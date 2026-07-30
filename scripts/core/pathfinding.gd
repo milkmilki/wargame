@@ -15,7 +15,8 @@ static func dijkstra_field(
 	start: int,
 	allowed_nation: int = -1,
 	block_contested_edges: bool = false,
-	use_danger_weight: bool = true
+	use_danger_weight: bool = true,
+	allowed_goal: int = -1
 ) -> Dictionary:
 	var dist := {}
 	var prev := {}
@@ -41,10 +42,20 @@ static func dijkstra_field(
 			if visited.has(v):
 				continue
 			if allowed_nation != -1:
-				# 起点可为刚失守的敌城；离开起点后只允许进入并穿过本国城市。
-				if state.cities[v].owner_nation != allowed_nation:
+				# 起点可为刚失守的敌城；之后只经过本国/盟国，攻击时允许最终敌城。
+				if (
+					v != allowed_goal
+					and not state.has_military_access(
+						allowed_nation, state.cities[v].owner_nation
+					)
+				):
 					continue
-				if u != start and state.cities[u].owner_nation != allowed_nation:
+				if (
+					u != start
+					and not state.has_military_access(
+						allowed_nation, state.cities[u].owner_nation
+					)
+				):
 					continue
 			var e := state.edge_of(u, v)
 			if e == null or e.max_throughput <= 0:
@@ -105,8 +116,8 @@ static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 	return reconstruct(field["prev"], start, best_goal)
 
 
-## 找最近的本国（友方）城市，返回到该城的路径（不含起点）。起点可为敌城，
-## 但离开起点后的路径只能经过本国城市；无友城 / 不可达返回空。
+## 找最近的本国城市，返回到该城的路径（不含起点）。起点可为敌城，
+## 离开起点后的路径可经过本国或盟国城市；最终目的地仍必须属于本国。
 ## excluded_city_id 用于守城方溃败时排除正在失守的城市。
 static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id: int = -1) -> Array[int]:
 	var start := _origin_of(army)
@@ -173,36 +184,62 @@ static func _nearest_friendly_goal(
 	return best_goal
 
 
-## 从本国登记粮仓中选择运输损耗最低者；返回 [warehouse_city_id, route_loss]。
+## 从可达本国/盟国粮仓中选择运输损耗最低者；返回 [warehouse_city_id, route_loss]。
 ## 每条边损耗 = SUPPLY_DISTANCE_LOSS × distance × (1 + SUPPLY_DANGER_MULT × danger)，
 ## 路径损耗按边相加，因此可直接使用 Dijkstra。无可用粮仓返回 [-1, INF]。
 static func nearest_supply_city(state: GameState, army: Army) -> Array:
-	if army.on_edge and army.move_to != -1:
-		return _nearest_supply_from_edge(state, army)
-	var start := _origin_of(army)
-	var start_city := state.cities[start]
-	# 被围城是补给孤岛：只有该城本身就是仍有库存的本国粮仓时才能获得补给。
-	if state.city_under_siege(start) and start_city.owner_nation == army.owner_nation:
-		return [start, 0.0] if (
-			start_city.has_warehouse and start_city.food_storage > 0
-			and state.nations[army.owner_nation].warehouse_city_ids.has(start)
-		) else [-1, INF]
-	var field := _supply_loss_field(state, start, army.owner_nation)
-	var dist: Dictionary = field["dist"]
-	var best_goal := -1
-	var best_d := INF
-	for city in state.warehouse_cities_of(army.owner_nation):
-		if city.food_storage <= 0:
-			continue
-		if state.city_under_siege(city.id):
-			continue
-		var d: float = dist[city.id]
-		if d < best_d or (is_equal_approx(d, best_d) and (best_goal == -1 or city.id < best_goal)):
-			best_d = d
-			best_goal = city.id
-	if best_goal == -1 or best_d == INF:
+	var sources := supply_sources(state, army)
+	if sources.is_empty():
 		return [-1, INF]
-	return [best_goal, best_d]
+	return [int(sources[0]["city_id"]), float(sources[0]["loss"])]
+
+
+## 返回全部可达本国/盟国粮仓，按运输损耗、城市 id 排序。
+static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
+	var start := _origin_of(army)
+	if start < 0 or start >= state.cities.size():
+		return []
+	var start_city := state.cities[start]
+	# 被围城是补给孤岛：只能使用本城仍有库存且对该军开放的粮仓。
+	if (
+		not army.on_edge
+		and state.city_under_siege(start)
+		and state.has_military_access(army.owner_nation, start_city.owner_nation)
+	):
+		if (
+			start_city.has_warehouse and start_city.food_storage > 0
+			and state.nations[start_city.owner_nation].warehouse_city_ids.has(start)
+		):
+			return [{
+				"city_id": start,
+				"owner_nation": start_city.owner_nation,
+				"loss": 0.0,
+			}]
+		return []
+	var source_loss := (
+		_supply_sources_from_edge(state, army)
+		if army.on_edge and army.move_to != -1
+		else _supply_sources_from_city(state, start, army.owner_nation)
+	)
+	var result: Array[Dictionary] = []
+	for city_id_value in source_loss:
+		var city_id := int(city_id_value)
+		var city := state.cities[city_id]
+		result.append({
+			"city_id": city_id,
+			"owner_nation": city.owner_nation,
+			"loss": float(source_loss[city_id]),
+		})
+	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return (
+			float(a["loss"]) < float(b["loss"])
+			or (
+				is_equal_approx(float(a["loss"]), float(b["loss"]))
+				and int(a["city_id"]) < int(b["city_id"])
+			)
+		)
+	)
+	return result
 
 
 ## 人口补员通路：与粮食补给共用控制区/争夺边规则，但不要求粮仓当前有粮。
@@ -218,7 +255,9 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 		):
 			return false
 		for endpoint in [army.move_from, army.move_to]:
-			if state.cities[endpoint].owner_nation != army.owner_nation:
+			if not state.has_military_access(
+				army.owner_nation, state.cities[endpoint].owner_nation
+			):
 				continue
 			if _field_reaches_warehouse(state, endpoint, army.owner_nation):
 				return true
@@ -226,7 +265,9 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 	var start := _origin_of(army)
 	if (
 		start < 0 or start >= state.cities.size()
-		or state.cities[start].owner_nation != army.owner_nation
+		or not state.has_military_access(
+			army.owner_nation, state.cities[start].owner_nation
+		)
 		or state.city_under_siege(start)
 	):
 		return false
@@ -242,40 +283,63 @@ static func _field_reaches_warehouse(state: GameState, start: int, nation_id: in
 	return false
 
 
-## 边上军队从真实位置分别接入两个端点，再沿本国控制且未被敌军争夺的道路寻找粮仓。
-static func _nearest_supply_from_edge(state: GameState, army: Army) -> Array:
+static func _supply_sources_from_city(
+	state: GameState,
+	start: int,
+	nation_id: int
+) -> Dictionary:
+	var field := _supply_loss_field(state, start, nation_id)
+	return _reachable_supply_losses(state, nation_id, field["dist"])
+
+
+## 边上军队从真实位置分别接入两个可通行端点，再沿本国/盟国道路寻找粮仓。
+static func _supply_sources_from_edge(state: GameState, army: Army) -> Dictionary:
 	var edge := state.edge_of(army.move_from, army.move_to)
 	if edge == null:
-		return [-1, INF]
+		return {}
 	var edge_loss := _supply_edge_loss(edge)
 	var progress := clampf(army.move_progress, 0.0, 1.0)
 	var options := [
 		{"endpoint": army.move_from, "offset": progress * edge_loss},
 		{"endpoint": army.move_to, "offset": (1.0 - progress) * edge_loss},
 	]
-	var best_city := -1
-	var best_distance := INF
+	var result := {}
 	for option in options:
 		var endpoint: int = option["endpoint"]
-		if state.cities[endpoint].owner_nation != army.owner_nation:
+		if not state.has_military_access(
+			army.owner_nation, state.cities[endpoint].owner_nation
+		):
 			continue
 		var field := _supply_loss_field(state, endpoint, army.owner_nation)
 		var dist: Dictionary = field["dist"]
-		for city in state.warehouse_cities_of(army.owner_nation):
-			if city.food_storage <= 0:
-				continue
-			if state.city_under_siege(city.id):
-				continue
-			var graph_distance: float = dist[city.id]
-			if graph_distance == INF:
-				continue
-			var total: float = float(option["offset"]) + graph_distance
-			if total < best_distance or (
-				is_equal_approx(total, best_distance) and (best_city == -1 or city.id < best_city)
+		var reachable := _reachable_supply_losses(
+			state, army.owner_nation, dist
+		)
+		for city_id in reachable:
+			var total := float(option["offset"]) + float(reachable[city_id])
+			if total < float(result.get(city_id, INF)):
+				result[city_id] = total
+	return result
+
+
+static func _reachable_supply_losses(
+	state: GameState,
+	nation_id: int,
+	dist: Dictionary
+) -> Dictionary:
+	var result := {}
+	for owner in state.nations:
+		if not state.has_military_access(nation_id, owner.id):
+			continue
+		for city in state.warehouse_cities_of(owner.id):
+			if (
+				city.food_storage <= 0
+				or state.city_under_siege(city.id)
+				or float(dist[city.id]) == INF
 			):
-				best_distance = total
-				best_city = city.id
-	return [best_city, best_distance] if best_city != -1 else [-1, INF]
+				continue
+			result[city.id] = float(dist[city.id])
+	return result
 
 
 static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> Dictionary:
@@ -301,7 +365,14 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 		for v in state.neighbors(u):
 			if visited.has(v):
 				continue
-			if state.cities[u].owner_nation != nation_id or state.cities[v].owner_nation != nation_id:
+			if (
+				not state.has_military_access(
+					nation_id, state.cities[u].owner_nation
+				)
+				or not state.has_military_access(
+					nation_id, state.cities[v].owner_nation
+				)
+			):
 				continue
 			var edge := state.edge_of(u, v)
 			if edge == null or edge.max_throughput <= 0:

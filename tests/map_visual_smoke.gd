@@ -6,6 +6,9 @@ func _init() -> void:
 	root.size = Vector2i(1280, 720)
 	var state := GameState.new()
 	state.generate_world(12345)
+	state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.ALLIED
+	)
 	var simulation := Simulation.new()
 	root.add_child(simulation)
 	simulation.setup(state)

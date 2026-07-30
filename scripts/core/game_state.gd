@@ -611,6 +611,20 @@ func is_allied(nation_a: int, nation_b: int) -> bool:
 	)
 
 
+## 共同防御联盟同时授予双向军事通行权；中立国不开放领土。
+func has_military_access(traveler_nation: int, territory_owner: int) -> bool:
+	return (
+		traveler_nation == territory_owner
+		or (
+			traveler_nation >= 0
+			and territory_owner >= 0
+			and traveler_nation < nations.size()
+			and territory_owner < nations.size()
+			and is_allied(traveler_nation, territory_owner)
+		)
+	)
+
+
 func relation_between(nation_a: int, nation_b: int) -> int:
 	if nation_a == nation_b:
 		return DiplomaticRelation.ALLIED

@@ -386,6 +386,10 @@ func _test_responsive_map_layout() -> void:
 		"窗口同比放大 1.5 倍时地图单元格也应放大 1.5 倍"
 	)
 	var large_origin: Vector2 = large["origin"]
+	_check(
+		large_origin.y > 120.0,
+		"国家详情卡应保留独立顶部区域，不得覆盖地图"
+	)
 	var large_span := float(large["cell"]) * float(GameState.GRID)
 	_check(
 		_approx(large_origin.x, (1920.0 - large_span) * 0.5),
@@ -2868,6 +2872,150 @@ func _test_diplomacy_state_and_ai() -> void:
 		not nation_one_is_enemy_army,
 		"盟军不得进入威胁场的敌军来源"
 	)
+	var alliance_geometry := MapRenderer.build_province_boundary_segments(gs)
+	_check(
+		not (
+			alliance_geometry["alliance"] as PackedVector2Array
+		).is_empty(),
+		"盟国接壤边界应生成独立青色联盟线段"
+	)
+	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
+	_check(
+		nation_lines.size() == 2
+		and nation_lines[0].contains("金")
+		and nation_lines[1].contains("粮")
+		and nation_lines[1].contains("盟"),
+		"国家详情卡必须独立展示财政、粮食和外交状态"
+	)
+	_check(
+		gs.has_military_access(0, 1)
+		and not gs.has_military_access(0, 2),
+		"联盟应提供双向军事通行，中立国不得开放领土"
+	)
+	var allied_city := gs.cities_of(1)[0]
+	var access_field := Pathfinding.dijkstra_field(
+		gs, gs.nations[0].capital_city_id, 0, false, true
+	)
+	_check(
+		float(access_field["dist"][allied_city.id]) < INF,
+		"本国军队应能规划经过盟国城市的路线"
+	)
+
+	var supply_state := GameState.new()
+	supply_state.generate_grid_world(32006)
+	supply_state.armies.clear()
+	for supply_a in range(supply_state.nations.size()):
+		for supply_b in range(supply_a + 1, supply_state.nations.size()):
+			supply_state.set_diplomatic_relation(
+				supply_a,
+				supply_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	supply_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.ALLIED
+	)
+	var supply_edge: Edge = null
+	for candidate_edge in supply_state.edges:
+		if (
+			supply_state.cities[candidate_edge.city_a].owner_nation
+			!= supply_state.cities[candidate_edge.city_b].owner_nation
+			and (
+				supply_state.cities[candidate_edge.city_a].owner_nation in [0, 1]
+				and supply_state.cities[candidate_edge.city_b].owner_nation in [0, 1]
+			)
+		):
+			supply_edge = candidate_edge
+			break
+	var own_supply_city := supply_edge.city_a
+	var allied_supply_city := supply_edge.city_b
+	if supply_state.cities[own_supply_city].owner_nation != 0:
+		var swap_supply_city := own_supply_city
+		own_supply_city = allied_supply_city
+		allied_supply_city = swap_supply_city
+	for nation in supply_state.nations:
+		for warehouse_id in nation.warehouse_city_ids:
+			supply_state.cities[warehouse_id].has_warehouse = false
+			supply_state.cities[warehouse_id].food_storage = 0
+		nation.warehouse_city_ids.clear()
+	for warehouse_data in [
+		[0, own_supply_city, 100],
+		[1, allied_supply_city, 300],
+	]:
+		var warehouse_nation := int(warehouse_data[0])
+		var warehouse_city := int(warehouse_data[1])
+		supply_state.nations[warehouse_nation].warehouse_city_ids = [
+			warehouse_city
+		] as Array[int]
+		supply_state.cities[warehouse_city].has_warehouse = true
+		supply_state.cities[warehouse_city].food_storage = int(
+			warehouse_data[2]
+		)
+	var allied_supplied_army := _make_army(9050, 0, 16000, 10, 10)
+	allied_supplied_army.location_city = own_supply_city
+	allied_supplied_army.move_from = own_supply_city
+	supply_state.armies.append(allied_supplied_army)
+	var supply_sim := Simulation.new()
+	supply_sim.setup(supply_state)
+	var supply_sources := Pathfinding.supply_sources(
+		supply_state, allied_supplied_army
+	)
+	var total_food_before := (
+		supply_state.cities[own_supply_city].food_storage
+		+ supply_state.cities[allied_supply_city].food_storage
+	)
+	var expected_allied_demand := int(ceil(
+		ceil(float(allied_supplied_army.size) * Simulation.FOOD_PER_CAPITA)
+		* minf(
+			1.0 + supply_sim._weighted_supply_loss(supply_sources),
+			Simulation.MAX_SUPPLY_MULT
+		)
+	))
+	supply_sim._resolve_supply()
+	var own_food_used := 100 - supply_state.cities[own_supply_city].food_storage
+	var allied_food_used := 300 - supply_state.cities[allied_supply_city].food_storage
+	var total_food_after := (
+		supply_state.cities[own_supply_city].food_storage
+		+ supply_state.cities[allied_supply_city].food_storage
+	)
+	_check(
+		supply_sources.size() == 2
+		and allied_food_used > own_food_used
+		and total_food_before - total_food_after
+			== own_food_used + allied_food_used
+		and total_food_before - total_food_after == expected_allied_demand,
+		"联盟补给应按库存与距离加权分摊，库存更多的粮仓承担更多：sources=%s own=%d ally=%d before=%d after=%d"
+			% [
+				str(supply_sources),
+				own_food_used,
+				allied_food_used,
+				total_food_before,
+				total_food_after,
+			]
+	)
+	allied_supplied_army.location_city = allied_supply_city
+	allied_supplied_army.move_from = allied_supply_city
+	_check(
+		Pathfinding.can_reach_manpower_hub(
+			supply_state, allied_supplied_army
+		),
+		"驻盟国领土的军队应能经军事通行路线连接本国人口中心"
+	)
+	var alliance_left := supply_sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.LEAVE_ALLIANCE,
+		"a": 0,
+		"b": 1,
+		"reason": "军事通行撤销测试",
+	})
+	_check(
+		alliance_left
+		and allied_supplied_army.state != Army.State.IDLE
+		and (
+			allied_supplied_army.size <= 0
+			or allied_supplied_army.move_to != -1
+		),
+		"退盟后滞留原盟国的军队必须立即撤回本国"
+	)
+	supply_sim.free()
 	var reserve_state := GameState.new()
 	reserve_state.generate_grid_world(32004)
 	for reserve_a in range(reserve_state.nations.size()):
@@ -3156,6 +3304,56 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	objective_sim.free()
 
+	var defense_state := GameState.new()
+	defense_state.generate_grid_world(32007)
+	for defense_a in range(defense_state.nations.size()):
+		for defense_b in range(defense_a + 1, defense_state.nations.size()):
+			defense_state.set_diplomatic_relation(
+				defense_a,
+				defense_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	defense_state.set_diplomatic_relation(
+		0, 3, GameState.DiplomaticRelation.ALLIED
+	)
+	defense_state.set_diplomatic_relation(
+		1, 2, GameState.DiplomaticRelation.ALLIED
+	)
+	var defense_sim := Simulation.new()
+	defense_sim.setup(defense_state)
+	var defense_target := DiplomacyAI.select_war_objective(
+		defense_state, 0, 1
+	)
+	var defense_declared := defense_sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.DECLARE_WAR,
+		"a": 0,
+		"b": 1,
+		"objective_city": int(defense_target.get("city_id", -1)),
+		"objective_reason": "共同防御测试",
+		"mobilization_armies": 0,
+		"reason": "主动宣战测试",
+	})
+	_check(
+		defense_declared
+		and defense_state.is_enemy(0, 1)
+		and defense_state.is_enemy(0, 2)
+		and not defense_state.is_enemy(3, 1)
+		and not defense_state.is_enemy(3, 2),
+		"共同防御只召唤被宣战方盟友，攻击方盟友不得加入主动战争"
+	)
+	var allied_origin := defense_state.cities_of(3)[0]
+	var enemy_target := defense_state.cities_of(1)[0]
+	var allied_origin_army := _make_army(9051, 0, 1000, 10, 10)
+	allied_origin_army.location_city = allied_origin.id
+	allied_origin_army.move_from = allied_origin.id
+	defense_state.armies.append(allied_origin_army)
+	defense_sim._capture_city(allied_origin_army, enemy_target)
+	_check(
+		enemy_target.owner_nation == 0,
+		"从盟国领土出发的占领仍必须归实际占领军所属国"
+	)
+	defense_sim.free()
+
 	ai_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.WAR)
 	ai_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
 	_check(
@@ -3166,14 +3364,41 @@ func _test_diplomacy_state_and_ai() -> void:
 		"拥有共同敌国的中立双方应愿意结盟"
 	)
 
+	var peaceful_alliance_state := GameState.new()
+	peaceful_alliance_state.generate_grid_world(32008)
+	for peaceful_a in range(peaceful_alliance_state.nations.size()):
+		peaceful_alliance_state.nations[peaceful_a].manpower_pool = 0
+		for peaceful_b in range(
+			peaceful_a + 1, peaceful_alliance_state.nations.size()
+		):
+			peaceful_alliance_state.set_diplomatic_relation(
+				peaceful_a,
+				peaceful_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	peaceful_alliance_state.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	var peaceful_alliance_found := false
+	for peaceful_action in DiplomacyAI.choose_actions(
+		peaceful_alliance_state
+	):
+		peaceful_alliance_found = (
+			peaceful_alliance_found
+			or int(peaceful_action["kind"])
+				== DiplomacyAI.Action.FORM_ALLIANCE
+		)
+	_check(
+		peaceful_alliance_found,
+		"共同防御联盟不是战时临时状态，和平期也应能主动缔结"
+	)
+
 	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	ai_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.NEUTRAL)
 	ai_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.NEUTRAL)
 	ai_state.day += DiplomacyAI.MIN_ALLIANCE_DAYS
 	_check(
 		DiplomacyAI.leave_alliance_desire(ai_state, 0, 1)
-			>= DiplomacyAI.LEAVE_ALLIANCE_SCORE,
-		"联盟持续期届满且共同威胁消失后应允许退盟"
+			< DiplomacyAI.LEAVE_ALLIANCE_SCORE,
+		"共同防御联盟可长期存在，和平且无共同敌人不得自动退盟"
 	)
 
 	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)

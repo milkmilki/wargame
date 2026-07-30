@@ -309,8 +309,8 @@ func _can_reinforce_army(army: Army) -> bool:
 # ------------------------------------------------------------------ 2. 粮食 + 饥饿
 
 func _resolve_supply() -> void:
-	# 快照式：先算每支军队的需求与供给城，再统一扣粮，保证可复现（§6.7.5）
-	var plans: Array = []   # [{army, supply_id, demand}]
+	# 快照式：先算每支军队的需求与可达粮仓，再统一按库存/距离权重扣粮。
+	var plans: Array = []   # [{army, sources, demand}]
 	var morale_broken: Array[Army] = []
 	var demand_by_nation: Array[int] = []
 	demand_by_nation.resize(state.nations.size())
@@ -324,16 +324,15 @@ func _resolve_supply() -> void:
 			army.starving = false
 			army.supply_ratio = 1.0
 			continue
-		var res := Pathfinding.nearest_supply_city(state, army)
-		var supply_id: int = res[0]
-		var route_loss: float = float(res[1])
+		var sources := Pathfinding.supply_sources(state, army)
+		var route_loss := _weighted_supply_loss(sources)
 		var mult: float = MAX_SUPPLY_MULT
-		if supply_id != -1:
+		if not sources.is_empty():
 			mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 		var base := int(ceil(army.size * FOOD_PER_CAPITA))
 		base = maxi(base, 1)
 		var demand := int(ceil(base * mult))
-		plans.append({ "army": army, "supply_id": supply_id, "demand": demand })
+		plans.append({ "army": army, "sources": sources, "demand": demand })
 		demand_by_nation[army.owner_nation] += demand
 	for nation in state.nations:
 		nation.last_food_demand = demand_by_nation[nation.id]
@@ -350,13 +349,8 @@ func _resolve_supply() -> void:
 	# 统一扣粮 + 减员
 	for p in plans:
 		var a: Army = p["army"]
-		var supply_id: int = p["supply_id"]
 		var demand: int = p["demand"]
-		var supplied := 0
-		if supply_id != -1:
-			var s := state.cities[supply_id]
-			supplied = mini(demand, s.food_storage)
-			s.food_storage -= supplied
+		var supplied := _withdraw_weighted_supply(p["sources"], demand)
 		var shortfall := demand - supplied
 		if shortfall > 0:
 			a.starving = true
@@ -404,26 +398,21 @@ func _recover_garrisoned_army(army: Army) -> void:
 		return
 	var city := state.cities[city_id]
 	# 驻城期间若城市已失守，重新撤往最近友城，不能在敌城恢复。
-	if city.owner_nation != army.owner_nation:
+	if not state.has_military_access(army.owner_nation, city.owner_nation):
 		_start_morale_retreat_from_city(army, city_id, city_id)
 		return
-	var supply := Pathfinding.nearest_supply_city(state, army)
-	var supply_id: int = supply[0]
-	var route_loss: float = float(supply[1])
+	var sources := Pathfinding.supply_sources(state, army)
+	var route_loss := _weighted_supply_loss(sources)
 	var full_month_demand := maxi(int(ceil(float(army.size) * RECOVERY_FOOD_PER_CAPITA)), 1)
 	var target_gain := minf(Combat.MORALE_RECOVER, 1.0 - army.morale)
 	var base_demand := maxi(
 		int(ceil(float(full_month_demand) * target_gain / Combat.MORALE_RECOVER)),
 		1
 	)
-	var demand := int(ceil(float(base_demand) * minf(1.0 + route_loss, MAX_SUPPLY_MULT))) \
-		if supply_id != -1 else base_demand
-	var supplied := 0
-	var warehouse: City = null
-	if supply_id != -1:
-		warehouse = state.cities[supply_id]
-		supplied = mini(demand, warehouse.food_storage)
-		warehouse.food_storage -= supplied
+	var demand := int(ceil(
+		float(base_demand) * minf(1.0 + route_loss, MAX_SUPPLY_MULT)
+	)) if not sources.is_empty() else base_demand
+	var supplied := _withdraw_weighted_supply(sources, demand)
 	army.starving = supplied < demand
 	if supplied > 0:
 		army.morale = minf(
@@ -435,10 +424,122 @@ func _recover_garrisoned_army(army: Army) -> void:
 		army.state = Army.State.IDLE
 		army.forced_retreat = false
 		army.starving = false
-	elif warehouse == null or warehouse.food_storage <= 0:
+	elif not _supply_sources_have_food(sources):
 		# 无可达粮仓或粮仓耗尽也是强制驻守的终止条件；保留当前未满士气。
 		army.state = Army.State.IDLE
 		army.forced_retreat = false
+
+
+func _supply_sources_have_food(sources: Array[Dictionary]) -> bool:
+	for source in sources:
+		var city_id := int(source["city_id"])
+		if (
+			city_id >= 0
+			and city_id < state.cities.size()
+			and state.cities[city_id].food_storage > 0
+		):
+			return true
+	return false
+
+
+func _weighted_supply_loss(sources: Array[Dictionary]) -> float:
+	if sources.is_empty():
+		return INF
+	var total_weight := 0.0
+	var weighted_loss := 0.0
+	for source in sources:
+		var city_id := int(source["city_id"])
+		if city_id < 0 or city_id >= state.cities.size():
+			continue
+		var stock := state.cities[city_id].food_storage
+		if stock <= 0:
+			continue
+		var loss := float(source["loss"])
+		var weight := _supply_source_weight(stock, loss)
+		total_weight += weight
+		weighted_loss += loss * weight
+	return weighted_loss / maxf(total_weight, 0.001)
+
+
+func _withdraw_weighted_supply(
+	sources: Array[Dictionary],
+	demand: int
+) -> int:
+	var remaining := maxi(demand, 0)
+	var supplied := 0
+	while remaining > 0:
+		var weighted: Array[Dictionary] = []
+		var total_weight := 0.0
+		for source in sources:
+			var city_id := int(source["city_id"])
+			if city_id < 0 or city_id >= state.cities.size():
+				continue
+			var city := state.cities[city_id]
+			if city.food_storage <= 0:
+				continue
+			var weight := _supply_source_weight(
+				city.food_storage, float(source["loss"])
+			)
+			total_weight += weight
+			weighted.append({
+				"city": city,
+				"weight": weight,
+				"city_id": city_id,
+			})
+		if weighted.is_empty() or total_weight <= 0.0:
+			break
+		var distributed := 0
+		var remainders: Array[Dictionary] = []
+		for entry in weighted:
+			var exact := float(remaining) * float(entry["weight"]) / total_weight
+			var share := mini(
+				int(floor(exact)),
+				(entry["city"] as City).food_storage
+			)
+			if share > 0:
+				(entry["city"] as City).food_storage -= share
+				distributed += share
+			remainders.append({
+				"city": entry["city"],
+				"city_id": entry["city_id"],
+				"fraction": exact - floor(exact),
+			})
+		remaining -= distributed
+		supplied += distributed
+		if remaining <= 0:
+			break
+		remainders.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return (
+				float(a["fraction"]) > float(b["fraction"])
+				or (
+					is_equal_approx(
+						float(a["fraction"]), float(b["fraction"])
+					)
+					and int(a["city_id"]) < int(b["city_id"])
+				)
+			)
+		)
+		var residual_distributed := 0
+		for entry in remainders:
+			if remaining <= 0:
+				break
+			var city: City = entry["city"]
+			if city.food_storage <= 0:
+				continue
+			city.food_storage -= 1
+			remaining -= 1
+			supplied += 1
+			residual_distributed += 1
+		if distributed == 0 and residual_distributed == 0:
+			break
+	return supplied
+
+
+static func _supply_source_weight(stock: int, route_loss: float) -> float:
+	return (
+		float(maxi(stock, 0))
+		/ sqrt(maxf(1.0 + route_loss, 0.001))
+	)
 
 # ------------------------------------------------------------------ 2c. 被围城粮草时钟（每日）
 
@@ -530,7 +631,11 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					if not defenders.has(ally_id):
 						defenders.append(ally_id)
 				for defender_id in defenders:
-					if defender_id == nation_a or state.is_enemy(nation_a, defender_id):
+					if (
+						defender_id == nation_a
+						or state.is_enemy(nation_a, defender_id)
+						or state.is_allied(nation_a, defender_id)
+					):
 						continue
 					state.set_diplomatic_relation(
 						nation_a,
@@ -574,6 +679,8 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					nation_b,
 					GameState.DiplomaticRelation.NEUTRAL
 				)
+				if changed:
+					_repatriate_after_access_revoked(nation_a, nation_b)
 		DiplomacyAI.Action.PREPARE_WAR:
 			if state.can_declare_war(nation_a, nation_b):
 				changed = _start_war_preparation(nation_a, nation_b, action)
@@ -774,6 +881,35 @@ func _end_bilateral_hostilities(nation_a: int, nation_b: int) -> void:
 				army.path.clear()
 				army.ai_target_city = -1
 				army.ai_order_until_day = state.day
+
+
+func _repatriate_after_access_revoked(
+	nation_a: int,
+	nation_b: int
+) -> void:
+	for army in state.armies:
+		if army.size <= 0 or army.owner_nation not in [nation_a, nation_b]:
+			continue
+		var former_ally := nation_b if army.owner_nation == nation_a else nation_a
+		var in_former_ally_territory := (
+			army.location_city >= 0
+			and army.location_city < state.cities.size()
+			and state.cities[army.location_city].owner_nation == former_ally
+		)
+		var route_uses_former_ally := false
+		for city_id in army.path:
+			if state.cities[city_id].owner_nation == former_ally:
+				route_uses_former_ally = true
+				break
+		if not in_former_ally_territory and not route_uses_former_ally:
+			continue
+		army.path.clear()
+		army.ai_target_city = -1
+		army.ai_order_until_day = state.day
+		if army.on_edge and army.move_to != -1:
+			_retreat(army)
+		else:
+			_retreat_to_friendly(army)
 # ------------------------------------------------------------------ 3. AI 决策
 
 
@@ -845,7 +981,9 @@ func _ai_assign_targets() -> void:
 				coordinator.reserve(army.ai_target_city, army)
 			elif army.state == Army.State.HOLDING:
 				var friendly_endpoint := army.move_from
-				if state.cities[friendly_endpoint].owner_nation != nation.id:
+				if not state.has_military_access(
+					nation.id, state.cities[friendly_endpoint].owner_nation
+				):
 					friendly_endpoint = army.move_to
 				coordinator.reserve(friendly_endpoint, army)
 		var strongest_first := bool(
@@ -1123,7 +1261,9 @@ func _assign_offensive_staging_orders(
 		):
 			continue
 		var friendly_endpoint := army.move_from
-		if state.cities[friendly_endpoint].owner_nation != nation_id:
+		if not state.has_military_access(
+			nation_id, state.cities[friendly_endpoint].owner_nation
+		):
 			friendly_endpoint = army.move_to
 		if (
 			staging.has(friendly_endpoint)
@@ -1138,7 +1278,9 @@ func _assign_offensive_staging_orders(
 		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 			break
 		var friendly_endpoint := army.move_from
-		if state.cities[friendly_endpoint].owner_nation != nation_id:
+		if not state.has_military_access(
+			nation_id, state.cities[friendly_endpoint].owner_nation
+		):
 			friendly_endpoint = army.move_to
 		var withdraw := ActionCandidate.make(
 			ActionCandidate.Kind.RETREAT,
@@ -1202,7 +1344,9 @@ func _launch_campaign_offensive(
 		var origin_city := army.location_city
 		if army.state == Army.State.HOLDING:
 			origin_city = army.move_from
-			if state.cities[origin_city].owner_nation != nation_id:
+			if not state.has_military_access(
+				nation_id, state.cities[origin_city].owner_nation
+			):
 				origin_city = army.move_to
 		var attack := ActionCandidate.make(
 			ActionCandidate.Kind.ATTACK,
@@ -1560,9 +1704,10 @@ func _execute_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 		var field := Pathfinding.dijkstra_field(
 			state,
 			army.location_city,
-			army.owner_nation if candidate.kind != ActionCandidate.Kind.ATTACK else -1,
+			army.owner_nation,
 			false,
-			candidate.kind != ActionCandidate.Kind.ATTACK
+			candidate.kind != ActionCandidate.Kind.ATTACK,
+			candidate.target_city if candidate.kind == ActionCandidate.Kind.ATTACK else -1
 		)
 		army.path = Pathfinding.reconstruct(
 			field["prev"], army.location_city, candidate.target_city
@@ -1769,8 +1914,8 @@ func _arrive_at_node(army: Army) -> void:
 		_start_or_join_siege(army, city, edge)
 		return
 
-	# 中立/盟国不提供军事通行权，抵达后必须撤回本国领土。
-	if city.owner_nation != army.owner_nation:
+	# 中立国不提供通行权；盟国允许穿越和临时驻留。
+	if not state.has_military_access(army.owner_nation, city.owner_nation):
 		army.move_from = arrived
 		army.move_to = -1
 		army.location_city = arrived
@@ -1778,7 +1923,7 @@ func _arrive_at_node(army: Army) -> void:
 		_retreat_to_friendly(army)
 		return
 
-	# 己方城且无围城：继续下一段或驻扎
+	# 本国/盟国城市且无围城：继续下一段或驻扎。
 	army.move_from = arrived
 	army.move_to = -1
 	army.location_city = arrived

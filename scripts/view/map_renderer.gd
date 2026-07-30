@@ -12,6 +12,7 @@ const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
+const BASE_HUD_CARD_HEIGHT := 66.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
@@ -27,8 +28,10 @@ var _province_texture: ImageTexture
 var _province_boundary_segments := PackedVector2Array()
 var _coast_segments := PackedVector2Array()
 var _nation_boundary_segments := PackedVector2Array()
+var _alliance_boundary_segments := PackedVector2Array()
 var _province_cache_ready: bool = false
 var _province_ownership_revision: int = -1
+var _province_diplomacy_revision: int = -1
 var _campaign_event_seen_at: Dictionary = {}
 var _blink: float = 0.0                    ## 饥饿闪烁计时
 
@@ -49,8 +52,10 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_province_boundary_segments = PackedVector2Array()
 	_coast_segments = PackedVector2Array()
 	_nation_boundary_segments = PackedVector2Array()
+	_alliance_boundary_segments = PackedVector2Array()
 	_province_cache_ready = false
 	_province_ownership_revision = -1
+	_province_diplomacy_revision = -1
 	_campaign_event_seen_at.clear()
 
 
@@ -123,7 +128,9 @@ static func compute_layout_for_viewport(viewport_size: Vector2, nation_count: in
 	)
 	var hud_rows := int(ceil(float(count) / float(hud_columns)))
 	var top_margin := (
-		BASE_HUD_TOP + BASE_HUD_ROW_HEIGHT * float(hud_rows + 1)
+		BASE_HUD_TOP
+		+ BASE_HUD_CARD_HEIGHT * float(hud_rows)
+		+ BASE_HUD_ROW_HEIGHT
 	) * display_scale
 	var bottom_margin := BASE_BOTTOM_MARGIN * display_scale
 	var span := maxf(minf(
@@ -218,12 +225,15 @@ func _ensure_province_visual_cache() -> void:
 	if (
 		_province_texture == null
 		or _province_ownership_revision != state.ownership_revision
+		or _province_diplomacy_revision != state.diplomacy_revision
 	):
 		var image := build_province_overlay_image(state)
 		_province_texture = ImageTexture.create_from_image(image)
 		var geometry := build_province_boundary_segments(state)
 		_nation_boundary_segments = geometry["nation"]
+		_alliance_boundary_segments = geometry["alliance"]
 		_province_ownership_revision = state.ownership_revision
+		_province_diplomacy_revision = state.diplomacy_revision
 
 
 static func build_province_overlay_image(game_state: GameState) -> Image:
@@ -254,10 +264,16 @@ static func build_province_boundary_segments(
 ) -> Dictionary:
 	var province := PackedVector2Array()
 	var nation := PackedVector2Array()
+	var alliance := PackedVector2Array()
 	var coast := PackedVector2Array()
 	var size := game_state.province_map_size
 	if size.x <= 0 or size.y <= 0:
-		return {"province": province, "nation": nation, "coast": coast}
+		return {
+			"province": province,
+			"nation": nation,
+			"alliance": alliance,
+			"coast": coast,
+		}
 	for y in range(size.y):
 		for x in range(size.x):
 			var province_id := game_state.province_ids[y * size.x + x]
@@ -293,13 +309,30 @@ static func build_province_boundary_segments(
 				_append_segment(province, Vector2(x1, y0), Vector2(x1, y1))
 				if _province_owners_differ(game_state, province_id, right):
 					_append_segment(nation, Vector2(x1, y0), Vector2(x1, y1))
+					if _province_owners_allied(
+						game_state, province_id, right
+					):
+						_append_segment(
+							alliance, Vector2(x1, y0), Vector2(x1, y1)
+						)
 			if bottom < 0:
 				_append_segment(coast, Vector2(x0, y1), Vector2(x1, y1))
 			elif bottom != province_id:
 				_append_segment(province, Vector2(x0, y1), Vector2(x1, y1))
 				if _province_owners_differ(game_state, province_id, bottom):
 					_append_segment(nation, Vector2(x0, y1), Vector2(x1, y1))
-	return {"province": province, "nation": nation, "coast": coast}
+					if _province_owners_allied(
+						game_state, province_id, bottom
+					):
+						_append_segment(
+							alliance, Vector2(x0, y1), Vector2(x1, y1)
+						)
+	return {
+		"province": province,
+		"nation": nation,
+		"alliance": alliance,
+		"coast": coast,
+	}
 
 
 static func _province_owners_differ(
@@ -312,6 +345,19 @@ static func _province_owners_differ(
 		and province_b >= 0
 		and game_state.cities[province_a].owner_nation
 			!= game_state.cities[province_b].owner_nation
+	)
+
+
+static func _province_owners_allied(
+	game_state: GameState,
+	province_a: int,
+	province_b: int
+) -> bool:
+	if province_a < 0 or province_b < 0:
+		return false
+	return game_state.is_allied(
+		game_state.cities[province_a].owner_nation,
+		game_state.cities[province_b].owner_nation
 	)
 
 
@@ -387,6 +433,13 @@ func _draw_national_boundaries() -> void:
 		2.4 * _display_scale,
 		true
 	)
+	if not _alliance_boundary_segments.is_empty():
+		draw_multiline(
+			_normalized_segments_to_pixels(_alliance_boundary_segments),
+			Color(0.25, 0.92, 1.0, 0.96),
+			2.8 * _display_scale,
+			true
+		)
 
 
 func _draw_campaign_arrows() -> void:
@@ -777,43 +830,31 @@ func _draw_hud() -> void:
 		Color.WHITE
 	)
 
-	# 各国概览
+	# 各国独立详情卡。
 	var overview_y := 46.0 * _display_scale
 	for nation_index in range(state.nations.size()):
 		var n := state.nations[nation_index]
-		var city_count := state.cities_of(n.id).size()
-		var troops := 0
-		for army in state.armies:
-			if army.owner_nation == n.id:
-				troops += army.size
-		var wars := state.wars_of(n.id)
-		var allies := state.allies_of(n.id)
-		var line := "国%d 城%d 金%d 粮%d 人%d 兵%d 战%s 盟%s%s" % [
-			n.id, city_count, n.treasury_gold, n.granary_food, n.manpower_pool, troops,
-			str(wars), str(allies),
-			"" if n.alive else " (灭)"
-		]
 		var column := nation_index % _hud_columns
 		var row := int(nation_index / _hud_columns)
-		var position := Vector2(
+		var card_position := Vector2(
 			_side_margin + float(column) * _hud_card_width,
-			overview_y + float(row) * BASE_HUD_ROW_HEIGHT * _display_scale
+			overview_y + float(row) * BASE_HUD_CARD_HEIGHT * _display_scale
 		)
-		draw_string(
-			_font,
-			position,
-			line,
-			HORIZONTAL_ALIGNMENT_LEFT,
-			_hud_card_width - 8.0 * _display_scale,
-			_font_size(13),
-			n.color.lightened(0.2)
+		var card_rect := Rect2(
+			card_position,
+			Vector2(
+				_hud_card_width - 8.0 * _display_scale,
+				(BASE_HUD_CARD_HEIGHT - 6.0) * _display_scale
+			)
 		)
+		_draw_nation_detail_card(n.id, card_rect)
 	if not state.diplomatic_history.is_empty():
 		var event: Dictionary = state.diplomatic_history[-1]
 		var diplomacy_y := (
 			overview_y
 			+ float(int(ceil(float(state.nations.size()) / float(_hud_columns))))
-				* BASE_HUD_ROW_HEIGHT * _display_scale
+				* BASE_HUD_CARD_HEIGHT * _display_scale
+			+ 2.0 * _display_scale
 		)
 		var diplomacy_line := "外交 Day%d 国%d→国%d %s：%s" % [
 			event["day"],
@@ -831,6 +872,85 @@ func _draw_hud() -> void:
 			_font_size(12),
 			Color(0.90, 0.90, 0.75)
 		)
+
+
+func _draw_nation_detail_card(nation_id: int, rect: Rect2) -> void:
+	var n := state.nations[nation_id]
+	var details := nation_detail_lines(state, nation_id)
+	var at_war := not state.wars_of(nation_id).is_empty()
+	var background := Color(0.035, 0.045, 0.065, 0.92)
+	if at_war:
+		background = Color(0.12, 0.035, 0.04, 0.94)
+	elif not n.alive:
+		background = Color(0.035, 0.035, 0.04, 0.82)
+	draw_rect(rect, Color(0.0, 0.0, 0.0, 0.55), true)
+	var inner := rect.grow(-1.0 * _display_scale)
+	draw_rect(inner, background, true)
+	draw_rect(
+		Rect2(inner.position, Vector2(5.0 * _display_scale, inner.size.y)),
+		n.color,
+		true
+	)
+	draw_line(
+		inner.position + Vector2(8.0, 22.0) * _display_scale,
+		inner.position + Vector2(inner.size.x / _display_scale - 8.0, 22.0)
+			* _display_scale,
+		Color(1.0, 1.0, 1.0, 0.10),
+		1.0 * _display_scale
+	)
+	var text_x := inner.position.x + 11.0 * _display_scale
+	var title_color := n.color.lightened(0.32)
+	var status := "战争" if at_war else ("和平" if n.alive else "灭亡")
+	draw_string(
+		_font,
+		Vector2(text_x, inner.position.y + 17.0 * _display_scale),
+		"国%d  %s" % [nation_id, status],
+		HORIZONTAL_ALIGNMENT_LEFT,
+		inner.size.x - 18.0 * _display_scale,
+		_font_size(13),
+		title_color
+	)
+	for line_index in range(details.size()):
+		draw_string(
+			_font,
+			Vector2(
+				text_x,
+				inner.position.y
+					+ (36.0 + float(line_index) * 15.0) * _display_scale
+			),
+			details[line_index],
+			HORIZONTAL_ALIGNMENT_LEFT,
+			inner.size.x - 18.0 * _display_scale,
+			_font_size(10),
+			Color(0.88, 0.91, 0.96, 0.96)
+		)
+
+
+static func nation_detail_lines(
+	game_state: GameState,
+	nation_id: int
+) -> Array[String]:
+	var n := game_state.nations[nation_id]
+	var troops := 0
+	for army in game_state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			troops += army.size
+	var report := DiplomacyAI.resource_report(game_state, nation_id)
+	var gold_balance := int(report["monthly_gold_balance"])
+	var line_one := "城%d 兵%d 人%d  金%d (%+d/月)" % [
+		game_state.cities_of(nation_id).size(),
+		troops,
+		n.manpower_pool,
+		n.treasury_gold,
+		gold_balance,
+	]
+	var line_two := "粮%d 需%d/月  战%s  盟%s" % [
+		n.granary_food,
+		int(ceil(float(report["monthly_food_demand"]))),
+		str(game_state.wars_of(nation_id)),
+		str(game_state.allies_of(nation_id)),
+	]
+	return [line_one, line_two] as Array[String]
 
 
 static func _diplomatic_action_name(action: int) -> String:

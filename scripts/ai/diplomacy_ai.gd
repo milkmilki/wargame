@@ -24,6 +24,7 @@ const FORCED_PEACE_DAYS: int = 900
 const MIN_NEUTRAL_DAYS: int = 180
 const MIN_ALLIANCE_DAYS: int = 360
 const MAX_CONCURRENT_WARS: int = 1
+const MAX_DEFENSIVE_ALLIES: int = 1
 const PEACE_ACCEPT_SCORE: float = 1.25
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
 const WAR_DECLARE_SCORE: float = 1.35
@@ -53,8 +54,8 @@ static func choose_actions(state: GameState) -> Array[Dictionary]:
 	var committed := {}
 	_collect_peace_actions(state, actions, committed)
 	_collect_leave_alliance_actions(state, actions, committed)
-	_collect_alliance_actions(state, actions, committed)
 	_collect_war_actions(state, actions, committed)
+	_collect_alliance_actions(state, actions, committed)
 	return actions
 
 
@@ -152,16 +153,39 @@ static func peace_reasons(
 static func alliance_willingness(state: GameState, nation_id: int, target_id: int) -> float:
 	if state.relation_between(nation_id, target_id) != GameState.DiplomaticRelation.NEUTRAL:
 		return -INF
+	if (
+		state.allies_of(nation_id).size() >= MAX_DEFENSIVE_ALLIES
+		or state.allies_of(target_id).size() >= MAX_DEFENSIVE_ALLIES
+	):
+		return -INF
 	if state.day - state.relation_since(nation_id, target_id) < MIN_NEUTRAL_DAYS:
 		return -INF
-	var common_enemies := _common_enemy_count(state, nation_id, target_id)
-	if common_enemies <= 0:
+	if _alliance_has_active_conflict(state, nation_id, target_id):
 		return -INF
+	var common_enemies := _common_enemy_count(state, nation_id, target_id)
 	var own_power := _national_power(state, nation_id)
 	var target_power := _national_power(state, target_id)
 	var imbalance := absf(log(maxf(own_power, 1.0) / maxf(target_power, 1.0)))
 	var border_bonus := 0.25 if _frontier_edges(state, nation_id, target_id) > 0 else 0.0
-	return float(common_enemies) * 1.5 + border_bonus - imbalance
+	var shared_threat := 0.0
+	for other in state.nations:
+		if other.id in [nation_id, target_id] or not other.alive:
+			continue
+		shared_threat = maxf(
+			shared_threat,
+			minf(
+				threat_from_nation(state, nation_id, other.id),
+				threat_from_nation(state, target_id, other.id)
+			)
+		)
+	var balance_affinity := maxf(1.0 - imbalance, 0.0) * 0.55
+	return (
+		0.35
+		+ float(common_enemies) * 1.5
+		+ minf(shared_threat * 0.35, 0.80)
+		+ border_bonus
+		+ balance_affinity
+	)
 
 
 static func war_desire(state: GameState, nation_id: int, target_id: int) -> float:
@@ -187,7 +211,8 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 	var objective := select_war_objective(state, nation_id, target_id)
 	if objective.is_empty():
 		return -INF
-	var own_power := _coalition_power(state, nation_id)
+	# 共同防御联盟不参加成员主动发动的战争；进攻方只能计算本国战力。
+	var own_power := _national_power(state, nation_id)
 	var target_power := _coalition_power(state, target_id)
 	var ratio := own_power / maxf(target_power, 1.0)
 	var target_distraction := float(state.wars_of(target_id).size()) * 0.25
@@ -556,7 +581,9 @@ static func select_war_objective(
 			if (
 				edge != null
 				and edge.max_throughput > 0
-				and state.cities[neighbor].owner_nation == nation_id
+				and state.has_military_access(
+					nation_id, state.cities[neighbor].owner_nation
+				)
 			):
 				own_links += 1
 		if own_links == 0:
@@ -611,9 +638,27 @@ static func leave_alliance_desire(state: GameState, nation_id: int, ally_id: int
 	var common_enemies := _common_enemy_count(state, nation_id, ally_id)
 	var own_power := _national_power(state, nation_id)
 	var ally_power := _national_power(state, ally_id)
-	var domination_risk := maxf(ally_power / maxf(own_power, 1.0) - 1.5, 0.0)
-	var idle_penalty := 1.0 if common_enemies == 0 else 0.0
-	return idle_penalty + domination_risk - float(common_enemies)
+	var domination_risk := maxf(
+		ally_power / maxf(own_power, 1.0) - 2.25,
+		0.0
+	) * 0.75
+	var conflicting_commitments := 0
+	for enemy_id in state.wars_of(nation_id):
+		if state.is_allied(ally_id, enemy_id):
+			conflicting_commitments += 1
+	var unilateral_wars := 0
+	for enemy_id in state.wars_of(ally_id):
+		if not state.is_enemy(nation_id, enemy_id):
+			unilateral_wars += 1
+	var duration_days := state.day - state.relation_since(nation_id, ally_id)
+	var established_trust := minf(float(duration_days) / 1800.0, 0.50)
+	return (
+		domination_risk
+		+ float(conflicting_commitments) * 1.5
+		+ float(unilateral_wars) * 0.20
+		- float(common_enemies) * 0.75
+		- established_trust
+	)
 
 
 static func _collect_peace_actions(
@@ -680,7 +725,7 @@ static func _collect_leave_alliance_actions(
 				"a": actor,
 				"b": b if actor == a else a,
 				"score": score,
-				"reason": "共同威胁消失或力量失衡，退盟收益 %.2f" % score,
+				"reason": "防御条约负担、外交冲突或力量失衡，退盟收益 %.2f" % score,
 			})
 			committed[a] = true
 			committed[b] = true
@@ -709,7 +754,8 @@ static func _collect_alliance_actions(
 				"a": a,
 				"b": b,
 				"score": minf(score_a, score_b),
-				"reason": "拥有共同敌国，双方结盟意愿 %.2f/%.2f" % [score_a, score_b],
+				"reason": "缔结长期共同防御与军事通行条约，双方意愿 %.2f/%.2f"
+					% [score_a, score_b],
 			})
 			committed[a] = true
 			committed[b] = true
@@ -891,7 +937,9 @@ static func staging_cities_for_objective(
 		if (
 			edge != null
 			and edge.max_throughput > 0
-			and state.cities[neighbor].owner_nation == nation_id
+			and state.has_military_access(
+				nation_id, state.cities[neighbor].owner_nation
+			)
 		):
 			result.append(neighbor)
 	result.sort()
@@ -1032,6 +1080,20 @@ static func _common_enemy_count(state: GameState, nation_a: int, nation_b: int) 
 	return count
 
 
+static func _alliance_has_active_conflict(
+	state: GameState,
+	nation_a: int,
+	nation_b: int
+) -> bool:
+	for enemy_id in state.wars_of(nation_a):
+		if state.is_allied(nation_b, enemy_id):
+			return true
+	for enemy_id in state.wars_of(nation_b):
+		if state.is_allied(nation_a, enemy_id):
+			return true
+	return false
+
+
 static func _has_shared_ally(state: GameState, nation_a: int, nation_b: int) -> bool:
 	for other in state.nations:
 		if (
@@ -1052,8 +1114,14 @@ static func _frontier_edges(state: GameState, nation_a: int, nation_b: int) -> i
 		var owner_a := state.cities[edge.city_a].owner_nation
 		var owner_b := state.cities[edge.city_b].owner_nation
 		if (
-			(owner_a == nation_a and owner_b == nation_b)
-			or (owner_a == nation_b and owner_b == nation_a)
+			(
+				state.has_military_access(nation_a, owner_a)
+				and owner_b == nation_b
+			)
+			or (
+				state.has_military_access(nation_a, owner_b)
+				and owner_a == nation_b
+			)
 		):
 			count += 1
 	return count
