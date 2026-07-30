@@ -1,0 +1,20 @@
+# Godot generated data
+.godot/
+/android/
+*.import
+
+# Local Python/tooling state
+.venv/
+.code-review-graph/
+.dbg/
+
+# IDE and agent-local state
+.claude/
+.trae/
+.mcp.json
+.cursorrules
+.windsurfrules
+
+# OS and logs
+.DS_Store
+*.log
