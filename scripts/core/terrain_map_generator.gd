@@ -11,7 +11,8 @@ const RELIEF_RADIUS: int = 3
 const FLAT_CANDIDATE_SHARE: float = 0.90
 const RELIEF_SPACING_WEIGHT: float = 0.015
 const MIN_CITY_SPACING: float = 0.075
-const TARGET_EDGE_COUNT: int = 112
+const MAX_LOCAL_EDGE_LENGTH: float = 0.30
+const PREFERRED_BACKBONE_LENGTH: float = 0.34
 const ROAD_SAMPLE_COUNT: int = 48
 
 static var _cache: Dictionary = {}
@@ -42,7 +43,6 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		"heights": samples["heights"],
 		"reliefs": samples["reliefs"],
 		"roads": road_result["roads"],
-		"nation_order": road_result["nation_order"],
 		"bounds": bounds,
 		"image_size": analysis.get_size(),
 		"source_region_normalized": Rect2(
@@ -272,11 +272,15 @@ static func _build_roads(
 ) -> Dictionary:
 	var pixels: Array[Vector2i] = samples["pixels"]
 	var positions: Array[Vector2] = samples["positions"]
+	var map_aspect := float(image.get_width()) / float(maxi(image.get_height(), 1))
+	var metric_positions := PackedVector2Array()
+	for position in positions:
+		metric_positions.append(Vector2(position.x * map_aspect, position.y))
 	var candidates: Array[Dictionary] = []
 	for a in range(pixels.size()):
 		for b in range(a + 1, pixels.size()):
 			var profile := _edge_profile(image, mask, pixels[a], pixels[b])
-			var length := positions[a].distance_to(positions[b])
+			var length := metric_positions[a].distance_to(metric_positions[b])
 			candidates.append({
 				"a": a,
 				"b": b,
@@ -299,61 +303,66 @@ static func _build_roads(
 	var candidate_by_key := {}
 	for candidate in candidates:
 		candidate_by_key[_pair_key(int(candidate["a"]), int(candidate["b"]))] = candidate
-	var nation_order: Array[int] = []
-	var start := 0
-	for i in range(1, positions.size()):
-		if (
-			positions[i].x + positions[i].y < positions[start].x + positions[start].y
-		):
-			start = i
-	nation_order.append(start)
-	var route_visited := {start: true}
+	var local_keys := {}
+	var triangles := Geometry2D.triangulate_delaunay(metric_positions)
+	for index in range(0, triangles.size(), 3):
+		for pair in [
+			[triangles[index], triangles[index + 1]],
+			[triangles[index + 1], triangles[index + 2]],
+			[triangles[index + 2], triangles[index]],
+		]:
+			local_keys[_pair_key(int(pair[0]), int(pair[1]))] = true
+
 	var selected: Array[Dictionary] = []
 	var selected_keys := {}
-	while nation_order.size() < pixels.size():
-		var current := nation_order[nation_order.size() - 1]
-		var best_next := -1
-		var best_cost := INF
-		for city_id in range(pixels.size()):
-			if route_visited.has(city_id):
-				continue
-			var candidate: Dictionary = candidate_by_key[
-				_pair_key(current, city_id)
-			]
-			var cost := float(candidate["cost"])
-			if cost < best_cost or (
-				is_equal_approx(cost, best_cost) and city_id < best_next
-			):
-				best_cost = cost
-				best_next = city_id
-		var route_edge: Dictionary = candidate_by_key[
-			_pair_key(current, best_next)
-		]
-		route_edge["backbone"] = true
-		selected.append(route_edge)
-		selected_keys[_pair_key(current, best_next)] = true
-		nation_order.append(best_next)
-		route_visited[best_next] = true
+	var parent: Array[int] = []
+	parent.resize(pixels.size())
+	for city_id in range(parent.size()):
+		parent[city_id] = city_id
+	var backbone_edges := 0
 	for candidate in candidates:
-		if selected.size() >= TARGET_EDGE_COUNT:
-			break
-		var key := _pair_key(int(candidate["a"]), int(candidate["b"]))
-		if selected_keys.has(key) or float(candidate["land_ratio"]) < 0.90:
+		if (
+			float(candidate["land_ratio"]) < 0.88
+			or float(candidate["length"]) > PREFERRED_BACKBONE_LENGTH
+		):
 			continue
-		if _crosses_selected(candidate, selected, positions):
+		var root_a := _root(parent, int(candidate["a"]))
+		var root_b := _root(parent, int(candidate["b"]))
+		if root_a == root_b:
+			continue
+		parent[root_b] = root_a
+		candidate["backbone"] = true
+		selected.append(candidate)
+		selected_keys[_pair_key(int(candidate["a"]), int(candidate["b"]))] = true
+		backbone_edges += 1
+	for candidate in candidates:
+		if backbone_edges >= pixels.size() - 1:
+			break
+		var root_a := _root(parent, int(candidate["a"]))
+		var root_b := _root(parent, int(candidate["b"]))
+		if root_a == root_b:
+			continue
+		parent[root_b] = root_a
+		candidate["backbone"] = true
+		selected.append(candidate)
+		selected_keys[_pair_key(int(candidate["a"]), int(candidate["b"]))] = true
+		backbone_edges += 1
+
+	var local_edge_keys := local_keys.keys()
+	local_edge_keys.sort()
+	for key_variant in local_edge_keys:
+		var key := int(key_variant)
+		if selected_keys.has(key):
+			continue
+		var candidate: Dictionary = candidate_by_key[key]
+		if (
+			float(candidate["land_ratio"]) < 0.90
+			or float(candidate["length"]) > MAX_LOCAL_EDGE_LENGTH
+		):
 			continue
 		candidate["backbone"] = false
 		selected.append(candidate)
 		selected_keys[key] = true
-	if selected.size() < TARGET_EDGE_COUNT:
-		for candidate in candidates:
-			if selected.size() >= TARGET_EDGE_COUNT:
-				break
-			var key := _pair_key(int(candidate["a"]), int(candidate["b"]))
-			if selected_keys.has(key) or float(candidate["land_ratio"]) < 0.80:
-				continue
-			selected.append(candidate)
-			selected_keys[key] = true
 	selected.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var diff_a := float(a["height_difference"])
 		var diff_b := float(b["height_difference"])
@@ -388,7 +397,6 @@ static func _build_roads(
 			break
 	return {
 		"roads": selected,
-		"nation_order": nation_order,
 	}
 
 
@@ -417,24 +425,13 @@ static func _edge_profile(
 	}
 
 
-static func _crosses_selected(
-	candidate: Dictionary,
-	selected: Array[Dictionary],
-	positions: Array[Vector2]
-) -> bool:
-	var a := int(candidate["a"])
-	var b := int(candidate["b"])
-	for road in selected:
-		var c := int(road["a"])
-		var d := int(road["b"])
-		if a in [c, d] or b in [c, d]:
-			continue
-		if Geometry2D.segment_intersects_segment(
-			positions[a], positions[b], positions[c], positions[d]
-		) != null:
-			return true
-	return false
-
-
 static func _pair_key(a: int, b: int) -> int:
 	return mini(a, b) * 10000 + maxi(a, b)
+
+
+static func _root(parent: Array[int], node: int) -> int:
+	var current := node
+	while parent[current] != current:
+		parent[current] = parent[parent[current]]
+		current = parent[current]
+	return current

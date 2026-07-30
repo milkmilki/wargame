@@ -1,6 +1,8 @@
 extends Node2D
 ## 入口：装配 GameState / Simulation / MapRenderer，处理全局输入（暂停/调速/重开）。
 
+@export var use_grid_world: bool = false
+
 @onready var simulation: Simulation = $Simulation
 @onready var renderer: MapRenderer = $MapRenderer
 
@@ -15,7 +17,10 @@ func _ready() -> void:
 
 func _start_new_game(world_seed: int) -> void:
 	state = GameState.new()
-	state.generate_world(world_seed)
+	if use_grid_world:
+		state.generate_grid_world(world_seed)
+	else:
+		state.generate_world(world_seed)
 	simulation.setup(state)
 	simulation.set_speed_multiplier(_speed_mult)
 	renderer.setup(state, simulation)

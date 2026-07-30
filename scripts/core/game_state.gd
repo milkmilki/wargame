@@ -42,8 +42,8 @@ func generate_world(world_seed: int = 12345) -> void:
 	_generate_nations()
 	var terrain := TerrainMapGenerator.build(TERRAIN_MAP_PATH, CITY_COUNT)
 	_generate_terrain_cities(terrain)
+	_assign_balanced_nations()
 	_generate_terrain_edges(terrain)
-	_assign_balanced_nations(terrain)
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
 	_generate_armies()
@@ -150,12 +150,34 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		adjacency[city.id] = [] as Array[int]
 
 
-func _assign_balanced_nations(terrain: Dictionary) -> void:
-	var nation_order: Array[int] = terrain["nation_order"]
-	assert(nation_order.size() == CITY_COUNT, "国家分区骨架必须覆盖全部城市")
-	var quota := CITY_COUNT / NATION_COUNT
-	for index in range(nation_order.size()):
-		cities[nation_order[index]].owner_nation = index / quota
+func _assign_balanced_nations() -> void:
+	var ordered: Array[City] = cities.duplicate()
+	ordered.sort_custom(func(a: City, b: City) -> bool:
+		return (
+			a.map_position.x < b.map_position.x
+			or (
+				is_equal_approx(a.map_position.x, b.map_position.x)
+				and a.id < b.id
+			)
+		)
+	)
+	var side_size := CITY_COUNT / 2
+	for side in range(2):
+		var side_cities: Array[City] = []
+		for index in range(side * side_size, (side + 1) * side_size):
+			side_cities.append(ordered[index])
+		side_cities.sort_custom(func(a: City, b: City) -> bool:
+			return (
+				a.map_position.y < b.map_position.y
+				or (
+					is_equal_approx(a.map_position.y, b.map_position.y)
+					and a.id < b.id
+				)
+			)
+		)
+		for index in range(side_cities.size()):
+			var row_half := 0 if index < side_cities.size() / 2 else 1
+			side_cities[index].owner_nation = row_half * 2 + side
 
 
 func _initialize_manpower_pools() -> void:

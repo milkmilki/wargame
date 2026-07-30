@@ -82,7 +82,10 @@ func _test_world_generation() -> void:
 	var gs := GameState.new()
 	gs.generate_world(12345)
 	_check(gs.cities.size() == 64, "城市数应为 64，实为 %d" % gs.cities.size())
-	_check(gs.edges.size() == 112, "边数应为 112，实为 %d" % gs.edges.size())
+	_check(
+		gs.edges.size() >= 63 and gs.edges.size() < 160,
+		"真实地图应使用稀疏局部图，边数实为 %d" % gs.edges.size()
+	)
 	_check(gs.armies.size() == 64, "初始军队数应为 64，实为 %d" % gs.armies.size())
 	_check(gs.nations.size() == 4, "国家数应为 4")
 	# 四等份：每国 16 城
@@ -135,6 +138,8 @@ func _test_world_generation() -> void:
 		and gs.map_source_region_normalized.end.y < 1.0,
 		"底图应裁切到 Alpha 陆地包围盒，排除外围水印区域"
 	)
+	_check(ResourceLoader.exists("res://main.tscn"), "真实地图场景 main.tscn 必须保留")
+	_check(ResourceLoader.exists("res://square_map.tscn"), "原方形地图场景必须独立保留")
 	# 每国只有首都一个粮仓；原 16 城初始储备全部归集到该粮仓。
 	for n in gs.nations:
 		var warehouses := gs.warehouse_cities_of(n.id)
@@ -155,12 +160,22 @@ func _test_world_generation() -> void:
 				ok_adj = false
 	_check(ok_adj, "邻接表应对称")
 	var road_counts := {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+	var degrees := {}
+	var longest_edge := 0.0
 	var roads_by_relief: Array[Edge] = gs.edges.duplicate()
 	roads_by_relief.sort_custom(func(a: Edge, b: Edge) -> bool:
 		return a.max_height_difference < b.max_height_difference
 	)
 	for edge in gs.edges:
 		road_counts[edge.max_throughput] = int(road_counts.get(edge.max_throughput, 0)) + 1
+		degrees[edge.city_a] = int(degrees.get(edge.city_a, 0)) + 1
+		degrees[edge.city_b] = int(degrees.get(edge.city_b, 0)) + 1
+		var delta := (
+			gs.cities[edge.city_a].map_position
+			- gs.cities[edge.city_b].map_position
+		)
+		delta.x *= gs.map_aspect_ratio
+		longest_edge = maxf(longest_edge, delta.length())
 	_check(
 		int(road_counts[0]) > 0,
 		"最高起伏道路中应包含不可供大军通行的边，分布=%s" % str(road_counts)
@@ -181,6 +196,15 @@ func _test_world_generation() -> void:
 	_check(
 		low_relief_average > high_relief_average,
 		"低起伏道路的平均通行等级应高于高起伏道路"
+	)
+	var degree_values := degrees.values()
+	_check(
+		degree_values.min() < degree_values.max(),
+		"Delaunay 局部图的城市度数应自然变化，不能硬编码固定边数"
+	)
+	_check(
+		longest_edge <= 0.36,
+		"连通骨架不得产生跨区域超长边，最长实为 %.3f" % longest_edge
 	)
 	var reachable := {0: true}
 	var queue: Array[int] = [0]
