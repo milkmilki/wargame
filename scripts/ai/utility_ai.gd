@@ -10,6 +10,7 @@ const REINFORCE_MIN_DEFICIT_SHARE: float = 0.50
 const RELIEF_MIN_DEFICIT_SHARE: float = 0.25
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
+const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
 const ASSAULT_SYNC_WINDOW_DAYS: float = 5.0
 const NORMAL_COMMIT_DAYS: int = 10
 const STRATEGIC_COMMIT_DAYS: int = 30
@@ -20,10 +21,18 @@ static func choose(
 	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	coordinator: ArmyCoordinator,
-	army: Army
+	army: Army,
+	minimum_participant_ratio: float = ASSAULT_PARTICIPANT_MIN_RATIO
 ) -> ActionCandidate:
 	if army.state == Army.State.HOLDING:
-		return _choose_holding(view, snapshot, threat, coordinator, army)
+		return _choose_holding(
+			view,
+			snapshot,
+			threat,
+			coordinator,
+			army,
+			minimum_participant_ratio
+		)
 	if army.state != Army.State.IDLE or army.location_city < 0:
 		return ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "状态不可接受新命令")
 	var breakout := _breakout_candidate(view, snapshot, army)
@@ -54,7 +63,14 @@ static func choose(
 	var hold := _hold_candidate(view, snapshot, threat, army)
 	if hold != null:
 		candidates.append(hold)
-	var attack := _attack_candidate(view, snapshot, threat, coordinator, army)
+	var attack := _attack_candidate(
+		view,
+		snapshot,
+		threat,
+		coordinator,
+		army,
+		minimum_participant_ratio
+	)
 	if attack != null:
 		candidates.append(attack)
 	var merge := _merge_candidate(view, snapshot, threat, coordinator, army)
@@ -240,7 +256,8 @@ static func _attack_candidate(
 	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	coordinator: ArmyCoordinator,
-	army: Army
+	army: Army,
+	minimum_participant_ratio: float
 ) -> ActionCandidate:
 	if army.morale < 0.5 or Pathfinding.nearest_supply_city(view.state, army)[0] == -1:
 		return null
@@ -291,6 +308,9 @@ static func _attack_candidate(
 		if is_adjacent_participant:
 			attack_power = maxf(attack_power, float(pool["power"]))
 		var ratio := attack_power / maxf(enemy_power, 1.0)
+		var participant_ratio := power / maxf(enemy_power, 1.0)
+		if participant_ratio < minimum_participant_ratio:
+			continue
 		var relief_value := _blockade_relief_value(view, city_id)
 		if (
 			ratio < ATTACK_ENTER_RATIO / aggression
@@ -672,7 +692,8 @@ static func _choose_holding(
 	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	coordinator: ArmyCoordinator,
-	army: Army
+	army: Army,
+	minimum_participant_ratio: float
 ) -> ActionCandidate:
 	var endpoint := army.move_from
 	if view.state.cities[endpoint].owner_nation != view.nation_id:
@@ -749,8 +770,16 @@ static func _choose_holding(
 			projected_enemy + ArmyPower.city_defense(target_city),
 			1.0
 		)
+		var participant_ratio := ArmyPower.effective(army) / maxf(
+			projected_enemy + ArmyPower.city_defense(target_city),
+			1.0
+		)
 		var directions := int(pool["directions"])
-		if available_size >= required_size and local_ratio >= ATTACK_ENTER_RATIO:
+		if (
+			available_size >= required_size
+			and local_ratio >= ATTACK_ENTER_RATIO
+			and participant_ratio >= minimum_participant_ratio
+		):
 			var attack := ActionCandidate.make(
 				ActionCandidate.Kind.ATTACK,
 				hold_score + local_ratio + 6.0 * float(maxi(directions - 1, 0)),

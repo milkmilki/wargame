@@ -2185,6 +2185,68 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 			% [guarded_candidate.kind, guarded_candidate.reason]
 	)
 
+	var participant_state := GameState.new()
+	participant_state.generate_world(7034)
+	participant_state.armies.clear()
+	for city in participant_state.cities:
+		city.owner_nation = 0
+	participant_state.cities[18].owner_nation = 1
+	participant_state.cities[18].defense = 1
+	participant_state.cities[10].owner_nation = 1
+	for edge_pair in [[17, 18], [19, 18], [10, 18]]:
+		var participant_edge := participant_state.edge_of(edge_pair[0], edge_pair[1])
+		participant_edge.max_throughput = 2
+		participant_edge.distance = 1
+	var tiny_participant := _make_army(948, 0, 500, 10, 10)
+	tiny_participant.state = Army.State.HOLDING
+	tiny_participant.location_city = 17
+	tiny_participant.move_from = 17
+	tiny_participant.move_to = 18
+	tiny_participant.move_progress = 0.5
+	tiny_participant.on_edge = true
+	var assault_support := _make_army(949, 0, 8500, 10, 10)
+	assault_support.state = Army.State.HOLDING
+	assault_support.location_city = 19
+	assault_support.move_from = 19
+	assault_support.move_to = 18
+	assault_support.move_progress = 0.5
+	assault_support.on_edge = true
+	var nearby_enemy := _make_army(950, 1, 10000, 10, 10)
+	nearby_enemy.state = Army.State.IDLE
+	nearby_enemy.location_city = 10
+	nearby_enemy.move_from = 10
+	participant_state.armies.append_array(
+		[tiny_participant, assault_support, nearby_enemy]
+	)
+	var participant_view := AiWorldView.build(participant_state, 0)
+	var participant_snapshot := StrategicMapSnapshot.build(participant_view)
+	var participant_threat := ThreatField.build(participant_view)
+	var baseline_candidate := UtilityAI.choose(
+		participant_view,
+		participant_snapshot,
+		participant_threat,
+		ArmyCoordinator.new(),
+		tiny_participant,
+		0.0
+	)
+	var improved_candidate := UtilityAI.choose(
+		participant_view,
+		participant_snapshot,
+		participant_threat,
+		ArmyCoordinator.new(),
+		tiny_participant
+	)
+	_check(
+		baseline_candidate.kind == ActionCandidate.Kind.ATTACK,
+		"B 当前 AI 应复现小军借联合兵力池出击，实为 kind=%d reason=%s"
+			% [baseline_candidate.kind, baseline_candidate.reason]
+	)
+	_check(
+		improved_candidate.kind != ActionCandidate.Kind.ATTACK,
+		"A 改进 AI 应因单军战力不足继续集结，实为 kind=%d reason=%s"
+			% [improved_candidate.kind, improved_candidate.reason]
+	)
+
 	var breakout_state := GameState.new()
 	breakout_state.generate_world(7031)
 	breakout_state.armies.clear()

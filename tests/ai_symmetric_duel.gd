@@ -1,11 +1,10 @@
 extends SceneTree
 ## 左右完全镜像的双国 AI 对战基准。
-## 左侧 nation 0 = 当前 Utility AI；右侧 nation 1 = 被替换前的旧规则 AI。
+## A（左侧 nation 0）= 改进 Utility AI；B（右侧 nation 1）= 修改前的当前 Utility AI。
 
 const DUEL_DAYS: int = 3650
 const LEFT_NATION: int = 0
 const RIGHT_NATION: int = 1
-const LEGACY_HOLD_DANGER: float = 0.40
 
 
 func _init() -> void:
@@ -21,7 +20,7 @@ func _init() -> void:
 	var simulation := Simulation.new()
 	root.add_child(simulation)
 	simulation.setup(state)
-	simulation.ai_policy_overrides[RIGHT_NATION] = _legacy_policy
+	simulation.ai_assault_participant_ratio_overrides[RIGHT_NATION] = 0.0
 
 	var initial_owner: Array[int] = []
 	for city in state.cities:
@@ -36,12 +35,12 @@ func _init() -> void:
 
 	var result := _measure(state, initial_owner)
 	var elapsed := Time.get_ticks_msec() - started
-	print("\n==== 左新 AI vs 右旧 AI：最终结果 ====")
+	print("\n==== A 改进 AI vs B 当前 AI：最终结果 ====")
 	var summary_template := (
 		"day=%d winner=%d elapsed_ms=%d\n"
-		+ "new: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
-		+ "old: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
-		+ "new_advantage_score=%.1f"
+		+ "A_improved: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
+		+ "B_current: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
+		+ "A_advantage_score=%.1f"
 	)
 	var summary := summary_template % [
 		state.day, state.winner, elapsed,
@@ -53,13 +52,16 @@ func _init() -> void:
 	]
 	print(summary)
 	_print_army_diagnostics(state)
-	var new_ai_better := (
+	var improved_ai_better := (
 		state.winner == LEFT_NATION
 		or (state.winner == -1 and float(result["score"]) > 0.0)
 	)
-	print("verdict=%s" % ("NEW_AI_BETTER" if new_ai_better else "NEW_AI_NOT_BETTER"))
+	print(
+		"verdict=%s"
+		% ("IMPROVED_AI_BETTER" if improved_ai_better else "IMPROVED_AI_NOT_BETTER")
+	)
 	simulation.free()
-	quit(0 if new_ai_better else 1)
+	quit(0 if improved_ai_better else 1)
 
 
 func _build_symmetric_world() -> GameState:
@@ -236,58 +238,6 @@ func _set_capital(
 	city.is_capital = true
 	city.has_warehouse = true
 	city.food_storage = food
-
-
-func _legacy_policy(state: GameState, nation_id: int, simulation: Simulation) -> void:
-	for army in state.armies:
-		if army.size <= 0 or army.owner_nation != nation_id or army.state != Army.State.IDLE:
-			continue
-		if not army.path.is_empty():
-			continue
-		var hold_to := _legacy_holding_edge(state, simulation, army)
-		if hold_to != -1:
-			army.path = [hold_to] as Array[int]
-			army.hold_target_progress = Simulation.HOLDING_TARGET_PROGRESS
-			army.ai_order_reason = "旧AI：最高danger边驻防"
-		else:
-			army.path = Pathfinding.nearest_enemy_city(state, army)
-			army.hold_target_progress = -1.0
-			army.ai_order_reason = "旧AI：前往最近敌城"
-		if army.path.is_empty():
-			continue
-		army.state = Army.State.MOVING
-		army.move_from = army.location_city
-		army.move_to = -1
-		army.move_progress = 0.0
-		army.ai_order_created_day = state.day
-		simulation._begin_next_leg(army)
-
-
-func _legacy_holding_edge(
-	state: GameState,
-	simulation: Simulation,
-	army: Army
-) -> int:
-	var best_neighbor := -1
-	var best_danger := LEGACY_HOLD_DANGER
-	for neighbor in state.neighbors(army.location_city):
-		if state.cities[neighbor].owner_nation == army.owner_nation:
-			continue
-		var edge := state.edge_of(army.location_city, neighbor)
-		if (
-			edge == null
-			or simulation._edge_has_friendly_holder_or_order(
-				army.owner_nation, army.location_city, neighbor
-			)
-		):
-			continue
-		if edge.danger > best_danger or (
-			is_equal_approx(edge.danger, best_danger)
-			and (best_neighbor == -1 or neighbor < best_neighbor)
-		):
-			best_danger = edge.danger
-			best_neighbor = neighbor
-	return best_neighbor
 
 
 func _measure(state: GameState, initial_owner: Array[int]) -> Dictionary:

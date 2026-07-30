@@ -48,6 +48,8 @@ var _ai_last_decision_day: int = -1
 ## 测试/基准注入点：nation_id -> Callable(state, nation_id, simulation)。
 ## 正式游戏保持为空，所有国家均使用 Utility AI。
 var ai_policy_overrides: Dictionary = {}
+## A/B 基准注入点：nation_id -> 正常进攻单军最低战力占比；正式游戏使用 UtilityAI 默认值。
+var ai_assault_participant_ratio_overrides: Dictionary = {}
 
 
 func setup(game_state: GameState) -> void:
@@ -374,6 +376,12 @@ func _ai_assign_targets() -> void:
 			view = AiWorldView.build(state, nation.id)
 			threat = ThreatField.build(view)
 		var coordinator := ArmyCoordinator.new()
+		var minimum_participant_ratio := float(
+			ai_assault_participant_ratio_overrides.get(
+				nation.id,
+				UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO
+			)
+		)
 		for army in view.friendly_armies:
 			if army.ai_target_city != -1 and army.state in [Army.State.MOVING, Army.State.FIGHTING]:
 				coordinator.reserve(army.ai_target_city, army)
@@ -391,7 +399,14 @@ func _ai_assign_targets() -> void:
 		for army in decision_order:
 			if army.size <= 0:
 				continue
-			var candidate := UtilityAI.choose(view, snapshot, threat, coordinator, army)
+			var candidate := UtilityAI.choose(
+				view,
+				snapshot,
+				threat,
+				coordinator,
+				army,
+				minimum_participant_ratio
+			)
 			if candidate.kind == ActionCandidate.Kind.NONE:
 				continue
 			if _execute_ai_candidate(army, candidate):

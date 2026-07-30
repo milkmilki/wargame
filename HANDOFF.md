@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **268 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **270 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
@@ -71,9 +71,9 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制地图/城市/边/军队/HUD(Day/Month)/攻城进度弧，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 主场景（Main + Simulation Node + MapRenderer） |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 268 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 270 断言，headless 运行 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
-| [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；左新 Utility AI、右旧规则 AI，十年对战并输出领土/军力/粮食/首都指标 |
+| [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；A 左侧改进 Utility AI、B 右侧修改前当前 Utility AI，十年对战并输出领土/军力/粮食/首都指标 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
 
 ---
@@ -196,6 +196,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - **合并守恒**：每日合并同城同状态军队及同位置驻防军；兵力求和，攻击/防御/士气/补给/驻防天数按兵力加权，边容量同步释放。
 - **驻防出击**：`HOLDING` 没有时间上限；只有士气、补给、局部战力和 5× 围城兵力（另留 1.5 倍战损余量）同时满足时，AI 才显式下达 `ATTACK`，从当前边位置连续推进。
 - **同边敌军估值**：远方威胁可按抵达时间衰减，但同一条边上的敌军是下一场直接接战对象，必须按 `100%` 有效战力计入。驻防军出击使用“折扣威胁场”和“同边敌军实值”的较大者，避免未满编军误攻满编驻防军。
+- **单军生存门槛**：联合兵力池决定整个攻势能否成立，但每支正常进攻参与军自身有效战力还必须达到目标局部敌军战力的 `35%`。这阻止几百人残部借用纸面联合战力分批冲锋；真正被围断粮军仍使用独立的 `0.70` 背水突围门槛。
 - **多方向协同**：敌城相邻正容量边上的实际友军按来源邻城计为独立方向，联合兵力达到围城/战力门槛后才进攻。最慢方向先出发，较快方向等待到预计抵达时间差不超过 5 天，避免“同日下令、分批送死”。
 - **断粮突围与解围**：补给率 `≤25%` 且无法经本国控制网抵达粮仓才算真正被围；突围优先级高于普通动作，但只攻击战力比 `≥0.70` 的最弱包围节点。被围城和断粮友军形成紧急救援缺口，相邻敌城作为打通通道的高价值目标。
 - **建军/解散**：AI 国家级命令 `CREATE_ARMY/DISBAND_ARMY`。军队数低于 `max(前线数+2, ceil(城市数/4))` 时在未被围首都粮仓消耗 5000 人建军；仅在军队数超额时解散安全后方 `<500` 人残部，幸存人数全额返还人口库。
@@ -343,13 +344,13 @@ AI 长跑命令：
 /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_longrun.gd
 ```
 
-左右镜像新旧 AI 对战：
+左右镜像 A 改进 AI / B 当前 AI 对战：
 
 ```bash
 /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
 ```
 
-当前基准结论（固定种子，左新右旧，含多方向协同、断粮突围、紧急解围和围城中断）：第 1 年新 AI 暂时 `20:44` 落后，第 3 年追至 `30:34`，第 2139 天以 `64:0` 完成统一，退出码 `0`，结论 **NEW_AI_BETTER**。基准启动前会验证城市、军队、道路左右镜像及 32 城满编稳态年度粮食结余为正。
+当前基准结论（固定种子，两侧均为同版 Utility AI，仅 A 启用 `0.35` 单军生存门槛、B 使用修改前的 `0`）：第 1 年 A 为 `28:36`，第 2 年反超至 `37:27`，第 3650 天 A 为 `63:1`，优势分 `132579.7`，退出码 `0`，结论 **IMPROVED_AI_BETTER**。基准启动前会验证城市、军队、道路左右镜像及 32 城满编稳态年度粮食结余为正。
 
 ---
 
