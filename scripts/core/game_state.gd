@@ -6,6 +6,10 @@ extends RefCounted
 const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64
 const NATION_COUNT: int = 4
+const CITY_MANPOWER_PER_MONTH_MIN: int = 10
+const CITY_MANPOWER_PER_MONTH_MAX: int = 30
+const INITIAL_MANPOWER_RESERVE_MONTHS: int = 150
+const INITIAL_ARMY_MANPOWER_MONTHS: int = 50
 const TERRAIN_MAP_PATH := (
 	"res://china-map-china-flag-shaded-relief-color-height-map-3d-illustration-png.webp"
 )
@@ -117,7 +121,10 @@ func _generate_grid_cities() -> void:
 			)
 			city.owner_nation = _quadrant_of(c, r)
 			city.defense = rng.randi_range(10, 30)
-			city.manpower_per_month = rng.randi_range(5, 15)
+			city.manpower_per_month = rng.randi_range(
+				CITY_MANPOWER_PER_MONTH_MIN,
+				CITY_MANPOWER_PER_MONTH_MAX
+			)
 			city.gold_per_month = rng.randi_range(5, 15)
 			city.food_per_half_year = rng.randi_range(20, 60)
 			# 先生成各城初始储备，随后统一归集到本国首都粮仓。
@@ -141,7 +148,10 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.terrain_height = heights[id]
 		city.terrain_relief = reliefs[id]
 		city.defense = rng.randi_range(10, 30)
-		city.manpower_per_month = rng.randi_range(5, 15)
+		city.manpower_per_month = rng.randi_range(
+			CITY_MANPOWER_PER_MONTH_MIN,
+			CITY_MANPOWER_PER_MONTH_MAX
+		)
 		city.gold_per_month = rng.randi_range(5, 15)
 		city.food_per_half_year = rng.randi_range(20, 60)
 		city.food_storage = rng.randi_range(80, 100)
@@ -184,8 +194,9 @@ func _initialize_manpower_pools() -> void:
 	for nation in nations:
 		nation.manpower_pool = 0
 	for city in cities:
-		# 初始人口库按 100 个月的单城产出标定，约等于旧版 500~1500 城市储备。
-		nations[city.owner_nation].manpower_pool += city.manpower_per_month * 100
+		nations[city.owner_nation].manpower_pool += (
+			city.manpower_per_month * INITIAL_MANPOWER_RESERVE_MONTHS
+		)
 
 
 func _initialize_capitals_and_warehouses() -> void:
@@ -437,7 +448,11 @@ func _union_find_root(parent: Array[int], node: int) -> int:
 
 func _generate_armies() -> void:
 	for city in cities:
-		var army := create_army(city.owner_nation, city.id, city.manpower_per_month * 100)
+		var army := create_army(
+			city.owner_nation,
+			city.id,
+			city.manpower_per_month * INITIAL_ARMY_MANPOWER_MONTHS
+		)
 		army.speed_factor = rng.randf_range(0.3, 0.9)
 		army.attack = rng.randi_range(8, 15)
 		army.defense = rng.randi_range(8, 15)

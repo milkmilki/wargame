@@ -20,7 +20,10 @@ func _init() -> void:
 	var simulation := Simulation.new()
 	root.add_child(simulation)
 	simulation.setup(state)
-	simulation.ai_assault_participant_ratio_overrides[RIGHT_NATION] = 0.0
+	var duel_mode := OS.get_environment("AI_DUEL_MODE")
+	if duel_mode.is_empty():
+		duel_mode = "improved-left"
+	_configure_duel_mode(simulation, duel_mode)
 
 	var initial_owner: Array[int] = []
 	for city in state.cities:
@@ -36,32 +39,80 @@ func _init() -> void:
 	var result := _measure(state, initial_owner)
 	var elapsed := Time.get_ticks_msec() - started
 	print("\n==== A 改进 AI vs B 当前 AI：最终结果 ====")
+	print("mode=%s" % duel_mode)
+	var left_policy := "improved"
+	var right_policy := "current"
+	if duel_mode == "current-control":
+		left_policy = "current"
+	elif duel_mode == "improved-right":
+		left_policy = "current"
+		right_policy = "improved"
+	elif duel_mode == "garrison-only":
+		left_policy = "garrison-only"
+	elif duel_mode == "offense-only":
+		left_policy = "offense-only"
 	var summary_template := (
 		"day=%d winner=%d elapsed_ms=%d\n"
-		+ "A_improved: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
-		+ "B_current: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
-		+ "A_advantage_score=%.1f"
+		+ "left_%s: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
+		+ "right_%s: cities=%d power=%.1f food=%d capital=%s captures=%d\n"
+		+ "left_advantage_score=%.1f"
 	)
 	var summary := summary_template % [
 		state.day, state.winner, elapsed,
+		left_policy,
 		result["new_cities"], result["new_power"], result["new_food"],
 		str(result["new_capital"]), result["new_captures"],
+		right_policy,
 		result["old_cities"], result["old_power"], result["old_food"],
 		str(result["old_capital"]), result["old_captures"],
 		result["score"],
 	]
 	print(summary)
 	_print_army_diagnostics(state)
-	var improved_ai_better := (
-		state.winner == LEFT_NATION
-		or (state.winner == -1 and float(result["score"]) > 0.0)
-	)
+	var improved_ai_better := false
+	if duel_mode == "current-control":
+		print("verdict=CONTROL_COMPLETE")
+		simulation.free()
+		quit(0)
+		return
+	elif duel_mode == "improved-right":
+		improved_ai_better = (
+			state.winner == RIGHT_NATION
+			or (state.winner == -1 and float(result["score"]) < 0.0)
+		)
+	else:
+		improved_ai_better = (
+			state.winner == LEFT_NATION
+			or (state.winner == -1 and float(result["score"]) > 0.0)
+		)
 	print(
 		"verdict=%s"
 		% ("IMPROVED_AI_BETTER" if improved_ai_better else "IMPROVED_AI_NOT_BETTER")
 	)
 	simulation.free()
 	quit(0 if improved_ai_better else 1)
+
+
+func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
+	match mode:
+		"current-control":
+			for nation_id in [LEFT_NATION, RIGHT_NATION]:
+				simulation.ai_strategic_planning_overrides[nation_id] = false
+				simulation.ai_adaptive_garrison_overrides[nation_id] = false
+		"improved-right":
+			simulation.ai_strategic_planning_overrides[LEFT_NATION] = false
+			simulation.ai_adaptive_garrison_overrides[LEFT_NATION] = false
+		"offense-only":
+			simulation.ai_adaptive_garrison_overrides[LEFT_NATION] = false
+			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
+			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
+		"garrison-only":
+			simulation.ai_strategic_planning_overrides[LEFT_NATION] = false
+			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
+			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
+		_:
+			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
+			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
 
 
 func _build_symmetric_world() -> GameState:
@@ -93,6 +144,14 @@ func _build_symmetric_world() -> GameState:
 		city.has_warehouse = false
 		city.food_storage = 0
 		city.at_war = true
+
+	for nation in state.nations:
+		nation.manpower_pool = 0
+	for city in state.cities:
+		state.nations[city.owner_nation].manpower_pool += (
+			city.manpower_per_month
+			* GameState.INITIAL_MANPOWER_RESERVE_MONTHS
+		)
 
 	var left_capital := 3 * GameState.GRID + 1
 	var right_capital := 3 * GameState.GRID + 6
@@ -148,6 +207,11 @@ func _build_symmetric_world() -> GameState:
 
 func _validate_symmetry(state: GameState) -> bool:
 	if state.nations.size() != 2:
+		return false
+	if (
+		state.nations[LEFT_NATION].manpower_pool
+		!= state.nations[RIGHT_NATION].manpower_pool
+	):
 		return false
 	for row in range(GameState.GRID):
 		for col in range(GameState.GRID / 2):

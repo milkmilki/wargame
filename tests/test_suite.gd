@@ -2082,6 +2082,59 @@ func _test_ai_strategic_map_and_threat() -> void:
 		"敌军威胁应随抵达时间衰减：c2=%.1f c1=%.1f c0=%.1f"
 			% [threat.threat_at(2), threat.threat_at(1), threat.threat_at(0)])
 
+	var deep_state := GameState.new()
+	deep_state.generate_grid_world(7003)
+	deep_state.armies.clear()
+	for city in deep_state.cities:
+		city.owner_nation = 2
+	for city_id in [16]:
+		deep_state.cities[city_id].owner_nation = 0
+	for city_id in [9, 17, 25]:
+		deep_state.cities[city_id].owner_nation = 1
+	for edge in deep_state.edges:
+		edge.max_throughput = 0
+	for pair in [[16, 17], [17, 9], [17, 25]]:
+		deep_state.edge_of(pair[0], pair[1]).max_throughput = 2
+	deep_state.nations[1].capital_city_id = 25
+	deep_state.cities[25].is_capital = true
+	var deep_view := AiWorldView.build(deep_state, 0)
+	var deep_snapshot := StrategicMapSnapshot.build(deep_view)
+	_check(
+		deep_snapshot.campaign_target == 17
+		and deep_snapshot.value_of_offense(17) > deep_snapshot.value_of_city(17),
+		"两层规划应识别打开后续城市且切断敌方连通的门户城市"
+	)
+	_check(
+		UtilityAI._post_capture_exposure(deep_view, 17) == 1
+		and UtilityAI._strategic_attack_adjustment(
+			deep_view, deep_snapshot, 17, 2
+		) > UtilityAI._strategic_attack_adjustment(
+			deep_view, deep_snapshot, 17, 1
+		),
+		"主战役目标只应在多方向进攻时获得大会战加分"
+	)
+	var strategic_adjustment := UtilityAI._strategic_attack_adjustment(
+		deep_view, deep_snapshot, 17, 2
+	)
+	_check(
+		strategic_adjustment > 0.0 and strategic_adjustment <= 1.5,
+		"图论规划只能作为有界战略先验，不能覆盖战力与补给判断"
+	)
+	deep_snapshot.campaign_target = -1
+	_check(
+		UtilityAI._strategic_attack_adjustment(
+			deep_view, deep_snapshot, 17, 2
+		) <= 0.5,
+		"非主战役目标不得获得国家级集中加分"
+	)
+	var siege := deep_state.new_battle(Battle.Kind.SIEGE)
+	siege.city = deep_state.cities[17]
+	var contested := MapRenderer.contested_city_ids(deep_state)
+	_check(
+		contested.has(17) and not contested.has(16),
+		"红框只应标记正在发生城战或围城的城市"
+	)
+
 
 func _test_ai_merge_and_retreat_utility() -> void:
 	print("[30] AI 协调：同城合并守恒、弱军生成可解释撤退候选")
@@ -2125,6 +2178,10 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	_check(candidate.kind == ActionCandidate.Kind.RETREAT and candidate.target_city != -1,
 		"局部敌军显著占优时弱军应生成 RETREAT，实为 kind=%d target=%d"
 			% [candidate.kind, candidate.target_city])
+	_check(
+		not UtilityAI._frontier_deployment_safe(view, threat, weak),
+		"城市局部战力低于撤退阈值时不得生成驻边候选，避免边城往返"
+	)
 	_check(not candidate.reason.is_empty() and candidate.minimum_commit_days >= 30,
 		"撤退候选必须保存可解释原因和命令承诺期")
 
@@ -2159,7 +2216,31 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		"首都守备不足时应生成定向增援：kind=%d target=%d capital=%d"
 			% [reinforce_candidate.kind, reinforce_candidate.target_city, capital_id]
 	)
-
+	var distant_enemy_city := capital_id + 2
+	gs.cities[distant_enemy_city].owner_nation = 1
+	gs.edge_of(capital_id, capital_id + 1).max_throughput = 2
+	gs.edge_of(capital_id, capital_id + 1).distance = 1
+	gs.edge_of(capital_id + 1, distant_enemy_city).max_throughput = 2
+	gs.edge_of(capital_id + 1, distant_enemy_city).distance = 1
+	var distant_enemy := _make_army(936, 1, 12000, 12, 12)
+	distant_enemy.location_city = distant_enemy_city
+	distant_enemy.move_from = distant_enemy_city
+	distant_enemy.state = Army.State.IDLE
+	gs.armies.append(distant_enemy)
+	view = AiWorldView.build(gs, 0)
+	threat = ThreatField.build(view)
+	var current_required := UtilityAI.required_logistics_garrison(
+		view, threat, capital_id
+	)
+	view.adaptive_garrison_enabled = false
+	var legacy_required := UtilityAI.required_logistics_garrison(
+		view, threat, capital_id
+	)
+	_check(
+		_approx(current_required, 5000.0) and legacy_required > current_required,
+		"非前线首都不应把两跳外传播威胁全部折算为常驻军：new=%.1f old=%.1f"
+			% [current_required, legacy_required]
+	)
 
 func _test_ai_encirclement_breakout_and_relief() -> void:
 	print("[30b] AI 包围协同：多方向进攻、断粮突围、紧急解围")
@@ -2446,11 +2527,31 @@ func _test_manpower_pool_and_force_commands() -> void:
 	var expected_initial := 0
 	var monthly_income := 0
 	for city in gs.cities_of(nation_id):
-		expected_initial += city.manpower_per_month * 100
+		expected_initial += (
+			city.manpower_per_month
+			* GameState.INITIAL_MANPOWER_RESERVE_MONTHS
+		)
 		monthly_income += city.manpower_per_month
+		_check(
+			city.manpower_per_month >= GameState.CITY_MANPOWER_PER_MONTH_MIN
+			and city.manpower_per_month <= GameState.CITY_MANPOWER_PER_MONTH_MAX,
+			"城市月度人口恢复应位于新标定区间"
+		)
 	_check(gs.nations[nation_id].manpower_pool == expected_initial,
 		"开局人口库应汇总本国城市储备：应 %d，实为 %d"
 			% [expected_initial, gs.nations[nation_id].manpower_pool])
+	for army in gs.armies:
+		_check(
+			army.size >= (
+				GameState.CITY_MANPOWER_PER_MONTH_MIN
+				* GameState.INITIAL_ARMY_MANPOWER_MONTHS
+			)
+			and army.size <= (
+				GameState.CITY_MANPOWER_PER_MONTH_MAX
+				* GameState.INITIAL_ARMY_MANPOWER_MONTHS
+			),
+			"提高人口池时初始军队仍应保持 500～1500 人标定"
+		)
 	var pool_before_income := gs.nations[nation_id].manpower_pool
 	gs.day = Simulation.DAYS_PER_MONTH
 	sim._resolve_economy()

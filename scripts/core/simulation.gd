@@ -50,6 +50,10 @@ var _ai_last_decision_day: int = -1
 var ai_policy_overrides: Dictionary = {}
 ## A/B 基准注入点：nation_id -> 正常进攻单军最低战力占比；正式游戏使用 UtilityAI 默认值。
 var ai_assault_participant_ratio_overrides: Dictionary = {}
+## A/B 基准注入点：false 保留修改前的静态进攻评分。
+var ai_strategic_planning_overrides: Dictionary = {}
+## A/B 基准注入点：false 保留修改前的 60 天传播威胁守备策略。
+var ai_adaptive_garrison_overrides: Dictionary = {}
 
 
 func setup(game_state: GameState) -> void:
@@ -364,6 +368,12 @@ func _ai_assign_targets() -> void:
 			policy.call(state, nation.id, self)
 			continue
 		var view := AiWorldView.build(state, nation.id)
+		view.strategic_planning_enabled = bool(
+			ai_strategic_planning_overrides.get(nation.id, true)
+		)
+		view.adaptive_garrison_enabled = bool(
+			ai_adaptive_garrison_overrides.get(nation.id, true)
+		)
 		if (
 			not _ai_strategy_cache.has(nation.id)
 			or int(_ai_strategy_revision.get(nation.id, -1)) != state.ownership_revision
@@ -374,6 +384,12 @@ func _ai_assign_targets() -> void:
 		var threat := ThreatField.build(view)
 		if _ai_manage_force_structure(view, snapshot, threat):
 			view = AiWorldView.build(state, nation.id)
+			view.strategic_planning_enabled = bool(
+				ai_strategic_planning_overrides.get(nation.id, true)
+			)
+			view.adaptive_garrison_enabled = bool(
+				ai_adaptive_garrison_overrides.get(nation.id, true)
+			)
 			threat = ThreatField.build(view)
 		var coordinator := ArmyCoordinator.new()
 		var minimum_participant_ratio := float(

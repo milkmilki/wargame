@@ -248,13 +248,18 @@ func _draw_cities() -> void:
 		5.0 * _display_scale,
 		10.0 * _display_scale
 	)
+	var contested_cities := contested_city_ids(state)
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
 		var base := state.nations[city.owner_nation].color
 		draw_rect(rect, base, true)
-		# 边框：at_war 红描边，否则暗描边
-		var border := Color(0.9, 0.1, 0.1) if city.at_war else Color(0, 0, 0, 0.5)
+		# 红框只表示本城正在发生守城战或围城，不再复述全局战争状态。
+		var border := (
+			Color(0.9, 0.1, 0.1)
+			if contested_cities.has(city.id)
+			else Color(0, 0, 0, 0.5)
+		)
 		draw_rect(rect, border, false, 2.0 * _display_scale)
 		# 普通城市只显示城防；首都粮仓额外显示 C/W 与库存。
 		var label := "D%d" % city.defense
@@ -269,6 +274,14 @@ func _draw_cities() -> void:
 			_font_size(8),
 			Color(0, 0, 0, 0.8)
 		)
+
+
+static func contested_city_ids(game_state: GameState) -> Dictionary:
+	var result := {}
+	for battle in game_state.battles:
+		if not battle.finished and battle.city != null:
+			result[battle.city.id] = true
+	return result
 
 
 func _draw_armies() -> void:

@@ -4,6 +4,7 @@ extends RefCounted
 
 const ATTACK_ENTER_RATIO: float = 1.35
 const RETREAT_ENTER_RATIO: float = 0.40
+const HOLD_DEPLOY_ENTER_RATIO: float = 0.60
 const EMERGENCY_RETREAT_RATIO: float = 0.25
 const SIEGE_COMMIT_MARGIN: float = 1.50
 const REINFORCE_MIN_DEFICIT_SHARE: float = 0.50
@@ -12,6 +13,8 @@ const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
 const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
 const ASSAULT_SYNC_WINDOW_DAYS: float = 5.0
+const STRATEGIC_VALUE_DELTA_LIMIT: float = 1.0
+const CAMPAIGN_TARGET_BONUS: float = 1.0
 const NORMAL_COMMIT_DAYS: int = 10
 const STRATEGIC_COMMIT_DAYS: int = 30
 
@@ -214,6 +217,8 @@ static func _hold_candidate(
 	army: Army
 ) -> ActionCandidate:
 	var current := army.location_city
+	if not _frontier_deployment_safe(view, threat, army):
+		return null
 	var best_edge: Edge = null
 	var best_score := -INF
 	for neighbor in view.state.neighbors(current):
@@ -249,6 +254,22 @@ static func _hold_candidate(
 	candidate.target_edge_b = target
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 	return candidate
+
+
+static func _frontier_deployment_safe(
+	view: AiWorldView,
+	threat: ThreatField,
+	army: Army
+) -> bool:
+	var threat_power := threat.threat_at(army.location_city)
+	var support_power := maxf(
+		threat.support_at(army.location_city),
+		ArmyPower.effective(army)
+	)
+	return (
+		support_power / maxf(threat_power, 1.0)
+		>= HOLD_DEPLOY_ENTER_RATIO * _caution(view.nation_id)
+	)
 
 
 static func _attack_candidate(
@@ -304,6 +325,7 @@ static func _attack_candidate(
 			continue
 		var enemy_power := threat.threat_at(city_id) + ArmyPower.city_defense(city)
 		var committed := coordinator.power_reserved(city_id)
+		var relief_value := _blockade_relief_value(view, city_id)
 		var attack_power := power + committed + 0.35 * threat.support_at(start)
 		if is_adjacent_participant:
 			attack_power = maxf(attack_power, float(pool["power"]))
@@ -311,7 +333,6 @@ static func _attack_candidate(
 		var participant_ratio := power / maxf(enemy_power, 1.0)
 		if participant_ratio < minimum_participant_ratio:
 			continue
-		var relief_value := _blockade_relief_value(view, city_id)
 		if (
 			ratio < ATTACK_ENTER_RATIO / aggression
 			and (relief_value <= 0.0 or ratio < 1.0)
@@ -326,6 +347,9 @@ static func _attack_candidate(
 			- 0.5 * snapshot.value_of_city(start)
 			+ 6.0 * float(maxi(directions - 1, 0))
 			+ relief_value
+			+ _strategic_attack_adjustment(
+				view, snapshot, city_id, directions
+			)
 		)
 		if score > best_score or (is_equal_approx(score, best_score) and city_id < best_city):
 			best_score = score
@@ -664,10 +688,32 @@ static func required_logistics_garrison(
 		return 0.0
 	var future_threat := threat.threat_at(city_id)
 	if city_id == view.capital_city_id:
+		if (
+			view.adaptive_garrison_enabled
+			and not _has_immediate_enemy_access(view, city_id)
+		):
+			return 5000.0
 		return maxf(5000.0, future_threat * 1.25)
 	if city.has_warehouse:
+		if (
+			view.adaptive_garrison_enabled
+			and not _has_immediate_enemy_access(view, city_id)
+		):
+			return 3000.0
 		return maxf(3000.0, future_threat)
 	return 0.0
+
+
+static func _has_immediate_enemy_access(view: AiWorldView, city_id: int) -> bool:
+	for neighbor in view.state.neighbors(city_id):
+		var edge := view.state.edge_of(city_id, neighbor)
+		if (
+			edge != null
+			and edge.max_throughput > 0
+			and view.state.cities[neighbor].owner_nation != view.nation_id
+		):
+			return true
+	return false
 
 
 static func stationed_power_at(
@@ -782,7 +828,14 @@ static func _choose_holding(
 		):
 			var attack := ActionCandidate.make(
 				ActionCandidate.Kind.ATTACK,
-				hold_score + local_ratio + 6.0 * float(maxi(directions - 1, 0)),
+				(
+					hold_score
+					+ local_ratio
+					+ 6.0 * float(maxi(directions - 1, 0))
+					+ _strategic_attack_adjustment(
+						view, snapshot, enemy_endpoint, directions
+					)
+				),
 				"%d 个方向形成协同优势 %.2f，向敌方端点 %d 同步推进"
 					% [directions, local_ratio, enemy_endpoint],
 				enemy_endpoint
@@ -795,6 +848,44 @@ static func _choose_holding(
 		"继续控制战略边，价值 %.2f" % hold_score,
 		army.move_to
 	)
+
+
+static func _strategic_attack_adjustment(
+	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
+	city_id: int,
+	directions: int
+) -> float:
+	if not view.strategic_planning_enabled:
+		return 0.0
+	var value_delta := clampf(
+		snapshot.value_of_offense(city_id) - snapshot.value_of_city(city_id),
+		-STRATEGIC_VALUE_DELTA_LIMIT,
+		STRATEGIC_VALUE_DELTA_LIMIT
+	)
+	var campaign_bonus := 0.0
+	if (
+		city_id == snapshot.campaign_target
+		and (directions >= 2 or _post_capture_exposure(view, city_id) <= 0)
+	):
+		campaign_bonus = CAMPAIGN_TARGET_BONUS
+	return value_delta * 0.5 + campaign_bonus
+
+
+static func _post_capture_exposure(view: AiWorldView, city_id: int) -> int:
+	var friendly_links := 0
+	var hostile_links := 0
+	var target_owner := view.state.cities[city_id].owner_nation
+	for neighbor in view.state.neighbors(city_id):
+		var edge := view.state.edge_of(city_id, neighbor)
+		if edge == null or edge.max_throughput <= 0:
+			continue
+		var owner := view.state.cities[neighbor].owner_nation
+		if owner == view.nation_id:
+			friendly_links += 1
+		elif owner == target_owner:
+			hostile_links += 1
+	return hostile_links - friendly_links
 
 
 ## 同一条边上的敌军是即将直接接战的对象，不能套用威胁场的时间衰减或远方折扣。

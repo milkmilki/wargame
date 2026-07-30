@@ -4,6 +4,7 @@ extends RefCounted
 
 var nation_id: int
 var ownership_revision: int
+var strategic_planning_enabled: bool
 var city_value: Dictionary = {}            ## city_id -> float
 var edge_value: Dictionary = {}            ## normalized edge key -> float
 var bridge_impact: Dictionary = {}         ## edge key -> 被切断友城价值
@@ -13,6 +14,8 @@ var frontier_edges: Array[Edge] = []
 var frontier_cities: Array[int] = []
 var frontier_enemy_cities: Array[int] = []
 var priority_enemy_cities: Array[int] = []
+var offensive_value: Dictionary = {}       ## enemy city_id -> 两层占领后战略价值
+var campaign_target: int = -1               ## 国家级主战役目标
 
 var _state: GameState
 var _disc: Dictionary = {}
@@ -26,12 +29,14 @@ static func build(view: AiWorldView) -> StrategicMapSnapshot:
 	var snapshot := StrategicMapSnapshot.new()
 	snapshot.nation_id = view.nation_id
 	snapshot.ownership_revision = view.state.ownership_revision
+	snapshot.strategic_planning_enabled = view.strategic_planning_enabled
 	snapshot._state = view.state
 	snapshot._compute_city_values()
 	snapshot._find_frontier()
 	snapshot._compute_connectivity()
 	snapshot._compute_supply_corridors(view)
 	snapshot._finalize_edge_values()
+	snapshot._compute_offensive_values(view)
 	snapshot._select_priority_targets(view)
 	return snapshot
 
@@ -219,10 +224,80 @@ func _finalize_edge_values() -> void:
 		edge_value[key] = value
 
 
+func _compute_offensive_values(view: AiWorldView) -> void:
+	for city_id in frontier_enemy_cities:
+		var base := value_of_city(city_id)
+		if not view.strategic_planning_enabled:
+			offensive_value[city_id] = base
+			continue
+		var target_owner := _state.cities[city_id].owner_nation
+		var friendly_links := 0
+		var hostile_links := 0
+		var gateway_value := 0.0
+		for neighbor in _state.neighbors(city_id):
+			var edge := _state.edge_of(city_id, neighbor)
+			if edge == null or edge.max_throughput <= 0:
+				continue
+			var neighbor_owner := _state.cities[neighbor].owner_nation
+			if neighbor_owner == nation_id:
+				friendly_links += 1
+			elif neighbor_owner == target_owner:
+				hostile_links += 1
+				if not frontier_enemy_cities.has(neighbor):
+					gateway_value = maxf(gateway_value, value_of_city(neighbor))
+		var defensive_gain := float(friendly_links - hostile_links)
+		var exposure := maxi(hostile_links - friendly_links, 0)
+		var gateway_bonus := 0.0
+		if exposure <= 1:
+			gateway_bonus = minf(gateway_value * 0.30, 1.5)
+		var cut_ratio := _enemy_cut_value_ratio(city_id, target_owner)
+		offensive_value[city_id] = (
+			base
+			+ maxf(defensive_gain, 0.0) * 1.5
+			- float(exposure) * 1.5
+			+ gateway_bonus
+			+ cut_ratio * 6.0
+		)
+
+
+func _enemy_cut_value_ratio(target_city: int, enemy_nation: int) -> float:
+	if enemy_nation < 0 or enemy_nation >= _state.nations.size():
+		return 0.0
+	var capital := _state.nations[enemy_nation].capital_city_id
+	if capital < 0 or capital == target_city:
+		return 0.0
+	var reachable := {capital: true}
+	var queue: Array[int] = [capital]
+	while not queue.is_empty():
+		var current: int = queue.pop_front()
+		for neighbor in _state.neighbors(current):
+			if neighbor == target_city or reachable.has(neighbor):
+				continue
+			var edge := _state.edge_of(current, neighbor)
+			if (
+				edge == null
+				or edge.max_throughput <= 0
+				or _state.cities[neighbor].owner_nation != enemy_nation
+			):
+				continue
+			reachable[neighbor] = true
+			queue.append(neighbor)
+	var total_value := 0.0
+	var cut_value := 0.0
+	for city in _state.cities:
+		if city.owner_nation != enemy_nation or city.id == target_city:
+			continue
+		var value := value_of_city(city.id)
+		total_value += value
+		if not reachable.has(city.id):
+			cut_value += value
+	return cut_value / maxf(total_value, 0.001)
+
+
 func _select_priority_targets(view: AiWorldView) -> void:
 	var scored: Array = []
 	for city_id in frontier_enemy_cities:
-		scored.append([float(city_value.get(city_id, 0.0)) + 2.0, city_id])
+		scored.append([value_of_offense(city_id) + 2.0, city_id])
 	scored.sort_custom(func(a: Array, b: Array) -> bool:
 		return float(a[0]) > float(b[0]) or (
 			is_equal_approx(float(a[0]), float(b[0])) and int(a[1]) < int(b[1])
@@ -230,10 +305,16 @@ func _select_priority_targets(view: AiWorldView) -> void:
 	)
 	for i in range(mini(scored.size(), 16)):
 		priority_enemy_cities.append(int(scored[i][1]))
+	if view.strategic_planning_enabled and not scored.is_empty():
+		campaign_target = int(scored[0][1])
 
 
 func value_of_city(city_id: int) -> float:
 	return float(city_value.get(city_id, 0.0))
+
+
+func value_of_offense(city_id: int) -> float:
+	return float(offensive_value.get(city_id, value_of_city(city_id)))
 
 
 func value_of_edge(a: int, b: int) -> float:

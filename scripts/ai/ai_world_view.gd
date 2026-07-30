@@ -6,6 +6,8 @@ var state: GameState
 var nation_id: int
 var day: int
 var capital_city_id: int
+var strategic_planning_enabled: bool = true
+var adaptive_garrison_enabled: bool = true
 var friendly_cities: Array[City] = []
 var enemy_cities: Array[City] = []
 var friendly_armies: Array[Army] = []
