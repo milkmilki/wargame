@@ -222,7 +222,7 @@ func _test_world_generation() -> void:
 	for city in gs.cities:
 		province_owners_stable = (
 			province_owners_stable
-			and gs.initial_owner_of(city.id) == city.owner_nation
+			and gs.recognized_owner_of(city.id) == city.owner_nation
 		)
 	_check(province_owners_stable, "省份必须保存不随占领变化的初始归属")
 	var province_geometry := MapRenderer.build_province_boundary_segments(gs)
@@ -1567,7 +1567,7 @@ func _test_morale_retreat_recovery() -> void:
 	# 城市恢复期间若易主，旧城主驻军必须被统一驱逐，不能滞留敌城。
 	starved.state = Army.State.RECOVERING
 	var old_owner := starved.owner_nation
-	var historical_owner := gs.initial_owner_of(c2)
+	var historical_owner := gs.recognized_owner_of(c2)
 	var captor := _make_army(502, (old_owner + 1) % GameState.NATION_COUNT, 1200, 10)
 	gs.armies.append(captor)
 	sim._capture_city(captor, gs.cities[c2])
@@ -1576,7 +1576,7 @@ func _test_morale_retreat_recovery() -> void:
 	_check(not (starved.state == Army.State.RECOVERING and gs.cities[c2].owner_nation != old_owner),
 		"RECOVERING 军队不得滞留敌方城市")
 	_check(
-		gs.initial_owner_of(c2) == historical_owner
+		gs.recognized_owner_of(c2) == historical_owner
 		and gs.cities[c2].owner_nation != historical_owner,
 		"占领只能改变当前归属，省份初始底色归属必须保持不变"
 	)
@@ -2587,6 +2587,21 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		"A 改进 AI 应因单军战力不足继续集结，实为 kind=%d reason=%s"
 			% [improved_candidate.kind, improved_candidate.reason]
 	)
+	var legacy_order := Simulation._sort_ai_decision_order(
+		[tiny_participant, assault_support] as Array[Army],
+		participant_snapshot,
+		false
+	)
+	var improved_order := Simulation._sort_ai_decision_order(
+		[tiny_participant, assault_support] as Array[Army],
+		participant_snapshot,
+		true
+	)
+	_check(
+		legacy_order[0] == tiny_participant
+		and improved_order[0] == assault_support,
+		"B 当前战斗 AI 按ID决策；A 改进 AI 应让同层级主力先确定攻势"
+	)
 
 	var breakout_state := GameState.new()
 	breakout_state.generate_grid_world(7031)
@@ -2912,6 +2927,13 @@ func _test_diplomacy_state_and_ai() -> void:
 		encounter_state.battles.size() == 1,
 		"只有一方主动越过边中线并接触对方后才应触发战斗"
 	)
+	var settlement_city := encounter_state.cities_of(1)[0]
+	settlement_city.owner_nation = 0
+	encounter_state.ownership_revision += 1
+	_check(
+		encounter_state.recognized_owner_of(settlement_city.id) == 1,
+		"战争期间实际控制与法理归属不同时应保持占领状态"
+	)
 	encounter_sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.MAKE_PEACE,
 		"a": 0,
@@ -2926,6 +2948,10 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		encounter_state.battles.is_empty() and not fighting_after_peace,
 		"求和必须结束双方活跃战斗并清除 FIGHTING 状态"
+	)
+	_check(
+		encounter_state.recognized_owner_of(settlement_city.id) == 0,
+		"和平协议必须确认双方实际控制城市的领土转移，停止显示占领斜线"
 	)
 	encounter_sim.free()
 
@@ -2961,12 +2987,36 @@ func _test_diplomacy_state_and_ai() -> void:
 		"宣战必须选择敌国合法目标城并解释产出和战略价值"
 	)
 	var treasury_before_crisis := ai_state.nations[0].treasury_gold
+	var original_gold_income := {}
+	for city in ai_state.cities_of(0):
+		original_gold_income[city.id] = city.gold_per_month
+	var pre_balance := int(
+		DiplomacyAI.resource_report(ai_state, 0)["monthly_gold_balance"]
+	)
+	if pre_balance < 0:
+		var income_city := ai_state.cities_of(0)[0]
+		income_city.gold_per_month += -pre_balance
 	ai_state.nations[0].treasury_gold = 0
+	var sustainable_zero_treasury := DiplomacyAI.resource_report(ai_state, 0)
+	_check(
+		int(sustainable_zero_treasury["monthly_gold_balance"]) >= 0
+		and bool(sustainable_zero_treasury["ready"])
+		and not "、".join(
+			DiplomacyAI.peace_reasons(ai_state, 0, 1)
+		).contains("国库"),
+		"月收入覆盖军费时，国库余额为0不得被误报为财政危机"
+	)
+	for city in ai_state.cities_of(0):
+		city.gold_per_month = 0
 	_check(
 		not bool(DiplomacyAI.resource_report(ai_state, 0)["ready"])
 		and DiplomacyAI.war_desire(ai_state, 0, 1) == -INF,
-		"国库不足六个月战役储备时不得宣战"
+		"月现金流为负且国库不足六个月时不得宣战"
 	)
+	for city_id in original_gold_income:
+		ai_state.cities[int(city_id)].gold_per_month = int(
+			original_gold_income[city_id]
+		)
 	ai_state.nations[0].treasury_gold = treasury_before_crisis
 	var preparation_actions := DiplomacyAI.choose_actions(ai_state)
 	var preparation_has_objective := false

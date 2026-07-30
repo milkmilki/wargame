@@ -98,11 +98,9 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 	match mode:
 		"current-control":
 			for nation_id in [LEFT_NATION, RIGHT_NATION]:
-				simulation.ai_strategic_planning_overrides[nation_id] = false
-				simulation.ai_adaptive_garrison_overrides[nation_id] = false
+				simulation.ai_tactical_decision_order_overrides[nation_id] = false
 		"improved-right":
-			simulation.ai_strategic_planning_overrides[LEFT_NATION] = false
-			simulation.ai_adaptive_garrison_overrides[LEFT_NATION] = false
+			simulation.ai_tactical_decision_order_overrides[LEFT_NATION] = false
 		"offense-only":
 			simulation.ai_adaptive_garrison_overrides[LEFT_NATION] = false
 			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
@@ -112,8 +110,7 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
 			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
 		_:
-			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
-			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
+			simulation.ai_tactical_decision_order_overrides[RIGHT_NATION] = false
 
 
 func _build_symmetric_world() -> GameState:
@@ -137,6 +134,7 @@ func _build_symmetric_world() -> GameState:
 		var col := city.coord.x
 		var mirror_col := mini(col, GameState.GRID - 1 - col)
 		city.owner_nation = LEFT_NATION if col < GameState.GRID / 2 else RIGHT_NATION
+		state.recognized_city_owners[city.id] = city.owner_nation
 		city.defense = 12 + (row * 3 + mirror_col * 5) % 17
 		city.manpower_per_month = 7 + (row * 7 + mirror_col * 11) % 8
 		city.gold_per_month = 6 + (row * 2 + mirror_col * 3) % 10

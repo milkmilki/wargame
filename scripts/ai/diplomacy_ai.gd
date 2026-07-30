@@ -89,12 +89,26 @@ static func peace_reasons(
 	var nation := state.nations[nation_id]
 	if (
 		nation.unpaid_war_cost > 0
-		or nation.treasury_gold < maxi(int(report["monthly_war_cost"]), 50)
-	):
-		reasons.append(
-			"国库仅余 %d 金，本月军费缺口 %d"
-			% [nation.treasury_gold, nation.unpaid_war_cost]
+		or (
+			int(report["monthly_gold_balance"]) < 0
+			and float(report["gold_runway_months"]) < CAMPAIGN_RESERVE_MONTHS
 		)
+	):
+		if nation.unpaid_war_cost > 0:
+			reasons.append(
+				"国库%d金，本月军费实际缺口%d"
+				% [nation.treasury_gold, nation.unpaid_war_cost]
+			)
+		else:
+			reasons.append(
+				"月入%d、军费%d，国库%d金仅能支撑%.1f个月"
+				% [
+					report["monthly_gold_income"],
+					report["monthly_war_cost"],
+					nation.treasury_gold,
+					report["gold_runway_months"],
+				]
+			)
 	if (
 		float(food_plan["target_runway_years"])
 			< float(food_plan["required_campaign_years"])
@@ -240,12 +254,18 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 	var monthly_war_cost := int(ceil(
 		float(troops) / float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
 	))
+	var monthly_gold_balance := monthly_income - monthly_war_cost
+	var monthly_gold_deficit := maxi(-monthly_gold_balance, 0)
 	var monthly_food_demand := int(ceil(
 		float(food_plan["current_monthly_demand"])
 	))
-	var gold_required := maxi(
-		(monthly_war_cost - monthly_income) * CAMPAIGN_RESERVE_MONTHS,
-		MIN_GOLD_RESERVE
+	var gold_required := (
+		maxi(
+			monthly_gold_deficit * CAMPAIGN_RESERVE_MONTHS,
+			MIN_GOLD_RESERVE
+		)
+		if monthly_gold_deficit > 0
+		else 0
 	)
 	var food_required := maxi(
 		monthly_food_demand * CAMPAIGN_RESERVE_MONTHS,
@@ -256,7 +276,16 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 		int(ceil(float(troops) * 0.15))
 	)
 	var food_stock := _food_stock(state, nation_id)
-	var gold_ratio := float(nation.treasury_gold) / float(maxi(gold_required, 1))
+	var gold_ratio := (
+		MAX_REPORTED_RUNWAY_YEARS
+		if gold_required <= 0
+		else float(nation.treasury_gold) / float(gold_required)
+	)
+	var gold_runway_months := (
+		MAX_REPORTED_RUNWAY_YEARS * float(MONTHS_PER_YEAR)
+		if monthly_gold_deficit <= 0
+		else float(nation.treasury_gold) / float(monthly_gold_deficit)
+	)
 	var food_ratio := float(food_stock) / float(food_required)
 	var manpower_ratio := float(nation.manpower_pool) / float(manpower_required)
 	var food_coverage_months := float(food_plan["current_runway_years"]) * 12.0
@@ -267,6 +296,8 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 		"troops": troops,
 		"monthly_gold_income": monthly_income,
 		"monthly_war_cost": monthly_war_cost,
+		"monthly_gold_balance": monthly_gold_balance,
+		"gold_runway_months": gold_runway_months,
 		"monthly_food_demand": monthly_food_demand,
 		"monthly_food_production": monthly_food_production,
 		"gold_required": gold_required,
@@ -282,7 +313,11 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 		"full_strength_annual_balance": food_plan["full_strength_annual_balance"],
 		"full_strength_runway_years": food_plan["full_strength_runway_years"],
 		"ready": (
-			gold_ratio >= 1.0
+			nation.unpaid_war_cost <= 0
+			and (
+				monthly_gold_balance >= 0
+				or gold_runway_months >= CAMPAIGN_RESERVE_MONTHS
+			)
 			and manpower_ratio >= 1.0
 			and (
 				float(food_plan["current_annual_balance"]) >= 0.0

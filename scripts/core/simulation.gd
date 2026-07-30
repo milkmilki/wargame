@@ -63,6 +63,8 @@ var _ai_last_decision_day: int = -1
 var ai_policy_overrides: Dictionary = {}
 ## A/B 基准注入点：nation_id -> 正常进攻单军最低战力占比；正式游戏使用 UtilityAI 默认值。
 var ai_assault_participant_ratio_overrides: Dictionary = {}
+## A/B 注入点：false 复现同优先级军队按 id 而非主力优先决策。
+var ai_tactical_decision_order_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的静态进攻评分。
 var ai_strategic_planning_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的 60 天传播威胁守备策略。
@@ -513,6 +515,11 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 				)
 				if changed:
 					_end_bilateral_hostilities(nation_a, nation_b)
+					var transferred := state.recognize_occupied_territory(
+						nation_a, nation_b
+					)
+					if not transferred.is_empty():
+						reason += "；和平协议确认%d座城市的领土转移" % transferred.size()
 					state.clear_war_objective(nation_a, nation_b)
 					_clear_finished_war_mobilization(nation_a)
 					_clear_finished_war_mobilization(nation_b)
@@ -841,17 +848,11 @@ func _ai_assign_targets() -> void:
 				if state.cities[friendly_endpoint].owner_nation != nation.id:
 					friendly_endpoint = army.move_to
 				coordinator.reserve(friendly_endpoint, army)
-		var decision_order: Array[Army] = view.friendly_armies.duplicate()
-		decision_order.sort_custom(func(a: Army, b: Army) -> bool:
-			var a_front := (
-				snapshot.frontier_cities.has(a.location_city)
-				or snapshot.potential_frontier_cities.has(a.location_city)
-			)
-			var b_front := (
-				snapshot.frontier_cities.has(b.location_city)
-				or snapshot.potential_frontier_cities.has(b.location_city)
-			)
-			return (a_front and not b_front) if a_front != b_front else a.id < b.id
+		var strongest_first := bool(
+			ai_tactical_decision_order_overrides.get(nation.id, true)
+		)
+		var decision_order := _sort_ai_decision_order(
+			view.friendly_armies, snapshot, strongest_first
 		)
 		for army in decision_order:
 			if army.size <= 0:
@@ -871,6 +872,35 @@ func _ai_assign_targets() -> void:
 					coordinator.reserve(candidate.target_edge_a, army)
 				elif candidate.target_city != -1:
 					coordinator.reserve(candidate.target_city, army)
+
+
+static func _sort_ai_decision_order(
+	armies: Array[Army],
+	snapshot: StrategicMapSnapshot,
+	strongest_first: bool
+) -> Array[Army]:
+	var result: Array[Army] = armies.duplicate()
+	result.sort_custom(func(a: Army, b: Army) -> bool:
+		var a_front := (
+			snapshot.frontier_cities.has(a.location_city)
+			or snapshot.potential_frontier_cities.has(a.location_city)
+		)
+		var b_front := (
+			snapshot.frontier_cities.has(b.location_city)
+			or snapshot.potential_frontier_cities.has(b.location_city)
+		)
+		if a_front != b_front:
+			return a_front and not b_front
+		if (
+			strongest_first
+			and not is_equal_approx(
+				ArmyPower.effective(a), ArmyPower.effective(b)
+			)
+		):
+			return ArmyPower.effective(a) > ArmyPower.effective(b)
+		return a.id < b.id
+	)
+	return result
 
 
 func _ai_manage_force_structure(

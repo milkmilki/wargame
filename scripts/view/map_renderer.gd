@@ -236,12 +236,12 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			if province_id < 0 or province_id >= game_state.cities.size():
 				continue
 			var current_owner := game_state.cities[province_id].owner_nation
-			var original_owner := game_state.initial_owner_of(province_id)
-			if original_owner < 0:
-				original_owner = current_owner
-			var base := game_state.nations[original_owner].color
+			var recognized_owner := game_state.recognized_owner_of(province_id)
+			if recognized_owner < 0:
+				recognized_owner = current_owner
+			var base := game_state.nations[recognized_owner].color
 			base.a = 0.30
-			if current_owner != original_owner and (x + y) % 9 < 3:
+			if current_owner != recognized_owner and (x + y) % 9 < 3:
 				var occupation := game_state.nations[current_owner].color.lightened(0.18)
 				occupation.a = 0.72
 				base = occupation

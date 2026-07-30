@@ -55,8 +55,8 @@ var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
-## 初始归属用于区分“本国底色”和“占领国斜线”，不会随占领变化。
-var initial_city_owners: PackedInt32Array = PackedInt32Array()
+## 法理归属用于区分“本国底色”和“占领国斜线”；和平协议会确认实际控制区。
+var recognized_city_owners: PackedInt32Array = PackedInt32Array()
 ## 短时战略箭头事件：{start_day,end_day,nation_id,target_city,origin_cities,wave}。
 var campaign_visual_events: Array[Dictionary] = []
 
@@ -72,7 +72,7 @@ func generate_world(world_seed: int = 12345) -> void:
 	var terrain := TerrainMapGenerator.build(TERRAIN_MAP_PATH, CITY_COUNT)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
-	_initialize_initial_city_owners()
+	_initialize_recognized_city_owners()
 	_generate_terrain_edges(terrain)
 	_initialize_resource_hubs()
 	_initialize_manpower_pools()
@@ -93,7 +93,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_generate_nations(DiplomaticRelation.WAR)
 	_generate_grid_cities()
 	_generate_grid_provinces()
-	_initialize_initial_city_owners()
+	_initialize_recognized_city_owners()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
 	_generate_grid_edges()
@@ -127,7 +127,7 @@ func _reset_world(world_seed: int) -> void:
 	war_objectives.clear()
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
-	initial_city_owners = PackedInt32Array()
+	recognized_city_owners = PackedInt32Array()
 	campaign_visual_events.clear()
 
 
@@ -213,10 +213,10 @@ func _generate_grid_provinces() -> void:
 		province_ids[city_id] = city_id
 
 
-func _initialize_initial_city_owners() -> void:
-	initial_city_owners.resize(cities.size())
+func _initialize_recognized_city_owners() -> void:
+	recognized_city_owners.resize(cities.size())
 	for city in cities:
-		initial_city_owners[city.id] = city.owner_nation
+		recognized_city_owners[city.id] = city.owner_nation
 
 
 func _assign_balanced_nations() -> void:
@@ -775,10 +775,31 @@ func city_under_siege(city_id: int) -> bool:
 	return false
 
 
-func initial_owner_of(city_id: int) -> int:
-	if city_id < 0 or city_id >= initial_city_owners.size():
+func recognized_owner_of(city_id: int) -> int:
+	if city_id < 0 or city_id >= recognized_city_owners.size():
 		return -1
-	return initial_city_owners[city_id]
+	return recognized_city_owners[city_id]
+
+
+## 双边和平只确认交战双方之间的实际控制区，不误处理第三国领土。
+func recognize_occupied_territory(
+	nation_a: int,
+	nation_b: int
+) -> Array[int]:
+	var transferred: Array[int] = []
+	for city in cities:
+		var recognized_owner := recognized_owner_of(city.id)
+		if (
+			city.owner_nation == recognized_owner
+			or city.owner_nation not in [nation_a, nation_b]
+			or recognized_owner not in [nation_a, nation_b]
+		):
+			continue
+		recognized_city_owners[city.id] = city.owner_nation
+		transferred.append(city.id)
+	if not transferred.is_empty():
+		ownership_revision += 1
+	return transferred
 
 
 func add_campaign_visual_event(
