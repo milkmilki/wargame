@@ -118,6 +118,23 @@ func _test_world_generation() -> void:
 	_check(gs.uses_heightmap and positions_unique.size() == 64,
 		"正式世界应从高度图生成 64 个互异城市位置")
 	_check(terrain_has_relief, "城市应保存高度图局部起伏数据")
+	var minimum_city_spacing := INF
+	for a in range(gs.cities.size()):
+		for b in range(a + 1, gs.cities.size()):
+			var delta := gs.cities[a].map_position - gs.cities[b].map_position
+			delta.x *= gs.map_aspect_ratio
+			minimum_city_spacing = minf(minimum_city_spacing, delta.length())
+	_check(
+		minimum_city_spacing >= 0.075,
+		"城市点应保持足够间距，实为 %.4f" % minimum_city_spacing
+	)
+	_check(
+		gs.map_source_region_normalized.position.x > 0.0
+		and gs.map_source_region_normalized.position.y > 0.0
+		and gs.map_source_region_normalized.end.x < 1.0
+		and gs.map_source_region_normalized.end.y < 1.0,
+		"底图应裁切到 Alpha 陆地包围盒，排除外围水印区域"
+	)
 	# 每国只有首都一个粮仓；原 16 城初始储备全部归集到该粮仓。
 	for n in gs.nations:
 		var warehouses := gs.warehouse_cities_of(n.id)

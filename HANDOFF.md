@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **278 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **280 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
@@ -72,7 +72,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制地图/城市/边/军队/HUD(Day/Month)/攻城进度弧，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 主场景（Main + Simulation Node + MapRenderer） |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 278 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 280 断言，headless 运行 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；A 左侧改进 Utility AI、B 右侧修改前当前 Utility AI，十年对战并输出领土/军力/粮食/首都指标 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
@@ -267,7 +267,7 @@ if state.day % 30 == 0:                              # 每月结算块
 - 行军锚点统一用 `move_from`（不是 location_city）。`_begin_next_leg` 前置约定：调用前 `move_from` 已锚定当前城，末尾置 `army.on_edge=true`。
 - **边占用的唯一判据是 `army.on_edge`**。`passing_count` 只统计全方向/全阵营总占用并供渲染使用；容量由 `_friendly_same_direction_count` 从军队 SSoT 实时派生。
 - `max_throughput` 对每个国家、每个方向分别生效：仅同国同向军队互相占名额；同国反向与敌军均不占本方向容量，因此追逐和迎战不会被敌军交通量阻塞。
-- 正式世界从 `china-map-...webp` 的 Alpha 最大连通区域提取陆地，在局部低起伏区域用确定性最远点采样生成 64 城。
+- 正式世界从 `china-map-...webp` 的 Alpha 最大连通区域提取陆地，在局部低起伏区域用确定性最远点采样生成 64 城；按地图真实宽高比强制最小城市间距 `0.075`。
 - 城市道路先构造覆盖全部城市的近邻骨架，再补充短且不交叉的局部连接至 112 条。每条边沿灰度图采样高度剖面，最大高度差决定 `max_throughput=0/1/2/3/4`；骨架边最低为 1，保证军事、补给和撤退网络连通。
 - 四国沿正容量覆盖骨架连续切分，每国严格 16 城且领土连通。首都选择本国城市几何中心附近的城市。
 - `GameState.generate_grid_world()` 仅供固定城市 ID 的状态机测试和严格左右镜像 A/B 基准使用；正式游戏与长跑使用 `generate_world()` 高度图世界。
@@ -282,6 +282,7 @@ if state.day % 30 == 0:                              # 每月结算块
 - **战斗爆发标记 `_draw_battles`**：每场活跃 Battle 在交战点（野战=边上 `contact_dist_a` 处，攻城=城中心）画脉动星芒 + 扩散环（半径随 `round_no` 增大）+ `R{round_no}` 回合数文字；**SIEGE 额外画 `siege_progress/REQUIRED` 攻城进度弧**（青色圆弧，直观展示破城进度）。
 - **HUD 头部**：显示 `Day %d (M%d) ...`（`state.day` 为真源，`state.month` 派生）。
 - **响应式布局**：项目禁用固定逻辑画布拉伸，`MapRenderer.compute_layout_for_viewport` 按实际窗口尺寸同比缩放地图、标记、线宽与字号；地图水平居中，窄窗口的国家概览自动减少列数并换行。
+- **高度图底图**：渲染器按生成器记录的 Alpha 陆地包围盒裁切同一灰度图，以低亮度半透明背景先绘制；道路、城市和军队保持前景层。城市标记使用紧凑尺寸，避免 64 城互相遮挡。
 - **中文字体**：HUD 从明确的跨平台 CJK 字体文件候选加载 `FontFile`，当前 macOS 使用 `Hiragino Sans GB.ttc`；找不到候选时才回退到 Godot 默认字体。测试直接校验“国”字字形存在。
 - 全部基于 `_blink` 计时器做动画，**不写任何 state**；截图验证已确认生效。
 

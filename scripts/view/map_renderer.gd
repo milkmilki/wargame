@@ -12,6 +12,7 @@ const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
+const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
 var _map_size: Vector2 = Vector2(512.0, 512.0)
@@ -21,6 +22,7 @@ var _hud_columns: int = 4
 var _hud_card_width: float = 300.0
 
 var _font: Font
+var _terrain_texture: Texture2D
 var _blink: float = 0.0                    ## 饥饿闪烁计时
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
@@ -40,6 +42,7 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 
 func _ready() -> void:
 	_font = create_ui_font()
+	_terrain_texture = load(TERRAIN_BACKGROUND_PATH) as Texture2D
 
 
 static func create_ui_font() -> Font:
@@ -154,11 +157,31 @@ func _draw() -> void:
 	if state == null:
 		return
 	_compute_layout()
+	_draw_terrain_background()
 	_draw_edges()
 	_draw_cities()
 	_draw_battles()
 	_draw_armies()
 	_draw_hud()
+
+
+func _draw_terrain_background() -> void:
+	if not state.uses_heightmap or _terrain_texture == null:
+		return
+	var texture_size := Vector2(_terrain_texture.get_size())
+	var normalized_region := state.map_source_region_normalized
+	var source_region := Rect2(
+		normalized_region.position * texture_size,
+		normalized_region.size * texture_size
+	)
+	draw_texture_rect_region(
+		_terrain_texture,
+		Rect2(_origin, _map_size),
+		source_region,
+		Color(0.38, 0.40, 0.42, 0.62)
+	)
+	# 暗色罩层压低底图细节，保证道路、国家色和文字仍是视觉主层。
+	draw_rect(Rect2(_origin, _map_size), Color(0.02, 0.025, 0.035, 0.34), true)
 
 
 func _draw_edges() -> void:
@@ -220,7 +243,11 @@ func _draw_blocked_edge_marker(pa: Vector2, pb: Vector2, color: Color) -> void:
 
 
 func _draw_cities() -> void:
-	var half := _cell * 0.38
+	var half := clampf(
+		_cell * 0.18,
+		5.0 * _display_scale,
+		10.0 * _display_scale
+	)
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
@@ -235,11 +262,11 @@ func _draw_cities() -> void:
 			label += " %sF%d" % ["C" if city.is_capital else "W", city.food_storage]
 		draw_string(
 			_font,
-			rect.position + Vector2(3, 12) * _display_scale,
+			rect.position + Vector2(2, 9) * _display_scale,
 			label,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
-			_font_size(10),
+			_font_size(8),
 			Color(0, 0, 0, 0.8)
 		)
 

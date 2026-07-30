@@ -29,6 +29,7 @@ var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
+var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 
 ## 结束态
 var winner: int = -1                        ## -1 表示未结束
@@ -57,6 +58,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_reset_world(world_seed)
 	uses_heightmap = false
 	map_aspect_ratio = 1.0
+	map_source_region_normalized = Rect2(0.0, 0.0, 1.0, 1.0)
 	_generate_nations()
 	_generate_grid_cities()
 	_initialize_manpower_pools()
@@ -130,6 +132,7 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 	var heights: Array[float] = terrain["heights"]
 	var reliefs: Array[float] = terrain["reliefs"]
 	map_aspect_ratio = clampf(float(terrain["map_aspect_ratio"]), 0.5, 2.5)
+	map_source_region_normalized = terrain["source_region_normalized"]
 	for id in range(CITY_COUNT):
 		var city := City.new()
 		city.id = id

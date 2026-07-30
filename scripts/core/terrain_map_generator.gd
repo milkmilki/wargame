@@ -8,6 +8,9 @@ const LUMA_THRESHOLD: float = 0.015
 const CANDIDATE_STRIDE: int = 2
 const INTERIOR_RADIUS: int = 2
 const RELIEF_RADIUS: int = 3
+const FLAT_CANDIDATE_SHARE: float = 0.90
+const RELIEF_SPACING_WEIGHT: float = 0.015
+const MIN_CITY_SPACING: float = 0.075
 const TARGET_EDGE_COUNT: int = 112
 const ROAD_SAMPLE_COUNT: int = 48
 
@@ -42,6 +45,10 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		"nation_order": road_result["nation_order"],
 		"bounds": bounds,
 		"image_size": analysis.get_size(),
+		"source_region_normalized": Rect2(
+			Vector2(bounds.position) / Vector2(analysis.get_size()),
+			Vector2(bounds.size) / Vector2(analysis.get_size())
+		),
 		"map_aspect_ratio": (
 			float(maxi(bounds.size.x, 1)) / float(maxi(bounds.size.y, 1))
 		),
@@ -140,7 +147,10 @@ static func _sample_cities(
 		var pb: Vector2i = b["pixel"]
 		return pa.y < pb.y or (pa.y == pb.y and pa.x < pb.x)
 	)
-	var usable_count := maxi(int(round(float(candidates.size()) * 0.70)), city_count)
+	var usable_count := maxi(
+		int(round(float(candidates.size()) * FLAT_CANDIDATE_SHARE)),
+		city_count
+	)
 	candidates.resize(usable_count)
 	var center := Vector2(bounds.get_center())
 	var first_index := 0
@@ -154,6 +164,7 @@ static func _sample_cities(
 	var selected: Array[Dictionary] = [candidates[first_index]]
 	var selected_pixels := {candidates[first_index]["pixel"]: true}
 	var scale := Vector2(maxi(bounds.size.x, 1), maxi(bounds.size.y, 1))
+	var map_aspect := float(maxi(bounds.size.x, 1)) / float(maxi(bounds.size.y, 1))
 	while selected.size() < city_count:
 		var best_index := -1
 		var best_score := -INF
@@ -164,20 +175,37 @@ static func _sample_cities(
 			var candidate_norm := (
 				Vector2(candidate["pixel"]) - Vector2(bounds.position)
 			) / scale
+			var candidate_metric := Vector2(
+				candidate_norm.x * map_aspect,
+				candidate_norm.y
+			)
 			var min_distance_sq := INF
 			for chosen in selected:
 				var chosen_norm := (
 					Vector2(chosen["pixel"]) - Vector2(bounds.position)
 				) / scale
+				var chosen_metric := Vector2(
+					chosen_norm.x * map_aspect,
+					chosen_norm.y
+				)
 				min_distance_sq = minf(
 					min_distance_sq,
-					candidate_norm.distance_squared_to(chosen_norm)
+					candidate_metric.distance_squared_to(chosen_metric)
 				)
-			var score := min_distance_sq - float(candidate["relief"]) * 0.08
+			if min_distance_sq < MIN_CITY_SPACING * MIN_CITY_SPACING:
+				continue
+			var score := (
+				min_distance_sq
+				- float(candidate["relief"]) * RELIEF_SPACING_WEIGHT
+			)
 			if score > best_score:
 				best_score = score
 				best_index = i
-		assert(best_index != -1, "无法选满城市点")
+		assert(
+			best_index != -1,
+			"无法在最小间距 %.3f 下选满 %d 个城市点"
+				% [MIN_CITY_SPACING, city_count]
+		)
 		selected.append(candidates[best_index])
 		selected_pixels[candidates[best_index]["pixel"]] = true
 	selected.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
