@@ -13,6 +13,8 @@ var defense: int = 0                      ## 城市防御力
 var manpower_per_month: int = 0           ## 每月人口产出，立即汇入所属国人口库
 var gold_per_month: int = 0               ## 每月金钱产出
 var food_per_half_year: int = 0           ## 每半年粮食产出
+var is_food_hub: bool = false             ## 重点粮食产地
+var is_manpower_hub: bool = false         ## 重点人口产地
 
 var is_capital: bool = false               ## 是否为当前所属国家首都
 var has_warehouse: bool = false            ## 是否设有粮仓（当前仅首都为 true）

@@ -55,6 +55,9 @@ func _init() -> void:
 	_test_ai_merge_and_retreat_utility()
 	_test_ai_encirclement_breakout_and_relief()
 	_test_manpower_pool_and_force_commands()
+	_test_diplomacy_state_and_ai()
+	_test_peacetime_demobilization_and_border_defense()
+	_test_resource_hubs_and_food_mobilization()
 
 	print("\n==== 结果: %d 通过, %d 失败 ====" % [_passed, _failed])
 	for m in _fail_msgs:
@@ -88,10 +91,54 @@ func _test_world_generation() -> void:
 	)
 	_check(gs.armies.size() == 64, "初始军队数应为 64，实为 %d" % gs.armies.size())
 	_check(gs.nations.size() == 4, "国家数应为 4")
+	var initial_peace := true
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			initial_peace = initial_peace and (
+				gs.relation_between(nation_a, nation_b)
+				== GameState.DiplomaticRelation.NEUTRAL
+			)
+	_check(initial_peace, "真实地形地图应以所有国家两两和平开局")
+	_check(
+		gs.cities.all(func(city: City) -> bool: return not city.at_war),
+		"和平开局时所有城市均不应显示战争状态"
+	)
 	# 四等份：每国 16 城
 	for n in gs.nations:
 		var cnt := gs.cities_of(n.id).size()
 		_check(cnt == 16, "国%d 初始应有 16 城，实为 %d" % [n.id, cnt])
+		var food_hubs: Array[City] = []
+		var manpower_hubs: Array[City] = []
+		for owned_city in gs.cities_of(n.id):
+			if owned_city.is_food_hub:
+				food_hubs.append(owned_city)
+			if owned_city.is_manpower_hub:
+				manpower_hubs.append(owned_city)
+		_check(
+			food_hubs.size() == 1
+			and food_hubs[0].food_per_half_year >= GameState.FOOD_HUB_MIN_OUTPUT,
+			"国%d 应有一个高产粮食核心" % n.id
+		)
+		_check(
+			manpower_hubs.size() == 1
+			and manpower_hubs[0].manpower_per_month
+				>= GameState.MANPOWER_HUB_MIN_OUTPUT,
+			"国%d 应有一个高产人口核心" % n.id
+		)
+		_check(
+			food_hubs.is_empty()
+			or manpower_hubs.is_empty()
+			or food_hubs[0].id != manpower_hubs[0].id,
+			"国%d 的粮食与人口核心在城市充足时应尽量分离" % n.id
+		)
+		var resource_snapshot := StrategicMapSnapshot.build(
+			AiWorldView.build(gs, n.id)
+		)
+		_check(
+			resource_snapshot.value_of_city(food_hubs[0].id) >= 4.0
+			and resource_snapshot.value_of_city(manpower_hubs[0].id) >= 4.0,
+			"资源核心应获得显著战略价值"
+		)
 		var owned_reachable := {}
 		var owned_queue: Array[int] = [gs.cities_of(n.id)[0].id]
 		owned_reachable[owned_queue[0]] = true
@@ -115,6 +162,17 @@ func _test_world_generation() -> void:
 		)
 	var positions_unique := {}
 	var terrain_has_relief := false
+	var initial_army_scale_valid := true
+	for army in gs.armies:
+		initial_army_scale_valid = (
+			initial_army_scale_valid
+			and army.size >= 500
+			and army.size <= 1500
+		)
+	_check(
+		initial_army_scale_valid,
+		"资源核心不得隐式放大开局军队，仍应保持500～1500人"
+	)
 	for city in gs.cities:
 		positions_unique[city.map_position] = true
 		terrain_has_relief = terrain_has_relief or city.terrain_relief > 0.0
@@ -137,6 +195,79 @@ func _test_world_generation() -> void:
 		and gs.map_source_region_normalized.end.x < 1.0
 		and gs.map_source_region_normalized.end.y < 1.0,
 		"底图应裁切到 Alpha 陆地包围盒，排除外围水印区域"
+	)
+	var province_seen := {}
+	var province_has_sea := false
+	var province_ids_valid := (
+		gs.province_map_size.x > 0
+		and gs.province_map_size.y > 0
+		and gs.province_ids.size()
+			== gs.province_map_size.x * gs.province_map_size.y
+	)
+	for province_id in gs.province_ids:
+		if province_id < 0:
+			province_has_sea = true
+			continue
+		province_ids_valid = (
+			province_ids_valid and province_id < gs.cities.size()
+		)
+		province_seen[province_id] = true
+	_check(
+		province_ids_valid
+		and province_has_sea
+		and province_seen.size() == gs.cities.size(),
+		"陆地掩码 Voronoi 必须为64城各生成独立省份，轮廓外保持透明"
+	)
+	var province_owners_stable := true
+	for city in gs.cities:
+		province_owners_stable = (
+			province_owners_stable
+			and gs.initial_owner_of(city.id) == city.owner_nation
+		)
+	_check(province_owners_stable, "省份必须保存不随占领变化的初始归属")
+	var province_geometry := MapRenderer.build_province_boundary_segments(gs)
+	_check(
+		not (province_geometry["province"] as PackedVector2Array).is_empty()
+		and not (province_geometry["nation"] as PackedVector2Array).is_empty()
+		and not (province_geometry["coast"] as PackedVector2Array).is_empty(),
+		"省份栅格必须能提取省界、国境和地图外轮廓三种线段"
+	)
+	var base_overlay := MapRenderer.build_province_overlay_image(gs)
+	var transparent_sea_found := false
+	for y in range(gs.province_map_size.y):
+		for x in range(gs.province_map_size.x):
+			if (
+				gs.province_ids[y * gs.province_map_size.x + x] < 0
+				and base_overlay.get_pixel(x, y).a <= 0.001
+			):
+				transparent_sea_found = true
+				break
+		if transparent_sea_found:
+			break
+	_check(transparent_sea_found, "省份覆盖层不得遮挡陆地轮廓外的底图")
+	var occupied_test_city := 0
+	var original_test_owner := gs.cities[occupied_test_city].owner_nation
+	gs.cities[occupied_test_city].owner_nation = (
+		original_test_owner + 1
+	) % gs.nations.size()
+	var occupied_overlay := MapRenderer.build_province_overlay_image(gs)
+	var occupation_hatch_found := false
+	for y in range(gs.province_map_size.y):
+		for x in range(gs.province_map_size.x):
+			if (
+				gs.province_ids[y * gs.province_map_size.x + x]
+					== occupied_test_city
+				and (x + y) % 9 < 3
+				and occupied_overlay.get_pixel(x, y).a > 0.60
+			):
+				occupation_hatch_found = true
+				break
+		if occupation_hatch_found:
+			break
+	gs.cities[occupied_test_city].owner_nation = original_test_owner
+	_check(
+		occupation_hatch_found,
+		"被占领省份必须叠加高于底色透明度的占领国斜线纹理"
 	)
 	_check(ResourceLoader.exists("res://main.tscn"), "真实地图场景 main.tscn 必须保留")
 	_check(ResourceLoader.exists("res://square_map.tscn"), "原方形地图场景必须独立保留")
@@ -442,6 +573,7 @@ func _test_simulation_progress() -> void:
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
+	sim.diplomacy_enabled = false
 	var captures := 0
 	var start_armies := gs.armies.size()
 	for d in range(2000):
@@ -506,21 +638,32 @@ func _test_time_layering() -> void:
 	var before := 0
 	for n in gs.nations:
 		before += n.treasury_gold
-	var monthly := 0
-	for c in gs.cities:
-		monthly += c.gold_per_month
 	for _i in range(29):
 		sim._advance_day()
 	var mid := 0
 	for n in gs.nations:
 		mid += n.treasury_gold
 	_check(mid == before, "1..29 天不应结算经济：%d -> %d" % [before, mid])
+	var monthly := 0
+	for c in gs.cities:
+		monthly += c.gold_per_month
+	var war_upkeep := 0
+	for nation in gs.nations:
+		var troops := 0
+		for army in gs.armies:
+			if army.owner_nation == nation.id:
+				troops += army.size
+		war_upkeep += int(ceil(
+			float(troops) / float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
+		))
 	sim._advance_day()   # day==30
 	var after := 0
 	for n in gs.nations:
 		after += n.treasury_gold
-	_check(after == before + monthly,
-		"day30 恰结算 1 次（非30×）：应 %d，实为 %d" % [before + monthly, after])
+	var expected_treasury := before + monthly - war_upkeep
+	_check(after == expected_treasury,
+		"day30 应结算月收入并扣战争军费：应 %d，实为 %d"
+			% [expected_treasury, after])
 	sim.free()
 
 	# 2. 注粮半年一次：隔离单测 _resolve_economy 的 day gate（避开消耗干扰）。
@@ -1424,6 +1567,7 @@ func _test_morale_retreat_recovery() -> void:
 	# 城市恢复期间若易主，旧城主驻军必须被统一驱逐，不能滞留敌城。
 	starved.state = Army.State.RECOVERING
 	var old_owner := starved.owner_nation
+	var historical_owner := gs.initial_owner_of(c2)
 	var captor := _make_army(502, (old_owner + 1) % GameState.NATION_COUNT, 1200, 10)
 	gs.armies.append(captor)
 	sim._capture_city(captor, gs.cities[c2])
@@ -1431,6 +1575,11 @@ func _test_morale_retreat_recovery() -> void:
 		"恢复驻军所在城市易主后应重新撤退（无友城则溃散），state=%d size=%d" % [starved.state, starved.size])
 	_check(not (starved.state == Army.State.RECOVERING and gs.cities[c2].owner_nation != old_owner),
 		"RECOVERING 军队不得滞留敌方城市")
+	_check(
+		gs.initial_owner_of(c2) == historical_owner
+		and gs.cities[c2].owner_nation != historical_owner,
+		"占领只能改变当前归属，省份初始底色归属必须保持不变"
+	)
 
 	# 多支恢复驻军必须全部加入守城，5× 门槛基准取总兵力，而非只取第一支。
 	gs.armies.clear()
@@ -1705,13 +1854,17 @@ func _test_edge_holding_state() -> void:
 	_check(holder.state == Army.State.MOVING and holder.move_to == c2,
 		"边境 AI 应选择最高 danger 敌对边部署")
 	_check(_approx(holder.hold_target_progress, Simulation.HOLDING_TARGET_PROGRESS),
-		"驻防目标应为边中点")
+		"驻防目标应位于从己方端点出发的35%%位置")
 	var guard := 0
 	while holder.state == Army.State.MOVING and guard < 40:
 		sim._advance_movement()
 		guard += 1
-	_check(holder.state == Army.State.HOLDING and _approx(holder.move_progress, 0.5),
-		"抵达边中点后应进入 HOLDING，state=%d progress=%.2f" % [holder.state, holder.move_progress])
+	_check(
+		holder.state == Army.State.HOLDING
+		and _approx(holder.move_progress, Simulation.HOLDING_TARGET_PROGRESS),
+		"抵达己方侧驻防点后应进入 HOLDING，state=%d progress=%.2f"
+			% [holder.state, holder.move_progress]
+	)
 	_check(holder.on_edge and hold_edge.passing_count == 1,
 		"HOLDING 必须继续占用道路容量")
 	var fixed_pos := holder.move_progress
@@ -2646,6 +2799,747 @@ func _test_manpower_pool_and_force_commands() -> void:
 		and gs.nations[nation_id].manpower_pool == pool_before_disband + created_size,
 		"解散应删除军队并把全部幸存人数返还全国人口库")
 	sim.free()
+
+
+# ------------------------------------------------------------------ 32. 外交关系与 Utility AI
+
+func _test_diplomacy_state_and_ai() -> void:
+	print("[32] 外交：求和、宣战、结盟、退盟、停战与敌我筛选")
+	var gs := GameState.new()
+	gs.generate_grid_world(32001)
+	_check(
+		gs.is_enemy(0, 1) and gs.is_enemy(1, 0),
+		"初始全面战争关系应双向对称"
+	)
+	_check(
+		gs.set_diplomatic_relation(
+			0, 1, GameState.DiplomaticRelation.NEUTRAL, 180
+		),
+		"交战国应能达成和平"
+	)
+	_check(
+		not gs.is_enemy(0, 1)
+		and gs.relation_between(0, 1) == gs.relation_between(1, 0),
+		"和平关系应双向一致"
+	)
+	_check(not gs.can_declare_war(0, 1), "停战期内不得重新宣战")
+	gs.day = 180
+	_check(gs.can_declare_war(0, 1), "停战期届满后应恢复宣战资格")
+	_check(
+		gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED),
+		"中立国家应能建立联盟"
+	)
+	var allied_view := AiWorldView.build(gs, 0)
+	var nation_one_is_enemy_city := false
+	var nation_one_is_allied_city := false
+	for city in allied_view.enemy_cities:
+		nation_one_is_enemy_city = (
+			nation_one_is_enemy_city or city.owner_nation == 1
+		)
+	for city in allied_view.allied_cities:
+		nation_one_is_allied_city = (
+			nation_one_is_allied_city or city.owner_nation == 1
+		)
+	_check(
+		not nation_one_is_enemy_city and nation_one_is_allied_city,
+		"盟国城市不得进入敌城列表，应进入盟国列表"
+	)
+	var nation_one_is_enemy_army := false
+	for army in allied_view.enemy_armies:
+		nation_one_is_enemy_army = (
+			nation_one_is_enemy_army or army.owner_nation == 1
+		)
+	_check(
+		not nation_one_is_enemy_army,
+		"盟军不得进入威胁场的敌军来源"
+	)
+	var reserve_state := GameState.new()
+	reserve_state.generate_grid_world(32004)
+	for reserve_a in range(reserve_state.nations.size()):
+		for reserve_b in range(reserve_a + 1, reserve_state.nations.size()):
+			reserve_state.set_diplomatic_relation(
+				reserve_a,
+				reserve_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	reserve_state.nations[0].manpower_pool = 5500
+	var reserve_sim := Simulation.new()
+	reserve_sim.setup(reserve_state)
+	reserve_sim._resolve_reinforcements()
+	_check(
+		reserve_state.nations[0].manpower_pool
+			>= Simulation.PEACETIME_MANPOWER_RESERVE,
+		"和平期常规补员必须保留 5000 战略人力预备役"
+	)
+	reserve_sim.free()
+
+	var encounter_state := GameState.new()
+	encounter_state.generate_grid_world(32002)
+	encounter_state.armies.clear()
+	encounter_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.NEUTRAL
+	)
+	var edge := encounter_state.edges[0]
+	_place_army_on_edge(
+		encounter_state, 9000, 0, edge.city_a, edge.city_b,
+		Simulation.HOLDING_TARGET_PROGRESS
+	)
+	_place_army_on_edge(
+		encounter_state, 9001, 1, edge.city_b, edge.city_a,
+		Simulation.HOLDING_TARGET_PROGRESS
+	)
+	encounter_state.armies[0].state = Army.State.HOLDING
+	encounter_state.armies[1].state = Army.State.HOLDING
+	var encounter_sim := Simulation.new()
+	encounter_sim.setup(encounter_state)
+	encounter_sim._detect_encounters()
+	_check(
+		encounter_state.battles.is_empty(),
+		"中立军队在同边接触不得触发战斗"
+	)
+	encounter_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	encounter_sim._detect_encounters()
+	_check(
+		encounter_state.battles.is_empty(),
+		"双方在己方侧驻防时，宣战本身不得让未接触军队立即开战"
+	)
+	encounter_state.armies[0].state = Army.State.MOVING
+	encounter_state.armies[0].move_progress = 0.55
+	encounter_sim._detect_encounters()
+	_check(
+		encounter_state.battles.size() == 1,
+		"只有一方主动越过边中线并接触对方后才应触发战斗"
+	)
+	encounter_sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.MAKE_PEACE,
+		"a": 0,
+		"b": 1,
+		"reason": "停战清理测试",
+	})
+	var fighting_after_peace := false
+	for army in encounter_state.armies:
+		fighting_after_peace = (
+			fighting_after_peace or army.state == Army.State.FIGHTING
+		)
+	_check(
+		encounter_state.battles.is_empty() and not fighting_after_peace,
+		"求和必须结束双方活跃战斗并清除 FIGHTING 状态"
+	)
+	encounter_sim.free()
+
+	var ai_state := GameState.new()
+	ai_state.generate_grid_world(32003)
+	ai_state.day = DiplomacyAI.FORCED_PEACE_DAYS
+	var peace_actions := DiplomacyAI.choose_actions(ai_state)
+	var has_peace_action := false
+	for action in peace_actions:
+		has_peace_action = (
+			has_peace_action
+			or int(action["kind"]) == DiplomacyAI.Action.MAKE_PEACE
+		)
+	_check(
+		has_peace_action,
+		"长期战争必须产生可接受的求和候选"
+	)
+
+	for a in range(ai_state.nations.size()):
+		for b in range(a + 1, ai_state.nations.size()):
+			ai_state.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	ai_state.day += DiplomacyAI.MIN_NEUTRAL_DAYS
+	var reserve_report := DiplomacyAI.resource_report(ai_state, 0)
+	_check(bool(reserve_report["ready"]), "开局完整储备应允许评估进攻战争")
+	var objective := DiplomacyAI.select_war_objective(ai_state, 0, 1)
+	_check(
+		not objective.is_empty()
+		and ai_state.cities[int(objective["city_id"])].owner_nation == 1
+		and str(objective["reason"]).contains("金")
+		and str(objective["reason"]).contains("战略值"),
+		"宣战必须选择敌国合法目标城并解释产出和战略价值"
+	)
+	var treasury_before_crisis := ai_state.nations[0].treasury_gold
+	ai_state.nations[0].treasury_gold = 0
+	_check(
+		not bool(DiplomacyAI.resource_report(ai_state, 0)["ready"])
+		and DiplomacyAI.war_desire(ai_state, 0, 1) == -INF,
+		"国库不足六个月战役储备时不得宣战"
+	)
+	ai_state.nations[0].treasury_gold = treasury_before_crisis
+	var preparation_actions := DiplomacyAI.choose_actions(ai_state)
+	var preparation_has_objective := false
+	for action in preparation_actions:
+		if int(action["kind"]) != DiplomacyAI.Action.PREPARE_WAR:
+			continue
+		preparation_has_objective = (
+			action.has("objective_city")
+			and int(action["objective_city"]) >= 0
+			and str(action["reason"]).contains("储备金")
+		)
+	_check(
+		preparation_has_objective,
+		"自然战争候选必须先生成携带目标和储备说明的备战动作"
+	)
+	var objective_state := GameState.new()
+	objective_state.generate_grid_world(32005)
+	for objective_a in range(objective_state.nations.size()):
+		for objective_b in range(objective_a + 1, objective_state.nations.size()):
+			objective_state.set_diplomatic_relation(
+				objective_a,
+				objective_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	objective_state.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	var preparation_action: Dictionary = {}
+	for action in DiplomacyAI.choose_actions(objective_state):
+		if int(action["kind"]) == DiplomacyAI.Action.PREPARE_WAR:
+			preparation_action = action
+			break
+	var objective_sim := Simulation.new()
+	objective_sim.setup(objective_state)
+	var preparation_executed := (
+		not preparation_action.is_empty()
+		and objective_sim._execute_diplomatic_action(preparation_action)
+	)
+	var objective_attacker := int(preparation_action.get("a", -1))
+	var objective_defender := int(preparation_action.get("b", -1))
+	var objective_city := int(preparation_action.get("objective_city", -1))
+	var staging := DiplomacyAI.staging_cities_for_objective(
+		objective_state,
+		objective_attacker,
+		objective_city
+	)
+	var staged_army: Army = null
+	if preparation_executed and not staging.is_empty():
+		for army in objective_state.armies:
+			if army.owner_nation == objective_attacker:
+				if staged_army == null:
+					staged_army = army
+				army.state = Army.State.IDLE
+				army.location_city = staging[0]
+				army.move_from = staging[0]
+				army.move_to = -1
+				army.move_progress = 0.0
+				army.on_edge = false
+	objective_state.day += DiplomacyAI.WAR_PREPARATION_MIN_DAYS
+	var objective_action: Dictionary = {}
+	for action in DiplomacyAI.choose_actions(objective_state):
+		if (
+			int(action["kind"]) == DiplomacyAI.Action.DECLARE_WAR
+			and int(action["a"]) == objective_attacker
+		):
+			objective_action = action
+			break
+	var objective_executed := (
+		not objective_action.is_empty()
+		and objective_sim._execute_diplomatic_action(objective_action)
+	)
+	var objective_campaign := -1
+	if objective_executed:
+		var objective_view := AiWorldView.build(
+			objective_state,
+			objective_attacker
+		)
+		objective_campaign = StrategicMapSnapshot.build(
+			objective_view
+		).campaign_target
+	_check(
+		objective_executed
+		and preparation_executed
+		and int(
+			objective_state.war_objective(
+				objective_attacker,
+				objective_defender
+			).get("city_id", -1)
+		) == objective_city
+		and objective_campaign == objective_city,
+		"备战完成后外交目标必须写入战争状态并成为军事 AI 主战役目标"
+	)
+	var immediate_offensive := false
+	for army in objective_state.armies:
+		if (
+			army.owner_nation == objective_attacker
+			and army.state == Army.State.MOVING
+			and army.ai_action == ActionCandidate.Kind.ATTACK
+			and army.ai_target_city == objective_city
+		):
+			immediate_offensive = true
+			break
+	_check(
+		objective_executed and immediate_offensive,
+		"宣战当日必须把已集结军队转为针对目标城的首轮攻势"
+	)
+	_check(
+		not objective_state.campaign_visual_events.is_empty()
+		and int(objective_state.campaign_visual_events[-1]["target_city"])
+			== objective_city,
+		"发动国家级攻势时必须生成指向目标城的短时战略箭头事件"
+	)
+	var first_wave_count := (
+		objective_state.nations[objective_attacker].campaign_offensive_count
+	)
+	for army in objective_state.armies:
+		if army.owner_nation == objective_attacker and not staging.is_empty():
+			objective_sim._settle_idle(army, staging[0])
+	objective_state.day = (
+		objective_state.nations[objective_attacker].campaign_next_offensive_day
+	)
+	var next_wave_launched := objective_sim._manage_campaign_offensive(
+		objective_attacker
+	)
+	_check(
+		next_wave_launched
+		and objective_state.nations[objective_attacker].campaign_offensive_count
+			== first_wave_count + 1,
+		"战争持续时每90天应重新集结并发动下一轮国家级攻势"
+	)
+	var arrow_expiry := int(
+		objective_state.campaign_visual_events[-1]["end_day"]
+	)
+	objective_state.day = arrow_expiry + 1
+	objective_state.prune_campaign_visual_events()
+	_check(
+		objective_state.campaign_visual_events.is_empty(),
+		"战略攻势箭头必须在展示期结束后自动清理"
+	)
+	objective_sim.free()
+
+	ai_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.WAR)
+	ai_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
+	_check(
+		DiplomacyAI.alliance_willingness(ai_state, 0, 1)
+			>= DiplomacyAI.ALLIANCE_ACCEPT_SCORE
+		and DiplomacyAI.alliance_willingness(ai_state, 1, 0)
+			>= DiplomacyAI.ALLIANCE_ACCEPT_SCORE,
+		"拥有共同敌国的中立双方应愿意结盟"
+	)
+
+	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
+	ai_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.NEUTRAL)
+	ai_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.NEUTRAL)
+	ai_state.day += DiplomacyAI.MIN_ALLIANCE_DAYS
+	_check(
+		DiplomacyAI.leave_alliance_desire(ai_state, 0, 1)
+			>= DiplomacyAI.LEAVE_ALLIANCE_SCORE,
+		"联盟持续期届满且共同威胁消失后应允许退盟"
+	)
+
+	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	ai_state.nations[0].treasury_gold = 0
+	ai_state.nations[0].unpaid_war_cost = 20
+	ai_state.nations[0].manpower_pool = 0
+	for warehouse in ai_state.warehouse_cities_of(0):
+		warehouse.food_storage = 0
+	var crisis_reason := "、".join(DiplomacyAI.peace_reasons(ai_state, 0, 1))
+	_check(
+		crisis_reason.contains("国库")
+		and crisis_reason.contains("粮草")
+		and crisis_reason.contains("人力"),
+		"求和原因应明确指出财政、粮草和人力危机"
+	)
+
+	# 防御同盟：0 向 1 宣战时，1 的盟友 2 必须自动对 0 参战。
+	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+	ai_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.ALLIED)
+	ai_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.NEUTRAL)
+	ai_state.day += GameState.DEFAULT_TRUCE_DAYS
+	ai_state.nations[1].war_preparation_target_nation = 3
+	ai_state.nations[1].war_preparation_objective_city = (
+		ai_state.cities_of(3)[0].id
+	)
+	ai_state.nations[1].war_preparation_started_day = ai_state.day
+	var diplomacy_sim := Simulation.new()
+	diplomacy_sim.setup(ai_state)
+	var declared := diplomacy_sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.DECLARE_WAR,
+		"a": 0,
+		"b": 1,
+		"reason": "专项测试",
+	})
+	_check(
+		declared and ai_state.is_enemy(0, 1) and ai_state.is_enemy(0, 2),
+		"宣战应生效，并触发守方现有盟友履行防御义务"
+	)
+	_check(
+		ai_state.nations[1].war_preparation_target_nation == -1,
+		"被宣战国必须取消原主动战争准备，立即转入当前防御战争"
+	)
+	_check(
+		ai_state.nations[0].ai_last_diplomatic_target == 1
+		and ai_state.nations[0].ai_last_diplomatic_reason == "专项测试",
+		"外交动作应记录目标与可解释原因"
+	)
+	diplomacy_sim.free()
+
+
+# ------------------------------------------------------------------ 33. 和平裁军与潜在边境守备
+
+func _test_peacetime_demobilization_and_border_defense() -> void:
+	print("[33] 和平军备：30%编制、主动裁军屯粮、高威胁中立边境驻军")
+	var gs := GameState.new()
+	gs.generate_grid_world(33001)
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var view := AiWorldView.build(gs, 0)
+	var snapshot := StrategicMapSnapshot.build(view)
+	_check(
+		snapshot.frontier_cities.is_empty()
+		and not snapshot.potential_frontier_cities.is_empty(),
+		"和平期不应有战争前线，但高威胁邻国边境应进入潜在前线"
+	)
+	var observed_border := int(snapshot.potential_frontier_cities[0])
+	var observed_enemy_city := -1
+	for neighbor in gs.neighbors(observed_border):
+		if (
+			gs.cities[neighbor].owner_nation != 0
+			and gs.relation_between(
+				0, gs.cities[neighbor].owner_nation
+			) == GameState.DiplomaticRelation.NEUTRAL
+		):
+			observed_enemy_city = neighbor
+			break
+	var concentrated_enemy: Army = null
+	if observed_enemy_city >= 0:
+		var enemy_nation := gs.cities[observed_enemy_city].owner_nation
+		for army in gs.armies:
+			if army.owner_nation == enemy_nation:
+				concentrated_enemy = army
+				break
+	var threat_before_concentration := snapshot.potential_threat_at(
+		observed_border
+	)
+	var old_enemy_city := -1
+	var old_enemy_size := 0
+	if concentrated_enemy != null:
+		old_enemy_city = concentrated_enemy.location_city
+		old_enemy_size = concentrated_enemy.size
+		concentrated_enemy.state = Army.State.IDLE
+		concentrated_enemy.location_city = observed_enemy_city
+		concentrated_enemy.move_from = observed_enemy_city
+		concentrated_enemy.move_to = -1
+		concentrated_enemy.on_edge = false
+		concentrated_enemy.size = concentrated_enemy.max_size
+	var concentrated_snapshot := StrategicMapSnapshot.build(
+		AiWorldView.build(gs, 0)
+	)
+	_check(
+		concentrated_enemy != null
+		and concentrated_snapshot.potential_threat_at(observed_border)
+			> threat_before_concentration,
+		"中立邻国在某方向集中兵力后，守方必须提高该边境的预警和布防需求"
+	)
+	if concentrated_enemy != null:
+		concentrated_enemy.location_city = old_enemy_city
+		concentrated_enemy.move_from = old_enemy_city
+		concentrated_enemy.size = old_enemy_size
+	var capital_id := gs.nations[0].capital_city_id
+	for army in view.friendly_armies:
+		if army.location_city == capital_id:
+			army.size = 5000
+			break
+	var interior_army: Army = null
+	for army in view.friendly_armies:
+		if (
+			army.location_city != capital_id
+			and not snapshot.potential_frontier_cities.has(army.location_city)
+		):
+			interior_army = army
+			break
+	_check(interior_army != null, "测试地图应存在非首都、非边境的内地军")
+	if interior_army != null:
+		interior_army.size = 5000
+		var peacetime_threat := ThreatField.build(view)
+		var reinforce := UtilityAI._reinforce_candidate(
+			view,
+			snapshot,
+			peacetime_threat,
+			ArmyCoordinator.new(),
+			interior_army
+		)
+		_check(
+			reinforce != null
+			and snapshot.potential_frontier_cities.has(reinforce.target_city)
+			and reinforce.reason.contains("高威胁中立国边境"),
+			"内地军应优先增援高威胁国家边境，而不是继续聚集首都"
+		)
+	var border_army: Army = null
+	for army in view.friendly_armies:
+		if snapshot.potential_frontier_cities.has(army.location_city):
+			border_army = army
+			break
+	_check(border_army != null, "潜在边境城市应有可用于驻边测试的本国军队")
+	if border_army != null:
+		border_army.size = 5000
+		var hold := UtilityAI._hold_candidate(
+			view,
+			snapshot,
+			ThreatField.build(view),
+			border_army
+		)
+		_check(
+			hold != null
+			and snapshot.potential_threat_of_edge(
+				border_army.location_city,
+				hold.target_city
+			) > 0.0
+			and hold.reason.contains("高威胁中立国边界"),
+			"边境军应进入面向高威胁中立国的 HOLDING 驻防"
+		)
+
+	gs.nations[0].manpower_pool = 100000
+	for army in gs.armies:
+		if army.owner_nation == 0:
+			army.size = 1000
+	for _month in range(10):
+		sim._resolve_reinforcements()
+	var peacetime_cap := int(ceil(
+		float(Army.DEFAULT_MAX_SIZE) * Simulation.PEACETIME_STRENGTH_RATIO
+	))
+	var exceeded_peacetime_cap := false
+	for army in gs.armies:
+		if army.owner_nation == 0 and army.size > peacetime_cap:
+			exceeded_peacetime_cap = true
+	_check(
+		not exceeded_peacetime_cap,
+		"和平期自动补员不得超过30%%编制%d人" % peacetime_cap
+	)
+
+	for city in gs.cities_of(0):
+		city.food_per_half_year = 0
+	for warehouse in gs.warehouse_cities_of(0):
+		warehouse.food_storage = 0
+	view = AiWorldView.build(gs, 0)
+	snapshot = StrategicMapSnapshot.build(view)
+	var food_before := sim._food_security_report(0)
+	var troops_before := 0
+	for army in view.friendly_armies:
+		troops_before += army.size
+	var manpower_before := gs.nations[0].manpower_pool
+	var demobilized := sim._ai_manage_force_structure(
+		view,
+		snapshot,
+		ThreatField.build(view)
+	)
+	var food_after := sim._food_security_report(0)
+	var troops_after := 0
+	for army in gs.armies:
+		if army.owner_nation == 0:
+			troops_after += army.size
+	var troops_reduced := troops_after < troops_before
+	var manpower_returned := gs.nations[0].manpower_pool > manpower_before
+	var demand_reduced := (
+		float(food_after["monthly_demand"])
+		< float(food_before["monthly_demand"])
+	)
+	var budget_is_bounded := (
+		float(food_before["sustainable_demand"])
+		<= float(food_before["monthly_production"])
+		and float(food_before["full_strength_annual_demand"]) > 0.0
+		and float(food_before["full_strength_runway_years"]) >= 0.0
+	)
+	var reason_recorded := (
+		gs.nations[0].ai_last_force_reason.contains("军粮预算缩编")
+	)
+	_check(
+		demobilized
+		and troops_reduced
+		and manpower_returned
+		and demand_reduced
+		and budget_is_bounded
+		and reason_recorded,
+		(
+			"粮食压力下应缩编、返还人力并控制粮耗：checks=%s/%s/%s/%s/%s "
+			+ "troops=%d→%d "
+			+ "manpower=%d→%d demand=%.1f→%.1f sustainable=%.1f production=%.1f reason=%s"
+		) % [
+			str(demobilized),
+			str(troops_reduced),
+			str(manpower_returned),
+			str(demand_reduced),
+			str(budget_is_bounded and reason_recorded),
+			troops_before,
+			troops_after,
+			manpower_before,
+			gs.nations[0].manpower_pool,
+			food_before["monthly_demand"],
+			food_after["monthly_demand"],
+			food_before["sustainable_demand"],
+			food_before["monthly_production"],
+			gs.nations[0].ai_last_force_reason,
+		]
+	)
+	sim.free()
+
+
+# ------------------------------------------------------------------ 34. 资源核心与粮食战争动员
+
+func _test_resource_hubs_and_food_mobilization() -> void:
+	print("[34] 资源核心：AI价值识别；富粮国家宣战时有限爆兵")
+	var gs := GameState.new()
+	gs.generate_grid_world(34001)
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	gs.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	for city in gs.cities_of(0):
+		city.food_per_half_year = 120
+	for city in gs.cities_of(1):
+		city.food_per_half_year = 0
+	for army in gs.armies:
+		if army.owner_nation == 0:
+			army.size = 500
+		elif army.owner_nation == 1:
+			army.size = 2000
+	gs.nations[0].manpower_pool = 30000
+	gs.nations[1].manpower_pool = 30000
+	for warehouse in gs.warehouse_cities_of(0):
+		warehouse.food_storage = 5000
+	for warehouse in gs.warehouse_cities_of(1):
+		warehouse.food_storage = 100
+	var rich_capacity := DiplomacyAI.mobilization_capacity(gs, 0)
+	var defensive_capacity := DiplomacyAI.mobilization_capacity(
+		gs,
+		0,
+		DiplomacyAI.FoodPosture.DEFENSIVE_WAR
+	)
+	var poor_capacity := DiplomacyAI.mobilization_capacity(gs, 1)
+	var rich_target_troops := DiplomacyAI._troop_count(gs, 0) \
+		+ rich_capacity * DiplomacyAI.MOBILIZATION_ARMY_SIZE
+	var rich_food_plan := DiplomacyAI.war_food_report(
+		gs,
+		0,
+		rich_target_troops,
+		DiplomacyAI.FoodPosture.OFFENSIVE_WAR
+	)
+	var stock_before_runway_test := gs.warehouse_cities_of(0)[0].food_storage
+	gs.warehouse_cities_of(0)[0].food_storage = 500
+	var low_stock_plan := DiplomacyAI.war_food_report(
+		gs,
+		0,
+		rich_target_troops,
+		DiplomacyAI.FoodPosture.OFFENSIVE_WAR
+	)
+	gs.warehouse_cities_of(0)[0].food_storage = stock_before_runway_test
+	_check(
+		rich_capacity == DiplomacyAI.MAX_MOBILIZATION_ARMIES
+		and defensive_capacity >= rich_capacity
+		and poor_capacity == 0,
+		"富粮国应可额外动员4军，防御动员不少于进攻，贫粮大国不得爆兵"
+	)
+	_check(
+		bool(rich_food_plan["target_sustainable"])
+		and float(rich_food_plan["target_runway_years"])
+			>= DiplomacyAI.OFFENSIVE_CAMPAIGN_YEARS
+		and float(rich_food_plan["target_runway_years"])
+			>= float(low_stock_plan["target_runway_years"])
+		and float(rich_food_plan["full_strength_annual_demand"])
+			> float(rich_food_plan["target_annual_demand"]),
+		"战争粮食报告应量化目标/满编年耗，库存越多可支撑战争越久"
+	)
+	_check(
+		DiplomacyAI.war_desire(gs, 0, 1) >= DiplomacyAI.WAR_DECLARE_SCORE,
+		"粮食动员潜力应使富粮小国具备向贫粮大国宣战的决策能力"
+	)
+
+	var resource_target: City = null
+	for city in gs.cities_of(1):
+		for neighbor in gs.neighbors(city.id):
+			if (
+				gs.cities[neighbor].owner_nation == 0
+				and gs.edge_of(city.id, neighbor).max_throughput > 0
+			):
+				resource_target = city
+				break
+		if resource_target != null:
+			break
+	_check(resource_target != null, "测试地图应存在国0接壤的国1城市")
+	if resource_target != null:
+		for city in gs.cities_of(1):
+			city.is_food_hub = false
+			city.is_manpower_hub = false
+		resource_target.is_food_hub = true
+		resource_target.is_manpower_hub = true
+		resource_target.food_per_half_year = 1000
+		resource_target.manpower_per_month = 200
+		var selected := DiplomacyAI.select_war_objective(gs, 0, 1)
+		_check(
+			int(selected.get("city_id", -1)) == resource_target.id
+			and str(selected.get("reason", "")).contains("粮食核心")
+			and str(selected.get("reason", "")).contains("人口核心"),
+			"高产粮食/人口城市应成为优先战争目标并写入原因"
+		)
+		resource_target.is_food_hub = false
+		resource_target.is_manpower_hub = false
+		resource_target.food_per_half_year = 0
+		resource_target.manpower_per_month = 10
+
+	var capital_id := gs.nations[0].capital_city_id
+	for army in gs.armies:
+		if army.owner_nation == 0 and army.location_city == capital_id:
+			army.size = 5000
+			break
+	var troops_before := 0
+	for army in gs.armies:
+		if army.owner_nation == 0:
+			troops_before += army.size
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var declared := sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.DECLARE_WAR,
+		"a": 0,
+		"b": 1,
+		"objective_city": resource_target.id if resource_target != null else -1,
+		"objective_reason": "资源核心测试",
+		"mobilization_armies": rich_capacity,
+		"reason": "富粮动员测试",
+	})
+	_check(
+		declared
+		and gs.nations[0].war_mobilization_target_troops
+			== troops_before + rich_capacity * Simulation.NEW_ARMY_SIZE
+		and gs.nations[1].war_mobilization_target_troops > 0
+		and gs.nations[1].war_mobilization_target_troops
+			< gs.nations[0].war_mobilization_target_troops,
+		"宣战双方应按各自粮食条件设置不同目标兵力"
+	)
+	var army_count_before := gs.armies.size()
+	var mobilized := sim._ai_manage_force_structure(
+		AiWorldView.build(gs, 0),
+		StrategicMapSnapshot.build(AiWorldView.build(gs, 0)),
+		ThreatField.build(AiWorldView.build(gs, 0))
+	)
+	_check(
+		mobilized
+		and gs.armies.size() == army_count_before + 1
+		and gs.nations[0].ai_last_force_reason.contains("战争粮食动员"),
+		"富粮国应在宣战后快速建立5000人动员军"
+	)
+	sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.MAKE_PEACE,
+		"a": 0,
+		"b": 1,
+		"reason": "动员清理测试",
+	})
+	_check(
+		gs.nations[0].war_mobilization_target_troops == 0
+		and gs.nations[0].war_mobilization_until_day == -1,
+		"结束最后一场战争后必须清除动员目标"
+	)
+	sim.free()
+
 
 # ------------------------------------------------------------------ 工厂辅助
 

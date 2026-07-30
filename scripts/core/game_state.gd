@@ -10,9 +10,19 @@ const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
 const INITIAL_MANPOWER_RESERVE_MONTHS: int = 150
 const INITIAL_ARMY_MANPOWER_MONTHS: int = 50
+const DEFAULT_TRUCE_DAYS: int = 180
+const WAR_GOLD_TROOPS_PER_UNIT: int = 100
+const FOOD_HUB_MIN_OUTPUT: int = 240
+const MANPOWER_HUB_MIN_OUTPUT: int = 80
 const TERRAIN_MAP_PATH := (
 	"res://china-map-china-flag-shaded-relief-color-height-map-3d-illustration-png.webp"
 )
+
+enum DiplomaticRelation {
+	NEUTRAL,
+	WAR,
+	ALLIED,
+}
 
 var cities: Array[City] = []
 var edges: Array[Edge] = []
@@ -31,9 +41,24 @@ var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _next_army_id: int = 0
 var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
+var diplomacy_revision: int = 0             ## 外交关系版本号，供 AI 战略缓存失效
+## 规范化国家对 key -> DiplomaticRelation / 关系生效日 / 停战截止日。
+var diplomatic_relations: Dictionary = {}
+var diplomatic_since_day: Dictionary = {}
+var truce_until_day: Dictionary = {}
+var diplomatic_history: Array[Dictionary] = []
+## 规范化国家对 key -> {attacker, defender, city_id, reason, started_day}。
+var war_objectives: Dictionary = {}
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
+## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
+var province_map_size: Vector2i = Vector2i.ZERO
+var province_ids: PackedInt32Array = PackedInt32Array()
+## 初始归属用于区分“本国底色”和“占领国斜线”，不会随占领变化。
+var initial_city_owners: PackedInt32Array = PackedInt32Array()
+## 短时战略箭头事件：{start_day,end_day,nation_id,target_city,origin_cities,wave}。
+var campaign_visual_events: Array[Dictionary] = []
 
 ## 结束态
 var winner: int = -1                        ## -1 表示未结束
@@ -43,11 +68,13 @@ var winner: int = -1                        ## -1 表示未结束
 func generate_world(world_seed: int = 12345) -> void:
 	_reset_world(world_seed)
 	uses_heightmap = true
-	_generate_nations()
+	_generate_nations(DiplomaticRelation.NEUTRAL)
 	var terrain := TerrainMapGenerator.build(TERRAIN_MAP_PATH, CITY_COUNT)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
+	_initialize_initial_city_owners()
 	_generate_terrain_edges(terrain)
+	_initialize_resource_hubs()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
 	_generate_armies()
@@ -63,8 +90,10 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	uses_heightmap = false
 	map_aspect_ratio = 1.0
 	map_source_region_normalized = Rect2(0.0, 0.0, 1.0, 1.0)
-	_generate_nations()
+	_generate_nations(DiplomaticRelation.WAR)
 	_generate_grid_cities()
+	_generate_grid_provinces()
+	_initialize_initial_city_owners()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
 	_generate_grid_edges()
@@ -90,9 +119,19 @@ func _reset_world(world_seed: int) -> void:
 	winner = -1
 	_next_army_id = 0
 	ownership_revision = 0
+	diplomacy_revision = 0
+	diplomatic_relations.clear()
+	diplomatic_since_day.clear()
+	truce_until_day.clear()
+	diplomatic_history.clear()
+	war_objectives.clear()
+	province_map_size = Vector2i.ZERO
+	province_ids = PackedInt32Array()
+	initial_city_owners = PackedInt32Array()
+	campaign_visual_events.clear()
 
 
-func _generate_nations() -> void:
+func _generate_nations(initial_relation: int) -> void:
 	var palette := [
 		Color(0.85, 0.22, 0.22),   # 红
 		Color(0.25, 0.45, 0.85),   # 蓝
@@ -107,6 +146,11 @@ func _generate_nations() -> void:
 		n.political_system = 0
 		n.alive = true
 		nations.append(n)
+	for nation_a in range(nations.size()):
+		for nation_b in range(nation_a + 1, nations.size()):
+			var key := _diplomacy_key(nation_a, nation_b)
+			diplomatic_relations[key] = initial_relation
+			diplomatic_since_day[key] = day
 
 
 func _generate_grid_cities() -> void:
@@ -140,6 +184,8 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 	var reliefs: Array[float] = terrain["reliefs"]
 	map_aspect_ratio = clampf(float(terrain["map_aspect_ratio"]), 0.5, 2.5)
 	map_source_region_normalized = terrain["source_region_normalized"]
+	province_map_size = terrain["province_map_size"]
+	province_ids = (terrain["province_ids"] as PackedInt32Array).duplicate()
 	for id in range(CITY_COUNT):
 		var city := City.new()
 		city.id = id
@@ -155,9 +201,22 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.gold_per_month = rng.randi_range(5, 15)
 		city.food_per_half_year = rng.randi_range(20, 60)
 		city.food_storage = rng.randi_range(80, 100)
-		city.at_war = true
+		city.at_war = false
 		cities.append(city)
 		adjacency[city.id] = [] as Array[int]
+
+
+func _generate_grid_provinces() -> void:
+	province_map_size = Vector2i(GRID, GRID)
+	province_ids.resize(CITY_COUNT)
+	for city_id in range(CITY_COUNT):
+		province_ids[city_id] = city_id
+
+
+func _initialize_initial_city_owners() -> void:
+	initial_city_owners.resize(cities.size())
+	for city in cities:
+		initial_city_owners[city.id] = city.owner_nation
 
 
 func _assign_balanced_nations() -> void:
@@ -196,6 +255,49 @@ func _initialize_manpower_pools() -> void:
 	for city in cities:
 		nations[city.owner_nation].manpower_pool += (
 			city.manpower_per_month * INITIAL_MANPOWER_RESERVE_MONTHS
+		)
+
+
+func _initialize_resource_hubs() -> void:
+	for city in cities:
+		city.is_food_hub = false
+		city.is_manpower_hub = false
+	for nation in nations:
+		var owned := cities_of(nation.id)
+		if owned.is_empty():
+			continue
+		var food_hub: City = owned[0]
+		for city in owned:
+			if (
+				city.food_per_half_year > food_hub.food_per_half_year
+				or (
+					city.food_per_half_year == food_hub.food_per_half_year
+					and city.id < food_hub.id
+				)
+			):
+				food_hub = city
+		food_hub.is_food_hub = true
+		food_hub.food_per_half_year = maxi(
+			food_hub.food_per_half_year * 4,
+			FOOD_HUB_MIN_OUTPUT
+		)
+		var manpower_hub: City = food_hub
+		for city in owned:
+			if city == food_hub and owned.size() > 1:
+				continue
+			if (
+				manpower_hub == food_hub
+				or city.manpower_per_month > manpower_hub.manpower_per_month
+				or (
+					city.manpower_per_month == manpower_hub.manpower_per_month
+					and city.id < manpower_hub.id
+				)
+			):
+				manpower_hub = city
+		manpower_hub.is_manpower_hub = true
+		manpower_hub.manpower_per_month = maxi(
+			manpower_hub.manpower_per_month * 3,
+			MANPOWER_HUB_MIN_OUTPUT
 		)
 
 
@@ -451,7 +553,11 @@ func _generate_armies() -> void:
 		var army := create_army(
 			city.owner_nation,
 			city.id,
-			city.manpower_per_month * INITIAL_ARMY_MANPOWER_MONTHS
+			clampi(
+				city.manpower_per_month,
+				CITY_MANPOWER_PER_MONTH_MIN,
+				CITY_MANPOWER_PER_MONTH_MAX
+			) * INITIAL_ARMY_MANPOWER_MONTHS
 		)
 		army.speed_factor = rng.randf_range(0.3, 0.9)
 		army.attack = rng.randi_range(8, 15)
@@ -495,7 +601,132 @@ func neighbors(city_id: int) -> Array[int]:
 
 
 func is_enemy(nation_a: int, nation_b: int) -> bool:
-	return nation_a != nation_b
+	return relation_between(nation_a, nation_b) == DiplomaticRelation.WAR
+
+
+func is_allied(nation_a: int, nation_b: int) -> bool:
+	return (
+		nation_a == nation_b
+		or relation_between(nation_a, nation_b) == DiplomaticRelation.ALLIED
+	)
+
+
+func relation_between(nation_a: int, nation_b: int) -> int:
+	if nation_a == nation_b:
+		return DiplomaticRelation.ALLIED
+	if (
+		nation_a < 0
+		or nation_b < 0
+		or nation_a >= nations.size()
+		or nation_b >= nations.size()
+	):
+		# 非法/测试占位国家不得被视为可安全借道的中立方。
+		return DiplomaticRelation.WAR
+	return int(diplomatic_relations.get(
+		_diplomacy_key(nation_a, nation_b),
+		DiplomaticRelation.WAR
+	))
+
+
+func relation_since(nation_a: int, nation_b: int) -> int:
+	return int(diplomatic_since_day.get(_diplomacy_key(nation_a, nation_b), 0))
+
+
+func truce_until(nation_a: int, nation_b: int) -> int:
+	return int(truce_until_day.get(_diplomacy_key(nation_a, nation_b), 0))
+
+
+func war_objective(nation_a: int, nation_b: int) -> Dictionary:
+	return war_objectives.get(_diplomacy_key(nation_a, nation_b), {})
+
+
+func set_war_objective(
+	attacker: int,
+	defender: int,
+	city_id: int,
+	reason: String
+) -> void:
+	war_objectives[_diplomacy_key(attacker, defender)] = {
+		"attacker": attacker,
+		"defender": defender,
+		"city_id": city_id,
+		"reason": reason,
+		"started_day": day,
+	}
+
+
+func clear_war_objective(nation_a: int, nation_b: int) -> void:
+	war_objectives.erase(_diplomacy_key(nation_a, nation_b))
+
+
+func can_declare_war(nation_a: int, nation_b: int) -> bool:
+	return (
+		nation_a != nation_b
+		and nation_a >= 0
+		and nation_b >= 0
+		and nation_a < nations.size()
+		and nation_b < nations.size()
+		and nations[nation_a].alive
+		and nations[nation_b].alive
+		and relation_between(nation_a, nation_b) == DiplomaticRelation.NEUTRAL
+		and day >= truce_until(nation_a, nation_b)
+	)
+
+
+func set_diplomatic_relation(
+	nation_a: int,
+	nation_b: int,
+	relation: int,
+	truce_days: int = 0
+) -> bool:
+	if (
+		nation_a == nation_b
+		or nation_a < 0
+		or nation_b < 0
+		or nation_a >= nations.size()
+		or nation_b >= nations.size()
+		or relation not in [
+			DiplomaticRelation.NEUTRAL,
+			DiplomaticRelation.WAR,
+			DiplomaticRelation.ALLIED,
+		]
+	):
+		return false
+	var key := _diplomacy_key(nation_a, nation_b)
+	var previous := relation_between(nation_a, nation_b)
+	if previous == relation:
+		return false
+	diplomatic_relations[key] = relation
+	diplomatic_since_day[key] = day
+	if previous == DiplomaticRelation.WAR and relation != DiplomaticRelation.WAR:
+		truce_until_day[key] = maxi(
+			int(truce_until_day.get(key, 0)),
+			day + maxi(truce_days, 0)
+		)
+	diplomacy_revision += 1
+	return true
+
+
+func wars_of(nation_id: int) -> Array[int]:
+	var result: Array[int] = []
+	for other in nations:
+		if other.id != nation_id and other.alive and is_enemy(nation_id, other.id):
+			result.append(other.id)
+	return result
+
+
+func allies_of(nation_id: int) -> Array[int]:
+	var result: Array[int] = []
+	for other in nations:
+		if other.id != nation_id and other.alive and is_allied(nation_id, other.id):
+			result.append(other.id)
+	return result
+
+
+func _diplomacy_key(nation_a: int, nation_b: int) -> String:
+	var lo := mini(nation_a, nation_b)
+	var hi := maxi(nation_a, nation_b)
+	return "%d:%d" % [lo, hi]
 
 
 func army_at_city(city_id: int) -> Army:
@@ -542,6 +773,36 @@ func city_under_siege(city_id: int) -> bool:
 		if not b.finished and b.kind == Battle.Kind.SIEGE and b.city != null and b.city.id == city_id:
 			return true
 	return false
+
+
+func initial_owner_of(city_id: int) -> int:
+	if city_id < 0 or city_id >= initial_city_owners.size():
+		return -1
+	return initial_city_owners[city_id]
+
+
+func add_campaign_visual_event(
+	nation_id: int,
+	target_city: int,
+	origin_cities: Array[int],
+	wave: int,
+	duration_days: int
+) -> void:
+	campaign_visual_events.append({
+		"start_day": day,
+		"end_day": day + maxi(duration_days, 1),
+		"nation_id": nation_id,
+		"target_city": target_city,
+		"origin_cities": origin_cities.duplicate(),
+		"wave": wave,
+	})
+
+
+func prune_campaign_visual_events() -> void:
+	campaign_visual_events = campaign_visual_events.filter(
+		func(event: Dictionary) -> bool:
+			return day <= int(event["end_day"])
+	)
 
 
 func cities_of(nation_id: int) -> Array[City]:

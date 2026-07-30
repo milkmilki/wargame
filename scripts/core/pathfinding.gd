@@ -331,7 +331,7 @@ static func _edge_has_enemy_presence(state: GameState, edge: Edge, nation_id: in
 	for army in state.armies:
 		if army.size <= 0 or not army.on_edge or army.move_to == -1:
 			continue
-		if army.owner_nation == nation_id:
+		if not state.is_enemy(army.owner_nation, nation_id):
 			continue
 		var army_edge := state.edge_of(army.move_from, army.move_to)
 		if army_edge == edge:

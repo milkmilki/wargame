@@ -13,6 +13,10 @@ var corridor_flow: Dictionary = {}         ## edge key -> 粮仓到前线的路�
 var frontier_edges: Array[Edge] = []
 var frontier_cities: Array[int] = []
 var frontier_enemy_cities: Array[int] = []
+var potential_frontier_edges: Array[Edge] = []
+var potential_frontier_cities: Array[int] = []
+var potential_border_threat: Dictionary = {} ## friendly city_id -> float
+var potential_edge_threat: Dictionary = {}   ## edge key -> dimensionless threat
 var priority_enemy_cities: Array[int] = []
 var offensive_value: Dictionary = {}       ## enemy city_id -> 两层占领后战略价值
 var campaign_target: int = -1               ## 国家级主战役目标
@@ -57,6 +61,10 @@ func _compute_city_values() -> void:
 			value += 5.0
 		if city.has_warehouse:
 			value += 3.0 + minf(float(city.food_storage) / 1000.0, 2.0)
+		if city.is_food_hub:
+			value += 4.0
+		if city.is_manpower_hub:
+			value += 4.0
 		city_value[city.id] = value
 		if city.owner_nation == nation_id:
 			_total_friendly_value += value
@@ -65,6 +73,8 @@ func _compute_city_values() -> void:
 func _find_frontier() -> void:
 	var frontier_seen := {}
 	var enemy_seen := {}
+	var neutral_cities_by_nation := {}
+	var neutral_edges_by_nation := {}
 	for edge in _state.edges:
 		if edge.max_throughput <= 0:
 			continue
@@ -74,20 +84,115 @@ func _find_frontier() -> void:
 			continue
 		if owner_a != nation_id and owner_b != nation_id:
 			continue
-		frontier_edges.append(edge)
 		var friendly_id := edge.city_a if owner_a == nation_id else edge.city_b
-		var enemy_id := edge.city_b if owner_a == nation_id else edge.city_a
-		if not frontier_seen.has(friendly_id):
-			frontier_seen[friendly_id] = true
-			frontier_cities.append(friendly_id)
-		if not enemy_seen.has(enemy_id):
-			enemy_seen[enemy_id] = true
-			frontier_enemy_cities.append(enemy_id)
+		var other_id := edge.city_b if owner_a == nation_id else edge.city_a
+		var other_nation := _state.cities[other_id].owner_nation
+		if _state.is_enemy(nation_id, other_nation):
+			frontier_edges.append(edge)
+			if not frontier_seen.has(friendly_id):
+				frontier_seen[friendly_id] = true
+				frontier_cities.append(friendly_id)
+			if not enemy_seen.has(other_id):
+				enemy_seen[other_id] = true
+				frontier_enemy_cities.append(other_id)
+		elif (
+			_state.relation_between(nation_id, other_nation)
+			== GameState.DiplomaticRelation.NEUTRAL
+		):
+			if not neutral_cities_by_nation.has(other_nation):
+				neutral_cities_by_nation[other_nation] = {}
+				neutral_edges_by_nation[other_nation] = []
+			neutral_cities_by_nation[other_nation][friendly_id] = true
+			neutral_edges_by_nation[other_nation].append(edge)
+	var neutral_nations := neutral_cities_by_nation.keys()
+	neutral_nations.sort()
+	var potential_seen := {}
+	for other_nation_value in neutral_nations:
+		var other_nation := int(other_nation_value)
+		var threat_score := DiplomacyAI.threat_from_nation(
+			_state,
+			nation_id,
+			other_nation
+		)
+		if threat_score < 1.0:
+			continue
+		var border_city_ids: Array = neutral_cities_by_nation[other_nation].keys()
+		border_city_ids.sort()
+		var deployable_power := _army_power_of(other_nation)
+		var per_city_power := (
+			deployable_power
+			/ float(maxi(border_city_ids.size(), 1))
+			* clampf(threat_score / 2.0, 0.25, 1.0)
+		)
+		for city_id_value in border_city_ids:
+			var city_id := int(city_id_value)
+			var local_concentration := _neutral_border_concentration(
+				other_nation,
+				city_id
+			)
+			potential_border_threat[city_id] = (
+				float(potential_border_threat.get(city_id, 0.0))
+				+ maxf(per_city_power, local_concentration)
+			)
+			if not potential_seen.has(city_id):
+				potential_seen[city_id] = true
+				potential_frontier_cities.append(city_id)
+		for edge in neutral_edges_by_nation[other_nation]:
+			if not potential_frontier_edges.has(edge):
+				potential_frontier_edges.append(edge)
+			potential_edge_threat[_edge_key(edge.city_a, edge.city_b)] = threat_score
 	frontier_edges.sort_custom(func(a: Edge, b: Edge) -> bool:
+		return _edge_key(a.city_a, a.city_b) < _edge_key(b.city_a, b.city_b)
+	)
+	potential_frontier_edges.sort_custom(func(a: Edge, b: Edge) -> bool:
 		return _edge_key(a.city_a, a.city_b) < _edge_key(b.city_a, b.city_b)
 	)
 	frontier_cities.sort()
 	frontier_enemy_cities.sort()
+	potential_frontier_cities.sort()
+
+
+func _army_power_of(owner_nation: int) -> float:
+	var total := 0.0
+	for army in _state.armies:
+		if army.owner_nation == owner_nation and army.size > 0:
+			total += ArmyPower.effective(army)
+	return total
+
+
+func _neutral_border_concentration(
+	other_nation: int,
+	friendly_city: int
+) -> float:
+	var total := 0.0
+	for neighbor in _state.neighbors(friendly_city):
+		var edge := _state.edge_of(friendly_city, neighbor)
+		if (
+			edge == null
+			or edge.max_throughput <= 0
+			or _state.cities[neighbor].owner_nation != other_nation
+		):
+			continue
+		for army in _state.armies:
+			if army.owner_nation != other_nation or army.size <= 0:
+				continue
+			if (
+				army.state in [Army.State.IDLE, Army.State.RECOVERING]
+				and army.location_city == neighbor
+			):
+				total += ArmyPower.effective(army)
+			elif (
+				army.state == Army.State.HOLDING
+				and (
+					(army.move_from == neighbor and army.move_to == friendly_city)
+					or (
+						army.move_to == neighbor
+						and army.move_from == friendly_city
+					)
+				)
+			):
+				total += ArmyPower.effective(army)
+	return total
 
 
 func _compute_connectivity() -> void:
@@ -189,12 +294,17 @@ func _friendly_neighbors(city_id: int) -> Array[int]:
 
 
 func _compute_supply_corridors(view: AiWorldView) -> void:
-	if frontier_cities.is_empty():
+	var defended_cities: Array[int] = frontier_cities.duplicate()
+	for city_id in potential_frontier_cities:
+		if not defended_cities.has(city_id):
+			defended_cities.append(city_id)
+	defended_cities.sort()
+	if defended_cities.is_empty():
 		return
 	for warehouse in view.warehouses:
 		var field := Pathfinding.dijkstra_field(_state, warehouse.id, nation_id, false, true)
 		var prev: Dictionary = field["prev"]
-		for frontier_id in frontier_cities:
+		for frontier_id in defended_cities:
 			var path := Pathfinding.reconstruct(prev, warehouse.id, frontier_id)
 			var from_id := warehouse.id
 			for to_id in path:
@@ -219,8 +329,12 @@ func _finalize_edge_values() -> void:
 		value += 3.0 * float(bridge_impact.get(key, 0.0)) / maxf(_total_friendly_value, 0.001)
 		value += 2.0 * float(corridor_flow.get(key, 0.0)) / max_flow
 		value += 0.75 * float(maxi(edge.max_throughput - 1, 0))
-		if owner_a != owner_b and (owner_a == nation_id or owner_b == nation_id):
+		if (
+			_state.is_enemy(owner_a, owner_b)
+			and (owner_a == nation_id or owner_b == nation_id)
+		):
 			value += 1.0 + edge.danger * 2.0
+		value += 2.0 * float(potential_edge_threat.get(key, 0.0))
 		edge_value[key] = value
 
 
@@ -296,8 +410,21 @@ func _enemy_cut_value_ratio(target_city: int, enemy_nation: int) -> float:
 
 func _select_priority_targets(view: AiWorldView) -> void:
 	var scored: Array = []
+	var diplomatic_targets := {}
+	for enemy_id in _state.wars_of(nation_id):
+		var objective := _state.war_objective(nation_id, enemy_id)
+		if (
+			not objective.is_empty()
+			and int(objective.get("attacker", -1)) == nation_id
+		):
+			diplomatic_targets[int(objective["city_id"])] = true
 	for city_id in frontier_enemy_cities:
-		scored.append([value_of_offense(city_id) + 2.0, city_id])
+		scored.append([
+			value_of_offense(city_id)
+				+ 2.0
+				+ (4.0 if diplomatic_targets.has(city_id) else 0.0),
+			city_id,
+		])
 	scored.sort_custom(func(a: Array, b: Array) -> bool:
 		return float(a[0]) > float(b[0]) or (
 			is_equal_approx(float(a[0]), float(b[0])) and int(a[1]) < int(b[1])
@@ -319,6 +446,14 @@ func value_of_offense(city_id: int) -> float:
 
 func value_of_edge(a: int, b: int) -> float:
 	return float(edge_value.get(_edge_key(a, b), 0.0))
+
+
+func potential_threat_at(city_id: int) -> float:
+	return float(potential_border_threat.get(city_id, 0.0))
+
+
+func potential_threat_of_edge(a: int, b: int) -> float:
+	return float(potential_edge_threat.get(_edge_key(a, b), 0.0))
 
 
 static func _edge_key(a: int, b: int) -> int:

@@ -10,8 +10,11 @@ var strategic_planning_enabled: bool = true
 var adaptive_garrison_enabled: bool = true
 var friendly_cities: Array[City] = []
 var enemy_cities: Array[City] = []
+var allied_cities: Array[City] = []
+var neutral_cities: Array[City] = []
 var friendly_armies: Array[Army] = []
 var enemy_armies: Array[Army] = []
+var allied_armies: Array[Army] = []
 var warehouses: Array[City] = []
 
 
@@ -25,17 +28,26 @@ static func build(game_state: GameState, owner_nation: int) -> AiWorldView:
 	for city in game_state.cities:
 		if city.owner_nation == owner_nation:
 			view.friendly_cities.append(city)
-		else:
+		elif game_state.is_enemy(owner_nation, city.owner_nation):
 			view.enemy_cities.append(city)
+		elif game_state.is_allied(owner_nation, city.owner_nation):
+			view.allied_cities.append(city)
+		else:
+			view.neutral_cities.append(city)
 	for army in game_state.armies:
 		if army.size <= 0:
 			continue
 		if army.owner_nation == owner_nation:
 			view.friendly_armies.append(army)
-		else:
+		elif game_state.is_enemy(owner_nation, army.owner_nation):
 			view.enemy_armies.append(army)
+		elif game_state.is_allied(owner_nation, army.owner_nation):
+			view.allied_armies.append(army)
 	view.friendly_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
 	view.enemy_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
+	view.allied_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
+	view.neutral_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
 	view.friendly_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
 	view.enemy_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
+	view.allied_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
 	return view

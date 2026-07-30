@@ -20,6 +20,7 @@ func _init() -> void:
 	var simulation := Simulation.new()
 	root.add_child(simulation)
 	simulation.setup(state)
+	simulation.diplomacy_enabled = false
 	var duel_mode := OS.get_environment("AI_DUEL_MODE")
 	if duel_mode.is_empty():
 		duel_mode = "improved-left"

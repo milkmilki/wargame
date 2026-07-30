@@ -141,6 +141,9 @@ static func _reinforce_candidate(
 	var best_city := -1
 	var best_score := -INF
 	var target_ids: Array[int] = snapshot.frontier_cities.duplicate()
+	for potential_city in snapshot.potential_frontier_cities:
+		if not target_ids.has(potential_city):
+			target_ids.append(potential_city)
 	for warehouse in view.warehouses:
 		if not target_ids.has(warehouse.id):
 			target_ids.append(warehouse.id)
@@ -149,10 +152,14 @@ static func _reinforce_candidate(
 			target_ids.append(city.id)
 	target_ids.sort()
 	var best_is_relief := false
+	var best_is_potential_border := false
 	for city_id in target_ids:
 		if city_id == start or dist[city_id] == INF:
 			continue
-		var enemy := threat.threat_at(city_id)
+		var enemy := maxf(
+			threat.threat_at(city_id),
+			snapshot.potential_threat_at(city_id)
+		)
 		# 支援必须是一军一目标的真实预留，不能使用会在多个城市重复计数的支援场。
 		var support := coordinator.power_reserved(city_id)
 		var frontline_deficit := enemy - support
@@ -166,7 +173,10 @@ static func _reinforce_candidate(
 		var relief_deficit := relief_need - support
 		var deficit := maxf(maxf(frontline_deficit, hub_deficit), relief_deficit)
 		var uncovered := (
-			snapshot.frontier_cities.has(city_id)
+			(
+				snapshot.frontier_cities.has(city_id)
+				or snapshot.potential_frontier_cities.has(city_id)
+			)
 			and
 			not _frontier_has_coverage(view, city_id)
 			and coordinator.power_reserved(city_id) <= 0.0
@@ -194,6 +204,10 @@ static func _reinforce_candidate(
 			best_score = score
 			best_city = city_id
 			best_is_relief = relief_need > 0.0
+			best_is_potential_border = (
+				snapshot.potential_frontier_cities.has(city_id)
+				and not snapshot.frontier_cities.has(city_id)
+			)
 	if best_city == -1:
 		return null
 	var candidate := ActionCandidate.make(
@@ -202,7 +216,11 @@ static func _reinforce_candidate(
 		(
 			"城市 %d 的被围/断粮友军需要紧急解围" % best_city
 			if best_is_relief
-			else "前线城市 %d 存在兵力缺口" % best_city
+			else (
+				"高威胁中立国边境城市 %d 存在守备缺口" % best_city
+				if best_is_potential_border
+				else "前线城市 %d 存在兵力缺口" % best_city
+			)
 		),
 		best_city
 	)
@@ -222,7 +240,15 @@ static func _hold_candidate(
 	var best_edge: Edge = null
 	var best_score := -INF
 	for neighbor in view.state.neighbors(current):
-		if view.state.cities[neighbor].owner_nation == view.nation_id:
+		var is_enemy_border := view.state.is_enemy(
+			view.nation_id,
+			view.state.cities[neighbor].owner_nation
+		)
+		var potential_threat := snapshot.potential_threat_of_edge(
+			current,
+			neighbor
+		)
+		if not is_enemy_border and potential_threat <= 0.0:
 			continue
 		var edge := view.state.edge_of(current, neighbor)
 		if edge == null or edge.max_throughput <= 0:
@@ -230,6 +256,7 @@ static func _hold_candidate(
 		var score := (
 			snapshot.value_of_edge(current, neighbor)
 			+ 0.5 * threat.threat_at(current) / maxf(ArmyPower.effective(army), 1.0)
+			+ potential_threat * 2.0
 			+ edge.danger * 2.0
 			+ (10.0 if not _edge_has_holder_or_order(view, current, neighbor) else 0.0)
 		)
@@ -244,10 +271,21 @@ static func _hold_candidate(
 	if best_edge == null:
 		return null
 	var target := best_edge.city_b if best_edge.city_a == current else best_edge.city_a
+	var is_potential_border := (
+		not view.state.is_enemy(
+			view.nation_id,
+			view.state.cities[target].owner_nation
+		)
+		and snapshot.potential_threat_of_edge(current, target) > 0.0
+	)
 	var candidate := ActionCandidate.make(
 		ActionCandidate.Kind.HOLD,
 		best_score + 2.0,
-		"边 %d-%d 战略价值 %.2f" % [current, target, best_score],
+		(
+			"驻守高威胁中立国边界 %d-%d，价值 %.2f"
+			if is_potential_border
+			else "边 %d-%d 战略价值 %.2f"
+		) % [current, target, best_score],
 		target
 	)
 	candidate.target_edge_a = current
@@ -710,7 +748,10 @@ static func _has_immediate_enemy_access(view: AiWorldView, city_id: int) -> bool
 		if (
 			edge != null
 			and edge.max_throughput > 0
-			and view.state.cities[neighbor].owner_nation != view.nation_id
+			and view.state.is_enemy(
+				view.nation_id,
+				view.state.cities[neighbor].owner_nation
+			)
 		):
 			return true
 	return false
@@ -757,7 +798,7 @@ static func _choose_holding(
 	var target_city := view.state.cities[enemy_endpoint]
 	if (
 		_is_encircled_low_supply(view, army)
-		and target_city.owner_nation != view.nation_id
+		and view.state.is_enemy(view.nation_id, target_city.owner_nation)
 	):
 		var breakout_target_power := _breakout_target_power(view, enemy_endpoint)
 		var breakout_ratio := (
@@ -783,7 +824,7 @@ static func _choose_holding(
 		return retreat
 	var hold_score := snapshot.value_of_edge(army.move_from, army.move_to) + 2.0
 	if (
-		target_city.owner_nation != view.nation_id
+		view.state.is_enemy(view.nation_id, target_city.owner_nation)
 		and army.morale >= 0.70
 		and army.supply_ratio >= 0.75
 	):

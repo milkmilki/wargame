@@ -22,6 +22,7 @@ func _start_new_game(world_seed: int) -> void:
 	else:
 		state.generate_world(world_seed)
 	simulation.setup(state)
+	simulation.diplomacy_enabled = not use_grid_world
 	simulation.set_speed_multiplier(_speed_mult)
 	renderer.setup(state, simulation)
 

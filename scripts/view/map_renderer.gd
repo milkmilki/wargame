@@ -23,6 +23,13 @@ var _hud_card_width: float = 300.0
 
 var _font: Font
 var _terrain_texture: Texture2D
+var _province_texture: ImageTexture
+var _province_boundary_segments := PackedVector2Array()
+var _coast_segments := PackedVector2Array()
+var _nation_boundary_segments := PackedVector2Array()
+var _province_cache_ready: bool = false
+var _province_ownership_revision: int = -1
+var _campaign_event_seen_at: Dictionary = {}
 var _blink: float = 0.0                    ## 饥饿闪烁计时
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
@@ -38,6 +45,13 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_prev_pos.clear()
 	_curr_pos.clear()
 	_last_day = -1
+	_province_texture = null
+	_province_boundary_segments = PackedVector2Array()
+	_coast_segments = PackedVector2Array()
+	_nation_boundary_segments = PackedVector2Array()
+	_province_cache_ready = false
+	_province_ownership_revision = -1
+	_campaign_event_seen_at.clear()
 
 
 func _ready() -> void:
@@ -109,7 +123,7 @@ static func compute_layout_for_viewport(viewport_size: Vector2, nation_count: in
 	)
 	var hud_rows := int(ceil(float(count) / float(hud_columns)))
 	var top_margin := (
-		BASE_HUD_TOP + BASE_HUD_ROW_HEIGHT * float(hud_rows)
+		BASE_HUD_TOP + BASE_HUD_ROW_HEIGHT * float(hud_rows + 1)
 	) * display_scale
 	var bottom_margin := BASE_BOTTOM_MARGIN * display_scale
 	var span := maxf(minf(
@@ -158,7 +172,12 @@ func _draw() -> void:
 		return
 	_compute_layout()
 	_draw_terrain_background()
+	_ensure_province_visual_cache()
+	_draw_province_fills()
+	_draw_province_boundaries()
 	_draw_edges()
+	_draw_national_boundaries()
+	_draw_campaign_arrows()
 	_draw_cities()
 	_draw_battles()
 	_draw_armies()
@@ -182,6 +201,281 @@ func _draw_terrain_background() -> void:
 	)
 	# 暗色罩层压低底图细节，保证道路、国家色和文字仍是视觉主层。
 	draw_rect(Rect2(_origin, _map_size), Color(0.02, 0.025, 0.035, 0.34), true)
+
+
+func _ensure_province_visual_cache() -> void:
+	if (
+		state.province_map_size.x <= 0
+		or state.province_map_size.y <= 0
+		or state.province_ids.is_empty()
+	):
+		return
+	if not _province_cache_ready:
+		var geometry := build_province_boundary_segments(state)
+		_province_boundary_segments = geometry["province"]
+		_coast_segments = geometry["coast"]
+		_province_cache_ready = true
+	if (
+		_province_texture == null
+		or _province_ownership_revision != state.ownership_revision
+	):
+		var image := build_province_overlay_image(state)
+		_province_texture = ImageTexture.create_from_image(image)
+		var geometry := build_province_boundary_segments(state)
+		_nation_boundary_segments = geometry["nation"]
+		_province_ownership_revision = state.ownership_revision
+
+
+static func build_province_overlay_image(game_state: GameState) -> Image:
+	var size := game_state.province_map_size
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	image.fill(Color.TRANSPARENT)
+	for y in range(size.y):
+		for x in range(size.x):
+			var province_id := game_state.province_ids[y * size.x + x]
+			if province_id < 0 or province_id >= game_state.cities.size():
+				continue
+			var current_owner := game_state.cities[province_id].owner_nation
+			var original_owner := game_state.initial_owner_of(province_id)
+			if original_owner < 0:
+				original_owner = current_owner
+			var base := game_state.nations[original_owner].color
+			base.a = 0.30
+			if current_owner != original_owner and (x + y) % 9 < 3:
+				var occupation := game_state.nations[current_owner].color.lightened(0.18)
+				occupation.a = 0.72
+				base = occupation
+			image.set_pixel(x, y, base)
+	return image
+
+
+static func build_province_boundary_segments(
+	game_state: GameState
+) -> Dictionary:
+	var province := PackedVector2Array()
+	var nation := PackedVector2Array()
+	var coast := PackedVector2Array()
+	var size := game_state.province_map_size
+	if size.x <= 0 or size.y <= 0:
+		return {"province": province, "nation": nation, "coast": coast}
+	for y in range(size.y):
+		for x in range(size.x):
+			var province_id := game_state.province_ids[y * size.x + x]
+			if province_id < 0:
+				continue
+			var left := (
+				game_state.province_ids[y * size.x + x - 1]
+				if x > 0 else -1
+			)
+			var top := (
+				game_state.province_ids[(y - 1) * size.x + x]
+				if y > 0 else -1
+			)
+			var right := (
+				game_state.province_ids[y * size.x + x + 1]
+				if x + 1 < size.x else -1
+			)
+			var bottom := (
+				game_state.province_ids[(y + 1) * size.x + x]
+				if y + 1 < size.y else -1
+			)
+			var x0 := float(x) / float(size.x)
+			var x1 := float(x + 1) / float(size.x)
+			var y0 := float(y) / float(size.y)
+			var y1 := float(y + 1) / float(size.y)
+			if left < 0:
+				_append_segment(coast, Vector2(x0, y0), Vector2(x0, y1))
+			if top < 0:
+				_append_segment(coast, Vector2(x0, y0), Vector2(x1, y0))
+			if right < 0:
+				_append_segment(coast, Vector2(x1, y0), Vector2(x1, y1))
+			elif right != province_id:
+				_append_segment(province, Vector2(x1, y0), Vector2(x1, y1))
+				if _province_owners_differ(game_state, province_id, right):
+					_append_segment(nation, Vector2(x1, y0), Vector2(x1, y1))
+			if bottom < 0:
+				_append_segment(coast, Vector2(x0, y1), Vector2(x1, y1))
+			elif bottom != province_id:
+				_append_segment(province, Vector2(x0, y1), Vector2(x1, y1))
+				if _province_owners_differ(game_state, province_id, bottom):
+					_append_segment(nation, Vector2(x0, y1), Vector2(x1, y1))
+	return {"province": province, "nation": nation, "coast": coast}
+
+
+static func _province_owners_differ(
+	game_state: GameState,
+	province_a: int,
+	province_b: int
+) -> bool:
+	return (
+		province_a >= 0
+		and province_b >= 0
+		and game_state.cities[province_a].owner_nation
+			!= game_state.cities[province_b].owner_nation
+	)
+
+
+static func _append_segment(
+	segments: PackedVector2Array,
+	from: Vector2,
+	to: Vector2
+) -> void:
+	segments.append(from)
+	segments.append(to)
+
+
+func _draw_province_fills() -> void:
+	if _province_texture == null:
+		return
+	draw_texture_rect(
+		_province_texture,
+		Rect2(_origin, _map_size),
+		false,
+		Color.WHITE
+	)
+
+
+func _normalized_segments_to_pixels(
+	segments: PackedVector2Array
+) -> PackedVector2Array:
+	var result := PackedVector2Array()
+	result.resize(segments.size())
+	for i in range(segments.size()):
+		result[i] = _origin + segments[i] * _map_size
+	return result
+
+
+func _draw_province_boundaries() -> void:
+	if not _province_boundary_segments.is_empty():
+		draw_multiline(
+			_normalized_segments_to_pixels(_province_boundary_segments),
+			Color(0.08, 0.09, 0.12, 0.72),
+			maxf(1.0 * _display_scale, 1.0),
+			true
+		)
+
+
+func _draw_national_boundaries() -> void:
+	var coast_pixels := _normalized_segments_to_pixels(_coast_segments)
+	if not coast_pixels.is_empty():
+		draw_multiline(
+			coast_pixels,
+			Color(0.02, 0.025, 0.04, 0.90),
+			4.0 * _display_scale,
+			true
+		)
+		draw_multiline(
+			coast_pixels,
+			Color(0.78, 0.78, 0.70, 0.72),
+			1.4 * _display_scale,
+			true
+		)
+	if _nation_boundary_segments.is_empty():
+		return
+	var nation_pixels := _normalized_segments_to_pixels(
+		_nation_boundary_segments
+	)
+	draw_multiline(
+		nation_pixels,
+		Color(0.025, 0.02, 0.035, 0.96),
+		6.0 * _display_scale,
+		true
+	)
+	draw_multiline(
+		nation_pixels,
+		Color(1.0, 0.88, 0.54, 0.94),
+		2.4 * _display_scale,
+		true
+	)
+
+
+func _draw_campaign_arrows() -> void:
+	for event in state.campaign_visual_events:
+		var target_city := int(event.get("target_city", -1))
+		var nation_id := int(event.get("nation_id", -1))
+		if (
+			target_city < 0
+			or target_city >= state.cities.size()
+			or nation_id < 0
+			or nation_id >= state.nations.size()
+		):
+			continue
+		var event_key := "%d:%d:%d:%d" % [
+			nation_id,
+			int(event["start_day"]),
+			int(event.get("wave", 0)),
+			target_city,
+		]
+		if not _campaign_event_seen_at.has(event_key):
+			_campaign_event_seen_at[event_key] = _blink
+		var visual_age := _blink - float(_campaign_event_seen_at[event_key])
+		const DISPLAY_SECONDS: float = 3.0
+		const FADE_SECONDS: float = 0.65
+		if visual_age >= DISPLAY_SECONDS:
+			continue
+		var alpha := clampf(
+			(DISPLAY_SECONDS - visual_age) / FADE_SECONDS,
+			0.0,
+			1.0
+		)
+		var origins: Array = event.get("origin_cities", [])
+		for index in range(origins.size()):
+			var origin_city := int(origins[index])
+			if origin_city < 0 or origin_city >= state.cities.size():
+				continue
+			_draw_campaign_arrow(
+				_city_center(state.cities[origin_city]),
+				_city_center(state.cities[target_city]),
+				state.nations[nation_id].color,
+				alpha,
+				index
+			)
+
+
+func _draw_campaign_arrow(
+	start: Vector2,
+	finish: Vector2,
+	color: Color,
+	alpha: float,
+	curve_index: int
+) -> void:
+	var delta := finish - start
+	if delta.length_squared() < 1.0:
+		return
+	var direction := delta.normalized()
+	var normal := Vector2(-direction.y, direction.x)
+	var bend_sign := -1.0 if curve_index % 2 == 0 else 1.0
+	var control := (
+		(start + finish) * 0.5
+		+ normal * minf(delta.length() * 0.16, 42.0 * _display_scale) * bend_sign
+	)
+	var points := PackedVector2Array()
+	const SEGMENTS: int = 18
+	for i in range(SEGMENTS + 1):
+		var t := float(i) / float(SEGMENTS)
+		var inv := 1.0 - t
+		points.append(
+			start * inv * inv + control * 2.0 * inv * t + finish * t * t
+		)
+	var arrow_color := color.lightened(0.28)
+	arrow_color.a = 0.92 * alpha
+	draw_polyline(
+		points,
+		Color(0.025, 0.02, 0.03, 0.84 * alpha),
+		9.0 * _display_scale,
+		true
+	)
+	draw_polyline(points, arrow_color, 5.0 * _display_scale, true)
+	var tangent := (finish - control).normalized()
+	var arrow_normal := Vector2(-tangent.y, tangent.x)
+	var head_length := 18.0 * _display_scale
+	var head_width := 10.0 * _display_scale
+	var head := PackedVector2Array([
+		finish,
+		finish - tangent * head_length + arrow_normal * head_width,
+		finish - tangent * head_length - arrow_normal * head_width,
+	])
+	draw_colored_polygon(head, arrow_color)
 
 
 func _draw_edges() -> void:
@@ -263,6 +557,10 @@ func _draw_cities() -> void:
 		draw_rect(rect, border, false, 2.0 * _display_scale)
 		# 普通城市只显示城防；首都粮仓额外显示 C/W 与库存。
 		var label := "D%d" % city.defense
+		if city.is_food_hub:
+			label += " 粮"
+		if city.is_manpower_hub:
+			label += " 人"
 		if city.has_warehouse:
 			label += " %sF%d" % ["C" if city.is_capital else "W", city.food_storage]
 		draw_string(
@@ -488,8 +786,11 @@ func _draw_hud() -> void:
 		for army in state.armies:
 			if army.owner_nation == n.id:
 				troops += army.size
-		var line := "国%d 城%d 金%d 粮%d 人%d 兵%d%s" % [
+		var wars := state.wars_of(n.id)
+		var allies := state.allies_of(n.id)
+		var line := "国%d 城%d 金%d 粮%d 人%d 兵%d 战%s 盟%s%s" % [
 			n.id, city_count, n.treasury_gold, n.granary_food, n.manpower_pool, troops,
+			str(wars), str(allies),
 			"" if n.alive else " (灭)"
 		]
 		var column := nation_index % _hud_columns
@@ -507,3 +808,43 @@ func _draw_hud() -> void:
 			_font_size(13),
 			n.color.lightened(0.2)
 		)
+	if not state.diplomatic_history.is_empty():
+		var event: Dictionary = state.diplomatic_history[-1]
+		var diplomacy_y := (
+			overview_y
+			+ float(int(ceil(float(state.nations.size()) / float(_hud_columns))))
+				* BASE_HUD_ROW_HEIGHT * _display_scale
+		)
+		var diplomacy_line := "外交 Day%d 国%d→国%d %s：%s" % [
+			event["day"],
+			event["nation_a"],
+			event["nation_b"],
+			_diplomatic_action_name(int(event["action"])),
+			event["reason"],
+		]
+		draw_string(
+			_font,
+			Vector2(_side_margin, diplomacy_y),
+			diplomacy_line,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			get_viewport_rect().size.x - _side_margin * 2.0,
+			_font_size(12),
+			Color(0.90, 0.90, 0.75)
+		)
+
+
+static func _diplomatic_action_name(action: int) -> String:
+	match action:
+		DiplomacyAI.Action.MAKE_PEACE:
+			return "求和"
+		DiplomacyAI.Action.DECLARE_WAR:
+			return "宣战"
+		DiplomacyAI.Action.FORM_ALLIANCE:
+			return "结盟"
+		DiplomacyAI.Action.LEAVE_ALLIANCE:
+			return "退盟"
+		DiplomacyAI.Action.PREPARE_WAR:
+			return "备战"
+		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
+			return "取消备战"
+	return "外交"

@@ -37,6 +37,12 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 	var bounds: Rect2i = component["bounds"]
 	var samples := _sample_cities(analysis, mask, bounds, city_count)
 	var road_result := _build_roads(analysis, mask, samples)
+	var provinces := _build_province_raster(
+		mask,
+		analysis.get_width(),
+		bounds,
+		samples["pixels"]
+	)
 	var result := {
 		"positions": samples["positions"],
 		"pixels": samples["pixels"],
@@ -52,9 +58,49 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		"map_aspect_ratio": (
 			float(maxi(bounds.size.x, 1)) / float(maxi(bounds.size.y, 1))
 		),
+		"province_map_size": provinces["size"],
+		"province_ids": provinces["ids"],
 	}
 	_cache[cache_key] = result.duplicate(true)
 	return result
+
+
+static func _build_province_raster(
+	land_mask: PackedByteArray,
+	image_width: int,
+	bounds: Rect2i,
+	city_pixels: Array[Vector2i]
+) -> Dictionary:
+	var width := bounds.size.x
+	var height := bounds.size.y
+	var ids := PackedInt32Array()
+	ids.resize(width * height)
+	ids.fill(-1)
+	for local_y in range(height):
+		var image_y := bounds.position.y + local_y
+		for local_x in range(width):
+			var image_x := bounds.position.x + local_x
+			if land_mask[image_y * image_width + image_x] == 0:
+				continue
+			var best_city := -1
+			var best_distance := INF
+			for city_id in range(city_pixels.size()):
+				var delta := Vector2(city_pixels[city_id]) - Vector2(image_x, image_y)
+				var distance := delta.length_squared()
+				if (
+					distance < best_distance
+					or (
+						is_equal_approx(distance, best_distance)
+						and city_id < best_city
+					)
+				):
+					best_distance = distance
+					best_city = city_id
+			ids[local_y * width + local_x] = best_city
+	return {
+		"size": Vector2i(width, height),
+		"ids": ids,
+	}
 
 
 static func _largest_land_component(image: Image) -> Dictionary:
