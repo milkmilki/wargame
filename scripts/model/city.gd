@@ -1,10 +1,12 @@
 class_name City
 extends RefCounted
-## 城市（网格）数据模型 —— 纯数据 SSoT，无逻辑。
-## id = row * 8 + col（0..63）；坐标可由 id 反算。
+## 城市数据模型 —— 纯数据 SSoT，无逻辑。
 
 var id: int = 0
-var coord: Vector2i = Vector2i.ZERO      ## (col, row)
+var coord: Vector2i = Vector2i.ZERO       ## 兼容测试/镜像基准的逻辑 8x8 索引
+var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [0,1]²
+var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
+var terrain_relief: float = 0.0           ## 城市周边局部最大高度差 [0,1]
 var owner_nation: int = -1                ## 所属国家 id
 
 var defense: int = 0                      ## 城市防御力

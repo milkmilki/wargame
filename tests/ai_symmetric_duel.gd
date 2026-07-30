@@ -66,7 +66,7 @@ func _init() -> void:
 
 func _build_symmetric_world() -> GameState:
 	var state := GameState.new()
-	state.generate_world(880088)
+	state.generate_grid_world(880088)
 	state.battles.clear()
 	state.nations.resize(2)
 	state.day = 0

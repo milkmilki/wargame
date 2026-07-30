@@ -89,6 +89,35 @@ func _test_world_generation() -> void:
 	for n in gs.nations:
 		var cnt := gs.cities_of(n.id).size()
 		_check(cnt == 16, "国%d 初始应有 16 城，实为 %d" % [n.id, cnt])
+		var owned_reachable := {}
+		var owned_queue: Array[int] = [gs.cities_of(n.id)[0].id]
+		owned_reachable[owned_queue[0]] = true
+		while not owned_queue.is_empty():
+			var current: int = owned_queue.pop_front()
+			for neighbor in gs.neighbors(current):
+				var owned_edge := gs.edge_of(current, neighbor)
+				if (
+					owned_edge == null
+					or owned_edge.max_throughput <= 0
+					or
+					gs.cities[neighbor].owner_nation != n.id
+					or owned_reachable.has(neighbor)
+				):
+					continue
+				owned_reachable[neighbor] = true
+				owned_queue.append(neighbor)
+		_check(
+			owned_reachable.size() == 16,
+			"国%d 初始 16 城应形成连续领土，实为 %d" % [n.id, owned_reachable.size()]
+		)
+	var positions_unique := {}
+	var terrain_has_relief := false
+	for city in gs.cities:
+		positions_unique[city.map_position] = true
+		terrain_has_relief = terrain_has_relief or city.terrain_relief > 0.0
+	_check(gs.uses_heightmap and positions_unique.size() == 64,
+		"正式世界应从高度图生成 64 个互异城市位置")
+	_check(terrain_has_relief, "城市应保存高度图局部起伏数据")
 	# 每国只有首都一个粮仓；原 16 城初始储备全部归集到该粮仓。
 	for n in gs.nations:
 		var warehouses := gs.warehouse_cities_of(n.id)
@@ -109,11 +138,15 @@ func _test_world_generation() -> void:
 				ok_adj = false
 	_check(ok_adj, "邻接表应对称")
 	var road_counts := {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+	var roads_by_relief: Array[Edge] = gs.edges.duplicate()
+	roads_by_relief.sort_custom(func(a: Edge, b: Edge) -> bool:
+		return a.max_height_difference < b.max_height_difference
+	)
 	for edge in gs.edges:
 		road_counts[edge.max_throughput] = int(road_counts.get(edge.max_throughput, 0)) + 1
 	_check(
-		int(road_counts[0]) == int(round(float(gs.edges.size()) * 0.15)),
-		"应有约 15%% 边抽象为不可供大军通行，分布=%s" % str(road_counts)
+		int(road_counts[0]) > 0,
+		"最高起伏道路中应包含不可供大军通行的边，分布=%s" % str(road_counts)
 	)
 	_check(
 		int(road_counts[1]) > 0
@@ -121,6 +154,16 @@ func _test_world_generation() -> void:
 		and int(road_counts[3]) > 0
 		and int(road_counts[4]) > 0,
 		"正容量道路应形成 1/2/3/4 四个等级，分布=%s" % str(road_counts)
+	)
+	var low_relief_average := 0.0
+	var high_relief_average := 0.0
+	var comparison_count := maxi(gs.edges.size() / 4, 1)
+	for i in range(comparison_count):
+		low_relief_average += roads_by_relief[i].max_throughput
+		high_relief_average += roads_by_relief[roads_by_relief.size() - 1 - i].max_throughput
+	_check(
+		low_relief_average > high_relief_average,
+		"低起伏道路的平均通行等级应高于高起伏道路"
 	)
 	var reachable := {0: true}
 	var queue: Array[int] = [0]
@@ -137,6 +180,29 @@ func _test_world_generation() -> void:
 		"移除 0 容量边后道路骨架仍必须连通：可达 %d/%d"
 			% [reachable.size(), gs.cities.size()]
 	)
+	var repeated := GameState.new()
+	repeated.generate_world(12345)
+	var terrain_deterministic := repeated.edges.size() == gs.edges.size()
+	for city_id in range(gs.cities.size()):
+		terrain_deterministic = (
+			terrain_deterministic
+			and repeated.cities[city_id].map_position == gs.cities[city_id].map_position
+			and repeated.cities[city_id].owner_nation == gs.cities[city_id].owner_nation
+		)
+	for edge_index in range(gs.edges.size()):
+		var original := gs.edges[edge_index]
+		var copied := repeated.edges[edge_index]
+		terrain_deterministic = (
+			terrain_deterministic
+			and original.city_a == copied.city_a
+			and original.city_b == copied.city_b
+			and original.max_throughput == copied.max_throughput
+			and _approx(
+				original.max_height_difference,
+				copied.max_height_difference
+			)
+		)
+	_check(terrain_deterministic, "相同高度图与种子必须生成完全一致的城市和道路")
 
 
 func _test_responsive_map_layout() -> void:
@@ -310,7 +376,7 @@ func _test_persistent_morale() -> void:
 
 	# (b) 战后恢复：非交战、有粮军队每月回士气，封顶 1.0。
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var probe := gs.armies[0]
@@ -332,7 +398,7 @@ func _test_persistent_morale() -> void:
 func _test_simulation_progress() -> void:
 	print("[6] 模拟推进：战斗/占领/粮食实际生效")
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var captures := 0
@@ -368,7 +434,7 @@ func _test_determinism() -> void:
 
 func _run_signature(world_seed: int, days: int) -> String:
 	var gs := GameState.new()
-	gs.generate_world(world_seed)
+	gs.generate_grid_world(world_seed)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	for d in range(days):
@@ -393,7 +459,7 @@ func _test_time_layering() -> void:
 	print("[8] 时间分层：经济/注粮按月结算，行军按天渐进")
 	# 1. 经济按月结算（非 30×）。总金库口径对国家归属免疫（Σ 城 gold_per_month）。
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var before := 0
@@ -418,7 +484,7 @@ func _test_time_layering() -> void:
 
 	# 2. 注粮半年一次：隔离单测 _resolve_economy 的 day gate（避开消耗干扰）。
 	var gs2 := GameState.new()
-	gs2.generate_world(12345)
+	gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new()
 	sim2.setup(gs2)
 	var nation0 := gs2.nations[0]
@@ -439,7 +505,7 @@ func _test_time_layering() -> void:
 
 	# 3. 行军不瞬移：单日 step 上界 = 1/MARCH_DAYS_MIN = 1/10 = 0.1（规格 R1，distance=1 最快）。
 	var gs3 := GameState.new()
-	gs3.generate_world(12345)
+	gs3.generate_grid_world(12345)
 	var sim3 := Simulation.new()
 	sim3.setup(gs3)
 	sim3._advance_day()
@@ -458,7 +524,7 @@ func _test_time_layering() -> void:
 func _test_siege_dice() -> void:
 	print("[9] 确定性围城：5× 门槛 + 兵力倍数递减(90→3 天) + 破城归攻方")
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 
@@ -521,7 +587,7 @@ func _test_trigger_detection() -> void:
 ##  X: nation nx, from cx(0=city0/1=city1), progress px；Y: nation ny, from cy, progress py。
 func _detect_count(px: float, nx: int, ny: int, cx: int, py: float, cy: int) -> int:
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -538,7 +604,7 @@ func _detect_count(px: float, nx: int, ny: int, cx: int, py: float, cy: int) -> 
 func _test_three_way_battle() -> void:
 	print("[11] 三方战斗：最近敌对对先战，各侧单一 nation，第三方不并肩")
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -578,7 +644,7 @@ func _single_nation(side: Array) -> bool:
 func _test_three_way_siege() -> void:
 	print("[12] 三方占领：一城一围城方，敌对他国不并肩，同族可汇合")
 	var gs := GameState.new()
-	gs.generate_world(12345)
+	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var city := gs.cities[63]        # 右下象限 nation3 属城，自带 IDLE 守军
@@ -622,7 +688,7 @@ func _test_multi_army_aggregation() -> void:
 	print("[13] 多军聚合：同国靠后友军并入 + 攻击Σ累加 + 防御反拆分漏洞 + 增援回气 + 同点必触发")
 
 	# (a) 2v2 聚合触发：同国靠后友军（>CONTACT_EPS）也应并入本侧（旧码会漏 → 1v1）
-	var gs := GameState.new(); gs.generate_world(12345)
+	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
 	_place_army_on_edge(gs, 0, 0, 0, 1, 0.50)   # A0 n0 norm0.50
@@ -648,7 +714,7 @@ func _test_multi_army_aggregation() -> void:
 	_check(absi(loss_def_single - loss_def_split) <= 2, "防御反拆分：单支(%d) 与拆分(%d) 总伤应近似（差≤2）" % [loss_def_single, loss_def_split])
 
 	# (d) 增援回气：疲劳(0.30)友军获满员援军(morale1.0)加入，士气应回升约 +0.10；援军自身不变
-	var gs2 := GameState.new(); gs2.generate_world(12345)
+	var gs2 := GameState.new(); gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new(); sim2.setup(gs2)
 	var tired := _make_army(0, 0, 1000, 10); tired.morale = 0.30
 	var defender := _make_army(1, 1, 1000, 10)
@@ -666,7 +732,7 @@ func _test_multi_army_aggregation() -> void:
 	_check_combo(2, 3)
 
 	# (f) 同点必触发：两敌军归一化位置完全重合，必开战
-	var gs3 := GameState.new(); gs3.generate_world(12345)
+	var gs3 := GameState.new(); gs3.generate_grid_world(12345)
 	var sim3 := Simulation.new(); sim3.setup(gs3)
 	gs3.armies.clear(); gs3.battles.clear()
 	_place_army_on_edge(gs3, 0, 0, 0, 1, 0.50)   # n0 norm0.50
@@ -687,7 +753,7 @@ func _one_round_side_b_loss(side_a: Array, side_b: Array, seed_val: int) -> int:
 
 ## 在真实边上放 na_count 支 n0 与 nb_count 支 n1（位置紧邻），断言恰 1 场且各侧聚合正确。
 func _check_combo(na_count: int, nb_count: int) -> void:
-	var gs := GameState.new(); gs.generate_world(12345)
+	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
 	var id := 0
@@ -709,7 +775,7 @@ func _check_combo(na_count: int, nb_count: int) -> void:
 
 func _test_three_way_serial() -> void:
 	print("[14] 三方串行：第三敌国卡位不得穿过交战点，A-B 分胜负后立即与幸存者接战")
-	var gs := GameState.new(); gs.generate_world(12345)
+	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
 	var a := _place_army_on_edge(gs, 0, 0, 0, 1, 0.50)   # n0 norm0.50
@@ -742,7 +808,7 @@ func _test_siege_arrival_triggers() -> void:
 	print("[15] 到达被围城必触发：城主回援空城/援军入城帮守，不得旁观穿过")
 
 	# (a) 敌对方抵达纯围城（空城）→ 城下决斗（回归护栏）
-	var gs := GameState.new(); gs.generate_world(12345)
+	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	var city: City = gs.cities[63]
 	var edge: Edge = gs.edge_of(62, 63)
@@ -766,7 +832,7 @@ func _test_siege_arrival_triggers() -> void:
 		"敌对方抵达纯围城应触发城下决斗（side_b 非空）")
 
 	# (b) 城主(nation3)援军回援自己被围的空城 → 必须触发战斗（本轮核心 bug）
-	var gs2 := GameState.new(); gs2.generate_world(12345)
+	var gs2 := GameState.new(); gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new(); sim2.setup(gs2)
 	var city2: City = gs2.cities[63]                     # 属 nation3
 	var edge2: Edge = gs2.edge_of(62, 63)
@@ -788,7 +854,7 @@ func _test_siege_arrival_triggers() -> void:
 	_check(relief.state == Army.State.FIGHTING, "城主援军应进入 FIGHTING，实为 %d" % relief.state)
 
 	# (c) 守军仍在城中，城主(nation3)援军抵达 → 入城帮守（并入 side_b、同族），不待机
-	var gs3 := GameState.new(); gs3.generate_world(12345)
+	var gs3 := GameState.new(); gs3.generate_grid_world(12345)
 	var sim3 := Simulation.new(); sim3.setup(gs3)
 	var city3: City = gs3.cities[63]                     # nation3，自带守军
 	var edge3: Edge = gs3.edge_of(62, 63)
@@ -822,7 +888,7 @@ func _test_siege_arrival_triggers() -> void:
 		"守军在场时真第三国应从目标城撤回且不介入")
 
 	# (e) 城主援军解围胜利后应入城驻守，而非"晋升为围城方去围自己的城"
-	var gs4 := GameState.new(); gs4.generate_world(12345)
+	var gs4 := GameState.new(); gs4.generate_grid_world(12345)
 	var sim4 := Simulation.new(); sim4.setup(gs4)
 	var city4: City = gs4.cities[63]                     # nation3
 	var edge4: Edge = gs4.edge_of(62, 63)
@@ -857,7 +923,7 @@ func _test_crosspass_field_priority() -> void:
 	print("[16] 相向错身：两敌军同在一条边相向而行，先到边末端者应野战交火而非离边攻城")
 
 	# 找一条敌对相邻边（c1 属 nation != c2 属 nation）
-	var gs := GameState.new(); gs.generate_world(12345)
+	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	var c1 := -1; var c2 := -1
 	for e in gs.edges:
@@ -895,7 +961,7 @@ func _test_crosspass_field_priority() -> void:
 func _test_throughput_no_block_enemy() -> void:
 	print("[17] 单槽边(throughput=1)：敌军先占边，迎战方不得被交通容量挡在城里错身穿过")
 
-	var gs := GameState.new(); gs.generate_world(12345)
+	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	var c1 := -1; var c2 := -1
 	for e in gs.edges:
@@ -944,7 +1010,7 @@ func _test_throughput_no_block_enemy() -> void:
 func _test_directional_friendly_throughput() -> void:
 	print("[17b] 边容量：同国同向受限，反向独立，敌军不占友军名额")
 	var gs := GameState.new()
-	gs.generate_world(1717)
+	gs.generate_grid_world(1717)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1051,7 +1117,7 @@ func _test_march_time_linear() -> void:
 	_check(mono, "行军时间应随距离单调不减")
 	# 端到端：distance=1 的边，10 个 tick 恰好走完（progress>=1）。
 	var gs := GameState.new()
-	gs.generate_world(999)
+	gs.generate_grid_world(999)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var c1 := -1; var c2 := -1
@@ -1109,7 +1175,7 @@ func _test_siege_time_curve() -> void:
 func _test_siege_food_clock() -> void:
 	print("[20] R3 粮草：被围约 90 天耗尽 + 补给孤岛 + 粮尽城防大幅降")
 	var gs := GameState.new()
-	gs.generate_world(2024)
+	gs.generate_grid_world(2024)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	# 找一条敌对边，让攻方从 c1 围攻守方城 c2。
@@ -1172,7 +1238,7 @@ func _test_siege_food_clock() -> void:
 func _test_weak_attack_retreat() -> void:
 	print("[21] R4 空城弱攻：兵力 < 城防则不围城、自动向友方城撤离")
 	var gs := GameState.new()
-	gs.generate_world(555)
+	gs.generate_grid_world(555)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	# 找一条敌对边：c1(攻方国) → c2(空城，防御高)。
@@ -1211,7 +1277,7 @@ func _test_weak_attack_retreat() -> void:
 func _test_morale_retreat_recovery() -> void:
 	print("[22] 士气崩溃：撤往最近友城 + 驻城耗粮恢复 + 满士气/粮尽解锁")
 	var gs := GameState.new()
-	gs.generate_world(777)
+	gs.generate_grid_world(777)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1221,7 +1287,7 @@ func _test_morale_retreat_recovery() -> void:
 
 	# 撤退路线不得把敌城当作中间节点；起点刚失守时仍允许直接离开敌城。
 	var route_state := GameState.new()
-	route_state.generate_world(778)
+	route_state.generate_grid_world(778)
 	for city in route_state.cities:
 		city.owner_nation = 1
 	route_state.cities[0].owner_nation = 0
@@ -1351,7 +1417,7 @@ func _test_morale_retreat_recovery() -> void:
 func _test_supply_morale_and_passive_retreat_battle() -> void:
 	print("[23] 状态机：断粮降士气触发溃逃 + 溃逃军只被动接战 + 获胜后继续撤退")
 	var gs := GameState.new()
-	gs.generate_world(909)
+	gs.generate_grid_world(909)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1412,7 +1478,7 @@ func _test_supply_morale_and_passive_retreat_battle() -> void:
 func _test_siege_battle_then_progress_order() -> void:
 	print("[24] 攻城顺序：守军正面战败后才推进围城，且撤往非当前攻城城市")
 	var gs := GameState.new()
-	gs.generate_world(4242)
+	gs.generate_grid_world(4242)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1483,7 +1549,7 @@ func _test_siege_interruption_and_late_garrison() -> void:
 	)
 
 	var gs := GameState.new()
-	gs.generate_world(2424)
+	gs.generate_grid_world(2424)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1569,7 +1635,7 @@ func _test_siege_interruption_and_late_garrison() -> void:
 func _test_edge_holding_state() -> void:
 	print("[25] HOLDING：AI 进入高 danger 边、固定位置、占用容量、补给控制适应")
 	var gs := GameState.new()
-	gs.generate_world(5150)
+	gs.generate_grid_world(5150)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1643,7 +1709,7 @@ func _test_edge_holding_state() -> void:
 func _test_edge_supply_from_both_endpoints() -> void:
 	print("[26] 边上补给：按真实位置比较双端点，当前边接敌不切断友方端点")
 	var gs := GameState.new()
-	gs.generate_world(6160)
+	gs.generate_grid_world(6160)
 	gs.armies.clear()
 	gs.battles.clear()
 	var a := -1
@@ -1690,7 +1756,7 @@ func _test_edge_supply_from_both_endpoints() -> void:
 func _test_warehouse_logistics() -> void:
 	print("[26b] 粮仓机制：最小损耗路线、多粮仓扩展、首都失守迁都与缴获")
 	var gs := GameState.new()
-	gs.generate_world(6262)
+	gs.generate_grid_world(6262)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1719,7 +1785,7 @@ func _test_warehouse_logistics() -> void:
 
 	# 独立世界验证首都失守：30% 库存汇入胜方首都，败方从剩余城市迁都。
 	var gs2 := GameState.new()
-	gs2.generate_world(6363)
+	gs2.generate_grid_world(6363)
 	var sim2 := Simulation.new()
 	sim2.setup(gs2)
 	gs2.armies.clear()
@@ -1774,7 +1840,7 @@ func _test_holding_combat_adaptation() -> void:
 		"驻防时间不得改变守军攻击惩罚；攻击方伤亡应一致：%d/%d" % [atk0.size, atk90.size])
 
 	var gs := GameState.new()
-	gs.generate_world(7170)
+	gs.generate_grid_world(7170)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1810,7 +1876,7 @@ func _test_holding_combat_adaptation() -> void:
 func _test_retreat_contact_and_position_continuity() -> void:
 	print("[28] 溃逃接战与位置连续性：驻防截击、中间城拥堵锚点、掉头、新局快照")
 	var gs := GameState.new()
-	gs.generate_world(8282)
+	gs.generate_grid_world(8282)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	gs.armies.clear()
@@ -1941,7 +2007,7 @@ func _test_retreat_contact_and_position_continuity() -> void:
 func _test_ai_strategic_map_and_threat() -> void:
 	print("[29] AI 战略图与威胁场：桥/割点识别、价值排序、抵达时间衰减")
 	var gs := GameState.new()
-	gs.generate_world(7001)
+	gs.generate_grid_world(7001)
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 1
@@ -1979,7 +2045,7 @@ func _test_ai_strategic_map_and_threat() -> void:
 func _test_ai_merge_and_retreat_utility() -> void:
 	print("[30] AI 协调：同城合并守恒、弱军生成可解释撤退候选")
 	var gs := GameState.new()
-	gs.generate_world(7002)
+	gs.generate_grid_world(7002)
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 0
@@ -2057,7 +2123,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 func _test_ai_encirclement_breakout_and_relief() -> void:
 	print("[30b] AI 包围协同：多方向进攻、断粮突围、紧急解围")
 	var gs := GameState.new()
-	gs.generate_world(7030)
+	gs.generate_grid_world(7030)
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 0
@@ -2140,7 +2206,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	sim.free()
 
 	var edge_guard_state := GameState.new()
-	edge_guard_state.generate_world(7033)
+	edge_guard_state.generate_grid_world(7033)
 	edge_guard_state.armies.clear()
 	for city in edge_guard_state.cities:
 		city.owner_nation = 0
@@ -2186,7 +2252,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	)
 
 	var participant_state := GameState.new()
-	participant_state.generate_world(7034)
+	participant_state.generate_grid_world(7034)
 	participant_state.armies.clear()
 	for city in participant_state.cities:
 		city.owner_nation = 0
@@ -2248,7 +2314,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	)
 
 	var breakout_state := GameState.new()
-	breakout_state.generate_world(7031)
+	breakout_state.generate_grid_world(7031)
 	breakout_state.armies.clear()
 	for city in breakout_state.cities:
 		city.owner_nation = 0
@@ -2291,7 +2357,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	)
 
 	var relief_state := GameState.new()
-	relief_state.generate_world(7032)
+	relief_state.generate_grid_world(7032)
 	relief_state.armies.clear()
 	for city in relief_state.cities:
 		city.owner_nation = 0
@@ -2332,7 +2398,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 func _test_manpower_pool_and_force_commands() -> void:
 	print("[31] 全国人口：月收入、公平补员、满编、边上阻断、建军与解散")
 	var gs := GameState.new()
-	gs.generate_world(7100)
+	gs.generate_grid_world(7100)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var nation_id := 0

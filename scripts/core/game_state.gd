@@ -6,6 +6,9 @@ extends RefCounted
 const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64
 const NATION_COUNT: int = 4
+const TERRAIN_MAP_PATH := (
+	"res://china-map-china-flag-shaded-relief-color-height-map-3d-illustration-png.webp"
+)
 
 var cities: Array[City] = []
 var edges: Array[Edge] = []
@@ -24,6 +27,8 @@ var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _next_army_id: int = 0
 var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
+var uses_heightmap: bool = false
+var map_aspect_ratio: float = 1.0
 
 ## 结束态
 var winner: int = -1                        ## -1 表示未结束
@@ -31,6 +36,41 @@ var winner: int = -1                        ## -1 表示未结束
 # ------------------------------------------------------------------ 生成
 
 func generate_world(world_seed: int = 12345) -> void:
+	_reset_world(world_seed)
+	uses_heightmap = true
+	_generate_nations()
+	var terrain := TerrainMapGenerator.build(TERRAIN_MAP_PATH, CITY_COUNT)
+	_generate_terrain_cities(terrain)
+	_generate_terrain_edges(terrain)
+	_assign_balanced_nations(terrain)
+	_initialize_manpower_pools()
+	_initialize_capitals_and_warehouses()
+	_generate_armies()
+
+	assert(cities.size() == CITY_COUNT, "城市数应为 64")
+	assert(edges.size() >= CITY_COUNT - 1, "道路图必须连通")
+	assert(armies.size() == CITY_COUNT, "初始军队数应为 64")
+
+
+## 严格镜像基准和局部状态机测试使用的兼容网格夹具；正式游戏不调用。
+func generate_grid_world(world_seed: int = 12345) -> void:
+	_reset_world(world_seed)
+	uses_heightmap = false
+	map_aspect_ratio = 1.0
+	_generate_nations()
+	_generate_grid_cities()
+	_initialize_manpower_pools()
+	_initialize_capitals_and_warehouses()
+	_generate_grid_edges()
+	_classify_road_throughput()
+	_generate_armies()
+
+	assert(cities.size() == CITY_COUNT, "城市数应为 64")
+	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
+	assert(armies.size() == CITY_COUNT, "初始军队数应为 64")
+
+
+func _reset_world(world_seed: int) -> void:
 	rng.seed = world_seed
 	cities.clear()
 	edges.clear()
@@ -44,18 +84,6 @@ func generate_world(world_seed: int = 12345) -> void:
 	winner = -1
 	_next_army_id = 0
 	ownership_revision = 0
-
-	_generate_nations()
-	_generate_cities()
-	_initialize_manpower_pools()
-	_initialize_capitals_and_warehouses()
-	_generate_edges()
-	_classify_road_throughput()
-	_generate_armies()
-
-	assert(cities.size() == CITY_COUNT, "城市数应为 64")
-	assert(edges.size() == 2 * GRID * (GRID - 1), "边数应为 112")
-	assert(armies.size() == CITY_COUNT, "初始军队数应为 64")
 
 
 func _generate_nations() -> void:
@@ -75,12 +103,16 @@ func _generate_nations() -> void:
 		nations.append(n)
 
 
-func _generate_cities() -> void:
+func _generate_grid_cities() -> void:
 	for r in range(GRID):
 		for c in range(GRID):
 			var city := City.new()
 			city.id = r * GRID + c
 			city.coord = Vector2i(c, r)
+			city.map_position = Vector2(
+				(float(c) + 0.5) / float(GRID),
+				(float(r) + 0.5) / float(GRID)
+			)
 			city.owner_nation = _quadrant_of(c, r)
 			city.defense = rng.randi_range(10, 30)
 			city.manpower_per_month = rng.randi_range(5, 15)
@@ -91,6 +123,36 @@ func _generate_cities() -> void:
 			city.at_war = true                                 # 开局全面战争
 			cities.append(city)
 			adjacency[city.id] = [] as Array[int]
+
+
+func _generate_terrain_cities(terrain: Dictionary) -> void:
+	var positions: Array[Vector2] = terrain["positions"]
+	var heights: Array[float] = terrain["heights"]
+	var reliefs: Array[float] = terrain["reliefs"]
+	map_aspect_ratio = clampf(float(terrain["map_aspect_ratio"]), 0.5, 2.5)
+	for id in range(CITY_COUNT):
+		var city := City.new()
+		city.id = id
+		city.coord = Vector2i(id % GRID, id / GRID)
+		city.map_position = positions[id]
+		city.terrain_height = heights[id]
+		city.terrain_relief = reliefs[id]
+		city.defense = rng.randi_range(10, 30)
+		city.manpower_per_month = rng.randi_range(5, 15)
+		city.gold_per_month = rng.randi_range(5, 15)
+		city.food_per_half_year = rng.randi_range(20, 60)
+		city.food_storage = rng.randi_range(80, 100)
+		city.at_war = true
+		cities.append(city)
+		adjacency[city.id] = [] as Array[int]
+
+
+func _assign_balanced_nations(terrain: Dictionary) -> void:
+	var nation_order: Array[int] = terrain["nation_order"]
+	assert(nation_order.size() == CITY_COUNT, "国家分区骨架必须覆盖全部城市")
+	var quota := CITY_COUNT / NATION_COUNT
+	for index in range(nation_order.size()):
+		cities[nation_order[index]].owner_nation = index / quota
 
 
 func _initialize_manpower_pools() -> void:
@@ -111,10 +173,20 @@ func _initialize_capitals_and_warehouses() -> void:
 		city.is_capital = false
 		city.has_warehouse = false
 	for nation in nations:
-		# 四象限内靠中央的确定性首都：避免首都生成在国家最外角。
-		var col_base := (nation.id % 2) * (GRID / 2)
-		var row_base := (nation.id / 2) * (GRID / 2)
-		var capital_id := (row_base + 1) * GRID + (col_base + 1)
+		var owned := cities_of(nation.id)
+		var centroid := Vector2.ZERO
+		for city in owned:
+			centroid += city.map_position
+		centroid /= float(maxi(owned.size(), 1))
+		var capital_id := owned[0].id
+		var best_distance := INF
+		for city in owned:
+			var distance := city.map_position.distance_squared_to(centroid)
+			if distance < best_distance or (
+				is_equal_approx(distance, best_distance) and city.id < capital_id
+			):
+				best_distance = distance
+				capital_id = city.id
 		nation.capital_city_id = capital_id
 		nation.warehouse_city_ids = [capital_id] as Array[int]
 		var capital := cities[capital_id]
@@ -131,7 +203,7 @@ func _quadrant_of(c: int, r: int) -> int:
 	return row_half * 2 + col_half   # 0:左上 1:右上 2:左下 3:右下
 
 
-func _generate_edges() -> void:
+func _generate_grid_edges() -> void:
 	for r in range(GRID):
 		for c in range(GRID):
 			var id := r * GRID + c
@@ -141,6 +213,28 @@ func _generate_edges() -> void:
 			# 下邻
 			if r + 1 < GRID:
 				_add_edge(id, (r + 1) * GRID + c)
+
+
+func _generate_terrain_edges(terrain: Dictionary) -> void:
+	var roads: Array[Dictionary] = terrain["roads"]
+	for road in roads:
+		var a := int(road["a"])
+		var b := int(road["b"])
+		var lo := mini(a, b)
+		var hi := maxi(a, b)
+		var edge := Edge.new()
+		edge.city_a = lo
+		edge.city_b = hi
+		edge.distance = int(road["distance"])
+		edge.danger = float(road["danger"])
+		edge.max_height_difference = float(road["height_difference"])
+		edge.max_throughput = int(road["max_throughput"])
+		edges.append(edge)
+		edge_lookup[_edge_key(lo, hi)] = edge
+		(adjacency[lo] as Array[int]).append(hi)
+		(adjacency[hi] as Array[int]).append(lo)
+	for city_id in adjacency.keys():
+		(adjacency[city_id] as Array[int]).sort()
 
 
 func _add_edge(a: int, b: int) -> void:

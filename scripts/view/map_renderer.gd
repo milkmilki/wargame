@@ -14,6 +14,7 @@ const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
+var _map_size: Vector2 = Vector2(512.0, 512.0)
 var _display_scale: float = 1.0
 var _side_margin: float = BASE_SIDE_MARGIN
 var _hud_columns: int = 4
@@ -69,8 +70,15 @@ func _compute_layout() -> void:
 	var vp := get_viewport_rect().size
 	var nation_count := state.nations.size() if state != null else GameState.NATION_COUNT
 	var layout := compute_layout_for_viewport(vp, nation_count)
-	_cell = layout["cell"]
-	_origin = layout["origin"]
+	var span := float(layout["span"])
+	var aspect := clampf(state.map_aspect_ratio if state != null else 1.0, 0.5, 2.5)
+	_map_size = (
+		Vector2(span, span / aspect)
+		if aspect >= 1.0
+		else Vector2(span * aspect, span)
+	)
+	_origin = (layout["origin"] as Vector2) + (Vector2(span, span) - _map_size) * 0.5
+	_cell = minf(_map_size.x, _map_size.y) / float(GameState.GRID)
 	_display_scale = layout["display_scale"]
 	_side_margin = layout["side_margin"]
 	_hud_columns = layout["hud_columns"]
@@ -107,6 +115,7 @@ static func compute_layout_for_viewport(viewport_size: Vector2, nation_count: in
 	), 1.0)
 	return {
 		"cell": span / float(GameState.GRID),
+		"span": span,
 		"origin": Vector2((safe_size.x - span) * 0.5, top_margin),
 		"display_scale": display_scale,
 		"side_margin": side_margin,
@@ -120,10 +129,7 @@ func _font_size(base_size: float) -> int:
 
 
 func _city_center(city: City) -> Vector2:
-	return _origin + Vector2(
-		(city.coord.x + 0.5) * _cell,
-		(city.coord.y + 0.5) * _cell
-	)
+	return _origin + city.map_position * _map_size
 
 
 ## 每当模拟推进一天，快照全部军队的逻辑位置：上次快照 -> _prev，本次 -> _curr。
@@ -391,7 +397,7 @@ func _army_position(army: Army) -> Vector2:
 	return _grid_to_pixel(g)
 
 
-## 军队逻辑位置，以网格坐标(col,row)表示，与像素布局无关（便于跨帧/缩放插值）。
+## 军队逻辑位置使用归一化地图坐标，与像素布局无关（便于跨帧/缩放插值）。
 func _logical_grid_pos(army: Army) -> Vector2:
 	# MOVING / HOLDING / RETREATING / FIGHTING 均可定位在边上。
 	if army.state in [
@@ -408,11 +414,11 @@ func _logical_grid_pos(army: Army) -> Vector2:
 
 
 func _city_grid(city: City) -> Vector2:
-	return Vector2(city.coord.x + 0.5, city.coord.y + 0.5)
+	return city.map_position
 
 
 func _grid_to_pixel(g: Vector2) -> Vector2:
-	return _origin + g * _cell
+	return _origin + g * _map_size
 
 
 func _draw_hud() -> void:

@@ -1,14 +1,14 @@
 # World-War 项目交接文档
 
 > 面向接手的 AI agent / 开发者。目标：不读全部源码即可理解架构、约定、当前状态与安全改动边界。
-> 最后更新：2026-07-29（道路分级/阻断、缓慢补员与后勤中心守备完成并通过全量验证后）。
+> 最后更新：2026-07-30（灰度高度图城市/道路生成与四国连续分区完成并通过全量验证后）。
 
 ---
 
 ## 0. 一句话概述
 
 Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 EU4，纯观赏、全 AI、实时推进）。
-8×8=64 城网格，4 国四等份，开局全面战争，AI 自动寻路、交战、占领，直到一国统一。
+从带 Alpha 的灰度高度图生成 64 城非规则图，4 国各 16 个连续城市，开局全面战争，AI 自动寻路、交战、占领，直到一国统一。
 
 ---
 
@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **270 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **278 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
@@ -58,12 +58,13 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 
 | 文件 | 角色 | 关键内容 |
 |---|---|---|
-| [scripts/model/city.gd](scripts/model/city.gd) | 数据 | `id, coord, owner_nation, defense, manpower_per_month, gold_per_month, food_per_half_year, is_capital, has_warehouse, food_storage(仅粮仓城市有效), at_war` |
-| [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_throughput(0=不可供大军/补给通行，1~4=每国每方向容量), distance, danger, occupied, passing_count(全方向总占用派生)` |
+| [scripts/model/city.gd](scripts/model/city.gd) | 数据 | `id, map_position, terrain_height, terrain_relief, owner_nation, defense, manpower_per_month, gold_per_month, food_per_half_year, is_capital, has_warehouse, food_storage(仅粮仓城市有效), at_war` |
+| [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_throughput(0=不可供大军/补给通行，1~4=每国每方向容量), distance, danger, max_height_difference, occupied, passing_count(全方向总占用派生)` |
 | [scripts/model/nation.gd](scripts/model/nation.gd) | 数据 | `id, color, treasury_gold, manpower_pool(全国人口SSoT), capital_city_id, warehouse_city_ids, granary_food, alive` |
 | [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, AI命令元数据` |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：`id, kind(FIELD/SIEGE), side_a[]/side_b[], edge, city, contact_dist_a/b, round_no, siege_progress(SIEGE累积破城), has_garrison(side_b是否驻城守军), garrison_ref(围城5×门槛的守方兵力基准快照), finished, winner_side`；`side_morale()` 兵力加权派生士气 |
 | [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | `generate_world(seed)`、`warehouse_cities_of/deposit_food/remove_warehouse/relocate_capital`、`edge_of/neighbors/is_enemy/army_at_city/cities_of/refresh_derived`、`new_battle/battle_by_id`、`city_under_siege(id)`、`battles/day/month/winner/rng` |
+| [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | Alpha 陆地提取、平坦城市采样、道路高度剖面与连续四国骨架 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路、补给与 `can_reach_manpower_hub`；补给边损耗=`0.1×distance×(1+danger)` |
 | [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算 + `siege_daily_progress(attacker_size,garrison_ref)` 确定性围城进度，见 §4 |
 | [scripts/core/simulation.gd](scripts/core/simulation.gd) | 逻辑 | 按天推进主循环 + `march_days(distance)` 行军时长（R1），见 §5 |
@@ -71,7 +72,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制地图/城市/边/军队/HUD(Day/Month)/攻城进度弧，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 主场景（Main + Simulation Node + MapRenderer） |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 270 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 278 断言，headless 运行 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；A 左侧改进 Utility AI、B 右侧修改前当前 Utility AI，十年对战并输出领土/军力/粮食/首都指标 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
@@ -266,7 +267,10 @@ if state.day % 30 == 0:                              # 每月结算块
 - 行军锚点统一用 `move_from`（不是 location_city）。`_begin_next_leg` 前置约定：调用前 `move_from` 已锚定当前城，末尾置 `army.on_edge=true`。
 - **边占用的唯一判据是 `army.on_edge`**。`passing_count` 只统计全方向/全阵营总占用并供渲染使用；容量由 `_friendly_same_direction_count` 从军队 SSoT 实时派生。
 - `max_throughput` 对每个国家、每个方向分别生效：仅同国同向军队互相占名额；同国反向与敌军均不占本方向容量，因此追逐和迎战不会被敌军交通量阻塞。
-- 世界生成按全点对最短路径流量与首都到本国城市/前线流量，把道路分为 `1/2/3/4` 级；约 15% 的非骨架低流量边设为 `0`。最小生成树保护正容量骨架，保证所有城市仍连通。
+- 正式世界从 `china-map-...webp` 的 Alpha 最大连通区域提取陆地，在局部低起伏区域用确定性最远点采样生成 64 城。
+- 城市道路先构造覆盖全部城市的近邻骨架，再补充短且不交叉的局部连接至 112 条。每条边沿灰度图采样高度剖面，最大高度差决定 `max_throughput=0/1/2/3/4`；骨架边最低为 1，保证军事、补给和撤退网络连通。
+- 四国沿正容量覆盖骨架连续切分，每国严格 16 城且领土连通。首都选择本国城市几何中心附近的城市。
+- `GameState.generate_grid_world()` 仅供固定城市 ID 的状态机测试和严格左右镜像 A/B 基准使用；正式游戏与长跑使用 `generate_world()` 高度图世界。
 - `max_throughput=0` 是统一的军事与补给不可通行语义；普通寻路、撤退、威胁传播、补给、战略桥/割点均跳过。旧路径遇到 `0` 边立即失效并重规划或回到驻地，不进入永久排队。
 - `_release_edge(army)` 以 `on_edge` 为准，幂等，防止 `passing_count` 双重释放变负。
 - `_settle_idle` / `_capture_city` / `_retreat` 均先 `_release_edge(army)` 并清 `battle_id=-1`。
