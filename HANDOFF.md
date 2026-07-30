@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **266 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **268 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
@@ -71,7 +71,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制地图/城市/边/军队/HUD(Day/Month)/攻城进度弧，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 主场景（Main + Simulation Node + MapRenderer） |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 266 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 268 断言，headless 运行 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；左新 Utility AI、右旧规则 AI，十年对战并输出领土/军力/粮食/首都指标 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
@@ -195,6 +195,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - **协调与滞回**：友军支援不使用可在多前线重复计数的威胁场，而由 `ArmyCoordinator` 一军一目标真实预留；前线军先决策，内线小军先在后方合并，单军能填补至少 50% 缺口才直接增援。命令记录 `target/score/reason/created_day/until_day`。
 - **合并守恒**：每日合并同城同状态军队及同位置驻防军；兵力求和，攻击/防御/士气/补给/驻防天数按兵力加权，边容量同步释放。
 - **驻防出击**：`HOLDING` 没有时间上限；只有士气、补给、局部战力和 5× 围城兵力（另留 1.5 倍战损余量）同时满足时，AI 才显式下达 `ATTACK`，从当前边位置连续推进。
+- **同边敌军估值**：远方威胁可按抵达时间衰减，但同一条边上的敌军是下一场直接接战对象，必须按 `100%` 有效战力计入。驻防军出击使用“折扣威胁场”和“同边敌军实值”的较大者，避免未满编军误攻满编驻防军。
 - **多方向协同**：敌城相邻正容量边上的实际友军按来源邻城计为独立方向，联合兵力达到围城/战力门槛后才进攻。最慢方向先出发，较快方向等待到预计抵达时间差不超过 5 天，避免“同日下令、分批送死”。
 - **断粮突围与解围**：补给率 `≤25%` 且无法经本国控制网抵达粮仓才算真正被围；突围优先级高于普通动作，但只攻击战力比 `≥0.70` 的最弱包围节点。被围城和断粮友军形成紧急救援缺口，相邻敌城作为打通通道的高价值目标。
 - **建军/解散**：AI 国家级命令 `CREATE_ARMY/DISBAND_ARMY`。军队数低于 `max(前线数+2, ceil(城市数/4))` 时在未被围首都粮仓消耗 5000 人建军；仅在军队数超额时解散安全后方 `<500` 人残部，幸存人数全额返还人口库。

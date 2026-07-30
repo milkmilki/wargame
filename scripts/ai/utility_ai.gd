@@ -738,8 +738,15 @@ static func _choose_holding(
 				army.move_to
 			)
 		var available_size := maxi(army.size, int(pool["size"]))
+		var direct_edge_enemy := _enemy_power_on_edge(
+			view, army.move_from, army.move_to
+		)
+		var projected_enemy := maxf(
+			threat.threat_at(enemy_endpoint) * 0.35,
+			direct_edge_enemy
+		)
 		var local_ratio := maxf(ArmyPower.effective(army), float(pool["power"])) / maxf(
-			threat.threat_at(enemy_endpoint) * 0.35 + ArmyPower.city_defense(target_city),
+			projected_enemy + ArmyPower.city_defense(target_city),
 			1.0
 		)
 		var directions := int(pool["directions"])
@@ -759,6 +766,26 @@ static func _choose_holding(
 		"继续控制战略边，价值 %.2f" % hold_score,
 		army.move_to
 	)
+
+
+## 同一条边上的敌军是即将直接接战的对象，不能套用威胁场的时间衰减或远方折扣。
+static func _enemy_power_on_edge(
+	view: AiWorldView,
+	city_a: int,
+	city_b: int
+) -> float:
+	var lo := mini(city_a, city_b)
+	var hi := maxi(city_a, city_b)
+	var total := 0.0
+	for enemy in view.enemy_armies:
+		if enemy.size <= 0 or not enemy.on_edge or enemy.move_to == -1:
+			continue
+		if (
+			mini(enemy.move_from, enemy.move_to) == lo
+			and maxi(enemy.move_from, enemy.move_to) == hi
+		):
+			total += ArmyPower.effective(enemy)
+	return total
 
 
 static func _aggression(nation_id: int) -> float:

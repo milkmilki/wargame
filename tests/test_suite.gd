@@ -2139,6 +2139,52 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	)
 	sim.free()
 
+	var edge_guard_state := GameState.new()
+	edge_guard_state.generate_world(7033)
+	edge_guard_state.armies.clear()
+	for city in edge_guard_state.cities:
+		city.owner_nation = 0
+	var guarded_target := 18
+	edge_guard_state.cities[guarded_target].owner_nation = 1
+	edge_guard_state.cities[guarded_target].defense = 1
+	var guarded_edge := edge_guard_state.edge_of(17, guarded_target)
+	guarded_edge.max_throughput = 2
+	var understrength := _make_army(946, 0, 10000, 10, 10)
+	understrength.state = Army.State.HOLDING
+	understrength.location_city = 17
+	understrength.move_from = 17
+	understrength.move_to = guarded_target
+	understrength.move_progress = 0.4
+	understrength.on_edge = true
+	var full_enemy_holder := _make_army(947, 1, 15000, 10, 10)
+	full_enemy_holder.state = Army.State.HOLDING
+	full_enemy_holder.location_city = guarded_target
+	full_enemy_holder.move_from = guarded_target
+	full_enemy_holder.move_to = 17
+	full_enemy_holder.move_progress = 0.4
+	full_enemy_holder.on_edge = true
+	edge_guard_state.armies.append_array([understrength, full_enemy_holder])
+	var edge_view := AiWorldView.build(edge_guard_state, 0)
+	var direct_enemy_power := UtilityAI._enemy_power_on_edge(
+		edge_view, 17, guarded_target
+	)
+	_check(
+		_approx(direct_enemy_power, ArmyPower.effective(full_enemy_holder)),
+		"同边满编敌军必须按 100%% 有效战力计入，实为 %.1f" % direct_enemy_power
+	)
+	var guarded_candidate := UtilityAI.choose(
+		edge_view,
+		StrategicMapSnapshot.build(edge_view),
+		ThreatField.build(edge_view),
+		ArmyCoordinator.new(),
+		understrength
+	)
+	_check(
+		guarded_candidate.kind != ActionCandidate.Kind.ATTACK,
+		"未满编 10000 人军队不得主动攻击同边满编 15000 人驻军：kind=%d reason=%s"
+			% [guarded_candidate.kind, guarded_candidate.reason]
+	)
+
 	var breakout_state := GameState.new()
 	breakout_state.generate_world(7031)
 	breakout_state.armies.clear()
