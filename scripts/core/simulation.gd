@@ -1013,6 +1013,7 @@ func _resolve_battles() -> void:
 ##  3) 纯围城：无对抗，掷骰累积 siege_progress，达阈值破城易主。
 func _advance_siege(battle: Battle) -> void:
 	battle.prune_dead()
+	_reconcile_siege_city_defenders(battle)
 	var atk_alive := battle.side_size(battle.side_a) > 0
 
 	# 阶段 1：守军抵抗
@@ -1026,6 +1027,7 @@ func _advance_siege(battle: Battle) -> void:
 			battle.finished = true
 			battle.winner_side = 2
 			return
+		_decay_interrupted_siege_progress(battle)
 		Combat.resolve_round(battle, state.rng)
 		if not battle.finished:
 			return
@@ -1064,6 +1066,7 @@ func _advance_siege(battle: Battle) -> void:
 			# 围城方尽墨 → 挑战者接管围城
 			_promote_challengers(battle)
 			return
+		_decay_interrupted_siege_progress(battle)
 		Combat.resolve_round(battle, state.rng)
 		if not battle.finished:
 			return
@@ -1135,6 +1138,46 @@ func _advance_siege(battle: Battle) -> void:
 			_capture_city(captor, battle.city)
 		battle.finished = true
 		battle.winner_side = 1
+
+
+## 围城建立后仍可能有撤退军抵达、恢复军落位等状态转换。每个围城日都重新收集
+## 目标城内未参战的本国驻军，确保任何有效守军都先进入战斗，不能被攻城进度跳过。
+func _reconcile_siege_city_defenders(battle: Battle) -> void:
+	if (
+		battle.city == null
+		or battle.city.id < 0
+		or battle.city.id >= state.cities.size()
+		or state.cities[battle.city.id] != battle.city
+	):
+		return
+	var defenders := state.armies_at_city(battle.city.id)
+	if defenders.is_empty():
+		return
+	if (
+		not battle.side_b.is_empty()
+		and battle.side_b[0].owner_nation != battle.city.owner_nation
+	):
+		# 第三方已在城下挑战围城方；守军下一日再接续，避免三国混入同一战斗侧。
+		return
+	for defender in defenders:
+		if battle.has_army(defender):
+			continue
+		_enter_battle(battle, defender, 2)
+	if (
+		not battle.side_b.is_empty()
+		and battle.side_b[0].owner_nation == battle.city.owner_nation
+	):
+		battle.has_garrison = true
+		battle.garrison_ref = maxi(
+			battle.garrison_ref,
+			battle.side_size(battle.side_b)
+		)
+
+
+func _decay_interrupted_siege_progress(battle: Battle) -> void:
+	battle.siege_progress = Combat.siege_progress_after_interruption(
+		battle.siege_progress
+	)
 
 
 ## 挑战者（side_b）接管围城：晋升为围城方（移入 side_a、置城墙位置），围城继续。

@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **259 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本编译错误 ②运行 `tests/test_suite.gd`（当前 **266 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
@@ -71,7 +71,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制地图/城市/边/军队/HUD(Day/Month)/攻城进度弧，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 主场景（Main + Simulation Node + MapRenderer） |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 259 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 266 断言，headless 运行 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；左新 Utility AI、右旧规则 AI，十年对战并输出领土/军力/粮食/首都指标 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
@@ -149,6 +149,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 | `SIEGE_DAYS_MIN` | 3.0 | **R2 饱和进攻(r→∞)最短围城天数** |
 | `SIEGE_DAYS_BASE` | 90.0 | **R2 基准围城天数**（r=5 时） |
 | `SIEGE_DECAY_K` | 435.0 | **R2 递减系数** = (90−3)×5，使 `围城天数 = clamp(3 + 435/r, 3, 90)` 在 r=5→90、r→∞→3 平滑递减 |
+| `SIEGE_INTERRUPTION_DECAY_PER_DAY` | 0.25 | 守城/解围战每持续一天，既有攻城进度回退 0.25 点，最低为 0 |
 | `SIEGE_STARVE_DEF_MULT` | 0.3 | **R3 粮尽守军城防加成衰减系数**（`food_storage≤0` 时城防 ×0.3，战力大幅下降） |
 
 > **R2 围城确定性递减（本轮替换旧掷骰模型）**：`siege_daily_progress(attacker_size, garrison_ref)`：令 `r = attacker_size / max(garrison_ref,1)`；`r<5` 返回 0，`Simulation` 据此结束围城并让攻方撤离；否则 `days = clamp(3 + 435/r, 3, 90)`、返回 `100/days`。**去掉掷骰**使围城天数精确可测（r=5→90 天、r=10→48 天、r→∞→3 天），且**与 city.defense 解耦**。`garrison_ref` 是围城开始时的守方兵力基准快照，守军被歼后仍保留。
@@ -253,6 +254,8 @@ if state.day % 30 == 0:                              # 每月结算块
 2. **城下决斗**（side_b 为敌对挑战者，无城防加成）：分胜负后——挑战者胜且**为城主（`side_b.owner==city.owner`）→ 解围成功，入城 `_settle_idle`、战斗结束**；挑战者胜且为敌对他国 → `_promote_challengers` 接管围城继续攻。围城方胜 → 挑战者撤退、围城继续。（第九轮修复：城主解围胜利不再被 `_promote_challengers` 误升为"围攻自己城"，[15](e)。）
 3. **纯围城累积（R2 确定性递减）**：无对抗时计算 `siege_daily_progress`；`r<5` 立即结束围城并让攻方沿真实路径撤回友城，禁止永久切断补给；否则按 90→3 天递减累积。达 100 后破城。`_promote_challengers` 接管围城时重置 `garrison_ref=city.defense`。
 
+每个围城日开始，`_reconcile_siege_city_defenders` 都会重新收集目标城内尚未参战的 `IDLE/RECOVERING` 本国守军。任何守军都会先把围城切回战斗阶段；守城或解围战期间，`siege_progress` 每天回退 `0.25` 点，守军被击败前不得继续推进或占领。
+
 **粮食/饥饿（首都粮仓 + 可扩展多粮仓）**：`Nation.capital_city_id` 是首都真源，`warehouse_city_ids` 登记本国粮仓；当前每国只有首都一个粮仓，但寻路按集合实现。每半年所有本国城市产出立即汇入首都。军队只从登记且有粮的粮仓取粮，并最小化路径损耗：每条边 `loss=0.1×distance×(1+danger)`，路径按边加总；月需求=`size×FOOD_PER_CAPITA×(1+route_loss)`，`FOOD_PER_CAPITA=0.0025`，总倍率封顶 3。镜像稳态门禁中每国 32 城、10 支满编 15000 人军队，一年粮食净增 `+414/+442`。
 **首都失守**：旧首都粮仓注销，库存 30% 汇入胜方首都、70% 损毁；败方若仍有城市，选择防御最高（同防御按 id）的城市迁都并建立空粮仓，无城则不迁都。
 **R3 补给孤岛**：被围城切断外部粮仓连接。若被围城市本身是有粮仓，则守军使用本地库存且由 `_drain_siege_food` 每日扣 1；普通城市无本地库存，被围后立即断供。粮尽后守军城防加成 ×`SIEGE_STARVE_DEF_MULT=0.3`。
@@ -306,6 +309,7 @@ if state.day % 30 == 0:                              # 每月结算块
 | 同城多支驻军时 `army_at_city` 只取第一支参战，城市易主后其余恢复军可能滞留敌城 | `_capture_city` 统一驱逐该城所有异国 `IDLE/RECOVERING` 军队并重新撤退；四种子 × 1095 天冒烟验证 |
 | 溃逃军完全排除在遭遇索引外，与“只会被动接战”不符 | `_detect_encounters` 同时索引 `MOVING/RETREATING`，但要求交战核心至少一方为 `MOVING`；`forced_retreat` 保证被动战斗获胜后继续撤退，[23] 固化 |
 | 攻城顺序若在守军战败同 tick 推进进度，会把“正面战斗”和“围城”合并结算 | `_advance_siege` 守军战败分支立即 return，下一天才进入纯围城；守军撤退排除当前攻城城市，[24] 固化 |
+| 围城建立后才落位的 `IDLE/RECOVERING` 守军不在 `side_b`，攻城可直接满进度占领并在清理阶段驱逐守军 | 每个围城日重新收集全部城内本国守军；战斗中每天回退 0.25 进度，守军未败不得占领，[24b] 固化 |
 | 两支敌军同日到达边中点时若先转 HOLDING、后做遭遇检测，会因双方都非主动方而互相无视 | 到达驻防点只先 clamp，遭遇检测完成后仍未交战者才转 HOLDING，[25] 固化 |
 | 驻防时间上限会让军队在无战术事件时自动离开阵地，与驻防语义冲突 | 删除 180 天自动推进机制；`HOLDING` 持续到接战、撤退或其他显式命令改变状态 |
 | 驻防增援若直接继承老兵适应天数，可用小军提前驻防再让大军免费获得满适应 | Battle 快照按兵力加权稀释驻防天数，[27] 固化 |
@@ -344,7 +348,7 @@ AI 长跑命令：
 /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
 ```
 
-当前基准结论（固定种子，左新右旧，含多方向协同、断粮突围和紧急解围）：第 1 年新 AI 暂时 `21:43` 落后，第 3 年反超至 `36:28`，第 2420 天以 `64:0` 完成统一，退出码 `0`，结论 **NEW_AI_BETTER**。基准启动前会验证城市、军队、道路左右镜像及 32 城满编稳态年度粮食结余为正。
+当前基准结论（固定种子，左新右旧，含多方向协同、断粮突围、紧急解围和围城中断）：第 1 年新 AI 暂时 `20:44` 落后，第 3 年追至 `30:34`，第 2139 天以 `64:0` 完成统一，退出码 `0`，结论 **NEW_AI_BETTER**。基准启动前会验证城市、军队、道路左右镜像及 32 城满编稳态年度粮食结余为正。
 
 ---
 

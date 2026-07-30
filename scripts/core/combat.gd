@@ -36,6 +36,7 @@ const SIEGE_DAYS_BASE: float = 90.0          ## 基准围城天数（r=SIEGE_RAT
 ## 递减系数 = (BASE-MIN)*RATIO_MIN，使 days = MIN + K/r 在 r=5 时取 BASE、r→∞ 时取 MIN。
 const SIEGE_DECAY_K: float = 435.0           ## (90-3)*5 = 435
 const SIEGE_STARVE_DEF_MULT: float = 0.3     ## 粮尽守军城防加成衰减系数（战力大幅下降）
+const SIEGE_INTERRUPTION_DECAY_PER_DAY: float = 0.25 ## 守城/解围战每持续一天，攻城成果回退 0.25 点
 
 
 ## 纯围城阶段单日进度增量（确定性，无掷骰）。ratio = 攻方兵力 / 守方基准。
@@ -49,6 +50,14 @@ static func siege_daily_progress(attacker_size: int, garrison_ref: int) -> float
 		return 0.0
 	var days := clampf(SIEGE_DAYS_MIN + SIEGE_DECAY_K / ratio, SIEGE_DAYS_MIN, SIEGE_DAYS_BASE)
 	return SIEGE_PROGRESS_REQUIRED / days
+
+
+## 守军或解围军打断攻城时，既有工事和破城成果按中断天数线性损失。
+static func siege_progress_after_interruption(progress: float, days: int = 1) -> float:
+	return maxf(
+		progress - SIEGE_INTERRUPTION_DECAY_PER_DAY * float(maxi(days, 0)),
+		0.0
+	)
 
 
 ## danger 对攻击力的固定惩罚，不随驻防时间变化。

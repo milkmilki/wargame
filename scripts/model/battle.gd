@@ -29,8 +29,8 @@ var holding_days: float = 0.0
 # 回合计数。士气不在此存储——真源是各 Army.morale，本层士气按兵力加权派生（见 side_morale）。
 var round_no: int = 0
 
-## 攻城进度累积（仅 SIEGE 有效）：守军被清空后进入纯围城阶段，每天掷骰累加，
-## 达 Combat.SIEGE_PROGRESS_REQUIRED 破城。FIELD 恒为 0。
+## 攻城进度累积（仅 SIEGE 有效）：守军被清空后进入纯围城阶段，每天确定性累加；
+## 守城/解围战持续期间每天回退，达 Combat.SIEGE_PROGRESS_REQUIRED 才能破城。
 var siege_progress: float = 0.0
 
 ## SIEGE 专用：side_b 当前是否为「驻城守军」（享城防加成）。

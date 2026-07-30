@@ -45,6 +45,7 @@ func _init() -> void:
 	_test_morale_retreat_recovery()
 	_test_supply_morale_and_passive_retreat_battle()
 	_test_siege_battle_then_progress_order()
+	_test_siege_interruption_and_late_garrison()
 	_test_edge_holding_state()
 	_test_edge_supply_from_both_endpoints()
 	_test_warehouse_logistics()
@@ -1469,6 +1470,101 @@ func _test_siege_battle_then_progress_order() -> void:
 	sim.free()
 
 # ------------------------------------------------------------------ 25. 边上驻防状态 + AI + 适应累计
+# ------------------------------------------------------------------ 24b. 后到守军打断围城并回退进度
+
+func _test_siege_interruption_and_late_garrison() -> void:
+	print("[24b] 围城中断：任何后到守军先参战，攻城进度按中断天数回退")
+	_check(
+		_approx(
+			Combat.siege_progress_after_interruption(50.0, 3),
+			50.0 - Combat.SIEGE_INTERRUPTION_DECAY_PER_DAY * 3.0
+		),
+		"攻城中断 3 天应按每日回退率累计扣减"
+	)
+
+	var gs := GameState.new()
+	gs.generate_world(2424)
+	var sim := Simulation.new()
+	sim.setup(gs)
+	gs.armies.clear()
+	gs.battles.clear()
+
+	var from_city := -1
+	var siege_city := -1
+	for edge in gs.edges:
+		if gs.cities[edge.city_a].owner_nation != gs.cities[edge.city_b].owner_nation:
+			from_city = edge.city_a
+			siege_city = edge.city_b
+			break
+	var city := gs.cities[siege_city]
+	var road := gs.edge_of(from_city, siege_city)
+	var original_owner := city.owner_nation
+	var attacker := _make_army(710, gs.cities[from_city].owner_nation, 5000, 0, 100)
+	attacker.state = Army.State.FIGHTING
+	attacker.move_from = from_city
+	attacker.move_to = siege_city
+	var idle_guard := _make_army(711, original_owner, 600, 0, 100)
+	idle_guard.state = Army.State.IDLE
+	idle_guard.location_city = siege_city
+	idle_guard.move_from = siege_city
+	var recovering_guard := _make_army(712, original_owner, 400, 0, 100)
+	recovering_guard.state = Army.State.RECOVERING
+	recovering_guard.location_city = siege_city
+	recovering_guard.move_from = siege_city
+	gs.armies.append_array([attacker, idle_guard, recovering_guard])
+
+	# 模拟已经推进到破城线、但同日有两支战斗外守军落位的异常状态。
+	var siege := gs.new_battle(Battle.Kind.SIEGE)
+	siege.city = city
+	siege.edge = road
+	siege.garrison_ref = 100
+	siege.siege_progress = Combat.SIEGE_PROGRESS_REQUIRED
+	siege.side_a.append(attacker)
+	attacker.battle_id = siege.id
+
+	sim._advance_siege(siege)
+	_check(
+		siege.has_garrison
+		and siege.side_b.has(idle_guard)
+		and siege.side_b.has(recovering_guard),
+		"围城日开始时必须收集城内全部 IDLE/RECOVERING 守军"
+	)
+	_check(
+		idle_guard.state == Army.State.FIGHTING
+		and recovering_guard.state == Army.State.FIGHTING
+		and idle_guard.battle_id == siege.id
+		and recovering_guard.battle_id == siege.id,
+		"后到守军必须进入当前围城战，不能留在战斗外等待占领清理"
+	)
+	_check(
+		_approx(
+			siege.siege_progress,
+			Combat.SIEGE_PROGRESS_REQUIRED - Combat.SIEGE_INTERRUPTION_DECAY_PER_DAY
+		),
+		"守军出现当天不得占领，进度还应回退 1 点"
+	)
+	_check(
+		city.owner_nation == original_owner and not siege.finished,
+		"城内仍有守军时城市不得易主，围城必须切回战斗阶段"
+	)
+	_check(
+		siege.garrison_ref == 1000,
+		"后到守军应更新围城守方兵力基准，实为 %d" % siege.garrison_ref
+	)
+
+	sim._advance_siege(siege)
+	sim._advance_siege(siege)
+	_check(
+		_approx(
+			siege.siege_progress,
+			Combat.SIEGE_PROGRESS_REQUIRED
+				- Combat.SIEGE_INTERRUPTION_DECAY_PER_DAY * 3.0
+		),
+		"守城战连续中断 3 天应累计回退，实为 %.2f" % siege.siege_progress
+	)
+	sim.free()
+
+
 
 func _test_edge_holding_state() -> void:
 	print("[25] HOLDING：AI 进入高 danger 边、固定位置、占用容量、补给控制适应")
