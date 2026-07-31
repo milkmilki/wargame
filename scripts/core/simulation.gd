@@ -42,6 +42,7 @@ const CONTACT_EPS: float = 0.15
 const AI_DECISION_INTERVAL_DAYS: int = 5
 const DIPLOMACY_DECISION_INTERVAL_DAYS: int = DAYS_PER_MONTH
 const NEW_ARMY_SIZE: int = 5000
+const NARROW_ROUTE_FORMATION_SIZE: int = Edge.MIN_MANPOWER
 const DISBAND_SIZE_MAX: int = 499
 const REINFORCE_PER_ARMY_PER_MONTH: int = 750
 const PEACETIME_MANPOWER_RESERVE: int = 5000
@@ -1433,6 +1434,11 @@ func _ai_manage_force_structure(
 	var current_troops := 0
 	for army in view.friendly_armies:
 		current_troops += maxi(army.size, 0)
+	if _split_army_for_narrow_objective(
+		view,
+		nation
+	):
+		return true
 	var mobilization_needed := (
 		(
 			not state.wars_of(view.nation_id).is_empty()
@@ -1529,6 +1535,166 @@ func _ai_manage_force_structure(
 					]
 				)
 			) != null
+	return false
+
+
+func _split_army_for_narrow_objective(
+	view: AiWorldView,
+	nation: Nation
+) -> bool:
+	var objective_city := (
+		nation.war_preparation_objective_city
+	)
+	if objective_city < 0:
+		objective_city = nation.campaign_plan_primary_city
+	if objective_city < 0:
+		for enemy_id in state.wars_of(nation.id):
+			var objective := state.war_objective(
+				nation.id,
+				enemy_id
+			)
+			if (
+				not objective.is_empty()
+				and int(objective.get("attacker", -1))
+					== nation.id
+			):
+				objective_city = int(
+					objective.get("city_id", -1)
+				)
+				break
+	if (
+		objective_city < 0
+		or objective_city >= state.cities.size()
+		or not state.is_enemy(
+			nation.id,
+			state.cities[objective_city].owner_nation
+		)
+	):
+		return false
+	var candidates: Array[Army] = []
+	for army in view.friendly_armies:
+		if (
+			army.state == Army.State.IDLE
+			and army.size > 0
+			and not army.starving
+			and army.morale >= 0.5
+			and army.supply_ratio >= 0.75
+			and army.max_size
+				> NARROW_ROUTE_FORMATION_SIZE
+		):
+			candidates.append(army)
+	candidates.sort_custom(func(a: Army, b: Army) -> bool:
+		return (
+			a.max_size > b.max_size
+			or (
+				a.max_size == b.max_size
+				and a.id < b.id
+			)
+		)
+	)
+	for army in candidates:
+		var wide_field := Pathfinding.dijkstra_field(
+			state,
+			army.location_city,
+			nation.id,
+			false,
+			true,
+			objective_city,
+			army.max_size
+		)
+		if (
+			float(
+				wide_field["dist"].get(
+					objective_city,
+					INF
+				)
+			) < INF
+		):
+			continue
+		var narrow_field := Pathfinding.dijkstra_field(
+			state,
+			army.location_city,
+			nation.id,
+			false,
+			true,
+			objective_city,
+			NARROW_ROUTE_FORMATION_SIZE
+		)
+		if (
+			float(
+				narrow_field["dist"].get(
+					objective_city,
+					INF
+				)
+			) == INF
+		):
+			continue
+		var route := Pathfinding.reconstruct(
+			narrow_field["prev"],
+			army.location_city,
+			objective_city
+		)
+		if route.is_empty():
+			continue
+		var bottleneck := army.max_size
+		var from_city := army.location_city
+		for to_city in route:
+			var edge := state.edge_of(
+				from_city,
+				to_city
+			)
+			if edge == null:
+				bottleneck = 0
+				break
+			bottleneck = mini(
+				bottleneck,
+				edge.max_manpower
+			)
+			from_city = to_city
+		if (
+			bottleneck < Edge.MIN_MANPOWER
+			or bottleneck >= army.max_size
+			or army.max_size % bottleneck != 0
+		):
+			continue
+		var assigned_target := int(
+			nation.campaign_attack_assignments.get(
+				army.id,
+				-1
+			)
+		)
+		var parts := state.split_army(
+			army,
+			bottleneck
+		)
+		if parts.is_empty():
+			continue
+		for part in parts:
+			part.ai_action = (
+				ActionCandidate.Kind.SPLIT_ARMY
+			)
+			part.ai_order_created_day = state.day
+			part.ai_order_reason = (
+				"为通过%d人容量道路，将军%d拆为%d支%d人编制"
+				% [
+					bottleneck,
+					army.id,
+					parts.size(),
+					bottleneck,
+				]
+			)
+			if assigned_target >= 0:
+				nation.campaign_attack_assignments[
+					part.id
+				] = assigned_target
+		nation.ai_last_force_action = (
+			ActionCandidate.Kind.SPLIT_ARMY
+		)
+		nation.ai_last_force_day = state.day
+		nation.ai_last_force_reason = (
+			parts[0].ai_order_reason
+		)
+		return true
 	return false
 
 
@@ -2391,6 +2557,8 @@ func _create_army_for_nation(nation_id: int, city_id: int, reason: String = "") 
 	var nation := state.nations[nation_id]
 	if (
 		nation.manpower_pool < NEW_ARMY_SIZE
+		or state.active_army_count(nation_id)
+			>= state.max_army_count(nation_id)
 		or not _is_available_recruitment_hub(nation_id, city_id)
 	):
 		return null
@@ -2863,7 +3031,10 @@ func _begin_next_leg(army: Army) -> void:
 			if (
 				from_city >= 0
 				and from_city < state.cities.size()
-				and state.cities[from_city].owner_nation == army.owner_nation
+				and state.has_military_access(
+					army.owner_nation,
+					state.cities[from_city].owner_nation
+				)
 			):
 				_start_recovering(army, from_city)
 				return
@@ -2959,7 +3130,10 @@ func _arrive_at_node(army: Army) -> void:
 		army.move_progress = 0.0
 		army.location_city = arrived
 		if army.path.is_empty():
-			if state.cities[arrived].owner_nation == army.owner_nation:
+			if state.has_military_access(
+				army.owner_nation,
+				state.cities[arrived].owner_nation
+			):
 				_start_recovering(army, arrived)
 			else:
 				# 目的地在撤退途中失守：从当前位置重新寻找最近友城。
@@ -3180,6 +3354,17 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 			return
 	if siege == null:
 		var defenders := state.armies_at_city(city.id)
+		if (
+			defenders.is_empty()
+			and state.recognized_owner_of(city.id)
+				== attacker.owner_nation
+		):
+			_capture_city(
+				attacker,
+				city,
+				attacker.owner_nation
+			)
+			return
 		# 规格 R4：进攻空城（无守军）时，若攻方兵力 < 城基础防御力，则无法围城——
 		# 攻方不得占据空城，须自动向最近友方城撤离（无合法本国通道则溃散）。
 		if defenders.is_empty() and attacker.size < city.defense:
@@ -3300,6 +3485,8 @@ func _advance_siege(battle: Battle) -> void:
 		if battle.side_a.is_empty():
 			battle.finished = true
 			battle.winner_side = 0
+			return
+		if _finish_legal_reclamation(battle):
 			return
 		battle.finished = false
 		battle.winner_side = 0
@@ -3574,9 +3761,44 @@ func _retreat_defender(defender: Army, city: City) -> void:
 
 # ------------------------------------------------------------------ 5. 占领
 
-func _capture_city(army: Army, city: City) -> void:
+func _finish_legal_reclamation(battle: Battle) -> bool:
+	if (
+		battle.city == null
+		or battle.side_a.is_empty()
+	):
+		return false
+	var captor := _strongest_alive(battle.side_a)
+	if (
+		captor == null
+		or state.recognized_owner_of(battle.city.id)
+			!= captor.owner_nation
+	):
+		return false
+	for attacker in battle.side_a:
+		attacker.battle_id = -1
+		if attacker != captor and attacker.size > 0:
+			_settle_idle(attacker, battle.city.id)
+	_capture_city(
+		captor,
+		battle.city,
+		captor.owner_nation
+	)
+	battle.finished = true
+	battle.winner_side = 1
+	return true
+
+
+func _capture_city(
+	army: Army,
+	city: City,
+	owner_override: int = -1
+) -> void:
 	var old_owner := city.owner_nation
-	var claimant := _occupation_claimant_for_army(army)
+	var claimant := (
+		owner_override
+		if owner_override >= 0
+		else _occupation_claimant_for_army(army)
+	)
 	var captured_food := city.food_storage if city.has_warehouse else 0
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
@@ -3758,7 +3980,13 @@ func _start_morale_retreat_from_city(
 	if current_city < 0 or current_city >= state.cities.size():
 		army.size = 0
 		return
-	if current_city != excluded_city_id and state.cities[current_city].owner_nation == army.owner_nation:
+	if (
+		current_city != excluded_city_id
+		and state.has_military_access(
+			army.owner_nation,
+			state.cities[current_city].owner_nation
+		)
+	):
 		_start_recovering(army, current_city)
 		return
 	var path := Pathfinding.nearest_friendly_city(state, army, excluded_city_id)

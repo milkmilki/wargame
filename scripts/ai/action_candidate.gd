@@ -11,6 +11,7 @@ enum Kind {
 	RETREAT,
 	CREATE_ARMY,
 	DISBAND_ARMY,
+	SPLIT_ARMY,
 }
 
 var kind: int = Kind.NONE

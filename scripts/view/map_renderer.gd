@@ -536,13 +536,7 @@ func _draw_edges() -> void:
 		var pa := _city_center(state.cities[e.city_a])
 		var pb := _city_center(state.cities[e.city_b])
 		var danger := clampf(e.danger, 0.0, 1.0)
-		if e.max_manpower <= 0:
-			# 高山或小渡口等战略阻断仍显示地理连接，但不属于军事道路网络。
-			var blocked_col := Color(0.20, 0.16, 0.24).lerp(
-				Color(0.48, 0.20, 0.30), danger
-			)
-			draw_line(pa, pb, blocked_col, 2.0 * _display_scale)
-			_draw_blocked_edge_marker(pa, pb, blocked_col.lightened(0.28))
+		if not is_edge_visible(e):
 			continue
 		var road_level := 1
 		if e.max_manpower >= 100000:
@@ -572,27 +566,8 @@ func _draw_edges() -> void:
 		draw_line(pa, pb, col, width)
 
 
-func _draw_blocked_edge_marker(pa: Vector2, pb: Vector2, color: Color) -> void:
-	var midpoint := (pa + pb) * 0.5
-	var direction := (pb - pa).normalized()
-	var normal := Vector2(-direction.y, direction.x)
-	var radius := clampf(
-		_cell * 0.09,
-		4.0 * _display_scale,
-		8.0 * _display_scale
-	)
-	draw_line(
-		midpoint - direction * radius - normal * radius,
-		midpoint + direction * radius + normal * radius,
-		color,
-		2.5 * _display_scale
-	)
-	draw_line(
-		midpoint - direction * radius + normal * radius,
-		midpoint + direction * radius - normal * radius,
-		color,
-		2.5 * _display_scale
-	)
+static func is_edge_visible(edge: Edge) -> bool:
+	return edge != null and edge.max_manpower > 0
 
 
 func _draw_cities() -> void:

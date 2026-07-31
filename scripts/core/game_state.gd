@@ -10,6 +10,7 @@ const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
 const INITIAL_MANPOWER_RESERVE_MONTHS: int = 150
 const INITIAL_ARMY_MANPOWER_MONTHS: int = 50
+const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 100
 const FOOD_HUB_MIN_OUTPUT: int = 240
@@ -572,6 +573,8 @@ func create_army(nation_id: int, city_id: int, size: int) -> Army:
 		or city_id < 0 or city_id >= cities.size()
 		or cities[city_id].owner_nation != nation_id
 		or size <= 0
+		or active_army_count(nation_id)
+			>= max_army_count(nation_id)
 	):
 		return null
 	var army := Army.new()
@@ -584,6 +587,98 @@ func create_army(nation_id: int, city_id: int, size: int) -> Army:
 	army.state = Army.State.IDLE
 	armies.append(army)
 	return army
+
+
+func active_army_count(nation_id: int) -> int:
+	var count := 0
+	for army in armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			count += 1
+	return count
+
+
+func max_army_count(nation_id: int) -> int:
+	return maxi(
+		cities_of(nation_id).size()
+			* ARMY_COUNT_LIMIT_PER_CITY,
+		ARMY_COUNT_LIMIT_PER_CITY
+	)
+
+
+## 将一支静止军队按满编容量等分，兵力和满编总额严格守恒。
+func split_army(
+	army: Army,
+	part_max_size: int
+) -> Array[Army]:
+	var result: Array[Army] = []
+	if (
+		army == null
+		or not armies.has(army)
+		or army.size <= 0
+		or army.state != Army.State.IDLE
+		or army.on_edge
+		or part_max_size < Edge.MIN_MANPOWER
+		or part_max_size >= army.max_size
+		or army.max_size % part_max_size != 0
+		or army.location_city < 0
+		or army.location_city >= cities.size()
+		or not has_military_access(
+			army.owner_nation,
+			cities[army.location_city].owner_nation
+		)
+	):
+		return result
+	var part_count := army.max_size / part_max_size
+	if (
+		army.size < part_count
+		or active_army_count(army.owner_nation)
+			+ part_count - 1
+			> max_army_count(army.owner_nation)
+	):
+		return result
+	var original_size := army.size
+	var base_size := original_size / part_count
+	var remainder := original_size % part_count
+	army.max_size = part_max_size
+	army.size = base_size + (1 if remainder > 0 else 0)
+	result.append(army)
+	for part_index in range(1, part_count):
+		var child := Army.new()
+		child.id = _next_army_id
+		_next_army_id += 1
+		child.owner_nation = army.owner_nation
+		child.max_size = part_max_size
+		child.size = (
+			base_size
+			+ (1 if part_index < remainder else 0)
+		)
+		child.speed_factor = army.speed_factor
+		child.attack = army.attack
+		child.defense = army.defense
+		child.morale = army.morale
+		child.supply_ratio = army.supply_ratio
+		child.starving = army.starving
+		child.location_city = army.location_city
+		child.move_from = army.location_city
+		child.state = Army.State.IDLE
+		child.offensive_attack_multiplier = (
+			army.offensive_attack_multiplier
+		)
+		child.offensive_bonus_until_day = (
+			army.offensive_bonus_until_day
+		)
+		child.defensive_deployment_until_day = (
+			army.defensive_deployment_until_day
+		)
+		child.defensive_blocked_edge_a = (
+			army.defensive_blocked_edge_a
+		)
+		child.defensive_blocked_edge_b = (
+			army.defensive_blocked_edge_b
+		)
+		armies.append(child)
+		result.append(child)
+	return result
 
 # ------------------------------------------------------------------ 查询辅助
 

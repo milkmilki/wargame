@@ -318,6 +318,11 @@ func _test_world_generation() -> void:
 	)
 	for edge in gs.edges:
 		road_counts[edge.max_manpower] = int(road_counts.get(edge.max_manpower, 0)) + 1
+		_check(
+			MapRenderer.is_edge_visible(edge)
+				== (edge.max_manpower > 0),
+			"地图只应显示正容量道路"
+		)
 		degrees[edge.city_a] = int(degrees.get(edge.city_a, 0)) + 1
 		degrees[edge.city_b] = int(degrees.get(edge.city_b, 0)) + 1
 		var delta := (
@@ -1739,6 +1744,53 @@ func _test_morale_retreat_recovery() -> void:
 	var hostile_start_route := Pathfinding.nearest_friendly_city(route_state, route_army, 0)
 	_check(hostile_start_route == [1],
 		"起点刚失守时应允许离开敌城进入最近友城 1，实为 %s" % str(hostile_start_route))
+	var ally_state := GameState.new()
+	ally_state.generate_grid_world(779)
+	ally_state.armies.clear()
+	for ally_city in ally_state.cities:
+		ally_city.owner_nation = 1
+	ally_state.cities[1].owner_nation = 2
+	ally_state.cities[2].owner_nation = 0
+	ally_state.set_diplomatic_relation(
+		0,
+		2,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	var ally_retreat := _make_army(498, 0, 1000, 10)
+	ally_retreat.location_city = 0
+	ally_retreat.move_from = 0
+	ally_retreat.morale = 0.0
+	ally_state.armies.append(ally_retreat)
+	var ally_route := Pathfinding.nearest_friendly_city(
+		ally_state,
+		ally_retreat,
+		0
+	)
+	_check(
+		ally_route == [1],
+		"败军应优先撤入最近的盟友城市，实为 %s"
+			% str(ally_route)
+	)
+	var ally_sim := Simulation.new()
+	ally_sim.setup(ally_state)
+	ally_sim._start_morale_retreat_from_city(
+		ally_retreat,
+		0,
+		0
+	)
+	var ally_guard := 0
+	while (
+		ally_retreat.state == Army.State.RETREATING
+		and ally_guard < 40
+	):
+		ally_sim._advance_movement()
+		ally_guard += 1
+	_check(
+		ally_retreat.state == Army.State.RECOVERING
+		and ally_retreat.location_city == 1,
+		"败军抵达盟友城市后应进入恢复状态"
+	)
+	ally_sim.free()
 
 	# 找同国相邻边；军队在靠近 c2 的 80% 位置崩溃，应继续到更近的 c2，而非固定退回 c1。
 	var c1 := -1
@@ -1972,6 +2024,94 @@ func _test_siege_battle_then_progress_order() -> void:
 			and gs.cities[defender.location_city].owner_nation == defender.owner_nation,
 			"战败守军不得在失守城市原地恢复，必须位于其他友城；location=%d siege_city=%d"
 				% [defender.location_city, siege_city])
+
+	# 收复自己的法理城市不再重复普通征服围城：空城立即恢复，击败占领军后同日恢复。
+	gs.armies.clear()
+	gs.battles.clear()
+	var legal_owner := gs.cities[from_city].owner_nation
+	var occupier := (legal_owner + 1) % GameState.NATION_COUNT
+	gs.cities[siege_city].owner_nation = occupier
+	gs.recognized_city_owners[siege_city] = legal_owner
+	gs.cities[siege_city].defense = 1000
+	var weak_reclaimer := _make_army(
+		702,
+		legal_owner,
+		1,
+		10
+	)
+	weak_reclaimer.move_from = from_city
+	weak_reclaimer.move_to = siege_city
+	weak_reclaimer.location_city = from_city
+	gs.armies.append(weak_reclaimer)
+	var reclaim_view := AiWorldView.build(
+		gs,
+		legal_owner
+	)
+	var reclaim_candidate := UtilityAI._attack_candidate(
+		reclaim_view,
+		StrategicMapSnapshot.build(reclaim_view),
+		ThreatField.build(reclaim_view),
+		ArmyCoordinator.new(),
+		weak_reclaimer,
+		UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO
+	)
+	_check(
+		reclaim_candidate != null
+		and reclaim_candidate.kind
+			== ActionCandidate.Kind.ATTACK
+		and reclaim_candidate.target_city
+			== siege_city,
+		"AI应主动进攻无守军的本国法理城市"
+	)
+	sim._start_or_join_siege(
+		weak_reclaimer,
+		gs.cities[siege_city],
+		road
+	)
+	_check(
+		gs.cities[siege_city].owner_nation == legal_owner
+		and weak_reclaimer.location_city == siege_city
+		and gs.battles.is_empty(),
+		"无守军的本国法理城市应立即收复，不受普通城防门槛阻挡"
+	)
+
+	gs.cities[siege_city].owner_nation = occupier
+	var reclaimer := _make_army(
+		703,
+		legal_owner,
+		5000,
+		1
+	)
+	reclaimer.move_from = from_city
+	reclaimer.move_to = siege_city
+	reclaimer.location_city = from_city
+	var occupation_guard := _make_army(
+		704,
+		occupier,
+		100,
+		1
+	)
+	occupation_guard.morale = 0.001
+	occupation_guard.state = Army.State.IDLE
+	occupation_guard.location_city = siege_city
+	occupation_guard.move_from = siege_city
+	gs.armies = [
+		reclaimer,
+		occupation_guard,
+	] as Array[Army]
+	sim._start_or_join_siege(
+		reclaimer,
+		gs.cities[siege_city],
+		road
+	)
+	var reclamation_battle: Battle = gs.battles[0]
+	sim._advance_siege(reclamation_battle)
+	_check(
+		gs.cities[siege_city].owner_nation == legal_owner
+		and reclamation_battle.finished
+		and reclaimer.location_city == siege_city,
+		"击败占领军后应立即收复本国法理城市，不得胜而不占"
+	)
 	sim.free()
 
 # ------------------------------------------------------------------ 25. 边上驻防状态 + AI + 适应累计
@@ -3781,6 +3921,133 @@ func _test_manpower_pool_and_force_commands() -> void:
 		and not gs.armies.has(created)
 		and gs.nations[nation_id].manpower_pool == pool_before_disband + created_size,
 		"解散应删除军队并把全部幸存人数返还全国人口库")
+
+	var split_source := gs.create_army(
+		nation_id,
+		capital_id,
+		13021
+	)
+	split_source.attack = 13
+	split_source.defense = 14
+	split_source.morale = 0.73
+	var split_parts := gs.split_army(
+		split_source,
+		5000
+	)
+	var split_size_total := 0
+	var split_capacity_total := 0
+	var split_attributes_preserved := true
+	for split_part in split_parts:
+		split_size_total += split_part.size
+		split_capacity_total += split_part.max_size
+		split_attributes_preserved = (
+			split_attributes_preserved
+			and split_part.attack == 13
+			and split_part.defense == 14
+			and _approx(split_part.morale, 0.73)
+		)
+	_check(
+		split_parts.size() == 3
+		and split_size_total == 13021
+		and split_capacity_total == 15000
+		and split_attributes_preserved,
+		"拆分应生成三支5000编制并保持兵力、编制和战斗属性守恒"
+	)
+
+	var narrow_state := GameState.new()
+	narrow_state.generate_grid_world(7101)
+	narrow_state.armies.clear()
+	narrow_state.battles.clear()
+	for narrow_city in narrow_state.cities:
+		narrow_city.owner_nation = 2
+	narrow_state.cities[0].owner_nation = 0
+	narrow_state.cities[1].owner_nation = 1
+	for narrow_edge in narrow_state.edges:
+		narrow_edge.max_manpower = 0
+	narrow_state.edge_of(0, 1).max_manpower = 5000
+	narrow_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var narrow_army := narrow_state.create_army(
+		0,
+		0,
+		15000
+	)
+	narrow_state.nations[0].war_preparation_target_nation = 1
+	narrow_state.nations[0].war_preparation_objective_city = 1
+	var narrow_sim := Simulation.new()
+	narrow_sim.setup(narrow_state)
+	var narrow_view := AiWorldView.build(
+		narrow_state,
+		0
+	)
+	var narrow_split_changed := (
+		narrow_sim._ai_manage_force_structure(
+			narrow_view,
+			StrategicMapSnapshot.build(narrow_view),
+			ThreatField.build(narrow_view)
+		)
+	)
+	var narrow_parts_valid := true
+	for narrow_part in narrow_state.armies:
+		if (
+			narrow_part.owner_nation == 0
+			and narrow_part.max_size != 5000
+		):
+			narrow_parts_valid = false
+	_check(
+		narrow_split_changed
+		and narrow_state.active_army_count(0) == 3
+		and narrow_parts_valid,
+		"AI应在唯一进攻路线容量不足时主动拆分标准军"
+	)
+	narrow_army.state = Army.State.MOVING
+	narrow_army.move_from = 0
+	narrow_army.path = [1] as Array[int]
+	narrow_sim._begin_next_leg(narrow_army)
+	_check(
+		narrow_army.on_edge
+		and narrow_army.move_to == 1,
+		"拆分后的五千编制军应能进入五千容量道路"
+	)
+	narrow_sim.free()
+
+	var cap_state := GameState.new()
+	cap_state.generate_grid_world(7102)
+	var cap_nation := 0
+	var expected_cap := (
+		cap_state.cities_of(cap_nation).size() * 3
+	)
+	_check(
+		cap_state.max_army_count(cap_nation)
+			== expected_cap,
+		"国家军队数量上限应为本国城市数的三倍"
+	)
+	var cap_city := cap_state.nations[
+		cap_nation
+	].capital_city_id
+	while (
+		cap_state.active_army_count(cap_nation)
+		< expected_cap
+	):
+		_check(
+			cap_state.create_army(
+				cap_nation,
+				cap_city,
+				1
+			) != null,
+			"达到三倍上限前应允许继续建军"
+		)
+	_check(
+		cap_state.create_army(
+			cap_nation,
+			cap_city,
+			1
+		) == null,
+		"达到三倍国家军队上限后必须拒绝继续建军"
+	)
 	sim.free()
 
 

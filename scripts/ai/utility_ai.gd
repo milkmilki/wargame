@@ -225,12 +225,20 @@ static func _attack_candidate(
 	var best_relief := 0.0
 	var target_ids: Array[int] = snapshot.priority_enemy_cities.duplicate()
 	for city_id in snapshot.frontier_enemy_cities:
+		var legal_reclamation := (
+			view.state.recognized_owner_of(city_id)
+				== view.nation_id
+		)
 		var pool := _adjacent_assault_pool(
 			view, snapshot, threat, coordinator, city_id
 		)
 		var relief := _blockade_relief_value(view, city_id)
 		if (
-			(int(pool["directions"]) >= 2 or relief > 0.0)
+			(
+				int(pool["directions"]) >= 2
+				or relief > 0.0
+				or legal_reclamation
+			)
 			and not target_ids.has(city_id)
 		):
 			target_ids.append(city_id)
@@ -244,14 +252,28 @@ static func _attack_candidate(
 		if target_distance == INF:
 			continue
 		var city := view.state.cities[city_id]
+		var legal_reclamation := (
+			view.state.recognized_owner_of(city_id)
+				== view.nation_id
+		)
 		var garrison_size := 0
 		for defender in view.state.armies_at_city(city_id):
 			garrison_size += defender.size
-		garrison_size = maxi(garrison_size, city.defense)
+		if not legal_reclamation:
+			garrison_size = maxi(
+				garrison_size,
+				city.defense
+			)
 		var committed_size := coordinator.size_reserved(city_id)
-		var required_siege_size := int(ceil(
-			float(garrison_size) * Combat.SIEGE_RATIO_MIN * SIEGE_COMMIT_MARGIN
-		))
+		var required_siege_size := (
+			0
+			if legal_reclamation
+			else int(ceil(
+				float(garrison_size)
+					* Combat.SIEGE_RATIO_MIN
+					* SIEGE_COMMIT_MARGIN
+			))
+		)
 		var pool := _adjacent_assault_pool(
 			view, snapshot, threat, coordinator, city_id
 		)
@@ -264,7 +286,9 @@ static func _attack_candidate(
 			available_size = maxi(available_size, int(pool["size"]))
 		if available_size < required_siege_size:
 			continue
-		var enemy_power := threat.threat_at(city_id) + ArmyPower.city_defense(city)
+		var enemy_power := threat.threat_at(city_id)
+		if not legal_reclamation:
+			enemy_power += ArmyPower.city_defense(city)
 		var committed := coordinator.power_reserved(city_id)
 		var relief_value := _blockade_relief_value(view, city_id)
 		var participant_power := power
@@ -312,6 +336,7 @@ static func _attack_candidate(
 			- 0.5 * snapshot.value_of_city(start)
 			+ 6.0 * float(maxi(directions - 1, 0))
 			+ relief_value
+			+ (12.0 if legal_reclamation else 0.0)
 			+ _strategic_attack_adjustment(
 				view, snapshot, city_id, directions
 			)

@@ -129,8 +129,8 @@ static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 	return reconstruct(field["prev"], start, best_goal)
 
 
-## 找最近的本国城市，返回到该城的路径（不含起点）。起点可为敌城，
-## 离开起点后的路径可经过本国或盟国城市；最终目的地仍必须属于本国。
+## 找最近的本国/盟友城市，返回到该城的路径（不含起点）。起点可为敌城，
+## 离开起点后的路径及最终恢复城市都必须拥有军事通行权。
 ## excluded_city_id 用于守城方溃败时排除正在失守的城市。
 static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id: int = -1) -> Array[int]:
 	var start := _origin_of(army)
@@ -204,7 +204,13 @@ static func _nearest_friendly_goal(
 	var best_goal := -1
 	var best_d := INF
 	for city in state.cities:
-		if city.owner_nation != nation_id or city.id == excluded_city_id:
+		if (
+			city.id == excluded_city_id
+			or not state.has_military_access(
+				nation_id,
+				city.owner_nation
+			)
+		):
 			continue
 		var d: float = dist[city.id]
 		if d < best_d or (d == best_d and (best_goal == -1 or city.id < best_goal)):
