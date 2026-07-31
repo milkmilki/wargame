@@ -25,6 +25,16 @@ func _init() -> void:
 	if duel_mode.is_empty():
 		duel_mode = "improved-left"
 	_configure_duel_mode(simulation, duel_mode)
+	for diagnostic_nation in [LEFT_NATION, RIGHT_NATION]:
+		var diagnostic_view := AiWorldView.build(state, diagnostic_nation)
+		var diagnostic_snapshot := StrategicMapSnapshot.build(diagnostic_view)
+		print(
+			"nation=%d critical_supply_cities=%s"
+			% [
+				diagnostic_nation,
+				str(diagnostic_snapshot.critical_supply_cities),
+			]
+		)
 
 	var initial_owner: Array[int] = []
 	for city in state.cities:
@@ -98,9 +108,9 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 	match mode:
 		"current-control":
 			for nation_id in [LEFT_NATION, RIGHT_NATION]:
-				simulation.ai_tactical_decision_order_overrides[nation_id] = false
+				simulation.ai_supply_corridor_defense_overrides[nation_id] = false
 		"improved-right":
-			simulation.ai_tactical_decision_order_overrides[LEFT_NATION] = false
+			simulation.ai_supply_corridor_defense_overrides[LEFT_NATION] = false
 		"offense-only":
 			simulation.ai_adaptive_garrison_overrides[LEFT_NATION] = false
 			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
@@ -110,7 +120,7 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
 			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
 		_:
-			simulation.ai_tactical_decision_order_overrides[RIGHT_NATION] = false
+			simulation.ai_supply_corridor_defense_overrides[RIGHT_NATION] = false
 
 
 func _build_symmetric_world() -> GameState:
@@ -353,12 +363,19 @@ func _measure(state: GameState, initial_owner: Array[int]) -> Dictionary:
 
 func _print_snapshot(state: GameState) -> void:
 	var metrics := _measure(state, [] as Array[int])
+	var corridor_counts := [0, 0]
+	for nation_id in [LEFT_NATION, RIGHT_NATION]:
+		var view := AiWorldView.build(state, nation_id)
+		corridor_counts[nation_id] = (
+			StrategicMapSnapshot.build(view).critical_supply_cities.size()
+		)
 	print(
-		"year=%d new_cities=%d old_cities=%d new_power=%.0f old_power=%.0f"
+		"year=%d new_cities=%d old_cities=%d new_power=%.0f old_power=%.0f corridors=%s"
 		% [
 			state.day / 365,
 			metrics["new_cities"], metrics["old_cities"],
 			metrics["new_power"], metrics["old_power"],
+			str(corridor_counts),
 		]
 	)
 

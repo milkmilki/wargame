@@ -9,6 +9,14 @@ const EMERGENCY_RETREAT_RATIO: float = 0.25
 const SIEGE_COMMIT_MARGIN: float = 1.50
 const REINFORCE_MIN_DEFICIT_SHARE: float = 0.50
 const RELIEF_MIN_DEFICIT_SHARE: float = 0.25
+const SUPPLY_CORRIDOR_MIN_IMPORTANCE: float = 0.50
+const SUPPLY_CORRIDOR_THREAT_FLOOR: float = 250.0
+const SUPPLY_CORRIDOR_GARRISON_BASE: float = 1000.0
+const SUPPLY_CORRIDOR_GARRISON_SCALE: float = 2000.0
+const SUPPLY_CORRIDOR_GARRISON_MAX: float = 3000.0
+const SUPPLY_CORRIDOR_RESPONSE_MAX_POWER: float = 5000.0
+const SUPPLY_CORRIDOR_POWER_RATIO_MIN: float = 0.80
+const SUPPLY_CORRIDOR_POWER_RATIO_MAX: float = 1.50
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
 const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
@@ -48,7 +56,7 @@ static func choose(
 	var local_ratio := local_support / maxf(local_threat, 1.0)
 	if view.day < army.ai_order_until_day and local_ratio >= EMERGENCY_RETREAT_RATIO:
 		return ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "命令承诺期未结束")
-	if _must_remain_at_logistics_hub(view, threat, army):
+	if _must_remain_at_logistics_hub(view, snapshot, threat, army):
 		return ActionCandidate.make(
 			ActionCandidate.Kind.NONE,
 			0.0,
@@ -147,12 +155,16 @@ static func _reinforce_candidate(
 	for warehouse in view.warehouses:
 		if not target_ids.has(warehouse.id):
 			target_ids.append(warehouse.id)
+	for city_id in snapshot.critical_supply_cities:
+		if not target_ids.has(city_id):
+			target_ids.append(city_id)
 	for city in view.friendly_cities:
 		if _friendly_relief_need(view, city.id) > 0.0 and not target_ids.has(city.id):
 			target_ids.append(city.id)
 	target_ids.sort()
 	var best_is_relief := false
 	var best_is_potential_border := false
+	var best_is_supply_corridor := false
 	for city_id in target_ids:
 		if city_id == start or dist[city_id] == INF:
 			continue
@@ -162,16 +174,30 @@ static func _reinforce_candidate(
 		)
 		# 支援必须是一军一目标的真实预留，不能使用会在多个城市重复计数的支援场。
 		var support := coordinator.power_reserved(city_id)
-		var frontline_deficit := enemy - support
-		var hub_required := required_logistics_garrison(view, threat, city_id)
+		var stationed := stationed_power_at(view, city_id)
+		var frontline_deficit := enemy - stationed - support
+		var hub_required := required_logistics_garrison(
+			view, snapshot, threat, city_id
+		)
 		var hub_deficit := (
 			hub_required
-			- stationed_power_at(view, city_id)
+			- stationed
 			- support
 		)
 		var relief_need := _friendly_relief_need(view, city_id)
 		var relief_deficit := relief_need - support
 		var deficit := maxf(maxf(frontline_deficit, hub_deficit), relief_deficit)
+		var supply_importance := snapshot.supply_importance_at(city_id)
+		var is_supply_corridor := (
+			supply_importance >= SUPPLY_CORRIDOR_MIN_IMPORTANCE
+			and hub_deficit > 0.0
+		)
+		if (
+			is_supply_corridor
+			and ArmyPower.effective(army)
+				> SUPPLY_CORRIDOR_RESPONSE_MAX_POWER
+		):
+			continue
 		var uncovered := (
 			(
 				snapshot.frontier_cities.has(city_id)
@@ -198,6 +224,7 @@ static func _reinforce_candidate(
 			- 0.06 * float(dist[city_id])
 			+ (10.0 if uncovered else 0.0)
 			+ (8.0 if hub_deficit > 0.0 else 0.0)
+			+ (5.0 * supply_importance if is_supply_corridor else 0.0)
 			+ (15.0 if relief_need > 0.0 else 0.0)
 		)
 		if score > best_score or (is_equal_approx(score, best_score) and city_id < best_city):
@@ -208,6 +235,7 @@ static func _reinforce_candidate(
 				snapshot.potential_frontier_cities.has(city_id)
 				and not snapshot.frontier_cities.has(city_id)
 			)
+			best_is_supply_corridor = is_supply_corridor
 	if best_city == -1:
 		return null
 	var candidate := ActionCandidate.make(
@@ -217,9 +245,15 @@ static func _reinforce_candidate(
 			"城市 %d 的被围/断粮友军需要紧急解围" % best_city
 			if best_is_relief
 			else (
-				"高威胁中立国边境城市 %d 存在守备缺口" % best_city
-				if best_is_potential_border
-				else "前线城市 %d 存在兵力缺口" % best_city
+				"唯一粮道节点 %d 面临截断风险，增援保护补给线"
+					% best_city
+				if best_is_supply_corridor
+				else (
+					"高威胁中立国边境城市 %d 存在守备缺口"
+						% best_city
+					if best_is_potential_border
+					else "前线城市 %d 存在兵力缺口" % best_city
+				)
 			)
 		),
 		best_city
@@ -331,7 +365,9 @@ static func _attack_candidate(
 	var best_relief := 0.0
 	var target_ids: Array[int] = snapshot.priority_enemy_cities.duplicate()
 	for city_id in snapshot.frontier_enemy_cities:
-		var pool := _adjacent_assault_pool(view, threat, coordinator, city_id)
+		var pool := _adjacent_assault_pool(
+			view, snapshot, threat, coordinator, city_id
+		)
 		var relief := _blockade_relief_value(view, city_id)
 		if (
 			(int(pool["directions"]) >= 2 or relief > 0.0)
@@ -351,7 +387,9 @@ static func _attack_candidate(
 		var required_siege_size := int(ceil(
 			float(garrison_size) * Combat.SIEGE_RATIO_MIN * SIEGE_COMMIT_MARGIN
 		))
-		var pool := _adjacent_assault_pool(view, threat, coordinator, city_id)
+		var pool := _adjacent_assault_pool(
+			view, snapshot, threat, coordinator, city_id
+		)
 		var participants: Dictionary = pool["participants"]
 		var is_adjacent_participant := participants.has(army.id)
 		if is_adjacent_participant and _wait_for_assault_sync(pool, army):
@@ -619,6 +657,7 @@ static func _blockade_relief_value(view: AiWorldView, enemy_city_id: int) -> flo
 
 static func _adjacent_assault_pool(
 	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	coordinator: ArmyCoordinator,
 	target_city: int
@@ -640,7 +679,9 @@ static func _adjacent_assault_pool(
 			var eligible := false
 			var already_reserved := false
 			if army.state == Army.State.IDLE and army.location_city == neighbor:
-				eligible = not _must_remain_at_logistics_hub(view, threat, army)
+				eligible = not _must_remain_at_logistics_hub(
+					view, snapshot, threat, army
+				)
 			elif (
 				army.state == Army.State.HOLDING
 				and (
@@ -704,11 +745,20 @@ static func _wait_for_assault_sync(pool: Dictionary, army: Army) -> bool:
 
 static func _must_remain_at_logistics_hub(
 	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	army: Army
 ) -> bool:
 	var city_id := army.location_city
-	var required := required_logistics_garrison(view, threat, city_id)
+	if city_id < 0 or city_id >= view.state.cities.size():
+		return false
+	var city := view.state.cities[city_id]
+	# 内部粮道使用高优先级增援和命令承诺期，不硬锁整支不可拆分军队。
+	if city_id != view.capital_city_id and not city.has_warehouse:
+		return false
+	var required := required_logistics_garrison(
+		view, snapshot, threat, city_id
+	)
 	if required <= 0.0:
 		return false
 	return stationed_power_at(view, city_id, army) < required
@@ -716,6 +766,7 @@ static func _must_remain_at_logistics_hub(
 
 static func required_logistics_garrison(
 	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	city_id: int
 ) -> float:
@@ -739,7 +790,45 @@ static func required_logistics_garrison(
 		):
 			return 3000.0
 		return maxf(3000.0, future_threat)
-	return 0.0
+	var importance := snapshot.supply_importance_at(city_id)
+	if (
+		not view.supply_corridor_defense_enabled
+		or not _corridor_response_strategically_affordable(view)
+		or importance < SUPPLY_CORRIDOR_MIN_IMPORTANCE
+	):
+		return 0.0
+	var corridor_threat := maxf(
+		future_threat,
+		snapshot.potential_threat_at(city_id)
+	)
+	if corridor_threat < SUPPLY_CORRIDOR_THREAT_FLOOR:
+		return 0.0
+	return minf(
+		maxf(
+			SUPPLY_CORRIDOR_GARRISON_BASE
+				+ SUPPLY_CORRIDOR_GARRISON_SCALE * importance,
+			corridor_threat * (0.75 + importance * 0.50)
+		),
+		SUPPLY_CORRIDOR_GARRISON_MAX
+	)
+
+
+static func _corridor_response_strategically_affordable(
+	view: AiWorldView
+) -> bool:
+	var friendly_power := 0.0
+	for army in view.friendly_armies:
+		friendly_power += ArmyPower.effective(army)
+	var enemy_power := 0.0
+	for army in view.enemy_armies:
+		enemy_power += ArmyPower.effective(army)
+	if enemy_power <= 0.0:
+		return false
+	var ratio := friendly_power / enemy_power
+	return (
+		ratio >= SUPPLY_CORRIDOR_POWER_RATIO_MIN
+		and ratio <= SUPPLY_CORRIDOR_POWER_RATIO_MAX
+	)
 
 
 static func _has_immediate_enemy_access(view: AiWorldView, city_id: int) -> bool:
@@ -836,7 +925,7 @@ static func _choose_holding(
 			float(garrison_size) * Combat.SIEGE_RATIO_MIN * SIEGE_COMMIT_MARGIN
 		))
 		var pool := _adjacent_assault_pool(
-			view, threat, coordinator, enemy_endpoint
+			view, snapshot, threat, coordinator, enemy_endpoint
 		)
 		if _wait_for_assault_sync(pool, army):
 			return ActionCandidate.make(

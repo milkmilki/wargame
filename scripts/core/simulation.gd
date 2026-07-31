@@ -65,6 +65,8 @@ var ai_policy_overrides: Dictionary = {}
 var ai_assault_participant_ratio_overrides: Dictionary = {}
 ## A/B 注入点：false 复现同优先级军队按 id 而非主力优先决策。
 var ai_tactical_decision_order_overrides: Dictionary = {}
+## A/B 注入点：false 关闭粮道桥梁/割点的守备与增援需求。
+var ai_supply_corridor_defense_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的静态进攻评分。
 var ai_strategic_planning_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的 60 天传播威胁守备策略。
@@ -929,6 +931,9 @@ func _ai_assign_targets() -> void:
 		view.adaptive_garrison_enabled = bool(
 			ai_adaptive_garrison_overrides.get(nation.id, true)
 		)
+		view.supply_corridor_defense_enabled = bool(
+			ai_supply_corridor_defense_overrides.get(nation.id, true)
+		)
 		if (
 			not _ai_strategy_cache.has(nation.id)
 			or _ai_strategy_revision.get(nation.id, []) != [
@@ -951,6 +956,9 @@ func _ai_assign_targets() -> void:
 			view.adaptive_garrison_enabled = bool(
 				ai_adaptive_garrison_overrides.get(nation.id, true)
 			)
+			view.supply_corridor_defense_enabled = bool(
+				ai_supply_corridor_defense_overrides.get(nation.id, true)
+			)
 			threat = ThreatField.build(view)
 		var strategic_orders_changed := false
 		if nation.war_preparation_target_nation >= 0:
@@ -967,6 +975,9 @@ func _ai_assign_targets() -> void:
 			)
 			view.adaptive_garrison_enabled = bool(
 				ai_adaptive_garrison_overrides.get(nation.id, true)
+			)
+			view.supply_corridor_defense_enabled = bool(
+				ai_supply_corridor_defense_overrides.get(nation.id, true)
 			)
 			threat = ThreatField.build(view)
 		var coordinator := ArmyCoordinator.new()
@@ -1101,7 +1112,7 @@ func _ai_manage_force_structure(
 			if not _is_available_recruitment_hub(view.nation_id, warehouse.id):
 				continue
 			var required := UtilityAI.required_logistics_garrison(
-				view, threat, warehouse.id
+				view, snapshot, threat, warehouse.id
 			)
 			var deficit := required - UtilityAI.stationed_power_at(
 				view, warehouse.id

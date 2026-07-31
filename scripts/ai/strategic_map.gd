@@ -10,6 +10,8 @@ var edge_value: Dictionary = {}            ## normalized edge key -> float
 var bridge_impact: Dictionary = {}         ## edge key -> 被切断友城价值
 var articulation_impact: Dictionary = {}   ## city_id -> 被切断友城价值
 var corridor_flow: Dictionary = {}         ## edge key -> 粮仓到前线的路径计数
+var supply_corridor_importance: Dictionary = {} ## city_id -> 0~1 粮道节点重要度
+var critical_supply_cities: Array[int] = []
 var frontier_edges: Array[Edge] = []
 var frontier_cities: Array[int] = []
 var frontier_enemy_cities: Array[int] = []
@@ -317,6 +319,9 @@ func _finalize_edge_values() -> void:
 	var max_flow := 1.0
 	for value in corridor_flow.values():
 		max_flow = maxf(max_flow, float(value))
+	var max_bridge_impact := 0.001
+	for value in bridge_impact.values():
+		max_bridge_impact = maxf(max_bridge_impact, float(value))
 	for edge in _state.edges:
 		var key := _edge_key(edge.city_a, edge.city_b)
 		var owner_a := _state.cities[edge.city_a].owner_nation
@@ -336,6 +341,35 @@ func _finalize_edge_values() -> void:
 			value += 1.0 + edge.danger * 2.0
 		value += 2.0 * float(potential_edge_threat.get(key, 0.0))
 		edge_value[key] = value
+		var normalized_flow := (
+			float(corridor_flow.get(key, 0.0)) / max_flow
+		)
+		if normalized_flow <= 0.0:
+			continue
+		var bridge_share := clampf(
+			float(bridge_impact.get(key, 0.0)) / max_bridge_impact,
+			0.0,
+			1.0
+		)
+		# 只有粮流与桥梁属性同时成立才形成硬守备需求。
+		# 非桥梁高流量道路仍保留 edge_value 加分，但不钉死常驻军。
+		var importance := clampf(
+			normalized_flow * bridge_share,
+			0.0,
+			1.0
+		)
+		for city_id in [edge.city_a, edge.city_b]:
+			if _state.cities[city_id].owner_nation != nation_id:
+				continue
+			supply_corridor_importance[city_id] = maxf(
+				float(supply_corridor_importance.get(city_id, 0.0)),
+				importance
+			)
+	for city_id_value in supply_corridor_importance:
+		var city_id := int(city_id_value)
+		if float(supply_corridor_importance[city_id]) >= 0.50:
+			critical_supply_cities.append(city_id)
+	critical_supply_cities.sort()
 
 
 func _compute_offensive_values(view: AiWorldView) -> void:
@@ -454,6 +488,10 @@ func potential_threat_at(city_id: int) -> float:
 
 func potential_threat_of_edge(a: int, b: int) -> float:
 	return float(potential_edge_threat.get(_edge_key(a, b), 0.0))
+
+
+func supply_importance_at(city_id: int) -> float:
+	return float(supply_corridor_importance.get(city_id, 0.0))
 
 
 static func _edge_key(a: int, b: int) -> int:

@@ -2387,16 +2387,118 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	view = AiWorldView.build(gs, 0)
 	threat = ThreatField.build(view)
 	var current_required := UtilityAI.required_logistics_garrison(
-		view, threat, capital_id
+		view, snapshot, threat, capital_id
 	)
 	view.adaptive_garrison_enabled = false
 	var legacy_required := UtilityAI.required_logistics_garrison(
-		view, threat, capital_id
+		view, snapshot, threat, capital_id
 	)
 	_check(
 		_approx(current_required, 5000.0) and legacy_required > current_required,
 		"非前线首都不应把两跳外传播威胁全部折算为常驻军：new=%.1f old=%.1f"
 			% [current_required, legacy_required]
+	)
+
+	var corridor_state := GameState.new()
+	corridor_state.generate_grid_world(7003)
+	corridor_state.armies.clear()
+	for city in corridor_state.cities:
+		city.owner_nation = 0
+	corridor_state.cities[4].owner_nation = 1
+	for corridor_edge in corridor_state.edges:
+		corridor_edge.max_throughput = 0
+	for pair in [[0, 1], [1, 2], [2, 3], [3, 4], [0, 8]]:
+		var open_edge := corridor_state.edge_of(pair[0], pair[1])
+		open_edge.max_throughput = 2
+		open_edge.distance = 1
+		open_edge.danger = 0.1
+	_set_single_warehouse(corridor_state, 0, 0, 5000)
+	var warehouse_guard := _make_army(936, 0, 6000, 10, 10)
+	warehouse_guard.location_city = 0
+	warehouse_guard.move_from = 0
+	var corridor_guard := _make_army(937, 0, 2000, 10, 10)
+	corridor_guard.location_city = 2
+	corridor_guard.move_from = 2
+	var frontline_guard := _make_army(938, 0, 15000, 10, 10)
+	frontline_guard.location_city = 3
+	frontline_guard.move_from = 3
+	var corridor_mobile := _make_army(939, 0, 4000, 10, 10)
+	corridor_mobile.location_city = 8
+	corridor_mobile.move_from = 8
+	var corridor_main_force := _make_army(941, 0, 15000, 10, 10)
+	corridor_main_force.location_city = 8
+	corridor_main_force.move_from = 8
+	var corridor_enemy := _make_army(940, 1, 20000, 10, 10)
+	corridor_enemy.location_city = 4
+	corridor_enemy.move_from = 4
+	corridor_state.armies.append_array([
+		warehouse_guard,
+		corridor_guard,
+		frontline_guard,
+		corridor_mobile,
+		corridor_enemy,
+	])
+	var corridor_view := AiWorldView.build(corridor_state, 0)
+	var corridor_snapshot := StrategicMapSnapshot.build(corridor_view)
+	var corridor_threat := ThreatField.build(corridor_view)
+	_check(
+		corridor_snapshot.critical_supply_cities.has(1)
+		and corridor_snapshot.critical_supply_cities.has(2)
+		and corridor_snapshot.supply_importance_at(2)
+			>= UtilityAI.SUPPLY_CORRIDOR_MIN_IMPORTANCE,
+		"粮仓到前线的唯一通路节点必须被识别为关键粮道"
+	)
+	var corridor_required := UtilityAI.required_logistics_garrison(
+		corridor_view,
+		corridor_snapshot,
+		corridor_threat,
+		2
+	)
+	_check(
+		corridor_required > ArmyPower.effective(corridor_guard),
+		"受威胁粮道节点应计算出超过现有守军的明确守备缺口"
+	)
+	var corridor_reinforcement := UtilityAI.choose(
+		corridor_view,
+		corridor_snapshot,
+		corridor_threat,
+		ArmyCoordinator.new(),
+		corridor_mobile
+	)
+	_check(
+		corridor_reinforcement.kind == ActionCandidate.Kind.REINFORCE
+		and corridor_reinforcement.target_city in [1, 2]
+		and corridor_reinforcement.reason.contains("粮道"),
+		"前线已有守军时，后方机动军应增援即将被截断的内部粮道：kind=%d target=%d reason=%s"
+			% [
+				corridor_reinforcement.kind,
+				corridor_reinforcement.target_city,
+				corridor_reinforcement.reason,
+			]
+	)
+	var main_force_order := UtilityAI.choose(
+		corridor_view,
+		corridor_snapshot,
+		corridor_threat,
+		ArmyCoordinator.new(),
+		corridor_main_force
+	)
+	_check(
+		not (
+			main_force_order.kind == ActionCandidate.Kind.REINFORCE
+			and main_force_order.target_city in [1, 2]
+		),
+		"内部粮道缺口不得抽调超过5000战力的前线主力"
+	)
+	corridor_view.supply_corridor_defense_enabled = false
+	_check(
+		UtilityAI.required_logistics_garrison(
+			corridor_view,
+			corridor_snapshot,
+			corridor_threat,
+			2
+		) == 0.0,
+		"A/B 当前 AI 对照开关应只关闭新增粮道守备需求"
 	)
 
 func _test_ai_encirclement_breakout_and_relief() -> void:
@@ -2434,7 +2536,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	var threat := ThreatField.build(view)
 	var coordinator := ArmyCoordinator.new()
 	var pool := UtilityAI._adjacent_assault_pool(
-		view, threat, coordinator, target_id
+		view, snapshot, threat, coordinator, target_id
 	)
 	_check(
 		int(pool["directions"]) == 2
