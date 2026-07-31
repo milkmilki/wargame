@@ -227,11 +227,35 @@ static func _attack_candidate(
 		var enemy_power := threat.threat_at(city_id) + ArmyPower.city_defense(city)
 		var committed := coordinator.power_reserved(city_id)
 		var relief_value := _blockade_relief_value(view, city_id)
-		var attack_power := power + committed + 0.35 * threat.support_at(start)
+		var participant_power := power
+		if (
+			is_adjacent_participant
+			and _enemy_power_on_edge(
+				view,
+				start,
+				city_id
+			) > 0.0
+		):
+			var approach_edge := view.state.edge_of(
+				start,
+				city_id
+			)
+			if approach_edge != null:
+				participant_power *= Combat.attack_multiplier(
+					approach_edge.danger
+				)
+		var attack_power := (
+			participant_power
+			+ committed
+			+ 0.35 * threat.support_at(start)
+		)
 		if is_adjacent_participant:
 			attack_power = maxf(attack_power, float(pool["power"]))
 		var ratio := attack_power / maxf(enemy_power, 1.0)
-		var participant_ratio := power / maxf(enemy_power, 1.0)
+		var participant_ratio := participant_power / maxf(
+			enemy_power,
+			1.0
+		)
 		if participant_ratio < minimum_participant_ratio:
 			continue
 		if (
@@ -483,6 +507,15 @@ static func _adjacent_assault_pool(
 		var edge := view.state.edge_of(target_city, neighbor)
 		if edge == null or edge.max_throughput <= 0:
 			continue
+		var edge_attack_multiplier := 1.0
+		if _enemy_power_on_edge(
+			view,
+			target_city,
+			neighbor
+		) > 0.0:
+			edge_attack_multiplier = Combat.attack_multiplier(
+				edge.danger
+			)
 		var has_direction := false
 		for army in view.friendly_armies:
 			if army.size <= 0 or participants.has(army.id):
@@ -531,7 +564,10 @@ static func _adjacent_assault_pool(
 			has_direction = true
 			if not already_reserved:
 				total_size += army.size
-				total_power += ArmyPower.effective(army)
+				total_power += (
+					ArmyPower.effective(army)
+					* edge_attack_multiplier
+				)
 		if has_direction:
 			directions[neighbor] = true
 	return {
@@ -739,11 +775,20 @@ static func _choose_holding(
 			threat.threat_at(enemy_endpoint) * 0.35,
 			direct_edge_enemy
 		)
-		var local_ratio := maxf(ArmyPower.effective(army), float(pool["power"])) / maxf(
+		var held_edge := view.state.edge_of(
+			army.move_from,
+			army.move_to
+		)
+		var own_attack_power := ArmyPower.effective(army)
+		if held_edge != null and direct_edge_enemy > 0.0:
+			own_attack_power *= Combat.attack_multiplier(
+				held_edge.danger
+			)
+		var local_ratio := maxf(own_attack_power, float(pool["power"])) / maxf(
 			projected_enemy + ArmyPower.city_defense(target_city),
 			1.0
 		)
-		var participant_ratio := ArmyPower.effective(army) / maxf(
+		var participant_ratio := own_attack_power / maxf(
 			projected_enemy + ArmyPower.city_defense(target_city),
 			1.0
 		)

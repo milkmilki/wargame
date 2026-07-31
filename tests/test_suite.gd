@@ -89,6 +89,18 @@ func _test_world_generation() -> void:
 		gs.edges.size() >= 63 and gs.edges.size() < 160,
 		"真实地图应使用稀疏局部图，边数实为 %d" % gs.edges.size()
 	)
+	var chokepoint_count := 0
+	for edge in gs.edges:
+		if (
+			edge.max_throughput > 0
+			and edge.danger
+				>= Combat.CHOKEPOINT_DANGER_THRESHOLD
+		):
+			chokepoint_count += 1
+	_check(
+		chokepoint_count > 0,
+		"真实地图至少应生成一条可通行高险关隘"
+	)
 	_check(gs.armies.size() == 64, "初始军队数应为 64，实为 %d" % gs.armies.size())
 	_check(gs.nations.size() == 4, "国家数应为 4")
 	var initial_peace := true
@@ -427,6 +439,21 @@ func _test_terrain_multiplier() -> void:
 		"danger=0 时攻防均不应受惩罚")
 	_check(_approx(Combat.attack_multiplier(danger), attack),
 		"攻击倍率不得随驻防时间或其他状态变化")
+	_check(
+		_approx(
+			Combat.attack_multiplier(
+				Combat.CHOKEPOINT_DANGER_THRESHOLD
+			),
+			Combat.CHOKEPOINT_ATTACK_MULTIPLIER
+		),
+		"高险关隘应把进攻方攻击倍率压低到25%%"
+	)
+	_check(
+		Combat.attack_multiplier(
+			Combat.CHOKEPOINT_DANGER_THRESHOLD - 0.01
+		) > Combat.CHOKEPOINT_ATTACK_MULTIPLIER,
+		"关隘级惩罚只能作用于少数高危险道路"
+	)
 
 # ------------------------------------------------------------------ 3. 战斗基础
 
@@ -666,9 +693,12 @@ func _test_time_layering() -> void:
 	for n in gs.nations:
 		mid += n.treasury_gold
 	_check(mid == before, "1..29 天不应结算经济：%d -> %d" % [before, mid])
+	gs.cities[0].war_disruption_until_day = (
+		gs.day + Simulation.CITY_WAR_DISRUPTION_DAYS
+	)
 	var monthly := 0
 	for c in gs.cities:
-		monthly += c.gold_per_month
+		monthly += Simulation.city_gold_output(gs, c)
 	var war_upkeep := 0
 	for nation in gs.nations:
 		var troops := 0
@@ -695,6 +725,10 @@ func _test_time_layering() -> void:
 	sim2.setup(gs2)
 	var nation0 := gs2.nations[0]
 	var capital := gs2.cities[nation0.capital_city_id]
+	var disrupted_food_city := gs2.cities_of(0)[0]
+	disrupted_food_city.war_disruption_until_day = (
+		Simulation.CITY_WAR_DISRUPTION_DAYS
+	)
 	var f0 := capital.food_storage
 	var nation0_production := 0
 	for city in gs2.cities_of(0):
@@ -716,6 +750,8 @@ func _test_time_layering() -> void:
 	garrison_state.generate_grid_world(12346)
 	garrison_state.armies.clear()
 	var productive_city := garrison_state.cities[0]
+	productive_city.gold_per_month = 11
+	productive_city.food_per_half_year = 101
 	var base_output := productive_city.food_per_half_year
 	var food_guard := _make_army(899, 0, 15000, 10, 10)
 	food_guard.location_city = productive_city.id
@@ -749,6 +785,59 @@ func _test_time_layering() -> void:
 		edge_output == base_output,
 		"驻边军不应降低城市产粮：base=%d actual=%d"
 			% [base_output, edge_output]
+	)
+	productive_city.war_disruption_until_day = (
+		Simulation.CITY_WAR_DISRUPTION_DAYS
+	)
+	garrison_state.day = (
+		Simulation.CITY_WAR_DISRUPTION_DAYS - 1
+	)
+	_check(
+		Simulation.city_food_output(
+			garrison_state,
+			productive_city
+		) == 50
+		and Simulation.city_gold_output(
+			garrison_state,
+			productive_city
+		) == 5,
+		"城市战争破坏期内粮食和金钱产量必须降为50%%"
+	)
+	garrison_state.day = Simulation.CITY_WAR_DISRUPTION_DAYS
+	_check(
+		Simulation.city_food_output(
+			garrison_state,
+			productive_city
+		) == base_output
+		and Simulation.city_gold_output(
+			garrison_state,
+			productive_city
+		) == productive_city.gold_per_month,
+		"城市战争结束满一年后应恢复完整粮食和金钱产量"
+	)
+	var restored_resource_report := DiplomacyAI.resource_report(
+		garrison_state,
+		productive_city.owner_nation
+	)
+	garrison_state.day = (
+		Simulation.CITY_WAR_DISRUPTION_DAYS - 1
+	)
+	var disrupted_resource_report := DiplomacyAI.resource_report(
+		garrison_state,
+		productive_city.owner_nation
+	)
+	_check(
+		float(disrupted_resource_report[
+			"monthly_gold_income"
+		]) < float(restored_resource_report[
+			"monthly_gold_income"
+		])
+		and float(disrupted_resource_report[
+			"monthly_food_production"
+		]) < float(restored_resource_report[
+			"monthly_food_production"
+		]),
+		"外交与军备预算必须使用战争破坏后的实际粮金产出"
 	)
 
 	# 3. 行军不瞬移：单日 step 上界 = 1/MARCH_DAYS_MIN = 1/10 = 0.1（规格 R1，distance=1 最快）。
@@ -1069,6 +1158,18 @@ func _test_siege_arrival_triggers() -> void:
 	sim._start_or_join_siege(besieger, city, edge)
 	var siege := sim._siege_battle_of(city)
 	_check(siege != null and not siege.has_garrison and siege.side_b.is_empty(), "空城应建纯围城 SIEGE")
+	_check(
+		city.war_disruption_until_day
+			== Simulation.CITY_WAR_DISRUPTION_DAYS,
+		"城市遭到攻击时应立即进入一年战争破坏期"
+	)
+	gs.day = 10
+	sim._advance_siege(siege)
+	_check(
+		city.war_disruption_until_day
+			== gs.day + Simulation.CITY_WAR_DISRUPTION_DAYS,
+		"围城持续期间应刷新破坏期，确保战后仍减产一年"
+	)
 
 	var enemy := _make_army(901, 1, 1000, 10)            # nation1 敌对来袭
 	enemy.move_from = 62; enemy.move_to = 63; enemy.move_progress = 1.0; enemy.on_edge = true
@@ -3089,6 +3190,28 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		guarded_candidate.kind != ActionCandidate.Kind.ATTACK,
 		"未满编 10000 人军队不得主动攻击同边满编 15000 人驻军：kind=%d reason=%s"
 			% [guarded_candidate.kind, guarded_candidate.reason]
+	)
+	understrength.size = 15000
+	full_enemy_holder.size = 10000
+	guarded_edge.danger = 0.9
+	edge_view = AiWorldView.build(edge_guard_state, 0)
+	var chokepoint_candidate := UtilityAI.choose(
+		edge_view,
+		StrategicMapSnapshot.build(edge_view),
+		ThreatField.build(edge_view),
+		ArmyCoordinator.new(),
+		understrength
+	)
+	_check(
+		chokepoint_candidate.kind
+			!= ActionCandidate.Kind.ATTACK,
+		(
+			"满编优势军也不得无视关隘75%%攻击惩罚强攻："
+			+ "kind=%d reason=%s"
+		) % [
+			chokepoint_candidate.kind,
+			chokepoint_candidate.reason,
+		]
 	)
 
 	var participant_state := GameState.new()

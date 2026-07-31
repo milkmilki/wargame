@@ -27,6 +27,8 @@ const MORALE_REINFORCE: float = 0.20       ## 增援集结上限系数：新友�
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
 const DEFENSE_DANGER_K: float = 0.40       ## 初始防御惩罚系数
 const HOLDING_TAU_DAYS: float = 30.0       ## 驻防适应时间常数
+const CHOKEPOINT_DANGER_THRESHOLD: float = 0.85
+const CHOKEPOINT_ATTACK_MULTIPLIER: float = 0.25
 
 # ---- 攻城累积（平衡规格 R2：确定性递减，守军清空后进入纯围城阶段）----
 const SIEGE_PROGRESS_REQUIRED: float = 100.0 ## 破城所需累积进度（满 100 破城）
@@ -62,7 +64,14 @@ static func siege_progress_after_interruption(progress: float, days: int = 1) ->
 
 ## danger 对攻击力的固定惩罚，不随驻防时间变化。
 static func attack_multiplier(danger: float) -> float:
-	return clampf(1.0 - ATTACK_DANGER_K * clampf(danger, 0.0, 1.0), 0.0, 1.0)
+	var normalized := clampf(danger, 0.0, 1.0)
+	if normalized >= CHOKEPOINT_DANGER_THRESHOLD:
+		return CHOKEPOINT_ATTACK_MULTIPLIER
+	return clampf(
+		1.0 - ATTACK_DANGER_K * normalized,
+		0.0,
+		1.0
+	)
 
 
 ## 防御方对地形的适应：惩罚随连续驻防天数指数衰减并无限趋近 0，但永不产生正加成。
@@ -92,8 +101,14 @@ static func resolve_round(battle: Battle, rng: RandomNumberGenerator) -> void:
 	var defense_pen_a := 1.0
 	var defense_pen_b := 1.0
 	if battle.kind == Battle.Kind.FIELD:
-		attack_pen_a = attack_multiplier(danger)
-		attack_pen_b = attack_multiplier(danger)
+		var terrain_attack_penalty := attack_multiplier(danger)
+		if battle.holding_side == 1:
+			attack_pen_b = terrain_attack_penalty
+		elif battle.holding_side == 2:
+			attack_pen_a = terrain_attack_penalty
+		else:
+			attack_pen_a = terrain_attack_penalty
+			attack_pen_b = terrain_attack_penalty
 		defense_pen_a = defense_multiplier(danger, battle.holding_days if battle.holding_side == 1 else 0.0)
 		defense_pen_b = defense_multiplier(danger, battle.holding_days if battle.holding_side == 2 else 0.0)
 

@@ -339,6 +339,12 @@ func _finalize_edge_values() -> void:
 			and (owner_a == nation_id or owner_b == nation_id)
 		):
 			value += 1.0 + edge.danger * 2.0
+		if (
+			edge.max_throughput > 0
+			and edge.danger
+				>= Combat.CHOKEPOINT_DANGER_THRESHOLD
+		):
+			value += 4.0
 		value += 2.0 * float(potential_edge_threat.get(key, 0.0))
 		edge_value[key] = value
 		var normalized_flow := (

@@ -273,7 +273,10 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 	var troops := _troop_count(state, nation_id)
 	var monthly_income := 0
 	for city in state.cities_of(nation_id):
-		monthly_income += city.gold_per_month
+		monthly_income += Simulation.city_gold_output(
+			state,
+			city
+		)
 	var food_plan := war_food_report(state, nation_id, troops)
 	var monthly_food_production := float(food_plan["monthly_food_production"])
 	var monthly_war_cost := int(ceil(
@@ -422,7 +425,10 @@ static func war_food_report(
 		posture = food_posture(state, nation_id)
 	var monthly_production := 0.0
 	for city in state.cities_of(nation_id):
-		monthly_production += float(city.food_per_half_year) / 6.0
+		monthly_production += (
+			float(Simulation.city_food_output(state, city))
+				/ 6.0
+		)
 	var current_monthly_demand := maxf(
 		nation.food_demand_ema,
 		float(current_troops)

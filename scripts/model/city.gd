@@ -24,3 +24,4 @@ var has_warehouse: bool = false            ## 是否设有粮仓（当前仅首�
 var food_storage: int = 0
 
 var at_war: bool = false                  ## 是否陷于战争
+var war_disruption_until_day: int = 0     ## 城市战斗结束后粮食/金钱减产截止日

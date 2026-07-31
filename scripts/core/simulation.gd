@@ -25,6 +25,8 @@ const HOLDING_STARVE_DECAY: int = 2        ## 完全断粮时每天损失的驻�
 const CITY_GARRISON_CAPACITY_PER_MANPOWER: float = 1000.0
 const CITY_GARRISON_FOOD_PENALTY_RATE: float = 0.20
 const CITY_GARRISON_FOOD_PENALTY_MAX: float = 0.30
+const CITY_WAR_DISRUPTION_DAYS: int = 365
+const CITY_WAR_OUTPUT_MULTIPLIER: float = 0.50
 ## 撤退驻城恢复每月消耗：复用普通驻军月耗口径（size × FOOD_PER_CAPITA）。
 ## 资源不足时按实际供给比例恢复；士气回满或本城粮尽后解除 RECOVERING。
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
@@ -161,7 +163,10 @@ func _advance_day() -> void:
 func _resolve_economy() -> void:
 	for city in state.cities:
 		var nation := state.nations[city.owner_nation]
-		nation.treasury_gold += city.gold_per_month
+		nation.treasury_gold += city_gold_output(
+			state,
+			city
+		)
 		nation.manpower_pool += city.manpower_per_month
 	_resolve_war_finance()
 	if state.day % DAYS_PER_HALF_YEAR == 0:
@@ -181,10 +186,46 @@ static func city_food_output(
 	game_state: GameState,
 	city: City
 ) -> int:
-	return city_food_output_for_garrison(
+	var garrison_output := city_food_output_for_garrison(
 		city,
 		city_garrison_troops(game_state, city)
 	)
+	return _apply_city_war_disruption(
+		game_state,
+		city,
+		garrison_output
+	)
+
+
+static func city_gold_output(
+	game_state: GameState,
+	city: City
+) -> int:
+	return _apply_city_war_disruption(
+		game_state,
+		city,
+		city.gold_per_month
+	)
+
+
+static func city_war_disrupted(
+	game_state: GameState,
+	city: City
+) -> bool:
+	return game_state.day < city.war_disruption_until_day
+
+
+static func _apply_city_war_disruption(
+	game_state: GameState,
+	city: City,
+	output: int
+) -> int:
+	if not city_war_disrupted(game_state, city):
+		return maxi(output, 0)
+	return maxi(int(floor(
+		float(output)
+			* CITY_WAR_OUTPUT_MULTIPLIER
+	)), 0)
 
 
 static func city_food_output_for_garrison(
@@ -234,14 +275,22 @@ static func city_garrison_food_loss(
 		city
 	)
 	return (
-		city_food_output_for_garrison(
+		_apply_city_war_disruption(
+			game_state,
 			city,
-			current_troops
+			city_food_output_for_garrison(
+				city,
+				current_troops
+			)
 		)
-		- city_food_output_for_garrison(
+		- _apply_city_war_disruption(
+			game_state,
 			city,
-			current_troops
-				+ maxi(additional_troops, 0)
+			city_food_output_for_garrison(
+				city,
+				current_troops
+					+ maxi(additional_troops, 0)
+			)
 		)
 	)
 
@@ -2541,6 +2590,7 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		siege = state.new_battle(Battle.Kind.SIEGE)
 		siege.edge = edge
 		siege.city = city
+		_mark_city_war_disruption(city)
 		var length := float(maxi(edge.distance, 1))
 		siege.contact_dist_a = length   # 围城方在城墙 dist=L（端点，无地形惩罚）
 		siege.contact_dist_b = 0.0      # 守军城中 dist=0（端点，无地形惩罚）
@@ -2595,11 +2645,20 @@ func _resolve_battles() -> void:
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
 
 
+func _mark_city_war_disruption(city: City) -> void:
+	city.war_disruption_until_day = maxi(
+		city.war_disruption_until_day,
+		state.day + CITY_WAR_DISRUPTION_DAYS
+	)
+
+
 ## SIEGE 状态机（每天一 tick）。三阶段：
 ##  1) 守军抵抗：resolve_round 削守军。守军歼灭≠破城——转纯围城；攻方溃则围城失败。
 ##  2) 城下决斗：side_b 为敌对挑战者（无城防加成），分胜负后胜方独占围城。
 ##  3) 纯围城：无对抗，掷骰累积 siege_progress，达阈值破城易主。
 func _advance_siege(battle: Battle) -> void:
+	if battle.city != null:
+		_mark_city_war_disruption(battle.city)
 	battle.prune_dead()
 	_reconcile_siege_city_defenders(battle)
 	var atk_alive := battle.side_size(battle.side_a) > 0
