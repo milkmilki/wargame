@@ -9,12 +9,17 @@ var nation_id: int
 var day: int
 var threat_by_city: Dictionary = {}
 var support_by_city: Dictionary = {}
+var travel_distance_cache: Dictionary = {}
 
 
-static func build(view: AiWorldView) -> ThreatField:
+static func build(
+	view: AiWorldView,
+	shared_travel_cache: Dictionary = {}
+) -> ThreatField:
 	var field := ThreatField.new()
 	field.nation_id = view.nation_id
 	field.day = view.day
+	field.travel_distance_cache = shared_travel_cache
 	for city in view.state.cities:
 		field.threat_by_city[city.id] = 0.0
 		field.support_by_city[city.id] = 0.0
@@ -97,11 +102,14 @@ func _accumulate(
 					)
 
 
-static func _travel_days_field(
+func _travel_days_field(
 	state: GameState,
 	start: int,
 	required_manpower: int
 ) -> Dictionary:
+	var cache_key := "%d:%d" % [start, required_manpower]
+	if travel_distance_cache.has(cache_key):
+		return travel_distance_cache[cache_key]
 	var dist := {start: 0.0}
 	var heap: Array = []
 	_heap_push(heap, [0.0, start])
@@ -126,6 +134,7 @@ static func _travel_days_field(
 			if next_dist < float(dist.get(neighbor, INF)):
 				dist[neighbor] = next_dist
 				_heap_push(heap, [next_dist, neighbor])
+	travel_distance_cache[cache_key] = dist
 	return dist
 
 

@@ -24,6 +24,16 @@ var campaign_next_offensive_day: int = -1
 var campaign_offensive_count: int = 0
 ## 当前波次的具体战役计划：army_id -> target_city_id。
 var campaign_attack_assignments: Dictionary = {}
+## 持续攻势梯队：army_id -> echelon_index；每个目标从第 0 梯队依次投入。
+var campaign_attack_echelons: Dictionary = {}
+## target_city_id -> 当前已激活梯队；-1 表示计划已生成但尚未发动。
+var campaign_active_echelons: Dictionary = {}
+## 已实际收到攻击命令的军队集合。用于区分待命军与因道路容量暂未出发的当前梯队。
+var campaign_launched_armies: Dictionary = {}
+## target_city_id -> 当前梯队开始日，供持续攻势状态与调试展示使用。
+var campaign_echelon_started_days: Dictionary = {}
+## 整轮攻势共享的备战倍率；后续梯队在实际投入时才开始计算 30 天持续期。
+var campaign_preparation_multiplier: float = 1.0
 var campaign_plan_targets: Array[int] = []
 var campaign_plan_wave: int = -1
 var campaign_plan_primary_city: int = -1

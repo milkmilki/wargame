@@ -133,8 +133,7 @@ static func _retreat_candidate(
 	if local_ratio >= RETREAT_ENTER_RATIO * caution:
 		return null
 	var start := army.location_city
-	var field := Pathfinding.dijkstra_field(
-		view.state,
+	var field := view.path_field(
 		start,
 		view.nation_id,
 		false,
@@ -193,11 +192,10 @@ static func _attack_candidate(
 	army: Army,
 	minimum_participant_ratio: float
 ) -> ActionCandidate:
-	if army.morale < 0.5 or Pathfinding.nearest_supply_city(view.state, army)[0] == -1:
+	if army.morale < 0.5 or view.nearest_supply_city(army)[0] == -1:
 		return null
 	var start := army.location_city
-	var field := Pathfinding.dijkstra_field(
-		view.state,
+	var field := view.path_field(
 		start,
 		-1,
 		false,
@@ -208,8 +206,7 @@ static func _attack_candidate(
 	var dist: Dictionary = field["dist"]
 	var access_dist: Dictionary = {}
 	if view.executable_attack_paths_enabled:
-		access_dist = Pathfinding.dijkstra_field(
-			view.state,
+		access_dist = view.path_field(
 			start,
 			view.nation_id,
 			false,
@@ -257,7 +254,7 @@ static func _attack_candidate(
 				== view.nation_id
 		)
 		var garrison_size := 0
-		for defender in view.state.armies_at_city(city_id):
+		for defender in view.armies_at_city(city_id):
 			garrison_size += defender.size
 		if not legal_reclamation:
 			garrison_size = maxi(
@@ -398,8 +395,7 @@ static func _merge_candidate(
 	var start := army.location_city
 	if snapshot.frontier_cities.has(start):
 		return null
-	var field := Pathfinding.dijkstra_field(
-		view.state,
+	var field := view.path_field(
 		start,
 		view.nation_id,
 		false,
@@ -420,6 +416,12 @@ static func _merge_candidate(
 			continue
 		var other_power := ArmyPower.effective(other)
 		if other_power < own_power:
+			continue
+		# 跨城合并必须形成严格单向偏序，否则两个等战力军会互相追逐
+		# 对方的上一周期位置。低 ID 为稳定接收端，目标链不可能成环。
+		if other.id >= army.id:
+			continue
+		if other.max_size - other.size < army.size:
 			continue
 		var local_enemy := threat.threat_at(other.location_city)
 		var threshold_gain := 1.0 if (
@@ -750,16 +752,7 @@ static func stationed_power_at(
 	city_id: int,
 	excluded: Army = null
 ) -> float:
-	var total := 0.0
-	for other in view.friendly_armies:
-		if other == excluded or other.size <= 0 or other.on_edge:
-			continue
-		if (
-			other.location_city == city_id
-			and other.state in [Army.State.IDLE, Army.State.RECOVERING]
-		):
-			total += ArmyPower.effective(other)
-	return total
+	return view.stationed_power_at(city_id, excluded)
 
 
 static func _choose_holding(
@@ -834,7 +827,7 @@ static func _choose_holding(
 		and army.supply_ratio >= 0.75
 	):
 		var garrison_size := 0
-		for defender in view.state.armies_at_city(enemy_endpoint):
+		for defender in view.armies_at_city(enemy_endpoint):
 			garrison_size += defender.size
 		garrison_size = maxi(garrison_size, target_city.defense)
 		var required_size := int(ceil(

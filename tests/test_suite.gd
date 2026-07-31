@@ -2677,7 +2677,7 @@ func _test_ai_strategic_map_and_threat() -> void:
 	_check(snapshot.articulation_impact.has(1),
 		"线性三城中间城市 1 应识别为 articulation city")
 
-	var friendly := _make_army(920, 0, 500, 10)
+	var friendly := _make_army(920, 0, 15000, 10)
 	friendly.location_city = 0
 	friendly.move_from = 0
 	friendly.state = Army.State.IDLE
@@ -2688,6 +2688,23 @@ func _test_ai_strategic_map_and_threat() -> void:
 	gs.armies.append_array([friendly, enemy])
 	view = AiWorldView.build(gs, 0)
 	var threat := ThreatField.build(view)
+	var frontier_plan := CityDefensePlan.build(
+		view,
+		snapshot,
+		threat
+	)
+	var all_frontiers_screened := true
+	for frontier_city in snapshot.frontier_cities:
+		all_frontiers_screened = (
+			all_frontiers_screened
+			and frontier_plan.requirement_at(frontier_city)
+				>= CityDefensePlan.FRONTIER_SCREEN_POWER
+					* CityDefensePlan.REQUIRED_PRESSURE_SHARE
+		)
+	_check(
+		all_frontiers_screened,
+		"所有实际前线城市都应获得最低驻防价值，不得只守少数高分要地"
+	)
 	_check(threat.threat_at(2) > threat.threat_at(1)
 		and threat.threat_at(1) > threat.threat_at(0),
 		"敌军威胁应随抵达时间衰减：c2=%.1f c1=%.1f c0=%.1f"
@@ -2870,6 +2887,64 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		ArmyCoordinator.merge_colocated(gs) == 0
 		and gs.armies.size() == 2,
 		"不同攻势倍率或截止日的军队不得合并并稀释限时状态"
+	)
+
+	gs.armies.clear()
+	var full_source := _make_army(938, 0, 5000, 10, 10)
+	full_source.max_size = 5000
+	full_source.location_city = 0
+	full_source.move_from = 0
+	var full_target := _make_army(939, 0, 15000, 10, 10)
+	full_target.max_size = 15000
+	full_target.location_city = 1
+	full_target.move_from = 1
+	gs.armies.append_array([full_source, full_target])
+	var full_view := AiWorldView.build(gs, 0)
+	var full_snapshot := StrategicMapSnapshot.build(full_view)
+	var full_threat := ThreatField.build(full_view)
+	_check(
+		UtilityAI._merge_candidate(
+			full_view,
+			full_snapshot,
+			full_threat,
+			ArmyCoordinator.new(),
+			full_source
+		) == null,
+		"目标军已满编时不得跨城聚集，避免多支满编军坍缩到同一位置"
+	)
+
+	gs.armies.clear()
+	var merge_anchor := _make_army(940, 0, 500, 10, 10)
+	merge_anchor.max_size = 15000
+	merge_anchor.location_city = 1
+	merge_anchor.move_from = 1
+	var merge_follower := _make_army(941, 0, 500, 10, 10)
+	merge_follower.max_size = 15000
+	merge_follower.location_city = 0
+	merge_follower.move_from = 0
+	gs.armies.append_array([merge_anchor, merge_follower])
+	var merge_view := AiWorldView.build(gs, 0)
+	var merge_snapshot := StrategicMapSnapshot.build(merge_view)
+	var merge_threat := ThreatField.build(merge_view)
+	var anchor_merge := UtilityAI._merge_candidate(
+		merge_view,
+		merge_snapshot,
+		merge_threat,
+		ArmyCoordinator.new(),
+		merge_anchor
+	)
+	var follower_merge := UtilityAI._merge_candidate(
+		merge_view,
+		merge_snapshot,
+		merge_threat,
+		ArmyCoordinator.new(),
+		merge_follower
+	)
+	_check(
+		anchor_merge == null
+		and follower_merge != null
+		and follower_merge.target_city == merge_anchor.location_city,
+		"等战力跨城合并必须按军队ID形成单向偏序，禁止互相追逐成环"
 	)
 
 	gs.armies.clear()
@@ -4850,6 +4925,104 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	plan_sim.free()
 
+	var echelon_state := GameState.new()
+	echelon_state.generate_grid_world(32009)
+	echelon_state.armies.clear()
+	for city in echelon_state.cities:
+		city.owner_nation = 0
+	var echelon_origin := 9
+	var echelon_target := 10
+	echelon_state.cities[echelon_target].owner_nation = 1
+	echelon_state.edge_of(
+		echelon_origin,
+		echelon_target
+	).max_manpower = 30000
+	echelon_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	for echelon_army_id in range(2):
+		var echelon_army := _make_army(
+			990 + echelon_army_id,
+			0,
+			15000,
+			10,
+			10
+		)
+		echelon_army.location_city = echelon_origin
+		echelon_army.move_from = echelon_origin
+		echelon_state.armies.append(echelon_army)
+	var echelon_sim := Simulation.new()
+	echelon_sim.setup(echelon_state)
+	var echelon_launched := echelon_sim._launch_campaign_offensive(
+		0,
+		echelon_target,
+		180
+	)
+	var echelon_nation := echelon_state.nations[0]
+	var lead_army: Army = null
+	var followup_army: Army = null
+	for army in echelon_state.armies:
+		var echelon := int(
+			echelon_nation.campaign_attack_echelons.get(
+				army.id,
+				-1
+			)
+		)
+		if echelon == 0:
+			lead_army = army
+		elif echelon == 1:
+			followup_army = army
+	_check(
+		echelon_launched
+		and lead_army != null
+		and lead_army.state == Army.State.MOVING
+		and followup_army != null
+		and followup_army.state == Army.State.IDLE
+		and not echelon_nation.campaign_launched_armies.has(
+			followup_army.id
+		),
+		"持续攻势首轮只能投入最小充分梯队，后续梯队必须在出发地待命"
+	)
+	echelon_state.day += 1
+	if lead_army != null:
+		echelon_sim._retreat(lead_army)
+	echelon_sim._advance_campaign_echelons()
+	_check(
+		lead_army != null
+		and lead_army.state == Army.State.RETREATING
+		and followup_army != null
+		and followup_army.state == Army.State.MOVING
+		and followup_army.ai_action == ActionCandidate.Kind.ATTACK
+		and followup_army.ai_target_city == echelon_target
+		and int(
+			echelon_nation.campaign_active_echelons.get(
+				echelon_target,
+				-1
+			)
+		) == 1
+		and int(
+			echelon_nation.campaign_echelon_started_days.get(
+				echelon_target,
+				-1
+			)
+		) == echelon_state.day,
+		"首攻梯队撤退后，下一梯队必须次日立即接替进攻而非等待90天"
+	)
+	_check(
+		followup_army != null
+		and _approx(
+			followup_army.offensive_attack_multiplier,
+			Simulation.offensive_preparation_multiplier(180)
+		)
+		and followup_army.offensive_bonus_until_day
+			== echelon_state.day
+				+ Simulation.OFFENSIVE_BONUS_DURATION_DAYS,
+		"后续梯队应继承整轮备战倍率，并从实际投入日计算持续期"
+	)
+	echelon_sim.free()
+
 	var defense_state := GameState.new()
 	defense_state.generate_grid_world(32007)
 	for defense_a in range(defense_state.nations.size()):
@@ -5102,6 +5275,110 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 		and concentrated_snapshot.potential_threat_at(observed_border)
 			> threat_before_concentration,
 		"中立邻国在某方向集中兵力后，守方必须提高该边境的预警和布防需求"
+	)
+	var depth_city := -1
+	for neighbor in gs.neighbors(observed_border):
+		if gs.cities[neighbor].owner_nation == 0:
+			depth_city = neighbor
+			break
+	var propagation_ratio := 0.0
+	if depth_city >= 0:
+		var propagation_view := AiWorldView.build(gs, 0)
+		var propagation_snapshot := StrategicMapSnapshot.new()
+		propagation_snapshot.city_value[observed_border] = 1.0
+		propagation_snapshot.city_value[depth_city] = 1.0
+		propagation_snapshot.potential_border_threat[
+			observed_border
+		] = 10000.0
+		propagation_snapshot.potential_border_threat[
+			depth_city
+		] = 1.0
+		var propagation_threat := ThreatField.new()
+		propagation_threat.threat_by_city[observed_border] = 10000.0
+		propagation_threat.threat_by_city[depth_city] = 1.0
+		var propagation_plan := CityDefensePlan.new()
+		propagation_plan.view = propagation_view
+		propagation_plan.snapshot = propagation_snapshot
+		propagation_plan.threat = propagation_threat
+		propagation_plan.frontline_distribution_enabled = true
+		propagation_plan.primary_frontline_cities[
+			observed_border
+		] = true
+		propagation_plan.frontline_cities[observed_border] = true
+		propagation_plan.frontline_cities[depth_city] = true
+		propagation_plan._normalize_frontline_requirements(10000.0)
+		propagation_ratio = (
+			float(
+				propagation_plan.frontline_allocation.get(
+					depth_city,
+					0.0
+				)
+			)
+			/ maxf(
+				float(
+					propagation_plan.frontline_allocation.get(
+						observed_border,
+						0.0
+					)
+				),
+				1.0
+			)
+		)
+	_check(
+		depth_city >= 0 and propagation_ratio > 0.5,
+		"二线城市即使已有微小背景危险，也必须继承相邻高压一线的行军衰减危险"
+	)
+	var balance_state := GameState.new()
+	balance_state.generate_grid_world(32010)
+	balance_state.armies.clear()
+	for city in balance_state.cities:
+		city.owner_nation = 0
+	for balance_a in range(balance_state.nations.size()):
+		for balance_b in range(
+			balance_a + 1,
+			balance_state.nations.size()
+		):
+			balance_state.set_diplomatic_relation(
+				balance_a,
+				balance_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	balance_state.cities[0].defense = 0
+	balance_state.cities[1].defense = 0
+	balance_state.edge_of(0, 1).max_manpower = 30000
+	for balance_army_id in range(4):
+		var balance_army := _make_army(
+			1100 + balance_army_id,
+			0,
+			5000,
+			10,
+			10
+		)
+		balance_army.max_size = 5000
+		balance_army.location_city = 0 if balance_army_id < 3 else 1
+		balance_army.move_from = balance_army.location_city
+		balance_state.armies.append(balance_army)
+	var balance_view := AiWorldView.build(balance_state, 0)
+	var balance_plan := CityDefensePlan.new()
+	balance_plan.view = balance_view
+	balance_plan.snapshot = StrategicMapSnapshot.new()
+	balance_plan.threat = ThreatField.new()
+	balance_plan.frontline_distribution_enabled = true
+	balance_plan.frontline_cities[0] = true
+	balance_plan.frontline_cities[1] = true
+	balance_plan.frontline_allocation[0] = 5000.0
+	balance_plan.frontline_allocation[1] = 5000.0
+	var saturation_rebalance := balance_plan.candidate_for(
+		balance_state.armies[0],
+		ArmyCoordinator.new()
+	)
+	_check(
+		saturation_rebalance != null
+		and saturation_rebalance.kind
+			== ActionCandidate.Kind.REINFORCE
+		and saturation_rebalance.target_city == 1
+		and saturation_rebalance.defensive_deployment,
+		"所有防区达标后仍应按覆盖/目标饱和度展开多余兵力，并纳入防御部署锁"
 	)
 	view = AiWorldView.build(gs, 0)
 	snapshot = concentrated_snapshot

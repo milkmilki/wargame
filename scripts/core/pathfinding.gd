@@ -277,6 +277,120 @@ static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
 	return result
 
 
+## 以粮仓为源反向构建国家补给网络。道路为无向图，因此结果与逐军从当前位置
+## 搜索粮仓完全等价，但每国每个粮仓只需计算一次距离场。
+static func build_supply_network(
+	state: GameState,
+	nation_id: int
+) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for owner in state.nations:
+		if not state.has_military_access(nation_id, owner.id):
+			continue
+		for warehouse in state.warehouse_cities_of(owner.id):
+			if (
+				warehouse.food_storage <= 0
+				or state.city_under_siege(warehouse.id)
+			):
+				continue
+			result.append({
+				"city_id": warehouse.id,
+				"owner_nation": owner.id,
+				"dist": _supply_loss_field(
+					state,
+					warehouse.id,
+					nation_id
+				)["dist"],
+			})
+	return result
+
+
+static func supply_sources_from_network(
+	state: GameState,
+	army: Army,
+	network: Array[Dictionary]
+) -> Array[Dictionary]:
+	var start := _origin_of(army)
+	if start < 0 or start >= state.cities.size():
+		return []
+	var start_city := state.cities[start]
+	if (
+		not army.on_edge
+		and state.city_under_siege(start)
+		and state.has_military_access(
+			army.owner_nation,
+			start_city.owner_nation
+		)
+	):
+		if (
+			start_city.has_warehouse
+			and start_city.food_storage > 0
+			and state.nations[
+				start_city.owner_nation
+			].warehouse_city_ids.has(start)
+		):
+			return [{
+				"city_id": start,
+				"owner_nation": start_city.owner_nation,
+				"loss": 0.0,
+			}]
+		return []
+	var edge: Edge = null
+	var edge_loss := 0.0
+	var progress := 0.0
+	if army.on_edge and army.move_to != -1:
+		edge = state.edge_of(army.move_from, army.move_to)
+		if edge == null:
+			return []
+		edge_loss = _supply_edge_loss(edge)
+		progress = clampf(army.move_progress, 0.0, 1.0)
+	var result: Array[Dictionary] = []
+	for source in network:
+		var dist: Dictionary = source["dist"]
+		var loss := INF
+		if edge == null:
+			loss = float(dist.get(start, INF))
+		else:
+			if state.has_military_access(
+				army.owner_nation,
+				state.cities[army.move_from].owner_nation
+			):
+				loss = minf(
+					loss,
+					progress * edge_loss
+						+ float(dist.get(army.move_from, INF))
+				)
+			if state.has_military_access(
+				army.owner_nation,
+				state.cities[army.move_to].owner_nation
+			):
+				loss = minf(
+					loss,
+					(1.0 - progress) * edge_loss
+						+ float(dist.get(army.move_to, INF))
+				)
+		if loss == INF:
+			continue
+		result.append({
+			"city_id": source["city_id"],
+			"owner_nation": source["owner_nation"],
+			"loss": loss,
+		})
+	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return (
+			float(a["loss"]) < float(b["loss"])
+			or (
+				is_equal_approx(
+					float(a["loss"]),
+					float(b["loss"])
+				)
+				and int(a["city_id"]) < int(b["city_id"])
+			)
+		)
+	)
+	return result
+
+
 ## 人口补员通路：与粮食补给共用控制区/争夺边规则，但不要求粮仓当前有粮。
 static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 	if army.owner_nation < 0 or army.owner_nation >= state.nations.size():

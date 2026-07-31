@@ -27,6 +27,10 @@ var directional_pressure: Dictionary = {} ## city_id -> {neighbor_id -> float}
 var relief_need: Dictionary = {}          ## city_id -> float
 var local_pressure: Dictionary = {}       ## city_id -> float
 var must_hold_cities: Dictionary = {}     ## city_id -> true
+var frontline_distribution_enabled: bool = false
+var primary_frontline_cities: Dictionary = {}
+var frontline_cities: Dictionary = {}
+var frontline_allocation: Dictionary = {}
 
 
 static func build(
@@ -118,6 +122,47 @@ func must_keep_at_city(
 	return coverage_without < requirement_at(city_id)
 
 
+func can_redeploy(
+	army: Army,
+	coordinator: ArmyCoordinator
+) -> bool:
+	if (
+		army == null
+		or army.size <= 0
+		or view.day < army.defensive_deployment_until_day
+	):
+		return false
+	if army.state == Army.State.IDLE:
+		var city_id := army.location_city
+		if not required_power.has(city_id):
+			return true
+		var coverage_without := _city_coverage(
+			city_id,
+			coordinator,
+			army
+		)
+		if (
+			posture_at(city_id) == Posture.EDGE
+			and preferred_edge_at(city_id) >= 0
+		):
+			coverage_without += (
+				coordinator.edge_defense_power_reserved(
+					city_id,
+					preferred_edge_at(city_id)
+				)
+			)
+		return coverage_without >= requirement_at(city_id)
+	if army.state == Army.State.HOLDING:
+		var anchor := army.move_from
+		if not view.state.has_military_access(
+			view.nation_id,
+			view.state.cities[anchor].owner_nation
+		):
+			anchor = army.move_to
+		return not required_power.has(anchor)
+	return false
+
+
 func _candidate_anchor_city(
 	candidate: ActionCandidate
 ) -> int:
@@ -193,6 +238,29 @@ func urgent_defense_at(city_id: int) -> bool:
 
 
 func _build() -> void:
+	var national_power := 0.0
+	for army in view.friendly_armies:
+		national_power += ArmyPower.effective(army)
+	for city_id in snapshot.frontier_cities:
+		primary_frontline_cities[city_id] = true
+	for city_id in snapshot.potential_frontier_cities:
+		primary_frontline_cities[city_id] = true
+	frontline_cities = primary_frontline_cities.duplicate()
+	var primary_frontline_ids := frontline_cities.keys()
+	primary_frontline_ids.sort()
+	for city_id_value in primary_frontline_ids:
+		var city_id := int(city_id_value)
+		for neighbor in view.state.neighbors(city_id):
+			if (
+				view.state.cities[neighbor].owner_nation
+				== view.nation_id
+			):
+				frontline_cities[neighbor] = true
+	frontline_distribution_enabled = (
+		not frontline_cities.is_empty()
+		and view.friendly_armies.size()
+			>= primary_frontline_cities.size()
+	)
 	for city in view.friendly_cities:
 		var pressures := _directional_pressure_at(city.id)
 		var direct_pressure := _enemy_power_inside(city.id)
@@ -291,6 +359,117 @@ func _build() -> void:
 		else:
 			posture_by_city[city.id] = Posture.EDGE
 			preferred_edge_by_city[city.id] = strongest_direction
+	_normalize_frontline_requirements(national_power)
+
+
+func _normalize_frontline_requirements(
+	national_power: float
+) -> void:
+	if (
+		not frontline_distribution_enabled
+		or national_power <= 0.0
+	):
+		return
+	var importance_raw := {}
+	var danger_raw := {}
+	var importance_total := 0.0
+	var danger_total := 0.0
+	var danger_square_total := 0.0
+	var city_ids := frontline_cities.keys()
+	city_ids.sort()
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		var importance := maxf(
+			snapshot.value_of_city(city_id),
+			0.01
+		) * (
+			1.0 + snapshot.supply_importance_at(city_id)
+		)
+		var danger := maxf(
+			threat.threat_at(city_id),
+			snapshot.potential_threat_at(city_id)
+		)
+		var pressures: Dictionary = directional_pressure.get(
+			city_id,
+			{}
+		)
+		for pressure in pressures.values():
+			danger += float(pressure)
+		# 二线的微小背景威胁不能屏蔽相邻一线的高压信号。始终取本地危险
+		# 与按响应时间衰减的一线危险最大值，使预备队自然分布在可及时回援的纵深。
+		for neighbor in view.state.neighbors(city_id):
+			if not primary_frontline_cities.has(neighbor):
+				continue
+			var edge := view.state.edge_of(city_id, neighbor)
+			if edge == null:
+				continue
+			var neighbor_danger := maxf(
+				threat.threat_at(neighbor),
+				snapshot.potential_threat_at(neighbor)
+			)
+			danger = maxf(
+				danger,
+				neighbor_danger * exp(
+					-_edge_travel_days(edge)
+						/ ThreatField.DECAY_DAYS
+				)
+			)
+		if (
+			danger <= 0.0
+			and primary_frontline_cities.has(city_id)
+		):
+			danger = FRONTIER_SCREEN_POWER
+		importance_raw[city_id] = importance
+		danger_raw[city_id] = danger
+		importance_total += importance
+		danger_total += danger
+		danger_square_total += danger * danger
+	if importance_total <= 0.0 or danger_total <= 0.0:
+		return
+	var combined_weights := {}
+	var combined_total := 0.0
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		var combined := sqrt(
+			float(importance_raw.get(city_id, 0.0))
+				/ importance_total
+			* float(danger_raw.get(city_id, 0.0))
+				/ danger_total
+		)
+		combined_weights[city_id] = combined
+		combined_total += combined
+	if combined_total <= 0.0:
+		return
+	var not_at_war := view.state.wars_of(
+		view.nation_id
+	).is_empty()
+	var aggregate_threat := sqrt(danger_square_total)
+	if not_at_war:
+		aggregate_threat = minf(
+			aggregate_threat,
+			national_power
+		)
+	var defense_budget := (
+		national_power * aggregate_threat
+		/ maxf(national_power + aggregate_threat, 1.0)
+	)
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		var allocation := (
+			defense_budget
+			* float(combined_weights[city_id])
+			/ combined_total
+		)
+		frontline_allocation[city_id] = allocation
+		if not_at_war:
+			required_power[city_id] = allocation
+		else:
+			required_power[city_id] = maxf(
+				requirement_at(city_id),
+				allocation
+			)
+		if not posture_by_city.has(city_id):
+			posture_by_city[city_id] = Posture.CITY
 
 
 func _friendly_local_power(city_id: int) -> float:
@@ -400,6 +579,8 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 
 
 func _requires_frontier_screen(city_id: int) -> bool:
+	if frontline_distribution_enabled:
+		return snapshot.frontier_cities.has(city_id)
 	var city := view.state.cities[city_id]
 	return (
 		city_id == view.capital_city_id
@@ -529,15 +710,12 @@ func _idle_candidate(
 					requirement_at(start)
 						- coverage_without_army
 				),
-				(
-					"城市 %d 面临多方向威胁，保留驻城预备队"
-					% start
-				),
+				"城市 %d 面临多方向威胁，保留驻城预备队"
+					% start,
 				start
 			)
 
-	var field := Pathfinding.dijkstra_field(
-		view.state,
+	var field := view.path_field(
 		start,
 		view.nation_id,
 		false,
@@ -584,7 +762,11 @@ func _idle_candidate(
 			best_city = city_id
 			best_deficit = deficit
 	if best_city == -1:
-		return null
+		return _frontline_balance_candidate(
+			army,
+			coordinator,
+			dist
+		)
 	if best_city == start:
 		if (
 			posture_at(best_city) == Posture.EDGE
@@ -606,6 +788,112 @@ func _idle_candidate(
 		ActionCandidate.Kind.REINFORCE,
 		best_score,
 		_defense_reason(best_city, best_deficit),
+		best_city
+	)
+	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+	candidate.defensive_deployment = true
+	return candidate
+
+
+func _frontline_balance_candidate(
+	army: Army,
+	coordinator: ArmyCoordinator,
+	dist: Dictionary
+) -> ActionCandidate:
+	if (
+		not frontline_distribution_enabled
+		or not view.state.wars_of(view.nation_id).is_empty()
+		or view.state.nations[
+			view.nation_id
+		].war_preparation_target_nation >= 0
+	):
+		return null
+	var source_target := float(
+		frontline_allocation.get(
+			army.location_city,
+			0.0
+		)
+	)
+	var source_after_move := 0.0
+	var source_ratio_before := 0.0
+	if frontline_cities.has(army.location_city):
+		var source_coverage := _effective_coverage(
+			army.location_city,
+			coordinator
+		)
+		source_after_move = (
+			source_coverage - ArmyPower.effective(army)
+		)
+		if (
+			source_after_move
+			< source_target * 1.10
+		):
+			return null
+		source_ratio_before = (
+			source_coverage / maxf(source_target, 1.0)
+		)
+	var best_city := -1
+	var best_score := -INF
+	var city_ids := frontline_cities.keys()
+	city_ids.sort()
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		if (
+			city_id == army.location_city
+			or float(dist.get(city_id, INF)) == INF
+		):
+			continue
+		var coverage := _effective_coverage(
+			city_id,
+			coordinator
+		)
+		var target_power := float(
+			frontline_allocation.get(city_id, 0.0)
+		)
+		if target_power <= 0.0:
+			continue
+		var target_ratio := coverage / target_power
+		var below_target_band := target_ratio < 0.75
+		var saturation_gap := source_ratio_before - target_ratio
+		if (
+			not below_target_band
+			and (
+				source_target <= 0.0
+				or source_ratio_before
+					< target_ratio * EDGE_SWITCH_PRESSURE_RATIO
+			)
+		):
+			continue
+		var normalized_need := maxf(
+			1.0 - target_ratio,
+			saturation_gap
+		)
+		if normalized_need <= 0.0:
+			continue
+		var score := (
+			20.0
+			+ 5.0 * normalized_need
+			- 0.05 * float(dist[city_id])
+		)
+		if (
+			score > best_score
+			or (
+				is_equal_approx(score, best_score)
+				and (
+					best_city == -1
+					or city_id < best_city
+				)
+			)
+		):
+			best_score = score
+			best_city = city_id
+	if best_city < 0:
+		return null
+	var candidate := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		best_score,
+		"前线防区机动预备队向低覆盖城市 %d 展开"
+			% best_city,
 		best_city
 	)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS

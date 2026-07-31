@@ -1,7 +1,7 @@
 # World-War 项目交接文档
 
 > 面向接手的 AI agent / 开发者。目标：不读全部源码即可理解架构、约定、当前状态与安全改动边界。
-> 最后更新：2026-07-30（无训练外交 Utility AI 完成并通过全量验证后）。
+> 最后更新：2026-07-31（AI 性能、归一化防区与持续梯队攻势完成并通过全量验证后）。
 
 ---
 
@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **455 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **668 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
@@ -60,12 +60,12 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 |---|---|---|
 | [scripts/model/city.gd](scripts/model/city.gd) | 数据 | 城市控制、地形、产出、粮仓、重点产地，以及和平确认前冻结直接交战方的 `occupation_sponsor_nation` |
 | [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_manpower(0/5000/15000/30000/60000/100000，每国每方向按满编兵力计), distance, danger, max_height_difference, occupied, passing_count(仅供显示的全方向军队数)` |
-| [scripts/model/nation.gd](scripts/model/nation.gd) | 数据 | 国家资源、首都粮仓、外交解释字段及战争动员目标 |
+| [scripts/model/nation.gd](scripts/model/nation.gd) | 数据 | 国家资源、首都粮仓、外交解释字段、战争动员目标及持久战役梯队状态 |
 | [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, AI命令元数据`；含占领声明国与防御反向边锁 |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：`id, kind(FIELD/SIEGE), side_a[]/side_b[], edge, city, contact_dist_a/b, round_no, siege_progress(SIEGE累积破城), has_garrison(side_b是否驻城守军), garrison_ref(围城5×门槛的守方兵力基准快照), finished, winner_side`；`side_morale()` 兵力加权派生士气 |
 | [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、粮仓、图查询、战斗、外交、三倍军队数上限与保持兵力/编制守恒的军队拆分 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | Alpha 陆地提取、平坦城市采样、陆地 Voronoi 省份、Delaunay 局部道路、高度剖面与连通骨架 |
-| [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路、补给与 `can_reach_manpower_hub`；补给边损耗=`0.1×distance×(1+danger)` |
+| [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路、反向粮仓补给网络与 `can_reach_manpower_hub`；补给边损耗=`0.1×distance×(1+danger)` |
 | [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算 + `siege_daily_progress(attacker_size,garrison_ref)` 确定性围城进度，见 §4 |
 | [scripts/core/simulation.gd](scripts/core/simulation.gd) | 逻辑 | 按天推进主循环 + `march_days(distance)` 行军时长（R1），见 §5 |
 | [scripts/ai/](scripts/ai) | AI | 军事 Utility AI、战略图、威胁场、协调器，以及 `DiplomacyAI` 双边外交评分 |
@@ -73,7 +73,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 默认真实高度图场景（Main + Simulation + MapRenderer） |
 | [square_map.tscn](square_map.tscn) | 场景 | 保留的原始 `8×8` 方形地图场景；Main 的 `use_grid_world=true` |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 660 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 668 断言，headless 运行 |
 | [tests/map_visual_smoke.gd](tests/map_visual_smoke.gd) | 视觉烟测 | 构造占领省份与攻势事件，用 Godot Movie Maker 验证真实渲染路径 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；A 左侧改进 Utility AI、B 右侧修改前当前 Utility AI，十年对战并输出领土/军力/粮食/首都指标 |
@@ -206,6 +206,9 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - **断粮突围与解围**：补给率 `≤25%` 且无法经本国控制网抵达粮仓才算真正被围；突围优先级高于普通动作，但只攻击战力比 `≥0.70` 的最弱包围节点。被围城和断粮友军形成紧急救援缺口，相邻敌城作为打通通道的高价值目标。
 - **建军/解散**：AI 国家级命令 `CREATE_ARMY/DISBAND_ARMY`。军队数低于 `max(前线数+2, ceil(城市数/4))` 时在未被围首都粮仓消耗 5000 人建军；仅在军队数超额时解散安全后方 `<500` 人残部，幸存人数全额返还人口库。
 - **后勤中心守备**：没有敌方正容量道路直接接入时，首都只保留最低 5000、其他粮仓最低 3000，不再把两跳外的 60 日传播威胁全部折算为常驻军；敌军直接邻接后恢复首都=`max(5000, 60日威胁×1.25)`、粮仓=`max(3000, 60日威胁)`。抽走某军会跌破门槛时拒绝普通移动。
+- **归一化防区**：一线为实际/潜在前线，二线为可及时回援的一线邻城。城市重要度=`城市价值×(1+粮道重要度)`，危险度取本地威胁与按行军时间衰减的一线威胁最大值；两者归一化后以几何平均合成权重。国家防御预算为 `P×T/(P+T)`，和平潜在威胁以全国战力封顶。多余兵力按“实际覆盖/目标战力”饱和度展开，使用 25% 滞回与移动后 110% 来源安全线，不做一城一军或固定国家防守比例。
+- **稳定任务所有权**：攻势集结只能抽调 `CityDefensePlan.can_redeploy()` 判定的防线剩余兵力，不能覆盖有效防御部署锁。跨城合并只允许高 ID 军向更低 ID 且不弱于自己的接收军移动，使合并目标图严格无环；满编目标没有完整容量时不生成无效合并。
+- **性能缓存**：`AiWorldView` 建立 `armies_by_city` 与驻军战力索引；AI 决策周期复用 Dijkstra 路径场；`ThreatField` 复用只依赖道路拓扑的传播距离；补给从粮仓反向构建国家网络，每国/粮仓计算一次后供全部军队查询。固定种子 1095 天约 6.6 秒，四种子约 24.4 秒。
 - **调度**：每日先合并；每 5 天重算威胁并决策；城市易主通过版本号触发下一轮战略图重算。所有国家性格由 nation id 确定生成，不训练、不引入随机不可复现性。
 
 ### 4.10 外交关系与 Utility AI
@@ -220,7 +223,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - 共同防御联盟在和平与战争时期都可长期存在，不要求当前拥有共同敌国；双方接受后至少持续 360 天，每国最多一个直接防御盟友。无共同敌人不是退盟理由，只有防御负担、外交冲突或严重力量失衡才提高退盟意愿。
 - 宣战要求停战期届满、可从本国或盟国边境接触目标、仅本国进攻战力足够且本国未陷入其他战争。主动战争不召唤攻击方盟友；被宣战方的直接盟友自动对攻击国参战。
 - 主动战争采用 `PREPARE_WAR → DECLARE_WAR` 两阶段。AI 先保存目标国/目标城、完成战前动员，并把军队调往目标城相邻的己方城市或己方侧驻防点；准备至少 30 天且集结兵力达到攻城需求后才宣战。宣战同一 tick 将集结军转为 `ATTACK`，不再等待普通 Utility 重新选择。
-- 战争中每 90 天进入下一轮国家级攻势窗口：若目标仍有效且兵力已齐则立即发动，否则先重新集结；目标已占领时重新选择敌方前线目标。潜在边境威胁同时读取对面城市和边上的实际兵力集中，守方会针对具体方向提前增援。
+- 战争中每 90 天进入下一轮国家级战役规划窗口：若目标仍有效且兵力已齐则立即发动，否则先重新集结；目标已占领时重新选择敌方前线目标。单轮计划按目标需求把逐军分工拆成持久梯队，首梯队只投入最小充分兵力，后续梯队留在出发地；前梯队全部撤退/恢复/歼灭且目标仍属敌方时，下一支兵力充分的梯队在次日立即接战，不等待新的 90 天窗口。后续梯队继承整轮备战倍率，但 30 天加成从实际投入日计算。
 - 宣战时通过统一的年度战争粮食报告计算 `0～4` 支额外动员军：报告同时给出当前兵力、目标兵力和现有全部编制满员时的年耗、年结余及粮仓可支撑年数。主动战争目标必须至少可维持 2 年，防御战争按 1 年生存线规划；动员窗口 180 天，每军仍消耗 5000 人并承担正常粮耗/军费。
 - 联盟提供双向军事通行和共享补给：军队可穿越并驻留盟国城市，也可从盟国边境发起攻势；占领城市始终归实际占领军所属国。退盟立即撤销通行权，滞留军队自动返国。
 - `AiWorldView`、战略前线、威胁场、驻边与攻击候选统一通过 `GameState.is_enemy()` 筛选。外交变更递增 `diplomacy_revision`，立即使战略缓存失效。
