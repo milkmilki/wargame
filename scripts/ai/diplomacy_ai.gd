@@ -27,7 +27,7 @@ const MAX_CONCURRENT_WARS: int = 1
 const MAX_DEFENSIVE_ALLIES: int = 1
 const PEACE_ACCEPT_SCORE: float = 1.25
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
-const WAR_DECLARE_SCORE: float = 1.35
+const WAR_DECLARE_SCORE: float = 1.20
 const LEAVE_ALLIANCE_SCORE: float = 0.90
 const CAMPAIGN_RESERVE_MONTHS: int = 6
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
@@ -180,12 +180,18 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 			)
 		)
 	var balance_affinity := maxf(1.0 - imbalance, 0.0) * 0.55
+	var frontier_release := _alliance_frontier_release_value(
+		state,
+		nation_id,
+		target_id
+	)
 	return (
 		0.35
 		+ float(common_enemies) * 1.5
 		+ minf(shared_threat * 0.35, 0.80)
 		+ border_bonus
 		+ balance_affinity
+		+ frontier_release
 	)
 
 
@@ -228,6 +234,9 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 	var mobilization_value := float(
 		mobilization_capacity(state, nation_id)
 	) * 0.15
+	var aggression_bonus := (
+		_ai_aggression(state, nation_id) - 1.0
+	)
 	return (
 		ratio
 		+ target_distraction
@@ -235,7 +244,59 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 		+ reserve_quality
 		+ objective_value
 		+ mobilization_value
+		+ aggression_bonus
 		- own_overextension
+	)
+
+
+static func _ai_aggression(
+	state: GameState,
+	nation_id: int
+) -> float:
+	return clampf(
+		state.nations[nation_id].ai_aggression,
+		0.5,
+		1.5
+	)
+
+
+## 结盟后双方不再需要在共同边境互相戒备。用该边境上已经投入的实际战力占
+## 全国战力的比例衡量可释放价值，使联盟服务于主战场，而不是仅依赖固定接壤加分。
+static func _alliance_frontier_release_value(
+	state: GameState,
+	nation_id: int,
+	target_id: int
+) -> float:
+	if _frontier_edges(state, nation_id, target_id) <= 0:
+		return 0.0
+	var frontier_cities := {}
+	for edge in state.edges:
+		var owner_a := state.cities[edge.city_a].owner_nation
+		var owner_b := state.cities[edge.city_b].owner_nation
+		if owner_a == nation_id and owner_b == target_id:
+			frontier_cities[edge.city_a] = true
+		elif owner_b == nation_id and owner_a == target_id:
+			frontier_cities[edge.city_b] = true
+	var committed_power := 0.0
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		if (
+			army.state == Army.State.IDLE
+			and frontier_cities.has(army.location_city)
+		) or (
+			army.state == Army.State.HOLDING
+			and army.move_to != -1
+			and (
+				frontier_cities.has(army.move_from)
+				or frontier_cities.has(army.move_to)
+			)
+		):
+			committed_power += ArmyPower.effective(army)
+	var national_power := _national_power(state, nation_id)
+	return minf(
+		committed_power / maxf(national_power, 1.0),
+		0.75
 	)
 
 
@@ -355,6 +416,34 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 			)
 		),
 	}
+
+
+## 开始备战要求完整战略储备；备战中的动员本身会消耗这部分人力，因此继续
+## 可行性改用生存线，避免“按计划动员 -> 储备下降 -> 自动取消”的自相矛盾。
+static func war_preparation_resources_ready(
+	state: GameState,
+	nation_id: int
+) -> bool:
+	var nation := state.nations[nation_id]
+	var report := resource_report(state, nation_id)
+	var emergency_manpower := maxi(
+		MIN_MANPOWER_RESERVE / 5,
+		int(ceil(float(report["troops"]) * 0.03))
+	)
+	return (
+		nation.unpaid_war_cost <= 0
+		and (
+			int(report["monthly_gold_balance"]) >= 0
+			or float(report["gold_runway_months"])
+				>= float(CAMPAIGN_RESERVE_MONTHS)
+		)
+		and nation.manpower_pool >= emergency_manpower
+		and (
+			float(report["annual_food_balance"]) >= 0.0
+			or float(report["food_runway_years"])
+				>= DEFENSIVE_CAMPAIGN_YEARS
+		)
+	)
 
 
 static func mobilization_capacity(
@@ -871,8 +960,9 @@ static func _collect_existing_war_preparation(
 		).is_empty()
 	)
 	var elapsed := state.day - nation.war_preparation_started_day
-	var resources_ready := bool(
-		resource_report(state, nation_id)["ready"]
+	var resources_ready := war_preparation_resources_ready(
+		state,
+		nation_id
 	)
 	var resource_grace_expired := (
 		nation.war_preparation_unready_since_day >= 0
@@ -902,6 +992,14 @@ static func _collect_existing_war_preparation(
 		committed[nation_id] = true
 		return
 	if not war_preparation_ready(state, nation_id):
+		if _collect_preparation_alliance(
+			state,
+			nation_id,
+			target_id,
+			actions,
+			committed
+		):
+			return
 		committed[nation_id] = true
 		return
 	var mobilization_armies := maxi(
@@ -931,6 +1029,68 @@ static func _collect_existing_war_preparation(
 	})
 	committed[nation_id] = true
 	committed[target_id] = true
+
+
+static func _collect_preparation_alliance(
+	state: GameState,
+	nation_id: int,
+	war_target_id: int,
+	actions: Array[Dictionary],
+	committed: Dictionary
+) -> bool:
+	var best_target := -1
+	var best_score := -INF
+	for candidate in state.nations:
+		if (
+			candidate.id in [nation_id, war_target_id]
+			or not candidate.alive
+			or committed.has(candidate.id)
+			or state.is_allied(candidate.id, war_target_id)
+		):
+			continue
+		var score_a := alliance_willingness(
+			state,
+			nation_id,
+			candidate.id
+		)
+		var score_b := alliance_willingness(
+			state,
+			candidate.id,
+			nation_id
+		)
+		var score := minf(score_a, score_b)
+		if (
+			score_a < ALLIANCE_ACCEPT_SCORE
+			or score_b < ALLIANCE_ACCEPT_SCORE
+		):
+			continue
+		if (
+			score > best_score
+			or (
+				is_equal_approx(score, best_score)
+				and (
+					best_target == -1
+					or candidate.id < best_target
+				)
+			)
+		):
+			best_score = score
+			best_target = candidate.id
+	if best_target < 0:
+		return false
+	actions.append({
+		"kind": Action.FORM_ALLIANCE,
+		"a": nation_id,
+		"b": best_target,
+		"score": best_score,
+		"reason": (
+			"备战国%d期间与非目标国%d结盟，释放中立边境守军投入目标国%d方向"
+			% [nation_id, best_target, war_target_id]
+		),
+	})
+	committed[nation_id] = true
+	committed[best_target] = true
+	return true
 
 
 static func war_preparation_ready(state: GameState, nation_id: int) -> bool:

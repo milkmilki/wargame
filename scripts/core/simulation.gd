@@ -172,6 +172,7 @@ func _advance_day() -> void:
 	if state.day % AI_DECISION_INTERVAL_DAYS == 0 or _ai_last_decision_day == -1:
 		_ai_assign_targets()
 	_advance_campaign_echelons()
+	_advance_priority_city_defense_echelons()
 	_advance_movement()
 	_advance_holding_adaptation()
 	_drain_siege_food()   # 规格 R3：被围城每日耗粮（补给孤岛的粮草时钟）
@@ -190,6 +191,18 @@ static func offensive_preparation_multiplier(
 		1.0
 	)
 	return lerpf(1.0, OFFENSIVE_BONUS_MAX_MULTIPLIER, ratio)
+
+
+func _campaign_offensive_interval(nation_id: int) -> int:
+	var aggression := clampf(
+		state.nations[nation_id].ai_aggression,
+		0.5,
+		1.5
+	)
+	return int(round(
+		float(CAMPAIGN_OFFENSIVE_INTERVAL_DAYS)
+			/ aggression
+	))
 
 
 func _expire_offensive_bonuses() -> void:
@@ -829,11 +842,9 @@ func _refresh_war_preparation_viability() -> void:
 		if nation.war_preparation_target_nation < 0:
 			nation.war_preparation_unready_since_day = -1
 			continue
-		var ready := bool(
-			DiplomacyAI.resource_report(
-				state,
-				nation.id
-			)["ready"]
+		var ready := DiplomacyAI.war_preparation_resources_ready(
+			state,
+			nation.id
 		)
 		if ready:
 			nation.war_preparation_unready_since_day = -1
@@ -2438,7 +2449,7 @@ func _launch_campaign_offensive(
 	if launched:
 		nation.campaign_last_offensive_day = state.day
 		nation.campaign_next_offensive_day = (
-			state.day + CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
+			state.day + _campaign_offensive_interval(nation_id)
 		)
 		nation.campaign_offensive_count += 1
 		var launched_targets := launched_origins.keys()
@@ -2455,8 +2466,8 @@ func _launch_campaign_offensive(
 	return launched
 
 
-## 既有战役计划的执行续接。它不重新做战略决策，只按已冻结的逐军梯队在前梯队
-## 失去进攻能力后激活下一梯队，因此可以每日响应而不破坏国家命令的两阶段规划。
+## 既有战役计划的执行续接。前梯队进入目标城市后即开放下一梯队，让道路容量
+## 自然形成连续纵队；若前梯队提前失去作战能力，仍沿用次日接替规则。
 func _advance_campaign_echelons() -> void:
 	for nation in state.nations:
 		if not nation.alive or nation.campaign_plan_targets.is_empty():
@@ -2496,6 +2507,18 @@ func _advance_campaign_echelons() -> void:
 					false,
 					false
 				)
+				if _campaign_echelon_engaged_at_target(
+					nation.id,
+					target_city,
+					active_echelon
+				):
+					_launch_campaign_echelon_members(
+						nation.id,
+						target_city,
+						active_echelon + 1,
+						true,
+						false
+					)
 				continue
 			_launch_campaign_echelon_members(
 				nation.id,
@@ -2504,6 +2527,44 @@ func _advance_campaign_echelons() -> void:
 				true,
 				true
 			)
+
+
+func _campaign_echelon_engaged_at_target(
+	nation_id: int,
+	target_city: int,
+	echelon: int
+) -> bool:
+	var nation := state.nations[nation_id]
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or army.state != Army.State.FIGHTING
+			or not nation.campaign_launched_armies.has(army.id)
+			or int(
+				nation.campaign_attack_assignments.get(
+					army.id,
+					-1
+				)
+			) != target_city
+			or int(
+				nation.campaign_attack_echelons.get(
+					army.id,
+					-1
+				)
+			) != echelon
+		):
+			continue
+		var battle := state.battle_by_id(army.battle_id)
+		if (
+			battle != null
+			and not battle.finished
+			and battle.kind == Battle.Kind.SIEGE
+			and battle.city != null
+			and battle.city.id == target_city
+		):
+			return true
+	return false
 
 
 func _campaign_echelon_operational(
@@ -2631,6 +2692,199 @@ func _launch_campaign_echelon_members(
 		CAMPAIGN_ARROW_DURATION_DAYS
 	)
 	return true
+
+
+## 对正在围攻的重点城市持续派遣纵深预备队。这里不保存平行的防御任务表：
+## Army.ai_target_city 是在途任务真源，战斗与道路占用则直接从 GameState 派生。
+func _advance_priority_city_defense_echelons() -> void:
+	var sieges: Array[Battle] = []
+	for battle in state.battles:
+		if (
+			not battle.finished
+			and battle.kind == Battle.Kind.SIEGE
+			and battle.city != null
+			and not battle.side_a.is_empty()
+		):
+			sieges.append(battle)
+	sieges.sort_custom(func(a: Battle, b: Battle) -> bool:
+		return a.city.id < b.city.id
+	)
+	for siege in sieges:
+		var city_id := siege.city.id
+		var nation_id := siege.city.owner_nation
+		if (
+			nation_id < 0
+			or nation_id >= state.nations.size()
+			or not state.nations[nation_id].alive
+		):
+			continue
+		var view := _build_ai_view(nation_id)
+		var snapshot := _strategy_snapshot_for(view)
+		if not _is_priority_defense_city(
+			nation_id,
+			city_id,
+			snapshot
+		):
+			continue
+		var attack_power := 0.0
+		for army in siege.side_a:
+			if army.size > 0:
+				attack_power += ArmyPower.effective(army)
+		var committed_power := ArmyPower.city_defense(siege.city)
+		for army in siege.side_b:
+			if army.size > 0 and army.owner_nation == nation_id:
+				committed_power += ArmyPower.effective(army)
+		for army in state.armies:
+			if (
+				army.owner_nation == nation_id
+				and army.size > 0
+				and army.state == Army.State.MOVING
+				and army.ai_action == ActionCandidate.Kind.REINFORCE
+				and army.ai_target_city == city_id
+			):
+				committed_power += ArmyPower.effective(army)
+		# 已在途的梯队足以填平当前战斗缺口时，无需重建完整国家防区。
+		if committed_power >= attack_power:
+			continue
+		var defense_plan := CityDefensePlan.build(
+			view,
+			snapshot,
+			ThreatField.build(view, _threat_travel_cache)
+		)
+		_advance_priority_city_defense(
+			siege,
+			defense_plan
+		)
+
+
+func _is_priority_defense_city(
+	nation_id: int,
+	city_id: int,
+	snapshot: StrategicMapSnapshot
+) -> bool:
+	var city := state.cities[city_id]
+	return (
+		city_id == state.nations[nation_id].capital_city_id
+		or city.has_warehouse
+		or city.is_food_hub
+		or city.is_manpower_hub
+		or snapshot.critical_supply_cities.has(city_id)
+		or snapshot.value_of_city(city_id)
+			>= CityDefensePlan.MUST_HOLD_CITY_VALUE_FLOOR
+	)
+
+
+func _advance_priority_city_defense(
+	siege: Battle,
+	defense_plan: CityDefensePlan
+) -> void:
+	var city_id := siege.city.id
+	var nation_id := siege.city.owner_nation
+	var coordinator := ArmyCoordinator.new()
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		if (
+			army.ai_target_city >= 0
+			and army.state in [
+				Army.State.MOVING,
+				Army.State.FIGHTING,
+			]
+		):
+			coordinator.reserve(army.ai_target_city, army)
+		elif army.state == Army.State.HOLDING and army.move_to != -1:
+			var friendly_endpoint := army.move_from
+			if not state.has_military_access(
+				nation_id,
+				state.cities[friendly_endpoint].owner_nation
+			):
+				friendly_endpoint = army.move_to
+			var other_endpoint := (
+				army.move_to
+				if friendly_endpoint == army.move_from
+				else army.move_from
+			)
+			coordinator.reserve_edge(
+				friendly_endpoint,
+				other_endpoint,
+				army
+			)
+	var attack_power := 0.0
+	for army in siege.side_a:
+		if army.size > 0:
+			attack_power += ArmyPower.effective(army)
+	var committed_power := ArmyPower.city_defense(siege.city)
+	for army in siege.side_b:
+		if army.size > 0 and army.owner_nation == nation_id:
+			committed_power += ArmyPower.effective(army)
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.size > 0
+			and army.state == Army.State.MOVING
+			and army.ai_action == ActionCandidate.Kind.REINFORCE
+			and army.ai_target_city == city_id
+		):
+			committed_power += ArmyPower.effective(army)
+	var required_power := maxf(
+		attack_power,
+		defense_plan.requirement_at(city_id)
+	)
+	if committed_power >= required_power:
+		return
+	var candidates: Array[Dictionary] = []
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or army.state != Army.State.IDLE
+			or army.location_city == city_id
+			or not defense_plan.can_redeploy(army, coordinator)
+		):
+			continue
+		var field := defense_plan.view.path_field(
+			army.location_city,
+			nation_id,
+			false,
+			true,
+			-1,
+			army.max_size
+		)
+		var distance := float(field["dist"].get(city_id, INF))
+		if distance == INF:
+			continue
+		candidates.append({
+			"army": army,
+			"distance": distance,
+		})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var distance_a := float(a["distance"])
+		var distance_b := float(b["distance"])
+		if not is_equal_approx(distance_a, distance_b):
+			return distance_a < distance_b
+		return (a["army"] as Army).id < (b["army"] as Army).id
+	)
+	for entry in candidates:
+		if committed_power >= required_power:
+			break
+		var army: Army = entry["army"]
+		var reinforce := ActionCandidate.make(
+			ActionCandidate.Kind.REINFORCE,
+			2000.0,
+			"重点城市%d大会战：纵深预备队军%d流水增援"
+				% [city_id, army.id],
+			city_id
+		)
+		reinforce.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+		reinforce.defensive_deployment = true
+		if not _execute_ai_candidate(army, reinforce):
+			continue
+		var nation := state.nations[nation_id]
+		nation.campaign_attack_assignments.erase(army.id)
+		nation.campaign_attack_echelons.erase(army.id)
+		nation.campaign_launched_armies.erase(army.id)
+		coordinator.reserve(city_id, army)
+		committed_power += ArmyPower.effective(army)
 
 
 func _remove_campaign_target(

@@ -4502,6 +4502,71 @@ func _test_diplomacy_state_and_ai() -> void:
 		and str(objective["reason"]).contains("战略值"),
 		"宣战必须选择敌国合法目标城并解释产出和战略价值"
 	)
+	ai_state.nations[0].ai_aggression = 0.7
+	var cautious_war_desire := DiplomacyAI.war_desire(
+		ai_state,
+		0,
+		1
+	)
+	ai_state.nations[0].ai_aggression = 1.3
+	var aggressive_war_desire := DiplomacyAI.war_desire(
+		ai_state,
+		0,
+		1
+	)
+	_check(
+		cautious_war_desire > -INF
+		and aggressive_war_desire > cautious_war_desire,
+		"国家激进值越高，资源条件相同时宣战意愿必须单调提高"
+	)
+	ai_state.nations[0].ai_aggression = 1.0
+	var alliance_edge: Edge = null
+	for candidate_edge in ai_state.edges:
+		var owner_a := ai_state.cities[
+			candidate_edge.city_a
+		].owner_nation
+		var owner_b := ai_state.cities[
+			candidate_edge.city_b
+		].owner_nation
+		if owner_a == 0 and owner_b == 1:
+			alliance_edge = candidate_edge
+			break
+		if owner_a == 1 and owner_b == 0:
+			alliance_edge = candidate_edge
+			break
+	var release_army: Army = null
+	var release_value := 0.0
+	if alliance_edge != null:
+		var release_city := (
+			alliance_edge.city_a
+			if ai_state.cities[
+				alliance_edge.city_a
+			].owner_nation == 0
+			else alliance_edge.city_b
+		)
+		release_army = _make_army(
+			9049,
+			0,
+			15000,
+			10,
+			10
+		)
+		release_army.location_city = release_city
+		release_army.move_from = release_city
+		ai_state.armies.append(release_army)
+		release_value = (
+			DiplomacyAI._alliance_frontier_release_value(
+				ai_state,
+				0,
+				1
+			)
+		)
+	_check(
+		alliance_edge != null and release_value > 0.0,
+		"与非战争目标国结盟时，应识别可从共同边境释放的实际驻军战力"
+	)
+	if release_army != null:
+		ai_state.armies.erase(release_army)
 	var treasury_before_crisis := ai_state.nations[0].treasury_gold
 	var original_gold_income := {}
 	for city in ai_state.cities_of(0):
@@ -4513,6 +4578,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		var income_city := ai_state.cities_of(0)[0]
 		income_city.gold_per_month += -pre_balance
 	ai_state.nations[0].treasury_gold = 0
+	ai_state.nations[0].ai_aggression = 1.5
 	var sustainable_zero_treasury := DiplomacyAI.resource_report(ai_state, 0)
 	_check(
 		int(sustainable_zero_treasury["monthly_gold_balance"]) >= 0
@@ -4527,13 +4593,14 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		not bool(DiplomacyAI.resource_report(ai_state, 0)["ready"])
 		and DiplomacyAI.war_desire(ai_state, 0, 1) == -INF,
-		"月现金流为负且国库不足六个月时不得宣战"
+		"最高激进值也不得绕过负现金流和国库不足的宣战硬约束"
 	)
 	for city_id in original_gold_income:
 		ai_state.cities[int(city_id)].gold_per_month = int(
 			original_gold_income[city_id]
 		)
 	ai_state.nations[0].treasury_gold = treasury_before_crisis
+	ai_state.nations[0].ai_aggression = 1.0
 	var preparation_actions := DiplomacyAI.choose_actions(ai_state)
 	var preparation_has_objective := false
 	for action in preparation_actions:
@@ -4578,6 +4645,28 @@ func _test_diplomacy_state_and_ai() -> void:
 		grace_action.get("a", -1)
 	)
 	if grace_started:
+		var preparation_alliance_actions: Array[Dictionary] = []
+		var preparation_alliance_committed := {}
+		var preparation_alliance_found := (
+			DiplomacyAI._collect_preparation_alliance(
+				grace_state,
+				grace_nation_id,
+				int(grace_action["b"]),
+				preparation_alliance_actions,
+				preparation_alliance_committed
+			)
+		)
+		_check(
+			preparation_alliance_found
+			and preparation_alliance_actions.size() == 1
+			and int(
+				preparation_alliance_actions[0]["kind"]
+			) == DiplomacyAI.Action.FORM_ALLIANCE
+			and int(
+				preparation_alliance_actions[0]["b"]
+			) != int(grace_action["b"]),
+			"备战未完成时应能与非战争目标国结盟，释放其他边境的驻军"
+		)
 		grace_state.nations[
 			grace_nation_id
 		].manpower_pool = 0
@@ -4987,11 +5076,24 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	echelon_state.day += 1
 	if lead_army != null:
-		echelon_sim._retreat(lead_army)
+		echelon_sim._release_edge(lead_army)
+		var pipeline_siege := echelon_state.new_battle(
+			Battle.Kind.SIEGE
+		)
+		pipeline_siege.city = echelon_state.cities[
+			echelon_target
+		]
+		pipeline_siege.edge = echelon_state.edge_of(
+			echelon_origin,
+			echelon_target
+		)
+		pipeline_siege.side_a.append(lead_army)
+		lead_army.state = Army.State.FIGHTING
+		lead_army.battle_id = pipeline_siege.id
 	echelon_sim._advance_campaign_echelons()
 	_check(
 		lead_army != null
-		and lead_army.state == Army.State.RETREATING
+		and lead_army.state == Army.State.FIGHTING
 		and followup_army != null
 		and followup_army.state == Army.State.MOVING
 		and followup_army.ai_action == ActionCandidate.Kind.ATTACK
@@ -5008,7 +5110,7 @@ func _test_diplomacy_state_and_ai() -> void:
 				-1
 			)
 		) == echelon_state.day,
-		"首攻梯队撤退后，下一梯队必须次日立即接替进攻而非等待90天"
+		"首攻梯队进入敌城后，下一梯队必须立即进入已释放道路形成流水强攻"
 	)
 	_check(
 		followup_army != null
@@ -5022,6 +5124,95 @@ func _test_diplomacy_state_and_ai() -> void:
 		"后续梯队应继承整轮备战倍率，并从实际投入日计算持续期"
 	)
 	echelon_sim.free()
+
+	var relief_state := GameState.new()
+	relief_state.generate_grid_world(32010)
+	relief_state.armies.clear()
+	for city in relief_state.cities:
+		city.owner_nation = 0
+	for relief_edge in relief_state.edges:
+		relief_edge.max_manpower = 0
+	var relief_target := relief_state.nations[0].capital_city_id
+	var relief_source := relief_state.neighbors(relief_target)[0]
+	relief_state.cities[relief_source].owner_nation = 2
+	var relief_route := relief_state.edge_of(
+		relief_source,
+		relief_target
+	)
+	relief_route.max_manpower = 15000
+	relief_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	relief_state.set_diplomatic_relation(
+		0,
+		2,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	var relief_siege := relief_state.new_battle(
+		Battle.Kind.SIEGE
+	)
+	relief_siege.city = relief_state.cities[relief_target]
+	relief_siege.edge = relief_route
+	for attacker_id in range(3):
+		var relief_attacker := _make_army(
+			995 + attacker_id,
+			1,
+			15000,
+			10,
+			10
+		)
+		relief_attacker.state = Army.State.FIGHTING
+		relief_attacker.location_city = relief_target
+		relief_attacker.battle_id = relief_siege.id
+		relief_siege.side_a.append(relief_attacker)
+		relief_state.armies.append(relief_attacker)
+	var relief_armies: Array[Army] = []
+	for defender_id in range(2):
+		var relief_defender := _make_army(
+			1000 + defender_id,
+			0,
+			15000,
+			10,
+			10
+		)
+		relief_defender.location_city = relief_source
+		relief_defender.move_from = relief_source
+		relief_state.armies.append(relief_defender)
+		relief_armies.append(relief_defender)
+	var relief_sim := Simulation.new()
+	relief_sim.setup(relief_state)
+	relief_sim._advance_priority_city_defense_echelons()
+	var first_relief: Army = null
+	var waiting_relief: Army = null
+	for relief_army in relief_armies:
+		if relief_army.state == Army.State.MOVING:
+			first_relief = relief_army
+		elif relief_army.state == Army.State.IDLE:
+			waiting_relief = relief_army
+	_check(
+		first_relief != null
+		and waiting_relief != null
+		and relief_route.passing_count == 1,
+		"重点城市首支援军进入满容量道路后，下一支必须在纵深等待"
+	)
+	if first_relief != null:
+		first_relief.move_progress = 1.0
+		relief_sim._arrive_at_node(first_relief)
+	relief_sim._advance_priority_city_defense_echelons()
+	_check(
+		first_relief != null
+		and first_relief.state == Army.State.FIGHTING
+		and waiting_relief != null
+		and waiting_relief.state == Army.State.MOVING
+		and waiting_relief.ai_action
+			== ActionCandidate.Kind.REINFORCE
+		and waiting_relief.ai_target_city == relief_target
+		and relief_route.passing_count == 1,
+		"重点城市前一援军入城参战并释放道路后，后一援军必须立即流水跟进"
+	)
+	relief_sim.free()
 
 	var defense_state := GameState.new()
 	defense_state.generate_grid_world(32007)

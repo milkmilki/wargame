@@ -958,11 +958,15 @@ static func _enemy_power_on_edge(
 
 static func _aggression(view: AiWorldView) -> float:
 	if not view.legacy_id_personality_enabled:
-		return 1.0
+		return clampf(
+			view.state.nations[view.nation_id].ai_aggression,
+			0.5,
+			1.5
+		)
 	return 0.85 + float((view.nation_id * 37 + 11) % 36) / 100.0
 
 
 static func _caution(view: AiWorldView) -> float:
 	if not view.legacy_id_personality_enabled:
-		return 1.0
+		return 1.0 / _aggression(view)
 	return 0.85 + float((view.nation_id * 53 + 7) % 36) / 100.0

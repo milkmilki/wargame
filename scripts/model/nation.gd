@@ -47,6 +47,9 @@ var granary_food: int = 0
 var last_food_demand: int = 0              ## 最近月度全部军队计划粮食需求
 var food_demand_ema: float = 0.0           ## 历史真实需求平滑值，供裁军规划
 var political_system: int = 0              ## 政治制度（预留，暂未使用）
+## 国家级 AI 风险偏好。1.0 为中性；更高时更愿意宣战、持续进攻并承担战术风险。
+## 默认对所有国家一致，避免把 nation id 重新引入镜像公平性。
+var ai_aggression: float = 1.0
 
 ## 最近一次 AI 建军/解散命令，供调试和可解释性展示。
 var ai_last_force_action: int = 0
