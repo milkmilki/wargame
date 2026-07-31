@@ -8,6 +8,8 @@ var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [
 var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
 var terrain_relief: float = 0.0           ## 城市周边局部最大高度差 [0,1]
 var owner_nation: int = -1                ## 所属国家 id
+## 当前占领由哪个直接交战国的军队取得；和平确认后清空。
+var occupation_sponsor_nation: int = -1
 
 var defense: int = 0                      ## 城市防御力
 var manpower_per_month: int = 0           ## 每月人口产出，立即汇入所属国人口库

@@ -420,15 +420,19 @@ static func _build_roads(
 	for i in range(count):
 		var road := selected[i]
 		var percentile := float(i) / float(maxi(count - 1, 1))
-		road["max_throughput"] = (
-			4 if percentile < 0.12
-			else 3 if percentile < 0.32
-			else 2 if percentile < 0.65
-			else 1 if percentile < 0.90
+		road["max_manpower"] = (
+			100000 if percentile < 0.05
+			else 60000 if percentile < 0.15
+			else 30000 if percentile < 0.55
+			else 15000 if percentile < 0.85
+			else 5000 if percentile < 0.90
 			else 0
 		)
 		if bool(road.get("backbone", false)):
-			road["max_throughput"] = maxi(int(road["max_throughput"]), 1)
+			road["max_manpower"] = maxi(
+				int(road["max_manpower"]),
+				5000
+			)
 		road["danger"] = clampf(percentile, 0.0, 1.0)
 		road["distance"] = clampi(int(round(float(road["length"]) * 12.0)), 1, 5)
 	var blocked_target := maxi(int(round(float(count) * 0.10)), 1)
@@ -437,7 +441,7 @@ static func _build_roads(
 		var road := selected[i]
 		if bool(road.get("backbone", false)):
 			continue
-		road["max_throughput"] = 0
+		road["max_manpower"] = 0
 		blocked_count += 1
 		if blocked_count >= blocked_target:
 			break

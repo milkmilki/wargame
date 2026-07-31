@@ -133,7 +133,15 @@ static func _retreat_candidate(
 	if local_ratio >= RETREAT_ENTER_RATIO * caution:
 		return null
 	var start := army.location_city
-	var field := Pathfinding.dijkstra_field(view.state, start, view.nation_id, false, true)
+	var field := Pathfinding.dijkstra_field(
+		view.state,
+		start,
+		view.nation_id,
+		false,
+		true,
+		-1,
+		army.max_size
+	)
 	var dist: Dictionary = field["dist"]
 	var best_city := -1
 	var best_score := -INF
@@ -188,12 +196,26 @@ static func _attack_candidate(
 	if army.morale < 0.5 or Pathfinding.nearest_supply_city(view.state, army)[0] == -1:
 		return null
 	var start := army.location_city
-	var field := Pathfinding.dijkstra_field(view.state, start)
+	var field := Pathfinding.dijkstra_field(
+		view.state,
+		start,
+		-1,
+		false,
+		true,
+		-1,
+		army.max_size
+	)
 	var dist: Dictionary = field["dist"]
 	var access_dist: Dictionary = {}
 	if view.executable_attack_paths_enabled:
 		access_dist = Pathfinding.dijkstra_field(
-			view.state, start, view.nation_id, false, true
+			view.state,
+			start,
+			view.nation_id,
+			false,
+			true,
+			-1,
+			army.max_size
 		)["dist"]
 	var power := ArmyPower.effective(army)
 	var aggression := _aggression(view)
@@ -327,7 +349,7 @@ static func _attack_approach_distance(
 	var best := INF
 	for neighbor in view.state.neighbors(target_city):
 		var edge := view.state.edge_of(target_city, neighbor)
-		if edge == null or edge.max_throughput <= 0:
+		if edge == null or edge.max_manpower <= 0:
 			continue
 		var neighbor_dist := float(access_dist.get(neighbor, INF))
 		if neighbor_dist == INF:
@@ -351,7 +373,15 @@ static func _merge_candidate(
 	var start := army.location_city
 	if snapshot.frontier_cities.has(start):
 		return null
-	var field := Pathfinding.dijkstra_field(view.state, start, view.nation_id, false, true)
+	var field := Pathfinding.dijkstra_field(
+		view.state,
+		start,
+		view.nation_id,
+		false,
+		true,
+		-1,
+		army.max_size
+	)
 	var dist: Dictionary = field["dist"]
 	var best_city := -1
 	var best_score := -INF
@@ -409,7 +439,7 @@ static func _breakout_candidate(
 		var edge := view.state.edge_of(start, neighbor)
 		if (
 			edge == null
-			or edge.max_throughput <= 0
+			or edge.max_manpower <= 0
 			or not view.state.is_enemy(view.nation_id, view.state.cities[neighbor].owner_nation)
 		):
 			continue
@@ -500,7 +530,7 @@ static func _blockade_relief_value(view: AiWorldView, enemy_city_id: int) -> flo
 	var value := 0.0
 	for neighbor in view.state.neighbors(enemy_city_id):
 		var edge := view.state.edge_of(enemy_city_id, neighbor)
-		if edge == null or edge.max_throughput <= 0:
+		if edge == null or edge.max_manpower <= 0:
 			continue
 		var need := _friendly_relief_need(view, neighbor)
 		if need > 0.0:
@@ -523,7 +553,7 @@ static func _adjacent_assault_pool(
 	var max_arrival_days := 0.0
 	for neighbor in view.state.neighbors(target_city):
 		var edge := view.state.edge_of(target_city, neighbor)
-		if edge == null or edge.max_throughput <= 0:
+		if edge == null or edge.max_manpower <= 0:
 			continue
 		var edge_attack_multiplier := 1.0
 		if _enemy_power_on_edge(
@@ -761,6 +791,9 @@ static func _choose_holding(
 			endpoint
 		)
 		retreat.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+		retreat.defensive_deployment = true
+		retreat.target_edge_a = army.move_from
+		retreat.target_edge_b = army.move_to
 		return retreat
 	if defense_plan.must_hold_city(endpoint):
 		return ActionCandidate.make(
@@ -875,7 +908,7 @@ static func _post_capture_exposure(view: AiWorldView, city_id: int) -> int:
 	var target_owner := view.state.cities[city_id].owner_nation
 	for neighbor in view.state.neighbors(city_id):
 		var edge := view.state.edge_of(city_id, neighbor)
-		if edge == null or edge.max_throughput <= 0:
+		if edge == null or edge.max_manpower <= 0:
 			continue
 		var owner := view.state.cities[neighbor].owner_nation
 		if owner == view.nation_id:

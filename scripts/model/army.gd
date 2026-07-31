@@ -73,3 +73,8 @@ var offensive_bonus_until_day: int = -1
 
 ## 防御换防锁。非紧急 CityDefensePlan 在截止日前不得再次调离该军。
 var defensive_deployment_until_day: int = -1
+var defensive_blocked_edge_a: int = -1
+var defensive_blocked_edge_b: int = -1
+
+## 跨入敌境时冻结的占领归属国；可为军队所属国或提供出发领土的盟国。
+var occupation_claimant_nation: int = -1

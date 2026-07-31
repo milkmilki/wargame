@@ -587,7 +587,8 @@ static func select_war_objective(
 			var edge := state.edge_of(city.id, neighbor)
 			if (
 				edge != null
-				and edge.max_throughput > 0
+				and edge.max_manpower
+					>= Edge.STANDARD_MANPOWER
 				and state.has_military_access(
 					nation_id, state.cities[neighbor].owner_nation
 				)
@@ -965,7 +966,8 @@ static func staging_cities_for_objective(
 		var edge := state.edge_of(neighbor, objective_city)
 		if (
 			edge != null
-			and edge.max_throughput > 0
+			and edge.max_manpower
+				>= Edge.STANDARD_MANPOWER
 			and state.has_military_access(
 				nation_id, state.cities[neighbor].owner_nation
 			)
@@ -1071,7 +1073,7 @@ static func _target_cut_ratio(
 			var edge := state.edge_of(current, neighbor)
 			if (
 				edge == null
-				or edge.max_throughput <= 0
+				or edge.max_manpower <= 0
 				or state.cities[neighbor].owner_nation != target_nation
 			):
 				continue
@@ -1138,7 +1140,7 @@ static func _has_shared_ally(state: GameState, nation_a: int, nation_b: int) -> 
 static func _frontier_edges(state: GameState, nation_a: int, nation_b: int) -> int:
 	var count := 0
 	for edge in state.edges:
-		if edge.max_throughput <= 0:
+		if edge.max_manpower <= 0:
 			continue
 		var owner_a := state.cities[edge.city_a].owner_nation
 		var owner_b := state.cities[edge.city_b].owner_nation

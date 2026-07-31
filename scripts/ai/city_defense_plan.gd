@@ -14,6 +14,7 @@ const FRONTIER_SCREEN_POWER: float = 1000.0
 const STRATEGIC_CITY_VALUE_FLOOR: float = 3.0
 const MUST_HOLD_CITY_VALUE_FLOOR: float = 5.0
 const EDGE_DEFENSE_MIN_POWER_RATIO: float = 0.40
+const EDGE_SWITCH_PRESSURE_RATIO: float = 1.25
 const STRATEGIC_COMMIT_DAYS: int = 30
 
 var view: AiWorldView
@@ -58,8 +59,14 @@ func candidate_for(
 		candidate != null
 		and candidate.defensive_deployment
 		and view.day < army.defensive_deployment_until_day
-		and not urgent_defense_at(
-			_candidate_anchor_city(candidate)
+		and (
+			_is_reverse_to_blocked_edge(
+				army,
+				candidate
+			)
+			or not urgent_defense_at(
+				_candidate_anchor_city(candidate)
+			)
 		)
 	):
 		return null
@@ -122,6 +129,30 @@ func _candidate_anchor_city(
 	return candidate.target_city
 
 
+func _is_reverse_to_blocked_edge(
+	army: Army,
+	candidate: ActionCandidate
+) -> bool:
+	if (
+		candidate.kind != ActionCandidate.Kind.HOLD
+		or candidate.target_edge_a < 0
+		or candidate.target_edge_b < 0
+		or army.defensive_blocked_edge_a < 0
+		or army.defensive_blocked_edge_b < 0
+	):
+		return false
+	return (
+		mini(
+			candidate.target_edge_a,
+			candidate.target_edge_b
+		) == army.defensive_blocked_edge_a
+		and maxi(
+			candidate.target_edge_a,
+			candidate.target_edge_b
+		) == army.defensive_blocked_edge_b
+	)
+
+
 func urgent_defense_at(city_id: int) -> bool:
 	if city_id < 0 or city_id >= view.state.cities.size():
 		return false
@@ -147,15 +178,17 @@ func urgent_defense_at(city_id: int) -> bool:
 			)
 		):
 			return true
-		if (
-			not enemy.on_edge
-			and enemy.location_city >= 0
-			and view.state.edge_of(
+		if not enemy.on_edge and enemy.location_city >= 0:
+			var approach_edge := view.state.edge_of(
 				city_id,
 				enemy.location_city
-			) != null
-		):
-			return true
+			)
+			if (
+				approach_edge != null
+				and approach_edge.max_manpower
+					>= enemy.max_size
+			):
+				return true
 	return false
 
 
@@ -301,7 +334,7 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 		var edge := view.state.edge_of(city_id, neighbor)
 		if (
 			edge != null
-			and edge.max_throughput > 0
+			and edge.max_manpower > 0
 			and snapshot.potential_threat_of_edge(
 				city_id,
 				neighbor
@@ -314,7 +347,7 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 	)
 	for neighbor in view.state.neighbors(city_id):
 		var edge := view.state.edge_of(city_id, neighbor)
-		if edge == null or edge.max_throughput <= 0:
+		if edge == null or edge.max_manpower <= 0:
 			continue
 		var owner := view.state.cities[neighbor].owner_nation
 		var pressure := 0.0
@@ -354,6 +387,8 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 					)
 				continue
 			if enemy.location_city != neighbor:
+				continue
+			if edge.max_manpower < enemy.max_size:
 				continue
 			pressure += power * exp(
 				-_edge_travel_days(edge)
@@ -422,10 +457,9 @@ func _holding_candidate(
 		)
 		if (
 			preferred_edge == other_endpoint
-			or is_equal_approx(
-				current_pressure,
-				preferred_pressure
-			)
+				or current_pressure
+					* EDGE_SWITCH_PRESSURE_RATIO
+					>= preferred_pressure
 		):
 			return null
 	var coverage := _city_coverage(
@@ -451,6 +485,8 @@ func _holding_candidate(
 	)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 	candidate.defensive_deployment = true
+	candidate.target_edge_a = friendly_city
+	candidate.target_edge_b = other_endpoint
 	return candidate
 
 
@@ -505,7 +541,9 @@ func _idle_candidate(
 		start,
 		view.nation_id,
 		false,
-		true
+		true,
+		-1,
+		army.max_size
 	)
 	var dist: Dictionary = field["dist"]
 	var best_city := -1

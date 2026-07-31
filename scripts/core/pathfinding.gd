@@ -16,7 +16,8 @@ static func dijkstra_field(
 	allowed_nation: int = -1,
 	block_contested_edges: bool = false,
 	use_danger_weight: bool = true,
-	allowed_goal: int = -1
+	allowed_goal: int = -1,
+	required_manpower: int = 0
 ) -> Dictionary:
 	var dist := {}
 	var prev := {}
@@ -58,7 +59,11 @@ static func dijkstra_field(
 				):
 					continue
 			var e := state.edge_of(u, v)
-			if e == null or e.max_throughput <= 0:
+			if (
+				e == null
+				or e.max_manpower <= 0
+				or e.max_manpower < required_manpower
+			):
 				continue
 			if block_contested_edges and _edge_has_enemy_presence(state, e, allowed_nation):
 				continue
@@ -99,7 +104,15 @@ static func dijkstra(state: GameState, start: int, goal: int) -> Array[int]:
 ## 找最近的敌方城市，返回到该城的路径（不含起点）。无敌城 / 不可达返回空。
 static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 	var start := _origin_of(army)
-	var field := dijkstra_field(state, start)
+	var field := dijkstra_field(
+		state,
+		start,
+		-1,
+		false,
+		true,
+		-1,
+		army.max_size
+	)
 	var dist: Dictionary = field["dist"]
 	var best_goal := -1
 	var best_d := INF
@@ -121,7 +134,15 @@ static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 ## excluded_city_id 用于守城方溃败时排除正在失守的城市。
 static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id: int = -1) -> Array[int]:
 	var start := _origin_of(army)
-	var field := dijkstra_field(state, start, army.owner_nation)
+	var field := dijkstra_field(
+		state,
+		start,
+		army.owner_nation,
+		false,
+		true,
+		-1,
+		army.max_size
+	)
 	var dist: Dictionary = field["dist"]
 	var best_goal := _nearest_friendly_goal(state, army.owner_nation, dist, excluded_city_id)
 	var best_d: float = dist[best_goal] if best_goal != -1 else INF
@@ -149,7 +170,15 @@ static func nearest_friendly_route_from_edge(
 	var best: Dictionary = {}
 	for option in options:
 		var endpoint: int = option["endpoint"]
-		var field := dijkstra_field(state, endpoint, army.owner_nation)
+		var field := dijkstra_field(
+			state,
+			endpoint,
+			army.owner_nation,
+			false,
+			true,
+			-1,
+			army.max_size
+		)
 		var dist: Dictionary = field["dist"]
 		var goal := _nearest_friendly_goal(state, army.owner_nation, dist, excluded_city_id)
 		if goal == -1 or dist[goal] == INF:
@@ -250,7 +279,7 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 		var current_edge := state.edge_of(army.move_from, army.move_to)
 		if (
 			current_edge == null
-			or current_edge.max_throughput <= 0
+			or current_edge.max_manpower <= 0
 			or _edge_has_enemy_presence(state, current_edge, army.owner_nation)
 		):
 			return false
@@ -375,7 +404,7 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 			):
 				continue
 			var edge := state.edge_of(u, v)
-			if edge == null or edge.max_throughput <= 0:
+			if edge == null or edge.max_manpower <= 0:
 				continue
 			if _edge_has_enemy_presence(state, edge, nation_id):
 				continue
@@ -387,7 +416,7 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 
 
 static func _supply_edge_loss(edge: Edge) -> float:
-	if edge == null or edge.max_throughput <= 0:
+	if edge == null or edge.max_manpower <= 0:
 		return INF
 	return (
 		SUPPLY_DISTANCE_LOSS

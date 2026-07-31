@@ -36,8 +36,8 @@ func _init() -> void:
 	_test_three_way_serial()
 	_test_siege_arrival_triggers()
 	_test_crosspass_field_priority()
-	_test_throughput_no_block_enemy()
-	_test_directional_friendly_throughput()
+	_test_capacity_no_block_enemy()
+	_test_directional_friendly_capacity()
 	_test_march_time_linear()
 	_test_siege_time_curve()
 	_test_siege_food_clock()
@@ -92,7 +92,7 @@ func _test_world_generation() -> void:
 	var chokepoint_count := 0
 	for edge in gs.edges:
 		if (
-			edge.max_throughput > 0
+			edge.max_manpower > 0
 			and edge.danger
 				>= Combat.CHOKEPOINT_DANGER_THRESHOLD
 		):
@@ -160,7 +160,7 @@ func _test_world_generation() -> void:
 				var owned_edge := gs.edge_of(current, neighbor)
 				if (
 					owned_edge == null
-					or owned_edge.max_throughput <= 0
+					or owned_edge.max_manpower <= 0
 					or
 					gs.cities[neighbor].owner_nation != n.id
 					or owned_reachable.has(neighbor)
@@ -302,7 +302,14 @@ func _test_world_generation() -> void:
 			if not (gs.neighbors(nb) as Array).has(cid):
 				ok_adj = false
 	_check(ok_adj, "邻接表应对称")
-	var road_counts := {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+	var road_counts := {
+		0: 0,
+		5000: 0,
+		15000: 0,
+		30000: 0,
+		60000: 0,
+		100000: 0,
+	}
 	var degrees := {}
 	var longest_edge := 0.0
 	var roads_by_relief: Array[Edge] = gs.edges.duplicate()
@@ -310,7 +317,7 @@ func _test_world_generation() -> void:
 		return a.max_height_difference < b.max_height_difference
 	)
 	for edge in gs.edges:
-		road_counts[edge.max_throughput] = int(road_counts.get(edge.max_throughput, 0)) + 1
+		road_counts[edge.max_manpower] = int(road_counts.get(edge.max_manpower, 0)) + 1
 		degrees[edge.city_a] = int(degrees.get(edge.city_a, 0)) + 1
 		degrees[edge.city_b] = int(degrees.get(edge.city_b, 0)) + 1
 		var delta := (
@@ -324,18 +331,25 @@ func _test_world_generation() -> void:
 		"最高起伏道路中应包含不可供大军通行的边，分布=%s" % str(road_counts)
 	)
 	_check(
-		int(road_counts[1]) > 0
-		and int(road_counts[2]) > 0
-		and int(road_counts[3]) > 0
-		and int(road_counts[4]) > 0,
-		"正容量道路应形成 1/2/3/4 四个等级，分布=%s" % str(road_counts)
+		int(road_counts[5000]) > 0
+		and int(road_counts[15000]) > 0
+		and int(road_counts[30000]) > 0
+		and int(road_counts[60000]) > 0
+		and int(road_counts[100000]) > 0,
+		"正容量道路应形成 5000~100000 人的五个等级，分布=%s"
+			% str(road_counts)
+	)
+	_check(
+		int(road_counts[100000])
+			< int(ceil(float(gs.edges.size()) * 0.10)),
+		"十万人平原大道必须保持稀少，分布=%s" % str(road_counts)
 	)
 	var low_relief_average := 0.0
 	var high_relief_average := 0.0
 	var comparison_count := maxi(gs.edges.size() / 4, 1)
 	for i in range(comparison_count):
-		low_relief_average += roads_by_relief[i].max_throughput
-		high_relief_average += roads_by_relief[roads_by_relief.size() - 1 - i].max_throughput
+		low_relief_average += roads_by_relief[i].max_manpower
+		high_relief_average += roads_by_relief[roads_by_relief.size() - 1 - i].max_manpower
 	_check(
 		low_relief_average > high_relief_average,
 		"低起伏道路的平均通行等级应高于高起伏道路"
@@ -355,7 +369,7 @@ func _test_world_generation() -> void:
 		var current: int = queue.pop_front()
 		for neighbor in gs.neighbors(current):
 			var edge := gs.edge_of(current, neighbor)
-			if edge.max_throughput <= 0 or reachable.has(neighbor):
+			if edge.max_manpower <= 0 or reachable.has(neighbor):
 				continue
 			reachable[neighbor] = true
 			queue.append(neighbor)
@@ -380,7 +394,7 @@ func _test_world_generation() -> void:
 			terrain_deterministic
 			and original.city_a == copied.city_a
 			and original.city_b == copied.city_b
-			and original.max_throughput == copied.max_throughput
+			and original.max_manpower == copied.max_manpower
 			and _approx(
 				original.max_height_difference,
 				copied.max_height_difference
@@ -1339,10 +1353,10 @@ func _test_crosspass_field_priority() -> void:
 
 	sim.free()
 
-# ------------------------------------------------------------------ 17. 单槽边错身：throughput=1 不得把迎战敌军挡在城里
+# ------------------------------------------------------------------ 17. 一万五容量边错身：敌军不占本国方向容量
 
-func _test_throughput_no_block_enemy() -> void:
-	print("[17] 单槽边(throughput=1)：敌军先占边，迎战方不得被交通容量挡在城里错身穿过")
+func _test_capacity_no_block_enemy() -> void:
+	print("[17] 一万五容量边：敌军先占边，迎战方不得被交通容量挡在城里错身穿过")
 
 	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
@@ -1352,7 +1366,7 @@ func _test_throughput_no_block_enemy() -> void:
 			c1 = e.city_a; c2 = e.city_b; break
 	_check(c1 != -1, "应存在一条敌对相邻边")
 	var edge := gs.edge_of(c1, c2)
-	edge.max_throughput = 1        # 单槽：复现容量满
+	edge.max_manpower = 15000        # 单槽：复现容量满
 	edge.distance = 3; edge.danger = 0.0
 	gs.armies.clear(); gs.battles.clear()
 
@@ -1372,7 +1386,7 @@ func _test_throughput_no_block_enemy() -> void:
 	gs.armies.append(G)
 	sim._begin_next_leg(G)
 	_check(G.on_edge and G.move_to == c1,
-		"迎战方 G 应无视 throughput 进入敌军所在边（on_edge=%s move_to=%d），而非被卡在城里" % [G.on_edge, G.move_to])
+		"迎战方 G 应无视 capacity 进入敌军所在边（on_edge=%s move_to=%d），而非被卡在城里" % [G.on_edge, G.move_to])
 
 	# 推进若干 tick：两军相向应野战，不得错身成攻城
 	var has_field := false; var has_siege := false
@@ -1390,7 +1404,7 @@ func _test_throughput_no_block_enemy() -> void:
 
 # ------------------------------------------------------------------ 17b. 分方向友军容量
 
-func _test_directional_friendly_throughput() -> void:
+func _test_directional_friendly_capacity() -> void:
 	print("[17b] 边容量：同国同向受限，反向独立，敌军不占友军名额")
 	var gs := GameState.new()
 	gs.generate_grid_world(1717)
@@ -1406,11 +1420,11 @@ func _test_directional_friendly_throughput() -> void:
 			to_city = edge.city_b
 			break
 	var edge := gs.edge_of(from_city, to_city)
-	edge.max_throughput = 1
+	edge.max_manpower = 15000
 	edge.passing_count = 0
 	var nation_id := gs.cities[from_city].owner_nation
 
-	var first := _make_army(1700, nation_id, 1000, 10)
+	var first := _make_army(1700, nation_id, 13021, 10)
 	first.state = Army.State.MOVING
 	first.location_city = from_city
 	first.move_from = from_city
@@ -1420,6 +1434,7 @@ func _test_directional_friendly_throughput() -> void:
 	_check(first.on_edge and first.move_to == to_city, "首支同向友军应进入边")
 
 	var same_direction := _make_army(1701, nation_id, 1000, 10)
+	same_direction.max_size = 5000
 	same_direction.state = Army.State.MOVING
 	same_direction.location_city = from_city
 	same_direction.move_from = from_city
@@ -1427,7 +1442,7 @@ func _test_directional_friendly_throughput() -> void:
 	gs.armies.append(same_direction)
 	sim._begin_next_leg(same_direction)
 	_check(not same_direction.on_edge and same_direction.move_to == -1,
-		"同国同方向达到 max_throughput 后应等待")
+		"同国同方向达到 max_manpower 后应等待")
 
 	var reverse := _make_army(1702, nation_id, 1000, 10)
 	reverse.state = Army.State.MOVING
@@ -1448,7 +1463,7 @@ func _test_directional_friendly_throughput() -> void:
 	gs.armies.append(enemy)
 	sim._begin_next_leg(enemy)
 	_check(enemy.on_edge and enemy.move_to == to_city,
-		"敌军不得占用本国同方向 throughput，必须允许追逐/接战")
+		"敌军不得占用本国同方向 capacity，必须允许追逐/接战")
 	_check(edge.passing_count == 3,
 		"总占用可超过单方向上限：正向友军+反向友军+敌军应为 3")
 
@@ -1456,11 +1471,46 @@ func _test_directional_friendly_throughput() -> void:
 	sim._begin_next_leg(same_direction)
 	_check(same_direction.on_edge and same_direction.move_to == to_city,
 		"同向友军释放名额后，等待军应能进入")
+	for small_index in range(2):
+		var small := _make_army(
+			1710 + small_index,
+			nation_id,
+			1000,
+			10
+		)
+		small.max_size = 5000
+		small.state = Army.State.MOVING
+		small.location_city = from_city
+		small.move_from = from_city
+		small.path = [to_city] as Array[int]
+		gs.armies.append(small)
+		sim._begin_next_leg(small)
+		_check(
+			small.on_edge,
+			"三支满编合计15000人的小军应可同向进入一万五容量边"
+		)
+	var fourth_small := _make_army(
+		1712,
+		nation_id,
+		1000,
+		10
+	)
+	fourth_small.max_size = 5000
+	fourth_small.state = Army.State.MOVING
+	fourth_small.location_city = from_city
+	fourth_small.move_from = from_city
+	fourth_small.path = [to_city] as Array[int]
+	gs.armies.append(fourth_small)
+	sim._begin_next_leg(fourth_small)
+	_check(
+		not fourth_small.on_edge,
+		"满编总额超过道路容量后必须等待"
+	)
 
 	var blocked_from := gs.nations[nation_id].capital_city_id
 	var blocked_to: int = gs.neighbors(blocked_from)[0]
 	for neighbor in gs.neighbors(blocked_from):
-		gs.edge_of(blocked_from, neighbor).max_throughput = 0
+		gs.edge_of(blocked_from, neighbor).max_manpower = 0
 	var blocked := _make_army(1704, nation_id, 1000, 10)
 	blocked.state = Army.State.MOVING
 	blocked.location_city = blocked_from
@@ -1508,7 +1558,7 @@ func _test_march_time_linear() -> void:
 		if gs.cities[e.city_a].owner_nation == gs.cities[e.city_b].owner_nation:
 			c1 = e.city_a; c2 = e.city_b; break
 	var edge := gs.edge_of(c1, c2)
-	edge.distance = 1; edge.danger = 0.0; edge.max_throughput = 3
+	edge.distance = 1; edge.danger = 0.0; edge.max_manpower = 45000
 	gs.armies.clear(); gs.battles.clear()
 	var mover := _make_army(1, gs.cities[c1].owner_nation, 500, 10)
 	mover.state = Army.State.MOVING; mover.move_from = c1; mover.move_to = c2
@@ -2042,7 +2092,7 @@ func _test_edge_holding_state() -> void:
 		gs.edge_of(c1, neighbor).danger = 0.0
 	var hold_edge := gs.edge_of(c1, c2)
 	hold_edge.danger = 0.9
-	hold_edge.max_throughput = 3
+	hold_edge.max_manpower = 45000
 	gs.cities[c1].is_food_hub = true
 	var holder := _make_army(800, gs.cities[c1].owner_nation, 1000, 10)
 	holder.state = Army.State.IDLE
@@ -2303,8 +2353,9 @@ func _test_retreat_contact_and_position_continuity() -> void:
 	var first_edge := gs.edge_of(0, 1)
 	var blocked_edge := gs.edge_of(1, 2)
 	first_edge.passing_count = 1
+	blocked_edge.max_manpower = 30000
 	blocked_edge.passing_count = 0
-	for i in range(blocked_edge.max_throughput):
+	for i in range(2):
 		var blocker := _make_army(9100 + i, mover.owner_nation, 1000, 10)
 		blocker.state = Army.State.MOVING
 		blocker.location_city = 1
@@ -2433,8 +2484,8 @@ func _test_ai_strategic_map_and_threat() -> void:
 		city.owner_nation = 1
 	for city_id in [0, 1, 2]:
 		gs.cities[city_id].owner_nation = 0
-	gs.edge_of(0, 1).max_throughput = 1
-	gs.edge_of(1, 2).max_throughput = 1
+	gs.edge_of(0, 1).max_manpower = 15000
+	gs.edge_of(1, 2).max_manpower = 15000
 	_set_single_warehouse(gs, 0, 0, 500)
 	var view := AiWorldView.build(gs, 0)
 	var snapshot := StrategicMapSnapshot.build(view)
@@ -2460,6 +2511,18 @@ func _test_ai_strategic_map_and_threat() -> void:
 		and threat.threat_at(1) > threat.threat_at(0),
 		"敌军威胁应随抵达时间衰减：c2=%.1f c1=%.1f c0=%.1f"
 			% [threat.threat_at(2), threat.threat_at(1), threat.threat_at(0)])
+	gs.edge_of(1, 2).max_manpower = 5000
+	threat = ThreatField.build(AiWorldView.build(gs, 0))
+	_check(
+		_approx(threat.threat_at(1), 0.0),
+		"一万五满编敌军的威胁不得穿过五千容量道路"
+	)
+	enemy.max_size = 5000
+	threat = ThreatField.build(AiWorldView.build(gs, 0))
+	_check(
+		threat.threat_at(1) > 0.0,
+		"五千满编敌军的威胁应能穿过五千容量道路"
+	)
 
 	var deep_state := GameState.new()
 	deep_state.generate_grid_world(7003)
@@ -2471,9 +2534,9 @@ func _test_ai_strategic_map_and_threat() -> void:
 	for city_id in [9, 17, 25]:
 		deep_state.cities[city_id].owner_nation = 1
 	for edge in deep_state.edges:
-		edge.max_throughput = 0
+		edge.max_manpower = 0
 	for pair in [[16, 17], [17, 9], [17, 25]]:
-		deep_state.edge_of(pair[0], pair[1]).max_throughput = 2
+		deep_state.edge_of(pair[0], pair[1]).max_manpower = 30000
 	deep_state.nations[1].capital_city_id = 25
 	deep_state.cities[25].is_capital = true
 	var deep_view := AiWorldView.build(deep_state, 0)
@@ -2517,10 +2580,10 @@ func _test_ai_strategic_map_and_threat() -> void:
 	for city_id in [1, 2]:
 		route_state.cities[city_id].owner_nation = 1
 	for edge in route_state.edges:
-		edge.max_throughput = 0
+		edge.max_manpower = 0
 	for pair in [[0, 1], [1, 2], [2, 10]]:
 		var route_edge := route_state.edge_of(pair[0], pair[1])
-		route_edge.max_throughput = 2
+		route_edge.max_manpower = 30000
 		route_edge.distance = 1
 	route_state.cities[1].defense = 1
 	route_state.cities[2].defense = 1
@@ -2685,9 +2748,9 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	)
 	var distant_enemy_city := capital_id + 2
 	gs.cities[distant_enemy_city].owner_nation = 1
-	gs.edge_of(capital_id, capital_id + 1).max_throughput = 2
+	gs.edge_of(capital_id, capital_id + 1).max_manpower = 30000
 	gs.edge_of(capital_id, capital_id + 1).distance = 1
-	gs.edge_of(capital_id + 1, distant_enemy_city).max_throughput = 2
+	gs.edge_of(capital_id + 1, distant_enemy_city).max_manpower = 30000
 	gs.edge_of(capital_id + 1, distant_enemy_city).distance = 1
 	var distant_enemy := _make_army(936, 1, 12000, 12, 12)
 	distant_enemy.location_city = distant_enemy_city
@@ -2716,10 +2779,10 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		city.owner_nation = 0
 	corridor_state.cities[4].owner_nation = 1
 	for corridor_edge in corridor_state.edges:
-		corridor_edge.max_throughput = 0
+		corridor_edge.max_manpower = 0
 	for pair in [[0, 1], [1, 2], [2, 3], [3, 4], [0, 8]]:
 		var open_edge := corridor_state.edge_of(pair[0], pair[1])
-		open_edge.max_throughput = 2
+		open_edge.max_manpower = 30000
 		open_edge.distance = 1
 		open_edge.danger = 0.1
 	_set_single_warehouse(corridor_state, 0, 0, 5000)
@@ -2824,7 +2887,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			threatened_city,
 			neighbor
 		)
-		defense_edge.max_throughput = 2
+		defense_edge.max_manpower = 30000
 		defense_edge.distance = 1
 	defense_state.set_diplomatic_relation(
 		0,
@@ -2978,6 +3041,81 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		]
 	)
 
+	var stable_state := GameState.new()
+	stable_state.generate_grid_world(7006)
+	stable_state.armies.clear()
+	for stable_city in stable_state.cities:
+		stable_city.owner_nation = 0
+	var stable_city_id := 9
+	var stable_enemy_city := 10
+	stable_state.cities[stable_enemy_city].owner_nation = 1
+	stable_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	stable_state.edge_of(
+		stable_city_id,
+		stable_enemy_city
+	).max_manpower = 30000
+	var stable_holder := _make_army(964, 0, 15000, 10, 10)
+	stable_holder.state = Army.State.HOLDING
+	stable_holder.location_city = stable_city_id
+	stable_holder.move_from = stable_city_id
+	stable_holder.move_to = stable_enemy_city
+	stable_holder.move_progress = Simulation.HOLDING_TARGET_PROGRESS
+	stable_holder.on_edge = true
+	stable_holder.defensive_deployment_until_day = (
+		stable_state.day - 1
+	)
+	var stable_enemy := _make_army(965, 1, 10000, 10, 10)
+	stable_enemy.state = Army.State.IDLE
+	stable_enemy.location_city = stable_enemy_city
+	stable_enemy.move_from = stable_enemy_city
+	stable_state.armies.append_array([
+		stable_holder,
+		stable_enemy,
+	])
+	var stable_view := AiWorldView.build(stable_state, 0)
+	var stable_plan := CityDefensePlan.build(
+		stable_view,
+		StrategicMapSnapshot.build(stable_view),
+		ThreatField.build(stable_view)
+	)
+	var stable_order := stable_plan.candidate_for(
+		stable_holder,
+		ArmyCoordinator.new()
+	)
+	_check(
+		stable_order == null
+			or stable_order.kind != ActionCandidate.Kind.RETREAT,
+		"稳定威胁布局下驻边超过90天后不得无故回城"
+	)
+	stable_holder.state = Army.State.IDLE
+	stable_holder.location_city = stable_city_id
+	stable_holder.move_from = stable_city_id
+	stable_holder.move_to = -1
+	stable_holder.on_edge = false
+	stable_holder.defensive_blocked_edge_a = stable_city_id
+	stable_holder.defensive_blocked_edge_b = stable_enemy_city
+	stable_holder.defensive_deployment_until_day = (
+		stable_state.day
+		+ Simulation.DEFENSIVE_DEPLOYMENT_LOCK_DAYS
+	)
+	stable_view = AiWorldView.build(stable_state, 0)
+	stable_plan = CityDefensePlan.build(
+		stable_view,
+		StrategicMapSnapshot.build(stable_view),
+		ThreatField.build(stable_view)
+	)
+	_check(
+		stable_plan.candidate_for(
+			stable_holder,
+			ArmyCoordinator.new()
+		) == null,
+		"刚从某边撤回时，持续邻敌不得绕过锁立即命令军队返回同一边"
+	)
+
 	alternate_attacker.state = Army.State.IDLE
 	alternate_attacker.on_edge = false
 	alternate_attacker.location_city = 10
@@ -3043,7 +3181,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	hard_state.edge_of(
 		hard_city,
 		hard_enemy_city
-	).max_throughput = 2
+	).max_manpower = 30000
 	hard_state.set_diplomatic_relation(
 		0,
 		1,
@@ -3127,8 +3265,8 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		batch_state.cities[city_id].owner_nation = 0
 	for city_id in [6, 7]:
 		batch_state.cities[city_id].owner_nation = 1
-	batch_state.edge_of(0, 1).max_throughput = 1
-	batch_state.edge_of(6, 7).max_throughput = 2
+	batch_state.edge_of(0, 1).max_manpower = 15000
+	batch_state.edge_of(6, 7).max_manpower = 30000
 	var batch_left := _make_army(957, 0, 5000, 10, 10)
 	batch_left.location_city = 0
 	batch_left.move_from = 0
@@ -3215,7 +3353,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	gs.cities[target_id].defense = 100
 	_set_single_warehouse(gs, 0, 0, 5000)
 	for neighbor in gs.neighbors(target_id):
-		gs.edge_of(target_id, neighbor).max_throughput = 2
+		gs.edge_of(target_id, neighbor).max_manpower = 30000
 	gs.edge_of(17, target_id).distance = 5
 	gs.edge_of(19, target_id).distance = 1
 	var holder_a := _make_army(940, 0, 400, 20, 20)
@@ -3297,7 +3435,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	edge_guard_state.cities[guarded_target].owner_nation = 1
 	edge_guard_state.cities[guarded_target].defense = 1
 	var guarded_edge := edge_guard_state.edge_of(17, guarded_target)
-	guarded_edge.max_throughput = 2
+	guarded_edge.max_manpower = 30000
 	var understrength := _make_army(946, 0, 10000, 10, 10)
 	understrength.state = Army.State.HOLDING
 	understrength.location_city = 17
@@ -3366,7 +3504,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	participant_state.cities[10].owner_nation = 1
 	for edge_pair in [[17, 18], [19, 18], [10, 18]]:
 		var participant_edge := participant_state.edge_of(edge_pair[0], edge_pair[1])
-		participant_edge.max_throughput = 2
+		participant_edge.max_manpower = 30000
 		participant_edge.distance = 1
 	var tiny_participant := _make_army(948, 0, 500, 10, 10)
 	tiny_participant.state = Army.State.HOLDING
@@ -3442,8 +3580,8 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	var breakout_target := 18
 	for neighbor in breakout_state.neighbors(breakout_from):
 		breakout_state.cities[neighbor].owner_nation = 1
-		breakout_state.edge_of(breakout_from, neighbor).max_throughput = (
-			1 if neighbor == breakout_target else 0
+		breakout_state.edge_of(breakout_from, neighbor).max_manpower = (
+			15000 if neighbor == breakout_target else 0
 		)
 	breakout_state.cities[breakout_target].defense = 10
 	var starving := _make_army(942, 0, 1000, 10, 10)
@@ -3599,7 +3737,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 	for edge in gs.edges:
 		if gs.cities[edge.city_a].owner_nation == nation_id \
 			and gs.cities[edge.city_b].owner_nation == nation_id \
-			and edge.max_throughput > 0:
+			and edge.max_manpower > 0:
 			edge_a = edge.city_a
 			edge_b = edge.city_b
 			break
@@ -4304,11 +4442,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	plan_state.edge_of(
 		plan_origin,
 		plan_primary
-	).max_throughput = 2
+	).max_manpower = 30000
 	plan_state.edge_of(
 		plan_origin,
 		plan_secondary
-	).max_throughput = 2
+	).max_manpower = 30000
 	plan_state.set_diplomatic_relation(
 		0,
 		1,
@@ -4420,16 +4558,58 @@ func _test_diplomacy_state_and_ai() -> void:
 		and not defense_state.is_enemy(3, 2),
 		"共同防御只召唤被宣战方盟友，攻击方盟友不得加入主动战争"
 	)
-	var allied_origin := defense_state.cities_of(3)[0]
-	var enemy_target := defense_state.cities_of(1)[0]
+	var allied_origin: City = null
+	var enemy_target: City = null
+	var allied_border: Edge = null
+	for border_edge in defense_state.edges:
+		var border_a := defense_state.cities[border_edge.city_a]
+		var border_b := defense_state.cities[border_edge.city_b]
+		if border_a.owner_nation == 3 and border_b.owner_nation == 1:
+			allied_origin = border_a
+			enemy_target = border_b
+			allied_border = border_edge
+			break
+		if border_b.owner_nation == 3 and border_a.owner_nation == 1:
+			allied_origin = border_b
+			enemy_target = border_a
+			allied_border = border_edge
+			break
+	_check(
+		allied_origin != null and enemy_target != null,
+		"外交测试地图必须存在国3到国1的相邻边界"
+	)
+	allied_border.max_manpower = 30000
 	var allied_origin_army := _make_army(9051, 0, 1000, 10, 10)
 	allied_origin_army.location_city = allied_origin.id
 	allied_origin_army.move_from = allied_origin.id
+	allied_origin_army.state = Army.State.MOVING
+	allied_origin_army.path = [
+		enemy_target.id
+	] as Array[int]
 	defense_state.armies.append(allied_origin_army)
-	defense_sim._capture_city(allied_origin_army, enemy_target)
+	defense_sim._begin_next_leg(allied_origin_army)
 	_check(
-		enemy_target.owner_nation == 0,
-		"从盟国领土出发的占领仍必须归实际占领军所属国"
+		allied_origin_army.occupation_claimant_nation == 3,
+		"从盟国边界进入敌境时必须冻结盟国为占领归属国"
+	)
+	defense_sim._release_edge(allied_origin_army)
+	allied_origin.owner_nation = 0
+	defense_sim._capture_city(allied_origin_army, enemy_target)
+	defense_state.set_diplomatic_relation(
+		0,
+		3,
+		GameState.DiplomaticRelation.NEUTRAL
+	)
+	var allied_legal_transfer := (
+		defense_state.recognize_occupied_territory(0, 1)
+	)
+	_check(
+		enemy_target.owner_nation == 3
+		and allied_legal_transfer.has(enemy_target.id)
+		and defense_state.recognized_owner_of(
+			enemy_target.id
+		) == 3,
+		"从盟国领土出发的占领及和平后法理必须归出发地盟国"
 	)
 	defense_sim.free()
 
@@ -4886,7 +5066,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		for neighbor in gs.neighbors(city.id):
 			if (
 				gs.cities[neighbor].owner_nation == 0
-				and gs.edge_of(city.id, neighbor).max_throughput > 0
+				and gs.edge_of(city.id, neighbor).max_manpower > 0
 			):
 				resource_target = city
 				break
@@ -4976,7 +5156,7 @@ func _make_edge(danger: float, distance: int) -> Edge:
 	e.city_b = 1
 	e.distance = distance
 	e.danger = danger
-	e.max_throughput = 3
+	e.max_manpower = 45000
 	return e
 
 

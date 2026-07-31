@@ -197,7 +197,7 @@ func _build_symmetric_world() -> GameState:
 			or (a.x == 4 and b.x == 3)
 		):
 			edge.danger = 0.45
-		edge.max_throughput = 2
+		edge.max_manpower = 30000
 		edge.passing_count = 0
 		edge.occupied = false
 
@@ -277,7 +277,7 @@ func _validate_symmetry(state: GameState) -> bool:
 			mirror == null
 			or edge.distance != mirror.distance
 			or not is_equal_approx(edge.danger, mirror.danger)
-			or edge.max_throughput != mirror.max_throughput
+			or edge.max_manpower != mirror.max_manpower
 		):
 			return false
 	return true

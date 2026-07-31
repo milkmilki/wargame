@@ -2,10 +2,14 @@ class_name Edge
 extends RefCounted
 ## 通路（无向边）数据模型。端点规范化为 city_a < city_b。
 
+const MIN_MANPOWER: int = 5000
+const STANDARD_MANPOWER: int = 15000
+const MAX_MANPOWER: int = 100000
+
 var city_a: int = -1                       ## 端点 A（较小 id）
 var city_b: int = -1                       ## 端点 B（较大 id）
 
-var max_throughput: int = 1                ## 每个国家、每个方向允许的最大友军数量
+var max_manpower: int = STANDARD_MANPOWER  ## 每个国家、每个方向允许的满编兵力总和
 var distance: int = 1                      ## 距离
 var danger: float = 0.0                    ## 地形危险系数 (0,1)
 var max_height_difference: float = 0.0     ## 两城连线上最高点与最低点之差 [0,1]

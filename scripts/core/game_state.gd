@@ -97,7 +97,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
 	_generate_grid_edges()
-	_classify_road_throughput()
+	_classify_road_capacity()
 	_generate_armies()
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
@@ -366,7 +366,7 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 		edge.distance = int(road["distance"])
 		edge.danger = float(road["danger"])
 		edge.max_height_difference = float(road["height_difference"])
-		edge.max_throughput = int(road["max_throughput"])
+		edge.max_manpower = int(road["max_manpower"])
 		edges.append(edge)
 		edge_lookup[_edge_key(lo, hi)] = edge
 		(adjacency[lo] as Array[int]).append(hi)
@@ -383,7 +383,7 @@ func _add_edge(a: int, b: int) -> void:
 	e.city_b = hi
 	e.distance = rng.randi_range(1, 5)
 	e.danger = rng.randf_range(0.0, 0.5)
-	e.max_throughput = 1
+	e.max_manpower = 15000
 	e.occupied = false
 	edges.append(e)
 	edge_lookup[_edge_key(lo, hi)] = e
@@ -391,7 +391,7 @@ func _add_edge(a: int, b: int) -> void:
 	(adjacency[hi] as Array[int]).append(lo)
 
 
-func _classify_road_throughput() -> void:
+func _classify_road_capacity() -> void:
 	var flow := {}
 	for edge in edges:
 		flow[_edge_key(edge.city_a, edge.city_b)] = 0.0
@@ -416,7 +416,7 @@ func _classify_road_throughput() -> void:
 
 	var backbone := _minimum_spanning_backbone()
 	for edge in edges:
-		edge.max_throughput = 1
+		edge.max_manpower = 15000
 	var zero_candidates: Array[Edge] = []
 	for edge in edges:
 		if not backbone.has(_edge_key(edge.city_a, edge.city_b)):
@@ -433,7 +433,7 @@ func _classify_road_throughput() -> void:
 	var zero_keys := {}
 	for i in range(zero_count):
 		var edge := zero_candidates[i]
-		edge.max_throughput = 0
+		edge.max_manpower = 0
 		edge.danger = maxf(edge.danger, 0.75)
 		zero_keys[_edge_key(edge.city_a, edge.city_b)] = true
 
@@ -449,12 +449,14 @@ func _classify_road_throughput() -> void:
 			and _edge_key(a.city_a, a.city_b) < _edge_key(b.city_a, b.city_b)
 		)
 	)
-	var level4_count := int(ceil(float(roads.size()) * 0.08))
+	var level4_count := int(ceil(float(roads.size()) * 0.05))
 	var level3_end := level4_count + int(ceil(float(roads.size()) * 0.10))
-	var level2_end := level3_end + int(ceil(float(roads.size()) * 0.20))
+	var level2_end := level3_end + int(ceil(float(roads.size()) * 0.35))
 	for i in range(roads.size()):
-		roads[i].max_throughput = 4 if i < level4_count else (
-			3 if i < level3_end else (2 if i < level2_end else 1)
+		roads[i].max_manpower = 100000 if i < level4_count else (
+			60000 if i < level3_end else (
+				30000 if i < level2_end else 15000
+			)
 		)
 
 
@@ -795,7 +797,7 @@ func recognized_owner_of(city_id: int) -> int:
 	return recognized_city_owners[city_id]
 
 
-## 双边和平只确认交战双方之间的实际控制区，不误处理第三国领土。
+## 双边和平确认交战双方及其占领归属盟友取得的实际控制区。
 func recognize_occupied_territory(
 	nation_a: int,
 	nation_b: int
@@ -803,13 +805,37 @@ func recognize_occupied_territory(
 	var transferred: Array[int] = []
 	for city in cities:
 		var recognized_owner := recognized_owner_of(city.id)
+		if city.owner_nation == recognized_owner:
+			continue
+		var occupying_side := -1
+		if city.occupation_sponsor_nation in [
+			nation_a,
+			nation_b,
+		]:
+			occupying_side = city.occupation_sponsor_nation
+		elif (
+			city.owner_nation == nation_a
+			or is_allied(city.owner_nation, nation_a)
+		):
+			occupying_side = nation_a
+		elif (
+			city.owner_nation == nation_b
+			or is_allied(city.owner_nation, nation_b)
+		):
+			occupying_side = nation_b
+		var recognized_side := -1
+		if recognized_owner == nation_a:
+			recognized_side = nation_a
+		elif recognized_owner == nation_b:
+			recognized_side = nation_b
 		if (
-			city.owner_nation == recognized_owner
-			or city.owner_nation not in [nation_a, nation_b]
-			or recognized_owner not in [nation_a, nation_b]
+			occupying_side < 0
+			or recognized_side < 0
+			or occupying_side == recognized_side
 		):
 			continue
 		recognized_city_owners[city.id] = city.owner_nation
+		city.occupation_sponsor_nation = -1
 		transferred.append(city.id)
 	if not transferred.is_empty():
 		ownership_revision += 1

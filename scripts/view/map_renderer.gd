@@ -536,7 +536,7 @@ func _draw_edges() -> void:
 		var pa := _city_center(state.cities[e.city_a])
 		var pb := _city_center(state.cities[e.city_b])
 		var danger := clampf(e.danger, 0.0, 1.0)
-		if e.max_throughput <= 0:
+		if e.max_manpower <= 0:
 			# 高山或小渡口等战略阻断仍显示地理连接，但不属于军事道路网络。
 			var blocked_col := Color(0.20, 0.16, 0.24).lerp(
 				Color(0.48, 0.20, 0.30), danger
@@ -544,7 +544,13 @@ func _draw_edges() -> void:
 			draw_line(pa, pb, blocked_col, 2.0 * _display_scale)
 			_draw_blocked_edge_marker(pa, pb, blocked_col.lightened(0.28))
 			continue
-		var road_level := clampi(e.max_throughput, 1, 4)
+		var road_level := 1
+		if e.max_manpower >= 100000:
+			road_level = 4
+		elif e.max_manpower >= 60000:
+			road_level = 3
+		elif e.max_manpower >= 15000:
+			road_level = 2
 		var road_colors: Array[Color] = [
 			Color(0.34, 0.34, 0.38),
 			Color(0.48, 0.46, 0.42),

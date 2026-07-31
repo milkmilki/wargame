@@ -78,7 +78,7 @@ func _find_frontier() -> void:
 	var neutral_cities_by_nation := {}
 	var neutral_edges_by_nation := {}
 	for edge in _state.edges:
-		if edge.max_throughput <= 0:
+		if edge.max_manpower <= 0:
 			continue
 		var owner_a := _state.cities[edge.city_a].owner_nation
 		var owner_b := _state.cities[edge.city_b].owner_nation
@@ -171,7 +171,7 @@ func _neutral_border_concentration(
 		var edge := _state.edge_of(friendly_city, neighbor)
 		if (
 			edge == null
-			or edge.max_throughput <= 0
+			or edge.max_manpower <= 0
 			or _state.cities[neighbor].owner_nation != other_nation
 		):
 			continue
@@ -288,7 +288,7 @@ func _friendly_neighbors(city_id: int) -> Array[int]:
 		if _state.cities[neighbor].owner_nation != nation_id:
 			continue
 		var edge := _state.edge_of(city_id, neighbor)
-		if edge == null or edge.max_throughput <= 0:
+		if edge == null or edge.max_manpower <= 0:
 			continue
 		result.append(neighbor)
 	result.sort()
@@ -333,14 +333,17 @@ func _finalize_edge_values() -> void:
 			value += 0.15 * float(city_value.get(edge.city_b, 0.0))
 		value += 3.0 * float(bridge_impact.get(key, 0.0)) / maxf(_total_friendly_value, 0.001)
 		value += 2.0 * float(corridor_flow.get(key, 0.0)) / max_flow
-		value += 0.75 * float(maxi(edge.max_throughput - 1, 0))
+		var capacity_units := (
+			float(edge.max_manpower) / 15000.0
+		)
+		value += 0.75 * maxf(capacity_units - 1.0, 0.0)
 		if (
 			_state.is_enemy(owner_a, owner_b)
 			and (owner_a == nation_id or owner_b == nation_id)
 		):
 			value += 1.0 + edge.danger * 2.0
 		if (
-			edge.max_throughput > 0
+			edge.max_manpower > 0
 			and edge.danger
 				>= Combat.CHOKEPOINT_DANGER_THRESHOLD
 		):
@@ -390,7 +393,7 @@ func _compute_offensive_values(view: AiWorldView) -> void:
 		var gateway_value := 0.0
 		for neighbor in _state.neighbors(city_id):
 			var edge := _state.edge_of(city_id, neighbor)
-			if edge == null or edge.max_throughput <= 0:
+			if edge == null or edge.max_manpower <= 0:
 				continue
 			var neighbor_owner := _state.cities[neighbor].owner_nation
 			if neighbor_owner == nation_id:
@@ -430,7 +433,7 @@ func _enemy_cut_value_ratio(target_city: int, enemy_nation: int) -> float:
 			var edge := _state.edge_of(current, neighbor)
 			if (
 				edge == null
-				or edge.max_throughput <= 0
+				or edge.max_manpower <= 0
 				or _state.cities[neighbor].owner_nation != enemy_nation
 			):
 				continue

@@ -72,7 +72,6 @@ var _ai_last_decision_day: int = -1
 var _collect_ai_commands: bool = false
 var _ai_command_buffer: Array[AiCommandIntent] = []
 var _ai_planned_armies: Dictionary = {}
-var _ai_planned_hold_edges: Dictionary = {}
 var _ai_planned_first_legs: Dictionary = {}
 var _ai_command_sequence: Dictionary = {}
 var _ai_snapshot_armies: Dictionary = {}
@@ -1229,10 +1228,25 @@ func _ai_assign_targets() -> void:
 			view.friendly_armies, snapshot, strongest_first
 		)
 		for army in decision_order:
+			var campaign_target := int(
+				nation.campaign_attack_assignments.get(
+					army.id,
+					-1
+				)
+			)
 			var campaign_locked := (
-				nation.war_preparation_target_nation >= 0
-				and nation.campaign_attack_assignments.has(
-					army.id
+				campaign_target >= 0
+				and (
+					nation.war_preparation_target_nation >= 0
+					or (
+						campaign_target < state.cities.size()
+						and state.is_enemy(
+							nation_id,
+							state.cities[
+								campaign_target
+							].owner_nation
+						)
+					)
 				)
 			)
 			if campaign_locked:
@@ -1249,6 +1263,50 @@ func _ai_assign_targets() -> void:
 					defense_anchor
 				):
 					campaign_locked = false
+			if (
+				campaign_locked
+				and army.size > 0
+				and not _ai_planned_armies.has(army.id)
+			):
+				if (
+					campaign_target >= 0
+					and state.is_enemy(
+						nation_id,
+						state.cities[
+							campaign_target
+						].owner_nation
+					)
+					and _army_ready_for_campaign_target(
+						army,
+						nation_id,
+						campaign_target
+					)
+				):
+					var continue_campaign := (
+						ActionCandidate.make(
+							ActionCandidate.Kind.ATTACK,
+							2000.0,
+							(
+								"继续执行国家战役计划："
+								+ "军%d攻击城市%d"
+							) % [
+								army.id,
+								campaign_target,
+							],
+							campaign_target
+						)
+					)
+					continue_campaign.minimum_commit_days = (
+						CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+					)
+					if _execute_ai_candidate(
+						army,
+						continue_campaign
+					):
+						coordinator.reserve(
+							campaign_target,
+							army
+						)
 			if (
 				army.size <= 0
 				or _ai_planned_armies.has(army.id)
@@ -1553,7 +1611,7 @@ func _ensure_campaign_attack_plan(
 				if (
 					neighbor == primary_city
 					or edge == null
-					or edge.max_throughput <= 0
+					or edge.max_manpower <= 0
 					or state.cities[neighbor].owner_nation
 						!= target_nation
 				):
@@ -1800,7 +1858,13 @@ func _assign_offensive_staging_orders(
 		var best_distance := INF
 		for staging_city in staging:
 			var field := Pathfinding.dijkstra_field(
-				state, army.location_city, nation_id, false, true
+				state,
+				army.location_city,
+				nation_id,
+				false,
+				true,
+				-1,
+				army.max_size
 			)
 			var distance := float(field["dist"][staging_city])
 			if distance < best_distance:
@@ -2380,7 +2444,6 @@ func _clear_ai_command_collection() -> void:
 	_collect_ai_commands = false
 	_ai_command_buffer.clear()
 	_ai_planned_armies.clear()
-	_ai_planned_hold_edges.clear()
 	_ai_planned_first_legs.clear()
 	_ai_command_sequence.clear()
 	_ai_snapshot_armies.clear()
@@ -2414,7 +2477,8 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			candidate.kind != ActionCandidate.Kind.ATTACK,
 			candidate.target_city
 				if candidate.kind == ActionCandidate.Kind.ATTACK
-				else -1
+				else -1,
+			army.max_size
 		)
 		prepared_path = Pathfinding.reconstruct(
 			field["prev"],
@@ -2432,22 +2496,31 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			first_leg = prepared_path[0]
 	if first_leg != -1:
 		var first_edge := state.edge_of(army.location_city, first_leg)
-		if first_edge == null or first_edge.max_throughput <= 0:
+		if first_edge == null or first_edge.max_manpower <= 0:
 			return false
 		var leg_key := _ai_first_leg_key(
 			army.owner_nation,
 			army.location_city,
 			first_leg
 		)
-		var occupied := _friendly_same_direction_count(
+		var occupied_manpower := _friendly_same_direction_manpower(
 			army.owner_nation,
 			army.location_city,
 			first_leg
 		)
-		var reserved := int(_ai_planned_first_legs.get(leg_key, 0))
-		if occupied + reserved >= first_edge.max_throughput:
+		var reserved_manpower := int(
+			_ai_planned_first_legs.get(leg_key, 0)
+		)
+		if (
+			occupied_manpower
+			+ reserved_manpower
+			+ army.max_size
+			> first_edge.max_manpower
+		):
 			return false
-		_ai_planned_first_legs[leg_key] = reserved + 1
+		_ai_planned_first_legs[leg_key] = (
+			reserved_manpower + army.max_size
+		)
 	var sequence := int(
 		_ai_command_sequence.get(army.owner_nation, 0)
 	)
@@ -2460,14 +2533,6 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 		path_prevalidated
 	))
 	_ai_planned_armies[army.id] = true
-	if candidate.kind == ActionCandidate.Kind.HOLD:
-		_ai_planned_hold_edges[
-			_ai_hold_order_key(
-				army.owner_nation,
-				candidate.target_edge_a,
-				candidate.target_edge_b
-			)
-		] = true
 	return true
 
 
@@ -2482,19 +2547,7 @@ func _can_queue_ai_candidate(
 			return true
 		if army.state != Army.State.IDLE or candidate.target_city == -1:
 			return false
-		var hold_key := _ai_hold_order_key(
-			army.owner_nation,
-			army.location_city,
-			candidate.target_city
-		)
-		return (
-			not _ai_planned_hold_edges.has(hold_key)
-			and not _edge_has_friendly_holder_or_order(
-				army.owner_nation,
-				army.location_city,
-				candidate.target_city
-			)
-		)
+		return true
 	if candidate.kind in [
 		ActionCandidate.Kind.ATTACK,
 		ActionCandidate.Kind.REINFORCE,
@@ -2570,17 +2623,6 @@ func _commit_ai_command_collection(
 	_clear_ai_command_collection()
 
 
-func _ai_hold_order_key(
-	nation_id: int,
-	city_a: int,
-	city_b: int
-) -> String:
-	return "%d:%d" % [
-		nation_id,
-		_edge_key_of(city_a, city_b),
-	]
-
-
 static func _ai_first_leg_key(
 	nation_id: int,
 	from_city: int,
@@ -2603,10 +2645,6 @@ func _execute_ai_candidate(
 			return true
 		if army.state != Army.State.IDLE or candidate.target_city == -1:
 			return false
-		if _edge_has_friendly_holder_or_order(
-			army.owner_nation, army.location_city, candidate.target_city
-		):
-			return false
 		army.path = [candidate.target_city] as Array[int]
 		army.hold_target_progress = HOLDING_TARGET_PROGRESS
 	elif candidate.kind in [
@@ -2622,6 +2660,11 @@ func _execute_ai_candidate(
 				army.move_progress = 1.0 - army.move_progress
 			elif candidate.target_city != army.move_to:
 				return false
+				_set_occupation_claimant_for_crossing(
+					army,
+					army.move_from,
+					army.move_to
+				)
 			army.state = Army.State.MOVING
 			army.holding_days = 0
 			army.hold_target_progress = -1.0
@@ -2641,7 +2684,8 @@ func _execute_ai_candidate(
 				candidate.kind != ActionCandidate.Kind.ATTACK,
 				candidate.target_city
 					if candidate.kind == ActionCandidate.Kind.ATTACK
-					else -1
+					else -1,
+				army.max_size
 			)
 			army.path = Pathfinding.reconstruct(
 				field["prev"], army.location_city, candidate.target_city
@@ -2670,7 +2714,13 @@ func _execute_ai_candidate(
 			army.path = prepared_path.duplicate()
 		else:
 			var retreat_field := Pathfinding.dijkstra_field(
-				state, army.location_city, army.owner_nation, false, true
+				state,
+				army.location_city,
+				army.owner_nation,
+				false,
+				true,
+				-1,
+				army.max_size
 			)
 			army.path = Pathfinding.reconstruct(
 				retreat_field["prev"],
@@ -2706,6 +2756,25 @@ func _record_ai_order(army: Army, candidate: ActionCandidate) -> void:
 		army.defensive_deployment_until_day = (
 			state.day + DEFENSIVE_DEPLOYMENT_LOCK_DAYS
 		)
+		if (
+			candidate.kind == ActionCandidate.Kind.RETREAT
+			and candidate.target_edge_a >= 0
+			and candidate.target_edge_b >= 0
+		):
+			army.defensive_blocked_edge_a = mini(
+				candidate.target_edge_a,
+				candidate.target_edge_b
+			)
+			army.defensive_blocked_edge_b = maxi(
+				candidate.target_edge_a,
+				candidate.target_edge_b
+			)
+		elif candidate.kind in [
+			ActionCandidate.Kind.HOLD,
+			ActionCandidate.Kind.REINFORCE,
+		]:
+			army.defensive_blocked_edge_a = -1
+			army.defensive_blocked_edge_b = -1
 	if candidate.offensive_bonus_days > 0:
 		_grant_offensive_bonus(
 			army,
@@ -2741,7 +2810,7 @@ func _advance_movement() -> void:
 		if not _is_travelling(army) or army.size <= 0:
 			continue   # FIGHTING 军队冻结在原地，不推进
 		if army.move_to == -1:
-			# 等待进入下一段（上月被 throughput 卡住）
+			# 等待进入下一段（上月被 capacity 卡住）
 			_begin_next_leg(army)
 			if army.move_to == -1:
 				continue
@@ -2775,7 +2844,7 @@ func _advance_movement() -> void:
 	_purge_dead_armies()
 
 
-## 尝试进入 path 的下一段边。throughput 仅限制同国同方向友军；反向与敌军独立。
+## 尝试进入 path 的下一段边。capacity 仅限制同国同方向友军；反向与敌军独立。
 ## 前置约定：调用前 army.move_from 已锚定为当前所在城。
 func _begin_next_leg(army: Army) -> void:
 	var from_city := army.move_from
@@ -2787,7 +2856,7 @@ func _begin_next_leg(army: Army) -> void:
 		return
 	var next_city: int = army.path[0]
 	var edge := state.edge_of(from_city, next_city)
-	if edge == null or edge.max_throughput <= 0:
+	if edge == null or edge.max_manpower <= 0:
 		# 路径失效或道路禁止大军通行：普通军等待 AI 重规划，撤退军立即改走合法路线。
 		army.path.clear()
 		if army.state == Army.State.RETREATING:
@@ -2806,10 +2875,23 @@ func _begin_next_leg(army: Army) -> void:
 		else:
 			_settle_idle(army, from_city)
 		return
-	if _friendly_same_direction_count(army.owner_nation, from_city, next_city) >= edge.max_throughput:
-		# 只被同国同方向队列阻塞；反向友军和敌军均不占本方向名额。
+	var occupied_manpower := _friendly_same_direction_manpower(
+		army.owner_nation,
+		from_city,
+		next_city
+	)
+	if (
+		occupied_manpower + army.max_size
+		> edge.max_manpower
+	):
+		# 只累计同国同方向的满编兵力；反向友军和敌军不占本方向容量。
 		army.move_to = -1
 		return
+	_set_occupation_claimant_for_crossing(
+		army,
+		from_city,
+		next_city
+	)
 	army.path.pop_front()
 	army.move_to = next_city
 	army.move_progress = 0.0
@@ -2820,16 +2902,49 @@ func _begin_next_leg(army: Army) -> void:
 	army.on_edge = true
 
 
-func _friendly_same_direction_count(nation_id: int, from_city: int, to_city: int) -> int:
-	var count := 0
+func _friendly_same_direction_manpower(
+	nation_id: int,
+	from_city: int,
+	to_city: int
+) -> int:
+	var manpower := 0
 	for other in state.armies:
 		if other.size <= 0 or other.owner_nation != nation_id:
 			continue
 		if not other.on_edge or other.move_to == -1:
 			continue
 		if other.move_from == from_city and other.move_to == to_city:
-			count += 1
-	return count
+			manpower += maxi(other.max_size, 0)
+	return manpower
+
+
+func _set_occupation_claimant_for_crossing(
+	army: Army,
+	from_city: int,
+	to_city: int
+) -> void:
+	if (
+		from_city < 0
+		or from_city >= state.cities.size()
+		or to_city < 0
+		or to_city >= state.cities.size()
+		or not state.is_enemy(
+			army.owner_nation,
+			state.cities[to_city].owner_nation
+		)
+	):
+		return
+	var origin_owner := state.cities[from_city].owner_nation
+	if (
+		origin_owner == army.owner_nation
+		or state.is_allied(
+			army.owner_nation,
+			origin_owner
+		)
+	):
+		army.occupation_claimant_nation = origin_owner
+	else:
+		army.occupation_claimant_nation = army.owner_nation
 
 
 ## 到达 move_to 节点：释放当前边，触发/加入围城或继续下一段。
@@ -3461,6 +3576,7 @@ func _retreat_defender(defender: Army, city: City) -> void:
 
 func _capture_city(army: Army, city: City) -> void:
 	var old_owner := city.owner_nation
+	var claimant := _occupation_claimant_for_army(army)
 	var captured_food := city.food_storage if city.has_warehouse else 0
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
@@ -3470,19 +3586,32 @@ func _capture_city(army: Army, city: City) -> void:
 		city.is_capital = false
 		city.has_warehouse = false
 	city.food_storage = 0
-	city.owner_nation = army.owner_nation
+	city.owner_nation = claimant
+	city.occupation_sponsor_nation = (
+		-1
+		if state.recognized_owner_of(city.id) == claimant
+		else army.owner_nation
+	)
 	state.ownership_revision += 1
 	city.defense = CITY_DEFENSE_AFTER_CAPTURE
 	if captured_capital:
 		state.relocate_capital(old_owner)
 	var spoils := int(floor(float(captured_food) * CAPITAL_FOOD_CAPTURE_RATE))
-	state.deposit_food(army.owner_nation, spoils)
+	state.deposit_food(claimant, spoils)
 	# 同城可能有多支静止/恢复军队，而围城入口历史上只取第一支守军。
 	# 城市易主时统一驱逐其余旧城主驻军，禁止 RECOVERING 军队滞留敌城。
 	for displaced in state.armies:
-		if displaced == army or displaced.size <= 0 or displaced.owner_nation == army.owner_nation:
+		if displaced == army or displaced.size <= 0:
 			continue
 		if displaced.location_city != city.id:
+			continue
+		if (
+			displaced.owner_nation != old_owner
+			and state.has_military_access(
+				displaced.owner_nation,
+				claimant
+			)
+		):
 			continue
 		if displaced.state in [Army.State.IDLE, Army.State.RECOVERING]:
 			_start_morale_retreat_from_city(displaced, city.id, city.id)
@@ -3494,6 +3623,30 @@ func _capture_city(army: Army, city: City) -> void:
 	army.move_to = -1
 	army.move_progress = 0.0
 	army.path.clear()
+	army.occupation_claimant_nation = -1
+
+
+func _occupation_claimant_for_army(army: Army) -> int:
+	if (
+		army.occupation_claimant_nation >= 0
+		and army.occupation_claimant_nation
+			< state.nations.size()
+	):
+		return army.occupation_claimant_nation
+	var origin_city := army.move_from
+	if origin_city < 0 or origin_city >= state.cities.size():
+		origin_city = army.location_city
+	if origin_city >= 0 and origin_city < state.cities.size():
+		var origin_owner := state.cities[origin_city].owner_nation
+		if (
+			origin_owner == army.owner_nation
+			or state.is_allied(
+				army.owner_nation,
+				origin_owner
+			)
+		):
+			return origin_owner
+	return army.owner_nation
 
 # ------------------------------------------------------------------ 6. 战争状态刷新
 

@@ -58,10 +58,10 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 
 | 文件 | 角色 | 关键内容 |
 |---|---|---|
-| [scripts/model/city.gd](scripts/model/city.gd) | 数据 | 城市归属、地形、产出、粮仓，以及 `is_food_hub/is_manpower_hub` 重点产地标记 |
-| [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_throughput(0=不可供大军/补给通行，1~4=每国每方向容量), distance, danger, max_height_difference, occupied, passing_count(全方向总占用派生)` |
+| [scripts/model/city.gd](scripts/model/city.gd) | 数据 | 城市控制、地形、产出、粮仓、重点产地，以及和平确认前冻结直接交战方的 `occupation_sponsor_nation` |
+| [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_manpower(0/5000/15000/30000/60000/100000，每国每方向按满编兵力计), distance, danger, max_height_difference, occupied, passing_count(仅供显示的全方向军队数)` |
 | [scripts/model/nation.gd](scripts/model/nation.gd) | 数据 | 国家资源、首都粮仓、外交解释字段及战争动员目标 |
-| [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, AI命令元数据` |
+| [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, AI命令元数据`；含占领声明国与防御反向边锁 |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：`id, kind(FIELD/SIEGE), side_a[]/side_b[], edge, city, contact_dist_a/b, round_no, siege_progress(SIEGE累积破城), has_garrison(side_b是否驻城守军), garrison_ref(围城5×门槛的守方兵力基准快照), finished, winner_side`；`side_morale()` 兵力加权派生士气 |
 | [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、粮仓、图查询、战斗、外交，以及省份栅格/初始归属/短时攻势视觉事件 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | Alpha 陆地提取、平坦城市采样、陆地 Voronoi 省份、Delaunay 局部道路、高度剖面与连通骨架 |
@@ -182,12 +182,12 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 
 ### 4.8 第十五轮：边上驻防、补给与地形适应
 
-- **边上部署**：新增 `HOLDING`。军队从己方端点出发后固定在边进度 `0.35`，双方物理位置分别为 `0.35/0.65`，保持 `on_edge=true` 并占用 throughput。和平时可在同边对峙而不重叠；宣战本身不触发战斗，只有一方主动推进至接触距离才进入 FIELD。
+- **边上部署**：新增 `HOLDING`。军队从己方端点出发后固定在边进度 `0.35`，双方物理位置分别为 `0.35/0.65`，保持 `on_edge=true` 并占用 capacity。和平时可在同边对峙而不重叠；宣战本身不触发战斗，只有一方主动推进至接触距离才进入 FIELD。
 - **适应累计**：满补给每天 `holding_days+1`；部分补给暂停；完全断粮每天 `−2`。换边、主动移动或撤退清零。
 - **增援稀释**：驻防侧战斗快照保存兵力加权驻防天数；非驻防增援加入时按 `old_days×old_size/new_total` 稀释。
 - **双端点补给**：边上军队按真实 `move_progress` 比较到两个端点的剩余距离，只要端点属于本国，就可从该端点接入补给网络；当前所在边出现敌军不会直接断供。端点之后的补给路径仍只能经过本国城市，且不能通过有敌军争夺的其他道路。
-- **AI**：驻防边由 Utility AI 综合 `danger`、边战略价值、补给走廊、桥影响与局部威胁评分；同国同边只允许一个驻防命令。军队抵达驻防点后持续保持 `HOLDING`，不设时间上限。
-- **视觉**：道路按 `max_throughput=1/2/3/4` 逐级加宽、提亮，3~4 级主通路带暗色外描边；`0` 容量边用暗色连接线与中点叉号显示高山/小渡口阻断。`danger` 仍叠加红色风险色，不增加第二地形真源。
+- **AI**：驻防边由 Utility AI 综合 `danger`、边战略价值、补给走廊、桥影响与局部威胁评分；同国同方向可部署多支军队，唯一上限是满编兵力容量。军队抵达驻防点后持续保持 `HOLDING`，不设时间上限。
+- **视觉**：道路按 `max_manpower=5000/15000/30000/60000/100000` 映射为四档宽度和亮度；十万人平原大道只占约 5%。`0` 容量边用暗线与中点叉号显示阻断，`danger` 继续叠加红色风险色。
 
 ### 4.9 无训练分层 Utility AI
 
@@ -295,15 +295,15 @@ if state.day % 30 == 0:                              # 每月结算块
 
 **移动/边约定（易错点，改动前必读）**：
 - 行军锚点统一用 `move_from`（不是 location_city）。`_begin_next_leg` 前置约定：调用前 `move_from` 已锚定当前城，末尾置 `army.on_edge=true`。
-- **边占用的唯一判据是 `army.on_edge`**。`passing_count` 只统计全方向/全阵营总占用并供渲染使用；容量由 `_friendly_same_direction_count` 从军队 SSoT 实时派生。
-- `max_throughput` 对每个国家、每个方向分别生效：仅同国同向军队互相占名额；同国反向与敌军均不占本方向容量，因此追逐和迎战不会被敌军交通量阻塞。
+- **边占用的唯一判据是 `army.on_edge`**。`passing_count` 只统计全方向/全阵营军队数并供渲染使用；容量由 `_friendly_same_direction_manpower` 实时累计每支军队的 `max_size`，不读取当前 `size`。
+- `max_manpower` 对每个国家、每个方向分别生效：仅同国同向军队共享满编兵力容量；同国反向与敌军均不占本方向容量。两阶段命令的首段预留使用同一单位，寻路会过滤小于本军 `max_size` 的道路。
 - 正式世界从 `china-map-...webp` 的 Alpha 最大连通区域提取陆地，在局部低起伏区域用确定性最远点采样生成 64 城；按地图真实宽高比强制最小城市间距 `0.075`。
-- 每个有效陆地像素按欧氏距离归属最近城市，生成确定性的一城一省 Voronoi 栅格；海域保持 `-1`。`recognized_city_owners` 保存法理归属：战争占领只改变实际控制并显示斜线，双边和平确认双方实际控制区后更新法理归属。
+- 每个有效陆地像素按欧氏距离归属最近城市，生成确定性的一城一省 Voronoi 栅格；海域保持 `-1`。`recognized_city_owners` 保存法理归属。军队跨入敌境时按出发城市/驻边友方端点冻结占领声明国；从盟友领土出发的占领归该盟友，城市另存直接交战方 sponsor，故联盟随后解散也不影响和平确认。
 - 真实地图道路使用 Delaunay 三角剖分生成自然局部邻接，超出地图尺度 `0.30` 的普通局部边不加入；按距离、陆地覆盖率和高度差加权的最小生成树只负责保证全图连通，最长边测试门禁为 `0.36`。真实地图不承诺固定总边数或每城固定度数。
-- 每条边沿灰度图采样高度剖面，最大高度差决定 `max_throughput=0/1/2/3/4`；骨架边最低为 1，保证军事、补给和撤退网络连通。
+- 每条边沿灰度图采样高度剖面，最大高度差决定 `max_manpower=0/5000/15000/30000/60000/100000`；骨架边最低 5000。高危险关隘容量压低，仍可因桥梁/粮道成为高战略价值命脉。
 - 四国按空间均衡分区，每国严格 16 城且本国正容量道路连通。首都选择本国城市几何中心附近的城市。
 - `main.tscn` 使用 `generate_world()` 高度图世界；`square_map.tscn` 使用 `generate_grid_world()`，保留原 `8×8 / 112` 边方形地图。固定城市 ID 的状态机测试和严格左右镜像 A/B 基准同样使用网格世界。
-- `max_throughput=0` 是统一的军事与补给不可通行语义；普通寻路、撤退、威胁传播、补给、战略桥/割点均跳过。旧路径遇到 `0` 边立即失效并重规划或回到驻地，不进入永久排队。
+- `max_manpower=0` 是统一的军事与补给不可通行语义；普通寻路、撤退、威胁传播、补给、战略桥/割点均跳过。旧路径遇到 `0` 边立即失效并重规划或回到驻地，不进入永久排队。
 - `_release_edge(army)` 以 `on_edge` 为准，幂等，防止 `passing_count` 双重释放变负。
 - `_settle_idle` / `_capture_city` / `_retreat` 均先 `_release_edge(army)` 并清 `battle_id=-1`。
 - `_purge_dead_armies` 统一清理 size≤0 军队并用 `on_edge` 释放其占用边。
@@ -378,6 +378,10 @@ if state.day % 30 == 0:                              # 每月结算块
 | 僵持期资源评分轻微波动或固定 360 天超时会反复触发“备战→取消→重新备战” | 删除无条件备战超时；`war_preparation_unready_since_day` 记录资源连续不足起点，连续 90 天不足才取消，期间任一次恢复即清零。目标失效或进攻道路中断仍立即取消；四种子长跑最终取消次数为 `0/0/0/0` |
 | 敌军集中后要害城市守军按普通撤退阈值逃离，缺乏“必须守住”的战略约束 | `CityDefensePlan.must_hold_cities` 统一标记受压的首都、粮仓、资源核心、关键粮道和高价值城市，守备需求提高到 100% 威胁覆盖；最后一支必要守军不得离开防区，后方军读取同一缺口增援。本地军力低于来敌 40% 时先驻城待援，避免弱军在城与边之间送死式往返 |
 | 国家攻势只有一个目标，没有明确哪支军队攻击哪座城市 | `Nation.campaign_attack_assignments` 保存当前波次 `army_id -> target_city_id`。主攻先满足 120% 攻城门槛；只有剩余军队能独立满足第二目标门槛时才开第二路。计划建立后冻结，主攻组失效、目标变化或下一波攻势才重建；国家卡片显示 `计划Wn 军x>城y`，多目标分别绘制攻势箭头 |
+| 驻边 90 天锁到期后因微小评分变化回城，持续邻敌又被当作新紧急事件立即送回原边 | 当前方向压力不低于新方向的 80% 时保持原边；防御撤退记录刚离开的无向边，锁期内持续邻敌不能绕过锁生成同边反向命令，其他方向的新威胁仍可紧急解锁 |
+| 联盟军从盟友领土进攻时，占领地一律归军队所属国；联盟若在和平前解散还会丢失归属链 | 跨入敌境时冻结 `Army.occupation_claimant_nation`，从盟友城市或驻边友方端点出发即归该盟友；`City.occupation_sponsor_nation` 保存直接交战侧，和平确认不依赖届时是否仍结盟 |
+| 道路容量以军队支数计，无法表达残编大编制与多支小编制对道路的不同占用 | `Edge.max_manpower` 改为满编人数容量；执行、批处理首段预留和寻路统一按 `Army.max_size`。一支 `13021/15000` 占 15000，三支 `max_size=5000` 也占 15000；反向和敌军独立 |
+| 宣战会清空 `war_preparation_target_nation`，旧 `campaign_locked` 因依赖该字段在战争开始后立即失效，计划军重新陷入局部同步等待 | 锁条件改为“存在逐军目标，且仍在备战或目标仍为敌城”；计划军回到集结城/驻边姿态后继续攻击原分配目标，真实要害防御仍可中断 |
 
 ---
 
@@ -390,9 +394,10 @@ if state.day % 30 == 0:                              # 每月结算块
 - **改战后恢复** → `RECOVERY_FOOD_PER_CAPITA` 决定基础需求，运输损耗与普通补给共用；必须同步 [22]，并保持 `RECOVERING` 不进入普通补给计划。
 - **改补给士气联动** → `SUPPLY_MORALE_LOSS_MAX` 是完全断粮月度士气损失，部分缺粮按比例缩放；必须同步 [23]。
 - **改边地形** → 只动 `danger` 与 Combat 的 `ATTACK_DANGER_K/DEFENSE_DANGER_K/HOLDING_TAU_DAYS/CHOKEPOINT_*`；禁止增加关隘第二真源。关隘惩罚只有敌军实际驻边时才能进入 AI 进攻战力折算。
+- **改道路容量** → 容量单位是满编人数，只允许 `0/5000/15000/30000/60000/100000`；必须同步执行期、两阶段首段预留、军队寻路、战略价值归一化和渲染映射，禁止重新使用军队支数。
 - **改 AI** → 普通战术候选在 [utility_ai.gd](scripts/ai/utility_ai.gd)，城市防御需求和驻城/驻边姿态在 [city_defense_plan.gd](scripts/ai/city_defense_plan.gd)，战略价值在 [strategic_map.gd](scripts/ai/strategic_map.gd)，威胁窗口在 [threat_field.gd](scripts/ai/threat_field.gd)。修改后运行 `./run_tests.sh`、AI 长跑与严格镜像基准。
-- **改攻势加成或部署迟滞** → 只动 `Simulation.OFFENSIVE_BONUS_*` / `DEFENSIVE_DEPLOYMENT_LOCK_DAYS`；攻势倍率必须通过 `ActionCandidate` 随统一命令提交，防御锁必须保留真实敌军压力的紧急解锁。
-- **改备战或攻势计划** → 备战取消迟滞真源是 `Nation.war_preparation_unready_since_day`；逐军目标真源是 `Nation.campaign_attack_assignments`。计划军不得进入普通战术重部署，但要害城市真实紧急威胁必须能解除冻结。
+- **改攻势加成或部署迟滞** → 只动 `Simulation.OFFENSIVE_BONUS_*` / `DEFENSIVE_DEPLOYMENT_LOCK_DAYS`；攻势倍率必须通过 `ActionCandidate` 随统一命令提交。防御锁保留不同方向的真实紧急解锁，但不得让持续邻敌绕过 `defensive_blocked_edge_*` 返回刚撤离的同一边。
+- **改备战或攻势计划** → 备战取消迟滞真源是 `Nation.war_preparation_unready_since_day`；逐军目标真源是 `Nation.campaign_attack_assignments`。计划锁在宣战后必须继续生效并持续执行目标，计划军不进入普通战术重部署，但要害城市真实紧急威胁必须能解除冻结。
 - **加新逻辑** → 写进 Simulation，不要写进 Model 或 View。新派生量必须进 `refresh_derived`。
 - **加随机** → 必须用 `state.rng`，否则破坏确定性（test #7 会红）。
 - **改时间粒度**（天/月分层）→ 时间真源是 `state.day`，`month=day/30` 派生。行军/战斗/攻城每天，经济/粮草/士气恢复在 `day%30==0` 块内。改动需同步 test_suite 中 #6/#7/#8 直接调 `_advance_day()` 的部分。
@@ -416,9 +421,9 @@ AI 长跑命令：
 AI_DUEL_MODE=balanced-fairness /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
 ```
 
-两阶段统一提交后，完全镜像固定种子十年结果为严格 `32:32`，双方有效战力 `48946.3/48946.3`、粮食 `972/972`、优势分 `0.0`。旧版依赖国家遍历顺序产生战局分叉的左右 A/B 数字已失效；攻击合法路径由专项不可达纵深目标夹具验证。后续比较策略时必须显式加入可交换的小扰动或使用多种子非完全对称场景，不能把调度偏差当成 AI 能力。
+两阶段统一提交后，完全镜像固定种子十年结果为严格 `32:32`，双方有效战力 `47875.6/47875.6`、粮食 `1292/1292`、优势分 `0.0`。旧版依赖国家遍历顺序产生战局分叉的左右 A/B 数字已失效；攻击合法路径由专项不可达纵深目标夹具验证。后续比较策略时必须显式加入可交换的小扰动或使用多种子非完全对称场景，不能把调度偏差当成 AI 能力。
 
-最新回归为 `508 passed, 0 failed`。真实地图长跑为 4 种子 × 1095 天，四局均保持 4 国存活，领土变化次数为 `3/4/1/1`，最终粮仓总库存为 `7252/6872/7650/9026`，断粮军与取消备战均为 `0/0/0/0`，全部军队有有效命令，`invalid=0` 且 `commit_failures=0`。纯和平 1080 天四国年度粮食结余均为正。四种子总耗时约 `41s`；命令缓冲为 `O(A)` 内存、提交排序为 `O(A log A)`，威胁场和城市防御计划均每国只构建一次。军制调整在冻结快照后结算，其变化从下一次 AI 决策（最多 5 天）起进入军事规划。
+最新回归为 `518 passed, 0 failed`。真实地图长跑为 4 种子 × 1095 天，四局均保持 4 国存活，领土变化次数为 `5/4/1/2`，最终粮仓总库存为 `6795/7305/8151/7867`，断粮军均为 0，全部军队有有效命令，`invalid=0` 且 `commit_failures=0`。纯和平 1080 天四国年度粮食结余均为正。四种子总耗时约 `40s`；命令缓冲为 `O(A)` 内存、提交排序为 `O(A log A)`，威胁场和城市防御计划均每国只构建一次。
 
 ---
 

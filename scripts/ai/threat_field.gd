@@ -34,11 +34,17 @@ func support_at(city_id: int) -> float:
 
 
 func _aggregate_sources(state: GameState, armies: Array[Army]) -> Dictionary:
-	var sources := {}
+	var sources_by_manpower := {}
 	for army in armies:
 		var power := ArmyPower.effective(army)
 		if power <= 0.0:
 			continue
+		var required_manpower := maxi(army.max_size, 1)
+		if not sources_by_manpower.has(required_manpower):
+			sources_by_manpower[required_manpower] = {}
+		var sources: Dictionary = (
+			sources_by_manpower[required_manpower]
+		)
 		if army.on_edge and army.move_to != -1:
 			var edge := state.edge_of(army.move_from, army.move_to)
 			if edge == null:
@@ -51,7 +57,7 @@ func _aggregate_sources(state: GameState, armies: Array[Army]) -> Dictionary:
 			var city_id := army.location_city
 			if city_id >= 0 and city_id < state.cities.size():
 				_add_source(sources, city_id, power, 0.0)
-	return sources
+	return sources_by_manpower
 
 
 func _add_source(sources: Dictionary, city_id: int, power: float, offset_days: float) -> void:
@@ -59,22 +65,43 @@ func _add_source(sources: Dictionary, city_id: int, power: float, offset_days: f
 	sources[city_id] = float(sources.get(city_id, 0.0)) + discounted
 
 
-func _accumulate(state: GameState, sources: Dictionary, output: Dictionary) -> void:
-	var source_ids := sources.keys()
-	source_ids.sort()
-	for source_id in source_ids:
-		var power := float(sources[source_id])
-		var distances := _travel_days_field(state, int(source_id))
-		for city_id in distances.keys():
-			var arrival := float(distances[city_id])
-			if arrival <= HORIZON_DAYS:
-				output[city_id] = (
-					float(output.get(city_id, 0.0))
-					+ power * exp(-arrival / DECAY_DAYS)
-				)
+func _accumulate(
+	state: GameState,
+	sources_by_manpower: Dictionary,
+	output: Dictionary
+) -> void:
+	var manpower_levels := sources_by_manpower.keys()
+	manpower_levels.sort()
+	for manpower_value in manpower_levels:
+		var required_manpower := int(manpower_value)
+		var sources: Dictionary = (
+			sources_by_manpower[required_manpower]
+		)
+		var source_ids := sources.keys()
+		source_ids.sort()
+		for source_id in source_ids:
+			var power := float(sources[source_id])
+			var distances := _travel_days_field(
+				state,
+				int(source_id),
+				required_manpower
+			)
+			for city_id in distances.keys():
+				var arrival := float(distances[city_id])
+				if arrival <= HORIZON_DAYS:
+					output[city_id] = (
+						float(output.get(city_id, 0.0))
+						+ power * exp(
+							-arrival / DECAY_DAYS
+						)
+					)
 
 
-static func _travel_days_field(state: GameState, start: int) -> Dictionary:
+static func _travel_days_field(
+	state: GameState,
+	start: int,
+	required_manpower: int
+) -> Dictionary:
 	var dist := {start: 0.0}
 	var heap: Array = []
 	_heap_push(heap, [0.0, start])
@@ -88,7 +115,10 @@ static func _travel_days_field(state: GameState, start: int) -> Dictionary:
 			continue
 		for neighbor in state.neighbors(city_id):
 			var edge := state.edge_of(city_id, neighbor)
-			if edge == null or edge.max_throughput <= 0:
+			if (
+				edge == null
+				or edge.max_manpower < required_manpower
+			):
 				continue
 			var next_dist := current_dist + _edge_days(edge)
 			if next_dist > HORIZON_DAYS:
