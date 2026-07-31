@@ -91,9 +91,16 @@ static func choose(
 	)
 	if attack != null:
 		candidates.append(attack)
-	var merge := _merge_candidate(view, snapshot, threat, coordinator, army)
-	if merge != null:
-		candidates.append(merge)
+	if view.day >= army.defensive_deployment_until_day:
+		var merge := _merge_candidate(
+			view,
+			snapshot,
+			threat,
+			coordinator,
+			army
+		)
+		if merge != null:
+			candidates.append(merge)
 	candidates.sort_custom(func(a: ActionCandidate, b: ActionCandidate) -> bool:
 		if not is_equal_approx(a.score, b.score):
 			return a.score > b.score

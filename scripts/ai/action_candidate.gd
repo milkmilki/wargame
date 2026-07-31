@@ -20,6 +20,9 @@ var target_edge_b: int = -1
 var score: float = -INF
 var minimum_commit_days: int = 10
 var reason: String = ""
+var defensive_deployment: bool = false
+var offensive_attack_multiplier: float = 1.0
+var offensive_bonus_days: int = 0
 
 
 static func make(

@@ -110,14 +110,27 @@ static func merge_colocated(state: GameState) -> int:
 
 
 static func _merge_key(army: Army) -> String:
+	var bonus_key := "B:%d:%d" % [
+		int(round(army.offensive_attack_multiplier * 1000.0)),
+		army.offensive_bonus_until_day,
+	]
 	if army.state in [Army.State.IDLE, Army.State.RECOVERING]:
-		return "%d:C:%d:S:%d" % [army.owner_nation, army.location_city, army.state]
+		return "%d:C:%d:S:%d:%s" % [
+			army.owner_nation,
+			army.location_city,
+			army.state,
+			bonus_key,
+		]
 	if army.state == Army.State.HOLDING and army.on_edge and army.move_to != -1:
 		var lo := mini(army.move_from, army.move_to)
 		var hi := maxi(army.move_from, army.move_to)
 		var norm := army.move_progress if army.move_from == lo else 1.0 - army.move_progress
-		return "%d:E:%d:%d:P:%d" % [
-			army.owner_nation, lo, hi, int(round(norm * 10000.0))
+		return "%d:E:%d:%d:P:%d:%s" % [
+			army.owner_nation,
+			lo,
+			hi,
+			int(round(norm * 10000.0)),
+			bonus_key,
 		]
 	return ""
 

@@ -66,3 +66,10 @@ var ai_order_created_day: int = -1
 var ai_order_until_day: int = -1
 var ai_order_score: float = 0.0
 var ai_order_reason: String = ""
+
+## 预定攻势的限时攻击加成。Simulation 负责授予和到期清理，Combat 只读取倍率。
+var offensive_attack_multiplier: float = 1.0
+var offensive_bonus_until_day: int = -1
+
+## 防御换防锁。非紧急 CityDefensePlan 在截止日前不得再次调离该军。
+var defensive_deployment_until_day: int = -1

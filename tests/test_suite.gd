@@ -497,6 +497,40 @@ func _test_battle_basics() -> void:
 		),
 		"同质双方共享战场波动时，单回合伤亡和士气必须严格对称"
 	)
+	var normal_attacker := _make_army(4, 0, 1000, 10, 10)
+	var normal_defender := _make_army(5, 1, 1000, 10, 10)
+	var bonus_attacker := _make_army(6, 0, 1000, 10, 10)
+	var bonus_defender := _make_army(7, 1, 1000, 10, 10)
+	bonus_attacker.offensive_attack_multiplier = 2.0
+	_check(
+		_approx(
+			ArmyPower.effective(bonus_attacker)
+				/ ArmyPower.effective(normal_attacker),
+			sqrt(2.0)
+		),
+		"AI综合战力应按sqrt(攻击倍率)识别限时攻势威胁"
+	)
+	var normal_battle := _make_field_battle(
+		[normal_attacker],
+		[normal_defender],
+		0.0,
+		4
+	)
+	var bonus_battle := _make_field_battle(
+		[bonus_attacker],
+		[bonus_defender],
+		0.0,
+		4
+	)
+	rng.seed = 9
+	Combat.resolve_round(normal_battle, rng)
+	rng.seed = 9
+	Combat.resolve_round(bonus_battle, rng)
+	_check(
+		1000 - bonus_defender.size
+			>= 2 * (1000 - normal_defender.size) - 1,
+		"2倍攻势倍率必须近似加倍同条件下的单回合杀伤"
+	)
 
 # ------------------------------------------------------------------ 4. 撤退机制（士气崩溃保兵）
 
@@ -2579,6 +2613,22 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		"合并后总士气量必须守恒")
 
 	gs.armies.clear()
+	var normal_wave := _make_army(936, 0, 400, 10, 10)
+	normal_wave.location_city = 0
+	normal_wave.move_from = 0
+	var prepared_wave := _make_army(937, 0, 400, 10, 10)
+	prepared_wave.location_city = 0
+	prepared_wave.move_from = 0
+	prepared_wave.offensive_attack_multiplier = 1.5
+	prepared_wave.offensive_bonus_until_day = 100
+	gs.armies.append_array([normal_wave, prepared_wave])
+	_check(
+		ArmyCoordinator.merge_colocated(gs) == 0
+		and gs.armies.size() == 2,
+		"不同攻势倍率或截止日的军队不得合并并稀释限时状态"
+	)
+
+	gs.armies.clear()
 	var weak := _make_army(932, 0, 100, 8, 8)
 	weak.location_city = 0
 	weak.move_from = 0
@@ -2854,6 +2904,10 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		second_holder,
 		false
 	)
+	first_holder.defensive_deployment_until_day = (
+		defense_view.day
+			+ Simulation.DEFENSIVE_DEPLOYMENT_LOCK_DAYS
+	)
 	var first_defense_order := UtilityAI.choose(
 		defense_view,
 		defense_snapshot,
@@ -2865,8 +2919,9 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		first_defense_order.kind == ActionCandidate.Kind.RETREAT
 		and first_defense_order.target_city == threatened_city
 		and first_defense_order.reason.contains("集中进攻"),
-		"敌军从另一条道路逼近时，驻边军必须回到受威胁城市防御"
+		"真实敌军从另一条道路逼近时，必须打破部署锁回城防御"
 	)
+	first_holder.defensive_deployment_until_day = -1
 	if first_defense_order.kind == ActionCandidate.Kind.RETREAT:
 		defense_coordinator.reserve(
 			first_defense_order.target_city,
@@ -3939,7 +3994,26 @@ func _test_diplomacy_state_and_ai() -> void:
 		and objective_campaign == objective_city,
 		"备战完成后外交目标必须写入战争状态并成为军事 AI 主战役目标"
 	)
-	var immediate_offensive := false
+	_check(
+		_approx(
+			Simulation.offensive_preparation_multiplier(0),
+			1.0
+		)
+		and _approx(
+			Simulation.offensive_preparation_multiplier(90),
+			1.5
+		)
+		and _approx(
+			Simulation.offensive_preparation_multiplier(180),
+			2.0
+		)
+		and _approx(
+			Simulation.offensive_preparation_multiplier(360),
+			2.0
+		),
+		"攻势倍率必须从0天1倍线性增长，并在备战180天封顶2倍"
+	)
+	var first_wave_army: Army = null
 	for army in objective_state.armies:
 		if (
 			army.owner_nation == objective_attacker
@@ -3947,11 +4021,24 @@ func _test_diplomacy_state_and_ai() -> void:
 			and army.ai_action == ActionCandidate.Kind.ATTACK
 			and army.ai_target_city == objective_city
 		):
-			immediate_offensive = true
+			first_wave_army = army
 			break
 	_check(
-		objective_executed and immediate_offensive,
+		objective_executed and first_wave_army != null,
 		"宣战当日必须把已集结军队转为针对目标城的首轮攻势"
+	)
+	_check(
+		first_wave_army != null
+		and _approx(
+			first_wave_army.offensive_attack_multiplier,
+			Simulation.offensive_preparation_multiplier(
+				DiplomacyAI.WAR_PREPARATION_MIN_DAYS
+			)
+		)
+		and first_wave_army.offensive_bonus_until_day
+			== objective_state.day
+				+ Simulation.OFFENSIVE_BONUS_DURATION_DAYS,
+		"首轮参战军必须按实际备战天数获得持续30天的攻击加成"
 	)
 	_check(
 		not objective_state.campaign_visual_events.is_empty()
@@ -3971,11 +4058,29 @@ func _test_diplomacy_state_and_ai() -> void:
 	var next_wave_launched := objective_sim._manage_campaign_offensive(
 		objective_attacker
 	)
+	var second_wave_army: Army = null
+	for army in objective_state.armies:
+		if (
+			army.owner_nation == objective_attacker
+			and army.state == Army.State.MOVING
+			and army.ai_action == ActionCandidate.Kind.ATTACK
+			and army.ai_target_city == objective_city
+		):
+			second_wave_army = army
+			break
 	_check(
 		next_wave_launched
 		and objective_state.nations[objective_attacker].campaign_offensive_count
 			== first_wave_count + 1,
 		"战争持续时每90天应重新集结并发动下一轮国家级攻势"
+	)
+	_check(
+		second_wave_army != null
+		and _approx(
+			second_wave_army.offensive_attack_multiplier,
+			1.5
+		),
+		"间隔90天发动的后续攻势应获得1.5倍攻击倍率"
 	)
 	var arrow_expiry := int(
 		objective_state.campaign_visual_events[-1]["end_day"]
@@ -3985,6 +4090,20 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		objective_state.campaign_visual_events.is_empty(),
 		"战略攻势箭头必须在展示期结束后自动清理"
+	)
+	if second_wave_army != null:
+		objective_state.day = (
+			second_wave_army.offensive_bonus_until_day
+		)
+		objective_sim._expire_offensive_bonuses()
+	_check(
+		second_wave_army != null
+		and _approx(
+			second_wave_army.offensive_attack_multiplier,
+			1.0
+		)
+		and second_wave_army.offensive_bonus_until_day == -1,
+		"攻势攻击加成必须在30天截止日清除"
 	)
 	objective_sim.free()
 
@@ -4227,6 +4346,7 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 		_check(
 			reinforce != null
 			and snapshot.potential_frontier_cities.has(reinforce.target_city)
+			and reinforce.defensive_deployment
 			and reinforce.reason.contains("高威胁中立国边境"),
 			(
 				"内地军应优先增援高威胁国家边境，而不是继续聚集首都：%s"
@@ -4240,6 +4360,41 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 					]
 				)
 			)
+		)
+		interior_army.defensive_deployment_until_day = (
+			view.day + Simulation.DEFENSIVE_DEPLOYMENT_LOCK_DAYS
+		)
+		var locked_redeployment := peacetime_plan.candidate_for(
+			interior_army,
+			ArmyCoordinator.new()
+		)
+		_check(
+			locked_redeployment == null,
+			"非紧急边境评分波动不得打破防御部署锁并触发反复换防"
+		)
+		var locked_utility_action := UtilityAI.choose(
+			view,
+			snapshot,
+			peacetime_threat,
+			ArmyCoordinator.new(),
+			interior_army,
+			UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO,
+			peacetime_plan
+		)
+		_check(
+			locked_utility_action.kind
+				== ActionCandidate.Kind.NONE,
+			"部署锁期间不得通过合并候选绕过约束调走军队"
+		)
+		interior_army.defensive_deployment_until_day = view.day
+		var unlocked_redeployment := peacetime_plan.candidate_for(
+			interior_army,
+			ArmyCoordinator.new()
+		)
+		_check(
+			unlocked_redeployment != null
+			and unlocked_redeployment.defensive_deployment,
+			"防御部署锁到期后应重新允许正常换防"
 		)
 	var border_army: Army = null
 	for army in view.friendly_armies:

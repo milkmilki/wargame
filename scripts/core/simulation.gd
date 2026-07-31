@@ -57,6 +57,10 @@ const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 90
 const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 45
 const CAMPAIGN_ARROW_DURATION_DAYS: int = 20
 const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 3
+const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = DAYS_PER_HALF_YEAR
+const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
+const OFFENSIVE_BONUS_DURATION_DAYS: int = DAYS_PER_MONTH
+const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 
 var state: GameState
 var _time_acc: float = 0.0
@@ -141,6 +145,7 @@ func _advance_day() -> void:
 	state.day += 1
 	state.month = state.day / DAYS_PER_MONTH
 	state.prune_campaign_visual_events()
+	_expire_offensive_bonuses()
 	# 每月结算：经济 / 粮草 / 士气恢复（数值口径与原按月一致，仅还原到每 30 天一次）
 	if state.day % DAYS_PER_MONTH == 0:
 		_resolve_economy()
@@ -157,6 +162,28 @@ func _advance_day() -> void:
 	_refresh_war_flags()
 	_check_victory()
 	state.refresh_derived()
+
+
+static func offensive_preparation_multiplier(
+	preparation_days: int
+) -> float:
+	var ratio := clampf(
+		float(maxi(preparation_days, 0))
+			/ float(OFFENSIVE_BONUS_MAX_PREPARATION_DAYS),
+		0.0,
+		1.0
+	)
+	return lerpf(1.0, OFFENSIVE_BONUS_MAX_MULTIPLIER, ratio)
+
+
+func _expire_offensive_bonuses() -> void:
+	for army in state.armies:
+		if (
+			army.offensive_bonus_until_day >= 0
+			and state.day >= army.offensive_bonus_until_day
+		):
+			army.offensive_attack_multiplier = 1.0
+			army.offensive_bonus_until_day = -1
 
 # ------------------------------------------------------------------ 1. 经济
 
@@ -798,6 +825,16 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 						str(action.get("objective_reason", ""))
 					)
 				if changed:
+					var preparation_days := 0
+					var preparation_started := (
+						state.nations[nation_a]
+							.war_preparation_started_day
+					)
+					if preparation_started >= 0:
+						preparation_days = maxi(
+							state.day - preparation_started,
+							0
+						)
 					_start_war_mobilization(
 						nation_a,
 						int(action.get("mobilization_armies", -1))
@@ -807,7 +844,11 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 							_clear_war_preparation(defender_id)
 							_start_war_mobilization(defender_id)
 					_clear_war_preparation(nation_a, false)
-					_launch_campaign_offensive(nation_a, objective_city)
+					_launch_campaign_offensive(
+						nation_a,
+						objective_city,
+						preparation_days
+					)
 		DiplomacyAI.Action.FORM_ALLIANCE:
 			if (
 				state.relation_between(nation_a, nation_b)
@@ -1521,7 +1562,8 @@ func _assign_offensive_staging_orders(
 
 func _launch_campaign_offensive(
 	nation_id: int,
-	objective_city: int
+	objective_city: int,
+	preparation_days: int = -1
 ) -> bool:
 	if (
 		objective_city < 0
@@ -1542,6 +1584,18 @@ func _launch_campaign_offensive(
 	)
 	if staged < required:
 		return false
+	if preparation_days < 0:
+		var last_offensive_day := (
+			state.nations[nation_id].campaign_last_offensive_day
+		)
+		preparation_days = (
+			maxi(state.day - last_offensive_day, 0)
+			if last_offensive_day >= 0
+			else 0
+		)
+	var offensive_multiplier := offensive_preparation_multiplier(
+		preparation_days
+	)
 	var attackers: Array[Army] = []
 	for army in state.armies:
 		if army.owner_nation != nation_id or army.size <= 0:
@@ -1574,14 +1628,18 @@ func _launch_campaign_offensive(
 		var attack := ActionCandidate.make(
 			ActionCandidate.Kind.ATTACK,
 			2000.0,
-			"国家战役第%d波：向目标城市%d发动预定攻势"
+			"国家战役第%d波：准备%d天，以%.2f倍攻击向目标城市%d发动攻势"
 				% [
 					state.nations[nation_id].campaign_offensive_count + 1,
+					preparation_days,
+					offensive_multiplier,
 					objective_city,
 				],
 			objective_city
 		)
 		attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+		attack.offensive_attack_multiplier = offensive_multiplier
+		attack.offensive_bonus_days = OFFENSIVE_BONUS_DURATION_DAYS
 		if _execute_ai_candidate(army, attack):
 			committed += army.size
 			launched = true
@@ -1604,6 +1662,21 @@ func _launch_campaign_offensive(
 			CAMPAIGN_ARROW_DURATION_DAYS
 		)
 	return launched
+
+
+func _grant_offensive_bonus(
+	army: Army,
+	multiplier: float,
+	duration_days: int
+) -> void:
+	army.offensive_attack_multiplier = clampf(
+		multiplier,
+		1.0,
+		OFFENSIVE_BONUS_MAX_MULTIPLIER
+	)
+	army.offensive_bonus_until_day = (
+		state.day + maxi(duration_days, 0)
+	)
 
 
 func _manage_campaign_offensive(nation_id: int) -> bool:
@@ -2229,6 +2302,16 @@ func _record_ai_order(army: Army, candidate: ActionCandidate) -> void:
 	army.ai_order_until_day = state.day + candidate.minimum_commit_days
 	army.ai_order_score = candidate.score
 	army.ai_order_reason = candidate.reason
+	if candidate.defensive_deployment:
+		army.defensive_deployment_until_day = (
+			state.day + DEFENSIVE_DEPLOYMENT_LOCK_DAYS
+		)
+	if candidate.offensive_bonus_days > 0:
+		_grant_offensive_bonus(
+			army,
+			candidate.offensive_attack_multiplier,
+			candidate.offensive_bonus_days
+		)
 
 
 func _edge_has_friendly_holder_or_order(nation_id: int, from_city: int, to_city: int) -> bool:

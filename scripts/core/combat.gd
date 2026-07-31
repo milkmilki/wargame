@@ -181,7 +181,11 @@ static func _side_attack(side: Array[Army]) -> float:
 	var total := 0.0
 	for a in side:
 		if a.size > 0:
-			total += float(a.size) * float(a.attack)
+			total += (
+				float(a.size)
+				* float(a.attack)
+				* maxf(a.offensive_attack_multiplier, 1.0)
+			)
 	return total
 
 

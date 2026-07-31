@@ -6,7 +6,17 @@ extends RefCounted
 static func effective(army: Army) -> float:
 	if army == null or army.size <= 0:
 		return 0.0
-	var quality := sqrt(maxf(float(army.attack * army.defense), 1.0)) / 10.0
+	var quality := (
+		sqrt(maxf(
+			float(army.attack * army.defense)
+				* maxf(
+					army.offensive_attack_multiplier,
+					1.0
+				),
+			1.0
+		))
+		/ 10.0
+	)
 	var morale_factor := clampf(army.morale, 0.0, 1.0)
 	var supply_factor := 0.5 + 0.5 * clampf(army.supply_ratio, 0.0, 1.0)
 	return float(army.size) * quality * morale_factor * supply_factor

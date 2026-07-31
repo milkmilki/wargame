@@ -44,11 +44,23 @@ func candidate_for(
 ) -> ActionCandidate:
 	if army == null or army.size <= 0:
 		return null
+	var candidate: ActionCandidate = null
 	if army.state == Army.State.HOLDING:
-		return _holding_candidate(army, coordinator)
-	if army.state != Army.State.IDLE or army.location_city < 0:
+		candidate = _holding_candidate(army, coordinator)
+	elif army.state == Army.State.IDLE and army.location_city >= 0:
+		candidate = _idle_candidate(army, coordinator)
+	else:
 		return null
-	return _idle_candidate(army, coordinator)
+	if (
+		candidate != null
+		and candidate.defensive_deployment
+		and view.day < army.defensive_deployment_until_day
+		and not _urgent_defense_at(
+			_candidate_anchor_city(candidate)
+		)
+	):
+		return null
+	return candidate
 
 
 func requirement_at(city_id: int) -> float:
@@ -61,6 +73,54 @@ func posture_at(city_id: int) -> int:
 
 func preferred_edge_at(city_id: int) -> int:
 	return int(preferred_edge_by_city.get(city_id, -1))
+
+
+func _candidate_anchor_city(
+	candidate: ActionCandidate
+) -> int:
+	if (
+		candidate.kind == ActionCandidate.Kind.HOLD
+		and candidate.target_edge_a >= 0
+	):
+		return candidate.target_edge_a
+	return candidate.target_city
+
+
+func _urgent_defense_at(city_id: int) -> bool:
+	if city_id < 0 or city_id >= view.state.cities.size():
+		return false
+	if (
+		float(local_pressure.get(city_id, 0.0)) > 0.0
+		or float(relief_need.get(city_id, 0.0)) > 0.0
+	):
+		return true
+	for enemy in view.enemy_armies:
+		if enemy.size <= 0:
+			continue
+		if (
+			not enemy.on_edge
+			and enemy.location_city == city_id
+		):
+			return true
+		if (
+			enemy.on_edge
+			and enemy.move_to != -1
+			and (
+				enemy.move_from == city_id
+				or enemy.move_to == city_id
+			)
+		):
+			return true
+		if (
+			not enemy.on_edge
+			and enemy.location_city >= 0
+			and view.state.edge_of(
+				city_id,
+				enemy.location_city
+			) != null
+		):
+			return true
+	return false
 
 
 func _build() -> void:
@@ -305,6 +365,7 @@ func _holding_candidate(
 		friendly_city
 	)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+	candidate.defensive_deployment = true
 	return candidate
 
 
@@ -425,6 +486,7 @@ func _idle_candidate(
 		best_city
 	)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+	candidate.defensive_deployment = true
 	return candidate
 
 
@@ -458,6 +520,7 @@ func _edge_hold_candidate(
 	candidate.target_edge_a = city_id
 	candidate.target_edge_b = neighbor
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+	candidate.defensive_deployment = true
 	return candidate
 
 

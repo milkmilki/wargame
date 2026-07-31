@@ -651,6 +651,31 @@ func _draw_armies() -> void:
 		if army.starving and blink_on:
 			col = Color(1, 1, 1)
 		draw_circle(pos, radius, col)
+		if (
+			army.offensive_attack_multiplier > 1.0
+			and state.day < army.offensive_bonus_until_day
+		):
+			draw_arc(
+				pos,
+				radius + 5.0 * _display_scale,
+				0,
+				TAU,
+				20,
+				Color(1.0, 0.75, 0.15, 0.95),
+				2.5 * _display_scale
+			)
+			draw_string(
+				_font,
+				pos + Vector2(
+					radius + 5.0 * _display_scale,
+					-radius
+				),
+				"攻x%.2f" % army.offensive_attack_multiplier,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				_font_size(9),
+				Color(1.0, 0.85, 0.35)
+			)
 		# 交战军队：脉动红圈描边（一眼区分“正在打仗”）
 		if army.state == Army.State.FIGHTING:
 			var rr := radius + (2.0 + pulse * 3.0) * _display_scale
