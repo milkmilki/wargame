@@ -2284,6 +2284,78 @@ func _test_ai_strategic_map_and_threat() -> void:
 		) <= 0.5,
 		"非主战役目标不得获得国家级集中加分"
 	)
+
+	var route_state := GameState.new()
+	route_state.generate_grid_world(7005)
+	route_state.armies.clear()
+	for city in route_state.cities:
+		city.owner_nation = 2
+	for city_id in [0, 10]:
+		route_state.cities[city_id].owner_nation = 0
+	for city_id in [1, 2]:
+		route_state.cities[city_id].owner_nation = 1
+	for edge in route_state.edges:
+		edge.max_throughput = 0
+	for pair in [[0, 1], [1, 2], [2, 10]]:
+		var route_edge := route_state.edge_of(pair[0], pair[1])
+		route_edge.max_throughput = 2
+		route_edge.distance = 1
+	route_state.cities[1].defense = 1
+	route_state.cities[2].defense = 1
+	route_state.cities[2].is_capital = true
+	route_state.cities[2].has_warehouse = true
+	route_state.cities[2].is_food_hub = true
+	route_state.cities[2].is_manpower_hub = true
+	route_state.nations[1].capital_city_id = 2
+	_set_single_warehouse(route_state, 0, 0, 5000)
+	var route_army := _make_army(923, 0, 15000, 10, 10)
+	route_army.location_city = 0
+	route_army.move_from = 0
+	route_state.armies.append(route_army)
+	var route_view := AiWorldView.build(route_state, 0)
+	var route_snapshot := StrategicMapSnapshot.build(route_view)
+	var route_threat := ThreatField.build(route_view)
+	route_view.executable_attack_paths_enabled = false
+	var unreachable_order := UtilityAI._attack_candidate(
+		route_view,
+		route_snapshot,
+		route_threat,
+		ArmyCoordinator.new(),
+		route_army,
+		0.0
+	)
+	_check(
+		unreachable_order != null
+		and unreachable_order.target_city == 2,
+		"旧 AI 应复现优先选择被敌城阻隔的高价值纵深目标"
+	)
+	var route_sim := Simulation.new()
+	route_sim.setup(route_state)
+	_check(
+		not route_sim._execute_ai_candidate(
+			route_army, unreachable_order
+		),
+		"旧纵深攻击命令应因中间敌城不可通行而执行失败"
+	)
+	route_view.executable_attack_paths_enabled = true
+	var executable_order := UtilityAI._attack_candidate(
+		route_view,
+		route_snapshot,
+		route_threat,
+		ArmyCoordinator.new(),
+		route_army,
+		0.0
+	)
+	_check(
+		executable_order != null
+		and executable_order.target_city == 1
+		and route_sim._execute_ai_candidate(
+			route_army, executable_order
+		),
+		"新 AI 应跳过不可达纵深目标并攻击可执行的门户城市"
+	)
+	route_sim.free()
+
 	var siege := deep_state.new_battle(Battle.Kind.SIEGE)
 	siege.city = deep_state.cities[17]
 	var contested := MapRenderer.contested_city_ids(deep_state)

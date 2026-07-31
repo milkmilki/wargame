@@ -9,6 +9,7 @@ var capital_city_id: int
 var strategic_planning_enabled: bool = true
 var adaptive_garrison_enabled: bool = true
 var supply_corridor_defense_enabled: bool = true
+var executable_attack_paths_enabled: bool = true
 var friendly_cities: Array[City] = []
 var enemy_cities: Array[City] = []
 var allied_cities: Array[City] = []

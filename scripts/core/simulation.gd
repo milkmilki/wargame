@@ -67,6 +67,8 @@ var ai_assault_participant_ratio_overrides: Dictionary = {}
 var ai_tactical_decision_order_overrides: Dictionary = {}
 ## A/B 注入点：false 关闭粮道桥梁/割点的守备与增援需求。
 var ai_supply_corridor_defense_overrides: Dictionary = {}
+## A/B 注入点：false 复现攻击候选不检查实际通行路径的旧逻辑。
+var ai_executable_attack_paths_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的静态进攻评分。
 var ai_strategic_planning_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的 60 天传播威胁守备策略。
@@ -934,6 +936,9 @@ func _ai_assign_targets() -> void:
 		view.supply_corridor_defense_enabled = bool(
 			ai_supply_corridor_defense_overrides.get(nation.id, true)
 		)
+		view.executable_attack_paths_enabled = bool(
+			ai_executable_attack_paths_overrides.get(nation.id, true)
+		)
 		if (
 			not _ai_strategy_cache.has(nation.id)
 			or _ai_strategy_revision.get(nation.id, []) != [
@@ -959,6 +964,9 @@ func _ai_assign_targets() -> void:
 			view.supply_corridor_defense_enabled = bool(
 				ai_supply_corridor_defense_overrides.get(nation.id, true)
 			)
+			view.executable_attack_paths_enabled = bool(
+				ai_executable_attack_paths_overrides.get(nation.id, true)
+			)
 			threat = ThreatField.build(view)
 		var strategic_orders_changed := false
 		if nation.war_preparation_target_nation >= 0:
@@ -978,6 +986,9 @@ func _ai_assign_targets() -> void:
 			)
 			view.supply_corridor_defense_enabled = bool(
 				ai_supply_corridor_defense_overrides.get(nation.id, true)
+			)
+			view.executable_attack_paths_enabled = bool(
+				ai_executable_attack_paths_overrides.get(nation.id, true)
 			)
 			threat = ThreatField.build(view)
 		var coordinator := ArmyCoordinator.new()

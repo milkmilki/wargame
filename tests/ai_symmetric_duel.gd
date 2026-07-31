@@ -108,9 +108,9 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 	match mode:
 		"current-control":
 			for nation_id in [LEFT_NATION, RIGHT_NATION]:
-				simulation.ai_supply_corridor_defense_overrides[nation_id] = false
+				simulation.ai_executable_attack_paths_overrides[nation_id] = false
 		"improved-right":
-			simulation.ai_supply_corridor_defense_overrides[LEFT_NATION] = false
+			simulation.ai_executable_attack_paths_overrides[LEFT_NATION] = false
 		"offense-only":
 			simulation.ai_adaptive_garrison_overrides[LEFT_NATION] = false
 			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
@@ -120,7 +120,7 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 			simulation.ai_strategic_planning_overrides[RIGHT_NATION] = false
 			simulation.ai_adaptive_garrison_overrides[RIGHT_NATION] = false
 		_:
-			simulation.ai_supply_corridor_defense_overrides[RIGHT_NATION] = false
+			simulation.ai_executable_attack_paths_overrides[RIGHT_NATION] = false
 
 
 func _build_symmetric_world() -> GameState:

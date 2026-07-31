@@ -357,6 +357,11 @@ static func _attack_candidate(
 	var start := army.location_city
 	var field := Pathfinding.dijkstra_field(view.state, start)
 	var dist: Dictionary = field["dist"]
+	var access_dist: Dictionary = {}
+	if view.executable_attack_paths_enabled:
+		access_dist = Pathfinding.dijkstra_field(
+			view.state, start, view.nation_id, false, true
+		)["dist"]
 	var power := ArmyPower.effective(army)
 	var aggression := _aggression(view.nation_id)
 	var best_city := -1
@@ -376,7 +381,12 @@ static func _attack_candidate(
 			target_ids.append(city_id)
 	target_ids.sort()
 	for city_id in target_ids:
-		if dist[city_id] == INF:
+		var target_distance := float(dist[city_id])
+		if view.executable_attack_paths_enabled:
+			target_distance = _attack_approach_distance(
+				view, access_dist, city_id
+			)
+		if target_distance == INF:
 			continue
 		var city := view.state.cities[city_id]
 		var garrison_size := 0
@@ -419,7 +429,7 @@ static func _attack_candidate(
 		var score := (
 			snapshot.value_of_city(city_id) * expected_win
 			+ minf(ratio - 1.0, 2.0) * 2.0
-			- 0.05 * float(dist[city_id])
+			- 0.05 * target_distance
 			- 0.5 * snapshot.value_of_city(start)
 			+ 6.0 * float(maxi(directions - 1, 0))
 			+ relief_value
@@ -450,6 +460,28 @@ static func _attack_candidate(
 	)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 	return candidate
+
+
+static func _attack_approach_distance(
+	view: AiWorldView,
+	access_dist: Dictionary,
+	target_city: int
+) -> float:
+	var best := INF
+	for neighbor in view.state.neighbors(target_city):
+		var edge := view.state.edge_of(target_city, neighbor)
+		if edge == null or edge.max_throughput <= 0:
+			continue
+		var neighbor_dist := float(access_dist.get(neighbor, INF))
+		if neighbor_dist == INF:
+			continue
+		best = minf(
+			best,
+			neighbor_dist
+				+ float(maxi(edge.distance, 1))
+				+ edge.danger * Pathfinding.DANGER_WEIGHT
+		)
+	return best
 
 
 static func _merge_candidate(
