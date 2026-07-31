@@ -2206,6 +2206,32 @@ func _test_ai_strategic_map_and_threat() -> void:
 	print("[29] AI 战略图与威胁场：桥/割点识别、价值排序、抵达时间衰减")
 	var gs := GameState.new()
 	gs.generate_grid_world(7001)
+	var personality_left := AiWorldView.build(gs, 0)
+	var personality_right := AiWorldView.build(gs, 1)
+	_check(
+		_approx(UtilityAI._aggression(personality_left), 1.0)
+		and _approx(UtilityAI._aggression(personality_right), 1.0)
+		and _approx(UtilityAI._caution(personality_left), 1.0)
+		and _approx(UtilityAI._caution(personality_right), 1.0),
+		"国家 ID 不得隐式改变正式 AI 的进攻性或谨慎度"
+	)
+	personality_left.legacy_id_personality_enabled = true
+	personality_right.legacy_id_personality_enabled = true
+	_check(
+		not _approx(
+			UtilityAI._caution(personality_left),
+			UtilityAI._caution(personality_right)
+		),
+		"A/B 开关应能复现旧版 nation_id 性格偏差"
+	)
+	_check(
+		Simulation._ai_nation_ids_for_day(4, 0) == [0, 1, 2, 3]
+		and Simulation._ai_nation_ids_for_day(4, 5) == [1, 2, 3, 0]
+		and Simulation._ai_nation_ids_for_day(4, 15) == [3, 0, 1, 2]
+		and Simulation._ai_nation_ids_for_day(4, 15, false)
+			== [0, 1, 2, 3],
+		"国家决策起点必须按AI决策轮次轮换，旧版固定顺序仅用于A/B"
+	)
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 1
@@ -2572,6 +2598,91 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		) == 0.0,
 		"A/B 当前 AI 对照开关应只关闭新增粮道守备需求"
 	)
+
+	var batch_state := GameState.new()
+	batch_state.generate_grid_world(7006)
+	batch_state.armies.clear()
+	for city in batch_state.cities:
+		city.owner_nation = 2
+	for city_id in [0, 1]:
+		batch_state.cities[city_id].owner_nation = 0
+	for city_id in [6, 7]:
+		batch_state.cities[city_id].owner_nation = 1
+	batch_state.edge_of(0, 1).max_throughput = 1
+	batch_state.edge_of(6, 7).max_throughput = 2
+	var batch_left := _make_army(957, 0, 5000, 10, 10)
+	batch_left.location_city = 0
+	batch_left.move_from = 0
+	var batch_right := _make_army(958, 1, 5000, 10, 10)
+	batch_right.location_city = 7
+	batch_right.move_from = 7
+	var batch_left_extra := _make_army(959, 0, 5000, 10, 10)
+	batch_left_extra.location_city = 0
+	batch_left_extra.move_from = 0
+	var batch_left_reverse := _make_army(960, 0, 5000, 10, 10)
+	batch_left_reverse.location_city = 1
+	batch_left_reverse.move_from = 1
+	batch_state.armies.append_array([
+		batch_left,
+		batch_right,
+		batch_left_extra,
+		batch_left_reverse,
+	])
+	var batch_sim := Simulation.new()
+	batch_sim.setup(batch_state)
+	var left_order := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		10.0,
+		"批处理左军",
+		1
+	)
+	var right_order := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		10.0,
+		"批处理右军",
+		6
+	)
+	var reverse_order := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		10.0,
+		"批处理反向军",
+		0
+	)
+	batch_sim._begin_ai_command_collection()
+	_check(
+		batch_sim._execute_ai_candidate(batch_left, left_order)
+		and batch_sim._execute_ai_candidate(batch_right, right_order)
+		and batch_sim._execute_ai_candidate(
+			batch_left_reverse,
+			reverse_order
+		)
+		and batch_left.state == Army.State.IDLE
+		and batch_right.state == Army.State.IDLE
+		and batch_left_reverse.state == Army.State.IDLE
+		and batch_sim._ai_command_buffer.size() == 3,
+		"规划阶段应收集两国命令且不修改任何军队状态"
+	)
+	_check(
+		not batch_sim._execute_ai_candidate(batch_left, left_order),
+		"同一规划批次中每支军队只能接受一条命令"
+	)
+	_check(
+		not batch_sim._execute_ai_candidate(batch_left_extra, left_order),
+		"同国同向首段容量满后，后续命令应在收集期被仲裁"
+	)
+	batch_sim._commit_ai_command_collection([0, 1] as Array[int])
+	_check(
+		batch_left.state == Army.State.MOVING
+		and batch_right.state == Army.State.MOVING
+		and batch_left_reverse.state == Army.State.MOVING
+		and batch_left.ai_target_city == 1
+		and batch_right.ai_target_city == 6
+		and batch_left_reverse.ai_target_city == 0
+		and batch_sim.ai_last_command_commit_failures == 0
+		and batch_sim._ai_command_buffer.is_empty(),
+		"统一提交后两国命令应在同一阶段生效并清空缓冲区"
+	)
+	batch_sim.free()
 
 func _test_ai_encirclement_breakout_and_relief() -> void:
 	print("[30b] AI 包围协同：多方向进攻、断粮突围、紧急解围")

@@ -55,6 +55,12 @@ func _init() -> void:
 	var right_policy := "current"
 	if duel_mode == "current-control":
 		left_policy = "current"
+	elif duel_mode == "legacy-fairness":
+		left_policy = "legacy"
+		right_policy = "legacy"
+	elif duel_mode == "balanced-fairness":
+		left_policy = "balanced"
+		right_policy = "balanced"
 	elif duel_mode == "improved-right":
 		left_policy = "current"
 		right_policy = "improved"
@@ -81,7 +87,11 @@ func _init() -> void:
 	print(summary)
 	_print_army_diagnostics(state)
 	var improved_ai_better := false
-	if duel_mode == "current-control":
+	if duel_mode in [
+		"current-control",
+		"legacy-fairness",
+		"balanced-fairness",
+	]:
 		print("verdict=CONTROL_COMPLETE")
 		simulation.free()
 		quit(0)
@@ -106,6 +116,12 @@ func _init() -> void:
 
 func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 	match mode:
+		"legacy-fairness":
+			simulation.rotate_ai_nation_order = false
+			for nation_id in [LEFT_NATION, RIGHT_NATION]:
+				simulation.ai_legacy_id_personality_overrides[nation_id] = true
+		"balanced-fairness":
+			pass
 		"current-control":
 			for nation_id in [LEFT_NATION, RIGHT_NATION]:
 				simulation.ai_executable_attack_paths_overrides[nation_id] = false
@@ -209,7 +225,11 @@ func _build_symmetric_world() -> GameState:
 		army.forced_retreat = false
 		army.holding_days = 0
 		army.hold_target_progress = -1.0
-	state.rng.seed = 991199
+	var rng_seed := 991199
+	var seed_override := OS.get_environment("AI_DUEL_RNG_SEED")
+	if not seed_override.is_empty():
+		rng_seed = int(seed_override)
+	state.rng.seed = rng_seed
 	state.refresh_derived()
 	return state
 
@@ -266,12 +286,18 @@ func _validate_symmetry(state: GameState) -> bool:
 func _validate_annual_food_surplus() -> bool:
 	var state := _build_symmetric_world()
 	state.armies.clear()
-	for nation_id in [LEFT_NATION, RIGHT_NATION]:
-		var owned := state.cities_of(nation_id)
-		for i in range(10):
-			var city := owned[(i * 3) % owned.size()]
-			var army := state.create_army(nation_id, city.id, Army.DEFAULT_MAX_SIZE)
-			army.max_size = Army.DEFAULT_MAX_SIZE
+	var left_owned := state.cities_of(LEFT_NATION)
+	for i in range(10):
+		var left_city := left_owned[(i * 3) % left_owned.size()]
+		var right_city_id := _mirror_city_id(state, left_city.id)
+		var left_army := state.create_army(
+			LEFT_NATION, left_city.id, Army.DEFAULT_MAX_SIZE
+		)
+		var right_army := state.create_army(
+			RIGHT_NATION, right_city_id, Army.DEFAULT_MAX_SIZE
+		)
+		left_army.max_size = Army.DEFAULT_MAX_SIZE
+		right_army.max_size = Army.DEFAULT_MAX_SIZE
 	var simulation := Simulation.new()
 	simulation.setup(state)
 	var initial_food := [
@@ -290,7 +316,7 @@ func _validate_annual_food_surplus() -> bool:
 		% [left_surplus, right_surplus, Simulation.FOOD_PER_CAPITA]
 	)
 	simulation.free()
-	return left_surplus > 0 and right_surplus > 0
+	return left_surplus > 0 and left_surplus == right_surplus
 
 
 func _mirror_city_id(state: GameState, city_id: int) -> int:

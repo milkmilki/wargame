@@ -122,7 +122,8 @@ func _init() -> void:
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
 				+ "mobilized=%d resource_peace=%d "
 				+ "ally=%d leave=%d "
-				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d ms=%d"
+				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d "
+				+ "commit_failures=%d ms=%d"
 			)
 			% [
 				world_seed,
@@ -149,13 +150,20 @@ func _init() -> void:
 				alliance_pairs,
 				capital_armies,
 				border_armies,
+				simulation.ai_command_commit_failure_total,
 				elapsed,
 			]
 		)
+		if simulation.ai_command_commit_failure_total > 0:
+			print(
+				"  commit_failure_log=%s"
+				% str(simulation.ai_command_commit_failure_log)
+			)
 		if (
 			captures == 0
 			or ordered == 0
 			or invalid > 0
+			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0
 			or border_armies == 0
 			or state.diplomatic_history.is_empty()

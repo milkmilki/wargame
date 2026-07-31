@@ -58,6 +58,16 @@ var _time_acc: float = 0.0
 var _ai_strategy_cache: Dictionary = {}    ## nation_id -> StrategicMapSnapshot
 var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership_revision, diplomacy_revision]
 var _ai_last_decision_day: int = -1
+var _collect_ai_commands: bool = false
+var _ai_command_buffer: Array[AiCommandIntent] = []
+var _ai_planned_armies: Dictionary = {}
+var _ai_planned_hold_edges: Dictionary = {}
+var _ai_planned_first_legs: Dictionary = {}
+var _ai_command_sequence: Dictionary = {}
+var _ai_snapshot_armies: Dictionary = {}
+var ai_last_command_commit_failures: int = 0
+var ai_command_commit_failure_total: int = 0
+var ai_command_commit_failure_log: Array[String] = []
 ## 测试/基准注入点：nation_id -> Callable(state, nation_id, simulation)。
 ## 正式游戏保持为空，所有国家均使用 Utility AI。
 var ai_policy_overrides: Dictionary = {}
@@ -69,6 +79,10 @@ var ai_tactical_decision_order_overrides: Dictionary = {}
 var ai_supply_corridor_defense_overrides: Dictionary = {}
 ## A/B 注入点：false 复现攻击候选不检查实际通行路径的旧逻辑。
 var ai_executable_attack_paths_overrides: Dictionary = {}
+## A/B 注入点：true 复现由 nation_id 隐式生成 AI 性格的旧逻辑。
+var ai_legacy_id_personality_overrides: Dictionary = {}
+## 每个 AI 决策轮次轮换统一提交顺序，避免低 ID 国家永久先提交。
+var rotate_ai_nation_order: bool = true
 ## A/B 基准注入点：false 保留修改前的静态进攻评分。
 var ai_strategic_planning_overrides: Dictionary = {}
 ## A/B 基准注入点：false 保留修改前的 60 天传播威胁守备策略。
@@ -83,6 +97,10 @@ func setup(game_state: GameState) -> void:
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
 	_ai_last_decision_day = -1
+	ai_last_command_commit_failures = 0
+	ai_command_commit_failure_total = 0
+	ai_command_commit_failure_log.clear()
+	_clear_ai_command_collection()
 
 
 func _process(delta: float) -> void:
@@ -919,103 +937,93 @@ func _repatriate_after_access_revoked(
 
 func _ai_assign_targets() -> void:
 	_ai_last_decision_day = state.day
-	for nation in state.nations:
+	var nation_order := _ai_nation_ids_for_day(
+		state.nations.size(), state.day, rotate_ai_nation_order
+	)
+	var managed_nations: Array[int] = []
+	var force_contexts := {}
+	for nation_id in nation_order:
+		var nation := state.nations[nation_id]
 		if not nation.alive:
 			continue
 		if ai_policy_overrides.has(nation.id):
 			var policy: Callable = ai_policy_overrides[nation.id]
 			policy.call(state, nation.id, self)
 			continue
-		var view := AiWorldView.build(state, nation.id)
-		view.strategic_planning_enabled = bool(
-			ai_strategic_planning_overrides.get(nation.id, true)
+		managed_nations.append(nation_id)
+		var view := _build_ai_view(nation_id)
+		var snapshot := _strategy_snapshot_for(view)
+		force_contexts[nation_id] = {
+			"view": view,
+			"snapshot": snapshot,
+			"threat": ThreatField.build(view),
+		}
+
+	# 军制调整只消耗本国资源；所有国家先基于同一时刻的冻结上下文决策。
+	for nation_id in managed_nations:
+		var context: Dictionary = force_contexts[nation_id]
+		_ai_manage_force_structure(
+			context["view"],
+			context["snapshot"],
+			context["threat"]
 		)
-		view.adaptive_garrison_enabled = bool(
-			ai_adaptive_garrison_overrides.get(nation.id, true)
-		)
-		view.supply_corridor_defense_enabled = bool(
-			ai_supply_corridor_defense_overrides.get(nation.id, true)
-		)
-		view.executable_attack_paths_enabled = bool(
-			ai_executable_attack_paths_overrides.get(nation.id, true)
-		)
-		if (
-			not _ai_strategy_cache.has(nation.id)
-			or _ai_strategy_revision.get(nation.id, []) != [
-				state.ownership_revision,
-				state.diplomacy_revision,
-			]
-		):
-			_ai_strategy_cache[nation.id] = StrategicMapSnapshot.build(view)
-			_ai_strategy_revision[nation.id] = [
-				state.ownership_revision,
-				state.diplomacy_revision,
-			]
-		var snapshot: StrategicMapSnapshot = _ai_strategy_cache[nation.id]
-		var threat := ThreatField.build(view)
-		if _ai_manage_force_structure(view, snapshot, threat):
-			view = AiWorldView.build(state, nation.id)
-			view.strategic_planning_enabled = bool(
-				ai_strategic_planning_overrides.get(nation.id, true)
-			)
-			view.adaptive_garrison_enabled = bool(
-				ai_adaptive_garrison_overrides.get(nation.id, true)
-			)
-			view.supply_corridor_defense_enabled = bool(
-				ai_supply_corridor_defense_overrides.get(nation.id, true)
-			)
-			view.executable_attack_paths_enabled = bool(
-				ai_executable_attack_paths_overrides.get(nation.id, true)
-			)
-			threat = ThreatField.build(view)
-		var strategic_orders_changed := false
+
+	# 军事规划复用 tick 开始时的冻结上下文；军制变化从下一次决策起生效。
+	var military_contexts := force_contexts
+	var snapshot_army_ids := {}
+	for nation_id in managed_nations:
+		var context: Dictionary = military_contexts[nation_id]
+		var snapshot_view: AiWorldView = context["view"]
+		for army in snapshot_view.friendly_armies:
+			snapshot_army_ids[army.id] = true
+	_begin_ai_command_collection(snapshot_army_ids)
+	for nation_id in managed_nations:
+		var nation := state.nations[nation_id]
 		if nation.war_preparation_target_nation >= 0:
-			strategic_orders_changed = _assign_offensive_staging_orders(
-				nation.id,
+			_assign_offensive_staging_orders(
+				nation_id,
 				nation.war_preparation_objective_city
 			)
-		elif not state.wars_of(nation.id).is_empty():
-			strategic_orders_changed = _manage_campaign_offensive(nation.id)
-		if strategic_orders_changed:
-			view = AiWorldView.build(state, nation.id)
-			view.strategic_planning_enabled = bool(
-				ai_strategic_planning_overrides.get(nation.id, true)
-			)
-			view.adaptive_garrison_enabled = bool(
-				ai_adaptive_garrison_overrides.get(nation.id, true)
-			)
-			view.supply_corridor_defense_enabled = bool(
-				ai_supply_corridor_defense_overrides.get(nation.id, true)
-			)
-			view.executable_attack_paths_enabled = bool(
-				ai_executable_attack_paths_overrides.get(nation.id, true)
-			)
-			threat = ThreatField.build(view)
+		elif not state.wars_of(nation_id).is_empty():
+			_manage_campaign_offensive(nation_id)
+
+	for nation_id in managed_nations:
+		var context: Dictionary = military_contexts[nation_id]
+		var view: AiWorldView = context["view"]
+		var snapshot: StrategicMapSnapshot = context["snapshot"]
+		var threat: ThreatField = context["threat"]
 		var coordinator := ArmyCoordinator.new()
 		var minimum_participant_ratio := float(
 			ai_assault_participant_ratio_overrides.get(
-				nation.id,
+				nation_id,
 				UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO
 			)
 		)
 		for army in view.friendly_armies:
-			if army.ai_target_city != -1 and army.state in [Army.State.MOVING, Army.State.FIGHTING]:
+			if (
+				army.ai_target_city != -1
+				and army.state in [
+					Army.State.MOVING,
+					Army.State.FIGHTING,
+				]
+			):
 				coordinator.reserve(army.ai_target_city, army)
 			elif army.state == Army.State.HOLDING:
 				var friendly_endpoint := army.move_from
 				if not state.has_military_access(
-					nation.id, state.cities[friendly_endpoint].owner_nation
+					nation_id,
+					state.cities[friendly_endpoint].owner_nation
 				):
 					friendly_endpoint = army.move_to
 				coordinator.reserve(friendly_endpoint, army)
 		var strongest_first := bool(
-			ai_tactical_decision_order_overrides.get(nation.id, true)
+			ai_tactical_decision_order_overrides.get(nation_id, true)
 		)
 		var decision_order := _sort_ai_decision_order(
 			view.friendly_armies, snapshot, strongest_first
 		)
 		for army in decision_order:
-			if army.size <= 0:
+			if army.size <= 0 or _ai_planned_armies.has(army.id):
 				continue
 			var candidate := UtilityAI.choose(
 				view,
@@ -1032,6 +1040,56 @@ func _ai_assign_targets() -> void:
 					coordinator.reserve(candidate.target_edge_a, army)
 				elif candidate.target_city != -1:
 					coordinator.reserve(candidate.target_city, army)
+	_commit_ai_command_collection(nation_order)
+
+
+func _build_ai_view(nation_id: int) -> AiWorldView:
+	var view := AiWorldView.build(state, nation_id)
+	view.strategic_planning_enabled = bool(
+		ai_strategic_planning_overrides.get(nation_id, true)
+	)
+	view.adaptive_garrison_enabled = bool(
+		ai_adaptive_garrison_overrides.get(nation_id, true)
+	)
+	view.supply_corridor_defense_enabled = bool(
+		ai_supply_corridor_defense_overrides.get(nation_id, true)
+	)
+	view.executable_attack_paths_enabled = bool(
+		ai_executable_attack_paths_overrides.get(nation_id, true)
+	)
+	view.legacy_id_personality_enabled = bool(
+		ai_legacy_id_personality_overrides.get(nation_id, false)
+	)
+	return view
+
+
+func _strategy_snapshot_for(view: AiWorldView) -> StrategicMapSnapshot:
+	var revision := [
+		state.ownership_revision,
+		state.diplomacy_revision,
+	]
+	if (
+		not _ai_strategy_cache.has(view.nation_id)
+		or _ai_strategy_revision.get(view.nation_id, []) != revision
+	):
+		_ai_strategy_cache[view.nation_id] = StrategicMapSnapshot.build(view)
+		_ai_strategy_revision[view.nation_id] = revision
+	return _ai_strategy_cache[view.nation_id]
+
+
+static func _ai_nation_ids_for_day(
+	nation_count: int,
+	day: int,
+	rotate_order: bool = true
+) -> Array[int]:
+	var result: Array[int] = []
+	if nation_count <= 0:
+		return result
+	var decision_round := day / AI_DECISION_INTERVAL_DAYS
+	var start := posmod(decision_round, nation_count) if rotate_order else 0
+	for offset in range(nation_count):
+		result.append((start + offset) % nation_count)
+	return result
 
 
 static func _sort_ai_decision_order(
@@ -1689,7 +1747,240 @@ func _disband_army(army: Army, reason: String = "") -> bool:
 	return true
 
 
-func _execute_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
+func _begin_ai_command_collection(
+	snapshot_army_ids: Dictionary = {}
+) -> void:
+	_clear_ai_command_collection()
+	if snapshot_army_ids.is_empty():
+		for army in state.armies:
+			if army.size > 0:
+				_ai_snapshot_armies[army.id] = true
+	else:
+		_ai_snapshot_armies = snapshot_army_ids.duplicate()
+	_collect_ai_commands = true
+
+
+func _clear_ai_command_collection() -> void:
+	_collect_ai_commands = false
+	_ai_command_buffer.clear()
+	_ai_planned_armies.clear()
+	_ai_planned_hold_edges.clear()
+	_ai_planned_first_legs.clear()
+	_ai_command_sequence.clear()
+	_ai_snapshot_armies.clear()
+
+
+func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
+	if (
+		army == null
+		or army.size <= 0
+		or not _ai_snapshot_armies.has(army.id)
+		or _ai_planned_armies.has(army.id)
+		or not _can_queue_ai_candidate(army, candidate)
+	):
+		return false
+	var prepared_path: Array[int] = []
+	var path_prevalidated := false
+	if (
+		army.state == Army.State.IDLE
+		and candidate.kind in [
+			ActionCandidate.Kind.ATTACK,
+			ActionCandidate.Kind.REINFORCE,
+			ActionCandidate.Kind.MERGE,
+			ActionCandidate.Kind.RETREAT,
+		]
+	):
+		var field := Pathfinding.dijkstra_field(
+			state,
+			army.location_city,
+			army.owner_nation,
+			false,
+			candidate.kind != ActionCandidate.Kind.ATTACK,
+			candidate.target_city
+				if candidate.kind == ActionCandidate.Kind.ATTACK
+				else -1
+		)
+		prepared_path = Pathfinding.reconstruct(
+			field["prev"],
+			army.location_city,
+			candidate.target_city
+		)
+		if prepared_path.is_empty():
+			return false
+		path_prevalidated = true
+	var first_leg := -1
+	if army.state == Army.State.IDLE:
+		if candidate.kind == ActionCandidate.Kind.HOLD:
+			first_leg = candidate.target_city
+		elif path_prevalidated:
+			first_leg = prepared_path[0]
+	if first_leg != -1:
+		var first_edge := state.edge_of(army.location_city, first_leg)
+		if first_edge == null or first_edge.max_throughput <= 0:
+			return false
+		var leg_key := _ai_first_leg_key(
+			army.owner_nation,
+			army.location_city,
+			first_leg
+		)
+		var occupied := _friendly_same_direction_count(
+			army.owner_nation,
+			army.location_city,
+			first_leg
+		)
+		var reserved := int(_ai_planned_first_legs.get(leg_key, 0))
+		if occupied + reserved >= first_edge.max_throughput:
+			return false
+		_ai_planned_first_legs[leg_key] = reserved + 1
+	var sequence := int(
+		_ai_command_sequence.get(army.owner_nation, 0)
+	)
+	_ai_command_sequence[army.owner_nation] = sequence + 1
+	_ai_command_buffer.append(AiCommandIntent.make(
+		army,
+		candidate,
+		sequence,
+		prepared_path,
+		path_prevalidated
+	))
+	_ai_planned_armies[army.id] = true
+	if candidate.kind == ActionCandidate.Kind.HOLD:
+		_ai_planned_hold_edges[
+			_ai_hold_order_key(
+				army.owner_nation,
+				candidate.target_edge_a,
+				candidate.target_edge_b
+			)
+		] = true
+	return true
+
+
+func _can_queue_ai_candidate(
+	army: Army,
+	candidate: ActionCandidate
+) -> bool:
+	if candidate == null or candidate.kind == ActionCandidate.Kind.NONE:
+		return false
+	if candidate.kind == ActionCandidate.Kind.HOLD:
+		if army.state == Army.State.HOLDING:
+			return true
+		if army.state != Army.State.IDLE or candidate.target_city == -1:
+			return false
+		var hold_key := _ai_hold_order_key(
+			army.owner_nation,
+			army.location_city,
+			candidate.target_city
+		)
+		return (
+			not _ai_planned_hold_edges.has(hold_key)
+			and not _edge_has_friendly_holder_or_order(
+				army.owner_nation,
+				army.location_city,
+				candidate.target_city
+			)
+		)
+	if candidate.kind in [
+		ActionCandidate.Kind.ATTACK,
+		ActionCandidate.Kind.REINFORCE,
+		ActionCandidate.Kind.MERGE,
+	]:
+		if candidate.kind == ActionCandidate.Kind.ATTACK and army.state == Army.State.HOLDING:
+			return (
+				candidate.target_city == army.move_from
+				or candidate.target_city == army.move_to
+			)
+		return (
+			army.state == Army.State.IDLE
+			and candidate.target_city >= 0
+			and candidate.target_city < state.cities.size()
+			and candidate.target_city != army.location_city
+		)
+	if candidate.kind == ActionCandidate.Kind.RETREAT:
+		if army.state == Army.State.HOLDING:
+			return (
+				candidate.target_city == army.move_from
+				or candidate.target_city == army.move_to
+			)
+		return (
+			army.state == Army.State.IDLE
+			and candidate.target_city >= 0
+			and candidate.target_city < state.cities.size()
+			and candidate.target_city != army.location_city
+		)
+	return false
+
+
+func _commit_ai_command_collection(
+	nation_order: Array[int]
+) -> void:
+	_collect_ai_commands = false
+	ai_last_command_commit_failures = 0
+	var nation_rank := {}
+	for index in range(nation_order.size()):
+		nation_rank[nation_order[index]] = index
+	_ai_command_buffer.sort_custom(
+		func(a: AiCommandIntent, b: AiCommandIntent) -> bool:
+			if a.sequence != b.sequence:
+				return a.sequence < b.sequence
+			return (
+				int(nation_rank.get(a.nation_id, 999999))
+				< int(nation_rank.get(b.nation_id, 999999))
+			)
+	)
+	for intent in _ai_command_buffer:
+		if not _execute_ai_candidate(
+			intent.army,
+			intent.candidate,
+			intent.prepared_path,
+			intent.path_prevalidated
+		):
+			ai_last_command_commit_failures += 1
+			ai_command_commit_failure_total += 1
+			if ai_command_commit_failure_log.size() < 20:
+				ai_command_commit_failure_log.append(
+					(
+						"day=%d army=%d nation=%d state=%d kind=%d target=%d "
+						+ "reason=%s"
+					) % [
+						state.day,
+						intent.army.id,
+						intent.army.owner_nation,
+						intent.army.state,
+						intent.candidate.kind,
+						intent.candidate.target_city,
+						intent.candidate.reason,
+					]
+				)
+	_clear_ai_command_collection()
+
+
+func _ai_hold_order_key(
+	nation_id: int,
+	city_a: int,
+	city_b: int
+) -> String:
+	return "%d:%d" % [
+		nation_id,
+		_edge_key_of(city_a, city_b),
+	]
+
+
+static func _ai_first_leg_key(
+	nation_id: int,
+	from_city: int,
+	to_city: int
+) -> String:
+	return "%d:%d:%d" % [nation_id, from_city, to_city]
+
+
+func _execute_ai_candidate(
+	army: Army,
+	candidate: ActionCandidate,
+	prepared_path: Array[int] = [],
+	path_prevalidated: bool = false
+) -> bool:
+	if _collect_ai_commands:
+		return _queue_ai_candidate(army, candidate)
 	if candidate.kind == ActionCandidate.Kind.HOLD:
 		if army.state == Army.State.HOLDING:
 			_record_ai_order(army, candidate)
@@ -1723,17 +2014,22 @@ func _execute_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			return true
 		if army.state != Army.State.IDLE or candidate.target_city == -1:
 			return false
-		var field := Pathfinding.dijkstra_field(
-			state,
-			army.location_city,
-			army.owner_nation,
-			false,
-			candidate.kind != ActionCandidate.Kind.ATTACK,
-			candidate.target_city if candidate.kind == ActionCandidate.Kind.ATTACK else -1
-		)
-		army.path = Pathfinding.reconstruct(
-			field["prev"], army.location_city, candidate.target_city
-		)
+		if path_prevalidated:
+			army.path = prepared_path.duplicate()
+		else:
+			var field := Pathfinding.dijkstra_field(
+				state,
+				army.location_city,
+				army.owner_nation,
+				false,
+				candidate.kind != ActionCandidate.Kind.ATTACK,
+				candidate.target_city
+					if candidate.kind == ActionCandidate.Kind.ATTACK
+					else -1
+			)
+			army.path = Pathfinding.reconstruct(
+				field["prev"], army.location_city, candidate.target_city
+			)
 		if army.path.is_empty():
 			return false
 		army.hold_target_progress = -1.0
@@ -1754,12 +2050,17 @@ func _execute_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			return true
 		if army.state != Army.State.IDLE:
 			return false
-		var retreat_field := Pathfinding.dijkstra_field(
-			state, army.location_city, army.owner_nation, false, true
-		)
-		army.path = Pathfinding.reconstruct(
-			retreat_field["prev"], army.location_city, candidate.target_city
-		)
+		if path_prevalidated:
+			army.path = prepared_path.duplicate()
+		else:
+			var retreat_field := Pathfinding.dijkstra_field(
+				state, army.location_city, army.owner_nation, false, true
+			)
+			army.path = Pathfinding.reconstruct(
+				retreat_field["prev"],
+				army.location_city,
+				candidate.target_city
+			)
 		if army.path.is_empty():
 			return false
 		army.hold_target_progress = -1.0

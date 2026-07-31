@@ -104,7 +104,7 @@ static func _retreat_candidate(
 	army: Army,
 	local_ratio: float
 ) -> ActionCandidate:
-	var caution := _caution(view.nation_id)
+	var caution := _caution(view)
 	if local_ratio >= RETREAT_ENTER_RATIO * caution:
 		return null
 	var start := army.location_city
@@ -340,7 +340,7 @@ static func _frontier_deployment_safe(
 	)
 	return (
 		support_power / maxf(threat_power, 1.0)
-		>= HOLD_DEPLOY_ENTER_RATIO * _caution(view.nation_id)
+		>= HOLD_DEPLOY_ENTER_RATIO * _caution(view)
 	)
 
 
@@ -363,7 +363,7 @@ static func _attack_candidate(
 			view.state, start, view.nation_id, false, true
 		)["dist"]
 	var power := ArmyPower.effective(army)
-	var aggression := _aggression(view.nation_id)
+	var aggression := _aggression(view)
 	var best_city := -1
 	var best_score := -INF
 	var best_directions := 0
@@ -934,7 +934,7 @@ static func _choose_holding(
 			)
 			breakout.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 			return breakout
-	if enemy > 0.0 and ratio < RETREAT_ENTER_RATIO * _caution(view.nation_id):
+	if enemy > 0.0 and ratio < RETREAT_ENTER_RATIO * _caution(view):
 		var retreat := ActionCandidate.make(
 			ActionCandidate.Kind.RETREAT,
 			20.0,
@@ -1070,9 +1070,13 @@ static func _enemy_power_on_edge(
 	return total
 
 
-static func _aggression(nation_id: int) -> float:
-	return 0.85 + float((nation_id * 37 + 11) % 36) / 100.0
+static func _aggression(view: AiWorldView) -> float:
+	if not view.legacy_id_personality_enabled:
+		return 1.0
+	return 0.85 + float((view.nation_id * 37 + 11) % 36) / 100.0
 
 
-static func _caution(nation_id: int) -> float:
-	return 0.85 + float((nation_id * 53 + 7) % 36) / 100.0
+static func _caution(view: AiWorldView) -> float:
+	if not view.legacy_id_personality_enabled:
+		return 1.0
+	return 0.85 + float((view.nation_id * 53 + 7) % 36) / 100.0
