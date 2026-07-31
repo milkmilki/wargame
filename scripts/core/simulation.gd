@@ -1015,7 +1015,7 @@ func _ai_assign_targets() -> void:
 					state.cities[friendly_endpoint].owner_nation
 				):
 					friendly_endpoint = army.move_to
-				coordinator.reserve(friendly_endpoint, army)
+				coordinator.reserve(friendly_endpoint, army, false)
 		var strongest_first := bool(
 			ai_tactical_decision_order_overrides.get(nation_id, true)
 		)
@@ -1037,7 +1037,11 @@ func _ai_assign_targets() -> void:
 				continue
 			if _execute_ai_candidate(army, candidate):
 				if candidate.kind == ActionCandidate.Kind.HOLD:
-					coordinator.reserve(candidate.target_edge_a, army)
+					coordinator.reserve(
+						candidate.target_edge_a,
+						army,
+						false
+					)
 				elif candidate.target_city != -1:
 					coordinator.reserve(candidate.target_city, army)
 	_commit_ai_command_collection(nation_order)

@@ -5,18 +5,28 @@ extends RefCounted
 var assigned_power: Dictionary = {}    ## target_city -> float
 var assigned_size: Dictionary = {}     ## target_city -> 原始兵力
 var assigned_armies: Dictionary = {}   ## target_city -> Array[int]
+var city_defense_power: Dictionary = {} ## target_city -> 确定进入城市的防御战力
 
 
-func reserve(target_city: int, army: Army) -> void:
+func reserve(
+	target_city: int,
+	army: Army,
+	counts_as_city_defense: bool = true
+) -> void:
 	if target_city < 0:
 		return
-	assigned_power[target_city] = (
-		float(assigned_power.get(target_city, 0.0)) + ArmyPower.effective(army)
-	)
+	var power := ArmyPower.effective(army)
+	assigned_power[target_city] = float(
+		assigned_power.get(target_city, 0.0)
+	) + power
 	assigned_size[target_city] = int(assigned_size.get(target_city, 0)) + army.size
 	if not assigned_armies.has(target_city):
 		assigned_armies[target_city] = [] as Array[int]
 	(assigned_armies[target_city] as Array[int]).append(army.id)
+	if counts_as_city_defense:
+		city_defense_power[target_city] = float(
+			city_defense_power.get(target_city, 0.0)
+		) + power
 
 
 func power_reserved(target_city: int) -> float:
@@ -25,6 +35,10 @@ func power_reserved(target_city: int) -> float:
 
 func size_reserved(target_city: int) -> int:
 	return int(assigned_size.get(target_city, 0))
+
+
+func city_defense_power_reserved(target_city: int) -> float:
+	return float(city_defense_power.get(target_city, 0.0))
 
 
 static func merge_colocated(state: GameState) -> int:

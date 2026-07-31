@@ -17,6 +17,8 @@ const SUPPLY_CORRIDOR_GARRISON_MAX: float = 3000.0
 const SUPPLY_CORRIDOR_RESPONSE_MAX_POWER: float = 5000.0
 const SUPPLY_CORRIDOR_POWER_RATIO_MIN: float = 0.80
 const SUPPLY_CORRIDOR_POWER_RATIO_MAX: float = 1.50
+const CITY_DEFENSE_RESPONSE_THREAT_FLOOR: float = 1000.0
+const CITY_DEFENSE_REQUIRED_PRESSURE_SHARE: float = 0.80
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
 const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
@@ -907,6 +909,15 @@ static func _choose_holding(
 	if view.state.cities[endpoint].owner_nation != view.nation_id:
 		endpoint = army.move_to
 	var enemy_endpoint := army.move_to if endpoint == army.move_from else army.move_from
+	var defend_city := _holding_city_defense_candidate(
+		view,
+		snapshot,
+		coordinator,
+		endpoint,
+		enemy_endpoint
+	)
+	if defend_city != null:
+		return defend_city
 	var enemy := maxf(threat.threat_at(army.move_from), threat.threat_at(army.move_to))
 	var support := maxf(
 		maxf(
@@ -1009,6 +1020,119 @@ static func _choose_holding(
 		hold_score,
 		"继续控制战略边，价值 %.2f" % hold_score,
 		army.move_to
+	)
+
+
+static func _holding_city_defense_candidate(
+	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
+	coordinator: ArmyCoordinator,
+	friendly_endpoint: int,
+	held_other_endpoint: int
+) -> ActionCandidate:
+	if (
+		friendly_endpoint < 0
+		or friendly_endpoint >= view.state.cities.size()
+		or view.state.cities[friendly_endpoint].owner_nation
+			!= view.nation_id
+	):
+		return null
+	var city := view.state.cities[friendly_endpoint]
+	var alternate_pressure := _enemy_city_approach_pressure(
+		view,
+		friendly_endpoint,
+		held_other_endpoint
+	)
+	var relief_need := _friendly_relief_need(view, friendly_endpoint)
+	var stationed := (
+		stationed_power_at(view, friendly_endpoint)
+		+ coordinator.city_defense_power_reserved(friendly_endpoint)
+		+ ArmyPower.city_defense(city)
+	)
+	var required := maxf(
+		alternate_pressure * CITY_DEFENSE_REQUIRED_PRESSURE_SHARE,
+		relief_need
+	)
+	var alternate_attack := (
+		alternate_pressure >= CITY_DEFENSE_RESPONSE_THREAT_FLOOR
+	)
+	if relief_need <= 0.0 and not alternate_attack:
+		return null
+	var deficit := required - stationed
+	if deficit <= 0.0:
+		return null
+	var candidate := ActionCandidate.make(
+		ActionCandidate.Kind.RETREAT,
+		50.0
+			+ 10.0 * deficit / maxf(required, 1.0)
+			+ 0.5 * snapshot.value_of_city(friendly_endpoint),
+		(
+			"城市 %d 面临集中进攻，守备缺口 %.0f，驻边军回城防御"
+			% [friendly_endpoint, deficit]
+		),
+		friendly_endpoint
+	)
+	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+	return candidate
+
+
+static func _enemy_city_approach_pressure(
+	view: AiWorldView,
+	city_id: int,
+	held_other_endpoint: int
+) -> float:
+	var pressure := 0.0
+	for enemy in view.enemy_armies:
+		var power := ArmyPower.effective(enemy)
+		if power <= 0.0:
+			continue
+		if enemy.on_edge and enemy.move_to != -1:
+			if enemy.move_to != city_id:
+				continue
+			var other_endpoint := enemy.move_from
+			if other_endpoint == held_other_endpoint:
+				continue
+			var edge := view.state.edge_of(
+				enemy.move_from,
+				enemy.move_to
+			)
+			if edge == null:
+				continue
+			var remaining_days := (
+				1.0 - clampf(enemy.move_progress, 0.0, 1.0)
+			) * _edge_travel_days(edge)
+			pressure += power * exp(
+				-remaining_days / ThreatField.DECAY_DAYS
+			)
+			continue
+		if enemy.location_city == city_id:
+			pressure += power
+			continue
+		if (
+			enemy.location_city == held_other_endpoint
+			or not view.state.neighbors(city_id).has(
+				enemy.location_city
+			)
+		):
+			continue
+		var approach_edge := view.state.edge_of(
+			city_id,
+			enemy.location_city
+		)
+		if approach_edge == null or approach_edge.max_throughput <= 0:
+			continue
+		pressure += power * exp(
+			-_edge_travel_days(approach_edge)
+				/ ThreatField.DECAY_DAYS
+		)
+	return pressure
+
+
+static func _edge_travel_days(edge: Edge) -> float:
+	return clampf(
+		10.0 + float(maxi(edge.distance, 1) - 1) * 5.0,
+		10.0,
+		30.0
 	)
 
 

@@ -2599,6 +2599,140 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		"A/B 当前 AI 对照开关应只关闭新增粮道守备需求"
 	)
 
+	var defense_state := GameState.new()
+	defense_state.generate_grid_world(7005)
+	defense_state.armies.clear()
+	for city in defense_state.cities:
+		city.owner_nation = 0
+	for enemy_city_id in [8, 10, 17]:
+		defense_state.cities[enemy_city_id].owner_nation = 1
+	defense_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var threatened_city := 9
+	var first_holder := _make_army(961, 0, 15000, 10, 10)
+	first_holder.state = Army.State.HOLDING
+	first_holder.location_city = threatened_city
+	first_holder.move_from = threatened_city
+	first_holder.move_to = 10
+	first_holder.move_progress = Simulation.HOLDING_TARGET_PROGRESS
+	first_holder.on_edge = true
+	var second_holder := _make_army(962, 0, 15000, 10, 10)
+	second_holder.state = Army.State.HOLDING
+	second_holder.location_city = threatened_city
+	second_holder.move_from = threatened_city
+	second_holder.move_to = 8
+	second_holder.move_progress = Simulation.HOLDING_TARGET_PROGRESS
+	second_holder.on_edge = true
+	var alternate_attacker := _make_army(963, 1, 15000, 10, 10)
+	alternate_attacker.state = Army.State.MOVING
+	alternate_attacker.location_city = 17
+	alternate_attacker.move_from = 17
+	alternate_attacker.move_to = threatened_city
+	alternate_attacker.move_progress = 0.5
+	alternate_attacker.on_edge = true
+	defense_state.armies.append_array([
+		first_holder,
+		second_holder,
+		alternate_attacker,
+	])
+	defense_state.refresh_derived()
+	var defense_view := AiWorldView.build(defense_state, 0)
+	var defense_snapshot := StrategicMapSnapshot.build(defense_view)
+	var defense_threat := ThreatField.build(defense_view)
+	var defense_coordinator := ArmyCoordinator.new()
+	defense_coordinator.reserve(
+		threatened_city,
+		first_holder,
+		false
+	)
+	defense_coordinator.reserve(
+		threatened_city,
+		second_holder,
+		false
+	)
+	var first_defense_order := UtilityAI.choose(
+		defense_view,
+		defense_snapshot,
+		defense_threat,
+		defense_coordinator,
+		first_holder
+	)
+	_check(
+		first_defense_order.kind == ActionCandidate.Kind.RETREAT
+		and first_defense_order.target_city == threatened_city
+		and first_defense_order.reason.contains("集中进攻"),
+		"敌军从另一条道路逼近时，驻边军必须回到受威胁城市防御"
+	)
+	if first_defense_order.kind == ActionCandidate.Kind.RETREAT:
+		defense_coordinator.reserve(
+			first_defense_order.target_city,
+			first_holder
+		)
+	var second_defense_order := UtilityAI.choose(
+		defense_view,
+		defense_snapshot,
+		defense_threat,
+		defense_coordinator,
+		second_holder
+	)
+	_check(
+		not (
+			second_defense_order.kind == ActionCandidate.Kind.RETREAT
+			and second_defense_order.target_city == threatened_city
+		),
+		"第一支回防军已填平缺口后，不得让其余驻边军集体撤线"
+	)
+
+	alternate_attacker.move_from = threatened_city
+	alternate_attacker.move_to = 17
+	defense_state.armies = [
+		first_holder,
+		alternate_attacker,
+	] as Array[Army]
+	defense_view = AiWorldView.build(defense_state, 0)
+	var departing_enemy_order := UtilityAI.choose(
+		defense_view,
+		StrategicMapSnapshot.build(defense_view),
+		ThreatField.build(defense_view),
+		ArmyCoordinator.new(),
+		first_holder
+	)
+	_check(
+		not (
+			departing_enemy_order.kind == ActionCandidate.Kind.RETREAT
+			and departing_enemy_order.target_city == threatened_city
+		),
+		"敌军正在背离城市时，不得误判为逼近压力并触发回防"
+	)
+
+	alternate_attacker.state = Army.State.IDLE
+	alternate_attacker.on_edge = false
+	alternate_attacker.location_city = 10
+	alternate_attacker.move_from = 10
+	alternate_attacker.move_to = -1
+	defense_state.armies = [
+		first_holder,
+		alternate_attacker,
+	] as Array[Army]
+	defense_view = AiWorldView.build(defense_state, 0)
+	var direct_border_order := UtilityAI.choose(
+		defense_view,
+		StrategicMapSnapshot.build(defense_view),
+		ThreatField.build(defense_view),
+		ArmyCoordinator.new(),
+		first_holder
+	)
+	_check(
+		not (
+			direct_border_order.kind == ActionCandidate.Kind.RETREAT
+			and direct_border_order.target_city == threatened_city
+		),
+		"唯一来敌位于当前驻守边对面且战力相当时，应继续扼守道路"
+	)
+
 	var batch_state := GameState.new()
 	batch_state.generate_grid_world(7006)
 	batch_state.armies.clear()
