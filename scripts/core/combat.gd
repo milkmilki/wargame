@@ -9,7 +9,7 @@ extends RefCounted
 const DEF_REF: float = 10.0                ## 防御减伤参考：减伤系数 = DEF_REF/(DEF_REF+eff_def)
 const K_ROUND: float = 120.0               ## 单回合伤害除数（越大每回合伤亡越小，战斗越久）
 
-# ---- 掷骰（EU4 式，每方每回合 0..9）----
+# ---- 战场波动（双方共享，避免阵营顺序造成系统性运气差）----
 const DICE_MIN: int = 0
 const DICE_MAX: int = 9
 const DICE_STEP: float = 0.15              ## 每点骰值放大火力比例（满骰 +135%）
@@ -105,11 +105,19 @@ static func resolve_round(battle: Battle, rng: RandomNumberGenerator) -> void:
 		if battle.city.food_storage <= 0:
 			garrison_b = int(round(garrison_b * SIEGE_STARVE_DEF_MULT))
 
-	# 各方攻击火力（聚合 size×attack）× 地形惩罚 × 掷骰放大
-	var roll_a := rng.randi_range(DICE_MIN, DICE_MAX)
-	var roll_b := rng.randi_range(DICE_MIN, DICE_MAX)
-	var fire_a := _side_attack(battle.side_a) * attack_pen_a * (1.0 + roll_a * DICE_STEP)
-	var fire_b := _side_attack(battle.side_b) * attack_pen_b * (1.0 + roll_b * DICE_STEP)
+	# 同一回合共享战场波动。保留逐回合随机变化，但不让 side_a/side_b 身份决定运气。
+	var battle_roll := rng.randi_range(DICE_MIN, DICE_MAX)
+	var roll_multiplier := 1.0 + battle_roll * DICE_STEP
+	var fire_a := (
+		_side_attack(battle.side_a)
+		* attack_pen_a
+		* roll_multiplier
+	)
+	var fire_b := (
+		_side_attack(battle.side_b)
+		* attack_pen_b
+		* roll_multiplier
+	)
 
 	# 各方平均有效防御（含地形惩罚；守方叠加城防）
 	var def_a := _side_avg_defense(battle.side_a, size_a) * defense_pen_a

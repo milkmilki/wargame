@@ -6,6 +6,7 @@ var assigned_power: Dictionary = {}    ## target_city -> float
 var assigned_size: Dictionary = {}     ## target_city -> 原始兵力
 var assigned_armies: Dictionary = {}   ## target_city -> Array[int]
 var city_defense_power: Dictionary = {} ## target_city -> 确定进入城市的防御战力
+var edge_defense_power: Dictionary = {} ## "city:neighbor" -> 驻守该方向的战力
 
 
 func reserve(
@@ -39,6 +40,35 @@ func size_reserved(target_city: int) -> int:
 
 func city_defense_power_reserved(target_city: int) -> float:
 	return float(city_defense_power.get(target_city, 0.0))
+
+
+func reserve_edge(
+	friendly_city: int,
+	other_city: int,
+	army: Army
+) -> void:
+	reserve(friendly_city, army, false)
+	var key := _edge_defense_key(friendly_city, other_city)
+	edge_defense_power[key] = float(
+		edge_defense_power.get(key, 0.0)
+	) + ArmyPower.effective(army)
+
+
+func edge_defense_power_reserved(
+	friendly_city: int,
+	other_city: int
+) -> float:
+	return float(edge_defense_power.get(
+		_edge_defense_key(friendly_city, other_city),
+		0.0
+	))
+
+
+static func _edge_defense_key(
+	friendly_city: int,
+	other_city: int
+) -> String:
+	return "%d:%d" % [friendly_city, other_city]
 
 
 static func merge_colocated(state: GameState) -> int:

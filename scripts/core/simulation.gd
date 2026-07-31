@@ -22,6 +22,9 @@ const STARVE_RATE: float = 0.5             ## 完全断粮时每月减员比例
 const SUPPLY_MORALE_LOSS_MAX: float = 0.20 ## 完全断粮时每月士气损失；部分缺粮按缺口比例缩放
 const HOLDING_TARGET_PROGRESS: float = 0.35 ## 从己方端点出发，驻防在边的己方侧
 const HOLDING_STARVE_DECAY: int = 2        ## 完全断粮时每天损失的驻防适应天数
+const CITY_GARRISON_CAPACITY_PER_MANPOWER: float = 1000.0
+const CITY_GARRISON_FOOD_PENALTY_RATE: float = 0.20
+const CITY_GARRISON_FOOD_PENALTY_MAX: float = 0.30
 ## 撤退驻城恢复每月消耗：复用普通驻军月耗口径（size × FOOD_PER_CAPITA）。
 ## 资源不足时按实际供给比例恢复；士气回满或本城粮尽后解除 RECOVERING。
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
@@ -166,9 +169,81 @@ func _resolve_economy() -> void:
 		produced.resize(state.nations.size())
 		produced.fill(0)
 		for city in state.cities:
-			produced[city.owner_nation] += city.food_per_half_year
+			produced[city.owner_nation] += city_food_output(
+				state,
+				city
+			)
 		for nation in state.nations:
 			state.deposit_food(nation.id, produced[nation.id])
+
+
+static func city_food_output(
+	game_state: GameState,
+	city: City
+) -> int:
+	return city_food_output_for_garrison(
+		city,
+		city_garrison_troops(game_state, city)
+	)
+
+
+static func city_food_output_for_garrison(
+	city: City,
+	garrison_troops: int
+) -> int:
+	var capacity := maxf(
+		float(city.manpower_per_month)
+			* CITY_GARRISON_CAPACITY_PER_MANPOWER,
+		1.0
+	)
+	var penalty := minf(
+		CITY_GARRISON_FOOD_PENALTY_MAX,
+		float(maxi(garrison_troops, 0))
+			/ capacity
+			* CITY_GARRISON_FOOD_PENALTY_RATE
+	)
+	return maxi(int(floor(
+		float(city.food_per_half_year)
+			* (1.0 - penalty)
+	)), 0)
+
+
+static func city_garrison_troops(
+	game_state: GameState,
+	city: City
+) -> int:
+	var result := 0
+	for army in game_state.armies:
+		if (
+			army.size > 0
+			and army.owner_nation == city.owner_nation
+			and not army.on_edge
+			and army.location_city == city.id
+		):
+			result += army.size
+	return result
+
+
+static func city_garrison_food_loss(
+	game_state: GameState,
+	city: City,
+	additional_troops: int = 0
+) -> int:
+	var current_troops := city_garrison_troops(
+		game_state,
+		city
+	)
+	return (
+		city_food_output_for_garrison(
+			city,
+			current_troops
+		)
+		- city_food_output_for_garrison(
+			city,
+			current_troops
+				+ maxi(additional_troops, 0)
+		)
+	)
 
 
 func _resolve_war_finance() -> void:
@@ -993,6 +1068,11 @@ func _ai_assign_targets() -> void:
 		var snapshot: StrategicMapSnapshot = context["snapshot"]
 		var threat: ThreatField = context["threat"]
 		var coordinator := ArmyCoordinator.new()
+		var defense_plan := CityDefensePlan.build(
+			view,
+			snapshot,
+			threat
+		)
 		var minimum_participant_ratio := float(
 			ai_assault_participant_ratio_overrides.get(
 				nation_id,
@@ -1015,7 +1095,16 @@ func _ai_assign_targets() -> void:
 					state.cities[friendly_endpoint].owner_nation
 				):
 					friendly_endpoint = army.move_to
-				coordinator.reserve(friendly_endpoint, army, false)
+				var other_endpoint := (
+					army.move_to
+					if friendly_endpoint == army.move_from
+					else army.move_from
+				)
+				coordinator.reserve_edge(
+					friendly_endpoint,
+					other_endpoint,
+					army
+				)
 		var strongest_first := bool(
 			ai_tactical_decision_order_overrides.get(nation_id, true)
 		)
@@ -1031,16 +1120,17 @@ func _ai_assign_targets() -> void:
 				threat,
 				coordinator,
 				army,
-				minimum_participant_ratio
+				minimum_participant_ratio,
+				defense_plan
 			)
 			if candidate.kind == ActionCandidate.Kind.NONE:
 				continue
 			if _execute_ai_candidate(army, candidate):
 				if candidate.kind == ActionCandidate.Kind.HOLD:
-					coordinator.reserve(
+					coordinator.reserve_edge(
 						candidate.target_edge_a,
-						army,
-						false
+						candidate.target_edge_b,
+						army
 					)
 				elif candidate.target_city != -1:
 					coordinator.reserve(candidate.target_city, army)

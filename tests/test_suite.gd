@@ -452,6 +452,24 @@ func _test_battle_basics() -> void:
 	rng.seed = 7
 	var r2 := _run_battle(b2, rng)
 	_check(r2 >= 3, "势均力敌应打多回合（EU4式持久），实为 %d" % r2)
+	var mirror_a := _make_army(2, 0, 1000, 10, 10)
+	var mirror_b := _make_army(3, 1, 1000, 10, 10)
+	var mirror_battle := _make_field_battle(
+		[mirror_a],
+		[mirror_b],
+		0.3,
+		4
+	)
+	rng.seed = 8
+	Combat.resolve_round(mirror_battle, rng)
+	_check(
+		mirror_a.size == mirror_b.size
+		and is_equal_approx(
+			mirror_a.morale,
+			mirror_b.morale
+		),
+		"同质双方共享战场波动时，单回合伤亡和士气必须严格对称"
+	)
 
 # ------------------------------------------------------------------ 4. 撤退机制（士气崩溃保兵）
 
@@ -680,7 +698,10 @@ func _test_time_layering() -> void:
 	var f0 := capital.food_storage
 	var nation0_production := 0
 	for city in gs2.cities_of(0):
-		nation0_production += city.food_per_half_year
+		nation0_production += Simulation.city_food_output(
+			gs2,
+			city
+		)
 	gs2.day = 30
 	sim2._resolve_economy()
 	_check(capital.food_storage == f0, "day30（非180倍数）不应注粮：%d" % capital.food_storage)
@@ -690,6 +711,45 @@ func _test_time_layering() -> void:
 		"day180 全国粮食产出应汇入首都：应 %d，实为 %d"
 			% [f0 + nation0_production, capital.food_storage])
 	sim2.free()
+
+	var garrison_state := GameState.new()
+	garrison_state.generate_grid_world(12346)
+	garrison_state.armies.clear()
+	var productive_city := garrison_state.cities[0]
+	var base_output := productive_city.food_per_half_year
+	var food_guard := _make_army(899, 0, 15000, 10, 10)
+	food_guard.location_city = productive_city.id
+	food_guard.move_from = productive_city.id
+	food_guard.state = Army.State.IDLE
+	garrison_state.armies.append(food_guard)
+	var city_output := Simulation.city_food_output(
+		garrison_state,
+		productive_city
+	)
+	var minimum_output := int(floor(
+		float(base_output)
+			* (
+				1.0
+				- Simulation.CITY_GARRISON_FOOD_PENALTY_MAX
+			)
+	))
+	_check(
+		city_output < base_output
+		and city_output >= minimum_output,
+		"驻城军应降低城市产粮且减产不得超过30%%：base=%d actual=%d"
+			% [base_output, city_output]
+	)
+	food_guard.on_edge = true
+	food_guard.move_to = 1
+	var edge_output := Simulation.city_food_output(
+		garrison_state,
+		productive_city
+	)
+	_check(
+		edge_output == base_output,
+		"驻边军不应降低城市产粮：base=%d actual=%d"
+			% [base_output, edge_output]
+	)
 
 	# 3. 行军不瞬移：单日 step 上界 = 1/MARCH_DAYS_MIN = 1/10 = 0.1（规格 R1，distance=1 最快）。
 	var gs3 := GameState.new()
@@ -1848,6 +1908,7 @@ func _test_edge_holding_state() -> void:
 	var hold_edge := gs.edge_of(c1, c2)
 	hold_edge.danger = 0.9
 	hold_edge.max_throughput = 3
+	gs.cities[c1].is_food_hub = true
 	var holder := _make_army(800, gs.cities[c1].owner_nation, 1000, 10)
 	holder.state = Army.State.IDLE
 	holder.location_city = c1
@@ -2604,14 +2665,21 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	defense_state.armies.clear()
 	for city in defense_state.cities:
 		city.owner_nation = 0
+	var threatened_city := 9
 	for enemy_city_id in [8, 10, 17]:
 		defense_state.cities[enemy_city_id].owner_nation = 1
+	for neighbor in [8, 10, 17]:
+		var defense_edge := defense_state.edge_of(
+			threatened_city,
+			neighbor
+		)
+		defense_edge.max_throughput = 2
+		defense_edge.distance = 1
 	defense_state.set_diplomatic_relation(
 		0,
 		1,
 		GameState.DiplomaticRelation.WAR
 	)
-	var threatened_city := 9
 	var first_holder := _make_army(961, 0, 15000, 10, 10)
 	first_holder.state = Army.State.HOLDING
 	first_holder.location_city = threatened_city
@@ -2642,6 +2710,38 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	var defense_view := AiWorldView.build(defense_state, 0)
 	var defense_snapshot := StrategicMapSnapshot.build(defense_view)
 	var defense_threat := ThreatField.build(defense_view)
+	var single_direction_plan := CityDefensePlan.build(
+		defense_view,
+		defense_snapshot,
+		defense_threat
+	)
+	_check(
+		single_direction_plan.posture_at(threatened_city)
+			== CityDefensePlan.Posture.EDGE
+		and single_direction_plan.preferred_edge_at(
+			threatened_city
+		) == 17,
+		"单一明确威胁方向应选择驻边，而不是把军队固定在城市"
+	)
+	var edge_reservation := ArmyCoordinator.new()
+	edge_reservation.reserve_edge(
+		threatened_city,
+		10,
+		first_holder
+	)
+	_check(
+		_approx(
+			edge_reservation.edge_defense_power_reserved(
+				threatened_city,
+				10
+			),
+			ArmyPower.effective(first_holder)
+		)
+		and edge_reservation.city_defense_power_reserved(
+			threatened_city
+		) == 0.0,
+		"驻边预留必须只覆盖指定方向，不能冒充驻城通用守军"
+	)
 	var defense_coordinator := ArmyCoordinator.new()
 	defense_coordinator.reserve(
 		threatened_city,
@@ -2683,7 +2783,14 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			second_defense_order.kind == ActionCandidate.Kind.RETREAT
 			and second_defense_order.target_city == threatened_city
 		),
-		"第一支回防军已填平缺口后，不得让其余驻边军集体撤线"
+		(
+			"第一支回防军已填平缺口后，不得让其余驻边军集体撤线："
+			+ "kind=%d target=%d reason=%s"
+		) % [
+			second_defense_order.kind,
+			second_defense_order.target_city,
+			second_defense_order.reason,
+		]
 	)
 
 	alternate_attacker.move_from = threatened_city
@@ -2705,7 +2812,14 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			departing_enemy_order.kind == ActionCandidate.Kind.RETREAT
 			and departing_enemy_order.target_city == threatened_city
 		),
-		"敌军正在背离城市时，不得误判为逼近压力并触发回防"
+		(
+			"敌军正在背离城市时，不得误判为逼近压力并触发回防："
+			+ "kind=%d target=%d reason=%s"
+		) % [
+			departing_enemy_order.kind,
+			departing_enemy_order.target_city,
+			departing_enemy_order.reason,
+		]
 	)
 
 	alternate_attacker.state = Army.State.IDLE
@@ -2730,7 +2844,35 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			direct_border_order.kind == ActionCandidate.Kind.RETREAT
 			and direct_border_order.target_city == threatened_city
 		),
-		"唯一来敌位于当前驻守边对面且战力相当时，应继续扼守道路"
+		(
+			"唯一来敌位于当前驻守边对面且战力相当时，应继续扼守道路："
+			+ "kind=%d target=%d reason=%s"
+		) % [
+			direct_border_order.kind,
+			direct_border_order.target_city,
+			direct_border_order.reason,
+		]
+	)
+	var second_attacker := _make_army(
+		964,
+		1,
+		15000,
+		10,
+		10
+	)
+	second_attacker.location_city = 8
+	second_attacker.move_from = 8
+	defense_state.armies.append(second_attacker)
+	defense_view = AiWorldView.build(defense_state, 0)
+	var multi_direction_plan := CityDefensePlan.build(
+		defense_view,
+		StrategicMapSnapshot.build(defense_view),
+		ThreatField.build(defense_view)
+	)
+	_check(
+		multi_direction_plan.posture_at(threatened_city)
+			== CityDefensePlan.Posture.CITY,
+		"两个方向同时形成进攻压力时，应驻城作为多方向预备队"
 	)
 
 	var batch_state := GameState.new()
@@ -3931,10 +4073,8 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 			> threat_before_concentration,
 		"中立邻国在某方向集中兵力后，守方必须提高该边境的预警和布防需求"
 	)
-	if concentrated_enemy != null:
-		concentrated_enemy.location_city = old_enemy_city
-		concentrated_enemy.move_from = old_enemy_city
-		concentrated_enemy.size = old_enemy_size
+	view = AiWorldView.build(gs, 0)
+	snapshot = concentrated_snapshot
 	var capital_id := gs.nations[0].capital_city_id
 	for army in view.friendly_armies:
 		if army.location_city == capital_id:
@@ -3952,42 +4092,81 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 	if interior_army != null:
 		interior_army.size = 5000
 		var peacetime_threat := ThreatField.build(view)
-		var reinforce := UtilityAI._reinforce_candidate(
+		var peacetime_plan := CityDefensePlan.build(
 			view,
 			snapshot,
-			peacetime_threat,
-			ArmyCoordinator.new(),
-			interior_army
+			peacetime_threat
+		)
+		var reinforce := peacetime_plan.candidate_for(
+			interior_army,
+			ArmyCoordinator.new()
 		)
 		_check(
 			reinforce != null
 			and snapshot.potential_frontier_cities.has(reinforce.target_city)
 			and reinforce.reason.contains("高威胁中立国边境"),
-			"内地军应优先增援高威胁国家边境，而不是继续聚集首都"
+			(
+				"内地军应优先增援高威胁国家边境，而不是继续聚集首都：%s"
+				% (
+					"null"
+					if reinforce == null
+					else "kind=%d target=%d reason=%s" % [
+						reinforce.kind,
+						reinforce.target_city,
+						reinforce.reason,
+					]
+				)
+			)
 		)
 	var border_army: Army = null
 	for army in view.friendly_armies:
-		if snapshot.potential_frontier_cities.has(army.location_city):
+		if army.location_city == observed_border:
 			border_army = army
 			break
 	_check(border_army != null, "潜在边境城市应有可用于驻边测试的本国军队")
 	if border_army != null:
 		border_army.size = 5000
-		var hold := UtilityAI._hold_candidate(
+		var border_threat := ThreatField.build(view)
+		var border_plan := CityDefensePlan.build(
 			view,
 			snapshot,
-			ThreatField.build(view),
-			border_army
+			border_threat
+		)
+		var hold := border_plan.candidate_for(
+			border_army,
+			ArmyCoordinator.new()
 		)
 		_check(
 			hold != null
+			and hold.kind == ActionCandidate.Kind.HOLD
 			and snapshot.potential_threat_of_edge(
 				border_army.location_city,
 				hold.target_city
 			) > 0.0
-			and hold.reason.contains("高威胁中立国边界"),
-			"边境军应进入面向高威胁中立国的 HOLDING 驻防"
+			and hold.reason.contains("驻边"),
+			(
+				"边境军应按统一防御姿态部署：%s posture=%d edge=%d"
+				% [
+					"null" if hold == null else (
+						"kind=%d target=%d reason=%s" % [
+							hold.kind,
+							hold.target_city,
+							hold.reason,
+						]
+					),
+					border_plan.posture_at(
+						border_army.location_city
+					),
+					border_plan.preferred_edge_at(
+						border_army.location_city
+					),
+				]
+			)
 		)
+	if concentrated_enemy != null:
+		concentrated_enemy.location_city = old_enemy_city
+		concentrated_enemy.move_from = old_enemy_city
+		concentrated_enemy.size = old_enemy_size
 
 	gs.nations[0].manpower_pool = 100000
 	for army in gs.armies:
