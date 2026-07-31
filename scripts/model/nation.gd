@@ -17,10 +17,16 @@ var war_preparation_target_nation: int = -1
 var war_preparation_objective_city: int = -1
 var war_preparation_started_day: int = -1
 var war_preparation_reason: String = ""
+var war_preparation_unready_since_day: int = -1
 ## 战争中的进攻波次时钟；到期后重新集结并发动下一轮攻势。
 var campaign_last_offensive_day: int = -1
 var campaign_next_offensive_day: int = -1
 var campaign_offensive_count: int = 0
+## 当前波次的具体战役计划：army_id -> target_city_id。
+var campaign_attack_assignments: Dictionary = {}
+var campaign_plan_targets: Array[int] = []
+var campaign_plan_wave: int = -1
+var campaign_plan_primary_city: int = -1
 ## 首都与粮仓登记。当前每国只有首都一个粮仓；数组结构为未来多粮仓保留扩展位。
 var capital_city_id: int = -1
 var warehouse_city_ids: Array[int] = []

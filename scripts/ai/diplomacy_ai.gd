@@ -46,6 +46,7 @@ const DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER: float = 1.5
 const MAX_REPORTED_RUNWAY_YEARS: float = 99.0
 const WAR_PREPARATION_MIN_DAYS: int = 30
 const WAR_PREPARATION_MAX_DAYS: int = 360
+const WAR_PREPARATION_RESOURCE_GRACE_DAYS: int = 90
 const WAR_PREPARATION_FORCE_SHARE: float = 0.25
 
 
@@ -862,19 +863,41 @@ static func _collect_existing_war_preparation(
 		and objective_city >= 0
 		and objective_city < state.cities.size()
 		and state.cities[objective_city].owner_nation == target_id
+		and not staging_cities_for_objective(
+			state,
+			nation_id,
+			objective_city
+		).is_empty()
 	)
 	var elapsed := state.day - nation.war_preparation_started_day
+	var resources_ready := bool(
+		resource_report(state, nation_id)["ready"]
+	)
+	var resource_grace_expired := (
+		nation.war_preparation_unready_since_day >= 0
+		and state.day
+			- nation.war_preparation_unready_since_day
+			>= WAR_PREPARATION_RESOURCE_GRACE_DAYS
+	)
 	if (
 		not valid
-		or elapsed > WAR_PREPARATION_MAX_DAYS
-		or not bool(resource_report(state, nation_id)["ready"])
+		or resource_grace_expired
 	):
 		actions.append({
 			"kind": Action.CANCEL_WAR_PREPARATION,
 			"a": nation_id,
 			"b": target_id,
-			"reason": "战争条件变化或集结超时，取消对国%d的战争准备" % target_id,
+			"reason": (
+				"目标失效、进攻道路中断或资源连续不足%d天，取消对国%d的战争准备"
+				% [
+					WAR_PREPARATION_RESOURCE_GRACE_DAYS,
+					target_id,
+				]
+			),
 		})
+		committed[nation_id] = true
+		return
+	if not resources_ready:
 		committed[nation_id] = true
 		return
 	if not war_preparation_ready(state, nation_id):

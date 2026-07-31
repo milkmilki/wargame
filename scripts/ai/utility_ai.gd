@@ -69,13 +69,24 @@ static func choose(
 			0.0,
 			"首都或粮仓最低守备约束"
 		)
-
 	var candidates: Array[ActionCandidate] = []
 	candidates.append(ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "保持当前驻地"))
 	var defense := active_defense_plan.candidate_for(
 		army,
 		coordinator
 	)
+	if active_defense_plan.must_keep_at_city(
+		army,
+		coordinator
+	):
+		if defense != null:
+			return defense
+		return ActionCandidate.make(
+			ActionCandidate.Kind.NONE,
+			100.0,
+			"要害城市最低防线：等待其他方向调兵增援",
+			current
+		)
 	if defense != null:
 		candidates.append(defense)
 	var retreat := _retreat_candidate(view, snapshot, threat, army, local_ratio)
@@ -751,6 +762,13 @@ static func _choose_holding(
 		)
 		retreat.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 		return retreat
+	if defense_plan.must_hold_city(endpoint):
+		return ActionCandidate.make(
+			ActionCandidate.Kind.HOLD,
+			100.0,
+			"继续扼守要害城市 %d 的首要防线" % endpoint,
+			enemy_endpoint
+		)
 	var hold_score := snapshot.value_of_edge(army.move_from, army.move_to) + 2.0
 	if (
 		view.state.is_enemy(view.nation_id, target_city.owner_nation)

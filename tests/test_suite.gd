@@ -3031,6 +3031,93 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		"两个方向同时形成进攻压力时，应驻城作为多方向预备队"
 	)
 
+	var hard_state := GameState.new()
+	hard_state.generate_grid_world(7007)
+	hard_state.armies.clear()
+	for city in hard_state.cities:
+		city.owner_nation = 0
+	var hard_city := 9
+	var hard_enemy_city := 10
+	hard_state.cities[hard_city].is_food_hub = true
+	hard_state.cities[hard_enemy_city].owner_nation = 1
+	hard_state.edge_of(
+		hard_city,
+		hard_enemy_city
+	).max_throughput = 2
+	hard_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var hard_guard := _make_army(
+		965,
+		0,
+		1000,
+		10,
+		10
+	)
+	hard_guard.location_city = hard_city
+	hard_guard.move_from = hard_city
+	var hard_enemy := _make_army(
+		966,
+		1,
+		15000,
+		10,
+		10
+	)
+	hard_enemy.location_city = hard_enemy_city
+	hard_enemy.move_from = hard_enemy_city
+	var hard_support := _make_army(
+		967,
+		0,
+		15000,
+		10,
+		10
+	)
+	hard_support.location_city = 0
+	hard_support.move_from = 0
+	hard_state.armies.append_array([
+		hard_guard,
+		hard_enemy,
+		hard_support,
+	])
+	var hard_view := AiWorldView.build(hard_state, 0)
+	var hard_snapshot := StrategicMapSnapshot.build(
+		hard_view
+	)
+	var hard_threat := ThreatField.build(hard_view)
+	var hard_plan := CityDefensePlan.build(
+		hard_view,
+		hard_snapshot,
+		hard_threat
+	)
+	var hard_guard_order := UtilityAI.choose(
+		hard_view,
+		hard_snapshot,
+		hard_threat,
+		ArmyCoordinator.new(),
+		hard_guard,
+		UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO,
+		hard_plan
+	)
+	var hard_support_order := hard_plan.candidate_for(
+		hard_support,
+		ArmyCoordinator.new()
+	)
+	_check(
+		hard_plan.must_hold_city(hard_city)
+		and hard_guard_order.kind
+			!= ActionCandidate.Kind.RETREAT,
+		"要害产粮城市守军不得因敌军集中而主动弃城逃走"
+	)
+	_check(
+		hard_support_order != null
+		and hard_support_order.kind
+			== ActionCandidate.Kind.REINFORCE
+		and hard_support_order.target_city == hard_city,
+		"要害城市兵力不足时，后方军队必须生成明确增援命令"
+	)
+
 	var batch_state := GameState.new()
 	batch_state.generate_grid_world(7006)
 	batch_state.armies.clear()
@@ -3919,6 +4006,103 @@ func _test_diplomacy_state_and_ai() -> void:
 		preparation_has_objective,
 		"自然战争候选必须先生成携带目标和储备说明的备战动作"
 	)
+	var grace_state := GameState.new()
+	grace_state.generate_grid_world(32004)
+	for grace_a in range(grace_state.nations.size()):
+		for grace_b in range(
+			grace_a + 1,
+			grace_state.nations.size()
+		):
+			grace_state.set_diplomatic_relation(
+				grace_a,
+				grace_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	grace_state.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	var grace_action: Dictionary = {}
+	for action in DiplomacyAI.choose_actions(grace_state):
+		if int(action["kind"]) == DiplomacyAI.Action.PREPARE_WAR:
+			grace_action = action
+			break
+	var grace_sim := Simulation.new()
+	grace_sim.setup(grace_state)
+	var grace_started := (
+		not grace_action.is_empty()
+		and grace_sim._execute_diplomatic_action(
+			grace_action
+		)
+	)
+	var grace_nation_id := int(
+		grace_action.get("a", -1)
+	)
+	if grace_started:
+		grace_state.nations[
+			grace_nation_id
+		].manpower_pool = 0
+		grace_sim._refresh_war_preparation_viability()
+	var early_cancel := false
+	for action in DiplomacyAI.choose_actions(grace_state):
+		early_cancel = (
+			early_cancel
+			or int(action["kind"])
+				== DiplomacyAI.Action.CANCEL_WAR_PREPARATION
+		)
+	_check(
+		grace_started
+		and not early_cancel,
+		"短期资源波动不得立即取消兵力布局未变的备战计划"
+	)
+	if grace_started:
+		grace_state.day += 60
+		grace_state.nations[
+			grace_nation_id
+		].manpower_pool = 100000
+		grace_sim._refresh_war_preparation_viability()
+		_check(
+			grace_state.nations[
+				grace_nation_id
+			].war_preparation_unready_since_day == -1,
+			"备战资源恢复后必须清零取消宽限计时"
+		)
+		grace_state.nations[
+			grace_nation_id
+		].manpower_pool = 0
+		grace_sim._refresh_war_preparation_viability()
+		var second_shortage_day := grace_state.day
+		grace_state.day = (
+			second_shortage_day
+			+ DiplomacyAI.WAR_PREPARATION_RESOURCE_GRACE_DAYS
+			- 1
+		)
+		var before_grace_cancel := false
+		for action in DiplomacyAI.choose_actions(
+			grace_state
+		):
+			before_grace_cancel = (
+				before_grace_cancel
+				or int(action["kind"])
+					== DiplomacyAI.Action.CANCEL_WAR_PREPARATION
+			)
+		_check(
+			not before_grace_cancel,
+			"资源连续不足89天时仍应维持既定备战"
+		)
+		grace_state.day += 1
+		var after_grace_cancel := false
+		for action in DiplomacyAI.choose_actions(
+			grace_state
+		):
+			after_grace_cancel = (
+				after_grace_cancel
+				or int(action["kind"])
+					== DiplomacyAI.Action.CANCEL_WAR_PREPARATION
+			)
+		_check(
+			after_grace_cancel,
+			"资源连续不足90天后才允许取消备战"
+		)
+	grace_sim.free()
+
 	var objective_state := GameState.new()
 	objective_state.generate_grid_world(32005)
 	for objective_a in range(objective_state.nations.size()):
@@ -4106,6 +4290,98 @@ func _test_diplomacy_state_and_ai() -> void:
 		"攻势攻击加成必须在30天截止日清除"
 	)
 	objective_sim.free()
+
+	var plan_state := GameState.new()
+	plan_state.generate_grid_world(32006)
+	plan_state.armies.clear()
+	for city in plan_state.cities:
+		city.owner_nation = 0
+	var plan_origin := 9
+	var plan_primary := 10
+	var plan_secondary := 17
+	plan_state.cities[plan_primary].owner_nation = 1
+	plan_state.cities[plan_secondary].owner_nation = 1
+	plan_state.edge_of(
+		plan_origin,
+		plan_primary
+	).max_throughput = 2
+	plan_state.edge_of(
+		plan_origin,
+		plan_secondary
+	).max_throughput = 2
+	plan_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	for plan_army_id in range(3):
+		var plan_army := _make_army(
+			980 + plan_army_id,
+			0,
+			15000,
+			10,
+			10
+		)
+		plan_army.location_city = plan_origin
+		plan_army.move_from = plan_origin
+		plan_state.armies.append(plan_army)
+	var plan_sim := Simulation.new()
+	plan_sim.setup(plan_state)
+	var plan_built := plan_sim._ensure_campaign_attack_plan(
+		0,
+		plan_primary
+	)
+	var plan_nation := plan_state.nations[0]
+	var frozen_assignments := (
+		plan_nation.campaign_attack_assignments.duplicate()
+	)
+	var plan_stable := plan_sim._ensure_campaign_attack_plan(
+		0,
+		plan_primary
+	)
+	_check(
+		plan_built
+		and plan_stable
+		and plan_nation.campaign_plan_targets.size() == 2
+		and plan_nation.campaign_plan_targets.has(
+			plan_primary
+		)
+		and plan_nation.campaign_plan_targets.has(
+			plan_secondary
+		)
+		and plan_nation.campaign_attack_assignments
+			== frozen_assignments,
+		"兵力足够时应生成并冻结主攻与第二方向的具体军队分工"
+	)
+	var multi_target_launched := (
+		plan_sim._launch_campaign_offensive(
+			0,
+			plan_primary,
+			180
+		)
+	)
+	var launched_plan_targets := {}
+	var assignments_match_orders := true
+	for army in plan_state.armies:
+		if not frozen_assignments.has(army.id):
+			continue
+		var assigned_target := int(
+			frozen_assignments[army.id]
+		)
+		if army.state == Army.State.MOVING:
+			launched_plan_targets[assigned_target] = true
+			assignments_match_orders = (
+				assignments_match_orders
+				and army.ai_target_city == assigned_target
+			)
+	_check(
+		multi_target_launched
+		and launched_plan_targets.has(plan_primary)
+		and launched_plan_targets.has(plan_secondary)
+		and assignments_match_orders,
+		"攻势执行必须逐军遵守计划中的目标城市，而非全部冲向主目标"
+	)
+	plan_sim.free()
 
 	var defense_state := GameState.new()
 	defense_state.generate_grid_world(32007)

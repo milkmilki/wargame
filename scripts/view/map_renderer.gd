@@ -12,7 +12,7 @@ const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
-const BASE_HUD_CARD_HEIGHT := 66.0
+const BASE_HUD_CARD_HEIGHT := 81.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
@@ -975,7 +975,28 @@ static func nation_detail_lines(
 		str(game_state.wars_of(nation_id)),
 		str(game_state.allies_of(nation_id)),
 	]
-	return [line_one, line_two] as Array[String]
+	var lines := [line_one, line_two] as Array[String]
+	if not n.campaign_attack_assignments.is_empty():
+		var assignments: Array[String] = []
+		var army_ids := n.campaign_attack_assignments.keys()
+		army_ids.sort()
+		for army_id_value in army_ids:
+			if assignments.size() >= 3:
+				break
+			var army_id := int(army_id_value)
+			assignments.append(
+				"军%d>城%d" % [
+					army_id,
+					int(n.campaign_attack_assignments[army_id]),
+				]
+			)
+		lines.append(
+			"计划W%d %s" % [
+				n.campaign_plan_wave,
+				" ".join(assignments),
+			]
+		)
+	return lines
 
 
 static func _diplomatic_action_name(action: int) -> String:

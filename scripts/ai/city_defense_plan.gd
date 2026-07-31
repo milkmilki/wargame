@@ -12,6 +12,8 @@ const RESPONSE_PRESSURE_FLOOR: float = 1000.0
 const REQUIRED_PRESSURE_SHARE: float = 0.65
 const FRONTIER_SCREEN_POWER: float = 1000.0
 const STRATEGIC_CITY_VALUE_FLOOR: float = 3.0
+const MUST_HOLD_CITY_VALUE_FLOOR: float = 5.0
+const EDGE_DEFENSE_MIN_POWER_RATIO: float = 0.40
 const STRATEGIC_COMMIT_DAYS: int = 30
 
 var view: AiWorldView
@@ -23,6 +25,7 @@ var preferred_edge_by_city: Dictionary = {} ## city_id -> neighbor_id
 var directional_pressure: Dictionary = {} ## city_id -> {neighbor_id -> float}
 var relief_need: Dictionary = {}          ## city_id -> float
 var local_pressure: Dictionary = {}       ## city_id -> float
+var must_hold_cities: Dictionary = {}     ## city_id -> true
 
 
 static func build(
@@ -55,7 +58,7 @@ func candidate_for(
 		candidate != null
 		and candidate.defensive_deployment
 		and view.day < army.defensive_deployment_until_day
-		and not _urgent_defense_at(
+		and not urgent_defense_at(
 			_candidate_anchor_city(candidate)
 		)
 	):
@@ -75,6 +78,39 @@ func preferred_edge_at(city_id: int) -> int:
 	return int(preferred_edge_by_city.get(city_id, -1))
 
 
+func must_hold_city(city_id: int) -> bool:
+	return bool(must_hold_cities.get(city_id, false))
+
+
+func must_keep_at_city(
+	army: Army,
+	coordinator: ArmyCoordinator
+) -> bool:
+	if (
+		army == null
+		or army.state != Army.State.IDLE
+		or not must_hold_city(army.location_city)
+	):
+		return false
+	var city_id := army.location_city
+	var coverage_without := _city_coverage(
+		city_id,
+		coordinator,
+		army
+	)
+	if (
+		posture_at(city_id) == Posture.EDGE
+		and preferred_edge_at(city_id) >= 0
+	):
+		coverage_without += (
+			coordinator.edge_defense_power_reserved(
+				city_id,
+				preferred_edge_at(city_id)
+			)
+		)
+	return coverage_without < requirement_at(city_id)
+
+
 func _candidate_anchor_city(
 	candidate: ActionCandidate
 ) -> int:
@@ -86,7 +122,7 @@ func _candidate_anchor_city(
 	return candidate.target_city
 
 
-func _urgent_defense_at(city_id: int) -> bool:
+func urgent_defense_at(city_id: int) -> bool:
 	if city_id < 0 or city_id >= view.state.cities.size():
 		return false
 	if (
@@ -190,15 +226,30 @@ func _build() -> void:
 			),
 			logistics
 		)
+		var is_must_hold := (
+			pressure_total > 0.0
+			and _is_strategic_must_hold_city(city.id)
+		)
+		if is_must_hold:
+			must_hold_cities[city.id] = true
+			required = maxf(required, pressure_total)
 		if required <= 0.0:
 			continue
 		required_power[city.id] = required
 		directional_pressure[city.id] = pressures
 		relief_need[city.id] = relief
 		local_pressure[city.id] = direct_pressure
+		var edge_defense_understrength := (
+			is_must_hold
+			and strongest_pressure > 0.0
+			and _friendly_local_power(city.id)
+				< strongest_pressure
+					* EDGE_DEFENSE_MIN_POWER_RATIO
+		)
 		if (
 			direct_pressure > 0.0
 			or relief > 0.0
+			or edge_defense_understrength
 			or active_directions.size() > 1
 			or strongest_direction == -1
 			or equally_best_directions > 1
@@ -207,6 +258,40 @@ func _build() -> void:
 		else:
 			posture_by_city[city.id] = Posture.EDGE
 			preferred_edge_by_city[city.id] = strongest_direction
+
+
+func _friendly_local_power(city_id: int) -> float:
+	var total := UtilityAI.stationed_power_at(
+		view,
+		city_id
+	)
+	for army in view.friendly_armies:
+		if (
+			army.size <= 0
+			or army.state != Army.State.HOLDING
+			or not army.on_edge
+			or army.move_to == -1
+			or (
+				army.move_from != city_id
+				and army.move_to != city_id
+			)
+		):
+			continue
+		total += ArmyPower.effective(army)
+	return total
+
+
+func _is_strategic_must_hold_city(city_id: int) -> bool:
+	var city := view.state.cities[city_id]
+	return (
+		city_id == view.capital_city_id
+		or city.has_warehouse
+		or city.is_food_hub
+		or city.is_manpower_hub
+		or snapshot.critical_supply_cities.has(city_id)
+		or snapshot.value_of_city(city_id)
+			>= MUST_HOLD_CITY_VALUE_FLOOR
+	)
 
 
 func _directional_pressure_at(city_id: int) -> Dictionary:
