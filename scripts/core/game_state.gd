@@ -9,11 +9,17 @@ const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
 const INITIAL_MANPOWER_RESERVE_MONTHS: int = 150
-const INITIAL_ARMY_MANPOWER_MONTHS: int = 50
+const INITIAL_LIGHT_ARMY_SIZE: int = 5000
+const INITIAL_HEAVY_ARMY_SIZE: int = 15000
+const INITIAL_ARMIES_PER_TWO_CITIES: int = 3
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const DEFAULT_TRUCE_DAYS: int = 180
-const WAR_GOLD_TROOPS_PER_UNIT: int = 100
-const FOOD_HUB_MIN_OUTPUT: int = 240
+const WAR_GOLD_TROOPS_PER_UNIT: int = 3000
+const CITY_FOOD_PER_HALF_YEAR_MIN: int = 400
+const CITY_FOOD_PER_HALF_YEAR_MAX: int = 600
+const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
+const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
+const FOOD_HUB_MIN_OUTPUT: int = 1600
 const MANPOWER_HUB_MIN_OUTPUT: int = 80
 const TERRAIN_MAP_PATH := (
 	"res://china-map-china-flag-shaded-relief-color-height-map-3d-illustration-png.webp"
@@ -82,7 +88,11 @@ func generate_world(world_seed: int = 12345) -> void:
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
 	assert(edges.size() >= CITY_COUNT - 1, "道路图必须连通")
-	assert(armies.size() == CITY_COUNT, "初始军队数应为 64")
+	assert(
+		armies.size()
+			== CITY_COUNT * INITIAL_ARMIES_PER_TWO_CITIES / 2,
+		"初始军队数应为 96"
+	)
 
 
 ## 严格镜像基准和局部状态机测试使用的兼容网格夹具；正式游戏不调用。
@@ -103,7 +113,11 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
-	assert(armies.size() == CITY_COUNT, "初始军队数应为 64")
+	assert(
+		armies.size()
+			== CITY_COUNT * INITIAL_ARMIES_PER_TWO_CITIES / 2,
+		"初始军队数应为 96"
+	)
 
 
 func _reset_world(world_seed: int) -> void:
@@ -171,9 +185,15 @@ func _generate_grid_cities() -> void:
 				CITY_MANPOWER_PER_MONTH_MAX
 			)
 			city.gold_per_month = rng.randi_range(5, 15)
-			city.food_per_half_year = rng.randi_range(20, 60)
+			city.food_per_half_year = rng.randi_range(
+				CITY_FOOD_PER_HALF_YEAR_MIN,
+				CITY_FOOD_PER_HALF_YEAR_MAX
+			)
 			# 先生成各城初始储备，随后统一归集到本国首都粮仓。
-			city.food_storage = rng.randi_range(80, 100)
+			city.food_storage = rng.randi_range(
+				INITIAL_CITY_FOOD_STOCK_MIN,
+				INITIAL_CITY_FOOD_STOCK_MAX
+			)
 			city.at_war = true                                 # 开局全面战争
 			cities.append(city)
 			adjacency[city.id] = [] as Array[int]
@@ -200,8 +220,14 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 			CITY_MANPOWER_PER_MONTH_MAX
 		)
 		city.gold_per_month = rng.randi_range(5, 15)
-		city.food_per_half_year = rng.randi_range(20, 60)
-		city.food_storage = rng.randi_range(80, 100)
+		city.food_per_half_year = rng.randi_range(
+			CITY_FOOD_PER_HALF_YEAR_MIN,
+			CITY_FOOD_PER_HALF_YEAR_MAX
+		)
+		city.food_storage = rng.randi_range(
+			INITIAL_CITY_FOOD_STOCK_MIN,
+			INITIAL_CITY_FOOD_STOCK_MAX
+		)
 		city.at_war = false
 		cities.append(city)
 		adjacency[city.id] = [] as Array[int]
@@ -552,27 +578,46 @@ func _union_find_root(parent: Array[int], node: int) -> int:
 
 
 func _generate_armies() -> void:
-	for city in cities:
-		var army := create_army(
-			city.owner_nation,
-			city.id,
-			clampi(
-				city.manpower_per_month,
-				CITY_MANPOWER_PER_MONTH_MIN,
-				CITY_MANPOWER_PER_MONTH_MAX
-			) * INITIAL_ARMY_MANPOWER_MONTHS
+	for nation in nations:
+		var owned := cities_of(nation.id)
+		owned.sort_custom(func(a: City, b: City) -> bool:
+			return a.id < b.id
 		)
-		army.speed_factor = rng.randf_range(0.3, 0.9)
-		army.attack = rng.randi_range(8, 15)
-		army.defense = rng.randi_range(8, 15)
+		for city in owned:
+			_initialize_army_attributes(create_army(
+				nation.id,
+				city.id,
+				INITIAL_LIGHT_ARMY_SIZE,
+				INITIAL_LIGHT_ARMY_SIZE
+			))
+		for index in range(owned.size() / 2):
+			_initialize_army_attributes(create_army(
+				nation.id,
+				owned[index * 2].id,
+				INITIAL_HEAVY_ARMY_SIZE,
+				INITIAL_HEAVY_ARMY_SIZE
+			))
 
 
-func create_army(nation_id: int, city_id: int, size: int) -> Army:
+func _initialize_army_attributes(army: Army) -> void:
+	assert(army != null, "初始军队生成不得突破国家军队上限")
+	army.speed_factor = rng.randf_range(0.3, 0.9)
+	army.attack = rng.randi_range(8, 15)
+	army.defense = rng.randi_range(8, 15)
+
+
+func create_army(
+	nation_id: int,
+	city_id: int,
+	size: int,
+	max_size: int = Army.DEFAULT_MAX_SIZE
+) -> Army:
 	if (
 		nation_id < 0 or nation_id >= nations.size()
 		or city_id < 0 or city_id >= cities.size()
 		or cities[city_id].owner_nation != nation_id
 		or size <= 0
+		or max_size <= 0
 		or active_army_count(nation_id)
 			>= max_army_count(nation_id)
 	):
@@ -581,7 +626,8 @@ func create_army(nation_id: int, city_id: int, size: int) -> Army:
 	army.id = _next_army_id
 	_next_army_id += 1
 	army.owner_nation = nation_id
-	army.size = mini(size, army.max_size)
+	army.max_size = max_size
+	army.size = mini(size, max_size)
 	army.location_city = city_id
 	army.move_from = city_id
 	army.state = Army.State.IDLE

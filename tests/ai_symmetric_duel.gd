@@ -164,7 +164,7 @@ func _build_symmetric_world() -> GameState:
 		city.defense = 12 + (row * 3 + mirror_col * 5) % 17
 		city.manpower_per_month = 7 + (row * 7 + mirror_col * 11) % 8
 		city.gold_per_month = 6 + (row * 2 + mirror_col * 3) % 10
-		city.food_per_half_year = 25 + (row * 7 + mirror_col * 11) % 36
+		city.food_per_half_year = 600 + (row * 17 + mirror_col * 29) % 201
 		city.is_capital = false
 		city.has_warehouse = false
 		city.food_storage = 0
@@ -180,8 +180,8 @@ func _build_symmetric_world() -> GameState:
 
 	var left_capital := 3 * GameState.GRID + 1
 	var right_capital := 3 * GameState.GRID + 6
-	_set_capital(state, LEFT_NATION, left_capital, 1500)
-	_set_capital(state, RIGHT_NATION, right_capital, 1500)
+	_set_capital(state, LEFT_NATION, left_capital, 16000)
+	_set_capital(state, RIGHT_NATION, right_capital, 16000)
 
 	for edge in state.edges:
 		var a := state.cities[edge.city_a].coord
@@ -201,13 +201,17 @@ func _build_symmetric_world() -> GameState:
 		edge.passing_count = 0
 		edge.occupied = false
 
+	state.armies.clear()
 	for city_id in range(state.cities.size()):
-		var army := state.armies[city_id]
 		var city := state.cities[city_id]
 		var row := city.coord.y
 		var mirror_col := mini(city.coord.x, GameState.GRID - 1 - city.coord.x)
-		army.owner_nation = city.owner_nation
-		army.size = 700 + (row * 97 + mirror_col * 131) % 700
+		var army := state.create_army(
+			city.owner_nation,
+			city_id,
+			GameState.INITIAL_LIGHT_ARMY_SIZE,
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
 		army.attack = 9 + (row * 5 + mirror_col * 3) % 7
 		army.defense = 9 + (row * 3 + mirror_col * 5) % 7
 		army.speed_factor = 0.5
@@ -225,6 +229,35 @@ func _build_symmetric_world() -> GameState:
 		army.forced_retreat = false
 		army.holding_days = 0
 		army.hold_target_progress = -1.0
+	var left_owned := state.cities_of(LEFT_NATION)
+	left_owned.sort_custom(func(a: City, b: City) -> bool:
+		return a.id < b.id
+	)
+	for index in range(left_owned.size() / 2):
+		var left_city := left_owned[index * 2]
+		var right_city := state.cities[_mirror_city_id(
+			state,
+			left_city.id
+		)]
+		var paired_cities: Array[City] = [
+			left_city,
+			right_city,
+		]
+		for city in paired_cities:
+			var row := city.coord.y
+			var mirror_col := mini(
+				city.coord.x,
+				GameState.GRID - 1 - city.coord.x
+			)
+			var army := state.create_army(
+				city.owner_nation,
+				city.id,
+				GameState.INITIAL_HEAVY_ARMY_SIZE,
+				GameState.INITIAL_HEAVY_ARMY_SIZE
+			)
+			army.attack = 9 + (row * 5 + mirror_col * 3) % 7
+			army.defense = 9 + (row * 3 + mirror_col * 5) % 7
+			army.speed_factor = 0.5
 	var rng_seed := 991199
 	var seed_override := OS.get_environment("AI_DUEL_RNG_SEED")
 	if not seed_override.is_empty():

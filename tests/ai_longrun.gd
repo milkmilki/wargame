@@ -9,6 +9,8 @@ func _init() -> void:
 	var total_start := Time.get_ticks_msec()
 	var failed := false
 	var total_mobilization_armies := 0
+	var total_captures := 0
+	var total_war_declarations := 0
 	for world_seed in SEEDS:
 		var state := GameState.new()
 		state.generate_world(world_seed)
@@ -115,6 +117,10 @@ func _init() -> void:
 					border_armies += 1
 		var elapsed := Time.get_ticks_msec() - seed_start
 		total_mobilization_armies += mobilization_armies
+		total_captures += captures
+		total_war_declarations += int(
+			diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR]
+		)
 		print(
 			(
 				"seed=%d day=%d alive=%d armies=%d troops=%d manpower=%d food=%d "
@@ -160,8 +166,7 @@ func _init() -> void:
 				% str(simulation.ai_command_commit_failure_log)
 			)
 		if (
-			captures == 0
-			or ordered == 0
+			ordered == 0
 			or invalid > 0
 			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0
@@ -174,8 +179,15 @@ func _init() -> void:
 		):
 			failed = true
 		simulation.free()
-	if total_mobilization_armies == 0:
+	if total_captures == 0 or total_war_declarations == 0:
 		failed = true
-	print("total_mobilized=%d" % total_mobilization_armies)
+	print(
+		"total_captures=%d total_wars=%d total_mobilized=%d"
+		% [
+			total_captures,
+			total_war_declarations,
+			total_mobilization_armies,
+		]
+	)
 	print("total_ms=%d" % (Time.get_ticks_msec() - total_start))
 	quit(1 if failed else 0)

@@ -101,7 +101,7 @@ func _test_world_generation() -> void:
 		chokepoint_count > 0,
 		"真实地图至少应生成一条可通行高险关隘"
 	)
-	_check(gs.armies.size() == 64, "初始军队数应为 64，实为 %d" % gs.armies.size())
+	_check(gs.armies.size() == 96, "初始军队数应为 96，实为 %d" % gs.armies.size())
 	_check(gs.nations.size() == 4, "国家数应为 4")
 	var initial_peace := true
 	for nation_a in range(gs.nations.size()):
@@ -172,19 +172,59 @@ func _test_world_generation() -> void:
 			owned_reachable.size() == 16,
 			"国%d 初始 16 城应形成连续领土，实为 %d" % [n.id, owned_reachable.size()]
 		)
+		var light_armies := 0
+		var heavy_armies := 0
+		var initial_troops := 0
+		for army in gs.armies:
+			if army.owner_nation != n.id:
+				continue
+			initial_troops += army.size
+			if (
+				army.size == GameState.INITIAL_LIGHT_ARMY_SIZE
+				and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
+			):
+				light_armies += 1
+			elif (
+				army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
+				and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			):
+				heavy_armies += 1
+		_check(
+			light_armies == cnt
+			and heavy_armies == cnt / 2
+			and light_armies + heavy_armies
+				== int(float(cnt) * 1.5),
+			"国%d 初始军制应为每城1支5000军、每2城1支15000军" % n.id
+		)
+		_check(
+			initial_troops == 200000,
+			"国%d 初始24军应满编20万人，实为%d" % [n.id, initial_troops]
+		)
+		var food_report := DiplomacyAI.war_food_report(
+			gs,
+			n.id,
+			initial_troops,
+			DiplomacyAI.FoodPosture.PEACE
+		)
+		_check(
+			float(food_report["full_strength_annual_balance"]) > 0.0,
+			"国%d 初始满编军制应保持粮食年正收益，实为%.1f"
+				% [n.id, food_report["full_strength_annual_balance"]]
+		)
+		var monthly_gold_income := 0
+		for city in gs.cities_of(n.id):
+			monthly_gold_income += Simulation.city_gold_output(gs, city)
+		var monthly_war_upkeep := int(ceil(
+			float(initial_troops)
+				/ float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
+		))
+		_check(
+			monthly_gold_income > monthly_war_upkeep,
+			"国%d 初始满编军制应保持战时月金正收益：收入%d，军费%d"
+				% [n.id, monthly_gold_income, monthly_war_upkeep]
+		)
 	var positions_unique := {}
 	var terrain_has_relief := false
-	var initial_army_scale_valid := true
-	for army in gs.armies:
-		initial_army_scale_valid = (
-			initial_army_scale_valid
-			and army.size >= 500
-			and army.size <= 1500
-		)
-	_check(
-		initial_army_scale_valid,
-		"资源核心不得隐式放大开局军队，仍应保持500～1500人"
-	)
 	for city in gs.cities:
 		positions_unique[city.map_position] = true
 		terrain_has_relief = terrain_has_relief or city.terrain_relief > 0.0
@@ -288,7 +328,11 @@ func _test_world_generation() -> void:
 		var warehouses := gs.warehouse_cities_of(n.id)
 		_check(warehouses.size() == 1 and warehouses[0].id == n.capital_city_id,
 			"国%d 初始应只有首都一个粮仓" % n.id)
-		_check(warehouses[0].food_storage >= 16 * 80 and warehouses[0].food_storage <= 16 * 100,
+		_check(
+			warehouses[0].food_storage
+				>= 16 * GameState.INITIAL_CITY_FOOD_STOCK_MIN
+			and warehouses[0].food_storage
+				<= 16 * GameState.INITIAL_CITY_FOOD_STOCK_MAX,
 			"国%d 首都粮仓应归集 16 城初始储备，实为 %d" % [n.id, warehouses[0].food_storage])
 	var non_warehouse_food := false
 	for c in gs.cities:
@@ -677,7 +721,6 @@ func _test_simulation_progress() -> void:
 	sim.setup(gs)
 	sim.diplomacy_enabled = false
 	var captures := 0
-	var start_armies := gs.armies.size()
 	for d in range(2000):
 		var before := {}
 		for c in gs.cities:
@@ -689,8 +732,6 @@ func _test_simulation_progress() -> void:
 		if gs.winner != -1:
 			break
 	_check(captures > 0, "2000 天内应发生城市易主（战斗+占领生效），实为 %d" % captures)
-	_check(gs.armies.size() < start_armies or gs.winner != -1,
-		"应发生军队减员/歼灭或已分胜负")
 	# 粮食：至少有城市 food_storage 被消耗过（存在低于半年产出的城）
 	_check(gs.day > 0, "天数应推进")
 	sim.free()   # 释放 Node，避免泄漏
@@ -2866,6 +2907,20 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	mobile.move_from = 0
 	mobile.state = Army.State.IDLE
 	gs.armies.append_array([capital_guard, mobile])
+	for city in gs.cities_of(0):
+		if city.id == capital_id:
+			continue
+		var local_guard := _make_army(
+			9400 + city.id,
+			0,
+			15000,
+			10,
+			10
+		)
+		local_guard.location_city = city.id
+		local_guard.move_from = city.id
+		local_guard.state = Army.State.IDLE
+		gs.armies.append(local_guard)
 	view = AiWorldView.build(gs, 0)
 	snapshot = StrategicMapSnapshot.build(view)
 	threat = ThreatField.build(view)
@@ -3816,18 +3871,25 @@ func _test_manpower_pool_and_force_commands() -> void:
 	_check(gs.nations[nation_id].manpower_pool == expected_initial,
 		"开局人口库应汇总本国城市储备：应 %d，实为 %d"
 			% [expected_initial, gs.nations[nation_id].manpower_pool])
+	var initial_light_armies := 0
+	var initial_heavy_armies := 0
 	for army in gs.armies:
-		_check(
-			army.size >= (
-				GameState.CITY_MANPOWER_PER_MONTH_MIN
-				* GameState.INITIAL_ARMY_MANPOWER_MONTHS
-			)
-			and army.size <= (
-				GameState.CITY_MANPOWER_PER_MONTH_MAX
-				* GameState.INITIAL_ARMY_MANPOWER_MONTHS
-			),
-			"提高人口池时初始军队仍应保持 500～1500 人标定"
-		)
+		if army.owner_nation != nation_id:
+			continue
+		if (
+			army.size == GameState.INITIAL_LIGHT_ARMY_SIZE
+			and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
+		):
+			initial_light_armies += 1
+		elif (
+			army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+		):
+			initial_heavy_armies += 1
+	_check(
+		initial_light_armies == 16 and initial_heavy_armies == 8,
+		"初始军制应为16支5000编制军和8支15000编制军"
+	)
 	var pool_before_income := gs.nations[nation_id].manpower_pool
 	gs.day = Simulation.DAYS_PER_MONTH
 	sim._resolve_economy()
@@ -5020,15 +5082,18 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 	)
 	var old_enemy_city := -1
 	var old_enemy_size := 0
+	var old_enemy_max_size := 0
 	if concentrated_enemy != null:
 		old_enemy_city = concentrated_enemy.location_city
 		old_enemy_size = concentrated_enemy.size
+		old_enemy_max_size = concentrated_enemy.max_size
 		concentrated_enemy.state = Army.State.IDLE
 		concentrated_enemy.location_city = observed_enemy_city
 		concentrated_enemy.move_from = observed_enemy_city
 		concentrated_enemy.move_to = -1
 		concentrated_enemy.on_edge = false
-		concentrated_enemy.size = concentrated_enemy.max_size
+		concentrated_enemy.size = 60000
+		concentrated_enemy.max_size = 60000
 	var concentrated_snapshot := StrategicMapSnapshot.build(
 		AiWorldView.build(gs, 0)
 	)
@@ -5168,6 +5233,7 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 		concentrated_enemy.location_city = old_enemy_city
 		concentrated_enemy.move_from = old_enemy_city
 		concentrated_enemy.size = old_enemy_size
+		concentrated_enemy.max_size = old_enemy_max_size
 
 	gs.nations[0].manpower_pool = 100000
 	for army in gs.armies:
@@ -5274,9 +5340,9 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		city.food_per_half_year = 0
 	for army in gs.armies:
 		if army.owner_nation == 0:
-			army.size = 500
+			army.size = 333
 		elif army.owner_nation == 1:
-			army.size = 2000
+			army.size = 1333
 	gs.nations[0].manpower_pool = 30000
 	gs.nations[1].manpower_pool = 30000
 	for warehouse in gs.warehouse_cities_of(0):

@@ -1427,7 +1427,11 @@ func _ai_manage_force_structure(
 		defended_cities[city_id] = true
 	var target_count := maxi(
 		defended_cities.size() + 2,
-		int(ceil(float(view.friendly_cities.size()) / 4.0))
+		int(ceil(
+			float(view.friendly_cities.size())
+				* float(GameState.INITIAL_ARMIES_PER_TWO_CITIES)
+				/ 2.0
+		))
 	)
 	var active_count := view.friendly_armies.size()
 	var nation := state.nations[view.nation_id]
@@ -1470,7 +1474,8 @@ func _ai_manage_force_structure(
 		state.nations[view.nation_id].manpower_pool - protected_reserve
 	)
 	if (
-		available_manpower >= NEW_ARMY_SIZE
+		(active_count < target_count or mobilization_needed)
+		and available_manpower >= NEW_ARMY_SIZE
 		and not food_pressure
 		and food_growth_budget >= NEW_ARMY_SIZE
 	):
