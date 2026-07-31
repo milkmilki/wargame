@@ -4864,6 +4864,53 @@ func _test_diplomacy_state_and_ai() -> void:
 	var first_wave_count := (
 		objective_state.nations[objective_attacker].campaign_offensive_count
 	)
+	var cooldown_origin := -1
+	for city in objective_state.cities_of(objective_attacker):
+		if (
+			not staging.has(city.id)
+			and not objective_sim._is_critical_food_security_city(
+				city.id
+			)
+		):
+			cooldown_origin = city.id
+			break
+	var cooldown_reinforcement: Army = null
+	for army in objective_state.armies:
+		if army.owner_nation == objective_attacker and not staging.is_empty():
+			objective_sim._settle_idle(army, staging[0])
+			if cooldown_reinforcement == null and cooldown_origin >= 0:
+				cooldown_reinforcement = army
+				objective_sim._settle_idle(
+					army,
+					cooldown_origin
+				)
+	objective_state.day = (
+		objective_state.nations[objective_attacker].campaign_next_offensive_day
+		- 1
+	)
+	var preorganized := objective_sim._manage_campaign_offensive(
+		objective_attacker
+	)
+	var cooldown_ordered := false
+	for army in objective_state.armies:
+		if (
+			army.owner_nation == objective_attacker
+			and army.ai_order_created_day == objective_state.day
+			and army.ai_order_reason.contains("战前集结")
+		):
+			cooldown_ordered = true
+			break
+	_check(
+		preorganized
+		and objective_state.nations[
+			objective_attacker
+		].campaign_offensive_count == first_wave_count
+		and cooldown_ordered
+		and objective_state.nations[
+			objective_attacker
+		].campaign_plan_wave == first_wave_count,
+		"冷却期必须持续集结下一波军队，且不得提前发动或覆盖当前梯队计划"
+	)
 	for army in objective_state.armies:
 		if army.owner_nation == objective_attacker and not staging.is_empty():
 			objective_sim._settle_idle(army, staging[0])
@@ -4921,6 +4968,105 @@ func _test_diplomacy_state_and_ai() -> void:
 		"攻势攻击加成必须在30天截止日清除"
 	)
 	objective_sim.free()
+
+	var counter_state := GameState.new()
+	counter_state.generate_grid_world(32011)
+	counter_state.armies.clear()
+	for city in counter_state.cities:
+		city.owner_nation = 1
+	for counter_edge in counter_state.edges:
+		counter_edge.max_manpower = 0
+	var counter_target := 10
+	var counter_origin := counter_state.neighbors(counter_target)[0]
+	counter_state.cities[counter_target].owner_nation = 0
+	var counter_route := counter_state.edge_of(
+		counter_origin,
+		counter_target
+	)
+	counter_route.max_manpower = 30000
+	for nation_a in range(counter_state.nations.size()):
+		for nation_b in range(
+			nation_a + 1,
+			counter_state.nations.size()
+		):
+			counter_state.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	counter_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	counter_state.set_war_objective(
+		0,
+		1,
+		counter_origin,
+		"国0原始战争目标"
+	)
+	var counter_garrison := _make_army(
+		969,
+		0,
+		15000,
+		10,
+		10
+	)
+	counter_garrison.location_city = counter_target
+	counter_garrison.move_from = counter_target
+	counter_state.armies.append(counter_garrison)
+	for counter_army_id in range(2):
+		var counter_army := _make_army(
+			970 + counter_army_id,
+			1,
+			15000,
+			10,
+			10
+		)
+		counter_army.location_city = counter_origin
+		counter_army.move_from = counter_origin
+		counter_state.armies.append(counter_army)
+	var counter_required := DiplomacyAI.required_assault_troops(
+		counter_state,
+		1,
+		counter_target
+	)
+	var counter_sim := Simulation.new()
+	counter_sim.setup(counter_state)
+	var counter_launched := counter_sim._manage_campaign_offensive(1)
+	var defender_attacking := false
+	for army in counter_state.armies:
+		if (
+			army.owner_nation == 1
+			and army.state == Army.State.MOVING
+			and army.ai_action == ActionCandidate.Kind.ATTACK
+			and army.ai_target_city == counter_target
+		):
+			defender_attacking = true
+			break
+	var preserved_diplomatic_objective := counter_state.war_objective(
+		0,
+		1
+	)
+	_check(
+		counter_launched
+		and defender_attacking
+		and counter_required == 22500
+		and int(
+			preserved_diplomatic_objective.get(
+				"attacker",
+				-1
+			)
+		) == 0
+		and int(
+			preserved_diplomatic_objective.get(
+				"city_id",
+				-1
+			)
+		) == counter_origin,
+		"被宣战方应以1.5倍局部优势主动反攻，且不得覆盖宣战方的外交战争目标"
+	)
+	counter_sim.free()
 
 	var plan_state := GameState.new()
 	plan_state.generate_grid_world(32006)

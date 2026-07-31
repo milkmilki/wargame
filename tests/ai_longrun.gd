@@ -11,6 +11,7 @@ func _init() -> void:
 	var total_mobilization_armies := 0
 	var total_captures := 0
 	var total_war_declarations := 0
+	var total_offensives := 0
 	for world_seed in SEEDS:
 		var state := GameState.new()
 		state.generate_world(world_seed)
@@ -20,11 +21,20 @@ func _init() -> void:
 		var initial_owners: Array[int] = []
 		for city in state.cities:
 			initial_owners.append(city.owner_nation)
+		var offensive_events := {}
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(DAYS):
 			if state.winner != -1:
 				break
 			simulation._advance_day()
+			for event in state.campaign_visual_events:
+				var event_key := "%d:%d:%d:%d" % [
+					int(event["start_day"]),
+					int(event["nation_id"]),
+					int(event["target_city"]),
+					int(event["wave"]),
+				]
+				offensive_events[event_key] = true
 		var captures := 0
 		for city in state.cities:
 			if city.owner_nation != initial_owners[city.id]:
@@ -121,12 +131,13 @@ func _init() -> void:
 		total_war_declarations += int(
 			diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR]
 		)
+		total_offensives += offensive_events.size()
 		print(
 			(
 				"seed=%d day=%d alive=%d armies=%d troops=%d manpower=%d food=%d "
 				+ "starving=%d captures=%d ordered=%d invalid=%d "
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
-				+ "mobilized=%d resource_peace=%d "
+				+ "offensives=%d mobilized=%d resource_peace=%d "
 				+ "ally=%d leave=%d "
 				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d "
 				+ "commit_failures=%d ms=%d"
@@ -148,6 +159,7 @@ func _init() -> void:
 				diplomatic_counts[DiplomacyAI.Action.CANCEL_WAR_PREPARATION],
 				diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR],
 				objective_declarations,
+				offensive_events.size(),
 				mobilization_armies,
 				resource_peaces,
 				diplomatic_counts[DiplomacyAI.Action.FORM_ALLIANCE],
@@ -179,13 +191,18 @@ func _init() -> void:
 		):
 			failed = true
 		simulation.free()
-	if total_captures == 0 or total_war_declarations == 0:
+	if (
+		total_captures == 0
+		or total_war_declarations == 0
+		or total_offensives <= total_war_declarations
+	):
 		failed = true
 	print(
-		"total_captures=%d total_wars=%d total_mobilized=%d"
+		"total_captures=%d total_wars=%d total_offensives=%d total_mobilized=%d"
 		% [
 			total_captures,
 			total_war_declarations,
+			total_offensives,
 			total_mobilization_armies,
 		]
 	)

@@ -2111,7 +2111,8 @@ func _assign_offensive_staging_orders(
 	nation_id: int,
 	objective_city: int,
 	defense_plan: CityDefensePlan = null,
-	coordinator: ArmyCoordinator = null
+	coordinator: ArmyCoordinator = null,
+	build_campaign_plan: bool = true
 ) -> bool:
 	var staging := DiplomacyAI.staging_cities_for_objective(
 		state, nation_id, objective_city
@@ -2165,10 +2166,11 @@ func _assign_offensive_staging_orders(
 	)
 	var sustained_required := required * CAMPAIGN_PREPARED_ECHELONS
 	if staged >= sustained_required:
-		_ensure_campaign_attack_plan(
-			nation_id,
-			objective_city
-		)
+		if build_campaign_plan:
+			_ensure_campaign_attack_plan(
+				nation_id,
+				objective_city
+			)
 		return changed
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
@@ -2239,10 +2241,11 @@ func _assign_offensive_staging_orders(
 		)
 	)
 	if actual_staged >= sustained_required:
-		_ensure_campaign_attack_plan(
-			nation_id,
-			objective_city
-		)
+		if build_campaign_plan:
+			_ensure_campaign_attack_plan(
+				nation_id,
+				objective_city
+			)
 		return changed
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
@@ -2961,20 +2964,38 @@ func _manage_campaign_offensive(
 	coordinator: ArmyCoordinator = null
 ) -> bool:
 	var nation := state.nations[nation_id]
-	if (
+	var can_launch := not (
 		nation.campaign_next_offensive_day >= 0
 		and state.day < nation.campaign_next_offensive_day
-	):
-		return false
+	)
 	var objective: Dictionary = {}
 	var defender_id := -1
-	for enemy_id in state.wars_of(nation_id):
+	var owns_diplomatic_objective := false
+	var enemy_ids := state.wars_of(nation_id)
+	enemy_ids.sort()
+	for enemy_id in enemy_ids:
 		var candidate := state.war_objective(nation_id, enemy_id)
 		if (
 			not candidate.is_empty()
 			and int(candidate.get("attacker", -1)) == nation_id
 		):
 			objective = candidate
+			defender_id = enemy_id
+			owns_diplomatic_objective = true
+			break
+	# 防御战争没有本国发起的外交目标，但仍必须主动选择敌城组织反攻。
+	if objective.is_empty():
+		for enemy_id in enemy_ids:
+			var counteroffensive := (
+				DiplomacyAI.select_war_objective(
+					state,
+					nation_id,
+					enemy_id
+				)
+			)
+			if counteroffensive.is_empty():
+				continue
+			objective = counteroffensive
 			defender_id = enemy_id
 			break
 	if objective.is_empty():
@@ -2993,19 +3014,28 @@ func _manage_campaign_offensive(
 		if next.is_empty():
 			return false
 		objective_city = int(next["city_id"])
-		state.set_war_objective(
+		if owns_diplomatic_objective:
+			state.set_war_objective(
+				nation_id,
+				defender_id,
+				objective_city,
+				str(next["reason"])
+			)
+	if (
+		can_launch
+		and _launch_campaign_offensive(
 			nation_id,
-			defender_id,
-			objective_city,
-			str(next["reason"])
+			objective_city
 		)
-	if _launch_campaign_offensive(nation_id, objective_city):
+	):
 		return true
+	# 重整期不是空窗期：持续集结，但不覆盖仍在执行的当前梯队计划。
 	return _assign_offensive_staging_orders(
 		nation_id,
 		objective_city,
 		defense_plan,
-		coordinator
+		coordinator,
+		can_launch
 	)
 
 
