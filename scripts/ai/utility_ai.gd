@@ -6,7 +6,7 @@ const ATTACK_ENTER_RATIO: float = 1.35
 const RETREAT_ENTER_RATIO: float = 0.40
 const HOLD_DEPLOY_ENTER_RATIO: float = 0.60
 const EMERGENCY_RETREAT_RATIO: float = 0.25
-const SIEGE_COMMIT_MARGIN: float = 1.50
+const SIEGE_COMMIT_MARGIN: float = 2.00
 const SUPPLY_CORRIDOR_MIN_IMPORTANCE: float = 0.50
 const SUPPLY_CORRIDOR_THREAT_FLOOR: float = 250.0
 const SUPPLY_CORRIDOR_GARRISON_BASE: float = 1000.0
@@ -23,6 +23,16 @@ const STRATEGIC_VALUE_DELTA_LIMIT: float = 1.0
 const CAMPAIGN_TARGET_BONUS: float = 1.0
 const NORMAL_COMMIT_DAYS: int = 10
 const STRATEGIC_COMMIT_DAYS: int = 30
+
+
+## 发起并维持对某城攻势应集结的兵力门槛（唯一真源，item 6/7）。
+## = 歼灭守军的野战预算(garrison_size) + 维持封锁的兵力(siege_required × SIEGE_COMMIT_MARGIN)。
+## 二者量纲统一（皆兵力）：野战阶段消耗约等于守军规模，之后剩余兵力仍保证围城比 ≈ margin（高效推进），
+## 避免「刚够破城需求即添油、野战后兵力不足、围城停滞」的空转。
+static func assault_commit_threshold(garrison_size: int, fort_strength: int) -> int:
+	return maxi(garrison_size, 0) + int(ceil(
+		float(Combat.siege_required_manpower(fort_strength)) * SIEGE_COMMIT_MARGIN
+	))
 
 
 static func choose(
@@ -256,20 +266,12 @@ static func _attack_candidate(
 		var garrison_size := 0
 		for defender in view.armies_at_city(city_id):
 			garrison_size += defender.size
-		if not legal_reclamation:
-			garrison_size = maxi(
-				garrison_size,
-				city.defense
-			)
 		var committed_size := coordinator.size_reserved(city_id)
+		# 攻城派兵门槛（item 6/7 唯一真源）：歼灭守军 + 维持封锁×余量，确保野战后仍能高效围城。
 		var required_siege_size := (
 			0
 			if legal_reclamation
-			else int(ceil(
-				float(garrison_size)
-					* Combat.SIEGE_RATIO_MIN
-					* SIEGE_COMMIT_MARGIN
-			))
+			else assault_commit_threshold(garrison_size, city.fort_strength)
 		)
 		var pool := _adjacent_assault_pool(
 			view, snapshot, threat, coordinator, city_id
@@ -541,7 +543,12 @@ static func _friendly_relief_need(view: AiWorldView, city_id: int) -> float:
 		for defender in battle.side_b:
 			if defender.owner_nation == view.nation_id and defender.size > 0:
 				defender_size += defender.size
-		need = maxf(need, float(maxi(defender_size, battle.city.defense)) * 1.25)
+		# 解围所需兵力：保住被围守军(defender_size) + 打破封锁级兵力(siege_required)，留 25% 余量。
+		# 量纲统一（皆兵力，item 6）：守军与工事换算封锁需求相加，再乘余量。
+		need = maxf(
+			need,
+			float(defender_size + Combat.siege_required_manpower(battle.city.fort_strength)) * 1.25
+		)
 	return need
 
 
@@ -829,10 +836,8 @@ static func _choose_holding(
 		var garrison_size := 0
 		for defender in view.armies_at_city(enemy_endpoint):
 			garrison_size += defender.size
-		garrison_size = maxi(garrison_size, target_city.defense)
-		var required_size := int(ceil(
-			float(garrison_size) * Combat.SIEGE_RATIO_MIN * SIEGE_COMMIT_MARGIN
-		))
+		# 攻城派兵门槛（item 6/7 唯一真源）：歼灭守军 + 维持封锁×余量。
+		var required_size := assault_commit_threshold(garrison_size, target_city.fort_strength)
 		var pool := _adjacent_assault_pool(
 			view, snapshot, threat, coordinator, enemy_endpoint
 		)

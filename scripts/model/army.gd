@@ -44,7 +44,12 @@ var starving: bool = false
 var morale: float = 1.0
 
 ## 最近一次月度补给满足率 ∈[0,1]。驻防适应每日据此增长/暂停/衰减。
+## 也是每日补给惩罚（士气/减员）的强度来源：shortage = 1 - supply_ratio（item 10 滚动结算）。
 var supply_ratio: float = 1.0
+
+## 累积断粮减员债（item 10）：每日按 shortage×size×STARVE_RATE/30 累加的「未满整人」减员，
+## 满 1 人即扣减 size 并留下小数余额。持久化字段——存读档不重置，避免利用结算相位套利。
+var supply_debt: float = 0.0
 
 ## 在当前边当前位置连续驻防的天数。换边、主动移动或撤退时清零。
 var holding_days: int = 0

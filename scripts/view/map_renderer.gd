@@ -589,8 +589,8 @@ func _draw_cities() -> void:
 			else Color(0, 0, 0, 0.5)
 		)
 		draw_rect(rect, border, false, 2.0 * _display_scale)
-		# 普通城市只显示城防；首都粮仓额外显示 C/W 与库存。
-		var label := "D%d" % city.defense
+		# 普通城市只显示工事强度；首都粮仓额外显示 C/W 与库存。
+		var label := "D%d" % city.fort_strength
 		if city.is_food_hub:
 			label += " 粮"
 		if city.is_manpower_hub:

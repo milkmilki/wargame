@@ -179,7 +179,7 @@ func _generate_grid_cities() -> void:
 				(float(r) + 0.5) / float(GRID)
 			)
 			city.owner_nation = _quadrant_of(c, r)
-			city.defense = rng.randi_range(10, 30)
+			city.fort_strength = rng.randi_range(10, 30)
 			city.manpower_per_month = rng.randi_range(
 				CITY_MANPOWER_PER_MONTH_MIN,
 				CITY_MANPOWER_PER_MONTH_MAX
@@ -214,7 +214,7 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.map_position = positions[id]
 		city.terrain_height = heights[id]
 		city.terrain_relief = reliefs[id]
-		city.defense = rng.randi_range(10, 30)
+		city.fort_strength = rng.randi_range(10, 30)
 		city.manpower_per_month = rng.randi_range(
 			CITY_MANPOWER_PER_MONTH_MIN,
 			CITY_MANPOWER_PER_MONTH_MAX
@@ -1061,7 +1061,7 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 		cities[city_id].has_warehouse = false
 
 
-## 首都失守后，从剩余城市中选择防御最高者迁都（同防御按 id 升序）。
+## 首都失守后，从剩余城市中选择工事最强者迁都（同工事按 id 升序）。
 func relocate_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
@@ -1070,7 +1070,7 @@ func relocate_capital(nation_id: int) -> int:
 		nations[nation_id].capital_city_id = -1
 		return -1
 	candidates.sort_custom(func(a: City, b: City) -> bool:
-		return a.defense > b.defense or (a.defense == b.defense and a.id < b.id)
+		return a.fort_strength > b.fort_strength or (a.fort_strength == b.fort_strength and a.id < b.id)
 	)
 	var capital := candidates[0]
 	var nation := nations[nation_id]

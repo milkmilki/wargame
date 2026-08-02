@@ -1,7 +1,7 @@
 # World-War 项目交接文档
 
 > 面向接手的 AI agent / 开发者。目标：不读全部源码即可理解架构、约定、当前状态与安全改动边界。
-> 最后更新：2026-07-31（AI 性能、归一化防区与持续梯队攻势完成并通过全量验证后）。
+> 最后更新：2026-08-02（战斗系统重构完成：item 1-17，见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）。
 
 ---
 
@@ -21,8 +21,10 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **668 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **739 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
+战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
+`tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
 
 游戏内输入（[map_renderer.gd](scripts/view/map_renderer.gd)）：`Space` 暂停/继续、`+/-` 调速、`R` 重开。
 
@@ -58,25 +60,26 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 
 | 文件 | 角色 | 关键内容 |
 |---|---|---|
-| [scripts/model/city.gd](scripts/model/city.gd) | 数据 | 城市控制、地形、产出、粮仓、重点产地，以及和平确认前冻结直接交战方的 `occupation_sponsor_nation` |
+| [scripts/model/city.gd](scripts/model/city.gd) | 数据 | 城市控制、地形、产出、粮仓、重点产地；工事强度真源 **`fort_strength`**（城防点量纲，item 6 由旧 `defense` 重命名）；和平确认前冻结直接交战方的 `occupation_sponsor_nation` |
 | [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_manpower(0/5000/15000/30000/60000/100000，每国每方向按满编兵力计), distance, danger, max_height_difference, occupied, passing_count(仅供显示的全方向军队数)` |
 | [scripts/model/nation.gd](scripts/model/nation.gd) | 数据 | 国家资源、首都粮仓、外交解释字段、战争动员目标及持久战役梯队状态 |
-| [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, AI命令元数据`；含占领声明国与防御反向边锁 |
-| [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：`id, kind(FIELD/SIEGE), side_a[]/side_b[], edge, city, contact_dist_a/b, round_no, siege_progress(SIEGE累积破城), has_garrison(side_b是否驻城守军), garrison_ref(围城5×门槛的守方兵力基准快照), finished, winner_side`；`side_morale()` 兵力加权派生士气 |
+| [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, supply_debt(item10 每日减员整人化累计余额), AI命令元数据`；含占领声明国与防御反向边锁 |
+| [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：`id, kind(FIELD/SIEGE), side_a[]/side_b[], edge, city, contact_dist_a/b, holding_side/holding_days(驻防快照), round_no, reinforce_fresh_a/b(本tick增援聚合，防拆分套利 item12), siege_progress, has_garrison, siege_required(item6/7 兵力量纲封锁需求), finished, winner_side`；士气不存 Battle，`side_morale()` 由各 Army.morale 兵力加权派生 |
 | [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、粮仓、图查询、战斗、外交、三倍军队数上限与保持兵力/编制守恒的军队拆分 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | Alpha 陆地提取、平坦城市采样、陆地 Voronoi 省份、Delaunay 局部道路、高度剖面与连通骨架 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路、反向粮仓补给网络与 `can_reach_manpower_hub`；补给边损耗=`0.1×distance×(1+danger)` |
-| [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算 + `siege_daily_progress(attacker_size,garrison_ref)` 确定性围城进度，见 §4 |
+| [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算 + 纯函数（`combat_efficiency`/`distribute_casualties`/`decide_winner`/`siege_required_manpower`/`siege_daily_progress`）+ 结构化战斗日志（item 15），见 §4 |
 | [scripts/core/simulation.gd](scripts/core/simulation.gd) | 逻辑 | 按天推进主循环 + `march_days(distance)` 行军时长（R1），见 §5 |
 | [scripts/ai/](scripts/ai) | AI | 军事 Utility AI、战略图、威胁场、协调器，以及 `DiplomacyAI` 双边外交评分 |
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制省份填色/占领纹理/省界/国境/攻势箭头/城市/边/军队/HUD，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 默认真实高度图场景（Main + Simulation + MapRenderer） |
 | [square_map.tscn](square_map.tscn) | 场景 | 保留的原始 `8×8` 方形地图场景；Main 的 `use_grid_world=true` |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 668 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 739 断言，headless 运行 |
 | [tests/map_visual_smoke.gd](tests/map_visual_smoke.gd) | 视觉烟测 | 构造占领省份与攻势事件，用 Godot Movie Maker 验证真实渲染路径 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；A 左侧改进 Utility AI、B 右侧修改前当前 Utility AI，十年对战并输出领土/军力/粮食/首都指标 |
+| [tests/combat_statistics.gd](tests/combat_statistics.gd) | 统计 | item 17 万场（10000）战斗批量统计：位置对称/优势胜率/优势不被随机夺走/拆分不变/地形单调/种子复现，独立 SceneTree 脚本 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
 
 ---
@@ -85,7 +88,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 
 **核心变化**：战斗从"瞬时一击解算"改为 **EU4 式多回合掷骰持续战斗**。一场战斗是持久化的 [Battle](scripts/model/battle.gd) 对象，存在 `GameState.battles` 中，**每天（tick）打一个回合**（`Combat.resolve_round`），直到一方兵力归零或士气崩溃。均势会战约 10-13 天。
 
-**统一模型**：野战（`Kind.FIELD`）与攻城（`Kind.SIEGE`）共用回合解算，但 SIEGE 走专用状态机 `_advance_siege`（见 §5）。攻方在城墙 `dist=L`，守军在城中 `dist=0` 且**当 `has_garrison=true` 时**享 `city.defense` 城防加成。
+**统一模型**：野战（`Kind.FIELD`）与攻城（`Kind.SIEGE`）共用回合解算，但 SIEGE 走专用状态机 `_advance_siege`（见 §5）。攻方在城墙 `dist=L`，守军在城中 `dist=0` 且**当 `has_garrison=true` 时**享 `fort_strength` 城防加成。
 
 **支持 N v M（多路打一路）**：`Battle.side_a` / `side_b` 是**军队数组**，同侧恒单一 nation。
 - **攻击力（累加）**：`Σ(size×attack)`——所有参战军队火力直接相加。
@@ -106,11 +109,12 @@ Army 状态：`IDLE / MOVING / FIGHTING / RETREATING / RECOVERING / HOLDING`。`
 ### 4.2 danger 地形与驻防适应
 
 ```
-attack_multiplier = 1 − 0.50 × danger
+attack_multiplier  = 1 − 0.50 × danger                              (danger < 0.85)
+                   = 连续单调降到 0.25 的关隘曲线                    (danger ≥ 0.85，item 9 去断崖)
 defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 ```
 
-`danger` 是地形难度唯一持久真源，不存在 `terrain_type/is_pass`。攻击惩罚固定；只有战前处于 `HOLDING` 的防守侧可用驻防时间逐步消除防御惩罚，倍率无限趋近 1 但不超过 1。普通相向遭遇双方 `holding_days=0`。
+`danger` 是地形难度唯一持久真源，不存在 `terrain_type/is_pass`。攻击惩罚在 `danger<CHOKEPOINT_DANGER_ONSET(0.85)` 为普通线性；`danger≥0.85` 进入"隘口带"，攻击倍率从 0.85 处的线性值**连续、单调**降到 `danger=1.0` 时的地板 `CHOKEPOINT_ATTACK_FLOOR=0.25`（**item 9：地形参数小幅变化只产生小幅结果变化，无 0.001 跨阈战力减半**）。只有战前处于 `HOLDING` 的防守侧可用驻防时间逐步消除防御惩罚，倍率无限趋近 1 但不超过 1。普通相向遭遇双方 `holding_days=0`。
 
 ### 4.3 触发条件（**位置驱动两两交战**，在 Simulation `_detect_encounters` 判定，第七轮重写）
 
@@ -147,15 +151,22 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 | `MORALE_STARVE_DECAY` | 0.10 | 断粮军队每回合额外士气衰减 |
 | `MORALE_RECOVER` | 0.15 | 非交战有粮军队每月士气恢复量（战后疲劳消退，封顶 1.0） |
 | `MORALE_REINFORCE` | 0.20 | 增援回气上限系数：新友军加入本侧时，按 `boost = 0.20 × newcomer.morale × (newcomer.size/本侧总兵力)` 提振既有（疲劳）成员士气（`Combat.reinforce_morale`，见 §5）。生力军愈壮、士气愈高 → 回气愈多；封顶 1.0 |
+| `MIN_COMBAT_EFFICIENCY` | 0.2 | **item 2** 士气→战力：有效战力 = 名义 × `(0.2 + 0.8×morale)`。满士气=1.0、零士气=0.2（仍能自卫但火力大降） |
+| `SIDE_ROUT_THRESHOLD` | 0.15 | 整侧派生士气 ≤ 此值判溃败（兵力归零前合理崩溃） |
+| `FRONTAGE_FALLBACK / SIEGE_FRONTAGE` | 15000 | **item 5** 正面宽度：野战正面=道路容量、攻城正面=城墙可展开兵力；超出进预备队（不贡献火力/不受伤亡）；拆分不增总正面 |
+| `CHOKEPOINT_DANGER_ONSET` | 0.85 | **item 9** 隘口带起点：`danger≥0.85` 攻击惩罚加速下探（连续，非跳变） |
+| `CHOKEPOINT_ATTACK_FLOOR` | 0.25 | **item 9** `danger=1.0` 时攻击倍率地板（隘口最极端处） |
 | `SIEGE_PROGRESS_REQUIRED` | 100.0 | 破城所需累积进度（满 100 破城，`siege_progress += siege_daily_progress`） |
-| `SIEGE_RATIO_MIN` | 5.0 | **R2 有效推进最低兵力倍数**：攻方/守方基准 < 5 则围城终止并强制撤离 |
-| `SIEGE_DAYS_MIN` | 3.0 | **R2 饱和进攻(r→∞)最短围城天数** |
-| `SIEGE_DAYS_BASE` | 90.0 | **R2 基准围城天数**（r=5 时） |
-| `SIEGE_DECAY_K` | 435.0 | **R2 递减系数** = (90−3)×5，使 `围城天数 = clamp(3 + 435/r, 3, 90)` 在 r=5→90、r→∞→3 平滑递减 |
+| `FORT_MANPOWER_PER_POINT` | 100 | **item 6** 量纲桥：城防点 → 封锁兵力。`siege_required_manpower = fort_strength × 100`，**不含守军人数** |
+| `SIEGE_RATIO_STALL` | 0.5 | **item 7** 倒退/推进分界比：`manpower_ratio<0.5` 进度每日倒退（工事修复），`0.5~1.0` 极慢正推进 |
+| `SIEGE_DAYS_BASE` | 30.0 | **item 7** 正常围城下限天数（`ratio=1` 时）；`days = 3 + 27/ratio` 单调降 |
+| `SIEGE_DAYS_MIN` | 3.0 | **item 7** 饱和进攻(`ratio→∞`)最短围城天数 |
+| `SIEGE_DAYS_DECAY` | 27.0 | = `SIEGE_DAYS_BASE − SIEGE_DAYS_MIN`（曲线系数） |
+| `SIEGE_REGRESS_PER_DAY` | 0.5 | `ratio<STALL` 时每日进度倒退量（最深，ratio=0 时） |
 | `SIEGE_INTERRUPTION_DECAY_PER_DAY` | 0.25 | 守城/解围战每持续一天，既有攻城进度回退 0.25 点，最低为 0 |
-| `SIEGE_STARVE_DEF_MULT` | 0.3 | **R3 粮尽守军城防加成衰减系数**（`food_storage≤0` 时城防 ×0.3，战力大幅下降） |
+| `SIEGE_STARVE_DEF_MULT` | 0.3 | 粮尽守军城防加成衰减系数（`food_storage≤0` 时城防 ×0.3，战力大幅下降） |
 
-> **R2 围城确定性递减（本轮替换旧掷骰模型）**：`siege_daily_progress(attacker_size, garrison_ref)`：令 `r = attacker_size / max(garrison_ref,1)`；`r<5` 返回 0，`Simulation` 据此结束围城并让攻方撤离；否则 `days = clamp(3 + 435/r, 3, 90)`、返回 `100/days`。**去掉掷骰**使围城天数精确可测（r=5→90 天、r=10→48 天、r→∞→3 天），且**与 city.defense 解耦**。`garrison_ref` 是围城开始时的守方兵力基准快照，守军被歼后仍保留。
+> **item 6/7 围城连续曲线（本轮替换旧 5× 硬门槛 + `garrison_ref` 掷骰模型）**：`manpower_ratio = 攻方有效兵力 / siege_required_manpower(fort_strength)`，其中 `siege_required_manpower = fort_strength × FORT_MANPOWER_PER_POINT`（**唯一量纲桥、不含守军人数** —— 守军是城下决斗阶段的对手，被歼后封锁需求不变，item 6 验收）。围城天数 `days = clamp(3 + 27/ratio, 3, 30)`：`ratio<0.5` 进度倒退、`0.5~1` 极慢、`ratio=1→30 天`、`2→16.5`、`4→9.75`、`→∞→3`。**无 5× 跳变、大兵力收益递减、与守军人数解耦**。旧 `SIEGE_RATIO_MIN=5 / SIEGE_DAYS_BASE=90 / SIEGE_DECAY_K=435 / garrison_ref` 已移除。
 
 > 调参依据：`K_ROUND=120, MORALE_CASUALTY_K=1.2` 下，均势会战约 10-13 天、优势方约 5-7 天（战斗常量在天/月分层后**零改动**，因每天一回合恰好把原"月级回合"落到"天级"，会战时长更贴合真实）。
 
@@ -164,12 +175,12 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 | 规格 | 规则 | 落地 |
 |---|---|---|
 | **R1 行军时间** | 任意长度道路 **最短 10 天、最长 30 天**，按长度线性插值 | `Simulation.march_days(distance) = clamp(10 + (distance−1)×5, 10, 30)`；distance∈[1,5]→[10,30] 天；每天推进 `1/march_days`。**副作用：speed_factor 与 danger 不再影响行军时长**（speed_factor 成行军侧死字段；danger 仍用于战斗地形惩罚 + 寻路边权） |
-| **R2 围城** | 攻方兵力 **≥5×守方基准**才推进，不足则强制撤离；基准 **90 天**；兵力优势增 → 时间递减；饱和最短 **3 天** | `Combat.siege_daily_progress` + `Simulation._withdraw_failed_siege`；`garrison_ref` 快照分母 |
+| **R2 围城** | ⚠️ **已被 item 6/7 取代**（见 §4.5）：旧"≥5×守方基准、基准 90 天"硬门槛已废，改为连续曲线 `manpower_ratio = 攻方兵力 / (fort_strength×100)`、`days = clamp(3+27/ratio, 3, 30)` | `Combat.siege_required_manpower` + `siege_daily_progress` + `Simulation._withdraw_failed_siege` |
 | **R3 粮草** | 被围城市切断外部补给；只有城市本身设有粮仓时可继续消耗本地库存，粮尽后战力大幅下降 | 当前每国仅首都有粮仓；`Simulation._drain_siege_food()` 每天扣被围粮仓库存；普通城市无本地库存，被围即断供；粮尽 → 守军城防 ×`SIEGE_STARVE_DEF_MULT=0.3` |
-| **R4 空城弱攻退避** | 攻空城时**兵力 < 城基础防御**则不建围城、不占城，**自动向友方城撤离** | `Simulation._start_or_join_siege`：`defender==null and attacker.size < city.defense` → `_retreat_to_friendly`（`Pathfinding.nearest_friendly_city` 仅沿本国城市找最近本国城，无合法通道则溃散） |
+| **R4 空城弱攻退避** | 攻空城时**兵力 < 破城所需兵力**（`fort_strength×100`）则不建围城、不占城，**自动向友方城撤离** | `Simulation._start_or_join_siege`：`defender==null and attacker.size < siege_required_manpower` → `_retreat_to_friendly`（`Pathfinding.nearest_friendly_city` 仅沿本国城市找最近本国城，无合法通道则溃散） |
 
 > **用户两个架构拍板**：① 围城模型保留"守军实战"（有守军先打实战、歼灭后转纯围城递减），非改为 EU4 纯被动围城；② 断粮结局是"战力大幅下降"（城防 ×0.3 + 断粮士气加速崩溃），非"粮尽即投降破城"。
-> **R4 触发频率提示**：world-gen `city.defense∈[10,30]` 远小于攻方兵力(size∈[500,1500])，故 R4 在默认参数下**极少触发**，作边界护栏存在（测试 [21] 用 `defense=300` 人工构造触发场景验证）。
+> **R4 触发频率提示**：world-gen `fort_strength∈[10,30]`（破城所需兵力 = ×100 = 1000~3000）相对攻方兵力(size∈[500,1500])，故 R4 在默认参数下作边界护栏存在（测试用大 `fort_strength` 人工构造触发场景验证）。
 
 ### 4.7 第十三轮：士气崩溃撤退与驻城恢复
 
@@ -251,15 +262,16 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 
 ## 5. 天推进主循环（[simulation.gd](scripts/core/simulation.gd) `_advance_day`）—— 天/月分层（第七轮）
 
-实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城每天推进；经济/粮草/士气恢复仍每月（30 天）结算，数值口径与原按月一致，仅还原到每 30 天一次。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
+实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城每天推进；经济与**粮食扣除**仍每月（30 天）结算（`food_storage` 为 int，日扣会 30× 通胀）；**item 10 后：断粮后果（士气/减员/溃逃）改为每日滚动施加**，全月累计恰等旧月度口径。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
 
 ```
 state.day += 1;  state.month = state.day / 30       # month 为派生显示量
 if state.day % 30 == 0:                              # 每月结算块
     1. _resolve_economy()   金钱/人口月产出；(day%180==0 时半年注粮)
     1b._resolve_reinforcements() 全国人口库按缺口公平补员
-    2. _resolve_supply()    补员后的军队取粮 + 刷新 army.starving
+    2. _resolve_supply()    补员后的军队月度扣粮 + 写 supply_ratio/starving（item10：只管经济，不再直接扣士气/减员）
     2b._recover_morale()    普通非交战军恢复；RECOVERING 驻军从损耗最低的可达粮仓取粮
+2c. _apply_supply_pressure()  【每日，item10】按 supply_ratio 逐军滚动施加 1/30 士气损失 + supply_debt 整人化减员 + 士气跨 0 触发溃逃
 3. ArmyCoordinator.merge_colocated()  同位置兼容军队守恒合并
 3b.每5天 _ai_assign_targets()  战略图缓存 + 威胁场 + Utility候选评分与目标预留
 4. _advance_movement()   四步严格分离（时序关键，勿合并）：
@@ -280,7 +292,7 @@ if state.day % 30 == 0:                              # 每月结算块
 - 敌占点卡位 `_block_passthrough`（第八轮新增，在 `_detect_encounters` 之后、`_resolve_battles` 之前调用）：任何 MOVING 军队若在同边逼近一场进行中 FIELD 战斗的交战线（位置差 ≤ `CONTACT_EPS`）、且与该战斗**任一方敌对**，则被**冻结在交战线位置待机**（`move_progress` 被夹到交战线、不得穿过）。待该战斗分出胜负、`_resolve_battles` 清掉后，下一 tick 由 `_detect_encounters` 让其与幸存者开战——实现**三方同点"串行化接战、必不穿过"**。同 nation 军队不卡位（它们由 `_join_field_battle` 直接并入）。[14] 断言固化。
 - 攻城 `_start_or_join_siege`（**一城一围城方**）：`_arrive_at_node` 到达城 → **只要该城有进行中 SIEGE（`_siege_battle_of != null`），无论城归属都转 `_start_or_join_siege`**；否则再按 `is_enemy(owner)` 分流（敌城→攻城，己方/中立且无围城→驻扎/续行）。
   > ⚠️ 第九轮修复"到达被围城不触发"：旧实现只凭 `is_enemy(army.owner, city.owner)` 分流。**被围城破城前 owner 不易主**，故城主（=守方）援军回援时 `is_enemy=false` → 被误判"回己方城"直接 `_settle_idle` **旁观穿过、不参战**。[15] 断言固化。
-  - 无既有 SIEGE：**R4 空城弱攻退避**——空城（无守军）且 `attacker.size < city.defense` → 不建围城、`_retreat_to_friendly` 撤离（见 §4.6）；否则有守军建带守军 SIEGE（`has_garrison=true`、`garrison_ref=守军兵力`），**空城（强攻）建纯围城 SIEGE**（side_b 空、`garrison_ref=city.defense`），不再瞬占。
+  - 无既有 SIEGE：**R4 空城弱攻退避**——空城（无守军）且 `attacker.size < siege_required_manpower(fort_strength)` → 不建围城、`_retreat_to_friendly` 撤离（见 §4.6）；否则有守军建带守军 SIEGE（`has_garrison=true`），**空城（强攻）建纯围城 SIEGE**（side_b 空），围城比值分母统一为 `battle.siege_required = siege_required_manpower(fort_strength)`，不再瞬占。
   - 既有 SIEGE 且与围城方同 nation → 并入 side_a（多路汇合）。
   - 既有 SIEGE 且与围城方敌对：
     - **守军仍在**（`has_garrison` 且 side_b 非空）：与守军同族者（=城主援军）**入城帮守**并入 side_b（享城防加成，[15](c)）；真第三国无处容身 → 以已抵达的目标城为锚点 `_retreat_to_friendly`，不得瞬移回来源城（[15](d)、[28]）。
@@ -289,7 +301,7 @@ if state.day % 30 == 0:                              # 每月结算块
 **SIEGE 状态机 `_advance_siege`（守军歼灭 ≠ 破城）**：
 1. **守军抵抗**（`has_garrison` 且 side_b 非空）：`resolve_round` 削守军。攻方被击退→真结束；守军溃散→`_retreat_defender` 清走守军、`has_garrison=false`、转纯围城（**不占领**）。战败守军必须排除当前守城城市撤往其他友城，抵达后才进入 `RECOVERING`；不能在原城恢复，无可达友城则溃散。
 2. **城下决斗**（side_b 为敌对挑战者，无城防加成）：分胜负后——挑战者胜且**为城主（`side_b.owner==city.owner`）→ 解围成功，入城 `_settle_idle`、战斗结束**；挑战者胜且为敌对他国 → `_promote_challengers` 接管围城继续攻。围城方胜 → 挑战者撤退、围城继续。（第九轮修复：城主解围胜利不再被 `_promote_challengers` 误升为"围攻自己城"，[15](e)。）
-3. **纯围城累积（R2 确定性递减）**：无对抗时计算 `siege_daily_progress`；`r<5` 立即结束围城并让攻方沿真实路径撤回友城，禁止永久切断补给；否则按 90→3 天递减累积。达 100 后破城。`_promote_challengers` 接管围城时重置 `garrison_ref=city.defense`。
+3. **纯围城累积（item 7 连续曲线）**：无对抗时计算 `siege_daily_progress`；`manpower_ratio<SIEGE_RATIO_STALL(0.5)` 时进度倒退，若持续无法封锁则结束围城让攻方沿真实路径撤回友城（禁止永久切断补给）；否则按 `days=clamp(3+27/ratio,3,30)` 递减累积。达 100 后破城。`_promote_challengers` 接管围城时按 `city.fort_strength` 重算 `battle.siege_required`。
 
 每个围城日开始，`_reconcile_siege_city_defenders` 都会重新收集目标城内尚未参战的 `IDLE/RECOVERING` 本国守军。任何守军都会先把围城切回战斗阶段；守城或解围战期间，`siege_progress` 每天回退 `0.25` 点，守军被击败前不得继续推进或占领。
 
@@ -402,13 +414,13 @@ if state.day % 30 == 0:                              # 每月结算块
 
 ## 7. 安全改动边界（给接手 agent 的护栏）
 
-- **改战斗平衡** → 只动 [combat.gd](scripts/core/combat.gd) 顶部常量（含围城 `SIEGE_RATIO_MIN`/`SIEGE_DAYS_MIN/BASE`/`SIEGE_DECAY_K`/`SIEGE_STARVE_DEF_MULT`），跑 `./run_tests.sh` 确认不破坏断言。
+- **改战斗平衡** → 只动 [combat.gd](scripts/core/combat.gd) 顶部常量（伤害 `K_ROUND`/`DEF_REF`；士气 `MORALE_*`/`MIN_COMBAT_EFFICIENCY`/`SIDE_ROUT_THRESHOLD`；正面 `*_FRONTAGE`；地形 `CHOKEPOINT_*`；围城 `FORT_MANPOWER_PER_POINT`/`SIEGE_RATIO_STALL`/`SIEGE_DAYS_BASE/MIN/DECAY`/`SIEGE_STARVE_DEF_MULT`），跑 `./run_tests.sh` 确认不破坏断言。
 - **改行军时长** → 只动 [simulation.gd](scripts/core/simulation.gd) 的 `MARCH_DAYS_MIN/MAX` 与 `march_days(distance)`（R1 唯一真源）；改斜率须同步 [18] 断言。
 - **改粮仓机制** → 首都/粮仓登记真源在 `Nation.capital_city_id/warehouse_city_ids`，库存真源在粮仓城市 `food_storage`；禁止重新让普通城市库存参与补给。
 - **改补给损耗** → 只动 `Pathfinding.SUPPLY_DISTANCE_LOSS/SUPPLY_DANGER_MULT`；保持边损耗可加，才能用单标量 Dijkstra 保证全局最优。
 - **改战后恢复** → `RECOVERY_FOOD_PER_CAPITA` 决定基础需求，运输损耗与普通补给共用；必须同步 [22]，并保持 `RECOVERING` 不进入普通补给计划。
 - **改军队拆分或数量上限** → 拆分只允许静止军并要求 `sum(size)`、`sum(max_size)` 守恒；子军继承攻防、士气、补给和战役目标。建军与拆分都必须经过 `GameState.max_army_count`。
-- **改补给士气联动** → `SUPPLY_MORALE_LOSS_MAX` 是完全断粮月度士气损失，部分缺粮按比例缩放；必须同步 [23]。
+- **改补给士气联动** → `SUPPLY_MORALE_LOSS_MAX` 是完全断粮月度士气损失，部分缺粮按比例缩放；**item 10 后为每日滚动施加**（`_apply_supply_pressure`/纯函数 `_accrue_supply_pressure`，按 `1/DAYS_PER_MONTH` 摊派），粮食扣除仍月度（`food_storage` 为 int）；减员经 `Army.supply_debt` 整人化累计；必须同步 [23]/[23b]。
 - **改边地形** → 只动 `danger` 与 Combat 的 `ATTACK_DANGER_K/DEFENSE_DANGER_K/HOLDING_TAU_DAYS/CHOKEPOINT_*`；禁止增加关隘第二真源。关隘惩罚只有敌军实际驻边时才能进入 AI 进攻战力折算。
 - **改道路容量** → 容量单位是满编人数，只允许 `0/5000/15000/30000/60000/100000`；必须同步执行期、两阶段首段预留、军队寻路、战略价值归一化和渲染映射，禁止重新使用军队支数。
 - **改 AI** → 普通战术候选在 [utility_ai.gd](scripts/ai/utility_ai.gd)，城市防御需求和驻城/驻边姿态在 [city_defense_plan.gd](scripts/ai/city_defense_plan.gd)，战略价值在 [strategic_map.gd](scripts/ai/strategic_map.gd)，威胁窗口在 [threat_field.gd](scripts/ai/threat_field.gd)。修改后运行 `./run_tests.sh`、AI 长跑与严格镜像基准。
@@ -434,12 +446,15 @@ AI 长跑命令：
 检查统一提交后的严格公平基线：
 
 ```bash
-AI_DUEL_MODE=balanced-fairness /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
+# 镜像公平基准：必须用 AI_DUEL_RNG_SEED（不是 AI_DUEL_SEED）指定种子，否则退化到默认种子 991199、多种子输出字节相同。
+AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
 ```
 
-当前完全镜像固定种子十年结果为 `32:32`，双方有效战力严格相等 `474008.2/474008.2`；攻势实际运行后粮食为 `196753/196758`，存在 5 点整数结算残差，优势分 `-0.5`。该残差不影响战局，但不应再表述为全状态严格 `0.0`；需作为独立的结算顺序公平性任务处理。旧版依赖国家遍历顺序产生战局分叉的左右 A/B 数字已失效。
-
-最新回归为 `675 passed, 0 failed`。真实地图长跑为 4 种子 × 1095 天，四局均保持 4 国存活：战争声明 `7` 次、国家攻势 `47` 波、领土变化 `2/2/2/3`，相比修复前 `5` 次战争、`8` 波攻势、`3` 城变化有实质提升；最终断粮军均为 0，`invalid=0` 且 `commit_failures=0`，总耗时约 `53.1s`。纯和平 1080 天四国精确维持目标军制且年度粮食结余均为正。十年 A/B 中改进 AI 优势分为 `+20631.1`。
+**战斗系统重构（item 1-17，2026-08-02）验收状态**（详见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）：
+- 快速回归 `./run_tests.sh` = **739 passed / 0 failed**（含新增 [23b] 滚动补给、[35] 战斗公平、[36] 结构化日志）。
+- item 17 万场统计 `tests/combat_statistics.gd` = **STATISTICS_PASS**（位置对称 10000/10000、优势胜率 1.0、5% 优势确定性全胜、拆分不变、地形单调、种子复现）。
+- 真实地图 4 种子 × 1095 天：全部 4 国存活，`invalid=0`、`commit_failures=0`、`starving=0`，稳态粮 116~121k，captures 11 / offensives 36。
+- item 8 镜像公平门槛：12 种子 balanced-fairness 对战 **L=7 / R=5**，均值 `+87k`、SE `64k`、**t=1.37**（与 0 无统计差异，达标）；残余 day-330 破裂属 AI 决策层效用平局（方案书允许的"对称战斗小幅非对称"，未追字节镜像）。
 
 ---
 

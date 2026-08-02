@@ -11,7 +11,11 @@ var owner_nation: int = -1                ## 所属国家 id
 ## 当前占领由哪个直接交战国的军队取得；和平确认后清空。
 var occupation_sponsor_nation: int = -1
 
-var defense: int = 0                      ## 城市防御力
+## 城墙/工事/要塞的结构强度（量纲：城防点数，值域约 10~30；非兵力）。
+## 战斗中作为守军的防御加成（city_defense_modifier 语义）；空城时经
+## Combat.siege_required_manpower() 显式换算为「破城所需兵力」（兵力量纲），
+## 不得与驻军人数直接相加或比较（item 6：禁止量纲混用）。
+var fort_strength: int = 0
 var manpower_per_month: int = 0           ## 每月人口产出，立即汇入所属国人口库
 var gold_per_month: int = 0               ## 每月金钱产出
 var food_per_half_year: int = 0           ## 每半年粮食产出

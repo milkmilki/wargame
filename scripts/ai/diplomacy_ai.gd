@@ -1181,12 +1181,11 @@ static func required_assault_troops(
 			and army.state in [Army.State.IDLE, Army.State.RECOVERING]
 		):
 			defenders += army.size
-	# 5 倍兵力是围城速度曲线的最快档，不是允许进攻的最低门槛。
-	# 战役只要求形成可接受的 1.5 倍局部优势，持久围城由战斗状态机承担。
-	var siege_requirement := int(ceil(
-		float(maxi(defenders, state.cities[objective_city].defense))
-			* UtilityAI.SIEGE_COMMIT_MARGIN
-	))
+	# 攻城派兵门槛（item 6/7 唯一真源，与 UtilityAI 同源）：歼灭守军 + 维持封锁×余量。
+	# 形成可接受的局部优势即发起，持久围城的连续推进曲线由战斗状态机承担（item 7：无 5× 硬门槛）。
+	var siege_requirement := UtilityAI.assault_commit_threshold(
+		defenders, state.cities[objective_city].fort_strength
+	)
 	return maxi(
 		siege_requirement,
 		int(ceil(float(_troop_count(state, nation_id)) * WAR_PREPARATION_FORCE_SHARE))

@@ -29,6 +29,12 @@ var holding_days: float = 0.0
 # 回合计数。士气不在此存储——真源是各 Army.morale，本层士气按兵力加权派生（见 side_morale）。
 var round_no: int = 0
 
+## 本 tick 新加入各侧的援军引用（每回合结算增援士气后清空）。
+## 语义：把「本 tick 新增的全部有效兵力」作为一个整体统一结算一次士气提振，
+## 而非「每支军队 join 一次」。这样把一支援军拆成多支依次加入不会重复获得士气奖励（item 12 拆分套利）。
+var reinforce_fresh_a: Array[Army] = []
+var reinforce_fresh_b: Array[Army] = []
+
 ## 攻城进度累积（仅 SIEGE 有效）：守军被清空后进入纯围城阶段，每天确定性累加；
 ## 守城/解围战持续期间每天回退，达 Combat.SIEGE_PROGRESS_REQUIRED 才能破城。
 var siege_progress: float = 0.0
@@ -37,10 +43,11 @@ var siege_progress: float = 0.0
 ## 守军溃散后转纯围城置 false；若换成城下援军(挑战者)占 side_b 亦为 false（无城防加成）。
 var has_garrison: bool = false
 
-## SIEGE 专用：围城推进的「守方兵力基准」快照（平衡规格 R2 的 5× 门槛分母）。
-## 有守军城 = 围城开始时守军兵力；空城 = city.defense（等效防御规模）。
-## 守军被歼后仍保留此快照，使「攻方≥5×守军才推进」在纯围城阶段持续生效。
-var garrison_ref: int = 0
+## SIEGE 专用：破城所需兵力（siege_required_manpower，item 6/7：恒为兵力量纲）。
+## 由 Combat.siege_required_manpower(city.fort_strength) 推导：= 工事强度换算封锁兵力（不含守军人数）。
+## 围城比值分母 = 攻方有效兵力 / 本值。守军是城下决斗阶段的对手、被歼后本值不变
+## （item 6 验收：驻军被击败后城防仍来自 fort_strength），使纯围城曲线始终以工事需求为准。
+var siege_required: int = 0
 
 # 结束态（由 Combat 解算后置位，Simulation 读取处理善后）
 var finished: bool = false

@@ -44,6 +44,7 @@ func _init() -> void:
 	_test_weak_attack_retreat()
 	_test_morale_retreat_recovery()
 	_test_supply_morale_and_passive_retreat_battle()
+	_test_rolling_supply_settlement()
 	_test_siege_battle_then_progress_order()
 	_test_siege_interruption_and_late_garrison()
 	_test_edge_holding_state()
@@ -58,6 +59,8 @@ func _init() -> void:
 	_test_diplomacy_state_and_ai()
 	_test_peacetime_demobilization_and_border_defense()
 	_test_resource_hubs_and_food_mobilization()
+	_test_combat_fairness_and_conservation()
+	_test_structured_battle_log()
 
 	print("\n==== 结果: %d 通过, %d 失败 ====" % [_passed, _failed])
 	for m in _fail_msgs:
@@ -94,7 +97,7 @@ func _test_world_generation() -> void:
 		if (
 			edge.max_manpower > 0
 			and edge.danger
-				>= Combat.CHOKEPOINT_DANGER_THRESHOLD
+				>= Combat.CHOKEPOINT_DANGER_ONSET
 		):
 			chokepoint_count += 1
 	_check(
@@ -502,20 +505,37 @@ func _test_terrain_multiplier() -> void:
 		"danger=0 时攻防均不应受惩罚")
 	_check(_approx(Combat.attack_multiplier(danger), attack),
 		"攻击倍率不得随驻防时间或其他状态变化")
+	# item 9：隘口带连续、无阈值断崖。danger=1.0 达攻击地板 FLOOR；ONSET 处两段取值连续相接。
 	_check(
 		_approx(
-			Combat.attack_multiplier(
-				Combat.CHOKEPOINT_DANGER_THRESHOLD
-			),
-			Combat.CHOKEPOINT_ATTACK_MULTIPLIER
+			Combat.attack_multiplier(1.0),
+			Combat.CHOKEPOINT_ATTACK_FLOOR
 		),
-		"高险关隘应把进攻方攻击倍率压低到25%%"
+		"danger=1.0 时进攻方攻击倍率应压到地板 %.2f" % Combat.CHOKEPOINT_ATTACK_FLOOR
 	)
+	# 无「浮点跨阈战力减半」：ONSET 前后各 0.001 的攻击倍率变化必须是小幅（远小于旧的 0.575→0.25 断崖）。
+	var just_below := Combat.attack_multiplier(Combat.CHOKEPOINT_DANGER_ONSET - 0.001)
+	var at_onset := Combat.attack_multiplier(Combat.CHOKEPOINT_DANGER_ONSET)
+	var just_above := Combat.attack_multiplier(Combat.CHOKEPOINT_DANGER_ONSET + 0.001)
 	_check(
-		Combat.attack_multiplier(
-			Combat.CHOKEPOINT_DANGER_THRESHOLD - 0.01
-		) > Combat.CHOKEPOINT_ATTACK_MULTIPLIER,
-		"关隘级惩罚只能作用于少数高危险道路"
+		absf(just_below - at_onset) < 0.01 and absf(at_onset - just_above) < 0.01,
+		"隘口带起点处必须连续：跨 0.001 的攻击倍率变化应<0.01，实为 %.4f/%.4f" % [
+			absf(just_below - at_onset), absf(at_onset - just_above)
+		]
+	)
+	# 全程单调不增：danger 越高攻击越受抑（采样覆盖普通段与隘口带）。
+	var mono_ok := true
+	var prev := Combat.attack_multiplier(0.0)
+	for i in range(1, 101):
+		var cur := Combat.attack_multiplier(float(i) / 100.0)
+		if cur > prev + 1e-9:
+			mono_ok = false
+		prev = cur
+	_check(mono_ok, "攻击倍率必须随 danger 全程单调不增（连续曲线，无回升跳变）")
+	# 隘口带内仍强力压制：danger=0.95 的攻击倍率应显著低于普通段 danger=0.5。
+	_check(
+		Combat.attack_multiplier(0.95) < Combat.attack_multiplier(0.5) - 0.2,
+		"极端地形(danger=0.95)仍须强力压制进攻，明显低于中等地形(danger=0.5)"
 	)
 
 # ------------------------------------------------------------------ 3. 战斗基础
@@ -953,42 +973,45 @@ func _test_time_layering() -> void:
 # ------------------------------------------------------------------ 9. 掷骰累积攻城
 
 func _test_siege_dice() -> void:
-	print("[9] 确定性围城：5× 门槛 + 兵力倍数递减(90→3 天) + 破城归攻方")
+	print("[9] 连续围城：ratio=1→30 天、单调递减、ratio<0.5 倒退不撤离 + 破城归攻方")
 	var gs := GameState.new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 
-	# 1. 破城需 >1 tick（累积，非瞬占），破城后城归攻方。ratio=1000/100=10 → ~48 天。
+	# 1. 破城需 >1 tick（累积，非瞬占），破城后城归攻方。ratio=1000/100=10 → days=3+27/10≈5.7。
 	var b := _make_pure_siege(_make_army(0, 0, 1000, 10), 10, 4, 100)
 	var ticks := _run_siege(sim, b)
 	_check(ticks > 1, "围城累积破城应 >1 天（非瞬占），实为 %d" % ticks)
 	_check(b.city.owner_nation == 0, "破城后城应归攻方 nation0，实为 %d" % b.city.owner_nation)
 	_check(b.winner_side == 1, "破城 winner_side 应为 1，实为 %d" % b.winner_side)
 
-	# 2. 兵力倍数越高围城越快（确定性、无掷骰、与城防无关）：r=100 应快于 r=5。
-	var t_r5 := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 500, 10), 10, 4, 100))   # r=5
-	var t_r100 := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 10000, 10), 10, 4, 100)) # r=100
-	_check(t_r100 < t_r5, "高兵力倍数(r=100)应快于低倍数(r=5)：%d vs %d" % [t_r100, t_r5])
+	# 2. 兵力倍数越高围城越快（连续、无掷骰、与工事强度无关）：ratio=100 应快于 ratio=5。
+	var t_r5 := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 500, 10), 10, 4, 100))   # ratio=5
+	var t_r100 := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 10000, 10), 10, 4, 100)) # ratio=100
+	_check(t_r100 < t_r5, "高兵力倍数(ratio=100)应快于低倍数(ratio=5)：%d vs %d" % [t_r100, t_r5])
 
-	# 3. 边界标定：r=5 → 90 天（±1 容差）；r 极大 → 趋近 3 天。
-	_check(absi(t_r5 - 90) <= 1, "r=5 围城应约 90 天，实为 %d" % t_r5)
+	# 3. 边界标定：ratio=1 → 30 天（±1 容差，正常围城下限）；ratio 极大 → 趋近 3 天。
+	var t_r1 := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 100, 10), 10, 4, 100))
+	_check(absi(t_r1 - 30) <= 1, "ratio=1 围城应约 30 天，实为 %d" % t_r1)
 	var t_rinf := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 1000000, 10), 10, 4, 100))
-	_check(t_rinf <= 4 and t_rinf >= 3, "r→∞ 围城应趋近 3 天(3~4)，实为 %d" % t_rinf)
+	_check(t_rinf <= 4 and t_rinf >= 3, "ratio→∞ 围城应趋近 3 天(3~4)，实为 %d" % t_rinf)
 
-	# 4. 5× 门槛：ratio<5 时立即结束围城并强制撤离，不能永久切断补给。
-	var weak_attacker := _make_army(0, 0, 400, 10)
-	var b_stall := _make_pure_siege(weak_attacker, 10, 4, 100)   # r=4 <5
-	var stalled := _run_siege(sim, b_stall)
-	_check(stalled == 1 and b_stall.finished,
-		"ratio<5(=4) 围城应首日终止，实跑 %d finished=%s" % [stalled, b_stall.finished])
-	_check(b_stall.siege_progress == 0.0 and b_stall.side_a.is_empty(),
-		"ratio<5(=4) 不得推进且攻方必须撤出围城")
+	# 4. item 7：连续曲线，ratio<0.5(=0.4) 进度倒退且不再机制性撤离（保持围城、等待援军）。
+	var weak_attacker := _make_army(0, 0, 40, 10)
+	var b_stall := _make_pure_siege(weak_attacker, 10, 4, 100)   # ratio=0.4 <0.5
+	# 先人为累积一点进度，再推进 5 天观察其倒退（负进度被 clamp 到 0，且攻方不撤离）。
+	b_stall.siege_progress = 3.0
+	for _i in range(5):
+		sim._advance_siege(b_stall)
+	_check(not b_stall.finished, "ratio<0.5 围城应持续（不机制性撤离），finished=%s" % b_stall.finished)
+	_check(not b_stall.side_a.is_empty(), "ratio<0.5 攻方应留在围城位置等待援军")
+	_check(b_stall.siege_progress < 3.0, "ratio<0.5 进度应倒退，实为 %.3f" % b_stall.siege_progress)
 
-	# 5. 城防不再影响纯围城速度（确定性递减只看兵力倍数）：同 ratio 同 garrison_ref 下高低城防同时。
+	# 5. 工事强度不影响纯围城速度（连续曲线只看 siege_required 分母）：同 siege_required 下高低工事同时。
 	var t_deflo := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 1000, 10), 5, 4, 100))
 	var t_defhi := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 1000, 10), 40, 4, 100))
-	_check(t_deflo == t_defhi, "纯围城速度应只取决于兵力倍数，与城防无关：%d vs %d" % [t_deflo, t_defhi])
+	_check(t_deflo == t_defhi, "纯围城速度应只取决于 siege_required，与工事强度无关：%d vs %d" % [t_deflo, t_defhi])
 
 	sim.free()
 
@@ -1118,20 +1141,32 @@ func _test_three_way_siege() -> void:
 func _test_multi_army_aggregation() -> void:
 	print("[13] 多军聚合：同国靠后友军并入 + 攻击Σ累加 + 防御反拆分漏洞 + 增援回气 + 同点必触发")
 
-	# (a) 2v2 聚合触发：同国靠后友军（>CONTACT_EPS）也应并入本侧（旧码会漏 → 1v1）
+	# (a) 增援按 ETA 抵达（item 4）：初始只有接触的核心对开战(1v1)；靠后友军(离战线 0.30)
+	#     不瞬间参战，须继续行军逼近己方战线到 REINFORCEMENT_RADIUS 内才加入，最终聚合成 2v2。
 	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
-	_place_army_on_edge(gs, 0, 0, 0, 1, 0.50)   # A0 n0 norm0.50
-	_place_army_on_edge(gs, 1, 0, 0, 1, 0.20)   # A1 n0 norm0.20（靠后）
-	_place_army_on_edge(gs, 2, 1, 1, 0, 0.50)   # B0 n1 norm0.50
-	_place_army_on_edge(gs, 3, 1, 1, 0, 0.20)   # B1 n1 norm0.80
+	var a0 := _place_army_on_edge(gs, 0, 0, 0, 1, 0.50)   # A0 n0 norm0.50（接触核心）
+	var a1 := _place_army_on_edge(gs, 1, 0, 0, 1, 0.20)   # A1 n0 norm0.20（离战线 0.30，未抵达）
+	_place_army_on_edge(gs, 2, 1, 1, 0, 0.50)             # B0 n1 norm0.50（接触核心）
+	_place_army_on_edge(gs, 3, 1, 1, 0, 0.20)             # B1 n1 norm0.80（离战线 0.30，未抵达）
 	sim._detect_encounters()
-	_check(gs.battles.size() == 1, "2v2 应仅 1 场战斗，实为 %d" % gs.battles.size())
+	_check(gs.battles.size() == 1, "应仅 1 场战斗，实为 %d" % gs.battles.size())
 	if gs.battles.size() == 1:
-		var bt: Battle = gs.battles[0]
-		_check(bt.side_a.size() == 2 and _single_nation(bt.side_a), "side_a 应聚合 2 支且同 n0，实为 %d" % bt.side_a.size())
-		_check(bt.side_b.size() == 2 and _single_nation(bt.side_b), "side_b 应聚合 2 支且同 n1，实为 %d" % bt.side_b.size())
+		var bt0: Battle = gs.battles[0]
+		# 初始：仅接触核心对开战，靠后友军尚未抵达 → 1v1（item4 远援不瞬时）。
+		_check(bt0.side_a.size() == 1 and bt0.side_b.size() == 1,
+			"初始应仅核心对开战 1v1，实为 %dv%d" % [bt0.side_a.size(), bt0.side_b.size()])
+		_check(a1.battle_id == -1, "未抵达的靠后友军不应在战斗中")
+		# 手动把靠后友军推进到战线附近（模拟 ETA 兑现：0.20→0.40，距 0.50 战线 0.10<半径）。
+		a1.move_progress = 0.40
+		gs.armies[3].move_progress = 1.0 - 0.40   # B1 对称推进到 norm0.40 附近
+		sim._detect_encounters()
+		_check(bt0.side_a.size() == 2 and _single_nation(bt0.side_a),
+			"靠后友军抵达后 side_a 应聚合 2 支同 n0，实为 %d" % bt0.side_a.size())
+		_check(bt0.side_b.size() == 2 and _single_nation(bt0.side_b),
+			"靠后友军抵达后 side_b 应聚合 2 支同 n1，实为 %d" % bt0.side_b.size())
+	_check(a0.battle_id != -1, "核心军 A0 应在战斗中")
 	sim.free()
 
 	# (b) 攻击力 Σ 累加：拆成 2 支（各 1000）与合成 1 支（2000）对同一守军的伤害应相等
@@ -1144,7 +1179,9 @@ func _test_multi_army_aggregation() -> void:
 	var loss_def_split := _one_round_side_b_loss([_make_army(0, 0, 2000, 10)], [_make_army(2, 1, 500, 10, 12), _make_army(3, 1, 500, 10, 12)], 91)
 	_check(absi(loss_def_single - loss_def_split) <= 2, "防御反拆分：单支(%d) 与拆分(%d) 总伤应近似（差≤2）" % [loss_def_single, loss_def_split])
 
-	# (d) 增援回气：疲劳(0.30)友军获满员援军(morale1.0)加入，士气应回升约 +0.10；援军自身不变
+	# (d) 增援回气（新语义 item2/12）：援军加入先登记为「本 tick 新增」，不立即结算；
+	#     resolve_round 开头按「本 tick 新增有效兵力占比」统一结算一次并封顶 REINFORCE_MORALE_MAX。
+	#     疲劳(0.30)友军 + 满员援军(1000,morale1.0)：boost=min(0.20×1000/2000,0.20)=0.10 → 回升至 0.40。
 	var gs2 := GameState.new(); gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new(); sim2.setup(gs2)
 	var tired := _make_army(0, 0, 1000, 10); tired.morale = 0.30
@@ -1154,8 +1191,22 @@ func _test_multi_army_aggregation() -> void:
 	fresh.move_from = 0; fresh.move_to = 1; fresh.move_progress = 0.5
 	sim2._join_field_battle(battle, fresh, battle.edge)
 	_check(battle.side_a.size() == 2, "增援后 side_a 应为 2 支")
+	_check(battle.reinforce_fresh_a.has(fresh), "援军应登记为本 tick 新增，待统一结算")
+	_check(_approx(tired.morale, 0.30, 0.001), "结算前疲劳友军士气不应立即变化，实为 %.3f" % tired.morale)
+	Combat.settle_reinforcement_morale(battle.side_a, battle.reinforce_fresh_a)
 	_check(_approx(tired.morale, 0.40, 0.001), "疲劳友军应因增援回气至约 0.40，实为 %.3f" % tired.morale)
 	_check(_approx(fresh.morale, 1.0), "援军自身士气不应被自己提振")
+	# (d2) 防拆分套利：把 1000 援军拆成 2×500 依次加入，回气总量应与单支 1000 完全一致。
+	var tired2 := _make_army(10, 0, 1000, 10); tired2.morale = 0.30
+	var battle2 := _make_field_battle([tired2], [_make_army(11, 1, 1000, 10)], 0.0, 4)
+	var f1 := _make_army(12, 0, 500, 10); f1.morale = 1.0
+	var f2 := _make_army(13, 0, 500, 10); f2.morale = 1.0
+	f1.move_from = 0; f1.move_to = 1; f1.move_progress = 0.5
+	f2.move_from = 0; f2.move_to = 1; f2.move_progress = 0.5
+	sim2._join_field_battle(battle2, f1, battle2.edge)
+	sim2._join_field_battle(battle2, f2, battle2.edge)
+	Combat.settle_reinforcement_morale(battle2.side_a, battle2.reinforce_fresh_a)
+	_check(_approx(tired2.morale, 0.40, 0.001), "拆分援军回气应与单支一致(0.40)，实为 %.3f" % tired2.morale)
 	sim2.free()
 
 	# (e) 不同数量组合：3v2 与 2v3 均应各形成 1 场并正确聚合
@@ -1232,6 +1283,36 @@ func _test_three_way_serial() -> void:
 		_check(gs.battles[0].has_army(a) and gs.battles[0].has_army(c), "新战斗应为 A vs C")
 		_check(c.state == Army.State.FIGHTING, "C 应进入战斗（不再穿过）")
 	sim.free()
+
+	# id 不变性（item 11 验收：改变军队 ID 不改变多方交战顺序）。构造 gap 完全相等的三方对撞：
+	# 两敌国军(n1,n2)在同一物理位置(norm0.50)与 n0(norm0.50)重合——(n0,n1) 与 (n0,n2) gap 均为 0。
+	# 交战核心必须由物理量(位置/接触)裁决、与 id 无关：无论怎样重排 id，形成的核心对物理归属相同。
+	var core_nations := {}
+	for perm in [[10, 11, 12], [12, 11, 10], [11, 12, 10]]:
+		var gs2 := GameState.new(); gs2.generate_grid_world(12345)
+		var sim2 := Simulation.new(); sim2.setup(gs2)
+		gs2.armies.clear(); gs2.battles.clear()
+		# 三支同处交战线：n0 与 n1 相向、n0 与 n2 相向，(n0,n1)/(n0,n2) gap 皆为 0（真 gap 平局）。
+		_place_army_on_edge(gs2, perm[0], 0, 0, 1, 0.50)
+		_place_army_on_edge(gs2, perm[1], 1, 1, 0, 0.50)
+		_place_army_on_edge(gs2, perm[2], 2, 1, 0, 0.50)
+		sim2._detect_encounters()
+		var key := "none"
+		if gs2.battles.size() >= 1:
+			var bt := gs2.battles[0]
+			# 记录核心对的「势力对」（物理归属），与具体 id 无关。
+			var na2: int = bt.side_a[0].owner_nation if not bt.side_a.is_empty() else -1
+			var nb2: int = bt.side_b[0].owner_nation if not bt.side_b.is_empty() else -1
+			var lo := mini(na2, nb2); var hi := maxi(na2, nb2)
+			key = "%d-%d" % [lo, hi]
+		core_nations[key] = true
+		sim2.free()
+	_check(
+		core_nations.size() == 1,
+		"改变军队 ID 不得改变多方交战核心的势力归属，实得 %d 种结果：%s" % [
+			core_nations.size(), str(core_nations.keys())
+		]
+	)
 
 # ------------------------------------------------------------------ 15. 到达被围城必触发（修复：城主回援/援军入城不旁观）
 
@@ -1620,34 +1701,51 @@ func _test_march_time_linear() -> void:
 # ------------------------------------------------------------------ 19. R2 围城时间标定
 
 func _test_siege_time_curve() -> void:
-	print("[19] R2 围城：5× 门槛 + 90→3 天递减标定")
-	# 每日进度 = 100/围城天数。反推天数 = 100/每日进度。
-	# r<5：不推进（进度 0）。
-	_check(Combat.siege_daily_progress(400, 100) == 0.0, "r=4(<5) 应不推进，实为 %.3f" % Combat.siege_daily_progress(400, 100))
-	_check(Combat.siege_daily_progress(499, 100) == 0.0, "r=4.99(<5) 应不推进")
-	# r=5：恰好 90 天（基准）。
-	var days_r5 := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(500, 100)
-	_check(_approx(days_r5, 90.0, 0.01), "r=5 应 90 天，实为 %.3f" % days_r5)
-	# r→∞：趋近下界 3 天。
+	print("[19] item 7 连续围城曲线：ratio=1→30 天、ratio<0.5 倒退、单调递减、饱和递减")
+	# 每日进度 = 100/围城天数。反推天数 = 100/每日进度。分母恒为 siege_required（兵力量纲）。
+	# ratio<0.5：进度为负（缓慢倒退，无跳变、无硬门槛）。
+	_check(Combat.siege_daily_progress(0, 100) < 0.0, "ratio=0 应最强倒退（负进度）")
+	_check(Combat.siege_daily_progress(40, 100) < 0.0, "ratio=0.4(<0.5) 应倒退（负进度），实为 %.4f" % Combat.siege_daily_progress(40, 100))
+	# ratio→0.5⁻ 倒退趋近 0（连续、无跳变）；ratio=0.5 恰好 0 边界后转正。
+	_check(Combat.siege_daily_progress(0, 100) <= Combat.siege_daily_progress(40, 100),
+		"倒退应随 ratio 增大而减弱（ratio=0 比 ratio=0.4 退得更快或相等）")
+	_check(Combat.siege_daily_progress(49, 100) < 0.0 and Combat.siege_daily_progress(49, 100) > -0.02,
+		"ratio=0.49 应轻微倒退（趋近 0），实为 %.4f" % Combat.siege_daily_progress(49, 100))
+	# 0.5~1.0：部分封锁，正推进但极慢（天数 > 30 基准）。
+	var days_r_half := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(70, 100)
+	_check(days_r_half > 30.0, "ratio=0.7(部分封锁)应比基准慢(>30 天)，实为 %.1f" % days_r_half)
+	# ratio=1：恰好 30 天（正常围城下限锚点）。
+	var days_r1 := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(100, 100)
+	_check(_approx(days_r1, 30.0, 0.01), "ratio=1 应 30 天，实为 %.3f" % days_r1)
+	# ratio→∞：趋近下界 3 天（饱和递减，不无限加速）。
 	var days_rinf := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(100000000, 100)
-	_check(days_rinf >= 3.0 and days_rinf <= 3.01, "r→∞ 应趋近 3 天，实为 %.3f" % days_rinf)
-	# 单调递减：兵力倍数越大，围城天数越短。
+	_check(days_rinf >= 3.0 and days_rinf <= 3.01, "ratio→∞ 应趋近 3 天，实为 %.3f" % days_rinf)
+	# ratio=2 高效区 ≈ 16.5 天、ratio=4 ≈ 9.75 天（1~2 正常、2~4 高效的量化锚点）。
+	var days_r2 := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(200, 100)
+	_check(_approx(days_r2, 16.5, 0.1), "ratio=2 应约 16.5 天，实为 %.3f" % days_r2)
+	# 正推进区单调递减：兵力比越大，围城天数越短。
 	var mono := true
 	var prev := 1e9
-	for mult in [5, 6, 8, 10, 20, 50, 100]:
-		var dp := Combat.siege_daily_progress(mult * 100, 100)
+	for att in [100, 120, 160, 200, 400, 1000, 2000]:
+		var dp := Combat.siege_daily_progress(att, 100)
 		var d := Combat.SIEGE_PROGRESS_REQUIRED / dp
 		if d > prev + 1e-6:
 			mono = false
 		prev = d
-	_check(mono, "围城天数应随兵力倍数单调递减")
-	# 全程夹在 [3,90]。
+	_check(mono, "正推进区围城天数应随兵力比单调递减")
+	# 正推进区全程夹在 (3,30]：ratio≥1 时天数 ∈ (3,30]。
 	var in_range := true
-	for mult in [5, 7, 13, 30, 200, 1000]:
-		var d := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(mult * 100, 100)
-		if d < 3.0 - 1e-6 or d > 90.0 + 1e-6:
+	for att in [100, 130, 300, 900, 5000, 100000]:
+		var d := Combat.SIEGE_PROGRESS_REQUIRED / Combat.siege_daily_progress(att, 100)
+		if d < 3.0 - 1e-6 or d > 30.0 + 1e-6:
 			in_range = false
-	_check(in_range, "围城天数应恒在 [3,90] 区间")
+	_check(in_range, "ratio≥1 围城天数应恒在 (3,30] 区间")
+	# item 6：siege_required_manpower 仅由工事强度推导，与守军人数无关（唯一真源、无量纲混用）。
+	# fort=10 → 10×100 = 1000；fort=30 → 30×100 = 3000。有无守军该值一致，消除数量级跳变。
+	_check(Combat.siege_required_manpower(10) == 1000, "封锁需求应 = 工事×100 = 1000")
+	_check(Combat.siege_required_manpower(30) == 3000, "封锁需求应 = 工事×100 = 3000")
+	# item 6 验收：驻军被击败后城防仍存在但来自 fort_strength——封锁需求不因守军有无而改变。
+	_check(Combat.siege_required_manpower(20) == 2000, "封锁需求恒由工事给出（守军无关）= 2000")
 
 # ------------------------------------------------------------------ 20. R3 粮草时钟 + 粮尽战力降
 
@@ -1672,7 +1770,7 @@ func _test_siege_food_clock() -> void:
 	siege.contact_dist_a = float(maxi(edge.distance, 1)); siege.contact_dist_b = 0.0
 	var atk := _make_army(90, gs.cities[c1].owner_nation, 100, 10)   # 弱攻，不破城
 	atk.state = Army.State.FIGHTING; atk.battle_id = siege.id
-	siege.side_a.append(atk); siege.garrison_ref = 100000            # 超高基准→永不推进
+	siege.side_a.append(atk); siege.siege_required = 100000            # 超高基准→永不推进
 	# 守军困在被围城 c2 内（补给孤岛：只能吃本城存粮）。
 	var garr := _make_army(91, gs.cities[c2].owner_nation, 200, 10)
 	garr.state = Army.State.FIGHTING; garr.battle_id = siege.id; garr.location_city = c2
@@ -1704,51 +1802,54 @@ func _test_siege_food_clock() -> void:
 	var supply_starved := Pathfinding.nearest_supply_city(gs, garr)
 	_check(supply_starved.is_empty() or supply_starved[0] == -1,
 		"粮尽后被围守军应断绝补给（补给孤岛），实为 %s" % str(supply_starved))
-	# 粮尽 → 守军城防加成大幅衰减（战力大幅下降）。
-	var garr_full := city.defense
-	var garr_starve := int(round(city.defense * Combat.SIEGE_STARVE_DEF_MULT))
+	# 粮尽 → 守军城防加成大幅衰减（战力大幅下降）。加成来自工事强度 fort_strength。
+	var garr_full := city.fort_strength
+	var garr_starve := int(round(city.fort_strength * Combat.SIEGE_STARVE_DEF_MULT))
 	_check(garr_starve < garr_full, "粮尽守军城防应大幅下降：%d → %d" % [garr_full, garr_starve])
 	_check(_approx(float(garr_starve) / maxf(float(garr_full), 1.0), Combat.SIEGE_STARVE_DEF_MULT, 0.05),
 		"粮尽城防应约为原值 ×%.1f" % Combat.SIEGE_STARVE_DEF_MULT)
 	sim.free()
 
-# ------------------------------------------------------------------ 21. R4 空城弱攻退避
+# ------------------------------------------------------------------ 21. item 7 弱攻不再机制撤离
 
 func _test_weak_attack_retreat() -> void:
-	print("[21] R4 空城弱攻：兵力 < 城防则不围城、自动向友方城撤离")
+	print("[21] item 7：弱攻空城仍建立围城但进度停滞/倒退，机制层不强制撤离（消除攻/撤循环）")
 	var gs := GameState.new()
 	gs.generate_grid_world(555)
 	var sim := Simulation.new()
 	sim.setup(gs)
-	# 找一条敌对边：c1(攻方国) → c2(空城，防御高)。
+	# 找一条敌对边：c1(攻方国) → c2(空城)。
 	var c1 := -1; var c2 := -1
 	for e in gs.edges:
 		if gs.cities[e.city_a].owner_nation != gs.cities[e.city_b].owner_nation:
 			c1 = e.city_a; c2 = e.city_b; break
 	var edge := gs.edge_of(c1, c2)
 	var target := gs.cities[c2]
-	target.defense = 300                     # 高城防
+	# 工事 10 → 空城破城所需兵力 = 10×100 = 1000；有效封锁下限(stall) = 500。
+	target.fort_strength = 10
+	var empty_required := Combat.siege_required_manpower(target.fort_strength)
+	var blockade_floor := int(empty_required * Combat.SIEGE_RATIO_STALL)   # = 500
 	gs.armies.clear(); gs.battles.clear()
-	# 确保 c2 为空城（无守军）。攻方兵力 100 < 城防 300。
+	# 弱攻兵力 100 << 封锁下限 500（ratio=0.1，远低于 stall）。
 	var atk := _make_army(1, gs.cities[c1].owner_nation, 100, 10)
 	atk.state = Army.State.MOVING; atk.move_from = c1; atk.move_to = c2
 	atk.location_city = c1; atk.on_edge = true; atk.move_progress = 1.0
 	gs.armies.append(atk)
 	var before_owner := target.owner_nation
-	# 攻方到达空城 → 触发围城判定：弱攻应撤离，不占城、不建围城。
+	_check(atk.size < blockade_floor, "前置：弱攻兵力应低于封锁下限")
+	# 攻方到达空城 → item 7：建立围城，但不占城、不被机制强制撤离。
 	sim._start_or_join_siege(atk, target, edge)
-	_check(gs.city_under_siege(c2) == false, "弱攻空城不应建立围城")
+	_check(gs.city_under_siege(c2), "弱攻空城应正常建立围城（不再机制拒绝）")
 	_check(target.owner_nation == before_owner, "弱攻不得占据空城（owner 不变）")
-	_check(atk.state == Army.State.MOVING, "弱攻方应转为 MOVING 撤离，实为 %d" % atk.state)
-	_check(atk.move_to != c2, "撤离目标不应是被攻空城 c2")
-	# 对照：强攻（兵力 >= 城防）应正常建立围城。
-	gs.armies.clear(); gs.battles.clear()
-	var strong := _make_army(2, gs.cities[c1].owner_nation, 400, 10)   # 400 >= 300
-	strong.state = Army.State.MOVING; strong.move_from = c1; strong.move_to = c2
-	strong.location_city = c1; strong.on_edge = true; strong.move_progress = 1.0
-	gs.armies.append(strong)
-	sim._start_or_join_siege(strong, target, edge)
-	_check(gs.city_under_siege(c2), "强攻(兵力>=城防)应正常建立围城")
+	_check(atk.state == Army.State.FIGHTING, "弱攻方应进入围城 FIGHTING，不被强制撤离，实为 %d" % atk.state)
+	# item 7 核心：ratio<0.5 时围城进度停滞/倒退，且不出现攻/撤循环（多天推进后仍在围城）。
+	var siege := sim._siege_battle_of(target)
+	siege.siege_progress = 5.0
+	for _i in range(10):
+		sim._advance_siege(siege)
+	_check(not siege.finished, "弱攻围城不应破城")
+	_check(siege.siege_progress < 5.0, "ratio<0.5 围城进度应倒退，实为 %.2f" % siege.siege_progress)
+	_check(not siege.side_a.is_empty(), "攻方应仍在围城（无机制强制撤离/无攻撤循环）")
 	sim.free()
 
 # ------------------------------------------------------------------ 22. 士气崩溃撤退 + 驻城恢复
@@ -1923,7 +2024,7 @@ func _test_morale_retreat_recovery() -> void:
 		"占领只能改变当前归属，省份初始底色归属必须保持不变"
 	)
 
-	# 多支恢复驻军必须全部加入守城，5× 门槛基准取总兵力，而非只取第一支。
+	# 多支恢复驻军必须全部加入守城，破城所需兵力的守军项取总兵力（而非只取第一支）。
 	gs.armies.clear()
 	gs.battles.clear()
 	var city_owner := gs.cities[c2].owner_nation
@@ -1941,7 +2042,10 @@ func _test_morale_retreat_recovery() -> void:
 	sim._start_or_join_siege(invader, gs.cities[c2], edge)
 	var recovery_siege: Battle = gs.battles[0]
 	_check(recovery_siege.side_b.size() == 2, "两支 RECOVERING 驻军应全部加入守城")
-	_check(recovery_siege.garrison_ref == 500, "守方基准应取全部驻军总兵力 500，实为 %d" % recovery_siege.garrison_ref)
+	# item 6：破城所需兵力仅由工事换算，与守军人数无关；两支恢复守军只在城下决斗阶段消耗攻方。
+	var expected_required := Combat.siege_required_manpower(gs.cities[c2].fort_strength)
+	_check(recovery_siege.siege_required == expected_required,
+		"破城所需兵力恒由工事推导（守军无关），实为 %d（期望 %d）" % [recovery_siege.siege_required, expected_required])
 	sim.free()
 
 # ------------------------------------------------------------------ 23. 自由/溃逃状态：断粮降士气 + 被动接战
@@ -1967,13 +2071,23 @@ func _test_supply_morale_and_passive_retreat_battle() -> void:
 		if city.owner_nation == nation:
 			city.food_storage = 0
 
-	# 自由行军军队完全断粮：每月损失 0.20 士气；由 0.10 跌至 0 后应自动转溃逃。
+	# 自由行军军队完全断粮：士气按 0.20/月 滚动逐日损失（item 10），而非结算日一次性跳变。
 	var hungry := _place_army_on_edge(gs, 600, nation, c1, c2, 0.4)
 	hungry.morale = 0.10
-	sim._resolve_supply()
-	_check(_approx(hungry.morale, 0.0), "完全断粮应将 0.10 士气降至 0，实为 %.3f" % hungry.morale)
+	sim._resolve_supply()   # 月度只写 supply_ratio（全断粮→0），不再直接扣士气
+	_check(_approx(hungry.supply_ratio, 0.0),
+		"全断粮月度结算应把 supply_ratio 记为 0，实为 %.3f" % hungry.supply_ratio)
+	sim._apply_supply_pressure()   # 第 1 天：只损失 0.20/30，绝不应一天崩溃
+	var per_day := Simulation.SUPPLY_MORALE_LOSS_MAX / float(Simulation.DAYS_PER_MONTH)
+	_check(_approx(hungry.morale, 0.10 - per_day) and hungry.state != Army.State.RETREATING,
+		"断粮首日应仅损失 %.4f 士气且不立即溃逃，实为 morale=%.4f state=%d" % [
+			per_day, hungry.morale, hungry.state])
+	# 继续滚动足够多天（0.10 需约 15 天耗尽），最终士气归零并触发溃逃。
+	for _i in range(19):
+		sim._apply_supply_pressure()
+	_check(_approx(hungry.morale, 0.0), "持续全断粮约 15 天后士气应降至 0，实为 %.4f" % hungry.morale)
 	_check(hungry.state == Army.State.RETREATING and hungry.forced_retreat,
-		"自由军士气降至 0 后应自动进入溃逃状态")
+		"自由军士气滚动降至 0 后应自动进入溃逃状态")
 
 	# 两支敌对溃逃军即使同点也不主动互战。
 	gs.armies.clear()
@@ -2003,6 +2117,68 @@ func _test_supply_morale_and_passive_retreat_battle() -> void:
 	_check(r1.state == Army.State.RETREATING and r1.forced_retreat,
 		"溃逃军被动接战获胜后应继续撤退，不得恢复自由行军")
 	_check(r1.path == [c2], "被动接战获胜后应保留原撤退路径")
+	sim.free()
+
+# ------------------------------------------------------------------ 23b. item10 补给滚动结算：相位无关 + 恢复消退
+func _test_rolling_supply_settlement() -> void:
+	print("[23b] 补给滚动结算：断粮影响逐日累积、月初月末相位无关、恢复后惩罚消退")
+	var sim := Simulation.new()
+	var per_day := Simulation.SUPPLY_MORALE_LOSS_MAX / float(Simulation.DAYS_PER_MONTH)
+
+	# --- (a) 逐日累积：全断粮 shortage=1，N 天后士气恰降 N*per_day，绝非结算日一次性跳变 ---
+	var a := _make_army(700, 0, 1000, 10)
+	a.morale = 1.0
+	for _i in range(10):
+		sim._accrue_supply_pressure(a, 1.0)
+	_check(_approx(a.morale, 1.0 - 10.0 * per_day),
+		"全断粮 10 天应逐日累积损失 %.4f 士气，实为 %.4f" % [10.0 * per_day, 1.0 - a.morale])
+
+	# --- (b) 相位无关：同为「断粮 10 天」，无论落在 30 天窗口的月初还是月末，结果一致 ---
+	var early := _make_army(701, 0, 1000, 10); early.morale = 1.0
+	var late := _make_army(702, 0, 1000, 10); late.morale = 1.0
+	for day in range(1, 31):
+		sim._accrue_supply_pressure(early, 1.0 if day <= 10 else 0.0)   # 月初断 10 天
+		sim._accrue_supply_pressure(late, 1.0 if day > 20 else 0.0)     # 月末断 10 天
+	_check(_approx(early.morale, late.morale),
+		"断粮同为 10 天，月初(%.4f)与月末(%.4f)结果应一致（相位无关）" % [early.morale, late.morale])
+	_check(_approx(early.morale, 1.0 - 10.0 * per_day),
+		"断粮 10 天后士气应为 %.4f，实为 %.4f" % [1.0 - 10.0 * per_day, early.morale])
+
+	# --- (c) 恢复消退：断粮压低士气后 shortage 归零，惩罚停止、士气不再下降、饥饿标记清除 ---
+	var recov := _make_army(703, 0, 1000, 10); recov.morale = 1.0
+	for _i in range(5):
+		sim._accrue_supply_pressure(recov, 1.0)
+	var dipped := recov.morale
+	_check(recov.starving and dipped < 1.0 - 4.0 * per_day + 0.0001,
+		"断粮 5 天应显著压低士气并标记饥饿，实为 %.4f" % dipped)
+	for _i in range(5):
+		sim._accrue_supply_pressure(recov, 0.0)   # 补给恢复
+	_check(_approx(recov.morale, dipped) and not recov.starving,
+		"补给恢复后断粮惩罚应停止、饥饿清除、士气不再下降（%.4f→%.4f）" % [dipped, recov.morale])
+
+	# --- (d) 减员整人化：小额日债累积到满 1 人才扣，size 不因逐日 ceil 而放大流失 ---
+	var attrit := _make_army(704, 0, 400, 10); attrit.morale = 1.0   # 400 人日债 = 400*0.5/30 ≈ 6.667
+	sim._accrue_supply_pressure(attrit, 1.0)   # 第 1 天：债≈6.667 → 扣 6，余 0.667
+	_check(attrit.size == 394
+		and _approx(attrit.supply_debt, 400.0 * Simulation.STARVE_RATE / 30.0 - 6.0),
+		"400 人全断粮首日应减 6 人(floor(6.67))并留 0.667 债，实为 size=%d debt=%.4f" % [
+			attrit.size, attrit.supply_debt])
+
+	# --- (e) 部分缺粮：shortage=0.5 施压等于全断粮的一半（线性、可解释）---
+	var half := _make_army(705, 0, 1000, 10); half.morale = 1.0
+	sim._accrue_supply_pressure(half, 0.5)
+	_check(_approx(half.morale, 1.0 - 0.5 * per_day),
+		"半缺粮单日士气损失应为全断粮之半 %.5f，实为 %.5f" % [0.5 * per_day, 1.0 - half.morale])
+
+	# --- (f) 溃逃边沿：士气自正值跌破 0 的当日返回 true（触发溃逃），此后不重复触发 ---
+	var brk := _make_army(706, 0, 1000, 10)
+	brk.state = Army.State.MOVING
+	brk.morale = per_day * 0.5   # 不足一日损失，本日必然跌破 0
+	var triggered := sim._accrue_supply_pressure(brk, 1.0)
+	_check(triggered and _approx(brk.morale, 0.0),
+		"士气自正值当日跌至 0 应返回溃逃触发，实为 trigger=%s morale=%.5f" % [str(triggered), brk.morale])
+	var retrigger := sim._accrue_supply_pressure(brk, 1.0)
+	_check(not retrigger, "士气已在 0 的军队不应重复触发溃逃")
 	sim.free()
 
 # ------------------------------------------------------------------ 24. 攻城顺序：先正面战斗，后围城；守军排除当前城撤退
@@ -2073,7 +2249,7 @@ func _test_siege_battle_then_progress_order() -> void:
 	var occupier := (legal_owner + 1) % GameState.NATION_COUNT
 	gs.cities[siege_city].owner_nation = occupier
 	gs.recognized_city_owners[siege_city] = legal_owner
-	gs.cities[siege_city].defense = 1000
+	gs.cities[siege_city].fort_strength = 1000
 	var weak_reclaimer := _make_army(
 		702,
 		legal_owner,
@@ -2203,7 +2379,7 @@ func _test_siege_interruption_and_late_garrison() -> void:
 	var siege := gs.new_battle(Battle.Kind.SIEGE)
 	siege.city = city
 	siege.edge = road
-	siege.garrison_ref = 100
+	siege.siege_required = 100
 	siege.siege_progress = Combat.SIEGE_PROGRESS_REQUIRED
 	siege.side_a.append(attacker)
 	attacker.battle_id = siege.id
@@ -2234,8 +2410,8 @@ func _test_siege_interruption_and_late_garrison() -> void:
 		"城内仍有守军时城市不得易主，围城必须切回战斗阶段"
 	)
 	_check(
-		siege.garrison_ref == 1000,
-		"后到守军应更新围城守方兵力基准，实为 %d" % siege.garrison_ref
+		siege.siege_required == 100,
+		"item 6：后到守军不得抬高破城所需兵力（应保持工事换算值 100），实为 %d" % siege.siege_required
 	)
 
 	sim._advance_siege(siege)
@@ -2578,7 +2754,7 @@ func _test_retreat_contact_and_position_continuity() -> void:
 	var siege := gs.new_battle(Battle.Kind.SIEGE)
 	siege.city = target_city
 	siege.edge = gs.edge_of(0, 1)
-	siege.garrison_ref = 10
+	siege.siege_required = 10
 	siege.siege_progress = Combat.SIEGE_PROGRESS_REQUIRED
 	siege.side_a.append(lead)
 	siege.side_a.append(support)
@@ -2783,8 +2959,8 @@ func _test_ai_strategic_map_and_threat() -> void:
 		var route_edge := route_state.edge_of(pair[0], pair[1])
 		route_edge.max_manpower = 30000
 		route_edge.distance = 1
-	route_state.cities[1].defense = 1
-	route_state.cities[2].defense = 1
+	route_state.cities[1].fort_strength = 1
+	route_state.cities[2].fort_strength = 1
 	route_state.cities[2].is_capital = true
 	route_state.cities[2].has_warehouse = true
 	route_state.cities[2].is_food_hub = true
@@ -3620,20 +3796,22 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		city.owner_nation = 0
 	var target_id := 18
 	gs.cities[target_id].owner_nation = 1
-	gs.cities[target_id].defense = 100
+	gs.cities[target_id].fort_strength = 20
 	_set_single_warehouse(gs, 0, 0, 5000)
 	for neighbor in gs.neighbors(target_id):
 		gs.edge_of(target_id, neighbor).max_manpower = 30000
 	gs.edge_of(17, target_id).distance = 5
 	gs.edge_of(19, target_id).distance = 1
-	var holder_a := _make_army(940, 0, 400, 20, 20)
+	# 空城 fort=20 → 破城所需兵力 siege_required_manpower(20)=2000，协同门槛 = 0+2000×2.0=4000。
+	# 单军 2200 < 4000 不足以独攻，两面合计 4400 > 4000 达标 → 应触发协同进攻。
+	var holder_a := _make_army(940, 0, 2200, 20, 20)
 	holder_a.state = Army.State.HOLDING
 	holder_a.location_city = 17
 	holder_a.move_from = 17
 	holder_a.move_to = target_id
 	holder_a.move_progress = 0.5
 	holder_a.on_edge = true
-	var holder_b := _make_army(941, 0, 400, 20, 20)
+	var holder_b := _make_army(941, 0, 2200, 20, 20)
 	holder_b.state = Army.State.HOLDING
 	holder_b.location_city = 19
 	holder_b.move_from = 19
@@ -3703,7 +3881,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		city.owner_nation = 0
 	var guarded_target := 18
 	edge_guard_state.cities[guarded_target].owner_nation = 1
-	edge_guard_state.cities[guarded_target].defense = 1
+	edge_guard_state.cities[guarded_target].fort_strength = 1
 	var guarded_edge := edge_guard_state.edge_of(17, guarded_target)
 	guarded_edge.max_manpower = 30000
 	var understrength := _make_army(946, 0, 10000, 10, 10)
@@ -3770,7 +3948,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	for city in participant_state.cities:
 		city.owner_nation = 0
 	participant_state.cities[18].owner_nation = 1
-	participant_state.cities[18].defense = 1
+	participant_state.cities[18].fort_strength = 1
 	participant_state.cities[10].owner_nation = 1
 	for edge_pair in [[17, 18], [19, 18], [10, 18]]:
 		var participant_edge := participant_state.edge_of(edge_pair[0], edge_pair[1])
@@ -3853,7 +4031,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		breakout_state.edge_of(breakout_from, neighbor).max_manpower = (
 			15000 if neighbor == breakout_target else 0
 		)
-	breakout_state.cities[breakout_target].defense = 10
+	breakout_state.cities[breakout_target].fort_strength = 10
 	var starving := _make_army(942, 0, 1000, 10, 10)
 	starving.location_city = breakout_from
 	starving.move_from = breakout_from
@@ -3874,7 +4052,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		and breakout.reason.contains("背水突围"),
 		"完全断粮军不得原地等死，应优先攻击相邻包围节点：%s" % breakout.reason
 	)
-	breakout_state.cities[breakout_target].defense = 100
+	breakout_state.cities[breakout_target].fort_strength = 100
 	snapshot = StrategicMapSnapshot.build(view)
 	var hopeless_breakout := UtilityAI.choose(
 		view, snapshot, threat, ArmyCoordinator.new(), starving
@@ -4979,6 +5157,10 @@ func _test_diplomacy_state_and_ai() -> void:
 	var counter_target := 10
 	var counter_origin := counter_state.neighbors(counter_target)[0]
 	counter_state.cities[counter_target].owner_nation = 0
+	# item 6/7 反攻门槛（与 UtilityAI.assault_commit_threshold 同源）：
+	# = 歼灭守军预算(15000) + 维持封锁兵力(工事换算 × SIEGE_COMMIT_MARGIN)。
+	# fort=10 → siege_required_manpower(10)=1000；门槛 = 15000 + ceil(1000×2.0) = 17000。
+	counter_state.cities[counter_target].fort_strength = 10
 	var counter_route := counter_state.edge_of(
 		counter_origin,
 		counter_target
@@ -5051,7 +5233,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		counter_launched
 		and defender_attacking
-		and counter_required == 22500
+		and counter_required == 17000
 		and int(
 			preserved_diplomatic_objective.get(
 				"attacker",
@@ -5680,8 +5862,8 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 				balance_b,
 				GameState.DiplomaticRelation.NEUTRAL
 			)
-	balance_state.cities[0].defense = 0
-	balance_state.cities[1].defense = 0
+	balance_state.cities[0].fort_strength = 0
+	balance_state.cities[1].fort_strength = 0
 	balance_state.edge_of(0, 1).max_manpower = 30000
 	for balance_army_id in range(4):
 		var balance_army := _make_army(
@@ -6090,9 +6272,265 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	_check(
 		gs.nations[0].war_mobilization_target_troops == 0
 		and gs.nations[0].war_mobilization_until_day == -1,
-		"结束最后一场战争后必须清除动员目标"
+			"结束最后一场战争后必须清除动员目标"
 	)
 	sim.free()
+
+
+## [35] 阶段1 战斗公平性与守恒：胜负与 A/B 位置无关、伤亡整数守恒、平局、士气影响战力、拆分不改总量。
+func _test_combat_fairness_and_conservation() -> void:
+	print("[35] 战斗公平：A/B 无偏置 + 伤亡守恒 + 平局 + 士气战力 + 拆分等价")
+
+	# (a) A/B 位置无偏置：同一对不对称阵容，交换 side_a/side_b 与固定种子后，胜方应随之镜像交换。
+	#     强者(3000)对弱者(1000)：强者所在侧必胜，与它站 A 还是 B 无关。
+	var seed_list := [1, 7, 42, 123, 999]
+	var ab_consistent := true
+	for s in seed_list:
+		var rng1 := RandomNumberGenerator.new(); rng1.seed = s
+		var strong_a := _make_field_battle([_make_army(0, 0, 3000, 10)], [_make_army(1, 1, 1000, 10)], 0.0, 4)
+		_run_battle(strong_a, rng1)
+		var rng2 := RandomNumberGenerator.new(); rng2.seed = s
+		var strong_b := _make_field_battle([_make_army(0, 0, 1000, 10)], [_make_army(1, 1, 3000, 10)], 0.0, 4)
+		_run_battle(strong_b, rng2)
+		# 强者在 A 时 winner==1，强者在 B 时 winner==2；否则说明有位置偏置。
+		if strong_a.winner_side != 1 or strong_b.winner_side != 2:
+			ab_consistent = false
+	_check(ab_consistent, "强弱对决胜负必须随位置镜像交换，不得有 A/B 偏置")
+
+	# (b) decide_winner 纯函数对称性：交换输入，输出必须 1↔2 对称，平局(0)不变。
+	_check(Combat.decide_winner(true, false, false, false, 0.0, 0.0) == 2, "仅 A 被歼→B 胜")
+	_check(Combat.decide_winner(false, true, false, false, 0.0, 0.0) == 1, "仅 B 被歼→A 胜")
+	_check(Combat.decide_winner(false, false, true, false, 5.0, 3.0) == 2, "仅 A 溃→B 胜")
+	_check(Combat.decide_winner(false, false, false, true, 3.0, 5.0) == 1, "仅 B 溃→A 胜")
+	_check(Combat.decide_winner(true, true, false, false, 5.0, 3.0) == 1, "同时歼灭→残力高者(A)胜")
+	_check(Combat.decide_winner(true, true, false, false, 3.0, 5.0) == 2, "同时歼灭→残力高者(B)胜")
+	_check(Combat.decide_winner(true, true, false, false, 4.0, 4.0) == 0, "同时歼灭且残力相等→平局")
+	_check(Combat.decide_winner(false, false, true, true, 4.0, 4.0) == 0, "同时溃败且残力相等→平局")
+
+	# (c) 完全对称战斗：同质双方（同 size/atk/def/morale）应打成平局(0)，绝不默认 A 胜。
+	var sym_ties := 0
+	for s in seed_list:
+		var rng := RandomNumberGenerator.new(); rng.seed = s
+		var b := _make_field_battle([_make_army(0, 0, 1000, 10)], [_make_army(1, 1, 1000, 10)], 0.0, 4)
+		_run_battle(b, rng)
+		if b.winner_side == 0:
+			sym_ties += 1
+	_check(sym_ties == seed_list.size(), "完全对称战斗应全部判平局，实为 %d/%d" % [sym_ties, seed_list.size()])
+
+	# (d) 伤亡整数守恒（最大余数法）：sum == min(round(loss), Σsize)，每支 0<=c<=size。
+	var sizes: Array[int] = [1000, 3000, 500, 2500]
+	var pool := 7000
+	var cas := Combat.distribute_casualties(sizes, 1234.0)
+	var sum_cas := 0
+	var bounded := true
+	for i in range(sizes.size()):
+		sum_cas += cas[i]
+		if cas[i] < 0 or cas[i] > sizes[i]:
+			bounded = false
+	_check(sum_cas == 1234, "伤亡守恒：Σ应=1234，实为 %d" % sum_cas)
+	_check(bounded, "每支伤亡必须在 [0, size] 内")
+	# 溢出夹住：loss 超过总兵力 → 全歼，Σ==pool。
+	var cas_all := Combat.distribute_casualties(sizes, 99999.0)
+	var sum_all := 0
+	for c in cas_all:
+		sum_all += c
+	_check(sum_all == pool, "损失超总兵力应全歼 Σ==%d，实为 %d" % [pool, sum_all])
+
+	# (e) 拆分不改变总伤亡（防套利 item12）：1×10000 与 10×1000 承受同一 loss，总伤相等。
+	var loss_target := 3456.0
+	var single_sum := 0
+	for c in Combat.distribute_casualties([10000], loss_target):
+		single_sum += c
+	var split_sizes: Array[int] = []
+	for _i in range(10):
+		split_sizes.append(1000)
+	var split_sum := 0
+	for c in Combat.distribute_casualties(split_sizes, loss_target):
+		split_sum += c
+	_check(single_sum == split_sum, "拆分伤亡总量应一致：单支%d vs 10支%d" % [single_sum, split_sum])
+
+	# (f) 士气影响战力：combat_efficiency 单调、满士气=1.0、下界=MIN_COMBAT_EFFICIENCY。
+	_check(_approx(Combat.combat_efficiency(1.0), 1.0), "满士气效率应=1.0")
+	_check(_approx(Combat.combat_efficiency(0.0), Combat.MIN_COMBAT_EFFICIENCY), "零士气效率应=下界")
+	_check(Combat.combat_efficiency(0.5) > Combat.combat_efficiency(0.2), "效率随士气单调递增")
+	# 同兵力同装备，满士气攻方一回合杀伤应 ≥ 疲劳攻方（士气折算攻击力，而非第二血条）。
+	var full_att := _make_army(0, 0, 2000, 10)             # morale 默认 1.0
+	var tired_att := _make_army(0, 0, 2000, 10); tired_att.morale = 0.3
+	var loss_full := _one_round_side_b_loss([full_att], [_make_army(2, 1, 3000, 10)], 90)
+	var loss_tired := _one_round_side_b_loss([tired_att], [_make_army(2, 1, 3000, 10)], 90)
+	_check(loss_full > loss_tired, "满士气攻方杀伤(%d)应高于疲劳攻方(%d)（士气折算战力）" % [loss_full, loss_tired])
+
+	# (g) 正面宽度/预备队（item 5）：窄路(frontage=5000)上大军(20000)无法全数展开。
+	_check(Combat.frontage_engaged_ratio(20000, 5000) == 0.25, "2万兵挤5千正面→参战比例应=0.25")
+	_check(Combat.frontage_engaged_ratio(3000, 5000) == 1.0, "兵力小于正面→全员参战")
+	# 拆分不增加总正面（item12）：1×20000 与 20×1000 在同一窄路，一回合对守军总杀伤应一致。
+	var single_army := _make_field_battle([_make_army(0, 0, 20000, 10)], [_make_army(99, 1, 20000, 10)], 0.0, 4)
+	single_army.edge.max_manpower = 5000
+	var split_list: Array = []
+	for k in range(20):
+		split_list.append(_make_army(k, 0, 1000, 10))
+	var split_army := _make_field_battle(split_list, [_make_army(99, 1, 20000, 10)], 0.0, 4)
+	split_army.edge.max_manpower = 5000
+	var rng_s1 := RandomNumberGenerator.new(); rng_s1.seed = 3
+	var rng_s2 := RandomNumberGenerator.new(); rng_s2.seed = 3
+	var sb1 := single_army.side_size(single_army.side_b)
+	var sb2 := split_army.side_size(split_army.side_b)
+	Combat.resolve_round(single_army, rng_s1)
+	Combat.resolve_round(split_army, rng_s2)
+	var single_dmg := sb1 - single_army.side_size(single_army.side_b)
+	var split_dmg := sb2 - split_army.side_size(split_army.side_b)
+	_check(absi(single_dmg - split_dmg) <= 2, "窄路拆分总杀伤应一致：单支%d vs 拆分%d" % [single_dmg, split_dmg])
+	# 窄路一回合杀伤应显著低于宽路：大军被正面卡住，只有前线部队出力。
+	var wide := _make_field_battle([_make_army(0, 0, 20000, 10)], [_make_army(2, 1, 20000, 10)], 0.0, 4)
+	wide.edge.max_manpower = 100000        # 宽路：全员展开
+	var narrow := _make_field_battle([_make_army(0, 0, 20000, 10)], [_make_army(2, 1, 20000, 10)], 0.0, 4)
+	narrow.edge.max_manpower = 5000        # 窄路：仅 5000 展开
+	var rng_w := RandomNumberGenerator.new(); rng_w.seed = 7
+	var rng_n := RandomNumberGenerator.new(); rng_n.seed = 7
+	var wide_before := wide.side_size(wide.side_b)
+	var narrow_before := narrow.side_size(narrow.side_b)
+	Combat.resolve_round(wide, rng_w)
+	Combat.resolve_round(narrow, rng_n)
+	var wide_loss := wide_before - wide.side_size(wide.side_b)
+	var narrow_loss := narrow_before - narrow.side_size(narrow.side_b)
+	_check(narrow_loss < wide_loss, "窄路杀伤(%d)应显著低于宽路(%d)（预备队不出力）" % [narrow_loss, wide_loss])
+	# 预备队不受伤亡：窄路一回合伤亡不得超过前线参战兵力 5000。
+	_check(narrow_loss <= 5000, "窄路单回合伤亡(%d)不得超过前线正面 5000（预备队不受伤）" % narrow_loss)
+
+	# (h) 军队 id 不改变战斗结果（item 16 对称性）：完全相同的阵容，仅把 id 整体错开，
+	#     多回合解算结果必须逐位一致——战斗数学不得依赖 id。
+	var rng_id1 := RandomNumberGenerator.new(); rng_id1.seed = 55
+	var low_ids := _make_field_battle([_make_army(0, 0, 4000, 11, 9)], [_make_army(1, 1, 3800, 10, 10)], 0.2, 4)
+	var l1 := _run_battle(low_ids, rng_id1)
+	var rng_id2 := RandomNumberGenerator.new(); rng_id2.seed = 55
+	var high_ids := _make_field_battle([_make_army(500, 0, 4000, 11, 9)], [_make_army(501, 1, 3800, 10, 10)], 0.2, 4)
+	var l2 := _run_battle(high_ids, rng_id2)
+	_check(
+		low_ids.winner_side == high_ids.winner_side
+		and low_ids.side_size(low_ids.side_a) == high_ids.side_size(high_ids.side_a)
+		and low_ids.side_size(low_ids.side_b) == high_ids.side_size(high_ids.side_b)
+		and l1 == l2,
+		"军队 id 整体偏移不得改变战斗结果（胜负/存活/回合数逐位一致）"
+	)
+
+	# (i) 一侧内部创建/加入顺序不改变战斗结果（item 16 + 本轮镜像修复的核心不变量）：
+	#     同一多重集 {3000,1000,2000} 以正序与逆序装入 side_a，对同一 side_b 打同种子多回合，
+	#     结果必须逐位一致。浮点求和不满足结合律，靠 resolve_round 内的物理键规范排序消除顺序依赖。
+	var rng_o1 := RandomNumberGenerator.new(); rng_o1.seed = 88
+	var fwd := _make_field_battle(
+		[_make_army(0, 0, 3000, 10, 10), _make_army(1, 0, 1000, 10, 10), _make_army(2, 0, 2000, 10, 10)],
+		[_make_army(9, 1, 6100, 10, 10)], 0.1, 4
+	)
+	var of1 := _run_battle(fwd, rng_o1)
+	var rng_o2 := RandomNumberGenerator.new(); rng_o2.seed = 88
+	var rev := _make_field_battle(
+		[_make_army(0, 0, 2000, 10, 10), _make_army(1, 0, 1000, 10, 10), _make_army(2, 0, 3000, 10, 10)],
+		[_make_army(9, 1, 6100, 10, 10)], 0.1, 4
+	)
+	var of2 := _run_battle(rev, rng_o2)
+	_check(
+		fwd.winner_side == rev.winner_side
+		and fwd.side_size(fwd.side_a) == rev.side_size(rev.side_a)
+		and fwd.side_size(fwd.side_b) == rev.side_size(rev.side_b)
+		and of1 == of2,
+		"同一多重集不同装入顺序，战斗结果必须逐位一致（浮点求和顺序无关）"
+	)
+
+	# (j) 共享战场骰下的镜像单回合对称（item 8「共享战场随机因素」）：同质双方注入同一 shared_roll，
+	#     无论骰值取 DICE_MIN..DICE_MAX 哪一档，单回合后两侧 size 与 morale 必须严格对称。
+	var shared_roll_symmetric := true
+	for roll in range(Combat.DICE_MIN, Combat.DICE_MAX + 1):
+		var ma := _make_army(0, 0, 5000, 10, 10)
+		var mb := _make_army(1, 1, 5000, 10, 10)
+		var mbat := _make_field_battle([ma], [mb], 0.3, 4)
+		Combat.resolve_round(mbat, RandomNumberGenerator.new(), roll)
+		if ma.size != mb.size or not is_equal_approx(ma.morale, mb.morale):
+			shared_roll_symmetric = false
+	_check(shared_roll_symmetric, "共享战场骰任一档位下，同质双方单回合结果必须严格对称")
+
+	# (k) 共享骰的确定性裁决（镜像公平优先的既定取舍，item 8 独立侧骰已放弃）：
+	#     shared_roll 同乘双方火力，故骰值只改变战斗「烈度/速度」、不改变相对胜负。
+	#     后果：给定兵力比，单场野战胜负是确定的——5% 兵力优势方在所有种子下必胜（无单场逆转）。
+	#     这是「镜像公平 > 单场戏剧性」抉择的直接代价，在此固化为回归门槛，使该取舍显式可见。
+	#     宏观戏剧性/局部逆转仍存在于战略层（骰值改变战斗时序→影响哪些战斗发生→领土交换）。
+	var adv_wins := 0
+	var total_battles := 200
+	for s in range(total_battles):
+		var rng := RandomNumberGenerator.new(); rng.seed = 1000 + s
+		var adv := _make_field_battle([_make_army(0, 0, 2100, 10, 10)], [_make_army(1, 1, 2000, 10, 10)], 0.1, 4)
+		_run_battle(adv, rng)
+		if adv.winner_side == 1:
+			adv_wins += 1
+	_check(
+		adv_wins == total_battles,
+		"共享骰下 5%%兵力优势方应确定性全胜(200/200)，实为 %d——若非全胜说明骰值错误地改变了相对胜负" % adv_wins
+	)
+
+
+## [36] item15 结构化战斗日志：默认关闭零记录、启用后字段完整可读、且不改变战斗结果（镜像安全）。
+func _test_structured_battle_log() -> void:
+	print("[36] 结构化战斗日志：可关闭 + 字段完整 + 不影响战斗数值")
+
+	# (a) 默认关闭：跑一场战斗不产生任何日志。
+	Combat.clear_battle_log()
+	Combat.battle_log_enabled = false
+	var rng0 := RandomNumberGenerator.new(); rng0.seed = 7
+	var quiet := _make_field_battle([_make_army(0, 0, 2000, 10)], [_make_army(1, 1, 2000, 10)], 0.2, 4)
+	_run_battle(quiet, rng0)
+	_check(Combat.battle_log.is_empty(), "日志默认关闭时不得产生任何记录，实为 %d 条" % Combat.battle_log.size())
+
+	# (b) 启用后：每回合一条记录，字段齐全（对照方案书 item15 字段清单），末条 winner 与战斗一致。
+	Combat.clear_battle_log()
+	Combat.battle_log_enabled = true
+	var rng1 := RandomNumberGenerator.new(); rng1.seed = 7
+	var logged := _make_field_battle([_make_army(0, 0, 3000, 12)], [_make_army(1, 1, 2000, 10)], 0.3, 4)
+	logged.id = 77
+	var rounds := _run_battle(logged, rng1)
+	_check(Combat.battle_log.size() == rounds,
+		"启用日志后记录条数应等于回合数 %d，实为 %d" % [rounds, Combat.battle_log.size()])
+	var required_keys := [
+		"battle_id", "round_no", "kind", "participants_a", "participants_b",
+		"frontline_strength_a", "reserve_strength_a", "effective_attack_a", "effective_defense_a",
+		"shared_random_modifier", "side_random_modifier", "terrain_modifier_a", "supply_modifier_a",
+		"casualties_a", "morale_before_a", "morale_after_a", "reinforcements_arrived_a",
+		"rout_reason", "winner_or_draw",
+	]
+	var first: Dictionary = Combat.battle_log[0]
+	var keys_ok := true
+	for k in required_keys:
+		if not first.has(k):
+			keys_ok = false
+	_check(keys_ok, "日志记录应包含 item15 规定的全部字段，缺失键；实有 %s" % str(first.keys()))
+	_check(int(first["battle_id"]) == 77, "日志应携带 battle_id，实为 %s" % str(first["battle_id"]))
+	var last: Dictionary = Combat.battle_log[Combat.battle_log.size() - 1]
+	_check(int(last["winner_or_draw"]) == logged.winner_side and String(last["rout_reason"]) != "none",
+		"末条日志 winner/rout_reason 应与战斗结束态一致：winner=%s reason=%s" % [
+			str(last["winner_or_draw"]), str(last["rout_reason"])])
+	# morale_after 应随回合单调不增（士气侵蚀），且首回合 morale_before≈1.0。
+	_check(_approx(float(first["morale_before_a"]), 1.0),
+		"满编新军首回合 morale_before 应≈1.0，实为 %.4f" % float(first["morale_before_a"]))
+
+	# (c) 镜像安全：开/关日志跑同种子同阵容，战斗结果逐位一致（日志只读、不改数值）。
+	Combat.battle_log_enabled = false
+	var rng_off := RandomNumberGenerator.new(); rng_off.seed = 12345
+	var b_off := _make_field_battle([_make_army(0, 0, 2500, 11)], [_make_army(1, 1, 2300, 10)], 0.25, 4)
+	_run_battle(b_off, rng_off)
+	var off_a := b_off.side_size(b_off.side_a)
+	var off_b := b_off.side_size(b_off.side_b)
+	Combat.clear_battle_log()
+	Combat.battle_log_enabled = true
+	var rng_on := RandomNumberGenerator.new(); rng_on.seed = 12345
+	var b_on := _make_field_battle([_make_army(0, 0, 2500, 11)], [_make_army(1, 1, 2300, 10)], 0.25, 4)
+	_run_battle(b_on, rng_on)
+	_check(b_on.side_size(b_on.side_a) == off_a and b_on.side_size(b_on.side_b) == off_b
+		and b_on.winner_side == b_off.winner_side,
+		"开启日志不得改变战斗结果：off=(%d,%d,w%d) on=(%d,%d,w%d)" % [
+			off_a, off_b, b_off.winner_side,
+			b_on.side_size(b_on.side_a), b_on.side_size(b_on.side_b), b_on.winner_side])
+
+	# 收尾：恢复默认关闭态，避免污染其他测试。
+	Combat.battle_log_enabled = false
+	Combat.clear_battle_log()
 
 
 # ------------------------------------------------------------------ 工厂辅助
@@ -6166,14 +6604,14 @@ func _make_field_battle(side_a: Array, side_b: Array, danger: float, distance: i
 	return b
 
 
-## 构造一场攻城：攻方在城墙(dist=L)、守军在城中(dist=0)，守军享 garrison 城防加成。
-func _make_siege_battle(attackers: Array, defender: Army, garrison: int, distance: int) -> Battle:
+## 构造一场攻城：攻方在城墙(dist=L)、守军在城中(dist=0)，守军享 fort_strength 城防加成。
+func _make_siege_battle(attackers: Array, defender: Army, fort_strength: int, distance: int) -> Battle:
 	var b := Battle.new()
 	b.id = 0
 	b.kind = Battle.Kind.SIEGE
 	b.edge = _make_edge(0.0, distance)
 	b.city = City.new()
-	b.city.defense = garrison
+	b.city.fort_strength = fort_strength
 	b.has_garrison = true              # side_b 为驻城守军，享城防加成（combat 按此 gate）
 	b.contact_dist_a = float(distance)
 	b.contact_dist_b = 0.0
@@ -6192,8 +6630,10 @@ func _run_battle(battle: Battle, rng: RandomNumberGenerator) -> int:
 	return guard
 
 
-## 纯围城（无守军）：side_b 空、has_garrison=false。garrison_ref 为 5× 门槛分母。
-func _make_pure_siege(attacker: Army, defense: int, distance: int, garrison_ref: int = -1) -> Battle:
+## 纯围城（无守军）：side_b 空、has_garrison=false。
+## fort_strength = 工事强度（战力量纲）；siege_required = 破城所需兵力（兵力量纲，围城比值分母）。
+## 未显式指定 siege_required 时，按空城口径由工事换算（Combat.siege_required_manpower）。
+func _make_pure_siege(attacker: Army, fort_strength: int, distance: int, siege_required: int = -1) -> Battle:
 	var b := Battle.new()
 	b.id = 0
 	b.kind = Battle.Kind.SIEGE
@@ -6201,10 +6641,13 @@ func _make_pure_siege(attacker: Army, defense: int, distance: int, garrison_ref:
 	b.city = City.new()
 	b.city.id = 0
 	b.city.owner_nation = 9          # 中立占位，_capture_city 会改写
-	b.city.defense = defense
+	b.city.fort_strength = fort_strength
 	b.city.food_storage = 100        # 有粮：不触发粮尽衰减
 	b.has_garrison = false
-	b.garrison_ref = garrison_ref if garrison_ref >= 0 else defense   # 默认空城以城防为基准
+	b.siege_required = (
+		siege_required if siege_required >= 0
+		else Combat.siege_required_manpower(fort_strength)
+	)
 	b.contact_dist_a = float(distance)
 	b.side_a.append(attacker)
 	return b

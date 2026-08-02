@@ -57,7 +57,7 @@ func _compute_city_values() -> void:
 		var value := (
 			float(city.gold_per_month) / float(max_gold)
 			+ float(city.food_per_half_year) / float(max_food)
-			+ float(city.defense) / 30.0 * 0.25
+			+ float(city.fort_strength) / 30.0 * 0.25
 		)
 		if city.is_capital:
 			value += 5.0
@@ -345,7 +345,7 @@ func _finalize_edge_values() -> void:
 		if (
 			edge.max_manpower > 0
 			and edge.danger
-				>= Combat.CHOKEPOINT_DANGER_THRESHOLD
+				>= Combat.CHOKEPOINT_DANGER_ONSET
 		):
 			value += 4.0
 		value += 2.0 * float(potential_edge_threat.get(key, 0.0))
