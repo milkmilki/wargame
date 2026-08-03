@@ -9,9 +9,18 @@ func _init() -> void:
 	var total_start := Time.get_ticks_msec()
 	var failed := false
 	var total_mobilization_armies := 0
-	var total_captures := 0
+	var total_net_captures := 0
+	var total_turnovers := 0
 	var total_war_declarations := 0
 	var total_offensives := 0
+	var total_full_preparation_offensives := 0
+	var total_post_capture_attacks := 0
+	var total_post_capture_edge_holds := 0
+	var total_post_capture_city_holds := 0
+	var legacy_capture_fort := (
+		OS.get_environment("AI_LONGRUN_LEGACY_CAPTURE_FORT")
+			== "1"
+	)
 	for world_seed in SEEDS:
 		var state := GameState.new()
 		state.generate_world(world_seed)
@@ -21,12 +30,30 @@ func _init() -> void:
 		var initial_owners: Array[int] = []
 		for city in state.cities:
 			initial_owners.append(city.owner_nation)
+		var current_owners := initial_owners.duplicate()
+		var turnovers := 0
 		var offensive_events := {}
+		var full_preparation_events := {}
+		var post_capture_attacks := 0
+		var post_capture_edge_holds := 0
+		var post_capture_city_holds := 0
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(DAYS):
 			if state.winner != -1:
 				break
 			simulation._advance_day()
+			var reverted_legacy_fort := false
+			for city in state.cities:
+				if city.owner_nation == current_owners[city.id]:
+					continue
+				turnovers += 1
+				current_owners[city.id] = city.owner_nation
+				if legacy_capture_fort:
+					city.fort_strength = 10
+					city.fort_last_capture_day = -1
+					reverted_legacy_fort = true
+			if reverted_legacy_fort:
+				state.fortification_revision += 1
 			for event in state.campaign_visual_events:
 				var event_key := "%d:%d:%d:%d" % [
 					int(event["start_day"]),
@@ -35,6 +62,36 @@ func _init() -> void:
 					int(event["wave"]),
 				]
 				offensive_events[event_key] = true
+			for army in state.armies:
+				if (
+					army.ai_order_created_day == state.day
+					and army.ai_order_reason.contains(
+						"满准备攻势第二阶段"
+					)
+				):
+					if army.ai_action == ActionCandidate.Kind.ATTACK:
+						post_capture_attacks += 1
+					elif army.ai_order_reason.contains(
+						"前出驻守"
+					):
+						post_capture_edge_holds += 1
+					else:
+						post_capture_city_holds += 1
+				if (
+					army.ai_order_created_day == state.day
+					and army.ai_action
+						== ActionCandidate.Kind.ATTACK
+					and is_equal_approx(
+						army.offensive_attack_multiplier,
+						Simulation.OFFENSIVE_BONUS_MAX_MULTIPLIER
+					)
+				):
+					full_preparation_events[
+						"%d:%d" % [
+							state.day,
+							army.owner_nation,
+						]
+					] = true
 		var captures := 0
 		for city in state.cities:
 			if city.owner_nation != initial_owners[city.id]:
@@ -127,17 +184,25 @@ func _init() -> void:
 					border_armies += 1
 		var elapsed := Time.get_ticks_msec() - seed_start
 		total_mobilization_armies += mobilization_armies
-		total_captures += captures
+		total_net_captures += captures
+		total_turnovers += turnovers
 		total_war_declarations += int(
 			diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR]
 		)
 		total_offensives += offensive_events.size()
+		total_full_preparation_offensives += (
+			full_preparation_events.size()
+		)
+		total_post_capture_attacks += post_capture_attacks
+		total_post_capture_edge_holds += post_capture_edge_holds
+		total_post_capture_city_holds += post_capture_city_holds
 		print(
 			(
 				"seed=%d day=%d alive=%d armies=%d troops=%d manpower=%d food=%d "
-				+ "starving=%d captures=%d ordered=%d invalid=%d "
+				+ "starving=%d net_captures=%d turnovers=%d ordered=%d invalid=%d "
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
-				+ "offensives=%d mobilized=%d resource_peace=%d "
+				+ "offensives=%d full_prep=%d phase2=%d/%d/%d "
+				+ "mobilized=%d resource_peace=%d "
 				+ "ally=%d leave=%d "
 				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d "
 				+ "commit_failures=%d ms=%d"
@@ -152,6 +217,7 @@ func _init() -> void:
 				food,
 				starving,
 				captures,
+				turnovers,
 				ordered,
 				invalid,
 				diplomatic_counts[DiplomacyAI.Action.MAKE_PEACE],
@@ -160,6 +226,10 @@ func _init() -> void:
 				diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR],
 				objective_declarations,
 				offensive_events.size(),
+				full_preparation_events.size(),
+				post_capture_attacks,
+				post_capture_edge_holds,
+				post_capture_city_holds,
 				mobilization_armies,
 				resource_peaces,
 				diplomatic_counts[DiplomacyAI.Action.FORM_ALLIANCE],
@@ -192,17 +262,27 @@ func _init() -> void:
 			failed = true
 		simulation.free()
 	if (
-		total_captures == 0
+		total_turnovers == 0
 		or total_war_declarations == 0
 		or total_offensives <= total_war_declarations
 	):
 		failed = true
 	print(
-		"total_captures=%d total_wars=%d total_offensives=%d total_mobilized=%d"
+		(
+			"mode=%s total_net_captures=%d total_turnovers=%d "
+			+ "total_wars=%d total_offensives=%d total_full_prep=%d "
+			+ "total_phase2=%d/%d/%d total_mobilized=%d"
+		)
 		% [
-			total_captures,
+			"legacy_fort" if legacy_capture_fort else "recovery_fort",
+			total_net_captures,
+			total_turnovers,
 			total_war_declarations,
 			total_offensives,
+			total_full_preparation_offensives,
+			total_post_capture_attacks,
+			total_post_capture_edge_holds,
+			total_post_capture_city_holds,
 			total_mobilization_armies,
 		]
 	)

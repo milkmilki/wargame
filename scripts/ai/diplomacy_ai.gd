@@ -25,9 +25,17 @@ const MIN_NEUTRAL_DAYS: int = 180
 const MIN_ALLIANCE_DAYS: int = 360
 const MAX_CONCURRENT_WARS: int = 1
 const MAX_DEFENSIVE_ALLIES: int = 1
-const PEACE_ACCEPT_SCORE: float = 1.25
+const PEACE_PROPOSE_SCORE: float = 1.25
+const PEACE_ACCEPT_SCORE: float = 0.60
+const PEACE_COMBINED_SCORE: float = 2.50
+const PEACE_OCCUPATION_GAIN_VALUE: float = 0.35
+const PEACE_OCCUPATION_LOSS_VALUE: float = 0.25
+const PEACE_OBJECTIVE_GAIN_VALUE: float = 0.50
+const PEACE_OBJECTIVE_LOSS_VALUE: float = 0.35
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
-const WAR_DECLARE_SCORE: float = 1.20
+const WAR_DECLARE_SCORE: float = 1.00
+const RECENT_CAPTURE_OBJECTIVE_BONUS: float = 4.0
+const RECENT_RECLAMATION_OBJECTIVE_BONUS: float = 20.0
 const LEAVE_ALLIANCE_SCORE: float = 0.90
 const CAMPAIGN_RESERVE_MONTHS: int = 6
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
@@ -70,6 +78,11 @@ static func peace_willingness(state: GameState, nation_id: int, enemy_id: int) -
 	var extra_wars := maxi(state.wars_of(nation_id).size() - 1, 0)
 	var no_front := 1.0 if _frontier_edges(state, nation_id, enemy_id) == 0 else 0.0
 	var crises := peace_reasons(state, nation_id, enemy_id)
+	var aggression := clampf(
+		state.nations[nation_id].ai_aggression,
+		0.5,
+		1.5
+	)
 	return (
 		float(war_days) / 360.0
 		+ maxf(ratio - 1.0, 0.0) * 1.5
@@ -77,7 +90,136 @@ static func peace_willingness(state: GameState, nation_id: int, enemy_id: int) -
 		+ float(extra_wars) * 0.75
 		+ no_front
 		+ float(crises.size()) * 1.25
+		- (aggression - 1.0) * 0.50
 	)
+
+
+static func peace_assessment(
+	state: GameState,
+	nation_a: int,
+	nation_b: int
+) -> Dictionary:
+	if not state.is_enemy(nation_a, nation_b):
+		return {
+			"acceptable": false,
+			"score_a": -INF,
+			"score_b": -INF,
+			"combined_score": -INF,
+			"proposer": -1,
+			"responder": -1,
+		}
+	var willingness_a := peace_willingness(
+		state,
+		nation_a,
+		nation_b
+	)
+	var willingness_b := peace_willingness(
+		state,
+		nation_b,
+		nation_a
+	)
+	var incentive_a := _peace_settlement_incentive(
+		state,
+		nation_a,
+		nation_b
+	)
+	var incentive_b := _peace_settlement_incentive(
+		state,
+		nation_b,
+		nation_a
+	)
+	var score_a := willingness_a + incentive_a
+	var score_b := willingness_b + incentive_b
+	var proposer := -1
+	var responder := -1
+	if not is_equal_approx(score_a, score_b):
+		proposer = nation_a if score_a > score_b else nation_b
+		responder = nation_b if proposer == nation_a else nation_a
+	var proposal_score := maxf(score_a, score_b)
+	var response_score := minf(score_a, score_b)
+	var combined_score := score_a + score_b
+	var war_days := state.day - state.relation_since(
+		nation_a,
+		nation_b
+	)
+	var forced := war_days >= FORCED_PEACE_DAYS
+	return {
+		"acceptable": (
+			forced
+			or (
+				war_days >= MIN_WAR_DAYS
+				and proposal_score >= PEACE_PROPOSE_SCORE
+				and response_score >= PEACE_ACCEPT_SCORE
+				and combined_score >= PEACE_COMBINED_SCORE
+			)
+		),
+		"forced": forced,
+		"score_a": score_a,
+		"score_b": score_b,
+		"willingness_a": willingness_a,
+		"willingness_b": willingness_b,
+		"incentive_a": incentive_a,
+		"incentive_b": incentive_b,
+		"combined_score": combined_score,
+		"proposer": proposer,
+		"responder": responder,
+	}
+
+
+static func _peace_settlement_incentive(
+	state: GameState,
+	nation_id: int,
+	enemy_id: int
+) -> float:
+	var incentive := 0.0
+	for city in state.cities:
+		var legal_owner := state.recognized_owner_of(city.id)
+		if legal_owner not in [nation_id, enemy_id]:
+			continue
+		var occupying_side := -1
+		if city.occupation_sponsor_nation in [
+			nation_id,
+			enemy_id,
+		]:
+			occupying_side = city.occupation_sponsor_nation
+		elif (
+			city.owner_nation == nation_id
+			or state.is_allied(city.owner_nation, nation_id)
+		):
+			occupying_side = nation_id
+		elif (
+			city.owner_nation == enemy_id
+			or state.is_allied(city.owner_nation, enemy_id)
+		):
+			occupying_side = enemy_id
+		if occupying_side < 0 or occupying_side == legal_owner:
+			continue
+		var city_value := (
+			1.0
+			+ (1.0 if city.is_capital else 0.0)
+			+ (0.5 if city.has_warehouse else 0.0)
+			+ (0.5 if city.is_food_hub else 0.0)
+			+ (0.5 if city.is_manpower_hub else 0.0)
+		)
+		if occupying_side == nation_id and legal_owner == enemy_id:
+			incentive += city_value * PEACE_OCCUPATION_GAIN_VALUE
+		elif occupying_side == enemy_id and legal_owner == nation_id:
+			incentive += city_value * PEACE_OCCUPATION_LOSS_VALUE
+	var objective := state.war_objective(nation_id, enemy_id)
+	if not objective.is_empty():
+		var objective_city := int(objective.get("city_id", -1))
+		var attacker := int(objective.get("attacker", -1))
+		if (
+			objective_city >= 0
+			and objective_city < state.cities.size()
+			and state.cities[objective_city].owner_nation == attacker
+		):
+			incentive += (
+				PEACE_OBJECTIVE_GAIN_VALUE
+				if attacker == nation_id
+				else PEACE_OBJECTIVE_LOSS_VALUE
+			)
+	return incentive
 
 
 static func peace_reasons(
@@ -145,8 +287,11 @@ static func peace_reasons(
 			and state.cities[objective_city].owner_nation == attacker
 		):
 			reasons.append(
-				"战争目标城市 %d 已被国%d控制"
-				% [objective_city, attacker]
+				(
+					"本国战争目标城市 %d 已被控制"
+					if attacker == nation_id
+					else "敌国战争目标城市 %d 已失守"
+				) % objective_city
 			)
 	return reasons
 
@@ -696,7 +841,25 @@ static func select_war_objective(
 			+ (4.0 if city.is_manpower_hub else 0.0)
 			+ _target_cut_ratio(state, city.id, target_id) * 4.0
 		)
-		var value := gold_value + food_value + manpower_value + strategic_value
+		var fort_vulnerability := Simulation.city_fort_vulnerability(
+			city,
+			state.day
+		)
+		var legal_reclamation := (
+			state.recognized_owner_of(city.id) == nation_id
+		)
+		var contest_value := fort_vulnerability * (
+			RECENT_RECLAMATION_OBJECTIVE_BONUS
+			if legal_reclamation
+			else RECENT_CAPTURE_OBJECTIVE_BONUS
+		)
+		var value := (
+			gold_value
+			+ food_value
+			+ manpower_value
+			+ strategic_value
+			+ contest_value
+		)
 		if (
 			best.is_empty()
 			or value > float(best["value"])
@@ -714,18 +877,28 @@ static func select_war_objective(
 				"city_id": city.id,
 				"value": value,
 				"reason": (
-					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f）"
+					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、争夺值%.2f）"
 					% [
 						city.id,
 						(
 							"【粮食核心】" if city.is_food_hub else ""
 						) + (
 							"【人口核心】" if city.is_manpower_hub else ""
+						) + (
+							"【近期失地】"
+							if legal_reclamation
+								and fort_vulnerability > 0.0
+							else (
+								"【城防受损】"
+								if fort_vulnerability > 0.0
+								else ""
+							)
 						),
 						city.gold_per_month,
 						city.food_per_half_year,
 						city.manpower_per_month,
 						strategic_value,
+						contest_value,
 					]
 				),
 			}
@@ -775,13 +948,11 @@ static func _collect_peace_actions(
 			var war_days := state.day - state.relation_since(a, b)
 			if war_days < MIN_WAR_DAYS:
 				continue
-			var score_a := peace_willingness(state, a, b)
-			var score_b := peace_willingness(state, b, a)
-			if (
-				war_days < FORCED_PEACE_DAYS
-				and (score_a < PEACE_ACCEPT_SCORE or score_b < PEACE_ACCEPT_SCORE)
-			):
+			var assessment := peace_assessment(state, a, b)
+			if not bool(assessment["acceptable"]):
 				continue
+			var score_a := float(assessment["score_a"])
+			var score_b := float(assessment["score_b"])
 			var reasons_a := peace_reasons(state, a, b)
 			var reasons_b := peace_reasons(state, b, a)
 			var reason_a := (
@@ -798,9 +969,19 @@ static func _collect_peace_actions(
 				"kind": Action.MAKE_PEACE,
 				"a": a,
 				"b": b,
-				"score": minf(score_a, score_b),
-				"reason": "战争持续%d天；国%d：%s；国%d：%s；意愿%.2f/%.2f" % [
-					war_days, a, reason_a, b, reason_b, score_a, score_b,
+				"score": float(assessment["combined_score"]) * 0.5,
+				"reason": (
+					"战争持续%d天；国%d：%s；国%d：%s；"
+					+ "结算后意愿%.2f/%.2f，合计%.2f"
+				) % [
+					war_days,
+					a,
+					reason_a,
+					b,
+					reason_b,
+					score_a,
+					score_b,
+					assessment["combined_score"],
 				],
 			})
 			committed[a] = true
@@ -1206,9 +1387,25 @@ static func required_assault_troops(
 			defenders += army.size
 	# 攻城派兵门槛（item 6/7 唯一真源，与 UtilityAI 同源）：歼灭守军 + 维持封锁×余量。
 	# 形成可接受的局部优势即发起，持久围城的连续推进曲线由战斗状态机承担（item 7：无 5× 硬门槛）。
-	var siege_requirement := UtilityAI.assault_commit_threshold(
-		defenders, state.cities[objective_city].fort_strength
+	var fort_strength := state.cities[
+		objective_city
+	].fort_strength
+	var recent_legal_reclamation := (
+		state.recognized_owner_of(objective_city) == nation_id
+		and Simulation.city_fort_vulnerability(
+			state.cities[objective_city],
+			state.day
+		) > 0.0
 	)
+	if recent_legal_reclamation:
+		# 近期失地在击败占领军后会直接完成法理收复，不需要再次破坏本国工事。
+		fort_strength = 0
+	var siege_requirement := UtilityAI.assault_commit_threshold(
+		defenders,
+		fort_strength
+	)
+	if recent_legal_reclamation:
+		return siege_requirement
 	return maxi(
 		siege_requirement,
 		int(ceil(float(_troop_count(state, nation_id)) * WAR_PREPARATION_FORCE_SHARE))

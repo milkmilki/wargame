@@ -22,6 +22,10 @@ var war_preparation_unready_since_day: int = -1
 var campaign_last_offensive_day: int = -1
 var campaign_next_offensive_day: int = -1
 var campaign_offensive_count: int = 0
+## 当前国家级攻势准备起点；普通波次可提前发动，僵局波次最多准备 180 天。
+var campaign_preparation_started_day: int = -1
+## 正在等待满准备的目标城；-1 表示当前没有僵局总攻计划。
+var campaign_full_preparation_target_city: int = -1
 ## 当前波次的具体战役计划：army_id -> target_city_id。
 var campaign_attack_assignments: Dictionary = {}
 ## 持续攻势梯队：army_id -> echelon_index；每个目标从第 0 梯队依次投入。
@@ -32,8 +36,14 @@ var campaign_active_echelons: Dictionary = {}
 var campaign_launched_armies: Dictionary = {}
 ## target_city_id -> 当前梯队开始日，供持续攻势状态与调试展示使用。
 var campaign_echelon_started_days: Dictionary = {}
-## 整轮攻势共享的备战倍率；后续梯队在实际投入时才开始计算 30 天持续期。
+## 当前准备时钟对应倍率，仅用于评估下一轮是否发动。
 var campaign_preparation_multiplier: float = 1.0
+## 已发动轮次的倍率和持续天数；后续梯队继承，且从各自实际投入日开始计时。
+var campaign_launched_attack_multiplier: float = 1.0
+var campaign_launched_bonus_days: int = 0
+## 满准备目标城 -> {preparation_days, expires_day}。
+## 破城当天消费并生成驻城/驻边/扩张的第二阶段命令。
+var campaign_post_capture_plans: Dictionary = {}
 var campaign_plan_targets: Array[int] = []
 var campaign_plan_wave: int = -1
 var campaign_plan_primary_city: int = -1

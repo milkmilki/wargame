@@ -8,7 +8,7 @@ const CITY_COUNT: int = GRID * GRID         ## 64
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
-const INITIAL_MANPOWER_RESERVE_MONTHS: int = 150
+const INITIAL_MANPOWER_RESERVE_MONTHS: int = 750
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const INITIAL_ARMIES_PER_TWO_CITIES: int = 3
@@ -49,6 +49,7 @@ var _next_army_id: int = 0
 var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
 var diplomacy_revision: int = 0             ## 外交关系版本号，供 AI 战略缓存失效
+var fortification_revision: int = 0         ## 当前城防变化版本号，供 AI 战略缓存失效
 ## 规范化国家对 key -> DiplomaticRelation / 关系生效日 / 停战截止日。
 var diplomatic_relations: Dictionary = {}
 var diplomatic_since_day: Dictionary = {}
@@ -135,6 +136,7 @@ func _reset_world(world_seed: int) -> void:
 	_next_army_id = 0
 	ownership_revision = 0
 	diplomacy_revision = 0
+	fortification_revision = 0
 	diplomatic_relations.clear()
 	diplomatic_since_day.clear()
 	truce_until_day.clear()
@@ -180,6 +182,7 @@ func _generate_grid_cities() -> void:
 			)
 			city.owner_nation = _quadrant_of(c, r)
 			city.fort_strength = rng.randi_range(10, 30)
+			city.fort_strength_max = city.fort_strength
 			city.manpower_per_month = rng.randi_range(
 				CITY_MANPOWER_PER_MONTH_MIN,
 				CITY_MANPOWER_PER_MONTH_MAX
@@ -215,6 +218,7 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.terrain_height = heights[id]
 		city.terrain_relief = reliefs[id]
 		city.fort_strength = rng.randi_range(10, 30)
+		city.fort_strength_max = city.fort_strength
 		city.manpower_per_month = rng.randi_range(
 			CITY_MANPOWER_PER_MONTH_MIN,
 			CITY_MANPOWER_PER_MONTH_MAX

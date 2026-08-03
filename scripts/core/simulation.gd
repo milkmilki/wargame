@@ -34,7 +34,8 @@ const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
 ## 规格 R3：被围粮仓城市每日消耗本地库存；普通城市无粮仓，被围即失去外部补给。
 const SIEGE_CITY_FOOD_PER_DAY: int = 1     ## 被围城每日粮草消耗系数
 # ---- 占领 ----
-const CITY_FORT_AFTER_CAPTURE: int = 10 ## 城破后工事强度重置下限（fort_strength）
+const CITY_FORT_CAPTURE_MULTIPLIER: float = 0.50
+const CITY_FORT_RECOVERY_DAYS: int = 365
 const CAPITAL_FOOD_CAPTURE_RATE: float = 0.30 ## 首都失守时库存缴获比例，其余损毁
 # ---- 遭遇战触发 ----
 ## 边内接触阈值（以边长归一化的 move_progress 为单位，即 [0,1] 区间）。
@@ -59,7 +60,7 @@ const PEACETIME_EMERGENCY_MIN_SIZE: int = 500
 const DEMOBILIZATION_STEP_MIN: int = 500
 const WAR_MOBILIZATION_DAYS: int = 180
 const GARRISON_CREATE_DEFICIT_MIN: float = 2500.0
-const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 90
+const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 60
 const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 45
 const CAMPAIGN_ARROW_DURATION_DAYS: int = 20
 const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 3
@@ -68,13 +69,16 @@ const CAMPAIGN_TARGET_COMMIT_RATIO: float = 1.20
 const CAMPAIGN_PREPARED_ECHELONS: int = 2
 const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = DAYS_PER_HALF_YEAR
 const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
-const OFFENSIVE_BONUS_DURATION_DAYS: int = DAYS_PER_MONTH
+const CAMPAIGN_POST_CAPTURE_GARRISON_MIN_POWER: float = 5000.0
+const CAMPAIGN_POST_CAPTURE_DEFENSE_RATIO: float = 1.10
+const CAMPAIGN_POST_CAPTURE_MORALE_MIN: float = 0.65
+const CAMPAIGN_POST_CAPTURE_SUPPLY_MIN: float = 0.75
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 
 var state: GameState
 var _time_acc: float = 0.0
 var _ai_strategy_cache: Dictionary = {}    ## nation_id -> StrategicMapSnapshot
-var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership_revision, diplomacy_revision]
+var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership, diplomacy, fortification]
 var _threat_travel_cache: Dictionary = {}  ## "start:max_size" -> 只依赖静态道路的行军天数字段
 var _ai_path_field_cache: Dictionary = {}
 var _ai_supply_source_cache: Dictionary = {}
@@ -120,6 +124,7 @@ var diplomacy_enabled: bool = true
 
 func setup(game_state: GameState) -> void:
 	state = game_state
+	_normalize_city_fortifications()
 	state.refresh_derived()
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
@@ -172,6 +177,7 @@ func _advance_day() -> void:
 	state.month = state.day / DAYS_PER_MONTH
 	state.prune_campaign_visual_events()
 	_expire_offensive_bonuses()
+	_recover_city_fortifications()
 	# 每月结算资源生产、补员与外交；普通军粮在下方每日重新分配。
 	if state.day % DAYS_PER_MONTH == 0:
 		_resolve_economy()
@@ -211,6 +217,72 @@ static func offensive_preparation_multiplier(
 	return lerpf(1.0, OFFENSIVE_BONUS_MAX_MULTIPLIER, ratio)
 
 
+static func offensive_bonus_duration_days(
+	preparation_days: int
+) -> int:
+	return clampi(
+		preparation_days,
+		0,
+		OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+	)
+
+
+func _campaign_preparation_days(nation_id: int) -> int:
+	var nation := state.nations[nation_id]
+	if nation.campaign_preparation_started_day < 0:
+		nation.campaign_preparation_started_day = (
+			nation.campaign_last_offensive_day
+			if nation.campaign_last_offensive_day >= 0
+			else state.day
+		)
+	return maxi(
+		state.day - nation.campaign_preparation_started_day,
+		0
+	)
+
+
+func _campaign_projected_assault_ratio(
+	nation_id: int,
+	objective_city: int,
+	preparation_days: int,
+	threat: ThreatField = null
+) -> float:
+	if objective_city < 0 or objective_city >= state.cities.size():
+		return 0.0
+	var attack_power := 0.0
+	for army in _campaign_staged_armies(
+		nation_id,
+		objective_city
+	):
+		attack_power += ArmyPower.effective(army)
+	attack_power *= offensive_preparation_multiplier(
+		preparation_days
+	)
+	var direct_defense := 0.0
+	for defender in state.armies_at_city(objective_city):
+		if state.is_enemy(nation_id, defender.owner_nation):
+			direct_defense += ArmyPower.effective(defender)
+	var defense_power := direct_defense
+	if threat != null:
+		defense_power = maxf(
+			defense_power,
+			threat.threat_at(objective_city)
+		)
+	if state.recognized_owner_of(objective_city) != nation_id:
+		defense_power += ArmyPower.city_defense(
+			state.cities[objective_city]
+		)
+	return attack_power / maxf(defense_power, 1.0)
+
+
+func _campaign_attack_ratio_threshold(nation_id: int) -> float:
+	return UtilityAI.ATTACK_ENTER_RATIO / clampf(
+		state.nations[nation_id].ai_aggression,
+		0.5,
+		1.5
+	)
+
+
 func _campaign_offensive_interval(nation_id: int) -> int:
 	var aggression := clampf(
 		state.nations[nation_id].ai_aggression,
@@ -221,6 +293,101 @@ func _campaign_offensive_interval(nation_id: int) -> int:
 		float(CAMPAIGN_OFFENSIVE_INTERVAL_DAYS)
 			/ aggression
 	))
+
+
+static func city_fort_strength_after_capture(
+	full_strength: int,
+	elapsed_days: int
+) -> int:
+	var maximum := maxi(full_strength, 0)
+	if maximum <= 0:
+		return 0
+	var damaged := clampi(
+		int(round(
+			float(maximum) * CITY_FORT_CAPTURE_MULTIPLIER
+		)),
+		0,
+		maximum
+	)
+	if damaged >= maximum or elapsed_days <= 0:
+		return damaged
+	if elapsed_days >= CITY_FORT_RECOVERY_DAYS:
+		return maximum
+	var progress := clampf(
+		float(elapsed_days)
+			/ float(CITY_FORT_RECOVERY_DAYS),
+		0.0,
+		1.0
+	)
+	# 整数城防在一年到期前不得因四舍五入提前回满。
+	return clampi(
+		int(floor(lerpf(
+			float(damaged),
+			float(maximum),
+			progress
+		))),
+		damaged,
+		maximum - 1
+	)
+
+
+static func city_fort_vulnerability(
+	city: City,
+	current_day: int
+) -> float:
+	if city == null or city.fort_last_capture_day < 0:
+		return 0.0
+	return 1.0 - clampf(
+		float(maxi(
+			current_day - city.fort_last_capture_day,
+			0
+		)) / float(CITY_FORT_RECOVERY_DAYS),
+		0.0,
+		1.0
+	)
+
+
+func _normalize_city_fortifications() -> void:
+	for city in state.cities:
+		city.fort_strength_max = maxi(
+			city.fort_strength_max,
+			city.fort_strength
+		)
+
+
+func _recover_city_fortifications() -> void:
+	var fortification_changed := false
+	for city in state.cities:
+		city.fort_strength_max = maxi(
+			city.fort_strength_max,
+			city.fort_strength
+		)
+		if city.fort_last_capture_day < 0:
+			continue
+		var recovered := city_fort_strength_after_capture(
+			city.fort_strength_max,
+			maxi(
+				state.day - city.fort_last_capture_day,
+				0
+			)
+		)
+		if recovered != city.fort_strength:
+			city.fort_strength = recovered
+			fortification_changed = true
+	if fortification_changed:
+		state.fortification_revision += 1
+	# 已建立的围城也必须读取恢复后的当前工事，不能永久冻结在开战日。
+	for battle in state.battles:
+		if (
+			battle.finished
+			or battle.kind != Battle.Kind.SIEGE
+			or battle.city == null
+			or battle.city.fort_last_capture_day < 0
+		):
+			continue
+		battle.siege_required = Combat.siege_required_manpower(
+			battle.city.fort_strength
+		)
 
 
 func _expire_offensive_bonuses() -> void:
@@ -1178,6 +1345,10 @@ func _clear_finished_war_mobilization(nation_id: int) -> void:
 	nation.campaign_last_offensive_day = -1
 	nation.campaign_next_offensive_day = -1
 	nation.campaign_offensive_count = 0
+	nation.campaign_preparation_started_day = -1
+	nation.campaign_full_preparation_target_city = -1
+	nation.campaign_preparation_multiplier = 1.0
+	nation.campaign_post_capture_plans.clear()
 	_clear_campaign_attack_plan(nation_id)
 
 
@@ -1383,7 +1554,11 @@ func _ai_assign_targets() -> void:
 			_manage_campaign_offensive(
 				nation_id,
 				defense_plan,
-				coordinator
+					coordinator,
+					(
+						military_contexts[nation_id]["threat"]
+						as ThreatField
+					)
 			)
 
 	for nation_id in managed_nations:
@@ -1550,6 +1725,7 @@ func _strategy_snapshot_for(view: AiWorldView) -> StrategicMapSnapshot:
 	var revision := [
 		state.ownership_revision,
 		state.diplomacy_revision,
+		state.fortification_revision,
 	]
 	if (
 		not _ai_strategy_cache.has(view.nation_id)
@@ -1918,7 +2094,8 @@ func _clear_campaign_attack_plan(nation_id: int) -> void:
 	nation.campaign_active_echelons.clear()
 	nation.campaign_launched_armies.clear()
 	nation.campaign_echelon_started_days.clear()
-	nation.campaign_preparation_multiplier = 1.0
+	nation.campaign_launched_attack_multiplier = 1.0
+	nation.campaign_launched_bonus_days = 0
 	nation.campaign_plan_targets.clear()
 	nation.campaign_plan_wave = -1
 	nation.campaign_plan_primary_city = -1
@@ -2518,15 +2695,13 @@ func _launch_campaign_offensive(
 	):
 		return false
 	if preparation_days < 0:
-		var last_offensive_day := (
-			state.nations[nation_id].campaign_last_offensive_day
-		)
-		preparation_days = (
-			maxi(state.day - last_offensive_day, 0)
-			if last_offensive_day >= 0
-			else 0
+		preparation_days = _campaign_preparation_days(
+			nation_id
 		)
 	var offensive_multiplier := offensive_preparation_multiplier(
+		preparation_days
+	)
+	var offensive_bonus_days := offensive_bonus_duration_days(
 		preparation_days
 	)
 	var nation := state.nations[nation_id]
@@ -2623,7 +2798,7 @@ func _launch_campaign_offensive(
 				offensive_multiplier
 			)
 			attack.offensive_bonus_days = (
-				OFFENSIVE_BONUS_DURATION_DAYS
+				offensive_bonus_days
 			)
 			if _execute_ai_candidate(army, attack):
 				target_committed += army.size
@@ -2648,7 +2823,15 @@ func _launch_campaign_offensive(
 				state.day
 			)
 	if launched:
+		nation.campaign_launched_attack_multiplier = (
+			offensive_multiplier
+		)
+		nation.campaign_launched_bonus_days = (
+			offensive_bonus_days
+		)
 		nation.campaign_last_offensive_day = state.day
+		nation.campaign_preparation_started_day = state.day
+		nation.campaign_full_preparation_target_city = -1
 		nation.campaign_next_offensive_day = (
 			state.day + _campaign_offensive_interval(nation_id)
 		)
@@ -2662,6 +2845,18 @@ func _launch_campaign_offensive(
 		)
 		for target_city_value in launched_targets:
 			var target_city := int(target_city_value)
+			if (
+				offensive_bonus_days
+					>= OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+			):
+				nation.campaign_post_capture_plans[
+					target_city
+				] = {
+					"preparation_days":
+						offensive_bonus_days,
+					"expires_day":
+						state.day + offensive_bonus_days,
+				}
 			state.add_campaign_visual_event(
 				nation_id,
 				target_city,
@@ -2886,9 +3081,11 @@ func _launch_campaign_echelon_members(
 		)
 		attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
 		attack.offensive_attack_multiplier = (
-			nation.campaign_preparation_multiplier
+			nation.campaign_launched_attack_multiplier
 		)
-		attack.offensive_bonus_days = OFFENSIVE_BONUS_DURATION_DAYS
+		attack.offensive_bonus_days = (
+			nation.campaign_launched_bonus_days
+		)
 		if not _execute_ai_candidate(army, attack):
 			continue
 		nation.campaign_launched_armies[army.id] = true
@@ -3120,6 +3317,7 @@ func _remove_campaign_target(
 	nation.campaign_plan_targets.erase(target_city)
 	nation.campaign_active_echelons.erase(target_city)
 	nation.campaign_echelon_started_days.erase(target_city)
+	nation.campaign_post_capture_plans.erase(target_city)
 	var army_ids := nation.campaign_attack_assignments.keys()
 	for army_id_value in army_ids:
 		var army_id := int(army_id_value)
@@ -3183,7 +3381,8 @@ func _grant_offensive_bonus(
 func _manage_campaign_offensive(
 	nation_id: int,
 	defense_plan: CityDefensePlan = null,
-	coordinator: ArmyCoordinator = null
+	coordinator: ArmyCoordinator = null,
+	threat: ThreatField = null
 ) -> bool:
 	var nation := state.nations[nation_id]
 	var can_launch := not (
@@ -3202,16 +3401,42 @@ func _manage_campaign_offensive(
 			b
 		)
 	)
+	# 仍在修复窗口内的本国法理失地优先于原进攻目标，形成真实反复争夺。
 	for enemy_id in enemy_ids:
-		var candidate := state.war_objective(nation_id, enemy_id)
+		var reclamation := DiplomacyAI.select_war_objective(
+			state,
+			nation_id,
+			enemy_id
+		)
+		if reclamation.is_empty():
+			continue
+		var reclamation_city := int(reclamation["city_id"])
 		if (
-			not candidate.is_empty()
-			and int(candidate.get("attacker", -1)) == nation_id
+			state.recognized_owner_of(reclamation_city)
+				== nation_id
+			and Simulation.city_fort_vulnerability(
+				state.cities[reclamation_city],
+				state.day
+			) > 0.0
 		):
-			objective = candidate
+			objective = reclamation
 			defender_id = enemy_id
-			owns_diplomatic_objective = true
 			break
+	if objective.is_empty():
+		for enemy_id in enemy_ids:
+			var candidate := state.war_objective(
+				nation_id,
+				enemy_id
+			)
+			if (
+				not candidate.is_empty()
+				and int(candidate.get("attacker", -1))
+					== nation_id
+			):
+				objective = candidate
+				defender_id = enemy_id
+				owns_diplomatic_objective = true
+				break
 	# 防御战争没有本国发起的外交目标，但仍必须主动选择敌城组织反攻。
 	if objective.is_empty():
 		for enemy_id in enemy_ids:
@@ -3250,6 +3475,77 @@ func _manage_campaign_offensive(
 				objective_city,
 				str(next["reason"])
 			)
+	var preparation_days := _campaign_preparation_days(
+		nation_id
+	)
+	nation.campaign_preparation_multiplier = (
+		offensive_preparation_multiplier(preparation_days)
+	)
+	if (
+		nation.campaign_full_preparation_target_city >= 0
+		and nation.campaign_full_preparation_target_city
+			!= objective_city
+	):
+		nation.campaign_full_preparation_target_city = -1
+	var recent_legal_reclamation := (
+		state.recognized_owner_of(objective_city) == nation_id
+		and Simulation.city_fort_vulnerability(
+			state.cities[objective_city],
+			state.day
+		) > 0.0
+	)
+	var full_preparation_active := (
+		nation.campaign_full_preparation_target_city
+			== objective_city
+	)
+	if recent_legal_reclamation:
+		nation.campaign_full_preparation_target_city = -1
+		full_preparation_active = false
+		can_launch = true
+	elif full_preparation_active:
+		can_launch = (
+			can_launch
+			and preparation_days
+				>= OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+		)
+	elif can_launch:
+		if threat == null:
+			threat = ThreatField.build(
+				_build_ai_view(nation_id),
+				_threat_travel_cache
+			)
+		var projected_ratio := (
+			_campaign_projected_assault_ratio(
+				nation_id,
+				objective_city,
+				preparation_days,
+				threat
+			)
+		)
+		if projected_ratio < _campaign_attack_ratio_threshold(
+			nation_id
+		):
+			nation.campaign_full_preparation_target_city = (
+				objective_city
+			)
+			full_preparation_active = true
+			can_launch = false
+			if (
+				DiplomacyAI.staged_troops_for_objective(
+					state,
+					nation_id,
+					objective_city
+				)
+				>= DiplomacyAI.required_assault_troops(
+					state,
+					nation_id,
+					objective_city
+				)
+			):
+				_ensure_campaign_attack_plan(
+					nation_id,
+					objective_city
+				)
 	if (
 		can_launch
 		and _launch_campaign_offensive(
@@ -3264,7 +3560,7 @@ func _manage_campaign_offensive(
 		objective_city,
 		defense_plan,
 		coordinator,
-		can_launch
+		can_launch or full_preparation_active
 	)
 
 
@@ -5045,7 +5341,16 @@ func _capture_city(
 		else army.owner_nation
 	)
 	state.ownership_revision += 1
-	city.fort_strength = CITY_FORT_AFTER_CAPTURE
+	if claimant != old_owner:
+		city.fort_strength_max = maxi(
+			city.fort_strength_max,
+			city.fort_strength
+		)
+		city.fort_last_capture_day = state.day
+		city.fort_strength = city_fort_strength_after_capture(
+			city.fort_strength_max,
+			0
+		)
 	if captured_capital:
 		state.relocate_capital(old_owner)
 	var spoils := int(floor(float(captured_food) * CAPITAL_FOOD_CAPTURE_RATE))
@@ -5076,6 +5381,195 @@ func _capture_city(
 	army.move_progress = 0.0
 	army.path.clear()
 	army.occupation_claimant_nation = -1
+	_execute_campaign_post_capture_plan(army, city)
+
+
+func _execute_campaign_post_capture_plan(
+	army: Army,
+	city: City
+) -> void:
+	if (
+		army.owner_nation < 0
+		or army.owner_nation >= state.nations.size()
+		or city == null
+	):
+		return
+	var nation := state.nations[army.owner_nation]
+	if not nation.campaign_post_capture_plans.has(city.id):
+		return
+	var plan: Dictionary = (
+		nation.campaign_post_capture_plans[city.id]
+	)
+	var preparation_days := int(
+		plan.get("preparation_days", 0)
+	)
+	if preparation_days < OFFENSIVE_BONUS_MAX_PREPARATION_DAYS:
+		nation.campaign_post_capture_plans.erase(city.id)
+		return
+	if state.day >= int(plan.get("expires_day", -1)):
+		nation.campaign_post_capture_plans.erase(city.id)
+		return
+	nation.campaign_post_capture_plans.erase(city.id)
+	var view := _build_ai_view(army.owner_nation)
+	var threat := ThreatField.build(
+		view,
+		_threat_travel_cache
+	)
+	var stationed_without_captor := view.stationed_power_at(
+		city.id,
+		army
+	)
+	var required_garrison := maxf(
+		CAMPAIGN_POST_CAPTURE_GARRISON_MIN_POWER,
+		threat.threat_at(city.id)
+			* CAMPAIGN_POST_CAPTURE_DEFENSE_RATIO
+	)
+	var next_step := _campaign_post_capture_target(
+		army,
+		city,
+		threat
+	)
+	var bonus_active := (
+		army.offensive_attack_multiplier > 1.0
+		and army.offensive_bonus_until_day > state.day
+	)
+	if (
+		not next_step.is_empty()
+		and bonus_active
+		and army.morale >= CAMPAIGN_POST_CAPTURE_MORALE_MIN
+		and army.supply_ratio >= CAMPAIGN_POST_CAPTURE_SUPPLY_MIN
+		and stationed_without_captor >= required_garrison
+		and float(next_step["attack_ratio"])
+			>= _campaign_attack_ratio_threshold(
+				army.owner_nation
+			)
+	):
+		var next_city := int(next_step["city_id"])
+		var attack := ActionCandidate.make(
+			ActionCandidate.Kind.ATTACK,
+			2500.0 + float(next_step["score"]),
+			(
+				"满准备攻势第二阶段：城市%d已占领且守备充足，"
+				+ "保留剩余加成立即攻击城市%d（战力比%.2f）"
+			) % [
+				city.id,
+				next_city,
+				next_step["attack_ratio"],
+			],
+			next_city
+		)
+		attack.minimum_commit_days = (
+			CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+		)
+		if _execute_ai_candidate(army, attack):
+			return
+	if (
+		not next_step.is_empty()
+		and army.morale >= 0.50
+		and army.supply_ratio >= 0.50
+		and stationed_without_captor
+			>= CAMPAIGN_POST_CAPTURE_GARRISON_MIN_POWER
+		and (
+			stationed_without_captor
+			+ ArmyPower.effective(army)
+		) >= required_garrison
+	):
+		var border_city := int(next_step["city_id"])
+		var hold := ActionCandidate.make(
+			ActionCandidate.Kind.HOLD,
+			2200.0 + float(next_step["score"]),
+			(
+				"满准备攻势第二阶段：城市%d已占领，"
+				+ "主力前出驻守通往城市%d的边界"
+			) % [city.id, border_city],
+			border_city
+		)
+		hold.minimum_commit_days = (
+			CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+		)
+		hold.defensive_deployment = true
+		hold.target_edge_a = city.id
+		hold.target_edge_b = border_city
+		if _execute_ai_candidate(army, hold):
+			return
+	var garrison := ActionCandidate.make(
+		ActionCandidate.Kind.HOLD,
+		2000.0,
+		(
+			"满准备攻势第二阶段：城市%d守备不足，"
+			+ "主力就地驻扎巩固占领"
+		) % city.id,
+		city.id
+	)
+	garrison.minimum_commit_days = DEFENSIVE_DEPLOYMENT_LOCK_DAYS
+	garrison.defensive_deployment = true
+	_record_ai_order(army, garrison)
+
+
+func _campaign_post_capture_target(
+	army: Army,
+	city: City,
+	threat: ThreatField
+) -> Dictionary:
+	var best: Dictionary = {}
+	var neighbors := state.neighbors(city.id).duplicate()
+	EquivariantOrder.sort_city_ids(
+		neighbors,
+		state,
+		army.owner_nation,
+		city.id
+	)
+	for target_id in neighbors:
+		var edge := state.edge_of(city.id, target_id)
+		if (
+			edge == null
+			or edge.max_manpower < army.max_size
+			or not state.is_enemy(
+				army.owner_nation,
+				state.cities[target_id].owner_nation
+			)
+		):
+			continue
+		var target := state.cities[target_id]
+		var defense_power := (
+			threat.threat_at(target_id)
+			+ ArmyPower.city_defense(target)
+		)
+		var attack_ratio := (
+			ArmyPower.effective(army)
+			/ maxf(defense_power, 1.0)
+		)
+		var strategic_value := (
+			float(target.gold_per_month) * 0.10
+			+ float(target.food_per_half_year) * 0.002
+			+ float(target.manpower_per_month) * 0.10
+			+ (5.0 if target.is_capital else 0.0)
+			+ (3.0 if target.has_warehouse else 0.0)
+			+ (2.0 if target.is_food_hub else 0.0)
+			+ (2.0 if target.is_manpower_hub else 0.0)
+		)
+		var score := attack_ratio * 4.0 + strategic_value
+		if (
+			best.is_empty()
+			or score > float(best["score"])
+			or (
+				is_equal_approx(score, float(best["score"]))
+				and EquivariantOrder.city_id_less(
+					state,
+					army.owner_nation,
+					target_id,
+					int(best["city_id"]),
+					city.id
+				)
+			)
+		):
+			best = {
+				"city_id": target_id,
+				"attack_ratio": attack_ratio,
+				"defense_power": defense_power,
+				"score": score,
+			}
+	return best
 
 
 func _occupation_claimant_for_army(army: Army) -> int:

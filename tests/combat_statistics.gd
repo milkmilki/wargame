@@ -9,8 +9,9 @@ extends SceneTree
 ##   ③ 优势方胜率：任意随机兵力/攻防阵容，兵力优势方胜率必须极高且稳定；
 ##   ④ 随机性不掩盖明显兵力优势：20% 优势方保持稳定统计优势；
 ##   ⑤ 拆分不改结果：把一侧拆成多支小军，总伤亡与胜负不变；
-##   ⑥ 地形优势符合预期：高危地形对进攻方的压制单调且方向正确；
-##   ⑦ 固定种子完全复现：同输入同种子逐位一致。
+##   ⑥ 受限正面拆分不变：固定 1×10000/2×5000 与随机 2~10 支逐轮一致；
+##   ⑦ 地形优势符合预期：高危地形对进攻方的压制单调且方向正确；
+##   ⑧ 固定种子完全复现：同输入同种子逐位一致。
 ## 运行：Godot --headless --script res://tests/combat_statistics.gd
 
 const BATTLE_COUNT: int = 10000
@@ -25,6 +26,7 @@ func _init() -> void:
 	_test_advantage_winrate()
 	_test_randomness_never_beats_advantage()
 	_test_split_invariance()
+	_test_constrained_frontage_split_invariance()
 	_test_terrain_monotonic()
 	_test_seed_reproducibility()
 	var elapsed := Time.get_ticks_msec() - started
@@ -233,7 +235,151 @@ func _test_split_invariance() -> void:
 	print("⑤ 拆分不变性：%d 场拆分前后胜负与总伤亡逐位一致" % checks)
 
 
-# ⑥ 地形优势符合预期：进攻方攻击倍率随地形危险度单调不增，极端地形显著压制。
+# ⑥ 受限正面拆分不变：显式覆盖完整预备队轮换，不只验证无限正面。
+func _test_constrained_frontage_split_invariance() -> void:
+	var fixed_whole := _make_battle(
+		10000, 10, 10,
+		10000, 10, 10,
+		0.0,
+		5000
+	)
+	var fixed_split := _make_split_battle(
+		10000,
+		[5000, 5000] as Array[int],
+		10,
+		10,
+		10000,
+		10,
+		10,
+		0.0,
+		5000
+	)
+	var fixed_whole_trace := _run_trace(fixed_whole, 860001)
+	var fixed_split_trace := _run_trace(fixed_split, 860001)
+	var fixed_diff := _trace_difference(
+		fixed_whole_trace,
+		fixed_split_trace
+	)
+	if not bool(fixed_diff["equal"]):
+		_fail(
+			(
+				"⑥ 固定窄正面拆分改变轨迹："
+				+ "winner=%s casualties=%s rounds=%s "
+				+ "attack_max=%.6f morale_max=%.9f"
+			) % [
+				str(fixed_diff["winner"]),
+				str(fixed_diff["casualties"]),
+				str(fixed_diff["rounds"]),
+				float(fixed_diff["attack_max"]),
+				float(fixed_diff["morale_max"]),
+			]
+		)
+
+	var checks := BATTLE_COUNT / 5
+	var seed_rng := RandomNumberGenerator.new()
+	seed_rng.seed = 20260803
+	var mismatch_winner := 0
+	var mismatch_casualties := 0
+	var mismatch_rounds := 0
+	var mismatch_attack := 0
+	var mismatch_morale := 0
+	var max_attack_diff := 0.0
+	var max_morale_diff := 0.0
+	for i in range(checks):
+		var part_count := seed_rng.randi_range(2, 10)
+		var total := seed_rng.randi_range(
+			maxi(6000, part_count * 1000),
+			30000
+		)
+		var frontage := seed_rng.randi_range(
+			5000,
+			mini(15000, total - 1)
+		)
+		var enemy := seed_rng.randi_range(5000, 25000)
+		var attack := seed_rng.randi_range(8, 14)
+		var defense := seed_rng.randi_range(8, 14)
+		var enemy_attack := seed_rng.randi_range(8, 14)
+		var enemy_defense := seed_rng.randi_range(8, 14)
+		var danger := seed_rng.randf_range(0.0, 0.6)
+		var battle_seed := 870000 + i
+		var whole := _make_battle(
+			total,
+			attack,
+			defense,
+			enemy,
+			enemy_attack,
+			enemy_defense,
+			danger,
+			frontage
+		)
+		var split := _make_split_battle(
+			total,
+			_split_sizes(total, part_count),
+			attack,
+			defense,
+			enemy,
+			enemy_attack,
+			enemy_defense,
+			danger,
+			frontage
+		)
+		var whole_trace := _run_trace(whole, battle_seed)
+		var split_trace := _run_trace(split, battle_seed)
+		var diff := _trace_difference(whole_trace, split_trace)
+		if bool(diff["winner"]):
+			mismatch_winner += 1
+		if bool(diff["casualties"]):
+			mismatch_casualties += 1
+		if bool(diff["rounds"]):
+			mismatch_rounds += 1
+		if float(diff["attack_max"]) > 0.000001:
+			mismatch_attack += 1
+		if float(diff["morale_max"]) > 0.000000001:
+			mismatch_morale += 1
+		max_attack_diff = maxf(
+			max_attack_diff,
+			float(diff["attack_max"])
+		)
+		max_morale_diff = maxf(
+			max_morale_diff,
+			float(diff["morale_max"])
+		)
+	var mismatch_any := maxi(
+		mismatch_winner,
+		maxi(
+			mismatch_casualties,
+			maxi(
+				mismatch_rounds,
+				maxi(mismatch_attack, mismatch_morale)
+			)
+		)
+	)
+	if mismatch_any != 0:
+		_fail(
+			(
+				"⑥ 随机窄正面拆分改变轨迹："
+				+ "winner=%d casualties=%d rounds=%d "
+				+ "attack=%d morale=%d/%d，max=%.6f/%.9f"
+			) % [
+				mismatch_winner,
+				mismatch_casualties,
+				mismatch_rounds,
+				mismatch_attack,
+				mismatch_morale,
+				checks,
+				max_attack_diff,
+				max_morale_diff,
+			]
+		)
+	print(
+		(
+			"⑥ 受限正面拆分：固定 1×10000/2×5000；"
+			+ "随机 %d 场(2~10支)，胜负/伤亡/逐轮火力/士气/时长逐位一致"
+		) % checks
+	)
+
+
+# ⑦ 地形优势符合预期：进攻方攻击倍率随地形危险度单调不增，极端地形显著压制。
 func _test_terrain_monotonic() -> void:
 	var prev := 2.0
 	var monotonic := true
@@ -245,16 +391,16 @@ func _test_terrain_monotonic() -> void:
 			monotonic = false
 		prev = m
 	if not monotonic:
-		_fail("⑥ 地形倍率非单调：attack_multiplier 随危险度上升出现回升")
+		_fail("⑦ 地形倍率非单调：attack_multiplier 随危险度上升出现回升")
 	# 极端 vs 平地：高危地形对进攻方应有明确压制。
 	if not (Combat.attack_multiplier(0.95) < Combat.attack_multiplier(0.0) - 0.2):
-		_fail("⑥ 极端地形压制不足：danger0.95=%.3f 应显著低于平地=%.3f" % [
+		_fail("⑦ 极端地形压制不足：danger0.95=%.3f 应显著低于平地=%.3f" % [
 			Combat.attack_multiplier(0.95), Combat.attack_multiplier(0.0)])
-	print("⑥ 地形单调压制：attack_multiplier(0)=%.3f → (0.95)=%.3f，%d 点采样单调不增" % [
+	print("⑦ 地形单调压制：attack_multiplier(0)=%.3f → (0.95)=%.3f，%d 点采样单调不增" % [
 		Combat.attack_multiplier(0.0), Combat.attack_multiplier(0.95), samples + 1])
 
 
-# ⑦ 固定种子完全复现：同一阵容同一种子跑两遍，逐位一致。
+# ⑧ 固定种子完全复现：同一阵容同一种子跑两遍，逐位一致。
 func _test_seed_reproducibility() -> void:
 	var diffs := 0
 	for i in range(BATTLE_COUNT):
@@ -265,8 +411,8 @@ func _test_seed_reproducibility() -> void:
 		if b1.winner_side != b2.winner_side or l1 != l2:
 			diffs += 1
 	if diffs != 0:
-		_fail("⑦ 复现失败：%d/%d 场同种子两遍结果不一致" % [diffs, BATTLE_COUNT])
-	print("⑦ 固定种子完全复现：%d 场两遍逐位一致" % BATTLE_COUNT)
+		_fail("⑧ 复现失败：%d/%d 场同种子两遍结果不一致" % [diffs, BATTLE_COUNT])
+	print("⑧ 固定种子完全复现：%d 场两遍逐位一致" % BATTLE_COUNT)
 
 
 # ------------------------------------------------------------------ 构造辅助
@@ -282,25 +428,26 @@ func _army(aid: int, nation: int, size: int, atk: int, def_v: int) -> Army:
 	return a
 
 
-func _edge(danger: float) -> Edge:
+func _edge(danger: float, frontage: int = 45000) -> Edge:
 	var e := Edge.new()
 	e.city_a = 0
 	e.city_b = 1
 	e.distance = 4
 	e.danger = danger
-	e.max_manpower = 45000
+	e.max_manpower = frontage
 	return e
 
 
 func _make_battle(
 	sa: int, atk_a: int, def_a: int,
 	sb: int, atk_b: int, def_b: int,
-	danger: float
+	danger: float,
+	frontage: int = 45000
 ) -> Battle:
 	var b := Battle.new()
 	b.id = 0
 	b.kind = Battle.Kind.FIELD
-	b.edge = _edge(danger)
+	b.edge = _edge(danger, frontage)
 	b.contact_dist_a = 2.0
 	b.contact_dist_b = 2.0
 	b.tactical_key_a = _stats_side_key(sa, atk_a, def_a)
@@ -308,6 +455,43 @@ func _make_battle(
 	b.side_a.append(_army(0, 0, sa, atk_a, def_a))
 	b.side_b.append(_army(1, 1, sb, atk_b, def_b))
 	return b
+
+
+func _make_split_battle(
+	total: int,
+	parts: Array[int],
+	attack: int,
+	defense: int,
+	enemy: int,
+	enemy_attack: int,
+	enemy_defense: int,
+	danger: float,
+	frontage: int
+) -> Battle:
+	var battle := Battle.new()
+	battle.id = 0
+	battle.kind = Battle.Kind.FIELD
+	battle.edge = _edge(danger, frontage)
+	battle.contact_dist_a = 2.0
+	battle.contact_dist_b = 2.0
+	battle.tactical_key_a = _stats_side_key(
+		total,
+		attack,
+		defense
+	)
+	battle.tactical_key_b = _stats_side_key(
+		enemy,
+		enemy_attack,
+		enemy_defense
+	)
+	for index in range(parts.size()):
+		battle.side_a.append(
+			_army(index, 0, parts[index], attack, defense)
+		)
+	battle.side_b.append(
+		_army(100, 1, enemy, enemy_attack, enemy_defense)
+	)
+	return battle
 
 
 func _stats_side_key(size: int, attack: int, defense: int) -> int:
@@ -331,6 +515,115 @@ func _run(battle: Battle, battle_seed: int) -> Array:
 		Combat.resolve_round(battle, rng)
 		guard += 1
 	return [start_a - battle.side_size(battle.side_a), start_b - battle.side_size(battle.side_b)]
+
+
+func _run_trace(
+	battle: Battle,
+	battle_seed: int
+) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = battle_seed
+	Combat.clear_battle_log()
+	Combat.battle_log_enabled = true
+	var guard := 0
+	while not battle.finished and guard < 1000:
+		Combat.resolve_round(battle, rng)
+		guard += 1
+	var attack_a: Array[float] = []
+	var attack_b: Array[float] = []
+	var morale_a: Array[float] = []
+	var morale_b: Array[float] = []
+	var casualties_a := 0
+	var casualties_b := 0
+	for record in Combat.battle_log:
+		attack_a.append(float(record["effective_attack_a"]))
+		attack_b.append(float(record["effective_attack_b"]))
+		morale_a.append(_record_force_morale(record, "a"))
+		morale_b.append(_record_force_morale(record, "b"))
+		casualties_a += int(record["casualties_a"])
+		casualties_b += int(record["casualties_b"])
+	Combat.battle_log_enabled = false
+	Combat.clear_battle_log()
+	return {
+		"winner": battle.winner_side,
+		"casualties": [casualties_a, casualties_b],
+		"rounds": guard,
+		"attack_a": attack_a,
+		"attack_b": attack_b,
+		"morale_a": morale_a,
+		"morale_b": morale_b,
+	}
+
+
+func _trace_difference(
+	left: Dictionary,
+	right: Dictionary
+) -> Dictionary:
+	var attack_max := maxf(
+		_series_max_difference(left["attack_a"], right["attack_a"]),
+		_series_max_difference(left["attack_b"], right["attack_b"])
+	)
+	var morale_max := maxf(
+		_series_max_difference(left["morale_a"], right["morale_a"]),
+		_series_max_difference(left["morale_b"], right["morale_b"])
+	)
+	var winner_diff: bool = (
+		int(left["winner"]) != int(right["winner"])
+	)
+	var casualties_diff: bool = (
+		left["casualties"] != right["casualties"]
+	)
+	var rounds_diff: bool = (
+		int(left["rounds"]) != int(right["rounds"])
+	)
+	return {
+		"equal":
+			not winner_diff
+			and not casualties_diff
+			and not rounds_diff
+			and attack_max <= 0.000001
+			and morale_max <= 0.000000001,
+		"winner": winner_diff,
+		"casualties": casualties_diff,
+		"rounds": rounds_diff,
+		"attack_max": attack_max,
+		"morale_max": morale_max,
+	}
+
+
+func _series_max_difference(left: Array, right: Array) -> float:
+	var maximum := 0.0
+	for index in range(mini(left.size(), right.size())):
+		maximum = maxf(
+			maximum,
+			absf(float(left[index]) - float(right[index]))
+		)
+	return maximum
+
+
+func _record_force_morale(
+	record: Dictionary,
+	side_name: String
+) -> float:
+	var morale_mass := 0.0
+	var manpower := 0
+	for key in [
+		"participants_after_" + side_name,
+		"routed_" + side_name,
+	]:
+		for army_data in record[key]:
+			var size := int(army_data["size"])
+			if size <= 0:
+				continue
+			morale_mass += (
+				float(size) * float(army_data["morale"])
+			)
+			manpower += size
+	return (
+		morale_mass / float(manpower)
+		if manpower > 0
+		else 0.0
+	)
 
 
 ## 将 total 拆成 n 份，尾数并入第一份（保持整数总量守恒）。

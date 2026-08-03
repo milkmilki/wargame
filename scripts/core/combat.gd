@@ -331,6 +331,14 @@ static func resolve_round(
 	# morale_before 的语义是「增援结算完成、伤亡发生前」。
 	var log_morale_before_a := battle.side_morale(battle.side_a) if battle_log_enabled else 0.0
 	var log_morale_before_b := battle.side_morale(battle.side_b) if battle_log_enabled else 0.0
+	var morale_before_a := battle.side_morale(battle.side_a)
+	var morale_before_b := battle.side_morale(battle.side_b)
+	var combat_efficiency_a := _side_combat_efficiency(
+		battle.side_a
+	)
+	var combat_efficiency_b := _side_combat_efficiency(
+		battle.side_b
+	)
 	var log_participants_before_a: Array[Dictionary] = []
 	var log_participants_before_b: Array[Dictionary] = []
 	var log_battle_context: Dictionary = {}
@@ -429,13 +437,13 @@ static func resolve_round(
 		)
 	# 火力只由本轮明确投入的前线兵力贡献。
 	var fire_a := (
-		_frontline_attack(frontline_a)
+		_frontline_attack(frontline_a, combat_efficiency_a)
 		* attack_pen_a
 		* roll_multiplier
 		* side_modifiers.x
 	)
 	var fire_b := (
-		_frontline_attack(frontline_b)
+		_frontline_attack(frontline_b, combat_efficiency_b)
 		* attack_pen_b
 		* roll_multiplier
 		* side_modifiers.y
@@ -455,10 +463,20 @@ static func resolve_round(
 	var actual_a := _apply_frontline_losses(frontline_a, loss_a)
 	var actual_b := _apply_frontline_losses(frontline_b, loss_b)
 
-	# 战斗士气侵蚀按前线伤亡率计算，只作用于前线。部分投入的大军按投入比例
-	# 折算到整军组织度；完整预备队不因前线伤亡或战斗基础衰减丢失士气。
-	_erode_frontline_morale(frontline_a, actual_a)
-	_erode_frontline_morale(frontline_b, actual_b)
+	# 战斗士气侵蚀按前线伤亡率形成拆分无关的组织度质量目标，再只回写
+	# 本轮前线军；完整预备队不因前线伤亡或战斗基础衰减丢失士气。
+	_erode_frontline_morale(
+		battle.side_a,
+		frontline_a,
+		actual_a,
+		morale_before_a
+	)
+	_erode_frontline_morale(
+		battle.side_b,
+		frontline_b,
+		actual_b,
+		morale_before_b
+	)
 	_extract_routed_armies(battle.side_a, battle.routed_a)
 	_extract_routed_armies(battle.side_b, battle.routed_b)
 
@@ -473,8 +491,16 @@ static func resolve_round(
 		active_size_b <= 0
 		and _side_size(battle.routed_b) <= 0
 	)
-	var mor_a := battle.side_morale(battle.side_a)
-	var mor_b := battle.side_morale(battle.side_b)
+	# 当回合刚退出的低士气军仍属于本侧战果的一部分。若侧级平均只看
+	# active，拆分方可通过把低值容器移入 routed 来抬高平均士气并多打一轮。
+	var mor_a := _combined_side_morale(
+		battle.side_a,
+		battle.routed_a
+	)
+	var mor_b := _combined_side_morale(
+		battle.side_b,
+		battle.routed_b
+	)
 	var broke_a := (
 		(active_size_a <= 0 and not battle.routed_a.is_empty())
 		or (active_size_a > 0 and mor_a <= SIDE_ROUT_THRESHOLD)
@@ -488,7 +514,14 @@ static func resolve_round(
 		# 对称指标裁决（item 1）：与 a/b 位置、军队 id、遍历顺序无关；完全对称判平局。
 		battle.winner_side = decide_winner(
 			dead_a, dead_b, broke_a, broke_b,
-			_side_residual(battle.side_a), _side_residual(battle.side_b)
+			_combined_side_residual(
+				battle.side_a,
+				battle.routed_a
+			),
+			_combined_side_residual(
+				battle.side_b,
+				battle.routed_b
+			)
 		)
 
 	# item 15：结构化战斗日志（纯数据快照，可关闭、测试可读、不参与任何逻辑判断）。
@@ -668,6 +701,8 @@ static func decide_winner(
 
 ## 对称 tie-break：续战能力高者胜，完全相等判平局（0）。
 static func _break_tie(residual_a: float, residual_b: float) -> int:
+	if is_equal_approx(residual_a, residual_b):
+		return 0
 	if residual_a > residual_b:
 		return 1
 	if residual_b > residual_a:
@@ -736,7 +771,10 @@ static func _frontline_size(frontline: Array[Dictionary]) -> int:
 	return total
 
 
-static func _frontline_attack(frontline: Array[Dictionary]) -> float:
+static func _frontline_attack(
+	frontline: Array[Dictionary],
+	side_efficiency: float
+) -> float:
 	var total := 0.0
 	for entry in frontline:
 		var army: Army = entry["army"]
@@ -744,9 +782,32 @@ static func _frontline_attack(frontline: Array[Dictionary]) -> float:
 			float(entry["committed"])
 			* float(army.attack)
 			* maxf(army.offensive_attack_multiplier, 1.0)
-			* combat_efficiency(army.morale)
+			* side_efficiency
 		)
 	return total
+
+
+static func _side_combat_efficiency(side: Array[Army]) -> float:
+	var nominal_attack := 0.0
+	var effective_attack := 0.0
+	for army in side:
+		if army.size <= 0:
+			continue
+		var army_nominal := (
+			float(army.size)
+			* float(army.attack)
+			* maxf(army.offensive_attack_multiplier, 1.0)
+		)
+		nominal_attack += army_nominal
+		effective_attack += (
+			army_nominal
+			* combat_efficiency(army.morale)
+		)
+	return (
+		effective_attack / nominal_attack
+		if nominal_attack > 0.0
+		else 0.0
+	)
 
 
 static func _frontline_avg_defense(
@@ -782,8 +843,10 @@ static func _apply_frontline_losses(
 
 
 static func _erode_frontline_morale(
+	side: Array[Army],
 	frontline: Array[Dictionary],
-	actual_casualties: int
+	actual_casualties: int,
+	morale_before: float
 ) -> void:
 	var committed_total := _frontline_size(frontline)
 	if committed_total <= 0:
@@ -794,29 +857,117 @@ static func _erode_frontline_morale(
 			* MORALE_CASUALTY_K
 		+ MORALE_BASE_DECAY
 	)
+	var frontline_survivors_total := 0
+	var starving_survivors := 0
 	for entry in frontline:
 		var army: Army = entry["army"]
 		if army.size <= 0:
 			continue
-		# Army 只有一个聚合士气值。把“幸存前线组织度下降、内部预备队
-		# 组织度不变”按剩余兵力加权回整军，避免内部预备队稀释前线伤亡率。
 		var frontline_survivors := maxi(
 			int(entry["committed"])
 				- int(entry.get("casualties", 0)),
 			0
 		)
-		var participation := (
-			float(frontline_survivors)
-			/ float(maxi(army.size, 1))
-		)
-		var erosion := base_erode
+		frontline_survivors_total += frontline_survivors
 		if army.starving:
-			erosion += MORALE_STARVE_DECAY
-		army.morale = clampf(
-			army.morale - erosion * participation,
-			MORALE_FLOOR,
-			1.0
+			starving_survivors += frontline_survivors
+	var surviving_size := _side_size(side)
+	if surviving_size <= 0:
+		return
+	# 士气是组织度密度，size×morale 是可守恒的组织度质量。伤亡先按本侧
+	# 战前平均密度移除，随后只扣除幸存前线的战斗侵蚀；这个目标不依赖
+	# 行政军队如何拆分。具体损耗仍只回写到本轮前线，完整预备队保持不变。
+	var target_mass := (
+		float(surviving_size) * morale_before
+		- float(frontline_survivors_total) * base_erode
+		- float(starving_survivors) * MORALE_STARVE_DECAY
+	)
+	target_mass = clampf(
+		target_mass,
+		0.0,
+		float(surviving_size)
+	)
+	_adjust_frontline_morale_mass(
+		side,
+		frontline,
+		target_mass
+	)
+
+
+static func _adjust_frontline_morale_mass(
+	side: Array[Army],
+	frontline: Array[Dictionary],
+	target_mass: float
+) -> void:
+	var current_mass := _side_morale_mass(side)
+	var remaining := current_mass - target_mass
+	if absf(remaining) <= 0.000000001:
+		return
+	var adjustable: Array[Dictionary] = []
+	for entry in frontline:
+		var army: Army = entry["army"]
+		if army.size <= 0:
+			continue
+		var frontline_survivors := maxi(
+			int(entry["committed"])
+				- int(entry.get("casualties", 0)),
+			0
 		)
+		if frontline_survivors > 0:
+			adjustable.append({
+				"army": army,
+				"weight": frontline_survivors,
+			})
+	while (
+		not adjustable.is_empty()
+		and absf(remaining) > 0.000000001
+	):
+		var total_weight := 0
+		for candidate in adjustable:
+			total_weight += int(candidate["weight"])
+		if total_weight <= 0:
+			break
+		var next_adjustable: Array[Dictionary] = []
+		var changed := 0.0
+		for candidate in adjustable:
+			var army: Army = candidate["army"]
+			var requested_mass := (
+				remaining
+				* float(candidate["weight"])
+				/ float(total_weight)
+			)
+			var old_morale := army.morale
+			army.morale = clampf(
+				army.morale
+					- requested_mass / float(maxi(army.size, 1)),
+				MORALE_FLOOR,
+				1.0
+			)
+			var applied_mass := (
+				(old_morale - army.morale)
+				* float(army.size)
+			)
+			changed += applied_mass
+			if (
+				remaining > 0.0
+				and army.morale > MORALE_FLOOR
+			) or (
+				remaining < 0.0
+				and army.morale < 1.0
+			):
+				next_adjustable.append(candidate)
+		remaining -= changed
+		if absf(changed) <= 0.000000001:
+			break
+		adjustable = next_adjustable
+
+
+static func _side_morale_mass(side: Array[Army]) -> float:
+	var total := 0.0
+	for army in side:
+		if army.size > 0:
+			total += float(army.size) * army.morale
+	return total
 
 
 static func _extract_routed_armies(
@@ -848,6 +999,30 @@ static func _side_residual(side: Array[Army]) -> float:
 		if a.size > 0:
 			total += float(a.size) * combat_efficiency(a.morale)
 	return total
+
+
+static func _combined_side_morale(
+	active: Array[Army],
+	routed: Array[Army]
+) -> float:
+	var morale_mass := _side_morale_mass(active)
+	var total_size := _side_size(active)
+	for army in routed:
+		if army.size > 0:
+			morale_mass += float(army.size) * army.morale
+			total_size += army.size
+	return (
+		morale_mass / float(total_size)
+		if total_size > 0
+		else 0.0
+	)
+
+
+static func _combined_side_residual(
+	active: Array[Army],
+	routed: Array[Army]
+) -> float:
+	return _side_residual(active) + _side_residual(routed)
 
 
 static func _side_attack(side: Array[Army]) -> float:

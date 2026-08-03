@@ -197,6 +197,8 @@ func _build_symmetric_world() -> GameState:
 		city.owner_nation = LEFT_NATION if col < GameState.GRID / 2 else RIGHT_NATION
 		state.recognized_city_owners[city.id] = city.owner_nation
 		city.fort_strength = 12 + (row * 3 + mirror_col * 5) % 17
+		city.fort_strength_max = city.fort_strength
+		city.fort_last_capture_day = -1
 		city.manpower_per_month = 7 + (row * 7 + mirror_col * 11) % 8
 		city.gold_per_month = 6 + (row * 2 + mirror_col * 3) % 10
 		city.food_per_half_year = 600 + (row * 17 + mirror_col * 29) % 201
@@ -320,6 +322,9 @@ func _validate_symmetry(state: GameState) -> bool:
 				left.owner_nation != LEFT_NATION
 				or right.owner_nation != RIGHT_NATION
 				or left.fort_strength != right.fort_strength
+				or left.fort_strength_max != right.fort_strength_max
+				or left.fort_last_capture_day
+					!= right.fort_last_capture_day
 				or left.manpower_per_month != right.manpower_per_month
 				or left.gold_per_month != right.gold_per_month
 				or left.food_per_half_year != right.food_per_half_year
@@ -400,6 +405,8 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 		"treasury_gold",
 		"granary_food",
 		"last_food_demand",
+		"campaign_preparation_started_day",
+		"campaign_launched_bonus_days",
 	]:
 		if left_nation.get(field) != right_nation.get(field):
 			return "nation.%s left=%s right=%s" % [
@@ -411,6 +418,7 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 		"food_demand_ema",
 		"ai_aggression",
 		"campaign_preparation_multiplier",
+		"campaign_launched_attack_multiplier",
 	]:
 		if not is_equal_approx(
 			float(left_nation.get(field)),
@@ -421,6 +429,54 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 				float(left_nation.get(field)),
 				float(right_nation.get(field)),
 			]
+	var right_full_preparation_target := (
+		_mirror_city_id(
+			state,
+			right_nation.campaign_full_preparation_target_city
+		)
+		if right_nation.campaign_full_preparation_target_city >= 0
+		else -1
+	)
+	if (
+		left_nation.campaign_full_preparation_target_city
+			!= right_full_preparation_target
+	):
+		return (
+			"nation.campaign_full_preparation_target_city "
+			+ "left=%d mirrored_right=%d"
+		) % [
+			left_nation.campaign_full_preparation_target_city,
+			right_full_preparation_target,
+		]
+	var left_post_capture_plans: Array[String] = []
+	for city_id_value in left_nation.campaign_post_capture_plans:
+		var city_id := int(city_id_value)
+		var plan: Dictionary = (
+			left_nation.campaign_post_capture_plans[city_id]
+		)
+		left_post_capture_plans.append("%d:%d:%d" % [
+			city_id,
+			int(plan.get("preparation_days", -1)),
+			int(plan.get("expires_day", -1)),
+		])
+	var right_post_capture_plans: Array[String] = []
+	for city_id_value in right_nation.campaign_post_capture_plans:
+		var city_id := int(city_id_value)
+		var plan: Dictionary = (
+			right_nation.campaign_post_capture_plans[city_id]
+		)
+		right_post_capture_plans.append("%d:%d:%d" % [
+			_mirror_city_id(state, city_id),
+			int(plan.get("preparation_days", -1)),
+			int(plan.get("expires_day", -1)),
+		])
+	left_post_capture_plans.sort()
+	right_post_capture_plans.sort()
+	if left_post_capture_plans != right_post_capture_plans:
+		return "nation.campaign_post_capture_plans left=%s right=%s" % [
+			left_post_capture_plans,
+			right_post_capture_plans,
+		]
 	for row in range(GameState.GRID):
 		for col in range(GameState.GRID / 2):
 			var left_id := row * GameState.GRID + col
@@ -437,6 +493,8 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 				]
 			for field in [
 				"fort_strength",
+				"fort_strength_max",
+				"fort_last_capture_day",
 				"manpower_per_month",
 				"gold_per_month",
 				"food_per_half_year",

@@ -295,6 +295,17 @@ static func _attack_candidate(
 		if target_distance == INF:
 			continue
 		var city := view.state.cities[city_id]
+		if _waiting_for_full_campaign_preparation(
+			view,
+			city_id
+		):
+			continue
+		var preparation_multiplier := (
+			_campaign_target_preparation_multiplier(
+				view,
+				city_id
+			)
+		)
 		var legal_reclamation := (
 			view.state.recognized_owner_of(city_id)
 				== view.nation_id
@@ -350,6 +361,8 @@ static func _attack_candidate(
 		)
 		if is_adjacent_participant:
 			attack_power = maxf(attack_power, float(pool["power"]))
+		participant_power *= preparation_multiplier
+		attack_power *= preparation_multiplier
 		var ratio := attack_power / maxf(enemy_power, 1.0)
 		var participant_ratio := participant_power / maxf(
 			enemy_power,
@@ -406,6 +419,24 @@ static func _attack_candidate(
 		),
 		best_city
 	)
+	var best_preparation_multiplier := (
+		_campaign_target_preparation_multiplier(
+			view,
+			best_city
+		)
+	)
+	if best_preparation_multiplier > 1.0:
+		candidate.offensive_attack_multiplier = (
+			best_preparation_multiplier
+		)
+		candidate.offensive_bonus_days = (
+			Simulation.offensive_bonus_duration_days(
+				_campaign_target_preparation_days(
+					view,
+					best_city
+				)
+			)
+		)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 	return candidate
 
@@ -900,6 +931,22 @@ static func _choose_holding(
 		)
 	var hold_score := snapshot.value_of_edge(army.move_from, army.move_to) + 2.0
 	if (
+		view.state.is_enemy(
+			view.nation_id,
+			target_city.owner_nation
+		)
+		and _waiting_for_full_campaign_preparation(
+			view,
+			enemy_endpoint
+		)
+	):
+		return ActionCandidate.make(
+			ActionCandidate.Kind.HOLD,
+			hold_score + 12.0,
+			"等待国家级180天满攻势准备完成",
+			enemy_endpoint
+		)
+	if (
 		view.state.is_enemy(view.nation_id, target_city.owner_nation)
 		and army.morale >= 0.70
 		and army.supply_ratio >= 0.75
@@ -936,11 +983,22 @@ static func _choose_holding(
 			own_attack_power *= Combat.attack_multiplier(
 				held_edge.danger
 			)
-		var local_ratio := maxf(own_attack_power, float(pool["power"])) / maxf(
+		var preparation_multiplier := (
+			_campaign_target_preparation_multiplier(
+				view,
+				enemy_endpoint
+			)
+		)
+		var local_ratio := (
+			maxf(own_attack_power, float(pool["power"]))
+			* preparation_multiplier
+		) / maxf(
 			projected_enemy + ArmyPower.city_defense(target_city),
 			1.0
 		)
-		var participant_ratio := own_attack_power / maxf(
+		var participant_ratio := (
+			own_attack_power * preparation_multiplier
+		) / maxf(
 			projected_enemy + ArmyPower.city_defense(target_city),
 			1.0
 		)
@@ -965,6 +1023,18 @@ static func _choose_holding(
 				enemy_endpoint
 			)
 			attack.minimum_commit_days = STRATEGIC_COMMIT_DAYS
+			if preparation_multiplier > 1.0:
+				attack.offensive_attack_multiplier = (
+					preparation_multiplier
+				)
+				attack.offensive_bonus_days = (
+						Simulation.offensive_bonus_duration_days(
+							_campaign_target_preparation_days(
+								view,
+								enemy_endpoint
+						)
+						)
+				)
 			return attack
 	return ActionCandidate.make(
 		ActionCandidate.Kind.HOLD,
@@ -1030,6 +1100,46 @@ static func _enemy_power_on_edge(
 		):
 			total += ArmyPower.effective(enemy)
 	return total
+
+
+static func _campaign_target_preparation_multiplier(
+	view: AiWorldView,
+	city_id: int
+) -> float:
+	return Simulation.offensive_preparation_multiplier(
+		_campaign_target_preparation_days(view, city_id)
+	)
+
+
+static func _campaign_target_preparation_days(
+	view: AiWorldView,
+	city_id: int
+) -> int:
+	var nation := view.state.nations[view.nation_id]
+	if (
+		nation.campaign_full_preparation_target_city
+			!= city_id
+		or nation.campaign_preparation_started_day < 0
+	):
+		return 0
+	return maxi(
+		view.day - nation.campaign_preparation_started_day,
+		0
+	)
+
+
+static func _waiting_for_full_campaign_preparation(
+	view: AiWorldView,
+	city_id: int
+) -> bool:
+	var nation := view.state.nations[view.nation_id]
+	return (
+		nation.campaign_full_preparation_target_city
+			== city_id
+		and nation.campaign_preparation_started_day >= 0
+		and view.day - nation.campaign_preparation_started_day
+			< Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+	)
 
 
 static func _aggression(view: AiWorldView) -> float:

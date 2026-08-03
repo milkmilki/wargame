@@ -29,6 +29,7 @@ func _init() -> void:
 	_test_determinism()
 	_test_time_layering()
 	_test_siege_dice()
+	_test_captured_city_fort_recovery()
 	_test_trigger_detection()
 	_test_three_way_battle()
 	_test_three_way_siege()
@@ -1015,6 +1016,171 @@ func _test_siege_dice() -> void:
 	var t_defhi := _run_siege(sim, _make_pure_siege(_make_army(0, 0, 1000, 10), 40, 4, 100))
 	_check(t_deflo == t_defhi, "纯围城速度应只取决于 siege_required，与工事强度无关：%d vs %d" % [t_deflo, t_defhi])
 
+	sim.free()
+
+
+func _test_captured_city_fort_recovery() -> void:
+	print("[9b] 城破工事：降至50%、一年线性回满、再次易手刷新")
+	var gs := GameState.new()
+	gs.generate_grid_world(12346)
+	gs.armies.clear()
+	gs.battles.clear()
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var city: City = null
+	var counterattack_staging_city := -1
+	for candidate in gs.cities:
+		if candidate.is_capital or candidate.has_warehouse:
+			continue
+		var has_counterattack_route := false
+		for neighbor in gs.neighbors(candidate.id):
+			var route := gs.edge_of(candidate.id, neighbor)
+			if (
+				gs.cities[neighbor].owner_nation
+					== candidate.owner_nation
+				and route.max_manpower
+					>= Edge.STANDARD_MANPOWER
+			):
+				has_counterattack_route = true
+				counterattack_staging_city = neighbor
+				break
+		if has_counterattack_route:
+			city = candidate
+			break
+	_check(
+		city != null,
+		"测试地图应存在可供原城主反攻的非首都城市"
+	)
+	if city == null:
+		sim.free()
+		return
+	var old_owner := city.owner_nation
+	var invader := (old_owner + 1) % gs.nations.size()
+	var full_strength := city.fort_strength
+	var full_requirement := UtilityAI.assault_commit_threshold(
+		0,
+		full_strength
+	)
+	var first_capture_day := 40
+	gs.day = first_capture_day
+	var captor := _make_army(9800, invader, 1000, 10)
+	gs.armies.append(captor)
+	sim._capture_city(captor, city, invader)
+	var damaged_strength := (
+		Simulation.city_fort_strength_after_capture(
+			full_strength,
+			0
+		)
+	)
+	_check(
+		city.owner_nation == invader
+			and city.fort_strength_max == full_strength
+			and city.fort_strength == damaged_strength
+			and city.fort_last_capture_day == first_capture_day,
+		"城市首次易手应保留完整工事%d、当前降至50%%附近%d并记录第%d天"
+			% [full_strength, damaged_strength, first_capture_day]
+	)
+	var damaged_requirement := UtilityAI.assault_commit_threshold(
+		0,
+		city.fort_strength
+	)
+	_check(
+		damaged_requirement < full_requirement,
+		"新占城市应直接降低 AI 攻城集结门槛：完整%d，受损%d"
+			% [full_requirement, damaged_requirement]
+	)
+	var counterattack_objective := DiplomacyAI.select_war_objective(
+		gs,
+		old_owner,
+		invader
+	)
+	_check(
+		int(counterattack_objective.get("city_id", -1)) == city.id
+			and str(
+				counterattack_objective.get("reason", "")
+			).contains("近期失地"),
+		"原城主应在恢复窗口优先反攻近期失地，而非放任城防回满"
+	)
+	var reclaim_required := DiplomacyAI.required_assault_troops(
+		gs,
+		old_owner,
+		city.id
+	)
+	var reclaim_army := _make_army(
+		9802,
+		old_owner,
+		maxi(reclaim_required, 1000),
+		10
+	)
+	reclaim_army.location_city = counterattack_staging_city
+	reclaim_army.move_from = counterattack_staging_city
+	gs.armies.append(reclaim_army)
+	gs.nations[old_owner].campaign_next_offensive_day = (
+		gs.day + Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
+	)
+	var reclamation_launched := sim._manage_campaign_offensive(
+		old_owner
+	)
+	_check(
+		reclaim_required < damaged_requirement
+			and reclamation_launched
+			and reclaim_army.ai_action
+				== ActionCandidate.Kind.ATTACK
+			and reclaim_army.ai_target_city == city.id,
+		"近期失地反攻应忽略本国工事集结成本并绕过普通攻势冷却"
+	)
+	var recovery_siege := gs.new_battle(Battle.Kind.SIEGE)
+	recovery_siege.city = city
+	recovery_siege.siege_required = Combat.siege_required_manpower(
+		city.fort_strength
+	)
+	var fortification_revision_before := gs.fortification_revision
+	gs.day = first_capture_day + 182
+	sim._recover_city_fortifications()
+	_check(
+		city.fort_strength > damaged_strength
+			and city.fort_strength < full_strength
+			and gs.fortification_revision
+				== fortification_revision_before + 1
+			and recovery_siege.siege_required
+				== Combat.siege_required_manpower(
+					city.fort_strength
+				),
+		"半年后城防应部分恢复，且既有围城同步当前工事：%d/%d"
+			% [city.fort_strength, full_strength]
+	)
+	gs.battles.clear()
+	var recaptor := _make_army(9801, old_owner, 1000, 10)
+	gs.armies.append(recaptor)
+	var second_capture_day := gs.day
+	sim._capture_city(recaptor, city, old_owner)
+	_check(
+		city.fort_strength == damaged_strength
+			and city.fort_strength_max == full_strength
+			and city.fort_last_capture_day == second_capture_day,
+		"再次易手必须从完整工事重新降至50%%并刷新日期，不能对当前值连续折半"
+	)
+	gs.day = second_capture_day + Simulation.CITY_FORT_RECOVERY_DAYS - 1
+	sim._recover_city_fortifications()
+	_check(
+		city.fort_strength < full_strength,
+		"恢复期第364天仍不得提前回满：%d/%d"
+			% [city.fort_strength, full_strength]
+	)
+	gs.day = second_capture_day + Simulation.CITY_FORT_RECOVERY_DAYS
+	sim._recover_city_fortifications()
+	_check(
+		city.fort_strength == full_strength
+			and _approx(
+				Simulation.city_fort_vulnerability(
+					city,
+					gs.day
+				),
+				0.0
+			),
+		"恢复期第365天应精确回满：%d/%d"
+			% [city.fort_strength, full_strength]
+	)
 	sim.free()
 
 
@@ -4238,9 +4404,12 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and city.manpower_per_month <= GameState.CITY_MANPOWER_PER_MONTH_MAX,
 			"城市月度人口恢复应位于新标定区间"
 		)
-	_check(gs.nations[nation_id].manpower_pool == expected_initial,
-		"开局人口库应汇总本国城市储备：应 %d，实为 %d"
-			% [expected_initial, gs.nations[nation_id].manpower_pool])
+	_check(
+		GameState.INITIAL_MANPOWER_RESERVE_MONTHS == 750
+			and gs.nations[nation_id].manpower_pool == expected_initial,
+		"开局人口库应按 750 个月产出储备（旧值 150 的 5 倍）：应 %d，实为 %d"
+			% [expected_initial, gs.nations[nation_id].manpower_pool]
+	)
 	var initial_light_armies := 0
 	var initial_heavy_armies := 0
 	for army in gs.armies:
@@ -4786,6 +4955,86 @@ func _test_diplomacy_state_and_ai() -> void:
 		has_peace_action,
 		"长期战争必须产生可接受的求和候选"
 	)
+	var bilateral_peace_state := GameState.new()
+	bilateral_peace_state.generate_grid_world(32013)
+	for peace_a in range(
+		bilateral_peace_state.nations.size()
+	):
+		for peace_b in range(
+			peace_a + 1,
+			bilateral_peace_state.nations.size()
+		):
+			bilateral_peace_state.set_diplomatic_relation(
+				peace_a,
+				peace_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	bilateral_peace_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	bilateral_peace_state.armies.clear()
+	for peace_nation in range(2):
+		var peace_army := _make_army(
+			9930 + peace_nation,
+			peace_nation,
+			10000,
+			10,
+			10
+		)
+		peace_army.location_city = (
+			bilateral_peace_state.cities_of(
+				peace_nation
+			)[0].id
+		)
+		peace_army.move_from = peace_army.location_city
+		bilateral_peace_state.armies.append(peace_army)
+	bilateral_peace_state.day = 360
+	bilateral_peace_state.nations[0].unpaid_war_cost = 20
+	bilateral_peace_state.nations[0].manpower_pool = 0
+	for warehouse in bilateral_peace_state.warehouse_cities_of(0):
+		warehouse.food_storage = 0
+	var mutual_peace := DiplomacyAI.peace_assessment(
+		bilateral_peace_state,
+		0,
+		1
+	)
+	_check(
+		bool(mutual_peace["acceptable"])
+			and float(mutual_peace["score_a"])
+				>= DiplomacyAI.PEACE_PROPOSE_SCORE
+			and float(mutual_peace["score_b"])
+				>= DiplomacyAI.PEACE_ACCEPT_SCORE
+			and float(mutual_peace["score_b"])
+				< DiplomacyAI.PEACE_PROPOSE_SCORE,
+		"一方强烈求和、另一方愿意接受且双边总效用达标时应缔结和平"
+	)
+	var dominant_army := _make_army(
+		9940,
+		1,
+		60000,
+		10,
+		10
+	)
+	dominant_army.location_city = (
+		bilateral_peace_state.cities_of(1)[0].id
+	)
+	dominant_army.move_from = dominant_army.location_city
+	bilateral_peace_state.armies.append(dominant_army)
+	var refused_peace := DiplomacyAI.peace_assessment(
+		bilateral_peace_state,
+		0,
+		1
+	)
+	_check(
+		not bool(refused_peace["acceptable"])
+			and float(refused_peace["score_a"])
+				>= DiplomacyAI.PEACE_PROPOSE_SCORE
+			and float(refused_peace["score_b"])
+				< DiplomacyAI.PEACE_ACCEPT_SCORE,
+		"求和方意愿再高也不得绕过优势方明确拒绝和平的接受底线"
+	)
 
 	for a in range(ai_state.nations.size()):
 		for b in range(a + 1, ai_state.nations.size()):
@@ -4821,6 +5070,17 @@ func _test_diplomacy_state_and_ai() -> void:
 		"国家激进值越高，资源条件相同时宣战意愿必须单调提高"
 	)
 	ai_state.nations[0].ai_aggression = 1.0
+	var default_war_desire := DiplomacyAI.war_desire(
+		ai_state,
+		0,
+		1
+	)
+	_check(
+		default_war_desire >= DiplomacyAI.WAR_DECLARE_SCORE
+			and _approx(DiplomacyAI.WAR_DECLARE_SCORE, 1.0),
+		"资源就绪的默认国家应达到加强后的 1.00 宣战线，实为 %.3f"
+			% default_war_desire
+	)
 	var alliance_edge: Edge = null
 	for candidate_edge in ai_state.edges:
 		var owner_a := ai_state.cities[
@@ -5126,8 +5386,12 @@ func _test_diplomacy_state_and_ai() -> void:
 		and _approx(
 			Simulation.offensive_preparation_multiplier(360),
 			2.0
-		),
-		"攻势倍率必须从0天1倍线性增长，并在备战180天封顶2倍"
+			)
+			and Simulation.offensive_bonus_duration_days(30) == 30
+			and Simulation.offensive_bonus_duration_days(60) == 60
+			and Simulation.offensive_bonus_duration_days(180) == 180
+			and Simulation.offensive_bonus_duration_days(360) == 180,
+		"攻势倍率和持续期应随准备天数增长，并都在180天封顶"
 	)
 	var first_wave_army: Army = null
 	for army in objective_state.armies:
@@ -5140,7 +5404,13 @@ func _test_diplomacy_state_and_ai() -> void:
 			first_wave_army = army
 			break
 	_check(
-		objective_executed and first_wave_army != null,
+		objective_executed
+			and first_wave_army != null
+			and objective_state.nations[
+				objective_attacker
+			].campaign_next_offensive_day
+				== objective_state.day
+					+ Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS,
 		"宣战当日必须把已集结军队转为针对目标城的首轮攻势"
 	)
 	_check(
@@ -5153,8 +5423,8 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 		and first_wave_army.offensive_bonus_until_day
 			== objective_state.day
-				+ Simulation.OFFENSIVE_BONUS_DURATION_DAYS,
-		"首轮参战军必须按实际备战天数获得持续30天的攻击加成"
+					+ DiplomacyAI.WAR_PREPARATION_MIN_DAYS,
+		"首轮参战军的攻击加成必须持续实际备战天数"
 	)
 	_check(
 		not objective_state.campaign_visual_events.is_empty()
@@ -5235,15 +5505,22 @@ func _test_diplomacy_state_and_ai() -> void:
 		next_wave_launched
 		and objective_state.nations[objective_attacker].campaign_offensive_count
 			== first_wave_count + 1,
-		"战争持续时每90天应重新集结并发动下一轮国家级攻势"
+		"战争持续时每%d天应重新集结并发动下一轮国家级攻势"
+			% Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
 	)
 	_check(
 		second_wave_army != null
 		and _approx(
 			second_wave_army.offensive_attack_multiplier,
-			1.5
-		),
-		"间隔90天发动的后续攻势应获得1.5倍攻击倍率"
+				Simulation.offensive_preparation_multiplier(
+					Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
+				)
+			)
+			and second_wave_army.offensive_bonus_until_day
+				== objective_state.day
+					+ Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS,
+		"后续攻势倍率应匹配 %d 天重整时长"
+			% Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
 	)
 	var arrow_expiry := int(
 		objective_state.campaign_visual_events[-1]["end_day"]
@@ -5266,9 +5543,231 @@ func _test_diplomacy_state_and_ai() -> void:
 			1.0
 		)
 		and second_wave_army.offensive_bonus_until_day == -1,
-		"攻势攻击加成必须在30天截止日清除"
+		"攻势攻击加成必须在对应准备天数的截止日清除"
 	)
 	objective_sim.free()
+
+	var stalemate_state := GameState.new()
+	stalemate_state.generate_grid_world(32012)
+	stalemate_state.armies.clear()
+	stalemate_state.battles.clear()
+	for city in stalemate_state.cities:
+		city.owner_nation = 0
+		stalemate_state.recognized_city_owners[city.id] = 0
+	for stalemate_edge in stalemate_state.edges:
+		stalemate_edge.max_manpower = 0
+	var stalemate_origin := 9
+	var stalemate_target := 10
+	var stalemate_support := 11
+	for enemy_city in [
+		stalemate_target,
+		stalemate_support,
+	]:
+		stalemate_state.cities[enemy_city].owner_nation = 1
+		stalemate_state.recognized_city_owners[enemy_city] = 1
+	stalemate_state.cities[stalemate_target].fort_strength = 10
+	stalemate_state.cities[stalemate_target].fort_strength_max = 10
+	stalemate_state.edge_of(
+		stalemate_origin,
+		stalemate_target
+	).max_manpower = 30000
+	stalemate_state.edge_of(
+		stalemate_target,
+		stalemate_support
+	).max_manpower = 30000
+	for nation_a in range(stalemate_state.nations.size()):
+		for nation_b in range(
+			nation_a + 1,
+			stalemate_state.nations.size()
+		):
+			stalemate_state.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	stalemate_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	stalemate_state.set_war_objective(
+		0,
+		1,
+		stalemate_target,
+		"均势僵局满准备测试"
+	)
+	var stalemate_attackers: Array[Army] = []
+	for attacker_index in range(2):
+		var stalemate_attacker := _make_army(
+			9900 + attacker_index,
+			0,
+			10000,
+			10,
+			10
+		)
+		stalemate_attacker.state = Army.State.HOLDING
+		stalemate_attacker.location_city = stalemate_origin
+		stalemate_attacker.move_from = stalemate_origin
+		stalemate_attacker.move_to = stalemate_target
+		stalemate_attacker.move_progress = (
+			Simulation.HOLDING_TARGET_PROGRESS
+		)
+		stalemate_attacker.on_edge = true
+		stalemate_state.armies.append(stalemate_attacker)
+		stalemate_attackers.append(stalemate_attacker)
+	stalemate_state.edge_of(
+		stalemate_origin,
+		stalemate_target
+	).passing_count = stalemate_attackers.size()
+	var stalemate_defender := _make_army(
+		9910,
+		1,
+		10000,
+		10,
+		10
+	)
+	stalemate_defender.location_city = stalemate_target
+	stalemate_defender.move_from = stalemate_target
+	stalemate_state.armies.append(stalemate_defender)
+	for support_index in range(2):
+		var support_army := _make_army(
+			9920 + support_index,
+			1,
+			10000,
+			10,
+			10
+		)
+		support_army.location_city = stalemate_support
+		support_army.move_from = stalemate_support
+		stalemate_state.armies.append(support_army)
+	var stalemate_nation := stalemate_state.nations[0]
+	stalemate_nation.campaign_last_offensive_day = 0
+	stalemate_nation.campaign_next_offensive_day = (
+		Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
+	)
+	stalemate_nation.campaign_preparation_started_day = 0
+	stalemate_state.day = (
+		Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
+	)
+	var stalemate_sim := Simulation.new()
+	stalemate_sim.setup(stalemate_state)
+	var stalemate_threat := ThreatField.build(
+		AiWorldView.build(stalemate_state, 0)
+	)
+	var ratio_at_normal_window := (
+		stalemate_sim._campaign_projected_assault_ratio(
+			0,
+			stalemate_target,
+			Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS,
+			stalemate_threat
+		)
+	)
+	var ratio_at_full_preparation := (
+		stalemate_sim._campaign_projected_assault_ratio(
+			0,
+			stalemate_target,
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+			stalemate_threat
+		)
+	)
+	var stalemate_threshold := (
+		stalemate_sim._campaign_attack_ratio_threshold(0)
+	)
+	_check(
+		ratio_at_normal_window < stalemate_threshold
+			and ratio_at_full_preparation >= stalemate_threshold,
+		"均势夹具应仅在180天满准备后跨过进攻阈值：60天%.2f，180天%.2f，阈值%.2f"
+			% [
+				ratio_at_normal_window,
+				ratio_at_full_preparation,
+				stalemate_threshold,
+			]
+	)
+	stalemate_sim._manage_campaign_offensive(
+		0,
+		null,
+		null,
+		stalemate_threat
+	)
+	stalemate_state.day = (
+		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS - 1
+	)
+	stalemate_sim._manage_campaign_offensive(
+		0,
+		null,
+		null,
+		ThreatField.build(
+			AiWorldView.build(stalemate_state, 0)
+		)
+	)
+	var no_early_stalemate_attack := true
+	for stalemate_attacker in stalemate_attackers:
+		no_early_stalemate_attack = (
+			no_early_stalemate_attack
+			and stalemate_attacker.ai_action
+				!= ActionCandidate.Kind.ATTACK
+		)
+	_check(
+		stalemate_nation.campaign_full_preparation_target_city
+			== stalemate_target
+			and stalemate_nation.campaign_offensive_count == 0
+			and no_early_stalemate_attack,
+		"均势攻势在60至179天必须持续集结，不得拆成零散提前攻击"
+	)
+	stalemate_state.day = (
+		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+	)
+	var full_preparation_launched := (
+		stalemate_sim._manage_campaign_offensive(
+			0,
+			null,
+			null,
+			ThreatField.build(
+				AiWorldView.build(stalemate_state, 0)
+			)
+		)
+	)
+	var full_preparation_attackers := 0
+	var full_preparation_bonus_extended := false
+	for stalemate_attacker in stalemate_attackers:
+		if (
+			stalemate_attacker.ai_action
+				== ActionCandidate.Kind.ATTACK
+			and stalemate_attacker.ai_target_city
+				== stalemate_target
+			and _approx(
+				stalemate_attacker.offensive_attack_multiplier,
+				Simulation.OFFENSIVE_BONUS_MAX_MULTIPLIER
+			)
+		):
+			full_preparation_attackers += 1
+			full_preparation_bonus_extended = (
+				stalemate_attacker.offensive_bonus_until_day
+				== stalemate_state.day
+					+ Simulation
+						.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+			)
+	_check(
+		full_preparation_launched
+			and full_preparation_attackers > 0
+			and stalemate_nation.campaign_offensive_count == 1
+			and stalemate_nation
+				.campaign_full_preparation_target_city == -1
+			and full_preparation_bonus_extended,
+		(
+			"第180天必须以2倍攻击加成统一发动满准备攻势："
+			+ "launched=%s attackers=%d count=%d target=%d "
+			+ "prep_start=%d multiplier=%.2f"
+		) % [
+			str(full_preparation_launched),
+			full_preparation_attackers,
+			stalemate_nation.campaign_offensive_count,
+			stalemate_nation.campaign_full_preparation_target_city,
+			stalemate_nation.campaign_preparation_started_day,
+			stalemate_nation.campaign_preparation_multiplier,
+		]
+	)
+	stalemate_sim.free()
 
 	var counter_state := GameState.new()
 	counter_state.generate_grid_world(32011)
@@ -5571,10 +6070,202 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 		and followup_army.offensive_bonus_until_day
 			== echelon_state.day
-				+ Simulation.OFFENSIVE_BONUS_DURATION_DAYS,
+					+ Simulation
+						.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
 		"后续梯队应继承整轮备战倍率，并从实际投入日计算持续期"
 	)
+	var post_capture_target := 11
+	echelon_state.cities[post_capture_target].owner_nation = 1
+	echelon_state.recognized_city_owners[
+		post_capture_target
+	] = 1
+	echelon_state.edge_of(
+		echelon_target,
+		post_capture_target
+	).max_manpower = 30000
+	var post_capture_support := _make_army(
+		9950,
+		0,
+		15000,
+		10,
+		10
+	)
+	post_capture_support.location_city = echelon_target
+	post_capture_support.move_from = echelon_target
+	echelon_state.armies.append(post_capture_support)
+	var next_city_defender := _make_army(
+		9951,
+		1,
+		2000,
+		10,
+		10
+	)
+	next_city_defender.location_city = post_capture_target
+	next_city_defender.move_from = post_capture_target
+	echelon_state.armies.append(next_city_defender)
+	var lead_bonus_deadline := (
+		lead_army.offensive_bonus_until_day
+		if lead_army != null
+		else -1
+	)
+	if lead_army != null:
+		echelon_sim._capture_city(
+			lead_army,
+			echelon_state.cities[echelon_target]
+		)
+	_check(
+		lead_army != null
+			and lead_army.state == Army.State.MOVING
+			and lead_army.ai_action
+				== ActionCandidate.Kind.ATTACK
+			and lead_army.ai_target_city
+				== post_capture_target
+			and lead_army.ai_order_reason.contains(
+				"满准备攻势第二阶段"
+			)
+			and lead_army.offensive_bonus_until_day
+				== lead_bonus_deadline
+			and not echelon_nation
+				.campaign_post_capture_plans.has(
+					echelon_target
+				),
+		"满准备攻势占城且守备充足时，应保留原截止日并立即攻击相邻弱城"
+	)
 	echelon_sim.free()
+
+	var consolidate_state := GameState.new()
+	consolidate_state.generate_grid_world(32014)
+	consolidate_state.armies.clear()
+	for consolidate_city in consolidate_state.cities:
+		consolidate_city.owner_nation = 0
+		consolidate_state.recognized_city_owners[
+			consolidate_city.id
+		] = 0
+	for consolidate_a in range(
+		consolidate_state.nations.size()
+	):
+		for consolidate_b in range(
+			consolidate_a + 1,
+			consolidate_state.nations.size()
+		):
+			consolidate_state.set_diplomatic_relation(
+				consolidate_a,
+				consolidate_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	consolidate_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var consolidate_origin := 9
+	var consolidate_target := 10
+	var consolidate_next := 11
+	for enemy_city in [
+		consolidate_target,
+		consolidate_next,
+	]:
+		consolidate_state.cities[enemy_city].owner_nation = 1
+		consolidate_state.recognized_city_owners[enemy_city] = 1
+	consolidate_state.edge_of(
+		consolidate_origin,
+		consolidate_target
+	).max_manpower = 30000
+	consolidate_state.edge_of(
+		consolidate_target,
+		consolidate_next
+	).max_manpower = 30000
+	var consolidate_army := _make_army(
+		9960,
+		0,
+		15000,
+		10,
+		10
+	)
+	consolidate_army.location_city = consolidate_origin
+	consolidate_army.move_from = consolidate_origin
+	consolidate_army.offensive_attack_multiplier = 2.0
+	consolidate_army.offensive_bonus_until_day = 180
+	consolidate_state.armies.append(consolidate_army)
+	consolidate_state.nations[0].campaign_post_capture_plans[
+		consolidate_target
+	] = {
+		"preparation_days":
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		"expires_day":
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+	}
+	var consolidate_sim := Simulation.new()
+	consolidate_sim.setup(consolidate_state)
+	consolidate_sim._capture_city(
+		consolidate_army,
+		consolidate_state.cities[consolidate_target]
+	)
+	_check(
+		consolidate_army.state == Army.State.IDLE
+			and consolidate_army.location_city
+				== consolidate_target
+			and consolidate_army.ai_action
+				== ActionCandidate.Kind.HOLD
+			and consolidate_army.ai_order_reason.contains(
+				"就地驻扎巩固占领"
+			)
+			and not consolidate_state.nations[0]
+				.campaign_post_capture_plans.has(
+					consolidate_target
+				),
+		"新占城市没有最低留守兵力时，满准备主力必须就地驻扎而非继续追击"
+	)
+	var border_support := _make_army(
+		9961,
+		0,
+		8000,
+		10,
+		10
+	)
+	border_support.location_city = consolidate_target
+	border_support.move_from = consolidate_target
+	consolidate_state.armies.append(border_support)
+	var border_enemy := _make_army(
+		9962,
+		1,
+		12000,
+		10,
+		10
+	)
+	border_enemy.location_city = consolidate_next
+	border_enemy.move_from = consolidate_next
+	consolidate_state.armies.append(border_enemy)
+	consolidate_army.offensive_attack_multiplier = 1.0
+	consolidate_army.offensive_bonus_until_day = -1
+	consolidate_state.nations[0].campaign_post_capture_plans[
+		consolidate_target
+	] = {
+		"preparation_days":
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		"expires_day":
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+	}
+	consolidate_sim._execute_campaign_post_capture_plan(
+		consolidate_army,
+		consolidate_state.cities[consolidate_target]
+	)
+	_check(
+		consolidate_army.state == Army.State.MOVING
+			and consolidate_army.ai_action
+				== ActionCandidate.Kind.HOLD
+			and consolidate_army.ai_target_city
+				== consolidate_next
+			and _approx(
+				consolidate_army.hold_target_progress,
+				Simulation.HOLDING_TARGET_PROGRESS
+			)
+			and consolidate_army.ai_order_reason.contains(
+				"前出驻守"
+			),
+		"新占城市已有最低守军且前线防御比达标时，主力应驻扎敌方方向边界"
+	)
+	consolidate_sim.free()
 
 	var relief_state := GameState.new()
 	relief_state.generate_grid_world(32010)
@@ -6502,6 +7193,40 @@ func _test_combat_fairness_and_conservation() -> void:
 	var loss_full := _one_round_side_b_loss([full_att], [_make_army(2, 1, 3000, 10)], 90)
 	var loss_tired := _one_round_side_b_loss([tired_att], [_make_army(2, 1, 3000, 10)], 90)
 	_check(loss_full > loss_tired, "满士气攻方杀伤(%d)应高于疲劳攻方(%d)（士气折算战力）" % [loss_full, loss_tired])
+	var mixed_strong := _make_army(3, 0, 1000, 20, 10)
+	mixed_strong.morale = 0.25
+	mixed_strong.offensive_attack_multiplier = 1.5
+	var mixed_steady := _make_army(4, 0, 2000, 8, 10)
+	mixed_steady.morale = 0.75
+	var mixed_side: Array[Army] = [
+		mixed_strong,
+		mixed_steady,
+	]
+	var mixed_expected_attack := (
+		float(mixed_strong.size)
+			* float(mixed_strong.attack)
+			* mixed_strong.offensive_attack_multiplier
+			* Combat.combat_efficiency(mixed_strong.morale)
+		+ float(mixed_steady.size)
+			* float(mixed_steady.attack)
+			* Combat.combat_efficiency(mixed_steady.morale)
+	)
+	var mixed_frontline := Combat.frontline_allocation(
+		mixed_side,
+		100000
+	)
+	var mixed_actual_attack := Combat._frontline_attack(
+		mixed_frontline,
+		Combat._side_combat_efficiency(mixed_side)
+	)
+	_check(
+		_approx(
+			mixed_actual_attack,
+			mixed_expected_attack,
+			0.000001
+		),
+		"无限正面混编军的侧级组织效率必须严格还原逐军火力求和"
+	)
 
 	# (g) 正面宽度/预备队（item 5）：窄路(frontage=5000)上大军(20000)无法全数展开。
 	_check(Combat.frontage_engaged_ratio(20000, 5000) == 0.25, "2万兵挤5千正面→参战比例应=0.25")
@@ -6523,6 +7248,155 @@ func _test_combat_fairness_and_conservation() -> void:
 	var single_dmg := sb1 - single_army.side_size(single_army.side_b)
 	var split_dmg := sb2 - split_army.side_size(split_army.side_b)
 	_check(absi(single_dmg - split_dmg) <= 2, "窄路拆分总杀伤应一致：单支%d vs 拆分%d" % [single_dmg, split_dmg])
+	# 完整多回合受限正面不变量：1×10000 与 2×5000 对同一敌军时，
+	# 行政编组粒度不得改变逐轮火力、伤亡、全军组织度、胜负或时长。
+	var constrained_whole := _make_field_battle(
+		[_make_army(10, 0, 10000, 10, 10)],
+		[_make_army(20, 1, 10000, 10, 10)],
+		0.0,
+		4
+	)
+	var constrained_split := _make_field_battle(
+		[
+			_make_army(11, 0, 5000, 10, 10),
+			_make_army(12, 0, 5000, 10, 10),
+		],
+		[_make_army(21, 1, 10000, 10, 10)],
+		0.0,
+		4
+	)
+	constrained_whole.edge.max_manpower = 5000
+	constrained_split.edge.max_manpower = 5000
+	var constrained_rng_whole := RandomNumberGenerator.new()
+	var constrained_rng_split := RandomNumberGenerator.new()
+	constrained_rng_whole.seed = 860001
+	constrained_rng_split.seed = 860001
+	var constrained_start_a := constrained_whole.side_size(
+		constrained_whole.side_a
+	)
+	var constrained_start_b := constrained_whole.side_size(
+		constrained_whole.side_b
+	)
+	var constrained_trace_equal := true
+	var constrained_rounds := 0
+	Combat.battle_log_enabled = true
+	while (
+		not constrained_whole.finished
+		and not constrained_split.finished
+		and constrained_rounds < 1000
+	):
+		Combat.clear_battle_log()
+		Combat.resolve_round(
+			constrained_whole,
+			constrained_rng_whole
+		)
+		var whole_record: Dictionary = (
+			Combat.battle_log[-1].duplicate(true)
+		)
+		Combat.clear_battle_log()
+		Combat.resolve_round(
+			constrained_split,
+			constrained_rng_split
+		)
+		var split_record: Dictionary = (
+			Combat.battle_log[-1].duplicate(true)
+		)
+		constrained_trace_equal = (
+			constrained_trace_equal
+			and int(whole_record["casualties_a"])
+				== int(split_record["casualties_a"])
+			and int(whole_record["casualties_b"])
+				== int(split_record["casualties_b"])
+			and _approx(
+				float(whole_record["effective_attack_a"]),
+				float(split_record["effective_attack_a"]),
+				0.000001
+			)
+			and _approx(
+				float(whole_record["effective_attack_b"]),
+				float(split_record["effective_attack_b"]),
+				0.000001
+			)
+			and _approx(
+				_battle_force_morale(
+					constrained_whole.side_a,
+					constrained_whole.routed_a
+				),
+				_battle_force_morale(
+					constrained_split.side_a,
+					constrained_split.routed_a
+				),
+				0.000000001
+			)
+			and _approx(
+				_battle_force_morale(
+					constrained_whole.side_b,
+					constrained_whole.routed_b
+				),
+				_battle_force_morale(
+					constrained_split.side_b,
+					constrained_split.routed_b
+				),
+				0.000000001
+			)
+		)
+		constrained_rounds += 1
+	Combat.battle_log_enabled = false
+	Combat.clear_battle_log()
+	var constrained_loss_whole := [
+		constrained_start_a
+			- constrained_whole.side_size(
+				constrained_whole.side_a
+			)
+			- constrained_whole.side_size(
+				constrained_whole.routed_a
+			),
+		constrained_start_b
+			- constrained_whole.side_size(
+				constrained_whole.side_b
+			)
+			- constrained_whole.side_size(
+				constrained_whole.routed_b
+			),
+	]
+	var constrained_loss_split := [
+		constrained_start_a
+			- constrained_split.side_size(
+				constrained_split.side_a
+			)
+			- constrained_split.side_size(
+				constrained_split.routed_a
+			),
+		constrained_start_b
+			- constrained_split.side_size(
+				constrained_split.side_b
+			)
+			- constrained_split.side_size(
+				constrained_split.routed_b
+			),
+	]
+	_check(
+		constrained_trace_equal
+			and constrained_whole.finished
+			and constrained_split.finished
+			and constrained_whole.winner_side
+				== constrained_split.winner_side
+			and constrained_whole.round_no
+				== constrained_split.round_no
+			and constrained_loss_whole
+				== constrained_loss_split,
+		(
+			"5000正面完整战斗拆分不变量失败："
+			+ "winner=%d/%d rounds=%d/%d loss=%s/%s"
+		) % [
+			constrained_whole.winner_side,
+			constrained_split.winner_side,
+			constrained_whole.round_no,
+			constrained_split.round_no,
+			str(constrained_loss_whole),
+			str(constrained_loss_split),
+		]
+	)
 	# 窄路一回合杀伤应显著低于宽路：大军被正面卡住，只有前线部队出力。
 	var wide := _make_field_battle([_make_army(0, 0, 20000, 10)], [_make_army(2, 1, 20000, 10)], 0.0, 4)
 	wide.edge.max_manpower = 100000        # 宽路：全员展开
@@ -7319,6 +8193,24 @@ func _run_battle(battle: Battle, rng: RandomNumberGenerator) -> int:
 		Combat.resolve_round(battle, rng)
 		guard += 1
 	return guard
+
+
+func _battle_force_morale(
+	active: Array[Army],
+	routed: Array[Army]
+) -> float:
+	var morale_mass := 0.0
+	var manpower := 0
+	for army in active + routed:
+		if army.size <= 0:
+			continue
+		morale_mass += float(army.size) * army.morale
+		manpower += army.size
+	return (
+		morale_mass / float(manpower)
+		if manpower > 0
+		else 0.0
+	)
 
 
 ## 纯围城（无守军）：side_b 空、has_garrison=false。
