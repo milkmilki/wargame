@@ -2,6 +2,11 @@
 
 项目地址：<https://github.com/milkmilki/wargame>
 
+> **实施状态（2026-08-03）**：item 1～17 及原变更说明中的 4 项残余风险均已闭环。
+> 验收：`run_tests.sh` 745/0、万场统计 `STATISTICS_PASS`、真实地图 4 seed × 1095 天健康、
+> strict-mirror 3650 天逐日无破裂（优势分 0.0）。实现与风险闭环见
+> [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)。
+
 ## 任务目标
 
 重构当前作战系统，修复会导致战果偏置、数值套利、空间失真、围城异常和战斗体验单一的问题。

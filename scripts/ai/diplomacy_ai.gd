@@ -702,7 +702,12 @@ static func select_war_objective(
 			or value > float(best["value"])
 			or (
 				is_equal_approx(value, float(best["value"]))
-				and city.id < int(best["city_id"])
+					and EquivariantOrder.city_id_less(
+						state,
+						nation_id,
+						city.id,
+						int(best["city_id"])
+					)
 			)
 		):
 			best = {
@@ -877,7 +882,15 @@ static func _collect_war_actions(
 			var score := war_desire(state, nation.id, target.id)
 			if score > best_score or (
 				is_equal_approx(score, best_score)
-				and (best_target == -1 or target.id < best_target)
+				and (
+					best_target == -1
+					or EquivariantOrder.nation_less(
+						state,
+						nation.id,
+						target.id,
+						best_target
+					)
+				)
 			):
 				best_score = score
 				best_target = target.id
@@ -1070,7 +1083,12 @@ static func _collect_preparation_alliance(
 				is_equal_approx(score, best_score)
 				and (
 					best_target == -1
-					or candidate.id < best_target
+						or EquivariantOrder.nation_less(
+							state,
+							nation_id,
+							candidate.id,
+							best_target
+						)
 				)
 			)
 		):
@@ -1133,7 +1151,12 @@ static func staging_cities_for_objective(
 			)
 		):
 			result.append(neighbor)
-	result.sort()
+	EquivariantOrder.sort_city_ids(
+		result,
+		state,
+		nation_id,
+		objective_city
+	)
 	return result
 
 

@@ -61,6 +61,7 @@ func _init() -> void:
 	_test_resource_hubs_and_food_mobilization()
 	_test_combat_fairness_and_conservation()
 	_test_structured_battle_log()
+	_test_equivariant_ordering()
 
 	print("\n==== 结果: %d 通过, %d 失败 ====" % [_passed, _failed])
 	for m in _fail_msgs:
@@ -1249,8 +1250,25 @@ func _check_combo(na_count: int, nb_count: int) -> void:
 	_check(gs.battles.size() == 1, "%dv%d 应仅 1 场，实为 %d" % [na_count, nb_count, gs.battles.size()])
 	if gs.battles.size() == 1:
 		var bt: Battle = gs.battles[0]
-		_check(bt.side_a.size() == na_count and bt.side_b.size() == nb_count,
-			"%dv%d 聚合计数应为 %d/%d，实为 %d/%d" % [na_count, nb_count, na_count, nb_count, bt.side_a.size(), bt.side_b.size()])
+		var count_n0 := 0
+		var count_n1 := 0
+		for army in bt.side_a + bt.side_b:
+			if army.owner_nation == 0:
+				count_n0 += 1
+			elif army.owner_nation == 1:
+				count_n1 += 1
+		_check(
+			count_n0 == na_count and count_n1 == nb_count,
+			"%dv%d 聚合应保持各国成员数 %d/%d，实为 %d/%d（不绑定 A/B 侧位）"
+				% [
+					na_count,
+					nb_count,
+					na_count,
+					nb_count,
+					count_n0,
+					count_n1,
+				]
+		)
 	sim.free()
 
 # ------------------------------------------------------------------ 14. 三方卡位串行（同点必战、不得穿过）
@@ -2656,7 +2674,8 @@ func _test_holding_combat_adaptation() -> void:
 	var enemy := _place_army_on_edge(gs, 831, 1, c2, c1, 0.5)
 	sim._detect_encounters()
 	var battle: Battle = gs.battles[0]
-	_check(battle.holding_side == 1 and _approx(battle.holding_days, 60.0),
+	var holder_side := 1 if battle.side_a.has(holder) else 2
+	_check(battle.holding_side == holder_side and _approx(battle.holding_days, 60.0),
 		"野战应快照驻防侧及 60 天适应，side=%d days=%.1f" % [battle.holding_side, battle.holding_days])
 
 	var reinforcement := _place_army_on_edge(gs, 832, 0, c1, c2, 0.5)
@@ -3116,11 +3135,25 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		ArmyCoordinator.new(),
 		merge_follower
 	)
-	_check(
+	var anchor_precedes := EquivariantOrder.army_less(
+		gs,
+		0,
+		merge_anchor,
+		merge_follower
+	)
+	var expected_forward := (
 		anchor_merge == null
 		and follower_merge != null
-		and follower_merge.target_city == merge_anchor.location_city,
-		"等战力跨城合并必须按军队ID形成单向偏序，禁止互相追逐成环"
+		and follower_merge.target_city == merge_anchor.location_city
+	)
+	var expected_reverse := (
+		follower_merge == null
+		and anchor_merge != null
+		and anchor_merge.target_city == merge_follower.location_city
+	)
+	_check(
+		(expected_forward if anchor_precedes else expected_reverse),
+		"等战力跨城合并必须按势力局部物理序形成单向偏序，禁止互相追逐成环"
 	)
 
 	gs.armies.clear()
@@ -4004,11 +4037,13 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 			% [improved_candidate.kind, improved_candidate.reason]
 	)
 	var legacy_order := Simulation._sort_ai_decision_order(
+		participant_view.state,
 		[tiny_participant, assault_support] as Array[Army],
 		participant_snapshot,
 		false
 	)
 	var improved_order := Simulation._sort_ai_decision_order(
+		participant_view.state,
 		[tiny_participant, assault_support] as Array[Army],
 		participant_snapshot,
 		true
@@ -5998,16 +6033,36 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 			border_army,
 			ArmyCoordinator.new()
 		)
-		_check(
+		var serves_pressured_frontier := (
 			hold != null
-			and hold.kind == ActionCandidate.Kind.HOLD
-			and snapshot.potential_threat_of_edge(
-				border_army.location_city,
-				hold.target_city
-			) > 0.0
-			and hold.reason.contains("驻边"),
+			and hold.defensive_deployment
+			and (
+				(
+					hold.kind == ActionCandidate.Kind.HOLD
+					and snapshot.potential_frontier_cities.has(
+						border_army.location_city
+					)
+					and snapshot.potential_threat_of_edge(
+						border_army.location_city,
+						hold.target_city
+					) > 0.0
+					and hold.reason.contains("驻边")
+				)
+				or (
+					hold.kind == ActionCandidate.Kind.REINFORCE
+					and snapshot.potential_frontier_cities.has(
+						hold.target_city
+					)
+					and hold.reason.contains(
+						"高威胁中立国边境"
+					)
+				)
+			)
+		)
+		_check(
+			serves_pressured_frontier,
 			(
-				"边境军应按统一防御姿态部署：%s posture=%d edge=%d"
+				"边境军应服务于高压边境目标（驻边或转援未满足防区）：%s posture=%d edge=%d"
 				% [
 					"null" if hold == null else (
 						"kind=%d target=%d reason=%s" % [
@@ -6489,7 +6544,7 @@ func _test_structured_battle_log() -> void:
 	_check(Combat.battle_log.size() == rounds,
 		"启用日志后记录条数应等于回合数 %d，实为 %d" % [rounds, Combat.battle_log.size()])
 	var required_keys := [
-		"battle_id", "round_no", "kind", "participants_a", "participants_b",
+		"battle_id", "day", "round_no", "kind", "participants_a", "participants_b",
 		"frontline_strength_a", "reserve_strength_a", "effective_attack_a", "effective_defense_a",
 		"shared_random_modifier", "side_random_modifier", "terrain_modifier_a", "supply_modifier_a",
 		"casualties_a", "morale_before_a", "morale_after_a", "reinforcements_arrived_a",
@@ -6509,8 +6564,60 @@ func _test_structured_battle_log() -> void:
 	# morale_after 应随回合单调不增（士气侵蚀），且首回合 morale_before≈1.0。
 	_check(_approx(float(first["morale_before_a"]), 1.0),
 		"满编新军首回合 morale_before 应≈1.0，实为 %.4f" % float(first["morale_before_a"]))
+	_check(
+		first["participants_a"] is Array
+			and not (first["participants_a"] as Array).is_empty()
+			and first["battle_context"] is Dictionary,
+		"日志应携带可独立回放的参战军快照与战场上下文"
+	)
 
-	# (c) 镜像安全：开/关日志跑同种子同阵容，战斗结果逐位一致（日志只读、不改数值）。
+	# (c) JSONL 落盘/加载/回放：每条记录可独立重建，篡改结果必须被检测。
+	var log_path := "user://combat_log_roundtrip_test.jsonl"
+	var saved := CombatLog.save_jsonl(
+		Combat.battle_log,
+		log_path
+	)
+	var loaded := CombatLog.load_jsonl(log_path)
+	_check(
+		bool(saved.get("ok", false))
+			and bool(loaded.get("ok", false))
+			and (loaded["records"] as Array).size()
+				== Combat.battle_log.size(),
+		"结构化日志 JSONL 应可完整落盘并加载：save=%s load=%s"
+			% [str(saved), str(loaded)]
+	)
+	if bool(loaded.get("ok", false)):
+		var replayed := CombatLog.replay_records(
+			loaded["records"] as Array[Dictionary]
+		)
+		_check(
+			bool(replayed.get("ok", false)),
+			"加载后的战斗日志应逐回合确定性重放：%s"
+				% str(replayed)
+		)
+		var tampered: Array[Dictionary] = (
+			loaded["records"] as Array[Dictionary]
+		).duplicate(true)
+		if not tampered.is_empty():
+			var after_a: Array = tampered[0][
+				"participants_after_a"
+			]
+			if not after_a.is_empty():
+				after_a[0]["size"] = int(
+					after_a[0]["size"]
+				) + 1
+				var rejected := CombatLog.replay_records(
+					tampered
+				)
+				_check(
+					not bool(rejected.get("ok", true)),
+					"回放器必须拒绝被篡改的战斗结果"
+				)
+	DirAccess.remove_absolute(
+		ProjectSettings.globalize_path(log_path)
+	)
+
+	# (d) 镜像安全：开/关日志跑同种子同阵容，战斗结果逐位一致（日志只读、不改数值）。
 	Combat.battle_log_enabled = false
 	var rng_off := RandomNumberGenerator.new(); rng_off.seed = 12345
 	var b_off := _make_field_battle([_make_army(0, 0, 2500, 11)], [_make_army(1, 1, 2300, 10)], 0.25, 4)
@@ -6531,6 +6638,60 @@ func _test_structured_battle_log() -> void:
 	# 收尾：恢复默认关闭态，避免污染其他测试。
 	Combat.battle_log_enabled = false
 	Combat.clear_battle_log()
+
+
+## [37] 决策排序镜像等变：城市物理序在左右镜像国家间一致，实体 ID 置换不改军队顺序。
+func _test_equivariant_ordering() -> void:
+	print("[37] 镜像等变排序：城市镜像 + 军队 ID 置换不变")
+	var gs := GameState.new()
+	gs.generate_grid_world(12345)
+	var city_order_ok := true
+	for row_a in range(GameState.GRID / 2):
+		for col_a in range(GameState.GRID / 2):
+			var a := row_a * GameState.GRID + col_a
+			var mirror_a := (
+				row_a * GameState.GRID
+				+ GameState.GRID - 1 - col_a
+			)
+			for row_b in range(GameState.GRID / 2):
+				for col_b in range(GameState.GRID / 2):
+					var b := row_b * GameState.GRID + col_b
+					var mirror_b := (
+						row_b * GameState.GRID
+						+ GameState.GRID - 1 - col_b
+					)
+					if (
+						EquivariantOrder.city_id_less(
+							gs, 0, a, b
+						)
+						!= EquivariantOrder.city_id_less(
+							gs, 1, mirror_a, mirror_b
+						)
+					):
+						city_order_ok = false
+	_check(
+		city_order_ok,
+		"势力局部城市物理序应在水平镜像国家间严格等变"
+	)
+
+	var army_a := _make_army(1, 0, 1000, 10, 10)
+	army_a.location_city = 0
+	army_a.move_from = 0
+	var army_b := _make_army(999, 0, 1000, 10, 10)
+	army_b.location_city = 8
+	army_b.move_from = 8
+	var before := EquivariantOrder.army_less(
+		gs, 0, army_a, army_b
+	)
+	army_a.id = 999999
+	army_b.id = -100
+	var after := EquivariantOrder.army_less(
+		gs, 0, army_a, army_b
+	)
+	_check(
+		before == after,
+		"交换军队 ID 不得改变决策物理顺序"
+	)
 
 
 # ------------------------------------------------------------------ 工厂辅助
@@ -6597,6 +6758,9 @@ func _make_field_battle(side_a: Array, side_b: Array, danger: float, distance: i
 	b.edge = _make_edge(danger, distance)
 	b.contact_dist_a = distance / 2.0
 	b.contact_dist_b = distance / 2.0
+	# 通用机制单测隔离战术运气，专门的 item 8 统计测试负责验证独立随机。
+	b.tactical_key_a = 101
+	b.tactical_key_b = 101
 	for a in side_a:
 		b.side_a.append(a)
 	for a in side_b:
@@ -6615,6 +6779,8 @@ func _make_siege_battle(attackers: Array, defender: Army, fort_strength: int, di
 	b.has_garrison = true              # side_b 为驻城守军，享城防加成（combat 按此 gate）
 	b.contact_dist_a = float(distance)
 	b.contact_dist_b = 0.0
+	b.tactical_key_a = 101
+	b.tactical_key_b = 101
 	for a in attackers:
 		b.side_a.append(a)
 	b.side_b.append(defender)

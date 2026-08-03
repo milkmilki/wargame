@@ -107,7 +107,14 @@ func _find_frontier() -> void:
 			neutral_cities_by_nation[other_nation][friendly_id] = true
 			neutral_edges_by_nation[other_nation].append(edge)
 	var neutral_nations := neutral_cities_by_nation.keys()
-	neutral_nations.sort()
+	neutral_nations.sort_custom(func(a, b) -> bool:
+		return EquivariantOrder.nation_less(
+			_state,
+			nation_id,
+			int(a),
+			int(b)
+		)
+	)
 	var potential_seen := {}
 	for other_nation_value in neutral_nations:
 		var other_nation := int(other_nation_value)
@@ -119,7 +126,11 @@ func _find_frontier() -> void:
 		if threat_score < 1.0:
 			continue
 		var border_city_ids: Array = neutral_cities_by_nation[other_nation].keys()
-		border_city_ids.sort()
+		EquivariantOrder.sort_city_ids(
+			border_city_ids,
+			_state,
+			nation_id
+		)
 		var deployable_power := _army_power_of(other_nation)
 		var per_city_power := (
 			deployable_power
@@ -144,14 +155,22 @@ func _find_frontier() -> void:
 				potential_frontier_edges.append(edge)
 			potential_edge_threat[_edge_key(edge.city_a, edge.city_b)] = threat_score
 	frontier_edges.sort_custom(func(a: Edge, b: Edge) -> bool:
-		return _edge_key(a.city_a, a.city_b) < _edge_key(b.city_a, b.city_b)
+		return EquivariantOrder.edge_less(_state, nation_id, a, b)
 	)
 	potential_frontier_edges.sort_custom(func(a: Edge, b: Edge) -> bool:
-		return _edge_key(a.city_a, a.city_b) < _edge_key(b.city_a, b.city_b)
+		return EquivariantOrder.edge_less(_state, nation_id, a, b)
 	)
-	frontier_cities.sort()
-	frontier_enemy_cities.sort()
-	potential_frontier_cities.sort()
+	EquivariantOrder.sort_city_ids(frontier_cities, _state, nation_id)
+	EquivariantOrder.sort_city_ids(
+		frontier_enemy_cities,
+		_state,
+		nation_id
+	)
+	EquivariantOrder.sort_city_ids(
+		potential_frontier_cities,
+		_state,
+		nation_id
+	)
 
 
 func _army_power_of(owner_nation: int) -> float:
@@ -209,11 +228,19 @@ func _compute_connectivity() -> void:
 	for city in _state.cities:
 		if city.owner_nation == nation_id and city.id != capital:
 			roots.append(city.id)
+	EquivariantOrder.sort_city_ids(roots, _state, nation_id, capital)
 	for root in roots:
 		if _disc.has(root):
 			continue
 		_dfs_connectivity_iterative(root)
-	for city_id in articulation_impact.keys():
+	var articulation_ids := articulation_impact.keys()
+	EquivariantOrder.sort_city_ids(
+		articulation_ids,
+		_state,
+		nation_id,
+		capital
+	)
+	for city_id in articulation_ids:
 		city_value[city_id] = (
 			float(city_value[city_id])
 			+ 2.0 * float(articulation_impact[city_id]) / maxf(_total_friendly_value, 0.001)
@@ -291,7 +318,7 @@ func _friendly_neighbors(city_id: int) -> Array[int]:
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		result.append(neighbor)
-	result.sort()
+	EquivariantOrder.sort_city_ids(result, _state, nation_id, city_id)
 	return result
 
 
@@ -300,7 +327,11 @@ func _compute_supply_corridors(view: AiWorldView) -> void:
 	for city_id in potential_frontier_cities:
 		if not defended_cities.has(city_id):
 			defended_cities.append(city_id)
-	defended_cities.sort()
+	EquivariantOrder.sort_city_ids(
+		defended_cities,
+		_state,
+		nation_id
+	)
 	if defended_cities.is_empty():
 		return
 	for warehouse in view.warehouses:
@@ -378,7 +409,11 @@ func _finalize_edge_values() -> void:
 		var city_id := int(city_id_value)
 		if float(supply_corridor_importance[city_id]) >= 0.50:
 			critical_supply_cities.append(city_id)
-	critical_supply_cities.sort()
+	EquivariantOrder.sort_city_ids(
+		critical_supply_cities,
+		_state,
+		nation_id
+	)
 
 
 func _compute_offensive_values(view: AiWorldView) -> void:
@@ -469,8 +504,13 @@ func _select_priority_targets(view: AiWorldView) -> void:
 			city_id,
 		])
 	scored.sort_custom(func(a: Array, b: Array) -> bool:
-		return float(a[0]) > float(b[0]) or (
-			is_equal_approx(float(a[0]), float(b[0])) and int(a[1]) < int(b[1])
+		if not is_equal_approx(float(a[0]), float(b[0])):
+			return float(a[0]) > float(b[0])
+		return EquivariantOrder.city_id_less(
+			_state,
+			nation_id,
+			int(a[1]),
+			int(b[1])
 		)
 	)
 	for i in range(mini(scored.size(), 16)):

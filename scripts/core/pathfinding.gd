@@ -25,6 +25,16 @@ static func dijkstra_field(
 	for city in state.cities:
 		dist[city.id] = INF
 	dist[start] = 0.0
+	var order_nation := (
+		allowed_nation
+		if allowed_nation >= 0
+		else state.cities[start].owner_nation
+	)
+	var order_rank := EquivariantOrder.city_rank_map(
+		state,
+		order_nation,
+		start
+	)
 
 	while true:
 		var u := -1
@@ -33,7 +43,12 @@ static func dijkstra_field(
 			if visited.has(cid):
 				continue
 			var d: float = dist[cid]
-			if d < best:
+			if d < best or (
+				d < INF
+				and is_equal_approx(d, best)
+				and int(order_rank[int(cid)])
+					< int(order_rank.get(u, 1 << 30))
+			):
 				best = d
 				u = cid
 		if u == -1:
@@ -71,7 +86,14 @@ static func dijkstra_field(
 			if use_danger_weight:
 				w += e.danger * DANGER_WEIGHT
 			var nd: float = dist[u] + w
-			if nd < dist[v]:
+			if nd < float(dist[v]) or (
+				is_equal_approx(nd, float(dist[v]))
+				and (
+					not prev.has(v)
+					or int(order_rank[u])
+						< int(order_rank[int(prev[v])])
+				)
+			):
 				dist[v] = nd
 				prev[v] = u
 	return { "dist": dist, "prev": prev }
@@ -120,8 +142,16 @@ static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 		if not state.is_enemy(army.owner_nation, city.owner_nation):
 			continue
 		var d: float = dist[city.id]
-		# tie-break 按 id 升序，保证可复现
-		if d < best_d or (d == best_d and city.id < best_goal):
+		if d < best_d or (
+			is_equal_approx(d, best_d)
+			and EquivariantOrder.city_id_less(
+				state,
+				army.owner_nation,
+				city.id,
+				best_goal,
+				start
+			)
+		):
 			best_d = d
 			best_goal = city.id
 	if best_goal == -1 or best_d == INF:
@@ -185,7 +215,14 @@ static func nearest_friendly_route_from_edge(
 			continue
 		var total: float = float(option["remaining"]) + float(dist[goal])
 		if best.is_empty() or total < float(best["distance"]) or (
-			is_equal_approx(total, float(best["distance"])) and endpoint < int(best["endpoint"])
+			is_equal_approx(total, float(best["distance"]))
+			and EquivariantOrder.city_id_less(
+				state,
+				army.owner_nation,
+				endpoint,
+				int(best["endpoint"]),
+				army.move_from
+			)
 		):
 			best = {
 				"endpoint": endpoint,
@@ -213,7 +250,15 @@ static func _nearest_friendly_goal(
 		):
 			continue
 		var d: float = dist[city.id]
-		if d < best_d or (d == best_d and (best_goal == -1 or city.id < best_goal)):
+		if d < best_d or (
+			is_equal_approx(d, best_d)
+			and EquivariantOrder.city_id_less(
+				state,
+				nation_id,
+				city.id,
+				best_goal
+			)
+		):
 			best_d = d
 			best_goal = city.id
 	return best_goal
@@ -229,7 +274,7 @@ static func nearest_supply_city(state: GameState, army: Army) -> Array:
 	return [int(sources[0]["city_id"]), float(sources[0]["loss"])]
 
 
-## 返回全部可达本国/盟国粮仓，按运输损耗、城市 id 排序。
+## 返回全部可达本国/盟国粮仓，按运输损耗、势力局部物理序排序。
 static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
 	var start := _origin_of(army)
 	if start < 0 or start >= state.cities.size():
@@ -266,12 +311,14 @@ static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
 			"loss": float(source_loss[city_id]),
 		})
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return (
-			float(a["loss"]) < float(b["loss"])
-			or (
-				is_equal_approx(float(a["loss"]), float(b["loss"]))
-				and int(a["city_id"]) < int(b["city_id"])
-			)
+		if not is_equal_approx(float(a["loss"]), float(b["loss"])):
+			return float(a["loss"]) < float(b["loss"])
+		return EquivariantOrder.city_id_less(
+			state,
+			army.owner_nation,
+			int(a["city_id"]),
+			int(b["city_id"]),
+			start
 		)
 	)
 	return result
@@ -284,10 +331,30 @@ static func build_supply_network(
 	nation_id: int
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	var owner_ids: Array = []
 	for owner in state.nations:
-		if not state.has_military_access(nation_id, owner.id):
-			continue
-		for warehouse in state.warehouse_cities_of(owner.id):
+		if state.has_military_access(nation_id, owner.id):
+			owner_ids.append(owner.id)
+	owner_ids.sort_custom(func(a, b) -> bool:
+		return EquivariantOrder.nation_less(
+			state,
+			nation_id,
+			int(a),
+			int(b)
+		)
+	)
+	for owner_id_value in owner_ids:
+		var owner_id := int(owner_id_value)
+		var warehouses := state.warehouse_cities_of(owner_id)
+		warehouses.sort_custom(func(a: City, b: City) -> bool:
+			return EquivariantOrder.city_less(
+				state,
+				nation_id,
+				a,
+				b
+			)
+		)
+		for warehouse in warehouses:
 			if (
 				warehouse.food_storage <= 0
 				or state.city_under_siege(warehouse.id)
@@ -295,7 +362,7 @@ static func build_supply_network(
 				continue
 			result.append({
 				"city_id": warehouse.id,
-				"owner_nation": owner.id,
+				"owner_nation": owner_id,
 				"dist": _supply_loss_field(
 					state,
 					warehouse.id,
@@ -377,15 +444,17 @@ static func supply_sources_from_network(
 			"loss": loss,
 		})
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return (
-			float(a["loss"]) < float(b["loss"])
-			or (
-				is_equal_approx(
-					float(a["loss"]),
-					float(b["loss"])
-				)
-				and int(a["city_id"]) < int(b["city_id"])
-			)
+		if not is_equal_approx(
+			float(a["loss"]),
+			float(b["loss"])
+		):
+			return float(a["loss"]) < float(b["loss"])
+		return EquivariantOrder.city_id_less(
+			state,
+			army.owner_nation,
+			int(a["city_id"]),
+			int(b["city_id"]),
+			start
 		)
 	)
 	return result
@@ -498,6 +567,11 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 	for city in state.cities:
 		dist[city.id] = INF
 	dist[start] = 0.0
+	var order_rank := EquivariantOrder.city_rank_map(
+		state,
+		nation_id,
+		start
+	)
 	while true:
 		var u := -1
 		var best := INF
@@ -505,7 +579,12 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 			if visited.has(cid):
 				continue
 			var d: float = dist[cid]
-			if d < best:
+			if d < best or (
+				d < INF
+				and is_equal_approx(d, best)
+				and int(order_rank[int(cid)])
+					< int(order_rank.get(u, 1 << 30))
+			):
 				best = d
 				u = cid
 		if u == -1:
@@ -529,7 +608,14 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 			if _edge_has_enemy_presence(state, edge, nation_id):
 				continue
 			var nd: float = dist[u] + _supply_edge_loss(edge)
-			if nd < dist[v]:
+			if nd < float(dist[v]) or (
+				is_equal_approx(nd, float(dist[v]))
+				and (
+					not prev.has(v)
+					or int(order_rank[u])
+						< int(order_rank[int(prev[v])])
+				)
+			):
 				dist[v] = nd
 				prev[v] = u
 	return {"dist": dist, "prev": prev}

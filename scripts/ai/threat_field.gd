@@ -83,7 +83,11 @@ func _accumulate(
 			sources_by_manpower[required_manpower]
 		)
 		var source_ids := sources.keys()
-		source_ids.sort()
+		EquivariantOrder.sort_city_ids(
+			source_ids,
+			state,
+			nation_id
+		)
 		for source_id in source_ids:
 			var power := float(sources[source_id])
 			var distances := _travel_days_field(
@@ -91,7 +95,14 @@ func _accumulate(
 				int(source_id),
 				required_manpower
 			)
-			for city_id in distances.keys():
+			var city_ids := distances.keys()
+			EquivariantOrder.sort_city_ids(
+				city_ids,
+				state,
+				nation_id,
+				int(source_id)
+			)
+			for city_id in city_ids:
 				var arrival := float(distances[city_id])
 				if arrival <= HORIZON_DAYS:
 					output[city_id] = (

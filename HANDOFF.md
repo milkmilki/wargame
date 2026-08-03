@@ -21,7 +21,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **739 断言 / 0 失败**）。
+`run_tests.sh` 两阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **745 断言 / 0 失败**）。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
 `tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
@@ -64,22 +64,24 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/model/edge.gd](scripts/model/edge.gd) | 数据 | `city_a<city_b, max_manpower(0/5000/15000/30000/60000/100000，每国每方向按满编兵力计), distance, danger, max_height_difference, occupied, passing_count(仅供显示的全方向军队数)` |
 | [scripts/model/nation.gd](scripts/model/nation.gd) | 数据 | 国家资源、首都粮仓、外交解释字段、战争动员目标及持久战役梯队状态 |
 | [scripts/model/army.gd](scripts/model/army.gd) | 数据 | `id, owner_nation, size, max_size(默认15000), attack, defense, location/state/path, on_edge, starving, morale, supply_debt(item10 每日减员整人化累计余额), AI命令元数据`；含占领声明国与防御反向边锁 |
-| [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：`id, kind(FIELD/SIEGE), side_a[]/side_b[], edge, city, contact_dist_a/b, holding_side/holding_days(驻防快照), round_no, reinforce_fresh_a/b(本tick增援聚合，防拆分套利 item12), siege_progress, has_garrison, siege_required(item6/7 兵力量纲封锁需求), finished, winner_side`；士气不存 Battle，`side_morale()` 由各 Army.morale 兵力加权派生 |
+| [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：双方/战场/驻防/增援/围城字段 + `tactical_key_a/b` 稳定战术随机键；士气由各 Army.morale 加权派生 |
 | [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、粮仓、图查询、战斗、外交、三倍军队数上限与保持兵力/编制守恒的军队拆分 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | Alpha 陆地提取、平坦城市采样、陆地 Voronoi 省份、Delaunay 局部道路、高度剖面与连通骨架 |
-| [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路、反向粮仓补给网络与 `can_reach_manpower_hub`；补给边损耗=`0.1×distance×(1+danger)` |
-| [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算 + 纯函数（`combat_efficiency`/`distribute_casualties`/`decide_winner`/`siege_required_manpower`/`siege_daily_progress`）+ 结构化战斗日志（item 15），见 §4 |
+| [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路、反向粮仓补给网络；等长路径/同损耗粮仓按势力局部物理序裁决 |
+| [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | 静态 | 镜像等变物理排序 SSoT：城市/军队/势力/边；禁止 ID/创建顺序参与行为决胜 |
+| [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算、纯函数、共享战场骰 + 独立战术修正、结构化日志，见 §4 |
+| [scripts/core/combat_log.gd](scripts/core/combat_log.gd) | 静态 | 战斗日志 JSONL 落盘/加载、逐回合确定性回放与篡改检测 |
 | [scripts/core/simulation.gd](scripts/core/simulation.gd) | 逻辑 | 按天推进主循环 + `march_days(distance)` 行军时长（R1），见 §5 |
 | [scripts/ai/](scripts/ai) | AI | 军事 Utility AI、战略图、威胁场、协调器，以及 `DiplomacyAI` 双边外交评分 |
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw`，绘制省份填色/占领纹理/省界/国境/攻势箭头/城市/边/军队/HUD，处理输入 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 默认真实高度图场景（Main + Simulation + MapRenderer） |
 | [square_map.tscn](square_map.tscn) | 场景 | 保留的原始 `8×8` 方形地图场景；Main 的 `use_grid_world=true` |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 739 断言，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 745 断言，headless 运行 |
 | [tests/map_visual_smoke.gd](tests/map_visual_smoke.gd) | 视觉烟测 | 构造占领省份与攻势事件，用 Godot Movie Maker 验证真实渲染路径 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，检查领土变化、命令覆盖和非法实体 |
-| [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城严格左右镜像；A 左侧改进 Utility AI、B 右侧修改前当前 Utility AI，十年对战并输出领土/军力/粮食/首都指标 |
-| [tests/combat_statistics.gd](tests/combat_statistics.gd) | 统计 | item 17 万场（10000）战斗批量统计：位置对称/优势胜率/优势不被随机夺走/拆分不变/地形单调/种子复现，独立 SceneTree 脚本 |
+| [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城左右镜像；支持 `AI_DUEL_STRICT_MIRROR=1` 逐日全状态物理镜像门禁 |
+| [tests/combat_statistics.gd](tests/combat_statistics.gd) | 统计 | item 17 万场：位置对称/独立战术随机无偏/优势胜率/拆分不变/地形单调/种子复现 |
 | [run_tests.sh](run_tests.sh) | 测试 | 一键编译+测试封装 |
 
 ---
@@ -218,8 +220,8 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - **建军/解散**：AI 国家级命令 `CREATE_ARMY/DISBAND_ARMY`。军队数低于 `max(前线数+2, ceil(城市数/4))` 时在未被围首都粮仓消耗 5000 人建军；仅在军队数超额时解散安全后方 `<500` 人残部，幸存人数全额返还人口库。
 - **后勤中心守备**：没有敌方正容量道路直接接入时，首都只保留最低 5000、其他粮仓最低 3000，不再把两跳外的 60 日传播威胁全部折算为常驻军；敌军直接邻接后恢复首都=`max(5000, 60日威胁×1.25)`、粮仓=`max(3000, 60日威胁)`。抽走某军会跌破门槛时拒绝普通移动。
 - **归一化防区**：一线为实际/潜在前线，二线为可及时回援的一线邻城。城市重要度=`城市价值×(1+粮道重要度)`，危险度取本地威胁与按行军时间衰减的一线威胁最大值；两者归一化后以几何平均合成权重。国家防御预算为 `P×T/(P+T)`，和平潜在威胁以全国战力封顶。多余兵力按“实际覆盖/目标战力”饱和度展开，使用 25% 滞回与移动后 110% 来源安全线，不做一城一军或固定国家防守比例。
-- **稳定任务所有权**：攻势集结只能抽调 `CityDefensePlan.can_redeploy()` 判定的防线剩余兵力，不能覆盖有效防御部署锁。跨城合并只允许高 ID 军向更低 ID 且不弱于自己的接收军移动，使合并目标图严格无环；满编目标没有完整容量时不生成无效合并。
-- **性能缓存**：`AiWorldView` 建立 `armies_by_city` 与驻军战力索引；AI 决策周期复用 Dijkstra 路径场；`ThreatField` 复用只依赖道路拓扑的传播距离；补给从粮仓反向构建国家网络，每国/粮仓计算一次后供全部军队查询。固定种子 1095 天约 6.6 秒，四种子约 24.4 秒。
+- **稳定任务所有权**：攻势集结只能抽调 `CityDefensePlan.can_redeploy()` 判定的防线剩余兵力，不能覆盖有效防御部署锁。跨城合并按 `EquivariantOrder` 势力局部物理序确定唯一接收方向，使目标图严格无环且不依赖军队 ID；满编目标没有完整容量时不生成无效合并。
+- **性能缓存**：`AiWorldView` 建立 `armies_by_city` 与驻军战力索引；AI 决策周期复用 Dijkstra 路径场；`ThreatField` 复用只依赖道路拓扑的传播距离；补给从粮仓反向构建国家网络；`EquivariantOrder` 缓存城市物理 rank。2026-08-03 当前 headless 实测 1095 天每种子约 24.6～35.9 秒，四种子约 123 秒。
 - **调度**：每日先合并；每 5 天重算威胁并决策；城市易主通过版本号触发下一轮战略图重算。所有国家性格由 nation id 确定生成，不训练、不引入随机不可复现性。
 
 ### 4.10 外交关系与 Utility AI
@@ -306,7 +308,7 @@ if state.day % 30 == 0:                              # 每月结算块
 每个围城日开始，`_reconcile_siege_city_defenders` 都会重新收集目标城内尚未参战的 `IDLE/RECOVERING` 本国守军。任何守军都会先把围城切回战斗阶段；守城或解围战期间，`siege_progress` 每天回退 `0.25` 点，守军被击败前不得继续推进或占领。
 
 **粮食/饥饿（首都粮仓 + 可扩展多粮仓）**：`Nation.capital_city_id` 是首都真源，`warehouse_city_ids` 登记本国粮仓；当前每国只有首都一个粮仓，但寻路按集合实现。每半年所有本国城市产出立即汇入首都。军队可从本国及盟国全部可达粮仓取粮，每条边 `loss=0.1×distance×(1+danger)`；分摊权重=`库存/sqrt(1+route_loss)`，因此库存更多、距离更近的粮仓承担更多，耗尽后自动重分配且总扣粮守恒。月需求=`size×FOOD_PER_CAPITA×(1+加权route_loss)`，`FOOD_PER_CAPITA=0.0025`，总倍率封顶 3。
-**首都失守**：旧首都粮仓注销，库存 30% 汇入胜方首都、70% 损毁；败方若仍有城市，选择防御最高（同防御按 id）的城市迁都并建立空粮仓，无城则不迁都。
+**首都失守**：旧首都粮仓注销，库存 30% 汇入胜方首都、70% 损毁；败方若仍有城市，选择防御最高（同防御按势力局部物理序）的城市迁都并建立空粮仓，无城则不迁都。
 **R3 补给孤岛**：被围城切断外部粮仓连接。若被围城市本身是有粮仓，则守军使用本地库存且由 `_drain_siege_food` 每日扣 1；普通城市无本地库存，被围后立即断供。粮尽后守军城防加成 ×`SIEGE_STARVE_DEF_MULT=0.3`。
 
 **移动/边约定（易错点，改动前必读）**：
@@ -386,7 +388,7 @@ if state.day % 30 == 0:                              # 每月结算块
 | 城市守备、前线增援、驻边和驻边回城分别计算目标，规则互相覆盖且容易重复算威胁 | 新增 `CityDefensePlan`，每国每次 AI tick 只计算一次 `required_power + posture + preferred_edge`。城市是防御目标：单一明确方向选 `EDGE`，多方向、城内敌军和围城解围选 `CITY`；`ArmyCoordinator` 分别预留驻城覆盖与各道路方向覆盖。旧 `_reinforce_candidate/_hold_candidate` 及重复辅助函数已删除 |
 | 用无方向 `ThreatField` 判断进攻意图，或把 `potential_threat_of_edge` 外交评分当战力，会重复放大守备需求 | 实际敌军只按所在相邻城、驻守道路或明确 `move_to` 方向计入；潜在敌军使用 `potential_threat_at(city)` 的战力并按受威胁道路分摊。首都/粮仓只提供最低守备，战时增量统一由 `CityDefensePlan` 计算 |
 | 驻城与驻边没有经济取舍，AI 只比较战术分数 | 驻城军按“军队规模 / 城市人口承载”降低半年粮食产出，封顶 30%；驻边军不影响城市产出。单方向规划把避免的减产计入驻边收益，多方向则接受经济成本换取全方向覆盖 |
-| 同一战斗回合为 side_a/side_b 独立掷骰，镜像双方一旦真实接战就因随机消费顺序产生系统性侧偏 | 同一回合共享一次战场波动骰，保留逐回合随机节奏，但双方火力获得相同乘数；严格镜像十年重新恢复战力、粮食和领土完全相等 |
+| 同一战斗回合按 side_a/side_b 顺序消费独立 RNG，镜像接战产生系统性侧偏 | 每 tick 只消费一次共享骰和一次战术熵；两侧由无 ID 的稳定空间键分别派生 `±5%` 修正，交换 A/B 严格交换；完全同构侧按等变性必要条件同值 |
 | 高危险道路只有普通线性地形惩罚，无法形成虎牢关式少数战略关隘 | `danger` 仍是唯一地形真源；可通行边达到 `0.85` 后进入关隘区。敌军实际 `HOLDING` 该边时，进攻方攻击倍率降至 `0.25`，驻防方不承受进攻惩罚；空关不产生额外阻挡。战略图为关隘增加显式价值，AI 联合兵力池按每个受阻方向折算有效战力 |
 | 城市战斗结束后经济立即恢复，长期战争没有地方破坏成本 | `City.war_disruption_until_day` 记录唯一截止日；活跃围城每天刷新为当前日加 365 天。破坏期内城市金钱和粮食产出在驻军修正后再乘 `0.50`，人口产出不变；外交军粮与金钱预算读取相同实际产出 |
 | 备战只延迟宣战，没有把准备时间转化为首轮战斗优势 | 实际准备时间按 `1 + days / 180` 线性转为攻势攻击倍率，180 天及以上封顶 `2.0`；只有成功加入国家攻势的军队获得，持续 30 天。后续攻势按距上一波的重整时间计算；倍率作为两阶段命令载荷在实际提交时写入军队，AI 综合战力按 `sqrt(倍率)` 识别威胁，地图以金环和 `攻x倍率` 标识 |
@@ -448,13 +450,16 @@ AI 长跑命令：
 ```bash
 # 镜像公平基准：必须用 AI_DUEL_RNG_SEED（不是 AI_DUEL_SEED）指定种子，否则退化到默认种子 991199、多种子输出字节相同。
 AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
+
+# 严格门禁：逐日比较镜像城市、国家资源和忽略 ID 的军队物理状态多重集，首个破裂立即失败。
+AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users/bytedance/Godot.app/Contents/MacOS/Godot --headless --path . --script res://tests/ai_symmetric_duel.gd
 ```
 
 **战斗系统重构（item 1-17，2026-08-02）验收状态**（详见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）：
-- 快速回归 `./run_tests.sh` = **739 passed / 0 failed**（含新增 [23b] 滚动补给、[35] 战斗公平、[36] 结构化日志）。
-- item 17 万场统计 `tests/combat_statistics.gd` = **STATISTICS_PASS**（位置对称 10000/10000、优势胜率 1.0、5% 优势确定性全胜、拆分不变、地形单调、种子复现）。
-- 真实地图 4 种子 × 1095 天：全部 4 国存活，`invalid=0`、`commit_failures=0`、`starving=0`，稳态粮 116~121k，captures 11 / offensives 36。
-- item 8 镜像公平门槛：12 种子 balanced-fairness 对战 **L=7 / R=5**，均值 `+87k`、SE `64k`、**t=1.37**（与 0 无统计差异，达标）；残余 day-330 破裂属 AI 决策层效用平局（方案书允许的"对称战斗小幅非对称"，未追字节镜像）。
+- 快速回归 `./run_tests.sh` = **745 passed / 0 failed**（含 [36] JSONL 落盘/确定性回放/篡改检测与 [37] 镜像等变排序）。
+- item 17 万场统计 = **STATISTICS_PASS**：位置对称 10000/10000；独立战术修正 9997/10000 次不同，A 较高占比 0.5020；20% 明显优势方 10000/10000 获胜；拆分不变、地形单调、种子复现。
+- 真实地图 4 种子 × 1095 天：全部 4 国存活，`invalid=0`、`commit_failures=0`、`starving=0`，稳态粮 115～123k，captures 11 / offensives 33。
+- strict-mirror：seed 1 连续 **3650 天逐日无破裂**，最终 32:32、有效战力 `504049/504049`、优势分 `0.0`。旧 12-seed t 检验已被更强的确定性状态门禁取代。
 
 ---
 

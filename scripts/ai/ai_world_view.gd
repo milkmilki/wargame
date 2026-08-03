@@ -86,13 +86,28 @@ static func build(
 			view.enemy_armies.append(army)
 		elif game_state.is_allied(owner_nation, army.owner_nation):
 			view.allied_armies.append(army)
-	view.friendly_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
-	view.enemy_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
-	view.allied_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
-	view.neutral_cities.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
-	view.friendly_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
-	view.enemy_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
-	view.allied_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
+	# AI 迭代顺序必须随势力镜像一起变换，不能读取创建顺序 id。
+	view.friendly_cities.sort_custom(func(a: City, b: City) -> bool:
+		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
+	)
+	view.enemy_cities.sort_custom(func(a: City, b: City) -> bool:
+		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
+	)
+	view.allied_cities.sort_custom(func(a: City, b: City) -> bool:
+		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
+	)
+	view.neutral_cities.sort_custom(func(a: City, b: City) -> bool:
+		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
+	)
+	view.friendly_armies.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
+	)
+	view.enemy_armies.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
+	)
+	view.allied_armies.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
+	)
 	return view
 
 

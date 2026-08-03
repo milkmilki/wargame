@@ -247,7 +247,11 @@ func _build() -> void:
 		primary_frontline_cities[city_id] = true
 	frontline_cities = primary_frontline_cities.duplicate()
 	var primary_frontline_ids := frontline_cities.keys()
-	primary_frontline_ids.sort()
+	EquivariantOrder.sort_city_ids(
+		primary_frontline_ids,
+		view.state,
+		view.nation_id
+	)
 	for city_id_value in primary_frontline_ids:
 		var city_id := int(city_id_value)
 		for neighbor in view.state.neighbors(city_id):
@@ -278,7 +282,12 @@ func _build() -> void:
 		var strongest_edge_value := -INF
 		var equally_best_directions := 0
 		var direction_ids := pressures.keys()
-		direction_ids.sort()
+		EquivariantOrder.sort_city_ids(
+			direction_ids,
+			view.state,
+			view.nation_id,
+			city.id
+		)
 		for direction_id in direction_ids:
 			var pressure := float(pressures[direction_id])
 			var edge_value := snapshot.value_of_edge(
@@ -376,7 +385,11 @@ func _normalize_frontline_requirements(
 	var danger_total := 0.0
 	var danger_square_total := 0.0
 	var city_ids := frontline_cities.keys()
-	city_ids.sort()
+	EquivariantOrder.sort_city_ids(
+		city_ids,
+		view.state,
+		view.nation_id
+	)
 	for city_id_value in city_ids:
 		var city_id := int(city_id_value)
 		var importance := maxf(
@@ -728,7 +741,12 @@ func _idle_candidate(
 	var best_deficit := 0.0
 	var best_score := -INF
 	var city_ids := required_power.keys()
-	city_ids.sort()
+	EquivariantOrder.sort_city_ids(
+		city_ids,
+		view.state,
+		view.nation_id,
+		start
+	)
 	for city_id_value in city_ids:
 		var city_id := int(city_id_value)
 		if float(dist.get(city_id, INF)) == INF:
@@ -755,7 +773,13 @@ func _idle_candidate(
 			score > best_score
 			or (
 				is_equal_approx(score, best_score)
-				and (best_city == -1 or city_id < best_city)
+				and EquivariantOrder.city_id_less(
+					view.state,
+					view.nation_id,
+					city_id,
+					best_city,
+					start
+				)
 			)
 		):
 			best_score = score
@@ -835,7 +859,12 @@ func _frontline_balance_candidate(
 	var best_city := -1
 	var best_score := -INF
 	var city_ids := frontline_cities.keys()
-	city_ids.sort()
+	EquivariantOrder.sort_city_ids(
+		city_ids,
+		view.state,
+		view.nation_id,
+		army.location_city
+	)
 	for city_id_value in city_ids:
 		var city_id := int(city_id_value)
 		if (
@@ -880,8 +909,13 @@ func _frontline_balance_candidate(
 			or (
 				is_equal_approx(score, best_score)
 				and (
-					best_city == -1
-					or city_id < best_city
+					EquivariantOrder.city_id_less(
+						view.state,
+						view.nation_id,
+						city_id,
+						best_city,
+						army.location_city
+					)
 				)
 			)
 		):

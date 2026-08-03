@@ -90,7 +90,16 @@ static func merge_colocated(state: GameState) -> int:
 		var group: Array[Army] = groups[key]
 		if group.size() < 2:
 			continue
-		group.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
+		group.sort_custom(func(a: Army, b: Army) -> bool:
+			if a.size != b.size:
+				return a.size > b.size
+			return EquivariantOrder.army_less(
+				state,
+				a.owner_nation,
+				a,
+				b
+			)
+		)
 		var survivor := group[0]
 		for i in range(1, group.size()):
 			var other := group[i]

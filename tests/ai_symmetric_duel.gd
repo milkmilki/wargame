@@ -39,11 +39,24 @@ func _init() -> void:
 	var initial_owner: Array[int] = []
 	for city in state.cities:
 		initial_owner.append(city.owner_nation)
+	var strict_mirror := (
+		OS.get_environment("AI_DUEL_STRICT_MIRROR") == "1"
+	)
 	var started := Time.get_ticks_msec()
 	for _day in range(DUEL_DAYS):
 		if state.winner != -1:
 			break
 		simulation._advance_day()
+		if strict_mirror:
+			var mismatch := _strict_mirror_mismatch(state)
+			if not mismatch.is_empty():
+				print(
+					"verdict=STRICT_MIRROR_FAIL day=%d %s"
+					% [state.day, mismatch]
+				)
+				simulation.free()
+				quit(4)
+				return
 		if state.day % 365 == 0:
 			_print_snapshot(state)
 
@@ -85,6 +98,8 @@ func _init() -> void:
 		result["score"],
 	]
 	print(summary)
+	if strict_mirror:
+		print("strict_mirror_days=%d" % state.day)
 	_print_army_diagnostics(state)
 	var improved_ai_better := false
 	if duel_mode in [
@@ -355,6 +370,191 @@ func _validate_annual_food_surplus() -> bool:
 func _mirror_city_id(state: GameState, city_id: int) -> int:
 	var coord := state.cities[city_id].coord
 	return coord.y * GameState.GRID + (GameState.GRID - 1 - coord.x)
+
+
+func _strict_mirror_mismatch(state: GameState) -> String:
+	var left_nation := state.nations[LEFT_NATION]
+	var right_nation := state.nations[RIGHT_NATION]
+	for field in [
+		"manpower_pool",
+		"treasury_gold",
+		"granary_food",
+		"last_food_demand",
+	]:
+		if left_nation.get(field) != right_nation.get(field):
+			return "nation.%s left=%s right=%s" % [
+				field,
+				str(left_nation.get(field)),
+				str(right_nation.get(field)),
+			]
+	for field in [
+		"food_demand_ema",
+		"ai_aggression",
+		"campaign_preparation_multiplier",
+	]:
+		if not is_equal_approx(
+			float(left_nation.get(field)),
+			float(right_nation.get(field))
+		):
+			return "nation.%s left=%.9f right=%.9f" % [
+				field,
+				float(left_nation.get(field)),
+				float(right_nation.get(field)),
+			]
+	for row in range(GameState.GRID):
+		for col in range(GameState.GRID / 2):
+			var left_id := row * GameState.GRID + col
+			var right_id := _mirror_city_id(state, left_id)
+			var left := state.cities[left_id]
+			var right := state.cities[right_id]
+			var mirrored_owner := _mirror_nation(right.owner_nation)
+			if left.owner_nation != mirrored_owner:
+				return "city.owner left_city=%d left=%d right_city=%d mirrored_right=%d" % [
+					left_id,
+					left.owner_nation,
+					right_id,
+					mirrored_owner,
+				]
+			for field in [
+				"fort_strength",
+				"manpower_per_month",
+				"gold_per_month",
+				"food_per_half_year",
+				"food_storage",
+				"war_disruption_until_day",
+			]:
+				if left.get(field) != right.get(field):
+					return "city.%s left_city=%d left=%s right_city=%d right=%s" % [
+						field,
+						left_id,
+						str(left.get(field)),
+						right_id,
+						str(right.get(field)),
+					]
+	var left_armies := _canonical_army_multiset(
+		state,
+		LEFT_NATION
+	)
+	var right_armies := _canonical_army_multiset(
+		state,
+		RIGHT_NATION
+	)
+	if left_armies != right_armies:
+		var common := mini(left_armies.size(), right_armies.size())
+		for index in range(common):
+			if left_armies[index] != right_armies[index]:
+				return "army[%d] left=%s right=%s" % [
+					index,
+					left_armies[index],
+					right_armies[index],
+				]
+		return "army_count left=%d right=%d" % [
+			left_armies.size(),
+			right_armies.size(),
+		]
+	return ""
+
+
+func _canonical_army_multiset(
+	state: GameState,
+	nation_id: int
+) -> Array[String]:
+	var result: Array[String] = []
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		var location := _canonical_city_for_nation(
+			state,
+			nation_id,
+			army.location_city
+		)
+		var move_from := _canonical_city_for_nation(
+			state,
+			nation_id,
+			army.move_from
+		)
+		var move_to := _canonical_city_for_nation(
+			state,
+			nation_id,
+			army.move_to
+		)
+		var target := _canonical_city_for_nation(
+			state,
+			nation_id,
+			army.ai_target_city
+		)
+		var path: Array[int] = []
+		for city_id in army.path:
+			path.append(_canonical_city_for_nation(
+				state,
+				nation_id,
+				city_id
+			))
+		result.append(
+			(
+				"s=%d|max=%d|atk=%d|def=%d|state=%d|loc=%d|"
+				+ "from=%d|to=%d|prog=%.9f|path=%s|mor=%.9f|"
+				+ "sup=%.9f|starve=%s|hold=%d|holdp=%.9f|"
+				+ "forced=%s|action=%d|target=%d|until=%d|"
+				+ "off=%.9f|off_until=%d|def_until=%d|reason=%s"
+			) % [
+				army.size,
+				army.max_size,
+				army.attack,
+				army.defense,
+				army.state,
+				location,
+				move_from,
+				move_to,
+				army.move_progress,
+				str(path),
+				army.morale,
+				army.supply_ratio,
+				str(army.starving),
+				army.holding_days,
+				army.hold_target_progress,
+				str(army.forced_retreat),
+				army.ai_action,
+				target,
+				army.ai_order_until_day,
+				army.offensive_attack_multiplier,
+				army.offensive_bonus_until_day,
+				army.defensive_deployment_until_day,
+				_reason_shape(army.ai_order_reason),
+			]
+		)
+	result.sort()
+	return result
+
+
+func _reason_shape(reason: String) -> String:
+	var result := ""
+	for character in reason:
+		if character < "0" or character > "9":
+			result += character
+	return result
+
+
+func _canonical_city_for_nation(
+	state: GameState,
+	nation_id: int,
+	city_id: int
+) -> int:
+	if city_id < 0:
+		return city_id
+	return (
+		_mirror_city_id(state, city_id)
+		if nation_id == RIGHT_NATION
+		else city_id
+	)
+
+
+func _mirror_nation(nation_id: int) -> int:
+	if nation_id == LEFT_NATION:
+		return RIGHT_NATION
+	if nation_id == RIGHT_NATION:
+		return LEFT_NATION
+	return nation_id
 
 
 func _set_capital(

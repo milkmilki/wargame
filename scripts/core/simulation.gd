@@ -99,7 +99,7 @@ var ai_command_commit_failure_log: Array[String] = []
 var ai_policy_overrides: Dictionary = {}
 ## A/B 基准注入点：nation_id -> 正常进攻单军最低战力占比；正式游戏使用 UtilityAI 默认值。
 var ai_assault_participant_ratio_overrides: Dictionary = {}
-## A/B 注入点：false 复现同优先级军队按 id 而非主力优先决策。
+## A/B 注入点：false 关闭“同层级主力优先”，平局仍使用镜像等变物理序。
 var ai_tactical_decision_order_overrides: Dictionary = {}
 ## A/B 注入点：false 关闭粮道桥梁/割点的守备与增援需求。
 var ai_supply_corridor_defense_overrides: Dictionary = {}
@@ -107,7 +107,7 @@ var ai_supply_corridor_defense_overrides: Dictionary = {}
 var ai_executable_attack_paths_overrides: Dictionary = {}
 ## A/B 注入点：true 复现由 nation_id 隐式生成 AI 性格的旧逻辑。
 var ai_legacy_id_personality_overrides: Dictionary = {}
-## 每个 AI 决策轮次轮换统一提交顺序，避免低 ID 国家永久先提交。
+## 每个 AI 决策轮次轮换统一提交顺序，避免固定国家永久先提交。
 var rotate_ai_nation_order: bool = true
 ## A/B 基准注入点：false 保留修改前的静态进攻评分。
 var ai_strategic_planning_overrides: Dictionary = {}
@@ -440,7 +440,14 @@ func _resolve_reinforcements() -> void:
 				return priority_a > priority_b
 			var fill_a := float(army_a.size) / float(maxi(army_a.max_size, 1))
 			var fill_b := float(army_b.size) / float(maxi(army_b.max_size, 1))
-			return fill_a < fill_b or (is_equal_approx(fill_a, fill_b) and army_a.id < army_b.id)
+			if not is_equal_approx(fill_a, fill_b):
+				return fill_a < fill_b
+			return EquivariantOrder.army_less(
+				state,
+				nation.id,
+				army_a,
+				army_b
+			)
 		)
 		var budget := mini(available_manpower, total_deficit)
 		if budget >= total_deficit:
@@ -572,7 +579,11 @@ func _resolve_supply() -> void:
 	for p in plans:
 		var a: Army = p["army"]
 		var demand: int = p["demand"]
-		var supplied := _withdraw_weighted_supply(p["sources"], demand)
+		var supplied := _withdraw_weighted_supply(
+			p["sources"],
+			demand,
+				a.owner_nation
+		)
 		var shortfall := demand - supplied
 		if shortfall > 0:
 			a.starving = true
@@ -687,7 +698,11 @@ func _recover_garrisoned_army(army: Army) -> void:
 	var demand := int(ceil(
 		float(base_demand) * minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 	)) if not sources.is_empty() else base_demand
-	var supplied := _withdraw_weighted_supply(sources, demand)
+	var supplied := _withdraw_weighted_supply(
+		sources,
+		demand,
+		army.owner_nation
+	)
 	army.starving = supplied < demand
 	if supplied > 0:
 		army.morale = minf(
@@ -770,7 +785,8 @@ func _weighted_supply_loss(sources: Array[Dictionary]) -> float:
 
 func _withdraw_weighted_supply(
 	sources: Array[Dictionary],
-	demand: int
+	demand: int,
+	order_nation: int
 ) -> int:
 	var remaining := maxi(demand, 0)
 	var supplied := 0
@@ -816,14 +832,15 @@ func _withdraw_weighted_supply(
 		if remaining <= 0:
 			break
 		remainders.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			return (
-				float(a["fraction"]) > float(b["fraction"])
-				or (
-					is_equal_approx(
-						float(a["fraction"]), float(b["fraction"])
-					)
-					and int(a["city_id"]) < int(b["city_id"])
-				)
+			if not is_equal_approx(
+				float(a["fraction"]), float(b["fraction"])
+			):
+				return float(a["fraction"]) > float(b["fraction"])
+			return EquivariantOrder.city_id_less(
+				state,
+				order_nation,
+				int(a["city_id"]),
+				int(b["city_id"])
 			)
 		)
 		var residual_distributed := 0
@@ -1377,7 +1394,10 @@ func _ai_assign_targets() -> void:
 			ai_tactical_decision_order_overrides.get(nation_id, true)
 		)
 		var decision_order := _sort_ai_decision_order(
-			view.friendly_armies, snapshot, strongest_first
+			state,
+			view.friendly_armies,
+			snapshot,
+			strongest_first
 		)
 		for army in decision_order:
 			var campaign_target := int(
@@ -1546,6 +1566,7 @@ static func _ai_nation_ids_for_day(
 
 
 static func _sort_ai_decision_order(
+	game_state: GameState,
 	armies: Array[Army],
 	snapshot: StrategicMapSnapshot,
 	strongest_first: bool
@@ -1569,7 +1590,12 @@ static func _sort_ai_decision_order(
 			)
 		):
 			return ArmyPower.effective(a) > ArmyPower.effective(b)
-		return a.id < b.id
+		return EquivariantOrder.army_less(
+			game_state,
+			snapshot.nation_id,
+			a,
+			b
+		)
 	)
 	return result
 
@@ -1651,7 +1677,12 @@ func _ai_manage_force_structure(
 			)
 			if deficit > largest_deficit or (
 				is_equal_approx(deficit, largest_deficit)
-				and (garrison_site == -1 or warehouse.id < garrison_site)
+					and EquivariantOrder.city_id_less(
+						state,
+						view.nation_id,
+						warehouse.id,
+						garrison_site
+					)
 			):
 				largest_deficit = deficit
 				garrison_site = warehouse.id
@@ -1748,13 +1779,15 @@ func _split_army_for_narrow_objective(
 		):
 			candidates.append(army)
 	candidates.sort_custom(func(a: Army, b: Army) -> bool:
-		return (
-			a.max_size > b.max_size
-			or (
-				a.max_size == b.max_size
-				and a.id < b.id
+			if a.max_size != b.max_size:
+				return a.max_size > b.max_size
+			return EquivariantOrder.army_less(
+				state,
+				view.nation_id,
+				a,
+				b,
+				objective_city
 			)
-		)
 	)
 	for army in candidates:
 		var wide_field := Pathfinding.dijkstra_field(
@@ -1974,7 +2007,12 @@ func _ensure_campaign_attack_plan(
 		var secondary_city := -1
 		var secondary_score := -INF
 		var target_ids := eligible_by_target.keys()
-		target_ids.sort()
+		EquivariantOrder.sort_city_ids(
+			target_ids,
+			state,
+			nation_id,
+			primary_city
+		)
 		for target_id_value in target_ids:
 			var target_id := int(target_id_value)
 			var required := (
@@ -1995,8 +2033,13 @@ func _ensure_campaign_attack_plan(
 						secondary_score
 					)
 					and (
-						secondary_city == -1
-						or target_id < secondary_city
+							EquivariantOrder.city_id_less(
+								state,
+								nation_id,
+								target_id,
+								secondary_city,
+								primary_city
+							)
 					)
 				)
 			):
@@ -2147,7 +2190,7 @@ func _campaign_staged_armies(
 ## 战役集结优先级：兵力多者优先，等兵力时按“距目标更近者优先”。
 ## 距离取整数边长最短路（求和精确、与松弛顺序无关），是镜像不变量，
 ## 因此镜像对称世界里左右两军会做出镜像一致的梯队编排；
-## 相同兵力且等距时以 id 收尾，保证严格全序、排序稳定。
+## 相同兵力且等距时按势力局部物理位置收尾，保证镜像等变。
 func _sort_campaign_priority(
 	armies: Array[Army],
 	nation_id: int,
@@ -2175,7 +2218,13 @@ func _sort_campaign_priority(
 		var db: float = distance_of.call(b)
 		if not is_equal_approx(da, db):
 			return da < db
-		return a.id < b.id
+		return EquivariantOrder.army_less(
+			state,
+			nation_id,
+			a,
+			b,
+			target_city
+		)
 	)
 	return sorted
 
@@ -2218,6 +2267,7 @@ func _assign_offensive_staging_orders(
 			nation_id, staging_city, objective_city
 		):
 			continue
+		var staging_armies: Array[Army] = []
 		for army in state.armies:
 			if (
 				army.owner_nation != nation_id
@@ -2235,6 +2285,18 @@ func _assign_offensive_staging_orders(
 				)
 			):
 				continue
+			staging_armies.append(army)
+		staging_armies.sort_custom(
+			func(a: Army, b: Army) -> bool:
+				return EquivariantOrder.army_less(
+					state,
+					nation_id,
+					a,
+					b,
+					objective_city
+				)
+		)
+		for army in staging_armies:
 			var hold := ActionCandidate.make(
 				ActionCandidate.Kind.HOLD,
 				1000.0,
@@ -2314,7 +2376,13 @@ func _assign_offensive_staging_orders(
 		var db: float = b["best_distance"]
 		if not is_equal_approx(da, db):
 			return da < db
-		return (a["army"] as Army).id < (b["army"] as Army).id
+		return EquivariantOrder.army_less(
+			state,
+			nation_id,
+			a["army"] as Army,
+			b["army"] as Army,
+			objective_city
+		)
 	)
 	for entry in candidates:
 		if (
@@ -2381,7 +2449,15 @@ func _assign_offensive_staging_orders(
 			continue
 		holders.append(army)
 	holders.sort_custom(func(a: Army, b: Army) -> bool:
-		return a.size > b.size or (a.size == b.size and a.id < b.id)
+			if a.size != b.size:
+				return a.size > b.size
+			return EquivariantOrder.army_less(
+				state,
+				nation_id,
+				a,
+				b,
+				objective_city
+			)
 	)
 	for army in holders:
 		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
@@ -2447,7 +2523,14 @@ func _launch_campaign_offensive(
 	nation.campaign_preparation_multiplier = offensive_multiplier
 	var launched := false
 	var launched_origins := {}
-	for target_city in nation.campaign_plan_targets:
+	var plan_targets := nation.campaign_plan_targets.duplicate()
+	EquivariantOrder.sort_city_ids(
+		plan_targets,
+		state,
+		nation_id,
+		objective_city
+	)
+	for target_city in plan_targets:
 		if not state.is_enemy(
 			nation_id,
 			state.cities[target_city].owner_nation
@@ -2491,12 +2574,14 @@ func _launch_campaign_offensive(
 			continue
 		target_attackers.sort_custom(
 			func(a: Army, b: Army) -> bool:
-				return (
-					a.size > b.size
-					or (
-						a.size == b.size
-						and a.id < b.id
-					)
+					if a.size != b.size:
+						return a.size > b.size
+					return EquivariantOrder.army_less(
+						state,
+						nation_id,
+						a,
+						b,
+						target_city
 				)
 		)
 		var target_committed := 0
@@ -2559,7 +2644,12 @@ func _launch_campaign_offensive(
 		)
 		nation.campaign_offensive_count += 1
 		var launched_targets := launched_origins.keys()
-		launched_targets.sort()
+		EquivariantOrder.sort_city_ids(
+			launched_targets,
+			state,
+			nation_id,
+			objective_city
+		)
 		for target_city_value in launched_targets:
 			var target_city := int(target_city_value)
 			state.add_campaign_visual_event(
@@ -2579,7 +2669,11 @@ func _advance_campaign_echelons() -> void:
 		if not nation.alive or nation.campaign_plan_targets.is_empty():
 			continue
 		var targets := nation.campaign_plan_targets.duplicate()
-		targets.sort()
+		EquivariantOrder.sort_city_ids(
+			targets,
+			state,
+			nation.id
+		)
 		for target_city_value in targets:
 			var target_city := int(target_city_value)
 			if (
@@ -2751,9 +2845,14 @@ func _launch_campaign_echelon_members(
 	if require_sufficient and ready_troops < required:
 		return false
 	attackers.sort_custom(func(a: Army, b: Army) -> bool:
-		return (
-			a.size > b.size
-			or (a.size == b.size and a.id < b.id)
+		if a.size != b.size:
+			return a.size > b.size
+		return EquivariantOrder.army_less(
+			state,
+			nation_id,
+			a,
+			b,
+			target_city
 		)
 	)
 	var launched := false
@@ -2813,7 +2912,11 @@ func _advance_priority_city_defense_echelons() -> void:
 		):
 			sieges.append(battle)
 	sieges.sort_custom(func(a: Battle, b: Battle) -> bool:
-		return a.city.id < b.city.id
+		return EquivariantOrder.mirror_orbit_city_less(
+			state,
+			a.city.id,
+			b.city.id
+		)
 	)
 	for siege in sieges:
 		var city_id := siege.city.id
@@ -2968,7 +3071,13 @@ func _advance_priority_city_defense(
 		var distance_b := float(b["distance"])
 		if not is_equal_approx(distance_a, distance_b):
 			return distance_a < distance_b
-		return (a["army"] as Army).id < (b["army"] as Army).id
+		return EquivariantOrder.army_less(
+			state,
+			nation_id,
+			a["army"] as Army,
+			b["army"] as Army,
+			city_id
+		)
 	)
 	for entry in candidates:
 		if committed_power >= required_power:
@@ -3075,7 +3184,14 @@ func _manage_campaign_offensive(
 	var defender_id := -1
 	var owns_diplomatic_objective := false
 	var enemy_ids := state.wars_of(nation_id)
-	enemy_ids.sort()
+	enemy_ids.sort_custom(func(a: int, b: int) -> bool:
+		return EquivariantOrder.nation_less(
+			state,
+			nation_id,
+			a,
+			b
+		)
+	)
 	for enemy_id in enemy_ids:
 		var candidate := state.war_objective(nation_id, enemy_id)
 		if (
@@ -3252,7 +3368,14 @@ func _demobilize_for_food_security(
 		)
 		if a_border != b_border:
 			return not a_border
-		return a.size > b.size or (a.size == b.size and a.id < b.id)
+		if a.size != b.size:
+			return a.size > b.size
+		return EquivariantOrder.army_less(
+			state,
+			view.nation_id,
+			a,
+			b
+		)
 	)
 	if candidates.is_empty():
 		return false
@@ -4001,10 +4124,32 @@ func _detect_encounters() -> void:
 		by_edge[key].append(army)
 
 	var keys := by_edge.keys()
-	keys.sort()   # 确定性顺序
+	keys.sort_custom(func(a, b) -> bool:
+		var group_a: Array = by_edge[a]
+		var group_b: Array = by_edge[b]
+		var edge_a := state.edge_of(
+			(group_a[0] as Army).move_from,
+			(group_a[0] as Army).move_to
+		)
+		var edge_b := state.edge_of(
+			(group_b[0] as Army).move_from,
+			(group_b[0] as Army).move_to
+		)
+		return EquivariantOrder.mirror_orbit_edge_less(
+			state,
+			edge_a,
+			edge_b
+		)
+	)
 	for key in keys:
 		var group: Array = by_edge[key]
-		group.sort_custom(func(x, y): return x.id < y.id)   # 确定性
+		group.sort_custom(func(x: Army, y: Army) -> bool:
+			return EquivariantOrder.mirror_orbit_army_less(
+				state,
+				x,
+				y
+			)
+		)
 		var edge := state.edge_of(group[0].move_from, group[0].move_to)
 		if edge == null:
 			continue
@@ -4023,12 +4168,11 @@ func _detect_encounters() -> void:
 		# 在所有「敌对且已接触」的对中选交战核心。主判据=归一化位置差 gap 最小（物理逼近程度）。
 		# gap 相等时按纯物理/稳定身份判据裁决，绝不依赖 army.id 或遍历顺序（item 11 验收）：
 		#   次判据=双方合计兵力更大者优先（更决定性的对撞先形成核心，镜像不变量）；
-		#   再相等=势力对 (min_nation,max_nation) 较小者优先（稳定战略身份，与 army 创建序无关）。
+		#   再相等=镜像轨道上的实体物理键较小者优先。
 		var best_x: Army = null
 		var best_y: Army = null
 		var best_gap := INF
 		var best_size := -1
-		var best_np := Vector2i(1 << 30, 1 << 30)
 		for i in range(group.size()):
 			for j in range(i + 1, group.size()):
 				var x: Army = group[i]
@@ -4041,11 +4185,7 @@ func _detect_encounters() -> void:
 					continue
 				var gap := absf(_norm_pos(x, edge) - _norm_pos(y, edge))
 				var psize := x.size + y.size
-				var np := Vector2i(
-					mini(x.owner_nation, y.owner_nation),
-					maxi(x.owner_nation, y.owner_nation)
-				)
-				# 词典序 argmin：gap 升 → 合计兵力降 → 势力对升。全物理/稳定身份，无 army.id。
+				# 词典序 argmin：gap 升 → 合计兵力降 → 镜像轨道实体键升。
 				var better := false
 				if best_x == null:
 					better = true
@@ -4053,14 +4193,17 @@ func _detect_encounters() -> void:
 					better = gap < best_gap
 				elif psize != best_size:
 					better = psize > best_size
-				elif np.x != best_np.x:
-					better = np.x < best_np.x
-				elif np.y != best_np.y:
-					better = np.y < best_np.y
+				else:
+					better = EquivariantOrder.encounter_pair_less(
+						state,
+						x,
+						y,
+						best_x,
+						best_y
+					)
 				if better:
 					best_gap = gap
 					best_size = psize
-					best_np = np
 					best_x = x
 					best_y = y
 		if best_x == null:
@@ -4210,9 +4353,7 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		siege.contact_dist_b = 0.0      # 守军城中 dist=0（端点，无地形惩罚）
 		if not defenders.is_empty():
 			for defender in defenders:
-				defender.state = Army.State.FIGHTING
-				defender.battle_id = siege.id
-				siege.side_b.append(defender)
+					_enter_battle(siege, defender, 2)
 			siege.has_garrison = true
 		# 破城所需兵力仅由工事强度换算（item 6：不含守军人数，守军是城下决斗阶段的对手）。
 		# 有无守军该值一致，消除数量级跳变；守军被歼后此值不变（城防来自 fort_strength）。
@@ -4245,16 +4386,27 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 
 ## 对每场进行中的战斗推进一个 tick：FIELD 打一回合；SIEGE 走专用状态机（守军歼灭≠破城）。
 func _resolve_battles() -> void:
-	# item 8「共享战场随机因素」：本 tick 只掷一次战场波动骰，供本日所有战斗共用。
-	# 镜像成对的战斗因此抽到相同波动、结果互为镜像；同时天气/能见度对全线一致更符合物理。
+	# item 8：每 tick 只消费一次共享战场骰与一次战术熵。各战斗/各侧修正由物理指纹纯函数派生，
+	# 不依赖 battle 数组顺序，也不会因军队拆分增加随机消费次数。
 	var shared_roll := state.rng.randi_range(Combat.DICE_MIN, Combat.DICE_MAX)
+	var tactical_entropy := int(state.rng.randi())
 	for battle in state.battles:
 		if battle.finished:
 			continue
 		if battle.kind == Battle.Kind.SIEGE:
-			_advance_siege(battle, shared_roll)
+			_advance_siege(
+				battle,
+				shared_roll,
+				tactical_entropy
+			)
 		else:
-			Combat.resolve_round(battle, state.rng, shared_roll)
+			Combat.resolve_round(
+				battle,
+				state.rng,
+				shared_roll,
+				tactical_entropy,
+				state.day
+			)
 			if battle.finished:
 				_finish_field_battle(battle)
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
@@ -4271,7 +4423,11 @@ func _mark_city_war_disruption(city: City) -> void:
 ##  1) 守军抵抗：resolve_round 削守军。守军歼灭≠破城——转纯围城；攻方溃则围城失败。
 ##  2) 城下决斗：side_b 为敌对挑战者（无城防加成），分胜负后胜方独占围城。
 ##  3) 纯围城：无对抗，掷骰累积 siege_progress，达阈值破城易主。
-func _advance_siege(battle: Battle, shared_roll: int = -1) -> void:
+func _advance_siege(
+	battle: Battle,
+	shared_roll: int = -1,
+	tactical_entropy: int = -1
+) -> void:
 	if battle.city != null:
 		_mark_city_war_disruption(battle.city)
 	battle.prune_dead()
@@ -4290,7 +4446,13 @@ func _advance_siege(battle: Battle, shared_roll: int = -1) -> void:
 			battle.winner_side = 2
 			return
 		_decay_interrupted_siege_progress(battle)
-		Combat.resolve_round(battle, state.rng, shared_roll)
+		Combat.resolve_round(
+			battle,
+			state.rng,
+			shared_roll,
+			tactical_entropy,
+			state.day
+		)
 		if not battle.finished:
 			return
 		if battle.winner_side != 1:
@@ -4331,7 +4493,13 @@ func _advance_siege(battle: Battle, shared_roll: int = -1) -> void:
 			_promote_challengers(battle)
 			return
 		_decay_interrupted_siege_progress(battle)
-		Combat.resolve_round(battle, state.rng, shared_roll)
+		Combat.resolve_round(
+			battle,
+			state.rng,
+			shared_roll,
+			tactical_entropy,
+			state.day
+		)
 		if not battle.finished:
 			return
 		if battle.winner_side == 1:
@@ -4465,6 +4633,8 @@ func _promote_challengers(battle: Battle) -> void:
 			c.battle_id = -1
 	battle.side_a = new_besiegers
 	battle.side_b.clear()
+	battle.tactical_key_a = battle.tactical_key_b
+	battle.tactical_key_b = 0
 	battle.contact_dist_a = float(maxi(battle.edge.distance, 1)) if battle.edge != null else 0.0
 	# 挑战者接管的是纯围城；封锁需求仅由工事决定（item 6，与守军无关），显式重申以自证。
 	battle.siege_required = (
@@ -4582,8 +4752,16 @@ func _enter_battle(battle: Battle, army: Army, side: int) -> void:
 	army.state = Army.State.FIGHTING
 	army.battle_id = battle.id
 	if side == 1:
+		if battle.side_a.is_empty():
+			battle.tactical_key_a = (
+				EquivariantOrder.tactical_side_key(state, army)
+			)
 		battle.side_a.append(army)
 	else:
+		if battle.side_b.is_empty():
+			battle.tactical_key_b = (
+				EquivariantOrder.tactical_side_key(state, army)
+			)
 		battle.side_b.append(army)
 
 

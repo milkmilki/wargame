@@ -1,16 +1,16 @@
 extends SceneTree
 ## item 17：批量统计战斗测试（≥10,000 场）。手动运行，不纳入每次快速回归。
 ##
-## 设计说明（诚实标注 item 8 取舍）：本项目已定「镜像公平 > 单场戏剧性」——
-## 每 tick 只掷一次 shared_roll 并同乘双方火力，故骰值只改变战斗『烈度/速度』、
-## 不改变『相对胜负』。因此固定阵容的单场野战是**确定性**的，随机性不会在单场内
-## 把胜负从优势方手里夺走。这使 §17 的验证项呈现为如下**更强**的确定性不变量：
+## item 8：每 tick 消费一次 shared_roll（共同烈度）和一次 tactical_entropy；后者通过
+## 无 id、无顺序、拆分不变的侧物理指纹分别派生 ±5% 战术修正。交换 A/B 会交换修正；
+## 完全同构侧因等变性要求自动得到相同修正。验证项：
 ##   ① A/B 位置对称：交换两侧 → 胜方镜像交换、双方伤亡互换（严格逐位）；
-##   ② 优势方胜率：任意随机兵力/攻防阵容，兵力优势方胜率必须极高且稳定；
-##   ③ 随机性不掩盖兵力优势：显著优势(≥5%)方在所有种子下 100% 取胜；
-##   ④ 拆分不改结果：把一侧拆成多支小军，总伤亡与胜负不变；
-##   ⑤ 地形优势符合预期：高危地形对进攻方的压制单调且方向正确；
-##   ⑥ 固定种子完全复现：同输入同种子逐位一致。
+##   ② 战术随机独立且无侧位偏置，交换指纹严格交换修正；
+##   ③ 优势方胜率：任意随机兵力/攻防阵容，兵力优势方胜率必须极高且稳定；
+##   ④ 随机性不掩盖明显兵力优势：20% 优势方保持稳定统计优势；
+##   ⑤ 拆分不改结果：把一侧拆成多支小军，总伤亡与胜负不变；
+##   ⑥ 地形优势符合预期：高危地形对进攻方的压制单调且方向正确；
+##   ⑦ 固定种子完全复现：同输入同种子逐位一致。
 ## 运行：Godot --headless --script res://tests/combat_statistics.gd
 
 const BATTLE_COUNT: int = 10000
@@ -21,6 +21,7 @@ var _fail_msgs: Array[String] = []
 func _init() -> void:
 	var started := Time.get_ticks_msec()
 	_test_position_symmetry()
+	_test_tactical_randomness()
 	_test_advantage_winrate()
 	_test_randomness_never_beats_advantage()
 	_test_split_invariance()
@@ -79,7 +80,79 @@ func _test_position_symmetry() -> void:
 	print("① 位置对称：%d 场全部镜像（其中平局 %d）" % [BATTLE_COUNT, draws])
 
 
-# ② 优势方胜率：随机阵容中兵力优势方（含攻防）应有极高且稳定的胜率。
+# ② 独立战术随机：不同侧指纹通常得到不同修正，长期无 A/B 偏置，交换输入严格交换输出。
+func _test_tactical_randomness() -> void:
+	var distinct := 0
+	var a_higher := 0
+	var b_higher := 0
+	var exchange_ok := true
+	var in_range := true
+	var equal_signature_ok := true
+	for entropy in range(BATTLE_COUNT):
+		var ab := Combat.side_tactical_modifiers(
+			entropy,
+			77,
+			101,
+			202
+		)
+		var ba := Combat.side_tactical_modifiers(
+			entropy,
+			77,
+			202,
+			101
+		)
+		if not (
+			is_equal_approx(ab.x, ba.y)
+			and is_equal_approx(ab.y, ba.x)
+		):
+			exchange_ok = false
+		if (
+			ab.x < 1.0 - Combat.SIDE_RANDOM_RANGE - 0.000001
+			or ab.x > 1.0 + Combat.SIDE_RANDOM_RANGE + 0.000001
+			or ab.y < 1.0 - Combat.SIDE_RANDOM_RANGE - 0.000001
+			or ab.y > 1.0 + Combat.SIDE_RANDOM_RANGE + 0.000001
+		):
+			in_range = false
+		if not is_equal_approx(ab.x, ab.y):
+			distinct += 1
+			if ab.x > ab.y:
+				a_higher += 1
+			else:
+				b_higher += 1
+		var same := Combat.side_tactical_modifiers(
+			entropy,
+			77,
+			303,
+			303
+		)
+		if not is_equal_approx(same.x, same.y):
+			equal_signature_ok = false
+	var a_share := float(a_higher) / float(maxi(distinct, 1))
+	if (
+		distinct < int(float(BATTLE_COUNT) * 0.95)
+		or a_share < 0.45
+		or a_share > 0.55
+		or not exchange_ok
+		or not in_range
+		or not equal_signature_ok
+	):
+		_fail(
+			"② 战术随机异常：distinct=%d A高占比=%.4f exchange=%s range=%s equal=%s"
+				% [
+					distinct,
+					a_share,
+					str(exchange_ok),
+					str(in_range),
+					str(equal_signature_ok),
+				]
+		)
+	print(
+		"② 独立战术随机：不同修正 %d/%d，A较高占比 %.4f，交换等变"
+			% [distinct, BATTLE_COUNT, a_share]
+	)
+
+
+# ③ 优势方胜率：随机阵容中兵力优势方（含攻防）应有极高且稳定的胜率。
 func _test_advantage_winrate() -> void:
 	var seed_rng := RandomNumberGenerator.new()
 	seed_rng.seed = 771010
@@ -97,24 +170,24 @@ func _test_advantage_winrate() -> void:
 			strong_wins += 1
 	var rate := float(strong_wins) / float(counted)
 	if rate < 0.95:
-		_fail("② 优势方胜率过低：%.4f（%d/%d），应≥0.95" % [rate, strong_wins, counted])
-	print("② 优势方胜率=%.4f（%d/%d，1.3~2.0倍兵力+攻防优势）" % [rate, strong_wins, counted])
+		_fail("③ 优势方胜率过低：%.4f（%d/%d），应≥0.95" % [rate, strong_wins, counted])
+	print("③ 优势方胜率=%.4f（%d/%d，1.3~2.0倍兵力+攻防优势）" % [rate, strong_wins, counted])
 
 
-# ③ 随机性不掩盖兵力优势：显著优势(≥5%)方在所有种子下必胜（确定性，item 8 取舍）。
+# ④ 随机性不掩盖明显兵力优势：20% 优势方在 ±5% 战术波动下仍应稳定取胜。
 func _test_randomness_never_beats_advantage() -> void:
 	var flips := 0
 	for i in range(BATTLE_COUNT):
-		var battle := _make_battle(2100, 10, 10, 2000, 10, 10, 0.1)
+		var battle := _make_battle(2400, 10, 10, 2000, 10, 10, 0.1)
 		_run(battle, 100000 + i)
 		if battle.winner_side != 1:
 			flips += 1
 	if flips != 0:
-		_fail("③ 随机性夺走兵力优势：%d/%d 场 5%%优势方未胜（shared_roll 应同乘双方、不改相对胜负）" % [flips, BATTLE_COUNT])
-	print("③ 5%%兵力优势方确定性全胜：%d/%d（随机性不覆盖兵力优势）" % [BATTLE_COUNT, BATTLE_COUNT])
+		_fail("④ 随机性覆盖明显兵力优势：%d/%d 场 20%%优势方未胜" % [flips, BATTLE_COUNT])
+	print("④ 20%%兵力优势方全胜：%d/%d（±5%%战术随机不覆盖明显优势）" % [BATTLE_COUNT, BATTLE_COUNT])
 
 
-# ④ 拆分不改结果：把优势侧拆成多支小军，总伤亡与胜负不变（防套利 item12）。
+# ⑤ 拆分不改结果：把优势侧拆成多支小军，总伤亡与胜负不变（防套利 item12）。
 func _test_split_invariance() -> void:
 	var mismatches := 0
 	var checks := BATTLE_COUNT / 5   # 拆分战斗较重，取 1/5 样本，仍 >=2000 场
@@ -137,6 +210,16 @@ func _test_split_invariance() -> void:
 		split.edge = _edge(danger)
 		split.contact_dist_a = 2.0
 		split.contact_dist_b = 2.0
+		split.tactical_key_a = _stats_side_key(
+			total,
+			10,
+			10
+		)
+		split.tactical_key_b = _stats_side_key(
+			enemy,
+			10,
+			10
+		)
 		var aid := 0
 		for p in parts:
 			split.side_a.append(_army(aid, 0, p, 10, 10)); aid += 1
@@ -146,11 +229,11 @@ func _test_split_invariance() -> void:
 		if whole.winner_side != split.winner_side or loss_whole[0] != loss_split[0] or loss_whole[1] != loss_split[1]:
 			mismatches += 1
 	if mismatches != 0:
-		_fail("④ 拆分改变结果：%d/%d 场拆分后胜负或总伤亡不一致" % [mismatches, checks])
-	print("④ 拆分不变性：%d 场拆分前后胜负与总伤亡逐位一致" % checks)
+		_fail("⑤ 拆分改变结果：%d/%d 场拆分后胜负或总伤亡不一致" % [mismatches, checks])
+	print("⑤ 拆分不变性：%d 场拆分前后胜负与总伤亡逐位一致" % checks)
 
 
-# ⑤ 地形优势符合预期：进攻方攻击倍率随地形危险度单调不增，极端地形显著压制。
+# ⑥ 地形优势符合预期：进攻方攻击倍率随地形危险度单调不增，极端地形显著压制。
 func _test_terrain_monotonic() -> void:
 	var prev := 2.0
 	var monotonic := true
@@ -162,16 +245,16 @@ func _test_terrain_monotonic() -> void:
 			monotonic = false
 		prev = m
 	if not monotonic:
-		_fail("⑤ 地形倍率非单调：attack_multiplier 随危险度上升出现回升")
+		_fail("⑥ 地形倍率非单调：attack_multiplier 随危险度上升出现回升")
 	# 极端 vs 平地：高危地形对进攻方应有明确压制。
 	if not (Combat.attack_multiplier(0.95) < Combat.attack_multiplier(0.0) - 0.2):
-		_fail("⑤ 极端地形压制不足：danger0.95=%.3f 应显著低于平地=%.3f" % [
+		_fail("⑥ 极端地形压制不足：danger0.95=%.3f 应显著低于平地=%.3f" % [
 			Combat.attack_multiplier(0.95), Combat.attack_multiplier(0.0)])
-	print("⑤ 地形单调压制：attack_multiplier(0)=%.3f → (0.95)=%.3f，%d 点采样单调不增" % [
+	print("⑥ 地形单调压制：attack_multiplier(0)=%.3f → (0.95)=%.3f，%d 点采样单调不增" % [
 		Combat.attack_multiplier(0.0), Combat.attack_multiplier(0.95), samples + 1])
 
 
-# ⑥ 固定种子完全复现：同一阵容同一种子跑两遍，逐位一致。
+# ⑦ 固定种子完全复现：同一阵容同一种子跑两遍，逐位一致。
 func _test_seed_reproducibility() -> void:
 	var diffs := 0
 	for i in range(BATTLE_COUNT):
@@ -182,8 +265,8 @@ func _test_seed_reproducibility() -> void:
 		if b1.winner_side != b2.winner_side or l1 != l2:
 			diffs += 1
 	if diffs != 0:
-		_fail("⑥ 复现失败：%d/%d 场同种子两遍结果不一致" % [diffs, BATTLE_COUNT])
-	print("⑥ 固定种子完全复现：%d 场两遍逐位一致" % BATTLE_COUNT)
+		_fail("⑦ 复现失败：%d/%d 场同种子两遍结果不一致" % [diffs, BATTLE_COUNT])
+	print("⑦ 固定种子完全复现：%d 场两遍逐位一致" % BATTLE_COUNT)
 
 
 # ------------------------------------------------------------------ 构造辅助
@@ -220,9 +303,21 @@ func _make_battle(
 	b.edge = _edge(danger)
 	b.contact_dist_a = 2.0
 	b.contact_dist_b = 2.0
+	b.tactical_key_a = _stats_side_key(sa, atk_a, def_a)
+	b.tactical_key_b = _stats_side_key(sb, atk_b, def_b)
 	b.side_a.append(_army(0, 0, sa, atk_a, def_a))
 	b.side_b.append(_army(1, 1, sb, atk_b, def_b))
 	return b
+
+
+func _stats_side_key(size: int, attack: int, defense: int) -> int:
+	# 统计夹具没有 GameState 空间上下文，用阵容键代表稳定侧身份；交换阵容时键随阵容交换。
+	return 1 + posmod(
+		size * 73856093
+			+ attack * 19349663
+			+ defense * 83492791,
+		2147483646
+	)
 
 
 ## 跑完一场战斗，返回 [side_a 总伤亡, side_b 总伤亡]。

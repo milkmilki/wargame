@@ -127,7 +127,29 @@ static func choose(
 			return a.score > b.score
 		if a.kind != b.kind:
 			return a.kind < b.kind
-		return a.target_city < b.target_city
+		if a.target_city != b.target_city:
+			return EquivariantOrder.city_id_less(
+				view.state,
+				view.nation_id,
+				a.target_city,
+				b.target_city,
+				current
+			)
+		if a.target_edge_a != b.target_edge_a:
+			return EquivariantOrder.city_id_less(
+				view.state,
+				view.nation_id,
+				a.target_edge_a,
+				b.target_edge_a,
+				current
+			)
+		return EquivariantOrder.city_id_less(
+			view.state,
+			view.nation_id,
+			a.target_edge_b,
+			b.target_edge_b,
+			current
+		)
 	)
 	return candidates[0]
 
@@ -163,7 +185,16 @@ static func _retreat_candidate(
 			+ 0.2 * snapshot.value_of_city(city.id)
 			- 0.08 * float(dist[city.id])
 		)
-		if score > best_score or (is_equal_approx(score, best_score) and city.id < best_city):
+		if score > best_score or (
+			is_equal_approx(score, best_score)
+			and EquivariantOrder.city_id_less(
+				view.state,
+				view.nation_id,
+				city.id,
+				best_city,
+				start
+			)
+		):
 			best_score = score
 			best_city = city.id
 	if best_city == -1:
@@ -249,7 +280,12 @@ static func _attack_candidate(
 			and not target_ids.has(city_id)
 		):
 			target_ids.append(city_id)
-	target_ids.sort()
+	EquivariantOrder.sort_city_ids(
+		target_ids,
+		view.state,
+		view.nation_id,
+		start
+	)
 	for city_id in target_ids:
 		var target_distance := float(dist[city_id])
 		if view.executable_attack_paths_enabled:
@@ -340,7 +376,16 @@ static func _attack_candidate(
 				view, snapshot, city_id, directions
 			)
 		)
-		if score > best_score or (is_equal_approx(score, best_score) and city_id < best_city):
+		if score > best_score or (
+			is_equal_approx(score, best_score)
+			and EquivariantOrder.city_id_less(
+				view.state,
+				view.nation_id,
+				city_id,
+				best_city,
+				start
+			)
+		):
 			best_score = score
 			best_city = city_id
 			best_directions = directions
@@ -419,9 +464,14 @@ static func _merge_candidate(
 		var other_power := ArmyPower.effective(other)
 		if other_power < own_power:
 			continue
-		# 跨城合并必须形成严格单向偏序，否则两个等战力军会互相追逐
-		# 对方的上一周期位置。低 ID 为稳定接收端，目标链不可能成环。
-		if other.id >= army.id:
+		# 跨城合并必须形成严格单向偏序，否则两个等战力军会互相追逐。
+		# 接收端由势力局部物理顺序决定，镜像等变且目标链严格无环。
+		if not EquivariantOrder.army_less(
+			view.state,
+			view.nation_id,
+			other,
+			army
+		):
 			continue
 		if other.max_size - other.size < army.size:
 			continue

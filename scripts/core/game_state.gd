@@ -249,13 +249,9 @@ func _initialize_recognized_city_owners() -> void:
 func _assign_balanced_nations() -> void:
 	var ordered: Array[City] = cities.duplicate()
 	ordered.sort_custom(func(a: City, b: City) -> bool:
-		return (
-			a.map_position.x < b.map_position.x
-			or (
-				is_equal_approx(a.map_position.x, b.map_position.x)
-				and a.id < b.id
-			)
-		)
+		if not is_equal_approx(a.map_position.x, b.map_position.x):
+			return a.map_position.x < b.map_position.x
+		return a.map_position.y < b.map_position.y
 	)
 	var side_size := CITY_COUNT / 2
 	for side in range(2):
@@ -263,13 +259,9 @@ func _assign_balanced_nations() -> void:
 		for index in range(side * side_size, (side + 1) * side_size):
 			side_cities.append(ordered[index])
 		side_cities.sort_custom(func(a: City, b: City) -> bool:
-			return (
-				a.map_position.y < b.map_position.y
-				or (
-					is_equal_approx(a.map_position.y, b.map_position.y)
-					and a.id < b.id
-				)
-			)
+				if not is_equal_approx(a.map_position.y, b.map_position.y):
+					return a.map_position.y < b.map_position.y
+				return a.map_position.x < b.map_position.x
 		)
 		for index in range(side_cities.size()):
 			var row_half := 0 if index < side_cities.size() / 2 else 1
@@ -299,7 +291,12 @@ func _initialize_resource_hubs() -> void:
 				city.food_per_half_year > food_hub.food_per_half_year
 				or (
 					city.food_per_half_year == food_hub.food_per_half_year
-					and city.id < food_hub.id
+						and EquivariantOrder.city_less(
+							self,
+							nation.id,
+							city,
+							food_hub
+						)
 				)
 			):
 				food_hub = city
@@ -317,7 +314,12 @@ func _initialize_resource_hubs() -> void:
 				or city.manpower_per_month > manpower_hub.manpower_per_month
 				or (
 					city.manpower_per_month == manpower_hub.manpower_per_month
-					and city.id < manpower_hub.id
+						and EquivariantOrder.city_less(
+							self,
+							nation.id,
+							city,
+							manpower_hub
+						)
 				)
 			):
 				manpower_hub = city
@@ -348,7 +350,13 @@ func _initialize_capitals_and_warehouses() -> void:
 		for city in owned:
 			var distance := city.map_position.distance_squared_to(centroid)
 			if distance < best_distance or (
-				is_equal_approx(distance, best_distance) and city.id < capital_id
+					is_equal_approx(distance, best_distance)
+					and EquivariantOrder.city_id_less(
+						self,
+						nation.id,
+						city.id,
+						capital_id
+					)
 			):
 				best_distance = distance
 				capital_id = city.id
@@ -581,7 +589,12 @@ func _generate_armies() -> void:
 	for nation in nations:
 		var owned := cities_of(nation.id)
 		owned.sort_custom(func(a: City, b: City) -> bool:
-			return a.id < b.id
+			return EquivariantOrder.city_less(
+				self,
+				nation.id,
+				a,
+				b
+			)
 		)
 		for city in owned:
 			_initialize_army_attributes(create_army(
@@ -901,7 +914,15 @@ func armies_at_city(city_id: int) -> Array[Army]:
 			continue
 		if army.location_city == city_id and army.state in [Army.State.IDLE, Army.State.RECOVERING]:
 			result.append(army)
-	result.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
+	result.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(
+			self,
+			city_owner,
+			a,
+			b,
+			city_id
+		)
+	)
 	return result
 
 
@@ -1025,7 +1046,14 @@ func warehouse_cities_of(nation_id: int) -> Array[City]:
 		var city := cities[city_id]
 		if city.owner_nation == nation_id and city.has_warehouse:
 			result.append(city)
-	result.sort_custom(func(a: City, b: City) -> bool: return a.id < b.id)
+	result.sort_custom(func(a: City, b: City) -> bool:
+		return EquivariantOrder.city_less(
+			self,
+			nation_id,
+			a,
+			b
+		)
+	)
 	return result
 
 
@@ -1061,7 +1089,7 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 		cities[city_id].has_warehouse = false
 
 
-## 首都失守后，从剩余城市中选择工事最强者迁都（同工事按 id 升序）。
+## 首都失守后，从剩余城市中选择工事最强者迁都（同工事按势力局部物理序）。
 func relocate_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
@@ -1070,7 +1098,14 @@ func relocate_capital(nation_id: int) -> int:
 		nations[nation_id].capital_city_id = -1
 		return -1
 	candidates.sort_custom(func(a: City, b: City) -> bool:
-		return a.fort_strength > b.fort_strength or (a.fort_strength == b.fort_strength and a.id < b.id)
+		if a.fort_strength != b.fort_strength:
+			return a.fort_strength > b.fort_strength
+		return EquivariantOrder.city_less(
+			self,
+			nation_id,
+			a,
+			b
+		)
 	)
 	var capital := candidates[0]
 	var nation := nations[nation_id]

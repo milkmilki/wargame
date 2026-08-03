@@ -35,6 +35,12 @@ var round_no: int = 0
 var reinforce_fresh_a: Array[Army] = []
 var reinforce_fresh_b: Array[Army] = []
 
+## item 8：两侧稳定战术随机键。由首次入场军队的镜像轨道位置/势力中心生成，
+## 不含实体 id、兵力、士气或攻防参数；战斗期间参数变化不会“重抽运气”。
+## 完全镜像的空间角色可得到相同键，此时独立修正按等变性要求自动退化为同值。
+var tactical_key_a: int = 0
+var tactical_key_b: int = 0
+
 ## 攻城进度累积（仅 SIEGE 有效）：守军被清空后进入纯围城阶段，每天确定性累加；
 ## 守城/解围战持续期间每天回退，达 Combat.SIEGE_PROGRESS_REQUIRED 才能破城。
 var siege_progress: float = 0.0
