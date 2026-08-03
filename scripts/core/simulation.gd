@@ -1,11 +1,12 @@
 class_name Simulation
 extends Node
-## 模拟系统：实时驱动时间，按天推进全部游戏逻辑（行军/战斗/占领每天；经济/粮食/士气恢复每月结算）。
+## 模拟系统：实时驱动时间。行军/战斗/占领/军粮分配每天推进；
+## 资源生产、补员、外交与非战斗士气恢复每月结算。
 ## 只写 GameState，调用 Pathfinding / Combat。表现层只读，不在此处理渲染。
 
 # ---- 时间（天/月分层）----
-## 基础 tick = 1 天。行军/战斗/攻城按天推进；经济/粮草/士气恢复每 DAYS_PER_MONTH 天结算一次。
-const DAYS_PER_MONTH: int = 30             ## 一月 = 30 天（经济/粮草/士气恢复结算周期）
+## 基础 tick = 1 天。军粮月耗通过小数债摊到每天，经济生产等仍每 DAYS_PER_MONTH 天结算。
+const DAYS_PER_MONTH: int = 30
 const DAYS_PER_HALF_YEAR: int = 180        ## 半年 = 180 天（粮食注入周期）
 # ---- 行军时长（平衡规格 R1：纯距离线性）----
 const MARCH_DAYS_MIN: float = 10.0         ## 任意边最短行军 10 天（distance=1）
@@ -171,15 +172,19 @@ func _advance_day() -> void:
 	state.month = state.day / DAYS_PER_MONTH
 	state.prune_campaign_visual_events()
 	_expire_offensive_bonuses()
-	# 每月结算：经济 / 粮草『经济』/ 士气恢复（数值口径与原按月一致，仅还原到每 30 天一次）
+	# 每月结算资源生产、补员与外交；普通军粮在下方每日重新分配。
 	if state.day % DAYS_PER_MONTH == 0:
 		_resolve_economy()
 		_resolve_reinforcements()
-		_resolve_supply()
-		_recover_morale()
 		_resolve_diplomacy()
-	# 断粮『后果』每日滚动施加（item 10）：读取月度写入的 supply_ratio，
-	# 按 1/30 逐日累计士气/减员/溃逃，并即时感知月中补给线切断。
+	# 日供应量与路径、兵力、共享库存竞争同日更新；月耗通过 Army.supply_food_debt
+	# 按 1/30 累积到整粮后扣除，不放大整数库存。
+	_resolve_supply()
+	if state.day % DAYS_PER_MONTH == 0:
+		_monthly_supply_source_cache.clear()
+		_monthly_supply_network_cache.clear()
+		_recover_morale()
+	# 断粮后果读取刚计算的当日满足率，按 1/30 累计士气与减员。
 	_apply_supply_pressure()
 	ArmyCoordinator.merge_colocated(state)
 	if state.day % AI_DECISION_INTERVAL_DAYS == 0 or _ai_last_decision_day == -1:
@@ -531,9 +536,10 @@ func _can_reinforce_army(army: Army) -> bool:
 # ------------------------------------------------------------------ 2. 粮食 + 饥饿
 
 func _resolve_supply() -> void:
-	# 快照式：先算每支军队的需求与可达粮仓，再统一按库存/距离权重扣粮。
-	_monthly_supply_source_cache.clear()
-	_monthly_supply_network_cache.clear()
+	# 每日重新计算位置、路线、兵力和共享库存竞争。月需求先除以 30 累加到
+	# Army.supply_food_debt，只有满整粮时实际扣库存，避免逐日 ceil 放大。
+	_daily_supply_source_cache.clear()
+	_daily_supply_network_cache.clear()
 	var plans: Array = []   # [{army, sources, demand}]
 	var demand_by_nation: Array[int] = []
 	demand_by_nation.resize(state.nations.size())
@@ -543,14 +549,15 @@ func _resolve_supply() -> void:
 			continue
 		var siege_garrison := _siege_garrison_battle_of(army)
 		if siege_garrison != null and siege_garrison.city.food_storage > 0:
-			# 被围守军的粮食消耗真源是每日围城时钟；有粮时不再重复扣除月度军粮。
+			# 被围守军的粮食消耗真源是每日围城时钟。
 			army.starving = false
 			army.supply_ratio = 1.0
+			army.supply_food_debt = 0.0
 			continue
 		var sources := _cached_supply_sources(
 			army,
-			_monthly_supply_source_cache,
-			_monthly_supply_network_cache
+			_daily_supply_source_cache,
+			_daily_supply_network_cache
 		)
 		var route_loss := _weighted_supply_loss(sources)
 		var mult: float = MAX_SUPPLY_MULT
@@ -558,31 +565,50 @@ func _resolve_supply() -> void:
 			mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 		var base := int(ceil(army.size * FOOD_PER_CAPITA))
 		base = maxi(base, 1)
-		var demand := int(ceil(base * mult))
+		var monthly_demand := int(ceil(base * mult))
+		demand_by_nation[army.owner_nation] += monthly_demand
+		army.supply_food_debt += (
+			float(monthly_demand) / float(DAYS_PER_MONTH)
+		)
+		var demand := int(floor(army.supply_food_debt + 0.000001))
+		if demand > 0:
+			army.supply_food_debt -= float(demand)
 		plans.append({ "army": army, "sources": sources, "demand": demand })
-		demand_by_nation[army.owner_nation] += demand
 	for nation in state.nations:
 		nation.last_food_demand = demand_by_nation[nation.id]
-		nation.food_demand_ema = (
-			float(nation.last_food_demand)
-			if nation.food_demand_ema <= 0.0
-			else lerpf(
-				nation.food_demand_ema,
-				float(nation.last_food_demand),
-				0.5
+		if state.day % DAYS_PER_MONTH == 0:
+			nation.food_demand_ema = (
+				float(nation.last_food_demand)
+				if nation.food_demand_ema <= 0.0
+				else lerpf(
+					nation.food_demand_ema,
+					float(nation.last_food_demand),
+					0.5
+				)
 			)
-		)
 
-	# 月度只结算「粮食经济」：扣除有限库存、按缺口写入 supply_ratio/starving。
-	# 断粮的『后果』（士气/减员/溃逃）改由 _apply_supply_pressure 每日滚动施加，
-	# 使影响逐步出现、与结算相位无关（item 10）。
+	# 按物理序执行同日库存竞争，避免 state.armies 创建顺序决定谁先取粮。
+	plans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var army_a: Army = a["army"]
+		var army_b: Army = b["army"]
+		return EquivariantOrder.mirror_orbit_army_less(
+			state,
+			army_a,
+			army_b
+		)
+	)
 	for p in plans:
 		var a: Army = p["army"]
 		var demand: int = p["demand"]
+		if demand <= 0:
+			var has_food := _supply_sources_have_food(p["sources"])
+			a.starving = not has_food
+			a.supply_ratio = 1.0 if has_food else 0.0
+			continue
 		var supplied := _withdraw_weighted_supply(
 			p["sources"],
 			demand,
-				a.owner_nation
+			a.owner_nation
 		)
 		var shortfall := demand - supplied
 		if shortfall > 0:
@@ -592,13 +618,10 @@ func _resolve_supply() -> void:
 			a.starving = false
 			a.supply_ratio = 1.0
 
-## 每日滚动施加断粮后果（item 10）：士气/减员/溃逃按 1/DAYS_PER_MONTH 逐日摊派，
-## 全月累计恰等于旧的月度一次性口径；并做每日可达性判定，使月中被切断的补给线
-## 当天即产生全断粮压力（criterion #2：断补给的影响与结算相位无关）。
+## 每日滚动施加刚完成的粮食分配结果：士气/减员按 1/DAYS_PER_MONTH 摊派，
+## 线路、部分短缺、兵力变化和共享库存竞争都已在本日 _resolve_supply 中体现。
 ## 逐军独立、无跨军求和/无 id/无 RNG → 天然镜像等变，不引入公平风险。
 func _apply_supply_pressure() -> void:
-	_daily_supply_source_cache.clear()
-	_daily_supply_network_cache.clear()
 	var morale_broken: Array[Army] = []
 	for army in state.armies:
 		if army.size <= 0 or army.state == Army.State.RECOVERING:
@@ -608,10 +631,7 @@ func _apply_supply_pressure() -> void:
 			# 被围守军的粮食时钟是 _drain_siege_food；此处不重复施压（补给孤岛）。
 			army.starving = false
 			continue
-		# 缺口来自月度经济稳态基线；补给线当天被切断则强制全断粮（瞬时覆盖，不污染基线）。
 		var shortage := 1.0 - army.supply_ratio
-		if not _has_reachable_food_today(army):
-			shortage = 1.0
 		if _accrue_supply_pressure(army, shortage):
 			morale_broken.append(army)
 	for army in morale_broken:
@@ -645,16 +665,6 @@ func _accrue_supply_pressure(army: Army, shortage: float) -> bool:
 		and army.size > 0
 	)
 
-
-## 当日可达性判定：军队是否仍能到达任一有粮粮仓。仅做图上 Dijkstra 与库存检查，
-## 不扣粮（int 库存的实际扣除仍由月度 _resolve_supply 独占，避免 30× 取整膨胀）。
-func _has_reachable_food_today(army: Army) -> bool:
-	var sources := _cached_supply_sources(
-		army,
-		_daily_supply_source_cache,
-		_daily_supply_network_cache
-	)
-	return _supply_sources_have_food(sources)
 
 # ------------------------------------------------------------------ 2b. 士气恢复
 
@@ -3837,6 +3847,7 @@ func _execute_ai_candidate(
 
 
 func _record_ai_order(army: Army, candidate: ActionCandidate) -> void:
+	army.encounter_blocked = false
 	army.ai_action = candidate.kind
 	army.ai_target_city = candidate.target_city
 	army.ai_order_created_day = state.day
@@ -3900,6 +3911,10 @@ func _advance_movement() -> void:
 	for army in state.armies:
 		if not _is_travelling(army) or army.size <= 0:
 			continue   # FIGHTING 军队冻结在原地，不推进
+		var was_encounter_blocked := army.encounter_blocked
+		army.encounter_blocked = false
+		if was_encounter_blocked:
+			continue
 		if army.move_to == -1:
 			# 等待进入下一段（上月被 capacity 卡住）
 			_begin_next_leg(army)
@@ -4154,12 +4169,24 @@ func _detect_encounters() -> void:
 		if edge == null:
 			continue
 
-		# 已有战斗：接触到战线的军队按归侧规则加入
+		# 已有战斗：先按回合开始时冻结的战线位置筛出全部抵达者，再统一加入。
+		# 逐支边判边加会让先加入者移动 contact_dist，进而改变后续军队资格，
+		# 把 group 遍历顺序泄漏成同日“级联增援”。
 		if field_by_edge.has(key):
 			var existing: Battle = field_by_edge[key]
+			var arrivals: Array[Army] = []
 			for army in group:
-				if not existing.has_army(army) and _can_join_field_contact(army, existing, edge):
-					_join_field_battle(existing, army, edge)
+				if (
+					not existing.has_army(army)
+					and _can_join_field_contact(
+						army,
+						existing,
+						edge
+					)
+				):
+					arrivals.append(army)
+			for army in arrivals:
+				_join_field_battle(existing, army, edge)
 			continue
 
 		if group.size() < 2:
@@ -4173,6 +4200,8 @@ func _detect_encounters() -> void:
 		var best_y: Army = null
 		var best_gap := INF
 		var best_size := -1
+		var best_ambiguous := false
+		var best_equivalent_contacts := {}
 		for i in range(group.size()):
 			for j in range(i + 1, group.size()):
 				var x: Army = group[i]
@@ -4201,13 +4230,65 @@ func _detect_encounters() -> void:
 						best_x,
 						best_y
 					)
+					if (
+						not better
+						and EquivariantOrder.encounter_pair_equivalent(
+							state,
+							x,
+							y,
+							best_x,
+							best_y
+						)
+					):
+						best_ambiguous = true
+						var equivalent_contact := (
+							_norm_pos(x, edge)
+							+ _norm_pos(y, edge)
+						) * 0.5
+						for equivalent_army in [x, y]:
+							if not best_equivalent_contacts.has(
+								equivalent_army
+							):
+								best_equivalent_contacts[
+									equivalent_army
+								] = []
+							best_equivalent_contacts[
+								equivalent_army
+							].append(equivalent_contact)
 				if better:
 					best_gap = gap
 					best_size = psize
 					best_x = x
 					best_y = y
+					best_ambiguous = false
+					var best_contact := (
+						_norm_pos(x, edge)
+						+ _norm_pos(y, edge)
+					) * 0.5
+					best_equivalent_contacts = {
+						x: [best_contact],
+						y: [best_contact],
+					}
 		if best_x == null:
 			continue   # 本边无满足接触的敌对对 → 不开战（"边内可能不触发"）
+		if best_ambiguous:
+			# 两个核心对在全部可观察物理键上完全同构时，不存在既确定
+			# 又镜像等变的二选一。冻结在共同接触面，等待外部状态打破
+			# 对称；不能读取数组顺序任取一对，也不能让军队继续穿透。
+			for army in best_equivalent_contacts:
+				var contacts: Array = best_equivalent_contacts[army]
+				contacts.sort()
+				var frozen_norm := 0.0
+				for contact in contacts:
+					frozen_norm += float(contact)
+				frozen_norm /= float(maxi(contacts.size(), 1))
+				army.move_progress = (
+					frozen_norm
+					if army.move_from == edge.city_a
+					else 1.0 - frozen_norm
+				)
+				army.encounter_blocked = true
+			continue
 
 		var length := float(maxi(edge.distance, 1))
 		var battle := state.new_battle(Battle.Kind.FIELD)
@@ -4222,10 +4303,21 @@ func _detect_encounters() -> void:
 			battle.holding_days = float(best_y.holding_days)
 		_enter_battle(battle, best_x, 1)
 		_enter_battle(battle, best_y, 2)
-		# 其余接触到战线的军队按归侧规则加入
+		# 首日其余军队也必须按核心对刚建立时的冻结战线批量判定，
+		# 不能让先加入者改变后续军队的抵达资格。
+		var initial_arrivals: Array[Army] = []
 		for army in group:
-			if not battle.has_army(army) and _can_join_field_contact(army, battle, edge):
-				_join_field_battle(battle, army, edge)
+			if (
+				not battle.has_army(army)
+				and _can_join_field_contact(
+					army,
+					battle,
+					edge
+				)
+			):
+				initial_arrivals.append(army)
+		for army in initial_arrivals:
+			_join_field_battle(battle, army, edge)
 
 
 ## 增援抵达判定（item 4）：任何军队（含 MOVING）加入一场进行中的战斗，都必须已行进到
@@ -4400,16 +4492,89 @@ func _resolve_battles() -> void:
 				tactical_entropy
 			)
 		else:
-			Combat.resolve_round(
+			_resolve_combat_round(
 				battle,
-				state.rng,
 				shared_roll,
-				tactical_entropy,
-				state.day
+				tactical_entropy
 			)
 			if battle.finished:
 				_finish_field_battle(battle)
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
+
+
+func _resolve_combat_round(
+	battle: Battle,
+	shared_roll: int,
+	tactical_entropy: int
+) -> void:
+	_refresh_battle_frontline_priorities(battle)
+	Combat.resolve_round(
+		battle,
+		state.rng,
+		shared_roll,
+		tactical_entropy,
+		state.day
+	)
+	# Combat 只负责判定单军溃退并从战斗侧移出；Simulation 拥有路径与边占用，
+	# 因此在同一回合立即从真实战场位置启动撤退。
+	for army in battle.routed_a:
+		if army.size > 0:
+			_retreat(army)
+		else:
+			army.battle_id = -1
+	for army in battle.routed_b:
+		if army.size <= 0:
+			army.battle_id = -1
+		elif (
+			battle.kind == Battle.Kind.SIEGE
+			and battle.has_garrison
+			and battle.city != null
+			and army.owner_nation == battle.city.owner_nation
+		):
+			_retreat_defender(army, battle.city)
+		else:
+			_retreat(army)
+
+
+func _refresh_battle_frontline_priorities(battle: Battle) -> void:
+	var anchor_city := (
+		battle.city.id
+		if battle.city != null
+		else -1
+	)
+	_fill_battle_frontline_priority(
+		battle.side_a,
+		battle.frontline_priority_a,
+		anchor_city
+	)
+	_fill_battle_frontline_priority(
+		battle.side_b,
+		battle.frontline_priority_b,
+		anchor_city
+	)
+
+
+func _fill_battle_frontline_priority(
+	side: Array[Army],
+	priority: Dictionary,
+	anchor_city: int
+) -> void:
+	priority.clear()
+	if side.is_empty():
+		return
+	var nation_id := side[0].owner_nation
+	var ordered: Array[Army] = side.duplicate()
+	ordered.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(
+			state,
+			nation_id,
+			a,
+			b,
+			anchor_city
+		)
+	)
+	for index in range(ordered.size()):
+		priority[ordered[index]] = index
 
 
 func _mark_city_war_disruption(city: City) -> void:
@@ -4431,7 +4596,11 @@ func _advance_siege(
 	if battle.city != null:
 		_mark_city_war_disruption(battle.city)
 	battle.prune_dead()
+	# 纯围城阶段也必须执行单军溃败阈值；不能因没有正面守军而让失去组织的
+	# 围城军无限停留并贡献（哪怕为 0 的）封锁兵力。
+	battle.side_a = _withdraw_broken_armies(battle.side_a)
 	_reconcile_siege_city_defenders(battle)
+	_refresh_battle_frontline_priorities(battle)
 	var atk_alive := battle.side_size(battle.side_a) > 0
 
 	# 阶段 1：守军抵抗
@@ -4446,12 +4615,10 @@ func _advance_siege(
 			battle.winner_side = 2
 			return
 		_decay_interrupted_siege_progress(battle)
-		Combat.resolve_round(
+		_resolve_combat_round(
 			battle,
-			state.rng,
 			shared_roll,
-			tactical_entropy,
-			state.day
+			tactical_entropy
 		)
 		if not battle.finished:
 			return
@@ -4493,12 +4660,10 @@ func _advance_siege(
 			_promote_challengers(battle)
 			return
 		_decay_interrupted_siege_progress(battle)
-		Combat.resolve_round(
+		_resolve_combat_round(
 			battle,
-			state.rng,
 			shared_roll,
-			tactical_entropy,
-			state.day
+			tactical_entropy
 		)
 		if not battle.finished:
 			return
@@ -4509,7 +4674,7 @@ func _advance_siege(
 					_retreat(c)
 				else:
 					c.battle_id = -1
-			battle.side_b.clear()
+			_reset_empty_battle_side_b(battle)
 			battle.side_a = _withdraw_broken_armies(battle.side_a)
 			if battle.side_a.is_empty():
 				battle.finished = true
@@ -4548,7 +4713,7 @@ func _advance_siege(
 					c.battle_id = -1
 					if c.size > 0:
 						_settle_or_recover_after_battle(c, battle.city.id)
-				battle.side_b.clear()
+				_reset_empty_battle_side_b(battle)
 				battle.finished = true
 				battle.winner_side = 2
 			else:
@@ -4564,7 +4729,11 @@ func _advance_siege(
 	# 不再机制性强制撤离——兵力不足时保持围城/等待援军，去留由 AI 战略层按补给与威胁决策，
 	# 避免「机制撤离 ↔ AI 再派」的攻/撤无限循环（item 7 验收）。进度夹在 [0, REQUIRED]。
 	var daily_progress := Combat.siege_daily_progress(
-		battle.side_size(battle.side_a), battle.siege_required
+		Combat.effective_siege_strength(
+			battle.side_a,
+			battle.frontline_priority_a
+		),
+		battle.siege_required
 	)
 	battle.siege_progress = clampf(
 		battle.siege_progress + daily_progress,
@@ -4625,16 +4794,25 @@ func _decay_interrupted_siege_progress(battle: Battle) -> void:
 func _promote_challengers(battle: Battle) -> void:
 	var new_besiegers: Array[Army] = []
 	for c in battle.side_b:
-		if c.size > 0 and c.morale > Combat.MORALE_FLOOR:
+		if (
+			c.size > 0
+			and c.morale > Combat.ARMY_ROUT_THRESHOLD
+		):
 			new_besiegers.append(c)
 		elif c.size > 0:
 			_retreat(c)
 		else:
 			c.battle_id = -1
 	battle.side_a = new_besiegers
-	battle.side_b.clear()
 	battle.tactical_key_a = battle.tactical_key_b
-	battle.tactical_key_b = 0
+	battle.reinforcement_morale_gained_a = (
+		battle.reinforcement_morale_gained_b
+	)
+	battle.reinforce_fresh_a = battle.reinforce_fresh_b.duplicate()
+	battle.frontline_priority_a = (
+		battle.frontline_priority_b.duplicate()
+	)
+	_reset_empty_battle_side_b(battle)
 	battle.contact_dist_a = float(maxi(battle.edge.distance, 1)) if battle.edge != null else 0.0
 	# 挑战者接管的是纯围城；封锁需求仅由工事决定（item 6，与守军无关），显式重申以自证。
 	battle.siege_required = (
@@ -4643,8 +4821,17 @@ func _promote_challengers(battle: Battle) -> void:
 		else battle.siege_required
 	)
 	battle.has_garrison = false
-	battle.finished = false
+	battle.finished = new_besiegers.is_empty()
 	battle.winner_side = 0
+
+
+func _reset_empty_battle_side_b(battle: Battle) -> void:
+	battle.side_b.clear()
+	battle.reinforce_fresh_b.clear()
+	battle.routed_b.clear()
+	battle.frontline_priority_b.clear()
+	battle.reinforcement_morale_gained_b = 0.0
+	battle.tactical_key_b = 0
 
 
 func _withdraw_broken_armies(side: Array[Army]) -> Array[Army]:
@@ -4734,14 +4921,31 @@ func _join_field_battle(battle: Battle, army: Army, edge: Edge) -> void:
 				battle.holding_days * float(old_size)
 				+ newcomer_days * float(maxi(army.size, 0))
 			) / float(new_total)
-	_enter_battle(battle, army, target)
 	var my_norm := _norm_pos(army, edge)
 	var length := float(maxi(edge.distance, 1))
+	var my_distance := my_norm * length
+	var own_line := (
+		battle.contact_dist_a
+		if target == 1
+		else battle.contact_dist_b
+	)
+	var enemy_line := (
+		battle.contact_dist_b
+		if target == 1
+		else battle.contact_dist_a
+	)
+	var advances_front := (
+		absf(my_distance - enemy_line)
+		< absf(own_line - enemy_line)
+	)
+	_enter_battle(battle, army, target)
 	if target == 1:
-		battle.contact_dist_a = maxf(battle.contact_dist_a, my_norm * length)
+		if advances_front:
+			battle.contact_dist_a = my_distance
 		battle.reinforce_fresh_a.append(army)
 	else:
-		battle.contact_dist_b = maxf(battle.contact_dist_b, my_norm * length)
+		if advances_front:
+			battle.contact_dist_b = my_distance
 		battle.reinforce_fresh_b.append(army)
 	# 增援集结：登记为本 tick 新援军，士气提振在下一次 resolve_round 统一结算（防拆分套利 item 12）。
 
@@ -4750,6 +4954,7 @@ func _enter_battle(battle: Battle, army: Army, side: int) -> void:
 	if battle.kind == Battle.Kind.FIELD and army.state == Army.State.HOLDING:
 		army.resume_holding_after_battle = true
 	army.state = Army.State.FIGHTING
+	army.encounter_blocked = false
 	army.battle_id = battle.id
 	if side == 1:
 		if battle.side_a.is_empty():
@@ -5077,6 +5282,7 @@ func _retreat_to_friendly(army: Army) -> void:
 
 ## 释放该军占用的边通行槽。以 army.on_edge 为唯一判据，幂等（重复调用安全）。
 func _release_edge(army: Army) -> void:
+	army.encounter_blocked = false
 	if not army.on_edge:
 		return
 	army.on_edge = false

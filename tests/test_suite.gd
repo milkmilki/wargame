@@ -62,6 +62,7 @@ func _init() -> void:
 	_test_combat_fairness_and_conservation()
 	_test_structured_battle_log()
 	_test_equivariant_ordering()
+	_test_remaining_combat_risk_closures()
 
 	print("\n==== 结果: %d 通过, %d 失败 ====" % [_passed, _failed])
 	for m in _fail_msgs:
@@ -1302,19 +1303,37 @@ func _test_three_way_serial() -> void:
 		_check(c.state == Army.State.FIGHTING, "C 应进入战斗（不再穿过）")
 	sim.free()
 
-	# id 不变性（item 11 验收：改变军队 ID 不改变多方交战顺序）。构造 gap 完全相等的三方对撞：
-	# 两敌国军(n1,n2)在同一物理位置(norm0.50)与 n0(norm0.50)重合——(n0,n1) 与 (n0,n2) gap 均为 0。
-	# 交战核心必须由物理量(位置/接触)裁决、与 id 无关：无论怎样重排 id，形成的核心对物理归属相同。
+	# 完全同构多方接战不存在镜像等变的单值核心对。改变军队 ID 或数组顺序时，
+	# 必须一致地延迟决策，不能回退到先出现的 pair。
 	var core_nations := {}
+	var ambiguous_frozen := true
 	for perm in [[10, 11, 12], [12, 11, 10], [11, 12, 10]]:
 		var gs2 := GameState.new(); gs2.generate_grid_world(12345)
 		var sim2 := Simulation.new(); sim2.setup(gs2)
 		gs2.armies.clear(); gs2.battles.clear()
-		# 三支同处交战线：n0 与 n1 相向、n0 与 n2 相向，(n0,n1)/(n0,n2) gap 皆为 0（真 gap 平局）。
-		_place_army_on_edge(gs2, perm[0], 0, 0, 1, 0.50)
-		_place_army_on_edge(gs2, perm[1], 1, 1, 0, 0.50)
-		_place_army_on_edge(gs2, perm[2], 2, 1, 0, 0.50)
+		for nation_id in range(3):
+			gs2.nations[nation_id].capital_city_id = 0
+		# 三支军物理状态及势力镜像轨道锚点完全相同，所有候选 pair 等价。
+		var symmetric_edge := gs2.edge_of(0, 1)
+		var symmetric_armies: Array[Army] = [
+			_place_army_on_edge(
+				gs2, perm[0], 0, 0, 1, 0.50
+			),
+			_place_army_on_edge(
+				gs2, perm[1], 1, 1, 0, 0.50
+			),
+			_place_army_on_edge(
+				gs2, perm[2], 2, 1, 0, 0.50
+			),
+		]
 		sim2._detect_encounters()
+		sim2._advance_movement()
+		for symmetric_army in symmetric_armies:
+			if not _approx(
+				sim2._norm_pos(symmetric_army, symmetric_edge),
+				0.50
+			):
+				ambiguous_frozen = false
 		var key := "none"
 		if gs2.battles.size() >= 1:
 			var bt := gs2.battles[0]
@@ -1326,10 +1345,11 @@ func _test_three_way_serial() -> void:
 		core_nations[key] = true
 		sim2.free()
 	_check(
-		core_nations.size() == 1,
-		"改变军队 ID 不得改变多方交战核心的势力归属，实得 %d 种结果：%s" % [
-			core_nations.size(), str(core_nations.keys())
-		]
+		core_nations.size() == 1
+			and core_nations.has("none")
+			and ambiguous_frozen,
+		"完全同构多方接战应一致延迟，不能按 ID/数组顺序任取核心对：%s"
+			% str(core_nations.keys())
 	)
 
 # ------------------------------------------------------------------ 15. 到达被围城必触发（修复：城主回援/援军入城不旁观）
@@ -3156,6 +3176,68 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		"等战力跨城合并必须按势力局部物理序形成单向偏序，禁止互相追逐成环"
 	)
 
+	# 两个行为目标在全部可观察物理键上完全等价时，不存在等变的单值
+	# 选择。应延迟本次合并，不能回退到 friendly_armies/城市 ID 顺序。
+	var ambiguous_state := GameState.new()
+	ambiguous_state.generate_grid_world(7003)
+	ambiguous_state.armies.clear()
+	ambiguous_state.nations[0].capital_city_id = 0
+	ambiguous_state.cities[0].map_position = Vector2(0.2, 0.2)
+	for target_city in [1, GameState.GRID]:
+		ambiguous_state.cities[target_city].map_position = Vector2(
+			0.1,
+			0.2
+		)
+		ambiguous_state.cities[target_city].terrain_height = 0.5
+		ambiguous_state.cities[target_city].terrain_relief = 0.5
+	var merge_edge_a := ambiguous_state.edge_of(0, 1)
+	var merge_edge_b := ambiguous_state.edge_of(
+		0,
+		GameState.GRID
+	)
+	merge_edge_a.distance = 4
+	merge_edge_b.distance = 4
+	merge_edge_a.danger = 0.25
+	merge_edge_b.danger = 0.25
+	merge_edge_a.max_manpower = 30000
+	merge_edge_b.max_manpower = 30000
+	EquivariantOrder._city_rank_cache.clear()
+	var ambiguous_source := _make_army(942, 0, 500, 10, 10)
+	ambiguous_source.location_city = 0
+	ambiguous_source.move_from = 0
+	var ambiguous_a := _make_army(943, 0, 500, 10, 10)
+	ambiguous_a.location_city = 1
+	ambiguous_a.move_from = 1
+	var ambiguous_b := _make_army(944, 0, 500, 10, 10)
+	ambiguous_b.location_city = GameState.GRID
+	ambiguous_b.move_from = GameState.GRID
+	ambiguous_state.armies.append_array([
+		ambiguous_source,
+		ambiguous_a,
+		ambiguous_b,
+	])
+	var ambiguous_view := AiWorldView.build(ambiguous_state, 0)
+	var ambiguous_snapshot := StrategicMapSnapshot.build(
+		ambiguous_view
+	)
+	var ambiguous_threat := ThreatField.build(ambiguous_view)
+	_check(
+		EquivariantOrder.army_less(
+				ambiguous_state, 0, ambiguous_a, ambiguous_source
+		)
+			and EquivariantOrder.army_less(
+					ambiguous_state, 0, ambiguous_b, ambiguous_source
+			)
+			and UtilityAI._merge_candidate(
+				ambiguous_view,
+				ambiguous_snapshot,
+				ambiguous_threat,
+				ArmyCoordinator.new(),
+				ambiguous_source
+			) == null,
+		"完全等价的跨城合并目标应延迟，不能按城市 ID 或数组顺序决胜"
+	)
+
 	gs.armies.clear()
 	var weak := _make_army(932, 0, 100, 8, 8)
 	weak.location_city = 0
@@ -4551,7 +4633,9 @@ func _test_diplomacy_state_and_ai() -> void:
 			Simulation.MAX_SUPPLY_MULT
 		)
 	))
-	supply_sim._resolve_supply()
+	for supply_day in range(1, Simulation.DAYS_PER_MONTH + 1):
+		supply_state.day = supply_day
+		supply_sim._resolve_supply()
 	var own_food_used := 100 - supply_state.cities[own_supply_city].food_storage
 	var allied_food_used := 300 - supply_state.cities[allied_supply_city].food_storage
 	var total_food_after := (
@@ -4563,7 +4647,11 @@ func _test_diplomacy_state_and_ai() -> void:
 		and allied_food_used > own_food_used
 		and total_food_before - total_food_after
 			== own_food_used + allied_food_used
-		and total_food_before - total_food_after == expected_allied_demand,
+			and absi(
+				total_food_before
+					- total_food_after
+					- expected_allied_demand
+			) <= 2,
 		"联盟补给应按库存与距离加权分摊，库存更多的粮仓承担更多：sources=%s own=%d ally=%d before=%d after=%d"
 			% [
 				str(supply_sources),
@@ -6613,6 +6701,37 @@ func _test_structured_battle_log() -> void:
 					not bool(rejected.get("ok", true)),
 					"回放器必须拒绝被篡改的战斗结果"
 				)
+				var entropy_tampered: Array[Dictionary] = (
+					loaded["records"] as Array[Dictionary]
+				).duplicate(true)
+				entropy_tampered[0]["tactical_entropy"] = (
+					int(entropy_tampered[0]["tactical_entropy"])
+					+ 1234567
+				)
+				var entropy_rejected := CombatLog.replay_records(
+					entropy_tampered
+				)
+				_check(
+					not bool(entropy_rejected.get("ok", true)),
+					"回放器必须拒绝被篡改的战术熵，不能只信任日志中的派生修正"
+				)
+				var key_tampered: Array[Dictionary] = (
+					loaded["records"] as Array[Dictionary]
+				).duplicate(true)
+				var key_context: Dictionary = key_tampered[0][
+					"battle_context"
+				]
+				key_context["tactical_key_a"] = (
+					int(key_context["tactical_key_a"])
+					+ 7654321
+				)
+				var key_rejected := CombatLog.replay_records(
+					key_tampered
+				)
+				_check(
+					not bool(key_rejected.get("ok", true)),
+					"回放器必须拒绝被篡改的 tactical key"
+				)
 	DirAccess.remove_absolute(
 		ProjectSettings.globalize_path(log_path)
 	)
@@ -6691,6 +6810,412 @@ func _test_equivariant_ordering() -> void:
 	_check(
 		before == after,
 		"交换军队 ID 不得改变决策物理顺序"
+	)
+
+	# 首都与领土质心均落在中轴时，没有可等变的固定左右朝向；镜像城市
+	# 必须落入同一轨道键，而不是隐式固定为“向右”。
+	for city in gs.cities:
+		city.owner_nation = 3
+	gs.nations[0].capital_city_id = 0
+	gs.cities[0].owner_nation = 0
+	gs.cities[0].map_position = Vector2(0.5, 0.5)
+	for city_id in [1, 2]:
+		gs.cities[city_id].owner_nation = 0
+		gs.cities[city_id].map_position = Vector2(
+			0.4 if city_id == 1 else 0.6,
+			0.25
+		)
+		gs.cities[city_id].terrain_height = 0.5
+		gs.cities[city_id].terrain_relief = 0.5
+	EquivariantOrder._city_rank_cache.clear()
+	_check(
+		is_zero_approx(
+			EquivariantOrder._nation_forward_sign(gs, 0)
+		)
+			and EquivariantOrder.city_key(gs, 0, 1)
+				== EquivariantOrder.city_key(gs, 0, 2)
+			and not EquivariantOrder.city_id_less(
+				gs, 0, 1, 2
+			)
+			and not EquivariantOrder.city_id_less(
+				gs, 0, 2, 1
+			),
+		"中轴自映射势力必须使用 abs(x-0.5) 轨道，不能任意选择全局方向"
+	)
+
+
+## [38] 审查闭环：跨回合援军、真实预备队、单军溃退、有效围城、日补给。
+func _test_remaining_combat_risk_closures() -> void:
+	print("[38] 残余机制闭环：跨日援军 + 显式预备队 + 单军溃退 + 有效围城 + 日补给")
+
+	# (a) 两批援军跨两个回合抵达，整场累计提振仍不得超过 0.20。
+	var tired := _make_army(10000, 0, 1000, 0, 10)
+	tired.morale = 0.30
+	var enemy := _make_army(10001, 1, 20000, 0, 10)
+	var reinforcement_battle := _make_field_battle(
+		[tired],
+		[enemy],
+		0.0,
+		4
+	)
+	reinforcement_battle.edge.max_manpower = 30000
+	for batch in range(2):
+		var fresh := _make_army(
+			10002 + batch,
+			0,
+			5000,
+			0,
+			10
+		)
+		reinforcement_battle.side_a.append(fresh)
+		reinforcement_battle.reinforce_fresh_a.append(fresh)
+		Combat.resolve_round(
+			reinforcement_battle,
+			RandomNumberGenerator.new(),
+			0,
+			1234 + batch
+		)
+	_check(
+		_approx(
+			reinforcement_battle.reinforcement_morale_gained_a,
+			Combat.REINFORCE_MORALE_MAX
+		),
+		"跨回合分批援军的整场累计提振应封顶 %.2f，实为 %.4f"
+			% [
+				Combat.REINFORCE_MORALE_MAX,
+				reinforcement_battle.reinforcement_morale_gained_a,
+			]
+	)
+
+	# (b) 5000 正面只能投入第一军；完整预备队首轮不伤亡、不掉战斗士气。
+	var frontline := _make_army(10010, 0, 5000, 10, 10)
+	var reserve := _make_army(10011, 0, 4000, 10, 10)
+	var opponent := _make_army(10012, 1, 5000, 10, 10)
+	var frontage_battle := _make_field_battle(
+		[frontline, reserve],
+		[opponent],
+		0.0,
+		4
+	)
+	frontage_battle.edge.max_manpower = 5000
+	Combat.resolve_round(
+		frontage_battle,
+		RandomNumberGenerator.new(),
+		0,
+		99
+	)
+	_check(
+		reserve.size == 4000 and _approx(reserve.morale, 1.0),
+		"完整预备队首轮应保持兵力和组织度，实为 size=%d morale=%.4f"
+			% [reserve.size, reserve.morale]
+	)
+	_check(
+		frontline.size < 5000 and frontline.morale < 1.0,
+		"前线军应独自承担首轮伤亡与士气侵蚀"
+	)
+	frontline.size = 0
+	var reserve_before := reserve.size
+	Combat.resolve_round(
+		frontage_battle,
+		RandomNumberGenerator.new(),
+		0,
+		100
+	)
+	_check(
+		reserve.size < reserve_before and reserve.morale < 1.0,
+		"前线退出后，预备队应在下一轮补入并开始承受战斗损耗"
+	)
+
+	# (c) 单军跌破 ARMY_ROUT_THRESHOLD 后立即离开战斗侧，健康预备队继续作战。
+	var near_rout := _make_army(10020, 0, 5000, 10, 10)
+	near_rout.morale = Combat.ARMY_ROUT_THRESHOLD + 0.001
+	var healthy := _make_army(10021, 0, 4000, 10, 10)
+	var rout_enemy := _make_army(10022, 1, 5000, 10, 10)
+	var rout_battle := _make_field_battle(
+		[near_rout, healthy],
+		[rout_enemy],
+		0.0,
+		4
+	)
+	rout_battle.edge.max_manpower = 5000
+	Combat.resolve_round(
+		rout_battle,
+		RandomNumberGenerator.new(),
+		0,
+		77
+	)
+	_check(
+		rout_battle.routed_a.has(near_rout)
+			and not rout_battle.side_a.has(near_rout)
+			and rout_battle.side_a.has(healthy)
+			and not rout_battle.finished,
+		"单军跌破阈值应立即退出，健康预备队应保持战斗"
+	)
+	var promotion_state := GameState.new()
+	promotion_state.generate_grid_world(38042)
+	promotion_state.armies.clear()
+	var broken_challenger := _make_army(
+		10023,
+		0,
+		1000,
+		10,
+		10
+	)
+	broken_challenger.morale = (
+		Combat.ARMY_ROUT_THRESHOLD - 0.001
+	)
+	broken_challenger.location_city = (
+		promotion_state.cities_of(0)[0].id
+	)
+	broken_challenger.move_from = broken_challenger.location_city
+	promotion_state.armies.append(broken_challenger)
+	var promotion_battle := Battle.new()
+	promotion_battle.kind = Battle.Kind.SIEGE
+	promotion_battle.city = promotion_state.cities_of(1)[0]
+	promotion_battle.side_b.append(broken_challenger)
+	var promotion_sim := Simulation.new()
+	promotion_sim.setup(promotion_state)
+	promotion_sim._promote_challengers(promotion_battle)
+	_check(
+		promotion_battle.finished
+			and promotion_battle.side_a.is_empty(),
+		"低于单军阈值的挑战者不得绕过战斗回合接管围城"
+	)
+	var healthy_challenger := _make_army(
+		10024,
+		0,
+		1000,
+		10,
+		10
+	)
+	var takeover_battle := Battle.new()
+	takeover_battle.kind = Battle.Kind.SIEGE
+	takeover_battle.city = promotion_state.cities_of(1)[0]
+	takeover_battle.side_b.append(healthy_challenger)
+	takeover_battle.reinforce_fresh_b.append(
+		healthy_challenger
+	)
+	takeover_battle.frontline_priority_b[
+		healthy_challenger
+	] = 2
+	takeover_battle.reinforcement_morale_gained_b = 0.12
+	takeover_battle.tactical_key_b = 123456
+	promotion_sim._promote_challengers(takeover_battle)
+	_check(
+		takeover_battle.side_a.has(healthy_challenger)
+			and takeover_battle.reinforce_fresh_a.has(
+				healthy_challenger
+			)
+			and _approx(
+				takeover_battle.reinforcement_morale_gained_a,
+				0.12
+			)
+			and takeover_battle.tactical_key_a == 123456
+			and takeover_battle.side_b.is_empty()
+			and takeover_battle.reinforce_fresh_b.is_empty()
+			and _approx(
+				takeover_battle.reinforcement_morale_gained_b,
+				0.0
+			),
+		"挑战者接管围城时应迁移自身累计/新援状态并清空旧 side_b 身份"
+	)
+	promotion_sim.free()
+
+	# (d) 围城只计算城墙正面内、受组织度和当日补给修正的有效兵力。
+	var siege_full := _make_army(10030, 0, 10000, 10, 10)
+	var siege_tired := _make_army(10031, 0, 10000, 10, 10)
+	siege_tired.morale = 0.50
+	var siege_unsupplied := _make_army(10032, 0, 10000, 10, 10)
+	siege_unsupplied.supply_ratio = 0.50
+	var full_strength := Combat.effective_siege_strength([siege_full])
+	var tired_strength := Combat.effective_siege_strength([siege_tired])
+	var unsupplied_strength := Combat.effective_siege_strength([
+		siege_unsupplied
+	])
+	_check(
+		full_strength == 10000
+			and tired_strength < full_strength
+			and unsupplied_strength < full_strength,
+		"低士气/部分缺粮必须降低有效围城兵力：full=%d tired=%d supply=%d"
+			% [full_strength, tired_strength, unsupplied_strength]
+	)
+	var siege_mass_a := _make_army(10033, 0, 10000, 10, 10)
+	var siege_mass_b := _make_army(10034, 0, 10000, 10, 10)
+	_check(
+		Combat.effective_siege_strength([
+			siege_mass_a,
+			siege_mass_b,
+		]) == Combat.SIEGE_FRONTAGE,
+		"超额围城兵力应受城墙正面 %d 限制"
+			% Combat.SIEGE_FRONTAGE
+	)
+
+	# (e) 军粮每天重算：30 天总耗保持月口径；同月兵力变化和库存不足立即反映。
+	var supply_state := GameState.new()
+	supply_state.generate_grid_world(38038)
+	var supply_sim := Simulation.new()
+	supply_sim.setup(supply_state)
+	supply_state.armies.clear()
+	var supply_city := supply_state.cities_of(0)[0]
+	_set_single_warehouse(
+		supply_state,
+		0,
+		supply_city.id,
+		100
+	)
+	var supplied_army := _make_army(10040, 0, 12000, 10, 10)
+	supplied_army.location_city = supply_city.id
+	supplied_army.move_from = supply_city.id
+	supply_state.armies.append(supplied_army)
+	for day in range(1, 31):
+		supply_state.day = day
+		supply_sim._resolve_supply()
+	_check(
+		supply_city.food_storage == 70,
+		"12000 人 30 天应消耗旧月口径 30 粮，不得按日 ceil 放大，实余 %d"
+			% supply_city.food_storage
+	)
+	supplied_army.size = 24000
+	supply_city.food_storage = 1
+	supply_state.day = 31
+	supply_sim._resolve_supply()
+	_check(
+		_approx(supplied_army.supply_ratio, 0.5)
+			and supplied_army.starving,
+		"同月兵力翻倍且仅余 1 粮时，当日 2 粮需求应立即得到 0.5 满足率，实为 %.3f"
+			% supplied_army.supply_ratio
+	)
+	supply_sim.free()
+
+	# (f) 同日增援资格必须按冻结战线批量判定；后方第一军加入不能把战线
+	# 推回并让更远的第二军级联加入。
+	var join_state := GameState.new()
+	join_state.generate_grid_world(38039)
+	join_state.armies.clear()
+	join_state.battles.clear()
+	var join_edge := join_state.edges[0]
+	join_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var core_a := _place_army_on_edge(
+		join_state, 10050, 0,
+		join_edge.city_a, join_edge.city_b, 0.40
+	)
+	var core_b := _place_army_on_edge(
+		join_state, 10051, 1,
+		join_edge.city_b, join_edge.city_a, 0.40
+	)
+	var near_b := _place_army_on_edge(
+		join_state, 10052, 1,
+		join_edge.city_b, join_edge.city_a, 0.30
+	)
+	var far_b := _place_army_on_edge(
+		join_state, 10053, 1,
+		join_edge.city_b, join_edge.city_a, 0.20
+	)
+	var existing := join_state.new_battle(Battle.Kind.FIELD)
+	existing.edge = join_edge
+	existing.contact_dist_a = 0.40 * float(join_edge.distance)
+	existing.contact_dist_b = 0.60 * float(join_edge.distance)
+	existing.side_a.append(core_a)
+	existing.side_b.append(core_b)
+	for core in [core_a, core_b]:
+		core.state = Army.State.FIGHTING
+		core.battle_id = existing.id
+	var join_sim := Simulation.new()
+	join_sim.setup(join_state)
+	join_sim._detect_encounters()
+	_check(
+		existing.side_b.has(near_b)
+			and not existing.side_b.has(far_b)
+			and far_b.battle_id == -1
+			and _approx(
+				existing.contact_dist_b,
+				0.60 * float(join_edge.distance)
+			),
+		"同日增援应冻结资格且后军不得把反向战线推回"
+	)
+	join_sim.free()
+
+	var initial_join_state := GameState.new()
+	initial_join_state.generate_grid_world(38041)
+	initial_join_state.armies.clear()
+	initial_join_state.battles.clear()
+	var initial_edge := initial_join_state.edges[0]
+	initial_join_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	_place_army_on_edge(
+		initial_join_state, 10054, 0,
+		initial_edge.city_a, initial_edge.city_b, 0.45
+	)
+	_place_army_on_edge(
+		initial_join_state, 10055, 1,
+		initial_edge.city_b, initial_edge.city_a, 0.45
+	)
+	var initial_near := _place_army_on_edge(
+		initial_join_state, 10056, 1,
+		initial_edge.city_b, initial_edge.city_a, 0.35
+	)
+	var initial_far := _place_army_on_edge(
+		initial_join_state, 10057, 1,
+		initial_edge.city_b, initial_edge.city_a, 0.25
+	)
+	var initial_join_sim := Simulation.new()
+	initial_join_sim.setup(initial_join_state)
+	initial_join_sim._detect_encounters()
+	var initial_nation_one_side: Array[Army] = []
+	if initial_join_state.battles.size() == 1:
+		var initial_battle := initial_join_state.battles[0]
+		initial_nation_one_side = (
+			initial_battle.side_a
+			if (
+				not initial_battle.side_a.is_empty()
+				and initial_battle.side_a[0].owner_nation == 1
+			)
+			else initial_battle.side_b
+		)
+	_check(
+		initial_join_state.battles.size() == 1
+			and initial_nation_one_side.has(initial_near)
+			and not initial_nation_one_side.has(initial_far),
+		"新战斗首日也应冻结增援资格，禁止逐支加入形成级联"
+	)
+	initial_join_sim.free()
+
+	# (g) 拆分/合并不能重置每日补给结算相位或既有缺粮减员债。
+	var debt_state := GameState.new()
+	debt_state.generate_grid_world(38040)
+	debt_state.armies.clear()
+	var debt_army := _make_army(10060, 0, 8000, 10, 10)
+	debt_army.max_size = 10000
+	debt_army.location_city = debt_state.cities_of(0)[0].id
+	debt_army.move_from = debt_army.location_city
+	debt_army.supply_debt = 0.75
+	debt_army.supply_food_debt = 0.60
+	debt_state.armies.append(debt_army)
+	var debt_parts := debt_state.split_army(debt_army, 5000)
+	var split_supply_debt := 0.0
+	var split_food_debt := 0.0
+	for part in debt_parts:
+		split_supply_debt += part.supply_debt
+		split_food_debt += part.supply_food_debt
+	debt_parts[0].max_size = 10000
+	ArmyCoordinator._merge_into(
+		debt_state,
+		debt_parts[0],
+		debt_parts[1]
+	)
+	_check(
+		_approx(split_supply_debt, 0.75)
+			and _approx(split_food_debt, 0.60)
+			and _approx(debt_parts[0].supply_debt, 0.75)
+			and _approx(debt_parts[0].supply_food_debt, 0.60),
+		"拆分/合并应守恒 supply_debt 与 supply_food_debt"
 	)
 
 

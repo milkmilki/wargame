@@ -42,18 +42,37 @@ func _init() -> void:
 	var strict_mirror := (
 		OS.get_environment("AI_DUEL_STRICT_MIRROR") == "1"
 	)
+	var trace_combat := (
+		OS.get_environment("AI_DUEL_TRACE_COMBAT") == "1"
+	)
+	if trace_combat:
+		Combat.clear_battle_log()
+		Combat.battle_log_enabled = true
 	var started := Time.get_ticks_msec()
 	for _day in range(DUEL_DAYS):
 		if state.winner != -1:
 			break
+		var combat_log_start := Combat.battle_log.size()
 		simulation._advance_day()
 		if strict_mirror:
 			var mismatch := _strict_mirror_mismatch(state)
 			if not mismatch.is_empty():
+				if trace_combat:
+					for log_index in range(
+						combat_log_start,
+						Combat.battle_log.size()
+					):
+						print(
+							"combat_trace=%s"
+							% JSON.stringify(
+								Combat.battle_log[log_index]
+							)
+						)
 				print(
 					"verdict=STRICT_MIRROR_FAIL day=%d %s"
 					% [state.day, mismatch]
 				)
+				Combat.battle_log_enabled = false
 				simulation.free()
 				quit(4)
 				return
@@ -100,6 +119,7 @@ func _init() -> void:
 	print(summary)
 	if strict_mirror:
 		print("strict_mirror_days=%d" % state.day)
+	Combat.battle_log_enabled = false
 	_print_army_diagnostics(state)
 	var improved_ai_better := false
 	if duel_mode in [
@@ -495,7 +515,7 @@ func _canonical_army_multiset(
 				"s=%d|max=%d|atk=%d|def=%d|state=%d|loc=%d|"
 				+ "from=%d|to=%d|prog=%.9f|path=%s|mor=%.9f|"
 				+ "sup=%.9f|starve=%s|hold=%d|holdp=%.9f|"
-				+ "forced=%s|action=%d|target=%d|until=%d|"
+					+ "blocked=%s|forced=%s|action=%d|target=%d|until=%d|"
 				+ "off=%.9f|off_until=%d|def_until=%d|reason=%s"
 			) % [
 				army.size,
@@ -513,6 +533,7 @@ func _canonical_army_multiset(
 				str(army.starving),
 				army.holding_days,
 				army.hold_target_progress,
+					str(army.encounter_blocked),
 				str(army.forced_retreat),
 				army.ai_action,
 				target,

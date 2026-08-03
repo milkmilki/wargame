@@ -453,6 +453,7 @@ static func _merge_candidate(
 	var dist: Dictionary = field["dist"]
 	var best_city := -1
 	var best_score := -INF
+	var best_ambiguous := false
 	var own_power := ArmyPower.effective(army)
 	for other in view.friendly_armies:
 		if other == army or other.state != Army.State.IDLE or other.location_city == start:
@@ -485,12 +486,32 @@ static func _merge_candidate(
 			- 0.08 * float(dist[other.location_city])
 			- 0.5 * coordinator.power_reserved(other.location_city) / maxf(other_power, 1.0)
 		)
-		if score > best_score or (
-			is_equal_approx(score, best_score) and other.location_city < best_city
-		):
+		var better := score > best_score
+		if is_equal_approx(score, best_score):
+			better = EquivariantOrder.city_id_less(
+				view.state,
+				view.nation_id,
+				other.location_city,
+				best_city,
+				start
+			)
+			if (
+				not better
+				and other.location_city != best_city
+				and not EquivariantOrder.city_id_less(
+					view.state,
+					view.nation_id,
+					best_city,
+					other.location_city,
+					start
+				)
+			):
+				best_ambiguous = true
+		if better:
 			best_score = score
 			best_city = other.location_city
-	if best_city == -1:
+			best_ambiguous = false
+	if best_city == -1 or best_ambiguous:
 		return null
 	var candidate := ActionCandidate.make(
 		ActionCandidate.Kind.MERGE,

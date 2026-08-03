@@ -2,8 +2,8 @@
 
 项目地址：<https://github.com/milkmilki/wargame>
 
-> **实施状态（2026-08-03）**：item 1～17 及原变更说明中的 4 项残余风险均已闭环。
-> 验收：`run_tests.sh` 745/0、万场统计 `STATISTICS_PASS`、真实地图 4 seed × 1095 天健康、
+> **实施状态（2026-08-03）**：item 1～17、五项机制复查缺口及上一轮 4 个 P1 均已闭环。
+> 验收：`run_tests.sh` 763/0、万场统计 `STATISTICS_PASS`、真实地图 4 seed × 1095 天健康、
 > strict-mirror 3650 天逐日无破裂（优势分 0.0）。实现与风险闭环见
 > [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)。
 

@@ -273,13 +273,25 @@ static func resolve_round(
 	day: int = -1,
 	forced_side_modifiers: Vector2 = Vector2.ZERO
 ) -> void:
+	battle.routed_a.clear()
+	battle.routed_b.clear()
 	battle.prune_dead()
+	_extract_routed_armies(battle.side_a, battle.routed_a)
+	_extract_routed_armies(battle.side_b, battle.routed_b)
 	var size_a := battle.side_size(battle.side_a)
 	var size_b := battle.side_size(battle.side_b)
-	# 任一方已空：对称裁决（双方同时空判平局，不再默认 side_b 胜）。
+	# 任一方已无可战军队：对称裁决。低于单军阈值的部队已移入 routed，
+	# Simulation 会立即从真实战场位置启动撤退。
 	if size_a <= 0 or size_b <= 0:
 		battle.finished = true
-		battle.winner_side = decide_winner(size_a <= 0, size_b <= 0, false, false, 0.0, 0.0)
+		battle.winner_side = decide_winner(
+			size_a <= 0 and battle.routed_a.is_empty(),
+			size_b <= 0 and battle.routed_b.is_empty(),
+			size_a <= 0 and not battle.routed_a.is_empty(),
+			size_b <= 0 and not battle.routed_b.is_empty(),
+			0.0,
+			0.0
+		)
 		return
 
 	battle.round_no += 1
@@ -291,13 +303,29 @@ static func resolve_round(
 	# 求和会差 ~1 ULP，经除法与取整放大成 1 兵差、再经士气侵蚀累积破坏镜像。
 	# 按纯物理键（兵力/攻/防/士气，全降序）规范排序后，聚合与摊分仅依赖物理多重集、
 	# 与加入历史无关：镜像成对的两侧因物理量相同而得到逐位一致的求和。全物理键、无 id 依赖。
-	_canonicalize_side(battle.side_a)
-	_canonicalize_side(battle.side_b)
+	_canonicalize_side(
+		battle.side_a,
+		battle.frontline_priority_a
+	)
+	_canonicalize_side(
+		battle.side_b,
+		battle.frontline_priority_b
+	)
 
-	# 本 tick 新增援军的士气提振：把两侧各自「本 tick 全部新增兵力」作为整体统一结算一次，
-	# 结算后清空。拆分成多支依次加入不会重复获得士气（item 12）；同质双方对称加入结果对称。
-	settle_reinforcement_morale(battle.side_a, battle.reinforce_fresh_a)
-	settle_reinforcement_morale(battle.side_b, battle.reinforce_fresh_b)
+	# 本 tick 新增援军按侧整体结算；每侧的剩余额度来自 Battle 整场累计值，
+	# 因而同回合或跨回合拆分都不能刷新 REINFORCE_MORALE_MAX。
+	battle.reinforcement_morale_gained_a += settle_reinforcement_morale(
+		battle.side_a,
+		battle.reinforce_fresh_a,
+		REINFORCE_MORALE_MAX
+			- battle.reinforcement_morale_gained_a
+	)
+	battle.reinforcement_morale_gained_b += settle_reinforcement_morale(
+		battle.side_b,
+		battle.reinforce_fresh_b,
+		REINFORCE_MORALE_MAX
+			- battle.reinforcement_morale_gained_b
+	)
 	battle.reinforce_fresh_a.clear()
 	battle.reinforce_fresh_b.clear()
 	# morale_before 的语义是「增援结算完成、伤亡发生前」。
@@ -341,11 +369,24 @@ static func resolve_round(
 		if battle.city.food_storage <= 0:
 			garrison_b = int(round(garrison_b * SIEGE_STARVE_DEF_MULT))
 
-	# 正面宽度（item 5）：超出道路/城墙容量的兵力为预备队，本回合不出力、不受伤亡。
-	# 参战比例 = min(总兵力, frontage)/总兵力；对双方各自计算（同一条战线共享 frontage 上限）。
+	# 正面宽度（item 5）：每轮按规范物理序明确投入各军的前线兵力。
+	# 完全未入选的军队是预备队：不出力、不受战斗伤亡、不承受战斗士气侵蚀；
+	# 当前线减员或溃退后，下一轮重新选择并由预备队补入。
 	var frontage := combat_frontage(battle)
-	var engaged_a := frontage_engaged_ratio(size_a, frontage)
-	var engaged_b := frontage_engaged_ratio(size_b, frontage)
+	var frontline_a := frontline_allocation(
+		battle.side_a,
+		frontage,
+		battle.frontline_priority_a
+	)
+	var frontline_b := frontline_allocation(
+		battle.side_b,
+		frontage,
+		battle.frontline_priority_b
+	)
+	var frontline_size_a := _frontline_size(frontline_a)
+	var frontline_size_b := _frontline_size(frontline_b)
+	var engaged_a := float(frontline_size_a) / float(maxi(size_a, 1))
+	var engaged_b := float(frontline_size_b) / float(maxi(size_b, 1))
 
 	# 同一回合共享战场波动。保留逐回合随机变化，但不让 side_a/side_b 身份决定运气。
 	# shared_roll>=0：采用本 tick 全局共享骰（镜像成对战斗抽到同一波动）；否则逐场抽取。
@@ -386,52 +427,62 @@ static func resolve_round(
 			side_signature_a,
 			side_signature_b
 		)
-	# 火力只由前线部队贡献（× engaged 比例）：窄路上大军无法全数展开（一夫当关）。
+	# 火力只由本轮明确投入的前线兵力贡献。
 	var fire_a := (
-		_side_attack(battle.side_a)
-		* engaged_a
+		_frontline_attack(frontline_a)
 		* attack_pen_a
 		* roll_multiplier
 		* side_modifiers.x
 	)
 	var fire_b := (
-		_side_attack(battle.side_b)
-		* engaged_b
+		_frontline_attack(frontline_b)
 		* attack_pen_b
 		* roll_multiplier
 		* side_modifiers.y
 	)
 
-	# 各方平均有效防御（含地形惩罚；守方叠加城防）
-	var def_a := _side_avg_defense(battle.side_a, size_a) * defense_pen_a
-	var def_b := _side_avg_defense(battle.side_b, size_b) * defense_pen_b + garrison_b
+	# 只有前线承受攻击，因此防御也按前线兵力加权；守方再叠加城防。
+	var def_a := _frontline_avg_defense(frontline_a) * defense_pen_a
+	var def_b := _frontline_avg_defense(frontline_b) * defense_pen_b + garrison_b
 
 	# 本回合伤亡：受对方火力，被己方有效防御减伤（守恒与上限交由 distribute_casualties）
 	var loss_a := fire_b / K_ROUND * (DEF_REF / (DEF_REF + def_a))
 	var loss_b := fire_a / K_ROUND * (DEF_REF / (DEF_REF + def_b))
-	# 预备队不受伤亡（item 5）：本方伤亡上限 = 本方前线参战兵力（超出者在阵后未接敌）。
-	loss_a = minf(loss_a, float(size_a) * engaged_a)
-	loss_b = minf(loss_b, float(size_b) * engaged_b)
+	loss_a = minf(loss_a, float(frontline_size_a))
+	loss_b = minf(loss_b, float(frontline_size_b))
 
-	# 伤亡按最大余数法守恒分配到各军（item 3），返回各侧实际总伤亡（整数、已守恒、已 cap）。
-	var actual_a := _apply_losses(battle.side_a, loss_a)
-	var actual_b := _apply_losses(battle.side_b, loss_b)
+	# 伤亡只在前线兵力池中按最大余数法守恒分配；完整预备队保持原兵力。
+	var actual_a := _apply_frontline_losses(frontline_a, loss_a)
+	var actual_b := _apply_frontline_losses(frontline_b, loss_b)
 
-	# 士气侵蚀：作用到每支参战军队（Army.morale 为真源）。
-	# 侵蚀量 = 本方「实际伤亡比」×MORALE_CASUALTY_K + 基础衰减 + 本军断粮额外衰减（粮草特色）。
-	# 用实际整数伤亡而非理论浮点，保证与真实减员一致；同质双方实际伤亡相等→侵蚀相等→镜像对称。
-	var erode_a := (float(actual_a) / float(size_a)) * MORALE_CASUALTY_K + MORALE_BASE_DECAY
-	var erode_b := (float(actual_b) / float(size_b)) * MORALE_CASUALTY_K + MORALE_BASE_DECAY
-	_erode_side_morale(battle.side_a, erode_a)
-	_erode_side_morale(battle.side_b, erode_b)
+	# 战斗士气侵蚀按前线伤亡率计算，只作用于前线。部分投入的大军按投入比例
+	# 折算到整军组织度；完整预备队不因前线伤亡或战斗基础衰减丢失士气。
+	_erode_frontline_morale(frontline_a, actual_a)
+	_erode_frontline_morale(frontline_b, actual_b)
+	_extract_routed_armies(battle.side_a, battle.routed_a)
+	_extract_routed_armies(battle.side_b, battle.routed_b)
 
-	# 结束判定：兵力归零 → 歼灭；侧士气（兵力加权派生）跌破 SIDE_ROUT_THRESHOLD → 溃败撤退。
-	var dead_a := battle.side_size(battle.side_a) <= 0
-	var dead_b := battle.side_size(battle.side_b) <= 0
+	# 结束判定：全灭、全体单军溃退，或剩余侧平均士气崩溃。
+	var active_size_a := battle.side_size(battle.side_a)
+	var active_size_b := battle.side_size(battle.side_b)
+	var dead_a := (
+		active_size_a <= 0
+		and _side_size(battle.routed_a) <= 0
+	)
+	var dead_b := (
+		active_size_b <= 0
+		and _side_size(battle.routed_b) <= 0
+	)
 	var mor_a := battle.side_morale(battle.side_a)
 	var mor_b := battle.side_morale(battle.side_b)
-	var broke_a := mor_a <= SIDE_ROUT_THRESHOLD
-	var broke_b := mor_b <= SIDE_ROUT_THRESHOLD
+	var broke_a := (
+		(active_size_a <= 0 and not battle.routed_a.is_empty())
+		or (active_size_a > 0 and mor_a <= SIDE_ROUT_THRESHOLD)
+	)
+	var broke_b := (
+		(active_size_b <= 0 and not battle.routed_b.is_empty())
+		or (active_size_b > 0 and mor_b <= SIDE_ROUT_THRESHOLD)
+	)
 	if dead_a or dead_b or broke_a or broke_b:
 		battle.finished = true
 		# 对称指标裁决（item 1）：与 a/b 位置、军队 id、遍历顺序无关；完全对称判平局。
@@ -462,10 +513,14 @@ static func resolve_round(
 				"participants_after_a": _side_log_snapshot(battle.side_a),
 				"participants_after_b": _side_log_snapshot(battle.side_b),
 				"battle_context": log_battle_context,
-			"frontline_strength_a": int(round(float(size_a) * engaged_a)),
-			"frontline_strength_b": int(round(float(size_b) * engaged_b)),
-			"reserve_strength_a": size_a - int(round(float(size_a) * engaged_a)),
-			"reserve_strength_b": size_b - int(round(float(size_b) * engaged_b)),
+			"frontline_strength_a": frontline_size_a,
+			"frontline_strength_b": frontline_size_b,
+			"reserve_strength_a": size_a - frontline_size_a,
+			"reserve_strength_b": size_b - frontline_size_b,
+			"frontline_a": _frontline_log_snapshot(frontline_a),
+			"frontline_b": _frontline_log_snapshot(frontline_b),
+			"routed_a": _side_log_snapshot(battle.routed_a),
+			"routed_b": _side_log_snapshot(battle.routed_b),
 			"effective_attack_a": fire_a,
 			"effective_attack_b": fire_b,
 			"effective_defense_a": def_a,
@@ -491,6 +546,10 @@ static func resolve_round(
 			"morale_after_b": battle.side_morale(battle.side_b),
 			"reinforcements_arrived_a": log_reinforced_a,
 			"reinforcements_arrived_b": log_reinforced_b,
+			"reinforcement_morale_gained_a":
+				battle.reinforcement_morale_gained_a,
+			"reinforcement_morale_gained_b":
+				battle.reinforcement_morale_gained_b,
 			"rout_reason": rout_reason,
 			"winner_or_draw": battle.winner_side,
 				"finished": battle.finished,
@@ -523,6 +582,24 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 	return result
 
 
+static func _frontline_log_snapshot(
+	frontline: Array[Dictionary]
+) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for entry in frontline:
+		var army: Army = entry["army"]
+		result.append({
+			"army_id": army.id,
+			"committed": int(entry["committed"]),
+			"reserve": (
+				int(entry["size_before"])
+				- int(entry["committed"])
+			),
+			"casualties": int(entry.get("casualties", 0)),
+		})
+	return result
+
+
 static func _battle_log_context(battle: Battle) -> Dictionary:
 	var context := {
 		"holding_side": battle.holding_side,
@@ -532,6 +609,16 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 		"contact_dist_b": battle.contact_dist_b,
 		"tactical_key_a": battle.tactical_key_a,
 		"tactical_key_b": battle.tactical_key_b,
+		"reinforcement_morale_gained_a":
+			battle.reinforcement_morale_gained_a,
+		"reinforcement_morale_gained_b":
+			battle.reinforcement_morale_gained_b,
+		"frontline_priority_a": _priority_log_snapshot(
+			battle.frontline_priority_a
+		),
+		"frontline_priority_b": _priority_log_snapshot(
+			battle.frontline_priority_b
+		),
 		"edge": {},
 		"city": {},
 	}
@@ -547,6 +634,13 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 			"food_storage": battle.city.food_storage,
 		}
 	return context
+
+
+static func _priority_log_snapshot(priority: Dictionary) -> Dictionary:
+	var result := {}
+	for army in priority:
+		result[str((army as Army).id)] = int(priority[army])
+	return result
 
 
 ## 战斗胜负裁决（item 1，纯函数，无 RNG）。返回 1=side_a 胜 / 2=side_b 胜 / 0=平局。
@@ -584,7 +678,10 @@ static func _break_tie(residual_a: float, residual_b: float) -> int:
 ## 规范化一侧内部顺序：按纯物理键降序（size, attack, defense, morale）就地排序。
 ## 目的是让后续所有浮点求和（火力/防御/士气/伤亡摊分）只依赖军队物理多重集、与加入历史无关，
 ## 从而在镜像下逐位一致。四键全等的两军物理上可互换，其残余相对顺序不影响任何求和结果。
-static func _canonicalize_side(side: Array[Army]) -> void:
+static func _canonicalize_side(
+	side: Array[Army],
+	priority: Dictionary = {}
+) -> void:
 	side.sort_custom(func(a: Army, b: Army) -> bool:
 		if a.size != b.size:
 			return a.size > b.size
@@ -592,8 +689,156 @@ static func _canonicalize_side(side: Array[Army]) -> void:
 			return a.attack > b.attack
 		if a.defense != b.defense:
 			return a.defense > b.defense
-		return a.morale > b.morale
+		if not is_equal_approx(a.morale, b.morale):
+			return a.morale > b.morale
+		return int(priority.get(a, 1 << 30)) < int(
+			priority.get(b, 1 << 30)
+		)
 	)
+
+
+## 为本轮明确选择前线兵力。返回项为 {army, committed, size_before}；
+## 未出现在结果中的军队是完整预备队。最后一支军队可只投入部分兵力。
+static func frontline_allocation(
+	side: Array[Army],
+	frontage: int,
+	priority: Dictionary = {}
+) -> Array[Dictionary]:
+	var ordered: Array[Army] = side.duplicate()
+	_canonicalize_side(ordered, priority)
+	var remaining := frontage
+	if remaining <= 0:
+		remaining = _side_size(ordered)
+	var result: Array[Dictionary] = []
+	for army in ordered:
+		if (
+			remaining <= 0
+			or army.size <= 0
+			or army.morale <= ARMY_ROUT_THRESHOLD
+		):
+			continue
+		var committed := mini(army.size, remaining)
+		if committed <= 0:
+			continue
+		result.append({
+			"army": army,
+			"committed": committed,
+			"size_before": army.size,
+		})
+		remaining -= committed
+	return result
+
+
+static func _frontline_size(frontline: Array[Dictionary]) -> int:
+	var total := 0
+	for entry in frontline:
+		total += int(entry["committed"])
+	return total
+
+
+static func _frontline_attack(frontline: Array[Dictionary]) -> float:
+	var total := 0.0
+	for entry in frontline:
+		var army: Army = entry["army"]
+		total += (
+			float(entry["committed"])
+			* float(army.attack)
+			* maxf(army.offensive_attack_multiplier, 1.0)
+			* combat_efficiency(army.morale)
+		)
+	return total
+
+
+static func _frontline_avg_defense(
+	frontline: Array[Dictionary]
+) -> float:
+	var total := _frontline_size(frontline)
+	if total <= 0:
+		return 0.0
+	var weighted := 0.0
+	for entry in frontline:
+		var army: Army = entry["army"]
+		weighted += float(entry["committed"]) * float(army.defense)
+	return weighted / float(total)
+
+
+static func _apply_frontline_losses(
+	frontline: Array[Dictionary],
+	total_loss: float
+) -> int:
+	if frontline.is_empty() or total_loss <= 0.0:
+		return 0
+	var committed: Array[int] = []
+	for entry in frontline:
+		committed.append(int(entry["committed"]))
+	var casualties := distribute_casualties(committed, total_loss)
+	var applied := 0
+	for index in range(frontline.size()):
+		var army: Army = frontline[index]["army"]
+		army.size -= casualties[index]
+		frontline[index]["casualties"] = casualties[index]
+		applied += casualties[index]
+	return applied
+
+
+static func _erode_frontline_morale(
+	frontline: Array[Dictionary],
+	actual_casualties: int
+) -> void:
+	var committed_total := _frontline_size(frontline)
+	if committed_total <= 0:
+		return
+	var base_erode := (
+		float(actual_casualties)
+			/ float(committed_total)
+			* MORALE_CASUALTY_K
+		+ MORALE_BASE_DECAY
+	)
+	for entry in frontline:
+		var army: Army = entry["army"]
+		if army.size <= 0:
+			continue
+		# Army 只有一个聚合士气值。把“幸存前线组织度下降、内部预备队
+		# 组织度不变”按剩余兵力加权回整军，避免内部预备队稀释前线伤亡率。
+		var frontline_survivors := maxi(
+			int(entry["committed"])
+				- int(entry.get("casualties", 0)),
+			0
+		)
+		var participation := (
+			float(frontline_survivors)
+			/ float(maxi(army.size, 1))
+		)
+		var erosion := base_erode
+		if army.starving:
+			erosion += MORALE_STARVE_DECAY
+		army.morale = clampf(
+			army.morale - erosion * participation,
+			MORALE_FLOOR,
+			1.0
+		)
+
+
+static func _extract_routed_armies(
+	side: Array[Army],
+	routed: Array[Army]
+) -> void:
+	for index in range(side.size() - 1, -1, -1):
+		var army := side[index]
+		if (
+			army.size > 0
+			and army.morale <= ARMY_ROUT_THRESHOLD
+		):
+			routed.push_front(army)
+			side.remove_at(index)
+
+
+static func _side_size(side: Array[Army]) -> int:
+	var total := 0
+	for army in side:
+		if army.size > 0:
+			total += army.size
+	return total
 
 
 ## 一侧「剩余续战能力」= Σ 存活军队 size × combat_efficiency(morale)。对称、与顺序无关。
@@ -618,6 +863,29 @@ static func _side_attack(side: Array[Army]) -> float:
 	return total
 
 
+## 纯围城阶段的有效封锁兵力。只计算当前可投入城墙正面的兵力，并乘以
+## 各军组织度与当日补给满足率；低于单军溃败阈值者不贡献围城。
+## 工程/指挥修正尚无独立模型字段，因此当前明确只包含 manpower×morale×supply。
+static func effective_siege_strength(
+	side: Array[Army],
+	priority: Dictionary = {}
+) -> int:
+	var frontline := frontline_allocation(
+		side,
+		SIEGE_FRONTAGE,
+		priority
+	)
+	var total := 0.0
+	for entry in frontline:
+		var army: Army = entry["army"]
+		total += (
+			float(entry["committed"])
+			* combat_efficiency(army.morale)
+			* clampf(army.supply_ratio, 0.0, 1.0)
+		)
+	return maxi(int(round(total)), 0)
+
+
 ## 本场战斗单侧「正面宽度」容量（item 5，纯函数）。野战取道路容量、攻城取城墙容量。
 ## 双方共享同一正面（同一条战线/同一段城墙）。返回值 <=0 时视为无限制（回退 FRONTAGE_FALLBACK）。
 static func combat_frontage(battle: Battle) -> int:
@@ -628,9 +896,8 @@ static func combat_frontage(battle: Battle) -> int:
 	return FRONTAGE_FALLBACK
 
 
-## 一侧「实际参战比例」= min(总兵力, 正面容量) / 总兵力 ∈ (0,1]（item 5，纯函数）。
-## 超出正面的兵力为预备队，本回合既不出力也不受伤亡。比例只依赖总兵力与正面，
-## 与军队拆成几支无关（防拆分套利 item 12）：把 1×10000 拆成 10×1000，engaged 比例完全相同。
+## 兼容查询：返回聚合参战比例。实际结算使用 frontline_allocation() 的显式前线，
+## 本函数只供 UI/测试读取，不再用于伤亡或士气摊分。
 static func frontage_engaged_ratio(side_total: int, frontage: int) -> float:
 	if side_total <= 0:
 		return 0.0
@@ -750,32 +1017,35 @@ static func distribute_casualties(sizes: Array[int], total_loss: float) -> Array
 ## 增援集结效应（item 2/12，纯函数，无 RNG）：把「本 tick 新增的全部援军」作为一个整体，
 ## 按其带来的有效兵力占当前本侧总兵力的比例，统一提振既有成员士气一次。
 ##   fresh_effective = Σ newcomer.size × newcomer.morale（濒溃援军几乎不回气）
-##   boost = min(MORALE_REINFORCE × fresh_effective / total_current, REINFORCE_MORALE_MAX)
+##   boost = min(MORALE_REINFORCE × fresh_effective / total_current, remaining_cap)
 ## 只提振「既有成员」（不含本批新军自身），clamp 到 [MORALE_FLOOR, 1]。
-## 关键性质：boost 只依赖新增总有效兵力与当前总兵力——把一支援军拆成多支依次加入，
-## 得到的 fresh_effective 与 total 完全相同，boost 一致，不能重复获得士气奖励（防拆分套利）。
-## 单场累计还受 REINFORCE_MORALE_MAX 上限约束，极小援军无法反复添油救活零士气战线。
-static func settle_reinforcement_morale(side: Array[Army], newcomers: Array[Army]) -> void:
-	if newcomers.is_empty():
-		return
+## 返回本批实际消耗的额度，由 Battle 按侧累计；因此同回合和跨回合拆分都共享同一上限。
+static func settle_reinforcement_morale(
+	side: Array[Army],
+	newcomers: Array[Army],
+	remaining_cap: float = REINFORCE_MORALE_MAX
+) -> float:
+	if newcomers.is_empty() or remaining_cap <= 0.0:
+		return 0.0
 	var total := 0
 	for a in side:
 		if a.size > 0:
 			total += a.size
 	if total <= 0:
-		return
+		return 0.0
 	var fresh_effective := 0.0
 	for nc in newcomers:
-		if nc.size > 0:
+		if nc.size > 0 and side.has(nc):
 			fresh_effective += float(nc.size) * clampf(nc.morale, 0.0, 1.0)
 	if fresh_effective <= 0.0:
-		return
+		return 0.0
 	var boost := minf(
 		MORALE_REINFORCE * fresh_effective / float(total),
-		REINFORCE_MORALE_MAX
+		maxf(remaining_cap, 0.0)
 	)
 	if boost <= 0.0:
-		return
+		return 0.0
 	for a in side:
 		if a.size > 0 and not newcomers.has(a):
 			a.morale = clampf(a.morale + boost, MORALE_FLOOR, 1.0)
+	return boost

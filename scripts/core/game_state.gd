@@ -696,10 +696,22 @@ func split_army(
 	):
 		return result
 	var original_size := army.size
+	var original_supply_debt := army.supply_debt
+	var original_food_debt := army.supply_food_debt
 	var base_size := original_size / part_count
 	var remainder := original_size % part_count
 	army.max_size = part_max_size
 	army.size = base_size + (1 if remainder > 0 else 0)
+	army.supply_debt = (
+		original_supply_debt
+		* float(army.size)
+		/ float(original_size)
+	)
+	army.supply_food_debt = (
+		original_food_debt
+		* float(army.size)
+		/ float(original_size)
+	)
 	result.append(army)
 	for part_index in range(1, part_count):
 		var child := Army.new()
@@ -717,6 +729,16 @@ func split_army(
 		child.morale = army.morale
 		child.supply_ratio = army.supply_ratio
 		child.starving = army.starving
+		child.supply_debt = (
+			original_supply_debt
+			* float(child.size)
+			/ float(original_size)
+		)
+		child.supply_food_debt = (
+			original_food_debt
+			* float(child.size)
+			/ float(original_size)
+		)
 		child.location_city = army.location_city
 		child.move_from = army.location_city
 		child.state = Army.State.IDLE

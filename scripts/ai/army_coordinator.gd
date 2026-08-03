@@ -146,7 +146,11 @@ static func _merge_key(army: Army) -> String:
 
 static func _merge_into(state: GameState, survivor: Army, other: Army) -> void:
 	var size_a := maxi(survivor.size, 0)
-	var size_b := mini(maxi(other.size, 0), maxi(survivor.max_size - size_a, 0))
+	var other_size_before := maxi(other.size, 0)
+	var size_b := mini(
+		other_size_before,
+		maxi(survivor.max_size - size_a, 0)
+	)
 	var total := size_a + size_b
 	if size_b <= 0 or total <= 0:
 		return
@@ -170,6 +174,19 @@ static func _merge_into(state: GameState, survivor: Army, other: Army) -> void:
 		/ float(total)
 	))
 	survivor.starving = survivor.starving or other.starving
+	var transferred_ratio := (
+		float(size_b) / float(maxi(other_size_before, 1))
+	)
+	var transferred_supply_debt := (
+		other.supply_debt * transferred_ratio
+	)
+	var transferred_food_debt := (
+		other.supply_food_debt * transferred_ratio
+	)
+	survivor.supply_debt += transferred_supply_debt
+	survivor.supply_food_debt += transferred_food_debt
+	other.supply_debt -= transferred_supply_debt
+	other.supply_food_debt -= transferred_food_debt
 	survivor.size = total
 	other.size -= size_b
 	if other.size <= 0 and other.on_edge:

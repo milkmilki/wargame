@@ -36,20 +36,27 @@ var battle_id: int = -1
 ## 是否正在边上。passing_count 由此维护总占用；方向容量则从全部 on_edge 军队实时派生。
 var on_edge: bool = false
 
-## 派生标记：本月是否缺粮（供渲染标记饥饿）。由 Simulation 每月刷新。
+## 完全同构多方接触时的瞬态阻塞。该状态只暂停下一次行军推进，
+## 不伪装成 HOLDING，也不授予驻防地形身份。
+var encounter_blocked: bool = false
+
+## 派生标记：当日是否缺粮（供渲染标记饥饿）。由 Simulation 每日刷新。
 var starving: bool = false
 
 ## 持久士气 ∈ [0,1]。战斗中被侵蚀（伤亡/断粮），战斗外每月恢复。
 ## 真源在此（Battle 层士气为本值的兵力加权派生），使"老兵带疲劳进场"效果自然涌现。
 var morale: float = 1.0
 
-## 最近一次月度补给满足率 ∈[0,1]。驻防适应每日据此增长/暂停/衰减。
-## 也是每日补给惩罚（士气/减员）的强度来源：shortage = 1 - supply_ratio（item 10 滚动结算）。
+## 当日补给满足率 ∈[0,1]。驻防适应与每日补给惩罚均读取本值。
 var supply_ratio: float = 1.0
 
 ## 累积断粮减员债（item 10）：每日按 shortage×size×STARVE_RATE/30 累加的「未满整人」减员，
 ## 满 1 人即扣减 size 并留下小数余额。持久化字段——存读档不重置，避免利用结算相位套利。
 var supply_debt: float = 0.0
+
+## 逐日粮食需求的小数债。月耗先除以 30，再在此累积到整粮后扣库存，
+## 从而每日重算竞争与部分短缺，同时避免对每支军队逐日 ceil 导致 30 倍取整膨胀。
+var supply_food_debt: float = 0.0
 
 ## 在当前边当前位置连续驻防的天数。换边、主动移动或撤退时清零。
 var holding_days: int = 0

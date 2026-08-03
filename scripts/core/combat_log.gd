@@ -99,6 +99,8 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 		"participants_b",
 		"participants_after_a",
 		"participants_after_b",
+		"routed_a",
+		"routed_b",
 		"battle_context",
 		"shared_random_roll",
 		"tactical_entropy",
@@ -116,16 +118,44 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 	var battle := _battle_from_record(record)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1
+	if battle.tactical_key_a <= 0 or battle.tactical_key_b <= 0:
+		return {
+			"error": "missing_stable_tactical_key",
+		}
+	var derived_modifiers := Combat.side_tactical_modifiers(
+		int(record["tactical_entropy"]),
+		Combat._battle_context_signature(battle),
+		battle.tactical_key_a,
+		battle.tactical_key_b
+	)
+	if (
+		not is_equal_approx(
+			derived_modifiers.x,
+			float(record["side_random_modifier_a"])
+		)
+		or not is_equal_approx(
+			derived_modifiers.y,
+			float(record["side_random_modifier_b"])
+		)
+	):
+		return {
+			"error": "side_random_modifier_mismatch",
+			"expected": [
+				float(record["side_random_modifier_a"]),
+				float(record["side_random_modifier_b"]),
+			],
+			"actual": [
+				derived_modifiers.x,
+				derived_modifiers.y,
+			],
+		}
 	Combat.resolve_round(
 		battle,
 		rng,
 		int(record["shared_random_roll"]),
 		int(record["tactical_entropy"]),
 		int(record["day"]),
-		Vector2(
-			float(record["side_random_modifier_a"]),
-			float(record["side_random_modifier_b"])
-		)
+		derived_modifiers
 	)
 	if battle.winner_side != int(record["winner_or_draw"]):
 		return {
@@ -159,6 +189,24 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 			"expected": record["participants_after_b"],
 			"actual": after_b,
 		}
+	if not _snapshots_equal(
+		_side_snapshot(battle.routed_a),
+		record["routed_a"] as Array
+	):
+		return {
+			"error": "side_a_routed_mismatch",
+			"expected": record["routed_a"],
+			"actual": _side_snapshot(battle.routed_a),
+		}
+	if not _snapshots_equal(
+		_side_snapshot(battle.routed_b),
+		record["routed_b"] as Array
+	):
+		return {
+			"error": "side_b_routed_mismatch",
+			"expected": record["routed_b"],
+			"actual": _side_snapshot(battle.routed_b),
+		}
 	return {}
 
 
@@ -175,6 +223,14 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 	battle.contact_dist_b = float(context.get("contact_dist_b", 0.0))
 	battle.tactical_key_a = int(context.get("tactical_key_a", 0))
 	battle.tactical_key_b = int(context.get("tactical_key_b", 0))
+	battle.reinforcement_morale_gained_a = float(context.get(
+		"reinforcement_morale_gained_a",
+		0.0
+	))
+	battle.reinforcement_morale_gained_b = float(context.get(
+		"reinforcement_morale_gained_b",
+		0.0
+	))
 	var edge_data: Dictionary = context.get("edge", {})
 	if not edge_data.is_empty():
 		var edge := Edge.new()
@@ -195,7 +251,28 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 		battle.side_a.append(_army_from_snapshot(army_data))
 	for army_data in record["participants_b"]:
 		battle.side_b.append(_army_from_snapshot(army_data))
+	_restore_frontline_priority(
+		battle.side_a,
+		battle.frontline_priority_a,
+		context.get("frontline_priority_a", {})
+	)
+	_restore_frontline_priority(
+		battle.side_b,
+		battle.frontline_priority_b,
+		context.get("frontline_priority_b", {})
+	)
 	return battle
+
+
+static func _restore_frontline_priority(
+	side: Array[Army],
+	priority: Dictionary,
+	serialized: Dictionary
+) -> void:
+	for army in side:
+		var key := str(army.id)
+		if serialized.has(key):
+			priority[army] = int(serialized[key])
 
 
 static func _army_from_snapshot(data: Dictionary) -> Army:

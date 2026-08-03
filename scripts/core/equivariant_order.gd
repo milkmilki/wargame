@@ -96,8 +96,17 @@ static func city_rank_map(
 		return _key_less(keys[a], keys[b])
 	)
 	var rank := {}
+	var current_rank := 0
 	for index in range(ids.size()):
-		rank[ids[index]] = index
+		if index > 0:
+			var previous_id := ids[index - 1]
+			var current_id := ids[index]
+			if (
+				_key_less(keys[previous_id], keys[current_id])
+				or _key_less(keys[current_id], keys[previous_id])
+			):
+				current_rank = index
+		rank[ids[index]] = current_rank
 	if _city_rank_cache.size() >= MAX_RANK_CACHE_ENTRIES:
 		_city_rank_cache.clear()
 	_city_rank_cache[cache_key] = rank
@@ -118,7 +127,10 @@ static func city_key(
 	var position := state.cities[city_id].map_position
 	var sign := _nation_forward_sign(state, nation_id)
 	return [
-		_quantize((position.x - origin.x) * sign, POSITION_SCALE),
+		_quantize(
+			_oriented_x(position, origin, sign),
+			POSITION_SCALE
+		),
 		_quantize(position.y, POSITION_SCALE),
 		_quantize(absf(position.x - 0.5), POSITION_SCALE),
 		_quantize(state.cities[city_id].terrain_height, VALUE_SCALE),
@@ -142,8 +154,14 @@ static func army_less(
 	var position_a := army_position(state, a)
 	var position_b := army_position(state, b)
 	var comparison := _compare_int(
-		_quantize((position_a.x - origin.x) * sign, POSITION_SCALE),
-		_quantize((position_b.x - origin.x) * sign, POSITION_SCALE)
+		_quantize(
+			_oriented_x(position_a, origin, sign),
+			POSITION_SCALE
+		),
+		_quantize(
+			_oriented_x(position_b, origin, sign),
+			POSITION_SCALE
+		)
 	)
 	if comparison != 0:
 		return comparison < 0
@@ -154,6 +172,12 @@ static func army_less(
 	if comparison != 0:
 		return comparison < 0
 	comparison = _compare_int(a.state, b.state)
+	if comparison != 0:
+		return comparison < 0
+	comparison = _compare_int(
+		1 if a.encounter_blocked else 0,
+		1 if b.encounter_blocked else 0
+	)
 	if comparison != 0:
 		return comparison < 0
 	comparison = _compare_int(a.size, b.size)
@@ -253,9 +277,13 @@ static func army_key(
 		anchor_city_id
 	)
 	return [
-		_quantize((position.x - origin.x) * sign, POSITION_SCALE),
+		_quantize(
+			_oriented_x(position, origin, sign),
+			POSITION_SCALE
+		),
 		_quantize(position.y, POSITION_SCALE),
 		army.state,
+			1 if army.encounter_blocked else 0,
 		army.size,
 		army.max_size,
 		army.attack,
@@ -304,11 +332,17 @@ static func nation_less(
 	var a := _nation_anchor(state, a_nation)
 	var b := _nation_anchor(state, b_nation)
 	var key_a := [
-		_quantize((a.x - observer_anchor.x) * sign, POSITION_SCALE),
+		_quantize(
+			_oriented_x(a, observer_anchor, sign),
+			POSITION_SCALE
+		),
 		_quantize(a.y, POSITION_SCALE),
 	]
 	var key_b := [
-		_quantize((b.x - observer_anchor.x) * sign, POSITION_SCALE),
+		_quantize(
+			_oriented_x(b, observer_anchor, sign),
+			POSITION_SCALE
+		),
 		_quantize(b.y, POSITION_SCALE),
 	]
 	return _key_less(key_a, key_b)
@@ -411,6 +445,7 @@ static func mirror_orbit_army_key(
 	)
 	result.append_array(nation_anchor_key)
 	result.append(army.state)
+	result.append(1 if army.encounter_blocked else 0)
 	result.append(army.size)
 	result.append(army.max_size)
 	result.append(army.attack)
@@ -469,25 +504,42 @@ static func encounter_pair_less(
 	b1: Army,
 	b2: Army
 ) -> bool:
+	return _key_less(
+		encounter_pair_key(state, a1, a2),
+		encounter_pair_key(state, b1, b2)
+	)
+
+
+static func encounter_pair_equivalent(
+	state: GameState,
+	a1: Army,
+	a2: Army,
+	b1: Army,
+	b2: Army
+) -> bool:
+	var a_key := encounter_pair_key(state, a1, a2)
+	var b_key := encounter_pair_key(state, b1, b2)
+	return not _key_less(a_key, b_key) and not _key_less(
+		b_key,
+		a_key
+	)
+
+
+static func encounter_pair_key(
+	state: GameState,
+	a1: Army,
+	a2: Army
+) -> Array[int]:
 	var a_key_1 := mirror_orbit_army_key(state, a1)
 	var a_key_2 := mirror_orbit_army_key(state, a2)
 	if _key_less(a_key_2, a_key_1):
 		var a_swap := a_key_1
 		a_key_1 = a_key_2
 		a_key_2 = a_swap
-	var b_key_1 := mirror_orbit_army_key(state, b1)
-	var b_key_2 := mirror_orbit_army_key(state, b2)
-	if _key_less(b_key_2, b_key_1):
-		var b_swap := b_key_1
-		b_key_1 = b_key_2
-		b_key_2 = b_swap
 	var a_pair: Array[int] = []
 	a_pair.append_array(a_key_1)
 	a_pair.append_array(a_key_2)
-	var b_pair: Array[int] = []
-	b_pair.append_array(b_key_1)
-	b_pair.append_array(b_key_2)
-	return _key_less(a_pair, b_pair)
+	return a_pair
 
 
 static func _mirror_orbit_edge_key(
@@ -535,7 +587,8 @@ static func _nation_forward_sign(state: GameState, nation_id: int) -> float:
 		return 1.0
 	if anchor.x > 0.5:
 		return -1.0
-	# 中轴势力用质心相对世界中心定向；完全居中时方向不影响镜像键。
+	# 中轴势力用质心相对世界中心定向；首都和质心均完全居中时返回 0，
+	# 调用方改用 abs(x-0.5) 镜像轨道，不能任意固定 +1。
 	var centroid := Vector2.ZERO
 	var count := 0
 	for city in state.cities:
@@ -544,7 +597,19 @@ static func _nation_forward_sign(state: GameState, nation_id: int) -> float:
 			count += 1
 	if count > 0 and centroid.x / float(count) > 0.5:
 		return -1.0
-	return 1.0
+	if count > 0 and centroid.x / float(count) < 0.5:
+		return 1.0
+	return 0.0
+
+
+static func _oriented_x(
+	position: Vector2,
+	origin: Vector2,
+	sign: float
+) -> float:
+	if is_zero_approx(sign):
+		return absf(position.x - 0.5)
+	return (position.x - origin.x) * sign
 
 
 static func _key_less(a: Array, b: Array) -> bool:

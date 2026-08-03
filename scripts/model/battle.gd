@@ -35,6 +35,22 @@ var round_no: int = 0
 var reinforce_fresh_a: Array[Army] = []
 var reinforce_fresh_b: Array[Army] = []
 
+## 两侧在本场战斗中已经获得的累计援军士气提振。上限由
+## Combat.REINFORCE_MORALE_MAX 约束，跨回合分批抵达不能重复刷新额度。
+## 必须按侧分别累计；共享单一标量会让先结算的一侧消耗另一侧额度，制造 A/B 偏置。
+var reinforcement_morale_gained_a: float = 0.0
+var reinforcement_morale_gained_b: float = 0.0
+
+## 本回合因单军士气阈值退出战斗的军队。Combat 负责从 side 中移出，
+## Simulation 随后根据真实战场位置启动撤退；下一回合开始前必须已消费并清空。
+var routed_a: Array[Army] = []
+var routed_b: Array[Army] = []
+
+## 显式前线选择的镜像等变优先级（Army 引用 -> rank）。Simulation 每轮在拥有
+## GameState 空间上下文时刷新；Combat 用它裁决完全相同战斗属性军队的先后。
+var frontline_priority_a: Dictionary = {}
+var frontline_priority_b: Dictionary = {}
+
 ## item 8：两侧稳定战术随机键。由首次入场军队的镜像轨道位置/势力中心生成，
 ## 不含实体 id、兵力、士气或攻防参数；战斗期间参数变化不会“重抽运气”。
 ## 完全镜像的空间角色可得到相同键，此时独立修正按等变性要求自动退化为同值。
