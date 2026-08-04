@@ -78,6 +78,7 @@ const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LOCAL_RELIEF_DELAY_COMMIT_RATIO: float = 0.50
 const LOCAL_RELIEF_READINESS_MIN: float = 0.50
 const LOCAL_RELIEF_MAX_LIGHT_ARMIES: int = 2
+const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 3
 
 var state: GameState
 var _time_acc: float = 0.0
@@ -2010,12 +2011,16 @@ func _ai_manage_force_structure(
 				"超过城市比例军制目标，整建制裁撤"
 			)
 	var missing_formation_size := (
-		GameState.INITIAL_LIGHT_ARMY_SIZE
-		if light_armies.size() < target_light
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+		if target_heavy > 0 and heavy_armies.is_empty()
 		else (
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-			if heavy_armies.size() < target_heavy
-			else 0
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+			if light_armies.size() < target_light
+			else (
+				GameState.INITIAL_HEAVY_ARMY_SIZE
+				if heavy_armies.size() < target_heavy
+				else 0
+			)
 		)
 	)
 	if (
@@ -2913,8 +2918,6 @@ func _ensure_campaign_preparation_plan(
 					== GameState.INITIAL_LIGHT_ARMY_SIZE
 			):
 				ranked_light.append(entry)
-		if ranked_heavy.is_empty():
-			continue
 		var rank_equivalent := func(
 			a: Dictionary,
 			b: Dictionary
@@ -2942,12 +2945,24 @@ func _ensure_campaign_preparation_plan(
 					target_city
 				)
 			)
-		for heavy_entry in ranked_heavy:
-			var spearhead: Army = heavy_entry["army"]
-			selected.append(spearhead)
-			selected_troops += spearhead.size
+		if ranked_heavy.is_empty():
+			var fallback_limit := mini(
+				LIGHT_ONLY_OFFENSIVE_MAX_ARMIES,
+				mini(ranked_light.size(), selection_limit)
+			)
+			for fallback_index in range(fallback_limit):
+				var fallback_army: Army = (
+					ranked_light[fallback_index]["army"]
+				)
+				selected.append(fallback_army)
+				selected_troops += fallback_army.size
+		else:
+			for heavy_entry in ranked_heavy:
+				var spearhead: Army = heavy_entry["army"]
+				selected.append(spearhead)
+				selected_troops += spearhead.size
 		if (
-			state.uses_heightmap
+			not ranked_heavy.is_empty()
 			and not ranked_light.is_empty()
 		):
 			var support_is_unique: bool = (
@@ -5386,9 +5401,19 @@ func _begin_next_leg(army: Army) -> void:
 		from_city,
 		next_city
 	)
+	var forced_evacuation := (
+		army.state == Army.State.RETREATING
+		and from_city >= 0
+		and from_city < state.cities.size()
+		and not state.has_military_access(
+			army.owner_nation,
+			state.cities[from_city].owner_nation
+		)
+	)
 	if (
-		occupied_manpower + army.max_size
-		> edge.max_manpower
+		not forced_evacuation
+		and occupied_manpower + army.max_size
+			> edge.max_manpower
 	):
 		# 只累计同国同方向的满编兵力；反向友军和敌军不占本方向容量。
 		army.move_to = -1
@@ -6139,12 +6164,12 @@ func _advance_siege(
 	)
 	if battle.siege_progress >= Combat.SIEGE_PROGRESS_REQUIRED:
 		var captor := _strongest_alive(battle.side_a)
+		if captor != null:
+			_capture_city(captor, battle.city)
 		for a in battle.side_a:
 			a.battle_id = -1
 			if a != captor and a.size > 0:
 				_settle_idle(a, battle.city.id)
-		if captor != null:
-			_capture_city(captor, battle.city)
 		battle.finished = true
 		battle.winner_side = 1
 
@@ -6406,15 +6431,15 @@ func _finish_legal_reclamation(battle: Battle) -> bool:
 			!= captor.owner_nation
 	):
 		return false
-	for attacker in battle.side_a:
-		attacker.battle_id = -1
-		if attacker != captor and attacker.size > 0:
-			_settle_idle(attacker, battle.city.id)
 	_capture_city(
 		captor,
 		battle.city,
 		captor.owner_nation
 	)
+	for attacker in battle.side_a:
+		attacker.battle_id = -1
+		if attacker != captor and attacker.size > 0:
+			_settle_idle(attacker, battle.city.id)
 	battle.finished = true
 	battle.winner_side = 1
 	return true
@@ -6461,23 +6486,23 @@ func _capture_city(
 		state.relocate_capital(old_owner)
 	var spoils := int(floor(float(captured_food) * CAPITAL_FOOD_CAPTURE_RATE))
 	state.deposit_food(claimant, spoils)
-	# 同城可能有多支静止/恢复军队，而围城入口历史上只取第一支守军。
-	# 城市易主时统一驱逐其余旧城主驻军，禁止 RECOVERING 军队滞留敌城。
+	# 城市易主后，所有不再拥有通行权且尚未离开城市节点的军队都必须撤退。
+	# 覆盖 IDLE/RECOVERING、容量阻塞的 MOVING/RETREATING 以及残留 FIGHTING 状态。
 	for displaced in state.armies:
 		if displaced == army or displaced.size <= 0:
 			continue
-		if displaced.location_city != city.id:
+		if displaced.location_city != city.id or displaced.on_edge:
 			continue
-		if (
-			displaced.owner_nation != old_owner
-			and state.has_military_access(
-				displaced.owner_nation,
-				claimant
-			)
+		if state.has_military_access(
+			displaced.owner_nation,
+			claimant
 		):
 			continue
-		if displaced.state in [Army.State.IDLE, Army.State.RECOVERING]:
-			_start_morale_retreat_from_city(displaced, city.id, city.id)
+		_start_morale_retreat_from_city(
+			displaced,
+			city.id,
+			city.id
+		)
 	army.state = Army.State.IDLE
 	army.forced_retreat = false
 	army.battle_id = -1
@@ -6735,6 +6760,20 @@ func _check_victory() -> void:
 # ================================================================== 工具
 
 func _settle_idle(army: Army, city_id: int) -> void:
+	if (
+		city_id >= 0
+		and city_id < state.cities.size()
+		and not state.has_military_access(
+			army.owner_nation,
+			state.cities[city_id].owner_nation
+		)
+	):
+		_start_morale_retreat_from_city(
+			army,
+			city_id,
+			city_id
+		)
+		return
 	_release_edge(army)   # 无条件释放：仅当 on_edge 为真才实际减计数
 	army.state = Army.State.IDLE
 	army.forced_retreat = false
@@ -6829,6 +6868,20 @@ func _start_morale_retreat_from_city(
 
 
 func _start_recovering(army: Army, city_id: int) -> void:
+	if (
+		city_id >= 0
+		and city_id < state.cities.size()
+		and not state.has_military_access(
+			army.owner_nation,
+			state.cities[city_id].owner_nation
+		)
+	):
+		_start_morale_retreat_from_city(
+			army,
+			city_id,
+			city_id
+		)
+		return
 	_release_edge(army)
 	army.state = Army.State.RECOVERING
 	army.forced_retreat = true

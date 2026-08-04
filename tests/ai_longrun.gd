@@ -64,6 +64,7 @@ func _init() -> void:
 		var max_frontier_idle_stack := 0
 		var max_interior_idle_stack := 0
 		var max_idle_stack_context := ""
+		var hostile_stationed_events := 0
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(DAYS):
 			if state.winner != -1:
@@ -116,6 +117,22 @@ func _init() -> void:
 				offensive_events[event_key] = true
 			var idle_city_stacks := {}
 			for army in state.armies:
+				if (
+					army.size > 0
+					and not army.on_edge
+					and army.location_city >= 0
+					and army.location_city
+						< state.cities.size()
+					and army.state
+						!= Army.State.FIGHTING
+					and not state.has_military_access(
+						army.owner_nation,
+						state.cities[
+							army.location_city
+						].owner_nation
+					)
+				):
+					hostile_stationed_events += 1
 				if (
 					army.size > 0
 					and army.location_city >= 0
@@ -474,7 +491,7 @@ func _init() -> void:
 				+ "defended_cities=%d force_mismatches=%d/%d "
 				+ "orders=%d redeploy=%d role_deploy=%d "
 				+ "max_idle_stack=%d/%d/%d stack_at=%s "
-				+ "commit_failures=%d ms=%d"
+				+ "hostile_stationed=%d commit_failures=%d ms=%d"
 			)
 			% [
 				world_seed,
@@ -522,6 +539,7 @@ func _init() -> void:
 				max_frontier_idle_stack,
 				max_interior_idle_stack,
 				max_idle_stack_context,
+				hostile_stationed_events,
 				simulation.ai_command_commit_failure_total,
 				elapsed,
 			]
@@ -537,6 +555,7 @@ func _init() -> void:
 			or invalid_finance > 0
 			or eliminated_war_relations > 0
 			or terminal_alliance_lock
+			or hostile_stationed_events > 0
 			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0
 			or (

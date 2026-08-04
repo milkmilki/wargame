@@ -2861,6 +2861,115 @@ func _test_morale_retreat_recovery() -> void:
 		"占领只能改变当前归属，省份初始底色归属必须保持不变"
 	)
 
+	# 城破后所有旧守军状态都必须离城；后到援军应立即作为攻方触发新战斗。
+	var capture_state := GameState.new()
+	capture_state.generate_grid_world(780)
+	capture_state.armies.clear()
+	capture_state.battles.clear()
+	for capture_city in capture_state.cities:
+		capture_city.owner_nation = 1
+	var capture_origin := 0
+	var captured_city_id := 1
+	var retreat_city_id := 2
+	capture_state.cities[capture_origin].owner_nation = 0
+	capture_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var capture_sim := Simulation.new()
+	capture_sim.setup(capture_state)
+	var city_captor := _make_army(510, 0, 5000, 10)
+	city_captor.location_city = capture_origin
+	city_captor.move_from = capture_origin
+	var captured_recovering := _make_army(511, 1, 3000, 10)
+	captured_recovering.state = Army.State.RECOVERING
+	captured_recovering.location_city = captured_city_id
+	captured_recovering.move_from = captured_city_id
+	var captured_waiting := _make_army(512, 1, 3000, 10)
+	captured_waiting.state = Army.State.RETREATING
+	captured_waiting.location_city = captured_city_id
+	captured_waiting.move_from = captured_city_id
+	captured_waiting.move_to = -1
+	captured_waiting.path = [retreat_city_id]
+	var captured_fighting := _make_army(513, 1, 3000, 10)
+	captured_fighting.state = Army.State.FIGHTING
+	captured_fighting.battle_id = 999
+	captured_fighting.location_city = captured_city_id
+	captured_fighting.move_from = captured_city_id
+	capture_state.armies.append_array([
+		city_captor,
+		captured_recovering,
+		captured_waiting,
+		captured_fighting,
+	])
+	capture_sim._capture_city(
+		city_captor,
+		capture_state.cities[captured_city_id],
+		0
+	)
+	var old_defenders_left_city := true
+	for old_defender in [
+		captured_recovering,
+		captured_waiting,
+		captured_fighting,
+	]:
+		old_defenders_left_city = (
+			old_defenders_left_city
+			and (
+				old_defender.size <= 0
+				or (
+					old_defender.state
+						== Army.State.RETREATING
+					and old_defender.on_edge
+					and old_defender.move_from
+						== captured_city_id
+				)
+			)
+		)
+	_check(
+		old_defenders_left_city,
+		"城市易主后，恢复/等待撤退/残留战斗状态的旧守军必须立即离开城市节点"
+	)
+	var illegal_recovery := _make_army(514, 1, 2000, 10)
+	illegal_recovery.location_city = captured_city_id
+	illegal_recovery.move_from = captured_city_id
+	capture_state.armies.append(illegal_recovery)
+	capture_sim._start_recovering(
+		illegal_recovery,
+		captured_city_id
+	)
+	_check(
+		illegal_recovery.size <= 0
+			or (
+				illegal_recovery.state
+					== Army.State.RETREATING
+				and illegal_recovery.on_edge
+			),
+		"敌军不得在无通行权的敌占城市开始恢复士气"
+	)
+	var late_relief := _make_army(515, 1, 5000, 10)
+	late_relief.state = Army.State.MOVING
+	late_relief.location_city = retreat_city_id
+	late_relief.move_from = retreat_city_id
+	late_relief.move_to = captured_city_id
+	late_relief.move_progress = 1.0
+	late_relief.on_edge = true
+	capture_state.armies.append(late_relief)
+	capture_sim._arrive_at_node(late_relief)
+	var recapture_battle := capture_sim._siege_battle_of(
+		capture_state.cities[captured_city_id]
+	)
+	_check(
+		recapture_battle != null
+			and recapture_battle.has_army(late_relief)
+			and recapture_battle.has_army(city_captor)
+			and late_relief.state == Army.State.FIGHTING
+			and city_captor.state == Army.State.FIGHTING,
+		"旧城主后到援军抵达已失守城市时，必须立即与新占领军触发战斗"
+	)
+	capture_sim.free()
+
 	# 多支恢复驻军必须全部加入守城，破城所需兵力的守军项取总兵力（而非只取第一支）。
 	gs.armies.clear()
 	gs.battles.clear()
@@ -5531,6 +5640,43 @@ func _test_manpower_pool_and_force_commands() -> void:
 				) - 1,
 		"5000与15000编制同时缺额时，AI必须优先创建5000填线军"
 	)
+	for force_army in force_state.armies.duplicate():
+		if (
+			force_army.owner_nation == force_nation_id
+			and force_army.max_size
+				== GameState.INITIAL_HEAVY_ARMY_SIZE
+		):
+			force_state.armies.erase(force_army)
+			force_state.nations[
+				force_nation_id
+			].manpower_pool += force_army.size
+	var zero_heavy_view := AiWorldView.build(
+		force_state,
+		force_nation_id
+	)
+	var rebuilt_first_heavy := (
+		priority_force_sim._ai_manage_force_structure(
+			zero_heavy_view,
+			StrategicMapSnapshot.build(zero_heavy_view),
+			ThreatField.build(zero_heavy_view)
+		)
+	)
+	var heavy_after_rebuild := 0
+	for force_army in force_state.armies:
+		if (
+			force_army.owner_nation == force_nation_id
+			and force_army.max_size
+				== GameState.INITIAL_HEAVY_ARMY_SIZE
+		):
+			heavy_after_rebuild += 1
+	_check(
+		rebuilt_first_heavy
+			and force_state.target_heavy_army_count(
+				force_nation_id
+			) > 0
+			and heavy_after_rebuild == 1,
+		"拥有重军编制目标但重军全灭时，应优先重建第一支15000攻势军"
+	)
 	priority_force_sim.free()
 	force_state.armies.append(removed_heavy)
 	force_state.nations[force_nation_id].manpower_pool -= (
@@ -7472,6 +7618,104 @@ func _test_diplomacy_state_and_ai() -> void:
 		"15000攻势军应与邻近边槽5000军协同准备，城市填线军必须留守"
 	)
 	role_attack_sim.free()
+
+	var fallback_state := GameState.new()
+	fallback_state.generate_grid_world(32015)
+	fallback_state.uses_heightmap = true
+	fallback_state.armies.clear()
+	for fallback_city in fallback_state.cities:
+		fallback_city.owner_nation = 1
+	for fallback_city_id in range(10):
+		fallback_state.cities[
+			fallback_city_id
+		].owner_nation = 0
+	fallback_state.nations[0].capital_city_id = 0
+	var fallback_origin := 9
+	var fallback_target := 10
+	fallback_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var fallback_city_guard := _make_army(
+		1987,
+		0,
+		5000,
+		10,
+		10
+	)
+	fallback_city_guard.max_size = (
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	fallback_city_guard.location_city = fallback_origin
+	fallback_city_guard.move_from = fallback_origin
+	fallback_state.armies.append(fallback_city_guard)
+	var fallback_mobile: Array[Army] = []
+	for fallback_index in range(2):
+		var fallback_army := _make_army(
+			1988 + fallback_index,
+			0,
+			5000,
+			10,
+			10
+		)
+		fallback_army.max_size = (
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+		fallback_army.location_city = fallback_origin
+		fallback_army.move_from = fallback_origin
+		fallback_state.armies.append(fallback_army)
+		fallback_mobile.append(fallback_army)
+	var fallback_sim := Simulation.new()
+	fallback_sim.setup(fallback_state)
+	var fallback_view := AiWorldView.build(fallback_state, 0)
+	var fallback_defense_plan := CityDefensePlan.new()
+	fallback_defense_plan.view = fallback_view
+	fallback_defense_plan.assigned_city_by_army = {
+		fallback_city_guard.id: fallback_origin,
+	}
+	fallback_defense_plan.assigned_posture_by_army = {
+		fallback_city_guard.id:
+			CityDefensePlan.Posture.CITY,
+	}
+	fallback_defense_plan.assigned_armies_by_city = {
+		fallback_origin: [fallback_city_guard.id],
+	}
+	var fallback_preparation_built := (
+		fallback_sim._ensure_campaign_preparation_plan(
+			0,
+			fallback_target,
+			fallback_defense_plan,
+			ArmyCoordinator.new()
+		)
+	)
+	var fallback_assignments := (
+		fallback_state.nations[0]
+			.campaign_preparation_assignments
+	)
+	var fallback_only_light := true
+	var fallback_mobile_ids := [
+		fallback_mobile[0].id,
+		fallback_mobile[1].id,
+	]
+	for fallback_army_id in fallback_assignments:
+		fallback_only_light = (
+			fallback_only_light
+			and fallback_mobile_ids.has(
+				int(fallback_army_id)
+			)
+		)
+	_check(
+		fallback_state.target_heavy_army_count(0) == 0
+			and fallback_preparation_built
+			and fallback_assignments.size() == 2
+			and fallback_only_light
+			and not fallback_assignments.has(
+				fallback_city_guard.id
+			),
+		"小国无重军编制时，应以可抽调5000军组织临时攻势且不得抽走城市填线军"
+	)
+	fallback_sim.free()
 
 	var prewar_state := GameState.new()
 	prewar_state.generate_grid_world(32014)
