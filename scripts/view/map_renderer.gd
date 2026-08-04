@@ -12,7 +12,7 @@ const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
-const BASE_HUD_CARD_HEIGHT := 81.0
+const BASE_HUD_CARD_HEIGHT := 96.0
 const BASE_HEADER_ONLY_TOP := 44.0
 const NATION_STATS_BUTTON_WIDTH := 104.0
 const VISUAL_SCALE_COMPACT: float = 0.80
@@ -1842,20 +1842,29 @@ static func nation_detail_lines(
 			troops += army.size
 	var report := DiplomacyAI.resource_report(game_state, nation_id)
 	var gold_balance := int(report["monthly_gold_balance"])
-	var line_one := "城%d 兵%d 人%d  金%d (%+d/月)" % [
+	var line_one := "城%d 兵%d 人%d  金%d" % [
 		game_state.cities_of(nation_id).size(),
 		troops,
 		n.manpower_pool,
 		n.treasury_gold,
-		gold_balance,
 	]
-	var line_two := "粮%d 需%d/月  战%s  盟%s" % [
+	var line_two := "月净%+d  军费%d 未付%d  支付%.0f%%" % [
+		gold_balance,
+		n.last_military_upkeep,
+		n.unpaid_military_upkeep,
+		n.military_payment_ratio * 100.0,
+	]
+	var line_three := "粮%d 需%d/月  战%s  盟%s" % [
 		n.granary_food,
 		int(ceil(float(report["monthly_food_demand"]))),
 		str(game_state.wars_of(nation_id)),
 		str(game_state.allies_of(nation_id)),
 	]
-	var lines := [line_one, line_two] as Array[String]
+	var lines := [
+		line_one,
+		line_two,
+		line_three,
+	] as Array[String]
 	if not n.campaign_attack_assignments.is_empty():
 		var assignments: Array[String] = []
 		var army_ids := n.campaign_attack_assignments.keys()
@@ -1871,10 +1880,19 @@ static func nation_detail_lines(
 				]
 			)
 		lines.append(
-			"计划W%d %s" % [
+			"计划W%d 费%d  %s" % [
 				n.campaign_plan_wave,
+				n.last_offensive_gold_cost,
 				" ".join(assignments),
 			]
+		)
+	elif n.last_offensive_gold_day >= 0:
+		lines.append(
+			"上次攻势 Day%d 组织费%d"
+				% [
+					n.last_offensive_gold_day,
+					n.last_offensive_gold_cost,
+				]
 		)
 	return lines
 

@@ -447,7 +447,7 @@ func _resolve_economy() -> void:
 			city
 		)
 		nation.manpower_pool += city.manpower_per_month
-	_resolve_war_finance()
+	_resolve_military_finance()
 	if state.day % DAYS_PER_HALF_YEAR == 0:
 		var produced: Array[int] = []
 		produced.resize(state.nations.size())
@@ -574,25 +574,24 @@ static func city_garrison_food_loss(
 	)
 
 
-func _resolve_war_finance() -> void:
-	var deployed: Array[int] = []
-	deployed.resize(state.nations.size())
-	deployed.fill(0)
-	for army in state.armies:
-		if army.size > 0 and army.owner_nation >= 0 and army.owner_nation < deployed.size():
-			deployed[army.owner_nation] += army.size
+func _resolve_military_finance() -> void:
 	for nation in state.nations:
-		if state.wars_of(nation.id).is_empty():
-			nation.last_war_upkeep = 0
-			nation.unpaid_war_cost = 0
-			continue
-		var upkeep := int(ceil(
-			float(deployed[nation.id]) / float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
-		))
+		var upkeep := state.nation_monthly_military_upkeep(
+			nation.id
+		)
 		var paid := mini(nation.treasury_gold, upkeep)
 		nation.treasury_gold -= paid
-		nation.last_war_upkeep = upkeep
-		nation.unpaid_war_cost = upkeep - paid
+		nation.last_military_upkeep = upkeep
+		nation.unpaid_military_upkeep = upkeep - paid
+		nation.military_payment_ratio = (
+			1.0
+			if upkeep <= 0
+			else clampf(
+				float(paid) / float(upkeep),
+				0.0,
+				1.0
+			)
+		)
 
 
 # ------------------------------------------------------------------ 1b. 全国人口补员
@@ -884,7 +883,26 @@ func _recover_morale() -> void:
 			continue
 		if army.starving:
 			continue
-		army.morale = minf(army.morale + Combat.MORALE_RECOVER, 1.0)
+		var recovery_multiplier := morale_recovery_payment_multiplier(
+			state.nations[
+				army.owner_nation
+			].military_payment_ratio
+		)
+		army.morale = minf(
+			army.morale
+				+ Combat.MORALE_RECOVER
+					* recovery_multiplier,
+			1.0
+		)
+
+
+static func morale_recovery_payment_multiplier(
+	payment_ratio: float
+) -> float:
+	return (
+		0.5
+		+ 0.5 * clampf(payment_ratio, 0.0, 1.0)
+	)
 
 
 func _recover_garrisoned_army(army: Army) -> void:
@@ -905,7 +923,15 @@ func _recover_garrisoned_army(army: Army) -> void:
 	)
 	var route_loss := _weighted_supply_loss(sources)
 	var full_month_demand := maxi(int(ceil(float(army.size) * RECOVERY_FOOD_PER_CAPITA)), 1)
-	var target_gain := minf(Combat.MORALE_RECOVER, 1.0 - army.morale)
+	var recovery_multiplier := morale_recovery_payment_multiplier(
+		state.nations[
+			army.owner_nation
+		].military_payment_ratio
+	)
+	var target_gain := minf(
+		Combat.MORALE_RECOVER * recovery_multiplier,
+		1.0 - army.morale
+	)
 	var base_demand := maxi(
 		int(ceil(float(full_month_demand) * target_gain / Combat.MORALE_RECOVER)),
 		1
@@ -3275,6 +3301,15 @@ func _launch_campaign_offensive(
 		prepared_targets
 	):
 		return false
+	var nation := state.nations[nation_id]
+	var organization_cost := _campaign_offensive_gold_cost(
+		nation_id
+	)
+	if (
+		organization_cost <= 0
+		or nation.treasury_gold < organization_cost
+	):
+		return false
 	if preparation_days < 0:
 		preparation_days = _campaign_preparation_days(
 			nation_id
@@ -3285,7 +3320,6 @@ func _launch_campaign_offensive(
 	var offensive_bonus_days := offensive_bonus_duration_days(
 		preparation_days
 	)
-	var nation := state.nations[nation_id]
 	nation.campaign_preparation_multiplier = offensive_multiplier
 	var launched := false
 	var launched_origins := {}
@@ -3403,6 +3437,9 @@ func _launch_campaign_offensive(
 				state.day
 			)
 	if launched:
+		nation.treasury_gold -= organization_cost
+		nation.last_offensive_gold_cost = organization_cost
+		nation.last_offensive_gold_day = state.day
 		nation.campaign_launched_attack_multiplier = (
 			offensive_multiplier
 		)
@@ -3444,6 +3481,50 @@ func _launch_campaign_offensive(
 				CAMPAIGN_ARROW_DURATION_DAYS
 			)
 	return launched
+
+
+static func offensive_organization_gold_cost(
+	participants: Array[Army]
+) -> int:
+	var total := 0
+	for army in participants:
+		if army != null and army.size > 0:
+			total += GameState.offensive_army_gold_cost(
+				army.size
+			)
+	return total
+
+
+func _campaign_offensive_gold_cost(nation_id: int) -> int:
+	var nation := state.nations[nation_id]
+	var participants: Array[Army] = []
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or not nation.campaign_attack_assignments.has(
+				army.id
+			)
+		):
+			continue
+		var target_city := int(
+			nation.campaign_attack_assignments.get(
+				army.id,
+				-1
+			)
+		)
+		if (
+			not nation.campaign_plan_targets.has(target_city)
+			or target_city < 0
+			or target_city >= state.cities.size()
+			or not state.is_enemy(
+				nation_id,
+				state.cities[target_city].owner_nation
+			)
+		):
+			continue
+		participants.append(army)
+	return offensive_organization_gold_cost(participants)
 
 
 ## 既有战役计划的执行续接。前梯队进入目标城市后即开放下一梯队，让道路容量
@@ -4501,14 +4582,21 @@ func _create_army_for_nation(
 	]:
 		return null
 	var nation := state.nations[nation_id]
+	var creation_cost := (
+		GameState.formation_creation_gold_cost(
+			formation_size
+		)
+	)
 	if (
 		nation.manpower_pool < formation_size
+		or nation.treasury_gold < creation_cost
 		or state.active_army_count(nation_id)
 			>= state.max_army_count(nation_id)
 		or not _is_available_recruitment_hub(nation_id, city_id)
 	):
 		return null
 	nation.manpower_pool -= formation_size
+	nation.treasury_gold -= creation_cost
 	var army := state.create_army(
 		nation_id,
 		city_id,
@@ -4517,13 +4605,19 @@ func _create_army_for_nation(
 	)
 	if army == null:
 		nation.manpower_pool += formation_size
+		nation.treasury_gold += creation_cost
 		return null
 	army.ai_action = ActionCandidate.Kind.CREATE_ARMY
 	army.ai_order_created_day = state.day
-	army.ai_order_reason = reason
+	army.ai_order_reason = (
+		"%s；支付建制费%d金" % [
+			reason,
+			creation_cost,
+		]
+	)
 	nation.ai_last_force_action = ActionCandidate.Kind.CREATE_ARMY
 	nation.ai_last_force_day = state.day
-	nation.ai_last_force_reason = reason
+	nation.ai_last_force_reason = army.ai_order_reason
 	return army
 
 

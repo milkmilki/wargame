@@ -7,8 +7,11 @@ var color: Color = Color.WHITE             ## 阵营色（渲染用）
 
 var treasury_gold: int = 0                 ## 国家钱仓
 var manpower_pool: int = 0                 ## 全国统一可用人口库（人口 SSoT）
-var last_war_upkeep: int = 0               ## 最近一月战争军费（派生记录）
-var unpaid_war_cost: int = 0               ## 最近一月无力支付的战争军费
+var last_military_upkeep: int = 0          ## 最近一月全军维护费
+var unpaid_military_upkeep: int = 0        ## 最近一月未支付的军队维护费
+var military_payment_ratio: float = 1.0    ## 最近一月军费实际支付率 [0,1]
+var last_offensive_gold_cost: int = 0      ## 最近一次实际发动攻势的组织费用
+var last_offensive_gold_day: int = -1
 var war_mobilization_target_troops: int = 0 ## 宣战粮食预算对应的目标总兵力
 var war_mobilization_until_day: int = -1
 var war_mobilization_reason: String = ""

@@ -17,6 +17,8 @@ const HEAVY_ARMIES_PER_CITY: float = 0.05
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 3000
+const FORMATION_CREATION_UPKEEP_MONTHS: int = 10
+const OFFENSIVE_COMMAND_GOLD_PER_ARMY: int = 1
 const CITY_FOOD_PER_HALF_YEAR_MIN: int = 400
 const CITY_FOOD_PER_HALF_YEAR_MAX: int = 600
 const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
@@ -32,6 +34,38 @@ enum DiplomaticRelation {
 	WAR,
 	ALLIED,
 }
+
+
+static func army_monthly_upkeep(troops: int) -> int:
+	if troops <= 0:
+		return 0
+	return int(ceil(
+		float(troops) / float(WAR_GOLD_TROOPS_PER_UNIT)
+	))
+
+
+static func formation_creation_gold_cost(formation_size: int) -> int:
+	return (
+		army_monthly_upkeep(formation_size)
+		* FORMATION_CREATION_UPKEEP_MONTHS
+	)
+
+
+static func offensive_army_gold_cost(troops: int) -> int:
+	if troops <= 0:
+		return 0
+	return (
+		army_monthly_upkeep(troops)
+		+ OFFENSIVE_COMMAND_GOLD_PER_ARMY
+	)
+
+
+func nation_monthly_military_upkeep(nation_id: int) -> int:
+	var total := 0
+	for army in armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			total += army_monthly_upkeep(army.size)
+	return total
 
 var cities: Array[City] = []
 var edges: Array[Edge] = []

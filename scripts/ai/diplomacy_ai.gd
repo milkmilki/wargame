@@ -135,7 +135,7 @@ static func peace_willingness_breakdown(
 	var resource_pressure := (
 		1.0 - 2.0 * resource_endurance
 	)
-	if state.nations[nation_id].unpaid_war_cost > 0:
+	if state.nations[nation_id].unpaid_military_upkeep > 0:
 		resource_pressure += 1.0
 	var external_threat := _neutral_border_massing_ratio(
 		state,
@@ -547,16 +547,19 @@ static func peace_reasons(
 			% float(breakdown["external_threat"])
 		)
 	if (
-		nation.unpaid_war_cost > 0
+		nation.unpaid_military_upkeep > 0
 		or (
 			int(report["monthly_gold_balance"]) < 0
 			and float(report["gold_runway_months"]) < CAMPAIGN_RESERVE_MONTHS
 		)
 	):
-		if nation.unpaid_war_cost > 0:
+		if nation.unpaid_military_upkeep > 0:
 			reasons.append(
 				"国库%d金，本月军费实际缺口%d"
-				% [nation.treasury_gold, nation.unpaid_war_cost]
+				% [
+					nation.treasury_gold,
+					nation.unpaid_military_upkeep,
+				]
 			)
 		else:
 			reasons.append(
@@ -878,9 +881,9 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 		)
 	var food_plan := war_food_report(state, nation_id, troops)
 	var monthly_food_production := float(food_plan["monthly_food_production"])
-	var monthly_war_cost := int(ceil(
-		float(troops) / float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
-	))
+	var monthly_war_cost := (
+		state.nation_monthly_military_upkeep(nation_id)
+	)
 	var monthly_gold_balance := monthly_income - monthly_war_cost
 	var monthly_gold_deficit := maxi(-monthly_gold_balance, 0)
 	var monthly_food_demand := int(ceil(
@@ -940,7 +943,7 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 		"full_strength_annual_balance": food_plan["full_strength_annual_balance"],
 		"full_strength_runway_years": food_plan["full_strength_runway_years"],
 		"ready": (
-			nation.unpaid_war_cost <= 0
+			nation.unpaid_military_upkeep <= 0
 			and (
 				monthly_gold_balance >= 0
 				or gold_runway_months >= CAMPAIGN_RESERVE_MONTHS
@@ -968,7 +971,7 @@ static func war_preparation_resources_ready(
 		int(ceil(float(report["troops"]) * 0.03))
 	)
 	return (
-		nation.unpaid_war_cost <= 0
+		nation.unpaid_military_upkeep <= 0
 		and (
 			int(report["monthly_gold_balance"]) >= 0
 			or float(report["gold_runway_months"])
@@ -994,7 +997,23 @@ static func mobilization_capacity(
 			0
 		)) / float(MOBILIZATION_ARMY_SIZE)
 	))
-	var max_units := clampi(manpower_units, 0, MAX_MOBILIZATION_ARMIES)
+	var formation_gold_cost := (
+		GameState.formation_creation_gold_cost(
+			MOBILIZATION_ARMY_SIZE
+		)
+	)
+	var gold_units := int(floor(
+		float(maxi(
+			state.nations[nation_id].treasury_gold
+				- MIN_GOLD_RESERVE,
+			0
+		)) / float(maxi(formation_gold_cost, 1))
+	))
+	var max_units := clampi(
+		mini(manpower_units, gold_units),
+		0,
+		MAX_MOBILIZATION_ARMIES
+	)
 	var current_troops := _troop_count(state, nation_id)
 	var affordable_units := 0
 	for units in range(1, max_units + 1):

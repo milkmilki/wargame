@@ -170,9 +170,20 @@ func _init() -> void:
 				invalid += 1
 		var manpower := 0
 		var food := 0
+		var invalid_finance := 0
 		for nation in state.nations:
 			manpower += nation.manpower_pool
 			food += nation.granary_food
+			if (
+				nation.treasury_gold < 0
+				or nation.last_military_upkeep < 0
+				or nation.unpaid_military_upkeep < 0
+				or nation.unpaid_military_upkeep
+					> nation.last_military_upkeep
+				or nation.military_payment_ratio < 0.0
+				or nation.military_payment_ratio > 1.0
+			):
+				invalid_finance += 1
 		var diplomatic_counts := {
 			DiplomacyAI.Action.MAKE_PEACE: 0,
 			DiplomacyAI.Action.DECLARE_WAR: 0,
@@ -324,7 +335,7 @@ func _init() -> void:
 		print(
 			(
 				"seed=%d day=%d alive=%d eliminated_wars=%d terminal_alliance_lock=%d "
-				+ "armies=%d troops=%d manpower=%d food=%d "
+				+ "armies=%d troops=%d manpower=%d food=%d finance_invalid=%d "
 				+ "starving=%d net_captures=%d turnovers=%d ordered=%d invalid=%d "
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
 				+ "offensives=%d full_prep=%d multi_prep=%d max_parallel=%d "
@@ -345,6 +356,7 @@ func _init() -> void:
 				troops,
 				manpower,
 				food,
+				invalid_finance,
 				starving,
 				captures,
 				turnovers,
@@ -385,6 +397,7 @@ func _init() -> void:
 		if (
 			ordered == 0
 			or invalid > 0
+			or invalid_finance > 0
 			or eliminated_war_relations > 0
 			or terminal_alliance_lock
 			or simulation.ai_command_commit_failure_total > 0

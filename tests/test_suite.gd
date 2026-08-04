@@ -1342,6 +1342,25 @@ func _test_persistent_morale() -> void:
 	sim._recover_morale()
 	_check(probe.morale > before, "非交战有粮军队士气应恢复：%.2f -> %.2f" % [before, probe.morale])
 	_check(probe.morale <= 1.0, "士气恢复不应越界 1.0")
+	# 军费支付率只缩放恢复速度，不像缺粮那样直接扣减士气。
+	probe.morale = 0.2
+	probe.starving = false
+	gs.nations[probe.owner_nation].treasury_gold = 0
+	gs.nations[probe.owner_nation].military_payment_ratio = 0.0
+	sim._recover_morale()
+	_check(
+		_approx(
+			probe.morale,
+			0.2 + Combat.MORALE_RECOVER * 0.5
+		)
+			and _approx(
+				Simulation.morale_recovery_payment_multiplier(
+					0.4
+				),
+				0.7
+			),
+		"军费未支付时士气仍应按50%%速度恢复，支付40%%时恢复倍率应为0.70"
+	)
 	# 断粮时不恢复
 	probe.morale = 0.2; probe.starving = true
 	sim._recover_morale()
@@ -1432,13 +1451,9 @@ func _test_time_layering() -> void:
 		monthly += Simulation.city_gold_output(gs, c)
 	var war_upkeep := 0
 	for nation in gs.nations:
-		var troops := 0
-		for army in gs.armies:
-			if army.owner_nation == nation.id:
-				troops += army.size
-		war_upkeep += int(ceil(
-			float(troops) / float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
-		))
+		war_upkeep += gs.nation_monthly_military_upkeep(
+			nation.id
+		)
 	sim._advance_day()   # day==30
 	var after := 0
 	for n in gs.nations:
@@ -5161,6 +5176,18 @@ func _test_manpower_pool_and_force_commands() -> void:
 	gs.armies.erase(holder)
 	var capital_id := gs.nations[nation_id].capital_city_id
 	gs.nations[nation_id].manpower_pool = 6000
+	gs.nations[nation_id].treasury_gold = 100
+	var light_upkeep := GameState.army_monthly_upkeep(
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var light_creation_cost := (
+		GameState.formation_creation_gold_cost(
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+	)
+	var treasury_before_creation := (
+		gs.nations[nation_id].treasury_gold
+	)
 	var created := sim._create_army_for_nation(
 		nation_id,
 		capital_id,
@@ -5168,14 +5195,82 @@ func _test_manpower_pool_and_force_commands() -> void:
 		"测试建军"
 	)
 	_check(created != null and created.size == 5000 and created.max_size == 5000
-		and gs.nations[nation_id].manpower_pool == 1000,
-		"轻军建军应消耗5000人并创建5000满编军队")
+		and gs.nations[nation_id].manpower_pool == 1000
+		and light_creation_cost == light_upkeep * 10
+		and gs.nations[nation_id].treasury_gold
+			== treasury_before_creation - light_creation_cost,
+		"轻军建军应消耗5000人和10个月维护费：upkeep=%d create=%d treasury=%d"
+			% [
+				light_upkeep,
+				light_creation_cost,
+				gs.nations[nation_id].treasury_gold,
+			])
 	var pool_before_disband := gs.nations[nation_id].manpower_pool
 	var created_size := created.size
 	_check(sim._disband_army(created, "测试解散")
 		and not gs.armies.has(created)
 		and gs.nations[nation_id].manpower_pool == pool_before_disband + created_size,
 		"解散应删除军队并把全部幸存人数返还全国人口库")
+	gs.nations[nation_id].manpower_pool = 6000
+	gs.nations[nation_id].treasury_gold = (
+		light_creation_cost - 1
+	)
+	var manpower_before_failed_creation := (
+		gs.nations[nation_id].manpower_pool
+	)
+	var unaffordable_creation := sim._create_army_for_nation(
+		nation_id,
+		capital_id,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		"资金不足建军测试"
+	)
+	_check(
+		unaffordable_creation == null
+			and gs.nations[nation_id].manpower_pool
+				== manpower_before_failed_creation
+			and gs.nations[nation_id].treasury_gold
+				== light_creation_cost - 1,
+		"资金不足时不得创建新编制，也不得预扣人力或金钱"
+	)
+
+	var finance_state := GameState.new()
+	finance_state.generate_grid_world(7104)
+	finance_state.armies.clear()
+	for finance_a in range(finance_state.nations.size()):
+		for finance_b in range(
+			finance_a + 1,
+			finance_state.nations.size()
+		):
+			finance_state.set_diplomatic_relation(
+				finance_a,
+				finance_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var finance_city := finance_state.cities_of(0)[0].id
+	finance_state.create_army(0, finance_city, 5000, 5000)
+	finance_state.create_army(0, finance_city, 15000, 15000)
+	finance_state.nations[0].treasury_gold = 3
+	var finance_sim := Simulation.new()
+	finance_sim.setup(finance_state)
+	finance_sim._resolve_military_finance()
+	var finance_upkeep := (
+		GameState.army_monthly_upkeep(5000)
+		+ GameState.army_monthly_upkeep(15000)
+	)
+	_check(
+		finance_state.nations[0].treasury_gold == 0
+			and finance_state.nations[0].last_military_upkeep
+				== finance_upkeep
+			and finance_state.nations[0].unpaid_military_upkeep
+				== finance_upkeep - 3
+			and _approx(
+				finance_state.nations[0]
+					.military_payment_ratio,
+				3.0 / float(finance_upkeep)
+			),
+		"和平或战争时期都应逐编制结算维护费并记录实际支付率"
+	)
+	finance_sim.free()
 
 	var force_state := GameState.new()
 	force_state.generate_world(7103)
@@ -5431,11 +5526,13 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
 	_check(
-		nation_lines.size() == 2
+		nation_lines.size() == 3
 		and nation_lines[0].contains("金")
-		and nation_lines[1].contains("粮")
-		and nation_lines[1].contains("盟"),
-		"国家详情卡必须独立展示财政、粮食和外交状态"
+		and nation_lines[1].contains("军费")
+		and nation_lines[1].contains("支付")
+		and nation_lines[2].contains("粮")
+		and nation_lines[2].contains("盟"),
+		"国家详情卡必须独立展示财政、军费支付率、粮食和外交状态"
 	)
 	_check(
 		gs.has_military_access(0, 1)
@@ -5711,7 +5808,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		peace_army.move_from = peace_army.location_city
 		bilateral_peace_state.armies.append(peace_army)
 	bilateral_peace_state.day = 720
-	bilateral_peace_state.nations[0].unpaid_war_cost = 20
+	bilateral_peace_state.nations[0].unpaid_military_upkeep = 20
 	bilateral_peace_state.nations[0].manpower_pool = 0
 	for warehouse in bilateral_peace_state.warehouse_cities_of(0):
 		warehouse.food_storage = 0
@@ -5976,7 +6073,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		1
 	)
 	formula_state.nations[0].treasury_gold = 0
-	formula_state.nations[0].unpaid_war_cost = 100
+	formula_state.nations[0].unpaid_military_upkeep = 100
 	for warehouse in formula_state.warehouse_cities_of(0):
 		warehouse.food_storage = 0
 	var resource_exhausted := DiplomacyAI.peace_willingness_breakdown(
@@ -7143,6 +7240,36 @@ func _test_diplomacy_state_and_ai() -> void:
 		echelon_state.armies.append(echelon_army)
 	var echelon_sim := Simulation.new()
 	echelon_sim.setup(echelon_state)
+	var one_army_offensive_cost := (
+		GameState.offensive_army_gold_cost(15000)
+	)
+	var echelon_offensive_cost := (
+		one_army_offensive_cost * 2
+	)
+	echelon_state.nations[0].treasury_gold = (
+		echelon_offensive_cost - 1
+	)
+	var unfunded_echelon_launch := (
+		echelon_sim._launch_campaign_offensive(
+			0,
+			echelon_target,
+			180
+		)
+	)
+	var unfunded_armies_idle := true
+	for army in echelon_state.armies:
+		unfunded_armies_idle = (
+			unfunded_armies_idle
+			and army.state == Army.State.IDLE
+		)
+	_check(
+		not unfunded_echelon_launch
+			and unfunded_armies_idle
+			and echelon_state.nations[0].treasury_gold
+				== echelon_offensive_cost - 1,
+		"金库不足时不得发动攻势或预扣组织费"
+	)
+	echelon_state.nations[0].treasury_gold = 100
 	var echelon_launched := echelon_sim._launch_campaign_offensive(
 		0,
 		echelon_target,
@@ -7170,8 +7297,14 @@ func _test_diplomacy_state_and_ai() -> void:
 		and followup_army.state == Army.State.IDLE
 		and not echelon_nation.campaign_launched_armies.has(
 			followup_army.id
-		),
-		"持续攻势首轮只能投入最小充分梯队，后续梯队必须在出发地待命"
+		)
+		and echelon_state.nations[0].treasury_gold
+			== 100 - echelon_offensive_cost
+		and echelon_state.nations[0]
+			.last_offensive_gold_cost == echelon_offensive_cost
+		and echelon_offensive_cost
+			> one_army_offensive_cost,
+		"持续攻势应按全部参与梯队扣费，军队越多费用越高；首轮仍只投入最小充分梯队"
 	)
 	echelon_state.day += 1
 	if lead_army != null:
@@ -7896,7 +8029,7 @@ func _test_diplomacy_state_and_ai() -> void:
 
 	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	ai_state.nations[0].treasury_gold = 0
-	ai_state.nations[0].unpaid_war_cost = 20
+	ai_state.nations[0].unpaid_military_upkeep = 20
 	ai_state.nations[0].manpower_pool = 0
 	for warehouse in ai_state.warehouse_cities_of(0):
 		warehouse.food_storage = 0
