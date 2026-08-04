@@ -93,9 +93,13 @@ func _test_world_generation() -> void:
 	gs.generate_world(12345)
 	var land_cities := gs.land_cities()
 	_check(
-		land_cities.size() == 64 and gs.cities.size() > 64,
-		"正式地图应有64个陆城和动态码头，实为%d城"
-			% gs.cities.size()
+		land_cities.size() == GameState.TERRAIN_CITY_COUNT
+			and gs.cities.size() > GameState.TERRAIN_CITY_COUNT,
+		"正式地图应有%d个陆城和动态码头，实为%d城"
+			% [
+				GameState.TERRAIN_CITY_COUNT,
+				gs.cities.size(),
+			]
 	)
 	_check(
 		gs.edges.size() >= gs.cities.size() - 1
@@ -137,13 +141,19 @@ func _test_world_generation() -> void:
 		gs.cities.all(func(city: City) -> bool: return not city.at_war),
 		"和平开局时所有城市均不应显示战争状态"
 	)
-	# 四等份：每国 16 个陆城；码头不改变初始军制。
+	# 四等份：每国 40 个陆城；码头不改变初始军制。
 	for n in gs.nations:
 		var owned_land := gs.land_cities_of(n.id)
 		var cnt := owned_land.size()
 		_check(
-			cnt == 16,
-			"国%d 初始应有16个陆城，实为%d" % [n.id, cnt]
+			cnt == GameState.TERRAIN_CITY_COUNT / gs.nations.size(),
+			"国%d 初始应有%d个陆城，实为%d"
+				% [
+					n.id,
+					GameState.TERRAIN_CITY_COUNT
+						/ gs.nations.size(),
+					cnt,
+				]
 		)
 		var food_hubs: Array[City] = []
 		var manpower_hubs: Array[City] = []
@@ -199,9 +209,16 @@ func _test_world_generation() -> void:
 			if not gs.cities[int(city_id)].is_dock:
 				reachable_land += 1
 		_check(
-			reachable_land == 16,
-			"国%d 初始16个陆城应经本国节点连通，实为%d"
-				% [n.id, reachable_land]
+			reachable_land
+				== GameState.TERRAIN_CITY_COUNT
+					/ gs.nations.size(),
+			"国%d 初始%d个陆城应经本国节点连通，实为%d"
+				% [
+					n.id,
+					GameState.TERRAIN_CITY_COUNT
+						/ gs.nations.size(),
+					reachable_land,
+				]
 		)
 		var light_armies := 0
 		var heavy_armies := 0
@@ -280,8 +297,164 @@ func _test_world_generation() -> void:
 			delta.x *= gs.map_aspect_ratio
 			minimum_city_spacing = minf(minimum_city_spacing, delta.length())
 	_check(
-		minimum_city_spacing >= 0.075,
-		"城市点应保持足够间距，实为 %.4f" % minimum_city_spacing
+		minimum_city_spacing
+			>= (
+				TerrainMapGenerator
+					.minimum_city_spacing_for_count(
+						GameState.TERRAIN_CITY_COUNT
+					)
+				* TerrainMapGenerator.LOCAL_SPACING_MIN_FACTOR
+				* TerrainMapGenerator.SPACING_RELAXATION_FLOOR
+			),
+		"160城动态采样仍须保持硬间距下界，实为 %.4f"
+			% minimum_city_spacing
+	)
+	var height_ordered: Array[City] = land_cities.duplicate()
+	height_ordered.sort_custom(func(a: City, b: City) -> bool:
+		if not is_equal_approx(a.terrain_height, b.terrain_height):
+			return a.terrain_height < b.terrain_height
+		return a.id < b.id
+	)
+	var elevation_quartile := maxi(
+		height_ordered.size() / 4,
+		1
+	)
+	var lowland_spacing_total := 0.0
+	var highland_spacing_total := 0.0
+	for height_index in range(elevation_quartile):
+		for source_data in [
+			[
+				height_ordered[height_index],
+				true,
+			],
+			[
+				height_ordered[
+					height_ordered.size()
+						- 1
+						- height_index
+				],
+				false,
+			],
+		]:
+			var source: City = source_data[0]
+			var nearest := INF
+			for target in land_cities:
+				if target.id == source.id:
+					continue
+				var spacing_delta := (
+					source.map_position - target.map_position
+				)
+				spacing_delta.x *= gs.map_aspect_ratio
+				nearest = minf(nearest, spacing_delta.length())
+			if bool(source_data[1]):
+				lowland_spacing_total += nearest
+			else:
+				highland_spacing_total += nearest
+	var lowland_mean_spacing := (
+		lowland_spacing_total / float(elevation_quartile)
+	)
+	var highland_mean_spacing := (
+		highland_spacing_total / float(elevation_quartile)
+	)
+	var northwest_spacing_total := 0.0
+	var northwest_count := 0
+	var central_southeast_spacing_total := 0.0
+	var central_southeast_count := 0
+	for source in land_cities:
+		var nearest := INF
+		for target in land_cities:
+			if target.id == source.id:
+				continue
+			var spacing_delta := (
+				source.map_position - target.map_position
+			)
+			spacing_delta.x *= gs.map_aspect_ratio
+			nearest = minf(nearest, spacing_delta.length())
+		if (
+			source.map_position.x < 0.45
+			and source.map_position.y < 0.50
+		):
+			northwest_spacing_total += nearest
+			northwest_count += 1
+		elif (
+			source.map_position.x >= 0.45
+			and source.map_position.y >= 0.35
+		):
+			central_southeast_spacing_total += nearest
+			central_southeast_count += 1
+	var northwest_mean_spacing := (
+		northwest_spacing_total
+		/ float(maxi(northwest_count, 1))
+	)
+	var central_southeast_mean_spacing := (
+		central_southeast_spacing_total
+		/ float(maxi(central_southeast_count, 1))
+	)
+	var river_bank_cities := 0
+	for source in land_cities:
+		var nearest_river := INF
+		for river_path in gs.river_paths:
+			for river_point in river_path:
+				var river_delta := (
+					source.map_position - river_point
+				)
+				river_delta.x *= gs.map_aspect_ratio
+				nearest_river = minf(
+					nearest_river,
+					river_delta.length()
+				)
+		if (
+			nearest_river
+				>= TerrainMapGenerator.RIVER_BANK_MIN_DISTANCE
+			and nearest_river
+				<= TerrainMapGenerator.RIVER_BANK_MAX_DISTANCE
+		):
+			river_bank_cities += 1
+	_check(
+		lowland_mean_spacing < highland_mean_spacing,
+		"低海拔四分位城市应比高海拔四分位更密：low=%.4f high=%.4f"
+			% [
+				lowland_mean_spacing,
+				highland_mean_spacing,
+			]
+	)
+	_check(
+		northwest_count > 0
+			and central_southeast_count > 0
+			and central_southeast_mean_spacing
+				< northwest_mean_spacing,
+		"中东部/东南城市应比西北更密：dense=%.4f northwest=%.4f count=%d/%d"
+			% [
+				central_southeast_mean_spacing,
+				northwest_mean_spacing,
+				central_southeast_count,
+				northwest_count,
+			]
+	)
+	_check(
+		river_bank_cities
+			>= int(ceil(
+				float(GameState.TERRAIN_CITY_COUNT) * 0.10
+			)),
+		"至少10%%陆城应依河而建，当前=%d/%d"
+			% [
+				river_bank_cities,
+				GameState.TERRAIN_CITY_COUNT,
+			]
+	)
+	_check(
+		TerrainMapGenerator.settlement_density(
+			0.15,
+			0.02,
+			Vector2(0.75, 0.70),
+			1.0
+		) > TerrainMapGenerator.settlement_density(
+			0.75,
+			0.20,
+			Vector2(0.20, 0.20),
+			0.0
+		),
+		"聚落评分必须单调偏好低海拔、中东南和河岸"
 	)
 	_check(
 		gs.map_source_region_normalized.position.x > 0.0
@@ -303,14 +476,15 @@ func _test_world_generation() -> void:
 			province_has_sea = true
 			continue
 		province_ids_valid = (
-			province_ids_valid and province_id < GameState.CITY_COUNT
+			province_ids_valid
+				and province_id < GameState.TERRAIN_CITY_COUNT
 		)
 		province_seen[province_id] = true
 	_check(
 		province_ids_valid
 		and province_has_sea
-		and province_seen.size() == GameState.CITY_COUNT,
-		"陆地掩码 Voronoi 必须为64城各生成独立省份，轮廓外保持透明"
+		and province_seen.size() == GameState.TERRAIN_CITY_COUNT,
+		"陆地掩码 Voronoi 必须为160城各生成独立省份，轮廓外保持透明"
 	)
 	var province_owners_stable := true
 	for city in gs.cities:
@@ -365,17 +539,25 @@ func _test_world_generation() -> void:
 	)
 	_check(ResourceLoader.exists("res://main.tscn"), "真实地图场景 main.tscn 必须保留")
 	_check(ResourceLoader.exists("res://square_map.tscn"), "原方形地图场景必须独立保留")
-	# 每国只有首都一个粮仓；原 16 城初始储备全部归集到该粮仓。
+	# 每国只有首都一个粮仓；本国全部陆城初始储备归集到该粮仓。
 	for n in gs.nations:
 		var warehouses := gs.warehouse_cities_of(n.id)
+		var owned_land_count := gs.land_cities_of(n.id).size()
 		_check(warehouses.size() == 1 and warehouses[0].id == n.capital_city_id,
 			"国%d 初始应只有首都一个粮仓" % n.id)
 		_check(
 			warehouses[0].food_storage
-				>= 16 * GameState.INITIAL_CITY_FOOD_STOCK_MIN
+				>= owned_land_count
+					* GameState.INITIAL_CITY_FOOD_STOCK_MIN
 			and warehouses[0].food_storage
-				<= 16 * GameState.INITIAL_CITY_FOOD_STOCK_MAX,
-			"国%d 首都粮仓应归集 16 城初始储备，实为 %d" % [n.id, warehouses[0].food_storage])
+				<= owned_land_count
+					* GameState.INITIAL_CITY_FOOD_STOCK_MAX,
+			"国%d 首都粮仓应归集%d城初始储备，实为%d"
+				% [
+					n.id,
+					owned_land_count,
+					warehouses[0].food_storage,
+				])
 	var non_warehouse_food := false
 	for c in gs.cities:
 		if not c.has_warehouse and c.food_storage != 0:
@@ -562,7 +744,7 @@ func _test_river_transport() -> void:
 	for dock in docks:
 		docks_are_full_cities = (
 			docks_are_full_cities
-			and dock.id >= GameState.CITY_COUNT
+			and dock.id >= GameState.TERRAIN_CITY_COUNT
 			and dock.owner_nation >= 0
 			and dock.fort_strength_max > 0
 			and gs.recognized_owner_of(dock.id) == dock.owner_nation

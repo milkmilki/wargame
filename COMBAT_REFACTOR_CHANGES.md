@@ -2,9 +2,9 @@
 
 > 对应方案书 [wargame_combat_system_refactor.md](wargame_combat_system_refactor.md) 十七条要求 + 推荐四阶段。
 > 基线 commit：`c346dda`（Sustain offensives throughout active wars）。
-> 验收：`./run_tests.sh` = **829 断言 / 0 失败**；`tests/combat_statistics.gd` = STATISTICS_PASS（10000 场）；
-> 含外交三层态度与统一目标的正式地图 4 种子 × 1095 天：`net_captures=88`、`turnovers=136`、`wars=13`、
-> `offensives=76`、`multi_prep=9`、`max_parallel=2`，
+> 验收：`./run_tests.sh` = **1112 断言 / 0 失败**；`tests/combat_statistics.gd` = STATISTICS_PASS（10000 场）；
+> 160 陆城正式地图 4 种子 × 1095 天：`net_captures=17`、`turnovers=93`、`wars=13`、
+> `offensives=40`、`multi_prep=2`、`max_parallel=3`，
 > 且 `eliminated_wars=0`、`terminal_alliance_lock=0`、`invalid=0`、`commit_failures=0`。strict-mirror 基准逐日校验
 > 3650 天无破裂，优势分 `0.0`。
 
@@ -19,12 +19,12 @@
 | [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | **新建**：城市/军队/势力/边的镜像等变物理排序唯一真源，禁止 ID/创建顺序参与行为决胜 |
 | [scripts/core/simulation.gd](scripts/core/simulation.gd) | 增援 ETA；每日滚动补给；多方战斗；围城状态机；最多三目标攻势；两档军制；邻接驰援；零城市国家向全部交战国立即投降；长距离行军不封顶 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 确定性二叉最小堆 Dijkstra 与等长裁决；寻路读取行军倍率，补给读取边级损耗倍率 |
-| [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 黄河/长江控制点模板与纬向走廊；均匀保留约35% crossing并最小连通补点；其余穿河道路禁用；三类边统一由端点几何长度生成距离 |
+| [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 160 城低地/中东南/河岸加权采样；黄河/长江控制点模板与纬向走廊；均匀保留约25% crossing并最小连通补点；其余穿河道路禁用；三类边统一由端点几何长度生成距离 |
 | [scripts/model/city.gd](scripts/model/city.gd) | 当前/完整工事及易手恢复字段；`is_dock` 标识复用完整城市能力的码头 |
 | [scripts/model/edge.gd](scripts/model/edge.gd) | 新增 `LAND/LANDING/RIVER` 类型、行军/粮损倍率和 `allows_holding` |
 | [scripts/model/army.gd](scripts/model/army.gd) | 两类补给债；完全同构多方接触的瞬态 `encounter_blocked`（不伪装为驻防） |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 每侧整场援军士气累计；显式前线优先级；单军溃退队列；驻防/围城/稳定战术随机字段 |
-| [scripts/core/game_state.gd](scripts/core/game_state.gd) | 64 个陆城之外创建码头；按全部当前城市计算 5000/15000 两档目标军制；首都/资源核心只读取陆城；边键改为 int64 打包 |
+| [scripts/core/game_state.gd](scripts/core/game_state.gd) | 正式地图 160 个陆城之外创建码头，64 城仅保留为网格夹具；按全部当前城市计算 5000/15000 两档目标军制；首都/资源核心只读取陆城；边键改为 int64 打包 |
 | [scripts/ai](scripts/ai) | Hungarian 军队到城市多槽离散驻防；威胁与抵达时间读取河运速度；水路不生成驻边姿态；外交按战局、军力、钱粮和第三国边境集结计算双边和平意愿 |
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 牛皮纸战略图、国家/道路描边、持续攻势箭头、军图城市/码头、NATO 兵牌、四档固定 UI、可折叠国家统计窗口、城市/道路点击详情；运行时最高 30 FPS、暂停 5 FPS 重绘 |
 | [tests/test_suite.gd](tests/test_suite.gd) | 826 断言：既有机制 + 战略图 UI + 黄河0.50～0.60/双河走向/国家内部与全图最小连通/硬阻隔 + 真实边距 + 多国灭国投降 + 邻接驰援 + 两档军制/同城多军驻防 |
@@ -62,7 +62,8 @@
 
 **河运与抢滩**
 - 正式高度图世界使用两组固定控制点和纬向走廊代价生成黄河、长江。黄河控制点下压至 `0.50～0.59`，实际均值门禁为 `0.50～0.60`；两河西向东、平均纵向分离至少 `0.06`、局部向西折返不超过 `0.08`。
-- 每条河均匀保留约 35% crossing，再先用并查集补足每个初始国家内部连通，最后补足全图连通所需的最少 crossing，码头数保持 8～22 门禁。未选中的穿河道路整条禁用；选中道路的全部交点拆成 `LANDING` 边。
+- 每条河均匀保留约 25% crossing，再先用并查集补足每个初始国家内部连通，最后补足全图连通所需的最少 crossing，码头数保持 8～22 门禁。未选中的穿河道路整条禁用；选中道路的全部交点拆成 `LANDING` 边。
+- 河道在陆城采样前生成。聚落密度由低海拔、低起伏、中东部/东南区位和河岸亲和度连续加权；局部最小间距以 `0.075×sqrt(64/N)` 为基准按密度缩放，使低地和中东南自然聚集、西北高地保持稀疏，同时避免硬分区边界。
 - 码头继续复用 `City` 的占领、驻军、工事、补给和法理归属，初始产出为 0。相邻码头沿河连接 `RIVER` 边：容量 100000、同距离速度为陆运 `1.2×`、补给损耗倍率 0.25、禁止驻边。
 - 河段 `danger` 由局部坡度和弯曲度确定，继续进入现有战斗地形模型。AI 威胁、进攻抵达和实际移动共用 `Simulation.edge_travel_days`；补给 Dijkstra 读取 `supply_loss_multiplier`。
 - `LAND/LANDING/RIVER` 均按显示端点和地图宽高比计算欧氏长度，再以每地图高度 12 个单位生成整数 `distance`；抢滩分段不再继承原边比例，旧 `1～5` 截断已删除。`march_days=10+(distance-1)×5` 不再把长边封顶为 30 天。
@@ -75,13 +76,13 @@
 **军制、驻防与性能**
 - 正式地图按当前城市数维护两档编制：`5000` 编制军数量为 `ceil(0.5×城市数)`，`15000` 编制军数量为 `floor(0.05×城市数)`；战争动员不得突破目标实体数。城市易手后逐轮整建制增建或裁撤，30 天稳定窗口后必须精确匹配。
 - 删除首都、粮仓、资源核心、新占城市和攻势抽调中的固定 5000/3000/10000 人门槛。粮食缩编只保留与 `max_size` 成比例的 30% 编制骨架。`CityDefensePlan` 以动态全国防御预算决定总槽数，每城槽上限为 `ceil(需求/平均军队战力)`，再用矩形 Hungarian 最大权匹配求解 `x[army,city_slot]∈{0,1}`。每军最多一个目标，高需求城市可获得多军；`15000` 编制军通过覆盖收益和过量投入惩罚优先覆盖高需求槽。
-- 同四种子 4380 天插桩基准由 `313973ms` 降至 `152096ms`（`2.06×`）；黄河 `0.50～0.60` 版本非插桩长跑约 `95.2s`，末期军队实体为 43～45。
+- 同四种子 4380 天插桩旧基准由 `313973ms` 降至 `152096ms`（`2.06×`）；160 陆城版本非插桩长跑约 `405.2s`，末期军队实体为 100～101。不得将 64 城性能基准直接用于新规模。
 
 ---
 
 ## 3. 新增测试
 
-**快速回归 [tests/test_suite.gd](tests/test_suite.gd)（829 断言 / 0 失败，`./run_tests.sh`）**
+**快速回归 [tests/test_suite.gd](tests/test_suite.gd)（1112 断言 / 0 失败，`./run_tests.sh`）**
 - 对称性/守恒/士气/拆分（阶段 1）：位置交换镜像、总伤亡守恒、士气影响战力、防御反拆分不变。
 - 空间/增援（阶段 2）：接触点触发、增援 ETA（远援不瞬时参战）、正面宽度/预备队、拆分不增总正面；5000 正面下 `1×10000` 与 `2×5000` 完整多回合逐轮火力、伤亡、加权士气、胜负和时长一致。
 - 围城（阶段 3）：`fort_strength` 量纲、`siege_required_manpower` 换算、连续围城曲线标定（ratio=1→30、2→16.5、∞→3）、驻军歼灭后城防仍来自工事。
@@ -101,6 +102,7 @@
 - **镜像等变排序（[37]）**：左右镜像国家的城市物理序逐对一致；交换军队 ID 不改变决策顺序。
 - **五项闭环（[38]）**：跨回合援军累计上限；预备队不伤亡/不掉士气及下一轮替换；单军即时溃退；有效围城兵力；每日粮耗、兵力变化和部分短缺；补给债拆并守恒；同日增援资格冻结。
 - **河运（[1a]）**：两条河西向东、北南分离且无明显折返；码头为旧 35 座约一半；最小连通增补后全图及四国领土仍连通；所有可通行非水路边均无内部河流交点；水路禁止驻边。
+- **160 城分布（[1]）**：正式地图恰有 160 个基础陆城、每国 40 城；低海拔四分位平均最近邻距小于高海拔四分位，中东部/东南平均最近邻距小于西北，至少 10% 陆城位于河岸带，动态间距保持硬下界。
 - **邻接驰援**：普通城市受攻时，邻城闲置军与目标相邻边驻军同日生成入城命令；重点城市按 100% 缺口形成主会战，普通城市按 50% 兵力承担迟滞；低士气/低补给军不抽调。
 - **投降与真实边距**：多国战争中全境失守者向全部交战国投降并清除所有战争关系；正式地图所有三类边逐条等于端点几何长度换算值。
 - **战略图交互**：地图画布响应式但图标仅使用四档离散比例；国家统计按钮可展开/收起卡片窗口，关闭后回收顶部空间；城市中心和道路中点可稳定命中，详情包含控制、工事、驻军、距离与行军信息；攻势箭头在事件完整寿命内持续可见。
@@ -118,8 +120,8 @@
 > item 8 数学边界：若两侧在镜像变换下完全同构且战斗映射到自身，逐局等变要求两侧修正相同；不可能同时强制“不同修正”。非同构空间角色使用独立修正，统计无 A/B 偏置。
 
 **真实地图长跑 [tests/ai_longrun.gd](tests/ai_longrun.gd)（4 种子 × 1095 天）**
-- 合计 `net_captures=88`、`turnovers=136`、`wars=13`、`offensives=76`，既有多城攻势也有邻接迟滞和主会战，没有形成静态僵局。
-- 出现 9 个真实多目标准备计划，单国同轮最大实际并行方向数为 2；各种子 `eliminated_wars=0`、`terminal_alliance_lock=0`，且 `invalid=0`、`commit_failures=0`，稳定超过 30 天的军制偏差为 0；总耗时约 `86.0s`。
+- 合计 `net_captures=17`、`turnovers=93`、`wars=13`、`offensives=40`，既有多城攻势也有邻接迟滞和主会战。
+- 出现 2 个真实多目标准备计划，单国同轮最大实际并行方向数为 3；各种子 `eliminated_wars=0`、`terminal_alliance_lock=0`，且 `invalid=0`、`commit_failures=0`，稳定超过 30 天的军制偏差为 0；总耗时约 `405.2s`。
 
 ---
 

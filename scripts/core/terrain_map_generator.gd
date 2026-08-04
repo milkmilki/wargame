@@ -8,15 +8,22 @@ const LUMA_THRESHOLD: float = 0.015
 const CANDIDATE_STRIDE: int = 2
 const INTERIOR_RADIUS: int = 2
 const RELIEF_RADIUS: int = 3
-const FLAT_CANDIDATE_SHARE: float = 0.90
 const RELIEF_SPACING_WEIGHT: float = 0.015
-const MIN_CITY_SPACING: float = 0.075
+const REFERENCE_CITY_COUNT: int = 64
+const MIN_CITY_SPACING_AT_REFERENCE: float = 0.075
+const LOCAL_SPACING_MIN_FACTOR: float = 0.55
+const LOCAL_SPACING_MAX_FACTOR: float = 1.25
+const SPACING_RELAXATION_STEP: float = 0.96
+const SPACING_RELAXATION_FLOOR: float = 0.72
+const RIVER_BANK_MIN_DISTANCE: float = 0.006
+const RIVER_BANK_IDEAL_DISTANCE: float = 0.020
+const RIVER_BANK_MAX_DISTANCE: float = 0.060
 const MAX_LOCAL_EDGE_LENGTH: float = 0.30
 const PREFERRED_BACKBONE_LENGTH: float = 0.34
 const ROAD_SAMPLE_COUNT: int = 48
 const RIVER_COUNT: int = 2
 const RIVER_CHANNEL_DEVIATION_WEIGHT: float = 36.0
-const RIVER_DOCK_SHARE: float = 0.35
+const RIVER_DOCK_SHARE: float = 0.25
 const RIVER_DOCK_MIN_PER_RIVER: int = 2
 const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
 const RIVER_CROSSING_MERGE_EPS: float = 0.0001
@@ -30,7 +37,7 @@ static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "river-v7:%s:%d" % [source_path, city_count]
+	var cache_key := "settlement-v1:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -52,7 +59,18 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		0.5,
 		2.5
 	)
-	var samples := _sample_cities(analysis, mask, bounds, city_count)
+	var river_paths := _build_river_paths(
+		analysis,
+		mask,
+		bounds
+	)
+	var samples := _sample_cities(
+		analysis,
+		mask,
+		bounds,
+		city_count,
+		river_paths
+	)
 	var road_result := _build_roads(
 		analysis,
 		mask,
@@ -65,6 +83,7 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		bounds,
 		samples,
 		road_result["roads"],
+		river_paths,
 		city_count,
 		map_aspect_ratio
 	)
@@ -201,47 +220,65 @@ static func _sample_cities(
 	image: Image,
 	mask: PackedByteArray,
 	bounds: Rect2i,
-	city_count: int
+	city_count: int,
+	river_paths: Array[Array]
 ) -> Dictionary:
 	var candidates: Array[Dictionary] = []
+	var scale := Vector2(
+		maxi(bounds.size.x, 1),
+		maxi(bounds.size.y, 1)
+	)
+	var map_aspect := (
+		float(maxi(bounds.size.x, 1))
+		/ float(maxi(bounds.size.y, 1))
+	)
+	var base_spacing := minimum_city_spacing_for_count(city_count)
 	for y in range(bounds.position.y, bounds.end.y, CANDIDATE_STRIDE):
 		for x in range(bounds.position.x, bounds.end.x, CANDIDATE_STRIDE):
 			if not _is_interior(mask, image.get_width(), image.get_height(), x, y):
 				continue
 			var relief := _local_relief(image, x, y, RELIEF_RADIUS)
+			var height := image.get_pixel(x, y).get_luminance()
+			var normalized := (
+				Vector2(x, y) - Vector2(bounds.position)
+			) / scale
+			var river_affinity := _river_bank_affinity(
+				Vector2i(x, y),
+				bounds,
+				river_paths
+			)
+			var density := settlement_density(
+				height,
+				relief,
+				normalized,
+				river_affinity
+			)
 			candidates.append({
 				"pixel": Vector2i(x, y),
-				"height": image.get_pixel(x, y).get_luminance(),
+				"height": height,
 				"relief": relief,
+				"density": density,
+				"river_affinity": river_affinity,
+				"spacing": clampf(
+					base_spacing / sqrt(maxf(density, 0.01)),
+					base_spacing * LOCAL_SPACING_MIN_FACTOR,
+					base_spacing * LOCAL_SPACING_MAX_FACTOR
+				),
 			})
 	assert(candidates.size() >= city_count, "平坦陆地候选点不足")
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var relief_a := float(a["relief"])
-		var relief_b := float(b["relief"])
-		if not is_equal_approx(relief_a, relief_b):
-			return relief_a < relief_b
+		var density_a := float(a["density"])
+		var density_b := float(b["density"])
+		if not is_equal_approx(density_a, density_b):
+			return density_a > density_b
 		var pa: Vector2i = a["pixel"]
 		var pb: Vector2i = b["pixel"]
 		return pa.y < pb.y or (pa.y == pb.y and pa.x < pb.x)
 	)
-	var usable_count := maxi(
-		int(round(float(candidates.size()) * FLAT_CANDIDATE_SHARE)),
-		city_count
-	)
-	candidates.resize(usable_count)
-	var center := Vector2(bounds.get_center())
 	var first_index := 0
-	var first_score := INF
-	for i in range(candidates.size()):
-		var point := Vector2(candidates[i]["pixel"])
-		var score := point.distance_squared_to(center) + float(candidates[i]["relief"]) * 10000.0
-		if score < first_score:
-			first_score = score
-			first_index = i
 	var selected: Array[Dictionary] = [candidates[first_index]]
 	var selected_pixels := {candidates[first_index]["pixel"]: true}
-	var scale := Vector2(maxi(bounds.size.x, 1), maxi(bounds.size.y, 1))
-	var map_aspect := float(maxi(bounds.size.x, 1)) / float(maxi(bounds.size.y, 1))
+	var spacing_scale := 1.0
 	while selected.size() < city_count:
 		var best_index := -1
 		var best_score := -INF
@@ -269,20 +306,55 @@ static func _sample_cities(
 					min_distance_sq,
 					candidate_metric.distance_squared_to(chosen_metric)
 				)
-			if min_distance_sq < MIN_CITY_SPACING * MIN_CITY_SPACING:
+				var required_spacing := (
+					(
+						float(candidate["spacing"])
+						+ float(chosen["spacing"])
+					) * 0.5 * spacing_scale
+				)
+				if (
+					candidate_metric.distance_squared_to(
+						chosen_metric
+					)
+					< required_spacing * required_spacing
+				):
+					min_distance_sq = -INF
+					break
+			if min_distance_sq < 0.0:
 				continue
 			var score := (
-				min_distance_sq
+				min_distance_sq * float(candidate["density"])
 				- float(candidate["relief"]) * RELIEF_SPACING_WEIGHT
 			)
-			if score > best_score:
+			var candidate_pixel: Vector2i = candidate["pixel"]
+			var best_pixel: Vector2i = (
+				candidates[best_index]["pixel"]
+				if best_index >= 0
+				else Vector2i(2147483647, 2147483647)
+			)
+			if (
+				score > best_score
+				or (
+					is_equal_approx(score, best_score)
+					and (
+						candidate_pixel.y < best_pixel.y
+						or (
+							candidate_pixel.y == best_pixel.y
+							and candidate_pixel.x < best_pixel.x
+						)
+					)
+				)
+			):
 				best_score = score
 				best_index = i
-		assert(
-			best_index != -1,
-			"无法在最小间距 %.3f 下选满 %d 个城市点"
-				% [MIN_CITY_SPACING, city_count]
-		)
+		if best_index == -1:
+			spacing_scale *= SPACING_RELAXATION_STEP
+			assert(
+				spacing_scale >= SPACING_RELAXATION_FLOOR,
+				"无法在动态最小间距下选满 %d 个城市点"
+					% city_count
+			)
+			continue
 		selected.append(candidates[best_index])
 		selected_pixels[candidates[best_index]["pixel"]] = true
 	selected.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -309,6 +381,104 @@ static func _sample_cities(
 		"heights": heights,
 		"reliefs": reliefs,
 	}
+
+
+static func minimum_city_spacing_for_count(city_count: int) -> float:
+	return (
+		MIN_CITY_SPACING_AT_REFERENCE
+		* sqrt(
+			float(REFERENCE_CITY_COUNT)
+			/ float(maxi(city_count, 1))
+		)
+	)
+
+
+## 聚落密度的唯一评分源。海拔/起伏越低越适居，中东部与东南获得人口带加权，
+## 河岸获得额外加权；返回值也用于反向缩放局部最小间距。
+static func settlement_density(
+	height: float,
+	relief: float,
+	normalized_position: Vector2,
+	river_affinity: float
+) -> float:
+	var lowland := pow(
+		1.0 - clampf(height, 0.0, 1.0),
+		1.6
+	)
+	var eastness := smoothstep(
+		0.10,
+		0.95,
+		clampf(normalized_position.x, 0.0, 1.0)
+	)
+	var southness := smoothstep(
+		0.20,
+		0.95,
+		clampf(normalized_position.y, 0.0, 1.0)
+	)
+	var centrality := 1.0 - clampf(
+		absf(normalized_position.x - 0.62) / 0.62,
+		0.0,
+		1.0
+	)
+	return clampf(
+		0.35
+			+ lowland * 1.00
+			+ eastness * 0.55
+			+ eastness * southness * 0.35
+			+ centrality * 0.15
+			+ clampf(river_affinity, 0.0, 1.0) * 0.70
+			- clampf(relief, 0.0, 1.0) * 1.20,
+		0.35,
+		3.00
+	)
+
+
+static func _river_bank_affinity(
+	pixel: Vector2i,
+	bounds: Rect2i,
+	river_paths: Array[Array]
+) -> float:
+	if river_paths.is_empty():
+		return 0.0
+	var scale := Vector2(
+		maxi(bounds.size.x, 1),
+		maxi(bounds.size.y, 1)
+	)
+	var map_aspect := (
+		float(maxi(bounds.size.x, 1))
+		/ float(maxi(bounds.size.y, 1))
+	)
+	var normalized := (
+		Vector2(pixel) - Vector2(bounds.position)
+	) / scale
+	var minimum_distance := INF
+	for path in river_paths:
+		for river_pixel_value in path:
+			var river_pixel: Vector2i = river_pixel_value
+			var river_normalized := (
+				Vector2(river_pixel) - Vector2(bounds.position)
+			) / scale
+			var delta := normalized - river_normalized
+			delta.x *= map_aspect
+			minimum_distance = minf(
+				minimum_distance,
+				delta.length()
+			)
+	if minimum_distance < RIVER_BANK_MIN_DISTANCE:
+		return 0.0
+	if minimum_distance <= RIVER_BANK_IDEAL_DISTANCE:
+		return inverse_lerp(
+			RIVER_BANK_MIN_DISTANCE,
+			RIVER_BANK_IDEAL_DISTANCE,
+			minimum_distance
+		)
+	if minimum_distance >= RIVER_BANK_MAX_DISTANCE:
+		return 0.0
+	return 1.0 - inverse_lerp(
+		RIVER_BANK_IDEAL_DISTANCE,
+		RIVER_BANK_MAX_DISTANCE,
+		minimum_distance
+	)
 
 
 static func _is_interior(
@@ -504,14 +674,10 @@ static func _build_river_transport(
 	bounds: Rect2i,
 	samples: Dictionary,
 	base_roads: Array[Dictionary],
+	river_paths: Array[Array],
 	city_count: int,
 	map_aspect_ratio: float
 ) -> Dictionary:
-	var river_paths := _build_river_paths(
-		image,
-		mask,
-		bounds
-	)
 	var dock_result := _find_river_docks(
 		image,
 		bounds,

@@ -4,7 +4,8 @@ extends RefCounted
 ## 并负责确定性世界生成。所有可变游戏状态都归此对象所有。
 
 const GRID: int = 8                         ## 8x8 网格
-const CITY_COUNT: int = GRID * GRID         ## 64
+const CITY_COUNT: int = GRID * GRID         ## 64 城兼容网格夹具
+const TERRAIN_CITY_COUNT: int = 160         ## 正式高度图基础陆城；动态码头另计
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
@@ -80,7 +81,10 @@ func generate_world(world_seed: int = 12345) -> void:
 	_reset_world(world_seed)
 	uses_heightmap = true
 	_generate_nations(DiplomaticRelation.NEUTRAL)
-	var terrain := TerrainMapGenerator.build(TERRAIN_MAP_PATH, CITY_COUNT)
+	var terrain := TerrainMapGenerator.build(
+		TERRAIN_MAP_PATH,
+		TERRAIN_CITY_COUNT
+	)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
 	_generate_terrain_docks(terrain)
@@ -91,9 +95,18 @@ func generate_world(world_seed: int = 12345) -> void:
 	_initialize_capitals_and_warehouses()
 	_generate_armies()
 
-	assert(land_cities().size() == CITY_COUNT, "陆地城市数应为 64")
-	assert(cities.size() > CITY_COUNT, "正式地图应生成河运码头")
-	assert(edges.size() >= CITY_COUNT - 1, "道路图必须连通")
+	assert(
+		land_cities().size() == TERRAIN_CITY_COUNT,
+		"正式地图陆地城市数应为 %d" % TERRAIN_CITY_COUNT
+	)
+	assert(
+		cities.size() > TERRAIN_CITY_COUNT,
+		"正式地图应生成河运码头"
+	)
+	assert(
+		edges.size() >= TERRAIN_CITY_COUNT - 1,
+		"道路图必须连通"
+	)
 	assert(_force_structure_matches_targets(), "正式地图初始军制必须匹配城市比例")
 
 
@@ -212,7 +225,7 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 	map_source_region_normalized = terrain["source_region_normalized"]
 	province_map_size = terrain["province_map_size"]
 	province_ids = (terrain["province_ids"] as PackedInt32Array).duplicate()
-	for id in range(CITY_COUNT):
+	for id in range(positions.size()):
 		var city := City.new()
 		city.id = id
 		city.coord = Vector2i(id % GRID, id / GRID)
@@ -303,7 +316,7 @@ func _assign_balanced_nations() -> void:
 			return a.map_position.x < b.map_position.x
 		return a.map_position.y < b.map_position.y
 	)
-	var side_size := CITY_COUNT / 2
+	var side_size := ordered.size() / 2
 	for side in range(2):
 		var side_cities: Array[City] = []
 		for index in range(side * side_size, (side + 1) * side_size):
