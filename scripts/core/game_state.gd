@@ -735,12 +735,7 @@ func _generate_armies() -> void:
 				INITIAL_LIGHT_ARMY_SIZE
 			))
 		for index in range(heavy_count):
-			var city: City = owned[
-				int(floor(
-					(float(index) + 0.5) * float(owned.size())
-						/ float(maxi(heavy_count, 1))
-				)) % owned.size()
-			]
+			var city: City = cities[nation.capital_city_id]
 			_initialize_army_attributes(create_army(
 				nation.id,
 				city.id,

@@ -46,7 +46,8 @@ const CONTACT_EPS: float = 0.15
 ## 归一化距离 <= 此值才算「抵达战场」并加入战斗。抵达前继续行军、不贡献攻击/不受伤亡/不占 frontage。
 ## eta = 剩余归一化距离 × edge_travel_days(edge)，由 move_progress 每日推进兑现。
 const REINFORCEMENT_RADIUS: float = 0.15
-const AI_DECISION_INTERVAL_DAYS: int = 5
+const AI_DECISION_INTERVAL_DAYS: int = 10
+const GRID_AI_DECISION_INTERVAL_DAYS: int = 5
 const DIPLOMACY_DECISION_INTERVAL_DAYS: int = DAYS_PER_MONTH
 const NEW_ARMY_SIZE: int = 5000
 const NARROW_ROUTE_FORMATION_SIZE: int = Edge.MIN_MANPOWER
@@ -76,6 +77,7 @@ const CAMPAIGN_POST_CAPTURE_SUPPLY_MIN: float = 0.75
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LOCAL_RELIEF_DELAY_COMMIT_RATIO: float = 0.50
 const LOCAL_RELIEF_READINESS_MIN: float = 0.50
+const LOCAL_RELIEF_MAX_LIGHT_ARMIES: int = 2
 
 var state: GameState
 var _time_acc: float = 0.0
@@ -194,7 +196,12 @@ func _advance_day() -> void:
 	# 断粮后果读取刚计算的当日满足率，按 1/30 累计士气与减员。
 	_apply_supply_pressure()
 	ArmyCoordinator.merge_colocated(state)
-	if state.day % AI_DECISION_INTERVAL_DAYS == 0 or _ai_last_decision_day == -1:
+	var ai_decision_interval := (
+		AI_DECISION_INTERVAL_DAYS
+		if state.uses_heightmap
+		else GRID_AI_DECISION_INTERVAL_DAYS
+	)
+	if state.day % ai_decision_interval == 0 or _ai_last_decision_day == -1:
 		_ai_assign_targets()
 	_advance_campaign_echelons()
 	_advance_priority_city_defense_echelons()
@@ -1580,7 +1587,14 @@ func _ai_assign_targets() -> void:
 	_ai_supply_network_cache.clear()
 	_ai_last_decision_day = state.day
 	var nation_order := _ai_nation_ids_for_day(
-		state.nations.size(), state.day, rotate_ai_nation_order
+		state.nations.size(),
+		state.day,
+		rotate_ai_nation_order,
+		(
+			AI_DECISION_INTERVAL_DAYS
+			if state.uses_heightmap
+			else GRID_AI_DECISION_INTERVAL_DAYS
+		)
 	)
 	var managed_nations: Array[int] = []
 	var force_contexts := {}
@@ -1859,12 +1873,13 @@ func _strategy_snapshot_for(view: AiWorldView) -> StrategicMapSnapshot:
 static func _ai_nation_ids_for_day(
 	nation_count: int,
 	day: int,
-	rotate_order: bool = true
+	rotate_order: bool = true,
+	decision_interval_days: int = AI_DECISION_INTERVAL_DAYS
 ) -> Array[int]:
 	var result: Array[int] = []
 	if nation_count <= 0:
 		return result
-	var decision_round := day / AI_DECISION_INTERVAL_DAYS
+	var decision_round := day / maxi(decision_interval_days, 1)
 	var start := posmod(decision_round, nation_count) if rotate_order else 0
 	for offset in range(nation_count):
 		result.append((start + offset) % nation_count)
@@ -1995,11 +2010,11 @@ func _ai_manage_force_structure(
 				"超过城市比例军制目标，整建制裁撤"
 			)
 	var missing_formation_size := (
-		GameState.INITIAL_HEAVY_ARMY_SIZE
-		if heavy_armies.size() < target_heavy
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+		if light_armies.size() < target_light
 		else (
-			GameState.INITIAL_LIGHT_ARMY_SIZE
-			if light_armies.size() < target_light
+			GameState.INITIAL_HEAVY_ARMY_SIZE
+			if heavy_armies.size() < target_heavy
 			else 0
 		)
 	)
@@ -2561,6 +2576,25 @@ func _campaign_army_origin(
 	return origin
 
 
+func _can_use_army_for_offensive(
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator,
+	army: Army,
+	target_city: int
+) -> bool:
+	if defense_plan == null:
+		return true
+	if state.uses_heightmap:
+		return defense_plan.can_join_offensive(
+			army,
+			target_city
+		)
+	return (
+		coordinator == null
+		or defense_plan.can_redeploy(army, coordinator)
+	)
+
+
 func _can_assign_campaign_preparation_army(
 	nation_id: int,
 	army: Army,
@@ -2680,14 +2714,6 @@ func _ensure_campaign_preparation_plan(
 				Army.State.HOLDING,
 			]
 			or state.day < army.defensive_deployment_until_day
-			or (
-				defense_plan != null
-				and coordinator != null
-				and not defense_plan.can_redeploy(
-					army,
-					coordinator
-				)
-			)
 		):
 			continue
 		available.append(army)
@@ -2731,14 +2757,20 @@ func _ensure_campaign_preparation_plan(
 				target_city
 			):
 				continue
+			if not _can_use_army_for_offensive(
+				defense_plan,
+				coordinator,
+				army,
+				target_city
+			):
+				continue
 			var origin := _campaign_army_origin(
 				army,
 				nation_id
 			)
 			if origin < 0:
 				continue
-			var field := Pathfinding.dijkstra_field(
-				state,
+			var field := view.path_field(
 				origin,
 				nation_id,
 				false,
@@ -2764,12 +2796,17 @@ func _ensure_campaign_preparation_plan(
 				"distance": best_distance,
 			})
 		ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			var army_a: Army = a["army"]
+			var army_b: Army = b["army"]
+			if (
+				state.uses_heightmap
+				and army_a.max_size != army_b.max_size
+			):
+				return army_a.max_size > army_b.max_size
 			var distance_a := float(a["distance"])
 			var distance_b := float(b["distance"])
 			if not is_equal_approx(distance_a, distance_b):
 				return distance_a < distance_b
-			var army_a: Army = a["army"]
-			var army_b: Army = b["army"]
 			if army_a.size != army_b.size:
 				return army_a.size > army_b.size
 			return EquivariantOrder.army_less(
@@ -2780,44 +2817,8 @@ func _ensure_campaign_preparation_plan(
 				target_city
 			)
 		)
-		var staged_required := _campaign_minimum_staged_troops(
-			nation_id,
-			target_city
-		)
-		var target_limit := int(ceil(
-			float(staged_required)
-				* CAMPAIGN_TARGET_COMMIT_RATIO
-		))
-		var direct_defense := 0.0
-		for defender in state.armies_at_city(target_city):
-			if state.is_enemy(
-				nation_id,
-				defender.owner_nation
-			):
-				direct_defense += ArmyPower.effective(defender)
-		var target_defense := maxf(
-			direct_defense,
-			threat.threat_at(target_city)
-		)
-		if state.recognized_owner_of(target_city) != nation_id:
-			target_defense += ArmyPower.city_defense(
-				state.cities[target_city]
-			)
-		var planned_preparation_days := (
-			_campaign_offensive_interval(nation_id)
-			if nation.campaign_last_offensive_day >= 0
-			else 0
-		)
-		var target_power := (
-			target_defense
-			* _campaign_attack_ratio_threshold(nation_id)
-			/ offensive_preparation_multiplier(
-				planned_preparation_days
-			)
-		)
 		var selected: Array[Army] = []
 		var selected_troops := 0
-		var selected_power := 0.0
 		var future_target_slots := mini(
 			mini(
 				target_candidates.size(),
@@ -2829,19 +2830,137 @@ func _ensure_campaign_preparation_plan(
 			available.size() - maxi(future_target_slots, 0),
 			1
 		)
-		for entry in ranked:
+		if not state.uses_heightmap:
+			var grid_target_limit := int(ceil(
+				float(_campaign_minimum_staged_troops(
+					nation_id,
+					target_city
+				)) * CAMPAIGN_TARGET_COMMIT_RATIO
+			))
+			var grid_direct_defense := 0.0
+			for defender in state.armies_at_city(target_city):
+				if state.is_enemy(
+					nation_id,
+					defender.owner_nation
+				):
+					grid_direct_defense += ArmyPower.effective(
+						defender
+					)
+			var grid_target_defense := maxf(
+				grid_direct_defense,
+				threat.threat_at(target_city)
+			)
 			if (
-				selected.size() >= selection_limit
-				or (
-						selected_troops >= target_limit
-						and selected_power >= target_power
-				)
+				state.recognized_owner_of(target_city)
+					!= nation_id
 			):
-				break
-			var army: Army = entry["army"]
-			selected.append(army)
-			selected_troops += army.size
-			selected_power += ArmyPower.effective(army)
+				grid_target_defense += ArmyPower.city_defense(
+					state.cities[target_city]
+				)
+			var grid_preparation_days := (
+				_campaign_offensive_interval(nation_id)
+				if nation.campaign_last_offensive_day >= 0
+				else 0
+			)
+			var grid_target_power := (
+				grid_target_defense
+				* _campaign_attack_ratio_threshold(nation_id)
+				/ offensive_preparation_multiplier(
+					grid_preparation_days
+				)
+			)
+			var grid_selected_power := 0.0
+			for entry in ranked:
+				if (
+					selected.size() >= selection_limit
+					or (
+						selected_troops >= grid_target_limit
+						and grid_selected_power
+							>= grid_target_power
+					)
+				):
+					break
+				var grid_army: Army = entry["army"]
+				selected.append(grid_army)
+				selected_troops += grid_army.size
+				grid_selected_power += ArmyPower.effective(
+					grid_army
+				)
+			if selected_troops <= 0:
+				continue
+			nation.campaign_preparation_targets.append(
+				target_city
+			)
+			for grid_army in selected:
+				_assign_campaign_preparation_army(
+					nation_id,
+					grid_army,
+					target_city
+				)
+				available.erase(grid_army)
+			continue
+		var ranked_heavy: Array[Dictionary] = []
+		var ranked_light: Array[Dictionary] = []
+		for entry in ranked:
+			var ranked_army: Army = entry["army"]
+			if (
+				ranked_army.max_size
+					== GameState.INITIAL_HEAVY_ARMY_SIZE
+			):
+				ranked_heavy.append(entry)
+			elif (
+				ranked_army.max_size
+					== GameState.INITIAL_LIGHT_ARMY_SIZE
+			):
+				ranked_light.append(entry)
+		if ranked_heavy.is_empty():
+			continue
+		var rank_equivalent := func(
+			a: Dictionary,
+			b: Dictionary
+		) -> bool:
+			var army_a: Army = a["army"]
+			var army_b: Army = b["army"]
+			return (
+				is_equal_approx(
+					float(a["distance"]),
+					float(b["distance"])
+				)
+				and army_a.size == army_b.size
+				and not EquivariantOrder.army_less(
+					state,
+					nation_id,
+					army_a,
+					army_b,
+					target_city
+				)
+				and not EquivariantOrder.army_less(
+					state,
+					nation_id,
+					army_b,
+					army_a,
+					target_city
+				)
+			)
+		for heavy_entry in ranked_heavy:
+			var spearhead: Army = heavy_entry["army"]
+			selected.append(spearhead)
+			selected_troops += spearhead.size
+		if (
+			state.uses_heightmap
+			and not ranked_light.is_empty()
+		):
+			var support_is_unique: bool = (
+				ranked_light.size() == 1
+				or not rank_equivalent.call(
+					ranked_light[0],
+					ranked_light[1]
+				)
+			)
+			if support_is_unique:
+				var support: Army = ranked_light[0]["army"]
+				selected.append(support)
+				selected_troops += support.size
 		if (
 			selected_troops <= 0
 			or (
@@ -2926,6 +3045,40 @@ func _assign_offensive_staging_orders(
 	)
 	if staging.is_empty():
 		return false
+	var path_view := (
+		defense_plan.view
+		if defense_plan != null
+		else _build_ai_view(nation_id)
+	)
+	var committed_heavy := 0
+	var committed_light := 0
+	if not assigned_only:
+		var objective_token := "目标城市%d" % objective_city
+		for committed_army in state.armies:
+			if (
+				committed_army.owner_nation != nation_id
+				or committed_army.size <= 0
+				or not committed_army.ai_order_reason.contains(
+					objective_token
+				)
+				or (
+					committed_army.state == Army.State.IDLE
+					and not staging.has(
+						committed_army.location_city
+					)
+				)
+			):
+				continue
+			if (
+				committed_army.max_size
+					== GameState.INITIAL_HEAVY_ARMY_SIZE
+			):
+				committed_heavy += 1
+			elif (
+				committed_army.max_size
+					== GameState.INITIAL_LIGHT_ARMY_SIZE
+			):
+				committed_light += 1
 	var changed := false
 	var orders := 0
 	for staging_city in staging:
@@ -2951,19 +3104,19 @@ func _assign_offensive_staging_orders(
 						)
 				)
 				or state.day < army.defensive_deployment_until_day
-				or (
-					defense_plan != null
-					and coordinator != null
-					and not defense_plan.can_redeploy(
-						army,
-						coordinator
-					)
+				or not _can_use_army_for_offensive(
+					defense_plan,
+					coordinator,
+					army,
+					objective_city
 				)
 			):
 				continue
 			staging_armies.append(army)
 		staging_armies.sort_custom(
 			func(a: Army, b: Army) -> bool:
+				if a.max_size != b.max_size:
+					return a.max_size > b.max_size
 				return EquivariantOrder.army_less(
 					state,
 					nation_id,
@@ -2973,6 +3126,13 @@ func _assign_offensive_staging_orders(
 				)
 		)
 		for army in staging_armies:
+			if (
+				not assigned_only
+				and army.max_size
+					== GameState.INITIAL_LIGHT_ARMY_SIZE
+				and committed_light >= committed_heavy
+			):
+				continue
 			var hold := ActionCandidate.make(
 				ActionCandidate.Kind.HOLD,
 				1000.0,
@@ -2991,6 +3151,17 @@ func _assign_offensive_staging_orders(
 					)
 				changed = true
 				orders += 1
+				if not assigned_only:
+					if (
+						army.max_size
+							== GameState.INITIAL_HEAVY_ARMY_SIZE
+					):
+						committed_heavy += 1
+					elif (
+						army.max_size
+							== GameState.INITIAL_LIGHT_ARMY_SIZE
+					):
+						committed_light += 1
 			break
 	var staged := (
 		_campaign_preparation_staged_troops(
@@ -3044,18 +3215,15 @@ func _assign_offensive_staging_orders(
 					)
 			)
 			or state.day < army.defensive_deployment_until_day
-			or (
-				defense_plan != null
-				and coordinator != null
-				and not defense_plan.can_redeploy(
-					army,
-					coordinator
-				)
+			or not _can_use_army_for_offensive(
+				defense_plan,
+				coordinator,
+				army,
+				objective_city
 			)
 		):
 			continue
-		var field := Pathfinding.dijkstra_field(
-			state,
+		var field := path_view.path_field(
 			army.location_city,
 			nation_id,
 			false,
@@ -3081,6 +3249,10 @@ func _assign_offensive_staging_orders(
 	# （Dijkstra 的 dist 与松弛顺序无关，镜像世界左右严格相等），
 	# 消除“先创建者（低 id）先动”的偏置，保证左右选出互为镜像的援军。
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var army_a: Army = a["army"]
+		var army_b: Army = b["army"]
+		if army_a.max_size != army_b.max_size:
+			return army_a.max_size > army_b.max_size
 		var da: float = a["best_distance"]
 		var db: float = b["best_distance"]
 		if not is_equal_approx(da, db):
@@ -3088,8 +3260,8 @@ func _assign_offensive_staging_orders(
 		return EquivariantOrder.army_less(
 			state,
 			nation_id,
-			a["army"] as Army,
-			b["army"] as Army,
+			army_a,
+			army_b,
 			objective_city
 		)
 	)
@@ -3101,6 +3273,13 @@ func _assign_offensive_staging_orders(
 			break
 		var army: Army = entry["army"]
 		var best_city: int = entry["best_city"]
+		if (
+			not assigned_only
+			and army.max_size
+				== GameState.INITIAL_LIGHT_ARMY_SIZE
+			and committed_light >= committed_heavy
+		):
+			continue
 		var reinforce := ActionCandidate.make(
 			ActionCandidate.Kind.REINFORCE,
 			900.0,
@@ -3119,6 +3298,17 @@ func _assign_offensive_staging_orders(
 			changed = true
 			orders += 1
 			staged += army.size
+			if not assigned_only:
+				if (
+					army.max_size
+						== GameState.INITIAL_HEAVY_ARMY_SIZE
+				):
+					committed_heavy += 1
+				elif (
+					army.max_size
+						== GameState.INITIAL_LIGHT_ARMY_SIZE
+				):
+					committed_light += 1
 	var actual_staged := (
 		_campaign_preparation_staged_troops(
 			nation_id,
@@ -3155,13 +3345,11 @@ func _assign_offensive_staging_orders(
 					)
 			)
 			or state.day < army.defensive_deployment_until_day
-			or (
-				defense_plan != null
-				and coordinator != null
-				and not defense_plan.can_redeploy(
-					army,
-					coordinator
-				)
+			or not _can_use_army_for_offensive(
+				defense_plan,
+				coordinator,
+				army,
+				objective_city
 			)
 		):
 			continue
@@ -3187,6 +3375,13 @@ func _assign_offensive_staging_orders(
 	for army in holders:
 		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 			break
+		if (
+			not assigned_only
+			and army.max_size
+				== GameState.INITIAL_LIGHT_ARMY_SIZE
+			and committed_light >= committed_heavy
+		):
+			continue
 		var friendly_endpoint := army.move_from
 		if not state.has_military_access(
 			nation_id, state.cities[friendly_endpoint].owner_nation
@@ -3209,6 +3404,17 @@ func _assign_offensive_staging_orders(
 				)
 			changed = true
 			orders += 1
+			if not assigned_only:
+				if (
+					army.max_size
+						== GameState.INITIAL_HEAVY_ARMY_SIZE
+				):
+					committed_heavy += 1
+				elif (
+					army.max_size
+						== GameState.INITIAL_LIGHT_ARMY_SIZE
+				):
+					committed_light += 1
 	return changed
 
 
@@ -3889,6 +4095,31 @@ func _advance_adjacent_city_relief(
 		)
 	if remaining_gap <= 0.0:
 		return
+	var relief_reason_token := (
+		"邻接战区驰援：城市%d受攻" % city_id
+	)
+	var committed_relief_armies := 0
+	for committed_army in state.armies:
+		if (
+			committed_army.owner_nation == nation_id
+			and committed_army.size > 0
+			and committed_army.max_size
+				== GameState.INITIAL_LIGHT_ARMY_SIZE
+			and committed_army.ai_order_reason.contains(
+				relief_reason_token
+			)
+			and committed_army.state in [
+				Army.State.MOVING,
+				Army.State.FIGHTING,
+				Army.State.RECOVERING,
+			]
+		):
+			committed_relief_armies += 1
+	if (
+		committed_relief_armies
+			>= LOCAL_RELIEF_MAX_LIGHT_ARMIES
+	):
+		return
 	var neighboring_cities := {}
 	for neighbor in state.neighbors(city_id):
 		var edge := state.edge_of(city_id, neighbor)
@@ -3906,6 +4137,8 @@ func _advance_adjacent_city_relief(
 		if (
 			army.owner_nation != nation_id
 			or army.size <= 0
+			or army.max_size
+				!= GameState.INITIAL_LIGHT_ARMY_SIZE
 			or army.morale < LOCAL_RELIEF_READINESS_MIN
 			or army.supply_ratio < LOCAL_RELIEF_READINESS_MIN
 		):
@@ -3958,7 +4191,11 @@ func _advance_adjacent_city_relief(
 		)
 	)
 	for entry in candidates:
-		if remaining_gap <= 0.0:
+		if (
+			remaining_gap <= 0.0
+			or committed_relief_armies
+				>= LOCAL_RELIEF_MAX_LIGHT_ARMIES
+		):
 			break
 		var army: Army = entry["army"]
 		var action_kind := int(entry["kind"])
@@ -3979,6 +4216,7 @@ func _advance_adjacent_city_relief(
 		nation.campaign_attack_echelons.erase(army.id)
 		nation.campaign_launched_armies.erase(army.id)
 		remaining_gap -= ArmyPower.effective(army)
+		committed_relief_armies += 1
 
 
 func _is_priority_defense_city(
@@ -6578,7 +6816,11 @@ func _start_morale_retreat_from_city(
 	):
 		_start_recovering(army, current_city)
 		return
-	var path := Pathfinding.nearest_friendly_city(state, army, excluded_city_id)
+	var path := Pathfinding.nearest_friendly_city(
+		state,
+		army,
+		excluded_city_id
+	)
 	if path.is_empty():
 		army.size = 0   # 已无可达友城：溃散
 		return

@@ -20,11 +20,23 @@ func _init() -> void:
 	var total_post_capture_attacks := 0
 	var total_post_capture_edge_holds := 0
 	var total_post_capture_city_holds := 0
+	var total_ai_orders := 0
+	var total_redeployment_orders := 0
+	var total_role_deployment_orders := 0
+	var global_max_idle_city_stack := 0
+	var global_max_frontier_idle_stack := 0
+	var global_max_interior_idle_stack := 0
 	var legacy_capture_fort := (
 		OS.get_environment("AI_LONGRUN_LEGACY_CAPTURE_FORT")
 			== "1"
 	)
-	for world_seed in SEEDS:
+	var selected_seeds := SEEDS.duplicate()
+	var seed_override := OS.get_environment(
+		"AI_LONGRUN_SEED"
+	)
+	if not seed_override.is_empty():
+		selected_seeds = [int(seed_override)]
+	for world_seed in selected_seeds:
 		var state := GameState.new()
 		state.generate_world(world_seed)
 		var simulation := Simulation.new()
@@ -45,6 +57,13 @@ func _init() -> void:
 		var post_capture_attacks := 0
 		var post_capture_edge_holds := 0
 		var post_capture_city_holds := 0
+		var ai_orders := 0
+		var redeployment_orders := 0
+		var role_deployment_orders := 0
+		var max_idle_city_stack := 0
+		var max_frontier_idle_stack := 0
+		var max_interior_idle_stack := 0
+		var max_idle_stack_context := ""
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(DAYS):
 			if state.winner != -1:
@@ -95,7 +114,38 @@ func _init() -> void:
 					int(event["wave"]),
 				]
 				offensive_events[event_key] = true
+			var idle_city_stacks := {}
 			for army in state.armies:
+				if (
+					army.size > 0
+					and army.location_city >= 0
+					and army.state in [
+						Army.State.IDLE,
+						Army.State.RECOVERING,
+					]
+				):
+					var stack_key := (
+						army.owner_nation
+							* state.cities.size()
+						+ army.location_city
+					)
+					idle_city_stacks[stack_key] = (
+						int(idle_city_stacks.get(stack_key, 0))
+						+ 1
+					)
+				if army.ai_order_created_day == state.day:
+					ai_orders += 1
+					if army.ai_action in [
+						ActionCandidate.Kind.HOLD,
+						ActionCandidate.Kind.REINFORCE,
+						ActionCandidate.Kind.MERGE,
+						ActionCandidate.Kind.RETREAT,
+					]:
+						redeployment_orders += 1
+					if army.ai_order_reason.begins_with(
+						"填线部署"
+					):
+						role_deployment_orders += 1
 				if (
 					army.ai_order_created_day == state.day
 					and army.ai_order_reason.contains(
@@ -125,6 +175,69 @@ func _init() -> void:
 							army.owner_nation,
 						]
 					] = true
+			for stack_key_value in idle_city_stacks:
+				var stack_key := int(stack_key_value)
+				var stack_size := int(
+					idle_city_stacks[stack_key]
+				)
+				var owner_nation := int(
+					stack_key / state.cities.size()
+				)
+				var city_id := (
+					stack_key % state.cities.size()
+				)
+				var frontier := false
+				for neighbor in state.neighbors(city_id):
+					if (
+						state.cities[neighbor].owner_nation
+							!= owner_nation
+					):
+						frontier = true
+						break
+				if stack_size > max_idle_city_stack:
+					max_idle_city_stack = stack_size
+					var stack_armies: Array[String] = []
+					for stacked_army in state.armies:
+						if (
+							stacked_army.owner_nation
+								!= owner_nation
+							or stacked_army.location_city
+								!= city_id
+							or stacked_army.state not in [
+								Army.State.IDLE,
+								Army.State.RECOVERING,
+							]
+						):
+							continue
+						stack_armies.append(
+							"%d:%d:%d:%s"
+							% [
+								stacked_army.max_size,
+								stacked_army.state,
+								stacked_army.ai_action,
+								stacked_army.ai_order_reason,
+							]
+						)
+					max_idle_stack_context = (
+						"day=%d nation=%d city=%d frontier=%d armies=%s"
+						% [
+							state.day,
+							owner_nation,
+							city_id,
+							1 if frontier else 0,
+							str(stack_armies),
+						]
+					)
+				if frontier:
+					max_frontier_idle_stack = maxi(
+						max_frontier_idle_stack,
+						stack_size
+					)
+				else:
+					max_interior_idle_stack = maxi(
+						max_interior_idle_stack,
+						stack_size
+					)
 		var captures := 0
 		for city in state.cities:
 			if city.owner_nation != initial_owners[city.id]:
@@ -332,6 +445,21 @@ func _init() -> void:
 		total_post_capture_attacks += post_capture_attacks
 		total_post_capture_edge_holds += post_capture_edge_holds
 		total_post_capture_city_holds += post_capture_city_holds
+		total_ai_orders += ai_orders
+		total_redeployment_orders += redeployment_orders
+		total_role_deployment_orders += role_deployment_orders
+		global_max_idle_city_stack = maxi(
+			global_max_idle_city_stack,
+			max_idle_city_stack
+		)
+		global_max_frontier_idle_stack = maxi(
+			global_max_frontier_idle_stack,
+			max_frontier_idle_stack
+		)
+		global_max_interior_idle_stack = maxi(
+			global_max_interior_idle_stack,
+			max_interior_idle_stack
+		)
 		print(
 			(
 				"seed=%d day=%d alive=%d eliminated_wars=%d terminal_alliance_lock=%d "
@@ -344,6 +472,8 @@ func _init() -> void:
 				+ "ally=%d leave=%d "
 				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d "
 				+ "defended_cities=%d force_mismatches=%d/%d "
+				+ "orders=%d redeploy=%d role_deploy=%d "
+				+ "max_idle_stack=%d/%d/%d stack_at=%s "
 				+ "commit_failures=%d ms=%d"
 			)
 			% [
@@ -385,6 +515,13 @@ func _init() -> void:
 				defended_cities_total,
 				force_structure_mismatches.size(),
 				persistent_force_structure_mismatches.size(),
+				ai_orders,
+				redeployment_orders,
+				role_deployment_orders,
+				max_idle_city_stack,
+				max_frontier_idle_stack,
+				max_interior_idle_stack,
+				max_idle_stack_context,
 				simulation.ai_command_commit_failure_total,
 				elapsed,
 			]
@@ -431,7 +568,9 @@ func _init() -> void:
 			"mode=%s total_net_captures=%d total_turnovers=%d "
 			+ "total_wars=%d total_offensives=%d total_full_prep=%d "
 			+ "total_multi_prep=%d max_parallel=%d "
-			+ "total_phase2=%d/%d/%d total_mobilized=%d"
+			+ "total_phase2=%d/%d/%d total_mobilized=%d "
+			+ "total_orders=%d total_redeploy=%d "
+			+ "total_role_deploy=%d max_idle_stack=%d/%d/%d"
 		)
 		% [
 			"legacy_fort" if legacy_capture_fort else "recovery_fort",
@@ -446,6 +585,12 @@ func _init() -> void:
 			total_post_capture_edge_holds,
 			total_post_capture_city_holds,
 			total_mobilization_armies,
+			total_ai_orders,
+			total_redeployment_orders,
+			total_role_deployment_orders,
+			global_max_idle_city_stack,
+			global_max_frontier_idle_stack,
+			global_max_interior_idle_stack,
 		]
 	)
 	var total_elapsed_ms := Time.get_ticks_msec() - total_start
