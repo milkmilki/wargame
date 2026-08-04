@@ -1199,9 +1199,22 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 	):
 		return false
 	var changed := false
+	var war_outcome_a := 0.0
+	var war_outcome_b := 0.0
+	var territories_transferred := 0
 	match kind:
 		DiplomacyAI.Action.MAKE_PEACE:
 			if state.is_enemy(nation_a, nation_b):
+				war_outcome_a = DiplomacyAI.war_situation_score(
+					state,
+					nation_a,
+					nation_b
+				)
+				war_outcome_b = DiplomacyAI.war_situation_score(
+					state,
+					nation_b,
+					nation_a
+				)
 				changed = state.set_diplomatic_relation(
 					nation_a,
 					nation_b,
@@ -1213,6 +1226,7 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					var transferred := state.recognize_occupied_territory(
 						nation_a, nation_b
 					)
+					territories_transferred = transferred.size()
 					if not transferred.is_empty():
 						reason += "；和平协议确认%d座城市的领土转移" % transferred.size()
 					state.clear_war_objective(nation_a, nation_b)
@@ -1312,6 +1326,10 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 		event["mobilization_armies"] = int(action["mobilization_armies"])
 	if action.has("surrendering_nation"):
 		event["surrendering_nation"] = int(action["surrendering_nation"])
+	if kind == DiplomacyAI.Action.MAKE_PEACE:
+		event["war_outcome_a"] = war_outcome_a
+		event["war_outcome_b"] = war_outcome_b
+		event["territories_transferred"] = territories_transferred
 	state.diplomatic_history.append(event)
 	_record_diplomatic_action(nation_a, kind, nation_b, reason)
 	_record_diplomatic_action(nation_b, kind, nation_a, reason)

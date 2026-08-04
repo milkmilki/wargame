@@ -130,10 +130,12 @@ func _init() -> void:
 			if city.owner_nation != initial_owners[city.id]:
 				captures += 1
 		var alive := 0
+		var alive_nations: Array[int] = []
 		var eliminated_war_relations := 0
 		for nation in state.nations:
 			if nation.alive:
 				alive += 1
+				alive_nations.append(nation.id)
 			if state.cities_of(nation.id).is_empty():
 				for other in state.nations:
 					if (
@@ -141,6 +143,19 @@ func _init() -> void:
 						and state.is_enemy(nation.id, other.id)
 					):
 						eliminated_war_relations += 1
+		var terminal_alliance_lock := false
+		if alive_nations.size() == 2:
+			var finalist_a := alive_nations[0]
+			var finalist_b := alive_nations[1]
+			terminal_alliance_lock = (
+				state.is_allied(finalist_a, finalist_b)
+				and state.day
+					- state.relation_since(
+						finalist_a,
+						finalist_b
+					)
+					>= DiplomacyAI.MIN_ALLIANCE_DAYS
+			)
 		var ordered := 0
 		var invalid := 0
 		var troops := 0
@@ -308,7 +323,8 @@ func _init() -> void:
 		total_post_capture_city_holds += post_capture_city_holds
 		print(
 			(
-				"seed=%d day=%d alive=%d eliminated_wars=%d armies=%d troops=%d manpower=%d food=%d "
+				"seed=%d day=%d alive=%d eliminated_wars=%d terminal_alliance_lock=%d "
+				+ "armies=%d troops=%d manpower=%d food=%d "
 				+ "starving=%d net_captures=%d turnovers=%d ordered=%d invalid=%d "
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
 				+ "offensives=%d full_prep=%d multi_prep=%d max_parallel=%d "
@@ -324,6 +340,7 @@ func _init() -> void:
 				state.day,
 				alive,
 				eliminated_war_relations,
+				1 if terminal_alliance_lock else 0,
 				state.armies.size(),
 				troops,
 				manpower,
@@ -369,6 +386,7 @@ func _init() -> void:
 			ordered == 0
 			or invalid > 0
 			or eliminated_war_relations > 0
+			or terminal_alliance_lock
 			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0
 			or (

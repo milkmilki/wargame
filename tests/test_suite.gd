@@ -5721,7 +5721,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	]
 	ordinary_enemy_city.owner_nation = 0
 	ordinary_enemy_city.occupation_sponsor_nation = 0
-	var ordinary_situation := DiplomacyAI._war_situation_score(
+	var ordinary_situation := DiplomacyAI.war_situation_score(
 		formula_state,
 		0,
 		1
@@ -5740,7 +5740,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	ordinary_enemy_city.occupation_sponsor_nation = -1
 	important_enemy_city.owner_nation = 0
 	important_enemy_city.occupation_sponsor_nation = 0
-	var important_situation := DiplomacyAI._war_situation_score(
+	var important_situation := DiplomacyAI.war_situation_score(
 		formula_state,
 		0,
 		1
@@ -7552,6 +7552,165 @@ func _test_diplomacy_state_and_ai() -> void:
 			< DiplomacyAI.LEAVE_ALLIANCE_SCORE,
 		"共同防御联盟可长期存在，和平且无共同敌人不得自动退盟"
 	)
+
+	var attitude_state := GameState.new()
+	attitude_state.generate_grid_world(32018)
+	for attitude_a in range(attitude_state.nations.size()):
+		for attitude_b in range(
+			attitude_a + 1,
+			attitude_state.nations.size()
+		):
+			attitude_state.set_diplomatic_relation(
+				attitude_a,
+				attitude_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	attitude_state.diplomatic_history.append({
+		"day": 100,
+		"action": DiplomacyAI.Action.MAKE_PEACE,
+		"nation_a": 0,
+		"nation_b": 1,
+		"war_outcome_a": -6.0,
+		"war_outcome_b": 6.0,
+		"territories_transferred": 1,
+	})
+	attitude_state.set_diplomatic_relation(
+		0, 2, GameState.DiplomaticRelation.WAR
+	)
+	attitude_state.set_diplomatic_relation(
+		1, 2, GameState.DiplomaticRelation.ALLIED
+	)
+	var hostile_attitude := (
+		DiplomacyAI.diplomatic_attitude_breakdown(
+			attitude_state,
+			0,
+			1
+		)
+	)
+	var victor_attitude := (
+		DiplomacyAI.diplomatic_attitude_breakdown(
+			attitude_state,
+			1,
+			0
+		)
+	)
+	_check(
+		float(hostile_attitude["historical"]) < 0.0
+			and float(victor_attitude["historical"]) == 0.0
+			and float(hostile_attitude["military"]) < 0.0
+			and float(hostile_attitude["political"]) < 0.0
+			and int(hostile_attitude["enemy_allies"]) == 1,
+		"外交态度必须区分败战复仇、接壤/目标城市与敌盟关系三个方向性分量"
+	)
+	attitude_state.set_diplomatic_relation(
+		1, 2, GameState.DiplomaticRelation.WAR
+	)
+	var shared_front_attitude := (
+		DiplomacyAI.diplomatic_attitude_breakdown(
+			attitude_state,
+			0,
+			1
+		)
+	)
+	_check(
+		float(shared_front_attitude["political"])
+			> float(hostile_attitude["political"])
+			and int(shared_front_attitude["common_enemies"]) == 1,
+		"共同敌人与可释放边境兵力必须改善政治态度并体现缓解战线压力"
+	)
+
+	var endgame_state := GameState.new()
+	endgame_state.generate_grid_world(32019)
+	for endgame_a in range(endgame_state.nations.size()):
+		for endgame_b in range(
+			endgame_a + 1,
+			endgame_state.nations.size()
+		):
+			endgame_state.set_diplomatic_relation(
+				endgame_a,
+				endgame_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	for endgame_city in endgame_state.cities:
+		var endgame_owner := (
+			0 if endgame_city.map_position.x < 0.5 else 1
+		)
+		endgame_city.owner_nation = endgame_owner
+		endgame_city.occupation_sponsor_nation = -1
+		endgame_state.recognized_city_owners[
+			endgame_city.id
+		] = endgame_owner
+	for endgame_nation in endgame_state.nations:
+		endgame_nation.alive = endgame_nation.id in [0, 1]
+		if endgame_nation.alive:
+			endgame_nation.treasury_gold = 100000
+			endgame_nation.manpower_pool = 100000
+	for endgame_army in endgame_state.armies.duplicate():
+		if endgame_army.owner_nation not in [0, 1]:
+			endgame_state.armies.erase(endgame_army)
+	for endgame_owner in [0, 1]:
+		for endgame_warehouse in endgame_state.warehouse_cities_of(
+			endgame_owner
+		):
+			endgame_warehouse.food_storage = 100000
+	endgame_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.ALLIED
+	)
+	endgame_state.day = DiplomacyAI.MIN_ALLIANCE_DAYS
+	var endgame_leave_desire := maxf(
+		DiplomacyAI.leave_alliance_desire(
+			endgame_state,
+			0,
+			1
+		),
+		DiplomacyAI.leave_alliance_desire(
+			endgame_state,
+			1,
+			0
+		)
+	)
+	var endgame_leave_action: Dictionary = {}
+	for endgame_action in DiplomacyAI.choose_actions(
+		endgame_state
+	):
+		if (
+			int(endgame_action["kind"])
+				== DiplomacyAI.Action.LEAVE_ALLIANCE
+		):
+			endgame_leave_action = endgame_action
+			break
+	var endgame_sim := Simulation.new()
+	endgame_sim.setup(endgame_state)
+	var endgame_left := (
+		not endgame_leave_action.is_empty()
+		and endgame_sim._execute_diplomatic_action(
+			endgame_leave_action
+		)
+	)
+	endgame_state.day += DiplomacyAI.MIN_NEUTRAL_DAYS
+	var endgame_alliance_score := (
+		DiplomacyAI.alliance_willingness(
+			endgame_state,
+			0,
+			1
+		)
+	)
+	var endgame_war_desire := DiplomacyAI.war_desire(
+		endgame_state,
+		0,
+		1
+	)
+	_check(
+		endgame_leave_desire
+			>= DiplomacyAI.LEAVE_ALLIANCE_SCORE
+			and endgame_left
+			and endgame_alliance_score
+				< DiplomacyAI.ALLIANCE_ACCEPT_SCORE
+			and endgame_war_desire
+				>= DiplomacyAI.WAR_DECLARE_SCORE,
+		"仅剩两个盟国二分全图时必须退盟、拒绝复盟并转入最终统一竞争"
+	)
+	endgame_sim.free()
 
 	ai_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	ai_state.nations[0].treasury_gold = 0

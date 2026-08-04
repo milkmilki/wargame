@@ -38,6 +38,21 @@ const WAR_DECLARE_SCORE: float = 1.00
 const RECENT_CAPTURE_OBJECTIVE_BONUS: float = 4.0
 const RECENT_RECLAMATION_OBJECTIVE_BONUS: float = 20.0
 const LEAVE_ALLIANCE_SCORE: float = 0.90
+const ATTITUDE_PEACE_WEIGHT: float = 0.25
+const ATTITUDE_ALLIANCE_WEIGHT: float = 0.35
+const ATTITUDE_WAR_WEIGHT: float = 0.35
+const ATTITUDE_LEAVE_WEIGHT: float = 0.50
+const REVENGE_PER_LOST_SITUATION_POINT: float = 0.10
+const REVENGE_SURRENDER_PENALTY: float = 0.85
+const REVENGE_ATTITUDE_FLOOR: float = -1.25
+const BORDER_ATTITUDE_PER_EDGE: float = 0.08
+const BORDER_ATTITUDE_FLOOR: float = -0.48
+const OBJECTIVE_ATTITUDE_PER_VALUE: float = 0.035
+const OBJECTIVE_ATTITUDE_FLOOR: float = -0.55
+const COMMON_ENEMY_ATTITUDE: float = 0.60
+const ENEMY_ALLY_ATTITUDE: float = -0.90
+const UNIFICATION_COMPLETION_WEIGHT: float = 1.35
+const UNIFICATION_RIVAL_SCARCITY_WEIGHT: float = 0.45
 const CAMPAIGN_RESERVE_MONTHS: int = 6
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
 const MIN_GOLD_RESERVE: int = 100
@@ -95,7 +110,7 @@ static func peace_willingness_breakdown(
 	var war_days := state.day - state.relation_since(nation_id, enemy_id)
 	var extra_wars := maxi(state.wars_of(nation_id).size() - 1, 0)
 	var no_front := 1.0 if _frontier_edges(state, nation_id, enemy_id) == 0 else 0.0
-	var situation_score := _war_situation_score(
+	var situation_score := war_situation_score(
 		state,
 		nation_id,
 		enemy_id
@@ -147,12 +162,19 @@ static func peace_willingness_breakdown(
 	var international_component := (
 		external_threat * PEACE_EXTERNAL_THREAT_WEIGHT
 	)
+	var attitude := diplomatic_attitude(
+		state,
+		nation_id,
+		enemy_id
+	)
+	var attitude_component := attitude * ATTITUDE_PEACE_WEIGHT
 	var score := (
 		war_fatigue
 		+ situation_component
 		+ power_component
 		+ resource_component
 		+ international_component
+		+ attitude_component
 		+ float(extra_wars) * 0.75
 		+ no_front
 		- (aggression - 1.0) * 0.50
@@ -168,6 +190,8 @@ static func peace_willingness_breakdown(
 		"resource_component": resource_component,
 		"external_threat": external_threat,
 		"international_component": international_component,
+		"attitude": attitude,
+		"attitude_component": attitude_component,
 		"extra_wars": extra_wars,
 		"no_front": no_front,
 		"aggression": aggression,
@@ -234,7 +258,7 @@ static func peace_assessment(
 	}
 
 
-static func _war_situation_score(
+static func war_situation_score(
 	state: GameState,
 	nation_id: int,
 	enemy_id: int
@@ -258,6 +282,193 @@ static func _war_situation_score(
 		elif occupying_side == enemy_id and legal_owner == nation_id:
 			score -= city_value
 	return score
+
+
+## 方向性外交态度：正值表示合作倾向，负值表示敌对倾向。
+## 三层分量只读取可观察事实，外交动作本身仍由各自效用和硬约束决定。
+static func diplomatic_attitude(
+	state: GameState,
+	nation_id: int,
+	other_id: int
+) -> float:
+	return float(
+		diplomatic_attitude_breakdown(
+			state,
+			nation_id,
+			other_id
+		)["score"]
+	)
+
+
+static func diplomatic_attitude_breakdown(
+	state: GameState,
+	nation_id: int,
+	other_id: int
+) -> Dictionary:
+	if (
+		nation_id == other_id
+		or nation_id < 0
+		or other_id < 0
+		or nation_id >= state.nations.size()
+		or other_id >= state.nations.size()
+	):
+		return {
+			"score": 0.0,
+			"historical": 0.0,
+			"military": 0.0,
+			"political": 0.0,
+		}
+	var historical := _historical_attitude(
+		state,
+		nation_id,
+		other_id
+	)
+	var frontier_count := _frontier_edges(
+		state,
+		nation_id,
+		other_id
+	)
+	var border_component := maxf(
+		-float(frontier_count) * BORDER_ATTITUDE_PER_EDGE,
+		BORDER_ATTITUDE_FLOOR
+	)
+	var objective := select_war_objective(
+		state,
+		nation_id,
+		other_id
+	)
+	var objective_value := float(objective.get("value", 0.0))
+	var objective_component := maxf(
+		-objective_value * OBJECTIVE_ATTITUDE_PER_VALUE,
+		OBJECTIVE_ATTITUDE_FLOOR
+	)
+	var military := border_component + objective_component
+	var common_enemies := _common_enemy_count(
+		state,
+		nation_id,
+		other_id
+	)
+	var enemy_allies := _enemy_alliance_count(
+		state,
+		nation_id,
+		other_id
+	)
+	var frontier_relief := (
+		0.0
+		if state.is_enemy(nation_id, other_id)
+		else _alliance_frontier_release_value(
+			state,
+			nation_id,
+			other_id
+		)
+	)
+	var political := (
+		float(common_enemies) * COMMON_ENEMY_ATTITUDE
+		+ frontier_relief
+		+ float(enemy_allies) * ENEMY_ALLY_ATTITUDE
+	)
+	return {
+		"score": historical + military + political,
+		"historical": historical,
+		"military": military,
+		"political": political,
+		"border_edges": frontier_count,
+		"border_component": border_component,
+		"objective_city": int(objective.get("city_id", -1)),
+		"objective_value": objective_value,
+		"objective_component": objective_component,
+		"common_enemies": common_enemies,
+		"enemy_allies": enemy_allies,
+		"frontier_relief": frontier_relief,
+	}
+
+
+static func _historical_attitude(
+	state: GameState,
+	nation_id: int,
+	other_id: int
+) -> float:
+	var revenge := 0.0
+	for event in state.diplomatic_history:
+		if (
+			int(event.get("action", Action.NONE))
+				!= Action.MAKE_PEACE
+		):
+			continue
+		var event_a := int(event.get("nation_a", -1))
+		var event_b := int(event.get("nation_b", -1))
+		if not (
+			(event_a == nation_id and event_b == other_id)
+			or (event_a == other_id and event_b == nation_id)
+		):
+			continue
+		var outcome := (
+			float(event.get("war_outcome_a", 0.0))
+			if event_a == nation_id
+			else float(event.get("war_outcome_b", 0.0))
+		)
+		var defeat := maxf(
+			-outcome * REVENGE_PER_LOST_SITUATION_POINT,
+			0.0
+		)
+		if int(event.get("surrendering_nation", -1)) == nation_id:
+			defeat = maxf(defeat, REVENGE_SURRENDER_PENALTY)
+		revenge += defeat
+	return maxf(-revenge, REVENGE_ATTITUDE_FLOOR)
+
+
+static func _enemy_alliance_count(
+	state: GameState,
+	nation_id: int,
+	other_id: int
+) -> int:
+	var count := 0
+	for enemy_id in state.wars_of(nation_id):
+		if enemy_id != other_id and state.is_allied(other_id, enemy_id):
+			count += 1
+	return count
+
+
+## 所有国家都以统一全图为终局目标。两国控制的地图份额越高、存活对手越少，
+## 彼此作为最终竞争者的压力越大；该连续值同时抑制结盟并推动退盟和宣战。
+static func unification_rivalry(
+	state: GameState,
+	nation_id: int,
+	other_id: int
+) -> float:
+	if (
+		nation_id == other_id
+		or nation_id < 0
+		or other_id < 0
+		or nation_id >= state.nations.size()
+		or other_id >= state.nations.size()
+		or not state.nations[nation_id].alive
+		or not state.nations[other_id].alive
+	):
+		return 0.0
+	var controlled := 0
+	for city in state.cities:
+		if city.owner_nation in [nation_id, other_id]:
+			controlled += 1
+	var pair_share := (
+		float(controlled) / float(maxi(state.cities.size(), 1))
+	)
+	var completion := clampf(
+		(pair_share - 0.50) / 0.50,
+		0.0,
+		1.0
+	)
+	var alive_count := 0
+	for nation in state.nations:
+		if nation.alive:
+			alive_count += 1
+	var rival_scarcity := (
+		1.0 / float(maxi(alive_count - 1, 1))
+	)
+	return (
+		completion * UNIFICATION_COMPLETION_WEIGHT
+		+ rival_scarcity * UNIFICATION_RIVAL_SCARCITY_WEIGHT
+	)
 
 
 static func _occupation_side(
@@ -434,6 +645,16 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 		nation_id,
 		target_id
 	)
+	var attitude := diplomatic_attitude(
+		state,
+		nation_id,
+		target_id
+	)
+	var unification_pressure := unification_rivalry(
+		state,
+		nation_id,
+		target_id
+	)
 	return (
 		0.35
 		+ float(common_enemies) * 1.5
@@ -441,6 +662,8 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 		+ border_bonus
 		+ balance_affinity
 		+ frontier_release
+		+ attitude * ATTITUDE_ALLIANCE_WEIGHT
+		- unification_pressure
 	)
 
 
@@ -486,6 +709,16 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 	var aggression_bonus := (
 		_ai_aggression(state, nation_id) - 1.0
 	)
+	var attitude := diplomatic_attitude(
+		state,
+		nation_id,
+		target_id
+	)
+	var unification_pressure := unification_rivalry(
+		state,
+		nation_id,
+		target_id
+	)
 	return (
 		ratio
 		+ target_distraction
@@ -494,6 +727,8 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 		+ objective_value
 		+ mobilization_value
 		+ aggression_bonus
+		- attitude * ATTITUDE_WAR_WEIGHT
+		+ unification_pressure
 		- own_overextension
 	)
 
@@ -1084,10 +1319,22 @@ static func leave_alliance_desire(state: GameState, nation_id: int, ally_id: int
 			unilateral_wars += 1
 	var duration_days := state.day - state.relation_since(nation_id, ally_id)
 	var established_trust := minf(float(duration_days) / 1800.0, 0.50)
+	var attitude := diplomatic_attitude(
+		state,
+		nation_id,
+		ally_id
+	)
+	var unification_pressure := unification_rivalry(
+		state,
+		nation_id,
+		ally_id
+	)
 	return (
 		domination_risk
 		+ float(conflicting_commitments) * 1.5
 		+ float(unilateral_wars) * 0.20
+		+ unification_pressure
+		- attitude * ATTITUDE_LEAVE_WEIGHT
 		- float(common_enemies) * 0.75
 		- established_trust
 	)
@@ -1122,6 +1369,12 @@ static func _collect_peace_actions(
 				if reasons_b.is_empty()
 				else "、".join(reasons_b)
 			)
+			var attitude_a := float(
+				assessment["breakdown_a"]["attitude"]
+			)
+			var attitude_b := float(
+				assessment["breakdown_b"]["attitude"]
+			)
 			actions.append({
 				"kind": Action.MAKE_PEACE,
 				"a": a,
@@ -1129,13 +1382,15 @@ static func _collect_peace_actions(
 				"score": float(assessment["combined_score"]) * 0.5,
 				"reason": (
 					"战争持续%d天；国%d：%s；国%d：%s；"
-					+ "结算后意愿%.2f/%.2f，合计%.2f"
+					+ "双边态度%.2f/%.2f，结算后意愿%.2f/%.2f，合计%.2f"
 				) % [
 					war_days,
 					a,
 					reason_a,
 					b,
 					reason_b,
+					attitude_a,
+					attitude_b,
 					score_a,
 					score_b,
 					assessment["combined_score"],
@@ -1157,15 +1412,29 @@ static func _collect_leave_alliance_actions(
 			var score_a := leave_alliance_desire(state, a, b)
 			var score_b := leave_alliance_desire(state, b, a)
 			var actor := a if score_a >= score_b else b
+			var target := b if actor == a else a
 			var score := maxf(score_a, score_b)
 			if score < LEAVE_ALLIANCE_SCORE:
 				continue
+			var attitude := diplomatic_attitude(
+				state,
+				actor,
+				target
+			)
+			var unification_pressure := unification_rivalry(
+				state,
+				actor,
+				target
+			)
 			actions.append({
 				"kind": Action.LEAVE_ALLIANCE,
 				"a": actor,
-				"b": b if actor == a else a,
+				"b": target,
 				"score": score,
-				"reason": "防御条约负担、外交冲突或力量失衡，退盟收益 %.2f" % score,
+				"reason": (
+					"外交态度%.2f、统一竞争压力%.2f，退盟收益%.2f"
+					% [attitude, unification_pressure, score]
+				),
 			})
 			committed[a] = true
 			committed[b] = true
@@ -1189,13 +1458,17 @@ static func _collect_alliance_actions(
 			var score_b := alliance_willingness(state, b, a)
 			if score_a < ALLIANCE_ACCEPT_SCORE or score_b < ALLIANCE_ACCEPT_SCORE:
 				continue
+			var attitude_a := diplomatic_attitude(state, a, b)
+			var attitude_b := diplomatic_attitude(state, b, a)
 			actions.append({
 				"kind": Action.FORM_ALLIANCE,
 				"a": a,
 				"b": b,
 				"score": minf(score_a, score_b),
-				"reason": "缔结长期共同防御与军事通行条约，双方意愿 %.2f/%.2f"
-					% [score_a, score_b],
+				"reason": (
+					"缔结共同防御与军事通行条约，"
+					+ "双边态度%.2f/%.2f、结盟意愿%.2f/%.2f"
+				) % [attitude_a, attitude_b, score_a, score_b],
 			})
 			committed[a] = true
 			committed[b] = true
@@ -1249,6 +1522,16 @@ static func _collect_war_actions(
 			campaign_troops,
 			FoodPosture.OFFENSIVE_WAR
 		)
+		var attitude := diplomatic_attitude(
+			state,
+			nation.id,
+			best_target
+		)
+		var unification_pressure := unification_rivalry(
+			state,
+			nation.id,
+			best_target
+		)
 		actions.append({
 			"kind": Action.PREPARE_WAR,
 			"a": nation.id,
@@ -1262,6 +1545,7 @@ static func _collect_war_actions(
 					"准备对国%d发动战争，目标%s；储备金%d/%d、粮%d/%d、人%d/%d；"
 					+ "目标兵力%d，年粮结余%.0f，可支撑%.1f年；"
 					+ "现有编制全满年结余%.0f，可支撑%.1f年；"
+					+ "外交态度%.2f、统一竞争压力%.2f；"
 					+ "先集结并额外动员%d军；战争收益%.2f"
 				)
 				% [
@@ -1278,6 +1562,8 @@ static func _collect_war_actions(
 					food_plan["target_runway_years"],
 					food_plan["full_strength_annual_balance"],
 					food_plan["full_strength_runway_years"],
+					attitude,
+					unification_pressure,
 					mobilization_armies,
 					best_score,
 				]
