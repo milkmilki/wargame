@@ -552,8 +552,10 @@ func _test_river_transport() -> void:
 	_check(
 		river_shapes_valid
 			and river_mean_y.size() == 2
-			and river_mean_y[0] + 0.18 < river_mean_y[1],
-		"黄河/长江必须为西向东、北南分离且无明显折返的两条主线：mean_y=%s"
+				and river_mean_y[0] >= 0.50
+				and river_mean_y[0] <= 0.60
+				and river_mean_y[0] + 0.06 < river_mean_y[1],
+			"黄河必须下压到0.50～0.60，且两河西向东、南北分离、无明显折返：mean_y=%s"
 			% str(river_mean_y)
 	)
 	var docks_are_full_cities := true
@@ -676,13 +678,14 @@ func _test_river_transport() -> void:
 		"陆路、抢滩边和水路的逻辑距离必须统一取端点真实几何长度"
 	)
 	_check(
-		longest_distance > 5
-			and Simulation.march_days(longest_distance) > 30.0,
-		"正式地图最长边必须突破旧 distance=5/30天上限：length=%.3f distance=%d days=%.1f"
+		longest_distance
+			== TerrainMapGenerator.distance_units_for_metric_length(
+				longest_metric_length
+			),
+		"正式地图最长边必须保持几何换算值，不得因地图拓扑或旧上限失真：length=%.3f distance=%d"
 			% [
 				longest_metric_length,
 				longest_distance,
-				Simulation.march_days(longest_distance),
 			]
 	)
 	var sample_river: Edge = river_edges[0]
@@ -783,12 +786,35 @@ func _test_river_transport() -> void:
 
 
 func _test_responsive_map_layout() -> void:
-	print("[1b] 响应式界面：窗口放大时地图同比增大并保持居中")
+	print("[1b] 战略图界面：地图响应式、图标四档缩放、城市/道路可点选")
 	var base := MapRenderer.compute_layout_for_viewport(Vector2(1280, 720), 4)
 	var large := MapRenderer.compute_layout_for_viewport(Vector2(1920, 1080), 4)
+	var stats_closed := MapRenderer.compute_layout_for_viewport(
+		Vector2(1280, 720),
+		4,
+		false
+	)
 	_check(
-		_approx(float(large["cell"]) / float(base["cell"]), 1.5),
-		"窗口同比放大 1.5 倍时地图单元格也应放大 1.5 倍"
+		float(large["cell"]) > float(base["cell"]),
+		"窗口放大时地图画布仍应扩大"
+	)
+	_check(
+		float((stats_closed["origin"] as Vector2).y)
+			< float((base["origin"] as Vector2).y)
+			and float(stats_closed["span"]) > float(base["span"]),
+		"关闭国家统计窗口后必须回收顶部空间并扩大地图"
+	)
+	var stats_button := MapRenderer.nation_stats_button_rect(
+		Vector2(1280, 720),
+		float(base["display_scale"]),
+		float(base["side_margin"])
+	)
+	_check(
+		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
+			stats_button
+		)
+			and stats_button.size.x > stats_button.size.y,
+		"国家统计按钮必须始终位于窗口内并具备稳定点击区域"
 	)
 	var large_origin: Vector2 = large["origin"]
 	_check(
@@ -806,10 +832,92 @@ func _test_responsive_map_layout() -> void:
 		and float((narrow["origin"] as Vector2).y) > float(base["origin"].y) * 0.65,
 		"窄窗口应自动减少 HUD 列数并为多行国家数据留出空间"
 	)
+	var same_tier := MapRenderer.compute_layout_for_viewport(
+		Vector2(1500, 800),
+		4
+	)
+	var extra_large := MapRenderer.compute_layout_for_viewport(
+		Vector2(2560, 1440),
+		4
+	)
+	_check(
+		_approx(float(narrow["display_scale"]), 0.80)
+			and _approx(float(base["display_scale"]), 1.00)
+			and _approx(float(same_tier["display_scale"]), 1.00)
+			and _approx(float(large["display_scale"]), 1.25)
+			and _approx(float(extra_large["display_scale"]), 1.50),
+		"图标与字体只能使用0.80/1.00/1.25/1.50四档，不得随窗口连续缩放"
+	)
 	var ui_font := MapRenderer.create_ui_font()
 	_check(
 		ui_font.has_char("国".unicode_at(0)),
 		"HUD 字体必须包含中文字形，不能回退为乱码或方框"
+	)
+	var hit_state := GameState.new()
+	hit_state.generate_grid_world(12346)
+	var hit_origin := Vector2(80.0, 60.0)
+	var hit_map_size := Vector2(640.0, 640.0)
+	var city_to_pick := hit_state.cities[0]
+	var city_pixel := (
+		hit_origin + city_to_pick.map_position * hit_map_size
+	)
+	_check(
+		MapRenderer.pick_city_at_pixel(
+			hit_state,
+			city_pixel,
+			hit_origin,
+			hit_map_size,
+			12.0
+		) == city_to_pick.id,
+		"点击城市符号中心必须稳定命中对应城市"
+	)
+	var edge_to_pick := hit_state.edges[0]
+	var edge_from := (
+		hit_origin
+		+ hit_state.cities[edge_to_pick.city_a].map_position
+			* hit_map_size
+	)
+	var edge_to := (
+		hit_origin
+		+ hit_state.cities[edge_to_pick.city_b].map_position
+			* hit_map_size
+	)
+	var picked_edge := MapRenderer.pick_edge_at_pixel(
+		hit_state,
+		edge_from.lerp(edge_to, 0.5),
+		hit_origin,
+		hit_map_size,
+		5.0
+	)
+	_check(
+		picked_edge == edge_to_pick,
+		"点击道路中点必须稳定命中对应可通行边"
+	)
+	var city_lines := MapRenderer.city_detail_lines(
+		hit_state,
+		city_to_pick.id
+	)
+	var edge_lines := MapRenderer.edge_detail_lines(
+		hit_state,
+		edge_to_pick
+	)
+	_check(
+		city_lines.size() >= 6
+			and "工事" in city_lines[2]
+			and edge_lines.size() >= 5
+			and "行军" in edge_lines[2],
+		"城市与道路详情必须包含控制、工事、驻军、距离和行军信息"
+	)
+	var arrow_event := {
+		"start_day": 10,
+		"end_day": 30,
+	}
+	_check(
+		MapRenderer.campaign_arrow_alpha(10, arrow_event) > 0.0
+			and MapRenderer.campaign_arrow_alpha(25, arrow_event) > 0.0
+			and MapRenderer.campaign_arrow_alpha(30, arrow_event) > 0.0
+			and MapRenderer.campaign_arrow_alpha(31, arrow_event) == 0.0,
+		"攻势箭头必须持续显示到事件结束日，而不是按现实时间3秒消失"
 	)
 
 # ------------------------------------------------------------------ 2. 地形惩罚
@@ -5497,17 +5605,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	capitulation_state.day = 120
 	var capitulation_sim := Simulation.new()
 	capitulation_sim.setup(capitulation_state)
-	capitulation_sim._resolve_forced_bilateral_capitulations()
-	_check(
-		capitulation_state.is_enemy(0, 1),
-		"败方仍与第三国交战时，不得把多国战争误判为双边投降"
-	)
-	capitulation_state.set_diplomatic_relation(
-		1,
-		2,
-		GameState.DiplomaticRelation.NEUTRAL
-	)
-	capitulation_sim._resolve_forced_bilateral_capitulations()
+	capitulation_sim._resolve_eliminated_nation_capitulations()
 	var occupied_territory_recognized := true
 	for occupied_city_id in occupied_city_ids:
 		occupied_territory_recognized = (
@@ -5517,19 +5615,26 @@ func _test_diplomacy_state_and_ai() -> void:
 			) == 0
 		)
 	var surrender_recorded := (
-		not capitulation_state.diplomatic_history.is_empty()
-		and int(capitulation_state.diplomatic_history[-1].get(
-			"surrendering_nation",
-			-1
-		)) == 1
+		capitulation_state.diplomatic_history.size() >= 2
 	)
+	for surrender_event in capitulation_state.diplomatic_history.slice(-2):
+		surrender_recorded = (
+			surrender_recorded
+			and int(surrender_event.get(
+				"surrendering_nation",
+				-1
+			)) == 1
+		)
 	_check(
 		not capitulation_state.is_enemy(0, 1)
+			and not capitulation_state.is_enemy(1, 2)
 			and capitulation_state.truce_until(0, 1)
+				> capitulation_state.day
+			and capitulation_state.truce_until(1, 2)
 				> capitulation_state.day
 			and occupied_territory_recognized
 			and surrender_recorded,
-		"纯双边战争中一方全境失守后必须立即投降、确认领土并进入停战"
+		"多国战争中一方全境失守后必须向全部交战国投降并清除所有战争关系"
 	)
 	capitulation_sim.free()
 	var occupied_capital := bilateral_peace_state.nations[

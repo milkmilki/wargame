@@ -30,7 +30,7 @@ static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "river-v5:%s:%d" % [source_path, city_count]
+	var cache_key := "river-v7:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -516,6 +516,7 @@ static func _build_river_transport(
 		image,
 		bounds,
 		samples["pixels"],
+		samples["positions"],
 		base_roads,
 		river_paths,
 		city_count
@@ -662,12 +663,12 @@ static func _build_river_paths(
 ) -> Array[Array]:
 	var templates: Array[PackedVector2Array] = [
 		PackedVector2Array([
-			Vector2(0.10, 0.34),
-			Vector2(0.25, 0.29),
-			Vector2(0.42, 0.23),
-			Vector2(0.58, 0.26),
-			Vector2(0.75, 0.32),
-			Vector2(0.94, 0.29),
+			Vector2(0.10, 0.58),
+			Vector2(0.25, 0.54),
+			Vector2(0.42, 0.50),
+			Vector2(0.58, 0.53),
+			Vector2(0.75, 0.59),
+			Vector2(0.94, 0.56),
 		]),
 		PackedVector2Array([
 			Vector2(0.08, 0.69),
@@ -806,6 +807,7 @@ static func _find_river_docks(
 	image: Image,
 	bounds: Rect2i,
 	city_pixels: Array[Vector2i],
+	city_positions: Array[Vector2],
 	roads: Array[Dictionary],
 	river_paths: Array[Array],
 	city_count: int
@@ -841,7 +843,8 @@ static func _find_river_docks(
 
 	var selected_dock_roads := _select_dock_crossing_roads(
 		candidates_by_river,
-		roads
+		roads,
+		city_positions
 	)
 	for river_id in range(river_paths.size()):
 		var candidates: Array[Dictionary] = candidates_by_river.get(
@@ -919,7 +922,8 @@ static func _find_river_docks(
 
 static func _select_dock_crossing_roads(
 	candidates_by_river: Dictionary,
-	roads: Array[Dictionary]
+	roads: Array[Dictionary],
+	city_positions: Array[Vector2]
 ) -> Dictionary:
 	var selected := {}
 	var crossing_roads := {}
@@ -1001,6 +1005,73 @@ static func _select_dock_crossing_roads(
 				return float(road_a["cost"]) < float(road_b["cost"])
 			return int(a) < int(b)
 	)
+	# 正式地图开局按空间四分区分国。先在各国内部补足最少渡口，
+	# 避免河道移动后全图仍连通、但单个国家领土被河流切成孤岛。
+	var initial_owner := _initial_nation_owner_by_position(
+		city_positions
+	)
+	var nation_parent: Array[int] = []
+	nation_parent.resize(node_count)
+	for node in range(node_count):
+		nation_parent[node] = node
+	for road_index in range(roads.size()):
+		var road: Dictionary = roads[road_index]
+		var city_a := int(road["a"])
+		var city_b := int(road["b"])
+		if (
+			int(road["max_manpower"]) <= 0
+			or initial_owner[city_a] != initial_owner[city_b]
+			or (
+				crossing_roads.has(road_index)
+				and not selected.has(road_index)
+			)
+		):
+			continue
+		_river_union_find_join(
+			nation_parent,
+			city_a,
+			city_b
+		)
+	for road_index_value in crossing_indices:
+		var road_index := int(road_index_value)
+		if selected.has(road_index):
+			continue
+		var road: Dictionary = roads[road_index]
+		var city_a := int(road["a"])
+		var city_b := int(road["b"])
+		if initial_owner[city_a] != initial_owner[city_b]:
+			continue
+		if (
+			_river_union_find_root(nation_parent, city_a)
+				== _river_union_find_root(nation_parent, city_b)
+		):
+			continue
+		selected[road_index] = true
+		_river_union_find_join(
+			nation_parent,
+			city_a,
+			city_b
+		)
+
+	# 在国家内部连通的基础上，再恢复全图连通所需的最少 crossing。
+	parent.fill(0)
+	for node in range(node_count):
+		parent[node] = node
+	for road_index in range(roads.size()):
+		var road: Dictionary = roads[road_index]
+		if (
+			int(road["max_manpower"]) <= 0
+			or (
+				crossing_roads.has(road_index)
+				and not selected.has(road_index)
+			)
+		):
+			continue
+		_river_union_find_join(
+			parent,
+			int(road["a"]),
+			int(road["b"])
+		)
 	for road_index_value in crossing_indices:
 		var road_index := int(road_index_value)
 		if selected.has(road_index):
@@ -1016,6 +1087,47 @@ static func _select_dock_crossing_roads(
 		selected[road_index] = true
 		_river_union_find_join(parent, city_a, city_b)
 	return selected
+
+
+static func _initial_nation_owner_by_position(
+	city_positions: Array[Vector2]
+) -> Array[int]:
+	var owner: Array[int] = []
+	owner.resize(city_positions.size())
+	owner.fill(-1)
+	var ordered: Array[int] = []
+	for city_id in range(city_positions.size()):
+		ordered.append(city_id)
+	ordered.sort_custom(func(a: int, b: int) -> bool:
+		var pa := city_positions[a]
+		var pb := city_positions[b]
+		if not is_equal_approx(pa.x, pb.x):
+			return pa.x < pb.x
+		return pa.y < pb.y
+	)
+	var side_size := city_positions.size() / 2
+	for side in range(2):
+		var side_cities: Array[int] = []
+		for index in range(
+			side * side_size,
+			(side + 1) * side_size
+		):
+			side_cities.append(ordered[index])
+		side_cities.sort_custom(func(a: int, b: int) -> bool:
+			var pa := city_positions[a]
+			var pb := city_positions[b]
+			if not is_equal_approx(pa.y, pb.y):
+				return pa.y < pb.y
+			return pa.x < pb.x
+		)
+		for index in range(side_cities.size()):
+			var row_half := (
+				0
+				if index < side_cities.size() / 2
+				else 1
+			)
+			owner[side_cities[index]] = row_half * 2 + side
+	return owner
 
 
 static func _river_union_find_root(

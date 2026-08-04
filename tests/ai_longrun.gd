@@ -130,9 +130,17 @@ func _init() -> void:
 			if city.owner_nation != initial_owners[city.id]:
 				captures += 1
 		var alive := 0
+		var eliminated_war_relations := 0
 		for nation in state.nations:
 			if nation.alive:
 				alive += 1
+			if state.cities_of(nation.id).is_empty():
+				for other in state.nations:
+					if (
+						other.id != nation.id
+						and state.is_enemy(nation.id, other.id)
+					):
+						eliminated_war_relations += 1
 		var ordered := 0
 		var invalid := 0
 		var troops := 0
@@ -300,7 +308,7 @@ func _init() -> void:
 		total_post_capture_city_holds += post_capture_city_holds
 		print(
 			(
-				"seed=%d day=%d alive=%d armies=%d troops=%d manpower=%d food=%d "
+				"seed=%d day=%d alive=%d eliminated_wars=%d armies=%d troops=%d manpower=%d food=%d "
 				+ "starving=%d net_captures=%d turnovers=%d ordered=%d invalid=%d "
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
 				+ "offensives=%d full_prep=%d multi_prep=%d max_parallel=%d "
@@ -315,6 +323,7 @@ func _init() -> void:
 				world_seed,
 				state.day,
 				alive,
+				eliminated_war_relations,
 				state.armies.size(),
 				troops,
 				manpower,
@@ -359,6 +368,7 @@ func _init() -> void:
 		if (
 			ordered == 0
 			or invalid > 0
+			or eliminated_war_relations > 0
 			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0
 			or (

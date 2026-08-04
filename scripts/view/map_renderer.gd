@@ -1,21 +1,38 @@
 class_name MapRenderer
 extends Node2D
 ## 表现层：只读 GameState，用 _draw() 单一渲染源绘制地图/城市/边/军队/HUD。
-## 处理暂停 / 调速 / 重开输入（转发给 Simulation / Main）。
+## 鼠标选择仅保存在表现层，不进入模拟状态或存档。
 
 var state: GameState
 var sim: Simulation
 
-# 布局基准：实际窗口相对 1280×720 同比缩放，不依赖固定逻辑画布。
+# 地图画布连续适配窗口；图标、字体和线宽只使用四档离散视觉比例。
 const BASE_VIEWPORT_SIZE := Vector2(1280.0, 720.0)
 const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
 const BASE_HUD_CARD_HEIGHT := 81.0
+const BASE_HEADER_ONLY_TOP := 44.0
+const NATION_STATS_BUTTON_WIDTH := 104.0
+const VISUAL_SCALE_COMPACT: float = 0.80
+const VISUAL_SCALE_STANDARD: float = 1.00
+const VISUAL_SCALE_LARGE: float = 1.25
+const VISUAL_SCALE_XL: float = 1.50
+const CITY_PICK_RADIUS: float = 14.0
+const EDGE_PICK_TOLERANCE: float = 10.0
+const DETAIL_PANEL_WIDTH: float = 350.0
+const DETAIL_PANEL_MARGIN: float = 18.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 const ACTIVE_REDRAW_FPS: float = 30.0
 const PAUSED_REDRAW_FPS: float = 5.0
+const PAPER_COLOR := Color(0.73, 0.61, 0.42)
+const PAPER_LIGHT := Color(0.86, 0.76, 0.57)
+const PAPER_DARK := Color(0.24, 0.19, 0.12)
+const INK_COLOR := Color(0.105, 0.085, 0.055)
+const COMMAND_GREEN := Color(0.16, 0.20, 0.14)
+const ACCENT_RED := Color(0.55, 0.12, 0.10)
+const ACCENT_GOLD := Color(0.88, 0.67, 0.22)
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
 var _map_size: Vector2 = Vector2(512.0, 512.0)
@@ -34,10 +51,13 @@ var _alliance_boundary_segments := PackedVector2Array()
 var _province_cache_ready: bool = false
 var _province_ownership_revision: int = -1
 var _province_diplomacy_revision: int = -1
-var _campaign_event_seen_at: Dictionary = {}
 var _blink: float = 0.0                    ## 饥饿闪烁计时
 var _redraw_elapsed: float = 0.0
 var _last_viewport_size: Vector2 = Vector2.ZERO
+var _selected_city_id: int = -1
+var _selected_edge_a: int = -1
+var _selected_edge_b: int = -1
+var _nation_stats_open: bool = false
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
 var _prev_pos: Dictionary = {}             ## army.id -> 上一 tick 末的逻辑位置
@@ -60,7 +80,9 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_province_cache_ready = false
 	_province_ownership_revision = -1
 	_province_diplomacy_revision = -1
-	_campaign_event_seen_at.clear()
+	_selected_city_id = -1
+	_selected_edge_a = -1
+	_selected_edge_b = -1
 
 
 func _ready() -> void:
@@ -112,10 +134,82 @@ func _process(_delta: float) -> void:
 		queue_redraw()
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if not (
+		event is InputEventMouseButton
+		and event.pressed
+	):
+		return
+	var mouse_event := event as InputEventMouseButton
+	if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+		_clear_selection()
+		get_viewport().set_input_as_handled()
+		return
+	if mouse_event.button_index != MOUSE_BUTTON_LEFT or state == null:
+		return
+	_compute_layout()
+	var point := mouse_event.position
+	if nation_stats_button_rect(
+		get_viewport_rect().size,
+		_display_scale,
+		_side_margin
+	).has_point(point):
+		_nation_stats_open = not _nation_stats_open
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if not Rect2(_origin, _map_size).grow(
+		CITY_PICK_RADIUS * _display_scale
+	).has_point(point):
+		_clear_selection()
+		return
+	var city_id := pick_city_at_pixel(
+		state,
+		point,
+		_origin,
+		_map_size,
+		CITY_PICK_RADIUS * _display_scale
+	)
+	if city_id >= 0:
+		_selected_city_id = city_id
+		_selected_edge_a = -1
+		_selected_edge_b = -1
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	var edge := pick_edge_at_pixel(
+		state,
+		point,
+		_origin,
+		_map_size,
+		EDGE_PICK_TOLERANCE * _display_scale
+	)
+	_selected_city_id = -1
+	if edge == null:
+		_selected_edge_a = -1
+		_selected_edge_b = -1
+	else:
+		_selected_edge_a = edge.city_a
+		_selected_edge_b = edge.city_b
+	queue_redraw()
+	get_viewport().set_input_as_handled()
+
+
+func _clear_selection() -> void:
+	_selected_city_id = -1
+	_selected_edge_a = -1
+	_selected_edge_b = -1
+	queue_redraw()
+
+
 func _compute_layout() -> void:
 	var vp := get_viewport_rect().size
 	var nation_count := state.nations.size() if state != null else GameState.NATION_COUNT
-	var layout := compute_layout_for_viewport(vp, nation_count)
+	var layout := compute_layout_for_viewport(
+		vp,
+		nation_count,
+		_nation_stats_open
+	)
 	var span := float(layout["span"])
 	var aspect := clampf(state.map_aspect_ratio if state != null else 1.0, 0.5, 2.5)
 	_map_size = (
@@ -131,16 +225,13 @@ func _compute_layout() -> void:
 	_hud_card_width = layout["hud_card_width"]
 
 
-static func compute_layout_for_viewport(viewport_size: Vector2, nation_count: int) -> Dictionary:
+static func compute_layout_for_viewport(
+	viewport_size: Vector2,
+	nation_count: int,
+	nation_stats_open: bool = true
+) -> Dictionary:
 	var safe_size := Vector2(maxf(viewport_size.x, 1.0), maxf(viewport_size.y, 1.0))
-	var display_scale := clampf(
-		minf(
-			safe_size.x / BASE_VIEWPORT_SIZE.x,
-			safe_size.y / BASE_VIEWPORT_SIZE.y
-		),
-		0.65,
-		3.0
-	)
+	var display_scale := visual_scale_for_viewport(safe_size)
 	var side_margin := BASE_SIDE_MARGIN * display_scale
 	var available_width := maxf(safe_size.x - side_margin * 2.0, 1.0)
 	var count := maxi(nation_count, 1)
@@ -152,9 +243,13 @@ static func compute_layout_for_viewport(viewport_size: Vector2, nation_count: in
 	)
 	var hud_rows := int(ceil(float(count) / float(hud_columns)))
 	var top_margin := (
-		BASE_HUD_TOP
-		+ BASE_HUD_CARD_HEIGHT * float(hud_rows)
-		+ BASE_HUD_ROW_HEIGHT
+		(
+			BASE_HUD_TOP
+			+ BASE_HUD_CARD_HEIGHT * float(hud_rows)
+			+ BASE_HUD_ROW_HEIGHT
+		)
+		if nation_stats_open
+		else BASE_HEADER_ONLY_TOP
 	) * display_scale
 	var bottom_margin := BASE_BOTTOM_MARGIN * display_scale
 	var span := maxf(minf(
@@ -172,12 +267,118 @@ static func compute_layout_for_viewport(viewport_size: Vector2, nation_count: in
 	}
 
 
+static func nation_stats_button_rect(
+	viewport_size: Vector2,
+	display_scale: float,
+	side_margin: float
+) -> Rect2:
+	var size := Vector2(
+		NATION_STATS_BUTTON_WIDTH * display_scale,
+		22.0 * display_scale
+	)
+	return Rect2(
+		Vector2(
+			viewport_size.x - side_margin - size.x,
+			8.0 * display_scale
+		),
+		size
+	)
+
+
+static func visual_scale_for_viewport(viewport_size: Vector2) -> float:
+	var short_side := minf(viewport_size.x, viewport_size.y)
+	if short_side < 600.0:
+		return VISUAL_SCALE_COMPACT
+	if short_side < 900.0:
+		return VISUAL_SCALE_STANDARD
+	if short_side < 1400.0:
+		return VISUAL_SCALE_LARGE
+	return VISUAL_SCALE_XL
+
+
 func _font_size(base_size: float) -> int:
 	return maxi(int(round(base_size * _display_scale)), 1)
 
 
 func _city_center(city: City) -> Vector2:
 	return _origin + city.map_position * _map_size
+
+
+static func pick_city_at_pixel(
+	game_state: GameState,
+	point: Vector2,
+	origin: Vector2,
+	map_size: Vector2,
+	radius: float
+) -> int:
+	var best_city := -1
+	var best_distance_sq := radius * radius
+	for city in game_state.cities:
+		var center := origin + city.map_position * map_size
+		var distance_sq := point.distance_squared_to(center)
+		if (
+			distance_sq < best_distance_sq
+			or (
+				is_equal_approx(distance_sq, best_distance_sq)
+				and (best_city < 0 or city.id < best_city)
+			)
+		):
+			best_city = city.id
+			best_distance_sq = distance_sq
+	return best_city
+
+
+static func pick_edge_at_pixel(
+	game_state: GameState,
+	point: Vector2,
+	origin: Vector2,
+	map_size: Vector2,
+	tolerance: float
+) -> Edge:
+	var best: Edge = null
+	var best_distance := tolerance
+	for edge in game_state.edges:
+		if not is_edge_visible(edge):
+			continue
+		var from := (
+			origin
+			+ game_state.cities[edge.city_a].map_position * map_size
+		)
+		var to := (
+			origin
+			+ game_state.cities[edge.city_b].map_position * map_size
+		)
+		var distance := point_to_segment_distance(point, from, to)
+		if (
+			distance < best_distance
+			or (
+				is_equal_approx(distance, best_distance)
+				and (
+					best == null
+					or GameState.edge_key(edge.city_a, edge.city_b)
+						< GameState.edge_key(best.city_a, best.city_b)
+				)
+			)
+		):
+			best = edge
+			best_distance = distance
+	return best
+
+
+static func point_to_segment_distance(
+	point: Vector2,
+	from: Vector2,
+	to: Vector2
+) -> float:
+	var delta := to - from
+	if delta.length_squared() <= 0.000001:
+		return point.distance_to(from)
+	var t := clampf(
+		(point - from).dot(delta) / delta.length_squared(),
+		0.0,
+		1.0
+	)
+	return point.distance_to(from + delta * t)
 
 
 ## 每当模拟推进一天，快照全部军队的逻辑位置：上次快照 -> _prev，本次 -> _curr。
@@ -202,18 +403,62 @@ func _draw() -> void:
 	if state == null:
 		return
 	_compute_layout()
+	_draw_paper_canvas()
 	_draw_terrain_background()
 	_ensure_province_visual_cache()
 	_draw_province_fills()
 	_draw_rivers()
 	_draw_province_boundaries()
 	_draw_edges()
+	_draw_selection_highlight()
 	_draw_national_boundaries()
 	_draw_campaign_arrows()
 	_draw_cities()
 	_draw_battles()
 	_draw_armies()
 	_draw_hud()
+	_draw_selection_detail()
+
+
+func _draw_paper_canvas() -> void:
+	var viewport_size := get_viewport_rect().size
+	draw_rect(
+		Rect2(Vector2.ZERO, viewport_size),
+		Color(0.10, 0.085, 0.060),
+		true
+	)
+	var map_rect := Rect2(_origin, _map_size)
+	draw_rect(
+		map_rect.grow(9.0 * _display_scale),
+		Color(0.02, 0.018, 0.014, 0.60),
+		true
+	)
+	draw_rect(map_rect, PAPER_COLOR, true)
+	# 低成本确定性纸张纤维；不使用随机数，不影响模拟确定性。
+	for fiber in range(42):
+		var y_ratio := fmod(float(fiber * 37 + 11), 101.0) / 101.0
+		var x_ratio := fmod(float(fiber * 53 + 7), 97.0) / 97.0
+		var length_ratio := 0.08 + fmod(float(fiber * 19), 23.0) / 100.0
+		var from := _origin + Vector2(
+			x_ratio * _map_size.x,
+			y_ratio * _map_size.y
+		)
+		var to := from + Vector2(
+			minf(length_ratio * _map_size.x, _origin.x + _map_size.x - from.x),
+			(float((fiber % 5) - 2)) * 0.8 * _display_scale
+		)
+		draw_line(
+			from,
+			to,
+			Color(0.20, 0.13, 0.07, 0.075),
+			1.0
+		)
+	draw_rect(
+		map_rect,
+		Color(0.08, 0.055, 0.025, 0.92),
+		false,
+		3.0 * _display_scale
+	)
 
 
 func _draw_terrain_background() -> void:
@@ -229,10 +474,14 @@ func _draw_terrain_background() -> void:
 		_terrain_texture,
 		Rect2(_origin, _map_size),
 		source_region,
-		Color(0.38, 0.40, 0.42, 0.62)
+		Color(0.62, 0.52, 0.35, 0.52)
 	)
-	# 暗色罩层压低底图细节，保证道路、国家色和文字仍是视觉主层。
-	draw_rect(Rect2(_origin, _map_size), Color(0.02, 0.025, 0.035, 0.34), true)
+	# 赭色罩层把卫星底图统一进战略图纸色域。
+	draw_rect(
+		Rect2(_origin, _map_size),
+		Color(0.30, 0.22, 0.12, 0.22),
+		true
+	)
 
 
 func _draw_rivers() -> void:
@@ -244,14 +493,14 @@ func _draw_rivers() -> void:
 			points.append(_origin + normalized_point * _map_size)
 		draw_polyline(
 			points,
-			Color(0.12, 0.42, 0.68, 0.78),
-			4.0 * _display_scale,
+				Color(0.08, 0.16, 0.19, 0.86),
+				5.0 * _display_scale,
 			true
 		)
 		draw_polyline(
 			points,
-			Color(0.30, 0.67, 0.90, 0.85),
-			1.5 * _display_scale,
+				Color(0.24, 0.48, 0.55, 0.90),
+				2.0 * _display_scale,
 			true
 		)
 
@@ -295,14 +544,25 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			var recognized_owner := game_state.recognized_owner_of(province_id)
 			if recognized_owner < 0:
 				recognized_owner = current_owner
-			var base := game_state.nations[recognized_owner].color
-			base.a = 0.30
+			var base := paper_nation_color(
+				game_state.nations[recognized_owner].color
+			)
+			base.a = 0.38
 			if current_owner != recognized_owner and (x + y) % 9 < 3:
-				var occupation := game_state.nations[current_owner].color.lightened(0.18)
-				occupation.a = 0.72
+				var occupation := paper_nation_color(
+					game_state.nations[current_owner].color
+				).darkened(0.08)
+				occupation.a = 0.78
 				base = occupation
 			image.set_pixel(x, y, base)
 	return image
+
+
+static func paper_nation_color(color: Color) -> Color:
+	var paper_tint := Color(0.64, 0.52, 0.33)
+	var result := color.lerp(paper_tint, 0.48)
+	result.s = minf(result.s, 0.58)
+	return result
 
 
 static func build_province_boundary_segments(
@@ -441,7 +701,7 @@ func _draw_province_boundaries() -> void:
 	if not _province_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_province_boundary_segments),
-			Color(0.08, 0.09, 0.12, 0.72),
+				Color(0.20, 0.14, 0.08, 0.50),
 			maxf(1.0 * _display_scale, 1.0),
 			true
 		)
@@ -452,14 +712,14 @@ func _draw_national_boundaries() -> void:
 	if not coast_pixels.is_empty():
 		draw_multiline(
 			coast_pixels,
-			Color(0.02, 0.025, 0.04, 0.90),
-			4.0 * _display_scale,
+				Color(0.055, 0.040, 0.022, 0.96),
+				5.0 * _display_scale,
 			true
 		)
 		draw_multiline(
 			coast_pixels,
-			Color(0.78, 0.78, 0.70, 0.72),
-			1.4 * _display_scale,
+				Color(0.88, 0.75, 0.50, 0.76),
+				1.6 * _display_scale,
 			true
 		)
 	if _nation_boundary_segments.is_empty():
@@ -469,21 +729,21 @@ func _draw_national_boundaries() -> void:
 	)
 	draw_multiline(
 		nation_pixels,
-		Color(0.025, 0.02, 0.035, 0.96),
-		6.0 * _display_scale,
+			Color(0.055, 0.035, 0.018, 0.98),
+			7.0 * _display_scale,
 		true
 	)
 	draw_multiline(
 		nation_pixels,
-		Color(1.0, 0.88, 0.54, 0.94),
-		2.4 * _display_scale,
+			Color(0.91, 0.69, 0.30, 0.92),
+			2.2 * _display_scale,
 		true
 	)
 	if not _alliance_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_alliance_boundary_segments),
-			Color(0.25, 0.92, 1.0, 0.96),
-			2.8 * _display_scale,
+				Color(0.20, 0.48, 0.50, 0.95),
+				3.0 * _display_scale,
 			true
 		)
 
@@ -499,24 +759,9 @@ func _draw_campaign_arrows() -> void:
 			or nation_id >= state.nations.size()
 		):
 			continue
-		var event_key := "%d:%d:%d:%d" % [
-			nation_id,
-			int(event["start_day"]),
-			int(event.get("wave", 0)),
-			target_city,
-		]
-		if not _campaign_event_seen_at.has(event_key):
-			_campaign_event_seen_at[event_key] = _blink
-		var visual_age := _blink - float(_campaign_event_seen_at[event_key])
-		const DISPLAY_SECONDS: float = 3.0
-		const FADE_SECONDS: float = 0.65
-		if visual_age >= DISPLAY_SECONDS:
+		var alpha := campaign_arrow_alpha(state.day, event)
+		if alpha <= 0.0:
 			continue
-		var alpha := clampf(
-			(DISPLAY_SECONDS - visual_age) / FADE_SECONDS,
-			0.0,
-			1.0
-		)
 		var origins: Array = event.get("origin_cities", [])
 		for index in range(origins.size()):
 			var origin_city := int(origins[index])
@@ -529,6 +774,22 @@ func _draw_campaign_arrows() -> void:
 				alpha,
 				index
 			)
+
+
+static func campaign_arrow_alpha(
+	game_day: int,
+	event: Dictionary
+) -> float:
+	var start_day := int(event.get("start_day", game_day))
+	var end_day := int(event.get("end_day", game_day))
+	if game_day < start_day or game_day > end_day:
+		return 0.0
+	var remaining_days := end_day - game_day
+	return clampf(
+		(float(remaining_days) + 1.0) / 4.0,
+		0.35,
+		1.0
+	)
 
 
 func _draw_campaign_arrow(
@@ -557,14 +818,42 @@ func _draw_campaign_arrow(
 			start * inv * inv + control * 2.0 * inv * t + finish * t * t
 		)
 	var arrow_color := color.lightened(0.28)
-	arrow_color.a = 0.92 * alpha
+	arrow_color = paper_nation_color(arrow_color)
+	arrow_color.a = 0.96 * alpha
 	draw_polyline(
 		points,
-		Color(0.025, 0.02, 0.03, 0.84 * alpha),
-		9.0 * _display_scale,
+		Color(0.04, 0.025, 0.012, 0.88 * alpha),
+		10.0 * _display_scale,
 		true
 	)
-	draw_polyline(points, arrow_color, 5.0 * _display_scale, true)
+	draw_polyline(points, arrow_color, 5.5 * _display_scale, true)
+	var flow_phase := fmod(_blink * 0.18 + float(curve_index) * 0.07, 0.24)
+	for chevron_index in range(4):
+		var t := 0.12 + flow_phase + float(chevron_index) * 0.24
+		if t >= 0.94:
+			continue
+		var point := _quadratic_point(start, control, finish, t)
+		var next := _quadratic_point(
+			start,
+			control,
+			finish,
+			minf(t + 0.02, 1.0)
+		)
+		var flow_direction := (next - point).normalized()
+		var flow_normal := Vector2(-flow_direction.y, flow_direction.x)
+		var tail := 5.0 * _display_scale
+		draw_line(
+			point,
+			point - flow_direction * tail + flow_normal * tail * 0.55,
+			Color(PAPER_LIGHT, alpha),
+			1.6 * _display_scale
+		)
+		draw_line(
+			point,
+			point - flow_direction * tail - flow_normal * tail * 0.55,
+			Color(PAPER_LIGHT, alpha),
+			1.6 * _display_scale
+		)
 	var tangent := (finish - control).normalized()
 	var arrow_normal := Vector2(-tangent.y, tangent.x)
 	var head_length := 18.0 * _display_scale
@@ -575,6 +864,29 @@ func _draw_campaign_arrow(
 		finish - tangent * head_length - arrow_normal * head_width,
 	])
 	draw_colored_polygon(head, arrow_color)
+	draw_polyline(
+		PackedVector2Array([
+			head[1],
+			head[0],
+			head[2],
+		]),
+		Color(0.04, 0.025, 0.012, 0.90 * alpha),
+		1.8 * _display_scale
+	)
+
+
+static func _quadratic_point(
+	start: Vector2,
+	control: Vector2,
+	finish: Vector2,
+	t: float
+) -> Vector2:
+	var inv := 1.0 - t
+	return (
+		start * inv * inv
+		+ control * 2.0 * inv * t
+		+ finish * t * t
+	)
 
 
 func _draw_edges() -> void:
@@ -585,15 +897,15 @@ func _draw_edges() -> void:
 		if not is_edge_visible(e):
 			continue
 		if e.kind == Edge.Kind.RIVER:
-			var river_color := Color(0.28, 0.72, 0.98)
+			var river_color := Color(0.20, 0.45, 0.52)
 			river_color = river_color.lerp(
-				Color(0.62, 0.30, 0.75),
+				Color(0.42, 0.25, 0.32),
 				danger * 0.45
 			)
 			draw_line(
 				pa,
 				pb,
-				Color(0.02, 0.10, 0.18, 0.85),
+				Color(0.04, 0.075, 0.075, 0.90),
 				7.0 * _display_scale
 			)
 			draw_line(
@@ -607,7 +919,7 @@ func _draw_edges() -> void:
 			draw_dashed_line(
 				pa,
 				pb,
-				Color(0.92, 0.30, 0.24, 0.95),
+					Color(0.62, 0.12, 0.09, 0.96),
 				3.0 * _display_scale,
 				6.0 * _display_scale
 			)
@@ -620,24 +932,91 @@ func _draw_edges() -> void:
 		elif e.max_manpower >= 15000:
 			road_level = 2
 		var road_colors: Array[Color] = [
-			Color(0.34, 0.34, 0.38),
-			Color(0.48, 0.46, 0.42),
-			Color(0.72, 0.65, 0.48),
-			Color(0.96, 0.82, 0.42),
+			Color(0.22, 0.17, 0.11),
+			Color(0.30, 0.22, 0.13),
+			Color(0.43, 0.31, 0.16),
+			Color(0.60, 0.42, 0.18),
 		]
 		var road_widths: Array[float] = [1.5, 2.5, 4.0, 6.0]
 		var col: Color = road_colors[road_level - 1]
-		col = col.lerp(Color(0.72, 0.20, 0.27), danger * 0.38)
+		col = col.lerp(ACCENT_RED, danger * 0.48)
 		var width: float = road_widths[road_level - 1] * _display_scale
 		if road_level >= 3:
 			draw_line(
-				pa, pb, Color(0.05, 0.04, 0.04, 0.75),
+				pa, pb, Color(0.04, 0.028, 0.015, 0.82),
 				width + 2.0 * _display_scale
 			)
 		if e.occupied:
-			col = col.lerp(Color(0.95, 0.85, 0.3), 0.55)
+			col = col.lerp(ACCENT_GOLD, 0.55)
 			width += 1.5 * _display_scale
 		draw_line(pa, pb, col, width)
+		if danger >= 0.72:
+			_draw_edge_danger_ticks(pa, pb, danger)
+
+
+func _draw_edge_danger_ticks(
+	from: Vector2,
+	to: Vector2,
+	danger: float
+) -> void:
+	var delta := to - from
+	if delta.length_squared() < 16.0:
+		return
+	var direction := delta.normalized()
+	var normal := Vector2(-direction.y, direction.x)
+	var count := clampi(int(round(delta.length() / 34.0)), 2, 6)
+	for index in range(1, count + 1):
+		var t := float(index) / float(count + 1)
+		var center := from.lerp(to, t)
+		var half := (2.0 + danger * 2.0) * _display_scale
+		draw_line(
+			center - normal * half,
+			center + normal * half,
+			Color(0.45, 0.08, 0.055, 0.88),
+			1.2 * _display_scale
+		)
+
+
+func _draw_selection_highlight() -> void:
+	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
+		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
+		if edge != null:
+			var from := _city_center(state.cities[edge.city_a])
+			var to := _city_center(state.cities[edge.city_b])
+			draw_line(
+				from,
+				to,
+				Color(0.04, 0.025, 0.01, 0.95),
+				10.0 * _display_scale
+			)
+			draw_dashed_line(
+				from,
+				to,
+				ACCENT_GOLD,
+				4.0 * _display_scale,
+				8.0 * _display_scale
+			)
+	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
+		var center := _city_center(state.cities[_selected_city_id])
+		var radius := 15.0 * _display_scale
+		draw_arc(
+			center,
+			radius,
+			0.0,
+			TAU,
+			32,
+			Color(0.04, 0.025, 0.01, 0.96),
+			5.0 * _display_scale
+		)
+		draw_arc(
+			center,
+			radius,
+			0.0,
+			TAU,
+			32,
+			ACCENT_GOLD,
+			2.0 * _display_scale
+		)
 
 
 static func is_edge_visible(edge: Edge) -> bool:
@@ -645,69 +1024,123 @@ static func is_edge_visible(edge: Edge) -> bool:
 
 
 func _draw_cities() -> void:
-	var half := clampf(
-		_cell * 0.18,
-		5.0 * _display_scale,
-		10.0 * _display_scale
-	)
+	var half := 7.0 * _display_scale
 	var contested_cities := contested_city_ids(state)
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
-		var base := state.nations[city.owner_nation].color
-		if city.is_dock:
-			draw_colored_polygon(
-				PackedVector2Array([
-					center + Vector2(0.0, -half * 1.25),
-					center + Vector2(half * 1.25, 0.0),
-					center + Vector2(0.0, half * 1.25),
-					center + Vector2(-half * 1.25, 0.0),
-				]),
-				base
-			)
-		else:
-			draw_rect(rect, base, true)
-		# 红框只表示本城正在发生守城战或围城，不再复述全局战争状态。
+		var base := paper_nation_color(
+			state.nations[city.owner_nation].color
+		)
 		var border := (
-			Color(0.9, 0.1, 0.1)
+			ACCENT_RED
 			if contested_cities.has(city.id)
-			else Color(0, 0, 0, 0.5)
+			else INK_COLOR
 		)
 		if city.is_dock:
-			draw_polyline(
-				PackedVector2Array([
-					center + Vector2(0.0, -half * 1.25),
-					center + Vector2(half * 1.25, 0.0),
-					center + Vector2(0.0, half * 1.25),
-					center + Vector2(-half * 1.25, 0.0),
-					center + Vector2(0.0, -half * 1.25),
-				]),
+			_draw_dock_symbol(center, half, base, border)
+		else:
+			draw_rect(rect.grow(2.0 * _display_scale), PAPER_LIGHT, true)
+			draw_rect(rect, base, true)
+			draw_rect(
+				rect,
 				border,
+				false,
 				2.0 * _display_scale
 			)
-		else:
-			draw_rect(rect, border, false, 2.0 * _display_scale)
-		# 普通城市只显示工事强度；首都粮仓额外显示 C/W 与库存。
-		var label := (
-			"港D%d" % city.fort_strength
-			if city.is_dock
-			else "D%d" % city.fort_strength
-		)
+			draw_line(
+				rect.position,
+				rect.end,
+				Color(INK_COLOR, 0.42),
+				1.0 * _display_scale
+			)
+			draw_line(
+				Vector2(rect.end.x, rect.position.y),
+				Vector2(rect.position.x, rect.end.y),
+				Color(INK_COLOR, 0.42),
+				1.0 * _display_scale
+			)
+		if city.is_capital:
+			_draw_star(
+				center + Vector2(0.0, -half - 5.0 * _display_scale),
+				4.0 * _display_scale,
+				ACCENT_GOLD
+			)
+		var label := ("港%d" if city.is_dock else "城%d") % city.id
 		if city.is_food_hub:
 			label += " 粮"
 		if city.is_manpower_hub:
 			label += " 人"
-		if city.has_warehouse:
-			label += " %sF%d" % ["C" if city.is_capital else "W", city.food_storage]
+		var label_position := center + Vector2(
+			half + 4.0 * _display_scale,
+			-2.0 * _display_scale
+		)
+		var label_width := float(label.length() * _font_size(8)) * 0.72
+		draw_rect(
+			Rect2(
+				label_position + Vector2(-2.0, -9.0) * _display_scale,
+				Vector2(label_width + 4.0 * _display_scale, 12.0 * _display_scale)
+			),
+			Color(PAPER_LIGHT, 0.82),
+			true
+		)
 		draw_string(
 			_font,
-			rect.position + Vector2(2, 9) * _display_scale,
+			label_position,
 			label,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			_font_size(8),
-			Color(0, 0, 0, 0.8)
+			INK_COLOR
 		)
+
+
+func _draw_dock_symbol(
+	center: Vector2,
+	half: float,
+	fill: Color,
+	border: Color
+) -> void:
+	draw_circle(center, half * 0.92, PAPER_LIGHT)
+	draw_circle(center, half * 0.72, fill)
+	draw_arc(
+		center,
+		half * 0.92,
+		0.0,
+		TAU,
+		24,
+		border,
+		2.0 * _display_scale
+	)
+	draw_line(
+		center + Vector2(0.0, -half * 0.62),
+		center + Vector2(0.0, half * 0.70),
+		border,
+		1.8 * _display_scale
+	)
+	draw_arc(
+		center + Vector2(0.0, half * 0.18),
+		half * 0.55,
+		0.15,
+		PI - 0.15,
+		12,
+		border,
+		1.8 * _display_scale
+	)
+
+
+func _draw_star(center: Vector2, radius: float, color: Color) -> void:
+	var points := PackedVector2Array()
+	for index in range(10):
+		var angle := -PI / 2.0 + float(index) * PI / 5.0
+		var point_radius := radius if index % 2 == 0 else radius * 0.45
+		points.append(center + Vector2(cos(angle), sin(angle)) * point_radius)
+	draw_colored_polygon(points, color)
+	draw_polyline(
+		PackedVector2Array(Array(points) + [points[0]]),
+		INK_COLOR,
+		1.0 * _display_scale
+	)
 
 
 static func contested_city_ids(game_state: GameState) -> Dictionary:
@@ -720,100 +1153,177 @@ static func contested_city_ids(game_state: GameState) -> Dictionary:
 
 func _draw_armies() -> void:
 	var blink_on := fmod(_blink, 0.6) < 0.3
-	var pulse := 0.5 + 0.5 * sin(_blink * 6.0)   # 0..1 脉动
+	var pulse := 0.5 + 0.5 * sin(_blink * 6.0)
 	for army in state.armies:
 		if army.size <= 0:
 			continue
-		var pos := _army_position(army)
-		var col := state.nations[army.owner_nation].color.lightened(0.25)
-		var radius := (
-			clampf(4.0 + army.size / 300.0, 4.0, 12.0)
-			* _display_scale
+		var pos := (
+			_army_position(army)
+			+ _army_counter_offset(army.id) * _display_scale
 		)
-		# 饥饿闪烁
+		var width := (
+			40.0 if army.max_size >= Edge.STANDARD_MANPOWER else 34.0
+		) * _display_scale
+		var height := 23.0 * _display_scale
+		var rect := Rect2(
+			pos - Vector2(width, height) * 0.5,
+			Vector2(width, height)
+		)
+		if army.state == Army.State.HOLDING:
+			var h := 18.0 * _display_scale
+			draw_polyline(
+				PackedVector2Array([
+					pos + Vector2(0.0, -h),
+					pos + Vector2(h, 0.0),
+					pos + Vector2(0.0, h),
+					pos + Vector2(-h, 0.0),
+					pos + Vector2(0.0, -h),
+				]),
+				Color(0.12, 0.25, 0.20, 0.88),
+				2.0 * _display_scale
+			)
+		draw_rect(
+			Rect2(
+				rect.position + Vector2(2.5, 3.0) * _display_scale,
+				rect.size
+			),
+			Color(0.03, 0.02, 0.01, 0.58),
+			true
+		)
+		var counter_color := paper_nation_color(
+			state.nations[army.owner_nation].color
+		).lightened(0.15)
 		if army.starving and blink_on:
-			col = Color(1, 1, 1)
-		draw_circle(pos, radius, col)
+			counter_color = PAPER_LIGHT
+		draw_rect(rect, counter_color, true)
+		draw_rect(
+			Rect2(rect.position, Vector2(rect.size.x, 5.0 * _display_scale)),
+			paper_nation_color(state.nations[army.owner_nation].color),
+			true
+		)
+		draw_rect(rect, INK_COLOR, false, 2.0 * _display_scale)
+		var symbol_top := rect.position.y + 7.0 * _display_scale
+		var symbol_bottom := rect.position.y + 15.0 * _display_scale
+		if army.max_size >= Edge.STANDARD_MANPOWER:
+			draw_arc(
+				Vector2(rect.get_center().x, (symbol_top + symbol_bottom) * 0.5),
+				5.0 * _display_scale,
+				0.0,
+				TAU,
+				20,
+				INK_COLOR,
+				1.4 * _display_scale
+			)
+		else:
+			draw_line(
+				Vector2(rect.position.x + 8.0 * _display_scale, symbol_top),
+				Vector2(rect.end.x - 8.0 * _display_scale, symbol_bottom),
+				INK_COLOR,
+				1.2 * _display_scale
+			)
+			draw_line(
+				Vector2(rect.end.x - 8.0 * _display_scale, symbol_top),
+				Vector2(rect.position.x + 8.0 * _display_scale, symbol_bottom),
+				INK_COLOR,
+				1.2 * _display_scale
+			)
+		var state_code := _army_state_code(army.state)
+		draw_string(
+			_font,
+			rect.position + Vector2(2.5, 4.5) * _display_scale,
+			state_code,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			_font_size(6),
+			PAPER_LIGHT
+		)
+		draw_string(
+			_font,
+			Vector2(
+				rect.position.x + 2.0 * _display_scale,
+				rect.end.y - 2.5 * _display_scale
+			),
+			"%dK" % int(round(float(army.size) / 1000.0)),
+			HORIZONTAL_ALIGNMENT_LEFT,
+			rect.size.x - 4.0 * _display_scale,
+			_font_size(7),
+			INK_COLOR
+		)
 		if (
 			army.offensive_attack_multiplier > 1.0
 			and state.day < army.offensive_bonus_until_day
 		):
-			draw_arc(
-				pos,
-				radius + 5.0 * _display_scale,
-				0,
-				TAU,
-				20,
-				Color(1.0, 0.75, 0.15, 0.95),
-				2.5 * _display_scale
+			var pennant := PackedVector2Array([
+				rect.position + Vector2(rect.size.x * 0.55, 0.0),
+				rect.position + Vector2(rect.size.x * 0.82, 0.0),
+				rect.position + Vector2(rect.size.x * 0.68, -7.0 * _display_scale),
+			])
+			draw_colored_polygon(pennant, ACCENT_GOLD)
+			draw_polyline(
+				PackedVector2Array([
+					pennant[0],
+					pennant[1],
+					pennant[2],
+					pennant[0],
+				]),
+				INK_COLOR,
+				1.0 * _display_scale
 			)
-			draw_string(
-				_font,
-				pos + Vector2(
-					radius + 5.0 * _display_scale,
-					-radius
-				),
-				"攻x%.2f" % army.offensive_attack_multiplier,
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1,
-				_font_size(9),
-				Color(1.0, 0.85, 0.35)
-			)
-		# 交战军队：脉动红圈描边（一眼区分“正在打仗”）
 		if army.state == Army.State.FIGHTING:
-			var rr := radius + (2.0 + pulse * 3.0) * _display_scale
-			draw_arc(
-				pos, rr, 0, TAU, 20,
-				Color(1.0, 0.3, 0.2, 0.5 + 0.4 * pulse),
-				2.0 * _display_scale
+			draw_rect(
+				rect.grow((2.0 + pulse * 2.0) * _display_scale),
+				Color(0.70, 0.10, 0.07, 0.55 + 0.35 * pulse),
+				false,
+				2.2 * _display_scale
 			)
 		elif army.state == Army.State.RECOVERING:
-			# 驻城恢复：稳定蓝圈，区别于交战红圈和断粮白闪。
-			draw_arc(
-				pos, radius + 3.0 * _display_scale, 0, TAU, 20,
-				Color(0.25, 0.75, 1.0, 0.9),
+			draw_rect(
+				rect.grow(2.0 * _display_scale),
+				Color(0.20, 0.42, 0.45, 0.90),
+				false,
 				2.0 * _display_scale
 			)
-		elif army.state == Army.State.HOLDING:
-			var h := radius + 3.0 * _display_scale
-			draw_polyline(PackedVector2Array([
-				pos + Vector2(0, -h), pos + Vector2(h, 0), pos + Vector2(0, h),
-				pos + Vector2(-h, 0), pos + Vector2(0, -h),
-			]), Color(0.2, 1.0, 0.85, 0.95), 2.0 * _display_scale)
-			draw_string(
-				_font,
-				pos + Vector2(radius + 4.0 * _display_scale, radius + 4.0 * _display_scale),
-				"H%d" % army.holding_days,
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1,
-				_font_size(9),
-				Color(0.5, 1.0, 0.9)
-			)
-		draw_arc(
-			pos, radius, 0, TAU, 16,
-			Color(0, 0, 0, 0.7),
-			1.5 * _display_scale
-		)
-		_draw_morale_bar(pos, radius, army.morale)
-		draw_string(
-			_font,
-			pos + Vector2(-10.0 * _display_scale, -radius - 4.0 * _display_scale),
-			str(army.size),
-			HORIZONTAL_ALIGNMENT_CENTER,
-			-1,
-			_font_size(9),
-			Color.WHITE
-		)
+		_draw_morale_bar(rect, army.morale)
 
 
-## 军队士气条：位于军队圆下方，红(0)→黄(0.5)→绿(1) 映射，直观展示疲劳/濒溃。
-func _draw_morale_bar(pos: Vector2, radius: float, morale: float) -> void:
-	var w := 20.0 * _display_scale
+static func _army_counter_offset(army_id: int) -> Vector2:
+	var offsets := [
+		Vector2.ZERO,
+		Vector2(-3.0, -2.0),
+		Vector2(3.0, -2.0),
+		Vector2(-3.0, 2.0),
+		Vector2(3.0, 2.0),
+	]
+	return offsets[posmod(army_id, offsets.size())]
+
+
+static func _army_state_code(state_value: int) -> String:
+	match state_value:
+		Army.State.MOVING:
+			return "M"
+		Army.State.FIGHTING:
+			return "F"
+		Army.State.RETREATING:
+			return "R"
+		Army.State.RECOVERING:
+			return "C"
+		Army.State.HOLDING:
+			return "H"
+	return "I"
+
+
+## 兵牌下沿士气条：红(0)→黄(0.5)→绿(1)。
+func _draw_morale_bar(rect: Rect2, morale: float) -> void:
+	var w := rect.size.x
 	var h := 3.0 * _display_scale
-	var top_left := pos + Vector2(-w * 0.5, radius + 3.0 * _display_scale)
+	var top_left := Vector2(rect.position.x, rect.end.y + 2.0 * _display_scale)
 	draw_rect(Rect2(top_left, Vector2(w, h)), Color(0, 0, 0, 0.55), true)
 	var m := clampf(morale, 0.0, 1.0)
-	var fill := Color(1.0 - m, m, 0.15) if m > 0.5 else Color(1.0, m * 2.0, 0.15)
+	var fill := (
+		Color(0.18, 0.46, 0.22)
+		if m > 0.5
+		else Color(0.66, 0.15 + m * 0.35, 0.08)
+	)
 	draw_rect(Rect2(top_left, Vector2(w * m, h)), fill, true)
 
 
@@ -832,7 +1342,7 @@ func _draw_battles() -> void:
 		) * _display_scale
 		draw_arc(
 			p, ring, 0, TAU, 28,
-			Color(1.0, 0.55, 0.1, 0.35 + 0.35 * pulse),
+				Color(0.66, 0.10, 0.07, 0.35 + 0.35 * pulse),
 			2.0 * _display_scale
 		)
 		# 星芒（8 道，脉动）
@@ -844,10 +1354,10 @@ func _draw_battles() -> void:
 			var dir := Vector2(cos(ang), sin(ang))
 			draw_line(
 				p + dir * r_in, p + dir * r_out,
-				Color(1.0, 0.85, 0.2, 0.9),
+					Color(0.86, 0.63, 0.20, 0.92),
 				2.0 * _display_scale
 			)
-		draw_circle(p, r_in, Color(1.0, 0.95, 0.6, 0.9))
+			draw_circle(p, r_in, ACCENT_GOLD)
 		# 回合数
 		draw_string(
 			_font,
@@ -856,7 +1366,7 @@ func _draw_battles() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			_font_size(11),
-			Color(1, 1, 1)
+				PAPER_LIGHT
 		)
 		# 攻城进度弧（纯围城阶段：siege_progress / REQUIRED）
 		if b.kind == Battle.Kind.SIEGE and b.siege_progress > 0.0:
@@ -867,7 +1377,7 @@ func _draw_battles() -> void:
 				-PI / 2.0,
 				-PI / 2.0 + TAU * frac,
 				32,
-				Color(0.4, 0.9, 1.0, 0.95),
+					Color(0.22, 0.48, 0.50, 0.95),
 				3.0 * _display_scale
 			)
 
@@ -922,10 +1432,63 @@ func _grid_to_pixel(g: Vector2) -> Vector2:
 
 func _draw_hud() -> void:
 	var header_y := 20.0 * _display_scale
-	var status := "PAUSED" if sim.paused else "RUN"
+	var status := "暂停" if sim.paused else "推演中"
 	if state.winner != -1:
-		status = "WINNER: 国%d" % state.winner
-	var header := "Day %d (M%d)   [%s]   Speed x%.2f   (Space:暂停  +/-:调速  R:重开)" % [
+		status = "国%d 胜利" % state.winner
+	var header_rect := Rect2(
+		Vector2(_side_margin - 10.0 * _display_scale, 5.0 * _display_scale),
+		Vector2(
+			get_viewport_rect().size.x
+				- (_side_margin - 10.0 * _display_scale) * 2.0,
+			28.0 * _display_scale
+		)
+	)
+	draw_rect(
+		Rect2(
+			header_rect.position + Vector2(2.0, 3.0) * _display_scale,
+			header_rect.size
+		),
+		Color(0.02, 0.015, 0.008, 0.60),
+		true
+	)
+	draw_rect(header_rect, COMMAND_GREEN, true)
+	draw_rect(header_rect, ACCENT_GOLD.darkened(0.25), false, 1.5 * _display_scale)
+	var button_rect := nation_stats_button_rect(
+		get_viewport_rect().size,
+		_display_scale,
+		_side_margin
+	)
+	draw_rect(
+		Rect2(
+			button_rect.position + Vector2(1.5, 2.0) * _display_scale,
+			button_rect.size
+		),
+		Color(0.02, 0.015, 0.008, 0.72),
+		true
+	)
+	draw_rect(
+		button_rect,
+		ACCENT_GOLD.darkened(0.18)
+			if _nation_stats_open
+			else PAPER_DARK,
+		true
+	)
+	draw_rect(
+		button_rect,
+		PAPER_LIGHT,
+		false,
+		1.2 * _display_scale
+	)
+	draw_string(
+		_font,
+		button_rect.position + Vector2(8.0, 15.0) * _display_scale,
+		"收起统计" if _nation_stats_open else "国家统计",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		button_rect.size.x - 16.0 * _display_scale,
+		_font_size(10),
+		PAPER_LIGHT
+	)
+	var header := "战略司令部 | 第%d日 / 第%d月 | %s | 速度 x%.2f | 左键查看档案 右键取消" % [
 		state.day, state.month, status, sim.speed_multiplier()
 	]
 	draw_string(
@@ -933,13 +1496,43 @@ func _draw_hud() -> void:
 		Vector2(_side_margin, header_y),
 		header,
 		HORIZONTAL_ALIGNMENT_LEFT,
-		get_viewport_rect().size.x - _side_margin * 2.0,
-		_font_size(16),
-		Color.WHITE
+		button_rect.position.x - _side_margin - 8.0 * _display_scale,
+		_font_size(13),
+		PAPER_LIGHT
 	)
+	if not _nation_stats_open:
+		return
 
-	# 各国独立详情卡。
+	# 可折叠国家统计窗口。
 	var overview_y := 46.0 * _display_scale
+	var hud_rows := int(ceil(
+		float(state.nations.size()) / float(_hud_columns)
+	))
+	var panel_rect := Rect2(
+		Vector2(
+			_side_margin - 9.0 * _display_scale,
+			overview_y - 8.0 * _display_scale
+		),
+		Vector2(
+			get_viewport_rect().size.x
+				- (_side_margin - 9.0 * _display_scale) * 2.0,
+			(
+				float(hud_rows) * BASE_HUD_CARD_HEIGHT
+				+ BASE_HUD_ROW_HEIGHT
+				+ 8.0
+			) * _display_scale
+		)
+	)
+	draw_rect(
+		Rect2(
+			panel_rect.position + Vector2(3.0, 4.0) * _display_scale,
+			panel_rect.size
+		),
+		Color(0.02, 0.015, 0.008, 0.62),
+		true
+	)
+	draw_rect(panel_rect, Color(0.58, 0.47, 0.31, 0.90), true)
+	draw_rect(panel_rect, INK_COLOR, false, 1.5 * _display_scale)
 	for nation_index in range(state.nations.size()):
 		var n := state.nations[nation_index]
 		var column := nation_index % _hud_columns
@@ -960,8 +1553,8 @@ func _draw_hud() -> void:
 		var event: Dictionary = state.diplomatic_history[-1]
 		var diplomacy_y := (
 			overview_y
-			+ float(int(ceil(float(state.nations.size()) / float(_hud_columns))))
-				* BASE_HUD_CARD_HEIGHT * _display_scale
+				+ float(hud_rows) * BASE_HUD_CARD_HEIGHT
+					* _display_scale
 			+ 2.0 * _display_scale
 		)
 		var diplomacy_line := "外交 Day%d 国%d→国%d %s：%s" % [
@@ -978,7 +1571,7 @@ func _draw_hud() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			get_viewport_rect().size.x - _side_margin * 2.0,
 			_font_size(12),
-			Color(0.90, 0.90, 0.75)
+				Color(0.28, 0.20, 0.10)
 		)
 
 
@@ -986,28 +1579,36 @@ func _draw_nation_detail_card(nation_id: int, rect: Rect2) -> void:
 	var n := state.nations[nation_id]
 	var details := nation_detail_lines(state, nation_id)
 	var at_war := not state.wars_of(nation_id).is_empty()
-	var background := Color(0.035, 0.045, 0.065, 0.92)
+	var background := Color(0.76, 0.66, 0.48, 0.96)
 	if at_war:
-		background = Color(0.12, 0.035, 0.04, 0.94)
+		background = Color(0.68, 0.48, 0.34, 0.97)
 	elif not n.alive:
-		background = Color(0.035, 0.035, 0.04, 0.82)
-	draw_rect(rect, Color(0.0, 0.0, 0.0, 0.55), true)
+		background = Color(0.43, 0.39, 0.31, 0.90)
+	draw_rect(
+		Rect2(
+			rect.position + Vector2(2.0, 2.5) * _display_scale,
+			rect.size
+		),
+		Color(0.02, 0.015, 0.01, 0.58),
+		true
+	)
 	var inner := rect.grow(-1.0 * _display_scale)
 	draw_rect(inner, background, true)
+	draw_rect(inner, INK_COLOR, false, 1.4 * _display_scale)
 	draw_rect(
 		Rect2(inner.position, Vector2(5.0 * _display_scale, inner.size.y)),
-		n.color,
+		paper_nation_color(n.color),
 		true
 	)
 	draw_line(
 		inner.position + Vector2(8.0, 22.0) * _display_scale,
 		inner.position + Vector2(inner.size.x / _display_scale - 8.0, 22.0)
 			* _display_scale,
-		Color(1.0, 1.0, 1.0, 0.10),
+		Color(0.18, 0.12, 0.06, 0.26),
 		1.0 * _display_scale
 	)
 	var text_x := inner.position.x + 11.0 * _display_scale
-	var title_color := n.color.lightened(0.32)
+	var title_color := INK_COLOR
 	var status := "战争" if at_war else ("和平" if n.alive else "灭亡")
 	draw_string(
 		_font,
@@ -1030,8 +1631,204 @@ func _draw_nation_detail_card(nation_id: int, rect: Rect2) -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			inner.size.x - 18.0 * _display_scale,
 			_font_size(10),
-			Color(0.88, 0.91, 0.96, 0.96)
+				Color(0.16, 0.11, 0.06, 0.96)
 		)
+
+
+func _draw_selection_detail() -> void:
+	var lines: Array[String] = []
+	var title := ""
+	var stripe_color := COMMAND_GREEN
+	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
+		var city := state.cities[_selected_city_id]
+		title = "城市作战档案  %s%d" % [
+			"港" if city.is_dock else "城",
+			city.id,
+		]
+		stripe_color = paper_nation_color(
+			state.nations[city.owner_nation].color
+		).darkened(0.22)
+		lines = city_detail_lines(state, city.id)
+	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
+		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
+		if edge != null:
+			title = "道路作战档案  %d ↔ %d" % [
+				edge.city_a,
+				edge.city_b,
+			]
+			lines = edge_detail_lines(state, edge)
+	if lines.is_empty():
+		return
+	var viewport_size := get_viewport_rect().size
+	var margin := DETAIL_PANEL_MARGIN * _display_scale
+	var width := minf(
+		DETAIL_PANEL_WIDTH * _display_scale,
+		viewport_size.x - margin * 2.0
+	)
+	var line_height := 17.0 * _display_scale
+	var height := (
+		43.0 * _display_scale
+		+ line_height * float(lines.size())
+	)
+	var rect := Rect2(
+		Vector2(
+			viewport_size.x - width - margin,
+			viewport_size.y - height - margin
+		),
+		Vector2(width, height)
+	)
+	draw_rect(
+		Rect2(
+			rect.position + Vector2(4.0, 5.0) * _display_scale,
+			rect.size
+		),
+		Color(0.02, 0.015, 0.008, 0.68),
+		true
+	)
+	draw_rect(rect, PAPER_LIGHT, true)
+	draw_rect(rect, INK_COLOR, false, 2.0 * _display_scale)
+	var title_rect := Rect2(
+		rect.position,
+		Vector2(rect.size.x, 28.0 * _display_scale)
+	)
+	draw_rect(title_rect, stripe_color, true)
+	draw_line(
+		Vector2(rect.position.x, title_rect.end.y),
+		Vector2(rect.end.x, title_rect.end.y),
+		ACCENT_GOLD,
+		2.0 * _display_scale
+	)
+	draw_string(
+		_font,
+		rect.position + Vector2(12.0, 19.0) * _display_scale,
+		title,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		rect.size.x - 24.0 * _display_scale,
+		_font_size(12),
+		PAPER_LIGHT
+	)
+	for index in range(lines.size()):
+		draw_string(
+			_font,
+			rect.position + Vector2(
+				12.0,
+				43.0 + float(index) * 17.0
+			) * _display_scale,
+			lines[index],
+			HORIZONTAL_ALIGNMENT_LEFT,
+			rect.size.x - 24.0 * _display_scale,
+			_font_size(10),
+			INK_COLOR
+		)
+
+
+static func city_detail_lines(
+	game_state: GameState,
+	city_id: int
+) -> Array[String]:
+	if city_id < 0 or city_id >= game_state.cities.size():
+		return []
+	var city := game_state.cities[city_id]
+	var legal_owner := game_state.recognized_owner_of(city_id)
+	var garrison_count := 0
+	var garrison_troops := 0
+	for army in game_state.armies:
+		if army.size > 0 and army.location_city == city_id:
+			garrison_count += 1
+			garrison_troops += army.size
+	var contested := contested_city_ids(game_state).has(city_id)
+	var recovery_days := 0
+	if city.fort_last_capture_day >= 0:
+		recovery_days = maxi(
+			Simulation.CITY_WAR_DISRUPTION_DAYS
+				- (game_state.day - city.fort_last_capture_day),
+			0
+		)
+	var type_name := "河运码头" if city.is_dock else "陆地城市"
+	var special: Array[String] = []
+	if city.is_capital:
+		special.append("首都")
+	if city.has_warehouse:
+		special.append("粮仓")
+	if city.is_food_hub:
+		special.append("粮食核心")
+	if city.is_manpower_hub:
+		special.append("人口核心")
+	return [
+		"类型 %s   状态 %s" % [
+			type_name,
+			"交战中" if contested else "稳定",
+		],
+		"控制 国%d   法理 国%d   %s" % [
+			city.owner_nation,
+			legal_owner,
+			" / ".join(special) if not special.is_empty() else "普通据点",
+		],
+		"工事 %d / %d   恢复剩余 %d 日" % [
+			city.fort_strength,
+			city.fort_strength_max,
+			recovery_days,
+		],
+		"驻军 %d 支 / %d 人" % [
+			garrison_count,
+			garrison_troops,
+		],
+		"产出 人力 %+d/月  金钱 %+d/月  粮食 %+d/半年" % [
+			city.manpower_per_month,
+			city.gold_per_month,
+			city.food_per_half_year,
+		],
+		"库存 %d   地形高度 %.2f / 起伏 %.2f" % [
+			city.food_storage,
+			city.terrain_height,
+			city.terrain_relief,
+		],
+	]
+
+
+static func edge_detail_lines(
+	game_state: GameState,
+	edge: Edge
+) -> Array[String]:
+	if edge == null:
+		return []
+	var city_a := game_state.cities[edge.city_a]
+	var city_b := game_state.cities[edge.city_b]
+	return [
+		"类型 %s   %s" % [
+			_edge_kind_name(edge.kind),
+			"允许驻边" if edge.allows_holding else "禁止驻边",
+		],
+		"端点 城%d(国%d) ↔ 城%d(国%d)" % [
+			edge.city_a,
+			city_a.owner_nation,
+			edge.city_b,
+			city_b.owner_nation,
+		],
+		"距离 %d   行军 %.1f 天" % [
+			edge.distance,
+			Simulation.edge_travel_days(edge),
+		],
+		"容量 %d   危险 %.0f%%   高差 %.2f" % [
+			edge.max_manpower,
+			edge.danger * 100.0,
+			edge.max_height_difference,
+		],
+		"粮损倍率 %.2f   通行军队 %d   %s" % [
+			edge.supply_loss_multiplier,
+			edge.passing_count,
+			"占用中" if edge.occupied else "畅通",
+		],
+	]
+
+
+static func _edge_kind_name(kind: int) -> String:
+	match kind:
+		Edge.Kind.LANDING:
+			return "抢滩通道"
+		Edge.Kind.RIVER:
+			return "河运航道"
+	return "陆上道路"
 
 
 static func nation_detail_lines(

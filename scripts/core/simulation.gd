@@ -199,7 +199,7 @@ func _advance_day() -> void:
 	_advance_campaign_echelons()
 	_advance_priority_city_defense_echelons()
 	_advance_movement()
-	_resolve_forced_bilateral_capitulations()
+	_resolve_eliminated_nation_capitulations()
 	_advance_holding_adaptation()
 	_drain_siege_food()   # 规格 R3：被围城每日耗粮（补给孤岛的粮草时钟）
 	_refresh_war_flags()
@@ -1139,33 +1139,25 @@ func _resolve_diplomacy() -> void:
 		_execute_diplomatic_action(action)
 
 
-## 仅有彼此一个交战国时，全境失守方立即投降。该规则属于战争结算，
-## 不经过和平意愿评分，也不等待月度外交 tick。
-func _resolve_forced_bilateral_capitulations() -> void:
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			if not state.is_enemy(nation_a, nation_b):
+## 失去全部城市的国家立即向所有交战国投降。该规则属于战争结算，
+## 不经过和平意愿评分、不等待月度外交 tick，也不保留多国战争残余关系。
+func _resolve_eliminated_nation_capitulations() -> void:
+	for surrendering in range(state.nations.size()):
+		if not state.cities_of(surrendering).is_empty():
+			continue
+		var opponents := _war_opponents_including_eliminated(
+			surrendering
+		)
+		for victor in opponents:
+			if not state.is_enemy(surrendering, victor):
 				continue
-			if (
-				_war_opponents_including_eliminated(nation_a)
-					!= [nation_b]
-				or _war_opponents_including_eliminated(nation_b)
-					!= [nation_a]
-			):
-				continue
-			var cities_a := state.cities_of(nation_a).size()
-			var cities_b := state.cities_of(nation_b).size()
-			if (cities_a == 0) == (cities_b == 0):
-				continue
-			var victor := nation_b if cities_a == 0 else nation_a
-			var surrendering := nation_a if cities_a == 0 else nation_b
 			_execute_diplomatic_action({
 				"kind": DiplomacyAI.Action.MAKE_PEACE,
 				"a": victor,
 				"b": surrendering,
 				"surrendering_nation": surrendering,
 				"reason": (
-					"国%d全境失守，且双方均无其他交战国，向国%d投降"
+					"国%d全境失守，向交战国%d投降"
 					% [surrendering, victor]
 				),
 			})
