@@ -24,8 +24,12 @@ var campaign_next_offensive_day: int = -1
 var campaign_offensive_count: int = 0
 ## 当前国家级攻势准备起点；普通波次可提前发动，僵局波次最多准备 180 天。
 var campaign_preparation_started_day: int = -1
-## 正在等待满准备的目标城；-1 表示当前没有僵局总攻计划。
-var campaign_full_preparation_target_city: int = -1
+## 当前波次并行准备的目标城，以及冻结的一军一目标分配。
+## 多个目标共享国家级准备时钟，不能让同一军在多个方向重复计入已集结兵力。
+var campaign_preparation_targets: Array[int] = []
+var campaign_preparation_assignments: Dictionary = {}
+## 正在等待 180 天满准备的目标城集合。
+var campaign_full_preparation_targets: Array[int] = []
 ## 当前波次的具体战役计划：army_id -> target_city_id。
 var campaign_attack_assignments: Dictionary = {}
 ## 持续攻势梯队：army_id -> echelon_index；每个目标从第 0 梯队依次投入。

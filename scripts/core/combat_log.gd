@@ -240,6 +240,16 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 			"max_manpower",
 			Combat.FRONTAGE_FALLBACK
 		))
+		edge.kind = int(edge_data.get("kind", Edge.Kind.LAND))
+		edge.travel_time_multiplier = float(
+			edge_data.get("travel_time_multiplier", 1.0)
+		)
+		edge.supply_loss_multiplier = float(
+			edge_data.get("supply_loss_multiplier", 1.0)
+		)
+		edge.allows_holding = bool(
+			edge_data.get("allows_holding", true)
+		)
 		battle.edge = edge
 	var city_data: Dictionary = context.get("city", {})
 	if not city_data.is_empty():

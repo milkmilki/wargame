@@ -7,14 +7,6 @@ const RETREAT_ENTER_RATIO: float = 0.40
 const HOLD_DEPLOY_ENTER_RATIO: float = 0.60
 const EMERGENCY_RETREAT_RATIO: float = 0.25
 const SIEGE_COMMIT_MARGIN: float = 2.00
-const SUPPLY_CORRIDOR_MIN_IMPORTANCE: float = 0.50
-const SUPPLY_CORRIDOR_THREAT_FLOOR: float = 250.0
-const SUPPLY_CORRIDOR_GARRISON_BASE: float = 1000.0
-const SUPPLY_CORRIDOR_GARRISON_SCALE: float = 2000.0
-const SUPPLY_CORRIDOR_GARRISON_MAX: float = 3000.0
-const SUPPLY_CORRIDOR_RESPONSE_MAX_POWER: float = 5000.0
-const SUPPLY_CORRIDOR_POWER_RATIO_MIN: float = 0.80
-const SUPPLY_CORRIDOR_POWER_RATIO_MAX: float = 1.50
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
 const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
@@ -73,12 +65,15 @@ static func choose(
 	var local_ratio := local_support / maxf(local_threat, 1.0)
 	if view.day < army.ai_order_until_day and local_ratio >= EMERGENCY_RETREAT_RATIO:
 		return ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "命令承诺期未结束")
-	if _must_remain_at_logistics_hub(view, snapshot, threat, army):
-		return ActionCandidate.make(
-			ActionCandidate.Kind.NONE,
-			0.0,
-			"首都或粮仓最低守备约束"
-		)
+	var retreat := _retreat_candidate(
+		view,
+		snapshot,
+		threat,
+		army,
+		local_ratio
+	)
+	if retreat != null:
+		return retreat
 	var candidates: Array[ActionCandidate] = []
 	candidates.append(ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "保持当前驻地"))
 	var defense := active_defense_plan.candidate_for(
@@ -99,9 +94,6 @@ static func choose(
 		)
 	if defense != null:
 		candidates.append(defense)
-	var retreat := _retreat_candidate(view, snapshot, threat, army, local_ratio)
-	if retreat != null:
-		candidates.append(retreat)
 	var attack := _attack_candidate(
 		view,
 		snapshot,
@@ -458,6 +450,7 @@ static func _attack_approach_distance(
 			best,
 			neighbor_dist
 				+ float(maxi(edge.distance, 1))
+					* maxf(edge.travel_time_multiplier, 0.05)
 				+ edge.danger * Pathfinding.DANGER_WEIGHT
 		)
 	return best
@@ -579,7 +572,9 @@ static func _breakout_candidate(
 			100.0
 			+ snapshot.value_of_city(neighbor)
 			- 5.0 * enemy_power / own_power
-			- 0.25 * float(edge.distance)
+			- 0.25
+				* float(edge.distance)
+				* maxf(edge.travel_time_multiplier, 0.05)
 		)
 		if score > best_score or (
 			is_equal_approx(score, best_score) and neighbor < best_city
@@ -707,9 +702,7 @@ static func _adjacent_assault_pool(
 			var eligible := false
 			var already_reserved := false
 			if army.state == Army.State.IDLE and army.location_city == neighbor:
-				eligible = not _must_remain_at_logistics_hub(
-					view, snapshot, threat, army
-				)
+					eligible = true
 			elif (
 				army.state == Army.State.HOLDING
 				and (
@@ -733,7 +726,7 @@ static func _adjacent_assault_pool(
 				or army.morale < 0.5
 			):
 				continue
-			var march_days := Simulation.march_days(edge.distance)
+			var march_days := Simulation.edge_travel_days(edge)
 			var arrival_days := march_days
 			if army.state in [Army.State.HOLDING, Army.State.MOVING]:
 				var remaining := (
@@ -774,88 +767,6 @@ static func _wait_for_assault_sync(pool: Dictionary, army: Army) -> bool:
 	)
 
 
-static func _must_remain_at_logistics_hub(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	army: Army
-) -> bool:
-	var city_id := army.location_city
-	if city_id < 0 or city_id >= view.state.cities.size():
-		return false
-	var city := view.state.cities[city_id]
-	# 内部粮道使用高优先级增援和命令承诺期，不硬锁整支不可拆分军队。
-	if city_id != view.capital_city_id and not city.has_warehouse:
-		return false
-	var required := required_logistics_garrison(
-		view, snapshot, threat, city_id
-	)
-	if required <= 0.0:
-		return false
-	return stationed_power_at(view, city_id, army) < required
-
-
-static func required_logistics_garrison(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	city_id: int
-) -> float:
-	if city_id < 0 or city_id >= view.state.cities.size():
-		return 0.0
-	var city := view.state.cities[city_id]
-	if city.owner_nation != view.nation_id:
-		return 0.0
-	var future_threat := threat.threat_at(city_id)
-	if city_id == view.capital_city_id:
-		if view.adaptive_garrison_enabled:
-			return 5000.0
-		return maxf(5000.0, future_threat * 1.25)
-	if city.has_warehouse:
-		if view.adaptive_garrison_enabled:
-			return 3000.0
-		return maxf(3000.0, future_threat)
-	var importance := snapshot.supply_importance_at(city_id)
-	if (
-		not view.supply_corridor_defense_enabled
-		or not _corridor_response_strategically_affordable(view)
-		or importance < SUPPLY_CORRIDOR_MIN_IMPORTANCE
-	):
-		return 0.0
-	var corridor_threat := maxf(
-		future_threat,
-		snapshot.potential_threat_at(city_id)
-	)
-	if corridor_threat < SUPPLY_CORRIDOR_THREAT_FLOOR:
-		return 0.0
-	return minf(
-		maxf(
-			SUPPLY_CORRIDOR_GARRISON_BASE
-				+ SUPPLY_CORRIDOR_GARRISON_SCALE * importance,
-			corridor_threat * (0.75 + importance * 0.50)
-		),
-		SUPPLY_CORRIDOR_GARRISON_MAX
-	)
-
-
-static func _corridor_response_strategically_affordable(
-	view: AiWorldView
-) -> bool:
-	var friendly_power := 0.0
-	for army in view.friendly_armies:
-		friendly_power += ArmyPower.effective(army)
-	var enemy_power := 0.0
-	for army in view.enemy_armies:
-		enemy_power += ArmyPower.effective(army)
-	if enemy_power <= 0.0:
-		return false
-	var ratio := friendly_power / enemy_power
-	return (
-		ratio >= SUPPLY_CORRIDOR_POWER_RATIO_MIN
-		and ratio <= SUPPLY_CORRIDOR_POWER_RATIO_MAX
-	)
-
-
 static func stationed_power_at(
 	view: AiWorldView,
 	city_id: int,
@@ -877,12 +788,6 @@ static func _choose_holding(
 	if view.state.cities[endpoint].owner_nation != view.nation_id:
 		endpoint = army.move_to
 	var enemy_endpoint := army.move_to if endpoint == army.move_from else army.move_from
-	var defense := defense_plan.candidate_for(
-		army,
-		coordinator
-	)
-	if defense != null:
-		return defense
 	var enemy := maxf(threat.threat_at(army.move_from), threat.threat_at(army.move_to))
 	var support := maxf(
 		maxf(
@@ -922,6 +827,12 @@ static func _choose_holding(
 		retreat.target_edge_a = army.move_from
 		retreat.target_edge_b = army.move_to
 		return retreat
+	var defense := defense_plan.candidate_for(
+		army,
+		coordinator
+	)
+	if defense != null:
+		return defense
 	if defense_plan.must_hold_city(endpoint):
 		return ActionCandidate.make(
 			ActionCandidate.Kind.HOLD,
@@ -1117,8 +1028,7 @@ static func _campaign_target_preparation_days(
 ) -> int:
 	var nation := view.state.nations[view.nation_id]
 	if (
-		nation.campaign_full_preparation_target_city
-			!= city_id
+		not nation.campaign_preparation_targets.has(city_id)
 		or nation.campaign_preparation_started_day < 0
 	):
 		return 0
@@ -1134,8 +1044,7 @@ static func _waiting_for_full_campaign_preparation(
 ) -> bool:
 	var nation := view.state.nations[view.nation_id]
 	return (
-		nation.campaign_full_preparation_target_city
-			== city_id
+		nation.campaign_full_preparation_targets.has(city_id)
 		and nation.campaign_preparation_started_day >= 0
 		and view.day - nation.campaign_preparation_started_day
 			< Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS

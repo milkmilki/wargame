@@ -544,6 +544,4 @@ func supply_importance_at(city_id: int) -> float:
 
 
 static func _edge_key(a: int, b: int) -> int:
-	var lo := mini(a, b)
-	var hi := maxi(a, b)
-	return lo * GameState.CITY_COUNT + hi
+	return GameState.edge_key(a, b)

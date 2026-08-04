@@ -11,7 +11,8 @@ const CITY_MANPOWER_PER_MONTH_MAX: int = 30
 const INITIAL_MANPOWER_RESERVE_MONTHS: int = 750
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
-const INITIAL_ARMIES_PER_TWO_CITIES: int = 3
+const LIGHT_ARMIES_PER_CITY: float = 0.50
+const HEAVY_ARMIES_PER_CITY: float = 0.05
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 3000
@@ -39,7 +40,7 @@ var battles: Array[Battle] = []            ## 进行中的多回合战斗
 
 ## 邻接表：city_id -> Array[int]（相邻 city_id）
 var adjacency: Dictionary = {}
-## 边查找：规范化 key (a*CITY_COUNT+b, a<b) -> Edge
+## 边查找：规范化无碰撞 int64 key -> Edge
 var edge_lookup: Dictionary = {}
 
 var day: int = 0                            ## 时间真源（1 tick = 1 天）
@@ -63,6 +64,8 @@ var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
+## 正式地图河流折线（归一化地图坐标），仅用于渲染；通行真源仍是 Edge。
+var river_paths: Array[PackedVector2Array] = []
 ## 法理归属用于区分“本国底色”和“占领国斜线”；和平协议会确认实际控制区。
 var recognized_city_owners: PackedInt32Array = PackedInt32Array()
 ## 短时战略箭头事件：{start_day,end_day,nation_id,target_city,origin_cities,wave}。
@@ -80,6 +83,7 @@ func generate_world(world_seed: int = 12345) -> void:
 	var terrain := TerrainMapGenerator.build(TERRAIN_MAP_PATH, CITY_COUNT)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
+	_generate_terrain_docks(terrain)
 	_initialize_recognized_city_owners()
 	_generate_terrain_edges(terrain)
 	_initialize_resource_hubs()
@@ -87,13 +91,10 @@ func generate_world(world_seed: int = 12345) -> void:
 	_initialize_capitals_and_warehouses()
 	_generate_armies()
 
-	assert(cities.size() == CITY_COUNT, "城市数应为 64")
+	assert(land_cities().size() == CITY_COUNT, "陆地城市数应为 64")
+	assert(cities.size() > CITY_COUNT, "正式地图应生成河运码头")
 	assert(edges.size() >= CITY_COUNT - 1, "道路图必须连通")
-	assert(
-		armies.size()
-			== CITY_COUNT * INITIAL_ARMIES_PER_TWO_CITIES / 2,
-		"初始军队数应为 96"
-	)
+	assert(_force_structure_matches_targets(), "正式地图初始军制必须匹配城市比例")
 
 
 ## 严格镜像基准和局部状态机测试使用的兼容网格夹具；正式游戏不调用。
@@ -116,8 +117,8 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
 	assert(
 		armies.size()
-			== CITY_COUNT * INITIAL_ARMIES_PER_TWO_CITIES / 2,
-		"初始军队数应为 96"
+			== CITY_COUNT * 3 / 2,
+		"网格状态机夹具必须保留每城轻军和每两城重军"
 	)
 
 
@@ -144,6 +145,7 @@ func _reset_world(world_seed: int) -> void:
 	war_objectives.clear()
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
+	river_paths.clear()
 	recognized_city_owners = PackedInt32Array()
 	campaign_visual_events.clear()
 
@@ -237,6 +239,50 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		adjacency[city.id] = [] as Array[int]
 
 
+func _generate_terrain_docks(terrain: Dictionary) -> void:
+	river_paths.clear()
+	for path_value in terrain.get("river_paths", []):
+		var path: PackedVector2Array = path_value
+		river_paths.append(path.duplicate())
+	var docks: Array[Dictionary] = terrain.get(
+		"docks",
+		[] as Array[Dictionary]
+	)
+	for dock_data in docks:
+		var city := City.new()
+		city.id = cities.size()
+		assert(
+			city.id == int(dock_data["city_id"]),
+			"码头城市 id 必须与河运边端点一致"
+		)
+		var position: Vector2 = dock_data["position"]
+		city.coord = Vector2i(
+			int(round(position.x * 1000.0)),
+			int(round(position.y * 1000.0))
+		)
+		city.map_position = position
+		city.terrain_height = float(dock_data["height"])
+		city.terrain_relief = float(dock_data["relief"])
+		city.is_dock = true
+		var road_t := float(dock_data["road_t"])
+		var owner_city := (
+			int(dock_data["road_a"])
+			if road_t <= 0.5
+			else int(dock_data["road_b"])
+		)
+		city.owner_nation = cities[owner_city].owner_nation
+		city.fort_strength = 10
+		city.fort_strength_max = 10
+		# 码头是完整可占领城市，但不凭空扩大开局四国经济盘子。
+		city.manpower_per_month = 0
+		city.gold_per_month = 0
+		city.food_per_half_year = 0
+		city.food_storage = 0
+		city.at_war = false
+		cities.append(city)
+		adjacency[city.id] = [] as Array[int]
+
+
 func _generate_grid_provinces() -> void:
 	province_map_size = Vector2i(GRID, GRID)
 	province_ids.resize(CITY_COUNT)
@@ -286,7 +332,7 @@ func _initialize_resource_hubs() -> void:
 		city.is_food_hub = false
 		city.is_manpower_hub = false
 	for nation in nations:
-		var owned := cities_of(nation.id)
+		var owned := land_cities_of(nation.id)
 		if owned.is_empty():
 			continue
 		var food_hub: City = owned[0]
@@ -344,7 +390,7 @@ func _initialize_capitals_and_warehouses() -> void:
 		city.is_capital = false
 		city.has_warehouse = false
 	for nation in nations:
-		var owned := cities_of(nation.id)
+		var owned := land_cities_of(nation.id)
 		var centroid := Vector2.ZERO
 		for city in owned:
 			centroid += city.map_position
@@ -404,6 +450,16 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 		edge.city_b = hi
 		edge.distance = int(road["distance"])
 		edge.danger = float(road["danger"])
+		edge.kind = int(road.get("kind", Edge.Kind.LAND))
+		edge.travel_time_multiplier = float(
+			road.get("travel_time_multiplier", 1.0)
+		)
+		edge.supply_loss_multiplier = float(
+			road.get("supply_loss_multiplier", 1.0)
+		)
+		edge.allows_holding = bool(
+			road.get("allows_holding", true)
+		)
 		edge.max_height_difference = float(road["height_difference"])
 		edge.max_manpower = int(road["max_manpower"])
 		edges.append(edge)
@@ -600,20 +656,88 @@ func _generate_armies() -> void:
 				b
 			)
 		)
-		for city in owned:
+		if not uses_heightmap:
+			for city in owned:
+				_initialize_army_attributes(create_army(
+					nation.id,
+					city.id,
+					INITIAL_LIGHT_ARMY_SIZE,
+					INITIAL_LIGHT_ARMY_SIZE
+				))
+			for index in range(owned.size() / 2):
+				_initialize_army_attributes(create_army(
+					nation.id,
+					owned[index * 2].id,
+					INITIAL_HEAVY_ARMY_SIZE,
+					INITIAL_HEAVY_ARMY_SIZE
+				))
+			continue
+		var light_count := target_light_army_count(nation.id)
+		var heavy_count := target_heavy_army_count(nation.id)
+		for index in range(light_count):
+			var city: City = owned[
+				int(floor(
+					float(index) * float(owned.size())
+						/ float(maxi(light_count, 1))
+				))
+			]
 			_initialize_army_attributes(create_army(
 				nation.id,
 				city.id,
 				INITIAL_LIGHT_ARMY_SIZE,
 				INITIAL_LIGHT_ARMY_SIZE
 			))
-		for index in range(owned.size() / 2):
+		for index in range(heavy_count):
+			var city: City = owned[
+				int(floor(
+					(float(index) + 0.5) * float(owned.size())
+						/ float(maxi(heavy_count, 1))
+				)) % owned.size()
+			]
 			_initialize_army_attributes(create_army(
 				nation.id,
-				owned[index * 2].id,
+				city.id,
 				INITIAL_HEAVY_ARMY_SIZE,
 				INITIAL_HEAVY_ARMY_SIZE
 			))
+
+
+func target_light_army_count(nation_id: int) -> int:
+	return int(ceil(
+		float(cities_of(nation_id).size()) * LIGHT_ARMIES_PER_CITY
+	))
+
+
+func target_heavy_army_count(nation_id: int) -> int:
+	return int(floor(
+		float(cities_of(nation_id).size()) * HEAVY_ARMIES_PER_CITY
+	))
+
+
+func target_army_count(nation_id: int) -> int:
+	return (
+		target_light_army_count(nation_id)
+		+ target_heavy_army_count(nation_id)
+	)
+
+
+func _force_structure_matches_targets() -> bool:
+	for nation in nations:
+		var light_count := 0
+		var heavy_count := 0
+		for army in armies:
+			if army.owner_nation != nation.id or army.size <= 0:
+				continue
+			if army.max_size == INITIAL_LIGHT_ARMY_SIZE:
+				light_count += 1
+			elif army.max_size == INITIAL_HEAVY_ARMY_SIZE:
+				heavy_count += 1
+		if (
+			light_count != target_light_army_count(nation.id)
+			or heavy_count != target_heavy_army_count(nation.id)
+		):
+			return false
+	return true
 
 
 func _initialize_army_attributes(army: Army) -> void:
@@ -767,10 +891,14 @@ func split_army(
 
 # ------------------------------------------------------------------ 查询辅助
 
-func _edge_key(a: int, b: int) -> int:
+static func edge_key(a: int, b: int) -> int:
 	var lo := mini(a, b)
 	var hi := maxi(a, b)
-	return lo * CITY_COUNT + hi
+	return (lo << 32) | hi
+
+
+func _edge_key(a: int, b: int) -> int:
+	return edge_key(a, b)
 
 
 ## 取两城之间的边（不存在返回 null）
@@ -1058,6 +1186,22 @@ func cities_of(nation_id: int) -> Array[City]:
 	var result: Array[City] = []
 	for city in cities:
 		if city.owner_nation == nation_id:
+			result.append(city)
+	return result
+
+
+func land_cities() -> Array[City]:
+	var result: Array[City] = []
+	for city in cities:
+		if not city.is_dock:
+			result.append(city)
+	return result
+
+
+func land_cities_of(nation_id: int) -> Array[City]:
+	var result: Array[City] = []
+	for city in cities:
+		if city.owner_nation == nation_id and not city.is_dock:
 			result.append(city)
 	return result
 

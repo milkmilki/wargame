@@ -391,6 +391,16 @@ static func edge_key(
 	result.append(edge.distance)
 	result.append(_quantize(edge.danger, VALUE_SCALE))
 	result.append(edge.max_manpower)
+	result.append(edge.kind)
+	result.append(_quantize(
+		edge.travel_time_multiplier,
+		VALUE_SCALE
+	))
+	result.append(_quantize(
+		edge.supply_loss_multiplier,
+		VALUE_SCALE
+	))
+	result.append(1 if edge.allows_holding else 0)
 	return result
 
 

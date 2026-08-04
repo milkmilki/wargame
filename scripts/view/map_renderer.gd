@@ -14,6 +14,8 @@ const BASE_HUD_TOP := 68.0
 const BASE_HUD_ROW_HEIGHT := 22.0
 const BASE_HUD_CARD_HEIGHT := 81.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
+const ACTIVE_REDRAW_FPS: float = 30.0
+const PAUSED_REDRAW_FPS: float = 5.0
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
 var _map_size: Vector2 = Vector2(512.0, 512.0)
@@ -34,6 +36,8 @@ var _province_ownership_revision: int = -1
 var _province_diplomacy_revision: int = -1
 var _campaign_event_seen_at: Dictionary = {}
 var _blink: float = 0.0                    ## 饥饿闪烁计时
+var _redraw_elapsed: float = 0.0
+var _last_viewport_size: Vector2 = Vector2.ZERO
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
 var _prev_pos: Dictionary = {}             ## army.id -> 上一 tick 末的逻辑位置
@@ -84,8 +88,28 @@ static func create_ui_font() -> Font:
 
 func _process(_delta: float) -> void:
 	_blink += _delta
+	_redraw_elapsed += _delta
+	var previous_day := _last_day
 	_sync_snapshots()
-	queue_redraw()
+	var viewport_size := get_viewport_rect().size
+	var viewport_changed := viewport_size != _last_viewport_size
+	if viewport_changed:
+		_last_viewport_size = viewport_size
+	var target_fps := (
+		PAUSED_REDRAW_FPS
+		if sim == null or sim.paused
+		else ACTIVE_REDRAW_FPS
+	)
+	if (
+		state != null
+		and (
+			viewport_changed
+			or state.day != previous_day
+			or _redraw_elapsed >= 1.0 / target_fps
+		)
+	):
+		_redraw_elapsed = 0.0
+		queue_redraw()
 
 
 func _compute_layout() -> void:
@@ -181,6 +205,7 @@ func _draw() -> void:
 	_draw_terrain_background()
 	_ensure_province_visual_cache()
 	_draw_province_fills()
+	_draw_rivers()
 	_draw_province_boundaries()
 	_draw_edges()
 	_draw_national_boundaries()
@@ -208,6 +233,27 @@ func _draw_terrain_background() -> void:
 	)
 	# 暗色罩层压低底图细节，保证道路、国家色和文字仍是视觉主层。
 	draw_rect(Rect2(_origin, _map_size), Color(0.02, 0.025, 0.035, 0.34), true)
+
+
+func _draw_rivers() -> void:
+	for river in state.river_paths:
+		if river.size() < 2:
+			continue
+		var points := PackedVector2Array()
+		for normalized_point in river:
+			points.append(_origin + normalized_point * _map_size)
+		draw_polyline(
+			points,
+			Color(0.12, 0.42, 0.68, 0.78),
+			4.0 * _display_scale,
+			true
+		)
+		draw_polyline(
+			points,
+			Color(0.30, 0.67, 0.90, 0.85),
+			1.5 * _display_scale,
+			true
+		)
 
 
 func _ensure_province_visual_cache() -> void:
@@ -538,6 +584,34 @@ func _draw_edges() -> void:
 		var danger := clampf(e.danger, 0.0, 1.0)
 		if not is_edge_visible(e):
 			continue
+		if e.kind == Edge.Kind.RIVER:
+			var river_color := Color(0.28, 0.72, 0.98)
+			river_color = river_color.lerp(
+				Color(0.62, 0.30, 0.75),
+				danger * 0.45
+			)
+			draw_line(
+				pa,
+				pb,
+				Color(0.02, 0.10, 0.18, 0.85),
+				7.0 * _display_scale
+			)
+			draw_line(
+				pa,
+				pb,
+				river_color,
+				4.5 * _display_scale
+			)
+			continue
+		if e.kind == Edge.Kind.LANDING:
+			draw_dashed_line(
+				pa,
+				pb,
+				Color(0.92, 0.30, 0.24, 0.95),
+				3.0 * _display_scale,
+				6.0 * _display_scale
+			)
+			continue
 		var road_level := 1
 		if e.max_manpower >= 100000:
 			road_level = 4
@@ -581,16 +655,44 @@ func _draw_cities() -> void:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
 		var base := state.nations[city.owner_nation].color
-		draw_rect(rect, base, true)
+		if city.is_dock:
+			draw_colored_polygon(
+				PackedVector2Array([
+					center + Vector2(0.0, -half * 1.25),
+					center + Vector2(half * 1.25, 0.0),
+					center + Vector2(0.0, half * 1.25),
+					center + Vector2(-half * 1.25, 0.0),
+				]),
+				base
+			)
+		else:
+			draw_rect(rect, base, true)
 		# 红框只表示本城正在发生守城战或围城，不再复述全局战争状态。
 		var border := (
 			Color(0.9, 0.1, 0.1)
 			if contested_cities.has(city.id)
 			else Color(0, 0, 0, 0.5)
 		)
-		draw_rect(rect, border, false, 2.0 * _display_scale)
+		if city.is_dock:
+			draw_polyline(
+				PackedVector2Array([
+					center + Vector2(0.0, -half * 1.25),
+					center + Vector2(half * 1.25, 0.0),
+					center + Vector2(0.0, half * 1.25),
+					center + Vector2(-half * 1.25, 0.0),
+					center + Vector2(0.0, -half * 1.25),
+				]),
+				border,
+				2.0 * _display_scale
+			)
+		else:
+			draw_rect(rect, border, false, 2.0 * _display_scale)
 		# 普通城市只显示工事强度；首都粮仓额外显示 C/W 与库存。
-		var label := "D%d" % city.fort_strength
+		var label := (
+			"港D%d" % city.fort_strength
+			if city.is_dock
+			else "D%d" % city.fort_strength
+		)
 		if city.is_food_hub:
 			label += " 粮"
 		if city.is_manpower_hub:

@@ -14,12 +14,23 @@ const MIN_CITY_SPACING: float = 0.075
 const MAX_LOCAL_EDGE_LENGTH: float = 0.30
 const PREFERRED_BACKBONE_LENGTH: float = 0.34
 const ROAD_SAMPLE_COUNT: int = 48
+const RIVER_COUNT: int = 2
+const RIVER_CHANNEL_DEVIATION_WEIGHT: float = 36.0
+const RIVER_DOCK_SHARE: float = 0.35
+const RIVER_DOCK_MIN_PER_RIVER: int = 2
+const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
+const RIVER_CROSSING_MERGE_EPS: float = 0.0001
+const LANDING_DANGER_MIN: float = 0.90
+const EDGE_DISTANCE_UNITS_PER_MAP_HEIGHT: float = 12.0
+## 河运速度为同 distance 陆路的 1.2 倍，因此耗时为陆路的 1/1.2。
+const RIVER_TRAVEL_TIME_MULTIPLIER: float = 1.0 / 1.2
+const RIVER_SUPPLY_LOSS_MULTIPLIER: float = 0.25
 
 static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "%s:%d" % [source_path, city_count]
+	var cache_key := "river-v5:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -35,8 +46,28 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 	assert(component["count"] >= city_count * 16, "高度图有效陆地区域不足")
 	var mask: PackedByteArray = component["mask"]
 	var bounds: Rect2i = component["bounds"]
+	var map_aspect_ratio := clampf(
+		float(maxi(bounds.size.x, 1))
+			/ float(maxi(bounds.size.y, 1)),
+		0.5,
+		2.5
+	)
 	var samples := _sample_cities(analysis, mask, bounds, city_count)
-	var road_result := _build_roads(analysis, mask, samples)
+	var road_result := _build_roads(
+		analysis,
+		mask,
+		samples,
+		map_aspect_ratio
+	)
+	var transport := _build_river_transport(
+		analysis,
+		mask,
+		bounds,
+		samples,
+		road_result["roads"],
+		city_count,
+		map_aspect_ratio
+	)
 	var provinces := _build_province_raster(
 		mask,
 		analysis.get_width(),
@@ -48,16 +79,16 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		"pixels": samples["pixels"],
 		"heights": samples["heights"],
 		"reliefs": samples["reliefs"],
-		"roads": road_result["roads"],
+		"roads": transport["roads"],
+		"docks": transport["docks"],
+		"river_paths": transport["river_paths"],
 		"bounds": bounds,
 		"image_size": analysis.get_size(),
 		"source_region_normalized": Rect2(
 			Vector2(bounds.position) / Vector2(analysis.get_size()),
 			Vector2(bounds.size) / Vector2(analysis.get_size())
 		),
-		"map_aspect_ratio": (
-			float(maxi(bounds.size.x, 1)) / float(maxi(bounds.size.y, 1))
-		),
+		"map_aspect_ratio": map_aspect_ratio,
 		"province_map_size": provinces["size"],
 		"province_ids": provinces["ids"],
 	}
@@ -314,19 +345,29 @@ static func _local_relief(image: Image, x: int, y: int, radius: int) -> float:
 static func _build_roads(
 	image: Image,
 	mask: PackedByteArray,
-	samples: Dictionary
+	samples: Dictionary,
+	map_aspect_ratio: float
 ) -> Dictionary:
 	var pixels: Array[Vector2i] = samples["pixels"]
 	var positions: Array[Vector2] = samples["positions"]
-	var map_aspect := float(image.get_width()) / float(maxi(image.get_height(), 1))
+	# 选边拓扑沿用原始分析图比例，避免距离数值调整改变道路连接关系。
+	var topology_aspect := (
+		float(image.get_width())
+		/ float(maxi(image.get_height(), 1))
+	)
 	var metric_positions := PackedVector2Array()
 	for position in positions:
-		metric_positions.append(Vector2(position.x * map_aspect, position.y))
+		metric_positions.append(Vector2(
+			position.x * topology_aspect,
+			position.y
+		))
 	var candidates: Array[Dictionary] = []
 	for a in range(pixels.size()):
 		for b in range(a + 1, pixels.size()):
 			var profile := _edge_profile(image, mask, pixels[a], pixels[b])
-			var length := metric_positions[a].distance_to(metric_positions[b])
+			var length := metric_positions[a].distance_to(
+				metric_positions[b]
+			)
 			candidates.append({
 				"a": a,
 				"b": b,
@@ -434,7 +475,14 @@ static func _build_roads(
 				5000
 			)
 		road["danger"] = clampf(percentile, 0.0, 1.0)
-		road["distance"] = clampi(int(round(float(road["length"]) * 12.0)), 1, 5)
+		road["length"] = metric_length_between(
+			positions[int(road["a"])],
+			positions[int(road["b"])],
+			map_aspect_ratio
+		)
+		road["distance"] = distance_units_for_metric_length(
+			float(road["length"])
+		)
 	var blocked_target := maxi(int(round(float(count) * 0.10)), 1)
 	var blocked_count := 0
 	for i in range(count - 1, -1, -1):
@@ -448,6 +496,783 @@ static func _build_roads(
 	return {
 		"roads": selected,
 	}
+
+
+static func _build_river_transport(
+	image: Image,
+	mask: PackedByteArray,
+	bounds: Rect2i,
+	samples: Dictionary,
+	base_roads: Array[Dictionary],
+	city_count: int,
+	map_aspect_ratio: float
+) -> Dictionary:
+	var river_paths := _build_river_paths(
+		image,
+		mask,
+		bounds
+	)
+	var dock_result := _find_river_docks(
+		image,
+		bounds,
+		samples["pixels"],
+		base_roads,
+		river_paths,
+		city_count
+	)
+	var docks: Array[Dictionary] = dock_result["docks"]
+	var crossings_by_road: Dictionary = dock_result[
+		"crossings_by_road"
+	]
+	var blocked_crossing_roads: Dictionary = dock_result[
+		"blocked_crossing_roads"
+	]
+	var city_positions: Array[Vector2] = samples["positions"]
+	city_positions = city_positions.duplicate()
+	for dock in docks:
+		assert(
+			int(dock["city_id"]) == city_positions.size(),
+			"码头位置顺序必须与城市 id 一致"
+		)
+		city_positions.append(dock["position"])
+	var roads: Array[Dictionary] = []
+	for road_index in range(base_roads.size()):
+		var road: Dictionary = base_roads[road_index]
+		var crossings: Array = crossings_by_road.get(
+			road_index,
+			[]
+		)
+		if crossings.is_empty():
+			if blocked_crossing_roads.has(road_index):
+				continue
+			var land_road := road.duplicate(true)
+			land_road["kind"] = Edge.Kind.LAND
+			land_road["travel_time_multiplier"] = 1.0
+			land_road["supply_loss_multiplier"] = 1.0
+			land_road["allows_holding"] = true
+			roads.append(land_road)
+			continue
+		crossings.sort_custom(
+			func(a: Dictionary, b: Dictionary) -> bool:
+				return float(a["road_t"]) < float(b["road_t"])
+		)
+		var previous_city := int(road["a"])
+		for crossing in crossings:
+			var dock_city := int(crossing["city_id"])
+			roads.append(_landing_road_segment(
+				road,
+				previous_city,
+				dock_city,
+				city_positions,
+				map_aspect_ratio
+			))
+			previous_city = dock_city
+		roads.append(_landing_road_segment(
+			road,
+			previous_city,
+			int(road["b"]),
+			city_positions,
+			map_aspect_ratio
+		))
+
+	var river_groups: Dictionary = dock_result["river_groups"]
+	var active_paths: Array[PackedVector2Array] = []
+	var occupied_pairs := {}
+	for road in roads:
+		occupied_pairs[_pair_key(
+			int(road["a"]),
+			int(road["b"])
+		)] = true
+	var river_ids := river_groups.keys()
+	river_ids.sort()
+	for river_id_value in river_ids:
+		var river_id := int(river_id_value)
+		var river_docks: Array = river_groups[river_id]
+		if river_docks.size() < 2:
+			continue
+		river_docks.sort_custom(
+			func(a: Dictionary, b: Dictionary) -> bool:
+				return (
+					float(a["river_progress"])
+					< float(b["river_progress"])
+				)
+		)
+		var path: Array[Vector2i] = river_paths[river_id]
+		active_paths.append(_normalized_river_path(path, bounds))
+		for index in range(river_docks.size() - 1):
+			var from_dock: Dictionary = river_docks[index]
+			var to_dock: Dictionary = river_docks[index + 1]
+			var from_city := int(from_dock["city_id"])
+			var to_city := int(to_dock["city_id"])
+			var pair_key := _pair_key(from_city, to_city)
+			if occupied_pairs.has(pair_key):
+				continue
+			occupied_pairs[pair_key] = true
+			var from_position: Vector2 = from_dock["position"]
+			var to_position: Vector2 = to_dock["position"]
+			var metric_length := metric_length_between(
+				from_position,
+				to_position,
+				map_aspect_ratio
+			)
+			var river_edge := {
+				"a": from_city,
+				"b": to_city,
+				"length": metric_length,
+				"height_difference": absf(
+					float(from_dock["height"])
+					- float(to_dock["height"])
+				),
+				"land_ratio": 1.0,
+				"cost": metric_length,
+				"backbone": true,
+				"max_manpower": Edge.MAX_MANPOWER,
+				"danger": _river_link_danger(
+					image,
+					path,
+					float(from_dock["river_progress"]),
+					float(to_dock["river_progress"])
+				),
+				"distance": distance_units_for_metric_length(
+					metric_length
+				),
+				"kind": Edge.Kind.RIVER,
+				"travel_time_multiplier":
+					RIVER_TRAVEL_TIME_MULTIPLIER,
+				"supply_loss_multiplier":
+					RIVER_SUPPLY_LOSS_MULTIPLIER,
+				"allows_holding": false,
+			}
+			roads.append(river_edge)
+	assert(
+		active_paths.size() == RIVER_COUNT,
+		"正式地图必须生成两条具备至少两个码头的有效河运路线"
+	)
+	return {
+		"roads": roads,
+		"docks": docks,
+		"river_paths": active_paths,
+	}
+
+
+static func _build_river_paths(
+	image: Image,
+	mask: PackedByteArray,
+	bounds: Rect2i
+) -> Array[Array]:
+	var templates: Array[PackedVector2Array] = [
+		PackedVector2Array([
+			Vector2(0.10, 0.34),
+			Vector2(0.25, 0.29),
+			Vector2(0.42, 0.23),
+			Vector2(0.58, 0.26),
+			Vector2(0.75, 0.32),
+			Vector2(0.94, 0.29),
+		]),
+		PackedVector2Array([
+			Vector2(0.08, 0.69),
+			Vector2(0.25, 0.63),
+			Vector2(0.43, 0.68),
+			Vector2(0.61, 0.60),
+			Vector2(0.78, 0.65),
+			Vector2(0.97, 0.61),
+		]),
+	]
+	var paths: Array[Array] = []
+	for river_index in range(mini(RIVER_COUNT, templates.size())):
+		var template := templates[river_index]
+		var grid := _build_river_path_grid(
+			image,
+			mask,
+			bounds,
+			template
+		)
+		var control_points: Array[Vector2i] = []
+		for normalized_point in template:
+			var control := _nearest_river_land_point(
+				mask,
+				image.get_width(),
+				bounds,
+				normalized_point
+			)
+			if (
+				control == Vector2i(-1, -1)
+				or (
+					not control_points.is_empty()
+					and control == control_points[-1]
+				)
+			):
+				continue
+			control_points.append(control)
+		if control_points.size() < 2:
+			continue
+		var path: Array[Vector2i] = []
+		for control_index in range(control_points.size() - 1):
+			var segment := grid.get_id_path(
+				control_points[control_index],
+				control_points[control_index + 1]
+			)
+			for point_value in segment:
+				var point: Vector2i = point_value
+				if path.is_empty() or point != path[-1]:
+					path.append(point)
+		if path.size() >= 2:
+			paths.append(path)
+	return paths
+
+
+static func _build_river_path_grid(
+	image: Image,
+	mask: PackedByteArray,
+	bounds: Rect2i,
+	template: PackedVector2Array
+) -> AStarGrid2D:
+	var grid := AStarGrid2D.new()
+	grid.region = Rect2i(Vector2i.ZERO, image.get_size())
+	grid.cell_size = Vector2.ONE
+	grid.diagonal_mode = (
+		AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+	)
+	grid.update()
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			var point := Vector2i(x, y)
+			if mask[y * image.get_width() + x] == 0:
+				grid.set_point_solid(point, true)
+				continue
+			var normalized := _normalized_map_point(point, bounds)
+			var target_y := _river_template_y(
+				template,
+				normalized.x
+			)
+			var height := image.get_pixel(x, y).get_luminance()
+			var relief := _pixel_relief(image, x, y)
+			grid.set_point_weight_scale(
+				point,
+				1.0
+					+ height * 2.0
+					+ relief * 16.0
+					+ absf(normalized.y - target_y)
+						* RIVER_CHANNEL_DEVIATION_WEIGHT
+			)
+	return grid
+
+
+static func _river_template_y(
+	template: PackedVector2Array,
+	normalized_x: float
+) -> float:
+	if normalized_x <= template[0].x:
+		return template[0].y
+	for index in range(template.size() - 1):
+		var from := template[index]
+		var to := template[index + 1]
+		if normalized_x > to.x:
+			continue
+		var ratio := clampf(
+			(normalized_x - from.x)
+				/ maxf(to.x - from.x, 0.0001),
+			0.0,
+			1.0
+		)
+		return lerpf(from.y, to.y, ratio)
+	return template[-1].y
+
+
+static func _nearest_river_land_point(
+	mask: PackedByteArray,
+	image_width: int,
+	bounds: Rect2i,
+	normalized_target: Vector2
+) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_distance := INF
+	for y in range(bounds.position.y, bounds.end.y):
+		for x in range(bounds.position.x, bounds.end.x):
+			if mask[y * image_width + x] == 0:
+				continue
+			var point := Vector2i(x, y)
+			var distance := _normalized_map_point(
+				point,
+				bounds
+			).distance_squared_to(normalized_target)
+			if distance < best_distance:
+				best_distance = distance
+				best = point
+	return best
+
+
+static func _find_river_docks(
+	image: Image,
+	bounds: Rect2i,
+	city_pixels: Array[Vector2i],
+	roads: Array[Dictionary],
+	river_paths: Array[Array],
+	city_count: int
+) -> Dictionary:
+	var docks: Array[Dictionary] = []
+	var crossings_by_road := {}
+	var river_groups := {}
+	var raw_crossings_by_road := {}
+	var candidates_by_river := {}
+	for river_id in range(river_paths.size()):
+		var path: Array[Vector2i] = river_paths[river_id]
+		var candidates: Array[Dictionary] = []
+		for road_index in range(roads.size()):
+			var road := roads[road_index]
+			if int(road["max_manpower"]) <= 0:
+				continue
+			var road_crossings := _road_river_crossings(
+				city_pixels,
+				road,
+				road_index,
+				path,
+				river_id,
+				bounds
+			)
+			for crossing in road_crossings:
+				candidates.append(crossing)
+				if not raw_crossings_by_road.has(road_index):
+					raw_crossings_by_road[road_index] = []
+				(raw_crossings_by_road[road_index] as Array).append(
+					crossing
+				)
+		candidates_by_river[river_id] = candidates
+
+	var selected_dock_roads := _select_dock_crossing_roads(
+		candidates_by_river,
+		roads
+	)
+	for river_id in range(river_paths.size()):
+		var candidates: Array[Dictionary] = candidates_by_river.get(
+			river_id,
+			[]
+		)
+		candidates.sort_custom(
+			func(a: Dictionary, b: Dictionary) -> bool:
+				return (
+					float(a["river_progress"])
+					< float(b["river_progress"])
+				)
+		)
+		if candidates.size() < 2:
+			continue
+		for candidate in candidates:
+			if not selected_dock_roads.has(
+				int(candidate["road_index"])
+			):
+				continue
+			var pixel_position: Vector2 = candidate[
+				"pixel_position"
+			]
+			var x := clampi(
+				int(round(pixel_position.x)),
+				0,
+				image.get_width() - 1
+			)
+			var y := clampi(
+				int(round(pixel_position.y)),
+				0,
+				image.get_height() - 1
+			)
+			candidate["city_id"] = city_count + docks.size()
+			candidate["height"] = image.get_pixel(
+				x,
+				y
+			).get_luminance()
+			candidate["relief"] = _local_relief(
+				image,
+				x,
+				y,
+				RELIEF_RADIUS
+			)
+			var road: Dictionary = roads[
+				int(candidate["road_index"])
+			]
+			candidate["road_a"] = int(road["a"])
+			candidate["road_b"] = int(road["b"])
+			docks.append(candidate)
+			if not crossings_by_road.has(
+				int(candidate["road_index"])
+			):
+				crossings_by_road[
+					int(candidate["road_index"])
+				] = []
+			(crossings_by_road[
+				int(candidate["road_index"])
+			] as Array).append(candidate)
+			if not river_groups.has(river_id):
+				river_groups[river_id] = []
+			(river_groups[river_id] as Array).append(candidate)
+	var blocked_crossing_roads := {}
+	for road_index_value in raw_crossings_by_road:
+		var road_index := int(road_index_value)
+		if not crossings_by_road.has(road_index):
+			blocked_crossing_roads[road_index] = true
+	return {
+		"docks": docks,
+		"crossings_by_road": crossings_by_road,
+		"blocked_crossing_roads": blocked_crossing_roads,
+		"river_groups": river_groups,
+	}
+
+
+static func _select_dock_crossing_roads(
+	candidates_by_river: Dictionary,
+	roads: Array[Dictionary]
+) -> Dictionary:
+	var selected := {}
+	var crossing_roads := {}
+	for candidates_value in candidates_by_river.values():
+		for candidate in candidates_value:
+			crossing_roads[int(candidate["road_index"])] = true
+	var river_ids := candidates_by_river.keys()
+	river_ids.sort()
+	for river_id_value in river_ids:
+		var candidates: Array[Dictionary] = (
+			candidates_by_river[river_id_value]
+		)
+		candidates.sort_custom(
+			func(a: Dictionary, b: Dictionary) -> bool:
+				return (
+					float(a["river_progress"])
+						< float(b["river_progress"])
+				)
+		)
+		var target := clampi(
+			int(round(
+				float(candidates.size()) * RIVER_DOCK_SHARE
+			)),
+			mini(RIVER_DOCK_MIN_PER_RIVER, candidates.size()),
+			candidates.size()
+		)
+		for selection_index in range(target):
+			var candidate_index := clampi(
+				int(round(
+					(float(selection_index) + 0.5)
+						* float(candidates.size())
+						/ float(maxi(target, 1))
+						- 0.5
+				)),
+				0,
+				candidates.size() - 1
+			)
+			selected[int(
+				candidates[candidate_index]["road_index"]
+			)] = true
+	var node_count := 0
+	for road in roads:
+		node_count = maxi(
+			node_count,
+			maxi(int(road["a"]), int(road["b"])) + 1
+		)
+	var parent: Array[int] = []
+	parent.resize(node_count)
+	for node in range(node_count):
+		parent[node] = node
+	for road_index in range(roads.size()):
+		var road := roads[road_index]
+		if (
+			int(road["max_manpower"]) <= 0
+			or (
+				crossing_roads.has(road_index)
+				and not selected.has(road_index)
+			)
+		):
+			continue
+		_river_union_find_join(
+			parent,
+			int(road["a"]),
+			int(road["b"])
+		)
+	var crossing_indices := crossing_roads.keys()
+	crossing_indices.sort_custom(
+		func(a: Variant, b: Variant) -> bool:
+			var road_a: Dictionary = roads[int(a)]
+			var road_b: Dictionary = roads[int(b)]
+			var backbone_a := bool(road_a.get("backbone", false))
+			var backbone_b := bool(road_b.get("backbone", false))
+			if backbone_a != backbone_b:
+				return backbone_a
+			if not is_equal_approx(
+				float(road_a["cost"]),
+				float(road_b["cost"])
+			):
+				return float(road_a["cost"]) < float(road_b["cost"])
+			return int(a) < int(b)
+	)
+	for road_index_value in crossing_indices:
+		var road_index := int(road_index_value)
+		if selected.has(road_index):
+			continue
+		var road: Dictionary = roads[road_index]
+		var city_a := int(road["a"])
+		var city_b := int(road["b"])
+		if (
+			_river_union_find_root(parent, city_a)
+				== _river_union_find_root(parent, city_b)
+		):
+			continue
+		selected[road_index] = true
+		_river_union_find_join(parent, city_a, city_b)
+	return selected
+
+
+static func _river_union_find_root(
+	parent: Array[int],
+	node: int
+) -> int:
+	var current := node
+	while parent[current] != current:
+		parent[current] = parent[parent[current]]
+		current = parent[current]
+	return current
+
+
+static func _river_union_find_join(
+	parent: Array[int],
+	a: int,
+	b: int
+) -> void:
+	var root_a := _river_union_find_root(parent, a)
+	var root_b := _river_union_find_root(parent, b)
+	if root_a != root_b:
+		parent[root_b] = root_a
+
+
+static func _road_river_crossings(
+	city_pixels: Array[Vector2i],
+	road: Dictionary,
+	road_index: int,
+	path: Array[Vector2i],
+	river_id: int,
+	bounds: Rect2i
+) -> Array[Dictionary]:
+	var road_start := Vector2(city_pixels[int(road["a"])])
+	var road_end := Vector2(city_pixels[int(road["b"])])
+	var road_delta := road_end - road_start
+	var road_length_sq := road_delta.length_squared()
+	var crossings: Array[Dictionary] = []
+	if road_length_sq <= 0.001:
+		return crossings
+	for path_index in range(path.size() - 1):
+		var river_start := Vector2(path[path_index])
+		var river_end := Vector2(path[path_index + 1])
+		var hit = Geometry2D.segment_intersects_segment(
+			road_start,
+			road_end,
+			river_start,
+			river_end
+		)
+		if hit == null:
+			continue
+		var point: Vector2 = hit
+		var road_t := (
+			(point - road_start).dot(road_delta)
+			/ road_length_sq
+		)
+		if (
+			road_t <= RIVER_CROSSING_ENDPOINT_EPS
+			or road_t >= 1.0 - RIVER_CROSSING_ENDPOINT_EPS
+		):
+			continue
+		crossings.append({
+			"road_index": road_index,
+			"road_t": road_t,
+			"river_id": river_id,
+			"river_progress": float(path_index)
+				+ _segment_fraction(
+					point,
+					river_start,
+					river_end
+				),
+			"pixel_position": point,
+			"position": _normalized_map_point(point, bounds),
+		})
+	crossings.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			if not is_equal_approx(
+				float(a["road_t"]),
+				float(b["road_t"])
+			):
+				return float(a["road_t"]) < float(b["road_t"])
+			return (
+				float(a["river_progress"])
+				< float(b["river_progress"])
+			)
+	)
+	var merged: Array[Dictionary] = []
+	for crossing in crossings:
+		if (
+			not merged.is_empty()
+			and absf(
+				float(crossing["road_t"])
+					- float(merged[-1]["road_t"])
+			) <= RIVER_CROSSING_MERGE_EPS
+		):
+			continue
+		merged.append(crossing)
+	return merged
+
+
+static func _landing_road_segment(
+	base: Dictionary,
+	from_city: int,
+	to_city: int,
+	city_positions: Array[Vector2],
+	map_aspect_ratio: float
+) -> Dictionary:
+	var segment := base.duplicate(true)
+	segment["a"] = from_city
+	segment["b"] = to_city
+	segment["length"] = metric_length_between(
+		city_positions[from_city],
+		city_positions[to_city],
+		map_aspect_ratio
+	)
+	segment["distance"] = distance_units_for_metric_length(
+		float(segment["length"])
+	)
+	segment["danger"] = maxf(
+		float(base["danger"]),
+		LANDING_DANGER_MIN
+	)
+	segment["kind"] = Edge.Kind.LANDING
+	segment["travel_time_multiplier"] = 1.0
+	segment["supply_loss_multiplier"] = 1.0
+	segment["allows_holding"] = true
+	return segment
+
+
+static func distance_units_for_metric_length(metric_length: float) -> int:
+	return maxi(
+		int(round(
+			maxf(metric_length, 0.0)
+				* EDGE_DISTANCE_UNITS_PER_MAP_HEIGHT
+		)),
+		1
+	)
+
+
+static func metric_length_between(
+	from_position: Vector2,
+	to_position: Vector2,
+	map_aspect_ratio: float
+) -> float:
+	var delta := to_position - from_position
+	delta.x *= map_aspect_ratio
+	return delta.length()
+
+
+static func _river_link_danger(
+	image: Image,
+	path: Array[Vector2i],
+	from_progress: float,
+	to_progress: float
+) -> float:
+	var first := clampi(
+		int(floor(from_progress)),
+		0,
+		path.size() - 1
+	)
+	var last := clampi(
+		int(ceil(to_progress)),
+		first + 1,
+		path.size() - 1
+	)
+	var slope_total := 0.0
+	var turn_total := 0.0
+	var samples := 0
+	for index in range(first, last):
+		var a := path[index]
+		var b := path[index + 1]
+		slope_total += absf(
+			image.get_pixel(a.x, a.y).get_luminance()
+			- image.get_pixel(b.x, b.y).get_luminance()
+		)
+		if index + 2 <= last:
+			var first_direction := Vector2(
+				path[index + 1] - path[index]
+			).normalized()
+			var second_direction := Vector2(
+				path[index + 2] - path[index + 1]
+			).normalized()
+			turn_total += (
+				1.0
+				- clampf(
+					first_direction.dot(second_direction),
+					-1.0,
+					1.0
+				)
+			)
+		samples += 1
+	return clampf(
+		0.12
+			+ slope_total / float(maxi(samples, 1)) * 10.0
+			+ turn_total / float(maxi(samples, 1)) * 0.18,
+		0.12,
+		0.60
+	)
+
+
+static func _normalized_river_path(
+	path: Array[Vector2i],
+	bounds: Rect2i
+) -> PackedVector2Array:
+	var result := PackedVector2Array()
+	for point in path:
+		result.append(_normalized_map_point(point, bounds))
+	return result
+
+
+static func _normalized_map_point(
+	point: Vector2,
+	bounds: Rect2i
+) -> Vector2:
+	return Vector2(
+		(point.x - float(bounds.position.x))
+			/ float(maxi(bounds.size.x - 1, 1)),
+		(point.y - float(bounds.position.y))
+			/ float(maxi(bounds.size.y - 1, 1))
+	)
+
+
+static func _segment_fraction(
+	point: Vector2,
+	from: Vector2,
+	to: Vector2
+) -> float:
+	var delta := to - from
+	if delta.length_squared() <= 0.000001:
+		return 0.0
+	return clampf(
+		(point - from).dot(delta) / delta.length_squared(),
+		0.0,
+		1.0
+	)
+
+
+static func _pixel_relief(
+	image: Image,
+	x: int,
+	y: int
+) -> float:
+	var center := image.get_pixel(x, y).get_luminance()
+	var result := 0.0
+	for oy in range(-1, 2):
+		for ox in range(-1, 2):
+			if ox == 0 and oy == 0:
+				continue
+			var px := clampi(x + ox, 0, image.get_width() - 1)
+			var py := clampi(y + oy, 0, image.get_height() - 1)
+			result = maxf(
+				result,
+				absf(
+					center
+					- image.get_pixel(px, py).get_luminance()
+				)
+			)
+	return result
 
 
 static func _edge_profile(

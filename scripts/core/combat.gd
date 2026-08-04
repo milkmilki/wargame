@@ -660,6 +660,12 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 			"distance": battle.edge.distance,
 			"danger": battle.edge.danger,
 			"max_manpower": battle.edge.max_manpower,
+			"kind": battle.edge.kind,
+			"travel_time_multiplier":
+				battle.edge.travel_time_multiplier,
+			"supply_loss_multiplier":
+				battle.edge.supply_loss_multiplier,
+			"allows_holding": battle.edge.allows_holding,
 		}
 	if battle.city != null:
 		context["city"] = {

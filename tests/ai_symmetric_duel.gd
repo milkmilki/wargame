@@ -429,24 +429,45 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 				float(left_nation.get(field)),
 				float(right_nation.get(field)),
 			]
-	var right_full_preparation_target := (
-		_mirror_city_id(
+	for field in [
+		"campaign_preparation_targets",
+		"campaign_full_preparation_targets",
+	]:
+		var left_targets: Array[int] = []
+		for city_id_value in left_nation.get(field):
+			left_targets.append(int(city_id_value))
+		var right_targets: Array[int] = []
+		for city_id_value in right_nation.get(field):
+			right_targets.append(
+				_mirror_city_id(state, int(city_id_value))
+			)
+		left_targets.sort()
+		right_targets.sort()
+		if left_targets != right_targets:
+			return "nation.%s left=%s mirrored_right=%s" % [
+				field,
+				str(left_targets),
+				str(right_targets),
+			]
+	var left_preparation_assignments := (
+		_canonical_campaign_preparation_assignments(
 			state,
-			right_nation.campaign_full_preparation_target_city
+			LEFT_NATION
 		)
-		if right_nation.campaign_full_preparation_target_city >= 0
-		else -1
 	)
-	if (
-		left_nation.campaign_full_preparation_target_city
-			!= right_full_preparation_target
-	):
+	var right_preparation_assignments := (
+		_canonical_campaign_preparation_assignments(
+			state,
+			RIGHT_NATION
+		)
+	)
+	if left_preparation_assignments != right_preparation_assignments:
 		return (
-			"nation.campaign_full_preparation_target_city "
-			+ "left=%d mirrored_right=%d"
+			"nation.campaign_preparation_assignments "
+			+ "left=%s right=%s"
 		) % [
-			left_nation.campaign_full_preparation_target_city,
-			right_full_preparation_target,
+			str(left_preparation_assignments),
+			str(right_preparation_assignments),
 		]
 	var left_post_capture_plans: Array[String] = []
 	for city_id_value in left_nation.campaign_post_capture_plans:
@@ -531,6 +552,51 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 			right_armies.size(),
 		]
 	return ""
+
+
+func _canonical_campaign_preparation_assignments(
+	state: GameState,
+	nation_id: int
+) -> Array[String]:
+	var nation := state.nations[nation_id]
+	var result: Array[String] = []
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or not nation.campaign_preparation_assignments.has(
+				army.id
+			)
+		):
+			continue
+		result.append(
+			"%d:%d:%d:%d:%d:%d" % [
+				army.size,
+				army.max_size,
+				army.state,
+				_canonical_city_for_nation(
+					state,
+					nation_id,
+					army.location_city
+				),
+				_canonical_city_for_nation(
+					state,
+					nation_id,
+					army.move_to
+				),
+				_canonical_city_for_nation(
+					state,
+					nation_id,
+					int(
+						nation.campaign_preparation_assignments[
+							army.id
+						]
+					)
+				),
+			]
+		)
+	result.sort()
+	return result
 
 
 func _canonical_army_multiset(

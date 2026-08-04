@@ -8,7 +8,6 @@ const DANGER_WEIGHT: float = 2.0           ## danger 对边权的加成系数
 const SUPPLY_DISTANCE_LOSS: float = 0.10   ## 每单位边长的基础运输损耗
 const SUPPLY_DANGER_MULT: float = 1.0      ## danger 对该边距离损耗的乘性放大系数
 
-
 ## 单源最短路场：返回 { "dist": {id->float}, "prev": {id->int} }。
 static func dijkstra_field(
 	state: GameState,
@@ -35,24 +34,19 @@ static func dijkstra_field(
 		order_nation,
 		start
 	)
-
-	while true:
-		var u := -1
-		var best := INF
-		for cid in dist.keys():
-			if visited.has(cid):
-				continue
-			var d: float = dist[cid]
-			if d < best or (
-				d < INF
-				and is_equal_approx(d, best)
-				and int(order_rank[int(cid)])
-					< int(order_rank.get(u, 1 << 30))
-			):
-				best = d
-				u = cid
-		if u == -1:
-			break
+	var queue: Array[Dictionary] = [{
+		"city": start,
+		"distance": 0.0,
+		"rank": int(order_rank[start]),
+	}]
+	while not queue.is_empty():
+		var entry := _heap_pop(queue)
+		var u := int(entry["city"])
+		if (
+			visited.has(u)
+			or float(entry["distance"]) > float(dist[u]) + 0.000001
+		):
+			continue
 		visited[u] = true
 		for v in state.neighbors(u):
 			if visited.has(v):
@@ -82,21 +76,87 @@ static func dijkstra_field(
 				continue
 			if block_contested_edges and _edge_has_enemy_presence(state, e, allowed_nation):
 				continue
-			var w := float(e.distance)
+			var w := (
+				float(e.distance)
+				* maxf(e.travel_time_multiplier, 0.05)
+			)
 			if use_danger_weight:
 				w += e.danger * DANGER_WEIGHT
 			var nd: float = dist[u] + w
-			if nd < float(dist[v]) or (
+			var improves := nd < float(dist[v])
+			var improves_tie := (
 				is_equal_approx(nd, float(dist[v]))
 				and (
 					not prev.has(v)
 					or int(order_rank[u])
 						< int(order_rank[int(prev[v])])
 				)
-			):
+			)
+			if improves or improves_tie:
 				dist[v] = nd
 				prev[v] = u
+				_heap_push(queue, {
+					"city": v,
+					"distance": nd,
+					"rank": int(order_rank[v]),
+				})
 	return { "dist": dist, "prev": prev }
+
+
+static func _heap_entry_less(
+	a: Dictionary,
+	b: Dictionary
+) -> bool:
+	var distance_a := float(a["distance"])
+	var distance_b := float(b["distance"])
+	if not is_equal_approx(distance_a, distance_b):
+		return distance_a < distance_b
+	return int(a["rank"]) < int(b["rank"])
+
+
+static func _heap_push(
+	heap: Array[Dictionary],
+	entry: Dictionary
+) -> void:
+	heap.append(entry)
+	var index := heap.size() - 1
+	while index > 0:
+		var parent := int((index - 1) / 2)
+		if not _heap_entry_less(heap[index], heap[parent]):
+			break
+		var swap: Dictionary = heap[parent]
+		heap[parent] = heap[index]
+		heap[index] = swap
+		index = parent
+
+
+static func _heap_pop(
+	heap: Array[Dictionary]
+) -> Dictionary:
+	var result: Dictionary = heap[0]
+	var tail: Dictionary = heap.pop_back()
+	if heap.is_empty():
+		return result
+	heap[0] = tail
+	var index := 0
+	while true:
+		var left := index * 2 + 1
+		if left >= heap.size():
+			break
+		var right := left + 1
+		var child := left
+		if (
+			right < heap.size()
+			and _heap_entry_less(heap[right], heap[left])
+		):
+			child = right
+		if not _heap_entry_less(heap[child], heap[index]):
+			break
+		var swap: Dictionary = heap[index]
+		heap[index] = heap[child]
+		heap[child] = swap
+		index = child
+	return result
 
 
 ## 由 prev 表回溯 start->goal 的城市序列（含 goal，不含 start）。不可达返回空。
@@ -627,6 +687,7 @@ static func _supply_edge_loss(edge: Edge) -> float:
 	return (
 		SUPPLY_DISTANCE_LOSS
 		* float(maxi(edge.distance, 1))
+		* maxf(edge.supply_loss_multiplier, 0.0)
 		* (1.0 + SUPPLY_DANGER_MULT * clampf(edge.danger, 0.0, 1.0))
 	)
 

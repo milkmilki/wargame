@@ -150,7 +150,7 @@ func _travel_days_field(
 
 
 static func _edge_days(edge: Edge) -> float:
-	return clampf(10.0 + float(maxi(edge.distance, 1) - 1) * 5.0, 10.0, 30.0)
+	return Simulation.edge_travel_days(edge)
 
 
 static func _heap_push(heap: Array, item: Array) -> void:

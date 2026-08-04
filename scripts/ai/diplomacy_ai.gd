@@ -20,18 +20,19 @@ enum FoodPosture {
 }
 
 const MIN_WAR_DAYS: int = 180
-const FORCED_PEACE_DAYS: int = 900
+const WAR_FATIGUE_REFERENCE_DAYS: int = 360
 const MIN_NEUTRAL_DAYS: int = 180
 const MIN_ALLIANCE_DAYS: int = 360
 const MAX_CONCURRENT_WARS: int = 1
 const MAX_DEFENSIVE_ALLIES: int = 1
 const PEACE_PROPOSE_SCORE: float = 1.25
 const PEACE_ACCEPT_SCORE: float = 0.60
-const PEACE_COMBINED_SCORE: float = 2.50
-const PEACE_OCCUPATION_GAIN_VALUE: float = 0.35
-const PEACE_OCCUPATION_LOSS_VALUE: float = 0.25
-const PEACE_OBJECTIVE_GAIN_VALUE: float = 0.50
-const PEACE_OBJECTIVE_LOSS_VALUE: float = 0.35
+const PEACE_SITUATION_WEIGHT: float = 0.40
+const PEACE_POWER_BALANCE_WEIGHT: float = 1.20
+const PEACE_RESOURCE_ENDURANCE_WEIGHT: float = 1.00
+const PEACE_EXTERNAL_THREAT_WEIGHT: float = 1.50
+const PEACE_RESOURCE_REFERENCE_MONTHS: float = 24.0
+const PEACE_MAX_BORDER_MASSING_RATIO: float = 1.50
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
 const WAR_DECLARE_SCORE: float = 1.00
 const RECENT_CAPTURE_OBJECTIVE_BONUS: float = 4.0
@@ -69,29 +70,108 @@ static func choose_actions(state: GameState) -> Array[Dictionary]:
 
 
 static func peace_willingness(state: GameState, nation_id: int, enemy_id: int) -> float:
+	return float(
+		peace_willingness_breakdown(
+			state,
+			nation_id,
+			enemy_id
+		)["score"]
+	)
+
+
+static func peace_willingness_breakdown(
+	state: GameState,
+	nation_id: int,
+	enemy_id: int
+) -> Dictionary:
 	if not state.is_enemy(nation_id, enemy_id):
-		return -INF
+		return {"score": -INF}
 	var own_power := _national_power(state, nation_id)
 	var enemy_power := _national_power(state, enemy_id)
-	var ratio := enemy_power / maxf(own_power, 1.0)
+	var power_balance := (
+		(own_power - enemy_power)
+		/ maxf(maxf(own_power, enemy_power), 1.0)
+	)
 	var war_days := state.day - state.relation_since(nation_id, enemy_id)
 	var extra_wars := maxi(state.wars_of(nation_id).size() - 1, 0)
 	var no_front := 1.0 if _frontier_edges(state, nation_id, enemy_id) == 0 else 0.0
-	var crises := peace_reasons(state, nation_id, enemy_id)
+	var situation_score := _war_situation_score(
+		state,
+		nation_id,
+		enemy_id
+	)
+	var resource_report := resource_report(state, nation_id)
+	var gold_endurance := clampf(
+		float(resource_report["gold_runway_months"])
+			/ PEACE_RESOURCE_REFERENCE_MONTHS,
+		0.0,
+		1.0
+	)
+	var food_endurance := clampf(
+		float(resource_report["food_coverage_months"])
+			/ PEACE_RESOURCE_REFERENCE_MONTHS,
+		0.0,
+		1.0
+	)
+	var resource_endurance := minf(
+		gold_endurance,
+		food_endurance
+	)
+	var resource_pressure := (
+		1.0 - 2.0 * resource_endurance
+	)
+	if state.nations[nation_id].unpaid_war_cost > 0:
+		resource_pressure += 1.0
+	var external_threat := _neutral_border_massing_ratio(
+		state,
+		nation_id,
+		enemy_id
+	)
 	var aggression := clampf(
 		state.nations[nation_id].ai_aggression,
 		0.5,
 		1.5
 	)
-	return (
-		float(war_days) / 360.0
-		+ maxf(ratio - 1.0, 0.0) * 1.5
-		- minf(maxf(1.0 / maxf(ratio, 0.01) - 1.0, 0.0), 1.0)
+	var war_fatigue := (
+		float(war_days) / float(WAR_FATIGUE_REFERENCE_DAYS)
+	)
+	var situation_component := (
+		-situation_score * PEACE_SITUATION_WEIGHT
+	)
+	var power_component := (
+		-power_balance * PEACE_POWER_BALANCE_WEIGHT
+	)
+	var resource_component := (
+		resource_pressure * PEACE_RESOURCE_ENDURANCE_WEIGHT
+	)
+	var international_component := (
+		external_threat * PEACE_EXTERNAL_THREAT_WEIGHT
+	)
+	var score := (
+		war_fatigue
+		+ situation_component
+		+ power_component
+		+ resource_component
+		+ international_component
 		+ float(extra_wars) * 0.75
 		+ no_front
-		+ float(crises.size()) * 1.25
 		- (aggression - 1.0) * 0.50
 	)
+	return {
+		"score": score,
+		"war_fatigue": war_fatigue,
+		"situation_score": situation_score,
+		"situation_component": situation_component,
+		"power_balance": power_balance,
+		"power_component": power_component,
+		"resource_endurance": resource_endurance,
+		"resource_component": resource_component,
+		"external_threat": external_threat,
+		"international_component": international_component,
+		"extra_wars": extra_wars,
+		"no_front": no_front,
+		"aggression": aggression,
+	}
 
 
 static func peace_assessment(
@@ -108,118 +188,113 @@ static func peace_assessment(
 			"proposer": -1,
 			"responder": -1,
 		}
-	var willingness_a := peace_willingness(
+	var breakdown_a := peace_willingness_breakdown(
 		state,
 		nation_a,
 		nation_b
 	)
-	var willingness_b := peace_willingness(
+	var breakdown_b := peace_willingness_breakdown(
 		state,
 		nation_b,
 		nation_a
 	)
-	var incentive_a := _peace_settlement_incentive(
-		state,
-		nation_a,
-		nation_b
-	)
-	var incentive_b := _peace_settlement_incentive(
-		state,
-		nation_b,
-		nation_a
-	)
-	var score_a := willingness_a + incentive_a
-	var score_b := willingness_b + incentive_b
+	var score_a := float(breakdown_a["score"])
+	var score_b := float(breakdown_b["score"])
 	var proposer := -1
 	var responder := -1
 	if not is_equal_approx(score_a, score_b):
 		proposer = nation_a if score_a > score_b else nation_b
 		responder = nation_b if proposer == nation_a else nation_a
 	var proposal_score := maxf(score_a, score_b)
-	var response_score := minf(score_a, score_b)
 	var combined_score := score_a + score_b
 	var war_days := state.day - state.relation_since(
 		nation_a,
 		nation_b
 	)
-	var forced := war_days >= FORCED_PEACE_DAYS
+	var consent_a := score_a >= PEACE_ACCEPT_SCORE
+	var consent_b := score_b >= PEACE_ACCEPT_SCORE
 	return {
 		"acceptable": (
-			forced
-			or (
-				war_days >= MIN_WAR_DAYS
-				and proposal_score >= PEACE_PROPOSE_SCORE
-				and response_score >= PEACE_ACCEPT_SCORE
-				and combined_score >= PEACE_COMBINED_SCORE
-			)
+			war_days >= MIN_WAR_DAYS
+			and proposal_score >= PEACE_PROPOSE_SCORE
+			and consent_a
+			and consent_b
 		),
-		"forced": forced,
+		"consent_a": consent_a,
+		"consent_b": consent_b,
 		"score_a": score_a,
 		"score_b": score_b,
-		"willingness_a": willingness_a,
-		"willingness_b": willingness_b,
-		"incentive_a": incentive_a,
-		"incentive_b": incentive_b,
+		"willingness_a": score_a,
+		"willingness_b": score_b,
+		"breakdown_a": breakdown_a,
+		"breakdown_b": breakdown_b,
 		"combined_score": combined_score,
 		"proposer": proposer,
 		"responder": responder,
 	}
 
 
-static func _peace_settlement_incentive(
+static func _war_situation_score(
 	state: GameState,
 	nation_id: int,
 	enemy_id: int
 ) -> float:
-	var incentive := 0.0
+	var score := 0.0
 	for city in state.cities:
 		var legal_owner := state.recognized_owner_of(city.id)
 		if legal_owner not in [nation_id, enemy_id]:
 			continue
-		var occupying_side := -1
-		if city.occupation_sponsor_nation in [
+		var occupying_side := _occupation_side(
+			state,
+			city,
 			nation_id,
-			enemy_id,
-		]:
-			occupying_side = city.occupation_sponsor_nation
-		elif (
-			city.owner_nation == nation_id
-			or state.is_allied(city.owner_nation, nation_id)
-		):
-			occupying_side = nation_id
-		elif (
-			city.owner_nation == enemy_id
-			or state.is_allied(city.owner_nation, enemy_id)
-		):
-			occupying_side = enemy_id
+			enemy_id
+		)
 		if occupying_side < 0 or occupying_side == legal_owner:
 			continue
-		var city_value := (
-			1.0
-			+ (1.0 if city.is_capital else 0.0)
-			+ (0.5 if city.has_warehouse else 0.0)
-			+ (0.5 if city.is_food_hub else 0.0)
-			+ (0.5 if city.is_manpower_hub else 0.0)
-		)
+		var city_value := _military_city_value(city)
 		if occupying_side == nation_id and legal_owner == enemy_id:
-			incentive += city_value * PEACE_OCCUPATION_GAIN_VALUE
+			score += city_value
 		elif occupying_side == enemy_id and legal_owner == nation_id:
-			incentive += city_value * PEACE_OCCUPATION_LOSS_VALUE
-	var objective := state.war_objective(nation_id, enemy_id)
-	if not objective.is_empty():
-		var objective_city := int(objective.get("city_id", -1))
-		var attacker := int(objective.get("attacker", -1))
-		if (
-			objective_city >= 0
-			and objective_city < state.cities.size()
-			and state.cities[objective_city].owner_nation == attacker
-		):
-			incentive += (
-				PEACE_OBJECTIVE_GAIN_VALUE
-				if attacker == nation_id
-				else PEACE_OBJECTIVE_LOSS_VALUE
-			)
-	return incentive
+			score -= city_value
+	return score
+
+
+static func _occupation_side(
+	state: GameState,
+	city: City,
+	nation_id: int,
+	enemy_id: int
+) -> int:
+	if city.occupation_sponsor_nation in [nation_id, enemy_id]:
+		return city.occupation_sponsor_nation
+	if (
+		city.owner_nation == nation_id
+		or state.is_allied(city.owner_nation, nation_id)
+	):
+		return nation_id
+	if (
+		city.owner_nation == enemy_id
+		or state.is_allied(city.owner_nation, enemy_id)
+	):
+		return enemy_id
+	return -1
+
+
+static func _military_city_value(city: City) -> float:
+	return (
+		1.0
+		+ (2.0 if city.is_capital else 0.0)
+		+ (1.0 if city.has_warehouse else 0.0)
+		+ (0.75 if city.is_food_hub else 0.0)
+		+ (0.75 if city.is_manpower_hub else 0.0)
+		+ (0.50 if city.is_dock else 0.0)
+		+ 0.50 * clampf(
+			float(city.fort_strength_max) / 30.0,
+			0.0,
+			1.0
+		)
+	)
 
 
 static func peace_reasons(
@@ -231,6 +306,35 @@ static func peace_reasons(
 	var report := resource_report(state, nation_id)
 	var food_plan := war_food_report(state, nation_id)
 	var nation := state.nations[nation_id]
+	var breakdown := peace_willingness_breakdown(
+		state,
+		nation_id,
+		enemy_id
+	)
+	if (
+		breakdown.has("situation_score")
+		and float(breakdown["situation_score"]) < -0.01
+	):
+		reasons.append(
+			"重要军事城市失守，战局分 %.2f"
+			% float(breakdown["situation_score"])
+		)
+	if (
+		breakdown.has("power_balance")
+		and float(breakdown["power_balance"]) < -0.10
+	):
+		reasons.append(
+			"当前军力处于劣势 %.0f%%"
+			% (-float(breakdown["power_balance"]) * 100.0)
+		)
+	if (
+		breakdown.has("external_threat")
+		and float(breakdown["external_threat"]) > 0.05
+	):
+		reasons.append(
+			"中立邻国在边境集结，威胁比 %.2f，需要调转战线"
+			% float(breakdown["external_threat"])
+		)
 	if (
 		nation.unpaid_war_cost > 0
 		or (
@@ -442,6 +546,59 @@ static func _alliance_frontier_release_value(
 	return minf(
 		committed_power / maxf(national_power, 1.0),
 		0.75
+	)
+
+
+## 只统计当前敌国之外的中立第三国在本国边境实际部署的战力。
+## 这是“需要调转战线”的可观察证据，不使用第三国总兵力代替边境集结。
+static func _neutral_border_massing_ratio(
+	state: GameState,
+	observer_id: int,
+	current_enemy_id: int
+) -> float:
+	var border_power := 0.0
+	for other in state.nations:
+		if (
+			not other.alive
+			or other.id in [observer_id, current_enemy_id]
+			or state.is_allied(observer_id, other.id)
+			or state.is_enemy(observer_id, other.id)
+		):
+			continue
+		var other_frontier_cities := {}
+		for edge in state.edges:
+			if edge.max_manpower <= 0:
+				continue
+			var owner_a := state.cities[edge.city_a].owner_nation
+			var owner_b := state.cities[edge.city_b].owner_nation
+			if owner_a == observer_id and owner_b == other.id:
+				other_frontier_cities[edge.city_b] = true
+			elif owner_b == observer_id and owner_a == other.id:
+				other_frontier_cities[edge.city_a] = true
+		if other_frontier_cities.is_empty():
+			continue
+		for army in state.armies:
+			if army.owner_nation != other.id or army.size <= 0:
+				continue
+			var massed := (
+				army.location_city >= 0
+				and other_frontier_cities.has(army.location_city)
+			)
+			if (
+				not massed
+				and army.on_edge
+				and army.move_to >= 0
+			):
+				massed = (
+					other_frontier_cities.has(army.move_from)
+					or other_frontier_cities.has(army.move_to)
+				)
+			if massed:
+				border_power += ArmyPower.effective(army)
+	return minf(
+		border_power
+			/ maxf(_national_power(state, observer_id), 1.0),
+		PEACE_MAX_BORDER_MASSING_RATIO
 	)
 
 
