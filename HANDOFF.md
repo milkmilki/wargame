@@ -526,9 +526,12 @@ AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users
 - 非战斗士气改为满状态 10 天恢复后 4 种子 × 1095 天：共 `wars=11`、`offensives=180`、`turnovers=78`、`net_captures=10`、`full_prep=68`、`multi_prep=70`、`max_parallel=7`、第二步 `42/0/10`、`orders=5080`、`redeploy=3774`、`role_deploy=1649`；军队实体 `194～249`、四种子终局断粮均为 0，各种子均 `eliminated_wars=0`、`force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `229328ms`。快速恢复提高了持续攻势与多路准备频率，同时增强回防，使净占领数低于旧恢复节奏。
 - 十日尖峰优化前：普通 AI 日 `39.35～47.59ms`，第 30 日最坏 `199.66ms`。缓存与并行快路径将同步普通 AI 日降至 `21.69～29.41ms`，外交目标 tick 缓存将同步第 30 日降至 `72.58ms`；实时路径进一步把独立工作拆到多个渲染帧，用户已确认正式地图不再出现十日一卡顿。同步/跨帧路径 40 日逐日完整状态签名一致。
 - 性能收敛后 4 种子 × 1095 天：共 `wars=11`、`offensives=185`、`turnovers=87`、`net_captures=15`，军队实体 `199～249`；各种子均 `force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `212590ms`。严格镜像连续 3650 天、优势分 `0.0`。
+- 40 国压力入口为 `tests/ai_40_nation_stress.gd`：正式地图 160 个陆城按空间递归二分为每国 4 城，默认正式游戏仍为 4 国。最初 40 国长跑在并发构建 `CityDefensePlan` 时触发 Godot worker 非法释放；该规划会写 Army Assignment 与 Nation 防区，**禁止重新放入 WorkerThreadPool 并发执行**。当前批量路径串行构建，实时路径逐国跨帧，40 国 `seed=12345` 通过 365 天，另两种子通过 180 天，均无非法驻军、命令提交失败或原生崩溃。
+- 40 国多国 AI 优化后，同种子 60 天状态指标逐项一致：总耗时 `12.740s→8.610s`（`-32.4%`），冷启动 AI `5.188s→2.860s`（`-44.9%`），热 AI 平均 `1.036s→0.750s`（`-27.6%`），月度日平均 `2.229s→1.466s`（`-34.2%`）。实现为每个 AI tick 共享一次军队基础索引、所有国家共享与国家无关的威胁路网距离/影响缓存，以及每次 `DiplomacyAI.choose_actions()` 内复用国力、粮食、边界、关系和意愿派生值；缓存不跨 tick/月保存。优化后 40 国 180 天 `STRESS_PASS`，`armies=442`、`wars=22`、`alliances=19`、`diplomacy=67`、`commit_failures=0`。
+- 首都失陷会在占领当日触发无条件投降。割地边界读取投降瞬间的**实控区快照**，从胜利国实控边境沿正容量道路向战败国实控区扩张最多两跳，同时确认控制权与法理；禁止逐城转移后形成新边境继续连锁吞并。战败国若仍有第三跳以外领土则迁都存续。议和、退盟、飞地割让和首都投降后，非法驻军进入 `diplomatic_repatriation`，可临时通过任意国家正容量道路返回本国，但不获得驻扎、补给、攻击或占领权。
 - 驻边军紧急回援修复后默认种子 1095 天：`armies=176`、`offensives=46`、`turnovers=15`、`force_mismatches=0/0`、`role_deploy=226`、`hostile_stationed=0`、`commit_failures=0`，脚本 `total_ms=45780`。
 - 当前一个目标只能绑定一个战团，一支军队只能属于一个目标；并行目标数不设固定上限，由合法前线目标、可用战团和资源自然限制。关键城市没有固定人数保底，正式地图受威胁驻防由 `CityDefensePlan` 的角色槽位决定。
-- strict-mirror：seed 1 连续 **3650 天逐日无破裂**，优势分 `0.0`。
+- 当前快速回归为 **1189 passed / 0 failed**；strict-mirror：seed 1 连续 **3650 天逐日无破裂**，优势分 `0.0`。
 
 ---
 

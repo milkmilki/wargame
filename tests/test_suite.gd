@@ -52,6 +52,7 @@ func _init() -> void:
 	_test_edge_holding_state()
 	_test_edge_supply_from_both_endpoints()
 	_test_warehouse_logistics()
+	_test_capital_capture_capitulation()
 	_test_holding_combat_adaptation()
 	_test_retreat_contact_and_position_continuity()
 	_test_ai_strategic_map_and_threat()
@@ -3627,6 +3628,13 @@ func _test_morale_retreat_recovery() -> void:
 	# 城市恢复期间若易主，旧城主驻军必须被统一驱逐，不能滞留敌城。
 	starved.state = Army.State.RECOVERING
 	var old_owner := starved.owner_nation
+	_set_warehouses(
+		gs,
+		old_owner,
+		[c1, c2] as Array[int],
+		[100, 0] as Array[int],
+		c1
+	)
 	var historical_owner := gs.recognized_owner_of(c2)
 	var captor := _make_army(502, (old_owner + 1) % GameState.NATION_COUNT, 1200, 10)
 	gs.armies.append(captor)
@@ -4446,7 +4454,7 @@ func _test_warehouse_logistics() -> void:
 	_check(supply[0] == 16 and _approx(float(supply[1]), 0.2),
 		"同距离时应选择 danger 更低的粮仓 16，实为 %s" % str(supply))
 
-	# 独立世界验证首都失守：30% 库存汇入胜方首都，败方从剩余城市迁都。
+	# 独立世界验证首都失守：30% 库存汇入胜方首都，败方立即投降后迁都。
 	var gs2 := GameState.new()
 	gs2.generate_grid_world(6363)
 	var sim2 := Simulation.new()
@@ -4458,6 +4466,18 @@ func _test_warehouse_logistics() -> void:
 	old_capital.food_storage = 100
 	var captor_capital := gs2.cities[gs2.nations[1].capital_city_id]
 	captor_capital.food_storage = 500
+	for nation_a in range(gs2.nations.size()):
+		for nation_b in range(nation_a + 1, gs2.nations.size()):
+			gs2.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	gs2.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
 	var captor := _make_army(813, 1, 1000, 10)
 	gs2.armies.append(captor)
 	sim2._capture_city(captor, old_capital)
@@ -4472,8 +4492,186 @@ func _test_warehouse_logistics() -> void:
 		and gs2.cities[new_capital_id].is_capital
 		and gs2.cities[new_capital_id].has_warehouse,
 		"败方应在剩余城市中迁都并建立新粮仓，实为 %d" % new_capital_id)
+	_check(
+		not gs2.is_enemy(0, 1)
+			and not gs2.diplomatic_history.is_empty()
+			and int(
+				gs2.diplomatic_history[-1].get(
+					"surrendering_nation",
+					-1
+				)
+			) == 0,
+		"首都失守必须立即投降，不得等待月度和平意愿结算"
+	)
 	sim.free()
 	sim2.free()
+
+
+func _test_capital_capture_capitulation() -> void:
+	print("[26c] 首都失陷：实控边境两跳割地、立即投降、禁止连锁扩张")
+	var boundary_state := GameState.new()
+	boundary_state.generate_grid_world(6364)
+	boundary_state.armies.clear()
+	boundary_state.battles.clear()
+	for city in boundary_state.cities:
+		city.owner_nation = 2
+		boundary_state.recognized_city_owners[city.id] = 2
+	for controlled_city in [40, 48]:
+		boundary_state.cities[controlled_city].owner_nation = 0
+		boundary_state.recognized_city_owners[controlled_city] = 1
+	for loser_city in [
+		41, 42, 43,
+		49, 50, 51,
+		57, 58, 59,
+	]:
+		boundary_state.cities[loser_city].owner_nation = 1
+		boundary_state.recognized_city_owners[loser_city] = 1
+	for road in [
+		[40, 41],
+		[48, 49],
+		[41, 42],
+		[41, 49],
+		[49, 50],
+		[49, 57],
+		[42, 43],
+		[50, 51],
+		[57, 58],
+	]:
+		boundary_state.edge_of(
+			int(road[0]),
+			int(road[1])
+		).max_manpower = Edge.STANDARD_MANPOWER
+	var boundary_sim := Simulation.new()
+	boundary_sim.setup(boundary_state)
+	var control_based_cession := (
+		boundary_sim._capital_capitulation_cession_cities(
+			0,
+			1
+		)
+	)
+	var expected_control_cession := {
+		41: true,
+		42: true,
+		49: true,
+		50: true,
+		57: true,
+	}
+	var control_boundary_exact := (
+		control_based_cession.size()
+			== expected_control_cession.size()
+	)
+	for city_id in control_based_cession:
+		control_boundary_exact = (
+			control_boundary_exact
+			and expected_control_cession.has(city_id)
+		)
+	_check(
+		control_boundary_exact
+			and not control_based_cession.has(43)
+			and not control_based_cession.has(51)
+			and not control_based_cession.has(58),
+		(
+			"两跳割地必须从胜方实控城市40/48出发，"
+			+ "即使其法理属于败方；第三跳不得纳入：%s"
+		) % str(control_based_cession)
+	)
+	boundary_sim.free()
+
+	var surrender_state := GameState.new()
+	surrender_state.generate_grid_world(6365)
+	surrender_state.armies.clear()
+	surrender_state.battles.clear()
+	for city in surrender_state.cities:
+		city.owner_nation = 2
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		surrender_state.recognized_city_owners[city.id] = 2
+	surrender_state.cities[0].owner_nation = 0
+	surrender_state.recognized_city_owners[0] = 0
+	for loser_city in [1, 2, 3, 4]:
+		surrender_state.cities[loser_city].owner_nation = 1
+		surrender_state.recognized_city_owners[loser_city] = 1
+	for chain_city in range(4):
+		surrender_state.edge_of(
+			chain_city,
+			chain_city + 1
+		).max_manpower = Edge.STANDARD_MANPOWER
+	_set_single_warehouse(surrender_state, 0, 0, 100)
+	_set_single_warehouse(surrender_state, 1, 1, 100)
+	_set_single_warehouse(surrender_state, 2, 63, 100)
+	_set_warehouses(
+		surrender_state,
+		3,
+		[] as Array[int],
+		[] as Array[int]
+	)
+	for nation_a in range(surrender_state.nations.size()):
+		for nation_b in range(
+			nation_a + 1,
+			surrender_state.nations.size()
+		):
+			surrender_state.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	surrender_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	surrender_state.refresh_derived()
+	var surrender_sim := Simulation.new()
+	surrender_sim.setup(surrender_state)
+	var capital_captor := _make_army(814, 0, 5000, 10)
+	capital_captor.location_city = 0
+	capital_captor.move_from = 0
+	surrender_state.armies.append(capital_captor)
+	surrender_sim._capture_city(
+		capital_captor,
+		surrender_state.cities[1]
+	)
+	var first_two_rings_transferred := true
+	for transferred_city in [1, 2, 3]:
+		first_two_rings_transferred = (
+			first_two_rings_transferred
+			and surrender_state.cities[
+				transferred_city
+			].owner_nation == 0
+			and surrender_state.recognized_owner_of(
+				transferred_city
+			) == 0
+		)
+	var capital_surrender_recorded := (
+		not surrender_state.diplomatic_history.is_empty()
+		and int(
+			surrender_state.diplomatic_history[-1].get(
+				"surrendering_nation",
+				-1
+			)
+		) == 1
+	)
+	_check(
+		first_two_rings_transferred
+			and surrender_state.cities[4].owner_nation == 1
+			and surrender_state.recognized_owner_of(4) == 1,
+		"首都1失陷后只能转移实控边界内两跳的城市2/3，第三跳城市4必须保留"
+	)
+	_check(
+		not surrender_state.is_enemy(0, 1)
+			and surrender_state.truce_until(0, 1)
+				> surrender_state.day
+			and capital_surrender_recorded,
+		"首都失陷当日必须直接结束战争并记录战败国投降"
+	)
+	_check(
+		surrender_state.nations[1].capital_city_id == 4
+			and surrender_state.cities[4].is_capital
+			and surrender_state.cities[4].has_warehouse,
+		"战败国仍有第三跳领土时，应在投降结算后迁都继续存续"
+	)
+	surrender_sim.free()
 
 # ------------------------------------------------------------------ 27. 驻防战斗适应 + 增援稀释
 
@@ -7473,6 +7671,16 @@ func _test_diplomacy_state_and_ai() -> void:
 		encounter_state.recognized_owner_of(settlement_city.id) == 1,
 		"战争期间实际控制与法理归属不同时应保持占领状态"
 	)
+	var stranded_after_battle := _make_army(
+		9002,
+		1,
+		5000,
+		10
+	)
+	stranded_after_battle.location_city = settlement_city.id
+	stranded_after_battle.move_from = settlement_city.id
+	stranded_after_battle.state = Army.State.IDLE
+	encounter_state.armies.append(stranded_after_battle)
 	encounter_sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.MAKE_PEACE,
 		"a": 0,
@@ -7487,6 +7695,17 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		encounter_state.battles.is_empty() and not fighting_after_peace,
 		"求和必须结束双方活跃战斗并清除 FIGHTING 状态"
+	)
+	_check(
+		stranded_after_battle.size <= 0
+			or (
+				stranded_after_battle.state
+					== Army.State.RETREATING
+				and not stranded_after_battle.is_at_city_node(
+					settlement_city.id
+				)
+			),
+		"议和必须撤出未参加当前战斗但滞留在对方控制城市的军队"
 	)
 	_check(
 		encounter_state.recognized_owner_of(settlement_city.id) == 0,
@@ -7546,13 +7765,21 @@ func _test_diplomacy_state_and_ai() -> void:
 		disconnected_occupation.id,
 		0.5
 	)
-	var enclave_garrison_manpower := (
-		enclave_garrison.size
-		+ enclave_edge_garrison.size
+	var enclave_third_party := _make_army(
+		9062,
+		2,
+		5000,
+		10
 	)
-	var enclave_manpower_before := (
-		enclave_state.nations[0].manpower_pool
+	enclave_third_party.max_size = Edge.MIN_MANPOWER
+	enclave_third_party.location_city = (
+		disconnected_occupation.id
 	)
+	enclave_third_party.move_from = (
+		disconnected_occupation.id
+	)
+	enclave_third_party.state = Army.State.IDLE
+	enclave_state.armies.append(enclave_third_party)
 	var enclave_sim := Simulation.new()
 	enclave_sim.setup(enclave_state)
 	var enclave_peace := enclave_sim._execute_diplomatic_action({
@@ -7590,15 +7817,49 @@ func _test_diplomacy_state_and_ai() -> void:
 			)) == 2,
 		"议和必须保留首都连通领土，并割让所有不连首都的飞地，无论其原为法理领土还是占领地"
 	)
+	var repatriating_armies: Array[Army] = [
+		enclave_garrison,
+		enclave_edge_garrison,
+		enclave_third_party,
+	]
+	var all_repatriations_started := true
+	for repatriating in repatriating_armies:
+		all_repatriations_started = (
+			all_repatriations_started
+			and enclave_state.armies.has(repatriating)
+			and repatriating.size > 0
+			and repatriating.state == Army.State.RETREATING
+			and repatriating.diplomatic_repatriation
+			and repatriating.move_to >= 0
+		)
 	_check(
-		not enclave_state.armies.has(enclave_garrison)
-			and not enclave_state.armies.has(
-				enclave_edge_garrison
+		all_repatriations_started,
+		"战争结束后的非法驻军必须保留兵力，并获得穿越第三国道路回本国的临时遣返路径"
+	)
+	for _repatriation_day in range(300):
+		var repatriation_active := false
+		for repatriating in repatriating_armies:
+			repatriation_active = (
+				repatriation_active
+				or repatriating.diplomatic_repatriation
 			)
-			and enclave_state.nations[0].manpower_pool
-				== enclave_manpower_before
-					+ enclave_garrison_manpower,
-		"飞地城市及边上无路撤回的驻军必须按和平协议复员并返还人力"
+		if not repatriation_active:
+			break
+		enclave_sim._advance_movement()
+	var all_repatriations_completed := true
+	for repatriating in repatriating_armies:
+		all_repatriations_completed = (
+			all_repatriations_completed
+			and repatriating.size > 0
+			and not repatriating.diplomatic_repatriation
+			and repatriating.location_city >= 0
+			and enclave_state.cities[
+				repatriating.location_city
+			].owner_nation == repatriating.owner_nation
+		)
+	_check(
+		all_repatriations_completed,
+		"外交遣返军必须全部抵达各自本国，并在抵达后清除临时过境权"
 	)
 	enclave_sim.free()
 
@@ -10876,11 +11137,22 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	defense_sim._release_edge(allied_origin_army)
 	allied_origin.owner_nation = 0
-	defense_sim._capture_city(allied_origin_army, enemy_target)
 	defense_state.set_diplomatic_relation(
 		0,
 		3,
 		GameState.DiplomaticRelation.NEUTRAL
+	)
+	defense_sim._capture_city(allied_origin_army, enemy_target)
+	_check(
+		allied_origin_army.size <= 0
+			or (
+				allied_origin_army.state
+					== Army.State.RETREATING
+				and not allied_origin_army.is_at_city_node(
+					enemy_target.id
+				)
+			),
+		"冻结归属国在破城前失去通行权时，占领权仍归原盟国，但实际攻城军必须撤离"
 	)
 	var allied_legal_transfer := (
 		defense_state.recognize_occupied_territory(0, 1)

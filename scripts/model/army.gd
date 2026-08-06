@@ -93,6 +93,10 @@ var resume_holding_after_battle: bool = false
 ## 若该军获胜则继续原撤退路线，而不是恢复普通 MOVING。
 var forced_retreat: bool = false
 
+## 外交关系变化后的遣返状态。仅允许沿正容量道路穿越第三国返回本国，
+## 不授予驻扎、补给、攻击或占领权；抵达本国城市后立即清除。
+var diplomatic_repatriation: bool = false
+
 ## AI 命令元数据。只记录决策与滞回，不直接改变状态机语义。
 var ai_action: int = 0
 var ai_target_city: int = -1

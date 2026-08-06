@@ -233,18 +233,60 @@ static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 ## 离开起点后的路径及最终恢复城市都必须拥有军事通行权。
 ## excluded_city_id 用于守城方溃败时排除正在失守的城市。
 static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id: int = -1) -> Array[int]:
+	return _nearest_retreat_city(
+		state,
+		army,
+		excluded_city_id,
+		false
+	)
+
+
+## 外交遣返专用：可穿越任意国家的正容量道路，但终点只能是本国城市。
+static func nearest_home_city_for_repatriation(
+	state: GameState,
+	army: Army,
+	excluded_city_id: int = -1
+) -> Array[int]:
+	return _nearest_retreat_city(
+		state,
+		army,
+		excluded_city_id,
+		true
+	)
+
+
+static func _nearest_retreat_city(
+	state: GameState,
+	army: Army,
+	excluded_city_id: int,
+	unrestricted_transit: bool
+) -> Array[int]:
 	var start := _origin_of(army)
 	var field := dijkstra_field(
 		state,
 		start,
-		army.owner_nation,
+		-1 if unrestricted_transit else army.owner_nation,
 		false,
 		true,
 		-1,
 		army.max_size
 	)
 	var dist: Dictionary = field["dist"]
-	var best_goal := _nearest_friendly_goal(state, army.owner_nation, dist, excluded_city_id)
+	var best_goal := (
+		_nearest_home_goal(
+			state,
+			army.owner_nation,
+			dist,
+			excluded_city_id
+		)
+		if unrestricted_transit
+		else _nearest_friendly_goal(
+			state,
+			army.owner_nation,
+			dist,
+			excluded_city_id
+		)
+	)
 	var best_d: float = dist[best_goal] if best_goal != -1 else INF
 	if best_goal == -1 or best_d == INF:
 		return [] as Array[int]
@@ -289,6 +331,34 @@ static func nearest_friendly_route_from_edge(
 	army: Army,
 	excluded_city_id: int = -1
 ) -> Dictionary:
+	return _nearest_retreat_route_from_edge(
+		state,
+		army,
+		excluded_city_id,
+		false
+	)
+
+
+## 外交遣返在道路上的对应版本：两端择优，可经第三国，终点仅限本国。
+static func nearest_home_route_from_edge_for_repatriation(
+	state: GameState,
+	army: Army,
+	excluded_city_id: int = -1
+) -> Dictionary:
+	return _nearest_retreat_route_from_edge(
+		state,
+		army,
+		excluded_city_id,
+		true
+	)
+
+
+static func _nearest_retreat_route_from_edge(
+	state: GameState,
+	army: Army,
+	excluded_city_id: int,
+	unrestricted_transit: bool
+) -> Dictionary:
 	var edge := state.edge_of(army.move_from, army.move_to)
 	if edge == null:
 		return {}
@@ -303,14 +373,28 @@ static func nearest_friendly_route_from_edge(
 		var field := dijkstra_field(
 			state,
 			endpoint,
-			army.owner_nation,
+			-1 if unrestricted_transit else army.owner_nation,
 			false,
 			true,
 			-1,
 			army.max_size
 		)
 		var dist: Dictionary = field["dist"]
-		var goal := _nearest_friendly_goal(state, army.owner_nation, dist, excluded_city_id)
+		var goal := (
+			_nearest_home_goal(
+				state,
+				army.owner_nation,
+				dist,
+				excluded_city_id
+			)
+			if unrestricted_transit
+			else _nearest_friendly_goal(
+				state,
+				army.owner_nation,
+				dist,
+				excluded_city_id
+			)
+		)
 		if goal == -1 or dist[goal] == INF:
 			continue
 		var total: float = float(option["remaining"]) + float(dist[goal])
@@ -330,6 +414,35 @@ static func nearest_friendly_route_from_edge(
 				"distance": total,
 			}
 	return best
+
+
+static func _nearest_home_goal(
+	state: GameState,
+	nation_id: int,
+	dist: Dictionary,
+	excluded_city_id: int
+) -> int:
+	var best_goal := -1
+	var best_d := INF
+	for city in state.cities:
+		if (
+			city.id == excluded_city_id
+			or city.owner_nation != nation_id
+		):
+			continue
+		var distance := float(dist[city.id])
+		if distance < best_d or (
+			is_equal_approx(distance, best_d)
+			and EquivariantOrder.city_id_less(
+				state,
+				nation_id,
+				city.id,
+				best_goal
+			)
+		):
+			best_d = distance
+			best_goal = city.id
+	return best_goal
 
 
 static func _nearest_friendly_goal(

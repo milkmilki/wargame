@@ -28,12 +28,64 @@ var _supply_city_cache: Dictionary = {}
 var _supply_network_cache: Dictionary = {}
 
 
+## 同一 AI 决策 tick 的所有国家共享基础军队索引。索引只保存 Army 引用，
+## 国家关系相关的敌我分类仍在各自视图中完成。
+static func build_army_index(game_state: GameState) -> Dictionary:
+	var armies_by_nation := {}
+	var armies_by_city := {}
+	var stationed_power_by_nation := {}
+	for nation in game_state.nations:
+		armies_by_nation[nation.id] = [] as Array[Army]
+		stationed_power_by_nation[nation.id] = {}
+	for army in game_state.armies:
+		if army.size <= 0:
+			continue
+		(
+			armies_by_nation[army.owner_nation]
+				as Array[Army]
+		).append(army)
+		if not army.on_edge and army.location_city >= 0:
+			if not armies_by_city.has(army.location_city):
+				armies_by_city[army.location_city] = (
+					[] as Array[Army]
+				)
+			(
+				armies_by_city[army.location_city]
+					as Array[Army]
+			).append(army)
+			if army.state in [
+				Army.State.IDLE,
+				Army.State.RECOVERING,
+			]:
+				var stationed: Dictionary = (
+					stationed_power_by_nation[
+						army.owner_nation
+					]
+				)
+				stationed[army.location_city] = (
+					float(
+						stationed.get(
+							army.location_city,
+							0.0
+						)
+					)
+					+ ArmyPower.effective(army)
+				)
+	return {
+		"armies_by_nation": armies_by_nation,
+		"armies_by_city": armies_by_city,
+		"stationed_power_by_nation":
+			stationed_power_by_nation,
+	}
+
+
 static func build(
 	game_state: GameState,
 	owner_nation: int,
 	shared_path_cache: Dictionary = {},
 	shared_supply_network_cache: Dictionary = {},
-	shared_city_partition_cache: Dictionary = {}
+	shared_city_partition_cache: Dictionary = {},
+	shared_army_index: Dictionary = {}
 ) -> AiWorldView:
 	var view := AiWorldView.new()
 	view.state = game_state
@@ -122,43 +174,40 @@ static func build(
 			"allied": view.allied_cities.duplicate(),
 			"neutral": view.neutral_cities.duplicate(),
 		}
-	for army in game_state.armies:
-		if army.size <= 0:
+	var army_index := (
+		shared_army_index
+		if not shared_army_index.is_empty()
+		else build_army_index(game_state)
+	)
+	view.armies_by_city = army_index["armies_by_city"]
+	var armies_by_nation: Dictionary = (
+		army_index["armies_by_nation"]
+	)
+	view.friendly_armies = (
+		armies_by_nation.get(
+			owner_nation,
+			[] as Array[Army]
+		) as Array[Army]
+	).duplicate()
+	view.friendly_stationed_power_by_city = (
+		army_index["stationed_power_by_nation"].get(
+			owner_nation,
+			{}
+		) as Dictionary
+	).duplicate()
+	for other in game_state.nations:
+		if other.id == owner_nation:
 			continue
-		if not army.on_edge and army.location_city >= 0:
-			if not view.armies_by_city.has(army.location_city):
-				view.armies_by_city[army.location_city] = (
-					[] as Array[Army]
-				)
-			(
-				view.armies_by_city[army.location_city]
-				as Array[Army]
-			).append(army)
-		if army.owner_nation == owner_nation:
-			view.friendly_armies.append(army)
-			if (
-				not army.on_edge
-				and army.location_city >= 0
-				and army.state in [
-					Army.State.IDLE,
-					Army.State.RECOVERING,
-				]
-			):
-				view.friendly_stationed_power_by_city[
-					army.location_city
-				] = (
-					float(
-						view.friendly_stationed_power_by_city.get(
-							army.location_city,
-							0.0
-						)
-					)
-					+ ArmyPower.effective(army)
-				)
-		elif game_state.is_enemy(owner_nation, army.owner_nation):
-			view.enemy_armies.append(army)
-		elif game_state.is_allied(owner_nation, army.owner_nation):
-			view.allied_armies.append(army)
+		var other_armies: Array[Army] = (
+			armies_by_nation.get(
+				other.id,
+				[] as Array[Army]
+			) as Array[Army]
+		)
+		if game_state.is_enemy(owner_nation, other.id):
+			view.enemy_armies.append_array(other_armies)
+		elif game_state.is_allied(owner_nation, other.id):
+			view.allied_armies.append_array(other_armies)
 	# AI 军队迭代顺序必须随势力镜像一起变换，不能读取创建顺序 id。
 	view.friendly_armies.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(game_state, owner_nation, a, b)

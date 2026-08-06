@@ -81,15 +81,30 @@ static func choose_actions(state: GameState) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
 	var committed := {}
 	var evaluation_cache := {}
-	_collect_peace_actions(state, actions, committed)
-	_collect_leave_alliance_actions(state, actions, committed)
+	_collect_peace_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
+	_collect_leave_alliance_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
 	_collect_war_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
-	_collect_alliance_actions(state, actions, committed)
+	_collect_alliance_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
 	return actions
 
 
@@ -106,25 +121,54 @@ static func peace_willingness(state: GameState, nation_id: int, enemy_id: int) -
 static func peace_willingness_breakdown(
 	state: GameState,
 	nation_id: int,
-	enemy_id: int
+	enemy_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
+	var cache_key := "peace:%d:%d" % [
+		nation_id,
+		enemy_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
 	if not state.is_enemy(nation_id, enemy_id):
 		return {"score": -INF}
-	var own_power := _national_power(state, nation_id)
-	var enemy_power := _national_power(state, enemy_id)
+	var own_power := _national_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var enemy_power := _national_power(
+		state,
+		enemy_id,
+		evaluation_cache
+	)
 	var power_balance := (
 		(own_power - enemy_power)
 		/ maxf(maxf(own_power, enemy_power), 1.0)
 	)
 	var war_days := state.day - state.relation_since(nation_id, enemy_id)
 	var extra_wars := maxi(state.wars_of(nation_id).size() - 1, 0)
-	var no_front := 1.0 if _frontier_edges(state, nation_id, enemy_id) == 0 else 0.0
+	var no_front := (
+		1.0
+		if _frontier_edges(
+			state,
+			nation_id,
+			enemy_id,
+			evaluation_cache
+		) == 0
+		else 0.0
+	)
 	var situation_score := war_situation_score(
 		state,
 		nation_id,
-		enemy_id
+		enemy_id,
+		evaluation_cache
 	)
-	var resource_report := resource_report(state, nation_id)
+	var resource_report := resource_report(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	var gold_endurance := clampf(
 		float(resource_report["gold_runway_months"])
 			/ PEACE_RESOURCE_REFERENCE_MONTHS,
@@ -149,7 +193,8 @@ static func peace_willingness_breakdown(
 	var external_threat := _neutral_border_massing_ratio(
 		state,
 		nation_id,
-		enemy_id
+		enemy_id,
+		evaluation_cache
 	)
 	var aggression := clampf(
 		state.nations[nation_id].ai_aggression,
@@ -174,7 +219,8 @@ static func peace_willingness_breakdown(
 	var attitude := diplomatic_attitude(
 		state,
 		nation_id,
-		enemy_id
+		enemy_id,
+		evaluation_cache
 	)
 	var attitude_component := attitude * ATTITUDE_PEACE_WEIGHT
 	var score := (
@@ -188,7 +234,7 @@ static func peace_willingness_breakdown(
 		+ no_front
 		- (aggression - 1.0) * 0.50
 	)
-	return {
+	var result := {
 		"score": score,
 		"war_fatigue": war_fatigue,
 		"situation_score": situation_score,
@@ -205,12 +251,15 @@ static func peace_willingness_breakdown(
 		"no_front": no_front,
 		"aggression": aggression,
 	}
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func peace_assessment(
 	state: GameState,
 	nation_a: int,
-	nation_b: int
+	nation_b: int,
+	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
 	if not state.is_enemy(nation_a, nation_b):
 		return {
@@ -224,12 +273,14 @@ static func peace_assessment(
 	var breakdown_a := peace_willingness_breakdown(
 		state,
 		nation_a,
-		nation_b
+		nation_b,
+		evaluation_cache
 	)
 	var breakdown_b := peace_willingness_breakdown(
 		state,
 		nation_b,
-		nation_a
+		nation_a,
+		evaluation_cache
 	)
 	var score_a := float(breakdown_a["score"])
 	var score_b := float(breakdown_b["score"])
@@ -270,8 +321,15 @@ static func peace_assessment(
 static func war_situation_score(
 	state: GameState,
 	nation_id: int,
-	enemy_id: int
+	enemy_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
+	var cache_key := "situation:%d:%d" % [
+		nation_id,
+		enemy_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	var score := 0.0
 	var bilateral_value := 0.0
 	for city in state.cities:
@@ -292,9 +350,11 @@ static func war_situation_score(
 			score += city_value
 		elif occupying_side == enemy_id and legal_owner == nation_id:
 			score -= city_value
-	return (
+	var result := (
 		score * 4.0 / maxf(bilateral_value, 1.0)
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 ## 方向性外交态度：正值表示合作倾向，负值表示敌对倾向。
@@ -334,15 +394,23 @@ static func diplomatic_attitude_breakdown(
 			"military": 0.0,
 			"political": 0.0,
 		}
+	var cache_key := "attitude:%d:%d" % [
+		nation_id,
+		other_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
 	var historical := _historical_attitude(
 		state,
 		nation_id,
-		other_id
+		other_id,
+		evaluation_cache
 	)
 	var frontier_count := _frontier_edges(
 		state,
 		nation_id,
-		other_id
+		other_id,
+		evaluation_cache
 	)
 	var border_component := maxf(
 		-float(frontier_count) * BORDER_ATTITUDE_PER_EDGE,
@@ -363,12 +431,14 @@ static func diplomatic_attitude_breakdown(
 	var common_enemies := _common_enemy_count(
 		state,
 		nation_id,
-		other_id
+		other_id,
+		evaluation_cache
 	)
 	var enemy_allies := _enemy_alliance_count(
 		state,
 		nation_id,
-		other_id
+		other_id,
+		evaluation_cache
 	)
 	var frontier_relief := (
 		0.0
@@ -376,7 +446,8 @@ static func diplomatic_attitude_breakdown(
 		else _alliance_frontier_release_value(
 			state,
 			nation_id,
-			other_id
+			other_id,
+			evaluation_cache
 		)
 	)
 	var political := (
@@ -384,7 +455,7 @@ static func diplomatic_attitude_breakdown(
 		+ frontier_relief
 		+ float(enemy_allies) * ENEMY_ALLY_ATTITUDE
 	)
-	return {
+	var result := {
 		"score": historical + military + political,
 		"historical": historical,
 		"military": military,
@@ -398,13 +469,22 @@ static func diplomatic_attitude_breakdown(
 		"enemy_allies": enemy_allies,
 		"frontier_relief": frontier_relief,
 	}
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func _historical_attitude(
 	state: GameState,
 	nation_id: int,
-	other_id: int
+	other_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
+	var cache_key := "history:%d:%d" % [
+		nation_id,
+		other_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	var revenge := 0.0
 	for event in state.diplomatic_history:
 		if (
@@ -431,18 +511,28 @@ static func _historical_attitude(
 		if int(event.get("surrendering_nation", -1)) == nation_id:
 			defeat = maxf(defeat, REVENGE_SURRENDER_PENALTY)
 		revenge += defeat
-	return maxf(-revenge, REVENGE_ATTITUDE_FLOOR)
+	var result := maxf(-revenge, REVENGE_ATTITUDE_FLOOR)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func _enemy_alliance_count(
 	state: GameState,
 	nation_id: int,
-	other_id: int
+	other_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> int:
+	var cache_key := "enemy_allies:%d:%d" % [
+		nation_id,
+		other_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var count := 0
 	for enemy_id in state.wars_of(nation_id):
 		if enemy_id != other_id and state.is_allied(other_id, enemy_id):
 			count += 1
+	evaluation_cache[cache_key] = count
 	return count
 
 
@@ -451,7 +541,8 @@ static func _enemy_alliance_count(
 static func unification_rivalry(
 	state: GameState,
 	nation_id: int,
-	other_id: int
+	other_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
 	if (
 		nation_id == other_id
@@ -463,6 +554,12 @@ static func unification_rivalry(
 		or not state.nations[other_id].alive
 	):
 		return 0.0
+	var cache_key := "unification:%d:%d" % [
+		mini(nation_id, other_id),
+		maxi(nation_id, other_id),
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	var controlled := 0
 	for city in state.cities:
 		if city.owner_nation in [nation_id, other_id]:
@@ -482,10 +579,12 @@ static func unification_rivalry(
 	var rival_scarcity := (
 		1.0 / float(maxi(alive_count - 1, 1))
 	)
-	return (
+	var result := (
 		completion * UNIFICATION_COMPLETION_WEIGHT
 		+ rival_scarcity * UNIFICATION_RIVAL_SCARCITY_WEIGHT
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func _occupation_side(
@@ -528,16 +627,28 @@ static func _military_city_value(city: City) -> float:
 static func peace_reasons(
 	state: GameState,
 	nation_id: int,
-	enemy_id: int
+	enemy_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> Array[String]:
 	var reasons: Array[String] = []
-	var report := resource_report(state, nation_id)
-	var food_plan := war_food_report(state, nation_id)
+	var report := resource_report(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var food_plan := war_food_report(
+		state,
+		nation_id,
+		-1,
+		-1,
+		evaluation_cache
+	)
 	var nation := state.nations[nation_id]
 	var breakdown := peace_willingness_breakdown(
 		state,
 		nation_id,
-		enemy_id
+		enemy_id,
+		evaluation_cache
 	)
 	if (
 		breakdown.has("situation_score")
@@ -631,7 +742,18 @@ static func peace_reasons(
 	return reasons
 
 
-static func alliance_willingness(state: GameState, nation_id: int, target_id: int) -> float:
+static func alliance_willingness(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var cache_key := "alliance:%d:%d" % [
+		nation_id,
+		target_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	if state.relation_between(nation_id, target_id) != GameState.DiplomaticRelation.NEUTRAL:
 		return -INF
 	if (
@@ -641,13 +763,40 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 		return -INF
 	if state.day - state.relation_since(nation_id, target_id) < MIN_NEUTRAL_DAYS:
 		return -INF
-	if _alliance_has_active_conflict(state, nation_id, target_id):
+	if _alliance_has_active_conflict(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache
+	):
 		return -INF
-	var common_enemies := _common_enemy_count(state, nation_id, target_id)
-	var own_power := _national_power(state, nation_id)
-	var target_power := _national_power(state, target_id)
+	var common_enemies := _common_enemy_count(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache
+	)
+	var own_power := _national_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var target_power := _national_power(
+		state,
+		target_id,
+		evaluation_cache
+	)
 	var imbalance := absf(log(maxf(own_power, 1.0) / maxf(target_power, 1.0)))
-	var border_bonus := 0.25 if _frontier_edges(state, nation_id, target_id) > 0 else 0.0
+	var border_bonus := (
+		0.25
+		if _frontier_edges(
+			state,
+			nation_id,
+			target_id,
+			evaluation_cache
+		) > 0
+		else 0.0
+	)
 	var shared_threat := 0.0
 	for other in state.nations:
 		if other.id in [nation_id, target_id] or not other.alive:
@@ -655,27 +804,40 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 		shared_threat = maxf(
 			shared_threat,
 			minf(
-				threat_from_nation(state, nation_id, other.id),
-				threat_from_nation(state, target_id, other.id)
+				threat_from_nation(
+					state,
+					nation_id,
+					other.id,
+					evaluation_cache
+				),
+				threat_from_nation(
+					state,
+					target_id,
+					other.id,
+					evaluation_cache
+				)
 			)
 		)
 	var balance_affinity := maxf(1.0 - imbalance, 0.0) * 0.55
 	var frontier_release := _alliance_frontier_release_value(
 		state,
 		nation_id,
-		target_id
+		target_id,
+		evaluation_cache
 	)
 	var attitude := diplomatic_attitude(
 		state,
 		nation_id,
-		target_id
+		target_id,
+		evaluation_cache
 	)
 	var unification_pressure := unification_rivalry(
 		state,
 		nation_id,
-		target_id
+		target_id,
+		evaluation_cache
 	)
-	return (
+	var result := (
 		0.35
 		+ float(common_enemies) * 1.5
 		+ minf(shared_threat * 0.35, 0.80)
@@ -685,6 +847,8 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 		+ attitude * ATTITUDE_ALLIANCE_WEIGHT
 		- unification_pressure
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func war_desire(
@@ -693,24 +857,53 @@ static func war_desire(
 	target_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> float:
+	var cache_key := "war_desire:%d:%d" % [
+		nation_id,
+		target_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	if (
 		not state.can_declare_war(nation_id, target_id)
 		or state.wars_of(nation_id).size() >= MAX_CONCURRENT_WARS
-		or _frontier_edges(state, nation_id, target_id) <= 0
-		or _has_shared_ally(state, nation_id, target_id)
+		or _frontier_edges(
+			state,
+			nation_id,
+			target_id,
+			evaluation_cache
+		) <= 0
+		or _has_shared_ally(
+			state,
+			nation_id,
+			target_id,
+			evaluation_cache
+		)
 	):
+		evaluation_cache[cache_key] = -INF
 		return -INF
-	var report := resource_report(state, nation_id)
+	var report := resource_report(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	if not bool(report["ready"]):
+		evaluation_cache[cache_key] = -INF
 		return -INF
-	var campaign_troops := _campaign_troop_target(state, nation_id, target_id)
+	var campaign_troops := _campaign_troop_target(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache
+	)
 	var food_plan := war_food_report(
 		state,
 		nation_id,
 		campaign_troops,
-		FoodPosture.OFFENSIVE_WAR
+		FoodPosture.OFFENSIVE_WAR,
+		evaluation_cache
 	)
 	if not bool(food_plan["target_sustainable"]):
+		evaluation_cache[cache_key] = -INF
 		return -INF
 	var objective := _cached_war_objective(
 		state,
@@ -719,14 +912,33 @@ static func war_desire(
 		evaluation_cache
 	)
 	if objective.is_empty():
+		evaluation_cache[cache_key] = -INF
 		return -INF
 	# 共同防御联盟不参加成员主动发动的战争；进攻方只能计算本国战力。
-	var own_power := _national_power(state, nation_id)
-	var target_power := _coalition_power(state, target_id)
+	var own_power := _national_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var target_power := _coalition_power(
+		state,
+		target_id,
+		evaluation_cache
+	)
 	var ratio := own_power / maxf(target_power, 1.0)
 	var target_distraction := float(state.wars_of(target_id).size()) * 0.25
 	var own_overextension := float(state.wars_of(nation_id).size()) * 0.75
-	var border_value := minf(float(_frontier_edges(state, nation_id, target_id)) * 0.10, 0.50)
+	var border_value := minf(
+		float(
+			_frontier_edges(
+				state,
+				nation_id,
+				target_id,
+				evaluation_cache
+			)
+		) * 0.10,
+		0.50
+	)
 	var reserve_quality := minf(
 		float(food_plan["target_runway_years"])
 			/ OFFENSIVE_CAMPAIGN_YEARS,
@@ -734,7 +946,12 @@ static func war_desire(
 	) * 0.20
 	var objective_value := minf(float(objective["value"]) * 0.05, 0.50)
 	var mobilization_value := float(
-		mobilization_capacity(state, nation_id)
+		mobilization_capacity(
+			state,
+			nation_id,
+			FoodPosture.OFFENSIVE_WAR,
+			evaluation_cache
+		)
 	) * 0.15
 	var aggression_bonus := (
 		_ai_aggression(state, nation_id) - 1.0
@@ -748,14 +965,15 @@ static func war_desire(
 	var unification_pressure := unification_rivalry(
 		state,
 		nation_id,
-		target_id
+		target_id,
+		evaluation_cache
 	)
 	var peace_escalation := neutral_peace_escalation(
 		state,
 		nation_id,
 		target_id
 	)
-	return (
+	var result := (
 		ratio
 		+ target_distraction
 		+ border_value
@@ -768,6 +986,8 @@ static func war_desire(
 		+ peace_escalation
 		- own_overextension
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func neutral_peace_escalation(
@@ -814,9 +1034,22 @@ static func _ai_aggression(
 static func _alliance_frontier_release_value(
 	state: GameState,
 	nation_id: int,
-	target_id: int
+	target_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
-	if _frontier_edges(state, nation_id, target_id) <= 0:
+	var cache_key := "frontier_release:%d:%d" % [
+		nation_id,
+		target_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
+	if _frontier_edges(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache
+	) <= 0:
+		evaluation_cache[cache_key] = 0.0
 		return 0.0
 	var frontier_cities := {}
 	for edge in state.edges:
@@ -842,11 +1075,17 @@ static func _alliance_frontier_release_value(
 			)
 		):
 			committed_power += ArmyPower.effective(army)
-	var national_power := _national_power(state, nation_id)
-	return minf(
+	var national_power := _national_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var result := minf(
 		committed_power / maxf(national_power, 1.0),
 		0.75
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 ## 只统计当前敌国之外的中立第三国在本国边境实际部署的战力。
@@ -854,8 +1093,15 @@ static func _alliance_frontier_release_value(
 static func _neutral_border_massing_ratio(
 	state: GameState,
 	observer_id: int,
-	current_enemy_id: int
+	current_enemy_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
+	var cache_key := "neutral_massing:%d:%d" % [
+		observer_id,
+		current_enemy_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	var border_power := 0.0
 	for other in state.nations:
 		if (
@@ -895,53 +1141,116 @@ static func _neutral_border_massing_ratio(
 				)
 			if massed:
 				border_power += ArmyPower.effective(army)
-	return minf(
+	var result := minf(
 		border_power
-			/ maxf(_national_power(state, observer_id), 1.0),
+			/ maxf(
+				_national_power(
+					state,
+					observer_id,
+					evaluation_cache
+				),
+				1.0
+			),
 		PEACE_MAX_BORDER_MASSING_RATIO
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func threat_from_nation(
 	state: GameState,
 	observer_id: int,
-	other_id: int
+	other_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
+	var cache_key := "threat:%d:%d" % [
+		observer_id,
+		other_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	if observer_id == other_id or state.is_allied(observer_id, other_id):
+		evaluation_cache[cache_key] = 0.0
 		return 0.0
 	if state.is_enemy(observer_id, other_id):
+		evaluation_cache[cache_key] = 3.0
 		return 3.0
-	var border_count := _frontier_edges(state, observer_id, other_id)
+	var border_count := _frontier_edges(
+		state,
+		observer_id,
+		other_id,
+		evaluation_cache
+	)
 	if border_count <= 0:
+		evaluation_cache[cache_key] = 0.0
 		return 0.0
 	var power_ratio := (
-		_coalition_power(state, other_id)
-		/ maxf(_coalition_power(state, observer_id), 1.0)
+		_coalition_power(
+			state,
+			other_id,
+			evaluation_cache
+		)
+		/ maxf(
+			_coalition_power(
+				state,
+				observer_id,
+				evaluation_cache
+			),
+			1.0
+		)
 	)
-	var report := resource_report(state, other_id)
+	var report := resource_report(
+		state,
+		other_id,
+		evaluation_cache
+	)
 	var readiness := 0.5 if bool(report["ready"]) else 0.0
-	var hostile_intent := war_desire(state, other_id, observer_id)
+	var hostile_intent := war_desire(
+		state,
+		other_id,
+		observer_id,
+		evaluation_cache
+	)
 	var intent_bonus := 0.0
 	if hostile_intent > -INF:
 		intent_bonus = maxf(hostile_intent - WAR_DECLARE_SCORE + 0.5, 0.0)
-	return (
+	var result := (
 		power_ratio
 		+ readiness
 		+ minf(float(border_count) * 0.05, 0.25)
 		+ intent_bonus
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
-static func resource_report(state: GameState, nation_id: int) -> Dictionary:
+static func resource_report(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Dictionary:
+	var cache_key := "resource:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
 	var nation := state.nations[nation_id]
-	var troops := _troop_count(state, nation_id)
+	var troops := _troop_count(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	var monthly_income := 0
 	for city in state.cities_of(nation_id):
 		monthly_income += Simulation.city_gold_output(
 			state,
 			city
 		)
-	var food_plan := war_food_report(state, nation_id, troops)
+	var food_plan := war_food_report(
+		state,
+		nation_id,
+		troops,
+		-1,
+		evaluation_cache
+	)
 	var monthly_food_production := float(food_plan["monthly_food_production"])
 	var monthly_war_cost := (
 		state.nation_monthly_military_upkeep(nation_id)
@@ -967,7 +1276,11 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 		MIN_MANPOWER_RESERVE,
 		int(ceil(float(troops) * 0.15))
 	)
-	var food_stock := _food_stock(state, nation_id)
+	var food_stock := _food_stock(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	var gold_ratio := (
 		MAX_REPORTED_RUNWAY_YEARS
 		if gold_required <= 0
@@ -984,7 +1297,7 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 	var food_production_ratio := (
 		monthly_food_production / maxf(float(monthly_food_demand), 1.0)
 	)
-	return {
+	var result := {
 		"troops": troops,
 		"monthly_gold_income": monthly_income,
 		"monthly_war_cost": monthly_war_cost,
@@ -1018,6 +1331,8 @@ static func resource_report(state: GameState, nation_id: int) -> Dictionary:
 			)
 		),
 	}
+	evaluation_cache[cache_key] = result
+	return result
 
 
 ## 开始备战要求完整战略储备；备战中的动员本身会消耗这部分人力，因此继续
@@ -1051,8 +1366,15 @@ static func war_preparation_resources_ready(
 static func mobilization_capacity(
 	state: GameState,
 	nation_id: int,
-	posture: int = FoodPosture.OFFENSIVE_WAR
+	posture: int = FoodPosture.OFFENSIVE_WAR,
+	evaluation_cache: Dictionary = {}
 ) -> int:
+	var cache_key := "mobilization:%d:%d" % [
+		nation_id,
+		posture,
+	]
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var manpower_units := int(floor(
 		float(maxi(
 			state.nations[nation_id].manpower_pool - MIN_MANPOWER_RESERVE,
@@ -1084,7 +1406,11 @@ static func mobilization_capacity(
 		0,
 		MAX_MOBILIZATION_ARMIES
 	)
-	var current_troops := _troop_count(state, nation_id)
+	var current_troops := _troop_count(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	var affordable_units := 0
 	for units in range(1, max_units + 1):
 		var target_troops := current_troops + units * MOBILIZATION_ARMY_SIZE
@@ -1092,15 +1418,24 @@ static func mobilization_capacity(
 			state,
 			nation_id,
 			target_troops,
-			posture
+			posture,
+			evaluation_cache
 		)
 		if not bool(plan["target_sustainable"]):
 			break
 		affordable_units = units
+	evaluation_cache[cache_key] = affordable_units
 	return affordable_units
 
 
-static func food_posture(state: GameState, nation_id: int) -> int:
+static func food_posture(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	var cache_key := "food_posture:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var wars := state.wars_of(nation_id)
 	if not wars.is_empty():
 		for enemy_id in wars:
@@ -1109,21 +1444,41 @@ static func food_posture(state: GameState, nation_id: int) -> int:
 				not objective.is_empty()
 				and int(objective.get("attacker", -1)) == nation_id
 			):
+				evaluation_cache[cache_key] = (
+					FoodPosture.OFFENSIVE_WAR
+				)
 				return FoodPosture.OFFENSIVE_WAR
+		evaluation_cache[cache_key] = FoodPosture.DEFENSIVE_WAR
 		return FoodPosture.DEFENSIVE_WAR
 	if state.nations[nation_id].war_mobilization_target_troops > 0:
+		evaluation_cache[cache_key] = FoodPosture.GUARDED
 		return FoodPosture.GUARDED
-	var own_power := _coalition_power(state, nation_id)
+	var own_power := _coalition_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	for other in state.nations:
 		if (
 			other.id == nation_id
 			or not other.alive
 			or state.is_allied(nation_id, other.id)
-			or _frontier_edges(state, nation_id, other.id) <= 0
+			or _frontier_edges(
+				state,
+				nation_id,
+				other.id,
+				evaluation_cache
+			) <= 0
 		):
 			continue
-		if _coalition_power(state, other.id) >= own_power * 0.75:
+		if _coalition_power(
+			state,
+			other.id,
+			evaluation_cache
+		) >= own_power * 0.75:
+			evaluation_cache[cache_key] = FoodPosture.GUARDED
 			return FoodPosture.GUARDED
+	evaluation_cache[cache_key] = FoodPosture.PEACE
 	return FoodPosture.PEACE
 
 
@@ -1131,14 +1486,30 @@ static func war_food_report(
 	state: GameState,
 	nation_id: int,
 	target_troops: int = -1,
-	posture: int = -1
+	posture: int = -1,
+	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
 	var nation := state.nations[nation_id]
-	var current_troops := _troop_count(state, nation_id)
+	var current_troops := _troop_count(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	if target_troops < 0:
 		target_troops = current_troops
 	if posture < 0:
-		posture = food_posture(state, nation_id)
+		posture = food_posture(
+			state,
+			nation_id,
+			evaluation_cache
+		)
+	var cache_key := "food:%d:%d:%d" % [
+		nation_id,
+		target_troops,
+		posture,
+	]
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
 	var monthly_production := 0.0
 	for city in state.cities_of(nation_id):
 		monthly_production += (
@@ -1170,7 +1541,13 @@ static func war_food_report(
 	var full_strength_annual_demand := (
 		full_strength_monthly_demand * float(MONTHS_PER_YEAR)
 	)
-	var stock := float(_food_stock(state, nation_id))
+	var stock := float(
+		_food_stock(
+			state,
+			nation_id,
+			evaluation_cache
+		)
+	)
 	var current_annual_balance := annual_production - current_annual_demand
 	var target_annual_balance := annual_production - target_annual_demand
 	var full_strength_annual_balance := (
@@ -1205,7 +1582,7 @@ static func war_food_report(
 	var affordable_troops := int(floor(
 		monthly_budget / maxf(food_per_troop, 0.0001)
 	))
-	return {
+	var result := {
 		"posture": posture,
 		"current_troops": current_troops,
 		"target_troops": target_troops,
@@ -1239,6 +1616,8 @@ static func war_food_report(
 			)
 		),
 	}
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func _required_campaign_years(posture: int) -> float:
@@ -1265,19 +1644,36 @@ static func _food_runway_years(stock: float, annual_balance: float) -> float:
 static func _campaign_troop_target(
 	state: GameState,
 	nation_id: int,
-	target_id: int
+	target_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> int:
-	var current := _troop_count(state, nation_id)
-	var enemy := _troop_count(state, target_id)
+	var cache_key := "campaign_troops:%d:%d" % [
+		nation_id,
+		target_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
+	var current := _troop_count(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var enemy := _troop_count(
+		state,
+		target_id,
+		evaluation_cache
+	)
 	var desired := maxi(current, int(ceil(float(enemy) * 1.10)))
 	var available := current + maxi(
 		state.nations[nation_id].manpower_pool - MIN_MANPOWER_RESERVE,
 		0
 	)
-	return mini(
+	var result := mini(
 		desired,
 		mini(available, current + MAX_MOBILIZATION_ARMIES * MOBILIZATION_ARMY_SIZE)
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func _cached_war_objective(
@@ -1417,14 +1813,38 @@ static func select_war_objective(
 	return best
 
 
-static func leave_alliance_desire(state: GameState, nation_id: int, ally_id: int) -> float:
+static func leave_alliance_desire(
+	state: GameState,
+	nation_id: int,
+	ally_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var cache_key := "leave_alliance:%d:%d" % [
+		nation_id,
+		ally_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	if not state.is_allied(nation_id, ally_id) or nation_id == ally_id:
 		return -INF
 	if state.day - state.relation_since(nation_id, ally_id) < MIN_ALLIANCE_DAYS:
 		return -INF
-	var common_enemies := _common_enemy_count(state, nation_id, ally_id)
-	var own_power := _national_power(state, nation_id)
-	var ally_power := _national_power(state, ally_id)
+	var common_enemies := _common_enemy_count(
+		state,
+		nation_id,
+		ally_id,
+		evaluation_cache
+	)
+	var own_power := _national_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
+	var ally_power := _national_power(
+		state,
+		ally_id,
+		evaluation_cache
+	)
 	var domination_risk := maxf(
 		ally_power / maxf(own_power, 1.0) - 2.25,
 		0.0
@@ -1442,14 +1862,16 @@ static func leave_alliance_desire(state: GameState, nation_id: int, ally_id: int
 	var attitude := diplomatic_attitude(
 		state,
 		nation_id,
-		ally_id
+		ally_id,
+		evaluation_cache
 	)
 	var unification_pressure := unification_rivalry(
 		state,
 		nation_id,
-		ally_id
+		ally_id,
+		evaluation_cache
 	)
-	return (
+	var result := (
 		domination_risk
 		+ float(conflicting_commitments) * 1.5
 		+ float(unilateral_wars) * 0.20
@@ -1458,12 +1880,15 @@ static func leave_alliance_desire(state: GameState, nation_id: int, ally_id: int
 		- float(common_enemies) * 0.75
 		- established_trust
 	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func _collect_peace_actions(
 	state: GameState,
 	actions: Array[Dictionary],
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary
 ) -> void:
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
@@ -1472,13 +1897,28 @@ static func _collect_peace_actions(
 			var war_days := state.day - state.relation_since(a, b)
 			if war_days < MIN_WAR_DAYS:
 				continue
-			var assessment := peace_assessment(state, a, b)
+			var assessment := peace_assessment(
+				state,
+				a,
+				b,
+				evaluation_cache
+			)
 			if not bool(assessment["acceptable"]):
 				continue
 			var score_a := float(assessment["score_a"])
 			var score_b := float(assessment["score_b"])
-			var reasons_a := peace_reasons(state, a, b)
-			var reasons_b := peace_reasons(state, b, a)
+			var reasons_a := peace_reasons(
+				state,
+				a,
+				b,
+				evaluation_cache
+			)
+			var reasons_b := peace_reasons(
+				state,
+				b,
+				a,
+				evaluation_cache
+			)
 			var reason_a := (
 				"战争疲劳"
 				if reasons_a.is_empty()
@@ -1523,14 +1963,25 @@ static func _collect_peace_actions(
 static func _collect_leave_alliance_actions(
 	state: GameState,
 	actions: Array[Dictionary],
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary
 ) -> void:
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
 			if committed.has(a) or committed.has(b) or not state.is_allied(a, b):
 				continue
-			var score_a := leave_alliance_desire(state, a, b)
-			var score_b := leave_alliance_desire(state, b, a)
+			var score_a := leave_alliance_desire(
+				state,
+				a,
+				b,
+				evaluation_cache
+			)
+			var score_b := leave_alliance_desire(
+				state,
+				b,
+				a,
+				evaluation_cache
+			)
 			var actor := a if score_a >= score_b else b
 			var target := b if actor == a else a
 			var score := maxf(score_a, score_b)
@@ -1539,12 +1990,14 @@ static func _collect_leave_alliance_actions(
 			var attitude := diplomatic_attitude(
 				state,
 				actor,
-				target
+				target,
+				evaluation_cache
 			)
 			var unification_pressure := unification_rivalry(
 				state,
 				actor,
-				target
+				target,
+				evaluation_cache
 			)
 			actions.append({
 				"kind": Action.LEAVE_ALLIANCE,
@@ -1563,7 +2016,8 @@ static func _collect_leave_alliance_actions(
 static func _collect_alliance_actions(
 	state: GameState,
 	actions: Array[Dictionary],
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary
 ) -> void:
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
@@ -1574,12 +2028,32 @@ static func _collect_alliance_actions(
 				or state.nations[b].war_preparation_target_nation >= 0
 			):
 				continue
-			var score_a := alliance_willingness(state, a, b)
-			var score_b := alliance_willingness(state, b, a)
+			var score_a := alliance_willingness(
+				state,
+				a,
+				b,
+				evaluation_cache
+			)
+			var score_b := alliance_willingness(
+				state,
+				b,
+				a,
+				evaluation_cache
+			)
 			if score_a < ALLIANCE_ACCEPT_SCORE or score_b < ALLIANCE_ACCEPT_SCORE:
 				continue
-			var attitude_a := diplomatic_attitude(state, a, b)
-			var attitude_b := diplomatic_attitude(state, b, a)
+			var attitude_a := diplomatic_attitude(
+				state,
+				a,
+				b,
+				evaluation_cache
+			)
+			var attitude_b := diplomatic_attitude(
+				state,
+				b,
+				a,
+				evaluation_cache
+			)
 			actions.append({
 				"kind": Action.FORM_ALLIANCE,
 				"a": a,
@@ -1639,10 +2113,19 @@ static func _collect_war_actions(
 			best_target,
 			evaluation_cache
 		)
-		var report := resource_report(state, nation.id)
+		var report := resource_report(
+			state,
+			nation.id,
+			evaluation_cache
+		)
 		if objective.is_empty() or not bool(report["ready"]):
 			continue
-		var mobilization_armies := mobilization_capacity(state, nation.id)
+		var mobilization_armies := mobilization_capacity(
+			state,
+			nation.id,
+			FoodPosture.OFFENSIVE_WAR,
+			evaluation_cache
+		)
 		var campaign_troops := (
 			int(report["troops"])
 			+ mobilization_armies * MOBILIZATION_ARMY_SIZE
@@ -1651,7 +2134,8 @@ static func _collect_war_actions(
 			state,
 			nation.id,
 			campaign_troops,
-			FoodPosture.OFFENSIVE_WAR
+			FoodPosture.OFFENSIVE_WAR,
+			evaluation_cache
 		)
 		var attitude := diplomatic_attitude(
 			state,
@@ -1662,7 +2146,8 @@ static func _collect_war_actions(
 		var unification_pressure := unification_rivalry(
 			state,
 			nation.id,
-			best_target
+			best_target,
+			evaluation_cache
 		)
 		var peace_escalation := neutral_peace_escalation(
 			state,
@@ -2070,26 +2555,54 @@ static func required_assault_troops(
 	)
 
 
-static func _national_power(state: GameState, nation_id: int) -> float:
+static func _national_power(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var cache_key := "power:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
 	var power := 0.0
 	for army in state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
 			power += ArmyPower.effective(army)
-	return power + float(state.cities_of(nation_id).size()) * 1500.0
+	var result := (
+		power
+		+ float(state.cities_of(nation_id).size()) * 1500.0
+	)
+	evaluation_cache[cache_key] = result
+	return result
 
 
-static func _troop_count(state: GameState, nation_id: int) -> int:
+static func _troop_count(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	var cache_key := "troops:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var total := 0
 	for army in state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
 			total += army.size
+	evaluation_cache[cache_key] = total
 	return total
 
 
-static func _food_stock(state: GameState, nation_id: int) -> int:
+static func _food_stock(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	var cache_key := "food_stock:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var total := 0
 	for warehouse in state.warehouse_cities_of(nation_id):
 		total += warehouse.food_storage
+	evaluation_cache[cache_key] = total
 	return total
 
 
@@ -2231,14 +2744,41 @@ static func _isolated_garrison_power_ratio(
 	return isolated_power / maxf(total_power, 1.0)
 
 
-static func _coalition_power(state: GameState, nation_id: int) -> float:
-	var power := _national_power(state, nation_id)
+static func _coalition_power(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var cache_key := "coalition:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
+	var power := _national_power(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	for ally_id in state.allies_of(nation_id):
-		power += _national_power(state, ally_id) * 0.75
+		power += _national_power(
+			state,
+			ally_id,
+			evaluation_cache
+		) * 0.75
+	evaluation_cache[cache_key] = power
 	return power
 
 
-static func _common_enemy_count(state: GameState, nation_a: int, nation_b: int) -> int:
+static func _common_enemy_count(
+	state: GameState,
+	nation_a: int,
+	nation_b: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	var cache_key := "common_enemy:%d:%d" % [
+		mini(nation_a, nation_b),
+		maxi(nation_a, nation_b),
+	]
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var count := 0
 	for other in state.nations:
 		if (
@@ -2249,24 +2789,46 @@ static func _common_enemy_count(state: GameState, nation_a: int, nation_b: int) 
 			and state.is_enemy(nation_b, other.id)
 		):
 			count += 1
+	evaluation_cache[cache_key] = count
 	return count
 
 
 static func _alliance_has_active_conflict(
 	state: GameState,
 	nation_a: int,
-	nation_b: int
+	nation_b: int,
+	evaluation_cache: Dictionary = {}
 ) -> bool:
+	var cache_key := "alliance_conflict:%d:%d" % [
+		mini(nation_a, nation_b),
+		maxi(nation_a, nation_b),
+	]
+	if evaluation_cache.has(cache_key):
+		return bool(evaluation_cache[cache_key])
 	for enemy_id in state.wars_of(nation_a):
 		if state.is_allied(nation_b, enemy_id):
+			evaluation_cache[cache_key] = true
 			return true
 	for enemy_id in state.wars_of(nation_b):
 		if state.is_allied(nation_a, enemy_id):
+			evaluation_cache[cache_key] = true
 			return true
+	evaluation_cache[cache_key] = false
 	return false
 
 
-static func _has_shared_ally(state: GameState, nation_a: int, nation_b: int) -> bool:
+static func _has_shared_ally(
+	state: GameState,
+	nation_a: int,
+	nation_b: int,
+	evaluation_cache: Dictionary = {}
+) -> bool:
+	var cache_key := "shared_ally:%d:%d" % [
+		mini(nation_a, nation_b),
+		maxi(nation_a, nation_b),
+	]
+	if evaluation_cache.has(cache_key):
+		return bool(evaluation_cache[cache_key])
 	for other in state.nations:
 		if (
 			other.id != nation_a
@@ -2274,11 +2836,24 @@ static func _has_shared_ally(state: GameState, nation_a: int, nation_b: int) -> 
 			and state.is_allied(nation_a, other.id)
 			and state.is_allied(nation_b, other.id)
 		):
+			evaluation_cache[cache_key] = true
 			return true
+	evaluation_cache[cache_key] = false
 	return false
 
 
-static func _frontier_edges(state: GameState, nation_a: int, nation_b: int) -> int:
+static func _frontier_edges(
+	state: GameState,
+	nation_a: int,
+	nation_b: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	var cache_key := "frontier:%d:%d" % [
+		nation_a,
+		nation_b,
+	]
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var count := 0
 	for edge in state.edges:
 		if edge.max_manpower <= 0:
@@ -2296,4 +2871,5 @@ static func _frontier_edges(state: GameState, nation_a: int, nation_b: int) -> i
 			)
 		):
 			count += 1
+	evaluation_cache[cache_key] = count
 	return count

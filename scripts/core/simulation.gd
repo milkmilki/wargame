@@ -38,6 +38,7 @@ const SIEGE_CITY_FOOD_PER_DAY: int = 1     ## 被围城每日粮草消耗系数
 const CITY_FORT_CAPTURE_MULTIPLIER: float = 0.50
 const CITY_FORT_RECOVERY_DAYS: int = 365
 const CAPITAL_FOOD_CAPTURE_RATE: float = 0.30 ## 首都失守时库存缴获比例，其余损毁
+const CAPITAL_CAPITULATION_CESSION_DEPTH: int = 2
 # ---- 遭遇战触发 ----
 ## 边内接触阈值（以边长归一化的 move_progress 为单位，即 [0,1] 区间）。
 ## 双方沿同边推进，当各自「以 city_a 为原点的归一化位置」之差 <= 此值（或相向已交错）才触发。
@@ -85,7 +86,6 @@ var _time_acc: float = 0.0
 var _ai_strategy_cache: Dictionary = {}    ## nation_id -> StrategicMapSnapshot
 var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership, diplomacy, fortification]
 var _threat_travel_cache: Dictionary = {}  ## 静态道路行军天数、威胁衰减权重及稳定遍历序
-var _threat_travel_cache_by_nation: Dictionary = {}
 var _ai_path_field_cache_by_nation: Dictionary = {}
 var _ai_supply_source_cache: Dictionary = {}
 var _ai_supply_network_cache: Dictionary = {}
@@ -135,7 +135,6 @@ func setup(game_state: GameState) -> void:
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
 	_threat_travel_cache.clear()
-	_threat_travel_cache_by_nation.clear()
 	_ai_path_field_cache_by_nation.clear()
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
@@ -1505,6 +1504,159 @@ func _resolve_eliminated_nation_capitulations() -> void:
 			})
 
 
+## 首都失陷后，战败国立即退出全部战争。额外割地严格读取投降瞬间的实控区：
+## 从胜利国实控边境进入战败国实控区最多两跳，禁止逐城转移后继续扩张边界。
+func _resolve_capital_capture_capitulation(
+	surrendering: int,
+	victor: int
+) -> Array[int]:
+	if (
+		surrendering < 0
+		or victor < 0
+		or surrendering >= state.nations.size()
+		or victor >= state.nations.size()
+		or surrendering == victor
+	):
+		return [] as Array[int]
+	var ceded := _cede_capital_frontier_territory(
+		victor,
+		surrendering
+	)
+	var opponents := _war_opponents_including_eliminated(
+		surrendering
+	)
+	if opponents.has(victor):
+		opponents.erase(victor)
+		opponents.push_front(victor)
+	for opponent in opponents:
+		if not state.is_enemy(surrendering, opponent):
+			continue
+		var cession_reason := ""
+		if opponent == victor and not ceded.is_empty():
+			cession_reason = (
+				"；按国%d实控边境向外两跳割让%d座城市"
+				% [victor, ceded.size()]
+			)
+		_execute_diplomatic_action({
+			"kind": DiplomacyAI.Action.MAKE_PEACE,
+			"a": opponent,
+			"b": surrendering,
+			"surrendering_nation": surrendering,
+			"reason": (
+				"国%d首都失守，向交战国%d投降%s"
+				% [surrendering, opponent, cession_reason]
+			),
+		})
+	var remaining := state.cities_of(surrendering)
+	if not remaining.is_empty():
+		var capital_id := state.nations[
+			surrendering
+		].capital_city_id
+		if (
+			capital_id < 0
+			or capital_id >= state.cities.size()
+			or state.cities[capital_id].owner_nation
+				!= surrendering
+		):
+			state.relocate_capital(surrendering)
+	if not ceded.is_empty():
+		_repatriate_abandoned_enclave_armies(ceded)
+	state.refresh_derived()
+	return ceded
+
+
+## 返回投降结算快照中应割让的城市。起点只看 owner_nation（实控），
+## recognized_owner_of（法理）不参与边界判定。
+func _capital_capitulation_cession_cities(
+	victor: int,
+	surrendering: int
+) -> Array[int]:
+	if (
+		victor < 0
+		or surrendering < 0
+		or victor >= state.nations.size()
+		or surrendering >= state.nations.size()
+		or victor == surrendering
+	):
+		return [] as Array[int]
+	var control_snapshot := PackedInt32Array()
+	control_snapshot.resize(state.cities.size())
+	for city in state.cities:
+		control_snapshot[city.id] = city.owner_nation
+	var queued := {}
+	var queue: Array[int] = []
+	var depths := {}
+	for city in state.cities:
+		if control_snapshot[city.id] != victor:
+			continue
+		for neighbor in state.neighbors(city.id):
+			var edge := state.edge_of(city.id, neighbor)
+			if (
+				control_snapshot[neighbor] != surrendering
+				or edge == null
+				or edge.max_manpower <= 0
+				or queued.has(neighbor)
+			):
+				continue
+			queued[neighbor] = true
+			depths[neighbor] = 1
+			queue.append(neighbor)
+	var cursor := 0
+	while cursor < queue.size():
+		var city_id := queue[cursor]
+		cursor += 1
+		var depth := int(depths[city_id])
+		if depth >= CAPITAL_CAPITULATION_CESSION_DEPTH:
+			continue
+		for neighbor in state.neighbors(city_id):
+			var edge := state.edge_of(city_id, neighbor)
+			if (
+				control_snapshot[neighbor] != surrendering
+				or edge == null
+				or edge.max_manpower <= 0
+				or queued.has(neighbor)
+			):
+				continue
+			queued[neighbor] = true
+			depths[neighbor] = depth + 1
+			queue.append(neighbor)
+	EquivariantOrder.sort_city_ids(queue, state, victor)
+	return queue
+
+
+func _cede_capital_frontier_territory(
+	victor: int,
+	surrendering: int
+) -> Array[int]:
+	var selected := _capital_capitulation_cession_cities(
+		victor,
+		surrendering
+	)
+	var ceded: Array[int] = []
+	var captured_food := 0
+	for city_id in selected:
+		var city := state.cities[city_id]
+		if city.owner_nation != surrendering:
+			continue
+		if city.has_warehouse:
+			captured_food += city.food_storage
+			state.remove_warehouse(surrendering, city.id)
+			city.food_storage = 0
+		city.is_capital = false
+		city.owner_nation = victor
+		city.occupation_sponsor_nation = -1
+		state.recognized_city_owners[city.id] = victor
+		ceded.append(city.id)
+	if ceded.is_empty():
+		return ceded
+	state.ownership_revision += 1
+	state.refresh_derived()
+	_ai_last_decision_day = -1
+	if captured_food > 0:
+		state.deposit_food(victor, captured_food)
+	return ceded
+
+
 func _war_opponents_including_eliminated(nation_id: int) -> Array[int]:
 	var opponents: Array[int] = []
 	for other_id in range(state.nations.size()):
@@ -1727,7 +1879,6 @@ func _abandon_capital_disconnected_enclaves(
 	if cessions.is_empty():
 		return [] as Array[int]
 	var abandoned: Array[int] = []
-	var former_owner_by_city := {}
 	for cession in cessions:
 		var city: City = cession["city"]
 		var former_owner := int(cession["former_owner"])
@@ -1740,7 +1891,6 @@ func _abandon_capital_disconnected_enclaves(
 		if city.has_warehouse:
 			state.remove_warehouse(former_owner, city.id)
 			city.food_storage = 0
-		former_owner_by_city[city.id] = former_owner
 		city.owner_nation = recipient
 		city.occupation_sponsor_nation = -1
 		state.recognized_city_owners[city.id] = recipient
@@ -1750,10 +1900,7 @@ func _abandon_capital_disconnected_enclaves(
 	state.ownership_revision += 1
 	state.refresh_derived()
 	_ai_last_decision_day = -1
-	_repatriate_abandoned_enclave_armies(
-		abandoned,
-		former_owner_by_city
-	)
+	_repatriate_abandoned_enclave_armies(abandoned)
 	return abandoned
 
 
@@ -1789,8 +1936,7 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 
 
 func _repatriate_abandoned_enclave_armies(
-	abandoned: Array[int],
-	former_owner_by_city: Dictionary
+	abandoned: Array[int]
 ) -> void:
 	var abandoned_set := {}
 	for city_id in abandoned:
@@ -1801,8 +1947,10 @@ func _repatriate_abandoned_enclave_armies(
 		var affected := false
 		for city_id in abandoned:
 			if (
-				int(former_owner_by_city[city_id])
-					== army.owner_nation
+				not state.has_military_access(
+					army.owner_nation,
+					state.cities[city_id].owner_nation
+				)
 				and (
 					army.is_at_city_node(city_id)
 					or army.move_from == city_id
@@ -1819,9 +1967,13 @@ func _repatriate_abandoned_enclave_armies(
 		army.ai_order_until_day = state.day
 		var repatriated_manpower := army.size
 		if army.on_edge and army.move_to != -1:
+			army.diplomatic_repatriation = true
 			_retreat(army)
 		elif abandoned_set.has(army.location_city):
-			_retreat_to_friendly(army)
+			_start_diplomatic_repatriation(
+				army,
+				army.location_city
+			)
 		else:
 			_settle_idle(army, army.location_city)
 		if army.size <= 0:
@@ -2005,6 +2157,20 @@ func _end_bilateral_hostilities(nation_a: int, nation_b: int) -> void:
 	for army in state.armies:
 		if army.size <= 0 or army.owner_nation not in [nation_a, nation_b]:
 			continue
+		var node_city := army.current_city_node()
+		if (
+			node_city >= 0
+			and node_city < state.cities.size()
+			and not state.has_military_access(
+				army.owner_nation,
+				state.cities[node_city].owner_nation
+			)
+		):
+			_start_diplomatic_repatriation(
+				army,
+				node_city
+			)
+			continue
 		if army.ai_target_city >= 0:
 			var target_owner := state.cities[army.ai_target_city].owner_nation
 			if (
@@ -2040,9 +2206,13 @@ func _repatriate_after_access_revoked(
 		army.ai_target_city = -1
 		army.ai_order_until_day = state.day
 		if army.on_edge and army.move_to != -1:
+			army.diplomatic_repatriation = true
 			_retreat(army)
 		else:
-			_retreat_to_friendly(army)
+			_start_diplomatic_repatriation(
+				army,
+				army.current_city_node()
+			)
 # ------------------------------------------------------------------ 3. AI 决策
 
 
@@ -2080,6 +2250,11 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	var managed_nations: Array[int] = []
 	var force_contexts := {}
 	var context_jobs: Array[Dictionary] = []
+	var shared_army_index := (
+		AiWorldView.build_army_index(state)
+		if ai_policy_overrides.is_empty()
+		else {}
+	)
 	for nation_id in nation_order:
 		var nation := state.nations[nation_id]
 		if not nation.alive:
@@ -2090,38 +2265,24 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			policy.call(state, nation.id, self)
 			continue
 		managed_nations.append(nation_id)
-		var view := _build_ai_view(nation_id)
+		var view := _build_ai_view(
+			nation_id,
+			shared_army_index
+		)
 		var snapshot := _strategy_snapshot_for(view)
-		if not _threat_travel_cache_by_nation.has(nation_id):
-			_threat_travel_cache_by_nation[nation_id] = {}
 		context_jobs.append({
 			"nation_id": nation_id,
 			"view": view,
 			"snapshot": snapshot,
-			"threat_cache":
-				_threat_travel_cache_by_nation[nation_id],
+			"threat_cache": _threat_travel_cache,
 			"threat": null,
 			"defense_plan": null,
 		})
 	_parallel_ai_context_jobs = context_jobs
-	if spread_runtime_work:
-		for job_index in range(context_jobs.size()):
-			_build_parallel_ai_context(job_index)
+	for job_index in range(context_jobs.size()):
+		_build_parallel_ai_context(job_index)
+		if spread_runtime_work:
 			await get_tree().process_frame
-	elif state.uses_heightmap and context_jobs.size() > 1:
-		var group_task_id := WorkerThreadPool.add_group_task(
-			_build_parallel_ai_context,
-			context_jobs.size(),
-			context_jobs.size(),
-			true,
-			"WorldWar AI contexts"
-		)
-		WorkerThreadPool.wait_for_group_task_completion(
-			group_task_id
-		)
-	else:
-		for job_index in range(context_jobs.size()):
-			_build_parallel_ai_context(job_index)
 	for job in context_jobs:
 		var nation_id := int(job["nation_id"])
 		force_contexts[nation_id] = {
@@ -2464,7 +2625,10 @@ func _reconcile_strategic_roles(nation_id: int) -> void:
 		nation.campaign_preparation_assignments.erase(army_id)
 
 
-func _build_ai_view(nation_id: int) -> AiWorldView:
+func _build_ai_view(
+	nation_id: int,
+	shared_army_index: Dictionary = {}
+) -> AiWorldView:
 	if not _ai_path_field_cache_by_nation.has(nation_id):
 		_ai_path_field_cache_by_nation[nation_id] = {}
 	var view := AiWorldView.build(
@@ -2472,7 +2636,8 @@ func _build_ai_view(nation_id: int) -> AiWorldView:
 		nation_id,
 		_ai_path_field_cache_by_nation[nation_id],
 		_ai_supply_network_cache,
-		_ai_city_partition_cache
+		_ai_city_partition_cache,
+		shared_army_index
 	)
 	view.strategic_planning_enabled = bool(
 		ai_strategic_planning_overrides.get(nation_id, true)
@@ -6634,7 +6799,17 @@ func _begin_next_leg(army: Army) -> void:
 			):
 				_start_recovering(army, from_city)
 				return
-			army.path = Pathfinding.nearest_friendly_city(state, army)
+				army.path = (
+					Pathfinding.nearest_home_city_for_repatriation(
+						state,
+						army
+					)
+					if army.diplomatic_repatriation
+					else Pathfinding.nearest_friendly_city(
+						state,
+						army
+					)
+				)
 			if army.path.is_empty():
 				army.size = 0
 			else:
@@ -7416,13 +7591,26 @@ func _advance_siege(
 			_capture_city(captor, battle.city, -1, false)
 		for a in battle.side_a:
 			a.battle_id = -1
-			if a != captor and a.size > 0:
+			if (
+				a != captor
+				and a.size > 0
+				and state.has_military_access(
+					a.owner_nation,
+					battle.city.owner_nation
+				)
+			):
 				_settle_idle(a, battle.city.id)
-		if captor != null:
-			_execute_campaign_post_capture_plan(
-				captor,
-				battle.city
-			)
+			if (
+				captor != null
+				and state.has_military_access(
+					captor.owner_nation,
+					battle.city.owner_nation
+				)
+			):
+				_execute_campaign_post_capture_plan(
+					captor,
+					battle.city
+				)
 		battle.finished = true
 		battle.winner_side = 1
 
@@ -7697,7 +7885,14 @@ func _finish_legal_reclamation(battle: Battle) -> bool:
 	)
 	for attacker in battle.side_a:
 		attacker.battle_id = -1
-		if attacker != captor and attacker.size > 0:
+		if (
+			attacker != captor
+			and attacker.size > 0
+			and state.has_military_access(
+				attacker.owner_nation,
+				battle.city.owner_nation
+			)
+		):
 			_settle_idle(attacker, battle.city.id)
 	_execute_campaign_post_capture_plan(
 		captor,
@@ -7748,8 +7943,6 @@ func _capture_city(
 			city.fort_strength_max,
 			0
 		)
-	if captured_capital:
-		state.relocate_capital(old_owner)
 	var spoils := int(floor(float(captured_food) * CAPITAL_FOOD_CAPTURE_RATE))
 	state.deposit_food(claimant, spoils)
 	# 城市易主后，所有不再拥有通行权且尚未离开城市节点的军队都必须撤退。
@@ -7769,16 +7962,31 @@ func _capture_city(
 			city.id,
 			city.id
 		)
-	army.state = Army.State.IDLE
-	army.forced_retreat = false
-	army.battle_id = -1
-	army.location_city = city.id
-	army.move_from = city.id
-	army.move_to = -1
-	army.move_progress = 0.0
-	army.path.clear()
+	var captor_can_remain := state.has_military_access(
+		army.owner_nation,
+		claimant
+	)
 	army.occupation_claimant_nation = -1
-	if execute_post_capture_plan:
+	if captor_can_remain:
+		army.state = Army.State.IDLE
+		army.forced_retreat = false
+		army.battle_id = -1
+		army.location_city = city.id
+		army.move_from = city.id
+		army.move_to = -1
+		army.move_progress = 0.0
+		army.path.clear()
+	else:
+		_start_diplomatic_repatriation(
+			army,
+			city.id
+		)
+	if captured_capital and claimant != old_owner:
+		_resolve_capital_capture_capitulation(
+			old_owner,
+			claimant
+		)
+	if execute_post_capture_plan and captor_can_remain:
 		_execute_campaign_post_capture_plan(army, city)
 
 
@@ -8066,6 +8274,7 @@ func _settle_idle(army: Army, city_id: int) -> void:
 	_release_edge(army)   # 无条件释放：仅当 on_edge 为真才实际减计数
 	army.state = Army.State.IDLE
 	army.forced_retreat = false
+	army.diplomatic_repatriation = false
 	army.holding_days = 0
 	army.hold_target_progress = -1.0
 	army.resume_holding_after_battle = false
@@ -8087,7 +8296,17 @@ func _retreat(army: Army) -> void:
 	army.resume_holding_after_battle = false
 	army.path.clear()
 	if army.on_edge and army.move_to != -1:
-		var route := Pathfinding.nearest_friendly_route_from_edge(state, army)
+		var route := (
+			Pathfinding.nearest_home_route_from_edge_for_repatriation(
+				state,
+				army
+			)
+			if army.diplomatic_repatriation
+			else Pathfinding.nearest_friendly_route_from_edge(
+				state,
+				army
+			)
+		)
 		if route.is_empty():
 			_release_edge(army)
 			army.size = 0
@@ -8135,9 +8354,12 @@ func _start_morale_retreat_from_city(
 	if current_city < 0 or current_city >= state.cities.size():
 		army.size = 0
 		return
-	if _annihilate_encircled_zero_morale_army(
+	if (
+		not army.diplomatic_repatriation
+		and _annihilate_encircled_zero_morale_army(
 		army,
 		current_city
+		)
 	):
 		return
 	if (
@@ -8149,10 +8371,18 @@ func _start_morale_retreat_from_city(
 	):
 		_start_recovering(army, current_city)
 		return
-	var path := Pathfinding.nearest_friendly_city(
-		state,
-		army,
-		excluded_city_id
+	var path := (
+		Pathfinding.nearest_home_city_for_repatriation(
+			state,
+			army,
+			excluded_city_id
+		)
+		if army.diplomatic_repatriation
+		else Pathfinding.nearest_friendly_city(
+			state,
+			army,
+			excluded_city_id
+		)
 	)
 	if path.is_empty():
 		army.size = 0   # 已无可达友城：溃散
@@ -8179,6 +8409,7 @@ func _start_recovering(army: Army, city_id: int) -> void:
 	_release_edge(army)
 	army.state = Army.State.RECOVERING
 	army.forced_retreat = true
+	army.diplomatic_repatriation = false
 	army.holding_days = 0
 	army.hold_target_progress = -1.0
 	army.resume_holding_after_battle = false
@@ -8225,6 +8456,7 @@ func _start_holding(army: Army) -> void:
 		return
 	army.state = Army.State.HOLDING
 	army.forced_retreat = false
+	army.diplomatic_repatriation = false
 	army.hold_target_progress = -1.0
 	army.holding_days = 0
 	army.path.clear()
@@ -8251,13 +8483,40 @@ func _retreat_to_friendly(army: Army) -> void:
 	army.hold_target_progress = -1.0
 	army.resume_holding_after_battle = false
 	army.location_city = army.move_from
-	var path := Pathfinding.nearest_friendly_city(state, army)
+	var path := (
+		Pathfinding.nearest_home_city_for_repatriation(
+			state,
+			army
+		)
+		if army.diplomatic_repatriation
+		else Pathfinding.nearest_friendly_city(
+			state,
+			army
+		)
+	)
 	if path.is_empty():
 		# 无合法本国通道时不能滞留敌城或穿越敌城，按无路可退处理为溃散。
 		army.size = 0
 		return
 	army.path = path
 	_begin_next_leg(army)
+
+
+func _start_diplomatic_repatriation(
+	army: Army,
+	current_city: int = -1
+) -> void:
+	army.diplomatic_repatriation = true
+	if army.on_edge and army.move_to != -1:
+		_retreat(army)
+		return
+	if current_city < 0:
+		current_city = army.current_city_node()
+	_start_morale_retreat_from_city(
+		army,
+		current_city,
+		current_city
+	)
 
 
 ## 释放该军占用的边通行槽。以 army.on_edge 为唯一判据，幂等（重复调用安全）。

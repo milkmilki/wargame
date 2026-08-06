@@ -123,10 +123,21 @@ var winner: int = -1                        ## -1 表示未结束
 
 # ------------------------------------------------------------------ 生成
 
-func generate_world(world_seed: int = 12345) -> void:
+func generate_world(
+	world_seed: int = 12345,
+	nation_count: int = NATION_COUNT
+) -> void:
+	assert(
+		nation_count > 0
+			and nation_count <= TERRAIN_CITY_COUNT,
+		"国家数必须在 1..%d 之间" % TERRAIN_CITY_COUNT
+	)
 	_reset_world(world_seed)
 	uses_heightmap = true
-	_generate_nations(DiplomaticRelation.NEUTRAL)
+	_generate_nations(
+		DiplomaticRelation.NEUTRAL,
+		nation_count
+	)
 	var terrain := TerrainMapGenerator.build(
 		TERRAIN_MAP_PATH,
 		TERRAIN_CITY_COUNT
@@ -214,17 +225,31 @@ func _reset_world(world_seed: int) -> void:
 	campaign_visual_events.clear()
 
 
-func _generate_nations(initial_relation: int) -> void:
+func _generate_nations(
+	initial_relation: int,
+	nation_count: int = NATION_COUNT
+) -> void:
 	var palette := [
 		Color(0.85, 0.22, 0.22),   # 红
 		Color(0.25, 0.45, 0.85),   # 蓝
 		Color(0.30, 0.70, 0.35),   # 绿
 		Color(0.90, 0.80, 0.25),   # 黄
 	]
-	for i in range(NATION_COUNT):
+	for i in range(nation_count):
 		var n := Nation.new()
 		n.id = i
-		n.color = palette[i]
+		n.color = (
+			palette[i]
+			if nation_count == NATION_COUNT
+			else Color.from_hsv(
+				fposmod(
+					float(i) * 0.61803398875,
+					1.0
+				),
+				0.65,
+				0.85
+			)
+		)
 		n.treasury_gold = 400
 		n.political_system = 0
 		n.alive = true
@@ -364,6 +389,14 @@ func _initialize_recognized_city_owners() -> void:
 
 
 func _assign_balanced_nations() -> void:
+	if nations.size() != NATION_COUNT:
+		var partition_cities: Array[City] = cities.duplicate()
+		_assign_spatial_nation_partition(
+			partition_cities,
+			0,
+			nations.size()
+		)
+		return
 	var ordered: Array[City] = cities.duplicate()
 	ordered.sort_custom(func(a: City, b: City) -> bool:
 		if not is_equal_approx(a.map_position.x, b.map_position.x):
@@ -383,6 +416,87 @@ func _assign_balanced_nations() -> void:
 		for index in range(side_cities.size()):
 			var row_half := 0 if index < side_cities.size() / 2 else 1
 			side_cities[index].owner_nation = row_half * 2 + side
+
+
+func _assign_spatial_nation_partition(
+	partition_cities: Array[City],
+	first_nation: int,
+	partition_nations: int
+) -> void:
+	assert(
+		partition_nations > 0
+			and partition_cities.size() >= partition_nations,
+		"空间分区必须保证每国至少一座陆城"
+	)
+	if partition_nations == 1:
+		for city in partition_cities:
+			city.owner_nation = first_nation
+		return
+	var min_position := partition_cities[0].map_position
+	var max_position := min_position
+	for city in partition_cities:
+		min_position = min_position.min(city.map_position)
+		max_position = max_position.max(city.map_position)
+	var split_x := (
+		max_position.x - min_position.x
+			>= max_position.y - min_position.y
+	)
+	partition_cities.sort_custom(
+		func(a: City, b: City) -> bool:
+			var primary_a := (
+				a.map_position.x
+				if split_x
+				else a.map_position.y
+			)
+			var primary_b := (
+				b.map_position.x
+				if split_x
+				else b.map_position.y
+			)
+			if not is_equal_approx(primary_a, primary_b):
+				return primary_a < primary_b
+			var secondary_a := (
+				a.map_position.y
+				if split_x
+				else a.map_position.x
+			)
+			var secondary_b := (
+				b.map_position.y
+				if split_x
+				else b.map_position.x
+			)
+			if not is_equal_approx(secondary_a, secondary_b):
+				return secondary_a < secondary_b
+			return a.id < b.id
+	)
+	var left_nations := partition_nations / 2
+	var right_nations := partition_nations - left_nations
+	var split_index := clampi(
+		int(round(
+			float(partition_cities.size())
+				* float(left_nations)
+				/ float(partition_nations)
+		)),
+		left_nations,
+		partition_cities.size() - right_nations
+	)
+	var left_cities: Array[City] = []
+	var right_cities: Array[City] = []
+	for index in range(partition_cities.size()):
+		if index < split_index:
+			left_cities.append(partition_cities[index])
+		else:
+			right_cities.append(partition_cities[index])
+	_assign_spatial_nation_partition(
+		left_cities,
+		first_nation,
+		left_nations
+	)
+	_assign_spatial_nation_partition(
+		right_cities,
+		first_nation + left_nations,
+		right_nations
+	)
 
 
 func _initialize_manpower_pools() -> void:
@@ -420,7 +534,11 @@ func _initialize_resource_hubs() -> void:
 		food_hub.is_food_hub = true
 		food_hub.food_per_half_year = maxi(
 			food_hub.food_per_half_year * 4,
-			FOOD_HUB_MIN_OUTPUT
+				(
+					FOOD_HUB_MIN_OUTPUT
+					if nations.size() == NATION_COUNT
+					else 0
+				)
 		)
 		var manpower_hub: City = food_hub
 		for city in owned:
@@ -609,7 +727,11 @@ func _apportion_city_output(
 		)
 		var lower_bound := (
 			FOOD_HUB_MIN_OUTPUT
-			if food_output and city.is_food_hub
+				if (
+					food_output
+					and city.is_food_hub
+					and nations.size() == NATION_COUNT
+				)
 			else minimum_output
 		)
 		var value := maxi(int(floor(exact)), lower_bound)
@@ -685,7 +807,7 @@ func _apportion_city_output(
 
 func _initialize_capitals_and_warehouses() -> void:
 	var initial_food: Array[int] = []
-	initial_food.resize(NATION_COUNT)
+	initial_food.resize(nations.size())
 	initial_food.fill(0)
 	for city in cities:
 		initial_food[city.owner_nation] += city.food_storage
