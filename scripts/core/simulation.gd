@@ -71,9 +71,8 @@ const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 12.0
 const CAMPAIGN_PREPARED_ECHELONS: int = 2
 const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = DAYS_PER_HALF_YEAR
 const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
-const CAMPAIGN_POST_CAPTURE_DEFENSE_RATIO: float = 1.10
-const CAMPAIGN_POST_CAPTURE_MORALE_MIN: float = 0.65
-const CAMPAIGN_POST_CAPTURE_SUPPLY_MIN: float = 0.75
+const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
+const CAMPAIGN_ENDGAME_CITY_THRESHOLD: int = 2
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 2
 const CAMPAIGN_BORROWED_LINE_MAX_ARMIES: int = 1
@@ -261,6 +260,34 @@ func _clear_campaign_preparation_plan(nation_id: int) -> void:
 	nation.campaign_full_preparation_targets.clear()
 	nation.campaign_preparation_started_day = -1
 	nation.campaign_preparation_multiplier = 1.0
+
+
+func _remove_campaign_preparation_target(
+	nation_id: int,
+	target_city: int
+) -> void:
+	var nation := state.nations[nation_id]
+	nation.campaign_preparation_targets.erase(target_city)
+	nation.campaign_full_preparation_targets.erase(target_city)
+	nation.campaign_preparation_group_assignments.erase(
+		target_city
+	)
+	for army_id_value in (
+		nation.campaign_preparation_assignments.keys().duplicate()
+	):
+		var army_id := int(army_id_value)
+		if int(
+			nation.campaign_preparation_assignments.get(
+				army_id,
+				-1
+			)
+		) == target_city:
+			nation.campaign_preparation_assignments.erase(
+				army_id
+			)
+	if nation.campaign_preparation_targets.is_empty():
+		nation.campaign_preparation_started_day = -1
+		nation.campaign_preparation_multiplier = 1.0
 
 
 func _campaign_projected_assault_ratio(
@@ -4362,14 +4389,6 @@ func _launch_campaign_offensive(
 	):
 		return false
 	var nation := state.nations[nation_id]
-	var organization_cost := _campaign_offensive_gold_cost(
-		nation_id
-	)
-	if (
-		organization_cost <= 0
-		or nation.treasury_gold < organization_cost
-	):
-		return false
 	if preparation_days < 0:
 		preparation_days = _campaign_preparation_days(
 			nation_id
@@ -4383,6 +4402,10 @@ func _launch_campaign_offensive(
 	nation.campaign_preparation_multiplier = offensive_multiplier
 	var launched := false
 	var launched_origins := {}
+	var route_threat := ThreatField.build(
+		_build_ai_view(nation_id),
+		_threat_travel_cache
+	)
 	var plan_targets := nation.campaign_plan_targets.duplicate()
 	EquivariantOrder.sort_city_ids(
 		plan_targets,
@@ -4390,6 +4413,8 @@ func _launch_campaign_offensive(
 		nation_id,
 		objective_city
 	)
+	var launchable_targets: Array[int] = []
+	var route_plans := {}
 	for target_city in plan_targets:
 		if not state.is_enemy(
 			nation_id,
@@ -4402,47 +4427,63 @@ func _launch_campaign_offensive(
 				target_city
 			)
 		)
-		var target_attackers: Array[Army] = []
+		var target_attackers := _campaign_initial_attackers(
+			nation_id,
+			target_city
+		)
 		var target_size := 0
-		for army in state.armies:
-			if (
-				army.owner_nation != nation_id
-				or army.size <= 0
-				or int(
-					nation.campaign_attack_assignments.get(
-						army.id,
-						-1
-					)
-				) != target_city
-				or int(
-					nation.campaign_attack_echelons.get(
-						army.id,
-						0
-					)
-				) != 0
-				or not _army_ready_for_campaign_target(
-					army,
-					nation_id,
-					target_city
-				)
-			):
-				continue
-			target_attackers.append(army)
+		for army in target_attackers:
 			target_size += army.size
 		if target_size < target_required:
 			continue
-		target_attackers.sort_custom(
-			func(a: Army, b: Army) -> bool:
-					if a.size != b.size:
-						return a.size > b.size
-					return EquivariantOrder.army_less(
-						state,
-						nation_id,
-						a,
-						b,
-						target_city
-				)
+		var route_plan := _campaign_two_step_route_plan(
+			nation_id,
+			target_city,
+			target_attackers,
+			route_threat
 		)
+		var defender_nation := state.cities[
+			target_city
+		].owner_nation
+		var defender_city_count := state.cities_of(
+			defender_nation
+		).size()
+		if (
+			state.uses_heightmap
+			and defender_city_count > CAMPAIGN_ENDGAME_CITY_THRESHOLD
+			and route_plan.is_empty()
+		):
+			_remove_campaign_target(nation_id, target_city)
+			_remove_campaign_preparation_target(
+				nation_id,
+				target_city
+			)
+			continue
+		launchable_targets.append(target_city)
+		route_plans[target_city] = route_plan
+	if launchable_targets.is_empty():
+		return false
+	var organization_cost := _campaign_offensive_gold_cost(
+		nation_id,
+		launchable_targets
+	)
+	if (
+		organization_cost <= 0
+		or nation.treasury_gold < organization_cost
+	):
+		return false
+	for target_city in launchable_targets:
+		var target_required := (
+			_campaign_minimum_staged_troops(
+				nation_id,
+				target_city
+			)
+		)
+		var target_attackers := _campaign_initial_attackers(
+			nation_id,
+			target_city
+		)
+		var route_plan: Dictionary = route_plans[target_city]
 		var target_committed := 0
 		var origin_cities: Array[int] = []
 		for army in target_attackers:
@@ -4496,6 +4537,14 @@ func _launch_campaign_offensive(
 			nation.campaign_echelon_started_days[target_city] = (
 				state.day
 			)
+			if not route_plan.is_empty():
+				nation.campaign_post_capture_plans[target_city] = (
+					route_plan
+				)
+			else:
+				nation.campaign_post_capture_plans.erase(
+					target_city
+				)
 	if launched:
 		nation.treasury_gold -= organization_cost
 		nation.last_offensive_gold_cost = organization_cost
@@ -4523,18 +4572,6 @@ func _launch_campaign_offensive(
 		)
 		for target_city_value in launched_targets:
 			var target_city := int(target_city_value)
-			if (
-				offensive_bonus_days
-					>= OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
-			):
-				nation.campaign_post_capture_plans[
-					target_city
-				] = {
-					"preparation_days":
-						offensive_bonus_days,
-					"expires_day":
-						state.day + offensive_bonus_days,
-				}
 			state.add_campaign_visual_event(
 				nation_id,
 				target_city,
@@ -4543,6 +4580,97 @@ func _launch_campaign_offensive(
 				CAMPAIGN_ARROW_DURATION_DAYS
 			)
 	return launched
+
+
+func _campaign_initial_attackers(
+	nation_id: int,
+	target_city: int
+) -> Array[Army]:
+	var nation := state.nations[nation_id]
+	var result: Array[Army] = []
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or int(
+				nation.campaign_attack_assignments.get(
+					army.id,
+					-1
+				)
+			) != target_city
+			or int(
+				nation.campaign_attack_echelons.get(
+					army.id,
+					0
+				)
+			) != 0
+			or not _army_ready_for_campaign_target(
+				army,
+				nation_id,
+				target_city
+			)
+		):
+			continue
+		result.append(army)
+	result.sort_custom(
+		func(a: Army, b: Army) -> bool:
+			if a.size != b.size:
+				return a.size > b.size
+			return EquivariantOrder.army_less(
+				state,
+				nation_id,
+				a,
+				b,
+				target_city
+			)
+	)
+	return result
+
+
+func _campaign_two_step_route_plan(
+	nation_id: int,
+	target_city: int,
+	target_attackers: Array[Army],
+	threat: ThreatField
+) -> Dictionary:
+	if target_attackers.is_empty():
+		return {}
+	var nation := state.nations[nation_id]
+	var route_army: Army = target_attackers[0]
+	var heavy_army_id := -1
+	for candidate in target_attackers:
+		if (
+			candidate.max_size
+				>= GameState.INITIAL_HEAVY_ARMY_SIZE
+		):
+			route_army = candidate
+			heavy_army_id = candidate.id
+			break
+	var defender_nation := state.cities[
+		target_city
+	].owner_nation
+	var next_step := _campaign_post_capture_target(
+		route_army,
+		state.cities[target_city],
+		threat,
+		defender_nation
+	)
+	if next_step.is_empty():
+		return {}
+	return {
+		"next_city": int(next_step["city_id"]),
+		"group_id": int(
+			nation.campaign_preparation_group_assignments.get(
+				target_city,
+				-1
+			)
+		),
+		"heavy_army_id": heavy_army_id,
+		"execution_army_id": route_army.id,
+		"enemy_nation": defender_nation,
+		"created_day": state.day,
+		"steps": CAMPAIGN_REQUIRED_ATTACK_STEPS,
+	}
 
 
 static func offensive_organization_gold_cost(
@@ -4557,7 +4685,10 @@ static func offensive_organization_gold_cost(
 	return total
 
 
-func _campaign_offensive_gold_cost(nation_id: int) -> int:
+func _campaign_offensive_gold_cost(
+	nation_id: int,
+	target_filter: Array[int] = []
+) -> int:
 	var nation := state.nations[nation_id]
 	var participants: Array[Army] = []
 	for army in state.armies:
@@ -4582,6 +4713,10 @@ func _campaign_offensive_gold_cost(nation_id: int) -> int:
 			or not state.is_enemy(
 				nation_id,
 				state.cities[target_city].owner_nation
+			)
+			or (
+				not target_filter.is_empty()
+				and not target_filter.has(target_city)
 			)
 		):
 			continue
@@ -6963,11 +7098,16 @@ func _advance_siege(
 	if battle.siege_progress >= Combat.SIEGE_PROGRESS_REQUIRED:
 		var captor := _strongest_alive(battle.side_a)
 		if captor != null:
-			_capture_city(captor, battle.city)
+			_capture_city(captor, battle.city, -1, false)
 		for a in battle.side_a:
 			a.battle_id = -1
 			if a != captor and a.size > 0:
 				_settle_idle(a, battle.city.id)
+		if captor != null:
+			_execute_campaign_post_capture_plan(
+				captor,
+				battle.city
+			)
 		battle.finished = true
 		battle.winner_side = 1
 
@@ -7237,12 +7377,17 @@ func _finish_legal_reclamation(battle: Battle) -> bool:
 	_capture_city(
 		captor,
 		battle.city,
-		captor.owner_nation
+		captor.owner_nation,
+		false
 	)
 	for attacker in battle.side_a:
 		attacker.battle_id = -1
 		if attacker != captor and attacker.size > 0:
 			_settle_idle(attacker, battle.city.id)
+	_execute_campaign_post_capture_plan(
+		captor,
+		battle.city
+	)
 	battle.finished = true
 	battle.winner_side = 1
 	return true
@@ -7251,7 +7396,8 @@ func _finish_legal_reclamation(battle: Battle) -> bool:
 func _capture_city(
 	army: Army,
 	city: City,
-	owner_override: int = -1
+	owner_override: int = -1,
+	execute_post_capture_plan: bool = true
 ) -> void:
 	var old_owner := city.owner_nation
 	var claimant := (
@@ -7317,7 +7463,8 @@ func _capture_city(
 	army.move_progress = 0.0
 	army.path.clear()
 	army.occupation_claimant_nation = -1
-	_execute_campaign_post_capture_plan(army, city)
+	if execute_post_capture_plan:
+		_execute_campaign_post_capture_plan(army, city)
 
 
 func _execute_campaign_post_capture_plan(
@@ -7336,102 +7483,118 @@ func _execute_campaign_post_capture_plan(
 	var plan: Dictionary = (
 		nation.campaign_post_capture_plans[city.id]
 	)
-	var preparation_days := int(
-		plan.get("preparation_days", 0)
-	)
-	if preparation_days < OFFENSIVE_BONUS_MAX_PREPARATION_DAYS:
-		nation.campaign_post_capture_plans.erase(city.id)
-		return
-	if state.day >= int(plan.get("expires_day", -1)):
-		nation.campaign_post_capture_plans.erase(city.id)
-		return
 	nation.campaign_post_capture_plans.erase(city.id)
-	var view := _build_ai_view(army.owner_nation)
-	var threat := ThreatField.build(
-		view,
-		_threat_travel_cache
+	_remove_campaign_target(army.owner_nation, city.id)
+	var next_city := int(plan.get("next_city", -1))
+	var route_valid := (
+		next_city >= 0
+		and next_city < state.cities.size()
+		and state.is_enemy(
+			army.owner_nation,
+			state.cities[next_city].owner_nation
+		)
 	)
-	var stationed_without_captor := view.stationed_power_at(
-		city.id,
-		army
+	var route_edge := (
+		state.edge_of(city.id, next_city)
+		if route_valid
+		else null
 	)
-	var required_garrison := (
-		threat.threat_at(city.id)
-		* CAMPAIGN_POST_CAPTURE_DEFENSE_RATIO
+	route_valid = (
+		route_valid
+		and route_edge != null
+		and route_edge.max_manpower >= army.max_size
 	)
-	var next_step := _campaign_post_capture_target(
-		army,
-		city,
-		threat
+	var heavy_army_id := int(
+		plan.get("heavy_army_id", -1)
 	)
-	var bonus_active := (
-		army.offensive_attack_multiplier > 1.0
-		and army.offensive_bonus_until_day > state.day
+	var execution_army_id := int(
+		plan.get("execution_army_id", army.id)
 	)
-	if (
-		not next_step.is_empty()
-		and bonus_active
-		and army.morale >= CAMPAIGN_POST_CAPTURE_MORALE_MIN
-		and army.supply_ratio >= CAMPAIGN_POST_CAPTURE_SUPPLY_MIN
-		and stationed_without_captor >= required_garrison
-		and float(next_step["attack_ratio"])
-			>= _campaign_attack_ratio_threshold(
-				army.owner_nation
+	var execution_army: Army = null
+	var heavy_operational := heavy_army_id < 0
+	for member in state.armies:
+		if member.id == execution_army_id:
+			execution_army = member
+		if member.id == heavy_army_id:
+			heavy_operational = (
+				member.size > 0
+				and member.morale > Combat.MORALE_FLOOR
 			)
+	if execution_army == null and execution_army_id == army.id:
+		execution_army = army
+	var execution_ready := (
+		execution_army != null
+		and execution_army.size > 0
+		and execution_army.morale > Combat.MORALE_FLOOR
+		and execution_army.is_at_city_node(city.id)
+	)
+	if route_valid and execution_army != null:
+		route_valid = (
+			route_edge.max_manpower
+				>= execution_army.max_size
+		)
+	if (
+		route_valid
+		and heavy_operational
+		and execution_ready
 	):
-		var next_city := int(next_step["city_id"])
 		var attack := ActionCandidate.make(
 			ActionCandidate.Kind.ATTACK,
-			2500.0 + float(next_step["score"]),
+			2500.0,
 			(
-				"满准备攻势第二阶段：城市%d已占领且守备充足，"
-				+ "保留剩余加成立即攻击城市%d（战力比%.2f）"
+				"两步攻势第二步：城市%d已占领，"
+				+ "按预定路线继续攻击城市%d"
 			) % [
 				city.id,
 				next_city,
-				next_step["attack_ratio"],
 			],
 			next_city
 		)
 		attack.minimum_commit_days = (
 			CAMPAIGN_OFFENSIVE_COMMIT_DAYS
 		)
-		if _execute_ai_candidate(army, attack):
-			return
-	if (
-		not next_step.is_empty()
-		and army.morale >= 0.50
-		and army.supply_ratio >= 0.50
-		and (
-			stationed_without_captor
-			+ ArmyPower.effective(army)
-		) >= required_garrison
-	):
-		var border_city := int(next_step["city_id"])
-		var hold := ActionCandidate.make(
-			ActionCandidate.Kind.HOLD,
-			2200.0 + float(next_step["score"]),
-			(
-				"满准备攻势第二阶段：城市%d已占领，"
-				+ "主力前出驻守通往城市%d的边界"
-			) % [city.id, border_city],
-			border_city
+		var remaining_bonus_days := maxi(
+			execution_army.offensive_bonus_until_day
+				- state.day,
+			0
 		)
-		hold.minimum_commit_days = (
-			CAMPAIGN_OFFENSIVE_COMMIT_DAYS
-		)
-		hold.defensive_deployment = true
-		hold.target_edge_a = city.id
-		hold.target_edge_b = border_city
-		if _execute_ai_candidate(army, hold):
+		if remaining_bonus_days > 0:
+			attack.offensive_attack_multiplier = (
+				execution_army.offensive_attack_multiplier
+			)
+			attack.offensive_bonus_days = remaining_bonus_days
+		if _execute_ai_candidate(execution_army, attack):
+			nation.campaign_attack_assignments[
+				execution_army.id
+			] = next_city
+			nation.campaign_launched_armies[
+				execution_army.id
+			] = true
+			if not nation.campaign_plan_targets.has(next_city):
+				nation.campaign_plan_targets.append(next_city)
+			state.add_campaign_visual_event(
+				execution_army.owner_nation,
+				next_city,
+				[city.id] as Array[int],
+				nation.campaign_offensive_count,
+				CAMPAIGN_ARROW_DURATION_DAYS
+			)
 			return
+	var stop_reason := (
+		"执行重军士气归零"
+		if not heavy_operational
+		else (
+			"执行军士气归零"
+			if not execution_ready
+			else "预定第二步目标或道路失效"
+		)
+	)
 	var garrison := ActionCandidate.make(
 		ActionCandidate.Kind.HOLD,
 		2000.0,
 		(
-			"满准备攻势第二阶段：城市%d守备不足，"
-			+ "主力就地驻扎巩固占领"
-		) % city.id,
+			"两步攻势终止：城市%d占领后%s，主力就地驻扎"
+		) % [city.id, stop_reason],
 		city.id
 	)
 	garrison.minimum_commit_days = DEFENSIVE_DEPLOYMENT_LOCK_DAYS
@@ -7442,7 +7605,8 @@ func _execute_campaign_post_capture_plan(
 func _campaign_post_capture_target(
 	army: Army,
 	city: City,
-	threat: ThreatField
+	threat: ThreatField,
+	target_nation: int = -1
 ) -> Dictionary:
 	var best: Dictionary = {}
 	var neighbors := state.neighbors(city.id).duplicate()
@@ -7460,6 +7624,11 @@ func _campaign_post_capture_target(
 			or not state.is_enemy(
 				army.owner_nation,
 				state.cities[target_id].owner_nation
+			)
+			or (
+				target_nation >= 0
+				and state.cities[target_id].owner_nation
+					!= target_nation
 			)
 		):
 			continue

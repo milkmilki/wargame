@@ -195,19 +195,14 @@ func _init() -> void:
 						"填线部署"
 					):
 						role_deployment_orders += 1
-				if (
-					army.ai_order_created_day == state.day
-					and army.ai_order_reason.contains(
-						"满准备攻势第二阶段"
-					)
-				):
-					if army.ai_action == ActionCandidate.Kind.ATTACK:
+				if army.ai_order_created_day == state.day:
+					if army.ai_order_reason.contains(
+						"两步攻势第二步"
+					):
 						post_capture_attacks += 1
 					elif army.ai_order_reason.contains(
-						"前出驻守"
+						"两步攻势终止"
 					):
-						post_capture_edge_holds += 1
-					else:
 						post_capture_city_holds += 1
 				if (
 					army.ai_order_created_day == state.day

@@ -6148,6 +6148,18 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 		and first_attack.reason.contains("2 个方向"),
 		"单军不足但两面合计达到门槛时，应发起协同进攻：%s" % first_attack.reason
 	)
+	gs.uses_heightmap = true
+	var formal_map_hold := UtilityAI.choose(
+		view, snapshot, threat, ArmyCoordinator.new(), holder_a
+	)
+	_check(
+		formal_map_hold.kind == ActionCandidate.Kind.HOLD
+			and formal_map_hold.reason.contains(
+				"不进行独立战术进攻"
+			),
+		"正式地图驻边军必须等待国家级两步攻势，不得独立攻击"
+	)
+	gs.uses_heightmap = false
 	var sim := Simulation.new()
 	sim.setup(gs)
 	_check(sim._execute_ai_candidate(holder_a, first_attack),
@@ -6350,6 +6362,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 	starving.supply_ratio = 0.0
 	starving.morale = 0.2
 	breakout_state.armies.append(starving)
+	breakout_state.uses_heightmap = true
 	view = AiWorldView.build(breakout_state, 0)
 	snapshot = StrategicMapSnapshot.build(view)
 	threat = ThreatField.build(view)
@@ -9497,6 +9510,78 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	critical_sim.free()
 
+	var route_gate_state := GameState.new()
+	route_gate_state.generate_grid_world(32015)
+	route_gate_state.uses_heightmap = true
+	route_gate_state.armies.clear()
+	for route_city in route_gate_state.cities:
+		route_city.owner_nation = 0
+	var route_gate_target := 10
+	for route_enemy_city in [
+		route_gate_target,
+		30,
+		40,
+	]:
+		route_gate_state.cities[
+			route_enemy_city
+		].owner_nation = 1
+	route_gate_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var route_gate_origin := 9
+	route_gate_state.edge_of(
+		route_gate_origin,
+		route_gate_target
+	).max_manpower = 30000
+	var route_gate_nation := route_gate_state.nations[0]
+	for route_army_index in range(2):
+		var route_army := _make_army(
+			9880 + route_army_index,
+			0,
+			GameState.INITIAL_HEAVY_ARMY_SIZE,
+			10,
+			10
+		)
+		route_army.max_size = (
+			GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
+		route_army.location_city = route_gate_origin
+		route_army.move_from = route_gate_origin
+		route_gate_state.armies.append(route_army)
+		route_gate_nation.campaign_preparation_assignments[
+			route_army.id
+		] = route_gate_target
+	route_gate_nation.campaign_preparation_targets = [
+		route_gate_target
+	] as Array[int]
+	route_gate_nation.treasury_gold = 1000
+	var route_gate_sim := Simulation.new()
+	route_gate_sim.setup(route_gate_state)
+	var route_gate_gold := route_gate_nation.treasury_gold
+	var route_gate_launched := (
+		route_gate_sim._launch_campaign_offensive(
+			0,
+			route_gate_target,
+			180,
+			[route_gate_target] as Array[int]
+		)
+	)
+	_check(
+		not route_gate_launched
+			and route_gate_nation
+				.campaign_preparation_targets.is_empty()
+			and route_gate_nation
+				.campaign_preparation_assignments.is_empty()
+			and route_gate_nation
+				.campaign_plan_targets.is_empty()
+			and route_gate_nation.treasury_gold
+				== route_gate_gold,
+		"正式地图敌国仍有三城时，无同国第二步的叶子目标不得发动、扣费或保留准备分配"
+	)
+	route_gate_sim.free()
+
 	var echelon_state := GameState.new()
 	echelon_state.generate_grid_world(32009)
 	echelon_state.armies.clear()
@@ -9504,10 +9589,19 @@ func _test_diplomacy_state_and_ai() -> void:
 		city.owner_nation = 0
 	var echelon_origin := 9
 	var echelon_target := 10
+	var post_capture_target := 11
 	echelon_state.cities[echelon_target].owner_nation = 1
+	echelon_state.cities[post_capture_target].owner_nation = 1
+	echelon_state.recognized_city_owners[
+		post_capture_target
+	] = 1
 	echelon_state.edge_of(
 		echelon_origin,
 		echelon_target
+	).max_manpower = 30000
+	echelon_state.edge_of(
+		echelon_target,
+		post_capture_target
 	).max_manpower = 30000
 	echelon_state.set_diplomatic_relation(
 		0,
@@ -9643,15 +9737,6 @@ func _test_diplomacy_state_and_ai() -> void:
 						.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
 		"后续梯队应继承整轮备战倍率，并从实际投入日计算持续期"
 	)
-	var post_capture_target := 11
-	echelon_state.cities[post_capture_target].owner_nation = 1
-	echelon_state.recognized_city_owners[
-		post_capture_target
-	] = 1
-	echelon_state.edge_of(
-		echelon_target,
-		post_capture_target
-	).max_manpower = 30000
 	var post_capture_support := _make_army(
 		9950,
 		0,
@@ -9690,7 +9775,7 @@ func _test_diplomacy_state_and_ai() -> void:
 			and lead_army.ai_target_city
 				== post_capture_target
 			and lead_army.ai_order_reason.contains(
-				"满准备攻势第二阶段"
+				"两步攻势第二步"
 			)
 			and lead_army.offensive_bonus_until_day
 				== lead_bonus_deadline
@@ -9698,7 +9783,7 @@ func _test_diplomacy_state_and_ai() -> void:
 				.campaign_post_capture_plans.has(
 					echelon_target
 				),
-		"满准备攻势占城且守备充足时，应保留原截止日并立即攻击相邻弱城"
+		"攻势必须在首攻前冻结第二步目标，并在占城后保留原截止日继续攻击"
 	)
 	echelon_sim.free()
 
@@ -9753,16 +9838,23 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	consolidate_army.location_city = consolidate_origin
 	consolidate_army.move_from = consolidate_origin
+	consolidate_army.max_size = (
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	consolidate_army.max_morale = Army.HEAVY_MAX_MORALE
 	consolidate_army.offensive_attack_multiplier = 2.0
 	consolidate_army.offensive_bonus_until_day = 180
 	consolidate_state.armies.append(consolidate_army)
 	consolidate_state.nations[0].campaign_post_capture_plans[
 		consolidate_target
 	] = {
-		"preparation_days":
-			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
-		"expires_day":
-			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		"next_city": consolidate_next,
+		"group_id": -1,
+		"heavy_army_id": consolidate_army.id,
+		"execution_army_id": consolidate_army.id,
+		"enemy_nation": 1,
+		"created_day": consolidate_state.day,
+		"steps": Simulation.CAMPAIGN_REQUIRED_ATTACK_STEPS,
 	}
 	var consolidate_sim := Simulation.new()
 	consolidate_sim.setup(consolidate_state)
@@ -9775,13 +9867,13 @@ func _test_diplomacy_state_and_ai() -> void:
 			and consolidate_army.ai_action
 				== ActionCandidate.Kind.ATTACK
 			and consolidate_army.ai_order_reason.contains(
-				"立即攻击"
+				"两步攻势第二步"
 			)
 			and not consolidate_state.nations[0]
 				.campaign_post_capture_plans.has(
 					consolidate_target
 				),
-		"新占城市没有现实守备需求时，满准备主力应继续追击"
+		"新占城市后，执行重军必须按预定路线继续第二步"
 	)
 	consolidate_sim._settle_idle(
 		consolidate_army,
@@ -9812,10 +9904,13 @@ func _test_diplomacy_state_and_ai() -> void:
 	consolidate_state.nations[0].campaign_post_capture_plans[
 		consolidate_target
 	] = {
-		"preparation_days":
-			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
-		"expires_day":
-			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		"next_city": consolidate_next,
+		"group_id": -1,
+		"heavy_army_id": consolidate_army.id,
+		"execution_army_id": consolidate_army.id,
+		"enemy_nation": 1,
+		"created_day": consolidate_state.day,
+		"steps": Simulation.CAMPAIGN_REQUIRED_ATTACK_STEPS,
 	}
 	consolidate_sim._execute_campaign_post_capture_plan(
 		consolidate_army,
@@ -9824,17 +9919,46 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		consolidate_army.state == Army.State.MOVING
 			and consolidate_army.ai_action
-				== ActionCandidate.Kind.HOLD
+				== ActionCandidate.Kind.ATTACK
 			and consolidate_army.ai_target_city
 				== consolidate_next
-			and _approx(
-				consolidate_army.hold_target_progress,
-				Simulation.HOLDING_TARGET_PROGRESS
-			)
 			and consolidate_army.ai_order_reason.contains(
-				"前出驻守"
+				"两步攻势第二步"
 			),
-		"新占城市已有最低守军且前线防御比达标时，主力应驻扎敌方方向边界"
+		"第二步不得因满准备加成到期或守军评分退化为驻边"
+	)
+	consolidate_sim._settle_idle(
+		consolidate_army,
+		consolidate_target
+	)
+	consolidate_army.morale = Combat.MORALE_FLOOR
+	consolidate_state.nations[0].campaign_post_capture_plans[
+		consolidate_target
+	] = {
+		"next_city": consolidate_next,
+		"group_id": -1,
+		"heavy_army_id": consolidate_army.id,
+		"execution_army_id": consolidate_army.id,
+		"enemy_nation": 1,
+		"created_day": consolidate_state.day,
+		"steps": Simulation.CAMPAIGN_REQUIRED_ATTACK_STEPS,
+	}
+	consolidate_sim._execute_campaign_post_capture_plan(
+		consolidate_army,
+		consolidate_state.cities[consolidate_target]
+	)
+	_check(
+		consolidate_army.ai_action == ActionCandidate.Kind.HOLD
+			and consolidate_army.ai_target_city
+				== consolidate_target
+			and consolidate_army.ai_order_reason.contains(
+				"执行重军士气归零"
+			)
+			and not consolidate_state.nations[0]
+				.campaign_post_capture_plans.has(
+					consolidate_target
+				),
+		"执行重军士气归零后必须终止两步攻势并就地驻扎"
 	)
 	consolidate_sim.free()
 

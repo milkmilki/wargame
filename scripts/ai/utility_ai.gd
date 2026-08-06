@@ -94,16 +94,17 @@ static func choose(
 		)
 	if defense != null:
 		candidates.append(defense)
-	var attack := _attack_candidate(
-		view,
-		snapshot,
-		threat,
-		coordinator,
-		army,
-		minimum_participant_ratio
-	)
-	if attack != null:
-		candidates.append(attack)
+	if not view.state.uses_heightmap:
+		var attack := _attack_candidate(
+			view,
+			snapshot,
+			threat,
+			coordinator,
+			army,
+			minimum_participant_ratio
+		)
+		if attack != null:
+			candidates.append(attack)
 	if view.day >= army.defensive_deployment_until_day:
 		var merge := _merge_candidate(
 			view,
@@ -855,6 +856,13 @@ static func _choose_holding(
 			ActionCandidate.Kind.HOLD,
 			hold_score + 12.0,
 			"等待国家级180天满攻势准备完成",
+			enemy_endpoint
+		)
+	if view.state.uses_heightmap:
+		return ActionCandidate.make(
+			ActionCandidate.Kind.HOLD,
+			hold_score,
+			"等待国家级两步攻势计划，不进行独立战术进攻",
 			enemy_endpoint
 		)
 	if (

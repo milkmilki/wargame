@@ -50,8 +50,9 @@ var campaign_preparation_multiplier: float = 1.0
 ## 已发动轮次的倍率和持续天数；后续梯队继承，且从各自实际投入日开始计时。
 var campaign_launched_attack_multiplier: float = 1.0
 var campaign_launched_bonus_days: int = 0
-## 满准备目标城 -> {preparation_days, expires_day}。
-## 破城当天消费并生成驻城/驻边/扩张的第二阶段命令。
+## 首攻目标城 -> 预先冻结的两步路线。
+## {next_city, group_id, heavy_army_id, execution_army_id,
+## enemy_nation, created_day, steps}；破城当天消费并立即执行第二步。
 var campaign_post_capture_plans: Dictionary = {}
 var campaign_plan_targets: Array[int] = []
 var campaign_plan_wave: int = -1
