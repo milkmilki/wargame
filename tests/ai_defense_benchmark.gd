@@ -7,6 +7,22 @@ const ITERATIONS: int = 100
 func _init() -> void:
 	var state := GameState.new()
 	state.generate_world(12345)
+	var war_mode := (
+		OS.get_environment(
+			"AI_DEFENSE_BENCHMARK_WAR"
+		) == "1"
+	)
+	if war_mode:
+		state.set_diplomatic_relation(
+			0,
+			1,
+			GameState.DiplomaticRelation.WAR
+		)
+		state.set_diplomatic_relation(
+			2,
+			3,
+			GameState.DiplomaticRelation.WAR
+		)
 	var fixtures: Array[Dictionary] = []
 	var shared_path_cache := {}
 	var shared_threat_cache := {}
@@ -32,23 +48,43 @@ func _init() -> void:
 		)
 	var started := Time.get_ticks_usec()
 	var assignments := 0
+	var build_usec := 0
+	var role_assignment_usec := 0
 	for _iteration in range(ITERATIONS):
 		for fixture in fixtures:
-			var plan := CityDefensePlan.build(
-				fixture["view"],
-				fixture["snapshot"],
-				fixture["threat"]
+			var plan := CityDefensePlan.new()
+			plan.view = fixture["view"]
+			plan.snapshot = fixture["snapshot"]
+			plan.threat = fixture["threat"]
+			var phase_started := Time.get_ticks_usec()
+			plan._build()
+			build_usec += (
+				Time.get_ticks_usec() - phase_started
+			)
+			phase_started = Time.get_ticks_usec()
+			plan._assign_role_based_defense()
+			role_assignment_usec += (
+				Time.get_ticks_usec() - phase_started
 			)
 			assignments += plan.assigned_city_by_army.size()
 	var elapsed_usec := Time.get_ticks_usec() - started
 	print(
-		"iterations=%d plans=%d assignments=%d elapsed_ms=%.3f us_per_plan=%.3f"
+		(
+			"mode=%s iterations=%d plans=%d assignments=%d elapsed_ms=%.3f "
+			+ "us_per_plan=%.3f build_us_per_plan=%.3f "
+			+ "role_us_per_plan=%.3f"
+		)
 		% [
+			"war" if war_mode else "peace",
 			ITERATIONS,
 			ITERATIONS * fixtures.size(),
 			assignments,
 			float(elapsed_usec) / 1000.0,
 			float(elapsed_usec)
+				/ float(ITERATIONS * fixtures.size()),
+			float(build_usec)
+				/ float(ITERATIONS * fixtures.size()),
+			float(role_assignment_usec)
 				/ float(ITERATIONS * fixtures.size()),
 		]
 	)

@@ -442,48 +442,18 @@ func _compute_offensive_values(view: AiWorldView) -> void:
 		var gateway_bonus := 0.0
 		if exposure <= 1:
 			gateway_bonus = minf(gateway_value * 0.30, 1.5)
-		var cut_ratio := _enemy_cut_value_ratio(city_id, target_owner)
+		var encirclement_value := DiplomacyAI.encirclement_value(
+			_state,
+			city_id,
+			target_owner
+		)
 		offensive_value[city_id] = (
 			base
 			+ maxf(defensive_gain, 0.0) * 1.5
 			- float(exposure) * 1.5
 			+ gateway_bonus
-			+ cut_ratio * 6.0
+			+ encirclement_value
 		)
-
-
-func _enemy_cut_value_ratio(target_city: int, enemy_nation: int) -> float:
-	if enemy_nation < 0 or enemy_nation >= _state.nations.size():
-		return 0.0
-	var capital := _state.nations[enemy_nation].capital_city_id
-	if capital < 0 or capital == target_city:
-		return 0.0
-	var reachable := {capital: true}
-	var queue: Array[int] = [capital]
-	while not queue.is_empty():
-		var current: int = queue.pop_front()
-		for neighbor in _state.neighbors(current):
-			if neighbor == target_city or reachable.has(neighbor):
-				continue
-			var edge := _state.edge_of(current, neighbor)
-			if (
-				edge == null
-				or edge.max_manpower <= 0
-				or _state.cities[neighbor].owner_nation != enemy_nation
-			):
-				continue
-			reachable[neighbor] = true
-			queue.append(neighbor)
-	var total_value := 0.0
-	var cut_value := 0.0
-	for city in _state.cities:
-		if city.owner_nation != enemy_nation or city.id == target_city:
-			continue
-		var value := value_of_city(city.id)
-		total_value += value
-		if not reachable.has(city.id):
-			cut_value += value
-	return cut_value / maxf(total_value, 0.001)
 
 
 func _select_priority_targets(view: AiWorldView) -> void:

@@ -21,6 +21,8 @@ var allied_armies: Array[Army] = []
 var warehouses: Array[City] = []
 var armies_by_city: Dictionary = {}
 var friendly_stationed_power_by_city: Dictionary = {}
+var enemy_armies_by_city: Dictionary = {}
+var enemy_armies_by_edge: Dictionary = {}
 var _path_field_cache: Dictionary = {}
 var _supply_city_cache: Dictionary = {}
 var _supply_network_cache: Dictionary = {}
@@ -105,6 +107,35 @@ static func build(
 	view.enemy_armies.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
 	)
+	for enemy in view.enemy_armies:
+		if enemy.on_edge and enemy.move_to != -1:
+			var edge_key := GameState.edge_key(
+				enemy.move_from,
+				enemy.move_to
+			)
+			if not view.enemy_armies_by_edge.has(edge_key):
+				view.enemy_armies_by_edge[edge_key] = (
+					[] as Array[Army]
+				)
+			(
+				view.enemy_armies_by_edge[edge_key]
+					as Array[Army]
+			).append(enemy)
+		elif (
+			not enemy.on_edge
+			and enemy.location_city >= 0
+		):
+			if not view.enemy_armies_by_city.has(
+				enemy.location_city
+			):
+				view.enemy_armies_by_city[
+					enemy.location_city
+				] = [] as Array[Army]
+			(
+				view.enemy_armies_by_city[
+					enemy.location_city
+				] as Array[Army]
+			).append(enemy)
 	view.allied_armies.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
 	)
@@ -113,6 +144,23 @@ static func build(
 
 func armies_at_city(city_id: int) -> Array[Army]:
 	return armies_by_city.get(city_id, []) as Array[Army]
+
+
+func enemy_armies_at_city(city_id: int) -> Array[Army]:
+	return enemy_armies_by_city.get(
+		city_id,
+		[]
+	) as Array[Army]
+
+
+func enemy_armies_on_edge(
+	city_a: int,
+	city_b: int
+) -> Array[Army]:
+	return enemy_armies_by_edge.get(
+		GameState.edge_key(city_a, city_b),
+		[]
+	) as Array[Army]
 
 
 func stationed_power_at(

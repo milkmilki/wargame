@@ -12,8 +12,6 @@ const CITY_MANPOWER_PER_MONTH_MAX: int = 30
 const INITIAL_MANPOWER_RESERVE_MONTHS: int = 750
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
-const LIGHT_ARMIES_PER_CITY: float = 0.50
-const HEAVY_ARMIES_PER_CITY: float = 0.05
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 3000
@@ -141,7 +139,10 @@ func generate_world(world_seed: int = 12345) -> void:
 		edges.size() >= TERRAIN_CITY_COUNT - 1,
 		"道路图必须连通"
 	)
-	assert(_force_structure_matches_targets(), "正式地图初始军制必须匹配城市比例")
+	assert(
+		_battle_group_structure_valid(),
+		"正式地图初始重军必须属于合法的持久战团"
+	)
 
 
 ## 严格镜像基准和局部状态机测试使用的兼容网格夹具；正式游戏不调用。
@@ -164,9 +165,10 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
 	assert(
 		armies.size()
-			== CITY_COUNT * 3 / 2,
-		"网格状态机夹具必须保留每城轻军和每两城重军"
+			== CITY_COUNT + NATION_COUNT * 3,
+		"网格状态机夹具必须保留每城填线军和每国一个满编战团"
 	)
+	assert(_battle_group_structure_valid(), "网格战团结构必须合法")
 
 
 func _reset_world(world_seed: int) -> void:
@@ -703,80 +705,69 @@ func _generate_armies() -> void:
 				b
 			)
 		)
+		var line_cities: Array[City] = []
+		for city in owned:
+			for neighbor in neighbors(city.id):
+				if cities[neighbor].owner_nation == nation.id:
+					continue
+				line_cities.append(city)
+				break
+		# 网格世界是镜像测试夹具，保留每城一支填线军；正式地图按实际国界城市起步。
 		if not uses_heightmap:
-			for city in owned:
-				_initialize_army_attributes(create_army(
-					nation.id,
-					city.id,
-					INITIAL_LIGHT_ARMY_SIZE,
-					INITIAL_LIGHT_ARMY_SIZE
-				))
-			for index in range(owned.size() / 2):
-				_initialize_army_attributes(create_army(
-					nation.id,
-					owned[index * 2].id,
-					INITIAL_HEAVY_ARMY_SIZE,
-					INITIAL_HEAVY_ARMY_SIZE
-				))
-			continue
-		var light_count := target_light_army_count(nation.id)
-		var heavy_count := target_heavy_army_count(nation.id)
-		for index in range(light_count):
-			var city: City = owned[
-				int(floor(
-					float(index) * float(owned.size())
-						/ float(maxi(light_count, 1))
-				))
-			]
+			line_cities = owned
+		for city in line_cities:
 			_initialize_army_attributes(create_army(
 				nation.id,
 				city.id,
 				INITIAL_LIGHT_ARMY_SIZE,
 				INITIAL_LIGHT_ARMY_SIZE
 			))
-		for index in range(heavy_count):
-			var city: City = cities[nation.capital_city_id]
-			_initialize_army_attributes(create_army(
+		if owned.is_empty():
+			continue
+		var group := create_battle_group(nation.id)
+		var group_city := nation.capital_city_id
+		for _index in range(BattleGroup.MAX_LIGHT_ARMIES):
+			var light := create_army(
 				nation.id,
-				city.id,
-				INITIAL_HEAVY_ARMY_SIZE,
-				INITIAL_HEAVY_ARMY_SIZE
-			))
+				group_city,
+				INITIAL_LIGHT_ARMY_SIZE,
+				INITIAL_LIGHT_ARMY_SIZE
+			)
+			_initialize_army_attributes(light)
+			assign_army_to_battle_group(light, group.id)
+		var heavy := create_army(
+			nation.id,
+			group_city,
+			INITIAL_HEAVY_ARMY_SIZE,
+			INITIAL_HEAVY_ARMY_SIZE
+		)
+		_initialize_army_attributes(heavy)
+		assign_army_to_battle_group(heavy, group.id)
 
 
-func target_light_army_count(nation_id: int) -> int:
-	return int(ceil(
-		float(cities_of(nation_id).size()) * LIGHT_ARMIES_PER_CITY
-	))
-
-
-func target_heavy_army_count(nation_id: int) -> int:
-	return int(floor(
-		float(cities_of(nation_id).size()) * HEAVY_ARMIES_PER_CITY
-	))
-
-
-func target_army_count(nation_id: int) -> int:
-	return (
-		target_light_army_count(nation_id)
-		+ target_heavy_army_count(nation_id)
-	)
-
-
-func _force_structure_matches_targets() -> bool:
+func _battle_group_structure_valid() -> bool:
 	for nation in nations:
-		var light_count := 0
-		var heavy_count := 0
-		for army in armies:
-			if army.owner_nation != nation.id or army.size <= 0:
-				continue
-			if army.max_size == INITIAL_LIGHT_ARMY_SIZE:
-				light_count += 1
-			elif army.max_size == INITIAL_HEAVY_ARMY_SIZE:
-				heavy_count += 1
+		for group in nation.battle_groups:
+			var light_count := 0
+			var heavy_count := 0
+			for army in battle_group_members(nation.id, group.id):
+				if army.max_size == INITIAL_LIGHT_ARMY_SIZE:
+					light_count += 1
+				elif army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+					heavy_count += 1
+			if (
+				light_count > BattleGroup.MAX_LIGHT_ARMIES
+				or heavy_count > BattleGroup.MAX_HEAVY_ARMIES
+			):
+				return false
+	for army in armies:
 		if (
-			light_count != target_light_army_count(nation.id)
-			or heavy_count != target_heavy_army_count(nation.id)
+			army.size > 0
+			and army.max_size >= INITIAL_HEAVY_ARMY_SIZE
+			and battle_group_by_id(
+				army.owner_nation,
+				army.battle_group_id
+			) == null
 		):
 			return false
 	return true
@@ -787,6 +778,85 @@ func _initialize_army_attributes(army: Army) -> void:
 	army.speed_factor = rng.randf_range(0.3, 0.9)
 	army.attack = rng.randi_range(8, 15)
 	army.defense = rng.randi_range(8, 15)
+
+
+func create_battle_group(nation_id: int) -> BattleGroup:
+	if nation_id < 0 or nation_id >= nations.size():
+		return null
+	var nation := nations[nation_id]
+	var group := BattleGroup.new()
+	group.id = nation.next_battle_group_id
+	nation.next_battle_group_id += 1
+	group.owner_nation = nation_id
+	group.created_day = day
+	nation.battle_groups.append(group)
+	return group
+
+
+func battle_group_by_id(
+	nation_id: int,
+	group_id: int
+) -> BattleGroup:
+	if nation_id < 0 or nation_id >= nations.size() or group_id < 0:
+		return null
+	for group in nations[nation_id].battle_groups:
+		if group.id == group_id:
+			return group
+	return null
+
+
+func battle_group_members(
+	nation_id: int,
+	group_id: int,
+	alive_only: bool = true
+) -> Array[Army]:
+	var result: Array[Army] = []
+	if battle_group_by_id(nation_id, group_id) == null:
+		return result
+	for army in armies:
+		if (
+			army.owner_nation == nation_id
+			and army.battle_group_id == group_id
+			and (not alive_only or army.size > 0)
+		):
+			result.append(army)
+	return result
+
+
+func assign_army_to_battle_group(
+	army: Army,
+	group_id: int
+) -> bool:
+	if (
+		army == null
+		or army.size <= 0
+		or battle_group_by_id(
+			army.owner_nation,
+			group_id
+		) == null
+	):
+		return false
+	var light_count := 0
+	var heavy_count := 0
+	for member in battle_group_members(army.owner_nation, group_id):
+		if member == army:
+			continue
+		if member.max_size == INITIAL_LIGHT_ARMY_SIZE:
+			light_count += 1
+		elif member.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+			heavy_count += 1
+	if (
+		army.max_size == INITIAL_LIGHT_ARMY_SIZE
+		and light_count >= BattleGroup.MAX_LIGHT_ARMIES
+	) or (
+		army.max_size >= INITIAL_HEAVY_ARMY_SIZE
+		and heavy_count >= BattleGroup.MAX_HEAVY_ARMIES
+	):
+		return false
+	army.battle_group_id = group_id
+	army.strategic_role = Army.StrategicRole.MAIN
+	army.clear_line_assignment()
+	return true
 
 
 func create_army(
@@ -811,6 +881,11 @@ func create_army(
 	army.owner_nation = nation_id
 	army.max_size = max_size
 	army.size = mini(size, max_size)
+	army.strategic_role = (
+		Army.StrategicRole.MAIN
+		if max_size >= INITIAL_HEAVY_ARMY_SIZE
+		else Army.StrategicRole.LINE
+	)
 	army.location_city = city_id
 	army.move_from = city_id
 	army.state = Army.State.IDLE
@@ -866,11 +941,48 @@ func split_army(
 	):
 		return result
 	var original_size := army.size
+	var original_battle_group_id := army.battle_group_id
+	var original_line_assignment_city := (
+		army.line_assignment_city
+	)
+	var original_line_assignment_posture := (
+		army.line_assignment_posture
+	)
+	var original_line_assignment_edge := (
+		army.line_assignment_edge
+	)
 	var original_supply_debt := army.supply_debt
 	var original_food_debt := army.supply_food_debt
 	var base_size := original_size / part_count
 	var remainder := original_size % part_count
+	var available_group_light_slots := 0
+	if original_battle_group_id >= 0:
+		var existing_group_lights := 0
+		for member in battle_group_members(
+			army.owner_nation,
+			original_battle_group_id
+		):
+			if (
+				member != army
+				and member.max_size == INITIAL_LIGHT_ARMY_SIZE
+			):
+				existing_group_lights += 1
+		available_group_light_slots = maxi(
+			BattleGroup.MAX_LIGHT_ARMIES
+				- existing_group_lights,
+			0
+		)
 	army.max_size = part_max_size
+	army.battle_group_id = (
+		original_battle_group_id
+		if available_group_light_slots > 0
+		else -1
+	)
+	army.strategic_role = (
+		Army.StrategicRole.MAIN
+		if army.battle_group_id >= 0
+		else Army.StrategicRole.LINE
+	)
 	army.size = base_size + (1 if remainder > 0 else 0)
 	army.supply_debt = (
 		original_supply_debt
@@ -889,6 +1001,25 @@ func split_army(
 		_next_army_id += 1
 		child.owner_nation = army.owner_nation
 		child.max_size = part_max_size
+		child.battle_group_id = (
+			original_battle_group_id
+			if part_index < available_group_light_slots
+			else -1
+		)
+		child.strategic_role = (
+			Army.StrategicRole.MAIN
+			if child.battle_group_id >= 0
+			else Army.StrategicRole.LINE
+		)
+		child.line_assignment_city = (
+			original_line_assignment_city
+		)
+		child.line_assignment_posture = (
+			original_line_assignment_posture
+		)
+		child.line_assignment_edge = (
+			original_line_assignment_edge
+		)
 		child.size = (
 			base_size
 			+ (1 if part_index < remainder else 0)
@@ -1110,6 +1241,46 @@ func armies_at_city(city_id: int) -> Array[Army]:
 			continue
 		if army.location_city == city_id and army.state in [Army.State.IDLE, Army.State.RECOVERING]:
 			result.append(army)
+	result.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(
+			self,
+			city_owner,
+			a,
+			b,
+			city_id
+		)
+	)
+	return result
+
+
+func armies_available_to_defend_city(
+	city_id: int
+) -> Array[Army]:
+	## 返回物理停留在城节点、可被攻城入口征召的本国军队。
+	## 容量等待中的 MOVING/RETREATING 尚未上边，不能因任务状态而从战场消失。
+	var result: Array[Army] = []
+	var city_owner := cities[city_id].owner_nation
+	for army in armies:
+		if (
+			army.size <= 0
+			or army.owner_nation != city_owner
+			or not army.is_at_city_node(city_id)
+		):
+			continue
+		if army.state == Army.State.FIGHTING:
+			var active_battle := battle_by_id(
+				army.battle_id
+			)
+			if (
+				active_battle != null
+				and not active_battle.finished
+				and active_battle.kind == Battle.Kind.SIEGE
+				and active_battle.city != null
+				and active_battle.city.id == city_id
+				and active_battle.has_army(army)
+			):
+				continue
+		result.append(army)
 	result.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(
 			self,

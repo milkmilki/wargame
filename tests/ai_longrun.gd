@@ -65,6 +65,7 @@ func _init() -> void:
 		var max_interior_idle_stack := 0
 		var max_idle_stack_context := ""
 		var hostile_stationed_events := 0
+		var hostile_stationed_log: Array[String] = []
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(DAYS):
 			if state.winner != -1:
@@ -117,22 +118,53 @@ func _init() -> void:
 				offensive_events[event_key] = true
 			var idle_city_stacks := {}
 			for army in state.armies:
+				var node_city_id := army.current_city_node()
 				if (
 					army.size > 0
-					and not army.on_edge
-					and army.location_city >= 0
-					and army.location_city
-						< state.cities.size()
-					and army.state
-						!= Army.State.FIGHTING
+					and node_city_id >= 0
+					and node_city_id < state.cities.size()
 					and not state.has_military_access(
 						army.owner_nation,
-						state.cities[
-							army.location_city
-						].owner_nation
+						state.cities[node_city_id].owner_nation
 					)
 				):
-					hostile_stationed_events += 1
+					var hostile_battle := state.battle_by_id(
+						army.battle_id
+					)
+					var valid_hostile_siege := (
+						army.state == Army.State.FIGHTING
+						and hostile_battle != null
+						and not hostile_battle.finished
+						and hostile_battle.kind
+							== Battle.Kind.SIEGE
+						and hostile_battle.city != null
+						and hostile_battle.city.id
+							== node_city_id
+						and hostile_battle.has_army(army)
+					)
+					if not valid_hostile_siege:
+						hostile_stationed_events += 1
+						if hostile_stationed_log.size() < 20:
+							hostile_stationed_log.append(
+								(
+									"day=%d army=%d owner=%d state=%d "
+									+ "city=%d city_owner=%d edge=%d-%d "
+									+ "progress=%.3f battle=%d"
+								) % [
+									state.day,
+									army.id,
+									army.owner_nation,
+									army.state,
+									node_city_id,
+									state.cities[
+										node_city_id
+									].owner_nation,
+									army.move_from,
+									army.move_to,
+									army.move_progress,
+									army.battle_id,
+								]
+							)
 				if (
 					army.size > 0
 					and army.location_city >= 0
@@ -405,25 +437,117 @@ func _init() -> void:
 					)
 				if committed_to_border:
 					border_armies += 1
-			var light_armies := 0
-			var heavy_armies := 0
+			var invalid_group_reasons: Array[String] = []
+			var light_by_group := {}
+			var heavy_by_group := {}
+			var army_group_by_id := {}
 			for army in state.armies:
 				if army.owner_nation != nation.id or army.size <= 0:
 					continue
-				if army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
-					light_armies += 1
-				elif army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
-					heavy_armies += 1
-			var target_light := state.target_light_army_count(nation.id)
-			var target_heavy := state.target_heavy_army_count(nation.id)
-			if light_armies != target_light or heavy_armies != target_heavy:
+				army_group_by_id[army.id] = army.battle_group_id
+				if army.battle_group_id >= 0:
+					if (
+						state.battle_group_by_id(
+							nation.id,
+							army.battle_group_id
+						) == null
+					):
+						invalid_group_reasons.append(
+							"army%d_missing_group"
+							% army.id
+						)
+						continue
+					if not army.is_main_battle_role():
+						invalid_group_reasons.append(
+							"army%d_group_not_main"
+							% army.id
+						)
+					if (
+						army.max_size
+							== GameState.INITIAL_LIGHT_ARMY_SIZE
+					):
+						light_by_group[army.battle_group_id] = (
+							int(light_by_group.get(
+								army.battle_group_id,
+								0
+							)) + 1
+						)
+					elif (
+						army.max_size
+							>= GameState.INITIAL_HEAVY_ARMY_SIZE
+					):
+						heavy_by_group[army.battle_group_id] = (
+							int(heavy_by_group.get(
+								army.battle_group_id,
+								0
+							)) + 1
+						)
+				elif (
+					army.max_size
+						>= GameState.INITIAL_HEAVY_ARMY_SIZE
+				):
+					invalid_group_reasons.append(
+						"heavy%d_ungrouped" % army.id
+					)
+			for group in nation.battle_groups:
+				if (
+					int(light_by_group.get(group.id, 0))
+						> BattleGroup.MAX_LIGHT_ARMIES
+					or int(heavy_by_group.get(group.id, 0))
+						> BattleGroup.MAX_HEAVY_ARMIES
+				):
+					invalid_group_reasons.append(
+						"group%d_over_capacity" % group.id
+					)
+			var campaign_groups := {}
+			for target_city in nation.campaign_preparation_targets:
+				if not nation.campaign_preparation_group_assignments.has(
+					target_city
+				):
+					invalid_group_reasons.append(
+						"target%d_missing_group" % target_city
+					)
+					continue
+				var campaign_group_id := int(
+					nation.campaign_preparation_group_assignments[
+						target_city
+					]
+				)
+				if campaign_groups.has(campaign_group_id):
+					invalid_group_reasons.append(
+						"group%d_multiple_targets"
+							% campaign_group_id
+					)
+				campaign_groups[campaign_group_id] = target_city
+			for army_id in nation.campaign_preparation_assignments:
+				var assigned_target := int(
+					nation.campaign_preparation_assignments[
+						army_id
+					]
+				)
+				if not army_group_by_id.has(army_id):
+					continue
+				if (
+					not nation
+						.campaign_preparation_group_assignments
+						.has(assigned_target)
+					or int(army_group_by_id[army_id])
+						!= int(
+							nation
+								.campaign_preparation_group_assignments[
+									assigned_target
+								]
+						)
+				):
+					invalid_group_reasons.append(
+						"army%d_wrong_campaign_group"
+							% army_id
+					)
+			if not invalid_group_reasons.is_empty():
 				var mismatch := {
 					"nation": nation.id,
 					"cities": state.cities_of(nation.id).size(),
-					"light": light_armies,
-					"target_light": target_light,
-					"heavy": heavy_armies,
-					"target_heavy": target_heavy,
+					"invalid_groups": invalid_group_reasons,
 					"days_since_city_change": (
 						state.day - int(
 							force_structure_last_change_day.get(
@@ -544,6 +668,11 @@ func _init() -> void:
 				elapsed,
 			]
 		)
+		if not hostile_stationed_log.is_empty():
+			print(
+				"  hostile_stationed_log=%s"
+				% str(hostile_stationed_log)
+			)
 		if simulation.ai_command_commit_failure_total > 0:
 			print(
 				"  commit_failure_log=%s"

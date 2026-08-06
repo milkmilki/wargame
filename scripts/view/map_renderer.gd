@@ -15,6 +15,12 @@ const BASE_HUD_ROW_HEIGHT := 22.0
 const BASE_HUD_CARD_HEIGHT := 96.0
 const BASE_HEADER_ONLY_TOP := 44.0
 const NATION_STATS_BUTTON_WIDTH := 104.0
+const ARMY_ICON_CONTROL_WIDTH := 320.0
+const CITY_NAME_BUTTON_WIDTH := 82.0
+const ARMY_ICON_SCALE_MIN: float = 0.10
+const ARMY_ICON_SCALE_MAX: float = 1.80
+const ARMY_ICON_SCALE_STEP: float = 0.10
+const ARMY_ICON_SCALE_DEFAULT: float = 1.00
 const VISUAL_SCALE_COMPACT: float = 0.80
 const VISUAL_SCALE_STANDARD: float = 1.00
 const VISUAL_SCALE_LARGE: float = 1.25
@@ -25,7 +31,7 @@ const DETAIL_PANEL_WIDTH: float = 350.0
 const DETAIL_PANEL_MARGIN: float = 18.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 const ACTIVE_REDRAW_FPS: float = 30.0
-const PAUSED_REDRAW_FPS: float = 5.0
+const STATIC_REDRAW_FPS: float = 5.0
 const PAPER_COLOR := Color(0.73, 0.61, 0.42)
 const PAPER_LIGHT := Color(0.86, 0.76, 0.57)
 const PAPER_DARK := Color(0.24, 0.19, 0.12)
@@ -33,6 +39,12 @@ const INK_COLOR := Color(0.105, 0.085, 0.055)
 const COMMAND_GREEN := Color(0.16, 0.20, 0.14)
 const ACCENT_RED := Color(0.55, 0.12, 0.10)
 const ACCENT_GOLD := Color(0.88, 0.67, 0.22)
+
+enum FormationIcon {
+	INFANTRY,
+	ARMOR,
+}
+
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
 var _map_size: Vector2 = Vector2(512.0, 512.0)
@@ -54,10 +66,26 @@ var _province_diplomacy_revision: int = -1
 var _blink: float = 0.0                    ## 饥饿闪烁计时
 var _redraw_elapsed: float = 0.0
 var _last_viewport_size: Vector2 = Vector2.ZERO
+var _layout_viewport_size: Vector2 = Vector2.ZERO
+var _layout_nation_count: int = -1
+var _layout_stats_open: bool = false
+var _layout_map_aspect_ratio: float = -1.0
 var _selected_city_id: int = -1
 var _selected_edge_a: int = -1
 var _selected_edge_b: int = -1
 var _nation_stats_open: bool = false
+var _city_names_visible: bool = true
+var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
+var _nation_detail_cache_day: int = -1
+var _nation_detail_cache: Dictionary = {}
+var _city_label_cache: Dictionary = {}
+var _contested_city_cache_day: int = -1
+var _contested_city_cache: Dictionary = {}
+var _visual_animation_active: bool = false
+var _army_icon_panel: PanelContainer
+var _army_icon_label: Label
+var _army_icon_slider: HSlider
+var _city_name_button: Button
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
 var _prev_pos: Dictionary = {}             ## army.id -> 上一 tick 末的逻辑位置
@@ -83,11 +111,172 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_selected_city_id = -1
 	_selected_edge_a = -1
 	_selected_edge_b = -1
+	_nation_detail_cache_day = -1
+	_nation_detail_cache.clear()
+	_city_label_cache.clear()
+	_contested_city_cache_day = -1
+	_contested_city_cache.clear()
+	_visual_animation_active = false
+	_layout_viewport_size = Vector2.ZERO
+	_layout_nation_count = -1
+	_layout_map_aspect_ratio = -1.0
 
 
 func _ready() -> void:
 	_font = create_ui_font()
 	_terrain_texture = load(TERRAIN_BACKGROUND_PATH) as Texture2D
+	_create_army_icon_scale_control()
+
+
+func _create_army_icon_scale_control() -> void:
+	_army_icon_panel = PanelContainer.new()
+	_army_icon_panel.name = "ArmyIconScaleControl"
+	_army_icon_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.12, 0.15, 0.10, 0.96)
+	panel_style.border_color = ACCENT_GOLD.darkened(0.25)
+	panel_style.set_border_width_all(1)
+	panel_style.content_margin_left = 6.0
+	panel_style.content_margin_right = 6.0
+	panel_style.content_margin_top = 2.0
+	panel_style.content_margin_bottom = 2.0
+	_army_icon_panel.add_theme_stylebox_override(
+		"panel",
+		panel_style
+	)
+	add_child(_army_icon_panel)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_army_icon_panel.add_child(row)
+
+	_army_icon_label = Label.new()
+	_army_icon_label.custom_minimum_size = Vector2(72.0, 0.0)
+	_army_icon_label.add_theme_font_override("font", _font)
+	_army_icon_label.add_theme_font_size_override("font_size", 10)
+	_army_icon_label.add_theme_color_override(
+		"font_color",
+		PAPER_LIGHT
+	)
+	row.add_child(_army_icon_label)
+
+	_army_icon_slider = HSlider.new()
+	_army_icon_slider.min_value = ARMY_ICON_SCALE_MIN
+	_army_icon_slider.max_value = ARMY_ICON_SCALE_MAX
+	_army_icon_slider.step = ARMY_ICON_SCALE_STEP
+	_army_icon_slider.custom_minimum_size = Vector2(126.0, 0.0)
+	_army_icon_slider.tooltip_text = "调整军队兵牌大小"
+	_army_icon_slider.value_changed.connect(
+		_on_army_icon_scale_changed
+	)
+	row.add_child(_army_icon_slider)
+
+	_city_name_button = Button.new()
+	_city_name_button.name = "CityNameToggle"
+	_city_name_button.toggle_mode = true
+	_city_name_button.button_pressed = _city_names_visible
+	_city_name_button.custom_minimum_size = Vector2(
+		CITY_NAME_BUTTON_WIDTH,
+		0.0
+	)
+	_city_name_button.add_theme_font_override("font", _font)
+	_city_name_button.add_theme_font_size_override("font_size", 10)
+	_city_name_button.add_theme_color_override(
+		"font_color",
+		PAPER_LIGHT
+	)
+	_city_name_button.add_theme_color_override(
+		"font_hover_color",
+		Color.WHITE
+	)
+	_city_name_button.add_theme_color_override(
+		"font_pressed_color",
+		PAPER_LIGHT
+	)
+	var city_button_normal := StyleBoxFlat.new()
+	city_button_normal.bg_color = PAPER_DARK
+	city_button_normal.border_color = (
+		ACCENT_GOLD.darkened(0.35)
+	)
+	city_button_normal.set_border_width_all(1)
+	city_button_normal.set_corner_radius_all(2)
+	var city_button_hover := (
+		city_button_normal.duplicate() as StyleBoxFlat
+	)
+	city_button_hover.bg_color = COMMAND_GREEN.lightened(0.12)
+	city_button_hover.border_color = ACCENT_GOLD
+	var city_button_pressed := (
+		city_button_normal.duplicate() as StyleBoxFlat
+	)
+	city_button_pressed.bg_color = ACCENT_GOLD.darkened(0.45)
+	city_button_pressed.border_color = PAPER_LIGHT
+	_city_name_button.add_theme_stylebox_override(
+		"normal",
+		city_button_normal
+	)
+	_city_name_button.add_theme_stylebox_override(
+		"hover",
+		city_button_hover
+	)
+	_city_name_button.add_theme_stylebox_override(
+		"pressed",
+		city_button_pressed
+	)
+	_city_name_button.tooltip_text = "开启或关闭地图城市名称"
+	_city_name_button.toggled.connect(
+		_on_city_names_toggled
+	)
+	row.add_child(_city_name_button)
+	set_army_icon_scale(_army_icon_scale)
+	set_city_names_visible(_city_names_visible)
+
+
+func _on_army_icon_scale_changed(value: float) -> void:
+	set_army_icon_scale(value)
+
+
+func set_army_icon_scale(value: float) -> void:
+	var clamped := clampf(
+		value,
+		ARMY_ICON_SCALE_MIN,
+		ARMY_ICON_SCALE_MAX
+	)
+	_army_icon_scale = clampf(
+		snappedf(clamped, ARMY_ICON_SCALE_STEP),
+		ARMY_ICON_SCALE_MIN,
+		ARMY_ICON_SCALE_MAX
+	)
+	if _army_icon_slider != null:
+		_army_icon_slider.set_value_no_signal(
+			_army_icon_scale
+		)
+	if _army_icon_label != null:
+		_army_icon_label.text = "兵牌 %d%%" % int(round(
+			_army_icon_scale * 100.0
+		))
+	queue_redraw()
+
+
+func army_icon_scale() -> float:
+	return _army_icon_scale
+
+
+func _on_city_names_toggled(visible: bool) -> void:
+	set_city_names_visible(visible)
+
+
+func set_city_names_visible(visible: bool) -> void:
+	_city_names_visible = visible
+	if _city_name_button != null:
+		_city_name_button.set_pressed_no_signal(visible)
+		_city_name_button.text = (
+			"城名 开" if visible else "城名 关"
+		)
+	queue_redraw()
+
+
+func city_names_visible() -> bool:
+	return _city_names_visible
 
 
 static func create_ui_font() -> Font:
@@ -117,10 +306,9 @@ func _process(_delta: float) -> void:
 	var viewport_changed := viewport_size != _last_viewport_size
 	if viewport_changed:
 		_last_viewport_size = viewport_size
-	var target_fps := (
-		PAUSED_REDRAW_FPS
-		if sim == null or sim.paused
-		else ACTIVE_REDRAW_FPS
+	var target_fps := target_redraw_fps(
+		sim == null or sim.paused,
+		_visual_animation_active
 	)
 	if (
 		state != null
@@ -132,6 +320,17 @@ func _process(_delta: float) -> void:
 	):
 		_redraw_elapsed = 0.0
 		queue_redraw()
+
+
+static func target_redraw_fps(
+	paused: bool,
+	animation_active: bool
+) -> float:
+	return (
+		ACTIVE_REDRAW_FPS
+		if not paused and animation_active
+		else STATIC_REDRAW_FPS
+	)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -205,17 +404,35 @@ func _clear_selection() -> void:
 func _compute_layout() -> void:
 	var vp := get_viewport_rect().size
 	var nation_count := state.nations.size() if state != null else GameState.NATION_COUNT
+	var map_aspect_ratio := clampf(
+		state.map_aspect_ratio if state != null else 1.0,
+		0.5,
+		2.5
+	)
+	if (
+		vp == _layout_viewport_size
+		and nation_count == _layout_nation_count
+		and _nation_stats_open == _layout_stats_open
+		and is_equal_approx(
+			map_aspect_ratio,
+			_layout_map_aspect_ratio
+		)
+	):
+		return
+	_layout_viewport_size = vp
+	_layout_nation_count = nation_count
+	_layout_stats_open = _nation_stats_open
+	_layout_map_aspect_ratio = map_aspect_ratio
 	var layout := compute_layout_for_viewport(
 		vp,
 		nation_count,
 		_nation_stats_open
 	)
 	var span := float(layout["span"])
-	var aspect := clampf(state.map_aspect_ratio if state != null else 1.0, 0.5, 2.5)
 	_map_size = (
-		Vector2(span, span / aspect)
-		if aspect >= 1.0
-		else Vector2(span * aspect, span)
+		Vector2(span, span / map_aspect_ratio)
+		if map_aspect_ratio >= 1.0
+		else Vector2(span * map_aspect_ratio, span)
 	)
 	_origin = (layout["origin"] as Vector2) + (Vector2(span, span) - _map_size) * 0.5
 	_cell = minf(_map_size.x, _map_size.y) / float(GameState.GRID)
@@ -223,6 +440,7 @@ func _compute_layout() -> void:
 	_side_margin = layout["side_margin"]
 	_hud_columns = layout["hud_columns"]
 	_hud_card_width = layout["hud_card_width"]
+	_layout_army_icon_scale_control()
 
 
 static func compute_layout_for_viewport(
@@ -285,6 +503,63 @@ static func nation_stats_button_rect(
 	)
 
 
+static func army_icon_scale_control_rect(
+	viewport_size: Vector2,
+	display_scale: float,
+	side_margin: float
+) -> Rect2:
+	var stats_rect := nation_stats_button_rect(
+		viewport_size,
+		display_scale,
+		side_margin
+	)
+	var size := Vector2(
+		ARMY_ICON_CONTROL_WIDTH * display_scale,
+		22.0 * display_scale
+	)
+	return Rect2(
+		Vector2(
+			stats_rect.position.x
+				- 8.0 * display_scale
+				- size.x,
+			8.0 * display_scale
+		),
+		size
+	)
+
+
+func _layout_army_icon_scale_control() -> void:
+	if _army_icon_panel == null:
+		return
+	var rect := army_icon_scale_control_rect(
+		get_viewport_rect().size,
+		_display_scale,
+		_side_margin
+	)
+	_army_icon_panel.position = rect.position
+	_army_icon_panel.size = rect.size
+	_army_icon_label.add_theme_font_size_override(
+		"font_size",
+		_font_size(10)
+	)
+	_army_icon_label.custom_minimum_size = Vector2(
+		72.0 * _display_scale,
+		0.0
+	)
+	_army_icon_slider.custom_minimum_size = Vector2(
+		112.0 * _display_scale,
+		0.0
+	)
+	_city_name_button.add_theme_font_size_override(
+		"font_size",
+		_font_size(10)
+	)
+	_city_name_button.custom_minimum_size = Vector2(
+		CITY_NAME_BUTTON_WIDTH * _display_scale,
+		0.0
+	)
+
+
 static func visual_scale_for_viewport(viewport_size: Vector2) -> float:
 	var short_side := minf(viewport_size.x, viewport_size.y)
 	if short_side < 600.0:
@@ -298,6 +573,12 @@ static func visual_scale_for_viewport(viewport_size: Vector2) -> float:
 
 func _font_size(base_size: float) -> int:
 	return maxi(int(round(base_size * _display_scale)), 1)
+
+
+func _army_font_size(base_size: float) -> int:
+	return maxi(int(round(
+		base_size * _display_scale * _army_icon_scale
+	)), 1)
 
 
 func _city_center(city: City) -> Vector2:
@@ -391,8 +672,20 @@ func _sync_snapshots() -> void:
 	_last_day = state.day
 	_prev_pos = _curr_pos
 	_curr_pos = {}
+	_visual_animation_active = not state.battles.is_empty()
 	for army in state.armies:
 		_curr_pos[army.id] = _logical_grid_pos(army)
+		if (
+			army.size > 0
+			and (
+				army.state in [
+					Army.State.MOVING,
+					Army.State.RETREATING,
+				]
+				or army.starving
+			)
+		):
+			_visual_animation_active = true
 	# 首帧或新军队无 prev：用 curr 兜底，避免从 (0,0) 飞入
 	if _prev_pos.is_empty():
 		_prev_pos = _curr_pos.duplicate()
@@ -1025,7 +1318,7 @@ static func is_edge_visible(edge: Edge) -> bool:
 
 func _draw_cities() -> void:
 	var half := 7.0 * _display_scale
-	var contested_cities := contested_city_ids(state)
+	var contested_cities := _contested_city_ids_cached()
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
@@ -1066,11 +1359,12 @@ func _draw_cities() -> void:
 				4.0 * _display_scale,
 				ACCENT_GOLD
 			)
-		var label := ("港%d" if city.is_dock else "城%d") % city.id
-		if city.is_food_hub:
-			label += " 粮"
-		if city.is_manpower_hub:
-			label += " 人"
+		_draw_city_resource_markers(city, center, half)
+		if not _city_names_visible:
+			continue
+		if not _city_label_cache.has(city.id):
+			_city_label_cache[city.id] = city_label_text(city)
+		var label := str(_city_label_cache[city.id])
 		var label_position := center + Vector2(
 			half + 4.0 * _display_scale,
 			-2.0 * _display_scale
@@ -1092,6 +1386,71 @@ func _draw_cities() -> void:
 			-1,
 			_font_size(8),
 			INK_COLOR
+		)
+
+
+static func city_label_text(city: City) -> String:
+	if city == null:
+		return ""
+	var label := ("港%d" if city.is_dock else "城%d") % city.id
+	if city.is_food_hub:
+		label += " 粮"
+	if city.is_manpower_hub:
+		label += " 人"
+	return label
+
+
+func _draw_city_resource_markers(
+	city: City,
+	center: Vector2,
+	half: float
+) -> void:
+	var marker_center := center + Vector2(
+		half * 0.78,
+		-half * 0.78
+	)
+	var marker_size := 2.5 * _display_scale
+	if city.is_food_hub:
+		var food_marker := PackedVector2Array([
+			marker_center + Vector2(0.0, -marker_size),
+			marker_center + Vector2(marker_size, marker_size),
+			marker_center + Vector2(-marker_size, marker_size),
+		])
+		draw_colored_polygon(
+			food_marker,
+			Color(0.18, 0.42, 0.16)
+		)
+		draw_polyline(
+			PackedVector2Array([
+				food_marker[0],
+				food_marker[1],
+				food_marker[2],
+				food_marker[0],
+			]),
+			INK_COLOR,
+			0.8 * _display_scale
+		)
+	if city.is_manpower_hub:
+		var manpower_center := marker_center + Vector2(
+			0.0,
+			5.0 * _display_scale if city.is_food_hub else 0.0
+		)
+		var manpower_marker := PackedVector2Array([
+			manpower_center + Vector2(0.0, -marker_size),
+			manpower_center + Vector2(marker_size, 0.0),
+			manpower_center + Vector2(0.0, marker_size),
+			manpower_center + Vector2(-marker_size, 0.0),
+		])
+		draw_colored_polygon(
+			manpower_marker,
+			Color(0.56, 0.14, 0.10)
+		)
+		draw_polyline(
+			PackedVector2Array(Array(manpower_marker) + [
+				manpower_marker[0],
+			]),
+			INK_COLOR,
+			0.8 * _display_scale
 		)
 
 
@@ -1151,26 +1510,36 @@ static func contested_city_ids(game_state: GameState) -> Dictionary:
 	return result
 
 
+func _contested_city_ids_cached() -> Dictionary:
+	if _contested_city_cache_day != state.day:
+		_contested_city_cache_day = state.day
+		_contested_city_cache = contested_city_ids(state)
+	return _contested_city_cache
+
+
 func _draw_armies() -> void:
 	var blink_on := fmod(_blink, 0.6) < 0.3
 	var pulse := 0.5 + 0.5 * sin(_blink * 6.0)
+	var icon_scale := _display_scale * _army_icon_scale
 	for army in state.armies:
 		if army.size <= 0:
 			continue
+		var profile := army_counter_profile(army.max_size)
+		var is_heavy := (
+			int(profile["icon"]) == FormationIcon.ARMOR
+		)
 		var pos := (
 			_army_position(army)
-			+ _army_counter_offset(army.id) * _display_scale
+			+ _army_counter_offset(army.id) * icon_scale
 		)
-		var width := (
-			40.0 if army.max_size >= Edge.STANDARD_MANPOWER else 34.0
-		) * _display_scale
-		var height := 23.0 * _display_scale
+		var width := float(profile["width"]) * icon_scale
+		var height := float(profile["height"]) * icon_scale
 		var rect := Rect2(
 			pos - Vector2(width, height) * 0.5,
 			Vector2(width, height)
 		)
 		if army.state == Army.State.HOLDING:
-			var h := 18.0 * _display_scale
+			var h := 18.0 * icon_scale
 			draw_polyline(
 				PackedVector2Array([
 					pos + Vector2(0.0, -h),
@@ -1180,73 +1549,52 @@ func _draw_armies() -> void:
 					pos + Vector2(0.0, -h),
 				]),
 				Color(0.12, 0.25, 0.20, 0.88),
-				2.0 * _display_scale
+				2.0 * icon_scale
 			)
-		draw_rect(
-			Rect2(
-				rect.position + Vector2(2.5, 3.0) * _display_scale,
-				rect.size
-			),
-			Color(0.03, 0.02, 0.01, 0.58),
-			true
-		)
 		var counter_color := paper_nation_color(
 			state.nations[army.owner_nation].color
 		).lightened(0.15)
 		if army.starving and blink_on:
 			counter_color = PAPER_LIGHT
-		draw_rect(rect, counter_color, true)
-		draw_rect(
-			Rect2(rect.position, Vector2(rect.size.x, 5.0 * _display_scale)),
-			paper_nation_color(state.nations[army.owner_nation].color),
-			true
+		_draw_army_counter_body(
+			rect,
+			counter_color,
+			paper_nation_color(
+				state.nations[army.owner_nation].color
+			),
+			is_heavy,
+			icon_scale
 		)
-		draw_rect(rect, INK_COLOR, false, 2.0 * _display_scale)
-		var symbol_top := rect.position.y + 7.0 * _display_scale
-		var symbol_bottom := rect.position.y + 15.0 * _display_scale
-		if army.max_size >= Edge.STANDARD_MANPOWER:
-			draw_arc(
-				Vector2(rect.get_center().x, (symbol_top + symbol_bottom) * 0.5),
-				5.0 * _display_scale,
-				0.0,
-				TAU,
-				20,
-				INK_COLOR,
-				1.4 * _display_scale
-			)
-		else:
-			draw_line(
-				Vector2(rect.position.x + 8.0 * _display_scale, symbol_top),
-				Vector2(rect.end.x - 8.0 * _display_scale, symbol_bottom),
-				INK_COLOR,
-				1.2 * _display_scale
-			)
-			draw_line(
-				Vector2(rect.end.x - 8.0 * _display_scale, symbol_top),
-				Vector2(rect.position.x + 8.0 * _display_scale, symbol_bottom),
-				INK_COLOR,
-				1.2 * _display_scale
-			)
+		_draw_army_formation_symbol(
+			rect,
+			int(profile["icon"]),
+			icon_scale
+		)
+		_draw_formation_marks(
+			rect,
+			int(profile["marks"]),
+			icon_scale
+		)
 		var state_code := _army_state_code(army.state)
 		draw_string(
 			_font,
-			rect.position + Vector2(2.5, 4.5) * _display_scale,
+			rect.position + Vector2(2.5, 4.5) * icon_scale,
 			state_code,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
-			_font_size(6),
+			_army_font_size(6),
 			PAPER_LIGHT
 		)
 		draw_string(
 			_font,
 			Vector2(
-				rect.position.x + 2.0 * _display_scale,
-				rect.end.y - 2.5 * _display_scale
+				rect.position.x + 2.0 * icon_scale,
+				rect.end.y - 2.5 * icon_scale
 			),
 			"%dK" % int(round(float(army.size) / 1000.0)),
 			HORIZONTAL_ALIGNMENT_LEFT,
-			rect.size.x - 4.0 * _display_scale,
-			_font_size(7),
+			rect.size.x - 4.0 * icon_scale,
+			_army_font_size(7),
 			INK_COLOR
 		)
 		if (
@@ -1256,7 +1604,7 @@ func _draw_armies() -> void:
 			var pennant := PackedVector2Array([
 				rect.position + Vector2(rect.size.x * 0.55, 0.0),
 				rect.position + Vector2(rect.size.x * 0.82, 0.0),
-				rect.position + Vector2(rect.size.x * 0.68, -7.0 * _display_scale),
+				rect.position + Vector2(rect.size.x * 0.68, -7.0 * icon_scale),
 			])
 			draw_colored_polygon(pennant, ACCENT_GOLD)
 			draw_polyline(
@@ -1267,23 +1615,195 @@ func _draw_armies() -> void:
 					pennant[0],
 				]),
 				INK_COLOR,
-				1.0 * _display_scale
+				1.0 * icon_scale
 			)
 		if army.state == Army.State.FIGHTING:
 			draw_rect(
-				rect.grow((2.0 + pulse * 2.0) * _display_scale),
+				rect.grow((2.0 + pulse * 2.0) * icon_scale),
 				Color(0.70, 0.10, 0.07, 0.55 + 0.35 * pulse),
 				false,
-				2.2 * _display_scale
+				2.2 * icon_scale
 			)
 		elif army.state == Army.State.RECOVERING:
 			draw_rect(
-				rect.grow(2.0 * _display_scale),
+				rect.grow(2.0 * icon_scale),
 				Color(0.20, 0.42, 0.45, 0.90),
 				false,
-				2.0 * _display_scale
+				2.0 * icon_scale
 			)
-		_draw_morale_bar(rect, army.morale)
+		_draw_morale_bar(rect, army.morale, icon_scale)
+
+
+static func army_counter_profile(max_size: int) -> Dictionary:
+	if max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+		return {
+			"icon": FormationIcon.ARMOR,
+			"width": 44.0,
+			"height": 26.0,
+			"marks": 3,
+		}
+	return {
+		"icon": FormationIcon.INFANTRY,
+		"width": 34.0,
+		"height": 23.0,
+		"marks": 1,
+	}
+
+
+func _draw_army_counter_body(
+	rect: Rect2,
+	fill: Color,
+	nation_color: Color,
+	is_heavy: bool,
+	icon_scale: float
+) -> void:
+	var shadow_offset := Vector2(2.5, 3.0) * icon_scale
+	if not is_heavy:
+		draw_rect(
+			Rect2(rect.position + shadow_offset, rect.size),
+			Color(0.03, 0.02, 0.01, 0.58),
+			true
+		)
+		draw_rect(rect, fill, true)
+		draw_rect(
+			Rect2(
+				rect.position,
+				Vector2(rect.size.x, 5.0 * icon_scale)
+			),
+			nation_color,
+			true
+		)
+		draw_rect(
+			rect,
+			INK_COLOR,
+			false,
+			2.0 * icon_scale
+		)
+		return
+	var chamfer := 4.0 * icon_scale
+	var shape := _chamfered_counter_points(
+		rect,
+		chamfer
+	)
+	var shadow_shape := PackedVector2Array()
+	for point in shape:
+		shadow_shape.append(point + shadow_offset)
+	draw_colored_polygon(
+		shadow_shape,
+		Color(0.03, 0.02, 0.01, 0.60)
+	)
+	draw_colored_polygon(shape, fill)
+	draw_line(
+		Vector2(
+			rect.position.x + chamfer,
+			rect.position.y + 2.5 * icon_scale
+		),
+		Vector2(
+			rect.end.x - chamfer,
+			rect.position.y + 2.5 * icon_scale
+		),
+		nation_color,
+		5.0 * icon_scale
+	)
+	draw_polyline(
+		PackedVector2Array(Array(shape) + [shape[0]]),
+		INK_COLOR,
+		2.2 * icon_scale
+	)
+
+
+static func _chamfered_counter_points(
+	rect: Rect2,
+	chamfer: float
+) -> PackedVector2Array:
+	return PackedVector2Array([
+		rect.position + Vector2(chamfer, 0.0),
+		Vector2(rect.end.x - chamfer, rect.position.y),
+		Vector2(rect.end.x, rect.position.y + chamfer),
+		rect.end - Vector2(0.0, chamfer),
+		rect.end - Vector2(chamfer, 0.0),
+		Vector2(rect.position.x + chamfer, rect.end.y),
+		Vector2(rect.position.x, rect.end.y - chamfer),
+		rect.position + Vector2(0.0, chamfer),
+	])
+
+
+func _draw_army_formation_symbol(
+	rect: Rect2,
+	icon: int,
+	icon_scale: float
+) -> void:
+	var center := rect.get_center() + Vector2(
+		0.0,
+		1.5 * icon_scale
+	)
+	if icon == FormationIcon.ARMOR:
+		var ellipse := PackedVector2Array()
+		for index in range(17):
+			var angle := TAU * float(index) / 16.0
+			ellipse.append(
+				center + Vector2(
+					cos(angle) * 7.0,
+					sin(angle) * 3.6
+				) * icon_scale
+			)
+		draw_polyline(
+			ellipse,
+			INK_COLOR,
+			1.5 * icon_scale
+		)
+		for track_offset in [-5.0, 5.0]:
+			draw_line(
+				center + Vector2(
+					-8.0,
+					track_offset
+				) * icon_scale,
+				center + Vector2(
+					8.0,
+					track_offset
+				) * icon_scale,
+				INK_COLOR,
+				1.0 * icon_scale
+			)
+		return
+	draw_line(
+		center + Vector2(-8.0, -5.0) * icon_scale,
+		center + Vector2(8.0, 5.0) * icon_scale,
+		INK_COLOR,
+		1.4 * icon_scale
+	)
+	draw_line(
+		center + Vector2(8.0, -5.0) * icon_scale,
+		center + Vector2(-8.0, 5.0) * icon_scale,
+		INK_COLOR,
+		1.4 * icon_scale
+	)
+
+
+func _draw_formation_marks(
+	rect: Rect2,
+	count: int,
+	icon_scale: float
+) -> void:
+	var mark_width := 1.8 * icon_scale
+	var gap := 1.4 * icon_scale
+	var total_width := (
+		float(count) * mark_width
+		+ float(maxi(count - 1, 0)) * gap
+	)
+	var start_x := rect.end.x - 3.0 * icon_scale - total_width
+	for index in range(count):
+		draw_rect(
+			Rect2(
+				Vector2(
+					start_x + float(index) * (mark_width + gap),
+					rect.position.y + 1.0 * icon_scale
+				),
+				Vector2(mark_width, 3.0 * icon_scale)
+			),
+			PAPER_LIGHT,
+			true
+		)
 
 
 static func _army_counter_offset(army_id: int) -> Vector2:
@@ -1313,10 +1833,17 @@ static func _army_state_code(state_value: int) -> String:
 
 
 ## 兵牌下沿士气条：红(0)→黄(0.5)→绿(1)。
-func _draw_morale_bar(rect: Rect2, morale: float) -> void:
+func _draw_morale_bar(
+	rect: Rect2,
+	morale: float,
+	icon_scale: float
+) -> void:
 	var w := rect.size.x
-	var h := 3.0 * _display_scale
-	var top_left := Vector2(rect.position.x, rect.end.y + 2.0 * _display_scale)
+	var h := 3.0 * icon_scale
+	var top_left := Vector2(
+		rect.position.x,
+		rect.end.y + 2.0 * icon_scale
+	)
 	draw_rect(Rect2(top_left, Vector2(w, h)), Color(0, 0, 0, 0.55), true)
 	var m := clampf(morale, 0.0, 1.0)
 	var fill := (
@@ -1458,6 +1985,11 @@ func _draw_hud() -> void:
 		_display_scale,
 		_side_margin
 	)
+	var army_scale_rect := army_icon_scale_control_rect(
+		get_viewport_rect().size,
+		_display_scale,
+		_side_margin
+	)
 	draw_rect(
 		Rect2(
 			button_rect.position + Vector2(1.5, 2.0) * _display_scale,
@@ -1496,7 +2028,9 @@ func _draw_hud() -> void:
 		Vector2(_side_margin, header_y),
 		header,
 		HORIZONTAL_ALIGNMENT_LEFT,
-		button_rect.position.x - _side_margin - 8.0 * _display_scale,
+		army_scale_rect.position.x
+			- _side_margin
+			- 8.0 * _display_scale,
 		_font_size(13),
 		PAPER_LIGHT
 	)
@@ -1577,7 +2111,15 @@ func _draw_hud() -> void:
 
 func _draw_nation_detail_card(nation_id: int, rect: Rect2) -> void:
 	var n := state.nations[nation_id]
-	var details := nation_detail_lines(state, nation_id)
+	if _nation_detail_cache_day != state.day:
+		_nation_detail_cache_day = state.day
+		_nation_detail_cache.clear()
+	if not _nation_detail_cache.has(nation_id):
+		_nation_detail_cache[nation_id] = nation_detail_lines(
+			state,
+			nation_id
+		)
+	var details: Array[String] = _nation_detail_cache[nation_id]
 	var at_war := not state.wars_of(nation_id).is_empty()
 	var background := Color(0.76, 0.66, 0.48, 0.96)
 	if at_war:

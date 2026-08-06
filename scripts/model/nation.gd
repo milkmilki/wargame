@@ -31,6 +31,8 @@ var campaign_preparation_started_day: int = -1
 ## 多个目标共享国家级准备时钟，不能让同一军在多个方向重复计入已集结兵力。
 var campaign_preparation_targets: Array[int] = []
 var campaign_preparation_assignments: Dictionary = {}
+## target_city_id -> battle_group_id。每个目标只能由一个持久战团承担。
+var campaign_preparation_group_assignments: Dictionary = {}
 ## 正在等待 180 天满准备的目标城集合。
 var campaign_full_preparation_targets: Array[int] = []
 ## 当前波次的具体战役计划：army_id -> target_city_id。
@@ -54,6 +56,15 @@ var campaign_post_capture_plans: Dictionary = {}
 var campaign_plan_targets: Array[int] = []
 var campaign_plan_wave: int = -1
 var campaign_plan_primary_city: int = -1
+## 最近一次实际发动攻势的主战区锚点。只要附近仍有合法敌城，后续波次继续
+## 在该战区组织，避免重军因全局评分微调在远距离方向间反复转场。
+var campaign_theater_anchor_city: int = -1
+var campaign_theater_started_day: int = -1
+## 持久战团容器。空战团也保留，后续按“轻、轻、重”顺序补充成员。
+var battle_groups: Array[BattleGroup] = []
+var next_battle_group_id: int = 0
+## 当前控制区派生的持久边境防区。city_id -> FrontierDefenseSector。
+var frontier_defense_sectors: Dictionary = {}
 ## 首都与粮仓登记。当前每国只有首都一个粮仓；数组结构为未来多粮仓保留扩展位。
 var capital_city_id: int = -1
 var warehouse_city_ids: Array[int] = []

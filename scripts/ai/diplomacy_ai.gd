@@ -21,7 +21,7 @@ enum FoodPosture {
 
 const MIN_WAR_DAYS: int = 180
 const WAR_FATIGUE_REFERENCE_DAYS: int = 360
-const MIN_NEUTRAL_DAYS: int = 180
+const MIN_NEUTRAL_DAYS: int = 90
 const MIN_ALLIANCE_DAYS: int = 360
 const MAX_CONCURRENT_WARS: int = 1
 const MAX_DEFENSIVE_ALLIES: int = 1
@@ -34,7 +34,10 @@ const PEACE_EXTERNAL_THREAT_WEIGHT: float = 1.50
 const PEACE_RESOURCE_REFERENCE_MONTHS: float = 24.0
 const PEACE_MAX_BORDER_MASSING_RATIO: float = 1.50
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
-const WAR_DECLARE_SCORE: float = 1.00
+const WAR_DECLARE_SCORE: float = 0.85
+const PEACE_ESCALATION_START_DAYS: int = 180
+const PEACE_ESCALATION_FULL_DAYS: int = 540
+const PEACE_ESCALATION_MAX_BONUS: float = 0.75
 const RECENT_CAPTURE_OBJECTIVE_BONUS: float = 4.0
 const RECENT_RECLAMATION_OBJECTIVE_BONUS: float = 20.0
 const LEAVE_ALLIANCE_SCORE: float = 0.90
@@ -722,6 +725,11 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 		nation_id,
 		target_id
 	)
+	var peace_escalation := neutral_peace_escalation(
+		state,
+		nation_id,
+		target_id
+	)
 	return (
 		ratio
 		+ target_distraction
@@ -732,8 +740,37 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 		+ aggression_bonus
 		- attitude * ATTITUDE_WAR_WEIGHT
 		+ unification_pressure
+		+ peace_escalation
 		- own_overextension
 	)
+
+
+static func neutral_peace_escalation(
+	state: GameState,
+	nation_id: int,
+	target_id: int
+) -> float:
+	if (
+		state.relation_between(nation_id, target_id)
+			!= GameState.DiplomaticRelation.NEUTRAL
+	):
+		return 0.0
+	var neutral_days := maxi(
+		state.day - state.relation_since(nation_id, target_id),
+		0
+	)
+	var escalation_range := maxi(
+		PEACE_ESCALATION_FULL_DAYS
+			- PEACE_ESCALATION_START_DAYS,
+		1
+	)
+	var ratio := clampf(
+		float(neutral_days - PEACE_ESCALATION_START_DAYS)
+			/ float(escalation_range),
+		0.0,
+		1.0
+	)
+	return ratio * PEACE_ESCALATION_MAX_BONUS
 
 
 static func _ai_aggression(
@@ -1002,10 +1039,18 @@ static func mobilization_capacity(
 			MOBILIZATION_ARMY_SIZE
 		)
 	)
+	var protected_gold := (
+		0
+		if posture in [
+			FoodPosture.OFFENSIVE_WAR,
+			FoodPosture.DEFENSIVE_WAR,
+		]
+		else MIN_GOLD_RESERVE
+	)
 	var gold_units := int(floor(
 		float(maxi(
 			state.nations[nation_id].treasury_gold
-				- MIN_GOLD_RESERVE,
+				- protected_gold,
 			0
 		)) / float(maxi(formation_gold_cost, 1))
 	))
@@ -1250,8 +1295,13 @@ static func select_war_objective(
 			+ (2.0 if city.has_warehouse else 0.0)
 			+ (4.0 if city.is_food_hub else 0.0)
 			+ (4.0 if city.is_manpower_hub else 0.0)
-			+ _target_cut_ratio(state, city.id, target_id) * 4.0
 		)
+		var encirclement_score := encirclement_value(
+			state,
+			city.id,
+			target_id
+		)
+		strategic_value += encirclement_score
 		var fort_vulnerability := Simulation.city_fort_vulnerability(
 			city,
 			state.day
@@ -1288,7 +1338,7 @@ static func select_war_objective(
 				"city_id": city.id,
 				"value": value,
 				"reason": (
-					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、争夺值%.2f）"
+					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、包围值%.2f、争夺值%.2f）"
 					% [
 						city.id,
 						(
@@ -1309,6 +1359,7 @@ static func select_war_objective(
 						city.food_per_half_year,
 						city.manpower_per_month,
 						strategic_value,
+						encirclement_score,
 						contest_value,
 					]
 				),
@@ -1551,6 +1602,11 @@ static func _collect_war_actions(
 			nation.id,
 			best_target
 		)
+		var peace_escalation := neutral_peace_escalation(
+			state,
+			nation.id,
+			best_target
+		)
 		actions.append({
 			"kind": Action.PREPARE_WAR,
 			"a": nation.id,
@@ -1564,7 +1620,7 @@ static func _collect_war_actions(
 					"准备对国%d发动战争，目标%s；储备金%d/%d、粮%d/%d、人%d/%d；"
 					+ "目标兵力%d，年粮结余%.0f，可支撑%.1f年；"
 					+ "现有编制全满年结余%.0f，可支撑%.1f年；"
-					+ "外交态度%.2f、统一竞争压力%.2f；"
+					+ "外交态度%.2f、统一竞争压力%.2f、长期和平压力%.2f；"
 					+ "先集结并额外动员%d军；战争收益%.2f"
 				)
 				% [
@@ -1583,6 +1639,7 @@ static func _collect_war_actions(
 					food_plan["full_strength_runway_years"],
 					attitude,
 					unification_pressure,
+					peace_escalation,
 					mobilization_armies,
 					best_score,
 				]
@@ -1626,18 +1683,28 @@ static func _collect_existing_war_preparation(
 			- nation.war_preparation_unready_since_day
 			>= WAR_PREPARATION_RESOURCE_GRACE_DAYS
 	)
+	var preparation_ready := war_preparation_ready(
+		state,
+		nation_id
+	)
+	var assembly_deadline_expired := (
+		elapsed >= WAR_PREPARATION_MAX_DAYS
+		and not preparation_ready
+	)
 	if (
 		not valid
 		or resource_grace_expired
+		or assembly_deadline_expired
 	):
 		actions.append({
 			"kind": Action.CANCEL_WAR_PREPARATION,
 			"a": nation_id,
 			"b": target_id,
 			"reason": (
-				"目标失效、进攻道路中断或资源连续不足%d天，取消对国%d的战争准备"
+				"目标失效、进攻道路中断、资源连续不足%d天或%d天内无法完成集结，取消对国%d的战争准备"
 				% [
 					WAR_PREPARATION_RESOURCE_GRACE_DAYS,
+					WAR_PREPARATION_MAX_DAYS,
 					target_id,
 				]
 			),
@@ -1647,7 +1714,7 @@ static func _collect_existing_war_preparation(
 	if not resources_ready:
 		committed[nation_id] = true
 		return
-	if not war_preparation_ready(state, nation_id):
+	if not preparation_ready:
 		if _collect_preparation_alliance(
 			state,
 			nation_id,
@@ -1763,6 +1830,53 @@ static func war_preparation_ready(state: GameState, nation_id: int) -> bool:
 			< WAR_PREPARATION_MIN_DAYS
 	):
 		return false
+	if (
+		state.uses_heightmap
+		and nation.campaign_preparation_group_assignments.has(
+			nation.war_preparation_objective_city
+		)
+	):
+		var group_id := int(
+			nation.campaign_preparation_group_assignments[
+				nation.war_preparation_objective_city
+			]
+		)
+		var members := state.battle_group_members(
+			nation_id,
+			group_id
+		)
+		if members.is_empty():
+			return false
+		var staging := staging_cities_for_objective(
+			state,
+			nation_id,
+			nation.war_preparation_objective_city
+		)
+		for army in members:
+			var staged := (
+				army.state in [
+					Army.State.IDLE,
+					Army.State.RECOVERING,
+				]
+				and staging.has(army.location_city)
+			) or (
+				army.state == Army.State.HOLDING
+				and (
+					(
+						army.move_from
+							== nation.war_preparation_objective_city
+						and staging.has(army.move_to)
+					)
+					or (
+						army.move_to
+							== nation.war_preparation_objective_city
+						and staging.has(army.move_from)
+					)
+				)
+			)
+			if not staged:
+				return false
+		return true
 	return (
 		staged_troops_for_objective(
 			state,
@@ -1902,9 +2016,54 @@ static func _target_cut_ratio(
 	target_city: int,
 	target_nation: int
 ) -> float:
+	return float(
+		_target_encirclement_effect(
+			state,
+			target_city,
+			target_nation
+		)["cut_city_ratio"]
+	)
+
+
+static func encirclement_value(
+	state: GameState,
+	target_city: int,
+	target_nation: int
+) -> float:
+	if (
+		target_nation < 0
+		or target_nation >= state.nations.size()
+		or target_city < 0
+		or target_city >= state.cities.size()
+	):
+		return 0.0
+	var effect := _target_encirclement_effect(
+		state,
+		target_city,
+		target_nation
+	)
+	return (
+		float(effect["cut_city_ratio"]) * 6.0
+		+ float(effect["cut_troop_ratio"]) * 8.0
+		+ _isolated_garrison_power_ratio(
+			state,
+			target_city,
+			target_nation
+		) * 8.0
+	)
+
+
+static func _target_encirclement_effect(
+	state: GameState,
+	target_city: int,
+	target_nation: int
+) -> Dictionary:
 	var capital := state.nations[target_nation].capital_city_id
 	if capital < 0 or capital == target_city:
-		return 0.0
+		return {
+			"cut_city_ratio": 0.0,
+			"cut_troop_ratio": 0.0,
+		}
 	var reachable := {capital: true}
 	var queue: Array[int] = [capital]
 	while not queue.is_empty():
@@ -1916,7 +2075,10 @@ static func _target_cut_ratio(
 			if (
 				edge == null
 				or edge.max_manpower <= 0
-				or state.cities[neighbor].owner_nation != target_nation
+				or not state.has_military_access(
+					target_nation,
+					state.cities[neighbor].owner_nation
+				)
 			):
 				continue
 			reachable[neighbor] = true
@@ -1929,7 +2091,62 @@ static func _target_cut_ratio(
 		total += 1
 		if not reachable.has(city.id):
 			cut += 1
-	return float(cut) / float(maxi(total, 1))
+	var total_power := 0.0
+	var cut_power := 0.0
+	for army in state.armies:
+		if army.owner_nation != target_nation or army.size <= 0:
+			continue
+		var power := ArmyPower.effective(army)
+		total_power += power
+		var node_city := army.current_city_node()
+		if (
+			node_city >= 0
+			and node_city != target_city
+			and not reachable.has(node_city)
+		):
+			cut_power += power
+	return {
+		"cut_city_ratio": (
+			float(cut) / float(maxi(total, 1))
+		),
+		"cut_troop_ratio": (
+			cut_power / maxf(total_power, 1.0)
+		),
+	}
+
+
+static func _isolated_garrison_power_ratio(
+	state: GameState,
+	city_id: int,
+	nation_id: int
+) -> float:
+	var total_power := 0.0
+	var isolated_power := 0.0
+	var retreat_route_by_capacity := {}
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		var power := ArmyPower.effective(army)
+		total_power += power
+		if army.current_city_node() != city_id:
+			continue
+		var required_manpower := maxi(army.max_size, 1)
+		if not retreat_route_by_capacity.has(
+			required_manpower
+		):
+			retreat_route_by_capacity[required_manpower] = (
+				Pathfinding.has_friendly_retreat_route_from_city(
+					state,
+					nation_id,
+					city_id,
+					required_manpower
+				)
+			)
+		if not bool(
+			retreat_route_by_capacity[required_manpower]
+		):
+			isolated_power += power
+	return isolated_power / maxf(total_power, 1.0)
 
 
 static func _coalition_power(state: GameState, nation_id: int) -> float:

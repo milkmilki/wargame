@@ -34,6 +34,11 @@ static func dijkstra_field(
 		order_nation,
 		start
 	)
+	var blocked_enemy_edges := (
+		_enemy_occupied_edge_keys(state, allowed_nation)
+		if block_contested_edges
+		else {}
+	)
 	var queue: Array[Dictionary] = [{
 		"city": start,
 		"distance": 0.0,
@@ -74,7 +79,12 @@ static func dijkstra_field(
 				or e.max_manpower < required_manpower
 			):
 				continue
-			if block_contested_edges and _edge_has_enemy_presence(state, e, allowed_nation):
+			if (
+				block_contested_edges
+				and blocked_enemy_edges.has(
+					GameState.edge_key(e.city_a, e.city_b)
+				)
+			):
 				continue
 			var w := (
 				float(e.distance)
@@ -241,6 +251,36 @@ static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id
 	return reconstruct(field["prev"], start, best_goal)
 
 
+## 城市中的军队是否存在通往其他本国/盟友城市的合法撤退路径。
+## 当前城本身不算退路；道路容量必须容纳该军满编，敌国城市不能作为中间节点。
+static func has_friendly_retreat_route_from_city(
+	state: GameState,
+	nation_id: int,
+	city_id: int,
+	required_manpower: int = 0
+) -> bool:
+	if (
+		nation_id < 0
+		or nation_id >= state.nations.size()
+		or city_id < 0
+		or city_id >= state.cities.size()
+	):
+		return false
+	for neighbor in state.neighbors(city_id):
+		var edge := state.edge_of(city_id, neighbor)
+		if (
+			edge != null
+			and edge.max_manpower > 0
+			and edge.max_manpower >= required_manpower
+			and state.has_military_access(
+				nation_id,
+				state.cities[neighbor].owner_nation
+			)
+		):
+			return true
+	return false
+
+
 ## 军队在边上溃败时，从真实交战位置分别计算到两个端点的剩余距离，再叠加端点到
 ## 最近友城的 Dijkstra 距离，返回全局最近路线。path 不含 endpoint。
 ## 返回 {endpoint, path, distance}；无友城时返回空 Dictionary。
@@ -391,6 +431,10 @@ static func build_supply_network(
 	nation_id: int
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	var blocked_enemy_edges := _enemy_occupied_edge_keys(
+		state,
+		nation_id
+	)
 	var owner_ids: Array = []
 	for owner in state.nations:
 		if state.has_military_access(nation_id, owner.id):
@@ -426,7 +470,9 @@ static func build_supply_network(
 				"dist": _supply_loss_field(
 					state,
 					warehouse.id,
-					nation_id
+					nation_id,
+					blocked_enemy_edges,
+					true
 				)["dist"],
 			})
 	return result
@@ -620,7 +666,13 @@ static func _reachable_supply_losses(
 	return result
 
 
-static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> Dictionary:
+static func _supply_loss_field(
+	state: GameState,
+	start: int,
+	nation_id: int,
+	blocked_enemy_edges: Dictionary = {},
+	blocked_edges_ready: bool = false
+) -> Dictionary:
 	var dist := {}
 	var prev := {}
 	var visited := {}
@@ -632,23 +684,25 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 		nation_id,
 		start
 	)
-	while true:
-		var u := -1
-		var best := INF
-		for cid in dist.keys():
-			if visited.has(cid):
-				continue
-			var d: float = dist[cid]
-			if d < best or (
-				d < INF
-				and is_equal_approx(d, best)
-				and int(order_rank[int(cid)])
-					< int(order_rank.get(u, 1 << 30))
-			):
-				best = d
-				u = cid
-		if u == -1:
-			break
+	if not blocked_edges_ready:
+		blocked_enemy_edges = _enemy_occupied_edge_keys(
+			state,
+			nation_id
+		)
+	var queue: Array[Dictionary] = [{
+		"city": start,
+		"distance": 0.0,
+		"rank": int(order_rank[start]),
+	}]
+	while not queue.is_empty():
+		var entry := _heap_pop(queue)
+		var u := int(entry["city"])
+		if (
+			visited.has(u)
+			or float(entry["distance"])
+				> float(dist[u]) + 0.000001
+		):
+			continue
 		visited[u] = true
 		for v in state.neighbors(u):
 			if visited.has(v):
@@ -665,7 +719,9 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 			var edge := state.edge_of(u, v)
 			if edge == null or edge.max_manpower <= 0:
 				continue
-			if _edge_has_enemy_presence(state, edge, nation_id):
+			if blocked_enemy_edges.has(
+				GameState.edge_key(edge.city_a, edge.city_b)
+			):
 				continue
 			var nd: float = dist[u] + _supply_edge_loss(edge)
 			if nd < float(dist[v]) or (
@@ -678,6 +734,11 @@ static func _supply_loss_field(state: GameState, start: int, nation_id: int) -> 
 			):
 				dist[v] = nd
 				prev[v] = u
+				_heap_push(queue, {
+					"city": v,
+					"distance": nd,
+					"rank": int(order_rank[v]),
+				})
 	return {"dist": dist, "prev": prev}
 
 
@@ -695,15 +756,37 @@ static func _supply_edge_loss(edge: Edge) -> float:
 static func _edge_has_enemy_presence(state: GameState, edge: Edge, nation_id: int) -> bool:
 	if edge == null:
 		return false
+	return _enemy_occupied_edge_keys(
+		state,
+		nation_id
+	).has(GameState.edge_key(edge.city_a, edge.city_b))
+
+
+static func _enemy_occupied_edge_keys(
+	state: GameState,
+	nation_id: int
+) -> Dictionary:
+	var result := {}
+	if nation_id < 0:
+		return result
 	for army in state.armies:
-		if army.size <= 0 or not army.on_edge or army.move_to == -1:
+		if (
+			army.size <= 0
+			or not army.on_edge
+			or army.move_to == -1
+			or not state.is_enemy(
+				army.owner_nation,
+				nation_id
+			)
+		):
 			continue
-		if not state.is_enemy(army.owner_nation, nation_id):
-			continue
-		var army_edge := state.edge_of(army.move_from, army.move_to)
-		if army_edge == edge:
-			return true
-	return false
+		result[
+			GameState.edge_key(
+				army.move_from,
+				army.move_to
+			)
+		] = true
+	return result
 
 
 static func _origin_of(army: Army) -> int:

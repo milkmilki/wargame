@@ -123,22 +123,31 @@ static func _merge_key(army: Army) -> String:
 		int(round(army.offensive_attack_multiplier * 1000.0)),
 		army.offensive_bonus_until_day,
 	]
+	var role_key := "R:%d:G:%d:L:%d:%d:%d" % [
+		army.strategic_role,
+		army.battle_group_id,
+		army.line_assignment_city,
+		army.line_assignment_posture,
+		army.line_assignment_edge,
+	]
 	if army.state in [Army.State.IDLE, Army.State.RECOVERING]:
-		return "%d:C:%d:S:%d:%s" % [
+		return "%d:C:%d:S:%d:%s:%s" % [
 			army.owner_nation,
 			army.location_city,
 			army.state,
+			role_key,
 			bonus_key,
 		]
 	if army.state == Army.State.HOLDING and army.on_edge and army.move_to != -1:
 		var lo := mini(army.move_from, army.move_to)
 		var hi := maxi(army.move_from, army.move_to)
 		var norm := army.move_progress if army.move_from == lo else 1.0 - army.move_progress
-		return "%d:E:%d:%d:P:%d:%s" % [
+		return "%d:E:%d:%d:P:%d:%s:%s" % [
 			army.owner_nation,
 			lo,
 			hi,
 			int(round(norm * 10000.0)),
+			role_key,
 			bonus_key,
 		]
 	return ""

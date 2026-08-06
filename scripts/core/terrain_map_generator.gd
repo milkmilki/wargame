@@ -37,7 +37,7 @@ static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "settlement-v1:%s:%d" % [source_path, city_count]
+	var cache_key := "settlement-v2:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -569,6 +569,12 @@ static func _build_roads(
 			[triangles[index + 2], triangles[index]],
 		]:
 			local_keys[_pair_key(int(pair[0]), int(pair[1]))] = true
+	var planar_candidates: Array[Dictionary] = []
+	for candidate in candidates:
+		if local_keys.has(
+			_pair_key(int(candidate["a"]), int(candidate["b"]))
+		):
+			planar_candidates.append(candidate)
 
 	var selected: Array[Dictionary] = []
 	var selected_keys := {}
@@ -577,7 +583,7 @@ static func _build_roads(
 	for city_id in range(parent.size()):
 		parent[city_id] = city_id
 	var backbone_edges := 0
-	for candidate in candidates:
+	for candidate in planar_candidates:
 		if (
 			float(candidate["land_ratio"]) < 0.88
 			or float(candidate["length"]) > PREFERRED_BACKBONE_LENGTH
@@ -592,7 +598,7 @@ static func _build_roads(
 		selected.append(candidate)
 		selected_keys[_pair_key(int(candidate["a"]), int(candidate["b"]))] = true
 		backbone_edges += 1
-	for candidate in candidates:
+	for candidate in planar_candidates:
 		if backbone_edges >= pixels.size() - 1:
 			break
 		var root_a := _root(parent, int(candidate["a"]))
@@ -604,6 +610,10 @@ static func _build_roads(
 		selected.append(candidate)
 		selected_keys[_pair_key(int(candidate["a"]), int(candidate["b"]))] = true
 		backbone_edges += 1
+	assert(
+		backbone_edges == pixels.size() - 1,
+		"Delaunay 平面候选图必须生成完整连通骨架"
+	)
 
 	var local_edge_keys := local_keys.keys()
 	local_edge_keys.sort()

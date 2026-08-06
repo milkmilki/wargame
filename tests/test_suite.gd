@@ -61,6 +61,7 @@ func _init() -> void:
 	_test_diplomacy_state_and_ai()
 	_test_peacetime_demobilization_and_border_defense()
 	_test_resource_hubs_and_food_mobilization()
+	_test_small_nation_survival_and_emergency_recruitment()
 	_test_combat_fairness_and_conservation()
 	_test_structured_battle_log()
 	_test_equivariant_ordering()
@@ -120,12 +121,21 @@ func _test_world_generation() -> void:
 	)
 	var expected_initial_armies := 0
 	for initial_nation in gs.nations:
-		expected_initial_armies += gs.target_army_count(
-			initial_nation.id
+		var initial_frontier := {}
+		for initial_city in gs.cities_of(initial_nation.id):
+			for initial_neighbor in gs.neighbors(initial_city.id):
+				if (
+					gs.cities[initial_neighbor].owner_nation
+						!= initial_nation.id
+				):
+					initial_frontier[initial_city.id] = true
+					break
+		expected_initial_armies += (
+			initial_frontier.size() + 3
 		)
 	_check(
 		gs.armies.size() == expected_initial_armies,
-		"初始军队数必须匹配城市比例军制，应为%d，实为%d"
+		"初始军队应覆盖实际国界城市并包含一个满编战团，应为%d，实为%d"
 			% [expected_initial_armies, gs.armies.size()]
 	)
 	_check(gs.nations.size() == 4, "国家数应为 4")
@@ -222,6 +232,7 @@ func _test_world_generation() -> void:
 		)
 		var light_armies := 0
 		var heavy_armies := 0
+		var line_armies := 0
 		var initial_troops := 0
 		for army in gs.armies:
 			if army.owner_nation != n.id:
@@ -232,16 +243,27 @@ func _test_world_generation() -> void:
 				and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
 			):
 				light_armies += 1
+				if army.is_line_role():
+					line_armies += 1
 			elif (
 				army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
 				and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
 			):
 				heavy_armies += 1
+		var initial_group_members := (
+			gs.battle_group_members(
+				n.id,
+				n.battle_groups[0].id
+			)
+			if not n.battle_groups.is_empty()
+			else [] as Array[Army]
+		)
 		_check(
-			light_armies == gs.target_light_army_count(n.id)
-			and heavy_armies
-				== gs.target_heavy_army_count(n.id),
-			"国%d 初始军制必须匹配0.5轻军/0.05重军城市比例" % n.id
+			n.battle_groups.size() == 1
+			and initial_group_members.size() == 3
+			and light_armies == line_armies + 2
+			and heavy_armies == 1,
+			"国%d 初始军制必须是国界填线军加一个2轻1重持久战团" % n.id
 		)
 		var expected_initial_troops := (
 			light_armies * GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -606,6 +628,45 @@ func _test_world_generation() -> void:
 			)
 			delta.x *= gs.map_aspect_ratio
 			longest_edge = maxf(longest_edge, delta.length())
+	var crossing_road_pairs := 0
+	for edge_a_index in range(gs.edges.size()):
+		var edge_a: Edge = gs.edges[edge_a_index]
+		if (
+			edge_a.max_manpower <= 0
+			or edge_a.kind == Edge.Kind.RIVER
+		):
+			continue
+		for edge_b_index in range(
+			edge_a_index + 1,
+			gs.edges.size()
+		):
+			var edge_b: Edge = gs.edges[edge_b_index]
+			if (
+				edge_b.max_manpower <= 0
+				or edge_b.kind == Edge.Kind.RIVER
+				or edge_a.city_a in [
+					edge_b.city_a,
+					edge_b.city_b,
+				]
+				or edge_a.city_b in [
+					edge_b.city_a,
+					edge_b.city_b,
+				]
+			):
+				continue
+			var hit = Geometry2D.segment_intersects_segment(
+				gs.cities[edge_a.city_a].map_position,
+				gs.cities[edge_a.city_b].map_position,
+				gs.cities[edge_b.city_a].map_position,
+				gs.cities[edge_b.city_b].map_position
+			)
+			if hit != null:
+				crossing_road_pairs += 1
+	_check(
+		crossing_road_pairs == 0,
+		"可见陆路只能在共享城市端点相接，不得中途交叉，当前交叉对=%d"
+			% crossing_road_pairs
+	)
 	_check(
 		int(road_counts[0]) > 0,
 		"最高起伏道路中应包含不可供大军通行的边，分布=%s" % str(road_counts)
@@ -998,6 +1059,77 @@ func _test_responsive_map_layout() -> void:
 			and stats_button.size.x > stats_button.size.y,
 		"国家统计按钮必须始终位于窗口内并具备稳定点击区域"
 	)
+	var army_scale_control := (
+		MapRenderer.army_icon_scale_control_rect(
+			Vector2(1280, 720),
+			float(base["display_scale"]),
+			float(base["side_margin"])
+		)
+	)
+	_check(
+		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
+			army_scale_control
+		)
+			and army_scale_control.end.x
+				< stats_button.position.x,
+		"军队图标大小滑块必须位于窗口内，且不能覆盖国家统计按钮"
+	)
+	var scale_renderer := MapRenderer.new()
+	scale_renderer.set_army_icon_scale(1.37)
+	var rounded_scale := scale_renderer.army_icon_scale()
+	scale_renderer.set_army_icon_scale(0.10)
+	var minimum_scale := scale_renderer.army_icon_scale()
+	scale_renderer.set_army_icon_scale(3.00)
+	var maximum_scale := scale_renderer.army_icon_scale()
+	scale_renderer.set_city_names_visible(false)
+	var city_names_hidden := (
+		not scale_renderer.city_names_visible()
+	)
+	scale_renderer.set_city_names_visible(true)
+	var city_names_restored := (
+		scale_renderer.city_names_visible()
+	)
+	_check(
+		_approx(rounded_scale, 1.40)
+			and _approx(
+				minimum_scale,
+				MapRenderer.ARMY_ICON_SCALE_MIN
+			)
+			and _approx(
+				maximum_scale,
+				MapRenderer.ARMY_ICON_SCALE_MAX
+			),
+		"军队图标滑块应按10%步长取整，并限制在10%至180%"
+	)
+	var light_counter := MapRenderer.army_counter_profile(
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var heavy_counter := MapRenderer.army_counter_profile(
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	_check(
+		city_names_hidden
+			and city_names_restored
+			and MapRenderer.target_redraw_fps(
+				false,
+				true
+			) == MapRenderer.ACTIVE_REDRAW_FPS
+			and MapRenderer.target_redraw_fps(
+				false,
+				false
+			) == MapRenderer.STATIC_REDRAW_FPS,
+		"城市名称按钮必须可逆切换；无动画时应降到静态刷新频率"
+	)
+	_check(
+		int(light_counter["icon"])
+			!= int(heavy_counter["icon"])
+			and float(heavy_counter["width"])
+				> float(light_counter["width"])
+			and int(light_counter["marks"]) == 1
+			and int(heavy_counter["marks"]) == 3,
+		"5000轻军与15000重军必须使用不同图标、轮廓宽度和编制标记"
+	)
+	scale_renderer.free()
 	var large_origin: Vector2 = large["origin"]
 	_check(
 		large_origin.y > 120.0,
@@ -1089,6 +1221,10 @@ func _test_responsive_map_layout() -> void:
 			and edge_lines.size() >= 5
 			and "行军" in edge_lines[2],
 		"城市与道路详情必须包含控制、工事、驻军、距离和行军信息"
+	)
+	_check(
+		not MapRenderer.city_label_text(city_to_pick).is_empty(),
+		"开启城名时必须能生成稳定城市名称文本"
 	)
 	var arrow_event := {
 		"start_day": 10,
@@ -1272,6 +1408,101 @@ func _test_garrison_defense() -> void:
 	var loss_garrison := 1000 - def2.size
 	_check(loss_garrison < loss_no_garrison,
 		"守军有城防加成(30)应损失更少：无加成损%d vs 有加成损%d" % [loss_no_garrison, loss_garrison])
+
+	var siege_city_id := 77
+	var one_route_attacker := _make_army(500, 0, 10000, 12)
+	one_route_attacker.move_from = 1
+	one_route_attacker.move_to = siege_city_id
+	var one_route_defender := _make_army(501, 1, 20000, 10)
+	var one_route_battle := _make_siege_battle(
+		[one_route_attacker],
+		one_route_defender,
+		0,
+		4
+	)
+	one_route_battle.city.id = siege_city_id
+	var split_same_a := _make_army(502, 0, 5000, 12)
+	var split_same_b := _make_army(503, 0, 5000, 12)
+	for same_route_army in [split_same_a, split_same_b]:
+		same_route_army.move_from = 1
+		same_route_army.move_to = siege_city_id
+	var same_route_battle := _make_siege_battle(
+		[split_same_a, split_same_b],
+		_make_army(504, 1, 20000, 10),
+		0,
+		4
+	)
+	same_route_battle.city.id = siege_city_id
+	var two_route_a := _make_army(505, 0, 5000, 12)
+	var two_route_b := _make_army(506, 0, 5000, 12)
+	two_route_a.move_from = 1
+	two_route_b.move_from = 2
+	for two_route_army in [two_route_a, two_route_b]:
+		two_route_army.move_to = siege_city_id
+	var two_route_defender := _make_army(507, 1, 20000, 10)
+	var two_route_battle := _make_siege_battle(
+		[two_route_a, two_route_b],
+		two_route_defender,
+		0,
+		4
+	)
+	two_route_battle.city.id = siege_city_id
+	var three_route_battle := _make_siege_battle(
+		[
+			_make_army(508, 0, 3000, 12),
+			_make_army(509, 0, 3000, 12),
+			_make_army(510, 0, 4000, 12),
+			_make_army(511, 0, 1000, 12),
+		],
+		_make_army(512, 1, 20000, 10),
+		0,
+		4
+	)
+	three_route_battle.city.id = siege_city_id
+	for route_index in range(three_route_battle.side_a.size()):
+		var route_army: Army = three_route_battle.side_a[route_index]
+		route_army.move_from = route_index + 1
+		route_army.move_to = siege_city_id
+	_check(
+		Combat.siege_attack_direction_count(one_route_battle) == 1
+			and Combat.siege_attack_direction_count(
+				same_route_battle
+			) == 1
+			and _approx(
+				Combat.siege_attack_damage_multiplier(
+					same_route_battle
+				),
+				1.0
+			)
+			and _approx(
+				Combat.siege_attack_damage_multiplier(
+					two_route_battle
+				),
+				1.2
+			)
+			and _approx(
+				Combat.siege_attack_damage_multiplier(
+					three_route_battle
+				),
+				1.3
+			),
+		"围城攻击方向必须按不同出发城市计数：同路拆军1.0、两路1.2、三路以上封顶1.3"
+	)
+	var one_route_rng := RandomNumberGenerator.new()
+	one_route_rng.seed = 4242
+	Combat.resolve_round(one_route_battle, one_route_rng)
+	var two_route_rng := RandomNumberGenerator.new()
+	two_route_rng.seed = 4242
+	Combat.resolve_round(two_route_battle, two_route_rng)
+	var one_route_loss := 20000 - one_route_defender.size
+	var two_route_loss := 20000 - two_route_defender.size
+	_check(
+		two_route_loss >= int(floor(float(one_route_loss) * 1.15))
+			and two_route_loss
+				<= int(ceil(float(one_route_loss) * 1.25)),
+		"同兵力同随机数下两路攻城杀伤应约为一路的1.2倍：一路%d，两路%d"
+			% [one_route_loss, two_route_loss]
+	)
 
 # ------------------------------------------------------------------ 5b. 多路 vs 一路
 
@@ -1915,7 +2146,7 @@ func _test_three_way_siege() -> void:
 	b.move_from = 62; b.move_to = 63
 	sim._start_or_join_siege(b, city, edge)
 	_check(siege.side_a.size() == 1, "敌对他国 B 不应并肩围城，side_a 仍为 1")
-	_check(b.battle_id == -1 and b.state == Army.State.MOVING and b.move_from == city.id,
+	_check(b.battle_id == -1 and b.state == Army.State.RETREATING and b.move_from == city.id,
 		"B 应从已抵达的目标城连续撤回，不得瞬移回来源城")
 
 	# A2(nation0) 同族多路汇合
@@ -2240,7 +2471,7 @@ func _test_siege_arrival_triggers() -> void:
 	intruder.state = Army.State.MOVING
 	gs3.armies.append(intruder)
 	sim3._arrive_at_node(intruder)
-	_check(intruder.battle_id == -1 and intruder.state == Army.State.MOVING
+	_check(intruder.battle_id == -1 and intruder.state == Army.State.RETREATING
 		and intruder.move_from == city3.id,
 		"守军在场时真第三国应从目标城撤回且不介入")
 
@@ -2312,6 +2543,97 @@ func _test_crosspass_field_priority() -> void:
 	_check(R.battle_id == G.battle_id and R.battle_id != -1, "R、G 应在同一场野战")
 
 	sim.free()
+
+	# 野战胜方已越过道路终点时，败方溃退军不能在下一 tick 重复拉起 FIELD。
+	# 溃退军应先落入目标城，随后胜方进城并与守军统一触发 SIEGE。
+	var endpoint_state := GameState.new()
+	endpoint_state.generate_grid_world(1601)
+	endpoint_state.armies.clear()
+	endpoint_state.battles.clear()
+	var endpoint_from := -1
+	var endpoint_city := -1
+	for endpoint_edge in endpoint_state.edges:
+		if (
+			endpoint_state.cities[
+				endpoint_edge.city_a
+			].owner_nation
+			!= endpoint_state.cities[
+				endpoint_edge.city_b
+			].owner_nation
+		):
+			endpoint_from = endpoint_edge.city_a
+			endpoint_city = endpoint_edge.city_b
+			break
+	var endpoint_edge := endpoint_state.edge_of(
+		endpoint_from,
+		endpoint_city
+	)
+	var endpoint_attacker := _make_army(
+		1601,
+		endpoint_state.cities[endpoint_from].owner_nation,
+		5000,
+		10
+	)
+	endpoint_attacker.state = Army.State.MOVING
+	endpoint_attacker.location_city = endpoint_from
+	endpoint_attacker.move_from = endpoint_from
+	endpoint_attacker.move_to = endpoint_city
+	endpoint_attacker.move_progress = 1.10
+	endpoint_attacker.on_edge = true
+	var endpoint_retreater := _make_army(
+		1602,
+		endpoint_state.cities[endpoint_city].owner_nation,
+		3000,
+		10
+	)
+	endpoint_retreater.state = Army.State.RETREATING
+	endpoint_retreater.location_city = endpoint_city
+	endpoint_retreater.move_from = endpoint_from
+	endpoint_retreater.move_to = endpoint_city
+	endpoint_retreater.move_progress = 1.0
+	endpoint_retreater.on_edge = true
+	var endpoint_guard := _make_army(
+		1603,
+		endpoint_state.cities[endpoint_city].owner_nation,
+		5000,
+		10
+	)
+	endpoint_guard.location_city = endpoint_city
+	endpoint_guard.move_from = endpoint_city
+	endpoint_state.armies.append_array([
+		endpoint_attacker,
+		endpoint_retreater,
+		endpoint_guard,
+	])
+	endpoint_edge.passing_count = 2
+	endpoint_edge.occupied = true
+	var endpoint_sim := Simulation.new()
+	root.add_child(endpoint_sim)
+	endpoint_sim.setup(endpoint_state)
+	endpoint_sim._advance_movement()
+	var endpoint_siege := endpoint_sim._siege_battle_of(
+		endpoint_state.cities[endpoint_city]
+	)
+	var endpoint_field_exists := endpoint_state.battles.any(
+		func(battle: Battle) -> bool:
+			return (
+				not battle.finished
+				and battle.kind == Battle.Kind.FIELD
+			)
+	)
+	_check(
+		endpoint_siege != null
+			and endpoint_siege.has_army(
+				endpoint_attacker
+			)
+			and endpoint_siege.has_army(
+				endpoint_retreater
+			)
+			and endpoint_siege.has_army(endpoint_guard)
+			and not endpoint_field_exists,
+		"道路野战胜方越过终点后应进城触发攻城，已到终点的溃退军不得重复拉起野战"
+	)
+	endpoint_sim.free()
 
 # ------------------------------------------------------------------ 17. 一万五容量边错身：敌军不占本国方向容量
 
@@ -2970,6 +3292,96 @@ func _test_morale_retreat_recovery() -> void:
 	)
 	capture_sim.free()
 
+	# 真实地图 68 城复现：占领军已下达后续移动命令，但受容量限制尚未上边。
+	# 其 MOVING 只是任务状态，物理上仍在城内，敌军抵达时必须作为守军参战。
+	var city68_state := GameState.new()
+	city68_state.generate_world(12345)
+	city68_state.armies.clear()
+	city68_state.battles.clear()
+	var city68_id := 68
+	var city68_source: int = city68_state.neighbors(
+		city68_id
+	)[0]
+	city68_state.cities[city68_id].owner_nation = 1
+	city68_state.cities[city68_source].owner_nation = 0
+	city68_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var city68_holder := _make_army(
+		516,
+		1,
+		5000,
+		10
+	)
+	city68_holder.state = Army.State.MOVING
+	city68_holder.location_city = city68_id
+	city68_holder.move_from = city68_id
+	city68_holder.move_to = -1
+	city68_holder.path = [city68_source] as Array[int]
+	var city68_stale_fighter := _make_army(
+		518,
+		1,
+		5000,
+		10
+	)
+	city68_stale_fighter.state = Army.State.FIGHTING
+	city68_stale_fighter.battle_id = 999
+	city68_stale_fighter.location_city = city68_id
+	city68_stale_fighter.move_from = city68_id
+	var city68_relief := _make_army(
+		517,
+		0,
+		5000,
+		10
+	)
+	city68_relief.state = Army.State.MOVING
+	city68_relief.location_city = city68_source
+	city68_relief.move_from = city68_source
+	city68_relief.move_to = city68_id
+	city68_relief.move_progress = 1.0
+	city68_relief.on_edge = true
+	var city68_edge := city68_state.edge_of(
+		city68_source,
+		city68_id
+	)
+	city68_edge.passing_count = 1
+	city68_edge.occupied = true
+	city68_state.armies.append_array([
+		city68_holder,
+		city68_stale_fighter,
+		city68_relief,
+	])
+	var city68_sim := Simulation.new()
+	city68_sim.setup(city68_state)
+	city68_sim._arrive_at_node(city68_relief)
+	var city68_battle := city68_sim._siege_battle_of(
+		city68_state.cities[city68_id]
+	)
+	_check(
+		city68_battle != null
+			and city68_battle.has_garrison
+			and city68_battle.has_army(city68_holder)
+			and city68_battle.has_army(
+				city68_stale_fighter
+			)
+			and city68_battle.has_army(city68_relief)
+			and city68_holder.state == Army.State.FIGHTING
+			and city68_stale_fighter.battle_id
+				== city68_battle.id
+			and city68_relief.state == Army.State.FIGHTING,
+		"真实地图68城：容量等待或失效战斗状态的占领军必须迎战后到敌军"
+	)
+	_check(
+		not city68_relief.on_edge
+			and city68_relief.is_at_city_node(city68_id)
+			and city68_relief.move_from == city68_source
+			and city68_relief.move_to == city68_id,
+		"抵达68城后必须识别为城市节点军队，同时保留围城补给边锚点"
+	)
+	city68_sim.free()
+
 	# 多支恢复驻军必须全部加入守城，破城所需兵力的守军项取总兵力（而非只取第一支）。
 	gs.armies.clear()
 	gs.battles.clear()
@@ -3395,10 +3807,16 @@ func _test_edge_holding_state() -> void:
 	var enemy_nation := gs.cities[c2].owner_nation
 	for city in gs.cities:
 		city.owner_nation = own_nation
+		city.is_capital = false
+		city.has_warehouse = false
+		city.is_food_hub = false
+		city.is_manpower_hub = false
+		city.fort_strength_max = 0
 	for edge in gs.edges:
 		edge.max_manpower = 0
 		edge.danger = 0.0
 	gs.cities[c2].owner_nation = enemy_nation
+	gs.nations[own_nation].capital_city_id = -1
 	var hold_edge := gs.edge_of(c1, c2)
 	hold_edge.danger = 0.9
 	hold_edge.max_manpower = 45000
@@ -3773,7 +4191,7 @@ func _test_retreat_contact_and_position_continuity() -> void:
 	contested_siege.side_b.append(defender)
 	gs.armies.append_array([besieger, defender, third_party])
 	sim._start_or_join_siege(third_party, target_city, contested_siege.edge)
-	_check(third_party.state == Army.State.MOVING
+	_check(third_party.state == Army.State.RETREATING
 		and third_party.move_from == target_city.id
 		and third_party.move_to == source_city.id
 		and _approx(third_party.move_progress, 0.0),
@@ -4351,7 +4769,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	free_line_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
 	_check(
 		assignment_plan.can_join_offensive(heavy_guard, 2)
-			and assignment_plan.can_join_offensive(
+			and not assignment_plan.can_join_offensive(
 				reserve_guard,
 				2
 			)
@@ -4363,11 +4781,11 @@ func _test_ai_merge_and_retreat_utility() -> void:
 				light_guard,
 				2
 			)
-			and assignment_plan.can_join_offensive(
+			and not assignment_plan.can_join_offensive(
 				free_line_army,
 				2
 			),
-		"攻势应优先允许15000攻势军、邻近边槽和空闲5000军，禁止抽走城市填线军"
+		"正式地图攻势只能使用战团主战军，禁止临时借入任何填线军"
 	)
 	assignment_plan.assigned_armies_by_city[1] = [
 		reserve_guard.id,
@@ -4382,6 +4800,8 @@ func _test_ai_merge_and_retreat_utility() -> void:
 
 	assignment_state.cities[2].owner_nation = 1
 	assignment_state.cities[10].is_dock = true
+	reserve_guard.strategic_role = Army.StrategicRole.MAIN
+	reserve_guard.clear_line_assignment()
 	light_guard.location_city = 1
 	light_guard.move_from = 1
 	var recovering_guard := _make_army(944, 0, 5000, 10, 10)
@@ -4414,7 +4834,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			and int(priority_slots[2]["city_id"]) == 10
 			and int(priority_slots[2]["posture"])
 				== CityDefensePlan.Posture.CITY,
-		"5000填线槽位必须严格按国界城市、国界边、国内码头或要塞排序"
+		"边境防区必须先填城市槽，再填第一边槽，最后才处理国内战略城市"
 	)
 	_check(
 		int(priority_plan.assigned_posture_by_army.get(
@@ -4425,11 +4845,15 @@ func _test_ai_merge_and_retreat_utility() -> void:
 				recovering_guard.id,
 				CityDefensePlan.Posture.NONE
 			)) == CityDefensePlan.Posture.EDGE
+			and int(priority_plan.assigned_edge_by_army.get(
+				recovering_guard.id,
+				-1
+			)) == 2
 			and priority_plan.candidate_for(
 				recovering_guard,
 				ArmyCoordinator.new()
 			) == null,
-		"恢复中的5000军必须继续占用防区槽位，但不得收到移动命令"
+		"所有边境城市本体已覆盖后应激活第一边槽，恢复军保留槽位但暂不移动"
 	)
 	assignment_state.armies.erase(recovering_guard)
 	var moving_line_guard := _make_army(945, 0, 5000, 10, 10)
@@ -4456,15 +4880,263 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	)
 	moving_priority_plan._assign_role_based_defense()
 	_check(
-		int(moving_priority_plan.assigned_posture_by_army.get(
+		int(moving_priority_plan.assigned_edge_by_army.get(
 			moving_line_guard.id,
-			CityDefensePlan.Posture.NONE
-		)) == CityDefensePlan.Posture.EDGE
+			-1
+		)) == 2
 			and moving_priority_plan.candidate_for(
 				moving_line_guard,
 				ArmyCoordinator.new()
 			) == null,
-		"调往防区途中的5000军必须持续占用目标槽位，防止长距离重复补派"
+		"城市槽已满时，调往第一边槽途中的5000军必须保持持久槽位"
+	)
+	var edge_priority_state := GameState.new()
+	edge_priority_state.generate_grid_world(7004)
+	edge_priority_state.uses_heightmap = true
+	edge_priority_state.armies.clear()
+	for edge_priority_city in edge_priority_state.cities:
+		edge_priority_city.owner_nation = 0
+		edge_priority_city.is_capital = false
+		edge_priority_city.has_warehouse = false
+		edge_priority_city.is_food_hub = false
+		edge_priority_city.is_manpower_hub = false
+		edge_priority_city.fort_strength_max = 0
+	edge_priority_state.cities[2].owner_nation = 1
+	edge_priority_state.nations[0].capital_city_id = -1
+	var edge_only_guard := _make_army(946, 0, 5000, 10, 10)
+	edge_only_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	edge_only_guard.state = Army.State.HOLDING
+	edge_only_guard.location_city = 1
+	edge_only_guard.move_from = 1
+	edge_only_guard.move_to = 2
+	edge_only_guard.move_progress = 0.5
+	edge_only_guard.on_edge = true
+	edge_only_guard.line_assignment_city = 1
+	edge_only_guard.line_assignment_posture = Army.LinePosture.EDGE
+	edge_only_guard.line_assignment_edge = 2
+	edge_priority_state.armies.append(edge_only_guard)
+	var edge_priority_view := AiWorldView.build(
+		edge_priority_state,
+		0
+	)
+	var edge_priority_snapshot := StrategicMapSnapshot.build(
+		edge_priority_view
+	)
+	edge_priority_snapshot.frontier_cities = [1]
+	edge_priority_snapshot.potential_frontier_cities = []
+	var edge_priority_plan := CityDefensePlan.new()
+	edge_priority_plan.view = edge_priority_view
+	edge_priority_plan.snapshot = edge_priority_snapshot
+	edge_priority_plan.threat = ThreatField.build(
+		edge_priority_view
+	)
+	edge_priority_plan._assign_role_based_defense()
+	var return_to_city := edge_priority_plan.candidate_for(
+		edge_only_guard,
+		ArmyCoordinator.new()
+	)
+	_check(
+		int(edge_priority_plan.assigned_posture_by_army.get(
+			edge_only_guard.id,
+			CityDefensePlan.Posture.NONE
+		)) == CityDefensePlan.Posture.CITY
+			and not edge_priority_plan.assigned_edge_by_army.has(
+				edge_only_guard.id
+			)
+			and return_to_city != null
+			and return_to_city.kind
+				== ActionCandidate.Kind.RETREAT
+			and return_to_city.target_city == 1,
+		"边境城市为空且兵力不足时，旧边槽军必须放弃驻边并立即回城"
+	)
+	var edge_city_guard := _make_army(947, 0, 5000, 10, 10)
+	edge_city_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	edge_city_guard.location_city = 1
+	edge_city_guard.move_from = 1
+	edge_city_guard.line_assignment_city = 1
+	edge_city_guard.line_assignment_posture = Army.LinePosture.CITY
+	var edge_besieger := _make_army(948, 1, 5000, 10, 10)
+	edge_besieger.state = Army.State.FIGHTING
+	edge_besieger.location_city = 1
+	edge_priority_state.armies.append_array([
+		edge_city_guard,
+		edge_besieger,
+	])
+	edge_priority_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var edge_city_siege := edge_priority_state.new_battle(
+		Battle.Kind.SIEGE
+	)
+	edge_city_siege.city = edge_priority_state.cities[1]
+	edge_city_siege.edge = edge_priority_state.edge_of(1, 2)
+	edge_city_siege.side_a.append(edge_besieger)
+	edge_besieger.battle_id = edge_city_siege.id
+	edge_only_guard.line_assignment_city = 1
+	edge_only_guard.line_assignment_posture = Army.LinePosture.EDGE
+	edge_only_guard.line_assignment_edge = 2
+	var edge_priority_sector: FrontierDefenseSector = (
+		edge_priority_state.nations[0]
+			.frontier_defense_sectors[1]
+	)
+	edge_priority_sector.assign(0, edge_city_guard.id)
+	edge_priority_sector.assign(1, edge_only_guard.id)
+	var siege_edge_view := AiWorldView.build(
+		edge_priority_state,
+		0
+	)
+	var siege_edge_plan := CityDefensePlan.new()
+	siege_edge_plan.view = siege_edge_view
+	siege_edge_plan.snapshot = StrategicMapSnapshot.build(
+		siege_edge_view
+	)
+	siege_edge_plan.snapshot.frontier_cities = [1]
+	siege_edge_plan.snapshot.potential_frontier_cities = []
+	siege_edge_plan.threat = ThreatField.build(siege_edge_view)
+	var siege_edge_slots := (
+		siege_edge_plan._build_role_defense_slots()
+	)
+	siege_edge_plan._assign_role_based_defense()
+	var siege_edge_recall := siege_edge_plan.candidate_for(
+		edge_only_guard,
+		ArmyCoordinator.new()
+	)
+	_check(
+		siege_edge_slots.size() == 2
+			and int(siege_edge_slots[0]["posture"])
+				== CityDefensePlan.Posture.CITY
+			and int(siege_edge_slots[1]["posture"])
+				== CityDefensePlan.Posture.EDGE
+			and int(siege_edge_plan.assigned_posture_by_army.get(
+				edge_only_guard.id,
+				CityDefensePlan.Posture.NONE
+			)) == CityDefensePlan.Posture.CITY
+			and siege_edge_recall != null
+			and siege_edge_recall.kind
+				== ActionCandidate.Kind.RETREAT
+			and siege_edge_recall.target_city == 1,
+		"锚点受围时边槽身份必须保留、有效姿态转为城市，驻边军立即回城"
+	)
+	var layered_state := GameState.new()
+	layered_state.generate_grid_world(7005)
+	layered_state.uses_heightmap = true
+	layered_state.armies.clear()
+	for layered_city in layered_state.cities:
+		layered_city.owner_nation = 0
+		layered_city.is_capital = false
+		layered_city.has_warehouse = false
+		layered_city.is_food_hub = false
+		layered_city.is_manpower_hub = false
+		layered_city.is_dock = false
+		layered_city.fort_strength_max = 0
+	layered_state.nations[0].capital_city_id = -1
+	for enemy_city_id in [1, 2, 8, 11]:
+		layered_state.cities[enemy_city_id].owner_nation = 1
+	for layered_pair in [
+		[9, 1],
+		[9, 8],
+		[10, 2],
+		[10, 11],
+	]:
+		var layered_edge := layered_state.edge_of(
+			int(layered_pair[0]),
+			int(layered_pair[1])
+		)
+		layered_edge.max_manpower = Edge.STANDARD_MANPOWER
+		layered_edge.allows_holding = true
+	layered_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var layered_guards: Array[Army] = []
+	for layered_index in range(6):
+		var layered_guard := _make_army(
+			960 + layered_index,
+			0,
+			5000,
+			10,
+			10
+		)
+		layered_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+		layered_guard.location_city = (
+			9 if layered_index == 0
+			else 10 if layered_index == 1
+			else 0
+		)
+		layered_guard.move_from = layered_guard.location_city
+		layered_state.armies.append(layered_guard)
+		layered_guards.append(layered_guard)
+	var layered_view := AiWorldView.build(layered_state, 0)
+	var layered_snapshot := StrategicMapSnapshot.build(layered_view)
+	layered_snapshot.frontier_cities = [9, 10]
+	layered_snapshot.potential_frontier_cities = []
+	var layered_plan := CityDefensePlan.new()
+	layered_plan.view = layered_view
+	layered_plan.snapshot = layered_snapshot
+	layered_plan.threat = ThreatField.build(layered_view)
+	var layered_slots := layered_plan._build_role_defense_slots()
+	layered_plan._assign_role_based_defense()
+	var first_layer_cities := {}
+	var second_layer_cities := {}
+	for slot_index in range(layered_slots.size()):
+		var layered_slot: Dictionary = layered_slots[slot_index]
+		if slot_index in [2, 3]:
+			first_layer_cities[int(layered_slot["city_id"])] = true
+		elif slot_index in [4, 5]:
+			second_layer_cities[int(layered_slot["city_id"])] = true
+	_check(
+		layered_slots.size() == 6
+			and int(layered_slots[0]["posture"])
+				== CityDefensePlan.Posture.CITY
+			and int(layered_slots[1]["posture"])
+				== CityDefensePlan.Posture.CITY
+			and int(layered_slots[2]["sector_slot"]) == 1
+			and int(layered_slots[3]["sector_slot"]) == 1
+			and int(layered_slots[4]["sector_slot"]) == 2
+			and int(layered_slots[5]["sector_slot"]) == 2
+			and first_layer_cities.size() == 2
+			and second_layer_cities.size() == 2,
+		"多边境城市必须按槽层填充：全部城市槽→全部第一边槽→全部第二边槽"
+			+ "，实际=%s" % str(layered_slots)
+	)
+	_check(
+		layered_plan.assigned_city_for(layered_guards[0]) == 9
+			and layered_plan.assigned_city_for(
+				layered_guards[1]
+			) == 10,
+		"边境城市本体必须由路径最近的填线军优先补位"
+	)
+	layered_state.cities[9].owner_nation = 1
+	layered_state.ownership_revision += 1
+	layered_guards[0].location_city = 17
+	layered_guards[0].move_from = 17
+	var changed_view := AiWorldView.build(layered_state, 0)
+	var changed_snapshot := StrategicMapSnapshot.build(changed_view)
+	changed_snapshot.frontier_cities = [10, 17]
+	changed_snapshot.potential_frontier_cities = []
+	var changed_plan := CityDefensePlan.build(
+		changed_view,
+		changed_snapshot,
+		ThreatField.build(changed_view)
+	)
+	var stale_sector_assignment := false
+	for layered_guard in layered_guards:
+		if layered_guard.line_assignment_city == 9:
+			stale_sector_assignment = true
+			break
+	_check(
+		not layered_state.nations[0]
+			.frontier_defense_sectors.has(9)
+			and layered_state.nations[0]
+				.frontier_defense_sectors.has(17)
+			and changed_plan.assigned_city_for(
+				layered_guards[0]
+			) == 17
+			and not stale_sector_assignment,
+		"城市易手后必须删除旧防区、创建新前线防区，并由最近军队快速补位"
 	)
 	var single_attacker := _make_army(937, 1, 15000, 10, 10)
 	var stacked_attacker := _make_army(938, 1, 15000, 10, 10)
@@ -5031,6 +5703,159 @@ func _test_ai_merge_and_retreat_utility() -> void:
 
 func _test_ai_encirclement_breakout_and_relief() -> void:
 	print("[30b] AI 包围协同：多方向进攻、断粮突围、紧急解围")
+	var pocket_state := GameState.new()
+	pocket_state.generate_grid_world(7029)
+	pocket_state.armies.clear()
+	pocket_state.battles.clear()
+	for pocket_city in pocket_state.cities:
+		pocket_city.owner_nation = 1
+	var isolated_city_id := 18
+	var allied_exit_id := 17
+	pocket_state.cities[isolated_city_id].owner_nation = 0
+	pocket_state.cities[allied_exit_id].owner_nation = 2
+	pocket_state.edge_of(
+		isolated_city_id,
+		allied_exit_id
+	).max_manpower = 15000
+	pocket_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	pocket_state.set_diplomatic_relation(
+		0,
+		2,
+		GameState.DiplomaticRelation.NEUTRAL
+	)
+	var isolated_army := _make_army(930, 0, 5000, 10, 10)
+	isolated_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	isolated_army.location_city = isolated_city_id
+	isolated_army.move_from = isolated_city_id
+	isolated_army.morale = Combat.MORALE_FLOOR
+	pocket_state.armies.append(isolated_army)
+	var pocket_sim := Simulation.new()
+	pocket_sim.setup(pocket_state)
+	_check(
+		not Pathfinding.has_friendly_retreat_route_from_city(
+			pocket_state,
+			0,
+			isolated_city_id,
+			isolated_army.max_size
+		),
+		"孤城周围没有本国或盟友通路时必须判定为无撤退路径"
+	)
+	pocket_sim._start_morale_retreat_from_city(
+		isolated_army,
+		isolated_city_id
+	)
+	_check(
+		isolated_army.size == 0,
+		"零士气军困在无退路孤城时必须全军覆没，不能原地恢复"
+	)
+	pocket_state.set_diplomatic_relation(
+		0,
+		2,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	var allied_escape_army := _make_army(
+		931,
+		0,
+		5000,
+		10,
+		10
+	)
+	allied_escape_army.max_size = (
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	allied_escape_army.location_city = isolated_city_id
+	allied_escape_army.move_from = isolated_city_id
+	allied_escape_army.morale = Combat.MORALE_FLOOR
+	pocket_state.armies.append(allied_escape_army)
+	_check(
+		Pathfinding.has_friendly_retreat_route_from_city(
+			pocket_state,
+			0,
+			isolated_city_id,
+			allied_escape_army.max_size
+		),
+		"邻接盟友城市应提供合法撤退路径，不能把联盟通路误判为包围"
+	)
+	pocket_sim._start_morale_retreat_from_city(
+		allied_escape_army,
+		isolated_city_id
+	)
+	_check(
+		allied_escape_army.size == 5000
+			and allied_escape_army.state
+				== Army.State.RECOVERING,
+		"存在盟友退路时零士气军不得被包围规则误杀"
+	)
+	pocket_sim.free()
+
+	var cut_state := GameState.new()
+	cut_state.generate_grid_world(7028)
+	cut_state.armies.clear()
+	for cut_city in cut_state.cities:
+		cut_city.owner_nation = 0
+		cut_city.is_capital = false
+		cut_city.has_warehouse = false
+		cut_city.is_food_hub = false
+		cut_city.is_manpower_hub = false
+		cut_city.gold_per_month = 1
+		cut_city.food_per_half_year = 1
+		cut_city.manpower_per_month = 1
+		cut_city.fort_strength = 0
+	var enemy_capital_id := 16
+	var cut_target_id := 17
+	var future_pocket_id := 18
+	for enemy_city_id in [
+		enemy_capital_id,
+		cut_target_id,
+		future_pocket_id,
+	]:
+		cut_state.cities[enemy_city_id].owner_nation = 1
+		for neighbor in cut_state.neighbors(enemy_city_id):
+			cut_state.edge_of(
+				enemy_city_id,
+				neighbor
+			).max_manpower = 30000
+	cut_state.nations[1].capital_city_id = enemy_capital_id
+	cut_state.cities[enemy_capital_id].is_capital = true
+	cut_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var pocket_garrison := cut_state.create_army(
+		1,
+		future_pocket_id,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var cut_value := DiplomacyAI.encirclement_value(
+		cut_state,
+		cut_target_id,
+		1
+	)
+	var cut_objective := DiplomacyAI.select_war_objective(
+		cut_state,
+		0,
+		1
+	)
+	var cut_view := AiWorldView.build(cut_state, 0)
+	var cut_snapshot := StrategicMapSnapshot.build(cut_view)
+	_check(
+		pocket_garrison != null
+			and cut_value >= 8.0
+			and int(cut_objective.get("city_id", -1))
+				== cut_target_id
+			and str(cut_objective.get("reason", ""))
+				.contains("包围值")
+			and cut_snapshot.campaign_target
+				== cut_target_id,
+		"能切断重兵孤袋的连接城必须成为外交与战役规划共同优先目标"
+	)
+
 	var gs := GameState.new()
 	gs.generate_grid_world(7030)
 	gs.armies.clear()
@@ -5387,9 +6212,9 @@ func _test_manpower_pool_and_force_commands() -> void:
 		):
 			initial_heavy_armies += 1
 	_check(
-		initial_light_armies == 16
-			and initial_heavy_armies == 8,
-		"网格状态机夹具应保留16支轻军和8支重军"
+		initial_light_armies == 18
+			and initial_heavy_armies == 1,
+		"网格状态机夹具应保留16支城市填线军和一个2轻1重战团"
 	)
 	var pool_before_income := gs.nations[nation_id].manpower_pool
 	gs.day = Simulation.DAYS_PER_MONTH
@@ -5576,29 +6401,12 @@ func _test_manpower_pool_and_force_commands() -> void:
 	var force_capital := force_state.nations[
 		force_nation_id
 	].capital_city_id
-	var removed_light: Army = null
-	var removed_heavy: Army = null
-	for force_army in force_state.armies:
-		if force_army.owner_nation != force_nation_id:
-			continue
-		if (
-			removed_light == null
-			and force_army.max_size
-				== GameState.INITIAL_LIGHT_ARMY_SIZE
-		):
-			removed_light = force_army
-		elif (
-			removed_heavy == null
-			and force_army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
-		):
-			removed_heavy = force_army
-	force_state.armies.erase(removed_light)
-	force_state.armies.erase(removed_heavy)
-	force_state.nations[force_nation_id].manpower_pool += (
-		GameState.INITIAL_LIGHT_ARMY_SIZE
-		+ GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
+	for force_army in force_state.armies.duplicate():
+		if force_army.owner_nation == force_nation_id:
+			force_state.armies.erase(force_army)
+	force_state.nations[force_nation_id].battle_groups.clear()
+	force_state.nations[force_nation_id].next_battle_group_id = 0
+	force_state.nations[force_nation_id].manpower_pool = 1000000
 	force_state.nations[force_nation_id].treasury_gold = 1000000
 	var priority_force_sim := Simulation.new()
 	priority_force_sim.setup(force_state)
@@ -5606,144 +6414,142 @@ func _test_manpower_pool_and_force_commands() -> void:
 		force_state,
 		force_nation_id
 	)
+	var no_line_slots := CityDefensePlan.new()
+	no_line_slots.view = priority_force_view
+	no_line_slots.snapshot = StrategicMapSnapshot.build(
+		priority_force_view
+	)
+	no_line_slots.threat = ThreatField.build(priority_force_view)
+	no_line_slots.line_city_slots = 0
+	no_line_slots.line_edge_slots = 0
 	var priority_force_created := (
 		priority_force_sim._ai_manage_force_structure(
 			priority_force_view,
 			StrategicMapSnapshot.build(priority_force_view),
-			ThreatField.build(priority_force_view)
+			ThreatField.build(priority_force_view),
+			no_line_slots
 		)
 	)
-	var light_after_priority := 0
-	var heavy_after_priority := 0
-	for force_army in force_state.armies:
-		if force_army.owner_nation != force_nation_id:
-			continue
-		if (
-			force_army.max_size
-				== GameState.INITIAL_LIGHT_ARMY_SIZE
-		):
-			light_after_priority += 1
-		elif (
-			force_army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
-		):
-			heavy_after_priority += 1
+	var first_group := force_state.nations[
+		force_nation_id
+	].battle_groups[0]
+	var first_members := force_state.battle_group_members(
+		force_nation_id,
+		first_group.id
+	)
 	_check(
 		priority_force_created
-			and light_after_priority
-				== force_state.target_light_army_count(
-					force_nation_id
-				)
-			and heavy_after_priority
-				== force_state.target_heavy_army_count(
-					force_nation_id
-				) - 1,
-		"5000与15000编制同时缺额时，AI必须优先创建5000填线军"
+			and first_members.size() == 1
+			and first_members[0].max_size
+				== GameState.INITIAL_LIGHT_ARMY_SIZE
+			and first_members[0].is_main_battle_role(),
+		"没有战团时必须先创建持久战团并加入第一支5000主战轻军"
 	)
-	for force_army in force_state.armies.duplicate():
-		if (
-			force_army.owner_nation == force_nation_id
-			and force_army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
-		):
-			force_state.armies.erase(force_army)
-			force_state.nations[
-				force_nation_id
-			].manpower_pool += force_army.size
-	var zero_heavy_view := AiWorldView.build(
-		force_state,
-		force_nation_id
-	)
-	var rebuilt_first_heavy := (
-		priority_force_sim._ai_manage_force_structure(
-			zero_heavy_view,
-			StrategicMapSnapshot.build(zero_heavy_view),
-			ThreatField.build(zero_heavy_view)
-		)
-	)
-	var heavy_after_rebuild := 0
-	for force_army in force_state.armies:
-		if (
-			force_army.owner_nation == force_nation_id
-			and force_army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
-		):
-			heavy_after_rebuild += 1
-	_check(
-		rebuilt_first_heavy
-			and force_state.target_heavy_army_count(
-				force_nation_id
-			) > 0
-			and heavy_after_rebuild == 1,
-		"拥有重军编制目标但重军全灭时，应优先重建第一支15000攻势军"
-	)
-	priority_force_sim.free()
-	force_state.armies.append(removed_heavy)
-	force_state.nations[force_nation_id].manpower_pool -= (
-		GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
-	var initial_force_target := force_state.target_army_count(
-		force_nation_id
-	)
-	for force_army in force_state.armies:
-		if force_army.owner_nation != force_nation_id:
-			continue
-		force_army.state = Army.State.IDLE
-		force_army.location_city = force_capital
-		force_army.move_from = force_capital
-		force_army.move_to = -1
-		force_army.on_edge = false
-	for force_city in force_state.cities_of(force_nation_id):
-		if (
-			force_city.id == force_capital
-			or force_city.has_warehouse
-		):
-			continue
-		force_city.owner_nation = 1
-		if (
-			force_state.target_army_count(force_nation_id)
-				< initial_force_target
-		):
-			break
-	for force_warehouse in force_state.warehouse_cities_of(
-		force_nation_id
-	):
-		force_warehouse.food_storage = 1000000
-	var force_sim := Simulation.new()
-	force_sim.setup(force_state)
-	for _reconcile_step in range(16):
-		var force_view := AiWorldView.build(
+	for _group_growth in range(2):
+		var growth_view := AiWorldView.build(
 			force_state,
 			force_nation_id
 		)
-		if not force_sim._ai_manage_force_structure(
-			force_view,
-			StrategicMapSnapshot.build(force_view),
-			ThreatField.build(force_view)
-		):
-			break
-	var reconciled_light := 0
-	var reconciled_heavy := 0
-	for force_army in force_state.armies:
-		if force_army.owner_nation != force_nation_id:
-			continue
-		if force_army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
-			reconciled_light += 1
-		elif force_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
-			reconciled_heavy += 1
-	_check(
-		reconciled_light
-			== force_state.target_light_army_count(force_nation_id)
-			and reconciled_heavy
-				== force_state.target_heavy_army_count(force_nation_id),
-		"城市数量下降后，两档军制必须在安全裁撤条件下精确收敛"
+		no_line_slots.view = growth_view
+		priority_force_sim._ai_manage_force_structure(
+			growth_view,
+			StrategicMapSnapshot.build(growth_view),
+			ThreatField.build(growth_view),
+			no_line_slots
+		)
+	first_members = force_state.battle_group_members(
+		force_nation_id,
+		first_group.id
 	)
-	force_sim.free()
+	var group_light_count := 0
+	var group_heavy_count := 0
+	for force_member in first_members:
+		if (
+			force_member.max_size
+				== GameState.INITIAL_LIGHT_ARMY_SIZE
+		):
+			group_light_count += 1
+		elif (
+			force_member.max_size
+				== GameState.INITIAL_HEAVY_ARMY_SIZE
+		):
+			group_heavy_count += 1
+	_check(
+		first_members.size() == 3
+			and group_light_count == 2
+			and group_heavy_count == 1,
+		"战团必须严格按第一轻军、第二轻军、重军的顺序扩充为2轻1重"
+	)
+	var peace_full_group_view := AiWorldView.build(
+		force_state,
+		force_nation_id
+	)
+	no_line_slots.view = peace_full_group_view
+	var peace_overexpansion_blocked := not (
+		priority_force_sim._ai_manage_force_structure(
+			peace_full_group_view,
+			StrategicMapSnapshot.build(peace_full_group_view),
+			ThreatField.build(peace_full_group_view),
+			no_line_slots
+		)
+	)
+	_check(
+		peace_overexpansion_blocked
+			and force_state.nations[
+				force_nation_id
+			].battle_groups.size() == 1,
+		"和平期填线已满且已有完整战团时，不得把全部资源持续转成闲置战团"
+	)
+	force_state.nations[
+		force_nation_id
+	].war_preparation_target_nation = 1
+	var next_group_view := AiWorldView.build(
+		force_state,
+		force_nation_id
+	)
+	no_line_slots.view = next_group_view
+	var next_group_started := (
+		priority_force_sim._ai_manage_force_structure(
+			next_group_view,
+			StrategicMapSnapshot.build(next_group_view),
+			ThreatField.build(next_group_view),
+			no_line_slots
+		)
+	)
+	_check(
+		next_group_started
+			and force_state.nations[
+				force_nation_id
+			].battle_groups.size() == 2
+			and force_state.battle_group_members(
+				force_nation_id,
+				1
+			).size() == 1,
+		"满编战团后继续扩军必须先创建下一战团并加入第一支轻军"
+	)
+	var ungrouped_heavy := (
+		priority_force_sim._create_army_for_nation(
+			force_nation_id,
+			force_capital,
+			GameState.INITIAL_HEAVY_ARMY_SIZE,
+			"非法独立重军"
+		)
+	)
+	_check(
+		ungrouped_heavy == null,
+		"15000重军只能作为战团第三成员创建，不得成为独立编制"
+	)
+	priority_force_sim.free()
 
 	var split_source := gs.create_army(
 		nation_id,
 		capital_id,
 		13021
+	)
+	var split_group := gs.create_battle_group(nation_id)
+	gs.assign_army_to_battle_group(
+		split_source,
+		split_group.id
 	)
 	split_source.attack = 13
 	split_source.defense = 14
@@ -5755,6 +6561,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 	var split_size_total := 0
 	var split_capacity_total := 0
 	var split_attributes_preserved := true
+	var split_group_members := 0
 	for split_part in split_parts:
 		split_size_total += split_part.size
 		split_capacity_total += split_part.max_size
@@ -5764,12 +6571,15 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and split_part.defense == 14
 			and _approx(split_part.morale, 0.73)
 		)
+		if split_part.battle_group_id == split_group.id:
+			split_group_members += 1
 	_check(
 		split_parts.size() == 3
 		and split_size_total == 13021
 		and split_capacity_total == 15000
-		and split_attributes_preserved,
-		"拆分应生成三支5000编制并保持兵力、编制和战斗属性守恒"
+		and split_attributes_preserved
+		and split_group_members == 2,
+		"拆分应保持兵力和属性守恒，并且同战团最多继承两支轻军"
 	)
 
 	var narrow_state := GameState.new()
@@ -6574,11 +7384,43 @@ func _test_diplomacy_state_and_ai() -> void:
 		0,
 		1
 	)
+	var baseline_day := ai_state.day
+	var baseline_escalation := (
+		DiplomacyAI.neutral_peace_escalation(
+			ai_state,
+			0,
+			1
+		)
+	)
+	ai_state.day = (
+		ai_state.relation_since(0, 1)
+		+ DiplomacyAI.PEACE_ESCALATION_FULL_DAYS
+	)
+	var long_peace_escalation := (
+		DiplomacyAI.neutral_peace_escalation(
+			ai_state,
+			0,
+			1
+		)
+	)
+	var long_peace_war_desire := DiplomacyAI.war_desire(
+		ai_state,
+		0,
+		1
+	)
+	ai_state.day = baseline_day
 	_check(
 		default_war_desire >= DiplomacyAI.WAR_DECLARE_SCORE
-			and _approx(DiplomacyAI.WAR_DECLARE_SCORE, 1.0),
-		"资源就绪的默认国家应达到加强后的 1.00 宣战线，实为 %.3f"
-			% default_war_desire
+			and _approx(DiplomacyAI.WAR_DECLARE_SCORE, 0.85)
+			and _approx(baseline_escalation, 0.0)
+			and _approx(
+				long_peace_escalation,
+				DiplomacyAI.PEACE_ESCALATION_MAX_BONUS
+			)
+			and long_peace_war_desire
+				> default_war_desire,
+		"资源就绪国家应达到0.85宣战线，长期和平压力必须单调提高意愿，实为%.3f→%.3f"
+			% [default_war_desire, long_peace_war_desire]
 	)
 	var alliance_edge: Edge = null
 	for candidate_edge in ai_state.edges:
@@ -6793,6 +7635,223 @@ func _test_diplomacy_state_and_ai() -> void:
 			"资源连续不足90天后才允许取消备战"
 		)
 	grace_sim.free()
+
+	var group_ready_state := GameState.new()
+	group_ready_state.generate_grid_world(32019)
+	group_ready_state.uses_heightmap = true
+	for group_ready_a in range(
+		group_ready_state.nations.size()
+	):
+		for group_ready_b in range(
+			group_ready_a + 1,
+			group_ready_state.nations.size()
+		):
+			group_ready_state.set_diplomatic_relation(
+				group_ready_a,
+				group_ready_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	group_ready_state.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	var group_objective := DiplomacyAI.select_war_objective(
+		group_ready_state,
+		0,
+		1
+	)
+	var group_objective_city := int(
+		group_objective.get("city_id", -1)
+	)
+	var group_staging := (
+		DiplomacyAI.staging_cities_for_objective(
+			group_ready_state,
+			0,
+			group_objective_city
+		)
+	)
+	var preparation_group := (
+		group_ready_state.nations[0].battle_groups[0]
+	)
+	var preparation_members := (
+		group_ready_state.battle_group_members(
+			0,
+			preparation_group.id
+		)
+	)
+	var preparation_group_troops := 0
+	if not group_staging.is_empty():
+		for group_member in preparation_members:
+			preparation_group_troops += group_member.size
+			group_member.state = Army.State.IDLE
+			group_member.location_city = group_staging[0]
+			group_member.move_from = group_staging[0]
+			group_member.move_to = -1
+			group_member.on_edge = false
+	var group_ready_nation := group_ready_state.nations[0]
+	group_ready_nation.war_preparation_target_nation = 1
+	group_ready_nation.war_preparation_objective_city = (
+		group_objective_city
+	)
+	group_ready_nation.war_preparation_started_day = (
+		group_ready_state.day
+			- DiplomacyAI.WAR_PREPARATION_MIN_DAYS
+	)
+	group_ready_nation.campaign_preparation_group_assignments[
+		group_objective_city
+	] = preparation_group.id
+	var old_national_share_requirement := (
+		DiplomacyAI.required_assault_troops(
+			group_ready_state,
+			0,
+			group_objective_city
+		)
+	)
+	var full_group_ready := DiplomacyAI.war_preparation_ready(
+		group_ready_state,
+		0
+	)
+	preparation_members[0].location_city = (
+		group_ready_state.nations[0].capital_city_id
+	)
+	var incomplete_group_not_ready := not (
+		DiplomacyAI.war_preparation_ready(
+			group_ready_state,
+			0
+		)
+	)
+	_check(
+		not group_objective.is_empty()
+			and not group_staging.is_empty()
+			and old_national_share_requirement
+				> preparation_group_troops
+			and full_group_ready
+			and incomplete_group_not_ready,
+		"正式地图备战应以指定战团全员集结为就绪条件，不得继续要求全国25%%兵力"
+	)
+	group_ready_nation.war_preparation_started_day = (
+		group_ready_state.day
+			- DiplomacyAI.WAR_PREPARATION_MAX_DAYS
+	)
+	var expired_preparation_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_existing_war_preparation(
+		group_ready_state,
+		0,
+		expired_preparation_actions,
+		{}
+	)
+	_check(
+		expired_preparation_actions.size() == 1
+			and int(expired_preparation_actions[0]["kind"])
+				== DiplomacyAI.Action.CANCEL_WAR_PREPARATION,
+		"战团超过360天仍未完成集结时必须退出旧备战并重新评估，禁止永久等待"
+	)
+	group_ready_nation.war_preparation_started_day = (
+		group_ready_state.day
+			- DiplomacyAI.WAR_PREPARATION_MIN_DAYS
+	)
+	var stale_group_holder := preparation_members[1]
+	var ready_group_holder := preparation_members[0]
+	var ready_group_reserve := preparation_members[2]
+	var stale_group_edge: Edge = null
+	if not group_staging.is_empty():
+		for neighbor in group_ready_state.neighbors(group_staging[0]):
+			var candidate_edge := group_ready_state.edge_of(
+				group_staging[0],
+				neighbor
+			)
+			if (
+				neighbor != group_objective_city
+				and group_ready_state.cities[neighbor].owner_nation == 0
+				and candidate_edge != null
+				and candidate_edge.allows_holding
+				and candidate_edge.max_manpower
+					>= stale_group_holder.max_size
+			):
+				stale_group_edge = candidate_edge
+				break
+	if stale_group_edge != null:
+		ready_group_holder.state = Army.State.HOLDING
+		ready_group_holder.location_city = -1
+		ready_group_holder.move_from = group_staging[0]
+		ready_group_holder.move_to = group_objective_city
+		ready_group_holder.move_progress = (
+			Simulation.HOLDING_TARGET_PROGRESS
+		)
+		ready_group_holder.on_edge = true
+		ready_group_reserve.state = Army.State.IDLE
+		ready_group_reserve.location_city = group_staging[0]
+		ready_group_reserve.move_from = group_staging[0]
+		ready_group_reserve.move_to = -1
+		ready_group_reserve.on_edge = false
+		stale_group_holder.state = Army.State.HOLDING
+		stale_group_holder.location_city = -1
+		stale_group_holder.move_from = group_staging[0]
+		stale_group_holder.move_to = (
+			stale_group_edge.city_b
+			if stale_group_edge.city_a == group_staging[0]
+			else stale_group_edge.city_a
+		)
+		stale_group_holder.move_progress = (
+			Simulation.HOLDING_TARGET_PROGRESS
+		)
+		stale_group_holder.on_edge = true
+		for preparation_member in preparation_members:
+			preparation_member.defensive_deployment_until_day = -1
+	var convergence_sim := Simulation.new()
+	convergence_sim.setup(group_ready_state)
+	group_ready_nation.campaign_preparation_targets = [
+		group_objective_city
+	] as Array[int]
+	convergence_sim._sync_campaign_group_members(0)
+	var convergence_view := AiWorldView.build(group_ready_state, 0)
+	var convergence_plan := CityDefensePlan.build(
+		convergence_view,
+		StrategicMapSnapshot.build(convergence_view),
+		ThreatField.build(convergence_view)
+	)
+	convergence_sim._assign_offensive_staging_orders(
+		0,
+		group_objective_city,
+		convergence_plan,
+		ArmyCoordinator.new(),
+		true,
+		true
+	)
+	_check(
+		stale_group_edge != null
+			and stale_group_holder.state == Army.State.MOVING
+			and stale_group_holder.ai_action
+				== ActionCandidate.Kind.RETREAT
+			and stale_group_holder.ai_target_city
+				== group_staging[0]
+			and stale_group_holder.ai_order_reason.contains(
+				"从次要边境撤回"
+			),
+		"战团部分成员已集结时，旧边驻军仍必须继续撤回，不得因最低兵力1而永久停止备战"
+	)
+	convergence_sim._clear_campaign_preparation_plan(0)
+	for preparation_member in preparation_members:
+		convergence_sim._settle_idle(
+			preparation_member,
+			group_staging[0]
+		)
+		preparation_member.defensive_deployment_until_day = -1
+	ready_group_reserve.state = Army.State.RECOVERING
+	var partial_group_bound := (
+		convergence_sim._assign_battle_groups_to_campaign_targets(
+			0,
+			[group_objective_city] as Array[int],
+			convergence_plan,
+			ArmyCoordinator.new()
+		)
+	)
+	_check(
+		not partial_group_bound
+			and not group_ready_nation
+				.campaign_preparation_group_assignments.has(
+					group_objective_city
+				),
+		"团内存在恢复中或不可达成员时不得只绑定部分战团，否则外交全员门禁会永久等待"
+	)
+	convergence_sim.free()
 
 	var objective_state := GameState.new()
 	objective_state.generate_grid_world(32005)
@@ -7482,6 +8541,14 @@ func _test_diplomacy_state_and_ai() -> void:
 			and prepared_launched_targets.has(plan_secondary),
 		"同批准备完成的多个目标必须分别生成攻击命令，不能退化为单点发动"
 	)
+	_check(
+		preparation_nation.campaign_theater_anchor_city
+			== plan_primary
+			and preparation_nation
+				.campaign_theater_started_day
+				== plan_state.day,
+		"攻势实际发动后必须持久记录主战区锚点"
+	)
 	for army in plan_state.armies:
 		plan_sim._settle_idle(army, plan_origin)
 	plan_sim._clear_campaign_attack_plan(0)
@@ -7573,6 +8640,35 @@ func _test_diplomacy_state_and_ai() -> void:
 		role_city_guard,
 		role_edge_support,
 	])
+	var role_attack_group := (
+		role_attack_state.nations[0].battle_groups[0]
+	)
+	role_attack_state.assign_army_to_battle_group(
+		role_heavy,
+		role_attack_group.id
+	)
+	role_attack_state.assign_army_to_battle_group(
+		role_edge_support,
+		role_attack_group.id
+	)
+	var other_attack_group := role_attack_state.create_battle_group(
+		0
+	)
+	var other_group_light := _make_army(
+		1988,
+		0,
+		5000,
+		10,
+		10
+	)
+	other_group_light.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	other_group_light.location_city = role_attack_origin
+	other_group_light.move_from = role_attack_origin
+	role_attack_state.armies.append(other_group_light)
+	role_attack_state.assign_army_to_battle_group(
+		other_group_light,
+		other_attack_group.id
+	)
 	var role_attack_sim := Simulation.new()
 	role_attack_sim.setup(role_attack_state)
 	var role_attack_view := AiWorldView.build(
@@ -7614,8 +8710,38 @@ func _test_diplomacy_state_and_ai() -> void:
 		role_preparation_built
 			and role_assignments.has(role_heavy.id)
 			and role_assignments.has(role_edge_support.id)
-			and not role_assignments.has(role_city_guard.id),
-		"15000攻势军应与邻近边槽5000军协同准备，城市填线军必须留守"
+			and not role_assignments.has(role_city_guard.id)
+			and not role_attack_sim
+				._can_assign_campaign_preparation_army(
+					0,
+					other_group_light,
+					role_attack_target
+				),
+		"同一持久战团成员应协同准备，其他战团和独立填线军不得混入该目标"
+	)
+	var late_group_light := _make_army(1987, 0, 5000, 10, 10)
+	late_group_light.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	late_group_light.location_city = role_attack_origin
+	late_group_light.move_from = role_attack_origin
+	role_attack_state.armies.append(late_group_light)
+	role_attack_state.assign_army_to_battle_group(
+		late_group_light,
+		role_attack_group.id
+	)
+	var persistent_plan_synced := (
+		role_attack_sim._ensure_campaign_preparation_plan(
+			0,
+			role_attack_target,
+			role_defense_plan,
+			ArmyCoordinator.new()
+		)
+	)
+	_check(
+		persistent_plan_synced
+			and role_assignments.has(late_group_light.id)
+			and int(role_assignments[late_group_light.id])
+				== role_attack_target,
+		"进行中攻势必须自动吸收同一持久战团后来补入的成员"
 	)
 	role_attack_sim.free()
 
@@ -7666,6 +8792,12 @@ func _test_diplomacy_state_and_ai() -> void:
 		fallback_army.move_from = fallback_origin
 		fallback_state.armies.append(fallback_army)
 		fallback_mobile.append(fallback_army)
+	var fallback_group := fallback_state.nations[0].battle_groups[0]
+	for fallback_army in fallback_mobile:
+		fallback_state.assign_army_to_battle_group(
+			fallback_army,
+			fallback_group.id
+		)
 	var fallback_sim := Simulation.new()
 	fallback_sim.setup(fallback_state)
 	var fallback_view := AiWorldView.build(fallback_state, 0)
@@ -7706,16 +8838,203 @@ func _test_diplomacy_state_and_ai() -> void:
 			)
 		)
 	_check(
-		fallback_state.target_heavy_army_count(0) == 0
-			and fallback_preparation_built
+		fallback_preparation_built
 			and fallback_assignments.size() == 2
 			and fallback_only_light
 			and not fallback_assignments.has(
 				fallback_city_guard.id
 			),
-		"小国无重军编制时，应以可抽调5000军组织临时攻势且不得抽走城市填线军"
+		"只有两支轻军的不满编战团也可组织攻势，且不得抽走独立城市填线军"
 	)
 	fallback_sim.free()
+
+	var borrowed_state := GameState.new()
+	borrowed_state.generate_grid_world(32016)
+	borrowed_state.uses_heightmap = true
+	borrowed_state.armies.clear()
+	for borrowed_city in borrowed_state.cities:
+		borrowed_city.owner_nation = 1
+	for borrowed_city_id in range(10):
+		borrowed_state.cities[borrowed_city_id].owner_nation = 0
+	borrowed_state.nations[0].capital_city_id = 0
+	var borrowed_origin := 9
+	var borrowed_target := 10
+	borrowed_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var borrowed_guard := _make_army(2100, 0, 5000, 10, 10)
+	borrowed_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	borrowed_guard.location_city = borrowed_origin
+	borrowed_guard.move_from = borrowed_origin
+	var borrowed_line_a := _make_army(2101, 0, 5000, 10, 10)
+	var borrowed_line_b := _make_army(2102, 0, 5000, 10, 10)
+	for borrowed_line in [borrowed_line_a, borrowed_line_b]:
+		borrowed_line.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+		borrowed_line.location_city = borrowed_origin
+		borrowed_line.move_from = borrowed_origin
+	var borrowed_free := _make_army(2103, 0, 4999, 10, 10)
+	borrowed_free.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	borrowed_free.location_city = borrowed_origin
+	borrowed_free.move_from = borrowed_origin
+	borrowed_state.armies.append_array([
+		borrowed_guard,
+		borrowed_line_a,
+		borrowed_line_b,
+		borrowed_free,
+	])
+	var borrowed_group := borrowed_state.nations[0].battle_groups[0]
+	borrowed_state.assign_army_to_battle_group(
+		borrowed_line_a,
+		borrowed_group.id
+	)
+	borrowed_state.assign_army_to_battle_group(
+		borrowed_free,
+		borrowed_group.id
+	)
+	var borrowed_sim := Simulation.new()
+	borrowed_sim.setup(borrowed_state)
+	var borrowed_view := AiWorldView.build(borrowed_state, 0)
+	var borrowed_plan := CityDefensePlan.new()
+	borrowed_plan.view = borrowed_view
+	borrowed_plan.assigned_city_by_army = {
+		borrowed_guard.id: borrowed_origin,
+		borrowed_line_a.id: borrowed_origin,
+		borrowed_line_b.id: borrowed_origin,
+	}
+	borrowed_plan.assigned_posture_by_army = {
+		borrowed_guard.id: CityDefensePlan.Posture.CITY,
+		borrowed_line_a.id: CityDefensePlan.Posture.EDGE,
+		borrowed_line_b.id: CityDefensePlan.Posture.EDGE,
+	}
+	borrowed_plan.assigned_edge_by_army = {
+		borrowed_line_a.id: borrowed_target,
+		borrowed_line_b.id: borrowed_target,
+	}
+	borrowed_plan.assigned_armies_by_city = {
+		borrowed_origin: [
+			borrowed_guard.id,
+			borrowed_line_a.id,
+			borrowed_line_b.id,
+		],
+	}
+	var borrowed_built := (
+		borrowed_sim._ensure_campaign_preparation_plan(
+			0,
+			borrowed_target,
+			borrowed_plan,
+			ArmyCoordinator.new()
+		)
+	)
+	var borrowed_assignments := (
+		borrowed_state.nations[0]
+			.campaign_preparation_assignments
+	)
+	var borrowed_line_count := 0
+	for borrowed_id in [
+		borrowed_line_a.id,
+		borrowed_line_b.id,
+	]:
+		if borrowed_assignments.has(borrowed_id):
+			borrowed_line_count += 1
+	_check(
+		borrowed_built
+			and borrowed_assignments.size() == 2
+			and borrowed_line_count == 1
+			and borrowed_assignments.has(borrowed_free.id)
+			and borrowed_assignments.has(borrowed_line_a.id)
+			and not borrowed_assignments.has(borrowed_guard.id)
+			and not borrowed_assignments.has(borrowed_line_b.id),
+		"每个攻势目标必须且只能使用一个持久战团，不得临时借入其他填线军"
+	)
+	borrowed_sim.free()
+
+	var theater_state := GameState.new()
+	theater_state.generate_grid_world(32017)
+	theater_state.uses_heightmap = true
+	theater_state.armies.clear()
+	for theater_city in theater_state.cities:
+		theater_city.owner_nation = 0
+	for theater_edge in theater_state.edges:
+		if theater_edge.max_manpower > 0:
+			theater_edge.max_manpower = 30000
+	var theater_anchor := 1
+	var theater_local_target := 2
+	var theater_far_target := 63
+	theater_state.cities[theater_anchor].owner_nation = 1
+	theater_state.cities[theater_far_target].owner_nation = 1
+	theater_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var theater_heavy := _make_army(
+		2200,
+		0,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		10,
+		10
+	)
+	theater_heavy.max_size = (
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	theater_heavy.location_city = 0
+	theater_heavy.move_from = 0
+	theater_state.armies.append(theater_heavy)
+	var theater_sim := Simulation.new()
+	theater_sim.setup(theater_state)
+	theater_state.nations[0].campaign_theater_anchor_city = (
+		theater_anchor
+	)
+	theater_state.nations[0].campaign_theater_started_day = 10
+	var retry_same_theater := (
+		theater_sim._campaign_objective_in_current_theater(
+			0,
+			theater_far_target
+		)
+	)
+	var local_only_plan := (
+		theater_sim._ensure_campaign_preparation_plan(
+			0,
+			theater_anchor
+		)
+	)
+	_check(
+		retry_same_theater == theater_anchor
+			and local_only_plan
+			and theater_state.nations[0]
+				.campaign_preparation_targets
+				== [theater_anchor],
+		"原战区目标仍为敌城时应继续原方向，且同波不得加入远端第二战区"
+	)
+	theater_sim._clear_campaign_preparation_plan(0)
+	theater_state.cities[theater_anchor].owner_nation = 0
+	theater_state.cities[theater_local_target].owner_nation = 1
+	theater_state.ownership_revision += 1
+	var continued_locally := (
+		theater_sim._campaign_objective_in_current_theater(
+			0,
+			theater_far_target
+		)
+	)
+	_check(
+		continued_locally == theater_local_target,
+		"原目标攻下后应沿当前战区攻击邻近敌城，不得立即跨图换线"
+	)
+	theater_state.cities[theater_local_target].owner_nation = 0
+	theater_state.ownership_revision += 1
+	var strategic_redeployment := (
+		theater_sim._campaign_objective_in_current_theater(
+			0,
+			theater_far_target
+		)
+	)
+	_check(
+		strategic_redeployment == theater_far_target,
+		"当前战区清空后必须允许重军向远端新战区战略转场"
+	)
+	theater_sim.free()
 
 	var prewar_state := GameState.new()
 	prewar_state.generate_grid_world(32014)
@@ -8358,22 +9677,198 @@ func _test_diplomacy_state_and_ai() -> void:
 	local_relief_sim.setup(local_relief_state)
 	local_relief_sim._advance_priority_city_defense_echelons()
 	_check(
-		neighboring_guard.state == Army.State.MOVING
-			and neighboring_guard.ai_action
-				== ActionCandidate.Kind.REINFORCE
-			and neighboring_guard.ai_target_city == local_target
-			and neighboring_guard.ai_order_reason.contains(
+		neighboring_guard.state == Army.State.IDLE
+			and edge_guard.state == Army.State.HOLDING
+			and not neighboring_guard.ai_order_reason.contains(
 				"邻接战区驰援"
 			)
-			and edge_guard.state == Army.State.MOVING
-			and edge_guard.ai_action == ActionCandidate.Kind.RETREAT
-			and edge_guard.ai_target_city == local_target
-			and edge_guard.ai_order_reason.contains(
+			and not edge_guard.ai_order_reason.contains(
 				"邻接战区驰援"
 			),
-		"普通城市受攻时，邻城军与相邻边驻军都必须自动入城驰援"
+		"删除邻近填线军自动协防后，邻城军与边槽军必须继续原防区任务"
+	)
+	edge_guard.line_assignment_city = local_target
+	edge_guard.line_assignment_posture = Army.LinePosture.EDGE
+	edge_guard.line_assignment_edge = local_source
+	var local_sector := FrontierDefenseSector.new()
+	local_sector.city_id = local_target
+	local_sector.owner_nation = 0
+	local_sector.configure(
+		[local_source] as Array[int],
+		local_relief_state.ownership_revision
+	)
+	local_sector.assign(1, edge_guard.id)
+	local_relief_state.nations[0].frontier_defense_sectors[
+		local_target
+	] = local_sector
+	local_relief_sim._resolve_line_edge_assignment_emergencies()
+	_check(
+		edge_guard.state == Army.State.MOVING
+			and edge_guard.ai_action
+				== ActionCandidate.Kind.RETREAT
+			and edge_guard.ai_target_city == local_target
+			and edge_guard.ai_order_reason.contains(
+				"立即回城"
+			),
+		"受围城市自己的边槽填线军必须每日紧急回城，不等待AI决策周期"
+	)
+	local_relief_state.cities[local_source].owner_nation = 1
+	local_siege.finished = true
+	local_relief_sim._settle_idle(edge_guard, local_target)
+	local_relief_sim._resolve_line_edge_assignment_emergencies()
+	_check(
+		local_sector.state
+			== FrontierDefenseSector.State.RESTORING
+			and edge_guard.state == Army.State.MOVING
+			and edge_guard.ai_action == ActionCandidate.Kind.HOLD
+			and edge_guard.ai_target_city == local_source
+			and edge_guard.ai_order_reason.contains("恢复边槽"),
+		"城市防守成功且战斗消失后，防区军必须返回原持久边槽"
+	)
+	local_relief_state.cities[local_source].owner_nation = 0
+	edge_guard.state = Army.State.HOLDING
+	edge_guard.move_from = local_source
+	edge_guard.move_to = local_target
+	edge_guard.move_progress = Simulation.HOLDING_TARGET_PROGRESS
+	edge_guard.on_edge = true
+	edge_guard.line_assignment_city = local_target
+	edge_guard.line_assignment_posture = Army.LinePosture.EDGE
+	edge_guard.line_assignment_edge = local_source
+	local_relief_state.cities[local_target].owner_nation = 1
+	local_relief_sim._resolve_line_edge_assignment_emergencies()
+	_check(
+		edge_guard.state == Army.State.RETREATING
+			and edge_guard.move_to == local_source
+			and edge_guard.line_assignment_city == -1
+			and edge_guard.ai_order_reason.contains(
+				"锚点城市%d失守" % local_target
+			),
+		"锚点城市已经失守时，驻边填线军必须撤往友城并清除失效防区"
 	)
 	local_relief_sim.free()
+
+	var role_state := GameState.new()
+	role_state.generate_grid_world(32018)
+	role_state.uses_heightmap = true
+	role_state.armies.clear()
+	for role_city in role_state.cities:
+		role_city.owner_nation = 1
+	for role_city_id in range(10):
+		role_state.cities[role_city_id].owner_nation = 0
+	for role_a in range(role_state.nations.size()):
+		for role_b in range(
+			role_a + 1,
+			role_state.nations.size()
+		):
+			role_state.set_diplomatic_relation(
+				role_a,
+				role_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var role_lights: Array[Army] = []
+	for role_index in range(5):
+		var role_light := role_state.create_army(
+			0,
+			role_index,
+			GameState.INITIAL_LIGHT_ARMY_SIZE,
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+		role_lights.append(role_light)
+	var role_sim := Simulation.new()
+	role_sim.setup(role_state)
+	var role_group := role_state.nations[0].battle_groups[0]
+	role_state.assign_army_to_battle_group(
+		role_lights[0],
+		role_group.id
+	)
+	role_state.assign_army_to_battle_group(
+		role_lights[1],
+		role_group.id
+	)
+	role_sim._reconcile_strategic_roles(0)
+	var promoted_light_count := 0
+	var promoted_light: Army = null
+	for role_light in role_lights:
+		if role_light.is_main_battle_role():
+			promoted_light_count += 1
+			promoted_light = role_light
+	var role_view := AiWorldView.build(role_state, 0)
+	var role_plan := CityDefensePlan.build(
+		role_view,
+		StrategicMapSnapshot.build(role_view),
+		ThreatField.build(role_view)
+	)
+	var line_redeploy_blocked := true
+	for role_light in role_lights:
+		if role_light.is_main_battle_role():
+			continue
+		line_redeploy_blocked = (
+			line_redeploy_blocked
+			and not role_plan.can_redeploy(
+				role_light,
+				ArmyCoordinator.new()
+			)
+		)
+	_check(
+		promoted_light_count == 2
+			and promoted_light != null
+			and role_plan.assigned_city_for(
+				promoted_light
+			) == -1
+			and line_redeploy_blocked,
+		"战团内两支5000轻军必须承担主战职能，且不得占用填线防区槽"
+	)
+	role_sim._ai_assign_targets()
+	var line_contract_respected := true
+	for role_light in role_lights:
+		if not role_light.is_line_role():
+			continue
+		line_contract_respected = (
+			line_contract_respected
+			and role_light.ai_action
+				not in [
+					ActionCandidate.Kind.ATTACK,
+					ActionCandidate.Kind.MERGE,
+				]
+			and (
+				role_light.ai_order_reason.is_empty()
+				or role_light.ai_order_reason.begins_with(
+					"填线部署"
+				)
+			)
+		)
+	_check(
+		line_contract_respected,
+		"和平期填线军只能执行统一填线部署，不得自行攻击、合并或选择其他动作"
+	)
+	var contract_heavy := role_state.create_army(
+		0,
+		0,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	role_sim._reconcile_strategic_roles(0)
+	var group_roles_preserved := (
+		contract_heavy.is_main_battle_role()
+		and role_lights[0].is_main_battle_role()
+		and role_lights[1].is_main_battle_role()
+	)
+	for role_index in range(2, role_lights.size()):
+		group_roles_preserved = (
+			group_roles_preserved
+			and role_lights[role_index].is_line_role()
+		)
+	_check(
+		group_roles_preserved,
+		"重军加入后同战团两支轻军继续主战，其余5000军继续填线"
+	)
+	role_state.armies = [role_lights[0]] as Array[Army]
+	role_sim._reconcile_strategic_roles(0)
+	_check(
+		role_lights[0].is_main_battle_role(),
+		"国家仅剩一支5000军时，该军必须自动成为主战军"
+	)
+	role_sim.free()
 
 	var defense_state := GameState.new()
 	defense_state.generate_grid_world(32007)
@@ -8902,6 +10397,7 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 	for army in view.friendly_armies:
 		if (
 			army.location_city != capital_id
+			and army.is_line_role()
 			and not snapshot.potential_frontier_cities.has(army.location_city)
 		):
 			interior_army = army
@@ -8922,8 +10418,7 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 		_check(
 			reinforce != null
 			and snapshot.potential_frontier_cities.has(reinforce.target_city)
-			and reinforce.defensive_deployment
-			and reinforce.reason.contains("高威胁中立国边境"),
+			and reinforce.defensive_deployment,
 			(
 				"内地军应优先增援高威胁国家边境，而不是继续聚集首都：%s"
 				% (
@@ -9083,7 +10578,7 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 		view,
 		ThreatField.build(view),
 		food_before,
-		gs.target_army_count(0)
+		formations_before
 	)
 	var food_after := sim._food_security_report(0)
 	var troops_after := 0
@@ -9176,6 +10671,30 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		DiplomacyAI.FoodPosture.DEFENSIVE_WAR
 	)
 	var poor_capacity := DiplomacyAI.mobilization_capacity(gs, 1)
+	var light_creation_cost := (
+		GameState.formation_creation_gold_cost(
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+	)
+	var rich_gold_before_exact_cost := (
+		gs.nations[0].treasury_gold
+	)
+	gs.nations[0].treasury_gold = light_creation_cost
+	var exact_cost_war_capacity := (
+		DiplomacyAI.mobilization_capacity(
+			gs,
+			0,
+			DiplomacyAI.FoodPosture.OFFENSIVE_WAR
+		)
+	)
+	var exact_cost_guarded_capacity := (
+		DiplomacyAI.mobilization_capacity(
+			gs,
+			0,
+			DiplomacyAI.FoodPosture.GUARDED
+		)
+	)
+	gs.nations[0].treasury_gold = rich_gold_before_exact_cost
 	var rich_target_troops := DiplomacyAI._troop_count(gs, 0) \
 		+ rich_capacity * DiplomacyAI.MOBILIZATION_ARMY_SIZE
 	var rich_food_plan := DiplomacyAI.war_food_report(
@@ -9198,6 +10717,11 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		and defensive_capacity >= rich_capacity
 		and poor_capacity == 0,
 		"富粮国应可额外动员4军，防御动员不少于进攻，贫粮大国不得爆兵"
+	)
+	_check(
+		exact_cost_war_capacity >= 1
+			and exact_cost_guarded_capacity == 0,
+		"战争动员可用最后一笔足额建制费爆兵，非战争姿态仍须保留100金"
 	)
 	_check(
 		bool(rich_food_plan["target_sustainable"])
@@ -9283,14 +10807,12 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		ThreatField.build(AiWorldView.build(gs, 0))
 	)
 	_check(
-		gs.armies.size() <= army_count_before
-			and (
-				not mobilized
-				or gs.nations[0].ai_last_force_reason.contains(
-					"超过城市比例军制目标"
-				)
+		mobilized
+			and gs.armies.size() == army_count_before + 1
+			and gs.nations[0].ai_last_force_reason.contains(
+				"战争生存动员"
 			),
-		"战争动员不得突破按城市比例确定的两档军制上限"
+		"有效战争动员目标必须允许在库存门禁内继续扩军"
 	)
 	sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.MAKE_PEACE,
@@ -9302,6 +10824,160 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		gs.nations[0].war_mobilization_target_troops == 0
 		and gs.nations[0].war_mobilization_until_day == -1,
 			"结束最后一场战争后必须清除动员目标"
+	)
+	sim.free()
+
+
+func _test_small_nation_survival_and_emergency_recruitment() -> void:
+	print("[34b] 小国生存：最后城市集中守备、负收益应急征兵与库存硬边界")
+	var gs := GameState.new()
+	gs.generate_grid_world(34002)
+	gs.uses_heightmap = true
+	gs.armies.clear()
+	gs.battles.clear()
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var last_city_id := gs.nations[0].capital_city_id
+	for city in gs.cities:
+		city.owner_nation = 1
+		city.has_warehouse = false
+		city.is_capital = false
+		if city.id == last_city_id:
+			city.owner_nation = 0
+			city.has_warehouse = true
+			city.is_capital = true
+			city.food_per_half_year = 0
+			city.food_storage = 100000
+	gs.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var guard := gs.create_army(
+		0,
+		last_city_id,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var enemy_city_id := gs.neighbors(last_city_id)[0]
+	var besieger := gs.create_army(
+		1,
+		enemy_city_id,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var peaceful_view := AiWorldView.build(gs, 0)
+	var peaceful_plan := CityDefensePlan.new()
+	peaceful_plan.view = peaceful_view
+	peaceful_plan.snapshot = StrategicMapSnapshot.build(
+		peaceful_view
+	)
+	peaceful_plan.threat = ThreatField.build(peaceful_view)
+	var peaceful_slots := (
+		peaceful_plan._build_role_defense_slots()
+	)
+	var siege := gs.new_battle(Battle.Kind.SIEGE)
+	siege.city = gs.cities[last_city_id]
+	siege.edge = gs.edge_of(last_city_id, enemy_city_id)
+	siege.has_garrison = true
+	siege.side_a.append(besieger)
+	siege.side_b.append(guard)
+	besieger.state = Army.State.FIGHTING
+	besieger.battle_id = siege.id
+	guard.state = Army.State.FIGHTING
+	guard.battle_id = siege.id
+	var siege_view := AiWorldView.build(gs, 0)
+	var siege_plan := CityDefensePlan.new()
+	siege_plan.view = siege_view
+	siege_plan.snapshot = StrategicMapSnapshot.build(siege_view)
+	siege_plan.threat = ThreatField.build(siege_view)
+	var siege_slots := siege_plan._build_role_defense_slots()
+	_check(
+		peaceful_slots.size() == 1
+			and int(peaceful_slots[0]["posture"])
+				== CityDefensePlan.Posture.CITY
+			and siege_slots.size() == 2
+			and int(siege_slots[0]["city_id"]) == last_city_id
+			and int(siege_slots[1]["city_id"]) == last_city_id
+			and int(siege_slots[0]["posture"])
+				== CityDefensePlan.Posture.CITY
+			and int(siege_slots[1]["posture"])
+				== CityDefensePlan.Posture.CITY,
+		"一城小国平时只设1个城市守备槽并保留机动军，被围后才把预备队投入第2守城槽"
+	)
+	var creation_cost := (
+		GameState.formation_creation_gold_cost(
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+	)
+	gs.nations[0].manpower_pool = (
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	gs.nations[0].treasury_gold = creation_cost
+	var food_report := sim._food_security_report(
+		0,
+		siege_view.friendly_armies
+	)
+	var mobilized := sim._ai_manage_force_structure(
+		siege_view,
+		StrategicMapSnapshot.build(siege_view),
+		ThreatField.build(siege_view)
+	)
+	var emergency_army: Army = null
+	for army in gs.armies:
+		if army.owner_nation == 0 and army != guard:
+			emergency_army = army
+			break
+	_check(
+		mobilized
+			and emergency_army != null
+			and gs.active_army_count(0) == 2
+			and float(food_report["monthly_surplus"]) < 0.0
+			and float(food_report["runway_years"])
+				>= Simulation.EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS
+			and gs.nations[0].treasury_gold == 0
+			and gs.nations[0].manpower_pool == 0,
+		"最后城市被围时，即使钱粮净收益为负，只要库存续航足够且能现付成本就应征募第2支轻军"
+	)
+	if emergency_army != null:
+		sim._reconcile_siege_city_defenders(siege)
+	_check(
+		emergency_army != null
+			and siege.has_army(emergency_army)
+			and emergency_army.battle_id == siege.id,
+		"被围城市当日新征军必须进入现有围城守军侧，不能留在战斗外"
+	)
+	if emergency_army != null:
+		siege.side_b.erase(emergency_army)
+		emergency_army.battle_id = -1
+		gs.armies.erase(emergency_army)
+	gs.cities[last_city_id].food_storage = 0
+	gs.nations[0].manpower_pool = (
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	gs.nations[0].treasury_gold = creation_cost
+	var empty_stock_view := AiWorldView.build(gs, 0)
+	var blocked_by_empty_stock := (
+		sim._ai_manage_force_structure(
+			empty_stock_view,
+			StrategicMapSnapshot.build(empty_stock_view),
+			ThreatField.build(empty_stock_view)
+		)
+	)
+	_check(
+		not blocked_by_empty_stock
+			and gs.active_army_count(0) == 1
+			and gs.nations[0].treasury_gold == creation_cost
+			and gs.nations[0].manpower_pool
+				== GameState.INITIAL_LIGHT_ARMY_SIZE,
+		"负收益征兵不等于透支：粮库为0时必须拒绝建军且不得预扣金钱或人力"
 	)
 	sim.free()
 

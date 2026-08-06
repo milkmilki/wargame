@@ -11,6 +11,17 @@ enum State {
 	HOLDING,    ## 固定部署在边上；不移动，持续补给并累计地形适应
 }
 
+enum StrategicRole {
+	LINE,       ## 填线军：只执行统一防区规划，可被国家级攻势借用为辅助军
+	MAIN,       ## 主战军：执行完整 Utility AI 与国家级攻势
+}
+
+enum LinePosture {
+	NONE,
+	CITY,
+	EDGE,
+}
+
 const DEFAULT_MAX_SIZE: int = 15000
 
 var id: int = 0
@@ -21,6 +32,13 @@ var max_size: int = DEFAULT_MAX_SIZE       ## 满编人数上限
 var speed_factor: float = 0.5              ## 速度系数 (0,1)
 var attack: int = 10                       ## 攻击力
 var defense: int = 10                      ## 防御力
+var strategic_role: int = StrategicRole.LINE
+## 所属持久战团；-1 表示独立填线军。战团内最多 2 支轻军和 1 支重军。
+var battle_group_id: int = -1
+## 填线军的持久防区 Assignment。前线未变化时跨 AI 周期保留，避免每次从零匹配换防。
+var line_assignment_city: int = -1
+var line_assignment_posture: int = LinePosture.NONE
+var line_assignment_edge: int = -1
 
 var location_city: int = -1                ## 静止时所在城市；行军时为出发城
 var state: int = State.IDLE
@@ -90,3 +108,40 @@ var defensive_blocked_edge_b: int = -1
 
 ## 跨入敌境时冻结的占领归属国；可为军队所属国或提供出发领土的盟国。
 var occupation_claimant_nation: int = -1
+
+
+func is_main_battle_role() -> bool:
+	return (
+		max_size >= DEFAULT_MAX_SIZE
+		or strategic_role == StrategicRole.MAIN
+	)
+
+
+func is_line_role() -> bool:
+	return (
+		max_size < DEFAULT_MAX_SIZE
+		and strategic_role == StrategicRole.LINE
+	)
+
+
+func clear_line_assignment() -> void:
+	line_assignment_city = -1
+	line_assignment_posture = LinePosture.NONE
+	line_assignment_edge = -1
+
+
+## 是否已经物理停留在城市节点。
+## 围城军抵达后会保留 move_from/move_to 作为补给与地形锚点，但已释放道路占用；
+## 容量等待军则以 location_city 锚定节点。两种状态必须由同一谓词识别。
+func is_at_city_node(city_id: int) -> bool:
+	return current_city_node() == city_id
+
+
+func current_city_node() -> int:
+	if on_edge:
+		return -1
+	if move_to >= 0 and move_progress >= 1.0:
+		return move_to
+	if move_to == -1:
+		return location_city
+	return -1

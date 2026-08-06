@@ -26,6 +26,8 @@ const RANDOM_HASH_MULT: int = 48271
 ## 无边信息兜底用 FRONTAGE_FALLBACK。拆分不增加总正面（基于总兵力的前 N 名，与军队数量无关，item 12）。
 const FRONTAGE_FALLBACK: int = 15000
 const SIEGE_FRONTAGE: int = 15000
+const SIEGE_TWO_DIRECTION_ATTACK_MULT: float = 1.20
+const SIEGE_THREE_DIRECTION_ATTACK_MULT: float = 1.30
 
 # ---- 士气 ----
 const MORALE_START: float = 1.0
@@ -258,6 +260,39 @@ static func defense_multiplier(danger: float, holding_days: float) -> float:
 	return clampf(1.0 - DEFENSE_DANGER_K * d * exp(-days / HOLDING_TAU_DAYS), 0.0, 1.0)
 
 
+static func siege_attack_direction_count(
+	battle: Battle
+) -> int:
+	if (
+		battle == null
+		or battle.kind != Battle.Kind.SIEGE
+		or battle.city == null
+	):
+		return 1
+	var origins := {}
+	for army in battle.side_a:
+		if (
+			army.size <= 0
+			or army.move_to != battle.city.id
+			or army.move_from < 0
+			or army.move_from == battle.city.id
+		):
+			continue
+		origins[army.move_from] = true
+	return maxi(origins.size(), 1)
+
+
+static func siege_attack_damage_multiplier(
+	battle: Battle
+) -> float:
+	var directions := siege_attack_direction_count(battle)
+	if directions >= 3:
+		return SIEGE_THREE_DIRECTION_ATTACK_MULT
+	if directions == 2:
+		return SIEGE_TWO_DIRECTION_ATTACK_MULT
+	return 1.0
+
+
 ## 解算一场战斗的一个回合，就地修改 battle 与其中军队的 size / 士气。
 ## 结束（一方崩溃或被歼灭）时置 battle.finished=true 与 winner_side(1/2)。
 ## shared_roll：本 tick 全局共享的战场波动骰值（item 8「共享战场随机因素」，天气/能见度/
@@ -441,6 +476,7 @@ static func resolve_round(
 		* attack_pen_a
 		* roll_multiplier
 		* side_modifiers.x
+		* siege_attack_damage_multiplier(battle)
 	)
 	var fire_b := (
 		_frontline_attack(frontline_b, combat_efficiency_b)

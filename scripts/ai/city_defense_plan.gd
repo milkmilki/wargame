@@ -17,6 +17,7 @@ const EDGE_DEFENSE_MIN_POWER_RATIO: float = 0.40
 const EDGE_SWITCH_PRESSURE_RATIO: float = 1.25
 const STRATEGIC_COMMIT_DAYS: int = 30
 const ROLE_DEPLOYMENT_SCORE: float = 2000.0
+const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
 
 var view: AiWorldView
 var snapshot: StrategicMapSnapshot
@@ -33,10 +34,14 @@ var primary_frontline_cities: Dictionary = {}
 var frontline_cities: Dictionary = {}
 var frontline_allocation: Dictionary = {}
 var defense_assignment_slots: int = 0
+var line_city_slots: int = 0
+var line_edge_slots: int = 0
 var assigned_city_by_army: Dictionary = {} ## army.id -> city_id
 var assigned_armies_by_city: Dictionary = {} ## city_id -> Array[army.id]
 var assigned_posture_by_army: Dictionary = {} ## army.id -> Posture
 var assigned_edge_by_army: Dictionary = {} ## army.id -> neighbor_id
+var _role_city_priority_cache: Dictionary = {}
+var _role_path_dist_by_origin: Dictionary = {}
 
 
 static func build(
@@ -155,7 +160,7 @@ func must_keep_at_city(
 		) < requirement_at(army.location_city)
 	return (
 		army != null
-		and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
+		and army.is_line_role()
 		and army.state == Army.State.IDLE
 		and int(assigned_city_by_army.get(army.id, -1))
 			== army.location_city
@@ -174,10 +179,11 @@ func can_redeploy(
 		return false
 	if (
 		view.state.uses_heightmap
-		and army.max_size
-			== GameState.INITIAL_HEAVY_ARMY_SIZE
+		and army.is_main_battle_role()
 	):
 		return true
+	if view.state.uses_heightmap:
+		return false
 	if not view.state.uses_heightmap:
 		if army.state == Army.State.IDLE:
 			if not required_power.has(army.location_city):
@@ -209,9 +215,11 @@ func can_join_offensive(
 		or view.day < army.defensive_deployment_until_day
 	):
 		return false
-	if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+	if army.is_main_battle_role():
 		return true
-	if army.max_size != GameState.INITIAL_LIGHT_ARMY_SIZE:
+	if view.state.uses_heightmap:
+		return false
+	if not army.is_line_role():
 		return false
 	if not assigned_city_by_army.has(army.id):
 		return true
@@ -571,8 +579,7 @@ func _assign_role_based_defense() -> void:
 	for army in view.friendly_armies:
 		if (
 			army.size <= 0
-			or army.max_size
-				!= GameState.INITIAL_LIGHT_ARMY_SIZE
+			or not army.is_line_role()
 		):
 			continue
 		if (
@@ -597,22 +604,98 @@ func _assign_role_based_defense() -> void:
 		)
 	)
 	var defense_slots := _build_role_defense_slots()
+	line_city_slots = 0
+	line_edge_slots = 0
+	for slot in defense_slots:
+		if int(slot["posture"]) == Posture.EDGE:
+			line_edge_slots += 1
+		else:
+			line_city_slots += 1
 	defense_assignment_slots = mini(
 		defense_slots.size(),
 		line_armies.size()
 	)
-	if line_armies.is_empty() or defense_slots.is_empty():
+	if line_armies.is_empty():
 		return
-	for slot in defense_slots:
-		if line_armies.is_empty():
+	if defense_slots.is_empty():
+		for army in line_armies:
+			army.clear_line_assignment()
+		return
+	var eligible_line_armies := line_armies.duplicate()
+	# 只激活当前兵力能覆盖的最高优先级槽位。持久 Assignment 只能在该前缀内
+	# 续任，避免城市守军损失后，旧边槽军仍驻边而把更高优先级城市留空。
+	var remaining_slots := defense_slots.slice(
+		0,
+		defense_assignment_slots
+	)
+	var remaining_armies := line_armies.duplicate()
+	# 防区槽是 Assignment 真源。先恢复仍合法的槽-军关系，再处理旧版军队侧索引。
+	var sector_slot_index := 0
+	while sector_slot_index < remaining_slots.size():
+		var slot: Dictionary = remaining_slots[sector_slot_index]
+		var sector := _sector_for_slot(slot)
+		if sector == null:
+			sector_slot_index += 1
+			continue
+		var slot_index := int(slot["sector_slot"])
+		var army_id := sector.assigned_army_at(slot_index)
+		if army_id < 0:
+			sector_slot_index += 1
+			continue
+		var army := _friendly_line_army_by_id(army_id)
+		if army == null:
+			sector.clear_slot(slot_index)
+			sector_slot_index += 1
+			continue
+		if not remaining_armies.has(army):
+			if army.state == Army.State.FIGHTING:
+				_record_role_assignment(army, slot)
+				remaining_slots.remove_at(sector_slot_index)
+				continue
+			sector.clear_slot(slot_index)
+			sector_slot_index += 1
+			continue
+		if _role_assignment_distance(
+			army,
+			int(slot["city_id"]),
+			int(slot["posture"]),
+			int(slot.get("edge_neighbor", -1))
+		) == INF:
+			sector.clear_slot(slot_index)
+			sector_slot_index += 1
+			continue
+		_record_role_assignment(army, slot)
+		remaining_slots.remove_at(sector_slot_index)
+		remaining_armies.erase(army)
+	# 同一优先级集合内保留有效的持久防区，减少无意义换防。
+	for army in line_armies:
+		var slot_index := _persistent_role_slot_index(
+			remaining_slots,
+			army
+		)
+		if slot_index < 0:
+			continue
+		var slot: Dictionary = remaining_slots[slot_index]
+		if _role_assignment_distance(
+			army,
+			int(slot["city_id"]),
+			int(slot["posture"]),
+			int(slot.get("edge_neighbor", -1))
+		) == INF:
+			continue
+		_record_role_assignment(army, slot)
+		remaining_slots.remove_at(slot_index)
+		remaining_armies.erase(army)
+	for slot in remaining_slots:
+		if remaining_armies.is_empty():
 			break
 		var city_id := int(slot["city_id"])
 		var posture := int(slot["posture"])
 		var edge_neighbor := int(slot.get("edge_neighbor", -1))
 		var best_index := -1
 		var best_distance := INF
-		for army_index in range(line_armies.size()):
-			var army := line_armies[army_index]
+		for army_index in range(remaining_armies.size()):
+			var army: Army = remaining_armies[army_index]
 			var distance := _role_assignment_distance(
 				army,
 				city_id,
@@ -629,7 +712,7 @@ func _assign_role_based_defense() -> void:
 							view.state,
 							view.nation_id,
 							army,
-							line_armies[best_index],
+							remaining_armies[best_index],
 							city_id
 						)
 					)
@@ -639,55 +722,325 @@ func _assign_role_based_defense() -> void:
 				best_distance = distance
 		if best_index < 0 or best_distance == INF:
 			continue
-		var army := line_armies[best_index]
-		line_armies.remove_at(best_index)
-		assigned_city_by_army[army.id] = city_id
-		assigned_posture_by_army[army.id] = posture
-		if edge_neighbor >= 0:
-			assigned_edge_by_army[army.id] = edge_neighbor
-		var assigned: Array[int] = assigned_armies_by_city.get(
-			city_id,
-			[] as Array[int]
+		var army: Army = remaining_armies[best_index]
+		remaining_armies.remove_at(best_index)
+		_record_role_assignment(army, slot)
+	for army in eligible_line_armies:
+		if not assigned_city_by_army.has(army.id):
+			_clear_army_from_frontier_sector(army)
+			army.clear_line_assignment()
+
+
+func _persistent_role_slot_index(
+	slots: Array,
+	army: Army
+) -> int:
+	if (
+		army.line_assignment_city < 0
+		or army.line_assignment_posture
+			== Army.LinePosture.NONE
+	):
+		return -1
+	for index in range(slots.size()):
+		var slot: Dictionary = slots[index]
+		if (
+			int(slot["city_id"])
+				== army.line_assignment_city
+			and int(slot["posture"])
+				== army.line_assignment_posture
+			and int(slot.get("edge_neighbor", -1))
+				== army.line_assignment_edge
+		):
+			return index
+	return -1
+
+
+func _record_role_assignment(
+	army: Army,
+	slot: Dictionary
+) -> void:
+	var city_id := int(slot["city_id"])
+	var posture := int(slot["posture"])
+	var edge_neighbor := int(slot.get("edge_neighbor", -1))
+	var sector := _sector_for_slot(slot)
+	_clear_army_from_frontier_sector(army)
+	if sector != null:
+		sector.assign(int(slot["sector_slot"]), army.id)
+	var effective_posture := posture
+	var effective_edge := edge_neighbor
+	if (
+		sector != null
+		and sector.state in [
+			FrontierDefenseSector.State.RECALLING,
+			FrontierDefenseSector.State.DEFENDING,
+		]
+	):
+		effective_posture = Posture.CITY
+		effective_edge = -1
+	assigned_city_by_army[army.id] = city_id
+	assigned_posture_by_army[army.id] = effective_posture
+	if effective_edge >= 0:
+		assigned_edge_by_army[army.id] = effective_edge
+	var assigned: Array[int] = assigned_armies_by_city.get(
+		city_id,
+		[] as Array[int]
+	)
+	assigned.append(army.id)
+	assigned_armies_by_city[city_id] = assigned
+	army.line_assignment_city = city_id
+	army.line_assignment_posture = posture
+	army.line_assignment_edge = edge_neighbor
+
+
+func _sector_for_slot(slot: Dictionary) -> FrontierDefenseSector:
+	if not slot.has("sector_city") or not slot.has("sector_slot"):
+		return null
+	return view.state.nations[
+		view.nation_id
+	].frontier_defense_sectors.get(
+		int(slot["sector_city"])
+	)
+
+
+func _clear_army_from_frontier_sector(army: Army) -> void:
+	if army == null or army.line_assignment_city < 0:
+		return
+	var sector: FrontierDefenseSector = view.state.nations[
+		view.nation_id
+	].frontier_defense_sectors.get(army.line_assignment_city)
+	if sector != null:
+		sector.clear_army(army.id)
+
+
+func _reconcile_frontier_defense_sectors() -> void:
+	var nation := view.state.nations[view.nation_id]
+	var sectors: Dictionary = nation.frontier_defense_sectors
+	var active_city_ids: Array = snapshot.frontier_cities.duplicate()
+	for city_id_value in snapshot.potential_frontier_cities:
+		if not active_city_ids.has(city_id_value):
+			active_city_ids.append(city_id_value)
+	var active_set := {}
+	for city_id_value in active_city_ids:
+		active_set[int(city_id_value)] = true
+	for city_id_value in sectors.keys().duplicate():
+		var city_id := int(city_id_value)
+		if (
+			active_set.has(city_id)
+			and city_id >= 0
+			and city_id < view.state.cities.size()
+			and view.state.cities[city_id].owner_nation
+				== view.nation_id
+		):
+			continue
+		var removed: FrontierDefenseSector = sectors[city_id]
+		for army_id in removed.assigned_army_ids:
+			var army := _friendly_line_army_by_id(int(army_id))
+			if (
+				army != null
+				and army.line_assignment_city == city_id
+			):
+				army.clear_line_assignment()
+		sectors.erase(city_id)
+	_sort_role_city_ids(active_city_ids)
+	for city_id_value in active_city_ids:
+		var city_id := int(city_id_value)
+		if (
+			city_id < 0
+			or city_id >= view.state.cities.size()
+			or view.state.cities[city_id].owner_nation
+				!= view.nation_id
+		):
+			continue
+		var edge_neighbors := _frontier_sector_edges(city_id)
+		var sector: FrontierDefenseSector = sectors.get(city_id)
+		if sector == null:
+			sector = FrontierDefenseSector.new()
+			sector.city_id = city_id
+			sector.owner_nation = view.nation_id
+			sectors[city_id] = sector
+		var topology_changed := (
+			sector.edge_neighbors.size() != edge_neighbors.size()
 		)
-		assigned.append(army.id)
-		assigned_armies_by_city[city_id] = assigned
+		if not topology_changed:
+			for neighbor in edge_neighbors:
+				if not sector.edge_neighbors.has(neighbor):
+					topology_changed = true
+					break
+		if topology_changed or sector.assigned_army_ids.is_empty():
+			sector.configure(
+				edge_neighbors,
+				view.state.ownership_revision
+			)
+		else:
+			sector.topology_revision = (
+				view.state.ownership_revision
+			)
+		for slot_index in range(sector.slot_count()):
+			var army_id := sector.assigned_army_at(slot_index)
+			if army_id < 0:
+				continue
+			var army := _friendly_line_army_by_id(army_id)
+			if army == null:
+				sector.clear_slot(slot_index)
+		if view.state.city_under_siege(city_id):
+			if sector.state in [
+				FrontierDefenseSector.State.NORMAL,
+				FrontierDefenseSector.State.RESTORING,
+			]:
+				sector.state = (
+					FrontierDefenseSector.State.RECALLING
+				)
+			else:
+				sector.state = (
+					FrontierDefenseSector.State.DEFENDING
+				)
+		elif sector.state in [
+			FrontierDefenseSector.State.RECALLING,
+			FrontierDefenseSector.State.DEFENDING,
+		]:
+			sector.state = FrontierDefenseSector.State.RESTORING
+	nation.frontier_defense_sectors = sectors
+
+
+func _frontier_sector_edges(city_id: int) -> Array[int]:
+	var result: Array[int] = []
+	for neighbor in view.state.neighbors(city_id):
+		var edge := view.state.edge_of(city_id, neighbor)
+		if (
+			edge == null
+			or edge.max_manpower <= 0
+			or not edge.allows_holding
+			or view.state.cities[neighbor].owner_nation
+				== view.nation_id
+		):
+			continue
+		var enemy_edge := view.state.is_enemy(
+			view.nation_id,
+			view.state.cities[neighbor].owner_nation
+		)
+		var potential_edge := (
+			snapshot.potential_frontier_edges.has(edge)
+		)
+		if enemy_edge or potential_edge:
+			result.append(neighbor)
+	var preferred := preferred_edge_at(city_id)
+	result.sort_custom(func(a: int, b: int) -> bool:
+		var score_a := _frontier_edge_rank(
+			city_id,
+			a,
+			preferred
+		)
+		var score_b := _frontier_edge_rank(
+			city_id,
+			b,
+			preferred
+		)
+		if not is_equal_approx(score_a, score_b):
+			return score_a > score_b
+		return EquivariantOrder.city_id_less(
+			view.state,
+			view.nation_id,
+			a,
+			b,
+			city_id
+		)
+	)
+	return result
+
+
+func _frontier_edge_rank(
+	city_id: int,
+	neighbor: int,
+	preferred: int
+) -> float:
+	var edge := view.state.edge_of(city_id, neighbor)
+	return (
+		(1000.0 if neighbor == preferred else 0.0)
+		+ snapshot.value_of_edge(city_id, neighbor)
+		+ snapshot.potential_threat_of_edge(city_id, neighbor)
+		+ (edge.danger if edge != null else 0.0)
+	)
+
+
+func _friendly_line_army_by_id(army_id: int) -> Army:
+	if army_id < 0:
+		return null
+	for army in view.friendly_armies:
+		if (
+			army.id == army_id
+			and army.size > 0
+			and army.is_line_role()
+		):
+			return army
+	return null
 
 
 func _build_role_defense_slots() -> Array[Dictionary]:
+	_reconcile_frontier_defense_sectors()
+	if _small_nation_survival_mode():
+		return _build_small_nation_defense_slots()
 	var result: Array[Dictionary] = []
 	var screened_cities := {}
 	var actual_frontier := snapshot.frontier_cities.duplicate()
 	var potential_frontier := (
 		snapshot.potential_frontier_cities.duplicate()
 	)
-	_append_city_role_slots(
-		result,
-			actual_frontier,
-		screened_cities,
-		0
-	)
-	_append_city_role_slots(
-		result,
-			potential_frontier,
-		screened_cities,
-		1
-	)
 	var frontier_ids: Array = actual_frontier.duplicate()
 	for city_id_value in potential_frontier:
 		if not frontier_ids.has(city_id_value):
 			frontier_ids.append(city_id_value)
 	_sort_role_city_ids(frontier_ids)
+	var sectors: Dictionary = (
+		view.state.nations[view.nation_id]
+			.frontier_defense_sectors
+	)
 	for city_id_value in frontier_ids:
 		var city_id := int(city_id_value)
-		var edge_neighbor := _line_edge_for_city(city_id)
-		if edge_neighbor < 0:
+		var sector: FrontierDefenseSector = sectors.get(city_id)
+		if sector == null:
 			continue
+		required_power[city_id] = maxf(
+			requirement_at(city_id),
+			FRONTIER_SCREEN_POWER
+		)
 		result.append({
 			"city_id": city_id,
-			"posture": Posture.EDGE,
-			"edge_neighbor": edge_neighbor,
-			"priority": 2,
+			"posture": Posture.CITY,
+			"edge_neighbor": -1,
+			"priority": 0,
+			"sector_city": city_id,
+			"sector_slot": 0,
 		})
+		screened_cities[city_id] = true
+	var max_edge_slots := 0
+	for city_id_value in frontier_ids:
+		var sector: FrontierDefenseSector = sectors.get(
+			int(city_id_value)
+		)
+		if sector != null:
+			max_edge_slots = maxi(
+				max_edge_slots,
+				sector.edge_neighbors.size()
+			)
+	for edge_layer in range(max_edge_slots):
+		for city_id_value in frontier_ids:
+			var city_id := int(city_id_value)
+			var sector: FrontierDefenseSector = sectors.get(city_id)
+			if (
+				sector == null
+				or edge_layer >= sector.edge_neighbors.size()
+			):
+				continue
+			result.append({
+				"city_id": city_id,
+				"posture": Posture.EDGE,
+				"edge_neighbor": sector.edge_neighbors[
+					edge_layer
+				],
+				"priority": edge_layer + 1,
+				"sector_city": city_id,
+				"sector_slot": edge_layer + 1,
+			})
 	var strategic_ids: Array = []
 	for city in view.friendly_cities:
 		if (
@@ -707,7 +1060,7 @@ func _build_role_defense_slots() -> Array[Dictionary]:
 			"city_id": city_id,
 			"posture": Posture.CITY,
 			"edge_neighbor": -1,
-			"priority": 3,
+			"priority": max_edge_slots + 1,
 		})
 		screened_cities[city_id] = true
 	if result.is_empty():
@@ -720,6 +1073,47 @@ func _build_role_defense_slots() -> Array[Dictionary]:
 				"edge_neighbor": -1,
 				"priority": 3,
 			})
+	return result
+
+
+func _small_nation_survival_mode() -> bool:
+	return (
+		not view.state.wars_of(view.nation_id).is_empty()
+		and view.friendly_cities.size()
+			<= SMALL_NATION_SURVIVAL_MAX_CITIES
+	)
+
+
+func _build_small_nation_defense_slots() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var city_ids: Array = []
+	for city in view.friendly_cities:
+		city_ids.append(city.id)
+	_sort_role_city_ids(city_ids)
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		required_power[city_id] = maxf(
+			requirement_at(city_id),
+			FRONTIER_SCREEN_POWER
+		)
+		result.append({
+			"city_id": city_id,
+			"posture": Posture.CITY,
+			"edge_neighbor": -1,
+			"priority": 0,
+		})
+	# 平时保留最后一支机动军反攻；只有城市已经被围时才把机动军投入第二守城槽。
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		if not view.state.city_under_siege(city_id):
+			continue
+		result.append({
+			"city_id": city_id,
+			"posture": Posture.CITY,
+			"edge_neighbor": -1,
+			"priority": 0,
+		})
+		break
 	return result
 
 
@@ -765,7 +1159,11 @@ func _sort_role_city_ids(city_ids: Array) -> void:
 
 
 func _line_city_priority(city_id: int) -> float:
-	return (
+	if _role_city_priority_cache.has(city_id):
+		return float(
+			_role_city_priority_cache[city_id]
+		)
+	var priority := (
 		maxf(threat.threat_at(city_id), 0.0)
 		+ maxf(
 			snapshot.potential_threat_at(city_id),
@@ -774,6 +1172,8 @@ func _line_city_priority(city_id: int) -> float:
 		+ snapshot.value_of_city(city_id) * 100.0
 		+ snapshot.supply_importance_at(city_id) * 100.0
 	)
+	_role_city_priority_cache[city_id] = priority
+	return priority
 
 
 func _line_edge_for_city(city_id: int) -> int:
@@ -877,16 +1277,23 @@ func _role_assignment_distance(
 		return -1.5 if posture == Posture.EDGE else -0.5
 	if posture == Posture.CITY and origin == city_id:
 		return -1.0
-	var field := view.path_field(
-		origin,
-		view.nation_id,
-		false,
-		true,
-		-1,
-		army.max_size
+	if not _role_path_dist_by_origin.has(origin):
+		var field := view.path_field(
+			origin,
+			view.nation_id,
+			false,
+			true,
+			-1,
+			army.max_size
+		)
+		_role_path_dist_by_origin[origin] = (
+			field["dist"] as Dictionary
+		)
+	var distances: Dictionary = (
+		_role_path_dist_by_origin[origin]
 	)
 	return float(
-		(field["dist"] as Dictionary).get(city_id, INF)
+		distances.get(city_id, INF)
 	)
 
 
@@ -1027,37 +1434,37 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 			pressure = FRONTIER_SCREEN_POWER
 		elif potential_neighbors.has(neighbor):
 			pressure = potential_share
-		for enemy in view.enemy_armies:
+		if view.enemy_armies.is_empty():
+			if pressure > 0.0:
+				result[neighbor] = pressure
+			continue
+		for enemy in view.enemy_armies_on_edge(
+			city_id,
+			neighbor
+		):
 			var power := ArmyPower.effective(enemy)
 			if power <= 0.0:
 				continue
-			if enemy.on_edge and enemy.move_to != -1:
-				if (
-					mini(enemy.move_from, enemy.move_to)
-						!= mini(city_id, neighbor)
-					or maxi(enemy.move_from, enemy.move_to)
-						!= maxi(city_id, neighbor)
-				):
-					continue
-				if enemy.state == Army.State.HOLDING:
-					pressure += power
-				elif enemy.move_to == city_id:
-					var remaining_days := (
+			if enemy.state == Army.State.HOLDING:
+				pressure += power
+			elif enemy.move_to == city_id:
+				var remaining_days := (
+					1.0
+					- clampf(
+						enemy.move_progress,
+						0.0,
 						1.0
-						- clampf(
-							enemy.move_progress,
-							0.0,
-							1.0
-						)
-					) * _edge_travel_days(edge)
-					pressure += power * exp(
-						-remaining_days
-							/ ThreatField.DECAY_DAYS
 					)
-				continue
-			if enemy.location_city != neighbor:
-				continue
+				) * _edge_travel_days(edge)
+				pressure += power * exp(
+					-remaining_days
+						/ ThreatField.DECAY_DAYS
+				)
+		for enemy in view.enemy_armies_at_city(neighbor):
 			if edge.max_manpower < enemy.max_size:
+				continue
+			var power := ArmyPower.effective(enemy)
+			if power <= 0.0:
 				continue
 			pressure += power * exp(
 				-_edge_travel_days(edge)
@@ -1084,13 +1491,11 @@ func _requires_frontier_screen(city_id: int) -> bool:
 
 
 func _enemy_power_inside(city_id: int) -> float:
+	if view.enemy_armies.is_empty():
+		return 0.0
 	var result := 0.0
-	for enemy in view.enemy_armies:
-		if (
-			not enemy.on_edge
-			and enemy.location_city == city_id
-		):
-			result += ArmyPower.effective(enemy)
+	for enemy in view.enemy_armies_at_city(city_id):
+		result += ArmyPower.effective(enemy)
 	return result
 
 
