@@ -19,6 +19,17 @@ const FORMATION_CREATION_UPKEEP_MONTHS: int = 10
 const OFFENSIVE_COMMAND_GOLD_PER_ARMY: int = 1
 const CITY_FOOD_PER_HALF_YEAR_MIN: int = 400
 const CITY_FOOD_PER_HALF_YEAR_MAX: int = 600
+const TERRAIN_CITY_GOLD_PER_MONTH_MIN: int = 2
+const TERRAIN_CITY_GOLD_PER_MONTH_MAX: int = 5
+const TERRAIN_CITY_FOOD_PER_HALF_YEAR_MIN: int = 145
+const TERRAIN_CITY_FOOD_PER_HALF_YEAR_MAX: int = 195
+const PLAIN_CITY_SHARE: float = 0.35
+const PORT_MARKET_GOLD_MULTIPLIER: float = 3.0
+const CROSSROADS_GOLD_MULTIPLIER: float = 1.5
+const PLAIN_GOLD_MULTIPLIER: float = 1.5
+const PLAIN_FOOD_MULTIPLIER: float = 1.5
+const DEVELOPMENT_PROPAGATION_RATE: float = 0.5
+const CROSSROADS_MIN_ROADS: int = 6
 const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
 const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
 const FOOD_HUB_MIN_OUTPUT: int = 1600
@@ -123,6 +134,7 @@ func generate_world(world_seed: int = 12345) -> void:
 	_initialize_recognized_city_owners()
 	_generate_terrain_edges(terrain)
 	_initialize_resource_hubs()
+	_initialize_terrain_development()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
 	_generate_armies()
@@ -274,10 +286,13 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 			CITY_MANPOWER_PER_MONTH_MIN,
 			CITY_MANPOWER_PER_MONTH_MAX
 		)
-		city.gold_per_month = rng.randi_range(5, 15)
+		city.gold_per_month = rng.randi_range(
+			TERRAIN_CITY_GOLD_PER_MONTH_MIN,
+			TERRAIN_CITY_GOLD_PER_MONTH_MAX
+		)
 		city.food_per_half_year = rng.randi_range(
-			CITY_FOOD_PER_HALF_YEAR_MIN,
-			CITY_FOOD_PER_HALF_YEAR_MAX
+			TERRAIN_CITY_FOOD_PER_HALF_YEAR_MIN,
+			TERRAIN_CITY_FOOD_PER_HALF_YEAR_MAX
 		)
 		city.food_storage = rng.randi_range(
 			INITIAL_CITY_FOOD_STOCK_MIN,
@@ -427,6 +442,227 @@ func _initialize_resource_hubs() -> void:
 			manpower_hub.manpower_per_month * 3,
 			MANPOWER_HUB_MIN_OUTPUT
 		)
+
+
+func _initialize_terrain_development() -> void:
+	if not uses_heightmap:
+		return
+	var land := land_cities()
+	if land.is_empty():
+		return
+	var relief_order := land.duplicate()
+	relief_order.sort_custom(func(a: City, b: City) -> bool:
+		if not is_equal_approx(
+			a.terrain_relief,
+			b.terrain_relief
+		):
+			return a.terrain_relief < b.terrain_relief
+		if not is_equal_approx(
+			a.map_position.x,
+			b.map_position.x
+		):
+			return a.map_position.x < b.map_position.x
+		return a.map_position.y < b.map_position.y
+	)
+	var plain_count := clampi(
+		int(round(float(land.size()) * PLAIN_CITY_SHARE)),
+		1,
+		land.size()
+	)
+	var plain_ids := {}
+	for index in range(plain_count):
+		plain_ids[relief_order[index].id] = true
+	var direct_gold := {}
+	var direct_food := {}
+	var original_gold_total := 0
+	var original_food_total := 0
+	for city in land:
+		city.is_plain_city = plain_ids.has(city.id)
+		city.is_port_market = false
+		city.is_crossroads = false
+		var road_count := 0
+		for neighbor in neighbors(city.id):
+			var edge := edge_of(city.id, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			if edge.kind != Edge.Kind.RIVER:
+				road_count += 1
+			if cities[neighbor].is_dock:
+				city.is_port_market = true
+		city.is_crossroads = road_count >= CROSSROADS_MIN_ROADS
+		var gold_multiplier := 1.0
+		if city.is_port_market:
+			gold_multiplier = maxf(
+				gold_multiplier,
+				PORT_MARKET_GOLD_MULTIPLIER
+			)
+		if city.is_crossroads:
+			gold_multiplier = maxf(
+				gold_multiplier,
+				CROSSROADS_GOLD_MULTIPLIER
+			)
+		if city.is_plain_city:
+			gold_multiplier = maxf(
+				gold_multiplier,
+				PLAIN_GOLD_MULTIPLIER
+			)
+		var food_multiplier := (
+			PLAIN_FOOD_MULTIPLIER
+			if city.is_plain_city
+			else 1.0
+		)
+		direct_gold[city.id] = gold_multiplier
+		direct_food[city.id] = food_multiplier
+		original_gold_total += city.gold_per_month
+		original_food_total += city.food_per_half_year
+	var propagated_gold := {}
+	var propagated_food := {}
+	for source in land:
+		var source_gold_bonus := maxf(
+			float(direct_gold[source.id]) - 1.0,
+			0.0
+		)
+		var source_food_bonus := maxf(
+			float(direct_food[source.id]) - 1.0,
+			0.0
+		)
+		if source_gold_bonus <= 0.0 and source_food_bonus <= 0.0:
+			continue
+		for neighbor in neighbors(source.id):
+			var edge := edge_of(source.id, neighbor)
+			var target := cities[neighbor]
+			if (
+				edge == null
+				or edge.max_manpower <= 0
+				or target.is_dock
+			):
+				continue
+			propagated_gold[target.id] = maxf(
+				float(propagated_gold.get(target.id, 0.0)),
+				source_gold_bonus * DEVELOPMENT_PROPAGATION_RATE
+			)
+			propagated_food[target.id] = maxf(
+				float(propagated_food.get(target.id, 0.0)),
+				source_food_bonus * DEVELOPMENT_PROPAGATION_RATE
+			)
+	var gold_weights := {}
+	var food_weights := {}
+	for city in land:
+		city.development_gold_multiplier = maxf(
+			float(direct_gold[city.id]),
+			1.0 + float(propagated_gold.get(city.id, 0.0))
+		)
+		city.development_food_multiplier = maxf(
+			float(direct_food[city.id]),
+			1.0 + float(propagated_food.get(city.id, 0.0))
+		)
+		gold_weights[city.id] = (
+			float(city.gold_per_month)
+			* city.development_gold_multiplier
+		)
+		food_weights[city.id] = (
+			float(city.food_per_half_year)
+			* city.development_food_multiplier
+		)
+	_apportion_city_output(
+		land,
+		original_gold_total,
+		gold_weights,
+		false
+	)
+	_apportion_city_output(
+		land,
+		original_food_total,
+		food_weights,
+		true
+	)
+
+
+func _apportion_city_output(
+	target_cities: Array[City],
+	target_total: int,
+	weights: Dictionary,
+	food_output: bool
+) -> void:
+	var weight_total := 0.0
+	for city in target_cities:
+		weight_total += maxf(
+			float(weights.get(city.id, 0.0)),
+			0.0
+		)
+	if weight_total <= 0.0:
+		return
+	var values := {}
+	var lower_bounds := {}
+	var remainders: Array[Dictionary] = []
+	var assigned := 0
+	for city in target_cities:
+		var exact := (
+			float(target_total)
+			* float(weights.get(city.id, 0.0))
+			/ weight_total
+		)
+		var lower_bound := (
+			FOOD_HUB_MIN_OUTPUT
+			if food_output and city.is_food_hub
+			else 0
+		)
+		var value := maxi(int(floor(exact)), lower_bound)
+		values[city.id] = value
+		lower_bounds[city.id] = lower_bound
+		assigned += value
+		remainders.append({
+			"city_id": city.id,
+			"fraction": exact - floor(exact),
+		})
+	if assigned < target_total:
+		remainders.sort_custom(
+			func(a: Dictionary, b: Dictionary) -> bool:
+				if not is_equal_approx(
+					float(a["fraction"]),
+					float(b["fraction"])
+				):
+					return float(a["fraction"]) > float(b["fraction"])
+				return int(a["city_id"]) < int(b["city_id"])
+		)
+		var add_index := 0
+		while assigned < target_total:
+			var city_id := int(
+				remainders[add_index % remainders.size()][
+					"city_id"
+				]
+			)
+			values[city_id] = int(values[city_id]) + 1
+			assigned += 1
+			add_index += 1
+	elif assigned > target_total:
+		remainders.sort_custom(
+			func(a: Dictionary, b: Dictionary) -> bool:
+				if not is_equal_approx(
+					float(a["fraction"]),
+					float(b["fraction"])
+				):
+					return float(a["fraction"]) < float(b["fraction"])
+				return int(a["city_id"]) > int(b["city_id"])
+		)
+		while assigned > target_total:
+			var changed := false
+			for entry in remainders:
+				var city_id := int(entry["city_id"])
+				if int(values[city_id]) <= int(lower_bounds[city_id]):
+					continue
+				values[city_id] = int(values[city_id]) - 1
+				assigned -= 1
+				changed = true
+				if assigned <= target_total:
+					break
+			if not changed:
+				break
+	for city in target_cities:
+		if food_output:
+			city.food_per_half_year = int(values[city.id])
+		else:
+			city.gold_per_month = int(values[city.id])
 
 
 func _initialize_capitals_and_warehouses() -> void:
@@ -881,6 +1117,8 @@ func create_army(
 	army.owner_nation = nation_id
 	army.max_size = max_size
 	army.size = mini(size, max_size)
+	army.max_morale = Army.max_morale_for_formation(max_size)
+	army.morale = army.max_morale
 	army.strategic_role = (
 		Army.StrategicRole.MAIN
 		if max_size >= INITIAL_HEAVY_ARMY_SIZE
@@ -953,6 +1191,10 @@ func split_army(
 	)
 	var original_supply_debt := army.supply_debt
 	var original_food_debt := army.supply_food_debt
+	var original_morale_ratio := army.morale_ratio()
+	var part_max_morale := Army.max_morale_for_formation(
+		part_max_size
+	)
 	var base_size := original_size / part_count
 	var remainder := original_size % part_count
 	var available_group_light_slots := 0
@@ -973,6 +1215,8 @@ func split_army(
 			0
 		)
 	army.max_size = part_max_size
+	army.max_morale = part_max_morale
+	army.morale = original_morale_ratio * part_max_morale
 	army.battle_group_id = (
 		original_battle_group_id
 		if available_group_light_slots > 0
@@ -1001,6 +1245,7 @@ func split_army(
 		_next_army_id += 1
 		child.owner_nation = army.owner_nation
 		child.max_size = part_max_size
+		child.max_morale = part_max_morale
 		child.battle_group_id = (
 			original_battle_group_id
 			if part_index < available_group_light_slots
@@ -1027,7 +1272,7 @@ func split_army(
 		child.speed_factor = army.speed_factor
 		child.attack = army.attack
 		child.defense = army.defense
-		child.morale = army.morale
+		child.morale = original_morale_ratio * part_max_morale
 		child.supply_ratio = army.supply_ratio
 		child.starving = army.starving
 		child.supply_debt = (

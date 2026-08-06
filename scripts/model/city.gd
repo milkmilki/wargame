@@ -26,6 +26,12 @@ var gold_per_month: int = 0               ## 每月金钱产出
 var food_per_half_year: int = 0           ## 每半年粮食产出
 var is_food_hub: bool = false             ## 重点粮食产地
 var is_manpower_hub: bool = false         ## 重点人口产地
+var is_plain_city: bool = false            ## 正式地图局部起伏最低的平原城市
+var is_port_market: bool = false           ## 与码头直接相连的陆城
+var is_crossroads: bool = false            ## 至少连接六条正容量道路的高连接交通枢纽
+## 地理开发直接加成与一跳传播后的相对权重；最终整数产出已全图归一化写回。
+var development_gold_multiplier: float = 1.0
+var development_food_multiplier: float = 1.0
 
 var is_capital: bool = false               ## 是否为当前所属国家首都
 var has_warehouse: bool = false            ## 是否设有粮仓（当前仅首都为 true）

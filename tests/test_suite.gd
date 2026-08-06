@@ -234,6 +234,7 @@ func _test_world_generation() -> void:
 		var heavy_armies := 0
 		var line_armies := 0
 		var initial_troops := 0
+		var formation_morale_valid := true
 		for army in gs.armies:
 			if army.owner_nation != n.id:
 				continue
@@ -243,6 +244,14 @@ func _test_world_generation() -> void:
 				and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
 			):
 				light_armies += 1
+				formation_morale_valid = (
+					formation_morale_valid
+					and _approx(
+						army.max_morale,
+						Army.LIGHT_MAX_MORALE
+					)
+					and _approx(army.morale, army.max_morale)
+				)
 				if army.is_line_role():
 					line_armies += 1
 			elif (
@@ -250,6 +259,18 @@ func _test_world_generation() -> void:
 				and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
 			):
 				heavy_armies += 1
+				formation_morale_valid = (
+					formation_morale_valid
+					and _approx(
+						army.max_morale,
+						Army.HEAVY_MAX_MORALE
+					)
+					and _approx(army.morale, army.max_morale)
+					and _approx(
+						Combat.combat_efficiency(army.morale),
+						1.0
+					)
+				)
 		var initial_group_members := (
 			gs.battle_group_members(
 				n.id,
@@ -264,6 +285,11 @@ func _test_world_generation() -> void:
 			and light_armies == line_armies + 2
 			and heavy_armies == 1,
 			"国%d 初始军制必须是国界填线军加一个2轻1重持久战团" % n.id
+		)
+		_check(
+			formation_morale_valid,
+			"国%d 轻军士气上限必须为1，重军必须为2且不额外放大满士气火力"
+				% n.id
 		)
 		var expected_initial_troops := (
 			light_armies * GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -298,6 +324,163 @@ func _test_world_generation() -> void:
 			"国%d 初始满编军制应保持战时月金正收益：收入%d，军费%d"
 				% [n.id, monthly_gold_income, monthly_war_upkeep]
 		)
+	var target_light_armies := 160
+	var target_heavy_armies := 40
+	var target_troops := (
+		target_light_armies * GameState.INITIAL_LIGHT_ARMY_SIZE
+		+ target_heavy_armies * GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	var target_monthly_gold := (
+		target_light_armies * GameState.army_monthly_upkeep(
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+		+ target_heavy_armies * GameState.army_monthly_upkeep(
+			GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
+	)
+	var target_half_year_food := int(ceil(
+		float(target_troops)
+			* Simulation.FOOD_PER_CAPITA
+			* DiplomacyAI.DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
+			* 6.0
+	))
+	var terrain_monthly_gold := 0
+	var terrain_half_year_food := 0
+	for city in gs.cities:
+		terrain_monthly_gold += Simulation.city_gold_output(gs, city)
+		terrain_half_year_food += Simulation.city_food_output(gs, city)
+	_check(
+		terrain_monthly_gold >= target_monthly_gold
+			and terrain_monthly_gold
+				<= int(ceil(float(target_monthly_gold) * 1.15)),
+		"真实地图月金产出应约维持160轻军+40重军：产出%d，目标军费%d"
+			% [terrain_monthly_gold, target_monthly_gold]
+	)
+	_check(
+		terrain_half_year_food
+			>= int(floor(float(target_half_year_food) * 0.95))
+			and terrain_half_year_food
+				<= int(ceil(float(target_half_year_food) * 1.15)),
+		"真实地图半年粮产出应约维持160轻军+40重军：产出%d，目标需求%d"
+			% [terrain_half_year_food, target_half_year_food]
+	)
+	var plain_city_count := 0
+	var port_market_count := 0
+	var crossroads_count := 0
+	var propagated_city_count := 0
+	var development_weights_valid := true
+	for city in land_cities:
+		plain_city_count += 1 if city.is_plain_city else 0
+		port_market_count += 1 if city.is_port_market else 0
+		crossroads_count += 1 if city.is_crossroads else 0
+		var direct_gold := 1.0
+		if city.is_port_market:
+			direct_gold = maxf(
+				direct_gold,
+				GameState.PORT_MARKET_GOLD_MULTIPLIER
+			)
+		if city.is_crossroads:
+			direct_gold = maxf(
+				direct_gold,
+				GameState.CROSSROADS_GOLD_MULTIPLIER
+			)
+		if city.is_plain_city:
+			direct_gold = maxf(
+				direct_gold,
+				GameState.PLAIN_GOLD_MULTIPLIER
+			)
+		var direct_food := (
+			GameState.PLAIN_FOOD_MULTIPLIER
+			if city.is_plain_city
+			else 1.0
+		)
+		var propagated_gold := 0.0
+		var propagated_food := 0.0
+		for neighbor in gs.neighbors(city.id):
+			var edge := gs.edge_of(city.id, neighbor)
+			var source := gs.cities[neighbor]
+			if (
+				edge == null
+				or edge.max_manpower <= 0
+				or source.is_dock
+			):
+				continue
+			var source_direct_gold := 1.0
+			if source.is_port_market:
+				source_direct_gold = maxf(
+					source_direct_gold,
+					GameState.PORT_MARKET_GOLD_MULTIPLIER
+				)
+			if source.is_crossroads:
+				source_direct_gold = maxf(
+					source_direct_gold,
+					GameState.CROSSROADS_GOLD_MULTIPLIER
+				)
+			if source.is_plain_city:
+				source_direct_gold = maxf(
+					source_direct_gold,
+					GameState.PLAIN_GOLD_MULTIPLIER
+				)
+			var source_direct_food := (
+				GameState.PLAIN_FOOD_MULTIPLIER
+				if source.is_plain_city
+				else 1.0
+			)
+			propagated_gold = maxf(
+				propagated_gold,
+				(source_direct_gold - 1.0)
+					* GameState.DEVELOPMENT_PROPAGATION_RATE
+			)
+			propagated_food = maxf(
+				propagated_food,
+				(source_direct_food - 1.0)
+					* GameState.DEVELOPMENT_PROPAGATION_RATE
+			)
+		var expected_gold := maxf(
+			direct_gold,
+			1.0 + propagated_gold
+		)
+		var expected_food := maxf(
+			direct_food,
+			1.0 + propagated_food
+		)
+		if (
+			direct_gold <= 1.0
+			and direct_food <= 1.0
+			and (
+				expected_gold > 1.0
+				or expected_food > 1.0
+			)
+		):
+			propagated_city_count += 1
+		development_weights_valid = (
+			development_weights_valid
+			and _approx(
+				city.development_gold_multiplier,
+				expected_gold
+			)
+			and _approx(
+				city.development_food_multiplier,
+				expected_food
+			)
+		)
+	_check(
+		plain_city_count == int(round(
+			float(GameState.TERRAIN_CITY_COUNT)
+				* GameState.PLAIN_CITY_SHARE
+		))
+			and port_market_count > 0
+			and crossroads_count > 0
+			and propagated_city_count > 0
+			and development_weights_valid,
+		"种田区位必须包含平原、港市、高连接枢纽和且仅一层50%%传播：平原%d 港市%d 枢纽%d 传播%d"
+			% [
+				plain_city_count,
+				port_market_count,
+				crossroads_count,
+				propagated_city_count,
+			]
+	)
 	var positions_unique := {}
 	var terrain_has_relief := false
 	for city in gs.cities:
@@ -771,6 +954,24 @@ func _test_river_transport() -> void:
 		docks.size() >= 8 and docks.size() <= 22,
 		"码头应由原35座压缩到约一半，当前=%d" % docks.size()
 	)
+	var minimum_dock_spacing := INF
+	for dock_a_index in range(docks.size()):
+		for dock_b_index in range(dock_a_index + 1, docks.size()):
+			var dock_delta := (
+				docks[dock_a_index].map_position
+				- docks[dock_b_index].map_position
+			)
+			dock_delta.x *= gs.map_aspect_ratio
+			minimum_dock_spacing = minf(
+				minimum_dock_spacing,
+				dock_delta.length()
+			)
+	_check(
+		minimum_dock_spacing
+			>= TerrainMapGenerator.RIVER_DOCK_MIN_SPACING,
+		"河流几何不得生成视觉重叠码头，最小码头间距实为%.6f"
+			% minimum_dock_spacing
+	)
 	var river_mean_y: Array[float] = []
 	var river_shapes_valid := true
 	for river_path in gs.river_paths:
@@ -1129,6 +1330,45 @@ func _test_responsive_map_layout() -> void:
 			and int(heavy_counter["marks"]) == 3,
 		"5000轻军与15000重军必须使用不同图标、轮廓宽度和编制标记"
 	)
+	var map_base_origin := Vector2(100.0, 80.0)
+	var map_base_size := Vector2(600.0, 400.0)
+	var zoom_anchor := Vector2(250.0, 180.0)
+	var anchored_pan := MapRenderer.map_pan_for_zoom_anchor(
+		map_base_origin,
+		map_base_size,
+		1.0,
+		Vector2.ZERO,
+		2.0,
+		zoom_anchor
+	)
+	var normalized_anchor := (
+		zoom_anchor - map_base_origin
+	) / map_base_size
+	var zoomed_origin := MapRenderer.map_view_origin(
+		map_base_origin,
+		map_base_size,
+		2.0,
+		anchored_pan
+	)
+	var zoomed_anchor := (
+		zoomed_origin
+		+ normalized_anchor * map_base_size * 2.0
+	)
+	var clamped_pan := MapRenderer.clamp_map_pan(
+		Vector2(10000.0, -10000.0),
+		2.0,
+		map_base_size
+	)
+	_check(
+		zoomed_anchor.distance_to(zoom_anchor) <= 0.001
+			and clamped_pan == Vector2(300.0, -200.0)
+			and MapRenderer.clamp_map_pan(
+				Vector2(50.0, 50.0),
+				1.0,
+				map_base_size
+			) == Vector2.ZERO,
+		"滚轮缩放必须锚定鼠标地图坐标，拖动平移必须受边界约束且1倍时归零"
+	)
 	scale_renderer.free()
 	var large_origin: Vector2 = large["origin"]
 	_check(
@@ -1216,8 +1456,9 @@ func _test_responsive_map_layout() -> void:
 		edge_to_pick
 	)
 	_check(
-		city_lines.size() >= 6
+		city_lines.size() >= 7
 			and "工事" in city_lines[2]
+			and "发展权重" in city_lines[5]
 			and edge_lines.size() >= 5
 			and "行军" in edge_lines[2],
 		"城市与道路详情必须包含控制、工事、驻军、距离和行军信息"
@@ -6500,6 +6741,30 @@ func _test_manpower_pool_and_force_commands() -> void:
 			].battle_groups.size() == 1,
 		"和平期填线已满且已有完整战团时，不得把全部资源持续转成闲置战团"
 	)
+	for force_city in force_state.cities_of(force_nation_id):
+		force_city.food_per_half_year = 100000
+	force_state.cities[force_capital].food_storage = 1000000
+	var forced_comprehensive_targets := 0
+	for force_source in force_state.cities_of(force_nation_id):
+		var target_neighbors: Array[int] = []
+		for force_neighbor in force_state.neighbors(force_source.id):
+			var force_edge := force_state.edge_of(
+				force_source.id,
+				force_neighbor
+			)
+			if (
+				force_edge != null
+				and force_edge.max_manpower
+					>= Edge.STANDARD_MANPOWER
+			):
+				target_neighbors.append(force_neighbor)
+		if target_neighbors.size() < 4:
+			continue
+		for force_target in target_neighbors.slice(0, 4):
+			force_state.cities[force_target].owner_nation = 1
+			forced_comprehensive_targets += 1
+		break
+	force_state.ownership_revision += 1
 	force_state.nations[
 		force_nation_id
 	].war_preparation_target_nation = 1
@@ -6527,6 +6792,31 @@ func _test_manpower_pool_and_force_commands() -> void:
 			).size() == 1,
 		"满编战团后继续扩军必须先创建下一战团并加入第一支轻军"
 	)
+	var comprehensive_target_capacity := (
+		priority_force_sim._campaign_offensive_target_capacity(
+			force_nation_id
+		)
+	)
+	for _comprehensive_growth in range(6):
+		var comprehensive_view := AiWorldView.build(
+			force_state,
+			force_nation_id
+		)
+		no_line_slots.view = comprehensive_view
+		priority_force_sim._ai_manage_force_structure(
+			comprehensive_view,
+			StrategicMapSnapshot.build(comprehensive_view),
+			ThreatField.build(comprehensive_view),
+			no_line_slots
+		)
+	_check(
+		forced_comprehensive_targets == 4
+			and comprehensive_target_capacity > 3
+			and force_state.nations[
+				force_nation_id
+			].battle_groups.size() >= 4,
+		"备战期战团数量必须由可进攻目标动态决定，不得残留最多三个战团的硬上限"
+	)
 	var ungrouped_heavy := (
 		priority_force_sim._create_army_for_nation(
 			force_nation_id,
@@ -6553,7 +6843,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 	)
 	split_source.attack = 13
 	split_source.defense = 14
-	split_source.morale = 0.73
+	split_source.morale = split_source.max_morale * 0.73
 	var split_parts := gs.split_army(
 		split_source,
 		5000
@@ -6570,6 +6860,10 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and split_part.attack == 13
 			and split_part.defense == 14
 			and _approx(split_part.morale, 0.73)
+			and _approx(
+				split_part.max_morale,
+				Army.LIGHT_MAX_MORALE
+			)
 		)
 		if split_part.battle_group_id == split_group.id:
 			split_group_members += 1
@@ -8442,24 +8736,30 @@ func _test_diplomacy_state_and_ai() -> void:
 	var plan_origin := 9
 	var plan_primary := 10
 	var plan_secondary := 17
+	var plan_third := 8
+	var plan_fourth := 1
 	plan_state.cities[plan_origin].is_capital = false
 	plan_state.cities[plan_origin].has_warehouse = false
 	plan_state.cities[plan_primary].owner_nation = 1
 	plan_state.cities[plan_secondary].owner_nation = 1
-	plan_state.edge_of(
-		plan_origin,
-		plan_primary
-	).max_manpower = 30000
-	plan_state.edge_of(
-		plan_origin,
-		plan_secondary
-	).max_manpower = 30000
+	plan_state.cities[plan_third].owner_nation = 1
+	plan_state.cities[plan_fourth].owner_nation = 1
+	for plan_target in [
+		plan_primary,
+		plan_secondary,
+		plan_third,
+		plan_fourth,
+	]:
+		plan_state.edge_of(
+			plan_origin,
+			plan_target
+		).max_manpower = 30000
 	plan_state.set_diplomatic_relation(
 		0,
 		1,
 		GameState.DiplomaticRelation.WAR
 	)
-	for plan_army_id in range(3):
+	for plan_army_id in range(8):
 		var plan_army := _make_army(
 			980 + plan_army_id,
 			0,
@@ -8501,7 +8801,7 @@ func _test_diplomacy_state_and_ai() -> void:
 				1.00
 			)
 			and preparation_nation
-				.campaign_preparation_targets.size() == 2
+				.campaign_preparation_targets.size() == 4
 			and int(
 				preparation_target_counts.get(
 					plan_primary,
@@ -8513,8 +8813,20 @@ func _test_diplomacy_state_and_ai() -> void:
 					plan_secondary,
 					0
 				)
+			) > 0
+			and int(
+				preparation_target_counts.get(
+					plan_third,
+					0
+				)
+			) > 0
+			and int(
+				preparation_target_counts.get(
+					plan_fourth,
+					0
+				)
 			) > 0,
-		"国家应以1.00攻势线并行准备多个目标，且每支军队只分配一个方向"
+		"国家应突破旧三路上限并行准备四个目标，且每支军队只分配一个方向"
 	)
 	var prepared_targets := (
 		preparation_nation
@@ -8538,8 +8850,10 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		prepared_batch_launched
 			and prepared_launched_targets.has(plan_primary)
-			and prepared_launched_targets.has(plan_secondary),
-		"同批准备完成的多个目标必须分别生成攻击命令，不能退化为单点发动"
+			and prepared_launched_targets.has(plan_secondary)
+			and prepared_launched_targets.has(plan_third)
+			and prepared_launched_targets.has(plan_fourth),
+		"同批准备完成的四个目标必须分别生成攻击命令，不能退化为三路上限"
 	)
 	_check(
 		preparation_nation.campaign_theater_anchor_city
@@ -8568,16 +8882,22 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		plan_built
 		and plan_stable
-		and plan_nation.campaign_plan_targets.size() == 2
+		and plan_nation.campaign_plan_targets.size() == 4
 		and plan_nation.campaign_plan_targets.has(
 			plan_primary
 		)
 		and plan_nation.campaign_plan_targets.has(
 			plan_secondary
 		)
+		and plan_nation.campaign_plan_targets.has(
+			plan_third
+		)
+		and plan_nation.campaign_plan_targets.has(
+			plan_fourth
+		)
 		and plan_nation.campaign_attack_assignments
 			== frozen_assignments,
-		"兵力足够时应生成并冻结主攻与第二方向的具体军队分工"
+		"兵力足够时应生成并冻结全部四个方向的具体军队分工"
 	)
 	var multi_target_launched := (
 		plan_sim._launch_campaign_offensive(
@@ -8604,8 +8924,10 @@ func _test_diplomacy_state_and_ai() -> void:
 		multi_target_launched
 		and launched_plan_targets.has(plan_primary)
 		and launched_plan_targets.has(plan_secondary)
+		and launched_plan_targets.has(plan_third)
+		and launched_plan_targets.has(plan_fourth)
 		and assignments_match_orders,
-		"攻势执行必须逐军遵守计划中的目标城市，而非全部冲向主目标"
+		"全面攻势执行必须逐军遵守四个计划目标，而非集中到少数方向"
 	)
 	plan_sim.free()
 

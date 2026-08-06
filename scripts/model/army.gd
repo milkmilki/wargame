@@ -23,6 +23,8 @@ enum LinePosture {
 }
 
 const DEFAULT_MAX_SIZE: int = 15000
+const LIGHT_MAX_MORALE: float = 1.0
+const HEAVY_MAX_MORALE: float = 2.0
 
 var id: int = 0
 var owner_nation: int = -1
@@ -61,9 +63,11 @@ var encounter_blocked: bool = false
 ## 派生标记：当日是否缺粮（供渲染标记饥饿）。由 Simulation 每日刷新。
 var starving: bool = false
 
-## 持久士气 ∈ [0,1]。战斗中被侵蚀（伤亡/断粮），战斗外每月恢复。
+## 持久士气 ∈ [0,max_morale]。战斗中被侵蚀（伤亡/断粮），战斗外每月恢复。
 ## 真源在此（Battle 层士气为本值的兵力加权派生），使"老兵带疲劳进场"效果自然涌现。
 var morale: float = 1.0
+## 轻军为 1，重军为 2；高于 1 的部分只增加持续作战储备，不继续放大战斗效率。
+var max_morale: float = LIGHT_MAX_MORALE
 
 ## 当日补给满足率 ∈[0,1]。驻防适应与每日补给惩罚均读取本值。
 var supply_ratio: float = 1.0
@@ -108,6 +112,22 @@ var defensive_blocked_edge_b: int = -1
 
 ## 跨入敌境时冻结的占领归属国；可为军队所属国或提供出发领土的盟国。
 var occupation_claimant_nation: int = -1
+
+
+static func max_morale_for_formation(formation_size: int) -> float:
+	return (
+		HEAVY_MAX_MORALE
+		if formation_size >= DEFAULT_MAX_SIZE
+		else LIGHT_MAX_MORALE
+	)
+
+
+func morale_ratio() -> float:
+	return clampf(
+		morale / maxf(max_morale, LIGHT_MAX_MORALE),
+		0.0,
+		1.0
+	)
 
 
 func is_main_battle_role() -> bool:

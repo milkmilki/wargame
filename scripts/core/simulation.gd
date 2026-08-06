@@ -63,7 +63,6 @@ const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 30
 const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 45
 const CAMPAIGN_ARROW_DURATION_DAYS: int = 20
 const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 3
-const CAMPAIGN_MAX_TARGETS: int = 3
 const CAMPAIGN_ATTACK_ENTER_RATIO: float = 1.00
 const CAMPAIGN_TARGET_COMMIT_RATIO: float = 1.00
 const CAMPAIGN_STAGED_TROOP_RATIO: float = 0.75
@@ -912,7 +911,7 @@ func _recover_morale() -> void:
 			army.morale
 				+ Combat.MORALE_RECOVER
 					* recovery_multiplier,
-			1.0
+			army.max_morale
 		)
 
 
@@ -950,7 +949,7 @@ func _recover_garrisoned_army(army: Army) -> void:
 	)
 	var target_gain := minf(
 		Combat.MORALE_RECOVER * recovery_multiplier,
-		1.0 - army.morale
+		army.max_morale - army.morale
 	)
 	var base_demand := maxi(
 		int(ceil(float(full_month_demand) * target_gain / Combat.MORALE_RECOVER)),
@@ -968,10 +967,10 @@ func _recover_garrisoned_army(army: Army) -> void:
 	if supplied > 0:
 		army.morale = minf(
 			army.morale + target_gain * float(supplied) / float(demand),
-			1.0
+			army.max_morale
 		)
-	if army.morale >= 1.0 - 0.0001:
-		army.morale = 1.0
+	if army.morale >= army.max_morale - 0.0001:
+		army.morale = army.max_morale
 		army.state = Army.State.IDLE
 		army.forced_retreat = false
 		army.starving = false
@@ -2373,7 +2372,9 @@ func _ai_manage_force_structure(
 				view.nation_id,
 				(
 					nation.battle_groups.size()
-						< CAMPAIGN_MAX_TARGETS
+						< _campaign_offensive_target_capacity(
+							view.nation_id
+						)
 					and (
 						nation.war_preparation_target_nation >= 0
 						or
@@ -2727,15 +2728,11 @@ func _ensure_campaign_attack_plan(
 		return false
 	nation.campaign_plan_targets.append(primary_city)
 
-	if (
-		CAMPAIGN_MAX_TARGETS > 1
-		and not remaining.is_empty()
-	):
+	if not remaining.is_empty():
 		var target_nation := (
 			state.cities[primary_city].owner_nation
 		)
 		var eligible_by_target := {}
-		var size_by_target := {}
 		for army in remaining:
 			var origin := _campaign_army_origin(
 				army,
@@ -2757,24 +2754,27 @@ func _ensure_campaign_attack_plan(
 					eligible_by_target[neighbor] = (
 						[] as Array[Army]
 					)
-					size_by_target[neighbor] = 0
 				(
 					eligible_by_target[neighbor]
 					as Array[Army]
 				).append(army)
-				size_by_target[neighbor] = int(
-					size_by_target[neighbor]
-				) + army.size
 		var view := _build_ai_view(nation_id)
 		var snapshot := _strategy_snapshot_for(view)
-		var secondary_city := -1
-		var secondary_score := -INF
 		var target_ids := eligible_by_target.keys()
-		EquivariantOrder.sort_city_ids(
-			target_ids,
-			state,
-			nation_id,
-			primary_city
+		target_ids.sort_custom(func(a_value: Variant, b_value: Variant) -> bool:
+			var a := int(a_value)
+			var b := int(b_value)
+			var score_a := snapshot.value_of_city(a)
+			var score_b := snapshot.value_of_city(b)
+			if not is_equal_approx(score_a, score_b):
+				return score_a > score_b
+			return EquivariantOrder.city_id_less(
+				state,
+				nation_id,
+				a,
+				b,
+				primary_city
+			)
 		)
 		for target_id_value in target_ids:
 			var target_id := int(target_id_value)
@@ -2785,56 +2785,31 @@ func _ensure_campaign_attack_plan(
 					target_id
 				)
 			)
-			if int(size_by_target[target_id]) < required:
+			var target_armies: Array[Army] = []
+			var target_available := 0
+			for army in remaining:
+				if not (
+					eligible_by_target[target_id]
+					as Array[Army]
+				).has(army):
+					continue
+				target_armies.append(army)
+				target_available += army.size
+			if target_available < required:
 				continue
-			var score := snapshot.value_of_city(target_id)
-			if (
-				score > secondary_score
-				or (
-					is_equal_approx(
-						score,
-						secondary_score
-					)
-					and (
-							EquivariantOrder.city_id_less(
-								state,
-								nation_id,
-								target_id,
-								secondary_city,
-								primary_city
-							)
-					)
-				)
-			):
-				secondary_score = score
-				secondary_city = target_id
-		if secondary_city >= 0:
-			var secondary_required := (
-				DiplomacyAI.required_assault_troops(
-					state,
-					nation_id,
-					secondary_city
-				)
-			)
-			var secondary_limit := int(ceil(
-				float(secondary_required)
+			var target_limit := int(ceil(
+				float(required)
 					* CAMPAIGN_TARGET_COMMIT_RATIO
 			))
-			var secondary_committed := 0
-			for army in (
-				eligible_by_target[secondary_city]
-				as Array[Army]
-			):
-				if secondary_committed >= secondary_limit:
+			var target_committed := 0
+			for army in target_armies:
+				if target_committed >= target_limit:
 					break
-				nation.campaign_attack_assignments[
-					army.id
-				] = secondary_city
-				secondary_committed += army.size
-			nation.campaign_plan_targets.append(
-				secondary_city
-			)
-	# 已进入集结区但未承担第二方向的军队全部作为主目标后续梯队，
+				nation.campaign_attack_assignments[army.id] = target_id
+				target_committed += army.size
+				remaining.erase(army)
+			nation.campaign_plan_targets.append(target_id)
+	# 已进入集结区但未承担独立方向的军队全部作为主目标后续梯队，
 	# 避免首轮失败后重新等待 90 天国家级攻势周期。
 	for army in remaining:
 		if not nation.campaign_attack_assignments.has(army.id):
@@ -3121,6 +3096,30 @@ func _campaign_theater_required_manpower(
 	return GameState.INITIAL_LIGHT_ARMY_SIZE
 
 
+func _campaign_offensive_target_capacity(nation_id: int) -> int:
+	var nation := state.nations[nation_id]
+	var target_nations := {}
+	for enemy_id in state.wars_of(nation_id):
+		target_nations[enemy_id] = true
+	if nation.war_preparation_target_nation >= 0:
+		target_nations[nation.war_preparation_target_nation] = true
+	if target_nations.is_empty():
+		return 1
+	var capacity := 0
+	for city in state.cities:
+		if (
+			not target_nations.has(city.owner_nation)
+			or DiplomacyAI.staging_cities_for_objective(
+				state,
+				nation_id,
+				city.id
+			).is_empty()
+		):
+			continue
+		capacity += 1
+	return maxi(capacity, 1)
+
+
 func _campaign_objective_in_current_theater(
 	nation_id: int,
 	proposed_city: int
@@ -3256,19 +3255,8 @@ func _ensure_campaign_preparation_plan(
 		view,
 		_threat_travel_cache
 	)
-	var theater_field := view.path_field(
-		primary_city,
-		-1,
-		false,
-		false,
-		-1,
-		_campaign_theater_required_manpower(nation_id)
-	)
-	var theater_distances: Dictionary = theater_field["dist"]
 	var target_candidates: Array[int] = [primary_city]
 	for target_city in snapshot.priority_enemy_cities:
-		if target_candidates.size() >= CAMPAIGN_MAX_TARGETS:
-			break
 		if (
 			target_city == primary_city
 			or not state.is_enemy(
@@ -3280,9 +3268,6 @@ func _ensure_campaign_preparation_plan(
 				nation_id,
 				target_city
 			).is_empty()
-			or float(
-				theater_distances.get(target_city, INF)
-			) > CAMPAIGN_THEATER_MAX_TRANSFER_COST
 		):
 			continue
 		target_candidates.append(target_city)
@@ -3321,7 +3306,7 @@ func _ensure_campaign_preparation_plan(
 		available_troops - primary_staged_required,
 		0
 	)
-	var parallel_capacity := clampi(
+	var parallel_capacity := maxi(
 		1 + int(floor(
 			float(primary_surplus)
 				/ (
@@ -3329,8 +3314,7 @@ func _ensure_campaign_preparation_plan(
 					* CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO
 				)
 		)),
-		1,
-		CAMPAIGN_MAX_TARGETS
+		1
 	)
 	var borrowed_line_armies := 0
 	for target_index in range(target_candidates.size()):

@@ -27,6 +27,7 @@ const RIVER_DOCK_SHARE: float = 0.25
 const RIVER_DOCK_MIN_PER_RIVER: int = 2
 const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
 const RIVER_CROSSING_MERGE_EPS: float = 0.0001
+const RIVER_DOCK_MIN_SPACING: float = 0.012
 const LANDING_DANGER_MIN: float = 0.90
 const EDGE_DISTANCE_UNITS_PER_MAP_HEIGHT: float = 12.0
 ## 河运速度为同 distance 陆路的 1.2 倍，因此耗时为陆路的 1/1.2。
@@ -37,7 +38,7 @@ static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "settlement-v2:%s:%d" % [source_path, city_count]
+	var cache_key := "settlement-v3:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -850,7 +851,7 @@ static func _build_river_paths(
 			Vector2(0.08, 0.69),
 			Vector2(0.25, 0.63),
 			Vector2(0.43, 0.68),
-			Vector2(0.61, 0.60),
+			Vector2(0.61, 0.62),
 			Vector2(0.78, 0.65),
 			Vector2(0.97, 0.61),
 		]),

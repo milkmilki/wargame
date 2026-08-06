@@ -21,6 +21,10 @@ const ARMY_ICON_SCALE_MIN: float = 0.10
 const ARMY_ICON_SCALE_MAX: float = 1.80
 const ARMY_ICON_SCALE_STEP: float = 0.10
 const ARMY_ICON_SCALE_DEFAULT: float = 1.00
+const MAP_ZOOM_MIN: float = 1.0
+const MAP_ZOOM_MAX: float = 4.0
+const MAP_ZOOM_WHEEL_FACTOR: float = 1.2
+const MAP_PAN_DRAG_THRESHOLD: float = 4.0
 const VISUAL_SCALE_COMPACT: float = 0.80
 const VISUAL_SCALE_STANDARD: float = 1.00
 const VISUAL_SCALE_LARGE: float = 1.25
@@ -48,6 +52,14 @@ enum FormationIcon {
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
 var _map_size: Vector2 = Vector2(512.0, 512.0)
+var _base_map_origin: Vector2 = _origin
+var _base_map_size: Vector2 = _map_size
+var _map_zoom: float = MAP_ZOOM_MIN
+var _map_pan: Vector2 = Vector2.ZERO
+var _map_drag_active: bool = false
+var _map_drag_moved: bool = false
+var _map_drag_start: Vector2 = Vector2.ZERO
+var _map_drag_start_pan: Vector2 = Vector2.ZERO
 var _display_scale: float = 1.0
 var _side_margin: float = BASE_SIDE_MARGIN
 var _hud_columns: int = 4
@@ -111,6 +123,10 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_selected_city_id = -1
 	_selected_edge_a = -1
 	_selected_edge_b = -1
+	_map_zoom = MAP_ZOOM_MIN
+	_map_pan = Vector2.ZERO
+	_map_drag_active = false
+	_map_drag_moved = false
 	_nation_detail_cache_day = -1
 	_nation_detail_cache.clear()
 	_city_label_cache.clear()
@@ -334,34 +350,100 @@ static func target_redraw_fps(
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not (
-		event is InputEventMouseButton
-		and event.pressed
-	):
+	if state == null:
+		return
+	if event is InputEventMouseMotion:
+		var motion := event as InputEventMouseMotion
+		if (
+			not _map_drag_active
+			or (
+				motion.button_mask
+					& MOUSE_BUTTON_MASK_LEFT
+			) == 0
+		):
+			return
+		if (
+			not _map_drag_moved
+			and motion.position.distance_to(_map_drag_start)
+				>= MAP_PAN_DRAG_THRESHOLD * _display_scale
+		):
+			_map_drag_moved = true
+		if _map_drag_moved:
+			_map_pan = _map_drag_start_pan + (
+				motion.position - _map_drag_start
+			)
+			_apply_map_view_transform()
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+		return
+	if not event is InputEventMouseButton:
 		return
 	var mouse_event := event as InputEventMouseButton
-	if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
-		_clear_selection()
-		get_viewport().set_input_as_handled()
-		return
-	if mouse_event.button_index != MOUSE_BUTTON_LEFT or state == null:
-		return
 	_compute_layout()
-	var point := mouse_event.position
-	if nation_stats_button_rect(
-		get_viewport_rect().size,
-		_display_scale,
-		_side_margin
-	).has_point(point):
-		_nation_stats_open = not _nation_stats_open
-		queue_redraw()
+	if (
+		mouse_event.pressed
+		and mouse_event.button_index in [
+			MOUSE_BUTTON_WHEEL_UP,
+			MOUSE_BUTTON_WHEEL_DOWN,
+		]
+		and Rect2(_origin, _map_size).has_point(
+			mouse_event.position
+		)
+	):
+		var factor := (
+			MAP_ZOOM_WHEEL_FACTOR
+			if mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
+			else 1.0 / MAP_ZOOM_WHEEL_FACTOR
+		)
+		_set_map_zoom_at(
+			_map_zoom * factor,
+			mouse_event.position
+		)
 		get_viewport().set_input_as_handled()
 		return
-	if not Rect2(_origin, _map_size).grow(
-		CITY_PICK_RADIUS * _display_scale
-	).has_point(point):
+	if (
+		mouse_event.pressed
+		and mouse_event.button_index == MOUSE_BUTTON_RIGHT
+	):
+		_clear_selection()
+		get_viewport().set_input_as_handled()
+		return
+	if mouse_event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	var point := mouse_event.position
+	if mouse_event.pressed:
+		if nation_stats_button_rect(
+			get_viewport_rect().size,
+			_display_scale,
+			_side_margin
+		).has_point(point):
+			_nation_stats_open = not _nation_stats_open
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+			return
+		if Rect2(_origin, _map_size).grow(
+			CITY_PICK_RADIUS * _display_scale
+		).has_point(point):
+			_map_drag_active = true
+			_map_drag_moved = false
+			_map_drag_start = point
+			_map_drag_start_pan = _map_pan
+			get_viewport().set_input_as_handled()
+		return
 		_clear_selection()
 		return
+	if not _map_drag_active:
+		return
+	_map_drag_active = false
+	if _map_drag_moved:
+		_map_drag_moved = false
+		get_viewport().set_input_as_handled()
+		return
+	_pick_map_feature(point)
+	get_viewport().set_input_as_handled()
+
+
+func _pick_map_feature(point: Vector2) -> void:
 	var city_id := pick_city_at_pixel(
 		state,
 		point,
@@ -391,7 +473,35 @@ func _unhandled_input(event: InputEvent) -> void:
 		_selected_edge_a = edge.city_a
 		_selected_edge_b = edge.city_b
 	queue_redraw()
-	get_viewport().set_input_as_handled()
+
+
+func _set_map_zoom_at(value: float, anchor: Vector2) -> void:
+	var next_zoom := clampf(
+		value,
+		MAP_ZOOM_MIN,
+		MAP_ZOOM_MAX
+	)
+	if is_equal_approx(next_zoom, _map_zoom):
+		return
+	_map_pan = map_pan_for_zoom_anchor(
+		_base_map_origin,
+		_base_map_size,
+		_map_zoom,
+		_map_pan,
+		next_zoom,
+		anchor
+	)
+	_map_zoom = next_zoom
+	_apply_map_view_transform()
+	queue_redraw()
+
+
+func map_zoom() -> float:
+	return _map_zoom
+
+
+func map_pan() -> Vector2:
+	return _map_pan
 
 
 func _clear_selection() -> void:
@@ -418,6 +528,7 @@ func _compute_layout() -> void:
 			_layout_map_aspect_ratio
 		)
 	):
+		_apply_map_view_transform()
 		return
 	_layout_viewport_size = vp
 	_layout_nation_count = nation_count
@@ -429,18 +540,106 @@ func _compute_layout() -> void:
 		_nation_stats_open
 	)
 	var span := float(layout["span"])
-	_map_size = (
+	_base_map_size = (
 		Vector2(span, span / map_aspect_ratio)
 		if map_aspect_ratio >= 1.0
 		else Vector2(span * map_aspect_ratio, span)
 	)
-	_origin = (layout["origin"] as Vector2) + (Vector2(span, span) - _map_size) * 0.5
-	_cell = minf(_map_size.x, _map_size.y) / float(GameState.GRID)
+	_base_map_origin = (
+		(layout["origin"] as Vector2)
+		+ (Vector2(span, span) - _base_map_size) * 0.5
+	)
 	_display_scale = layout["display_scale"]
 	_side_margin = layout["side_margin"]
 	_hud_columns = layout["hud_columns"]
 	_hud_card_width = layout["hud_card_width"]
+	_apply_map_view_transform()
 	_layout_army_icon_scale_control()
+
+
+func _apply_map_view_transform() -> void:
+	_map_zoom = clampf(
+		_map_zoom,
+		MAP_ZOOM_MIN,
+		MAP_ZOOM_MAX
+	)
+	_map_pan = clamp_map_pan(
+		_map_pan,
+		_map_zoom,
+		_base_map_size
+	)
+	_map_size = _base_map_size * _map_zoom
+	_origin = map_view_origin(
+		_base_map_origin,
+		_base_map_size,
+		_map_zoom,
+		_map_pan
+	)
+	_cell = minf(_map_size.x, _map_size.y) / float(GameState.GRID)
+
+
+static func clamp_map_pan(
+	pan: Vector2,
+	zoom: float,
+	base_map_size: Vector2
+) -> Vector2:
+	var clamped_zoom := maxf(zoom, MAP_ZOOM_MIN)
+	var limit := (
+		base_map_size * (clamped_zoom - MAP_ZOOM_MIN) * 0.5
+	)
+	return Vector2(
+		clampf(pan.x, -limit.x, limit.x),
+		clampf(pan.y, -limit.y, limit.y)
+	)
+
+
+static func map_view_origin(
+	base_origin: Vector2,
+	base_map_size: Vector2,
+	zoom: float,
+	pan: Vector2
+) -> Vector2:
+	var zoomed_size := base_map_size * zoom
+	return (
+		base_origin
+		+ (base_map_size - zoomed_size) * 0.5
+		+ clamp_map_pan(pan, zoom, base_map_size)
+	)
+
+
+static func map_pan_for_zoom_anchor(
+	base_origin: Vector2,
+	base_map_size: Vector2,
+	old_zoom: float,
+	old_pan: Vector2,
+	new_zoom: float,
+	anchor: Vector2
+) -> Vector2:
+	var old_size := base_map_size * old_zoom
+	var old_origin := map_view_origin(
+		base_origin,
+		base_map_size,
+		old_zoom,
+		old_pan
+	)
+	var normalized_anchor := Vector2(
+		(anchor.x - old_origin.x) / maxf(old_size.x, 0.0001),
+		(anchor.y - old_origin.y) / maxf(old_size.y, 0.0001)
+	)
+	var new_size := base_map_size * new_zoom
+	var centered_origin := (
+		base_origin + (base_map_size - new_size) * 0.5
+	)
+	var desired_pan := (
+		anchor
+		- centered_origin
+		- normalized_anchor * new_size
+	)
+	return clamp_map_pan(
+		desired_pan,
+		new_zoom,
+		base_map_size
+	)
 
 
 static func compute_layout_for_viewport(
@@ -1631,7 +1830,11 @@ func _draw_armies() -> void:
 				false,
 				2.0 * icon_scale
 			)
-		_draw_morale_bar(rect, army.morale, icon_scale)
+		_draw_morale_bar(
+			rect,
+			army.morale_ratio(),
+			icon_scale
+		)
 
 
 static func army_counter_profile(max_size: int) -> Dictionary:
@@ -2296,6 +2499,12 @@ static func city_detail_lines(
 		special.append("粮食核心")
 	if city.is_manpower_hub:
 		special.append("人口核心")
+	if city.is_plain_city:
+		special.append("平原")
+	if city.is_port_market:
+		special.append("港市")
+	if city.is_crossroads:
+		special.append("枢纽")
 	return [
 		"类型 %s   状态 %s" % [
 			type_name,
@@ -2319,6 +2528,10 @@ static func city_detail_lines(
 			city.manpower_per_month,
 			city.gold_per_month,
 			city.food_per_half_year,
+		],
+		"发展权重 金×%.2f  粮×%.2f" % [
+			city.development_gold_multiplier,
+			city.development_food_multiplier,
 		],
 		"库存 %d   地形高度 %.2f / 起伏 %.2f" % [
 			city.food_storage,
@@ -2408,24 +2621,29 @@ static func nation_detail_lines(
 		line_three,
 	] as Array[String]
 	if not n.campaign_attack_assignments.is_empty():
-		var assignments: Array[String] = []
-		var army_ids := n.campaign_attack_assignments.keys()
-		army_ids.sort()
-		for army_id_value in army_ids:
-			if assignments.size() >= 3:
+		var target_set := {}
+		for target_value in n.campaign_attack_assignments.values():
+			target_set[int(target_value)] = true
+		var target_ids := target_set.keys()
+		target_ids.sort()
+		var target_labels: Array[String] = []
+		for target_value in target_ids:
+			if target_labels.size() >= 4:
 				break
-			var army_id := int(army_id_value)
-			assignments.append(
-				"军%d>城%d" % [
-					army_id,
-					int(n.campaign_attack_assignments[army_id]),
-				]
-			)
+			target_labels.append("城%d" % int(target_value))
+		var omitted_targets := maxi(
+			target_ids.size() - target_labels.size(),
+			0
+		)
+		var target_summary := " ".join(target_labels)
+		if omitted_targets > 0:
+			target_summary += " +%d" % omitted_targets
 		lines.append(
-			"计划W%d 费%d  %s" % [
+			"计划W%d %d路 费%d  %s" % [
 				n.campaign_plan_wave,
+				target_ids.size(),
 				n.last_offensive_gold_cost,
-				" ".join(assignments),
+				target_summary,
 			]
 		)
 	elif n.last_offensive_gold_day >= 0:

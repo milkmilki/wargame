@@ -483,7 +483,7 @@ func _select_priority_targets(view: AiWorldView) -> void:
 			int(b[1])
 		)
 	)
-	for i in range(mini(scored.size(), 16)):
+	for i in range(scored.size()):
 		priority_enemy_cities.append(int(scored[i][1]))
 	if view.strategic_planning_enabled and not scored.is_empty():
 		campaign_target = int(scored[0][1])

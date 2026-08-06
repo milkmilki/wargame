@@ -927,7 +927,7 @@ static func _erode_frontline_morale(
 	target_mass = clampf(
 		target_mass,
 		0.0,
-		float(surviving_size)
+		_side_max_morale_mass(side)
 	)
 	_adjust_frontline_morale_mass(
 		side,
@@ -983,7 +983,7 @@ static func _adjust_frontline_morale_mass(
 				army.morale
 					- requested_mass / float(maxi(army.size, 1)),
 				MORALE_FLOOR,
-				1.0
+				army.max_morale
 			)
 			var applied_mass := (
 				(old_morale - army.morale)
@@ -995,7 +995,7 @@ static func _adjust_frontline_morale_mass(
 				and army.morale > MORALE_FLOOR
 			) or (
 				remaining < 0.0
-				and army.morale < 1.0
+				and army.morale < army.max_morale
 			):
 				next_adjustable.append(candidate)
 		remaining -= changed
@@ -1009,6 +1009,14 @@ static func _side_morale_mass(side: Array[Army]) -> float:
 	for army in side:
 		if army.size > 0:
 			total += float(army.size) * army.morale
+	return total
+
+
+static func _side_max_morale_mass(side: Array[Army]) -> float:
+	var total := 0.0
+	for army in side:
+		if army.size > 0:
+			total += float(army.size) * army.max_morale
 	return total
 
 
@@ -1142,7 +1150,7 @@ static func _side_avg_defense(side: Array[Army], side_size: int) -> float:
 
 
 ## 对一侧每支存活军队侵蚀士气。基础侵蚀同侧共担；断粮军队额外掉 MORALE_STARVE_DECAY。
-## 直接写入 Army.morale（真源），clamp 到 [MORALE_FLOOR, 1]。
+## 直接写入 Army.morale（真源），clamp 到 [MORALE_FLOOR, Army.max_morale]。
 static func _erode_side_morale(side: Array[Army], base_erode: float) -> void:
 	for a in side:
 		if a.size <= 0:
@@ -1150,7 +1158,11 @@ static func _erode_side_morale(side: Array[Army], base_erode: float) -> void:
 		var e := base_erode
 		if a.starving:
 			e += MORALE_STARVE_DECAY
-		a.morale = clampf(a.morale - e, MORALE_FLOOR, 1.0)
+		a.morale = clampf(
+			a.morale - e,
+			MORALE_FLOOR,
+			a.max_morale
+		)
 
 
 ## 将本回合总伤亡守恒地摊分到本侧各军并就地扣减 size（item 3）。返回实际扣减的总伤亡（整数）。
@@ -1235,7 +1247,7 @@ static func distribute_casualties(sizes: Array[int], total_loss: float) -> Array
 ## 按其带来的有效兵力占当前本侧总兵力的比例，统一提振既有成员士气一次。
 ##   fresh_effective = Σ newcomer.size × newcomer.morale（濒溃援军几乎不回气）
 ##   boost = min(MORALE_REINFORCE × fresh_effective / total_current, remaining_cap)
-## 只提振「既有成员」（不含本批新军自身），clamp 到 [MORALE_FLOOR, 1]。
+## 只提振「既有成员」（不含本批新军自身），clamp 到各军 max_morale。
 ## 返回本批实际消耗的额度，由 Battle 按侧累计；因此同回合和跨回合拆分都共享同一上限。
 static func settle_reinforcement_morale(
 	side: Array[Army],
@@ -1253,7 +1265,10 @@ static func settle_reinforcement_morale(
 	var fresh_effective := 0.0
 	for nc in newcomers:
 		if nc.size > 0 and side.has(nc):
-			fresh_effective += float(nc.size) * clampf(nc.morale, 0.0, 1.0)
+			fresh_effective += (
+				float(nc.size)
+				* clampf(nc.morale, 0.0, nc.max_morale)
+			)
 	if fresh_effective <= 0.0:
 		return 0.0
 	var boost := minf(
@@ -1264,5 +1279,9 @@ static func settle_reinforcement_morale(
 		return 0.0
 	for a in side:
 		if a.size > 0 and not newcomers.has(a):
-			a.morale = clampf(a.morale + boost, MORALE_FLOOR, 1.0)
+			a.morale = clampf(
+				a.morale + boost,
+				MORALE_FLOOR,
+				a.max_morale
+			)
 	return boost

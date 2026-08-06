@@ -291,6 +291,10 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	army.owner_nation = int(data.get("owner_nation", -1))
 	army.size = int(data.get("size", 0))
 	army.max_size = int(data.get("max_size", Army.DEFAULT_MAX_SIZE))
+	army.max_morale = float(data.get(
+		"max_morale",
+		Army.max_morale_for_formation(army.max_size)
+	))
 	army.attack = int(data.get("attack", 10))
 	army.defense = int(data.get("defense", 10))
 	army.morale = float(data.get("morale", 1.0))
@@ -310,6 +314,7 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"owner_nation": army.owner_nation,
 			"size": army.size,
 			"max_size": army.max_size,
+			"max_morale": army.max_morale,
 			"attack": army.attack,
 			"defense": army.defense,
 			"morale": army.morale,
