@@ -338,6 +338,21 @@ func _test_world_generation() -> void:
 			GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
 	)
+	_check(
+		GameState.army_monthly_upkeep(
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		) == 4
+			and GameState.army_monthly_upkeep(
+				GameState.INITIAL_HEAVY_ARMY_SIZE
+			) == 11
+			and GameState.formation_creation_gold_cost(
+				GameState.INITIAL_LIGHT_ARMY_SIZE
+			) == 40
+			and GameState.formation_creation_gold_cost(
+				GameState.INITIAL_HEAVY_ARMY_SIZE
+			) == 110,
+		"金币粒度提高后，轻/重军维护费必须为4/11，建制费必须为40/110"
+	)
 	var target_half_year_food := int(ceil(
 		float(target_troops)
 			* Simulation.FOOD_PER_CAPITA
@@ -346,15 +361,41 @@ func _test_world_generation() -> void:
 	))
 	var terrain_monthly_gold := 0
 	var terrain_half_year_food := 0
+	var terrain_gold_min := 999999
+	var terrain_gold_max := 0
 	for city in gs.cities:
 		terrain_monthly_gold += Simulation.city_gold_output(gs, city)
 		terrain_half_year_food += Simulation.city_food_output(gs, city)
+		if not city.is_dock:
+			terrain_gold_min = mini(
+				terrain_gold_min,
+				city.gold_per_month
+			)
+			terrain_gold_max = maxi(
+				terrain_gold_max,
+				city.gold_per_month
+			)
 	_check(
 		terrain_monthly_gold >= target_monthly_gold
 			and terrain_monthly_gold
 				<= int(ceil(float(target_monthly_gold) * 1.15)),
 		"真实地图月金产出应约维持160轻军+40重军：产出%d，目标军费%d"
 			% [terrain_monthly_gold, target_monthly_gold]
+	)
+	_check(
+		terrain_monthly_gold
+			== GameState.TERRAIN_CITY_COUNT
+				* GameState.TERRAIN_CITY_GOLD_TARGET_AVERAGE
+			and terrain_gold_min
+				== GameState.TERRAIN_CITY_GOLD_OUTPUT_MIN
+			and terrain_gold_max
+				== GameState.TERRAIN_CITY_GOLD_OUTPUT_MAX,
+		"真实地图金币必须拉开到1～15且平均7：总额%d，范围%d～%d"
+			% [
+				terrain_monthly_gold,
+				terrain_gold_min,
+				terrain_gold_max,
+			]
 	)
 	_check(
 		terrain_half_year_food
@@ -777,8 +818,8 @@ func _test_world_generation() -> void:
 	_check(ok_adj, "邻接表应对称")
 	var road_counts := {
 		0: 0,
-		5000: 0,
-		15000: 0,
+		Edge.TERRAIN_LOW_MANPOWER: 0,
+		Edge.TERRAIN_STANDARD_MANPOWER: 0,
 		30000: 0,
 		60000: 0,
 		100000: 0,
@@ -855,12 +896,12 @@ func _test_world_generation() -> void:
 		"最高起伏道路中应包含不可供大军通行的边，分布=%s" % str(road_counts)
 	)
 	_check(
-		int(road_counts[5000]) > 0
-		and int(road_counts[15000]) > 0
+		int(road_counts[Edge.TERRAIN_LOW_MANPOWER]) > 0
+		and int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER]) > 0
 		and int(road_counts[30000]) > 0
 		and int(road_counts[60000]) > 0
 		and int(road_counts[100000]) > 0,
-		"正容量道路应形成 5000~100000 人的五个等级，分布=%s"
+		"正容量道路应形成 10000~100000 人的五个等级，分布=%s"
 			% str(road_counts)
 	)
 	_check(
@@ -1801,20 +1842,38 @@ func _test_persistent_morale() -> void:
 	_run_battle(battle, rng1)
 	_check(battle.winner_side == 1, "满士气一方应战胜疲劳(0.3)一方")
 
-	# (b) 战后恢复：非交战、有粮军队每月回士气，封顶 1.0。
+	# (b) 战后恢复：满军费、满补给时，轻重军都在 10 天从零恢复至各自上限。
 	var gs := GameState.new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var probe := gs.armies[0]
-	probe.morale = 0.2
+	probe.morale = 0.0
 	probe.state = Army.State.IDLE
 	probe.starving = false
-	var before := probe.morale
+	for _day in range(Combat.MORALE_RECOVERY_DAYS - 1):
+		sim._recover_morale()
+	_check(
+		_approx(probe.morale, probe.max_morale * 0.9)
+			and probe.morale < probe.max_morale,
+		"轻军第9天士气应为上限的90%%，实为 %.2f/%.2f"
+			% [probe.morale, probe.max_morale]
+	)
 	sim._recover_morale()
-	_check(probe.morale > before, "非交战有粮军队士气应恢复：%.2f -> %.2f" % [before, probe.morale])
-	_check(probe.morale <= 1.0, "士气恢复不应越界 1.0")
+	_check(
+		_approx(probe.morale, probe.max_morale),
+		"轻军满补给时必须在第10天回满士气"
+	)
+	probe.max_morale = Army.HEAVY_MAX_MORALE
+	probe.morale = 0.0
+	for _day in range(Combat.MORALE_RECOVERY_DAYS):
+		sim._recover_morale()
+	_check(
+		_approx(probe.morale, Army.HEAVY_MAX_MORALE),
+		"重军必须按自身士气上限比例恢复，并在第10天从0回满2.0"
+	)
 	# 军费支付率只缩放恢复速度，不像缺粮那样直接扣减士气。
+	probe.max_morale = Army.LIGHT_MAX_MORALE
 	probe.morale = 0.2
 	probe.starving = false
 	gs.nations[probe.owner_nation].treasury_gold = 0
@@ -1823,7 +1882,10 @@ func _test_persistent_morale() -> void:
 	_check(
 		_approx(
 			probe.morale,
-			0.2 + Combat.MORALE_RECOVER * 0.5
+			0.2
+				+ probe.max_morale
+					/ float(Combat.MORALE_RECOVERY_DAYS)
+					* 0.5
 		)
 			and _approx(
 				Simulation.morale_recovery_payment_multiplier(
@@ -1935,6 +1997,34 @@ func _test_time_layering() -> void:
 		"day30 应结算月收入并扣战争军费：应 %d，实为 %d"
 			% [expected_treasury, after])
 	sim.free()
+
+	var morale_state := GameState.new()
+	morale_state.generate_grid_world(12347)
+	morale_state.armies.clear()
+	var morale_nation := morale_state.nations[0]
+	morale_nation.military_payment_ratio = 1.0
+	var morale_probe := morale_state.create_army(
+		0,
+		morale_nation.capital_city_id,
+		5000,
+		5000
+	)
+	morale_probe.morale = 0.0
+	var morale_sim := Simulation.new()
+	morale_sim.setup(morale_state)
+	morale_sim.diplomacy_enabled = false
+	morale_sim._advance_day()
+	_check(
+		_approx(morale_probe.morale, 0.1),
+		"士气恢复必须进入每日时钟：第1天应从0恢复到0.1"
+	)
+	for _day in range(Combat.MORALE_RECOVERY_DAYS - 1):
+		morale_sim._advance_day()
+	_check(
+		_approx(morale_probe.morale, morale_probe.max_morale),
+		"满军费、满补给军队必须在真实推进第10天回满士气"
+	)
+	morale_sim.free()
 
 	# 2. 注粮半年一次：隔离单测 _resolve_economy 的 day gate（避开消耗干扰）。
 	var gs2 := GameState.new()
@@ -3030,6 +3120,116 @@ func _test_directional_friendly_capacity() -> void:
 		"满编总额超过道路容量后必须等待"
 	)
 
+	gs.armies.clear()
+	gs.battles.clear()
+	edge.passing_count = 0
+	edge.occupied = false
+	edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+	var low_road_holder := _make_army(
+		1720,
+		nation_id,
+		5000,
+		10
+	)
+	low_road_holder.max_size = Edge.MIN_MANPOWER
+	low_road_holder.state = Army.State.MOVING
+	low_road_holder.location_city = from_city
+	low_road_holder.move_from = from_city
+	low_road_holder.path = [to_city] as Array[int]
+	gs.armies.append(low_road_holder)
+	sim._begin_next_leg(low_road_holder)
+	low_road_holder.state = Army.State.HOLDING
+	var low_road_attacker := _make_army(
+		1721,
+		nation_id,
+		5000,
+		10
+	)
+	low_road_attacker.max_size = Edge.MIN_MANPOWER
+	low_road_attacker.state = Army.State.MOVING
+	low_road_attacker.location_city = from_city
+	low_road_attacker.move_from = from_city
+	low_road_attacker.path = [to_city] as Array[int]
+	gs.armies.append(low_road_attacker)
+	sim._begin_next_leg(low_road_attacker)
+	_check(
+		low_road_holder.on_edge
+		and low_road_attacker.on_edge,
+		"10000 容量边应同时容纳5000驻边轻军和5000进攻轻军"
+	)
+	var low_road_overflow := _make_army(
+		1722,
+		nation_id,
+		5000,
+		10
+	)
+	low_road_overflow.max_size = Edge.MIN_MANPOWER
+	low_road_overflow.state = Army.State.MOVING
+	low_road_overflow.location_city = from_city
+	low_road_overflow.move_from = from_city
+	low_road_overflow.path = [to_city] as Array[int]
+	gs.armies.append(low_road_overflow)
+	sim._begin_next_leg(low_road_overflow)
+	_check(
+		not low_road_overflow.on_edge,
+		"10000 容量边已有两支轻军后，第三支同向军必须等待"
+	)
+
+	gs.armies.clear()
+	gs.battles.clear()
+	edge.passing_count = 0
+	edge.occupied = false
+	edge.max_manpower = Edge.TERRAIN_STANDARD_MANPOWER
+	var standard_road_holder := _make_army(
+		1730,
+		nation_id,
+		5000,
+		10
+	)
+	standard_road_holder.max_size = Edge.MIN_MANPOWER
+	standard_road_holder.state = Army.State.MOVING
+	standard_road_holder.location_city = from_city
+	standard_road_holder.move_from = from_city
+	standard_road_holder.path = [to_city] as Array[int]
+	gs.armies.append(standard_road_holder)
+	sim._begin_next_leg(standard_road_holder)
+	standard_road_holder.state = Army.State.HOLDING
+	var standard_road_attacker := _make_army(
+		1731,
+		nation_id,
+		15000,
+		10
+	)
+	standard_road_attacker.max_size = Edge.STANDARD_MANPOWER
+	standard_road_attacker.state = Army.State.MOVING
+	standard_road_attacker.location_city = from_city
+	standard_road_attacker.move_from = from_city
+	standard_road_attacker.path = [to_city] as Array[int]
+	gs.armies.append(standard_road_attacker)
+	sim._begin_next_leg(standard_road_attacker)
+	_check(
+		standard_road_holder.on_edge
+		and standard_road_attacker.on_edge,
+		"20000 容量边应同时容纳5000驻边轻军和15000进攻重军"
+	)
+	var standard_road_overflow := _make_army(
+		1732,
+		nation_id,
+		5000,
+		10
+	)
+	standard_road_overflow.max_size = Edge.MIN_MANPOWER
+	standard_road_overflow.state = Army.State.MOVING
+	standard_road_overflow.location_city = from_city
+	standard_road_overflow.move_from = from_city
+	standard_road_overflow.path = [to_city] as Array[int]
+	gs.armies.append(standard_road_overflow)
+	sim._begin_next_leg(standard_road_overflow)
+	_check(
+		not standard_road_overflow.on_edge,
+		"20000 容量边已有驻军和重军后，额外同向军必须等待"
+	)
+
 	var blocked_from := gs.nations[nation_id].capital_city_id
 	var blocked_to: int = gs.neighbors(blocked_from)[0]
 	for neighbor in gs.neighbors(blocked_from):
@@ -3375,22 +3575,34 @@ func _test_morale_retreat_recovery() -> void:
 	_set_single_warehouse(gs, broken.owner_nation, c2, 100)
 	sim._resolve_supply()
 	_check(gs.cities[c2].food_storage == 100, "RECOVERING 不应被普通补给重复扣粮")
-	sim._recover_morale()
-	var recovery_demand := int(ceil(1000.0 * Simulation.RECOVERY_FOOD_PER_CAPITA))
-	_check(
-		_approx(broken.morale, Combat.MORALE_RECOVER)
-		and gs.cities[c2].food_storage == 100 - recovery_demand,
-		"1000 人首月应耗 %d 粮并恢复 %.2f 士气，实为 morale=%.2f food=%d" % [
-			recovery_demand,
-			Combat.MORALE_RECOVER, broken.morale, gs.cities[c2].food_storage
-		])
-	_check(broken.state == Army.State.RECOVERING, "士气未满且城市有粮时必须继续驻守")
-
-	while broken.state == Army.State.RECOVERING and guard < 60:
+	for _day in range(Combat.MORALE_RECOVERY_DAYS - 1):
 		sim._recover_morale()
-		guard += 1
-	_check(broken.state == Army.State.IDLE and _approx(broken.morale, 1.0),
-		"士气回满后应解除驻守并转 IDLE，morale=%.2f state=%d" % [broken.morale, broken.state])
+	_check(
+		_approx(broken.morale, broken.max_morale * 0.9)
+			and broken.state == Army.State.RECOVERING,
+		"恢复驻军第9天必须保持RECOVERING且士气为上限的90%%"
+	)
+	sim._recover_morale()
+	var ten_day_recovery_demand := int(floor(
+		float(ceil(
+			1000.0 * Simulation.RECOVERY_FOOD_PER_CAPITA
+		))
+			* float(Combat.MORALE_RECOVERY_DAYS)
+			/ float(Simulation.DAYS_PER_MONTH)
+			+ 0.000001
+	))
+	_check(
+		broken.state == Army.State.IDLE
+			and _approx(broken.morale, broken.max_morale)
+			and gs.cities[c2].food_storage
+				== 100 - ten_day_recovery_demand,
+		"恢复驻军必须第10天回满并解除驻守；十天应耗%d粮，实为morale=%.2f food=%d"
+			% [
+				ten_day_recovery_demand,
+				broken.morale,
+				gs.cities[c2].food_storage,
+			]
+	)
 
 	# 对照：资源不足时按比例恢复，粮尽立即解除驻守，但保留未满士气。
 	gs.armies.clear()
@@ -3399,12 +3611,17 @@ func _test_morale_retreat_recovery() -> void:
 	starved.state = Army.State.RECOVERING
 	starved.location_city = c2
 	starved.move_from = c2
+	starved.supply_food_debt = 3.0
 	gs.armies.append(starved)
 	_set_single_warehouse(gs, starved.owner_nation, c2, 2)
 	sim._recover_morale()
 	_check(gs.cities[c2].food_storage == 0, "恢复资源不足时应耗尽本城剩余粮食")
 	_check(starved.state == Army.State.IDLE, "城内恢复资源耗尽后应解除强制驻守")
-	_check(starved.morale > 0.0 and starved.morale < Combat.MORALE_RECOVER,
+	_check(
+		starved.morale > 0.0
+			and starved.morale
+				< starved.max_morale
+					/ float(Combat.MORALE_RECOVERY_DAYS),
 		"资源不足应按供给比例部分恢复，实为 %.3f" % starved.morale)
 
 	# 城市恢复期间若易主，旧城主驻军必须被统一驱逐，不能滞留敌城。
@@ -7277,6 +7494,114 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	encounter_sim.free()
 
+	var enclave_state := GameState.new()
+	enclave_state.generate_grid_world(32017)
+	enclave_state.armies.clear()
+	enclave_state.battles.clear()
+	for enclave_a in range(enclave_state.nations.size()):
+		for enclave_b in range(
+			enclave_a + 1,
+			enclave_state.nations.size()
+		):
+			enclave_state.set_diplomatic_relation(
+				enclave_a,
+				enclave_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	enclave_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	for enclave_edge in enclave_state.edges:
+		enclave_edge.max_manpower = Edge.STANDARD_MANPOWER
+	var connected_occupation := enclave_state.cities[4]
+	var disconnected_legal_city := enclave_state.cities[6]
+	var disconnected_occupation := enclave_state.cities[7]
+	connected_occupation.owner_nation = 0
+	connected_occupation.occupation_sponsor_nation = 0
+	disconnected_legal_city.owner_nation = 0
+	enclave_state.recognized_city_owners[
+		disconnected_legal_city.id
+	] = 0
+	disconnected_occupation.owner_nation = 0
+	disconnected_occupation.occupation_sponsor_nation = 0
+	enclave_state.ownership_revision += 1
+	var enclave_garrison := _make_army(
+		9060,
+		0,
+		5000,
+		10
+	)
+	enclave_garrison.max_size = Edge.MIN_MANPOWER
+	enclave_garrison.location_city = disconnected_occupation.id
+	enclave_garrison.move_from = disconnected_occupation.id
+	enclave_garrison.state = Army.State.IDLE
+	enclave_state.armies.append(enclave_garrison)
+	var enclave_edge_garrison := _place_army_on_edge(
+		enclave_state,
+		9061,
+		0,
+		disconnected_legal_city.id,
+		disconnected_occupation.id,
+		0.5
+	)
+	var enclave_garrison_manpower := (
+		enclave_garrison.size
+		+ enclave_edge_garrison.size
+	)
+	var enclave_manpower_before := (
+		enclave_state.nations[0].manpower_pool
+	)
+	var enclave_sim := Simulation.new()
+	enclave_sim.setup(enclave_state)
+	var enclave_peace := enclave_sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.MAKE_PEACE,
+		"a": 0,
+		"b": 1,
+		"reason": "飞地和平结算测试",
+	})
+	var enclave_event: Dictionary = (
+		enclave_state.diplomatic_history[-1]
+		if not enclave_state.diplomatic_history.is_empty()
+		else {}
+	)
+	_check(
+		enclave_peace
+			and connected_occupation.owner_nation == 0
+			and enclave_state.recognized_owner_of(
+				connected_occupation.id
+			) == 0
+			and disconnected_legal_city.owner_nation == 1
+			and enclave_state.recognized_owner_of(
+				disconnected_legal_city.id
+			) == 1
+			and disconnected_occupation.owner_nation == 1
+			and enclave_state.recognized_owner_of(
+				disconnected_occupation.id
+			) == 1
+			and int(enclave_event.get(
+				"territories_transferred",
+				-1
+			)) == 1
+			and int(enclave_event.get(
+				"enclaves_abandoned",
+				-1
+			)) == 2,
+		"议和必须保留首都连通领土，并割让所有不连首都的飞地，无论其原为法理领土还是占领地"
+	)
+	_check(
+		not enclave_state.armies.has(enclave_garrison)
+			and not enclave_state.armies.has(
+				enclave_edge_garrison
+			)
+			and enclave_state.nations[0].manpower_pool
+				== enclave_manpower_before
+					+ enclave_garrison_manpower,
+		"飞地城市及边上无路撤回的驻军必须按和平协议复员并返还人力"
+	)
+	enclave_sim.free()
+
 	var ai_state := GameState.new()
 	ai_state.generate_grid_world(32003)
 	ai_state.day = (
@@ -7437,6 +7762,168 @@ func _test_diplomacy_state_and_ai() -> void:
 		"多国战争中一方全境失守后必须向全部交战国投降并清除所有战争关系"
 	)
 	capitulation_sim.free()
+
+	var remnant_state := GameState.new()
+	remnant_state.generate_grid_world(32016)
+	remnant_state.uses_heightmap = true
+	remnant_state.armies.clear()
+	remnant_state.battles.clear()
+	for remnant_a in range(remnant_state.nations.size()):
+		remnant_state.nations[remnant_a].battle_groups.clear()
+		remnant_state.nations[remnant_a].next_battle_group_id = 0
+		for remnant_b in range(
+			remnant_a + 1,
+			remnant_state.nations.size()
+		):
+			remnant_state.set_diplomatic_relation(
+				remnant_a,
+				remnant_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var remnant_origin := 9
+	var remnant_first := 10
+	var remnant_last := 11
+	for remnant_city in remnant_state.cities:
+		remnant_city.owner_nation = 0
+		remnant_city.is_capital = false
+		remnant_city.has_warehouse = false
+		remnant_city.food_storage = 0
+		remnant_city.fort_strength = 0
+		remnant_city.fort_strength_max = 0
+		remnant_city.manpower_per_month = 0
+		remnant_state.recognized_city_owners[
+			remnant_city.id
+		] = 0
+	for remnant_city_id in [remnant_first, remnant_last]:
+		remnant_state.cities[
+			remnant_city_id
+		].owner_nation = 1
+		remnant_state.recognized_city_owners[
+			remnant_city_id
+		] = 1
+	for remnant_edge in remnant_state.edges:
+		remnant_edge.max_manpower = 0
+	remnant_state.edge_of(
+		remnant_origin,
+		remnant_first
+	).max_manpower = Edge.MIN_MANPOWER
+	remnant_state.edge_of(
+		remnant_first,
+		remnant_last
+	).max_manpower = Edge.MIN_MANPOWER
+	remnant_state.nations[0].capital_city_id = remnant_origin
+	remnant_state.nations[0].warehouse_city_ids = [
+		remnant_origin
+	] as Array[int]
+	remnant_state.cities[remnant_origin].is_capital = true
+	remnant_state.cities[remnant_origin].has_warehouse = true
+	remnant_state.cities[remnant_origin].food_storage = 100000
+	remnant_state.nations[1].capital_city_id = remnant_last
+	remnant_state.nations[1].warehouse_city_ids = [
+		remnant_last
+	] as Array[int]
+	remnant_state.cities[remnant_last].is_capital = true
+	remnant_state.cities[remnant_last].has_warehouse = true
+	remnant_state.cities[remnant_last].food_storage = 1000
+	remnant_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	remnant_state.nations[0].treasury_gold = 10000
+	remnant_state.nations[1].treasury_gold = 0
+	remnant_state.nations[1].manpower_pool = 0
+	var remnant_group := remnant_state.create_battle_group(0)
+	var remnant_light_armies: Array[Army] = []
+	for remnant_index in range(2):
+		var remnant_light := remnant_state.create_army(
+			0,
+			remnant_origin,
+			GameState.INITIAL_LIGHT_ARMY_SIZE,
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+		remnant_light.attack = 20
+		remnant_light.defense = 20
+		remnant_state.assign_army_to_battle_group(
+			remnant_light,
+			remnant_group.id
+		)
+		remnant_light_armies.append(remnant_light)
+	var remnant_heavy := remnant_state.create_army(
+		0,
+		remnant_origin,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	remnant_heavy.attack = 20
+	remnant_heavy.defense = 20
+	remnant_state.assign_army_to_battle_group(
+		remnant_heavy,
+		remnant_group.id
+	)
+	remnant_state.refresh_derived()
+	var remnant_sim := Simulation.new()
+	remnant_sim.setup(remnant_state)
+	var remnant_objective := DiplomacyAI.select_war_objective(
+		remnant_state,
+		0,
+		1
+	)
+	var remnant_plan_ready := (
+		not remnant_objective.is_empty()
+		and int(remnant_objective["city_id"])
+			== remnant_first
+		and remnant_sim._ensure_campaign_preparation_plan(
+			0,
+			remnant_first
+		)
+	)
+	var remnant_nation := remnant_state.nations[0]
+	var light_detachment_ready := remnant_plan_ready
+	for remnant_light in remnant_light_armies:
+		light_detachment_ready = (
+			light_detachment_ready
+			and int(
+				remnant_nation
+					.campaign_preparation_assignments.get(
+						remnant_light.id,
+						-1
+					)
+			) == remnant_first
+		)
+	light_detachment_ready = (
+		light_detachment_ready
+		and not remnant_nation
+			.campaign_preparation_assignments.has(
+				remnant_heavy.id
+			)
+	)
+	var remnant_launched := (
+		light_detachment_ready
+		and remnant_sim._launch_campaign_offensive(
+			0,
+			remnant_first,
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+			[remnant_first] as Array[int]
+		)
+	)
+	var remnant_terminated := false
+	for _remnant_day in range(240):
+		if (
+			remnant_state.cities_of(1).is_empty()
+			or not remnant_state.is_enemy(0, 1)
+		):
+			remnant_terminated = true
+			break
+		remnant_sim._advance_day()
+	_check(
+		remnant_launched
+			and remnant_heavy.state == Army.State.IDLE
+			and remnant_terminated,
+		"多数城对两座残城时，5000关隘必须允许轻军分遣队继续A→B→C，并在240天内灭国或双边议和"
+	)
+	remnant_sim.free()
+
 	var occupied_capital := bilateral_peace_state.nations[
 		0
 	].capital_city_id

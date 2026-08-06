@@ -1421,7 +1421,7 @@ func _draw_edges() -> void:
 			road_level = 4
 		elif e.max_manpower >= 60000:
 			road_level = 3
-		elif e.max_manpower >= 15000:
+		elif e.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER:
 			road_level = 2
 		var road_colors: Array[Color] = [
 			Color(0.22, 0.17, 0.11),

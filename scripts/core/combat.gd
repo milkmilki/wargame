@@ -35,7 +35,7 @@ const MORALE_FLOOR: float = 0.0            ## 士气跌破此值该军崩溃（A
 const MORALE_CASUALTY_K: float = 1.2       ## 伤亡比例对士气的侵蚀系数
 const MORALE_BASE_DECAY: float = 0.01      ## 每回合基础士气衰减（保证战斗必然收敛结束）
 const MORALE_STARVE_DECAY: float = 0.10    ## 断粮方每回合额外士气衰减——粮草特色
-const MORALE_RECOVER: float = 0.15         ## 非交战、有粮军队每月士气恢复量（战后疲劳消退）
+const MORALE_RECOVERY_DAYS: int = 10       ## 满军费、满补给时从零士气恢复至上限的天数
 const MORALE_REINFORCE: float = 0.20       ## 增援集结上限系数：新友军对本侧既有成员的士气提振
 
 # ---- 士气→战斗效率（item 2：士气是组织度而非第二血条）----

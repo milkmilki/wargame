@@ -188,7 +188,7 @@ func _build_symmetric_world() -> GameState:
 		nation.warehouse_city_ids.clear()
 		nation.granary_food = 0
 		nation.alive = true
-		nation.treasury_gold = 200
+		nation.treasury_gold = 400
 
 	for city in state.cities:
 		var row := city.coord.y

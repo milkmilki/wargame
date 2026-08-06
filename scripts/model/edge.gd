@@ -4,6 +4,8 @@ extends RefCounted
 
 const MIN_MANPOWER: int = 5000
 const STANDARD_MANPOWER: int = 15000
+const TERRAIN_LOW_MANPOWER: int = 10000
+const TERRAIN_STANDARD_MANPOWER: int = 20000
 const MAX_MANPOWER: int = 100000
 
 enum Kind {

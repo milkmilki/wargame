@@ -38,7 +38,7 @@ static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "settlement-v3:%s:%d" % [source_path, city_count]
+	var cache_key := "settlement-v4:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -642,18 +642,22 @@ static func _build_roads(
 	for i in range(count):
 		var road := selected[i]
 		var percentile := float(i) / float(maxi(count - 1, 1))
-		road["max_manpower"] = (
-			100000 if percentile < 0.05
-			else 60000 if percentile < 0.15
-			else 30000 if percentile < 0.55
-			else 15000 if percentile < 0.85
-			else 5000 if percentile < 0.90
-			else 0
-		)
+		var max_manpower := 0
+		if percentile < 0.05:
+			max_manpower = 100000
+		elif percentile < 0.15:
+			max_manpower = 60000
+		elif percentile < 0.55:
+			max_manpower = 30000
+		elif percentile < 0.85:
+			max_manpower = Edge.TERRAIN_STANDARD_MANPOWER
+		elif percentile < 0.90:
+			max_manpower = Edge.TERRAIN_LOW_MANPOWER
+		road["max_manpower"] = max_manpower
 		if bool(road.get("backbone", false)):
 			road["max_manpower"] = maxi(
 				int(road["max_manpower"]),
-				5000
+				Edge.TERRAIN_LOW_MANPOWER
 			)
 		road["danger"] = clampf(percentile, 0.0, 1.0)
 		road["length"] = metric_length_between(

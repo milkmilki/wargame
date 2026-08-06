@@ -90,27 +90,71 @@ func _accumulate(
 		)
 		for source_id in source_ids:
 			var power := float(sources[source_id])
-			var distances := _travel_days_field(
+			var influence := _influence_field(
 				state,
 				int(source_id),
 				required_manpower
 			)
-			var city_ids := distances.keys()
-			EquivariantOrder.sort_city_ids(
-				city_ids,
+			var city_ids := _ordered_influence_city_ids(
 				state,
-				nation_id,
-				int(source_id)
+				int(source_id),
+				required_manpower,
+				influence
 			)
 			for city_id in city_ids:
-				var arrival := float(distances[city_id])
-				if arrival <= HORIZON_DAYS:
-					output[city_id] = (
-						float(output.get(city_id, 0.0))
-						+ power * exp(
-							-arrival / DECAY_DAYS
-						)
-					)
+				output[city_id] = (
+					float(output.get(city_id, 0.0))
+					+ power * float(influence[city_id])
+				)
+
+
+func _influence_field(
+	state: GameState,
+	start: int,
+	required_manpower: int
+) -> Dictionary:
+	var cache_key := "I:%d:%d" % [
+		start,
+		required_manpower,
+	]
+	if travel_distance_cache.has(cache_key):
+		return travel_distance_cache[cache_key]
+	var distances := _travel_days_field(
+		state,
+		start,
+		required_manpower
+	)
+	var influence := {}
+	for city_id in distances:
+		influence[city_id] = exp(
+			-float(distances[city_id]) / DECAY_DAYS
+		)
+	travel_distance_cache[cache_key] = influence
+	return influence
+
+
+func _ordered_influence_city_ids(
+	state: GameState,
+	start: int,
+	required_manpower: int,
+	influence: Dictionary
+) -> Array:
+	var cache_key := "O:%d:%d:%d" % [
+		nation_id,
+		start,
+		required_manpower,
+	]
+	if travel_distance_cache.has(cache_key):
+		return travel_distance_cache[cache_key]
+	var city_ids := influence.keys()
+	EquivariantOrder.sort_city_ids(
+		city_ids,
+		state,
+		nation_id,
+		start
+	)
+	travel_distance_cache[cache_key] = city_ids
+	return city_ids
 
 
 func _travel_days_field(
@@ -118,7 +162,10 @@ func _travel_days_field(
 	start: int,
 	required_manpower: int
 ) -> Dictionary:
-	var cache_key := "%d:%d" % [start, required_manpower]
+	var cache_key := "D:%d:%d" % [
+		start,
+		required_manpower,
+	]
 	if travel_distance_cache.has(cache_key):
 		return travel_distance_cache[cache_key]
 	var dist := {start: 0.0}

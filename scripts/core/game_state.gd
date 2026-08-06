@@ -14,13 +14,16 @@ const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const DEFAULT_TRUCE_DAYS: int = 180
-const WAR_GOLD_TROOPS_PER_UNIT: int = 3000
+const WAR_GOLD_TROOPS_PER_UNIT: int = 1400
 const FORMATION_CREATION_UPKEEP_MONTHS: int = 10
-const OFFENSIVE_COMMAND_GOLD_PER_ARMY: int = 1
+const OFFENSIVE_COMMAND_GOLD_PER_ARMY: int = 2
 const CITY_FOOD_PER_HALF_YEAR_MIN: int = 400
 const CITY_FOOD_PER_HALF_YEAR_MAX: int = 600
-const TERRAIN_CITY_GOLD_PER_MONTH_MIN: int = 2
+const TERRAIN_CITY_GOLD_PER_MONTH_MIN: int = 1
 const TERRAIN_CITY_GOLD_PER_MONTH_MAX: int = 5
+const TERRAIN_CITY_GOLD_TARGET_AVERAGE: int = 7
+const TERRAIN_CITY_GOLD_OUTPUT_MIN: int = 1
+const TERRAIN_CITY_GOLD_OUTPUT_MAX: int = 15
 const TERRAIN_CITY_FOOD_PER_HALF_YEAR_MIN: int = 145
 const TERRAIN_CITY_FOOD_PER_HALF_YEAR_MAX: int = 195
 const PLAIN_CITY_SHARE: float = 0.35
@@ -222,7 +225,7 @@ func _generate_nations(initial_relation: int) -> void:
 		var n := Nation.new()
 		n.id = i
 		n.color = palette[i]
-		n.treasury_gold = 200
+		n.treasury_gold = 400
 		n.political_system = 0
 		n.alive = true
 		nations.append(n)
@@ -474,7 +477,6 @@ func _initialize_terrain_development() -> void:
 		plain_ids[relief_order[index].id] = true
 	var direct_gold := {}
 	var direct_food := {}
-	var original_gold_total := 0
 	var original_food_total := 0
 	for city in land:
 		city.is_plain_city = plain_ids.has(city.id)
@@ -513,7 +515,6 @@ func _initialize_terrain_development() -> void:
 		)
 		direct_gold[city.id] = gold_multiplier
 		direct_food[city.id] = food_multiplier
-		original_gold_total += city.gold_per_month
 		original_food_total += city.food_per_half_year
 	var propagated_gold := {}
 	var propagated_food := {}
@@ -566,9 +567,11 @@ func _initialize_terrain_development() -> void:
 		)
 	_apportion_city_output(
 		land,
-		original_gold_total,
+		land.size() * TERRAIN_CITY_GOLD_TARGET_AVERAGE,
 		gold_weights,
-		false
+		false,
+		TERRAIN_CITY_GOLD_OUTPUT_MIN,
+		TERRAIN_CITY_GOLD_OUTPUT_MAX
 	)
 	_apportion_city_output(
 		land,
@@ -582,7 +585,9 @@ func _apportion_city_output(
 	target_cities: Array[City],
 	target_total: int,
 	weights: Dictionary,
-	food_output: bool
+	food_output: bool,
+	minimum_output: int = 0,
+	maximum_output: int = -1
 ) -> void:
 	var weight_total := 0.0
 	for city in target_cities:
@@ -605,9 +610,11 @@ func _apportion_city_output(
 		var lower_bound := (
 			FOOD_HUB_MIN_OUTPUT
 			if food_output and city.is_food_hub
-			else 0
+			else minimum_output
 		)
 		var value := maxi(int(floor(exact)), lower_bound)
+		if maximum_output >= 0:
+			value = mini(value, maximum_output)
 		values[city.id] = value
 		lower_bounds[city.id] = lower_bound
 		assigned += value
@@ -625,16 +632,22 @@ func _apportion_city_output(
 					return float(a["fraction"]) > float(b["fraction"])
 				return int(a["city_id"]) < int(b["city_id"])
 		)
-		var add_index := 0
 		while assigned < target_total:
-			var city_id := int(
-				remainders[add_index % remainders.size()][
-					"city_id"
-				]
-			)
-			values[city_id] = int(values[city_id]) + 1
-			assigned += 1
-			add_index += 1
+			var changed := false
+			for entry in remainders:
+				var city_id := int(entry["city_id"])
+				if (
+					maximum_output >= 0
+					and int(values[city_id]) >= maximum_output
+				):
+					continue
+				values[city_id] = int(values[city_id]) + 1
+				assigned += 1
+				changed = true
+				if assigned >= target_total:
+					break
+			if not changed:
+				break
 	elif assigned > target_total:
 		remainders.sort_custom(
 			func(a: Dictionary, b: Dictionary) -> bool:
@@ -658,6 +671,11 @@ func _apportion_city_output(
 					break
 			if not changed:
 				break
+	assert(
+		assigned == target_total,
+		"城市产出目标与上下界不兼容：目标%d，实际%d"
+			% [target_total, assigned]
+	)
 	for city in target_cities:
 		if food_output:
 			city.food_per_half_year = int(values[city.id])

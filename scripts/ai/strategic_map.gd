@@ -365,7 +365,8 @@ func _finalize_edge_values() -> void:
 		value += 3.0 * float(bridge_impact.get(key, 0.0)) / maxf(_total_friendly_value, 0.001)
 		value += 2.0 * float(corridor_flow.get(key, 0.0)) / max_flow
 		var capacity_units := (
-			float(edge.max_manpower) / 15000.0
+			float(edge.max_manpower)
+				/ float(Edge.STANDARD_MANPOWER)
 		)
 		value += 0.75 * maxf(capacity_units - 1.0, 0.0)
 		if (

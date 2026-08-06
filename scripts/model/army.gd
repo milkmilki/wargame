@@ -63,7 +63,7 @@ var encounter_blocked: bool = false
 ## 派生标记：当日是否缺粮（供渲染标记饥饿）。由 Simulation 每日刷新。
 var starving: bool = false
 
-## 持久士气 ∈ [0,max_morale]。战斗中被侵蚀（伤亡/断粮），战斗外每月恢复。
+## 持久士气 ∈ [0,max_morale]。战斗中被侵蚀（伤亡/断粮），战斗外每日恢复。
 ## 真源在此（Battle 层士气为本值的兵力加权派生），使"老兵带疲劳进场"效果自然涌现。
 var morale: float = 1.0
 ## 轻军为 1，重军为 2；高于 1 的部分只增加持续作战储备，不继续放大战斗效率。

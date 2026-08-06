@@ -32,7 +32,8 @@ static func build(
 	game_state: GameState,
 	owner_nation: int,
 	shared_path_cache: Dictionary = {},
-	shared_supply_network_cache: Dictionary = {}
+	shared_supply_network_cache: Dictionary = {},
+	shared_city_partition_cache: Dictionary = {}
 ) -> AiWorldView:
 	var view := AiWorldView.new()
 	view.state = game_state
@@ -42,15 +43,85 @@ static func build(
 	view._path_field_cache = shared_path_cache
 	view._supply_network_cache = shared_supply_network_cache
 	view.warehouses = game_state.warehouse_cities_of(owner_nation)
-	for city in game_state.cities:
-		if city.owner_nation == owner_nation:
-			view.friendly_cities.append(city)
-		elif game_state.is_enemy(owner_nation, city.owner_nation):
-			view.enemy_cities.append(city)
-		elif game_state.is_allied(owner_nation, city.owner_nation):
-			view.allied_cities.append(city)
-		else:
-			view.neutral_cities.append(city)
+	var city_partition_key := "%d:%d:%d" % [
+		owner_nation,
+		game_state.ownership_revision,
+		game_state.diplomacy_revision,
+	]
+	if shared_city_partition_cache.has(city_partition_key):
+		var cached: Dictionary = shared_city_partition_cache[
+			city_partition_key
+		]
+		view.friendly_cities = (
+			cached["friendly"] as Array[City]
+		).duplicate()
+		view.enemy_cities = (
+			cached["enemy"] as Array[City]
+		).duplicate()
+		view.allied_cities = (
+			cached["allied"] as Array[City]
+		).duplicate()
+		view.neutral_cities = (
+			cached["neutral"] as Array[City]
+		).duplicate()
+	else:
+		for city in game_state.cities:
+			if city.owner_nation == owner_nation:
+				view.friendly_cities.append(city)
+			elif game_state.is_enemy(
+				owner_nation,
+				city.owner_nation
+			):
+				view.enemy_cities.append(city)
+			elif game_state.is_allied(
+				owner_nation,
+				city.owner_nation
+			):
+				view.allied_cities.append(city)
+			else:
+				view.neutral_cities.append(city)
+		view.friendly_cities.sort_custom(
+			func(a: City, b: City) -> bool:
+				return EquivariantOrder.city_less(
+					game_state,
+					owner_nation,
+					a,
+					b
+				)
+		)
+		view.enemy_cities.sort_custom(
+			func(a: City, b: City) -> bool:
+				return EquivariantOrder.city_less(
+					game_state,
+					owner_nation,
+					a,
+					b
+				)
+		)
+		view.allied_cities.sort_custom(
+			func(a: City, b: City) -> bool:
+				return EquivariantOrder.city_less(
+					game_state,
+					owner_nation,
+					a,
+					b
+				)
+		)
+		view.neutral_cities.sort_custom(
+			func(a: City, b: City) -> bool:
+				return EquivariantOrder.city_less(
+					game_state,
+					owner_nation,
+					a,
+					b
+				)
+		)
+		shared_city_partition_cache[city_partition_key] = {
+			"friendly": view.friendly_cities.duplicate(),
+			"enemy": view.enemy_cities.duplicate(),
+			"allied": view.allied_cities.duplicate(),
+			"neutral": view.neutral_cities.duplicate(),
+		}
 	for army in game_state.armies:
 		if army.size <= 0:
 			continue
@@ -88,19 +159,7 @@ static func build(
 			view.enemy_armies.append(army)
 		elif game_state.is_allied(owner_nation, army.owner_nation):
 			view.allied_armies.append(army)
-	# AI 迭代顺序必须随势力镜像一起变换，不能读取创建顺序 id。
-	view.friendly_cities.sort_custom(func(a: City, b: City) -> bool:
-		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
-	)
-	view.enemy_cities.sort_custom(func(a: City, b: City) -> bool:
-		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
-	)
-	view.allied_cities.sort_custom(func(a: City, b: City) -> bool:
-		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
-	)
-	view.neutral_cities.sort_custom(func(a: City, b: City) -> bool:
-		return EquivariantOrder.city_less(game_state, owner_nation, a, b)
-	)
+	# AI 军队迭代顺序必须随势力镜像一起变换，不能读取创建顺序 id。
 	view.friendly_armies.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
 	)

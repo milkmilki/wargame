@@ -58,7 +58,7 @@ const UNIFICATION_COMPLETION_WEIGHT: float = 1.35
 const UNIFICATION_RIVAL_SCARCITY_WEIGHT: float = 0.45
 const CAMPAIGN_RESERVE_MONTHS: int = 6
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
-const MIN_GOLD_RESERVE: int = 100
+const MIN_GOLD_RESERVE: int = 200
 const MIN_MANPOWER_RESERVE: int = 5000
 const MAX_MOBILIZATION_ARMIES: int = 4
 const MOBILIZATION_ARMY_SIZE: int = 5000
@@ -80,9 +80,15 @@ const WAR_PREPARATION_FORCE_SHARE: float = 0.25
 static func choose_actions(state: GameState) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
 	var committed := {}
+	var evaluation_cache := {}
 	_collect_peace_actions(state, actions, committed)
 	_collect_leave_alliance_actions(state, actions, committed)
-	_collect_war_actions(state, actions, committed)
+	_collect_war_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
 	_collect_alliance_actions(state, actions, committed)
 	return actions
 
@@ -267,10 +273,13 @@ static func war_situation_score(
 	enemy_id: int
 ) -> float:
 	var score := 0.0
+	var bilateral_value := 0.0
 	for city in state.cities:
 		var legal_owner := state.recognized_owner_of(city.id)
 		if legal_owner not in [nation_id, enemy_id]:
 			continue
+		var city_value := _military_city_value(city)
+		bilateral_value += city_value
 		var occupying_side := _occupation_side(
 			state,
 			city,
@@ -279,12 +288,13 @@ static func war_situation_score(
 		)
 		if occupying_side < 0 or occupying_side == legal_owner:
 			continue
-		var city_value := _military_city_value(city)
 		if occupying_side == nation_id and legal_owner == enemy_id:
 			score += city_value
 		elif occupying_side == enemy_id and legal_owner == nation_id:
 			score -= city_value
-	return score
+	return (
+		score * 4.0 / maxf(bilateral_value, 1.0)
+	)
 
 
 ## 方向性外交态度：正值表示合作倾向，负值表示敌对倾向。
@@ -292,13 +302,15 @@ static func war_situation_score(
 static func diplomatic_attitude(
 	state: GameState,
 	nation_id: int,
-	other_id: int
+	other_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
 	return float(
 		diplomatic_attitude_breakdown(
 			state,
 			nation_id,
-			other_id
+			other_id,
+			evaluation_cache
 		)["score"]
 	)
 
@@ -306,7 +318,8 @@ static func diplomatic_attitude(
 static func diplomatic_attitude_breakdown(
 	state: GameState,
 	nation_id: int,
-	other_id: int
+	other_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
 	if (
 		nation_id == other_id
@@ -335,10 +348,11 @@ static func diplomatic_attitude_breakdown(
 		-float(frontier_count) * BORDER_ATTITUDE_PER_EDGE,
 		BORDER_ATTITUDE_FLOOR
 	)
-	var objective := select_war_objective(
+	var objective := _cached_war_objective(
 		state,
 		nation_id,
-		other_id
+		other_id,
+		evaluation_cache
 	)
 	var objective_value := float(objective.get("value", 0.0))
 	var objective_component := maxf(
@@ -673,7 +687,12 @@ static func alliance_willingness(state: GameState, nation_id: int, target_id: in
 	)
 
 
-static func war_desire(state: GameState, nation_id: int, target_id: int) -> float:
+static func war_desire(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
 	if (
 		not state.can_declare_war(nation_id, target_id)
 		or state.wars_of(nation_id).size() >= MAX_CONCURRENT_WARS
@@ -693,7 +712,12 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 	)
 	if not bool(food_plan["target_sustainable"]):
 		return -INF
-	var objective := select_war_objective(state, nation_id, target_id)
+	var objective := _cached_war_objective(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache
+	)
 	if objective.is_empty():
 		return -INF
 	# 共同防御联盟不参加成员主动发动的战争；进攻方只能计算本国战力。
@@ -718,7 +742,8 @@ static func war_desire(state: GameState, nation_id: int, target_id: int) -> floa
 	var attitude := diplomatic_attitude(
 		state,
 		nation_id,
-		target_id
+		target_id,
+		evaluation_cache
 	)
 	var unification_pressure := unification_rivalry(
 		state,
@@ -1255,6 +1280,27 @@ static func _campaign_troop_target(
 	)
 
 
+static func _cached_war_objective(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary
+) -> Dictionary:
+	var cache_key := "objective:%d:%d" % [
+		nation_id,
+		target_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
+	var objective := select_war_objective(
+		state,
+		nation_id,
+		target_id
+	)
+	evaluation_cache[cache_key] = objective
+	return objective
+
+
 static func select_war_objective(
 	state: GameState,
 	nation_id: int,
@@ -1266,6 +1312,10 @@ static func select_war_objective(
 	var max_gold := 1
 	var max_food := 1
 	var max_manpower := 1
+	var required_capacity := objective_staging_capacity(
+		state,
+		target_id
+	)
 	for city in target_cities:
 		max_gold = maxi(max_gold, city.gold_per_month)
 		max_food = maxi(max_food, city.food_per_half_year)
@@ -1278,7 +1328,7 @@ static func select_war_objective(
 			if (
 				edge != null
 				and edge.max_manpower
-					>= Edge.STANDARD_MANPOWER
+					>= required_capacity
 				and state.has_military_access(
 					nation_id, state.cities[neighbor].owner_nation
 				)
@@ -1547,7 +1597,8 @@ static func _collect_alliance_actions(
 static func _collect_war_actions(
 	state: GameState,
 	actions: Array[Dictionary],
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary
 ) -> void:
 	for nation in state.nations:
 		if committed.has(nation.id) or not nation.alive:
@@ -1560,7 +1611,12 @@ static func _collect_war_actions(
 		for target in state.nations:
 			if target.id == nation.id or committed.has(target.id) or not target.alive:
 				continue
-			var score := war_desire(state, nation.id, target.id)
+			var score := war_desire(
+				state,
+				nation.id,
+				target.id,
+				evaluation_cache
+			)
 			if score > best_score or (
 				is_equal_approx(score, best_score)
 				and (
@@ -1577,7 +1633,12 @@ static func _collect_war_actions(
 				best_target = target.id
 		if best_target == -1 or best_score < WAR_DECLARE_SCORE:
 			continue
-		var objective := select_war_objective(state, nation.id, best_target)
+		var objective := _cached_war_objective(
+			state,
+			nation.id,
+			best_target,
+			evaluation_cache
+		)
 		var report := resource_report(state, nation.id)
 		if objective.is_empty() or not bool(report["ready"]):
 			continue
@@ -1595,7 +1656,8 @@ static func _collect_war_actions(
 		var attitude := diplomatic_attitude(
 			state,
 			nation.id,
-			best_target
+			best_target,
+			evaluation_cache
 		)
 		var unification_pressure := unification_rivalry(
 			state,
@@ -1897,12 +1959,19 @@ static func staging_cities_for_objective(
 	objective_city: int
 ) -> Array[int]:
 	var result: Array[int] = []
+	var target_nation := state.cities[
+		objective_city
+	].owner_nation
+	var required_capacity := objective_staging_capacity(
+		state,
+		target_nation
+	)
 	for neighbor in state.neighbors(objective_city):
 		var edge := state.edge_of(neighbor, objective_city)
 		if (
 			edge != null
 			and edge.max_manpower
-				>= Edge.STANDARD_MANPOWER
+				>= required_capacity
 			and state.has_military_access(
 				nation_id, state.cities[neighbor].owner_nation
 			)
@@ -1915,6 +1984,19 @@ static func staging_cities_for_objective(
 		objective_city
 	)
 	return result
+
+
+static func objective_staging_capacity(
+	state: GameState,
+	target_nation: int
+) -> int:
+	if (
+		target_nation >= 0
+		and target_nation < state.nations.size()
+		and state.cities_of(target_nation).size() <= 2
+	):
+		return Edge.MIN_MANPOWER
+	return Edge.STANDARD_MANPOWER
 
 
 static func staged_troops_for_objective(
