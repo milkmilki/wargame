@@ -23,7 +23,10 @@ const MIN_WAR_DAYS: int = 180
 const WAR_FATIGUE_REFERENCE_DAYS: int = 360
 const MIN_NEUTRAL_DAYS: int = 90
 const MIN_ALLIANCE_DAYS: int = 360
-const MAX_CONCURRENT_WARS: int = 1
+## 单国同时主动开战上限。诊断显示宣战「意愿分」恒在阈值 3× 以上，长和平期的
+## 真因是该上限=1：一旦入战，其余所有战线被硬门槛拦死。放开到 3 以支持多线
+## 饱和进攻的乱世感；经济/粮食硬门槛（ready / target_sustainable）仍逐国把关。
+const MAX_CONCURRENT_WARS: int = 3
 const MAX_DEFENSIVE_ALLIES: int = 1
 const PEACE_PROPOSE_SCORE: float = 1.25
 const PEACE_ACCEPT_SCORE: float = 0.60
