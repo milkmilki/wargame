@@ -685,6 +685,14 @@ func _resolve_military_finance() -> void:
 # ------------------------------------------------------------------ 1b. 全国人口补员
 
 func _resolve_reinforcements() -> void:
+	# 先按国家分桶（O(A)），避免对每个国家都全表扫描 state.armies（原 O(N×A)，
+	# 40 国 × 数百军是月结算主线程 ~1s 卡顿的根因）。桶内保持 state.armies 原序，
+	# 与旧实现逐军遍历顺序一致，补员结果不变。
+	var armies_by_nation := {}
+	for army in state.armies:
+		if not armies_by_nation.has(army.owner_nation):
+			armies_by_nation[army.owner_nation] = [] as Array[Army]
+		(armies_by_nation[army.owner_nation] as Array[Army]).append(army)
 	for nation in state.nations:
 		var at_war := not state.wars_of(nation.id).is_empty()
 		var food_report := _food_security_report(nation.id)
@@ -705,8 +713,10 @@ func _resolve_reinforcements() -> void:
 			continue
 		var plans: Array = []
 		var total_deficit := 0
-		for army in state.armies:
-			if not _can_reinforce_army(army) or army.owner_nation != nation.id:
+		for army in (
+			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army]
+		):
+			if not _can_reinforce_army(army):
 				continue
 			var target_size := army.max_size
 			if not at_war:
