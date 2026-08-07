@@ -17,7 +17,10 @@ const MISSING_EDGE_TRAVEL_DAYS: float = 30.0
 var seconds_per_day: float = 1.0           ## 默认 1 秒 = 1 天
 var paused: bool = false
 const SPEED_MIN: float = 0.25
-const SPEED_MAX: float = 4.0
+## 快进「看海」上限。步进为 ×2，可依次到 8/16/32。注意：实际帧率仍受单日
+## 算力约束——40 国重决策日单日约 10s，远超 8x 所需的 0.125s/天，故高倍速
+## 在重决策日只会「尽力追赶」，普通日才真正跑满设定倍速。
+const SPEED_MAX: float = 32.0
 
 # ---- 粮食 / 饥饿 调参常量（§6.7）----
 const FOOD_PER_CAPITA: float = 0.0025      ## 每人月耗（400 人耗 1 粮）
@@ -1790,6 +1793,9 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					state.clear_war_objective(nation_a, nation_b)
 					_clear_finished_war_mobilization(nation_a)
 					_clear_finished_war_mobilization(nation_b)
+					# 议和瞬间前线消失：强制双方下一天重算国境与防区，
+					# 让填线军立刻脱离已失效的边境扇区、按新国界重新部署。
+					_ai_last_decision_day = -1
 		DiplomacyAI.Action.DECLARE_WAR:
 			if state.can_declare_war(nation_a, nation_b):
 				var defenders: Array[int] = [nation_b]
@@ -1865,6 +1871,9 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 							objective_city,
 							preparation_days
 						)
+					# 宣战瞬间出现新前线：强制所有参战国（尤其被动防守方）
+					# 下一天重算国境与防区，立即沿新边界铺开填线军。
+					_ai_last_decision_day = -1
 		DiplomacyAI.Action.FORM_ALLIANCE:
 			if (
 				state.relation_between(nation_a, nation_b)

@@ -18,6 +18,12 @@ const EDGE_SWITCH_PRESSURE_RATIO: float = 1.25
 const STRATEGIC_COMMIT_DAYS: int = 30
 const ROLE_DEPLOYMENT_SCORE: float = 2000.0
 const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
+## 重要城市（内线）部署权重的地理修正：价值随「离边境近」「离首都近」放大。
+## 采用拓扑跳数（BFS）度量，加权和合成，跳数越小因子越接近上限。
+const STRATEGIC_BORDER_PROXIMITY_WEIGHT: float = 0.60
+const STRATEGIC_CAPITAL_PROXIMITY_WEIGHT: float = 0.40
+const STRATEGIC_PROXIMITY_DECAY_HOPS: float = 3.0
+const STRATEGIC_PROXIMITY_MIN_FACTOR: float = 0.35
 
 var view: AiWorldView
 var snapshot: StrategicMapSnapshot
@@ -42,6 +48,10 @@ var assigned_posture_by_army: Dictionary = {} ## army.id -> Posture
 var assigned_edge_by_army: Dictionary = {} ## army.id -> neighbor_id
 var _role_city_priority_cache: Dictionary = {}
 var _role_path_dist_by_origin: Dictionary = {}
+## 内线部署地理修正用的拓扑跳数场（本国领土内 BFS）。惰性构建、随规划复用。
+var _border_hop_distance: Dictionary = {}   ## city_id -> 到最近国界城市的跳数
+var _capital_hop_distance: Dictionary = {}  ## city_id -> 到首都的跳数
+var _proximity_fields_ready: bool = false
 var topology: FrontierDefenseTopology = null
 var topology_rebuilt: bool = false
 var topology_reused: bool = false
@@ -1442,17 +1452,103 @@ func _line_city_priority(city_id: int) -> float:
 		return float(
 			_role_city_priority_cache[city_id]
 		)
+	# 基础重要性（城市价值 + 补给枢纽价值）按地理区位放大：优先部署在
+	# 离国境、离首都都近的重要城市。威胁项是对敌情的即时反应，不参与地理修正。
+	var base_importance := (
+		snapshot.value_of_city(city_id) * 100.0
+		+ snapshot.supply_importance_at(city_id) * 100.0
+	)
 	var priority := (
 		maxf(threat.threat_at(city_id), 0.0)
 		+ maxf(
 			snapshot.potential_threat_at(city_id),
 			0.0
 		)
-		+ snapshot.value_of_city(city_id) * 100.0
-		+ snapshot.supply_importance_at(city_id) * 100.0
+		+ base_importance * _strategic_proximity_factor(city_id)
 	)
 	_role_city_priority_cache[city_id] = priority
 	return priority
+
+
+## 地理区位修正因子 ∈ [MIN_FACTOR, 1]：离国境越近、离首都越近，因子越大。
+## 两个方向以加权和合成，任一方向靠近都能提升，但同时靠近收益最高。
+func _strategic_proximity_factor(city_id: int) -> float:
+	_ensure_proximity_fields()
+	var border_factor := _hop_decay(
+		_border_hop_distance.get(city_id, INF)
+	)
+	var capital_factor := _hop_decay(
+		_capital_hop_distance.get(city_id, INF)
+	)
+	var factor := (
+		STRATEGIC_BORDER_PROXIMITY_WEIGHT * border_factor
+		+ STRATEGIC_CAPITAL_PROXIMITY_WEIGHT * capital_factor
+	)
+	return clampf(factor, STRATEGIC_PROXIMITY_MIN_FACTOR, 1.0)
+
+
+static func _hop_decay(hops: float) -> float:
+	if hops == INF:
+		return 0.0
+	return exp(-maxf(hops, 0.0) / STRATEGIC_PROXIMITY_DECAY_HOPS)
+
+
+## 在本国领土内做两次 BFS 跳数场：到最近国界城市、到首都。只按本国可通行边
+## 扩散，与填线军实际可达范围一致。territory 不变时随规划缓存复用。
+func _ensure_proximity_fields() -> void:
+	if _proximity_fields_ready:
+		return
+	_proximity_fields_ready = true
+	var border_sources: Array[int] = []
+	for city_id in snapshot.frontier_cities:
+		border_sources.append(int(city_id))
+	for city_id in snapshot.potential_frontier_cities:
+		if not border_sources.has(int(city_id)):
+			border_sources.append(int(city_id))
+	_border_hop_distance = _friendly_hop_field(border_sources)
+	var capital := view.capital_city_id
+	var capital_sources: Array[int] = []
+	if (
+		capital >= 0
+		and capital < view.state.cities.size()
+		and view.state.cities[capital].owner_nation
+			== view.nation_id
+	):
+		capital_sources.append(capital)
+	_capital_hop_distance = _friendly_hop_field(capital_sources)
+
+
+## 多源 BFS 跳数场，仅在本国领土、沿可驻守（正容量）边扩散。源点顺序不影响
+## 最短跳数结果，因而无需等变排序即保持确定性。
+func _friendly_hop_field(sources: Array[int]) -> Dictionary:
+	var dist := {}
+	var frontier: Array[int] = []
+	for source in sources:
+		if (
+			source >= 0
+			and source < view.state.cities.size()
+			and view.state.cities[source].owner_nation
+				== view.nation_id
+			and not dist.has(source)
+		):
+			dist[source] = 0
+			frontier.append(source)
+	var head := 0
+	while head < frontier.size():
+		var city_id := frontier[head]
+		head += 1
+		var next_hops := int(dist[city_id]) + 1
+		for neighbor in view.state.neighbors(city_id):
+			if dist.has(neighbor):
+				continue
+			if view.state.cities[neighbor].owner_nation != view.nation_id:
+				continue
+			var edge := view.state.edge_of(city_id, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			dist[neighbor] = next_hops
+			frontier.append(neighbor)
+	return dist
 
 
 func _line_edge_for_city(city_id: int) -> int:
