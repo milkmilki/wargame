@@ -1460,28 +1460,56 @@ static func food_posture(
 		nation_id,
 		evaluation_cache
 	)
-	for other in state.nations:
-		if (
-			other.id == nation_id
-			or not other.alive
-			or state.is_allied(nation_id, other.id)
-			or _frontier_edges(
-				state,
-				nation_id,
-				other.id,
-				evaluation_cache
-			) <= 0
-		):
-			continue
+	# 是否存在与本国势力接壤、且战力≥75% 的非盟国。原实现对每个国家都扫全
+	# 边表判接壤（O(N×E)），是大地图 AI 决策日的头号热点；改为一次遍历边表
+	# 收集接壤非盟国集合（O(E)），再逐邻查战力。结果为存在性判断，与遍历
+	# 顺序无关，确定性不变。
+	for other_id in _bordering_nation_ids(state, nation_id, evaluation_cache):
 		if _coalition_power(
 			state,
-			other.id,
+			other_id,
 			evaluation_cache
 		) >= own_power * 0.75:
 			evaluation_cache[cache_key] = FoodPosture.GUARDED
 			return FoodPosture.GUARDED
 	evaluation_cache[cache_key] = FoodPosture.PEACE
 	return FoodPosture.PEACE
+
+
+## 一次遍历边表收集与本国势力（本国+盟国领土）接壤的非盟外国 id。等价于
+## 对所有 B 判定 _frontier_edges(nation_id, B) > 0，但复杂度从 O(N×E) 降至 O(E)。
+static func _bordering_nation_ids(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var cache_key := "borders:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
+	var seen := {}
+	for edge in state.edges:
+		if edge.max_manpower <= 0:
+			continue
+		var owner_a := state.cities[edge.city_a].owner_nation
+		var owner_b := state.cities[edge.city_b].owner_nation
+		if (
+			state.has_military_access(nation_id, owner_a)
+			and owner_b >= 0
+			and not state.has_military_access(nation_id, owner_b)
+		):
+			seen[owner_b] = true
+		if (
+			state.has_military_access(nation_id, owner_b)
+			and owner_a >= 0
+			and not state.has_military_access(nation_id, owner_a)
+		):
+			seen[owner_a] = true
+	var result: Array[int] = []
+	for other_id in seen:
+		result.append(int(other_id))
+	result.sort()
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func war_food_report(
