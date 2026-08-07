@@ -125,12 +125,13 @@ var winner: int = -1                        ## -1 表示未结束
 
 func generate_world(
 	world_seed: int = 12345,
-	nation_count: int = NATION_COUNT
+	nation_count: int = NATION_COUNT,
+	terrain_city_count: int = TERRAIN_CITY_COUNT
 ) -> void:
 	assert(
 		nation_count > 0
-			and nation_count <= TERRAIN_CITY_COUNT,
-		"国家数必须在 1..%d 之间" % TERRAIN_CITY_COUNT
+			and nation_count <= terrain_city_count,
+		"国家数必须在 1..%d 之间" % terrain_city_count
 	)
 	_reset_world(world_seed)
 	uses_heightmap = true
@@ -140,7 +141,7 @@ func generate_world(
 	)
 	var terrain := TerrainMapGenerator.build(
 		TERRAIN_MAP_PATH,
-		TERRAIN_CITY_COUNT
+		terrain_city_count
 	)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
@@ -154,15 +155,15 @@ func generate_world(
 	_generate_armies()
 
 	assert(
-		land_cities().size() == TERRAIN_CITY_COUNT,
-		"正式地图陆地城市数应为 %d" % TERRAIN_CITY_COUNT
+		land_cities().size() == terrain_city_count,
+		"正式地图陆地城市数应为 %d" % terrain_city_count
 	)
 	assert(
-		cities.size() > TERRAIN_CITY_COUNT,
+		cities.size() > terrain_city_count,
 		"正式地图应生成河运码头"
 	)
 	assert(
-		edges.size() >= TERRAIN_CITY_COUNT - 1,
+		edges.size() >= terrain_city_count - 1,
 		"道路图必须连通"
 	)
 	assert(
