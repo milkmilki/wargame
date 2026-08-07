@@ -2898,28 +2898,52 @@ static func _frontier_edges(
 	nation_b: int,
 	evaluation_cache: Dictionary = {}
 ) -> int:
-	var cache_key := "frontier:%d:%d" % [
-		nation_a,
-		nation_b,
-	]
-	if evaluation_cache.has(cache_key):
-		return int(evaluation_cache[cache_key])
-	var count := 0
+	# 首次调用时一次遍历边表填满全部国家对的接壤边数矩阵（O(E)），后续查表 O(1)。
+	# 原实现每对国家都全表扫描（每次 O(E)），同一 AI tick 内被数千次冷调用，
+	# 是外交/威胁场的头号开销。矩阵键沿用 "frontier:a:b"，语义完全一致：
+	# pair(a,b) = 一端归 b、另一端可被 a 军事通行（a 本国或其盟友）的边数。
+	if not evaluation_cache.has("frontier_matrix_built"):
+		_build_frontier_matrix(state, evaluation_cache)
+	return int(evaluation_cache.get("frontier:%d:%d" % [nation_a, nation_b], 0))
+
+
+static func _build_frontier_matrix(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> void:
+	evaluation_cache["frontier_matrix_built"] = true
+	# 预计算每国的「可通行观察者」集合：本国 + 其盟友（结盟上限低，规模极小）。
+	var accessors_of := {}
+	for nation in state.nations:
+		var accessors: Array[int] = [nation.id]
+		for ally_id in state.allies_of(nation.id):
+			if ally_id != nation.id:
+				accessors.append(ally_id)
+		accessors_of[nation.id] = accessors
 	for edge in state.edges:
 		if edge.max_manpower <= 0:
 			continue
 		var owner_a := state.cities[edge.city_a].owner_nation
 		var owner_b := state.cities[edge.city_b].owner_nation
-		if (
-			(
-				state.has_military_access(nation_a, owner_a)
-				and owner_b == nation_b
-			)
-			or (
-				state.has_military_access(nation_a, owner_b)
-				and owner_a == nation_b
-			)
-		):
-			count += 1
-	evaluation_cache[cache_key] = count
-	return count
+		if owner_a < 0 or owner_b < 0:
+			continue
+		if owner_a == owner_b:
+			# 旧逻辑对同主边亦计入：pair(a, owner) 命中当 a 可通行 owner。
+			# 保留该行为以维持字节等价（观察者含 owner 本身及其盟友）。
+			for x in (accessors_of.get(owner_a, [owner_a]) as Array):
+				_bump_frontier(evaluation_cache, int(x), owner_a)
+			continue
+		# 跨主边：(观察者 X 可通行 owner_a) → 目标 owner_b 贡献 +1，反向亦然。
+		for x in (accessors_of.get(owner_a, [owner_a]) as Array):
+			_bump_frontier(evaluation_cache, int(x), owner_b)
+		for x in (accessors_of.get(owner_b, [owner_b]) as Array):
+			_bump_frontier(evaluation_cache, int(x), owner_a)
+
+
+static func _bump_frontier(
+	evaluation_cache: Dictionary,
+	observer: int,
+	target: int
+) -> void:
+	var key := "frontier:%d:%d" % [observer, target]
+	evaluation_cache[key] = int(evaluation_cache.get(key, 0)) + 1
