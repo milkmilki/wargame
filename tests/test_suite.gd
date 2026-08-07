@@ -56,6 +56,7 @@ func _init() -> void:
 	_test_holding_combat_adaptation()
 	_test_retreat_contact_and_position_continuity()
 	_test_ai_strategic_map_and_threat()
+	_test_city_defense_incremental_topology()
 	_test_ai_merge_and_retreat_utility()
 	_test_ai_encirclement_breakout_and_relief()
 	_test_manpower_pool_and_force_commands()
@@ -5095,6 +5096,166 @@ func _test_ai_strategic_map_and_threat() -> void:
 	_check(
 		contested.has(17) and not contested.has(16),
 		"红框只应标记正在发生城战或围城的城市"
+	)
+
+
+func _test_city_defense_incremental_topology() -> void:
+	print("[29b] 防区增量更新：拓扑复用、动态失效、外交与控制区重建")
+	var state := GameState.new()
+	state.generate_grid_world(70031)
+	state.uses_heightmap = true
+	state.armies.clear()
+	state.battles.clear()
+	for city in state.cities:
+		city.owner_nation = 0
+		city.is_capital = false
+		city.has_warehouse = false
+		city.is_food_hub = false
+		city.is_manpower_hub = false
+	state.cities[10].owner_nation = 1
+	state.nations[0].capital_city_id = -1
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(
+			nation_a + 1,
+			state.nations.size()
+		):
+			state.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	state.edge_of(9, 10).max_manpower = (
+		Edge.STANDARD_MANPOWER
+	)
+	var guard := _make_army(9890, 0, 5000, 10, 10)
+	guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	guard.location_city = 9
+	guard.move_from = 9
+	var attacker := _make_army(
+		9891,
+		1,
+		15000,
+		10,
+		10
+	)
+	attacker.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+	attacker.location_city = 10
+	attacker.move_from = 10
+	state.armies.append_array([guard, attacker])
+	state.refresh_derived()
+
+	var first_view := AiWorldView.build(state, 0)
+	var first_snapshot := StrategicMapSnapshot.build(first_view)
+	var first_plan := CityDefensePlan.build(
+		first_view,
+		first_snapshot,
+		ThreatField.build(first_view)
+	)
+	var first_topology := first_plan.topology
+	var first_required := (
+		first_plan.required_power.duplicate(true)
+	)
+	var second_view := AiWorldView.build(state, 0)
+	var second_snapshot := StrategicMapSnapshot.build(
+		second_view
+	)
+	var reused_plan := CityDefensePlan.build(
+		second_view,
+		second_snapshot,
+		ThreatField.build(second_view),
+		first_plan
+	)
+	_check(
+		first_plan.topology_rebuilt
+			and reused_plan.topology_reused
+			and reused_plan.dynamic_plan_reused
+			and reused_plan.topology == first_topology,
+		"控制区、外交和军队状态不变时必须复用同一防区拓扑与动态需求"
+	)
+	_check(
+		reused_plan.required_power == first_required
+			and reused_plan.posture_by_city
+				== first_plan.posture_by_city
+			and reused_plan.assigned_city_by_army
+				== first_plan.assigned_city_by_army,
+		"增量复用结果必须与上一轮完整计划逐项一致"
+	)
+
+	state.nations[0].frontier_defense_topology = null
+	var full_view := AiWorldView.build(state, 0)
+	var full_plan := CityDefensePlan.build(
+		full_view,
+		StrategicMapSnapshot.build(full_view),
+		ThreatField.build(full_view)
+	)
+	_check(
+		full_plan.topology_rebuilt
+			and full_plan.required_power
+				== reused_plan.required_power
+			and full_plan.posture_by_city
+				== reused_plan.posture_by_city
+			and full_plan.assigned_city_by_army
+				== reused_plan.assigned_city_by_army,
+		"强制全量重建必须与增量复用产生相同防区和Assignment"
+	)
+
+	var topology_before_power_change := full_plan.topology
+	attacker.size = 10000
+	var changed_power_view := AiWorldView.build(state, 0)
+	var changed_power_plan := CityDefensePlan.build(
+		changed_power_view,
+		StrategicMapSnapshot.build(changed_power_view),
+		ThreatField.build(changed_power_view),
+		full_plan
+	)
+	_check(
+		changed_power_plan.topology_reused
+			and not changed_power_plan.dynamic_plan_reused
+			and changed_power_plan.topology
+				== topology_before_power_change
+			and changed_power_plan.requirement_at(9)
+				!= full_plan.requirement_at(9),
+		"敌军兵力变化只能失效动态需求，不得重建未变化的控制区拓扑"
+	)
+
+	state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.NEUTRAL
+	)
+	var diplomacy_view := AiWorldView.build(state, 0)
+	var diplomacy_plan := CityDefensePlan.build(
+		diplomacy_view,
+		StrategicMapSnapshot.build(diplomacy_view),
+		ThreatField.build(diplomacy_view),
+		changed_power_plan
+	)
+	_check(
+		diplomacy_plan.topology_rebuilt
+			and diplomacy_plan.topology
+				!= topology_before_power_change,
+		"外交revision变化必须重建防区拓扑"
+	)
+
+	state.cities[9].owner_nation = 1
+	state.ownership_revision += 1
+	var ownership_view := AiWorldView.build(state, 0)
+	var ownership_plan := CityDefensePlan.build(
+		ownership_view,
+		StrategicMapSnapshot.build(ownership_view),
+		ThreatField.build(ownership_view),
+		diplomacy_plan
+	)
+	_check(
+		ownership_plan.topology_rebuilt
+			and not state.nations[0]
+				.frontier_defense_sectors.has(9),
+		"控制区revision变化必须重建拓扑并删除失效防区"
 	)
 
 

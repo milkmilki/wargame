@@ -90,6 +90,7 @@ var _ai_path_field_cache_by_nation: Dictionary = {}
 var _ai_supply_source_cache: Dictionary = {}
 var _ai_supply_network_cache: Dictionary = {}
 var _ai_city_partition_cache: Dictionary = {}
+var _ai_defense_plan_cache: Dictionary = {}
 ## 每日补给可达性缓存（item 10 滚动结算专用）：每天开头清空重建，
 ## 使月中被切断/恢复的补给线当天即被感知，而不必等到月度经济结算。
 var _daily_supply_source_cache: Dictionary = {}
@@ -106,6 +107,9 @@ var _runtime_day_in_progress: bool = false
 var ai_last_command_commit_failures: int = 0
 var ai_command_commit_failure_total: int = 0
 var ai_command_commit_failure_log: Array[String] = []
+var ai_defense_topology_rebuild_total: int = 0
+var ai_defense_topology_reuse_total: int = 0
+var ai_defense_dynamic_reuse_total: int = 0
 ## 测试/基准注入点：nation_id -> Callable(state, nation_id, simulation)。
 ## 正式游戏保持为空，所有国家均使用 Utility AI。
 var ai_policy_overrides: Dictionary = {}
@@ -139,12 +143,16 @@ func setup(game_state: GameState) -> void:
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
 	_ai_city_partition_cache.clear()
+	_ai_defense_plan_cache.clear()
 	_daily_supply_source_cache.clear()
 	_daily_supply_network_cache.clear()
 	_ai_last_decision_day = -1
 	ai_last_command_commit_failures = 0
 	ai_command_commit_failure_total = 0
 	ai_command_commit_failure_log.clear()
+	ai_defense_topology_rebuild_total = 0
+	ai_defense_topology_reuse_total = 0
+	ai_defense_dynamic_reuse_total = 0
 	_clear_ai_command_collection()
 	_parallel_ai_context_jobs.clear()
 	_runtime_day_in_progress = false
@@ -2227,10 +2235,23 @@ func _build_parallel_ai_context(job_index: int) -> void:
 	var defense_plan := CityDefensePlan.build(
 		job["view"],
 		job["snapshot"],
-		threat
+		threat,
+		job["previous_defense_plan"]
 	)
+	_record_defense_plan_cache_result(defense_plan)
 	job["threat"] = threat
 	job["defense_plan"] = defense_plan
+
+
+func _record_defense_plan_cache_result(
+	plan: CityDefensePlan
+) -> void:
+	if plan.topology_rebuilt:
+		ai_defense_topology_rebuild_total += 1
+	elif plan.topology_reused:
+		ai_defense_topology_reuse_total += 1
+	if plan.dynamic_plan_reused:
+		ai_defense_dynamic_reuse_total += 1
 
 
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
@@ -2275,6 +2296,8 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			"view": view,
 			"snapshot": snapshot,
 			"threat_cache": _threat_travel_cache,
+			"previous_defense_plan":
+				_ai_defense_plan_cache.get(nation_id),
 			"threat": null,
 			"defense_plan": null,
 		})
@@ -2285,6 +2308,9 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			await get_tree().process_frame
 	for job in context_jobs:
 		var nation_id := int(job["nation_id"])
+		_ai_defense_plan_cache[nation_id] = (
+			job["defense_plan"]
+		)
 		force_contexts[nation_id] = {
 			"view": job["view"],
 			"snapshot": job["snapshot"],
@@ -5546,8 +5572,11 @@ func _advance_priority_city_defense_echelons() -> void:
 		var defense_plan := CityDefensePlan.build(
 			view,
 			snapshot,
-			threat
+			threat,
+			_ai_defense_plan_cache.get(nation_id)
 		)
+		_record_defense_plan_cache_result(defense_plan)
+		_ai_defense_plan_cache[nation_id] = defense_plan
 		_advance_priority_city_defense(
 			siege,
 			defense_plan

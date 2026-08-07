@@ -66,6 +66,9 @@ var battle_groups: Array[BattleGroup] = []
 var next_battle_group_id: int = 0
 ## 当前控制区派生的持久边境防区。city_id -> FrontierDefenseSector。
 var frontier_defense_sectors: Dictionary = {}
+## 控制区、外交关系与实际/潜在边境共同派生的防区拓扑缓存。
+## 威胁、兵力和 Assignment 不存入此对象，每个 AI tick 仍动态刷新。
+var frontier_defense_topology: FrontierDefenseTopology = null
 ## 首都与粮仓登记。当前每国只有首都一个粮仓；数组结构为未来多粮仓保留扩展位。
 var capital_city_id: int = -1
 var warehouse_city_ids: Array[int] = []

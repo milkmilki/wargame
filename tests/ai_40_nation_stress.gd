@@ -166,6 +166,12 @@ func _run_case(
 			state.diplomatic_history.size(),
 		"commit_failures":
 			simulation.ai_command_commit_failure_total,
+		"defense_topology_rebuilds":
+			simulation.ai_defense_topology_rebuild_total,
+		"defense_topology_reuses":
+			simulation.ai_defense_topology_reuse_total,
+		"defense_dynamic_reuses":
+			simulation.ai_defense_dynamic_reuse_total,
 		"peak_day": peak_day,
 		"all": _timing_stats(all_ticks),
 		"ordinary": _timing_stats(ordinary_ticks),
@@ -376,7 +382,7 @@ func _print_case(result: Dictionary) -> void:
 			+ "land_per_nation=%d-%d armies=%d->%d "
 			+ "alive=%d winner=%d battles=%d "
 			+ "wars=%d alliances=%d diplomacy=%d "
-			+ "commit_failures=%d"
+			+ "commit_failures=%d defense_cache=%d/%d/%d"
 		) % [
 			result["nation_count"],
 			result["seed"],
@@ -396,6 +402,9 @@ func _print_case(result: Dictionary) -> void:
 			result["alliance_pairs"],
 			result["diplomatic_events"],
 			result["commit_failures"],
+			result["defense_topology_rebuilds"],
+			result["defense_topology_reuses"],
+			result["defense_dynamic_reuses"],
 		]
 	)
 	print(

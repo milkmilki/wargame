@@ -41,7 +41,7 @@ func _init() -> void:
 			),
 		})
 	for fixture in fixtures:
-		CityDefensePlan.build(
+		fixture["previous_plan"] = CityDefensePlan.build(
 			fixture["view"],
 			fixture["snapshot"],
 			fixture["threat"]
@@ -50,6 +50,8 @@ func _init() -> void:
 	var assignments := 0
 	var build_usec := 0
 	var role_assignment_usec := 0
+	var topology_reuses := 0
+	var dynamic_reuses := 0
 	for _iteration in range(ITERATIONS):
 		for fixture in fixtures:
 			var plan := CityDefensePlan.new()
@@ -57,7 +59,19 @@ func _init() -> void:
 			plan.snapshot = fixture["snapshot"]
 			plan.threat = fixture["threat"]
 			var phase_started := Time.get_ticks_usec()
-			plan._build()
+			plan._prepare_frontier_topology()
+			plan.input_signature = plan._input_signature()
+			var previous: CityDefensePlan = (
+				fixture["previous_plan"]
+			)
+			if (
+				previous.topology == plan.topology
+				and previous.input_signature
+					== plan.input_signature
+			):
+				plan._reuse_dynamic_plan(previous)
+			else:
+				plan._build()
 			build_usec += (
 				Time.get_ticks_usec() - phase_started
 			)
@@ -66,13 +80,19 @@ func _init() -> void:
 			role_assignment_usec += (
 				Time.get_ticks_usec() - phase_started
 			)
+			if plan.topology_reused:
+				topology_reuses += 1
+			if plan.dynamic_plan_reused:
+				dynamic_reuses += 1
+			fixture["previous_plan"] = plan
 			assignments += plan.assigned_city_by_army.size()
 	var elapsed_usec := Time.get_ticks_usec() - started
 	print(
 		(
 			"mode=%s iterations=%d plans=%d assignments=%d elapsed_ms=%.3f "
 			+ "us_per_plan=%.3f build_us_per_plan=%.3f "
-			+ "role_us_per_plan=%.3f"
+			+ "role_us_per_plan=%.3f topology_reuses=%d "
+			+ "dynamic_reuses=%d"
 		)
 		% [
 			"war" if war_mode else "peace",
@@ -86,6 +106,8 @@ func _init() -> void:
 				/ float(ITERATIONS * fixtures.size()),
 			float(role_assignment_usec)
 				/ float(ITERATIONS * fixtures.size()),
+			topology_reuses,
+			dynamic_reuses,
 		]
 	)
 	quit()
