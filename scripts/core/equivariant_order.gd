@@ -65,6 +65,29 @@ static func sort_city_ids(
 	)
 
 
+static func sort_city_subset(
+	values: Array,
+	state: GameState,
+	nation_id: int,
+	anchor_city_id: int = -1
+) -> void:
+	var keys := {}
+	for city_id_value in values:
+		var city_id := int(city_id_value)
+		keys[city_id] = city_key(
+			state,
+			nation_id,
+			city_id,
+			anchor_city_id
+		)
+	values.sort_custom(func(a, b) -> bool:
+		return _key_less(
+			keys[int(a)],
+			keys[int(b)]
+		)
+	)
+
+
 static func city_rank_map(
 	state: GameState,
 	nation_id: int,
@@ -360,6 +383,25 @@ static func edge_less(
 	return _key_less(
 		edge_key(state, nation_id, a, anchor_city_id),
 		edge_key(state, nation_id, b, anchor_city_id)
+	)
+
+
+static func sort_edges(
+	values: Array[Edge],
+	state: GameState,
+	nation_id: int,
+	anchor_city_id: int = -1
+) -> void:
+	var keys := {}
+	for edge in values:
+		keys[edge] = edge_key(
+			state,
+			nation_id,
+			edge,
+			anchor_city_id
+		)
+	values.sort_custom(func(a: Edge, b: Edge) -> bool:
+		return _key_less(keys[a], keys[b])
 	)
 
 

@@ -151,7 +151,7 @@ func _ordered_influence_city_ids(
 		city_ids,
 		state,
 		nation_id,
-		start
+		state.nations[nation_id].capital_city_id
 	)
 	travel_distance_cache[cache_key] = city_ids
 	return city_ids

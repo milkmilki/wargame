@@ -31,6 +31,7 @@ var _time: int = 0
 var _total_friendly_value: float = 0.0
 
 
+
 static func build(view: AiWorldView) -> StrategicMapSnapshot:
 	var snapshot := StrategicMapSnapshot.new()
 	snapshot.nation_id = view.nation_id
@@ -116,12 +117,14 @@ func _find_frontier() -> void:
 		)
 	)
 	var potential_seen := {}
+	var diplomacy_evaluation_cache := {}
 	for other_nation_value in neutral_nations:
 		var other_nation := int(other_nation_value)
 		var threat_score := DiplomacyAI.threat_from_nation(
 			_state,
 			nation_id,
-			other_nation
+			other_nation,
+			diplomacy_evaluation_cache
 		)
 		if threat_score < 1.0:
 			continue
@@ -154,11 +157,15 @@ func _find_frontier() -> void:
 			if not potential_frontier_edges.has(edge):
 				potential_frontier_edges.append(edge)
 			potential_edge_threat[_edge_key(edge.city_a, edge.city_b)] = threat_score
-	frontier_edges.sort_custom(func(a: Edge, b: Edge) -> bool:
-		return EquivariantOrder.edge_less(_state, nation_id, a, b)
+	EquivariantOrder.sort_edges(
+		frontier_edges,
+		_state,
+		nation_id
 	)
-	potential_frontier_edges.sort_custom(func(a: Edge, b: Edge) -> bool:
-		return EquivariantOrder.edge_less(_state, nation_id, a, b)
+	EquivariantOrder.sort_edges(
+		potential_frontier_edges,
+		_state,
+		nation_id
 	)
 	EquivariantOrder.sort_city_ids(frontier_cities, _state, nation_id)
 	EquivariantOrder.sort_city_ids(
@@ -318,7 +325,12 @@ func _friendly_neighbors(city_id: int) -> Array[int]:
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		result.append(neighbor)
-	EquivariantOrder.sort_city_ids(result, _state, nation_id, city_id)
+	EquivariantOrder.sort_city_subset(
+		result,
+		_state,
+		nation_id,
+		city_id
+	)
 	return result
 
 

@@ -4863,6 +4863,67 @@ func _test_retreat_contact_and_position_continuity() -> void:
 	renderer.setup(gs, sim)
 	_check(renderer._prev_pos.is_empty() and renderer._curr_pos.is_empty() and renderer._last_day == -1,
 		"Renderer.setup 必须清空旧世界插值快照")
+	sim.seconds_per_day = 1.0
+	sim._time_acc = 0.2
+	sim._runtime_day_in_progress = true
+	renderer._last_day = gs.day - 2
+	renderer._curr_pos = {999: Vector2(0.25, 0.5)}
+	var presentation_anchor := Vector2(0.31, 0.47)
+	renderer._presented_pos[third_party.id] = presentation_anchor
+	renderer._sync_snapshots()
+	_check(
+		renderer._last_day == gs.day - 2
+		and renderer._curr_pos.has(999),
+		"异步日结算未完成时 Renderer 不得提前抓取未提交的位置"
+	)
+	sim._runtime_day_in_progress = false
+	sim.runtime_day_committed.emit(gs.day)
+	_check(
+		renderer._last_day == gs.day
+		and not renderer._curr_pos.has(999),
+		"提交信号必须立即抓取逻辑位置，不得因跨帧追赶跳过中间快照"
+	)
+	_check(
+		renderer._prev_pos.get(
+			third_party.id,
+			Vector2.ZERO
+		).is_equal_approx(presentation_anchor),
+		"新表现段必须从上一帧实际位置开始"
+	)
+	_check(
+		renderer._army_position(third_party).is_equal_approx(
+			renderer._grid_to_pixel(presentation_anchor)
+		),
+		"提交后的第一帧必须保持 C0 位置连续"
+	)
+	var follow_target := Vector2(0.71, 0.47)
+	renderer._curr_pos = {
+		third_party.id: follow_target,
+	}
+	renderer._presented_pos = {
+		third_party.id: presentation_anchor,
+	}
+	sim.seconds_per_day = 0.25
+	sim._runtime_day_in_progress = true
+	renderer._advance_army_presentation(0.25)
+	var halfway := renderer._presented_pos[
+		third_party.id
+	] as Vector2
+	_check(
+		halfway.is_equal_approx(
+			presentation_anchor.lerp(follow_target, 0.5)
+		),
+		"有界跟随在一个半衰期后应走完剩余距离的一半"
+	)
+	renderer._advance_army_presentation(1.0)
+	var approached := renderer._presented_pos[
+		third_party.id
+	] as Vector2
+	_check(
+		approached.x > halfway.x
+		and approached.x < follow_target.x,
+		"长事务期间兵牌必须继续接近目标且永不越过目标"
+	)
 	renderer.free()
 	sim.free()
 

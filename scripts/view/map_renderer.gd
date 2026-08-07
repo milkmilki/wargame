@@ -36,6 +36,8 @@ const DETAIL_PANEL_MARGIN: float = 18.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
+const ARMY_FOLLOW_HALF_LIFE_MIN: float = 0.10
+const ARMY_FOLLOW_HALF_LIFE_MAX: float = 0.25
 const PAPER_COLOR := Color(0.73, 0.61, 0.42)
 const PAPER_LIGHT := Color(0.86, 0.76, 0.57)
 const PAPER_DARK := Color(0.24, 0.19, 0.12)
@@ -102,6 +104,7 @@ var _city_name_button: Button
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
 var _prev_pos: Dictionary = {}             ## army.id -> 上一 tick 末的逻辑位置
 var _curr_pos: Dictionary = {}             ## army.id -> 当前 tick 末的逻辑位置
+var _presented_pos: Dictionary = {}         ## army.id -> 最近一次实际绘制位置
 var _last_day: int = -1
 
 
@@ -111,7 +114,14 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	# Main 重开会复用 Renderer，army id 也会从 0 重排；旧快照不可跨 GameState 复用。
 	_prev_pos.clear()
 	_curr_pos.clear()
+	_presented_pos.clear()
 	_last_day = -1
+	if not sim.runtime_day_committed.is_connected(
+		_on_runtime_day_committed
+	):
+		sim.runtime_day_committed.connect(
+			_on_runtime_day_committed
+		)
 	_province_texture = null
 	_province_boundary_segments = PackedVector2Array()
 	_coast_segments = PackedVector2Array()
@@ -316,6 +326,7 @@ static func create_ui_font() -> Font:
 func _process(_delta: float) -> void:
 	_blink += _delta
 	_redraw_elapsed += _delta
+	_advance_army_presentation(_delta)
 	var previous_day := _last_day
 	_sync_snapshots()
 	var viewport_size := get_viewport_rect().size
@@ -861,19 +872,32 @@ static func point_to_segment_distance(
 	return point.distance_to(from + delta * t)
 
 
-## 每当模拟推进一天，快照全部军队的逻辑位置：上次快照 -> _prev，本次 -> _curr。
-## 渲染时在两者间按 day_fraction 插值，使运动连续（消除"一秒一跳"）。
+func _on_runtime_day_committed(_day: int) -> void:
+	_sync_snapshots()
+
+
+## 每当模拟提交一天，以最后实际显示位置为起点抓取新的逻辑位置。
+## 提交信号保证高倍速追赶时也不会跳过中间日快照。
 func _sync_snapshots() -> void:
 	if state == null:
 		return
+	if sim != null and sim.runtime_day_in_progress():
+		return
 	if state.day == _last_day:
 		return
+	var old_curr: Dictionary = _curr_pos
+	var presented_before: Dictionary = _presented_pos.duplicate()
 	_last_day = state.day
-	_prev_pos = _curr_pos
+	_prev_pos = {}
 	_curr_pos = {}
 	_visual_animation_active = not state.battles.is_empty()
 	for army in state.armies:
-		_curr_pos[army.id] = _logical_grid_pos(army)
+		var logical_position := _logical_grid_pos(army)
+		_curr_pos[army.id] = logical_position
+		_prev_pos[army.id] = presented_before.get(
+			army.id,
+			old_curr.get(army.id, logical_position)
+		)
 		if (
 			army.size > 0
 			and (
@@ -885,10 +909,6 @@ func _sync_snapshots() -> void:
 			)
 		):
 			_visual_animation_active = true
-	# 首帧或新军队无 prev：用 curr 兜底，避免从 (0,0) 飞入
-	if _prev_pos.is_empty():
-		_prev_pos = _curr_pos.duplicate()
-
 # ================================================================== 绘制
 
 func _draw() -> void:
@@ -2127,13 +2147,46 @@ func _battle_pixel(b: Battle) -> Vector2:
 	return _origin
 
 
-## 军队渲染位置：在上/本月快照（网格坐标）间按当月已流逝比例插值，再转像素。
+## 军队渲染位置：从上一帧实际显示位置连续过渡到最新已提交逻辑位置。
 func _army_position(army: Army) -> Vector2:
 	var curr: Vector2 = _curr_pos.get(army.id, _logical_grid_pos(army))
-	var g: Vector2 = curr
-	if _prev_pos.has(army.id):
-		g = (_prev_pos[army.id] as Vector2).lerp(curr, sim.day_fraction())
+	var g: Vector2 = _presented_pos.get(
+		army.id,
+		_prev_pos.get(army.id, curr)
+	)
+	_presented_pos[army.id] = g
 	return _grid_to_pixel(g)
+
+
+func _advance_army_presentation(delta: float) -> void:
+	if (
+		sim == null
+		or state == null
+		or sim.paused
+		or state.winner != -1
+		or _curr_pos.is_empty()
+	):
+		return
+	var half_life := clampf(
+		sim.seconds_per_day,
+		ARMY_FOLLOW_HALF_LIFE_MIN,
+		ARMY_FOLLOW_HALF_LIFE_MAX
+	)
+	var follow := 1.0 - pow(0.5, maxf(delta, 0.0) / half_life)
+	var live_armies := {}
+	for army in state.armies:
+		if army.size <= 0 or not _curr_pos.has(army.id):
+			continue
+		live_armies[army.id] = true
+		var target := _curr_pos[army.id] as Vector2
+		var current := _presented_pos.get(
+			army.id,
+			_prev_pos.get(army.id, target)
+		) as Vector2
+		_presented_pos[army.id] = current.lerp(target, follow)
+	for army_id in _presented_pos.keys():
+		if not live_armies.has(army_id):
+			_presented_pos.erase(army_id)
 
 
 ## 军队逻辑位置使用归一化地图坐标，与像素布局无关（便于跨帧/缩放插值）。

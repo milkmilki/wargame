@@ -4,6 +4,8 @@ extends Node
 ## 资源生产、补员与外交每月结算。
 ## 只写 GameState，调用 Pathfinding / Combat。表现层只读，不在此处理渲染。
 
+signal runtime_day_committed(day: int)
+
 # ---- 时间（天/月分层）----
 ## 基础 tick = 1 天。军粮月耗通过小数债摊到每天，经济生产等仍每 DAYS_PER_MONTH 天结算。
 const DAYS_PER_MONTH: int = 30
@@ -49,6 +51,8 @@ const CONTACT_EPS: float = 0.15
 const REINFORCEMENT_RADIUS: float = 0.15
 const AI_DECISION_INTERVAL_DAYS: int = 10
 const GRID_AI_DECISION_INTERVAL_DAYS: int = 5
+const AI_RUNTIME_SLICE_BUDGET_USEC: int = 6000
+const AI_CONTEXT_SLICE_BUDGET_USEC: int = 6000
 const DIPLOMACY_DECISION_INTERVAL_DAYS: int = DAYS_PER_MONTH
 const NEW_ARMY_SIZE: int = 5000
 const NARROW_ROUTE_FORMATION_SIZE: int = Edge.MIN_MANPOWER
@@ -103,6 +107,9 @@ var _ai_planned_first_legs: Dictionary = {}
 var _ai_command_sequence: Dictionary = {}
 var _ai_snapshot_armies: Dictionary = {}
 var _parallel_ai_context_jobs: Array[Dictionary] = []
+var _pending_declaration_launches: Dictionary = {}
+var _pending_war_mobilizations: Array[Dictionary] = []
+var _defer_declaration_launches: bool = false
 var _runtime_day_in_progress: bool = false
 var ai_last_command_commit_failures: int = 0
 var ai_command_commit_failure_total: int = 0
@@ -132,6 +139,8 @@ var ai_adaptive_garrison_overrides: Dictionary = {}
 ## 隔离军事状态机测试时可关闭；正式游戏始终保持 true。
 var diplomacy_enabled: bool = true
 
+
+
 func setup(game_state: GameState) -> void:
 	state = game_state
 	_normalize_city_fortifications()
@@ -147,6 +156,9 @@ func setup(game_state: GameState) -> void:
 	_daily_supply_source_cache.clear()
 	_daily_supply_network_cache.clear()
 	_ai_last_decision_day = -1
+	_pending_declaration_launches.clear()
+	_pending_war_mobilizations.clear()
+	_defer_declaration_launches = false
 	ai_last_command_commit_failures = 0
 	ai_command_commit_failure_total = 0
 	ai_command_commit_failure_log.clear()
@@ -163,10 +175,11 @@ func _process(delta: float) -> void:
 		state == null
 		or paused
 		or state.winner != -1
-		or _runtime_day_in_progress
 	):
 		return
 	_time_acc += delta
+	if _runtime_day_in_progress:
+		return
 	if _time_acc >= seconds_per_day:
 		_time_acc -= seconds_per_day
 		_runtime_day_in_progress = true
@@ -176,6 +189,7 @@ func _process(delta: float) -> void:
 func _advance_runtime_day() -> void:
 	await _advance_day(true)
 	_runtime_day_in_progress = false
+	runtime_day_committed.emit(state.day)
 
 
 func set_speed_multiplier(mult: float) -> void:
@@ -188,11 +202,9 @@ func speed_multiplier() -> float:
 	return 1.0 / seconds_per_day
 
 
-## 当前天已流逝的比例 [0,1)。仅供表现层做 tick 间插值，不参与任何逻辑。
-func day_fraction() -> float:
-	if paused or state == null or state.winner != -1:
-		return 0.0
-	return clampf(_time_acc / seconds_per_day, 0.0, 1.0)
+func runtime_day_in_progress() -> bool:
+	return _runtime_day_in_progress
+
 
 # ================================================================== 天推进
 
@@ -223,7 +235,11 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		if state.uses_heightmap
 		else GRID_AI_DECISION_INTERVAL_DAYS
 	)
-	if state.day % ai_decision_interval == 0 or _ai_last_decision_day == -1:
+	var ai_decision_due := (
+		state.day % ai_decision_interval == 0
+		or _ai_last_decision_day == -1
+	)
+	if ai_decision_due:
 		if spread_runtime_work:
 			await _ai_assign_targets(true)
 		else:
@@ -1476,16 +1492,46 @@ func _resolve_diplomacy_over_frames() -> void:
 		await get_tree().process_frame
 	WorkerThreadPool.wait_for_task_completion(task_id)
 	var actions: Array = job["actions"]
-	_commit_diplomacy_actions(actions)
+	await _commit_diplomacy_actions_over_frames(actions)
 
 
 func _build_parallel_diplomacy_actions(job: Dictionary) -> void:
 	job["actions"] = DiplomacyAI.choose_actions(state)
 
 
+func _commit_diplomacy_actions_over_frames(actions: Array) -> void:
+	var runtime_slice_started := Time.get_ticks_usec()
+	_defer_declaration_launches = true
+	for action in actions:
+		_commit_diplomacy_action(action)
+		for mobilization in _pending_war_mobilizations:
+			_start_war_mobilization(
+				int(mobilization["nation_id"]),
+				int(mobilization["requested_armies"])
+			)
+			if (
+				Time.get_ticks_usec() - runtime_slice_started
+					>= AI_RUNTIME_SLICE_BUDGET_USEC
+			):
+				await get_tree().process_frame
+				runtime_slice_started = Time.get_ticks_usec()
+		_pending_war_mobilizations.clear()
+		if (
+			Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	_defer_declaration_launches = false
+
+
 func _commit_diplomacy_actions(actions: Array) -> void:
 	for action in actions:
-		_execute_diplomatic_action(action)
+		_commit_diplomacy_action(action)
+
+
+func _commit_diplomacy_action(action: Dictionary) -> void:
+	_execute_diplomatic_action(action)
 
 
 ## 失去全部城市的国家立即向所有交战国投降。该规则属于战争结算，
@@ -1782,20 +1828,43 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 							state.day - preparation_started,
 							0
 						)
-					_start_war_mobilization(
-						nation_a,
-						int(action.get("mobilization_armies", -1))
+					var requested_armies := int(
+						action.get("mobilization_armies", -1)
 					)
+					if _defer_declaration_launches:
+						_pending_war_mobilizations.append({
+							"nation_id": nation_a,
+							"requested_armies": requested_armies,
+						})
+					else:
+						_start_war_mobilization(
+							nation_a,
+							requested_armies
+						)
 					for defender_id in defenders:
 						if state.is_enemy(nation_a, defender_id):
 							_clear_war_preparation(defender_id)
-							_start_war_mobilization(defender_id)
+							if _defer_declaration_launches:
+								_pending_war_mobilizations.append({
+									"nation_id": defender_id,
+									"requested_armies": -1,
+								})
+							else:
+								_start_war_mobilization(
+									defender_id
+								)
 					_clear_war_preparation(nation_a, false)
-					_launch_campaign_offensive(
-						nation_a,
-						objective_city,
-						preparation_days
-					)
+					if _defer_declaration_launches:
+						_pending_declaration_launches[nation_a] = {
+							"objective_city": objective_city,
+							"preparation_days": preparation_days,
+						}
+					else:
+						_launch_campaign_offensive(
+							nation_a,
+							objective_city,
+							preparation_days
+						)
 		DiplomacyAI.Action.FORM_ALLIANCE:
 			if (
 				state.relation_between(nation_a, nation_b)
@@ -2224,14 +2293,21 @@ func _repatriate_after_access_revoked(
 # ------------------------------------------------------------------ 3. AI 决策
 
 
-func _build_parallel_ai_context(job_index: int) -> void:
+func _build_parallel_ai_threat(job_index: int) -> void:
 	var job: Dictionary = _parallel_ai_context_jobs[
 		job_index
 	]
-	var threat := ThreatField.build(
+	job["threat"] = ThreatField.build(
 		job["view"],
 		job["threat_cache"]
 	)
+
+
+func _build_parallel_ai_defense(job_index: int) -> void:
+	var job: Dictionary = _parallel_ai_context_jobs[
+		job_index
+	]
+	var threat: ThreatField = job["threat"]
 	var defense_plan := CityDefensePlan.build(
 		job["view"],
 		job["snapshot"],
@@ -2239,7 +2315,6 @@ func _build_parallel_ai_context(job_index: int) -> void:
 		job["previous_defense_plan"]
 	)
 	_record_defense_plan_cache_result(defense_plan)
-	job["threat"] = threat
 	job["defense_plan"] = defense_plan
 
 
@@ -2254,7 +2329,14 @@ func _record_defense_plan_cache_result(
 		ai_defense_dynamic_reuse_total += 1
 
 
+func _build_ai_snapshot_context(job: Dictionary) -> void:
+	job["snapshot"] = _strategy_snapshot_for(job["view"])
+
+
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
+	if spread_runtime_work:
+		await get_tree().process_frame
+	var runtime_slice_started := Time.get_ticks_usec()
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
 	_ai_last_decision_day = state.day
@@ -2290,22 +2372,58 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			nation_id,
 			shared_army_index
 		)
-		var snapshot := _strategy_snapshot_for(view)
 		context_jobs.append({
 			"nation_id": nation_id,
 			"view": view,
-			"snapshot": snapshot,
+			"snapshot": null,
 			"threat_cache": _threat_travel_cache,
 			"previous_defense_plan":
 				_ai_defense_plan_cache.get(nation_id),
 			"threat": null,
 			"defense_plan": null,
 		})
-	_parallel_ai_context_jobs = context_jobs
-	for job_index in range(context_jobs.size()):
-		_build_parallel_ai_context(job_index)
-		if spread_runtime_work:
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_CONTEXT_SLICE_BUDGET_USEC
+		):
 			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	for job in context_jobs:
+		_build_ai_snapshot_context(job)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_CONTEXT_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	_parallel_ai_context_jobs = context_jobs
+	if (
+		spread_runtime_work
+		and Time.get_ticks_usec() - runtime_slice_started
+			>= AI_RUNTIME_SLICE_BUDGET_USEC
+	):
+		await get_tree().process_frame
+		runtime_slice_started = Time.get_ticks_usec()
+	for job_index in range(context_jobs.size()):
+		_build_parallel_ai_threat(job_index)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_CONTEXT_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	for job_index in range(context_jobs.size()):
+		_build_parallel_ai_defense(job_index)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_CONTEXT_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
 	for job in context_jobs:
 		var nation_id := int(job["nation_id"])
 		_ai_defense_plan_cache[nation_id] = (
@@ -2318,6 +2436,55 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			"defense_plan": job["defense_plan"],
 		}
 	_parallel_ai_context_jobs.clear()
+	# 宣战提交只落盘外交状态；同日 AI 上下文完成后复用其 ThreatField
+	# 发动已准备攻势，避免在外交阶段重复构建整张威胁场。
+	var declaration_launched_nations := {}
+	for nation_id in managed_nations:
+		if not _pending_declaration_launches.has(nation_id):
+			continue
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+		var pending_launch: Dictionary = (
+			_pending_declaration_launches[nation_id]
+		)
+		_pending_declaration_launches.erase(nation_id)
+		var pending_objective := int(
+			pending_launch.get("objective_city", -1)
+		)
+		if (
+			pending_objective >= 0
+			and pending_objective < state.cities.size()
+			and state.is_enemy(
+				nation_id,
+				state.cities[pending_objective].owner_nation
+			)
+		):
+			var pending_context: Dictionary = (
+				force_contexts[nation_id]
+			)
+			if _launch_campaign_offensive(
+				nation_id,
+				pending_objective,
+				int(pending_launch.get(
+					"preparation_days",
+					0
+				)),
+				[],
+				pending_context["threat"]
+			):
+				declaration_launched_nations[nation_id] = true
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
 	# 军制调整只消耗本国资源；所有国家先基于同一时刻的冻结上下文决策。
 	for nation_id in managed_nations:
 		var context: Dictionary = force_contexts[nation_id]
@@ -2328,6 +2495,13 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			context["defense_plan"],
 			true
 		)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
 	# 军事规划复用 tick 开始时的冻结上下文；军制变化从下一次决策起生效。
 	var military_contexts := force_contexts
 	var snapshot_army_ids := {}
@@ -2384,7 +2558,10 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 				true,
 				false
 			)
-		elif not state.wars_of(nation_id).is_empty():
+		elif (
+			not declaration_launched_nations.has(nation_id)
+			and not state.wars_of(nation_id).is_empty()
+		):
 			_manage_campaign_offensive(
 				nation_id,
 				defense_plan,
@@ -2394,6 +2571,13 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 						as ThreatField
 					)
 			)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
 	for nation_id in managed_nations:
 		var context: Dictionary = military_contexts[nation_id]
 		var nation := state.nations[nation_id]
@@ -2557,6 +2741,13 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 					)
 				elif candidate.target_city != -1:
 					coordinator.reserve(candidate.target_city, army)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
 	_commit_ai_command_collection(nation_order)
 
 
@@ -3594,6 +3785,11 @@ func _campaign_offensive_target_capacity(nation_id: int) -> int:
 		target_nations[nation.war_preparation_target_nation] = true
 	if target_nations.is_empty():
 		return 1
+	var city_counts := {}
+	for city in state.cities:
+		city_counts[city.owner_nation] = int(
+			city_counts.get(city.owner_nation, 0)
+		) + 1
 	var capacity := 0
 	for city in state.cities:
 		if (
@@ -3601,7 +3797,8 @@ func _campaign_offensive_target_capacity(nation_id: int) -> int:
 			or DiplomacyAI.staging_cities_for_objective(
 				state,
 				nation_id,
-				city.id
+				city.id,
+				int(city_counts.get(city.owner_nation, 0))
 			).is_empty()
 		):
 			continue
@@ -3611,7 +3808,9 @@ func _campaign_offensive_target_capacity(nation_id: int) -> int:
 
 func _campaign_objective_in_current_theater(
 	nation_id: int,
-	proposed_city: int
+	proposed_city: int,
+	context_view: AiWorldView = null,
+	context_snapshot: StrategicMapSnapshot = null
 ) -> int:
 	var nation := state.nations[nation_id]
 	var anchor := nation.campaign_theater_anchor_city
@@ -3622,6 +3821,11 @@ func _campaign_objective_in_current_theater(
 		or proposed_city >= state.cities.size()
 	):
 		return proposed_city
+	var city_counts := {}
+	for city in state.cities:
+		city_counts[city.owner_nation] = int(
+			city_counts.get(city.owner_nation, 0)
+		) + 1
 	if (
 		state.is_enemy(
 			nation_id,
@@ -3630,12 +3834,24 @@ func _campaign_objective_in_current_theater(
 		and not DiplomacyAI.staging_cities_for_objective(
 			state,
 			nation_id,
-			anchor
+			anchor,
+			int(city_counts.get(
+				state.cities[anchor].owner_nation,
+				0
+			))
 		).is_empty()
 	):
 		return anchor
-	var view := _build_ai_view(nation_id)
-	var snapshot := _strategy_snapshot_for(view)
+	var view := (
+		context_view
+		if context_view != null
+		else _build_ai_view(nation_id)
+	)
+	var snapshot := (
+		context_snapshot
+		if context_snapshot != null
+		else _strategy_snapshot_for(view)
+	)
 	var field := view.path_field(
 		anchor,
 		-1,
@@ -3654,13 +3870,18 @@ func _campaign_objective_in_current_theater(
 		and not DiplomacyAI.staging_cities_for_objective(
 			state,
 			nation_id,
-			proposed_city
+			proposed_city,
+			int(city_counts.get(
+				state.cities[proposed_city].owner_nation,
+				0
+			))
 		).is_empty()
 	):
 		return proposed_city
 	var best_city := -1
 	var best_score := -INF
-	for city in state.cities:
+	for city_id in snapshot.priority_enemy_cities:
+		var city := state.cities[city_id]
 		if (
 			not state.is_enemy(
 				nation_id,
@@ -3669,7 +3890,8 @@ func _campaign_objective_in_current_theater(
 			or DiplomacyAI.staging_cities_for_objective(
 				state,
 				nation_id,
-				city.id
+				city.id,
+				int(city_counts.get(city.owner_nation, 0))
 			).is_empty()
 		):
 			continue
@@ -3738,11 +3960,21 @@ func _ensure_campaign_preparation_plan(
 		)
 	):
 		return false
-	var view := _build_ai_view(nation_id)
-	var snapshot := _strategy_snapshot_for(view)
-	var threat := ThreatField.build(
-		view,
-		_threat_travel_cache
+	var view := (
+		defense_plan.view
+		if (
+			defense_plan != null
+			and defense_plan.view != null
+		)
+		else _build_ai_view(nation_id)
+	)
+	var snapshot := (
+		defense_plan.snapshot
+		if (
+			defense_plan != null
+			and defense_plan.snapshot != null
+		)
+		else _strategy_snapshot_for(view)
 	)
 	var target_candidates: Array[int] = [primary_city]
 	for target_city in snapshot.priority_enemy_cities:
@@ -3767,6 +3999,17 @@ func _ensure_campaign_preparation_plan(
 			defense_plan,
 			coordinator
 		)
+	var threat := (
+		defense_plan.threat
+		if (
+			defense_plan != null
+			and defense_plan.threat != null
+		)
+		else ThreatField.build(
+			view,
+			_threat_travel_cache
+		)
+	)
 
 	var available: Array[Army] = []
 	for army in state.armies:
@@ -4175,11 +4418,6 @@ func _assign_battle_groups_to_campaign_targets(
 						army,
 						target_city
 					)
-					or not _campaign_army_can_attack_target(
-						army,
-						nation_id,
-						target_city
-					)
 				):
 					continue
 				var field := view.path_field(
@@ -4192,6 +4430,16 @@ func _assign_battle_groups_to_campaign_targets(
 				)
 				var member_distance := INF
 				for staging_city in staging:
+					var attack_edge := state.edge_of(
+						staging_city,
+						target_city
+					)
+					if (
+						attack_edge == null
+						or attack_edge.max_manpower
+							< army.max_size
+					):
+						continue
 					member_distance = minf(
 						member_distance,
 						float(
@@ -4840,7 +5088,8 @@ func _launch_campaign_offensive(
 	nation_id: int,
 	objective_city: int,
 	preparation_days: int = -1,
-	prepared_targets: Array[int] = []
+	prepared_targets: Array[int] = [],
+	route_threat_override: ThreatField = null
 ) -> bool:
 	if (
 		objective_city < 0
@@ -4883,10 +5132,12 @@ func _launch_campaign_offensive(
 	nation.campaign_preparation_multiplier = offensive_multiplier
 	var launched := false
 	var launched_origins := {}
-	var route_threat := ThreatField.build(
-		_build_ai_view(nation_id),
-		_threat_travel_cache
-	)
+	var route_threat := route_threat_override
+	if route_threat == null:
+		route_threat = ThreatField.build(
+			_build_ai_view(nation_id),
+			_threat_travel_cache
+		)
 	var plan_targets := nation.campaign_plan_targets.duplicate()
 	EquivariantOrder.sort_city_ids(
 		plan_targets,
@@ -5818,6 +6069,20 @@ func _grant_offensive_bonus(
 	)
 
 
+func _cached_campaign_objective(
+	nation_id: int,
+	target_id: int,
+	cache: Dictionary
+) -> Dictionary:
+	if not cache.has(target_id):
+		cache[target_id] = DiplomacyAI.select_war_objective(
+			state,
+			nation_id,
+			target_id
+		)
+	return cache[target_id]
+
+
 func _manage_campaign_offensive(
 	nation_id: int,
 	defense_plan: CityDefensePlan = null,
@@ -5833,6 +6098,7 @@ func _manage_campaign_offensive(
 	var defender_id := -1
 	var owns_diplomatic_objective := false
 	var enemy_ids := state.wars_of(nation_id)
+	var objective_cache := {}
 	enemy_ids.sort_custom(func(a: int, b: int) -> bool:
 		return EquivariantOrder.nation_less(
 			state,
@@ -5843,10 +6109,10 @@ func _manage_campaign_offensive(
 	)
 	# 仍在修复窗口内的本国法理失地优先于原进攻目标，形成真实反复争夺。
 	for enemy_id in enemy_ids:
-		var reclamation := DiplomacyAI.select_war_objective(
-			state,
+		var reclamation := _cached_campaign_objective(
 			nation_id,
-			enemy_id
+			enemy_id,
+			objective_cache
 		)
 		if reclamation.is_empty():
 			continue
@@ -5881,10 +6147,10 @@ func _manage_campaign_offensive(
 	if objective.is_empty():
 		for enemy_id in enemy_ids:
 			var counteroffensive := (
-				DiplomacyAI.select_war_objective(
-					state,
+				_cached_campaign_objective(
 					nation_id,
-					enemy_id
+					enemy_id,
+					objective_cache
 				)
 			)
 			if counteroffensive.is_empty():
@@ -5902,8 +6168,10 @@ func _manage_campaign_offensive(
 			nation_id, state.cities[objective_city].owner_nation
 		)
 	):
-		var next := DiplomacyAI.select_war_objective(
-			state, nation_id, defender_id
+		var next := _cached_campaign_objective(
+			nation_id,
+			defender_id,
+			objective_cache
 		)
 		if next.is_empty():
 			return false
@@ -5918,7 +6186,23 @@ func _manage_campaign_offensive(
 	var theater_objective := (
 		_campaign_objective_in_current_theater(
 			nation_id,
-			objective_city
+			objective_city,
+			(
+				defense_plan.view
+				if (
+					defense_plan != null
+					and defense_plan.view != null
+				)
+				else null
+			),
+			(
+				defense_plan.snapshot
+				if (
+					defense_plan != null
+					and defense_plan.snapshot != null
+				)
+				else null
+			)
 		)
 	)
 	if theater_objective != objective_city:
@@ -5927,12 +6211,13 @@ func _manage_campaign_offensive(
 			objective_city
 		].owner_nation
 		owns_diplomatic_objective = false
-	if not _ensure_campaign_preparation_plan(
+	var plan_ready := _ensure_campaign_preparation_plan(
 		nation_id,
 		objective_city,
 		defense_plan,
 		coordinator
-	):
+	)
+	if not plan_ready:
 		return false
 	var preparation_days := _campaign_preparation_days(nation_id)
 	nation.campaign_preparation_multiplier = (
@@ -6018,12 +6303,14 @@ func _manage_campaign_offensive(
 			if launch_targets.has(objective_city)
 			else launch_targets[0]
 		)
-		if _launch_campaign_offensive(
+		var launched := _launch_campaign_offensive(
 				nation_id,
 				launch_objective,
 				preparation_days,
-				launch_targets
-		):
+				launch_targets,
+				threat
+		)
+		if launched:
 			return true
 	# 重整期不是空窗期：持续集结，但不覆盖仍在执行的当前梯队计划。
 	var changed := false

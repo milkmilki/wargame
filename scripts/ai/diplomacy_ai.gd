@@ -35,6 +35,7 @@ const PEACE_RESOURCE_REFERENCE_MONTHS: float = 24.0
 const PEACE_MAX_BORDER_MASSING_RATIO: float = 1.50
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
 const WAR_DECLARE_SCORE: float = 0.85
+const OBSERVED_WAR_PREPARATION_THREAT_BONUS: float = 0.75
 const PEACE_ESCALATION_START_DAYS: int = 180
 const PEACE_ESCALATION_FULL_DAYS: int = 540
 const PEACE_ESCALATION_MAX_BONUS: float = 0.75
@@ -1205,15 +1206,13 @@ static func threat_from_nation(
 		evaluation_cache
 	)
 	var readiness := 0.5 if bool(report["ready"]) else 0.0
-	var hostile_intent := war_desire(
-		state,
-		other_id,
-		observer_id,
-		evaluation_cache
+	var intent_bonus := (
+		OBSERVED_WAR_PREPARATION_THREAT_BONUS
+		if state.nations[
+			other_id
+		].war_preparation_target_nation == observer_id
+		else 0.0
 	)
-	var intent_bonus := 0.0
-	if hostile_intent > -INF:
-		intent_bonus = maxf(hostile_intent - WAR_DECLARE_SCORE + 0.5, 0.0)
 	var result := (
 		power_ratio
 		+ readiness
@@ -2441,7 +2440,8 @@ static func war_preparation_ready(state: GameState, nation_id: int) -> bool:
 static func staging_cities_for_objective(
 	state: GameState,
 	nation_id: int,
-	objective_city: int
+	objective_city: int,
+	target_city_count: int = -1
 ) -> Array[int]:
 	var result: Array[int] = []
 	var target_nation := state.cities[
@@ -2449,7 +2449,8 @@ static func staging_cities_for_objective(
 	].owner_nation
 	var required_capacity := objective_staging_capacity(
 		state,
-		target_nation
+		target_nation,
+		target_city_count
 	)
 	for neighbor in state.neighbors(objective_city):
 		var edge := state.edge_of(neighbor, objective_city)
@@ -2462,7 +2463,7 @@ static func staging_cities_for_objective(
 			)
 		):
 			result.append(neighbor)
-	EquivariantOrder.sort_city_ids(
+	EquivariantOrder.sort_city_subset(
 		result,
 		state,
 		nation_id,
@@ -2473,12 +2474,17 @@ static func staging_cities_for_objective(
 
 static func objective_staging_capacity(
 	state: GameState,
-	target_nation: int
+	target_nation: int,
+	target_city_count: int = -1
 ) -> int:
 	if (
 		target_nation >= 0
 		and target_nation < state.nations.size()
-		and state.cities_of(target_nation).size() <= 2
+		and (
+			target_city_count
+				if target_city_count >= 0
+				else state.cities_of(target_nation).size()
+		) <= 2
 	):
 		return Edge.MIN_MANPOWER
 	return Edge.STANDARD_MANPOWER

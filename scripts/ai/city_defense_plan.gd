@@ -53,6 +53,7 @@ var _friendly_line_army_by_id_cache: Dictionary = {}
 var _friendly_line_army_index_ready: bool = false
 
 
+
 static func build(
 	world_view: AiWorldView,
 	strategic_snapshot: StrategicMapSnapshot,
