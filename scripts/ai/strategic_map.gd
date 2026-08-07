@@ -32,14 +32,17 @@ var _total_friendly_value: float = 0.0
 
 
 
-static func build(view: AiWorldView) -> StrategicMapSnapshot:
+static func build(
+	view: AiWorldView,
+	diplomacy_cache: Dictionary = {}
+) -> StrategicMapSnapshot:
 	var snapshot := StrategicMapSnapshot.new()
 	snapshot.nation_id = view.nation_id
 	snapshot.ownership_revision = view.state.ownership_revision
 	snapshot.strategic_planning_enabled = view.strategic_planning_enabled
 	snapshot._state = view.state
 	snapshot._compute_city_values()
-	snapshot._find_frontier()
+	snapshot._find_frontier(diplomacy_cache)
 	snapshot._compute_connectivity()
 	snapshot._compute_supply_corridors(view)
 	snapshot._finalize_edge_values()
@@ -73,7 +76,7 @@ func _compute_city_values() -> void:
 			_total_friendly_value += value
 
 
-func _find_frontier() -> void:
+func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 	var frontier_seen := {}
 	var enemy_seen := {}
 	var neutral_cities_by_nation := {}
@@ -117,7 +120,9 @@ func _find_frontier() -> void:
 		)
 	)
 	var potential_seen := {}
-	var diplomacy_evaluation_cache := {}
+	# 复用跨国共享的外交评估缓存：resource_report / _national_power / _troop_count
+	# 等按 nation_id 记忆的全局事实在同一 AI tick 内只算一次，避免每国重复扫全军。
+	var diplomacy_evaluation_cache := diplomacy_cache
 	for other_nation_value in neutral_nations:
 		var other_nation := int(other_nation_value)
 		var threat_score := DiplomacyAI.threat_from_nation(

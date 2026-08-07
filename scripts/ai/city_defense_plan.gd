@@ -22,7 +22,7 @@ const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
 ## 采用拓扑跳数（BFS）度量，加权和合成，跳数越小因子越接近上限。
 const STRATEGIC_BORDER_PROXIMITY_WEIGHT: float = 0.60
 const STRATEGIC_CAPITAL_PROXIMITY_WEIGHT: float = 0.40
-const STRATEGIC_PROXIMITY_DECAY_HOPS: float = 3.0
+const STRATEGIC_PROXIMITY_DECAY_HOPS: float = 2.0
 const STRATEGIC_PROXIMITY_MIN_FACTOR: float = 0.35
 
 var view: AiWorldView

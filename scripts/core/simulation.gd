@@ -2338,8 +2338,14 @@ func _record_defense_plan_cache_result(
 		ai_defense_dynamic_reuse_total += 1
 
 
-func _build_ai_snapshot_context(job: Dictionary) -> void:
-	job["snapshot"] = _strategy_snapshot_for(job["view"])
+func _build_ai_snapshot_context(
+	job: Dictionary,
+	diplomacy_cache: Dictionary = {}
+) -> void:
+	job["snapshot"] = _strategy_snapshot_for(
+		job["view"],
+		diplomacy_cache
+	)
 
 
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
@@ -2398,8 +2404,9 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		):
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
+	var snapshot_diplomacy_cache := {}
 	for job in context_jobs:
-		_build_ai_snapshot_context(job)
+		_build_ai_snapshot_context(job, snapshot_diplomacy_cache)
 		if (
 			spread_runtime_work
 			and Time.get_ticks_usec() - runtime_slice_started
@@ -2883,7 +2890,10 @@ func _build_ai_view(
 	return view
 
 
-func _strategy_snapshot_for(view: AiWorldView) -> StrategicMapSnapshot:
+func _strategy_snapshot_for(
+	view: AiWorldView,
+	diplomacy_cache: Dictionary = {}
+) -> StrategicMapSnapshot:
 	var revision := [
 		state.ownership_revision,
 		state.diplomacy_revision,
@@ -2893,7 +2903,10 @@ func _strategy_snapshot_for(view: AiWorldView) -> StrategicMapSnapshot:
 		not _ai_strategy_cache.has(view.nation_id)
 		or _ai_strategy_revision.get(view.nation_id, []) != revision
 	):
-		_ai_strategy_cache[view.nation_id] = StrategicMapSnapshot.build(view)
+		_ai_strategy_cache[view.nation_id] = StrategicMapSnapshot.build(
+			view,
+			diplomacy_cache
+		)
 		_ai_strategy_revision[view.nation_id] = revision
 	return _ai_strategy_cache[view.nation_id]
 
