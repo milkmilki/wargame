@@ -1542,9 +1542,12 @@ static func war_food_report(
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
 	var monthly_production := 0.0
+	if not evaluation_cache.has("garrison_by_city"):
+		evaluation_cache["garrison_by_city"] = Simulation.build_garrison_index(state)
+	var garrison_by_city: Dictionary = evaluation_cache["garrison_by_city"]
 	for city in state.cities_of(nation_id):
 		monthly_production += (
-			float(Simulation.city_food_output(state, city))
+			float(Simulation.city_food_output(state, city, garrison_by_city))
 				/ 6.0
 		)
 	var current_monthly_demand := maxf(
@@ -1559,10 +1562,11 @@ static func war_food_report(
 		else FOOD_PER_CAPITA_MONTH * DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
 	)
 	var target_monthly_demand := float(target_troops) * food_per_troop
-	var full_strength_troops := 0
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			full_strength_troops += army.max_size
+	var full_strength_troops := _full_strength_troop_count(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	var full_strength_monthly_demand := (
 		float(full_strength_troops) * food_per_troop
 	)
@@ -2637,6 +2641,22 @@ static func _troop_count(
 	for army in state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
 			total += army.size
+	evaluation_cache[cache_key] = total
+	return total
+
+
+static func _full_strength_troop_count(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	var cache_key := "full_troops:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
+	var total := 0
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			total += army.max_size
 	evaluation_cache[cache_key] = total
 	return total
 

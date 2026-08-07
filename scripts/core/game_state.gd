@@ -1706,6 +1706,16 @@ func city_under_siege(city_id: int) -> bool:
 	return false
 
 
+## 一次遍历 battles（O(B)）收集全部被围城 id 集合。供每 tick 对多城/多粮仓
+## 反复判被围的结算路径共享，替代逐次 city_under_siege 的 O(城×B) 退化。
+func besieged_city_ids() -> Dictionary:
+	var result := {}
+	for b in battles:
+		if not b.finished and b.kind == Battle.Kind.SIEGE and b.city != null:
+			result[b.city.id] = true
+	return result
+
+
 func recognized_owner_of(city_id: int) -> int:
 	if city_id < 0 or city_id >= recognized_city_owners.size():
 		return -1

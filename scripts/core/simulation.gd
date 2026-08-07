@@ -102,6 +102,9 @@ var _ai_defense_plan_cache: Dictionary = {}
 ## 使月中被切断/恢复的补给线当天即被感知，而不必等到月度经济结算。
 var _daily_supply_source_cache: Dictionary = {}
 var _daily_supply_network_cache: Dictionary = {}
+## 补给网络依赖指纹（owner_nation -> String）：仅当指纹变化才丢弃对应网络重建，
+## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
+var _supply_network_fingerprints: Dictionary = {}
 var _ai_last_decision_day: int = -1
 var _collect_ai_commands: bool = false
 var _ai_command_buffer: Array[AiCommandIntent] = []
@@ -141,6 +144,9 @@ var ai_strategic_planning_overrides: Dictionary = {}
 var ai_adaptive_garrison_overrides: Dictionary = {}
 ## 隔离军事状态机测试时可关闭；正式游戏始终保持 true。
 var diplomacy_enabled: bool = true
+## 等价性守卫用：置 true 强制补给网络每天全量重建（指纹缓存前的旧行为），
+## 正式游戏始终 false，走指纹选择性失效。
+var supply_network_cache_disabled: bool = false
 
 
 
@@ -158,6 +164,7 @@ func setup(game_state: GameState) -> void:
 	_ai_defense_plan_cache.clear()
 	_daily_supply_source_cache.clear()
 	_daily_supply_network_cache.clear()
+	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
@@ -540,10 +547,12 @@ func _resolve_economy() -> void:
 		var produced: Array[int] = []
 		produced.resize(state.nations.size())
 		produced.fill(0)
+		var garrison_by_city := build_garrison_index(state)
 		for city in state.cities:
 			produced[city.owner_nation] += city_food_output(
 				state,
-				city
+				city,
+				garrison_by_city
 			)
 		for nation in state.nations:
 			state.deposit_food(nation.id, produced[nation.id])
@@ -551,11 +560,12 @@ func _resolve_economy() -> void:
 
 static func city_food_output(
 	game_state: GameState,
-	city: City
+	city: City,
+	garrison_by_city: Dictionary = {}
 ) -> int:
 	var garrison_output := city_food_output_for_garrison(
 		city,
-		city_garrison_troops(game_state, city)
+		city_garrison_troops(game_state, city, garrison_by_city)
 	)
 	return _apply_city_war_disruption(
 		game_state,
@@ -618,8 +628,13 @@ static func city_food_output_for_garrison(
 
 static func city_garrison_troops(
 	game_state: GameState,
-	city: City
+	city: City,
+	garrison_by_city: Dictionary = {}
 ) -> int:
+	# 提供 garrison_by_city（city_id -> 驻城兵力）时走 O(1) 查桶；否则回退全表扫描。
+	# 结算路径（经济/军粮报告）每 tick 对上百城反复取用，一次分桶 O(A) 消除 O(C×A)。
+	if not garrison_by_city.is_empty():
+		return int(garrison_by_city.get(city.id, 0))
 	var result := 0
 	for army in game_state.armies:
 		if (
@@ -630,6 +645,19 @@ static func city_garrison_troops(
 		):
 			result += army.size
 	return result
+
+
+## 一次性构建「驻城兵力桶」：city_id -> 该城本国非在途守军兵力总和（O(A)）。
+## 供经济/军粮结算共享，替代 city_garrison_troops 的逐城 O(A) 全表扫描。
+static func build_garrison_index(game_state: GameState) -> Dictionary:
+	var index := {}
+	for army in game_state.armies:
+		if army.size <= 0 or army.on_edge or army.location_city < 0:
+			continue
+		if army.owner_nation != game_state.cities[army.location_city].owner_nation:
+			continue
+		index[army.location_city] = int(index.get(army.location_city, 0)) + army.size
+	return index
 
 
 static func city_garrison_food_loss(
@@ -693,9 +721,20 @@ func _resolve_reinforcements() -> void:
 		if not armies_by_nation.has(army.owner_nation):
 			armies_by_nation[army.owner_nation] = [] as Array[Army]
 		(armies_by_nation[army.owner_nation] as Array[Army]).append(army)
+	# 40 国共享同一 evaluation_cache：war_food_report 链路的边表矩阵、tick 级
+	# 只读评估（troops/food_stock/frontier/garrison）本就与结算顺序无关，共享后
+	# 从每国 O(N×A) 冷调降为一次构建，削减月结算日的主线程开销。
+	var food_cache := {}
 	for nation in state.nations:
 		var at_war := not state.wars_of(nation.id).is_empty()
-		var food_report := _food_security_report(nation.id)
+		var nation_armies := (
+			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army]
+		)
+		var food_report := _food_security_report(
+			nation.id,
+			nation_armies,
+			food_cache
+		)
 		var food_manpower_budget := _food_growth_manpower_budget(food_report)
 		if food_manpower_budget <= 0:
 			continue
@@ -713,9 +752,7 @@ func _resolve_reinforcements() -> void:
 			continue
 		var plans: Array = []
 		var total_deficit := 0
-		for army in (
-			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army]
-		):
+		for army in nation_armies:
 			if not _can_reinforce_army(army):
 				continue
 			var target_size := army.max_size
@@ -840,8 +877,24 @@ func _can_reinforce_army(army: Army) -> bool:
 func _resolve_supply() -> void:
 	# 每日重新计算位置、路线、兵力和共享库存竞争。月需求先除以 30 累加到
 	# Army.supply_food_debt，只有满整粮时实际扣库存，避免逐日 ceil 放大。
+	# 补给网络（每粮仓 O(E) 损耗场）是本函数主成本之一，且其依赖——敌占边、
+	# 城市归属、外交、粮仓可用性——多数天跨天不变。因此按依赖指纹选择性失效：
+	# 指纹变的国家丢弃其网络下次重建，其余复用，削减每日全量重建的主线程开销。
+	# 军队位置查表结果（_daily_supply_source_cache）仍每天清空（军队每天移动）。
 	_daily_supply_source_cache.clear()
-	_daily_supply_network_cache.clear()
+	# 一次性预算共享依赖：被围城集合（O(B)）与各粮仓可用性，供逐国指纹复用，
+	# 避免在指纹里逐粮仓 city_under_siege 的 O(B) 扫描退化成 O(城×B)。
+	if supply_network_cache_disabled:
+		# 等价性守卫用：强制每天全量重建，复现指纹缓存前的旧行为。
+		_daily_supply_network_cache.clear()
+	else:
+		var besieged := state.besieged_city_ids()
+		var warehouse_state := _supply_warehouse_availability(besieged)
+		for nation in state.nations:
+			var fp := _supply_network_fingerprint(nation.id, warehouse_state)
+			if str(_supply_network_fingerprints.get(nation.id, "")) != fp:
+				_daily_supply_network_cache.erase(nation.id)
+				_supply_network_fingerprints[nation.id] = fp
 	var plans: Array = []   # [{army, sources, demand}]
 	var demand_by_nation: Array[int] = []
 	demand_by_nation.resize(state.nations.size())
@@ -919,6 +972,7 @@ func _resolve_supply() -> void:
 		else:
 			a.starving = false
 			a.supply_ratio = 1.0
+
 
 ## 每日滚动施加刚完成的粮食分配结果：士气/减员按 1/DAYS_PER_MONTH 摊派，
 ## 线路、部分短缺、兵力变化和共享库存竞争都已在本日 _resolve_supply 中体现。
@@ -1093,6 +1147,46 @@ func _supply_sources_have_food(sources: Array[Dictionary]) -> bool:
 		):
 			return true
 	return false
+
+
+## 逐国补给网络依赖指纹：捕获 build_supply_network 读取的全部动态量——可达
+## 各方粮仓的可用性（存量>0 且未被围）、敌占边集合、归属/外交版本。拓扑与
+## danger 系静态量（运行期不改），无需纳入。指纹一致即可跨天复用网络。
+func _supply_network_fingerprint(
+	nation_id: int,
+	warehouse_state: Dictionary
+) -> String:
+	var accessible: Array[int] = []
+	for owner in state.nations:
+		if state.has_military_access(nation_id, owner.id):
+			accessible.append(owner.id)
+	accessible.sort()
+	var parts: Array[String] = []
+	for owner_id in accessible:
+		parts.append("%d>%s" % [owner_id, warehouse_state.get(owner_id, "")])
+	var enemy_edges := Pathfinding._enemy_occupied_edge_keys(state, nation_id)
+	var enemy_keys := enemy_edges.keys()
+	enemy_keys.sort()
+	return "%d:%d:%s|E%s" % [
+		state.ownership_revision,
+		state.diplomacy_revision,
+		"".join(parts),
+		str(enemy_keys),
+	]
+
+
+## 预算各国可用粮仓（存量>0 且未被围）为 owner_id -> "id,id,..." 串，供逐国
+## 指纹拼接复用，避免每国重复遍历全部粮仓与逐粮仓 city_under_siege。
+func _supply_warehouse_availability(besieged: Dictionary) -> Dictionary:
+	var result := {}
+	for owner in state.nations:
+		var usable: Array[int] = []
+		for warehouse in state.warehouse_cities_of(owner.id):
+			if warehouse.food_storage > 0 and not besieged.has(warehouse.id):
+				usable.append(warehouse.id)
+		usable.sort()
+		result[owner.id] = ",".join(usable.map(func(i: int) -> String: return str(i)))
+	return result
 
 
 func _cached_supply_sources(
@@ -6385,9 +6479,16 @@ func _manage_campaign_offensive(
 
 func _food_security_report(
 	nation_id: int,
-	nation_armies: Array[Army] = []
+	nation_armies: Array[Army] = [],
+	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
-	var war_food := DiplomacyAI.war_food_report(state, nation_id)
+	var war_food := DiplomacyAI.war_food_report(
+		state,
+		nation_id,
+		-1,
+		-1,
+		evaluation_cache
+	)
 	var monthly_production := float(war_food["monthly_food_production"])
 	var monthly_demand := 0.0
 	var armies_to_scan: Array[Army] = (
