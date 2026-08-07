@@ -1341,10 +1341,11 @@ static func resource_report(
 ## 可行性改用生存线，避免“按计划动员 -> 储备下降 -> 自动取消”的自相矛盾。
 static func war_preparation_resources_ready(
 	state: GameState,
-	nation_id: int
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> bool:
 	var nation := state.nations[nation_id]
-	var report := resource_report(state, nation_id)
+	var report := resource_report(state, nation_id, evaluation_cache)
 	var emergency_manpower := maxi(
 		MIN_MANPOWER_RESERVE / 5,
 		int(ceil(float(report["troops"]) * 0.03))
@@ -2108,7 +2109,13 @@ static func _collect_war_actions(
 		if committed.has(nation.id) or not nation.alive:
 			continue
 		if nation.war_preparation_target_nation >= 0:
-			_collect_existing_war_preparation(state, nation.id, actions, committed)
+			_collect_existing_war_preparation(
+				state,
+				nation.id,
+				actions,
+				committed,
+				evaluation_cache
+			)
 			continue
 		var best_target := -1
 		var best_score := -INF
@@ -2230,7 +2237,8 @@ static func _collect_existing_war_preparation(
 	state: GameState,
 	nation_id: int,
 	actions: Array[Dictionary],
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary = {}
 ) -> void:
 	var nation := state.nations[nation_id]
 	var target_id := nation.war_preparation_target_nation
@@ -2252,7 +2260,8 @@ static func _collect_existing_war_preparation(
 	var elapsed := state.day - nation.war_preparation_started_day
 	var resources_ready := war_preparation_resources_ready(
 		state,
-		nation_id
+		nation_id,
+		evaluation_cache
 	)
 	var resource_grace_expired := (
 		nation.war_preparation_unready_since_day >= 0
@@ -2297,7 +2306,8 @@ static func _collect_existing_war_preparation(
 			nation_id,
 			target_id,
 			actions,
-			committed
+			committed,
+			evaluation_cache
 		):
 			return
 		committed[nation_id] = true
@@ -2306,7 +2316,7 @@ static func _collect_existing_war_preparation(
 		int(ceil(
 			float(
 				nation.war_mobilization_target_troops
-				- _troop_count(state, nation_id)
+				- _troop_count(state, nation_id, evaluation_cache)
 			) / float(MOBILIZATION_ARMY_SIZE)
 		)),
 		0
@@ -2336,7 +2346,8 @@ static func _collect_preparation_alliance(
 	nation_id: int,
 	war_target_id: int,
 	actions: Array[Dictionary],
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary = {}
 ) -> bool:
 	var best_target := -1
 	var best_score := -INF
@@ -2351,12 +2362,14 @@ static func _collect_preparation_alliance(
 		var score_a := alliance_willingness(
 			state,
 			nation_id,
-			candidate.id
+			candidate.id,
+			evaluation_cache
 		)
 		var score_b := alliance_willingness(
 			state,
 			candidate.id,
-			nation_id
+			nation_id,
+			evaluation_cache
 		)
 		var score := minf(score_a, score_b)
 		if (
