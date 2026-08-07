@@ -2348,6 +2348,30 @@ func _build_ai_snapshot_context(
 	)
 
 
+## 后台线程构建全部国家的只读 AI 上下文（view/snapshot/threat）。运行期把这
+## ~67% 的重活移出主线程，主线程在等待期间继续渲染插值，消除十日一次的卡顿。
+## 只读冻结的 GameState，写入各自 job 私有字段与本任务独占的行军/外交缓存；
+## 期间主线程只做渲染（不触碰 EquivariantOrder/威胁缓存），故无需加锁。
+## 防区规划因会改写 GameState，仍留在主线程串行提交。
+func _build_ai_readonly_contexts(payload: Dictionary) -> void:
+	var jobs: Array = payload["jobs"]
+	var diplomacy_cache: Dictionary = payload["diplomacy_cache"]
+	var threat_cache: Dictionary = payload["threat_cache"]
+	# 顺序须与主线程同步路径一致：先全部 snapshot，再全部 threat，
+	# 使共享缓存的填充次序相同，保证线程化结果与同步路径逐位一致。
+	for job in jobs:
+		job["snapshot"] = _strategy_snapshot_for(
+			job["view"],
+			diplomacy_cache
+		)
+	for job in jobs:
+		job["threat"] = ThreatField.build(
+			job["view"],
+			threat_cache
+		)
+
+
+
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	if spread_runtime_work:
 		await get_tree().process_frame
@@ -2405,32 +2429,30 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
 	var snapshot_diplomacy_cache := {}
-	for job in context_jobs:
-		_build_ai_snapshot_context(job, snapshot_diplomacy_cache)
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_CONTEXT_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
 	_parallel_ai_context_jobs = context_jobs
-	if (
-		spread_runtime_work
-		and Time.get_ticks_usec() - runtime_slice_started
-			>= AI_RUNTIME_SLICE_BUDGET_USEC
-	):
-		await get_tree().process_frame
-		runtime_slice_started = Time.get_ticks_usec()
-	for job_index in range(context_jobs.size()):
-		_build_parallel_ai_threat(job_index)
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_CONTEXT_SLICE_BUDGET_USEC
-		):
+	# 只读上下文（snapshot+threat）是卡顿主因（单国 snapshot 峰值可达 ~50ms，
+	# 分帧器无法切分）。运行期整体丢到后台线程，主线程在等待期间持续渲染插值；
+	# 测试/快进等同步路径仍在主线程内串行执行以保持单帧确定性语义。
+	if spread_runtime_work and not context_jobs.is_empty():
+		var payload := {
+			"jobs": context_jobs,
+			"diplomacy_cache": snapshot_diplomacy_cache,
+			"threat_cache": _threat_travel_cache,
+		}
+		var task_id := WorkerThreadPool.add_task(
+			_build_ai_readonly_contexts.bind(payload),
+			true,
+			"WorldWar AI readonly context"
+		)
+		while not WorkerThreadPool.is_task_completed(task_id):
 			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
+		WorkerThreadPool.wait_for_task_completion(task_id)
+		runtime_slice_started = Time.get_ticks_usec()
+	else:
+		for job in context_jobs:
+			_build_ai_snapshot_context(job, snapshot_diplomacy_cache)
+		for job_index in range(context_jobs.size()):
+			_build_parallel_ai_threat(job_index)
 	for job_index in range(context_jobs.size()):
 		_build_parallel_ai_defense(job_index)
 		if (
