@@ -1868,7 +1868,9 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 		cities[city_id].has_warehouse = false
 
 
-## 首都失守后，从剩余城市中选择工事最强者迁都（同工事按势力局部物理序）。
+## 首都失守后迁都：优先落在本国「最大连通领土分量」内，分量内再取工事最强者
+## （同工事按势力局部物理序）。选最大分量而非全局最强单城，可避免把主体国土误
+## 判为飞地——投降割地后国土可能碎成多块，迁都到最大块才能让其余飞地被正确放弃。
 func relocate_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
@@ -1876,7 +1878,8 @@ func relocate_capital(nation_id: int) -> int:
 	if candidates.is_empty():
 		nations[nation_id].capital_city_id = -1
 		return -1
-	candidates.sort_custom(func(a: City, b: City) -> bool:
+	var best_component := _largest_owned_component(nation_id, candidates)
+	best_component.sort_custom(func(a: City, b: City) -> bool:
 		if a.fort_strength != b.fort_strength:
 			return a.fort_strength > b.fort_strength
 		return EquivariantOrder.city_less(
@@ -1886,7 +1889,7 @@ func relocate_capital(nation_id: int) -> int:
 			b
 		)
 	)
-	var capital := candidates[0]
+	var capital := best_component[0]
 	var nation := nations[nation_id]
 	nation.capital_city_id = capital.id
 	if not nation.warehouse_city_ids.has(capital.id):
@@ -1894,6 +1897,48 @@ func relocate_capital(nation_id: int) -> int:
 	capital.is_capital = true
 	capital.has_warehouse = true
 	return capital.id
+
+
+## 返回本国按道路连通划分后的「最大连通分量」（城市列表）。同大小时按分量代表城
+## 的势力局部物理序取更小者，保证确定性。仅用本国实控城 + 可通行边构成子图。
+func _largest_owned_component(
+	nation_id: int,
+	owned_cities: Array[City]
+) -> Array[City]:
+	var owned := {}
+	for city in owned_cities:
+		owned[city.id] = true
+	var visited := {}
+	var best: Array[City] = []
+	var best_rep := -1
+	for city in owned_cities:
+		if visited.has(city.id):
+			continue
+		var component: Array[City] = []
+		var rep := city.id
+		var queue: Array[int] = [city.id]
+		visited[city.id] = true
+		var cursor := 0
+		while cursor < queue.size():
+			var cid := queue[cursor]
+			cursor += 1
+			component.append(cities[cid])
+			rep = mini(rep, cid)
+			for neighbor in neighbors(cid):
+				if visited.has(neighbor) or not owned.has(neighbor):
+					continue
+				var edge := edge_of(cid, neighbor)
+				if edge == null or edge.max_manpower <= 0:
+					continue
+				visited[neighbor] = true
+				queue.append(neighbor)
+		if (
+			component.size() > best.size()
+			or (component.size() == best.size() and (best_rep < 0 or rep < best_rep))
+		):
+			best = component
+			best_rep = rep
+	return best
 
 
 ## 刷新派生量：国家 granary_food（粮仓求和）与 alive（是否还有城市）

@@ -4674,6 +4674,69 @@ func _test_capital_capture_capitulation() -> void:
 	)
 	surrender_sim.free()
 
+	# 首都失陷投降后，割地使残余国土碎成多块时，不连回新首都的飞地必须一并放弃，
+	# 保证地图连续（回归：曾因迁都锚点选到孤立飞地，反把主体国土误判为飞地割走）。
+	var enclave_state := GameState.new()
+	enclave_state.generate_grid_world(6366)
+	enclave_state.armies.clear()
+	enclave_state.battles.clear()
+	for city in enclave_state.cities:
+		city.owner_nation = 2
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		enclave_state.recognized_city_owners[city.id] = 2
+	enclave_state.cities[0].owner_nation = 0
+	enclave_state.recognized_city_owners[0] = 0
+	# B 主体链 1-2-3-4 连通；城16 是与主体断开的孤立飞地（只连中立国2）。
+	for c in [1, 2, 3, 4, 16]:
+		enclave_state.cities[c].owner_nation = 1
+		enclave_state.recognized_city_owners[c] = 1
+	for road in [[0, 1], [1, 2], [2, 3], [3, 4], [16, 17], [16, 24]]:
+		var enclave_edge := enclave_state.edge_of(int(road[0]), int(road[1]))
+		if enclave_edge != null:
+			enclave_edge.max_manpower = Edge.STANDARD_MANPOWER
+	_set_single_warehouse(enclave_state, 0, 0, 100)
+	_set_single_warehouse(enclave_state, 1, 1, 100)
+	_set_single_warehouse(enclave_state, 2, 63, 100)
+	for enclave_a in range(enclave_state.nations.size()):
+		for enclave_b in range(enclave_a + 1, enclave_state.nations.size()):
+			enclave_state.set_diplomatic_relation(
+				enclave_a,
+				enclave_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	enclave_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	enclave_state.refresh_derived()
+	var enclave_sim := Simulation.new()
+	enclave_sim.setup(enclave_state)
+	var enclave_captor := _make_army(816, 0, 5000, 10)
+	enclave_captor.location_city = 0
+	enclave_captor.move_from = 0
+	enclave_state.armies.append(enclave_captor)
+	enclave_sim._capture_city(enclave_captor, enclave_state.cities[1])
+	var enclave_capital := enclave_state.nations[1].capital_city_id
+	var enclave_contiguous := (
+		enclave_capital >= 0
+		and _nation_territory_contiguous(enclave_state, 1)
+	)
+	_check(
+		enclave_state.cities[16].owner_nation != 1
+			and enclave_contiguous
+			and enclave_state.cities[4].owner_nation == 1,
+		(
+			"投降后孤立飞地城16必须被放弃、主体城4保留、残余国土连续："
+			+ "城16归属=%d 首都=%d 连续=%s"
+		) % [
+			enclave_state.cities[16].owner_nation,
+			enclave_capital,
+			str(enclave_contiguous),
+		]
+	)
+	enclave_sim.free()
+
 # ------------------------------------------------------------------ 27. 驻防战斗适应 + 增援稀释
 
 func _test_holding_combat_adaptation() -> void:
@@ -13435,6 +13498,34 @@ func _set_single_warehouse(gs: GameState, nation_id: int, city_id: int, stock: i
 		[stock] as Array[int],
 		city_id
 	)
+
+
+## 本国全部实控城是否都能从首都经本国可通行道路到达（地图连续性判定）。
+func _nation_territory_contiguous(gs: GameState, nation_id: int) -> bool:
+	var capital := gs.nations[nation_id].capital_city_id
+	if capital < 0:
+		return true
+	var seen := {capital: true}
+	var queue: Array[int] = [capital]
+	var cursor := 0
+	while cursor < queue.size():
+		var cid := queue[cursor]
+		cursor += 1
+		for neighbor in gs.neighbors(cid):
+			var edge := gs.edge_of(cid, neighbor)
+			if (
+				seen.has(neighbor)
+				or edge == null
+				or edge.max_manpower <= 0
+				or gs.cities[neighbor].owner_nation != nation_id
+			):
+				continue
+			seen[neighbor] = true
+			queue.append(neighbor)
+	for city in gs.cities:
+		if city.owner_nation == nation_id and not seen.has(city.id):
+			return false
+	return true
 
 
 func _make_army(aid: int, nation: int, size: int, atk: int, def_v: int = 10) -> Army:
