@@ -147,6 +147,9 @@ var diplomacy_enabled: bool = true
 ## 等价性守卫用：置 true 强制补给网络每天全量重建（指纹缓存前的旧行为），
 ## 正式游戏始终 false，走指纹选择性失效。
 var supply_network_cache_disabled: bool = false
+## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_supply（不分帧），
+## 以隔离「补给分帧」相对「补给同步」在同一运行时路径下的等价性。正式游戏 false。
+var supply_frame_slicing_disabled: bool = false
 
 
 
@@ -235,7 +238,10 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_resolve_line_edge_assignment_emergencies()
 	# 日供应量与路径、兵力、共享库存竞争同日更新；月耗通过 Army.supply_food_debt
 	# 按 1/30 累积到整粮后扣除，不放大整数库存。
-	_resolve_supply()
+	if spread_runtime_work and not supply_frame_slicing_disabled:
+		await _resolve_supply_over_frames()
+	else:
+		_resolve_supply()
 	_recover_morale()
 	# 断粮后果读取刚计算的当日满足率，按 1/30 累计士气与减员。
 	_apply_supply_pressure()
@@ -875,60 +881,113 @@ func _can_reinforce_army(army: Army) -> bool:
 # ------------------------------------------------------------------ 2. 粮食 + 饥饿
 
 func _resolve_supply() -> void:
-	# 每日重新计算位置、路线、兵力和共享库存竞争。月需求先除以 30 累加到
-	# Army.supply_food_debt，只有满整粮时实际扣库存，避免逐日 ceil 放大。
-	# 补给网络（每粮仓 O(E) 损耗场）是本函数主成本之一，且其依赖——敌占边、
-	# 城市归属、外交、粮仓可用性——多数天跨天不变。因此按依赖指纹选择性失效：
-	# 指纹变的国家丢弃其网络下次重建，其余复用，削减每日全量重建的主线程开销。
-	# 军队位置查表结果（_daily_supply_source_cache）仍每天清空（军队每天移动）。
+	# 同步驱动：一次性完成当日补给结算（测试与快进路径用，保持单帧确定性）。
+	# 运行时改走 _resolve_supply_over_frames 把两段逐军循环分摊到多帧。
+	_prepare_supply_network_caches()
+	var plans: Array = []   # [{army, sources, demand}]
+	var demand_by_nation := _new_food_demand_accumulator()
+	for army in state.armies:
+		var plan := _build_supply_plan_for_army(army, demand_by_nation)
+		if not plan.is_empty():
+			plans.append(plan)
+	_finalize_food_demand(demand_by_nation)
+	_sort_supply_plans(plans)
+	for p in plans:
+		_withdraw_supply_for_plan(p)
+
+
+## 运行时分帧驱动：与 _resolve_supply 逐军等价，但在两段循环内按墙钟预算 yield，
+## 把每天 ~35ms 的补给结算摊到多帧，消除单帧尖峰。切帧点只暂停/继续循环，不重排
+## plan 顺序、不改变累加序，故与同步版逐字节等价（由 supply_network_cache 守卫覆盖）。
+func _resolve_supply_over_frames() -> void:
+	_prepare_supply_network_caches()
+	var plans: Array = []
+	var demand_by_nation := _new_food_demand_accumulator()
+	var slice_started := Time.get_ticks_usec()
+	for army in state.armies:
+		var plan := _build_supply_plan_for_army(army, demand_by_nation)
+		if not plan.is_empty():
+			plans.append(plan)
+		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+			await get_tree().process_frame
+			slice_started = Time.get_ticks_usec()
+	_finalize_food_demand(demand_by_nation)
+	_sort_supply_plans(plans)
+	slice_started = Time.get_ticks_usec()
+	for p in plans:
+		_withdraw_supply_for_plan(p)
+		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+			await get_tree().process_frame
+			slice_started = Time.get_ticks_usec()
+
+
+## 每日重算前的补给网络缓存维护：军队位置查表结果每天失效（军队每天移动）；
+## 补给网络损耗场按依赖指纹选择性失效——敌占边、城市归属、外交、粮仓可用性
+## 多数天跨天不变，指纹一致即复用，削减每日全量 O(粮仓×E) 重建的主线程开销。
+func _prepare_supply_network_caches() -> void:
 	_daily_supply_source_cache.clear()
 	# 一次性预算共享依赖：被围城集合（O(B)）与各粮仓可用性，供逐国指纹复用，
 	# 避免在指纹里逐粮仓 city_under_siege 的 O(B) 扫描退化成 O(城×B)。
 	if supply_network_cache_disabled:
 		# 等价性守卫用：强制每天全量重建，复现指纹缓存前的旧行为。
 		_daily_supply_network_cache.clear()
-	else:
-		var besieged := state.besieged_city_ids()
-		var warehouse_state := _supply_warehouse_availability(besieged)
-		for nation in state.nations:
-			var fp := _supply_network_fingerprint(nation.id, warehouse_state)
-			if str(_supply_network_fingerprints.get(nation.id, "")) != fp:
-				_daily_supply_network_cache.erase(nation.id)
-				_supply_network_fingerprints[nation.id] = fp
-	var plans: Array = []   # [{army, sources, demand}]
+		return
+	var besieged := state.besieged_city_ids()
+	var warehouse_state := _supply_warehouse_availability(besieged)
+	for nation in state.nations:
+		var fp := _supply_network_fingerprint(nation.id, warehouse_state)
+		if str(_supply_network_fingerprints.get(nation.id, "")) != fp:
+			_daily_supply_network_cache.erase(nation.id)
+			_supply_network_fingerprints[nation.id] = fp
+
+
+func _new_food_demand_accumulator() -> Array[int]:
 	var demand_by_nation: Array[int] = []
 	demand_by_nation.resize(state.nations.size())
 	demand_by_nation.fill(0)
-	for army in state.armies:
-		if army.size <= 0 or army.state == Army.State.RECOVERING:
-			continue
-		var siege_garrison := _siege_garrison_battle_of(army)
-		if siege_garrison != null and siege_garrison.city.food_storage > 0:
-			# 被围守军的粮食消耗真源是每日围城时钟。
-			army.starving = false
-			army.supply_ratio = 1.0
-			army.supply_food_debt = 0.0
-			continue
-		var sources := _cached_supply_sources(
-			army,
-			_daily_supply_source_cache,
-			_daily_supply_network_cache
-		)
-		var route_loss := _weighted_supply_loss(sources)
-		var mult: float = MAX_SUPPLY_MULT
-		if not sources.is_empty():
-			mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
-		var base := int(ceil(army.size * FOOD_PER_CAPITA))
-		base = maxi(base, 1)
-		var monthly_demand := int(ceil(base * mult))
-		demand_by_nation[army.owner_nation] += monthly_demand
-		army.supply_food_debt += (
-			float(monthly_demand) / float(DAYS_PER_MONTH)
-		)
-		var demand := int(floor(army.supply_food_debt + 0.000001))
-		if demand > 0:
-			army.supply_food_debt -= float(demand)
-		plans.append({ "army": army, "sources": sources, "demand": demand })
+	return demand_by_nation
+
+
+## 单军当日粮食需求结算（逐军独立、无跨军依赖）：累加本国月需求、按 1/30 滚动
+## 到整粮债务，返回 {army, sources, demand} 供随后的库存竞争；被围守军与无需求军
+## 在此直接落定状态并返回空字典（不参与竞争）。
+func _build_supply_plan_for_army(
+	army: Army,
+	demand_by_nation: Array[int]
+) -> Dictionary:
+	if army.size <= 0 or army.state == Army.State.RECOVERING:
+		return {}
+	var siege_garrison := _siege_garrison_battle_of(army)
+	if siege_garrison != null and siege_garrison.city.food_storage > 0:
+		# 被围守军的粮食消耗真源是每日围城时钟。
+		army.starving = false
+		army.supply_ratio = 1.0
+		army.supply_food_debt = 0.0
+		return {}
+	var sources := _cached_supply_sources(
+		army,
+		_daily_supply_source_cache,
+		_daily_supply_network_cache
+	)
+	var route_loss := _weighted_supply_loss(sources)
+	var mult: float = MAX_SUPPLY_MULT
+	if not sources.is_empty():
+		mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
+	var base := int(ceil(army.size * FOOD_PER_CAPITA))
+	base = maxi(base, 1)
+	var monthly_demand := int(ceil(base * mult))
+	demand_by_nation[army.owner_nation] += monthly_demand
+	army.supply_food_debt += (
+		float(monthly_demand) / float(DAYS_PER_MONTH)
+	)
+	var demand := int(floor(army.supply_food_debt + 0.000001))
+	if demand > 0:
+		army.supply_food_debt -= float(demand)
+	return { "army": army, "sources": sources, "demand": demand }
+
+
+## 落定各国当日粮食需求，并在月初把需求滚入 EMA（供裁军/宣战粮草评估）。
+func _finalize_food_demand(demand_by_nation: Array[int]) -> void:
 	for nation in state.nations:
 		nation.last_food_demand = demand_by_nation[nation.id]
 		if state.day % DAYS_PER_MONTH == 0:
@@ -942,7 +1001,9 @@ func _resolve_supply() -> void:
 				)
 			)
 
-	# 按物理序执行同日库存竞争，避免 state.armies 创建顺序决定谁先取粮。
+
+## 按物理镜像序排序取粮计划，避免 state.armies 创建顺序决定谁先取粮（确定性）。
+func _sort_supply_plans(plans: Array) -> void:
 	plans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var army_a: Army = a["army"]
 		var army_b: Army = b["army"]
@@ -952,26 +1013,29 @@ func _resolve_supply() -> void:
 			army_b
 		)
 	)
-	for p in plans:
-		var a: Army = p["army"]
-		var demand: int = p["demand"]
-		if demand <= 0:
-			var has_food := _supply_sources_have_food(p["sources"])
-			a.starving = not has_food
-			a.supply_ratio = 1.0 if has_food else 0.0
-			continue
-		var supplied := _withdraw_weighted_supply(
-			p["sources"],
-			demand,
-			a.owner_nation
-		)
-		var shortfall := demand - supplied
-		if shortfall > 0:
-			a.starving = true
-			a.supply_ratio = 1.0 - float(shortfall) / float(demand)
-		else:
-			a.starving = false
-			a.supply_ratio = 1.0
+
+
+## 单个取粮计划的共享库存竞争结算（按已排序序执行；逐 plan 独立写自身军队状态）。
+func _withdraw_supply_for_plan(p: Dictionary) -> void:
+	var a: Army = p["army"]
+	var demand: int = p["demand"]
+	if demand <= 0:
+		var has_food := _supply_sources_have_food(p["sources"])
+		a.starving = not has_food
+		a.supply_ratio = 1.0 if has_food else 0.0
+		return
+	var supplied := _withdraw_weighted_supply(
+		p["sources"],
+		demand,
+		a.owner_nation
+	)
+	var shortfall := demand - supplied
+	if shortfall > 0:
+		a.starving = true
+		a.supply_ratio = 1.0 - float(shortfall) / float(demand)
+	else:
+		a.starving = false
+		a.supply_ratio = 1.0
 
 
 ## 每日滚动施加刚完成的粮食分配结果：士气/减员按 1/DAYS_PER_MONTH 摊派，
