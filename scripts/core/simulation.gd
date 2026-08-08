@@ -153,6 +153,9 @@ var supply_frame_slicing_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_reinforcements（不分帧），
 ## 以隔离「补员分帧」在同一运行时路径下的等价性。正式游戏 false。
 var reinforcement_frame_slicing_disabled: bool = false
+## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_line_edge_assignment_emergencies
+## （不分帧），以隔离「填线防区分帧」在同一运行时路径下的等价性。正式游戏 false。
+var line_edge_frame_slicing_disabled: bool = false
 
 
 
@@ -241,7 +244,10 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			await _resolve_diplomacy_over_frames()
 		else:
 			_resolve_diplomacy()
-	_resolve_line_edge_assignment_emergencies()
+	if spread_runtime_work and not line_edge_frame_slicing_disabled:
+		await _resolve_line_edge_assignment_emergencies_over_frames()
+	else:
+		_resolve_line_edge_assignment_emergencies()
 	# 日供应量与路径、兵力、共享库存竞争同日更新；月耗通过 Army.supply_food_debt
 	# 按 1/30 累积到整粮后扣除，不放大整数库存。
 	if spread_runtime_work and not supply_frame_slicing_disabled:
@@ -1458,51 +1464,83 @@ func _siege_garrison_battle_of(army: Army) -> Battle:
 
 
 ## 每日推进持久边境防区状态，不等待十日一次的正式地图 AI 决策。
+## 同步驱动：一次性处理全国防区（测试与快进路径用）。运行时改走分帧版。
 func _resolve_line_edge_assignment_emergencies() -> void:
+	var army_by_id := _living_army_index()
+	# 一次性收集被围城集合（O(B)），替代逐防区 city_under_siege 的 O(防区×B) 扫描。
+	var besieged := state.besieged_city_ids()
+	for nation in state.nations:
+		_resolve_nation_line_edge_sectors(nation, army_by_id, besieged)
+
+
+## 运行时分帧驱动：与同步版逐国等价，但在国与国之间按墙钟预算 yield。各国只处理
+## 本国防区、只改本国军队状态，彼此独立；army_by_id 与 besieged 为只读快照，切帧
+## 不改变任何结果（由等价守卫覆盖）。
+func _resolve_line_edge_assignment_emergencies_over_frames() -> void:
+	var army_by_id := _living_army_index()
+	var besieged := state.besieged_city_ids()
+	var slice_started := Time.get_ticks_usec()
+	for nation in state.nations:
+		_resolve_nation_line_edge_sectors(nation, army_by_id, besieged)
+		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+			await get_tree().process_frame
+			slice_started = Time.get_ticks_usec()
+
+
+func _living_army_index() -> Dictionary:
 	var army_by_id := {}
 	for army in state.armies:
 		if army.size > 0:
 			army_by_id[army.id] = army
-	for nation in state.nations:
-		var sectors: Dictionary = nation.frontier_defense_sectors
-		for city_id_value in sectors.keys().duplicate():
-			var city_id := int(city_id_value)
-			var sector: FrontierDefenseSector = sectors[city_id]
-			if (
-				city_id < 0
-				or city_id >= state.cities.size()
-				or state.cities[city_id].owner_nation
-					!= nation.id
-			):
-				sector.state = FrontierDefenseSector.State.RETREATING
-				_retreat_lost_frontier_sector(
-					sector,
-					army_by_id
-				)
-				sectors.erase(city_id)
-				continue
-			if state.city_under_siege(city_id):
-				if sector.state in [
-					FrontierDefenseSector.State.NORMAL,
-					FrontierDefenseSector.State.RESTORING,
-				]:
-					sector.state = (
-						FrontierDefenseSector.State.RECALLING
-					)
-				else:
-					sector.state = (
-						FrontierDefenseSector.State.DEFENDING
-					)
-				_recall_frontier_sector(sector, army_by_id)
-				continue
+	return army_by_id
+
+
+## 单国防区每日状态推进（逐国独立：只读 army_by_id/besieged 快照，只改本国防区
+## 与本国军队）。丢失城的防区撤退并移除；被围城召回；否则逐步恢复驻边。
+func _resolve_nation_line_edge_sectors(
+	nation: Nation,
+	army_by_id: Dictionary,
+	besieged: Dictionary
+) -> void:
+	var sectors: Dictionary = nation.frontier_defense_sectors
+	for city_id_value in sectors.keys().duplicate():
+		var city_id := int(city_id_value)
+		var sector: FrontierDefenseSector = sectors[city_id]
+		if (
+			city_id < 0
+			or city_id >= state.cities.size()
+			or state.cities[city_id].owner_nation
+				!= nation.id
+		):
+			sector.state = FrontierDefenseSector.State.RETREATING
+			_retreat_lost_frontier_sector(
+				sector,
+				army_by_id
+			)
+			sectors.erase(city_id)
+			continue
+		if besieged.has(city_id):
 			if sector.state in [
-				FrontierDefenseSector.State.RECALLING,
-				FrontierDefenseSector.State.DEFENDING,
+				FrontierDefenseSector.State.NORMAL,
+				FrontierDefenseSector.State.RESTORING,
 			]:
-				sector.state = FrontierDefenseSector.State.RESTORING
-			if sector.state == FrontierDefenseSector.State.RESTORING:
-				_restore_frontier_sector(sector, army_by_id)
-		nation.frontier_defense_sectors = sectors
+				sector.state = (
+					FrontierDefenseSector.State.RECALLING
+				)
+			else:
+				sector.state = (
+					FrontierDefenseSector.State.DEFENDING
+				)
+			_recall_frontier_sector(sector, army_by_id)
+			continue
+		if sector.state in [
+			FrontierDefenseSector.State.RECALLING,
+			FrontierDefenseSector.State.DEFENDING,
+		]:
+			sector.state = FrontierDefenseSector.State.RESTORING
+		if sector.state == FrontierDefenseSector.State.RESTORING:
+			_restore_frontier_sector(sector, army_by_id)
+	nation.frontier_defense_sectors = sectors
 
 
 func _recall_frontier_sector(
