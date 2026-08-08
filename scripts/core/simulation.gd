@@ -263,9 +263,16 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		if state.uses_heightmap
 		else GRID_AI_DECISION_INTERVAL_DAYS
 	)
+	# 错峰下几乎每天都有一批国家到期；力求「有到期国家或需强制重算」即进入决策。
+	var force_recompute := _ai_last_decision_day == -1
 	var ai_decision_due := (
-		state.day % ai_decision_interval == 0
-		or _ai_last_decision_day == -1
+		force_recompute
+		or not _ai_nation_ids_for_day(
+			state.nations.size(),
+			state.day,
+			rotate_ai_nation_order,
+			ai_decision_interval
+		).is_empty()
 	)
 	if ai_decision_due:
 		if spread_runtime_work:
@@ -2623,6 +2630,9 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	var runtime_slice_started := Time.get_ticks_usec()
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
+	# 议和/宣战后（_ai_last_decision_day==-1）强制全体今天重算，忽略错峰相位：
+	# 国境刚变，所有国家都需立即按新边界重规划，且这是低频事件，偶发全量可接受。
+	var force_all_nations := _ai_last_decision_day == -1
 	_ai_last_decision_day = state.day
 	var nation_order := _ai_nation_ids_for_day(
 		state.nations.size(),
@@ -2632,7 +2642,8 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			AI_DECISION_INTERVAL_DAYS
 			if state.uses_heightmap
 			else GRID_AI_DECISION_INTERVAL_DAYS
-		)
+		),
+		force_all_nations
 	)
 	var managed_nations: Array[int] = []
 	var force_contexts := {}
@@ -3178,19 +3189,37 @@ func _strategy_snapshot_for(
 	return _ai_strategy_cache[view.nation_id]
 
 
+## 返回「今天应决策的国家」及其决策顺序。
+## 错峰：当国家数 > 决策周期时，把各国按相位 posmod(nation_id, interval) 均摊到
+## 周期内的不同天，每天只决策相位匹配的子集——每国仍每 interval 天决策一次，但
+## 计算量从「每周期一次性算全部」摊成「每天算一小批」，消除决策日的算力尖峰。
+## force_all=true（议和/宣战后强制重算）或国家数 <= 周期（含 2 国镜像基准）时，
+## 退化为「全体今天决策」，保持镜像对称与原有语义。
 static func _ai_nation_ids_for_day(
 	nation_count: int,
 	day: int,
 	rotate_order: bool = true,
-	decision_interval_days: int = AI_DECISION_INTERVAL_DAYS
+	decision_interval_days: int = AI_DECISION_INTERVAL_DAYS,
+	force_all: bool = false
 ) -> Array[int]:
 	var result: Array[int] = []
 	if nation_count <= 0:
 		return result
-	var decision_round := day / maxi(decision_interval_days, 1)
-	var start := posmod(decision_round, nation_count) if rotate_order else 0
-	for offset in range(nation_count):
-		result.append((start + offset) % nation_count)
+	var interval := maxi(decision_interval_days, 1)
+	var stagger := nation_count > interval and not force_all
+	var today_phase := posmod(day, interval)
+	# 先按相位筛出今天到期的国家（错峰关闭时全部到期）。
+	var due: Array[int] = []
+	for nation_id in range(nation_count):
+		if not stagger or posmod(nation_id, interval) == today_phase:
+			due.append(nation_id)
+	if due.is_empty():
+		return result
+	# 在到期集合内部轮转起点，保持决策先后顺序的长期公平性。
+	var decision_round := day / interval
+	var start := posmod(decision_round, due.size()) if rotate_order else 0
+	for offset in range(due.size()):
+		result.append(due[(start + offset) % due.size()])
 	return result
 
 

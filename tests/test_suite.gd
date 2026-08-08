@@ -5039,6 +5039,30 @@ func _test_ai_strategic_map_and_threat() -> void:
 			== [0, 1, 2, 3],
 		"国家决策起点必须按AI决策轮次轮换，旧版固定顺序仅用于A/B"
 	)
+	# 错峰：国家数 > 决策周期时，每天只返回相位 posmod(id,interval) 匹配当日的国家；
+	# 各相位在周期内互不重叠且并集为全体，保证每国每周期恰好决策一次。
+	var stagger_interval := 10
+	var stagger_union := {}
+	var stagger_ok := true
+	for phase_day in range(stagger_interval):
+		var due := Simulation._ai_nation_ids_for_day(
+			40, phase_day, false, stagger_interval
+		)
+		for nation_id in due:
+			# 该国相位必须等于当天相位，且不得跨天重复。
+			if nation_id % stagger_interval != phase_day or stagger_union.has(nation_id):
+				stagger_ok = false
+			stagger_union[nation_id] = true
+	_check(
+		stagger_ok and stagger_union.size() == 40,
+		"错峰必须把40国无重叠地均摊到10天，且并集覆盖全部国家：命中=%d" % stagger_union.size()
+	)
+	# force_all=true（议和/宣战后强制重算）或国家数<=周期（含2国镜像）时全体到期。
+	_check(
+		Simulation._ai_nation_ids_for_day(40, 3, false, stagger_interval, true).size() == 40
+		and Simulation._ai_nation_ids_for_day(2, 3, false, stagger_interval).size() == 2,
+		"强制重算或国家数不超过周期时必须全体今天决策，退化保持镜像对称"
+	)
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 1
