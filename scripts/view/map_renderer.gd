@@ -36,8 +36,6 @@ const DETAIL_PANEL_MARGIN: float = 18.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
-const ARMY_FOLLOW_HALF_LIFE_MIN: float = 0.10
-const ARMY_FOLLOW_HALF_LIFE_MAX: float = 0.25
 const PAPER_COLOR := Color(0.73, 0.61, 0.42)
 const PAPER_LIGHT := Color(0.86, 0.76, 0.57)
 const PAPER_DARK := Color(0.24, 0.19, 0.12)
@@ -105,6 +103,12 @@ var _city_name_button: Button
 var _prev_pos: Dictionary = {}             ## army.id -> 上一 tick 末的逻辑位置
 var _curr_pos: Dictionary = {}             ## army.id -> 当前 tick 末的逻辑位置
 var _presented_pos: Dictionary = {}         ## army.id -> 最近一次实际绘制位置
+## tick 间线性插值时基：军队按真实经过时间从 _prev_pos 匀速滑向 _curr_pos，
+## 与该 tick 的计算实际跨了几帧解耦。_tick_duration 平滑跟踪 tick 的真实提交
+## 节奏（详见 _sync_snapshots），避免分帧导致的「冻结数帧再猛跳」顿挫。
+var _tick_elapsed: float = 0.0
+var _tick_duration: float = 1.0
+var _last_commit_usec: int = 0
 var _last_day: int = -1
 
 
@@ -115,6 +119,9 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_prev_pos.clear()
 	_curr_pos.clear()
 	_presented_pos.clear()
+	_tick_elapsed = 0.0
+	_tick_duration = 1.0
+	_last_commit_usec = 0
 	_last_day = -1
 	if not sim.runtime_day_committed.is_connected(
 		_on_runtime_day_committed
@@ -326,7 +333,7 @@ static func create_ui_font() -> Font:
 func _process(_delta: float) -> void:
 	_blink += _delta
 	_redraw_elapsed += _delta
-	_advance_army_presentation(_delta)
+	_advance_tick_interpolation(_delta)
 	var previous_day := _last_day
 	_sync_snapshots()
 	var viewport_size := get_viewport_rect().size
@@ -888,6 +895,22 @@ func _sync_snapshots() -> void:
 	var old_curr: Dictionary = _curr_pos
 	var presented_before: Dictionary = _presented_pos.duplicate()
 	_last_day = state.day
+	# 本 tick 视觉时长跟踪「tick 提交的真实墙钟节奏」：取上一 tick 到本次提交的
+	# 间隔，对 _tick_duration 做指数平滑（避免决策日的偶发长间隔突然拉长紧随的
+	# 普通日视觉时长而抖动），下限 seconds_per_day。这样无论某个 tick 计算跨了
+	# 几帧，军队都在与实际推进节奏相称、且平稳变化的时长内匀速滑完这一步。
+	var now_usec := Time.get_ticks_usec()
+	var day_seconds := sim.seconds_per_day if sim != null else 1.0
+	if _last_commit_usec > 0:
+		var measured := maxf(
+			float(now_usec - _last_commit_usec) / 1_000_000.0,
+			day_seconds
+		)
+		_tick_duration = lerpf(_tick_duration, measured, 0.35)
+	else:
+		_tick_duration = day_seconds
+	_last_commit_usec = now_usec
+	_tick_elapsed = 0.0
 	_prev_pos = {}
 	_curr_pos = {}
 	_visual_animation_active = not state.battles.is_empty()
@@ -2147,46 +2170,31 @@ func _battle_pixel(b: Battle) -> Vector2:
 	return _origin
 
 
-## 军队渲染位置：从上一帧实际显示位置连续过渡到最新已提交逻辑位置。
+## 军队渲染位置：按 tick 内真实经过时间，在上一 tick 位置与当前 tick 位置之间
+## 匀速插值（smoothstep 收尾更自然）。进度 t 用墙钟时间而非「目标是否更新」驱动，
+## 因此 tick 计算横跨多帧（分帧）时军队仍匀速前进，不会冻结再猛跳。
 func _army_position(army: Army) -> Vector2:
 	var curr: Vector2 = _curr_pos.get(army.id, _logical_grid_pos(army))
-	var g: Vector2 = _presented_pos.get(
-		army.id,
-		_prev_pos.get(army.id, curr)
-	)
+	var prev: Vector2 = _prev_pos.get(army.id, curr)
+	var t := clampf(_tick_elapsed / maxf(_tick_duration, 0.0001), 0.0, 1.0)
+	var eased := smoothstep(0.0, 1.0, t)
+	var g := prev.lerp(curr, eased)
 	_presented_pos[army.id] = g
 	return _grid_to_pixel(g)
 
 
-func _advance_army_presentation(delta: float) -> void:
+## 累积当前 tick 已经过的真实时间。tick 计算进行中（分帧）也照常累积——军队据此
+## 持续朝 _curr_pos 匀速滑行；暂停/结束则冻结进度。目标位置的轮转仍由 tick 提交
+## 时的 _sync_snapshots 负责。
+func _advance_tick_interpolation(delta: float) -> void:
 	if (
 		sim == null
 		or state == null
 		or sim.paused
 		or state.winner != -1
-		or _curr_pos.is_empty()
 	):
 		return
-	var half_life := clampf(
-		sim.seconds_per_day,
-		ARMY_FOLLOW_HALF_LIFE_MIN,
-		ARMY_FOLLOW_HALF_LIFE_MAX
-	)
-	var follow := 1.0 - pow(0.5, maxf(delta, 0.0) / half_life)
-	var live_armies := {}
-	for army in state.armies:
-		if army.size <= 0 or not _curr_pos.has(army.id):
-			continue
-		live_armies[army.id] = true
-		var target := _curr_pos[army.id] as Vector2
-		var current := _presented_pos.get(
-			army.id,
-			_prev_pos.get(army.id, target)
-		) as Vector2
-		_presented_pos[army.id] = current.lerp(target, follow)
-	for army_id in _presented_pos.keys():
-		if not live_armies.has(army_id):
-			_presented_pos.erase(army_id)
+	_tick_elapsed += maxf(delta, 0.0)
 
 
 ## 军队逻辑位置使用归一化地图坐标，与像素布局无关（便于跨帧/缩放插值）。

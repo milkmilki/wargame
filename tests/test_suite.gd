@@ -4959,33 +4959,37 @@ func _test_retreat_contact_and_position_continuity() -> void:
 		),
 		"提交后的第一帧必须保持 C0 位置连续"
 	)
+	# 时间基线性插值：军队在 _tick_duration 内按真实经过时间从 _prev_pos 匀速
+	# （smoothstep 缓动）滑向 _curr_pos，与该 tick 计算跨了几帧无关。
+	var interp_prev := Vector2(0.31, 0.47)
 	var follow_target := Vector2(0.71, 0.47)
-	renderer._curr_pos = {
-		third_party.id: follow_target,
-	}
-	renderer._presented_pos = {
-		third_party.id: presentation_anchor,
-	}
-	sim.seconds_per_day = 0.25
-	sim._runtime_day_in_progress = true
-	renderer._advance_army_presentation(0.25)
-	var halfway := renderer._presented_pos[
-		third_party.id
-	] as Vector2
+	renderer._prev_pos = {third_party.id: interp_prev}
+	renderer._curr_pos = {third_party.id: follow_target}
+	renderer._tick_duration = 0.25
+	renderer._tick_elapsed = 0.0
+	sim.paused = false
+	gs.winner = -1
+	_check(
+		renderer._army_position(third_party).is_equal_approx(
+			renderer._grid_to_pixel(interp_prev)
+		),
+		"tick 起点（t=0）必须停在上一 tick 位置，保证 C0 连续"
+	)
+	# 推进半个 tick 时长：t=0.5，smoothstep(0.5)=0.5，恰好中点。
+	renderer._advance_tick_interpolation(0.125)
+	var halfway := renderer._army_position(third_party)
 	_check(
 		halfway.is_equal_approx(
-			presentation_anchor.lerp(follow_target, 0.5)
+			renderer._grid_to_pixel(interp_prev.lerp(follow_target, 0.5))
 		),
-		"有界跟随在一个半衰期后应走完剩余距离的一半"
+		"半个 tick 时长后应位于两端中点（smoothstep 对称）"
 	)
-	renderer._advance_army_presentation(1.0)
-	var approached := renderer._presented_pos[
-		third_party.id
-	] as Vector2
+	# 推进超过整个 tick 时长：t 被 clamp 到 1，停在目标，永不越过。
+	renderer._advance_tick_interpolation(1.0)
+	var arrived := renderer._army_position(third_party)
 	_check(
-		approached.x > halfway.x
-		and approached.x < follow_target.x,
-		"长事务期间兵牌必须继续接近目标且永不越过目标"
+		arrived.is_equal_approx(renderer._grid_to_pixel(follow_target)),
+		"超过一个 tick 时长后必须精确停在目标位置，永不越过"
 	)
 	renderer.free()
 	sim.free()
