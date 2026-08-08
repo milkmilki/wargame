@@ -144,6 +144,9 @@ var ai_strategic_planning_overrides: Dictionary = {}
 var ai_adaptive_garrison_overrides: Dictionary = {}
 ## 隔离军事状态机测试时可关闭；正式游戏始终保持 true。
 var diplomacy_enabled: bool = true
+## AI 决策错峰：true 时各国按相位分散到决策周期内的不同天（削峰）；false 时全体
+## 在 day%interval==0 同日决策（错峰前的旧行为）。仅用于 A/B 对照平衡性影响。
+var ai_staggered_decisions: bool = true
 ## 等价性守卫用：置 true 强制补给网络每天全量重建（指纹缓存前的旧行为），
 ## 正式游戏始终 false，走指纹选择性失效。
 var supply_network_cache_disabled: bool = false
@@ -264,16 +267,20 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		else GRID_AI_DECISION_INTERVAL_DAYS
 	)
 	# 错峰下几乎每天都有一批国家到期；力求「有到期国家或需强制重算」即进入决策。
+	# 关闭错峰（A/B 对照）时退回旧门控：仅在 day%interval==0 全体决策。
 	var force_recompute := _ai_last_decision_day == -1
-	var ai_decision_due := (
-		force_recompute
-		or not _ai_nation_ids_for_day(
+	var ai_decision_due := force_recompute
+	if ai_staggered_decisions:
+		ai_decision_due = ai_decision_due or not _ai_nation_ids_for_day(
 			state.nations.size(),
 			state.day,
 			rotate_ai_nation_order,
-			ai_decision_interval
+			ai_decision_interval,
+			false,
+			true
 		).is_empty()
-	)
+	else:
+		ai_decision_due = ai_decision_due or state.day % ai_decision_interval == 0
 	if ai_decision_due:
 		if spread_runtime_work:
 			await _ai_assign_targets(true)
@@ -2643,7 +2650,8 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			if state.uses_heightmap
 			else GRID_AI_DECISION_INTERVAL_DAYS
 		),
-		force_all_nations
+		force_all_nations,
+		ai_staggered_decisions
 	)
 	var managed_nations: Array[int] = []
 	var force_contexts := {}
@@ -3200,13 +3208,14 @@ static func _ai_nation_ids_for_day(
 	day: int,
 	rotate_order: bool = true,
 	decision_interval_days: int = AI_DECISION_INTERVAL_DAYS,
-	force_all: bool = false
+	force_all: bool = false,
+	stagger_enabled: bool = true
 ) -> Array[int]:
 	var result: Array[int] = []
 	if nation_count <= 0:
 		return result
 	var interval := maxi(decision_interval_days, 1)
-	var stagger := nation_count > interval and not force_all
+	var stagger := stagger_enabled and nation_count > interval and not force_all
 	var today_phase := posmod(day, interval)
 	# 先按相位筛出今天到期的国家（错峰关闭时全部到期）。
 	var due: Array[int] = []
