@@ -150,6 +150,9 @@ var supply_network_cache_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_supply（不分帧），
 ## 以隔离「补给分帧」相对「补给同步」在同一运行时路径下的等价性。正式游戏 false。
 var supply_frame_slicing_disabled: bool = false
+## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_reinforcements（不分帧），
+## 以隔离「补员分帧」在同一运行时路径下的等价性。正式游戏 false。
+var reinforcement_frame_slicing_disabled: bool = false
 
 
 
@@ -230,7 +233,10 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	# 每月结算资源生产、补员与外交；普通军粮在下方每日重新分配。
 	if state.day % DAYS_PER_MONTH == 0:
 		_resolve_economy()
-		_resolve_reinforcements()
+		if spread_runtime_work and not reinforcement_frame_slicing_disabled:
+			await _resolve_reinforcements_over_frames()
+		else:
+			_resolve_reinforcements()
 		if spread_runtime_work:
 			await _resolve_diplomacy_over_frames()
 		else:
@@ -719,130 +725,163 @@ func _resolve_military_finance() -> void:
 # ------------------------------------------------------------------ 1b. 全国人口补员
 
 func _resolve_reinforcements() -> void:
-	# 先按国家分桶（O(A)），避免对每个国家都全表扫描 state.armies（原 O(N×A)，
-	# 40 国 × 数百军是月结算主线程 ~1s 卡顿的根因）。桶内保持 state.armies 原序，
-	# 与旧实现逐军遍历顺序一致，补员结果不变。
+	# 同步驱动：一次性完成全国补员（测试与快进路径用）。运行时改走
+	# _resolve_reinforcements_over_frames 把 40 国循环分摊到多帧。
+	var armies_by_nation := _bucket_armies_by_nation()
+	var food_cache := {}
+	for nation in state.nations:
+		_reinforce_nation(
+			nation,
+			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army],
+			food_cache
+		)
+
+
+## 运行时分帧驱动：与 _resolve_reinforcements 逐国等价，但在国与国之间按墙钟预算
+## yield。各国只写自身 manpower_pool 与自身军队 size，彼此独立；食物评估共享的
+## food_cache 只读且与结算顺序无关，故切帧不改变任何结果（由等价守卫覆盖）。
+func _resolve_reinforcements_over_frames() -> void:
+	var armies_by_nation := _bucket_armies_by_nation()
+	var food_cache := {}
+	var slice_started := Time.get_ticks_usec()
+	for nation in state.nations:
+		_reinforce_nation(
+			nation,
+			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army],
+			food_cache
+		)
+		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+			await get_tree().process_frame
+			slice_started = Time.get_ticks_usec()
+
+
+## 按国家给 state.armies 分桶（O(A)），桶内保持原序。避免每国全表扫描（原 O(N×A），
+## 40 国 × 数百军是月结算主线程卡顿的根因）；桶序与旧实现一致，补员结果不变。
+func _bucket_armies_by_nation() -> Dictionary:
 	var armies_by_nation := {}
 	for army in state.armies:
 		if not armies_by_nation.has(army.owner_nation):
 			armies_by_nation[army.owner_nation] = [] as Array[Army]
 		(armies_by_nation[army.owner_nation] as Array[Army]).append(army)
-	# 40 国共享同一 evaluation_cache：war_food_report 链路的边表矩阵、tick 级
-	# 只读评估（troops/food_stock/frontier/garrison）本就与结算顺序无关，共享后
-	# 从每国 O(N×A) 冷调降为一次构建，削减月结算日的主线程开销。
-	var food_cache := {}
-	for nation in state.nations:
-		var at_war := not state.wars_of(nation.id).is_empty()
-		var nation_armies := (
-			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army]
+	return armies_by_nation
+
+
+## 单国当月补员（逐国独立：只读食物评估共享 food_cache，只写本国 manpower_pool
+## 与本国军队 size）。food_cache 携带 war_food_report 链路的边表矩阵/tick 级评估，
+## 40 国共享后从每国 O(N×A) 冷调降为一次构建。
+func _reinforce_nation(
+	nation: Nation,
+	nation_armies: Array[Army],
+	food_cache: Dictionary
+) -> void:
+	var at_war := not state.wars_of(nation.id).is_empty()
+	var food_report := _food_security_report(
+		nation.id,
+		nation_armies,
+		food_cache
+	)
+	var food_manpower_budget := _food_growth_manpower_budget(food_report)
+	if food_manpower_budget <= 0:
+		return
+	var protected_reserve := (
+		PEACETIME_MANPOWER_RESERVE
+		if not at_war
+		else 0
+	)
+	var available_manpower := maxi(
+		nation.manpower_pool - protected_reserve,
+		0
+	)
+	available_manpower = mini(available_manpower, food_manpower_budget)
+	if available_manpower <= 0:
+		return
+	var plans: Array = []
+	var total_deficit := 0
+	for army in nation_armies:
+		if not _can_reinforce_army(army):
+			continue
+		var target_size := army.max_size
+		if not at_war:
+			target_size = int(ceil(
+				float(army.max_size) * PEACETIME_STRENGTH_RATIO
+			))
+		var deficit := mini(
+			maxi(target_size - army.size, 0),
+			REINFORCE_PER_ARMY_PER_MONTH
 		)
-		var food_report := _food_security_report(
+		if deficit <= 0:
+			continue
+		plans.append({
+			"army": army,
+			"deficit": deficit,
+			"grant": 0,
+			"priority": _reinforcement_priority(army),
+		})
+		total_deficit += deficit
+	if plans.is_empty():
+		return
+	plans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var army_a: Army = a["army"]
+		var army_b: Army = b["army"]
+		var priority_a := int(a["priority"])
+		var priority_b := int(b["priority"])
+		if priority_a != priority_b:
+			return priority_a > priority_b
+		var fill_a := float(army_a.size) / float(maxi(army_a.max_size, 1))
+		var fill_b := float(army_b.size) / float(maxi(army_b.max_size, 1))
+		if not is_equal_approx(fill_a, fill_b):
+			return fill_a < fill_b
+		return EquivariantOrder.army_less(
+			state,
 			nation.id,
-			nation_armies,
-			food_cache
+			army_a,
+			army_b
 		)
-		var food_manpower_budget := _food_growth_manpower_budget(food_report)
-		if food_manpower_budget <= 0:
-			continue
-		var protected_reserve := (
-			PEACETIME_MANPOWER_RESERVE
-			if not at_war
-			else 0
-		)
-		var available_manpower := maxi(
-			nation.manpower_pool - protected_reserve,
-			0
-		)
-		available_manpower = mini(available_manpower, food_manpower_budget)
-		if available_manpower <= 0:
-			continue
-		var plans: Array = []
-		var total_deficit := 0
-		for army in nation_armies:
-			if not _can_reinforce_army(army):
-				continue
-			var target_size := army.max_size
-			if not at_war:
-				target_size = int(ceil(
-					float(army.max_size) * PEACETIME_STRENGTH_RATIO
-				))
-			var deficit := mini(
-				maxi(target_size - army.size, 0),
-				REINFORCE_PER_ARMY_PER_MONTH
-			)
-			if deficit <= 0:
-				continue
-			plans.append({
-				"army": army,
-				"deficit": deficit,
-				"grant": 0,
-				"priority": _reinforcement_priority(army),
-			})
-			total_deficit += deficit
-		if plans.is_empty():
-			continue
-		plans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			var army_a: Army = a["army"]
-			var army_b: Army = b["army"]
-			var priority_a := int(a["priority"])
-			var priority_b := int(b["priority"])
-			if priority_a != priority_b:
-				return priority_a > priority_b
-			var fill_a := float(army_a.size) / float(maxi(army_a.max_size, 1))
-			var fill_b := float(army_b.size) / float(maxi(army_b.max_size, 1))
-			if not is_equal_approx(fill_a, fill_b):
-				return fill_a < fill_b
-			return EquivariantOrder.army_less(
-				state,
-				nation.id,
-				army_a,
-				army_b
-			)
-		)
-		var budget := mini(available_manpower, total_deficit)
-		if budget >= total_deficit:
-			for plan in plans:
-				plan["grant"] = plan["deficit"]
-		else:
-			var remainder := budget
-			var index := 0
-			while index < plans.size() and remainder > 0:
-				var priority := int(plans[index]["priority"])
-				var end := index
-				var tier_deficit := 0
-				while (
-					end < plans.size()
-					and int(plans[end]["priority"]) == priority
-				):
-					tier_deficit += int(plans[end]["deficit"])
-					end += 1
-				var tier_budget := mini(remainder, tier_deficit)
-				var tier_granted := 0
-				for i in range(index, end):
-					var share := int(floor(
-						float(tier_budget)
-						* float(plans[i]["deficit"])
-						/ float(maxi(tier_deficit, 1))
-					))
-					plans[i]["grant"] = share
-					tier_granted += share
-				var tier_remainder := tier_budget - tier_granted
-				for i in range(index, end):
-					if tier_remainder <= 0:
-						break
-					if int(plans[i]["grant"]) >= int(plans[i]["deficit"]):
-						continue
-					plans[i]["grant"] = int(plans[i]["grant"]) + 1
-					tier_remainder -= 1
-				remainder -= tier_budget
-				index = end
-		var spent := 0
+	)
+	var budget := mini(available_manpower, total_deficit)
+	if budget >= total_deficit:
 		for plan in plans:
-			var grant: int = plan["grant"]
-			var army: Army = plan["army"]
-			army.size += grant
-			spent += grant
-		nation.manpower_pool -= spent
+			plan["grant"] = plan["deficit"]
+	else:
+		var remainder := budget
+		var index := 0
+		while index < plans.size() and remainder > 0:
+			var priority := int(plans[index]["priority"])
+			var end := index
+			var tier_deficit := 0
+			while (
+				end < plans.size()
+				and int(plans[end]["priority"]) == priority
+			):
+				tier_deficit += int(plans[end]["deficit"])
+				end += 1
+			var tier_budget := mini(remainder, tier_deficit)
+			var tier_granted := 0
+			for i in range(index, end):
+				var share := int(floor(
+					float(tier_budget)
+					* float(plans[i]["deficit"])
+					/ float(maxi(tier_deficit, 1))
+				))
+				plans[i]["grant"] = share
+				tier_granted += share
+			var tier_remainder := tier_budget - tier_granted
+			for i in range(index, end):
+				if tier_remainder <= 0:
+					break
+				if int(plans[i]["grant"]) >= int(plans[i]["deficit"]):
+					continue
+				plans[i]["grant"] = int(plans[i]["grant"]) + 1
+				tier_remainder -= 1
+			remainder -= tier_budget
+			index = end
+	var spent := 0
+	for plan in plans:
+		var grant: int = plan["grant"]
+		var army: Army = plan["army"]
+		army.size += grant
+		spent += grant
+	nation.manpower_pool -= spent
 
 
 func _reinforcement_priority(army: Army) -> int:
