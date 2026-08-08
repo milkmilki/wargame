@@ -5776,6 +5776,13 @@ func _advance_campaign_echelons() -> void:
 	for nation in state.nations:
 		if not nation.alive or nation.campaign_plan_targets.is_empty():
 			continue
+		# 本国军队一次成表，供下方三个梯队函数按 (目标,梯队) 反复筛选时复用，替代
+		# 各自 for army in state.armies 全表扫描。40 国实测帧收益微小（campaign 目标
+		# 通常很少），但把 O(国×目标×A) 降为 O(国×目标×本国军)，为百国规模留出余量。
+		var nation_armies: Array[Army] = []
+		for army in state.armies:
+			if army.owner_nation == nation.id and army.size > 0:
+				nation_armies.append(army)
 		var targets := nation.campaign_plan_targets.duplicate()
 		EquivariantOrder.sort_city_ids(
 			targets,
@@ -5805,7 +5812,8 @@ func _advance_campaign_echelons() -> void:
 			if _campaign_echelon_operational(
 				nation.id,
 				target_city,
-				active_echelon
+				active_echelon,
+				nation_armies
 			):
 				# 同梯队可能因首段道路容量暂未出发；容量释放后继续执行同一命令。
 				_launch_campaign_echelon_members(
@@ -5813,19 +5821,22 @@ func _advance_campaign_echelons() -> void:
 					target_city,
 					active_echelon,
 					false,
-					false
+					false,
+					nation_armies
 				)
 				if _campaign_echelon_engaged_at_target(
 					nation.id,
 					target_city,
-					active_echelon
+					active_echelon,
+					nation_armies
 				):
 					_launch_campaign_echelon_members(
 						nation.id,
 						target_city,
 						active_echelon + 1,
 						true,
-						false
+						false,
+						nation_armies
 					)
 				continue
 			_launch_campaign_echelon_members(
@@ -5833,17 +5844,19 @@ func _advance_campaign_echelons() -> void:
 				target_city,
 				active_echelon + 1,
 				true,
-				true
+				true,
+				nation_armies
 			)
 
 
 func _campaign_echelon_engaged_at_target(
 	nation_id: int,
 	target_city: int,
-	echelon: int
+	echelon: int,
+	nation_armies: Array[Army]
 ) -> bool:
 	var nation := state.nations[nation_id]
-	for army in state.armies:
+	for army in nation_armies:
 		if (
 			army.owner_nation != nation_id
 			or army.size <= 0
@@ -5878,10 +5891,11 @@ func _campaign_echelon_engaged_at_target(
 func _campaign_echelon_operational(
 	nation_id: int,
 	target_city: int,
-	echelon: int
+	echelon: int,
+	nation_armies: Array[Army]
 ) -> bool:
 	var nation := state.nations[nation_id]
-	for army in state.armies:
+	for army in nation_armies:
 		if (
 			army.owner_nation == nation_id
 			and army.size > 0
@@ -5912,12 +5926,13 @@ func _launch_campaign_echelon_members(
 	target_city: int,
 	echelon: int,
 	followup: bool,
-	require_sufficient: bool
+	require_sufficient: bool,
+	nation_armies: Array[Army]
 ) -> bool:
 	var nation := state.nations[nation_id]
 	var attackers: Array[Army] = []
 	var ready_troops := 0
-	for army in state.armies:
+	for army in nation_armies:
 		if (
 			army.owner_nation != nation_id
 			or army.size <= 0
