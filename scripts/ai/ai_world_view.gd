@@ -209,11 +209,15 @@ static func build(
 		elif game_state.is_allied(owner_nation, other.id):
 			view.allied_armies.append_array(other_armies)
 	# AI 军队迭代顺序必须随势力镜像一起变换，不能读取创建顺序 id。
-	view.friendly_armies.sort_custom(func(a: Army, b: Army) -> bool:
-		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
+	EquivariantOrder.sort_armies(
+		view.friendly_armies,
+		game_state,
+		owner_nation
 	)
-	view.enemy_armies.sort_custom(func(a: Army, b: Army) -> bool:
-		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
+	EquivariantOrder.sort_armies(
+		view.enemy_armies,
+		game_state,
+		owner_nation
 	)
 	for enemy in view.enemy_armies:
 		if enemy.on_edge and enemy.move_to != -1:
@@ -244,8 +248,10 @@ static func build(
 					enemy.location_city
 				] as Array[Army]
 			).append(enemy)
-	view.allied_armies.sort_custom(func(a: Army, b: Army) -> bool:
-		return EquivariantOrder.army_less(game_state, owner_nation, a, b)
+	EquivariantOrder.sort_armies(
+		view.allied_armies,
+		game_state,
+		owner_nation
 	)
 	return view
 

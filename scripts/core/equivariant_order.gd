@@ -282,6 +282,64 @@ static func army_less(
 	return false
 
 
+## 按与 army_less 完全相同的词典序批量排序，但每支军队只生成一次键。
+## 避免 sort_custom 在 O(A log A) 次比较中反复计算国家锚点、插值位置与目标城市排名。
+static func sort_armies(
+	values: Array[Army],
+	state: GameState,
+	nation_id: int,
+	anchor_city_id: int = -1
+) -> void:
+	if values.size() < 2:
+		return
+	var origin := _nation_anchor(state, nation_id)
+	if _valid_city(state, anchor_city_id):
+		origin = state.cities[anchor_city_id].map_position
+	var sign := _nation_forward_sign(state, nation_id)
+	var city_ranks := city_rank_map(
+		state,
+		nation_id,
+		anchor_city_id
+	)
+	var keys := {}
+	for army in values:
+		var position := army_position(state, army)
+		var target := (
+			army.move_to
+			if army.move_to >= 0
+			else army.ai_target_city
+		)
+		keys[army] = [
+			_quantize(
+				_oriented_x(position, origin, sign),
+				POSITION_SCALE
+			),
+			_quantize(position.y, POSITION_SCALE),
+			army.state,
+			1 if army.encounter_blocked else 0,
+			army.size,
+			army.max_size,
+			army.attack,
+			army.defense,
+			_quantize(army.morale, VALUE_SCALE),
+			_quantize(army.supply_ratio, VALUE_SCALE),
+			army.holding_days,
+			_quantize(army.move_progress, VALUE_SCALE),
+			int(city_ranks.get(target, 1 << 30)),
+			army.ai_action,
+			army.ai_order_until_day,
+			army.defensive_deployment_until_day,
+			_quantize(
+				army.offensive_attack_multiplier,
+				VALUE_SCALE
+			),
+			army.offensive_bonus_until_day,
+		]
+	values.sort_custom(func(a: Army, b: Army) -> bool:
+		return _key_less(keys[a], keys[b])
+	)
+
+
 static func army_key(
 	state: GameState,
 	nation_id: int,
@@ -484,6 +542,22 @@ static func mirror_orbit_army_less(
 	return _key_less(
 		mirror_orbit_army_key(state, a),
 		mirror_orbit_army_key(state, b)
+	)
+
+
+## 按与 mirror_orbit_army_less 完全相同的词典序批量排序，
+## 避免 sort_custom 在每次比较时重复计算位置与势力中心。
+static func sort_armies_by_mirror_orbit(
+	values: Array[Army],
+	state: GameState
+) -> void:
+	if values.size() < 2:
+		return
+	var keys := {}
+	for army in values:
+		keys[army] = mirror_orbit_army_key(state, army)
+	values.sort_custom(func(a: Army, b: Army) -> bool:
+		return _key_less(keys[a], keys[b])
 	)
 
 
