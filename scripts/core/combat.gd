@@ -791,7 +791,7 @@ static func frontline_allocation(
 		if (
 			remaining <= 0
 			or army.size <= 0
-			or army.morale <= ARMY_ROUT_THRESHOLD
+				or army.combat_morale() <= ARMY_ROUT_THRESHOLD
 		):
 			continue
 		var committed := mini(army.size, remaining)
@@ -843,7 +843,7 @@ static func _side_combat_efficiency(side: Array[Army]) -> float:
 		nominal_attack += army_nominal
 		effective_attack += (
 			army_nominal
-			* combat_efficiency(army.morale)
+				* combat_efficiency(army.combat_morale())
 		)
 	return (
 		effective_attack / nominal_attack
@@ -979,15 +979,21 @@ static func _adjust_frontline_morale_mass(
 				/ float(total_weight)
 			)
 			var old_morale := army.morale
+			var morale_multiplier := army.offensive_multiplier()
 			army.morale = clampf(
 				army.morale
-					- requested_mass / float(maxi(army.size, 1)),
+					- requested_mass
+						/ (
+							float(maxi(army.size, 1))
+							* morale_multiplier
+						),
 				MORALE_FLOOR,
 				army.max_morale
 			)
 			var applied_mass := (
 				(old_morale - army.morale)
 				* float(army.size)
+				* morale_multiplier
 			)
 			changed += applied_mass
 			if (
@@ -1008,7 +1014,7 @@ static func _side_morale_mass(side: Array[Army]) -> float:
 	var total := 0.0
 	for army in side:
 		if army.size > 0:
-			total += float(army.size) * army.morale
+			total += float(army.size) * army.combat_morale()
 	return total
 
 
@@ -1016,7 +1022,7 @@ static func _side_max_morale_mass(side: Array[Army]) -> float:
 	var total := 0.0
 	for army in side:
 		if army.size > 0:
-			total += float(army.size) * army.max_morale
+			total += float(army.size) * army.combat_max_morale()
 	return total
 
 
@@ -1028,7 +1034,7 @@ static func _extract_routed_armies(
 		var army := side[index]
 		if (
 			army.size > 0
-			and army.morale <= ARMY_ROUT_THRESHOLD
+			and army.combat_morale() <= ARMY_ROUT_THRESHOLD
 		):
 			routed.push_front(army)
 			side.remove_at(index)
@@ -1047,7 +1053,10 @@ static func _side_residual(side: Array[Army]) -> float:
 	var total := 0.0
 	for a in side:
 		if a.size > 0:
-			total += float(a.size) * combat_efficiency(a.morale)
+			total += (
+				float(a.size)
+				* combat_efficiency(a.combat_morale())
+			)
 	return total
 
 
@@ -1059,7 +1068,9 @@ static func _combined_side_morale(
 	var total_size := _side_size(active)
 	for army in routed:
 		if army.size > 0:
-			morale_mass += float(army.size) * army.morale
+			morale_mass += (
+				float(army.size) * army.combat_morale()
+			)
 			total_size += army.size
 	return (
 		morale_mass / float(total_size)
@@ -1083,7 +1094,7 @@ static func _side_attack(side: Array[Army]) -> float:
 				float(a.size)
 				* float(a.attack)
 				* maxf(a.offensive_attack_multiplier, 1.0)
-				* combat_efficiency(a.morale)
+					* combat_efficiency(a.combat_morale())
 			)
 	return total
 
@@ -1105,7 +1116,7 @@ static func effective_siege_strength(
 		var army: Army = entry["army"]
 		total += (
 			float(entry["committed"])
-			* combat_efficiency(army.morale)
+				* combat_efficiency(army.combat_morale())
 			* clampf(army.supply_ratio, 0.0, 1.0)
 		)
 	return maxi(int(round(total)), 0)
@@ -1159,7 +1170,7 @@ static func _erode_side_morale(side: Array[Army], base_erode: float) -> void:
 		if a.starving:
 			e += MORALE_STARVE_DECAY
 		a.morale = clampf(
-			a.morale - e,
+			a.morale - e / a.offensive_multiplier(),
 			MORALE_FLOOR,
 			a.max_morale
 		)

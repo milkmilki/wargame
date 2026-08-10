@@ -1875,7 +1875,7 @@ func _draw_armies() -> void:
 			)
 		_draw_morale_bar(
 			rect,
-			army.morale_ratio(),
+				army.combat_morale_ratio(),
 			icon_scale
 		)
 
@@ -2191,7 +2191,6 @@ func _advance_tick_interpolation(delta: float) -> void:
 		sim == null
 		or state == null
 		or sim.paused
-		or state.winner != -1
 	):
 		return
 	_tick_elapsed += maxf(delta, 0.0)
@@ -2225,7 +2224,13 @@ func _draw_hud() -> void:
 	var header_y := 20.0 * _display_scale
 	var status := "暂停" if sim.paused else "推演中"
 	if state.winner != -1:
-		status = "国%d 胜利" % state.winner
+		status = (
+			"国%d 已统一 · %s"
+			% [
+				state.winner,
+				"暂停" if sim.paused else "继续推演",
+			]
+		)
 	var header_rect := Rect2(
 		Vector2(_side_margin - 10.0 * _display_scale, 5.0 * _display_scale),
 		Vector2(

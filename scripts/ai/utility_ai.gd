@@ -226,7 +226,7 @@ static func _attack_candidate(
 	army: Army,
 	minimum_participant_ratio: float
 ) -> ActionCandidate:
-	if army.morale < 0.5 or view.nearest_supply_city(army)[0] == -1:
+	if army.combat_morale() < 0.5 or view.nearest_supply_city(army)[0] == -1:
 		return null
 	var start := army.location_city
 	var field := view.path_field(
@@ -724,7 +724,7 @@ static func _adjacent_assault_pool(
 				not eligible
 				or army.starving
 				or army.supply_ratio < 0.75
-				or army.morale < 0.5
+					or army.combat_morale() < 0.5
 			):
 				continue
 			var march_days := Simulation.edge_travel_days(edge)
@@ -867,7 +867,7 @@ static func _choose_holding(
 		)
 	if (
 		view.state.is_enemy(view.nation_id, target_city.owner_nation)
-		and army.morale >= 0.70
+			and army.combat_morale() >= 0.70
 		and army.supply_ratio >= 0.75
 	):
 		var garrison_size := 0

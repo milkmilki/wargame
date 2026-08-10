@@ -27,6 +27,7 @@ func _init() -> void:
 	_test_starvation_morale()
 	_test_persistent_morale()
 	_test_simulation_progress()
+	_test_post_unification_continuation()
 	_test_determinism()
 	_test_time_layering()
 	_test_siege_dice()
@@ -61,6 +62,7 @@ func _init() -> void:
 	_test_ai_encirclement_breakout_and_relief()
 	_test_manpower_pool_and_force_commands()
 	_test_diplomacy_state_and_ai()
+	_test_alliance_war_coalitions()
 	_test_peacetime_demobilization_and_border_defense()
 	_test_resource_hubs_and_food_mobilization()
 	_test_small_nation_survival_and_emergency_recruitment()
@@ -1630,6 +1632,38 @@ func _test_battle_basics() -> void:
 		),
 		"AI综合战力应按sqrt(攻击倍率)识别限时攻势威胁"
 	)
+	var tired_normal := _make_army(8, 0, 1000, 10, 10)
+	var tired_prepared := _make_army(9, 0, 1000, 10, 10)
+	tired_normal.morale = 0.4
+	tired_prepared.morale = 0.4
+	tired_prepared.offensive_attack_multiplier = 1.5
+	_check(
+		_approx(tired_prepared.combat_morale(), 0.6)
+			and _approx(tired_prepared.combat_max_morale(), 1.5)
+			and _approx(tired_prepared.combat_morale_ratio(), 0.6)
+			and _approx(
+				ArmyPower.effective(tired_prepared)
+					/ ArmyPower.effective(tired_normal),
+				1.5 * sqrt(1.5)
+			),
+		"攻势准备必须以攻击加成的同一倍率临时提高有效士气和AI战力"
+	)
+	var near_rout_normal := _make_army(10, 0, 1000, 10, 10)
+	var near_rout_prepared := _make_army(11, 0, 1000, 10, 10)
+	near_rout_normal.morale = Combat.ARMY_ROUT_THRESHOLD * 0.75
+	near_rout_prepared.morale = Combat.ARMY_ROUT_THRESHOLD * 0.75
+	near_rout_prepared.offensive_attack_multiplier = 2.0
+	_check(
+		Combat.frontline_allocation(
+			[near_rout_normal],
+			1000
+		).is_empty()
+			and not Combat.frontline_allocation(
+				[near_rout_prepared],
+				1000
+			).is_empty(),
+		"攻势士气倍率必须参与前线准入和单军溃逃阈值"
+	)
 	var normal_battle := _make_field_battle(
 		[normal_attacker],
 		[normal_defender],
@@ -1929,6 +1963,31 @@ func _test_simulation_progress() -> void:
 	sim.free()   # 释放 Node，避免泄漏
 
 # ------------------------------------------------------------------ 7. 确定性复现
+func _test_post_unification_continuation() -> void:
+	print("[6b] 统一后继续推演：保留胜者里程碑但不暂停时间")
+	var gs := GameState.new()
+	gs.generate_grid_world(12666)
+	gs.armies.clear()
+	gs.battles.clear()
+	for city in gs.cities:
+		city.owner_nation = 0
+		gs.recognized_city_owners[city.id] = 0
+	var sim := Simulation.new()
+	sim.setup(gs)
+	sim.diplomacy_enabled = false
+	sim._check_victory()
+	var day_before := gs.day
+	sim._advance_day()
+	_check(
+		gs.winner == 0
+			and not sim.paused
+			and gs.day == day_before + 1,
+		"仅剩一国时应记录统一者但继续推进日期，不得自动暂停"
+	)
+	sim.free()
+
+
+
 
 func _test_determinism() -> void:
 	print("[7] 确定性：同种子两次运行状态一致")
@@ -7486,6 +7545,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 		force_city.food_per_half_year = 100000
 	force_state.cities[force_capital].food_storage = 1000000
 	var forced_comprehensive_targets := 0
+	var forced_comprehensive_target_ids: Array[int] = []
 	for force_source in force_state.cities_of(force_nation_id):
 		var target_neighbors: Array[int] = []
 		for force_neighbor in force_state.neighbors(force_source.id):
@@ -7504,11 +7564,17 @@ func _test_manpower_pool_and_force_commands() -> void:
 		for force_target in target_neighbors.slice(0, 4):
 			force_state.cities[force_target].owner_nation = 1
 			forced_comprehensive_targets += 1
+			forced_comprehensive_target_ids.append(force_target)
 		break
 	force_state.ownership_revision += 1
 	force_state.nations[
 		force_nation_id
 	].war_preparation_target_nation = 1
+	force_state.nations[
+		force_nation_id
+	].campaign_preparation_targets = (
+		forced_comprehensive_target_ids.duplicate()
+	)
 	var next_group_view := AiWorldView.build(
 		force_state,
 		force_nation_id
@@ -7533,9 +7599,20 @@ func _test_manpower_pool_and_force_commands() -> void:
 			).size() == 1,
 		"满编战团后继续扩军必须先创建下一战团并加入第一支轻军"
 	)
+	var comprehensive_snapshot := StrategicMapSnapshot.build(
+		next_group_view
+	)
+	var comprehensive_demand_targets := (
+		priority_force_sim._campaign_force_demand_targets(
+			force_nation_id,
+			comprehensive_snapshot
+		)
+	)
 	var comprehensive_target_capacity := (
-		priority_force_sim._campaign_offensive_target_capacity(
-			force_nation_id
+		priority_force_sim._campaign_required_group_count(
+			force_nation_id,
+			comprehensive_demand_targets,
+			ThreatField.build(next_group_view)
 		)
 	)
 	for _comprehensive_growth in range(6):
@@ -7552,11 +7629,12 @@ func _test_manpower_pool_and_force_commands() -> void:
 		)
 	_check(
 		forced_comprehensive_targets == 4
+			and comprehensive_demand_targets.size() == 4
 			and comprehensive_target_capacity > 3
 			and force_state.nations[
 				force_nation_id
 			].battle_groups.size() >= 4,
-		"备战期战团数量必须由可进攻目标动态决定，不得残留最多三个战团的硬上限"
+		"备战期战团数量必须只由四个实际准备目标的统一需求决定"
 	)
 	var ungrouped_heavy := (
 		priority_force_sim._create_army_for_nation(
@@ -7720,6 +7798,16 @@ func _test_diplomacy_state_and_ai() -> void:
 	print("[32] 外交：求和、宣战、结盟、退盟、停战与敌我筛选")
 	var gs := GameState.new()
 	gs.generate_grid_world(32001)
+	_check(
+		is_zero_approx(DiplomacyAI.unification_era_factor(gs)),
+		"统一时代在自然演化期内必须保持为0"
+	)
+	gs.day = DiplomacyAI.UNIFICATION_ERA_FULL_YEARS * 365
+	_check(
+		is_equal_approx(DiplomacyAI.unification_era_factor(gs), 1.0),
+		"统一时代到完整年份时必须单调收敛到1"
+	)
+	gs.day = 0
 	_check(
 		gs.is_enemy(0, 1) and gs.is_enemy(1, 0),
 		"初始全面战争关系应双向对称"
@@ -9065,6 +9153,10 @@ func _test_diplomacy_state_and_ai() -> void:
 	group_ready_nation.campaign_preparation_group_assignments[
 		group_objective_city
 	] = preparation_group.id
+	for preparation_member in preparation_members:
+		group_ready_nation.campaign_preparation_assignments[
+			preparation_member.id
+		] = group_objective_city
 	var old_national_share_requirement := (
 		DiplomacyAI.required_assault_troops(
 			group_ready_state,
@@ -9093,6 +9185,26 @@ func _test_diplomacy_state_and_ai() -> void:
 			and full_group_ready
 			and incomplete_group_not_ready,
 		"正式地图备战应以指定战团全员集结为就绪条件，不得继续要求全国25%%兵力"
+	)
+	var waiting_preparation_actions: Array[Dictionary] = []
+	var waiting_preparation_committed := {}
+	for preparation_candidate in [2, 3]:
+		group_ready_state.set_diplomatic_relation(
+			preparation_candidate,
+			1,
+			GameState.DiplomaticRelation.ALLIED
+		)
+	DiplomacyAI._collect_existing_war_preparation(
+		group_ready_state,
+		0,
+		waiting_preparation_actions,
+		waiting_preparation_committed,
+		{}
+	)
+	_check(
+		waiting_preparation_actions.is_empty()
+			and not waiting_preparation_committed.has(0),
+		"尚未就绪且未产生外交动作的备战国不得占用 committed 并免疫他国宣战"
 	)
 	group_ready_nation.war_preparation_started_day = (
 		group_ready_state.day
@@ -9347,10 +9459,15 @@ func _test_diplomacy_state_and_ai() -> void:
 				DiplomacyAI.WAR_PREPARATION_MIN_DAYS
 			)
 		)
+			and _approx(
+				first_wave_army.combat_morale(),
+				first_wave_army.morale
+					* first_wave_army.offensive_attack_multiplier
+			)
 		and first_wave_army.offensive_bonus_until_day
 			== objective_state.day
 					+ DiplomacyAI.WAR_PREPARATION_MIN_DAYS,
-		"首轮参战军的攻击加成必须持续实际备战天数"
+		"首轮参战军的攻击和有效士气加成必须持续实际备战天数"
 	)
 	_check(
 		not objective_state.campaign_visual_events.is_empty()
@@ -9452,7 +9569,9 @@ func _test_diplomacy_state_and_ai() -> void:
 		objective_state.campaign_visual_events.is_empty(),
 		"战略攻势箭头必须在展示期结束后自动清理"
 	)
+	var persistent_morale_before_expiry := -1.0
 	if second_wave_army != null:
+		persistent_morale_before_expiry = second_wave_army.morale
 		objective_state.day = (
 			second_wave_army.offensive_bonus_until_day
 		)
@@ -9463,8 +9582,16 @@ func _test_diplomacy_state_and_ai() -> void:
 			second_wave_army.offensive_attack_multiplier,
 			1.0
 		)
+			and _approx(
+				second_wave_army.morale,
+				persistent_morale_before_expiry
+			)
+			and _approx(
+				second_wave_army.combat_morale(),
+				second_wave_army.morale
+			)
 		and second_wave_army.offensive_bonus_until_day == -1,
-		"攻势攻击加成必须在对应准备天数的截止日清除"
+		"攻势攻击和有效士气加成到期必须清除，且不得改写持久士气"
 	)
 	objective_sim.free()
 
@@ -10014,6 +10141,8 @@ func _test_diplomacy_state_and_ai() -> void:
 	var role_attack_origin := 9
 	var role_attack_target := 10
 	role_attack_state.cities[role_attack_target].owner_nation = 1
+	role_attack_state.recognized_city_owners[role_attack_target] = 1
+	role_attack_state.cities[role_attack_target].fort_strength = 5000
 	role_attack_state.set_diplomatic_relation(
 		0,
 		1,
@@ -10106,14 +10235,15 @@ func _test_diplomacy_state_and_ai() -> void:
 		role_preparation_built
 			and role_assignments.has(role_heavy.id)
 			and role_assignments.has(role_edge_support.id)
+			and role_assignments.has(other_group_light.id)
 			and not role_assignments.has(role_city_guard.id)
-			and not role_attack_sim
+			and role_attack_sim
 				._can_assign_campaign_preparation_army(
 					0,
 					other_group_light,
 					role_attack_target
 				),
-		"同一持久战团成员应协同准备，其他战团和独立填线军不得混入该目标"
+		"高防目标应允许多个完整战团协同准备，独立填线军不得混入"
 	)
 	var late_group_light := _make_army(1987, 0, 5000, 10, 10)
 	late_group_light.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -10140,6 +10270,88 @@ func _test_diplomacy_state_and_ai() -> void:
 		"进行中攻势必须自动吸收同一持久战团后来补入的成员"
 	)
 	role_attack_sim.free()
+
+	var unified_demand_state := GameState.new()
+	unified_demand_state.generate_grid_world(32020)
+	unified_demand_state.uses_heightmap = true
+	unified_demand_state.armies.clear()
+	unified_demand_state.battles.clear()
+	for demand_city in unified_demand_state.cities:
+		demand_city.owner_nation = 0
+		unified_demand_state.recognized_city_owners[
+			demand_city.id
+		] = 0
+	for demand_target_city in [10, 11, 12]:
+		unified_demand_state.cities[
+			demand_target_city
+		].owner_nation = 1
+		unified_demand_state.recognized_city_owners[
+			demand_target_city
+		] = 1
+	for demand_edge in unified_demand_state.edges:
+		demand_edge.max_manpower = 0
+	var demand_origin := 9
+	var demand_target := 10
+	unified_demand_state.edge_of(
+		demand_origin,
+		demand_target
+	).max_manpower = Edge.TERRAIN_LOW_MANPOWER
+	unified_demand_state.cities[demand_target].fort_strength = 10
+	unified_demand_state.cities[demand_target].fort_strength_max = 10
+	for defender_index in range(4):
+		var demand_defender := _make_army(
+			1990 + defender_index,
+			1,
+			GameState.INITIAL_LIGHT_ARMY_SIZE,
+			10,
+			10
+		)
+		demand_defender.max_size = (
+			GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+		demand_defender.location_city = demand_target
+		demand_defender.move_from = demand_target
+		unified_demand_state.armies.append(demand_defender)
+	unified_demand_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	unified_demand_state.set_war_objective(
+		0,
+		1,
+		demand_target,
+		"统一需求模型回归"
+	)
+	var unified_demand_sim := Simulation.new()
+	unified_demand_sim.setup(unified_demand_state)
+	var unified_targets := (
+		unified_demand_sim._campaign_force_demand_targets(
+			0,
+			StrategicMapSnapshot.build(
+				AiWorldView.build(unified_demand_state, 0)
+			)
+		)
+	)
+	var unified_demand := (
+		unified_demand_sim._campaign_target_group_demand(
+			0,
+			demand_target
+		)
+	)
+	_check(
+		unified_demand_state.cities_of(1).size() == 3
+			and DiplomacyAI.objective_staging_capacity()
+				== Edge.MIN_MANPOWER
+			and unified_targets == [demand_target]
+			and int(unified_demand["route_group_manpower"])
+				== 10000
+			and int(unified_demand["required_manpower"])
+				== 22000
+			and int(unified_demand["groups"]) == 3,
+		"统一需求模型必须对三城国家的实际窄路目标同样配置3个战团，不得依赖两城终局特判"
+	)
+	unified_demand_sim.free()
 
 	var fallback_state := GameState.new()
 	fallback_state.generate_grid_world(32015)
@@ -10630,16 +10842,21 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 	)
 	_check(
-		not route_gate_launched
+		route_gate_launched
 			and route_gate_nation
 				.campaign_preparation_targets.is_empty()
 			and route_gate_nation
 				.campaign_preparation_assignments.is_empty()
-			and route_gate_nation
-				.campaign_plan_targets.is_empty()
+			and route_gate_nation.campaign_plan_targets.has(
+				route_gate_target
+			)
+			and not route_gate_nation
+				.campaign_post_capture_plans.has(
+					route_gate_target
+				)
 			and route_gate_nation.treasury_gold
-				== route_gate_gold,
-		"正式地图敌国仍有三城时，无同国第二步的叶子目标不得发动、扣费或保留准备分配"
+				< route_gate_gold,
+		"无同国第二步的叶子目标应允许首攻，但不得生成虚假续攻计划"
 	)
 	route_gate_sim.free()
 
@@ -11410,9 +11627,15 @@ func _test_diplomacy_state_and_ai() -> void:
 		defense_declared
 		and defense_state.is_enemy(0, 1)
 		and defense_state.is_enemy(0, 2)
-		and not defense_state.is_enemy(3, 1)
-		and not defense_state.is_enemy(3, 2),
-		"共同防御只召唤被宣战方盟友，攻击方盟友不得加入主动战争"
+			and defense_state.is_enemy(3, 1)
+			and defense_state.is_enemy(3, 2)
+			and int(
+				defense_state.war_objective(3, 1).get(
+					"city_id",
+					-1
+				)
+			) == int(defense_target.get("city_id", -1)),
+		"联盟宣战必须让攻守双方全部成员参战，并共享主动方战争目标"
 	)
 	var allied_origin: City = null
 	var enemy_target: City = null
@@ -11732,6 +11955,156 @@ func _test_diplomacy_state_and_ai() -> void:
 		"外交动作应记录目标与可解释原因"
 	)
 	diplomacy_sim.free()
+
+
+func _test_alliance_war_coalitions() -> void:
+	print("[32b] 联盟战争：整体宣战、战时入盟、集团议和与分国军事AI")
+	var gs := GameState.new()
+	gs.generate_grid_world(32021)
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	gs.set_diplomatic_relation(
+		0, 3, GameState.DiplomaticRelation.ALLIED
+	)
+	gs.set_diplomatic_relation(
+		1, 2, GameState.DiplomaticRelation.ALLIED
+	)
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var objective := DiplomacyAI.select_war_objective(gs, 0, 1)
+	var objective_city := int(objective.get("city_id", -1))
+	var declared := sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.DECLARE_WAR,
+		"a": 0,
+		"b": 1,
+		"objective_city": objective_city,
+		"objective_reason": "联盟集团战争回归",
+		"mobilization_armies": 0,
+		"reason": "联盟整体宣战",
+	})
+	var complete_war_matrix := declared
+	for attacker in [0, 3]:
+		for defender in [1, 2]:
+			complete_war_matrix = (
+				complete_war_matrix
+				and gs.is_enemy(attacker, defender)
+				and int(
+					gs.war_objective(attacker, defender).get(
+						"city_id",
+						-1
+					)
+				) == objective_city
+			)
+	_check(
+		complete_war_matrix
+			and gs.alliance_bloc(0) == [0, 3]
+			and gs.alliance_bloc(1) == [1, 2],
+		"联盟宣战必须形成集团间完整敌对矩阵，并向所有攻击成员传播共同目标"
+	)
+	gs.day += DiplomacyAI.MIN_WAR_DAYS
+	var coalition_assessment := DiplomacyAI.peace_assessment(
+		gs,
+		0,
+		1
+	)
+	_check(
+		coalition_assessment["bloc_a"] == [0, 3]
+			and coalition_assessment["bloc_b"] == [1, 2]
+			and (
+				coalition_assessment["breakdown_a"]["member_scores"]
+				as Dictionary
+			).size() == 2
+			and (
+				coalition_assessment["breakdown_b"]["member_scores"]
+				as Dictionary
+			).size() == 2,
+		"联盟和平意愿必须聚合双方全部成员，不能只读取议和代表国"
+	)
+	gs.nations[0].campaign_preparation_targets = [
+		objective_city
+	] as Array[int]
+	_check(
+		gs.nations[3].campaign_preparation_targets.is_empty(),
+		"联盟共享战争目标，但各国战团与军队Assignment必须保持独立"
+	)
+	var coalition_peace := sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.MAKE_PEACE,
+		"a": 0,
+		"b": 1,
+		"reason": "联盟整体议和回归",
+	})
+	var complete_peace_matrix := coalition_peace
+	for former_attacker in [0, 3]:
+		for former_defender in [1, 2]:
+			complete_peace_matrix = (
+				complete_peace_matrix
+				and not gs.is_enemy(
+					former_attacker,
+					former_defender
+				)
+				and gs.truce_until(
+					former_attacker,
+					former_defender
+				) > gs.day
+				and gs.war_objective(
+					former_attacker,
+					former_defender
+				).is_empty()
+			)
+	_check(
+		complete_peace_matrix,
+		"联盟议和必须原子结束集团间全部战争关系、目标并设置统一停战期"
+	)
+	sim.free()
+
+	var join_state := GameState.new()
+	join_state.generate_grid_world(32022)
+	for join_a in range(join_state.nations.size()):
+		for join_b in range(join_a + 1, join_state.nations.size()):
+			join_state.set_diplomatic_relation(
+				join_a,
+				join_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	join_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var join_target := join_state.cities_of(1)[0].id
+	join_state.set_war_objective(
+		0,
+		1,
+		join_target,
+		"既有战争目标"
+	)
+	var join_sim := Simulation.new()
+	join_sim.setup(join_state)
+	var joined := join_sim._execute_diplomatic_action({
+		"kind": DiplomacyAI.Action.FORM_ALLIANCE,
+		"a": 0,
+		"b": 2,
+		"reason": "战争中结盟回归",
+	})
+	_check(
+		joined
+			and join_state.is_enemy(2, 1)
+			and int(
+				join_state.war_objective(2, 1).get(
+					"city_id",
+					-1
+				)
+			) == join_target
+			and join_state.nations[2]
+				.war_mobilization_target_troops > 0,
+		"战争中结盟必须让新盟友立即参战、继承共同目标并启动本国动员"
+	)
+	join_sim.free()
 
 
 # ------------------------------------------------------------------ 33. 和平裁军与潜在边境守备
@@ -12595,7 +12968,9 @@ func _test_combat_fairness_and_conservation() -> void:
 		float(mixed_strong.size)
 			* float(mixed_strong.attack)
 			* mixed_strong.offensive_attack_multiplier
-			* Combat.combat_efficiency(mixed_strong.morale)
+				* Combat.combat_efficiency(
+					mixed_strong.combat_morale()
+				)
 		+ float(mixed_steady.size)
 			* float(mixed_steady.attack)
 			* Combat.combat_efficiency(mixed_steady.morale)

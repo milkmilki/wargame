@@ -80,7 +80,6 @@ const CAMPAIGN_PREPARED_ECHELONS: int = 2
 const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = DAYS_PER_HALF_YEAR
 const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
 const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
-const CAMPAIGN_ENDGAME_CITY_THRESHOLD: int = 2
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 2
 const CAMPAIGN_BORROWED_LINE_MAX_ARMIES: int = 1
@@ -196,7 +195,6 @@ func _process(delta: float) -> void:
 	if (
 		state == null
 		or paused
-		or state.winner != -1
 	):
 		return
 	_time_acc += delta
@@ -393,10 +391,29 @@ func _campaign_projected_assault_ratio(
 		)
 	)
 	for army in staged_armies:
+		if not _campaign_army_can_attack_target(
+			army,
+			nation_id,
+			objective_city
+		):
+			continue
 		attack_power += ArmyPower.effective(army)
 	attack_power *= offensive_preparation_multiplier(
 		preparation_days
 	)
+	var defense_power := _campaign_objective_defense_power(
+		nation_id,
+		objective_city,
+		threat
+	)
+	return attack_power / maxf(defense_power, 1.0)
+
+
+func _campaign_objective_defense_power(
+	nation_id: int,
+	objective_city: int,
+	threat: ThreatField = null
+) -> float:
 	var direct_defense := 0.0
 	for defender in state.armies_at_city(objective_city):
 		if state.is_enemy(nation_id, defender.owner_nation):
@@ -411,7 +428,7 @@ func _campaign_projected_assault_ratio(
 		defense_power += ArmyPower.city_defense(
 			state.cities[objective_city]
 		)
-	return attack_power / maxf(defense_power, 1.0)
+	return defense_power
 
 
 func _campaign_attack_ratio_threshold(nation_id: int) -> float:
@@ -1732,6 +1749,7 @@ func _advance_holding_adaptation() -> void:
 func _resolve_diplomacy() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
+	_normalize_alliance_wars()
 	_refresh_war_preparation_viability()
 	_commit_diplomacy_actions(
 		DiplomacyAI.choose_actions(state)
@@ -1741,6 +1759,7 @@ func _resolve_diplomacy() -> void:
 func _resolve_diplomacy_over_frames() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
+	_normalize_alliance_wars()
 	_refresh_war_preparation_viability()
 	var job := {
 		"actions": [] as Array[Dictionary],
@@ -2013,72 +2032,60 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 	var war_outcome_b := 0.0
 	var territories_transferred := 0
 	var enclaves_abandoned := 0
+	var action_bloc_a: Array[int] = [nation_a]
+	var action_bloc_b: Array[int] = [nation_b]
 	match kind:
 		DiplomacyAI.Action.MAKE_PEACE:
 			if state.is_enemy(nation_a, nation_b):
-				war_outcome_a = DiplomacyAI.war_situation_score(
-					state,
+				var peace_result := _make_coalition_peace(
 					nation_a,
 					nation_b
 				)
-				war_outcome_b = DiplomacyAI.war_situation_score(
-					state,
-					nation_b,
-					nation_a
+				changed = bool(peace_result.get("changed", false))
+				war_outcome_a = float(
+					peace_result.get("war_outcome_a", 0.0)
 				)
-				changed = state.set_diplomatic_relation(
-					nation_a,
-					nation_b,
-					GameState.DiplomaticRelation.NEUTRAL,
-					GameState.DEFAULT_TRUCE_DAYS
+				war_outcome_b = float(
+					peace_result.get("war_outcome_b", 0.0)
 				)
-				if changed:
-					_end_bilateral_hostilities(nation_a, nation_b)
-					var abandoned_enclaves := (
-						_abandon_capital_disconnected_enclaves(
-							nation_a,
-							nation_b
-						)
+				territories_transferred = int(
+					peace_result.get("territories_transferred", 0)
+				)
+				enclaves_abandoned = int(
+					peace_result.get("enclaves_abandoned", 0)
+				)
+				action_bloc_a.assign(
+					peace_result.get("bloc_a", [nation_a])
+				)
+				action_bloc_b.assign(
+					peace_result.get("bloc_b", [nation_b])
+				)
+				if territories_transferred > 0:
+					reason += (
+						"；联盟和平确认%d座城市的领土转移"
+						% territories_transferred
 					)
-					enclaves_abandoned = abandoned_enclaves.size()
-					var transferred := state.recognize_occupied_territory(
-						nation_a, nation_b
+				if enclaves_abandoned > 0:
+					reason += (
+						"；联盟和平割让%d座无法连接首都的飞地"
+						% enclaves_abandoned
 					)
-					territories_transferred = transferred.size()
-					if not transferred.is_empty():
-						reason += "；和平协议确认%d座城市的领土转移" % transferred.size()
-					if not abandoned_enclaves.is_empty():
-						reason += "；割让%d座无法连接本国首都的飞地" % abandoned_enclaves.size()
-					state.clear_war_objective(nation_a, nation_b)
-					_clear_finished_war_mobilization(nation_a)
-					_clear_finished_war_mobilization(nation_b)
-					# 议和瞬间前线消失：强制双方下一天重算国境与防区，
-					# 让填线军立刻脱离已失效的边境扇区、按新国界重新部署。
-					_ai_last_decision_day = -1
 		DiplomacyAI.Action.DECLARE_WAR:
-			if state.can_declare_war(nation_a, nation_b):
-				var defenders: Array[int] = [nation_b]
-				for ally_id in state.allies_of(nation_b):
-					if not defenders.has(ally_id):
-						defenders.append(ally_id)
-				for defender_id in defenders:
-					if (
-						defender_id == nation_a
-						or state.is_enemy(nation_a, defender_id)
-						or state.is_allied(nation_a, defender_id)
-					):
-						continue
-					state.set_diplomatic_relation(
-						nation_a,
-						defender_id,
-						GameState.DiplomaticRelation.WAR
-					)
-				changed = state.is_enemy(nation_a, nation_b)
+			if state.can_alliance_declare_war(nation_a, nation_b):
+				var attackers := state.alliance_bloc(nation_a)
+				var defenders := state.alliance_bloc(nation_b)
+				action_bloc_a = attackers
+				action_bloc_b = defenders
+				changed = _set_coalition_war(
+					attackers,
+					defenders
+				)
 				var objective_city := int(action.get("objective_city", -1))
 				if changed and objective_city >= 0:
-					state.set_war_objective(
+					_set_coalition_war_objective(
+						attackers,
+						defenders,
 						nation_a,
-						nation_b,
 						objective_city,
 						str(action.get("objective_reason", ""))
 					)
@@ -2096,28 +2103,19 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					var requested_armies := int(
 						action.get("mobilization_armies", -1)
 					)
-					if _defer_declaration_launches:
-						_pending_war_mobilizations.append({
-							"nation_id": nation_a,
-							"requested_armies": requested_armies,
-						})
-					else:
-						_start_war_mobilization(
-							nation_a,
+					for attacker_id in attackers:
+						_queue_or_start_war_mobilization(
+							attacker_id,
 							requested_armies
+								if attacker_id == nation_a
+								else -1
 						)
 					for defender_id in defenders:
-						if state.is_enemy(nation_a, defender_id):
-							_clear_war_preparation(defender_id)
-							if _defer_declaration_launches:
-								_pending_war_mobilizations.append({
-									"nation_id": defender_id,
-									"requested_armies": -1,
-								})
-							else:
-								_start_war_mobilization(
-									defender_id
-								)
+						_clear_war_preparation(defender_id)
+						_queue_or_start_war_mobilization(
+							defender_id,
+							-1
+						)
 					_clear_war_preparation(nation_a, false)
 					if _defer_declaration_launches:
 						_pending_declaration_launches[nation_a] = {
@@ -2143,6 +2141,8 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					nation_b,
 					GameState.DiplomaticRelation.ALLIED
 				)
+				if changed:
+					_synchronize_alliance_wars(nation_a, nation_b)
 		DiplomacyAI.Action.LEAVE_ALLIANCE:
 			if state.is_allied(nation_a, nation_b) and nation_a != nation_b:
 				changed = state.set_diplomatic_relation(
@@ -2153,7 +2153,7 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 				if changed:
 					_repatriate_after_access_revoked(nation_a, nation_b)
 		DiplomacyAI.Action.PREPARE_WAR:
-			if state.can_declare_war(nation_a, nation_b):
+			if state.can_alliance_declare_war(nation_a, nation_b):
 				changed = _start_war_preparation(nation_a, nation_b, action)
 		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
 			if state.nations[nation_a].war_preparation_target_nation >= 0:
@@ -2180,10 +2180,308 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 		event["war_outcome_b"] = war_outcome_b
 		event["territories_transferred"] = territories_transferred
 		event["enclaves_abandoned"] = enclaves_abandoned
+	if kind in [
+		DiplomacyAI.Action.MAKE_PEACE,
+		DiplomacyAI.Action.DECLARE_WAR,
+	]:
+		event["bloc_a"] = action_bloc_a.duplicate()
+		event["bloc_b"] = action_bloc_b.duplicate()
 	state.diplomatic_history.append(event)
-	_record_diplomatic_action(nation_a, kind, nation_b, reason)
-	_record_diplomatic_action(nation_b, kind, nation_a, reason)
+	for member_a in action_bloc_a:
+		_record_diplomatic_action(
+			member_a,
+			kind,
+			action_bloc_b[0],
+			reason
+		)
+	for member_b in action_bloc_b:
+		_record_diplomatic_action(
+			member_b,
+			kind,
+			action_bloc_a[0],
+			reason
+		)
 	return true
+
+
+func _queue_or_start_war_mobilization(
+	nation_id: int,
+	requested_armies: int
+) -> void:
+	if _defer_declaration_launches:
+		_pending_war_mobilizations.append({
+			"nation_id": nation_id,
+			"requested_armies": requested_armies,
+		})
+	else:
+		_start_war_mobilization(nation_id, requested_armies)
+
+
+func _set_coalition_war(
+	attackers: Array[int],
+	defenders: Array[int]
+) -> bool:
+	var changed := false
+	for attacker in attackers:
+		for defender in defenders:
+			if (
+				attacker == defender
+				or state.is_allied(attacker, defender)
+			):
+				continue
+			if state.is_enemy(attacker, defender):
+				continue
+			changed = (
+				state.set_diplomatic_relation(
+					attacker,
+					defender,
+					GameState.DiplomaticRelation.WAR
+				)
+				or changed
+			)
+	return changed
+
+
+func _set_coalition_war_objective(
+	attackers: Array[int],
+	defenders: Array[int],
+	initiator: int,
+	objective_city: int,
+	reason: String
+) -> void:
+	if (
+		objective_city < 0
+		or objective_city >= state.cities.size()
+		or not defenders.has(
+			state.cities[objective_city].owner_nation
+		)
+	):
+		return
+	for attacker in attackers:
+		for defender in defenders:
+			if not state.is_enemy(attacker, defender):
+				continue
+			state.set_war_objective(
+				attacker,
+				defender,
+				objective_city,
+				(
+					reason
+					if attacker == initiator
+					else "响应盟国共同战争目标：%s" % reason
+				)
+			)
+
+
+func _synchronize_alliance_wars(
+	nation_a: int,
+	nation_b: int
+) -> void:
+	var bloc := state.alliance_bloc(nation_a)
+	if not bloc.has(nation_b):
+		return
+	var enemy_set := {}
+	var shared_objective: Dictionary = {}
+	for member in bloc:
+		for enemy_id in state.wars_of(member):
+			if bloc.has(enemy_id):
+				continue
+			for enemy_member in state.alliance_bloc(enemy_id):
+				if not bloc.has(enemy_member):
+					enemy_set[enemy_member] = true
+			var objective := state.war_objective(member, enemy_id)
+			if shared_objective.is_empty() and not objective.is_empty():
+				shared_objective = objective
+	var enemies: Array[int] = []
+	enemies.assign(enemy_set.keys())
+	enemies.sort()
+	if enemies.is_empty():
+		return
+	var joined_war := _set_coalition_war(bloc, enemies)
+	if not joined_war:
+		return
+	var objective_city := int(shared_objective.get("city_id", -1))
+	if objective_city >= 0:
+		_set_coalition_war_objective(
+			bloc,
+			enemies,
+			int(shared_objective.get("attacker", bloc[0])),
+			objective_city,
+			str(shared_objective.get(
+				"reason",
+				"联盟共同战争目标"
+			))
+		)
+	for member in bloc:
+		if state.nations[member].war_preparation_target_nation >= 0:
+			_clear_war_preparation(member)
+		_queue_or_start_war_mobilization(member, -1)
+	_ai_last_decision_day = -1
+
+
+func _normalize_alliance_wars() -> void:
+	var processed := {}
+	for nation in state.nations:
+		if not nation.alive or processed.has(nation.id):
+			continue
+		var bloc := state.alliance_bloc(nation.id)
+		for member in bloc:
+			processed[member] = true
+		if bloc.size() < 2:
+			continue
+		_synchronize_alliance_wars(bloc[0], bloc[1])
+
+
+func _make_coalition_peace(
+	nation_a: int,
+	nation_b: int
+) -> Dictionary:
+	var bloc_a := state.alliance_bloc(nation_a, false)
+	var bloc_b := state.alliance_bloc(nation_b, false)
+	if bloc_a.is_empty() or bloc_b.is_empty():
+		return {"changed": false}
+	var war_outcome_a := DiplomacyAI.war_situation_score(
+		state,
+		nation_a,
+		nation_b
+	)
+	var war_outcome_b := DiplomacyAI.war_situation_score(
+		state,
+		nation_b,
+		nation_a
+	)
+	var changed := false
+	for member_a in bloc_a:
+		for member_b in bloc_b:
+			if not state.is_enemy(member_a, member_b):
+				continue
+			changed = (
+				state.set_diplomatic_relation(
+					member_a,
+					member_b,
+					GameState.DiplomaticRelation.NEUTRAL,
+					GameState.DEFAULT_TRUCE_DAYS
+				)
+				or changed
+			)
+			_end_bilateral_hostilities(member_a, member_b)
+	if not changed:
+		return {"changed": false}
+	var abandoned := _abandon_coalition_disconnected_enclaves(
+		bloc_a,
+		bloc_b
+	)
+	var transferred := (
+		state.recognize_coalition_occupied_territory(
+			bloc_a,
+			bloc_b
+		)
+	)
+	for member_a in bloc_a:
+		for member_b in bloc_b:
+			state.clear_war_objective(member_a, member_b)
+	for member in bloc_a + bloc_b:
+		_clear_finished_war_mobilization(member)
+	_ai_last_decision_day = -1
+	return {
+		"changed": true,
+		"war_outcome_a": war_outcome_a,
+		"war_outcome_b": war_outcome_b,
+		"territories_transferred": transferred.size(),
+		"enclaves_abandoned": abandoned.size(),
+		"bloc_a": bloc_a,
+		"bloc_b": bloc_b,
+	}
+
+
+func _abandon_coalition_disconnected_enclaves(
+	bloc_a: Array[int],
+	bloc_b: Array[int]
+) -> Array[int]:
+	var connected_by_nation := {}
+	for nation_id in bloc_a + bloc_b:
+		if not state.cities_of(nation_id).is_empty():
+			connected_by_nation[nation_id] = (
+				_capital_connected_territory(nation_id)
+			)
+	var cessions: Array[Dictionary] = []
+	for former_owner in bloc_a + bloc_b:
+		if not connected_by_nation.has(former_owner):
+			continue
+		var opposing_bloc := bloc_b if bloc_a.has(former_owner) else bloc_a
+		var connected: Dictionary = connected_by_nation[former_owner]
+		for city in state.cities:
+			if (
+				city.owner_nation != former_owner
+				or connected.has(city.id)
+			):
+				continue
+			var recipient := _nearest_coalition_recipient(
+				city.id,
+				former_owner,
+				opposing_bloc
+			)
+			if recipient >= 0:
+				cessions.append({
+					"city": city,
+					"former_owner": former_owner,
+					"recipient": recipient,
+				})
+	if cessions.is_empty():
+		return [] as Array[int]
+	var abandoned: Array[int] = []
+	for cession in cessions:
+		var city: City = cession["city"]
+		var former_owner := int(cession["former_owner"])
+		var recipient := int(cession["recipient"])
+		var stored_food := city.food_storage if city.has_warehouse else 0
+		if city.has_warehouse:
+			state.remove_warehouse(former_owner, city.id)
+			city.food_storage = 0
+		city.owner_nation = recipient
+		city.occupation_sponsor_nation = -1
+		state.recognized_city_owners[city.id] = recipient
+		if stored_food > 0:
+			state.deposit_food(recipient, stored_food)
+		abandoned.append(city.id)
+	state.ownership_revision += 1
+	state.refresh_derived()
+	_ai_last_decision_day = -1
+	_repatriate_abandoned_enclave_armies(abandoned)
+	return abandoned
+
+
+func _nearest_coalition_recipient(
+	city_id: int,
+	former_owner: int,
+	opposing_bloc: Array[int]
+) -> int:
+	var city := state.cities[city_id]
+	var best_nation := -1
+	var best_distance := INF
+	for candidate in opposing_bloc:
+		for candidate_city in state.cities_of(candidate):
+			var distance := city.map_position.distance_squared_to(
+				candidate_city.map_position
+			)
+			if (
+				distance < best_distance
+				or (
+					is_equal_approx(distance, best_distance)
+					and (
+						best_nation < 0
+						or EquivariantOrder.nation_less(
+							state,
+							former_owner,
+							candidate,
+							best_nation
+						)
+					)
+				)
+			):
+				best_distance = distance
+				best_nation = candidate
+	return best_nation
 
 
 ## 双边议和按结算前快照同时割让双方无法经本国城市连接首都的飞地。
@@ -3128,17 +3426,14 @@ func _reconcile_strategic_roles(nation_id: int) -> void:
 		var target_city := int(
 			nation.campaign_preparation_assignments[army_id]
 		)
-		var expected_group := int(
-			nation.campaign_preparation_group_assignments.get(
-				target_city,
-				-1
-			)
-		)
 		var assigned_army: Army = army_by_id.get(army_id)
 		if (
 			assigned_army != null
-			and assigned_army.battle_group_id == expected_group
-			and expected_group >= 0
+			and assigned_army.battle_group_id >= 0
+			and _campaign_preparation_target_for_group(
+				nation_id,
+				assigned_army.battle_group_id
+			) == target_city
 		):
 			continue
 		nation.campaign_preparation_assignments.erase(army_id)
@@ -3289,11 +3584,14 @@ func _ai_manage_force_structure(
 		)
 	var nation := state.nations[view.nation_id]
 	var line_armies := 0
+	var main_armies := 0
 	var current_troops := 0
 	for army in view.friendly_armies:
 		current_troops += army.size
 		if army.is_line_role():
 			line_armies += 1
+		elif army.is_main_battle_role():
+			main_armies += 1
 	var wars := state.wars_of(view.nation_id)
 	var small_nation_survival := (
 		not wars.is_empty()
@@ -3307,12 +3605,19 @@ func _ai_manage_force_structure(
 			> current_troops
 	)
 	var city_line_target := defense_plan.line_city_slots
+	var critical_city_line_target := (
+		defense_plan.line_critical_city_slots
+	)
 	var total_line_target := (
 		city_line_target + defense_plan.line_edge_slots
 	)
 	if small_nation_survival:
 		city_line_target = maxi(
 			city_line_target,
+			view.friendly_cities.size()
+		)
+		critical_city_line_target = maxi(
+			critical_city_line_target,
 			view.friendly_cities.size()
 		)
 		total_line_target = maxi(
@@ -3349,45 +3654,87 @@ func _ai_manage_force_structure(
 		state.nations[view.nation_id].manpower_pool - protected_reserve
 	)
 	var recruitment := {}
-	if line_armies < city_line_target:
+	if line_armies < critical_city_line_target:
 		recruitment = {
 			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
 			"group_id": -1,
-			"reason": "补充城市填线槽",
+			"reason": "补充核心城市填线槽",
 		}
 	else:
-		var first_group_has_members := false
-		for group in nation.battle_groups:
-			if not state.battle_group_members(
+		var active_offense := (
+			nation.war_preparation_target_nation >= 0
+			or not wars.is_empty()
+		)
+		var force_demand_targets: Array[int] = []
+		if active_offense:
+			force_demand_targets = _campaign_force_demand_targets(
 				view.nation_id,
-				group.id
-			).is_empty():
-				first_group_has_members = true
-				break
-		if not first_group_has_members:
-			recruitment = _next_battle_group_recruitment(
-				view.nation_id
+				snapshot
 			)
-		elif line_armies < total_line_target:
+		var required_group_count := (
+			_campaign_required_group_count(
+				view.nation_id,
+				force_demand_targets,
+				threat
+			)
+			if active_offense
+			else 1
+		)
+		var target_group_count := maxi(
+			nation.battle_groups.size(),
+			required_group_count
+		)
+		var target_main_armies := maxi(
+			target_group_count * (
+				BattleGroup.MAX_LIGHT_ARMIES
+				+ BattleGroup.MAX_HEAVY_ARMIES
+			),
+			1
+		)
+		var main_deficit := maxi(
+			target_main_armies - main_armies,
+			0
+		)
+		var line_deficit := maxi(
+			total_line_target - line_armies,
+			0
+		)
+		var main_deficit_ratio := (
+			float(main_deficit)
+			/ float(target_main_armies)
+		)
+		var line_deficit_ratio := (
+			float(line_deficit)
+			/ float(maxi(total_line_target, 1))
+		)
+		var recruit_main := (
+			main_deficit > 0
+			and (
+				line_deficit <= 0
+				or main_deficit_ratio >= line_deficit_ratio
+			)
+		)
+		if recruit_main:
+			recruitment = _next_battle_group_recruitment(
+				view.nation_id,
+				nation.battle_groups.size()
+					< target_group_count
+			)
+		elif line_deficit > 0:
 			recruitment = {
 				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
 				"group_id": -1,
-				"reason": "补充边境填线槽",
+					"reason": "补充常规填线槽",
 			}
 		else:
 			recruitment = _next_battle_group_recruitment(
 				view.nation_id,
-				(
-					nation.battle_groups.size()
-						< _campaign_offensive_target_capacity(
-							view.nation_id
+					active_war_mobilization
+						or (
+							active_offense
+							and nation.battle_groups.size()
+								< required_group_count
 						)
-					and (
-						nation.war_preparation_target_nation >= 0
-						or
-						not wars.is_empty()
-					)
-				)
 			)
 	var missing_formation_size := int(
 		recruitment.get("size", 0)
@@ -3532,7 +3879,7 @@ func _split_army_for_narrow_objective(
 			army.state == Army.State.IDLE
 			and army.size > 0
 			and not army.starving
-			and army.morale >= 0.5
+				and army.combat_morale() >= 0.5
 			and army.supply_ratio >= 0.75
 			and army.max_size
 				> NARROW_ROUTE_FORMATION_SIZE
@@ -4036,17 +4383,16 @@ func _can_assign_campaign_preparation_army(
 	var nation := state.nations[nation_id]
 	if (
 		state.uses_heightmap
-		and nation.campaign_preparation_group_assignments.has(
-			target_city
-		)
-		and army.battle_group_id
-			!= int(
-				nation.campaign_preparation_group_assignments[
-					target_city
-				]
-			)
+		and army.battle_group_id >= 0
 	):
-		return false
+		var group_target := _campaign_preparation_target_for_group(
+			nation_id,
+			army.battle_group_id
+		)
+		if group_target >= 0 and group_target != target_city:
+			return false
+		if group_target == -2:
+			return false
 	var preparation_target := int(
 		nation.campaign_preparation_assignments.get(
 			army.id,
@@ -4103,34 +4449,298 @@ func _campaign_theater_required_manpower(
 	return GameState.INITIAL_LIGHT_ARMY_SIZE
 
 
-func _campaign_offensive_target_capacity(nation_id: int) -> int:
+func _campaign_force_demand_targets(
+	nation_id: int,
+	snapshot: StrategicMapSnapshot = null
+) -> Array[int]:
 	var nation := state.nations[nation_id]
-	var target_nations := {}
-	for enemy_id in state.wars_of(nation_id):
-		target_nations[enemy_id] = true
-	if nation.war_preparation_target_nation >= 0:
-		target_nations[nation.war_preparation_target_nation] = true
-	if target_nations.is_empty():
-		return 1
-	var city_counts := {}
-	for city in state.cities:
-		city_counts[city.owner_nation] = int(
-			city_counts.get(city.owner_nation, 0)
-		) + 1
-	var capacity := 0
-	for city in state.cities:
-		if (
-			not target_nations.has(city.owner_nation)
-			or DiplomacyAI.staging_cities_for_objective(
-				state,
+	var candidates: Array[int] = []
+	for target_city in nation.campaign_preparation_targets:
+		if not candidates.has(target_city):
+			candidates.append(target_city)
+	if candidates.is_empty():
+		for target_city in nation.campaign_plan_targets:
+			if not candidates.has(target_city):
+				candidates.append(target_city)
+	if (
+		candidates.is_empty()
+		and nation.war_preparation_objective_city >= 0
+	):
+		candidates.append(nation.war_preparation_objective_city)
+	if candidates.is_empty():
+		for enemy_id in state.wars_of(nation_id):
+			var objective := state.war_objective(
 				nation_id,
-				city.id,
-				int(city_counts.get(city.owner_nation, 0))
-			).is_empty()
+				enemy_id
+			)
+			if (
+				not objective.is_empty()
+				and int(objective.get("attacker", -1))
+					== nation_id
+			):
+				var objective_city := int(
+					objective.get("city_id", -1)
+				)
+				if (
+					objective_city >= 0
+					and not candidates.has(objective_city)
+				):
+					candidates.append(objective_city)
+	if (
+		candidates.is_empty()
+		and snapshot != null
+		and snapshot.campaign_target >= 0
+	):
+		candidates.append(snapshot.campaign_target)
+	var result: Array[int] = []
+	for target_city in candidates:
+		if (
+			not _campaign_force_demand_target_valid(
+				nation_id,
+				target_city
+			)
+			or result.has(target_city)
 		):
 			continue
-		capacity += 1
-	return maxi(capacity, 1)
+		if DiplomacyAI.staging_cities_for_objective(
+			state,
+			nation_id,
+			target_city
+		).is_empty():
+			continue
+		result.append(target_city)
+	return result
+
+
+func _campaign_force_demand_target_valid(
+	nation_id: int,
+	target_city: int
+) -> bool:
+	if (
+		target_city < 0
+		or target_city >= state.cities.size()
+	):
+		return false
+	var owner := state.cities[target_city].owner_nation
+	return (
+		state.is_enemy(nation_id, owner)
+		or owner
+			== state.nations[
+				nation_id
+			].war_preparation_target_nation
+	)
+
+
+func _campaign_required_group_count(
+	nation_id: int,
+	targets: Array[int],
+	threat: ThreatField = null
+) -> int:
+	var required_groups := 0
+	for target_city in targets:
+		var demand := _campaign_target_group_demand(
+			nation_id,
+			target_city,
+			threat
+		)
+		required_groups += int(demand.get("groups", 0))
+	return maxi(required_groups, 1)
+
+
+func _campaign_target_group_demand(
+	nation_id: int,
+	target_city: int,
+	threat: ThreatField = null
+) -> Dictionary:
+	if not _campaign_force_demand_target_valid(
+		nation_id,
+		target_city
+	):
+		return {}
+	var staging := DiplomacyAI.staging_cities_for_objective(
+		state,
+		nation_id,
+		target_city
+	)
+	if staging.is_empty():
+		return {}
+	var route_capacity := _campaign_route_group_capacity(
+		target_city,
+		staging
+	)
+	var route_manpower := int(
+		route_capacity.get("manpower", 0)
+	)
+	var route_power := float(route_capacity.get("power", 0.0))
+	if route_manpower <= 0 or route_power <= 0.0:
+		return {}
+	var required_manpower := (
+		DiplomacyAI.objective_assault_troops(
+			state,
+			nation_id,
+			target_city
+		)
+	)
+	var required_power := (
+		_campaign_objective_defense_power(
+			nation_id,
+			target_city,
+			threat
+		)
+		* _campaign_attack_ratio_threshold(nation_id)
+		/ OFFENSIVE_BONUS_MAX_MULTIPLIER
+	)
+	var groups_by_manpower := int(ceil(
+		float(required_manpower) / float(route_manpower)
+	))
+	var groups_by_power := int(ceil(
+		required_power / route_power
+	))
+	return {
+		"groups": maxi(
+			maxi(groups_by_manpower, groups_by_power),
+			1
+		),
+		"required_manpower": required_manpower,
+		"required_power": required_power,
+		"route_group_manpower": route_manpower,
+		"route_group_power": route_power,
+	}
+
+
+func _campaign_route_group_capacity(
+	target_city: int,
+	staging: Array[int]
+) -> Dictionary:
+	var entry_capacity := 0
+	for staging_city in staging:
+		var edge := state.edge_of(staging_city, target_city)
+		if edge != null:
+			entry_capacity = maxi(
+				entry_capacity,
+				edge.max_manpower
+			)
+	var manpower := 0
+	var power := 0.0
+	if entry_capacity >= GameState.INITIAL_LIGHT_ARMY_SIZE:
+		manpower += (
+			BattleGroup.MAX_LIGHT_ARMIES
+			* GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+		power += float(
+			BattleGroup.MAX_LIGHT_ARMIES
+			* GameState.INITIAL_LIGHT_ARMY_SIZE
+		)
+	if entry_capacity >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+		manpower += (
+			BattleGroup.MAX_HEAVY_ARMIES
+			* GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
+		power += float(
+			BattleGroup.MAX_HEAVY_ARMIES
+			* GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
+	return {
+		"entry_capacity": entry_capacity,
+		"manpower": manpower,
+		"power": power,
+	}
+
+
+func _campaign_formation_fits_target_entry(
+	army: Army,
+	target_city: int
+) -> bool:
+	if army == null or army.size <= 0:
+		return false
+	for staging_city in DiplomacyAI.staging_cities_for_objective(
+		state,
+		army.owner_nation,
+		target_city
+	):
+		var edge := state.edge_of(staging_city, target_city)
+		if edge != null and edge.max_manpower >= army.max_size:
+			return true
+	return false
+
+
+func _campaign_group_availability(
+	nation_id: int,
+	target_city: int,
+	group_members: Array[Army],
+	staging: Array[int],
+	view: AiWorldView,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator
+) -> Dictionary:
+	var members: Array[Army] = []
+	var power := 0.0
+	var manpower := 0
+	var distance := 0.0
+	for army in group_members:
+		if not _campaign_formation_fits_target_entry(
+			army,
+			target_city
+		):
+			continue
+		var origin := _campaign_army_origin(army, nation_id)
+		if (
+			origin < 0
+			or army.state not in [
+				Army.State.IDLE,
+				Army.State.HOLDING,
+			]
+			or state.day < army.defensive_deployment_until_day
+			or not _can_assign_campaign_preparation_army(
+				nation_id,
+				army,
+				target_city
+			)
+			or not _can_use_army_for_offensive(
+				defense_plan,
+				coordinator,
+				army,
+				target_city
+			)
+		):
+			return {}
+		var field := view.path_field(
+			origin,
+			nation_id,
+			false,
+			true,
+			-1,
+			army.max_size
+		)
+		var member_distance := INF
+		for staging_city in staging:
+			var attack_edge := state.edge_of(
+				staging_city,
+				target_city
+			)
+			if (
+				attack_edge == null
+				or attack_edge.max_manpower < army.max_size
+			):
+				continue
+			member_distance = minf(
+				member_distance,
+				float(field["dist"].get(staging_city, INF))
+			)
+		if member_distance == INF:
+			return {}
+		members.append(army)
+		power += ArmyPower.effective(army)
+		manpower += army.size
+		distance = maxf(distance, member_distance)
+	if members.is_empty():
+		return {}
+	return {
+		"members": members,
+		"power": power,
+		"manpower": manpower,
+		"distance": distance,
+	}
 
 
 func _campaign_objective_in_current_theater(
@@ -4148,11 +4758,6 @@ func _campaign_objective_in_current_theater(
 		or proposed_city >= state.cities.size()
 	):
 		return proposed_city
-	var city_counts := {}
-	for city in state.cities:
-		city_counts[city.owner_nation] = int(
-			city_counts.get(city.owner_nation, 0)
-		) + 1
 	if (
 		state.is_enemy(
 			nation_id,
@@ -4161,11 +4766,7 @@ func _campaign_objective_in_current_theater(
 		and not DiplomacyAI.staging_cities_for_objective(
 			state,
 			nation_id,
-			anchor,
-			int(city_counts.get(
-				state.cities[anchor].owner_nation,
-				0
-			))
+			anchor
 		).is_empty()
 	):
 		return anchor
@@ -4197,11 +4798,7 @@ func _campaign_objective_in_current_theater(
 		and not DiplomacyAI.staging_cities_for_objective(
 			state,
 			nation_id,
-			proposed_city,
-			int(city_counts.get(
-				state.cities[proposed_city].owner_nation,
-				0
-			))
+			proposed_city
 		).is_empty()
 	):
 		return proposed_city
@@ -4217,8 +4814,7 @@ func _campaign_objective_in_current_theater(
 			or DiplomacyAI.staging_cities_for_objective(
 				state,
 				nation_id,
-				city.id,
-				int(city_counts.get(city.owner_nation, 0))
+				city.id
 			).is_empty()
 		):
 			continue
@@ -4275,6 +4871,16 @@ func _ensure_campaign_preparation_plan(
 	if plan_valid and state.uses_heightmap:
 		plan_valid = _sync_campaign_group_members(nation_id)
 	if plan_valid:
+		if state.uses_heightmap:
+			var existing_targets: Array[int] = (
+				nation.campaign_preparation_targets.duplicate()
+			)
+			_assign_battle_groups_to_campaign_targets(
+				nation_id,
+				existing_targets,
+				defense_plan,
+				coordinator
+			)
 		return true
 
 	_clear_campaign_preparation_plan(nation_id)
@@ -4689,15 +5295,20 @@ func _assign_battle_groups_to_campaign_targets(
 	var nation := state.nations[nation_id]
 	var view := _build_ai_view(nation_id)
 	var used_groups := {}
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.size > 0
+			and army.battle_group_id >= 0
+			and int(
+				nation.campaign_preparation_assignments.get(
+					army.id,
+					-1
+				)
+			) >= 0
+		):
+			used_groups[army.battle_group_id] = true
 	for target_city in target_candidates:
-		var target_nation := state.cities[
-			target_city
-		].owner_nation
-		var endgame_detachment := (
-			target_nation >= 0
-			and state.cities_of(target_nation).size()
-				<= CAMPAIGN_ENDGAME_CITY_THRESHOLD
-		)
 		var staging := DiplomacyAI.staging_cities_for_objective(
 			state,
 			nation_id,
@@ -4705,137 +5316,158 @@ func _assign_battle_groups_to_campaign_targets(
 		)
 		if staging.is_empty():
 			continue
-		var best_group_id := -1
-		var best_members: Array[Army] = []
-		var best_power := -1.0
-		var best_distance := INF
-		for group in nation.battle_groups:
-			if used_groups.has(group.id):
-				continue
-			var group_members := state.battle_group_members(
-				nation_id,
-				group.id
-			)
-			if group_members.is_empty():
-				continue
-			var members: Array[Army] = []
-			var group_power := 0.0
-			var group_distance := 0.0
-			for army in group_members:
-				var origin := _campaign_army_origin(
+		var demand := _campaign_target_group_demand(
+			nation_id,
+			target_city,
+			defense_plan.threat if defense_plan != null else null
+		)
+		if demand.is_empty():
+			continue
+		var required_base_power := float(
+			demand["required_power"]
+		)
+		var required_commit_manpower := int(
+			demand["required_manpower"]
+		)
+		var assigned_power := 0.0
+		var assigned_commit_manpower := 0
+		for army in state.armies:
+			if (
+				army.owner_nation == nation_id
+				and army.size > 0
+				and int(
+					nation.campaign_preparation_assignments.get(
+						army.id,
+						-1
+					)
+				) == target_city
+				and _campaign_army_can_attack_target(
 					army,
-					nation_id
+					nation_id,
+					target_city
+				)
+			):
+				assigned_power += ArmyPower.effective(army)
+				assigned_commit_manpower += army.size
+		var target_bound := (
+			nation.campaign_preparation_targets.has(target_city)
+		)
+		while (
+			not target_bound
+			or assigned_power < required_base_power
+			or assigned_commit_manpower
+				< required_commit_manpower
+		):
+			var best_group_id := -1
+			var best_members: Array[Army] = []
+			var best_power := -1.0
+			var best_commit_manpower := 0
+			var best_distance := INF
+			for group in nation.battle_groups:
+				if used_groups.has(group.id):
+					continue
+				var group_members := state.battle_group_members(
+					nation_id,
+					group.id
+				)
+				if group_members.is_empty():
+					continue
+				var availability := _campaign_group_availability(
+					nation_id,
+					target_city,
+					group_members,
+					staging,
+					view,
+					defense_plan,
+					coordinator
+				)
+				if availability.is_empty():
+					continue
+				var members: Array[Army] = availability["members"]
+				var group_power := float(availability["power"])
+				var group_commit_manpower := int(
+					availability["manpower"]
+				)
+				var group_distance := float(
+					availability["distance"]
 				)
 				if (
-					origin < 0
-					or army.state not in [
-						Army.State.IDLE,
-						Army.State.HOLDING,
-					]
-					or state.day
-						< army.defensive_deployment_until_day
-					or not _can_assign_campaign_preparation_army(
-						nation_id,
-						army,
-						target_city
-					)
-					or not _can_use_army_for_offensive(
-						defense_plan,
-						coordinator,
-						army,
-						target_city
+					group_power > best_power
+					or (
+						is_equal_approx(group_power, best_power)
+						and (
+							group_distance < best_distance
+							or (
+								is_equal_approx(
+									group_distance,
+									best_distance
+								)
+								and (
+									best_group_id < 0
+									or group.id < best_group_id
+								)
+							)
+						)
 					)
 				):
-					continue
-				var field := view.path_field(
-					origin,
+					best_group_id = group.id
+					best_members = members
+					best_power = group_power
+					best_commit_manpower = (
+						group_commit_manpower
+					)
+					best_distance = group_distance
+			if best_group_id < 0:
+				break
+			if not target_bound:
+				nation.campaign_preparation_targets.append(
+					target_city
+				)
+				nation.campaign_preparation_group_assignments[
+					target_city
+				] = best_group_id
+				target_bound = true
+			used_groups[best_group_id] = true
+			assigned_power += best_power
+			assigned_commit_manpower += best_commit_manpower
+			for army in best_members:
+				_assign_campaign_preparation_army(
 					nation_id,
-					false,
-					true,
-					-1,
-					army.max_size
+					army,
+					target_city
 				)
-				var member_distance := INF
-				for staging_city in staging:
-					var attack_edge := state.edge_of(
-						staging_city,
-						target_city
-					)
-					if (
-						attack_edge == null
-						or attack_edge.max_manpower
-							< army.max_size
-					):
-						continue
-					member_distance = minf(
-						member_distance,
-						float(
-							field["dist"].get(
-								staging_city,
-								INF
-							)
-						)
-					)
-				if member_distance == INF:
-					continue
-				members.append(army)
-				group_power += ArmyPower.effective(army)
-				group_distance = maxf(
-					group_distance,
-					member_distance
-				)
-			if (
-				members.is_empty()
-				or (
-					not endgame_detachment
-					and members.size() != group_members.size()
-				)
-			):
-				continue
-			if (
-				group_power > best_power
-				or (
-					is_equal_approx(group_power, best_power)
-					and (
-						group_distance < best_distance
-						or (
-							is_equal_approx(
-								group_distance,
-								best_distance
-							)
-							and (
-								best_group_id < 0
-								or group.id < best_group_id
-							)
-						)
-					)
-				)
-			):
-				best_group_id = group.id
-				best_members = members
-				best_power = group_power
-				best_distance = group_distance
-		if best_group_id < 0:
-			continue
-		nation.campaign_preparation_targets.append(target_city)
-		nation.campaign_preparation_group_assignments[
-			target_city
-		] = best_group_id
-		used_groups[best_group_id] = true
-		for army in best_members:
-			_assign_campaign_preparation_army(
-				nation_id,
-				army,
-				target_city
-			)
 	if nation.campaign_preparation_targets.is_empty():
 		return false
-	nation.campaign_preparation_started_day = (
-		nation.campaign_last_offensive_day
-		if nation.campaign_last_offensive_day >= 0
-		else state.day
-	)
+	if nation.campaign_preparation_started_day < 0:
+		nation.campaign_preparation_started_day = (
+			nation.campaign_last_offensive_day
+			if nation.campaign_last_offensive_day >= 0
+			else state.day
+		)
 	return true
+
+
+func _campaign_preparation_target_for_group(
+	nation_id: int,
+	group_id: int
+) -> int:
+	if group_id < 0:
+		return -1
+	var nation := state.nations[nation_id]
+	var target_city := -1
+	for member in state.battle_group_members(nation_id, group_id):
+		var member_target := int(
+			nation.campaign_preparation_assignments.get(
+				member.id,
+				-1
+			)
+		)
+		if member_target < 0:
+			continue
+		if target_city >= 0 and target_city != member_target:
+			return -2
+		target_city = member_target
+	return target_city
 
 
 func _sync_campaign_group_members(nation_id: int) -> bool:
@@ -4845,6 +5477,7 @@ func _sync_campaign_group_members(nation_id: int) -> bool:
 			!= nation.campaign_preparation_targets.size()
 	):
 		return false
+	var group_targets := {}
 	var desired_assignments := {}
 	for target_city in nation.campaign_preparation_targets:
 		if not nation.campaign_preparation_group_assignments.has(
@@ -4858,11 +5491,40 @@ func _sync_campaign_group_members(nation_id: int) -> bool:
 		)
 		if state.battle_group_by_id(nation_id, group_id) == null:
 			return false
+		group_targets[group_id] = target_city
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or army.battle_group_id < 0
+		):
+			continue
+		var target_city := int(
+			nation.campaign_preparation_assignments.get(
+				army.id,
+				-1
+			)
+		)
+		if target_city < 0:
+			continue
+		var existing_target := int(
+			group_targets.get(army.battle_group_id, -1)
+		)
+		if existing_target >= 0 and existing_target != target_city:
+			return false
+		group_targets[army.battle_group_id] = target_city
+	for group_id_value in group_targets:
+		var group_id := int(group_id_value)
+		var target_city := int(group_targets[group_id])
 		for member in state.battle_group_members(
 			nation_id,
 			group_id
 		):
-			desired_assignments[member.id] = target_city
+				if _campaign_formation_fits_target_entry(
+					member,
+					target_city
+				):
+					desired_assignments[member.id] = target_city
 	for army_id in (
 		nation.campaign_preparation_assignments.keys().duplicate()
 	):
@@ -5089,16 +5751,18 @@ func _assign_offensive_staging_orders(
 			)
 		):
 			required = 0
-			var group_id := int(
-				nation.campaign_preparation_group_assignments[
-					objective_city
-				]
-			)
-			for member in state.battle_group_members(
-				nation_id,
-				group_id
-			):
-				required += member.size
+			for army in state.armies:
+				if (
+					army.owner_nation == nation_id
+					and army.size > 0
+					and int(
+						nation.campaign_preparation_assignments.get(
+							army.id,
+							-1
+						)
+					) == objective_city
+				):
+					required += army.size
 			required = maxi(required, 1)
 		else:
 			required = _campaign_minimum_staged_troops(
@@ -5501,33 +6165,22 @@ func _launch_campaign_offensive(
 			target_attackers,
 			route_threat
 		)
-		var defender_nation := state.cities[
-			target_city
-		].owner_nation
-		var defender_city_count := state.cities_of(
-			defender_nation
-		).size()
-		if (
-			state.uses_heightmap
-			and defender_city_count > CAMPAIGN_ENDGAME_CITY_THRESHOLD
-			and route_plan.is_empty()
-		):
-			_remove_campaign_target(nation_id, target_city)
-			_remove_campaign_preparation_target(
-				nation_id,
-				target_city
-			)
-			continue
+		# 两步路线是破城后的续攻优化，不是首攻合法性。局部战力已经满足时，
+		# 死胡同或暂无第二步的边境城仍可作为一步攻势目标。
 		launchable_targets.append(target_city)
 		route_plans[target_city] = route_plan
 	if launchable_targets.is_empty():
 		return false
-	var organization_cost := _campaign_offensive_gold_cost(
+	var base_organization_cost := _campaign_offensive_gold_cost(
 		nation_id,
 		launchable_targets
 	)
+	var organization_cost := int(ceil(
+		float(base_organization_cost)
+			* (1.0 - DiplomacyAI.unification_era_factor(state))
+	))
 	if (
-		organization_cost <= 0
+		base_organization_cost <= 0
 		or nation.treasury_gold < organization_cost
 	):
 		return false
@@ -6519,9 +7172,10 @@ func _manage_campaign_offensive(
 			return false
 		objective_city = int(next["city_id"])
 		if owns_diplomatic_objective:
-			state.set_war_objective(
+				_set_coalition_war_objective(
+					state.alliance_bloc(nation_id),
+					state.alliance_bloc(defender_id),
 				nation_id,
-				defender_id,
 				objective_city,
 				str(next["reason"])
 			)
@@ -8326,7 +8980,7 @@ func _promote_challengers(battle: Battle) -> void:
 	for c in battle.side_b:
 		if (
 			c.size > 0
-			and c.morale > Combat.ARMY_ROUT_THRESHOLD
+				and c.combat_morale() > Combat.ARMY_ROUT_THRESHOLD
 		):
 			new_besiegers.append(c)
 		elif c.size > 0:
@@ -8369,7 +9023,7 @@ func _withdraw_broken_armies(side: Array[Army]) -> Array[Army]:
 	for army in side:
 		if army.size <= 0:
 			army.battle_id = -1
-		elif army.morale <= Combat.ARMY_ROUT_THRESHOLD:
+		elif army.combat_morale() <= Combat.ARMY_ROUT_THRESHOLD:
 			_retreat(army)              # 军队级溃退阈值：彻底失去组织者撤离
 		else:
 			active.append(army)
@@ -8404,7 +9058,7 @@ func _finish_field(winners: Array[Army], losers: Array[Army]) -> void:
 			a.battle_id = -1
 	for a in winners:
 		if a.size > 0:
-			if a.morale <= Combat.SIDE_ROUT_THRESHOLD:
+			if a.combat_morale() <= Combat.SIDE_ROUT_THRESHOLD:
 				_retreat(a)          # 双方同时崩溃时，低士气胜方也不能继续追击
 			else:
 				_resume_after_battle(a)
@@ -8917,7 +9571,8 @@ func _check_victory() -> void:
 			alive_nations.append(n.id)
 	if alive_nations.size() == 1:
 		state.winner = alive_nations[0]
-		paused = true
+	elif alive_nations.size() > 1:
+		state.winner = -1
 
 # ================================================================== 工具
 

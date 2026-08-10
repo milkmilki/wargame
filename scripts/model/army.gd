@@ -105,7 +105,8 @@ var ai_order_until_day: int = -1
 var ai_order_score: float = 0.0
 var ai_order_reason: String = ""
 
-## 预定攻势的限时攻击加成。Simulation 负责授予和到期清理，Combat 只读取倍率。
+## 预定攻势的限时攻击/有效士气加成。Simulation 负责授予和到期清理；
+## 持久 morale 不直接改写，战斗层通过 combat_morale() 读取同一倍率。
 var offensive_attack_multiplier: float = 1.0
 var offensive_bonus_until_day: int = -1
 
@@ -129,6 +130,26 @@ static func max_morale_for_formation(formation_size: int) -> float:
 func morale_ratio() -> float:
 	return clampf(
 		morale / maxf(max_morale, LIGHT_MAX_MORALE),
+		0.0,
+		1.0
+	)
+
+
+func offensive_multiplier() -> float:
+	return maxf(offensive_attack_multiplier, 1.0)
+
+
+func combat_morale() -> float:
+	return morale * offensive_multiplier()
+
+
+func combat_max_morale() -> float:
+	return max_morale * offensive_multiplier()
+
+
+func combat_morale_ratio() -> float:
+	return clampf(
+		combat_morale() / maxf(max_morale, LIGHT_MAX_MORALE),
 		0.0,
 		1.0
 	)

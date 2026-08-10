@@ -17,7 +17,7 @@ static func effective(army: Army) -> float:
 		))
 		/ 10.0
 	)
-	var morale_factor := clampf(army.morale, 0.0, 1.0)
+	var morale_factor := clampf(army.combat_morale(), 0.0, 1.0)
 	var supply_factor := 0.5 + 0.5 * clampf(army.supply_ratio, 0.0, 1.0)
 	return float(army.size) * quality * morale_factor * supply_factor
 

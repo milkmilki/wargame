@@ -41,6 +41,7 @@ var frontline_cities: Dictionary = {}
 var frontline_allocation: Dictionary = {}
 var defense_assignment_slots: int = 0
 var line_city_slots: int = 0
+var line_critical_city_slots: int = 0
 var line_edge_slots: int = 0
 var assigned_city_by_army: Dictionary = {} ## army.id -> city_id
 var assigned_armies_by_city: Dictionary = {} ## city_id -> Array[army.id]
@@ -818,12 +819,15 @@ func _assign_role_based_defense() -> void:
 	)
 	var defense_slots := _build_role_defense_slots()
 	line_city_slots = 0
+	line_critical_city_slots = 0
 	line_edge_slots = 0
 	for slot in defense_slots:
 		if int(slot["posture"]) == Posture.EDGE:
 			line_edge_slots += 1
 		else:
 			line_city_slots += 1
+			if int(slot.get("priority", 0)) == 0:
+				line_critical_city_slots += 1
 	defense_assignment_slots = mini(
 		defense_slots.size(),
 		line_armies.size()

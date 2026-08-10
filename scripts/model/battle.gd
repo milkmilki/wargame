@@ -76,13 +76,13 @@ var finished: bool = false
 var winner_side: int = 0         ## 1=side_a 胜，2=side_b 胜，0=未决
 
 
-## 一侧的兵力加权平均士气（派生自各 Army.morale；重军上限为 2）。空侧返回 0。
+## 一侧的兵力加权平均有效士气；攻势准备期间读取与攻击加成同源的临时倍率。
 func side_morale(side: Array[Army]) -> float:
 	var wsum := 0.0
 	var tot := 0
 	for a in side:
 		if a.size > 0:
-			wsum += a.morale * float(a.size)
+			wsum += a.combat_morale() * float(a.size)
 			tot += a.size
 	return wsum / float(tot) if tot > 0 else 0.0
 

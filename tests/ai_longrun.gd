@@ -514,6 +514,7 @@ func _init() -> void:
 							% campaign_group_id
 					)
 				campaign_groups[campaign_group_id] = target_city
+			var assigned_target_by_group := {}
 			for army_id in nation.campaign_preparation_assignments:
 				var assigned_target := int(
 					nation.campaign_preparation_assignments[
@@ -522,22 +523,31 @@ func _init() -> void:
 				)
 				if not army_group_by_id.has(army_id):
 					continue
-				if (
-					not nation
-						.campaign_preparation_group_assignments
-						.has(assigned_target)
-					or int(army_group_by_id[army_id])
-						!= int(
-							nation
-								.campaign_preparation_group_assignments[
-									assigned_target
-								]
-						)
+				var assigned_group := int(
+					army_group_by_id[army_id]
+				)
+				if not nation.campaign_preparation_targets.has(
+					assigned_target
 				):
 					invalid_group_reasons.append(
-						"army%d_wrong_campaign_group"
+						"army%d_unknown_campaign_target"
 							% army_id
 					)
+					continue
+				if (
+					assigned_target_by_group.has(assigned_group)
+					and int(
+						assigned_target_by_group[assigned_group]
+					) != assigned_target
+				):
+					invalid_group_reasons.append(
+						"group%d_multiple_assignment_targets"
+							% assigned_group
+					)
+				else:
+					assigned_target_by_group[
+						assigned_group
+					] = assigned_target
 			if not invalid_group_reasons.is_empty():
 				var mismatch := {
 					"nation": nation.id,

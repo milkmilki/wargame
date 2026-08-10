@@ -251,7 +251,7 @@ func _generate_nations(
 				0.85
 			)
 		)
-		n.treasury_gold = 400
+		n.treasury_gold = 10000
 		n.political_system = 0
 		n.alive = true
 		nations.append(n)
@@ -1556,6 +1556,34 @@ func can_declare_war(nation_a: int, nation_b: int) -> bool:
 	)
 
 
+func can_alliance_declare_war(
+	nation_a: int,
+	nation_b: int
+) -> bool:
+	if not can_declare_war(nation_a, nation_b):
+		return false
+	var attackers := alliance_bloc(nation_a)
+	var defenders := alliance_bloc(nation_b)
+	if attackers.is_empty() or defenders.is_empty():
+		return false
+	for attacker in attackers:
+		for defender in defenders:
+			if (
+				attacker == defender
+				or is_allied(attacker, defender)
+				or (
+					not is_enemy(attacker, defender)
+					and (
+						relation_between(attacker, defender)
+							!= DiplomaticRelation.NEUTRAL
+						or day < truce_until(attacker, defender)
+					)
+				)
+			):
+				return false
+	return true
+
+
 func set_diplomatic_relation(
 	nation_a: int,
 	nation_b: int,
@@ -1603,6 +1631,40 @@ func allies_of(nation_id: int) -> Array[int]:
 	for other in nations:
 		if other.id != nation_id and other.alive and is_allied(nation_id, other.id):
 			result.append(other.id)
+	return result
+
+
+## 当前联盟图中 nation_id 所在的完整连通分量。联盟上限虽通常使其退化为二元组，
+## 但按连通分量派生可避免外交层再维护一份易漂移的“战争集团成员”状态。
+func alliance_bloc(
+	nation_id: int,
+	alive_only: bool = true
+) -> Array[int]:
+	var result: Array[int] = []
+	if (
+		nation_id < 0
+		or nation_id >= nations.size()
+		or (alive_only and not nations[nation_id].alive)
+	):
+		return result
+	var seen := {nation_id: true}
+	var queue: Array[int] = [nation_id]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		result.append(current)
+		for other in nations:
+			if (
+				other.id == current
+				or seen.has(other.id)
+				or (alive_only and not other.alive)
+				or not is_allied(current, other.id)
+			):
+				continue
+			seen[other.id] = true
+			queue.append(other.id)
+	result.sort()
 	return result
 
 
@@ -1758,6 +1820,37 @@ func recognize_occupied_territory(
 			or recognized_side < 0
 			or occupying_side == recognized_side
 		):
+			continue
+		recognized_city_owners[city.id] = city.owner_nation
+		city.occupation_sponsor_nation = -1
+		transferred.append(city.id)
+	if not transferred.is_empty():
+		ownership_revision += 1
+	return transferred
+
+
+## 联盟整体议和确认两个集团之间的全部实际占领。实际控制者保留自己的占领成果，
+## 不把盟军占领地错误归给发起议和的代表国。
+func recognize_coalition_occupied_territory(
+	bloc_a: Array[int],
+	bloc_b: Array[int]
+) -> Array[int]:
+	var side_a := {}
+	var side_b := {}
+	for nation_id in bloc_a:
+		side_a[nation_id] = true
+	for nation_id in bloc_b:
+		side_b[nation_id] = true
+	var transferred: Array[int] = []
+	for city in cities:
+		var recognized_owner := recognized_owner_of(city.id)
+		if city.owner_nation == recognized_owner:
+			continue
+		var opposing_sides := (
+			(side_a.has(city.owner_nation) and side_b.has(recognized_owner))
+			or (side_b.has(city.owner_nation) and side_a.has(recognized_owner))
+		)
+		if not opposing_sides:
 			continue
 		recognized_city_owners[city.id] = city.owner_nation
 		city.occupation_sponsor_nation = -1
