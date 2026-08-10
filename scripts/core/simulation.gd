@@ -146,6 +146,9 @@ var diplomacy_enabled: bool = true
 ## AI 决策错峰：true 时各国按相位分散到决策周期内的不同天（削峰）；false 时全体
 ## 在 day%interval==0 同日决策（错峰前的旧行为）。仅用于 A/B 对照平衡性影响。
 var ai_staggered_decisions: bool = true
+## 分封开关：true 时执行 AI 产出的 ENFEOFF 动作；false 时忽略（评估仍算，无副作用）。
+## 正式游戏保持 true；仅供分封收益 A/B 对照关闭。
+var enfeoff_enabled: bool = true
 ## 等价性守卫用：置 true 强制补给网络每天全量重建（指纹缓存前的旧行为），
 ## 正式游戏始终 false，走指纹选择性失效。
 var supply_network_cache_disabled: bool = false
@@ -292,6 +295,9 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_drain_siege_food()   # 规格 R3：被围城每日耗粮（补给孤岛的粮草时钟）
 	_refresh_war_flags()
 	_check_victory()
+	# 领土/存亡结算后修复死亡国造成的悬空宗藩记录，保持宗藩不变量。
+	if state.prune_dead_suzerainty():
+		state.diplomacy_revision += 1
 	state.refresh_derived()
 
 
@@ -584,13 +590,18 @@ func _expire_offensive_bonuses() -> void:
 # ------------------------------------------------------------------ 1. 经济
 
 func _resolve_economy() -> void:
+	# 累计每国当月金钱税收（含战乱减产），作为贡赋基数。
+	var gold_income: Array[int] = []
+	gold_income.resize(state.nations.size())
+	gold_income.fill(0)
 	for city in state.cities:
 		var nation := state.nations[city.owner_nation]
-		nation.treasury_gold += city_gold_output(
-			state,
-			city
-		)
+		var gold := city_gold_output(state, city)
+		nation.treasury_gold += gold
+		gold_income[city.owner_nation] += gold
 		nation.manpower_pool += city.manpower_per_month
+	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
+	_resolve_tribute(gold_income)
 	_resolve_military_finance()
 	if state.day % DAYS_PER_HALF_YEAR == 0:
 		var produced: Array[int] = []
@@ -605,6 +616,35 @@ func _resolve_economy() -> void:
 			)
 		for nation in state.nations:
 			state.deposit_food(nation.id, produced[nation.id])
+
+
+## 贡赋：每个藩王把当月金钱税收的 tribute_rate 比例上缴直接宗主（守恒转移）。
+## 基数用当月产出而非国库存量，避免把藩王反复抽干；逐级上缴（各自只缴本国
+## 城市产出的分成）天然支持多级宗藩，且与结算顺序无关。
+func _resolve_tribute(gold_income: Array[int]) -> void:
+	for subject_value in state.suzerainty:
+		var subject_id := int(subject_value)
+		var overlord_id := int(state.suzerainty[subject_id]["overlord_id"])
+		if (
+			subject_id < 0
+			or subject_id >= state.nations.size()
+			or subject_id >= gold_income.size()
+			or overlord_id < 0
+			or overlord_id >= state.nations.size()
+		):
+			continue
+		var rate := float(state.suzerainty[subject_id].get("tribute_rate", 0.0))
+		if rate <= 0.0:
+			continue
+		var subject_nation := state.nations[subject_id]
+		var tribute := mini(
+			int(floor(float(gold_income[subject_id]) * rate)),
+			subject_nation.treasury_gold
+		)
+		if tribute <= 0:
+			continue
+		subject_nation.treasury_gold -= tribute
+		state.nations[overlord_id].treasury_gold += tribute
 
 
 static func city_food_output(
@@ -1839,6 +1879,40 @@ func _resolve_eliminated_nation_capitulations() -> void:
 			})
 
 
+## 削藩内战的首都失陷通吃结算。仅当 old_owner 与 claimant 正处于削藩内战关系时生效，
+## 返回 true 表示已按通吃处理（调用方不再走普通投降）。否则返回 false。
+##   宗主占藩王首都 → 吞并藩王全境，宗藩记录移除。
+##   藩王占宗主首都 → 藩王继承宗主全部领土；宗主的其余藩王转投胜利藩王；
+##                    胜利藩王自身升为独立主权（继承整个宗藩体系顶点）。
+func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
+	# 情形一：宗主(claimant)攻破藩王(old_owner)首都 → 吞并藩王。
+	if state.overlord_of(old_owner) == claimant and state.is_in_civil_war(old_owner):
+		state.suzerainty.erase(old_owner)
+		state.annex_nation(claimant, old_owner)
+		state.prune_dead_suzerainty()
+		_ai_last_decision_day = -1
+		return true
+	# 情形二：藩王(claimant)攻破宗主(old_owner)首都 → 藩王夺取宗主全部领土并继承体系。
+	if state.overlord_of(claimant) == old_owner and state.is_in_civil_war(claimant):
+		# 胜利藩王先脱离宗藩（它将成为新的顶点）。
+		state.suzerainty.erase(claimant)
+		# 宗主的其余藩王（除胜者外）改投胜利藩王，保持对外 ALLIED。
+		for other_subject in state.subjects_of(old_owner):
+			if other_subject == claimant:
+				continue
+			state.suzerainty[other_subject]["overlord_id"] = claimant
+			state.suzerainty[other_subject]["civil_war"] = false
+			state.set_diplomatic_relation(
+				other_subject, claimant, GameState.DiplomaticRelation.ALLIED
+			)
+		# 吞并原宗主全境。
+		state.annex_nation(claimant, old_owner)
+		state.prune_dead_suzerainty()
+		_ai_last_decision_day = -1
+		return true
+	return false
+
+
 ## 首都失陷后，战败国立即退出全部战争。额外割地严格读取投降瞬间的实控区：
 ## 从胜利国实控边境进入战败国实控区最多两跳，禁止逐城转移后继续扩张边界。
 func _resolve_capital_capture_capitulation(
@@ -2159,6 +2233,28 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 			if state.nations[nation_a].war_preparation_target_nation >= 0:
 				_clear_war_preparation(nation_a)
 				changed = true
+		DiplomacyAI.Action.ENFEOFF:
+			if not enfeoff_enabled:
+				return false
+			var region_cities: Array[int] = []
+			for city_value in action.get("region_cities", []):
+				region_cities.append(int(city_value))
+			var new_subject := state.enfeoff(nation_a, region_cities)
+			if new_subject >= 0:
+				changed = true
+				action["subject_nation"] = new_subject
+				# 新藩王出现，边境与防区拓扑改变：强制下一天全体重算。
+				_ai_last_decision_day = -1
+		DiplomacyAI.Action.CENTRALIZE:
+			# 削藩：藩王反抗则开内战（占首都通吃留待领土结算），否则和平撤藩直辖。
+			if state.overlord_of(nation_b) == nation_a and not state.is_in_civil_war(nation_b):
+				if bool(action.get("resist", false)):
+					changed = state.start_civil_war(nation_b)
+				else:
+					changed = state.revoke_vassal(nation_b)
+				if changed:
+					# 关系/领土拓扑改变：强制下一天全体重算。
+					_ai_last_decision_day = -1
 	if not changed:
 		return false
 	var event := {
@@ -2173,6 +2269,8 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 		event["objective_reason"] = str(action.get("objective_reason", ""))
 	if action.has("mobilization_armies"):
 		event["mobilization_armies"] = int(action["mobilization_armies"])
+	if action.has("subject_nation"):
+		event["subject_nation"] = int(action["subject_nation"])
 	if action.has("surrendering_nation"):
 		event["surrendering_nation"] = int(action["surrendering_nation"])
 	if kind == DiplomacyAI.Action.MAKE_PEACE:
@@ -9301,10 +9399,15 @@ func _capture_city(
 			city.id
 		)
 	if captured_capital and claimant != old_owner:
-		_resolve_capital_capture_capitulation(
-			old_owner,
-			claimant
-		)
+		# 削藩内战：占领对方首都即通吃。宗主占藩王首都→吞并藩王全境；
+		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。
+		if _resolve_civil_war_capital_capture(old_owner, claimant):
+			pass
+		else:
+			_resolve_capital_capture_capitulation(
+				old_owner,
+				claimant
+			)
 	if execute_post_capture_plan and captor_can_remain:
 		_execute_campaign_post_capture_plan(army, city)
 

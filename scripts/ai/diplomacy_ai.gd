@@ -10,6 +10,8 @@ enum Action {
 	LEAVE_ALLIANCE,
 	PREPARE_WAR,
 	CANCEL_WAR_PREPARATION,
+	ENFEOFF,
+	CENTRALIZE,
 }
 
 enum FoodPosture {
@@ -90,6 +92,24 @@ const WAR_PREPARATION_MAX_DAYS: int = 360
 const WAR_PREPARATION_RESOURCE_GRACE_DAYS: int = 90
 const WAR_PREPARATION_FORCE_SHARE: float = 0.25
 
+## 分封（藩王系统增量 B3）调参。第一版尽量少参数，判据来自设计文档第 4、6 节：
+## 核心是「区域所需 LINE 军粮耗 / 区域粮产」的负担比，只在和平期分封。
+const ENFEOFF_MIN_REGION_CITIES: int = 3       ## 候选封地最少城市数，避免碎封
+const ENFEOFF_MAX_REGION_CITIES: int = 8       ## 单次分封上限，避免一次掏空
+const ENFEOFF_BURDEN_RATIO_THRESHOLD: float = 0.60  ## 区域驻军粮耗/粮产超此值算「养不起」
+## 「远」是相对该国疆域半径的，而非绝对跳数：距首都跳数 ≥ 本国最大跳数 × 此比例
+## 才算外围（避免把绝对阈值套到小疆域国家上、导致永远找不到边疆种子）。
+const ENFEOFF_FAR_HOP_FRACTION: float = 0.5
+const ENFEOFF_MIN_OVERLORD_CITIES_AFTER: int = 6    ## 分封后宗主至少保留的陆城数
+const ENFEOFF_DECISION_COOLDOWN_DAYS: int = 360     ## 同一宗主两次分封的最短间隔
+
+## 削藩（藩王系统增量 C）调参。宗主和平期+军力优势才削藩；藩王按反抗比决定接受/反抗。
+const CENTRALIZE_MIN_POWER_ADVANTAGE: float = 1.5   ## 宗主军力须为藩王的此倍以上才考虑削藩
+const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内不再对同一藩王削藩
+## 反抗比 = 藩王军力 / 宗主可镇压军力；超此阈值藩王倾向反抗（内战），否则接受(和平撤藩)。
+## 文档第18节：和平0.45。第一版宗主削藩本就要求和平，故用单一阈值。
+const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
+
 
 static func choose_actions(state: GameState) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
@@ -114,6 +134,18 @@ static func choose_actions(state: GameState) -> Array[Dictionary]:
 		evaluation_cache
 	)
 	_collect_alliance_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
+	_collect_enfeoff_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
+	_collect_centralization_actions(
 		state,
 		actions,
 		committed,
@@ -2245,6 +2277,11 @@ static func _collect_peace_actions(
 		for b in range(a + 1, state.nations.size()):
 			if committed.has(a) or committed.has(b) or not state.is_enemy(a, b):
 				continue
+			# 削藩内战不走普通议和：宗藩内战只能由明确政治结果（占首都通吃）终结。
+			if state.is_suzerainty_pair(a, b) and (
+				state.is_in_civil_war(a) or state.is_in_civil_war(b)
+			):
+				continue
 			var bloc_a := state.alliance_bloc(a)
 			var bloc_b := state.alliance_bloc(b)
 			var war_key := _coalition_pair_key(bloc_a, bloc_b)
@@ -2382,6 +2419,10 @@ static func _collect_leave_alliance_actions(
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
 			if committed.has(a) or committed.has(b) or not state.is_allied(a, b):
+				continue
+			# 宗主与藩王的 ALLIED 是宗藩政治义务，不可通过普通退盟解除
+			# （解除只能来自明确政治事件，如独立战争）。跳过这类对。
+			if state.is_suzerainty_pair(a, b):
 				continue
 			var score_a := leave_alliance_desire(
 				state,
@@ -3354,3 +3395,371 @@ static func _bump_frontier(
 ) -> void:
 	var key := "frontier:%d:%d" % [observer, target]
 	evaluation_cache[key] = int(evaluation_cache.get(key, 0)) + 1
+
+
+# ------------------------------------------------------------------ 分封（藩王系统 B3）
+# 判据源自设计文档第 4、6 节：分封的本质是「把养不起自己驻军的偏远边疆，
+# 连同防务责任一起交给地方政权」。因此核心信号是区域负担比，
+# 而非「国家太大」这类虚构的行政容量。执行仍由 GameState.enfeoff 完成，
+# 本层只负责「统一规划」：评估并产出候选动作。
+
+## 纯派生评估：一片区域对宗主的负担画像。无副作用。
+## burden_ratio = 区域边疆线「所需」LINE 军的月粮耗 / 区域城市的等效月粮产。
+## 关键：分子是「地理应然的防务需求」（接敌边满编所需驻军），而非「当前实际驻军」——
+## 因为中央打仗时会把兵抽到主战场，偏远边疆的实际驻军往往极少，用实然驻军会让
+## 负担比恒低、分封永不触发。文档第 4 节原文即「地块所需 line 军队的粮食损耗」。
+## >阈值表示：这片边疆连守住自己所需的驻军都养不起，中央在长期倒贴其防务。
+static func evaluate_region_burden(
+	state: GameState,
+	nation_id: int,
+	city_ids: Array[int]
+) -> Dictionary:
+	var region := {}
+	for city_id in city_ids:
+		region[city_id] = true
+	var monthly_food_output := 0.0
+	var required_defense_troops := 0
+	var garrison_troops := 0
+	var gold_output := 0
+	var manpower_output := 0
+	for city_id in city_ids:
+		if city_id < 0 or city_id >= state.cities.size():
+			continue
+		var city := state.cities[city_id]
+		# 半年粮产折算为月产（与经济结算口径一致，DAYS_PER_HALF_YEAR 一次入库）。
+		monthly_food_output += float(city.food_per_half_year) / 6.0
+		gold_output += city.gold_per_month
+		manpower_output += city.manpower_per_month
+		# 该城通往「非本国可通行」邻城的每条正容量边，都是一段需长期驻守的边疆线；
+		# 其 max_manpower 即守住这段边所需的满编 LINE 兵力（应然防务需求）。
+		for neighbor in state.neighbors(city_id):
+			var edge := state.edge_of(city_id, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			var neighbor_owner := state.cities[neighbor].owner_nation
+			if neighbor_owner >= 0 and not state.has_military_access(nation_id, neighbor_owner):
+				required_defense_troops += edge.max_manpower
+	# 实然驻军仅供解释展示，不作判据。
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		var node := army.current_city_node()
+		if node >= 0 and region.has(node):
+			garrison_troops += army.size
+	var monthly_food_demand := float(required_defense_troops) * Simulation.FOOD_PER_CAPITA
+	var burden_ratio := (
+		monthly_food_demand / monthly_food_output
+		if monthly_food_output > 0.0
+		else INF
+	)
+	return {
+		"city_ids": city_ids,
+		"monthly_food_output": monthly_food_output,
+		"monthly_food_demand": monthly_food_demand,
+		"required_defense_troops": required_defense_troops,
+		"garrison_troops": garrison_troops,
+		"gold_output": gold_output,
+		"manpower_output": manpower_output,
+		"burden_ratio": burden_ratio,
+	}
+
+
+## 从最远的边疆城为种子，沿道路连续地生长一片候选封地（确定性 BFS）。
+## 只纳入本国陆城、不含首都、避免超过上限。返回 city_ids（可能为空）。
+static func _grow_enfeoff_region(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var nation := state.nations[nation_id]
+	var capital := nation.capital_city_id
+	if capital < 0:
+		return [] as Array[int]
+	var hops := _capital_hop_distances(state, nation_id)
+	# 「远」相对本国疆域半径：取本国最大跳数的一定比例为外围门槛。
+	var max_hop := 0
+	for h_value in hops.values():
+		max_hop = maxi(max_hop, int(h_value))
+	var min_hops := maxi(1, int(ceil(float(max_hop) * ENFEOFF_FAR_HOP_FRACTION)))
+	# 种子：本国非首都陆城中，距首都跳数最大且接敌（边疆）的城。
+	var seed := -1
+	var seed_hops := -1
+	for city in state.land_cities_of(nation_id):
+		if city.is_capital or city.id == capital:
+			continue
+		var h := int(hops.get(city.id, -1))
+		if h < min_hops:
+			continue
+		if not _city_is_frontier(state, nation_id, city.id):
+			continue
+		if h > seed_hops or (
+			h == seed_hops
+			and EquivariantOrder.city_id_less(state, nation_id, city.id, seed)
+		):
+			seed_hops = h
+			seed = city.id
+	if seed < 0:
+		return [] as Array[int]
+	# 从种子沿道路向「更靠近首都的方向不优先」生长：优先纳入跳数同样较大的邻城，
+	# 保证封地是一片连续的外围区域，且不轻易切断宗主核心。
+	var region: Array[int] = [seed]
+	var in_region := {seed: true}
+	var frontier_queue: Array[int] = [seed]
+	while (
+		not frontier_queue.is_empty()
+		and region.size() < ENFEOFF_MAX_REGION_CITIES
+	):
+		# 在当前边界里选跳数最大的城扩张（确定性打破平局），偏向外围。
+		var best_idx := 0
+		for i in range(1, frontier_queue.size()):
+			var a := frontier_queue[i]
+			var b := frontier_queue[best_idx]
+			var ha := int(hops.get(a, -1))
+			var hb := int(hops.get(b, -1))
+			if ha > hb or (
+				ha == hb
+				and EquivariantOrder.city_id_less(state, nation_id, a, b)
+			):
+				best_idx = i
+		var current: int = frontier_queue[best_idx]
+		frontier_queue.remove_at(best_idx)
+		var neighbor_ids := state.neighbors(current)
+		var sorted_neighbors: Array[int] = neighbor_ids.duplicate()
+		sorted_neighbors.sort()
+		for neighbor in sorted_neighbors:
+			if region.size() >= ENFEOFF_MAX_REGION_CITIES:
+				break
+			if in_region.has(neighbor):
+				continue
+			var ncity := state.cities[neighbor]
+			# 只纳入本国、非首都、非码头、且离首都够远的城，保持外围连续。
+			if (
+				ncity.owner_nation != nation_id
+				or ncity.is_capital
+				or ncity.is_dock
+				or int(hops.get(neighbor, -1)) < min_hops
+			):
+				continue
+			var edge := state.edge_of(current, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			in_region[neighbor] = true
+			region.append(neighbor)
+			frontier_queue.append(neighbor)
+	region.sort()
+	return region
+
+
+## 各城到本国首都的道路跳数（确定性 BFS，只走本国可通行边）。缓存于 evaluation_cache。
+static func _capital_hop_distances(
+	state: GameState,
+	nation_id: int
+) -> Dictionary:
+	var nation := state.nations[nation_id]
+	var capital := nation.capital_city_id
+	var dist := {}
+	if capital < 0:
+		return dist
+	dist[capital] = 0
+	var queue: Array[int] = [capital]
+	var cursor := 0
+	while cursor < queue.size():
+		var current: int = queue[cursor]
+		cursor += 1
+		var current_dist := int(dist[current])
+		var sorted_neighbors: Array[int] = state.neighbors(current).duplicate()
+		sorted_neighbors.sort()
+		for neighbor in sorted_neighbors:
+			if dist.has(neighbor):
+				continue
+			if state.cities[neighbor].owner_nation != nation_id:
+				continue
+			var edge := state.edge_of(current, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			dist[neighbor] = current_dist + 1
+			queue.append(neighbor)
+	return dist
+
+
+## 该城是否为本国边疆城：至少有一条正容量边通往非本国可通行的城。
+static func _city_is_frontier(
+	state: GameState,
+	nation_id: int,
+	city_id: int
+) -> bool:
+	for neighbor in state.neighbors(city_id):
+		var edge := state.edge_of(city_id, neighbor)
+		if edge == null or edge.max_manpower <= 0:
+			continue
+		var neighbor_owner := state.cities[neighbor].owner_nation
+		if neighbor_owner >= 0 and not state.has_military_access(nation_id, neighbor_owner):
+			return true
+	return false
+
+
+## 中央是否正在承受严重外战压力：有实际前线的对外战争，或军费已在拖欠。
+static func _overlord_under_war_pressure(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> bool:
+	var nation := state.nations[nation_id]
+	if nation.military_payment_ratio < 1.0:
+		return true
+	for enemy_id in state.wars_of(nation_id):
+		if _frontier_edges(state, nation_id, enemy_id, evaluation_cache) > 0:
+			return true
+	return false
+
+
+## 生成分封候选动作。第一版规则（尽量少变量、先跑起来）：
+##   非藩王 且 冷却已过 且 处于和平 且 候选区负担比超阈 且 分封后留足核心 → 分封。
+## 注：与设计文档第 6 节相反，这里要求「和平」而非「正在外战」——战时把前线连同
+## 尚弱的藩王一起甩出会导致边疆崩溃，且与削藩「宗主须和平」对称，逻辑更自洽。
+static func _collect_enfeoff_actions(
+	state: GameState,
+	actions: Array[Dictionary],
+	committed: Dictionary,
+	evaluation_cache: Dictionary
+) -> void:
+	for nation in state.nations:
+		if not nation.alive:
+			continue
+		var overlord_id := nation.id
+		# 藩王不得再分封（第一版不做多级自动分封）；已在本 tick 有动作的国家跳过。
+		if state.is_vassal(overlord_id) or committed.has(overlord_id):
+			continue
+		# 冷却：距上次分封任一藩王不足冷却期则跳过。
+		if _recent_enfeoff_day(state, overlord_id) >= 0 and (
+			state.day - _recent_enfeoff_day(state, overlord_id)
+				< ENFEOFF_DECISION_COOLDOWN_DAYS
+		):
+			continue
+		# 只有和平时期才分封：战时把前线连同弱藩王一起甩出去反而会导致边疆崩溃，
+		# 且与削藩「宗主须和平」对称——分封与削藩都是和平期的政治重组，逻辑自洽。
+		if _overlord_under_war_pressure(state, overlord_id, evaluation_cache):
+			continue
+		var region := _grow_enfeoff_region(state, overlord_id, evaluation_cache)
+		if region.size() < ENFEOFF_MIN_REGION_CITIES:
+			continue
+		# 分封后宗主必须保留足够核心领土。
+		if (
+			state.land_cities_of(overlord_id).size() - region.size()
+				< ENFEOFF_MIN_OVERLORD_CITIES_AFTER
+		):
+			continue
+		var burden := evaluate_region_burden(state, overlord_id, region)
+		if float(burden["burden_ratio"]) < ENFEOFF_BURDEN_RATIO_THRESHOLD:
+			continue
+		actions.append({
+			"kind": Action.ENFEOFF,
+			"a": overlord_id,
+			"b": overlord_id,
+			"region_cities": region,
+			"reason": "和平期偏远边疆负担比%.2f超阈，分封以转移地方防务" % float(
+				burden["burden_ratio"]
+			),
+		})
+		committed[overlord_id] = true
+
+
+## 该宗主最近一次分封任一藩王的世界日；从未分封返回 -1。
+static func _recent_enfeoff_day(state: GameState, overlord_id: int) -> int:
+	var latest := -1
+	for subject_id in state.subjects_of(overlord_id):
+		var created := int(state.suzerainty_record(subject_id).get("created_day", -1))
+		if created > latest:
+			latest = created
+	return latest
+
+
+# ------------------------------------------------------------------ 削藩（藩王系统 C2）
+# 宗主在和平期、对藩王有军力优势且冷却已过时发起削藩。藩王按「反抗比」即时决定：
+# 反抗比 = 藩王军力 / 宗主可镇压军力。低于阈值则接受（和平撤藩），高则反抗（内战）。
+# 执行仍由 Simulation 完成；本层只产出候选动作并预判藩王反应，附在动作里供展示。
+
+## 宗主当前可用于镇压内战的军力：总军力扣除被其它实战线占用的兵力。
+## 第一版：宗主削藩本就要求和平（无实战前线），故可镇压 ≈ 全部军力。
+## 仍按「扣除与非宗藩敌国交战占用」派生，为将来宗主多线状态保留正确性。
+static func _suppression_power(
+	state: GameState,
+	overlord_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	# 与任何非本宗藩体系的敌国交战时，占用的前线兵力不计入可镇压力。
+	# 和平时该集合为空，可镇压力 = 全部军力。
+	var tied_up := 0.0
+	for enemy_id in state.wars_of(overlord_id):
+		if state.suzerainty_root(enemy_id) == state.suzerainty_root(overlord_id):
+			continue  # 宗藩体系内部（如正在进行的其它内战）不在此扣除
+		tied_up += _national_power(state, enemy_id, evaluation_cache)
+	return maxf(_national_power(state, overlord_id, evaluation_cache) - tied_up, 1.0)
+
+
+## 藩王反抗比 = 藩王军力 / 宗主可镇压军力。越高越敢反抗。
+static func vassal_resist_ratio(
+	state: GameState,
+	subject_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var overlord_id := state.overlord_of(subject_id)
+	if overlord_id < 0:
+		return 0.0
+	var subject_power := _national_power(state, subject_id, evaluation_cache)
+	var suppression := _suppression_power(state, overlord_id, evaluation_cache)
+	return subject_power / maxf(suppression, 1.0)
+
+
+## 生成削藩候选动作。规则（文档 17、18 节）：
+##   宗主非藩王、处于和平、对该藩王军力优势达标、冷却已过、当前无内战 → 削藩。
+## 动作附带预判：resist=true 表示藩王将反抗（执行时开内战），否则和平撤藩。
+static func _collect_centralization_actions(
+	state: GameState,
+	actions: Array[Dictionary],
+	committed: Dictionary,
+	evaluation_cache: Dictionary
+) -> void:
+	for nation in state.nations:
+		if not nation.alive:
+			continue
+		var overlord_id := nation.id
+		if state.is_vassal(overlord_id) or committed.has(overlord_id):
+			continue
+		# 削藩须和平：与分封同样要求中央无实战压力（攘外必先安内的对称）。
+		if _overlord_under_war_pressure(state, overlord_id, evaluation_cache):
+			continue
+		for subject_id in state.subjects_of(overlord_id):
+			if committed.has(subject_id) or state.is_in_civil_war(subject_id):
+				continue
+			# 冷却：距上次对该藩王削藩不足冷却期则跳过。
+			var last_day := int(
+				state.suzerainty_record(subject_id).get("last_centralization_day", -1)
+			)
+			if last_day >= 0 and state.day - last_day < CENTRALIZE_COOLDOWN_DAYS:
+				continue
+			# 军力优势：宗主可镇压军力须达藩王的倍数阈值。
+			var subject_power := _national_power(state, subject_id, evaluation_cache)
+			var suppression := _suppression_power(state, overlord_id, evaluation_cache)
+			if suppression < subject_power * CENTRALIZE_MIN_POWER_ADVANTAGE:
+				continue
+			var resist_ratio := subject_power / maxf(suppression, 1.0)
+			var will_resist := resist_ratio > CENTRALIZE_RESIST_RATIO_THRESHOLD
+			actions.append({
+				"kind": Action.CENTRALIZE,
+				"a": overlord_id,
+				"b": subject_id,
+				"resist": will_resist,
+				"resist_ratio": resist_ratio,
+				"reason": (
+					"和平期对藩王%d削藩：反抗比%.2f，%s"
+					% [
+						subject_id,
+						resist_ratio,
+						"藩王将反抗，转削藩内战" if will_resist else "藩王接受，和平撤藩直辖",
+					]
+				),
+			})
+			committed[overlord_id] = true
+			committed[subject_id] = true
+			break  # 一个宗主每 tick 最多对一个藩王削藩

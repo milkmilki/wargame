@@ -6,6 +6,10 @@ const ATTACK_ENTER_RATIO: float = 1.35
 const RETREAT_ENTER_RATIO: float = 0.40
 const HOLD_DEPLOY_ENTER_RATIO: float = 0.60
 const EMERGENCY_RETREAT_RATIO: float = 0.25
+## 撤退决策计入所在本国城池城防加成的折扣权重。守城时 fort_strength 实际放大防御力
+## （见 Combat.gd 守方 def_b += garrison_b），但撤退比原本只比裸战力，导致 AI 低估守城
+## 能力、刚占的有城墙的城不放一枪就弃守。打折计入以修正该信息缺失，避免过度死守孤城。
+const CITY_DEFENSE_RETREAT_WEIGHT: float = 0.5
 const SIEGE_COMMIT_MARGIN: float = 2.00
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
@@ -62,6 +66,8 @@ static func choose(
 	var power := ArmyPower.effective(army)
 	var local_threat := threat.threat_at(current)
 	var local_support := maxf(threat.support_at(current), power)
+	# 守军位于本国城池时，把城防加成打折计入守城战力（修正撤退决策低估守城能力）。
+	local_support += _city_defense_support(view, army, current)
 	var local_ratio := local_support / maxf(local_threat, 1.0)
 	if view.day < army.ai_order_until_day and local_ratio >= EMERGENCY_RETREAT_RATIO:
 		return ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "命令承诺期未结束")
@@ -145,6 +151,25 @@ static func choose(
 		)
 	)
 	return candidates[0]
+
+
+## 守军所在本国城池的城防加成折算为守城战力（战力量纲，打折 + 断粮衰减）。
+## 复用 ArmyPower.city_defense（fort_strength×10，注释即声明与军队战力可比）与
+## Combat.SIEGE_STARVE_DEF_MULT（断粮同源衰减），不新增换算逻辑。
+static func _city_defense_support(
+	view: AiWorldView,
+	army: Army,
+	city_id: int
+) -> float:
+	if city_id < 0 or city_id >= view.state.cities.size():
+		return 0.0
+	var city: City = view.state.cities[city_id]
+	if city.owner_nation != army.owner_nation:
+		return 0.0
+	var support := ArmyPower.city_defense(city) * CITY_DEFENSE_RETREAT_WEIGHT
+	if city.food_storage <= 0:
+		support *= Combat.SIEGE_STARVE_DEF_MULT
+	return support
 
 
 static func _retreat_candidate(

@@ -47,6 +47,9 @@ enum DiplomaticRelation {
 	ALLIED,
 }
 
+## 分封默认贡赋率。
+const DEFAULT_TRIBUTE_RATE: float = 0.25
+
 
 static func army_monthly_upkeep(troops: int) -> int:
 	if troops <= 0:
@@ -105,6 +108,13 @@ var truce_until_day: Dictionary = {}
 var diplomatic_history: Array[Dictionary] = []
 ## 规范化国家对 key -> {attacker, defender, city_id, reason, started_day}。
 var war_objectives: Dictionary = {}
+## 宗藩关系有向真源（SSoT）：subject_id -> {
+##     overlord_id, tribute_rate, created_day,
+##     last_centralization_day, civil_war
+## }。不对称，故不塞进对称的 diplomatic_relations。
+## 不变量：一个藩王至多一个宗主；宗主链无环；非内战宗藩对为 ALLIED，
+## 削藩内战宗藩对为 WAR。
+var suzerainty: Dictionary = {}
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
@@ -219,6 +229,7 @@ func _reset_world(world_seed: int) -> void:
 	truce_until_day.clear()
 	diplomatic_history.clear()
 	war_objectives.clear()
+	suzerainty.clear()
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
 	river_paths.clear()
@@ -1666,6 +1677,555 @@ func alliance_bloc(
 			queue.append(other.id)
 	result.sort()
 	return result
+
+
+# ------------------------------------------------------------------ 宗藩关系
+# 宗藩是一层挂在对外「联盟共同体」之上的有向元数据：宗主与藩王对外恒为 ALLIED，
+# 故对外战争、威胁、防区等逻辑仍只依赖 is_enemy()/alliance_bloc()，无需理解藩王。
+# 本区只维护「谁是谁的宗主」这一有向真源及其不变量，不涉及削藩/内战机制。
+
+## 藩王的宗主 id；不是藩王返回 -1。
+func overlord_of(nation_id: int) -> int:
+	var record: Dictionary = suzerainty.get(nation_id, {})
+	return int(record.get("overlord_id", -1)) if not record.is_empty() else -1
+
+
+## 直接藩王 id 列表（不含更下级），按 id 升序，确定性。
+func subjects_of(overlord_id: int) -> Array[int]:
+	var result: Array[int] = []
+	for subject_id in suzerainty:
+		if int(suzerainty[subject_id].get("overlord_id", -1)) == overlord_id:
+			result.append(int(subject_id))
+	result.sort()
+	return result
+
+
+## 藩王关系记录副本；不是藩王返回空字典。
+func suzerainty_record(subject_id: int) -> Dictionary:
+	return (suzerainty.get(subject_id, {}) as Dictionary).duplicate()
+
+
+func is_vassal(nation_id: int) -> bool:
+	return suzerainty.has(nation_id)
+
+
+func is_overlord(nation_id: int) -> bool:
+	return not subjects_of(nation_id).is_empty()
+
+
+## a 与 b 是否互为直接宗主-藩属。宗藩的 ALLIED 纽带是政治义务、非普通盟约，
+## 不得被普通外交（退盟/结盟/宣战/议和）随意改动；各外交收集器据此跳过这类对。
+func is_suzerainty_pair(nation_a: int, nation_b: int) -> bool:
+	return overlord_of(nation_a) == nation_b or overlord_of(nation_b) == nation_a
+
+
+## 藩王是否正处于与其宗主的削藩内战中。内战期间宗主↔藩王为 WAR（而非 ALLIED），
+## 对外共同体因此自然解散（alliance_bloc 会把两者拆开）——攘外必先安内。
+func is_in_civil_war(subject_id: int) -> bool:
+	var record: Dictionary = suzerainty.get(subject_id, {})
+	return not record.is_empty() and bool(record.get("civil_war", false))
+
+
+## 发起削藩内战：把宗主↔藩王从 ALLIED 改为 WAR，并在记录上打内战标记。
+## 返回是否成功（须是既有宗藩对且当前非内战）。
+func start_civil_war(subject_id: int) -> bool:
+	if not suzerainty.has(subject_id) or is_in_civil_war(subject_id):
+		return false
+	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
+	suzerainty[subject_id]["civil_war"] = true
+	suzerainty[subject_id]["last_centralization_day"] = day
+	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.WAR)
+	return true
+
+
+## 结束削藩内战（不改变领土归属，仅复位关系）：宗主↔藩王恢复 ALLIED，清内战标记。
+## 供藩王战败保留宗藩、或和平收场时调用；通吃吞并另由领土结算处理。
+func end_civil_war(subject_id: int) -> bool:
+	if not suzerainty.has(subject_id) or not is_in_civil_war(subject_id):
+		return false
+	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
+	suzerainty[subject_id]["civil_war"] = false
+	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.ALLIED)
+	return true
+
+
+## 沿宗主链上溯到的最终宗主（自身不是藩王时返回自身）。含环保护。
+func suzerainty_root(nation_id: int) -> int:
+	var current := nation_id
+	var guard := 0
+	while suzerainty.has(current) and guard <= nations.size():
+		current = int(suzerainty[current]["overlord_id"])
+		guard += 1
+	return current
+
+
+## nation_id 所属宗藩体系的全部成员（含宗主与各级藩王），按 id 升序。
+## 与 alliance_bloc 的区别：bloc 是对外军事共同体（对称 ALLIED 连通分量），
+## 可能包含平等盟友；本方法只沿有向宗藩链聚合同一个宗主根下的成员。
+func suzerainty_members(nation_id: int) -> Array[int]:
+	var root := suzerainty_root(nation_id)
+	var result: Array[int] = [root]
+	var seen := {root: true}
+	var cursor := 0
+	while cursor < result.size():
+		for subject_id in subjects_of(result[cursor]):
+			if not seen.has(subject_id):
+				seen[subject_id] = true
+				result.append(subject_id)
+		cursor += 1
+	result.sort()
+	return result
+
+
+## 宗藩结构不变量校验。任一破坏都表明分封/削藩逻辑有 bug，应在测试中断言。
+func suzerainty_structure_valid() -> bool:
+	for subject_value in suzerainty:
+		var subject_id := int(subject_value)
+		var record: Dictionary = suzerainty[subject_id]
+		var overlord_id := int(record.get("overlord_id", -1))
+		# 1. id 合法且宗主藩属互异。
+		if (
+			subject_id < 0
+			or subject_id >= nations.size()
+			or overlord_id < 0
+			or overlord_id >= nations.size()
+			or subject_id == overlord_id
+		):
+			return false
+		# 2. 关系随内战态：内战中宗主↔藩王须为 WAR（共同体解散、攘外必先安内），
+		#    非内战的宗藩对须恒为 ALLIED（对外共同体化的前提）。
+		var expected := (
+			DiplomaticRelation.WAR
+			if bool(record.get("civil_war", false))
+			else DiplomaticRelation.ALLIED
+		)
+		if relation_between(subject_id, overlord_id) != expected:
+			return false
+		# 3. 沿宗主链上溯必须在有限步内终止（无环、单一宗主）。
+		var walker := overlord_id
+		var guard := 0
+		while suzerainty.has(walker):
+			if walker == subject_id or guard > nations.size():
+				return false
+			walker = int(suzerainty[walker]["overlord_id"])
+			guard += 1
+	return true
+
+
+## 清理死亡国家（无城）造成的悬空宗藩记录，保持不变量。每 tick 领土结算后调用。
+## - 死亡藩王：直接移除其记录（它已不存在）。
+## - 死亡宗主：其直接藩王上移一级（挂到宗主自己的宗主，无则升为独立主权），
+##   宗藩链因此保持连续、无悬空、无环。
+## 返回是否发生了任何清理（供调用方决定是否刷新缓存）。
+func prune_dead_suzerainty() -> bool:
+	var changed := false
+	# 先处理死亡宗主：把它的直接藩王提升到它自己的上级。
+	# 反复扫描直到稳定，兼容一次结算中多级宗主同时消亡。
+	var progressing := true
+	while progressing:
+		progressing = false
+		for subject_value in suzerainty.keys():
+			var subject_id := int(subject_value)
+			var overlord_id := int(suzerainty[subject_id]["overlord_id"])
+			var overlord_dead := (
+				overlord_id < 0
+				or overlord_id >= nations.size()
+				or not nations[overlord_id].alive
+			)
+			if not overlord_dead:
+				continue
+			# 宗主已死：藩王上移到宗主的宗主（祖父），无则脱离宗藩成为独立主权。
+			var grand := overlord_of(overlord_id)
+			if grand >= 0 and grand != subject_id and nations[grand].alive:
+				suzerainty[subject_id]["overlord_id"] = grand
+				# 宗主死于内战则内战随之终结；继承为新宗主的藩属须对外 ALLIED。
+				suzerainty[subject_id]["civil_war"] = false
+				set_diplomatic_relation(subject_id, grand, DiplomaticRelation.ALLIED)
+			else:
+				suzerainty.erase(subject_id)
+			changed = true
+			progressing = true
+	# 再移除死亡藩王自身的记录。
+	for subject_value in suzerainty.keys():
+		var subject_id := int(subject_value)
+		if (
+			subject_id < 0
+			or subject_id >= nations.size()
+			or not nations[subject_id].alive
+		):
+			suzerainty.erase(subject_id)
+			changed = true
+	return changed
+
+
+## 分封：宗主 overlord_id 将 city_ids 划出，新建一个完整藩王 Nation。
+## 长期主义切分：增量 A 只转移「领土 + 对外关系 + 派生资源」，军队不迁移
+## （藩王首版无常备军，军队迁移涉及战团结构不变量，留待增量 B 专门处理）。
+## 资源按迁出区在宗主总产能中的动态占比划转，全局守恒、无硬编码常量。
+## 返回新藩王 id；输入非法（空区、含宗主首都、跨国、道路不连续保留给增量 B）
+## 时返回 -1，不产生任何副作用。
+func enfeoff(
+	overlord_id: int,
+	city_ids: Array[int],
+	tribute_rate: float = DEFAULT_TRIBUTE_RATE
+) -> int:
+	if not _can_enfeoff(overlord_id, city_ids):
+		return -1
+	var overlord := nations[overlord_id]
+
+	# 1. 按产能占比确定划转份额（迁出区 / 宗主全域），保证资源守恒。
+	#    人力、金钱、粮食三种同质资源同构处理：均按各自产能占比划转。
+	var overlord_manpower_output := 0
+	var overlord_gold_output := 0
+	var overlord_food_output := 0
+	for city in land_cities_of(overlord_id):
+		overlord_manpower_output += city.manpower_per_month
+		overlord_gold_output += city.gold_per_month
+		overlord_food_output += city.food_per_half_year
+	var moved_manpower_output := 0
+	var moved_gold_output := 0
+	var moved_food_output := 0
+	for city_id in city_ids:
+		moved_manpower_output += cities[city_id].manpower_per_month
+		moved_gold_output += cities[city_id].gold_per_month
+		moved_food_output += cities[city_id].food_per_half_year
+	var granted_manpower := _proportional_share(
+		overlord.manpower_pool, moved_manpower_output, overlord_manpower_output
+	)
+	var granted_gold := _proportional_share(
+		overlord.treasury_gold, moved_gold_output, overlord_gold_output
+	)
+	var granted_food := _proportional_share(
+		overlord.granary_food, moved_food_output, overlord_food_output
+	)
+
+	# 2. 建新藩王 Nation（完整实体，色调随宗主派生以体现同一政治共同体）。
+	var subject := Nation.new()
+	subject.id = nations.size()
+	subject.color = _derive_vassal_color(overlord.color, subject.id)
+	subject.alive = true
+	subject.political_system = overlord.political_system
+	subject.ai_aggression = overlord.ai_aggression
+	nations.append(subject)
+
+	# 3. 迁移城市实控与法理归属；宗主与藩王间同色系，法理即刻归藩王。
+	for city_id in city_ids:
+		var city := cities[city_id]
+		city.owner_nation = subject.id
+		recognized_city_owners[city_id] = subject.id
+	ownership_revision += 1
+
+	# 3.5 迁移封地内驻军给藩王，使其能自行守边（文档第 3 节的分封经济动机核心）。
+	#     必须在城市归属藩王后进行：以城市新 owner 判定「军队是否在封地内」。
+	_transfer_garrison_to_vassal(overlord, subject)
+
+	# 4. 划转人力与金钱（守恒：从宗主池扣除、注入藩王池）。
+	overlord.manpower_pool -= granted_manpower
+	subject.manpower_pool = granted_manpower
+	overlord.treasury_gold -= granted_gold
+	subject.treasury_gold = granted_gold
+
+	# 5. 选藩王首都，并把宗主粮仓划出的份额 + 迁入城市自带存粮存入其新粮仓。
+	_withdraw_food_from_warehouses(overlord, granted_food)
+	_establish_vassal_capital(subject, granted_food)
+
+	# 6. 外交：藩王继承宗主对每个第三方的关系，并与宗主结盟。
+	#    这样 alliance_bloc 天然把宗藩聚为一体，对外 is_enemy 自动正确，
+	#    且不会因缺省 key 让新藩王与未建交国凭空开战（relation_between 缺省=WAR）。
+	_inherit_overlord_diplomacy(overlord_id, subject.id)
+
+	# 7. 写宗藩关系 SSoT。
+	suzerainty[subject.id] = {
+		"overlord_id": overlord_id,
+		"tribute_rate": clampf(tribute_rate, 0.0, 1.0),
+		"created_day": day,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+
+	refresh_derived()
+	assert(
+		suzerainty_structure_valid(),
+		"分封后宗藩结构不变量必须成立"
+	)
+	assert(
+		_battle_group_structure_valid(),
+		"分封迁移军队后战团结构不变量必须成立"
+	)
+	return subject.id
+
+
+## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。通用兼并原语，
+## 同时服务于「和平撤藩」（宗主吸收藩王）与「削藩内战通吃」（胜者吸收败者）。
+## absorbed 随后成为无城的死国（alive=false）。不处理宗藩记录，调用方负责。
+func annex_nation(absorber: int, absorbed: int) -> void:
+	if (
+		absorber < 0 or absorber >= nations.size()
+		or absorbed < 0 or absorbed >= nations.size()
+		or absorber == absorbed
+	):
+		return
+	# 1. 领土：城市实控与法理归属全部转给 absorber，清 absorbed 的首都/粮仓标记。
+	#    粮仓存粮先累加，稍后并入 absorber 首都粮仓（守恒）。
+	var absorbed_food := 0
+	for city in cities:
+		if city.owner_nation != absorbed:
+			continue
+		if city.has_warehouse:
+			absorbed_food += city.food_storage
+		city.food_storage = 0
+		city.is_capital = false
+		city.has_warehouse = false
+		city.owner_nation = absorber
+		recognized_city_owners[city.id] = absorber
+	ownership_revision += 1
+	# 2. 军队与战团：整体改属 absorber。战团 id 重新分配到 absorber 的 id 空间。
+	for group in nations[absorbed].battle_groups:
+		var members := battle_group_members(absorbed, group.id)
+		var new_group_id := nations[absorber].next_battle_group_id
+		nations[absorber].next_battle_group_id += 1
+		group.id = new_group_id
+		group.owner_nation = absorber
+		nations[absorber].battle_groups.append(group)
+		for member in members:
+			member.owner_nation = absorber
+			member.battle_group_id = new_group_id
+	nations[absorbed].battle_groups.clear()
+	for army in armies:
+		if army.owner_nation == absorbed and army.size > 0:
+			army.owner_nation = absorber
+			if army.battle_group_id < 0:
+				army.clear_line_assignment()
+	# 3. 资源：人力/金钱并入；粮食并入 absorber 首都粮仓。
+	nations[absorber].manpower_pool += nations[absorbed].manpower_pool
+	nations[absorbed].manpower_pool = 0
+	nations[absorber].treasury_gold += nations[absorbed].treasury_gold
+	nations[absorbed].treasury_gold = 0
+	var absorber_capital := nations[absorber].capital_city_id
+	if absorbed_food > 0 and absorber_capital >= 0 and absorber_capital < cities.size():
+		cities[absorber_capital].food_storage += absorbed_food
+	# 4. absorbed 成为无城死国。其宗藩记录由调用方按语义处理。
+	nations[absorbed].capital_city_id = -1
+	nations[absorbed].warehouse_city_ids = [] as Array[int]
+	nations[absorbed].alive = false
+	refresh_derived()
+
+
+## 和平撤藩：宗主直接吸收藩王全境，宗藩记录移除。返回是否成功。
+## 用于藩王面对削藩选择不反抗（军力悬殊）时的和平收场。
+func revoke_vassal(subject_id: int) -> bool:
+	if not suzerainty.has(subject_id):
+		return false
+	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
+	if overlord_id < 0 or overlord_id >= nations.size():
+		return false
+	# 先解除内战态关系（若在内战中），避免吸收后残留 WAR 关系。
+	suzerainty.erase(subject_id)
+	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.ALLIED)
+	annex_nation(overlord_id, subject_id)
+	# 被撤藩者若有下级藩王，其记录此刻悬空（指向已死国），立即修复上移。
+	prune_dead_suzerainty()
+	assert(
+		suzerainty_structure_valid(),
+		"撤藩后宗藩结构不变量必须成立"
+	)
+	assert(
+		_battle_group_structure_valid(),
+		"撤藩合并军队后战团结构不变量必须成立"
+	)
+	return true
+
+
+## 分封合法性：宗主有效存活、区域非空且全部属于宗主的陆城、不含宗主首都、
+## 不得清空宗主领土。道路连续性/切断核心等更强约束留待增量 B 的区域生成器。
+func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
+	if (
+		overlord_id < 0
+		or overlord_id >= nations.size()
+		or not nations[overlord_id].alive
+		or city_ids.is_empty()
+	):
+		return false
+	var seen := {}
+	for city_id in city_ids:
+		if (
+			city_id < 0
+			or city_id >= cities.size()
+			or seen.has(city_id)
+			or cities[city_id].owner_nation != overlord_id
+			or cities[city_id].is_capital
+		):
+			return false
+		seen[city_id] = true
+	# 不得把宗主全部陆城分封出去（宗主必须保留直辖领土）。
+	if seen.size() >= land_cities_of(overlord_id).size():
+		return false
+	return true
+
+
+## 按产能占比从一个整数资源池中切出应划转的整数份额（floor，保证不超发）。
+## share 分母为 0 时返回 0。三种同质资源（人力/金钱/粮食）共用此逻辑。
+func _proportional_share(pool: int, moved_output: int, total_output: int) -> int:
+	if total_output <= 0 or pool <= 0 or moved_output <= 0:
+		return 0
+	var ratio := float(moved_output) / float(total_output)
+	return mini(pool, int(floor(float(pool) * ratio)))
+
+
+## 从宗主全部粮仓按库存占比扣除 amount 单位粮食（守恒地把粮食划给藩王）。
+## 当前每国仅首都一个粮仓；按占比分摊为未来多粮仓保留正确性。
+func _withdraw_food_from_warehouses(overlord: Nation, amount: int) -> void:
+	if amount <= 0:
+		return
+	var warehouses := warehouse_cities_of(overlord.id)
+	var total := 0
+	for warehouse in warehouses:
+		total += warehouse.food_storage
+	if total <= 0:
+		return
+	var remaining := mini(amount, total)
+	for i in range(warehouses.size()):
+		if remaining <= 0:
+			break
+		var warehouse := warehouses[i]
+		var take := (
+			remaining
+			if i == warehouses.size() - 1
+			else mini(
+				warehouse.food_storage,
+				int(floor(float(amount) * float(warehouse.food_storage) / float(total)))
+			)
+		)
+		take = mini(take, warehouse.food_storage)
+		warehouse.food_storage -= take
+		remaining -= take
+	# granary_food 是派生量，由 refresh_derived 统一重算，此处不手改。
+
+
+## 藩王色调从宗主派生：同色相、降低明度/饱和度，体现「同一政治共同体、
+## 内部多个实体」。id 参与微调避免多个藩王同色。
+func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
+	var h := overlord_color.h
+	var s := clampf(overlord_color.s * 0.7, 0.0, 1.0)
+	var v := clampf(
+		overlord_color.v * (0.75 + fposmod(float(subject_id) * 0.11, 0.15)),
+		0.0,
+		1.0
+	)
+	return Color.from_hsv(h, s, v)
+
+
+## 为藩王选定首都与粮仓，把迁入城市自带存粮与宗主划出的 granted_food 一起入库。
+## 复用宗主首都选取的「领土重心 + EquivariantOrder 决定性打破平局」规则。
+func _establish_vassal_capital(subject: Nation, granted_food: int) -> void:
+	var owned := land_cities_of(subject.id)
+	if owned.is_empty():
+		return
+	var pooled_food := granted_food
+	for city in owned:
+		pooled_food += city.food_storage
+		city.food_storage = 0
+		city.is_capital = false
+		city.has_warehouse = false
+	var centroid := Vector2.ZERO
+	for city in owned:
+		centroid += city.map_position
+	centroid /= float(owned.size())
+	var capital_id := owned[0].id
+	var best_distance := INF
+	for city in owned:
+		var distance := city.map_position.distance_squared_to(centroid)
+		if distance < best_distance or (
+			is_equal_approx(distance, best_distance)
+			and EquivariantOrder.city_id_less(self, subject.id, city.id, capital_id)
+		):
+			best_distance = distance
+			capital_id = city.id
+	subject.capital_city_id = capital_id
+	subject.warehouse_city_ids = [capital_id] as Array[int]
+	var capital := cities[capital_id]
+	capital.is_capital = true
+	capital.has_warehouse = true
+	capital.food_storage = pooled_food
+
+
+## 把驻扎在封地内的静止驻军迁移给藩王，使藩王能自行守边。
+## 迁移规则（保证战团结构不变量、不撕裂战团、不打断行军/战斗）：
+##   1. 全部存活成员都静止在封地内的「整团」——连 BattleGroup 对象一起迁移；
+##   2. 静止在封地内的独立 LINE 军（无战团）——直接改属；
+##   3. 跨界战团（部分成员不在封地）、行军/战斗/撤退中的军队——留给宗主，
+##      其战团归属与运行态由宗主下个 AI tick 的 _reconcile_strategic_roles 自愈。
+func _transfer_garrison_to_vassal(overlord: Nation, subject: Nation) -> void:
+	# 迁移整团：仅当该战团全部存活成员都静止在藩王领土内。
+	var groups_to_move: Array[BattleGroup] = []
+	for group in overlord.battle_groups:
+		var members := battle_group_members(overlord.id, group.id)
+		if members.is_empty():
+			continue
+		var all_inside := true
+		for member in members:
+			if not _army_stationed_in_nation(member, subject.id):
+				all_inside = false
+				break
+		if all_inside:
+			groups_to_move.append(group)
+	for group in groups_to_move:
+		var members := battle_group_members(overlord.id, group.id)
+		var new_group_id := subject.next_battle_group_id
+		subject.next_battle_group_id += 1
+		group.id = new_group_id
+		group.owner_nation = subject.id
+		overlord.battle_groups.erase(group)
+		subject.battle_groups.append(group)
+		for member in members:
+			member.owner_nation = subject.id
+			member.battle_group_id = new_group_id
+			member.strategic_role = Army.StrategicRole.MAIN
+			member.clear_line_assignment()
+
+	# 迁移封地内的独立 LINE 军（无战团的轻军）。无战团的重军属异常态
+	# （重军必须隶属战团），不在此迁移，交由宗主 reconcile 归位，避免制造非法结构。
+	for army in armies:
+		if (
+			army.owner_nation == overlord.id
+			and army.battle_group_id < 0
+			and army.size > 0
+			and army.max_size < INITIAL_HEAVY_ARMY_SIZE
+			and _army_stationed_in_nation(army, subject.id)
+		):
+			army.owner_nation = subject.id
+			army.strategic_role = Army.StrategicRole.LINE
+			army.clear_line_assignment()
+			army.line_assignment_city = -1
+			army.line_assignment_edge = -1
+
+
+## 军队是否静止驻扎在 nation_id 的领土内（可安全整体转隶）。
+## 只认已停在城节点且处于静止态的军队；行军/战斗/边上驻防/撤退一律不迁移，
+## 以免破坏 battle、边通行占用与撤退路线的连续性。
+func _army_stationed_in_nation(army: Army, nation_id: int) -> bool:
+	if army.on_edge or army.state not in [Army.State.IDLE, Army.State.RECOVERING]:
+		return false
+	var node := army.current_city_node()
+	return (
+		node >= 0
+		and node < cities.size()
+		and cities[node].owner_nation == nation_id
+	)
+
+
+## 让藩王继承宗主对每一个第三方国家的对外关系，并与宗主结盟。
+func _inherit_overlord_diplomacy(overlord_id: int, subject_id: int) -> void:
+	for third in nations:
+		if third.id == subject_id or third.id == overlord_id:
+			continue
+		var inherited := relation_between(overlord_id, third.id)
+		set_diplomatic_relation(subject_id, third.id, inherited)
+	set_diplomatic_relation(
+		subject_id,
+		overlord_id,
+		DiplomaticRelation.ALLIED
+	)
 
 
 func _diplomacy_key(nation_a: int, nation_b: int) -> String:
