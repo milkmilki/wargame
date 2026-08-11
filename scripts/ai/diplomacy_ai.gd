@@ -95,7 +95,7 @@ const WAR_PREPARATION_FORCE_SHARE: float = 0.25
 ## 分封（藩王系统增量 B3）调参。第一版尽量少参数，判据来自设计文档第 4、6 节：
 ## 核心是「区域所需 LINE 军粮耗 / 区域粮产」的负担比，只在和平期分封。
 const ENFEOFF_MIN_REGION_CITIES: int = 3       ## 候选封地最少城市数，避免碎封
-const ENFEOFF_MAX_REGION_CITIES: int = 8       ## 单次分封上限，避免一次掏空
+const ENFEOFF_MAX_REGION_CITIES: int = 8       ## 主动生长上限；被切断飞地闭包可超过
 const ENFEOFF_BURDEN_RATIO_THRESHOLD: float = 0.60  ## 区域驻军粮耗/粮产超此值算「养不起」
 ## 「远」是相对该国疆域半径的，而非绝对跳数：距首都跳数 ≥ 本国最大跳数 × 此比例
 ## 才算外围（避免把绝对阈值套到小疆域国家上、导致永远找不到边疆种子）。
@@ -3830,7 +3830,10 @@ static func _grow_enfeoff_region(
 			region.append(neighbor)
 			frontier_queue.append(neighbor)
 	region.sort()
-	return region
+	return state.enfeoff_region_closure(
+		nation_id,
+		region
+	)
 
 
 ## 各城到本国首都的道路跳数（确定性 BFS，只走本国可通行边）。缓存于 evaluation_cache。

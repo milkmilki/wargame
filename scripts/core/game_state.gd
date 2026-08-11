@@ -1869,6 +1869,10 @@ func enfeoff(
 	city_ids: Array[int],
 	tribute_rate: float = DEFAULT_TRIBUTE_RATE
 ) -> int:
+	city_ids = enfeoff_region_closure(
+		overlord_id,
+		city_ids
+	)
 	if not _can_enfeoff(overlord_id, city_ids):
 		return -1
 	var overlord := nations[overlord_id]
@@ -2036,8 +2040,71 @@ func revoke_vassal(subject_id: int) -> bool:
 	return true
 
 
-## 分封合法性：宗主有效存活、区域非空且全部属于宗主的陆城、不含宗主首都、
-## 不得清空宗主领土。道路连续性/切断核心等更强约束留待增量 B 的区域生成器。
+## 分封区域闭包：拟分封区域从宗主直辖领土移除后，所有无法再沿正容量道路连回
+## 宗主首都的直辖飞地一并纳入封地。闭包不改变合法输入的城市，只补齐被切断部分。
+func enfeoff_region_closure(
+	overlord_id: int,
+	city_ids: Array[int]
+) -> Array[int]:
+	if (
+		overlord_id < 0
+		or overlord_id >= nations.size()
+		or not nations[overlord_id].alive
+		or city_ids.is_empty()
+	):
+		return [] as Array[int]
+	var capital_id := nations[overlord_id].capital_city_id
+	if (
+		capital_id < 0
+		or capital_id >= cities.size()
+		or cities[capital_id].owner_nation != overlord_id
+	):
+		return [] as Array[int]
+	var region := {}
+	for city_id in city_ids:
+		if (
+			city_id < 0
+			or city_id >= cities.size()
+			or region.has(city_id)
+			or city_id == capital_id
+			or cities[city_id].owner_nation != overlord_id
+		):
+			return [] as Array[int]
+		region[city_id] = true
+	var reachable := {capital_id: true}
+	var queue: Array[int] = [capital_id]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		for neighbor in neighbors(current):
+			var edge := edge_of(current, neighbor)
+			if (
+				reachable.has(neighbor)
+				or region.has(neighbor)
+				or cities[neighbor].owner_nation
+					!= overlord_id
+				or edge == null
+				or edge.max_manpower <= 0
+			):
+				continue
+			reachable[neighbor] = true
+			queue.append(neighbor)
+	for city in cities:
+		if (
+			city.owner_nation == overlord_id
+			and not reachable.has(city.id)
+		):
+			region[city.id] = true
+	var result: Array[int] = []
+	for city_id_value in region:
+		result.append(int(city_id_value))
+	result.sort()
+	return result
+
+
+## 分封合法性：宗主有效存活、区域非空且全部属于宗主、不含宗主首都、
+## 不得清空宗主陆地领土；传入区域必须已经包含其造成的全部直辖飞地。
 func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 	if (
 		overlord_id < 0
@@ -2057,8 +2124,17 @@ func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 		):
 			return false
 		seen[city_id] = true
-	# 不得把宗主全部陆城分封出去（宗主必须保留直辖领土）。
-	if seen.size() >= land_cities_of(overlord_id).size():
+	var remaining_land := 0
+	for city in land_cities_of(overlord_id):
+		if not seen.has(city.id):
+			remaining_land += 1
+	if remaining_land <= 0:
+		return false
+	var closure := enfeoff_region_closure(
+		overlord_id,
+		city_ids
+	)
+	if closure.size() != seen.size():
 		return false
 	return true
 

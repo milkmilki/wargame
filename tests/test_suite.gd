@@ -8311,6 +8311,92 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	enclave_sim.free()
 
+	# 宗主国领土可经和平藩属连续。藩属夹在宗主首都与边远直辖领之间时，
+	# 议和不得把边远直辖领误判为断连飞地割给敌国；普通盟国仍不具备此效果。
+	var vassal_corridor_state := GameState.new()
+	vassal_corridor_state.generate_grid_world(32018)
+	vassal_corridor_state.armies.clear()
+	vassal_corridor_state.battles.clear()
+	for city in vassal_corridor_state.cities:
+		city.owner_nation = 3
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		vassal_corridor_state.recognized_city_owners[
+			city.id
+		] = 3
+	for corridor_edge in vassal_corridor_state.edges:
+		corridor_edge.max_manpower = 0
+	for corridor_city_id in [0, 48]:
+		vassal_corridor_state.cities[
+			corridor_city_id
+		].owner_nation = 0
+		vassal_corridor_state.recognized_city_owners[
+			corridor_city_id
+		] = 0
+	for corridor_city_id in [8, 16, 24, 32, 40]:
+		vassal_corridor_state.cities[
+			corridor_city_id
+		].owner_nation = 1
+		vassal_corridor_state.recognized_city_owners[
+			corridor_city_id
+		] = 1
+	vassal_corridor_state.cities[63].owner_nation = 2
+	vassal_corridor_state.recognized_city_owners[63] = 2
+	for corridor_road in [
+		[0, 8],
+		[8, 16],
+		[16, 24],
+		[24, 32],
+		[32, 40],
+		[40, 48],
+	]:
+		vassal_corridor_state.edge_of(
+			int(corridor_road[0]),
+			int(corridor_road[1])
+		).max_manpower = Edge.STANDARD_MANPOWER
+	_set_single_warehouse(vassal_corridor_state, 0, 0, 100)
+	_set_single_warehouse(vassal_corridor_state, 1, 8, 100)
+	_set_single_warehouse(vassal_corridor_state, 2, 63, 100)
+	_set_single_warehouse(vassal_corridor_state, 3, 62, 100)
+	for corridor_a in range(vassal_corridor_state.nations.size()):
+		for corridor_b in range(
+			corridor_a + 1,
+			vassal_corridor_state.nations.size()
+		):
+			vassal_corridor_state.set_diplomatic_relation(
+				corridor_a,
+				corridor_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	vassal_corridor_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	vassal_corridor_state.set_diplomatic_relation(
+		0,
+		2,
+		GameState.DiplomaticRelation.WAR
+	)
+	vassal_corridor_state.suzerainty[1] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	vassal_corridor_state.refresh_derived()
+	var vassal_corridor_sim := Simulation.new()
+	vassal_corridor_sim.setup(vassal_corridor_state)
+	vassal_corridor_sim._make_coalition_peace(0, 2)
+	_check(
+		vassal_corridor_state.cities[48].owner_nation == 0
+			and vassal_corridor_state.recognized_owner_of(48) == 0,
+		"宗主城48经和平藩属领土连回首都时不得在议和中被判为飞地割让"
+	)
+	vassal_corridor_sim.free()
+
 	var ai_state := GameState.new()
 	ai_state.generate_grid_world(32003)
 	ai_state.day = (
@@ -12354,6 +12440,61 @@ func _test_suzerainty_invariants() -> void:
 		"非法分封（空区/含首都/非本国城/清空领土）必须被拒绝且不建国"
 	)
 	_check(gs.suzerainty_structure_valid(), "非法分封被拒后宗藩结构仍须合法")
+
+	# 分封切断宗主直辖领土时，被切断飞地必须自动并入同一封地。
+	var closure_state := GameState.new()
+	closure_state.generate_grid_world(32033)
+	closure_state.armies.clear()
+	closure_state.battles.clear()
+	for city in closure_state.cities:
+		city.owner_nation = 1
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		closure_state.recognized_city_owners[city.id] = 1
+	for closure_edge in closure_state.edges:
+		closure_edge.max_manpower = 0
+	for closure_city_id in [0, 1, 2, 3, 8]:
+		closure_state.cities[closure_city_id].owner_nation = 0
+		closure_state.recognized_city_owners[
+			closure_city_id
+		] = 0
+	for closure_road in [
+		[0, 1],
+		[1, 2],
+		[2, 3],
+		[0, 8],
+	]:
+		closure_state.edge_of(
+			int(closure_road[0]),
+			int(closure_road[1])
+		).max_manpower = Edge.STANDARD_MANPOWER
+	_set_single_warehouse(closure_state, 0, 0, 100)
+	closure_state.refresh_derived()
+	var closure_region := closure_state.enfeoff_region_closure(
+		0,
+		[1] as Array[int]
+	)
+	var closure_subject := closure_state.enfeoff(
+		0,
+		[1] as Array[int]
+	)
+	_check(
+		closure_region == [1, 2, 3]
+			and closure_subject >= 0
+			and closure_state.cities[1].owner_nation
+				== closure_subject
+			and closure_state.cities[2].owner_nation
+				== closure_subject
+			and closure_state.cities[3].owner_nation
+				== closure_subject
+			and closure_state.cities[8].owner_nation == 0
+			and _nation_territory_contiguous(
+				closure_state,
+				0
+			),
+		"分封城1切断城2/3时，飞地2/3必须一并封出，宗主保留城0/8连续"
+	)
 
 
 # ------------------------------------------------------------------ 32d. 贡赋月度结算（增量 B）

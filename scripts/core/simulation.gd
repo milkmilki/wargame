@@ -2818,6 +2818,7 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 		capital_id = state.relocate_capital(nation_id)
 	if capital_id < 0:
 		return {}
+	var suzerainty_root := state.suzerainty_root(nation_id)
 	var connected := {capital_id: true}
 	var queue: Array[int] = [capital_id]
 	var cursor := 0
@@ -2826,12 +2827,23 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 		cursor += 1
 		for neighbor in state.neighbors(city_id):
 			var edge := state.edge_of(city_id, neighbor)
+			var neighbor_owner := state.cities[
+				neighbor
+			].owner_nation
+			var same_peaceful_suzerainty := (
+				neighbor_owner >= 0
+				and state.suzerainty_root(neighbor_owner)
+					== suzerainty_root
+				and state.has_military_access(
+					nation_id,
+					neighbor_owner
+				)
+			)
 			if (
 				connected.has(neighbor)
 				or edge == null
 				or edge.max_manpower <= 0
-				or state.cities[neighbor].owner_nation
-					!= nation_id
+				or not same_peaceful_suzerainty
 			):
 				continue
 			connected[neighbor] = true
