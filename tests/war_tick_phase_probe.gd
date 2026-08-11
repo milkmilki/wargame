@@ -41,6 +41,28 @@ const CAMPAIGN_STAGES: Array[String] = [
 	"campaign_staging",
 ]
 
+const SUPPLY_STAGES: Array[String] = [
+	"supply_prepare",
+	"supply_build_plans",
+	"supply_sort",
+	"supply_withdraw",
+]
+
+const MONTHLY_STAGES: Array[String] = [
+	"monthly_economy",
+	"monthly_reinforcements",
+	"monthly_diplomacy",
+]
+
+const DIPLOMACY_STAGES: Array[String] = [
+	"diplomacy_peace",
+	"diplomacy_leave_alliance",
+	"diplomacy_war",
+	"diplomacy_alliance",
+	"diplomacy_enfeoff",
+	"diplomacy_centralization",
+]
+
 
 func _init() -> void:
 	var nations := _env_int("PHASE_NATIONS", 4)
@@ -74,7 +96,14 @@ func _init() -> void:
 
 func _new_bucket() -> Dictionary:
 	var values := {}
-	for stage in STAGES + AI_STAGES + CAMPAIGN_STAGES:
+	for stage in (
+		STAGES
+		+ AI_STAGES
+		+ CAMPAIGN_STAGES
+		+ SUPPLY_STAGES
+		+ MONTHLY_STAGES
+		+ DIPLOMACY_STAGES
+	):
 		values[stage] = [] as Array[int]
 	return {
 		"count": 0,
@@ -85,7 +114,14 @@ func _new_bucket() -> Dictionary:
 func _record(bucket: Dictionary, profile: Dictionary) -> void:
 	bucket["count"] = int(bucket["count"]) + 1
 	var values: Dictionary = bucket["values"]
-	for stage in STAGES + AI_STAGES + CAMPAIGN_STAGES:
+	for stage in (
+		STAGES
+		+ AI_STAGES
+		+ CAMPAIGN_STAGES
+		+ SUPPLY_STAGES
+		+ MONTHLY_STAGES
+		+ DIPLOMACY_STAGES
+	):
 		(values[stage] as Array[int]).append(
 			int(profile.get(stage, 0))
 		)
@@ -127,6 +163,36 @@ func _print_bucket(label: String, bucket: Dictionary) -> void:
 		])
 	print("  战役规划内部：")
 	for stage in CAMPAIGN_STAGES:
+		var avg := _average(values[stage])
+		if avg <= 0.0:
+			continue
+		print("    %-22s 均值=%7.2fms 峰值=%7.2fms" % [
+			stage,
+			avg / 1000.0,
+			float(_peak(values[stage])) / 1000.0,
+		])
+	print("  补给内部：")
+	for stage in SUPPLY_STAGES:
+		var avg := _average(values[stage])
+		if avg <= 0.0:
+			continue
+		print("    %-22s 均值=%7.2fms 峰值=%7.2fms" % [
+			stage,
+			avg / 1000.0,
+			float(_peak(values[stage])) / 1000.0,
+		])
+	print("  月度内部：")
+	for stage in MONTHLY_STAGES:
+		var avg := _average(values[stage])
+		if avg <= 0.0:
+			continue
+		print("    %-22s 均值=%7.2fms 峰值=%7.2fms" % [
+			stage,
+			avg / 1000.0,
+			float(_peak(values[stage])) / 1000.0,
+		])
+	print("  外交内部：")
+	for stage in DIPLOMACY_STAGES:
 		var avg := _average(values[stage])
 		if avg <= 0.0:
 			continue

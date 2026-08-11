@@ -563,13 +563,10 @@ static func build_supply_network(
 	for owner_id_value in owner_ids:
 		var owner_id := int(owner_id_value)
 		var warehouses := state.warehouse_cities_of(owner_id)
-		warehouses.sort_custom(func(a: City, b: City) -> bool:
-			return EquivariantOrder.city_less(
-				state,
-				nation_id,
-				a,
-				b
-			)
+		EquivariantOrder.sort_cities(
+			warehouses,
+			state,
+			nation_id
 		)
 		for warehouse in warehouses:
 			if (

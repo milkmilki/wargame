@@ -111,47 +111,105 @@ const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内
 const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
 
 
-static func choose_actions(state: GameState) -> Array[Dictionary]:
+static func choose_actions(
+	state: GameState,
+	profile: Dictionary = {}
+) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
 	var committed := {}
 	var evaluation_cache := {}
+	var profile_enabled := bool(profile.get("enabled", false))
+	var profile_started := (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	_collect_peace_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_peace",
+		profile_started,
+		profile_enabled
+	)
+	profile_started = Time.get_ticks_usec() if profile_enabled else 0
 	_collect_leave_alliance_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_leave_alliance",
+		profile_started,
+		profile_enabled
+	)
+	profile_started = Time.get_ticks_usec() if profile_enabled else 0
 	_collect_war_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_war",
+		profile_started,
+		profile_enabled
+	)
+	profile_started = Time.get_ticks_usec() if profile_enabled else 0
 	_collect_alliance_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_alliance",
+		profile_started,
+		profile_enabled
+	)
+	profile_started = Time.get_ticks_usec() if profile_enabled else 0
 	_collect_enfeoff_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_enfeoff",
+		profile_started,
+		profile_enabled
+	)
+	profile_started = Time.get_ticks_usec() if profile_enabled else 0
 	_collect_centralization_actions(
 		state,
 		actions,
 		committed,
 		evaluation_cache
 	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_centralization",
+		profile_started,
+		profile_enabled
+	)
 	return actions
+
+
+static func _record_profile_stage(
+	profile: Dictionary,
+	stage: String,
+	started_usec: int,
+	enabled: bool
+) -> void:
+	if enabled:
+		profile[stage] = Time.get_ticks_usec() - started_usec
 
 
 static func peace_willingness(state: GameState, nation_id: int, enemy_id: int) -> float:
@@ -767,7 +825,11 @@ static func _enemy_alliance_count(
 	if evaluation_cache.has(cache_key):
 		return int(evaluation_cache[cache_key])
 	var count := 0
-	for enemy_id in state.wars_of(nation_id):
+	for enemy_id in _cached_wars_of(
+		state,
+		nation_id,
+		evaluation_cache
+	):
 		if enemy_id != other_id and state.is_allied(other_id, enemy_id):
 			count += 1
 	evaluation_cache[cache_key] = count
@@ -1012,8 +1074,16 @@ static func alliance_willingness(
 	if state.relation_between(nation_id, target_id) != GameState.DiplomaticRelation.NEUTRAL:
 		return -INF
 	if (
-		state.allies_of(nation_id).size() >= MAX_DEFENSIVE_ALLIES
-		or state.allies_of(target_id).size() >= MAX_DEFENSIVE_ALLIES
+		_cached_allies_of(
+			state,
+			nation_id,
+			evaluation_cache
+		).size() >= MAX_DEFENSIVE_ALLIES
+		or _cached_allies_of(
+			state,
+			target_id,
+			evaluation_cache
+		).size() >= MAX_DEFENSIVE_ALLIES
 	):
 		return -INF
 	if state.day - state.relation_since(nation_id, target_id) < MIN_NEUTRAL_DAYS:
@@ -1052,27 +1122,12 @@ static func alliance_willingness(
 		) > 0
 		else 0.0
 	)
-	var shared_threat := 0.0
-	for other in state.nations:
-		if other.id in [nation_id, target_id] or not other.alive:
-			continue
-		shared_threat = maxf(
-			shared_threat,
-			minf(
-				threat_from_nation(
-					state,
-					nation_id,
-					other.id,
-					evaluation_cache
-				),
-				threat_from_nation(
-					state,
-					target_id,
-					other.id,
-					evaluation_cache
-				)
-			)
-		)
+	var shared_threat := _shared_threat(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache
+	)
 	var balance_affinity := maxf(1.0 - imbalance, 0.0) * 0.55
 	var frontier_release := _alliance_frontier_release_value(
 		state,
@@ -1106,6 +1161,72 @@ static func alliance_willingness(
 	return result
 
 
+static func _shared_threat(
+	state: GameState,
+	nation_a: int,
+	nation_b: int,
+	evaluation_cache: Dictionary
+) -> float:
+	var cache_key := "shared_threat:%d:%d" % [
+		mini(nation_a, nation_b),
+		maxi(nation_a, nation_b),
+	]
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
+	var result := 0.0
+	var candidate_ids := {}
+	for other_id in _cached_wars_of(
+		state,
+		nation_a,
+		evaluation_cache
+	):
+		candidate_ids[other_id] = true
+	for other_id in _cached_wars_of(
+		state,
+		nation_b,
+		evaluation_cache
+	):
+		candidate_ids[other_id] = true
+	for other_id in _bordering_nation_ids(
+		state,
+		nation_a,
+		evaluation_cache
+	):
+		candidate_ids[other_id] = true
+	for other_id in _bordering_nation_ids(
+		state,
+		nation_b,
+		evaluation_cache
+	):
+		candidate_ids[other_id] = true
+	for other_id_value in candidate_ids:
+		var other_id := int(other_id_value)
+		if (
+			other_id in [nation_a, nation_b]
+			or not state.nations[other_id].alive
+		):
+			continue
+		result = maxf(
+			result,
+			minf(
+				threat_from_nation(
+					state,
+					nation_a,
+					other_id,
+					evaluation_cache
+				),
+				threat_from_nation(
+					state,
+					nation_b,
+					other_id,
+					evaluation_cache
+				)
+			)
+		)
+	evaluation_cache[cache_key] = result
+	return result
+
+
 static func war_desire(
 	state: GameState,
 	nation_id: int,
@@ -1120,7 +1241,11 @@ static func war_desire(
 		return float(evaluation_cache[cache_key])
 	if (
 		not state.can_alliance_declare_war(nation_id, target_id)
-		or state.wars_of(nation_id).size() >= MAX_CONCURRENT_WARS
+		or _cached_wars_of(
+			state,
+			nation_id,
+			evaluation_cache
+		).size() >= MAX_CONCURRENT_WARS
 		or _frontier_edges(
 			state,
 			nation_id,
@@ -1185,8 +1310,16 @@ static func war_desire(
 		evaluation_cache
 	)
 	var ratio := own_power / maxf(target_power, 1.0)
-	var target_distraction := float(state.wars_of(target_id).size()) * 0.25
-	var own_overextension := float(state.wars_of(nation_id).size()) * 0.75
+	var target_distraction := float(_cached_wars_of(
+		state,
+		target_id,
+		evaluation_cache
+	).size()) * 0.25
+	var own_overextension := float(_cached_wars_of(
+		state,
+		nation_id,
+		evaluation_cache
+	).size()) * 0.75
 	var border_value := minf(
 		float(
 			_frontier_edges(
@@ -1496,7 +1629,11 @@ static func resource_report(
 		evaluation_cache
 	)
 	var monthly_income := 0
-	for city in state.cities_of(nation_id):
+	for city in _cached_cities_of(
+		state,
+		nation_id,
+		evaluation_cache
+	):
 		monthly_income += Simulation.city_gold_output(
 			state,
 			city
@@ -1789,7 +1926,11 @@ static func food_posture(
 	var cache_key := "food_posture:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return int(evaluation_cache[cache_key])
-	var wars := state.wars_of(nation_id)
+	var wars := _cached_wars_of(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	if not wars.is_empty():
 		for enemy_id in wars:
 			var objective := state.war_objective(nation_id, enemy_id)
@@ -1837,28 +1978,24 @@ static func _bordering_nation_ids(
 	var cache_key := "borders:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
-	var seen := {}
-	for edge in state.edges:
-		if edge.max_manpower <= 0:
-			continue
-		var owner_a := state.cities[edge.city_a].owner_nation
-		var owner_b := state.cities[edge.city_b].owner_nation
-		if (
-			state.has_military_access(nation_id, owner_a)
-			and owner_b >= 0
-			and not state.has_military_access(nation_id, owner_b)
-		):
-			seen[owner_b] = true
-		if (
-			state.has_military_access(nation_id, owner_b)
-			and owner_a >= 0
-			and not state.has_military_access(nation_id, owner_a)
-		):
-			seen[owner_a] = true
+	if not evaluation_cache.has("frontier_matrix_built"):
+		_build_frontier_matrix(state, evaluation_cache)
 	var result: Array[int] = []
-	for other_id in seen:
-		result.append(int(other_id))
-	result.sort()
+	for other in state.nations:
+		if (
+			other.id != nation_id
+			and not state.has_military_access(
+				nation_id,
+				other.id
+			)
+			and _frontier_edges(
+				state,
+				nation_id,
+				other.id,
+				evaluation_cache
+			) > 0
+		):
+			result.append(other.id)
 	evaluation_cache[cache_key] = result
 	return result
 
@@ -1895,7 +2032,11 @@ static func war_food_report(
 	if not evaluation_cache.has("garrison_by_city"):
 		evaluation_cache["garrison_by_city"] = Simulation.build_garrison_index(state)
 	var garrison_by_city: Dictionary = evaluation_cache["garrison_by_city"]
-	for city in state.cities_of(nation_id):
+	for city in _cached_cities_of(
+		state,
+		nation_id,
+		evaluation_cache
+	):
 		monthly_production += (
 			float(Simulation.city_food_output(state, city, garrison_by_city))
 				/ 6.0
@@ -2076,7 +2217,8 @@ static func _cached_war_objective(
 	var objective := select_war_objective(
 		state,
 		nation_id,
-		target_id
+		target_id,
+		evaluation_cache
 	)
 	evaluation_cache[cache_key] = objective
 	return objective
@@ -2085,9 +2227,18 @@ static func _cached_war_objective(
 static func select_war_objective(
 	state: GameState,
 	nation_id: int,
-	target_id: int
+	target_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
-	var target_cities := state.cities_of(target_id)
+	var target_cities := (
+		_cached_cities_of(
+			state,
+			target_id,
+			evaluation_cache
+		)
+		if not evaluation_cache.is_empty()
+		else state.cities_of(target_id)
+	)
 	if target_cities.is_empty():
 		return {}
 	var max_gold := 1
@@ -2124,11 +2275,26 @@ static func select_war_objective(
 			+ (4.0 if city.is_food_hub else 0.0)
 			+ (4.0 if city.is_manpower_hub else 0.0)
 		)
-		var encirclement_score := encirclement_value(
-			state,
-			city.id,
-			target_id
+		var encirclement_cache_key := (
+			"encirclement:%d:%d" % [
+				city.id,
+				target_id,
+			]
 		)
+		var encirclement_score := 0.0
+		if evaluation_cache.has(encirclement_cache_key):
+			encirclement_score = float(
+				evaluation_cache[encirclement_cache_key]
+			)
+		else:
+			encirclement_score = encirclement_value(
+				state,
+				city.id,
+				target_id
+			)
+			evaluation_cache[encirclement_cache_key] = (
+				encirclement_score
+			)
 		strategic_value += encirclement_score
 		var fort_vulnerability := Simulation.city_fort_vulnerability(
 			city,
@@ -2232,11 +2398,19 @@ static func leave_alliance_desire(
 		0.0
 	) * 0.75
 	var conflicting_commitments := 0
-	for enemy_id in state.wars_of(nation_id):
+	for enemy_id in _cached_wars_of(
+		state,
+		nation_id,
+		evaluation_cache
+	):
 		if state.is_allied(ally_id, enemy_id):
 			conflicting_commitments += 1
 	var unilateral_wars := 0
-	for enemy_id in state.wars_of(ally_id):
+	for enemy_id in _cached_wars_of(
+		state,
+		ally_id,
+		evaluation_cache
+	):
 		if not state.is_enemy(nation_id, enemy_id):
 			unilateral_wars += 1
 	var duration_days := state.day - state.relation_since(nation_id, ally_id)
@@ -2478,6 +2652,10 @@ static func _collect_alliance_actions(
 			if (
 				committed.has(a)
 				or committed.has(b)
+				or not state.nations[a].alive
+				or not state.nations[b].alive
+				or state.relation_between(a, b)
+					!= GameState.DiplomaticRelation.NEUTRAL
 				or state.nations[a].war_preparation_target_nation >= 0
 				or state.nations[b].war_preparation_target_nation >= 0
 			):
@@ -2540,10 +2718,33 @@ static func _collect_war_actions(
 				evaluation_cache
 			)
 			continue
+		if (
+			_cached_wars_of(
+				state,
+				nation.id,
+				evaluation_cache
+			).size()
+				>= MAX_CONCURRENT_WARS
+			or not offensive_resources_ready(
+				state,
+				nation.id,
+				resource_report(
+					state,
+					nation.id,
+					evaluation_cache
+				)
+			)
+		):
+			continue
 		var best_target := -1
 		var best_score := -INF
-		for target in state.nations:
-			if target.id == nation.id or committed.has(target.id) or not target.alive:
+		for target_id in _bordering_nation_ids(
+			state,
+			nation.id,
+			evaluation_cache
+		):
+			var target := state.nations[target_id]
+			if committed.has(target.id) or not target.alive:
 				continue
 			var score := war_desire(
 				state,
@@ -3045,16 +3246,8 @@ static func _national_power(
 	var cache_key := "power:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
-	var power := 0.0
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			power += ArmyPower.effective(army)
-	var result := (
-		power
-		+ float(state.cities_of(nation_id).size()) * 1500.0
-	)
-	evaluation_cache[cache_key] = result
-	return result
+	_build_nation_aggregates(state, evaluation_cache)
+	return float(evaluation_cache.get(cache_key, 0.0))
 
 
 static func _troop_count(
@@ -3065,12 +3258,8 @@ static func _troop_count(
 	var cache_key := "troops:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return int(evaluation_cache[cache_key])
-	var total := 0
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			total += army.size
-	evaluation_cache[cache_key] = total
-	return total
+	_build_nation_aggregates(state, evaluation_cache)
+	return int(evaluation_cache.get(cache_key, 0))
 
 
 static func _full_strength_troop_count(
@@ -3081,12 +3270,94 @@ static func _full_strength_troop_count(
 	var cache_key := "full_troops:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return int(evaluation_cache[cache_key])
-	var total := 0
+	_build_nation_aggregates(state, evaluation_cache)
+	return int(evaluation_cache.get(cache_key, 0))
+
+
+static func _build_nation_aggregates(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> void:
+	if evaluation_cache.has("nation_aggregates_built"):
+		return
+	evaluation_cache["nation_aggregates_built"] = true
+	var power: Array[float] = []
+	var troops: Array[int] = []
+	var full_troops: Array[int] = []
+	var cities_by_nation := {}
+	power.resize(state.nations.size())
+	power.fill(0.0)
+	troops.resize(state.nations.size())
+	troops.fill(0)
+	full_troops.resize(state.nations.size())
+	full_troops.fill(0)
+	for nation in state.nations:
+		cities_by_nation[nation.id] = [] as Array[City]
+	for city in state.cities:
+		(cities_by_nation[city.owner_nation] as Array[City]).append(
+			city
+		)
 	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			total += army.max_size
-	evaluation_cache[cache_key] = total
-	return total
+		if army.size <= 0:
+			continue
+		var owner := army.owner_nation
+		power[owner] += ArmyPower.effective(army)
+		troops[owner] += army.size
+		full_troops[owner] += army.max_size
+	for nation in state.nations:
+		var nation_id := nation.id
+		var owned_cities: Array[City] = cities_by_nation[nation_id]
+		evaluation_cache["owned_cities:%d" % nation_id] = (
+			owned_cities
+		)
+		evaluation_cache["power:%d" % nation_id] = (
+			power[nation_id]
+			+ float(owned_cities.size()) * 1500.0
+		)
+		evaluation_cache["troops:%d" % nation_id] = (
+			troops[nation_id]
+		)
+		evaluation_cache["full_troops:%d" % nation_id] = (
+			full_troops[nation_id]
+		)
+
+
+static func _cached_cities_of(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary
+) -> Array[City]:
+	var cache_key := "owned_cities:%d" % nation_id
+	if not evaluation_cache.has(cache_key):
+		_build_nation_aggregates(state, evaluation_cache)
+	return (
+		evaluation_cache.get(
+			cache_key,
+			[] as Array[City]
+		) as Array[City]
+	)
+
+
+static func _cached_wars_of(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary
+) -> Array[int]:
+	var cache_key := "wars:%d" % nation_id
+	if not evaluation_cache.has(cache_key):
+		evaluation_cache[cache_key] = state.wars_of(nation_id)
+	return evaluation_cache[cache_key] as Array[int]
+
+
+static func _cached_allies_of(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary
+) -> Array[int]:
+	var cache_key := "allies:%d" % nation_id
+	if not evaluation_cache.has(cache_key):
+		evaluation_cache[cache_key] = state.allies_of(nation_id)
+	return evaluation_cache[cache_key] as Array[int]
 
 
 static func _food_stock(
@@ -3255,7 +3526,11 @@ static func _coalition_power(
 		nation_id,
 		evaluation_cache
 	)
-	for ally_id in state.allies_of(nation_id):
+	for ally_id in _cached_allies_of(
+		state,
+		nation_id,
+		evaluation_cache
+	):
 		power += _national_power(
 			state,
 			ally_id,
@@ -3303,11 +3578,19 @@ static func _alliance_has_active_conflict(
 	]
 	if evaluation_cache.has(cache_key):
 		return bool(evaluation_cache[cache_key])
-	for enemy_id in state.wars_of(nation_a):
+	for enemy_id in _cached_wars_of(
+		state,
+		nation_a,
+		evaluation_cache
+	):
 		if state.is_allied(nation_b, enemy_id):
 			evaluation_cache[cache_key] = true
 			return true
-	for enemy_id in state.wars_of(nation_b):
+	for enemy_id in _cached_wars_of(
+		state,
+		nation_b,
+		evaluation_cache
+	):
 		if state.is_allied(nation_a, enemy_id):
 			evaluation_cache[cache_key] = true
 			return true

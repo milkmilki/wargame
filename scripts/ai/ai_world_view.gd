@@ -19,7 +19,10 @@ var friendly_armies: Array[Army] = []
 var enemy_armies: Array[Army] = []
 var allied_armies: Array[Army] = []
 var warehouses: Array[City] = []
+var armies_by_nation: Dictionary = {}
 var armies_by_city: Dictionary = {}
+var armies_by_incident_city: Dictionary = {}
+var army_power_by_nation: Dictionary = {}
 var friendly_stationed_power_by_city: Dictionary = {}
 var enemy_armies_by_city: Dictionary = {}
 var enemy_armies_by_edge: Dictionary = {}
@@ -33,9 +36,12 @@ var _supply_network_cache: Dictionary = {}
 static func build_army_index(game_state: GameState) -> Dictionary:
 	var armies_by_nation := {}
 	var armies_by_city := {}
+	var armies_by_incident_city := {}
+	var army_power_by_nation := {}
 	var stationed_power_by_nation := {}
 	for nation in game_state.nations:
 		armies_by_nation[nation.id] = [] as Array[Army]
+		army_power_by_nation[nation.id] = 0.0
 		stationed_power_by_nation[nation.id] = {}
 	for army in game_state.armies:
 		if army.size <= 0:
@@ -44,13 +50,42 @@ static func build_army_index(game_state: GameState) -> Dictionary:
 			armies_by_nation[army.owner_nation]
 				as Array[Army]
 		).append(army)
-		if not army.on_edge and army.location_city >= 0:
+		army_power_by_nation[army.owner_nation] = (
+			float(army_power_by_nation[army.owner_nation])
+			+ ArmyPower.effective(army)
+		)
+		if army.on_edge and army.move_to >= 0:
+			var incident_city_ids: Array[int] = [
+				army.move_from
+			]
+			if army.move_to != army.move_from:
+				incident_city_ids.append(army.move_to)
+			for city_id in incident_city_ids:
+				if not armies_by_incident_city.has(city_id):
+					armies_by_incident_city[city_id] = (
+						[] as Array[Army]
+					)
+				(
+					armies_by_incident_city[city_id]
+						as Array[Army]
+				).append(army)
+		elif army.location_city >= 0:
 			if not armies_by_city.has(army.location_city):
 				armies_by_city[army.location_city] = (
 					[] as Array[Army]
 				)
 			(
 				armies_by_city[army.location_city]
+					as Array[Army]
+			).append(army)
+			if not armies_by_incident_city.has(
+				army.location_city
+			):
+				armies_by_incident_city[army.location_city] = (
+					[] as Array[Army]
+				)
+			(
+				armies_by_incident_city[army.location_city]
 					as Array[Army]
 			).append(army)
 			if army.state in [
@@ -74,6 +109,8 @@ static func build_army_index(game_state: GameState) -> Dictionary:
 	return {
 		"armies_by_nation": armies_by_nation,
 		"armies_by_city": armies_by_city,
+		"armies_by_incident_city": armies_by_incident_city,
+		"army_power_by_nation": army_power_by_nation,
 		"stationed_power_by_nation":
 			stationed_power_by_nation,
 	}
@@ -132,41 +169,25 @@ static func build(
 				view.allied_cities.append(city)
 			else:
 				view.neutral_cities.append(city)
-		view.friendly_cities.sort_custom(
-			func(a: City, b: City) -> bool:
-				return EquivariantOrder.city_less(
-					game_state,
-					owner_nation,
-					a,
-					b
-				)
+		EquivariantOrder.sort_cities(
+			view.friendly_cities,
+			game_state,
+			owner_nation
 		)
-		view.enemy_cities.sort_custom(
-			func(a: City, b: City) -> bool:
-				return EquivariantOrder.city_less(
-					game_state,
-					owner_nation,
-					a,
-					b
-				)
+		EquivariantOrder.sort_cities(
+			view.enemy_cities,
+			game_state,
+			owner_nation
 		)
-		view.allied_cities.sort_custom(
-			func(a: City, b: City) -> bool:
-				return EquivariantOrder.city_less(
-					game_state,
-					owner_nation,
-					a,
-					b
-				)
+		EquivariantOrder.sort_cities(
+			view.allied_cities,
+			game_state,
+			owner_nation
 		)
-		view.neutral_cities.sort_custom(
-			func(a: City, b: City) -> bool:
-				return EquivariantOrder.city_less(
-					game_state,
-					owner_nation,
-					a,
-					b
-				)
+		EquivariantOrder.sort_cities(
+			view.neutral_cities,
+			game_state,
+			owner_nation
 		)
 		shared_city_partition_cache[city_partition_key] = {
 			"friendly": view.friendly_cities.duplicate(),
@@ -179,10 +200,15 @@ static func build(
 		if not shared_army_index.is_empty()
 		else build_army_index(game_state)
 	)
+	view.armies_by_nation = army_index["armies_by_nation"]
 	view.armies_by_city = army_index["armies_by_city"]
-	var armies_by_nation: Dictionary = (
-		army_index["armies_by_nation"]
-	)
+	view.armies_by_incident_city = army_index[
+		"armies_by_incident_city"
+	]
+	view.army_power_by_nation = army_index[
+		"army_power_by_nation"
+	]
+	var armies_by_nation: Dictionary = view.armies_by_nation
 	view.friendly_armies = (
 		armies_by_nation.get(
 			owner_nation,
@@ -258,6 +284,13 @@ static func build(
 
 func armies_at_city(city_id: int) -> Array[Army]:
 	return armies_by_city.get(city_id, []) as Array[Army]
+
+
+func armies_at_or_on_city(city_id: int) -> Array[Army]:
+	return armies_by_incident_city.get(
+		city_id,
+		[]
+	) as Array[Army]
 
 
 func enemy_armies_at_city(city_id: int) -> Array[Army]:

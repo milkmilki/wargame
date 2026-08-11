@@ -91,6 +91,8 @@ var state: GameState
 var _time_acc: float = 0.0
 var _ai_strategy_cache: Dictionary = {}    ## nation_id -> StrategicMapSnapshot
 var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership, diplomacy, fortification]
+var _ai_base_city_values_revision: Array[int] = []
+var _ai_base_city_values: Dictionary = {}
 var _threat_travel_cache: Dictionary = {}  ## 静态道路行军天数、威胁衰减权重及稳定遍历序
 var _ai_path_field_cache_by_nation: Dictionary = {}
 var _ai_supply_source_cache: Dictionary = {}
@@ -101,7 +103,7 @@ var _ai_defense_plan_cache: Dictionary = {}
 ## 使月中被切断/恢复的补给线当天即被感知，而不必等到月度经济结算。
 var _daily_supply_source_cache: Dictionary = {}
 var _daily_supply_network_cache: Dictionary = {}
-## 补给网络依赖指纹（owner_nation -> String）：仅当指纹变化才丢弃对应网络重建，
+## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
 var _supply_network_fingerprints: Dictionary = {}
 var _ai_last_decision_day: int = -1
@@ -174,6 +176,8 @@ func setup(game_state: GameState) -> void:
 	state.refresh_derived()
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
+	_ai_base_city_values_revision.clear()
+	_ai_base_city_values.clear()
 	_threat_travel_cache.clear()
 	_ai_path_field_cache_by_nation.clear()
 	_ai_supply_source_cache.clear()
@@ -253,15 +257,39 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	)
 	# 每月结算资源生产、补员与外交；普通军粮在下方每日重新分配。
 	if state.day % DAYS_PER_MONTH == 0:
+		var monthly_profile_started := (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
 		_resolve_economy()
+		_record_tick_profile_stage(
+			"monthly_economy",
+			monthly_profile_started
+		)
+		monthly_profile_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
 		if spread_runtime_work and not reinforcement_frame_slicing_disabled:
 			await _resolve_reinforcements_over_frames()
 		else:
 			_resolve_reinforcements()
+		_record_tick_profile_stage(
+			"monthly_reinforcements",
+			monthly_profile_started
+		)
+		monthly_profile_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
 		if spread_runtime_work:
 			await _resolve_diplomacy_over_frames()
 		else:
 			_resolve_diplomacy()
+		_record_tick_profile_stage(
+			"monthly_diplomacy",
+			monthly_profile_started
+		)
 	_record_tick_profile_stage("monthly", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -1058,7 +1086,17 @@ func _can_reinforce_army(army: Army) -> bool:
 func _resolve_supply() -> void:
 	# 同步驱动：一次性完成当日补给结算（测试与快进路径用，保持单帧确定性）。
 	# 运行时改走 _resolve_supply_over_frames 把两段逐军循环分摊到多帧。
+	var supply_profile_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	_prepare_supply_network_caches()
+	_record_tick_profile_stage(
+		"supply_prepare",
+		supply_profile_started
+	)
+	supply_profile_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	var plans: Array = []   # [{army, sources, demand}]
 	var demand_by_nation := _new_food_demand_accumulator()
 	for army in state.armies:
@@ -1066,9 +1104,27 @@ func _resolve_supply() -> void:
 		if not plan.is_empty():
 			plans.append(plan)
 	_finalize_food_demand(demand_by_nation)
+	_record_tick_profile_stage(
+		"supply_build_plans",
+		supply_profile_started
+	)
+	supply_profile_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	_sort_supply_plans(plans)
+	_record_tick_profile_stage(
+		"supply_sort",
+		supply_profile_started
+	)
+	supply_profile_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	for p in plans:
 		_withdraw_supply_for_plan(p)
+	_record_tick_profile_stage(
+		"supply_withdraw",
+		supply_profile_started
+	)
 
 
 ## 运行时分帧驱动：与 _resolve_supply 逐军等价，但在两段循环内按墙钟预算 yield，
@@ -1109,11 +1165,41 @@ func _prepare_supply_network_caches() -> void:
 		return
 	var besieged := state.besieged_city_ids()
 	var warehouse_state := _supply_warehouse_availability(besieged)
-	for nation in state.nations:
-		var fp := _supply_network_fingerprint(nation.id, warehouse_state)
-		if str(_supply_network_fingerprints.get(nation.id, "")) != fp:
-			_daily_supply_network_cache.erase(nation.id)
-			_supply_network_fingerprints[nation.id] = fp
+	var active_nations := {}
+	var occupied_edges_by_owner := {}
+	for army in state.armies:
+		if army.size <= 0:
+			continue
+		active_nations[army.owner_nation] = true
+		if not army.on_edge or army.move_to < 0:
+			continue
+		if not occupied_edges_by_owner.has(army.owner_nation):
+			occupied_edges_by_owner[army.owner_nation] = {}
+		(occupied_edges_by_owner[army.owner_nation] as Dictionary)[
+			GameState.edge_key(army.move_from, army.move_to)
+		] = true
+	var active_ids := active_nations.keys()
+	active_ids.sort()
+	for nation_id_value in active_ids:
+		var nation_id := int(nation_id_value)
+		var enemy_edges := {}
+		for owner_id_value in occupied_edges_by_owner:
+			var owner_id := int(owner_id_value)
+			if not state.is_enemy(nation_id, owner_id):
+				continue
+			for edge_key_value in (
+				occupied_edges_by_owner[owner_id]
+				as Dictionary
+			):
+				enemy_edges[int(edge_key_value)] = true
+		var fp := _supply_network_fingerprint(
+			nation_id,
+			warehouse_state,
+			enemy_edges
+		)
+		if _supply_network_fingerprints.get(nation_id, []) != fp:
+			_daily_supply_network_cache.erase(nation_id)
+			_supply_network_fingerprints[nation_id] = fp
 
 
 func _new_food_demand_accumulator() -> Array[int]:
@@ -1395,29 +1481,34 @@ func _supply_sources_have_food(sources: Array[Dictionary]) -> bool:
 ## danger 系静态量（运行期不改），无需纳入。指纹一致即可跨天复用网络。
 func _supply_network_fingerprint(
 	nation_id: int,
-	warehouse_state: Dictionary
-) -> String:
-	var accessible: Array[int] = []
-	for owner in state.nations:
-		if state.has_military_access(nation_id, owner.id):
-			accessible.append(owner.id)
-	accessible.sort()
-	var parts: Array[String] = []
-	for owner_id in accessible:
-		parts.append("%d>%s" % [owner_id, warehouse_state.get(owner_id, "")])
-	var enemy_edges := Pathfinding._enemy_occupied_edge_keys(state, nation_id)
-	var enemy_keys := enemy_edges.keys()
-	enemy_keys.sort()
-	return "%d:%d:%s|E%s" % [
+	warehouse_state: Dictionary,
+	enemy_edges: Dictionary
+) -> Array[int]:
+	var result: Array[int] = [
 		state.ownership_revision,
 		state.diplomacy_revision,
-		"".join(parts),
-		str(enemy_keys),
 	]
+	for owner in state.nations:
+		if not state.has_military_access(nation_id, owner.id):
+			continue
+		result.append(-1)
+		result.append(owner.id)
+		result.append_array(
+			warehouse_state.get(
+				owner.id,
+				[] as Array[int]
+			) as Array[int]
+		)
+	result.append(-2)
+	var enemy_keys := enemy_edges.keys()
+	enemy_keys.sort()
+	for edge_key_value in enemy_keys:
+		result.append(int(edge_key_value))
+	return result
 
 
-## 预算各国可用粮仓（存量>0 且未被围）为 owner_id -> "id,id,..." 串，供逐国
-## 指纹拼接复用，避免每国重复遍历全部粮仓与逐粮仓 city_under_siege。
+## 预算各国可用粮仓（存量>0 且未被围）为 owner_id -> Array[city_id]，供逐国
+## 指纹复用，避免每国重复遍历全部粮仓与逐粮仓 city_under_siege。
 func _supply_warehouse_availability(besieged: Dictionary) -> Dictionary:
 	var result := {}
 	for owner in state.nations:
@@ -1426,7 +1517,7 @@ func _supply_warehouse_availability(besieged: Dictionary) -> Dictionary:
 			if warehouse.food_storage > 0 and not besieged.has(warehouse.id):
 				usable.append(warehouse.id)
 		usable.sort()
-		result[owner.id] = ",".join(usable.map(func(i: int) -> String: return str(i)))
+		result[owner.id] = usable
 	return result
 
 
@@ -1852,9 +1943,20 @@ func _resolve_diplomacy() -> void:
 		return
 	_normalize_alliance_wars()
 	_refresh_war_preparation_viability()
-	_commit_diplomacy_actions(
-		DiplomacyAI.choose_actions(state)
-	)
+	if tick_phase_profiling_enabled:
+		var profile := {"enabled": true}
+		var actions := DiplomacyAI.choose_actions(
+			state,
+			profile
+		)
+		for stage in profile:
+			if stage != "enabled":
+				tick_profile_last_usec[stage] = profile[stage]
+		_commit_diplomacy_actions(actions)
+	else:
+		_commit_diplomacy_actions(
+			DiplomacyAI.choose_actions(state)
+		)
 
 
 func _resolve_diplomacy_over_frames() -> void:
@@ -3716,9 +3818,22 @@ func _strategy_snapshot_for(
 		not _ai_strategy_cache.has(view.nation_id)
 		or _ai_strategy_revision.get(view.nation_id, []) != revision
 	):
+		var city_values_revision: Array[int] = [
+			state.day,
+			state.ownership_revision,
+			state.fortification_revision,
+		]
+		if _ai_base_city_values_revision != city_values_revision:
+			_ai_base_city_values = (
+				StrategicMapSnapshot.build_base_city_values(
+					state
+				)
+			)
+			_ai_base_city_values_revision = city_values_revision
 		_ai_strategy_cache[view.nation_id] = StrategicMapSnapshot.build(
 			view,
-			diplomacy_cache
+			diplomacy_cache,
+			_ai_base_city_values
 		)
 		_ai_strategy_revision[view.nation_id] = revision
 	return _ai_strategy_cache[view.nation_id]
@@ -5186,11 +5301,10 @@ func _ensure_campaign_preparation_plan(
 	)
 
 	var available: Array[Army] = []
-	for army in state.armies:
+	for army in view.friendly_armies:
 		var origin := _campaign_army_origin(army, nation_id)
 		if (
-			army.owner_nation != nation_id
-			or army.size <= 0
+			army.size <= 0
 			or origin < 0
 			or army.state not in [
 				Army.State.IDLE,
@@ -5547,10 +5661,9 @@ func _assign_battle_groups_to_campaign_targets(
 	)
 	var used_groups := {}
 	var group_members_by_id := {}
-	for army in state.armies:
+	for army in view.friendly_armies:
 		if (
-			army.owner_nation == nation_id
-			and army.size > 0
+			army.size > 0
 			and army.battle_group_id >= 0
 		):
 			if not group_members_by_id.has(army.battle_group_id):
@@ -5591,10 +5704,9 @@ func _assign_battle_groups_to_campaign_targets(
 		)
 		var assigned_power := 0.0
 		var assigned_commit_manpower := 0
-		for army in state.armies:
+		for army in view.friendly_armies:
 			if (
-				army.owner_nation == nation_id
-				and army.size > 0
+				army.size > 0
 				and int(
 					nation.campaign_preparation_assignments.get(
 						army.id,
@@ -5880,10 +5992,9 @@ func _assign_offensive_staging_orders(
 	var committed_light := 0
 	if not assigned_only:
 		var objective_token := "目标城市%d" % objective_city
-		for committed_army in state.armies:
+		for committed_army in path_view.friendly_armies:
 			if (
-				committed_army.owner_nation != nation_id
-				or committed_army.size <= 0
+				committed_army.size <= 0
 				or not committed_army.ai_order_reason.contains(
 					objective_token
 				)
@@ -5915,10 +6026,9 @@ func _assign_offensive_staging_orders(
 		):
 			continue
 		var staging_armies: Array[Army] = []
-		for army in state.armies:
+		for army in path_view.friendly_armies:
 			if (
-				army.owner_nation != nation_id
-				or army.size <= 0
+				army.size <= 0
 				or army.state != Army.State.IDLE
 				or army.location_city != staging_city
 				or (
@@ -6016,10 +6126,9 @@ func _assign_offensive_staging_orders(
 			)
 		):
 			required = 0
-			for army in state.armies:
+			for army in path_view.friendly_armies:
 				if (
-					army.owner_nation == nation_id
-					and army.size > 0
+					army.size > 0
 					and int(
 						nation.campaign_preparation_assignments.get(
 							army.id,
@@ -6049,10 +6158,9 @@ func _assign_offensive_staging_orders(
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
 	var candidates: Array[Dictionary] = []
-	for army in state.armies:
+	for army in path_view.friendly_armies:
 		if (
-			army.owner_nation != nation_id
-			or army.size <= 0
+			army.size <= 0
 			or army.state != Army.State.IDLE
 			or staging.has(army.location_city)
 			or (
@@ -6180,10 +6288,9 @@ func _assign_offensive_staging_orders(
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
 	var holders: Array[Army] = []
-	for army in state.armies:
+	for army in path_view.friendly_armies:
 		if (
-			army.owner_nation != nation_id
-			or army.size <= 0
+			army.size <= 0
 			or army.state != Army.State.HOLDING
 			or (
 				assigned_only

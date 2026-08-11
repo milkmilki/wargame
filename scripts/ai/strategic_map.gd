@@ -24,6 +24,7 @@ var offensive_value: Dictionary = {}       ## enemy city_id -> 两层占领后�
 var campaign_target: int = -1               ## 国家级主战役目标
 
 var _state: GameState
+var _view: AiWorldView
 var _disc: Dictionary = {}
 var _low: Dictionary = {}
 var _subtree_value: Dictionary = {}
@@ -34,14 +35,16 @@ var _total_friendly_value: float = 0.0
 
 static func build(
 	view: AiWorldView,
-	diplomacy_cache: Dictionary = {}
+	diplomacy_cache: Dictionary = {},
+	shared_city_values: Dictionary = {}
 ) -> StrategicMapSnapshot:
 	var snapshot := StrategicMapSnapshot.new()
 	snapshot.nation_id = view.nation_id
 	snapshot.ownership_revision = view.state.ownership_revision
 	snapshot.strategic_planning_enabled = view.strategic_planning_enabled
 	snapshot._state = view.state
-	snapshot._compute_city_values()
+	snapshot._view = view
+	snapshot._initialize_city_values(shared_city_values)
 	snapshot._find_frontier(diplomacy_cache)
 	snapshot._compute_connectivity()
 	snapshot._compute_supply_corridors(view)
@@ -51,13 +54,14 @@ static func build(
 	return snapshot
 
 
-func _compute_city_values() -> void:
+static func build_base_city_values(state: GameState) -> Dictionary:
 	var max_gold := 1
 	var max_food := 1
-	for city in _state.cities:
+	for city in state.cities:
 		max_gold = maxi(max_gold, city.gold_per_month)
 		max_food = maxi(max_food, city.food_per_half_year)
-	for city in _state.cities:
+	var result := {}
+	for city in state.cities:
 		var value := (
 			float(city.gold_per_month) / float(max_gold)
 			+ float(city.food_per_half_year) / float(max_food)
@@ -71,7 +75,18 @@ func _compute_city_values() -> void:
 			value += 4.0
 		if city.is_manpower_hub:
 			value += 4.0
-		city_value[city.id] = value
+		result[city.id] = value
+	return result
+
+
+func _initialize_city_values(shared_city_values: Dictionary) -> void:
+	city_value = (
+		shared_city_values.duplicate()
+		if not shared_city_values.is_empty()
+		else build_base_city_values(_state)
+	)
+	for city in _view.friendly_cities:
+		var value := float(city_value.get(city.id, 0.0))
 		if city.owner_nation == nation_id:
 			_total_friendly_value += value
 
@@ -81,35 +96,38 @@ func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 	var enemy_seen := {}
 	var neutral_cities_by_nation := {}
 	var neutral_edges_by_nation := {}
-	for edge in _state.edges:
-		if edge.max_manpower <= 0:
-			continue
-		var owner_a := _state.cities[edge.city_a].owner_nation
-		var owner_b := _state.cities[edge.city_b].owner_nation
-		if owner_a == owner_b:
-			continue
-		if owner_a != nation_id and owner_b != nation_id:
-			continue
-		var friendly_id := edge.city_a if owner_a == nation_id else edge.city_b
-		var other_id := edge.city_b if owner_a == nation_id else edge.city_a
-		var other_nation := _state.cities[other_id].owner_nation
-		if _state.is_enemy(nation_id, other_nation):
-			frontier_edges.append(edge)
-			if not frontier_seen.has(friendly_id):
-				frontier_seen[friendly_id] = true
-				frontier_cities.append(friendly_id)
-			if not enemy_seen.has(other_id):
-				enemy_seen[other_id] = true
-				frontier_enemy_cities.append(other_id)
-		elif (
-			_state.relation_between(nation_id, other_nation)
-			== GameState.DiplomaticRelation.NEUTRAL
-		):
-			if not neutral_cities_by_nation.has(other_nation):
-				neutral_cities_by_nation[other_nation] = {}
-				neutral_edges_by_nation[other_nation] = []
-			neutral_cities_by_nation[other_nation][friendly_id] = true
-			neutral_edges_by_nation[other_nation].append(edge)
+	for friendly_city in _view.friendly_cities:
+		var friendly_id := friendly_city.id
+		for other_id in _state.neighbors(friendly_id):
+			var other_nation := _state.cities[other_id].owner_nation
+			if other_nation == nation_id:
+				continue
+			var edge := _state.edge_of(friendly_id, other_id)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			if _state.is_enemy(nation_id, other_nation):
+				frontier_edges.append(edge)
+				if not frontier_seen.has(friendly_id):
+					frontier_seen[friendly_id] = true
+					frontier_cities.append(friendly_id)
+				if not enemy_seen.has(other_id):
+					enemy_seen[other_id] = true
+					frontier_enemy_cities.append(other_id)
+			elif (
+				_state.relation_between(
+					nation_id,
+					other_nation
+				) == GameState.DiplomaticRelation.NEUTRAL
+			):
+				if not neutral_cities_by_nation.has(other_nation):
+					neutral_cities_by_nation[other_nation] = {}
+					neutral_edges_by_nation[other_nation] = []
+				neutral_cities_by_nation[other_nation][
+					friendly_id
+				] = true
+				neutral_edges_by_nation[other_nation].append(
+					edge
+				)
 	var neutral_nations := neutral_cities_by_nation.keys()
 	neutral_nations.sort_custom(func(a, b) -> bool:
 		return EquivariantOrder.nation_less(
@@ -186,11 +204,9 @@ func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 
 
 func _army_power_of(owner_nation: int) -> float:
-	var total := 0.0
-	for army in _state.armies:
-		if army.owner_nation == owner_nation and army.size > 0:
-			total += ArmyPower.effective(army)
-	return total
+	return float(
+		_view.army_power_by_nation.get(owner_nation, 0.0)
+	)
 
 
 func _neutral_border_concentration(
@@ -206,15 +222,16 @@ func _neutral_border_concentration(
 			or _state.cities[neighbor].owner_nation != other_nation
 		):
 			continue
-		for army in _state.armies:
-			if army.owner_nation != other_nation or army.size <= 0:
+		for army in _view.armies_at_or_on_city(neighbor):
+			if army.owner_nation != other_nation:
 				continue
 			if (
-				army.state in [Army.State.IDLE, Army.State.RECOVERING]
+				army.state in [
+					Army.State.IDLE,
+					Army.State.RECOVERING,
+				]
 				and army.location_city == neighbor
-			):
-				total += ArmyPower.effective(army)
-			elif (
+			) or (
 				army.state == Army.State.HOLDING
 				and (
 					(army.move_from == neighbor and army.move_to == friendly_city)
@@ -352,7 +369,12 @@ func _compute_supply_corridors(view: AiWorldView) -> void:
 	if defended_cities.is_empty():
 		return
 	for warehouse in view.warehouses:
-		var field := Pathfinding.dijkstra_field(_state, warehouse.id, nation_id, false, true)
+		var field := view.path_field(
+			warehouse.id,
+			nation_id,
+			false,
+			true
+		)
 		var prev: Dictionary = field["prev"]
 		for frontier_id in defended_cities:
 			var path := Pathfinding.reconstruct(prev, warehouse.id, frontier_id)

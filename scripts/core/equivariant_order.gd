@@ -47,6 +47,27 @@ static func city_less(
 	return city_id_less(state, nation_id, a.id, b.id, anchor_city_id)
 
 
+## 按与 city_less 完全相同的排名批量排序，只获取一次城市排名表。
+static func sort_cities(
+	values: Array[City],
+	state: GameState,
+	nation_id: int,
+	anchor_city_id: int = -1
+) -> void:
+	if values.size() < 2:
+		return
+	var rank := city_rank_map(
+		state,
+		nation_id,
+		anchor_city_id
+	)
+	values.sort_custom(func(a: City, b: City) -> bool:
+		return int(rank.get(a.id, 1 << 30)) < int(
+			rank.get(b.id, 1 << 30)
+		)
+	)
+
+
 static func sort_city_ids(
 	values: Array,
 	state: GameState,
@@ -96,12 +117,23 @@ static func city_rank_map(
 	var capital_id := -1
 	if nation_id >= 0 and nation_id < state.nations.size():
 		capital_id = state.nations[nation_id].capital_city_id
+	# 有效且不在中轴的首都完全决定排序原点与朝向；其他城市易手不会改变键。
+	# 无有效首都或中轴首都的朝向依赖领土质心，才需要随归属版本失效。
+	var ownership_dependency := 0
+	if (
+		not _valid_city(state, capital_id)
+		or is_equal_approx(
+			state.cities[capital_id].map_position.x,
+			0.5
+		)
+	):
+		ownership_dependency = state.ownership_revision
 	var cache_key := "%d:%d:%d:%d:%d" % [
 		state.get_instance_id(),
 		nation_id,
 		capital_id,
 		anchor_city_id,
-		state.ownership_revision,
+		ownership_dependency,
 	]
 	if _city_rank_cache.has(cache_key):
 		return _city_rank_cache[cache_key]
