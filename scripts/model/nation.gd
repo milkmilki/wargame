@@ -21,6 +21,9 @@ var war_preparation_objective_city: int = -1
 var war_preparation_started_day: int = -1
 var war_preparation_reason: String = ""
 var war_preparation_unready_since_day: int = -1
+## 上次「取消备战」的世界日；用于取消后冷却，杜绝取消→隔一个决策周期立即重开的横跳。
+## -1 表示无冷却在途。仅由取消路径盖戳，宣战成功清空备战不盖戳（成功不该被冷却惩罚）。
+var war_preparation_cancelled_day: int = -1
 ## 战争中的进攻波次时钟；到期后重新集结并发动下一轮攻势。
 var campaign_last_offensive_day: int = -1
 var campaign_next_offensive_day: int = -1

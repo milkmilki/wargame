@@ -1064,14 +1064,29 @@ func _reconcile_frontier_defense_sectors() -> void:
 		)
 	)
 	if not full_reconcile:
+		# 快路径也须校验锚点归属：拓扑集合未变但某锚点城被敌占领时，若只刷 runtime 会漏掉
+		# 失守锚点，导致其上的 LINE 军被反复派回敌城 IDLE 卡死。发现失守锚点则退回全量清理。
+		var fast_path_valid := true
 		for city_id_value in active_city_ids:
-			var city_id := int(city_id_value)
-			_refresh_frontier_sector_runtime(
-				sectors[city_id],
-				city_id
-			)
-		_topology_reconciled = true
-		return
+			var check_city := int(city_id_value)
+			if (
+				not sectors.has(check_city)
+				or check_city < 0
+				or check_city >= view.state.cities.size()
+				or view.state.cities[check_city].owner_nation
+					!= view.nation_id
+			):
+				fast_path_valid = false
+				break
+		if fast_path_valid:
+			for city_id_value in active_city_ids:
+				var city_id := int(city_id_value)
+				_refresh_frontier_sector_runtime(
+					sectors[city_id],
+					city_id
+				)
+			_topology_reconciled = true
+			return
 	var active_set := {}
 	for city_id_value in active_city_ids:
 		active_set[int(city_id_value)] = true
@@ -1682,6 +1697,20 @@ func _assigned_defense_candidate(
 	assigned_posture: int,
 	assigned_edge: int
 ) -> ActionCandidate:
+	# 安全门：填线锚点城若已不属本国（被敌占领/易主，无军事通行权），绝不再派兵进驻——
+	# 否则 LINE 军会开进敌城后 IDLE 卡死（不攻城、无新指令），形成敌城滞留死锁。
+	# 清掉过期防区分配，让该军回退到常规防御重规划（本函数返回 null 表示不认领此锚点）。
+	if (
+		city_id < 0
+		or city_id >= view.state.cities.size()
+		or not view.state.has_military_access(
+			view.nation_id,
+			view.state.cities[city_id].owner_nation
+		)
+	):
+		if army.line_assignment_city == city_id:
+			army.clear_line_assignment()
+		return null
 	var origin := army.location_city
 	if army.state == Army.State.HOLDING:
 		origin = army.move_from

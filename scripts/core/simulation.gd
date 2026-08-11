@@ -34,6 +34,10 @@ const CITY_GARRISON_FOOD_PENALTY_RATE: float = 0.20
 const CITY_GARRISON_FOOD_PENALTY_MAX: float = 0.30
 const CITY_WAR_DISRUPTION_DAYS: int = 365
 const CITY_WAR_OUTPUT_MULTIPLIER: float = 0.50
+## 藩王就近治理加成：藩王实控疆域内城市的钱/粮产出乘此系数（体现分权就近治理的
+## 更高产出，并弥补藩王需上缴的贡赋）。仅按「城市实控 owner 是否为藩王」派生，不烧进
+## 城市基础字段——owner 变更（分封/兼并/割地/易手）后自动生效，零维护、单一真源。
+const VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER: float = 1.5
 ## 撤退驻城恢复每月消耗：复用普通驻军月耗口径（size × FOOD_PER_CAPITA）。
 ## 资源不足时按实际供给比例恢复；士气回满或本城粮尽后解除 RECOVERING。
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
@@ -44,6 +48,9 @@ const CITY_FORT_CAPTURE_MULTIPLIER: float = 0.50
 const CITY_FORT_RECOVERY_DAYS: int = 365
 const CAPITAL_FOOD_CAPTURE_RATE: float = 0.30 ## 首都失守时库存缴获比例，其余损毁
 const CAPITAL_CAPITULATION_CESSION_DEPTH: int = 2
+## 分封战争加成：宗藩体系处于对外战争时，「不接壤敌国」的后方藩王把贡赋率临时提到此值，
+## 用后方财税支撑中央战争机器；接壤敌国的前线藩王不加税、改为自守边疆并上交机动军团。
+const VASSAL_WARTIME_REAR_TRIBUTE_RATE: float = 0.60
 # ---- 遭遇战触发 ----
 ## 边内接触阈值（以边长归一化的 move_progress 为单位，即 [0,1] 区间）。
 ## 双方沿同边推进，当各自「以 city_a 为原点的归一化位置」之差 <= 此值（或相向已交错）才触发。
@@ -368,6 +375,12 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	# 领土/存亡结算后修复死亡国造成的悬空宗藩记录，保持宗藩不变量。
 	if state.prune_dead_suzerainty():
 		state.diplomacy_revision += 1
+	# 再清理宗藩体系内因运行时被占而残留的飞地（优先体系内就近改归，否则割敌），
+	# 使地图不必等到议和即可自愈碎裂领土。
+	_reassign_disconnected_suzerainty_enclaves()
+	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留），
+	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
+	_evict_stranded_hostile_armies()
 	state.refresh_derived()
 	_record_tick_profile_stage("cleanup", profile_stage_started)
 	if tick_phase_profiling_enabled:
@@ -689,6 +702,8 @@ func _resolve_economy() -> void:
 		nation.manpower_pool += city.manpower_per_month
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
+	# 分封战争加成：前线藩王上交机动军团给中央（每月评估，随体系战争态与接壤态动态生效）。
+	_resolve_vassal_wartime_mobilization()
 	_resolve_military_finance()
 	if state.day % DAYS_PER_HALF_YEAR == 0:
 		var produced: Array[int] = []
@@ -721,6 +736,13 @@ func _resolve_tribute(gold_income: Array[int]) -> void:
 		):
 			continue
 		var rate := float(state.suzerainty[subject_id].get("tribute_rate", 0.0))
+		# 分封战争加成（后方藩王）：体系对外战争期间，不接壤敌国的后方藩王临时提高贡赋率，
+		# 用后方财税供养中央战争机器。接壤敌国的前线藩王不加税（改为自守+上交军团）。
+		if (
+			_suzerainty_system_at_war(subject_id)
+			and not state.vassal_borders_system_enemy(subject_id)
+		):
+			rate = maxf(rate, VASSAL_WARTIME_REAR_TRIBUTE_RATE)
 		if rate <= 0.0:
 			continue
 		var subject_nation := state.nations[subject_id]
@@ -734,6 +756,63 @@ func _resolve_tribute(gold_income: Array[int]) -> void:
 		state.nations[overlord_id].treasury_gold += tribute
 
 
+## 藩王所属宗藩体系是否正处于对外战争（体系对外共同体化，用体系任一成员的对外敌对判定）。
+## 削藩内战不算「对外战争」：内战期宗主↔藩王为 WAR，但那是体系内部冲突，不触发战争动员。
+func _suzerainty_system_at_war(subject_id: int) -> bool:
+	if state.is_in_civil_war(subject_id):
+		return false
+	var root := state.suzerainty_root(subject_id)
+	for member in state.suzerainty_members(root):
+		if not state.wars_of(member).is_empty():
+			return true
+	return false
+
+
+## 分封战争加成（前线藩王）：体系对外战争期间，接壤敌国的前线藩王自守边疆，
+## 并把静止在本土的整支 MAIN 机动军团上交中央（直接宗主），转为中央可自由调度的机动兵力。
+## 每月经济结算时评估一次；只迁完整静止 MAIN 战团，不撕裂战团、不打断行军/战斗（守恒）。
+func _resolve_vassal_wartime_mobilization() -> void:
+	for subject_value in state.suzerainty.keys():
+		var subject_id := int(subject_value)
+		if (
+			subject_id < 0
+			or subject_id >= state.nations.size()
+			or not state.nations[subject_id].alive
+			or state.is_in_civil_war(subject_id)
+			or not _suzerainty_system_at_war(subject_id)
+			or not state.vassal_borders_system_enemy(subject_id)
+		):
+			continue
+		state.transfer_main_battle_groups_to_overlord(subject_id)
+
+
+## 城市产出的就近治理倍率（钱/粮共用）：实控 owner 是藩王则 ×VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER，
+## 否则 ×1。纯 owner 派生、无状态，与战乱减产正交相乘。是藩王产出加成的单一真源。
+static func city_governance_output_multiplier(
+	game_state: GameState,
+	city: City
+) -> float:
+	if (
+		city == null
+		or city.owner_nation < 0
+		or city.owner_nation >= game_state.nations.size()
+		or not game_state.is_vassal(city.owner_nation)
+	):
+		return 1.0
+	return VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+
+
+static func _apply_governance_multiplier(
+	game_state: GameState,
+	city: City,
+	output: int
+) -> int:
+	var mult := city_governance_output_multiplier(game_state, city)
+	if is_equal_approx(mult, 1.0):
+		return output
+	return maxi(int(floor(float(output) * mult)), 0)
+
+
 static func city_food_output(
 	game_state: GameState,
 	city: City,
@@ -743,10 +822,14 @@ static func city_food_output(
 		city,
 		city_garrison_troops(game_state, city, garrison_by_city)
 	)
-	return _apply_city_war_disruption(
+	return _apply_governance_multiplier(
 		game_state,
 		city,
-		garrison_output
+		_apply_city_war_disruption(
+			game_state,
+			city,
+			garrison_output
+		)
 	)
 
 
@@ -754,10 +837,14 @@ static func city_gold_output(
 	game_state: GameState,
 	city: City
 ) -> int:
-	return _apply_city_war_disruption(
+	return _apply_governance_multiplier(
 		game_state,
 		city,
-		city.gold_per_month
+		_apply_city_war_disruption(
+			game_state,
+			city,
+			city.gold_per_month
+		)
 	)
 
 
@@ -1195,7 +1282,8 @@ func _prepare_supply_network_caches() -> void:
 		var fp := _supply_network_fingerprint(
 			nation_id,
 			warehouse_state,
-			enemy_edges
+			enemy_edges,
+			besieged
 		)
 		if _supply_network_fingerprints.get(nation_id, []) != fp:
 			_daily_supply_network_cache.erase(nation_id)
@@ -1477,12 +1565,14 @@ func _supply_sources_have_food(sources: Array[Dictionary]) -> bool:
 
 
 ## 逐国补给网络依赖指纹：捕获 build_supply_network 读取的全部动态量——可达
-## 各方粮仓的可用性（存量>0 且未被围）、敌占边集合、归属/外交版本。拓扑与
-## danger 系静态量（运行期不改），无需纳入。指纹一致即可跨天复用网络。
+## 各方粮仓的可用性（存量>0 且未被围）、敌占边集合、归属/外交版本，以及各粮池持有者
+## 的「藩王首都中继起点」集合及其被围态（中继节点被围会改变损耗场）。拓扑与 danger 系
+## 静态量（运行期不改），无需纳入。指纹一致即可跨天复用网络。
 func _supply_network_fingerprint(
 	nation_id: int,
 	warehouse_state: Dictionary,
-	enemy_edges: Dictionary
+	enemy_edges: Dictionary,
+	besieged: Dictionary
 ) -> Array[int]:
 	var result: Array[int] = [
 		state.ownership_revision,
@@ -1499,6 +1589,13 @@ func _supply_network_fingerprint(
 				[] as Array[int]
 			) as Array[int]
 		)
+		# 共享粮仓中继起点：owner 名下藩王首都（零库存中继）及其被围态。分封/撤藩改 owner-
+		# ship_revision、内战改 diplomacy_revision 已覆盖成员集变化；此处补齐「中继被围」维度。
+		if not owner.warehouse_city_ids.is_empty():
+			result.append(-3)
+			for capital_id in state.food_pool_relay_capitals(owner.id):
+				result.append(capital_id)
+				result.append(1 if besieged.has(capital_id) else 0)
 	result.append(-2)
 	var enemy_keys := enemy_edges.keys()
 	enemy_keys.sort()
@@ -2395,6 +2492,9 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
 			if state.nations[nation_a].war_preparation_target_nation >= 0:
 				_clear_war_preparation(nation_a)
+				# 盖取消冷却戳：杜绝取消后隔一个决策周期立即重开备战的横跳（仅显式取消路径盖戳，
+				# 宣战成功清空备战不盖，成功不该被冷却惩罚）。
+				state.nations[nation_a].war_preparation_cancelled_day = state.day
 				changed = true
 		DiplomacyAI.Action.ENFEOFF:
 			if not enfeoff_enabled:
@@ -2615,6 +2715,13 @@ func _make_coalition_peace(
 	for member_a in bloc_a:
 		for member_b in bloc_b:
 			if not state.is_enemy(member_a, member_b):
+				continue
+			# 宗藩对的关系态由宗藩机制独占管理，普通联盟议和不得触碰（与退盟/议和
+			# 收集器层的 is_suzerainty_pair 门控同源）。内战宗藩对（civil_war=true →
+			# 关系 WAR）尤其危险：宗主与内战藩王可能分属对立集团，bloc 展开会把这对
+			# WAR 扫进来，若在此停战会抹掉 WAR 却留下 civil_war 标记，破坏宗藩不变量
+			# 第2条。内战只能由占首都通吃终结，故整对跳过（关系与双边战斗都不动）。
+			if state.is_suzerainty_pair(member_a, member_b):
 				continue
 			changed = (
 				state.set_diplomatic_relation(
@@ -2899,6 +3006,139 @@ func _repatriate_abandoned_enclave_armies(
 			army.ai_action = ActionCandidate.Kind.DISBAND_ARMY
 			army.ai_order_reason = "和平割让飞地，无陆路可撤时按协议复员"
 	_purge_dead_armies()
+
+
+## 每日维护：清理宗藩体系内因运行时被占而残留的飞地（非议和路径也能自愈）。
+## 飞地 = 体系成员实控、但无法沿「体系可通行道路」连回体系首都的城（体系被视为一个整体，
+## 藩王领土经宗主领土连通亦算连续）。处置遵循「优先体系内就近改归、否则割敌」：
+##  - 若飞地组件内同时含宗主与藩王的城（组件本身仍是体系混合体），把整个组件统一到其中
+##    最靠近的存活成员，保证该组件在单一旗号下内部连续（主权连续、不碎旗）。
+##  - 若飞地组件被敌国完全隔断、无法维系，则整体割给相邻敌国（视为实际失控失地）。
+## 只在存在宗藩关系且归属发生变化后运行，避免每日热路径空转。
+func _reassign_disconnected_suzerainty_enclaves() -> void:
+	if state.suzerainty.is_empty():
+		return
+	var members_by_root := {}
+	for nation in state.nations:
+		if not nation.alive or state.cities_of(nation.id).is_empty():
+			continue
+		var root := state.suzerainty_root(nation.id)
+		if not members_by_root.has(root):
+			members_by_root[root] = [] as Array[int]
+		(members_by_root[root] as Array[int]).append(nation.id)
+	var roots := members_by_root.keys()
+	roots.sort()
+	var reassigned_any := false
+	for root_value in roots:
+		var root := int(root_value)
+		var members: Array[int] = members_by_root[root]
+		if members.size() < 2:
+			continue
+		if _reassign_system_enclaves(root, members):
+			reassigned_any = true
+	if reassigned_any:
+		state.ownership_revision += 1
+		state.diplomacy_revision += 1
+		_ai_last_decision_day = -1
+
+
+## 处理单个宗藩体系（根 root、成员 members）的飞地。返回是否发生任何归属变更。
+## connected = 从体系首都出发、沿「同体系成员实控 + 正容量道路」可达的全部城（体系本土）。
+## 把每个「非本土」的体系城按其飞地连通组件聚合，逐组件决定统一归属：
+##  - 组件通过正容量道路与相邻敌国相接 → 整组件割给（决定性择一的）相邻敌国；
+##  - 否则（内陆孤块，仅与体系自身相邻但仍连不回首都）→ 统一到组件内决定性择一的存活成员，
+##    保证该孤块在单一旗号下内部连续、不再多旗碎裂。
+func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
+	var member_set := {}
+	for member_id in members:
+		member_set[member_id] = true
+	var connected := _capital_connected_territory(root)
+	var enclave_cities: Array[int] = []
+	for member_id in members:
+		for city in state.cities_of(member_id):
+			if not connected.has(city.id):
+				enclave_cities.append(city.id)
+	if enclave_cities.is_empty():
+		return false
+	enclave_cities.sort()
+	var visited := {}
+	var changed := false
+	for seed_city in enclave_cities:
+		if visited.has(seed_city):
+			continue
+		# BFS 出该飞地的连通组件（只沿体系成员实控的城 + 正容量道路），
+		# 同时记录组件外沿相邻的敌国（用于判断可否割敌）。
+		var component: Array[int] = []
+		var adjacent_enemy := -1
+		var queue: Array[int] = [seed_city]
+		visited[seed_city] = true
+		var cursor := 0
+		while cursor < queue.size():
+			var cid := queue[cursor]
+			cursor += 1
+			component.append(cid)
+			for neighbor in state.neighbors(cid):
+				var edge := state.edge_of(cid, neighbor)
+				if edge == null or edge.max_manpower <= 0:
+					continue
+				var owner := state.cities[neighbor].owner_nation
+				if member_set.has(owner) and not connected.has(neighbor):
+					if not visited.has(neighbor):
+						visited[neighbor] = true
+						queue.append(neighbor)
+				elif owner >= 0 and not member_set.has(owner):
+					# 组件外沿的敌国候选（决定性择一，观察者取体系根）。
+					if (
+						adjacent_enemy < 0
+						or EquivariantOrder.nation_less(state, root, owner, adjacent_enemy)
+					):
+						adjacent_enemy = owner
+		var recipient := (
+			adjacent_enemy
+			if adjacent_enemy >= 0
+			else _dominant_component_member(component, root)
+		)
+		if recipient < 0:
+			continue
+		for cid in component:
+			var city := state.cities[cid]
+			if city.owner_nation == recipient:
+				continue
+			if city.has_warehouse:
+				state.remove_warehouse(city.owner_nation, city.id)
+				city.food_storage = 0
+			city.owner_nation = recipient
+			city.occupation_sponsor_nation = -1
+			state.recognized_city_owners[city.id] = recipient
+			changed = true
+	return changed
+
+
+## 飞地组件的体系内统一归属：取组件内已实控最多城的存活成员（并列时以根 root 为观察者
+## 按 EquivariantOrder 决定性择一），把整块统一到它，保证组件在单一旗号下内部连续。
+func _dominant_component_member(component: Array[int], root: int) -> int:
+	var count_by_owner := {}
+	for cid in component:
+		var owner := state.cities[cid].owner_nation
+		count_by_owner[owner] = int(count_by_owner.get(owner, 0)) + 1
+	var best := -1
+	var best_count := -1
+	for owner_value in count_by_owner:
+		var owner := int(owner_value)
+		var c := int(count_by_owner[owner])
+		if (
+			c > best_count
+			or (
+				c == best_count
+				and (
+					best < 0
+					or EquivariantOrder.nation_less(state, root, owner, best)
+				)
+			)
+		):
+			best_count = c
+			best = owner
+	return best
 
 
 func _start_war_preparation(
@@ -3485,7 +3725,11 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		var nation := state.nations[nation_id]
 		var defense_plan: CityDefensePlan = defense_plans[nation_id]
 		var coordinator: ArmyCoordinator = coordinators[nation_id]
-		if nation.war_preparation_target_nation >= 0:
+		# 藩王不做攻势规划：主战力与进攻指挥统一归宗主，藩王只管填线军守土（作战体系简化）。
+		# 跳过战前集结与战役进攻，藩王的 LINE 仍可被宗主的国家级攻势借用为辅助军（既有机制）。
+		if state.is_vassal(nation_id):
+			pass
+		elif nation.war_preparation_target_nation >= 0:
 			_assign_offensive_staging_orders(
 				nation_id,
 				nation.war_preparation_objective_city,
@@ -4019,6 +4263,16 @@ func _ai_manage_force_structure(
 			"group_id": -1,
 			"reason": "补充核心城市填线槽",
 		}
+	elif state.is_vassal(view.nation_id):
+		# 藩王只补 LINE 填线军、绝不组建 MAIN 战团（主战力归中央，藩王作战体系简化）。
+		# 主战 MAIN 只归宗主征召；藩王 MAIN 仅在削藩反抗时凭空起兵。缺 LINE 才补，否则不扩军。
+		var vassal_line_deficit := maxi(total_line_target - line_armies, 0)
+		if vassal_line_deficit > 0:
+			recruitment = {
+				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+				"group_id": -1,
+				"reason": "藩王补充填线槽",
+			}
 	else:
 		var active_offense := (
 			nation.war_preparation_target_nation >= 0
@@ -7974,6 +8228,14 @@ func _create_army_for_nation(
 	]:
 		return null
 	var nation := state.nations[nation_id]
+	# 藩王只能征召 LINE 填线军：主战 MAIN（重编制）军团只归宗主征召与指挥（藩王作战体系
+	# 简化的核心）。藩王的 MAIN 仅在削藩反抗时由起兵火星兵动员（_spawn_civil_war_uprising_armies，
+	# 走凭空动员路径、不经本函数），故此处对藩王的重军征召一律拒绝。
+	if (
+		formation_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+		and state.is_vassal(nation_id)
+	):
+		return null
 	if (
 		formation_size == GameState.INITIAL_HEAVY_ARMY_SIZE
 		and state.battle_group_by_id(
@@ -9749,7 +10011,9 @@ func _capture_city(
 		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。
 		if _resolve_civil_war_capital_capture(old_owner, claimant):
 			pass
-		else:
+		elif not state.is_vassal(old_owner):
+			# 首都失陷通吃投降只适用于宗主级/独立主权国。藩王首都被占仅丢该城，
+			# 其宗藩纽带的悬空/继承由每日 prune_dead_suzerainty 结算，不整国投降割地。
 			_resolve_capital_capture_capitulation(
 				old_owner,
 				claimant
@@ -10100,6 +10364,31 @@ func _retreat(army: Army) -> void:
 	if current_city == -1:
 		current_city = army.location_city
 	_start_morale_retreat_from_city(army, current_city)
+
+
+## 每日兜底清理：驱离「已定居（非在途、非交战）在无军事通行权敌城节点」的己方军队。
+## 覆盖占领驱逐漏网（如占领瞬间军队在途、抵达后城已易主）与填线锚点易主后滞留等所有入口，
+## 使这类军队立即撤向最近友城，杜绝 LINE 军在敌城 IDLE 永久卡死（hostile_stationed 死锁）。
+## 只处理静止态（IDLE/RECOVERING/HOLDING 且不在边上、不在战斗），不打断行军/撤退/战斗。
+func _evict_stranded_hostile_armies() -> void:
+	for army in state.armies:
+		if army.size <= 0 or army.on_edge or army.battle_id >= 0:
+			continue
+		if army.state not in [
+			Army.State.IDLE,
+			Army.State.RECOVERING,
+			Army.State.HOLDING,
+		]:
+			continue
+		var node := army.current_city_node()
+		if node < 0 or node >= state.cities.size():
+			continue
+		if state.has_military_access(
+			army.owner_nation,
+			state.cities[node].owner_nation
+		):
+			continue
+		_start_morale_retreat_from_city(army, node, node)
 
 
 ## 从城市节点开始撤退。excluded_city_id 常用于排除正在失守/被围的当前城。

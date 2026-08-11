@@ -82,6 +82,18 @@ const SIEGE_DAYS_DECAY: float = 27.0         ## = SIEGE_DAYS_BASE - SIEGE_DAYS_M
 const SIEGE_REGRESS_PER_DAY: float = 0.5     ## ratio<STALL 时每日进度倒退量（最深，ratio=0 时）
 const SIEGE_STARVE_DEF_MULT: float = 0.3     ## 粮尽守军城防加成衰减系数（战力大幅下降）
 const SIEGE_INTERRUPTION_DECAY_PER_DAY: float = 0.25 ## 守城/解围战每持续一天，攻城成果回退 0.25 点
+const CAPITAL_DEFENSE_MULT: int = 2          ## 首都固有防御倍率：城市作为首都时城防加成翻倍
+
+
+## 城市固有防御的等效城防点数（唯一真源）：以 fort_strength 为基，首都翻倍。
+## 战斗守军加成（Combat.garrison_b）与 AI 战力估值（ArmyPower.city_defense）都经此换算，
+## 保证「首都更难守下」在实战与规划两侧一致。不含守军人数（item 6：城防来自工事结构）。
+## 注意：这是「防御力」量纲，不改变 siege_required_manpower（破城所需兵力，另一量纲）。
+static func city_defense_modifier(city: City) -> int:
+	if city == null:
+		return 0
+	var base := maxi(city.fort_strength, 0)
+	return base * CAPITAL_DEFENSE_MULT if city.is_capital else base
 
 
 # ---- 结构化战斗日志（item 15：调试与回放）----
@@ -408,7 +420,7 @@ static func resolve_round(
 	# 粮尽（城 food_storage<=0）时城防加成大幅衰减（规格 R3：战力大幅下降）。
 	var garrison_b := 0
 	if battle.kind == Battle.Kind.SIEGE and battle.has_garrison and battle.city != null:
-		garrison_b = battle.city.fort_strength
+		garrison_b = city_defense_modifier(battle.city)
 		if battle.city.food_storage <= 0:
 			garrison_b = int(round(garrison_b * SIEGE_STARVE_DEF_MULT))
 

@@ -91,6 +91,12 @@ const WAR_PREPARATION_MIN_DAYS: int = 30
 const WAR_PREPARATION_MAX_DAYS: int = 360
 const WAR_PREPARATION_RESOURCE_GRACE_DAYS: int = 90
 const WAR_PREPARATION_FORCE_SHARE: float = 0.25
+## 取消备战后的重启冷却：取消后这么多天内该国不得再发起 PREPARE_WAR。与 MAX_DAYS 同阶。
+## 打断「集结失败→取消→隔一个决策周期(30天)立即重开→再失败」的终局横跳正反馈。
+const WAR_PREPARATION_CANCEL_COOLDOWN_DAYS: int = 360
+## 集结超时后的「尽力而战」最低兵力比：已集结兵力达到 required_assault_troops 的此比例，
+## 即使未凑齐完美门槛也在超时后立即发起攻势（用现有可用主战军团），而非无限空转/取消再重开。
+const WAR_PREPARATION_BEST_EFFORT_RATIO: float = 0.5
 
 ## 分封（藩王系统增量 B3）调参。第一版尽量少参数，判据来自设计文档第 4、6 节：
 ## 核心是「区域所需 LINE 军粮耗 / 区域粮产」的负担比，只在和平期分封。
@@ -106,6 +112,10 @@ const ENFEOFF_DECISION_COOLDOWN_DAYS: int = 360     ## 同一宗主两次分封�
 ## 削藩（藩王系统增量 C）调参。宗主和平期+军力优势才削藩；藩王按反抗比决定接受/反抗。
 const CENTRALIZE_MIN_POWER_ADVANTAGE: float = 1.5   ## 宗主军力须为藩王的此倍以上才考虑削藩
 const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内不再对同一藩王削藩
+## 分封保护期：藩王被分封后至少存续这么多天才可被削藩。防止「分封→立即撤回」反复横跳
+## （分封 created_day 与削藩 last_centralization_day 是两套字段，缺此门控时新藩王当即满足削藩）。
+## 拉长到约 4 年：一次分封的政治重组需长期稳定，杜绝"封了又撤"的高频横跳。
+const CENTRALIZE_MIN_VASSAL_AGE_DAYS: int = 1440
 ## 反抗比 = 藩王军力 / 宗主可镇压军力；超此阈值藩王倾向反抗（内战），否则接受(和平撤藩)。
 ## 文档第18节：和平0.45。第一版宗主削藩本就要求和平，故用单一阈值。
 const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
@@ -2709,6 +2719,10 @@ static func _collect_war_actions(
 	for nation in state.nations:
 		if committed.has(nation.id) or not nation.alive:
 			continue
+		# 藩王不主动宣战：进攻性外交与开战决策统一由宗主代理（藩王作战体系简化）。
+		# 藩王对外战争由宗主的联盟宣战自动带入（宗藩对外 ALLIED、共同体化）。
+		if state.is_vassal(nation.id):
+			continue
 		if nation.war_preparation_target_nation >= 0:
 			_collect_existing_war_preparation(
 				state,
@@ -2717,6 +2731,13 @@ static func _collect_war_actions(
 				committed,
 				evaluation_cache
 			)
+			continue
+		# 取消备战冷却：刚取消过备战的国家在冷却期内不得重新发起，打断终局横跳正反馈。
+		if (
+			nation.war_preparation_cancelled_day >= 0
+			and state.day - nation.war_preparation_cancelled_day
+				< WAR_PREPARATION_CANCEL_COOLDOWN_DAYS
+		):
 			continue
 		if (
 			_cached_wars_of(
@@ -2908,10 +2929,26 @@ static func _collect_existing_war_preparation(
 		elapsed >= WAR_PREPARATION_MAX_DAYS
 		and not preparation_ready
 	)
+	# 治本：集结超时但仍是合法目标、且已集结到「足够发起」的最低兵力时，改为尽力而战——
+	# 用现有可用主战军团立即宣战，而不是无限空转/取消再重开。避免终局残编战团凑不齐
+	# required_assault_troops 的完美门槛而永远打不出去（军队因此零移动）。
+	var best_effort_launch := (
+		valid
+		and not resource_grace_expired
+		and assembly_deadline_expired
+		and staged_troops_for_objective(state, nation_id, objective_city)
+			>= int(ceil(
+				float(required_assault_troops(state, nation_id, objective_city))
+				* WAR_PREPARATION_BEST_EFFORT_RATIO
+			))
+	)
 	if (
-		not valid
-		or resource_grace_expired
-		or assembly_deadline_expired
+		not best_effort_launch
+		and (
+			not valid
+			or resource_grace_expired
+			or assembly_deadline_expired
+		)
 	):
 		actions.append({
 			"kind": Action.CANCEL_WAR_PREPARATION,
@@ -2928,9 +2965,9 @@ static func _collect_existing_war_preparation(
 		})
 		committed[nation_id] = true
 		return
-	if not resources_ready:
+	if not resources_ready and not best_effort_launch:
 		return
-	if not preparation_ready:
+	if not preparation_ready and not best_effort_launch:
 		if _collect_preparation_alliance(
 			state,
 			nation_id,
@@ -3368,8 +3405,10 @@ static func _food_stock(
 	var cache_key := "food_stock:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return int(evaluation_cache[cache_key])
+	# 藩王已无独立粮仓（粮食归共享粮仓）；读其宗藩体系粮池持有者的库存作为可用粮。
+	var holder_id := state.food_pool_holder(nation_id)
 	var total := 0
-	for warehouse in state.warehouse_cities_of(nation_id):
+	for warehouse in state.warehouse_cities_of(holder_id):
 		total += warehouse.food_storage
 	evaluation_cache[cache_key] = total
 	return total
@@ -4017,6 +4056,12 @@ static func _collect_centralization_actions(
 			continue
 		for subject_id in state.subjects_of(overlord_id):
 			if committed.has(subject_id) or state.is_in_civil_war(subject_id):
+				continue
+			# 分封保护期：刚分封的藩王在稳定期内不得削藩，消除「封了又撤」的反复横跳。
+			var created_day := int(
+				state.suzerainty_record(subject_id).get("created_day", -1)
+			)
+			if created_day >= 0 and state.day - created_day < CENTRALIZE_MIN_VASSAL_AGE_DAYS:
 				continue
 			# 冷却：距上次对该藩王削藩不足冷却期则跳过。
 			var last_day := int(

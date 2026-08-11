@@ -25,8 +25,9 @@ static func effective(army: Army) -> float:
 ## 城市固有防御的等效战力（战力量纲，用于 AI 威胁/攻防规划，与军队 effective power 可比）。
 ## 语义 = 城墙工事结构强度的战力投影，与「破城所需兵力」(Combat.siege_required_manpower)
 ## 是不同量纲的两个量：前者进威胁评估，后者进围城比值分母（item 6：禁止量纲混用）。
+## 基数经 Combat.city_defense_modifier 统一换算（含首都翻倍），与实战守军加成同源。
 static func city_defense(city: City) -> float:
-	return float(maxi(city.fort_strength, 0)) * 10.0
+	return float(Combat.city_defense_modifier(city)) * 10.0
 
 
 static func combined(armies: Array[Army]) -> float:

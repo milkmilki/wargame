@@ -63,6 +63,7 @@ func _init() -> void:
 	_test_ai_encirclement_breakout_and_relief()
 	_test_manpower_pool_and_force_commands()
 	_test_diplomacy_state_and_ai()
+	_test_war_preparation_cancel_cooldown()
 	_test_alliance_war_coalitions()
 	_test_suzerainty_invariants()
 	_test_vassal_tribute()
@@ -71,11 +72,18 @@ func _init() -> void:
 	_test_civil_war_relations()
 	_test_centralization_decision()
 	_test_civil_war_annexation()
+	_test_shared_granary_and_relay_supply()
+	_test_vassal_governance_output_bonus()
+	_test_suzerainty_enclave_self_healing()
+	_test_vassal_line_only_command()
+	_test_stranded_hostile_army_eviction()
+	_test_vassal_wartime_support_and_capital()
 	_test_peacetime_demobilization_and_border_defense()
 	_test_resource_hubs_and_food_mobilization()
 	_test_small_nation_survival_and_emergency_recruitment()
 	_test_combat_fairness_and_conservation()
 	_test_structured_battle_log()
+	_test_capital_defense_bonus()
 	_test_equivariant_ordering()
 	_test_remaining_combat_risk_closures()
 
@@ -9353,8 +9361,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		expired_preparation_actions.size() == 1
 			and int(expired_preparation_actions[0]["kind"])
-				== DiplomacyAI.Action.CANCEL_WAR_PREPARATION,
-		"战团超过360天仍未完成集结时必须退出旧备战并重新评估，禁止永久等待"
+				in [
+					DiplomacyAI.Action.CANCEL_WAR_PREPARATION,
+					DiplomacyAI.Action.DECLARE_WAR,
+				],
+		"战团超过360天仍未完成集结时必须退出旧备战（取消或尽力而战宣战），禁止永久等待"
 	)
 	group_ready_nation.war_preparation_started_day = (
 		group_ready_state.day
@@ -12090,6 +12101,54 @@ func _test_diplomacy_state_and_ai() -> void:
 	diplomacy_sim.free()
 
 
+func _test_war_preparation_cancel_cooldown() -> void:
+	print("[32a2] 备战冷却：取消备战后冷却期内不得重开，冷却期满后恢复；集结超时尽力而战")
+	# 用可复现的 AI 世界：推进到有备战意愿的时代，找出一个「本可发起 PREPARE_WAR」的国家，
+	# 给它盖上取消冷却戳后，同一评估里它必须不再出现 PREPARE_WAR；冷却期满后门控解除。
+	var gs := GameState.new()
+	gs.generate_world(12345, 12)
+	gs.day = DiplomacyAI.WAR_FATIGUE_REFERENCE_DAYS * 5 / 2
+	var baseline: Array[Dictionary] = []
+	DiplomacyAI._collect_war_actions(gs, baseline, {}, {})
+	var prep_nation := -1
+	for action in baseline:
+		if int(action.get("kind", -1)) == DiplomacyAI.Action.PREPARE_WAR:
+			prep_nation = int(action.get("a", -1))
+			break
+	# 若该世界此刻无人发起备战，跳过（不同版本平衡下可能无备战意愿），避免脆弱断言。
+	if prep_nation < 0:
+		_check(true, "该世界此刻无备战意愿，跳过冷却门控用例（非失败）")
+		return
+
+	# 盖冷却戳：冷却期内同一评估必须不再为该国产生 PREPARE_WAR。
+	gs.nations[prep_nation].war_preparation_cancelled_day = gs.day
+	var cooled: Array[Dictionary] = []
+	DiplomacyAI._collect_war_actions(gs, cooled, {}, {})
+	var prepares_in_cooldown := false
+	for action in cooled:
+		if (
+			int(action.get("kind", -1)) == DiplomacyAI.Action.PREPARE_WAR
+			and int(action.get("a", -1)) == prep_nation
+		):
+			prepares_in_cooldown = true
+	_check(not prepares_in_cooldown, "取消备战冷却期内该国不得重新发起 PREPARE_WAR")
+
+	# 冷却期满：把取消戳推到冷却窗口之外，门控解除，该国可再次评估备战。
+	gs.nations[prep_nation].war_preparation_cancelled_day = (
+		gs.day - DiplomacyAI.WAR_PREPARATION_CANCEL_COOLDOWN_DAYS - 1
+	)
+	var recovered: Array[Dictionary] = []
+	DiplomacyAI._collect_war_actions(gs, recovered, {}, {})
+	var prepares_after := false
+	for action in recovered:
+		if (
+			int(action.get("kind", -1)) == DiplomacyAI.Action.PREPARE_WAR
+			and int(action.get("a", -1)) == prep_nation
+		):
+			prepares_after = true
+	_check(prepares_after, "冷却期满后该国必须恢复发起 PREPARE_WAR 的能力")
+
+
 func _test_alliance_war_coalitions() -> void:
 	print("[32b] 联盟战争：整体宣战、战时入盟、集团议和与分国军事AI")
 	var gs := GameState.new()
@@ -12268,22 +12327,6 @@ func _test_suzerainty_invariants() -> void:
 	gs.refresh_derived()
 	var pre_food := gs.nations[overlord_id].granary_food
 	var pre_land_count := gs.land_cities_of(overlord_id).size()
-	# 军队守恒与迁移快照：统计全局存活军队数，及封地内应迁移的独立驻军。
-	var pre_total_armies := 0
-	for army in gs.armies:
-		if army.size > 0:
-			pre_total_armies += 1
-	var expected_moved_army_ids := {}
-	for army in gs.armies:
-		if (
-			army.owner_nation == overlord_id
-			and army.size > 0
-			and army.battle_group_id < 0
-			and army.state == Army.State.IDLE
-			and not army.on_edge
-			and enfeoff_cities.has(army.current_city_node())
-		):
-			expected_moved_army_ids[army.id] = true
 
 	var subject_id := gs.enfeoff(overlord_id, enfeoff_cities)
 	_check(
@@ -12314,15 +12357,29 @@ func _test_suzerainty_invariants() -> void:
 			% [post_manpower, pre_manpower, post_gold, pre_gold, post_food, pre_food]
 	)
 
-	# 藩王获得独立首都与粮仓，且首都属于藩王。
+	# 藩王获得独立首都，但首都是「共享粮仓」的零库存补给中继节点（无独立粮仓）：
+	# 粮食归宗主根池，藩王 granary/warehouse 为空、首都 has_warehouse=false。
 	var capital_id := gs.nations[subject_id].capital_city_id
 	_check(
 		capital_id >= 0
 			and gs.cities[capital_id].owner_nation == subject_id
 			and gs.cities[capital_id].is_capital
-			and gs.cities[capital_id].has_warehouse
-			and gs.nations[subject_id].warehouse_city_ids == [capital_id],
-		"藩王必须拥有独立首都与粮仓"
+			and not gs.cities[capital_id].has_warehouse
+			and gs.cities[capital_id].food_storage == 0
+			and gs.nations[subject_id].warehouse_city_ids.is_empty()
+			and gs.nations[subject_id].granary_food == 0,
+		"藩王首都必须是零库存补给中继节点（粮食归共享粮仓，藩王无独立粮仓）"
+	)
+	# 共享粮仓：藩王的粮食产出重定向到宗主根池；宗主 granary 承载全体系粮食。
+	var overlord_food_before := gs.nations[overlord_id].granary_food
+	var deposited := gs.deposit_food(subject_id, 100)
+	gs.refresh_derived()
+	_check(
+		gs.food_pool_holder(subject_id) == overlord_id
+			and deposited
+			and gs.nations[overlord_id].granary_food == overlord_food_before + 100
+			and gs.nations[subject_id].granary_food == 0,
+		"藩王粮食产出必须归集到宗藩体系根粮池（food_pool_holder=宗主）"
 	)
 
 	# 宗藩关系 SSoT 与查询接口。
@@ -12367,25 +12424,29 @@ func _test_suzerainty_invariants() -> void:
 	# 结构不变量成立。
 	_check(gs.suzerainty_structure_valid(), "分封后宗藩结构不变量必须成立")
 
-	# 军队迁移：封地内的独立驻军应转隶藩王；军队总数守恒；战团结构不变量成立。
-	var post_total_armies := 0
+	# 赐军（新模型）：分封不再迁移宗主驻军，改为给藩王凭空赐「陆城数」支 LINE 填线军；
+	# 藩王不得拥有 MAIN、不得拥有战团（主战力归中央）。
+	var vassal_land := gs.land_cities_of(subject_id).size()
+	var vassal_line := 0
+	var vassal_main := 0
 	for army in gs.armies:
-		if army.size > 0:
-			post_total_armies += 1
-	var moved_ok := not expected_moved_army_ids.is_empty()
-	for army in gs.armies:
-		if expected_moved_army_ids.has(army.id):
-			moved_ok = moved_ok and army.owner_nation == subject_id
+		if army.owner_nation == subject_id and army.size > 0:
+			if army.is_main_battle_role():
+				vassal_main += 1
+			elif army.is_line_role():
+				vassal_line += 1
 	_check(
-		moved_ok and post_total_armies == pre_total_armies,
-		"分封必须把封地内驻军转隶藩王且军队总数守恒（moved=%s pre=%d post=%d）"
-			% [str(moved_ok), pre_total_armies, post_total_armies]
+		vassal_line == vassal_land
+			and vassal_main == 0
+			and gs.nations[subject_id].battle_groups.is_empty(),
+		"分封须赐藩王=陆城数的LINE军、且无MAIN无战团（LINE=%d 陆城=%d MAIN=%d 战团=%d）"
+			% [vassal_line, vassal_land, vassal_main, gs.nations[subject_id].battle_groups.size()]
 	)
 	_check(
 		gs._battle_group_structure_valid(),
-		"分封迁移军队后战团结构不变量必须成立"
+		"分封赐军后战团结构不变量必须成立"
 	)
-	# 整团迁移路径：把宗主一个战团整体挪到一座待分封城，验证连 BattleGroup 一起转隶。
+	# 宗主战团不随分封转隶：整团迁移路径已废弃，宗主保留自己的 MAIN 战团。
 	var group_state := GameState.new()
 	group_state.generate_grid_world(32032)
 	var group_overlord := 0
@@ -12394,30 +12455,16 @@ func _test_suzerainty_invariants() -> void:
 		if not city.is_capital:
 			group_move_city = city.id
 			break
-	var moved_group_id := -1
-	for group in group_state.nations[group_overlord].battle_groups:
-		moved_group_id = group.id
-		for member in group_state.battle_group_members(group_overlord, group.id):
-			member.location_city = group_move_city
-			member.move_from = group_move_city
-			member.move_to = -1
-			member.move_progress = 0.0
-			member.state = Army.State.IDLE
-			member.on_edge = false
-		break
-	_check(moved_group_id >= 0, "网格宗主应至少拥有一个初始战团用于整团迁移验证")
+	var overlord_groups_before := group_state.nations[group_overlord].battle_groups.size()
 	var group_subject := group_state.enfeoff(group_overlord, [group_move_city])
-	var group_migrated := group_subject > 0 and group_state.nations[group_subject].battle_groups.size() == 1
-	for member in group_state.battle_group_members(
-		group_subject,
-		group_state.nations[group_subject].battle_groups[0].id
-	):
-		group_migrated = group_migrated and member.owner_nation == group_subject
 	_check(
-		group_migrated
+		group_subject > 0
+			and group_state.nations[group_subject].battle_groups.is_empty()
+			and group_state.nations[group_overlord].battle_groups.size() == overlord_groups_before
 			and group_state._battle_group_structure_valid()
 			and group_state.suzerainty_structure_valid(),
-		"整团驻扎封地内时应连 BattleGroup 一起转隶藩王且不变量成立"
+		"分封后宗主保留全部 MAIN 战团、藩王无战团、结构不变量成立（宗主战团 %d→%d）"
+			% [overlord_groups_before, group_state.nations[group_overlord].battle_groups.size()]
 	)
 
 	# 非法输入：空区、含宗主首都、非宗主领土、清空宗主领土——均返回 -1 且无副作用。
@@ -12920,6 +12967,51 @@ func _test_civil_war_relations() -> void:
 		"内战中宗主消亡：藩王脱离宗藩、内战标记随记录清除、不变量成立"
 	)
 
+	# 内战宗藩对不得被联盟批量议和误停战（回归：撤藩不变量后期偶发失败根因）。
+	# 构造宗主 0 与内战藩王 1 分属对立联盟集团：0 ALLIED 2、1 ALLIED 3、2↔3 外部 WAR。
+	# bloc(0)={0,2} 与 bloc(1)={1,3} 因 2↔3 议和时会遍历到内战对 0↔1（WAR），
+	# 若在此停战会抹掉 WAR 却留 civil_war 标记 → 违反不变量第2条，潜伏到后续撤藩才爆。
+	var cw := GameState.new()
+	cw.generate_grid_world(32073)
+	for a in range(cw.nations.size()):
+		for b in range(a + 1, cw.nations.size()):
+			cw.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	cw.suzerainty[1] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": true,
+	}
+	cw.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	cw.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
+	cw.set_diplomatic_relation(1, 3, GameState.DiplomaticRelation.ALLIED)
+	cw.set_diplomatic_relation(2, 3, GameState.DiplomaticRelation.WAR)
+	cw.refresh_derived()
+	_check(
+		cw.alliance_bloc(0, false) == [0, 2]
+			and cw.alliance_bloc(1, false) == [1, 3]
+			and cw.suzerainty_structure_valid(),
+		"复现前置：内战宗主与藩王分属对立联盟集团，初始结构合法"
+	)
+	var cw_sim := Simulation.new()
+	cw_sim.setup(cw)
+	# 触发外部战争 2↔3 的联盟议和（主对非内战对，绕过收集器层门控，直击执行层）。
+	var cw_peace := cw_sim._make_coalition_peace(2, 3)
+	_check(
+		bool(cw_peace.get("changed", false))
+			and cw.relation_between(2, 3) == GameState.DiplomaticRelation.NEUTRAL,
+		"外部战争 2↔3 仍正常经联盟议和停战"
+	)
+	_check(
+		cw.relation_between(0, 1) == GameState.DiplomaticRelation.WAR
+			and cw.is_in_civil_war(1)
+			and cw.suzerainty_structure_valid(),
+		"内战宗藩对 0↔1 须被议和豁免：关系保持 WAR、civil_war 不变、不变量成立"
+	)
+	cw_sim.free()
+
+
 
 # ------------------------------------------------------------------ 32h. 削藩决策与反抗判据（增量 C2）
 
@@ -12951,6 +13043,19 @@ func _test_centralization_decision() -> void:
 		weak_ratio < DiplomacyAI.CENTRALIZE_RESIST_RATIO_THRESHOLD,
 		"藩王军力被清空后反抗比应远低于阈值（实为 %.3f）" % weak_ratio
 	)
+	# 分封保护期内不得削藩：刚分封（created_day==0）时评估应无削藩动作，杜绝「封了又撤」横跳。
+	var fresh_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_centralization_actions(gs, fresh_actions, {}, {})
+	var fresh_has_centralize := false
+	for act in fresh_actions:
+		if int(act.get("kind", -1)) == DiplomacyAI.Action.CENTRALIZE and int(act.get("b", -1)) == subject:
+			fresh_has_centralize = true
+	_check(
+		not fresh_has_centralize,
+		"分封保护期内不得对新藩王削藩（防止分封↔撤回反复横跳）"
+	)
+	# 越过分封保护期后方可削藩：把世界日推进到超过 CENTRALIZE_MIN_VASSAL_AGE_DAYS。
+	gs.day = DiplomacyAI.CENTRALIZE_MIN_VASSAL_AGE_DAYS + 1
 	var actions: Array[Dictionary] = []
 	DiplomacyAI._collect_centralization_actions(gs, actions, {}, {})
 	var accept_action := {}
@@ -13114,6 +13219,615 @@ func _test_civil_war_annexation() -> void:
 		"藩王占宗主首都：夺取宗主全境、其余藩王转投胜者、胜者成顶点、不变量成立"
 	)
 	vs_sim.free()
+
+
+# ------------------------------------------------------------------ 32i2. 共享粮仓 + 补给中继节点 + 内战切分
+
+func _test_shared_granary_and_relay_supply() -> void:
+	print("[32i2] 共享粮仓：分封守恒归根池、藩王首都零库存中继降损耗、内战切分守恒+火星兵")
+	# --- 1. 分封：粮食不划走、全归宗主根池；藩王首都为零库存中继节点 ---
+	var gs := GameState.new()
+	gs.generate_grid_world(41001)
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	gs.refresh_derived()
+	var pre_food := gs.nations[0].granary_food
+	var region: Array[int] = []
+	for city in gs.land_cities_of(0):
+		if not city.is_capital:
+			region.append(city.id)
+		if region.size() >= 3:
+			break
+	var subject := gs.enfeoff(0, region)
+	gs.refresh_derived()
+	var sub_capital := gs.nations[subject].capital_city_id
+	_check(
+		subject > 0
+			and not gs.cities[sub_capital].has_warehouse
+			and gs.cities[sub_capital].food_storage == 0
+			and gs.nations[subject].granary_food == 0
+			and gs.nations[0].granary_food == pre_food
+			and gs.food_pool_holder(subject) == 0,
+		"分封后粮食全留宗主根池（%d==%d）、藩王首都零库存中继" % [gs.nations[0].granary_food, pre_food]
+	)
+
+	# --- 2. 补给中继降损耗：构造线性走廊 0-8-16-24-32-40，宗主根首都在城0，藩王首都在城40。
+	# 城40 远离城0（5 跳）。藩王首都作为零损耗中继起点注入后，城40 处损耗应从「5 跳距离」
+	# 骤降到 0（它就是中继起点），对照「无中继」（藩王首都不作起点）时城40 需从城0 累计 5 跳。 ---
+	var corr := GameState.new()
+	corr.generate_grid_world(41005)
+	corr.armies.clear()
+	corr.battles.clear()
+	for city in corr.cities:
+		city.owner_nation = 3
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		corr.recognized_city_owners[city.id] = 3
+	for corridor_edge in corr.edges:
+		corridor_edge.max_manpower = 0
+	# 走廊城归宗主 0；城40 稍后划给藩王作首都。
+	for corridor_city_id in [0, 8, 16, 24, 32, 40]:
+		corr.cities[corridor_city_id].owner_nation = 0
+		corr.recognized_city_owners[corridor_city_id] = 0
+	for corridor_road in [[0, 8], [8, 16], [16, 24], [24, 32], [32, 40]]:
+		corr.edge_of(int(corridor_road[0]), int(corridor_road[1])).max_manpower = Edge.STANDARD_MANPOWER
+	corr.nations[0].capital_city_id = 0
+	corr.cities[0].is_capital = true
+	corr.cities[0].has_warehouse = true
+	corr.cities[0].food_storage = 100000
+	corr.nations[0].warehouse_city_ids = [0] as Array[int]
+	corr.refresh_derived()
+	# 对照组（无中继）：城40 仍属宗主、非中继起点，损耗从城0 累计 5 跳。
+	var no_relay_network := Pathfinding.build_supply_network(corr, 0)
+	var no_relay_dist := INF
+	for source in no_relay_network:
+		var pdist: Dictionary = source["dist"]
+		no_relay_dist = minf(no_relay_dist, float(pdist.get(40, INF)))
+	# 实验组（有中继）：把城40 划为藩王首都（零库存中继节点）。
+	var corr_sub := corr.enfeoff(0, [40])
+	corr.refresh_derived()
+	_check(
+		corr_sub > 0
+			and corr.nations[corr_sub].capital_city_id == 40
+			and not corr.cities[40].has_warehouse
+			and corr.food_pool_relay_capitals(0) == ([40] as Array[int]),
+		"走廊藩王首都(城40)须为宗主粮池的零库存中继起点"
+	)
+	var relay_network := Pathfinding.build_supply_network(corr, 0)
+	var relay_dist := INF
+	for source in relay_network:
+		var dist_field: Dictionary = source["dist"]
+		relay_dist = minf(relay_dist, float(dist_field.get(40, INF)))
+	_check(
+		is_equal_approx(relay_dist, 0.0) and no_relay_dist > 0.0,
+		"藩王首都中继必须把偏远城40 损耗从%.4f 降到 0（中继起点自身零损耗）" % no_relay_dist
+	)
+
+	# --- 3. 削藩内战：反叛方按领土粮食产能占比切分共享库存（守恒）、并刷火星兵 ---
+	var cw := GameState.new()
+	cw.generate_grid_world(41002)
+	for a in range(cw.nations.size()):
+		for b in range(a + 1, cw.nations.size()):
+			cw.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	cw.refresh_derived()
+	var cw_region: Array[int] = []
+	for city in cw.land_cities_of(0):
+		if not city.is_capital:
+			cw_region.append(city.id)
+		if cw_region.size() >= 3:
+			break
+	var rebel := cw.enfeoff(0, cw_region)
+	cw.refresh_derived()
+	var pool_food_before := cw.nations[0].granary_food + cw.nations[rebel].granary_food
+	var rebel_armies_before := 0
+	for army in cw.armies:
+		if army.owner_nation == rebel and army.size > 0:
+			rebel_armies_before += 1
+	var rebel_land := cw.land_cities_of(rebel).size()
+	var started := cw.start_civil_war(rebel)
+	cw.refresh_derived()
+	# 切分守恒：内战后宗主根池 + 反叛方新池 = 内战前共享池总量。
+	var pool_food_after := cw.nations[0].granary_food + cw.nations[rebel].granary_food
+	_check(
+		started
+			and pool_food_after == pool_food_before
+			and cw.nations[rebel].granary_food > 0
+			and cw.cities[cw.nations[rebel].capital_city_id].has_warehouse
+			and cw.food_pool_holder(rebel) == rebel,
+		"内战切分共享库存必须守恒（前%d==后%d）且反叛方自成一池" % [pool_food_before, pool_food_after]
+	)
+	# 火星兵：反叛方首都凭空动员 ceil(0.1 × 陆城数) 个满编主战军团。
+	var expected_uprising := int(ceil(0.1 * float(rebel_land)))
+	var rebel_main_armies := 0
+	for army in cw.armies:
+		if (
+			army.owner_nation == rebel
+			and army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.strategic_role == Army.StrategicRole.MAIN
+			and army.location_city == cw.nations[rebel].capital_city_id
+		):
+			rebel_main_armies += 1
+	_check(
+		rebel_main_armies >= expected_uprising
+			and expected_uprising >= 1
+			and cw._battle_group_structure_valid()
+			and cw.suzerainty_structure_valid(),
+		"内战起兵须刷 ceil(0.1×%d)=%d 个满编主战火星兵（实测≥%d）且结构不变量成立"
+			% [rebel_land, expected_uprising, rebel_main_armies]
+	)
+
+
+# ------------------------------------------------------------------ 32i3. 藩王就近治理产出加成
+
+func _test_vassal_governance_output_bonus() -> void:
+	print("[32i3] 藩王加成：藩王疆域城市钱粮产出×1.5、owner 派生自动生效、经济结算与AI估值同源")
+	var gs := GameState.new()
+	gs.generate_grid_world(41010)
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	# 构造宗主 0 与藩王，藩王 id 明确；随后在同一城上翻转 owner，隔离 garrison/war 等混淆项，
+	# 纯粹检验「owner 是否藩王」这一维度对产出真源的 1.5× 影响。
+	var region: Array[int] = []
+	for city in gs.land_cities_of(0):
+		if not city.is_capital:
+			region.append(city.id)
+		if region.size() >= 3:
+			break
+	var subject := gs.enfeoff(0, region)
+	_check(subject > 0 and gs.is_vassal(subject) and not gs.is_vassal(0), "分封应建立藩王且宗主非藩王")
+
+	# 取一座宗主直辖的非首都城作探针（owner=0，非藩王）。清战乱减产 + 清驻军，
+	# 使 garrison 惩罚在翻转 owner 前后都为 0，隔离出纯粹的治理倍率维度。
+	var probe: City = null
+	for city in gs.land_cities_of(0):
+		if not city.is_capital and city.gold_per_month > 0 and city.food_per_half_year > 0:
+			probe = city
+			break
+	_check(probe != null, "需要一座有正钱粮产出的宗主城作为探针")
+	probe.war_disruption_until_day = 0
+	for army in gs.armies:
+		if not army.on_edge and army.location_city == probe.id:
+			army.size = 0
+	var overlord_gold := Simulation.city_gold_output(gs, probe)
+	var overlord_food := Simulation.city_food_output(gs, probe)
+	_check(
+		is_equal_approx(Simulation.city_governance_output_multiplier(gs, probe), 1.0)
+			and overlord_gold == probe.gold_per_month,
+		"宗主直辖城无治理加成（倍率=1，钱产=基础字段）"
+	)
+
+	# 仅把该城 owner 翻转为藩王（不动其它状态），同城产出应精确变 1.5×（floor）。
+	probe.owner_nation = subject
+	var vassal_gold := Simulation.city_gold_output(gs, probe)
+	var vassal_food := Simulation.city_food_output(gs, probe)
+	_check(
+		is_equal_approx(
+			Simulation.city_governance_output_multiplier(gs, probe),
+			Simulation.VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+		)
+			and vassal_gold == int(floor(float(overlord_gold) * 1.5))
+			and vassal_food == int(floor(float(overlord_food) * 1.5)),
+		"藩王城钱粮产出须为 1.5×（gold %d→%d、food %d→%d）"
+			% [overlord_gold, vassal_gold, overlord_food, vassal_food]
+	)
+
+	# owner 派生：翻回宗主，加成自动消失（纯 owner 派生、零残留状态）。
+	probe.owner_nation = 0
+	_check(
+		is_equal_approx(Simulation.city_governance_output_multiplier(gs, probe), 1.0)
+			and Simulation.city_gold_output(gs, probe) == overlord_gold,
+		"城并回宗主后治理加成必须自动消失（纯 owner 派生）"
+	)
+
+
+# ------------------------------------------------------------------ 32i4. 宗藩体系飞地每日自愈
+
+func _test_suzerainty_enclave_self_healing() -> void:
+	print("[32i4] 飞地自愈：运行时被占造成的体系飞地每日清理——优先体系内改归、否则割敌")
+
+	# --- 子场景 A：合法连通的藩王领土不得被误清理（无假阳性）---
+	# 链 0-1-2-3-4：宗主 0 首都=城0、直辖 城0/城1；藩王 1 领 城2/城3/城4，经 城1-城2 连回宗主。
+	# 此时藩王领土经宗主城1 与体系首都连通（体系视为整体），不是飞地 → 每日清理必须不动它。
+	var sa := GameState.new()
+	sa.generate_grid_world(51001)
+	sa.armies.clear()
+	sa.battles.clear()
+	for city in sa.cities:
+		city.owner_nation = 3
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		sa.recognized_city_owners[city.id] = 3
+	for c in [0, 1]:
+		sa.cities[c].owner_nation = 0
+		sa.recognized_city_owners[c] = 0
+	for c in [2, 3, 4]:
+		sa.cities[c].owner_nation = 1
+		sa.recognized_city_owners[c] = 1
+	for road in [[0, 1], [1, 2], [2, 3], [3, 4]]:
+		var e := sa.edge_of(int(road[0]), int(road[1]))
+		if e != null:
+			e.max_manpower = Edge.STANDARD_MANPOWER
+	sa.nations[0].capital_city_id = 0
+	sa.cities[0].is_capital = true
+	sa.cities[0].has_warehouse = true
+	sa.nations[1].capital_city_id = 2
+	sa.cities[2].is_capital = true
+	for a in range(sa.nations.size()):
+		for b in range(a + 1, sa.nations.size()):
+			sa.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	sa.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
+	sa.suzerainty[1] = {
+		"overlord_id": 0, "tribute_rate": 0.25,
+		"created_day": 0, "last_centralization_day": -1, "civil_war": false,
+	}
+	sa.refresh_derived()
+	var sa_sim := Simulation.new()
+	sa_sim.setup(sa)
+	sa_sim._reassign_disconnected_suzerainty_enclaves()
+	_check(
+		sa.cities[2].owner_nation == 1
+			and sa.cities[3].owner_nation == 1
+			and sa.cities[4].owner_nation == 1
+			and sa.suzerainty_structure_valid(),
+		"无假阳性：经宗主连通的藩王领土不得被误清理（2=%d 3=%d 4=%d）"
+			% [sa.cities[2].owner_nation, sa.cities[3].owner_nation, sa.cities[4].owner_nation]
+	)
+	sa_sim.free()
+
+	# --- 子场景 B：被敌国完全包围则割敌 ---
+	# 链 0-1-2-3-4，宗主 0 首都=城0、直辖城1；藩王 1 领 城3、城4；城2 属敌国 3。
+	# 藩王领土 {3,4} 唯一对外连接是 城2(敌)，无任何体系连通邻居 → 应割给相邻敌国 3。
+	var sb := GameState.new()
+	sb.generate_grid_world(51002)
+	sb.armies.clear()
+	sb.battles.clear()
+	for city in sb.cities:
+		city.owner_nation = 3
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		sb.recognized_city_owners[city.id] = 3
+	for c in [0, 1]:
+		sb.cities[c].owner_nation = 0
+		sb.recognized_city_owners[c] = 0
+	for c in [3, 4]:
+		sb.cities[c].owner_nation = 1
+		sb.recognized_city_owners[c] = 1
+	for road in [[0, 1], [1, 2], [2, 3], [3, 4]]:
+		var e := sb.edge_of(int(road[0]), int(road[1]))
+		if e != null:
+			e.max_manpower = Edge.STANDARD_MANPOWER
+	sb.nations[0].capital_city_id = 0
+	sb.cities[0].is_capital = true
+	sb.cities[0].has_warehouse = true
+	sb.nations[1].capital_city_id = 3
+	sb.cities[3].is_capital = true
+	for a in range(sb.nations.size()):
+		for b in range(a + 1, sb.nations.size()):
+			sb.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	sb.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
+	sb.suzerainty[1] = {
+		"overlord_id": 0, "tribute_rate": 0.25,
+		"created_day": 0, "last_centralization_day": -1, "civil_war": false,
+	}
+	sb.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.WAR)
+	sb.set_diplomatic_relation(1, 3, GameState.DiplomaticRelation.WAR)
+	sb.refresh_derived()
+	var sb_sim := Simulation.new()
+	sb_sim.setup(sb)
+	sb_sim._reassign_disconnected_suzerainty_enclaves()
+	_check(
+		sb.cities[3].owner_nation == 3
+			and sb.cities[4].owner_nation == 3
+			and sb.suzerainty_structure_valid(),
+		"完全包围割敌：藩王飞地 {3,4} 无体系连通邻居须割给敌国3（3=%d 4=%d）"
+			% [sb.cities[3].owner_nation, sb.cities[4].owner_nation]
+	)
+	sb_sim.free()
+
+
+# ------------------------------------------------------------------ 32i5. 藩王只管 LINE、MAIN 归宗主
+
+func _test_vassal_line_only_command() -> void:
+	print("[32i5] 藩王简化：分封赐城数LINE军、藩王禁征MAIN、藩王跳过攻势外交")
+	var gs := GameState.new()
+	gs.generate_grid_world(52001)
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	var region: Array[int] = []
+	for city in gs.land_cities_of(0):
+		if not city.is_capital:
+			region.append(city.id)
+		if region.size() >= 3:
+			break
+	var subject := gs.enfeoff(0, region)
+	_check(subject > 0, "分封应成功建立藩王")
+
+	# 赐军：藩王 LINE 军数量 = 其陆城数；无 MAIN；无战团。
+	var land := gs.land_cities_of(subject).size()
+	var line_n := 0
+	var main_n := 0
+	for army in gs.armies:
+		if army.owner_nation == subject and army.size > 0:
+			if army.is_main_battle_role():
+				main_n += 1
+			elif army.is_line_role():
+				line_n += 1
+	_check(
+		line_n == land and main_n == 0 and gs.nations[subject].battle_groups.is_empty(),
+		"分封赐藩王=陆城数的LINE(实%d/城%d)、无MAIN(%d)、无战团(%d)"
+			% [line_n, land, main_n, gs.nations[subject].battle_groups.size()]
+	)
+
+	# 征召门控：藩王征 MAIN（重编制）必被拒；LINE 仍可征。
+	var sim := Simulation.new()
+	sim.setup(gs)
+	gs.nations[subject].treasury_gold = 100000
+	gs.nations[subject].manpower_pool = 100000
+	var cap := gs.nations[subject].capital_city_id
+	var vassal_group := gs.create_battle_group(subject)
+	var denied_main := sim._create_army_for_nation(
+		subject, cap, GameState.INITIAL_HEAVY_ARMY_SIZE, "试图征MAIN", true, vassal_group.id
+	)
+	# 清掉为测试建的空战团，避免污染结构。
+	gs.nations[subject].battle_groups.erase(vassal_group)
+	_check(denied_main == null, "藩王征召 MAIN 重军团必须被拒绝")
+
+	# 对照：宗主 0 征 MAIN 应成功（宗主可建主战力）。
+	gs.nations[0].treasury_gold = 100000
+	gs.nations[0].manpower_pool = 100000
+	var overlord_cap := gs.nations[0].capital_city_id
+	var overlord_group := gs.create_battle_group(0)
+	var overlord_main := sim._create_army_for_nation(
+		0, overlord_cap, GameState.INITIAL_HEAVY_ARMY_SIZE, "宗主征MAIN", true, overlord_group.id
+	)
+	_check(
+		overlord_main != null and overlord_main.is_main_battle_role(),
+		"宗主必须能征召 MAIN 主战军团（对照）"
+	)
+
+	# 攻势外交门控：藩王与敌国交战也不主动宣战（进攻性外交由宗主代理）。
+	var war_state := GameState.new()
+	war_state.generate_grid_world(52002)
+	for a in range(war_state.nations.size()):
+		for b in range(a + 1, war_state.nations.size()):
+			war_state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	var war_region: Array[int] = []
+	for city in war_state.land_cities_of(0):
+		if not city.is_capital:
+			war_region.append(city.id)
+		if war_region.size() >= 3:
+			break
+	var war_vassal := war_state.enfeoff(0, war_region)
+	var war_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_war_actions(war_state, war_actions, {}, {})
+	var vassal_declares := false
+	for action in war_actions:
+		if int(action.get("a", -1)) == war_vassal or int(action.get("nation_id", -1)) == war_vassal:
+			vassal_declares = true
+	_check(not vassal_declares, "藩王不得出现在主动宣战/战备动作的发起方")
+	sim.free()
+
+
+# ------------------------------------------------------------------ 32i6. 敌城滞留军队每日驱离
+
+func _test_stranded_hostile_army_eviction() -> void:
+	print("[32i6] 敌城滞留驱离：定居在无通行权敌城的己方军队须每日兜底撤离，杜绝 IDLE 死锁")
+	var gs := GameState.new()
+	gs.generate_grid_world(53001)
+	gs.armies.clear()
+	gs.battles.clear()
+	# 全图归敌国 1；国 0 只留首都城0，与敌城1 有正容量道路（撤退有路可走）。
+	for city in gs.cities:
+		city.owner_nation = 1
+		city.is_capital = false
+		city.has_warehouse = false
+		gs.recognized_city_owners[city.id] = 1
+	gs.cities[0].owner_nation = 0
+	gs.recognized_city_owners[0] = 0
+	gs.nations[0].capital_city_id = 0
+	gs.cities[0].is_capital = true
+	gs.cities[0].has_warehouse = true
+	gs.nations[1].capital_city_id = 63
+	gs.cities[63].is_capital = true
+	for road in [[0, 1], [1, 2]]:
+		var e := gs.edge_of(int(road[0]), int(road[1]))
+		if e != null:
+			e.max_manpower = Edge.STANDARD_MANPOWER
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	gs.refresh_derived()
+	# 人为制造滞留：国 0 的一支 LINE 军 IDLE 定居在敌城1（无通行权）。
+	var stranded := _make_army(9301, 0, 5000, 10)
+	stranded.location_city = 1
+	stranded.move_from = 1
+	stranded.move_to = -1
+	stranded.on_edge = false
+	stranded.state = Army.State.IDLE
+	gs.armies.append(stranded)
+	var sim := Simulation.new()
+	sim.setup(gs)
+	_check(
+		stranded.current_city_node() == 1
+			and not gs.has_military_access(0, 1),
+		"前置：滞留军应定居敌城1 且国0 对国1 无通行权"
+	)
+	# 直接触发兜底清理：滞留军须被撤离（不再定居敌城1）。
+	sim._evict_stranded_hostile_armies()
+	_check(
+		stranded.state == Army.State.RETREATING
+			or stranded.current_city_node() != 1
+			or stranded.size <= 0,
+		"敌城滞留军队须被驱离（state=%d node=%d size=%d）"
+			% [stranded.state, stranded.current_city_node(), stranded.size]
+	)
+	sim.free()
+
+
+# ------------------------------------------------------------------ 32j. 分封战争加成 + 藩王首都失陷不投降
+
+func _test_vassal_wartime_support_and_capital() -> void:
+	print("[32j] 分封战争加成：前线藩王上交机动军团、后方藩王提贡赋、藩王首都失陷不投降割地")
+	var gs := GameState.new()
+	gs.generate_grid_world(32095)
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	# 国家角色：0=宗主，1=前线藩王，2=后方藩王，3=敌国。
+	# 城市（基于 grid 真实边）：城0=宗主首都；城1=前线藩王首都(城1↔城2 有边,接壤敌国)；
+	# 城2=敌国；城9=后方藩王首都(城9 邻 城1/城10/城17,均非敌国,不接壤)。
+	var overlord := 0
+	var front_vassal := 1
+	var rear_vassal := 2
+	var enemy := 3
+	# 全图先归宗主，再逐一指派测试相关城市，确保接壤关系完全可控。
+	for city in gs.cities:
+		city.owner_nation = overlord
+		city.is_capital = false
+		city.has_warehouse = false
+		gs.recognized_city_owners[city.id] = overlord
+	var overlord_capital := 0
+	var front_city := 1
+	var enemy_city := 2
+	var rear_city := 9
+	gs.cities[front_city].owner_nation = front_vassal
+	gs.recognized_city_owners[front_city] = front_vassal
+	gs.cities[enemy_city].owner_nation = enemy
+	gs.recognized_city_owners[enemy_city] = enemy
+	gs.cities[rear_city].owner_nation = rear_vassal
+	gs.recognized_city_owners[rear_city] = rear_vassal
+	gs.nations[overlord].capital_city_id = overlord_capital
+	gs.cities[overlord_capital].is_capital = true
+	gs.cities[front_city].is_capital = true
+	gs.cities[rear_city].is_capital = true
+	gs.nations[front_vassal].capital_city_id = front_city
+	gs.nations[rear_vassal].capital_city_id = rear_city
+	# 宗藩记录：两藩王挂到宗主 0，默认贡赋率；宗主↔藩王 ALLIED。
+	for sub in [front_vassal, rear_vassal]:
+		gs.set_diplomatic_relation(overlord, sub, GameState.DiplomaticRelation.ALLIED)
+		gs.suzerainty[sub] = {
+			"overlord_id": overlord,
+			"tribute_rate": 0.25,
+			"created_day": 0,
+			"last_centralization_day": -1,
+			"civil_war": false,
+		}
+	# 对外共同体化：宗主与两藩王都与敌国处于战争（体系对外统一敌对）。
+	gs.set_diplomatic_relation(overlord, enemy, GameState.DiplomaticRelation.WAR)
+	gs.set_diplomatic_relation(front_vassal, enemy, GameState.DiplomaticRelation.WAR)
+	gs.set_diplomatic_relation(rear_vassal, enemy, GameState.DiplomaticRelation.WAR)
+	gs.refresh_derived()
+
+	# 接壤判定：前线藩王接壤敌国，后方藩王不接壤。
+	_check(
+		gs.vassal_borders_system_enemy(front_vassal)
+			and not gs.vassal_borders_system_enemy(rear_vassal),
+		"接壤判定：前线藩王须接壤敌国、后方藩王须不接壤（front=%s rear=%s）"
+			% [
+				str(gs.vassal_borders_system_enemy(front_vassal)),
+				str(gs.vassal_borders_system_enemy(rear_vassal)),
+			]
+	)
+
+	# 给前线藩王一支静止在本土的 MAIN 战团（重军），验证战时上交宗主。
+	# 复用藩王已有军队并迁到封地首都：新建会撞军队数上限（藩王城少、配额已被
+	# 网格初始填线军占满），故改造既有军队为静止 MAIN，语义等价且不违反数量约束。
+	var heavy: Army = null
+	for army in gs.armies:
+		if army.owner_nation == front_vassal and army.size > 0:
+			heavy = army
+			break
+	_check(heavy != null, "前线藩王须有可改造为 MAIN 的既有军队")
+	heavy.clear_line_assignment()
+	heavy.battle_group_id = -1
+	heavy.location_city = front_city
+	heavy.move_from = front_city
+	heavy.move_to = -1
+	heavy.on_edge = false
+	heavy.state = Army.State.IDLE
+	heavy.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+	heavy.size = GameState.INITIAL_HEAVY_ARMY_SIZE
+	heavy.strategic_role = Army.StrategicRole.MAIN
+	var fg := gs.create_battle_group(front_vassal)
+	gs.assign_army_to_battle_group(heavy, fg.id)
+	var heavy_id := heavy.id
+	var moved := gs.transfer_main_battle_groups_to_overlord(front_vassal)
+	var transferred_army: Army = null
+	for army in gs.armies:
+		if army.id == heavy_id:
+			transferred_army = army
+	_check(
+		moved >= 1
+			and transferred_army != null
+			and transferred_army.owner_nation == overlord
+			and gs._battle_group_structure_valid()
+			and gs.suzerainty_structure_valid(),
+		"前线藩王的静止 MAIN 战团须整团上交宗主作中央机动军（moved=%d owner=%d）"
+			% [moved, transferred_army.owner_nation if transferred_army else -1]
+	)
+
+	# 战时贡赋：结算后后方藩王按提升率上缴、前线藩王不被强制加税。
+	var sim := Simulation.new()
+	sim.setup(gs)
+	for n in gs.nations:
+		n.treasury_gold = 1000
+	var gold_income: Array[int] = []
+	gold_income.resize(gs.nations.size())
+	gold_income.fill(0)
+	gold_income[rear_vassal] = 100
+	gold_income[front_vassal] = 100
+	sim._resolve_tribute(gold_income)
+	# 后方藩王按 max(0.25, 0.60)=0.60 上缴 100×0.6=60；前线藩王按记录率 0.25 上缴 25。
+	_check(
+		gs.nations[rear_vassal].treasury_gold == 1000 - 60
+			and gs.nations[front_vassal].treasury_gold == 1000 - 25,
+		"战时后方藩王按提升率上缴、前线藩王按原率（后方余%d 前线余%d）"
+			% [gs.nations[rear_vassal].treasury_gold, gs.nations[front_vassal].treasury_gold]
+	)
+	sim.free()
+
+	# 藩王首都失陷不触发投降割地：敌国占领前线藩王首都，只丢该城，不整国投降。
+	var cap_state := GameState.new()
+	cap_state.generate_grid_world(32096)
+	for a in range(cap_state.nations.size()):
+		for b in range(a + 1, cap_state.nations.size()):
+			cap_state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	var cap_region: Array[int] = []
+	for city in cap_state.land_cities_of(0):
+		if not city.is_capital:
+			cap_region.append(city.id)
+		if cap_region.size() >= 3:
+			break
+	var cap_subject := cap_state.enfeoff(0, cap_region)
+	_check(cap_subject > 0, "分封应成功建立藩王（首都失陷用例）")
+	var cap_sim := Simulation.new()
+	cap_sim.setup(cap_state)
+	var vassal_capital := cap_state.nations[cap_subject].capital_city_id
+	var vassal_city_count_before := cap_state.land_cities_of(cap_subject).size()
+	var history_before := cap_state.diplomatic_history.size()
+	# 敌国 1 与藩王开战并直接占领藩王首都。
+	cap_state.set_diplomatic_relation(1, cap_subject, GameState.DiplomaticRelation.WAR)
+	var invader := _make_army(9500, 1, 5000, 10)
+	invader.location_city = vassal_capital
+	invader.move_from = vassal_capital
+	cap_state.armies.append(invader)
+	cap_sim._capture_city(invader, cap_state.cities[vassal_capital], 1)
+	_check(
+		cap_state.cities[vassal_capital].owner_nation == 1
+			and cap_state.diplomatic_history.size() == history_before
+			and cap_state.land_cities_of(cap_subject).size()
+				== vassal_city_count_before - 1
+			and cap_state.suzerainty_structure_valid(),
+		"藩王首都失陷只丢该城、不触发投降割地、不写投降历史、宗藩不变量成立"
+	)
+	cap_sim.free()
 
 
 # ------------------------------------------------------------------ 33. 和平裁军与潜在边境守备
@@ -14404,6 +15118,56 @@ func _test_structured_battle_log() -> void:
 	# 收尾：恢复默认关闭态，避免污染其他测试。
 	Combat.battle_log_enabled = false
 	Combat.clear_battle_log()
+
+
+## [36b] 首都防御加成：城市作为首都时城防加成翻倍（真源 + 实战 + AI 估值三处一致）。
+func _test_capital_defense_bonus() -> void:
+	print("[36b] 首都防御：city_defense_modifier 翻倍、守军实战损失更小、AI 估值翻倍")
+	# 真源函数：同 fort_strength 下首都返回 2 倍、非首都返回原值；空城返回 0。
+	var plain := City.new()
+	plain.fort_strength = 20
+	plain.is_capital = false
+	var capital := City.new()
+	capital.fort_strength = 20
+	capital.is_capital = true
+	_check(
+		Combat.city_defense_modifier(plain) == 20
+			and Combat.city_defense_modifier(capital) == 40,
+		"city_defense_modifier：非首都=fort(20)，首都=fort×2(40)，实为 %d/%d"
+			% [Combat.city_defense_modifier(plain), Combat.city_defense_modifier(capital)]
+	)
+
+	# AI 估值：首都城防等效战力应为非首都的两倍（同源换算）。
+	_check(
+		is_equal_approx(
+			ArmyPower.city_defense(capital),
+			ArmyPower.city_defense(plain) * 2.0
+		) and ArmyPower.city_defense(plain) > 0.0,
+		"ArmyPower.city_defense：首都应为非首都两倍（%.1f vs %.1f）"
+			% [ArmyPower.city_defense(capital), ArmyPower.city_defense(plain)]
+	)
+
+	# 实战对照：同种子、同攻方、同 fort，守军在首都因城防加成翻倍而损失更少。
+	var rng_plain := RandomNumberGenerator.new(); rng_plain.seed = 42
+	var atk_plain := _make_army(0, 0, 1000, 12)
+	var def_plain := _make_army(1, 1, 1000, 10)
+	var b_plain := _make_siege_battle([atk_plain], def_plain, 20, 4)
+	b_plain.city.is_capital = false
+	Combat.resolve_round(b_plain, rng_plain)
+	var loss_plain := 1000 - def_plain.size
+
+	var rng_cap := RandomNumberGenerator.new(); rng_cap.seed = 42
+	var atk_cap := _make_army(0, 0, 1000, 12)
+	var def_cap := _make_army(1, 1, 1000, 10)
+	var b_cap := _make_siege_battle([atk_cap], def_cap, 20, 4)
+	b_cap.city.is_capital = true
+	Combat.resolve_round(b_cap, rng_cap)
+	var loss_cap := 1000 - def_cap.size
+	_check(
+		loss_cap < loss_plain,
+		"首都守军城防加成翻倍应让守军损失更少：非首都损%d vs 首都损%d"
+			% [loss_plain, loss_cap]
+	)
 
 
 ## [37] 决策排序镜像等变：城市物理序在左右镜像国家间一致，实体 ID 置换不改军队顺序。

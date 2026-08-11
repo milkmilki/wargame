@@ -563,11 +563,18 @@ static func build_supply_network(
 	for owner_id_value in owner_ids:
 		var owner_id := int(owner_id_value)
 		var warehouses := state.warehouse_cities_of(owner_id)
+		if warehouses.is_empty():
+			continue
 		EquivariantOrder.sort_cities(
 			warehouses,
 			state,
 			nation_id
 		)
+		# 「共享粮仓」中继节点：owner 是本宗藩体系的粮池持有者（藩王已无独立粮仓，故
+		# 只有持有者会走到这里），其和平藩属的首都作为零损耗补给起点注入损耗场——军队
+		# 损耗按到「根粮仓或任一藩王首都」的最近距离计算，实现「藩王让偏远军队损耗重新
+		# 起算」。独立国无藩属，relay_origins 为空，行为与旧版逐位一致。
+		var relay_origins := state.food_pool_relay_capitals(owner_id)
 		for warehouse in warehouses:
 			if (
 				warehouse.food_storage <= 0
@@ -582,7 +589,8 @@ static func build_supply_network(
 					warehouse.id,
 					nation_id,
 					blocked_enemy_edges,
-					true
+					true,
+					relay_origins
 				)["dist"],
 			})
 	return result
@@ -776,12 +784,17 @@ static func _reachable_supply_losses(
 	return result
 
 
+## extra_zero_origins：除主源 start 外的其他「零损耗起点」（如同一宗藩体系的藩王
+## 首都中继节点）。距离场从全部起点同时以 dist=0 向外扩散，故军队损耗按到「最近的
+## 任一起点」计算——这正是「藩王首都让偏远军队损耗重新起算」的数学表达。确定性打破
+## 平局仍以主源 start 锚定 rank，与单源行为在无中继时逐位一致。
 static func _supply_loss_field(
 	state: GameState,
 	start: int,
 	nation_id: int,
 	blocked_enemy_edges: Dictionary = {},
-	blocked_edges_ready: bool = false
+	blocked_edges_ready: bool = false,
+	extra_zero_origins: Array[int] = [] as Array[int]
 ) -> Dictionary:
 	var dist := {}
 	var prev := {}
@@ -804,6 +817,21 @@ static func _supply_loss_field(
 		"distance": 0.0,
 		"rank": int(order_rank[start]),
 	}]
+	# 中继起点同样以 dist=0 入堆；沿宗藩体系可达道路自然扩散并竞争最短损耗。
+	for origin in extra_zero_origins:
+		if (
+			origin < 0
+			or origin >= state.cities.size()
+			or origin == start
+			or dist[origin] == 0.0
+		):
+			continue
+		dist[origin] = 0.0
+		queue.append({
+			"city": origin,
+			"distance": 0.0,
+			"rank": int(order_rank[origin]),
+		})
 	while not queue.is_empty():
 		var entry := _heap_pop(queue)
 		var u := int(entry["city"])

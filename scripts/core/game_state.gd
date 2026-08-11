@@ -1719,6 +1719,74 @@ func is_suzerainty_pair(nation_a: int, nation_b: int) -> bool:
 	return overlord_of(nation_a) == nation_b or overlord_of(nation_b) == nation_a
 
 
+## 藩王领土是否与本宗藩体系的任一敌国接壤（存在一条正容量边通往体系敌国的城）。
+## 用于分封战争加成：接壤敌国的藩王须自守边疆（并上交机动军团），
+## 非接壤藩王只提高贡赋、不承担前线。判据只看实控归属与道路容量，确定性。
+func vassal_borders_system_enemy(subject_id: int) -> bool:
+	if not is_vassal(subject_id):
+		return false
+	for city in cities:
+		if city.owner_nation != subject_id:
+			continue
+		for neighbor in neighbors(city.id):
+			var edge := edge_of(city.id, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			var neighbor_owner := cities[neighbor].owner_nation
+			if neighbor_owner >= 0 and is_enemy(subject_id, neighbor_owner):
+				return true
+	return false
+
+
+## 把藩王当前静止在自身领土内的整支 MAIN 战团转隶其直接宗主，作为中央机动军。
+## 复用整团迁移规则：只迁「全部存活成员都静止在藩王领土内」的完整 MAIN 战团，
+## 不撕裂战团、不打断行军/战斗/驻边。返回迁移的军队数（供上层统计与测试）。
+func transfer_main_battle_groups_to_overlord(subject_id: int) -> int:
+	var overlord_id := overlord_of(subject_id)
+	if (
+		overlord_id < 0
+		or overlord_id >= nations.size()
+		or subject_id < 0
+		or subject_id >= nations.size()
+		or not nations[overlord_id].alive
+		or not nations[subject_id].alive
+	):
+		return 0
+	var subject := nations[subject_id]
+	var overlord := nations[overlord_id]
+	var groups_to_move: Array[BattleGroup] = []
+	for group in subject.battle_groups:
+		var members := battle_group_members(subject_id, group.id)
+		if members.is_empty():
+			continue
+		var all_main_inside := true
+		for member in members:
+			if (
+				not member.is_main_battle_role()
+				or not _army_stationed_in_nation(member, subject_id)
+			):
+				all_main_inside = false
+				break
+		if all_main_inside:
+			groups_to_move.append(group)
+	var moved := 0
+	for group in groups_to_move:
+		var members := battle_group_members(subject_id, group.id)
+		var new_group_id := overlord.next_battle_group_id
+		overlord.next_battle_group_id += 1
+		group.id = new_group_id
+		group.owner_nation = overlord_id
+		subject.battle_groups.erase(group)
+		overlord.battle_groups.append(group)
+		for member in members:
+			member.owner_nation = overlord_id
+			member.battle_group_id = new_group_id
+			member.strategic_role = Army.StrategicRole.MAIN
+			member.clear_line_assignment()
+			moved += 1
+	return moved
+
+
 ## 藩王是否正处于与其宗主的削藩内战中。内战期间宗主↔藩王为 WAR（而非 ALLIED），
 ## 对外共同体因此自然解散（alliance_bloc 会把两者拆开）——攘外必先安内。
 func is_in_civil_war(subject_id: int) -> bool:
@@ -1727,15 +1795,191 @@ func is_in_civil_war(subject_id: int) -> bool:
 
 
 ## 发起削藩内战：把宗主↔藩王从 ALLIED 改为 WAR，并在记录上打内战标记。
+## 反叛藩王随即退出共享粮仓、按其（含下级和平藩属）领土粮食产能占原粮池的比例
+## 切分库存到自己新建的首都粮仓（自成一池），并在首都凭空动员一批「火星兵」满编
+## 主战军团（数量 = ceil(0.1 × 反叛方陆城数)）作为起兵资本。
 ## 返回是否成功（须是既有宗藩对且当前非内战）。
 func start_civil_war(subject_id: int) -> bool:
 	if not suzerainty.has(subject_id) or is_in_civil_war(subject_id):
 		return false
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
+	# 1. 切分前先量取：反叛方子树（沿非内战边）与整个原粮池的粮食产能，用于按比例分粮。
+	var holder_before := food_pool_holder(subject_id)
+	var rebel_food_output := _food_pool_food_output(subject_id)
+	var pool_food_output := _food_pool_food_output(holder_before)
+	var pool_stock := _food_pool_stock(holder_before)
+	# 2. 断开内战边（关系转 WAR、打标记）。此后 food_pool_holder(subject) 收敛到 subject 自身。
 	suzerainty[subject_id]["civil_war"] = true
 	suzerainty[subject_id]["last_centralization_day"] = day
 	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.WAR)
+	# 3. 反叛方自成一池：在其首都建独立粮仓，从原持有者粮仓按产能占比划入切分份额（守恒）。
+	var rebel_share := _proportional_share(
+		pool_stock, rebel_food_output, pool_food_output
+	)
+	_establish_rebel_food_pool(subject_id, holder_before, rebel_share)
+	# 4. 起兵资本：反叛方首都凭空动员火星兵（满编主战军团）。
+	_spawn_civil_war_uprising_armies(subject_id)
 	return true
+
+
+## 一个粮池（沿非内战宗藩边可达的成员集）领土陆城的半年粮食产能之和。
+## 用作内战切分共享库存的守恒比例基数。
+func _food_pool_food_output(holder_id: int) -> int:
+	var total := 0
+	for member_id in food_pool_members(holder_id):
+		for city in land_cities_of(member_id):
+			total += city.food_per_half_year
+	return total
+
+
+## 一个粮池的当前库存总量（持有者名下全部粮仓存量之和；藩属首都零库存不计）。
+func _food_pool_stock(holder_id: int) -> int:
+	var total := 0
+	for warehouse in warehouse_cities_of(holder_id):
+		total += warehouse.food_storage
+	return total
+
+
+## 反叛方脱离共享粮仓、自成一池：在其首都建独立粮仓，从原持有者粮仓扣除 share 并注入。
+## 守恒：先从原持有者粮仓（按占比）扣，再存入反叛方首都，粮食总量不变。
+func _establish_rebel_food_pool(
+	rebel_id: int,
+	former_holder_id: int,
+	share: int
+) -> void:
+	if rebel_id < 0 or rebel_id >= nations.size():
+		return
+	var rebel := nations[rebel_id]
+	var capital_id := rebel.capital_city_id
+	if capital_id < 0 or capital_id >= cities.size():
+		return
+	# 反叛方首都升为独立粮仓（内战期它是自己粮池的持有者）。
+	var capital := cities[capital_id]
+	capital.has_warehouse = true
+	if not rebel.warehouse_city_ids.has(capital_id):
+		rebel.warehouse_city_ids = [capital_id] as Array[int]
+	# 从原持有者共享粮仓按占比扣除，等额注入反叛方首都（守恒转移）。
+	if share > 0 and former_holder_id >= 0 and former_holder_id < nations.size():
+		_withdraw_food_from_warehouses(nations[former_holder_id], share)
+		capital.food_storage += share
+	refresh_derived()
+
+
+## 削藩内战起兵：反叛方首都凭空动员 ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
+## 每个军团为一支满编重军（INITIAL_HEAVY_ARMY_SIZE、MAIN 角色），独立成团。起兵是离散
+## 政治事件，属性沿用 _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
+func _spawn_civil_war_uprising_armies(rebel_id: int) -> void:
+	if rebel_id < 0 or rebel_id >= nations.size():
+		return
+	var capital_id := nations[rebel_id].capital_city_id
+	if capital_id < 0 or capital_id >= cities.size():
+		return
+	var land_count := land_cities_of(rebel_id).size()
+	if land_count <= 0:
+		return
+	var uprising_count := int(ceil(0.1 * float(land_count)))
+	for _index in range(uprising_count):
+		var group := create_battle_group(rebel_id)
+		if group == null:
+			return
+		var heavy := _spawn_uprising_army(rebel_id, capital_id)
+		if heavy == null:
+			# 军队数上限已满：撤掉空战团，停止动员（不留悬空战团破坏结构不变量）。
+			nations[rebel_id].battle_groups.erase(group)
+			return
+		assign_army_to_battle_group(heavy, group.id)
+
+
+## 凭空动员一支满编重军（绕过 create_army 的城市归属校验：火星兵可在被围/新夺首都起兵）。
+## 突破 create_army 的国家军队数上限硬约束——起兵是剧情动员，不受常备军配额限制。
+func _spawn_uprising_army(nation_id: int, city_id: int) -> Army:
+	return _spawn_conjured_army(
+		nation_id,
+		city_id,
+		INITIAL_HEAVY_ARMY_SIZE,
+		Army.StrategicRole.MAIN
+	)
+
+
+## 凭空动员一支指定编制/角色的满编军队（不扣人力/金钱、不受军队数上限约束）。
+## 用于分封赐军（LINE）与削藩起兵火星兵（MAIN）等离散政治动员事件的单一真源。
+func _spawn_conjured_army(
+	nation_id: int,
+	city_id: int,
+	formation_size: int,
+	role: int
+) -> Army:
+	var army := Army.new()
+	army.id = _next_army_id
+	_next_army_id += 1
+	army.owner_nation = nation_id
+	army.max_size = formation_size
+	army.size = formation_size
+	army.max_morale = Army.max_morale_for_formation(formation_size)
+	army.morale = army.max_morale
+	army.strategic_role = role
+	army.location_city = city_id
+	army.move_from = city_id
+	army.state = Army.State.IDLE
+	army.speed_factor = rng.randf_range(0.3, 0.9)
+	army.attack = rng.randi_range(8, 15)
+	army.defense = rng.randi_range(8, 15)
+	armies.append(army)
+	return army
+
+
+## 分封赐军：确保新藩王拥有至少「陆城数」支 LINE 填线军（不足则凭空补足）。
+## 新模型下分封不迁移宗主驻军，故一般 existing=0、按城数全额赐军；仍做「计现有、补缺口」
+## 以对任何既有藩王军队（如反复分封的边界情形）保持幂等、不超编。凭空补（不扣人力池）。
+## 藩王只能有 LINE，主战 MAIN 只归宗主征召（见 Simulation._create_army_for_nation 门控）。
+func _grant_vassal_line_armies(subject_id: int) -> void:
+	if subject_id < 0 or subject_id >= nations.size():
+		return
+	var owned := land_cities_of(subject_id)
+	if owned.is_empty():
+		return
+	var target := owned.size()
+	# 统计藩王当前存活军队数（迁入驻军已归属藩王）；只补足到城市数，不叠加超编。
+	var existing := 0
+	for army in armies:
+		if army.owner_nation == subject_id and army.size > 0:
+			existing += 1
+	var deficit := target - existing
+	if deficit <= 0:
+		return
+	# 缺口按城序补：优先补到当前无本国驻军的城，让填线军铺开而非堆在首都（确定性城序）。
+	var garrisoned := {}
+	for army in armies:
+		if (
+			army.owner_nation == subject_id
+			and army.size > 0
+			and not army.on_edge
+			and army.location_city >= 0
+		):
+			garrisoned[army.location_city] = true
+	var granted := 0
+	for city in owned:
+		if granted >= deficit:
+			break
+		if garrisoned.has(city.id):
+			continue
+		_spawn_conjured_army(
+			subject_id,
+			city.id,
+			INITIAL_LIGHT_ARMY_SIZE,
+			Army.StrategicRole.LINE
+		)
+		granted += 1
+	# 若无驻军空城已补完仍有缺口（城少军多的极端情形），余量补在首都。
+	var capital_id := nations[subject_id].capital_city_id
+	while granted < deficit and capital_id >= 0 and capital_id < cities.size():
+		_spawn_conjured_army(
+			subject_id,
+			capital_id,
+			INITIAL_LIGHT_ARMY_SIZE,
+			Army.StrategicRole.LINE
+		)
+		granted += 1
 
 
 ## 结束削藩内战（不改变领土归属，仅复位关系）：宗主↔藩王恢复 ALLIED，清内战标记。
@@ -1746,7 +1990,32 @@ func end_civil_war(subject_id: int) -> bool:
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
 	suzerainty[subject_id]["civil_war"] = false
 	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.ALLIED)
+	# 内战结束（藩王战败保留宗藩）：反叛方重新并入共享粮仓——撤销其独立粮仓，
+	# 剩余库存回流原持有者共享池，藩王首都复位为零库存中继节点。
+	_merge_rebel_food_pool_back(subject_id)
 	return true
+
+
+## 内战和平收场时把反叛方独立粮仓并回共享池：库存回流新的粮池持有者，首都复位零库存中继。
+func _merge_rebel_food_pool_back(subject_id: int) -> void:
+	if subject_id < 0 or subject_id >= nations.size():
+		return
+	var subject := nations[subject_id]
+	var capital_id := subject.capital_city_id
+	if capital_id < 0 or capital_id >= cities.size():
+		return
+	var leftover := 0
+	for warehouse in warehouse_cities_of(subject_id):
+		leftover += warehouse.food_storage
+		warehouse.food_storage = 0
+		warehouse.has_warehouse = false
+	subject.warehouse_city_ids = [] as Array[int]
+	cities[capital_id].has_warehouse = false
+	cities[capital_id].food_storage = 0
+	# 复位后 food_pool_holder(subject) 收敛到宗主根；库存回流共享池（守恒）。
+	if leftover > 0:
+		deposit_food(subject_id, leftover)
+	refresh_derived()
 
 
 ## 沿宗主链上溯到的最终宗主（自身不是藩王时返回自身）。含环保护。
@@ -1775,6 +2044,60 @@ func suzerainty_members(nation_id: int) -> Array[int]:
 		cursor += 1
 	result.sort()
 	return result
+
+
+## 粮食共享池的持有者：沿「非内战」宗藩边上溯到的最顶端节点（遇到内战边即停，不跨越）。
+## 语义：同一宗藩体系里所有和平成员共享持有者首都的唯一粮仓这一「共享粮仓」，藩王首都
+## 只是零库存补给中继节点；削藩内战的反叛者与其宗主断开、自成一池（见 start_civil_war）。
+## 独立国返回自身。含环保护。这是「共享粮仓」库存归属的单一真源。
+func food_pool_holder(nation_id: int) -> int:
+	var current := nation_id
+	var guard := 0
+	while (
+		suzerainty.has(current)
+		and not is_in_civil_war(current)
+		and guard <= nations.size()
+	):
+		current = int(suzerainty[current]["overlord_id"])
+		guard += 1
+	return current
+
+
+## holder 共享粮池的全部和平成员（holder + 其下沿非内战边可达的各级藩王），按 id 升序。
+## 用于补给网络把成员首都注入为零损耗中继起点，以及内战切分时界定「反叛方 / 留守方」。
+func food_pool_members(holder_id: int) -> Array[int]:
+	var result: Array[int] = [holder_id]
+	var seen := {holder_id: true}
+	var cursor := 0
+	while cursor < result.size():
+		for subject_id in subjects_of(result[cursor]):
+			# 内战边被切断：反叛藩王及其子树不属于宗主的共享池。
+			if not seen.has(subject_id) and not is_in_civil_war(subject_id):
+				seen[subject_id] = true
+				result.append(subject_id)
+		cursor += 1
+	result.sort()
+	return result
+
+
+## holder 粮池里可作补给中继起点的藩王首都（不含 holder 自己首都，那是主源；不含被围首都）。
+## 补给损耗场与网络缓存指纹共用此单一真源，保证「降损耗中继」与「缓存失效」判据一致。
+func food_pool_relay_capitals(holder_id: int) -> Array[int]:
+	var origins: Array[int] = []
+	for member_id in food_pool_members(holder_id):
+		if member_id == holder_id:
+			continue
+		var capital_id := nations[member_id].capital_city_id
+		if (
+			capital_id < 0
+			or capital_id >= cities.size()
+			or cities[capital_id].owner_nation != member_id
+			or city_under_siege(capital_id)
+		):
+			continue
+		origins.append(capital_id)
+	origins.sort()
+	return origins
 
 
 ## 宗藩结构不变量校验。任一破坏都表明分封/削藩逻辑有 bug，应在测试中断言。
@@ -1878,30 +2201,25 @@ func enfeoff(
 	var overlord := nations[overlord_id]
 
 	# 1. 按产能占比确定划转份额（迁出区 / 宗主全域），保证资源守恒。
-	#    人力、金钱、粮食三种同质资源同构处理：均按各自产能占比划转。
+	#    人力、金钱按各自产能占比划转；粮食不划转（归共享粮仓，见下）。
 	var overlord_manpower_output := 0
 	var overlord_gold_output := 0
-	var overlord_food_output := 0
 	for city in land_cities_of(overlord_id):
 		overlord_manpower_output += city.manpower_per_month
 		overlord_gold_output += city.gold_per_month
-		overlord_food_output += city.food_per_half_year
 	var moved_manpower_output := 0
 	var moved_gold_output := 0
-	var moved_food_output := 0
 	for city_id in city_ids:
 		moved_manpower_output += cities[city_id].manpower_per_month
 		moved_gold_output += cities[city_id].gold_per_month
-		moved_food_output += cities[city_id].food_per_half_year
 	var granted_manpower := _proportional_share(
 		overlord.manpower_pool, moved_manpower_output, overlord_manpower_output
 	)
 	var granted_gold := _proportional_share(
 		overlord.treasury_gold, moved_gold_output, overlord_gold_output
 	)
-	var granted_food := _proportional_share(
-		overlord.granary_food, moved_food_output, overlord_food_output
-	)
+	# 粮食归「共享粮仓」：分封不划走粮食库存，全体系粮食继续留在宗主根粮仓。
+	# 藩王首都只作零库存补给中继节点（见 _establish_vassal_capital），不切分库存。
 
 	# 2. 建新藩王 Nation（完整实体，色调随宗主派生以体现同一政治共同体）。
 	var subject := Nation.new()
@@ -1919,9 +2237,9 @@ func enfeoff(
 		recognized_city_owners[city_id] = subject.id
 	ownership_revision += 1
 
-	# 3.5 迁移封地内驻军给藩王，使其能自行守边（文档第 3 节的分封经济动机核心）。
-	#     必须在城市归属藩王后进行：以城市新 owner 判定「军队是否在封地内」。
-	_transfer_garrison_to_vassal(overlord, subject)
+	# 3.5 分封不再把宗主驻军（尤其 MAIN 战团）转隶藩王：新模型下藩王只能有 LINE、
+	#     主战 MAIN 只归宗主征召与指挥。藩王的守土兵力改由第 5.5 步凭空赐 LINE 军提供；
+	#     留在封地内的宗主军队因宗藩 ALLIED 通行权不会被困，交宗主 AI 下个 tick 自然调度。
 
 	# 4. 划转人力与金钱（守恒：从宗主池扣除、注入藩王池）。
 	overlord.manpower_pool -= granted_manpower
@@ -1929,9 +2247,13 @@ func enfeoff(
 	overlord.treasury_gold -= granted_gold
 	subject.treasury_gold = granted_gold
 
-	# 5. 选藩王首都，并把宗主粮仓划出的份额 + 迁入城市自带存粮存入其新粮仓。
-	_withdraw_food_from_warehouses(overlord, granted_food)
-	_establish_vassal_capital(subject, granted_food)
+	# 5. 选藩王首都作为「共享粮仓」的补给中继节点（零库存）；封地城市自带的存粮
+	#    回流宗主根粮仓（共享池守恒，不凭空蒸发）。
+	_establish_vassal_capital(subject, overlord_id)
+
+	# 5.5 赐军：确保藩王至少拥有「陆城数」支 LINE 填线军（含迁入驻军，缺口凭空补足），
+	#     解决「分封藩王常无军队」；藩王只能有 LINE，MAIN 仅宗主可征召。
+	_grant_vassal_line_armies(subject.id)
 
 	# 6. 外交：藩王继承宗主对每个第三方的关系，并与宗主结盟。
 	#    这样 alliance_bloc 天然把宗藩聚为一体，对外 is_enemy 自动正确，
@@ -2191,15 +2513,16 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 	return Color.from_hsv(h, s, v)
 
 
-## 为藩王选定首都与粮仓，把迁入城市自带存粮与宗主划出的 granted_food 一起入库。
-## 复用宗主首都选取的「领土重心 + EquivariantOrder 决定性打破平局」规则。
-func _establish_vassal_capital(subject: Nation, granted_food: int) -> void:
+## 为藩王选定首都作为「共享粮仓」的补给中继节点：首都本身零库存、不建独立粮仓，
+## 封地城市自带的存粮全部回流宗主根粮仓（共享池守恒）。复用宗主首都选取的
+## 「领土重心 + EquivariantOrder 决定性打破平局」规则。overlord_id 是回流粮食的接收方。
+func _establish_vassal_capital(subject: Nation, overlord_id: int) -> void:
 	var owned := land_cities_of(subject.id)
 	if owned.is_empty():
 		return
-	var pooled_food := granted_food
+	var reclaimed_food := 0
 	for city in owned:
-		pooled_food += city.food_storage
+		reclaimed_food += city.food_storage
 		city.food_storage = 0
 		city.is_capital = false
 		city.has_warehouse = false
@@ -2218,62 +2541,15 @@ func _establish_vassal_capital(subject: Nation, granted_food: int) -> void:
 			best_distance = distance
 			capital_id = city.id
 	subject.capital_city_id = capital_id
-	subject.warehouse_city_ids = [capital_id] as Array[int]
+	# 藩王首都是补给中继节点，不是独立粮仓：warehouse_city_ids 保持空、has_warehouse=false。
+	subject.warehouse_city_ids = [] as Array[int]
 	var capital := cities[capital_id]
 	capital.is_capital = true
-	capital.has_warehouse = true
-	capital.food_storage = pooled_food
-
-
-## 把驻扎在封地内的静止驻军迁移给藩王，使藩王能自行守边。
-## 迁移规则（保证战团结构不变量、不撕裂战团、不打断行军/战斗）：
-##   1. 全部存活成员都静止在封地内的「整团」——连 BattleGroup 对象一起迁移；
-##   2. 静止在封地内的独立 LINE 军（无战团）——直接改属；
-##   3. 跨界战团（部分成员不在封地）、行军/战斗/撤退中的军队——留给宗主，
-##      其战团归属与运行态由宗主下个 AI tick 的 _reconcile_strategic_roles 自愈。
-func _transfer_garrison_to_vassal(overlord: Nation, subject: Nation) -> void:
-	# 迁移整团：仅当该战团全部存活成员都静止在藩王领土内。
-	var groups_to_move: Array[BattleGroup] = []
-	for group in overlord.battle_groups:
-		var members := battle_group_members(overlord.id, group.id)
-		if members.is_empty():
-			continue
-		var all_inside := true
-		for member in members:
-			if not _army_stationed_in_nation(member, subject.id):
-				all_inside = false
-				break
-		if all_inside:
-			groups_to_move.append(group)
-	for group in groups_to_move:
-		var members := battle_group_members(overlord.id, group.id)
-		var new_group_id := subject.next_battle_group_id
-		subject.next_battle_group_id += 1
-		group.id = new_group_id
-		group.owner_nation = subject.id
-		overlord.battle_groups.erase(group)
-		subject.battle_groups.append(group)
-		for member in members:
-			member.owner_nation = subject.id
-			member.battle_group_id = new_group_id
-			member.strategic_role = Army.StrategicRole.MAIN
-			member.clear_line_assignment()
-
-	# 迁移封地内的独立 LINE 军（无战团的轻军）。无战团的重军属异常态
-	# （重军必须隶属战团），不在此迁移，交由宗主 reconcile 归位，避免制造非法结构。
-	for army in armies:
-		if (
-			army.owner_nation == overlord.id
-			and army.battle_group_id < 0
-			and army.size > 0
-			and army.max_size < INITIAL_HEAVY_ARMY_SIZE
-			and _army_stationed_in_nation(army, subject.id)
-		):
-			army.owner_nation = subject.id
-			army.strategic_role = Army.StrategicRole.LINE
-			army.clear_line_assignment()
-			army.line_assignment_city = -1
-			army.line_assignment_edge = -1
+	capital.has_warehouse = false
+	capital.food_storage = 0
+	# 封地存粮回流宗主共享池（deposit_food 会重定向到 food_pool_holder 首都）。
+	if reclaimed_food > 0 and overlord_id >= 0 and overlord_id < nations.size():
+		deposit_food(overlord_id, reclaimed_food)
 
 
 ## 军队是否静止驻扎在 nation_id 的领土内（可安全整体转隶）。
@@ -2565,18 +2841,22 @@ func warehouse_cities_of(nation_id: int) -> Array[City]:
 	return result
 
 
-## 将粮食汇入首都粮仓；若首都暂不可用，则回退到第一个有效粮仓。
+## 将粮食汇入「共享粮仓」：藩王的粮食产出重定向到其宗藩体系的粮池持有者
+## （food_pool_holder）首都粮仓，藩王首都不再持有独立库存（它只是补给中继节点）。
+## 独立国 / 内战反叛方 holder 即自身，行为与旧版一致。若持有者首都暂不可用，回退到其
+## 第一个有效粮仓。这是「一个宗主国内所有藩属共享粮仓」在库存写入侧的单一真源。
 func deposit_food(nation_id: int, amount: int) -> bool:
 	if amount <= 0 or nation_id < 0 or nation_id >= nations.size():
 		return false
-	var nation := nations[nation_id]
+	var holder_id := food_pool_holder(nation_id)
+	var nation := nations[holder_id]
 	var target: City = null
 	if nation.capital_city_id >= 0 and nation.capital_city_id < cities.size():
 		var capital := cities[nation.capital_city_id]
-		if capital.owner_nation == nation_id and capital.has_warehouse:
+		if capital.owner_nation == holder_id and capital.has_warehouse:
 			target = capital
 	if target == null:
-		var warehouses := warehouse_cities_of(nation_id)
+		var warehouses := warehouse_cities_of(holder_id)
 		if not warehouses.is_empty():
 			target = warehouses[0]
 	if target == null:
