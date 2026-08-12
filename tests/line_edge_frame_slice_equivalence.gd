@@ -37,6 +37,8 @@ func _process(_delta: float) -> bool:
 		return false
 	if _active_state.day < _target_days and _active_state.winner == -1:
 		return false
+	if _active_sim.runtime_day_in_progress():
+		return false
 	if _phase == 0:
 		for army in _active_state.armies:
 			_baseline_by_id[army.id] = _army_fp(army)

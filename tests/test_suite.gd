@@ -5280,6 +5280,91 @@ func _test_ai_strategic_map_and_threat() -> void:
 		and Simulation._ai_nation_ids_for_day(2, 3, false, stagger_interval).size() == 2,
 		"强制重算或国家数不超过周期时必须全体今天决策，退化保持镜像对称"
 	)
+	var normally_due := Simulation._ai_nation_ids_for_day(
+		40,
+		3,
+		false,
+		stagger_interval
+	)
+	var locally_forced := Simulation.merge_forced_ai_nation_order(
+		normally_due,
+		[2, 17, 23, 99, -1],
+		40,
+		3,
+		false,
+		stagger_interval
+	)
+	_check(
+		locally_forced == [2, 3, 13, 17, 23, 33],
+		"局部占领失效必须只合并到期相位与受影响国家，过滤越界ID且保持全局轮转顺序"
+	)
+	var locally_forced_rotated := (
+		Simulation.merge_forced_ai_nation_order(
+			Simulation._ai_nation_ids_for_day(
+				40,
+				13,
+				true,
+				stagger_interval
+			),
+			[2, 17],
+			40,
+			13,
+			true,
+			stagger_interval
+		)
+	)
+	var full_rotated := Simulation._ai_nation_ids_for_day(
+		40,
+		13,
+		true,
+		stagger_interval,
+		true
+	)
+	var filtered_full: Array[int] = []
+	for nation_id in full_rotated:
+		if nation_id in [2, 3, 13, 17, 23, 33]:
+			filtered_full.append(nation_id)
+	_check(
+		locally_forced_rotated == filtered_full,
+		"局部失效国家必须继承该决策轮的全局轮转顺序，不得固定抢占队首"
+	)
+	var local_replan_state := GameState.new()
+	local_replan_state.generate_grid_world(7000)
+	var local_replan_sim := Simulation.new()
+	root.add_child(local_replan_sim)
+	local_replan_sim.setup(local_replan_state)
+	local_replan_sim._ai_last_decision_day = 7
+	var capture_city := 5
+	var old_capture_owner := (
+		local_replan_state.cities[capture_city].owner_nation
+	)
+	var claimant := (
+		(old_capture_owner + 1)
+			% local_replan_state.nations.size()
+	)
+	local_replan_state.cities[capture_city].owner_nation = claimant
+	var expected_replans := {
+		old_capture_owner: true,
+		claimant: true,
+	}
+	for neighbor_id in local_replan_state.neighbors(capture_city):
+		expected_replans[
+			local_replan_state.cities[
+				neighbor_id
+			].owner_nation
+		] = true
+	local_replan_sim._force_ai_replan_for_capture(
+		old_capture_owner,
+		claimant,
+		capture_city
+	)
+	_check(
+		local_replan_sim._ai_last_decision_day == 7
+			and local_replan_sim._ai_forced_nations
+				== expected_replans,
+		"普通占领必须只标记旧主、占领者和相邻势力，不得退化为全体强制重算"
+	)
+	local_replan_sim.free()
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 1
@@ -9083,6 +9168,33 @@ func _test_diplomacy_state_and_ai() -> void:
 				> float(before_massing["score"]),
 		"中立邻国在本国边境屯兵必须提高和平意愿以便调转战线"
 	)
+	var massing_matrix_equivalent := true
+	var shared_massing_cache := {}
+	for observer_id in range(formula_state.nations.size()):
+		for enemy_id in range(formula_state.nations.size()):
+			if observer_id == enemy_id:
+				continue
+			massing_matrix_equivalent = (
+				massing_matrix_equivalent
+				and _approx(
+					DiplomacyAI._neutral_border_massing_ratio(
+						formula_state,
+						observer_id,
+						enemy_id,
+						shared_massing_cache
+					),
+					_legacy_neutral_border_massing_ratio(
+						formula_state,
+						observer_id,
+						enemy_id
+					),
+					0.000001
+				)
+			)
+	_check(
+		massing_matrix_equivalent,
+		"共享边境集结矩阵必须与逐组合扫描的旧公式逐国一致"
+	)
 
 	for a in range(ai_state.nations.size()):
 		for b in range(a + 1, ai_state.nations.size()):
@@ -11796,6 +11908,29 @@ func _test_diplomacy_state_and_ai() -> void:
 		role_group.id
 	)
 	role_sim._reconcile_strategic_roles(0)
+	var role_signature_before_index: Array[Array] = []
+	for role_army in role_state.armies:
+		role_signature_before_index.append([
+			role_army.id,
+			role_army.battle_group_id,
+			role_army.strategic_role,
+		])
+	role_sim._reconcile_strategic_roles(
+		0,
+		AiWorldView.build_army_index(role_state)
+	)
+	var role_signature_after_index: Array[Array] = []
+	for role_army in role_state.armies:
+		role_signature_after_index.append([
+			role_army.id,
+			role_army.battle_group_id,
+			role_army.strategic_role,
+		])
+	_check(
+		role_signature_after_index
+			== role_signature_before_index,
+		"共享军队索引路径必须与全军扫描路径生成相同的战团和战略角色"
+	)
 	var promoted_light_count := 0
 	var promoted_light: Army = null
 	for role_light in role_lights:
@@ -15954,3 +16089,63 @@ func _place_army_on_edge(gs, id: int, nation: int, from_city: int, to_city: int,
 	a.on_edge = true
 	gs.armies.append(a)
 	return a
+
+
+func _legacy_neutral_border_massing_ratio(
+	game_state: GameState,
+	observer_id: int,
+	current_enemy_id: int
+) -> float:
+	var border_power := 0.0
+	for other in game_state.nations:
+		if (
+			not other.alive
+			or other.id in [observer_id, current_enemy_id]
+			or game_state.is_allied(observer_id, other.id)
+			or game_state.is_enemy(observer_id, other.id)
+		):
+			continue
+		var frontier_cities := {}
+		for edge in game_state.edges:
+			if edge.max_manpower <= 0:
+				continue
+			var owner_a := game_state.cities[
+				edge.city_a
+			].owner_nation
+			var owner_b := game_state.cities[
+				edge.city_b
+			].owner_nation
+			if owner_a == observer_id and owner_b == other.id:
+				frontier_cities[edge.city_b] = true
+			elif owner_b == observer_id and owner_a == other.id:
+				frontier_cities[edge.city_a] = true
+		for army in game_state.armies:
+			if army.owner_nation != other.id or army.size <= 0:
+				continue
+			if (
+				(
+					army.location_city >= 0
+					and frontier_cities.has(army.location_city)
+				)
+				or (
+					army.on_edge
+					and army.move_to >= 0
+					and (
+						frontier_cities.has(army.move_from)
+						or frontier_cities.has(army.move_to)
+					)
+				)
+			):
+				border_power += ArmyPower.effective(army)
+	return minf(
+		border_power
+			/ maxf(
+				DiplomacyAI._national_power(
+					game_state,
+					observer_id,
+					{}
+				),
+				1.0
+			),
+		DiplomacyAI.PEACE_MAX_BORDER_MASSING_RATIO
+	)

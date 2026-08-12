@@ -1504,6 +1504,8 @@ static func _neutral_border_massing_ratio(
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
+	if not evaluation_cache.has("border_massing_matrix_built"):
+		_build_border_massing_matrix(state, evaluation_cache)
 	var border_power := 0.0
 	for other in state.nations:
 		if (
@@ -1513,36 +1515,11 @@ static func _neutral_border_massing_ratio(
 			or state.is_enemy(observer_id, other.id)
 		):
 			continue
-		var other_frontier_cities := {}
-		for edge in state.edges:
-			if edge.max_manpower <= 0:
-				continue
-			var owner_a := state.cities[edge.city_a].owner_nation
-			var owner_b := state.cities[edge.city_b].owner_nation
-			if owner_a == observer_id and owner_b == other.id:
-				other_frontier_cities[edge.city_b] = true
-			elif owner_b == observer_id and owner_a == other.id:
-				other_frontier_cities[edge.city_a] = true
-		if other_frontier_cities.is_empty():
-			continue
-		for army in state.armies:
-			if army.owner_nation != other.id or army.size <= 0:
-				continue
-			var massed := (
-				army.location_city >= 0
-				and other_frontier_cities.has(army.location_city)
-			)
-			if (
-				not massed
-				and army.on_edge
-				and army.move_to >= 0
-			):
-				massed = (
-					other_frontier_cities.has(army.move_from)
-					or other_frontier_cities.has(army.move_to)
-				)
-			if massed:
-				border_power += ArmyPower.effective(army)
+		border_power += float(evaluation_cache.get(
+			"border_massing_power:%d:%d"
+				% [observer_id, other.id],
+			0.0
+		))
 	var result := minf(
 		border_power
 			/ maxf(
@@ -1557,6 +1534,85 @@ static func _neutral_border_massing_ratio(
 	)
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 单次建立“观察国 -> 第三国”的边境集结战力矩阵。旧实现对每个
+## observer/current_enemy 组合重复扫描 E 条边和 A 支军队；矩阵严格保留
+## “军队位于第三国一侧边境城或相邻边上”的原判定。
+static func _build_border_massing_matrix(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> void:
+	evaluation_cache["border_massing_matrix_built"] = true
+	var frontier_cities_by_pair := {}
+	var observers_by_other := {}
+	for edge in state.edges:
+		if edge.max_manpower <= 0:
+			continue
+		var owner_a := state.cities[edge.city_a].owner_nation
+		var owner_b := state.cities[edge.city_b].owner_nation
+		if owner_a < 0 or owner_b < 0 or owner_a == owner_b:
+			continue
+		for entry in [
+			[owner_a, owner_b, edge.city_b],
+			[owner_b, owner_a, edge.city_a],
+		]:
+			var observer_id := int(entry[0])
+			var other_id := int(entry[1])
+			var pair_key := "%d:%d" % [observer_id, other_id]
+			if not frontier_cities_by_pair.has(pair_key):
+				frontier_cities_by_pair[pair_key] = {}
+				if not observers_by_other.has(other_id):
+					observers_by_other[other_id] = (
+						[] as Array[int]
+					)
+				(
+					observers_by_other[other_id]
+						as Array[int]
+				).append(observer_id)
+			(
+				frontier_cities_by_pair[pair_key]
+					as Dictionary
+			)[int(entry[2])] = true
+	for army in state.armies:
+		if army.size <= 0:
+			continue
+		for observer_id in (
+			observers_by_other.get(
+				army.owner_nation,
+				[] as Array[int]
+			) as Array[int]
+		):
+			var pair_key := "%d:%d" % [
+				observer_id,
+				army.owner_nation,
+			]
+			var frontier_cities: Dictionary = (
+				frontier_cities_by_pair[pair_key]
+			)
+			var massed := (
+				army.location_city >= 0
+				and frontier_cities.has(army.location_city)
+			)
+			if (
+				not massed
+				and army.on_edge
+				and army.move_to >= 0
+			):
+				massed = (
+					frontier_cities.has(army.move_from)
+					or frontier_cities.has(army.move_to)
+				)
+			if not massed:
+				continue
+			var power_key := (
+				"border_massing_power:%d:%d"
+					% [observer_id, army.owner_nation]
+			)
+			evaluation_cache[power_key] = (
+				float(evaluation_cache.get(power_key, 0.0))
+				+ ArmyPower.effective(army)
+			)
 
 
 static func threat_from_nation(

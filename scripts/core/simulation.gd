@@ -114,6 +114,9 @@ var _daily_supply_network_cache: Dictionary = {}
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
 var _supply_network_fingerprints: Dictionary = {}
 var _ai_last_decision_day: int = -1
+## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
+## _ai_last_decision_day == -1 触发全体重算。
+var _ai_forced_nations: Dictionary = {}
 var _collect_ai_commands: bool = false
 var _ai_command_buffer: Array[AiCommandIntent] = []
 var _ai_planned_armies: Dictionary = {}
@@ -195,6 +198,7 @@ func setup(game_state: GameState) -> void:
 	_daily_supply_network_cache.clear()
 	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
+	_ai_forced_nations.clear()
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
 	_defer_declaration_launches = false
@@ -334,7 +338,10 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	)
 	# 错峰下几乎每天都有一批国家到期；力求「有到期国家或需强制重算」即进入决策。
 	# 关闭错峰（A/B 对照）时退回旧门控：仅在 day%interval==0 全体决策。
-	var force_recompute := _ai_last_decision_day == -1
+	var force_recompute := (
+		_ai_last_decision_day == -1
+		or not _ai_forced_nations.is_empty()
+	)
 	var ai_decision_due := force_recompute
 	if ai_staggered_decisions:
 		ai_decision_due = ai_decision_due or not _ai_nation_ids_for_day(
@@ -3451,22 +3458,33 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	)
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
-	# 议和/宣战后（_ai_last_decision_day==-1）强制全体今天重算，忽略错峰相位：
-	# 国境刚变，所有国家都需立即按新边界重规划，且这是低频事件，偶发全量可接受。
+	# 全局外交变化强制全体重算；局部占领只把直接受影响国家并入当天错峰集合。
 	var force_all_nations := _ai_last_decision_day == -1
 	_ai_last_decision_day = state.day
+	var decision_interval := (
+		AI_DECISION_INTERVAL_DAYS
+		if state.uses_heightmap
+		else GRID_AI_DECISION_INTERVAL_DAYS
+	)
 	var nation_order := _ai_nation_ids_for_day(
 		state.nations.size(),
 		state.day,
 		rotate_ai_nation_order,
-		(
-			AI_DECISION_INTERVAL_DAYS
-			if state.uses_heightmap
-			else GRID_AI_DECISION_INTERVAL_DAYS
-		),
+		decision_interval,
 		force_all_nations,
 		ai_staggered_decisions
 	)
+	if not force_all_nations and not _ai_forced_nations.is_empty():
+		nation_order = merge_forced_ai_nation_order(
+			nation_order,
+			_ai_forced_nations.keys(),
+			state.nations.size(),
+			state.day,
+			rotate_ai_nation_order,
+			decision_interval
+		)
+	for nation_id in nation_order:
+		_ai_forced_nations.erase(nation_id)
 	var managed_nations: Array[int] = []
 	var force_contexts := {}
 	var context_jobs: Array[Dictionary] = []
@@ -3490,7 +3508,10 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
-		_reconcile_strategic_roles(nation_id)
+		_reconcile_strategic_roles(
+			nation_id,
+			shared_army_index
+		)
 		_record_tick_profile_stage(
 			"ai_reconcile_roles",
 			ai_view_detail_started
@@ -3941,7 +3962,10 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
 
 
-func _reconcile_strategic_roles(nation_id: int) -> void:
+func _reconcile_strategic_roles(
+	nation_id: int,
+	shared_army_index: Dictionary = {}
+) -> void:
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return
 	var nation := state.nations[nation_id]
@@ -3949,9 +3973,17 @@ func _reconcile_strategic_roles(nation_id: int) -> void:
 	for group in nation.battle_groups:
 		valid_groups[group.id] = true
 	var armies: Array[Army] = []
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			armies.append(army)
+	if not shared_army_index.is_empty():
+		var armies_by_nation: Dictionary = (
+			shared_army_index["armies_by_nation"]
+		)
+		armies.assign(
+			(armies_by_nation[nation_id] as Array[Army])
+		)
+	else:
+		for army in state.armies:
+			if army.owner_nation == nation_id and army.size > 0:
+				armies.append(army)
 	armies.sort_custom(func(a: Army, b: Army) -> bool:
 		if a.max_size != b.max_size:
 			return a.max_size > b.max_size
@@ -4128,6 +4160,61 @@ static func _ai_nation_ids_for_day(
 	for offset in range(due.size()):
 		result.append(due[(start + offset) % due.size()])
 	return result
+
+
+## 把局部失效国家并入当天决策集合，同时保持“全体今天决策”时的既有轮转顺序。
+## 这样城市易手不会把 40 国错峰退化成全量重算，也不会让被提前决策国家获得
+## 固定靠前顺序。
+static func merge_forced_ai_nation_order(
+	due_nations: Array[int],
+	forced_values: Array,
+	nation_count: int,
+	day: int,
+	rotate_order: bool = true,
+	decision_interval_days: int = AI_DECISION_INTERVAL_DAYS
+) -> Array[int]:
+	var included := {}
+	for nation_id in due_nations:
+		if nation_id >= 0 and nation_id < nation_count:
+			included[nation_id] = true
+	for nation_value in forced_values:
+		var nation_id := int(nation_value)
+		if nation_id >= 0 and nation_id < nation_count:
+			included[nation_id] = true
+	if included.is_empty():
+		return [] as Array[int]
+	var full_order := _ai_nation_ids_for_day(
+		nation_count,
+		day,
+		rotate_order,
+		decision_interval_days,
+		true,
+		true
+	)
+	var result: Array[int] = []
+	for nation_id in full_order:
+		if included.has(nation_id):
+			result.append(nation_id)
+	return result
+
+
+func _force_ai_replan_for_capture(
+	old_owner: int,
+	claimant: int,
+	city_id: int
+) -> void:
+	if old_owner >= 0:
+		_ai_forced_nations[old_owner] = true
+	if claimant >= 0:
+		_ai_forced_nations[claimant] = true
+	if city_id < 0 or city_id >= state.cities.size():
+		return
+	for neighbor_id in state.neighbors(city_id):
+		var neighbor_owner := state.cities[
+			neighbor_id
+		].owner_nation
+		if neighbor_owner >= 0:
+			_ai_forced_nations[neighbor_owner] = true
 
 
 static func _sort_ai_decision_order(
@@ -9956,8 +10043,9 @@ func _capture_city(
 		else army.owner_nation
 	)
 	state.ownership_revision += 1
-	# 控制区变化会重塑双方边境防区；下一日立即重建，不等待十日常规 AI 周期。
-	_ai_last_decision_day = -1
+	# 普通占领只重塑局部边境：旧主、占领者和该城相邻势力下一日提前重算。
+	# 全局外交/宗藩重构仍使用 _ai_last_decision_day=-1。
+	_force_ai_replan_for_capture(old_owner, claimant, city.id)
 	if claimant != old_owner:
 		city.fort_strength_max = maxi(
 			city.fort_strength_max,
