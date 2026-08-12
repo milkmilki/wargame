@@ -339,12 +339,41 @@ func path_field(
 	allowed_goal: int = -1,
 	required_manpower: int = 0
 ) -> Dictionary:
+	return cached_path_field(
+		state,
+		day,
+		_path_field_cache,
+		start,
+		allowed_nation,
+		block_contested_edges,
+		use_danger_weight,
+		allowed_goal,
+		required_manpower
+	)
+
+
+static func cached_path_field(
+	game_state: GameState,
+	current_day: int,
+	cache: Dictionary,
+	start: int,
+	allowed_nation: int = -1,
+	block_contested_edges: bool = false,
+	use_danger_weight: bool = true,
+	allowed_goal: int = -1,
+	required_manpower: int = 0
+) -> Dictionary:
+	var normalized_goal := allowed_goal
+	# allowed_goal 仅在限制通行国时放行最终敌城；不限制通行国、或目标就是
+	# Dijkstra 起点时，它不参与任何松弛判定，统一键可消除伪重复路径场。
+	if allowed_nation < 0 or allowed_goal == start:
+		normalized_goal = -1
 	var revision_key := (
-		"D:%d" % day
+		"D:%d" % current_day
 		if block_contested_edges
 		else "R:%d:%d" % [
-			state.ownership_revision,
-			state.diplomacy_revision,
+			game_state.ownership_revision,
+			game_state.diplomacy_revision,
 		]
 	)
 	var key := "%s:%d:%d:%d:%d:%d:%d" % [
@@ -353,20 +382,20 @@ func path_field(
 		allowed_nation,
 		int(block_contested_edges),
 		int(use_danger_weight),
-		allowed_goal,
+		normalized_goal,
 		required_manpower,
 	]
-	if not _path_field_cache.has(key):
-		_path_field_cache[key] = Pathfinding.dijkstra_field(
-			state,
+	if not cache.has(key):
+		cache[key] = Pathfinding.dijkstra_field(
+			game_state,
 			start,
 			allowed_nation,
 			block_contested_edges,
 			use_danger_weight,
-			allowed_goal,
+			normalized_goal,
 			required_manpower
 		)
-	return _path_field_cache[key]
+	return cache[key]
 
 
 func nearest_supply_city(army: Army) -> Array:

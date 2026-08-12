@@ -5365,6 +5365,125 @@ func _test_ai_strategic_map_and_threat() -> void:
 		"普通占领必须只标记旧主、占领者和相邻势力，不得退化为全体强制重算"
 	)
 	local_replan_sim.free()
+	var path_cache_state := GameState.new()
+	path_cache_state.generate_grid_world(7002)
+	var path_cache := {}
+	var unrestricted_a := AiWorldView.cached_path_field(
+		path_cache_state,
+		path_cache_state.day,
+		path_cache,
+		0,
+		-1,
+		false,
+		true,
+		1,
+		0
+	)
+	var unrestricted_b := AiWorldView.cached_path_field(
+		path_cache_state,
+		path_cache_state.day,
+		path_cache,
+		0,
+		-1,
+		false,
+		true,
+		2,
+		0
+	)
+	var start_goal := AiWorldView.cached_path_field(
+		path_cache_state,
+		path_cache_state.day,
+		path_cache,
+		0,
+		0,
+		false,
+		false,
+		0,
+		0
+	)
+	var no_goal := AiWorldView.cached_path_field(
+		path_cache_state,
+		path_cache_state.day,
+		path_cache,
+		0,
+		0,
+		false,
+		false,
+		-1,
+		0
+	)
+	_check(
+		path_cache.size() == 2
+			and unrestricted_a == unrestricted_b
+			and start_goal == no_goal,
+		"路径场缓存必须合并不限制通行国或目标等于起点时的语义等价键"
+	)
+	var enemy_goals: Array[int] = []
+	for path_city in path_cache_state.cities:
+		if path_city.owner_nation != 0:
+			enemy_goals.append(path_city.id)
+		if enemy_goals.size() >= 2:
+			break
+	for enemy_goal in enemy_goals:
+		AiWorldView.cached_path_field(
+			path_cache_state,
+			path_cache_state.day,
+			path_cache,
+			0,
+			0,
+			false,
+			true,
+			enemy_goal,
+			0
+		)
+	_check(
+		enemy_goals.size() == 2
+			and path_cache.size() == 4,
+		"限制通行国时不同敌方终点必须保持独立缓存键，不能错误共享可达区域"
+	)
+	var path_cache_sim := Simulation.new()
+	root.add_child(path_cache_sim)
+	path_cache_sim.setup(path_cache_state)
+	var shared_path_view := path_cache_sim._build_ai_view(0)
+	shared_path_view.path_field(
+		0,
+		0,
+		false,
+		true,
+		-1,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var shared_cache_size := (
+		path_cache_sim._ai_path_field_cache_by_nation[0]
+			as Dictionary
+	).size()
+	var shared_path_result := path_cache_sim._cached_ai_path_field(
+		0,
+		0,
+		0,
+		false,
+		true,
+		-1,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var direct_path_result := Pathfinding.dijkstra_field(
+		path_cache_state,
+		0,
+		0,
+		false,
+		true,
+		-1,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	_check(
+		(
+			path_cache_sim._ai_path_field_cache_by_nation[0]
+				as Dictionary
+		).size() == shared_cache_size
+			and shared_path_result == direct_path_result,
+		"战役规划与命令提交必须命中同一国家级路径缓存，且结果与直接Dijkstra一致"
+	)
+	path_cache_sim.free()
 	gs.armies.clear()
 	for city in gs.cities:
 		city.owner_nation = 1

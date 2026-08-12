@@ -4093,6 +4093,30 @@ func _build_ai_view(
 	return view
 
 
+func _cached_ai_path_field(
+	cache_nation_id: int,
+	start: int,
+	allowed_nation: int = -1,
+	block_contested_edges: bool = false,
+	use_danger_weight: bool = true,
+	allowed_goal: int = -1,
+	required_manpower: int = 0
+) -> Dictionary:
+	if not _ai_path_field_cache_by_nation.has(cache_nation_id):
+		_ai_path_field_cache_by_nation[cache_nation_id] = {}
+	return AiWorldView.cached_path_field(
+		state,
+		state.day,
+		_ai_path_field_cache_by_nation[cache_nation_id],
+		start,
+		allowed_nation,
+		block_contested_edges,
+		use_danger_weight,
+		allowed_goal,
+		required_manpower
+	)
+
+
 func _strategy_snapshot_for(
 	view: AiWorldView,
 	diplomacy_cache: Dictionary = {}
@@ -4597,8 +4621,7 @@ func _split_army_for_narrow_objective(
 			)
 	)
 	for army in candidates:
-		var wide_field := Pathfinding.dijkstra_field(
-			state,
+		var wide_field := view.path_field(
 			army.location_city,
 			nation.id,
 			false,
@@ -4615,8 +4638,7 @@ func _split_army_for_narrow_objective(
 			) < INF
 		):
 			continue
-		var narrow_field := Pathfinding.dijkstra_field(
-			state,
+		var narrow_field := view.path_field(
 			army.location_city,
 			nation.id,
 			false,
@@ -5006,8 +5028,8 @@ func _sort_campaign_priority(
 	nation_id: int,
 	target_city: int
 ) -> Array[Army]:
-	var field := Pathfinding.dijkstra_field(
-		state,
+	var field := _cached_ai_path_field(
+		nation_id,
 		target_city,
 		nation_id,
 		false,
@@ -7077,8 +7099,8 @@ func _campaign_army_can_attack_target(
 	var origin := _campaign_army_origin(army, nation_id)
 	if origin < 0:
 		return false
-	var field := Pathfinding.dijkstra_field(
-		state,
+	var field := _cached_ai_path_field(
+		nation_id,
 		origin,
 		nation_id,
 		false,
@@ -8452,8 +8474,8 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			ActionCandidate.Kind.RETREAT,
 		]
 	):
-		var field := Pathfinding.dijkstra_field(
-			state,
+		var field := _cached_ai_path_field(
+			army.owner_nation,
 			army.location_city,
 			army.owner_nation,
 			false,
@@ -8684,8 +8706,8 @@ func _execute_ai_candidate(
 		if path_prevalidated:
 			army.path = prepared_path.duplicate()
 		else:
-			var field := Pathfinding.dijkstra_field(
-				state,
+			var field := _cached_ai_path_field(
+				army.owner_nation,
 				army.location_city,
 				army.owner_nation,
 				false,
@@ -8721,8 +8743,8 @@ func _execute_ai_candidate(
 		if path_prevalidated:
 			army.path = prepared_path.duplicate()
 		else:
-			var retreat_field := Pathfinding.dijkstra_field(
-				state,
+			var retreat_field := _cached_ai_path_field(
+				army.owner_nation,
 				army.location_city,
 				army.owner_nation,
 				false,
