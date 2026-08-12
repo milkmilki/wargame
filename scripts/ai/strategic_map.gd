@@ -36,7 +36,8 @@ var _total_friendly_value: float = 0.0
 static func build(
 	view: AiWorldView,
 	diplomacy_cache: Dictionary = {},
-	shared_city_values: Dictionary = {}
+	shared_city_values: Dictionary = {},
+	shared_edge_values: Dictionary = {}
 ) -> StrategicMapSnapshot:
 	var snapshot := StrategicMapSnapshot.new()
 	snapshot.nation_id = view.nation_id
@@ -48,7 +49,7 @@ static func build(
 	snapshot._find_frontier(diplomacy_cache)
 	snapshot._compute_connectivity()
 	snapshot._compute_supply_corridors(view)
-	snapshot._finalize_edge_values()
+	snapshot._finalize_edge_values(shared_edge_values)
 	snapshot._compute_offensive_values(view)
 	snapshot._select_priority_targets(view)
 	return snapshot
@@ -76,6 +77,29 @@ static func build_base_city_values(state: GameState) -> Dictionary:
 		if city.is_manpower_hub:
 			value += 4.0
 		result[city.id] = value
+	return result
+
+
+## 道路危险、容量与关隘价值在运行期不随观察国变化。AI tick 内共享这部分，
+## 国家快照只叠加本国城市、边境、桥梁和粮道价值。
+static func build_base_edge_values(state: GameState) -> Dictionary:
+	var result := {}
+	for edge in state.edges:
+		var capacity_units := (
+			float(edge.max_manpower)
+				/ float(Edge.STANDARD_MANPOWER)
+		)
+		var value := (
+			edge.danger
+			+ 0.75 * maxf(capacity_units - 1.0, 0.0)
+		)
+		if (
+			edge.max_manpower > 0
+			and edge.danger
+				>= Combat.CHOKEPOINT_DANGER_ONSET
+		):
+			value += 4.0
+		result[_edge_key(edge.city_a, edge.city_b)] = value
 	return result
 
 
@@ -385,40 +409,46 @@ func _compute_supply_corridors(view: AiWorldView) -> void:
 				from_id = to_id
 
 
-func _finalize_edge_values() -> void:
+func _finalize_edge_values(shared_edge_values: Dictionary = {}) -> void:
+	edge_value = (
+		shared_edge_values.duplicate()
+		if not shared_edge_values.is_empty()
+		else build_base_edge_values(_state)
+	)
 	var max_flow := 1.0
 	for value in corridor_flow.values():
 		max_flow = maxf(max_flow, float(value))
 	var max_bridge_impact := 0.001
 	for value in bridge_impact.values():
 		max_bridge_impact = maxf(max_bridge_impact, float(value))
-	for edge in _state.edges:
+	var relevant_edges: Array[Edge] = []
+	var relevant_edge_keys := {}
+	for city in _view.friendly_cities:
+		for neighbor in _state.neighbors(city.id):
+			var edge := _state.edge_of(city.id, neighbor)
+			if edge == null:
+				continue
+			var edge_key := _edge_key(edge.city_a, edge.city_b)
+			if relevant_edge_keys.has(edge_key):
+				continue
+			relevant_edge_keys[edge_key] = true
+			relevant_edges.append(edge)
+	for edge in relevant_edges:
 		var key := _edge_key(edge.city_a, edge.city_b)
 		var owner_a := _state.cities[edge.city_a].owner_nation
 		var owner_b := _state.cities[edge.city_b].owner_nation
-		var value := edge.danger
+		var value := float(edge_value.get(key, 0.0))
 		if owner_a == nation_id:
 			value += 0.15 * float(city_value.get(edge.city_a, 0.0))
 		if owner_b == nation_id:
 			value += 0.15 * float(city_value.get(edge.city_b, 0.0))
 		value += 3.0 * float(bridge_impact.get(key, 0.0)) / maxf(_total_friendly_value, 0.001)
 		value += 2.0 * float(corridor_flow.get(key, 0.0)) / max_flow
-		var capacity_units := (
-			float(edge.max_manpower)
-				/ float(Edge.STANDARD_MANPOWER)
-		)
-		value += 0.75 * maxf(capacity_units - 1.0, 0.0)
 		if (
 			_state.is_enemy(owner_a, owner_b)
 			and (owner_a == nation_id or owner_b == nation_id)
 		):
 			value += 1.0 + edge.danger * 2.0
-		if (
-			edge.max_manpower > 0
-			and edge.danger
-				>= Combat.CHOKEPOINT_DANGER_ONSET
-		):
-			value += 4.0
 		value += 2.0 * float(potential_edge_threat.get(key, 0.0))
 		edge_value[key] = value
 		var normalized_flow := (

@@ -100,15 +100,17 @@ var _ai_strategy_cache: Dictionary = {}    ## nation_id -> StrategicMapSnapshot
 var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership, diplomacy, fortification]
 var _ai_base_city_values_revision: Array[int] = []
 var _ai_base_city_values: Dictionary = {}
+var _ai_base_edge_values: Dictionary = {}
 var _threat_travel_cache: Dictionary = {}  ## 静态道路行军天数、威胁衰减权重及稳定遍历序
 var _ai_path_field_cache_by_nation: Dictionary = {}
 var _ai_supply_source_cache: Dictionary = {}
 var _ai_supply_network_cache: Dictionary = {}
 var _ai_city_partition_cache: Dictionary = {}
 var _ai_defense_plan_cache: Dictionary = {}
-## 每日补给可达性缓存（item 10 滚动结算专用）：每天开头清空重建，
-## 使月中被切断/恢复的补给线当天即被感知，而不必等到月度经济结算。
+## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
 var _daily_supply_source_cache: Dictionary = {}
+var _stable_supply_city_source_cache: Dictionary = {}
+var _supply_source_besieged_cities: Dictionary = {}
 var _daily_supply_network_cache: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
@@ -188,6 +190,7 @@ func setup(game_state: GameState) -> void:
 	_ai_strategy_revision.clear()
 	_ai_base_city_values_revision.clear()
 	_ai_base_city_values.clear()
+	_ai_base_edge_values.clear()
 	_threat_travel_cache.clear()
 	_ai_path_field_cache_by_nation.clear()
 	_ai_supply_source_cache.clear()
@@ -195,6 +198,8 @@ func setup(game_state: GameState) -> void:
 	_ai_city_partition_cache.clear()
 	_ai_defense_plan_cache.clear()
 	_daily_supply_source_cache.clear()
+	_stable_supply_city_source_cache.clear()
+	_supply_source_besieged_cities.clear()
 	_daily_supply_network_cache.clear()
 	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
@@ -1246,18 +1251,19 @@ func _resolve_supply_over_frames() -> void:
 			slice_started = Time.get_ticks_usec()
 
 
-## 每日重算前的补给网络缓存维护：军队位置查表结果每天失效（军队每天移动）；
-## 补给网络损耗场按依赖指纹选择性失效——敌占边、城市归属、外交、粮仓可用性
-## 多数天跨天不变，指纹一致即复用，削减每日全量 O(粮仓×E) 重建的主线程开销。
+## 每日重算前的补给缓存维护：行军位置查表每天失效；驻城位置仅在该国网络
+## 或该城围城状态变化时失效。网络损耗场继续按依赖指纹选择性失效。
 func _prepare_supply_network_caches() -> void:
 	_daily_supply_source_cache.clear()
 	# 一次性预算共享依赖：被围城集合（O(B)）与各粮仓可用性，供逐国指纹复用，
 	# 避免在指纹里逐粮仓 city_under_siege 的 O(B) 扫描退化成 O(城×B)。
+	var besieged := state.besieged_city_ids()
+	_invalidate_supply_city_sources_for_siege_changes(besieged)
 	if supply_network_cache_disabled:
 		# 等价性守卫用：强制每天全量重建，复现指纹缓存前的旧行为。
 		_daily_supply_network_cache.clear()
+		_stable_supply_city_source_cache.clear()
 		return
-	var besieged := state.besieged_city_ids()
 	var warehouse_state := _supply_warehouse_availability(besieged)
 	var active_nations := {}
 	var occupied_edges_by_owner := {}
@@ -1294,7 +1300,27 @@ func _prepare_supply_network_caches() -> void:
 		)
 		if _supply_network_fingerprints.get(nation_id, []) != fp:
 			_daily_supply_network_cache.erase(nation_id)
+			_stable_supply_city_source_cache.erase(nation_id)
 			_supply_network_fingerprints[nation_id] = fp
+
+
+## 围城只改变驻扎在该城市的“补给孤岛”判定，不必清空其他城市或整张补给网络。
+func _invalidate_supply_city_sources_for_siege_changes(
+	besieged: Dictionary
+) -> void:
+	var changed_city_ids := {}
+	for city_id_value in _supply_source_besieged_cities:
+		if not besieged.has(city_id_value):
+			changed_city_ids[int(city_id_value)] = true
+	for city_id_value in besieged:
+		if not _supply_source_besieged_cities.has(city_id_value):
+			changed_city_ids[int(city_id_value)] = true
+	if not changed_city_ids.is_empty():
+		for nation_cache_value in _stable_supply_city_source_cache.values():
+			var nation_cache: Dictionary = nation_cache_value
+			for city_id_value in changed_city_ids:
+				nation_cache.erase(int(city_id_value))
+	_supply_source_besieged_cities = besieged.duplicate()
 
 
 func _new_food_demand_accumulator() -> Array[int]:
@@ -1323,7 +1349,8 @@ func _build_supply_plan_for_army(
 	var sources := _cached_supply_sources(
 		army,
 		_daily_supply_source_cache,
-		_daily_supply_network_cache
+		_daily_supply_network_cache,
+		_stable_supply_city_source_cache
 	)
 	var route_loss := _weighted_supply_loss(sources)
 	var mult: float = MAX_SUPPLY_MULT
@@ -1494,7 +1521,8 @@ func _recover_garrisoned_army(army: Army) -> void:
 	var sources := _cached_supply_sources(
 		army,
 		_daily_supply_source_cache,
-		_daily_supply_network_cache
+		_daily_supply_network_cache,
+		_stable_supply_city_source_cache
 	)
 	var route_loss := _weighted_supply_loss(sources)
 	var full_month_demand := maxi(int(ceil(float(army.size) * RECOVERY_FOOD_PER_CAPITA)), 1)
@@ -1628,9 +1656,37 @@ func _supply_warehouse_availability(besieged: Dictionary) -> Dictionary:
 func _cached_supply_sources(
 	army: Army,
 	cache: Dictionary,
-	network_cache: Dictionary
+	network_cache: Dictionary,
+	stable_city_cache: Variant = null
 ) -> Array[Dictionary]:
-	var position_key := (
+	var on_edge := army.on_edge and army.move_to != -1
+	var position_key := _supply_position_key(army)
+	var source_cache := cache
+	var key: Variant = "%d:%s" % [army.owner_nation, position_key]
+	if not on_edge and stable_city_cache is Dictionary:
+		var stable_cache: Dictionary = stable_city_cache
+		if not stable_cache.has(army.owner_nation):
+			stable_cache[army.owner_nation] = {}
+		source_cache = stable_cache[army.owner_nation]
+		key = army.location_city
+	if not source_cache.has(key):
+		if not network_cache.has(army.owner_nation):
+			network_cache[army.owner_nation] = (
+				Pathfinding.build_supply_network(
+					state,
+					army.owner_nation
+				)
+			)
+		source_cache[key] = Pathfinding.supply_sources_from_network(
+			state,
+			army,
+			network_cache[army.owner_nation]
+		)
+	return source_cache[key]
+
+
+static func _supply_position_key(army: Army) -> String:
+	return (
 		"E:%d:%d:%d"
 		% [
 			army.move_from,
@@ -1640,21 +1696,6 @@ func _cached_supply_sources(
 		if army.on_edge and army.move_to != -1
 		else "C:%d" % army.location_city
 	)
-	var key := "%d:%s" % [army.owner_nation, position_key]
-	if not cache.has(key):
-		if not network_cache.has(army.owner_nation):
-			network_cache[army.owner_nation] = (
-				Pathfinding.build_supply_network(
-					state,
-					army.owner_nation
-				)
-			)
-		cache[key] = Pathfinding.supply_sources_from_network(
-			state,
-			army,
-			network_cache[army.owner_nation]
-		)
-	return cache[key]
 
 
 func _weighted_supply_loss(sources: Array[Dictionary]) -> float:
@@ -4142,10 +4183,17 @@ func _strategy_snapshot_for(
 				)
 			)
 			_ai_base_city_values_revision = city_values_revision
+		if _ai_base_edge_values.is_empty():
+			_ai_base_edge_values = (
+				StrategicMapSnapshot.build_base_edge_values(
+					state
+				)
+			)
 		_ai_strategy_cache[view.nation_id] = StrategicMapSnapshot.build(
 			view,
 			diplomacy_cache,
-			_ai_base_city_values
+			_ai_base_city_values,
+			_ai_base_edge_values
 		)
 		_ai_strategy_revision[view.nation_id] = revision
 	return _ai_strategy_cache[view.nation_id]
@@ -8203,7 +8251,8 @@ func _projected_army_food_demand(army: Army) -> float:
 	var sources := _cached_supply_sources(
 		army,
 		_daily_supply_source_cache,
-		_daily_supply_network_cache
+		_daily_supply_network_cache,
+		_stable_supply_city_source_cache
 	)
 	var supply := (
 		[

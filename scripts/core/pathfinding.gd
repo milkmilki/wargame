@@ -637,10 +637,10 @@ static func supply_sources_from_network(
 		progress = clampf(army.move_progress, 0.0, 1.0)
 	var result: Array[Dictionary] = []
 	for source in network:
-		var dist: Dictionary = source["dist"]
+		var dist: PackedFloat64Array = source["dist"]
 		var loss := INF
 		if edge == null:
-			loss = float(dist.get(start, INF))
+			loss = dist[start]
 		else:
 			if state.has_military_access(
 				army.owner_nation,
@@ -649,7 +649,7 @@ static func supply_sources_from_network(
 				loss = minf(
 					loss,
 					progress * edge_loss
-						+ float(dist.get(army.move_from, INF))
+						+ dist[army.move_from]
 				)
 			if state.has_military_access(
 				army.owner_nation,
@@ -658,7 +658,7 @@ static func supply_sources_from_network(
 				loss = minf(
 					loss,
 					(1.0 - progress) * edge_loss
-						+ float(dist.get(army.move_to, INF))
+						+ dist[army.move_to]
 				)
 		if loss == INF:
 			continue
@@ -718,7 +718,7 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 
 static func _field_reaches_warehouse(state: GameState, start: int, nation_id: int) -> bool:
 	var field := _supply_loss_field(state, start, nation_id)
-	var dist: Dictionary = field["dist"]
+	var dist: PackedFloat64Array = field["dist"]
 	for warehouse in state.warehouse_cities_of(nation_id):
 		if not state.city_under_siege(warehouse.id) and float(dist[warehouse.id]) < INF:
 			return true
@@ -753,7 +753,7 @@ static func _supply_sources_from_edge(state: GameState, army: Army) -> Dictionar
 		):
 			continue
 		var field := _supply_loss_field(state, endpoint, army.owner_nation)
-		var dist: Dictionary = field["dist"]
+		var dist: PackedFloat64Array = field["dist"]
 		var reachable := _reachable_supply_losses(
 			state, army.owner_nation, dist
 		)
@@ -767,7 +767,7 @@ static func _supply_sources_from_edge(state: GameState, army: Army) -> Dictionar
 static func _reachable_supply_losses(
 	state: GameState,
 	nation_id: int,
-	dist: Dictionary
+	dist: PackedFloat64Array
 ) -> Dictionary:
 	var result := {}
 	for owner in state.nations:
@@ -796,11 +796,16 @@ static func _supply_loss_field(
 	blocked_edges_ready: bool = false,
 	extra_zero_origins: Array[int] = [] as Array[int]
 ) -> Dictionary:
-	var dist := {}
-	var prev := {}
-	var visited := {}
-	for city in state.cities:
-		dist[city.id] = INF
+	var city_count := state.cities.size()
+	var dist := PackedFloat64Array()
+	dist.resize(city_count)
+	dist.fill(INF)
+	var prev := PackedInt32Array()
+	prev.resize(city_count)
+	prev.fill(-1)
+	var visited := PackedByteArray()
+	visited.resize(city_count)
+	visited.fill(0)
 	dist[start] = 0.0
 	var order_rank := EquivariantOrder.city_rank_map(
 		state,
@@ -836,14 +841,14 @@ static func _supply_loss_field(
 		var entry := _heap_pop(queue)
 		var u := int(entry["city"])
 		if (
-			visited.has(u)
+			visited[u] != 0
 			or float(entry["distance"])
 				> float(dist[u]) + 0.000001
 		):
 			continue
-		visited[u] = true
+		visited[u] = 1
 		for v in state.neighbors(u):
-			if visited.has(v):
+			if visited[v] != 0:
 				continue
 			if (
 				not state.has_military_access(
@@ -865,9 +870,9 @@ static func _supply_loss_field(
 			if nd < float(dist[v]) or (
 				is_equal_approx(nd, float(dist[v]))
 				and (
-					not prev.has(v)
+					prev[v] < 0
 					or int(order_rank[u])
-						< int(order_rank[int(prev[v])])
+						< int(order_rank[prev[v]])
 				)
 			):
 				dist[v] = nd

@@ -4671,6 +4671,50 @@ func _test_warehouse_logistics() -> void:
 	var supply := Pathfinding.nearest_supply_city(gs, probe)
 	_check(supply[0] == 16 and _approx(float(supply[1]), 0.2),
 		"同距离时应选择 danger 更低的粮仓 16，实为 %s" % str(supply))
+	sim._prepare_supply_network_caches()
+	var cached_supply := sim._cached_supply_sources(
+		probe,
+		sim._daily_supply_source_cache,
+		sim._daily_supply_network_cache,
+		sim._stable_supply_city_source_cache
+	)
+	var stable_nation_cache: Dictionary = (
+		sim._stable_supply_city_source_cache[0]
+	)
+	_check(
+		cached_supply == Pathfinding.supply_sources(gs, probe)
+			and stable_nation_cache.has(0),
+		"驻城补给来源缓存结果必须与直接路径计算一致"
+	)
+	sim._prepare_supply_network_caches()
+	_check(
+		(sim._stable_supply_city_source_cache[0] as Dictionary).has(0),
+		"补给网络与围城状态未变时，驻城来源必须跨日保留"
+	)
+	var second_probe := _make_army(814, 0, 1000, 10)
+	second_probe.state = Army.State.IDLE
+	second_probe.location_city = 1
+	second_probe.move_from = 1
+	sim._cached_supply_sources(
+		second_probe,
+		sim._daily_supply_source_cache,
+		sim._daily_supply_network_cache,
+		sim._stable_supply_city_source_cache
+	)
+	sim._invalidate_supply_city_sources_for_siege_changes({0: true})
+	stable_nation_cache = sim._stable_supply_city_source_cache[0]
+	_check(
+		not stable_nation_cache.has(0)
+			and stable_nation_cache.has(1),
+		"围城变化必须只失效对应城市的驻城补给来源"
+	)
+	sim._invalidate_supply_city_sources_for_siege_changes({})
+	gs.ownership_revision += 1
+	sim._prepare_supply_network_caches()
+	_check(
+		not sim._stable_supply_city_source_cache.has(0),
+		"补给网络依赖版本变化必须失效对应国家的全部驻城来源"
+	)
 
 	# 独立世界验证首都失守：30% 库存汇入胜方首都，败方立即投降后迁都。
 	var gs2 := GameState.new()
@@ -5494,8 +5538,20 @@ func _test_ai_strategic_map_and_threat() -> void:
 	_set_single_warehouse(gs, 0, 0, 500)
 	var view := AiWorldView.build(gs, 0)
 	var snapshot := StrategicMapSnapshot.build(view)
+	var shared_edge_snapshot := StrategicMapSnapshot.build(
+		view,
+		{},
+		{},
+		StrategicMapSnapshot.build_base_edge_values(gs)
+	)
 	var key01 := StrategicMapSnapshot._edge_key(0, 1)
 	var key12 := StrategicMapSnapshot._edge_key(1, 2)
+	_check(
+		shared_edge_snapshot.edge_value == snapshot.edge_value
+			and shared_edge_snapshot.edge_value.size()
+				== gs.edges.size(),
+		"共享道路基础值必须与逐快照全图构建完全等价，并保留完整 edge_value 契约"
+	)
 	_check(snapshot.bridge_impact.has(key01) and snapshot.bridge_impact.has(key12),
 		"线性三城领土的两条边都应识别为 bridge")
 	_check(snapshot.articulation_impact.has(1),
@@ -13679,8 +13735,8 @@ func _test_shared_granary_and_relay_supply() -> void:
 	var no_relay_network := Pathfinding.build_supply_network(corr, 0)
 	var no_relay_dist := INF
 	for source in no_relay_network:
-		var pdist: Dictionary = source["dist"]
-		no_relay_dist = minf(no_relay_dist, float(pdist.get(40, INF)))
+		var pdist: PackedFloat64Array = source["dist"]
+		no_relay_dist = minf(no_relay_dist, pdist[40])
 	# 实验组（有中继）：把城40 划为藩王首都（零库存中继节点）。
 	var corr_sub := corr.enfeoff(0, [40])
 	corr.refresh_derived()
@@ -13694,8 +13750,8 @@ func _test_shared_granary_and_relay_supply() -> void:
 	var relay_network := Pathfinding.build_supply_network(corr, 0)
 	var relay_dist := INF
 	for source in relay_network:
-		var dist_field: Dictionary = source["dist"]
-		relay_dist = minf(relay_dist, float(dist_field.get(40, INF)))
+		var dist_field: PackedFloat64Array = source["dist"]
+		relay_dist = minf(relay_dist, dist_field[40])
 	_check(
 		is_equal_approx(relay_dist, 0.0) and no_relay_dist > 0.0,
 		"藩王首都中继必须把偏远城40 损耗从%.4f 降到 0（中继起点自身零损耗）" % no_relay_dist
