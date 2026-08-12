@@ -2,6 +2,21 @@ extends Node2D
 ## 入口：装配 GameState / Simulation / MapRenderer，处理全局输入（暂停/调速/重开）。
 
 @export var use_grid_world: bool = false
+@export_range(1, GameState.TERRAIN_CITY_COUNT, 1) var nation_count: int = (
+	GameState.NATION_COUNT
+)
+@export_range(1, 1000, 1) var terrain_city_count: int = (
+	GameState.TERRAIN_CITY_COUNT
+)
+@export var world_seed: int = 12345
+@export_range(
+	MapRenderer.ARMY_ICON_SCALE_MIN,
+	MapRenderer.ARMY_ICON_SCALE_MAX,
+	MapRenderer.ARMY_ICON_SCALE_STEP
+) var initial_army_icon_scale: float = (
+	MapRenderer.ARMY_ICON_SCALE_DEFAULT
+)
+@export var initial_city_names_visible: bool = true
 
 @onready var simulation: Simulation = $Simulation
 @onready var renderer: MapRenderer = $MapRenderer
@@ -12,6 +27,7 @@ var _speed_mult: float = 1.0
 
 
 func _ready() -> void:
+	_seed = world_seed
 	_start_new_game(_seed)
 
 
@@ -20,10 +36,16 @@ func _start_new_game(world_seed: int) -> void:
 	if use_grid_world:
 		state.generate_grid_world(world_seed)
 	else:
-		state.generate_world(world_seed)
+		state.generate_world(
+			world_seed,
+			nation_count,
+			terrain_city_count
+		)
 	simulation.setup(state)
 	simulation.diplomacy_enabled = not use_grid_world
 	simulation.set_speed_multiplier(_speed_mult)
+	renderer.set_army_icon_scale(initial_army_icon_scale)
+	renderer.set_city_names_visible(initial_city_names_visible)
 	renderer.setup(state, simulation)
 
 

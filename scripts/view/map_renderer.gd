@@ -10,9 +10,6 @@ var sim: Simulation
 const BASE_VIEWPORT_SIZE := Vector2(1280.0, 720.0)
 const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
-const BASE_HUD_TOP := 68.0
-const BASE_HUD_ROW_HEIGHT := 22.0
-const BASE_HUD_CARD_HEIGHT := 96.0
 const BASE_HEADER_ONLY_TOP := 44.0
 const NATION_STATS_BUTTON_WIDTH := 104.0
 const ARMY_ICON_CONTROL_WIDTH := 320.0
@@ -33,6 +30,12 @@ const CITY_PICK_RADIUS: float = 14.0
 const EDGE_PICK_TOLERANCE: float = 10.0
 const DETAIL_PANEL_WIDTH: float = 350.0
 const DETAIL_PANEL_MARGIN: float = 18.0
+const NATION_WINDOW_WIDTH: float = 1120.0
+const NATION_WINDOW_TITLE_HEIGHT: float = 30.0
+const NATION_WINDOW_HEADER_HEIGHT: float = 25.0
+const NATION_WINDOW_ROW_HEIGHT: float = 31.0
+const NATION_WINDOW_FOOTER_HEIGHT: float = 22.0
+const NATION_WINDOW_MARGIN: float = 18.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
@@ -62,9 +65,6 @@ var _map_drag_start: Vector2 = Vector2.ZERO
 var _map_drag_start_pan: Vector2 = Vector2.ZERO
 var _display_scale: float = 1.0
 var _side_margin: float = BASE_SIDE_MARGIN
-var _hud_columns: int = 4
-var _hud_card_width: float = 300.0
-
 var _font: Font
 var _terrain_texture: Texture2D
 var _province_texture: ImageTexture
@@ -72,6 +72,7 @@ var _province_boundary_segments := PackedVector2Array()
 var _coast_segments := PackedVector2Array()
 var _nation_boundary_segments := PackedVector2Array()
 var _alliance_boundary_segments := PackedVector2Array()
+var _suzerainty_boundary_segments := PackedVector2Array()
 var _province_cache_ready: bool = false
 var _province_ownership_revision: int = -1
 var _province_diplomacy_revision: int = -1
@@ -80,16 +81,21 @@ var _redraw_elapsed: float = 0.0
 var _last_viewport_size: Vector2 = Vector2.ZERO
 var _layout_viewport_size: Vector2 = Vector2.ZERO
 var _layout_nation_count: int = -1
-var _layout_stats_open: bool = false
 var _layout_map_aspect_ratio: float = -1.0
 var _selected_city_id: int = -1
 var _selected_edge_a: int = -1
 var _selected_edge_b: int = -1
 var _nation_stats_open: bool = false
+var _nation_stats_window_position := Vector2(-1.0, -1.0)
+var _nation_stats_drag_active: bool = false
+var _nation_stats_drag_offset := Vector2.ZERO
+var _nation_stats_scroll: int = 0
 var _city_names_visible: bool = true
 var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
-var _nation_detail_cache_day: int = -1
-var _nation_detail_cache: Dictionary = {}
+var _nation_list_cache_day: int = -1
+var _nation_list_cache_ownership_revision: int = -1
+var _nation_list_cache_diplomacy_revision: int = -1
+var _nation_list_cache: Array[Dictionary] = []
 var _city_label_cache: Dictionary = {}
 var _contested_city_cache_day: int = -1
 var _contested_city_cache: Dictionary = {}
@@ -134,6 +140,7 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_coast_segments = PackedVector2Array()
 	_nation_boundary_segments = PackedVector2Array()
 	_alliance_boundary_segments = PackedVector2Array()
+	_suzerainty_boundary_segments = PackedVector2Array()
 	_province_cache_ready = false
 	_province_ownership_revision = -1
 	_province_diplomacy_revision = -1
@@ -144,8 +151,12 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_map_pan = Vector2.ZERO
 	_map_drag_active = false
 	_map_drag_moved = false
-	_nation_detail_cache_day = -1
-	_nation_detail_cache.clear()
+	_nation_list_cache_day = -1
+	_nation_list_cache_ownership_revision = -1
+	_nation_list_cache_diplomacy_revision = -1
+	_nation_list_cache.clear()
+	_nation_stats_drag_active = false
+	_nation_stats_scroll = 0
 	_city_label_cache.clear()
 	_contested_city_cache_day = -1
 	_contested_city_cache.clear()
@@ -372,6 +383,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
+		if _nation_stats_drag_active:
+			if (
+				motion.button_mask
+					& MOUSE_BUTTON_MASK_LEFT
+			) == 0:
+				_nation_stats_drag_active = false
+				return
+			_nation_stats_window_position = (
+				motion.position - _nation_stats_drag_offset
+			)
+			_clamp_nation_stats_window_position()
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+			return
 		if (
 			not _map_drag_active
 			or (
@@ -398,6 +423,36 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var mouse_event := event as InputEventMouseButton
 	_compute_layout()
+	var stats_rect := _nation_stats_window_rect()
+	if (
+		_nation_stats_open
+		and stats_rect.has_point(mouse_event.position)
+		and mouse_event.pressed
+		and mouse_event.button_index in [
+			MOUSE_BUTTON_WHEEL_UP,
+			MOUSE_BUTTON_WHEEL_DOWN,
+		]
+	):
+		var rows := _nation_list_rows_cached()
+		var capacity := nation_stats_visible_row_capacity(
+			stats_rect.size,
+			_display_scale
+		)
+		var maximum_scroll := maxi(rows.size() - capacity, 0)
+		_nation_stats_scroll = clampi(
+			_nation_stats_scroll
+				+ (
+					-1
+					if mouse_event.button_index
+						== MOUSE_BUTTON_WHEEL_UP
+					else 1
+				),
+			0,
+			maximum_scroll
+		)
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
 	if (
 		mouse_event.pressed
 		and mouse_event.button_index in [
@@ -423,6 +478,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		mouse_event.pressed
 		and mouse_event.button_index == MOUSE_BUTTON_RIGHT
 	):
+		if _nation_stats_open and stats_rect.has_point(
+			mouse_event.position
+		):
+			get_viewport().set_input_as_handled()
+			return
 		_clear_selection()
 		get_viewport().set_input_as_handled()
 		return
@@ -436,6 +496,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			_side_margin
 		).has_point(point):
 			_nation_stats_open = not _nation_stats_open
+			if _nation_stats_open:
+				_ensure_nation_stats_window_position()
+				_clamp_nation_stats_scroll()
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+			return
+		if _nation_stats_open and stats_rect.has_point(point):
+			if nation_stats_close_rect(
+				stats_rect,
+				_display_scale
+			).has_point(point):
+				_nation_stats_open = false
+			elif nation_stats_title_rect(
+				stats_rect,
+				_display_scale
+			).has_point(point):
+				_nation_stats_drag_active = true
+				_nation_stats_drag_offset = (
+					point - stats_rect.position
+				)
 			queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
@@ -449,6 +529,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 		_clear_selection()
+		return
+	if _nation_stats_drag_active:
+		_nation_stats_drag_active = false
+		get_viewport().set_input_as_handled()
 		return
 	if not _map_drag_active:
 		return
@@ -540,7 +624,6 @@ func _compute_layout() -> void:
 	if (
 		vp == _layout_viewport_size
 		and nation_count == _layout_nation_count
-		and _nation_stats_open == _layout_stats_open
 		and is_equal_approx(
 			map_aspect_ratio,
 			_layout_map_aspect_ratio
@@ -550,12 +633,11 @@ func _compute_layout() -> void:
 		return
 	_layout_viewport_size = vp
 	_layout_nation_count = nation_count
-	_layout_stats_open = _nation_stats_open
 	_layout_map_aspect_ratio = map_aspect_ratio
 	var layout := compute_layout_for_viewport(
 		vp,
 		nation_count,
-		_nation_stats_open
+		false
 	)
 	var span := float(layout["span"])
 	_base_map_size = (
@@ -569,10 +651,11 @@ func _compute_layout() -> void:
 	)
 	_display_scale = layout["display_scale"]
 	_side_margin = layout["side_margin"]
-	_hud_columns = layout["hud_columns"]
-	_hud_card_width = layout["hud_card_width"]
 	_apply_map_view_transform()
 	_layout_army_icon_scale_control()
+	if _nation_stats_open:
+		_clamp_nation_stats_window_position()
+		_clamp_nation_stats_scroll()
 
 
 func _apply_map_view_transform() -> void:
@@ -663,7 +746,7 @@ static func map_pan_for_zoom_anchor(
 static func compute_layout_for_viewport(
 	viewport_size: Vector2,
 	nation_count: int,
-	nation_stats_open: bool = true
+	_nation_stats_open: bool = true
 ) -> Dictionary:
 	var safe_size := Vector2(maxf(viewport_size.x, 1.0), maxf(viewport_size.y, 1.0))
 	var display_scale := visual_scale_for_viewport(safe_size)
@@ -676,16 +759,7 @@ static func compute_layout_for_viewport(
 		1,
 		count
 	)
-	var hud_rows := int(ceil(float(count) / float(hud_columns)))
-	var top_margin := (
-		(
-			BASE_HUD_TOP
-			+ BASE_HUD_CARD_HEIGHT * float(hud_rows)
-			+ BASE_HUD_ROW_HEIGHT
-		)
-		if nation_stats_open
-		else BASE_HEADER_ONLY_TOP
-	) * display_scale
+	var top_margin := BASE_HEADER_ONLY_TOP * display_scale
 	var bottom_margin := BASE_BOTTOM_MARGIN * display_scale
 	var span := maxf(minf(
 		available_width,
@@ -717,6 +791,161 @@ static func nation_stats_button_rect(
 			8.0 * display_scale
 		),
 		size
+	)
+
+
+static func nation_stats_window_size(
+	viewport_size: Vector2,
+	display_scale: float,
+	alive_nation_count: int
+) -> Vector2:
+	var margin := NATION_WINDOW_MARGIN * display_scale
+	var width := maxf(
+		minf(
+			NATION_WINDOW_WIDTH * display_scale,
+			viewport_size.x - margin * 2.0
+		),
+		1.0
+	)
+	var fixed_height := (
+		NATION_WINDOW_TITLE_HEIGHT
+		+ NATION_WINDOW_HEADER_HEIGHT
+		+ NATION_WINDOW_FOOTER_HEIGHT
+	) * display_scale
+	var available_rows_height := maxf(
+		viewport_size.y - margin * 2.0 - fixed_height,
+		NATION_WINDOW_ROW_HEIGHT * display_scale
+	)
+	var capacity := maxi(
+		int(floor(
+			available_rows_height
+				/ (NATION_WINDOW_ROW_HEIGHT * display_scale)
+		)),
+		1
+	)
+	var visible_rows := mini(maxi(alive_nation_count, 1), capacity)
+	return Vector2(
+		width,
+		fixed_height
+			+ float(visible_rows)
+				* NATION_WINDOW_ROW_HEIGHT * display_scale
+	)
+
+
+static func nation_stats_visible_row_capacity(
+	window_size: Vector2,
+	display_scale: float
+) -> int:
+	var fixed_height := (
+		NATION_WINDOW_TITLE_HEIGHT
+		+ NATION_WINDOW_HEADER_HEIGHT
+		+ NATION_WINDOW_FOOTER_HEIGHT
+	) * display_scale
+	return maxi(
+		int(floor(
+			(window_size.y - fixed_height)
+				/ (NATION_WINDOW_ROW_HEIGHT * display_scale)
+		)),
+		1
+	)
+
+
+static func nation_stats_window_rect(
+	viewport_size: Vector2,
+	display_scale: float,
+	position: Vector2,
+	alive_nation_count: int
+) -> Rect2:
+	var size := nation_stats_window_size(
+		viewport_size,
+		display_scale,
+		alive_nation_count
+	)
+	var margin := NATION_WINDOW_MARGIN * display_scale
+	var maximum := Vector2(
+		maxf(viewport_size.x - size.x - margin, margin),
+		maxf(viewport_size.y - size.y - margin, margin)
+	)
+	return Rect2(
+		Vector2(
+			clampf(position.x, margin, maximum.x),
+			clampf(position.y, margin, maximum.y)
+		),
+		size
+	)
+
+
+static func nation_stats_title_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return Rect2(
+		window_rect.position,
+		Vector2(
+			window_rect.size.x,
+			NATION_WINDOW_TITLE_HEIGHT * display_scale
+		)
+	)
+
+
+static func nation_stats_close_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	var side := 22.0 * display_scale
+	return Rect2(
+		Vector2(
+			window_rect.end.x - side - 4.0 * display_scale,
+			window_rect.position.y + 4.0 * display_scale
+		),
+		Vector2(side, side)
+	)
+
+
+func _ensure_nation_stats_window_position() -> void:
+	if (
+		_nation_stats_window_position.x >= 0.0
+		and _nation_stats_window_position.y >= 0.0
+	):
+		return
+	var viewport_size := get_viewport_rect().size
+	var size := nation_stats_window_size(
+		viewport_size,
+		_display_scale,
+		_nation_list_rows_cached().size()
+	)
+	_nation_stats_window_position = Vector2(
+		(viewport_size.x - size.x) * 0.5,
+		46.0 * _display_scale
+	)
+
+
+func _nation_stats_window_rect() -> Rect2:
+	_ensure_nation_stats_window_position()
+	return nation_stats_window_rect(
+		get_viewport_rect().size,
+		_display_scale,
+		_nation_stats_window_position,
+		_nation_list_rows_cached().size()
+	)
+
+
+func _clamp_nation_stats_window_position() -> void:
+	var rect := _nation_stats_window_rect()
+	_nation_stats_window_position = rect.position
+
+
+func _clamp_nation_stats_scroll() -> void:
+	var rows := _nation_list_rows_cached()
+	var rect := _nation_stats_window_rect()
+	var capacity := nation_stats_visible_row_capacity(
+		rect.size,
+		_display_scale
+	)
+	_nation_stats_scroll = clampi(
+		_nation_stats_scroll,
+		0,
+		maxi(rows.size() - capacity, 0)
 	)
 
 
@@ -951,8 +1180,8 @@ func _draw() -> void:
 	_draw_cities()
 	_draw_battles()
 	_draw_armies()
-	_draw_hud()
 	_draw_selection_detail()
+	_draw_hud()
 
 
 func _draw_paper_canvas() -> void:
@@ -1062,6 +1291,7 @@ func _ensure_province_visual_cache() -> void:
 		var geometry := build_province_boundary_segments(state)
 		_nation_boundary_segments = geometry["nation"]
 		_alliance_boundary_segments = geometry["alliance"]
+		_suzerainty_boundary_segments = geometry["suzerainty"]
 		_province_ownership_revision = state.ownership_revision
 		_province_diplomacy_revision = state.diplomacy_revision
 
@@ -1106,6 +1336,7 @@ static func build_province_boundary_segments(
 	var province := PackedVector2Array()
 	var nation := PackedVector2Array()
 	var alliance := PackedVector2Array()
+	var suzerainty := PackedVector2Array()
 	var coast := PackedVector2Array()
 	var size := game_state.province_map_size
 	if size.x <= 0 or size.y <= 0:
@@ -1113,6 +1344,7 @@ static func build_province_boundary_segments(
 			"province": province,
 			"nation": nation,
 			"alliance": alliance,
+			"suzerainty": suzerainty,
 			"coast": coast,
 		}
 	for y in range(size.y):
@@ -1149,29 +1381,44 @@ static func build_province_boundary_segments(
 			elif right != province_id:
 				_append_segment(province, Vector2(x1, y0), Vector2(x1, y1))
 				if _province_owners_differ(game_state, province_id, right):
-					_append_segment(nation, Vector2(x1, y0), Vector2(x1, y1))
-					if _province_owners_allied(
+					if _province_owners_peaceful_suzerainty(
 						game_state, province_id, right
 					):
 						_append_segment(
-							alliance, Vector2(x1, y0), Vector2(x1, y1)
+							suzerainty, Vector2(x1, y0), Vector2(x1, y1)
 						)
+					else:
+						_append_segment(nation, Vector2(x1, y0), Vector2(x1, y1))
+						if _province_owners_allied(
+							game_state, province_id, right
+						):
+							_append_segment(
+								alliance, Vector2(x1, y0), Vector2(x1, y1)
+							)
 			if bottom < 0:
 				_append_segment(coast, Vector2(x0, y1), Vector2(x1, y1))
 			elif bottom != province_id:
 				_append_segment(province, Vector2(x0, y1), Vector2(x1, y1))
 				if _province_owners_differ(game_state, province_id, bottom):
-					_append_segment(nation, Vector2(x0, y1), Vector2(x1, y1))
-					if _province_owners_allied(
+					if _province_owners_peaceful_suzerainty(
 						game_state, province_id, bottom
 					):
 						_append_segment(
-							alliance, Vector2(x0, y1), Vector2(x1, y1)
+							suzerainty, Vector2(x0, y1), Vector2(x1, y1)
 						)
+					else:
+						_append_segment(nation, Vector2(x0, y1), Vector2(x1, y1))
+						if _province_owners_allied(
+							game_state, province_id, bottom
+						):
+							_append_segment(
+								alliance, Vector2(x0, y1), Vector2(x1, y1)
+							)
 	return {
 		"province": province,
 		"nation": nation,
 		"alliance": alliance,
+		"suzerainty": suzerainty,
 		"coast": coast,
 	}
 
@@ -1199,6 +1446,21 @@ static func _province_owners_allied(
 	return game_state.is_allied(
 		game_state.cities[province_a].owner_nation,
 		game_state.cities[province_b].owner_nation
+	)
+
+
+static func _province_owners_peaceful_suzerainty(
+	game_state: GameState,
+	province_a: int,
+	province_b: int
+) -> bool:
+	if province_a < 0 or province_b < 0:
+		return false
+	var owner_a := game_state.cities[province_a].owner_nation
+	var owner_b := game_state.cities[province_b].owner_nation
+	return (
+		game_state.is_suzerainty_pair(owner_a, owner_b)
+		and game_state.is_allied(owner_a, owner_b)
 	)
 
 
@@ -1257,28 +1519,36 @@ func _draw_national_boundaries() -> void:
 				1.6 * _display_scale,
 			true
 		)
-	if _nation_boundary_segments.is_empty():
-		return
-	var nation_pixels := _normalized_segments_to_pixels(
-		_nation_boundary_segments
-	)
-	draw_multiline(
-		nation_pixels,
-			Color(0.055, 0.035, 0.018, 0.98),
-			7.0 * _display_scale,
-		true
-	)
-	draw_multiline(
-		nation_pixels,
-			Color(0.91, 0.69, 0.30, 0.92),
-			2.2 * _display_scale,
-		true
-	)
+	if not _nation_boundary_segments.is_empty():
+		var nation_pixels := _normalized_segments_to_pixels(
+			_nation_boundary_segments
+		)
+		draw_multiline(
+			nation_pixels,
+				Color(0.055, 0.035, 0.018, 0.98),
+				7.0 * _display_scale,
+			true
+		)
+		draw_multiline(
+			nation_pixels,
+				Color(0.91, 0.69, 0.30, 0.92),
+				2.2 * _display_scale,
+			true
+		)
 	if not _alliance_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_alliance_boundary_segments),
 				Color(0.20, 0.48, 0.50, 0.95),
 				3.0 * _display_scale,
+			true
+		)
+	if not _suzerainty_boundary_segments.is_empty():
+		draw_multiline(
+			_normalized_segments_to_pixels(
+				_suzerainty_boundary_segments
+			),
+			Color(0.30, 0.25, 0.18, 0.58),
+			maxf(1.35 * _display_scale, 1.0),
 			true
 		)
 
@@ -2220,6 +2490,152 @@ func _grid_to_pixel(g: Vector2) -> Vector2:
 	return _origin + g * _map_size
 
 
+static func nation_list_rows(
+	game_state: GameState
+) -> Array[Dictionary]:
+	var rows: Array[Dictionary] = []
+	for nation in game_state.nations:
+		var owned_cities := game_state.cities_of(nation.id)
+		if not nation.alive or owned_cities.is_empty():
+			continue
+		var troops := 0
+		var army_count := 0
+		for army in game_state.armies:
+			if army.owner_nation == nation.id and army.size > 0:
+				troops += army.size
+				army_count += 1
+		var report := DiplomacyAI.resource_report(
+			game_state,
+			nation.id
+		)
+		var wars := game_state.wars_of(nation.id)
+		var allies := game_state.allies_of(nation.id)
+		rows.append({
+			"nation_id": nation.id,
+			"color": nation.color,
+			"at_war": not wars.is_empty(),
+			"identity": "国%d  %s" % [
+				nation.id,
+				_nation_relation_text(game_state, nation.id),
+			],
+			"military": "城%d  军%d/%d  人%d" % [
+				owned_cities.size(),
+				army_count,
+				troops,
+				nation.manpower_pool,
+			],
+			"economy": "金%d  月%+d  粮%d/%d" % [
+				nation.treasury_gold,
+				int(report["monthly_gold_balance"]),
+				nation.granary_food,
+				int(ceil(float(report["monthly_food_demand"]))),
+			],
+			"diplomacy": "战%s  盟%s" % [
+				str(wars),
+				str(allies),
+			],
+			"action": nation_action_summary(game_state, nation.id),
+		})
+	return rows
+
+
+static func _nation_relation_text(
+	game_state: GameState,
+	nation_id: int
+) -> String:
+	if game_state.is_vassal(nation_id):
+		var overlord_id := game_state.overlord_of(nation_id)
+		return (
+			"内战藩王→国%d" % overlord_id
+			if game_state.is_in_civil_war(nation_id)
+			else "藩王→国%d" % overlord_id
+		)
+	var subjects := game_state.subjects_of(nation_id)
+	if not subjects.is_empty():
+		return "宗主·%d藩" % subjects.size()
+	return "独立"
+
+
+static func nation_action_summary(
+	game_state: GameState,
+	nation_id: int
+) -> String:
+	if nation_id < 0 or nation_id >= game_state.nations.size():
+		return ""
+	var nation := game_state.nations[nation_id]
+	var actions: Array[String] = []
+	if nation.war_preparation_target_nation >= 0:
+		actions.append(
+			"备战→国%d/城%d" % [
+				nation.war_preparation_target_nation,
+				nation.war_preparation_objective_city,
+			]
+		)
+	elif not nation.campaign_attack_assignments.is_empty():
+		var targets := {}
+		for target_value in nation.campaign_attack_assignments.values():
+			targets[int(target_value)] = true
+		actions.append(
+			"攻势W%d·%d路" % [
+				nation.campaign_plan_wave,
+				targets.size(),
+			]
+		)
+	if nation.ai_last_force_day >= 0:
+		actions.append(
+			"军D%d:%s" % [
+				nation.ai_last_force_day,
+				_force_action_name(nation.ai_last_force_action),
+			]
+		)
+	if nation.ai_last_diplomatic_day >= 0:
+		actions.append(
+			"外D%d:%s→国%d" % [
+				nation.ai_last_diplomatic_day,
+				_diplomatic_action_name(
+					nation.ai_last_diplomatic_action
+				),
+				nation.ai_last_diplomatic_target,
+			]
+		)
+	if actions.is_empty() and nation.last_offensive_gold_day >= 0:
+		actions.append(
+			"攻势D%d·费%d" % [
+				nation.last_offensive_gold_day,
+				nation.last_offensive_gold_cost,
+			]
+		)
+	return "；".join(actions) if not actions.is_empty() else "无近期动作"
+
+
+static func _force_action_name(action: int) -> String:
+	match action:
+		ActionCandidate.Kind.CREATE_ARMY:
+			return "建军"
+		ActionCandidate.Kind.DISBAND_ARMY:
+			return "裁军"
+		ActionCandidate.Kind.SPLIT_ARMY:
+			return "拆军"
+		ActionCandidate.Kind.REINFORCE:
+			return "补员"
+	return "整军"
+
+
+func _nation_list_rows_cached() -> Array[Dictionary]:
+	if (
+		_nation_list_cache_day != state.day
+		or _nation_list_cache_ownership_revision
+			!= state.ownership_revision
+		or _nation_list_cache_diplomacy_revision
+			!= state.diplomacy_revision
+	):
+		_nation_list_cache_day = state.day
+		_nation_list_cache_ownership_revision = state.ownership_revision
+		_nation_list_cache_diplomacy_revision = state.diplomacy_revision
+		_nation_list_cache = nation_list_rows(state)
+	return _nation_list_cache
+
+
 func _draw_hud() -> void:
 	var header_y := 20.0 * _display_scale
 	var status := "暂停" if sim.paused else "推演中"
@@ -2283,7 +2699,7 @@ func _draw_hud() -> void:
 	draw_string(
 		_font,
 		button_rect.position + Vector2(8.0, 15.0) * _display_scale,
-		"收起统计" if _nation_stats_open else "国家统计",
+		"关闭列表" if _nation_stats_open else "国家列表",
 		HORIZONTAL_ALIGNMENT_CENTER,
 		button_rect.size.x - 16.0 * _display_scale,
 		_font_size(10),
@@ -2303,146 +2719,214 @@ func _draw_hud() -> void:
 		_font_size(13),
 		PAPER_LIGHT
 	)
-	if not _nation_stats_open:
-		return
+	if _nation_stats_open:
+		_draw_nation_stats_window()
 
-	# 可折叠国家统计窗口。
-	var overview_y := 46.0 * _display_scale
-	var hud_rows := int(ceil(
-		float(state.nations.size()) / float(_hud_columns)
-	))
-	var panel_rect := Rect2(
+
+func _draw_nation_stats_window() -> void:
+	var rows := _nation_list_rows_cached()
+	_clamp_nation_stats_scroll()
+	var window_rect := _nation_stats_window_rect()
+	_nation_stats_window_position = window_rect.position
+	var title_rect := nation_stats_title_rect(
+		window_rect,
+		_display_scale
+	)
+	var close_rect := nation_stats_close_rect(
+		window_rect,
+		_display_scale
+	)
+	var header_rect := Rect2(
+		Vector2(window_rect.position.x, title_rect.end.y),
 		Vector2(
-			_side_margin - 9.0 * _display_scale,
-			overview_y - 8.0 * _display_scale
-		),
-		Vector2(
-			get_viewport_rect().size.x
-				- (_side_margin - 9.0 * _display_scale) * 2.0,
-			(
-				float(hud_rows) * BASE_HUD_CARD_HEIGHT
-				+ BASE_HUD_ROW_HEIGHT
-				+ 8.0
-			) * _display_scale
+			window_rect.size.x,
+			NATION_WINDOW_HEADER_HEIGHT * _display_scale
 		)
 	)
 	draw_rect(
 		Rect2(
-			panel_rect.position + Vector2(3.0, 4.0) * _display_scale,
-			panel_rect.size
+			window_rect.position
+				+ Vector2(5.0, 6.0) * _display_scale,
+			window_rect.size
 		),
-		Color(0.02, 0.015, 0.008, 0.62),
+		Color(0.01, 0.008, 0.004, 0.72),
 		true
 	)
-	draw_rect(panel_rect, Color(0.58, 0.47, 0.31, 0.90), true)
-	draw_rect(panel_rect, INK_COLOR, false, 1.5 * _display_scale)
-	for nation_index in range(state.nations.size()):
-		var n := state.nations[nation_index]
-		var column := nation_index % _hud_columns
-		var row := int(nation_index / _hud_columns)
-		var card_position := Vector2(
-			_side_margin + float(column) * _hud_card_width,
-			overview_y + float(row) * BASE_HUD_CARD_HEIGHT * _display_scale
-		)
-		var card_rect := Rect2(
-			card_position,
-			Vector2(
-				_hud_card_width - 8.0 * _display_scale,
-				(BASE_HUD_CARD_HEIGHT - 6.0) * _display_scale
-			)
-		)
-		_draw_nation_detail_card(n.id, card_rect)
-	if not state.diplomatic_history.is_empty():
-		var event: Dictionary = state.diplomatic_history[-1]
-		var diplomacy_y := (
-			overview_y
-				+ float(hud_rows) * BASE_HUD_CARD_HEIGHT
-					* _display_scale
-			+ 2.0 * _display_scale
-		)
-		var diplomacy_line := "外交 Day%d 国%d→国%d %s：%s" % [
-			event["day"],
-			event["nation_a"],
-			event["nation_b"],
-			_diplomatic_action_name(int(event["action"])),
-			event["reason"],
-		]
-		draw_string(
-			_font,
-			Vector2(_side_margin, diplomacy_y),
-			diplomacy_line,
-			HORIZONTAL_ALIGNMENT_LEFT,
-			get_viewport_rect().size.x - _side_margin * 2.0,
-			_font_size(12),
-				Color(0.28, 0.20, 0.10)
-		)
-
-
-func _draw_nation_detail_card(nation_id: int, rect: Rect2) -> void:
-	var n := state.nations[nation_id]
-	if _nation_detail_cache_day != state.day:
-		_nation_detail_cache_day = state.day
-		_nation_detail_cache.clear()
-	if not _nation_detail_cache.has(nation_id):
-		_nation_detail_cache[nation_id] = nation_detail_lines(
-			state,
-			nation_id
-		)
-	var details: Array[String] = _nation_detail_cache[nation_id]
-	var at_war := not state.wars_of(nation_id).is_empty()
-	var background := Color(0.76, 0.66, 0.48, 0.96)
-	if at_war:
-		background = Color(0.68, 0.48, 0.34, 0.97)
-	elif not n.alive:
-		background = Color(0.43, 0.39, 0.31, 0.90)
 	draw_rect(
-		Rect2(
-			rect.position + Vector2(2.0, 2.5) * _display_scale,
-			rect.size
-		),
-		Color(0.02, 0.015, 0.01, 0.58),
+		window_rect,
+		Color(0.69, 0.59, 0.43, 0.98),
 		true
 	)
-	var inner := rect.grow(-1.0 * _display_scale)
-	draw_rect(inner, background, true)
-	draw_rect(inner, INK_COLOR, false, 1.4 * _display_scale)
 	draw_rect(
-		Rect2(inner.position, Vector2(5.0 * _display_scale, inner.size.y)),
-		paper_nation_color(n.color),
-		true
+		window_rect,
+		INK_COLOR,
+		false,
+		2.0 * _display_scale
 	)
+	draw_rect(title_rect, COMMAND_GREEN, true)
 	draw_line(
-		inner.position + Vector2(8.0, 22.0) * _display_scale,
-		inner.position + Vector2(inner.size.x / _display_scale - 8.0, 22.0)
-			* _display_scale,
-		Color(0.18, 0.12, 0.06, 0.26),
-		1.0 * _display_scale
+		Vector2(title_rect.position.x, title_rect.end.y),
+		title_rect.end,
+		ACCENT_GOLD.darkened(0.18),
+		1.5 * _display_scale
 	)
-	var text_x := inner.position.x + 11.0 * _display_scale
-	var title_color := INK_COLOR
-	var status := "战争" if at_war else ("和平" if n.alive else "灭亡")
 	draw_string(
 		_font,
-		Vector2(text_x, inner.position.y + 17.0 * _display_scale),
-		"国%d  %s" % [nation_id, status],
+		title_rect.position + Vector2(12.0, 20.0) * _display_scale,
+		"国家列表  存活 %d / 总计 %d  · 拖动标题栏移动"
+			% [rows.size(), state.nations.size()],
 		HORIZONTAL_ALIGNMENT_LEFT,
-		inner.size.x - 18.0 * _display_scale,
-		_font_size(13),
-		title_color
+		title_rect.size.x - 48.0 * _display_scale,
+		_font_size(12),
+		PAPER_LIGHT
 	)
-	for line_index in range(details.size()):
+	draw_rect(close_rect, PAPER_DARK, true)
+	draw_rect(
+		close_rect,
+		PAPER_LIGHT,
+		false,
+		1.0 * _display_scale
+	)
+	draw_string(
+		_font,
+		close_rect.position + Vector2(4.0, 16.0) * _display_scale,
+		"×",
+		HORIZONTAL_ALIGNMENT_CENTER,
+		close_rect.size.x - 8.0 * _display_scale,
+		_font_size(14),
+		PAPER_LIGHT
+	)
+	draw_rect(header_rect, Color(0.28, 0.22, 0.14, 0.96), true)
+	_draw_nation_window_cells(
+		header_rect,
+		{
+			"identity": "国家 / 身份",
+			"military": "领土 / 军事",
+			"economy": "财政 / 粮食",
+			"diplomacy": "外交",
+			"action": "相关动作",
+		},
+		PAPER_LIGHT,
+		_font_size(10)
+	)
+	var capacity := nation_stats_visible_row_capacity(
+		window_rect.size,
+		_display_scale
+	)
+	var visible_end := mini(
+		_nation_stats_scroll + capacity,
+		rows.size()
+	)
+	var row_top := header_rect.end.y
+	for row_index in range(_nation_stats_scroll, visible_end):
+		var row_data := rows[row_index]
+		var visual_index := row_index - _nation_stats_scroll
+		var row_rect := Rect2(
+			Vector2(
+				window_rect.position.x,
+				row_top
+					+ float(visual_index)
+						* NATION_WINDOW_ROW_HEIGHT
+						* _display_scale
+			),
+			Vector2(
+				window_rect.size.x,
+				NATION_WINDOW_ROW_HEIGHT * _display_scale
+			)
+		)
+		var row_color := (
+			Color(0.73, 0.64, 0.49, 0.98)
+			if visual_index % 2 == 0
+			else Color(0.66, 0.57, 0.43, 0.98)
+		)
+		if bool(row_data["at_war"]):
+			row_color = row_color.lerp(
+				Color(0.58, 0.36, 0.28, 0.98),
+				0.34
+			)
+		draw_rect(row_rect, row_color, true)
+		draw_rect(
+			Rect2(
+				row_rect.position,
+				Vector2(5.0 * _display_scale, row_rect.size.y)
+			),
+			paper_nation_color(row_data["color"]),
+			true
+		)
+		draw_line(
+			Vector2(row_rect.position.x, row_rect.end.y),
+			row_rect.end,
+			Color(0.18, 0.12, 0.06, 0.24),
+			1.0
+		)
+		_draw_nation_window_cells(
+			row_rect,
+			row_data,
+			INK_COLOR,
+			_font_size(10)
+		)
+	var footer_rect := Rect2(
+		Vector2(
+			window_rect.position.x,
+			window_rect.end.y
+				- NATION_WINDOW_FOOTER_HEIGHT * _display_scale
+		),
+		Vector2(
+			window_rect.size.x,
+			NATION_WINDOW_FOOTER_HEIGHT * _display_scale
+		)
+	)
+	draw_rect(footer_rect, Color(0.25, 0.20, 0.13, 0.96), true)
+	var footer := (
+		"滚轮浏览  %d-%d / %d"
+		% [
+			mini(_nation_stats_scroll + 1, rows.size()),
+			visible_end,
+			rows.size(),
+		]
+		if not rows.is_empty()
+		else "当前无存活国家"
+	)
+	draw_string(
+		_font,
+		footer_rect.position + Vector2(10.0, 15.0) * _display_scale,
+		footer,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		footer_rect.size.x - 20.0 * _display_scale,
+		_font_size(9),
+		PAPER_LIGHT
+	)
+
+
+func _draw_nation_window_cells(
+	row_rect: Rect2,
+	row_data: Dictionary,
+	color: Color,
+	font_size: int
+) -> void:
+	var columns := [
+		["identity", 0.02, 0.13],
+		["military", 0.15, 0.21],
+		["economy", 0.36, 0.20],
+		["diplomacy", 0.56, 0.19],
+		["action", 0.75, 0.23],
+	]
+	for column in columns:
+		var x_ratio := float(column[1])
+		var width_ratio := float(column[2])
 		draw_string(
 			_font,
 			Vector2(
-				text_x,
-				inner.position.y
-					+ (36.0 + float(line_index) * 15.0) * _display_scale
+				row_rect.position.x
+					+ row_rect.size.x * x_ratio,
+				row_rect.position.y
+					+ row_rect.size.y * 0.68
 			),
-			details[line_index],
+			str(row_data.get(str(column[0]), "")),
 			HORIZONTAL_ALIGNMENT_LEFT,
-			inner.size.x - 18.0 * _display_scale,
-			_font_size(10),
-				Color(0.16, 0.11, 0.06, 0.96)
+			row_rect.size.x * width_ratio,
+			font_size,
+			color
 		)
 
 

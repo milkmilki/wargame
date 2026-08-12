@@ -1,0 +1,19 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/core/simulation.gd" id="2_sim"]
+[ext_resource type="Script" path="res://scripts/view/map_renderer.gd" id="3_render"]
+
+[node name="FortyNations" type="Node2D"]
+script = ExtResource("1_main")
+nation_count = 40
+terrain_city_count = 160
+world_seed = 12345
+initial_army_icon_scale = 0.4
+initial_city_names_visible = false
+
+[node name="Simulation" type="Node" parent="."]
+script = ExtResource("2_sim")
+
+[node name="MapRenderer" type="Node2D" parent="."]
+script = ExtResource("3_render")

@@ -805,6 +805,26 @@ func _test_world_generation() -> void:
 	)
 	_check(ResourceLoader.exists("res://main.tscn"), "真实地图场景 main.tscn 必须保留")
 	_check(ResourceLoader.exists("res://square_map.tscn"), "原方形地图场景必须独立保留")
+	_check(
+		ResourceLoader.exists("res://forty_nations.tscn"),
+		"40国可玩场景 forty_nations.tscn 必须存在"
+	)
+	var forty_scene := (
+		load("res://forty_nations.tscn") as PackedScene
+	).instantiate()
+	_check(
+		int(forty_scene.get("nation_count")) == 40
+			and int(forty_scene.get("terrain_city_count")) == 160
+			and _approx(
+				float(forty_scene.get("initial_army_icon_scale")),
+				0.40
+			)
+			and not bool(
+				forty_scene.get("initial_city_names_visible")
+			),
+		"40国场景必须配置40国、160陆城，并使用低密度初始地图显示"
+	)
+	forty_scene.free()
 	# 每国只有首都一个粮仓；本国全部陆城初始储备归集到该粮仓。
 	for n in gs.nations:
 		var warehouses := gs.warehouse_cities_of(n.id)
@@ -1304,10 +1324,13 @@ func _test_responsive_map_layout() -> void:
 		"窗口放大时地图画布仍应扩大"
 	)
 	_check(
-		float((stats_closed["origin"] as Vector2).y)
-			< float((base["origin"] as Vector2).y)
-			and float(stats_closed["span"]) > float(base["span"]),
-		"关闭国家统计窗口后必须回收顶部空间并扩大地图"
+		(stats_closed["origin"] as Vector2)
+				== (base["origin"] as Vector2)
+			and _approx(
+				float(stats_closed["span"]),
+				float(base["span"])
+			),
+		"国家列表必须是覆盖式浮窗，开关时不得挤压或移动地图"
 	)
 	var stats_button := MapRenderer.nation_stats_button_rect(
 		Vector2(1280, 720),
@@ -1320,6 +1343,38 @@ func _test_responsive_map_layout() -> void:
 		)
 			and stats_button.size.x > stats_button.size.y,
 		"国家统计按钮必须始终位于窗口内并具备稳定点击区域"
+	)
+	var nation_window := MapRenderer.nation_stats_window_rect(
+		Vector2(1280, 720),
+		float(base["display_scale"]),
+		Vector2(10000.0, -10000.0),
+		40
+	)
+	var nation_window_capacity := (
+		MapRenderer.nation_stats_visible_row_capacity(
+			nation_window.size,
+			float(base["display_scale"])
+		)
+	)
+	_check(
+		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
+			nation_window
+		)
+			and nation_window_capacity > 0
+			and nation_window_capacity < 40
+			and MapRenderer.nation_stats_title_rect(
+				nation_window,
+				float(base["display_scale"])
+			).has_point(
+				nation_window.position + Vector2(10.0, 10.0)
+			)
+			and nation_window.encloses(
+				MapRenderer.nation_stats_close_rect(
+					nation_window,
+					float(base["display_scale"])
+				)
+			),
+		"国家列表浮窗必须可约束在视口内，并提供标题拖动区、关闭区和滚动容量"
 	)
 	var army_scale_control := (
 		MapRenderer.army_icon_scale_control_rect(
@@ -1433,8 +1488,12 @@ func _test_responsive_map_layout() -> void:
 	scale_renderer.free()
 	var large_origin: Vector2 = large["origin"]
 	_check(
-		large_origin.y > 120.0,
-		"国家详情卡应保留独立顶部区域，不得覆盖地图"
+		_approx(
+			large_origin.y,
+			MapRenderer.BASE_HEADER_ONLY_TOP
+				* float(large["display_scale"])
+		),
+		"覆盖式国家列表不得为旧卡片网格预留顶部空间"
 	)
 	var large_span := float(large["cell"]) * float(GameState.GRID)
 	_check(
@@ -1445,7 +1504,7 @@ func _test_responsive_map_layout() -> void:
 	_check(
 		int(narrow["hud_columns"]) < 4
 		and float((narrow["origin"] as Vector2).y) > float(base["origin"].y) * 0.65,
-		"窄窗口应自动减少 HUD 列数并为多行国家数据留出空间"
+		"窄窗口应自动减少派生列数，并保持固定顶栏地图起点"
 	)
 	var same_tier := MapRenderer.compute_layout_for_viewport(
 		Vector2(1500, 800),
@@ -1470,6 +1529,89 @@ func _test_responsive_map_layout() -> void:
 	)
 	var hit_state := GameState.new()
 	hit_state.generate_grid_world(12346)
+	var list_state := GameState.new()
+	list_state.generate_grid_world(12347)
+	list_state.nations[3].alive = false
+	list_state.suzerainty[1] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": 0,
+		"civil_war": false,
+	}
+	list_state.nations[0].ai_last_force_action = (
+		ActionCandidate.Kind.CREATE_ARMY
+	)
+	list_state.nations[0].ai_last_force_day = 12
+	var nation_rows := MapRenderer.nation_list_rows(list_state)
+	var nation_ids: Array[int] = []
+	for row in nation_rows:
+		nation_ids.append(int(row["nation_id"]))
+	_check(
+		nation_rows.size() == 3
+			and nation_ids == [0, 1, 2]
+			and str(nation_rows[1]["identity"]).contains("藩王")
+			and str(nation_rows[0]["action"]).contains("建军"),
+		"国家列表必须一国一行、过滤灭亡国家，并显示宗藩身份和最近动作"
+	)
+	var border_state := GameState.new()
+	border_state.generate_grid_world(12348)
+	for nation_a in range(border_state.nations.size()):
+		for nation_b in range(
+			nation_a + 1,
+			border_state.nations.size()
+		):
+			border_state.set_diplomatic_relation(
+				nation_a,
+				nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	border_state.suzerainty[1] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": 0,
+		"civil_war": false,
+	}
+	border_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	var peaceful_suzerainty_geometry := (
+		MapRenderer.build_province_boundary_segments(border_state)
+	)
+	_check(
+		not (
+			peaceful_suzerainty_geometry["suzerainty"]
+				as PackedVector2Array
+		).is_empty()
+			and (
+				peaceful_suzerainty_geometry["alliance"]
+					as PackedVector2Array
+			).is_empty(),
+		"和平宗藩接壤必须进入专属弱边界，不得复用普通同盟青色边界"
+	)
+	border_state.suzerainty[1]["civil_war"] = true
+	border_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var civil_war_geometry := (
+		MapRenderer.build_province_boundary_segments(border_state)
+	)
+	_check(
+		(
+			civil_war_geometry["suzerainty"]
+				as PackedVector2Array
+		).is_empty()
+			and not (
+				civil_war_geometry["nation"]
+					as PackedVector2Array
+			).is_empty(),
+		"削藩内战时宗藩弱边界必须消失，并恢复敌对国家边界"
+	)
 	var hit_origin := Vector2(80.0, 60.0)
 	var hit_map_size := Vector2(640.0, 640.0)
 	var city_to_pick := hit_state.cities[0]
