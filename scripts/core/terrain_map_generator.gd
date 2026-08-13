@@ -38,7 +38,7 @@ static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "settlement-v4:%s:%d" % [source_path, city_count]
+	var cache_key := "settlement-v5:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -239,7 +239,12 @@ static func _sample_cities(
 			if not _is_interior(mask, image.get_width(), image.get_height(), x, y):
 				continue
 			var relief := _local_relief(image, x, y, RELIEF_RADIUS)
-			var height := image.get_pixel(x, y).get_luminance()
+			var luminance := (
+				image.get_pixel(x, y).get_luminance()
+			)
+			var height := altitude_from_luminance(
+				luminance
+			)
 			var normalized := (
 				Vector2(x, y) - Vector2(bounds.position)
 			) / scale
@@ -392,6 +397,12 @@ static func minimum_city_spacing_for_count(city_count: int) -> float:
 			/ float(maxi(city_count, 1))
 		)
 	)
+
+
+## 源高度图编码约定：白色是低地、黑色是高地。所有需要绝对海拔的路径
+## 必须经此函数转换；起伏/坡度只看亮度差，反转不改变其数值。
+static func altitude_from_luminance(luminance: float) -> float:
+	return 1.0 - clampf(luminance, 0.0, 1.0)
 
 
 ## 聚落密度的唯一评分源。海拔/起伏越低越适居，中东部与东南获得人口带加权，
@@ -927,7 +938,9 @@ static func _build_river_path_grid(
 				template,
 				normalized.x
 			)
-			var height := image.get_pixel(x, y).get_luminance()
+			var height := altitude_from_luminance(
+				image.get_pixel(x, y).get_luminance()
+			)
 			var relief := _pixel_relief(image, x, y)
 			grid.set_point_weight_scale(
 				point,
@@ -1060,10 +1073,12 @@ static func _find_river_docks(
 				image.get_height() - 1
 			)
 			candidate["city_id"] = city_count + docks.size()
-			candidate["height"] = image.get_pixel(
-				x,
-				y
-			).get_luminance()
+			candidate["height"] = altitude_from_luminance(
+				image.get_pixel(
+					x,
+					y
+				).get_luminance()
+			)
 			candidate["relief"] = _local_relief(
 				image,
 				x,

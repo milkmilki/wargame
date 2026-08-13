@@ -1492,7 +1492,7 @@ static func build_province_boundary_segments(
 			elif right != province_id:
 				_append_segment(province, Vector2(x1, y0), Vector2(x1, y1))
 				if _province_owners_differ(game_state, province_id, right):
-					if _province_owners_peaceful_suzerainty(
+					if _province_owners_same_peaceful_suzerainty(
 						game_state, province_id, right
 					):
 						_append_segment(
@@ -1511,7 +1511,7 @@ static func build_province_boundary_segments(
 			elif bottom != province_id:
 				_append_segment(province, Vector2(x0, y1), Vector2(x1, y1))
 				if _province_owners_differ(game_state, province_id, bottom):
-					if _province_owners_peaceful_suzerainty(
+					if _province_owners_same_peaceful_suzerainty(
 						game_state, province_id, bottom
 					):
 						_append_segment(
@@ -1560,7 +1560,7 @@ static func _province_owners_allied(
 	)
 
 
-static func _province_owners_peaceful_suzerainty(
+static func _province_owners_same_peaceful_suzerainty(
 	game_state: GameState,
 	province_a: int,
 	province_b: int
@@ -1570,8 +1570,11 @@ static func _province_owners_peaceful_suzerainty(
 	var owner_a := game_state.cities[province_a].owner_nation
 	var owner_b := game_state.cities[province_b].owner_nation
 	return (
-		game_state.is_suzerainty_pair(owner_a, owner_b)
+		game_state.suzerainty_root(owner_a)
+			== game_state.suzerainty_root(owner_b)
 		and game_state.is_allied(owner_a, owner_b)
+		and not game_state.is_in_civil_war(owner_a)
+		and not game_state.is_in_civil_war(owner_b)
 	)
 
 
@@ -1658,8 +1661,8 @@ func _draw_national_boundaries() -> void:
 			_normalized_segments_to_pixels(
 				_suzerainty_boundary_segments
 			),
-			Color(0.30, 0.25, 0.18, 0.58),
-			maxf(1.35 * _display_scale, 1.0),
+			Color(0.0, 0.0, 0.0, 0.92),
+			maxf(1.25 * _display_scale, 1.0),
 			true
 		)
 
@@ -2632,6 +2635,7 @@ static func nation_list_rows(
 		troops_by_nation[army.owner_nation] += army.size
 	var row_by_nation := {}
 	var visible_nation_ids: Array[int] = []
+	var resource_cache := {}
 	for nation in game_state.nations:
 		if (
 			not nation.alive
@@ -2640,7 +2644,8 @@ static func nation_list_rows(
 			continue
 		var report := DiplomacyAI.resource_report(
 			game_state,
-			nation.id
+			nation.id,
+			resource_cache
 		)
 		var wars := game_state.wars_of(nation.id)
 		var allies := game_state.allies_of(nation.id)
@@ -2658,9 +2663,11 @@ static func nation_list_rows(
 				troops_by_nation[nation.id],
 				nation.manpower_pool,
 			],
-			"economy": "金%d  月%+d  粮%d/%d" % [
+			"economy": "金%d  月%+d  贡%+d  粮%d/%d" % [
 				nation.treasury_gold,
 				int(report["monthly_gold_balance"]),
+				int(report["monthly_tribute_income"])
+					- int(report["monthly_tribute_expense"]),
 				nation.granary_food,
 				int(ceil(float(report["monthly_food_demand"]))),
 			],
@@ -3396,9 +3403,10 @@ static func city_detail_lines(
 			city.gold_per_month,
 			city.food_per_half_year,
 		],
-		"发展权重 金×%.2f  粮×%.2f" % [
+		"发展权重 金×%.2f  粮×%.2f  海拔产出×%.2f" % [
 			city.development_gold_multiplier,
 			city.development_food_multiplier,
+			city.terrain_output_multiplier,
 		],
 		"库存 %d   地形高度 %.2f / 起伏 %.2f" % [
 			city.food_storage,
@@ -3464,19 +3472,27 @@ static func nation_detail_lines(
 			troops += army.size
 	var report := DiplomacyAI.resource_report(game_state, nation_id)
 	var gold_balance := int(report["monthly_gold_balance"])
+	var tribute_balance := (
+		int(report["monthly_tribute_income"])
+		- int(report["monthly_tribute_expense"])
+	)
 	var line_one := "城%d 兵%d 人%d  金%d" % [
 		game_state.cities_of(nation_id).size(),
 		troops,
 		n.manpower_pool,
 		n.treasury_gold,
 	]
-	var line_two := "月净%+d  军费%d 未付%d  支付%.0f%%" % [
+	var line_two := "月净%+d  城收%d  贡赋%+d" % [
 		gold_balance,
+		int(report["monthly_city_gold_income"]),
+		tribute_balance,
+	]
+	var line_three := "军费%d  未付%d  支付%.0f%%" % [
 		n.last_military_upkeep,
 		n.unpaid_military_upkeep,
 		n.military_payment_ratio * 100.0,
 	]
-	var line_three := "粮%d 需%d/月  战%s  盟%s" % [
+	var line_four := "粮%d 需%d/月  战%s  盟%s" % [
 		n.granary_food,
 		int(ceil(float(report["monthly_food_demand"]))),
 		str(game_state.wars_of(nation_id)),
@@ -3486,6 +3502,7 @@ static func nation_detail_lines(
 		line_one,
 		line_two,
 		line_three,
+		line_four,
 	] as Array[String]
 	if not n.campaign_attack_assignments.is_empty():
 		var target_set := {}

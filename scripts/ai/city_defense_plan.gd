@@ -43,6 +43,7 @@ var defense_assignment_slots: int = 0
 var line_city_slots: int = 0
 var line_critical_city_slots: int = 0
 var line_edge_slots: int = 0
+var vassal_main_reserve_cities: Array[int] = []
 var assigned_city_by_army: Dictionary = {} ## army.id -> city_id
 var assigned_armies_by_city: Dictionary = {} ## city_id -> Array[army.id]
 var assigned_posture_by_army: Dictionary = {} ## army.id -> Posture
@@ -174,6 +175,14 @@ func must_hold_city(city_id: int) -> bool:
 	return bool(must_hold_cities.get(city_id, false))
 
 
+func vassal_main_reserve_city_count() -> int:
+	return vassal_main_reserve_cities.size()
+
+
+func relief_required_at(city_id: int) -> bool:
+	return float(relief_need.get(city_id, 0.0)) > 0.0
+
+
 func must_keep_at_city(
 	army: Army,
 	coordinator: ArmyCoordinator
@@ -248,6 +257,16 @@ func can_join_offensive(
 	):
 		return false
 	if army.is_main_battle_role():
+		if (
+			view.state.is_vassal(view.nation_id)
+			and not view.state.is_in_civil_war(
+				view.nation_id
+			)
+		):
+			return (
+				view.state.recognized_owner_of(target_city)
+					== view.nation_id
+			)
 		return true
 	if view.state.uses_heightmap:
 		return false
@@ -789,6 +808,9 @@ func _assign_role_based_defense() -> void:
 	assigned_armies_by_city.clear()
 	assigned_posture_by_army.clear()
 	assigned_edge_by_army.clear()
+	vassal_main_reserve_cities = (
+		_build_vassal_main_reserve_cities()
+	)
 	var line_armies: Array[Army] = []
 	for army in view.friendly_armies:
 		if (
@@ -833,10 +855,12 @@ func _assign_role_based_defense() -> void:
 		line_armies.size()
 	)
 	if line_armies.is_empty():
+		_assign_vassal_main_reserves()
 		return
 	if defense_slots.is_empty():
 		for army in line_armies:
 			army.clear_line_assignment()
+		_assign_vassal_main_reserves()
 		return
 	var eligible_line_armies := line_armies.duplicate()
 	# 只激活当前兵力能覆盖的最高优先级槽位。持久 Assignment 只能在该前缀内
@@ -946,6 +970,125 @@ func _assign_role_based_defense() -> void:
 		if not assigned_city_by_army.has(army.id):
 			_clear_army_from_frontier_sector(army)
 			army.clear_line_assignment()
+	_assign_vassal_main_reserves()
+
+
+func _build_vassal_main_reserve_cities() -> Array[int]:
+	var result: Array[int] = []
+	if (
+		not view.state.is_vassal(view.nation_id)
+		or view.state.is_in_civil_war(view.nation_id)
+	):
+		return result
+	for city in view.friendly_cities:
+		if _is_strategic_must_hold_city(city.id):
+			result.append(city.id)
+	if result.is_empty() and (
+		view.capital_city_id >= 0
+		and view.capital_city_id < view.state.cities.size()
+		and view.state.cities[
+			view.capital_city_id
+		].owner_nation == view.nation_id
+	):
+		result.append(view.capital_city_id)
+	_sort_role_city_ids(result)
+	return result
+
+
+## 藩王 MAIN 是完整战团编制的封国内线预备队。紧急城市优先于平时重点城市，
+## 同一战团全部成员共享同一驻防目标，避免把持久战团拆散成多个独立驻军。
+func _assign_vassal_main_reserves() -> void:
+	if vassal_main_reserve_cities.is_empty():
+		return
+	var target_cities: Array = []
+	var relief_cities: Array = []
+	var urgent_cities: Array = []
+	for city in view.friendly_cities:
+		if relief_required_at(city.id):
+			relief_cities.append(city.id)
+		elif urgent_defense_at(city.id):
+			urgent_cities.append(city.id)
+	_sort_role_city_ids(relief_cities)
+	_sort_role_city_ids(urgent_cities)
+	target_cities.append_array(relief_cities)
+	target_cities.append_array(urgent_cities)
+	for city_id in vassal_main_reserve_cities:
+		if not target_cities.has(city_id):
+			target_cities.append(city_id)
+	if target_cities.is_empty():
+		return
+	var members_by_group := {}
+	for army in view.friendly_armies:
+		if (
+			army.size <= 0
+			or not army.is_main_battle_role()
+			or army.battle_group_id < 0
+		):
+			continue
+		if not members_by_group.has(army.battle_group_id):
+			members_by_group[army.battle_group_id] = (
+				[] as Array[Army]
+			)
+		(
+			members_by_group[army.battle_group_id]
+			as Array[Army]
+		).append(army)
+	var group_ids := members_by_group.keys()
+	for group_id in group_ids:
+		(
+			members_by_group[group_id] as Array[Army]
+		).sort_custom(func(a: Army, b: Army) -> bool:
+			return EquivariantOrder.army_less(
+				view.state,
+				view.nation_id,
+				a,
+				b
+			)
+		)
+	group_ids.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var members_a: Array[Army] = members_by_group[a]
+		var members_b: Array[Army] = members_by_group[b]
+		return EquivariantOrder.army_less(
+			view.state,
+			view.nation_id,
+			members_a[0],
+			members_b[0]
+		)
+	)
+	for group_index in range(group_ids.size()):
+		var members: Array[Army] = members_by_group[
+			group_ids[group_index]
+		]
+		var representative := members[0]
+		var target_city := -1
+		for offset in range(target_cities.size()):
+			var candidate_city := int(target_cities[
+				(group_index + offset)
+					% target_cities.size()
+			])
+			if _role_assignment_distance(
+				representative,
+				candidate_city,
+				Posture.CITY,
+				-1
+			) != INF:
+				target_city = candidate_city
+				break
+		if target_city < 0:
+			continue
+		for member in members:
+			assigned_city_by_army[member.id] = target_city
+			assigned_posture_by_army[member.id] = (
+				Posture.CITY
+			)
+			var assigned: Array[int] = (
+				assigned_armies_by_city.get(
+					target_city,
+					[] as Array[int]
+				)
+			)
+			assigned.append(member.id)
+			assigned_armies_by_city[target_city] = assigned
 
 
 func _persistent_role_slot_index(
@@ -1697,8 +1840,8 @@ func _assigned_defense_candidate(
 	assigned_posture: int,
 	assigned_edge: int
 ) -> ActionCandidate:
-	# 安全门：填线锚点城若已不属本国（被敌占领/易主，无军事通行权），绝不再派兵进驻——
-	# 否则 LINE 军会开进敌城后 IDLE 卡死（不攻城、无新指令），形成敌城滞留死锁。
+	# 安全门：驻防锚点城若已不属本国（被敌占领/易主，无军事通行权），绝不再派兵进驻——
+	# 否则军队会开进敌城后 IDLE 卡死（不攻城、无新指令），形成敌城滞留死锁。
 	# 清掉过期防区分配，让该军回退到常规防御重规划（本函数返回 null 表示不认领此锚点）。
 	if (
 		city_id < 0
@@ -1741,7 +1884,11 @@ func _assigned_defense_candidate(
 		var retreat := ActionCandidate.make(
 			ActionCandidate.Kind.RETREAT,
 			ROLE_DEPLOYMENT_SCORE,
-			"填线部署：回到国界城市%d" % city_id,
+			(
+				"藩王主战预备队：撤回重点城市%d"
+				if army.is_main_battle_role()
+				else "填线部署：回到国界城市%d"
+			) % city_id,
 			city_id
 		)
 		retreat.minimum_commit_days = STRATEGIC_COMMIT_DAYS
@@ -1769,16 +1916,24 @@ func _assigned_defense_candidate(
 		return ActionCandidate.make(
 			ActionCandidate.Kind.NONE,
 			ROLE_DEPLOYMENT_SCORE,
-			"填线部署：留守城市%d" % city_id,
+			(
+				"藩王主战预备队：驻守重点城市%d"
+				if army.is_main_battle_role()
+				else "填线部署：留守城市%d"
+			) % city_id,
 			city_id
 		)
 	var reinforce := ActionCandidate.make(
 		ActionCandidate.Kind.REINFORCE,
 		ROLE_DEPLOYMENT_SCORE,
 		(
-			"填线部署：5000编制军调往国界边锚点城市%d"
-			if assigned_posture == Posture.EDGE
-			else "填线部署：5000编制军调往城市%d"
+			"藩王主战预备队：调往重点城市%d"
+			if army.is_main_battle_role()
+			else (
+				"填线部署：5000编制军调往国界边锚点城市%d"
+				if assigned_posture == Posture.EDGE
+				else "填线部署：5000编制军调往城市%d"
+			)
 		) % city_id,
 		city_id
 	)

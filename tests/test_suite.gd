@@ -75,7 +75,7 @@ func _init() -> void:
 	_test_shared_granary_and_relay_supply()
 	_test_vassal_governance_output_bonus()
 	_test_suzerainty_enclave_self_healing()
-	_test_vassal_line_only_command()
+	_test_vassal_local_main_command()
 	_test_stranded_hostile_army_eviction()
 	_test_vassal_wartime_support_and_capital()
 	_test_peacetime_demobilization_and_border_defense()
@@ -171,13 +171,17 @@ func _test_world_generation() -> void:
 		gs.cities.all(func(city: City) -> bool: return not city.at_war),
 		"和平开局时所有城市均不应显示战争状态"
 	)
-	# 四等份：每国 40 个陆城；码头不改变初始军制。
+	# 空间四等份经合法交通图消除飞地后允许 ±1 城偏差；码头不改变初始军制。
 	for n in gs.nations:
 		var owned_land := gs.land_cities_of(n.id)
 		var cnt := owned_land.size()
 		_check(
-			cnt == GameState.TERRAIN_CITY_COUNT / gs.nations.size(),
-			"国%d 初始应有%d个陆城，实为%d"
+			absi(
+				cnt
+				- GameState.TERRAIN_CITY_COUNT
+					/ gs.nations.size()
+			) <= 1,
+			"国%d 初始陆城数应在均值%d的±1范围内，实为%d"
 				% [
 					n.id,
 					GameState.TERRAIN_CITY_COUNT
@@ -194,8 +198,15 @@ func _test_world_generation() -> void:
 				manpower_hubs.append(owned_city)
 		_check(
 			food_hubs.size() == 1
-			and food_hubs[0].food_per_half_year >= GameState.FOOD_HUB_MIN_OUTPUT,
-			"国%d 应有一个高产粮食核心" % n.id
+			and food_hubs[0].food_per_half_year
+				>= int(round(
+					float(GameState.FOOD_HUB_MIN_OUTPUT)
+						* food_hubs[
+							0
+						].terrain_output_multiplier
+				)),
+			"国%d 应有一个达到海拔修正下限的高产粮食核心"
+				% n.id
 		)
 		_check(
 			manpower_hubs.size() == 1
@@ -239,14 +250,11 @@ func _test_world_generation() -> void:
 			if not gs.cities[int(city_id)].is_dock:
 				reachable_land += 1
 		_check(
-			reachable_land
-				== GameState.TERRAIN_CITY_COUNT
-					/ gs.nations.size(),
+			reachable_land == cnt,
 			"国%d 初始%d个陆城应经本国节点连通，实为%d"
 				% [
 					n.id,
-					GameState.TERRAIN_CITY_COUNT
-						/ gs.nations.size(),
+					cnt,
 					reachable_land,
 				]
 		)
@@ -430,6 +438,7 @@ func _test_world_generation() -> void:
 	var crossroads_count := 0
 	var propagated_city_count := 0
 	var development_weights_valid := true
+	var port_food_multiplier_valid := true
 	for city in land_cities:
 		plain_city_count += 1 if city.is_plain_city else 0
 		port_market_count += 1 if city.is_port_market else 0
@@ -438,7 +447,7 @@ func _test_world_generation() -> void:
 		if city.is_port_market:
 			direct_gold = maxf(
 				direct_gold,
-				GameState.PORT_MARKET_GOLD_MULTIPLIER
+				GameState.PORT_MARKET_OUTPUT_MULTIPLIER
 			)
 		if city.is_crossroads:
 			direct_gold = maxf(
@@ -450,11 +459,22 @@ func _test_world_generation() -> void:
 				direct_gold,
 				GameState.PLAIN_GOLD_MULTIPLIER
 			)
-		var direct_food := (
-			GameState.PLAIN_FOOD_MULTIPLIER
-			if city.is_plain_city
-			else 1.0
-		)
+		var direct_food := 1.0
+		if city.is_port_market:
+			direct_food = maxf(
+				direct_food,
+				GameState.PORT_MARKET_OUTPUT_MULTIPLIER
+			)
+			port_food_multiplier_valid = (
+				port_food_multiplier_valid
+				and city.development_food_multiplier
+					>= GameState.PORT_MARKET_OUTPUT_MULTIPLIER
+			)
+		if city.is_plain_city:
+			direct_food = maxf(
+				direct_food,
+				GameState.PLAIN_FOOD_MULTIPLIER
+			)
 		var propagated_gold := 0.0
 		var propagated_food := 0.0
 		for neighbor in gs.neighbors(city.id):
@@ -470,7 +490,7 @@ func _test_world_generation() -> void:
 			if source.is_port_market:
 				source_direct_gold = maxf(
 					source_direct_gold,
-					GameState.PORT_MARKET_GOLD_MULTIPLIER
+					GameState.PORT_MARKET_OUTPUT_MULTIPLIER
 				)
 			if source.is_crossroads:
 				source_direct_gold = maxf(
@@ -482,11 +502,17 @@ func _test_world_generation() -> void:
 					source_direct_gold,
 					GameState.PLAIN_GOLD_MULTIPLIER
 				)
-			var source_direct_food := (
-				GameState.PLAIN_FOOD_MULTIPLIER
-				if source.is_plain_city
-				else 1.0
-			)
+			var source_direct_food := 1.0
+			if source.is_port_market:
+				source_direct_food = maxf(
+					source_direct_food,
+					GameState.PORT_MARKET_OUTPUT_MULTIPLIER
+				)
+			if source.is_plain_city:
+				source_direct_food = maxf(
+					source_direct_food,
+					GameState.PLAIN_FOOD_MULTIPLIER
+				)
 			propagated_gold = maxf(
 				propagated_gold,
 				(source_direct_gold - 1.0)
@@ -533,14 +559,80 @@ func _test_world_generation() -> void:
 			and port_market_count > 0
 			and crossroads_count > 0
 			and propagated_city_count > 0
-			and development_weights_valid,
-		"种田区位必须包含平原、港市、高连接枢纽和且仅一层50%%传播：平原%d 港市%d 枢纽%d 传播%d"
+			and development_weights_valid
+			and port_food_multiplier_valid,
+		"种田区位必须包含平原、钱粮港市、高连接枢纽和且仅一层50%%传播：平原%d 港市%d 枢纽%d 传播%d"
 			% [
 				plain_city_count,
 				port_market_count,
 				crossroads_count,
 				propagated_city_count,
 			]
+	)
+	var minimum_city_height := INF
+	var maximum_city_height := -INF
+	for city in land_cities:
+		minimum_city_height = minf(
+			minimum_city_height,
+			city.terrain_height
+		)
+		maximum_city_height = maxf(
+			maximum_city_height,
+			city.terrain_height
+		)
+	var city_height_span := maxf(
+		maximum_city_height - minimum_city_height,
+		0.000001
+	)
+	var height_multipliers_valid := true
+	for city in land_cities:
+		var normalized_height := (
+			(city.terrain_height - minimum_city_height)
+			/ city_height_span
+		)
+		height_multipliers_valid = (
+			height_multipliers_valid
+			and _approx(
+				city.terrain_output_multiplier,
+				GameState.terrain_height_output_multiplier(
+					normalized_height
+				)
+			)
+		)
+	var height_m0 := (
+		GameState.terrain_height_output_multiplier(0.0)
+	)
+	var height_m25 := (
+		GameState.terrain_height_output_multiplier(0.25)
+	)
+	var height_m50 := (
+		GameState.terrain_height_output_multiplier(0.50)
+	)
+	var height_m75 := (
+		GameState.terrain_height_output_multiplier(0.75)
+	)
+	var height_m100 := (
+		GameState.terrain_height_output_multiplier(1.0)
+	)
+	_check(
+		height_multipliers_valid
+			and _approx(height_m0, 1.0)
+			and _approx(
+				height_m100,
+				GameState
+					.TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER
+			)
+			and height_m0 > height_m25
+			and height_m25 > height_m50
+			and height_m50 > height_m75
+			and height_m75 > height_m100
+			and height_m0 - height_m25
+				< height_m25 - height_m50
+			and height_m25 - height_m50
+				< height_m50 - height_m75
+			and height_m50 - height_m75
+				< height_m75 - height_m100,
+		"海拔产出倍率必须按J型惩罚从最低城1.0单调降至最高城0.2"
 	)
 	var positions_unique := {}
 	var terrain_has_relief := false
@@ -709,7 +801,18 @@ func _test_world_generation() -> void:
 			]
 	)
 	_check(
-		TerrainMapGenerator.settlement_density(
+		_approx(
+			TerrainMapGenerator.altitude_from_luminance(
+				1.0
+			),
+			0.0
+		)
+			and _approx(
+				TerrainMapGenerator
+					.altitude_from_luminance(0.0),
+				1.0
+			)
+			and TerrainMapGenerator.settlement_density(
 			0.15,
 			0.02,
 			Vector2(0.75, 0.70),
@@ -720,7 +823,7 @@ func _test_world_generation() -> void:
 			Vector2(0.20, 0.20),
 			0.0
 		),
-		"聚落评分必须单调偏好低海拔、中东南和河岸"
+		"白色必须映射为低地、黑色映射为高地，聚落评分偏好低海拔、中东南和河岸"
 	)
 	_check(
 		gs.map_source_region_normalized.position.x > 0.0
@@ -1704,9 +1807,26 @@ func _test_responsive_map_layout() -> void:
 		"last_centralization_day": 0,
 		"civil_war": false,
 	}
+	border_state.suzerainty[3] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": 0,
+		"civil_war": false,
+	}
 	border_state.set_diplomatic_relation(
 		0,
 		1,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	border_state.set_diplomatic_relation(
+		0,
+		3,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	border_state.set_diplomatic_relation(
+		1,
+		3,
 		GameState.DiplomaticRelation.ALLIED
 	)
 	var peaceful_suzerainty_geometry := (
@@ -1721,7 +1841,18 @@ func _test_responsive_map_layout() -> void:
 				peaceful_suzerainty_geometry["alliance"]
 					as PackedVector2Array
 			).is_empty(),
-		"和平宗藩接壤必须进入专属弱边界，不得复用普通同盟青色边界"
+		"和平宗主-藩王及兄弟藩王边界必须统一进入宗藩内部线，不得复用同盟青线"
+	)
+	border_state.suzerainty.erase(3)
+	border_state.set_diplomatic_relation(
+		0,
+		3,
+		GameState.DiplomaticRelation.NEUTRAL
+	)
+	border_state.set_diplomatic_relation(
+		1,
+		3,
+		GameState.DiplomaticRelation.NEUTRAL
 	)
 	border_state.suzerainty[1]["civil_war"] = true
 	border_state.set_diplomatic_relation(
@@ -2666,6 +2797,12 @@ func _test_captured_city_fort_recovery() -> void:
 		old_owner,
 		city.id
 	)
+	var expected_reclaim_requirement := (
+		UtilityAI.assault_commit_threshold(
+			captor.size,
+			city.fort_strength
+		)
+	)
 	var reclaim_army := _make_army(
 		9802,
 		old_owner,
@@ -2682,12 +2819,12 @@ func _test_captured_city_fort_recovery() -> void:
 		old_owner
 	)
 	_check(
-		reclaim_required < damaged_requirement
+		reclaim_required == expected_reclaim_requirement
 			and reclamation_launched
 			and reclaim_army.ai_action
 				== ActionCandidate.Kind.ATTACK
 			and reclaim_army.ai_target_city == city.id,
-		"近期失地反攻应忽略本国工事集结成本并绕过普通攻势冷却"
+		"近期失地反攻应优先发起但仍承担占领军与受损城防的完整围城集结成本"
 	)
 	var recovery_siege := gs.new_battle(Battle.Kind.SIEGE)
 	recovery_siege.city = city
@@ -4434,7 +4571,7 @@ func _test_siege_battle_then_progress_order() -> void:
 			"战败守军不得在失守城市原地恢复，必须位于其他友城；location=%d siege_city=%d"
 				% [defender.location_city, siege_city])
 
-	# 收复自己的法理城市不再重复普通征服围城：空城立即恢复，击败占领军后同日恢复。
+	# 收复自己的法理城市不再走特判：与普通征服一致，必须建立围城、破坏城防后才能占领。
 	gs.armies.clear()
 	gs.battles.clear()
 	var legal_owner := gs.cities[from_city].owner_nation
@@ -4442,16 +4579,20 @@ func _test_siege_battle_then_progress_order() -> void:
 	gs.cities[siege_city].owner_nation = occupier
 	gs.recognized_city_owners[siege_city] = legal_owner
 	gs.cities[siege_city].fort_strength = 1000
-	var weak_reclaimer := _make_army(
+	var reclaim_required := UtilityAI.assault_commit_threshold(
+		0,
+		gs.cities[siege_city].fort_strength
+	)
+	var empty_city_reclaimer := _make_army(
 		702,
 		legal_owner,
-		1,
+		reclaim_required,
 		10
 	)
-	weak_reclaimer.move_from = from_city
-	weak_reclaimer.move_to = siege_city
-	weak_reclaimer.location_city = from_city
-	gs.armies.append(weak_reclaimer)
+	empty_city_reclaimer.move_from = from_city
+	empty_city_reclaimer.move_to = siege_city
+	empty_city_reclaimer.location_city = from_city
+	gs.armies.append(empty_city_reclaimer)
 	var reclaim_view := AiWorldView.build(
 		gs,
 		legal_owner
@@ -4461,7 +4602,7 @@ func _test_siege_battle_then_progress_order() -> void:
 		StrategicMapSnapshot.build(reclaim_view),
 		ThreatField.build(reclaim_view),
 		ArmyCoordinator.new(),
-		weak_reclaimer,
+		empty_city_reclaimer,
 		UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO
 	)
 	_check(
@@ -4470,20 +4611,22 @@ func _test_siege_battle_then_progress_order() -> void:
 			== ActionCandidate.Kind.ATTACK
 		and reclaim_candidate.target_city
 			== siege_city,
-		"AI应主动进攻无守军的本国法理城市"
+		"兵力达到完整围城门槛后，AI应主动收复无守军的本国法理城市"
 	)
 	sim._start_or_join_siege(
-		weak_reclaimer,
+		empty_city_reclaimer,
 		gs.cities[siege_city],
 		road
 	)
 	_check(
-		gs.cities[siege_city].owner_nation == legal_owner
-		and weak_reclaimer.location_city == siege_city
-		and gs.battles.is_empty(),
-		"无守军的本国法理城市应立即收复，不受普通城防门槛阻挡"
+		gs.cities[siege_city].owner_nation == occupier
+		and gs.battles.size() == 1
+		and gs.battles[0].kind == Battle.Kind.SIEGE,
+		"收复无守军的本国法理城市也必须建立围城，不再瞬间恢复"
 	)
 
+	gs.armies.clear()
+	gs.battles.clear()
 	gs.cities[siege_city].owner_nation = occupier
 	var reclaimer := _make_army(
 		703,
@@ -4516,10 +4659,10 @@ func _test_siege_battle_then_progress_order() -> void:
 	var reclamation_battle: Battle = gs.battles[0]
 	sim._advance_siege(reclamation_battle)
 	_check(
-		gs.cities[siege_city].owner_nation == legal_owner
-		and reclamation_battle.finished
-		and reclaimer.location_city == siege_city,
-		"击败占领军后应立即收复本国法理城市，不得胜而不占"
+		gs.cities[siege_city].owner_nation == occupier
+		and not reclamation_battle.finished
+		and not reclamation_battle.has_garrison,
+		"击败占领军后不再瞬间收复：转入纯围城阶段，仍须累积破城进度"
 	)
 	sim.free()
 
@@ -8082,6 +8225,46 @@ func _test_manpower_pool_and_force_commands() -> void:
 			),
 		"和平或战争时期都应逐编制结算维护费并记录实际支付率"
 	)
+	finance_state.uses_heightmap = true
+	for city in finance_state.cities_of(0):
+		city.gold_per_month = 0
+	finance_state.nations[0].food_demand_ema = 0.0
+	finance_state.deposit_food(0, 1000000)
+	var upkeep_before_financial_demobilization := (
+		finance_state.nation_monthly_military_upkeep(0)
+	)
+	var finance_view := AiWorldView.build(
+		finance_state,
+		0
+	)
+	var finance_snapshot := StrategicMapSnapshot.build(
+		finance_view
+	)
+	var finance_threat := ThreatField.build(finance_view)
+	var finance_plan := CityDefensePlan.build(
+		finance_view,
+		finance_snapshot,
+		finance_threat
+	)
+	var financial_demobilized := (
+		finance_sim._ai_manage_force_structure(
+			finance_view,
+			finance_snapshot,
+			finance_threat,
+			finance_plan
+		)
+	)
+	_check(
+		financial_demobilized
+			and finance_state.nation_monthly_military_upkeep(0)
+				< upkeep_before_financial_demobilization
+			and finance_state.nations[
+				0
+			].ai_last_force_reason.contains(
+				"军费赤字缩编"
+			),
+		"国库为0且存在未付军费时，军制AI必须主动缩编并降低月维护费"
+	)
 	finance_sim.free()
 
 	var force_state := GameState.new()
@@ -8511,13 +8694,15 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
 	_check(
-		nation_lines.size() == 3
+		nation_lines.size() == 4
 		and nation_lines[0].contains("金")
-		and nation_lines[1].contains("军费")
-		and nation_lines[1].contains("支付")
-		and nation_lines[2].contains("粮")
-		and nation_lines[2].contains("盟"),
-		"国家详情卡必须独立展示财政、军费支付率、粮食和外交状态"
+		and nation_lines[1].contains("月净")
+		and nation_lines[1].contains("贡赋")
+		and nation_lines[2].contains("军费")
+		and nation_lines[2].contains("支付")
+		and nation_lines[3].contains("粮")
+		and nation_lines[3].contains("盟"),
+		"国家详情卡必须独立展示财政、贡赋、军费支付率、粮食和外交状态"
 	)
 	_check(
 		gs.has_military_access(0, 1)
@@ -13372,6 +13557,49 @@ func _test_vassal_tribute() -> void:
 		"贡赋按国库余额封顶，不得使藩王国库为负（实为 %d）" % gs.nations[2].treasury_gold
 	)
 
+	# 财政派生必须与真实月结算同源：城市税收 + 贡赋流入 - 贡赋流出 - 军费。
+	for nation in gs.nations:
+		nation.treasury_gold = 100000
+	var predicted_flows := Simulation.monthly_gold_flows(
+		gs
+	)
+	var treasury_before_month: Array[int] = []
+	var reports_match_flows := true
+	var report_cache := {}
+	for nation in gs.nations:
+		treasury_before_month.append(nation.treasury_gold)
+		var report := DiplomacyAI.resource_report(
+			gs,
+			nation.id,
+			report_cache
+		)
+		var flow: Dictionary = predicted_flows[nation.id]
+		reports_match_flows = (
+			reports_match_flows
+			and int(report["monthly_city_gold_income"])
+				== int(flow["city_income"])
+			and int(report["monthly_tribute_income"])
+				== int(flow["tribute_received"])
+			and int(report["monthly_tribute_expense"])
+				== int(flow["tribute_paid"])
+			and int(report["monthly_gold_balance"])
+				== int(flow["balance"])
+		)
+	sim._resolve_economy()
+	var settlement_matches_prediction := true
+	for nation in gs.nations:
+		settlement_matches_prediction = (
+			settlement_matches_prediction
+			and nation.treasury_gold
+				- treasury_before_month[nation.id]
+				== int(predicted_flows[nation.id]["balance"])
+		)
+	_check(
+		reports_match_flows
+			and settlement_matches_prediction,
+		"前端/AI财政派生必须逐国等于真实月结算国库变化（含多级贡赋）"
+	)
+
 	# 端到端：完整推进一个月，藩王必有正税收并向宗主净转移金钱。
 	var e2e := GameState.new()
 	e2e.generate_grid_world(32042)
@@ -13400,8 +13628,252 @@ func _test_vassal_tribute() -> void:
 		e2e_subject > 0 and overlord_gain > 0 and total_system_after >= total_system_before,
 		"端到端一个月后宗主应收到藩王贡赋（overlord_gain=%d）" % overlord_gain
 	)
+
+	# 长期财政压力：藩王月亏、宗主靠贡赋恰好覆盖军费且国库始终为 0。
+	# 藩王 AI 应在首月缩编到收支平衡，后续月份不得因旧 unpaid 记录重复缩编；
+	# 宗主月净为 0，不应仅因国库为 0 被误判为财政危机。
+	var crisis := GameState.new()
+	crisis.generate_grid_world(32043)
+	crisis.armies.clear()
+	crisis.battles.clear()
+	crisis.uses_heightmap = true
+	for a in range(crisis.nations.size()):
+		for b in range(a + 1, crisis.nations.size()):
+			crisis.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	for nation in crisis.nations:
+		nation.warehouse_city_ids.clear()
+		nation.battle_groups.clear()
+		nation.next_battle_group_id = 0
+	for city in crisis.cities:
+		city.owner_nation = 0
+		crisis.recognized_city_owners[city.id] = 0
+		city.gold_per_month = 0
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+	var overlord_id := 0
+	var subject_id := 1
+	var overlord_city := 0
+	var subject_city := 1
+	crisis.cities[subject_city].owner_nation = subject_id
+	crisis.recognized_city_owners[subject_city] = subject_id
+	crisis.cities[subject_city].gold_per_month = 10
+	crisis.nations[overlord_id].capital_city_id = overlord_city
+	crisis.nations[subject_id].capital_city_id = subject_city
+	crisis.cities[overlord_city].is_capital = true
+	crisis.cities[overlord_city].has_warehouse = true
+	crisis.cities[overlord_city].food_storage = 1000000
+	crisis.nations[overlord_id].warehouse_city_ids = [
+		overlord_city
+	] as Array[int]
+	crisis.cities[subject_city].is_capital = true
+	crisis.set_diplomatic_relation(
+		overlord_id,
+		subject_id,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	crisis.suzerainty[subject_id] = {
+		"overlord_id": overlord_id,
+		"tribute_rate": 0.25,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	crisis.refresh_derived()
+	var subject_city_income := Simulation.city_gold_output(
+		crisis,
+		crisis.cities[subject_city]
+	)
+	var subject_tribute := int(floor(
+		float(subject_city_income)
+		* Simulation.effective_tribute_rate(
+			crisis,
+			subject_id
+		)
+	))
+	var overlord_army := crisis.create_army(
+		overlord_id,
+		overlord_city,
+		subject_tribute
+			* GameState.WAR_GOLD_TROOPS_PER_UNIT,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var subject_light_a := crisis.create_army(
+		subject_id,
+		subject_city,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var subject_light_b := crisis.create_army(
+		subject_id,
+		subject_city,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	var subject_heavy := crisis.create_army(
+		subject_id,
+		subject_city,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	for nation in crisis.nations:
+		nation.treasury_gold = 0
+		nation.manpower_pool = 0
+		nation.food_demand_ema = 0.0
+	var crisis_sim := Simulation.new()
+	crisis_sim.diplomacy_enabled = false
+	crisis_sim.setup(crisis)
+	var initial_flows := Simulation.monthly_gold_flows(
+		crisis
+	)
+	var initial_subject_upkeep := int(
+		initial_flows[subject_id]["military_upkeep"]
+	)
+	var expected_subject_deficit := -int(
+		initial_flows[subject_id]["balance"]
+	)
+	var overlord_treasuries: Array[int] = []
+	var subject_treasuries: Array[int] = []
+	var subject_unpaid: Array[int] = []
+	var subject_upkeep_after_ai: Array[int] = []
+	var subject_demobilized: Array[bool] = []
+	var overlord_demobilized: Array[bool] = []
+	for month_index in range(6):
+		crisis.day = (
+			(month_index + 1)
+			* Simulation.DAYS_PER_MONTH
+		)
+		crisis_sim._resolve_economy()
+		overlord_treasuries.append(
+			crisis.nations[overlord_id].treasury_gold
+		)
+		subject_treasuries.append(
+			crisis.nations[subject_id].treasury_gold
+		)
+		subject_unpaid.append(
+			crisis.nations[
+				subject_id
+			].unpaid_military_upkeep
+		)
+		var subject_view := AiWorldView.build(
+			crisis,
+			subject_id
+		)
+		var subject_snapshot := StrategicMapSnapshot.build(
+			subject_view
+		)
+		var subject_threat := ThreatField.build(
+			subject_view
+		)
+		subject_demobilized.append(
+			crisis_sim._ai_manage_force_structure(
+				subject_view,
+				subject_snapshot,
+				subject_threat,
+				CityDefensePlan.build(
+					subject_view,
+					subject_snapshot,
+					subject_threat
+				)
+			)
+		)
+		subject_upkeep_after_ai.append(
+			crisis.nation_monthly_military_upkeep(
+				subject_id
+			)
+		)
+		var overlord_view := AiWorldView.build(
+			crisis,
+			overlord_id
+		)
+		var overlord_snapshot := StrategicMapSnapshot.build(
+			overlord_view
+		)
+		var overlord_threat := ThreatField.build(
+			overlord_view
+		)
+		overlord_demobilized.append(
+			crisis_sim._ai_manage_force_structure(
+				overlord_view,
+				overlord_snapshot,
+				overlord_threat,
+				CityDefensePlan.build(
+					overlord_view,
+					overlord_snapshot,
+					overlord_threat
+				)
+			)
+		)
+	var all_overlord_zero := true
+	var all_subject_zero := true
+	var no_repeat_demobilization := true
+	var overlord_never_demobilized := true
+	for month_index in range(6):
+		all_overlord_zero = (
+			all_overlord_zero
+			and overlord_treasuries[month_index] == 0
+		)
+		all_subject_zero = (
+			all_subject_zero
+			and subject_treasuries[month_index] == 0
+		)
+		if month_index > 0:
+			no_repeat_demobilization = (
+				no_repeat_demobilization
+				and not subject_demobilized[month_index]
+			)
+		overlord_never_demobilized = (
+			overlord_never_demobilized
+			and not overlord_demobilized[month_index]
+		)
+	var balanced_upkeep := (
+		subject_city_income - subject_tribute
+	)
+	_check(
+		overlord_army != null
+			and subject_light_a != null
+			and subject_light_b != null
+			and subject_heavy != null
+			and int(initial_flows[overlord_id]["balance"])
+				== 0
+			and expected_subject_deficit > 0
+			and subject_demobilized[0]
+			and subject_upkeep_after_ai[0]
+				== balanced_upkeep
+			and subject_unpaid[0]
+				== expected_subject_deficit
+			and subject_unpaid[1] == 0
+			and no_repeat_demobilization
+			and overlord_never_demobilized
+			and all_overlord_zero
+			and all_subject_zero,
+		"长期贡赋财政：藩王首月应缩编至平衡、后续不重复缩编；宗主国库0但月净0不得误裁军"
+	)
+	print(
+		"  [32d-finance] 城收=%d 贡赋=%d 藩王军费=%d→%d 月亏=%d "
+		% [
+			subject_city_income,
+			subject_tribute,
+			initial_subject_upkeep,
+			subject_upkeep_after_ai[0],
+			expected_subject_deficit,
+		]
+		+ "藩王国库=%s 未付=%s 缩编=%s 宗主国库=%s 宗主缩编=%s"
+		% [
+			str(subject_treasuries),
+			str(subject_unpaid),
+			str(subject_demobilized),
+			str(overlord_treasuries),
+			str(overlord_demobilized),
+		]
+	)
 	sim.free()
 	e2e_sim.free()
+	crisis_sim.free()
 
 
 # ------------------------------------------------------------------ 32e. 区域负担评估与分封 AI（增量 B3）
@@ -14278,24 +14750,45 @@ func _test_suzerainty_enclave_self_healing() -> void:
 	}
 	sb.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.WAR)
 	sb.set_diplomatic_relation(1, 3, GameState.DiplomaticRelation.WAR)
+	var sb_garrison := _make_army(12990, 1, 5000, 10, 10)
+	sb_garrison.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	sb_garrison.location_city = 3
+	sb_garrison.move_from = 3
+	sb_garrison.state = Army.State.IDLE
+	sb.armies.append(sb_garrison)
 	sb.refresh_derived()
 	var sb_sim := Simulation.new()
 	sb_sim.setup(sb)
 	sb_sim._reassign_disconnected_suzerainty_enclaves()
 	_check(
+		sb.cities[3].owner_nation == 1
+			and sb.cities[4].owner_nation == 1
+			and sb_garrison.size == 5000,
+		(
+			"战争飞地内仍有本体系守军时不得被每日自愈直接吞并或删除驻军"
+			+ "（3=%d 4=%d 守军=%d）"
+		) % [
+			sb.cities[3].owner_nation,
+			sb.cities[4].owner_nation,
+			sb_garrison.size,
+		]
+	)
+	sb_garrison.size = 0
+	sb_sim._reassign_disconnected_suzerainty_enclaves()
+	_check(
 		sb.cities[3].owner_nation == 3
 			and sb.cities[4].owner_nation == 3
 			and sb.suzerainty_structure_valid(),
-		"完全包围割敌：藩王飞地 {3,4} 无体系连通邻居须割给敌国3（3=%d 4=%d）"
+		"守军消灭后完全包围的藩王飞地 {3,4} 才可割给敌国3（3=%d 4=%d）"
 			% [sb.cities[3].owner_nation, sb.cities[4].owner_nation]
 	)
 	sb_sim.free()
 
 
-# ------------------------------------------------------------------ 32i5. 藩王只管 LINE、MAIN 归宗主
+# ------------------------------------------------------------------ 32i5. 藩王 MAIN 封国内线指挥
 
-func _test_vassal_line_only_command() -> void:
-	print("[32i5] 藩王简化：分封赐城数LINE军、藩王禁征MAIN、藩王跳过攻势外交")
+func _test_vassal_local_main_command() -> void:
+	print("[32i5] 藩王军制：分封赐LINE、自主征MAIN、封国内线换防与法理收复")
 	var gs := GameState.new()
 	gs.generate_grid_world(52001)
 	for a in range(gs.nations.size()):
@@ -14310,7 +14803,7 @@ func _test_vassal_line_only_command() -> void:
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0, "分封应成功建立藩王")
 
-	# 赐军：藩王 LINE 军数量 = 其陆城数；无 MAIN；无战团。
+	# 分封当下只赐军：藩王 LINE 军数量 = 其陆城数；MAIN 留待后续自费组建。
 	var land := gs.land_cities_of(subject).size()
 	var line_n := 0
 	var main_n := 0
@@ -14326,19 +14819,75 @@ func _test_vassal_line_only_command() -> void:
 			% [line_n, land, main_n, gs.nations[subject].battle_groups.size()]
 	)
 
-	# 征召门控：藩王征 MAIN（重编制）必被拒；LINE 仍可征。
+	# 藩王可用自身资源组建 MAIN 战团。
 	var sim := Simulation.new()
 	sim.setup(gs)
+	gs.uses_heightmap = true
 	gs.nations[subject].treasury_gold = 100000
 	gs.nations[subject].manpower_pool = 100000
 	var cap := gs.nations[subject].capital_city_id
-	var vassal_group := gs.create_battle_group(subject)
-	var denied_main := sim._create_army_for_nation(
-		subject, cap, GameState.INITIAL_HEAVY_ARMY_SIZE, "试图征MAIN", true, vassal_group.id
+	gs.deposit_food(0, 100000)
+	var initial_view := AiWorldView.build(gs, subject)
+	var initial_snapshot := StrategicMapSnapshot.build(
+		initial_view
 	)
-	# 清掉为测试建的空战团，避免污染结构。
-	gs.nations[subject].battle_groups.erase(vassal_group)
-	_check(denied_main == null, "藩王征召 MAIN 重军团必须被拒绝")
+	var initial_threat := ThreatField.build(initial_view)
+	var initial_plan := CityDefensePlan.build(
+		initial_view,
+		initial_snapshot,
+		initial_threat
+	)
+	var autonomous_recruited := (
+		sim._ai_manage_force_structure(
+			initial_view,
+			initial_snapshot,
+			initial_threat,
+			initial_plan
+		)
+	)
+	var vassal_group: BattleGroup = (
+		gs.nations[subject].battle_groups[0]
+		if not gs.nations[
+			subject
+		].battle_groups.is_empty()
+		else null
+	)
+	var autonomous_main: Army = null
+	if vassal_group != null:
+		var autonomous_members := (
+			gs.battle_group_members(
+				subject,
+				vassal_group.id
+			)
+		)
+		if not autonomous_members.is_empty():
+			autonomous_main = autonomous_members[0]
+	_check(
+		autonomous_recruited
+			and autonomous_main != null
+			and autonomous_main.is_main_battle_role(),
+		"资源充足时藩王 AI 应自主创建第一支 MAIN 战团"
+	)
+	if vassal_group == null or autonomous_main == null:
+		sim.free()
+		return
+	var vassal_main := sim._create_army_for_nation(
+		subject,
+		cap,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		"藩王组建内线MAIN",
+		true,
+		vassal_group.id if vassal_group != null else -1
+	)
+	_check(
+		vassal_main != null
+			and vassal_main.owner_nation == subject
+			and vassal_main.is_main_battle_role(),
+		"藩王应能以本国资源组建自有 MAIN 战团"
+	)
+	if vassal_main == null:
+		sim.free()
+		return
 
 	# 对照：宗主 0 征 MAIN 应成功（宗主可建主战力）。
 	gs.nations[0].treasury_gold = 100000
@@ -14351,6 +14900,129 @@ func _test_vassal_line_only_command() -> void:
 	_check(
 		overlord_main != null and overlord_main.is_main_battle_role(),
 		"宗主必须能征召 MAIN 主战军团（对照）"
+	)
+
+	# 平时 MAIN 归入完整战团并驻扎在本藩王重点城市。
+	var reserve_view := AiWorldView.build(gs, subject)
+	var reserve_snapshot := StrategicMapSnapshot.build(
+		reserve_view
+	)
+	var reserve_threat := ThreatField.build(reserve_view)
+	var reserve_plan := CityDefensePlan.build(
+		reserve_view,
+		reserve_snapshot,
+		reserve_threat
+	)
+	var reserve_city := reserve_plan.assigned_city_for(
+		vassal_main
+	)
+	_check(
+		reserve_plan.vassal_main_reserve_city_count() >= 1
+			and reserve_city >= 0
+			and gs.cities[reserve_city].owner_nation
+				== subject,
+		"藩王 MAIN 必须被分配到本国重点城市（reserve=%d count=%d）"
+			% [
+				reserve_city,
+				reserve_plan.vassal_main_reserve_city_count(),
+			]
+	)
+
+	# 战时本藩王防区内换防：任一本国城市被围后，完整 MAIN 战团优先调往该城解围。
+	var relief_city := -1
+	for neighbor in gs.neighbors(cap):
+		var edge := gs.edge_of(cap, neighbor)
+		if (
+			gs.cities[neighbor].owner_nation == subject
+			and edge != null
+			and edge.max_manpower
+				>= GameState.INITIAL_HEAVY_ARMY_SIZE
+		):
+			relief_city = neighbor
+			break
+	_check(relief_city >= 0, "藩王换防测试需要第二座封地城市")
+	var enemy_id := 1
+	gs.set_diplomatic_relation(
+		subject,
+		enemy_id,
+		GameState.DiplomaticRelation.WAR
+	)
+	var besieger := _make_army(
+		9701,
+		enemy_id,
+		5000,
+		10
+	)
+	besieger.state = Army.State.FIGHTING
+	besieger.location_city = relief_city
+	besieger.move_from = relief_city
+	gs.armies.append(besieger)
+	var relief_siege := gs.new_battle(Battle.Kind.SIEGE)
+	relief_siege.city = gs.cities[relief_city]
+	relief_siege.side_a.append(besieger)
+	besieger.battle_id = relief_siege.id
+	var relief_view := AiWorldView.build(gs, subject)
+	var relief_plan := CityDefensePlan.build(
+		relief_view,
+		StrategicMapSnapshot.build(relief_view),
+		ThreatField.build(relief_view)
+	)
+	var relief_candidate := relief_plan.candidate_for(
+		vassal_main,
+		ArmyCoordinator.new()
+	)
+	_check(
+		relief_plan.assigned_city_for(vassal_main)
+				== relief_city
+			and relief_candidate != null
+			and relief_candidate.kind
+				== ActionCandidate.Kind.REINFORCE
+			and relief_candidate.target_city
+				== relief_city,
+		"战时藩王 MAIN 应在本防区换防并增援被围城市%d"
+			% relief_city
+	)
+
+	# 法理失地收复：失守封地是唯一允许的攻击目标，且仍按普通围城门槛评估。
+	gs.battles.clear()
+	gs.armies.erase(besieger)
+	for army in gs.armies.duplicate():
+		if army.owner_nation == enemy_id:
+			gs.armies.erase(army)
+	gs.cities[relief_city].owner_nation = enemy_id
+	gs.recognized_city_owners[relief_city] = subject
+	gs.cities[relief_city].fort_strength = 1
+	gs.ownership_revision += 1
+	gs.deposit_food(0, 100000)
+	var reclaim_view := AiWorldView.build(gs, subject)
+	var reclaim_snapshot := StrategicMapSnapshot.build(
+		reclaim_view
+	)
+	var reclaim_candidate := UtilityAI.choose(
+		reclaim_view,
+		reclaim_snapshot,
+		ThreatField.build(reclaim_view),
+		ArmyCoordinator.new(),
+		vassal_main,
+		UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO,
+		CityDefensePlan.build(
+			reclaim_view,
+			reclaim_snapshot,
+			ThreatField.build(reclaim_view)
+		)
+	)
+	_check(
+		reclaim_candidate.kind
+				== ActionCandidate.Kind.ATTACK
+			and reclaim_candidate.target_city
+				== relief_city,
+		"藩王 MAIN 应主动收复本国法理失地%d，不得攻击其他敌城（kind=%d target=%d reason=%s）"
+			% [
+				relief_city,
+				reclaim_candidate.kind,
+				reclaim_candidate.target_city,
+				reclaim_candidate.reason,
+			]
 	)
 
 	# 攻势外交门控：藩王与敌国交战也不主动宣战（进攻性外交由宗主代理）。
@@ -14436,7 +15108,7 @@ func _test_stranded_hostile_army_eviction() -> void:
 # ------------------------------------------------------------------ 32j. 分封战争加成 + 藩王首都失陷不投降
 
 func _test_vassal_wartime_support_and_capital() -> void:
-	print("[32j] 分封战争加成：前线藩王上交机动军团、后方藩王提贡赋、藩王首都失陷不投降割地")
+	print("[32j] 分封战争加成：前线藩王自有军团守土、后方藩王提贡赋、藩王首都失陷不投降割地")
 	var gs := GameState.new()
 	gs.generate_grid_world(32095)
 	for a in range(gs.nations.size()):
@@ -14498,7 +15170,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 			]
 	)
 
-	# 给前线藩王一支静止在本土的 MAIN 战团（重军），验证战时上交宗主。
+	# 给前线藩王一支静止在本土的 MAIN 战团（重军），验证战时仍归藩王守土。
 	# 复用藩王已有军队并迁到封地首都：新建会撞军队数上限（藩王城少、配额已被
 	# 网格初始填线军占满），故改造既有军队为静止 MAIN，语义等价且不违反数量约束。
 	var heavy: Army = null
@@ -14520,19 +15192,12 @@ func _test_vassal_wartime_support_and_capital() -> void:
 	var fg := gs.create_battle_group(front_vassal)
 	gs.assign_army_to_battle_group(heavy, fg.id)
 	var heavy_id := heavy.id
-	var moved := gs.transfer_main_battle_groups_to_overlord(front_vassal)
-	var transferred_army: Army = null
-	for army in gs.armies:
-		if army.id == heavy_id:
-			transferred_army = army
 	_check(
-		moved >= 1
-			and transferred_army != null
-			and transferred_army.owner_nation == overlord
+		heavy.owner_nation == front_vassal
 			and gs._battle_group_structure_valid()
 			and gs.suzerainty_structure_valid(),
-		"前线藩王的静止 MAIN 战团须整团上交宗主作中央机动军（moved=%d owner=%d）"
-			% [moved, transferred_army.owner_nation if transferred_army else -1]
+		"前线藩王的 MAIN 战团必须保留本国所有权、只承担封地防御（army=%d owner=%d）"
+			% [heavy_id, heavy.owner_nation]
 	)
 
 	# 战时贡赋：结算后后方藩王按提升率上缴、前线藩王不被强制加税。
@@ -14552,6 +15217,13 @@ func _test_vassal_wartime_support_and_capital() -> void:
 			and gs.nations[front_vassal].treasury_gold == 1000 - 25,
 		"战时后方藩王按提升率上缴、前线藩王按原率（后方余%d 前线余%d）"
 			% [gs.nations[rear_vassal].treasury_gold, gs.nations[front_vassal].treasury_gold]
+	)
+	sim._resolve_economy()
+	_check(
+		heavy.owner_nation == front_vassal
+			and heavy.battle_group_id == fg.id,
+		"战时经济结算不得抽调前线藩王 MAIN（owner=%d group=%d）"
+			% [heavy.owner_nation, heavy.battle_group_id]
 	)
 	sim.free()
 

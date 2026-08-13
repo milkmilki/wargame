@@ -49,7 +49,7 @@ const CITY_FORT_RECOVERY_DAYS: int = 365
 const CAPITAL_FOOD_CAPTURE_RATE: float = 0.30 ## 首都失守时库存缴获比例，其余损毁
 const CAPITAL_CAPITULATION_CESSION_DEPTH: int = 2
 ## 分封战争加成：宗藩体系处于对外战争时，「不接壤敌国」的后方藩王把贡赋率临时提到此值，
-## 用后方财税支撑中央战争机器；接壤敌国的前线藩王不加税、改为自守边疆并上交机动军团。
+## 用后方财税支撑中央战争机器；接壤敌国的前线藩王不加税、以自有军团守卫封地。
 const VASSAL_WARTIME_REAR_TRIBUTE_RATE: float = 0.60
 # ---- 遭遇战触发 ----
 ## 边内接触阈值（以边长归一化的 move_progress 为单位，即 [0,1] 区间）。
@@ -712,6 +712,122 @@ func _expire_offensive_bonuses() -> void:
 
 # ------------------------------------------------------------------ 1. 经济
 
+## 宗藩体系是否正处于对外战争。削藩内战不算体系外战。
+static func suzerainty_system_at_war(
+	game_state: GameState,
+	subject_id: int
+) -> bool:
+	if game_state.is_in_civil_war(subject_id):
+		return false
+	var root := game_state.suzerainty_root(subject_id)
+	for member in game_state.suzerainty_members(root):
+		if not game_state.wars_of(member).is_empty():
+			return true
+	return false
+
+
+## 当月有效贡赋率的单一真源：后方藩王在体系外战期间提高贡赋，
+## 前线藩王维持记录中的基础税率。
+static func effective_tribute_rate(
+	game_state: GameState,
+	subject_id: int
+) -> float:
+	if (
+		subject_id < 0
+		or subject_id >= game_state.nations.size()
+		or not game_state.suzerainty.has(subject_id)
+	):
+		return 0.0
+	var rate := float(
+		game_state.suzerainty[subject_id].get(
+			"tribute_rate",
+			0.0
+		)
+	)
+	if (
+		suzerainty_system_at_war(game_state, subject_id)
+		and not game_state.vassal_borders_system_enemy(
+			subject_id
+		)
+	):
+		rate = maxf(
+			rate,
+			VASSAL_WARTIME_REAR_TRIBUTE_RATE
+		)
+	return clampf(rate, 0.0, 1.0)
+
+
+## 全体国家下一次月结算的财政派生。贡赋只对藩王自己的城市税收计征，
+## 不对下级藩王汇入的贡赋重复征税；因此逐级宗藩与结算遍历顺序无关。
+static func monthly_gold_flows(
+	game_state: GameState
+) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for nation in game_state.nations:
+		result.append({
+			"nation_id": nation.id,
+			"city_income": 0,
+			"tribute_received": 0,
+			"tribute_paid": 0,
+			"net_income": 0,
+			"military_upkeep":
+				game_state.nation_monthly_military_upkeep(
+					nation.id
+				),
+			"balance": 0,
+		})
+	for city in game_state.cities:
+		if (
+			city.owner_nation < 0
+			or city.owner_nation >= result.size()
+		):
+			continue
+		result[city.owner_nation]["city_income"] = (
+			int(result[city.owner_nation]["city_income"])
+			+ city_gold_output(game_state, city)
+		)
+	for subject_value in game_state.suzerainty:
+		var subject_id := int(subject_value)
+		var overlord_id := game_state.overlord_of(
+			subject_id
+		)
+		if (
+			subject_id < 0
+			or subject_id >= result.size()
+			or overlord_id < 0
+			or overlord_id >= result.size()
+		):
+			continue
+		var tribute := int(floor(
+			float(result[subject_id]["city_income"])
+			* effective_tribute_rate(
+				game_state,
+				subject_id
+			)
+		))
+		result[subject_id]["tribute_paid"] = (
+			int(result[subject_id]["tribute_paid"])
+			+ tribute
+		)
+		result[overlord_id]["tribute_received"] = (
+			int(result[overlord_id]["tribute_received"])
+			+ tribute
+		)
+	for nation_id in range(result.size()):
+		var report: Dictionary = result[nation_id]
+		var net_income := (
+			int(report["city_income"])
+			+ int(report["tribute_received"])
+			- int(report["tribute_paid"])
+		)
+		report["net_income"] = net_income
+		report["balance"] = (
+			net_income
+			- int(report["military_upkeep"])
+		)
+	return result
+
+
 func _resolve_economy() -> void:
 	# 累计每国当月金钱税收（含战乱减产），作为贡赋基数。
 	var gold_income: Array[int] = []
@@ -725,8 +841,6 @@ func _resolve_economy() -> void:
 		nation.manpower_pool += city.manpower_per_month
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
-	# 分封战争加成：前线藩王上交机动军团给中央（每月评估，随体系战争态与接壤态动态生效）。
-	_resolve_vassal_wartime_mobilization()
 	_resolve_military_finance()
 	if state.day % DAYS_PER_HALF_YEAR == 0:
 		var produced: Array[int] = []
@@ -758,14 +872,10 @@ func _resolve_tribute(gold_income: Array[int]) -> void:
 			or overlord_id >= state.nations.size()
 		):
 			continue
-		var rate := float(state.suzerainty[subject_id].get("tribute_rate", 0.0))
-		# 分封战争加成（后方藩王）：体系对外战争期间，不接壤敌国的后方藩王临时提高贡赋率，
-		# 用后方财税供养中央战争机器。接壤敌国的前线藩王不加税（改为自守+上交军团）。
-		if (
-			_suzerainty_system_at_war(subject_id)
-			and not state.vassal_borders_system_enemy(subject_id)
-		):
-			rate = maxf(rate, VASSAL_WARTIME_REAR_TRIBUTE_RATE)
+		var rate := effective_tribute_rate(
+			state,
+			subject_id
+		)
 		if rate <= 0.0:
 			continue
 		var subject_nation := state.nations[subject_id]
@@ -777,38 +887,6 @@ func _resolve_tribute(gold_income: Array[int]) -> void:
 			continue
 		subject_nation.treasury_gold -= tribute
 		state.nations[overlord_id].treasury_gold += tribute
-
-
-## 藩王所属宗藩体系是否正处于对外战争（体系对外共同体化，用体系任一成员的对外敌对判定）。
-## 削藩内战不算「对外战争」：内战期宗主↔藩王为 WAR，但那是体系内部冲突，不触发战争动员。
-func _suzerainty_system_at_war(subject_id: int) -> bool:
-	if state.is_in_civil_war(subject_id):
-		return false
-	var root := state.suzerainty_root(subject_id)
-	for member in state.suzerainty_members(root):
-		if not state.wars_of(member).is_empty():
-			return true
-	return false
-
-
-## 分封战争加成（前线藩王）：体系对外战争期间，接壤敌国的前线藩王自守边疆，
-## 并把静止在本土的整支 MAIN 机动军团上交中央（直接宗主），转为中央可自由调度的机动兵力。
-## 每月经济结算时评估一次；只迁完整静止 MAIN 战团，不撕裂战团、不打断行军/战斗（守恒）。
-func _resolve_vassal_wartime_mobilization() -> void:
-	for subject_value in state.suzerainty.keys():
-		var subject_id := int(subject_value)
-		if (
-			subject_id < 0
-			or subject_id >= state.nations.size()
-			or not state.nations[subject_id].alive
-			or state.is_in_civil_war(subject_id)
-			or not _suzerainty_system_at_war(subject_id)
-			or not state.vassal_borders_system_enemy(subject_id)
-		):
-			continue
-		state.transfer_main_battle_groups_to_overlord(subject_id)
-
-
 ## 城市产出的就近治理倍率（钱/粮共用）：实控 owner 是藩王则 ×VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER，
 ## 否则 ×1。纯 owner 派生、无状态，与战乱减产正交相乘。是藩王产出加成的单一真源。
 static func city_governance_output_multiplier(
@@ -3104,7 +3182,8 @@ func _reassign_disconnected_suzerainty_enclaves() -> void:
 ## 处理单个宗藩体系（根 root、成员 members）的飞地。返回是否发生任何归属变更。
 ## connected = 从体系首都出发、沿「同体系成员实控 + 正容量道路」可达的全部城（体系本土）。
 ## 把每个「非本土」的体系城按其飞地连通组件聚合，逐组件决定统一归属：
-##  - 组件通过正容量道路与相邻敌国相接 → 整组件割给（决定性择一的）相邻敌国；
+##  - 组件通过正容量道路与相邻体系外国家相接 → 和平时可自动改归；战争时仅当组件内
+##    已无本体系守军，才整组件割给（决定性择一的）相邻敌国；
 ##  - 否则（内陆孤块，仅与体系自身相邻但仍连不回首都）→ 统一到组件内决定性择一的存活成员，
 ##    保证该孤块在单一旗号下内部连续、不再多旗碎裂。
 func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
@@ -3126,9 +3205,9 @@ func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 		if visited.has(seed_city):
 			continue
 		# BFS 出该飞地的连通组件（只沿体系成员实控的城 + 正容量道路），
-		# 同时记录组件外沿相邻的敌国（用于判断可否割敌）。
+		# 同时记录组件外沿相邻的体系外国家（用于决定和平改归或战争割敌）。
 		var component: Array[int] = []
-		var adjacent_enemy := -1
+		var adjacent_external_owner := -1
 		var queue: Array[int] = [seed_city]
 		visited[seed_city] = true
 		var cursor := 0
@@ -3146,18 +3225,35 @@ func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 						visited[neighbor] = true
 						queue.append(neighbor)
 				elif owner >= 0 and not member_set.has(owner):
-					# 组件外沿的敌国候选（决定性择一，观察者取体系根）。
+					# 组件外沿的接收方候选（决定性择一，观察者取体系根）。
 					if (
-						adjacent_enemy < 0
-						or EquivariantOrder.nation_less(state, root, owner, adjacent_enemy)
+						adjacent_external_owner < 0
+						or EquivariantOrder.nation_less(
+							state,
+							root,
+							owner,
+							adjacent_external_owner
+						)
 					):
-						adjacent_enemy = owner
+						adjacent_external_owner = owner
 		var recipient := (
-			adjacent_enemy
-			if adjacent_enemy >= 0
+			adjacent_external_owner
+			if adjacent_external_owner >= 0
 			else _dominant_component_member(component, root)
 		)
 		if recipient < 0:
+			continue
+		if (
+			adjacent_external_owner >= 0
+			and _enclave_component_at_war_with(
+				component,
+				recipient
+			)
+			and _enclave_component_has_system_army(
+				component,
+				member_set
+			)
+		):
 			continue
 		for cid in component:
 			var city := state.cities[cid]
@@ -3171,6 +3267,45 @@ func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 			state.recognized_city_owners[city.id] = recipient
 			changed = true
 	return changed
+
+
+func _enclave_component_at_war_with(
+	component: Array[int],
+	recipient: int
+) -> bool:
+	for city_id in component:
+		if state.is_enemy(
+			state.cities[city_id].owner_nation,
+			recipient
+		):
+			return true
+	return false
+
+
+func _enclave_component_has_system_army(
+	component: Array[int],
+	member_set: Dictionary
+) -> bool:
+	var component_set := {}
+	for city_id in component:
+		component_set[city_id] = true
+	for army in state.armies:
+		if (
+			army.size <= 0
+			or not member_set.has(army.owner_nation)
+		):
+			continue
+		if component_set.has(army.current_city_node()):
+			return true
+		if (
+			army.on_edge
+			and (
+				component_set.has(army.move_from)
+				or component_set.has(army.move_to)
+			)
+		):
+			return true
+	return false
 
 
 ## 飞地组件的体系内统一归属：取组件内已实控最多城的存活成员（并列时以根 root 为观察者
@@ -3731,6 +3866,7 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	# 军制调整只消耗本国资源；所有国家先基于同一时刻的冻结上下文决策。
+	var force_resource_cache := {}
 	for nation_id in managed_nations:
 		var context: Dictionary = force_contexts[nation_id]
 		_ai_manage_force_structure(
@@ -3738,7 +3874,8 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			context["snapshot"],
 			context["threat"],
 			context["defense_plan"],
-			true
+			true,
+			force_resource_cache
 		)
 		if (
 			spread_runtime_work
@@ -3798,9 +3935,12 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		var nation := state.nations[nation_id]
 		var defense_plan: CityDefensePlan = defense_plans[nation_id]
 		var coordinator: ArmyCoordinator = coordinators[nation_id]
-		# 藩王不做攻势规划：主战力与进攻指挥统一归宗主，藩王只管填线军守土（作战体系简化）。
-		# 独立 LINE 不进入正式地图攻势候选；只有归入持久战团并转为 MAIN 的军队才能参加攻势。
-		if state.is_vassal(nation_id):
+		# 藩王不做体系级攻势规划：自有 MAIN 只接受封国内线换防、解围和法理失地收复任务。
+		# 独立 LINE 继续只执行防区部署，不进入正式地图攻势候选。
+		if (
+			state.is_vassal(nation_id)
+			and not state.is_in_civil_war(nation_id)
+		):
 			pass
 		elif nation.war_preparation_target_nation >= 0:
 			_assign_offensive_staging_orders(
@@ -4340,7 +4480,8 @@ func _ai_manage_force_structure(
 	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
 	defense_plan: CityDefensePlan = null,
-	roles_reconciled: bool = false
+	roles_reconciled: bool = false,
+	resource_evaluation_cache: Dictionary = {}
 ) -> bool:
 	if not state.uses_heightmap:
 		return _split_army_for_narrow_objective(
@@ -4406,16 +4547,44 @@ func _ai_manage_force_structure(
 		view.friendly_armies
 	)
 	var food_pressure := bool(food_report["needs_demobilization"])
+	var gold_report := DiplomacyAI.resource_report(
+		state,
+		view.nation_id,
+		resource_evaluation_cache
+	)
+	var monthly_gold_balance := int(
+		gold_report["monthly_gold_balance"]
+	)
+	var gold_pressure := (
+		monthly_gold_balance < 0
+		and (
+			nation.unpaid_military_upkeep > 0
+			or float(gold_report["gold_runway_months"])
+				< float(
+					DiplomacyAI.CAMPAIGN_RESERVE_MONTHS
+				)
+		)
+	)
 	var food_growth_budget := _food_growth_manpower_budget(
 		food_report
 	)
-	if food_pressure and not emergency_recruitment:
-		if _demobilize_for_food_security(
+	var force_structure_target := (
+		total_line_target
+		+ nation.battle_groups.size() * 3
+	)
+	if not emergency_recruitment:
+		if food_pressure and _demobilize_for_food_security(
 			view,
 			threat,
 			food_report,
-			total_line_target
-				+ nation.battle_groups.size() * 3
+			force_structure_target
+		):
+			return true
+		if gold_pressure and _demobilize_for_gold_security(
+			view,
+			threat,
+			-monthly_gold_balance,
+			force_structure_target
 		):
 			return true
 	var protected_reserve := (
@@ -4433,11 +4602,52 @@ func _ai_manage_force_structure(
 			"group_id": -1,
 			"reason": "补充核心城市填线槽",
 		}
-	elif state.is_vassal(view.nation_id):
-		# 藩王只补 LINE 填线军、绝不组建 MAIN 战团（主战力归中央，藩王作战体系简化）。
-		# 主战 MAIN 只归宗主征召；藩王 MAIN 仅在削藩反抗时凭空起兵。缺 LINE 才补，否则不扩军。
+	elif (
+		state.is_vassal(view.nation_id)
+		and not state.is_in_civil_war(
+			view.nation_id
+		)
+	):
 		var vassal_line_deficit := maxi(total_line_target - line_armies, 0)
-		if vassal_line_deficit > 0:
+		# 一个重点驻防城市对应一个完整 MAIN 战团需求。城市集合由
+		# CityDefensePlan 的战略价值/补给单一派生。与 LINE 使用归一化
+		# 缺口竞争征兵资源，避免高边数封地永远补不出第一支 MAIN。
+		var target_group_count := maxi(
+			defense_plan.vassal_main_reserve_city_count(),
+			1
+		)
+		var target_main_armies := (
+			target_group_count * (
+				BattleGroup.MAX_LIGHT_ARMIES
+					+ BattleGroup.MAX_HEAVY_ARMIES
+			)
+		)
+		var vassal_main_deficit := maxi(
+			target_main_armies - main_armies,
+			0
+		)
+		var main_deficit_ratio := (
+			float(vassal_main_deficit)
+			/ float(target_main_armies)
+		)
+		var line_deficit_ratio := (
+			float(vassal_line_deficit)
+			/ float(maxi(total_line_target, 1))
+		)
+		if (
+			vassal_main_deficit > 0
+			and (
+				vassal_line_deficit <= 0
+				or main_deficit_ratio
+					>= line_deficit_ratio
+			)
+		):
+			recruitment = _next_battle_group_recruitment(
+				view.nation_id,
+				nation.battle_groups.size()
+					< target_group_count
+			)
+		elif vassal_line_deficit > 0:
 			recruitment = {
 				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
 				"group_id": -1,
@@ -8375,15 +8585,174 @@ func _demobilize_for_food_security(
 	return true
 
 
+func _demobilize_for_gold_security(
+	view: AiWorldView,
+	threat: ThreatField,
+	required_savings: int,
+	target_count: int
+) -> bool:
+	if required_savings <= 0:
+		return false
+	var candidates: Array[Army] = []
+	for army in view.friendly_armies:
+		if (
+			army.state != Army.State.IDLE
+			or army.location_city < 0
+			or state.cities[
+				army.location_city
+			].owner_nation != view.nation_id
+			or threat.threat_at(army.location_city)
+				>= ArmyPower.effective(army)
+		):
+			continue
+		candidates.append(army)
+	candidates.sort_custom(func(a: Army, b: Army) -> bool:
+		var upkeep_a := GameState.army_monthly_upkeep(
+			a.size
+		)
+		var upkeep_b := GameState.army_monthly_upkeep(
+			b.size
+		)
+		if upkeep_a != upkeep_b:
+			return upkeep_a > upkeep_b
+		return EquivariantOrder.army_less(
+			state,
+			view.nation_id,
+			a,
+			b
+		)
+	)
+	if candidates.is_empty():
+		return false
+	var remaining_savings := required_savings
+	var total_saved := 0
+	var total_returned := 0
+	var total_food_saved := 0.0
+	var active_count := view.friendly_armies.size()
+	for army in candidates:
+		if remaining_savings <= 0:
+			break
+		var current_upkeep := (
+			GameState.army_monthly_upkeep(army.size)
+		)
+		var minimum_size := int(ceil(
+			float(army.max_size)
+			* PEACETIME_STRENGTH_RATIO
+		))
+		if active_count > target_count:
+			minimum_size = 0
+		var minimum_upkeep := (
+			GameState.army_monthly_upkeep(minimum_size)
+		)
+		var possible_savings := (
+			current_upkeep - minimum_upkeep
+		)
+		if possible_savings <= 0:
+			continue
+		var requested_savings := mini(
+			remaining_savings,
+			possible_savings
+		)
+		var target_upkeep := (
+			current_upkeep - requested_savings
+		)
+		var target_size := maxi(
+			minimum_size,
+			target_upkeep
+				* GameState.WAR_GOLD_TROOPS_PER_UNIT
+		)
+		target_size = mini(target_size, army.size)
+		var demand_before := _projected_army_food_demand(
+			army
+		)
+		var returned := army.size - target_size
+		if returned <= 0:
+			continue
+		if (
+			target_size <= DISBAND_SIZE_MAX
+			and active_count > target_count
+		):
+			var disbanded_size := army.size
+			if not _disband_army(
+				army,
+				"军费赤字缩编：撤销无法维持的编制"
+			):
+				continue
+			returned = disbanded_size
+			active_count -= 1
+			total_food_saved += demand_before
+			target_size = 0
+		else:
+			army.size = target_size
+			state.nations[
+				army.owner_nation
+			].manpower_pool += returned
+			army.ai_action = (
+				ActionCandidate.Kind.DISBAND_ARMY
+			)
+			army.ai_order_created_day = state.day
+			total_food_saved += maxf(
+				demand_before
+					- _projected_army_food_demand(army),
+				0.0
+			)
+		var saved := (
+			current_upkeep
+			- GameState.army_monthly_upkeep(
+				target_size
+			)
+		)
+		total_returned += returned
+		total_saved += saved
+		remaining_savings = maxi(
+			remaining_savings - saved,
+			0
+		)
+	if total_saved <= 0:
+		return false
+	var nation := state.nations[view.nation_id]
+	nation.food_demand_ema = maxf(
+		nation.food_demand_ema - total_food_saved,
+		0.0
+	)
+	nation.ai_last_force_action = (
+		ActionCandidate.Kind.DISBAND_ARMY
+	)
+	nation.ai_last_force_day = state.day
+	nation.ai_last_force_reason = (
+		"军费赤字缩编：返还%d人，月省%d金，预测缺口%d金，目标保留%d军"
+		% [
+			total_returned,
+			total_saved,
+			required_savings,
+			target_count,
+		]
+	)
+	return true
+
+
 func _is_available_recruitment_hub(
 	nation_id: int,
 	city_id: int,
 	allow_besieged: bool = false
 ) -> bool:
+	if (
+		nation_id < 0
+		or nation_id >= state.nations.size()
+		or city_id < 0
+		or city_id >= state.cities.size()
+		or state.cities[city_id].owner_nation
+			!= nation_id
+	):
+		return false
+	var city := state.cities[city_id]
+	var is_vassal_capital_relay := (
+		state.is_vassal(nation_id)
+		and state.nations[nation_id].capital_city_id
+			== city_id
+	)
 	return (
-		city_id >= 0 and city_id < state.cities.size()
-		and state.cities[city_id].owner_nation == nation_id
-		and state.cities[city_id].has_warehouse
+		(city.has_warehouse or is_vassal_capital_relay)
 		and (
 			allow_besieged
 			or not state.city_under_siege(city_id)
@@ -8407,14 +8776,6 @@ func _create_army_for_nation(
 	]:
 		return null
 	var nation := state.nations[nation_id]
-	# 藩王只能征召 LINE 填线军：主战 MAIN（重编制）军团只归宗主征召与指挥（藩王作战体系
-	# 简化的核心）。藩王的 MAIN 仅在削藩反抗时由起兵火星兵动员（_spawn_civil_war_uprising_armies，
-	# 走凭空动员路径、不经本函数），故此处对藩王的重军征召一律拒绝。
-	if (
-		formation_size == GameState.INITIAL_HEAVY_ARMY_SIZE
-		and state.is_vassal(nation_id)
-	):
-		return null
 	if (
 		formation_size == GameState.INITIAL_HEAVY_ARMY_SIZE
 		and state.battle_group_by_id(
@@ -9472,17 +9833,6 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		var defenders := (
 			state.armies_available_to_defend_city(city.id)
 		)
-		if (
-			defenders.is_empty()
-			and state.recognized_owner_of(city.id)
-				== attacker.owner_nation
-		):
-			_capture_city(
-				attacker,
-				city,
-				attacker.owner_nation
-			)
-			return
 		# item 7：不再设机制层「弱攻自动撤离」硬门槛——兵力不足时围城进度会按连续曲线
 		# 停滞/倒退（见 _advance_siege），是否撤离交 AI 战略层裁量，避免攻/撤无限循环。
 		siege = state.new_battle(Battle.Kind.SIEGE)
@@ -9695,8 +10045,6 @@ func _advance_siege(
 		if battle.side_a.is_empty():
 			battle.finished = true
 			battle.winner_side = 0
-			return
-		if _finish_legal_reclamation(battle):
 			return
 		battle.finished = false
 		battle.winner_side = 0
@@ -10067,45 +10415,6 @@ func _retreat_defender(defender: Army, city: City) -> void:
 	_start_morale_retreat_from_city(defender, city.id, city.id)
 
 # ------------------------------------------------------------------ 5. 占领
-
-func _finish_legal_reclamation(battle: Battle) -> bool:
-	if (
-		battle.city == null
-		or battle.side_a.is_empty()
-	):
-		return false
-	var captor := _strongest_alive(battle.side_a)
-	if (
-		captor == null
-		or state.recognized_owner_of(battle.city.id)
-			!= captor.owner_nation
-	):
-		return false
-	_capture_city(
-		captor,
-		battle.city,
-		captor.owner_nation,
-		false
-	)
-	for attacker in battle.side_a:
-		attacker.battle_id = -1
-		if (
-			attacker != captor
-			and attacker.size > 0
-			and state.has_military_access(
-				attacker.owner_nation,
-				battle.city.owner_nation
-			)
-		):
-			_settle_idle(attacker, battle.city.id)
-	_execute_campaign_post_capture_plan(
-		captor,
-		battle.city
-	)
-	battle.finished = true
-	battle.winner_side = 1
-	return true
-
 
 func _capture_city(
 	army: Army,

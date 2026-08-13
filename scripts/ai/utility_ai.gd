@@ -47,7 +47,28 @@ static func choose(
 			snapshot,
 			threat
 		)
+	var vassal_main_reserve := (
+		army.is_main_battle_role()
+		and view.state.is_vassal(view.nation_id)
+		and not view.state.is_in_civil_war(
+			view.nation_id
+		)
+	)
 	if army.state == Army.State.HOLDING:
+		if vassal_main_reserve:
+			var reserve_recall := (
+				active_defense_plan.candidate_for(
+					army,
+					coordinator
+				)
+			)
+			if reserve_recall != null:
+				return reserve_recall
+			return ActionCandidate.make(
+				ActionCandidate.Kind.NONE,
+				0.0,
+				"藩王主战预备队等待返回封地重点城市"
+			)
 		return _choose_holding(
 			view,
 			snapshot,
@@ -100,7 +121,42 @@ static func choose(
 		)
 	if defense != null:
 		candidates.append(defense)
-	if not view.state.uses_heightmap:
+	if (
+		vassal_main_reserve
+		and not view.state.wars_of(
+			view.nation_id
+		).is_empty()
+	):
+		var reclamation := _attack_candidate(
+			view,
+			snapshot,
+			threat,
+			coordinator,
+			army,
+			minimum_participant_ratio,
+			true
+		)
+		if reclamation != null:
+			var assigned_city := (
+				active_defense_plan.assigned_city_for(
+					army
+				)
+			)
+			if (
+				not active_defense_plan.relief_required_at(
+					assigned_city
+				)
+			):
+				reclamation.score = maxf(
+					reclamation.score,
+					CityDefensePlan.ROLE_DEPLOYMENT_SCORE
+						+ 1.0
+				)
+			candidates.append(reclamation)
+	if (
+		not view.state.uses_heightmap
+		and not vassal_main_reserve
+	):
 		var attack := _attack_candidate(
 			view,
 			snapshot,
@@ -249,7 +305,8 @@ static func _attack_candidate(
 	threat: ThreatField,
 	coordinator: ArmyCoordinator,
 	army: Army,
-	minimum_participant_ratio: float
+	minimum_participant_ratio: float,
+	legal_reclamation_only: bool = false
 ) -> ActionCandidate:
 	if army.combat_morale() < 0.5 or view.nearest_supply_city(army)[0] == -1:
 		return null
@@ -328,15 +385,18 @@ static func _attack_candidate(
 			view.state.recognized_owner_of(city_id)
 				== view.nation_id
 		)
+		if legal_reclamation_only and not legal_reclamation:
+			continue
 		var garrison_size := 0
 		for defender in view.armies_at_city(city_id):
 			garrison_size += defender.size
 		var committed_size := coordinator.size_reserved(city_id)
 		# 攻城派兵门槛（item 6/7 唯一真源）：歼灭守军 + 维持封锁×余量，确保野战后仍能高效围城。
 		var required_siege_size := (
-			0
-			if legal_reclamation
-			else assault_commit_threshold(garrison_size, city.fort_strength)
+			assault_commit_threshold(
+				garrison_size,
+				city.fort_strength
+			)
 		)
 		var pool := _adjacent_assault_pool(
 			view, snapshot, threat, coordinator, city_id
@@ -351,8 +411,7 @@ static func _attack_candidate(
 		if available_size < required_siege_size:
 			continue
 		var enemy_power := threat.threat_at(city_id)
-		if not legal_reclamation:
-			enemy_power += ArmyPower.city_defense(city)
+		enemy_power += ArmyPower.city_defense(city)
 		var committed := coordinator.power_reserved(city_id)
 		var relief_value := _blockade_relief_value(view, city_id)
 		var participant_power := power

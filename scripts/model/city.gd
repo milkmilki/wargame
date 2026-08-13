@@ -7,6 +7,7 @@ var coord: Vector2i = Vector2i.ZERO       ## 兼容测试/镜像基准的逻辑 
 var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [0,1]²
 var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
 var terrain_relief: float = 0.0           ## 城市周边局部最大高度差 [0,1]
+var terrain_output_multiplier: float = 1.0 ## 正式地图海拔产出倍率，最低地1、最高地0.2
 var is_dock: bool = false                 ## 河运码头；仍复用完整城市占领/补给/经济状态
 var owner_nation: int = -1                ## 所属国家 id
 ## 当前占领由哪个直接交战国的军队取得；和平确认后清空。
@@ -29,7 +30,8 @@ var is_manpower_hub: bool = false         ## 重点人口产地
 var is_plain_city: bool = false            ## 正式地图局部起伏最低的平原城市
 var is_port_market: bool = false           ## 与码头直接相连的陆城
 var is_crossroads: bool = false            ## 至少连接六条正容量道路的高连接交通枢纽
-## 地理开发直接加成与一跳传播后的相对权重；最终整数产出已全图归一化写回。
+## 交通/平原开发直接加成与一跳传播后的相对权重；海拔倍率单独保存于
+## terrain_output_multiplier，最终整数产出已全图归一化写回。
 var development_gold_multiplier: float = 1.0
 var development_food_multiplier: float = 1.0
 

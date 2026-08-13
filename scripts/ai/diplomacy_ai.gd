@@ -1694,16 +1694,25 @@ static func resource_report(
 		nation_id,
 		evaluation_cache
 	)
-	var monthly_income := 0
-	for city in _cached_cities_of(
-		state,
-		nation_id,
-		evaluation_cache
-	):
-		monthly_income += Simulation.city_gold_output(
-			state,
-			city
+	const GOLD_FLOWS_CACHE_KEY := "monthly_gold_flows"
+	if not evaluation_cache.has(GOLD_FLOWS_CACHE_KEY):
+		evaluation_cache[GOLD_FLOWS_CACHE_KEY] = (
+			Simulation.monthly_gold_flows(state)
 		)
+	var gold_flows: Array[Dictionary] = (
+		evaluation_cache[GOLD_FLOWS_CACHE_KEY]
+	)
+	var gold_flow: Dictionary = gold_flows[nation_id]
+	var monthly_city_income := int(
+		gold_flow["city_income"]
+	)
+	var monthly_tribute_income := int(
+		gold_flow["tribute_received"]
+	)
+	var monthly_tribute_expense := int(
+		gold_flow["tribute_paid"]
+	)
+	var monthly_income := int(gold_flow["net_income"])
 	var food_plan := war_food_report(
 		state,
 		nation_id,
@@ -1712,10 +1721,10 @@ static func resource_report(
 		evaluation_cache
 	)
 	var monthly_food_production := float(food_plan["monthly_food_production"])
-	var monthly_war_cost := (
-		state.nation_monthly_military_upkeep(nation_id)
+	var monthly_war_cost := int(
+		gold_flow["military_upkeep"]
 	)
-	var monthly_gold_balance := monthly_income - monthly_war_cost
+	var monthly_gold_balance := int(gold_flow["balance"])
 	var monthly_gold_deficit := maxi(-monthly_gold_balance, 0)
 	var monthly_food_demand := int(ceil(
 		float(food_plan["current_monthly_demand"])
@@ -1759,6 +1768,9 @@ static func resource_report(
 	)
 	var result := {
 		"troops": troops,
+		"monthly_city_gold_income": monthly_city_income,
+		"monthly_tribute_income": monthly_tribute_income,
+		"monthly_tribute_expense": monthly_tribute_expense,
 		"monthly_gold_income": monthly_income,
 		"monthly_war_cost": monthly_war_cost,
 		"monthly_gold_balance": monthly_gold_balance,
@@ -3314,16 +3326,6 @@ static func objective_assault_troops(
 	var fort_strength := state.cities[
 		objective_city
 	].fort_strength
-	var recent_legal_reclamation := (
-		state.recognized_owner_of(objective_city) == nation_id
-		and Simulation.city_fort_vulnerability(
-			state.cities[objective_city],
-			state.day
-		) > 0.0
-	)
-	if recent_legal_reclamation:
-		# 近期失地在击败占领军后会直接完成法理收复，不需要再次破坏本国工事。
-		fort_strength = 0
 	var siege_requirement := UtilityAI.assault_commit_threshold(
 		defenders,
 		fort_strength

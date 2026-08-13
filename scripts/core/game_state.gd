@@ -27,11 +27,13 @@ const TERRAIN_CITY_GOLD_OUTPUT_MAX: int = 15
 const TERRAIN_CITY_FOOD_PER_HALF_YEAR_MIN: int = 145
 const TERRAIN_CITY_FOOD_PER_HALF_YEAR_MAX: int = 195
 const PLAIN_CITY_SHARE: float = 0.35
-const PORT_MARKET_GOLD_MULTIPLIER: float = 3.0
+const PORT_MARKET_OUTPUT_MULTIPLIER: float = 3.0
 const CROSSROADS_GOLD_MULTIPLIER: float = 1.5
 const PLAIN_GOLD_MULTIPLIER: float = 1.5
 const PLAIN_FOOD_MULTIPLIER: float = 1.5
 const DEVELOPMENT_PROPAGATION_RATE: float = 0.5
+const TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER: float = 0.2
+const TERRAIN_HEIGHT_OUTPUT_EXPONENT: float = 3.0
 const CROSSROADS_MIN_ROADS: int = 6
 const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
 const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
@@ -49,6 +51,10 @@ enum DiplomaticRelation {
 
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
+const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 10.0
+const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
+const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
+const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
 
 
 static func army_monthly_upkeep(troops: int) -> int:
@@ -156,8 +162,9 @@ func generate_world(
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
 	_generate_terrain_docks(terrain)
-	_initialize_recognized_city_owners()
 	_generate_terrain_edges(terrain)
+	_repair_initial_nation_connectivity()
+	_initialize_recognized_city_owners()
 	_initialize_resource_hubs()
 	_initialize_terrain_development()
 	_initialize_manpower_pools()
@@ -577,12 +584,53 @@ func _initialize_resource_hubs() -> void:
 		)
 
 
+## 高海拔产出惩罚：penalty=0.8*h³ 是凸增的 J 型惩罚，
+## 因而倍率在低海拔变化缓慢、接近最高海拔时快速降至 0.2。
+static func terrain_height_output_multiplier(
+	normalized_height: float
+) -> float:
+	var height := clampf(normalized_height, 0.0, 1.0)
+	return (
+		1.0
+		- (1.0 - TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER)
+			* pow(
+				height,
+				TERRAIN_HEIGHT_OUTPUT_EXPONENT
+			)
+	)
+
+
 func _initialize_terrain_development() -> void:
 	if not uses_heightmap:
 		return
 	var land := land_cities()
 	if land.is_empty():
 		return
+	var minimum_height := INF
+	var maximum_height := -INF
+	for city in land:
+		minimum_height = minf(
+			minimum_height,
+			city.terrain_height
+		)
+		maximum_height = maxf(
+			maximum_height,
+			city.terrain_height
+		)
+	var height_span := maxf(
+		maximum_height - minimum_height,
+		0.000001
+	)
+	for city in land:
+		var normalized_height := (
+			(city.terrain_height - minimum_height)
+			/ height_span
+		)
+		city.terrain_output_multiplier = (
+			terrain_height_output_multiplier(
+				normalized_height
+			)
+		)
 	var relief_order := land.duplicate()
 	relief_order.sort_custom(func(a: City, b: City) -> bool:
 		if not is_equal_approx(
@@ -626,7 +674,7 @@ func _initialize_terrain_development() -> void:
 		if city.is_port_market:
 			gold_multiplier = maxf(
 				gold_multiplier,
-				PORT_MARKET_GOLD_MULTIPLIER
+				PORT_MARKET_OUTPUT_MULTIPLIER
 			)
 		if city.is_crossroads:
 			gold_multiplier = maxf(
@@ -638,11 +686,17 @@ func _initialize_terrain_development() -> void:
 				gold_multiplier,
 				PLAIN_GOLD_MULTIPLIER
 			)
-		var food_multiplier := (
-			PLAIN_FOOD_MULTIPLIER
-			if city.is_plain_city
-			else 1.0
-		)
+		var food_multiplier := 1.0
+		if city.is_port_market:
+			food_multiplier = maxf(
+				food_multiplier,
+				PORT_MARKET_OUTPUT_MULTIPLIER
+			)
+		if city.is_plain_city:
+			food_multiplier = maxf(
+				food_multiplier,
+				PLAIN_FOOD_MULTIPLIER
+			)
 		direct_gold[city.id] = gold_multiplier
 		direct_food[city.id] = food_multiplier
 		original_food_total += city.food_per_half_year
@@ -690,10 +744,12 @@ func _initialize_terrain_development() -> void:
 		gold_weights[city.id] = (
 			float(city.gold_per_month)
 			* city.development_gold_multiplier
+			* city.terrain_output_multiplier
 		)
 		food_weights[city.id] = (
 			float(city.food_per_half_year)
 			* city.development_food_multiplier
+			* city.terrain_output_multiplier
 		)
 	_apportion_city_output(
 		land,
@@ -738,7 +794,10 @@ func _apportion_city_output(
 			/ weight_total
 		)
 		var lower_bound := (
-			FOOD_HUB_MIN_OUTPUT
+			int(round(
+				float(FOOD_HUB_MIN_OUTPUT)
+				* city.terrain_output_multiplier
+			))
 				if (
 					food_output
 					and city.is_food_hub
@@ -905,6 +964,148 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 		(adjacency[hi] as Array[int]).append(lo)
 	for city_id in adjacency.keys():
 		(adjacency[city_id] as Array[int]).sort()
+
+func _initial_owner_components(
+	nation_id: int
+) -> Array[Array]:
+	var result: Array[Array] = []
+	var unseen := {}
+	for city in cities:
+		if city.owner_nation == nation_id:
+			unseen[city.id] = true
+	while not unseen.is_empty():
+		var starts := unseen.keys()
+		starts.sort()
+		var start := int(starts[0])
+		var component: Array[int] = []
+		var queue: Array[int] = [start]
+		unseen.erase(start)
+		var head := 0
+		while head < queue.size():
+			var city_id := queue[head]
+			head += 1
+			component.append(city_id)
+			for neighbor in neighbors(city_id):
+				if not unseen.has(neighbor):
+					continue
+				var edge := edge_of(city_id, neighbor)
+				if (
+					edge == null
+					or edge.max_manpower <= 0
+					or cities[neighbor].owner_nation
+						!= nation_id
+				):
+					continue
+				unseen.erase(neighbor)
+				queue.append(neighbor)
+		component.sort()
+		result.append(component)
+	return result
+
+
+func _initial_component_land_count(component: Array) -> int:
+	var result := 0
+	for city_value in component:
+		if not cities[int(city_value)].is_dock:
+			result += 1
+	return result
+
+
+## 几何初分只提供空间先验；最终归属必须服从合法道路/码头图。每轮保留
+## 各国陆城最多的主体组件，其余飞地整体交给边界连接最多的邻国，直到稳定。
+func _repair_initial_nation_connectivity() -> void:
+	var guard := cities.size()
+	while guard > 0:
+		guard -= 1
+		var changed := false
+		for nation in nations:
+			var components := _initial_owner_components(
+				nation.id
+			)
+			if components.size() <= 1:
+				continue
+			components.sort_custom(
+				func(a: Array, b: Array) -> bool:
+					var land_a := (
+						_initial_component_land_count(a)
+					)
+					var land_b := (
+						_initial_component_land_count(b)
+					)
+					if land_a != land_b:
+						return land_a > land_b
+					if a.size() != b.size():
+						return a.size() > b.size()
+					return int(a[0]) < int(b[0])
+			)
+			for component_index in range(
+				1,
+				components.size()
+			):
+				var component: Array = components[
+					component_index
+				]
+				var boundary_counts := {}
+				for city_value in component:
+					var city_id := int(city_value)
+					for neighbor in neighbors(city_id):
+						var edge := edge_of(
+							city_id,
+							neighbor
+						)
+						var neighbor_owner := (
+							cities[
+								neighbor
+							].owner_nation
+						)
+						if (
+							edge == null
+							or edge.max_manpower <= 0
+							or neighbor_owner < 0
+							or neighbor_owner
+								== nation.id
+						):
+							continue
+						boundary_counts[
+							neighbor_owner
+						] = (
+							int(boundary_counts.get(
+								neighbor_owner,
+								0
+							))
+							+ 1
+						)
+				assert(
+					not boundary_counts.is_empty(),
+					"初始飞地必须沿合法交通图连接到邻国"
+				)
+				var recipient := -1
+				var best_count := -1
+				var owner_ids := boundary_counts.keys()
+				owner_ids.sort()
+				for owner_value in owner_ids:
+					var owner := int(owner_value)
+					var count := int(
+						boundary_counts[owner]
+					)
+					if count > best_count:
+						best_count = count
+						recipient = owner
+				for city_value in component:
+					cities[
+						int(city_value)
+					].owner_nation = recipient
+				changed = true
+		if not changed:
+			break
+	assert(guard > 0, "初始国家飞地修复必须收敛")
+	for nation in nations:
+		assert(
+			_initial_owner_components(nation.id).size()
+				== 1,
+			"初始国%d领土必须经合法交通图连通"
+				% nation.id
+		)
 
 
 func _add_edge(a: int, b: int) -> void:
@@ -1720,7 +1921,7 @@ func is_suzerainty_pair(nation_a: int, nation_b: int) -> bool:
 
 
 ## 藩王领土是否与本宗藩体系的任一敌国接壤（存在一条正容量边通往体系敌国的城）。
-## 用于分封战争加成：接壤敌国的藩王须自守边疆（并上交机动军团），
+## 用于分封战争加成：接壤敌国的藩王须以自有军团守卫封地，
 ## 非接壤藩王只提高贡赋、不承担前线。判据只看实控归属与道路容量，确定性。
 func vassal_borders_system_enemy(subject_id: int) -> bool:
 	if not is_vassal(subject_id):
@@ -1736,55 +1937,6 @@ func vassal_borders_system_enemy(subject_id: int) -> bool:
 			if neighbor_owner >= 0 and is_enemy(subject_id, neighbor_owner):
 				return true
 	return false
-
-
-## 把藩王当前静止在自身领土内的整支 MAIN 战团转隶其直接宗主，作为中央机动军。
-## 复用整团迁移规则：只迁「全部存活成员都静止在藩王领土内」的完整 MAIN 战团，
-## 不撕裂战团、不打断行军/战斗/驻边。返回迁移的军队数（供上层统计与测试）。
-func transfer_main_battle_groups_to_overlord(subject_id: int) -> int:
-	var overlord_id := overlord_of(subject_id)
-	if (
-		overlord_id < 0
-		or overlord_id >= nations.size()
-		or subject_id < 0
-		or subject_id >= nations.size()
-		or not nations[overlord_id].alive
-		or not nations[subject_id].alive
-	):
-		return 0
-	var subject := nations[subject_id]
-	var overlord := nations[overlord_id]
-	var groups_to_move: Array[BattleGroup] = []
-	for group in subject.battle_groups:
-		var members := battle_group_members(subject_id, group.id)
-		if members.is_empty():
-			continue
-		var all_main_inside := true
-		for member in members:
-			if (
-				not member.is_main_battle_role()
-				or not _army_stationed_in_nation(member, subject_id)
-			):
-				all_main_inside = false
-				break
-		if all_main_inside:
-			groups_to_move.append(group)
-	var moved := 0
-	for group in groups_to_move:
-		var members := battle_group_members(subject_id, group.id)
-		var new_group_id := overlord.next_battle_group_id
-		overlord.next_battle_group_id += 1
-		group.id = new_group_id
-		group.owner_nation = overlord_id
-		subject.battle_groups.erase(group)
-		overlord.battle_groups.append(group)
-		for member in members:
-			member.owner_nation = overlord_id
-			member.battle_group_id = new_group_id
-			member.strategic_role = Army.StrategicRole.MAIN
-			member.clear_line_assignment()
-			moved += 1
-	return moved
 
 
 ## 藩王是否正处于与其宗主的削藩内战中。内战期间宗主↔藩王为 WAR（而非 ALLIED），
@@ -1931,7 +2083,7 @@ func _spawn_conjured_army(
 ## 分封赐军：确保新藩王拥有至少「陆城数」支 LINE 填线军（不足则凭空补足）。
 ## 新模型下分封不迁移宗主驻军，故一般 existing=0、按城数全额赐军；仍做「计现有、补缺口」
 ## 以对任何既有藩王军队（如反复分封的边界情形）保持幂等、不超编。凭空补（不扣人力池）。
-## 藩王只能有 LINE，主战 MAIN 只归宗主征召（见 Simulation._create_army_for_nation 门控）。
+## 分封时只赐 LINE 守土军；藩王后续可用自身资源组建 MAIN 内线军团。
 func _grant_vassal_line_armies(subject_id: int) -> void:
 	if subject_id < 0 or subject_id >= nations.size():
 		return
@@ -2237,8 +2389,8 @@ func enfeoff(
 		recognized_city_owners[city_id] = subject.id
 	ownership_revision += 1
 
-	# 3.5 分封不再把宗主驻军（尤其 MAIN 战团）转隶藩王：新模型下藩王只能有 LINE、
-	#     主战 MAIN 只归宗主征召与指挥。藩王的守土兵力改由第 5.5 步凭空赐 LINE 军提供；
+	# 3.5 分封不把宗主驻军（尤其 MAIN 战团）转隶藩王：新藩王先获得第 5.5 步赐予的
+	#     LINE 守土军，后续再用自身资源组建受封地防区约束的 MAIN 内线军团；
 	#     留在封地内的宗主军队因宗藩 ALLIED 通行权不会被困，交宗主 AI 下个 tick 自然调度。
 
 	# 4. 划转人力与金钱（守恒：从宗主池扣除、注入藩王池）。
@@ -2252,7 +2404,7 @@ func enfeoff(
 	_establish_vassal_capital(subject, overlord_id)
 
 	# 5.5 赐军：确保藩王至少拥有「陆城数」支 LINE 填线军（含迁入驻军，缺口凭空补足），
-	#     解决「分封藩王常无军队」；藩王只能有 LINE，MAIN 仅宗主可征召。
+	#     解决「分封藩王常无军队」；MAIN 不凭空赐予，由藩王后续按经济能力自行组建。
 	_grant_vassal_line_armies(subject.id)
 
 	# 6. 外交：藩王继承宗主对每个第三方的关系，并与宗主结盟。
@@ -2500,13 +2652,25 @@ func _withdraw_food_from_warehouses(overlord: Nation, amount: int) -> void:
 	# granary_food 是派生量，由 refresh_derived 统一重算，此处不手改。
 
 
-## 藩王色调从宗主派生：同色相、降低明度/饱和度，体现「同一政治共同体、
-## 内部多个实体」。id 参与微调避免多个藩王同色。
+## 藩王色调从宗主派生：色相小幅偏移、降低明度/饱和度，体现「同一政治共同体、
+## 内部多个实体」。id 仅参与小幅确定性微调，避免多个藩王完全同色。
 func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
-	var h := overlord_color.h
-	var s := clampf(overlord_color.s * 0.7, 0.0, 1.0)
+	var subject_hue_variance := fposmod(
+		float(subject_id) * 1.61803398875,
+		VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES
+	)
+	var h := fposmod(
+		overlord_color.h
+			+ (VASSAL_COLOR_HUE_OFFSET_DEGREES + subject_hue_variance) / 360.0,
+		1.0
+	)
+	var s := clampf(
+		overlord_color.s - VASSAL_COLOR_SATURATION_OFFSET,
+		0.0,
+		1.0
+	)
 	var v := clampf(
-		overlord_color.v * (0.75 + fposmod(float(subject_id) * 0.11, 0.15)),
+		overlord_color.v - VASSAL_COLOR_VALUE_OFFSET,
 		0.0,
 		1.0
 	)
