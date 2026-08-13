@@ -179,6 +179,8 @@ var reinforcement_frame_slicing_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_line_edge_assignment_emergencies
 ## （不分帧），以隔离「填线防区分帧」在同一运行时路径下的等价性。正式游戏 false。
 var line_edge_frame_slicing_disabled: bool = false
+## 等价性守卫用：置 true 时重点城市防御梯队保持同步推进；正式游戏 false。
+var priority_defense_frame_slicing_disabled: bool = false
 
 
 
@@ -369,7 +371,13 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	_advance_campaign_echelons()
-	_advance_priority_city_defense_echelons()
+	if (
+		spread_runtime_work
+		and not priority_defense_frame_slicing_disabled
+	):
+		await _advance_priority_city_defense_echelons(true)
+	else:
+		_advance_priority_city_defense_echelons()
 	_record_tick_profile_stage("campaign", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -7511,7 +7519,9 @@ func _launch_campaign_echelon_members(
 
 ## 对正在围攻的重点城市持续派遣纵深预备队。这里不保存平行的防御任务表：
 ## Army.ai_target_city 是在途任务真源，战斗与道路占用则直接从 GameState 派生。
-func _advance_priority_city_defense_echelons() -> void:
+func _advance_priority_city_defense_echelons(
+	spread_runtime_work: bool = false
+) -> void:
 	var sieges: Array[Battle] = []
 	var context_by_nation := {}
 	for battle in state.battles:
@@ -7533,7 +7543,15 @@ func _advance_priority_city_defense_echelons() -> void:
 			b.city.id
 		)
 	)
+	var runtime_slice_started := Time.get_ticks_usec()
 	for siege in sieges:
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
 		var city_id := siege.city.id
 		var nation_id := siege.city.owner_nation
 		if (
