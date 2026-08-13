@@ -7,7 +7,7 @@ var coord: Vector2i = Vector2i.ZERO       ## 兼容测试/镜像基准的逻辑 
 var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [0,1]²
 var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
 var terrain_relief: float = 0.0           ## 城市周边局部最大高度差 [0,1]
-var terrain_output_multiplier: float = 1.0 ## 正式地图海拔产出倍率，最低地1、最高地0.2
+var terrain_output_multiplier: float = 1.0 ## 正式地图海拔产出倍率，Logistic 曲线从低地1降至最高地0.2
 var is_dock: bool = false                 ## 河运码头；仍复用完整城市占领/补给/经济状态
 var owner_nation: int = -1                ## 所属国家 id
 ## 当前占领由哪个直接交战国的军队取得；和平确认后清空。

@@ -608,6 +608,9 @@ func _test_world_generation() -> void:
 	var height_m50 := (
 		GameState.terrain_height_output_multiplier(0.50)
 	)
+	var height_m69 := (
+		GameState.terrain_height_output_multiplier(0.69)
+	)
 	var height_m75 := (
 		GameState.terrain_height_output_multiplier(0.75)
 	)
@@ -626,13 +629,18 @@ func _test_world_generation() -> void:
 			and height_m25 > height_m50
 			and height_m50 > height_m75
 			and height_m75 > height_m100
+			and _approx(height_m50, 0.6)
+			and height_m69 >= 0.29
+			and height_m69 <= 0.31
 			and height_m0 - height_m25
 				< height_m25 - height_m50
-			and height_m25 - height_m50
-				< height_m50 - height_m75
 			and height_m50 - height_m75
-				< height_m75 - height_m100,
-		"海拔产出倍率必须按J型惩罚从最低城1.0单调降至最高城0.2"
+				> height_m75 - height_m100
+			and _approx(
+				height_m25 - height_m50,
+				height_m50 - height_m75
+			),
+		"海拔产出倍率必须按Sigmoid从低地1.0降至最高地0.2，西南高原约为0.3"
 	)
 	var positions_unique := {}
 	var terrain_has_relief := false

@@ -33,7 +33,8 @@ const PLAIN_GOLD_MULTIPLIER: float = 1.5
 const PLAIN_FOOD_MULTIPLIER: float = 1.5
 const DEVELOPMENT_PROPAGATION_RATE: float = 0.5
 const TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER: float = 0.2
-const TERRAIN_HEIGHT_OUTPUT_EXPONENT: float = 3.0
+const TERRAIN_HEIGHT_OUTPUT_SIGMOID_MIDPOINT: float = 0.5
+const TERRAIN_HEIGHT_OUTPUT_SIGMOID_STEEPNESS: float = 10.0
 const CROSSROADS_MIN_ROADS: int = 6
 const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
 const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
@@ -584,19 +585,43 @@ func _initialize_resource_hubs() -> void:
 		)
 
 
-## 高海拔产出惩罚：penalty=0.8*h³ 是凸增的 J 型惩罚，
-## 因而倍率在低海拔变化缓慢、接近最高海拔时快速降至 0.2。
+## 端点归一化 Logistic 海拔惩罚：低地保持 1.0、最高地保持 0.2，
+## 西南高原集中的归一化海拔 0.65~0.75 区间约为 0.34~0.25。
 static func terrain_height_output_multiplier(
 	normalized_height: float
 ) -> float:
 	var height := clampf(normalized_height, 0.0, 1.0)
+	var sigmoid_at_low := 1.0 / (
+		1.0 + exp(
+			TERRAIN_HEIGHT_OUTPUT_SIGMOID_STEEPNESS
+				* (0.0 - TERRAIN_HEIGHT_OUTPUT_SIGMOID_MIDPOINT)
+		)
+	)
+	var sigmoid_at_high := 1.0 / (
+		1.0 + exp(
+			TERRAIN_HEIGHT_OUTPUT_SIGMOID_STEEPNESS
+				* (1.0 - TERRAIN_HEIGHT_OUTPUT_SIGMOID_MIDPOINT)
+		)
+	)
+	var sigmoid_at_height := 1.0 / (
+		1.0 + exp(
+			TERRAIN_HEIGHT_OUTPUT_SIGMOID_STEEPNESS
+				* (
+					height
+					- TERRAIN_HEIGHT_OUTPUT_SIGMOID_MIDPOINT
+				)
+		)
+	)
+	var normalized_sigmoid := (
+		(sigmoid_at_height - sigmoid_at_high)
+		/ (sigmoid_at_low - sigmoid_at_high)
+	)
 	return (
-		1.0
-		- (1.0 - TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER)
-			* pow(
-				height,
-				TERRAIN_HEIGHT_OUTPUT_EXPONENT
-			)
+		TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER
+		+ (
+			1.0
+			- TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER
+		) * normalized_sigmoid
 	)
 
 
