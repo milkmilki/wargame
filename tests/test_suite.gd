@@ -12190,6 +12190,85 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	role_sim.free()
 
+	var liberation_state := GameState.new()
+	liberation_state.generate_grid_world(32016)
+	liberation_state.armies.clear()
+	liberation_state.battles.clear()
+	for liberation_a in range(
+		liberation_state.nations.size()
+	):
+		for liberation_b in range(
+			liberation_a + 1,
+			liberation_state.nations.size()
+		):
+			liberation_state.set_diplomatic_relation(
+				liberation_a,
+				liberation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var legal_owner := 0
+	var liberator_nation := 1
+	var occupier_nation := 2
+	liberation_state.set_diplomatic_relation(
+		legal_owner,
+		liberator_nation,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	liberation_state.set_diplomatic_relation(
+		legal_owner,
+		occupier_nation,
+		GameState.DiplomaticRelation.WAR
+	)
+	liberation_state.set_diplomatic_relation(
+		liberator_nation,
+		occupier_nation,
+		GameState.DiplomaticRelation.WAR
+	)
+	var liberation_city: City = null
+	for candidate_city in liberation_state.cities:
+		if (
+			candidate_city.owner_nation == legal_owner
+			and not candidate_city.is_capital
+			and not candidate_city.has_warehouse
+		):
+			liberation_city = candidate_city
+			break
+	_check(
+		liberation_city != null,
+		"盟友解放测试必须找到普通法理城市"
+	)
+	liberation_city.owner_nation = occupier_nation
+	liberation_state.recognized_city_owners[
+		liberation_city.id
+	] = legal_owner
+	var liberator := _make_army(
+		9050,
+		liberator_nation,
+		5000,
+		10
+	)
+	liberator.location_city = liberation_city.id
+	liberator.move_from = liberation_city.id
+	liberator.occupation_claimant_nation = liberator_nation
+	liberation_state.armies.append(liberator)
+	var liberation_sim := Simulation.new()
+	liberation_sim.setup(liberation_state)
+	liberation_sim._capture_city(
+		liberator,
+		liberation_city
+	)
+	_check(
+		liberation_city.owner_nation == legal_owner
+			and liberation_state.recognized_owner_of(
+				liberation_city.id
+			) == legal_owner
+			and liberation_city.occupation_sponsor_nation == -1
+			and liberator.location_city == liberation_city.id
+			and liberator.state == Army.State.IDLE,
+		"盟军击退占领者后必须把城市控制权归还法理盟友，而非据为己有"
+	)
+	liberation_sim.free()
+
 	var defense_state := GameState.new()
 	defense_state.generate_grid_world(32007)
 	for defense_a in range(defense_state.nations.size()):

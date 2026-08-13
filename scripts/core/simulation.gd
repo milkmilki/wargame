@@ -10114,7 +10114,7 @@ func _capture_city(
 	var claimant := (
 		owner_override
 		if owner_override >= 0
-		else _occupation_claimant_for_army(army)
+		else _occupation_claimant_for_army(army, city)
 	)
 	var captured_food := city.food_storage if city.has_warehouse else 0
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
@@ -10406,7 +10406,31 @@ func _campaign_post_capture_target(
 	return best
 
 
-func _occupation_claimant_for_army(army: Army) -> int:
+func _occupation_claimant_for_army(
+	army: Army,
+	target_city: City = null
+) -> int:
+	if target_city != null:
+		var recognized_owner := state.recognized_owner_of(
+			target_city.id
+		)
+		if (
+			recognized_owner >= 0
+			and recognized_owner < state.nations.size()
+			and state.nations[recognized_owner].alive
+			and state.is_enemy(
+				recognized_owner,
+				target_city.owner_nation
+			)
+			and (
+				recognized_owner == army.owner_nation
+				or state.is_allied(
+					army.owner_nation,
+					recognized_owner
+				)
+			)
+		):
+			return recognized_owner
 	if (
 		army.occupation_claimant_nation >= 0
 		and army.occupation_claimant_nation
