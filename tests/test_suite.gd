@@ -13379,8 +13379,8 @@ func _test_suzerainty_invariants() -> void:
 	# 结构不变量成立。
 	_check(gs.suzerainty_structure_valid(), "分封后宗藩结构不变量必须成立")
 
-	# 赐军（新模型）：分封不再迁移宗主驻军，改为给藩王凭空赐「陆城数」支 LINE 填线军；
-	# 藩王不得拥有 MAIN、不得拥有战团（主战力归中央）。
+	# 驻军地方化：封地内稳定驻防的宗主 LINE 先转给藩王，再凭空补足到「陆城数」；
+	# 藩王不得因分封获得 MAIN 或战团（主战力归中央）。
 	var vassal_land := gs.land_cities_of(subject_id).size()
 	var vassal_line := 0
 	var vassal_main := 0
@@ -13401,7 +13401,7 @@ func _test_suzerainty_invariants() -> void:
 		gs._battle_group_structure_valid(),
 		"分封赐军后战团结构不变量必须成立"
 	)
-	# 宗主战团不随分封转隶：整团迁移路径已废弃，宗主保留自己的 MAIN 战团。
+	# 宗主 MAIN 战团不随分封转隶。
 	var group_state := GameState.new()
 	group_state.generate_grid_world(32032)
 	var group_overlord := 0
@@ -13420,6 +13420,174 @@ func _test_suzerainty_invariants() -> void:
 			and group_state.suzerainty_structure_valid(),
 		"分封后宗主保留全部 MAIN 战团、藩王无战团、结构不变量成立（宗主战团 %d→%d）"
 			% [overlord_groups_before, group_state.nations[group_overlord].battle_groups.size()]
+	)
+
+	# LINE 转移与补军必须是同一闭环：城内驻军、封地端驻边军地方化；远端 LINE 与
+	# MAIN 战团留归宗主；转移后清除旧防区/战役引用，最终只补足 LINE 缺口。
+	var transfer_state := GameState.new()
+	transfer_state.generate_grid_world(32033)
+	var transfer_overlord := 0
+	var transfer_region: Array[int] = []
+	for city in transfer_state.land_cities_of(
+		transfer_overlord
+	):
+		if city.is_capital:
+			continue
+		transfer_region.append(city.id)
+		if transfer_region.size() >= 3:
+			break
+	transfer_region = transfer_state.enfeoff_region_closure(
+		transfer_overlord,
+		transfer_region
+	)
+	var retained_city := -1
+	for city in transfer_state.land_cities_of(
+		transfer_overlord
+	):
+		if not transfer_region.has(city.id):
+			retained_city = city.id
+			break
+	var border_from := -1
+	var border_to := -1
+	for city_id in transfer_region:
+		for neighbor in transfer_state.neighbors(city_id):
+			var edge := transfer_state.edge_of(
+				city_id,
+				neighbor
+			)
+			if (
+				not transfer_region.has(neighbor)
+				and edge != null
+				and edge.max_manpower > 0
+				and edge.allows_holding
+			):
+				border_from = city_id
+				border_to = neighbor
+				break
+		if border_from >= 0:
+			break
+	for army in transfer_state.armies:
+		if (
+			army.owner_nation == transfer_overlord
+			and army.is_line_role()
+		):
+			army.location_city = retained_city
+			army.move_from = retained_city
+			army.move_to = -1
+			army.move_progress = 0.0
+			army.on_edge = false
+			army.state = Army.State.IDLE
+			army.path.clear()
+	var local_line := transfer_state._spawn_conjured_army(
+		transfer_overlord,
+		transfer_region[0],
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		Army.StrategicRole.LINE
+	)
+	local_line.line_assignment_city = transfer_region[0]
+	local_line.line_assignment_posture = (
+		Army.LinePosture.CITY
+	)
+	local_line.ai_action = ActionCandidate.Kind.HOLD
+	local_line.ai_target_city = transfer_region[0]
+	local_line.ai_order_until_day = 999
+	local_line.defensive_deployment_until_day = 999
+	transfer_state.nations[
+		transfer_overlord
+	].campaign_attack_assignments[local_line.id] = (
+		transfer_region[0]
+	)
+	var border_line := transfer_state._spawn_conjured_army(
+		transfer_overlord,
+		border_from,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		Army.StrategicRole.LINE
+	)
+	border_line.location_city = border_from
+	border_line.move_from = border_from
+	border_line.move_to = border_to
+	border_line.move_progress = 0.35
+	border_line.on_edge = true
+	border_line.state = Army.State.HOLDING
+	border_line.hold_target_progress = 0.35
+	var remote_line := transfer_state._spawn_conjured_army(
+		transfer_overlord,
+		retained_city,
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		Army.StrategicRole.LINE
+	)
+	var main_group := transfer_state.create_battle_group(
+		transfer_overlord
+	)
+	var local_main := transfer_state._spawn_conjured_army(
+		transfer_overlord,
+		transfer_region[0],
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		Army.StrategicRole.MAIN
+	)
+	transfer_state.assign_army_to_battle_group(
+		local_main,
+		main_group.id
+	)
+	var transfer_army_count_before := (
+		transfer_state.armies.size()
+	)
+	var transfer_groups_before := transfer_state.nations[
+		transfer_overlord
+	].battle_groups.size()
+	var transfer_subject := transfer_state.enfeoff(
+		transfer_overlord,
+		transfer_region
+	)
+	var transferred_line_count := 0
+	for army in transfer_state.armies:
+		if (
+			army.owner_nation == transfer_subject
+			and army.size > 0
+			and army.is_line_role()
+		):
+			transferred_line_count += 1
+	var expected_conjured := maxi(
+		transfer_region.size() - 2,
+		0
+	)
+	_check(
+		transfer_subject > 0
+			and retained_city >= 0
+			and border_from >= 0
+			and local_line.owner_nation == transfer_subject
+			and border_line.owner_nation == transfer_subject
+			and remote_line.owner_nation == transfer_overlord
+			and local_main.owner_nation == transfer_overlord
+			and local_main.battle_group_id == main_group.id
+			and border_line.state == Army.State.HOLDING
+			and border_line.move_from == border_from
+			and local_line.line_assignment_city == -1
+			and local_line.ai_action
+				== ActionCandidate.Kind.NONE
+			and local_line.ai_target_city == -1
+			and local_line.defensive_deployment_until_day
+				== -1
+			and not transfer_state.nations[
+				transfer_overlord
+			].campaign_attack_assignments.has(
+				local_line.id
+			)
+			and transferred_line_count
+				== transfer_region.size()
+			and transfer_state.armies.size()
+				== transfer_army_count_before
+					+ expected_conjured
+			and transfer_state.nations[
+				transfer_overlord
+			].battle_groups.size()
+				== transfer_groups_before
+			and transfer_state.nations[
+				transfer_subject
+			].battle_groups.is_empty()
+			and transfer_state
+				._battle_group_structure_valid(),
+		"分封须地方化城内/驻边LINE、保留远端LINE与MAIN，并仅补足缺口"
 	)
 
 	# 非法输入：空区、含宗主首都、非宗主领土、清空宗主领土——均返回 -1 且无副作用。
@@ -13887,8 +14055,9 @@ func _test_vassal_tribute() -> void:
 # ------------------------------------------------------------------ 32e. 区域负担评估与分封 AI（增量 B3）
 
 func _test_enfeoff_ai() -> void:
-	print("[32e] 宗藩：区域负担比数学、封地道路连续性、AI 分封触发与门控")
-	# 1. evaluate_region_burden 数学：负担比 = 区域边疆线所需LINE军月粮耗 / 区域月粮产。
+	print("[32e] 宗藩：区域粮食/财政收益、封地道路连续性、AI 分封触发与门控")
+	# 1. evaluate_region_burden 数学：负担比 = 区域边疆线所需LINE军月粮耗 / 区域月粮产；
+	# 财政收益 = 可转移LINE军费 + 治理增产后的预计贡赋 - 当前直辖收入。
 	var gs := GameState.new()
 	gs.generate_grid_world(32051)
 	for a in range(gs.nations.size()):
@@ -13904,13 +14073,55 @@ func _test_enfeoff_ai() -> void:
 		if region.size() >= 3:
 			break
 	var expected_food_output := 0.0
+	var expected_direct_gold := 0
+	var expected_vassal_gold := 0
 	for city_id in region:
 		expected_food_output += float(gs.cities[city_id].food_per_half_year) / 6.0
+		var city_gold := Simulation.city_gold_output(
+			gs,
+			gs.cities[city_id]
+		)
+		expected_direct_gold += city_gold
+		expected_vassal_gold += int(floor(
+			float(city_gold)
+			* Simulation
+				.VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+		))
+	var expected_transfer_upkeep := 0
+	var expected_transfer_count := 0
+	for army in gs.transferable_vassal_line_armies(
+		0,
+		region
+	):
+		expected_transfer_count += 1
+		expected_transfer_upkeep += (
+			GameState.army_monthly_upkeep(army.size)
+		)
+	var expected_tribute := int(floor(
+		float(expected_vassal_gold)
+		* GameState.DEFAULT_TRIBUTE_RATE
+	))
 	var burden := DiplomacyAI.evaluate_region_burden(gs, 0, region)
 	_check(
 		_approx(float(burden["monthly_food_output"]), expected_food_output)
-			and float(burden["burden_ratio"]) >= 0.0,
-		"区域负担画像必须按半年粮产折月产计算且负担比非负"
+			and float(burden["burden_ratio"]) >= 0.0
+			and int(burden["direct_gold_income"])
+				== expected_direct_gold
+			and int(burden["projected_vassal_gold_income"])
+				== expected_vassal_gold
+			and int(burden["projected_tribute_income"])
+				== expected_tribute
+			and int(burden["transferable_line_count"])
+				== expected_transfer_count
+			and int(burden["transferable_line_upkeep"])
+				== expected_transfer_upkeep
+			and int(burden["monthly_fiscal_benefit"])
+				== (
+					expected_transfer_upkeep
+					+ expected_tribute
+					- expected_direct_gold
+				),
+		"区域负担画像必须同源计算粮食负担与分封财政反事实"
 	)
 	# 负担比分子应来自「边疆线所需驻军」而非实际驻军：接敌区应有正的防务需求，
 	# 且负担比随所需防务兵力（边疆线）单调——完全内陆无接敌边的区域负担比为 0。
@@ -14003,17 +14214,174 @@ func _test_enfeoff_ai() -> void:
 	if not triggered and gate_region.size() >= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES:
 		var gate_burden := DiplomacyAI.evaluate_region_burden(ai_state, 0, gate_region)
 		gate_reason_ok = (
-			float(gate_burden["burden_ratio"]) < DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD
+				(
+					float(gate_burden["burden_ratio"])
+						< DiplomacyAI
+							.ENFEOFF_BURDEN_RATIO_THRESHOLD
+					and int(
+						gate_burden[
+							"monthly_fiscal_benefit"
+						]
+					) <= 0
+				)
 			or ai_state.land_cities_of(0).size() - gate_region.size()
 				< DiplomacyAI.ENFEOFF_MIN_OVERLORD_CITIES_AFTER
 		)
 	_check(
 		(triggered and triggered_region.size() >= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES)
 			or gate_reason_ok,
-		"和平时分封要么触发、要么被负担比/留核心门控合法挡下"
+			"和平时分封要么由财政/粮食收益触发，要么被双收益/留核心门控合法挡下"
 	)
 
-	# 4. 直接验证执行链：手动构造一个满足全部前置的分封并执行，校验不变量。
+	# 4. 财政路径独立触发：把候选区粮产抬高到低负担、直辖金产压低，并布置三支
+	# 可转移 LINE；此时必须因「转军费 + 贡赋 - 直辖收入」为正而分封。
+	var finance_state := GameState.new()
+	finance_state.generate_grid_world(32054)
+	for a in range(finance_state.nations.size()):
+		for b in range(a + 1, finance_state.nations.size()):
+			finance_state.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var finance_region := DiplomacyAI._grow_enfeoff_region(
+		finance_state,
+		0
+	)
+	var finance_retained_city := -1
+	for city in finance_state.land_cities_of(0):
+		if not finance_region.has(city.id):
+			finance_retained_city = city.id
+			break
+	for army in finance_state.armies:
+		if army.owner_nation == 0 and army.is_line_role():
+			army.location_city = finance_retained_city
+			army.move_from = finance_retained_city
+			army.move_to = -1
+			army.on_edge = false
+			army.state = Army.State.IDLE
+	for city_id in finance_region:
+		finance_state.cities[city_id].gold_per_month = 1
+		finance_state.cities[
+			city_id
+		].food_per_half_year = 100000
+	if not finance_region.is_empty():
+		for index in range(3):
+			finance_state._spawn_conjured_army(
+				0,
+				finance_region[
+					index % finance_region.size()
+				],
+				GameState.INITIAL_LIGHT_ARMY_SIZE,
+				Army.StrategicRole.LINE
+			)
+	var finance_report := (
+		DiplomacyAI.evaluate_region_burden(
+			finance_state,
+			0,
+			finance_region
+		)
+	)
+	var finance_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(
+		finance_state,
+		finance_actions,
+		{},
+		{}
+	)
+	var finance_triggered := false
+	var finance_reason := ""
+	for action in finance_actions:
+		if (
+			int(action.get("kind", -1))
+				== DiplomacyAI.Action.ENFEOFF
+			and int(action.get("a", -1)) == 0
+		):
+			finance_triggered = true
+			finance_reason = str(action.get("reason", ""))
+	_check(
+		finance_region.size()
+			>= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES
+			and finance_retained_city >= 0
+			and float(finance_report["burden_ratio"])
+				< DiplomacyAI
+					.ENFEOFF_BURDEN_RATIO_THRESHOLD
+			and int(
+				finance_report["monthly_fiscal_benefit"]
+			) > 0
+			and finance_triggered
+			and finance_reason.contains("财政月增益"),
+		"低粮食负担但财政月增益为正时，AI 必须把分封作为开源节流策略"
+	)
+
+	# 5. 双收益否决：同类候选区无可转移 LINE 且直辖收入很高，财政为负、粮食负担
+	# 又低于阈值时，不得仅因地处偏远而分封。
+	var loss_state := GameState.new()
+	loss_state.generate_grid_world(32055)
+	for a in range(loss_state.nations.size()):
+		for b in range(a + 1, loss_state.nations.size()):
+			loss_state.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var loss_region := DiplomacyAI._grow_enfeoff_region(
+		loss_state,
+		0
+	)
+	var loss_retained_city := -1
+	for city in loss_state.land_cities_of(0):
+		if not loss_region.has(city.id):
+			loss_retained_city = city.id
+			break
+	for army in loss_state.armies:
+		if army.owner_nation == 0 and army.is_line_role():
+			army.location_city = loss_retained_city
+			army.move_from = loss_retained_city
+			army.move_to = -1
+			army.on_edge = false
+			army.state = Army.State.IDLE
+	for city_id in loss_region:
+		loss_state.cities[city_id].gold_per_month = 100
+		loss_state.cities[
+			city_id
+		].food_per_half_year = 100000
+	var loss_report := DiplomacyAI.evaluate_region_burden(
+		loss_state,
+		0,
+		loss_region
+	)
+	var loss_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(
+		loss_state,
+		loss_actions,
+		{},
+		{}
+	)
+	var loss_triggered := false
+	for action in loss_actions:
+		if (
+			int(action.get("kind", -1))
+				== DiplomacyAI.Action.ENFEOFF
+			and int(action.get("a", -1)) == 0
+		):
+			loss_triggered = true
+	_check(
+		loss_region.size()
+			>= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES
+			and loss_retained_city >= 0
+			and int(loss_report["transferable_line_count"])
+				== 0
+			and int(loss_report["monthly_fiscal_benefit"])
+				< 0
+			and float(loss_report["burden_ratio"])
+				< DiplomacyAI
+					.ENFEOFF_BURDEN_RATIO_THRESHOLD
+			and not loss_triggered,
+		"财政月增益为负且粮食负担低时，AI 不得分封"
+	)
+
+	# 6. 直接验证执行链：手动构造一个满足全部前置的分封并执行，校验不变量。
 	if not triggered:
 		triggered_region = gate_region
 	if triggered_region.size() >= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES:
@@ -14258,7 +14626,7 @@ func _test_civil_war_relations() -> void:
 # ------------------------------------------------------------------ 32h. 削藩决策与反抗判据（增量 C2）
 
 func _test_centralization_decision() -> void:
-	print("[32h] 削藩：和平+军力优势+冷却门控、反抗比、和平撤藩守恒")
+	print("[32h] 削藩：财政收益主判据、高威胁例外、反抗比、和平撤藩守恒")
 	# 构造宗主 0 + 藩王：把藩王大部分军队清掉，制造宗主压倒性优势→藩王接受。
 	var gs := GameState.new()
 	gs.generate_grid_world(32081)
@@ -14281,9 +14649,43 @@ func _test_centralization_decision() -> void:
 			army.size = 0
 			removed += 1
 	var weak_ratio := DiplomacyAI.vassal_resist_ratio(gs, subject)
+	var weak_fiscal := (
+		DiplomacyAI
+			.evaluate_centralization_fiscal_benefit(
+				gs,
+				subject
+			)
+	)
+	var expected_direct_income := 0
+	for city in gs.cities_of(subject):
+		expected_direct_income += (
+			Simulation.city_gold_output_before_governance(
+				gs,
+				city
+			)
+		)
+	var weak_gold_flow := Simulation.monthly_gold_flows(gs)[
+		subject
+	]
 	_check(
-		weak_ratio < DiplomacyAI.CENTRALIZE_RESIST_RATIO_THRESHOLD,
-		"藩王军力被清空后反抗比应远低于阈值（实为 %.3f）" % weak_ratio
+		weak_ratio
+			< DiplomacyAI.CENTRALIZE_RESIST_RATIO_THRESHOLD
+			and int(weak_fiscal["projected_direct_income"])
+				== expected_direct_income
+			and int(weak_fiscal["inherited_subordinate_tribute"])
+				== int(weak_gold_flow["tribute_received"])
+			and int(weak_fiscal["lost_subject_tribute"])
+				== int(weak_gold_flow["tribute_paid"])
+			and int(weak_fiscal["inherited_military_upkeep"])
+				== int(weak_gold_flow["military_upkeep"])
+			and int(weak_fiscal["monthly_fiscal_benefit"])
+				== (
+					expected_direct_income
+					+ int(weak_gold_flow["tribute_received"])
+					- int(weak_gold_flow["tribute_paid"])
+					- int(weak_gold_flow["military_upkeep"])
+				),
+		"撤藩财政反事实须同源计算直辖收入、下级贡赋、原贡赋与接收军费"
 	)
 	# 分封保护期内不得削藩：刚分封（created_day==0）时评估应无削藩动作，杜绝「封了又撤」横跳。
 	var fresh_actions: Array[Dictionary] = []
@@ -14305,8 +14707,16 @@ func _test_centralization_decision() -> void:
 		if int(act.get("kind", -1)) == DiplomacyAI.Action.CENTRALIZE and int(act.get("b", -1)) == subject:
 			accept_action = act
 	_check(
-		not accept_action.is_empty() and not bool(accept_action.get("resist", true)),
-		"和平+压倒军力优势时应产出削藩动作且预判藩王接受"
+		int(weak_fiscal["monthly_fiscal_benefit"]) > 0
+			and not accept_action.is_empty()
+			and int(
+				accept_action.get(
+					"monthly_fiscal_benefit",
+					0
+				)
+			) > 0
+			and not bool(accept_action.get("resist", true)),
+		"撤藩财政收益为正且藩王弱小时，应产出和平撤藩动作"
 	)
 
 	# 战时不得削藩：给宗主制造实战外战，动作应消失。
@@ -14347,7 +14757,68 @@ func _test_centralization_decision() -> void:
 	)
 	sim.free()
 
-	# 反抗路径：藩王军力强则预判反抗，执行 CENTRALIZE 应开内战（非撤藩）。
+	# 财政亏损且威胁不高时不得撤藩，防止移除军力优势门槛后周期性无条件削藩。
+	var loss_state := GameState.new()
+	loss_state.generate_grid_world(32083)
+	for a in range(loss_state.nations.size()):
+		for b in range(a + 1, loss_state.nations.size()):
+			loss_state.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var loss_region: Array[int] = []
+	for city in loss_state.land_cities_of(0):
+		if not city.is_capital:
+			loss_region.append(city.id)
+		if loss_region.size() >= 3:
+			break
+	var loss_subject := loss_state.enfeoff(
+		0,
+		loss_region
+	)
+	for city in loss_state.cities_of(loss_subject):
+		city.gold_per_month = 0
+	loss_state.day = (
+		DiplomacyAI.CENTRALIZE_MIN_VASSAL_AGE_DAYS + 1
+	)
+	var loss_fiscal := (
+		DiplomacyAI
+			.evaluate_centralization_fiscal_benefit(
+				loss_state,
+				loss_subject
+			)
+	)
+	var loss_ratio := DiplomacyAI.vassal_resist_ratio(
+		loss_state,
+		loss_subject
+	)
+	var loss_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_centralization_actions(
+		loss_state,
+		loss_actions,
+		{},
+		{}
+	)
+	var loss_has_centralize := false
+	for action in loss_actions:
+		if (
+			int(action.get("kind", -1))
+				== DiplomacyAI.Action.CENTRALIZE
+			and int(action.get("b", -1))
+				== loss_subject
+		):
+			loss_has_centralize = true
+	_check(
+		int(loss_fiscal["monthly_fiscal_benefit"]) < 0
+			and loss_ratio
+				< DiplomacyAI
+					.CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD
+			and not loss_has_centralize,
+		"撤藩财政亏损且政治威胁未达高危阈值时，不得削藩"
+	)
+
+	# 高威胁例外：大藩王即使撤藩财政亏损、军力强于宗主，仍应触发削藩并反抗。
 	var rs := GameState.new()
 	rs.generate_grid_world(32082)
 	for a in range(rs.nations.size()):
@@ -14360,29 +14831,63 @@ func _test_centralization_decision() -> void:
 		if rs_region.size() >= 3:
 			break
 	var rs_sub := rs.enfeoff(0, rs_region)
-	# 削弱宗主自身军队，抬高藩王反抗比越过阈值 → 预判反抗。
+	for city in rs.cities_of(rs_sub):
+		city.gold_per_month = 0
+	# 削弱宗主自身军队，使藩王超过高威胁阈值；旧的 1.5 倍军力优势门槛在此必定失败。
 	var rs_removed := 0
 	for army in rs.armies:
 		if army.owner_nation == 0 and rs_removed < 100:
 			army.size = 0
 			rs_removed += 1
+	rs.day = (
+		DiplomacyAI.CENTRALIZE_MIN_VASSAL_AGE_DAYS + 1
+	)
+	var rs_fiscal := (
+		DiplomacyAI
+			.evaluate_centralization_fiscal_benefit(
+				rs,
+				rs_sub
+			)
+	)
 	var strong_ratio := DiplomacyAI.vassal_resist_ratio(rs, rs_sub)
+	var rs_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_centralization_actions(
+		rs,
+		rs_actions,
+		{},
+		{}
+	)
+	var resist_action := {}
+	for action in rs_actions:
+		if (
+			int(action.get("kind", -1))
+				== DiplomacyAI.Action.CENTRALIZE
+			and int(action.get("b", -1)) == rs_sub
+		):
+			resist_action = action
 	var rs_sim := Simulation.new()
 	rs_sim.setup(rs)
-	var rs_exec := rs_sim._execute_diplomatic_action({
-		"kind": DiplomacyAI.Action.CENTRALIZE,
-		"a": 0,
-		"b": rs_sub,
-		"resist": strong_ratio > DiplomacyAI.CENTRALIZE_RESIST_RATIO_THRESHOLD,
-		"reason": "回归：削藩反抗",
-	})
+	var rs_exec := (
+		rs_sim._execute_diplomatic_action(resist_action)
+		if not resist_action.is_empty()
+		else false
+	)
 	_check(
-		rs_exec
+		int(rs_fiscal["monthly_fiscal_benefit"]) < 0
+			and strong_ratio
+				>= DiplomacyAI
+					.CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD
+			and not resist_action.is_empty()
+			and bool(resist_action.get("resist", false))
+			and str(
+				resist_action.get("reason", "")
+			).contains("政治威胁比")
+			and rs_exec
 			and rs.is_in_civil_war(rs_sub)
 			and rs.is_enemy(0, rs_sub)
 			and rs.is_vassal(rs_sub)
 			and rs.suzerainty_structure_valid(),
-		"藩王反抗：CENTRALIZE 应开内战（宗藩记录保留、转 WAR、不变量成立）"
+		"高威胁大藩王须绕过财政亏损触发削藩，并以反抗进入内战"
 	)
 	rs_sim.free()
 
@@ -14811,7 +15316,7 @@ func _test_vassal_local_main_command() -> void:
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0, "分封应成功建立藩王")
 
-	# 分封当下只赐军：藩王 LINE 军数量 = 其陆城数；MAIN 留待后续自费组建。
+	# 分封当下地方化驻防 LINE 并补齐到陆城数；MAIN 留待后续自费组建。
 	var land := gs.land_cities_of(subject).size()
 	var line_n := 0
 	var main_n := 0

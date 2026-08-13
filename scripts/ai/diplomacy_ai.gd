@@ -109,8 +109,7 @@ const ENFEOFF_FAR_HOP_FRACTION: float = 0.5
 const ENFEOFF_MIN_OVERLORD_CITIES_AFTER: int = 6    ## 分封后宗主至少保留的陆城数
 const ENFEOFF_DECISION_COOLDOWN_DAYS: int = 360     ## 同一宗主两次分封的最短间隔
 
-## 削藩（藩王系统增量 C）调参。宗主和平期+军力优势才削藩；藩王按反抗比决定接受/反抗。
-const CENTRALIZE_MIN_POWER_ADVANTAGE: float = 1.5   ## 宗主军力须为藩王的此倍以上才考虑削藩
+## 削藩（藩王系统增量 C）调参。财政收益是主决策；高政治威胁是次级例外。
 const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内不再对同一藩王削藩
 ## 分封保护期：藩王被分封后至少存续这么多天才可被削藩。防止「分封→立即撤回」反复横跳
 ## （分封 created_day 与削藩 last_centralization_day 是两套字段，缺此门控时新藩王当即满足削藩）。
@@ -119,6 +118,9 @@ const CENTRALIZE_MIN_VASSAL_AGE_DAYS: int = 1440
 ## 反抗比 = 藩王军力 / 宗主可镇压军力；超此阈值藩王倾向反抗（内战），否则接受(和平撤藩)。
 ## 文档第18节：和平0.45。第一版宗主削藩本就要求和平，故用单一阈值。
 const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
+## 财政收益不为正时，只有达到此高威胁比才因政治风险削藩。该阈值显著高于反抗阈值，
+## 因此威胁分支天然会进入内战，而不会让一般军力增长压过财政理性。
+const CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD: float = 0.80
 
 
 static func choose_actions(
@@ -3783,7 +3785,7 @@ static func _bump_frontier(
 # 而非「国家太大」这类虚构的行政容量。执行仍由 GameState.enfeoff 完成，
 # 本层只负责「统一规划」：评估并产出候选动作。
 
-## 纯派生评估：一片区域对宗主的负担画像。无副作用。
+## 纯派生评估：一片区域对宗主的负担与分封财政反事实。无副作用。
 ## burden_ratio = 区域边疆线「所需」LINE 军的月粮耗 / 区域城市的等效月粮产。
 ## 关键：分子是「地理应然的防务需求」（接敌边满编所需驻军），而非「当前实际驻军」——
 ## 因为中央打仗时会把兵抽到主战场，偏远边疆的实际驻军往往极少，用实然驻军会让
@@ -3800,7 +3802,8 @@ static func evaluate_region_burden(
 	var monthly_food_output := 0.0
 	var required_defense_troops := 0
 	var garrison_troops := 0
-	var gold_output := 0
+	var direct_gold_income := 0
+	var projected_vassal_gold_income := 0
 	var manpower_output := 0
 	for city_id in city_ids:
 		if city_id < 0 or city_id >= state.cities.size():
@@ -3808,7 +3811,16 @@ static func evaluate_region_burden(
 		var city := state.cities[city_id]
 		# 半年粮产折算为月产（与经济结算口径一致，DAYS_PER_HALF_YEAR 一次入库）。
 		monthly_food_output += float(city.food_per_half_year) / 6.0
-		gold_output += city.gold_per_month
+		var city_gold := Simulation.city_gold_output(
+			state,
+			city
+		)
+		direct_gold_income += city_gold
+		projected_vassal_gold_income += int(floor(
+			float(city_gold)
+			* Simulation
+				.VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+		))
 		manpower_output += city.manpower_per_month
 		# 该城通往「非本国可通行」邻城的每条正容量边，都是一段需长期驻守的边疆线；
 		# 其 max_manpower 即守住这段边所需的满编 LINE 兵力（应然防务需求）。
@@ -3832,15 +3844,45 @@ static func evaluate_region_burden(
 		if monthly_food_output > 0.0
 		else INF
 	)
+	var transferable_line_upkeep := 0
+	var transferable_line_count := 0
+	for army in state.transferable_vassal_line_armies(
+		nation_id,
+		city_ids
+	):
+		transferable_line_count += 1
+		transferable_line_upkeep += (
+			GameState.army_monthly_upkeep(army.size)
+		)
+	var projected_tribute_income := int(floor(
+		float(projected_vassal_gold_income)
+		* GameState.DEFAULT_TRIBUTE_RATE
+	))
+	var monthly_fiscal_benefit := (
+		transferable_line_upkeep
+		+ projected_tribute_income
+		- direct_gold_income
+	)
 	return {
 		"city_ids": city_ids,
 		"monthly_food_output": monthly_food_output,
 		"monthly_food_demand": monthly_food_demand,
 		"required_defense_troops": required_defense_troops,
 		"garrison_troops": garrison_troops,
-		"gold_output": gold_output,
+		"gold_output": direct_gold_income,
 		"manpower_output": manpower_output,
 		"burden_ratio": burden_ratio,
+		"direct_gold_income": direct_gold_income,
+		"projected_vassal_gold_income":
+			projected_vassal_gold_income,
+		"projected_tribute_income":
+			projected_tribute_income,
+		"transferable_line_count":
+			transferable_line_count,
+		"transferable_line_upkeep":
+			transferable_line_upkeep,
+		"monthly_fiscal_benefit":
+			monthly_fiscal_benefit,
 	}
 
 
@@ -3996,8 +4038,10 @@ static func _overlord_under_war_pressure(
 	return false
 
 
-## 生成分封候选动作。第一版规则（尽量少变量、先跑起来）：
-##   非藩王 且 冷却已过 且 处于和平 且 候选区负担比超阈 且 分封后留足核心 → 分封。
+## 生成分封候选动作：
+##   非藩王、冷却已过、处于和平、分封后留足核心，且满足以下任一长期收益：
+##   1. 转移 LINE 军费 + 预计贡赋 - 失去直辖收入 > 0；
+##   2. 候选边疆的应然驻军粮耗 / 本地产粮超过负担阈值。
 ## 注：与设计文档第 6 节相反，这里要求「和平」而非「正在外战」——战时把前线连同
 ## 尚弱的藩王一起甩出会导致边疆崩溃，且与削藩「宗主须和平」对称，逻辑更自洽。
 static func _collect_enfeoff_actions(
@@ -4033,16 +4077,34 @@ static func _collect_enfeoff_actions(
 		):
 			continue
 		var burden := evaluate_region_burden(state, overlord_id, region)
-		if float(burden["burden_ratio"]) < ENFEOFF_BURDEN_RATIO_THRESHOLD:
+		var food_burden_justifies := (
+			float(burden["burden_ratio"])
+			>= ENFEOFF_BURDEN_RATIO_THRESHOLD
+		)
+		var fiscal_benefit := int(
+			burden["monthly_fiscal_benefit"]
+		)
+		if not food_burden_justifies and fiscal_benefit <= 0:
 			continue
+		var motive := (
+			"财政月增益%+d（转军费%d+贡赋%d-直辖%d）"
+			% [
+				fiscal_benefit,
+				int(burden["transferable_line_upkeep"]),
+				int(burden["projected_tribute_income"]),
+				int(burden["direct_gold_income"]),
+			]
+			if fiscal_benefit > 0
+			else "边疆粮食负担比%.2f超阈"
+				% float(burden["burden_ratio"])
+		)
 		actions.append({
 			"kind": Action.ENFEOFF,
 			"a": overlord_id,
 			"b": overlord_id,
 			"region_cities": region,
-			"reason": "和平期偏远边疆负担比%.2f超阈，分封以转移地方防务" % float(
-				burden["burden_ratio"]
-			),
+			"reason": "和平期偏远边疆%s，分封以转移地方防务"
+				% motive,
 		})
 		committed[overlord_id] = true
 
@@ -4058,7 +4120,7 @@ static func _recent_enfeoff_day(state: GameState, overlord_id: int) -> int:
 
 
 # ------------------------------------------------------------------ 削藩（藩王系统 C2）
-# 宗主在和平期、对藩王有军力优势且冷却已过时发起削藩。藩王按「反抗比」即时决定：
+# 宗主在和平期、撤藩财政收益为正或藩王已成高威胁且冷却已过时发起削藩。藩王按「反抗比」即时决定：
 # 反抗比 = 藩王军力 / 宗主可镇压军力。低于阈值则接受（和平撤藩），高则反抗（内战）。
 # 执行仍由 Simulation 完成；本层只产出候选动作并预判藩王反应，附在动作里供展示。
 
@@ -4094,8 +4156,71 @@ static func vassal_resist_ratio(
 	return subject_power / maxf(suppression, 1.0)
 
 
+## 撤藩对宗主的月度财政反事实。藩王城市恢复直辖后失去 1.5 倍治理加成；其军队
+## 全部并入中央。藩王原有的下级藩属会转投宗主，故其贡赋继续计入撤藩后收入。
+static func evaluate_centralization_fiscal_benefit(
+	state: GameState,
+	subject_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Dictionary:
+	var overlord_id := state.overlord_of(subject_id)
+	if (
+		overlord_id < 0
+		or subject_id < 0
+		or subject_id >= state.nations.size()
+	):
+		return {
+			"projected_direct_income": 0,
+			"inherited_subordinate_tribute": 0,
+			"lost_subject_tribute": 0,
+			"inherited_military_upkeep": 0,
+			"monthly_fiscal_benefit": 0,
+		}
+	const GOLD_FLOWS_CACHE_KEY := "monthly_gold_flows"
+	if not evaluation_cache.has(GOLD_FLOWS_CACHE_KEY):
+		evaluation_cache[GOLD_FLOWS_CACHE_KEY] = (
+			Simulation.monthly_gold_flows(state)
+		)
+	var gold_flows: Array[Dictionary] = (
+		evaluation_cache[GOLD_FLOWS_CACHE_KEY]
+	)
+	var subject_flow: Dictionary = gold_flows[subject_id]
+	var projected_direct_income := 0
+	for city in state.cities_of(subject_id):
+		projected_direct_income += (
+			Simulation.city_gold_output_before_governance(
+				state,
+				city
+			)
+		)
+	var inherited_subordinate_tribute := int(
+		subject_flow["tribute_received"]
+	)
+	var lost_subject_tribute := int(
+		subject_flow["tribute_paid"]
+	)
+	var inherited_military_upkeep := int(
+		subject_flow["military_upkeep"]
+	)
+	return {
+		"projected_direct_income": projected_direct_income,
+		"inherited_subordinate_tribute":
+			inherited_subordinate_tribute,
+		"lost_subject_tribute": lost_subject_tribute,
+		"inherited_military_upkeep":
+			inherited_military_upkeep,
+		"monthly_fiscal_benefit": (
+			projected_direct_income
+			+ inherited_subordinate_tribute
+			- lost_subject_tribute
+			- inherited_military_upkeep
+		),
+	}
+
+
 ## 生成削藩候选动作。规则（文档 17、18 节）：
-##   宗主非藩王、处于和平、对该藩王军力优势达标、冷却已过、当前无内战 → 削藩。
+##   宗主非藩王、处于和平、冷却已过、当前无内战，且撤藩财政收益为正 → 削藩。
+##   财政不划算时，仅高政治威胁比可例外触发；军力比不再作为宗主优势硬门槛。
 ## 动作附带预判：resist=true 表示藩王将反抗（执行时开内战），否则和平撤藩。
 static func _collect_centralization_actions(
 	state: GameState,
@@ -4127,23 +4252,52 @@ static func _collect_centralization_actions(
 			)
 			if last_day >= 0 and state.day - last_day < CENTRALIZE_COOLDOWN_DAYS:
 				continue
-			# 军力优势：宗主可镇压军力须达藩王的倍数阈值。
+			var fiscal := (
+				evaluate_centralization_fiscal_benefit(
+					state,
+					subject_id,
+					evaluation_cache
+				)
+			)
 			var subject_power := _national_power(state, subject_id, evaluation_cache)
 			var suppression := _suppression_power(state, overlord_id, evaluation_cache)
-			if suppression < subject_power * CENTRALIZE_MIN_POWER_ADVANTAGE:
-				continue
 			var resist_ratio := subject_power / maxf(suppression, 1.0)
+			var fiscal_benefit := int(
+				fiscal["monthly_fiscal_benefit"]
+			)
+			var political_threat := (
+				resist_ratio
+				>= CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD
+			)
+			if fiscal_benefit <= 0 and not political_threat:
+				continue
 			var will_resist := resist_ratio > CENTRALIZE_RESIST_RATIO_THRESHOLD
+			var motive := (
+				"撤藩月增益%+d（直辖%d+下级贡赋%d-原贡赋%d-接军费%d）"
+				% [
+					fiscal_benefit,
+					int(fiscal["projected_direct_income"]),
+					int(fiscal["inherited_subordinate_tribute"]),
+					int(fiscal["lost_subject_tribute"]),
+					int(fiscal["inherited_military_upkeep"]),
+				]
+				if fiscal_benefit > 0
+				else "政治威胁比%.2f达到高危阈值"
+					% resist_ratio
+			)
 			actions.append({
 				"kind": Action.CENTRALIZE,
 				"a": overlord_id,
 				"b": subject_id,
 				"resist": will_resist,
 				"resist_ratio": resist_ratio,
+				"monthly_fiscal_benefit":
+					fiscal_benefit,
 				"reason": (
-					"和平期对藩王%d削藩：反抗比%.2f，%s"
+					"和平期对藩王%d削藩：%s；反抗比%.2f，%s"
 					% [
 						subject_id,
+						motive,
 						resist_ratio,
 						"藩王将反抗，转削藩内战" if will_resist else "藩王接受，和平撤藩直辖",
 					]

@@ -2105,21 +2105,107 @@ func _spawn_conjured_army(
 	return army
 
 
-## 分封赐军：确保新藩王拥有至少「陆城数」支 LINE 填线军（不足则凭空补足）。
-## 新模型下分封不迁移宗主驻军，故一般 existing=0、按城数全额赐军；仍做「计现有、补缺口」
-## 以对任何既有藩王军队（如反复分封的边界情形）保持幂等、不超编。凭空补（不扣人力池）。
-## 分封时只赐 LINE 守土军；藩王后续可用自身资源组建 MAIN 内线军团。
-func _grant_vassal_line_armies(subject_id: int) -> void:
-	if subject_id < 0 or subject_id >= nations.size():
+## 查询一次分封会地方化的宗主 LINE。只认封地城市内的稳定驻军，以及从封地端
+## 驻守外部边界的 HOLDING；供 AI 反事实财政评估与实际转移共用，避免预测漂移。
+func transferable_vassal_line_armies(
+	overlord_id: int,
+	fief_city_ids: Array[int]
+) -> Array[Army]:
+	var result: Array[Army] = []
+	if (
+		overlord_id < 0
+		or overlord_id >= nations.size()
+		or fief_city_ids.is_empty()
+	):
+		return result
+	var fief := {}
+	for city_id in fief_city_ids:
+		if city_id >= 0 and city_id < cities.size():
+			fief[city_id] = true
+	for army in armies:
+		if (
+			army.owner_nation != overlord_id
+			or army.size <= 0
+			or not army.is_line_role()
+			or army.battle_group_id >= 0
+		):
+			continue
+		var stationed_in_fief := (
+			not army.on_edge
+			and army.state in [
+				Army.State.IDLE,
+				Army.State.RECOVERING,
+			]
+			and fief.has(army.current_city_node())
+		)
+		var holding_fief_border := (
+			army.on_edge
+			and army.state == Army.State.HOLDING
+			and fief.has(army.move_from)
+		)
+		if stationed_in_fief or holding_fief_border:
+			result.append(army)
+	result.sort_custom(func(a: Army, b: Army) -> bool:
+		return a.id < b.id
+	)
+	return result
+
+
+## 分封驻军地方化：先把稳定驻扎在封地城市、或从封地端驻守外部边界的宗主 LINE
+## 转给藩王，再凭空补足到「封地陆城数」。正在行军/交战/撤退的 LINE 与全部 MAIN
+## 仍归宗主，避免政治重组改写进行中的状态机或拆散持久战团。
+func _grant_vassal_line_armies(
+	subject_id: int,
+	overlord_id: int
+) -> void:
+	if (
+		subject_id < 0
+		or subject_id >= nations.size()
+		or overlord_id < 0
+		or overlord_id >= nations.size()
+	):
 		return
 	var owned := land_cities_of(subject_id)
 	if owned.is_empty():
 		return
+	var fief_city_ids: Array[int] = []
+	for city in owned:
+		fief_city_ids.append(city.id)
+	var overlord := nations[overlord_id]
+	for army in transferable_vassal_line_armies(
+		overlord_id,
+		fief_city_ids
+	):
+		army.owner_nation = subject_id
+		army.clear_line_assignment()
+		army.ai_action = ActionCandidate.Kind.NONE
+		army.ai_target_city = -1
+		army.ai_order_created_day = -1
+		army.ai_order_until_day = -1
+		army.ai_order_score = 0.0
+		army.ai_order_reason = ""
+		army.defensive_deployment_until_day = -1
+		army.defensive_blocked_edge_a = -1
+		army.defensive_blocked_edge_b = -1
+		army.offensive_attack_multiplier = 1.0
+		army.offensive_bonus_until_day = -1
+		army.occupation_claimant_nation = -1
+		army.diplomatic_repatriation = false
+		overlord.campaign_preparation_assignments.erase(
+			army.id
+		)
+		overlord.campaign_attack_assignments.erase(army.id)
+		overlord.campaign_attack_echelons.erase(army.id)
+		overlord.campaign_launched_armies.erase(army.id)
 	var target := owned.size()
-	# 统计藩王当前存活军队数（迁入驻军已归属藩王）；只补足到城市数，不叠加超编。
+	# 只按 LINE 计数；藩王未来已有 MAIN 时也不得挤占地方防务配额。
 	var existing := 0
 	for army in armies:
-		if army.owner_nation == subject_id and army.size > 0:
+		if (
+			army.owner_nation == subject_id
+			and army.size > 0
+			and army.is_line_role()
+		):
 			existing += 1
 	var deficit := target - existing
 	if deficit <= 0:
@@ -2414,9 +2500,8 @@ func enfeoff(
 		recognized_city_owners[city_id] = subject.id
 	ownership_revision += 1
 
-	# 3.5 分封不把宗主驻军（尤其 MAIN 战团）转隶藩王：新藩王先获得第 5.5 步赐予的
-	#     LINE 守土军，后续再用自身资源组建受封地防区约束的 MAIN 内线军团；
-	#     留在封地内的宗主军队因宗藩 ALLIED 通行权不会被困，交宗主 AI 下个 tick 自然调度。
+	# 3.5 军队归属在第 5.5 步统一处理：封地内稳定驻防的 LINE 地方化并补齐，
+	#     MAIN 战团与在途 LINE 继续归中央。
 
 	# 4. 划转人力与金钱（守恒：从宗主池扣除、注入藩王池）。
 	overlord.manpower_pool -= granted_manpower
@@ -2428,9 +2513,9 @@ func enfeoff(
 	#    回流宗主根粮仓（共享池守恒，不凭空蒸发）。
 	_establish_vassal_capital(subject, overlord_id)
 
-	# 5.5 赐军：确保藩王至少拥有「陆城数」支 LINE 填线军（含迁入驻军，缺口凭空补足），
-	#     解决「分封藩王常无军队」；MAIN 不凭空赐予，由藩王后续按经济能力自行组建。
-	_grant_vassal_line_armies(subject.id)
+	# 5.5 地方化驻军并补齐：先转移封地内稳定驻防的宗主 LINE，再把缺口凭空补到
+	#     「陆城数」；MAIN 不转移、不凭空赐予，由藩王后续按经济能力自行组建。
+	_grant_vassal_line_armies(subject.id, overlord_id)
 
 	# 6. 外交：藩王继承宗主对每个第三方的关系，并与宗主结盟。
 	#    这样 alliance_bloc 天然把宗藩聚为一体，对外 is_enemy 自动正确，

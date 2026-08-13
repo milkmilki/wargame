@@ -2,8 +2,9 @@ extends SceneTree
 ## 分封瓶颈诊断：推进到指定年份后，枚举所有存活非藩王国家，逐条统计分封门控
 ## 的通过率，定位「分封在自然演化中几乎不发生」的真正瓶颈条件。
 ##
-## 门控链（全部为 AND）：
-##   非藩王 → 冷却已过 → 中央处于和平 → 候选封地≥MIN城 → 分封后仍留足核心 → 负担比≥阈
+## 门控链：
+##   非藩王 → 冷却已过 → 中央处于和平 → 候选封地≥MIN城 → 分封后仍留足核心
+##   →（负担比≥阈 OR 财政月增益>0）
 ## 输出各阶段的幸存国家数，最后一段掉得最多的即瓶颈。
 
 func _init() -> void:
@@ -26,8 +27,9 @@ func _init() -> void:
 	var peace_ok := 0
 	var region_ok := 0
 	var core_retained := 0
-	var burden_pass := 0
+	var benefit_pass := 0
 	var burden_samples: Array[float] = []
+	var fiscal_samples: Array[int] = []
 	var region_sizes: Array[int] = []
 
 	for n in state.nations:
@@ -58,9 +60,17 @@ func _init() -> void:
 		core_retained += 1
 		var burden := DiplomacyAI.evaluate_region_burden(state, oid, region)
 		var ratio := float(burden["burden_ratio"])
+		var fiscal := int(
+			burden["monthly_fiscal_benefit"]
+		)
 		burden_samples.append(ratio)
-		if ratio >= DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD:
-			burden_pass += 1
+		fiscal_samples.append(fiscal)
+		if (
+			ratio
+				>= DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD
+			or fiscal > 0
+		):
+			benefit_pass += 1
 
 	print("=== 分封门控诊断 seed=%d %d国%d城 推进%d年 ===" % [
 		world_seed, nations, cities, probe_year,
@@ -73,8 +83,8 @@ func _init() -> void:
 		DiplomacyAI.ENFEOFF_MIN_REGION_CITIES, region_ok,
 	])
 	print("⑤ 且分封后留足核心 : %d" % core_retained)
-	print("⑥ 且负担比≥%.2f     : %d   <- 最终触发" % [
-		DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD, burden_pass,
+	print("⑥ 且负担比≥%.2f或财政>0: %d   <- 最终触发" % [
+		DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD, benefit_pass,
 	])
 	if not region_sizes.is_empty():
 		var rmin := region_sizes[0]
@@ -100,6 +110,20 @@ func _init() -> void:
 		])
 	else:
 		print("负担比样本: 无（在④或⑤已全部掉光）")
+	if not fiscal_samples.is_empty():
+		var fmin := fiscal_samples[0]
+		var fmax := fiscal_samples[0]
+		var fsum := 0
+		for fiscal in fiscal_samples:
+			fmin = mini(fmin, fiscal)
+			fmax = maxi(fmax, fiscal)
+			fsum += fiscal
+		print("财政月增益样本(通过⑤的国家): min=%d max=%d avg=%.1f n=%d" % [
+			fmin,
+			fmax,
+			float(fsum) / float(fiscal_samples.size()),
+			fiscal_samples.size(),
+		])
 	sim.free()
 	quit(0)
 

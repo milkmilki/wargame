@@ -941,11 +941,23 @@ static func city_gold_output(
 	return _apply_governance_multiplier(
 		game_state,
 		city,
-		_apply_city_war_disruption(
+		city_gold_output_before_governance(
 			game_state,
-			city,
-			city.gold_per_month
+			city
 		)
+	)
+
+
+## 城市当月金产出在治理倍率生效前的值。用于所有权变化的反事实评估，避免通过
+## 除以当前倍率逆推时被逐城 floor 舍入破坏精度。
+static func city_gold_output_before_governance(
+	game_state: GameState,
+	city: City
+) -> int:
+	return _apply_city_war_disruption(
+		game_state,
+		city,
+		city.gold_per_month
 	)
 
 
