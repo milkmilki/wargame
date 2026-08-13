@@ -1719,15 +1719,25 @@ func _assigned_defense_candidate(
 			view.state.cities[origin].owner_nation
 		):
 			origin = army.move_to
-		if (
-			origin == city_id
-			and assigned_posture == Posture.EDGE
-			and assigned_edge in [
+		if origin == city_id and assigned_posture == Posture.EDGE:
+			if assigned_edge in [
 				army.move_from,
 				army.move_to,
-			]
-		):
-			return null
+			]:
+				return null
+			# 同锚点换边时，已有压力的当前边必须继续由原 LINE 驻守；只有当前边完全
+			# 无压力才允许回城换防。改派回 CITY、换锚点和锚点失守仍走既有撤离路径。
+			var current_edge := (
+				army.move_to
+				if origin == army.move_from
+				else army.move_from
+			)
+			var pressures: Dictionary = directional_pressure.get(
+				city_id,
+				{}
+			)
+			if float(pressures.get(current_edge, 0.0)) > 0.0:
+				return null
 		var retreat := ActionCandidate.make(
 			ActionCandidate.Kind.RETREAT,
 			ROLE_DEPLOYMENT_SCORE,

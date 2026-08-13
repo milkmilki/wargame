@@ -12,8 +12,8 @@ enum State {
 }
 
 enum StrategicRole {
-	LINE,       ## 填线军：只执行统一防区规划，可被国家级攻势借用为辅助军
-	MAIN,       ## 主战军：执行完整 Utility AI 与国家级攻势
+	LINE,       ## 独立填线军：只执行统一防区规划；正式地图国家级攻势不会临时抽调
+	MAIN,       ## 主战军：包含重军与战团轻军，执行完整 Utility AI 与国家级攻势
 }
 
 enum LinePosture {

@@ -89,7 +89,10 @@ const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
 const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 2
-const CAMPAIGN_BORROWED_LINE_MAX_ARMIES: int = 1
+## 正式地图的独立 LINE 已由 CityDefensePlan.can_join_offensive 拒绝。此上限只处理角色整理与
+## 防区快照交界：同一轮攻势最多接纳一支仍残留防区记录、但已归入战团成为 MAIN 的轻军，
+## 避免旧防区快照让多个防守槽同时进入攻势。
+const CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES: int = 1
 const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
 const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = 1
 const EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS: float = 0.25
@@ -3796,7 +3799,7 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		var defense_plan: CityDefensePlan = defense_plans[nation_id]
 		var coordinator: ArmyCoordinator = coordinators[nation_id]
 		# 藩王不做攻势规划：主战力与进攻指挥统一归宗主，藩王只管填线军守土（作战体系简化）。
-		# 跳过战前集结与战役进攻，藩王的 LINE 仍可被宗主的国家级攻势借用为辅助军（既有机制）。
+		# 独立 LINE 不进入正式地图攻势候选；只有归入持久战团并转为 MAIN 的军队才能参加攻势。
 		if state.is_vassal(nation_id):
 			pass
 		elif nation.war_preparation_target_nation >= 0:
@@ -5767,7 +5770,7 @@ func _ensure_campaign_preparation_plan(
 		)),
 		1
 	)
-	var borrowed_line_armies := 0
+	var defense_assigned_armies := 0
 	for target_index in range(target_candidates.size()):
 		var target_city := target_candidates[target_index]
 		var staging := DiplomacyAI.staging_cities_for_objective(
@@ -5982,22 +5985,22 @@ func _ensure_campaign_preparation_plan(
 				if selected.size() >= fallback_limit:
 					break
 				var fallback_army: Army = fallback_entry["army"]
-				var borrows_line := (
+				var has_defense_assignment := (
 					defense_plan != null
 					and defense_plan.assigned_city_for(
 						fallback_army
 					) >= 0
 				)
 				if (
-					borrows_line
-					and borrowed_line_armies
-						>= CAMPAIGN_BORROWED_LINE_MAX_ARMIES
+					has_defense_assignment
+					and defense_assigned_armies
+						>= CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES
 				):
 					continue
 				selected.append(fallback_army)
 				selected_troops += fallback_army.size
-				if borrows_line:
-					borrowed_line_armies += 1
+				if has_defense_assignment:
+					defense_assigned_armies += 1
 		else:
 			for heavy_entry in ranked_heavy:
 				var spearhead: Army = heavy_entry["army"]
@@ -6010,16 +6013,16 @@ func _ensure_campaign_preparation_plan(
 			var support_candidates: Array[Dictionary] = []
 			for light_entry in ranked_light:
 				var light_army: Army = light_entry["army"]
-				var borrows_line := (
+				var has_defense_assignment := (
 					defense_plan != null
 					and defense_plan.assigned_city_for(
 						light_army
 					) >= 0
 				)
 				if (
-					borrows_line
-					and borrowed_line_armies
-						>= CAMPAIGN_BORROWED_LINE_MAX_ARMIES
+					has_defense_assignment
+					and defense_assigned_armies
+						>= CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES
 				):
 					continue
 				support_candidates.append(light_entry)
@@ -6042,7 +6045,7 @@ func _ensure_campaign_preparation_plan(
 						support
 					) >= 0
 				):
-					borrowed_line_armies += 1
+					defense_assigned_armies += 1
 		if (
 			selected_troops <= 0
 			or (

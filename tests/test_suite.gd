@@ -6545,6 +6545,47 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			and return_to_city.target_city == 1,
 		"边境城市为空且兵力不足时，旧边槽军必须放弃驻边并立即回城"
 	)
+	var edge_switch_plan := CityDefensePlan.new()
+	edge_switch_plan.view = edge_priority_view
+	edge_switch_plan.assigned_city_by_army = {
+		edge_only_guard.id: 1,
+	}
+	edge_switch_plan.assigned_posture_by_army = {
+		edge_only_guard.id: CityDefensePlan.Posture.EDGE,
+	}
+	edge_switch_plan.assigned_edge_by_army = {
+		edge_only_guard.id: 0,
+	}
+	edge_switch_plan.directional_pressure = {
+		1: {
+			0: 2000.0,
+			2: 1000.0,
+		},
+	}
+	var pressured_edge_order := edge_switch_plan.candidate_for(
+		edge_only_guard,
+		ArmyCoordinator.new()
+	)
+	_check(
+		pressured_edge_order == null,
+		"当前驻边仍有压力时，LINE 不得为追逐更高压力方向而主动弃守"
+	)
+	edge_switch_plan.directional_pressure = {
+		1: {
+			0: 2000.0,
+		},
+	}
+	var empty_edge_switch_order := edge_switch_plan.candidate_for(
+		edge_only_guard,
+		ArmyCoordinator.new()
+	)
+	_check(
+		empty_edge_switch_order != null
+			and empty_edge_switch_order.kind
+				== ActionCandidate.Kind.RETREAT
+			and empty_edge_switch_order.target_city == 1,
+		"当前驻边完全无压力时，LINE 应允许回城换防到更高压力方向"
+	)
 	var edge_city_guard := _make_army(947, 0, 5000, 10, 10)
 	edge_city_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
 	edge_city_guard.location_city = 1
@@ -11179,107 +11220,147 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	fallback_sim.free()
 
-	var borrowed_state := GameState.new()
-	borrowed_state.generate_grid_world(32016)
-	borrowed_state.uses_heightmap = true
-	borrowed_state.armies.clear()
-	for borrowed_city in borrowed_state.cities:
-		borrowed_city.owner_nation = 1
-	for borrowed_city_id in range(10):
-		borrowed_state.cities[borrowed_city_id].owner_nation = 0
-	borrowed_state.nations[0].capital_city_id = 0
-	var borrowed_origin := 9
-	var borrowed_target := 10
-	borrowed_state.set_diplomatic_relation(
+	# 角色整理后，旧防区快照可能仍记录一支已经归入战团并转为 MAIN 的轻军。攻势应接纳
+	# 同一持久战团的两支 MAIN 轻军，但必须拒绝仍承担 CITY/EDGE 防区的独立 LINE。
+	var stale_assignment_state := GameState.new()
+	stale_assignment_state.generate_grid_world(32016)
+	stale_assignment_state.uses_heightmap = true
+	stale_assignment_state.armies.clear()
+	for stale_assignment_city in stale_assignment_state.cities:
+		stale_assignment_city.owner_nation = 1
+	for stale_assignment_city_id in range(10):
+		stale_assignment_state.cities[
+			stale_assignment_city_id
+		].owner_nation = 0
+	stale_assignment_state.nations[0].capital_city_id = 0
+	var stale_assignment_origin := 9
+	var stale_assignment_target := 10
+	stale_assignment_state.set_diplomatic_relation(
 		0,
 		1,
 		GameState.DiplomaticRelation.WAR
 	)
-	var borrowed_guard := _make_army(2100, 0, 5000, 10, 10)
-	borrowed_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
-	borrowed_guard.location_city = borrowed_origin
-	borrowed_guard.move_from = borrowed_origin
-	var borrowed_line_a := _make_army(2101, 0, 5000, 10, 10)
-	var borrowed_line_b := _make_army(2102, 0, 5000, 10, 10)
-	for borrowed_line in [borrowed_line_a, borrowed_line_b]:
-		borrowed_line.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
-		borrowed_line.location_city = borrowed_origin
-		borrowed_line.move_from = borrowed_origin
-	var borrowed_free := _make_army(2103, 0, 4999, 10, 10)
-	borrowed_free.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
-	borrowed_free.location_city = borrowed_origin
-	borrowed_free.move_from = borrowed_origin
-	borrowed_state.armies.append_array([
-		borrowed_guard,
-		borrowed_line_a,
-		borrowed_line_b,
-		borrowed_free,
+	var independent_city_guard := _make_army(2100, 0, 5000, 10, 10)
+	independent_city_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	independent_city_guard.location_city = stale_assignment_origin
+	independent_city_guard.move_from = stale_assignment_origin
+	var group_member_with_stale_assignment := _make_army(
+		2101,
+		0,
+		5000,
+		10,
+		10
+	)
+	var independent_edge_guard := _make_army(2102, 0, 5000, 10, 10)
+	for light_army in [
+		group_member_with_stale_assignment,
+		independent_edge_guard,
+	]:
+		light_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+		light_army.location_city = stale_assignment_origin
+		light_army.move_from = stale_assignment_origin
+	var group_member_without_assignment := _make_army(
+		2103,
+		0,
+		4999,
+		10,
+		10
+	)
+	group_member_without_assignment.max_size = (
+		GameState.INITIAL_LIGHT_ARMY_SIZE
+	)
+	group_member_without_assignment.location_city = (
+		stale_assignment_origin
+	)
+	group_member_without_assignment.move_from = stale_assignment_origin
+	stale_assignment_state.armies.append_array([
+		independent_city_guard,
+		group_member_with_stale_assignment,
+		independent_edge_guard,
+		group_member_without_assignment,
 	])
-	var borrowed_group := borrowed_state.nations[0].battle_groups[0]
-	borrowed_state.assign_army_to_battle_group(
-		borrowed_line_a,
-		borrowed_group.id
+	var support_group := stale_assignment_state.nations[0].battle_groups[0]
+	stale_assignment_state.assign_army_to_battle_group(
+		group_member_with_stale_assignment,
+		support_group.id
 	)
-	borrowed_state.assign_army_to_battle_group(
-		borrowed_free,
-		borrowed_group.id
+	stale_assignment_state.assign_army_to_battle_group(
+		group_member_without_assignment,
+		support_group.id
 	)
-	var borrowed_sim := Simulation.new()
-	borrowed_sim.setup(borrowed_state)
-	var borrowed_view := AiWorldView.build(borrowed_state, 0)
-	var borrowed_plan := CityDefensePlan.new()
-	borrowed_plan.view = borrowed_view
-	borrowed_plan.assigned_city_by_army = {
-		borrowed_guard.id: borrowed_origin,
-		borrowed_line_a.id: borrowed_origin,
-		borrowed_line_b.id: borrowed_origin,
+	var stale_assignment_sim := Simulation.new()
+	stale_assignment_sim.setup(stale_assignment_state)
+	var stale_assignment_view := AiWorldView.build(
+		stale_assignment_state,
+		0
+	)
+	var stale_assignment_plan := CityDefensePlan.new()
+	stale_assignment_plan.view = stale_assignment_view
+	stale_assignment_plan.assigned_city_by_army = {
+		independent_city_guard.id: stale_assignment_origin,
+		group_member_with_stale_assignment.id: stale_assignment_origin,
+		independent_edge_guard.id: stale_assignment_origin,
 	}
-	borrowed_plan.assigned_posture_by_army = {
-		borrowed_guard.id: CityDefensePlan.Posture.CITY,
-		borrowed_line_a.id: CityDefensePlan.Posture.EDGE,
-		borrowed_line_b.id: CityDefensePlan.Posture.EDGE,
+	stale_assignment_plan.assigned_posture_by_army = {
+		independent_city_guard.id: CityDefensePlan.Posture.CITY,
+		group_member_with_stale_assignment.id:
+			CityDefensePlan.Posture.EDGE,
+		independent_edge_guard.id: CityDefensePlan.Posture.EDGE,
 	}
-	borrowed_plan.assigned_edge_by_army = {
-		borrowed_line_a.id: borrowed_target,
-		borrowed_line_b.id: borrowed_target,
+	stale_assignment_plan.assigned_edge_by_army = {
+		group_member_with_stale_assignment.id: stale_assignment_target,
+		independent_edge_guard.id: stale_assignment_target,
 	}
-	borrowed_plan.assigned_armies_by_city = {
-		borrowed_origin: [
-			borrowed_guard.id,
-			borrowed_line_a.id,
-			borrowed_line_b.id,
+	stale_assignment_plan.assigned_armies_by_city = {
+		stale_assignment_origin: [
+			independent_city_guard.id,
+			group_member_with_stale_assignment.id,
+			independent_edge_guard.id,
 		],
 	}
-	var borrowed_built := (
-		borrowed_sim._ensure_campaign_preparation_plan(
+	var stale_assignment_built := (
+		stale_assignment_sim._ensure_campaign_preparation_plan(
 			0,
-			borrowed_target,
-			borrowed_plan,
+			stale_assignment_target,
+			stale_assignment_plan,
 			ArmyCoordinator.new()
 		)
 	)
-	var borrowed_assignments := (
-		borrowed_state.nations[0]
+	var stale_assignment_campaign_assignments := (
+		stale_assignment_state.nations[0]
 			.campaign_preparation_assignments
 	)
-	var borrowed_line_count := 0
-	for borrowed_id in [
-		borrowed_line_a.id,
-		borrowed_line_b.id,
+	var defense_assigned_member_count := 0
+	for defense_assigned_id in [
+		group_member_with_stale_assignment.id,
+		independent_edge_guard.id,
 	]:
-		if borrowed_assignments.has(borrowed_id):
-			borrowed_line_count += 1
+		if stale_assignment_campaign_assignments.has(
+			defense_assigned_id
+		):
+			defense_assigned_member_count += 1
 	_check(
-		borrowed_built
-			and borrowed_assignments.size() == 2
-			and borrowed_line_count == 1
-			and borrowed_assignments.has(borrowed_free.id)
-			and borrowed_assignments.has(borrowed_line_a.id)
-			and not borrowed_assignments.has(borrowed_guard.id)
-			and not borrowed_assignments.has(borrowed_line_b.id),
-		"每个攻势目标必须且只能使用一个持久战团，不得临时借入其他填线军"
+		stale_assignment_built
+			and stale_assignment_campaign_assignments.size() == 2
+			and defense_assigned_member_count == 1
+			and stale_assignment_campaign_assignments.has(
+				group_member_without_assignment.id
+			)
+			and stale_assignment_campaign_assignments.has(
+				group_member_with_stale_assignment.id
+			)
+			and not stale_assignment_campaign_assignments.has(
+				independent_city_guard.id
+			)
+			and not stale_assignment_campaign_assignments.has(
+				independent_edge_guard.id
+			),
+		(
+			"正式地图轻型攻势应使用同一持久战团的两支 MAIN 轻军；"
+			+ "即使旧防区快照仍记录其中一军，也不得抽调独立 CITY/EDGE LINE"
+		)
 	)
-	borrowed_sim.free()
+	stale_assignment_sim.free()
 
 	var theater_state := GameState.new()
 	theater_state.generate_grid_world(32017)
