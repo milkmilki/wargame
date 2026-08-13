@@ -36,6 +36,8 @@ const NATION_WINDOW_HEADER_HEIGHT: float = 25.0
 const NATION_WINDOW_ROW_HEIGHT: float = 31.0
 const NATION_WINDOW_FOOTER_HEIGHT: float = 22.0
 const NATION_WINDOW_MARGIN: float = 18.0
+const NATION_TREE_INDENT: float = 14.0
+const NATION_TREE_TOGGLE_SIZE: float = 14.0
 const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
@@ -90,12 +92,14 @@ var _nation_stats_window_position := Vector2(-1.0, -1.0)
 var _nation_stats_drag_active: bool = false
 var _nation_stats_drag_offset := Vector2.ZERO
 var _nation_stats_scroll: int = 0
+var _nation_stats_collapsed_nations: Dictionary = {}
 var _city_names_visible: bool = true
 var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
 var _nation_list_cache_day: int = -1
 var _nation_list_cache_ownership_revision: int = -1
 var _nation_list_cache_diplomacy_revision: int = -1
 var _nation_list_cache: Array[Dictionary] = []
+var _nation_list_alive_count: int = 0
 var _city_label_cache: Dictionary = {}
 var _contested_city_cache_day: int = -1
 var _contested_city_cache: Dictionary = {}
@@ -155,8 +159,10 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_nation_list_cache_ownership_revision = -1
 	_nation_list_cache_diplomacy_revision = -1
 	_nation_list_cache.clear()
+	_nation_list_alive_count = 0
 	_nation_stats_drag_active = false
 	_nation_stats_scroll = 0
+	_nation_stats_collapsed_nations.clear()
 	_city_label_cache.clear()
 	_contested_city_cache_day = -1
 	_contested_city_cache.clear()
@@ -515,6 +521,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				_nation_stats_drag_active = true
 				_nation_stats_drag_offset = (
 					point - stats_rect.position
+				)
+			else:
+				_toggle_nation_tree_at_point(
+					point,
+					stats_rect
 				)
 			queue_redraw()
 			get_viewport().set_input_as_handled()
@@ -902,6 +913,48 @@ static func nation_stats_close_rect(
 	)
 
 
+static func nation_stats_row_rect(
+	window_rect: Rect2,
+	display_scale: float,
+	visual_index: int
+) -> Rect2:
+	return Rect2(
+		Vector2(
+			window_rect.position.x,
+			window_rect.position.y
+				+ (
+					NATION_WINDOW_TITLE_HEIGHT
+					+ NATION_WINDOW_HEADER_HEIGHT
+					+ float(maxi(visual_index, 0))
+						* NATION_WINDOW_ROW_HEIGHT
+				) * display_scale
+		),
+		Vector2(
+			window_rect.size.x,
+			NATION_WINDOW_ROW_HEIGHT * display_scale
+		)
+	)
+
+
+static func nation_tree_toggle_rect(
+	row_rect: Rect2,
+	display_scale: float,
+	depth: int
+) -> Rect2:
+	var side := NATION_TREE_TOGGLE_SIZE * display_scale
+	return Rect2(
+		Vector2(
+			row_rect.position.x
+				+ row_rect.size.x * 0.02
+				+ float(maxi(depth, 0))
+					* NATION_TREE_INDENT * display_scale,
+			row_rect.position.y
+				+ (row_rect.size.y - side) * 0.5
+		),
+		Vector2(side, side)
+	)
+
+
 func _ensure_nation_stats_window_position() -> void:
 	if (
 		_nation_stats_window_position.x >= 0.0
@@ -947,6 +1000,64 @@ func _clamp_nation_stats_scroll() -> void:
 		0,
 		maxi(rows.size() - capacity, 0)
 	)
+
+
+func _toggle_nation_tree_at_point(
+	point: Vector2,
+	window_rect: Rect2
+) -> bool:
+	var rows := _nation_list_rows_cached()
+	var capacity := nation_stats_visible_row_capacity(
+		window_rect.size,
+		_display_scale
+	)
+	for visual_index in range(
+		maxi(
+			mini(
+				capacity,
+				rows.size() - _nation_stats_scroll
+			),
+			0
+		)
+	):
+		var row_index := _nation_stats_scroll + visual_index
+		var row_data: Dictionary = rows[row_index]
+		if not bool(row_data.get("has_subjects", false)):
+			continue
+		var toggle_rect := nation_tree_toggle_rect(
+			nation_stats_row_rect(
+				window_rect,
+				_display_scale,
+				visual_index
+			),
+			_display_scale,
+			int(row_data.get("depth", 0))
+		)
+		if not toggle_rect.has_point(point):
+			continue
+		var nation_id := int(row_data["nation_id"])
+		if _nation_stats_collapsed_nations.has(nation_id):
+			_nation_stats_collapsed_nations.erase(nation_id)
+		else:
+			_nation_stats_collapsed_nations[nation_id] = true
+		_nation_list_cache_day = -1
+		var updated_rows := _nation_list_rows_cached()
+		var updated_capacity := (
+			nation_stats_visible_row_capacity(
+				window_rect.size,
+				_display_scale
+			)
+		)
+		_nation_stats_scroll = clampi(
+			_nation_stats_scroll,
+			0,
+			maxi(
+				updated_rows.size() - updated_capacity,
+				0
+			)
+		)
+		return true
+	return false
 
 
 static func army_icon_scale_control_rect(
@@ -2491,26 +2602,49 @@ func _grid_to_pixel(g: Vector2) -> Vector2:
 
 
 static func nation_list_rows(
-	game_state: GameState
+	game_state: GameState,
+	collapsed_nations: Dictionary = {}
 ) -> Array[Dictionary]:
-	var rows: Array[Dictionary] = []
-	for nation in game_state.nations:
-		var owned_cities := game_state.cities_of(nation.id)
-		if not nation.alive or owned_cities.is_empty():
+	var city_count_by_nation: Array[int] = []
+	var army_count_by_nation: Array[int] = []
+	var troops_by_nation: Array[int] = []
+	for values in [
+		city_count_by_nation,
+		army_count_by_nation,
+		troops_by_nation,
+	]:
+		values.resize(game_state.nations.size())
+		values.fill(0)
+	for city in game_state.cities:
+		if (
+			city.owner_nation >= 0
+			and city.owner_nation < game_state.nations.size()
+		):
+			city_count_by_nation[city.owner_nation] += 1
+	for army in game_state.armies:
+		if (
+			army.owner_nation < 0
+			or army.owner_nation >= game_state.nations.size()
+			or army.size <= 0
+		):
 			continue
-		var troops := 0
-		var army_count := 0
-		for army in game_state.armies:
-			if army.owner_nation == nation.id and army.size > 0:
-				troops += army.size
-				army_count += 1
+		army_count_by_nation[army.owner_nation] += 1
+		troops_by_nation[army.owner_nation] += army.size
+	var row_by_nation := {}
+	var visible_nation_ids: Array[int] = []
+	for nation in game_state.nations:
+		if (
+			not nation.alive
+			or city_count_by_nation[nation.id] <= 0
+		):
+			continue
 		var report := DiplomacyAI.resource_report(
 			game_state,
 			nation.id
 		)
 		var wars := game_state.wars_of(nation.id)
 		var allies := game_state.allies_of(nation.id)
-		rows.append({
+		row_by_nation[nation.id] = {
 			"nation_id": nation.id,
 			"color": nation.color,
 			"at_war": not wars.is_empty(),
@@ -2519,9 +2653,9 @@ static func nation_list_rows(
 				_nation_relation_text(game_state, nation.id),
 			],
 			"military": "城%d  军%d/%d  人%d" % [
-				owned_cities.size(),
-				army_count,
-				troops,
+				city_count_by_nation[nation.id],
+				army_count_by_nation[nation.id],
+				troops_by_nation[nation.id],
 				nation.manpower_pool,
 			],
 			"economy": "金%d  月%+d  粮%d/%d" % [
@@ -2535,8 +2669,144 @@ static func nation_list_rows(
 				str(allies),
 			],
 			"action": nation_action_summary(game_state, nation.id),
-		})
+		}
+		visible_nation_ids.append(nation.id)
+	var children_by_parent := {}
+	var root_ids: Array[int] = []
+	for nation_id in visible_nation_ids:
+		var parent_id := (
+			game_state.overlord_of(nation_id)
+			if game_state.is_vassal(nation_id)
+			else -1
+		)
+		if (
+			parent_id < 0
+			or parent_id == nation_id
+			or not row_by_nation.has(parent_id)
+		):
+			(row_by_nation[nation_id] as Dictionary)[
+				"parent_nation_id"
+			] = -1
+			root_ids.append(nation_id)
+			continue
+		(row_by_nation[nation_id] as Dictionary)[
+			"parent_nation_id"
+		] = parent_id
+		if not children_by_parent.has(parent_id):
+			children_by_parent[parent_id] = [] as Array[int]
+		(
+			children_by_parent[parent_id] as Array[int]
+		).append(nation_id)
+	root_ids.sort()
+	for child_values in children_by_parent.values():
+		(child_values as Array[int]).sort()
+	var rows: Array[Dictionary] = []
+	var visited := {}
+	for root_id in root_ids:
+		_append_nation_tree_rows(
+			rows,
+			root_id,
+			0,
+			row_by_nation,
+			children_by_parent,
+			collapsed_nations,
+			visited
+		)
+	# 宗藩数据若暂时损坏成环，仍保证每个存活国家显示一次。
+	for nation_id in visible_nation_ids:
+		if visited.has(nation_id):
+			continue
+		_append_nation_tree_rows(
+			rows,
+			nation_id,
+			0,
+			row_by_nation,
+			children_by_parent,
+			collapsed_nations,
+			visited
+		)
 	return rows
+
+
+static func _append_nation_tree_rows(
+	rows: Array[Dictionary],
+	nation_id: int,
+	depth: int,
+	row_by_nation: Dictionary,
+	children_by_parent: Dictionary,
+	collapsed_nations: Dictionary,
+	visited: Dictionary
+) -> void:
+	if visited.has(nation_id) or not row_by_nation.has(nation_id):
+		return
+	visited[nation_id] = true
+	var children: Array[int] = (
+		children_by_parent.get(
+			nation_id,
+			[] as Array[int]
+		) as Array[int]
+	)
+	var row: Dictionary = (
+		row_by_nation[nation_id] as Dictionary
+	).duplicate()
+	row["depth"] = depth
+	row["has_subjects"] = not children.is_empty()
+	row["expanded"] = (
+		not children.is_empty()
+		and not collapsed_nations.has(nation_id)
+	)
+	rows.append(row)
+	if collapsed_nations.has(nation_id):
+		for child_id in children:
+			_mark_nation_tree_hidden(
+				child_id,
+				children_by_parent,
+				visited
+			)
+		return
+	for child_id in children:
+		_append_nation_tree_rows(
+			rows,
+			child_id,
+			depth + 1,
+			row_by_nation,
+			children_by_parent,
+			collapsed_nations,
+			visited
+		)
+
+
+static func _mark_nation_tree_hidden(
+	nation_id: int,
+	children_by_parent: Dictionary,
+	visited: Dictionary
+) -> void:
+	if visited.has(nation_id):
+		return
+	visited[nation_id] = true
+	var children: Array[int] = (
+		children_by_parent.get(
+			nation_id,
+			[] as Array[int]
+		) as Array[int]
+	)
+	for child_id in children:
+		_mark_nation_tree_hidden(
+			child_id,
+			children_by_parent,
+			visited
+		)
+
+
+static func nation_list_alive_count(game_state: GameState) -> int:
+	var nations_with_cities := {}
+	for city in game_state.cities:
+		nations_with_cities[city.owner_nation] = true
+	var result := 0
+	for nation in game_state.nations:
+		if nation.alive and nations_with_cities.has(nation.id):
+			result += 1
+	return result
 
 
 static func _nation_relation_text(
@@ -2632,7 +2902,11 @@ func _nation_list_rows_cached() -> Array[Dictionary]:
 		_nation_list_cache_day = state.day
 		_nation_list_cache_ownership_revision = state.ownership_revision
 		_nation_list_cache_diplomacy_revision = state.diplomacy_revision
-		_nation_list_cache = nation_list_rows(state)
+		_nation_list_cache = nation_list_rows(
+			state,
+			_nation_stats_collapsed_nations
+		)
+		_nation_list_alive_count = nation_list_alive_count(state)
 	return _nation_list_cache
 
 
@@ -2773,8 +3047,8 @@ func _draw_nation_stats_window() -> void:
 	draw_string(
 		_font,
 		title_rect.position + Vector2(12.0, 20.0) * _display_scale,
-		"国家列表  存活 %d / 总计 %d  · 拖动标题栏移动"
-			% [rows.size(), state.nations.size()],
+		"国家列表  显示 %d / 存活 %d  · 拖动标题栏移动"
+			% [rows.size(), _nation_list_alive_count],
 		HORIZONTAL_ALIGNMENT_LEFT,
 		title_rect.size.x - 48.0 * _display_scale,
 		_font_size(12),
@@ -2817,22 +3091,13 @@ func _draw_nation_stats_window() -> void:
 		_nation_stats_scroll + capacity,
 		rows.size()
 	)
-	var row_top := header_rect.end.y
 	for row_index in range(_nation_stats_scroll, visible_end):
 		var row_data := rows[row_index]
 		var visual_index := row_index - _nation_stats_scroll
-		var row_rect := Rect2(
-			Vector2(
-				window_rect.position.x,
-				row_top
-					+ float(visual_index)
-						* NATION_WINDOW_ROW_HEIGHT
-						* _display_scale
-			),
-			Vector2(
-				window_rect.size.x,
-				NATION_WINDOW_ROW_HEIGHT * _display_scale
-			)
+		var row_rect := nation_stats_row_rect(
+			window_rect,
+			_display_scale,
+			visual_index
 		)
 		var row_color := (
 			Color(0.73, 0.64, 0.49, 0.98)
@@ -2878,7 +3143,7 @@ func _draw_nation_stats_window() -> void:
 	)
 	draw_rect(footer_rect, Color(0.25, 0.20, 0.13, 0.96), true)
 	var footer := (
-		"滚轮浏览  %d-%d / %d"
+		"箭头展开/收起 · 滚轮浏览  %d-%d / %d"
 		% [
 			mini(_nation_stats_scroll + 1, rows.size()),
 			visible_end,
@@ -2912,19 +3177,71 @@ func _draw_nation_window_cells(
 		["action", 0.75, 0.23],
 	]
 	for column in columns:
+		var key := str(column[0])
 		var x_ratio := float(column[1])
 		var width_ratio := float(column[2])
+		var text_x := (
+			row_rect.position.x
+			+ row_rect.size.x * x_ratio
+		)
+		var text_width := row_rect.size.x * width_ratio
+		if key == "identity" and row_data.has("depth"):
+			var depth := int(row_data.get("depth", 0))
+			var toggle_rect := nation_tree_toggle_rect(
+				row_rect,
+				_display_scale,
+				depth
+			)
+			if depth > 0:
+				draw_line(
+					Vector2(
+						toggle_rect.position.x
+							- NATION_TREE_INDENT
+								* _display_scale * 0.55,
+						toggle_rect.get_center().y
+					),
+					Vector2(
+						toggle_rect.position.x
+							- 2.0 * _display_scale,
+						toggle_rect.get_center().y
+					),
+					Color(0.18, 0.12, 0.06, 0.38),
+					1.0 * _display_scale
+				)
+			if bool(row_data.get("has_subjects", false)):
+				draw_string(
+					_font,
+					toggle_rect.position
+						+ Vector2(0.0, 11.0)
+							* _display_scale,
+					(
+						"▼"
+						if bool(row_data.get("expanded", false))
+						else "▶"
+					),
+					HORIZONTAL_ALIGNMENT_CENTER,
+					toggle_rect.size.x,
+					_font_size(9),
+					color
+				)
+			text_x = toggle_rect.end.x + 2.0 * _display_scale
+			text_width = maxf(
+				row_rect.position.x
+					+ row_rect.size.x
+						* (x_ratio + width_ratio)
+					- text_x,
+				1.0
+			)
 		draw_string(
 			_font,
 			Vector2(
-				row_rect.position.x
-					+ row_rect.size.x * x_ratio,
+				text_x,
 				row_rect.position.y
 					+ row_rect.size.y * 0.68
 			),
-			str(row_data.get(str(column[0]), "")),
+			str(row_data.get(key, "")),
 			HORIZONTAL_ALIGNMENT_LEFT,
-			row_rect.size.x * width_ratio,
+			text_width,
 			font_size,
 			color
 		)

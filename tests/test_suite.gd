@@ -1550,10 +1550,141 @@ func _test_responsive_map_layout() -> void:
 	_check(
 		nation_rows.size() == 3
 			and nation_ids == [0, 1, 2]
+			and int(nation_rows[0]["depth"]) == 0
+			and bool(nation_rows[0]["has_subjects"])
+			and int(nation_rows[1]["depth"]) == 1
+			and int(nation_rows[1]["parent_nation_id"]) == 0
 			and str(nation_rows[1]["identity"]).contains("藩王")
 			and str(nation_rows[0]["action"]).contains("建军"),
-		"国家列表必须一国一行、过滤灭亡国家，并显示宗藩身份和最近动作"
+		"国家列表必须过滤灭亡国家，并把直属藩王缩进到宗主之后"
 	)
+	list_state.suzerainty[2] = {
+		"overlord_id": 1,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": 0,
+		"civil_war": false,
+	}
+	var nested_rows := MapRenderer.nation_list_rows(list_state)
+	var collapsed_root_rows := MapRenderer.nation_list_rows(
+		list_state,
+		{0: true}
+	)
+	var collapsed_subject_rows := MapRenderer.nation_list_rows(
+		list_state,
+		{1: true}
+	)
+	_check(
+		[
+			int(nested_rows[0]["nation_id"]),
+			int(nested_rows[1]["nation_id"]),
+			int(nested_rows[2]["nation_id"]),
+		] == [0, 1, 2]
+			and [
+				int(nested_rows[0]["depth"]),
+				int(nested_rows[1]["depth"]),
+				int(nested_rows[2]["depth"]),
+			] == [0, 1, 2]
+			and int(nested_rows[2]["parent_nation_id"]) == 1
+			and collapsed_root_rows.size() == 1
+			and not bool(collapsed_root_rows[0]["expanded"])
+			and collapsed_subject_rows.size() == 2
+			and MapRenderer.nation_list_alive_count(list_state) == 3,
+		"多级宗藩必须递归缩进，折叠宗主时隐藏全部后代，折叠藩王时只隐藏其支系"
+	)
+	var root_row_rect := MapRenderer.nation_stats_row_rect(
+		nation_window,
+		float(base["display_scale"]),
+		0
+	)
+	var nested_row_rect := MapRenderer.nation_stats_row_rect(
+		nation_window,
+		float(base["display_scale"]),
+		2
+	)
+	var root_toggle_rect := MapRenderer.nation_tree_toggle_rect(
+		root_row_rect,
+		float(base["display_scale"]),
+		0
+	)
+	var nested_toggle_rect := MapRenderer.nation_tree_toggle_rect(
+		nested_row_rect,
+		float(base["display_scale"]),
+		2
+	)
+	_check(
+		root_row_rect.position.y
+			> MapRenderer.nation_stats_title_rect(
+				nation_window,
+				float(base["display_scale"])
+			).end.y
+			and root_row_rect.encloses(root_toggle_rect)
+			and nested_row_rect.encloses(nested_toggle_rect)
+			and nested_toggle_rect.position.x
+				> root_toggle_rect.position.x,
+		"宗藩箭头命中区必须位于对应行内，并随层级向右缩进"
+	)
+	var tree_renderer := MapRenderer.new()
+	tree_renderer.state = list_state
+	tree_renderer._display_scale = float(base["display_scale"])
+	tree_renderer._nation_stats_window_position = Vector2(
+		80.0,
+		80.0
+	)
+	var expanded_rect := MapRenderer.nation_stats_window_rect(
+		Vector2(1280.0, 720.0),
+		tree_renderer._display_scale,
+		tree_renderer._nation_stats_window_position,
+		tree_renderer._nation_list_rows_cached().size()
+	)
+	var root_click_rect := MapRenderer.nation_tree_toggle_rect(
+		MapRenderer.nation_stats_row_rect(
+			expanded_rect,
+			tree_renderer._display_scale,
+			0
+		),
+		tree_renderer._display_scale,
+		0
+	)
+	var collapsed_by_click := (
+		tree_renderer._toggle_nation_tree_at_point(
+			root_click_rect.get_center(),
+			expanded_rect
+		)
+	)
+	var collapsed_runtime_rows := (
+		tree_renderer._nation_list_rows_cached()
+	)
+	var collapsed_rect := MapRenderer.nation_stats_window_rect(
+		Vector2(1280.0, 720.0),
+		tree_renderer._display_scale,
+		tree_renderer._nation_stats_window_position,
+		collapsed_runtime_rows.size()
+	)
+	var collapsed_click_rect := MapRenderer.nation_tree_toggle_rect(
+		MapRenderer.nation_stats_row_rect(
+			collapsed_rect,
+			tree_renderer._display_scale,
+			0
+		),
+		tree_renderer._display_scale,
+		0
+	)
+	var expanded_by_click := (
+		tree_renderer._toggle_nation_tree_at_point(
+			collapsed_click_rect.get_center(),
+			collapsed_rect
+		)
+	)
+	_check(
+		collapsed_by_click
+			and collapsed_runtime_rows.size() == 1
+			and collapsed_rect.size.y < expanded_rect.size.y
+			and expanded_by_click
+			and tree_renderer._nation_list_rows_cached().size() == 3,
+		"点击宗主箭头必须折叠支系并缩小窗口，再次点击恢复全部藩属"
+	)
+	tree_renderer.free()
 	var border_state := GameState.new()
 	border_state.generate_grid_world(12348)
 	for nation_a in range(border_state.nations.size()):
