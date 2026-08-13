@@ -1262,12 +1262,12 @@ func _frontier_edge_rank(
 	neighbor: int,
 	preferred: int
 ) -> float:
-	var edge := view.state.edge_of(city_id, neighbor)
+	# 地形据守价值已由 snapshot.value_of_edge 单一承载（其内部按 danger 计入敌对前线边加成），
+	# 此处不再重复叠加，避免双重计数。
 	return (
 		(1000.0 if neighbor == preferred else 0.0)
 		+ snapshot.value_of_edge(city_id, neighbor)
 		+ snapshot.potential_threat_of_edge(city_id, neighbor)
-		+ (edge.danger if edge != null else 0.0)
 	)
 
 

@@ -272,6 +272,16 @@ static func defense_multiplier(danger: float, holding_days: float) -> float:
 	return clampf(1.0 - DEFENSE_DANGER_K * d * exp(-days / HOLDING_TAU_DAYS), 0.0, 1.0)
 
 
+## 地形对守方的净利好系数（派生纯函数，唯一真源）：= 防御适应倍率 / 敌方跨边进攻倍率。
+## danger 越高、连续驻防越久越利于据守（>1）；danger=0 时两倍率均为 1，退化为 1.0（平地无影响）。
+## 供 AI 撤退判定（据守价值）与防区边选取（优先据守险要边）共用，保证认知与实战解算同源。
+static func terrain_hold_bias(danger: float, holding_days: float) -> float:
+	return (
+		defense_multiplier(danger, holding_days)
+		/ maxf(attack_multiplier(danger), 0.01)
+	)
+
+
 static func siege_attack_direction_count(
 	battle: Battle
 ) -> int:

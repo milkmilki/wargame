@@ -1865,6 +1865,25 @@ func _test_terrain_multiplier() -> void:
 		Combat.attack_multiplier(0.95) < Combat.attack_multiplier(0.5) - 0.2,
 		"极端地形(danger=0.95)仍须强力压制进攻，明显低于中等地形(danger=0.5)"
 	)
+	# 撤退决策地形红利（派生纯函数）：平地退化为 1；险地利守 >1；久守单调递增。
+	_check(_approx(UtilityAI.terrain_hold_bias(0.0, 0.0), 1.0),
+		"平地(danger=0)地形据守系数应退化为 1，实为 %.4f" % UtilityAI.terrain_hold_bias(0.0, 0.0))
+	_check(UtilityAI.terrain_hold_bias(0.9, 0.0) > 1.0,
+		"隘口(danger=0.9)即便零驻防也应利于据守(>1)，实为 %.4f" % UtilityAI.terrain_hold_bias(0.9, 0.0))
+	var bias_d0 := UtilityAI.terrain_hold_bias(0.9, 0.0)
+	var bias_d30 := UtilityAI.terrain_hold_bias(0.9, 30.0)
+	_check(bias_d30 > bias_d0,
+		"连续驻防应提升据守红利：30天(%.4f)须高于0天(%.4f)" % [bias_d30, bias_d0])
+	# 前线边选值阶段(holding_days=0)：danger 越高据守溢价越高（value_of_edge 敌对前线边
+	# 加成基础），且 UtilityAI 别名与 Combat 真源必须一致。
+	var premium_flat := Combat.terrain_hold_bias(0.0, 0.0)
+	var premium_mid := Combat.terrain_hold_bias(0.3, 0.0)
+	var premium_pass := Combat.terrain_hold_bias(0.9, 0.0)
+	_check(premium_pass > premium_mid and premium_mid > premium_flat,
+		"选边溢价须随 danger 单调递增：平地%.4f<中等%.4f<隘口%.4f" % [
+			premium_flat, premium_mid, premium_pass])
+	_check(_approx(UtilityAI.terrain_hold_bias(0.9, 0.0), Combat.terrain_hold_bias(0.9, 0.0)),
+		"UtilityAI.terrain_hold_bias 必须委托 Combat 真源，取值一致")
 
 # ------------------------------------------------------------------ 3. 战斗基础
 

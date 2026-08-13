@@ -801,6 +801,12 @@ static func stationed_power_at(
 	return view.stationed_power_at(city_id, excluded)
 
 
+## 驻防边地形对守方的净利好系数：真源为 Combat.terrain_hold_bias（据守判定与防区边
+## 选取共用同一派生函数，保证 AI 认知与实战解算同源）。此处仅作本模块调用别名。
+static func terrain_hold_bias(danger: float, holding_days: float) -> float:
+	return Combat.terrain_hold_bias(danger, holding_days)
+
+
 static func _choose_holding(
 	view: AiWorldView,
 	snapshot: StrategicMapSnapshot,
@@ -823,6 +829,11 @@ static func _choose_holding(
 		ArmyPower.effective(army)
 	)
 	var ratio := support / maxf(enemy, 1.0)
+	# 据守 danger 边享地形红利：敌跨边进攻被削、我方防御随驻防天数适应。复用战斗层
+	# 真源派生净利好系数乘入战力比，修正 AI 低估险要地形守御价值、不放一枪即弃守险关。
+	var hold_edge := view.state.edge_of(army.move_from, army.move_to)
+	if hold_edge != null:
+		ratio *= terrain_hold_bias(hold_edge.danger, float(army.holding_days))
 	var target_city := view.state.cities[enemy_endpoint]
 	if (
 		_is_encircled_low_supply(view, army)

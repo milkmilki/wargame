@@ -2,6 +2,15 @@ class_name StrategicMapSnapshot
 extends RefCounted
 ## 国家级战略地图。所有字段均为派生缓存，不写回 GameState。
 
+## 敌对前线边地形据守加成权重：乘在 (terrain_hold_bias(danger,0)-1) 上。取 4.0 使加成幅度
+## 与历史线性 danger*2.0 在 danger=0/1 端点对齐（bias-1 在 danger=1 约 0.5，×4≈2.0），
+## 差异仅在曲线形状——凸曲线令中段更低、隘口带更陡。是可调的单一权重真源。
+const EDGE_TERRAIN_HOLD_GAIN: float = 4.0
+
+## AB 实验开关（默认 true=生产行为）：敌对前线边地形加成是否用 terrain_hold_bias 凸曲线。
+## 关闭时退回历史线性 danger*2.0，仅供地形收益 A/B 长跑对照，不影响生产与确定性回归。
+static var terrain_hold_bias_enabled: bool = true
+
 var nation_id: int
 var ownership_revision: int
 var strategic_planning_enabled: bool
@@ -448,7 +457,17 @@ func _finalize_edge_values(shared_edge_values: Dictionary = {}) -> void:
 			_state.is_enemy(owner_a, owner_b)
 			and (owner_a == nation_id or owner_b == nation_id)
 		):
-			value += 1.0 + edge.danger * 2.0
+			# 敌对前线边据守价值：基线 1.0（是条敌对前线边）+ 地形据守加成。
+			# 加成改用 Combat.terrain_hold_bias 凸曲线（刚进驻 holding_days=0）而非历史线性
+			# danger*2.0：两者在 danger=0/1 端点对齐（幅度均 [0,2]），但凸曲线令中等地形加权
+			# 更低、真正的隘口带(danger≥0.85)加权更陡，与实战「唯隘口显著利守」的物理一致。
+			# AB 关闭时退回历史线性项，用于隔离曲线形状的净收益。
+			var terrain_gain := (
+				(Combat.terrain_hold_bias(edge.danger, 0.0) - 1.0) * EDGE_TERRAIN_HOLD_GAIN
+				if terrain_hold_bias_enabled
+				else edge.danger * 2.0
+			)
+			value += 1.0 + terrain_gain
 		value += 2.0 * float(potential_edge_threat.get(key, 0.0))
 		edge_value[key] = value
 		var normalized_flow := (
