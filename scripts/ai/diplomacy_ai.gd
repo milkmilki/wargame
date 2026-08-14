@@ -2101,8 +2101,11 @@ static func war_food_report(
 			nation_id,
 			evaluation_cache
 		)
-	var cache_key := "food:%d:%d:%d" % [
+	var pool_holder := state.food_pool_holder(nation_id)
+	var pool_members := state.food_pool_members(pool_holder)
+	var cache_key := "food:%d:%d:%d:%d" % [
 		nation_id,
+		pool_holder,
 		target_troops,
 		posture,
 	]
@@ -2112,34 +2115,58 @@ static func war_food_report(
 	if not evaluation_cache.has("garrison_by_city"):
 		evaluation_cache["garrison_by_city"] = Simulation.build_garrison_index(state)
 	var garrison_by_city: Dictionary = evaluation_cache["garrison_by_city"]
-	for city in _cached_cities_of(
-		state,
-		nation_id,
-		evaluation_cache
-	):
-		monthly_production += (
-			float(Simulation.city_food_output(state, city, garrison_by_city))
-				/ 6.0
+	var pool_current_troops := 0
+	var current_monthly_demand := 0.0
+	var nation_current_monthly_demand := 0.0
+	for member_id in pool_members:
+		for city in _cached_cities_of(
+			state,
+			member_id,
+			evaluation_cache
+		):
+			monthly_production += (
+				float(Simulation.city_food_output(
+					state,
+					city,
+					garrison_by_city
+				)) / 6.0
+			)
+		var member_troops := _troop_count(
+			state,
+			member_id,
+			evaluation_cache
 		)
-	var current_monthly_demand := maxf(
-		nation.food_demand_ema,
-		float(current_troops)
-			* FOOD_PER_CAPITA_MONTH
-			* DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
-	)
+		var member_demand := maxf(
+			state.nations[member_id].food_demand_ema,
+			float(member_troops)
+				* FOOD_PER_CAPITA_MONTH
+				* DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
+		)
+		pool_current_troops += member_troops
+		current_monthly_demand += member_demand
+		if member_id == nation_id:
+			nation_current_monthly_demand = member_demand
 	var food_per_troop := (
-		current_monthly_demand / float(current_troops)
+		nation_current_monthly_demand / float(current_troops)
 		if current_troops > 0
 		else FOOD_PER_CAPITA_MONTH * DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
 	)
-	var target_monthly_demand := float(target_troops) * food_per_troop
+	var other_members_monthly_demand := maxf(
+		current_monthly_demand - nation_current_monthly_demand,
+		0.0
+	)
+	var target_monthly_demand := (
+		other_members_monthly_demand
+		+ float(target_troops) * food_per_troop
+	)
 	var full_strength_troops := _full_strength_troop_count(
 		state,
 		nation_id,
 		evaluation_cache
 	)
 	var full_strength_monthly_demand := (
-		float(full_strength_troops) * food_per_troop
+		other_members_monthly_demand
+		+ float(full_strength_troops) * food_per_troop
 	)
 	var annual_production := monthly_production * float(MONTHS_PER_YEAR)
 	var current_annual_demand := current_monthly_demand * float(MONTHS_PER_YEAR)
@@ -2186,11 +2213,17 @@ static func war_food_report(
 				/ (required_years * float(MONTHS_PER_YEAR))
 		)
 	var affordable_troops := int(floor(
-		monthly_budget / maxf(food_per_troop, 0.0001)
+		maxf(
+			monthly_budget - other_members_monthly_demand,
+			0.0
+		) / maxf(food_per_troop, 0.0001)
 	))
 	var result := {
 		"posture": posture,
 		"current_troops": current_troops,
+		"pool_holder": pool_holder,
+		"pool_members": pool_members,
+		"pool_current_troops": pool_current_troops,
 		"target_troops": target_troops,
 		"full_strength_troops": full_strength_troops,
 		"monthly_food_production": monthly_production,
@@ -3462,11 +3495,11 @@ static func _food_stock(
 	nation_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> int:
-	var cache_key := "food_stock:%d" % nation_id
+	var holder_id := state.food_pool_holder(nation_id)
+	var cache_key := "food_stock:%d" % holder_id
 	if evaluation_cache.has(cache_key):
 		return int(evaluation_cache[cache_key])
 	# 藩王已无独立粮仓（粮食归共享粮仓）；读其宗藩体系粮池持有者的库存作为可用粮。
-	var holder_id := state.food_pool_holder(nation_id)
 	var total := 0
 	for warehouse in state.warehouse_cities_of(holder_id):
 		total += warehouse.food_storage

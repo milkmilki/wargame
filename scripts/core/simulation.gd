@@ -3058,9 +3058,12 @@ func _make_coalition_peace(
 				)
 				or changed
 			)
-			_end_bilateral_hostilities(member_a, member_b)
 	if not changed:
 		return {"changed": false}
+	_reconcile_battles_after_coalition_peace(
+		bloc_a,
+		bloc_b
+	)
 	var abandoned := _abandon_coalition_disconnected_enclaves(
 		bloc_a,
 		bloc_b
@@ -3648,53 +3651,27 @@ func _record_diplomatic_action(
 	nation.ai_last_diplomatic_reason = reason
 
 
-func _end_bilateral_hostilities(nation_a: int, nation_b: int) -> void:
+## 联盟议和先原子提交全部外交关系，再按当前敌对关系重建战斗参与者。
+## 不能用 side_a[0]/side_b[0] 代表整侧：围城守方可以是多国共同体，且被普通
+## 议和豁免的削藩内战仍可能在同一场围城中继续。
+func _reconcile_battles_after_coalition_peace(
+	bloc_a: Array[int],
+	bloc_b: Array[int]
+) -> void:
 	for battle in state.battles:
 		if battle.finished:
 			continue
-		var side_a_nation := (
-			battle.side_a[0].owner_nation if not battle.side_a.is_empty() else -1
-		)
-		var side_b_nation := (
-			battle.side_b[0].owner_nation if not battle.side_b.is_empty() else -1
-		)
-		var city_owner := battle.city.owner_nation if battle.city != null else -1
-		var bilateral := (
-			(side_a_nation == nation_a and side_b_nation == nation_b)
-			or (side_a_nation == nation_b and side_b_nation == nation_a)
-			or (
-				battle.kind == Battle.Kind.SIEGE
-				and (
-					(side_a_nation == nation_a and city_owner == nation_b)
-					or (side_a_nation == nation_b and city_owner == nation_a)
-				)
-			)
-		)
-		if not bilateral:
+		if battle.kind == Battle.Kind.SIEGE:
+			_reconcile_siege_after_coalition_peace(battle)
 			continue
-		for army in battle.side_a + battle.side_b:
-			if army.size <= 0:
-				army.battle_id = -1
-				continue
-			if (
-				army.location_city >= 0
-				and army.location_city < state.cities.size()
-				and state.cities[army.location_city].owner_nation == army.owner_nation
-			):
-				_settle_idle(army, army.location_city)
-			elif battle.city != null and battle.city.owner_nation == army.owner_nation:
-				_settle_idle(army, battle.city.id)
-			elif army.on_edge and army.move_to != -1:
-				army.state = Army.State.MOVING
-				army.battle_id = -1
-				army.path.clear()
-			else:
-				_retreat_to_friendly(army)
-		battle.finished = true
-		battle.winner_side = 0
+		if not _battle_sides_still_hostile(battle):
+			_finish_battle_for_peace(battle)
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
+	var affected := {}
+	for nation_id in bloc_a + bloc_b:
+		affected[nation_id] = true
 	for army in state.armies:
-		if army.size <= 0 or army.owner_nation not in [nation_a, nation_b]:
+		if army.size <= 0 or not affected.has(army.owner_nation):
 			continue
 		var node_city := army.current_city_node()
 		if (
@@ -3710,15 +3687,155 @@ func _end_bilateral_hostilities(nation_a: int, nation_b: int) -> void:
 				node_city
 			)
 			continue
-		if army.ai_target_city >= 0:
+		if (
+			army.ai_target_city >= 0
+			and army.ai_target_city < state.cities.size()
+		):
 			var target_owner := state.cities[army.ai_target_city].owner_nation
-			if (
-				(army.owner_nation == nation_a and target_owner == nation_b)
-				or (army.owner_nation == nation_b and target_owner == nation_a)
-			):
+			if not state.is_enemy(army.owner_nation, target_owner):
 				army.path.clear()
 				army.ai_target_city = -1
 				army.ai_order_until_day = state.day
+
+
+func _reconcile_siege_after_coalition_peace(
+	battle: Battle
+) -> void:
+	if battle.city == null or battle.side_a.is_empty():
+		_finish_battle_for_peace(battle)
+		return
+	var besieger_nation := battle.side_a[0].owner_nation
+	if not state.is_enemy(
+		besieger_nation,
+		battle.city.owner_nation
+	):
+		if (
+			not _siege_side_defends_city(
+				battle,
+				battle.side_b
+			)
+			and _siege_side_has_enemy_of_city(
+				battle.side_b,
+				battle.city
+			)
+		):
+			for army in battle.side_a:
+				_release_army_from_peace_battle(
+					army,
+					battle
+				)
+			battle.side_a.clear()
+			_promote_challengers(battle)
+			return
+		_finish_battle_for_peace(battle)
+		return
+	var retained: Array[Army] = []
+	for army in battle.side_b:
+		if (
+			army.size > 0
+			and state.is_enemy(
+				army.owner_nation,
+				besieger_nation
+			)
+		):
+			retained.append(army)
+		else:
+			_release_army_from_peace_battle(
+				army,
+				battle
+			)
+	battle.side_b = retained
+	battle.reinforce_fresh_b = battle.reinforce_fresh_b.filter(
+		func(army: Army) -> bool:
+			return retained.has(army)
+	)
+	battle.routed_b = battle.routed_b.filter(
+		func(army: Army) -> bool:
+			return retained.has(army)
+	)
+	for army in battle.frontline_priority_b.keys():
+		if not retained.has(army):
+			battle.frontline_priority_b.erase(army)
+	battle.has_garrison = _siege_side_defends_city(
+		battle,
+		retained
+	)
+
+
+func _siege_side_has_enemy_of_city(
+	side: Array[Army],
+	city: City
+) -> bool:
+	for army in side:
+		if (
+			army.size > 0
+			and state.is_enemy(
+				army.owner_nation,
+				city.owner_nation
+			)
+		):
+			return true
+	return false
+
+
+func _battle_sides_still_hostile(
+	battle: Battle
+) -> bool:
+	for army_a in battle.side_a:
+		if army_a.size <= 0:
+			continue
+		for army_b in battle.side_b:
+			if (
+				army_b.size > 0
+				and state.is_enemy(
+					army_a.owner_nation,
+					army_b.owner_nation
+				)
+			):
+				return true
+	return false
+
+
+func _finish_battle_for_peace(battle: Battle) -> void:
+	for army in battle.side_a + battle.side_b:
+		_release_army_from_peace_battle(
+			army,
+			battle
+		)
+	battle.finished = true
+	battle.winner_side = 0
+
+
+func _release_army_from_peace_battle(
+	army: Army,
+	battle: Battle
+) -> void:
+	if army.size <= 0:
+		army.battle_id = -1
+		return
+	if (
+		army.location_city >= 0
+		and army.location_city < state.cities.size()
+		and state.has_military_access(
+			army.owner_nation,
+			state.cities[army.location_city].owner_nation
+		)
+	):
+		_settle_idle(army, army.location_city)
+	elif (
+		battle.city != null
+		and state.has_military_access(
+			army.owner_nation,
+			battle.city.owner_nation
+		)
+	):
+		_settle_idle(army, battle.city.id)
+	elif army.on_edge and army.move_to != -1:
+		army.state = Army.State.MOVING
+		army.battle_id = -1
+		army.path.clear()
+	else:
+		_retreat_to_friendly(army)
 
 
 func _repatriate_after_access_revoked(
@@ -11232,6 +11349,9 @@ func _occupation_claimant_for_army(
 		army.occupation_claimant_nation >= 0
 		and army.occupation_claimant_nation
 			< state.nations.size()
+		and state.nations[
+			army.occupation_claimant_nation
+		].alive
 	):
 		return army.occupation_claimant_nation
 	var origin_city := army.move_from

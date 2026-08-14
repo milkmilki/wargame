@@ -13189,6 +13189,60 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	defense_sim.free()
 
+	# 冻结的占领接收者在破城前灭亡时必须失效，不能借新占城市复活。
+	var dead_claim_state := GameState.new()
+	dead_claim_state.generate_grid_world(32019)
+	dead_claim_state.armies.clear()
+	dead_claim_state.battles.clear()
+	for dead_a in range(dead_claim_state.nations.size()):
+		for dead_b in range(
+			dead_a + 1,
+			dead_claim_state.nations.size()
+		):
+			dead_claim_state.set_diplomatic_relation(
+				dead_a,
+				dead_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	dead_claim_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	for city in dead_claim_state.cities:
+		if city.owner_nation == 3:
+			city.owner_nation = 2
+	dead_claim_state.refresh_derived()
+	var dead_claim_target: City = null
+	for city in dead_claim_state.land_cities_of(1):
+		if not city.is_capital and not city.has_warehouse:
+			dead_claim_target = city
+			break
+	var dead_claim_army := _make_army(
+		9052,
+		0,
+		5000,
+		10
+	)
+	dead_claim_army.location_city = dead_claim_target.id
+	dead_claim_army.move_from = dead_claim_target.id
+	dead_claim_army.occupation_claimant_nation = 3
+	dead_claim_state.armies.append(dead_claim_army)
+	var dead_claim_sim := Simulation.new()
+	dead_claim_sim.setup(dead_claim_state)
+	dead_claim_sim._capture_city(
+		dead_claim_army,
+		dead_claim_target
+	)
+	_check(
+		not dead_claim_state.nations[3].alive
+			and dead_claim_target.owner_nation == 0
+			and dead_claim_army
+				.occupation_claimant_nation == -1,
+		"冻结占领接收者已灭亡时必须回退实际攻城国，且死国不得因获城复活"
+	)
+	dead_claim_sim.free()
+
 	ai_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.WAR)
 	ai_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
 	_check(
@@ -14883,6 +14937,65 @@ func _test_suzerainty_lifecycle() -> void:
 			% mv.overlord_of(3)
 	)
 
+	# 4. 无祖父的和平藩王独立后必须把零库存中继首都升格为自身粮仓。
+	var independent := GameState.new()
+	independent.generate_grid_world(32064)
+	for a in range(independent.nations.size()):
+		for b in range(a + 1, independent.nations.size()):
+			independent.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var independent_region: Array[int] = []
+	for city in independent.land_cities_of(0):
+		if not city.is_capital:
+			independent_region.append(city.id)
+		if independent_region.size() >= 3:
+			break
+	var independent_subject := independent.enfeoff(
+		0,
+		independent_region
+	)
+	for city in independent.cities:
+		if city.owner_nation == 0:
+			city.owner_nation = 1
+	independent.refresh_derived()
+	var independent_pruned := (
+		independent.prune_dead_suzerainty()
+	)
+	var independent_capital := (
+		independent.nations[
+			independent_subject
+		].capital_city_id
+	)
+	var independent_food_before := independent.cities[
+		independent_capital
+	].food_storage
+	var independent_deposit := independent.deposit_food(
+		independent_subject,
+		10
+	)
+	_check(
+		independent_pruned
+			and not independent.is_vassal(
+				independent_subject
+			)
+			and independent.cities[
+				independent_capital
+			].has_warehouse
+			and independent.nations[
+				independent_subject
+			].warehouse_city_ids == (
+				[independent_capital] as Array[int]
+			)
+			and independent_deposit
+			and independent.cities[
+				independent_capital
+			].food_storage == independent_food_before + 10,
+		"和平藩王因宗主死亡独立后，首都必须升格粮仓且后续产粮可入库"
+	)
+
 
 # ------------------------------------------------------------------ 32g. 削藩内战：内战态关系与共同体解散（增量 C1）
 
@@ -14983,6 +15096,8 @@ func _test_civil_war_relations() -> void:
 	cw.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	cw.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
 	cw.set_diplomatic_relation(1, 3, GameState.DiplomaticRelation.ALLIED)
+	cw.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.WAR)
+	cw.set_diplomatic_relation(2, 1, GameState.DiplomaticRelation.WAR)
 	cw.set_diplomatic_relation(2, 3, GameState.DiplomaticRelation.WAR)
 	cw.refresh_derived()
 	_check(
@@ -14993,6 +15108,28 @@ func _test_civil_war_relations() -> void:
 	)
 	var cw_sim := Simulation.new()
 	cw_sim.setup(cw)
+	var civil_city := cw.land_cities_of(1)[0]
+	var civil_besieger: Army = null
+	var allied_defender: Army = null
+	for army in cw.armies:
+		if army.owner_nation == 0 and civil_besieger == null:
+			civil_besieger = army
+		elif (
+			army.owner_nation == 3
+			and allied_defender == null
+		):
+			allied_defender = army
+	var civil_siege := cw.new_battle(
+		Battle.Kind.SIEGE
+	)
+	civil_siege.city = civil_city
+	civil_siege.has_garrison = true
+	civil_siege.side_a.append(civil_besieger)
+	civil_siege.side_b.append(allied_defender)
+	civil_besieger.state = Army.State.FIGHTING
+	civil_besieger.battle_id = civil_siege.id
+	allied_defender.state = Army.State.FIGHTING
+	allied_defender.battle_id = civil_siege.id
 	# 触发外部战争 2↔3 的联盟议和（主对非内战对，绕过收集器层门控，直击执行层）。
 	var cw_peace := cw_sim._make_coalition_peace(2, 3)
 	_check(
@@ -15005,6 +15142,18 @@ func _test_civil_war_relations() -> void:
 			and cw.is_in_civil_war(1)
 			and cw.suzerainty_structure_valid(),
 		"内战宗藩对 0↔1 须被议和豁免：关系保持 WAR、civil_war 不变、不变量成立"
+	)
+	_check(
+		cw.battles.has(civil_siege)
+			and not civil_siege.finished
+			and civil_siege.side_a.has(civil_besieger)
+			and not civil_siege.side_b.has(
+				allied_defender
+			)
+			and civil_besieger.battle_id
+				== civil_siege.id
+			and allied_defender.battle_id == -1,
+		"外部盟友议和只能移出该盟友守军，仍为 WAR 的削藩围城必须继续"
 	)
 	cw_sim.free()
 
@@ -15314,6 +15463,70 @@ func _test_civil_war_annexation() -> void:
 	)
 	sim.free()
 
+	# 兼并原语必须分别迁移实控与法理，并终止兼并后失去敌对性的战斗。
+	var atomic := GameState.new()
+	atomic.generate_grid_world(32093)
+	for a in range(atomic.nations.size()):
+		for b in range(a + 1, atomic.nations.size()):
+			atomic.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	atomic.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var captured_legal_city := atomic.land_cities_of(1)[0]
+	captured_legal_city.owner_nation = 0
+	var third_party_legal_city := atomic.land_cities_of(1)[1]
+	atomic.recognized_city_owners[
+		third_party_legal_city.id
+	] = 2
+	third_party_legal_city.occupation_sponsor_nation = 1
+	var absorber_army: Army = null
+	var absorbed_army: Army = null
+	for army in atomic.armies:
+		if army.owner_nation == 0 and absorber_army == null:
+			absorber_army = army
+		elif (
+			army.owner_nation == 1
+			and absorbed_army == null
+		):
+			absorbed_army = army
+	var stale_claim_army: Army = atomic.armies[0]
+	stale_claim_army.occupation_claimant_nation = 1
+	var internal_battle := atomic.new_battle(
+		Battle.Kind.FIELD
+	)
+	internal_battle.side_a.append(absorber_army)
+	internal_battle.side_b.append(absorbed_army)
+	absorber_army.state = Army.State.FIGHTING
+	absorber_army.battle_id = internal_battle.id
+	absorbed_army.state = Army.State.FIGHTING
+	absorbed_army.battle_id = internal_battle.id
+	atomic.annex_nation(0, 1)
+	_check(
+		atomic.recognized_owner_of(
+			captured_legal_city.id
+		) == 0
+			and third_party_legal_city.owner_nation == 0
+			and atomic.recognized_owner_of(
+				third_party_legal_city.id
+			) == 2
+			and third_party_legal_city
+				.occupation_sponsor_nation == 0
+			and internal_battle.finished
+			and absorber_army.battle_id == -1
+			and absorbed_army.battle_id == -1
+			and absorber_army.owner_nation == 0
+			and absorbed_army.owner_nation == 0
+			and stale_claim_army
+				.occupation_claimant_nation == 0,
+		"兼并须独立迁移实控/法理/占领声明，并原子解除已变成同国的战斗"
+	)
+
 	# 情形二：藩王赢——占宗主首都→夺取宗主全境，其余藩王转投，胜者成新顶点。
 	var vs := GameState.new()
 	vs.generate_grid_world(32092)
@@ -15384,6 +15597,43 @@ func _test_shared_granary_and_relay_supply() -> void:
 			and gs.nations[0].granary_food == pre_food
 			and gs.food_pool_holder(subject) == 0,
 		"分封后粮食全留宗主根池（%d==%d）、藩王首都零库存中继" % [gs.nations[0].granary_food, pre_food]
+	)
+	gs.nations[0].food_demand_ema = 100000.0
+	gs.nations[subject].food_demand_ema = 200000.0
+	var pool_expected_production := 0.0
+	var pool_garrisons := Simulation.build_garrison_index(
+		gs
+	)
+	for member_id in gs.food_pool_members(0):
+		for city in gs.cities_of(member_id):
+			pool_expected_production += (
+				float(Simulation.city_food_output(
+					gs,
+					city,
+					pool_garrisons
+				)) / 6.0
+			)
+	var pool_report := DiplomacyAI.war_food_report(
+		gs,
+		0
+	)
+	_check(
+		int(pool_report["pool_holder"]) == 0
+			and pool_report["pool_members"]
+				== gs.food_pool_members(0)
+			and is_equal_approx(
+				float(pool_report[
+					"monthly_food_production"
+				]),
+				pool_expected_production
+			)
+			and is_equal_approx(
+				float(pool_report[
+					"current_monthly_demand"
+				]),
+				300000.0
+			),
+		"宗藩战争粮食报告必须按共享粮池聚合全部成员的生产、需求与库存"
 	)
 
 	# --- 2. 补给中继降损耗：构造线性走廊 0-8-16-24-32-40，宗主根首都在城0，藩王首都在城40。

@@ -2429,6 +2429,7 @@ func prune_dead_suzerainty() -> bool:
 				set_diplomatic_relation(subject_id, grand, DiplomaticRelation.ALLIED)
 			else:
 				suzerainty.erase(subject_id)
+				_establish_sovereign_food_pool(subject_id)
 			changed = true
 			progressing = true
 	# 再移除死亡藩王自身的记录。
@@ -2442,6 +2443,33 @@ func prune_dead_suzerainty() -> bool:
 			suzerainty.erase(subject_id)
 			changed = true
 	return changed
+
+
+## 藩王脱离宗藩成为独立主权时，原“零库存中继首都”必须升格为自身粮池。
+## 这里只建立库存真源，不凭空切分已经失去的旧宗主库存。
+func _establish_sovereign_food_pool(nation_id: int) -> void:
+	if (
+		nation_id < 0
+		or nation_id >= nations.size()
+		or not nations[nation_id].alive
+	):
+		return
+	var nation := nations[nation_id]
+	var capital_id := nation.capital_city_id
+	if (
+		capital_id < 0
+		or capital_id >= cities.size()
+		or cities[capital_id].owner_nation != nation_id
+	):
+		var owned := land_cities_of(nation_id)
+		if owned.is_empty():
+			return
+		capital_id = owned[0].id
+		nation.capital_city_id = capital_id
+	var capital := cities[capital_id]
+	capital.is_capital = true
+	capital.has_warehouse = true
+	nation.warehouse_city_ids = [capital_id] as Array[int]
 
 
 ## 分封：宗主 overlord_id 将 city_ids 划出，新建一个完整藩王 Nation。
@@ -2553,20 +2581,29 @@ func annex_nation(absorber: int, absorbed: int) -> void:
 		or absorber == absorbed
 	):
 		return
-	# 1. 领土：城市实控与法理归属全部转给 absorber，清 absorbed 的首都/粮仓标记。
+	# 1. 主权：实控与法理是两个独立维度。分别迁移 absorbed 的实控区和法理区，
+	#    避免吞掉它暂时占领的第三方法理，也避免首都先失陷后遗留死国法理。
 	#    粮仓存粮先累加，稍后并入 absorber 首都粮仓（守恒）。
 	var absorbed_food := 0
+	var ownership_changed := false
 	for city in cities:
-		if city.owner_nation != absorbed:
-			continue
-		if city.has_warehouse:
-			absorbed_food += city.food_storage
-		city.food_storage = 0
-		city.is_capital = false
-		city.has_warehouse = false
-		city.owner_nation = absorber
-		recognized_city_owners[city.id] = absorber
-	ownership_revision += 1
+		if city.owner_nation == absorbed:
+			if city.has_warehouse:
+				absorbed_food += city.food_storage
+			city.food_storage = 0
+			city.is_capital = false
+			city.has_warehouse = false
+			city.owner_nation = absorber
+			ownership_changed = true
+		if recognized_city_owners[city.id] == absorbed:
+			recognized_city_owners[city.id] = absorber
+			ownership_changed = true
+		if city.occupation_sponsor_nation == absorbed:
+			city.occupation_sponsor_nation = absorber
+		if city.owner_nation == recognized_city_owners[city.id]:
+			city.occupation_sponsor_nation = -1
+	if ownership_changed:
+		ownership_revision += 1
 	# 2. 军队与战团：整体改属 absorber。战团 id 重新分配到 absorber 的 id 空间。
 	for group in nations[absorbed].battle_groups:
 		var members := battle_group_members(absorbed, group.id)
@@ -2584,6 +2621,9 @@ func annex_nation(absorber: int, absorbed: int) -> void:
 			army.owner_nation = absorber
 			if army.battle_group_id < 0:
 				army.clear_line_assignment()
+		if army.occupation_claimant_nation == absorbed:
+			army.occupation_claimant_nation = absorber
+	_reconcile_battles_after_annexation()
 	# 3. 资源：人力/金钱并入；粮食并入 absorber 首都粮仓。
 	nations[absorber].manpower_pool += nations[absorbed].manpower_pool
 	nations[absorbed].manpower_pool = 0
@@ -2597,6 +2637,74 @@ func annex_nation(absorber: int, absorbed: int) -> void:
 	nations[absorbed].warehouse_city_ids = [] as Array[int]
 	nations[absorbed].alive = false
 	refresh_derived()
+
+
+## 兼并可能让原战斗双方变成同国或不再敌对。Battle 持有 Army 引用，因此必须在
+## owner 迁移的同一事务中解除这类战斗，不能留到下一回合继续互相造成伤亡。
+func _reconcile_battles_after_annexation() -> void:
+	for battle in battles:
+		if battle.finished:
+			continue
+		battle.prune_dead()
+		if battle.kind == Battle.Kind.SIEGE and not battle.side_a.is_empty():
+			var besieger_nation := battle.side_a[0].owner_nation
+			var merged: Array[Army] = []
+			for army in battle.side_b:
+				if army.owner_nation == besieger_nation:
+					if not battle.side_a.has(army):
+						battle.side_a.append(army)
+					merged.append(army)
+			for army in merged:
+				battle.side_b.erase(army)
+				battle.reinforce_fresh_b.erase(army)
+				battle.routed_b.erase(army)
+				battle.frontline_priority_b.erase(army)
+			if battle.side_b.is_empty():
+				battle.has_garrison = false
+				battle.reinforce_fresh_b.clear()
+				battle.routed_b.clear()
+				battle.frontline_priority_b.clear()
+				battle.reinforcement_morale_gained_b = 0.0
+				battle.tactical_key_b = 0
+		if _battle_has_hostile_sides(battle):
+			continue
+		for army in battle.side_a + battle.side_b:
+			army.battle_id = -1
+			if army.state != Army.State.FIGHTING:
+				continue
+			army.state = (
+				Army.State.MOVING
+				if army.on_edge and army.move_to != -1
+				else Army.State.IDLE
+			)
+		battle.finished = true
+		battle.winner_side = 0
+
+
+func _battle_has_hostile_sides(battle: Battle) -> bool:
+	for army_a in battle.side_a:
+		if army_a.size <= 0:
+			continue
+		for army_b in battle.side_b:
+			if (
+				army_b.size > 0
+				and is_enemy(
+					army_a.owner_nation,
+					army_b.owner_nation
+				)
+			):
+				return true
+	if battle.kind == Battle.Kind.SIEGE and battle.city != null:
+		for besieger in battle.side_a:
+			if (
+				besieger.size > 0
+				and is_enemy(
+					besieger.owner_nation,
+					battle.city.owner_nation
+				)
+			):
+				return true
+	return false
 
 
 ## 和平撤藩：宗主直接吸收藩王全境，宗藩记录移除。返回是否成功。
