@@ -33,12 +33,24 @@ const EDGE_DISTANCE_UNITS_PER_MAP_HEIGHT: float = 12.0
 ## 河运速度为同 distance 陆路的 1.2 倍，因此耗时为陆路的 1/1.2。
 const RIVER_TRAVEL_TIME_MULTIPLIER: float = 1.0 / 1.2
 const RIVER_SUPPLY_LOSS_MULTIPLIER: float = 0.25
+## 地理成本在地形分析分辨率求解；边界显示由矢量简化与圆滑消除栅格台阶。
+const PROVINCE_RASTER_SCALE: int = 1
+## 连续域扭曲把规则 Voronoi 直线变成自然弯曲边界；振幅以地形分析像素计。
+const PROVINCE_WARP_PRIMARY_AMPLITUDE: float = 2.6
+const PROVINCE_WARP_SECONDARY_AMPLITUDE: float = 1.2
+const PROVINCE_MOUNTAIN_ALTITUDE_ONSET: float = 0.42
+const PROVINCE_MOUNTAIN_COST: float = 2.8
+const PROVINCE_SLOPE_COST: float = 7.0
+const PROVINCE_RIVER_CROSSING_COST: float = 7.5
+const PROVINCE_ROAD_COST_REDUCTION: float = 0.58
+const PROVINCE_ROAD_RIVER_RELIEF: float = 0.78
+const PROVINCE_CORRIDOR_RADIUS: int = 3
 
 static var _cache: Dictionary = {}
 
 
 static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "settlement-v5:%s:%d" % [source_path, city_count]
+	var cache_key := "settlement-v7:%s:%d" % [source_path, city_count]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -89,10 +101,12 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		map_aspect_ratio
 	)
 	var provinces := _build_province_raster(
+		analysis,
 		mask,
-		analysis.get_width(),
 		bounds,
-		samples["pixels"]
+		samples["pixels"],
+		road_result["roads"],
+		river_paths
 	)
 	var result := {
 		"positions": samples["positions"],
@@ -117,41 +131,438 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 
 
 static func _build_province_raster(
+	image: Image,
 	land_mask: PackedByteArray,
-	image_width: int,
 	bounds: Rect2i,
-	city_pixels: Array[Vector2i]
+	city_pixels: Array[Vector2i],
+	roads: Array[Dictionary],
+	river_paths: Array[Array]
 ) -> Dictionary:
-	var width := bounds.size.x
-	var height := bounds.size.y
+	var width := bounds.size.x * PROVINCE_RASTER_SCALE
+	var height := bounds.size.y * PROVINCE_RASTER_SCALE
+	var raster_size := Vector2i(width, height)
 	var ids := PackedInt32Array()
 	ids.resize(width * height)
 	ids.fill(-1)
+	var land := PackedByteArray()
+	land.resize(width * height)
+	var altitude := PackedFloat32Array()
+	altitude.resize(width * height)
+	var river := PackedByteArray()
+	river.resize(width * height)
+	var road_strength := PackedFloat32Array()
+	road_strength.resize(width * height)
+	var metric_points := PackedVector2Array()
+	metric_points.resize(width * height)
+	var image_width := image.get_width()
+	var warped_cities: Array[Vector2] = []
+	for city_pixel in city_pixels:
+		warped_cities.append(province_metric_point(
+			Vector2(city_pixel - bounds.position)
+		))
 	for local_y in range(height):
-		var image_y := bounds.position.y + local_y
+		var image_y := bounds.position.y + clampi(
+			local_y / PROVINCE_RASTER_SCALE,
+			0,
+			bounds.size.y - 1
+		)
 		for local_x in range(width):
-			var image_x := bounds.position.x + local_x
+			var index := local_y * width + local_x
+			metric_points[index] = province_metric_point(
+				(Vector2(local_x, local_y)
+					+ Vector2(0.5, 0.5))
+					/ float(PROVINCE_RASTER_SCALE)
+			)
+			var image_x := bounds.position.x + clampi(
+				local_x / PROVINCE_RASTER_SCALE,
+				0,
+				bounds.size.x - 1
+			)
 			if land_mask[image_y * image_width + image_x] == 0:
 				continue
+			land[index] = 1
+			altitude[index] = altitude_from_luminance(
+				image.get_pixel(image_x, image_y).get_luminance()
+			)
+	_build_province_river_mask(
+		river,
+		raster_size,
+		bounds,
+		river_paths
+	)
+	_build_province_road_field(
+		road_strength,
+		raster_size,
+		bounds,
+		city_pixels,
+		roads
+	)
+	var distances := PackedFloat64Array()
+	distances.resize(width * height)
+	distances.fill(INF)
+	var heap: Array[Vector3] = []
+	for city_id in range(city_pixels.size()):
+		var local := (
+			city_pixels[city_id] - bounds.position
+		) * PROVINCE_RASTER_SCALE
+		var seed := Vector2i(
+			clampi(local.x, 0, width - 1),
+			clampi(local.y, 0, height - 1)
+		)
+		var seed_index := seed.y * width + seed.x
+		if land[seed_index] == 0:
+			continue
+		distances[seed_index] = 0.0
+		ids[seed_index] = city_id
+		_province_heap_push(
+			heap,
+			Vector3(0.0, seed_index, city_id)
+		)
+	var offsets := [
+		Vector2i.LEFT,
+		Vector2i.RIGHT,
+		Vector2i.UP,
+		Vector2i.DOWN,
+		Vector2i(-1, -1),
+		Vector2i(1, -1),
+		Vector2i(-1, 1),
+		Vector2i(1, 1),
+	]
+	while not heap.is_empty():
+		var entry: Vector3 = _province_heap_pop(heap)
+		var current_index := int(entry.y)
+		var owner := int(entry.z)
+		var current_cost := entry.x
+		if (
+			owner != ids[current_index]
+			or current_cost
+				> distances[current_index] + 0.000001
+		):
+			continue
+		var current := Vector2i(
+			current_index % width,
+			current_index / width
+		)
+		var current_metric := metric_points[current_index]
+		for offset in offsets:
+			var next: Vector2i = current + offset
+			if (
+				next.x < 0
+				or next.y < 0
+				or next.x >= width
+				or next.y >= height
+			):
+				continue
+			var next_index: int = next.y * width + next.x
+			if land[next_index] == 0:
+				continue
+			var step_cost := province_geographic_step_cost(
+				altitude[current_index],
+				altitude[next_index],
+				river[current_index] != river[next_index],
+				maxf(
+					road_strength[current_index],
+					road_strength[next_index]
+				),
+				current_metric.distance_to(
+					metric_points[next_index]
+				)
+			)
+			var candidate_cost := current_cost + step_cost
+			if (
+				candidate_cost
+					< distances[next_index] - 0.000001
+				or (
+					is_equal_approx(
+						candidate_cost,
+						distances[next_index]
+					)
+					and (
+						ids[next_index] < 0
+						or owner < ids[next_index]
+					)
+				)
+			):
+				distances[next_index] = candidate_cost
+				ids[next_index] = owner
+				_province_heap_push(
+					heap,
+					Vector3(
+						candidate_cost,
+						next_index,
+						owner
+					)
+				)
+	for local_y in range(height):
+		for local_x in range(width):
+			var index := local_y * width + local_x
+			if land[index] == 0 or ids[index] >= 0:
+				continue
+			var warped_point := metric_points[index]
 			var best_city := -1
 			var best_distance := INF
-			for city_id in range(city_pixels.size()):
-				var delta := Vector2(city_pixels[city_id]) - Vector2(image_x, image_y)
-				var distance := delta.length_squared()
+			for city_id in range(warped_cities.size()):
+				var distance := warped_point.distance_squared_to(
+					warped_cities[city_id]
+				)
 				if (
 					distance < best_distance
 					or (
-						is_equal_approx(distance, best_distance)
+						is_equal_approx(
+							distance,
+							best_distance
+						)
 						and city_id < best_city
 					)
 				):
 					best_distance = distance
 					best_city = city_id
-			ids[local_y * width + local_x] = best_city
+			ids[index] = best_city
 	return {
-		"size": Vector2i(width, height),
+		"size": raster_size,
 		"ids": ids,
 	}
+
+
+static func province_geographic_step_cost(
+	from_altitude: float,
+	to_altitude: float,
+	crosses_river: bool,
+	road_strength: float,
+	step_length: float
+) -> float:
+	var average_altitude := (
+		from_altitude + to_altitude
+	) * 0.5
+	var mountain_factor := clampf(
+		inverse_lerp(
+			PROVINCE_MOUNTAIN_ALTITUDE_ONSET,
+			0.88,
+			average_altitude
+		),
+		0.0,
+		1.0
+	)
+	var slope := absf(to_altitude - from_altitude)
+	var corridor := clampf(road_strength, 0.0, 1.0)
+	var terrain_cost := maxf(step_length, 0.01) * (
+		1.0
+		+ mountain_factor * PROVINCE_MOUNTAIN_COST
+		+ slope * PROVINCE_SLOPE_COST
+	)
+	terrain_cost *= (
+		1.0 - corridor * PROVINCE_ROAD_COST_REDUCTION
+	)
+	if crosses_river:
+		terrain_cost += PROVINCE_RIVER_CROSSING_COST * (
+			1.0 - corridor * PROVINCE_ROAD_RIVER_RELIEF
+		)
+	return maxf(terrain_cost, 0.01)
+
+
+static func _build_province_river_mask(
+	result: PackedByteArray,
+	raster_size: Vector2i,
+	bounds: Rect2i,
+	river_paths: Array[Array]
+) -> void:
+	for path in river_paths:
+		for point_value in path:
+			var point: Vector2i = point_value
+			var local := (
+				point - bounds.position
+			) * PROVINCE_RASTER_SCALE
+			_mark_province_disk(
+				result,
+				raster_size,
+				local,
+				1,
+				1.0
+			)
+
+
+static func _build_province_road_field(
+	result: PackedFloat32Array,
+	raster_size: Vector2i,
+	bounds: Rect2i,
+	city_pixels: Array[Vector2i],
+	roads: Array[Dictionary]
+) -> void:
+	for road in roads:
+		if (
+			int(road.get("max_manpower", 0)) <= 0
+			or int(road.get("a", -1)) < 0
+			or int(road.get("b", -1)) < 0
+			or int(road["a"]) >= city_pixels.size()
+			or int(road["b"]) >= city_pixels.size()
+		):
+			continue
+		var from := Vector2(
+			(city_pixels[int(road["a"])] - bounds.position)
+				* PROVINCE_RASTER_SCALE
+		)
+		var to := Vector2(
+			(city_pixels[int(road["b"])] - bounds.position)
+				* PROVINCE_RASTER_SCALE
+		)
+		var distance := from.distance_to(to)
+		var sample_count := maxi(
+			int(ceil(distance * 1.5)),
+			1
+		)
+		var strength := clampf(
+			0.45
+				+ (1.0 - float(road.get("danger", 1.0)))
+					* 0.45
+				+ (0.10 if bool(
+					road.get("backbone", false)
+				) else 0.0),
+			0.0,
+			1.0
+		)
+		for sample in range(sample_count + 1):
+			var ratio := float(sample) / float(sample_count)
+			_mark_province_disk(
+				result,
+				raster_size,
+				Vector2i(from.lerp(to, ratio).round()),
+				PROVINCE_CORRIDOR_RADIUS,
+				strength
+			)
+
+
+static func _mark_province_disk(
+	field: Variant,
+	size: Vector2i,
+	center: Vector2i,
+	radius: int,
+	value: float
+) -> void:
+	for offset_y in range(-radius, radius + 1):
+		for offset_x in range(-radius, radius + 1):
+			var point := center + Vector2i(
+				offset_x,
+				offset_y
+			)
+			if (
+				point.x < 0
+				or point.y < 0
+				or point.x >= size.x
+				or point.y >= size.y
+			):
+				continue
+			var distance := Vector2(
+				offset_x,
+				offset_y
+			).length()
+			if distance > float(radius) + 0.001:
+				continue
+			var falloff := (
+				1.0
+				if radius <= 1
+				else 1.0
+					- distance / float(radius + 1)
+			)
+			var index := point.y * size.x + point.x
+			if field is PackedByteArray:
+				field[index] = 1
+			else:
+				field[index] = maxf(
+					float(field[index]),
+					value * falloff
+				)
+
+
+static func _province_heap_entry_less(
+	a: Vector3,
+	b: Vector3
+) -> bool:
+	var cost_a := a.x
+	var cost_b := b.x
+	if not is_equal_approx(cost_a, cost_b):
+		return cost_a < cost_b
+	var owner_a := int(a.z)
+	var owner_b := int(b.z)
+	if owner_a != owner_b:
+		return owner_a < owner_b
+	return int(a.y) < int(b.y)
+
+
+static func _province_heap_push(
+	heap: Array[Vector3],
+	entry: Vector3
+) -> void:
+	heap.append(entry)
+	var index := heap.size() - 1
+	while index > 0:
+		var parent: int = (index - 1) / 2
+		if not _province_heap_entry_less(
+			heap[index],
+			heap[parent]
+		):
+			break
+		var temporary: Vector3 = heap[index]
+		heap[index] = heap[parent]
+		heap[parent] = temporary
+		index = parent
+
+
+static func _province_heap_pop(
+	heap: Array[Vector3]
+) -> Vector3:
+	var result: Vector3 = heap[0]
+	var last: Vector3 = heap.pop_back()
+	if heap.is_empty():
+		return result
+	heap[0] = last
+	var index := 0
+	while true:
+		var left := index * 2 + 1
+		var right := left + 1
+		var smallest := index
+		if (
+			left < heap.size()
+			and _province_heap_entry_less(
+				heap[left],
+				heap[smallest]
+			)
+		):
+			smallest = left
+		if (
+			right < heap.size()
+			and _province_heap_entry_less(
+				heap[right],
+				heap[smallest]
+			)
+		):
+			smallest = right
+		if smallest == index:
+			break
+		var temporary: Vector3 = heap[index]
+		heap[index] = heap[smallest]
+		heap[smallest] = temporary
+		index = smallest
+	return result
+
+
+## 确定性的低频连续域扭曲。相邻采样点保持相邻，不引入随机飞地；
+## 同时两组不同方向波叠加，避免边界呈现统一波纹。
+static func province_metric_point(point: Vector2) -> Vector2:
+	var primary := Vector2(
+		sin(
+			point.y * 0.137
+				+ sin(point.x * 0.041) * 1.7
+		),
+		sin(
+			point.x * 0.119
+				+ cos(point.y * 0.047) * 1.5
+		)
+	) * PROVINCE_WARP_PRIMARY_AMPLITUDE
+	var secondary := Vector2(
+		sin((point.x + point.y) * 0.061 + 0.9),
+		cos((point.x - point.y) * 0.057 - 0.6)
+	) * PROVINCE_WARP_SECONDARY_AMPLITUDE
+	return point + primary + secondary
 
 
 static func _largest_land_component(image: Image) -> Dictionary:

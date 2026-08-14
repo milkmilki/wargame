@@ -6,6 +6,13 @@ extends Node
 
 signal runtime_day_committed(day: int)
 
+enum SiegeRole {
+	REJECTED,
+	BESIEGER,
+	CITY_DEFENDER,
+	CHALLENGER,
+}
+
 # ---- 时间（天/月分层）----
 ## 基础 tick = 1 天。军粮月耗通过小数债摊到每天，经济生产等仍每 DAYS_PER_MONTH 天结算。
 const DAYS_PER_MONTH: int = 30
@@ -10164,29 +10171,18 @@ func _block_passthrough() -> void:
 				army.move_progress = clampf(1.0 - line_norm, 0.0, army.move_progress)
 
 
-## 攻城入口：A 抵达被围/敌方城。规则：一城至多一个「围城 nation」占 side_a（不允许敌对他国并肩）。
-##  - 无既有围城：有守军→建带守军 SIEGE；空城→建纯围城 SIEGE（side_b 空，累积破城）。
-##  - 既有围城且与围城方同 nation：并入 side_a（多路攻城汇合）。
-##  - 既有围城且与围城方敌对：
-##     · 守军仍在(side_b 被守军占)：与守军同族者(城主援军)→入城帮守并入 side_b；真第三国→撤回友城。
-##     · 纯围城阶段(守军已歼/空城)：进 side_b 与围城方城下决斗（城主援军解围亦走此路，修复"回援不触发"）。
+## 围城角色统一入口：
+## - side_a 仍是单一 nation 的围城方；
+## - side_b 若与城市控制者有军事通行权，则是可含盟军的城市防卫共同体；
+## - side_b 否则是单一 nation 的敌对挑战者；
+## - 与当前围城无敌对关系的无关方撤回。
 func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 	var siege := _siege_battle_of(city)
 	if siege == null and not state.is_enemy(attacker.owner_nation, city.owner_nation):
 		_retreat_to_friendly(attacker)
 		return
-	if siege != null and not siege.side_a.is_empty():
-		var besieger := siege.side_a[0].owner_nation
-		if (
-			attacker.owner_nation != besieger
-			and not state.is_enemy(attacker.owner_nation, besieger)
-		):
-			_retreat_to_friendly(attacker)
-			return
 	if siege == null:
-		var defenders := (
-			state.armies_available_to_defend_city(city.id)
-		)
+		var defenders := _siege_city_defenders(city)
 		# item 7：不再设机制层「弱攻自动撤离」硬门槛——兵力不足时围城进度会按连续曲线
 		# 停滞/倒退（见 _advance_siege），是否撤离交 AI 战略层裁量，避免攻/撤无限循环。
 		siege = state.new_battle(Battle.Kind.SIEGE)
@@ -10206,27 +10202,134 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		_enter_battle(siege, attacker, 1)
 		return
 
-	# 既有围城
-	var besieger_nation: int = siege.side_a[0].owner_nation if not siege.side_a.is_empty() else attacker.owner_nation
-	if attacker.owner_nation == besieger_nation:
-		_enter_battle(siege, attacker, 1)   # 与围城方同 nation：多路汇合
-		return
-	# 到此 attacker 与围城方敌对
-	if siege.has_garrison and siege.side_size(siege.side_b) > 0:
-		# 守军仍在城中：与守军同族的城主援军入城帮守（并入 side_b，享城防加成）；
-		# 真第三国无处容身（三方不可共存）→ 从目标城沿道路撤回友城。
-		var defender_nation: int = siege.side_b[0].owner_nation
-		if attacker.owner_nation == defender_nation:
+	match _siege_role_for_nation(siege, attacker.owner_nation):
+		SiegeRole.BESIEGER:
+			_enter_battle(siege, attacker, 1)
+		SiegeRole.CITY_DEFENDER:
+			if (
+				not siege.side_b.is_empty()
+				and not _siege_side_defends_city(
+					siege,
+					siege.side_b
+				)
+			):
+				# side_b 已被敌对挑战者占据，防卫共同体下一日接续，避免三方混侧。
+				_retreat_to_friendly(attacker)
+				return
 			_enter_battle(siege, attacker, 2)
-			return
-		_retreat_to_friendly(attacker)
-		return
-	# 纯围城阶段：A 进 side_b 与围城方城下决斗（城主援军解围 / 敌对他国抢城均走此路）
-	if not siege.side_b.is_empty() and siege.side_b[0].owner_nation != attacker.owner_nation:
-		# side_b 已被另一挑战 nation 占据（罕见四方），A 从已抵达的城节点撤回最近友城。
-		_retreat_to_friendly(attacker)
-		return
-	_enter_battle(siege, attacker, 2)
+			siege.has_garrison = true
+		SiegeRole.CHALLENGER:
+			if (
+				siege.has_garrison
+				or (
+					not siege.side_b.is_empty()
+					and siege.side_b[0].owner_nation
+						!= attacker.owner_nation
+				)
+			):
+				_retreat_to_friendly(attacker)
+				return
+			_enter_battle(siege, attacker, 2)
+		_:
+			_retreat_to_friendly(attacker)
+
+
+func _siege_role_for_nation(
+	siege: Battle,
+	nation_id: int
+) -> int:
+	if (
+		siege == null
+		or siege.city == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+		or siege.side_a.is_empty()
+	):
+		return SiegeRole.REJECTED
+	var besieger_nation := siege.side_a[0].owner_nation
+	if nation_id == besieger_nation:
+		return SiegeRole.BESIEGER
+	if (
+		_nation_defends_city(nation_id, siege.city)
+		and state.is_enemy(nation_id, besieger_nation)
+	):
+		return SiegeRole.CITY_DEFENDER
+	if (
+		not siege.side_b.is_empty()
+		and siege.side_b[0].owner_nation == nation_id
+	):
+		return SiegeRole.CHALLENGER
+	if state.is_enemy(nation_id, besieger_nation):
+		return SiegeRole.CHALLENGER
+	return SiegeRole.REJECTED
+
+
+func _nation_defends_city(
+	nation_id: int,
+	city: City
+) -> bool:
+	return (
+		city != null
+		and nation_id >= 0
+		and nation_id < state.nations.size()
+		and state.has_military_access(
+			nation_id,
+			city.owner_nation
+		)
+	)
+
+
+func _siege_side_defends_city(
+	siege: Battle,
+	side: Array[Army]
+) -> bool:
+	if siege == null or siege.city == null:
+		return false
+	var living_count := 0
+	for army in side:
+		if army.size <= 0:
+			continue
+		living_count += 1
+		if not _nation_defends_city(
+			army.owner_nation,
+			siege.city
+		):
+			return false
+	return living_count > 0
+
+
+func _siege_city_defenders(city: City) -> Array[Army]:
+	var result: Array[Army] = []
+	for army in state.armies:
+		if (
+			army.size <= 0
+			or not _nation_defends_city(
+				army.owner_nation,
+				city
+			)
+			or not army.is_at_city_node(city.id)
+		):
+			continue
+		if army.state == Army.State.FIGHTING:
+			var active_battle := state.battle_by_id(
+				army.battle_id
+			)
+			if (
+				active_battle != null
+				and not active_battle.finished
+				and active_battle.kind == Battle.Kind.SIEGE
+				and active_battle.city == city
+				and active_battle.has_army(army)
+			):
+				continue
+		result.append(army)
+	EquivariantOrder.sort_armies(
+		result,
+		state,
+		city.owner_nation,
+		city.id
+	)
+	return result
 
 
 ## 对每场进行中的战斗推进一个 tick：FIELD 打一回合；SIEGE 走专用状态机（守军歼灭≠破城）。
@@ -10282,7 +10385,10 @@ func _resolve_combat_round(
 			battle.kind == Battle.Kind.SIEGE
 			and battle.has_garrison
 			and battle.city != null
-			and army.owner_nation == battle.city.owner_nation
+			and _nation_defends_city(
+				army.owner_nation,
+				battle.city
+			)
 		):
 			_retreat_defender(army, battle.city)
 		else:
@@ -10316,6 +10422,21 @@ func _fill_battle_frontline_priority(
 	if side.is_empty():
 		return
 	var nation_id := side[0].owner_nation
+	if (
+		anchor_city >= 0
+		and anchor_city < state.cities.size()
+	):
+		var anchor := state.cities[anchor_city]
+		var defense_coalition := true
+		for army in side:
+			if not _nation_defends_city(
+				army.owner_nation,
+				anchor
+			):
+				defense_coalition = false
+				break
+		if defense_coalition:
+			nation_id = anchor.owner_nation
 	var ordered: Array[Army] = side.duplicate()
 	ordered.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(
@@ -10359,13 +10480,8 @@ func _advance_siege(
 	# 阶段 1：守军抵抗
 	if battle.has_garrison and battle.side_size(battle.side_b) > 0:
 		if not atk_alive:
-			# 围城方尽墨（多因断粮）→ 守军坚守，围城解除
-			for d in battle.side_b:
-				d.battle_id = -1
-				if d.size > 0:
-					_settle_idle(d, battle.city.id)
-			battle.finished = true
-			battle.winner_side = 2
+			# 围城方尽墨（多因断粮）→ 防卫共同体统一结算解围。
+			_resolve_siege_side_b_victory(battle)
 			return
 		_decay_interrupted_siege_progress(battle)
 		_resolve_combat_round(
@@ -10407,8 +10523,8 @@ func _advance_siege(
 	# 阶段 2：城下决斗（side_b 为敌对挑战者，无城防加成）
 	if battle.side_size(battle.side_b) > 0:
 		if not atk_alive:
-			# 围城方尽墨 → 挑战者接管围城
-			_promote_challengers(battle)
+			# 围城方尽墨：城主/盟军解围则解除围城，敌对第三国才接管围城。
+			_resolve_siege_side_b_victory(battle)
 			return
 		_decay_interrupted_siege_progress(battle)
 		_resolve_combat_round(
@@ -10457,18 +10573,7 @@ func _advance_siege(
 				else:
 					a.battle_id = -1
 			battle.side_a.clear()
-			# 若胜方为城主（解围成功）→ 入城驻守、围城解除；否则晋升为新围城方继续攻城。
-			var challenger_nation: int = battle.side_b[0].owner_nation if not battle.side_b.is_empty() else -1
-			if challenger_nation == battle.city.owner_nation:
-				for c in battle.side_b:
-					c.battle_id = -1
-					if c.size > 0:
-						_settle_or_recover_after_battle(c, battle.city.id)
-				_reset_empty_battle_side_b(battle)
-				battle.finished = true
-				battle.winner_side = 2
-			else:
-				_promote_challengers(battle)
+			_resolve_siege_side_b_victory(battle)
 		return
 
 	# 阶段 3：纯围城，连续曲线累积破城（item 7：无 5× 硬门槛、无跳变）。
@@ -10522,7 +10627,7 @@ func _advance_siege(
 
 
 ## 围城建立后仍可能有撤退军抵达、恢复军落位等状态转换。每个围城日都重新收集
-## 目标城内未参战的本国驻军，确保任何有效守军都先进入战斗，不能被攻城进度跳过。
+## 目标城内未参战的防卫共同体军队，确保城主与盟军使用同一入场规则。
 func _reconcile_siege_city_defenders(battle: Battle) -> void:
 	if (
 		battle.city == null
@@ -10531,14 +10636,15 @@ func _reconcile_siege_city_defenders(battle: Battle) -> void:
 		or state.cities[battle.city.id] != battle.city
 	):
 		return
-	var defenders := state.armies_available_to_defend_city(
-		battle.city.id
-	)
+	var defenders := _siege_city_defenders(battle.city)
 	if defenders.is_empty():
 		return
 	if (
 		not battle.side_b.is_empty()
-		and battle.side_b[0].owner_nation != battle.city.owner_nation
+		and not _siege_side_defends_city(
+			battle,
+			battle.side_b
+		)
 	):
 		# 第三方已在城下挑战围城方；守军下一日再接续，避免三国混入同一战斗侧。
 		return
@@ -10546,11 +10652,8 @@ func _reconcile_siege_city_defenders(battle: Battle) -> void:
 		if battle.has_army(defender):
 			continue
 		_enter_battle(battle, defender, 2)
-	if (
-		not battle.side_b.is_empty()
-		and battle.side_b[0].owner_nation == battle.city.owner_nation
-	):
-		# 后到守军入城帮守：加入城下决斗消耗攻方，但封锁需求 siege_required 仅由工事决定
+	if _siege_side_defends_city(battle, battle.side_b):
+		# 后到防卫共同体入城帮守：加入城下决斗消耗攻方，但封锁需求仅由工事决定
 		# （item 6：守军不抬高破城门槛），此处无需改动 battle.siege_required。
 		battle.has_garrison = true
 
@@ -10559,6 +10662,31 @@ func _decay_interrupted_siege_progress(battle: Battle) -> void:
 	battle.siege_progress = Combat.siege_progress_after_interruption(
 		battle.siege_progress
 	)
+
+
+## side_b 获胜后的唯一结算：城市防卫共同体解围并驻城；
+## 对城主无通行权的敌对挑战者才晋升为新围城方。
+func _resolve_siege_side_b_victory(
+	battle: Battle
+) -> void:
+	if not _siege_side_defends_city(
+		battle,
+		battle.side_b
+	):
+		_promote_challengers(battle)
+		return
+	battle.side_a.clear()
+	for challenger in battle.side_b:
+		challenger.battle_id = -1
+		if challenger.size > 0:
+			_settle_or_recover_after_battle(
+				challenger,
+				battle.city.id
+			)
+	_reset_empty_battle_side_b(battle)
+	battle.has_garrison = false
+	battle.finished = true
+	battle.winner_side = 2
 
 
 ## 挑战者（side_b）接管围城：晋升为围城方（移入 side_a、置城墙位置），围城继续。
@@ -11076,6 +11204,9 @@ func _occupation_claimant_for_army(
 	army: Army,
 	target_city: City = null
 ) -> int:
+	# 此函数只在真正破城后决定控制权接收者，与围城阶段的 CITY_DEFENDER/
+	# CHALLENGER 角色正交：战斗阵营按当前控制与军事通行权，控制权则优先归还
+	# 仍存活且与攻方结盟的法理所有者。
 	if target_city != null:
 		var recognized_owner := state.recognized_owner_of(
 			target_city.id

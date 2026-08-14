@@ -107,7 +107,6 @@ func _approx(a: float, b: float, eps: float = 0.0001) -> bool:
 	return absf(a - b) <= eps
 
 # ------------------------------------------------------------------ 1. 世界生成
-
 func _test_world_generation() -> void:
 	print("[1] 世界生成不变量")
 	var gs := GameState.new()
@@ -842,6 +841,11 @@ func _test_world_generation() -> void:
 	)
 	var province_seen := {}
 	var province_has_sea := false
+	var terrain_geometry := TerrainMapGenerator.build(
+		GameState.TERRAIN_MAP_PATH,
+		GameState.TERRAIN_CITY_COUNT
+	)
+	var terrain_bounds: Rect2i = terrain_geometry["bounds"]
 	var province_ids_valid := (
 		gs.province_map_size.x > 0
 		and gs.province_map_size.y > 0
@@ -862,6 +866,107 @@ func _test_world_generation() -> void:
 		and province_has_sea
 		and province_seen.size() == GameState.TERRAIN_CITY_COUNT,
 		"陆地掩码 Voronoi 必须为160城各生成独立省份，轮廓外保持透明"
+	)
+	var warp_sample := Vector2(47.0, 83.0)
+	var warped_sample := TerrainMapGenerator.province_metric_point(
+		warp_sample
+	)
+	var warped_neighbor := TerrainMapGenerator.province_metric_point(
+		warp_sample + Vector2.ONE
+	)
+	_check(
+		gs.province_map_size
+			== terrain_bounds.size
+				* TerrainMapGenerator.PROVINCE_RASTER_SCALE
+			and warped_sample
+				== TerrainMapGenerator.province_metric_point(
+					warp_sample
+				)
+			and warped_sample.distance_to(warp_sample) > 0.5
+			and warped_sample.distance_to(warped_neighbor) < 2.5,
+		"省份归属图必须使用地形分析分辨率和确定、局部连续的域扭曲"
+	)
+	var flat_cost := (
+		TerrainMapGenerator.province_geographic_step_cost(
+			0.20,
+			0.20,
+			false,
+			0.0,
+			1.0
+		)
+	)
+	var mountain_cost := (
+		TerrainMapGenerator.province_geographic_step_cost(
+			0.78,
+			0.84,
+			false,
+			0.0,
+			1.0
+		)
+	)
+	var river_cost := (
+		TerrainMapGenerator.province_geographic_step_cost(
+			0.20,
+			0.20,
+			true,
+			0.0,
+			1.0
+		)
+	)
+	var road_cost := (
+		TerrainMapGenerator.province_geographic_step_cost(
+			0.20,
+			0.20,
+			false,
+			1.0,
+			1.0
+		)
+	)
+	var road_river_cost := (
+		TerrainMapGenerator.province_geographic_step_cost(
+			0.20,
+			0.20,
+			true,
+			1.0,
+			1.0
+		)
+	)
+	_check(
+		mountain_cost > flat_cost * 2.0
+			and river_cost > flat_cost * 4.0
+			and road_cost < flat_cost
+			and road_river_cost < river_cost,
+		"省界地理成本必须把山脉和河流作为屏障，把道路和渡口作为扩张走廊"
+	)
+	var test_river_field := PackedByteArray()
+	test_river_field.resize(100)
+	TerrainMapGenerator._build_province_river_mask(
+		test_river_field,
+		Vector2i(10, 10),
+		Rect2i(0, 0, 10, 10),
+		[[Vector2i(2, 5), Vector2i(3, 5)]]
+	)
+	var test_road_field := PackedFloat32Array()
+	test_road_field.resize(100)
+	TerrainMapGenerator._build_province_road_field(
+		test_road_field,
+		Vector2i(10, 10),
+		Rect2i(0, 0, 10, 10),
+		[Vector2i(1, 2), Vector2i(8, 2)],
+		[{
+			"a": 0,
+			"b": 1,
+			"max_manpower": 30000,
+			"danger": 0.2,
+			"backbone": true,
+		}]
+	)
+	_check(
+		test_river_field[5 * 10 + 2] != 0
+			and test_river_field[5 * 10 + 3] != 0
+			and test_road_field[2 * 10 + 4] > 0.5
+			and test_road_field[8 * 10 + 4] <= 0.001,
+		"河流路径必须写入屏障掩码，道路必须只在交通走廊附近生成强度场"
 	)
 	var province_owners_stable := true
 	for city in gs.cities:
@@ -1423,6 +1528,103 @@ func _test_river_transport() -> void:
 
 func _test_responsive_map_layout() -> void:
 	print("[1b] 战略图界面：地图响应式、图标四档缩放、城市/道路可点选")
+	var valid_resolutions := (
+		DisplaySettings.RESOLUTIONS.has(
+			DisplaySettings.DEFAULT_RESOLUTION
+		)
+	)
+	for resolution in DisplaySettings.RESOLUTIONS:
+		valid_resolutions = (
+			valid_resolutions
+			and resolution.x * 9 == resolution.y * 16
+		)
+	_check(
+		valid_resolutions
+			and DisplaySettings.RESOLUTIONS.size() == 5,
+		"分辨率设置必须提供五档固定16:9选项，且默认分辨率必须在选项内"
+	)
+	_check(
+		DisplaySettings.validated_resolution(
+			Vector2i(1920, 1080)
+		) == Vector2i(1920, 1080)
+			and DisplaySettings.validated_resolution(
+				Vector2i(1366, 768)
+			) == DisplaySettings.DEFAULT_RESOLUTION,
+		"分辨率配置必须接受白名单尺寸，并把任意或损坏尺寸回退到默认值"
+	)
+	var main_scene := load("res://main.tscn") as PackedScene
+	var settings_game := main_scene.instantiate()
+	root.add_child(settings_game)
+	var settings_sim := settings_game.get_node("Simulation") as Simulation
+	var settings_overlay := settings_game.get_node(
+		"SettingsLayer/SettingsOverlay"
+	) as Control
+	var settings_options := settings_game.get_node(
+		(
+			"SettingsLayer/SettingsOverlay/SettingsPanel/"
+			+ "Margin/Content/ResolutionOption"
+		)
+	) as OptionButton
+	var settings_entry_button := settings_game.get_node(
+		"SettingsLayer/SettingsButton"
+	) as Button
+	settings_game.set("simulation", settings_sim)
+	settings_game.set("settings_overlay", settings_overlay)
+	settings_game.set("resolution_option", settings_options)
+	settings_game.set(
+		"settings_button",
+		settings_entry_button
+	)
+	settings_game.set(
+		"resolution_hint",
+		settings_game.get_node(
+			(
+				"SettingsLayer/SettingsOverlay/SettingsPanel/"
+				+ "Margin/Content/ResolutionHint"
+			)
+		)
+	)
+	settings_game.set(
+		"settings_close_button",
+		settings_game.get_node(
+			(
+				"SettingsLayer/SettingsOverlay/SettingsPanel/"
+				+ "Margin/Content/Actions/CloseButton"
+			)
+		)
+	)
+	settings_game.set(
+		"settings_apply_button",
+		settings_game.get_node(
+			(
+				"SettingsLayer/SettingsOverlay/SettingsPanel/"
+				+ "Margin/Content/Actions/ApplyButton"
+			)
+		)
+	)
+	settings_game.call("_setup_display_settings")
+	var pause_before_settings := settings_sim.paused
+	settings_game.call("_open_settings")
+	var opened_and_paused := (
+		settings_overlay.visible
+		and settings_sim.paused
+		and settings_options.item_count
+			== DisplaySettings.RESOLUTIONS.size()
+		and settings_entry_button.get_theme_font(
+			"font"
+		).has_char("设".unicode_at(0))
+		and settings_options.get_popup().get_theme_font(
+			"font"
+		).has_char("辨".unicode_at(0))
+	)
+	settings_game.call("_close_settings")
+	_check(
+		opened_and_paused
+			and not settings_overlay.visible
+			and settings_sim.paused == pause_before_settings,
+		"设置面板必须使用中文字体、提供全部分辨率，并正确暂停和恢复模拟"
+	)
+	settings_game.free()
 	var base := MapRenderer.compute_layout_for_viewport(Vector2(1280, 720), 4)
 	var large := MapRenderer.compute_layout_for_viewport(Vector2(1920, 1080), 4)
 	var stats_closed := MapRenderer.compute_layout_for_viewport(
@@ -1586,6 +1788,18 @@ func _test_responsive_map_layout() -> void:
 		2.0,
 		map_base_size
 	)
+	var wheel_up := MapRenderer.wheel_zoom_multiplier(
+		MOUSE_BUTTON_WHEEL_UP,
+		1.0
+	)
+	var wheel_down := MapRenderer.wheel_zoom_multiplier(
+		MOUSE_BUTTON_WHEEL_DOWN,
+		1.0
+	)
+	var smooth_wheel := MapRenderer.wheel_zoom_multiplier(
+		MOUSE_BUTTON_WHEEL_UP,
+		0.25
+	)
 	_check(
 		zoomed_anchor.distance_to(zoom_anchor) <= 0.001
 			and clamped_pan == Vector2(300.0, -200.0)
@@ -1595,6 +1809,26 @@ func _test_responsive_map_layout() -> void:
 				map_base_size
 			) == Vector2.ZERO,
 		"滚轮缩放必须锚定鼠标地图坐标，拖动平移必须受边界约束且1倍时归零"
+	)
+	_check(
+		wheel_up > 1.0
+			and wheel_down < 1.0
+			and _approx(wheel_up * wheel_down, 1.0)
+			and smooth_wheel > 1.0
+			and smooth_wheel < wheel_up
+			and _approx(
+				MapRenderer.magnify_zoom_multiplier(1.25),
+				1.25
+			)
+			and _approx(
+				MapRenderer.magnify_zoom_multiplier(0.1),
+				0.5
+			)
+			and _approx(
+				MapRenderer.magnify_zoom_multiplier(3.0),
+				2.0
+			),
+		"触控板捏合与平滑滚轮倍率必须连续、方向正确且限制异常输入"
 	)
 	scale_renderer.free()
 	var large_origin: Vector2 = large["origin"]
@@ -3309,7 +3543,32 @@ func _test_siege_arrival_triggers() -> void:
 	_check(relief3.state == Army.State.FIGHTING and _single_nation(siege3.side_b),
 		"帮守方应 FIGHTING 且 side_b 保持单一 nation")
 
-	# (d) 守军仍在，真第三国(nation1)抵达 → 三方不可共存，从目标城撤回（不并入任一侧）
+	# (d) 守军仍在，盟军抵达 → 加入城市防卫共同体；side_b 可以包含多个盟国。
+	gs3.set_diplomatic_relation(
+		2,
+		defender_nation,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	var allied_relief3 := _make_army(923, 2, 1000, 10)
+	allied_relief3.move_from = 62
+	allied_relief3.move_to = 63
+	allied_relief3.move_progress = 1.0
+	allied_relief3.on_edge = true
+	allied_relief3.state = Army.State.MOVING
+	gs3.armies.append(allied_relief3)
+	sim3._arrive_at_node(allied_relief3)
+	_check(
+		siege3.has_army(allied_relief3)
+			and allied_relief3.state == Army.State.FIGHTING
+			and not _single_nation(siege3.side_b)
+			and sim3._siege_side_defends_city(
+				siege3,
+				siege3.side_b
+			),
+		"盟军抵达被围盟城后必须加入同一防卫共同体，并共享驻城防守状态"
+	)
+
+	# (e) 守军仍在，真第三国(nation1)抵达 → 三方不可共存，从目标城撤回（不并入任一侧）
 	gs3.cities[62].owner_nation = 1   # 为第三国提供合法本国退路，禁止借道其他敌城
 	var intruder := _make_army(922, 1, 1000, 10)
 	intruder.move_from = 62; intruder.move_to = 63; intruder.move_progress = 1.0; intruder.on_edge = true
@@ -3320,7 +3579,7 @@ func _test_siege_arrival_triggers() -> void:
 		and intruder.move_from == city3.id,
 		"守军在场时真第三国应从目标城撤回且不介入")
 
-	# (e) 城主援军解围胜利后应入城驻守，而非"晋升为围城方去围自己的城"
+	# (f) 城主援军解围胜利后应入城驻守，而非"晋升为围城方去围自己的城"
 	var gs4 := GameState.new(); gs4.generate_grid_world(12345)
 	var sim4 := Simulation.new(); sim4.setup(gs4)
 	var city4: City = gs4.cities[63]                     # nation3
@@ -3348,7 +3607,44 @@ func _test_siege_arrival_triggers() -> void:
 	_check(city4.owner_nation == 3, "城仍属城主 nation3（未被围城方夺取）")
 	_check(relief4.state == Army.State.IDLE and relief4.location_city == 63,
 		"城主援军解围胜利应入城驻守（IDLE@63），而非晋升围城自己的城，实 state=%d loc=%d" % [relief4.state, relief4.location_city])
-	sim.free(); sim2.free(); sim3.free(); sim4.free()
+
+	# (g) 围城建立前已驻扎的盟军也必须在首个围城回合直接进入 side_b。
+	var gs5 := GameState.new(); gs5.generate_grid_world(12345)
+	var sim5 := Simulation.new(); sim5.setup(gs5)
+	var city5: City = gs5.cities[63]
+	var edge5: Edge = gs5.edge_of(62, 63)
+	gs5.set_diplomatic_relation(
+		2,
+		city5.owner_nation,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	var stationed_ally := _make_army(940, 2, 1000, 10)
+	stationed_ally.state = Army.State.IDLE
+	stationed_ally.location_city = city5.id
+	stationed_ally.move_from = city5.id
+	gs5.armies.append(stationed_ally)
+	var bz5 := _make_army(941, 0, 1000, 10)
+	bz5.move_from = 62
+	bz5.move_to = 63
+	gs5.armies.append(bz5)
+	sim5._start_or_join_siege(bz5, city5, edge5)
+	var siege5 := sim5._siege_battle_of(city5)
+	_check(
+		siege5 != null
+			and siege5.has_garrison
+			and siege5.has_army(stationed_ally)
+			and stationed_ally.state == Army.State.FIGHTING
+			and sim5._siege_side_defends_city(
+				siege5,
+				siege5.side_b
+			),
+		"围城开始前驻扎在盟城的盟军必须与城主守军一同进入防守侧"
+	)
+	sim.free()
+	sim2.free()
+	sim3.free()
+	sim4.free()
+	sim5.free()
 
 # ------------------------------------------------------------------ 16. 相向错身：走到边末端的一方应先野战，而非离边攻城穿过
 
@@ -4673,6 +4969,97 @@ func _test_siege_battle_then_progress_order() -> void:
 		"击败占领军后不再瞬间收复：转入纯围城阶段，仍须累积破城进度"
 	)
 	sim.free()
+
+	# 盟军击败围城方属于解围，不能被晋升为对盟友城市的新围城方。
+	var ally_state := GameState.new()
+	ally_state.generate_grid_world(24240)
+	var ally_sim := Simulation.new()
+	ally_sim.setup(ally_state)
+	ally_state.armies.clear()
+	ally_state.battles.clear()
+	var ally_id := 0
+	var city_owner_id := 1
+	var enemy_id := 2
+	ally_state.set_diplomatic_relation(
+		ally_id,
+		city_owner_id,
+		GameState.DiplomaticRelation.ALLIED
+	)
+	ally_state.set_diplomatic_relation(
+		ally_id,
+		enemy_id,
+		GameState.DiplomaticRelation.WAR
+	)
+	ally_state.set_diplomatic_relation(
+		city_owner_id,
+		enemy_id,
+		GameState.DiplomaticRelation.WAR
+	)
+	var allied_city := -1
+	var allied_road: Edge = null
+	for edge in ally_state.edges:
+		if (
+			ally_state.cities[edge.city_a].owner_nation
+				== city_owner_id
+		):
+			allied_city = edge.city_a
+			allied_road = edge
+			break
+		if (
+			ally_state.cities[edge.city_b].owner_nation
+				== city_owner_id
+		):
+			allied_city = edge.city_b
+			allied_road = edge
+			break
+	var enemy_besieger := _make_army(
+		705,
+		enemy_id,
+		5000,
+		10
+	)
+	enemy_besieger.move_from = (
+		allied_road.city_b
+		if allied_road.city_a == allied_city
+		else allied_road.city_a
+	)
+	enemy_besieger.move_to = allied_city
+	var allied_relief := _make_army(
+		706,
+		ally_id,
+		5000,
+		10
+	)
+	allied_relief.move_from = enemy_besieger.move_from
+	allied_relief.move_to = allied_city
+	ally_state.armies = [
+		enemy_besieger,
+		allied_relief,
+	] as Array[Army]
+	ally_sim._start_or_join_siege(
+		enemy_besieger,
+		ally_state.cities[allied_city],
+		allied_road
+	)
+	var allied_siege: Battle = ally_state.battles[0]
+	ally_sim._start_or_join_siege(
+		allied_relief,
+		ally_state.cities[allied_city],
+		allied_road
+	)
+	enemy_besieger.size = 0
+	ally_sim._advance_siege(allied_siege)
+	_check(
+		ally_state.cities[allied_city].owner_nation
+			== city_owner_id
+			and allied_siege.finished
+			and allied_siege.side_a.is_empty()
+			and allied_siege.side_b.is_empty()
+			and allied_relief.state == Army.State.IDLE
+			and allied_relief.location_city == allied_city,
+		"盟军击败盟友城市上的围城方后必须解除围城并驻城，不得接管围城或夺取城市"
+	)
+	ally_sim.free()
 
 # ------------------------------------------------------------------ 25. 边上驻防状态 + AI + 适应累计
 # ------------------------------------------------------------------ 24b. 后到守军打断围城并回退进度

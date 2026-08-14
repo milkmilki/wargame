@@ -20,15 +20,93 @@ extends Node2D
 
 @onready var simulation: Simulation = $Simulation
 @onready var renderer: MapRenderer = $MapRenderer
+@onready var settings_button: Button = $SettingsLayer/SettingsButton
+@onready var settings_overlay: Control = $SettingsLayer/SettingsOverlay
+@onready var resolution_option: OptionButton = (
+	$SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content/ResolutionOption
+)
+@onready var resolution_hint: Label = (
+	$SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content/ResolutionHint
+)
+@onready var settings_close_button: Button = (
+	$SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content/Actions/CloseButton
+)
+@onready var settings_apply_button: Button = (
+	$SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content/Actions/ApplyButton
+)
 
 var state: GameState
 var _seed: int = 12345
 var _speed_mult: float = 1.0
+var _settings_previous_pause: bool = false
 
 
 func _ready() -> void:
+	_setup_display_settings()
 	_seed = world_seed
 	_start_new_game(_seed)
+
+
+func _setup_display_settings() -> void:
+	var settings_font := MapRenderer.create_ui_font()
+	_apply_settings_font(settings_button, settings_font)
+	_apply_settings_font(settings_overlay, settings_font)
+	resolution_option.get_popup().add_theme_font_override(
+		"font",
+		settings_font
+	)
+	var saved_resolution := DisplaySettings.load_resolution()
+	DisplaySettings.apply_resolution(saved_resolution)
+	resolution_option.clear()
+	for resolution in DisplaySettings.RESOLUTIONS:
+		var index := resolution_option.item_count
+		resolution_option.add_item(
+			"%d × %d" % [resolution.x, resolution.y]
+		)
+		resolution_option.set_item_metadata(index, resolution)
+		if resolution == saved_resolution:
+			resolution_option.select(index)
+	settings_button.pressed.connect(_open_settings)
+	settings_close_button.pressed.connect(_close_settings)
+	settings_apply_button.pressed.connect(_apply_display_settings)
+
+
+func _apply_settings_font(control: Control, font: Font) -> void:
+	control.add_theme_font_override("font", font)
+	for child in control.get_children():
+		if child is Control:
+			_apply_settings_font(child as Control, font)
+
+
+func _open_settings() -> void:
+	if settings_overlay.visible:
+		return
+	_settings_previous_pause = simulation.paused
+	simulation.paused = true
+	settings_overlay.visible = true
+
+
+func _close_settings() -> void:
+	if not settings_overlay.visible:
+		return
+	settings_overlay.visible = false
+	simulation.paused = _settings_previous_pause
+
+
+func _apply_display_settings() -> void:
+	var resolution: Vector2i = (
+		resolution_option.get_selected_metadata()
+	)
+	var save_error := DisplaySettings.save_resolution(resolution)
+	if save_error != OK:
+		resolution_hint.text = (
+			"设置保存失败（错误码 %d），请检查用户目录权限。"
+			% save_error
+		)
+		return
+	DisplaySettings.apply_resolution(resolution)
+	resolution_hint.text = "应用后窗口将按所选分辨率固定并自动居中。"
+	_close_settings()
 
 
 func _start_new_game(world_seed: int) -> void:
@@ -51,6 +129,10 @@ func _start_new_game(world_seed: int) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	if event.keycode == KEY_ESCAPE and settings_overlay.visible:
+		_close_settings()
+		get_viewport().set_input_as_handled()
 		return
 	match event.keycode:
 		KEY_SPACE:

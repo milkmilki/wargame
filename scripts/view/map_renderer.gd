@@ -21,6 +21,7 @@ const ARMY_ICON_SCALE_DEFAULT: float = 1.00
 const MAP_ZOOM_MIN: float = 1.0
 const MAP_ZOOM_MAX: float = 4.0
 const MAP_ZOOM_WHEEL_FACTOR: float = 1.2
+const MAP_PAN_GESTURE_SCALE: float = 24.0
 const MAP_PAN_DRAG_THRESHOLD: float = 4.0
 const VISUAL_SCALE_COMPACT: float = 0.80
 const VISUAL_SCALE_STANDARD: float = 1.00
@@ -387,6 +388,43 @@ static func target_redraw_fps(
 func _unhandled_input(event: InputEvent) -> void:
 	if state == null:
 		return
+	if event is InputEventMagnifyGesture:
+		var magnify := event as InputEventMagnifyGesture
+		_compute_layout()
+		if (
+			not _point_blocked_by_nation_stats(magnify.position)
+			and Rect2(_origin, _map_size).has_point(
+				magnify.position
+			)
+		):
+			_set_map_zoom_at(
+				_map_zoom * magnify_zoom_multiplier(
+					magnify.factor
+				),
+				magnify.position
+			)
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventPanGesture:
+		var pan_gesture := event as InputEventPanGesture
+		_compute_layout()
+		if (
+			not _point_blocked_by_nation_stats(
+				pan_gesture.position
+			)
+			and Rect2(_origin, _map_size).has_point(
+				pan_gesture.position
+			)
+		):
+			_map_pan -= (
+				pan_gesture.delta
+				* MAP_PAN_GESTURE_SCALE
+				* _display_scale
+			)
+			_apply_map_view_transform()
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		if _nation_stats_drag_active:
@@ -469,10 +507,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			mouse_event.position
 		)
 	):
-		var factor := (
-			MAP_ZOOM_WHEEL_FACTOR
-			if mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP
-			else 1.0 / MAP_ZOOM_WHEEL_FACTOR
+		var factor := wheel_zoom_multiplier(
+			mouse_event.button_index,
+			mouse_event.factor
 		)
 		_set_map_zoom_at(
 			_map_zoom * factor,
@@ -554,6 +591,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	_pick_map_feature(point)
 	get_viewport().set_input_as_handled()
+
+
+func _point_blocked_by_nation_stats(point: Vector2) -> bool:
+	return (
+		_nation_stats_open
+		and _nation_stats_window_rect().has_point(point)
+	)
+
+
+static func magnify_zoom_multiplier(factor: float) -> float:
+	return clampf(factor, 0.5, 2.0)
+
+
+static func wheel_zoom_multiplier(
+	button_index: int,
+	factor: float
+) -> float:
+	var direction := (
+		1.0
+		if button_index == MOUSE_BUTTON_WHEEL_UP
+		else -1.0
+	)
+	return pow(
+		MAP_ZOOM_WHEEL_FACTOR,
+		direction * maxf(factor, 0.05)
+	)
 
 
 func _pick_map_feature(point: Vector2) -> void:
@@ -1387,8 +1450,9 @@ func _ensure_province_visual_cache() -> void:
 		or state.province_ids.is_empty()
 	):
 		return
+	var geometry := {}
 	if not _province_cache_ready:
-		var geometry := build_province_boundary_segments(state)
+		geometry = build_province_boundary_segments(state)
 		_province_boundary_segments = geometry["province"]
 		_coast_segments = geometry["coast"]
 		_province_cache_ready = true
@@ -1399,7 +1463,8 @@ func _ensure_province_visual_cache() -> void:
 	):
 		var image := build_province_overlay_image(state)
 		_province_texture = ImageTexture.create_from_image(image)
-		var geometry := build_province_boundary_segments(state)
+		if geometry.is_empty():
+			geometry = build_province_boundary_segments(state)
 		_nation_boundary_segments = geometry["nation"]
 		_alliance_boundary_segments = geometry["alliance"]
 		_suzerainty_boundary_segments = geometry["suzerainty"]
@@ -1526,11 +1591,11 @@ static func build_province_boundary_segments(
 								alliance, Vector2(x0, y1), Vector2(x1, y1)
 							)
 	return {
-		"province": province,
-		"nation": nation,
-		"alliance": alliance,
-		"suzerainty": suzerainty,
-		"coast": coast,
+		"province": _smooth_boundary_segments(province, size),
+		"nation": _smooth_boundary_segments(nation, size),
+		"alliance": _smooth_boundary_segments(alliance, size),
+		"suzerainty": _smooth_boundary_segments(suzerainty, size),
+		"coast": _smooth_boundary_segments(coast, size),
 	}
 
 
@@ -1587,6 +1652,307 @@ static func _append_segment(
 	segments.append(to)
 
 
+## 将栅格边逐端点串成路径，并在保持分叉端点的前提下做两次 Chaikin 圆滑。
+## 输出仍是 draw_multiline 所需的成对线段，调用方无需维护多边形拓扑。
+static func _smooth_boundary_segments(
+	segments: PackedVector2Array,
+	raster_size: Vector2i
+) -> PackedVector2Array:
+	if segments.size() < 4:
+		return segments
+	var points := {}
+	var neighbors := {}
+	var edge_ends := {}
+	var used_edges := {}
+	for index in range(0, segments.size(), 2):
+		var from := segments[index]
+		var to := segments[index + 1]
+		var from_key := _boundary_point_key(from)
+		var to_key := _boundary_point_key(to)
+		if from_key == to_key:
+			continue
+		points[from_key] = from
+		points[to_key] = to
+		if not neighbors.has(from_key):
+			neighbors[from_key] = [] as Array[String]
+		if not neighbors.has(to_key):
+			neighbors[to_key] = [] as Array[String]
+		(neighbors[from_key] as Array[String]).append(to_key)
+		(neighbors[to_key] as Array[String]).append(from_key)
+		var edge_key := _boundary_edge_key(from_key, to_key)
+		edge_ends[edge_key] = [from_key, to_key]
+		used_edges[edge_key] = false
+	var paths: Array[PackedVector2Array] = []
+	for start_key_value in neighbors:
+		var start_key := str(start_key_value)
+		var adjacent: Array[String] = neighbors[start_key]
+		if adjacent.size() == 2:
+			continue
+		for next_key in adjacent:
+			var edge_key := _boundary_edge_key(
+				start_key,
+				next_key
+			)
+			if bool(used_edges[edge_key]):
+				continue
+			paths.append(_trace_boundary_path(
+				start_key,
+				next_key,
+				points,
+				neighbors,
+				used_edges
+			))
+	for edge_key_value in edge_ends:
+		var edge_key := str(edge_key_value)
+		if bool(used_edges[edge_key]):
+			continue
+		var ends: Array = edge_ends[edge_key]
+		paths.append(_trace_boundary_path(
+			str(ends[0]),
+			str(ends[1]),
+			points,
+			neighbors,
+			used_edges
+		))
+	var result := PackedVector2Array()
+	for path in paths:
+		_append_smoothed_path_segments(
+			result,
+			path,
+			raster_size
+		)
+	return result
+
+
+static func _trace_boundary_path(
+	start_key: String,
+	next_key: String,
+	points: Dictionary,
+	neighbors: Dictionary,
+	used_edges: Dictionary
+) -> PackedVector2Array:
+	var path := PackedVector2Array([
+		points[start_key],
+		points[next_key],
+	])
+	var previous_key := start_key
+	var current_key := next_key
+	used_edges[_boundary_edge_key(
+		previous_key,
+		current_key
+	)] = true
+	while true:
+		var adjacent: Array[String] = neighbors[current_key]
+		if adjacent.size() != 2:
+			break
+		var candidate := (
+			adjacent[1]
+			if adjacent[0] == previous_key
+			else adjacent[0]
+		)
+		var edge_key := _boundary_edge_key(
+			current_key,
+			candidate
+		)
+		if bool(used_edges[edge_key]):
+			break
+		used_edges[edge_key] = true
+		path.append(points[candidate])
+		previous_key = current_key
+		current_key = candidate
+	return path
+
+
+static func _append_smoothed_path_segments(
+	result: PackedVector2Array,
+	path: PackedVector2Array,
+	raster_size: Vector2i
+) -> void:
+	if path.size() < 2:
+		return
+	var closed := (
+		path.size() > 2
+		and path[0].is_equal_approx(path[path.size() - 1])
+	)
+	var source := path
+	if closed:
+		source = path.slice(0, path.size() - 1)
+	source = _simplify_boundary_path(
+		source,
+		raster_size,
+		closed
+	)
+	var smoothed := source
+	for _iteration in range(2):
+		smoothed = _chaikin_boundary_path(
+			smoothed,
+			closed
+		)
+	for index in range(smoothed.size() - 1):
+		_append_segment(
+			result,
+			smoothed[index],
+			smoothed[index + 1]
+		)
+	if closed and smoothed.size() > 2:
+		_append_segment(
+			result,
+			smoothed[smoothed.size() - 1],
+			smoothed[0]
+		)
+
+
+static func _chaikin_boundary_path(
+	source: PackedVector2Array,
+	closed: bool
+) -> PackedVector2Array:
+	if source.size() < 2:
+		return source
+	var result := PackedVector2Array()
+	if not closed:
+		result.append(source[0])
+	for index in range(
+		source.size()
+		if closed
+		else source.size() - 1
+	):
+		var next_index := (index + 1) % source.size()
+		var current := source[index]
+		var next := source[next_index]
+		result.append(current.lerp(next, 0.25))
+		result.append(current.lerp(next, 0.75))
+	if not closed:
+		result.append(source[source.size() - 1])
+	return result
+
+
+## RDP 在全局误差不超过一个栅格像素时合并高频折点，将“横一格、竖一格”
+## 的台阶压缩成斜线。计算在栅格坐标中进行，因而不同地图尺寸视觉阈值一致。
+static func _simplify_boundary_path(
+	source: PackedVector2Array,
+	raster_size: Vector2i,
+	closed: bool
+) -> PackedVector2Array:
+	if source.size() < 3:
+		return source
+	if not closed:
+		return _rdp_boundary_path(
+			source,
+			raster_size,
+			0.80
+		)
+	var split_index := 1
+	var maximum_distance := 0.0
+	var origin := source[0] * Vector2(raster_size)
+	for index in range(1, source.size()):
+		var distance := origin.distance_squared_to(
+			source[index] * Vector2(raster_size)
+		)
+		if distance > maximum_distance:
+			maximum_distance = distance
+			split_index = index
+	if split_index <= 0 or split_index >= source.size():
+		return source
+	var first_arc := source.slice(0, split_index + 1)
+	var second_arc := source.slice(
+		split_index,
+		source.size()
+	)
+	second_arc.append(source[0])
+	var first_simplified := _rdp_boundary_path(
+		first_arc,
+		raster_size,
+		0.80
+	)
+	var second_simplified := _rdp_boundary_path(
+		second_arc,
+		raster_size,
+		0.80
+	)
+	var result := PackedVector2Array()
+	result.append_array(first_simplified)
+	for index in range(1, second_simplified.size() - 1):
+		result.append(second_simplified[index])
+	return result
+
+
+static func _rdp_boundary_path(
+	source: PackedVector2Array,
+	raster_size: Vector2i,
+	tolerance: float
+) -> PackedVector2Array:
+	if source.size() < 3:
+		return source
+	var keep := PackedByteArray()
+	keep.resize(source.size())
+	keep[0] = 1
+	keep[source.size() - 1] = 1
+	var stack: Array[Vector2i] = [
+		Vector2i(0, source.size() - 1)
+	]
+	while not stack.is_empty():
+		var range_pair: Vector2i = stack.pop_back()
+		var start: int = range_pair.x
+		var finish: int = range_pair.y
+		var maximum_distance := 0.0
+		var maximum_index := -1
+		var from := source[start] * Vector2(raster_size)
+		var to := source[finish] * Vector2(raster_size)
+		for index in range(start + 1, finish):
+			var distance := _boundary_point_segment_distance(
+				source[index] * Vector2(raster_size),
+				from,
+				to
+			)
+			if distance > maximum_distance:
+				maximum_distance = distance
+				maximum_index = index
+		if maximum_index >= 0 and maximum_distance > tolerance:
+			keep[maximum_index] = 1
+			stack.append(Vector2i(start, maximum_index))
+			stack.append(Vector2i(maximum_index, finish))
+	var result := PackedVector2Array()
+	for index in range(source.size()):
+		if keep[index] != 0:
+			result.append(source[index])
+	return result
+
+
+static func _boundary_point_segment_distance(
+	point: Vector2,
+	from: Vector2,
+	to: Vector2
+) -> float:
+	var segment := to - from
+	var length_squared := segment.length_squared()
+	if length_squared <= 0.000001:
+		return point.distance_to(from)
+	var ratio := clampf(
+		(point - from).dot(segment) / length_squared,
+		0.0,
+		1.0
+	)
+	return point.distance_to(from + segment * ratio)
+
+
+static func _boundary_point_key(point: Vector2) -> String:
+	return "%d:%d" % [
+		int(round(point.x * 1000000.0)),
+		int(round(point.y * 1000000.0)),
+	]
+
+
+static func _boundary_edge_key(
+	from_key: String,
+	to_key: String
+) -> String:
+	return (
+		"%s|%s" % [from_key, to_key]
+		if from_key < to_key
+		else "%s|%s" % [to_key, from_key]
+	)
+
+
 func _draw_province_fills() -> void:
 	if _province_texture == null:
 		return
@@ -1612,8 +1978,8 @@ func _draw_province_boundaries() -> void:
 	if not _province_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_province_boundary_segments),
-				Color(0.20, 0.14, 0.08, 0.50),
-			maxf(1.0 * _display_scale, 1.0),
+			Color(0.16, 0.105, 0.055, 0.38),
+			maxf(0.8 * _display_scale, 0.75),
 			true
 		)
 
@@ -1623,14 +1989,14 @@ func _draw_national_boundaries() -> void:
 	if not coast_pixels.is_empty():
 		draw_multiline(
 			coast_pixels,
-				Color(0.055, 0.040, 0.022, 0.96),
-				5.0 * _display_scale,
+			Color(0.055, 0.040, 0.022, 0.90),
+			4.0 * _display_scale,
 			true
 		)
 		draw_multiline(
 			coast_pixels,
-				Color(0.88, 0.75, 0.50, 0.76),
-				1.6 * _display_scale,
+			Color(0.88, 0.75, 0.50, 0.72),
+			1.25 * _display_scale,
 			true
 		)
 	if not _nation_boundary_segments.is_empty():
@@ -1639,21 +2005,21 @@ func _draw_national_boundaries() -> void:
 		)
 		draw_multiline(
 			nation_pixels,
-				Color(0.055, 0.035, 0.018, 0.98),
-				7.0 * _display_scale,
+			Color(0.055, 0.035, 0.018, 0.95),
+			5.0 * _display_scale,
 			true
 		)
 		draw_multiline(
 			nation_pixels,
-				Color(0.91, 0.69, 0.30, 0.92),
-				2.2 * _display_scale,
+			Color(0.91, 0.69, 0.30, 0.88),
+			1.6 * _display_scale,
 			true
 		)
 	if not _alliance_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_alliance_boundary_segments),
-				Color(0.20, 0.48, 0.50, 0.95),
-				3.0 * _display_scale,
+			Color(0.20, 0.48, 0.50, 0.90),
+			2.4 * _display_scale,
 			true
 		)
 	if not _suzerainty_boundary_segments.is_empty():

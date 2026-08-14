@@ -12,3 +12,104 @@ script = ExtResource("2_sim")
 
 [node name="MapRenderer" type="Node2D" parent="."]
 script = ExtResource("3_render")
+
+[node name="SettingsLayer" type="CanvasLayer" parent="."]
+layer = 20
+
+[node name="SettingsButton" type="Button" parent="SettingsLayer"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = -38.0
+offset_right = 108.0
+offset_bottom = -8.0
+grow_vertical = 0
+text = "设置"
+
+[node name="SettingsOverlay" type="Control" parent="SettingsLayer"]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="DimBackground" type="ColorRect" parent="SettingsLayer/SettingsOverlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.04, 0.03, 0.02, 0.72)
+mouse_filter = 1
+
+[node name="SettingsPanel" type="PanelContainer" parent="SettingsLayer/SettingsOverlay"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -210.0
+offset_top = -145.0
+offset_right = 210.0
+offset_bottom = 145.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Margin" type="MarginContainer" parent="SettingsLayer/SettingsOverlay/SettingsPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 20
+
+[node name="Content" type="VBoxContainer" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "游戏设置"
+horizontal_alignment = 1
+
+[node name="Separator" type="HSeparator" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+layout_mode = 2
+
+[node name="ResolutionLabel" type="Label" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+layout_mode = 2
+text = "窗口分辨率（固定 16:9）"
+
+[node name="ResolutionOption" type="OptionButton" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+
+[node name="ResolutionHint" type="Label" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+layout_mode = 2
+text = "应用后窗口将按所选分辨率固定并自动居中。"
+autowrap_mode = 2
+
+[node name="Spacer" type="Control" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Actions" type="HBoxContainer" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 2
+
+[node name="CloseButton" type="Button" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content/Actions"]
+custom_minimum_size = Vector2(92, 36)
+layout_mode = 2
+text = "取消"
+
+[node name="ApplyButton" type="Button" parent="SettingsLayer/SettingsOverlay/SettingsPanel/Margin/Content/Actions"]
+custom_minimum_size = Vector2(92, 36)
+layout_mode = 2
+text = "应用"

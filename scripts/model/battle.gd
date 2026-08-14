@@ -11,7 +11,10 @@ enum Kind { FIELD, SIEGE }   ## 野战（边中相遇）/ 攻城（城下）
 var id: int = -1
 var kind: int = Kind.FIELD
 
-# 参战双方（军队引用数组）。SIEGE 时 side_b 为守军（通常 1 支，在城内）。
+# 参战双方（军队引用数组）。SIEGE 时：
+# - side_a 为单一 nation 的围城方；
+# - side_b 在 has_garrison=true 时为城市防卫共同体（城主及其盟军，可多 nation）；
+# - side_b 在 has_garrison=false 时为单一 nation 的敌对挑战者。
 var side_a: Array[Army] = []
 var side_b: Array[Army] = []
 
@@ -61,8 +64,8 @@ var tactical_key_b: int = 0
 ## 守城/解围战持续期间每天回退，达 Combat.SIEGE_PROGRESS_REQUIRED 才能破城。
 var siege_progress: float = 0.0
 
-## SIEGE 专用：side_b 当前是否为「驻城守军」（享城防加成）。
-## 守军溃散后转纯围城置 false；若换成城下援军(挑战者)占 side_b 亦为 false（无城防加成）。
+## SIEGE 专用：side_b 当前是否为「城市防卫共同体」（享城防加成）。
+## 防卫方溃散后转纯围城置 false；敌对挑战者占 side_b 时亦为 false（无城防加成）。
 var has_garrison: bool = false
 
 ## SIEGE 专用：破城所需兵力（siege_required_manpower，item 6/7：恒为兵力量纲）。
