@@ -16,6 +16,8 @@ var _done := false
 var _peak_frame_ms: float = 0.0
 var _peak_frame_day: int = 0
 var _peak_is_month: bool = false
+var _peak_stage: StringName = &""
+var _slow_frames_by_stage: Dictionary = {}
 
 
 func _init() -> void:
@@ -29,11 +31,42 @@ func _init() -> void:
 	_sim = Simulation.new()
 	root.add_child(_sim)
 	_sim.setup(_state)
+	_sim.runtime_day_committed.connect(_on_runtime_day_committed)
+	_sim.runtime_stage_profiling_enabled = true
+	_sim.supply_network_parallel_prebuild_disabled = (
+		OS.get_environment(
+			"AI_STUT_SERIAL_SUPPLY_NETWORKS"
+		) == "1"
+	)
+	_sim.supply_network_cache_disabled = (
+		OS.get_environment(
+			"AI_STUT_REBUILD_SUPPLY_NETWORKS"
+		) == "1"
+	)
+	_sim.ai_staggered_decisions = (
+		OS.get_environment(
+			"AI_STUT_FORCE_ALL_AI"
+		) != "1"
+	)
 	_sim.set_speed_multiplier(float(speed))
 
-	print("=== 真实运行路径卡顿探针 国=%d 城=%d 目标天=%d 倍率=%dx ===" % [
-		nations, cities, _target_days, speed,
-	])
+	print(
+		(
+			"=== 真实运行路径卡顿探针 国=%d 城=%d "
+			+ "目标天=%d 倍率=%dx 补给网络=%s ==="
+		) % [
+			nations,
+			cities,
+			_target_days,
+			speed,
+			(
+				"串行worker"
+				if _sim
+					.supply_network_parallel_prebuild_disabled
+				else "多核分片"
+			),
+		]
+	)
 	_last_frame_usec = Time.get_ticks_usec()
 
 
@@ -56,10 +89,41 @@ func _process(_delta: float) -> bool:
 		_peak_frame_ms = frame_ms
 		_peak_frame_day = _state.day
 		_peak_is_month = (_state.day % 30 == 0)
+		_peak_stage = _current_runtime_stage()
+	if frame_ms > 16.0:
+		var stage := str(_current_runtime_stage())
+		if not _slow_frames_by_stage.has(stage):
+			_slow_frames_by_stage[stage] = {
+				"over_16": 0,
+				"over_33": 0,
+				"peak_ms": 0.0,
+			}
+		var stage_report: Dictionary = (
+			_slow_frames_by_stage[stage]
+		)
+		stage_report["over_16"] = (
+			int(stage_report["over_16"]) + 1
+		)
+		if frame_ms > 33.0:
+			stage_report["over_33"] = (
+				int(stage_report["over_33"]) + 1
+			)
+		stage_report["peak_ms"] = maxf(
+			float(stage_report["peak_ms"]),
+			frame_ms
+		)
 
-	if _state.day >= _target_days or _state.winner != -1:
+	if (
+		(_state.day >= _target_days or _state.winner != -1)
+		and not _sim.runtime_day_in_progress()
+	):
 		_finish()
 	return false
+
+
+func _on_runtime_day_committed(day: int) -> void:
+	if day >= _target_days:
+		_sim.paused = true
 
 
 func _finish() -> void:
@@ -101,13 +165,43 @@ func _finish() -> void:
 	print("掉帧统计: 16-33ms=%d  33-100ms=%d  >100ms=%d (总%d帧)" % [
 		over_16, over_33, over_100, _frame_times.size(),
 	])
-	print("峰值帧落在第 %d 天 (月结算日=%s)" % [
+	print("峰值帧落在第 %d 天 (月结算日=%s, 阶段=%s)" % [
 		_peak_frame_day,
 		"是" if _peak_is_month else "否",
+		str(_peak_stage) if not _peak_stage.is_empty() else "startup",
 	])
+	var stage_names := _slow_frames_by_stage.keys()
+	stage_names.sort()
+	print("慢帧阶段归因:")
+	for stage in stage_names:
+		var report: Dictionary = _slow_frames_by_stage[stage]
+		print("  %-24s >16ms=%d >33ms=%d 峰值=%.1fms" % [
+			stage,
+			int(report["over_16"]),
+			int(report["over_33"]),
+			float(report["peak_ms"]),
+		])
 	print("verdict=STUTTER_PROBE_DONE")
 	_sim.queue_free()
+	_quit_after_worker_cleanup.call_deferred()
+
+
+func _quit_after_worker_cleanup() -> void:
+	await process_frame
+	await process_frame
 	quit(0)
+
+
+func _current_runtime_stage() -> StringName:
+	if _state.day <= 0:
+		return &"startup"
+	if not _sim.runtime_day_in_progress():
+		return &"idle"
+	return (
+		_sim.runtime_profile_stage
+		if not _sim.runtime_profile_stage.is_empty()
+		else &"unknown"
+	)
 
 
 func _env_int(key: String, fallback: int) -> int:

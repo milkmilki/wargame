@@ -74,6 +74,12 @@ func _init() -> void:
 	root.add_child(sim)
 	sim.setup(state)
 	sim.tick_phase_profiling_enabled = true
+	sim.ai_force_resource_cache_disabled = (
+		OS.get_environment("PHASE_DISABLE_FORCE_RESOURCE_CACHE") == "1"
+	)
+	sim.ai_decision_context_disabled = (
+		OS.get_environment("PHASE_DISABLE_AI_CONTEXT") == "1"
+	)
 
 	var peaceful := _new_bucket()
 	var wartime := _new_bucket()

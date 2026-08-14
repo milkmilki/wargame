@@ -538,15 +538,21 @@ static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
 
 
 ## 以粮仓为源反向构建国家补给网络。道路为无向图，因此结果与逐军从当前位置
-## 搜索粮仓完全等价，但每国每个粮仓只需计算一次距离场。
+## 搜索粮仓完全等价，但每国每个粮仓只需计算一次距离场。调用方若已在同一冻结
+## 世界快照中汇总敌占边，可直接传入以避免重复全军扫描。
 static func build_supply_network(
 	state: GameState,
-	nation_id: int
+	nation_id: int,
+	precomputed_blocked_enemy_edges: Variant = null
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	var blocked_enemy_edges := _enemy_occupied_edge_keys(
-		state,
-		nation_id
+	var blocked_enemy_edges: Dictionary = (
+		precomputed_blocked_enemy_edges
+		if precomputed_blocked_enemy_edges is Dictionary
+		else _enemy_occupied_edge_keys(
+			state,
+			nation_id
+		)
 	)
 	var owner_ids: Array = []
 	for owner in state.nations:

@@ -12,6 +12,7 @@ const VALUE_SCALE: float = 1000000.0
 const MAX_RANK_CACHE_ENTRIES: int = 2048
 
 static var _city_rank_cache: Dictionary = {}
+static var _city_rank_cache_mutex := Mutex.new()
 
 
 static func city_id_less(
@@ -135,8 +136,12 @@ static func city_rank_map(
 		anchor_city_id,
 		ownership_dependency,
 	]
+	_city_rank_cache_mutex.lock()
 	if _city_rank_cache.has(cache_key):
-		return _city_rank_cache[cache_key]
+		var cached: Dictionary = _city_rank_cache[cache_key]
+		_city_rank_cache_mutex.unlock()
+		return cached
+	_city_rank_cache_mutex.unlock()
 	var ids: Array[int] = []
 	var keys := {}
 	for city in state.cities:
@@ -162,10 +167,15 @@ static func city_rank_map(
 			):
 				current_rank = index
 		rank[ids[index]] = current_rank
-	if _city_rank_cache.size() >= MAX_RANK_CACHE_ENTRIES:
-		_city_rank_cache.clear()
-	_city_rank_cache[cache_key] = rank
-	return rank
+	_city_rank_cache_mutex.lock()
+	# 另一 worker 可能在本线程计算期间提交了同一键；两份排名等价，统一返回先提交者。
+	if not _city_rank_cache.has(cache_key):
+		if _city_rank_cache.size() >= MAX_RANK_CACHE_ENTRIES:
+			_city_rank_cache.clear()
+		_city_rank_cache[cache_key] = rank
+	var result: Dictionary = _city_rank_cache[cache_key]
+	_city_rank_cache_mutex.unlock()
+	return result
 
 
 static func city_key(

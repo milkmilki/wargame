@@ -30,14 +30,61 @@ func _start_world(disable_slicing: bool) -> void:
 	_active_sim = Simulation.new()
 	root.add_child(_active_sim)
 	_active_sim.setup(_active_state)
+	_active_sim.runtime_day_committed.connect(
+		_on_runtime_day_committed.bind(
+			_active_sim,
+			_active_state
+		)
+	)
+	# 本脚本只验证补给驱动等价性。隔离外交与军事 AI 的后台 worker，避免切换
+	# 两个测试世界时无关任务仍持有旧 SceneTree，并缩短守卫耗时。
+	_active_sim.diplomacy_enabled = false
+	for nation in _active_state.nations:
+		_active_sim.ai_policy_overrides[nation.id] = (
+			func(
+				_state: GameState,
+				_nation_id: int,
+				_sim: Simulation
+			) -> void:
+				pass
+		)
 	_active_sim.supply_frame_slicing_disabled = disable_slicing
+	_active_sim.supply_network_cache_disabled = (
+		OS.get_environment(
+			"SUPPLY_SLICE_DISABLE_CACHE"
+		) == "1"
+	)
+	_active_sim.supply_network_parallel_prebuild_disabled = (
+		OS.get_environment(
+			"SUPPLY_SLICE_SERIAL_NETWORKS"
+		) == "1"
+	)
 	_active_sim.set_speed_multiplier(32.0)
+
+
+func _on_runtime_day_committed(
+	day: int,
+	sim: Simulation,
+	world: GameState
+) -> void:
+	if (
+		sim == _active_sim
+		and world == _active_state
+		and day >= _target_days
+	):
+		sim.paused = true
 
 
 func _process(_delta: float) -> bool:
 	if _phase == 2:
 		return false
-	if _active_state.day < _target_days and _active_state.winner == -1:
+	if (
+		(
+			_active_state.day < _target_days
+			and _active_state.winner == -1
+		)
+		or _active_sim.runtime_day_in_progress()
+	):
 		return false
 	# 当前世界推进到目标天。
 	if _phase == 0:
@@ -87,7 +134,17 @@ func _finish() -> void:
 		"SUPPLY_SLICE_EQUIVALENT" if mismatches == 0 else "SUPPLY_SLICE_DIVERGED"
 	))
 	_sliced_sim.queue_free()
-	quit(0 if mismatches == 0 else 1)
+	_quit_after_worker_cleanup.call_deferred(
+		0 if mismatches == 0 else 1
+	)
+
+
+func _quit_after_worker_cleanup(exit_code: int) -> void:
+	# WorkerThreadPool 的任务句柄在完成后的主循环尾部回收；至少跨两帧退出，
+	# 避免测试同帧 quit 让引擎 PagedAllocator 误报仍有任务页在用。
+	await process_frame
+	await process_frame
+	quit(exit_code)
 
 
 func _army_fp(army: Army) -> String:
