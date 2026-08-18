@@ -1,7 +1,8 @@
-extends Node2D
-## 入口：装配 GameState / Simulation / MapRenderer，处理全局输入（暂停/调速/重开）。
+extends Node
+## 入口：装配 GameState / Simulation / Gaea 3D 地图 / HUD。
 
 @export var use_grid_world: bool = false
+@export var use_3d_map: bool = true
 @export_range(1, GameState.TERRAIN_CITY_COUNT, 1) var nation_count: int = (
 	GameState.NATION_COUNT
 )
@@ -20,6 +21,9 @@ extends Node2D
 
 @onready var simulation: Simulation = $Simulation
 @onready var renderer: MapRenderer = $MapRenderer
+@onready var map_3d: StrategicMap3D = get_node_or_null(
+	"StrategicMap3D"
+)
 @onready var settings_button: Button = $SettingsLayer/SettingsButton
 @onready var settings_overlay: Control = $SettingsLayer/SettingsOverlay
 @onready var resolution_option: OptionButton = (
@@ -125,6 +129,17 @@ func _start_new_game(world_seed: int) -> void:
 	renderer.set_army_icon_scale(initial_army_icon_scale)
 	renderer.set_city_names_visible(initial_city_names_visible)
 	renderer.setup(state, simulation)
+	var enable_3d := (
+		use_3d_map
+		and not use_grid_world
+		and map_3d != null
+	)
+	renderer.set_world_layer_visible(not enable_3d)
+	if enable_3d:
+		map_3d.visible = true
+		map_3d.setup(state, simulation, renderer)
+	elif map_3d != null:
+		map_3d.visible = false
 
 
 func _unhandled_input(event: InputEvent) -> void:

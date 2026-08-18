@@ -5,6 +5,8 @@ extends Node2D
 
 var state: GameState
 var sim: Simulation
+## false 时仅保留 HUD、详情与控件；地图世界由 StrategicMap3D 绘制和拾取。
+var world_layer_visible: bool = true
 
 # 地图画布连续适配窗口；图标、字体和线宽只使用四档离散视觉比例。
 const BASE_VIEWPORT_SIZE := Vector2(1280.0, 720.0)
@@ -330,6 +332,69 @@ func city_names_visible() -> bool:
 	return _city_names_visible
 
 
+func set_world_layer_visible(visible: bool) -> void:
+	world_layer_visible = visible
+	_map_drag_active = false
+	_map_drag_moved = false
+	queue_redraw()
+
+
+func select_city(city_id: int) -> void:
+	_selected_city_id = city_id
+	_selected_edge_a = -1
+	_selected_edge_b = -1
+	queue_redraw()
+
+
+func select_edge(city_a: int, city_b: int) -> void:
+	_selected_city_id = -1
+	_selected_edge_a = mini(city_a, city_b)
+	_selected_edge_b = maxi(city_a, city_b)
+	queue_redraw()
+
+
+func clear_map_selection() -> void:
+	_clear_selection()
+
+
+func selected_city_id() -> int:
+	return _selected_city_id
+
+
+func world_input_blocked(point: Vector2) -> bool:
+	_compute_layout()
+	if point.y <= 38.0 * _display_scale:
+		return true
+	if (
+		_nation_stats_open
+		and _nation_stats_window_rect().has_point(point)
+	):
+		return true
+	var detail_line_count := _selection_detail_line_count()
+	if (
+		detail_line_count > 0
+		and _selection_detail_rect(
+			detail_line_count
+		).has_point(point)
+	):
+		return true
+	return false
+
+
+func army_map_position(army: Army) -> Vector2:
+	var curr: Vector2 = _curr_pos.get(
+		army.id,
+		_logical_grid_pos(army)
+	)
+	var prev: Vector2 = _prev_pos.get(army.id, curr)
+	var t := clampf(
+		_tick_elapsed / maxf(_tick_duration, 0.0001),
+		0.0,
+		1.0
+	)
+	return prev.lerp(curr, smoothstep(0.0, 1.0, t))
+
+
 static func create_ui_font() -> Font:
 	var candidates := PackedStringArray([
 		"/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -389,6 +454,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if state == null:
 		return
 	if event is InputEventMagnifyGesture:
+		if not world_layer_visible:
+			return
 		var magnify := event as InputEventMagnifyGesture
 		_compute_layout()
 		if (
@@ -406,6 +473,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event is InputEventPanGesture:
+		if not world_layer_visible:
+			return
 		var pan_gesture := event as InputEventPanGesture
 		_compute_layout()
 		if (
@@ -440,6 +509,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_clamp_nation_stats_window_position()
 			queue_redraw()
 			get_viewport().set_input_as_handled()
+			return
+		if not world_layer_visible:
 			return
 		if (
 			not _map_drag_active
@@ -503,6 +574,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			MOUSE_BUTTON_WHEEL_UP,
 			MOUSE_BUTTON_WHEEL_DOWN,
 		]
+		and world_layer_visible
 		and Rect2(_origin, _map_size).has_point(
 			mouse_event.position
 		)
@@ -525,6 +597,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			mouse_event.position
 		):
 			get_viewport().set_input_as_handled()
+			return
+		if not world_layer_visible:
 			return
 		_clear_selection()
 		get_viewport().set_input_as_handled()
@@ -567,6 +641,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
+		if not world_layer_visible:
+			return
 		if Rect2(_origin, _map_size).grow(
 			CITY_PICK_RADIUS * _display_scale
 		).has_point(point):
@@ -581,6 +657,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _nation_stats_drag_active:
 		_nation_stats_drag_active = false
 		get_viewport().set_input_as_handled()
+		return
+	if not world_layer_visible:
 		return
 	if not _map_drag_active:
 		return
@@ -1341,19 +1419,20 @@ func _draw() -> void:
 	if state == null:
 		return
 	_compute_layout()
-	_draw_paper_canvas()
-	_draw_terrain_background()
-	_ensure_province_visual_cache()
-	_draw_province_fills()
-	_draw_rivers()
-	_draw_province_boundaries()
-	_draw_edges()
-	_draw_selection_highlight()
-	_draw_national_boundaries()
-	_draw_campaign_arrows()
-	_draw_cities()
-	_draw_battles()
-	_draw_armies()
+	if world_layer_visible:
+		_draw_paper_canvas()
+		_draw_terrain_background()
+		_ensure_province_visual_cache()
+		_draw_province_fills()
+		_draw_rivers()
+		_draw_province_boundaries()
+		_draw_edges()
+		_draw_selection_highlight()
+		_draw_national_boundaries()
+		_draw_campaign_arrows()
+		_draw_cities()
+		_draw_battles()
+		_draw_armies()
 	_draw_selection_detail()
 	_draw_hud()
 
@@ -3644,24 +3723,8 @@ func _draw_selection_detail() -> void:
 			lines = edge_detail_lines(state, edge)
 	if lines.is_empty():
 		return
-	var viewport_size := get_viewport_rect().size
-	var margin := DETAIL_PANEL_MARGIN * _display_scale
-	var width := minf(
-		DETAIL_PANEL_WIDTH * _display_scale,
-		viewport_size.x - margin * 2.0
-	)
 	var line_height := 17.0 * _display_scale
-	var height := (
-		43.0 * _display_scale
-		+ line_height * float(lines.size())
-	)
-	var rect := Rect2(
-		Vector2(
-			viewport_size.x - width - margin,
-			viewport_size.y - height - margin
-		),
-		Vector2(width, height)
-	)
+	var rect := _selection_detail_rect(lines.size())
 	draw_rect(
 		Rect2(
 			rect.position + Vector2(4.0, 5.0) * _display_scale,
@@ -3705,6 +3768,39 @@ func _draw_selection_detail() -> void:
 			_font_size(10),
 			INK_COLOR
 		)
+
+
+func _selection_detail_line_count() -> int:
+	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
+		return city_detail_lines(state, _selected_city_id).size()
+	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
+		var edge := state.edge_of(
+			_selected_edge_a,
+			_selected_edge_b
+		)
+		if edge != null:
+			return edge_detail_lines(state, edge).size()
+	return 0
+
+
+func _selection_detail_rect(line_count: int) -> Rect2:
+	var viewport_size := get_viewport_rect().size
+	var margin := DETAIL_PANEL_MARGIN * _display_scale
+	var width := minf(
+		DETAIL_PANEL_WIDTH * _display_scale,
+		viewport_size.x - margin * 2.0
+	)
+	var height := (
+		43.0 * _display_scale
+		+ 17.0 * _display_scale * float(line_count)
+	)
+	return Rect2(
+		Vector2(
+			viewport_size.x - width - margin,
+			viewport_size.y - height - margin
+		),
+		Vector2(width, height)
+	)
 
 
 static func city_detail_lines(

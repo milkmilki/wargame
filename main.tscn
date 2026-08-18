@@ -1,14 +1,18 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/core/simulation.gd" id="2_sim"]
 [ext_resource type="Script" path="res://scripts/view/map_renderer.gd" id="3_render"]
+[ext_resource type="Script" path="res://scripts/view/strategic_map_3d.gd" id="4_map3d"]
 
-[node name="Main" type="Node2D"]
+[node name="Main" type="Node"]
 script = ExtResource("1_main")
 
 [node name="Simulation" type="Node" parent="."]
 script = ExtResource("2_sim")
+
+[node name="StrategicMap3D" type="Node3D" parent="."]
+script = ExtResource("4_map3d")
 
 [node name="MapRenderer" type="Node2D" parent="."]
 script = ExtResource("3_render")
