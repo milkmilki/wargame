@@ -18,3 +18,6 @@
 # OS and logs
 .DS_Store
 *.log
+
+# Terrain DEM regeneration cache (reproducible via scripts/tools; not a runtime dep)
+assets/terrain/*_dem_meters.npz

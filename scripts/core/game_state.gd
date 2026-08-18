@@ -41,7 +41,7 @@ const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
 const FOOD_HUB_MIN_OUTPUT: int = 1600
 const MANPOWER_HUB_MIN_OUTPUT: int = 80
 const TERRAIN_MAP_PATH := (
-	"res://china-map-china-flag-shaded-relief-color-height-map-3d-illustration-png.webp"
+	"res://assets/terrain/china_copernicus_glo90_2048.png"
 )
 
 enum DiplomaticRelation {
