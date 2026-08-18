@@ -108,6 +108,7 @@ var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
 var diplomacy_revision: int = 0             ## 外交关系版本号，供 AI 战略缓存失效
 var fortification_revision: int = 0         ## 当前城防变化版本号，供 AI 战略缓存失效
+var road_network_revision: int = 0          ## 运行时道路通行性/容量重算版本号
 ## 规范化国家对 key -> DiplomaticRelation / 关系生效日 / 停战截止日。
 var diplomatic_relations: Dictionary = {}
 var diplomatic_since_day: Dictionary = {}
@@ -232,6 +233,7 @@ func _reset_world(world_seed: int) -> void:
 	ownership_revision = 0
 	diplomacy_revision = 0
 	fortification_revision = 0
+	road_network_revision = 0
 	diplomatic_relations.clear()
 	diplomatic_since_day.clear()
 	truce_until_day.clear()
@@ -983,12 +985,208 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 		)
 		edge.max_height_difference = float(road["height_difference"])
 		edge.max_manpower = int(road["max_manpower"])
+		edge.land_ratio = float(road.get("land_ratio", 1.0))
+		edge.is_backbone = bool(road.get("backbone", false))
+		edge.base_max_manpower = int(road.get(
+			"base_max_manpower",
+			maxi(edge.max_manpower, Edge.MIN_MANPOWER)
+		))
 		edges.append(edge)
 		edge_lookup[_edge_key(lo, hi)] = edge
 		(adjacency[lo] as Array[int]).append(hi)
 		(adjacency[hi] as Array[int]).append(lo)
 	for city_id in adjacency.keys():
 		(adjacency[city_id] as Array[int]).sort()
+
+
+static func default_road_tuning() -> Dictionary:
+	return {
+		"minimum_land_ratio": 0.90,
+		"maximum_relief": 0.72,
+		"blocked_branch_share": 0.10,
+		"terrain_capacity_penalty": 0.35,
+		"capacity_multiplier": 1.0,
+	}
+
+
+func road_network_rebuild_block_reason() -> String:
+	if edges.is_empty():
+		return "当前世界没有可调校的道路。"
+	return ""
+
+
+func recalculate_road_network(settings: Dictionary) -> Dictionary:
+	var blocked_reason := road_network_rebuild_block_reason()
+	if not blocked_reason.is_empty():
+		return {
+			"ok": false,
+			"error": blocked_reason,
+		}
+	var defaults := default_road_tuning()
+	var minimum_land_ratio := clampf(
+		float(settings.get(
+			"minimum_land_ratio",
+			defaults["minimum_land_ratio"]
+		)),
+		0.70,
+		1.0
+	)
+	var maximum_relief := clampf(
+		float(settings.get(
+			"maximum_relief",
+			defaults["maximum_relief"]
+		)),
+		0.05,
+		1.0
+	)
+	var blocked_share := clampf(
+		float(settings.get(
+			"blocked_branch_share",
+			defaults["blocked_branch_share"]
+		)),
+		0.0,
+		0.45
+	)
+	var terrain_penalty := clampf(
+		float(settings.get(
+			"terrain_capacity_penalty",
+			defaults["terrain_capacity_penalty"]
+		)),
+		0.0,
+		0.90
+	)
+	var capacity_multiplier := clampf(
+		float(settings.get(
+			"capacity_multiplier",
+			defaults["capacity_multiplier"]
+		)),
+		0.25,
+		3.0
+	)
+	var protected_keys := {}
+	for army in armies:
+		if (
+			army.size > 0
+			and army.on_edge
+			and army.move_from >= 0
+			and army.move_to >= 0
+		):
+			protected_keys[_edge_key(
+				army.move_from,
+				army.move_to
+			)] = true
+	for battle in battles:
+		if not battle.finished and battle.edge != null:
+			protected_keys[_edge_key(
+				battle.edge.city_a,
+				battle.edge.city_b
+			)] = true
+	var land_edges: Array[Edge] = []
+	var blocked_keys := {}
+	for edge in edges:
+		if edge.kind != Edge.Kind.LAND:
+			continue
+		land_edges.append(edge)
+		if (
+			not edge.is_backbone
+			and not protected_keys.has(
+				_edge_key(edge.city_a, edge.city_b)
+			)
+			and (
+				edge.land_ratio < minimum_land_ratio
+				or edge.max_height_difference > maximum_relief
+			)
+		):
+			blocked_keys[_edge_key(edge.city_a, edge.city_b)] = true
+	var branch_candidates: Array[Edge] = []
+	for edge in land_edges:
+		var key := _edge_key(edge.city_a, edge.city_b)
+		if (
+			edge.is_backbone
+			or protected_keys.has(key)
+			or blocked_keys.has(key)
+		):
+			continue
+		branch_candidates.append(edge)
+	branch_candidates.sort_custom(func(a: Edge, b: Edge) -> bool:
+		var difficulty_a := (
+			a.danger * 0.55
+			+ a.max_height_difference * 0.35
+			+ (1.0 - a.land_ratio) * 0.10
+		)
+		var difficulty_b := (
+			b.danger * 0.55
+			+ b.max_height_difference * 0.35
+			+ (1.0 - b.land_ratio) * 0.10
+		)
+		if not is_equal_approx(difficulty_a, difficulty_b):
+			return difficulty_a > difficulty_b
+		return _edge_key(a.city_a, a.city_b) < _edge_key(
+			b.city_a,
+			b.city_b
+		)
+	)
+	var extra_blocked := mini(
+		int(round(float(land_edges.size()) * blocked_share)),
+		branch_candidates.size()
+	)
+	for index in range(extra_blocked):
+		var edge := branch_candidates[index]
+		blocked_keys[_edge_key(edge.city_a, edge.city_b)] = true
+	var open_count := 0
+	var blocked_count := 0
+	var total_capacity := 0
+	for edge in land_edges:
+		var key := _edge_key(edge.city_a, edge.city_b)
+		if blocked_keys.has(key):
+			edge.max_manpower = 0
+			blocked_count += 1
+			continue
+		if protected_keys.has(key):
+			open_count += 1
+			total_capacity += edge.max_manpower
+			continue
+		var difficulty := clampf(
+			edge.danger * 0.60
+				+ edge.max_height_difference * 0.40,
+			0.0,
+			1.0
+		)
+		var capacity := (
+			float(maxi(
+				edge.base_max_manpower,
+				Edge.MIN_MANPOWER
+			))
+			* capacity_multiplier
+			* (1.0 - terrain_penalty * difficulty)
+		)
+		edge.max_manpower = maxi(
+			int(round(capacity / 1000.0)) * 1000,
+			Edge.MIN_MANPOWER
+		)
+		if edge.is_backbone:
+			edge.max_manpower = maxi(
+				edge.max_manpower,
+				Edge.TERRAIN_LOW_MANPOWER
+			)
+		open_count += 1
+		total_capacity += edge.max_manpower
+	for army in armies:
+		army.clear_line_assignment()
+	for nation in nations:
+		nation.frontier_defense_sectors.clear()
+		nation.frontier_defense_topology = null
+	road_network_revision += 1
+	return {
+		"ok": true,
+		"open_count": open_count,
+		"blocked_count": blocked_count,
+		"average_capacity": (
+			total_capacity / maxi(open_count, 1)
+		),
+		"protected_count": protected_keys.size(),
+		"revision": road_network_revision,
+	}
 
 func _initial_owner_components(
 	nation_id: int

@@ -12,7 +12,7 @@ var resolution := Vector2i(192, 128)
 var world_size := Vector2(64.0, 40.0)
 var height_scale: float = 7.0
 var height_steps: int = 24
-var smoothing_passes: int = 4
+var smoothing_passes: int = 2
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -48,6 +48,35 @@ func configure(
 func set_province_texture(texture: Texture2D) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter("province_texture", texture)
+
+
+func set_province_strength(strength: float) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter(
+		"province_strength",
+		clampf(strength, 0.0, 1.0)
+	)
+
+
+func set_height_texture(
+	texture: Texture2D,
+	source_region: Rect2
+) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter("height_texture", texture)
+	_material.set_shader_parameter(
+		"height_source_origin",
+		source_region.position
+	)
+	_material.set_shader_parameter(
+		"height_source_size",
+		source_region.size
+	)
+
+
+func set_surface_texture(texture: Texture2D) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter("surface_texture", texture)
 
 
 func mesh_instance() -> MeshInstance3D:

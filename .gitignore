@@ -21,3 +21,4 @@
 
 # Terrain DEM regeneration cache (reproducible via scripts/tools; not a runtime dep)
 assets/terrain/*_dem_meters.npz
+assets/terrain/source/natural_earth/

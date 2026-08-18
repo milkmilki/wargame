@@ -25,6 +25,9 @@ var travel_time_multiplier: float = 1.0    ## 相对同 distance 陆路的行军
 var supply_loss_multiplier: float = 1.0    ## 相对同 distance 陆路的粮食运输损耗倍率
 var allows_holding: bool = true            ## 水路禁止驻边，军队只能航行或交战
 var max_height_difference: float = 0.0     ## 两城连线上最高点与最低点之差 [0,1]
+var land_ratio: float = 1.0                ## 连线采样中位于陆地的比例 [0,1]
+var is_backbone: bool = false              ## 最小连通骨架边不可被运行时调参封闭
+var base_max_manpower: int = STANDARD_MANPOWER ## 运行时容量倍率的稳定基准
 var occupied: bool = false                 ## 是否被占用（passing_count>0 时为真）
 
 var passing_count: int = 0                 ## 全方向/全阵营边上军队总数（仅作占用派生）

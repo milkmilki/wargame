@@ -1,0 +1,40 @@
+{
+  "source": {
+    "dataset": "Natural Earth II with Shaded Relief",
+    "scale": "1:50m",
+    "version": "3.2.0",
+    "download_url": "https://naciscdn.org/naturalearth/50m/raster/NE2_50M_SR.zip",
+    "terms_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+    "license": "Public domain"
+  },
+  "source_file": "NE2_50M_SR.tif",
+  "source_crs": "EPSG:4326",
+  "source_raster_size": [
+    10800,
+    5400
+  ],
+  "bbox_wgs84": {
+    "west": 73.0,
+    "south": 18.0,
+    "east": 135.5,
+    "north": 54.0
+  },
+  "output": "assets/terrain/china_natural_earth2_2048.png",
+  "output_size": [
+    2048,
+    2048
+  ],
+  "alpha_bbox_px": [
+    316,
+    509,
+    1725,
+    1539
+  ],
+  "processing": {
+    "saturation": 0.72,
+    "contrast": 1.08,
+    "brightness": 0.94,
+    "resampling": "Lanczos",
+    "flat_water_pixels_filled": 221679
+  }
+}

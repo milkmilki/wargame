@@ -244,6 +244,14 @@ func setup(game_state: GameState) -> void:
 	_runtime_day_in_progress = false
 
 
+func on_road_network_rebuilt() -> void:
+	## 路网参数变化会使路径、补给、防区和威胁场缓存全部失效。
+	## 复用 setup 的集中失效逻辑，避免遗漏某个跨日缓存。
+	var was_paused := paused
+	setup(state)
+	paused = was_paused
+
+
 func _process(delta: float) -> void:
 	if (
 		state == null

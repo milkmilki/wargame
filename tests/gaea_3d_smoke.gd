@@ -51,6 +51,17 @@ func _run() -> void:
 	)
 	map_3d._pick_map_feature(city_screen_position)
 	map_3d._update_selection_marker()
+	var selected_edge: Edge = null
+	for edge in state.edges:
+		if MapRenderer.is_edge_visible(edge):
+			selected_edge = edge
+			break
+	if selected_edge != null:
+		overlay.select_edge(
+			selected_edge.city_a,
+			selected_edge.city_b
+		)
+		map_3d._update_edge_selection()
 	var valid := (
 		terrain_mesh != null
 		and terrain_mesh.get_surface_count() > 0
@@ -63,7 +74,11 @@ func _run() -> void:
 		and map_3d._armies.multimesh.instance_count > 0
 		and map_3d._province_texture != null
 		and map_3d._selection.visible
-		and overlay.selected_city_id() == 0
+		and selected_edge != null
+		and map_3d._edge_selection.mesh != null
+		and map_3d._capital_rings.multimesh != null
+		and map_3d._capital_rings.multimesh.instance_count
+			== state.nations.size()
 	)
 	if not valid:
 		push_error("GAEA_3D_SMOKE_INVALID")

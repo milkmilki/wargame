@@ -24,6 +24,9 @@ extends Node
 @onready var map_3d: StrategicMap3D = get_node_or_null(
 	"StrategicMap3D"
 )
+@onready var road_tuning_panel: RoadTuningPanel = get_node_or_null(
+	"RoadTuningLayer"
+) as RoadTuningPanel
 @onready var settings_button: Button = $SettingsLayer/SettingsButton
 @onready var settings_overlay: Control = $SettingsLayer/SettingsOverlay
 @onready var resolution_option: OptionButton = (
@@ -43,10 +46,13 @@ var state: GameState
 var _seed: int = 12345
 var _speed_mult: float = 1.0
 var _settings_previous_pause: bool = false
+var _road_previous_pause: bool = false
 
 
 func _ready() -> void:
 	_setup_display_settings()
+	if road_tuning_panel != null:
+		_setup_road_tuning()
 	_seed = world_seed
 	_start_new_game(_seed)
 
@@ -85,6 +91,11 @@ func _apply_settings_font(control: Control, font: Font) -> void:
 func _open_settings() -> void:
 	if settings_overlay.visible:
 		return
+	if (
+		road_tuning_panel != null
+		and road_tuning_panel.is_open()
+	):
+		road_tuning_panel.close_panel()
 	_settings_previous_pause = simulation.paused
 	simulation.paused = true
 	settings_overlay.visible = true
@@ -113,6 +124,66 @@ func _apply_display_settings() -> void:
 	_close_settings()
 
 
+func _setup_road_tuning() -> void:
+	road_tuning_panel.panel_opened.connect(_on_road_panel_opened)
+	road_tuning_panel.panel_closed.connect(_on_road_panel_closed)
+	road_tuning_panel.regenerate_requested.connect(
+		_on_road_regenerate_requested
+	)
+	road_tuning_panel.province_strength_changed.connect(
+		_on_province_strength_changed
+	)
+
+
+func _on_road_panel_opened() -> void:
+	if settings_overlay.visible:
+		_close_settings()
+	_road_previous_pause = simulation.paused
+	simulation.paused = true
+
+
+func _on_road_panel_closed() -> void:
+	simulation.paused = _road_previous_pause
+
+
+func _on_road_regenerate_requested(settings: Dictionary) -> void:
+	if state == null or use_grid_world:
+		road_tuning_panel.set_status(
+			"网格测试地图不支持运行时路网调校。",
+			true
+		)
+		return
+	var result := state.recalculate_road_network(settings)
+	if not bool(result.get("ok", false)):
+		road_tuning_panel.set_status(
+			str(result.get("error", "路网重算失败。")),
+			true
+		)
+		return
+	simulation.on_road_network_rebuilt()
+	renderer.refresh_road_network()
+	var protected_count := int(result.get("protected_count", 0))
+	var protected_text := (
+		"，%d 条在用道路保持原容量" % protected_count
+		if protected_count > 0
+		else ""
+	)
+	road_tuning_panel.set_status(
+		"已生成：%d 条通路，%d 条封闭，平均容量 %d%s。"
+		% [
+			int(result["open_count"]),
+			int(result["blocked_count"]),
+			int(result["average_capacity"]),
+			protected_text,
+		]
+	)
+
+
+func _on_province_strength_changed(strength: float) -> void:
+	if map_3d != null:
+		map_3d.set_province_strength(strength)
+
+
 func _start_new_game(world_seed: int) -> void:
 	state = GameState.new()
 	if use_grid_world:
@@ -138,6 +209,10 @@ func _start_new_game(world_seed: int) -> void:
 	if enable_3d:
 		map_3d.visible = true
 		map_3d.setup(state, simulation, renderer)
+		if road_tuning_panel != null:
+			map_3d.set_province_strength(
+				road_tuning_panel.province_strength()
+			)
 	elif map_3d != null:
 		map_3d.visible = false
 

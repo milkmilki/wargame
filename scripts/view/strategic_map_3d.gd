@@ -4,14 +4,23 @@ extends Node3D
 ## 负责连续地形、国家覆色、道路、河流、城市、军队、战斗和相机交互。
 
 const BASE_WORLD_SPAN: float = 64.0
-const BASE_MESH_RESOLUTION: int = 192
-const HEIGHT_STEPS: int = 28
+const BASE_MESH_RESOLUTION: int = 256
+const HEIGHT_STEPS: int = 64
 const HEIGHT_SCALE: float = 4.8
 const MAP_PICK_CITY_PIXELS: float = 18.0
 const MAP_PICK_EDGE_PIXELS: float = 10.0
 const CAMERA_MIN_DISTANCE: float = 24.0
 const CAMERA_MAX_DISTANCE: float = 92.0
 const CAMERA_DRAG_THRESHOLD: float = 4.0
+const TERRAIN_SURFACE_PATH := (
+	"res://assets/terrain/china_natural_earth2_2048.png"
+)
+const ANTIQUE_OVERLAY_SHADER := preload(
+	"res://scripts/view/gaea/antique_overlay.gdshader"
+)
+const WATER_SHADER := preload(
+	"res://scripts/view/gaea/strategic_water.gdshader"
+)
 
 var state: GameState
 var sim: Simulation
@@ -27,11 +36,16 @@ var _rivers: MeshInstance3D
 var _boundaries: MeshInstance3D
 var _campaigns: MeshInstance3D
 var _cities: MultiMeshInstance3D
+var _capital_rings: MultiMeshInstance3D
 var _armies: MultiMeshInstance3D
 var _battles: MultiMeshInstance3D
 var _selection: MeshInstance3D
+var _edge_selection: MeshInstance3D
+var _antique_overlay_layer: CanvasLayer
 var _city_labels: Array[Label3D] = []
+var _nation_labels: Array[Label3D] = []
 var _province_texture: ImageTexture
+var _map_font: Font
 
 var _world_size := Vector2(BASE_WORLD_SPAN, BASE_WORLD_SPAN)
 var _mesh_resolution := Vector2i(
@@ -47,6 +61,9 @@ var _drag_target_start := Vector3.ZERO
 var _last_day: int = -1
 var _last_ownership_revision: int = -1
 var _last_diplomacy_revision: int = -1
+var _last_road_network_revision: int = -1
+var _last_selected_edge := Vector2i(-2, -2)
+var _province_strength: float = 0.62
 
 
 func setup(
@@ -57,6 +74,8 @@ func setup(
 	state = game_state
 	sim = simulation
 	overlay = overlay_renderer
+	if _map_font == null:
+		_map_font = MapRenderer.create_ui_font()
 	_ensure_scene_nodes()
 	_clear_labels()
 	_configure_dimensions()
@@ -66,6 +85,7 @@ func setup(
 	_last_day = -1
 	_last_ownership_revision = -1
 	_last_diplomacy_revision = -1
+	_last_road_network_revision = -1
 	set_process(true)
 	set_process_unhandled_input(true)
 
@@ -80,14 +100,23 @@ func _process(_delta: float) -> void:
 	):
 		_update_province_visuals()
 		_update_city_instances()
+		_rebuild_nation_labels()
 		_last_ownership_revision = state.ownership_revision
 		_last_diplomacy_revision = state.diplomacy_revision
 	if state.day != _last_day:
 		_update_campaign_mesh()
 		_update_battle_instances()
 		_last_day = state.day
+	if (
+		state.road_network_revision
+		!= _last_road_network_revision
+		and _terrain.land_cell_count() > 0
+	):
+		_build_road_mesh()
+		_last_road_network_revision = state.road_network_revision
 	_update_army_instances()
 	_update_selection_marker()
+	_update_edge_selection()
 	_update_city_label_visibility()
 
 
@@ -205,8 +234,8 @@ func _ensure_scene_nodes() -> void:
 		var sun := DirectionalLight3D.new()
 		sun.name = "Sun"
 		sun.rotation_degrees = Vector3(-58.0, -32.0, 0.0)
-		sun.light_color = Color(1.0, 0.91, 0.76)
-		sun.light_energy = 1.45
+		sun.light_color = Color(1.0, 0.87, 0.68)
+		sun.light_energy = 1.12
 		sun.shadow_enabled = true
 		add_child(sun)
 	if get_node_or_null("Environment") == null:
@@ -214,21 +243,42 @@ func _ensure_scene_nodes() -> void:
 		world_environment.name = "Environment"
 		var environment := Environment.new()
 		environment.background_mode = Environment.BG_COLOR
-		environment.background_color = Color(0.035, 0.055, 0.065)
-		environment.background_energy_multiplier = 0.75
+		environment.background_color = Color(0.55, 0.49, 0.38)
+		environment.background_energy_multiplier = 0.82
 		environment.ambient_light_source = (
 			Environment.AMBIENT_SOURCE_COLOR
 		)
 		environment.ambient_light_color = Color(
-			0.42,
-			0.48,
-			0.52
+			0.58,
+			0.52,
+			0.42
 		)
-		environment.ambient_light_energy = 0.72
+		environment.ambient_light_energy = 0.64
 		environment.tonemap_mode = Environment.TONE_MAPPER_ACES
 		world_environment.environment = environment
 		add_child(world_environment)
 	_ensure_feature_nodes()
+	_ensure_antique_overlay()
+
+
+func _ensure_antique_overlay() -> void:
+	if _antique_overlay_layer != null:
+		return
+	_antique_overlay_layer = CanvasLayer.new()
+	_antique_overlay_layer.name = "AntiqueOverlay"
+	_antique_overlay_layer.layer = -1
+	var overlay_rect := ColorRect.new()
+	overlay_rect.name = "PaperTintAndVignette"
+	overlay_rect.set_anchors_and_offsets_preset(
+		Control.PRESET_FULL_RECT
+	)
+	overlay_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay_rect.color = Color.WHITE
+	var material := ShaderMaterial.new()
+	material.shader = ANTIQUE_OVERLAY_SHADER
+	overlay_rect.material = material
+	_antique_overlay_layer.add_child(overlay_rect)
+	add_child(_antique_overlay_layer)
 
 
 func _ensure_feature_nodes() -> void:
@@ -256,6 +306,10 @@ func _ensure_feature_nodes() -> void:
 		_cities = MultiMeshInstance3D.new()
 		_cities.name = "Cities"
 		_content.add_child(_cities)
+	if _capital_rings == null:
+		_capital_rings = MultiMeshInstance3D.new()
+		_capital_rings.name = "CapitalRings"
+		_content.add_child(_capital_rings)
 	if _armies == null:
 		_armies = MultiMeshInstance3D.new()
 		_armies.name = "Armies"
@@ -281,6 +335,11 @@ func _ensure_feature_nodes() -> void:
 		_selection.material_override = material
 		_selection.visible = false
 		_content.add_child(_selection)
+	if _edge_selection == null:
+		_edge_selection = MeshInstance3D.new()
+		_edge_selection.name = "EdgeSelection"
+		_edge_selection.material_override = _line_material(true)
+		_content.add_child(_edge_selection)
 
 
 func _configure_dimensions() -> void:
@@ -318,7 +377,7 @@ func _configure_dimensions() -> void:
 func _configure_camera() -> void:
 	_camera_target = Vector3.ZERO
 	_camera_distance = clampf(
-		maxf(_world_size.x, _world_size.y) * 0.92,
+		maxf(_world_size.x, _world_size.y) * 1.08,
 		CAMERA_MIN_DISTANCE,
 		CAMERA_MAX_DISTANCE
 	)
@@ -372,13 +431,11 @@ func _clamp_camera_target() -> void:
 
 func _build_static_scene() -> void:
 	var water_plane := PlaneMesh.new()
-	water_plane.size = _world_size * 1.28
+	water_plane.size = _world_size * 2.6
 	_water.mesh = water_plane
 	_water.position.y = -0.42
-	var water_material := StandardMaterial3D.new()
-	water_material.albedo_color = Color(0.055, 0.16, 0.20)
-	water_material.roughness = 0.38
-	water_material.metallic = 0.08
+	var water_material := ShaderMaterial.new()
+	water_material.shader = WATER_SHADER
 	_water.material_override = water_material
 
 
@@ -404,13 +461,25 @@ func _start_gaea_generation() -> void:
 		HEIGHT_SCALE,
 		HEIGHT_STEPS
 	)
+	var height_texture := load(
+		GameState.TERRAIN_MAP_PATH
+	) as Texture2D
+	_terrain.set_height_texture(
+		height_texture,
+		state.map_source_region_normalized
+	)
+	var surface_texture := load(
+		TERRAIN_SURFACE_PATH
+	) as Texture2D
+	if surface_texture != null:
+		_terrain.set_surface_texture(surface_texture)
 	_terrain.render_finished.connect(_on_terrain_ready)
 
 	var graph := GaeaGraph.new()
 	graph.ensure_initialized()
 	var source := StrategicHeightmapNode.new()
 	source.arguments = {
-		&"texture": load(GameState.TERRAIN_MAP_PATH) as Texture2D,
+		&"texture": height_texture,
 		&"source_origin": state.map_source_region_normalized.position,
 		&"source_size": state.map_source_region_normalized.size,
 		&"resolution": _mesh_resolution,
@@ -448,6 +517,7 @@ func _on_terrain_ready() -> void:
 		push_error("Gaea 3D 地形为空")
 		return
 	_update_province_visuals()
+	_terrain.set_province_strength(_province_strength)
 	_build_road_mesh()
 	_build_river_mesh()
 	_build_city_instances()
@@ -455,6 +525,14 @@ func _on_terrain_ready() -> void:
 	_update_army_instances()
 	_update_battle_instances()
 	_update_campaign_mesh()
+	_rebuild_nation_labels()
+	_last_road_network_revision = state.road_network_revision
+
+
+func set_province_strength(strength: float) -> void:
+	_province_strength = clampf(strength, 0.0, 1.0)
+	if _terrain != null:
+		_terrain.set_province_strength(_province_strength)
 
 
 func _update_province_visuals() -> void:
@@ -470,33 +548,33 @@ func _update_province_visuals() -> void:
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["coast"],
-		0.16,
-		Color(0.04, 0.035, 0.025),
+		0.115,
+		Color(0.10, 0.07, 0.038, 0.88),
 		0.10
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["province"],
-		0.045,
-		Color(0.08, 0.07, 0.05, 0.46),
+		0.026,
+		Color(0.16, 0.12, 0.075, 0.28),
 		0.12
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["nation"],
-		0.17,
-		Color(0.95, 0.66, 0.18),
+		0.110,
+		Color(0.18, 0.12, 0.06, 0.86),
 		0.15
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["alliance"],
-		0.11,
-		Color(0.16, 0.72, 0.76),
+		0.065,
+		Color(0.14, 0.38, 0.40, 0.62),
 		0.17
 	)
 	_boundaries.mesh = surface_tool.commit()
-	_boundaries.material_override = _line_material(true)
+	_boundaries.material_override = _line_material(false)
 
 
 func _build_road_mesh() -> void:
@@ -507,25 +585,56 @@ func _build_road_mesh() -> void:
 			continue
 		var from := state.cities[edge.city_a].map_position
 		var to := state.cities[edge.city_b].map_position
-		var color := Color(0.18, 0.14, 0.09)
-		var width := 0.055 + (
-			float(edge.max_manpower) / float(Edge.MAX_MANPOWER)
-		) * 0.13
+		var color := _road_color_for_capacity(edge.max_manpower)
+		var width := _road_width_for_capacity(edge.max_manpower)
 		if edge.kind == Edge.Kind.LANDING:
-			color = Color(0.56, 0.42, 0.20)
+			color = Color(0.64, 0.46, 0.24, 0.88)
+			width = 0.080
 		elif edge.kind == Edge.Kind.RIVER:
-			color = Color(0.10, 0.36, 0.52)
-			width = 0.14
-		_append_world_ribbon(
+			color = Color(0.20, 0.49, 0.55, 0.88)
+			width = 0.090
+		_append_draped_ribbon(
+			surface_tool,
+			from,
+			to,
+			width * 1.75,
+			Color(0.08, 0.055, 0.030, 0.70),
+			0.105
+		)
+		_append_draped_ribbon(
 			surface_tool,
 			from,
 			to,
 			width,
 			color,
-			0.20
+			0.125
 		)
 	_roads.mesh = surface_tool.commit()
 	_roads.material_override = _line_material(false)
+
+
+func _road_width_for_capacity(capacity: int) -> float:
+	if capacity >= Edge.MAX_MANPOWER:
+		return 0.145
+	if capacity >= 60000:
+		return 0.120
+	if capacity >= 30000:
+		return 0.095
+	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
+		return 0.078
+	return 0.060
+
+
+func _road_color_for_capacity(capacity: int) -> Color:
+	if capacity >= Edge.MAX_MANPOWER:
+		return Color(0.92, 0.72, 0.37, 0.96)
+	if capacity >= 60000:
+		return Color(0.78, 0.56, 0.27, 0.90)
+	if capacity >= 30000:
+		return Color(0.60, 0.43, 0.22, 0.80)
+	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
+		return Color(0.43, 0.31, 0.17, 0.68)
+	return Color(0.30, 0.23, 0.15, 0.54)
 
 
 func _build_river_mesh() -> void:
@@ -537,9 +646,9 @@ func _build_river_mesh() -> void:
 				surface_tool,
 				river[index],
 				river[index + 1],
-				0.18,
-				Color(0.08, 0.44, 0.62),
-				0.14
+				0.075,
+				Color(0.12, 0.39, 0.46, 0.88),
+				0.11
 			)
 	_rivers.mesh = surface_tool.commit()
 	_rivers.material_override = _line_material(false)
@@ -551,13 +660,43 @@ func _build_city_instances() -> void:
 	multimesh.use_colors = true
 	multimesh.instance_count = state.cities.size()
 	var marker := CylinderMesh.new()
-	marker.top_radius = 0.24
-	marker.bottom_radius = 0.34
-	marker.height = 0.42
+	marker.top_radius = 0.18
+	marker.bottom_radius = 0.25
+	marker.height = 0.34
 	marker.radial_segments = 10
 	multimesh.mesh = marker
 	_cities.multimesh = multimesh
 	_cities.material_override = _instance_color_material(false)
+	var capitals: Array[City] = []
+	for city in state.cities:
+		if city.is_capital and not city.is_dock:
+			capitals.append(city)
+	var capital_multimesh := MultiMesh.new()
+	capital_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	capital_multimesh.use_colors = true
+	capital_multimesh.instance_count = capitals.size()
+	var capital_ring := TorusMesh.new()
+	capital_ring.inner_radius = 0.34
+	capital_ring.outer_radius = 0.48
+	capital_ring.rings = 16
+	capital_ring.ring_segments = 8
+	capital_multimesh.mesh = capital_ring
+	_capital_rings.multimesh = capital_multimesh
+	_capital_rings.material_override = _instance_color_material(true)
+	for index in range(capitals.size()):
+		var capital := capitals[index]
+		var world := _terrain.map_to_world(capital.map_position)
+		capital_multimesh.set_instance_transform(
+			index,
+			Transform3D(
+				Basis.IDENTITY,
+				world + Vector3(0.0, 0.22, 0.0)
+			)
+		)
+		capital_multimesh.set_instance_color(
+			index,
+			Color(0.96, 0.72, 0.24)
+		)
 	_clear_labels()
 	for city in state.cities:
 		if (
@@ -572,6 +711,7 @@ func _build_city_instances() -> void:
 			continue
 		var label := Label3D.new()
 		label.text = MapRenderer.city_label_text(city)
+		label.font = _map_font
 		label.font_size = 30
 		label.outline_size = 7
 		label.pixel_size = 0.016
@@ -612,9 +752,50 @@ func _update_city_instances() -> void:
 			if city.owner_nation >= 0
 			else Color(0.45, 0.45, 0.42)
 		)
+		color = color.lerp(Color(0.62, 0.53, 0.38), 0.28)
 		if city.is_capital:
-			color = color.lightened(0.24)
+			color = color.lightened(0.18)
 		_cities.multimesh.set_instance_color(city.id, color)
+
+
+func _rebuild_nation_labels() -> void:
+	for label in _nation_labels:
+		if is_instance_valid(label):
+			label.queue_free()
+	_nation_labels.clear()
+	for nation in state.nations:
+		if not nation.alive:
+			continue
+		var centroid := Vector2.ZERO
+		var weight := 0.0
+		for city in state.cities:
+			if city.owner_nation != nation.id or city.is_dock:
+				continue
+			var city_weight := 2.0 if city.is_capital else 1.0
+			centroid += city.map_position * city_weight
+			weight += city_weight
+		if weight <= 0.0:
+			continue
+		centroid /= weight
+		var label := Label3D.new()
+		label.text = "国%d" % nation.id
+		label.font = _map_font
+		label.font_size = 54
+		label.outline_size = 10
+		label.pixel_size = 0.026
+		label.modulate = nation.color.lerp(
+			Color(0.88, 0.79, 0.60),
+			0.48
+		)
+		label.outline_modulate = Color(0.08, 0.055, 0.03, 0.90)
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.position = (
+			_terrain.map_to_world(centroid)
+			+ Vector3(0.0, 1.32, 0.0)
+		)
+		_content.add_child(label)
+		_nation_labels.append(label)
 
 
 func _update_army_instances() -> void:
@@ -746,12 +927,41 @@ func _update_selection_marker() -> void:
 	_selection.visible = false
 
 
+func _update_edge_selection() -> void:
+	if overlay == null or _terrain == null:
+		return
+	var pair := overlay.selected_edge_pair()
+	if pair == _last_selected_edge:
+		return
+	_last_selected_edge = pair
+	if pair.x < 0 or pair.y < 0:
+		_edge_selection.mesh = null
+		return
+	var edge := state.edge_of(pair.x, pair.y)
+	if edge == null or not MapRenderer.is_edge_visible(edge):
+		_edge_selection.mesh = null
+		return
+	var surface_tool := SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_draped_ribbon(
+		surface_tool,
+		state.cities[edge.city_a].map_position,
+		state.cities[edge.city_b].map_position,
+		_road_width_for_capacity(edge.max_manpower) * 1.8,
+		Color(1.0, 0.76, 0.18, 0.92),
+		0.18
+	)
+	_edge_selection.mesh = surface_tool.commit()
+
+
 func _update_city_label_visibility() -> void:
 	if overlay == null:
 		return
 	var visible := overlay.city_names_visible()
 	for label in _city_labels:
-		label.visible = visible
+		label.visible = visible and _camera_distance <= 62.0
+	for label in _nation_labels:
+		label.visible = _camera_distance >= 38.0
 
 
 func _pick_map_feature(screen_position: Vector2) -> void:
@@ -777,25 +987,27 @@ func _pick_map_feature(screen_position: Vector2) -> void:
 	for edge in state.edges:
 		if not MapRenderer.is_edge_visible(edge):
 			continue
-		var from := _terrain.map_to_world(
-			state.cities[edge.city_a].map_position
+		var samples := _draped_world_samples(
+			state.cities[edge.city_a].map_position,
+			state.cities[edge.city_b].map_position,
+			0.125
 		)
-		var to := _terrain.map_to_world(
-			state.cities[edge.city_b].map_position
-		)
-		if (
-			_camera.is_position_behind(from)
-			or _camera.is_position_behind(to)
-		):
-			continue
-		var distance := MapRenderer.point_to_segment_distance(
-			screen_position,
-			_camera.unproject_position(from),
-			_camera.unproject_position(to)
-		)
-		if distance < best_edge_distance:
-			best_edge_distance = distance
-			best_edge = edge
+		for index in range(samples.size() - 1):
+			var from := samples[index]
+			var to := samples[index + 1]
+			if (
+				_camera.is_position_behind(from)
+				or _camera.is_position_behind(to)
+			):
+				continue
+			var distance := MapRenderer.point_to_segment_distance(
+				screen_position,
+				_camera.unproject_position(from),
+				_camera.unproject_position(to)
+			)
+			if distance < best_edge_distance:
+				best_edge_distance = distance
+				best_edge = edge
 	if (
 		best_edge != null
 		and best_edge_distance <= MAP_PICK_EDGE_PIXELS
@@ -867,6 +1079,61 @@ func _append_world_ribbon(
 		surface_tool.add_vertex(vertex)
 
 
+func _append_draped_ribbon(
+	surface_tool: SurfaceTool,
+	from_uv: Vector2,
+	to_uv: Vector2,
+	width: float,
+	color: Color,
+	elevation: float
+) -> void:
+	var samples := _draped_world_samples(
+		from_uv,
+		to_uv,
+		elevation
+	)
+	for segment in range(samples.size() - 1):
+		var from := samples[segment]
+		var to := samples[segment + 1]
+		var direction := Vector2(to.x - from.x, to.z - from.z)
+		if direction.length_squared() <= 0.000001:
+			continue
+		var perpendicular := direction.normalized().orthogonal() * width
+		var offset := Vector3(perpendicular.x, 0.0, perpendicular.y)
+		for vertex in [
+			from - offset,
+			to - offset,
+			from + offset,
+			to - offset,
+			to + offset,
+			from + offset,
+		]:
+			surface_tool.set_color(color)
+			surface_tool.add_vertex(vertex)
+
+
+func _draped_world_samples(
+	from_uv: Vector2,
+	to_uv: Vector2,
+	elevation: float
+) -> PackedVector3Array:
+	var map_length := from_uv.distance_to(to_uv)
+	var segment_count := clampi(
+		int(ceil(map_length * 96.0)),
+		8,
+		32
+	)
+	var samples := PackedVector3Array()
+	samples.resize(segment_count + 1)
+	for index in range(segment_count + 1):
+		var ratio := float(index) / float(segment_count)
+		var map_position := from_uv.lerp(to_uv, ratio)
+		var world := _terrain.map_to_world(map_position)
+		world.y += elevation
+		samples[index] = world
+	return samples
+
+
 func _line_material(emissive: bool) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -898,3 +1165,7 @@ func _clear_labels() -> void:
 		if is_instance_valid(label):
 			label.queue_free()
 	_city_labels.clear()
+	for label in _nation_labels:
+		if is_instance_valid(label):
+			label.queue_free()
+	_nation_labels.clear()

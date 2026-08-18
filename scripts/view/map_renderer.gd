@@ -339,6 +339,11 @@ func set_world_layer_visible(visible: bool) -> void:
 	queue_redraw()
 
 
+func refresh_road_network() -> void:
+	_clear_selection()
+	queue_redraw()
+
+
 func select_city(city_id: int) -> void:
 	_selected_city_id = city_id
 	_selected_edge_a = -1
@@ -359,6 +364,10 @@ func clear_map_selection() -> void:
 
 func selected_city_id() -> int:
 	return _selected_city_id
+
+
+func selected_edge_pair() -> Vector2i:
+	return Vector2i(_selected_edge_a, _selected_edge_b)
 
 
 func world_input_blocked(point: Vector2) -> bool:
@@ -1567,7 +1576,7 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			var base := paper_nation_color(
 				game_state.nations[recognized_owner].color
 			)
-			base.a = 0.38
+			base.a = 0.68
 			if current_owner != recognized_owner and (x + y) % 9 < 3:
 				var occupation := paper_nation_color(
 					game_state.nations[current_owner].color

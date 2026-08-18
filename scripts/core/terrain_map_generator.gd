@@ -1081,6 +1081,10 @@ static func _build_roads(
 				int(road["max_manpower"]),
 				Edge.TERRAIN_LOW_MANPOWER
 			)
+		road["base_max_manpower"] = maxi(
+			int(road["max_manpower"]),
+			Edge.MIN_MANPOWER
+		)
 		road["danger"] = clampf(percentile, 0.0, 1.0)
 		road["length"] = metric_length_between(
 			positions[int(road["a"])],
