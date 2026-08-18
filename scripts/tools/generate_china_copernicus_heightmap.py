@@ -2,7 +2,7 @@
 """Generate the authoritative China heightmap from Copernicus DEM COG tiles.
 
 The game expects a grayscale image with alpha:
-- alpha marks playable land, inherited from the current China silhouette;
+- alpha marks playable land, taken from assets/terrain/china_mask.png;
 - white means low altitude and dark means high altitude, matching
   TerrainMapGenerator.altitude_from_luminance().
 """
@@ -24,9 +24,7 @@ from rasterio.windows import from_bounds
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MASK = REPO_ROOT / (
-    "china-map-china-flag-shaded-relief-color-height-map-3d-illustration-png.webp"
-)
+DEFAULT_MASK = REPO_ROOT / "assets/terrain/china_mask.png"
 DEFAULT_OUTPUT = REPO_ROOT / "assets/terrain/china_copernicus_glo90_2048.png"
 DEFAULT_METERS = REPO_ROOT / "assets/terrain/china_copernicus_glo90_2048_dem_meters.npz"
 DEFAULT_METADATA = REPO_ROOT / "assets/terrain/china_copernicus_glo90_2048.json"
