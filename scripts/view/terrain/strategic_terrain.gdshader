@@ -7,6 +7,7 @@ uniform sampler2D surface_texture : source_color, filter_linear_mipmap_anisotrop
 uniform vec2 height_source_origin = vec2(0.0);
 uniform vec2 height_source_size = vec2(1.0);
 uniform float height_scale = 7.0;
+uniform float land_alpha_threshold : hint_range(0.0, 1.0) = 0.2;
 uniform float province_strength : hint_range(0.0, 1.0) = 0.62;
 uniform float hillshade_strength : hint_range(0.0, 1.0) = 0.68;
 uniform float detail_normal_strength = 240.0;
@@ -41,6 +42,10 @@ void vertex() {
 
 
 void fragment() {
+	vec2 source_uv = height_source_origin + UV * height_source_size;
+	if (texture(height_texture, source_uv).a < land_alpha_threshold) {
+		discard;
+	}
 	float source_altitude = sampled_altitude(UV);
 	float altitude = mix(normalized_height, source_altitude, 0.72);
 	float lower_mix = smoothstep(0.08, 0.38, altitude);
@@ -49,7 +54,6 @@ void fragment() {
 	vec3 terrain = mix(lowland_color, upland_color, lower_mix);
 	terrain = mix(terrain, mountain_color, upper_mix);
 	terrain = mix(terrain, summit_color, summit_mix);
-	vec2 source_uv = height_source_origin + UV * height_source_size;
 	vec3 natural_surface = texture(surface_texture, source_uv).rgb;
 	float surface_luma = dot(
 		natural_surface,
@@ -114,6 +118,26 @@ void fragment() {
 	vec4 province = texture(province_texture, UV);
 	float province_mix = province.a * province_strength;
 	vec3 province_tint = mix(terrain * province.rgb * 1.35, province.rgb, 0.46);
-	ALBEDO = mix(terrain, province_tint, province_mix);
+	vec3 final_color = mix(terrain, province_tint, province_mix);
+	float coast_alpha = min(
+		min(
+			texture(height_texture, source_uv - vec2(texel.x * 2.0, 0.0)).a,
+			texture(height_texture, source_uv + vec2(texel.x * 2.0, 0.0)).a
+		),
+		min(
+			texture(height_texture, source_uv - vec2(0.0, texel.y * 2.0)).a,
+			texture(height_texture, source_uv + vec2(0.0, texel.y * 2.0)).a
+		)
+	);
+	float coast_edge = 1.0 - smoothstep(
+		land_alpha_threshold,
+		0.92,
+		coast_alpha
+	);
+	ALBEDO = mix(
+		final_color,
+		vec3(0.12, 0.075, 0.035),
+		coast_edge * 0.72
+	);
 	ROUGHNESS = 0.94;
 }

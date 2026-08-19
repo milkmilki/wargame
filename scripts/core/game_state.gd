@@ -1002,7 +1002,7 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 static func default_road_tuning() -> Dictionary:
 	return {
 		"minimum_land_ratio": 0.90,
-		"maximum_relief": 0.72,
+		"maximum_relief": 0.25,
 		"blocked_branch_share": 0.10,
 		"terrain_capacity_penalty": 0.35,
 		"capacity_multiplier": 1.0,

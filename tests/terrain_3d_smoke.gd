@@ -56,6 +56,73 @@ func _run() -> void:
 		return
 
 	var terrain_mesh := map_3d._terrain.mesh_instance().mesh
+	var terrain_arrays := terrain_mesh.surface_get_arrays(0)
+	var terrain_indices: PackedInt32Array = terrain_arrays[
+		Mesh.ARRAY_INDEX
+	]
+	var expected_indices := (
+		(map_3d._terrain.resolution.x - 1)
+		* (map_3d._terrain.resolution.y - 1)
+		* 6
+	)
+	var terrain_material := (
+		map_3d._terrain.mesh_instance().material_override
+		as ShaderMaterial
+	)
+	var overview_angle := map_3d._camera_normal_angle_degrees()
+	var overview_framed := true
+	for corner in [
+		Vector3(
+			-map_3d._world_size.x * 0.5,
+			0.0,
+			-map_3d._world_size.y * 0.5
+		),
+		Vector3(
+			map_3d._world_size.x * 0.5,
+			0.0,
+			-map_3d._world_size.y * 0.5
+		),
+		Vector3(
+			-map_3d._world_size.x * 0.5,
+			0.0,
+			map_3d._world_size.y * 0.5
+		),
+		Vector3(
+			map_3d._world_size.x * 0.5,
+			0.0,
+			map_3d._world_size.y * 0.5
+		),
+	]:
+		var screen := map_3d._camera.unproject_position(corner)
+		overview_framed = overview_framed and (
+			screen.x >= 0.0
+			and screen.x <= 1280.0
+			and screen.y >= 34.0
+			and screen.y <= 712.0
+		)
+	map_3d._camera_distance = lerpf(
+		map_3d._camera_overview_distance,
+		StrategicMap3D.CAMERA_MIN_DISTANCE,
+		0.5
+	)
+	var middle_angle := map_3d._camera_normal_angle_degrees()
+	map_3d._camera_distance = StrategicMap3D.CAMERA_MIN_DISTANCE
+	map_3d._apply_camera_transform()
+	var close_angle := map_3d._camera_normal_angle_degrees()
+	var focus := map_3d._camera_target + Vector3(
+		0.0,
+		StrategicMap3D.HEIGHT_SCALE * 0.18,
+		0.0
+	)
+	var actual_close_angle := rad_to_deg(acos(clampf(
+		(map_3d._camera.position - focus).normalized().dot(
+			Vector3.UP
+		),
+		-1.0,
+		1.0
+	)))
+	map_3d._camera_distance = map_3d._camera_overview_distance
+	map_3d._apply_camera_transform()
 	var sample_position := Vector2(0.42, 0.58)
 	var world_position := map_3d._terrain.map_to_world(
 		sample_position
@@ -85,6 +152,25 @@ func _run() -> void:
 	var valid := (
 		terrain_mesh != null
 		and terrain_mesh.get_surface_count() > 0
+		and terrain_indices.size() == expected_indices
+		and is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"land_alpha_threshold"
+			)),
+			TerrainMapGenerator.ALPHA_THRESHOLD
+		)
+		and absf(overview_angle) < 0.001
+		and overview_framed
+		and absf(
+			middle_angle
+				- StrategicMap3D.CAMERA_MAX_NORMAL_ANGLE_DEGREES
+					* 0.5
+		) < 0.001
+		and absf(
+			close_angle
+				- StrategicMap3D.CAMERA_MAX_NORMAL_ANGLE_DEGREES
+		) < 0.001
+		and absf(actual_close_angle - close_angle) < 0.001
 		and map_3d._terrain.land_cell_count() > 1000
 		and round_trip.distance_to(sample_position) < 0.0001
 		and map_3d._cities.multimesh != null

@@ -12,6 +12,7 @@ const MAP_PICK_EDGE_PIXELS: float = 10.0
 const CAMERA_MIN_DISTANCE: float = 24.0
 const CAMERA_MAX_DISTANCE: float = 92.0
 const CAMERA_DRAG_THRESHOLD: float = 4.0
+const CAMERA_MAX_NORMAL_ANGLE_DEGREES: float = 30.0
 const TERRAIN_SURFACE_PATH := (
 	"res://assets/terrain/china_natural_earth2_2048.png"
 )
@@ -53,6 +54,7 @@ var _mesh_resolution := Vector2i(
 )
 var _camera_target := Vector3.ZERO
 var _camera_distance: float = 56.0
+var _camera_overview_distance: float = 56.0
 var _drag_active: bool = false
 var _drag_moved: bool = false
 var _drag_start := Vector2.ZERO
@@ -376,23 +378,58 @@ func _configure_dimensions() -> void:
 func _configure_camera() -> void:
 	_camera_target = Vector3.ZERO
 	_camera_distance = clampf(
-		maxf(_world_size.x, _world_size.y) * 1.08,
+		_overview_distance_for_viewport(),
 		CAMERA_MIN_DISTANCE,
 		CAMERA_MAX_DISTANCE
 	)
+	_camera_overview_distance = _camera_distance
 	_apply_camera_transform()
 
 
+func _overview_distance_for_viewport() -> float:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var viewport_aspect := (
+		viewport_size.x / maxf(viewport_size.y, 1.0)
+	)
+	var half_vertical_fov := deg_to_rad(_camera.fov * 0.5)
+	var vertical_tangent := maxf(tan(half_vertical_fov), 0.01)
+	var vertical_distance := (
+		_world_size.y * 0.5 / vertical_tangent
+	)
+	var horizontal_distance := (
+		_world_size.x * 0.5
+		/ (vertical_tangent * viewport_aspect)
+	)
+	# Reserve screen space for the HUD and bottom map-mode controls.
+	return maxf(vertical_distance, horizontal_distance) * 1.16
+
+
 func _apply_camera_transform() -> void:
-	_camera.position = _camera_target + Vector3(
+	var focus := _camera_target + Vector3(
 		0.0,
-		_camera_distance * 0.78,
-		_camera_distance * 0.62
+		HEIGHT_SCALE * 0.18,
+		0.0
 	)
-	_camera.look_at(
-		_camera_target + Vector3(0.0, HEIGHT_SCALE * 0.18, 0.0),
-		Vector3.UP
+	var angle := deg_to_rad(_camera_normal_angle_degrees())
+	_camera.position = focus + Vector3(
+		0.0,
+		_camera_distance * cos(angle),
+		_camera_distance * sin(angle)
 	)
+	_camera.look_at(focus, Vector3(0.0, 0.0, -1.0))
+
+
+func _camera_normal_angle_degrees() -> float:
+	var zoom_progress := clampf(
+		inverse_lerp(
+			_camera_overview_distance,
+			CAMERA_MIN_DISTANCE,
+			_camera_distance
+		),
+		0.0,
+		1.0
+	)
+	return zoom_progress * CAMERA_MAX_NORMAL_ANGLE_DEGREES
 
 
 func _zoom_camera(factor: float) -> void:
@@ -507,13 +544,6 @@ func _update_province_visuals() -> void:
 	var geometry := MapRenderer.build_province_boundary_segments(state)
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_append_segment_ribbons(
-		surface_tool,
-		geometry["coast"],
-		0.115,
-		Color(0.10, 0.07, 0.038, 0.88),
-		0.10
-	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["province"],

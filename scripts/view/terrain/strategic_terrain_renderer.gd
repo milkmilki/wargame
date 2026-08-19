@@ -87,6 +87,10 @@ func generate_from_height_texture(
 ) -> void:
 	_reset()
 	set_height_texture(texture, source_region)
+	_material.set_shader_parameter(
+		"land_alpha_threshold",
+		alpha_threshold
+	)
 	if texture == null:
 		generation_finished.emit()
 		return
@@ -258,7 +262,9 @@ func _build_surface_mesh() -> ArrayMesh:
 			surface_tool.set_uv(uv)
 			surface_tool.add_vertex(Vector3(
 				(uv.x - 0.5) * world_size.x,
-				0.0 if is_nan(height) else height,
+				_mesh_vertex_height(x, z)
+					if is_nan(height)
+					else height,
 				(uv.y - 0.5) * world_size.y
 			))
 	for z in range(resolution.y - 1):
@@ -267,13 +273,6 @@ func _build_surface_mesh() -> ArrayMesh:
 			var i10 := i00 + 1
 			var i01 := i00 + resolution.x
 			var i11 := i01 + 1
-			if (
-				is_nan(_height_samples[i00])
-				or is_nan(_height_samples[i10])
-				or is_nan(_height_samples[i01])
-				or is_nan(_height_samples[i11])
-			):
-				continue
 			surface_tool.add_index(i00)
 			surface_tool.add_index(i10)
 			surface_tool.add_index(i01)
@@ -282,6 +281,25 @@ func _build_surface_mesh() -> ArrayMesh:
 			surface_tool.add_index(i01)
 	surface_tool.generate_normals()
 	return surface_tool.commit()
+
+
+func _mesh_vertex_height(x: int, z: int) -> float:
+	# Sea vertices remain in the rectangular mesh. Near the coast they inherit
+	# the closest land height so the high-resolution alpha mask cuts a vertical
+	# seam instead of exposing low-resolution grid steps.
+	for radius in range(1, 5):
+		for sample_z in range(
+			maxi(z - radius, 0),
+			mini(z + radius + 1, resolution.y)
+		):
+			for sample_x in range(
+				maxi(x - radius, 0),
+				mini(x + radius + 1, resolution.x)
+			):
+				var nearby := _sample_height(sample_x, sample_z)
+				if not is_nan(nearby):
+					return nearby
+	return 0.0
 
 
 func _sample_height(x: int, z: int) -> float:
