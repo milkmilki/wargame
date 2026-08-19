@@ -1,6 +1,6 @@
 class_name StrategicMap3D
 extends Node3D
-## 3D 战略地图表现层。Gaea 负责从权威高度图生成确定性高度网格，本节点
+## 3D 战略地图表现层。Renderer 直接从 Copernicus 高度图生成确定性网格，本节点
 ## 负责连续地形、国家覆色、道路、河流、城市、军队、战斗和相机交互。
 
 const BASE_WORLD_SPAN: float = 64.0
@@ -16,17 +16,16 @@ const TERRAIN_SURFACE_PATH := (
 	"res://assets/terrain/china_natural_earth2_2048.png"
 )
 const ANTIQUE_OVERLAY_SHADER := preload(
-	"res://scripts/view/gaea/antique_overlay.gdshader"
+	"res://scripts/view/terrain/antique_overlay.gdshader"
 )
 const WATER_SHADER := preload(
-	"res://scripts/view/gaea/strategic_water.gdshader"
+	"res://scripts/view/terrain/strategic_water.gdshader"
 )
 
 var state: GameState
 var sim: Simulation
 var overlay: MapRenderer
 
-var _generator: GaeaGenerator
 var _terrain: StrategicTerrainRenderer
 var _camera: Camera3D
 var _content: Node3D
@@ -81,7 +80,7 @@ func setup(
 	_configure_dimensions()
 	_configure_camera()
 	_build_static_scene()
-	_start_gaea_generation()
+	_start_terrain_generation()
 	_last_day = -1
 	_last_ownership_revision = -1
 	_last_diplomacy_revision = -1
@@ -439,22 +438,14 @@ func _build_static_scene() -> void:
 	_water.material_override = water_material
 
 
-func _start_gaea_generation() -> void:
-	if _generator != null:
-		_generator.cancel_generation()
-		_generator.queue_free()
-		_generator = null
+func _start_terrain_generation() -> void:
 	if _terrain != null:
 		_terrain.queue_free()
 		_terrain = null
 
-	_generator = GaeaGenerator.new()
-	_generator.name = "GaeaHeightGenerator"
-	add_child(_generator)
 	_terrain = StrategicTerrainRenderer.new()
 	_terrain.name = "StrategicTerrainRenderer"
 	add_child(_terrain)
-	_terrain.generator = _generator
 	_terrain.configure(
 		_mesh_resolution,
 		_world_size,
@@ -473,48 +464,19 @@ func _start_gaea_generation() -> void:
 	) as Texture2D
 	if surface_texture != null:
 		_terrain.set_surface_texture(surface_texture)
-	_terrain.render_finished.connect(_on_terrain_ready)
-
-	var graph := GaeaGraph.new()
-	graph.ensure_initialized()
-	var source := StrategicHeightmapNode.new()
-	source.arguments = {
-		&"texture": height_texture,
-		&"source_origin": state.map_source_region_normalized.position,
-		&"source_size": state.map_source_region_normalized.size,
-		&"resolution": _mesh_resolution,
-		&"height_steps": HEIGHT_STEPS,
-		&"alpha_threshold": TerrainMapGenerator.ALPHA_THRESHOLD,
-		&"luma_threshold": TerrainMapGenerator.LUMA_THRESHOLD,
-	}
-	var source_id := graph.add_node(source, Vector2(-240.0, 0.0))
-	var output := graph.get_output_node()
-	var connection_error := graph.connect_nodes(
-		source_id,
-		0,
-		output.id,
-		0
+	_terrain.generation_finished.connect(_on_terrain_ready)
+	_terrain.call_deferred(
+		"generate_from_height_texture",
+		height_texture,
+		state.map_source_region_normalized,
+		TerrainMapGenerator.ALPHA_THRESHOLD,
+		TerrainMapGenerator.LUMA_THRESHOLD
 	)
-	assert(
-		connection_error == OK,
-		"无法连接 Gaea 战略高度图节点"
-	)
-	var settings := GaeaGenerationSettings.new()
-	settings.random_seed_on_generate = false
-	settings.seed = 0
-	settings.world_size = Vector3i(
-		_mesh_resolution.x,
-		HEIGHT_STEPS + 1,
-		_mesh_resolution.y
-	)
-	_generator.graph = graph
-	_generator.settings = settings
-	_generator.generate()
 
 
 func _on_terrain_ready() -> void:
 	if _terrain.land_cell_count() <= 0:
-		push_error("Gaea 3D 地形为空")
+		push_error("Copernicus 3D 地形为空")
 		return
 	_update_province_visuals()
 	_terrain.set_province_strength(_province_strength)

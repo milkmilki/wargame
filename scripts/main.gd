@@ -1,5 +1,5 @@
 extends Node
-## 入口：装配 GameState / Simulation / Gaea 3D 地图 / HUD。
+## 入口：装配 GameState / Simulation / 3D 战略地图 / HUD。
 
 @export var use_grid_world: bool = false
 @export var use_3d_map: bool = true

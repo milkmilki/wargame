@@ -8,6 +8,10 @@ Runtime textures:
   from Natural Earth II 1:50m with shaded relief.
 - `china_mask.png`: stable playable-land silhouette shared by both pipelines.
 
+At runtime, Godot directly samples the Copernicus texture into a deterministic
+`ArrayMesh` and layers the Natural Earth texture in the terrain shader. No
+procedural terrain plugin or third-party map service is required.
+
 Regenerate:
 
 ```bash

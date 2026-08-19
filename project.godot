@@ -22,10 +22,6 @@ window/size/viewport_height=720
 window/size/resizable=false
 window/stretch/aspect="expand"
 
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/gaea/plugin.cfg")
-
 [physics]
 
 3d/physics_engine="Jolt Physics"
