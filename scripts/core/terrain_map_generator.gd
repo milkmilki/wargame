@@ -3,10 +3,16 @@ extends RefCounted
 ## 从带 Alpha 的灰度高度图确定性生成城市位置和道路图。
 
 const ANALYSIS_WIDTH: int = 256
-const ALPHA_THRESHOLD: float = 0.20
-const LUMA_THRESHOLD: float = 0.015
+## Copernicus source covers 73E..135.5E / 18N..54N. Keep that complete
+## geographic rectangle as the runtime map instead of cropping to the land
+## alpha bounds; the land mask still exclusively controls city placement.
+const FULL_MAP_ASPECT_RATIO: float = 62.5 / 36.0  ## Legacy default for old map definitions.
+## Packed map source contract: RGB=satellite color, Alpha=numerical elevation.
+## Alpha 0 is water/non-positive elevation; 1..255 maps land to 0..1 altitude.
+const ALPHA_THRESHOLD: float = 0.001
+const LUMA_THRESHOLD: float = 0.0  ## Compatibility parameter; RGB never drives geography.
 const CANDIDATE_STRIDE: int = 2
-const INTERIOR_RADIUS: int = 2
+const INTERIOR_RADIUS: int = 0
 const RELIEF_RADIUS: int = 3
 const RELIEF_SPACING_WEIGHT: float = 0.015
 const REFERENCE_CITY_COUNT: int = 64
@@ -49,8 +55,15 @@ const PROVINCE_CORRIDOR_RADIUS: int = 3
 static var _cache: Dictionary = {}
 
 
-static func build(source_path: String, city_count: int) -> Dictionary:
-	var cache_key := "settlement-v7:%s:%d" % [source_path, city_count]
+static func build(
+	source_path: String,
+	city_count: int,
+	city_mask_path: String = ""
+) -> Dictionary:
+	var mask_signature := city_mask_signature(city_mask_path)
+	var cache_key := "settlement-v10-city-mask:%s:%d:%s" % [
+		source_path, city_count, mask_signature
+	]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -61,29 +74,45 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		int(round(float(source.get_height()) * float(ANALYSIS_WIDTH) / float(source.get_width()))),
 		1
 	)
-	analysis.resize(ANALYSIS_WIDTH, analysis_height, Image.INTERPOLATE_LANCZOS)
-	var component := _largest_land_component(analysis)
-	assert(component["count"] >= city_count * 16, "高度图有效陆地区域不足")
-	var mask: PackedByteArray = component["mask"]
-	var bounds: Rect2i = component["bounds"]
-	var map_aspect_ratio := clampf(
-		float(maxi(bounds.size.x, 1))
-			/ float(maxi(bounds.size.y, 1)),
-		0.5,
-		2.5
+	# Alpha is numerical elevation, not visual transparency. Never interpolate
+	# it across coastlines when building the geography analysis grid.
+	analysis.resize(ANALYSIS_WIDTH, analysis_height, Image.INTERPOLATE_NEAREST)
+	var land_geometry := _all_land_geometry(analysis)
+	assert(land_geometry["count"] >= city_count * 16, "高度图有效陆地区域不足")
+	var mask: PackedByteArray = land_geometry["mask"]
+	var land_bounds: Rect2i = land_geometry["bounds"]
+	var city_mask_result := build_city_candidate_mask(
+		mask, analysis.get_size(), city_mask_path
 	)
+	assert(bool(city_mask_result.get("ok", false)), str(
+		city_mask_result.get("error", "城市蒙版加载失败")
+	))
+	var city_mask: PackedByteArray = city_mask_result["mask"]
+	var city_geometry := _mask_geometry(city_mask, analysis.get_size())
+	assert(
+		int(city_geometry["count"]) >= city_count,
+		"白色蒙版内真实陆地不足以生成%d座城市" % city_count
+	)
+	var bounds := Rect2i(Vector2i.ZERO, analysis.get_size())
+	var map_aspect_ratio := MapSource.aspect_ratio()
 	var river_paths := _build_river_paths(
 		analysis,
 		mask,
-		bounds
+		land_bounds
 	)
 	var samples := _sample_cities(
 		analysis,
-		mask,
-		bounds,
+		city_mask,
+		city_geometry["bounds"],
 		city_count,
 		river_paths
 	)
+	# Settlement density and spacing are solved in the tight land domain, then
+	# projected once into the complete geographic rectangle used by rendering.
+	var full_positions: Array[Vector2] = []
+	for pixel in samples["pixels"]:
+		full_positions.append(_normalized_map_point(pixel, bounds))
+	samples["positions"] = full_positions
 	var road_result := _build_roads(
 		analysis,
 		mask,
@@ -117,17 +146,279 @@ static func build(source_path: String, city_count: int) -> Dictionary:
 		"docks": transport["docks"],
 		"river_paths": transport["river_paths"],
 		"bounds": bounds,
+		"land_bounds": land_bounds,
 		"image_size": analysis.get_size(),
-		"source_region_normalized": Rect2(
-			Vector2(bounds.position) / Vector2(analysis.get_size()),
-			Vector2(bounds.size) / Vector2(analysis.get_size())
-		),
+		"source_region_normalized": Rect2(0.0, 0.0, 1.0, 1.0),
 		"map_aspect_ratio": map_aspect_ratio,
 		"province_map_size": provinces["size"],
 		"province_ids": provinces["ids"],
+		"city_mask_path": city_mask_path,
+		"city_mask_signature": mask_signature,
 	}
 	_cache[cache_key] = result.duplicate(true)
 	return result
+
+
+static func city_mask_signature(path: String) -> String:
+	var clean := path.strip_edges()
+	if clean.is_empty():
+		return "none"
+	var global_path := (
+		ProjectSettings.globalize_path(clean)
+		if clean.begins_with("res://") or clean.begins_with("user://")
+		else clean
+	)
+	return "%s:%d" % [clean, FileAccess.get_modified_time(global_path)]
+
+
+static func load_city_mask_image(path: String) -> Dictionary:
+	var clean := path.strip_edges()
+	if clean.is_empty():
+		return {"ok": true, "image": null, "path": ""}
+	var image: Image = null
+	if clean.begins_with("res://"):
+		var texture := load(clean) as Texture2D
+		if texture != null:
+			image = texture.get_image()
+	else:
+		var global_path := (
+			ProjectSettings.globalize_path(clean)
+			if clean.begins_with("user://")
+			else clean
+		)
+		if FileAccess.file_exists(global_path):
+			image = Image.load_from_file(global_path)
+	if image == null or image.is_empty():
+		return {
+			"ok": false,
+			"error": "无法读取城市蒙版图片：%s" % clean,
+		}
+	return {"ok": true, "image": image, "path": clean}
+
+
+static func build_city_candidate_mask(
+	land_mask: PackedByteArray,
+	target_size: Vector2i,
+	city_mask_path: String
+) -> Dictionary:
+	var result := load_city_mask_image(city_mask_path)
+	if not bool(result.get("ok", false)):
+		return result
+	var output := land_mask.duplicate()
+	var image: Image = result.get("image")
+	if image == null:
+		return {"ok": true, "mask": output, "white_land_count": _count_mask(output)}
+	image = image.duplicate()
+	image.resize(target_size.x, target_size.y, Image.INTERPOLATE_NEAREST)
+	var allowed_count := 0
+	for y in range(target_size.y):
+		for x in range(target_size.x):
+			var index := y * target_size.x + x
+			var color := image.get_pixel(x, y)
+			var allowed := (
+				land_mask[index] != 0
+				and color.get_luminance() >= 0.5
+			)
+			output[index] = 1 if allowed else 0
+			if allowed:
+				allowed_count += 1
+	return {
+		"ok": true,
+		"mask": output,
+		"white_land_count": allowed_count,
+		"path": city_mask_path,
+	}
+
+
+static func validate_city_mask(
+	source_path: String,
+	city_mask_path: String,
+	city_count: int
+) -> Dictionary:
+	var texture := load(source_path) as Texture2D
+	var source := texture.get_image() if texture != null else null
+	if source == null or source.is_empty():
+		return {"ok": false, "error": "地图源纹理不可用。"}
+	var analysis := source.duplicate()
+	var analysis_height := maxi(
+		int(round(float(source.get_height()) * float(ANALYSIS_WIDTH) / float(source.get_width()))), 1
+	)
+	analysis.resize(ANALYSIS_WIDTH, analysis_height, Image.INTERPOLATE_NEAREST)
+	var land_geometry := _all_land_geometry(analysis)
+	var result := build_city_candidate_mask(
+		land_geometry["mask"], analysis.get_size(), city_mask_path
+	)
+	if not bool(result.get("ok", false)):
+		return result
+	var available := int(result.get("white_land_count", 0))
+	if available < city_count:
+		return {
+			"ok": false,
+			"error": "蒙版白色陆地区域不足：可用%d格，请求%d城。" % [available, city_count],
+		}
+	return {"ok": true, "white_land_count": available, "path": city_mask_path}
+
+
+static func _count_mask(mask: PackedByteArray) -> int:
+	var count := 0
+	for value in mask:
+		if value != 0:
+			count += 1
+	return count
+
+
+static func _mask_geometry(mask: PackedByteArray, size: Vector2i) -> Dictionary:
+	var min_x := size.x
+	var min_y := size.y
+	var max_x := -1
+	var max_y := -1
+	var count := 0
+	for y in range(size.y):
+		for x in range(size.x):
+			if mask[y * size.x + x] == 0:
+				continue
+			count += 1
+			min_x = mini(min_x, x)
+			min_y = mini(min_y, y)
+			max_x = maxi(max_x, x)
+			max_y = maxi(max_y, y)
+	return {
+		"count": count,
+		"bounds": Rect2i(
+			min_x if count > 0 else 0,
+			min_y if count > 0 else 0,
+			maxi(max_x - min_x + 1, 1) if count > 0 else 1,
+			maxi(max_y - min_y + 1, 1) if count > 0 else 1
+		),
+	}
+
+
+static func is_land_map_position(
+	source_path: String,
+	map_position: Vector2
+) -> bool:
+	var texture := load(source_path) as Texture2D
+	if texture == null:
+		return false
+	var image := texture.get_image()
+	if image == null or image.is_empty():
+		return false
+	var x := clampi(
+		int(floor(clampf(map_position.x, 0.0, 1.0) * image.get_width())),
+		0, image.get_width() - 1
+	)
+	var y := clampi(
+		int(floor(clampf(map_position.y, 0.0, 1.0) * image.get_height())),
+		0, image.get_height() - 1
+	)
+	var pixel := image.get_pixel(x, y)
+	return packed_is_land(pixel)
+
+
+static func packed_is_land(color: Color) -> bool:
+	return color.a > ALPHA_THRESHOLD
+
+
+static func packed_altitude(color: Color) -> float:
+	if not packed_is_land(color):
+		return 0.0
+	return clampf((color.a * 255.0 - 1.0) / 254.0, 0.0, 1.0)
+
+
+static func map_segment_profile(
+	source_path: String,
+	from: Vector2,
+	to: Vector2
+) -> Dictionary:
+	var texture := load(source_path) as Texture2D
+	var image := texture.get_image() if texture != null else null
+	if image == null or image.is_empty():
+		return {"height_difference": 0.0, "land_ratio": 0.0}
+	var minimum := 1.0
+	var maximum := 0.0
+	var land_samples := 0
+	for index in range(ROAD_SAMPLE_COUNT + 1):
+		var ratio := float(index) / float(ROAD_SAMPLE_COUNT)
+		var point := from.lerp(to, ratio)
+		var x := clampi(int(floor(point.x * image.get_width())), 0, image.get_width() - 1)
+		var y := clampi(int(floor(point.y * image.get_height())), 0, image.get_height() - 1)
+		var color := image.get_pixel(x, y)
+		var height := packed_altitude(color)
+		minimum = minf(minimum, height)
+		maximum = maxf(maximum, height)
+		if packed_is_land(color):
+			land_samples += 1
+	return {
+		"height_difference": maximum - minimum,
+		"land_ratio": float(land_samples) / float(ROAD_SAMPLE_COUNT + 1),
+	}
+
+
+static func rebuild_provinces(
+	source_path: String,
+	city_positions: Array[Vector2],
+	edges: Array[Edge],
+	normalized_rivers: Array[PackedVector2Array]
+) -> Dictionary:
+	var texture := load(source_path) as Texture2D
+	var source := texture.get_image() if texture != null else null
+	assert(source != null and not source.is_empty())
+	var analysis := source.duplicate()
+	var analysis_height := maxi(
+		int(round(
+			float(source.get_height()) * float(ANALYSIS_WIDTH)
+				/ float(source.get_width())
+		)),
+		1
+	)
+	analysis.resize(
+		ANALYSIS_WIDTH, analysis_height, Image.INTERPOLATE_NEAREST
+	)
+	var land_geometry := _all_land_geometry(analysis)
+	var mask: PackedByteArray = land_geometry["mask"]
+	var bounds := Rect2i(Vector2i.ZERO, analysis.get_size())
+	var city_pixels: Array[Vector2i] = []
+	for position in city_positions:
+		city_pixels.append(Vector2i(
+			clampi(
+				int(round(position.x * float(analysis.get_width() - 1))),
+				0, analysis.get_width() - 1
+			),
+			clampi(
+				int(round(position.y * float(analysis.get_height() - 1))),
+				0, analysis.get_height() - 1
+			)
+		))
+	var roads: Array[Dictionary] = []
+	for edge in edges:
+		if (
+			edge.city_a >= city_positions.size()
+			or edge.city_b >= city_positions.size()
+		):
+			continue
+		roads.append({
+			"a": edge.city_a,
+			"b": edge.city_b,
+			"max_manpower": edge.max_manpower,
+		})
+	var river_pixels: Array[Array] = []
+	for river in normalized_rivers:
+		var path: Array[Vector2i] = []
+		for point in river:
+			path.append(Vector2i(
+				clampi(
+					int(round(point.x * float(analysis.get_width() - 1))),
+					0, analysis.get_width() - 1
+				),
+				clampi(
+					int(round(point.y * float(analysis.get_height() - 1))),
+					0, analysis.get_height() - 1
+				)
+			))
+		river_pixels.append(path)
+	return _build_province_raster(
+		analysis, mask, bounds, city_pixels, roads, river_pixels
+	)
 
 
 static func _build_province_raster(
@@ -181,8 +472,8 @@ static func _build_province_raster(
 			if land_mask[image_y * image_width + image_x] == 0:
 				continue
 			land[index] = 1
-			altitude[index] = altitude_from_luminance(
-				image.get_pixel(image_x, image_y).get_luminance()
+			altitude[index] = packed_altitude(
+				image.get_pixel(image_x, image_y)
 			)
 	_build_province_river_mask(
 		river,
@@ -573,7 +864,7 @@ static func _largest_land_component(image: Image) -> Dictionary:
 	for y in range(height):
 		for x in range(width):
 			var color := image.get_pixel(x, y)
-			if color.a >= ALPHA_THRESHOLD and color.get_luminance() >= LUMA_THRESHOLD:
+			if packed_is_land(color):
 				eligible[y * width + x] = 1
 	var visited := PackedByteArray()
 	visited.resize(width * height)
@@ -628,6 +919,37 @@ static func _largest_land_component(image: Image) -> Dictionary:
 	}
 
 
+static func _all_land_geometry(image: Image) -> Dictionary:
+	var width := image.get_width()
+	var height := image.get_height()
+	var mask := PackedByteArray()
+	mask.resize(width * height)
+	var min_x := width
+	var min_y := height
+	var max_x := -1
+	var max_y := -1
+	var count := 0
+	for y in range(height):
+		for x in range(width):
+			if not packed_is_land(image.get_pixel(x, y)):
+				continue
+			mask[y * width + x] = 1
+			count += 1
+			min_x = mini(min_x, x)
+			min_y = mini(min_y, y)
+			max_x = maxi(max_x, x)
+			max_y = maxi(max_y, y)
+	return {
+		"mask": mask,
+		"count": count,
+		"bounds": Rect2i(
+			min_x, min_y,
+			maxi(max_x - min_x + 1, 1),
+			maxi(max_y - min_y + 1, 1)
+		),
+	}
+
+
 static func _sample_cities(
 	image: Image,
 	mask: PackedByteArray,
@@ -650,11 +972,8 @@ static func _sample_cities(
 			if not _is_interior(mask, image.get_width(), image.get_height(), x, y):
 				continue
 			var relief := _local_relief(image, x, y, RELIEF_RADIUS)
-			var luminance := (
-				image.get_pixel(x, y).get_luminance()
-			)
-			var height := altitude_from_luminance(
-				luminance
+			var height := packed_altitude(
+				image.get_pixel(x, y)
 			)
 			var normalized := (
 				Vector2(x, y) - Vector2(bounds.position)
@@ -766,11 +1085,11 @@ static func _sample_cities(
 				best_index = i
 		if best_index == -1:
 			spacing_scale *= SPACING_RELAXATION_STEP
-			assert(
-				spacing_scale >= SPACING_RELAXATION_FLOOR,
-				"无法在动态最小间距下选满 %d 个城市点"
-					% city_count
-			)
+			if spacing_scale < SPACING_RELAXATION_FLOOR:
+				# User masks may be narrow or fragmented. Once the normal spacing
+				# floor is exhausted, keep farthest-point ordering but remove the
+				# hard distance gate so an otherwise valid mask can still fill.
+				spacing_scale = 0.0
 			continue
 		selected.append(candidates[best_index])
 		selected_pixels[candidates[best_index]["pixel"]] = true
@@ -810,8 +1129,8 @@ static func minimum_city_spacing_for_count(city_count: int) -> float:
 	)
 
 
-## 源高度图编码约定：白色是低地、黑色是高地。所有需要绝对海拔的路径
-## 必须经此函数转换；起伏/坡度只看亮度差，反转不改变其数值。
+## Legacy math helper retained for focused combat/terrain tests. Runtime packed
+## map sources use packed_altitude() and never infer height from RGB luminance.
 static func altitude_from_luminance(luminance: float) -> float:
 	return 1.0 - clampf(luminance, 0.0, 1.0)
 
@@ -929,7 +1248,7 @@ static func _local_relief(image: Image, x: int, y: int, radius: int) -> float:
 		for ox in range(-radius, radius + 1):
 			var px := clampi(x + ox, 0, image.get_width() - 1)
 			var py := clampi(y + oy, 0, image.get_height() - 1)
-			var height := image.get_pixel(px, py).get_luminance()
+			var height := packed_altitude(image.get_pixel(px, py))
 			minimum = minf(minimum, height)
 			maximum = maxf(maximum, height)
 	return maximum - minimum
@@ -943,11 +1262,9 @@ static func _build_roads(
 ) -> Dictionary:
 	var pixels: Array[Vector2i] = samples["pixels"]
 	var positions: Array[Vector2] = samples["positions"]
-	# 选边拓扑沿用原始分析图比例，避免距离数值调整改变道路连接关系。
-	var topology_aspect := (
-		float(image.get_width())
-		/ float(maxi(image.get_height(), 1))
-	)
+	# The packed source is square pixels but represents a non-square geographic
+	# bbox. Use manifest aspect from the first topology decision onward.
+	var topology_aspect := map_aspect_ratio
 	var metric_positions := PackedVector2Array()
 	for position in positions:
 		metric_positions.append(Vector2(
@@ -1064,17 +1381,11 @@ static func _build_roads(
 	for i in range(count):
 		var road := selected[i]
 		var percentile := float(i) / float(maxi(count - 1, 1))
-		var max_manpower := 0
-		if percentile < 0.05:
-			max_manpower = 100000
-		elif percentile < 0.15:
-			max_manpower = 60000
-		elif percentile < 0.55:
-			max_manpower = 30000
-		elif percentile < 0.85:
-			max_manpower = Edge.TERRAIN_STANDARD_MANPOWER
-		elif percentile < 0.90:
-			max_manpower = Edge.TERRAIN_LOW_MANPOWER
+		var max_manpower := (
+			Edge.TERRAIN_STANDARD_MANPOWER
+			if percentile < 0.85
+			else Edge.TERRAIN_LOW_MANPOWER
+		)
 		road["max_manpower"] = max_manpower
 		if bool(road.get("backbone", false)):
 			road["max_manpower"] = maxi(
@@ -1126,7 +1437,8 @@ static func _build_river_transport(
 		samples["positions"],
 		base_roads,
 		river_paths,
-		city_count
+		city_count,
+		map_aspect_ratio
 	)
 	var docks: Array[Dictionary] = dock_result["docks"]
 	var crossings_by_road: Dictionary = dock_result[
@@ -1154,10 +1466,24 @@ static func _build_river_transport(
 			if blocked_crossing_roads.has(road_index):
 				continue
 			var land_road := road.duplicate(true)
-			land_road["kind"] = Edge.Kind.LAND
-			land_road["travel_time_multiplier"] = 1.0
-			land_road["supply_loss_multiplier"] = 1.0
-			land_road["allows_holding"] = true
+			var crosses_open_water := float(
+				land_road.get("land_ratio", 1.0)
+			) < 0.72
+			land_road["kind"] = (
+				Edge.Kind.SEA if crosses_open_water else Edge.Kind.LAND
+			)
+			land_road["max_manpower"] = (
+				Edge.WATER_MANPOWER
+				if crosses_open_water
+				else int(land_road["max_manpower"])
+			)
+			land_road["travel_time_multiplier"] = (
+				RIVER_TRAVEL_TIME_MULTIPLIER if crosses_open_water else 1.0
+			)
+			land_road["supply_loss_multiplier"] = (
+				RIVER_SUPPLY_LOSS_MULTIPLIER if crosses_open_water else 1.0
+			)
+			land_road["allows_holding"] = not crosses_open_water
 			roads.append(land_road)
 			continue
 		crossings.sort_custom(
@@ -1234,7 +1560,7 @@ static func _build_river_transport(
 				"land_ratio": 1.0,
 				"cost": metric_length,
 				"backbone": true,
-				"max_manpower": Edge.MAX_MANPOWER,
+				"max_manpower": Edge.WATER_MANPOWER,
 				"danger": _river_link_danger(
 					image,
 					path,
@@ -1353,9 +1679,7 @@ static func _build_river_path_grid(
 				template,
 				normalized.x
 			)
-			var height := altitude_from_luminance(
-				image.get_pixel(x, y).get_luminance()
-			)
+			var height := packed_altitude(image.get_pixel(x, y))
 			var relief := _pixel_relief(image, x, y)
 			grid.set_point_weight_scale(
 				point,
@@ -1419,7 +1743,8 @@ static func _find_river_docks(
 	city_positions: Array[Vector2],
 	roads: Array[Dictionary],
 	river_paths: Array[Array],
-	city_count: int
+	city_count: int,
+	map_aspect_ratio: float
 ) -> Dictionary:
 	var docks: Array[Dictionary] = []
 	var crossings_by_road := {}
@@ -1455,6 +1780,13 @@ static func _find_river_docks(
 		roads,
 		city_positions
 	)
+	var accepted_positions: Array[Vector2] = []
+	var accepted_per_river := {}
+	# A straight road can intersect a meandering river more than once.  If one
+	# crossing is too close to an existing dock, retaining only the other
+	# crossing would leave a visible landing segment cutting across the river.
+	# Reject that entire road after candidate collection instead.
+	var spacing_rejected_roads := {}
 	for river_id in range(river_paths.size()):
 		var candidates: Array[Dictionary] = candidates_by_river.get(
 			river_id,
@@ -1474,6 +1806,17 @@ static func _find_river_docks(
 				int(candidate["road_index"])
 			):
 				continue
+			var candidate_position: Vector2 = candidate["position"]
+			var overlaps_existing := false
+			for accepted_position in accepted_positions:
+				var spacing_delta := candidate_position - accepted_position
+				spacing_delta.x *= map_aspect_ratio
+				if spacing_delta.length() < RIVER_DOCK_MIN_SPACING:
+					overlaps_existing = true
+					break
+			if overlaps_existing:
+				spacing_rejected_roads[int(candidate["road_index"])] = true
+				continue
 			var pixel_position: Vector2 = candidate[
 				"pixel_position"
 			]
@@ -1488,11 +1831,8 @@ static func _find_river_docks(
 				image.get_height() - 1
 			)
 			candidate["city_id"] = city_count + docks.size()
-			candidate["height"] = altitude_from_luminance(
-				image.get_pixel(
-					x,
-					y
-				).get_luminance()
+			candidate["height"] = packed_altitude(
+				image.get_pixel(x, y)
 			)
 			candidate["relief"] = _local_relief(
 				image,
@@ -1506,6 +1846,10 @@ static func _find_river_docks(
 			candidate["road_a"] = int(road["a"])
 			candidate["road_b"] = int(road["b"])
 			docks.append(candidate)
+			accepted_positions.append(candidate_position)
+			accepted_per_river[river_id] = (
+				int(accepted_per_river.get(river_id, 0)) + 1
+			)
 			if not crossings_by_road.has(
 				int(candidate["road_index"])
 			):
@@ -1518,6 +1862,25 @@ static func _find_river_docks(
 			if not river_groups.has(river_id):
 				river_groups[river_id] = []
 			(river_groups[river_id] as Array).append(candidate)
+	if not spacing_rejected_roads.is_empty():
+		var retained_docks: Array[Dictionary] = []
+		for dock in docks:
+			if spacing_rejected_roads.has(int(dock["road_index"])):
+				continue
+			dock["city_id"] = city_count + retained_docks.size()
+			retained_docks.append(dock)
+		docks = retained_docks
+		crossings_by_road.clear()
+		river_groups.clear()
+		for dock in docks:
+			var road_index := int(dock["road_index"])
+			var river_id := int(dock["river_id"])
+			if not crossings_by_road.has(road_index):
+				crossings_by_road[road_index] = []
+			(crossings_by_road[road_index] as Array).append(dock)
+			if not river_groups.has(river_id):
+				river_groups[river_id] = []
+			(river_groups[river_id] as Array).append(dock)
 	var blocked_crossing_roads := {}
 	for road_index_value in raw_crossings_by_road:
 		var road_index := int(road_index_value)
@@ -1910,8 +2273,8 @@ static func _river_link_danger(
 		var a := path[index]
 		var b := path[index + 1]
 		slope_total += absf(
-			image.get_pixel(a.x, a.y).get_luminance()
-			- image.get_pixel(b.x, b.y).get_luminance()
+			packed_altitude(image.get_pixel(a.x, a.y))
+			- packed_altitude(image.get_pixel(b.x, b.y))
 		)
 		if index + 2 <= last:
 			var first_direction := Vector2(
@@ -1953,10 +2316,10 @@ static func _normalized_map_point(
 	bounds: Rect2i
 ) -> Vector2:
 	return Vector2(
-		(point.x - float(bounds.position.x))
-			/ float(maxi(bounds.size.x - 1, 1)),
-		(point.y - float(bounds.position.y))
-			/ float(maxi(bounds.size.y - 1, 1))
+		(point.x - float(bounds.position.x) + 0.5)
+			/ float(maxi(bounds.size.x, 1)),
+		(point.y - float(bounds.position.y) + 0.5)
+			/ float(maxi(bounds.size.y, 1))
 	)
 
 
@@ -1980,7 +2343,7 @@ static func _pixel_relief(
 	x: int,
 	y: int
 ) -> float:
-	var center := image.get_pixel(x, y).get_luminance()
+	var center := packed_altitude(image.get_pixel(x, y))
 	var result := 0.0
 	for oy in range(-1, 2):
 		for ox in range(-1, 2):
@@ -1992,7 +2355,7 @@ static func _pixel_relief(
 				result,
 				absf(
 					center
-					- image.get_pixel(px, py).get_luminance()
+					- packed_altitude(image.get_pixel(px, py))
 				)
 			)
 	return result
@@ -2012,7 +2375,7 @@ static func _edge_profile(
 		var point := Vector2(from).lerp(Vector2(to), t)
 		var x := clampi(int(round(point.x)), 0, image.get_width() - 1)
 		var y := clampi(int(round(point.y)), 0, image.get_height() - 1)
-		var height := image.get_pixel(x, y).get_luminance()
+		var height := packed_altitude(image.get_pixel(x, y))
 		minimum = minf(minimum, height)
 		maximum = maxf(maximum, height)
 		if mask[y * image.get_width() + x] != 0:

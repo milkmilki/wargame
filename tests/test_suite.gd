@@ -139,6 +139,27 @@ func _test_world_generation() -> void:
 		"真实地图至少应生成一条可通行高险关隘"
 	)
 	var expected_initial_armies := 0
+	var default_city_mask := (
+		load(GameState.DEFAULT_CITY_MASK_PATH) as Texture2D
+	).get_image()
+	var all_land_cities_in_default_mask := true
+	for masked_city in gs.land_cities():
+		var mask_x := clampi(
+			int(masked_city.map_position.x * default_city_mask.get_width()),
+			0, default_city_mask.get_width() - 1
+		)
+		var mask_y := clampi(
+			int(masked_city.map_position.y * default_city_mask.get_height()),
+			0, default_city_mask.get_height() - 1
+		)
+		all_land_cities_in_default_mask = (
+			all_land_cities_in_default_mask
+			and default_city_mask.get_pixel(mask_x, mask_y).get_luminance() >= 0.5
+		)
+	_check(
+		all_land_cities_in_default_mask,
+		"默认地图所有陆城必须位于对齐的中国领土白色蒙版内"
+	)
 	for initial_nation in gs.nations:
 		var initial_frontier := {}
 		for initial_city in gs.cities_of(initial_nation.id):
@@ -808,17 +829,10 @@ func _test_world_generation() -> void:
 			]
 	)
 	_check(
-		_approx(
-			TerrainMapGenerator.altitude_from_luminance(
-				1.0
-			),
-			0.0
-		)
-			and _approx(
-				TerrainMapGenerator
-					.altitude_from_luminance(0.0),
-				1.0
-			)
+		TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 0.0)) == 0.0
+			and TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 1.0)) > 0.99
+			and not TerrainMapGenerator.packed_is_land(Color(1.0, 1.0, 1.0, 0.0))
+			and TerrainMapGenerator.packed_is_land(Color(0.0, 0.0, 0.0, 1.0 / 255.0))
 			and TerrainMapGenerator.settlement_density(
 			0.15,
 			0.02,
@@ -829,20 +843,22 @@ func _test_world_generation() -> void:
 			0.20,
 			Vector2(0.20, 0.20),
 			0.0
-		),
-		"白色必须映射为低地、黑色映射为高地，聚落评分偏好低海拔、中东南和河岸"
+			),
+		"打包纹理Alpha必须独立编码陆海/高程，RGB颜色不得影响地理；聚落仍偏好低地与河岸"
 	)
 	_check(
-		gs.map_source_region_normalized.position.x > 0.0
-		and gs.map_source_region_normalized.position.y > 0.0
-		and gs.map_source_region_normalized.end.x < 1.0
-		and gs.map_source_region_normalized.end.y < 1.0,
-		"底图应裁切到 Alpha 陆地包围盒，排除外围水印区域"
+		gs.map_source_region_normalized
+			== Rect2(0.0, 0.0, 1.0, 1.0)
+		and _approx(
+			gs.map_aspect_ratio,
+			TerrainMapGenerator.FULL_MAP_ASPECT_RATIO
+		),
+		"底图必须保留覆盖中国全境与周边海洋的完整矩形范围"
 	)
 	var province_seen := {}
 	var province_has_sea := false
 	var terrain_geometry := TerrainMapGenerator.build(
-		GameState.TERRAIN_MAP_PATH,
+		GameState.terrain_map_path(),
 		GameState.TERRAIN_CITY_COUNT
 	)
 	var terrain_bounds: Rect2i = terrain_geometry["bounds"]
@@ -865,7 +881,7 @@ func _test_world_generation() -> void:
 		province_ids_valid
 		and province_has_sea
 		and province_seen.size() == GameState.TERRAIN_CITY_COUNT,
-		"陆地掩码 Voronoi 必须为160城各生成独立省份，轮廓外保持透明"
+		"完整矩形省份图必须为160城各生成独立省份，海洋保持透明"
 	)
 	var warp_sample := Vector2(47.0, 83.0)
 	var warped_sample := TerrainMapGenerator.province_metric_point(
@@ -995,6 +1011,31 @@ func _test_world_generation() -> void:
 		if transparent_sea_found:
 			break
 	_check(transparent_sea_found, "省份覆盖层不得遮挡陆地轮廓外的底图")
+	var subject_color_test := 1
+	var overlord_color_test := 0
+	var original_suzerainty := gs.suzerainty.duplicate(true)
+	gs.suzerainty[subject_color_test] = {
+		"overlord_id": overlord_color_test,
+		"civil_war": false,
+	}
+	var expected_subject_color := MapRenderer.paper_nation_color(
+		gs.nations[overlord_color_test].color
+	).darkened(MapRenderer.VASSAL_BRIGHTNESS_STEP)
+	var actual_subject_color := MapRenderer.political_map_color(
+		gs, subject_color_test
+	)
+	_check(
+		actual_subject_color.is_equal_approx(expected_subject_color),
+		"政治疆域中藩王必须继承宗主色并降低约15%明度"
+	)
+	var political_command_base := MapRenderer.political_map_color(gs, 0)
+	var command_marker := MapRenderer.command_marker_color(gs, 0)
+	_check(
+		command_marker.s > political_command_base.s
+		and command_marker.v < political_command_base.v,
+		"军旗与攻势箭头必须比政治覆色饱和度更高且明度更低"
+	)
+	gs.suzerainty = original_suzerainty
 	var occupied_test_city := 0
 	var original_test_owner := gs.cities[occupied_test_city].owner_nation
 	gs.cities[occupied_test_city].owner_nation = (
@@ -1076,21 +1117,21 @@ func _test_world_generation() -> void:
 		0: 0,
 		Edge.TERRAIN_LOW_MANPOWER: 0,
 		Edge.TERRAIN_STANDARD_MANPOWER: 0,
-		30000: 0,
-		60000: 0,
-		100000: 0,
 	}
 	var degrees := {}
 	var longest_edge := 0.0
 	var roads_by_relief: Array[Edge] = []
 	for edge in gs.edges:
-		if edge.kind != Edge.Kind.RIVER:
+		if (
+			edge.max_manpower > 0
+			and edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
+		):
 			roads_by_relief.append(edge)
 	roads_by_relief.sort_custom(func(a: Edge, b: Edge) -> bool:
 		return a.max_height_difference < b.max_height_difference
 	)
 	for edge in gs.edges:
-		if edge.kind != Edge.Kind.RIVER:
+		if edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]:
 			road_counts[edge.max_manpower] = (
 				int(road_counts.get(edge.max_manpower, 0)) + 1
 			)
@@ -1101,7 +1142,10 @@ func _test_world_generation() -> void:
 		)
 		degrees[edge.city_a] = int(degrees.get(edge.city_a, 0)) + 1
 		degrees[edge.city_b] = int(degrees.get(edge.city_b, 0)) + 1
-		if edge.kind != Edge.Kind.RIVER:
+		if (
+			edge.max_manpower > 0
+			and edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
+		):
 			var delta := (
 				gs.cities[edge.city_a].map_position
 				- gs.cities[edge.city_b].map_position
@@ -1113,7 +1157,7 @@ func _test_world_generation() -> void:
 		var edge_a: Edge = gs.edges[edge_a_index]
 		if (
 			edge_a.max_manpower <= 0
-			or edge_a.kind == Edge.Kind.RIVER
+			or edge_a.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
 		):
 			continue
 		for edge_b_index in range(
@@ -1123,7 +1167,7 @@ func _test_world_generation() -> void:
 			var edge_b: Edge = gs.edges[edge_b_index]
 			if (
 				edge_b.max_manpower <= 0
-				or edge_b.kind == Edge.Kind.RIVER
+				or edge_b.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
 				or edge_a.city_a in [
 					edge_b.city_a,
 					edge_b.city_b,
@@ -1153,17 +1197,22 @@ func _test_world_generation() -> void:
 	)
 	_check(
 		int(road_counts[Edge.TERRAIN_LOW_MANPOWER]) > 0
-		and int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER]) > 0
-		and int(road_counts[30000]) > 0
-		and int(road_counts[60000]) > 0
-		and int(road_counts[100000]) > 0,
-		"正容量道路应形成 10000~100000 人的五个等级，分布=%s"
+		and int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER]) > 0,
+		"陆路正容量只能形成10000/20000两个等级，分布=%s"
 			% str(road_counts)
 	)
+	var production_capacities_valid := true
+	for production_edge in gs.edges:
+		production_capacities_valid = (
+			production_capacities_valid
+			and Edge.production_capacity_valid(
+				production_edge.kind,
+				production_edge.max_manpower
+			)
+		)
 	_check(
-		int(road_counts[100000])
-			< int(ceil(float(roads_by_relief.size()) * 0.10)),
-		"十万人平原大道必须保持稀少，分布=%s" % str(road_counts)
+		production_capacities_valid,
+		"正式地图容量只允许陆路0/10000/20000与水路50000"
 	)
 	var low_relief_average := 0.0
 	var high_relief_average := 0.0
@@ -1232,6 +1281,7 @@ func _test_river_transport() -> void:
 	var docks: Array[City] = []
 	var landing_edges: Array[Edge] = []
 	var river_edges: Array[Edge] = []
+	var sea_edges: Array[Edge] = []
 	for city in gs.cities:
 		if city.is_dock:
 			docks.append(city)
@@ -1240,6 +1290,8 @@ func _test_river_transport() -> void:
 			landing_edges.append(edge)
 		elif edge.kind == Edge.Kind.RIVER:
 			river_edges.append(edge)
+		elif edge.kind == Edge.Kind.SEA:
+			sea_edges.append(edge)
 	_check(
 		gs.river_paths.size() == 2
 			and docks.size() >= 4
@@ -1287,16 +1339,16 @@ func _test_river_transport() -> void:
 		)
 		river_shapes_valid = (
 			river_shapes_valid
-			and river_path[-1].x - river_path[0].x >= 0.65
+			and river_path[-1].x - river_path[0].x >= 0.40
 			and maximum_backtrack <= 0.08
 		)
 	_check(
 		river_shapes_valid
 			and river_mean_y.size() == 2
-				and river_mean_y[0] >= 0.50
-				and river_mean_y[0] <= 0.60
-				and river_mean_y[0] + 0.06 < river_mean_y[1],
-			"黄河必须下压到0.50～0.60，且两河西向东、南北分离、无明显折返：mean_y=%s"
+					and river_mean_y[0] >= 0.48
+					and river_mean_y[0] <= 0.56
+					and river_mean_y[0] + 0.045 < river_mean_y[1],
+				"完整矩形坐标下黄河应位于0.48～0.56，且两河西向东、南北分离、无明显折返：mean_y=%s"
 			% str(river_mean_y)
 	)
 	var docks_are_full_cities := true
@@ -1331,7 +1383,7 @@ func _test_river_transport() -> void:
 	for edge in gs.edges:
 		if (
 			edge.max_manpower <= 0
-			or edge.kind == Edge.Kind.RIVER
+			or edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
 		):
 			continue
 		var road_start := gs.cities[edge.city_a].map_position
@@ -1378,7 +1430,7 @@ func _test_river_transport() -> void:
 			river_valid
 			and gs.cities[edge.city_a].is_dock
 			and gs.cities[edge.city_b].is_dock
-			and edge.max_manpower == Edge.MAX_MANPOWER
+			and edge.max_manpower == Edge.WATER_MANPOWER
 			and edge.travel_time_multiplier < 1.0
 			and edge.supply_loss_multiplier < 1.0
 			and not edge.allows_holding
@@ -1387,7 +1439,19 @@ func _test_river_transport() -> void:
 		river_danger_bands[int(round(edge.danger * 100.0))] = true
 	_check(
 		river_valid,
-		"码头间水路必须大容量、快速、低粮损、有水文危险且不可驻边"
+		"码头间水路必须固定50000容量、快速、低粮损、有水文危险且不可驻边"
+	)
+	var sea_edges_valid := true
+	for sea_edge in sea_edges:
+		sea_edges_valid = (
+			sea_edges_valid
+			and sea_edge.max_manpower == Edge.WATER_MANPOWER
+			and not sea_edge.allows_holding
+			and sea_edge.land_ratio < 0.72
+		)
+	_check(
+		sea_edges_valid,
+		"真实DEM跨海连接必须是独立SEA航道，固定50000容量且禁止驻边"
 	)
 	_check(
 		river_danger_bands.size() > 1,

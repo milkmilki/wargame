@@ -2,6 +2,7 @@
 .godot/
 /android/
 *.import
+!assets/terrain/china_natural_earth2_2048.png.import
 
 # Local Python/tooling state
 .venv/
@@ -21,4 +22,6 @@
 
 # Terrain DEM regeneration cache (reproducible via scripts/tools; not a runtime dep)
 assets/terrain/*_dem_meters.npz
+assets/terrain/source/blue_marble/
+assets/terrain/source/natural_earth_admin/
 assets/terrain/source/natural_earth/

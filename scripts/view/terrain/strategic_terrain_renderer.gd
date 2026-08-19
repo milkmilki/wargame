@@ -14,6 +14,8 @@ var world_size := Vector2(64.0, 40.0)
 var height_scale: float = 7.0
 var height_steps: int = 24
 var smoothing_passes: int = 2
+const SEA_FLOOR_HEIGHT: float = -0.72
+const WATER_SURFACE_HEIGHT: float = -0.10
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -99,7 +101,7 @@ func generate_from_height_texture(
 		generation_finished.emit()
 		return
 	_height_samples.resize(resolution.x * resolution.y)
-	_height_samples.fill(NAN)
+	_height_samples.fill(SEA_FLOOR_HEIGHT)
 	_land_cell_count = 0
 	var image_size := Vector2(image.get_size())
 	for z in range(resolution.y):
@@ -123,17 +125,12 @@ func generate_from_height_texture(
 				)
 			)
 			var pixel := image.get_pixelv(pixel_position)
-			var luminance := pixel.get_luminance()
-			if (
-				pixel.a < alpha_threshold
-				or luminance <= luma_threshold
-			):
-				continue
-			var altitude := (
-				TerrainMapGenerator.altitude_from_luminance(
-					luminance
+			if not TerrainMapGenerator.packed_is_land(pixel):
+				_height_samples[z * resolution.x + x] = (
+					SEA_FLOOR_HEIGHT
 				)
-			)
+				continue
+			var altitude := TerrainMapGenerator.packed_altitude(pixel)
 			var discrete_height := clampi(
 				int(round(altitude * float(height_steps))),
 				0,
@@ -227,6 +224,10 @@ func height_at_map_position(map_position: Vector2) -> float:
 	return 0.0
 
 
+func is_water_at_map_position(map_position: Vector2) -> bool:
+	return height_at_map_position(map_position) < WATER_SURFACE_HEIGHT
+
+
 func _reset() -> void:
 	_ensure_render_nodes()
 	_mesh_instance.mesh = null
@@ -258,13 +259,10 @@ func _build_surface_mesh() -> ArrayMesh:
 				float(x) / float(resolution.x - 1),
 				float(z) / float(resolution.y - 1)
 			)
-			var height := _sample_height(x, z)
 			surface_tool.set_uv(uv)
 			surface_tool.add_vertex(Vector3(
 				(uv.x - 0.5) * world_size.x,
-				_mesh_vertex_height(x, z)
-					if is_nan(height)
-					else height,
+				_sample_height(x, z),
 				(uv.y - 0.5) * world_size.y
 			))
 	for z in range(resolution.y - 1):
@@ -281,25 +279,6 @@ func _build_surface_mesh() -> ArrayMesh:
 			surface_tool.add_index(i01)
 	surface_tool.generate_normals()
 	return surface_tool.commit()
-
-
-func _mesh_vertex_height(x: int, z: int) -> float:
-	# Sea vertices remain in the rectangular mesh. Near the coast they inherit
-	# the closest land height so the high-resolution alpha mask cuts a vertical
-	# seam instead of exposing low-resolution grid steps.
-	for radius in range(1, 5):
-		for sample_z in range(
-			maxi(z - radius, 0),
-			mini(z + radius + 1, resolution.y)
-		):
-			for sample_x in range(
-				maxi(x - radius, 0),
-				mini(x + radius + 1, resolution.x)
-			):
-				var nearby := _sample_height(sample_x, sample_z)
-				if not is_nan(nearby):
-					return nearby
-	return 0.0
 
 
 func _sample_height(x: int, z: int) -> float:
@@ -321,7 +300,7 @@ func _smooth_height_samples() -> void:
 		for z in range(resolution.y):
 			for x in range(resolution.x):
 				var index := z * resolution.x + x
-				if is_nan(source[index]):
+				if source[index] < WATER_SURFACE_HEIGHT:
 					continue
 				var total := source[index] * 4.0
 				var weight := 4.0
@@ -347,7 +326,7 @@ func _smooth_height_samples() -> void:
 					var nearby := source[
 						sample_z * resolution.x + sample_x
 					]
-					if is_nan(nearby):
+					if nearby < WATER_SURFACE_HEIGHT:
 						continue
 					var sample_weight := (
 						1.0

@@ -40,9 +40,14 @@ const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
 const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
 const FOOD_HUB_MIN_OUTPUT: int = 1600
 const MANPOWER_HUB_MIN_OUTPUT: int = 80
-const TERRAIN_MAP_PATH := (
-	"res://assets/terrain/china_copernicus_glo90_2048.png"
+const MAP_SOURCE_MANIFEST := MapSource.DEFAULT_MANIFEST
+const DEFAULT_CITY_MASK_PATH := (
+	"res://assets/terrain/default_china_city_mask.png"
 )
+
+
+static func terrain_map_path() -> String:
+	return MapSource.texture_path(MAP_SOURCE_MANIFEST)
 
 enum DiplomaticRelation {
 	NEUTRAL,
@@ -126,6 +131,7 @@ var suzerainty: Dictionary = {}
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
+var city_generation_mask_path: String = ""
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
@@ -144,7 +150,8 @@ var winner: int = -1                        ## -1 表示未结束
 func generate_world(
 	world_seed: int = 12345,
 	nation_count: int = NATION_COUNT,
-	terrain_city_count: int = TERRAIN_CITY_COUNT
+	terrain_city_count: int = TERRAIN_CITY_COUNT,
+	city_mask_path: String = DEFAULT_CITY_MASK_PATH
 ) -> void:
 	assert(
 		nation_count > 0
@@ -153,19 +160,30 @@ func generate_world(
 	)
 	_reset_world(world_seed)
 	uses_heightmap = true
+	city_generation_mask_path = city_mask_path.strip_edges()
 	_generate_nations(
 		DiplomaticRelation.NEUTRAL,
 		nation_count
 	)
 	var terrain := TerrainMapGenerator.build(
-		TERRAIN_MAP_PATH,
-		terrain_city_count
+		terrain_map_path(),
+		terrain_city_count,
+		city_generation_mask_path
 	)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
 	_generate_terrain_docks(terrain)
 	_generate_terrain_edges(terrain)
-	_repair_initial_nation_connectivity()
+	_connect_initial_nation_components()
+	# 正式地图从第一帧起就使用与路网面板相同的默认计算规则；
+	# 初始化时保护各国内部连通骨架；这不是运行时变更，revision 最终归零。
+	var initial_road_settings := default_road_tuning()
+	initial_road_settings["preserve_initial_owner_connectivity"] = true
+	var initial_road_result := recalculate_road_network(
+		initial_road_settings
+	)
+	assert(bool(initial_road_result.get("ok", false)))
+	road_network_revision = 0
 	_initialize_recognized_city_owners()
 	_initialize_resource_hubs()
 	_initialize_terrain_development()
@@ -217,6 +235,200 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	assert(_battle_group_structure_valid(), "网格战团结构必须合法")
 
 
+func generate_from_map_definition(
+	definition: Dictionary,
+	world_seed: int = 12345
+) -> void:
+	var validation_error := MapDefinition.validate(definition)
+	assert(validation_error.is_empty(), validation_error)
+	_reset_world(world_seed)
+	uses_heightmap = true
+	city_generation_mask_path = str(definition.get(
+		"city_generation_mask_path", ""
+	))
+	map_aspect_ratio = float(definition.get(
+		"map_aspect_ratio", TerrainMapGenerator.FULL_MAP_ASPECT_RATIO
+	))
+	var source_region: Array = definition.get(
+		"source_region", [0.0, 0.0, 1.0, 1.0]
+	)
+	map_source_region_normalized = Rect2(
+		float(source_region[0]), float(source_region[1]),
+		float(source_region[2]), float(source_region[3])
+	)
+	_generate_nations(
+		DiplomaticRelation.NEUTRAL,
+		int(definition["nation_count"])
+	)
+	var city_records: Array = definition["cities"]
+	for record_value in city_records:
+		var record: Dictionary = record_value
+		var city := City.new()
+		city.id = int(record["id"])
+		var coord: Array = record.get("coord", [0, 0])
+		city.coord = Vector2i(int(coord[0]), int(coord[1]))
+		var position: Array = record["map_position"]
+		city.map_position = Vector2(float(position[0]), float(position[1]))
+		city.terrain_height = float(record.get("terrain_height", 0.0))
+		city.terrain_relief = float(record.get("terrain_relief", 0.0))
+		city.terrain_output_multiplier = float(record.get(
+			"terrain_output_multiplier", 1.0
+		))
+		city.is_dock = bool(record.get("is_dock", false))
+		city.owner_nation = int(record["owner_nation"])
+		city.fort_strength = int(record.get("fort_strength", 10))
+		city.fort_strength_max = int(record.get("fort_strength_max", 10))
+		city.manpower_per_month = int(record.get("manpower_per_month", 10))
+		city.gold_per_month = int(record.get("gold_per_month", 1))
+		city.food_per_half_year = int(record.get("food_per_half_year", 100))
+		city.is_food_hub = bool(record.get("is_food_hub", false))
+		city.is_manpower_hub = bool(record.get("is_manpower_hub", false))
+		city.is_plain_city = bool(record.get("is_plain_city", false))
+		city.is_port_market = bool(record.get("is_port_market", false))
+		city.is_crossroads = bool(record.get("is_crossroads", false))
+		city.development_gold_multiplier = float(record.get(
+			"development_gold_multiplier", 1.0
+		))
+		city.development_food_multiplier = float(record.get(
+			"development_food_multiplier", 1.0
+		))
+		city.food_storage = int(record.get("food_storage", 0))
+		cities.append(city)
+		adjacency[city.id] = [] as Array[int]
+	var edge_records: Array = definition["edges"]
+	for record_value in edge_records:
+		var record: Dictionary = record_value
+		var edge := Edge.new()
+		edge.city_a = mini(int(record["city_a"]), int(record["city_b"]))
+		edge.city_b = maxi(int(record["city_a"]), int(record["city_b"]))
+		edge.kind = int(record.get("kind", Edge.Kind.LAND))
+		edge.max_manpower = int(record.get("max_manpower", 0))
+		edge.base_max_manpower = int(record.get("base_max_manpower", edge.max_manpower))
+		edge.distance = maxi(int(record.get("distance", 1)), 1)
+		edge.danger = clampf(float(record.get("danger", 0.0)), 0.0, 1.0)
+		edge.travel_time_multiplier = maxf(float(record.get("travel_time_multiplier", 1.0)), 0.01)
+		edge.supply_loss_multiplier = maxf(float(record.get("supply_loss_multiplier", 1.0)), 0.0)
+		edge.allows_holding = bool(record.get("allows_holding", true))
+		edge.max_height_difference = maxf(float(record.get("max_height_difference", 0.0)), 0.0)
+		edge.land_ratio = clampf(float(record.get("land_ratio", 1.0)), 0.0, 1.0)
+		edge.is_backbone = bool(record.get("is_backbone", false))
+		edges.append(edge)
+		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
+		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
+	for city_id in adjacency:
+		(adjacency[city_id] as Array[int]).sort()
+	var province_size: Array = definition.get("province_map_size", [0, 0])
+	province_map_size = Vector2i(int(province_size[0]), int(province_size[1]))
+	province_ids = PackedInt32Array(definition.get("province_ids", []))
+	river_paths.clear()
+	for river_value in definition.get("river_paths", []):
+		var river := PackedVector2Array()
+		for point_value in river_value:
+			var point: Array = point_value
+			river.append(Vector2(float(point[0]), float(point[1])))
+		river_paths.append(river)
+	_initialize_recognized_city_owners()
+	_initialize_manpower_pools()
+	_initialize_capitals_and_warehouses()
+	_generate_armies()
+	refresh_derived()
+
+
+func apply_city_editor_changes(
+	city_id: int,
+	changes: Dictionary
+) -> Dictionary:
+	if city_id < 0 or city_id >= cities.size():
+		return {"ok": false, "error": "城市不存在。"}
+	var city := cities[city_id]
+	var new_position := Vector2(
+		clampf(float(changes.get("map_x", city.map_position.x)), 0.0, 1.0),
+		clampf(float(changes.get("map_y", city.map_position.y)), 0.0, 1.0)
+	)
+	var position_changed := new_position != city.map_position
+	if (
+		position_changed
+		and (city.is_dock or not TerrainMapGenerator.is_land_map_position(
+			terrain_map_path(), new_position
+		))
+	):
+		return {"ok": false, "error": "陆地城市不能移动到海洋，码头位置暂不可手动移动。"}
+	city.map_position = new_position
+	var owner := clampi(int(changes.get("owner_nation", city.owner_nation)), 0, nations.size() - 1)
+	var owner_changed := owner != city.owner_nation
+	if (
+		owner_changed
+		and not city.is_dock
+		and land_cities_of(city.owner_nation).size() <= 1
+	):
+		return {"ok": false, "error": "不能转移一个国家的最后一座陆地城市。"}
+	city.owner_nation = owner
+	city.fort_strength_max = maxi(int(changes.get("fort_strength_max", city.fort_strength_max)), 0)
+	city.fort_strength = clampi(int(changes.get("fort_strength", city.fort_strength)), 0, city.fort_strength_max)
+	city.manpower_per_month = maxi(int(changes.get("manpower_per_month", city.manpower_per_month)), 0)
+	city.gold_per_month = maxi(int(changes.get("gold_per_month", city.gold_per_month)), 0)
+	city.food_per_half_year = maxi(int(changes.get("food_per_half_year", city.food_per_half_year)), 0)
+	city.food_storage = maxi(int(changes.get("food_storage", city.food_storage)), 0)
+	city.terrain_height = clampf(float(changes.get("terrain_height", city.terrain_height)), 0.0, 1.0)
+	city.terrain_relief = clampf(float(changes.get("terrain_relief", city.terrain_relief)), 0.0, 1.0)
+	city.terrain_output_multiplier = clampf(float(changes.get("terrain_output_multiplier", city.terrain_output_multiplier)), 0.0, 4.0)
+	city.development_gold_multiplier = clampf(float(changes.get("development_gold_multiplier", city.development_gold_multiplier)), 0.0, 10.0)
+	city.development_food_multiplier = clampf(float(changes.get("development_food_multiplier", city.development_food_multiplier)), 0.0, 10.0)
+	city.is_food_hub = bool(changes.get("is_food_hub", city.is_food_hub))
+	city.is_manpower_hub = bool(changes.get("is_manpower_hub", city.is_manpower_hub))
+	city.is_plain_city = bool(changes.get("is_plain_city", city.is_plain_city))
+	city.is_port_market = bool(changes.get("is_port_market", city.is_port_market))
+	city.is_crossroads = bool(changes.get("is_crossroads", city.is_crossroads))
+	if owner_changed:
+		recognized_city_owners[city_id] = owner
+		city.occupation_sponsor_nation = -1
+		ownership_revision += 1
+	if position_changed:
+		var land_positions: Array[Vector2] = []
+		for land_city in land_cities():
+			land_positions.append(land_city.map_position)
+		var provinces := TerrainMapGenerator.rebuild_provinces(
+			terrain_map_path(), land_positions, edges, river_paths
+		)
+		province_map_size = provinces["size"]
+		province_ids = provinces["ids"]
+		ownership_revision += 1
+		road_network_revision += 1
+	refresh_derived()
+	return {"ok": true, "city_id": city_id}
+
+
+func apply_edge_editor_changes(
+	city_a: int,
+	city_b: int,
+	changes: Dictionary
+) -> Dictionary:
+	var edge := edge_of(city_a, city_b)
+	if edge == null:
+		return {"ok": false, "error": "道路不存在。"}
+	edge.kind = clampi(int(changes.get("kind", edge.kind)), Edge.Kind.LAND, Edge.Kind.SEA)
+	var requested_capacity := int(changes.get("max_manpower", edge.max_manpower))
+	edge.max_manpower = (
+		Edge.WATER_MANPOWER
+		if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
+		else Edge.quantize_land_capacity(requested_capacity)
+	)
+	edge.base_max_manpower = edge.max_manpower
+	edge.distance = maxi(int(changes.get("distance", edge.distance)), 1)
+	edge.danger = clampf(float(changes.get("danger", edge.danger)), 0.0, 1.0)
+	edge.travel_time_multiplier = maxf(float(changes.get("travel_time_multiplier", edge.travel_time_multiplier)), 0.01)
+	edge.supply_loss_multiplier = maxf(float(changes.get("supply_loss_multiplier", edge.supply_loss_multiplier)), 0.0)
+	edge.allows_holding = bool(changes.get("allows_holding", edge.allows_holding))
+	edge.max_height_difference = clampf(float(changes.get("max_height_difference", edge.max_height_difference)), 0.0, 1.0)
+	edge.land_ratio = clampf(float(changes.get("land_ratio", edge.land_ratio)), 0.0, 1.0)
+	edge.is_backbone = bool(changes.get("is_backbone", edge.is_backbone))
+	if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
+		edge.allows_holding = false
+	road_network_revision += 1
+	return {"ok": true, "city_a": edge.city_a, "city_b": edge.city_b}
+
+
 func _reset_world(world_seed: int) -> void:
 	rng.seed = world_seed
 	cities.clear()
@@ -240,6 +452,7 @@ func _reset_world(world_seed: int) -> void:
 	diplomatic_history.clear()
 	war_objectives.clear()
 	suzerainty.clear()
+	city_generation_mask_path = ""
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
 	river_paths.clear()
@@ -692,7 +905,7 @@ func _initialize_terrain_development() -> void:
 			var edge := edge_of(city.id, neighbor)
 			if edge == null or edge.max_manpower <= 0:
 				continue
-			if edge.kind != Edge.Kind.RIVER:
+			if edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]:
 				road_count += 1
 			if cities[neighbor].is_dock:
 				city.is_port_market = true
@@ -985,12 +1198,25 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 		)
 		edge.max_height_difference = float(road["height_difference"])
 		edge.max_manpower = int(road["max_manpower"])
+		if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
+			edge.max_manpower = Edge.WATER_MANPOWER
+		else:
+			edge.max_manpower = Edge.quantize_land_capacity(
+				edge.max_manpower
+			)
 		edge.land_ratio = float(road.get("land_ratio", 1.0))
 		edge.is_backbone = bool(road.get("backbone", false))
 		edge.base_max_manpower = int(road.get(
 			"base_max_manpower",
-			maxi(edge.max_manpower, Edge.MIN_MANPOWER)
+			maxi(edge.max_manpower, Edge.TERRAIN_LOW_MANPOWER)
 		))
+		edge.base_max_manpower = (
+			Edge.WATER_MANPOWER
+			if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
+			else Edge.quantize_land_capacity(
+				maxf(edge.base_max_manpower, Edge.TERRAIN_LOW_MANPOWER)
+			)
+		)
 		edges.append(edge)
 		edge_lookup[_edge_key(lo, hi)] = edge
 		(adjacency[lo] as Array[int]).append(hi)
@@ -1064,6 +1290,13 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 		3.0
 	)
 	var protected_keys := {}
+	if bool(settings.get(
+		"preserve_initial_owner_connectivity", false
+	)):
+		protected_keys.merge(
+			_initial_owner_connectivity_edge_keys(),
+			true
+		)
 	for army in armies:
 		if (
 			army.size > 0
@@ -1143,6 +1376,9 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 			blocked_count += 1
 			continue
 		if protected_keys.has(key):
+			edge.max_manpower = Edge.quantize_land_capacity(
+				edge.max_manpower
+			)
 			open_count += 1
 			total_capacity += edge.max_manpower
 			continue
@@ -1160,10 +1396,7 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 			* capacity_multiplier
 			* (1.0 - terrain_penalty * difficulty)
 		)
-		edge.max_manpower = maxi(
-			int(round(capacity / 1000.0)) * 1000,
-			Edge.MIN_MANPOWER
-		)
+		edge.max_manpower = Edge.quantize_land_capacity(capacity)
 		if edge.is_backbone:
 			edge.max_manpower = maxi(
 				edge.max_manpower,
@@ -1231,6 +1464,37 @@ func _initial_component_land_count(component: Array) -> int:
 	for city_value in component:
 		if not cities[int(city_value)].is_dock:
 			result += 1
+	return result
+
+
+func _initial_owner_connectivity_edge_keys() -> Dictionary:
+	var result := {}
+	for nation in nations:
+		var owned := cities_of(nation.id)
+		if owned.is_empty():
+			continue
+		var visited := {owned[0].id: true}
+		var queue: Array[int] = [owned[0].id]
+		var cursor := 0
+		while cursor < queue.size():
+			var city_id := queue[cursor]
+			cursor += 1
+			for neighbor in neighbors(city_id):
+				var edge := edge_of(city_id, neighbor)
+				if (
+					visited.has(neighbor)
+					or cities[neighbor].owner_nation != nation.id
+					or edge == null
+					or edge.max_manpower <= 0
+				):
+					continue
+				visited[neighbor] = true
+				queue.append(neighbor)
+				result[_edge_key(city_id, neighbor)] = true
+		assert(
+			visited.size() == owned.size(),
+			"初始化路网重算前国%d必须已连通" % nation.id
+		)
 	return result
 
 
@@ -1329,6 +1593,94 @@ func _repair_initial_nation_connectivity() -> void:
 			"初始国%d领土必须经合法交通图连通"
 				% nation.id
 		)
+
+
+## Keep the exact spatial nation quotas. If the final real-elevation graph cuts
+## a nation into components, connect its nearest components with an explicit
+## backbone route instead of transferring cities to another nation.
+func _connect_initial_nation_components() -> void:
+	for nation in nations:
+		var guard := cities.size()
+		while guard > 0:
+			guard -= 1
+			var components := _initial_owner_components(nation.id)
+			if components.size() <= 1:
+				break
+			var best_a := -1
+			var best_b := -1
+			var best_distance := INF
+			for city_a_value in components[0]:
+				var city_a := int(city_a_value)
+				for component_index in range(1, components.size()):
+					for city_b_value in components[component_index]:
+						var city_b := int(city_b_value)
+						var delta := (
+							cities[city_a].map_position
+							- cities[city_b].map_position
+						)
+						delta.x *= map_aspect_ratio
+						var distance := delta.length_squared()
+						if (
+							distance < best_distance
+							or (
+								is_equal_approx(distance, best_distance)
+								and edge_key(city_a, city_b)
+									< edge_key(best_a, best_b)
+							)
+						):
+							best_distance = distance
+							best_a = city_a
+							best_b = city_b
+			assert(best_a >= 0 and best_b >= 0)
+			_add_initial_component_connector(best_a, best_b)
+		assert(guard > 0, "初始国家交通组件连接必须收敛")
+
+
+func _add_initial_component_connector(city_a: int, city_b: int) -> void:
+	var profile := TerrainMapGenerator.map_segment_profile(
+		terrain_map_path(),
+		cities[city_a].map_position,
+		cities[city_b].map_position
+	)
+	var land_ratio := float(profile["land_ratio"])
+	var edge := edge_of(city_a, city_b)
+	var is_new := edge == null
+	if edge == null:
+		edge = Edge.new()
+		edge.city_a = mini(city_a, city_b)
+		edge.city_b = maxi(city_a, city_b)
+	edge.kind = Edge.Kind.LAND if land_ratio >= 0.72 else Edge.Kind.SEA
+	edge.max_manpower = (
+		Edge.TERRAIN_STANDARD_MANPOWER
+		if edge.kind == Edge.Kind.LAND
+		else Edge.WATER_MANPOWER
+	)
+	edge.base_max_manpower = edge.max_manpower
+	edge.land_ratio = land_ratio
+	edge.max_height_difference = float(profile["height_difference"])
+	edge.danger = clampf(
+		edge.max_height_difference * 0.65 + (1.0 - land_ratio) * 0.35,
+		0.0, 1.0
+	)
+	edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
+		TerrainMapGenerator.metric_length_between(
+			cities[city_a].map_position,
+			cities[city_b].map_position,
+			map_aspect_ratio
+		)
+	)
+	edge.is_backbone = true
+	if edge.kind == Edge.Kind.SEA:
+		edge.travel_time_multiplier = TerrainMapGenerator.RIVER_TRAVEL_TIME_MULTIPLIER
+		edge.supply_loss_multiplier = TerrainMapGenerator.RIVER_SUPPLY_LOSS_MULTIPLIER
+		edge.allows_holding = false
+	if is_new:
+		edges.append(edge)
+		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
+		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
+		(adjacency[edge.city_a] as Array[int]).sort()
+		(adjacency[edge.city_b] as Array[int]).sort()
 
 
 func _add_edge(a: int, b: int) -> void:

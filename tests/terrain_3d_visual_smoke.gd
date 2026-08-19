@@ -17,6 +17,7 @@ func _run() -> void:
 	)
 	var state := GameState.new()
 	state.generate_world(12345)
+	_prepare_frontend_showcase(state)
 	var simulation := Simulation.new()
 	root.add_child(simulation)
 	simulation.setup(state)
@@ -87,3 +88,54 @@ func _run() -> void:
 	overlay.free()
 	simulation.free()
 	quit(0)
+
+
+func _prepare_frontend_showcase(state: GameState) -> void:
+	# Cover every high-priority battle-map artifact in one deterministic frame:
+	# campaign arrows, field battle, siege, weak morale and starvation.
+	var frontier_edges: Array[Edge] = []
+	for edge in state.edges:
+		if (
+			edge.max_manpower > 0
+			and state.cities[edge.city_a].owner_nation
+				!= state.cities[edge.city_b].owner_nation
+		):
+			frontier_edges.append(edge)
+			if frontier_edges.size() >= 3:
+				break
+	if frontier_edges.is_empty():
+		return
+	var first := frontier_edges[0]
+	var target := first.city_b
+	var origins: Array[int] = [first.city_a]
+	if frontier_edges.size() > 1:
+		origins.append(frontier_edges[1].city_a)
+	state.add_campaign_visual_event(
+		state.cities[first.city_a].owner_nation,
+		target, origins, 1, Simulation.CAMPAIGN_ARROW_DURATION_DAYS
+	)
+	if frontier_edges.size() > 2:
+		var second := frontier_edges[2]
+		state.add_campaign_visual_event(
+			state.cities[second.city_a].owner_nation,
+			second.city_b, [second.city_a], 2,
+			Simulation.CAMPAIGN_ARROW_DURATION_DAYS
+		)
+	var field := state.new_battle(Battle.Kind.FIELD)
+	field.edge = first
+	field.contact_dist_a = float(first.distance) * 0.52
+	field.round_no = 7
+	var siege_edge := (
+		frontier_edges[-1] if frontier_edges.size() > 1 else first
+	)
+	var siege := state.new_battle(Battle.Kind.SIEGE)
+	siege.city = state.cities[siege_edge.city_b]
+	siege.edge = siege_edge
+	siege.siege_progress = Combat.SIEGE_PROGRESS_REQUIRED * 0.63
+	for index in range(mini(state.armies.size(), 5)):
+		var army := state.armies[index]
+		if index == 0:
+			army.starving = true
+			army.supply_ratio = 0.12
+		elif index == 1:
+			army.morale = army.max_morale * 0.42

@@ -41,7 +41,7 @@ const NATION_WINDOW_FOOTER_HEIGHT: float = 22.0
 const NATION_WINDOW_MARGIN: float = 18.0
 const NATION_TREE_INDENT: float = 14.0
 const NATION_TREE_TOGGLE_SIZE: float = 14.0
-const TERRAIN_BACKGROUND_PATH := GameState.TERRAIN_MAP_PATH
+const TERRAIN_BACKGROUND_PATH := MapSource.DEFAULT_MANIFEST
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
 const PAPER_COLOR := Color(0.73, 0.61, 0.42)
@@ -51,6 +51,11 @@ const INK_COLOR := Color(0.105, 0.085, 0.055)
 const COMMAND_GREEN := Color(0.16, 0.20, 0.14)
 const ACCENT_RED := Color(0.55, 0.12, 0.10)
 const ACCENT_GOLD := Color(0.88, 0.67, 0.22)
+const POLITICAL_MAP_DEFAULT_STRENGTH: float = 1.0
+const VASSAL_BRIGHTNESS_STEP: float = 0.15
+const COMMAND_COLOR_SATURATION_SCALE: float = 1.55
+const COMMAND_COLOR_SATURATION_FLOOR: float = 0.42
+const COMMAND_COLOR_VALUE_SCALE: float = 0.66
 
 enum FormationIcon {
 	INFANTRY,
@@ -73,6 +78,7 @@ var _side_margin: float = BASE_SIDE_MARGIN
 var _font: Font
 var _terrain_texture: Texture2D
 var _province_texture: ImageTexture
+var _province_strength: float = POLITICAL_MAP_DEFAULT_STRENGTH
 var _province_boundary_segments := PackedVector2Array()
 var _coast_segments := PackedVector2Array()
 var _nation_boundary_segments := PackedVector2Array()
@@ -177,7 +183,9 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 
 func _ready() -> void:
 	_font = create_ui_font()
-	_terrain_texture = load(TERRAIN_BACKGROUND_PATH) as Texture2D
+	_terrain_texture = load(
+		MapSource.texture_path(TERRAIN_BACKGROUND_PATH)
+	) as Texture2D
 	_create_army_icon_scale_control()
 
 
@@ -1434,9 +1442,11 @@ func _draw() -> void:
 		_ensure_province_visual_cache()
 		_draw_province_fills()
 		_draw_rivers()
-		_draw_province_boundaries()
 		_draw_edges()
 		_draw_selection_highlight()
+		# Political divisions form one multiply-like line layer above the map,
+		# terrain and transport network, while counters remain the topmost layer.
+		_draw_province_boundaries()
 		_draw_national_boundaries()
 		_draw_campaign_arrows()
 		_draw_cities()
@@ -1573,15 +1583,17 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			var recognized_owner := game_state.recognized_owner_of(province_id)
 			if recognized_owner < 0:
 				recognized_owner = current_owner
-			var base := paper_nation_color(
-				game_state.nations[recognized_owner].color
+			var base := political_map_color(
+				game_state, recognized_owner
 			)
-			base.a = 0.68
+			# Alpha is a land mask. Political opacity is controlled separately by
+			# province_strength, so 100% can be a genuinely solid color map.
+			base.a = 1.0
 			if current_owner != recognized_owner and (x + y) % 9 < 3:
-				var occupation := paper_nation_color(
-					game_state.nations[current_owner].color
+				var occupation := political_map_color(
+					game_state, current_owner
 				).darkened(0.08)
-				occupation.a = 0.78
+				occupation.a = 1.0
 				base = occupation
 			image.set_pixel(x, y, base)
 	return image
@@ -1592,6 +1604,71 @@ static func paper_nation_color(color: Color) -> Color:
 	var result := color.lerp(paper_tint, 0.48)
 	result.s = minf(result.s, 0.58)
 	return result
+
+
+## Political-map color is intentionally shared by 2D and 3D renderers. A
+## peaceful vassal inherits its ultimate sovereign's hue and is 15% darker per
+## level, so each fief remains legible without looking like a foreign bloc.
+static func political_map_color(
+	game_state: GameState,
+	nation_id: int
+) -> Color:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return Color(0.45, 0.45, 0.43)
+	if game_state.is_in_civil_war(nation_id):
+		return paper_nation_color(game_state.nations[nation_id].color)
+	var sovereign_id := nation_id
+	var depth := 0
+	var guard := game_state.nations.size()
+	while game_state.is_vassal(sovereign_id) and guard > 0:
+		var overlord_id := game_state.overlord_of(sovereign_id)
+		if (
+			overlord_id < 0
+			or overlord_id >= game_state.nations.size()
+			or game_state.is_in_civil_war(sovereign_id)
+		):
+			break
+		sovereign_id = overlord_id
+		depth += 1
+		guard -= 1
+	var result := paper_nation_color(
+		game_state.nations[sovereign_id].color
+	)
+	var accumulated_darken := 1.0 - pow(
+		1.0 - VASSAL_BRIGHTNESS_STEP,
+		float(depth)
+	)
+	return result.darkened(clampf(
+		accumulated_darken,
+		0.0,
+		0.72
+	))
+
+
+## Counters and offensive arrows need a denser ink than the broad political
+## fill: preserve the same faction hue, raise chroma and lower brightness.
+static func command_marker_color(
+	game_state: GameState,
+	nation_id: int
+) -> Color:
+	var source := political_map_color(game_state, nation_id)
+	return Color.from_hsv(
+		source.h,
+		clampf(
+			maxf(
+				source.s * COMMAND_COLOR_SATURATION_SCALE,
+				COMMAND_COLOR_SATURATION_FLOOR
+			),
+			0.0,
+			1.0
+		),
+		clampf(source.v * COMMAND_COLOR_VALUE_SCALE, 0.0, 1.0),
+		source.a
+	)
 
 
 static func build_province_boundary_segments(
@@ -2042,14 +2119,19 @@ static func _boundary_edge_key(
 
 
 func _draw_province_fills() -> void:
-	if _province_texture == null:
+	if _province_texture == null or _province_strength <= 0.0:
 		return
 	draw_texture_rect(
 		_province_texture,
 		Rect2(_origin, _map_size),
 		false,
-		Color.WHITE
+		Color(1.0, 1.0, 1.0, _province_strength)
 	)
+
+
+func set_province_strength(strength: float) -> void:
+	_province_strength = clampf(strength, 0.0, 1.0)
+	queue_redraw()
 
 
 func _normalized_segments_to_pixels(
@@ -2066,8 +2148,8 @@ func _draw_province_boundaries() -> void:
 	if not _province_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_province_boundary_segments),
-			Color(0.16, 0.105, 0.055, 0.38),
-			maxf(0.8 * _display_scale, 0.75),
+			Color(0.32, 0.33, 0.33, 0.52),
+			maxf(0.72 * _display_scale, 0.70),
 			true
 		)
 
@@ -2077,14 +2159,8 @@ func _draw_national_boundaries() -> void:
 	if not coast_pixels.is_empty():
 		draw_multiline(
 			coast_pixels,
-			Color(0.055, 0.040, 0.022, 0.90),
-			4.0 * _display_scale,
-			true
-		)
-		draw_multiline(
-			coast_pixels,
-			Color(0.88, 0.75, 0.50, 0.72),
-			1.25 * _display_scale,
+			Color(0.24, 0.25, 0.25, 0.86),
+			maxf(1.4 * _display_scale, 1.0),
 			true
 		)
 	if not _nation_boundary_segments.is_empty():
@@ -2093,21 +2169,15 @@ func _draw_national_boundaries() -> void:
 		)
 		draw_multiline(
 			nation_pixels,
-			Color(0.055, 0.035, 0.018, 0.95),
-			5.0 * _display_scale,
-			true
-		)
-		draw_multiline(
-			nation_pixels,
-			Color(0.91, 0.69, 0.30, 0.88),
-			1.6 * _display_scale,
+			Color(0.20, 0.21, 0.21, 0.92),
+			maxf(2.2 * _display_scale, 1.4),
 			true
 		)
 	if not _alliance_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_alliance_boundary_segments),
-			Color(0.20, 0.48, 0.50, 0.90),
-			2.4 * _display_scale,
+			Color(0.39, 0.40, 0.40, 0.72),
+			maxf(1.55 * _display_scale, 1.0),
 			true
 		)
 	if not _suzerainty_boundary_segments.is_empty():
@@ -2115,8 +2185,8 @@ func _draw_national_boundaries() -> void:
 			_normalized_segments_to_pixels(
 				_suzerainty_boundary_segments
 			),
-			Color(0.0, 0.0, 0.0, 0.92),
-			maxf(1.25 * _display_scale, 1.0),
+			Color(0.30, 0.31, 0.31, 0.86),
+			maxf(1.25 * _display_scale, 0.9),
 			true
 		)
 
@@ -2143,7 +2213,7 @@ func _draw_campaign_arrows() -> void:
 			_draw_campaign_arrow(
 				_city_center(state.cities[origin_city]),
 				_city_center(state.cities[target_city]),
-				state.nations[nation_id].color,
+				command_marker_color(state, nation_id),
 				alpha,
 				index
 			)
@@ -2190,8 +2260,7 @@ func _draw_campaign_arrow(
 		points.append(
 			start * inv * inv + control * 2.0 * inv * t + finish * t * t
 		)
-	var arrow_color := color.lightened(0.28)
-	arrow_color = paper_nation_color(arrow_color)
+	var arrow_color := color
 	arrow_color.a = 0.96 * alpha
 	draw_polyline(
 		points,
@@ -2218,13 +2287,13 @@ func _draw_campaign_arrow(
 		draw_line(
 			point,
 			point - flow_direction * tail + flow_normal * tail * 0.55,
-			Color(PAPER_LIGHT, alpha),
+			Color(arrow_color.lightened(0.14), alpha),
 			1.6 * _display_scale
 		)
 		draw_line(
 			point,
 			point - flow_direction * tail - flow_normal * tail * 0.55,
-			Color(PAPER_LIGHT, alpha),
+			Color(arrow_color.lightened(0.14), alpha),
 			1.6 * _display_scale
 		)
 	var tangent := (finish - control).normalized()
@@ -2269,7 +2338,7 @@ func _draw_edges() -> void:
 		var danger := clampf(e.danger, 0.0, 1.0)
 		if not is_edge_visible(e):
 			continue
-		if e.kind == Edge.Kind.RIVER:
+		if e.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
 			var river_color := Color(0.20, 0.45, 0.52)
 			river_color = river_color.lerp(
 				Color(0.42, 0.25, 0.32),
@@ -2297,24 +2366,20 @@ func _draw_edges() -> void:
 				6.0 * _display_scale
 			)
 			continue
-		var road_level := 1
-		if e.max_manpower >= 100000:
-			road_level = 4
-		elif e.max_manpower >= 60000:
-			road_level = 3
-		elif e.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER:
-			road_level = 2
+		var road_level := (
+			2
+			if e.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
+			else 1
+		)
 		var road_colors: Array[Color] = [
 			Color(0.22, 0.17, 0.11),
-			Color(0.30, 0.22, 0.13),
-			Color(0.43, 0.31, 0.16),
 			Color(0.60, 0.42, 0.18),
 		]
-		var road_widths: Array[float] = [1.5, 2.5, 4.0, 6.0]
+		var road_widths: Array[float] = [1.5, 3.5]
 		var col: Color = road_colors[road_level - 1]
 		col = col.lerp(ACCENT_RED, danger * 0.48)
 		var width: float = road_widths[road_level - 1] * _display_scale
-		if road_level >= 3:
+		if road_level >= 2:
 			draw_line(
 				pa, pb, Color(0.04, 0.028, 0.015, 0.82),
 				width + 2.0 * _display_scale
@@ -2631,17 +2696,16 @@ func _draw_armies() -> void:
 				Color(0.12, 0.25, 0.20, 0.88),
 				2.0 * icon_scale
 			)
-		var counter_color := paper_nation_color(
-			state.nations[army.owner_nation].color
-		).lightened(0.15)
+		var army_color := command_marker_color(
+			state, army.owner_nation
+		)
+		var counter_color := army_color
 		if army.starving and blink_on:
 			counter_color = PAPER_LIGHT
 		_draw_army_counter_body(
 			rect,
 			counter_color,
-			paper_nation_color(
-				state.nations[army.owner_nation].color
-			),
+			army_color.darkened(0.10),
 			is_heavy,
 			icon_scale
 		)
@@ -3372,7 +3436,6 @@ func _nation_list_rows_cached() -> Array[Dictionary]:
 
 
 func _draw_hud() -> void:
-	var header_y := 20.0 * _display_scale
 	var status := "暂停" if sim.paused else "推演中"
 	if state.winner != -1:
 		status = (
@@ -3383,11 +3446,11 @@ func _draw_hud() -> void:
 			]
 		)
 	var header_rect := Rect2(
-		Vector2(_side_margin - 10.0 * _display_scale, 5.0 * _display_scale),
+		Vector2(_side_margin - 10.0 * _display_scale, 4.0 * _display_scale),
 		Vector2(
 			get_viewport_rect().size.x
 				- (_side_margin - 10.0 * _display_scale) * 2.0,
-			28.0 * _display_scale
+			30.0 * _display_scale
 		)
 	)
 	draw_rect(
@@ -3398,8 +3461,12 @@ func _draw_hud() -> void:
 		Color(0.02, 0.015, 0.008, 0.60),
 		true
 	)
-	draw_rect(header_rect, COMMAND_GREEN, true)
-	draw_rect(header_rect, ACCENT_GOLD.darkened(0.25), false, 1.5 * _display_scale)
+	draw_rect(header_rect, Color(0.075, 0.095, 0.060, 0.97), true)
+	draw_rect(
+		Rect2(header_rect.position, Vector2(header_rect.size.x, 2.0 * _display_scale)),
+		ACCENT_GOLD, true
+	)
+	draw_rect(header_rect, ACCENT_GOLD.darkened(0.32), false, 1.2 * _display_scale)
 	var button_rect := nation_stats_button_rect(
 		get_viewport_rect().size,
 		_display_scale,
@@ -3440,20 +3507,44 @@ func _draw_hud() -> void:
 		_font_size(10),
 		PAPER_LIGHT
 	)
-	var header := "战略司令部 | 第%d日 / 第%d月 | %s | 速度 x%.2f | 左键查看档案 右键取消" % [
-		state.day, state.month, status, sim.speed_multiplier()
-	]
+	var title_x := _side_margin
 	draw_string(
 		_font,
-		Vector2(_side_margin, header_y),
-		header,
+		Vector2(title_x, 23.0 * _display_scale),
+		"战略司令部",
 		HORIZONTAL_ALIGNMENT_LEFT,
-		army_scale_rect.position.x
-			- _side_margin
-			- 8.0 * _display_scale,
-		_font_size(13),
+		92.0 * _display_scale,
+		_font_size(12),
 		PAPER_LIGHT
 	)
+	var chip_x := title_x + 100.0 * _display_scale
+	var chip_values := [
+		["第 %d 日" % state.day, 66.0, PAPER_LIGHT],
+		["第 %d 月" % state.month, 60.0, PAPER_LIGHT],
+		[status, 72.0, ACCENT_GOLD if sim.paused else Color(0.48, 0.78, 0.56)],
+		["速度 ×%.2f" % sim.speed_multiplier(), 82.0, PAPER_LIGHT],
+	]
+	for chip in chip_values:
+		var chip_width := float(chip[1]) * _display_scale
+		if chip_x + chip_width >= army_scale_rect.position.x - 6.0 * _display_scale:
+			break
+		var chip_rect := Rect2(
+			Vector2(chip_x, 8.0 * _display_scale),
+			Vector2(chip_width, 21.0 * _display_scale)
+		)
+		draw_rect(chip_rect, Color(0.03, 0.04, 0.025, 0.62), true)
+		draw_rect(
+			chip_rect, Color(0.66, 0.54, 0.30, 0.42),
+			false, 1.0 * _display_scale
+		)
+		draw_string(
+			_font,
+			chip_rect.position + Vector2(6.0, 14.5) * _display_scale,
+			str(chip[0]), HORIZONTAL_ALIGNMENT_CENTER,
+			chip_rect.size.x - 12.0 * _display_scale,
+			_font_size(9), chip[2]
+		)
+		chip_x += chip_width + 5.0 * _display_scale
 	if _nation_stats_open:
 		_draw_nation_stats_window()
 
@@ -3929,6 +4020,8 @@ static func _edge_kind_name(kind: int) -> String:
 			return "抢滩通道"
 		Edge.Kind.RIVER:
 			return "河运航道"
+		Edge.Kind.SEA:
+			return "跨海航道"
 	return "陆上道路"
 
 

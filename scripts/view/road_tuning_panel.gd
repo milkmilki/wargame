@@ -25,6 +25,7 @@ func _ready() -> void:
 
 func _build_ui() -> void:
 	var open_button := Button.new()
+	open_button.name = "RoadTuningButton"
 	open_button.text = "路网"
 	open_button.tooltip_text = "调整道路通行、容量和国家颜色图"
 	open_button.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -112,7 +113,8 @@ func _build_ui() -> void:
 	)
 	_add_slider(
 		grid, "国家覆色", PROVINCE_STRENGTH_KEY,
-		0.0, 0.90, 0.01, 0.62, 0, true
+		0.0, 1.0, 0.01, MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH,
+		0, true
 	)
 	var legend := HBoxContainer.new()
 	legend.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -122,9 +124,9 @@ func _build_ui() -> void:
 	legend_title.text = "道路等级"
 	legend.add_child(legend_title)
 	for item in [
-		["支路", Color(0.30, 0.23, 0.15)],
-		["干道", Color(0.60, 0.43, 0.22)],
-		["驰道", Color(0.92, 0.72, 0.37)],
+		["支路 1万", Color(0.30, 0.23, 0.15)],
+		["干道 2万", Color(0.60, 0.43, 0.22)],
+		["水路 5万", Color(0.20, 0.49, 0.55)],
 	]:
 		var swatch := ColorRect.new()
 		swatch.custom_minimum_size = Vector2(28.0, 6.0)
@@ -149,6 +151,7 @@ func _build_ui() -> void:
 	close_button.text = "关闭"
 	close_button.custom_minimum_size = Vector2(92.0, 36.0)
 	close_button.pressed.connect(close_panel)
+	_apply_command_button_style(close_button)
 	actions.add_child(close_button)
 	var rebuild_button := Button.new()
 	rebuild_button.text = "重新计算路网"
@@ -156,10 +159,12 @@ func _build_ui() -> void:
 	rebuild_button.pressed.connect(func() -> void:
 		regenerate_requested.emit(road_settings())
 	)
+	_apply_command_button_style(rebuild_button, true)
 	actions.add_child(rebuild_button)
 
 	var font := MapRenderer.create_ui_font()
 	_apply_font(open_button, font)
+	_apply_command_button_style(open_button)
 	_apply_font(_overlay, font)
 	_build_map_mode_control(font)
 
@@ -174,9 +179,9 @@ func _build_map_mode_control(font: Font) -> void:
 	add_child(modes)
 	var group := ButtonGroup.new()
 	for mode in [
-		["地形", 0.08],
+		["地形", 0.0],
 		["混合", 0.42],
-		["政治", 0.72],
+		["政治", 1.0],
 	]:
 		var button := Button.new()
 		button.text = str(mode[0])
@@ -188,6 +193,7 @@ func _build_map_mode_control(font: Font) -> void:
 		button.pressed.connect(func() -> void:
 			(_sliders[PROVINCE_STRENGTH_KEY] as HSlider).value = strength
 		)
+		_apply_command_button_style(button, true)
 		modes.add_child(button)
 		_map_mode_buttons[strength] = button
 	_apply_font(modes, font)
@@ -267,6 +273,39 @@ func _apply_font(control: Control, font: Font) -> void:
 	for child in control.get_children():
 		if child is Control:
 			_apply_font(child as Control, font)
+
+
+func _apply_command_button_style(
+	button: Button,
+	show_selected: bool = false
+) -> void:
+	button.add_theme_color_override(
+		"font_color", MapRenderer.PAPER_LIGHT
+	)
+	button.add_theme_color_override(
+		"font_hover_color", Color.WHITE
+	)
+	button.add_theme_color_override(
+		"font_pressed_color", MapRenderer.PAPER_LIGHT
+	)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.075, 0.095, 0.060, 0.97)
+	normal.border_color = MapRenderer.ACCENT_GOLD.darkened(0.42)
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(2)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.13, 0.16, 0.095, 0.98)
+	hover.border_color = MapRenderer.ACCENT_GOLD
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = (
+		MapRenderer.ACCENT_GOLD.darkened(0.55)
+		if show_selected
+		else Color(0.10, 0.13, 0.075, 0.98)
+	)
+	pressed.border_color = MapRenderer.PAPER_LIGHT
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
 
 
 func road_settings() -> Dictionary:

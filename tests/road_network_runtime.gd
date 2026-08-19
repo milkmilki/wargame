@@ -21,6 +21,15 @@ func _run() -> void:
 		return
 	var state := GameState.new()
 	state.generate_world(12345)
+	if state.road_network_revision != 0:
+		_fail("initial default rebuild must not consume runtime revision")
+		return
+	for initial_edge in state.edges:
+		if not Edge.production_capacity_valid(
+			initial_edge.kind, initial_edge.max_manpower
+		):
+			_fail("initial capacity outside production bands")
+			return
 	var preserved_transport := {}
 	for edge in state.edges:
 		if edge.kind != Edge.Kind.LAND:
@@ -46,6 +55,9 @@ func _run() -> void:
 		_fail("aggressive tuning must close at least one branch")
 		return
 	for edge in state.edges:
+		if not Edge.production_capacity_valid(edge.kind, edge.max_manpower):
+			_fail("rebuild capacity outside production bands")
+			return
 		if edge.is_backbone and edge.max_manpower <= 0:
 			_fail("backbone edge became impassable")
 			return

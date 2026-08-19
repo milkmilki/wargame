@@ -12,15 +12,22 @@ const MAP_PICK_EDGE_PIXELS: float = 10.0
 const CAMERA_MIN_DISTANCE: float = 24.0
 const CAMERA_MAX_DISTANCE: float = 92.0
 const CAMERA_DRAG_THRESHOLD: float = 4.0
+const CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES: float = 0.0
 const CAMERA_MAX_NORMAL_ANGLE_DEGREES: float = 30.0
-const TERRAIN_SURFACE_PATH := (
-	"res://assets/terrain/china_natural_earth2_2048.png"
-)
+const MAP_INK := Color(0.075, 0.055, 0.032)
+const MAP_IVORY := Color(0.94, 0.87, 0.69)
+const MAP_GOLD := Color(0.94, 0.67, 0.20)
+const MAP_ALERT := Color(0.84, 0.13, 0.055)
+const MAP_SUPPLY := Color(0.20, 0.62, 0.48)
+const MAP_COUNTER_MARK := Color(0.66, 0.59, 0.40)
 const ANTIQUE_OVERLAY_SHADER := preload(
 	"res://scripts/view/terrain/antique_overlay.gdshader"
 )
 const WATER_SHADER := preload(
 	"res://scripts/view/terrain/strategic_water.gdshader"
+)
+const POLITICAL_BOUNDARY_SHADER := preload(
+	"res://scripts/view/terrain/political_boundaries.gdshader"
 )
 
 var state: GameState
@@ -32,18 +39,31 @@ var _camera: Camera3D
 var _content: Node3D
 var _water: MeshInstance3D
 var _roads: MeshInstance3D
+var _minor_roads: MeshInstance3D
 var _rivers: MeshInstance3D
 var _boundaries: MeshInstance3D
 var _campaigns: MeshInstance3D
 var _cities: MultiMeshInstance3D
+var _city_bases: MultiMeshInstance3D
+var _city_resource_markers: MultiMeshInstance3D
+var _dock_rings: MultiMeshInstance3D
 var _capital_rings: MultiMeshInstance3D
 var _armies: MultiMeshInstance3D
+var _army_bases: MultiMeshInstance3D
+var _army_symbol_a: MultiMeshInstance3D
+var _army_symbol_b: MultiMeshInstance3D
+var _army_morale_backs: MultiMeshInstance3D
+var _army_morale_bars: MultiMeshInstance3D
 var _battles: MultiMeshInstance3D
+var _battle_rings: MultiMeshInstance3D
+var _battle_cross_a: MultiMeshInstance3D
+var _battle_cross_b: MultiMeshInstance3D
 var _selection: MeshInstance3D
 var _edge_selection: MeshInstance3D
 var _antique_overlay_layer: CanvasLayer
 var _city_labels: Array[Label3D] = []
 var _nation_labels: Array[Label3D] = []
+var _battle_labels: Array[Label3D] = []
 var _province_texture: ImageTexture
 var _map_font: Font
 
@@ -64,7 +84,10 @@ var _last_ownership_revision: int = -1
 var _last_diplomacy_revision: int = -1
 var _last_road_network_revision: int = -1
 var _last_selected_edge := Vector2i(-2, -2)
-var _province_strength: float = 0.62
+var _province_strength: float = (
+	MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
+)
+var _visual_time: float = 0.0
 
 
 func setup(
@@ -91,9 +114,10 @@ func setup(
 	set_process_unhandled_input(true)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if state == null or _terrain == null:
 		return
+	_visual_time += delta
 	if (
 		state.ownership_revision != _last_ownership_revision
 		or state.diplomacy_revision
@@ -289,8 +313,12 @@ func _ensure_feature_nodes() -> void:
 		_content.add_child(_water)
 	if _roads == null:
 		_roads = MeshInstance3D.new()
-		_roads.name = "Roads"
+		_roads.name = "MajorRoads"
 		_content.add_child(_roads)
+	if _minor_roads == null:
+		_minor_roads = MeshInstance3D.new()
+		_minor_roads.name = "MinorRoads"
+		_content.add_child(_minor_roads)
 	if _rivers == null:
 		_rivers = MeshInstance3D.new()
 		_rivers.name = "Rivers"
@@ -307,6 +335,18 @@ func _ensure_feature_nodes() -> void:
 		_cities = MultiMeshInstance3D.new()
 		_cities.name = "Cities"
 		_content.add_child(_cities)
+	if _city_bases == null:
+		_city_bases = MultiMeshInstance3D.new()
+		_city_bases.name = "CityBases"
+		_content.add_child(_city_bases)
+	if _city_resource_markers == null:
+		_city_resource_markers = MultiMeshInstance3D.new()
+		_city_resource_markers.name = "CityResourceMarkers"
+		_content.add_child(_city_resource_markers)
+	if _dock_rings == null:
+		_dock_rings = MultiMeshInstance3D.new()
+		_dock_rings.name = "DockRings"
+		_content.add_child(_dock_rings)
 	if _capital_rings == null:
 		_capital_rings = MultiMeshInstance3D.new()
 		_capital_rings.name = "CapitalRings"
@@ -315,10 +355,42 @@ func _ensure_feature_nodes() -> void:
 		_armies = MultiMeshInstance3D.new()
 		_armies.name = "Armies"
 		_content.add_child(_armies)
+	if _army_bases == null:
+		_army_bases = MultiMeshInstance3D.new()
+		_army_bases.name = "ArmyCounterBases"
+		_content.add_child(_army_bases)
+	if _army_symbol_a == null:
+		_army_symbol_a = MultiMeshInstance3D.new()
+		_army_symbol_a.name = "ArmySymbolsA"
+		_content.add_child(_army_symbol_a)
+	if _army_symbol_b == null:
+		_army_symbol_b = MultiMeshInstance3D.new()
+		_army_symbol_b.name = "ArmySymbolsB"
+		_content.add_child(_army_symbol_b)
+	if _army_morale_backs == null:
+		_army_morale_backs = MultiMeshInstance3D.new()
+		_army_morale_backs.name = "ArmyMoraleBacks"
+		_content.add_child(_army_morale_backs)
+	if _army_morale_bars == null:
+		_army_morale_bars = MultiMeshInstance3D.new()
+		_army_morale_bars.name = "ArmyMoraleBars"
+		_content.add_child(_army_morale_bars)
 	if _battles == null:
 		_battles = MultiMeshInstance3D.new()
 		_battles.name = "Battles"
 		_content.add_child(_battles)
+	if _battle_rings == null:
+		_battle_rings = MultiMeshInstance3D.new()
+		_battle_rings.name = "BattleRings"
+		_content.add_child(_battle_rings)
+	if _battle_cross_a == null:
+		_battle_cross_a = MultiMeshInstance3D.new()
+		_battle_cross_a.name = "BattleCrossA"
+		_content.add_child(_battle_cross_a)
+	if _battle_cross_b == null:
+		_battle_cross_b = MultiMeshInstance3D.new()
+		_battle_cross_b.name = "BattleCrossB"
+		_content.add_child(_battle_cross_b)
 	if _selection == null:
 		_selection = MeshInstance3D.new()
 		_selection.name = "Selection"
@@ -329,9 +401,9 @@ func _ensure_feature_nodes() -> void:
 		ring.ring_segments = 8
 		_selection.mesh = ring
 		var material := StandardMaterial3D.new()
-		material.albedo_color = Color(1.0, 0.72, 0.18)
+		material.albedo_color = MAP_GOLD
 		material.emission_enabled = true
-		material.emission = Color(0.72, 0.26, 0.02)
+		material.emission = Color(0.76, 0.24, 0.035)
 		material.emission_energy_multiplier = 2.0
 		_selection.material_override = material
 		_selection.visible = false
@@ -400,7 +472,8 @@ func _overview_distance_for_viewport() -> float:
 		_world_size.x * 0.5
 		/ (vertical_tangent * viewport_aspect)
 	)
-	# Reserve screen space for the HUD and bottom map-mode controls.
+	# Start as a true orthogonal-looking top-down view; zooming in gradually
+	# introduces perspective pitch. Reserve space for HUD and map controls.
 	return maxf(vertical_distance, horizontal_distance) * 1.16
 
 
@@ -429,7 +502,11 @@ func _camera_normal_angle_degrees() -> float:
 		0.0,
 		1.0
 	)
-	return zoom_progress * CAMERA_MAX_NORMAL_ANGLE_DEGREES
+	return lerpf(
+		CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES,
+		CAMERA_MAX_NORMAL_ANGLE_DEGREES,
+		zoom_progress
+	)
 
 
 func _zoom_camera(factor: float) -> void:
@@ -467,12 +544,13 @@ func _clamp_camera_target() -> void:
 
 func _build_static_scene() -> void:
 	var water_plane := PlaneMesh.new()
-	water_plane.size = _world_size * 2.6
+	water_plane.size = _world_size
 	_water.mesh = water_plane
-	_water.position.y = -0.42
-	var water_material := ShaderMaterial.new()
-	water_material.shader = WATER_SHADER
-	_water.material_override = water_material
+	_water.position.y = StrategicTerrainRenderer.WATER_SURFACE_HEIGHT
+	# Water color and texture now come directly from the complete Natural Earth
+	# surface image on the terrain mesh. Keep the old plane disabled so it can
+	# never cover the source imagery with a procedural color layer.
+	_water.visible = false
 
 
 func _start_terrain_generation() -> void:
@@ -490,17 +568,15 @@ func _start_terrain_generation() -> void:
 		HEIGHT_STEPS
 	)
 	var height_texture := load(
-		GameState.TERRAIN_MAP_PATH
+		GameState.terrain_map_path()
 	) as Texture2D
 	_terrain.set_height_texture(
 		height_texture,
 		state.map_source_region_normalized
 	)
-	var surface_texture := load(
-		TERRAIN_SURFACE_PATH
-	) as Texture2D
-	if surface_texture != null:
-		_terrain.set_surface_texture(surface_texture)
+	# Packed map source: RGB=satellite color, Alpha=elevation. The same texture
+	# drives rendering, terrain height and city/road/province generation.
+	_terrain.set_surface_texture(height_texture)
 	_terrain.generation_finished.connect(_on_terrain_ready)
 	_terrain.call_deferred(
 		"generate_from_height_texture",
@@ -547,31 +623,40 @@ func _update_province_visuals() -> void:
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["province"],
-		0.026,
-		Color(0.16, 0.12, 0.075, 0.28),
-		0.12
+		0.014,
+		Color(0.68, 0.69, 0.69, 0.42),
+		0.205
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["nation"],
-		0.110,
-		Color(0.18, 0.12, 0.06, 0.86),
-		0.15
+		0.052,
+		Color(0.52, 0.53, 0.53, 0.74),
+		0.215
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["alliance"],
-		0.065,
-		Color(0.14, 0.38, 0.40, 0.62),
-		0.17
+		0.035,
+		Color(0.64, 0.65, 0.65, 0.54),
+		0.225
+	)
+	_append_segment_ribbons(
+		surface_tool,
+		geometry["suzerainty"],
+		0.028,
+		Color(0.58, 0.59, 0.59, 0.68),
+		0.230
 	)
 	_boundaries.mesh = surface_tool.commit()
-	_boundaries.material_override = _line_material(false)
+	_boundaries.material_override = _political_boundary_material()
 
 
 func _build_road_mesh() -> void:
-	var surface_tool := SurfaceTool.new()
-	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var major_tool := SurfaceTool.new()
+	major_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var minor_tool := SurfaceTool.new()
+	minor_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for edge in state.edges:
 		if not MapRenderer.is_edge_visible(edge):
 			continue
@@ -582,15 +667,20 @@ func _build_road_mesh() -> void:
 		if edge.kind == Edge.Kind.LANDING:
 			color = Color(0.64, 0.46, 0.24, 0.88)
 			width = 0.080
-		elif edge.kind == Edge.Kind.RIVER:
+		elif edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
 			color = Color(0.20, 0.49, 0.55, 0.88)
 			width = 0.090
+		var surface_tool := (
+			major_tool
+			if edge.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
+			else minor_tool
+		)
 		_append_draped_ribbon(
 			surface_tool,
 			from,
 			to,
-			width * 1.75,
-			Color(0.08, 0.055, 0.030, 0.70),
+			width * 1.58,
+			Color(0.055, 0.038, 0.022, 0.54),
 			0.105
 		)
 		_append_draped_ribbon(
@@ -601,32 +691,27 @@ func _build_road_mesh() -> void:
 			color,
 			0.125
 		)
-	_roads.mesh = surface_tool.commit()
+	_roads.mesh = major_tool.commit()
 	_roads.material_override = _line_material(false)
+	_minor_roads.mesh = minor_tool.commit()
+	_minor_roads.material_override = _line_material(false)
+	_update_map_detail_visibility()
 
 
 func _road_width_for_capacity(capacity: int) -> float:
-	if capacity >= Edge.MAX_MANPOWER:
-		return 0.145
-	if capacity >= 60000:
-		return 0.120
-	if capacity >= 30000:
-		return 0.095
+	if capacity >= Edge.WATER_MANPOWER:
+		return 0.106
 	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
-		return 0.078
-	return 0.060
+		return 0.079
+	return 0.036
 
 
 func _road_color_for_capacity(capacity: int) -> Color:
-	if capacity >= Edge.MAX_MANPOWER:
-		return Color(0.92, 0.72, 0.37, 0.96)
-	if capacity >= 60000:
-		return Color(0.78, 0.56, 0.27, 0.90)
-	if capacity >= 30000:
-		return Color(0.60, 0.43, 0.22, 0.80)
+	if capacity >= Edge.WATER_MANPOWER:
+		return Color(0.20, 0.49, 0.55, 0.88)
 	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
-		return Color(0.43, 0.31, 0.17, 0.68)
-	return Color(0.30, 0.23, 0.15, 0.54)
+		return Color(0.64, 0.44, 0.22, 0.72)
+	return Color(0.28, 0.22, 0.16, 0.28)
 
 
 func _build_river_mesh() -> void:
@@ -639,7 +724,7 @@ func _build_river_mesh() -> void:
 				river[index],
 				river[index + 1],
 				0.075,
-				Color(0.12, 0.39, 0.46, 0.88),
+				Color(0.09, 0.42, 0.52, 0.78),
 				0.11
 			)
 	_rivers.mesh = surface_tool.commit()
@@ -647,48 +732,48 @@ func _build_river_mesh() -> void:
 
 
 func _build_city_instances() -> void:
-	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.use_colors = true
-	multimesh.instance_count = state.cities.size()
-	var marker := CylinderMesh.new()
-	marker.top_radius = 0.18
-	marker.bottom_radius = 0.25
-	marker.height = 0.34
-	marker.radial_segments = 10
-	multimesh.mesh = marker
-	_cities.multimesh = multimesh
-	_cities.material_override = _instance_color_material(false)
-	var capitals: Array[City] = []
-	for city in state.cities:
-		if city.is_capital and not city.is_dock:
-			capitals.append(city)
-	var capital_multimesh := MultiMesh.new()
-	capital_multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	capital_multimesh.use_colors = true
-	capital_multimesh.instance_count = capitals.size()
+	var base_marker := CylinderMesh.new()
+	base_marker.top_radius = 0.34
+	base_marker.bottom_radius = 0.39
+	base_marker.height = 0.14
+	base_marker.radial_segments = 12
+	_configure_multimesh(
+		_city_bases, base_marker, state.cities.size(),
+		_instance_color_material(false, true)
+	)
+	var city_marker := CylinderMesh.new()
+	city_marker.top_radius = 0.25
+	city_marker.bottom_radius = 0.30
+	city_marker.height = 0.28
+	city_marker.radial_segments = 12
+	_configure_multimesh(
+		_cities, city_marker, state.cities.size(),
+		_instance_color_material(false, true)
+	)
+	var resource_marker := BoxMesh.new()
+	resource_marker.size = Vector3(0.23, 0.10, 0.23)
+	_configure_multimesh(
+		_city_resource_markers, resource_marker,
+		state.cities.size(), _instance_color_material(true, true)
+	)
+	var dock_ring := TorusMesh.new()
+	dock_ring.inner_radius = 0.27
+	dock_ring.outer_radius = 0.36
+	dock_ring.rings = 16
+	dock_ring.ring_segments = 6
+	_configure_multimesh(
+		_dock_rings, dock_ring, state.cities.size(),
+		_instance_color_material(true, true)
+	)
 	var capital_ring := TorusMesh.new()
 	capital_ring.inner_radius = 0.34
 	capital_ring.outer_radius = 0.48
 	capital_ring.rings = 16
 	capital_ring.ring_segments = 8
-	capital_multimesh.mesh = capital_ring
-	_capital_rings.multimesh = capital_multimesh
-	_capital_rings.material_override = _instance_color_material(true)
-	for index in range(capitals.size()):
-		var capital := capitals[index]
-		var world := _terrain.map_to_world(capital.map_position)
-		capital_multimesh.set_instance_transform(
-			index,
-			Transform3D(
-				Basis.IDENTITY,
-				world + Vector3(0.0, 0.22, 0.0)
-			)
-		)
-		capital_multimesh.set_instance_color(
-			index,
-			Color(0.96, 0.72, 0.24)
-		)
+	_configure_multimesh(
+		_capital_rings, capital_ring, 0,
+		_instance_color_material(true, true)
+	)
 	_clear_labels()
 	for city in state.cities:
 		if (
@@ -704,39 +789,50 @@ func _build_city_instances() -> void:
 		var label := Label3D.new()
 		label.text = MapRenderer.city_label_text(city)
 		label.font = _map_font
-		label.font_size = 30
-		label.outline_size = 7
-		label.pixel_size = 0.016
-		label.modulate = Color(0.95, 0.90, 0.76)
-		label.outline_modulate = Color(0.025, 0.025, 0.02, 0.92)
+		label.font_size = 28
+		label.outline_size = 8
+		label.pixel_size = 0.014
+		label.modulate = MAP_IVORY
+		label.outline_modulate = Color(0.025, 0.018, 0.010, 0.96)
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
 		label.position = (
 			_terrain.map_to_world(city.map_position)
-			+ Vector3(0.0, 0.92, 0.0)
+			+ Vector3(0.0, 0.86, 0.0)
 		)
 		_content.add_child(label)
 		_city_labels.append(label)
 
 
 func _update_city_instances() -> void:
-	if _cities.multimesh == null:
+	if _cities.multimesh == null or _city_bases.multimesh == null:
 		return
+	_update_capital_rings()
 	for city in state.cities:
 		var world := _terrain.map_to_world(city.map_position)
 		var scale := (
-			1.35
+			1.30
 			if city.is_capital
-			else 0.58 if city.is_dock else 0.78
+			else 0.62 if city.is_dock else 0.78
 		)
 		var basis := Basis.IDENTITY.scaled(
 			Vector3(scale, scale, scale)
 		)
-		_cities.multimesh.set_instance_transform(
+		_city_bases.multimesh.set_instance_transform(
 			city.id,
 			Transform3D(
 				basis,
-				world + Vector3(0.0, 0.34 * scale, 0.0)
+				world + Vector3(0.0, 0.10 * scale, 0.0)
+			)
+		)
+		_city_bases.multimesh.set_instance_color(city.id, MAP_INK)
+		_cities.multimesh.set_instance_transform(
+			city.id,
+			Transform3D(
+				Basis.IDENTITY.scaled(
+					Vector3(scale * 0.78, scale, scale * 0.78)
+				),
+				world + Vector3(0.0, 0.23 * scale, 0.0)
 			)
 		)
 		var color := (
@@ -744,10 +840,66 @@ func _update_city_instances() -> void:
 			if city.owner_nation >= 0
 			else Color(0.45, 0.45, 0.42)
 		)
-		color = color.lerp(Color(0.62, 0.53, 0.38), 0.28)
+		color = color.lerp(Color(0.68, 0.58, 0.40), 0.18)
 		if city.is_capital:
-			color = color.lightened(0.18)
+			color = color.lightened(0.24)
+		elif city.at_war:
+			color = color.lerp(MAP_ALERT, 0.34)
 		_cities.multimesh.set_instance_color(city.id, color)
+
+		var resource_scale := 0.001
+		var resource_color := MAP_IVORY
+		if city.is_food_hub:
+			resource_scale = 1.0
+			resource_color = Color(0.82, 0.66, 0.18)
+		elif city.is_manpower_hub:
+			resource_scale = 1.0
+			resource_color = Color(0.78, 0.22, 0.14)
+		elif city.is_crossroads:
+			resource_scale = 0.78
+			resource_color = MAP_IVORY
+		_city_resource_markers.multimesh.set_instance_transform(
+			city.id,
+			Transform3D(
+				Basis(Vector3.UP, PI * 0.25).scaled(
+					Vector3.ONE * resource_scale * scale
+				),
+				world + Vector3(0.0, 0.58 * scale, 0.0)
+			)
+		)
+		_city_resource_markers.multimesh.set_instance_color(
+			city.id, resource_color
+		)
+		var dock_scale := scale if city.is_dock else 0.001
+		_dock_rings.multimesh.set_instance_transform(
+			city.id,
+			Transform3D(
+				Basis.IDENTITY.scaled(Vector3.ONE * dock_scale),
+				world + Vector3(0.0, 0.34, 0.0)
+			)
+		)
+		_dock_rings.multimesh.set_instance_color(
+			city.id, Color(0.24, 0.66, 0.72)
+		)
+
+
+func _update_capital_rings() -> void:
+	var capitals: Array[City] = []
+	for city in state.cities:
+		if city.is_capital and not city.is_dock:
+			capitals.append(city)
+	_capital_rings.multimesh.instance_count = capitals.size()
+	for index in range(capitals.size()):
+		var capital := capitals[index]
+		var world := _terrain.map_to_world(capital.map_position)
+		_capital_rings.multimesh.set_instance_transform(
+			index,
+			Transform3D(
+				Basis.IDENTITY,
+				world + Vector3(0.0, 0.19, 0.0)
+			)
+		)
+		_capital_rings.multimesh.set_instance_color(index, MAP_GOLD)
 
 
 func _rebuild_nation_labels() -> void:
@@ -798,41 +950,153 @@ func _update_army_instances() -> void:
 		if army.size > 0:
 			living.append(army)
 	if _armies.multimesh == null:
-		var marker := BoxMesh.new()
-		marker.size = Vector3(0.72, 0.18, 0.44)
-		var multimesh := MultiMesh.new()
-		multimesh.transform_format = MultiMesh.TRANSFORM_3D
-		multimesh.use_colors = true
-		multimesh.mesh = marker
-		_armies.multimesh = multimesh
-		_armies.material_override = _instance_color_material(false)
-	_armies.multimesh.instance_count = living.size()
+		_build_army_counter_meshes()
+	for layer in [
+		_army_bases, _armies, _army_symbol_a, _army_symbol_b,
+		_army_morale_backs, _army_morale_bars,
+	]:
+		layer.multimesh.instance_count = living.size()
 	for index in range(living.size()):
 		var army := living[index]
 		var map_position := overlay.army_map_position(army)
 		var world := _terrain.map_to_world(map_position)
 		var angle := float(army.id % 11) / 11.0 * TAU
-		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.30
-		var scale := (
-			0.92
+		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.34
+		var scale := overlay.army_icon_scale() * (
+			1.02
 			if army.max_size >= Army.DEFAULT_MAX_SIZE
-			else 0.64
+			else 0.78
 		)
-		_armies.multimesh.set_instance_transform(
+		var origin := world + offset + Vector3(0.0, 0.82, 0.0)
+		_set_counter_transform(
+			_army_bases, index, origin, scale, Vector3(1.12, 1.0, 1.12)
+		)
+		_set_counter_transform(
+			_armies, index, origin + Vector3(0.0, 0.10, 0.0),
+			scale, Vector3.ONE
+		)
+		var is_heavy := army.max_size >= Army.DEFAULT_MAX_SIZE
+		var first_angle := 0.0 if is_heavy else PI * 0.25
+		var symbol_basis := Basis(Vector3.UP, first_angle).scaled(
+			Vector3(scale, scale, scale)
+		)
+		var symbol_origin := origin + Vector3(0.0, 0.225, 0.0)
+		_army_symbol_a.multimesh.set_instance_transform(
+			index, Transform3D(symbol_basis, symbol_origin)
+		)
+		var second_angle := (
+			PI * 0.5 if is_heavy else -PI * 0.25
+		)
+		_army_symbol_b.multimesh.set_instance_transform(
 			index,
 			Transform3D(
-				Basis.IDENTITY.scaled(
+				Basis(Vector3.UP, second_angle).scaled(
 					Vector3(scale, scale, scale)
 				),
-				world + offset + Vector3(0.0, 0.92, 0.0)
+				symbol_origin
 			)
 		)
-		var color := state.nations[army.owner_nation].color
+		_set_morale_bar_transform(
+			_army_morale_backs, index, origin, scale, 1.0
+		)
+		var morale_ratio := army.morale_ratio()
+		_set_morale_bar_transform(
+			_army_morale_bars, index, origin, scale, morale_ratio
+		)
+		var color := MapRenderer.command_marker_color(
+			state, army.owner_nation
+		)
 		if army.starving:
-			color = color.lerp(Color(0.86, 0.16, 0.08), 0.72)
+			color = color.lerp(MAP_ALERT, 0.68)
 		elif army.state == Army.State.FIGHTING:
-			color = color.lightened(0.28)
+			color = color.lightened(0.18)
+		_army_bases.multimesh.set_instance_color(index, MAP_INK)
 		_armies.multimesh.set_instance_color(index, color)
+		_army_symbol_a.multimesh.set_instance_color(
+			index, MAP_COUNTER_MARK
+		)
+		_army_symbol_b.multimesh.set_instance_color(
+			index, MAP_COUNTER_MARK
+		)
+		_army_morale_backs.multimesh.set_instance_color(index, MAP_INK)
+		_army_morale_bars.multimesh.set_instance_color(
+			index, _morale_color(morale_ratio, army.starving)
+		)
+
+
+func _build_army_counter_meshes() -> void:
+	var base := BoxMesh.new()
+	base.size = Vector3(0.90, 0.16, 0.58)
+	_configure_multimesh(
+		_army_bases, base, 0, _instance_color_material(false, true)
+	)
+	var face := BoxMesh.new()
+	face.size = Vector3(0.78, 0.13, 0.48)
+	_configure_multimesh(
+		_armies, face, 0, _instance_color_material(false, true)
+	)
+	var symbol := BoxMesh.new()
+	symbol.size = Vector3(0.46, 0.045, 0.055)
+	_configure_multimesh(
+		_army_symbol_a, symbol, 0, _instance_color_material(false, true)
+	)
+	_configure_multimesh(
+		_army_symbol_b, symbol, 0, _instance_color_material(false, true)
+	)
+	var morale_back := BoxMesh.new()
+	morale_back.size = Vector3(0.68, 0.045, 0.065)
+	_configure_multimesh(
+		_army_morale_backs, morale_back, 0,
+		_instance_color_material(false, true)
+	)
+	var morale_bar := BoxMesh.new()
+	morale_bar.size = Vector3(0.62, 0.055, 0.040)
+	_configure_multimesh(
+		_army_morale_bars, morale_bar, 0,
+		_instance_color_material(true, true)
+	)
+
+
+func _set_counter_transform(
+	layer: MultiMeshInstance3D,
+	index: int,
+	origin: Vector3,
+	scale: float,
+	shape_scale: Vector3
+) -> void:
+	layer.multimesh.set_instance_transform(
+		index,
+		Transform3D(
+			Basis.IDENTITY.scaled(shape_scale * scale), origin
+		)
+	)
+
+
+func _set_morale_bar_transform(
+	layer: MultiMeshInstance3D,
+	index: int,
+	origin: Vector3,
+	scale: float,
+	ratio: float
+) -> void:
+	var width := maxf(ratio, 0.001)
+	var left := -0.31 * scale
+	var center_x := left + 0.31 * width * scale
+	layer.multimesh.set_instance_transform(
+		index,
+		Transform3D(
+			Basis.IDENTITY.scaled(Vector3(width * scale, scale, scale)),
+			origin + Vector3(center_x, 0.225, 0.226 * scale)
+		)
+	)
+
+
+func _morale_color(ratio: float, starving: bool) -> Color:
+	if starving or ratio < 0.30:
+		return MAP_ALERT
+	if ratio < 0.62:
+		return MAP_GOLD
+	return MAP_SUPPLY
 
 
 func _update_battle_instances() -> void:
@@ -841,33 +1105,111 @@ func _update_battle_instances() -> void:
 		if not battle.finished:
 			active.append(battle)
 	if _battles.multimesh == null:
-		var marker := SphereMesh.new()
-		marker.radius = 0.32
-		marker.height = 0.64
-		marker.radial_segments = 12
-		marker.rings = 6
-		var multimesh := MultiMesh.new()
-		multimesh.transform_format = MultiMesh.TRANSFORM_3D
-		multimesh.use_colors = true
-		multimesh.mesh = marker
-		_battles.multimesh = multimesh
-		_battles.material_override = _instance_color_material(true)
-	_battles.multimesh.instance_count = active.size()
+		_build_battle_marker_meshes()
+	for layer in [
+		_battles, _battle_rings, _battle_cross_a, _battle_cross_b,
+	]:
+		layer.multimesh.instance_count = active.size()
+	_clear_battle_labels()
 	for index in range(active.size()):
 		var battle := active[index]
 		var map_position := _battle_map_position(battle)
 		var world := _terrain.map_to_world(map_position)
+		var scale := (
+			1.12 if battle.kind == Battle.Kind.SIEGE else 1.0
+		)
+		var origin := world + Vector3(0.0, 1.13, 0.0)
 		_battles.multimesh.set_instance_transform(
 			index,
 			Transform3D(
-				Basis.IDENTITY,
-				world + Vector3(0.0, 1.5, 0.0)
+				Basis.IDENTITY.scaled(Vector3.ONE * scale),
+				origin
 			)
 		)
-		_battles.multimesh.set_instance_color(
-			index,
-			Color(0.92, 0.14, 0.06)
+		_battle_rings.multimesh.set_instance_transform(
+			index, Transform3D(
+				Basis.IDENTITY.scaled(Vector3.ONE * scale), origin
+			)
 		)
+		var cross_origin := origin + Vector3(0.0, 0.28, 0.0)
+		_battle_cross_a.multimesh.set_instance_transform(
+			index, Transform3D(
+				Basis(Vector3.UP, PI * 0.25).scaled(
+					Vector3.ONE * scale
+				), cross_origin
+			)
+		)
+		_battle_cross_b.multimesh.set_instance_transform(
+			index, Transform3D(
+				Basis(Vector3.UP, -PI * 0.25).scaled(
+					Vector3.ONE * scale
+				), cross_origin
+			)
+		)
+		_battles.multimesh.set_instance_color(index, MAP_ALERT)
+		_battle_rings.multimesh.set_instance_color(index, MAP_GOLD)
+		_battle_cross_a.multimesh.set_instance_color(index, MAP_IVORY)
+		_battle_cross_b.multimesh.set_instance_color(index, MAP_IVORY)
+		_add_battle_label(battle, origin)
+
+
+func _build_battle_marker_meshes() -> void:
+	var center := CylinderMesh.new()
+	center.top_radius = 0.34
+	center.bottom_radius = 0.42
+	center.height = 0.30
+	center.radial_segments = 10
+	_configure_multimesh(
+		_battles, center, 0, _instance_color_material(true, true)
+	)
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.48
+	ring.outer_radius = 0.62
+	ring.rings = 18
+	ring.ring_segments = 6
+	_configure_multimesh(
+		_battle_rings, ring, 0, _instance_color_material(true, true)
+	)
+	var cross := BoxMesh.new()
+	cross.size = Vector3(0.72, 0.075, 0.095)
+	_configure_multimesh(
+		_battle_cross_a, cross, 0, _instance_color_material(true, true)
+	)
+	_configure_multimesh(
+		_battle_cross_b, cross, 0, _instance_color_material(true, true)
+	)
+
+
+func _add_battle_label(battle: Battle, origin: Vector3) -> void:
+	var label := Label3D.new()
+	if battle.kind == Battle.Kind.SIEGE:
+		label.text = "围城 %d%%" % int(round(
+			clampf(
+				battle.siege_progress
+					/ maxf(Combat.SIEGE_PROGRESS_REQUIRED, 1.0),
+				0.0, 1.0
+			) * 100.0
+		))
+	else:
+		label.text = "会战 · %d回合" % battle.round_no
+	label.font = _map_font
+	label.font_size = 25
+	label.outline_size = 8
+	label.pixel_size = 0.0125
+	label.modulate = MAP_IVORY
+	label.outline_modulate = MAP_INK
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.position = origin + Vector3(0.0, 0.86, 0.0)
+	_content.add_child(label)
+	_battle_labels.append(label)
+
+
+func _clear_battle_labels() -> void:
+	for label in _battle_labels:
+		if is_instance_valid(label):
+			label.queue_free()
+	_battle_labels.clear()
 
 
 func _update_campaign_mesh() -> void:
@@ -876,31 +1218,132 @@ func _update_campaign_mesh() -> void:
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for event in state.campaign_visual_events:
-		if MapRenderer.campaign_arrow_alpha(state.day, event) <= 0.0:
+		var alpha := MapRenderer.campaign_arrow_alpha(state.day, event)
+		if alpha <= 0.0:
 			continue
 		var target_id := int(event.get("target_city", -1))
 		if target_id < 0 or target_id >= state.cities.size():
 			continue
 		var target := state.cities[target_id].map_position
 		var nation_id := int(event.get("nation_id", -1))
-		var color := (
-			state.nations[nation_id].color.lightened(0.25)
+		var nation_color := (
+			MapRenderer.command_marker_color(state, nation_id)
 			if nation_id >= 0 and nation_id < state.nations.size()
-			else Color(0.94, 0.58, 0.16)
+			else MAP_GOLD
 		)
+		nation_color.a = alpha
 		for origin_id in event.get("origin_cities", []):
 			if origin_id < 0 or origin_id >= state.cities.size():
 				continue
-			_append_world_ribbon(
+			_append_campaign_arrow(
 				surface_tool,
 				state.cities[origin_id].map_position,
 				target,
-				0.24,
-				color,
-				0.42
+				nation_color,
+				int(event.get("wave", 0))
 			)
 	_campaigns.mesh = surface_tool.commit()
-	_campaigns.material_override = _line_material(true)
+	_campaigns.material_override = _line_material(false)
+
+
+func _append_campaign_arrow(
+	surface_tool: SurfaceTool,
+	from_uv: Vector2,
+	to_uv: Vector2,
+	color: Color,
+	wave: int
+) -> void:
+	var direction := to_uv - from_uv
+	var length := direction.length()
+	if length <= 0.0001:
+		return
+	var perpendicular := direction.normalized().orthogonal()
+	var bend_sign := -1.0 if posmod(wave, 2) == 0 else 1.0
+	var bend := minf(length * 0.16, 0.045) * bend_sign
+	var points := PackedVector2Array()
+	var segments := clampi(int(ceil(length * 84.0)), 12, 30)
+	for index in range(segments + 1):
+		var ratio := float(index) / float(segments)
+		var eased := ratio * ratio * (3.0 - 2.0 * ratio)
+		var point := from_uv.lerp(to_uv, eased)
+		point += perpendicular * sin(ratio * PI) * bend
+		points.append(point)
+	var ink := MAP_INK
+	ink.a = color.a * 0.82
+	_append_tapered_draped_path(
+		surface_tool, points, 0.30, 0.21, ink, 0.38
+	)
+	_append_tapered_draped_path(
+		surface_tool, points, 0.21, 0.12, color, 0.40
+	)
+	var end_direction := (points[-1] - points[-2]).normalized()
+	var end_perpendicular := end_direction.orthogonal()
+	var head_length := minf(maxf(length * 0.18, 0.030), 0.062)
+	var head_width := head_length * 0.72
+	var tip := points[-1]
+	var base := tip - end_direction * head_length
+	_append_draped_triangle(
+		surface_tool,
+		tip,
+		base + end_perpendicular * head_width,
+		base - end_perpendicular * head_width,
+		ink,
+		0.375
+	)
+	_append_draped_triangle(
+		surface_tool,
+		tip,
+		base + end_perpendicular * head_width * 0.74,
+		base - end_perpendicular * head_width * 0.74,
+		color,
+		0.405
+	)
+
+
+func _append_tapered_draped_path(
+	surface_tool: SurfaceTool,
+	points: PackedVector2Array,
+	start_width: float,
+	end_width: float,
+	color: Color,
+	elevation: float
+) -> void:
+	for index in range(points.size() - 1):
+		var ratio_a := float(index) / float(points.size() - 1)
+		var ratio_b := float(index + 1) / float(points.size() - 1)
+		var from := _terrain.map_to_world(points[index])
+		var to := _terrain.map_to_world(points[index + 1])
+		from.y += elevation
+		to.y += elevation
+		var segment := Vector2(to.x - from.x, to.z - from.z)
+		if segment.length_squared() <= 0.000001:
+			continue
+		var normal := segment.normalized().orthogonal()
+		var from_offset := Vector3(normal.x, 0.0, normal.y) * lerpf(
+			start_width, end_width, ratio_a
+		)
+		var to_offset := Vector3(normal.x, 0.0, normal.y) * lerpf(
+			start_width, end_width, ratio_b
+		)
+		_append_colored_quad(
+			surface_tool, from - from_offset, to - to_offset,
+			to + to_offset, from + from_offset, color
+		)
+
+
+func _append_draped_triangle(
+	surface_tool: SurfaceTool,
+	a_uv: Vector2,
+	b_uv: Vector2,
+	c_uv: Vector2,
+	color: Color,
+	elevation: float
+) -> void:
+	for uv in [a_uv, b_uv, c_uv]:
+		var world := _terrain.map_to_world(uv)
+		world.y += elevation
+		surface_tool.set_color(color)
+		surface_tool.add_vertex(world)
 
 
 func _update_selection_marker() -> void:
@@ -914,6 +1357,8 @@ func _update_selection_marker() -> void:
 			)
 			+ Vector3(0.0, 0.34, 0.0)
 		)
+		var pulse := 1.0 + sin(_visual_time * 3.2) * 0.08
+		_selection.scale = Vector3.ONE * pulse
 		_selection.visible = true
 		return
 	_selection.visible = false
@@ -939,21 +1384,29 @@ func _update_edge_selection() -> void:
 		surface_tool,
 		state.cities[edge.city_a].map_position,
 		state.cities[edge.city_b].map_position,
-		_road_width_for_capacity(edge.max_manpower) * 1.8,
-		Color(1.0, 0.76, 0.18, 0.92),
+		_road_width_for_capacity(edge.max_manpower) * 2.4,
+		Color(1.0, 0.72, 0.12, 0.96),
 		0.18
 	)
 	_edge_selection.mesh = surface_tool.commit()
 
 
 func _update_city_label_visibility() -> void:
+	_update_map_detail_visibility()
+
+
+func _update_map_detail_visibility() -> void:
 	if overlay == null:
 		return
 	var visible := overlay.city_names_visible()
 	for label in _city_labels:
-		label.visible = visible and _camera_distance <= 62.0
+		label.visible = visible and _camera_distance <= 40.0
 	for label in _nation_labels:
-		label.visible = _camera_distance >= 38.0
+		label.visible = _camera_distance >= 56.0
+	for label in _battle_labels:
+		label.visible = _camera_distance <= 50.0
+	if _minor_roads != null:
+		_minor_roads.visible = _camera_distance <= 62.0
 
 
 func _pick_map_feature(screen_position: Vector2) -> void:
@@ -1071,6 +1524,19 @@ func _append_world_ribbon(
 		surface_tool.add_vertex(vertex)
 
 
+func _append_colored_quad(
+	surface_tool: SurfaceTool,
+	a: Vector3,
+	b: Vector3,
+	c: Vector3,
+	d: Vector3,
+	color: Color
+) -> void:
+	for vertex in [a, b, d, b, c, d]:
+		surface_tool.set_color(color)
+		surface_tool.add_vertex(vertex)
+
+
 func _append_draped_ribbon(
 	surface_tool: SurfaceTool,
 	from_uv: Vector2,
@@ -1139,20 +1605,46 @@ func _line_material(emissive: bool) -> StandardMaterial3D:
 	return material
 
 
+func _political_boundary_material() -> ShaderMaterial:
+	var material := ShaderMaterial.new()
+	material.shader = POLITICAL_BOUNDARY_SHADER
+	material.render_priority = 4
+	return material
+
+
 func _instance_color_material(
-	emissive: bool
+	emissive: bool,
+	unshaded: bool = false
 ) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.vertex_color_use_as_albedo = true
 	material.roughness = 0.82
+	if unshaded:
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	if emissive:
 		material.emission_enabled = true
-		material.emission = Color(0.45, 0.04, 0.01)
-		material.emission_energy_multiplier = 1.3
+		material.emission = Color(0.28, 0.12, 0.025)
+		material.emission_energy_multiplier = 0.55
 	return material
 
 
+func _configure_multimesh(
+	layer: MultiMeshInstance3D,
+	mesh: Mesh,
+	instance_count: int,
+	material: Material
+) -> void:
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.use_colors = true
+	multimesh.mesh = mesh
+	multimesh.instance_count = instance_count
+	layer.multimesh = multimesh
+	layer.material_override = material
+
+
 func _clear_labels() -> void:
+	_clear_battle_labels()
 	for label in _city_labels:
 		if is_instance_valid(label):
 			label.queue_free()

@@ -1,0 +1,11 @@
+{
+  "format": "world-war-map-source",
+  "version": 1,
+  "texture": "res://assets/terrain/china_natural_earth2_2048.png",
+  "bbox_wgs84": [73.0, 18.0, 135.5, 54.0],
+  "channels": {
+    "rgb": "NASA Blue Marble satellite color",
+    "alpha": "0=water, 1..255=positive elevation normalized to 6200m"
+  },
+  "elevation_high_clip_m": 6200.0
+}

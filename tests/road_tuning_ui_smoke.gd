@@ -37,10 +37,17 @@ func _run() -> void:
 		push_error("ROAD_TUNING_UI_PAUSE_FAILED")
 		quit(1)
 		return
-	(panel._map_mode_buttons[0.72] as Button).pressed.emit()
 	if (
-		not is_equal_approx(panel.province_strength(), 0.72)
-		or not is_equal_approx(main.map_3d._province_strength, 0.72)
+		not is_equal_approx(panel.province_strength(), 1.0)
+		or not is_equal_approx(main.map_3d._province_strength, 1.0)
+	):
+		push_error("ROAD_TUNING_UI_DEFAULT_POLITICAL_MODE_FAILED")
+		quit(1)
+		return
+	(panel._map_mode_buttons[0.42] as Button).pressed.emit()
+	if (
+		not is_equal_approx(panel.province_strength(), 0.42)
+		or not is_equal_approx(main.map_3d._province_strength, 0.42)
 	):
 		push_error("ROAD_TUNING_UI_MAP_MODE_FAILED")
 		quit(1)
@@ -58,6 +65,11 @@ func _run() -> void:
 		push_error("ROAD_TUNING_UI_REBUILD_FAILED")
 		quit(1)
 		return
+	for edge in main.state.edges:
+		if not Edge.production_capacity_valid(edge.kind, edge.max_manpower):
+			push_error("ROAD_TUNING_UI_CAPACITY_BAND_FAILED")
+			quit(1)
+			return
 	var output := OS.get_environment("WW_VISUAL_OUTPUT")
 	if not output.is_empty():
 		var image := root.get_texture().get_image()

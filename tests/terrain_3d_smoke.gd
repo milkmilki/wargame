@@ -39,8 +39,12 @@ func _run() -> void:
 		map_3d._terrain._height_samples.duplicate()
 	)
 	var first_land_count := map_3d._terrain.land_cell_count()
+	var negative_water_samples := 0
+	for height in first_height_samples:
+		if height < StrategicTerrainRenderer.WATER_SURFACE_HEIGHT:
+			negative_water_samples += 1
 	map_3d._terrain.generate_from_height_texture(
-		load(GameState.TERRAIN_MAP_PATH) as Texture2D,
+		load(GameState.terrain_map_path()) as Texture2D,
 		state.map_source_region_normalized,
 		TerrainMapGenerator.ALPHA_THRESHOLD,
 		TerrainMapGenerator.LUMA_THRESHOLD
@@ -149,44 +153,55 @@ func _run() -> void:
 			selected_edge.city_b
 		)
 		map_3d._update_edge_selection()
-	var valid := (
-		terrain_mesh != null
-		and terrain_mesh.get_surface_count() > 0
-		and terrain_indices.size() == expected_indices
-		and is_equal_approx(
+	var checks := {
+		"terrain_mesh": terrain_mesh != null and terrain_mesh.get_surface_count() > 0,
+		"terrain_indices": terrain_indices.size() == expected_indices,
+		"alpha_threshold": is_equal_approx(
 			float(terrain_material.get_shader_parameter(
 				"land_alpha_threshold"
 			)),
 			TerrainMapGenerator.ALPHA_THRESHOLD
-		)
-		and absf(overview_angle) < 0.001
-		and overview_framed
-		and absf(
+		),
+		"default_political_mode": is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"province_strength"
+			)),
+			MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
+		),
+		"overview_angle": absf(
+			overview_angle
+				- StrategicMap3D.CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES
+		) < 0.001,
+		"overview_framed": overview_framed,
+		"middle_angle": absf(
 			middle_angle
-				- StrategicMap3D.CAMERA_MAX_NORMAL_ANGLE_DEGREES
-					* 0.5
-		) < 0.001
-		and absf(
+				- lerpf(
+					StrategicMap3D.CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES,
+					StrategicMap3D.CAMERA_MAX_NORMAL_ANGLE_DEGREES,
+					0.5
+				)
+		) < 0.001,
+		"close_angle": absf(
 			close_angle
 				- StrategicMap3D.CAMERA_MAX_NORMAL_ANGLE_DEGREES
-		) < 0.001
-		and absf(actual_close_angle - close_angle) < 0.001
-		and map_3d._terrain.land_cell_count() > 1000
-		and round_trip.distance_to(sample_position) < 0.0001
-		and map_3d._cities.multimesh != null
-		and map_3d._cities.multimesh.instance_count
-			== state.cities.size()
-		and map_3d._armies.multimesh != null
-		and map_3d._armies.multimesh.instance_count > 0
-		and map_3d._province_texture != null
-		and map_3d._selection.visible
-		and selected_edge != null
-		and map_3d._edge_selection.mesh != null
-		and map_3d._capital_rings.multimesh != null
-		and map_3d._capital_rings.multimesh.instance_count
-			== state.nations.size()
-	)
+		) < 0.001,
+		"actual_close_angle": absf(actual_close_angle - close_angle) < 0.001,
+		"land_cells": map_3d._terrain.land_cell_count() > 1000,
+		"negative_water": negative_water_samples > 0,
+		"source_water_layer_disabled": not map_3d._water.visible,
+		"round_trip": round_trip.distance_to(sample_position) < 0.0001,
+		"cities": map_3d._cities.multimesh != null and map_3d._cities.multimesh.instance_count == state.cities.size(),
+		"armies": map_3d._armies.multimesh != null and map_3d._armies.multimesh.instance_count > 0,
+		"provinces": map_3d._province_texture != null,
+		"selection": map_3d._selection.visible,
+		"edge_selection": selected_edge != null and map_3d._edge_selection.mesh != null,
+		"capitals": map_3d._capital_rings.multimesh != null and map_3d._capital_rings.multimesh.instance_count == state.nations.size(),
+	}
+	var valid := true
+	for check_value in checks.values():
+		valid = valid and bool(check_value)
 	if not valid:
+		print("TERRAIN_3D_DIAGNOSTIC checks=", checks)
 		push_error("TERRAIN_3D_SMOKE_INVALID")
 		quit(1)
 		return
@@ -198,7 +213,8 @@ func _run() -> void:
 		" cities=",
 		map_3d._cities.multimesh.instance_count,
 		" armies=",
-		map_3d._armies.multimesh.instance_count
+		map_3d._armies.multimesh.instance_count,
+		" water_samples=", negative_water_samples
 	)
 	map_3d.free()
 	overlay.free()

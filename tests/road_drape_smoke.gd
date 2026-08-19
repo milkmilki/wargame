@@ -72,14 +72,19 @@ func _run() -> void:
 			push_error("ROAD_DRAPE_HEIGHT_MISMATCH")
 			quit(1)
 			return
-	var mesh := map_3d._roads.mesh as ArrayMesh
-	var vertices: PackedVector3Array = (
-		mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var major_mesh := map_3d._roads.mesh as ArrayMesh
+	var minor_mesh := map_3d._minor_roads.mesh as ArrayMesh
+	var major_vertices: PackedVector3Array = (
+		major_mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 	)
+	var minor_vertices: PackedVector3Array = (
+		minor_mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	)
+	var vertex_count := major_vertices.size() + minor_vertices.size()
 	if (
-		vertices.size() <= state.edges.size() * 12
-		or map_3d._road_width_for_capacity(100000)
-			<= map_3d._road_width_for_capacity(10000)
+		vertex_count <= state.edges.size() * 12
+		or map_3d._road_width_for_capacity(Edge.TERRAIN_STANDARD_MANPOWER)
+			<= map_3d._road_width_for_capacity(Edge.TERRAIN_LOW_MANPOWER)
 	):
 		push_error("ROAD_DRAPE_GEOMETRY_TOO_SIMPLE")
 		quit(1)
@@ -88,7 +93,7 @@ func _run() -> void:
 		"ROAD_DRAPE_OK samples=",
 		tested_samples.size(),
 		" vertices=",
-		vertices.size(),
+		vertex_count,
 		" elevation_span=",
 		tested_samples[0].distance_to(
 			tested_samples[-1]

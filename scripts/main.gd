@@ -6,7 +6,7 @@ extends Node
 @export_range(1, GameState.TERRAIN_CITY_COUNT, 1) var nation_count: int = (
 	GameState.NATION_COUNT
 )
-@export_range(1, 1000, 1) var terrain_city_count: int = (
+@export_range(1, 500, 1) var terrain_city_count: int = (
 	GameState.TERRAIN_CITY_COUNT
 )
 @export var world_seed: int = 12345
@@ -27,6 +27,9 @@ extends Node
 @onready var road_tuning_panel: RoadTuningPanel = get_node_or_null(
 	"RoadTuningLayer"
 ) as RoadTuningPanel
+@onready var map_editor_panel: MapEditorPanel = get_node_or_null(
+	"MapEditorLayer"
+) as MapEditorPanel
 @onready var settings_button: Button = $SettingsLayer/SettingsButton
 @onready var settings_overlay: Control = $SettingsLayer/SettingsOverlay
 @onready var resolution_option: OptionButton = (
@@ -47,12 +50,16 @@ var _seed: int = 12345
 var _speed_mult: float = 1.0
 var _settings_previous_pause: bool = false
 var _road_previous_pause: bool = false
+var _editor_previous_pause: bool = false
+var _city_generation_mask_path: String = GameState.DEFAULT_CITY_MASK_PATH
 
 
 func _ready() -> void:
 	_setup_display_settings()
 	if road_tuning_panel != null:
 		_setup_road_tuning()
+	if map_editor_panel != null:
+		_setup_map_editor()
 	_seed = world_seed
 	_start_new_game(_seed)
 
@@ -61,6 +68,8 @@ func _setup_display_settings() -> void:
 	var settings_font := MapRenderer.create_ui_font()
 	_apply_settings_font(settings_button, settings_font)
 	_apply_settings_font(settings_overlay, settings_font)
+	_apply_command_button_style(settings_button)
+	_apply_settings_panel_style()
 	resolution_option.get_popup().add_theme_font_override(
 		"font",
 		settings_font
@@ -81,6 +90,43 @@ func _setup_display_settings() -> void:
 	settings_apply_button.pressed.connect(_apply_display_settings)
 
 
+func _apply_command_button_style(button: Button) -> void:
+	button.add_theme_color_override(
+		"font_color", MapRenderer.PAPER_LIGHT
+	)
+	button.add_theme_color_override(
+		"font_hover_color", Color.WHITE
+	)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.075, 0.095, 0.060, 0.97)
+	normal.border_color = MapRenderer.ACCENT_GOLD.darkened(0.28)
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(2)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.13, 0.16, 0.095, 0.98)
+	hover.border_color = MapRenderer.ACCENT_GOLD
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = MapRenderer.ACCENT_GOLD.darkened(0.50)
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+
+
+func _apply_settings_panel_style() -> void:
+	var panel := (
+		$SettingsLayer/SettingsOverlay/SettingsPanel
+		as PanelContainer
+	)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.075, 0.068, 0.052, 0.985)
+	panel_style.border_color = MapRenderer.ACCENT_GOLD.darkened(0.18)
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(5)
+	panel.add_theme_stylebox_override("panel", panel_style)
+	_apply_command_button_style(settings_close_button)
+	_apply_command_button_style(settings_apply_button)
+
+
 func _apply_settings_font(control: Control, font: Font) -> void:
 	control.add_theme_font_override("font", font)
 	for child in control.get_children():
@@ -96,6 +142,8 @@ func _open_settings() -> void:
 		and road_tuning_panel.is_open()
 	):
 		road_tuning_panel.close_panel()
+	if map_editor_panel != null and map_editor_panel.is_open():
+		map_editor_panel.close_panel()
 	_settings_previous_pause = simulation.paused
 	simulation.paused = true
 	settings_overlay.visible = true
@@ -138,6 +186,8 @@ func _setup_road_tuning() -> void:
 func _on_road_panel_opened() -> void:
 	if settings_overlay.visible:
 		_close_settings()
+	if map_editor_panel != null and map_editor_panel.is_open():
+		map_editor_panel.close_panel()
 	_road_previous_pause = simulation.paused
 	simulation.paused = true
 
@@ -180,26 +230,153 @@ func _on_road_regenerate_requested(settings: Dictionary) -> void:
 
 
 func _on_province_strength_changed(strength: float) -> void:
+	if renderer != null:
+		renderer.set_province_strength(strength)
 	if map_3d != null:
 		map_3d.set_province_strength(strength)
 
 
+func _setup_map_editor() -> void:
+	map_editor_panel.panel_opened.connect(_on_map_editor_opened)
+	map_editor_panel.panel_closed.connect(_on_map_editor_closed)
+	map_editor_panel.regenerate_requested.connect(
+		_on_map_regenerate_requested
+	)
+	map_editor_panel.save_requested.connect(_on_map_save_requested)
+	map_editor_panel.load_requested.connect(_on_map_load_requested)
+	map_editor_panel.city_changes_requested.connect(
+		_on_city_changes_requested
+	)
+	map_editor_panel.edge_changes_requested.connect(
+		_on_edge_changes_requested
+	)
+
+
+func _on_map_editor_opened() -> void:
+	if settings_overlay.visible:
+		_close_settings()
+	if road_tuning_panel != null and road_tuning_panel.is_open():
+		road_tuning_panel.close_panel()
+	_editor_previous_pause = simulation.paused
+	simulation.paused = true
+
+
+func _on_map_editor_closed() -> void:
+	simulation.paused = _editor_previous_pause
+
+
+func _on_map_regenerate_requested(
+	city_count: int,
+	city_mask_path: String
+) -> void:
+	var requested_count := clampi(city_count, nation_count, 500)
+	var requested_mask := city_mask_path.strip_edges()
+	var validation := TerrainMapGenerator.validate_city_mask(
+		GameState.terrain_map_path(), requested_mask, requested_count
+	)
+	if not bool(validation.get("ok", false)):
+		map_editor_panel.set_status(
+			str(validation.get("error", "城市蒙版无效。")), true
+		)
+		return
+	terrain_city_count = requested_count
+	_city_generation_mask_path = requested_mask
+	_start_new_game(_seed)
+	map_editor_panel.set_status(
+		"已按 %d 座城市重新生成；%s。" % [
+			terrain_city_count,
+			"仅白色蒙版内真实陆地可生成"
+				if not _city_generation_mask_path.is_empty()
+				else "未启用城市蒙版，所有真实陆地可生成",
+		]
+	)
+
+
+func _on_map_save_requested(file_name: String) -> void:
+	var result := MapDefinition.save_state(state, file_name)
+	map_editor_panel.set_status(
+		str(result.get("path", result.get("error", "保存失败。"))),
+		not bool(result.get("ok", false))
+	)
+
+
+func _on_map_load_requested(file_name: String) -> void:
+	var result := MapDefinition.load_file(file_name)
+	if not bool(result.get("ok", false)):
+		map_editor_panel.set_status(str(result.get("error", "加载失败。")), true)
+		return
+	_start_from_map_definition(result["data"] as Dictionary)
+	map_editor_panel.set_status(
+		"已加载 %s；战局已按地图定义重置。" % str(result["path"])
+	)
+
+
+func _on_city_changes_requested(
+	city_id: int,
+	changes: Dictionary
+) -> void:
+	var result := state.apply_city_editor_changes(city_id, changes)
+	if not bool(result.get("ok", false)):
+		map_editor_panel.set_status(str(result.get("error", "编辑失败。")), true)
+		return
+	_rebuild_scenario_from_edited_map("城市 %d 属性已应用" % city_id)
+
+
+func _on_edge_changes_requested(
+	city_a: int,
+	city_b: int,
+	changes: Dictionary
+) -> void:
+	var result := state.apply_edge_editor_changes(city_a, city_b, changes)
+	if not bool(result.get("ok", false)):
+		map_editor_panel.set_status(str(result.get("error", "编辑失败。")), true)
+		return
+	_rebuild_scenario_from_edited_map(
+		"道路 %d ↔ %d 属性已应用" % [city_a, city_b]
+	)
+
+
+func _rebuild_scenario_from_edited_map(message: String) -> void:
+	var definition := MapDefinition.from_state(state)
+	_start_from_map_definition(definition)
+	map_editor_panel.set_status(message + "；战局已安全重置。")
+
+
 func _start_new_game(world_seed: int) -> void:
-	state = GameState.new()
+	var next_state := GameState.new()
 	if use_grid_world:
-		state.generate_grid_world(world_seed)
+		next_state.generate_grid_world(world_seed)
 	else:
-		state.generate_world(
+		next_state.generate_world(
 			world_seed,
 			nation_count,
-			terrain_city_count
+			terrain_city_count,
+			_city_generation_mask_path
 		)
+	_activate_state(next_state)
+
+
+func _start_from_map_definition(definition: Dictionary) -> void:
+	var next_state := GameState.new()
+	next_state.generate_from_map_definition(definition, _seed)
+	nation_count = next_state.nations.size()
+	terrain_city_count = next_state.land_cities().size()
+	_city_generation_mask_path = next_state.city_generation_mask_path
+	_activate_state(next_state)
+
+
+func _activate_state(next_state: GameState) -> void:
+	state = next_state
 	simulation.setup(state)
 	simulation.diplomacy_enabled = not use_grid_world
 	simulation.set_speed_multiplier(_speed_mult)
 	renderer.set_army_icon_scale(initial_army_icon_scale)
 	renderer.set_city_names_visible(initial_city_names_visible)
 	renderer.setup(state, simulation)
+	if road_tuning_panel != null:
+		renderer.set_province_strength(
+			road_tuning_panel.province_strength()
+		)
 	var enable_3d := (
 		use_3d_map
 		and not use_grid_world
@@ -215,6 +392,8 @@ func _start_new_game(world_seed: int) -> void:
 			)
 	elif map_3d != null:
 		map_3d.visible = false
+	if map_editor_panel != null:
+		map_editor_panel.bind(state, renderer)
 
 
 func _unhandled_input(event: InputEvent) -> void:

@@ -1,0 +1,18 @@
+{
+  "source": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_map_units.geojson",
+  "dataset": "Natural Earth 1:10m Admin 0 Map Units",
+  "filter": "ADM0_A3 == CHN",
+  "bbox_wgs84": [
+    73.0,
+    18.0,
+    135.5,
+    54.0
+  ],
+  "resolution": [
+    2048,
+    2048
+  ],
+  "selected_features": 2,
+  "semantics": "white=city generation allowed, black=forbidden",
+  "rendering_effect": "none"
+}
