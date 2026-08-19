@@ -3,9 +3,15 @@
   "version": 1,
   "texture": "res://assets/terrain/china_natural_earth2_2048.png",
   "bbox_wgs84": [73.0, 18.0, 135.5, 54.0],
+  "city_density": {
+    "peak_latitude": 30.0,
+    "south_edge_multiplier": 0.5,
+    "north_edge_multiplier": 0.2
+  },
   "channels": {
     "rgb": "NASA Blue Marble satellite color",
-    "alpha": "0=water, 1..255=positive elevation normalized to 6200m"
+    "alpha": "1..128=-8000..0m sea, 129..255=positive land..6200m"
   },
+  "elevation_low_clip_m": -8000.0,
   "elevation_high_clip_m": 6200.0
 }

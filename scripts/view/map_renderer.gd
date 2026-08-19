@@ -51,11 +51,17 @@ const INK_COLOR := Color(0.105, 0.085, 0.055)
 const COMMAND_GREEN := Color(0.16, 0.20, 0.14)
 const ACCENT_RED := Color(0.55, 0.12, 0.10)
 const ACCENT_GOLD := Color(0.88, 0.67, 0.22)
+const BORDER_NEUTRAL := Color(0.025, 0.025, 0.025, 1.0)
+const BORDER_ALLIED := Color(0.025, 0.095, 0.235, 1.0)
+const BORDER_ENEMY := Color(0.285, 0.025, 0.018, 1.0)
+const BORDER_SUZERAINTY := Color(0.18, 0.19, 0.20, 1.0)
 const POLITICAL_MAP_DEFAULT_STRENGTH: float = 1.0
 const VASSAL_BRIGHTNESS_STEP: float = 0.15
-const COMMAND_COLOR_SATURATION_SCALE: float = 1.55
-const COMMAND_COLOR_SATURATION_FLOOR: float = 0.42
-const COMMAND_COLOR_VALUE_SCALE: float = 0.66
+const CAMPAIGN_ARROW_TEXTURE := preload(
+	"res://assets/ui/strategic/offensive_arc_arrow.png"
+)
+const CAMPAIGN_ARROW_SOURCE_TAIL := Vector2(20.0, 616.0)
+const CAMPAIGN_ARROW_SOURCE_TIP := Vector2(1490.0, 15.0)
 
 enum FormationIcon {
 	INFANTRY,
@@ -78,11 +84,13 @@ var _side_margin: float = BASE_SIDE_MARGIN
 var _font: Font
 var _terrain_texture: Texture2D
 var _province_texture: ImageTexture
+var _political_texture: ImageTexture
 var _province_strength: float = POLITICAL_MAP_DEFAULT_STRENGTH
 var _province_boundary_segments := PackedVector2Array()
 var _coast_segments := PackedVector2Array()
 var _nation_boundary_segments := PackedVector2Array()
 var _alliance_boundary_segments := PackedVector2Array()
+var _enemy_boundary_segments := PackedVector2Array()
 var _suzerainty_boundary_segments := PackedVector2Array()
 var _province_cache_ready: bool = false
 var _province_ownership_revision: int = -1
@@ -149,10 +157,12 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 			_on_runtime_day_committed
 		)
 	_province_texture = null
+	_political_texture = null
 	_province_boundary_segments = PackedVector2Array()
 	_coast_segments = PackedVector2Array()
 	_nation_boundary_segments = PackedVector2Array()
 	_alliance_boundary_segments = PackedVector2Array()
+	_enemy_boundary_segments = PackedVector2Array()
 	_suzerainty_boundary_segments = PackedVector2Array()
 	_province_cache_ready = false
 	_province_ownership_revision = -1
@@ -428,6 +438,18 @@ static func create_ui_font() -> Font:
 		if font_file.load_dynamic_font(path) == OK:
 			return font_file
 	return ThemeDB.fallback_font
+
+
+static func create_map_label_font() -> Font:
+	var fangsong := SystemFont.new()
+	fangsong.font_names = PackedStringArray([
+		"FangSong", "STFangsong", "仿宋", "仿宋_GB2312",
+		"FangSong_GB2312", "Noto Serif CJK SC",
+		"Source Han Serif SC",
+	])
+	fangsong.font_weight = 700
+	fangsong.allow_system_fallback = true
+	return fangsong
 
 
 func _process(_delta: float) -> void:
@@ -1561,10 +1583,47 @@ func _ensure_province_visual_cache() -> void:
 	):
 		var image := build_province_overlay_image(state)
 		_province_texture = ImageTexture.create_from_image(image)
+		var political_image := image.duplicate()
+		var packed_height := (
+			load(GameState.terrain_map_path()) as Texture2D
+		).get_image()
+		for political_y in range(political_image.get_height()):
+			for political_x in range(political_image.get_width()):
+				var political_pixel: Color = political_image.get_pixel(
+					political_x, political_y
+				)
+				if political_pixel.a <= 0.001:
+					var source_x := clampi(int(
+						(float(political_x) + 0.5)
+						/ float(political_image.get_width())
+						* float(packed_height.get_width())
+					), 0, packed_height.get_width() - 1)
+					var source_y := clampi(int(
+						(float(political_y) + 0.5)
+						/ float(political_image.get_height())
+						* float(packed_height.get_height())
+					), 0, packed_height.get_height() - 1)
+					var signed_elevation := (
+						TerrainMapGenerator.packed_signed_elevation(
+							packed_height.get_pixel(source_x, source_y)
+						)
+					)
+					var sea_depth := maxf(-signed_elevation, 0.0)
+					var deep_mix := smoothstep(0.06, 0.375, sea_depth)
+					political_image.set_pixel(
+						political_x, political_y,
+						Color(0.090, 0.310, 0.470).lerp(
+							Color(0.025, 0.060, 0.130), deep_mix
+						)
+					)
+		_political_texture = ImageTexture.create_from_image(
+			political_image
+		)
 		if geometry.is_empty():
 			geometry = build_province_boundary_segments(state)
 		_nation_boundary_segments = geometry["nation"]
 		_alliance_boundary_segments = geometry["alliance"]
+		_enemy_boundary_segments = geometry["enemy"]
 		_suzerainty_boundary_segments = geometry["suzerainty"]
 		_province_ownership_revision = state.ownership_revision
 		_province_diplomacy_revision = state.diplomacy_revision
@@ -1590,9 +1649,11 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			# province_strength, so 100% can be a genuinely solid color map.
 			base.a = 1.0
 			if current_owner != recognized_owner and (x + y) % 9 < 3:
-				var occupation := political_map_color(
-					game_state, current_owner
-				).darkened(0.08)
+				var occupation := GameState.normalize_nation_color(
+					political_map_color(
+						game_state, current_owner
+					).darkened(0.08)
+				)
 				occupation.a = 1.0
 				base = occupation
 			image.set_pixel(x, y, base)
@@ -1600,10 +1661,7 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 
 
 static func paper_nation_color(color: Color) -> Color:
-	var paper_tint := Color(0.64, 0.52, 0.33)
-	var result := color.lerp(paper_tint, 0.48)
-	result.s = minf(result.s, 0.58)
-	return result
+	return GameState.normalize_nation_color(color)
 
 
 ## Political-map color is intentionally shared by 2D and 3D renderers. A
@@ -1642,11 +1700,13 @@ static func political_map_color(
 		1.0 - VASSAL_BRIGHTNESS_STEP,
 		float(depth)
 	)
-	return result.darkened(clampf(
-		accumulated_darken,
-		0.0,
-		0.72
-	))
+	return GameState.normalize_nation_color(
+		result.darkened(clampf(
+			accumulated_darken,
+			0.0,
+			0.72
+		))
+	)
 
 
 ## Counters and offensive arrows need a denser ink than the broad political
@@ -1655,20 +1715,33 @@ static func command_marker_color(
 	game_state: GameState,
 	nation_id: int
 ) -> Color:
-	var source := political_map_color(game_state, nation_id)
-	return Color.from_hsv(
-		source.h,
-		clampf(
-			maxf(
-				source.s * COMMAND_COLOR_SATURATION_SCALE,
-				COMMAND_COLOR_SATURATION_FLOOR
-			),
-			0.0,
-			1.0
-		),
-		clampf(source.v * COMMAND_COLOR_VALUE_SCALE, 0.0, 1.0),
-		source.a
+	return GameState.normalize_nation_color(
+		political_map_color(game_state, nation_id)
 	)
+
+
+static func final_faction_visual_color(
+	game_state: GameState,
+	nation_id: int,
+	alert_mix: float = 0.0,
+	highlight: float = 0.0
+) -> Color:
+	var result := command_marker_color(game_state, nation_id)
+	if alert_mix > 0.0:
+		result = result.lerp(
+			Color.from_hsv(0.0, 0.68, 0.68),
+			clampf(alert_mix, 0.0, 1.0)
+		)
+	if highlight > 0.0:
+		result = Color.from_hsv(
+			result.h, result.s,
+			clampf(
+				result.v + highlight,
+				GameState.NATION_COLOR_VALUE_MIN,
+				GameState.NATION_COLOR_VALUE_MAX
+			), result.a
+		)
+	return GameState.normalize_nation_color(result)
 
 
 static func build_province_boundary_segments(
@@ -1677,6 +1750,7 @@ static func build_province_boundary_segments(
 	var province := PackedVector2Array()
 	var nation := PackedVector2Array()
 	var alliance := PackedVector2Array()
+	var enemy := PackedVector2Array()
 	var suzerainty := PackedVector2Array()
 	var coast := PackedVector2Array()
 	var size := game_state.province_map_size
@@ -1685,6 +1759,7 @@ static func build_province_boundary_segments(
 			"province": province,
 			"nation": nation,
 			"alliance": alliance,
+			"enemy": enemy,
 			"suzerainty": suzerainty,
 			"coast": coast,
 		}
@@ -1729,12 +1804,21 @@ static func build_province_boundary_segments(
 							suzerainty, Vector2(x1, y0), Vector2(x1, y1)
 						)
 					else:
-						_append_segment(nation, Vector2(x1, y0), Vector2(x1, y1))
 						if _province_owners_allied(
 							game_state, province_id, right
 						):
 							_append_segment(
 								alliance, Vector2(x1, y0), Vector2(x1, y1)
+							)
+						elif _province_owners_enemy(
+							game_state, province_id, right
+						):
+							_append_segment(
+								enemy, Vector2(x1, y0), Vector2(x1, y1)
+							)
+						else:
+							_append_segment(
+								nation, Vector2(x1, y0), Vector2(x1, y1)
 							)
 			if bottom < 0:
 				_append_segment(coast, Vector2(x0, y1), Vector2(x1, y1))
@@ -1748,20 +1832,27 @@ static func build_province_boundary_segments(
 							suzerainty, Vector2(x0, y1), Vector2(x1, y1)
 						)
 					else:
-						_append_segment(nation, Vector2(x0, y1), Vector2(x1, y1))
 						if _province_owners_allied(
 							game_state, province_id, bottom
 						):
 							_append_segment(
 								alliance, Vector2(x0, y1), Vector2(x1, y1)
 							)
-	return {
-		"province": _smooth_boundary_segments(province, size),
-		"nation": _smooth_boundary_segments(nation, size),
-		"alliance": _smooth_boundary_segments(alliance, size),
-		"suzerainty": _smooth_boundary_segments(suzerainty, size),
-		"coast": _smooth_boundary_segments(coast, size),
-	}
+						elif _province_owners_enemy(
+							game_state, province_id, bottom
+						):
+							_append_segment(
+								enemy, Vector2(x0, y1), Vector2(x1, y1)
+							)
+						else:
+							_append_segment(
+								nation, Vector2(x0, y1), Vector2(x1, y1)
+							)
+	var shared := _smooth_shared_political_segments(
+		province, nation, alliance, enemy, suzerainty
+	)
+	shared["coast"] = _smooth_boundary_segments(coast, size)
+	return shared
 
 
 static func _province_owners_differ(
@@ -1785,6 +1876,17 @@ static func _province_owners_allied(
 	if province_a < 0 or province_b < 0:
 		return false
 	return game_state.is_allied(
+		game_state.cities[province_a].owner_nation,
+		game_state.cities[province_b].owner_nation
+	)
+
+
+static func _province_owners_enemy(
+	game_state: GameState, province_a: int, province_b: int
+) -> bool:
+	if province_a < 0 or province_b < 0:
+		return false
+	return game_state.is_enemy(
 		game_state.cities[province_a].owner_nation,
 		game_state.cities[province_b].owner_nation
 	)
@@ -1815,6 +1917,68 @@ static func _append_segment(
 ) -> void:
 	segments.append(from)
 	segments.append(to)
+
+
+## Smooth the single city-border graph once, then remap every diplomatic
+## subset through the same vertex table. A national border therefore remains
+## exactly on top of its underlying city border instead of drifting after each
+## class is smoothed independently.
+static func _smooth_shared_political_segments(
+	province: PackedVector2Array,
+	nation: PackedVector2Array,
+	alliance: PackedVector2Array,
+	enemy: PackedVector2Array,
+	suzerainty: PackedVector2Array
+) -> Dictionary:
+	var positions := {}
+	var neighbors := {}
+	for index in range(0, province.size(), 2):
+		var from := province[index]
+		var to := province[index + 1]
+		var from_key := _boundary_point_key(from)
+		var to_key := _boundary_point_key(to)
+		positions[from_key] = from
+		positions[to_key] = to
+		if not neighbors.has(from_key):
+			neighbors[from_key] = [] as Array[String]
+		if not neighbors.has(to_key):
+			neighbors[to_key] = [] as Array[String]
+		if not (neighbors[from_key] as Array[String]).has(to_key):
+			(neighbors[from_key] as Array[String]).append(to_key)
+		if not (neighbors[to_key] as Array[String]).has(from_key):
+			(neighbors[to_key] as Array[String]).append(from_key)
+	var smoothed := positions.duplicate()
+	for _iteration in range(2):
+		var next := smoothed.duplicate()
+		for key_value in neighbors:
+			var key := str(key_value)
+			var adjacent: Array[String] = neighbors[key]
+			if adjacent.size() != 2:
+				continue
+			var current: Vector2 = smoothed[key]
+			var previous: Vector2 = smoothed[adjacent[0]]
+			var following: Vector2 = smoothed[adjacent[1]]
+			next[key] = current * 0.50 + (previous + following) * 0.25
+		smoothed = next
+	return {
+		"province": _remap_boundary_segments(province, smoothed),
+		"nation": _remap_boundary_segments(nation, smoothed),
+		"alliance": _remap_boundary_segments(alliance, smoothed),
+		"enemy": _remap_boundary_segments(enemy, smoothed),
+		"suzerainty": _remap_boundary_segments(suzerainty, smoothed),
+	}
+
+
+static func _remap_boundary_segments(
+	segments: PackedVector2Array,
+	positions: Dictionary
+) -> PackedVector2Array:
+	var result := PackedVector2Array()
+	result.resize(segments.size())
+	for index in range(segments.size()):
+		var key := _boundary_point_key(segments[index])
+		result[index] = positions.get(key, segments[index])
+	return result
 
 
 ## 将栅格边逐端点串成路径，并在保持分叉端点的前提下做两次 Chaikin 圆滑。
@@ -2119,10 +2283,10 @@ static func _boundary_edge_key(
 
 
 func _draw_province_fills() -> void:
-	if _province_texture == null or _province_strength <= 0.0:
+	if _political_texture == null or _province_strength <= 0.0:
 		return
 	draw_texture_rect(
-		_province_texture,
+		_political_texture,
 		Rect2(_origin, _map_size),
 		false,
 		Color(1.0, 1.0, 1.0, _province_strength)
@@ -2148,8 +2312,8 @@ func _draw_province_boundaries() -> void:
 	if not _province_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_province_boundary_segments),
-			Color(0.32, 0.33, 0.33, 0.52),
-			maxf(0.72 * _display_scale, 0.70),
+			Color(0.11, 0.115, 0.12, 0.92),
+			maxf(1.20 * _display_scale, 1.0),
 			true
 		)
 
@@ -2159,8 +2323,8 @@ func _draw_national_boundaries() -> void:
 	if not coast_pixels.is_empty():
 		draw_multiline(
 			coast_pixels,
-			Color(0.24, 0.25, 0.25, 0.86),
-			maxf(1.4 * _display_scale, 1.0),
+			Color(0.11, 0.115, 0.12, 0.92),
+			maxf(1.20 * _display_scale, 1.0),
 			true
 		)
 	if not _nation_boundary_segments.is_empty():
@@ -2169,15 +2333,22 @@ func _draw_national_boundaries() -> void:
 		)
 		draw_multiline(
 			nation_pixels,
-			Color(0.20, 0.21, 0.21, 0.92),
-			maxf(2.2 * _display_scale, 1.4),
+			BORDER_NEUTRAL,
+			maxf(2.8 * _display_scale, 1.8),
 			true
 		)
 	if not _alliance_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_alliance_boundary_segments),
-			Color(0.39, 0.40, 0.40, 0.72),
-			maxf(1.55 * _display_scale, 1.0),
+			BORDER_ALLIED,
+			maxf(2.8 * _display_scale, 1.8),
+			true
+		)
+	if not _enemy_boundary_segments.is_empty():
+		draw_multiline(
+			_normalized_segments_to_pixels(_enemy_boundary_segments),
+			BORDER_ENEMY,
+			maxf(3.0 * _display_scale, 2.0),
 			true
 		)
 	if not _suzerainty_boundary_segments.is_empty():
@@ -2185,8 +2356,8 @@ func _draw_national_boundaries() -> void:
 			_normalized_segments_to_pixels(
 				_suzerainty_boundary_segments
 			),
-			Color(0.30, 0.31, 0.31, 0.86),
-			maxf(1.25 * _display_scale, 0.9),
+			BORDER_SUZERAINTY,
+			maxf(2.4 * _display_scale, 1.6),
 			true
 		)
 
@@ -2213,7 +2384,6 @@ func _draw_campaign_arrows() -> void:
 			_draw_campaign_arrow(
 				_city_center(state.cities[origin_city]),
 				_city_center(state.cities[target_city]),
-				command_marker_color(state, nation_id),
 				alpha,
 				index
 			)
@@ -2238,97 +2408,23 @@ static func campaign_arrow_alpha(
 func _draw_campaign_arrow(
 	start: Vector2,
 	finish: Vector2,
-	color: Color,
 	alpha: float,
 	curve_index: int
 ) -> void:
 	var delta := finish - start
 	if delta.length_squared() < 1.0:
 		return
-	var direction := delta.normalized()
-	var normal := Vector2(-direction.y, direction.x)
-	var bend_sign := -1.0 if curve_index % 2 == 0 else 1.0
-	var control := (
-		(start + finish) * 0.5
-		+ normal * minf(delta.length() * 0.16, 42.0 * _display_scale) * bend_sign
+	var source_delta := (
+		CAMPAIGN_ARROW_SOURCE_TIP - CAMPAIGN_ARROW_SOURCE_TAIL
 	)
-	var points := PackedVector2Array()
-	const SEGMENTS: int = 18
-	for i in range(SEGMENTS + 1):
-		var t := float(i) / float(SEGMENTS)
-		var inv := 1.0 - t
-		points.append(
-			start * inv * inv + control * 2.0 * inv * t + finish * t * t
-		)
-	var arrow_color := color
-	arrow_color.a = 0.96 * alpha
-	draw_polyline(
-		points,
-		Color(0.04, 0.025, 0.012, 0.88 * alpha),
-		10.0 * _display_scale,
-		true
+	var scale := delta.length() / source_delta.length()
+	var rotation := delta.angle() - source_delta.angle()
+	draw_set_transform(start, rotation, Vector2.ONE * scale)
+	draw_texture(
+		CAMPAIGN_ARROW_TEXTURE, -CAMPAIGN_ARROW_SOURCE_TAIL,
+		Color(1.0, 1.0, 1.0, 0.94 * alpha)
 	)
-	draw_polyline(points, arrow_color, 5.5 * _display_scale, true)
-	var flow_phase := fmod(_blink * 0.18 + float(curve_index) * 0.07, 0.24)
-	for chevron_index in range(4):
-		var t := 0.12 + flow_phase + float(chevron_index) * 0.24
-		if t >= 0.94:
-			continue
-		var point := _quadratic_point(start, control, finish, t)
-		var next := _quadratic_point(
-			start,
-			control,
-			finish,
-			minf(t + 0.02, 1.0)
-		)
-		var flow_direction := (next - point).normalized()
-		var flow_normal := Vector2(-flow_direction.y, flow_direction.x)
-		var tail := 5.0 * _display_scale
-		draw_line(
-			point,
-			point - flow_direction * tail + flow_normal * tail * 0.55,
-			Color(arrow_color.lightened(0.14), alpha),
-			1.6 * _display_scale
-		)
-		draw_line(
-			point,
-			point - flow_direction * tail - flow_normal * tail * 0.55,
-			Color(arrow_color.lightened(0.14), alpha),
-			1.6 * _display_scale
-		)
-	var tangent := (finish - control).normalized()
-	var arrow_normal := Vector2(-tangent.y, tangent.x)
-	var head_length := 18.0 * _display_scale
-	var head_width := 10.0 * _display_scale
-	var head := PackedVector2Array([
-		finish,
-		finish - tangent * head_length + arrow_normal * head_width,
-		finish - tangent * head_length - arrow_normal * head_width,
-	])
-	draw_colored_polygon(head, arrow_color)
-	draw_polyline(
-		PackedVector2Array([
-			head[1],
-			head[0],
-			head[2],
-		]),
-		Color(0.04, 0.025, 0.012, 0.90 * alpha),
-		1.8 * _display_scale
-	)
-
-
-static func _quadratic_point(
-	start: Vector2,
-	control: Vector2,
-	finish: Vector2,
-	t: float
-) -> Vector2:
-	var inv := 1.0 - t
-	return (
-		start * inv * inv
-		+ control * 2.0 * inv * t
-		+ finish * t * t
-	)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 func _draw_edges() -> void:
@@ -2467,8 +2563,10 @@ func _draw_cities() -> void:
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
-		var base := paper_nation_color(
-			state.nations[city.owner_nation].color
+		var base := final_faction_visual_color(
+			state, city.owner_nation,
+			0.30 if contested_cities.has(city.id) else 0.0,
+			0.06 if city.is_capital else 0.0
 		)
 		var border := (
 			ACCENT_RED
@@ -2696,16 +2794,16 @@ func _draw_armies() -> void:
 				Color(0.12, 0.25, 0.20, 0.88),
 				2.0 * icon_scale
 			)
-		var army_color := command_marker_color(
-			state, army.owner_nation
+		var army_color := final_faction_visual_color(
+			state, army.owner_nation,
+			0.48 if army.starving and blink_on else 0.0,
+			0.04 if army.state == Army.State.FIGHTING else 0.0
 		)
 		var counter_color := army_color
-		if army.starving and blink_on:
-			counter_color = PAPER_LIGHT
 		_draw_army_counter_body(
 			rect,
 			counter_color,
-			army_color.darkened(0.10),
+			GameState.normalize_nation_color(army_color.darkened(0.10)),
 			is_heavy,
 			icon_scale
 		)
@@ -3809,9 +3907,11 @@ func _draw_selection_detail() -> void:
 			"港" if city.is_dock else "城",
 			city.id,
 		]
-		stripe_color = paper_nation_color(
-			state.nations[city.owner_nation].color
-		).darkened(0.22)
+		stripe_color = GameState.normalize_nation_color(
+			paper_nation_color(
+				state.nations[city.owner_nation].color
+			).darkened(0.22)
+		)
 		lines = city_detail_lines(state, city.id)
 	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)

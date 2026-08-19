@@ -40,9 +40,15 @@ func _run() -> void:
 	)
 	var first_land_count := map_3d._terrain.land_cell_count()
 	var negative_water_samples := 0
+	var shallow_water_samples := 0
+	var deep_water_samples := 0
 	for height in first_height_samples:
 		if height < StrategicTerrainRenderer.WATER_SURFACE_HEIGHT:
 			negative_water_samples += 1
+			if height > -0.28:
+				shallow_water_samples += 1
+			elif height < -0.55:
+				deep_water_samples += 1
 	map_3d._terrain.generate_from_height_texture(
 		load(GameState.terrain_map_path()) as Texture2D,
 		state.map_source_region_normalized,
@@ -73,6 +79,9 @@ func _run() -> void:
 		map_3d._terrain.mesh_instance().material_override
 		as ShaderMaterial
 	)
+	var unclaimed_color := StrategicTerrainRenderer.UNCLAIMED_POLITICAL_COLOR
+	var shallow_sea := StrategicTerrainRenderer.SHALLOW_SEA_COLOR
+	var deep_sea := StrategicTerrainRenderer.DEEP_SEA_COLOR
 	var overview_angle := map_3d._camera_normal_angle_degrees()
 	var overview_framed := true
 	for corner in [
@@ -168,6 +177,22 @@ func _run() -> void:
 			)),
 			MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
 		),
+		"default_elevation_shadow": is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"elevation_shadow_strength"
+			)), 0.62
+		),
+		"unclaimed_political_dark_blue": (
+			unclaimed_color.b > unclaimed_color.r
+			and unclaimed_color.b > unclaimed_color.g
+			and unclaimed_color.v >= 0.16
+			and unclaimed_color.v <= 0.20
+		),
+		"sea_depth_gradient": (
+			shallow_sea.v > deep_sea.v
+			and shallow_sea.b > shallow_sea.r
+			and deep_sea.b > deep_sea.r
+		),
 		"overview_angle": absf(
 			overview_angle
 				- StrategicMap3D.CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES
@@ -188,6 +213,9 @@ func _run() -> void:
 		"actual_close_angle": absf(actual_close_angle - close_angle) < 0.001,
 		"land_cells": map_3d._terrain.land_cell_count() > 1000,
 		"negative_water": negative_water_samples > 0,
+		"bathymetry_depth_bands": (
+			shallow_water_samples > 0 and deep_water_samples > 0
+		),
 		"source_water_layer_disabled": not map_3d._water.visible,
 		"round_trip": round_trip.distance_to(sample_position) < 0.0001,
 		"cities": map_3d._cities.multimesh != null and map_3d._cities.multimesh.instance_count == state.cities.size(),

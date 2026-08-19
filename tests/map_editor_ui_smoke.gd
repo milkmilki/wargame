@@ -27,6 +27,16 @@ func _run() -> void:
 		push_error("MAP_EDITOR_UI_DEFAULT_MASK_FAILED")
 		quit(1)
 		return
+	if (
+		not is_equal_approx(panel._latitude_min.value, 18.0)
+		or not is_equal_approx(panel._latitude_max.value, 54.0)
+		or not is_equal_approx(panel._density_peak_latitude.value, 30.0)
+		or not is_equal_approx(panel._south_density.value, 0.5)
+		or not is_equal_approx(panel._north_density.value, 0.2)
+	):
+		push_error("MAP_EDITOR_UI_LATITUDE_DENSITY_DEFAULT_FAILED")
+		quit(1)
+		return
 	main.renderer.select_city(0)
 	panel._refresh_selection_form()
 	if not panel.is_open() or not main.simulation.paused or not panel._city_form.visible:
@@ -41,7 +51,14 @@ func _run() -> void:
 		quit(1)
 		return
 	main._on_map_regenerate_requested(
-		72, main.state.city_generation_mask_path
+		72, main.state.city_generation_mask_path,
+		{
+			"latitude_min": 10.0,
+			"latitude_max": 70.0,
+			"density_peak_latitude": 28.0,
+			"south_density": 0.45,
+			"north_density": 0.15,
+		}
 	)
 	await process_frame
 	if (
@@ -49,13 +66,16 @@ func _run() -> void:
 		or not main.simulation.paused
 		or main.state.city_generation_mask_path
 			!= GameState.DEFAULT_CITY_MASK_PATH
+		or not is_equal_approx(float(main.state.city_density_settings["latitude_min"]), 10.0)
+		or not is_equal_approx(float(main.state.city_density_settings["latitude_max"]), 70.0)
 	):
 		push_error("MAP_EDITOR_UI_REGENERATE_FAILED")
 		quit(1)
 		return
 	var state_before_bad_mask: GameState = main.state
 	main._on_map_regenerate_requested(
-		72, "/private/tmp/not-a-real-city-mask.png"
+		72, "/private/tmp/not-a-real-city-mask.png",
+		main.state.city_density_settings
 	)
 	if main.state != state_before_bad_mask or not panel._status.text.contains("无法读取"):
 		push_error("MAP_EDITOR_UI_BAD_MASK_GUARD_FAILED")

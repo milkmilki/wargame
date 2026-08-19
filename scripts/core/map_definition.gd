@@ -62,6 +62,7 @@ static func from_state(state: GameState) -> Dictionary:
 		"version": VERSION,
 		"map_source_manifest": GameState.MAP_SOURCE_MANIFEST,
 		"city_generation_mask_path": state.city_generation_mask_path,
+		"city_density_settings": state.city_density_settings.duplicate(true),
 		"nation_count": state.nations.size(),
 		"map_aspect_ratio": state.map_aspect_ratio,
 		"source_region": [

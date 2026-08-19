@@ -5,7 +5,11 @@ extends CanvasLayer
 
 signal panel_opened
 signal panel_closed
-signal regenerate_requested(city_count: int, city_mask_path: String)
+signal regenerate_requested(
+	city_count: int,
+	city_mask_path: String,
+	city_density_settings: Dictionary
+)
 signal save_requested(file_name: String)
 signal load_requested(file_name: String)
 signal city_changes_requested(city_id: int, changes: Dictionary)
@@ -16,6 +20,11 @@ var _dock_panel: PanelContainer
 var _status: Label
 var _city_count: SpinBox
 var _city_mask_path: LineEdit
+var _latitude_min: SpinBox
+var _latitude_max: SpinBox
+var _density_peak_latitude: SpinBox
+var _south_density: SpinBox
+var _north_density: SpinBox
 var _mask_file_dialog: FileDialog
 var _file_name: LineEdit
 var _selection_title: Label
@@ -44,6 +53,9 @@ func bind(game_state: GameState, renderer: MapRenderer) -> void:
 		_city_count.value = game_state.land_cities().size()
 	if _city_mask_path != null:
 		_city_mask_path.text = game_state.city_generation_mask_path
+	_apply_density_settings_to_ui(
+		game_state.city_density_settings
+	)
 	_refresh_selection_form()
 
 
@@ -76,8 +88,8 @@ func _build_ui() -> void:
 	var panel := PanelContainer.new()
 	panel.name = "EditorDock"
 	panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	panel.position = Vector2(-530.0, -325.0)
-	panel.size = Vector2(520.0, 650.0)
+	panel.position = Vector2(-530.0, -350.0)
+	panel.size = Vector2(520.0, 700.0)
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.075, 0.068, 0.052, 0.99)
@@ -116,7 +128,8 @@ func _build_ui() -> void:
 	regenerate.custom_minimum_size = Vector2(210.0, 32.0)
 	regenerate.pressed.connect(func() -> void:
 		regenerate_requested.emit(
-			int(_city_count.value), _city_mask_path.text
+			int(_city_count.value), _city_mask_path.text,
+			city_density_settings()
 		)
 	)
 	_style_button(regenerate, true)
@@ -162,6 +175,45 @@ func _build_ui() -> void:
 		set_status("已选择蒙版；点击重新生成以应用。")
 	)
 	add_child(_mask_file_dialog)
+	var latitude_grid := GridContainer.new()
+	latitude_grid.columns = 4
+	latitude_grid.add_theme_constant_override("h_separation", 8)
+	latitude_grid.add_theme_constant_override("v_separation", 6)
+	content.add_child(latitude_grid)
+	_latitude_min = _compact_spin_field(
+		latitude_grid, "下限纬度", -90.0, 90.0, 0.5
+	)
+	_latitude_max = _compact_spin_field(
+		latitude_grid, "上限纬度", -90.0, 90.0, 0.5
+	)
+	_density_peak_latitude = _compact_spin_field(
+		latitude_grid, "峰值纬度", -90.0, 90.0, 0.5
+	)
+	_south_density = _compact_spin_field(
+		latitude_grid, "南端密度", 0.0, 1.0, 0.05
+	)
+	_north_density = _compact_spin_field(
+		latitude_grid, "北端密度", 0.0, 1.0, 0.05
+	)
+	var reset_density := Button.new()
+	reset_density.text = "恢复真实纬度"
+	reset_density.tooltip_text = "从当前地图源 bbox 恢复纬度范围与默认密度曲线"
+	reset_density.pressed.connect(func() -> void:
+		_apply_density_settings_to_ui(
+			TerrainMapGenerator.default_city_density_settings()
+		)
+		set_status("已恢复当前地图源的真实纬度与默认城市密度曲线。")
+	)
+	_style_button(reset_density)
+	latitude_grid.add_child(reset_density)
+	var latitude_hint := Label.new()
+	latitude_hint.text = (
+		"像素顶部=上限纬度、底部=下限纬度；峰值密度固定为1。"
+		+ "默认南端0.5、北端0.2，两侧向峰值平滑衰减。"
+	)
+	latitude_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	latitude_hint.modulate = Color(0.78, 0.73, 0.62)
+	content.add_child(latitude_hint)
 	content.add_child(HSeparator.new())
 
 	_selection_title = Label.new()
@@ -169,7 +221,7 @@ func _build_ui() -> void:
 	_selection_title.add_theme_font_size_override("font_size", 17)
 	content.add_child(_selection_title)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0.0, 310.0)
+	scroll.custom_minimum_size = Vector2(0.0, 220.0)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_child(scroll)
 	var form_host := VBoxContainer.new()
@@ -315,6 +367,50 @@ func _spin_field(
 	spin.custom_minimum_size = Vector2(180.0, 30.0)
 	row.add_child(spin)
 	return spin
+
+
+func _compact_spin_field(
+	parent: GridContainer,
+	label_text: String,
+	minimum: float,
+	maximum: float,
+	step: float
+) -> SpinBox:
+	parent.add_child(_label(label_text, 78.0))
+	var spin := SpinBox.new()
+	spin.min_value = minimum
+	spin.max_value = maximum
+	spin.step = step
+	spin.allow_lesser = false
+	spin.allow_greater = false
+	spin.custom_minimum_size = Vector2(128.0, 30.0)
+	parent.add_child(spin)
+	return spin
+
+
+func city_density_settings() -> Dictionary:
+	return TerrainMapGenerator.normalize_city_density_settings({
+		"latitude_min": _latitude_min.value,
+		"latitude_max": _latitude_max.value,
+		"density_peak_latitude": _density_peak_latitude.value,
+		"south_density": _south_density.value,
+		"north_density": _north_density.value,
+	})
+
+
+func _apply_density_settings_to_ui(settings: Dictionary) -> void:
+	if _latitude_min == null:
+		return
+	var normalized := (
+		TerrainMapGenerator.normalize_city_density_settings(settings)
+	)
+	_latitude_min.value = float(normalized["latitude_min"])
+	_latitude_max.value = float(normalized["latitude_max"])
+	_density_peak_latitude.value = float(
+		normalized["density_peak_latitude"]
+	)
+	_south_density.value = float(normalized["south_density"])
+	_north_density.value = float(normalized["north_density"])
 
 
 func _label(text_value: String, width: float = 0.0) -> Label:

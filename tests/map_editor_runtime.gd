@@ -21,6 +21,15 @@ func _run() -> void:
 	if state.city_generation_mask_path != GameState.DEFAULT_CITY_MASK_PATH:
 		_fail("default China city mask was not applied")
 		return
+	var density_defaults := TerrainMapGenerator.default_city_density_settings()
+	if (
+		not is_equal_approx(float(state.city_density_settings["latitude_min"]), 18.0)
+		or not is_equal_approx(float(state.city_density_settings["latitude_max"]), 54.0)
+		or not is_equal_approx(float(state.city_density_settings["density_peak_latitude"]), 30.0)
+		or state.city_density_settings != density_defaults
+	):
+		_fail("default city density did not use the source WGS84 latitude bounds")
+		return
 	var default_mask := (
 		load(GameState.DEFAULT_CITY_MASK_PATH) as Texture2D
 	).get_image()
@@ -51,7 +60,7 @@ func _run() -> void:
 			clampi(int(city.map_position.x * height_image.get_width()), 0, height_image.get_width() - 1),
 			clampi(int(city.map_position.y * height_image.get_height()), 0, height_image.get_height() - 1)
 		)
-		if pixel.a < TerrainMapGenerator.ALPHA_THRESHOLD:
+		if not TerrainMapGenerator.packed_is_land(pixel):
 			_fail("generated city landed in negative-height water")
 			return
 		var px := clampi(int(city.map_position.x * alpha_image.get_width()), 0, alpha_image.get_width() - 1)
@@ -61,7 +70,7 @@ func _run() -> void:
 			for sample in [Vector2i(px - radius, py), Vector2i(px + radius, py), Vector2i(px, py - radius), Vector2i(px, py + radius)]:
 				if sample.x < 0 or sample.y < 0 or sample.x >= alpha_image.get_width() or sample.y >= alpha_image.get_height():
 					continue
-				if alpha_image.get_pixelv(sample).a <= TerrainMapGenerator.ALPHA_THRESHOLD:
+				if not TerrainMapGenerator.packed_is_land(alpha_image.get_pixelv(sample)):
 					found_water = true
 					break
 			if found_water:
@@ -189,6 +198,7 @@ func _run() -> void:
 		"edge_land": restored_edge != null and is_equal_approx(restored_edge.land_ratio, 0.88),
 		"edge_backbone": restored_edge != null and restored_edge.is_backbone,
 		"sea_roundtrip": restored_sea_count == original_sea_count,
+		"density_roundtrip": restored.city_density_settings == state.city_density_settings,
 		"armies": not restored.armies.is_empty(),
 		"day_zero": restored.day == 0,
 	}

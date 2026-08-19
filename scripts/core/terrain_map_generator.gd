@@ -7,9 +7,10 @@ const ANALYSIS_WIDTH: int = 256
 ## geographic rectangle as the runtime map instead of cropping to the land
 ## alpha bounds; the land mask still exclusively controls city placement.
 const FULL_MAP_ASPECT_RATIO: float = 62.5 / 36.0  ## Legacy default for old map definitions.
-## Packed map source contract: RGB=satellite color, Alpha=numerical elevation.
-## Alpha 0 is water/non-positive elevation; 1..255 maps land to 0..1 altitude.
-const ALPHA_THRESHOLD: float = 0.001
+## Packed map source contract: RGB=satellite color, Alpha=signed elevation.
+## 1..128 is -8000..0m sea; 129..255 is positive land..6200m.
+const SEA_LEVEL_ALPHA: float = 128.0 / 255.0
+const ALPHA_THRESHOLD: float = SEA_LEVEL_ALPHA
 const LUMA_THRESHOLD: float = 0.0  ## Compatibility parameter; RGB never drives geography.
 const CANDIDATE_STRIDE: int = 2
 const INTERIOR_RADIUS: int = 0
@@ -18,7 +19,7 @@ const RELIEF_SPACING_WEIGHT: float = 0.015
 const REFERENCE_CITY_COUNT: int = 64
 const MIN_CITY_SPACING_AT_REFERENCE: float = 0.075
 const LOCAL_SPACING_MIN_FACTOR: float = 0.55
-const LOCAL_SPACING_MAX_FACTOR: float = 1.25
+const LOCAL_SPACING_MAX_FACTOR: float = 2.25
 const SPACING_RELAXATION_STEP: float = 0.96
 const SPACING_RELAXATION_FLOOR: float = 0.72
 const RIVER_BANK_MIN_DISTANCE: float = 0.006
@@ -29,16 +30,20 @@ const PREFERRED_BACKBONE_LENGTH: float = 0.34
 const ROAD_SAMPLE_COUNT: int = 48
 const RIVER_COUNT: int = 2
 const RIVER_CHANNEL_DEVIATION_WEIGHT: float = 36.0
-const RIVER_DOCK_SHARE: float = 0.25
 const RIVER_DOCK_MIN_PER_RIVER: int = 2
+const RIVER_DOCK_FIXED_INTERVAL: float = 0.16
 const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
 const RIVER_CROSSING_MERGE_EPS: float = 0.0001
 const RIVER_DOCK_MIN_SPACING: float = 0.012
+const RIVER_DOCK_CITY_MIN_SPACING: float = 0.022
 const LANDING_DANGER_MIN: float = 0.90
 const EDGE_DISTANCE_UNITS_PER_MAP_HEIGHT: float = 12.0
 ## 河运速度为同 distance 陆路的 1.2 倍，因此耗时为陆路的 1/1.2。
 const RIVER_TRAVEL_TIME_MULTIPLIER: float = 1.0 / 1.2
 const RIVER_SUPPLY_LOSS_MULTIPLIER: float = 0.25
+const DEFAULT_DENSITY_PEAK_LATITUDE: float = 30.0
+const DEFAULT_SOUTH_EDGE_DENSITY: float = 0.50
+const DEFAULT_NORTH_EDGE_DENSITY: float = 0.20
 ## 地理成本在地形分析分辨率求解；边界显示由矢量简化与圆滑消除栅格台阶。
 const PROVINCE_RASTER_SCALE: int = 1
 ## 连续域扭曲把规则 Voronoi 直线变成自然弯曲边界；振幅以地形分析像素计。
@@ -58,11 +63,16 @@ static var _cache: Dictionary = {}
 static func build(
 	source_path: String,
 	city_count: int,
-	city_mask_path: String = ""
+	city_mask_path: String = "",
+	city_density_settings: Dictionary = {}
 ) -> Dictionary:
 	var mask_signature := city_mask_signature(city_mask_path)
-	var cache_key := "settlement-v10-city-mask:%s:%d:%s" % [
-		source_path, city_count, mask_signature
+	var density_settings := normalize_city_density_settings(
+		city_density_settings
+	)
+	var cache_key := "settlement-v12-fixed-river-docks:%s:%d:%s:%s" % [
+		source_path, city_count, mask_signature,
+		city_density_signature(density_settings),
 	]
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
@@ -104,8 +114,10 @@ static func build(
 		analysis,
 		city_mask,
 		city_geometry["bounds"],
+		bounds,
 		city_count,
-		river_paths
+		river_paths,
+		density_settings
 	)
 	# Settlement density and spacing are solved in the tight land domain, then
 	# projected once into the complete geographic rectangle used by rendering.
@@ -154,9 +166,119 @@ static func build(
 		"province_ids": provinces["ids"],
 		"city_mask_path": city_mask_path,
 		"city_mask_signature": mask_signature,
+		"city_density_settings": density_settings.duplicate(true),
 	}
 	_cache[cache_key] = result.duplicate(true)
 	return result
+
+
+static func default_city_density_settings() -> Dictionary:
+	var latitude_bounds := MapSource.latitude_bounds()
+	var profile := MapSource.city_density_profile()
+	return {
+		"latitude_min": latitude_bounds.x,
+		"latitude_max": latitude_bounds.y,
+		"density_peak_latitude": clampf(
+			float(profile.get(
+				"peak_latitude", DEFAULT_DENSITY_PEAK_LATITUDE
+			)),
+			latitude_bounds.x,
+			latitude_bounds.y
+		),
+		"south_density": clampf(float(profile.get(
+			"south_edge_multiplier", DEFAULT_SOUTH_EDGE_DENSITY
+		)), 0.01, 1.0),
+		"north_density": clampf(float(profile.get(
+			"north_edge_multiplier", DEFAULT_NORTH_EDGE_DENSITY
+		)), 0.01, 1.0),
+	}
+
+
+static func normalize_city_density_settings(
+	settings: Dictionary
+) -> Dictionary:
+	var defaults := default_city_density_settings()
+	var latitude_min := clampf(
+		float(settings.get("latitude_min", defaults["latitude_min"])),
+		-90.0, 90.0
+	)
+	var latitude_max := clampf(
+		float(settings.get("latitude_max", defaults["latitude_max"])),
+		-90.0, 90.0
+	)
+	if latitude_min > latitude_max:
+		var swap := latitude_min
+		latitude_min = latitude_max
+		latitude_max = swap
+	if is_equal_approx(latitude_min, latitude_max):
+		latitude_max = minf(latitude_min + 0.1, 90.0)
+		latitude_min = maxf(latitude_max - 0.1, -90.0)
+	return {
+		"latitude_min": latitude_min,
+		"latitude_max": latitude_max,
+		"density_peak_latitude": clampf(
+			float(settings.get(
+				"density_peak_latitude",
+				defaults["density_peak_latitude"]
+			)),
+			latitude_min, latitude_max
+		),
+		"south_density": clampf(
+			float(settings.get(
+				"south_density", defaults["south_density"]
+			)),
+			0.01, 1.0
+		),
+		"north_density": clampf(
+			float(settings.get(
+				"north_density", defaults["north_density"]
+			)),
+			0.01, 1.0
+		),
+	}
+
+
+static func city_density_signature(settings: Dictionary) -> String:
+	return "%.3f:%.3f:%.3f:%.3f:%.3f" % [
+		float(settings["latitude_min"]),
+		float(settings["latitude_max"]),
+		float(settings["density_peak_latitude"]),
+		float(settings["south_density"]),
+		float(settings["north_density"]),
+	]
+
+
+static func latitude_for_map_y(
+	map_y: float, settings: Dictionary
+) -> float:
+	return lerpf(
+		float(settings["latitude_max"]),
+		float(settings["latitude_min"]),
+		clampf(map_y, 0.0, 1.0)
+	)
+
+
+static func latitude_density_multiplier(
+	latitude: float, settings: Dictionary
+) -> float:
+	var normalized := normalize_city_density_settings(settings)
+	var south := float(normalized["latitude_min"])
+	var north := float(normalized["latitude_max"])
+	var peak := float(normalized["density_peak_latitude"])
+	if latitude <= peak:
+		var south_ratio := smoothstep(
+			south, maxf(peak, south + 0.0001), latitude
+		)
+		return lerpf(
+			float(normalized["south_density"]),
+			1.0, south_ratio
+		)
+	var north_ratio := smoothstep(
+		peak, maxf(north, peak + 0.0001), latitude
+	)
+	return lerpf(
+		1.0, float(normalized["north_density"]), north_ratio
+	)
 
 
 static func city_mask_signature(path: String) -> String:
@@ -316,13 +438,20 @@ static func is_land_map_position(
 
 
 static func packed_is_land(color: Color) -> bool:
-	return color.a > ALPHA_THRESHOLD
+	return color.a > SEA_LEVEL_ALPHA + 0.5 / 255.0
 
 
 static func packed_altitude(color: Color) -> float:
 	if not packed_is_land(color):
 		return 0.0
-	return clampf((color.a * 255.0 - 1.0) / 254.0, 0.0, 1.0)
+	return clampf((color.a * 255.0 - 129.0) / 126.0, 0.0, 1.0)
+
+
+static func packed_signed_elevation(color: Color) -> float:
+	var alpha_byte := color.a * 255.0
+	if alpha_byte <= 128.5:
+		return lerpf(-1.0, 0.0, clampf((alpha_byte - 1.0) / 127.0, 0.0, 1.0))
+	return clampf((alpha_byte - 129.0) / 126.0, 0.0, 1.0)
 
 
 static func map_segment_profile(
@@ -954,8 +1083,10 @@ static func _sample_cities(
 	image: Image,
 	mask: PackedByteArray,
 	bounds: Rect2i,
+	full_bounds: Rect2i,
 	city_count: int,
-	river_paths: Array[Array]
+	river_paths: Array[Array],
+	city_density_settings: Dictionary
 ) -> Dictionary:
 	var candidates: Array[Dictionary] = []
 	var scale := Vector2(
@@ -978,6 +1109,15 @@ static func _sample_cities(
 			var normalized := (
 				Vector2(x, y) - Vector2(bounds.position)
 			) / scale
+			var full_normalized := _normalized_map_point(
+				Vector2(x, y), full_bounds
+			)
+			var latitude := latitude_for_map_y(
+				full_normalized.y, city_density_settings
+			)
+			var latitude_density := latitude_density_multiplier(
+				latitude, city_density_settings
+			)
 			var river_affinity := _river_bank_affinity(
 				Vector2i(x, y),
 				bounds,
@@ -987,7 +1127,8 @@ static func _sample_cities(
 				height,
 				relief,
 				normalized,
-				river_affinity
+				river_affinity,
+				latitude_density
 			)
 			candidates.append({
 				"pixel": Vector2i(x, y),
@@ -995,6 +1136,8 @@ static func _sample_cities(
 				"relief": relief,
 				"density": density,
 				"river_affinity": river_affinity,
+				"latitude": latitude,
+				"latitude_density": latitude_density,
 				"spacing": clampf(
 					base_spacing / sqrt(maxf(density, 0.01)),
 					base_spacing * LOCAL_SPACING_MIN_FACTOR,
@@ -1141,7 +1284,8 @@ static func settlement_density(
 	height: float,
 	relief: float,
 	normalized_position: Vector2,
-	river_affinity: float
+	river_affinity: float,
+	latitude_multiplier: float = 1.0
 ) -> float:
 	var lowland := pow(
 		1.0 - clampf(height, 0.0, 1.0),
@@ -1162,7 +1306,7 @@ static func settlement_density(
 		0.0,
 		1.0
 	)
-	return clampf(
+	var geographic_density := clampf(
 		0.35
 			+ lowland * 1.00
 			+ eastness * 0.55
@@ -1172,6 +1316,10 @@ static func settlement_density(
 			- clampf(relief, 0.0, 1.0) * 1.20,
 		0.35,
 		3.00
+	)
+	return clampf(
+		geographic_density * clampf(latitude_multiplier, 0.01, 1.0),
+		0.03, 3.00
 	)
 
 
@@ -1775,13 +1923,33 @@ static func _find_river_docks(
 				)
 		candidates_by_river[river_id] = candidates
 
+	# A crossing too close to any ordinary city invalidates that whole road as
+	# a dock road. Otherwise selecting another crossing of the same meandering
+	# road could still leave an overlapping landing segment.
+	var city_spacing_rejected_roads := {}
+	for candidates_value in candidates_by_river.values():
+		for candidate in candidates_value:
+			var candidate_position: Vector2 = candidate["position"]
+			for city_position in city_positions:
+				var city_delta := candidate_position - city_position
+				city_delta.x *= map_aspect_ratio
+				if city_delta.length() < RIVER_DOCK_CITY_MIN_SPACING:
+					city_spacing_rejected_roads[int(candidate["road_index"])] = true
+					break
+	for river_id in candidates_by_river:
+		var retained: Array[Dictionary] = []
+		for candidate in candidates_by_river[river_id]:
+			if not city_spacing_rejected_roads.has(int(candidate["road_index"])):
+				retained.append(candidate)
+		candidates_by_river[river_id] = retained
+
 	var selected_dock_roads := _select_dock_crossing_roads(
 		candidates_by_river,
 		roads,
-		city_positions
+		city_positions,
+		map_aspect_ratio
 	)
 	var accepted_positions: Array[Vector2] = []
-	var accepted_per_river := {}
 	# A straight road can intersect a meandering river more than once.  If one
 	# crossing is too close to an existing dock, retaining only the other
 	# crossing would leave a visible landing segment cutting across the river.
@@ -1847,9 +2015,6 @@ static func _find_river_docks(
 			candidate["road_b"] = int(road["b"])
 			docks.append(candidate)
 			accepted_positions.append(candidate_position)
-			accepted_per_river[river_id] = (
-				int(accepted_per_river.get(river_id, 0)) + 1
-			)
 			if not crossings_by_road.has(
 				int(candidate["road_index"])
 			):
@@ -1897,7 +2062,8 @@ static func _find_river_docks(
 static func _select_dock_crossing_roads(
 	candidates_by_river: Dictionary,
 	roads: Array[Dictionary],
-	city_positions: Array[Vector2]
+	city_positions: Array[Vector2],
+	map_aspect_ratio: float
 ) -> Dictionary:
 	var selected := {}
 	var crossing_roads := {}
@@ -1917,27 +2083,43 @@ static func _select_dock_crossing_roads(
 						< float(b["river_progress"])
 				)
 		)
-		var target := clampi(
-			int(round(
-				float(candidates.size()) * RIVER_DOCK_SHARE
-			)),
+		if candidates.is_empty():
+			continue
+		var cumulative := PackedFloat32Array()
+		cumulative.resize(candidates.size())
+		var total_distance := 0.0
+		for candidate_index in range(1, candidates.size()):
+			var delta: Vector2 = (
+				candidates[candidate_index]["position"]
+				- candidates[candidate_index - 1]["position"]
+			)
+			delta.x *= map_aspect_ratio
+			total_distance += delta.length()
+			cumulative[candidate_index] = total_distance
+		var target_count := clampi(
+			int(floor(total_distance / RIVER_DOCK_FIXED_INTERVAL)) + 1,
 			mini(RIVER_DOCK_MIN_PER_RIVER, candidates.size()),
 			candidates.size()
 		)
-		for selection_index in range(target):
-			var candidate_index := clampi(
-				int(round(
-					(float(selection_index) + 0.5)
-						* float(candidates.size())
-						/ float(maxi(target, 1))
-						- 0.5
-				)),
-				0,
-				candidates.size() - 1
+		var chosen_candidates := {}
+		for target_index in range(target_count):
+			var target_distance := (
+				(float(target_index) + 0.5)
+				* total_distance / float(maxi(target_count, 1))
 			)
-			selected[int(
-				candidates[candidate_index]["road_index"]
-			)] = true
+			var best_candidate := -1
+			var best_error := INF
+			for candidate_index in range(candidates.size()):
+				var road_index := int(candidates[candidate_index]["road_index"])
+				if chosen_candidates.has(candidate_index) or selected.has(road_index):
+					continue
+				var error := absf(cumulative[candidate_index] - target_distance)
+				if error < best_error:
+					best_error = error
+					best_candidate = candidate_index
+			if best_candidate >= 0:
+				chosen_candidates[best_candidate] = true
+				selected[int(candidates[best_candidate]["road_index"])] = true
 	var node_count := 0
 	for road in roads:
 		node_count = maxi(
@@ -2248,6 +2430,72 @@ static func metric_length_between(
 	var delta := to_position - from_position
 	delta.x *= map_aspect_ratio
 	return delta.length()
+
+
+static func segment_crosses_river_paths(
+	from_position: Vector2,
+	to_position: Vector2,
+	paths: Array[PackedVector2Array]
+) -> bool:
+	return not river_crossing_positions(
+		from_position, to_position, paths
+	).is_empty()
+
+
+static func river_crossing_positions(
+	from_position: Vector2,
+	to_position: Vector2,
+	paths: Array[PackedVector2Array]
+) -> PackedVector2Array:
+	var road_delta := to_position - from_position
+	var road_length_sq := road_delta.length_squared()
+	var crossings: Array[Dictionary] = []
+	if road_length_sq <= 0.000001:
+		return PackedVector2Array()
+	for path in paths:
+		for path_index in range(path.size() - 1):
+			var hit = Geometry2D.segment_intersects_segment(
+				from_position, to_position,
+				path[path_index], path[path_index + 1]
+			)
+			if hit == null:
+				continue
+			var road_t := (
+				(Vector2(hit) - from_position).dot(road_delta)
+				/ road_length_sq
+			)
+			if (
+				road_t > RIVER_CROSSING_ENDPOINT_EPS
+				and road_t < 1.0 - RIVER_CROSSING_ENDPOINT_EPS
+			):
+				var duplicate := false
+				for existing in crossings:
+					if absf(float(existing["t"]) - road_t) <= 0.0001:
+						duplicate = true
+						break
+				if not duplicate:
+					crossings.append({"t": road_t, "position": Vector2(hit)})
+	crossings.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["t"]) < float(b["t"])
+	)
+	var result := PackedVector2Array()
+	for crossing in crossings:
+		result.append(crossing["position"])
+	return result
+
+
+static func altitude_at_map_position(
+	source_path: String, map_position: Vector2
+) -> float:
+	var texture := load(source_path) as Texture2D
+	if texture == null:
+		return 0.0
+	var image := texture.get_image()
+	if image == null or image.is_empty():
+		return 0.0
+	var x := clampi(int(floor(clampf(map_position.x, 0.0, 1.0) * image.get_width())), 0, image.get_width() - 1)
+	var y := clampi(int(floor(clampf(map_position.y, 0.0, 1.0) * image.get_height())), 0, image.get_height() - 1)
+	return packed_altitude(image.get_pixel(x, y))
 
 
 static func _river_link_danger(

@@ -33,6 +33,7 @@ ELEVATION_URL = (
 )
 ELEVATION_ZOOM = 7
 ELEVATION_HIGH_CLIP_M = 6200.0
+ELEVATION_LOW_CLIP_M = -8000.0
 DEFAULT_BBOX = (73.0, 18.0, 135.5, 54.0)
 
 
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-image", type=Path)
     parser.add_argument("--elevation-zoom", type=int, default=ELEVATION_ZOOM)
     parser.add_argument("--high-clip-m", type=float, default=ELEVATION_HIGH_CLIP_M)
+    parser.add_argument("--low-clip-m", type=float, default=ELEVATION_LOW_CLIP_M)
     parser.add_argument(
         "--bbox", type=float, nargs=4,
         metavar=("WEST", "SOUTH", "EAST", "NORTH"),
@@ -150,6 +152,8 @@ def build_texture(args: argparse.Namespace) -> dict:
         raise ValueError("--resolution must be positive")
     if args.high_clip_m <= 0.0:
         raise ValueError("--high-clip-m must be positive")
+    if args.low_clip_m >= 0.0:
+        raise ValueError("--low-clip-m must be negative")
     source_path = ensure_source(args.cache_dir, args.source_image)
     source = Image.open(source_path).convert("RGB")
     west, south, east, north = map(float, args.bbox)
@@ -174,12 +178,22 @@ def build_texture(args: argparse.Namespace) -> dict:
         args.resolution, args.elevation_zoom
     )
     land = elevation > 0.0
-    normalized = np.clip(elevation / args.high_clip_m, 0.0, 1.0)
-    # Alpha is a numerical channel, never a render mask:
-    # 0=water, 1..255=land altitude 0..high_clip_m.
-    elevation_alpha = np.zeros(elevation.shape, dtype=np.uint8)
+    sea = ~land
+    # Alpha is a signed numerical DEM, never a render mask. 0 m is the fixed
+    # coastline split: 1..128 encodes -8000..0 m and 129..255 encodes
+    # positive land up to high_clip_m. No pixel uses alpha 0.
+    elevation_alpha = np.empty(elevation.shape, dtype=np.uint8)
+    sea_normalized = np.clip(
+        (elevation[sea] - args.low_clip_m) / -args.low_clip_m, 0.0, 1.0
+    )
+    elevation_alpha[sea] = (
+        1 + np.rint(sea_normalized * 127.0).astype(np.uint8)
+    )
+    land_normalized = np.clip(
+        elevation[land] / args.high_clip_m, 0.0, 1.0
+    )
     elevation_alpha[land] = (
-        1 + np.rint(normalized[land] * 254.0).astype(np.uint8)
+        129 + np.rint(land_normalized * 126.0).astype(np.uint8)
     )
     rgba = np.asarray(crop.convert("RGBA"), dtype=np.uint8).copy()
     rgba[:, :, 3] = elevation_alpha
@@ -218,8 +232,10 @@ def build_texture(args: argparse.Namespace) -> dict:
             "playable_mask_applied": False,
             "packed_texture": "RGB=satellite, A=elevation",
             "elevation_alpha": (
-                "0=water_or_nonpositive, 1..255=0..high_clip_m land"
+                "1..128=low_clip_m..0m sea, "
+                "129..255=positive land..high_clip_m"
             ),
+            "low_clip_m": args.low_clip_m,
             "high_clip_m": args.high_clip_m,
             "saturation": 0.86,
             "contrast": 1.04,

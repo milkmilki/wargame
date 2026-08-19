@@ -16,6 +16,9 @@ var height_steps: int = 24
 var smoothing_passes: int = 2
 const SEA_FLOOR_HEIGHT: float = -0.72
 const WATER_SURFACE_HEIGHT: float = -0.10
+const UNCLAIMED_POLITICAL_COLOR := Color(0.035, 0.090, 0.190)
+const SHALLOW_SEA_COLOR := Color(0.090, 0.310, 0.470)
+const DEEP_SEA_COLOR := Color(0.025, 0.060, 0.130)
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -57,6 +60,13 @@ func set_province_strength(strength: float) -> void:
 	_material.set_shader_parameter(
 		"province_strength",
 		clampf(strength, 0.0, 1.0)
+	)
+
+
+func set_elevation_shadow_strength(strength: float) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter(
+		"elevation_shadow_strength", clampf(strength, 0.0, 1.0)
 	)
 
 
@@ -126,8 +136,10 @@ func generate_from_height_texture(
 			)
 			var pixel := image.get_pixelv(pixel_position)
 			if not TerrainMapGenerator.packed_is_land(pixel):
-				_height_samples[z * resolution.x + x] = (
-					SEA_FLOOR_HEIGHT
+				var sea_depth := -TerrainMapGenerator.packed_signed_elevation(pixel)
+				_height_samples[z * resolution.x + x] = lerpf(
+					WATER_SURFACE_HEIGHT - 0.04,
+					SEA_FLOOR_HEIGHT, sea_depth
 				)
 				continue
 			var altitude := TerrainMapGenerator.packed_altitude(pixel)
@@ -247,6 +259,12 @@ func _ensure_render_nodes() -> void:
 			"height_scale",
 			height_scale
 		)
+		_material.set_shader_parameter(
+			"unclaimed_political_color",
+			UNCLAIMED_POLITICAL_COLOR
+		)
+		_material.set_shader_parameter("shallow_sea_color", SHALLOW_SEA_COLOR)
+		_material.set_shader_parameter("deep_sea_color", DEEP_SEA_COLOR)
 	_mesh_instance.material_override = _material
 
 

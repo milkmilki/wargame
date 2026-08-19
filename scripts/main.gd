@@ -52,6 +52,9 @@ var _settings_previous_pause: bool = false
 var _road_previous_pause: bool = false
 var _editor_previous_pause: bool = false
 var _city_generation_mask_path: String = GameState.DEFAULT_CITY_MASK_PATH
+var _city_density_settings: Dictionary = (
+	TerrainMapGenerator.default_city_density_settings()
+)
 
 
 func _ready() -> void:
@@ -181,6 +184,9 @@ func _setup_road_tuning() -> void:
 	road_tuning_panel.province_strength_changed.connect(
 		_on_province_strength_changed
 	)
+	road_tuning_panel.elevation_shadow_strength_changed.connect(
+		_on_elevation_shadow_strength_changed
+	)
 
 
 func _on_road_panel_opened() -> void:
@@ -236,6 +242,11 @@ func _on_province_strength_changed(strength: float) -> void:
 		map_3d.set_province_strength(strength)
 
 
+func _on_elevation_shadow_strength_changed(strength: float) -> void:
+	if map_3d != null:
+		map_3d.set_elevation_shadow_strength(strength)
+
+
 func _setup_map_editor() -> void:
 	map_editor_panel.panel_opened.connect(_on_map_editor_opened)
 	map_editor_panel.panel_closed.connect(_on_map_editor_closed)
@@ -267,7 +278,8 @@ func _on_map_editor_closed() -> void:
 
 func _on_map_regenerate_requested(
 	city_count: int,
-	city_mask_path: String
+	city_mask_path: String,
+	density_settings: Dictionary
 ) -> void:
 	var requested_count := clampi(city_count, nation_count, 500)
 	var requested_mask := city_mask_path.strip_edges()
@@ -281,6 +293,11 @@ func _on_map_regenerate_requested(
 		return
 	terrain_city_count = requested_count
 	_city_generation_mask_path = requested_mask
+	_city_density_settings = (
+		TerrainMapGenerator.normalize_city_density_settings(
+			density_settings
+		)
+	)
 	_start_new_game(_seed)
 	map_editor_panel.set_status(
 		"已按 %d 座城市重新生成；%s。" % [
@@ -351,7 +368,8 @@ func _start_new_game(world_seed: int) -> void:
 			world_seed,
 			nation_count,
 			terrain_city_count,
-			_city_generation_mask_path
+			_city_generation_mask_path,
+			_city_density_settings
 		)
 	_activate_state(next_state)
 
@@ -362,6 +380,7 @@ func _start_from_map_definition(definition: Dictionary) -> void:
 	nation_count = next_state.nations.size()
 	terrain_city_count = next_state.land_cities().size()
 	_city_generation_mask_path = next_state.city_generation_mask_path
+	_city_density_settings = next_state.city_density_settings.duplicate(true)
 	_activate_state(next_state)
 
 
@@ -389,6 +408,9 @@ func _activate_state(next_state: GameState) -> void:
 		if road_tuning_panel != null:
 			map_3d.set_province_strength(
 				road_tuning_panel.province_strength()
+			)
+			map_3d.set_elevation_shadow_strength(
+				road_tuning_panel.elevation_shadow_strength()
 			)
 	elif map_3d != null:
 		map_3d.visible = false

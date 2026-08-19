@@ -61,6 +61,15 @@ const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 10.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
 const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
+const NATION_COLOR_SATURATION_MIN: float = 0.60
+const NATION_COLOR_SATURATION_MAX: float = 0.70
+const NATION_COLOR_VALUE_MIN: float = 0.60
+const NATION_COLOR_VALUE_MAX: float = 0.80
+## Hard-coded HSV palette. All procedural colors reuse the same bounded S/V
+## bands; only hue changes for additional nations.
+const NATION_PALETTE_HUES := [0.000, 0.610, 0.350, 0.140]
+const NATION_PALETTE_SATURATIONS := [0.64, 0.61, 0.60, 0.64]
+const NATION_PALETTE_VALUES := [0.66, 0.64, 0.62, 0.66]
 
 
 static func army_monthly_upkeep(troops: int) -> int:
@@ -69,6 +78,25 @@ static func army_monthly_upkeep(troops: int) -> int:
 	return int(ceil(
 		float(troops) / float(WAR_GOLD_TROOPS_PER_UNIT)
 	))
+
+
+## Shared HSV contract for every faction-owned visual. Hue and alpha survive;
+## saturation/value stay inside the requested non-neon palette rectangle.
+static func normalize_nation_color(color: Color) -> Color:
+	return Color.from_hsv(
+		color.h,
+		clampf(
+			color.s,
+			NATION_COLOR_SATURATION_MIN,
+			NATION_COLOR_SATURATION_MAX
+		),
+		clampf(
+			color.v,
+			NATION_COLOR_VALUE_MIN,
+			NATION_COLOR_VALUE_MAX
+		),
+		color.a
+	)
 
 
 static func formation_creation_gold_cost(formation_size: int) -> int:
@@ -132,6 +160,7 @@ var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 var city_generation_mask_path: String = ""
+var city_density_settings: Dictionary = {}
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
@@ -151,7 +180,8 @@ func generate_world(
 	world_seed: int = 12345,
 	nation_count: int = NATION_COUNT,
 	terrain_city_count: int = TERRAIN_CITY_COUNT,
-	city_mask_path: String = DEFAULT_CITY_MASK_PATH
+	city_mask_path: String = DEFAULT_CITY_MASK_PATH,
+	density_settings: Dictionary = {}
 ) -> void:
 	assert(
 		nation_count > 0
@@ -161,6 +191,11 @@ func generate_world(
 	_reset_world(world_seed)
 	uses_heightmap = true
 	city_generation_mask_path = city_mask_path.strip_edges()
+	city_density_settings = (
+		TerrainMapGenerator.normalize_city_density_settings(
+			density_settings
+		)
+	)
 	_generate_nations(
 		DiplomaticRelation.NEUTRAL,
 		nation_count
@@ -168,7 +203,8 @@ func generate_world(
 	var terrain := TerrainMapGenerator.build(
 		terrain_map_path(),
 		terrain_city_count,
-		city_generation_mask_path
+		city_generation_mask_path,
+		city_density_settings
 	)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
@@ -246,6 +282,13 @@ func generate_from_map_definition(
 	city_generation_mask_path = str(definition.get(
 		"city_generation_mask_path", ""
 	))
+	city_density_settings = (
+		TerrainMapGenerator.normalize_city_density_settings(
+			definition.get(
+				"city_density_settings", {}
+			) as Dictionary
+		)
+	)
 	map_aspect_ratio = float(definition.get(
 		"map_aspect_ratio", TerrainMapGenerator.FULL_MAP_ASPECT_RATIO
 	))
@@ -453,6 +496,7 @@ func _reset_world(world_seed: int) -> void:
 	war_objectives.clear()
 	suzerainty.clear()
 	city_generation_mask_path = ""
+	city_density_settings = {}
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
 	river_paths.clear()
@@ -464,25 +508,23 @@ func _generate_nations(
 	initial_relation: int,
 	nation_count: int = NATION_COUNT
 ) -> void:
-	var palette := [
-		Color(0.85, 0.22, 0.22),   # 红
-		Color(0.25, 0.45, 0.85),   # 蓝
-		Color(0.30, 0.70, 0.35),   # 绿
-		Color(0.90, 0.80, 0.25),   # 黄
-	]
 	for i in range(nation_count):
 		var n := Nation.new()
 		n.id = i
-		n.color = (
-			palette[i]
+		n.color = normalize_nation_color(
+			Color.from_hsv(
+				float(NATION_PALETTE_HUES[i]),
+				float(NATION_PALETTE_SATURATIONS[i]),
+				float(NATION_PALETTE_VALUES[i])
+			)
 			if nation_count == NATION_COUNT
 			else Color.from_hsv(
 				fposmod(
 					float(i) * 0.61803398875,
 					1.0
 				),
-				0.65,
-				0.85
+				0.60 + float(i % 3) * 0.02,
+				0.60 + float(i % 4) * 0.02
 			)
 		)
 		n.treasury_gold = 10000
@@ -1609,11 +1651,19 @@ func _connect_initial_nation_components() -> void:
 			var best_a := -1
 			var best_b := -1
 			var best_distance := INF
+			var best_crossings := PackedVector2Array()
 			for city_a_value in components[0]:
 				var city_a := int(city_a_value)
 				for component_index in range(1, components.size()):
 					for city_b_value in components[component_index]:
 						var city_b := int(city_b_value)
+						var crossings := TerrainMapGenerator.river_crossing_positions(
+							cities[city_a].map_position,
+							cities[city_b].map_position,
+							river_paths
+						)
+						if not _connector_crossings_have_spacing(crossings):
+							continue
 						var delta := (
 							cities[city_a].map_position
 							- cities[city_b].map_position
@@ -1631,12 +1681,47 @@ func _connect_initial_nation_components() -> void:
 							best_distance = distance
 							best_a = city_a
 							best_b = city_b
+							best_crossings = crossings
 			assert(best_a >= 0 and best_b >= 0)
-			_add_initial_component_connector(best_a, best_b)
+			_add_initial_component_connector(
+				best_a, best_b, best_crossings, nation.id
+			)
 		assert(guard > 0, "初始国家交通组件连接必须收敛")
 
 
-func _add_initial_component_connector(city_a: int, city_b: int) -> void:
+func _connector_crossings_have_spacing(
+	crossings: PackedVector2Array
+) -> bool:
+	for crossing_index in range(crossings.size()):
+		for city in cities:
+			var delta := crossings[crossing_index] - city.map_position
+			delta.x *= map_aspect_ratio
+			if delta.length() < TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING:
+				return false
+		for other_index in range(crossing_index):
+			var delta := crossings[crossing_index] - crossings[other_index]
+			delta.x *= map_aspect_ratio
+			if delta.length() < TerrainMapGenerator.RIVER_DOCK_MIN_SPACING:
+				return false
+	return true
+
+
+func _add_initial_component_connector(
+	city_a: int,
+	city_b: int,
+	crossings: PackedVector2Array = PackedVector2Array(),
+	owner_nation: int = -1
+) -> void:
+	if not crossings.is_empty():
+		var previous_city := city_a
+		for crossing in crossings:
+			var dock_id := _add_initial_connector_dock(
+				crossing, owner_nation
+			)
+			_add_initial_landing_connector(previous_city, dock_id)
+			previous_city = dock_id
+		_add_initial_landing_connector(previous_city, city_b)
+		return
 	var profile := TerrainMapGenerator.map_segment_profile(
 		terrain_map_path(),
 		cities[city_a].map_position,
@@ -1681,6 +1766,49 @@ func _add_initial_component_connector(city_a: int, city_b: int) -> void:
 		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
 		(adjacency[edge.city_a] as Array[int]).sort()
 		(adjacency[edge.city_b] as Array[int]).sort()
+
+
+func _add_initial_connector_dock(
+	position: Vector2, owner_nation: int
+) -> int:
+	var city := City.new()
+	city.id = cities.size()
+	city.coord = Vector2i(int(round(position.x * 1000.0)), int(round(position.y * 1000.0)))
+	city.map_position = position
+	city.terrain_height = TerrainMapGenerator.altitude_at_map_position(terrain_map_path(), position)
+	city.terrain_relief = 0.0
+	city.is_dock = true
+	city.owner_nation = owner_nation
+	city.fort_strength = 10
+	city.fort_strength_max = 10
+	city.manpower_per_month = 0
+	city.gold_per_month = 0
+	city.food_per_half_year = 0
+	cities.append(city)
+	adjacency[city.id] = [] as Array[int]
+	return city.id
+
+
+func _add_initial_landing_connector(city_a: int, city_b: int) -> void:
+	var edge := Edge.new()
+	edge.city_a = mini(city_a, city_b)
+	edge.city_b = maxi(city_a, city_b)
+	edge.kind = Edge.Kind.LANDING
+	edge.max_manpower = Edge.TERRAIN_STANDARD_MANPOWER
+	edge.base_max_manpower = edge.max_manpower
+	edge.land_ratio = 1.0
+	edge.max_height_difference = absf(cities[city_a].terrain_height - cities[city_b].terrain_height)
+	edge.danger = TerrainMapGenerator.LANDING_DANGER_MIN
+	edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
+		TerrainMapGenerator.metric_length_between(cities[city_a].map_position, cities[city_b].map_position, map_aspect_ratio)
+	)
+	edge.is_backbone = true
+	edges.append(edge)
+	edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
+	(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+	(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
+	(adjacency[edge.city_a] as Array[int]).sort()
+	(adjacency[edge.city_b] as Array[int]).sort()
 
 
 func _add_edge(a: int, b: int) -> void:
@@ -3442,7 +3570,7 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 		0.0,
 		1.0
 	)
-	return Color.from_hsv(h, s, v)
+	return normalize_nation_color(Color.from_hsv(h, s, v))
 
 
 ## 为藩王选定首都作为「共享粮仓」的补给中继节点：首都本身零库存、不建独立粮仓，

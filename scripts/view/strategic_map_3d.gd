@@ -20,6 +20,8 @@ const MAP_GOLD := Color(0.94, 0.67, 0.20)
 const MAP_ALERT := Color(0.84, 0.13, 0.055)
 const MAP_SUPPLY := Color(0.20, 0.62, 0.48)
 const MAP_COUNTER_MARK := Color(0.66, 0.59, 0.40)
+const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
+const CAMPAIGN_ARROW_GRID := Vector2i(24, 16)
 const ANTIQUE_OVERLAY_SHADER := preload(
 	"res://scripts/view/terrain/antique_overlay.gdshader"
 )
@@ -87,6 +89,7 @@ var _last_selected_edge := Vector2i(-2, -2)
 var _province_strength: float = (
 	MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
 )
+var _elevation_shadow_strength: float = 0.62
 var _visual_time: float = 0.0
 
 
@@ -99,7 +102,7 @@ func setup(
 	sim = simulation
 	overlay = overlay_renderer
 	if _map_font == null:
-		_map_font = MapRenderer.create_ui_font()
+		_map_font = MapRenderer.create_map_label_font()
 	_ensure_scene_nodes()
 	_clear_labels()
 	_configure_dimensions()
@@ -593,6 +596,7 @@ func _on_terrain_ready() -> void:
 		return
 	_update_province_visuals()
 	_terrain.set_province_strength(_province_strength)
+	_terrain.set_elevation_shadow_strength(_elevation_shadow_strength)
 	_build_road_mesh()
 	_build_river_mesh()
 	_build_city_instances()
@@ -610,6 +614,14 @@ func set_province_strength(strength: float) -> void:
 		_terrain.set_province_strength(_province_strength)
 
 
+func set_elevation_shadow_strength(strength: float) -> void:
+	_elevation_shadow_strength = clampf(strength, 0.0, 1.0)
+	if _terrain != null:
+		_terrain.set_elevation_shadow_strength(
+			_elevation_shadow_strength
+		)
+
+
 func _update_province_visuals() -> void:
 	if _terrain == null or _terrain.land_cell_count() <= 0:
 		return
@@ -623,29 +635,40 @@ func _update_province_visuals() -> void:
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["province"],
-		0.014,
-		Color(0.68, 0.69, 0.69, 0.42),
+		0.026,
+		Color(0.11, 0.115, 0.12, 0.92),
 		0.205
 	)
 	_append_segment_ribbons(
 		surface_tool,
+		geometry["coast"],
+		0.026,
+		Color(0.11, 0.115, 0.12, 0.92),
+		0.207
+	)
+	_append_segment_ribbons(
+		surface_tool,
 		geometry["nation"],
-		0.052,
-		Color(0.52, 0.53, 0.53, 0.74),
+		0.070,
+		MapRenderer.BORDER_NEUTRAL,
 		0.215
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["alliance"],
-		0.035,
-		Color(0.64, 0.65, 0.65, 0.54),
+		0.070,
+		MapRenderer.BORDER_ALLIED,
 		0.225
+	)
+	_append_segment_ribbons(
+		surface_tool, geometry["enemy"], 0.078,
+		MapRenderer.BORDER_ENEMY, 0.228
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["suzerainty"],
-		0.028,
-		Color(0.58, 0.59, 0.59, 0.68),
+		0.060,
+		MapRenderer.BORDER_SUZERAINTY,
 		0.230
 	)
 	_boundaries.mesh = surface_tool.commit()
@@ -836,15 +859,14 @@ func _update_city_instances() -> void:
 			)
 		)
 		var color := (
-			state.nations[city.owner_nation].color
+			MapRenderer.final_faction_visual_color(
+				state, city.owner_nation,
+				0.34 if city.at_war else 0.0,
+				0.08 if city.is_capital else 0.0
+			)
 			if city.owner_nation >= 0
 			else Color(0.45, 0.45, 0.42)
 		)
-		color = color.lerp(Color(0.68, 0.58, 0.40), 0.18)
-		if city.is_capital:
-			color = color.lightened(0.24)
-		elif city.at_war:
-			color = color.lerp(MAP_ALERT, 0.34)
 		_cities.multimesh.set_instance_color(city.id, color)
 
 		var resource_scale := 0.001
@@ -910,36 +932,84 @@ func _rebuild_nation_labels() -> void:
 	for nation in state.nations:
 		if not nation.alive:
 			continue
-		var centroid := Vector2.ZERO
-		var weight := 0.0
-		for city in state.cities:
-			if city.owner_nation != nation.id or city.is_dock:
-				continue
-			var city_weight := 2.0 if city.is_capital else 1.0
-			centroid += city.map_position * city_weight
-			weight += city_weight
-		if weight <= 0.0:
+		var layout := _nation_label_layout(nation.id)
+		if layout.is_empty():
 			continue
-		centroid /= weight
+		var text_value := str(layout["text"])
+		var center: Vector2 = layout["center"]
+		var axis: Vector2 = layout["axis"]
+		var glyph_scale := float(layout["glyph_scale"])
 		var label := Label3D.new()
-		label.text = "国%d" % nation.id
+		label.text = text_value
 		label.font = _map_font
-		label.font_size = 54
-		label.outline_size = 10
-		label.pixel_size = 0.026
-		label.modulate = nation.color.lerp(
-			Color(0.88, 0.79, 0.60),
-			0.48
-		)
-		label.outline_modulate = Color(0.08, 0.055, 0.03, 0.90)
-		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.font_size = 84
+		label.outline_size = 3
+		label.pixel_size = 0.026 * glyph_scale
+		label.modulate = Color(0.075, 0.078, 0.082, 0.86)
+		label.outline_modulate = Color(0.62, 0.60, 0.54, 0.18)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 		label.no_depth_test = true
+		label.render_priority = 8
+		var local_x := Vector3(axis.x, 0.0, axis.y)
+		var local_y := Vector3(axis.y, 0.0, -axis.x)
+		label.basis = Basis(local_x, local_y, Vector3.UP)
 		label.position = (
-			_terrain.map_to_world(centroid)
-			+ Vector3(0.0, 1.32, 0.0)
+			_terrain.map_to_world(center)
+			+ Vector3(0.0, 0.34, 0.0)
 		)
 		_content.add_child(label)
 		_nation_labels.append(label)
+
+
+func _nation_label_layout(nation_id: int) -> Dictionary:
+	var points := PackedVector2Array()
+	var center := Vector2.ZERO
+	for city in state.cities:
+		if city.owner_nation != nation_id or city.is_dock:
+			continue
+		var metric := Vector2(
+			city.map_position.x * _world_size.x,
+			city.map_position.y * _world_size.y
+		)
+		points.append(metric)
+		center += metric
+	if points.is_empty():
+		return {}
+	center /= float(points.size())
+	var covariance_xx := 0.0
+	var covariance_xy := 0.0
+	var covariance_yy := 0.0
+	for point in points:
+		var delta := point - center
+		covariance_xx += delta.x * delta.x
+		covariance_xy += delta.x * delta.y
+		covariance_yy += delta.y * delta.y
+	var axis_angle := 0.5 * atan2(
+		2.0 * covariance_xy, covariance_xx - covariance_yy
+	)
+	var axis := Vector2(cos(axis_angle), sin(axis_angle)).normalized()
+	if axis.x < 0.0:
+		axis = -axis
+	var projection_min := INF
+	var projection_max := -INF
+	for point in points:
+		var projection := (point - center).dot(axis)
+		projection_min = minf(projection_min, projection)
+		projection_max = maxf(projection_max, projection)
+	var territory_span := maxf(projection_max - projection_min, 2.0)
+	var text_value := "国%d" % nation_id
+	return {
+		"text": text_value,
+		"center": Vector2(
+			center.x / _world_size.x, center.y / _world_size.y
+		),
+		"axis": axis,
+		"territory_span": territory_span,
+		"glyph_scale": clampf(
+			pow(territory_span / 8.0, 0.76), 1.10, 3.10
+		),
+	}
 
 
 func _update_army_instances() -> void:
@@ -1003,13 +1073,11 @@ func _update_army_instances() -> void:
 		_set_morale_bar_transform(
 			_army_morale_bars, index, origin, scale, morale_ratio
 		)
-		var color := MapRenderer.command_marker_color(
-			state, army.owner_nation
+		var color := MapRenderer.final_faction_visual_color(
+			state, army.owner_nation,
+			0.62 if army.starving else 0.0,
+			0.06 if army.state == Army.State.FIGHTING else 0.0
 		)
-		if army.starving:
-			color = color.lerp(MAP_ALERT, 0.68)
-		elif army.state == Army.State.FIGHTING:
-			color = color.lightened(0.18)
 		_army_bases.multimesh.set_instance_color(index, MAP_INK)
 		_armies.multimesh.set_instance_color(index, color)
 		_army_symbol_a.multimesh.set_instance_color(
@@ -1225,13 +1293,6 @@ func _update_campaign_mesh() -> void:
 		if target_id < 0 or target_id >= state.cities.size():
 			continue
 		var target := state.cities[target_id].map_position
-		var nation_id := int(event.get("nation_id", -1))
-		var nation_color := (
-			MapRenderer.command_marker_color(state, nation_id)
-			if nation_id >= 0 and nation_id < state.nations.size()
-			else MAP_GOLD
-		)
-		nation_color.a = alpha
 		for origin_id in event.get("origin_cities", []):
 			if origin_id < 0 or origin_id >= state.cities.size():
 				continue
@@ -1239,65 +1300,70 @@ func _update_campaign_mesh() -> void:
 				surface_tool,
 				state.cities[origin_id].map_position,
 				target,
-				nation_color,
+				alpha,
 				int(event.get("wave", 0))
 			)
 	_campaigns.mesh = surface_tool.commit()
-	_campaigns.material_override = _line_material(false)
+	_campaigns.material_override = _campaign_arrow_material()
 
 
 func _append_campaign_arrow(
 	surface_tool: SurfaceTool,
 	from_uv: Vector2,
 	to_uv: Vector2,
-	color: Color,
-	wave: int
+	alpha: float,
+	_wave: int
 ) -> void:
-	var direction := to_uv - from_uv
-	var length := direction.length()
-	if length <= 0.0001:
+	var from_metric := Vector2(
+		from_uv.x * _world_size.x, from_uv.y * _world_size.y
+	)
+	var to_metric := Vector2(
+		to_uv.x * _world_size.x, to_uv.y * _world_size.y
+	)
+	var target_delta := to_metric - from_metric
+	var source_delta := (
+		MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
+		- MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL
+	)
+	if target_delta.length_squared() <= 0.000001:
 		return
-	var perpendicular := direction.normalized().orthogonal()
-	var bend_sign := -1.0 if posmod(wave, 2) == 0 else 1.0
-	var bend := minf(length * 0.16, 0.045) * bend_sign
-	var points := PackedVector2Array()
-	var segments := clampi(int(ceil(length * 84.0)), 12, 30)
-	for index in range(segments + 1):
-		var ratio := float(index) / float(segments)
-		var eased := ratio * ratio * (3.0 - 2.0 * ratio)
-		var point := from_uv.lerp(to_uv, eased)
-		point += perpendicular * sin(ratio * PI) * bend
-		points.append(point)
-	var ink := MAP_INK
-	ink.a = color.a * 0.82
-	_append_tapered_draped_path(
-		surface_tool, points, 0.30, 0.21, ink, 0.38
-	)
-	_append_tapered_draped_path(
-		surface_tool, points, 0.21, 0.12, color, 0.40
-	)
-	var end_direction := (points[-1] - points[-2]).normalized()
-	var end_perpendicular := end_direction.orthogonal()
-	var head_length := minf(maxf(length * 0.18, 0.030), 0.062)
-	var head_width := head_length * 0.72
-	var tip := points[-1]
-	var base := tip - end_direction * head_length
-	_append_draped_triangle(
-		surface_tool,
-		tip,
-		base + end_perpendicular * head_width,
-		base - end_perpendicular * head_width,
-		ink,
-		0.375
-	)
-	_append_draped_triangle(
-		surface_tool,
-		tip,
-		base + end_perpendicular * head_width * 0.74,
-		base - end_perpendicular * head_width * 0.74,
-		color,
-		0.405
-	)
+	var source_size := Vector2(CAMPAIGN_ARROW_TEXTURE.get_size())
+	var scale := target_delta.length() / source_delta.length()
+	var rotation := target_delta.angle() - source_delta.angle()
+	for grid_y in range(CAMPAIGN_ARROW_GRID.y):
+		var v0 := float(grid_y) / float(CAMPAIGN_ARROW_GRID.y)
+		var v1 := float(grid_y + 1) / float(CAMPAIGN_ARROW_GRID.y)
+		for grid_x in range(CAMPAIGN_ARROW_GRID.x):
+			var u0 := float(grid_x) / float(CAMPAIGN_ARROW_GRID.x)
+			var u1 := float(grid_x + 1) / float(CAMPAIGN_ARROW_GRID.x)
+			var uv00 := Vector2(u0, v0)
+			var uv10 := Vector2(u1, v0)
+			var uv01 := Vector2(u0, v1)
+			var uv11 := Vector2(u1, v1)
+			_append_campaign_texture_triangle(surface_tool, uv00, uv10, uv01, source_size, from_metric, scale, rotation, alpha)
+			_append_campaign_texture_triangle(surface_tool, uv10, uv11, uv01, source_size, from_metric, scale, rotation, alpha)
+
+
+func _append_campaign_texture_triangle(
+	surface_tool: SurfaceTool,
+	uv_a: Vector2, uv_b: Vector2, uv_c: Vector2,
+	source_size: Vector2, from_metric: Vector2,
+	scale: float, rotation: float, alpha: float
+) -> void:
+	for uv in [uv_a, uv_b, uv_c]:
+		var typed_uv: Vector2 = uv
+		var source_point: Vector2 = typed_uv * source_size
+		var metric_offset: Vector2 = (
+			(source_point - MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL)
+			.rotated(rotation) * scale
+		)
+		var metric_point: Vector2 = from_metric + metric_offset
+		var map_point := Vector2(metric_point.x / _world_size.x, metric_point.y / _world_size.y)
+		var world := _terrain.map_to_world(map_point)
+		world.y += 0.43
+		surface_tool.set_uv(typed_uv)
+		surface_tool.set_color(Color(1.0, 1.0, 1.0, 0.94 * alpha))
+		surface_tool.add_vertex(world)
 
 
 func _append_tapered_draped_path(
@@ -1609,6 +1675,19 @@ func _political_boundary_material() -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = POLITICAL_BOUNDARY_SHADER
 	material.render_priority = 4
+	return material
+
+
+func _campaign_arrow_material() -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_texture = CAMPAIGN_ARROW_TEXTURE
+	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	material.alpha_scissor_threshold = 0.025
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = true
+	material.render_priority = 7
 	return material
 
 

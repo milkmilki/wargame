@@ -40,8 +40,15 @@ func _run() -> void:
 	if (
 		not is_equal_approx(panel.province_strength(), 1.0)
 		or not is_equal_approx(main.map_3d._province_strength, 1.0)
+		or not is_equal_approx(panel.elevation_shadow_strength(), 0.62)
+		or not is_equal_approx(main.map_3d._elevation_shadow_strength, 0.62)
 	):
 		push_error("ROAD_TUNING_UI_DEFAULT_POLITICAL_MODE_FAILED")
+		quit(1)
+		return
+	(panel._sliders[RoadTuningPanel.ELEVATION_SHADOW_STRENGTH_KEY] as HSlider).value = 0.61
+	if not is_equal_approx(main.map_3d._elevation_shadow_strength, 0.61):
+		push_error("ROAD_TUNING_UI_ELEVATION_SHADOW_FAILED")
 		quit(1)
 		return
 	(panel._map_mode_buttons[0.42] as Button).pressed.emit()

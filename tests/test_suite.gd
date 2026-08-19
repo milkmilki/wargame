@@ -829,10 +829,12 @@ func _test_world_generation() -> void:
 			]
 	)
 	_check(
-		TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 0.0)) == 0.0
+		TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 128.0 / 255.0)) == 0.0
 			and TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 1.0)) > 0.99
-			and not TerrainMapGenerator.packed_is_land(Color(1.0, 1.0, 1.0, 0.0))
-			and TerrainMapGenerator.packed_is_land(Color(0.0, 0.0, 0.0, 1.0 / 255.0))
+			and not TerrainMapGenerator.packed_is_land(Color(1.0, 1.0, 1.0, 128.0 / 255.0))
+			and TerrainMapGenerator.packed_is_land(Color(0.0, 0.0, 0.0, 129.0 / 255.0))
+			and TerrainMapGenerator.packed_signed_elevation(Color(0.0, 0.0, 0.0, 1.0 / 255.0)) < -0.99
+			and absf(TerrainMapGenerator.packed_signed_elevation(Color(0.0, 0.0, 0.0, 128.0 / 255.0))) < 0.001
 			and TerrainMapGenerator.settlement_density(
 			0.15,
 			0.02,
@@ -844,7 +846,34 @@ func _test_world_generation() -> void:
 			Vector2(0.20, 0.20),
 			0.0
 			),
-		"打包纹理Alpha必须独立编码陆海/高程，RGB颜色不得影响地理；聚落仍偏好低地与河岸"
+		"打包纹理Alpha必须独立编码海底/海岸/陆地高程，RGB颜色不得影响地理；聚落仍偏好低地与河岸"
+	)
+	var latitude_density := TerrainMapGenerator.default_city_density_settings()
+	var south_multiplier := TerrainMapGenerator.latitude_density_multiplier(
+		float(latitude_density["latitude_min"]), latitude_density
+	)
+	var peak_multiplier := TerrainMapGenerator.latitude_density_multiplier(
+		float(latitude_density["density_peak_latitude"]), latitude_density
+	)
+	var north_multiplier := TerrainMapGenerator.latitude_density_multiplier(
+		float(latitude_density["latitude_max"]), latitude_density
+	)
+	_check(
+		_approx(south_multiplier, 0.5)
+		and _approx(peak_multiplier, 1.0)
+		and _approx(north_multiplier, 0.2)
+		and north_multiplier < south_multiplier
+		and south_multiplier < peak_multiplier,
+		"纬度城市密度应为热带0.5、亚热带峰值1.0、北部0.2"
+	)
+	_check(
+		MapRenderer.CAMPAIGN_ARROW_TEXTURE != null
+		and MapRenderer.CAMPAIGN_ARROW_TEXTURE.get_width() == 1536
+		and MapRenderer.CAMPAIGN_ARROW_TEXTURE.get_height() == 1024
+		and MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL.distance_to(
+			MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
+		) > 1000.0,
+		"攻势箭头必须使用正式红色渐变贴图，并以尾部和尖端锚点等比对齐"
 	)
 	_check(
 		gs.map_source_region_normalized
@@ -998,6 +1027,10 @@ func _test_world_generation() -> void:
 		and not (province_geometry["coast"] as PackedVector2Array).is_empty(),
 		"省份栅格必须能提取省界、国境和地图外轮廓三种线段"
 	)
+	_check(
+		not (province_geometry["coast"] as PackedVector2Array).is_empty(),
+		"0米海岸线必须生成与城市疆域边界同层的闭合描边"
+	)
 	var base_overlay := MapRenderer.build_province_overlay_image(gs)
 	var transparent_sea_found := false
 	for y in range(gs.province_map_size.y):
@@ -1021,6 +1054,9 @@ func _test_world_generation() -> void:
 	var expected_subject_color := MapRenderer.paper_nation_color(
 		gs.nations[overlord_color_test].color
 	).darkened(MapRenderer.VASSAL_BRIGHTNESS_STEP)
+	expected_subject_color = GameState.normalize_nation_color(
+		expected_subject_color
+	)
 	var actual_subject_color := MapRenderer.political_map_color(
 		gs, subject_color_test
 	)
@@ -1028,12 +1064,42 @@ func _test_world_generation() -> void:
 		actual_subject_color.is_equal_approx(expected_subject_color),
 		"政治疆域中藩王必须继承宗主色并降低约15%明度"
 	)
-	var political_command_base := MapRenderer.political_map_color(gs, 0)
-	var command_marker := MapRenderer.command_marker_color(gs, 0)
+	var faction_colors_valid := true
+	var hardcoded_palette_valid := (
+		GameState.NATION_PALETTE_HUES.size() == 4
+		and GameState.NATION_PALETTE_SATURATIONS.size() == 4
+		and GameState.NATION_PALETTE_VALUES.size() == 4
+	)
+	for palette_index in range(GameState.NATION_PALETTE_HUES.size()):
+		var palette_color := Color.from_hsv(
+			float(GameState.NATION_PALETTE_HUES[palette_index]),
+			float(GameState.NATION_PALETTE_SATURATIONS[palette_index]),
+			float(GameState.NATION_PALETTE_VALUES[palette_index])
+		)
+		hardcoded_palette_valid = (
+			hardcoded_palette_valid
+			and palette_color.s >= GameState.NATION_COLOR_SATURATION_MIN
+			and palette_color.s <= GameState.NATION_COLOR_SATURATION_MAX
+			and palette_color.v >= GameState.NATION_COLOR_VALUE_MIN
+			and palette_color.v <= GameState.NATION_COLOR_VALUE_MAX
+		)
+	for nation in gs.nations:
+		var palette_color := MapRenderer.political_map_color(gs, nation.id)
+		var counter_color := MapRenderer.command_marker_color(gs, nation.id)
+		var alert_color := MapRenderer.final_faction_visual_color(
+			gs, nation.id, 0.62, 0.08
+		)
+		for visual_color in [nation.color, palette_color, counter_color, alert_color]:
+			faction_colors_valid = (
+				faction_colors_valid
+				and visual_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.0001
+				and visual_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.0001
+				and visual_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.0001
+				and visual_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.0001
+			)
 	_check(
-		command_marker.s > political_command_base.s
-		and command_marker.v < political_command_base.v,
-		"军旗与攻势箭头必须比政治覆色饱和度更高且明度更低"
+		faction_colors_valid and hardcoded_palette_valid,
+		"阵营、政治覆色和兵棋颜色必须落在HSV S60~70 / V60~80范围"
 	)
 	gs.suzerainty = original_suzerainty
 	var occupied_test_city := 0
@@ -1304,7 +1370,17 @@ func _test_river_transport() -> void:
 		"码头应由原35座压缩到约一半，当前=%d" % docks.size()
 	)
 	var minimum_dock_spacing := INF
+	var minimum_dock_city_spacing := INF
 	for dock_a_index in range(docks.size()):
+		for land_city in gs.land_cities():
+			var city_delta := (
+				docks[dock_a_index].map_position
+				- land_city.map_position
+			)
+			city_delta.x *= gs.map_aspect_ratio
+			minimum_dock_city_spacing = minf(
+				minimum_dock_city_spacing, city_delta.length()
+			)
 		for dock_b_index in range(dock_a_index + 1, docks.size()):
 			var dock_delta := (
 				docks[dock_a_index].map_position
@@ -1320,6 +1396,17 @@ func _test_river_transport() -> void:
 			>= TerrainMapGenerator.RIVER_DOCK_MIN_SPACING,
 		"河流几何不得生成视觉重叠码头，最小码头间距实为%.6f"
 			% minimum_dock_spacing
+	)
+	_check(
+		minimum_dock_city_spacing
+			>= TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING,
+		"码头不得贴住普通城市，最小间距实为%.6f"
+			% minimum_dock_city_spacing
+	)
+	_check(
+		docks.size() >= 12
+		and TerrainMapGenerator.RIVER_DOCK_FIXED_INTERVAL > 0.0,
+		"码头应按固定河程生成且保持足量，当前=%d" % docks.size()
 	)
 	var river_mean_y: Array[float] = []
 	var river_shapes_valid := true
@@ -8837,7 +8924,6 @@ func _test_manpower_pool_and_force_commands() -> void:
 	var forced_comprehensive_targets := 0
 	var forced_comprehensive_target_ids: Array[int] = []
 	for force_source in force_state.cities_of(force_nation_id):
-		var target_neighbors: Array[int] = []
 		for force_neighbor in force_state.neighbors(force_source.id):
 			var force_edge := force_state.edge_of(
 				force_source.id,
@@ -8847,15 +8933,17 @@ func _test_manpower_pool_and_force_commands() -> void:
 				force_edge != null
 				and force_edge.max_manpower
 					>= Edge.STANDARD_MANPOWER
+				and not forced_comprehensive_target_ids.has(
+					force_neighbor
+				)
 			):
-				target_neighbors.append(force_neighbor)
-		if target_neighbors.size() < 4:
-			continue
-		for force_target in target_neighbors.slice(0, 4):
-			force_state.cities[force_target].owner_nation = 1
-			forced_comprehensive_targets += 1
-			forced_comprehensive_target_ids.append(force_target)
-		break
+				force_state.cities[force_neighbor].owner_nation = 1
+				forced_comprehensive_targets += 1
+				forced_comprehensive_target_ids.append(force_neighbor)
+				if forced_comprehensive_targets >= 4:
+					break
+		if forced_comprehensive_targets >= 4:
+			break
 	force_state.ownership_revision += 1
 	force_state.nations[
 		force_nation_id
@@ -9149,8 +9237,15 @@ func _test_diplomacy_state_and_ai() -> void:
 		not (
 			alliance_geometry["alliance"] as PackedVector2Array
 		).is_empty(),
-		"盟国接壤边界应生成独立青色联盟线段"
+		"盟国接壤边界应生成独立深蓝色联盟线段"
 	)
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	var enemy_geometry := MapRenderer.build_province_boundary_segments(gs)
+	_check(
+		not (enemy_geometry["enemy"] as PackedVector2Array).is_empty(),
+		"交战国接壤边界应生成独立深红色敌对线段"
+	)
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
 	_check(
 		nation_lines.size() == 4

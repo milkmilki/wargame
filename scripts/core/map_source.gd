@@ -34,3 +34,26 @@ static func texture_path(path: String = DEFAULT_MANIFEST) -> String:
 static func aspect_ratio(path: String = DEFAULT_MANIFEST) -> float:
 	var bbox: Array = load_manifest(path)["bbox_wgs84"]
 	return (float(bbox[2]) - float(bbox[0])) / (float(bbox[3]) - float(bbox[1]))
+
+
+static func latitude_bounds(
+	path: String = DEFAULT_MANIFEST
+) -> Vector2:
+	var bbox: Array = load_manifest(path)["bbox_wgs84"]
+	return Vector2(float(bbox[1]), float(bbox[3]))
+
+
+static func city_density_profile(
+	path: String = DEFAULT_MANIFEST
+) -> Dictionary:
+	var manifest := load_manifest(path)
+	var profile: Dictionary = manifest.get("city_density", {})
+	return {
+		"peak_latitude": float(profile.get("peak_latitude", 30.0)),
+		"south_edge_multiplier": float(profile.get(
+			"south_edge_multiplier", 0.5
+		)),
+		"north_edge_multiplier": float(profile.get(
+			"north_edge_multiplier", 0.2
+		)),
+	}

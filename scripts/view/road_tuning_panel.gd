@@ -7,8 +7,10 @@ signal panel_opened
 signal panel_closed
 signal regenerate_requested(settings: Dictionary)
 signal province_strength_changed(strength: float)
+signal elevation_shadow_strength_changed(strength: float)
 
 const PROVINCE_STRENGTH_KEY := "province_strength"
+const ELEVATION_SHADOW_STRENGTH_KEY := "elevation_shadow_strength"
 
 var _overlay: Control
 var _status: Label
@@ -48,8 +50,8 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.position = Vector2(-270.0, -215.0)
-	panel.size = Vector2(540.0, 430.0)
+	panel.position = Vector2(-270.0, -235.0)
+	panel.size = Vector2(540.0, 470.0)
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.095, 0.085, 0.065, 0.98)
 	panel_style.border_color = Color(0.62, 0.46, 0.19, 0.95)
@@ -115,6 +117,10 @@ func _build_ui() -> void:
 		grid, "国家覆色", PROVINCE_STRENGTH_KEY,
 		0.0, 1.0, 0.01, MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH,
 		0, true
+	)
+	_add_slider(
+		grid, "高程阴影", ELEVATION_SHADOW_STRENGTH_KEY,
+		0.0, 1.0, 0.01, 0.62, 0, true
 	)
 	var legend := HBoxContainer.new()
 	legend.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -234,6 +240,8 @@ func _add_slider(
 		if key == PROVINCE_STRENGTH_KEY:
 			province_strength_changed.emit(value)
 			_sync_map_mode_buttons(value)
+		elif key == ELEVATION_SHADOW_STRENGTH_KEY:
+			elevation_shadow_strength_changed.emit(value)
 	)
 	_update_value_label(key, initial, decimals, as_percent)
 
@@ -322,6 +330,10 @@ func road_settings() -> Dictionary:
 
 func province_strength() -> float:
 	return _slider_value(PROVINCE_STRENGTH_KEY)
+
+
+func elevation_shadow_strength() -> float:
+	return _slider_value(ELEVATION_SHADOW_STRENGTH_KEY)
 
 
 func _slider_value(key: String) -> float:
