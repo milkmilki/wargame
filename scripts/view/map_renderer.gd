@@ -56,6 +56,7 @@ const BORDER_ALLIED := Color(0.025, 0.095, 0.235, 1.0)
 const BORDER_ENEMY := Color(0.285, 0.025, 0.018, 1.0)
 const BORDER_SUZERAINTY := Color(0.18, 0.19, 0.20, 1.0)
 const POLITICAL_MAP_DEFAULT_STRENGTH: float = 1.0
+const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
 const VASSAL_BRIGHTNESS_STEP: float = 0.15
 const CAMPAIGN_ARROW_TEXTURE := preload(
 	"res://assets/ui/strategic/offensive_arc_arrow.png"
@@ -1659,6 +1660,27 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			image.set_pixel(x, y, base)
 	return image
 
+static func build_smooth_province_overlay_image(
+	game_state: GameState
+) -> Image:
+	var source := build_province_overlay_image(game_state)
+	if source == null or source.is_empty():
+		return source
+	var target := source.duplicate()
+	target.resize(
+		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
+		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
+		Image.INTERPOLATE_CUBIC
+	)
+	# Interpolation may create colored transparent pixels outside the province
+	# mask. Clear them; the signed 0m height mask performs the final coast clip.
+	for y in range(target.get_height()):
+		for x in range(target.get_width()):
+			var color: Color = target.get_pixel(x, y)
+			if color.a <= 0.01:
+				target.set_pixel(x, y, Color.TRANSPARENT)
+	return target
+
 
 static func paper_nation_color(color: Color) -> Color:
 	return GameState.normalize_nation_color(color)
@@ -2328,7 +2350,7 @@ func _draw_national_boundaries() -> void:
 	if not coast_pixels.is_empty():
 		draw_multiline(
 			coast_pixels,
-			Color(0.11, 0.115, 0.12, 0.92),
+			Color(0.075, 0.085, 0.088, 1.0),
 			maxf(1.20 * _display_scale, 1.0),
 			true
 		)

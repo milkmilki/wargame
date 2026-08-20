@@ -625,7 +625,7 @@ func set_elevation_shadow_strength(strength: float) -> void:
 func _update_province_visuals() -> void:
 	if _terrain == null or _terrain.land_cell_count() <= 0:
 		return
-	var image := MapRenderer.build_province_overlay_image(state)
+	var image := MapRenderer.build_smooth_province_overlay_image(state)
 	if image != null and not image.is_empty():
 		_province_texture = ImageTexture.create_from_image(image)
 		_terrain.set_province_texture(_province_texture)
@@ -636,14 +636,14 @@ func _update_province_visuals() -> void:
 		surface_tool,
 		geometry["province"],
 		0.026,
-		Color(0.11, 0.115, 0.12, 0.92),
+		Color(0.1, 0.12, 0.12, 1.00),
 		0.205
 	)
 	_append_segment_ribbons(
 		surface_tool,
 		geometry["coast"],
 		0.026,
-		Color(0.11, 0.115, 0.12, 0.92),
+		Color(0.075, 0.085, 0.088, 1.0),
 		0.207
 	)
 	_append_segment_ribbons(

@@ -72,24 +72,46 @@ static func build(
 	threat_field: ThreatField,
 	previous_plan: CityDefensePlan = null
 ) -> CityDefensePlan:
+	var plan := prepare_evaluation(
+		world_view, strategic_snapshot, threat_field
+	)
+	plan.evaluate_readonly(previous_plan)
+	plan.commit_assignments()
+	return plan
+
+
+## 主线程阶段：读取/更新国家防区拓扑缓存并冻结输入签名。
+static func prepare_evaluation(
+	world_view: AiWorldView,
+	strategic_snapshot: StrategicMapSnapshot,
+	threat_field: ThreatField
+) -> CityDefensePlan:
 	var plan := CityDefensePlan.new()
 	plan.view = world_view
 	plan.snapshot = strategic_snapshot
 	plan.threat = threat_field
 	plan._prepare_frontier_topology()
 	plan.input_signature = plan._input_signature()
+	return plan
+
+
+## Worker 安全阶段：只读 GameState，只写本计划对象的派生压力/需求字段。
+func evaluate_readonly(previous_plan: CityDefensePlan = null) -> void:
 	if (
 		previous_plan != null
-		and previous_plan.topology == plan.topology
+		and previous_plan.topology == topology
 		and previous_plan.input_signature
-			== plan.input_signature
+			== input_signature
 	):
-		plan._reuse_dynamic_plan(previous_plan)
+		_reuse_dynamic_plan(previous_plan)
 	else:
-		plan._build()
-	if world_view.state.uses_heightmap:
-		plan._assign_role_based_defense()
-	return plan
+		_build()
+
+
+## 主线程提交阶段：持久化军队填线归属与防区槽，不允许在 worker 调用。
+func commit_assignments() -> void:
+	if view.state.uses_heightmap:
+		_assign_role_based_defense()
 
 
 func candidate_for(

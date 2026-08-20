@@ -10,16 +10,25 @@ var day: int
 var threat_by_city: Dictionary = {}
 var support_by_city: Dictionary = {}
 var travel_distance_cache: Dictionary = {}
+## 多核构建时只读共享的已完成缓存；新条目只写 travel_distance_cache。
+## 主线程等待全部 worker 完成后再按固定顺序合并，避免 Dictionary 并发写。
+var travel_distance_base_cache: Dictionary = {}
 
 
 static func build(
 	view: AiWorldView,
-	shared_travel_cache: Dictionary = {}
+	shared_travel_cache: Dictionary = {},
+	local_write_cache: Dictionary = {},
+	use_readonly_base_cache: bool = false
 ) -> ThreatField:
 	var field := ThreatField.new()
 	field.nation_id = view.nation_id
 	field.day = view.day
-	field.travel_distance_cache = shared_travel_cache
+	if use_readonly_base_cache:
+		field.travel_distance_base_cache = shared_travel_cache
+		field.travel_distance_cache = local_write_cache
+	else:
+		field.travel_distance_cache = shared_travel_cache
 	for city in view.state.cities:
 		field.threat_by_city[city.id] = 0.0
 		field.support_by_city[city.id] = 0.0
@@ -28,6 +37,20 @@ static func build(
 	field._accumulate(view.state, enemy_sources, field.threat_by_city)
 	field._accumulate(view.state, friendly_sources, field.support_by_city)
 	return field
+
+
+## ThreatField 中 D/I 缓存与观察国无关。多核阶段先按唯一
+## (起点,编制容量) 预热这些图搜索结果，随后各国 worker 只读复用。
+static func build_shared_travel_request(
+	state: GameState,
+	start: int,
+	required_manpower: int,
+	output: Dictionary
+) -> void:
+	var field := ThreatField.new()
+	field.nation_id = 0
+	field.travel_distance_cache = output
+	field._influence_field(state, start, required_manpower)
 
 
 func threat_at(city_id: int) -> float:
@@ -117,8 +140,8 @@ func _influence_field(
 		start,
 		required_manpower,
 	]
-	if travel_distance_cache.has(cache_key):
-		return travel_distance_cache[cache_key]
+	if _travel_cache_has(cache_key):
+		return _travel_cache_get(cache_key)
 	var distances := _travel_days_field(
 		state,
 		start,
@@ -144,8 +167,8 @@ func _ordered_influence_city_ids(
 		start,
 		required_manpower,
 	]
-	if travel_distance_cache.has(cache_key):
-		return travel_distance_cache[cache_key]
+	if _travel_cache_has(cache_key):
+		return _travel_cache_get(cache_key)
 	var city_ids := influence.keys()
 	EquivariantOrder.sort_city_ids(
 		city_ids,
@@ -166,8 +189,8 @@ func _travel_days_field(
 		start,
 		required_manpower,
 	]
-	if travel_distance_cache.has(cache_key):
-		return travel_distance_cache[cache_key]
+	if _travel_cache_has(cache_key):
+		return _travel_cache_get(cache_key)
 	var dist := {start: 0.0}
 	var heap: Array = []
 	_heap_push(heap, [0.0, start])
@@ -194,6 +217,19 @@ func _travel_days_field(
 				_heap_push(heap, [next_dist, neighbor])
 	travel_distance_cache[cache_key] = dist
 	return dist
+
+
+func _travel_cache_has(key: String) -> bool:
+	return (
+		travel_distance_cache.has(key)
+		or travel_distance_base_cache.has(key)
+	)
+
+
+func _travel_cache_get(key: String) -> Variant:
+	if travel_distance_cache.has(key):
+		return travel_distance_cache[key]
+	return travel_distance_base_cache[key]
 
 
 static func _edge_days(edge: Edge) -> float:

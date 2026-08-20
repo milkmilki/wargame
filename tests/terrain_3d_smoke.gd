@@ -79,6 +79,13 @@ func _run() -> void:
 		map_3d._terrain.mesh_instance().material_override
 		as ShaderMaterial
 	)
+	var terrain_shader_code := terrain_material.shader.code
+	var political_geometry := (
+		MapRenderer.build_province_boundary_segments(state)
+	)
+	var zero_meter_city_boundary: PackedVector2Array = (
+		political_geometry["coast"]
+	)
 	var unclaimed_color := StrategicTerrainRenderer.UNCLAIMED_POLITICAL_COLOR
 	var shallow_sea := StrategicTerrainRenderer.SHALLOW_SEA_COLOR
 	var deep_sea := StrategicTerrainRenderer.DEEP_SEA_COLOR
@@ -193,6 +200,11 @@ func _run() -> void:
 			and shallow_sea.b > shallow_sea.r
 			and deep_sea.b > deep_sea.r
 		),
+		"hard_coast_height_sampling": (
+			terrain_shader_code.contains("texelFetch(height_texture")
+			and terrain_shader_code.contains("abs(left_land - hard_land)")
+			and terrain_shader_code.contains("abs(right_land - hard_land)")
+		),
 		"overview_angle": absf(
 			overview_angle
 				- StrategicMap3D.CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES
@@ -221,6 +233,22 @@ func _run() -> void:
 		"cities": map_3d._cities.multimesh != null and map_3d._cities.multimesh.instance_count == state.cities.size(),
 		"armies": map_3d._armies.multimesh != null and map_3d._armies.multimesh.instance_count > 0,
 		"provinces": map_3d._province_texture != null,
+		"province_visual_supersample": (
+			map_3d._province_texture != null
+			and map_3d._province_texture.get_width()
+				== state.province_map_size.x
+					* MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
+			and map_3d._province_texture.get_height()
+				== state.province_map_size.y
+					* MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
+		),
+		# 海岸也是沿 0m 截止的城市疆域边界。白边诊断会隐藏覆盖物，
+		# 因此这里单独锁住这条细线，避免以后修插值时把它一起删掉。
+		"zero_meter_city_boundary_retained": (
+			not zero_meter_city_boundary.is_empty()
+			and zero_meter_city_boundary.size() % 2 == 0
+			and map_3d._boundaries.mesh != null
+		),
 		"selection": map_3d._selection.visible,
 		"edge_selection": selected_edge != null and map_3d._edge_selection.mesh != null,
 		"capitals": map_3d._capital_rings.multimesh != null and map_3d._capital_rings.multimesh.instance_count == state.nations.size(),

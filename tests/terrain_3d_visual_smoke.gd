@@ -40,6 +40,8 @@ func _run() -> void:
 			quit(1)
 			return
 		await process_frame
+	if OS.get_environment("WW_VISUAL_TERRAIN_ONLY") == "1":
+		map_3d._content.visible = false
 	var zoom_factor := float(OS.get_environment("WW_VISUAL_ZOOM"))
 	if zoom_factor > 0.0:
 		var center_x := float(OS.get_environment("WW_VISUAL_CENTER_X"))

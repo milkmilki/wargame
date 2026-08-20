@@ -70,6 +70,9 @@ const AI_DECISION_INTERVAL_DAYS: int = 10
 const GRID_AI_DECISION_INTERVAL_DAYS: int = 5
 const AI_RUNTIME_SLICE_BUDGET_USEC: int = 6000
 const AI_CONTEXT_SLICE_BUDGET_USEC: int = 6000
+## ThreatField 按国家并行；4 路通常能覆盖性能核且避免图搜索争抢内存带宽。
+const AI_THREAT_MAX_WORKERS: int = 4
+const AI_DEFENSE_MAX_WORKERS: int = 4
 ## 补给网络含大量图搜索与内存访问；超过 4 路后通常受缓存/内存带宽限制，并会制造
 ## 过多短生命周期任务。保留一个逻辑核给主线程，再以此上限约束实际并发。
 const SUPPLY_NETWORK_MAX_WORKERS: int = 4
@@ -151,6 +154,15 @@ var ai_command_commit_failure_log: Array[String] = []
 var ai_defense_topology_rebuild_total: int = 0
 var ai_defense_topology_reuse_total: int = 0
 var ai_defense_dynamic_reuse_total: int = 0
+## 运行时 ThreatField worker 墙钟统计，供多核 A/B 与现场诊断。
+var ai_threat_worker_count_last: int = 0
+var ai_threat_worker_last_usec: int = 0
+var ai_threat_worker_total_usec: int = 0
+var ai_threat_worker_runs: int = 0
+var ai_defense_worker_count_last: int = 0
+var ai_defense_worker_last_usec: int = 0
+var ai_defense_worker_total_usec: int = 0
+var ai_defense_worker_runs: int = 0
 ## 测试/基准注入点：nation_id -> Callable(state, nation_id, simulation)。
 ## 正式游戏保持为空，所有国家均使用 Utility AI。
 var ai_policy_overrides: Dictionary = {}
@@ -178,6 +190,9 @@ var ai_staggered_decisions: bool = true
 ## 性能 A/B 守卫：正式运行均为 false；分别关闭资源缓存贯通和单 tick 决策上下文。
 var ai_force_resource_cache_disabled: bool = false
 var ai_decision_context_disabled: bool = false
+## A/B 与等价性测试开关；正式运行 false，按国家多核构建威胁场。
+var ai_parallel_threat_disabled: bool = false
+var ai_parallel_defense_disabled: bool = false
 ## 分封开关：true 时执行 AI 产出的 ENFEOFF 动作；false 时忽略（评估仍算，无副作用）。
 ## 正式游戏保持 true；仅供分封收益 A/B 对照关闭。
 var enfeoff_enabled: bool = true
@@ -816,6 +831,23 @@ static func effective_tribute_rate(
 static func monthly_gold_flows(
 	game_state: GameState
 ) -> Array[Dictionary]:
+	# 军费是全局财政表的共享输入。旧实现逐国调用
+	# nation_monthly_military_upkeep()，每次都会重新扫描全部军队，
+	# 大地图因此退化为 O(国家数 × 军队数)，并把整段耗时挤到首个
+	# 查询财政报告的国家。一次扫描按 owner 汇总即可保持结果完全一致。
+	var upkeep_by_nation: Array[int] = []
+	upkeep_by_nation.resize(game_state.nations.size())
+	upkeep_by_nation.fill(0)
+	for army in game_state.armies:
+		if (
+			army.size <= 0
+			or army.owner_nation < 0
+			or army.owner_nation >= upkeep_by_nation.size()
+		):
+			continue
+		upkeep_by_nation[army.owner_nation] += (
+			GameState.army_monthly_upkeep(army.size)
+		)
 	var result: Array[Dictionary] = []
 	for nation in game_state.nations:
 		result.append({
@@ -824,10 +856,7 @@ static func monthly_gold_flows(
 			"tribute_received": 0,
 			"tribute_paid": 0,
 			"net_income": 0,
-			"military_upkeep":
-				game_state.nation_monthly_military_upkeep(
-					nation.id
-				),
+			"military_upkeep": upkeep_by_nation[nation.id],
 			"balance": 0,
 		})
 	for city in game_state.cities:
@@ -3894,15 +3923,17 @@ func _build_parallel_ai_defense(job_index: int) -> void:
 	var job: Dictionary = _parallel_ai_context_jobs[
 		job_index
 	]
-	var threat: ThreatField = job["threat"]
-	var defense_plan := CityDefensePlan.build(
-		job["view"],
-		job["snapshot"],
-		threat,
-		job["previous_defense_plan"]
-	)
-	_record_defense_plan_cache_result(defense_plan)
-	job["defense_plan"] = defense_plan
+	var defense_plan: CityDefensePlan = job["defense_plan"]
+	defense_plan.evaluate_readonly(job["previous_defense_plan"])
+
+
+func _build_ai_defense_partition(
+	worker_index: int, worker_count: int, job_count: int
+) -> void:
+	var job_index := worker_index
+	while job_index < job_count:
+		_build_parallel_ai_defense(job_index)
+		job_index += worker_count
 
 
 func _record_defense_plan_cache_result(
@@ -3931,22 +3962,102 @@ func _build_ai_snapshot_context(
 ## 只读冻结的 GameState，写入各自 job 私有字段与本任务独占的行军/外交缓存；
 ## 期间主线程只做渲染（不触碰 EquivariantOrder/威胁缓存），故无需加锁。
 ## 防区规划因会改写 GameState，仍留在主线程串行提交。
-func _build_ai_readonly_contexts(payload: Dictionary) -> void:
+func _build_ai_snapshots_serial(payload: Dictionary) -> void:
 	var jobs: Array = payload["jobs"]
 	var diplomacy_cache: Dictionary = payload["diplomacy_cache"]
-	var threat_cache: Dictionary = payload["threat_cache"]
-	# 顺序须与主线程同步路径一致：先全部 snapshot，再全部 threat，
-	# 使共享缓存的填充次序相同，保证线程化结果与同步路径逐位一致。
 	for job in jobs:
 		job["snapshot"] = _strategy_snapshot_for(
-			job["view"],
-			diplomacy_cache
+			job["view"], diplomacy_cache
 		)
-	for job in jobs:
+
+
+func _build_ai_threat_partition(
+	worker_index: int,
+	worker_count: int,
+	payload: Dictionary
+) -> void:
+	var jobs: Array = payload["jobs"]
+	var base_cache: Dictionary = payload["threat_base_cache"]
+	var worker_cache_deltas: Array = payload["worker_cache_deltas"]
+	var local_cache: Dictionary = worker_cache_deltas[worker_index]
+	var job_index := worker_index
+	while job_index < jobs.size():
+		var job: Dictionary = jobs[job_index]
 		job["threat"] = ThreatField.build(
-			job["view"],
-			threat_cache
+			job["view"], base_cache, local_cache, true
 		)
+		job_index += worker_count
+
+
+func _build_ai_travel_partition(
+	worker_index: int,
+	worker_count: int,
+	payload: Dictionary
+) -> void:
+	var requests: Array = payload["requests"]
+	var worker_deltas: Array = payload["worker_deltas"]
+	var output: Dictionary = worker_deltas[worker_index]
+	var request_index := worker_index
+	while request_index < requests.size():
+		var request: Vector2i = requests[request_index]
+		ThreatField.build_shared_travel_request(
+			state, request.x, request.y, output
+		)
+		request_index += worker_count
+
+
+func _ai_threat_travel_requests() -> Array[Vector2i]:
+	var unique := {}
+	for army in state.armies:
+		if army.size <= 0:
+			continue
+		var starts: Array[int] = []
+		if army.on_edge and army.move_to >= 0:
+			starts = [army.move_from, army.move_to]
+		elif army.location_city >= 0:
+			starts = [army.location_city]
+		for start in starts:
+			if start < 0:
+				continue
+			unique["%d:%d" % [start, maxi(army.max_size, 1)]] = (
+				Vector2i(start, maxi(army.max_size, 1))
+			)
+	var requests: Array[Vector2i] = []
+	requests.assign(unique.values())
+	requests.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.x < b.x or (a.x == b.x and a.y < b.y)
+	)
+	return requests
+
+
+func _run_worker_tasks_over_frames(
+	task_ids: Array[int]
+) -> void:
+	var pending := true
+	while pending:
+		pending = false
+		for task_id in task_ids:
+			if not WorkerThreadPool.is_task_completed(task_id):
+				pending = true
+				break
+		if pending:
+			await get_tree().process_frame
+	for task_id in task_ids:
+		WorkerThreadPool.wait_for_task_completion(task_id)
+
+
+func _merge_parallel_threat_cache_deltas(
+	worker_cache_deltas: Array
+) -> void:
+	# worker 索引固定；同 key 的计算结果确定性相同。固定顺序合并
+	# 保持缓存内容与串行路径一致，也杜绝 worker 间 Dictionary 写竞争。
+	for delta_value in worker_cache_deltas:
+		var delta: Dictionary = delta_value
+		var keys := delta.keys()
+		keys.sort()
+		for key in keys:
+			if not _threat_travel_cache.has(key):
+				_threat_travel_cache[key] = delta[key]
 
 
 
@@ -4058,24 +4169,87 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	)
 	var snapshot_diplomacy_cache := {}
 	_parallel_ai_context_jobs = context_jobs
-	# 只读上下文（snapshot+threat）是卡顿主因（单国 snapshot 峰值可达 ~50ms，
-	# 分帧器无法切分）。运行期整体丢到后台线程，主线程在等待期间持续渲染插值；
+	# 只读上下文（snapshot+threat）是卡顿主因。snapshot 先在一个后台任务中
+	# 按固定国家顺序构建；随后 ThreatField 按国家分片到最多4个worker。
+	# 主线程在两段等待期间持续渲染插值；
 	# 测试/快进等同步路径仍在主线程内串行执行以保持单帧确定性语义。
 	if spread_runtime_work and not context_jobs.is_empty():
-		var payload := {
+		var snapshot_payload := {
 			"jobs": context_jobs,
 			"diplomacy_cache": snapshot_diplomacy_cache,
-			"threat_cache": _threat_travel_cache,
 		}
-		var task_id := WorkerThreadPool.add_task(
-			_build_ai_readonly_contexts.bind(payload),
-			true,
-			"WorldWar AI readonly context"
+		var snapshot_task_id := WorkerThreadPool.add_task(
+			_build_ai_snapshots_serial.bind(snapshot_payload),
+			true, "WorldWar AI snapshots"
 		)
-		_set_runtime_profile_stage(&"ai_context_worker")
-		while not WorkerThreadPool.is_task_completed(task_id):
+		_set_runtime_profile_stage(&"ai_snapshot_worker")
+		while not WorkerThreadPool.is_task_completed(snapshot_task_id):
 			await get_tree().process_frame
-		WorkerThreadPool.wait_for_task_completion(task_id)
+		WorkerThreadPool.wait_for_task_completion(snapshot_task_id)
+		var worker_count := (
+			1
+			if ai_parallel_threat_disabled
+			else mini(
+				context_jobs.size(),
+				mini(maxi(OS.get_processor_count() - 1, 1), AI_THREAT_MAX_WORKERS)
+			)
+		)
+		var travel_requests := _ai_threat_travel_requests().filter(
+			func(request: Vector2i) -> bool:
+				return not _threat_travel_cache.has(
+					"I:%d:%d" % [request.x, request.y]
+				)
+		)
+		if not travel_requests.is_empty():
+			var travel_worker_count := mini(
+				worker_count, travel_requests.size()
+			)
+			var travel_worker_deltas: Array = []
+			for _worker_index in range(travel_worker_count):
+				travel_worker_deltas.append({})
+			var travel_payload := {
+				"requests": travel_requests,
+				"worker_deltas": travel_worker_deltas,
+			}
+			var travel_task_ids: Array[int] = []
+			for worker_index in range(travel_worker_count):
+				travel_task_ids.append(WorkerThreadPool.add_task(
+					_build_ai_travel_partition.bind(
+						worker_index, travel_worker_count, travel_payload
+					),
+					true,
+					"WorldWar AI travel fields"
+				))
+			_set_runtime_profile_stage(&"ai_travel_workers")
+			await _run_worker_tasks_over_frames(travel_task_ids)
+			_merge_parallel_threat_cache_deltas(travel_worker_deltas)
+		var threat_payload := {
+			"jobs": context_jobs,
+			"threat_base_cache": _threat_travel_cache,
+			"worker_cache_deltas": [],
+		}
+		var worker_cache_deltas: Array = threat_payload["worker_cache_deltas"]
+		for _worker_index in range(worker_count):
+			worker_cache_deltas.append({})
+		var threat_task_ids: Array[int] = []
+		var threat_started_usec := Time.get_ticks_usec()
+		ai_threat_worker_count_last = worker_count
+		for worker_index in range(worker_count):
+			threat_task_ids.append(WorkerThreadPool.add_task(
+				_build_ai_threat_partition.bind(
+					worker_index, worker_count, threat_payload
+				),
+				true,
+				"WorldWar AI threats"
+			))
+		_set_runtime_profile_stage(&"ai_threat_workers")
+		await _run_worker_tasks_over_frames(threat_task_ids)
+		ai_threat_worker_last_usec = (
+			Time.get_ticks_usec() - threat_started_usec
+		)
+		ai_threat_worker_total_usec += ai_threat_worker_last_usec
+		ai_threat_worker_runs += 1
+		_merge_parallel_threat_cache_deltas(worker_cache_deltas)
 		runtime_slice_started = Time.get_ticks_usec()
 		_record_tick_profile_stage(
 			"ai_snapshot_threat",
@@ -4101,15 +4275,56 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			if tick_phase_profiling_enabled else 0
 		)
 	_set_runtime_profile_stage(&"ai_defense")
-	for job_index in range(context_jobs.size()):
-		_build_parallel_ai_defense(job_index)
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_CONTEXT_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
+	if spread_runtime_work and not context_jobs.is_empty():
+		for job in context_jobs:
+			job["defense_plan"] = CityDefensePlan.prepare_evaluation(
+				job["view"], job["snapshot"], job["threat"]
+			)
+		var defense_worker_count := (
+			1 if ai_parallel_defense_disabled else mini(
+				context_jobs.size(),
+				mini(maxi(OS.get_processor_count() - 1, 1), AI_DEFENSE_MAX_WORKERS)
+			)
+		)
+		var defense_task_ids: Array[int] = []
+		var defense_started_usec := Time.get_ticks_usec()
+		ai_defense_worker_count_last = defense_worker_count
+		for worker_index in range(defense_worker_count):
+			defense_task_ids.append(WorkerThreadPool.add_task(
+				_build_ai_defense_partition.bind(
+					worker_index, defense_worker_count, context_jobs.size()
+				),
+				true, "WorldWar AI defense evaluation"
+			))
+		_set_runtime_profile_stage(&"ai_defense_workers")
+		await _run_worker_tasks_over_frames(defense_task_ids)
+		ai_defense_worker_last_usec = Time.get_ticks_usec() - defense_started_usec
+		ai_defense_worker_total_usec += ai_defense_worker_last_usec
+		ai_defense_worker_runs += 1
+		_set_runtime_profile_stage(&"ai_defense_commit")
+		# worker 完成后仍需按国家固定顺序把防区结果写回 GameState。
+		# 大地图首日可能同时提交全部国家；按运行时预算切帧，既保持
+		# 确定性提交顺序，也避免这段主线程工作集中到一帧。
+		runtime_slice_started = Time.get_ticks_usec()
+		for job in context_jobs:
+			var defense_plan: CityDefensePlan = job["defense_plan"]
+			defense_plan.commit_assignments()
+			_record_defense_plan_cache_result(defense_plan)
+			if (
+				spread_runtime_work
+				and Time.get_ticks_usec() - runtime_slice_started
+					>= AI_RUNTIME_SLICE_BUDGET_USEC
+			):
+				await get_tree().process_frame
+				runtime_slice_started = Time.get_ticks_usec()
+	else:
+		for job in context_jobs:
+			var defense_plan := CityDefensePlan.build(
+				job["view"], job["snapshot"], job["threat"],
+				job["previous_defense_plan"]
+			)
+			job["defense_plan"] = defense_plan
+			_record_defense_plan_cache_result(defense_plan)
 	_record_tick_profile_stage("ai_defense", ai_profile_stage_started)
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -4190,13 +4405,31 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	for nation_id in managed_nations:
 		var context: Dictionary = force_contexts[nation_id]
 		var decision_context := {}
+		var force_context_started := (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		_set_runtime_profile_stage(&"ai_force_context")
 		if not ai_decision_context_disabled:
 			_enrich_ai_decision_context(
 				context,
 				force_resource_cache
 			)
 			decision_context = context
+		_record_tick_profile_stage(
+			"ai_force_context", force_context_started
+		)
 		decision_contexts[nation_id] = decision_context
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+		var force_commit_started := (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		_set_runtime_profile_stage(&"ai_force_commit")
 		_ai_manage_force_structure(
 			context["view"],
 			context["snapshot"],
@@ -4205,6 +4438,9 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			true,
 			force_resource_cache,
 			decision_context
+		)
+		_record_tick_profile_stage(
+			"ai_force_commit", force_commit_started
 		)
 		if (
 			spread_runtime_work
@@ -4634,22 +4870,49 @@ func _enrich_ai_decision_context(
 ) -> void:
 	var view: AiWorldView = context["view"]
 	var nation_id := view.nation_id
+	var part_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	_set_runtime_profile_stage(&"ai_force_wars")
 	context["wars"] = state.wars_of(nation_id)
+	_record_tick_profile_stage("ai_force_wars", part_started)
 	var food_evaluation_cache := (
 		{}
 		if ai_force_resource_cache_disabled
 		else resource_evaluation_cache
 	)
+	part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	_set_runtime_profile_stage(&"ai_force_food")
 	context["food_report"] = _food_security_report(
 		nation_id,
 		view.friendly_armies,
 		food_evaluation_cache
 	)
+	_record_tick_profile_stage("ai_force_food", part_started)
+	const GOLD_FLOWS_CACHE_KEY := "monthly_gold_flows"
+	if not resource_evaluation_cache.has(GOLD_FLOWS_CACHE_KEY):
+		part_started = (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		_set_runtime_profile_stage(&"ai_force_gold_flows")
+		resource_evaluation_cache[GOLD_FLOWS_CACHE_KEY] = (
+			monthly_gold_flows(state)
+		)
+		_record_tick_profile_stage(
+			"ai_force_gold_flows", part_started
+		)
+	part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	_set_runtime_profile_stage(&"ai_force_gold_report")
 	context["gold_report"] = DiplomacyAI.resource_report(
 		state,
 		nation_id,
 		resource_evaluation_cache
 	)
+	_record_tick_profile_stage("ai_force_gold_report", part_started)
 
 
 ## 战役准备分配可能在规划阶段变化，因此只在计划落定后刷新，并仅供本次规划读取。
