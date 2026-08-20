@@ -138,6 +138,9 @@ var _prepared_supply_blocked_edges: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
 var _supply_network_fingerprints: Dictionary = {}
+## 战争财政快照只依赖外交关系转换。普通日以 O(1) 版本比较跳过，
+## 外部脚本直接调用 set_diplomatic_relation 也会因 revision 变化被补同步。
+var _war_gold_snapshot_diplomacy_revision: int = -1
 var _ai_last_decision_day: int = -1
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
@@ -322,6 +325,11 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"maintenance")
 	state.day += 1
 	state.month = state.day / DAYS_PER_MONTH
+	if (
+		state.diplomacy_revision
+		!= _war_gold_snapshot_diplomacy_revision
+	):
+		_synchronize_war_gold_income_snapshots()
 	state.prune_campaign_visual_events()
 	_expire_offensive_bonuses()
 	_recover_city_fortifications()
@@ -972,6 +980,12 @@ static func gold_reserve_policy(
 		target_savings - budget_monthly_balance,
 		0
 	)
+	# 战前收入快照只负责防止失地后的即时连环裁军；当半年储备真正
+	# 耗尽并产生实际欠饷时仍须收缩。缩编入口另按世界月份限频。
+	if nation.unpaid_military_upkeep > 0:
+		required_upkeep_savings = maxi(
+			required_upkeep_savings, nation.unpaid_military_upkeep
+		)
 	return {
 		"at_war": at_war,
 		"current_monthly_income": current_income,
@@ -993,6 +1007,9 @@ static func gold_reserve_policy(
 func _synchronize_war_gold_income_snapshots() -> void:
 	if state == null or state.nations.is_empty():
 		return
+	_war_gold_snapshot_diplomacy_revision = (
+		state.diplomacy_revision
+	)
 	var needs_snapshot: Array[int] = []
 	for nation in state.nations:
 		var at_war := not state.wars_of(nation.id).is_empty()
@@ -1040,6 +1057,9 @@ func _capture_war_gold_income_snapshots(
 			int(flows[nation_id]["net_income"]), 0
 		)
 		nation.war_gold_income_snapshot_day = state.day
+	_war_gold_snapshot_diplomacy_revision = (
+		state.diplomacy_revision
+	)
 
 
 func _resolve_economy() -> void:
@@ -5433,7 +5453,12 @@ func _ai_manage_force_structure(
 	var required_gold_savings := int(
 		gold_reserve.get("required_upkeep_savings", 0)
 	)
-	var gold_pressure := required_gold_savings > 0
+	var current_financial_month := state.day / DAYS_PER_MONTH
+	var gold_pressure := (
+		required_gold_savings > 0
+		and nation.last_gold_demobilization_month
+			< current_financial_month
+	)
 	var food_growth_budget := _food_growth_manpower_budget(
 		food_report
 	)
@@ -9662,6 +9687,9 @@ func _demobilize_for_gold_security(
 		ActionCandidate.Kind.DISBAND_ARMY
 	)
 	nation.ai_last_force_day = state.day
+	nation.last_gold_demobilization_month = (
+		state.day / DAYS_PER_MONTH
+	)
 	nation.ai_last_force_reason = (
 		"财政储备缩编：返还%d人，月省%d金，储备月度缺口%d金，目标保留%d军"
 		% [

@@ -17,6 +17,9 @@ var last_offensive_gold_day: int = -1
 ## -1 表示当前和平；初始战争/外部脚本改关系由 Simulation.setup/日同步补快照。
 var war_gold_income_snapshot: int = -1
 var war_gold_income_snapshot_day: int = -1
+## 实际欠饷触发的财政缩编每月最多一次，防止 10 日 AI 周期读取同一月
+## unpaid 记录而连续缩编；值为世界月份（day / 30）。
+var last_gold_demobilization_month: int = -1
 var war_mobilization_target_troops: int = 0 ## 宣战粮食预算对应的目标总兵力
 var war_mobilization_until_day: int = -1
 var war_mobilization_reason: String = ""
