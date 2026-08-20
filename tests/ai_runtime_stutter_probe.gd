@@ -18,6 +18,8 @@ var _peak_frame_day: int = 0
 var _peak_is_month: bool = false
 var _peak_stage: StringName = &""
 var _slow_frames_by_stage: Dictionary = {}
+var _interval_started_stage: StringName = &"startup"
+var _slow_frame_events: Array[Dictionary] = []
 
 
 func _init() -> void:
@@ -96,6 +98,11 @@ func _process(_delta: float) -> bool:
 	var frame_ms := float(now - _last_frame_usec) / 1000.0
 	_last_frame_usec = now
 	_frame_times.append(frame_ms)
+	var current_stage := _current_runtime_stage()
+	# 帧间隔内的阻塞发生在上次回调结束后，因此优先归因给上次观察到的
+	# 阶段；current_stage 用于显示该间隔结束时已推进到了哪里。
+	var elapsed_stage := _interval_started_stage
+	_interval_started_stage = current_stage
 
 	if _state.day != _prev_day:
 		if _state.day % Simulation.AI_DECISION_INTERVAL_DAYS == 0:
@@ -105,9 +112,9 @@ func _process(_delta: float) -> bool:
 		_peak_frame_ms = frame_ms
 		_peak_frame_day = _state.day
 		_peak_is_month = (_state.day % 30 == 0)
-		_peak_stage = _current_runtime_stage()
+		_peak_stage = elapsed_stage
 	if frame_ms > 16.0:
-		var stage := str(_current_runtime_stage())
+		var stage := str(elapsed_stage)
 		if not _slow_frames_by_stage.has(stage):
 			_slow_frames_by_stage[stage] = {
 				"over_16": 0,
@@ -128,6 +135,12 @@ func _process(_delta: float) -> bool:
 			float(stage_report["peak_ms"]),
 			frame_ms
 		)
+		_slow_frame_events.append({
+			"day": _state.day,
+			"ms": frame_ms,
+			"from": elapsed_stage,
+			"to": current_stage,
+		})
 
 	if (
 		(_state.day >= _target_days or _state.winner != -1)
@@ -210,6 +223,18 @@ func _finish() -> void:
 			int(report["over_16"]),
 			int(report["over_33"]),
 			float(report["peak_ms"]),
+		])
+	_slow_frame_events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["ms"]) > float(b["ms"])
+	)
+	print("最慢帧时间线（起始阶段 -> 结束阶段）:")
+	for index in range(mini(_slow_frame_events.size(), 16)):
+		var event: Dictionary = _slow_frame_events[index]
+		print("  day=%d %6.1fms  %s -> %s" % [
+			int(event["day"]),
+			float(event["ms"]),
+			str(event["from"]),
+			str(event["to"]),
 		])
 	print("verdict=STUTTER_PROBE_DONE")
 	_sim.queue_free()

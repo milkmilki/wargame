@@ -57,6 +57,7 @@ func _init() -> void:
 	_test_holding_combat_adaptation()
 	_test_retreat_contact_and_position_continuity()
 	_test_ai_strategic_map_and_threat()
+	_test_stable_force_resource_cache_filter()
 	_test_city_defense_incremental_topology()
 	_test_ai_merge_and_retreat_utility()
 	_test_garrison_retreat_city_defense()
@@ -6567,6 +6568,66 @@ func _test_ai_strategic_map_and_threat() -> void:
 		contested.has(17) and not contested.has(16),
 		"红框只应标记正在发生城战或围城的城市"
 	)
+
+
+func _test_stable_force_resource_cache_filter() -> void:
+	print("[29a] AI 资源缓存：只复用快照后仍稳定的索引，动态报告必须重算")
+	var sim := Simulation.new()
+	var marker := {"value": 7}
+	var snapshot_cache := {
+		"nation_aggregates_built": true,
+		"frontier_matrix_built": true,
+		"monthly_gold_flows": marker,
+		"power:0": marker,
+		"troops:0": marker,
+		"full_troops:0": marker,
+		"owned_cities:0": marker,
+		"wars:0": marker,
+		"allies:0": marker,
+		"coalition:0": marker,
+		"frontier:0:1": marker,
+		"borders:0": marker,
+		"resource:0": marker,
+		"food:0:0:1000:0": marker,
+		"food_stock:0": marker,
+		"food_posture:0": marker,
+		"mobilization:0:0": marker,
+		"garrison_by_city": marker,
+		"threat:0:1": marker,
+	}
+	var stable := sim._stable_force_resource_cache_from_snapshot(
+		snapshot_cache
+	)
+	var expected_stable := [
+		"frontier_matrix_built", "monthly_gold_flows",
+		"wars:0", "allies:0", "frontier:0:1",
+		"borders:0",
+	]
+	var stable_keys := stable.keys()
+	stable_keys.sort()
+	expected_stable.sort()
+	_check(
+		stable_keys == expected_stable,
+		"军制缓存白名单只应保留稳定索引，实为 %s" % [stable_keys]
+	)
+	_check(
+		stable["frontier:0:1"] == marker
+		and not stable.has("nation_aggregates_built")
+		and not stable.has("power:0")
+		and not stable.has("troops:0")
+		and not stable.has("full_troops:0")
+		and not stable.has("owned_cities:0")
+		and not stable.has("coalition:0")
+		and not stable.has("resource:0")
+		and not stable.has("food:0:0:1000:0")
+		and not stable.has("food_stock:0")
+		and not stable.has("food_posture:0")
+		and not stable.has("mobilization:0:0")
+		and not stable.has("garrison_by_city")
+		and not stable.has("threat:0:1"),
+		"国库/粮食/姿态/驻军等快照后可变报告不得跨阶段复用"
+	)
+	sim.free()
 
 
 func _test_city_defense_incremental_topology() -> void:

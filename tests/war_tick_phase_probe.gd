@@ -32,6 +32,8 @@ const AI_STAGES: Array[String] = [
 	"ai_force_context",
 	"ai_force_wars",
 	"ai_force_food",
+	"ai_force_food_plan",
+	"ai_force_food_armies",
 	"ai_force_gold_flows",
 	"ai_force_gold_report",
 	"ai_force_commit",
@@ -79,6 +81,9 @@ func _init() -> void:
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
+	sim.ai_snapshot_resource_cache_reuse_disabled = (
+		OS.get_environment("PHASE_COLD_FORCE_RESOURCES") == "1"
+	)
 	sim.tick_phase_profiling_enabled = true
 	sim.ai_force_resource_cache_disabled = (
 		OS.get_environment("PHASE_DISABLE_FORCE_RESOURCE_CACHE") == "1"

@@ -190,6 +190,8 @@ var ai_staggered_decisions: bool = true
 ## 性能 A/B 守卫：正式运行均为 false；分别关闭资源缓存贯通和单 tick 决策上下文。
 var ai_force_resource_cache_disabled: bool = false
 var ai_decision_context_disabled: bool = false
+## 等价/性能 A/B：true 时军制不复用战略快照已构建的同 tick 外交资源缓存。
+var ai_snapshot_resource_cache_reuse_disabled: bool = false
 ## A/B 与等价性测试开关；正式运行 false，按国家多核构建威胁场。
 var ai_parallel_threat_disabled: bool = false
 var ai_parallel_defense_disabled: bool = false
@@ -4060,7 +4062,6 @@ func _merge_parallel_threat_cache_deltas(
 				_threat_travel_cache[key] = delta[key]
 
 
-
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	if spread_runtime_work:
 		await get_tree().process_frame
@@ -4400,7 +4401,16 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	)
 	# 军制调整只消耗本国资源；所有国家先基于同一时刻的冻结上下文决策。
 	_set_runtime_profile_stage(&"ai_force_structure")
-	var force_resource_cache := {}
+	# 战略快照已经在同一冻结世界上构建了外交、疆界及部分财政原语。
+	# 只复用在宣战攻势启动后仍不变的只读索引；
+	# resource:/food: 等包含当前国库、库存或姿态的动态报告必须重算。
+	var force_resource_cache := (
+		{}
+		if ai_snapshot_resource_cache_reuse_disabled
+		else _stable_force_resource_cache_from_snapshot(
+			snapshot_diplomacy_cache
+		)
+	)
 	var decision_contexts := {}
 	for nation_id in managed_nations:
 		var context: Dictionary = force_contexts[nation_id]
@@ -4729,6 +4739,28 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"ai_commit")
 	_commit_ai_command_collection(nation_order)
 	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
+
+
+func _stable_force_resource_cache_from_snapshot(
+	snapshot_cache: Dictionary
+) -> Dictionary:
+	var result := {}
+	for key_value in snapshot_cache:
+		if key_value is not String:
+			continue
+		var key := key_value as String
+		if (
+			key in [
+				"frontier_matrix_built",
+				"monthly_gold_flows",
+			]
+			or key.begins_with("wars:")
+			or key.begins_with("allies:")
+			or key.begins_with("frontier:")
+			or key.begins_with("borders:")
+		):
+			result[key] = snapshot_cache[key]
+	return result
 
 
 func _reconcile_strategic_roles(
@@ -9164,12 +9196,21 @@ func _food_security_report(
 	nation_armies: Array[Army] = [],
 	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
+	var food_part_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	var war_food := DiplomacyAI.war_food_report(
 		state,
 		nation_id,
 		-1,
 		-1,
 		evaluation_cache
+	)
+	_record_tick_profile_stage(
+		"ai_force_food_plan", food_part_started
+	)
+	food_part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	var monthly_production := float(war_food["monthly_food_production"])
 	var monthly_demand := 0.0
@@ -9183,6 +9224,9 @@ func _food_security_report(
 		if army.owner_nation != nation_id or army.size <= 0:
 			continue
 		monthly_demand += _projected_army_food_demand(army)
+	_record_tick_profile_stage(
+		"ai_force_food_armies", food_part_started
+	)
 	monthly_demand = maxf(
 		monthly_demand,
 		nation.food_demand_ema

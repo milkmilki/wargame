@@ -6,15 +6,21 @@ func _init() -> void:
 	var days := _env_int("AI_CONTEXT_EQUIV_DAYS", 365)
 	var nations := _env_int("AI_CONTEXT_EQUIV_NATIONS", 40)
 	var cities := _env_int("AI_CONTEXT_EQUIV_CITIES", 160)
-	var legacy := _run_world(nations, cities, days, true)
-	var optimized := _run_world(nations, cities, days, false)
-	var mismatches := _compare_states(legacy.state, optimized.state)
+	var legacy := _run_world(nations, cities, days, true, true)
+	var cold_context := _run_world(nations, cities, days, false, true)
+	var optimized := _run_world(nations, cities, days, false, false)
+	var legacy_mismatches := _compare_states(legacy.state, optimized.state)
+	var cache_reuse_mismatches := _compare_states(
+		cold_context.state, optimized.state
+	)
+	var mismatches := legacy_mismatches + cache_reuse_mismatches
 	print("=== AI 决策上下文等价校验 (%d国/%d城/%d天) ===" % [
 		nations,
 		cities,
 		days,
 	])
-	print("不一致=%d" % mismatches)
+	print("旧上下文→优化 不一致=%d" % legacy_mismatches)
+	print("冷资源缓存→快照缓存复用 不一致=%d" % cache_reuse_mismatches)
 	print(
 		"verdict=%s"
 		% (
@@ -24,6 +30,7 @@ func _init() -> void:
 		)
 	)
 	legacy.free()
+	cold_context.free()
 	optimized.free()
 	quit(0 if mismatches == 0 else 1)
 
@@ -32,7 +39,8 @@ func _run_world(
 	nations: int,
 	cities: int,
 	days: int,
-	legacy_path: bool
+	legacy_path: bool,
+	disable_snapshot_resource_reuse: bool
 ) -> Simulation:
 	var world := GameState.new()
 	world.generate_world(12345, nations, cities)
@@ -41,6 +49,9 @@ func _run_world(
 	sim.setup(world)
 	sim.ai_force_resource_cache_disabled = legacy_path
 	sim.ai_decision_context_disabled = legacy_path
+	sim.ai_snapshot_resource_cache_reuse_disabled = (
+		disable_snapshot_resource_reuse
+	)
 	for _day in range(days):
 		if world.winner != -1:
 			break
