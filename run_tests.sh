@@ -19,7 +19,7 @@ echo "==> Godot: $($GODOT --version)"
 echo "==> 项目: $PROJECT_DIR"
 echo
 
-echo "==> [1/2] 编译检查（headless 导入，捕获脚本错误）"
+echo "==> [1/4] 编译检查（headless 导入，捕获脚本错误）"
 # 导入阶段任何 SCRIPT ERROR 都会打印；grep 到即判失败。
 IMPORT_LOG="$(HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" --editor --quit \
   --log-file "$LOG_DIR/world-war-import.log" 2>&1)"
@@ -31,7 +31,17 @@ fi
 echo "    编译通过（class_name 全部注册，无脚本错误）"
 echo
 
-echo "==> [2/2] 逻辑测试套件"
+echo "==> [2/4] 逻辑测试套件"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/test_suite.gd \
   --log-file "$LOG_DIR/world-war-tests.log"
+echo
+
+echo "==> [3/4] 高程图打包与海岸无插值门禁"
+python3 "$PROJECT_DIR/tests/low_poly_map_source_tool.py"
+echo
+
+echo "==> [4/4] 3D 低模分面与双灯光门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/terrain_3d_smoke.gd \
+  --log-file "$LOG_DIR/world-war-terrain-3d.log"

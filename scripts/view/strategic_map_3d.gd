@@ -4,9 +4,15 @@ extends Node3D
 ## 负责连续地形、国家覆色、道路、河流、城市、军队、战斗和相机交互。
 
 const BASE_WORLD_SPAN: float = 64.0
-const BASE_MESH_RESOLUTION: int = 256
-const HEIGHT_STEPS: int = 64
+## Low-poly terrain contract: coarse enough for readable facets at overview,
+## while retaining coast and major mountain silhouettes.
+const BASE_MESH_RESOLUTION: int = 160
+const HEIGHT_STEPS: int = 128
 const HEIGHT_SCALE: float = 4.8
+const VERTICAL_TERRAIN_LIGHT_ENERGY: float = 0.92
+const SCULPT_TERRAIN_LIGHT_MAX_ENERGY: float = 1.35
+const VERTICAL_TERRAIN_LIGHT_COLOR := Color(0.91, 0.94, 1.0)
+const SCULPT_TERRAIN_LIGHT_COLOR := Color(1.0, 0.82, 0.62)
 const MAP_PICK_CITY_PIXELS: float = 18.0
 const MAP_PICK_EDGE_PIXELS: float = 10.0
 const CAMERA_MIN_DISTANCE: float = 24.0
@@ -39,6 +45,8 @@ var overlay: MapRenderer
 var _terrain: StrategicTerrainRenderer
 var _camera: Camera3D
 var _content: Node3D
+var _vertical_terrain_light: DirectionalLight3D
+var _sculpt_terrain_light: DirectionalLight3D
 var _water: MeshInstance3D
 var _roads: MeshInstance3D
 var _minor_roads: MeshInstance3D
@@ -258,14 +266,7 @@ func _ensure_scene_nodes() -> void:
 		_camera.near = 0.2
 		_camera.far = 300.0
 		add_child(_camera)
-	if get_node_or_null("Sun") == null:
-		var sun := DirectionalLight3D.new()
-		sun.name = "Sun"
-		sun.rotation_degrees = Vector3(-58.0, -32.0, 0.0)
-		sun.light_color = Color(1.0, 0.87, 0.68)
-		sun.light_energy = 1.12
-		sun.shadow_enabled = true
-		add_child(sun)
+	_ensure_terrain_lights()
 	if get_node_or_null("Environment") == null:
 		var world_environment := WorldEnvironment.new()
 		world_environment.name = "Environment"
@@ -276,17 +277,51 @@ func _ensure_scene_nodes() -> void:
 		environment.ambient_light_source = (
 			Environment.AMBIENT_SOURCE_COLOR
 		)
-		environment.ambient_light_color = Color(
-			0.58,
-			0.52,
-			0.42
-		)
-		environment.ambient_light_energy = 0.64
+		environment.ambient_light_color = Color(0.52, 0.56, 0.64)
+		# The vertical plane light is the readable base illumination. Keep only
+		# a small world ambient term so the horizontal sculpt light retains form.
+		environment.ambient_light_energy = 0.16
 		environment.tonemap_mode = Environment.TONE_MAPPER_ACES
 		world_environment.environment = environment
 		add_child(world_environment)
 	_ensure_feature_nodes()
 	_ensure_antique_overlay()
+
+
+func _ensure_terrain_lights() -> void:
+	if _vertical_terrain_light == null:
+		_vertical_terrain_light = DirectionalLight3D.new()
+		_vertical_terrain_light.name = "TerrainVerticalPlaneLight"
+		# DirectionalLight3D emits along local -Z. X=-90° points straight down.
+		_vertical_terrain_light.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+		_vertical_terrain_light.light_color = VERTICAL_TERRAIN_LIGHT_COLOR
+		_vertical_terrain_light.light_energy = VERTICAL_TERRAIN_LIGHT_ENERGY
+		_vertical_terrain_light.light_cull_mask = (
+			StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
+		)
+		_vertical_terrain_light.shadow_enabled = false
+		add_child(_vertical_terrain_light)
+	if _sculpt_terrain_light == null:
+		_sculpt_terrain_light = DirectionalLight3D.new()
+		_sculpt_terrain_light.name = "TerrainNorthwestSculptPlaneLight"
+		# Map top-left is world (-X,-Z); horizontal emission toward (+X,+Z)
+		# is local -Z rotated -135° around Y. It lights slopes, not flat ground.
+		_sculpt_terrain_light.rotation_degrees = Vector3(0.0, -135.0, 0.0)
+		_sculpt_terrain_light.light_color = SCULPT_TERRAIN_LIGHT_COLOR
+		_sculpt_terrain_light.light_cull_mask = (
+			StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
+		)
+		_sculpt_terrain_light.shadow_enabled = false
+		add_child(_sculpt_terrain_light)
+	_apply_terrain_sculpt_light_strength()
+
+
+func _apply_terrain_sculpt_light_strength() -> void:
+	if _sculpt_terrain_light != null:
+		_sculpt_terrain_light.light_energy = (
+			_elevation_shadow_strength
+			* SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+		)
 
 
 func _ensure_antique_overlay() -> void:
@@ -596,7 +631,6 @@ func _on_terrain_ready() -> void:
 		return
 	_update_province_visuals()
 	_terrain.set_province_strength(_province_strength)
-	_terrain.set_elevation_shadow_strength(_elevation_shadow_strength)
 	_build_road_mesh()
 	_build_river_mesh()
 	_build_city_instances()
@@ -616,10 +650,7 @@ func set_province_strength(strength: float) -> void:
 
 func set_elevation_shadow_strength(strength: float) -> void:
 	_elevation_shadow_strength = clampf(strength, 0.0, 1.0)
-	if _terrain != null:
-		_terrain.set_elevation_shadow_strength(
-			_elevation_shadow_strength
-		)
+	_apply_terrain_sculpt_light_strength()
 
 
 func _update_province_visuals() -> void:

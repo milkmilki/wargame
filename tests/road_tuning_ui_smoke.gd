@@ -47,7 +47,13 @@ func _run() -> void:
 		quit(1)
 		return
 	(panel._sliders[RoadTuningPanel.ELEVATION_SHADOW_STRENGTH_KEY] as HSlider).value = 0.61
-	if not is_equal_approx(main.map_3d._elevation_shadow_strength, 0.61):
+	if (
+		not is_equal_approx(main.map_3d._elevation_shadow_strength, 0.61)
+		or not is_equal_approx(
+			main.map_3d._sculpt_terrain_light.light_energy,
+			0.61 * StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+		)
+	):
 		push_error("ROAD_TUNING_UI_ELEVATION_SHADOW_FAILED")
 		quit(1)
 		return

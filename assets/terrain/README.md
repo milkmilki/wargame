@@ -29,6 +29,11 @@ python3 scripts/tools/generate_china_surface_texture.py
 python3 scripts/tools/generate_default_city_mask.py
 ```
 
+For a user-supplied heightmap and the deterministic faceted low-poly lighting
+pipeline, follow [LOW_POLY_TERRAIN_SOP.md](LOW_POLY_TERRAIN_SOP.md) and use
+`scripts/tools/prepare_low_poly_map_source.py`. The height image remains numeric
+data only; no hillshade or height pseudocolor is baked into RGB.
+
 The source archives and intermediate metric DEM cache are ignored by Git.
 Output metadata records source URL, geographic bounds and processing values.
 

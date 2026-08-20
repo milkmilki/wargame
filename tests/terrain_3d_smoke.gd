@@ -67,19 +67,51 @@ func _run() -> void:
 
 	var terrain_mesh := map_3d._terrain.mesh_instance().mesh
 	var terrain_arrays := terrain_mesh.surface_get_arrays(0)
-	var terrain_indices: PackedInt32Array = terrain_arrays[
-		Mesh.ARRAY_INDEX
+	var terrain_vertices: PackedVector3Array = terrain_arrays[
+		Mesh.ARRAY_VERTEX
 	]
-	var expected_indices := (
+	var terrain_normals: PackedVector3Array = terrain_arrays[
+		Mesh.ARRAY_NORMAL
+	]
+	var expected_vertices := (
 		(map_3d._terrain.resolution.x - 1)
 		* (map_3d._terrain.resolution.y - 1)
 		* 6
 	)
+	var flat_faces := terrain_normals.size() == terrain_vertices.size()
+	var has_facet_variation := false
+	for face_start in range(0, terrain_normals.size(), 3):
+		if face_start + 2 >= terrain_normals.size():
+			flat_faces = false
+			break
+		var face_normal := terrain_normals[face_start]
+		flat_faces = flat_faces and (
+			face_normal.distance_to(terrain_normals[face_start + 1]) < 0.000001
+			and face_normal.distance_to(terrain_normals[face_start + 2]) < 0.000001
+			and face_normal.y >= -0.000001
+		)
+		if (
+			face_start >= 3
+			and face_normal.distance_to(terrain_normals[face_start - 3]) > 0.0001
+		):
+			has_facet_variation = true
 	var terrain_material := (
 		map_3d._terrain.mesh_instance().material_override
 		as ShaderMaterial
 	)
 	var terrain_shader_code := terrain_material.shader.code
+	var vertical_light_direction := (
+		map_3d._vertical_terrain_light.global_basis
+		* Vector3(0.0, 0.0, -1.0)
+	).normalized()
+	var sculpt_light_direction := (
+		map_3d._sculpt_terrain_light.global_basis
+		* Vector3(0.0, 0.0, -1.0)
+	).normalized()
+	var initial_sculpt_energy := map_3d._sculpt_terrain_light.light_energy
+	map_3d.set_elevation_shadow_strength(0.25)
+	var quarter_sculpt_energy := map_3d._sculpt_terrain_light.light_energy
+	map_3d.set_elevation_shadow_strength(0.62)
 	var political_geometry := (
 		MapRenderer.build_province_boundary_segments(state)
 	)
@@ -171,7 +203,12 @@ func _run() -> void:
 		map_3d._update_edge_selection()
 	var checks := {
 		"terrain_mesh": terrain_mesh != null and terrain_mesh.get_surface_count() > 0,
-		"terrain_indices": terrain_indices.size() == expected_indices,
+		"terrain_unindexed_low_poly": (
+			terrain_vertices.size() == expected_vertices
+			and (terrain_arrays[Mesh.ARRAY_INDEX] == null
+				or (terrain_arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty())
+		),
+		"terrain_flat_faces": flat_faces and has_facet_variation,
 		"alpha_threshold": is_equal_approx(
 			float(terrain_material.get_shader_parameter(
 				"land_alpha_threshold"
@@ -184,10 +221,36 @@ func _run() -> void:
 			)),
 			MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
 		),
-		"default_elevation_shadow": is_equal_approx(
-			float(terrain_material.get_shader_parameter(
-				"elevation_shadow_strength"
-			)), 0.62
+		"lit_low_poly_shader": (
+			not terrain_shader_code.contains("unshaded")
+			and not terrain_shader_code.contains("height_left")
+			and not terrain_shader_code.contains("detail_normal_strength")
+		),
+		"vertical_plane_light": (
+			vertical_light_direction.distance_to(Vector3.DOWN) < 0.0001
+			and is_equal_approx(
+				map_3d._vertical_terrain_light.light_energy,
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_ENERGY
+			)
+			and map_3d._vertical_terrain_light.light_cull_mask
+				== StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
+		),
+		"northwest_sculpt_plane_light": (
+			absf(sculpt_light_direction.y) < 0.0001
+			and sculpt_light_direction.x > 0.70
+			and sculpt_light_direction.z > 0.70
+			and is_equal_approx(
+				initial_sculpt_energy,
+				0.62 * StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+			)
+			and is_equal_approx(
+				quarter_sculpt_energy,
+				0.25 * StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+			)
+			and map_3d._sculpt_terrain_light.light_cull_mask
+				== StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
+			and map_3d._terrain.mesh_instance().layers
+				== StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
 		),
 		"unclaimed_political_dark_blue": (
 			unclaimed_color.b > unclaimed_color.r
@@ -200,10 +263,8 @@ func _run() -> void:
 			and shallow_sea.b > shallow_sea.r
 			and deep_sea.b > deep_sea.r
 		),
-		"hard_coast_height_sampling": (
-			terrain_shader_code.contains("texelFetch(height_texture")
-			and terrain_shader_code.contains("abs(left_land - hard_land)")
-			and terrain_shader_code.contains("abs(right_land - hard_land)")
+		"hard_coast_height_sampling": terrain_shader_code.contains(
+			"texelFetch(height_texture"
 		),
 		"overview_angle": absf(
 			overview_angle

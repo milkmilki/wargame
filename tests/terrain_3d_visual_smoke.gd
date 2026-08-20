@@ -29,6 +29,13 @@ func _run() -> void:
 	var map_3d := StrategicMap3D.new()
 	root.add_child(map_3d)
 	map_3d.setup(state, simulation, overlay)
+	var sculpt_strength := OS.get_environment(
+		"WW_VISUAL_SCULPT_LIGHT"
+	)
+	if not sculpt_strength.is_empty():
+		map_3d.set_elevation_shadow_strength(
+			clampf(float(sculpt_strength), 0.0, 1.0)
+		)
 
 	var started := Time.get_ticks_msec()
 	while (

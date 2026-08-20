@@ -119,7 +119,7 @@ func _build_ui() -> void:
 		0, true
 	)
 	_add_slider(
-		grid, "高程阴影", ELEVATION_SHADOW_STRENGTH_KEY,
+		grid, "地形塑形光", ELEVATION_SHADOW_STRENGTH_KEY,
 		0.0, 1.0, 0.01, 0.62, 0, true
 	)
 	var legend := HBoxContainer.new()

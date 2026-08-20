@@ -1,6 +1,6 @@
 class_name StrategicTerrainRenderer
 extends Node3D
-## 直接采样 Copernicus 权威高度图，输出带平滑法线的 ArrayMesh，
+## 直接采样权威高度图，输出带独立面法线的低模 ArrayMesh，
 ## 并提供与逻辑地图共用的 UV -> 世界坐标/高度映射。
 
 signal generation_finished
@@ -19,6 +19,7 @@ const WATER_SURFACE_HEIGHT: float = -0.10
 const UNCLAIMED_POLITICAL_COLOR := Color(0.035, 0.090, 0.190)
 const SHALLOW_SEA_COLOR := Color(0.090, 0.310, 0.470)
 const DEEP_SEA_COLOR := Color(0.025, 0.060, 0.130)
+const TERRAIN_VISUAL_LAYER: int = 2
 
 var _mesh_instance: MeshInstance3D
 var _material: ShaderMaterial
@@ -47,7 +48,6 @@ func configure(
 	height_scale = maxf(terrain_height_scale, 0.1)
 	height_steps = maxi(terrain_height_steps, 1)
 	_ensure_render_nodes()
-	_material.set_shader_parameter("height_scale", height_scale)
 
 
 func set_province_texture(texture: Texture2D) -> void:
@@ -60,13 +60,6 @@ func set_province_strength(strength: float) -> void:
 	_material.set_shader_parameter(
 		"province_strength",
 		clampf(strength, 0.0, 1.0)
-	)
-
-
-func set_elevation_shadow_strength(strength: float) -> void:
-	_ensure_render_nodes()
-	_material.set_shader_parameter(
-		"elevation_shadow_strength", clampf(strength, 0.0, 1.0)
 	)
 
 
@@ -251,14 +244,11 @@ func _ensure_render_nodes() -> void:
 	if _mesh_instance == null:
 		_mesh_instance = MeshInstance3D.new()
 		_mesh_instance.name = "TerrainMesh"
+		_mesh_instance.layers = TERRAIN_VISUAL_LAYER
 		add_child(_mesh_instance)
 	if _material == null:
 		_material = ShaderMaterial.new()
 		_material.shader = TERRAIN_SHADER
-		_material.set_shader_parameter(
-			"height_scale",
-			height_scale
-		)
 		_material.set_shader_parameter(
 			"unclaimed_political_color",
 			UNCLAIMED_POLITICAL_COLOR
@@ -271,32 +261,57 @@ func _ensure_render_nodes() -> void:
 func _build_surface_mesh() -> ArrayMesh:
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for z in range(resolution.y):
-		for x in range(resolution.x):
-			var uv := Vector2(
-				float(x) / float(resolution.x - 1),
-				float(z) / float(resolution.y - 1)
-			)
-			surface_tool.set_uv(uv)
-			surface_tool.add_vertex(Vector3(
-				(uv.x - 0.5) * world_size.x,
-				_sample_height(x, z),
-				(uv.y - 0.5) * world_size.y
-			))
 	for z in range(resolution.y - 1):
 		for x in range(resolution.x - 1):
-			var i00 := z * resolution.x + x
-			var i10 := i00 + 1
-			var i01 := i00 + resolution.x
-			var i11 := i01 + 1
-			surface_tool.add_index(i00)
-			surface_tool.add_index(i10)
-			surface_tool.add_index(i01)
-			surface_tool.add_index(i10)
-			surface_tool.add_index(i11)
-			surface_tool.add_index(i01)
-	surface_tool.generate_normals()
+			var uv00 := _grid_uv(x, z)
+			var uv10 := _grid_uv(x + 1, z)
+			var uv01 := _grid_uv(x, z + 1)
+			var uv11 := _grid_uv(x + 1, z + 1)
+			_add_low_poly_face(
+				surface_tool,
+				_world_vertex(x, z, uv00), uv00,
+				_world_vertex(x + 1, z, uv10), uv10,
+				_world_vertex(x, z + 1, uv01), uv01
+			)
+			_add_low_poly_face(
+				surface_tool,
+				_world_vertex(x + 1, z, uv10), uv10,
+				_world_vertex(x + 1, z + 1, uv11), uv11,
+				_world_vertex(x, z + 1, uv01), uv01
+			)
 	return surface_tool.commit()
+
+
+func _grid_uv(x: int, z: int) -> Vector2:
+	return Vector2(
+		float(x) / float(resolution.x - 1),
+		float(z) / float(resolution.y - 1)
+	)
+
+
+func _world_vertex(x: int, z: int, uv: Vector2) -> Vector3:
+	return Vector3(
+		(uv.x - 0.5) * world_size.x,
+		_sample_height(x, z),
+		(uv.y - 0.5) * world_size.y
+	)
+
+
+func _add_low_poly_face(
+	surface_tool: SurfaceTool,
+	a: Vector3, uv_a: Vector2,
+	b: Vector3, uv_b: Vector2,
+	c: Vector3, uv_c: Vector2
+) -> void:
+	var normal := (b - a).cross(c - a).normalized()
+	if normal.y < 0.0:
+		normal = -normal
+	for vertex_data in [
+		[a, uv_a], [b, uv_b], [c, uv_c],
+	]:
+		surface_tool.set_normal(normal)
+		surface_tool.set_uv(vertex_data[1])
+		surface_tool.add_vertex(vertex_data[0])
 
 
 func _sample_height(x: int, z: int) -> float:
