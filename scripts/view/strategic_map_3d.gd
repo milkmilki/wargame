@@ -683,8 +683,10 @@ func _build_road_mesh() -> void:
 	for edge in state.edges:
 		if not MapRenderer.is_edge_visible(edge):
 			continue
-		var from := state.cities[edge.city_a].map_position
-		var to := state.cities[edge.city_b].map_position
+		var path := edge.map_points(
+			state.cities[edge.city_a].map_position,
+			state.cities[edge.city_b].map_position
+		)
 		var color := _road_color_for_capacity(edge.max_manpower)
 		var width := _road_width_for_capacity(edge.max_manpower)
 		if edge.kind == Edge.Kind.LANDING:
@@ -698,18 +700,16 @@ func _build_road_mesh() -> void:
 			if edge.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
 			else minor_tool
 		)
-		_append_draped_ribbon(
+		_append_draped_path_ribbon(
 			surface_tool,
-			from,
-			to,
+			path,
 			width * 1.58,
 			Color(0.055, 0.038, 0.022, 0.54),
 			0.105
 		)
-		_append_draped_ribbon(
+		_append_draped_path_ribbon(
 			surface_tool,
-			from,
-			to,
+			path,
 			width,
 			color,
 			0.125
@@ -1446,10 +1446,12 @@ func _update_edge_selection() -> void:
 		return
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_append_draped_ribbon(
+	_append_draped_path_ribbon(
 		surface_tool,
-		state.cities[edge.city_a].map_position,
-		state.cities[edge.city_b].map_position,
+		edge.map_points(
+			state.cities[edge.city_a].map_position,
+			state.cities[edge.city_b].map_position
+		),
 		_road_width_for_capacity(edge.max_manpower) * 2.4,
 		Color(1.0, 0.72, 0.12, 0.96),
 		0.18
@@ -1498,11 +1500,19 @@ func _pick_map_feature(screen_position: Vector2) -> void:
 	for edge in state.edges:
 		if not MapRenderer.is_edge_visible(edge):
 			continue
-		var samples := _draped_world_samples(
+		var samples := PackedVector3Array()
+		var path := edge.map_points(
 			state.cities[edge.city_a].map_position,
-			state.cities[edge.city_b].map_position,
-			0.125
+			state.cities[edge.city_b].map_position
 		)
+		for path_index in range(path.size() - 1):
+			var segment_samples := _draped_world_samples(
+				path[path_index], path[path_index + 1], 0.125
+			)
+			for sample_index in range(segment_samples.size()):
+				if path_index > 0 and sample_index == 0:
+					continue
+				samples.append(segment_samples[sample_index])
 		for index in range(samples.size() - 1):
 			var from := samples[index]
 			var to := samples[index + 1]
@@ -1533,9 +1543,11 @@ func _battle_map_position(battle: Battle) -> Vector2:
 		return battle.city.map_position
 	if battle.edge != null:
 		var length := float(maxi(battle.edge.distance, 1))
-		return state.cities[battle.edge.city_a].map_position.lerp(
+		return battle.edge.map_position_at(
+			clampf(battle.contact_dist_a / length, 0.0, 1.0),
+			state.cities[battle.edge.city_a].map_position,
 			state.cities[battle.edge.city_b].map_position,
-			clampf(battle.contact_dist_a / length, 0.0, 1.0)
+			state.map_aspect_ratio
 		)
 	if not battle.side_a.is_empty():
 		return overlay.army_map_position(battle.side_a[0])
@@ -1634,6 +1646,20 @@ func _append_draped_ribbon(
 		]:
 			surface_tool.set_color(color)
 			surface_tool.add_vertex(vertex)
+
+
+func _append_draped_path_ribbon(
+	surface_tool: SurfaceTool,
+	path: PackedVector2Array,
+	width: float,
+	color: Color,
+	elevation: float
+) -> void:
+	for index in range(path.size() - 1):
+		_append_draped_ribbon(
+			surface_tool, path[index], path[index + 1],
+			width, color, elevation
+		)
 
 
 func _draped_world_samples(

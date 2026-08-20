@@ -174,6 +174,15 @@ func _run() -> void:
 	var restored := GameState.new()
 	restored.generate_from_map_definition(loaded["data"], 24680)
 	var restored_edge := restored.edge_of(edge_a, edge_b)
+	var map_paths_roundtrip := restored.edges.size() == state.edges.size()
+	if map_paths_roundtrip:
+		for edge_index in range(state.edges.size()):
+			map_paths_roundtrip = (
+				state.edges[edge_index].map_path
+					== restored.edges[edge_index].map_path
+			)
+			if not map_paths_roundtrip:
+				break
 	var original_sea_count := 0
 	var restored_sea_count := 0
 	for source_edge in state.edges:
@@ -198,6 +207,7 @@ func _run() -> void:
 		"edge_land": restored_edge != null and is_equal_approx(restored_edge.land_ratio, 0.88),
 		"edge_backbone": restored_edge != null and restored_edge.is_backbone,
 		"sea_roundtrip": restored_sea_count == original_sea_count,
+		"map_paths_roundtrip": map_paths_roundtrip,
 		"density_roundtrip": restored.city_density_settings == state.city_density_settings,
 		"armies": not restored.armies.is_empty(),
 		"day_zero": restored.day == 0,

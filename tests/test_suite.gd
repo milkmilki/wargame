@@ -980,9 +980,9 @@ func _test_world_generation() -> void:
 	_check(
 		mountain_cost > flat_cost * 2.0
 			and river_cost > flat_cost * 4.0
-			and road_cost < flat_cost
-			and road_river_cost < river_cost,
-		"省界地理成本必须把山脉和河流作为屏障，把道路和渡口作为扩张走廊"
+			and _approx(road_cost, flat_cost)
+			and _approx(road_river_cost, river_cost),
+		"省界地理成本只由山脉与河流塑造，道路不得反向改变省界"
 	)
 	var test_river_field := PackedByteArray()
 	test_river_field.resize(100)
@@ -992,27 +992,10 @@ func _test_world_generation() -> void:
 		Rect2i(0, 0, 10, 10),
 		[[Vector2i(2, 5), Vector2i(3, 5)]]
 	)
-	var test_road_field := PackedFloat32Array()
-	test_road_field.resize(100)
-	TerrainMapGenerator._build_province_road_field(
-		test_road_field,
-		Vector2i(10, 10),
-		Rect2i(0, 0, 10, 10),
-		[Vector2i(1, 2), Vector2i(8, 2)],
-		[{
-			"a": 0,
-			"b": 1,
-			"max_manpower": 30000,
-			"danger": 0.2,
-			"backbone": true,
-		}]
-	)
 	_check(
 		test_river_field[5 * 10 + 2] != 0
-			and test_river_field[5 * 10 + 3] != 0
-			and test_road_field[2 * 10 + 4] > 0.5
-			and test_road_field[8 * 10 + 4] <= 0.001,
-		"河流路径必须写入屏障掩码，道路必须只在交通走廊附近生成强度场"
+			and test_river_field[5 * 10 + 3] != 0,
+		"河流路径必须写入省界地理屏障掩码"
 	)
 	var province_owners_stable := true
 	for city in gs.cities:
@@ -1188,6 +1171,14 @@ func _test_world_generation() -> void:
 		Edge.TERRAIN_STANDARD_MANPOWER: 0,
 	}
 	var degrees := {}
+	var shared_province_boundaries := (
+		TerrainMapGenerator.province_shared_boundary_counts(
+			gs.province_ids, gs.province_map_size
+		)
+	)
+	var invalid_land_adjacency := 0
+	var invalid_land_path := 0
+	var curved_land_paths := 0
 	var longest_edge := 0.0
 	var roads_by_relief: Array[Edge] = []
 	for edge in gs.edges:
@@ -1221,6 +1212,34 @@ func _test_world_generation() -> void:
 			)
 			delta.x *= gs.map_aspect_ratio
 			longest_edge = maxf(longest_edge, delta.length())
+		if edge.kind == Edge.Kind.LAND:
+			if not shared_province_boundaries.has(
+				TerrainMapGenerator._pair_key(edge.city_a, edge.city_b)
+			):
+				invalid_land_adjacency += 1
+			if edge.map_path.size() >= 2:
+				curved_land_paths += 1
+			var road_path := edge.map_points(
+				gs.cities[edge.city_a].map_position,
+				gs.cities[edge.city_b].map_position
+			)
+			for path_index in range(road_path.size() - 1):
+				if not TerrainMapGenerator.province_segment_stays_in_pair(
+					gs.province_ids, gs.province_map_size,
+					road_path[path_index], road_path[path_index + 1],
+					edge.city_a, edge.city_b
+				):
+					invalid_land_path += 1
+					break
+	_check(
+		invalid_land_adjacency == 0,
+		"所有陆路端点必须是共享省界的城市，违规=%d" % invalid_land_adjacency
+	)
+	_check(
+		invalid_land_path == 0 and curved_land_paths > 0,
+		"陆路正式折线必须只经过端点两省，违规=%d 折线路=%d"
+			% [invalid_land_path, curved_land_paths]
+	)
 	var crossing_road_pairs := 0
 	for edge_a_index in range(gs.edges.size()):
 		var edge_a: Edge = gs.edges[edge_a_index]
@@ -1247,13 +1266,26 @@ func _test_world_generation() -> void:
 				]
 			):
 				continue
-			var hit = Geometry2D.segment_intersects_segment(
+			var path_a := edge_a.map_points(
 				gs.cities[edge_a.city_a].map_position,
-				gs.cities[edge_a.city_b].map_position,
+				gs.cities[edge_a.city_b].map_position
+			)
+			var path_b := edge_b.map_points(
 				gs.cities[edge_b.city_a].map_position,
 				gs.cities[edge_b.city_b].map_position
 			)
-			if hit != null:
+			var paths_cross := false
+			for segment_a in range(path_a.size() - 1):
+				for segment_b in range(path_b.size() - 1):
+					if Geometry2D.segment_intersects_segment(
+						path_a[segment_a], path_a[segment_a + 1],
+						path_b[segment_b], path_b[segment_b + 1]
+					) != null:
+						paths_cross = true
+						break
+				if paths_cross:
+					break
+			if paths_cross:
 				crossing_road_pairs += 1
 	_check(
 		crossing_road_pairs == 0,
@@ -1269,6 +1301,11 @@ func _test_world_generation() -> void:
 		and int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER]) > 0,
 		"陆路正容量只能形成10000/20000两个等级，分布=%s"
 			% str(road_counts)
+	)
+	_check(
+		int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER])
+			< int(road_counts[Edge.TERRAIN_LOW_MANPOWER]),
+		"20000标准陆路应少于10000轻通路，分布=%s" % str(road_counts)
 	)
 	var production_capacities_valid := true
 	for production_edge in gs.edges:
@@ -1296,7 +1333,7 @@ func _test_world_generation() -> void:
 	var degree_values := degrees.values()
 	_check(
 		degree_values.min() < degree_values.max(),
-		"Delaunay 局部图的城市度数应自然变化，不能硬编码固定边数"
+		"省份对偶局部图的城市度数应自然变化，不能硬编码固定边数"
 	)
 	_check(
 		longest_edge <= 0.36,
@@ -1413,24 +1450,59 @@ func _test_river_transport() -> void:
 	)
 	var river_mean_y: Array[float] = []
 	var river_shapes_valid := true
+	var packed_height := (
+		load(GameState.terrain_map_path()) as Texture2D
+	).get_image()
 	for river_path in gs.river_paths:
 		var y_total := 0.0
+		var minimum_y := INF
+		var maximum_y := -INF
 		var eastmost := river_path[0].x
 		var maximum_backtrack := 0.0
+		var maximum_line_deviation := 0.0
+		var water_before_last := false
+		var maximum_step := Vector2.ZERO
 		for point in river_path:
 			y_total += point.y
+			minimum_y = minf(minimum_y, point.y)
+			maximum_y = maxf(maximum_y, point.y)
 			maximum_backtrack = maxf(
 				maximum_backtrack,
 				eastmost - point.x
 			)
 			eastmost = maxf(eastmost, point.x)
+			var line_ratio := inverse_lerp(
+				river_path[0].x, river_path[-1].x, point.x
+			)
+			var line_y := lerpf(
+				river_path[0].y, river_path[-1].y, line_ratio
+			)
+			maximum_line_deviation = maxf(
+				maximum_line_deviation, absf(point.y - line_y)
+			)
+		for point_index in range(river_path.size()):
+			if point_index + 1 < river_path.size():
+				maximum_step = maximum_step.max(
+					(river_path[point_index + 1] - river_path[point_index]).abs()
+				)
+				var pixel := Vector2i(
+					clampi(int(river_path[point_index].x * packed_height.get_width()), 0, packed_height.get_width() - 1),
+					clampi(int(river_path[point_index].y * packed_height.get_height()), 0, packed_height.get_height() - 1)
+				)
+				if not TerrainMapGenerator.packed_is_land(packed_height.get_pixelv(pixel)):
+					water_before_last = true
 		river_mean_y.append(
 			y_total / float(maxi(river_path.size(), 1))
 		)
 		river_shapes_valid = (
 			river_shapes_valid
 			and river_path[-1].x - river_path[0].x >= 0.40
-			and maximum_backtrack <= 0.08
+			and maximum_y - minimum_y <= 0.09
+			and maximum_line_deviation <= 0.055
+			and maximum_backtrack <= 0.025
+			and not water_before_last
+			and maximum_step.x <= 0.006
+			and maximum_step.y <= 0.010
 		)
 	_check(
 		river_shapes_valid
@@ -1438,8 +1510,37 @@ func _test_river_transport() -> void:
 					and river_mean_y[0] >= 0.48
 					and river_mean_y[0] <= 0.56
 					and river_mean_y[0] + 0.045 < river_mean_y[1],
-				"完整矩形坐标下黄河应位于0.48～0.56，且两河西向东、南北分离、无明显折返：mean_y=%s"
+				"两条河必须西向东近直线，仅保留小幅连续曲折且南北分离：mean_y=%s"
 			% str(river_mean_y)
+	)
+	var docks_per_river := {}
+	var dock_x_per_river := {}
+	for dock_data in TerrainMapGenerator.build(
+		GameState.terrain_map_path(), GameState.TERRAIN_CITY_COUNT,
+		gs.city_generation_mask_path, gs.city_density_settings
+	).get("docks", []):
+		var river_id := int(dock_data.get("river_id", -1))
+		docks_per_river[river_id] = int(docks_per_river.get(river_id, 0)) + 1
+		if not dock_x_per_river.has(river_id):
+			dock_x_per_river[river_id] = []
+		(dock_x_per_river[river_id] as Array).append(
+			float((dock_data["position"] as Vector2).x)
+		)
+	var south_east_docks := 0
+	var south_mouth_docks := 0
+	for x_value in dock_x_per_river.get(1, []):
+		var x := float(x_value)
+		if x >= TerrainMapGenerator.RIVER_DOCK_SOUTH_EAST_MIN_X:
+			south_east_docks += 1
+		if x >= TerrainMapGenerator.RIVER_DOCK_SOUTH_MOUTH_MIN_X:
+			south_mouth_docks += 1
+	_check(
+		int(docks_per_river.get(0, 0)) >= 6
+		and int(docks_per_river.get(1, 0)) >= 12
+		and south_east_docks >= 6
+		and south_mouth_docks >= 3,
+		"北河至少6个码头；南河至少12个且东段≥6、河口段≥3，实为%s x=%s"
+			% [docks_per_river, dock_x_per_river]
 	)
 	var docks_are_full_cities := true
 	for dock in docks:
@@ -1476,34 +1577,36 @@ func _test_river_transport() -> void:
 			or edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
 		):
 			continue
-		var road_start := gs.cities[edge.city_a].map_position
-		var road_end := gs.cities[edge.city_b].map_position
-		var road_delta := road_end - road_start
-		var road_length_sq := road_delta.length_squared()
-		if road_length_sq <= 0.000001:
-			continue
-		for river_path in gs.river_paths:
-			for path_index in range(river_path.size() - 1):
-				var hit = Geometry2D.segment_intersects_segment(
-					road_start,
-					road_end,
-					river_path[path_index],
-					river_path[path_index + 1]
-				)
-				if hit == null:
-					continue
-				var road_t := (
-					(Vector2(hit) - road_start).dot(road_delta)
-					/ road_length_sq
-				)
-				if (
-					road_t
-						> TerrainMapGenerator.RIVER_CROSSING_ENDPOINT_EPS
-					and road_t
-						< 1.0
-							- TerrainMapGenerator.RIVER_CROSSING_ENDPOINT_EPS
-				):
-					land_crosses_river = true
+		var road_points := edge.map_points(
+			gs.cities[edge.city_a].map_position,
+			gs.cities[edge.city_b].map_position
+		)
+		for road_index in range(road_points.size() - 1):
+			var road_start := road_points[road_index]
+			var road_end := road_points[road_index + 1]
+			var road_delta := road_end - road_start
+			var road_length_sq := road_delta.length_squared()
+			if road_length_sq <= 0.000001:
+				continue
+			for river_path in gs.river_paths:
+				for path_index in range(river_path.size() - 1):
+					var hit = Geometry2D.segment_intersects_segment(
+						road_start, road_end,
+						river_path[path_index], river_path[path_index + 1]
+					)
+					if hit == null:
+						continue
+					var road_t := (
+						(Vector2(hit) - road_start).dot(road_delta)
+						/ road_length_sq
+					)
+					if (
+						road_t > TerrainMapGenerator.RIVER_CROSSING_ENDPOINT_EPS
+						and road_t < 1.0 - TerrainMapGenerator.RIVER_CROSSING_ENDPOINT_EPS
+					):
+						land_crosses_river = true
+						break
+				if land_crosses_river:
 					break
 			if land_crosses_river:
 				break
@@ -1532,6 +1635,7 @@ func _test_river_transport() -> void:
 		"码头间水路必须固定50000容量、快速、低粮损、有水文危险且不可驻边"
 	)
 	var sea_edges_valid := true
+	var sea_crosses_river := false
 	for sea_edge in sea_edges:
 		sea_edges_valid = (
 			sea_edges_valid
@@ -1539,9 +1643,21 @@ func _test_river_transport() -> void:
 			and not sea_edge.allows_holding
 			and sea_edge.land_ratio < 0.72
 		)
+		var sea_path := sea_edge.map_points(
+			gs.cities[sea_edge.city_a].map_position,
+			gs.cities[sea_edge.city_b].map_position
+		)
+		for sea_index in range(sea_path.size() - 1):
+			for river_path in gs.river_paths:
+				for river_index in range(river_path.size() - 1):
+					if Geometry2D.segment_intersects_segment(
+						sea_path[sea_index], sea_path[sea_index + 1],
+						river_path[river_index], river_path[river_index + 1]
+					) != null:
+						sea_crosses_river = true
 	_check(
-		sea_edges_valid,
-		"真实DEM跨海连接必须是独立SEA航道，固定50000容量且禁止驻边"
+		sea_edges_valid and not sea_crosses_river,
+		"SEA只连接独立陆地区域，不得代替A→渡口→B跨河；并须固定50000容量、禁止驻边"
 	)
 	_check(
 		river_danger_bands.size() > 1,
@@ -1551,9 +1667,11 @@ func _test_river_transport() -> void:
 	var longest_metric_length := 0.0
 	var longest_distance := 0
 	for edge in gs.edges:
-		var metric_length := TerrainMapGenerator.metric_length_between(
-			gs.cities[edge.city_a].map_position,
-			gs.cities[edge.city_b].map_position,
+		var metric_length := TerrainMapGenerator.metric_polyline_length(
+			edge.map_points(
+				gs.cities[edge.city_a].map_position,
+				gs.cities[edge.city_b].map_position
+			),
 			gs.map_aspect_ratio
 		)
 		var expected_distance := (
@@ -1570,7 +1688,7 @@ func _test_river_transport() -> void:
 			longest_distance = edge.distance
 	_check(
 		geometric_distances_valid,
-		"陆路、抢滩边和水路的逻辑距离必须统一取端点真实几何长度"
+		"陆路、抢滩边和水路的逻辑距离必须统一取正式路径真实几何长度"
 	)
 	_check(
 		longest_distance

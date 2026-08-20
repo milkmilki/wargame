@@ -210,7 +210,10 @@ func generate_world(
 	_assign_balanced_nations()
 	_generate_terrain_docks(terrain)
 	_generate_terrain_edges(terrain)
-	_connect_initial_nation_components()
+	# 初始归属服从合法省份邻接/水运图；飞地通过归属调整消除，
+	# 不得为保留空间配额临时创建跨省陆路。
+	_repair_initial_nation_connectivity()
+	_rebalance_initial_nation_land_quotas()
 	# 正式地图从第一帧起就使用与路网面板相同的默认计算规则；
 	# 初始化时保护各国内部连通骨架；这不是运行时变更，revision 最终归零。
 	var initial_road_settings := default_road_tuning()
@@ -342,8 +345,10 @@ func generate_from_map_definition(
 	for record_value in edge_records:
 		var record: Dictionary = record_value
 		var edge := Edge.new()
-		edge.city_a = mini(int(record["city_a"]), int(record["city_b"]))
-		edge.city_b = maxi(int(record["city_a"]), int(record["city_b"]))
+		var raw_a := int(record["city_a"])
+		var raw_b := int(record["city_b"])
+		edge.city_a = mini(raw_a, raw_b)
+		edge.city_b = maxi(raw_a, raw_b)
 		edge.kind = int(record.get("kind", Edge.Kind.LAND))
 		edge.max_manpower = int(record.get("max_manpower", 0))
 		edge.base_max_manpower = int(record.get("base_max_manpower", edge.max_manpower))
@@ -354,6 +359,11 @@ func generate_from_map_definition(
 		edge.allows_holding = bool(record.get("allows_holding", true))
 		edge.max_height_difference = maxf(float(record.get("max_height_difference", 0.0)), 0.0)
 		edge.land_ratio = clampf(float(record.get("land_ratio", 1.0)), 0.0, 1.0)
+		for point_value in record.get("map_path", []):
+			var point: Array = point_value
+			edge.map_path.append(Vector2(float(point[0]), float(point[1])))
+		if raw_a > raw_b:
+			edge.map_path.reverse()
 		edge.is_backbone = bool(record.get("is_backbone", false))
 		edges.append(edge)
 		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
@@ -436,10 +446,59 @@ func apply_city_editor_changes(
 		)
 		province_map_size = provinces["size"]
 		province_ids = provinces["ids"]
+		_refresh_land_edge_paths_after_province_rebuild()
 		ownership_revision += 1
 		road_network_revision += 1
 	refresh_derived()
 	return {"ok": true, "city_id": city_id}
+
+
+func _refresh_land_edge_paths_after_province_rebuild() -> void:
+	var shared := TerrainMapGenerator.province_shared_boundary_counts(
+		province_ids, province_map_size
+	)
+	for edge in edges:
+		if edge.map_path.size() >= 2:
+			edge.map_path[0] = cities[edge.city_a].map_position
+			edge.map_path[-1] = cities[edge.city_b].map_position
+		if (
+			edge.kind != Edge.Kind.LAND
+			or edge.city_a >= land_cities().size()
+			or edge.city_b >= land_cities().size()
+		):
+			continue
+		edge.map_path.clear()
+		if not shared.has(_edge_key(edge.city_a, edge.city_b)):
+			edge.max_manpower = 0
+			edge.base_max_manpower = Edge.TERRAIN_LOW_MANPOWER
+			edge.is_backbone = false
+			continue
+		var from := cities[edge.city_a].map_position
+		var to := cities[edge.city_b].map_position
+		if not TerrainMapGenerator.province_segment_stays_in_pair(
+			province_ids, province_map_size, from, to,
+			edge.city_a, edge.city_b
+		):
+			edge.map_path = TerrainMapGenerator.province_pair_path(
+				province_ids, province_map_size, from, to,
+				edge.city_a, edge.city_b
+			)
+		var points := edge.map_points(from, to)
+		edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
+			TerrainMapGenerator.metric_polyline_length(
+				points, map_aspect_ratio
+			)
+		)
+	for edge in edges:
+		if edge.kind == Edge.Kind.LAND:
+			continue
+		var points := edge.map_points(
+			cities[edge.city_a].map_position,
+			cities[edge.city_b].map_position
+		)
+		edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
+			TerrainMapGenerator.metric_polyline_length(points, map_aspect_ratio)
+		)
 
 
 func apply_edge_editor_changes(
@@ -1247,6 +1306,21 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 				edge.max_manpower
 			)
 		edge.land_ratio = float(road.get("land_ratio", 1.0))
+		edge.map_path = (
+			road.get("map_path", PackedVector2Array())
+			as PackedVector2Array
+		).duplicate()
+		if a > b:
+			edge.map_path.reverse()
+		edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
+			TerrainMapGenerator.metric_polyline_length(
+				edge.map_points(
+					cities[edge.city_a].map_position,
+					cities[edge.city_b].map_position
+				),
+				map_aspect_ratio
+			)
+		)
 		edge.is_backbone = bool(road.get("backbone", false))
 		edge.base_max_manpower = int(road.get(
 			"base_max_manpower",
@@ -1548,83 +1622,31 @@ func _repair_initial_nation_connectivity() -> void:
 		guard -= 1
 		var changed := false
 		for nation in nations:
-			var components := _initial_owner_components(
-				nation.id
-			)
+			var components := _initial_owner_components(nation.id)
 			if components.size() <= 1:
 				continue
 			components.sort_custom(
 				func(a: Array, b: Array) -> bool:
-					var land_a := (
-						_initial_component_land_count(a)
-					)
-					var land_b := (
-						_initial_component_land_count(b)
-					)
+					var land_a := _initial_component_land_count(a)
+					var land_b := _initial_component_land_count(b)
 					if land_a != land_b:
 						return land_a > land_b
 					if a.size() != b.size():
 						return a.size() > b.size()
 					return int(a[0]) < int(b[0])
 			)
-			for component_index in range(
-				1,
-				components.size()
-			):
-				var component: Array = components[
-					component_index
-				]
-				var boundary_counts := {}
-				for city_value in component:
-					var city_id := int(city_value)
-					for neighbor in neighbors(city_id):
-						var edge := edge_of(
-							city_id,
-							neighbor
-						)
-						var neighbor_owner := (
-							cities[
-								neighbor
-							].owner_nation
-						)
-						if (
-							edge == null
-							or edge.max_manpower <= 0
-							or neighbor_owner < 0
-							or neighbor_owner
-								== nation.id
-						):
-							continue
-						boundary_counts[
-							neighbor_owner
-						] = (
-							int(boundary_counts.get(
-								neighbor_owner,
-								0
-							))
-							+ 1
-						)
-				assert(
-					not boundary_counts.is_empty(),
-					"初始飞地必须沿合法交通图连接到邻国"
-				)
-				var recipient := -1
-				var best_count := -1
-				var owner_ids := boundary_counts.keys()
-				owner_ids.sort()
-				for owner_value in owner_ids:
-					var owner := int(owner_value)
-					var count := int(
-						boundary_counts[owner]
-					)
-					if count > best_count:
-						best_count = count
-						recipient = owner
-				for city_value in component:
-					cities[
-						int(city_value)
-					].owner_nation = recipient
+			# 每轮只处理该国一个飞地，随后重新计算全部组件；归属或容量
+			# 变化会立即影响组件关系，不能继续使用本轮的过期快照。
+			var component: Array = components[1]
+			if _reopen_initial_component_connector(component, nation.id):
 				changed = true
+				break
+			assert(
+				_transfer_initial_component_to_neighbor(component, nation.id),
+				"初始飞地必须沿合法交通图连接到邻国"
+			)
+			changed = true
+			break
 		if not changed:
 			break
 	assert(guard > 0, "初始国家飞地修复必须收敛")
@@ -1637,241 +1659,156 @@ func _repair_initial_nation_connectivity() -> void:
 		)
 
 
-## Keep the exact spatial nation quotas. If the final real-elevation graph cuts
-## a nation into components, connect its nearest components with an explicit
-## backbone route instead of transferring cities to another nation.
-func _connect_initial_nation_components() -> void:
-	for nation in nations:
-		var guard := cities.size()
-		while guard > 0:
-			guard -= 1
-			var components := _initial_owner_components(nation.id)
-			if components.size() <= 1:
-				break
-			var best_a := -1
-			var best_b := -1
-			var best_distance := INF
-			var best_crossings := PackedVector2Array()
-			var fallback_a := -1
-			var fallback_b := -1
-			var fallback_distance := INF
-			for city_a_value in components[0]:
-				var city_a := int(city_a_value)
-				for component_index in range(1, components.size()):
-					for city_b_value in components[component_index]:
-						var city_b := int(city_b_value)
-						var crossings := TerrainMapGenerator.river_crossing_positions(
-							cities[city_a].map_position,
-							cities[city_b].map_position,
-							river_paths
-						)
-						var raw_delta := (
-							cities[city_a].map_position
-							- cities[city_b].map_position
-						)
-						raw_delta.x *= map_aspect_ratio
-						var raw_distance := raw_delta.length_squared()
-						if raw_distance < fallback_distance:
-							fallback_distance = raw_distance
-							fallback_a = city_a
-							fallback_b = city_b
-						if not _connector_crossings_have_spacing(crossings):
-							continue
-						var delta := (
-							cities[city_a].map_position
-							- cities[city_b].map_position
-						)
-						delta.x *= map_aspect_ratio
-						var distance := delta.length_squared()
-						if (
-							distance < best_distance
-							or (
-								is_equal_approx(distance, best_distance)
-								and edge_key(city_a, city_b)
-									< edge_key(best_a, best_b)
-							)
-						):
-							best_distance = distance
-							best_a = city_a
-							best_b = city_b
-							best_crossings = crossings
-			if best_a >= 0 and best_b >= 0:
-				_add_initial_component_connector(
-					best_a, best_b, best_crossings, nation.id
-				)
-			else:
-				assert(fallback_a >= 0 and fallback_b >= 0)
-				_add_initial_water_connector(fallback_a, fallback_b)
-		assert(guard > 0, "初始国家交通组件连接必须收敛")
-
-
-func _connector_crossings_have_spacing(
-	crossings: PackedVector2Array
+func _reopen_initial_component_connector(
+	component: Array, owner_nation: int
 ) -> bool:
-	for crossing_index in range(crossings.size()):
-		for city in cities:
-			var delta := crossings[crossing_index] - city.map_position
-			delta.x *= map_aspect_ratio
+	var component_set := {}
+	for city_value in component:
+		component_set[int(city_value)] = true
+	var best: Edge = null
+	for city_value in component:
+		for neighbor in neighbors(int(city_value)):
+			var edge := edge_of(int(city_value), neighbor)
 			if (
-				city.is_dock
-				and delta.length()
-					< TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING
+				edge == null
+				or component_set.has(neighbor)
+				or cities[neighbor].owner_nation != owner_nation
 			):
 				continue
-			if delta.length() < TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING:
-				return false
-		for other_index in range(crossing_index):
-			var delta := crossings[crossing_index] - crossings[other_index]
-			delta.x *= map_aspect_ratio
-			if delta.length() < TerrainMapGenerator.RIVER_DOCK_MIN_SPACING:
-				return false
+			if best == null or edge.distance < best.distance:
+				best = edge
+	if best == null:
+		return false
+	best.max_manpower = (
+		Edge.WATER_MANPOWER
+		if best.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
+		else Edge.TERRAIN_LOW_MANPOWER
+	)
+	best.is_backbone = true
 	return true
 
 
-func _add_initial_component_connector(
-	city_a: int,
-	city_b: int,
-	crossings: PackedVector2Array = PackedVector2Array(),
-	owner_nation: int = -1
-) -> void:
-	if not crossings.is_empty():
-		var previous_city := city_a
-		for crossing in crossings:
-			var dock_id := _add_initial_connector_dock(
-				crossing, owner_nation
+func _transfer_initial_component_to_neighbor(
+	component: Array, owner_nation: int
+) -> bool:
+	var counts := {}
+	var edge_by_owner := {}
+	for city_value in component:
+		for neighbor in neighbors(int(city_value)):
+			var edge := edge_of(int(city_value), neighbor)
+			var neighbor_owner := cities[neighbor].owner_nation
+			if edge == null or neighbor_owner < 0 or neighbor_owner == owner_nation:
+				continue
+			counts[neighbor_owner] = int(counts.get(neighbor_owner, 0)) + 1
+			var previous: Edge = edge_by_owner.get(neighbor_owner)
+			if previous == null or edge.distance < previous.distance:
+				edge_by_owner[neighbor_owner] = edge
+	if counts.is_empty():
+		return false
+	var owners := counts.keys()
+	owners.sort()
+	var recipient := int(owners[0])
+	for owner_value in owners:
+		var owner := int(owner_value)
+		var owner_land_count := land_cities_of(owner).size()
+		var recipient_land_count := land_cities_of(recipient).size()
+		if (
+			owner_land_count < recipient_land_count
+			or (
+				owner_land_count == recipient_land_count
+				and int(counts[owner]) > int(counts[recipient])
 			)
-			_add_initial_landing_connector(previous_city, dock_id)
-			previous_city = dock_id
-		_add_initial_landing_connector(previous_city, city_b)
+		):
+			recipient = owner
+	for city_value in component:
+		cities[int(city_value)].owner_nation = recipient
+	var connector: Edge = edge_by_owner[recipient]
+	connector.max_manpower = (
+		Edge.WATER_MANPOWER
+		if connector.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
+		else Edge.TERRAIN_LOW_MANPOWER
+	)
+	connector.is_backbone = true
+	return true
+
+
+## 连通修复可能把少量飞地整体转给同一邻国。只移动连通安全的边界陆城，
+## 将初始国陆城数收敛到均值±1；不新增/删除任何道路。
+func _rebalance_initial_nation_land_quotas() -> void:
+	# 精确四等份是默认四国地图的设计约束。自定义国家数使用递归空间
+	# 分区，只要求每国非空且交通连通，不强加全局均值±1。
+	if nations.size() != NATION_COUNT:
 		return
-	var profile := TerrainMapGenerator.map_segment_profile(
-		terrain_map_path(),
-		cities[city_a].map_position,
-		cities[city_b].map_position
-	)
-	var land_ratio := float(profile["land_ratio"])
-	var edge := edge_of(city_a, city_b)
-	var is_new := edge == null
-	if edge == null:
-		edge = Edge.new()
-		edge.city_a = mini(city_a, city_b)
-		edge.city_b = maxi(city_a, city_b)
-	edge.kind = Edge.Kind.LAND if land_ratio >= 0.72 else Edge.Kind.SEA
-	edge.max_manpower = (
-		Edge.TERRAIN_STANDARD_MANPOWER
-		if edge.kind == Edge.Kind.LAND
-		else Edge.WATER_MANPOWER
-	)
-	edge.base_max_manpower = edge.max_manpower
-	edge.land_ratio = land_ratio
-	edge.max_height_difference = float(profile["height_difference"])
-	edge.danger = clampf(
-		edge.max_height_difference * 0.65 + (1.0 - land_ratio) * 0.35,
-		0.0, 1.0
-	)
-	edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
-		TerrainMapGenerator.metric_length_between(
-			cities[city_a].map_position,
-			cities[city_b].map_position,
-			map_aspect_ratio
+	var average := float(land_cities().size()) / float(nations.size())
+	var target_count := int(round(average))
+	var minimum_count := maxi(int(floor(average)) - 1, 1)
+	var maximum_count := int(ceil(average)) + 1
+	var guard := cities.size() * nations.size()
+	while guard > 0:
+		guard -= 1
+		var counts: Array[int] = []
+		counts.resize(nations.size())
+		for nation in nations:
+			counts[nation.id] = land_cities_of(nation.id).size()
+		var changed := false
+		for source in nations:
+			if counts[source.id] <= maximum_count:
+				continue
+			var candidates := land_cities_of(source.id)
+			candidates.sort_custom(func(a: City, b: City) -> bool:
+				return a.id < b.id
+			)
+			for city in candidates:
+				var recipient_ids := {}
+				for neighbor in neighbors(city.id):
+					var edge := edge_of(city.id, neighbor)
+					var owner := cities[neighbor].owner_nation
+					if (
+						edge != null and edge.max_manpower > 0
+						and owner >= 0 and owner != source.id
+						and counts[owner] < target_count
+					):
+						recipient_ids[owner] = true
+				var recipients := recipient_ids.keys()
+				recipients.sort_custom(func(a: Variant, b: Variant) -> bool:
+					var owner_a := int(a)
+					var owner_b := int(b)
+					return (
+						counts[owner_a] < counts[owner_b]
+						or (counts[owner_a] == counts[owner_b] and owner_a < owner_b)
+					)
+				)
+				for recipient_value in recipients:
+					var recipient := int(recipient_value)
+					if _initial_city_transfer_preserves_connectivity(
+						city.id, source.id, recipient
+					):
+						city.owner_nation = recipient
+						changed = true
+						break
+				if changed:
+					break
+			if changed:
+				break
+		if not changed:
+			break
+	for nation in nations:
+		var count := land_cities_of(nation.id).size()
+		assert(
+			count >= minimum_count and count <= maximum_count,
+			"初始国%d陆城数必须在均值±1内，实为%d" % [nation.id, count]
 		)
-	)
-	edge.is_backbone = true
-	if edge.kind == Edge.Kind.SEA:
-		edge.travel_time_multiplier = TerrainMapGenerator.RIVER_TRAVEL_TIME_MULTIPLIER
-		edge.supply_loss_multiplier = TerrainMapGenerator.RIVER_SUPPLY_LOSS_MULTIPLIER
-		edge.allows_holding = false
-	if is_new:
-		edges.append(edge)
-		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
-		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
-		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
-		(adjacency[edge.city_a] as Array[int]).sort()
-		(adjacency[edge.city_b] as Array[int]).sort()
 
 
-func _add_initial_connector_dock(
-	position: Vector2, owner_nation: int
-) -> int:
-	for existing in cities:
-		if not existing.is_dock:
-			continue
-		var delta := position - existing.map_position
-		delta.x *= map_aspect_ratio
-		if delta.length() < TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING:
-			existing.owner_nation = owner_nation
-			return existing.id
-	var city := City.new()
-	city.id = cities.size()
-	city.coord = Vector2i(int(round(position.x * 1000.0)), int(round(position.y * 1000.0)))
-	city.map_position = position
-	city.terrain_height = TerrainMapGenerator.altitude_at_map_position(terrain_map_path(), position)
-	city.terrain_relief = 0.0
-	city.is_dock = true
-	city.owner_nation = owner_nation
-	city.fort_strength = 10
-	city.fort_strength_max = 10
-	city.manpower_per_month = 0
-	city.gold_per_month = 0
-	city.food_per_half_year = 0
-	cities.append(city)
-	adjacency[city.id] = [] as Array[int]
-	return city.id
-
-
-func _add_initial_landing_connector(city_a: int, city_b: int) -> void:
-	var edge := edge_of(city_a, city_b)
-	var is_new := edge == null
-	if edge == null:
-		edge = Edge.new()
-		edge.city_a = mini(city_a, city_b)
-		edge.city_b = maxi(city_a, city_b)
-	edge.kind = Edge.Kind.LANDING
-	edge.max_manpower = Edge.TERRAIN_STANDARD_MANPOWER
-	edge.base_max_manpower = edge.max_manpower
-	edge.land_ratio = 1.0
-	edge.max_height_difference = absf(cities[city_a].terrain_height - cities[city_b].terrain_height)
-	edge.danger = TerrainMapGenerator.LANDING_DANGER_MIN
-	edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
-		TerrainMapGenerator.metric_length_between(cities[city_a].map_position, cities[city_b].map_position, map_aspect_ratio)
-	)
-	edge.is_backbone = true
-	if is_new:
-		edges.append(edge)
-		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
-		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
-		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
-		(adjacency[edge.city_a] as Array[int]).sort()
-		(adjacency[edge.city_b] as Array[int]).sort()
-
-
-func _add_initial_water_connector(city_a: int, city_b: int) -> void:
-	var edge := edge_of(city_a, city_b)
-	var is_new := edge == null
-	if edge == null:
-		edge = Edge.new()
-		edge.city_a = mini(city_a, city_b)
-		edge.city_b = maxi(city_a, city_b)
-	edge.kind = Edge.Kind.SEA
-	edge.max_manpower = Edge.WATER_MANPOWER
-	edge.base_max_manpower = Edge.WATER_MANPOWER
-	edge.land_ratio = 0.0
-	edge.max_height_difference = absf(cities[city_a].terrain_height - cities[city_b].terrain_height)
-	edge.danger = 0.55
-	edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
-		TerrainMapGenerator.metric_length_between(cities[city_a].map_position, cities[city_b].map_position, map_aspect_ratio)
-	)
-	edge.is_backbone = true
-	edge.travel_time_multiplier = TerrainMapGenerator.RIVER_TRAVEL_TIME_MULTIPLIER
-	edge.supply_loss_multiplier = TerrainMapGenerator.RIVER_SUPPLY_LOSS_MULTIPLIER
-	edge.allows_holding = false
-	if is_new:
-		edges.append(edge)
-		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
-		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
-		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
-		(adjacency[edge.city_a] as Array[int]).sort()
-		(adjacency[edge.city_b] as Array[int]).sort()
+func _initial_city_transfer_preserves_connectivity(
+	city_id: int, source_id: int, recipient_id: int
+) -> bool:
+	var city := cities[city_id]
+	city.owner_nation = recipient_id
+	var source_connected := _initial_owner_components(source_id).size() <= 1
+	var recipient_connected := _initial_owner_components(recipient_id).size() <= 1
+	city.owner_nation = source_id
+	return source_connected and recipient_connected
 
 
 func _add_edge(a: int, b: int) -> void:

@@ -1359,15 +1359,16 @@ static func pick_edge_at_pixel(
 	for edge in game_state.edges:
 		if not is_edge_visible(edge):
 			continue
-		var from := (
-			origin
-			+ game_state.cities[edge.city_a].map_position * map_size
+		var distance := INF
+		var path := edge.map_points(
+			game_state.cities[edge.city_a].map_position,
+			game_state.cities[edge.city_b].map_position
 		)
-		var to := (
-			origin
-			+ game_state.cities[edge.city_b].map_position * map_size
-		)
-		var distance := point_to_segment_distance(point, from, to)
+		for index in range(path.size() - 1):
+			distance = minf(distance, point_to_segment_distance(
+				point, origin + path[index] * map_size,
+				origin + path[index + 1] * map_size
+			))
 		if (
 			distance < best_distance
 			or (
@@ -2456,8 +2457,12 @@ func _draw_campaign_arrow(
 
 func _draw_edges() -> void:
 	for e in state.edges:
-		var pa := _city_center(state.cities[e.city_a])
-		var pb := _city_center(state.cities[e.city_b])
+		var pixel_points := PackedVector2Array()
+		for point in e.map_points(
+			state.cities[e.city_a].map_position,
+			state.cities[e.city_b].map_position
+		):
+			pixel_points.append(_grid_to_pixel(point))
 		var danger := clampf(e.danger, 0.0, 1.0)
 		if not is_edge_visible(e):
 			continue
@@ -2467,27 +2472,24 @@ func _draw_edges() -> void:
 				Color(0.22, 0.018, 0.028),
 				danger * 0.45
 			)
-			draw_line(
-				pa,
-				pb,
+			draw_polyline(
+				pixel_points,
 				Color(0.04, 0.075, 0.075, 0.90),
 				7.0 * _display_scale
 			)
-			draw_line(
-				pa,
-				pb,
+			draw_polyline(
+				pixel_points,
 				river_color,
 				4.5 * _display_scale
 			)
 			continue
 		if e.kind == Edge.Kind.LANDING:
-			draw_dashed_line(
-				pa,
-				pb,
+			for index in range(pixel_points.size() - 1):
+				draw_dashed_line(
+					pixel_points[index], pixel_points[index + 1],
 					Color(0.28, 0.018, 0.010, 0.96),
-				3.0 * _display_scale,
-				6.0 * _display_scale
-			)
+					3.0 * _display_scale, 6.0 * _display_scale
+				)
 			continue
 		var road_level := (
 			2
@@ -2503,16 +2505,19 @@ func _draw_edges() -> void:
 		col = col.lerp(ACCENT_RED, danger * 0.48)
 		var width: float = road_widths[road_level - 1] * _display_scale
 		if road_level >= 2:
-			draw_line(
-				pa, pb, Color(0.04, 0.028, 0.015, 0.82),
+			draw_polyline(
+				pixel_points, Color(0.04, 0.028, 0.015, 0.82),
 				width + 2.0 * _display_scale
 			)
 		if e.occupied:
 			col = col.lerp(ACCENT_GOLD, 0.55)
 			width += 1.5 * _display_scale
-		draw_line(pa, pb, col, width)
+		draw_polyline(pixel_points, col, width, true)
 		if danger >= 0.72:
-			_draw_edge_danger_ticks(pa, pb, danger)
+			for index in range(pixel_points.size() - 1):
+				_draw_edge_danger_ticks(
+					pixel_points[index], pixel_points[index + 1], danger
+				)
 
 
 func _draw_edge_danger_ticks(
@@ -2542,21 +2547,22 @@ func _draw_selection_highlight() -> void:
 	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
 		if edge != null:
-			var from := _city_center(state.cities[edge.city_a])
-			var to := _city_center(state.cities[edge.city_b])
-			draw_line(
-				from,
-				to,
+			var points := PackedVector2Array()
+			for point in edge.map_points(
+				state.cities[edge.city_a].map_position,
+				state.cities[edge.city_b].map_position
+			):
+				points.append(_grid_to_pixel(point))
+			draw_polyline(
+				points,
 				Color(0.04, 0.025, 0.01, 0.95),
 				10.0 * _display_scale
 			)
-			draw_dashed_line(
-				from,
-				to,
-				ACCENT_GOLD,
-				4.0 * _display_scale,
-				8.0 * _display_scale
-			)
+			for index in range(points.size() - 1):
+				draw_dashed_line(
+					points[index], points[index + 1], ACCENT_GOLD,
+					4.0 * _display_scale, 8.0 * _display_scale
+				)
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
 		var center := _city_center(state.cities[_selected_city_id])
 		var radius := 15.0 * _display_scale
@@ -3188,9 +3194,12 @@ func _battle_pixel(b: Battle) -> Vector2:
 		return _city_center(b.city)
 	if b.edge != null:
 		var length := float(maxi(b.edge.distance, 1))
-		var a := _city_grid(state.cities[b.edge.city_a])
-		var c := _city_grid(state.cities[b.edge.city_b])
-		return _grid_to_pixel(a.lerp(c, clampf(b.contact_dist_a / length, 0.0, 1.0)))
+		return _grid_to_pixel(b.edge.map_position_at(
+			clampf(b.contact_dist_a / length, 0.0, 1.0),
+			_city_grid(state.cities[b.edge.city_a]),
+			_city_grid(state.cities[b.edge.city_b]),
+			state.map_aspect_ratio
+		))
 	# 兜底：任一参战军队位置
 	if not b.side_a.is_empty():
 		return _army_position(b.side_a[0])
@@ -3234,6 +3243,17 @@ func _logical_grid_pos(army: Army) -> Vector2:
 	] and army.move_to != -1:
 		var a := _city_grid(state.cities[army.move_from])
 		var b := _city_grid(state.cities[army.move_to])
+		var edge := state.edge_of(army.move_from, army.move_to)
+		if edge != null:
+			var progress := clampf(army.move_progress, 0.0, 1.0)
+			if army.move_from == edge.city_b:
+				progress = 1.0 - progress
+			return edge.map_position_at(
+				progress,
+				state.cities[edge.city_a].map_position,
+				state.cities[edge.city_b].map_position,
+				state.map_aspect_ratio
+			)
 		return a.lerp(b, clampf(army.move_progress, 0.0, 1.0))
 	var cid := army.location_city if army.location_city != -1 else army.move_from
 	return _city_grid(state.cities[cid])

@@ -36,6 +36,9 @@ static func from_state(state: GameState) -> Dictionary:
 		})
 	var edge_records: Array[Dictionary] = []
 	for edge in state.edges:
+		var edge_map_path: Array[Array] = []
+		for point in edge.map_path:
+			edge_map_path.append([point.x, point.y])
 		edge_records.append({
 			"city_a": edge.city_a,
 			"city_b": edge.city_b,
@@ -49,6 +52,7 @@ static func from_state(state: GameState) -> Dictionary:
 			"allows_holding": edge.allows_holding,
 			"max_height_difference": edge.max_height_difference,
 			"land_ratio": edge.land_ratio,
+			"map_path": edge_map_path,
 			"is_backbone": edge.is_backbone,
 		})
 	var river_records: Array[Array] = []
@@ -104,6 +108,34 @@ static func validate(data: Dictionary) -> String:
 		var b := int(record.get("city_b", -1))
 		if a < 0 or b < 0 or a >= cities.size() or b >= cities.size() or a == b:
 			return "道路端点无效。"
+		var map_path: Array = record.get("map_path", [])
+		for point_value in map_path:
+			if point_value is not Array:
+				return "道路折线路径格式无效。"
+			var point: Array = point_value
+			if point.size() != 2:
+				return "道路折线路径点必须包含两个坐标。"
+			var x := float(point[0])
+			var y := float(point[1])
+			if (
+				not is_finite(x) or not is_finite(y)
+				or x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0
+			):
+				return "道路折线路径坐标无效。"
+		if not map_path.is_empty() and map_path.size() < 2:
+			return "道路折线路径至少需要两个点。"
+		if not map_path.is_empty():
+			var city_a_position: Array = (cities[a] as Dictionary)["map_position"]
+			var city_b_position: Array = (cities[b] as Dictionary)["map_position"]
+			var first: Array = map_path[0]
+			var last: Array = map_path[-1]
+			if (
+				absf(float(first[0]) - float(city_a_position[0])) > 0.0001
+				or absf(float(first[1]) - float(city_a_position[1])) > 0.0001
+				or absf(float(last[0]) - float(city_b_position[0])) > 0.0001
+				or absf(float(last[1]) - float(city_b_position[1])) > 0.0001
+			):
+				return "道路折线路径首尾必须匹配端点城市。"
 	return ""
 
 
