@@ -74,7 +74,6 @@ const TOTAL_WAR_FOOD_RUNWAY_YEARS: float = 0.25
 const TOTAL_WAR_MANPOWER_SHARE: float = 0.0
 const CAMPAIGN_RESERVE_MONTHS: int = 6
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
-const MIN_GOLD_RESERVE: int = 200
 const MIN_MANPOWER_RESERVE: int = 5000
 const MAX_MOBILIZATION_ARMIES: int = 4
 const MOBILIZATION_ARMY_SIZE: int = 5000
@@ -1728,17 +1727,15 @@ static func resource_report(
 	)
 	var monthly_gold_balance := int(gold_flow["balance"])
 	var monthly_gold_deficit := maxi(-monthly_gold_balance, 0)
+	var gold_reserve := Simulation.gold_reserve_policy(
+		state, nation_id, gold_flows
+	)
 	var monthly_food_demand := int(ceil(
 		float(food_plan["current_monthly_demand"])
 	))
-	var gold_required := (
-		maxi(
-			monthly_gold_deficit * CAMPAIGN_RESERVE_MONTHS,
-			MIN_GOLD_RESERVE
-		)
-		if monthly_gold_deficit > 0
-		else 0
-	)
+	var gold_required := int(gold_reserve.get(
+		"reserve_target", 0
+	))
 	var food_required := maxi(
 		monthly_food_demand * CAMPAIGN_RESERVE_MONTHS,
 		1
@@ -1777,6 +1774,10 @@ static func resource_report(
 		"monthly_war_cost": monthly_war_cost,
 		"monthly_gold_balance": monthly_gold_balance,
 		"gold_runway_months": gold_runway_months,
+		"gold_reserve_months": int(gold_reserve.get("reserve_months", 0)),
+		"gold_reserve_target": gold_required,
+		"gold_reserve_gap": int(gold_reserve.get("reserve_gap", 0)),
+		"gold_reserve_baseline_income": int(gold_reserve.get("baseline_monthly_income", monthly_income)),
 		"monthly_food_demand": monthly_food_demand,
 		"monthly_food_production": monthly_food_production,
 		"gold_required": gold_required,
@@ -1793,6 +1794,7 @@ static func resource_report(
 		"full_strength_runway_years": food_plan["full_strength_runway_years"],
 		"ready": (
 			nation.unpaid_military_upkeep <= 0
+			and bool(gold_reserve.get("ready", false))
 			and (
 				monthly_gold_balance >= 0
 				or gold_runway_months >= CAMPAIGN_RESERVE_MONTHS
@@ -1847,8 +1849,13 @@ static func offensive_resources_ready(
 		TOTAL_WAR_FOOD_RUNWAY_YEARS,
 		era
 	)
+	var required_gold_reserve := int(round(
+		float(report.get("gold_reserve_target", 0))
+		* (1.0 - era)
+	))
 	return (
 		nation.military_payment_ratio >= required_payment
+		and nation.treasury_gold >= required_gold_reserve
 		and (
 			int(report["monthly_gold_balance"]) >= 0
 			or float(report["gold_runway_months"]) >= gold_runway
@@ -1905,12 +1912,17 @@ static func war_preparation_resources_ready(
 		int(ceil(float(report["troops"]) * TOTAL_WAR_MANPOWER_SHARE))
 	)
 	var era := unification_era_factor(state)
+	var required_gold_reserve := int(round(
+		float(report.get("gold_reserve_target", 0))
+		* (1.0 - era)
+	))
 	return (
 		nation.military_payment_ratio >= lerpf(
 			1.0,
 			TOTAL_WAR_MIN_PAYMENT_RATIO,
 			era
 		)
+		and nation.treasury_gold >= required_gold_reserve
 		and (
 			int(report["monthly_gold_balance"]) >= 0
 			or float(report["gold_runway_months"])
@@ -1956,14 +1968,22 @@ static func mobilization_capacity(
 			MOBILIZATION_ARMY_SIZE
 		)
 	)
-	var protected_gold := (
-		0
-		if posture in [
-			FoodPosture.OFFENSIVE_WAR,
-			FoodPosture.DEFENSIVE_WAR,
-		]
-		else MIN_GOLD_RESERVE
+	var finance_report := resource_report(
+		state, nation_id, evaluation_cache
 	)
+	var protected_gold := int(finance_report.get(
+		"gold_reserve_target", 0
+	))
+	if posture in [
+		FoodPosture.OFFENSIVE_WAR,
+		FoodPosture.DEFENSIVE_WAR,
+	]:
+		protected_gold = (
+			int(finance_report.get(
+				"gold_reserve_baseline_income", 0
+			))
+			* Simulation.WAR_GOLD_RESERVE_MONTHS
+		)
 	var gold_units := int(floor(
 		float(maxi(
 			state.nations[nation_id].treasury_gold

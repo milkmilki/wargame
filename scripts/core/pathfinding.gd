@@ -16,7 +16,8 @@ static func dijkstra_field(
 	block_contested_edges: bool = false,
 	use_danger_weight: bool = true,
 	allowed_goal: int = -1,
-	required_manpower: int = 0
+	required_manpower: int = 0,
+	blocked_city_ids: Dictionary = {}
 ) -> Dictionary:
 	var dist := {}
 	var prev := {}
@@ -55,6 +56,11 @@ static func dijkstra_field(
 		visited[u] = true
 		for v in state.neighbors(u):
 			if visited.has(v):
+				continue
+			if (
+				(blocked_city_ids.has(v) and v != allowed_goal)
+				or (blocked_city_ids.has(u) and u != start)
+			):
 				continue
 			if allowed_nation != -1:
 				# 起点可为刚失守的敌城；之后只经过本国/盟国，攻击时允许最终敌城。
@@ -241,6 +247,35 @@ static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id
 	)
 
 
+## 战败部队专用：围城城市既不能作为恢复目标，也不能作为撤退中继。
+## 目标按“本国且向首都缩短纵深 → 盟友且向首都缩短纵深 → 最近安全本国城
+## → 最近安全盟友城”排序。这样每次有首都方向可走时，撤退都会严格减少
+## 首都距离，不会在两个同时被围的相邻城市之间往返。
+static func strategic_retreat_city(
+	state: GameState,
+	army: Army,
+	excluded_city_id: int = -1
+) -> Array[int]:
+	var start := _origin_of(army)
+	if start < 0 or start >= state.cities.size():
+		return [] as Array[int]
+	var blocked := state.besieged_city_ids()
+	var traversal_blocked := blocked.duplicate()
+	traversal_blocked.erase(start)
+	var field := dijkstra_field(
+		state, start, army.owner_nation, false, true, -1,
+		army.max_size, traversal_blocked
+	)
+	var choice := _strategic_retreat_goal(
+		state, army.owner_nation, start, field["dist"],
+		excluded_city_id, blocked, army.max_size
+	)
+	var goal := int(choice.get("goal", -1))
+	if goal < 0:
+		return [] as Array[int]
+	return reconstruct(field["prev"], start, goal)
+
+
 ## 外交遣返专用：可穿越任意国家的正容量道路，但终点只能是本国城市。
 static func nearest_home_city_for_repatriation(
 	state: GameState,
@@ -323,8 +358,8 @@ static func has_friendly_retreat_route_from_city(
 	return false
 
 
-## 军队在边上溃败时，从真实交战位置分别计算到两个端点的剩余距离，再叠加端点到
-## 最近友城的 Dijkstra 距离，返回全局最近路线。path 不含 endpoint。
+## 兼容/非战略调用：军队在边上时，从真实位置分别接入两端，再叠加端点到
+## 最近友城的 Dijkstra 距离。战败状态机改用 strategic_retreat_route_from_edge。
 ## 返回 {endpoint, path, distance}；无友城时返回空 Dictionary。
 static func nearest_friendly_route_from_edge(
 	state: GameState,
@@ -336,6 +371,183 @@ static func nearest_friendly_route_from_edge(
 		army,
 		excluded_city_id,
 		false
+	)
+
+
+## 边上溃败的战略撤退版本。真实战场位置仍分别接入两端，但每个端点
+## 后续都使用首都纵深与围城禁行规则，最后按目标层级、总路程和首都深度裁决。
+static func strategic_retreat_route_from_edge(
+	state: GameState,
+	army: Army,
+	excluded_city_id: int = -1
+) -> Dictionary:
+	var edge := state.edge_of(army.move_from, army.move_to)
+	if edge == null:
+		return {}
+	var length := float(maxi(edge.distance, 1))
+	var options := [
+		{"endpoint": army.move_from, "remaining": clampf(army.move_progress, 0.0, 1.0) * length},
+		{"endpoint": army.move_to, "remaining": (1.0 - clampf(army.move_progress, 0.0, 1.0)) * length},
+	]
+	var blocked := state.besieged_city_ids()
+	var best: Dictionary = {}
+	for option in options:
+		var endpoint := int(option["endpoint"])
+		var traversal_blocked := blocked.duplicate()
+		traversal_blocked.erase(endpoint)
+		var field := dijkstra_field(
+			state, endpoint, army.owner_nation, false, true, -1,
+			army.max_size, traversal_blocked
+		)
+		var choice := _strategic_retreat_goal(
+			state, army.owner_nation, endpoint, field["dist"],
+			excluded_city_id, blocked, army.max_size
+		)
+		var goal := int(choice.get("goal", -1))
+		if goal < 0:
+			continue
+		var total := (
+			float(option["remaining"])
+			+ float((field["dist"] as Dictionary)[goal])
+		)
+		var candidate := {
+			"endpoint": endpoint,
+			"path": reconstruct(field["prev"], endpoint, goal),
+			"distance": total,
+			"tier": int(choice["tier"]),
+			"capital_distance": float(choice["capital_distance"]),
+		}
+		if _strategic_edge_route_better(
+			state, army.owner_nation, army.move_from, candidate, best
+		):
+			best = candidate
+	return best
+
+
+static func _strategic_edge_route_better(
+	state: GameState,
+	nation_id: int,
+	anchor_city: int,
+	candidate: Dictionary,
+	best: Dictionary
+) -> bool:
+	if best.is_empty():
+		return true
+	if int(candidate["tier"]) != int(best["tier"]):
+		return int(candidate["tier"]) < int(best["tier"])
+	if not is_equal_approx(
+		float(candidate["distance"]), float(best["distance"])
+	):
+		return float(candidate["distance"]) < float(best["distance"])
+	if not is_equal_approx(
+		float(candidate["capital_distance"]),
+		float(best["capital_distance"])
+	):
+		return (
+			float(candidate["capital_distance"])
+			< float(best["capital_distance"])
+		)
+	return EquivariantOrder.city_id_less(
+		state, nation_id, int(candidate["endpoint"]),
+		int(best["endpoint"]), anchor_city
+	)
+
+
+static func _strategic_retreat_goal(
+	state: GameState,
+	nation_id: int,
+	start: int,
+	retreat_dist: Dictionary,
+	excluded_city_id: int,
+	blocked_city_ids: Dictionary,
+	required_manpower: int
+) -> Dictionary:
+	var capital_id := (
+		state.nations[nation_id].capital_city_id
+		if nation_id >= 0 and nation_id < state.nations.size()
+		else -1
+	)
+	var capital_dist := {}
+	if (
+		capital_id >= 0
+		and capital_id < state.cities.size()
+		and not blocked_city_ids.has(capital_id)
+		and state.cities[capital_id].owner_nation == nation_id
+	):
+		var capital_blocked := blocked_city_ids.duplicate()
+		capital_blocked.erase(start)
+		capital_dist = dijkstra_field(
+			state, capital_id, nation_id, false, true, -1,
+			required_manpower, capital_blocked
+		)["dist"]
+	var start_capital_distance := (
+		float(capital_dist.get(start, INF))
+		if not capital_dist.is_empty() else INF
+	)
+	var best: Dictionary = {}
+	for city in state.cities:
+		if (
+			city.id == excluded_city_id
+			or blocked_city_ids.has(city.id)
+			or not state.has_military_access(nation_id, city.owner_nation)
+			or float(retreat_dist.get(city.id, INF)) == INF
+		):
+			continue
+		var own_city := city.owner_nation == nation_id
+		var depth := float(capital_dist.get(city.id, INF))
+		var progresses := (
+			start_capital_distance < INF
+			and depth < start_capital_distance - 0.000001
+		)
+		var tier := 0
+		if not capital_dist.is_empty():
+			tier = (
+				0 if own_city and progresses
+				else 1 if progresses
+				else 2 if own_city
+				else 3
+			)
+		else:
+			tier = 0 if own_city else 1
+		var candidate := {
+			"goal": city.id,
+			"tier": tier,
+			"distance": float(retreat_dist[city.id]),
+			"capital_distance": depth,
+		}
+		if _strategic_goal_better(
+			state, nation_id, start, candidate, best
+		):
+			best = candidate
+	return best
+
+
+static func _strategic_goal_better(
+	state: GameState,
+	nation_id: int,
+	start: int,
+	candidate: Dictionary,
+	best: Dictionary
+) -> bool:
+	if best.is_empty():
+		return true
+	if int(candidate["tier"]) != int(best["tier"]):
+		return int(candidate["tier"]) < int(best["tier"])
+	if not is_equal_approx(
+		float(candidate["distance"]), float(best["distance"])
+	):
+		return float(candidate["distance"]) < float(best["distance"])
+	if not is_equal_approx(
+		float(candidate["capital_distance"]),
+		float(best["capital_distance"])
+	):
+		return (
+			float(candidate["capital_distance"])
+			< float(best["capital_distance"])
+		)
+	return EquivariantOrder.city_id_less(
+		state, nation_id, int(candidate["goal"]),
+		int(best["goal"]), start
 	)
 
 

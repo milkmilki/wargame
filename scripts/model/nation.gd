@@ -12,6 +12,11 @@ var unpaid_military_upkeep: int = 0        ## 最近一月未支付的军队维�
 var military_payment_ratio: float = 1.0    ## 最近一月军费实际支付率 [0,1]
 var last_offensive_gold_cost: int = 0      ## 最近一次实际发动攻势的组织费用
 var last_offensive_gold_day: int = -1
+## 首次进入当前连续战争时冻结的战前月收入（城市+贡赋净收入，不扣军费）。
+## 战争期国库目标始终基于此值，领土易手和贡赋变化不得触发军队快速裁撤。
+## -1 表示当前和平；初始战争/外部脚本改关系由 Simulation.setup/日同步补快照。
+var war_gold_income_snapshot: int = -1
+var war_gold_income_snapshot_day: int = -1
 var war_mobilization_target_troops: int = 0 ## 宣战粮食预算对应的目标总兵力
 var war_mobilization_until_day: int = -1
 var war_mobilization_reason: String = ""

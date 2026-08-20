@@ -46,6 +46,7 @@ func _init() -> void:
 	_test_siege_food_clock()
 	_test_weak_attack_retreat()
 	_test_morale_retreat_recovery()
+	_test_besieged_city_retreat_depth()
 	_test_supply_morale_and_passive_retreat_battle()
 	_test_rolling_supply_settlement()
 	_test_siege_battle_then_progress_order()
@@ -63,6 +64,7 @@ func _init() -> void:
 	_test_garrison_retreat_city_defense()
 	_test_ai_encirclement_breakout_and_relief()
 	_test_manpower_pool_and_force_commands()
+	_test_gold_reserve_budget_and_war_snapshot()
 	_test_diplomacy_state_and_ai()
 	_test_war_preparation_cancel_cooldown()
 	_test_alliance_war_coalitions()
@@ -4537,7 +4539,7 @@ func _test_weak_attack_retreat() -> void:
 # ------------------------------------------------------------------ 22. 士气崩溃撤退 + 驻城恢复
 
 func _test_morale_retreat_recovery() -> void:
-	print("[22] 士气崩溃：撤往最近友城 + 驻城耗粮恢复 + 满士气/粮尽解锁")
+	print("[22] 士气崩溃：向首都纵深撤退 + 驻城耗粮恢复 + 满士气/粮尽解锁")
 	var gs := GameState.new()
 	gs.generate_grid_world(777)
 	var sim := Simulation.new()
@@ -4644,19 +4646,29 @@ func _test_morale_retreat_recovery() -> void:
 	_check(broken.state == Army.State.RETREATING, "撤退途中不得被 AI 重新分配进攻目标")
 
 	var guard := 0
-	while broken.state == Army.State.RETREATING and guard < 40:
+	while broken.state == Army.State.RETREATING and guard < 240:
 		sim._advance_movement()
 		guard += 1
-	_check(broken.state == Army.State.RECOVERING and broken.location_city == c2,
-		"抵达最近友城后应进入 RECOVERING 驻守，state=%d city=%d" % [broken.state, broken.location_city])
-	_check(gs.army_at_city(c2) == broken, "RECOVERING 军队应计入驻城守军，不能被视为空城")
+	var recovery_city := broken.location_city
+	_check(
+		broken.state == Army.State.RECOVERING
+		and recovery_city >= 0
+		and gs.cities[recovery_city].owner_nation == broken.owner_nation
+		and not gs.city_under_siege(recovery_city),
+		"败军应沿首都纵深抵达安全本国城并进入 RECOVERING，state=%d city=%d"
+			% [broken.state, recovery_city]
+	)
+	_check(
+		gs.army_at_city(recovery_city) == broken,
+		"RECOVERING 军队应计入最终恢复城守军，不能被视为空城"
+	)
 	sim._ai_assign_targets()
 	_check(broken.state == Army.State.RECOVERING, "恢复驻守期间不得执行下一步行动")
 
 	# RECOVERING 不走普通补给扣粮，只由恢复结算消费本城资源，避免双重扣除。
-	_set_single_warehouse(gs, broken.owner_nation, c2, 100)
+	_set_single_warehouse(gs, broken.owner_nation, recovery_city, 100)
 	sim._resolve_supply()
-	_check(gs.cities[c2].food_storage == 100, "RECOVERING 不应被普通补给重复扣粮")
+	_check(gs.cities[recovery_city].food_storage == 100, "RECOVERING 不应被普通补给重复扣粮")
 	for _day in range(Combat.MORALE_RECOVERY_DAYS - 1):
 		sim._recover_morale()
 	_check(
@@ -4676,28 +4688,28 @@ func _test_morale_retreat_recovery() -> void:
 	_check(
 		broken.state == Army.State.IDLE
 			and _approx(broken.morale, broken.max_morale)
-			and gs.cities[c2].food_storage
+			and gs.cities[recovery_city].food_storage
 				== 100 - ten_day_recovery_demand,
 		"恢复驻军必须第10天回满并解除驻守；十天应耗%d粮，实为morale=%.2f food=%d"
 			% [
 				ten_day_recovery_demand,
 				broken.morale,
-				gs.cities[c2].food_storage,
+				gs.cities[recovery_city].food_storage,
 			]
 	)
 
 	# 对照：资源不足时按比例恢复，粮尽立即解除驻守，但保留未满士气。
 	gs.armies.clear()
-	var starved := _make_army(501, gs.cities[c2].owner_nation, 1000, 10)
+	var starved := _make_army(501, broken.owner_nation, 1000, 10)
 	starved.morale = 0.0
 	starved.state = Army.State.RECOVERING
-	starved.location_city = c2
-	starved.move_from = c2
+	starved.location_city = recovery_city
+	starved.move_from = recovery_city
 	starved.supply_food_debt = 3.0
 	gs.armies.append(starved)
-	_set_single_warehouse(gs, starved.owner_nation, c2, 2)
+	_set_single_warehouse(gs, starved.owner_nation, recovery_city, 2)
 	sim._recover_morale()
-	_check(gs.cities[c2].food_storage == 0, "恢复资源不足时应耗尽本城剩余粮食")
+	_check(gs.cities[recovery_city].food_storage == 0, "恢复资源不足时应耗尽本城剩余粮食")
 	_check(starved.state == Army.State.IDLE, "城内恢复资源耗尽后应解除强制驻守")
 	_check(
 		starved.morale > 0.0
@@ -4712,21 +4724,21 @@ func _test_morale_retreat_recovery() -> void:
 	_set_warehouses(
 		gs,
 		old_owner,
-		[c1, c2] as Array[int],
+		[c1, recovery_city] as Array[int],
 		[100, 0] as Array[int],
 		c1
 	)
-	var historical_owner := gs.recognized_owner_of(c2)
+	var historical_owner := gs.recognized_owner_of(recovery_city)
 	var captor := _make_army(502, (old_owner + 1) % GameState.NATION_COUNT, 1200, 10)
 	gs.armies.append(captor)
-	sim._capture_city(captor, gs.cities[c2])
+	sim._capture_city(captor, gs.cities[recovery_city])
 	_check(starved.size <= 0 or starved.state == Army.State.RETREATING,
 		"恢复驻军所在城市易主后应重新撤退（无友城则溃散），state=%d size=%d" % [starved.state, starved.size])
-	_check(not (starved.state == Army.State.RECOVERING and gs.cities[c2].owner_nation != old_owner),
+	_check(not (starved.state == Army.State.RECOVERING and gs.cities[recovery_city].owner_nation != old_owner),
 		"RECOVERING 军队不得滞留敌方城市")
 	_check(
-		gs.recognized_owner_of(c2) == historical_owner
-		and gs.cities[c2].owner_nation != historical_owner,
+		gs.recognized_owner_of(recovery_city) == historical_owner
+		and gs.cities[recovery_city].owner_nation != historical_owner,
 		"占领只能改变当前归属，省份初始底色归属必须保持不变"
 	)
 
@@ -4932,25 +4944,165 @@ func _test_morale_retreat_recovery() -> void:
 	# 多支恢复驻军必须全部加入守城，破城所需兵力的守军项取总兵力（而非只取第一支）。
 	gs.armies.clear()
 	gs.battles.clear()
-	var city_owner := gs.cities[c2].owner_nation
+	var siege_edge: Edge = null
+	for candidate_edge in gs.edges:
+		if (
+			gs.cities[candidate_edge.city_a].owner_nation
+				!= gs.cities[candidate_edge.city_b].owner_nation
+		):
+			siege_edge = candidate_edge
+			break
+	var siege_from := siege_edge.city_a
+	var siege_to := siege_edge.city_b
+	var city_owner := gs.cities[siege_to].owner_nation
 	var g1 := _make_army(503, city_owner, 300, 10)
 	var g2 := _make_army(504, city_owner, 200, 10)
 	for garrison in [g1, g2]:
 		garrison.state = Army.State.RECOVERING
-		garrison.location_city = c2
-		garrison.move_from = c2
+		garrison.location_city = siege_to
+		garrison.move_from = siege_to
 		gs.armies.append(garrison)
-	var invader := _make_army(505, old_owner, 1000, 10)
-	invader.move_from = c1
-	invader.move_to = c2
+	var invader := _make_army(
+		505, gs.cities[siege_from].owner_nation, 1000, 10
+	)
+	invader.move_from = siege_from
+	invader.move_to = siege_to
 	gs.armies.append(invader)
-	sim._start_or_join_siege(invader, gs.cities[c2], edge)
+	sim._start_or_join_siege(
+		invader, gs.cities[siege_to], siege_edge
+	)
 	var recovery_siege: Battle = gs.battles[0]
 	_check(recovery_siege.side_b.size() == 2, "两支 RECOVERING 驻军应全部加入守城")
 	# item 6：破城所需兵力仅由工事换算，与守军人数无关；两支恢复守军只在城下决斗阶段消耗攻方。
-	var expected_required := Combat.siege_required_manpower(gs.cities[c2].fort_strength)
+	var expected_required := Combat.siege_required_manpower(gs.cities[siege_to].fort_strength)
 	_check(recovery_siege.siege_required == expected_required,
 		"破城所需兵力恒由工事推导（守军无关），实为 %d（期望 %d）" % [recovery_siege.siege_required, expected_required])
+	sim.free()
+
+
+func _test_besieged_city_retreat_depth() -> void:
+	print("[22b] 撤退纵深：双围城不得在相邻城市之间横跳，必须向首都方向后撤")
+	var gs := GameState.new()
+	gs.generate_grid_world(782)
+	gs.armies.clear()
+	gs.battles.clear()
+	for city in gs.cities:
+		city.owner_nation = 1
+	var front_a := 0
+	var front_b := 1
+	var rear_a := 8
+	var rear_b := 9
+	var capital := 16
+	for city_id in [front_a, front_b, rear_a, rear_b, capital]:
+		gs.cities[city_id].owner_nation = 0
+	for edge in gs.edges:
+		edge.max_manpower = (
+			Edge.STANDARD_MANPOWER
+			if GameState.edge_key(edge.city_a, edge.city_b) in [
+				GameState.edge_key(front_a, front_b),
+				GameState.edge_key(front_a, rear_a),
+				GameState.edge_key(front_b, rear_b),
+				GameState.edge_key(rear_a, rear_b),
+				GameState.edge_key(rear_a, capital),
+			]
+			else 0
+		)
+	gs.nations[0].capital_city_id = capital
+	for front in [front_a, front_b]:
+		var siege := gs.new_battle(Battle.Kind.SIEGE)
+		siege.city = gs.cities[front]
+	var army_a := _make_army(510, 0, 1000, 10)
+	var army_b := _make_army(511, 0, 1000, 10)
+	army_a.morale = 0.1
+	army_b.morale = 0.1
+	gs.armies.append_array([army_a, army_b])
+	var sim := Simulation.new()
+	sim.setup(gs)
+	sim._start_morale_retreat_from_city(army_a, front_a, front_a)
+	sim._start_morale_retreat_from_city(army_b, front_b, front_b)
+	_check(
+		army_a.state == Army.State.RETREATING
+		and army_a.move_to == rear_a
+		and not army_a.path.has(front_b)
+		and army_b.state == Army.State.RETREATING
+		and army_b.move_to == rear_b
+		and not army_b.path.has(front_a),
+		"双围城败军必须分别向首都纵深撤至%d/%d，不得互撤至%d/%d：A=%d path=%s B=%d path=%s"
+			% [rear_a, rear_b, front_b, front_a, army_a.move_to, str(army_a.path), army_b.move_to, str(army_b.path)]
+	)
+	sim.free()
+
+
+func _test_gold_reserve_budget_and_war_snapshot() -> void:
+	print("[31b] 财政储备：和平三年、战争半年，战前收入快照不随领土变化")
+	var gs := GameState.new()
+	gs.generate_grid_world(7105)
+	gs.armies.clear()
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	for city in gs.cities:
+		city.gold_per_month = 0
+	for city in gs.cities_of(0):
+		city.gold_per_month = 10
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var flows := Simulation.monthly_gold_flows(gs)
+	var income := int(flows[0]["net_income"])
+	gs.nations[0].treasury_gold = 0
+	var peace := Simulation.gold_reserve_policy(gs, 0, flows)
+	_check(
+		income > 0
+		and int(peace["reserve_months"]) == 36
+		and int(peace["reserve_target"]) == income * 36
+		and int(peace["target_monthly_savings"]) == income,
+		"和平财政应以当前月收入%d建立36个月目标%d，并从空库至少月存%d：%s"
+			% [income, income * 36, income, str(peace)]
+	)
+	var expected_snapshot := income
+	sim._capture_war_gold_income_snapshots([0, 1] as Array[int])
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	var war := Simulation.gold_reserve_policy(gs, 0)
+	_check(
+		gs.nations[0].war_gold_income_snapshot == expected_snapshot
+		and int(war["reserve_months"]) == 6
+		and int(war["reserve_target"]) == expected_snapshot * 6
+		and int(war["budget_monthly_balance"])
+			== expected_snapshot - int(
+				Simulation.monthly_gold_flows(gs)[0]["military_upkeep"]
+			),
+		"进入战争应冻结战前月收入%d并将目标降至半年%d：snapshot=%d policy=%s"
+			% [expected_snapshot, expected_snapshot * 6, gs.nations[0].war_gold_income_snapshot, str(war)]
+	)
+	for city in gs.cities_of(0):
+		city.gold_per_month = 0
+	var collapsed_income := int(
+		Simulation.monthly_gold_flows(gs)[0]["net_income"]
+	)
+	sim._synchronize_war_gold_income_snapshots()
+	var frozen_after_loss := Simulation.gold_reserve_policy(gs, 0)
+	_check(
+		collapsed_income == 0
+		and gs.nations[0].war_gold_income_snapshot == expected_snapshot
+		and int(frozen_after_loss["reserve_target"]) == expected_snapshot * 6
+		and int(frozen_after_loss["budget_monthly_balance"])
+			== int(war["budget_monthly_balance"])
+		and int(frozen_after_loss["required_upkeep_savings"])
+			== int(war["required_upkeep_savings"]),
+		"战争中收入降至%d后仍须保持战前半年目标%d，不得按失地收入快速裁军：%s"
+			% [collapsed_income, expected_snapshot * 6, str(frozen_after_loss)]
+	)
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+	sim._synchronize_war_gold_income_snapshots()
+	var postwar := Simulation.gold_reserve_policy(gs, 0)
+	_check(
+		gs.nations[0].war_gold_income_snapshot == -1
+		and int(postwar["reserve_months"]) == 36
+		and int(postwar["reserve_target"]) == 0,
+		"最后一场战争结束后必须清空快照并恢复按当前收入计算三年目标"
+	)
 	sim.free()
 
 # ------------------------------------------------------------------ 23. 自由/溃逃状态：断粮降士气 + 被动接战
@@ -8988,9 +9140,35 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and finance_state.nations[
 				0
 			].ai_last_force_reason.contains(
-				"军费赤字缩编"
+				"财政储备缩编"
 			),
 		"国库为0且存在未付军费时，军制AI必须主动缩编并降低月维护费"
+	)
+	var upkeep_after_first_financial_demobilization := (
+		finance_state.nation_monthly_military_upkeep(0)
+	)
+	var repeat_finance_view := AiWorldView.build(finance_state, 0)
+	var repeat_finance_snapshot := StrategicMapSnapshot.build(
+		repeat_finance_view
+	)
+	var repeat_finance_threat := ThreatField.build(repeat_finance_view)
+	var repeated_financial_demobilization := (
+		finance_sim._ai_manage_force_structure(
+			repeat_finance_view,
+			repeat_finance_snapshot,
+			repeat_finance_threat,
+			CityDefensePlan.build(
+				repeat_finance_view,
+				repeat_finance_snapshot,
+				repeat_finance_threat
+			)
+		)
+	)
+	_check(
+		not repeated_financial_demobilization
+		and finance_state.nation_monthly_military_upkeep(0)
+			== upkeep_after_first_financial_demobilization,
+		"同一月内旧欠饷记录不得驱动连续重复缩编"
 	)
 	finance_sim.free()
 
@@ -10631,11 +10809,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	var sustainable_zero_treasury := DiplomacyAI.resource_report(ai_state, 0)
 	_check(
 		int(sustainable_zero_treasury["monthly_gold_balance"]) >= 0
-		and bool(sustainable_zero_treasury["ready"])
-		and not "、".join(
-			DiplomacyAI.peace_reasons(ai_state, 0, 1)
-		).contains("国库"),
-		"月收入覆盖军费时，国库余额为0不得被误报为财政危机"
+		and not bool(sustainable_zero_treasury["ready"])
+		and int(sustainable_zero_treasury["gold_reserve_target"]) > 0
+		and int(sustainable_zero_treasury["gold_reserve_gap"])
+			== int(sustainable_zero_treasury["gold_reserve_target"]),
+		"月收入覆盖军费但国库为0时仍应进入三年储备积累期，不得提前判为备战就绪"
 	)
 	for city in ai_state.cities_of(0):
 		city.gold_per_month = 0
@@ -14775,31 +14953,30 @@ func _test_vassal_tribute() -> void:
 				)
 			)
 		)
-	var all_overlord_zero := true
-	var all_subject_zero := true
+	var overlord_treasury_grows := true
+	var subject_treasury_grows := true
 	var no_repeat_demobilization := true
-	var overlord_never_demobilized := true
+	var overlord_only_initial_demobilization := true
 	for month_index in range(6):
-		all_overlord_zero = (
-			all_overlord_zero
-			and overlord_treasuries[month_index] == 0
-		)
-		all_subject_zero = (
-			all_subject_zero
-			and subject_treasuries[month_index] == 0
-		)
 		if month_index > 0:
 			no_repeat_demobilization = (
 				no_repeat_demobilization
 				and not subject_demobilized[month_index]
 			)
-		overlord_never_demobilized = (
-			overlord_never_demobilized
-			and not overlord_demobilized[month_index]
-		)
-	var balanced_upkeep := (
-		subject_city_income - subject_tribute
-	)
+			overlord_only_initial_demobilization = (
+				overlord_only_initial_demobilization
+				and not overlord_demobilized[month_index]
+			)
+			overlord_treasury_grows = (
+				overlord_treasury_grows
+				and overlord_treasuries[month_index]
+					> overlord_treasuries[month_index - 1]
+			)
+			subject_treasury_grows = (
+				subject_treasury_grows
+				and subject_treasuries[month_index]
+					> subject_treasuries[month_index - 1]
+			)
 	_check(
 		overlord_army != null
 			and subject_light_a != null
@@ -14809,16 +14986,17 @@ func _test_vassal_tribute() -> void:
 				== 0
 			and expected_subject_deficit > 0
 			and subject_demobilized[0]
+			and overlord_demobilized[0]
 			and subject_upkeep_after_ai[0]
-				== balanced_upkeep
+				< subject_city_income - subject_tribute
 			and subject_unpaid[0]
 				== expected_subject_deficit
 			and subject_unpaid[1] == 0
 			and no_repeat_demobilization
-			and overlord_never_demobilized
-			and all_overlord_zero
-			and all_subject_zero,
-		"长期贡赋财政：藩王首月应缩编至平衡、后续不重复缩编；宗主国库0但月净0不得误裁军"
+			and overlord_only_initial_demobilization
+			and overlord_treasury_grows
+			and subject_treasury_grows,
+		"长期贡赋财政：双方应只在首轮按三年储备预算缩编一次，随后国库稳定正增长"
 	)
 	print(
 		"  [32d-finance] 城收=%d 贡赋=%d 藩王军费=%d→%d 月亏=%d "
@@ -17227,14 +17405,30 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	var rich_gold_before_exact_cost := (
 		gs.nations[0].treasury_gold
 	)
+	var exact_cost_report := DiplomacyAI.resource_report(gs, 0)
+	var half_year_reserve := (
+		int(exact_cost_report["gold_reserve_baseline_income"])
+		* Simulation.WAR_GOLD_RESERVE_MONTHS
+	)
 	gs.nations[0].treasury_gold = light_creation_cost
-	var exact_cost_war_capacity := (
+	var below_reserve_war_capacity := (
 		DiplomacyAI.mobilization_capacity(
 			gs,
 			0,
 			DiplomacyAI.FoodPosture.OFFENSIVE_WAR
 		)
 	)
+	gs.nations[0].treasury_gold = (
+		half_year_reserve + light_creation_cost
+	)
+	var exact_reserve_war_capacity := (
+		DiplomacyAI.mobilization_capacity(
+			gs,
+			0,
+			DiplomacyAI.FoodPosture.OFFENSIVE_WAR
+		)
+	)
+	gs.nations[0].treasury_gold = light_creation_cost
 	var exact_cost_guarded_capacity := (
 		DiplomacyAI.mobilization_capacity(
 			gs,
@@ -17267,9 +17461,10 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		"富粮国应可额外动员4军，防御动员不少于进攻，贫粮大国不得爆兵"
 	)
 	_check(
-		exact_cost_war_capacity >= 1
+		below_reserve_war_capacity == 0
+			and exact_reserve_war_capacity >= 1
 			and exact_cost_guarded_capacity == 0,
-		"战争动员可用最后一笔足额建制费爆兵，非战争姿态仍须保留100金"
+		"战争动员必须保留战前半年收入；半年储备外刚好一笔建制费可扩军，和平仍保护三年目标"
 	)
 	_check(
 		bool(rich_food_plan["target_sustainable"])

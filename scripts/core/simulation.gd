@@ -83,6 +83,11 @@ const DISBAND_SIZE_MAX: int = 499
 const REINFORCE_PER_ARMY_PER_MONTH: int = 750
 const PEACETIME_MANPOWER_RESERVE: int = 5000
 const PEACETIME_STRENGTH_RATIO: float = 0.30
+## 财政储备不是“现金不得为负”的补丁，而是军队规模预算的目标状态：
+## 和平积累约三年月收入；进入连续战争时冻结战前月收入并只保留半年。
+const PEACE_GOLD_RESERVE_MONTHS: int = 36
+const WAR_GOLD_RESERVE_MONTHS: int = 6
+const GOLD_RESERVE_RECOVERY_MONTHS: int = 36
 const FOOD_SECURITY_RESERVE_MONTHS: int = 6
 const FOOD_RESERVE_RECOVERY_MONTHS: int = 6
 const DEMOBILIZATION_STEP_MIN: int = 500
@@ -228,6 +233,7 @@ func setup(game_state: GameState) -> void:
 	state = game_state
 	_normalize_city_fortifications()
 	state.refresh_derived()
+	_synchronize_war_gold_income_snapshots()
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
 	_ai_base_city_values_revision.clear()
@@ -911,6 +917,129 @@ static func monthly_gold_flows(
 			- int(report["military_upkeep"])
 		)
 	return result
+
+
+## 国家财政储备策略的唯一真源。收入使用“城市税收+净贡赋”，不扣军费：
+## - 和平目标 = 当前月收入 × 36；
+## - 战争目标 = 首次进入当前连续战争前冻结的月收入 × 6。
+## 低于目标时把缺口按 36 个月摊为月度储蓄预算；和平从空库恢复时会尽量
+## 留存完整月收入，战争从空库恢复只留存约六分之一，体现半年目标的宽松。
+## 若已有月赤字，所需节流额还会覆盖赤字。
+static func gold_reserve_policy(
+	game_state: GameState,
+	nation_id: int,
+	gold_flows: Array[Dictionary] = []
+) -> Dictionary:
+	if (
+		nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return {}
+	var flows := (
+		gold_flows
+		if not gold_flows.is_empty()
+		else monthly_gold_flows(game_state)
+	)
+	var flow: Dictionary = flows[nation_id]
+	var nation := game_state.nations[nation_id]
+	var at_war := not game_state.wars_of(nation_id).is_empty()
+	var current_income := maxi(int(flow["net_income"]), 0)
+	var baseline_income := current_income
+	if at_war and nation.war_gold_income_snapshot >= 0:
+		baseline_income = nation.war_gold_income_snapshot
+	var reserve_months := (
+		WAR_GOLD_RESERVE_MONTHS
+		if at_war else PEACE_GOLD_RESERVE_MONTHS
+	)
+	var target := baseline_income * reserve_months
+	var gap := maxi(target - nation.treasury_gold, 0)
+	var monthly_balance := int(flow["balance"])
+	# 战争军制承载能力使用战前冻结收入；真实国库仍按 current income 结算。
+	# 因此失地不会在同一 AI 周期把月收入骤降直接放大成等额裁军，
+	# 但储备逐月消耗和实际欠饷仍会温和/强制地推动后续缩编。
+	var budget_monthly_balance := (
+		baseline_income - int(flow["military_upkeep"])
+		if at_war and nation.war_gold_income_snapshot >= 0
+		else monthly_balance
+	)
+	var target_savings := 0
+	if gap > 0:
+		target_savings = int(ceil(
+			float(gap)
+			/ float(GOLD_RESERVE_RECOVERY_MONTHS)
+		))
+	var required_upkeep_savings := maxi(
+		target_savings - budget_monthly_balance,
+		0
+	)
+	return {
+		"at_war": at_war,
+		"current_monthly_income": current_income,
+		"baseline_monthly_income": baseline_income,
+		"reserve_months": reserve_months,
+		"reserve_target": target,
+		"reserve_gap": gap,
+		"monthly_balance": monthly_balance,
+		"budget_monthly_balance": budget_monthly_balance,
+		"target_monthly_savings": target_savings,
+		"required_upkeep_savings": required_upkeep_savings,
+		"ready": nation.treasury_gold >= target,
+	}
+
+
+## 补齐外部脚本/旧地图直接改外交后的财政快照，并在最后一场战争结束时清空。
+## 正常 AI 宣战会在关系改为 WAR 前调用 _capture_war_gold_income_snapshots，
+## 因而这里不会用战后领土/贡赋覆盖战前基准。
+func _synchronize_war_gold_income_snapshots() -> void:
+	if state == null or state.nations.is_empty():
+		return
+	var needs_snapshot: Array[int] = []
+	for nation in state.nations:
+		var at_war := not state.wars_of(nation.id).is_empty()
+		if at_war and nation.war_gold_income_snapshot < 0:
+			needs_snapshot.append(nation.id)
+		elif not at_war and nation.war_gold_income_snapshot >= 0:
+			nation.war_gold_income_snapshot = -1
+			nation.war_gold_income_snapshot_day = -1
+	if needs_snapshot.is_empty():
+		return
+	# 正常路径在宣战前已主动冻结，不会走到这里。只有旧存档、测试或
+	# 外部脚本直接改关系时才惰性汇总一次，避免每个普通日扫描全军/全城。
+	var flows := monthly_gold_flows(state)
+	for nation_id in needs_snapshot:
+		var nation := state.nations[nation_id]
+		nation.war_gold_income_snapshot = maxi(
+			int(flows[nation_id]["net_income"]), 0
+		)
+		nation.war_gold_income_snapshot_day = state.day
+
+
+func _capture_war_gold_income_snapshots(
+	nation_ids: Array[int]
+) -> void:
+	if state == null or nation_ids.is_empty():
+		return
+	var eligible: Array[int] = []
+	for nation_id in nation_ids:
+		if (
+			nation_id < 0
+			or nation_id >= state.nations.size()
+			or not state.wars_of(nation_id).is_empty()
+		):
+			continue
+		if (
+			not eligible.has(nation_id)
+		):
+			eligible.append(nation_id)
+	if eligible.is_empty():
+		return
+	var flows := monthly_gold_flows(state)
+	for nation_id in eligible:
+		var nation := state.nations[nation_id]
+		nation.war_gold_income_snapshot = maxi(
+			int(flows[nation_id]["net_income"]), 0
+		)
+		nation.war_gold_income_snapshot_day = state.day
 
 
 func _resolve_economy() -> void:
@@ -1829,7 +1958,7 @@ func _recover_garrisoned_army(army: Army) -> void:
 		army.forced_retreat = false
 		return
 	var city := state.cities[city_id]
-	# 驻城期间若城市已失守，重新撤往最近友城，不能在敌城恢复。
+	# 驻城期间若城市已失守，重新向首都纵深撤退，不能在敌城恢复。
 	if not state.has_military_access(army.owner_nation, city.owner_nation):
 		_start_morale_retreat_from_city(army, city_id, city_id)
 		return
@@ -2515,6 +2644,7 @@ func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 		state.suzerainty.erase(old_owner)
 		state.annex_nation(claimant, old_owner)
 		state.prune_dead_suzerainty()
+		_synchronize_war_gold_income_snapshots()
 		_ai_last_decision_day = -1
 		return true
 	# 情形二：藩王(claimant)攻破宗主(old_owner)首都 → 藩王夺取宗主全部领土并继承体系。
@@ -2533,6 +2663,7 @@ func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 		# 吞并原宗主全境。
 		state.annex_nation(claimant, old_owner)
 		state.prune_dead_suzerainty()
+		_synchronize_war_gold_income_snapshots()
 		_ai_last_decision_day = -1
 		return true
 	return false
@@ -2877,6 +3008,9 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 			# 削藩：藩王反抗则开内战（占首都通吃留待领土结算），否则和平撤藩直辖。
 			if state.overlord_of(nation_b) == nation_a and not state.is_in_civil_war(nation_b):
 				if bool(action.get("resist", false)):
+					_capture_war_gold_income_snapshots([
+						nation_a, nation_b
+					] as Array[int])
 					changed = state.start_civil_war(nation_b)
 				else:
 					changed = state.revoke_vassal(nation_b)
@@ -2947,6 +3081,7 @@ func _set_coalition_war(
 	attackers: Array[int],
 	defenders: Array[int]
 ) -> bool:
+	_capture_war_gold_income_snapshots(attackers + defenders)
 	var changed := false
 	for attacker in attackers:
 		for defender in defenders:
@@ -3099,6 +3234,7 @@ func _make_coalition_peace(
 			)
 	if not changed:
 		return {"changed": false}
+	_synchronize_war_gold_income_snapshots()
 	_reconcile_battles_after_coalition_peace(
 		bloc_a,
 		bloc_b
@@ -5288,19 +5424,16 @@ func _ai_manage_force_structure(
 			resource_evaluation_cache
 		)
 	)
-	var monthly_gold_balance := int(
-		gold_report["monthly_gold_balance"]
+	var gold_flows: Array[Dictionary] = []
+	if resource_evaluation_cache.has("monthly_gold_flows"):
+		gold_flows = resource_evaluation_cache["monthly_gold_flows"]
+	var gold_reserve: Dictionary = gold_reserve_policy(
+		state, view.nation_id, gold_flows
 	)
-	var gold_pressure := (
-		monthly_gold_balance < 0
-		and (
-			nation.unpaid_military_upkeep > 0
-			or float(gold_report["gold_runway_months"])
-				< float(
-					DiplomacyAI.CAMPAIGN_RESERVE_MONTHS
-				)
-		)
+	var required_gold_savings := int(
+		gold_reserve.get("required_upkeep_savings", 0)
 	)
+	var gold_pressure := required_gold_savings > 0
 	var food_growth_budget := _food_growth_manpower_budget(
 		food_report
 	)
@@ -5319,7 +5452,7 @@ func _ai_manage_force_structure(
 		if gold_pressure and _demobilize_for_gold_security(
 			view,
 			threat,
-			-monthly_gold_balance,
+			required_gold_savings,
 			force_structure_target
 		):
 			return true
@@ -5468,6 +5601,22 @@ func _ai_manage_force_structure(
 	var missing_formation_size := int(
 		recruitment.get("size", 0)
 	)
+	var creation_cost := (
+		GameState.formation_creation_gold_cost(
+			missing_formation_size
+		)
+		if missing_formation_size > 0 else 0
+	)
+	var reserve_target := int(gold_reserve.get(
+		"reserve_target", 0
+	))
+	var gold_growth_allowed := (
+		emergency_recruitment
+		or (
+			not gold_pressure
+			and nation.treasury_gold - creation_cost >= reserve_target
+		)
+	)
 	var food_recruitment_allowed := (
 		not food_pressure
 		and food_growth_budget >= missing_formation_size
@@ -5485,6 +5634,7 @@ func _ai_manage_force_structure(
 		missing_formation_size > 0
 		and available_manpower >= missing_formation_size
 		and food_recruitment_allowed
+		and gold_growth_allowed
 	):
 		var creation_site := -1
 		var capital_id := nation.capital_city_id
@@ -9513,7 +9663,7 @@ func _demobilize_for_gold_security(
 	)
 	nation.ai_last_force_day = state.day
 	nation.ai_last_force_reason = (
-		"军费赤字缩编：返还%d人，月省%d金，预测缺口%d金，目标保留%d军"
+		"财政储备缩编：返还%d人，月省%d金，储备月度缺口%d金，目标保留%d军"
 		% [
 			total_returned,
 			total_saved,
@@ -10154,6 +10304,7 @@ func _begin_next_leg(army: Army) -> void:
 					army.owner_nation,
 					state.cities[from_city].owner_nation
 				)
+				and not state.city_under_siege(from_city)
 			):
 				_start_recovering(army, from_city)
 				return
@@ -10163,7 +10314,7 @@ func _begin_next_leg(army: Army) -> void:
 						army
 					)
 					if army.diplomatic_repatriation
-					else Pathfinding.nearest_friendly_city(
+					else Pathfinding.strategic_retreat_city(
 						state,
 						army
 					)
@@ -10269,13 +10420,16 @@ func _arrive_at_node(army: Army) -> void:
 		army.move_progress = 0.0
 		army.location_city = arrived
 		if army.path.is_empty():
-			if state.has_military_access(
-				army.owner_nation,
-				state.cities[arrived].owner_nation
+			if (
+				state.has_military_access(
+					army.owner_nation,
+					state.cities[arrived].owner_nation
+				)
+				and not state.city_under_siege(arrived)
 			):
 				_start_recovering(army, arrived)
 			else:
-				# 目的地在撤退途中失守：从当前位置重新寻找最近友城。
+				# 目的地在途中失守或被围：继续向首都纵深重算。
 				_start_morale_retreat_from_city(army, arrived, arrived)
 		else:
 			_begin_next_leg(army)
@@ -11200,7 +11354,7 @@ func _finish_field_battle(battle: Battle) -> void:
 func _finish_field(winners: Array[Army], losers: Array[Army]) -> void:
 	for a in losers:
 		if a.size > 0:
-			_retreat(a)              # 败方带残兵撤往最近友城
+			_retreat(a)              # 败方带残兵向首都纵深撤退
 		else:
 			a.battle_id = -1
 	for a in winners:
@@ -11752,7 +11906,7 @@ func _settle_idle(army: Army, city_id: int) -> void:
 	army.path.clear()
 
 
-## 士气崩溃撤退：从真实交战位置选择图距离最近的友方城市。
+## 士气崩溃撤退：从真实交战位置避开围城，优先向本国首都纵深撤离。
 func _retreat(army: Army) -> void:
 	army.battle_id = -1
 	army.state = Army.State.RETREATING
@@ -11768,7 +11922,7 @@ func _retreat(army: Army) -> void:
 				army
 			)
 			if army.diplomatic_repatriation
-			else Pathfinding.nearest_friendly_route_from_edge(
+			else Pathfinding.strategic_retreat_route_from_edge(
 				state,
 				army
 			)
@@ -11801,7 +11955,7 @@ func _retreat(army: Army) -> void:
 
 ## 每日兜底清理：驱离「已定居（非在途、非交战）在无军事通行权敌城节点」的己方军队。
 ## 覆盖占领驱逐漏网（如占领瞬间军队在途、抵达后城已易主）与填线锚点易主后滞留等所有入口，
-## 使这类军队立即撤向最近友城，杜绝 LINE 军在敌城 IDLE 永久卡死（hostile_stationed 死锁）。
+## 使这类军队立即向首都纵深撤离，杜绝 LINE 军在敌城 IDLE 永久卡死。
 ## 只处理静止态（IDLE/RECOVERING/HOLDING 且不在边上、不在战斗），不打断行军/撤退/战斗。
 func _evict_stranded_hostile_armies() -> void:
 	for army in state.armies:
@@ -11859,6 +12013,7 @@ func _start_morale_retreat_from_city(
 			army.owner_nation,
 			state.cities[current_city].owner_nation
 		)
+		and not state.city_under_siege(current_city)
 	):
 		_start_recovering(army, current_city)
 		return
@@ -11869,7 +12024,7 @@ func _start_morale_retreat_from_city(
 			excluded_city_id
 		)
 		if army.diplomatic_repatriation
-		else Pathfinding.nearest_friendly_city(
+		else Pathfinding.strategic_retreat_city(
 			state,
 			army,
 			excluded_city_id
@@ -11886,9 +12041,12 @@ func _start_recovering(army: Army, city_id: int) -> void:
 	if (
 		city_id >= 0
 		and city_id < state.cities.size()
-		and not state.has_military_access(
-			army.owner_nation,
-			state.cities[city_id].owner_nation
+		and (
+			not state.has_military_access(
+				army.owner_nation,
+				state.cities[city_id].owner_nation
+			)
+			or state.city_under_siege(city_id)
 		)
 	):
 		_start_morale_retreat_from_city(
@@ -11962,7 +12120,7 @@ func _leave_holding(army: Army) -> void:
 	army.resume_holding_after_battle = false
 
 
-## 从无法加入的围城节点向最近友城强制撤离。army 已抵达目标城且当前边已释放；
+## 从无法加入的围城节点向首都纵深强制撤离。army 已抵达目标城且当前边已释放；
 ## RETREATING 保证它不受 AI 改写，并可立即离开敌城而不受友方方向容量阻塞。
 func _retreat_to_friendly(army: Army) -> void:
 	var arrived := army.move_to
@@ -11980,7 +12138,7 @@ func _retreat_to_friendly(army: Army) -> void:
 			army
 		)
 		if army.diplomatic_repatriation
-		else Pathfinding.nearest_friendly_city(
+		else Pathfinding.strategic_retreat_city(
 			state,
 			army
 		)
