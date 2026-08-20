@@ -1051,17 +1051,19 @@ func _test_world_generation() -> void:
 		"overlord_id": overlord_color_test,
 		"civil_war": false,
 	}
-	var expected_subject_color := MapRenderer.paper_nation_color(
+	var overlord_political_color := MapRenderer.paper_nation_color(
 		gs.nations[overlord_color_test].color
-	).darkened(MapRenderer.VASSAL_BRIGHTNESS_STEP)
-	expected_subject_color = GameState.normalize_nation_color(
-		expected_subject_color
 	)
 	var actual_subject_color := MapRenderer.political_map_color(
 		gs, subject_color_test
 	)
 	_check(
-		actual_subject_color.is_equal_approx(expected_subject_color),
+		absf(actual_subject_color.h - overlord_political_color.h) < 0.001
+		and _approx(
+			actual_subject_color.v,
+			overlord_political_color.v
+				* (1.0 - MapRenderer.VASSAL_BRIGHTNESS_STEP)
+		),
 		"政治疆域中藩王必须继承宗主色并降低约15%明度"
 	)
 	var faction_colors_valid := true
@@ -1078,11 +1080,12 @@ func _test_world_generation() -> void:
 		)
 		hardcoded_palette_valid = (
 			hardcoded_palette_valid
-			and palette_color.s >= GameState.NATION_COLOR_SATURATION_MIN
-			and palette_color.s <= GameState.NATION_COLOR_SATURATION_MAX
-			and palette_color.v >= GameState.NATION_COLOR_VALUE_MIN
-			and palette_color.v <= GameState.NATION_COLOR_VALUE_MAX
+			and palette_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.001
+			and palette_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.001
+			and palette_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.001
+			and palette_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.001
 		)
+	gs.suzerainty = original_suzerainty
 	for nation in gs.nations:
 		var palette_color := MapRenderer.political_map_color(gs, nation.id)
 		var counter_color := MapRenderer.command_marker_color(gs, nation.id)
@@ -1099,9 +1102,8 @@ func _test_world_generation() -> void:
 			)
 	_check(
 		faction_colors_valid and hardcoded_palette_valid,
-		"阵营、政治覆色和兵棋颜色必须落在HSV S60~70 / V60~80范围"
+		"主权阵营、政治覆色和兵棋颜色必须使用暗色高饱和硬编码调色板"
 	)
-	gs.suzerainty = original_suzerainty
 	var occupied_test_city := 0
 	var original_test_owner := gs.cities[occupied_test_city].owner_nation
 	gs.cities[occupied_test_city].owner_nation = (
@@ -1366,8 +1368,8 @@ func _test_river_transport() -> void:
 		"正式地图必须生成两条各有有效码头连接的主河道"
 	)
 	_check(
-		docks.size() >= 8 and docks.size() <= 22,
-		"码头应由原35座压缩到约一半，当前=%d" % docks.size()
+		docks.size() >= 12 and docks.size() <= 32,
+		"固定河程与低地加密后码头应保持12～32座，当前=%d" % docks.size()
 	)
 	var minimum_dock_spacing := INF
 	var minimum_dock_city_spacing := INF
@@ -8923,7 +8925,13 @@ func _test_manpower_pool_and_force_commands() -> void:
 	force_state.cities[force_capital].food_storage = 1000000
 	var forced_comprehensive_targets := 0
 	var forced_comprehensive_target_ids: Array[int] = []
+	var protected_force_sources := {}
 	for force_source in force_state.cities_of(force_nation_id):
+		if (
+			force_source.id == force_capital
+			or forced_comprehensive_target_ids.has(force_source.id)
+		):
+			continue
 		for force_neighbor in force_state.neighbors(force_source.id):
 			var force_edge := force_state.edge_of(
 				force_source.id,
@@ -8936,14 +8944,18 @@ func _test_manpower_pool_and_force_commands() -> void:
 				and not forced_comprehensive_target_ids.has(
 					force_neighbor
 				)
+				and force_neighbor != force_capital
+				and not protected_force_sources.has(force_neighbor)
 			):
-				force_state.cities[force_neighbor].owner_nation = 1
 				forced_comprehensive_targets += 1
 				forced_comprehensive_target_ids.append(force_neighbor)
+				protected_force_sources[force_source.id] = true
 				if forced_comprehensive_targets >= 4:
 					break
 		if forced_comprehensive_targets >= 4:
 			break
+	for force_target in forced_comprehensive_target_ids:
+		force_state.cities[force_target].owner_nation = 1
 	force_state.ownership_revision += 1
 	force_state.nations[
 		force_nation_id

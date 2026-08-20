@@ -32,6 +32,10 @@ const RIVER_COUNT: int = 2
 const RIVER_CHANNEL_DEVIATION_WEIGHT: float = 36.0
 const RIVER_DOCK_MIN_PER_RIVER: int = 2
 const RIVER_DOCK_FIXED_INTERVAL: float = 0.16
+const RIVER_DOCK_LOWLAND_DENSITY: float = 2.20
+const RIVER_DOCK_LOWLAND_ALTITUDE: float = 0.18
+const RIVER_DOCK_EASTERN_MIN_X: float = 0.55
+const RIVER_DOCK_EASTERN_MIN_PER_RIVER: int = 3
 const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
 const RIVER_CROSSING_MERGE_EPS: float = 0.0001
 const RIVER_DOCK_MIN_SPACING: float = 0.012
@@ -1786,6 +1790,14 @@ static func _build_river_paths(
 			):
 				continue
 			control_points.append(control)
+		if control_points.size() >= 2:
+			var mouth := _nearest_reachable_eastern_river_mouth(
+				grid, mask, image.get_width(), bounds,
+				control_points[control_points.size() - 2],
+				template[-1].y
+			)
+			if mouth != Vector2i(-1, -1):
+				control_points[-1] = mouth
 		if control_points.size() < 2:
 			continue
 		var path: Array[Vector2i] = []
@@ -1799,8 +1811,46 @@ static func _build_river_paths(
 				if path.is_empty() or point != path[-1]:
 					path.append(point)
 		if path.size() >= 2:
+			var mouth_point := path[-1]
+			var sea_point := Vector2i(mouth_point.x + 1, mouth_point.y)
+			if (
+				sea_point.x < image.get_width()
+				and mask[sea_point.y * image.get_width() + sea_point.x] == 0
+			):
+				path.append(sea_point)
 			paths.append(path)
 	return paths
+
+
+static func _nearest_reachable_eastern_river_mouth(
+	grid: AStarGrid2D, mask: PackedByteArray, image_width: int,
+	bounds: Rect2i, from_point: Vector2i, target_y: float
+) -> Vector2i:
+	var candidates: Array[Dictionary] = []
+	for y in range(bounds.position.y, bounds.end.y):
+		for x in range(bounds.position.x, bounds.end.x - 1):
+			var point := Vector2i(x, y)
+			if (
+				mask[y * image_width + x] == 0
+				or mask[y * image_width + x + 1] != 0
+			):
+				continue
+			var normalized := _normalized_map_point(point, bounds)
+			if normalized.x < 0.72:
+				continue
+			candidates.append({
+				"point": point,
+				"score": absf(normalized.y - target_y)
+					+ (1.0 - normalized.x) * 0.22,
+			})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["score"]) < float(b["score"])
+	)
+	for candidate in candidates:
+		var point: Vector2i = candidate["point"]
+		if not grid.get_id_path(from_point, point).is_empty():
+			return point
+	return Vector2i(-1, -1)
 
 
 static func _build_river_path_grid(
@@ -1915,6 +1965,12 @@ static func _find_river_docks(
 				bounds
 			)
 			for crossing in road_crossings:
+				var crossing_pixel: Vector2 = crossing["pixel_position"]
+				var crossing_x := clampi(int(round(crossing_pixel.x)), 0, image.get_width() - 1)
+				var crossing_y := clampi(int(round(crossing_pixel.y)), 0, image.get_height() - 1)
+				crossing["height"] = packed_altitude(
+					image.get_pixel(crossing_x, crossing_y)
+				)
 				candidates.append(crossing)
 				if not raw_crossings_by_road.has(road_index):
 					raw_crossings_by_road[road_index] = []
@@ -2094,7 +2150,16 @@ static func _select_dock_crossing_roads(
 				- candidates[candidate_index - 1]["position"]
 			)
 			delta.x *= map_aspect_ratio
-			total_distance += delta.length()
+			var altitude := float(candidates[candidate_index].get(
+				"height", 0.0
+			))
+			var lowland_ratio := 1.0 - smoothstep(
+				0.0, RIVER_DOCK_LOWLAND_ALTITUDE, altitude
+			)
+			var density_weight := lerpf(
+				1.0, RIVER_DOCK_LOWLAND_DENSITY, lowland_ratio
+			)
+			total_distance += delta.length() * density_weight
 			cumulative[candidate_index] = total_distance
 		var target_count := clampi(
 			int(floor(total_distance / RIVER_DOCK_FIXED_INTERVAL)) + 1,
@@ -2120,6 +2185,29 @@ static func _select_dock_crossing_roads(
 			if best_candidate >= 0:
 				chosen_candidates[best_candidate] = true
 				selected[int(candidates[best_candidate]["road_index"])] = true
+		var eastern: Array[Dictionary] = []
+		for candidate in candidates:
+			var position: Vector2 = candidate["position"]
+			if (
+				position.x >= RIVER_DOCK_EASTERN_MIN_X
+				and float(candidate.get("height", 1.0))
+					<= RIVER_DOCK_LOWLAND_ALTITUDE
+			):
+				eastern.append(candidate)
+		eastern.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return float(a["river_progress"]) < float(b["river_progress"])
+		)
+		var eastern_selected := 0
+		for candidate in eastern:
+			if selected.has(int(candidate["road_index"])):
+				eastern_selected += 1
+		for candidate in eastern:
+			if eastern_selected >= RIVER_DOCK_EASTERN_MIN_PER_RIVER:
+				break
+			var road_index := int(candidate["road_index"])
+			if not selected.has(road_index):
+				selected[road_index] = true
+				eastern_selected += 1
 	var node_count := 0
 	for road in roads:
 		node_count = maxi(

@@ -61,15 +61,15 @@ const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 10.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
 const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
-const NATION_COLOR_SATURATION_MIN: float = 0.60
-const NATION_COLOR_SATURATION_MAX: float = 0.70
-const NATION_COLOR_VALUE_MIN: float = 0.60
-const NATION_COLOR_VALUE_MAX: float = 0.80
+const NATION_COLOR_SATURATION_MIN: float = 0.74
+const NATION_COLOR_SATURATION_MAX: float = 0.84
+const NATION_COLOR_VALUE_MIN: float = 0.34
+const NATION_COLOR_VALUE_MAX: float = 0.46
 ## Hard-coded HSV palette. All procedural colors reuse the same bounded S/V
 ## bands; only hue changes for additional nations.
 const NATION_PALETTE_HUES := [0.000, 0.610, 0.350, 0.140]
-const NATION_PALETTE_SATURATIONS := [0.64, 0.61, 0.60, 0.64]
-const NATION_PALETTE_VALUES := [0.66, 0.64, 0.62, 0.66]
+const NATION_PALETTE_SATURATIONS := [0.82, 0.78, 0.76, 0.81]
+const NATION_PALETTE_VALUES := [0.44, 0.41, 0.37, 0.46]
 
 
 static func army_monthly_upkeep(troops: int) -> int:
@@ -523,8 +523,8 @@ func _generate_nations(
 					float(i) * 0.61803398875,
 					1.0
 				),
-				0.60 + float(i % 3) * 0.02,
-				0.60 + float(i % 4) * 0.02
+				0.76 + float(i % 3) * 0.03,
+				0.36 + float(i % 4) * 0.025
 			)
 		)
 		n.treasury_gold = 10000
@@ -1652,6 +1652,9 @@ func _connect_initial_nation_components() -> void:
 			var best_b := -1
 			var best_distance := INF
 			var best_crossings := PackedVector2Array()
+			var fallback_a := -1
+			var fallback_b := -1
+			var fallback_distance := INF
 			for city_a_value in components[0]:
 				var city_a := int(city_a_value)
 				for component_index in range(1, components.size()):
@@ -1662,6 +1665,16 @@ func _connect_initial_nation_components() -> void:
 							cities[city_b].map_position,
 							river_paths
 						)
+						var raw_delta := (
+							cities[city_a].map_position
+							- cities[city_b].map_position
+						)
+						raw_delta.x *= map_aspect_ratio
+						var raw_distance := raw_delta.length_squared()
+						if raw_distance < fallback_distance:
+							fallback_distance = raw_distance
+							fallback_a = city_a
+							fallback_b = city_b
 						if not _connector_crossings_have_spacing(crossings):
 							continue
 						var delta := (
@@ -1682,10 +1695,13 @@ func _connect_initial_nation_components() -> void:
 							best_a = city_a
 							best_b = city_b
 							best_crossings = crossings
-			assert(best_a >= 0 and best_b >= 0)
-			_add_initial_component_connector(
-				best_a, best_b, best_crossings, nation.id
-			)
+			if best_a >= 0 and best_b >= 0:
+				_add_initial_component_connector(
+					best_a, best_b, best_crossings, nation.id
+				)
+			else:
+				assert(fallback_a >= 0 and fallback_b >= 0)
+				_add_initial_water_connector(fallback_a, fallback_b)
 		assert(guard > 0, "初始国家交通组件连接必须收敛")
 
 
@@ -1696,6 +1712,12 @@ func _connector_crossings_have_spacing(
 		for city in cities:
 			var delta := crossings[crossing_index] - city.map_position
 			delta.x *= map_aspect_ratio
+			if (
+				city.is_dock
+				and delta.length()
+					< TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING
+			):
+				continue
 			if delta.length() < TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING:
 				return false
 		for other_index in range(crossing_index):
@@ -1771,6 +1793,14 @@ func _add_initial_component_connector(
 func _add_initial_connector_dock(
 	position: Vector2, owner_nation: int
 ) -> int:
+	for existing in cities:
+		if not existing.is_dock:
+			continue
+		var delta := position - existing.map_position
+		delta.x *= map_aspect_ratio
+		if delta.length() < TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING:
+			existing.owner_nation = owner_nation
+			return existing.id
 	var city := City.new()
 	city.id = cities.size()
 	city.coord = Vector2i(int(round(position.x * 1000.0)), int(round(position.y * 1000.0)))
@@ -1790,9 +1820,12 @@ func _add_initial_connector_dock(
 
 
 func _add_initial_landing_connector(city_a: int, city_b: int) -> void:
-	var edge := Edge.new()
-	edge.city_a = mini(city_a, city_b)
-	edge.city_b = maxi(city_a, city_b)
+	var edge := edge_of(city_a, city_b)
+	var is_new := edge == null
+	if edge == null:
+		edge = Edge.new()
+		edge.city_a = mini(city_a, city_b)
+		edge.city_b = maxi(city_a, city_b)
 	edge.kind = Edge.Kind.LANDING
 	edge.max_manpower = Edge.TERRAIN_STANDARD_MANPOWER
 	edge.base_max_manpower = edge.max_manpower
@@ -1803,12 +1836,42 @@ func _add_initial_landing_connector(city_a: int, city_b: int) -> void:
 		TerrainMapGenerator.metric_length_between(cities[city_a].map_position, cities[city_b].map_position, map_aspect_ratio)
 	)
 	edge.is_backbone = true
-	edges.append(edge)
-	edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
-	(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
-	(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
-	(adjacency[edge.city_a] as Array[int]).sort()
-	(adjacency[edge.city_b] as Array[int]).sort()
+	if is_new:
+		edges.append(edge)
+		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
+		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
+		(adjacency[edge.city_a] as Array[int]).sort()
+		(adjacency[edge.city_b] as Array[int]).sort()
+
+
+func _add_initial_water_connector(city_a: int, city_b: int) -> void:
+	var edge := edge_of(city_a, city_b)
+	var is_new := edge == null
+	if edge == null:
+		edge = Edge.new()
+		edge.city_a = mini(city_a, city_b)
+		edge.city_b = maxi(city_a, city_b)
+	edge.kind = Edge.Kind.SEA
+	edge.max_manpower = Edge.WATER_MANPOWER
+	edge.base_max_manpower = Edge.WATER_MANPOWER
+	edge.land_ratio = 0.0
+	edge.max_height_difference = absf(cities[city_a].terrain_height - cities[city_b].terrain_height)
+	edge.danger = 0.55
+	edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
+		TerrainMapGenerator.metric_length_between(cities[city_a].map_position, cities[city_b].map_position, map_aspect_ratio)
+	)
+	edge.is_backbone = true
+	edge.travel_time_multiplier = TerrainMapGenerator.RIVER_TRAVEL_TIME_MULTIPLIER
+	edge.supply_loss_multiplier = TerrainMapGenerator.RIVER_SUPPLY_LOSS_MULTIPLIER
+	edge.allows_holding = false
+	if is_new:
+		edges.append(edge)
+		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
+		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+		(adjacency[edge.city_b] as Array[int]).append(edge.city_a)
+		(adjacency[edge.city_a] as Array[int]).sort()
+		(adjacency[edge.city_b] as Array[int]).sort()
 
 
 func _add_edge(a: int, b: int) -> void:
@@ -3570,7 +3633,11 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 		0.0,
 		1.0
 	)
-	return normalize_nation_color(Color.from_hsv(h, s, v))
+	return Color.from_hsv(
+		h,
+		clampf(s + 0.10, NATION_COLOR_SATURATION_MIN, NATION_COLOR_SATURATION_MAX),
+		clampf(v * 0.85, 0.28, NATION_COLOR_VALUE_MAX)
+	)
 
 
 ## 为藩王选定首都作为「共享粮仓」的补给中继节点：首都本身零库存、不建独立粮仓，

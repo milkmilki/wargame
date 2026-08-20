@@ -1700,12 +1700,11 @@ static func political_map_color(
 		1.0 - VASSAL_BRIGHTNESS_STEP,
 		float(depth)
 	)
-	return GameState.normalize_nation_color(
-		result.darkened(clampf(
-			accumulated_darken,
-			0.0,
-			0.72
-		))
+	return Color.from_hsv(
+		result.h,
+		clampf(result.s + 0.03, GameState.NATION_COLOR_SATURATION_MIN, GameState.NATION_COLOR_SATURATION_MAX),
+		clampf(result.v * (1.0 - accumulated_darken), 0.24, GameState.NATION_COLOR_VALUE_MAX),
+		result.a
 	)
 
 
@@ -1715,9 +1714,7 @@ static func command_marker_color(
 	game_state: GameState,
 	nation_id: int
 ) -> Color:
-	return GameState.normalize_nation_color(
-		political_map_color(game_state, nation_id)
-	)
+	return political_map_color(game_state, nation_id)
 
 
 static func final_faction_visual_color(
@@ -1741,7 +1738,15 @@ static func final_faction_visual_color(
 				GameState.NATION_COLOR_VALUE_MAX
 			), result.a
 		)
-	return GameState.normalize_nation_color(result)
+	var minimum_value := (
+		0.24 if game_state.is_vassal(nation_id) else GameState.NATION_COLOR_VALUE_MIN
+	)
+	return Color.from_hsv(
+		result.h,
+		clampf(result.s, GameState.NATION_COLOR_SATURATION_MIN, GameState.NATION_COLOR_SATURATION_MAX),
+		clampf(result.v, minimum_value, GameState.NATION_COLOR_VALUE_MAX),
+		result.a
+	)
 
 
 static func build_province_boundary_segments(
@@ -2435,9 +2440,9 @@ func _draw_edges() -> void:
 		if not is_edge_visible(e):
 			continue
 		if e.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-			var river_color := Color(0.20, 0.45, 0.52)
+			var river_color := Color(0.010, 0.105, 0.165)
 			river_color = river_color.lerp(
-				Color(0.42, 0.25, 0.32),
+				Color(0.22, 0.018, 0.028),
 				danger * 0.45
 			)
 			draw_line(
@@ -2457,7 +2462,7 @@ func _draw_edges() -> void:
 			draw_dashed_line(
 				pa,
 				pb,
-					Color(0.62, 0.12, 0.09, 0.96),
+					Color(0.28, 0.018, 0.010, 0.96),
 				3.0 * _display_scale,
 				6.0 * _display_scale
 			)
@@ -2468,8 +2473,8 @@ func _draw_edges() -> void:
 			else 1
 		)
 		var road_colors: Array[Color] = [
-			Color(0.22, 0.17, 0.11),
-			Color(0.60, 0.42, 0.18),
+			Color(0.075, 0.025, 0.008),
+			Color(0.20, 0.060, 0.012),
 		]
 		var road_widths: Array[float] = [1.5, 3.5]
 		var col: Color = road_colors[road_level - 1]

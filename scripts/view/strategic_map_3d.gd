@@ -19,7 +19,7 @@ const MAP_IVORY := Color(0.94, 0.87, 0.69)
 const MAP_GOLD := Color(0.94, 0.67, 0.20)
 const MAP_ALERT := Color(0.84, 0.13, 0.055)
 const MAP_SUPPLY := Color(0.20, 0.62, 0.48)
-const MAP_COUNTER_MARK := Color(0.66, 0.59, 0.40)
+const MAP_COUNTER_MARK := Color(0.32, 0.25, 0.12)
 const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
 const CAMPAIGN_ARROW_GRID := Vector2i(24, 16)
 const ANTIQUE_OVERLAY_SHADER := preload(
@@ -688,10 +688,10 @@ func _build_road_mesh() -> void:
 		var color := _road_color_for_capacity(edge.max_manpower)
 		var width := _road_width_for_capacity(edge.max_manpower)
 		if edge.kind == Edge.Kind.LANDING:
-			color = Color(0.64, 0.46, 0.24, 0.88)
+			color = Color(0.25, 0.075, 0.020, 0.92)
 			width = 0.080
 		elif edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-			color = Color(0.20, 0.49, 0.55, 0.88)
+			color = Color(0.012, 0.105, 0.165, 0.94)
 			width = 0.090
 		var surface_tool := (
 			major_tool
@@ -731,10 +731,10 @@ func _road_width_for_capacity(capacity: int) -> float:
 
 func _road_color_for_capacity(capacity: int) -> Color:
 	if capacity >= Edge.WATER_MANPOWER:
-		return Color(0.20, 0.49, 0.55, 0.88)
+		return Color(0.012, 0.105, 0.165, 0.94)
 	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
-		return Color(0.64, 0.44, 0.22, 0.72)
-	return Color(0.28, 0.22, 0.16, 0.28)
+		return Color(0.20, 0.065, 0.018, 0.92)
+	return Color(0.085, 0.028, 0.010, 0.78)
 
 
 func _build_river_mesh() -> void:
@@ -747,7 +747,7 @@ func _build_river_mesh() -> void:
 				river[index],
 				river[index + 1],
 				0.075,
-				Color(0.09, 0.42, 0.52, 0.78),
+				Color(0.008, 0.095, 0.165, 0.96),
 				0.11
 			)
 	_rivers.mesh = surface_tool.commit()
