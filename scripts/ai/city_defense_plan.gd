@@ -44,6 +44,7 @@ var line_city_slots: int = 0
 var line_critical_city_slots: int = 0
 var line_edge_slots: int = 0
 var vassal_main_reserve_cities: Array[int] = []
+var main_reserve_cities: Array[int] = []
 var assigned_city_by_army: Dictionary = {} ## army.id -> city_id
 var assigned_armies_by_city: Dictionary = {} ## city_id -> Array[army.id]
 var assigned_posture_by_army: Dictionary = {} ## army.id -> Posture
@@ -201,6 +202,75 @@ func vassal_main_reserve_city_count() -> int:
 	return vassal_main_reserve_cities.size()
 
 
+func main_reserve_target_group_count() -> int:
+	return maxi(
+		1,
+		int(ceil(
+			float(primary_frontline_cities.size())
+				/ float(
+					BattleGroup.MAX_LIGHT_ARMIES
+						+ BattleGroup.MAX_HEAVY_ARMIES
+				)
+		))
+	)
+
+
+## 是否仍有未达到最低屏障的一线城市。重点城市纵深增援和攻势抽调共用
+## 这一判断，保证国家先形成连续战线，再向单个高价值城市叠加兵力。
+func has_uncovered_frontline_minimum(
+	coordinator: ArmyCoordinator,
+	ignored_city: int = -1
+) -> bool:
+	var city_ids := primary_frontline_cities.keys()
+	EquivariantOrder.sort_city_ids(
+		city_ids,
+		view.state,
+		view.nation_id
+	)
+	for city_id_value in city_ids:
+		var city_id := int(city_id_value)
+		if city_id == ignored_city:
+			continue
+		if (
+			_mobile_city_coverage(city_id, coordinator)
+				< _frontline_minimum_at(city_id)
+		):
+			return true
+	return false
+
+
+## 已有明确防区但仍堵在出发节点的军队。军制层用它作为部署流水线背压：
+## 先让既有编制离开征兵枢纽，再创建下一支，避免生产速度超过道路吞吐。
+func pending_deployment_army_count(
+	main_battle_role: int = -1
+) -> int:
+	var result := 0
+	for army in view.friendly_armies:
+		if (
+			army.size <= 0
+			or army.state != Army.State.IDLE
+			or army.ai_action != ActionCandidate.Kind.CREATE_ARMY
+			or not assigned_city_by_army.has(army.id)
+		):
+			continue
+		if (
+			main_battle_role >= 0
+			and army.is_main_battle_role()
+				!= (main_battle_role == 1)
+		):
+			continue
+		var target_city := int(assigned_city_by_army[army.id])
+		var target_posture := int(assigned_posture_by_army.get(
+			army.id, Posture.CITY
+		))
+		if (
+			army.location_city != target_city
+			or target_posture == Posture.EDGE
+		):
+			result += 1
+	return result
+
+
 func relief_required_at(city_id: int) -> bool:
 	return float(relief_need.get(city_id, 0.0)) > 0.0
 
@@ -244,6 +314,21 @@ func can_redeploy(
 		view.state.uses_heightmap
 		and army.is_main_battle_role()
 	):
+		if (
+			army.state == Army.State.IDLE
+			and primary_frontline_cities.has(
+				army.location_city
+			)
+		):
+			return (
+				_mobile_city_coverage(
+					army.location_city,
+					coordinator,
+					army
+				) >= _frontline_minimum_at(
+					army.location_city
+				)
+			)
 		return true
 	if view.state.uses_heightmap:
 		return false
@@ -833,6 +918,7 @@ func _assign_role_based_defense() -> void:
 	vassal_main_reserve_cities = (
 		_build_vassal_main_reserve_cities()
 	)
+	main_reserve_cities = _build_main_reserve_cities()
 	var line_armies: Array[Army] = []
 	for army in view.friendly_armies:
 		if (
@@ -877,12 +963,12 @@ func _assign_role_based_defense() -> void:
 		line_armies.size()
 	)
 	if line_armies.is_empty():
-		_assign_vassal_main_reserves()
+		_assign_main_reserves()
 		return
 	if defense_slots.is_empty():
 		for army in line_armies:
 			army.clear_line_assignment()
-		_assign_vassal_main_reserves()
+		_assign_main_reserves()
 		return
 	var eligible_line_armies := line_armies.duplicate()
 	# 只激活当前兵力能覆盖的最高优先级槽位。持久 Assignment 只能在该前缀内
@@ -992,7 +1078,7 @@ func _assign_role_based_defense() -> void:
 		if not assigned_city_by_army.has(army.id):
 			_clear_army_from_frontier_sector(army)
 			army.clear_line_assignment()
-	_assign_vassal_main_reserves()
+	_assign_main_reserves()
 
 
 func _build_vassal_main_reserve_cities() -> Array[int]:
@@ -1017,12 +1103,28 @@ func _build_vassal_main_reserve_cities() -> Array[int]:
 	return result
 
 
-## 藩王 MAIN 是完整战团编制的封国内线预备队。紧急城市优先于平时重点城市，
-## 同一战团全部成员共享同一驻防目标，避免把持久战团拆散成多个独立驻军。
-func _assign_vassal_main_reserves() -> void:
-	if vassal_main_reserve_cities.is_empty():
+func _build_main_reserve_cities() -> Array[int]:
+	var strategic: Array[int] = []
+	var remaining: Array[int] = []
+	for city in view.friendly_cities:
+		if _is_strategic_must_hold_city(city.id):
+			strategic.append(city.id)
+		else:
+			remaining.append(city.id)
+	_sort_role_city_ids(strategic)
+	_sort_role_city_ids(remaining)
+	strategic.append_array(remaining)
+	return strategic
+
+
+## MAIN 以完整战团作为国家级机动预备队。先补没有 LINE 城市槽的一线，
+## 再按前线、战略纵深、普通纵深逐城展开；一个目标先接收一个战团。这样战时
+## 动员遗留的多个战团不会永久堆在首都/征兵枢纽，紧急大会战的额外兵力则由
+## 按真实战力缺口运行的逐日梯队负责。
+func _assign_main_reserves() -> void:
+	if main_reserve_cities.is_empty():
 		return
-	var target_cities: Array = []
+	var target_cities: Array[int] = []
 	var relief_cities: Array = []
 	var urgent_cities: Array = []
 	for city in view.friendly_cities:
@@ -1034,7 +1136,33 @@ func _assign_vassal_main_reserves() -> void:
 	_sort_role_city_ids(urgent_cities)
 	target_cities.append_array(relief_cities)
 	target_cities.append_array(urgent_cities)
-	for city_id in vassal_main_reserve_cities:
+	var frontline_ids := primary_frontline_cities.keys()
+	_sort_role_city_ids(frontline_ids)
+	# LINE 城市槽尚未建立的缺口拥有最高常态部署优先级。
+	for city_id_value in frontline_ids:
+		var city_id := int(city_id_value)
+		var has_line_city_slot := false
+		for army_id_value in assigned_armies_by_city.get(
+			city_id, [] as Array[int]
+		):
+			if int(assigned_posture_by_army.get(
+				int(army_id_value), Posture.NONE
+			)) == Posture.CITY:
+				has_line_city_slot = true
+				break
+		if not has_line_city_slot and not target_cities.has(city_id):
+			target_cities.append(city_id)
+	for city_id_value in frontline_ids:
+		var city_id := int(city_id_value)
+		if not target_cities.has(city_id):
+			target_cities.append(city_id)
+	var extended_frontline_ids := frontline_cities.keys()
+	_sort_role_city_ids(extended_frontline_ids)
+	for city_id_value in extended_frontline_ids:
+		var city_id := int(city_id_value)
+		if not target_cities.has(city_id):
+			target_cities.append(city_id)
+	for city_id in main_reserve_cities:
 		if not target_cities.has(city_id):
 			target_cities.append(city_id)
 	if target_cities.is_empty():
@@ -1907,7 +2035,7 @@ func _assigned_defense_candidate(
 			ActionCandidate.Kind.RETREAT,
 			ROLE_DEPLOYMENT_SCORE,
 			(
-				"藩王主战预备队：撤回重点城市%d"
+				"国家主战预备队：撤回防区城市%d"
 				if army.is_main_battle_role()
 				else "填线部署：回到国界城市%d"
 			) % city_id,
@@ -1939,7 +2067,7 @@ func _assigned_defense_candidate(
 			ActionCandidate.Kind.NONE,
 			ROLE_DEPLOYMENT_SCORE,
 			(
-				"藩王主战预备队：驻守重点城市%d"
+				"国家主战预备队：驻守防区城市%d"
 				if army.is_main_battle_role()
 				else "填线部署：留守城市%d"
 			) % city_id,
@@ -1949,7 +2077,7 @@ func _assigned_defense_candidate(
 		ActionCandidate.Kind.REINFORCE,
 		ROLE_DEPLOYMENT_SCORE,
 		(
-			"藩王主战预备队：调往重点城市%d"
+			"国家主战预备队：调往防区城市%d"
 			if army.is_main_battle_role()
 			else (
 				"填线部署：5000编制军调往国界边锚点城市%d"
@@ -2451,11 +2579,36 @@ func _city_coverage(
 			city_id,
 			excluded
 		)
-		+ coordinator.city_defense_power_reserved(city_id)
+		+ coordinator.city_defense_power_reserved(
+			city_id,
+			excluded
+		)
 		+ ArmyPower.city_defense(
 			view.state.cities[city_id]
 		)
 	)
+
+
+func _mobile_city_coverage(
+	city_id: int,
+	coordinator: ArmyCoordinator,
+	excluded: Army = null
+) -> float:
+	return (
+		UtilityAI.stationed_power_at(
+			view,
+			city_id,
+			excluded
+		)
+		+ coordinator.city_defense_power_reserved(
+			city_id,
+			excluded
+		)
+	)
+
+
+func _frontline_minimum_at(city_id: int) -> float:
+	return FRONTIER_SCREEN_POWER
 
 
 func _effective_coverage(

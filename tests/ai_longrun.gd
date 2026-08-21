@@ -31,6 +31,12 @@ func _init() -> void:
 			== "1"
 	)
 	var selected_seeds := SEEDS.duplicate()
+	var selected_days := DAYS
+	var days_override := OS.get_environment(
+		"AI_LONGRUN_DAYS"
+	)
+	if not days_override.is_empty():
+		selected_days = maxi(int(days_override), 1)
 	var seed_override := OS.get_environment(
 		"AI_LONGRUN_SEED"
 	)
@@ -67,7 +73,7 @@ func _init() -> void:
 		var hostile_stationed_events := 0
 		var hostile_stationed_log: Array[String] = []
 		var seed_start := Time.get_ticks_msec()
-		for _day in range(DAYS):
+		for _day in range(selected_days):
 			if state.winner != -1:
 				break
 			simulation._advance_day()
@@ -254,11 +260,17 @@ func _init() -> void:
 						):
 							continue
 						stack_armies.append(
-							"%d:%d:%d:%s"
+							"%d:S%d:A%d:R%d:G%d:L%d/%d/%d:T%d:%s"
 							% [
 								stacked_army.max_size,
 								stacked_army.state,
 								stacked_army.ai_action,
+								stacked_army.strategic_role,
+								stacked_army.battle_group_id,
+								stacked_army.line_assignment_city,
+								stacked_army.line_assignment_posture,
+								stacked_army.line_assignment_edge,
+								stacked_army.ai_target_city,
 								stacked_army.ai_order_reason,
 							]
 						)

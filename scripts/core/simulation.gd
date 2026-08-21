@@ -4634,33 +4634,7 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	for nation_id in managed_nations:
 		var context: Dictionary = military_contexts[nation_id]
 		var view: AiWorldView = context["view"]
-		var coordinator := ArmyCoordinator.new()
-		for army in view.friendly_armies:
-			if (
-				army.ai_target_city != -1
-				and army.state in [
-					Army.State.MOVING,
-					Army.State.FIGHTING,
-				]
-			):
-				coordinator.reserve(army.ai_target_city, army)
-			elif army.state == Army.State.HOLDING:
-				var friendly_endpoint := army.move_from
-				if not state.has_military_access(
-					nation_id,
-					state.cities[friendly_endpoint].owner_nation
-				):
-					friendly_endpoint = army.move_to
-				var other_endpoint := (
-					army.move_to
-					if friendly_endpoint == army.move_from
-					else army.move_from
-				)
-				coordinator.reserve_edge(
-					friendly_endpoint,
-					other_endpoint,
-					army
-				)
+		var coordinator := ArmyCoordinator.from_view(view)
 		coordinators[nation_id] = coordinator
 		defense_plans[nation_id] = context["defense_plan"]
 	for nation_id in managed_nations:
@@ -5462,10 +5436,31 @@ func _ai_manage_force_structure(
 	var food_growth_budget := _food_growth_manpower_budget(
 		food_report
 	)
+	# 现存战团数量是历史结果，不能反向成为永久最低编制。战争动员结束后，
+	# 只按当前战区需求保留战团；否则每轮战争创建的战团会不断抬高缩编下限。
+	var baseline_group_count := (
+		defense_plan.main_reserve_target_group_count()
+		if wars.is_empty()
+		else maxi(nation.battle_groups.size(), 1)
+	)
 	var force_structure_target := (
 		total_line_target
-		+ nation.battle_groups.size() * 3
+		+ baseline_group_count
+			* (
+				BattleGroup.MAX_LIGHT_ARMIES
+				+ BattleGroup.MAX_HEAVY_ARMIES
+			)
 	)
+	if (
+		wars.is_empty()
+		and nation.war_preparation_target_nation < 0
+		and _demobilize_excess_peacetime_battle_group(
+			view,
+			threat,
+			baseline_group_count
+		)
+	):
+		return true
 	if not emergency_recruitment:
 		if food_pressure and _demobilize_for_food_security(
 			view,
@@ -5506,9 +5501,8 @@ func _ai_manage_force_structure(
 		# 一个重点驻防城市对应一个完整 MAIN 战团需求。城市集合由
 		# CityDefensePlan 的战略价值/补给单一派生。与 LINE 使用归一化
 		# 缺口竞争征兵资源，避免高边数封地永远补不出第一支 MAIN。
-		var target_group_count := maxi(
-			defense_plan.vassal_main_reserve_city_count(),
-			1
+		var target_group_count := (
+			defense_plan.main_reserve_target_group_count()
 		)
 		var target_main_armies := (
 			target_group_count * (
@@ -5567,9 +5561,10 @@ func _ai_manage_force_structure(
 			if active_offense
 			else 1
 		)
-		var target_group_count := maxi(
-			nation.battle_groups.size(),
-			required_group_count
+		var target_group_count := (
+			maxi(nation.battle_groups.size(), required_group_count)
+			if active_offense
+			else defense_plan.main_reserve_target_group_count()
 		)
 		var target_main_armies := maxi(
 			target_group_count * (
@@ -5626,6 +5621,24 @@ func _ai_manage_force_structure(
 	var missing_formation_size := int(
 		recruitment.get("size", 0)
 	)
+	# 防区命令与征兵共享同一条部署流水线。若已有军队获得远端防区却仍
+	# 因首段道路容量留在征兵节点，本轮停止继续生产；否则枢纽会每轮多
+	# 一支新军，而前线仍旧空缺。紧急动员也必须服从真实道路吞吐。
+	if (
+		missing_formation_size > 0
+		and (
+			(
+				bool(recruitment.get("create_group", false))
+				and defense_plan.pending_deployment_army_count(1) > 0
+			)
+			or (
+				int(recruitment.get("group_id", -1)) < 0
+				and not bool(recruitment.get("create_group", false))
+				and defense_plan.pending_deployment_army_count(0) > 0
+			)
+		)
+	):
+		return false
 	var creation_cost := (
 		GameState.formation_creation_gold_cost(
 			missing_formation_size
@@ -5692,14 +5705,106 @@ func _ai_manage_force_structure(
 					"战争生存动员%d编制"
 					% missing_formation_size
 				)
-			return _create_army_for_nation(
+			var battle_group_id := int(
+				recruitment.get("group_id", -1)
+			)
+			var created_group: BattleGroup = null
+			if bool(recruitment.get("create_group", false)):
+				created_group = state.create_battle_group(
+					view.nation_id
+				)
+				battle_group_id = created_group.id
+				recruitment_reason = (
+					"战争生存动员%d编制：创建战团%d并补充第一支轻军"
+					% [missing_formation_size, battle_group_id]
+					if emergency_recruitment
+					else "创建战团%d并补充第一支轻军"
+						% battle_group_id
+				)
+			var created_army := _create_army_for_nation(
 				view.nation_id,
 				creation_site,
 				missing_formation_size,
 				recruitment_reason,
 				small_nation_survival,
-				int(recruitment.get("group_id", -1))
-			) != null
+				battle_group_id
+			)
+			if created_army == null and created_group != null:
+				nation.battle_groups.erase(created_group)
+			return created_army != null
+	return false
+
+
+## 和平时期战团数量由当前防区规模决定，而不是由历次战争动员的历史峰值决定。
+## 一次撤销一个完整的、已回到安全本土的多余战团，并让该国下一日继续重算；
+## 保持战团原子性，避免只裁重军后留下多个残缺战团继续挤在重点城市。
+func _demobilize_excess_peacetime_battle_group(
+	view: AiWorldView,
+	threat: ThreatField,
+	target_group_count: int
+) -> bool:
+	var nation := state.nations[view.nation_id]
+	if nation.battle_groups.size() <= target_group_count:
+		return false
+	var groups: Array[BattleGroup] = (
+		nation.battle_groups.duplicate()
+	)
+	# 后组建的战争动员战团优先复员；同日建立时组号仍是国家内部的
+	# 持久编制序，不读取军队数组顺序。
+	groups.sort_custom(func(a: BattleGroup, b: BattleGroup) -> bool:
+		if a.created_day != b.created_day:
+			return a.created_day > b.created_day
+		return a.id > b.id
+	)
+	for group in groups:
+		var members := state.battle_group_members(
+			view.nation_id,
+			group.id
+		)
+		if members.is_empty():
+			nation.battle_groups.erase(group)
+			_ai_forced_nations[view.nation_id] = true
+			return true
+		var safe_to_demobilize := true
+		for army in members:
+			if (
+				army.state not in [
+					Army.State.IDLE,
+					Army.State.RECOVERING,
+				]
+				or army.location_city < 0
+				or state.cities[army.location_city].owner_nation
+					!= view.nation_id
+				or state.city_under_siege(army.location_city)
+				or threat.threat_at(army.location_city)
+					>= ArmyPower.effective(army)
+			):
+				safe_to_demobilize = false
+				break
+		if not safe_to_demobilize:
+			continue
+		var returned := 0
+		for army in members.duplicate():
+			returned += army.size
+			nation.campaign_preparation_assignments.erase(army.id)
+			nation.campaign_attack_assignments.erase(army.id)
+			nation.campaign_attack_echelons.erase(army.id)
+			nation.campaign_launched_armies.erase(army.id)
+			_disband_army(
+				army,
+				"和平防区复员：撤销多余战团%d" % group.id
+			)
+		nation.battle_groups.erase(group)
+		nation.ai_last_force_action = (
+			ActionCandidate.Kind.DISBAND_ARMY
+		)
+		nation.ai_last_force_day = state.day
+		nation.ai_last_force_reason = (
+			"和平防区复员：战团%d返还%d人，当前防区保留%d个战团"
+			% [group.id, returned, target_group_count]
+		)
+		_ai_forced_nations[view.nation_id] = true
+		return true
 	return false
 
 
@@ -5736,11 +5841,11 @@ func _next_battle_group_recruitment(
 			}
 	if not allow_new_group:
 		return {}
-	var group := state.create_battle_group(nation_id)
 	return {
 		"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-		"group_id": group.id,
-		"reason": "创建战团%d并补充第一支轻军" % group.id,
+		"group_id": -1,
+		"create_group": true,
+		"reason": "创建新战团并补充第一支轻军",
 	}
 
 
@@ -8830,35 +8935,9 @@ func _advance_priority_city_defense(
 ) -> void:
 	var city_id := siege.city.id
 	var nation_id := siege.city.owner_nation
-	var coordinator := ArmyCoordinator.new()
-	for army in state.armies:
-		if army.owner_nation != nation_id or army.size <= 0:
-			continue
-		if (
-			army.ai_target_city >= 0
-			and army.state in [
-				Army.State.MOVING,
-				Army.State.FIGHTING,
-			]
-		):
-			coordinator.reserve(army.ai_target_city, army)
-		elif army.state == Army.State.HOLDING and army.move_to != -1:
-			var friendly_endpoint := army.move_from
-			if not state.has_military_access(
-				nation_id,
-				state.cities[friendly_endpoint].owner_nation
-			):
-				friendly_endpoint = army.move_to
-			var other_endpoint := (
-				army.move_to
-				if friendly_endpoint == army.move_from
-				else army.move_from
-			)
-			coordinator.reserve_edge(
-				friendly_endpoint,
-				other_endpoint,
-				army
-			)
+	var coordinator := ArmyCoordinator.from_view(
+		defense_plan.view
+	)
 	var attack_power := 0.0
 	for army in siege.side_a:
 		if army.size > 0:
@@ -8867,23 +8946,32 @@ func _advance_priority_city_defense(
 	for army in siege.side_b:
 		if army.size > 0 and army.owner_nation == nation_id:
 			committed_power += ArmyPower.effective(army)
-	for army in state.armies:
-		if (
-			army.owner_nation == nation_id
-			and army.size > 0
-			and army.state == Army.State.MOVING
-			and army.ai_action in [
-				ActionCandidate.Kind.REINFORCE,
-				ActionCandidate.Kind.RETREAT,
-			]
-			and army.ai_target_city == city_id
-		):
-			committed_power += ArmyPower.effective(army)
+	# 在途与既有战斗任务已由统一 coordinator 计入；排除本城战斗军，
+	# 因为它们刚刚由 siege.side_b 统计过。
+	for army_id in coordinator.city_defense_army_ids(city_id):
+		var reserved_army: Army = null
+		for candidate_army in defense_plan.view.friendly_armies:
+			if candidate_army.id == int(army_id):
+				reserved_army = candidate_army
+				break
+		if reserved_army == null or reserved_army.battle_id == siege.id:
+			continue
+		committed_power += ArmyPower.effective(reserved_army)
 	var required_power := maxf(
 		attack_power,
 		defense_plan.requirement_at(city_id)
 	)
 	if committed_power >= required_power:
+		return
+	# 城市已处于本地均势而其他前线仍未形成最低屏障时，不再为其叠加
+	# 纵深预备队。若本城仍实际劣势，则保留紧急解围权。
+	if (
+		committed_power >= attack_power
+		and defense_plan.has_uncovered_frontline_minimum(
+			coordinator,
+			city_id
+		)
+	):
 		return
 	var candidates: Array[Dictionary] = []
 	for army in state.armies:
@@ -9803,6 +9891,9 @@ func _create_army_for_nation(
 			creation_cost,
 		]
 	)
+	# 当前国家计划基于建军前的冻结军队快照；让该国下一日立即重建防区，
+	# 新编制就会先获得展开命令，而不是在枢纽等待完整 AI 周期。
+	_ai_forced_nations[nation_id] = true
 	nation.ai_last_force_action = ActionCandidate.Kind.CREATE_ARMY
 	nation.ai_last_force_day = state.day
 	nation.ai_last_force_reason = army.ai_order_reason

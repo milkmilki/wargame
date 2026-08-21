@@ -7369,6 +7369,94 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			and assigned_light_orders == 1,
 		"单个常态防区最多一支5000填线军，不得再把多军和15000攻势军堆入同城"
 	)
+
+	var reserve_spread_state := GameState.new()
+	reserve_spread_state.generate_grid_world(70031)
+	reserve_spread_state.uses_heightmap = true
+	reserve_spread_state.armies.clear()
+	reserve_spread_state.nations[0].battle_groups.clear()
+	reserve_spread_state.nations[0].next_battle_group_id = 0
+	for spread_city in reserve_spread_state.cities:
+		spread_city.owner_nation = 0
+		spread_city.is_capital = false
+		spread_city.has_warehouse = false
+		spread_city.is_food_hub = false
+		spread_city.is_manpower_hub = false
+	reserve_spread_state.cities[2].owner_nation = 1
+	reserve_spread_state.set_diplomatic_relation(
+		0,
+		1,
+		GameState.DiplomaticRelation.WAR
+	)
+	var spread_armies: Array[Army] = []
+	for spread_index in range(3):
+		var spread_group := reserve_spread_state.create_battle_group(0)
+		var spread_army := _make_army(960 + spread_index, 0, 15000, 10, 10)
+		spread_army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		spread_army.location_city = 0
+		spread_army.move_from = 0
+		spread_army.strategic_role = Army.StrategicRole.MAIN
+		spread_army.battle_group_id = spread_group.id
+		spread_army.ai_action = ActionCandidate.Kind.CREATE_ARMY
+		reserve_spread_state.armies.append(spread_army)
+		spread_armies.append(spread_army)
+	var reserve_spread_view := AiWorldView.build(
+		reserve_spread_state,
+		0
+	)
+	var reserve_spread_plan := CityDefensePlan.build(
+		reserve_spread_view,
+		StrategicMapSnapshot.build(reserve_spread_view),
+		ThreatField.build(reserve_spread_view)
+	)
+	var spread_targets := {}
+	var all_spread_to_frontline := true
+	for spread_army in spread_armies:
+		var spread_target := reserve_spread_plan.assigned_city_for(
+			spread_army
+		)
+		spread_targets[spread_target] = true
+		all_spread_to_frontline = (
+			all_spread_to_frontline
+			and reserve_spread_plan.primary_frontline_cities.has(
+				spread_target
+			)
+		)
+	_check(
+		reserve_spread_plan.primary_frontline_cities.size() >= 3
+			and spread_targets.size() == 3
+			and all_spread_to_frontline,
+		(
+			"LINE 未铺满时三个 MAIN 战团必须先展开到三个不同前线城市，"
+			+ "不得堆在同一重点城市"
+		)
+	)
+	_check(
+		reserve_spread_plan.pending_deployment_army_count() == 3,
+		"已分配远端前线但尚未离开征兵枢纽的战团必须形成征兵背压"
+	)
+	var spread_sim := Simulation.new()
+	spread_sim.setup(reserve_spread_state)
+	var spread_manpower_before := (
+		reserve_spread_state.nations[0].manpower_pool
+	)
+	var demobilized_group_size := spread_armies[2].size
+	_check(
+		spread_sim._demobilize_excess_peacetime_battle_group(
+			reserve_spread_view,
+			ThreatField.build(reserve_spread_view),
+			1
+		)
+			and reserve_spread_state.nations[0].battle_groups.size() == 2
+			and reserve_spread_state.nations[0].manpower_pool
+				== spread_manpower_before + demobilized_group_size
+			and not reserve_spread_state.armies.has(spread_armies[2]),
+		(
+			"和平后必须按当前防区规模原子复员最新的多余战团，"
+			+ "不能让战争动员编制永久挤在重点城市"
+		)
+	)
+	spread_sim.free()
 	assignment_plan.assigned_city_by_army = {
 		light_guard.id: 1,
 		reserve_guard.id: 1,
@@ -7924,6 +8012,39 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			threatened_city
 		) == 0.0,
 		"驻边预留必须只覆盖指定方向，不能冒充驻城通用守军"
+	)
+	var reservation_power := ArmyPower.effective(first_holder)
+	edge_reservation.reserve_edge(
+		threatened_city,
+		10,
+		first_holder
+	)
+	_check(
+		_approx(
+			edge_reservation.power_reserved(threatened_city),
+			reservation_power
+		)
+		and _approx(
+			edge_reservation.edge_defense_power_reserved(
+				threatened_city,
+				10
+			),
+			reservation_power
+		),
+		"统一覆盖账本重复看见同一驻边军时必须幂等，不能重复累计战力"
+	)
+	edge_reservation.reserve(17, first_holder)
+	_check(
+		edge_reservation.power_reserved(threatened_city) == 0.0
+			and edge_reservation.edge_defense_power_reserved(
+				threatened_city,
+				10
+			) == 0.0
+			and _approx(
+				edge_reservation.city_defense_power_reserved(17),
+				reservation_power
+			),
+		"同一军获得新目标时覆盖必须原子迁移，旧城市和旧边不得残留幽灵守军"
 	)
 	var defense_coordinator := ArmyCoordinator.new()
 	defense_coordinator.reserve(
@@ -13473,9 +13594,12 @@ func _test_diplomacy_state_and_ai() -> void:
 			and promoted_light != null
 			and role_plan.assigned_city_for(
 				promoted_light
-			) == -1
+			) >= 0
 			and line_redeploy_blocked,
-		"战团内两支5000轻军必须承担主战职能，且不得占用填线防区槽"
+		(
+			"战团内两支5000轻军必须承担主战职能，并作为国家级预备队"
+			+ "独立展开；不得占用 LINE 防区槽"
+		)
 	)
 	role_sim._ai_assign_targets()
 	var line_contract_respected := true
