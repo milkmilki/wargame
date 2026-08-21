@@ -41,10 +41,6 @@ const ANTIQUE_OVERLAY_SHADER := preload(
 const WATER_SHADER := preload(
 	"res://scripts/view/terrain/strategic_water.gdshader"
 )
-const POLITICAL_BOUNDARY_SHADER := preload(
-	"res://scripts/view/terrain/political_boundaries.gdshader"
-)
-
 var state: GameState
 var sim: Simulation
 var overlay: MapRenderer
@@ -82,7 +78,12 @@ var _city_labels: Array[Label3D] = []
 var _nation_labels: Array[Label3D] = []
 var _battle_labels: Array[Label3D] = []
 var _province_texture: ImageTexture
-var _political_line_texture: ImageTexture
+var _diplomatic_boundary_texture: ImageTexture
+var _province_boundary_texture: ImageTexture
+var _coast_boundary_texture: ImageTexture
+var _political_fill_signature := PackedInt64Array()
+var _boundary_topology := {}
+var _province_topology_ids := PackedInt32Array()
 var _map_font: Font
 
 var _world_size := Vector2(BASE_WORLD_SPAN, BASE_WORLD_SPAN)
@@ -128,6 +129,9 @@ func setup(
 	_last_day = -1
 	_last_ownership_revision = -1
 	_last_diplomacy_revision = -1
+	_political_fill_signature = PackedInt64Array()
+	_boundary_topology = {}
+	_province_topology_ids = PackedInt32Array()
 	_last_road_network_revision = -1
 	set_process(true)
 	set_process_unhandled_input(true)
@@ -536,6 +540,38 @@ func _apply_camera_transform() -> void:
 		_camera_distance * sin(angle)
 	)
 	_camera.look_at(focus, Vector3(0.0, 0.0, -1.0))
+	_update_boundary_lod()
+
+
+func _update_boundary_lod() -> void:
+	if _terrain == null:
+		return
+	# EU4-style density hierarchy: local province borders are a close/mid zoom
+	# aid and fade from the overview. Coast and country borders remain legible.
+	var lod := boundary_lod_strengths(_camera_distance)
+	var province_alpha := float(lod["province"])
+	var diplomatic_alpha := float(lod["diplomatic"])
+	_terrain.set_boundary_lod(province_alpha, 1.0, diplomatic_alpha)
+
+
+static func boundary_lod_strengths(camera_distance: float) -> Dictionary:
+	var province_alpha := 1.0
+	if camera_distance > 40.0 and camera_distance < 58.0:
+		province_alpha = lerpf(
+			1.0, 0.55, smoothstep(40.0, 58.0, camera_distance)
+		)
+	elif camera_distance >= 58.0:
+		province_alpha = 0.55 * (
+			1.0 - smoothstep(58.0, 72.0, camera_distance)
+		)
+	var diplomatic_alpha := lerpf(
+		1.0, 0.86, smoothstep(72.0, 92.0, camera_distance)
+	)
+	return {
+		"province": clampf(province_alpha, 0.0, 1.0),
+		"coast": 1.0,
+		"diplomatic": clampf(diplomatic_alpha, 0.0, 1.0),
+	}
 
 
 func _camera_normal_angle_degrees() -> float:
@@ -647,6 +683,8 @@ func _on_terrain_ready() -> void:
 	_update_battle_instances()
 	_update_campaign_mesh()
 	_rebuild_nation_labels()
+	_last_ownership_revision = state.ownership_revision
+	_last_diplomacy_revision = state.diplomacy_revision
 	_last_road_network_revision = state.road_network_revision
 
 
@@ -664,19 +702,76 @@ func set_elevation_shadow_strength(strength: float) -> void:
 func _update_province_visuals() -> void:
 	if _terrain == null or _terrain.land_cell_count() <= 0:
 		return
-	var canvas := MapRenderer.build_political_canvas_images(state)
-	var image: Image = canvas["terrain_fill"]
-	var line_image: Image = canvas["lines"]
-	if image != null and not image.is_empty():
-		_province_texture = ImageTexture.create_from_image(image)
-		_terrain.set_province_texture(_province_texture)
-		_political_line_texture = ImageTexture.create_from_image(line_image)
-		_terrain.set_political_line_texture(_political_line_texture)
+	var topology_changed := (
+		_boundary_topology.is_empty()
+		or _province_topology_ids != state.province_ids
+	)
+	if topology_changed:
+		_boundary_topology = MapRenderer.build_province_boundary_topology(state)
+		_province_topology_ids = state.province_ids.duplicate()
+	var geometry := MapRenderer.classify_province_boundary_topology(
+		state, _boundary_topology
+	)
+	# Most diplomacy revisions only reclassify country edges, but suzerainty and
+	# civil-war changes can also alter province colors. A semantic signature lets
+	# ordinary relations keep the existing GPU fill; a topology change always
+	# rebuilds it because the same city colors now occupy different pixels.
+	var fill_signature := MapRenderer.political_fill_signature(state)
+	var rebuild_fill := (
+		topology_changed
+		or _province_texture == null
+		or fill_signature != _political_fill_signature
+	)
+	if rebuild_fill:
+		var fill_source := MapRenderer.build_province_overlay_image(state)
+		var canvas := MapRenderer.build_political_canvas_images(
+			state, geometry, false, fill_source
+		)
+		var image: Image = canvas["terrain_fill"]
+		if image != null and not image.is_empty():
+			_province_texture = ImageTexture.create_from_image(image)
+			_terrain.set_province_texture(_province_texture)
+			_political_fill_signature = fill_signature
+	var output_size := (
+		state.province_map_size * MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
+	)
+	var diplomatic_boundary_image := MapRenderer.build_diplomatic_boundary_image(
+		state, geometry
+	)
+	var province_boundary_image: Image = null
+	var coast_boundary_image: Image = null
+	if topology_changed or _province_boundary_texture == null:
+		province_boundary_image = MapRenderer._rasterize_soft_boundary_layer(
+			geometry["province"], output_size, MapRenderer.LOCAL_BOUNDARY_INK,
+			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, MapRenderer.BOUNDARY_FEATHER_PX
+		)
+		province_boundary_image.generate_mipmaps()
+		_province_boundary_texture = ImageTexture.create_from_image(
+			province_boundary_image
+		)
+	if topology_changed or _coast_boundary_texture == null:
+		coast_boundary_image = MapRenderer._rasterize_soft_boundary_layer(
+			geometry["coast"], output_size, MapRenderer.LOCAL_BOUNDARY_INK,
+			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, MapRenderer.BOUNDARY_FEATHER_PX
+		)
+		coast_boundary_image.generate_mipmaps()
+		_coast_boundary_texture = ImageTexture.create_from_image(
+			coast_boundary_image
+		)
+	if diplomatic_boundary_image != null and not diplomatic_boundary_image.is_empty():
+		_diplomatic_boundary_texture = ImageTexture.create_from_image(
+			diplomatic_boundary_image
+		)
+		_terrain.set_boundary_textures(
+			_province_boundary_texture, _coast_boundary_texture,
+			_diplomatic_boundary_texture
+		)
+		_update_boundary_lod()
 	# Political fill and political boundaries now share one terrain material
 	# canvas. Keep the legacy MeshInstance empty to prevent a second geometry
 	# from drifting away from the painted regions.
 	_boundaries.mesh = null
-	_boundaries.material_override = _political_boundary_material()
+	_boundaries.material_override = null
 
 
 func _build_road_mesh() -> void:
@@ -1785,13 +1880,6 @@ func _line_material(emissive: bool) -> StandardMaterial3D:
 		material.emission_enabled = true
 		material.emission = Color(0.32, 0.22, 0.06)
 		material.emission_energy_multiplier = 0.8
-	return material
-
-
-func _political_boundary_material() -> ShaderMaterial:
-	var material := ShaderMaterial.new()
-	material.shader = POLITICAL_BOUNDARY_SHADER
-	material.render_priority = 4
 	return material
 
 

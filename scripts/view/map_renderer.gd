@@ -51,13 +51,20 @@ const INK_COLOR := Color(0.105, 0.085, 0.055)
 const COMMAND_GREEN := Color(0.16, 0.20, 0.14)
 const ACCENT_RED := Color(0.55, 0.12, 0.10)
 const ACCENT_GOLD := Color(0.88, 0.67, 0.22)
-const BORDER_NEUTRAL := Color(0.025, 0.025, 0.025, 1.0)
-const BORDER_ALLIED := Color(0.025, 0.095, 0.235, 1.0)
-const BORDER_ENEMY := Color(0.285, 0.025, 0.018, 1.0)
-const BORDER_SUZERAINTY := Color(0.18, 0.19, 0.20, 1.0)
+## EU4 式边界层级：省界与海岸是同一层柔和暗墨，国家/外交边界只在
+## 同一中心线上加粗覆盖，不再叠一条纯黑底边。色值为本项目视觉拟合，
+## 不是 Paradox 原始资产取样。
+const LOCAL_BOUNDARY_INK := Color(0.055, 0.067, 0.069, 0.52)
+const BORDER_NEUTRAL := Color(0.067, 0.082, 0.086, 0.72) # #111516
+const BORDER_ALLIED := Color(0.094, 0.227, 0.400, 0.72) # #183A66
+const BORDER_ENEMY := Color(0.416, 0.129, 0.110, 0.72) # #6A211C
+const BORDER_SUZERAINTY := Color(0.204, 0.227, 0.235, 0.68) # #343A3C
 const POLITICAL_MAP_DEFAULT_STRENGTH: float = 1.0
 const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
 const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
+const LOCAL_BOUNDARY_WIDTH_PX: float = 0.85
+const DIPLOMATIC_BOUNDARY_WIDTH_PX: float = 2.20
+const BOUNDARY_FEATHER_PX: float = 0.42
 const VASSAL_BRIGHTNESS_STEP: float = 0.15
 const CAMPAIGN_ARROW_TEXTURE := preload(
 	"res://assets/ui/strategic/offensive_arc_arrow.png"
@@ -87,15 +94,18 @@ var _font: Font
 var _terrain_texture: Texture2D
 var _province_texture: ImageTexture
 var _political_base_texture: ImageTexture
+var _political_ocean_texture: ImageTexture
 var _political_texture: ImageTexture
-var _political_line_texture: ImageTexture
+var _political_fill_signature := PackedInt64Array()
 var _province_strength: float = POLITICAL_MAP_DEFAULT_STRENGTH
-var _province_boundary_segments := PackedVector2Array()
+var _local_boundary_segments := PackedVector2Array()
 var _coast_segments := PackedVector2Array()
 var _nation_boundary_segments := PackedVector2Array()
 var _alliance_boundary_segments := PackedVector2Array()
 var _enemy_boundary_segments := PackedVector2Array()
 var _suzerainty_boundary_segments := PackedVector2Array()
+var _boundary_topology := {}
+var _province_topology_ids := PackedInt32Array()
 var _province_cache_ready: bool = false
 var _province_ownership_revision: int = -1
 var _province_diplomacy_revision: int = -1
@@ -162,14 +172,17 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 		)
 	_province_texture = null
 	_political_base_texture = null
+	_political_ocean_texture = null
 	_political_texture = null
-	_political_line_texture = null
-	_province_boundary_segments = PackedVector2Array()
+	_political_fill_signature = PackedInt64Array()
+	_local_boundary_segments = PackedVector2Array()
 	_coast_segments = PackedVector2Array()
 	_nation_boundary_segments = PackedVector2Array()
 	_alliance_boundary_segments = PackedVector2Array()
 	_enemy_boundary_segments = PackedVector2Array()
 	_suzerainty_boundary_segments = PackedVector2Array()
+	_boundary_topology = {}
+	_province_topology_ids = PackedInt32Array()
 	_province_cache_ready = false
 	_province_ownership_revision = -1
 	_province_diplomacy_revision = -1
@@ -1581,173 +1594,235 @@ func _ensure_province_visual_cache() -> void:
 		or state.province_ids.is_empty()
 	):
 		return
-	var geometry := {}
-	if not _province_cache_ready:
-		geometry = build_province_boundary_segments(state)
-		_province_boundary_segments = geometry["province"]
-		_coast_segments = geometry["coast"]
-		_province_cache_ready = true
-	if (
+	var visual_revision_changed := (
 		_province_texture == null
 		or _province_ownership_revision != state.ownership_revision
 		or _province_diplomacy_revision != state.diplomacy_revision
-	):
-		var canvas := build_political_canvas_images(state)
+	)
+	if not visual_revision_changed:
+		return
+	var topology_changed := (
+		not _province_cache_ready
+		or _boundary_topology.is_empty()
+		or _province_topology_ids != state.province_ids
+	)
+	if topology_changed:
+		_boundary_topology = build_province_boundary_topology(state)
+		_province_topology_ids = state.province_ids.duplicate()
+		_province_cache_ready = true
+	var geometry := classify_province_boundary_topology(
+		state, _boundary_topology
+	)
+	_cache_boundary_geometry(geometry)
+	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
+	# signature still catches suzerainty/civil-war color changes without first
+	# rebuilding the full categorical image.
+	var fill_signature := political_fill_signature(state)
+	var fill_changed := (
+		topology_changed
+		or _province_texture == null
+		or fill_signature != _political_fill_signature
+	)
+	if fill_changed:
+		var fill_source := build_province_overlay_image(state)
+		var canvas := build_political_canvas_images(
+			state, geometry, false, fill_source
+		)
 		var political_image: Image = canvas["fill"]
-		var political_line_image: Image = canvas["lines"]
 		_province_texture = ImageTexture.create_from_image(
 			political_image
 		)
-		var political_base_image := political_image.duplicate()
-		var packed_height := (
-			load(GameState.terrain_map_path()) as Texture2D
-		).get_image()
-		for political_y in range(political_image.get_height()):
-			for political_x in range(political_image.get_width()):
-				var political_pixel: Color = political_image.get_pixel(
-					political_x, political_y
-				)
-				if political_pixel.a <= 0.001:
-					var source_x := clampi(int(
-						(float(political_x) + 0.5)
-						/ float(political_image.get_width())
-						* float(packed_height.get_width())
-					), 0, packed_height.get_width() - 1)
-					var source_y := clampi(int(
-						(float(political_y) + 0.5)
-						/ float(political_image.get_height())
-						* float(packed_height.get_height())
-					), 0, packed_height.get_height() - 1)
-					var signed_elevation := (
-						TerrainMapGenerator.packed_signed_elevation(
-							packed_height.get_pixel(source_x, source_y)
-						)
-					)
-					var sea_depth := maxf(-signed_elevation, 0.0)
-					var deep_mix := smoothstep(0.06, 0.375, sea_depth)
-					political_image.set_pixel(
-						political_x, political_y,
-						Color(0.090, 0.310, 0.470).lerp(
-							Color(0.025, 0.060, 0.130), deep_mix
-						)
-					)
-					political_base_image.set_pixel(
-						political_x, political_y,
-						POLITICAL_LAND_BASE_COLOR
-					)
-				else:
-					# Political mode paints on a neutral white map base. Satellite
-					# RGB belongs exclusively to the exact 0% terrain mode.
-					political_base_image.set_pixel(
-						political_x, political_y,
-						POLITICAL_LAND_BASE_COLOR
-					)
-		_political_base_texture = ImageTexture.create_from_image(
-			political_base_image
-		)
+		# Sea bathymetry and the neutral primer depend only on province topology
+		# and terrain, not on who owns a city. Cache this million-pixel pass across
+		# ordinary captures; only a topology edit can move the land/sea mask.
+		if topology_changed or _political_base_texture == null:
+			_rebuild_political_base_texture(political_image)
 		_political_texture = ImageTexture.create_from_image(
 			political_image
 		)
-		_political_line_texture = ImageTexture.create_from_image(
-			political_line_image
-		)
-		if geometry.is_empty():
-			geometry = build_province_boundary_segments(state)
-		_nation_boundary_segments = geometry["nation"]
-		_alliance_boundary_segments = geometry["alliance"]
-		_enemy_boundary_segments = geometry["enemy"]
-		_suzerainty_boundary_segments = geometry["suzerainty"]
-		_province_ownership_revision = state.ownership_revision
-		_province_diplomacy_revision = state.diplomacy_revision
+		_political_fill_signature = fill_signature
+	_province_ownership_revision = state.ownership_revision
+	_province_diplomacy_revision = state.diplomacy_revision
+
+
+func _rebuild_political_base_texture(political_image: Image) -> void:
+	var political_base_image := Image.create(
+		political_image.get_width(), political_image.get_height(),
+		false, Image.FORMAT_RGBA8
+	)
+	political_base_image.fill(POLITICAL_LAND_BASE_COLOR)
+	var ocean_image := Image.create(
+		political_image.get_width(), political_image.get_height(),
+		false, Image.FORMAT_RGBA8
+	)
+	ocean_image.fill(Color.TRANSPARENT)
+	var packed_height := (
+		load(GameState.terrain_map_path()) as Texture2D
+	).get_image()
+	for political_y in range(political_image.get_height()):
+		for political_x in range(political_image.get_width()):
+			var political_pixel: Color = political_image.get_pixel(
+				political_x, political_y
+			)
+			if political_pixel.a <= 0.001:
+				var source_x := clampi(int(
+					(float(political_x) + 0.5)
+					/ float(political_image.get_width())
+					* float(packed_height.get_width())
+				), 0, packed_height.get_width() - 1)
+				var source_y := clampi(int(
+					(float(political_y) + 0.5)
+					/ float(political_image.get_height())
+					* float(packed_height.get_height())
+				), 0, packed_height.get_height() - 1)
+				var signed_elevation := (
+					TerrainMapGenerator.packed_signed_elevation(
+						packed_height.get_pixel(source_x, source_y)
+					)
+				)
+				var sea_depth := maxf(-signed_elevation, 0.0)
+				var deep_mix := smoothstep(0.06, 0.375, sea_depth)
+				ocean_image.set_pixel(
+					political_x, political_y,
+					Color(0.090, 0.310, 0.470).lerp(
+						Color(0.025, 0.060, 0.130), deep_mix
+					)
+				)
+	_political_base_texture = ImageTexture.create_from_image(
+		political_base_image
+	)
+	_political_ocean_texture = ImageTexture.create_from_image(ocean_image)
+
+
+func _cache_boundary_geometry(geometry: Dictionary) -> void:
+	# Cache every visible layer as one snapshot. Ownership revisions can also
+	# come from province-topology rebuilds (for example, moving a city in the
+	# map editor), so refreshing only diplomatic subsets would leave the coast
+	# at its previous position and make political/terrain modes disagree.
+	_local_boundary_segments = geometry["local"]
+	_coast_segments = geometry["coast"]
+	_nation_boundary_segments = geometry["nation"]
+	_alliance_boundary_segments = geometry["alliance"]
+	_enemy_boundary_segments = geometry["enemy"]
+	_suzerainty_boundary_segments = geometry["suzerainty"]
 
 
 static func build_province_overlay_image(game_state: GameState) -> Image:
 	var size := game_state.province_map_size
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
 	image.fill(Color.TRANSPARENT)
+	var province_colors := PackedColorArray()
+	var occupation_colors := PackedColorArray()
+	var occupied := PackedByteArray()
+	province_colors.resize(game_state.cities.size())
+	occupation_colors.resize(game_state.cities.size())
+	occupied.resize(game_state.cities.size())
+	# Political color depends on the province owner, not on the individual
+	# raster cell. Compute vassal/civil-war color transforms once per city
+	# instead of tens of thousands of times during every capture refresh.
+	for city_id in range(game_state.cities.size()):
+		var current_owner := game_state.cities[city_id].owner_nation
+		var recognized_owner := game_state.recognized_owner_of(city_id)
+		if recognized_owner < 0:
+			recognized_owner = current_owner
+		var base := political_map_color(game_state, recognized_owner)
+		base.a = 1.0
+		province_colors[city_id] = base
+		if current_owner != recognized_owner:
+			var occupation := GameState.normalize_nation_color(
+				political_map_color(game_state, current_owner).darkened(0.08)
+			)
+			occupation.a = 1.0
+			occupation_colors[city_id] = occupation
+			occupied[city_id] = 1
 	for y in range(size.y):
 		for x in range(size.x):
 			var province_id := game_state.province_ids[y * size.x + x]
 			if province_id < 0 or province_id >= game_state.cities.size():
 				continue
-			var current_owner := game_state.cities[province_id].owner_nation
-			var recognized_owner := game_state.recognized_owner_of(province_id)
-			if recognized_owner < 0:
-				recognized_owner = current_owner
-			var base := political_map_color(
-				game_state, recognized_owner
-			)
-			# Alpha is a land mask. Political opacity is controlled separately by
-			# province_strength, so 100% can be a genuinely solid color map.
-			base.a = 1.0
-			if current_owner != recognized_owner and (x + y) % 9 < 3:
-				var occupation := GameState.normalize_nation_color(
-					political_map_color(
-						game_state, current_owner
-					).darkened(0.08)
-				)
-				occupation.a = 1.0
-				base = occupation
-			image.set_pixel(x, y, base)
+			var color := province_colors[province_id]
+			if occupied[province_id] > 0 and (x + y) % 9 < 3:
+				color = occupation_colors[province_id]
+			image.set_pixel(x, y, color)
 	return image
 
 
-## One categorical paint canvas is the shared source for political fill and
-## border ink. Both images use the same nearest-neighbor pixel grid, so a line
-## can never drift away from the region it encloses.
-static func build_political_canvas_images(
+## Compact semantic signature for political fill. This avoids rebuilding the
+## 256x256 source image merely to discover that an alliance/war revision did
+## not change any province color. Province topology is tracked separately.
+static func political_fill_signature(
 	game_state: GameState
+) -> PackedInt64Array:
+	var signature := PackedInt64Array()
+	signature.resize(game_state.cities.size() * 4)
+	for city_id in range(game_state.cities.size()):
+		var current_owner := game_state.cities[city_id].owner_nation
+		var recognized_owner := game_state.recognized_owner_of(city_id)
+		if recognized_owner < 0:
+			recognized_owner = current_owner
+		var offset := city_id * 4
+		signature[offset] = current_owner
+		signature[offset + 1] = recognized_owner
+		signature[offset + 2] = int(
+			political_map_color(game_state, recognized_owner).to_rgba32()
+		)
+		signature[offset + 3] = int(
+			political_map_color(game_state, current_owner).to_rgba32()
+		)
+	return signature
+
+
+## Build the categorical political fill and, when requested, the three soft
+## boundary layers derived from the same authoritative province topology.
+static func build_political_canvas_images(
+	game_state: GameState,
+	boundary_geometry: Dictionary = {},
+	include_soft_boundaries: bool = true,
+	prebuilt_source: Image = null
 ) -> Dictionary:
-	var source := build_province_overlay_image(game_state)
+	var source := prebuilt_source
+	if source == null:
+		source = build_province_overlay_image(game_state)
 	if source == null or source.is_empty():
-		return {"fill": source, "lines": source}
+		return {
+			"fill": source,
+			"terrain_fill": source,
+			"province_boundaries": source,
+			"coast_boundaries": source,
+			"diplomatic_boundaries": source,
+		}
 	var fill := source.duplicate()
 	fill.resize(
 		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
 		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
 		Image.INTERPOLATE_NEAREST
 	)
-	var terrain_fill := _dilate_political_fill(
-		fill, PROVINCE_VISUAL_SUPERSAMPLE * 2
+	# The shader masks political color with authoritative terrain geometry, so
+	# this texture only needs to supply a nearby province RGB where the coarse
+	# ownership raster stops just inside the real coast. Dilate three source cells
+	# before nearest-neighbor enlargement instead of scanning the 16x larger
+	# supersampled image eight times. The enlarged low-resolution diamond fully
+	# contains the old 8-texel dilation, preventing coastal color gaps; any extra
+	# sea texels are discarded by the authoritative 0m terrain mask in shader.
+	# This cuts synchronous ownership refresh from roughly 2.0s to ~0.1s.
+	var terrain_fill := _dilate_political_fill(source, 3)
+	terrain_fill.resize(
+		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
+		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
+		Image.INTERPOLATE_NEAREST
 	)
-	var lines := Image.create(
-		fill.get_width(), fill.get_height(), false, Image.FORMAT_RGBA8
-	)
-	lines.fill(Color.TRANSPARENT)
-	var size := game_state.province_map_size
-	for y in range(size.y):
-		for x in range(size.x):
-			var province_id := game_state.province_ids[y * size.x + x]
-			if x + 1 < size.x:
-				var right := game_state.province_ids[y * size.x + x + 1]
-				if right != province_id:
-					var style := _political_canvas_border_style(
-						game_state, province_id, right
-					)
-					_paint_canvas_vertical_border(
-						lines,
-						(x + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
-						y * PROVINCE_VISUAL_SUPERSAMPLE,
-						(y + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
-						style["color"], int(style["width"])
-					)
-			if y + 1 < size.y:
-				var bottom := game_state.province_ids[(y + 1) * size.x + x]
-				if bottom != province_id:
-					var style := _political_canvas_border_style(
-						game_state, province_id, bottom
-					)
-					_paint_canvas_horizontal_border(
-						lines,
-						x * PROVINCE_VISUAL_SUPERSAMPLE,
-						(x + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
-						(y + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
-						style["color"], int(style["width"])
-					)
+	if not include_soft_boundaries:
+		return {
+			"fill": fill,
+			"terrain_fill": terrain_fill,
+		}
+	var soft_boundaries := build_soft_boundary_images(game_state, boundary_geometry)
 	return {
 		"fill": fill,
 		"terrain_fill": terrain_fill,
-		"lines": lines,
+		"province_boundaries": soft_boundaries["province"],
+		"coast_boundaries": soft_boundaries["coast"],
+		"diplomatic_boundaries": soft_boundaries["diplomatic"],
 	}
 
 
@@ -1783,49 +1858,154 @@ static func _dilate_political_fill(
 	return result
 
 
-static func _political_canvas_border_style(
-	game_state: GameState, province_a: int, province_b: int
+## 将共享平滑路径栅格化为带羽化的 coverage 图。纹理本身使用线性采样，
+## 因而政治填色仍保持 nearest 分类，而边界可以独立柔化、不串色。
+static func build_soft_boundary_images(
+	game_state: GameState,
+	boundary_geometry: Dictionary = {}
 ) -> Dictionary:
-	if province_a < 0 or province_b < 0:
-		# Coast is not a province-grid line. The terrain Shader draws it from
-		# the modeled 0m contour, which is the same boundary used for ocean fill.
-		return {"color": Color.TRANSPARENT, "width": 0}
-	if not _province_owners_differ(game_state, province_a, province_b):
-		return {"color": Color(0.10, 0.12, 0.12, 1.0), "width": 1}
-	if _province_owners_same_peaceful_suzerainty(
-		game_state, province_a, province_b
-	):
-		return {"color": BORDER_SUZERAINTY, "width": 3}
-	if _province_owners_allied(game_state, province_a, province_b):
-		return {"color": BORDER_ALLIED, "width": 3}
-	if _province_owners_enemy(game_state, province_a, province_b):
-		return {"color": BORDER_ENEMY, "width": 3}
-	return {"color": BORDER_NEUTRAL, "width": 3}
+	var geometry := boundary_geometry
+	if geometry.is_empty():
+		geometry = build_province_boundary_segments(game_state)
+	var source_size := game_state.province_map_size
+	var output_size := Vector2i(
+		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
+		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1)
+	)
+	var province := _rasterize_soft_boundary_layer(
+		geometry.get("local", PackedVector2Array()),
+		output_size, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX,
+		BOUNDARY_FEATHER_PX
+	)
+	var coast := _rasterize_soft_boundary_layer(
+		geometry.get("coast", PackedVector2Array()),
+		output_size, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX,
+		BOUNDARY_FEATHER_PX
+	)
+	var diplomatic := build_diplomatic_boundary_image(game_state, geometry)
+	# The shader uses trilinear/anisotropic sampling at oblique overview angles.
+	# Dynamic ImageTextures do not acquire mip levels automatically, so build
+	# them explicitly after all max-coverage compositing is complete.
+	for boundary_image in [province, coast]:
+		var mipmap_error: Error = boundary_image.generate_mipmaps()
+		if mipmap_error != OK:
+			push_error(
+				"Failed to generate political-boundary mipmaps: %d"
+				% mipmap_error
+			)
+	return {
+		"province": province,
+		"coast": coast,
+		"diplomatic": diplomatic,
+	}
 
 
-static func _paint_canvas_vertical_border(
-	image: Image, x: int, y_from: int, y_to: int, color: Color, width: int
+static func build_diplomatic_boundary_image(
+	game_state: GameState,
+	boundary_geometry: Dictionary = {}
+) -> Image:
+	var geometry := boundary_geometry
+	if geometry.is_empty():
+		geometry = build_province_boundary_segments(game_state)
+	var source_size := game_state.province_map_size
+	var output_size := Vector2i(
+		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
+		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1)
+	)
+	var diplomatic := Image.create(
+		output_size.x, output_size.y, false, Image.FORMAT_RGBA8
+	)
+	diplomatic.fill(Color.TRANSPARENT)
+	for layer_spec in [
+		["nation", BORDER_NEUTRAL],
+		["suzerainty", BORDER_SUZERAINTY],
+		["alliance", BORDER_ALLIED],
+		["enemy", BORDER_ENEMY],
+	]:
+		_rasterize_soft_segments_into(
+			diplomatic, geometry.get(layer_spec[0], PackedVector2Array()),
+			layer_spec[1], DIPLOMATIC_BOUNDARY_WIDTH_PX,
+			BOUNDARY_FEATHER_PX
+		)
+	var mipmap_error: Error = diplomatic.generate_mipmaps()
+	if mipmap_error != OK:
+		push_error(
+			"Failed to generate diplomatic-boundary mipmaps: %d"
+			% mipmap_error
+		)
+	return diplomatic
+
+
+static func _rasterize_soft_boundary_layer(
+	segments: PackedVector2Array,
+	size: Vector2i,
+	color: Color,
+	core_width_px: float,
+	feather_px: float
+) -> Image:
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	image.fill(Color.TRANSPARENT)
+	_rasterize_soft_segments_into(
+		image, segments, color, core_width_px, feather_px
+	)
+	return image
+
+
+static func _rasterize_soft_segments_into(
+	image: Image,
+	segments: PackedVector2Array,
+	color: Color,
+	core_width_px: float,
+	feather_px: float
 ) -> void:
-	if width <= 0:
+	if image == null or image.is_empty() or segments.size() < 2:
 		return
-	var half := width / 2
-	for py in range(y_from, y_to):
-		for px in range(x - half, x - half + width):
-			if px >= 0 and px < image.get_width():
-				image.set_pixel(px, py, color)
+	var image_size := Vector2(image.get_width(), image.get_height())
+	var core_radius := maxf(core_width_px * 0.5, 0.05)
+	var outer_radius := core_radius + maxf(feather_px, 0.05)
+	for index in range(0, segments.size(), 2):
+		var from := segments[index] * image_size
+		var to := segments[index + 1] * image_size
+		# 沿线盖小圆笔刷，复杂度与线长成正比。旧实现逐段扫描完整
+		# 包围矩形，斜长线会退化为 O(width*height)，一次归属刷新需秒级。
+		var step_count := maxi(int(ceil(from.distance_to(to) / 0.34)), 1)
+		for step in range(step_count + 1):
+			var center := from.lerp(to, float(step) / float(step_count))
+			var x_from := clampi(
+				int(floor(center.x - outer_radius - 0.5)), 0, image.get_width() - 1
+			)
+			var x_to := clampi(
+				int(ceil(center.x + outer_radius + 0.5)), 0, image.get_width() - 1
+			)
+			var y_from := clampi(
+				int(floor(center.y - outer_radius - 0.5)), 0, image.get_height() - 1
+			)
+			var y_to := clampi(
+				int(ceil(center.y + outer_radius + 0.5)), 0, image.get_height() - 1
+			)
+			for y in range(y_from, y_to + 1):
+				for x in range(x_from, x_to + 1):
+					var distance := Vector2(
+						float(x) + 0.5, float(y) + 0.5
+					).distance_to(center)
+					if distance >= outer_radius:
+						continue
+					var coverage := (
+						1.0
+						if distance <= core_radius
+						else 1.0 - smoothstep(core_radius, outer_radius, distance)
+					)
+					var source := color
+					source.a *= coverage
+					var destination := image.get_pixel(x, y)
+					# Coverage 取最大值而非反复 source-over；相邻小线段和三岔口
+					# 不得把 0.52 墨量累加成近乎不透明的黑结。相同 coverage 时
+					# 后写入的外交类别取得确定性优先级。
+					if source.a + 0.0001 < destination.a:
+						continue
+					image.set_pixel(x, y, source)
 
 
-static func _paint_canvas_horizontal_border(
-	image: Image, x_from: int, x_to: int, y: int, color: Color, width: int
-) -> void:
-	if width <= 0:
-		return
-	var half := width / 2
-	for py in range(y - half, y - half + width):
-		if py < 0 or py >= image.get_height():
-			continue
-		for px in range(x_from, x_to):
-			image.set_pixel(px, py, color)
 
 static func paper_nation_color(color: Color) -> Color:
 	return GameState.normalize_nation_color(color)
@@ -1919,21 +2099,28 @@ static func final_faction_visual_color(
 static func build_province_boundary_segments(
 	game_state: GameState
 ) -> Dictionary:
+	return classify_province_boundary_topology(
+		game_state, build_province_boundary_topology(game_state)
+	)
+
+
+## Geometry/topology is independent from ownership and diplomacy. Cache this
+## object across ordinary captures and relation changes; only a province_ids
+## rebuild (for example moving a city in the editor) invalidates it.
+static func build_province_boundary_topology(
+	game_state: GameState
+) -> Dictionary:
 	var province := PackedVector2Array()
-	var nation := PackedVector2Array()
-	var alliance := PackedVector2Array()
-	var enemy := PackedVector2Array()
-	var suzerainty := PackedVector2Array()
 	var coast := PackedVector2Array()
+	var province_a := PackedInt32Array()
+	var province_b := PackedInt32Array()
 	var size := game_state.province_map_size
 	if size.x <= 0 or size.y <= 0:
 		return {
 			"province": province,
-			"nation": nation,
-			"alliance": alliance,
-			"enemy": enemy,
-			"suzerainty": suzerainty,
 			"coast": coast,
+			"province_a": province_a,
+			"province_b": province_b,
 		}
 	for y in range(size.y):
 		for x in range(size.x):
@@ -1968,63 +2155,75 @@ static func build_province_boundary_segments(
 				_append_segment(coast, Vector2(x1, y0), Vector2(x1, y1))
 			elif right != province_id:
 				_append_segment(province, Vector2(x1, y0), Vector2(x1, y1))
-				if _province_owners_differ(game_state, province_id, right):
-					if _province_owners_same_peaceful_suzerainty(
-						game_state, province_id, right
-					):
-						_append_segment(
-							suzerainty, Vector2(x1, y0), Vector2(x1, y1)
-						)
-					else:
-						if _province_owners_allied(
-							game_state, province_id, right
-						):
-							_append_segment(
-								alliance, Vector2(x1, y0), Vector2(x1, y1)
-							)
-						elif _province_owners_enemy(
-							game_state, province_id, right
-						):
-							_append_segment(
-								enemy, Vector2(x1, y0), Vector2(x1, y1)
-							)
-						else:
-							_append_segment(
-								nation, Vector2(x1, y0), Vector2(x1, y1)
-							)
+				province_a.append(province_id)
+				province_b.append(right)
 			if bottom < 0:
 				_append_segment(coast, Vector2(x0, y1), Vector2(x1, y1))
 			elif bottom != province_id:
 				_append_segment(province, Vector2(x0, y1), Vector2(x1, y1))
-				if _province_owners_differ(game_state, province_id, bottom):
-					if _province_owners_same_peaceful_suzerainty(
-						game_state, province_id, bottom
-					):
-						_append_segment(
-							suzerainty, Vector2(x0, y1), Vector2(x1, y1)
-						)
-					else:
-						if _province_owners_allied(
-							game_state, province_id, bottom
-						):
-							_append_segment(
-								alliance, Vector2(x0, y1), Vector2(x1, y1)
-							)
-						elif _province_owners_enemy(
-							game_state, province_id, bottom
-						):
-							_append_segment(
-								enemy, Vector2(x0, y1), Vector2(x1, y1)
-							)
-						else:
-							_append_segment(
-								nation, Vector2(x0, y1), Vector2(x1, y1)
-							)
+				province_a.append(province_id)
+				province_b.append(bottom)
 	var shared := _smooth_shared_political_segments(
-		province, nation, alliance, enemy, suzerainty
+		province, PackedVector2Array(), PackedVector2Array(),
+		PackedVector2Array(), PackedVector2Array(), PackedVector2Array()
 	)
-	shared["coast"] = _smooth_boundary_segments(coast, size)
-	return shared
+	return {
+		"province": shared["province"],
+		"coast": _smooth_boundary_segments(coast, size),
+		"province_a": province_a,
+		"province_b": province_b,
+	}
+
+
+## Reclassify cached, already-smoothed city-border edges. This is the only
+## work required when ownership or diplomacy changes without topology edits.
+static func classify_province_boundary_topology(
+	game_state: GameState,
+	topology: Dictionary
+) -> Dictionary:
+	var province: PackedVector2Array = topology.get(
+		"province", PackedVector2Array()
+	)
+	var province_a: PackedInt32Array = topology.get(
+		"province_a", PackedInt32Array()
+	)
+	var province_b: PackedInt32Array = topology.get(
+		"province_b", PackedInt32Array()
+	)
+	var local := PackedVector2Array()
+	var nation := PackedVector2Array()
+	var alliance := PackedVector2Array()
+	var enemy := PackedVector2Array()
+	var suzerainty := PackedVector2Array()
+	var edge_count := mini(
+		mini(province_a.size(), province_b.size()), province.size() / 2
+	)
+	for edge_index in range(edge_count):
+		var city_a := province_a[edge_index]
+		var city_b := province_b[edge_index]
+		var from := province[edge_index * 2]
+		var to := province[edge_index * 2 + 1]
+		if not _province_owners_differ(game_state, city_a, city_b):
+			_append_segment(local, from, to)
+		elif _province_owners_same_peaceful_suzerainty(
+			game_state, city_a, city_b
+		):
+			_append_segment(suzerainty, from, to)
+		elif _province_owners_allied(game_state, city_a, city_b):
+			_append_segment(alliance, from, to)
+		elif _province_owners_enemy(game_state, city_a, city_b):
+			_append_segment(enemy, from, to)
+		else:
+			_append_segment(nation, from, to)
+	return {
+		"province": province,
+		"local": local,
+		"nation": nation,
+		"alliance": alliance,
+		"enemy": enemy,
+		"suzerainty": suzerainty,
+		"coast": topology.get("coast", PackedVector2Array()),
+	}
 
 
 static func _province_owners_differ(
@@ -2097,6 +2296,7 @@ static func _append_segment(
 ## class is smoothed independently.
 static func _smooth_shared_political_segments(
 	province: PackedVector2Array,
+	local: PackedVector2Array,
 	nation: PackedVector2Array,
 	alliance: PackedVector2Array,
 	enemy: PackedVector2Array,
@@ -2120,7 +2320,7 @@ static func _smooth_shared_political_segments(
 		if not (neighbors[to_key] as Array[String]).has(from_key):
 			(neighbors[to_key] as Array[String]).append(from_key)
 	var smoothed := positions.duplicate()
-	for _iteration in range(2):
+	for _iteration in range(3):
 		var next := smoothed.duplicate()
 		for key_value in neighbors:
 			var key := str(key_value)
@@ -2134,6 +2334,7 @@ static func _smooth_shared_political_segments(
 		smoothed = next
 	return {
 		"province": _remap_boundary_segments(province, smoothed),
+		"local": _remap_boundary_segments(local, smoothed),
 		"nation": _remap_boundary_segments(nation, smoothed),
 		"alliance": _remap_boundary_segments(alliance, smoothed),
 		"enemy": _remap_boundary_segments(enemy, smoothed),
@@ -2458,6 +2659,7 @@ func _draw_province_fills() -> void:
 	if (
 		_political_texture == null
 		or _political_base_texture == null
+		or _political_ocean_texture == null
 		or _province_strength <= 0.0
 	):
 		return
@@ -2470,17 +2672,17 @@ func _draw_province_fills() -> void:
 		Color.WHITE
 	)
 	draw_texture_rect(
+		_political_ocean_texture,
+		Rect2(_origin, _map_size),
+		false,
+		Color(1.0, 1.0, 1.0, _province_strength)
+	)
+	draw_texture_rect(
 		_political_texture,
 		Rect2(_origin, _map_size),
 		false,
 		Color(1.0, 1.0, 1.0, _province_strength)
 	)
-	if _political_line_texture != null:
-		draw_texture_rect(
-			_political_line_texture,
-			Rect2(_origin, _map_size),
-			false, Color.WHITE
-		)
 
 
 func set_province_strength(strength: float) -> void:
@@ -2499,13 +2701,16 @@ func _normalized_segments_to_pixels(
 
 
 func _draw_province_boundaries() -> void:
-	if _province_strength > 0.0:
-		return
-	if not _province_boundary_segments.is_empty():
+	# Local borders deliberately exclude every diplomatic edge in both map
+	# modes. Country borders are drawn once by _draw_national_boundaries();
+	# putting the all-province graph underneath them creates a darker double
+	# stroke and makes 2D terrain mode disagree with political mode and 3D.
+	var segments := _local_boundary_segments
+	if not segments.is_empty():
 		draw_multiline(
-			_normalized_segments_to_pixels(_province_boundary_segments),
-			Color(0.11, 0.115, 0.12, 0.92),
-			maxf(1.20 * _display_scale, 1.0),
+			_normalized_segments_to_pixels(segments),
+			LOCAL_BOUNDARY_INK,
+			maxf(LOCAL_BOUNDARY_WIDTH_PX * _display_scale, 0.75),
 			true
 		)
 
@@ -2515,14 +2720,10 @@ func _draw_national_boundaries() -> void:
 	if not coast_pixels.is_empty():
 		draw_multiline(
 			coast_pixels,
-			Color(0.075, 0.085, 0.088, 1.0),
-			maxf(1.20 * _display_scale, 1.0),
+			LOCAL_BOUNDARY_INK,
+			maxf(LOCAL_BOUNDARY_WIDTH_PX * _display_scale, 0.75),
 			true
 		)
-	if _province_strength > 0.0:
-		# Province/nation lines are already painted into the same categorical
-		# texture as the fill. Only the packed 0m coast remains a separate 2D line.
-		return
 	if not _nation_boundary_segments.is_empty():
 		var nation_pixels := _normalized_segments_to_pixels(
 			_nation_boundary_segments
@@ -2530,21 +2731,21 @@ func _draw_national_boundaries() -> void:
 		draw_multiline(
 			nation_pixels,
 			BORDER_NEUTRAL,
-			maxf(2.8 * _display_scale, 1.8),
+			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
 			true
 		)
 	if not _alliance_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_alliance_boundary_segments),
 			BORDER_ALLIED,
-			maxf(2.8 * _display_scale, 1.8),
+			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
 			true
 		)
 	if not _enemy_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_enemy_boundary_segments),
 			BORDER_ENEMY,
-			maxf(3.0 * _display_scale, 2.0),
+			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
 			true
 		)
 	if not _suzerainty_boundary_segments.is_empty():
@@ -2553,7 +2754,7 @@ func _draw_national_boundaries() -> void:
 				_suzerainty_boundary_segments
 			),
 			BORDER_SUZERAINTY,
-			maxf(2.4 * _display_scale, 1.6),
+			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
 			true
 		)
 

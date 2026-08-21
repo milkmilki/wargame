@@ -58,9 +58,37 @@ func set_province_texture(texture: Texture2D) -> void:
 	_material.set_shader_parameter("province_texture", texture)
 
 
-func set_political_line_texture(texture: Texture2D) -> void:
+func set_boundary_textures(
+	province_texture: Texture2D,
+	coast_texture: Texture2D,
+	diplomatic_texture: Texture2D
+) -> void:
 	_ensure_render_nodes()
-	_material.set_shader_parameter("political_line_texture", texture)
+	_material.set_shader_parameter(
+		"province_boundary_texture", province_texture
+	)
+	_material.set_shader_parameter("coast_boundary_texture", coast_texture)
+	_material.set_shader_parameter(
+		"diplomatic_boundary_texture", diplomatic_texture
+	)
+
+
+func set_boundary_lod(
+	province_strength: float,
+	coast_strength: float = 1.0,
+	diplomatic_strength: float = 1.0
+) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter(
+		"province_boundary_strength", clampf(province_strength, 0.0, 1.0)
+	)
+	_material.set_shader_parameter(
+		"coast_boundary_strength", clampf(coast_strength, 0.0, 1.0)
+	)
+	_material.set_shader_parameter(
+		"diplomatic_boundary_strength",
+		clampf(diplomatic_strength, 0.0, 1.0)
+	)
 
 
 func set_province_strength(strength: float) -> void:

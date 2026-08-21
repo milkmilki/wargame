@@ -2,11 +2,16 @@ shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_disabled;
 
 uniform sampler2D province_texture : source_color, filter_nearest;
-uniform sampler2D political_line_texture : source_color, filter_nearest;
+uniform sampler2D province_boundary_texture : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
+uniform sampler2D coast_boundary_texture : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
+uniform sampler2D diplomatic_boundary_texture : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
 uniform sampler2D surface_texture : source_color, filter_linear_mipmap_anisotropic;
 uniform vec2 height_source_origin = vec2(0.0);
 uniform vec2 height_source_size = vec2(1.0);
 uniform float province_strength : hint_range(0.0, 1.0) = 0.0;
+uniform float province_boundary_strength : hint_range(0.0, 1.0) = 1.0;
+uniform float coast_boundary_strength : hint_range(0.0, 1.0) = 1.0;
+uniform float diplomatic_boundary_strength : hint_range(0.0, 1.0) = 1.0;
 uniform float ocean_height_threshold = 0.0;
 uniform float sea_floor_height = -2.2;
 uniform vec3 political_land_base_color : source_color = vec3(0.82, 0.82, 0.80);
@@ -23,14 +28,9 @@ void vertex() {
 
 void fragment() {
 	vec2 source_uv = height_source_origin + UV * height_source_size;
-	ivec2 line_size = textureSize(political_line_texture, 0);
-	ivec2 line_pixel = clamp(
-		ivec2(floor(UV * vec2(line_size))),
-		ivec2(0), line_size - ivec2(1)
-	);
-	vec4 political_line = texelFetch(
-		political_line_texture, line_pixel, 0
-	);
+	vec4 province_boundary = texture(province_boundary_texture, UV);
+	vec4 coast_boundary = texture(coast_boundary_texture, UV);
+	vec4 diplomatic_boundary = texture(diplomatic_boundary_texture, UV);
 	float hard_land = step(ocean_height_threshold, terrain_elevation);
 	vec3 final_color;
 	if (province_strength <= 0.000001) {
@@ -66,22 +66,33 @@ void fragment() {
 			white_low_poly_base, political_target, province_strength
 		);
 	}
-	// Fill and border ink use the same categorical pixel canvas in every mode.
+	// EU4-style hierarchy: soft local province ink fades at overview, while
+	// coastline and diplomatic borders remain readable. Diplomatic coverage is
+	// applied last so a national border never becomes a doubled province line.
+	float province_ink = (
+		province_boundary.a * province_boundary_strength * hard_land
+		* (1.0 - smoothstep(0.01, 0.18, diplomatic_boundary.a))
+	);
+	float coast_ink = coast_boundary.a * coast_boundary_strength;
+	// Ink is multiplicative: it can only darken the underlying paper/terrain,
+	// never turn a red or blue province edge into a light gray lit ribbon.
+	final_color *= 1.0 - province_ink * 0.76;
+	final_color *= 1.0 - coast_ink * 0.76;
+	float diplomatic_ink = (
+		diplomatic_boundary.a * diplomatic_boundary_strength * hard_land
+	);
+	// Diplomatic RGB remains semantic (neutral/allied/enemy/suzerainty), but
+	// like real ink it tints and darkens the underlying map instead of replacing
+	// lit terrain with a bright flat ribbon. This preserves the red/blue cue
+	// without recreating the former gray fringe at the coverage feather.
+	vec3 diplomatic_tint = mix(
+		vec3(0.14),
+		clamp(diplomatic_boundary.rgb * 1.45, vec3(0.10), vec3(0.62)),
+		0.42
+	);
 	final_color = mix(
-		final_color, political_line.rgb, political_line.a * hard_land
+		final_color, final_color * diplomatic_tint, diplomatic_ink
 	);
-	// Coast ink is the modeled 0m *crossing*, not every flat vertex at 0m.
-	// Screen derivatives provide a one-pixel contour only where elevation
-	// actually changes across the fragment; broad 0m plains stay untouched.
-	float elevation_width = fwidth(terrain_elevation);
-	float contour_distance = abs(
-		terrain_elevation - ocean_height_threshold
-	) / max(elevation_width, 0.000001);
-	float coast_band = (
-		1.0 - smoothstep(0.25, 1.15, contour_distance)
-	) * step(0.00001, elevation_width);
-	ALBEDO = mix(
-		final_color, vec3(0.075, 0.085, 0.088), coast_band
-	);
+	ALBEDO = final_color;
 	ROUGHNESS = 1.0;
 }
