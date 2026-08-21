@@ -224,6 +224,10 @@ var supply_frame_slicing_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_reinforcements（不分帧），
 ## 以隔离「补员分帧」在同一运行时路径下的等价性。正式游戏 false。
 var reinforcement_frame_slicing_disabled: bool = false
+## 等价性/性能 A/B：true 时恢复逐军图搜索判断补员枢纽可达性；正式游戏 false。
+var reinforcement_network_cache_disabled: bool = false
+## 外交结构缓存 A/B：true 恢复同一次月度评估内重复构建联盟/敌对集团。
+var diplomacy_structure_cache_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_line_edge_assignment_emergencies
 ## （不分帧），以隔离「填线防区分帧」在同一运行时路径下的等价性。正式游戏 false。
 var line_edge_frame_slicing_disabled: bool = false
@@ -479,6 +483,12 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	# 使地图不必等到议和即可自愈碎裂领土。
 	_set_runtime_profile_stage(&"cleanup_enclaves")
 	_reassign_disconnected_suzerainty_enclaves()
+	# 飞地清理本身也可能让国家失去最后一城；同日完成投降，再刷新存亡
+	# 与宗藩关系，不能留下“无城但仍参战/仍挂宗藩”的一天中间态。
+	_resolve_eliminated_nation_capitulations()
+	_check_victory()
+	if state.prune_dead_suzerainty():
+		state.diplomacy_revision += 1
 	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留），
 	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
 	_set_runtime_profile_stage(&"cleanup_evict")
@@ -1393,10 +1403,21 @@ func _reinforce_nation(
 	available_manpower = mini(available_manpower, food_manpower_budget)
 	if available_manpower <= 0:
 		return
+	var manpower_hub_network := (
+		{}
+		if reinforcement_network_cache_disabled
+		else Pathfinding.build_manpower_hub_network(
+			state,
+			nation.id
+		)
+	)
 	var plans: Array = []
 	var total_deficit := 0
 	for army in nation_armies:
-		if not _can_reinforce_army(army):
+		if not _can_reinforce_army(
+			army,
+			manpower_hub_network
+		):
 			continue
 		var target_size := army.max_size
 		if not at_war:
@@ -1501,7 +1522,10 @@ func _reinforcement_priority(army: Army) -> int:
 	return 1
 
 
-func _can_reinforce_army(army: Army) -> bool:
+func _can_reinforce_army(
+	army: Army,
+	manpower_hub_network: Dictionary = {}
+) -> bool:
 	if army.size <= 0 or army.size >= army.max_size:
 		return false
 	if army.state in [Army.State.FIGHTING, Army.State.RETREATING]:
@@ -1513,7 +1537,16 @@ func _can_reinforce_army(army: Army) -> bool:
 		Army.State.HOLDING,
 	]:
 		return false
-	return Pathfinding.can_reach_manpower_hub(state, army)
+	if (
+		reinforcement_network_cache_disabled
+		or manpower_hub_network.is_empty()
+	):
+		return Pathfinding.can_reach_manpower_hub(state, army)
+	return Pathfinding.can_reach_manpower_hub_from_network(
+		state,
+		army,
+		manpower_hub_network
+	)
 
 # ------------------------------------------------------------------ 2. 粮食 + 饥饿
 
@@ -2556,7 +2589,8 @@ func _resolve_diplomacy() -> void:
 		var profile := {"enabled": true}
 		var actions := DiplomacyAI.choose_actions(
 			state,
-			profile
+			profile,
+			not diplomacy_structure_cache_disabled
 		)
 		for stage in profile:
 			if stage != "enabled":
@@ -2564,7 +2598,10 @@ func _resolve_diplomacy() -> void:
 		_commit_diplomacy_actions(actions)
 	else:
 		_commit_diplomacy_actions(
-			DiplomacyAI.choose_actions(state)
+			DiplomacyAI.choose_actions(
+				state, {},
+				not diplomacy_structure_cache_disabled
+			)
 		)
 
 
@@ -2591,7 +2628,10 @@ func _resolve_diplomacy_over_frames() -> void:
 
 
 func _build_parallel_diplomacy_actions(job: Dictionary) -> void:
-	job["actions"] = DiplomacyAI.choose_actions(state)
+	job["actions"] = DiplomacyAI.choose_actions(
+		state, {},
+		not diplomacy_structure_cache_disabled
+	)
 
 
 func _commit_diplomacy_actions_over_frames(actions: Array) -> void:
@@ -2638,6 +2678,24 @@ func _resolve_eliminated_nation_capitulations() -> void:
 		var opponents := _war_opponents_including_eliminated(
 			surrendering
 		)
+		# 藩王没有独立议和权。其全境失守只让这个无城成员退出战斗，
+		# 不能借 _make_coalition_peace 强迫整个宗主体系停战；法理归属留给
+		# 宗主最终集团议和统一确认。
+		if state.is_vassal(surrendering):
+			for opponent in opponents:
+				state.set_diplomatic_relation(
+					surrendering,
+					opponent,
+					GameState.DiplomaticRelation.NEUTRAL,
+					GameState.DEFAULT_TRUCE_DAYS
+				)
+				state.clear_war_objective(surrendering, opponent)
+			_reconcile_battles_after_coalition_peace(
+				[surrendering] as Array[int],
+				opponents
+			)
+			_clear_finished_war_mobilization(surrendering)
+			continue
 		for victor in opponents:
 			if not state.is_enemy(surrendering, victor):
 				continue
@@ -2661,7 +2719,6 @@ func _resolve_eliminated_nation_capitulations() -> void:
 func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 	# 情形一：宗主(claimant)攻破藩王(old_owner)首都 → 吞并藩王。
 	if state.overlord_of(old_owner) == claimant and state.is_in_civil_war(old_owner):
-		state.suzerainty.erase(old_owner)
 		state.annex_nation(claimant, old_owner)
 		state.prune_dead_suzerainty()
 		_synchronize_war_gold_income_snapshots()
@@ -2669,18 +2726,7 @@ func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 		return true
 	# 情形二：藩王(claimant)攻破宗主(old_owner)首都 → 藩王夺取宗主全部领土并继承体系。
 	if state.overlord_of(claimant) == old_owner and state.is_in_civil_war(claimant):
-		# 胜利藩王先脱离宗藩（它将成为新的顶点）。
-		state.suzerainty.erase(claimant)
-		# 宗主的其余藩王（除胜者外）改投胜利藩王，保持对外 ALLIED。
-		for other_subject in state.subjects_of(old_owner):
-			if other_subject == claimant:
-				continue
-			state.suzerainty[other_subject]["overlord_id"] = claimant
-			state.suzerainty[other_subject]["civil_war"] = false
-			state.set_diplomatic_relation(
-				other_subject, claimant, GameState.DiplomaticRelation.ALLIED
-			)
-		# 吞并原宗主全境。
+		# 兼并原语解除胜者与旧宗主的边，并把旧宗主其余藩王改投胜者。
 		state.annex_nation(claimant, old_owner)
 		state.prune_dead_suzerainty()
 		_synchronize_war_gold_income_snapshots()
@@ -2772,7 +2818,12 @@ func _capital_capitulation_cession_cities(
 	var queue: Array[int] = []
 	var depths := {}
 	for city in state.cities:
-		if control_snapshot[city.id] != victor:
+		var controller := int(control_snapshot[city.id])
+		if (
+			controller < 0
+			or state.external_territory_recipient(controller)
+				!= victor
+		):
 			continue
 		for neighbor in state.neighbors(city.id):
 			var edge := state.edge_of(city.id, neighbor)
@@ -2813,8 +2864,11 @@ func _cede_capital_frontier_territory(
 	victor: int,
 	surrendering: int
 ) -> Array[int]:
+	var recipient := state.external_territory_recipient(victor)
+	if recipient < 0:
+		return [] as Array[int]
 	var selected := _capital_capitulation_cession_cities(
-		victor,
+		recipient,
 		surrendering
 	)
 	var ceded: Array[int] = []
@@ -2828,9 +2882,9 @@ func _cede_capital_frontier_territory(
 			state.remove_warehouse(surrendering, city.id)
 			city.food_storage = 0
 		city.is_capital = false
-		city.owner_nation = victor
+		city.owner_nation = recipient
 		city.occupation_sponsor_nation = -1
-		state.recognized_city_owners[city.id] = victor
+		state.recognized_city_owners[city.id] = recipient
 		ceded.append(city.id)
 	if ceded.is_empty():
 		return ceded
@@ -2838,7 +2892,7 @@ func _cede_capital_frontier_territory(
 	state.refresh_derived()
 	_ai_last_decision_day = -1
 	if captured_food > 0:
-		state.deposit_food(victor, captured_food)
+		state.deposit_food(recipient, captured_food)
 	return ceded
 
 
@@ -3011,6 +3065,27 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 				# 盖取消冷却戳：杜绝取消后隔一个决策周期立即重开备战的横跳（仅显式取消路径盖戳，
 				# 宣战成功清空备战不盖，成功不该被冷却惩罚）。
 				state.nations[nation_a].war_preparation_cancelled_day = state.day
+				changed = true
+		DiplomacyAI.Action.RETARGET_WAR_PREPARATION:
+			var nation := state.nations[nation_a]
+			var objective_city := int(action.get("objective_city", -1))
+			if (
+				nation.war_preparation_target_nation == nation_b
+				and objective_city >= 0
+				and objective_city < state.cities.size()
+				and state.cities[objective_city].owner_nation == nation_b
+				and not DiplomacyAI.staging_cities_for_objective(
+					state, nation_a, objective_city
+				).is_empty()
+			):
+				nation.war_preparation_objective_city = objective_city
+				nation.war_preparation_reason = str(
+					action.get("objective_reason", "")
+				)
+				# 只清目标相关的军事 Assignment；战略备战开始日、资源
+				# 宽限时钟和既有动员成果全部保留。
+				_clear_campaign_preparation_plan(nation_a)
+				_clear_campaign_attack_plan(nation_a)
 				changed = true
 		DiplomacyAI.Action.ENFEOFF:
 			if not enfeoff_enabled:
@@ -3269,6 +3344,11 @@ func _make_coalition_peace(
 			bloc_b
 		)
 	)
+	# 议和中的割地与占领确认可能消灭藩王/宗主；必须在同一外交事务
+	# 清理悬空宗藩，不能留下到下一日才修复的无城成员。
+	state.refresh_derived()
+	if state.prune_dead_suzerainty():
+		state.diplomacy_revision += 1
 	for member_a in bloc_a:
 		for member_b in bloc_b:
 			state.clear_war_objective(member_a, member_b)
@@ -3313,6 +3393,7 @@ func _abandon_coalition_disconnected_enclaves(
 				former_owner,
 				opposing_bloc
 			)
+			recipient = state.external_territory_recipient(recipient)
 			if recipient >= 0:
 				cessions.append({
 					"city": city,
@@ -3327,7 +3408,12 @@ func _abandon_coalition_disconnected_enclaves(
 		var former_owner := int(cession["former_owner"])
 		var recipient := int(cession["recipient"])
 		var stored_food := city.food_storage if city.has_warehouse else 0
-		if city.has_warehouse:
+		if (
+			city.has_warehouse
+			or city.is_capital
+			or state.nations[former_owner].capital_city_id
+				== city.id
+		):
 			state.remove_warehouse(former_owner, city.id)
 			city.food_storage = 0
 		city.owner_nation = recipient
@@ -3337,6 +3423,11 @@ func _abandon_coalition_disconnected_enclaves(
 			state.deposit_food(recipient, stored_food)
 		abandoned.append(city.id)
 	state.ownership_revision += 1
+	var former_owners := {}
+	for cession in cessions:
+		former_owners[int(cession["former_owner"])] = true
+	for former_value in former_owners:
+		state.ensure_valid_capital(int(former_value))
 	state.refresh_derived()
 	_ai_last_decision_day = -1
 	_repatriate_abandoned_enclave_armies(abandoned)
@@ -3376,69 +3467,8 @@ func _nearest_coalition_recipient(
 	return best_nation
 
 
-## 双边议和按结算前快照同时割让双方无法经本国城市连接首都的飞地。
-## 粮仓、联盟通行、当前库存与临时围城均不参与，避免产生第二套飞地定义。
-func _abandon_capital_disconnected_enclaves(
-	nation_a: int,
-	nation_b: int
-) -> Array[int]:
-	if (
-		state.cities_of(nation_a).is_empty()
-		or state.cities_of(nation_b).is_empty()
-	):
-		return [] as Array[int]
-	var connected_by_nation := {
-		nation_a: _capital_connected_territory(nation_a),
-		nation_b: _capital_connected_territory(nation_b),
-	}
-	var cessions: Array[Dictionary] = []
-	for former_owner in [nation_a, nation_b]:
-		var recipient := (
-			nation_b
-			if former_owner == nation_a
-			else nation_a
-		)
-		var connected: Dictionary = connected_by_nation[
-			former_owner
-		]
-		for city in state.cities:
-			if (
-				city.owner_nation == former_owner
-				and not connected.has(city.id)
-			):
-				cessions.append({
-					"city": city,
-					"former_owner": former_owner,
-					"recipient": recipient,
-				})
-	if cessions.is_empty():
-		return [] as Array[int]
-	var abandoned: Array[int] = []
-	for cession in cessions:
-		var city: City = cession["city"]
-		var former_owner := int(cession["former_owner"])
-		var recipient := int(cession["recipient"])
-		var stored_food := (
-			city.food_storage
-			if city.has_warehouse
-			else 0
-		)
-		if city.has_warehouse:
-			state.remove_warehouse(former_owner, city.id)
-			city.food_storage = 0
-		city.owner_nation = recipient
-		city.occupation_sponsor_nation = -1
-		state.recognized_city_owners[city.id] = recipient
-		if stored_food > 0:
-			state.deposit_food(recipient, stored_food)
-		abandoned.append(city.id)
-	state.ownership_revision += 1
-	state.refresh_derived()
-	_ai_last_decision_day = -1
-	_repatriate_abandoned_enclave_armies(abandoned)
-	return abandoned
-
-
+## 返回 nation_id 所属和平宗藩体系内，从该国首都沿正容量道路可达的实控区。
+## 用于集团议和与每日宗藩飞地判断；普通盟国不提供领土连续性。
 func _capital_connected_territory(nation_id: int) -> Dictionary:
 	var capital_id := state.nations[nation_id].capital_city_id
 	if (
@@ -3534,10 +3564,10 @@ func _repatriate_abandoned_enclave_armies(
 
 ## 每日维护：清理宗藩体系内因运行时被占而残留的飞地（非议和路径也能自愈）。
 ## 飞地 = 体系成员实控、但无法沿「体系可通行道路」连回体系首都的城（体系被视为一个整体，
-## 藩王领土经宗主领土连通亦算连续）。处置遵循「优先体系内就近改归、否则割敌」：
-##  - 若飞地组件内同时含宗主与藩王的城（组件本身仍是体系混合体），把整个组件统一到其中
-##    最靠近的存活成员，保证该组件在单一旗号下内部连续（主权连续、不碎旗）。
-##  - 若飞地组件被敌国完全隔断、无法维系，则整体割给相邻敌国（视为实际失控失地）。
+## 藩王领土经宗主领土连通亦算连续）。这里只结算战时实际控制，不直接改写法理：
+##  - 和平或仅邻接中立国时不转移；地理断联本身不是合法割地协议。
+##  - 被敌对体系隔断且组件内无本体系军队时，整块进入敌方宗主的临时占领；
+##    recognized_owner 保持原值，只有后续集团议和才会确认法理转移。
 ## 只在存在宗藩关系且归属发生变化后运行，避免每日热路径空转。
 func _reassign_disconnected_suzerainty_enclaves() -> void:
 	if state.suzerainty.is_empty():
@@ -3568,11 +3598,8 @@ func _reassign_disconnected_suzerainty_enclaves() -> void:
 
 ## 处理单个宗藩体系（根 root、成员 members）的飞地。返回是否发生任何归属变更。
 ## connected = 从体系首都出发、沿「同体系成员实控 + 正容量道路」可达的全部城（体系本土）。
-## 把每个「非本土」的体系城按其飞地连通组件聚合，逐组件决定统一归属：
-##  - 组件通过正容量道路与相邻体系外国家相接 → 和平时可自动改归；战争时仅当组件内
-##    已无本体系守军，才整组件割给（决定性择一的）相邻敌国；
-##  - 否则（内陆孤块，仅与体系自身相邻但仍连不回首都）→ 统一到组件内决定性择一的存活成员，
-##    保证该孤块在单一旗号下内部连续、不再多旗碎裂。
+## 把每个「非本土」的体系城按其飞地连通组件聚合。仅相邻敌对体系且无本体系守军
+## 时改变实控；同体系内部不因断联自动重划封地，体系外中立邻国也不能无协议受领。
 func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 	var member_set := {}
 	for member_id in members:
@@ -3581,20 +3608,25 @@ func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 	var enclave_cities: Array[int] = []
 	for member_id in members:
 		for city in state.cities_of(member_id):
-			if not connected.has(city.id):
+			var legal_owner := state.recognized_owner_of(city.id)
+			if (
+				member_set.has(legal_owner)
+				and not connected.has(city.id)
+			):
 				enclave_cities.append(city.id)
 	if enclave_cities.is_empty():
 		return false
 	enclave_cities.sort()
 	var visited := {}
 	var changed := false
+	var affected_former_owners := {}
 	for seed_city in enclave_cities:
 		if visited.has(seed_city):
 			continue
 		# BFS 出该飞地的连通组件（只沿体系成员实控的城 + 正容量道路），
 		# 同时记录组件外沿相邻的体系外国家（用于决定和平改归或战争割敌）。
 		var component: Array[int] = []
-		var adjacent_external_owner := -1
+		var adjacent_external_owners := {}
 		var queue: Array[int] = [seed_city]
 		visited[seed_city] = true
 		var cursor := 0
@@ -3608,35 +3640,49 @@ func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 					continue
 				var owner := state.cities[neighbor].owner_nation
 				if member_set.has(owner) and not connected.has(neighbor):
-					if not visited.has(neighbor):
+					# 只把本体系法理本土纳入飞地组件；刚占到的外国法理地
+					# 是另一笔占领，不能随本土飞地被整包转手。
+					if (
+						member_set.has(
+							state.recognized_owner_of(neighbor)
+						)
+						and not visited.has(neighbor)
+					):
 						visited[neighbor] = true
 						queue.append(neighbor)
 				elif owner >= 0 and not member_set.has(owner):
-					# 组件外沿的接收方候选（决定性择一，观察者取体系根）。
-					if (
-						adjacent_external_owner < 0
-						or EquivariantOrder.nation_less(
-							state,
-							root,
-							owner,
-							adjacent_external_owner
-						)
-					):
-						adjacent_external_owner = owner
-		var recipient := (
-			adjacent_external_owner
-			if adjacent_external_owner >= 0
-			else _dominant_component_member(component, root)
-		)
+					adjacent_external_owners[owner] = true
+		var recipient := -1
+		for external_value in adjacent_external_owners:
+			var external_owner := int(external_value)
+			if not _enclave_component_at_war_with(
+				component,
+				external_owner
+			):
+				continue
+			var sovereign := state.external_territory_recipient(
+				external_owner
+			)
+			if (
+				sovereign < 0
+				or sovereign == root
+				or state.cities_of(sovereign).is_empty()
+			):
+				continue
+			if (
+				recipient < 0
+				or EquivariantOrder.nation_less(
+					state,
+					root,
+					sovereign,
+					recipient
+				)
+			):
+				recipient = sovereign
 		if recipient < 0:
 			continue
 		if (
-			adjacent_external_owner >= 0
-			and _enclave_component_at_war_with(
-				component,
-				recipient
-			)
-			and _enclave_component_has_system_army(
+			_enclave_component_has_system_army(
 				component,
 				member_set
 			)
@@ -3646,13 +3692,21 @@ func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
 			var city := state.cities[cid]
 			if city.owner_nation == recipient:
 				continue
-			if city.has_warehouse:
+			var former_owner := city.owner_nation
+			if (
+				city.has_warehouse
+				or city.is_capital
+				or state.nations[former_owner].capital_city_id
+					== city.id
+			):
 				state.remove_warehouse(city.owner_nation, city.id)
 				city.food_storage = 0
 			city.owner_nation = recipient
-			city.occupation_sponsor_nation = -1
-			state.recognized_city_owners[city.id] = recipient
+			city.occupation_sponsor_nation = recipient
+			affected_former_owners[former_owner] = true
 			changed = true
+	for former_value in affected_former_owners:
+		state.ensure_valid_capital(int(former_value))
 	return changed
 
 
@@ -3693,33 +3747,6 @@ func _enclave_component_has_system_army(
 		):
 			return true
 	return false
-
-
-## 飞地组件的体系内统一归属：取组件内已实控最多城的存活成员（并列时以根 root 为观察者
-## 按 EquivariantOrder 决定性择一），把整块统一到它，保证组件在单一旗号下内部连续。
-func _dominant_component_member(component: Array[int], root: int) -> int:
-	var count_by_owner := {}
-	for cid in component:
-		var owner := state.cities[cid].owner_nation
-		count_by_owner[owner] = int(count_by_owner.get(owner, 0)) + 1
-	var best := -1
-	var best_count := -1
-	for owner_value in count_by_owner:
-		var owner := int(owner_value)
-		var c := int(count_by_owner[owner])
-		if (
-			c > best_count
-			or (
-				c == best_count
-				and (
-					best < 0
-					or EquivariantOrder.nation_less(state, root, owner, best)
-				)
-			)
-		):
-			best_count = c
-			best = owner
-	return best
 
 
 func _start_war_preparation(
@@ -9133,6 +9160,48 @@ func _enemy_holds_recent_legal_reclamation(
 	return false
 
 
+## 当前主目标无法形成可执行计划时，在所有敌国中找守军最少的可达城市。
+## 守军是第一判据，集结入口数是第二判据，最终用镜像等变城市序稳定决胜。
+func _weak_garrison_campaign_fallback(
+	nation_id: int,
+	enemy_ids: Array,
+	excluded_city: int
+) -> Dictionary:
+	var best := {}
+	for enemy_value in enemy_ids:
+		var enemy_id := int(enemy_value)
+		var candidate := (
+			DiplomacyAI.replacement_war_preparation_objective(
+				state, nation_id, enemy_id, excluded_city
+			)
+		)
+		if candidate.is_empty():
+			continue
+		if (
+			best.is_empty()
+			or int(candidate["defender_troops"])
+				< int(best["defender_troops"])
+			or (
+				int(candidate["defender_troops"])
+					== int(best["defender_troops"])
+				and int(candidate["staging_links"])
+					> int(best["staging_links"])
+			)
+			or (
+				int(candidate["defender_troops"])
+					== int(best["defender_troops"])
+				and int(candidate["staging_links"])
+					== int(best["staging_links"])
+				and EquivariantOrder.city_id_less(
+					state, nation_id, int(candidate["city_id"]),
+					int(best["city_id"])
+				)
+			)
+		):
+			best = candidate
+	return best
+
+
 func _manage_campaign_offensive(
 	nation_id: int,
 	defense_plan: CityDefensePlan = null,
@@ -9289,6 +9358,24 @@ func _manage_campaign_offensive(
 		coordinator,
 		true
 	)
+	if not plan_ready:
+		var fallback := _weak_garrison_campaign_fallback(
+			nation_id, enemy_ids, objective_city
+		)
+		if not fallback.is_empty():
+			objective_city = int(fallback["city_id"])
+			defender_id = state.cities[objective_city].owner_nation
+			plan_ready = _ensure_campaign_preparation_plan(
+				nation_id,
+				objective_city,
+				defense_plan,
+				coordinator,
+				true
+			)
+			if plan_ready:
+				# 在下一轮外交/战役评估前固定当前战区方向，避免又被
+				# 已不可执行的旧目标拉回。
+				nation.campaign_theater_anchor_city = objective_city
 	_record_tick_profile_stage(
 		"campaign_ensure_plan",
 		campaign_profile_started
@@ -11610,15 +11697,24 @@ func _capture_city(
 	execute_post_capture_plan: bool = true
 ) -> void:
 	var old_owner := city.owner_nation
-	var claimant := (
-		owner_override
-		if owner_override >= 0
-		else _occupation_claimant_for_army(army, city)
-	)
+	var claimant := _occupation_claimant_for_army(army, city)
+	if owner_override >= 0:
+		claimant = (
+			owner_override
+			if state.recognized_owner_of(city.id) == owner_override
+			else state.external_territory_recipient(owner_override)
+		)
 	var captured_food := city.food_storage if city.has_warehouse else 0
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
-	if city.has_warehouse and old_owner_valid:
+	if (
+		old_owner_valid
+		and (
+			city.has_warehouse
+			or captured_capital
+			or city.is_capital
+		)
+	):
 		state.remove_warehouse(old_owner, city.id)
 	else:
 		city.is_capital = false
@@ -11694,6 +11790,12 @@ func _capture_city(
 				old_owner,
 				claimant
 			)
+		else:
+			# 和平藩王不整国投降，但仍须立即迁都；新首都保持共享粮仓
+			# 的零库存中继语义。若已经失去最后一城，日末会先让它退出
+			# 自身战争，再清理宗藩记录；不能在这里提前丢失藩王身份。
+			state.ensure_valid_capital(old_owner)
+			state.refresh_derived()
 	if execute_post_capture_plan and captor_can_remain:
 		_execute_campaign_post_capture_plan(army, city)
 
@@ -11919,7 +12021,7 @@ func _occupation_claimant_for_army(
 		if (
 			recognized_owner >= 0
 			and recognized_owner < state.nations.size()
-			and state.nations[recognized_owner].alive
+			and not state.cities_of(recognized_owner).is_empty()
 			and state.is_enemy(
 				recognized_owner,
 				target_city.owner_nation
@@ -11937,11 +12039,13 @@ func _occupation_claimant_for_army(
 		army.occupation_claimant_nation >= 0
 		and army.occupation_claimant_nation
 			< state.nations.size()
-		and state.nations[
+		and not state.cities_of(
 			army.occupation_claimant_nation
-		].alive
+		).is_empty()
 	):
-		return army.occupation_claimant_nation
+		return state.external_territory_recipient(
+			army.occupation_claimant_nation
+		)
 	var origin_city := army.move_from
 	if origin_city < 0 or origin_city >= state.cities.size():
 		origin_city = army.location_city
@@ -11954,8 +12058,8 @@ func _occupation_claimant_for_army(
 				origin_owner
 			)
 		):
-			return origin_owner
-	return army.owner_nation
+			return state.external_territory_recipient(origin_owner)
+	return state.external_territory_recipient(army.owner_nation)
 
 # ------------------------------------------------------------------ 6. 战争状态刷新
 
@@ -12243,6 +12347,7 @@ func _leave_holding(army: Army) -> void:
 ## RETREATING 保证它不受 AI 改写，并可立即离开敌城而不受友方方向容量阻塞。
 func _retreat_to_friendly(army: Army) -> void:
 	var arrived := army.move_to
+	army.battle_id = -1
 	army.move_from = arrived if arrived != -1 else army.move_from
 	army.move_to = -1
 	army.move_progress = 0.0

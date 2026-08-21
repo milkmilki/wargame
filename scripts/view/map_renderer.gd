@@ -4434,4 +4434,6 @@ static func _diplomatic_action_name(action: int) -> String:
 			return "备战"
 		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
 			return "取消备战"
+		DiplomacyAI.Action.RETARGET_WAR_PREPARATION:
+			return "调整备战目标"
 	return "外交"

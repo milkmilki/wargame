@@ -934,6 +934,124 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 	return _field_reaches_warehouse(state, start, army.owner_nation)
 
 
+## 为一个国家一次性构建当月补员可达网络。图为无向图，因此从全部未被围的
+## 本国人口/粮仓枢纽做多源遍历，与逐军从当前位置搜索任一枢纽的布尔结果等价。
+## 返回的 blocked_enemy_edges 同时用于边上军队校验，避免每支军队重复扫描全军。
+static func build_manpower_hub_network(
+	state: GameState,
+	nation_id: int
+) -> Dictionary:
+	var reachable := PackedByteArray()
+	reachable.resize(state.cities.size())
+	reachable.fill(0)
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return {
+			"reachable": reachable,
+			"blocked_enemy_edges": {},
+		}
+	var blocked_enemy_edges := _enemy_occupied_edge_keys(
+		state,
+		nation_id
+	)
+	var queue: Array[int] = []
+	for warehouse in state.warehouse_cities_of(nation_id):
+		if state.city_under_siege(warehouse.id):
+			continue
+		if reachable[warehouse.id] != 0:
+			continue
+		reachable[warehouse.id] = 1
+		queue.append(warehouse.id)
+	var cursor := 0
+	while cursor < queue.size():
+		var city_id := queue[cursor]
+		cursor += 1
+		for neighbor in state.neighbors(city_id):
+			if reachable[neighbor] != 0:
+				continue
+			if (
+				not state.has_military_access(
+					nation_id,
+					state.cities[city_id].owner_nation
+				)
+				or not state.has_military_access(
+					nation_id,
+					state.cities[neighbor].owner_nation
+				)
+			):
+				continue
+			var edge := state.edge_of(city_id, neighbor)
+			if (
+				edge == null
+				or edge.max_manpower <= 0
+				or blocked_enemy_edges.has(
+					GameState.edge_key(edge.city_a, edge.city_b)
+				)
+			):
+				continue
+			reachable[neighbor] = 1
+			queue.append(neighbor)
+	return {
+		"reachable": reachable,
+		"blocked_enemy_edges": blocked_enemy_edges,
+	}
+
+
+## 使用预构建网络判断单军能否补员。围城节点、当前敌占边与军事通行规则
+## 完全复用 can_reach_manpower_hub 的既有语义；这里只把重复图搜索替换为 O(1) 查表。
+static func can_reach_manpower_hub_from_network(
+	state: GameState,
+	army: Army,
+	network: Dictionary
+) -> bool:
+	if (
+		army.owner_nation < 0
+		or army.owner_nation >= state.nations.size()
+		or not network.has("reachable")
+	):
+		return false
+	var reachable: PackedByteArray = network["reachable"]
+	if army.on_edge and army.move_to != -1:
+		var current_edge := state.edge_of(army.move_from, army.move_to)
+		var blocked_enemy_edges: Dictionary = network.get(
+			"blocked_enemy_edges",
+			{}
+		)
+		if (
+			current_edge == null
+			or current_edge.max_manpower <= 0
+			or blocked_enemy_edges.has(
+				GameState.edge_key(
+					current_edge.city_a,
+					current_edge.city_b
+				)
+			)
+		):
+			return false
+		for endpoint in [army.move_from, army.move_to]:
+			if (
+				endpoint >= 0
+				and endpoint < reachable.size()
+				and reachable[endpoint] != 0
+				and state.has_military_access(
+					army.owner_nation,
+					state.cities[endpoint].owner_nation
+				)
+			):
+				return true
+		return false
+	var start := _origin_of(army)
+	return (
+		start >= 0
+		and start < reachable.size()
+		and reachable[start] != 0
+		and state.has_military_access(
+			army.owner_nation,
+			state.cities[start].owner_nation
+		)
+		and not state.city_under_siege(start)
+	)
+
+
 static func _field_reaches_warehouse(state: GameState, start: int, nation_id: int) -> bool:
 	var field := _supply_loss_field(state, start, nation_id)
 	var dist: PackedFloat64Array = field["dist"]

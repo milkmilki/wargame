@@ -72,11 +72,17 @@ func _init() -> void:
 		var max_idle_stack_context := ""
 		var hostile_stationed_events := 0
 		var hostile_stationed_log: Array[String] = []
+		var territory_invariant_failures := 0
+		var first_territory_invariant_failure_day := -1
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(selected_days):
 			if state.winner != -1:
 				break
 			simulation._advance_day()
+			if not state.territory_structure_valid():
+				territory_invariant_failures += 1
+				if first_territory_invariant_failure_day < 0:
+					first_territory_invariant_failure_day = state.day
 			var reverted_legacy_fort := false
 			for city in state.cities:
 				if city.owner_nation == current_owners[city.id]:
@@ -360,6 +366,7 @@ func _init() -> void:
 			DiplomacyAI.Action.LEAVE_ALLIANCE: 0,
 			DiplomacyAI.Action.PREPARE_WAR: 0,
 			DiplomacyAI.Action.CANCEL_WAR_PREPARATION: 0,
+			DiplomacyAI.Action.RETARGET_WAR_PREPARATION: 0,
 		}
 		var objective_declarations := 0
 		var resource_peaces := 0
@@ -632,7 +639,8 @@ func _init() -> void:
 				+ "defended_cities=%d force_mismatches=%d/%d "
 				+ "orders=%d redeploy=%d role_deploy=%d "
 				+ "max_idle_stack=%d/%d/%d stack_at=%s "
-				+ "hostile_stationed=%d commit_failures=%d ms=%d"
+				+ "hostile_stationed=%d territory_invalid=%d@%d "
+				+ "commit_failures=%d ms=%d"
 			)
 			% [
 				world_seed,
@@ -681,6 +689,8 @@ func _init() -> void:
 				max_interior_idle_stack,
 				max_idle_stack_context,
 				hostile_stationed_events,
+				territory_invariant_failures,
+				first_territory_invariant_failure_day,
 				simulation.ai_command_commit_failure_total,
 				elapsed,
 			]
@@ -702,6 +712,7 @@ func _init() -> void:
 			or eliminated_war_relations > 0
 			or terminal_alliance_lock
 			or hostile_stationed_events > 0
+			or territory_invariant_failures > 0
 			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0
 			or (

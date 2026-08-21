@@ -12,6 +12,7 @@ enum Action {
 	CANCEL_WAR_PREPARATION,
 	ENFEOFF,
 	CENTRALIZE,
+	RETARGET_WAR_PREPARATION,
 }
 
 enum FoodPosture {
@@ -46,6 +47,10 @@ const PEACE_ESCALATION_FULL_DAYS: int = 540
 const PEACE_ESCALATION_MAX_BONUS: float = 0.75
 const RECENT_CAPTURE_OBJECTIVE_BONUS: float = 4.0
 const RECENT_RECLAMATION_OBJECTIVE_BONUS: float = 20.0
+## 守军薄弱补偿：常规价值（金/粮/人/战略/包围/争夺）拉不开差距时，主动倾向敌方
+## 守军最少的接壤城，填补“攻势找不到目标”的空档。值域约 [0, 此上限]，故意小于
+## 资源/战略权重，只在其他信号平手时决胜，不喧宾夺主推翻高价值目标。
+const WEAK_GARRISON_OBJECTIVE_BONUS: float = 0.90
 const LEAVE_ALLIANCE_SCORE: float = 0.90
 const ATTITUDE_PEACE_WEIGHT: float = 0.25
 const ATTITUDE_ALLIANCE_WEIGHT: float = 0.35
@@ -124,12 +129,17 @@ const CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD: float = 0.80
 
 static func choose_actions(
 	state: GameState,
-	profile: Dictionary = {}
+	profile: Dictionary = {},
+	use_structure_cache: bool = true
 ) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
 	var committed := {}
 	var evaluation_cache := {}
+	if not use_structure_cache:
+		evaluation_cache["__disable_structure_cache"] = true
 	var profile_enabled := bool(profile.get("enabled", false))
+	if profile_enabled:
+		evaluation_cache["__profile"] = profile
 	var profile_started := (
 		Time.get_ticks_usec() if profile_enabled else 0
 	)
@@ -223,6 +233,23 @@ static func _record_profile_stage(
 		profile[stage] = Time.get_ticks_usec() - started_usec
 
 
+static func _record_evaluation_profile(
+	evaluation_cache: Dictionary,
+	stage: String,
+	started_usec: int
+) -> void:
+	var profile: Dictionary = evaluation_cache.get(
+		"__profile",
+		{}
+	)
+	if profile.is_empty():
+		return
+	profile[stage] = (
+		int(profile.get(stage, 0))
+		+ Time.get_ticks_usec() - started_usec
+	)
+
+
 static func peace_willingness(state: GameState, nation_id: int, enemy_id: int) -> float:
 	return float(
 		peace_willingness_breakdown(
@@ -247,6 +274,11 @@ static func peace_willingness_breakdown(
 		return evaluation_cache[cache_key]
 	if not state.is_enemy(nation_id, enemy_id):
 		return {"score": -INF}
+	var part_started := (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var own_power := _national_power(
 		state,
 		nation_id,
@@ -263,8 +295,22 @@ static func peace_willingness_breakdown(
 	)
 	var war_days := state.day - state.relation_since(nation_id, enemy_id)
 	var extra_wars := maxi(
-		_distinct_enemy_coalition_count(state, nation_id) - 1,
+		_distinct_enemy_coalition_count(
+			state,
+			nation_id,
+			evaluation_cache
+		) - 1,
 		0
+	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_power_wars",
+		part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var no_front := (
 		1.0
@@ -282,10 +328,30 @@ static func peace_willingness_breakdown(
 		enemy_id,
 		evaluation_cache
 	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_situation",
+		part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var resource_report := resource_report(
 		state,
 		nation_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_resources",
+		part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var gold_endurance := clampf(
 		float(resource_report["gold_runway_months"])
@@ -313,6 +379,16 @@ static func peace_willingness_breakdown(
 		nation_id,
 		enemy_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_external_threat",
+		part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var aggression := clampf(
 		state.nations[nation_id].ai_aggression,
@@ -344,6 +420,11 @@ static func peace_willingness_breakdown(
 		nation_id,
 		enemy_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_attitude",
+		part_started
 	)
 	var attitude_component := attitude * ATTITUDE_PEACE_WEIGHT
 	var score := (
@@ -393,13 +474,37 @@ static func peace_assessment(
 			"proposer": -1,
 			"responder": -1,
 		}
-	var bloc_a := state.alliance_bloc(nation_a)
-	var bloc_b := state.alliance_bloc(nation_b)
+	var part_started := (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
+	var bloc_a := _cached_alliance_bloc(
+		state, nation_a, evaluation_cache
+	)
+	var bloc_b := _cached_alliance_bloc(
+		state, nation_b, evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_blocs",
+		part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var breakdown_a := _coalition_peace_breakdown(
 		state,
 		bloc_a,
 		bloc_b,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache,
+		"peace_coalition_breakdown",
+		part_started
 	)
 	var breakdown_b := _coalition_peace_breakdown(
 		state,
@@ -554,7 +659,8 @@ static func _coalition_peace_breakdown(
 	var coalition_extra_wars := maxi(
 		_distinct_enemy_coalition_count_for_bloc(
 			state,
-			own_bloc
+			own_bloc,
+			evaluation_cache
 		) - 1,
 		0
 	)
@@ -600,25 +706,50 @@ static func _coalition_peace_breakdown(
 
 static func _distinct_enemy_coalition_count(
 	state: GameState,
-	nation_id: int
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> int:
+	var cache_key := "enemy_coalition_count:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	return _distinct_enemy_coalition_count_for_bloc(
 		state,
-		state.alliance_bloc(nation_id)
+		_cached_alliance_bloc(
+			state, nation_id, evaluation_cache
+		),
+		evaluation_cache
 	)
 
 
 static func _distinct_enemy_coalition_count_for_bloc(
 	state: GameState,
-	own_bloc: Array[int]
+	own_bloc: Array[int],
+	evaluation_cache: Dictionary = {}
 ) -> int:
+	var own_key := _nation_list_key(own_bloc)
+	var cache_key := "enemy_coalition_count_bloc:%s" % own_key
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var enemy_blocs := {}
 	for member_id in own_bloc:
-		for enemy_id in state.wars_of(member_id):
+		for enemy_id in _cached_wars_of(
+			state, member_id, evaluation_cache
+		):
 			enemy_blocs[
-				_nation_list_key(state.alliance_bloc(enemy_id))
+				_nation_list_key(_cached_alliance_bloc(
+					state, enemy_id, evaluation_cache
+				))
 			] = true
-	return enemy_blocs.size()
+	var result := enemy_blocs.size()
+	if not bool(evaluation_cache.get(
+		"__disable_structure_cache", false
+	)):
+		evaluation_cache[cache_key] = result
+		for member_id in own_bloc:
+			evaluation_cache[
+				"enemy_coalition_count:%d" % member_id
+			] = result
+	return result
 
 
 static func war_situation_score(
@@ -703,11 +834,24 @@ static func diplomatic_attitude_breakdown(
 	]
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
+	var part_started := (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var historical := _historical_attitude(
 		state,
 		nation_id,
 		other_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "attitude_history", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var frontier_count := _frontier_edges(
 		state,
@@ -724,6 +868,14 @@ static func diplomatic_attitude_breakdown(
 		nation_id,
 		other_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "attitude_frontier_objective", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var objective_value := float(objective.get("value", 0.0))
 	var objective_component := maxf(
@@ -752,6 +904,9 @@ static func diplomatic_attitude_breakdown(
 			other_id,
 			evaluation_cache
 		)
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "attitude_political", part_started
 	)
 	var political := (
 		float(common_enemies) * COMMON_ENEMY_ATTITUDE
@@ -788,6 +943,13 @@ static func _historical_attitude(
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
+	if not bool(evaluation_cache.get(
+		"__disable_structure_cache", false
+	)):
+		_build_historical_attitude_matrix(
+			state, evaluation_cache
+		)
+		return float(evaluation_cache.get(cache_key, 0.0))
 	var revenge := 0.0
 	for event in state.diplomatic_history:
 		if (
@@ -821,6 +983,64 @@ static func _historical_attitude(
 	var result := maxf(-revenge, REVENGE_ATTITUDE_FLOOR)
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 单遍外交历史构建所有方向性的复仇态度。旧实现对每个国家对重扫完整历史；
+## 一次月度外交评估内历史冻结，故可把每条集团和平事件直接展开到双方成员对。
+static func _build_historical_attitude_matrix(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> void:
+	if evaluation_cache.has("historical_attitude_matrix_built"):
+		return
+	evaluation_cache["historical_attitude_matrix_built"] = true
+	var revenge_by_pair := {}
+	for event in state.diplomatic_history:
+		if int(event.get("action", Action.NONE)) != Action.MAKE_PEACE:
+			continue
+		var event_a := int(event.get("nation_a", -1))
+		var event_b := int(event.get("nation_b", -1))
+		var bloc_a: Array = event.get("bloc_a", [event_a])
+		var bloc_b: Array = event.get("bloc_b", [event_b])
+		var outcome_a := float(event.get("war_outcome_a", 0.0))
+		var outcome_b := float(event.get("war_outcome_b", 0.0))
+		var surrendering := int(event.get("surrendering_nation", -1))
+		for nation_value in bloc_a:
+			var nation_id := int(nation_value)
+			var defeat := maxf(
+				-outcome_a * REVENGE_PER_LOST_SITUATION_POINT,
+				0.0
+			)
+			if surrendering == nation_id:
+				defeat = maxf(defeat, REVENGE_SURRENDER_PENALTY)
+			if defeat <= 0.0:
+				continue
+			for other_value in bloc_b:
+				var key := "%d:%d" % [nation_id, int(other_value)]
+				revenge_by_pair[key] = (
+					float(revenge_by_pair.get(key, 0.0)) + defeat
+				)
+		for nation_value in bloc_b:
+			var nation_id := int(nation_value)
+			var defeat := maxf(
+				-outcome_b * REVENGE_PER_LOST_SITUATION_POINT,
+				0.0
+			)
+			if surrendering == nation_id:
+				defeat = maxf(defeat, REVENGE_SURRENDER_PENALTY)
+			if defeat <= 0.0:
+				continue
+			for other_value in bloc_a:
+				var key := "%d:%d" % [nation_id, int(other_value)]
+				revenge_by_pair[key] = (
+					float(revenge_by_pair.get(key, 0.0)) + defeat
+				)
+	for pair_key_value in revenge_by_pair:
+		var pair_key := str(pair_key_value)
+		evaluation_cache["history:%s" % pair_key] = maxf(
+			-float(revenge_by_pair[pair_key]),
+			REVENGE_ATTITUDE_FLOOR
+		)
 
 
 static func _enemy_alliance_count(
@@ -872,9 +1092,32 @@ static func unification_rivalry(
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
 	var controlled := 0
-	for city in state.cities:
-		if city.owner_nation in [nation_id, other_id]:
-			controlled += 1
+	var alive_count := 0
+	if bool(evaluation_cache.get(
+		"__disable_structure_cache", false
+	)):
+		for city in state.cities:
+			if city.owner_nation in [nation_id, other_id]:
+				controlled += 1
+		for nation in state.nations:
+			if nation.alive:
+				alive_count += 1
+	else:
+		controlled = (
+			_cached_cities_of(
+				state, nation_id, evaluation_cache
+			).size()
+			+ _cached_cities_of(
+				state, other_id, evaluation_cache
+			).size()
+		)
+		if not evaluation_cache.has("alive_nation_count"):
+			var cached_alive_count := 0
+			for nation in state.nations:
+				if nation.alive:
+					cached_alive_count += 1
+			evaluation_cache["alive_nation_count"] = cached_alive_count
+		alive_count = int(evaluation_cache["alive_nation_count"])
 	var pair_share := (
 		float(controlled) / float(maxi(state.cities.size(), 1))
 	)
@@ -883,10 +1126,6 @@ static func unification_rivalry(
 		0.0,
 		1.0
 	)
-	var alive_count := 0
-	for nation in state.nations:
-		if nation.alive:
-			alive_count += 1
 	var rival_scarcity := (
 		1.0 / float(maxi(alive_count - 1, 1))
 	)
@@ -1082,6 +1321,11 @@ static func alliance_willingness(
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
+	var part_started := (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	if state.relation_between(nation_id, target_id) != GameState.DiplomaticRelation.NEUTRAL:
 		return -INF
 	if (
@@ -1106,6 +1350,14 @@ static func alliance_willingness(
 		evaluation_cache
 	):
 		return -INF
+	_record_evaluation_profile(
+		evaluation_cache, "alliance_gate", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var common_enemies := _common_enemy_count(
 		state,
 		nation_id,
@@ -1133,11 +1385,27 @@ static func alliance_willingness(
 		) > 0
 		else 0.0
 	)
+	_record_evaluation_profile(
+		evaluation_cache, "alliance_common_power", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var shared_threat := _shared_threat(
 		state,
 		nation_id,
 		target_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "alliance_shared_threat", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var balance_affinity := maxf(1.0 - imbalance, 0.0) * 0.55
 	var frontier_release := _alliance_frontier_release_value(
@@ -1145,6 +1413,14 @@ static func alliance_willingness(
 		nation_id,
 		target_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "alliance_frontier_release", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
 	)
 	var attitude := diplomatic_attitude(
 		state,
@@ -1157,6 +1433,9 @@ static func alliance_willingness(
 		nation_id,
 		target_id,
 		evaluation_cache
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "alliance_attitude_unification", part_started
 	)
 	var result := (
 		0.35
@@ -1250,6 +1529,11 @@ static func war_desire(
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
+	var part_started := (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	if (
 		not state.can_alliance_declare_war(nation_id, target_id)
 		or _cached_wars_of(
@@ -1272,6 +1556,14 @@ static func war_desire(
 	):
 		evaluation_cache[cache_key] = -INF
 		return -INF
+	_record_evaluation_profile(
+		evaluation_cache, "war_gate", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var report := resource_report(
 		state,
 		nation_id,
@@ -1300,6 +1592,14 @@ static func war_desire(
 	if not offensive_food_sustainable(state, food_plan):
 		evaluation_cache[cache_key] = -INF
 		return -INF
+	_record_evaluation_profile(
+		evaluation_cache, "war_resources_food", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var objective := _cached_war_objective(
 		state,
 		nation_id,
@@ -1309,6 +1609,14 @@ static func war_desire(
 	if objective.is_empty():
 		evaluation_cache[cache_key] = -INF
 		return -INF
+	_record_evaluation_profile(
+		evaluation_cache, "war_objective", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	# 共同防御联盟不参加成员主动发动的战争；进攻方只能计算本国战力。
 	var own_power := _national_power(
 		state,
@@ -1356,6 +1664,14 @@ static func war_desire(
 			evaluation_cache
 		)
 	) * 0.15
+	_record_evaluation_profile(
+		evaluation_cache, "war_power_scoring", part_started
+	)
+	part_started = (
+		Time.get_ticks_usec()
+		if evaluation_cache.has("__profile")
+		else 0
+	)
 	var aggression_bonus := (
 		_ai_aggression(state, nation_id) - 1.0
 	)
@@ -1375,6 +1691,9 @@ static func war_desire(
 		state,
 		nation_id,
 		target_id
+	)
+	_record_evaluation_profile(
+		evaluation_cache, "war_attitude_unification", part_started
 	)
 	var result := (
 		ratio
@@ -1507,6 +1826,17 @@ static func _neutral_border_massing_ratio(
 		return float(evaluation_cache[cache_key])
 	if not evaluation_cache.has("border_massing_matrix_built"):
 		_build_border_massing_matrix(state, evaluation_cache)
+	var observer_cache_key := "neutral_massing_observer:%d" % observer_id
+	var cache_by_observer := (
+		state.is_enemy(observer_id, current_enemy_id)
+		and not bool(evaluation_cache.get(
+			"__disable_structure_cache", false
+		))
+	)
+	if cache_by_observer and evaluation_cache.has(observer_cache_key):
+		var cached := float(evaluation_cache[observer_cache_key])
+		evaluation_cache[cache_key] = cached
+		return cached
 	var border_power := 0.0
 	for other in state.nations:
 		if (
@@ -1534,6 +1864,8 @@ static func _neutral_border_massing_ratio(
 		PEACE_MAX_BORDER_MASSING_RATIO
 	)
 	evaluation_cache[cache_key] = result
+	if cache_by_observer:
+		evaluation_cache[observer_cache_key] = result
 	return result
 
 
@@ -2361,7 +2693,8 @@ static func select_war_objective(
 	state: GameState,
 	nation_id: int,
 	target_id: int,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	excluded_city: int = -1
 ) -> Dictionary:
 	var target_cities := (
 		_cached_cities_of(
@@ -2378,26 +2711,42 @@ static func select_war_objective(
 	var max_food := 1
 	var max_manpower := 1
 	var required_capacity := objective_staging_capacity()
+	# 先收集真正具备集结入口的候选。守军归一化只能消费这批候选，
+	# 不得让不可达内陆城的大守军稀释薄弱目标之间的差异。
+	var defender_index := _city_defender_troop_index(
+		state, nation_id, evaluation_cache
+	)
+	var candidate_links := {}
+	var max_reachable_garrison := 1
 	for city in target_cities:
 		max_gold = maxi(max_gold, city.gold_per_month)
 		max_food = maxi(max_food, city.food_per_half_year)
 		max_manpower = maxi(max_manpower, city.manpower_per_month)
-	var best: Dictionary = {}
-	for city in target_cities:
+		if city.id == excluded_city:
+			continue
 		var own_links := 0
 		for neighbor in state.neighbors(city.id):
 			var edge := state.edge_of(city.id, neighbor)
 			if (
 				edge != null
-				and edge.max_manpower
-					>= required_capacity
+				and edge.max_manpower >= required_capacity
 				and state.has_military_access(
 					nation_id, state.cities[neighbor].owner_nation
 				)
 			):
 				own_links += 1
-		if own_links == 0:
+		if own_links <= 0:
 			continue
+		candidate_links[city.id] = own_links
+		max_reachable_garrison = maxi(
+			max_reachable_garrison,
+			int(defender_index.get(city.id, 0))
+		)
+	var best: Dictionary = {}
+	for city in target_cities:
+		if not candidate_links.has(city.id):
+			continue
+		var own_links := int(candidate_links[city.id])
 		var gold_value := 1.5 * float(city.gold_per_month) / float(max_gold)
 		var food_value := 1.2 * float(city.food_per_half_year) / float(max_food)
 		var manpower_value := 1.3 * float(city.manpower_per_month) / float(max_manpower)
@@ -2441,12 +2790,20 @@ static func select_war_objective(
 			if legal_reclamation
 			else RECENT_CAPTURE_OBJECTIVE_BONUS
 		)
+		# 守军空虚补偿：守军越少（相对本国接壤敌城的最强守军）加分越高。这让攻势在
+		# 常规价值拉不开差距时主动倒向最好打的敌城，避免“找不到目标就空转”。
+		var defender_troops := int(defender_index.get(city.id, 0))
+		var weak_garrison_value := (
+			1.0 - float(defender_troops)
+				/ float(max_reachable_garrison)
+		) * WEAK_GARRISON_OBJECTIVE_BONUS
 		var value := (
 			gold_value
 			+ food_value
 			+ manpower_value
 			+ strategic_value
 			+ contest_value
+			+ weak_garrison_value
 		)
 		if (
 			best.is_empty()
@@ -2465,7 +2822,7 @@ static func select_war_objective(
 				"city_id": city.id,
 				"value": value,
 				"reason": (
-					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、包围值%.2f、争夺值%.2f）"
+					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、包围值%.2f、争夺值%.2f、守军%d空虚值%.2f）"
 					% [
 						city.id,
 						(
@@ -2488,10 +2845,93 @@ static func select_war_objective(
 						strategic_value,
 						encirclement_score,
 						contest_value,
+						defender_troops,
+						weak_garrison_value,
 					]
 				),
 			}
 	return best
+
+
+## 原目标被占、易手或道路封闭时，直接在同一敌国可达城市里选择守军最少者。
+## 这是完整价值评分之外的兜底层，确保“攻势找不到目标”时优先攻击空虚城市。
+static func replacement_war_preparation_objective(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	current_city: int,
+	evaluation_cache: Dictionary = {}
+) -> Dictionary:
+	var defender_index := _city_defender_troop_index(
+		state, nation_id, evaluation_cache
+	)
+	var best_city := -1
+	var best_defenders := 2147483647
+	var best_links := -1
+	for city in state.cities_of(target_id):
+		if city.id == current_city:
+			continue
+		var staging := staging_cities_for_objective(
+			state, nation_id, city.id
+		)
+		if staging.is_empty():
+			continue
+		var defenders := int(defender_index.get(city.id, 0))
+		if (
+			defenders < best_defenders
+			or (defenders == best_defenders and staging.size() > best_links)
+			or (
+				defenders == best_defenders
+				and staging.size() == best_links
+				and (
+					best_city < 0
+					or EquivariantOrder.city_id_less(
+						state, nation_id, city.id, best_city
+					)
+				)
+			)
+		):
+			best_city = city.id
+			best_defenders = defenders
+			best_links = staging.size()
+	if best_city < 0:
+		return {}
+	return {
+		"city_id": best_city,
+		"value": WEAK_GARRISON_OBJECTIVE_BONUS,
+		"defender_troops": best_defenders,
+		"staging_links": best_links,
+		"reason": (
+			"薄弱守军兜底：城市%d当前守军%d、可用集结入口%d"
+			% [best_city, best_defenders, best_links]
+		),
+	}
+
+
+## 目标城当前实际驻守敌军兵力索引（IDLE/RECOVERING）。一次外交评估只扫描
+## 全军一次，避免目标评分退化为 O(城市×军队)。
+static func _city_defender_troop_index(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Dictionary:
+	var cache_key := "city_defender_troops:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
+	var result := {}
+	for army in state.armies:
+		if (
+			army.size > 0
+			and army.owner_nation != nation_id
+			and army.location_city >= 0
+			and army.state in [Army.State.IDLE, Army.State.RECOVERING]
+		):
+			result[army.location_city] = (
+				int(result.get(army.location_city, 0)) + army.size
+			)
+	if not evaluation_cache.is_empty():
+		evaluation_cache[cache_key] = result
+	return result
 
 
 static func leave_alliance_desire(
@@ -2589,8 +3029,12 @@ static func _collect_peace_actions(
 				state.is_in_civil_war(a) or state.is_in_civil_war(b)
 			):
 				continue
-			var bloc_a := state.alliance_bloc(a)
-			var bloc_b := state.alliance_bloc(b)
+			var bloc_a := _cached_alliance_bloc(
+				state, a, evaluation_cache
+			)
+			var bloc_b := _cached_alliance_bloc(
+				state, b, evaluation_cache
+			)
 			var war_key := _coalition_pair_key(bloc_a, bloc_b)
 			if processed_wars.has(war_key):
 				continue
@@ -2598,7 +3042,8 @@ static func _collect_peace_actions(
 			var war_days := _coalition_war_days(
 				state,
 				bloc_a,
-				bloc_b
+				bloc_b,
+				evaluation_cache
 			)
 			if war_days < MIN_WAR_DAYS:
 				continue
@@ -2692,8 +3137,14 @@ static func _nation_list_key(nation_ids: Array[int]) -> String:
 static func _coalition_war_days(
 	state: GameState,
 	bloc_a: Array[int],
-	bloc_b: Array[int]
+	bloc_b: Array[int],
+	evaluation_cache: Dictionary = {}
 ) -> int:
+	var cache_key := "coalition_war_days:%s" % (
+		_coalition_pair_key(bloc_a, bloc_b)
+	)
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
 	var started_day := state.day
 	var found := false
 	for member_a in bloc_a:
@@ -2705,15 +3156,23 @@ static func _coalition_war_days(
 				state.relation_since(member_a, member_b)
 			)
 			found = true
-	return state.day - started_day if found else 0
+	var result := state.day - started_day if found else 0
+	if not bool(evaluation_cache.get(
+		"__disable_structure_cache", false
+	)):
+		evaluation_cache[cache_key] = result
+	return result
 
 
 static func _commit_alliance_bloc(
 	state: GameState,
 	nation_id: int,
-	committed: Dictionary
+	committed: Dictionary,
+	evaluation_cache: Dictionary
 ) -> void:
-	for member_id in state.alliance_bloc(nation_id):
+	for member_id in _cached_alliance_bloc(
+		state, nation_id, evaluation_cache
+	):
 		committed[member_id] = true
 
 
@@ -2770,8 +3229,8 @@ static func _collect_leave_alliance_actions(
 					% [attitude, unification_pressure, score]
 				),
 			})
-			_commit_alliance_bloc(state, a, committed)
-			_commit_alliance_bloc(state, b, committed)
+			_commit_alliance_bloc(state, a, committed, evaluation_cache)
+			_commit_alliance_bloc(state, b, committed, evaluation_cache)
 
 
 static func _collect_alliance_actions(
@@ -2829,8 +3288,8 @@ static func _collect_alliance_actions(
 					+ "双边态度%.2f/%.2f、结盟意愿%.2f/%.2f"
 				) % [attitude_a, attitude_b, score_a, score_b],
 			})
-			_commit_alliance_bloc(state, a, committed)
-			_commit_alliance_bloc(state, b, committed)
+			_commit_alliance_bloc(state, a, committed, evaluation_cache)
+			_commit_alliance_bloc(state, b, committed, evaluation_cache)
 
 
 static func _collect_war_actions(
@@ -2847,12 +3306,22 @@ static func _collect_war_actions(
 		if state.is_vassal(nation.id):
 			continue
 		if nation.war_preparation_target_nation >= 0:
+			var preparation_started := (
+				Time.get_ticks_usec()
+				if evaluation_cache.has("__profile")
+				else 0
+			)
 			_collect_existing_war_preparation(
 				state,
 				nation.id,
 				actions,
 				committed,
 				evaluation_cache
+			)
+			_record_evaluation_profile(
+				evaluation_cache,
+				"war_existing_preparation",
+				preparation_started
 			)
 			continue
 		# 取消备战冷却：刚取消过备战的国家在冷却期内不得重新发起，打断终局横跳正反馈。
@@ -2862,7 +3331,12 @@ static func _collect_war_actions(
 				< WAR_PREPARATION_CANCEL_COOLDOWN_DAYS
 		):
 			continue
-		if (
+		var part_started := (
+			Time.get_ticks_usec()
+			if evaluation_cache.has("__profile")
+			else 0
+		)
+		var precheck_failed := (
 			_cached_wars_of(
 				state,
 				nation.id,
@@ -2878,8 +3352,17 @@ static func _collect_war_actions(
 					evaluation_cache
 				)
 			)
-		):
+		)
+		_record_evaluation_profile(
+			evaluation_cache, "war_collect_precheck", part_started
+		)
+		if precheck_failed:
 			continue
+		part_started = (
+			Time.get_ticks_usec()
+			if evaluation_cache.has("__profile")
+			else 0
+		)
 		var best_target := -1
 		var best_score := -INF
 		for target_id in _bordering_nation_ids(
@@ -2910,8 +3393,16 @@ static func _collect_war_actions(
 			):
 				best_score = score
 				best_target = target.id
+		_record_evaluation_profile(
+			evaluation_cache, "war_collect_candidates", part_started
+		)
 		if best_target == -1 or best_score < WAR_DECLARE_SCORE:
 			continue
+		part_started = (
+			Time.get_ticks_usec()
+			if evaluation_cache.has("__profile")
+			else 0
+		)
 		var objective := _cached_war_objective(
 			state,
 			nation.id,
@@ -3004,8 +3495,15 @@ static func _collect_war_actions(
 				]
 			),
 		})
-		_commit_alliance_bloc(state, nation.id, committed)
-		_commit_alliance_bloc(state, best_target, committed)
+		_record_evaluation_profile(
+			evaluation_cache, "war_collect_finalize", part_started
+		)
+		_commit_alliance_bloc(
+			state, nation.id, committed, evaluation_cache
+		)
+		_commit_alliance_bloc(
+			state, best_target, committed, evaluation_cache
+		)
 
 
 static func _collect_existing_war_preparation(
@@ -3018,20 +3516,47 @@ static func _collect_existing_war_preparation(
 	var nation := state.nations[nation_id]
 	var target_id := nation.war_preparation_target_nation
 	var objective_city := nation.war_preparation_objective_city
-	var valid := (
+	# 备战是战略状态，不依赖瞬时道路容量或边境屯兵。目标国仍是合法敌手时，
+	# 先在同国改选一个可达的薄弱城市；如果整个边境暂时封闭则保持备战等待，
+	# 绝不因道路状态发出取消，从根上消除“封路→取消→恢复→重开”的横跳。
+	var target_nation_valid := (
 		target_id >= 0
 		and target_id < state.nations.size()
 		and state.nations[target_id].alive
 		and state.can_alliance_declare_war(nation_id, target_id)
+	)
+	var objective_valid := (
+		target_nation_valid
 		and objective_city >= 0
 		and objective_city < state.cities.size()
 		and state.cities[objective_city].owner_nation == target_id
+	)
+	var has_route := (
+		objective_valid
 		and not staging_cities_for_objective(
 			state,
 			nation_id,
 			objective_city
 		).is_empty()
 	)
+	if target_nation_valid and (not objective_valid or not has_route):
+		var replacement := replacement_war_preparation_objective(
+			state, nation_id, target_id, objective_city, evaluation_cache
+		)
+		if not replacement.is_empty():
+			actions.append({
+				"kind": Action.RETARGET_WAR_PREPARATION,
+				"a": nation_id,
+				"b": target_id,
+				"objective_city": int(replacement["city_id"]),
+				"objective_reason": str(replacement["reason"]),
+				"reason": (
+					"原备战目标城市%d不可用，保持对国%d备战并改向%s"
+					% [objective_city, target_id, replacement["reason"]]
+				),
+			})
+			committed[nation_id] = true
+			return
 	var elapsed := state.day - nation.war_preparation_started_day
 	var resources_ready := war_preparation_resources_ready(
 		state,
@@ -3050,13 +3575,16 @@ static func _collect_existing_war_preparation(
 	)
 	var assembly_deadline_expired := (
 		elapsed >= WAR_PREPARATION_MAX_DAYS
+		and has_route
 		and not preparation_ready
 	)
 	# 治本：集结超时但仍是合法目标、且已集结到「足够发起」的最低兵力时，改为尽力而战——
 	# 用现有可用主战军团立即宣战，而不是无限空转/取消再重开。避免终局残编战团凑不齐
 	# required_assault_troops 的完美门槛而永远打不出去（军队因此零移动）。
 	var best_effort_launch := (
-		valid
+		target_nation_valid
+		and objective_valid
+		and has_route
 		and not resource_grace_expired
 		and assembly_deadline_expired
 		and staged_troops_for_objective(state, nation_id, objective_city)
@@ -3068,9 +3596,8 @@ static func _collect_existing_war_preparation(
 	if (
 		not best_effort_launch
 		and (
-			not valid
+			not target_nation_valid
 			or resource_grace_expired
-			or assembly_deadline_expired
 		)
 	):
 		actions.append({
@@ -3078,15 +3605,17 @@ static func _collect_existing_war_preparation(
 			"a": nation_id,
 			"b": target_id,
 			"reason": (
-				"目标失效、进攻道路中断、资源连续不足%d天或%d天内无法完成集结，取消对国%d的战争准备"
+				"目标国失效或己方资源连续不足%d天，取消对国%d的战争准备；道路、敌军屯兵和集结进度不触发取消"
 				% [
 					WAR_PREPARATION_RESOURCE_GRACE_DAYS,
-					WAR_PREPARATION_MAX_DAYS,
 					target_id,
 				]
 			),
 		})
 		committed[nation_id] = true
+		return
+	# 没有任何可达目标时保持战略备战；道路恢复或边境易手后会自动重选。
+	if not objective_valid or not has_route:
 		return
 	if not resources_ready and not best_effort_launch:
 		return
@@ -3126,8 +3655,12 @@ static func _collect_existing_war_preparation(
 			]
 		),
 	})
-	_commit_alliance_bloc(state, nation_id, committed)
-	_commit_alliance_bloc(state, target_id, committed)
+	_commit_alliance_bloc(
+		state, nation_id, committed, evaluation_cache
+	)
+	_commit_alliance_bloc(
+		state, target_id, committed, evaluation_cache
+	)
 
 
 static func _collect_preparation_alliance(
@@ -3497,6 +4030,28 @@ static func _cached_wars_of(
 	if not evaluation_cache.has(cache_key):
 		evaluation_cache[cache_key] = state.wars_of(nation_id)
 	return evaluation_cache[cache_key] as Array[int]
+
+
+static func _cached_alliance_bloc(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary
+) -> Array[int]:
+	if bool(evaluation_cache.get(
+		"__disable_structure_cache", false
+	)):
+		return state.alliance_bloc(nation_id)
+	var cache_key := "alliance_bloc:%d" % nation_id
+	if not evaluation_cache.has(cache_key):
+		var bloc := state.alliance_bloc(nation_id)
+		for member_id in bloc:
+			evaluation_cache[
+				"alliance_bloc:%d" % member_id
+			] = bloc
+	return evaluation_cache.get(
+		cache_key,
+		[] as Array[int]
+	) as Array[int]
 
 
 static func _cached_allies_of(

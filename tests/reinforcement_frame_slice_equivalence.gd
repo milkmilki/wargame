@@ -29,6 +29,9 @@ func _start_world(disable_slicing: bool) -> void:
 	root.add_child(_active_sim)
 	_active_sim.setup(_active_state)
 	_active_sim.reinforcement_frame_slicing_disabled = disable_slicing
+	_active_sim.runtime_day_committed.connect(
+		_on_runtime_day_committed
+	)
 	_active_sim.set_speed_multiplier(32.0)
 
 
@@ -36,6 +39,8 @@ func _process(_delta: float) -> bool:
 	if _phase == 2:
 		return false
 	if _active_state.day < _target_days and _active_state.winner == -1:
+		return false
+	if _active_sim.runtime_day_in_progress():
 		return false
 	if _phase == 0:
 		for army in _active_state.armies:
@@ -77,6 +82,11 @@ func _finish() -> void:
 	))
 	_sliced_sim.queue_free()
 	quit(0 if mismatches == 0 else 1)
+
+
+func _on_runtime_day_committed(day: int) -> void:
+	if day >= _target_days:
+		_active_sim.paused = true
 
 
 ## 补员只改变 army.size 与 nation.manpower_pool，故指纹取 size 即可捕获其结果；

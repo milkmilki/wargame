@@ -408,14 +408,24 @@ func apply_city_editor_changes(
 	):
 		return {"ok": false, "error": "陆地城市不能移动到海洋，码头位置暂不可手动移动。"}
 	city.map_position = new_position
-	var owner := clampi(int(changes.get("owner_nation", city.owner_nation)), 0, nations.size() - 1)
-	var owner_changed := owner != city.owner_nation
+	var previous_owner := city.owner_nation
+	var owner := clampi(int(changes.get("owner_nation", previous_owner)), 0, nations.size() - 1)
+	var owner_changed := owner != previous_owner
 	if (
 		owner_changed
 		and not city.is_dock
-		and land_cities_of(city.owner_nation).size() <= 1
+		and land_cities_of(previous_owner).size() <= 1
 	):
 		return {"ok": false, "error": "不能转移一个国家的最后一座陆地城市。"}
+	if (
+		owner_changed
+		and (
+			city.is_capital
+			or city.has_warehouse
+			or nations[previous_owner].capital_city_id == city_id
+		)
+	):
+		remove_warehouse(previous_owner, city_id)
 	city.owner_nation = owner
 	city.fort_strength_max = maxi(int(changes.get("fort_strength_max", city.fort_strength_max)), 0)
 	city.fort_strength = clampi(int(changes.get("fort_strength", city.fort_strength)), 0, city.fort_strength_max)
@@ -437,6 +447,8 @@ func apply_city_editor_changes(
 		recognized_city_owners[city_id] = owner
 		city.occupation_sponsor_nation = -1
 		ownership_revision += 1
+		ensure_valid_capital(previous_owner)
+		ensure_valid_capital(owner)
 	if position_changed:
 		var land_positions: Array[Vector2] = []
 		for land_city in land_cities():
@@ -693,11 +705,12 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 		city.terrain_relief = float(dock_data["relief"])
 		city.is_dock = true
 		var road_t := float(dock_data["road_t"])
-		var owner_city := (
+		var owner_city := int(dock_data.get(
+			"owner_city",
 			int(dock_data["road_a"])
-			if road_t <= 0.5
-			else int(dock_data["road_b"])
-		)
+				if road_t <= 0.5
+				else int(dock_data["road_b"])
+		))
 		city.owner_nation = cities[owner_city].owner_nation
 		city.fort_strength = 10
 		city.fort_strength_max = 10
@@ -2969,6 +2982,31 @@ func suzerainty_root(nation_id: int) -> int:
 	return current
 
 
+## 对外战争中新取得领土的主权接收者。和平宗藩没有独立议和权，故沿非内战
+## 宗藩链上溯到当前主权方；削藩内战边在政治上已经断开，反叛方及其和平子树
+## 以反叛方为接收者。死亡或非法宗主不会获得新领土，避免悬空记录复活死国。
+func external_territory_recipient(nation_id: int) -> int:
+	if nation_id < 0 or nation_id >= nations.size():
+		return -1
+	var current := nation_id
+	var guard := 0
+	while (
+		suzerainty.has(current)
+		and not is_in_civil_war(current)
+		and guard <= nations.size()
+	):
+		var overlord_id := overlord_of(current)
+		if (
+			overlord_id < 0
+			or overlord_id >= nations.size()
+			or cities_of(overlord_id).is_empty()
+		):
+			break
+		current = overlord_id
+		guard += 1
+	return current
+
+
 ## nation_id 所属宗藩体系的全部成员（含宗主与各级藩王），按 id 升序。
 ## 与 alliance_bloc 的区别：bloc 是对外军事共同体（对称 ALLIED 连通分量），
 ## 可能包含平等盟友；本方法只沿有向宗藩链聚合同一个宗主根下的成员。
@@ -3118,9 +3156,45 @@ func prune_dead_suzerainty() -> bool:
 			or subject_id >= nations.size()
 			or not nations[subject_id].alive
 		):
+			var successor := overlord_of(subject_id)
+			if (
+				successor >= 0
+				and successor < nations.size()
+				and nations[successor].alive
+			):
+				_inherit_recognized_territory(
+					subject_id,
+					successor
+				)
 			suzerainty.erase(subject_id)
 			changed = true
 	return changed
+
+
+## 灭亡藩王的封地法理回归直接宗主。只迁移 recognized_owner，不改变当前实控；
+## 若继承者本来就控制该城，则同时清除已失去意义的占领声明。
+func _inherit_recognized_territory(
+	former_owner: int,
+	successor: int
+) -> void:
+	if (
+		former_owner < 0
+		or former_owner >= nations.size()
+		or successor < 0
+		or successor >= nations.size()
+		or former_owner == successor
+	):
+		return
+	var changed := false
+	for city in cities:
+		if recognized_owner_of(city.id) != former_owner:
+			continue
+		recognized_city_owners[city.id] = successor
+		if city.owner_nation == successor:
+			city.occupation_sponsor_nation = -1
+		changed = true
+	if changed:
+		ownership_revision += 1
 
 
 ## 藩王脱离宗藩成为独立主权时，原“零库存中继首都”必须升格为自身粮池。
@@ -3251,7 +3325,8 @@ func enfeoff(
 
 ## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。通用兼并原语，
 ## 同时服务于「和平撤藩」（宗主吸收藩王）与「削藩内战通吃」（胜者吸收败者）。
-## absorbed 随后成为无城的死国（alive=false）。不处理宗藩记录，调用方负责。
+## absorbed 随后成为无城死国；其直接藩王改投 absorber，被吸收节点的宗藩记录
+## 原子移除。这样多级宗藩不会因调用方先删父级记录而把下级藩王误释放为独立国。
 func annex_nation(absorber: int, absorbed: int) -> void:
 	if (
 		absorber < 0 or absorber >= nations.size()
@@ -3259,6 +3334,21 @@ func annex_nation(absorber: int, absorbed: int) -> void:
 		or absorber == absorbed
 	):
 		return
+	# 0. 先迁移政治子树。若 absorber 本身正是 absorbed 的藩王（反叛方
+	# 吞并宗主），先解除这条边，避免把胜者改挂到自己名下形成环。
+	if overlord_of(absorber) == absorbed:
+		suzerainty.erase(absorber)
+	for child_id in subjects_of(absorbed):
+		if child_id == absorber:
+			continue
+		suzerainty[child_id]["overlord_id"] = absorber
+		suzerainty[child_id]["civil_war"] = false
+		set_diplomatic_relation(
+			child_id,
+			absorber,
+			DiplomaticRelation.ALLIED
+		)
+	suzerainty.erase(absorbed)
 	# 1. 主权：实控与法理是两个独立维度。分别迁移 absorbed 的实控区和法理区，
 	#    避免吞掉它暂时占领的第三方法理，也避免首都先失陷后遗留死国法理。
 	#    粮仓存粮先累加，稍后并入 absorber 首都粮仓（守恒）。
@@ -3310,7 +3400,7 @@ func annex_nation(absorber: int, absorbed: int) -> void:
 	var absorber_capital := nations[absorber].capital_city_id
 	if absorbed_food > 0 and absorber_capital >= 0 and absorber_capital < cities.size():
 		cities[absorber_capital].food_storage += absorbed_food
-	# 4. absorbed 成为无城死国。其宗藩记录由调用方按语义处理。
+	# 4. absorbed 成为无城死国。
 	nations[absorbed].capital_city_id = -1
 	nations[absorbed].warehouse_city_ids = [] as Array[int]
 	nations[absorbed].alive = false
@@ -3393,11 +3483,9 @@ func revoke_vassal(subject_id: int) -> bool:
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
 	if overlord_id < 0 or overlord_id >= nations.size():
 		return false
-	# 先解除内战态关系（若在内战中），避免吸收后残留 WAR 关系。
-	suzerainty.erase(subject_id)
+	# 兼并原语会原子移除 subject 并把其直接藩王改投宗主。
 	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.ALLIED)
 	annex_nation(overlord_id, subject_id)
-	# 被撤藩者若有下级藩王，其记录此刻悬空（指向已死国），立即修复上移。
 	prune_dead_suzerainty()
 	assert(
 		suzerainty_structure_valid(),
@@ -3473,8 +3561,9 @@ func enfeoff_region_closure(
 	return result
 
 
-## 分封合法性：宗主有效存活、区域非空且全部属于宗主、不含宗主首都、
-## 不得清空宗主陆地领土；传入区域必须已经包含其造成的全部直辖飞地。
+## 分封合法性：宗主有效存活、区域非空且全部属于宗主实控与法理、不含宗主首都、
+## 不得清空宗主陆地领土；传入区域必须已经包含其造成的全部直辖飞地。临时占领地
+## 不能通过分封直接洗成新藩王法理，必须先由议和确认归宗主。
 func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 	if (
 		overlord_id < 0
@@ -3490,6 +3579,7 @@ func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 			or city_id >= cities.size()
 			or seen.has(city_id)
 			or cities[city_id].owner_nation != overlord_id
+			or recognized_owner_of(city_id) != overlord_id
 			or cities[city_id].is_capital
 		):
 			return false
@@ -3766,6 +3856,7 @@ func recognize_occupied_territory(
 	nation_b: int
 ) -> Array[int]:
 	var transferred: Array[int] = []
+	var former_controllers := {}
 	for city in cities:
 		var recognized_owner := recognized_owner_of(city.id)
 		if city.owner_nation == recognized_owner:
@@ -3787,9 +3878,15 @@ func recognize_occupied_territory(
 		):
 			occupying_side = nation_b
 		var recognized_side := -1
-		if recognized_owner == nation_a:
+		if (
+			recognized_owner == nation_a
+			or is_allied(recognized_owner, nation_a)
+		):
 			recognized_side = nation_a
-		elif recognized_owner == nation_b:
+		elif (
+			recognized_owner == nation_b
+			or is_allied(recognized_owner, nation_b)
+		):
 			recognized_side = nation_b
 		if (
 			occupying_side < 0
@@ -3797,11 +3894,32 @@ func recognize_occupied_territory(
 			or occupying_side == recognized_side
 		):
 			continue
-		recognized_city_owners[city.id] = city.owner_nation
+		var recipient := external_territory_recipient(
+			city.owner_nation
+		)
+		if recipient < 0:
+			continue
+		if city.owner_nation != recipient:
+			var former_controller := city.owner_nation
+			if (
+				city.is_capital
+				or city.has_warehouse
+				or nations[former_controller].capital_city_id
+					== city.id
+			):
+				remove_warehouse(former_controller, city.id)
+			city.owner_nation = recipient
+			former_controllers[former_controller] = true
+		recognized_city_owners[city.id] = recipient
 		city.occupation_sponsor_nation = -1
 		transferred.append(city.id)
 	if not transferred.is_empty():
 		ownership_revision += 1
+		for former_value in former_controllers:
+			ensure_valid_capital(int(former_value))
+		refresh_derived()
+		if prune_dead_suzerainty():
+			diplomacy_revision += 1
 	return transferred
 
 
@@ -3818,6 +3936,7 @@ func recognize_coalition_occupied_territory(
 	for nation_id in bloc_b:
 		side_b[nation_id] = true
 	var transferred: Array[int] = []
+	var former_controllers := {}
 	for city in cities:
 		var recognized_owner := recognized_owner_of(city.id)
 		if city.owner_nation == recognized_owner:
@@ -3828,11 +3947,32 @@ func recognize_coalition_occupied_territory(
 		)
 		if not opposing_sides:
 			continue
-		recognized_city_owners[city.id] = city.owner_nation
+		var recipient := external_territory_recipient(
+			city.owner_nation
+		)
+		if recipient < 0:
+			continue
+		if city.owner_nation != recipient:
+			var former_controller := city.owner_nation
+			if (
+				city.is_capital
+				or city.has_warehouse
+				or nations[former_controller].capital_city_id
+					== city.id
+			):
+				remove_warehouse(former_controller, city.id)
+			city.owner_nation = recipient
+			former_controllers[former_controller] = true
+		recognized_city_owners[city.id] = recipient
 		city.occupation_sponsor_nation = -1
 		transferred.append(city.id)
 	if not transferred.is_empty():
 		ownership_revision += 1
+		for former_value in former_controllers:
+			ensure_valid_capital(int(former_value))
+		refresh_derived()
+		if prune_dead_suzerainty():
+			diplomacy_revision += 1
 	return transferred
 
 
@@ -3944,12 +4084,17 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 ## 首都失守后迁都：优先落在本国「最大连通领土分量」内，分量内再取工事最强者
 ## （同工事按势力局部物理序）。选最大分量而非全局最强单城，可避免把主体国土误
 ## 判为飞地——投降割地后国土可能碎成多块，迁都到最大块才能让其余飞地被正确放弃。
+## 只有当前粮池持有者建立粮仓；和平藩王的新首都仍是零库存补给中继，不能因迁都
+## 意外获得独立粮仓。削藩内战反叛方是自己的粮池持有者，仍会正常建立粮仓。
 func relocate_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
-	var candidates := cities_of(nation_id)
+	var candidates: Array[City] = land_cities_of(nation_id)
+	if candidates.is_empty():
+		candidates = cities_of(nation_id)
 	if candidates.is_empty():
 		nations[nation_id].capital_city_id = -1
+		nations[nation_id].warehouse_city_ids.clear()
 		return -1
 	var best_component := _largest_owned_component(nation_id, candidates)
 	best_component.sort_custom(func(a: City, b: City) -> bool:
@@ -3965,11 +4110,114 @@ func relocate_capital(nation_id: int) -> int:
 	var capital := best_component[0]
 	var nation := nations[nation_id]
 	nation.capital_city_id = capital.id
-	if not nation.warehouse_city_ids.has(capital.id):
-		nation.warehouse_city_ids.append(capital.id)
 	capital.is_capital = true
-	capital.has_warehouse = true
+	var owns_food_pool := food_pool_holder(nation_id) == nation_id
+	if owns_food_pool:
+		if not nation.warehouse_city_ids.has(capital.id):
+			nation.warehouse_city_ids.append(capital.id)
+		capital.has_warehouse = true
+	else:
+		nation.warehouse_city_ids.clear()
+		capital.has_warehouse = false
+		capital.food_storage = 0
 	return capital.id
+
+
+## 领土转移后的首都修复。国家仍有城市但首都已不归本国时立即迁都；无城则清空
+## 首都与粮仓索引。调用者不需要依赖下一日的寻路或 AI 查询来被动修复悬空首都。
+func ensure_valid_capital(nation_id: int) -> int:
+	if nation_id < 0 or nation_id >= nations.size():
+		return -1
+	var nation := nations[nation_id]
+	var capital_id := nation.capital_city_id
+	if (
+		capital_id >= 0
+		and capital_id < cities.size()
+		and cities[capital_id].owner_nation == nation_id
+		and cities[capital_id].is_capital
+	):
+		return capital_id
+	return relocate_capital(nation_id)
+
+
+## 运行期领土事务不变量。覆盖实控/法理 ID、占领声明、国家存亡、首都与粮仓
+## 的双向索引，以及和平宗藩共享粮仓约束。世界生成中间态可以暂不满足；每个完整
+## 领土事务和每日 tick 结束后必须成立。
+func territory_structure_valid() -> bool:
+	if recognized_city_owners.size() != cities.size():
+		return false
+	var capital_count_by_nation := {}
+	for city in cities:
+		var owner := city.owner_nation
+		var legal_owner := recognized_owner_of(city.id)
+		if (
+			owner < 0
+			or owner >= nations.size()
+			or legal_owner < 0
+			or legal_owner >= nations.size()
+			or city.occupation_sponsor_nation < -1
+			or city.occupation_sponsor_nation >= nations.size()
+		):
+			return false
+		if cities_of(legal_owner).is_empty():
+			return false
+		if owner == legal_owner and city.occupation_sponsor_nation != -1:
+			return false
+		if city.is_capital:
+			if nations[owner].capital_city_id != city.id:
+				return false
+			capital_count_by_nation[owner] = (
+				int(capital_count_by_nation.get(owner, 0)) + 1
+			)
+		if (
+			city.has_warehouse
+			and not nations[owner].warehouse_city_ids.has(city.id)
+		):
+			return false
+	for nation in nations:
+		var has_city := not cities_of(nation.id).is_empty()
+		if nation.alive != has_city:
+			return false
+		if not has_city:
+			if (
+				nation.capital_city_id != -1
+				or not nation.warehouse_city_ids.is_empty()
+			):
+				return false
+			continue
+		var capital_id := nation.capital_city_id
+		if (
+			capital_id < 0
+			or capital_id >= cities.size()
+			or cities[capital_id].owner_nation != nation.id
+			or not cities[capital_id].is_capital
+			or int(capital_count_by_nation.get(nation.id, 0)) != 1
+		):
+			return false
+		var warehouse_seen := {}
+		for warehouse_id in nation.warehouse_city_ids:
+			if (
+				warehouse_seen.has(warehouse_id)
+				or warehouse_id < 0
+				or warehouse_id >= cities.size()
+				or cities[warehouse_id].owner_nation != nation.id
+				or not cities[warehouse_id].has_warehouse
+			):
+				return false
+			warehouse_seen[warehouse_id] = true
+		if food_pool_holder(nation.id) != nation.id:
+			if (
+				not nation.warehouse_city_ids.is_empty()
+				or cities[capital_id].has_warehouse
+				or cities[capital_id].food_storage != 0
+			):
+				return false
+		elif (
+			not cities[capital_id].has_warehouse
+			or not nation.warehouse_city_ids.has(capital_id)
+		):
+			return false
+	return true
 
 
 ## 返回本国按道路连通划分后的「最大连通分量」（城市列表）。同大小时按分量代表城

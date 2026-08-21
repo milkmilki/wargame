@@ -70,6 +70,57 @@ func _run() -> void:
 			campaign_mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 			as PackedVector3Array
 		).size()
+	var campaign_arch_valid := false
+	var arrow_from := state.cities[frontier.city_a].map_position
+	var arrow_to := state.cities[frontier.city_b].map_position
+	var from_metric := Vector2(
+		arrow_from.x * map_3d._world_size.x,
+		arrow_from.y * map_3d._world_size.y
+	)
+	var to_metric := Vector2(
+		arrow_to.x * map_3d._world_size.x,
+		arrow_to.y * map_3d._world_size.y
+	)
+	var target_delta := to_metric - from_metric
+	var source_delta := (
+		MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
+		- MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL
+	)
+	if target_delta.length_squared() > 0.000001:
+		var arrow_scale := target_delta.length() / source_delta.length()
+		var arrow_rotation := target_delta.angle() - source_delta.angle()
+		var from_height := map_3d._terrain.height_at_map_position(arrow_from)
+		var to_height := map_3d._terrain.height_at_map_position(arrow_to)
+		var arch_height := map_3d._campaign_arrow_arch_height(
+			arrow_from, arrow_to, target_delta.length(),
+			from_height, to_height
+		)
+		var tail_world := map_3d._campaign_arrow_surface_point(
+			MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL, from_metric,
+			arrow_scale, arrow_rotation, from_height, to_height, arch_height
+		)
+		var middle_world := map_3d._campaign_arrow_surface_point(
+			MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL + source_delta * 0.5,
+			from_metric, arrow_scale, arrow_rotation,
+			from_height, to_height, arch_height
+		)
+		var tip_world := map_3d._campaign_arrow_surface_point(
+			MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP, from_metric,
+			arrow_scale, arrow_rotation, from_height, to_height, arch_height
+		)
+		campaign_arch_valid = (
+			absf(
+				tail_world.y - from_height
+					- StrategicMap3D.CAMPAIGN_ARROW_ENDPOINT_CLEARANCE
+			) < 0.001
+			and absf(
+				tip_world.y - to_height
+					- StrategicMap3D.CAMPAIGN_ARROW_ENDPOINT_CLEARANCE
+			) < 0.001
+			and middle_world.y
+				> lerpf(tail_world.y, tip_world.y, 0.5)
+					+ StrategicMap3D.CAMPAIGN_ARROW_MIN_ARCH_HEIGHT * 0.95
+		)
 	var major_mesh := map_3d._roads.mesh as ArrayMesh
 	var minor_mesh := map_3d._minor_roads.mesh as ArrayMesh
 	var territory_labels_valid := not map_3d._nation_labels.is_empty()
@@ -107,6 +158,13 @@ func _run() -> void:
 			and campaign_material.albedo_texture
 				== MapRenderer.CAMPAIGN_ARROW_TEXTURE
 		),
+		"campaign_unlit_surface": (
+			campaign_material != null
+			and campaign_material.shading_mode
+				== BaseMaterial3D.SHADING_MODE_UNSHADED
+			and not campaign_material.no_depth_test
+		),
+		"campaign_arch": campaign_arch_valid,
 		"major_roads": major_mesh != null and major_mesh.get_surface_count() > 0,
 		"minor_roads": minor_mesh != null and minor_mesh.get_surface_count() > 0,
 		"road_hierarchy": map_3d._road_width_for_capacity(Edge.TERRAIN_STANDARD_MANPOWER) > map_3d._road_width_for_capacity(Edge.TERRAIN_LOW_MANPOWER) * 2.0,

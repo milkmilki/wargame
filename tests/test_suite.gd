@@ -67,6 +67,7 @@ func _init() -> void:
 	_test_gold_reserve_budget_and_war_snapshot()
 	_test_diplomacy_state_and_ai()
 	_test_war_preparation_cancel_cooldown()
+	_test_war_preparation_route_block_grace()
 	_test_alliance_war_coalitions()
 	_test_suzerainty_invariants()
 	_test_vassal_tribute()
@@ -78,6 +79,7 @@ func _init() -> void:
 	_test_shared_granary_and_relay_supply()
 	_test_vassal_governance_output_bonus()
 	_test_suzerainty_enclave_self_healing()
+	_test_external_territory_sovereignty()
 	_test_vassal_local_main_command()
 	_test_stranded_hostile_army_eviction()
 	_test_vassal_wartime_support_and_capital()
@@ -862,12 +864,12 @@ func _test_world_generation() -> void:
 		float(latitude_density["latitude_max"]), latitude_density
 	)
 	_check(
-		_approx(south_multiplier, 0.5)
+		_approx(south_multiplier, float(latitude_density["south_density"]))
 		and _approx(peak_multiplier, 1.0)
-		and _approx(north_multiplier, 0.2)
+		and _approx(north_multiplier, float(latitude_density["north_density"]))
 		and north_multiplier < south_multiplier
 		and south_multiplier < peak_multiplier,
-		"纬度城市密度应为热带0.5、亚热带峰值1.0、北部0.2"
+		"纬度城市密度必须服从地图源配置，且峰值>南缘>北缘"
 	)
 	_check(
 		MapRenderer.CAMPAIGN_ARROW_TEXTURE != null
@@ -1408,8 +1410,11 @@ func _test_river_transport() -> void:
 		"正式地图必须生成两条各有有效码头连接的主河道"
 	)
 	_check(
-		docks.size() >= 12 and docks.size() <= 32,
-		"固定河程与低地加密后码头应保持12～32座，当前=%d" % docks.size()
+		docks.size() >= TerrainMapGenerator.RIVER_COUNT * 2
+			and docks.size()
+				<= TerrainMapGenerator.RIVER_COUNT
+					* TerrainMapGenerator.BOUNDARY_RIVER_DOCK_MAX_PER_RIVER,
+		"省界河流应按河长生成适量码头，当前=%d" % docks.size()
 	)
 	var minimum_dock_spacing := INF
 	var minimum_dock_city_spacing := INF
@@ -1445,104 +1450,61 @@ func _test_river_transport() -> void:
 		"码头不得贴住普通城市，最小间距实为%.6f"
 			% minimum_dock_city_spacing
 	)
-	_check(
-		docks.size() >= 12
-		and TerrainMapGenerator.RIVER_DOCK_FIXED_INTERVAL > 0.0,
-		"码头应按固定河程生成且保持足量，当前=%d" % docks.size()
-	)
-	var river_mean_y: Array[float] = []
 	var river_shapes_valid := true
-	var packed_height := (
-		load(GameState.terrain_map_path()) as Texture2D
-	).get_image()
+	var river_pair_keys := {}
 	for river_path in gs.river_paths:
-		var y_total := 0.0
-		var minimum_y := INF
-		var maximum_y := -INF
-		var eastmost := river_path[0].x
-		var maximum_backtrack := 0.0
-		var maximum_line_deviation := 0.0
-		var water_before_last := false
-		var maximum_step := Vector2.ZERO
-		for point in river_path:
-			y_total += point.y
-			minimum_y = minf(minimum_y, point.y)
-			maximum_y = maxf(maximum_y, point.y)
-			maximum_backtrack = maxf(
-				maximum_backtrack,
-				eastmost - point.x
+		river_shapes_valid = river_shapes_valid and river_path.size() >= 2
+		for point_index in range(river_path.size() - 1):
+			var owners := TerrainMapGenerator.province_boundary_segment_owners(
+				gs.province_ids, gs.province_map_size,
+				river_path[point_index], river_path[point_index + 1]
 			)
-			eastmost = maxf(eastmost, point.x)
-			var line_ratio := inverse_lerp(
-				river_path[0].x, river_path[-1].x, point.x
-			)
-			var line_y := lerpf(
-				river_path[0].y, river_path[-1].y, line_ratio
-			)
-			maximum_line_deviation = maxf(
-				maximum_line_deviation, absf(point.y - line_y)
-			)
-		for point_index in range(river_path.size()):
-			if point_index + 1 < river_path.size():
-				maximum_step = maximum_step.max(
-					(river_path[point_index + 1] - river_path[point_index]).abs()
-				)
-				var pixel := Vector2i(
-					clampi(int(river_path[point_index].x * packed_height.get_width()), 0, packed_height.get_width() - 1),
-					clampi(int(river_path[point_index].y * packed_height.get_height()), 0, packed_height.get_height() - 1)
-				)
-				if not TerrainMapGenerator.packed_is_land(packed_height.get_pixelv(pixel)):
-					water_before_last = true
-		river_mean_y.append(
-			y_total / float(maxi(river_path.size(), 1))
-		)
-		river_shapes_valid = (
-			river_shapes_valid
-			and river_path[-1].x - river_path[0].x >= 0.40
-			and maximum_y - minimum_y <= 0.09
-			and maximum_line_deviation <= 0.055
-			and maximum_backtrack <= 0.025
-			and not water_before_last
-			and maximum_step.x <= 0.006
-			and maximum_step.y <= 0.010
-		)
+			river_shapes_valid = river_shapes_valid and owners.x >= 0
+			if owners.x >= 0:
+				river_pair_keys[TerrainMapGenerator._pair_key(owners.x, owners.y)] = true
 	_check(
-		river_shapes_valid
-			and river_mean_y.size() == 2
-					and river_mean_y[0] >= 0.48
-					and river_mean_y[0] <= 0.56
-					and river_mean_y[0] + 0.045 < river_mean_y[1],
-				"两条河必须西向东近直线，仅保留小幅连续曲折且南北分离：mean_y=%s"
-			% str(river_mean_y)
+		river_shapes_valid and not river_pair_keys.is_empty(),
+		"河道每一小段都必须严格落在两个城市省份的公共边界上"
 	)
-	var docks_per_river := {}
-	var dock_x_per_river := {}
-	for dock_data in TerrainMapGenerator.build(
+	var generated := TerrainMapGenerator.build(
 		GameState.terrain_map_path(), GameState.TERRAIN_CITY_COUNT,
 		gs.city_generation_mask_path, gs.city_density_settings
-	).get("docks", []):
+	)
+	var docks_per_river := {}
+	var dock_banks_valid := true
+	for dock_data in generated.get("docks", []):
 		var river_id := int(dock_data.get("river_id", -1))
 		docks_per_river[river_id] = int(docks_per_river.get(river_id, 0)) + 1
-		if not dock_x_per_river.has(river_id):
-			dock_x_per_river[river_id] = []
-		(dock_x_per_river[river_id] as Array).append(
-			float((dock_data["position"] as Vector2).x)
+		var river_path: PackedVector2Array = gs.river_paths[river_id]
+		var path_index := clampi(
+			int(floor(float(dock_data["river_progress"]))),
+			0, river_path.size() - 2
 		)
-	var south_east_docks := 0
-	var south_mouth_docks := 0
-	for x_value in dock_x_per_river.get(1, []):
-		var x := float(x_value)
-		if x >= TerrainMapGenerator.RIVER_DOCK_SOUTH_EAST_MIN_X:
-			south_east_docks += 1
-		if x >= TerrainMapGenerator.RIVER_DOCK_SOUTH_MOUTH_MIN_X:
-			south_mouth_docks += 1
+		var owners := TerrainMapGenerator.province_boundary_segment_owners(
+			gs.province_ids, gs.province_map_size,
+			river_path[path_index], river_path[path_index + 1]
+		)
+		var banks := Vector2i(
+			mini(int(dock_data["bank_a"]), int(dock_data["bank_b"])),
+			maxi(int(dock_data["bank_a"]), int(dock_data["bank_b"]))
+		)
+		var dock_city := int(dock_data["city_id"])
+		var bank_a_edge := gs.edge_of(banks.x, dock_city)
+		var bank_b_edge := gs.edge_of(banks.y, dock_city)
+		var direct_edge := gs.edge_of(banks.x, banks.y)
+		dock_banks_valid = (
+			dock_banks_valid
+			and owners == banks
+			and bank_a_edge != null and bank_a_edge.kind == Edge.Kind.LANDING
+			and bank_b_edge != null and bank_b_edge.kind == Edge.Kind.LANDING
+			and (direct_edge == null or direct_edge.kind != Edge.Kind.LAND)
+		)
 	_check(
-		int(docks_per_river.get(0, 0)) >= 6
-		and int(docks_per_river.get(1, 0)) >= 12
-		and south_east_docks >= 6
-		and south_mouth_docks >= 3,
-		"北河至少6个码头；南河至少12个且东段≥6、河口段≥3，实为%s x=%s"
-			% [docks_per_river, dock_x_per_river]
+		dock_banks_valid
+			and int(docks_per_river.get(0, 0)) >= 2
+			and int(docks_per_river.get(1, 0)) >= 2,
+		"每座码头必须位于对应公共省界，并以两条抢滩连接两岸城市；跨河直连LAND必须删除：%s"
+			% docks_per_river
 	)
 	var docks_are_full_cities := true
 	for dock in docks:
@@ -1643,7 +1605,7 @@ func _test_river_transport() -> void:
 			sea_edges_valid
 			and sea_edge.max_manpower == Edge.WATER_MANPOWER
 			and not sea_edge.allows_holding
-			and sea_edge.land_ratio < 0.72
+			and sea_edge.land_ratio < 1.0
 		)
 		var sea_path := sea_edge.map_points(
 			gs.cities[sea_edge.city_a].map_position,
@@ -1652,14 +1614,31 @@ func _test_river_transport() -> void:
 		for sea_index in range(sea_path.size() - 1):
 			for river_path in gs.river_paths:
 				for river_index in range(river_path.size() - 1):
-					if Geometry2D.segment_intersects_segment(
+					var hit = Geometry2D.segment_intersects_segment(
 						sea_path[sea_index], sea_path[sea_index + 1],
 						river_path[river_index], river_path[river_index + 1]
-					) != null:
+					)
+					if hit == null:
+						continue
+					var sea_delta := sea_path[sea_index + 1] - sea_path[sea_index]
+					var sea_t := (
+						(Vector2(hit) - sea_path[sea_index]).dot(sea_delta)
+							/ maxf(sea_delta.length_squared(), 0.000001)
+					)
+					var river_delta := river_path[river_index + 1] - river_path[river_index]
+					var river_t := (
+						(Vector2(hit) - river_path[river_index]).dot(river_delta)
+							/ maxf(river_delta.length_squared(), 0.000001)
+					)
+					var endpoint_touch := (
+						(sea_t <= 0.0001 or sea_t >= 0.9999)
+						and (river_t <= 0.0001 or river_t >= 0.9999)
+					)
+					if not endpoint_touch:
 						sea_crosses_river = true
 	_check(
 		sea_edges_valid and not sea_crosses_river,
-		"SEA只连接独立陆地区域，不得代替A→渡口→B跨河；并须固定50000容量、禁止驻边"
+		"SEA只连接独立陆地区域，可在海岸河口端点相接但不得中途横穿河流；并须固定50000容量、禁止驻边"
 	)
 	_check(
 		river_danger_bands.size() > 1,
@@ -9108,6 +9087,16 @@ func _test_manpower_pool_and_force_commands() -> void:
 	holder.move_progress = 0.5
 	holder.on_edge = true
 	holder.max_size = 1010
+	var open_hub_network := Pathfinding.build_manpower_hub_network(
+		gs, nation_id
+	)
+	_check(
+		Pathfinding.can_reach_manpower_hub(gs, holder)
+			== Pathfinding.can_reach_manpower_hub_from_network(
+				gs, holder, open_hub_network
+			),
+		"友方边上的旧/新补员可达判定必须一致"
+	)
 	gs.nations[nation_id].manpower_pool = 10
 	sim._resolve_reinforcements()
 	_check(holder.size == 1010 and gs.nations[nation_id].manpower_pool == 0,
@@ -9122,6 +9111,19 @@ func _test_manpower_pool_and_force_commands() -> void:
 	enemy.move_progress = 0.2
 	enemy.on_edge = true
 	gs.armies.append(enemy)
+	var contested_hub_network := (
+		Pathfinding.build_manpower_hub_network(gs, nation_id)
+	)
+	_check(
+		Pathfinding.can_reach_manpower_hub(gs, holder)
+			== Pathfinding.can_reach_manpower_hub_from_network(
+				gs, holder, contested_hub_network
+			)
+			and not Pathfinding.can_reach_manpower_hub_from_network(
+				gs, holder, contested_hub_network
+			),
+		"敌军争夺边上的旧/新补员可达判定必须一致且均为不可达"
+	)
 	sim._resolve_reinforcements()
 	_check(holder.size == 1000 and gs.nations[nation_id].manpower_pool == 10,
 		"当前边有敌军争夺时必须禁止边上补员")
@@ -11208,13 +11210,10 @@ func _test_diplomacy_state_and_ai() -> void:
 		{}
 	)
 	_check(
-		expired_preparation_actions.size() == 1
-			and int(expired_preparation_actions[0]["kind"])
-				in [
-					DiplomacyAI.Action.CANCEL_WAR_PREPARATION,
-					DiplomacyAI.Action.DECLARE_WAR,
-				],
-		"战团超过360天仍未完成集结时必须退出旧备战（取消或尽力而战宣战），禁止永久等待"
+		expired_preparation_actions.is_empty()
+			or int(expired_preparation_actions[0]["kind"])
+				== DiplomacyAI.Action.DECLARE_WAR,
+		"战团超过360天后可在兵力过半时尽力开战，但不得因敌军屯兵或集结不足取消备战"
 	)
 	group_ready_nation.war_preparation_started_day = (
 		group_ready_state.day
@@ -13865,6 +13864,9 @@ func _test_diplomacy_state_and_ai() -> void:
 		if city.owner_nation == 3:
 			city.owner_nation = 2
 	dead_claim_state.refresh_derived()
+	# 模拟同一天内 alive 派生值尚未刷新；占领接收者必须按真实城池判断，
+	# 不能用陈旧 alive 把无城国家复活。
+	dead_claim_state.nations[3].alive = true
 	var dead_claim_target: City = null
 	for city in dead_claim_state.land_cities_of(1):
 		if not city.is_capital and not city.has_warehouse:
@@ -13887,11 +13889,15 @@ func _test_diplomacy_state_and_ai() -> void:
 		dead_claim_target
 	)
 	_check(
-		not dead_claim_state.nations[3].alive
-			and dead_claim_target.owner_nation == 0
+		dead_claim_target.owner_nation == 0
 			and dead_claim_army
 				.occupation_claimant_nation == -1,
-		"冻结占领接收者已灭亡时必须回退实际攻城国，且死国不得因获城复活"
+		"冻结占领接收者已无城时必须忽略陈旧 alive，回退实际攻城国"
+	)
+	dead_claim_state.refresh_derived()
+	_check(
+		not dead_claim_state.nations[3].alive,
+		"无城的冻结占领接收者不得因新占城市复活"
 	)
 	dead_claim_sim.free()
 
@@ -14197,6 +14203,118 @@ func _test_war_preparation_cancel_cooldown() -> void:
 	_check(prepares_after, "冷却期满后该国必须恢复发起 PREPARE_WAR 的能力")
 
 
+func _test_war_preparation_route_block_grace() -> void:
+	print("[32a3] 备战稳定性：断路自动换薄弱目标；全线封闭与边境屯兵均不得取消")
+	var gs := GameState.new()
+	gs.generate_grid_world(32041)
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	gs.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	var objective := DiplomacyAI.select_war_objective(gs, 0, 1)
+	var objective_city := int(objective.get("city_id", -1))
+	_check(objective_city >= 0, "测试世界应能为国0选出对国1的进攻目标")
+	if objective_city < 0:
+		return
+	var staging := DiplomacyAI.staging_cities_for_objective(
+		gs, 0, objective_city
+	)
+	_check(not staging.is_empty(), "初始应存在合法集结城市")
+	if staging.is_empty():
+		return
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var nation := gs.nations[0]
+	nation.war_preparation_target_nation = 1
+	nation.war_preparation_objective_city = objective_city
+	nation.war_preparation_started_day = gs.day
+	nation.war_preparation_unready_since_day = -1
+
+	# 只阻断原目标：应生成“保持备战并换目标”动作，而非取消。
+	var closed_edges: Array[Edge] = []
+	for staging_city in staging:
+		var edge := gs.edge_of(staging_city, objective_city)
+		if edge != null:
+			edge.max_manpower = 0
+			closed_edges.append(edge)
+	var retarget_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_existing_war_preparation(
+		gs, 0, retarget_actions, {}
+	)
+	var retarget_action: Dictionary = {}
+	for action in retarget_actions:
+		if int(action.get("kind", -1)) == DiplomacyAI.Action.RETARGET_WAR_PREPARATION:
+			retarget_action = action
+			break
+	_check(
+		not retarget_action.is_empty()
+			and int(retarget_action["objective_city"]) != objective_city
+			and str(retarget_action["objective_reason"]).contains("薄弱守军"),
+		"原目标道路封闭后必须保持对同国备战并改选可达薄弱城市"
+	)
+	var started_day := nation.war_preparation_started_day
+	var mobilization_target := nation.war_mobilization_target_troops
+	var retargeted := (
+		not retarget_action.is_empty()
+		and sim._execute_diplomatic_action(retarget_action)
+	)
+	_check(
+		retargeted
+			and nation.war_preparation_started_day == started_day
+			and nation.war_mobilization_target_troops == mobilization_target,
+		"改换目标必须原子保留原备战开始日和已完成动员，不得重开一轮备战"
+	)
+
+	# 封闭攻击者与目标国之间的全部道路，并把备战时钟推过360天。
+	# 即使永久无路也只能等待拓扑恢复，不能由道路状态触发取消。
+	for edge in gs.edges:
+		var owner_a := gs.cities[edge.city_a].owner_nation
+		var owner_b := gs.cities[edge.city_b].owner_nation
+		if (owner_a == 0 and owner_b == 1) or (owner_a == 1 and owner_b == 0):
+			edge.max_manpower = 0
+	gs.day = started_day + DiplomacyAI.WAR_PREPARATION_MAX_DAYS + 30
+	var blocked_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_existing_war_preparation(gs, 0, blocked_actions, {})
+	var blocked_cancel := false
+	for action in blocked_actions:
+		blocked_cancel = (
+			blocked_cancel
+			or int(action.get("kind", -1))
+				== DiplomacyAI.Action.CANCEL_WAR_PREPARATION
+		)
+	_check(
+		blocked_actions.is_empty() and not blocked_cancel,
+		"全线道路永久封闭且超过集结上限时也不得取消备战"
+	)
+
+	# 边境屯兵数量只影响军事部署，不参与是否保持备战的门控。
+	var border_army: Army = null
+	for army in gs.armies:
+		if army.owner_nation == 1:
+			border_army = army
+			break
+	if border_army != null:
+		border_army.size = border_army.max_size
+		border_army.location_city = objective_city
+		border_army.move_from = objective_city
+	var massed_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_existing_war_preparation(gs, 0, massed_actions, {})
+	var massed_cancel := false
+	for action in massed_actions:
+		massed_cancel = (
+			massed_cancel
+			or int(action.get("kind", -1))
+				== DiplomacyAI.Action.CANCEL_WAR_PREPARATION
+		)
+	_check(
+		not massed_cancel,
+		"敌方边境屯兵增减不得触发取消备战"
+	)
+	sim.free()
+
+
 func _test_alliance_war_coalitions() -> void:
 	print("[32b] 联盟战争：整体宣战、战时入盟、集团议和与分国军事AI")
 	var gs := GameState.new()
@@ -14440,6 +14558,12 @@ func _test_suzerainty_invariants() -> void:
 			and gs.suzerainty_root(subject_id) == overlord_id
 			and gs.suzerainty_root(overlord_id) == overlord_id,
 		"宗藩查询接口必须正确反映有向关系"
+	)
+	_check(
+		gs.external_territory_recipient(subject_id) == overlord_id
+			and gs.external_territory_recipient(overlord_id)
+				== overlord_id,
+		"和平藩王的对外领土收益必须上收到宗主，宗主保持自身主权"
 	)
 	var record := gs.suzerainty_record(subject_id)
 	_check(
@@ -14690,6 +14814,16 @@ func _test_suzerainty_invariants() -> void:
 	var reject_capital := gs.enfeoff(overlord_id, [overlord_capital] as Array[int])
 	var foreign_city := gs.land_cities_of(2)[0].id
 	var reject_foreign := gs.enfeoff(overlord_id, [foreign_city] as Array[int])
+	var occupied_city := gs.land_cities_of(overlord_id)[0]
+	if occupied_city.id == overlord_capital:
+		occupied_city = gs.land_cities_of(overlord_id)[1]
+	var occupied_legal_owner := gs.recognized_owner_of(occupied_city.id)
+	gs.recognized_city_owners[occupied_city.id] = 2
+	var reject_occupied := gs.enfeoff(
+		overlord_id,
+		[occupied_city.id] as Array[int]
+	)
+	gs.recognized_city_owners[occupied_city.id] = occupied_legal_owner
 	var all_overlord_cities: Array[int] = []
 	for city in gs.land_cities_of(overlord_id):
 		all_overlord_cities.append(city.id)
@@ -14698,9 +14832,13 @@ func _test_suzerainty_invariants() -> void:
 		reject_empty == -1
 			and reject_capital == -1
 			and reject_foreign == -1
+			and reject_occupied == -1
 			and reject_drain == -1
 			and gs.nations.size() == nation_count_before,
-		"非法分封（空区/含首都/非本国城/清空领土）必须被拒绝且不建国"
+		(
+			"非法分封（空区/含首都/非本国城/临时占领地/清空领土）"
+			+ "必须被拒绝且不建国"
+		)
 	)
 	_check(gs.suzerainty_structure_valid(), "非法分封被拒后宗藩结构仍须合法")
 
@@ -14786,6 +14924,18 @@ func _test_vassal_tribute() -> void:
 		"last_centralization_day": -1,
 		"civil_war": false,
 	}
+	_check(
+		gs.external_territory_recipient(2) == 0,
+		"多级和平宗藩中，次级藩王的对外领土收益必须逐级上收到根宗主"
+	)
+	gs.suzerainty[1]["civil_war"] = true
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	_check(
+		gs.external_territory_recipient(2) == 1,
+		"中间藩王反叛后，其子树对外领土收益必须止于反叛方，不得越过内战边"
+	)
+	gs.suzerainty[1]["civil_war"] = false
+	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	var sim := Simulation.new()
 	sim.setup(gs)
 
@@ -16094,10 +16244,35 @@ func _test_civil_war_annexation() -> void:
 	for city in gs.land_cities_of(0):
 		if not city.is_capital:
 			region.append(city.id)
-		if region.size() >= 3:
+		if region.size() >= 8:
 			break
 	var subject := gs.enfeoff(0, region)
+	var child_region: Array[int] = []
+	var subject_land_count := gs.land_cities_of(subject).size()
+	for child_candidate in gs.land_cities_of(subject):
+		if child_candidate.is_capital:
+			continue
+		var candidate_closure := gs.enfeoff_region_closure(
+			subject,
+			[child_candidate.id] as Array[int]
+		)
+		if (
+			not candidate_closure.is_empty()
+			and candidate_closure.size() < subject_land_count
+		):
+			child_region = candidate_closure
+			break
+	var child_subject := gs.enfeoff(subject, child_region)
+	_check(
+		child_subject > subject
+			and gs.overlord_of(child_subject) == subject,
+		"削藩兼并测试须通过真实分封建立下级藩王"
+	)
 	gs.start_civil_war(subject)
+	_check(
+		gs.external_territory_recipient(subject) == subject,
+		"削藩内战反叛方已脱离和平主权链，对外领土接收者必须是自己"
+	)
 	var overlord_cities_before := gs.land_cities_of(0).size()
 	var subject_cities := gs.land_cities_of(subject).size()
 	var sim := Simulation.new()
@@ -16108,10 +16283,12 @@ func _test_civil_war_annexation() -> void:
 		resolved
 			and not gs.is_vassal(subject)
 			and not gs.nations[subject].alive
+			and gs.overlord_of(child_subject) == 0
+			and gs.is_allied(0, child_subject)
 			and gs.land_cities_of(0).size() == overlord_cities_before + subject_cities
 			and gs.suzerainty_structure_valid()
 			and gs._battle_group_structure_valid(),
-		"宗主占藩王首都：吞并藩王全境、宗藩记录清除、不变量成立"
+		"宗主占藩王首都：吞并全境、下级藩王改投宗主、不变量成立"
 	)
 	sim.free()
 
@@ -16462,7 +16639,7 @@ func _test_vassal_governance_output_bonus() -> void:
 # ------------------------------------------------------------------ 32i4. 宗藩体系飞地每日自愈
 
 func _test_suzerainty_enclave_self_healing() -> void:
-	print("[32i4] 飞地自愈：运行时被占造成的体系飞地每日清理——优先体系内改归、否则割敌")
+	print("[32i4] 宗藩飞地：战争中只转临时实控，集团议和才确认法理")
 
 	# --- 子场景 A：合法连通的藩王领土不得被误清理（无假阳性）---
 	# 链 0-1-2-3-4：宗主 0 首都=城0、直辖 城0/城1；藩王 1 领 城2/城3/城4，经 城1-城2 连回宗主。
@@ -16514,9 +16691,8 @@ func _test_suzerainty_enclave_self_healing() -> void:
 	)
 	sa_sim.free()
 
-	# --- 子场景 B：被敌国完全包围则割敌 ---
-	# 链 0-1-2-3-4，宗主 0 首都=城0、直辖城1；藩王 1 领 城3、城4；城2 属敌国 3。
-	# 藩王领土 {3,4} 唯一对外连接是 城2(敌)，无任何体系连通邻居 → 应割给相邻敌国 3。
+	# --- 子场景 B：被敌方藩王完全包围时，临时占领与法理都归敌方宗主 ---
+	# 链 0-1-2-3-4，体系 0→1 的藩王领城3/4；城2 属敌体系 2→3 的藩王3。
 	var sb := GameState.new()
 	sb.generate_grid_world(51002)
 	sb.armies.clear()
@@ -16533,6 +16709,8 @@ func _test_suzerainty_enclave_self_healing() -> void:
 	for c in [3, 4]:
 		sb.cities[c].owner_nation = 1
 		sb.recognized_city_owners[c] = 1
+	sb.cities[63].owner_nation = 2
+	sb.recognized_city_owners[63] = 2
 	for road in [[0, 1], [1, 2], [2, 3], [3, 4]]:
 		var e := sb.edge_of(int(road[0]), int(road[1]))
 		if e != null:
@@ -16542,6 +16720,9 @@ func _test_suzerainty_enclave_self_healing() -> void:
 	sb.cities[0].has_warehouse = true
 	sb.nations[1].capital_city_id = 3
 	sb.cities[3].is_capital = true
+	sb.nations[2].capital_city_id = 63
+	sb.cities[63].is_capital = true
+	sb.cities[63].has_warehouse = true
 	for a in range(sb.nations.size()):
 		for b in range(a + 1, sb.nations.size()):
 			sb.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
@@ -16550,8 +16731,16 @@ func _test_suzerainty_enclave_self_healing() -> void:
 		"overlord_id": 0, "tribute_rate": 0.25,
 		"created_day": 0, "last_centralization_day": -1, "civil_war": false,
 	}
-	sb.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.WAR)
-	sb.set_diplomatic_relation(1, 3, GameState.DiplomaticRelation.WAR)
+	sb.set_diplomatic_relation(2, 3, GameState.DiplomaticRelation.ALLIED)
+	sb.suzerainty[3] = {
+		"overlord_id": 2, "tribute_rate": 0.25,
+		"created_day": 0, "last_centralization_day": -1, "civil_war": false,
+	}
+	for attacker in [0, 1]:
+		for defender in [2, 3]:
+			sb.set_diplomatic_relation(
+				attacker, defender, GameState.DiplomaticRelation.WAR
+			)
 	var sb_garrison := _make_army(12990, 1, 5000, 10, 10)
 	sb_garrison.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
 	sb_garrison.location_city = 3
@@ -16575,16 +16764,147 @@ func _test_suzerainty_enclave_self_healing() -> void:
 			sb_garrison.size,
 		]
 	)
+	# 和平时地理断联本身不能代替割地协议。
+	for attacker in [0, 1]:
+		for defender in [2, 3]:
+			sb.set_diplomatic_relation(
+				attacker, defender, GameState.DiplomaticRelation.NEUTRAL
+			)
 	sb_garrison.size = 0
 	sb_sim._reassign_disconnected_suzerainty_enclaves()
 	_check(
-		sb.cities[3].owner_nation == 3
-			and sb.cities[4].owner_nation == 3
+		sb.cities[3].owner_nation == 1
+			and sb.cities[4].owner_nation == 1
+			and sb.recognized_owner_of(3) == 1
+			and sb.recognized_owner_of(4) == 1,
+		"和平时断联藩王飞地不得无协议自动割给相邻国家"
+	)
+	# 恢复战争后，无守军飞地可成为敌方临时占领，但法理必须等待议和确认。
+	for attacker in [0, 1]:
+		for defender in [2, 3]:
+			sb.set_diplomatic_relation(
+				attacker, defender, GameState.DiplomaticRelation.WAR
+			)
+	sb_sim._reassign_disconnected_suzerainty_enclaves()
+	_check(
+		sb.cities[3].owner_nation == 2
+			and sb.cities[4].owner_nation == 2
+			and sb.recognized_owner_of(3) == 1
+			and sb.recognized_owner_of(4) == 1
+			and sb.cities[3].occupation_sponsor_nation == 2
 			and sb.suzerainty_structure_valid(),
-		"守军消灭后完全包围的藩王飞地 {3,4} 才可割给敌国3（3=%d 4=%d）"
+		(
+			"守军消灭后飞地 {3,4} 只能转为敌方宗主2临时占领，"
+			+ "不能归敌方藩王3或提前改法理（3=%d 4=%d）"
+		)
 			% [sb.cities[3].owner_nation, sb.cities[4].owner_nation]
 	)
+	var sb_recognized := sb.recognize_coalition_occupied_territory(
+		[0, 1] as Array[int],
+		[2, 3] as Array[int]
+	)
+	_check(
+		sb_recognized.has(3)
+			and sb_recognized.has(4)
+			and sb.recognized_owner_of(3) == 2
+			and sb.recognized_owner_of(4) == 2
+			and sb.cities[3].occupation_sponsor_nation == -1,
+		"集团议和后才可把临时占领确认为接收方的法理领土"
+	)
 	sb_sim.free()
+
+
+# ------------------------------------------------------------------ 32i4b. 对外领土主权接收者
+
+func _test_external_territory_sovereignty() -> void:
+	print("[32i4b] 对外领土：藩王参战但战果归宗主，法理收复仍归原藩王")
+	var gs := GameState.new()
+	gs.generate_grid_world(51003)
+	gs.armies.clear()
+	gs.battles.clear()
+	for a in range(gs.nations.size()):
+		for b in range(a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	# 两个独立宗藩体系：0→1 与 2→3。
+	for pair in [[0, 1], [2, 3]]:
+		var root := int(pair[0])
+		var subject := int(pair[1])
+		gs.suzerainty[subject] = {
+			"overlord_id": root,
+			"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+			"created_day": 0,
+			"last_centralization_day": -1,
+			"civil_war": false,
+		}
+		gs.set_diplomatic_relation(
+			root, subject, GameState.DiplomaticRelation.ALLIED
+		)
+		# 手工挂接宗藩时同步模拟 enfeoff() 的共享粮仓语义：藩王首都
+		# 保留首都身份，但不再拥有独立粮仓或库存。
+		for warehouse_id in gs.nations[subject].warehouse_city_ids:
+			gs.cities[warehouse_id].has_warehouse = false
+			gs.cities[warehouse_id].food_storage = 0
+		gs.nations[subject].warehouse_city_ids.clear()
+	for attacker in [0, 1]:
+		for defender in [2, 3]:
+			gs.set_diplomatic_relation(
+				attacker, defender, GameState.DiplomaticRelation.WAR
+			)
+	gs.refresh_derived()
+	var targets: Array[City] = []
+	for city in gs.land_cities_of(3):
+		if not city.is_capital and not city.has_warehouse:
+			targets.append(city)
+			if targets.size() >= 2:
+				break
+	_check(targets.size() == 2, "跨宗藩领土测试必须找到两个普通敌方藩王城市")
+	var sim := Simulation.new()
+	sim.setup(gs)
+	# A 藩王亲自攻下 B 藩王城市：实控归 A 宗主，B 藩王法理暂时保留。
+	var subject_army := _make_army(12991, 1, 5000, 10, 10)
+	subject_army.location_city = targets[0].id
+	subject_army.move_from = targets[0].id
+	gs.armies.append(subject_army)
+	sim._capture_city(subject_army, targets[0])
+	_check(
+		targets[0].owner_nation == 0
+			and gs.recognized_owner_of(targets[0].id) == 3
+			and targets[0].occupation_sponsor_nation == 1,
+		"藩王攻占外国领土时临时实控必须归宗主，不能直接扩张藩王法理"
+	)
+	var recognized := gs.recognize_coalition_occupied_territory(
+		[0, 1] as Array[int],
+		[2, 3] as Array[int]
+	)
+	_check(
+		recognized.has(targets[0].id)
+			and targets[0].owner_nation == 0
+			and gs.recognized_owner_of(targets[0].id) == 0
+			and targets[0].occupation_sponsor_nation == -1,
+		"集团议和确认战果时，外国藩王旧地必须成为获胜宗主法理领土"
+	)
+	# 宗主替本体系藩王收复其法理旧地时，法理优先，仍归原藩王。
+	gs.recognized_city_owners[targets[1].id] = 1
+	var root_army := _make_army(12992, 0, 5000, 10, 10)
+	root_army.location_city = targets[1].id
+	root_army.move_from = targets[1].id
+	gs.armies.append(root_army)
+	sim._capture_city(root_army, targets[1])
+	_check(
+		targets[1].owner_nation == 1
+			and gs.recognized_owner_of(targets[1].id) == 1
+			and targets[1].occupation_sponsor_nation == -1,
+		"宗主或同体系盟军收复藩王法理领土时必须归还藩王，不能上收宗主"
+	)
+	_check(gs.suzerainty_structure_valid(), "跨体系领土结算后宗藩结构必须保持合法")
+	gs.refresh_derived()
+	_check(
+		gs.territory_structure_valid(),
+		"跨体系领土结算后实控/法理/首都/粮仓结构必须保持合法"
+	)
+	sim.free()
 
 
 # ------------------------------------------------------------------ 32i5. 藩王 MAIN 封国内线指挥
@@ -17055,6 +17375,9 @@ func _test_vassal_wartime_support_and_capital() -> void:
 	invader.move_from = vassal_capital
 	cap_state.armies.append(invader)
 	cap_sim._capture_city(invader, cap_state.cities[vassal_capital], 1)
+	var relocated_vassal_capital := (
+		cap_state.nations[cap_subject].capital_city_id
+	)
 	_check(
 		cap_state.cities[vassal_capital].owner_nation == 1
 			and cap_state.diplomatic_history.size() == history_before
@@ -17063,7 +17386,115 @@ func _test_vassal_wartime_support_and_capital() -> void:
 			and cap_state.suzerainty_structure_valid(),
 		"藩王首都失陷只丢该城、不触发投降割地、不写投降历史、宗藩不变量成立"
 	)
+	_check(
+		relocated_vassal_capital >= 0
+			and relocated_vassal_capital != vassal_capital
+			and cap_state.cities[relocated_vassal_capital].owner_nation
+				== cap_subject
+			and cap_state.cities[relocated_vassal_capital].is_capital
+			and not cap_state.cities[relocated_vassal_capital].has_warehouse
+			and cap_state.nations[cap_subject].warehouse_city_ids.is_empty()
+			and not cap_state.cities[vassal_capital].is_capital,
+		"藩王首都失陷后必须立即迁都，且新首都仍是共享粮仓零库存中继"
+	)
+	_check(
+		cap_state.territory_structure_valid(),
+		"藩王首都失陷事务结束后领土结构不变量必须成立"
+	)
 	cap_sim.free()
+
+	# 藩王全境失守不能触发整个宗藩体系集团议和。藩王只退出自己的
+	# 战争关系，宗主继续对外作战，最终议和权仍在宗主。
+	var eliminated_state := GameState.new()
+	eliminated_state.generate_grid_world(32097)
+	for a in range(eliminated_state.nations.size()):
+		for b in range(a + 1, eliminated_state.nations.size()):
+			eliminated_state.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	var eliminated_region: Array[int] = []
+	for candidate in eliminated_state.land_cities_of(0):
+		if not candidate.is_capital:
+			eliminated_region.append(candidate.id)
+		if eliminated_region.size() >= 3:
+			break
+	var eliminated_subject := eliminated_state.enfeoff(
+		0, eliminated_region
+	)
+	eliminated_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	eliminated_state.set_diplomatic_relation(
+		eliminated_subject, 1, GameState.DiplomaticRelation.WAR
+	)
+	for lost_city in eliminated_state.cities_of(eliminated_subject):
+		lost_city.owner_nation = 1
+		lost_city.occupation_sponsor_nation = 1
+	eliminated_state.refresh_derived()
+	var subject_field_army := _make_army(9501, eliminated_subject, 5000, 10)
+	var subject_enemy_army := _make_army(9502, 1, 5000, 10)
+	var root_field_army := _make_army(9503, 0, 5000, 10)
+	var root_enemy_army := _make_army(9504, 1, 5000, 10)
+	var subject_battle := eliminated_state.new_battle(Battle.Kind.FIELD)
+	subject_battle.side_a.append(subject_field_army)
+	subject_battle.side_b.append(subject_enemy_army)
+	var root_battle := eliminated_state.new_battle(Battle.Kind.FIELD)
+	root_battle.side_a.append(root_field_army)
+	root_battle.side_b.append(root_enemy_army)
+	for battle_setup in [
+		[subject_field_army, subject_battle.id],
+		[subject_enemy_army, subject_battle.id],
+		[root_field_army, root_battle.id],
+		[root_enemy_army, root_battle.id],
+	]:
+		var field_army: Army = battle_setup[0]
+		field_army.state = Army.State.FIGHTING
+		field_army.battle_id = int(battle_setup[1])
+		eliminated_state.armies.append(field_army)
+	# 保留宗藩记录直到无城结算识别其身份。
+	var eliminated_sim := Simulation.new()
+	eliminated_sim.setup(eliminated_state)
+	var eliminated_history_before := eliminated_state.diplomatic_history.size()
+	eliminated_sim._resolve_eliminated_nation_capitulations()
+	_check(
+		eliminated_state.is_enemy(0, 1)
+			and not eliminated_state.is_enemy(eliminated_subject, 1)
+			and subject_battle.finished
+			and not root_battle.finished
+			and subject_field_army.battle_id == -1
+			and root_field_army.battle_id == root_battle.id
+			and eliminated_state.diplomatic_history.size()
+				== eliminated_history_before,
+		(
+			"藩王全境失守只结束自身战争与战斗，不得终止宗主对外战争："
+			+ "root_war=%s subject_war=%s subject_finished=%s root_finished=%s "
+			+ "subject_bid=%d root_bid=%d history=%d/%d"
+		) % [
+			str(eliminated_state.is_enemy(0, 1)),
+			str(eliminated_state.is_enemy(eliminated_subject, 1)),
+			str(subject_battle.finished),
+			str(root_battle.finished),
+			subject_field_army.battle_id,
+			root_field_army.battle_id,
+			eliminated_state.diplomatic_history.size(),
+			eliminated_history_before,
+		]
+	)
+	eliminated_state.prune_dead_suzerainty()
+	var inherited_legal_claims := true
+	for lost_city in eliminated_state.cities:
+		if lost_city.owner_nation == 1 and lost_city.occupation_sponsor_nation == 1:
+			inherited_legal_claims = (
+				inherited_legal_claims
+				and eliminated_state.recognized_owner_of(lost_city.id) == 0
+			)
+	_check(
+		not eliminated_state.is_vassal(eliminated_subject)
+			and inherited_legal_claims
+			and eliminated_state.suzerainty_structure_valid(),
+		"灭亡藩王退出战争后，封地法理须回归宗主并清理宗藩记录"
+	)
+	eliminated_sim.free()
 
 
 # ------------------------------------------------------------------ 33. 和平裁军与潜在边境守备

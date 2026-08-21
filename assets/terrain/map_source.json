@@ -5,8 +5,8 @@
   "bbox_wgs84": [73.0, 18.0, 135.5, 54.0],
   "city_density": {
     "peak_latitude": 30.0,
-    "south_edge_multiplier": 0.5,
-    "north_edge_multiplier": 0.2
+    "south_edge_multiplier": 0.2,
+    "north_edge_multiplier": 0.1
   },
   "channels": {
     "rgb": "NASA Blue Marble satellite color",

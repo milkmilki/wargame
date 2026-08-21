@@ -46,6 +46,11 @@ const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
 const RIVER_CROSSING_MERGE_EPS: float = 0.0001
 const RIVER_DOCK_MIN_SPACING: float = 0.012
 const RIVER_DOCK_CITY_MIN_SPACING: float = 0.022
+## 省界河流按河程分层后，在每层内做确定性随机抖动。数量随河长变化，
+## 不再绑定固定纬度、河口方向或某条河的硬编码码头数。
+const BOUNDARY_RIVER_DOCK_TARGET_SPACING: float = 0.14
+const BOUNDARY_RIVER_DOCK_MAX_PER_RIVER: int = 10
+const BOUNDARY_RIVER_MIN_LENGTH: float = 0.10
 const LANDING_DANGER_MIN: float = 0.90
 const EDGE_DISTANCE_UNITS_PER_MAP_HEIGHT: float = 12.0
 ## 河运速度为同 distance 陆路的 1.2 倍，因此耗时为陆路的 1/1.2。
@@ -80,7 +85,7 @@ static func build(
 	var density_settings := normalize_city_density_settings(
 		city_density_settings
 	)
-	var cache_key := "settlement-v13-province-dual-roads:%s:%d:%s:%s" % [
+	var cache_key := "settlement-v15-coastal-boundary-rivers:%s:%d:%s:%s" % [
 		source_path, city_count, mask_signature,
 		city_density_signature(density_settings),
 	]
@@ -115,18 +120,16 @@ static func build(
 	)
 	var bounds := Rect2i(Vector2i.ZERO, analysis.get_size())
 	var map_aspect_ratio := MapSource.aspect_ratio()
-	var river_paths := _build_river_paths(
-		analysis,
-		mask,
-		land_bounds
-	)
+	# 城市与省份先独立生成；河流随后从既有公共省界中选择。这样河流
+	# 不再反过来扭曲城市位置或省界，省界也成为河道几何的唯一真源。
+	var empty_river_paths: Array[Array] = []
 	var samples := _sample_cities(
 		analysis,
 		city_mask,
 		city_geometry["bounds"],
 		bounds,
 		city_count,
-		river_paths,
+		empty_river_paths,
 		density_settings
 	)
 	# Settlement density and spacing are solved in the tight land domain, then
@@ -142,7 +145,10 @@ static func build(
 		mask,
 		bounds,
 		samples["pixels"],
-		river_paths
+		empty_river_paths
+	)
+	var boundary_rivers := _build_boundary_river_network(
+		provinces, samples["positions"], map_aspect_ratio
 	)
 	var road_result := _build_roads(
 		analysis,
@@ -150,7 +156,7 @@ static func build(
 		samples,
 		map_aspect_ratio,
 		provinces,
-		river_paths
+		boundary_rivers["pixel_paths"]
 	)
 	_attach_province_land_paths(
 		road_result["roads"],
@@ -158,13 +164,12 @@ static func build(
 		samples["positions"],
 		city_count
 	)
-	var transport := _build_river_transport(
+	var transport := _build_boundary_river_transport(
 		analysis,
-		mask,
-		bounds,
 		samples,
 		road_result["roads"],
-		river_paths,
+		provinces,
+		boundary_rivers,
 		city_count,
 		map_aspect_ratio
 	)
@@ -1693,6 +1698,507 @@ static func _accumulate_province_boundary(
 	counts[key] = int(counts.get(key, 0)) + 1
 
 
+## 返回一条轴对齐栅格边两侧的规范化省份 ID；不是公共省界时返回 (-1,-1)。
+static func province_boundary_segment_owners(
+	province_ids: PackedInt32Array,
+	size: Vector2i,
+	from: Vector2,
+	to: Vector2
+) -> Vector2i:
+	var raster_from := from * Vector2(size)
+	var raster_to := to * Vector2(size)
+	var a := -1
+	var b := -1
+	if is_equal_approx(raster_from.x, raster_to.x):
+		var x := int(round(raster_from.x))
+		var y := int(floor(minf(raster_from.y, raster_to.y) + 0.000001))
+		if x <= 0 or x >= size.x or y < 0 or y >= size.y:
+			return Vector2i(-1, -1)
+		a = int(province_ids[y * size.x + x - 1])
+		b = int(province_ids[y * size.x + x])
+	elif is_equal_approx(raster_from.y, raster_to.y):
+		var x := int(floor(minf(raster_from.x, raster_to.x) + 0.000001))
+		var y := int(round(raster_from.y))
+		if y <= 0 or y >= size.y or x < 0 or x >= size.x:
+			return Vector2i(-1, -1)
+		a = int(province_ids[(y - 1) * size.x + x])
+		b = int(province_ids[y * size.x + x])
+	if a < 0 or b < 0 or a == b:
+		return Vector2i(-1, -1)
+	return Vector2i(mini(a, b), maxi(a, b))
+
+
+## 公共测试/编辑器查询：归一化省界顶点是否同时接触至少两个省份和海域。
+static func province_boundary_coast_intersection(
+	province_ids: PackedInt32Array,
+	size: Vector2i,
+	position: Vector2
+) -> bool:
+	var vertex := Vector2i(
+		clampi(int(round(position.x * size.x)), 0, size.x),
+		clampi(int(round(position.y * size.y)), 0, size.y)
+	)
+	return _boundary_node_is_coast_intersection(
+		province_ids, size, vertex
+	)
+
+
+## 把省份栅格的每条四邻域公共边转成显式线段。端点位于栅格顶点，
+## 每条线段同时保存两岸省份和各自贴边的栅格单元；河道、码头和抢滩
+## 路径都消费这一份数据，避免三套几何规则彼此漂移。
+static func province_boundary_segment_graph(
+	province_ids: PackedInt32Array,
+	size: Vector2i,
+	valid_cells: PackedByteArray = PackedByteArray()
+) -> Dictionary:
+	var segments: Array[Dictionary] = []
+	var adjacency := {}
+	if (
+		size.x <= 0 or size.y <= 0
+		or province_ids.size() != size.x * size.y
+	):
+		return {"segments": segments, "adjacency": adjacency}
+	var vertex_width := size.x + 1
+	for y in range(size.y):
+		for x in range(size.x):
+			var cell_index := y * size.x + x
+			var owner := int(province_ids[cell_index])
+			if owner < 0:
+				continue
+			if x + 1 < size.x:
+				var right_index := cell_index + 1
+				var right_owner := int(
+					province_ids[right_index]
+				)
+				if (
+					right_owner >= 0 and right_owner != owner
+					and (
+						valid_cells.is_empty()
+						or (valid_cells[cell_index] != 0 and valid_cells[right_index] != 0)
+					)
+				):
+					_append_province_boundary_segment(
+						segments, adjacency, vertex_width,
+						Vector2i(x + 1, y), Vector2i(x + 1, y + 1),
+						owner, Vector2i(x, y),
+						right_owner, Vector2i(x + 1, y)
+					)
+			if y + 1 < size.y:
+				var lower_index := cell_index + size.x
+				var lower_owner := int(
+					province_ids[lower_index]
+				)
+				if (
+					lower_owner >= 0 and lower_owner != owner
+					and (
+						valid_cells.is_empty()
+						or (valid_cells[cell_index] != 0 and valid_cells[lower_index] != 0)
+					)
+				):
+					_append_province_boundary_segment(
+						segments, adjacency, vertex_width,
+						Vector2i(x, y + 1), Vector2i(x + 1, y + 1),
+						owner, Vector2i(x, y),
+						lower_owner, Vector2i(x, y + 1)
+					)
+	return {
+		"segments": segments,
+		"adjacency": adjacency,
+		"vertex_width": vertex_width,
+		"size": size,
+	}
+
+
+static func _append_province_boundary_segment(
+	segments: Array[Dictionary],
+	adjacency: Dictionary,
+	vertex_width: int,
+	from: Vector2i,
+	to: Vector2i,
+	owner_a: int,
+	cell_a: Vector2i,
+	owner_b: int,
+	cell_b: Vector2i
+) -> void:
+	var lower_owner := mini(owner_a, owner_b)
+	var upper_owner := maxi(owner_a, owner_b)
+	var segment_index := segments.size()
+	var from_key := from.y * vertex_width + from.x
+	var to_key := to.y * vertex_width + to.x
+	segments.append({
+		"from": from,
+		"to": to,
+		"from_key": from_key,
+		"to_key": to_key,
+		"a": lower_owner,
+		"b": upper_owner,
+		"cell_a": cell_a if owner_a == lower_owner else cell_b,
+		"cell_b": cell_b if owner_b == upper_owner else cell_a,
+		"pair_key": _pair_key(lower_owner, upper_owner),
+	})
+	for node_key in [from_key, to_key]:
+		if not adjacency.has(node_key):
+			adjacency[node_key] = [] as Array[int]
+		(adjacency[node_key] as Array[int]).append(segment_index)
+
+
+## 只保留每个城市种子所在的同 ID 四连通省域。地形求解可能给离岸小岛
+## 或狭窄飞地同一个省 ID，但那些碎片不能凭 ID 直接连接到岸边城市。
+static func _province_city_seed_components(
+	province_ids: PackedInt32Array,
+	size: Vector2i,
+	city_positions: Array[Vector2]
+) -> PackedByteArray:
+	var valid := PackedByteArray()
+	valid.resize(size.x * size.y)
+	var queue: Array[int] = []
+	for city_id in range(city_positions.size()):
+		var position := city_positions[city_id]
+		var cell := Vector2i(
+			clampi(int(floor(position.x * size.x)), 0, size.x - 1),
+			clampi(int(floor(position.y * size.y)), 0, size.y - 1)
+		)
+		var index := cell.y * size.x + cell.x
+		if int(province_ids[index]) == city_id and valid[index] == 0:
+			valid[index] = 1
+			queue.append(index)
+	var head := 0
+	var offsets := [
+		Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN,
+	]
+	while head < queue.size():
+		var current_index := queue[head]
+		head += 1
+		var owner := int(province_ids[current_index])
+		var current := Vector2i(
+			current_index % size.x, current_index / size.x
+		)
+		for offset_value in offsets:
+			var next: Vector2i = current + offset_value
+			if next.x < 0 or next.y < 0 or next.x >= size.x or next.y >= size.y:
+				continue
+			var next_index := next.y * size.x + next.x
+			if valid[next_index] != 0 or int(province_ids[next_index]) != owner:
+				continue
+			valid[next_index] = 1
+			queue.append(next_index)
+	return valid
+
+
+## 从完整公共边界图中抽取两条西向东走廊。第一条近水平穿过中部，
+## 第二条从西部中南侧向东缓慢南偏；全程仍只消费公共省界线段。
+static func _build_boundary_river_network(
+	provinces: Dictionary,
+	city_positions: Array[Vector2],
+	map_aspect_ratio: float
+) -> Dictionary:
+	var size: Vector2i = provinces["size"]
+	var ids: PackedInt32Array = provinces["ids"]
+	var valid_cells := _province_city_seed_components(
+		ids, size, city_positions
+	)
+	var graph := province_boundary_segment_graph(
+		ids, size, valid_cells
+	)
+	var segments: Array[Dictionary] = graph["segments"]
+	var blocked_edges := {}
+	var blocked_nodes := {}
+	var rivers: Array[Dictionary] = []
+	var normalized_paths: Array[PackedVector2Array] = []
+	var pixel_paths: Array[Array] = []
+	var river_pair_keys := {}
+	for river_id in range(RIVER_COUNT):
+		var trail := _coastal_boundary_river_trail(
+			graph, ids, blocked_edges, blocked_nodes, river_id,
+			map_aspect_ratio
+		)
+		if (
+			trail.is_empty()
+			or float(trail.get("length", 0.0)) < BOUNDARY_RIVER_MIN_LENGTH
+		):
+			trail = _coastal_boundary_river_trail(
+				graph, ids, blocked_edges, {}, river_id,
+				map_aspect_ratio
+			)
+		if (
+			trail.is_empty()
+			or float(trail.get("length", 0.0)) < BOUNDARY_RIVER_MIN_LENGTH
+		):
+			# 第一条横河可能恰好切断省界图；两条目标走廊相距较远，
+			# 最后允许第二条重新消费原图，由走廊成本自然保持分离。
+			trail = _coastal_boundary_river_trail(
+				graph, ids, {}, {}, river_id, map_aspect_ratio
+			)
+		assert(
+			not trail.is_empty()
+				and float(trail["length"]) >= BOUNDARY_RIVER_MIN_LENGTH,
+			"省界图必须能够生成%d条有效长河，失败河流=%d length=%.3f"
+				% [RIVER_COUNT, river_id, float(trail.get("length", 0.0))]
+		)
+		var node_keys: Array = trail["nodes"]
+		var edge_indices: Array = trail["edge_indices"]
+		var path := PackedVector2Array()
+		var pixel_path: Array = []
+		for node_value in node_keys:
+			var node := _boundary_node_position(
+				int(node_value), int(graph["vertex_width"])
+			)
+			path.append(Vector2(node) / Vector2(size))
+			# 城市像素坐标表示像素中心；栅格顶点需减半个像素才能
+			# 与道路/海运的分析坐标落在同一几何空间。
+			pixel_path.append(Vector2(node) - Vector2(0.5, 0.5))
+		for edge_value in edge_indices:
+			var edge_index := int(edge_value)
+			blocked_edges[edge_index] = true
+			river_pair_keys[int(segments[edge_index]["pair_key"])] = true
+		for node_value in node_keys:
+			blocked_nodes[int(node_value)] = true
+		var river := trail.duplicate(true)
+		river["river_id"] = river_id
+		river["path"] = path
+		river["pixel_path"] = pixel_path
+		rivers.append(river)
+		normalized_paths.append(path)
+		pixel_paths.append(pixel_path)
+	return {
+		"graph": graph,
+		"rivers": rivers,
+		"paths": normalized_paths,
+		"pixel_paths": pixel_paths,
+		"river_pair_keys": river_pair_keys,
+	}
+
+
+## 固定端点河流：源头取省界网络西侧最贴近目标纬度的节点，河口必须
+## 是“两个省份公共边界与海岸线”的交点。固定端点后用省界图最短路
+## 连接，纵向距离额外放大，使上河近水平、下河只按端点缓慢南偏。
+static func _coastal_boundary_river_trail(
+	graph: Dictionary,
+	province_ids: PackedInt32Array,
+	blocked_edges: Dictionary,
+	blocked_nodes: Dictionary,
+	river_id: int,
+	map_aspect_ratio: float
+) -> Dictionary:
+	var adjacency: Dictionary = graph["adjacency"]
+	var segments: Array[Dictionary] = graph["segments"]
+	var size: Vector2i = graph["size"]
+	var vertex_width := int(graph["vertex_width"])
+	var node_keys := adjacency.keys()
+	node_keys.sort()
+	var unseen := {}
+	for node_value in node_keys:
+		var node := int(node_value)
+		if not blocked_nodes.has(node):
+			unseen[node] = true
+	var selected_component: Array[int] = []
+	var selected_start := -1
+	var selected_goal := -1
+	var selected_score := -INF
+	var source_target_y := 0.52 if river_id == 0 else 0.62
+	var mouth_target_y := 0.52 if river_id == 0 else 0.70
+	while not unseen.is_empty():
+		var remaining := unseen.keys()
+		remaining.sort()
+		var component := _boundary_component_nodes(
+			int(remaining[0]), adjacency, segments, blocked_edges, blocked_nodes
+		)
+		var minimum_x := INF
+		var maximum_x := -INF
+		var coast_nodes: Array[int] = []
+		for node in component:
+			unseen.erase(node)
+			var raster_position := _boundary_node_position(node, vertex_width)
+			var position := Vector2(raster_position) / Vector2(size)
+			minimum_x = minf(minimum_x, position.x)
+			maximum_x = maxf(maximum_x, position.x)
+			if _boundary_node_is_coast_intersection(
+				province_ids, size, raster_position
+			):
+				coast_nodes.append(node)
+		if component.size() < 2 or coast_nodes.is_empty():
+			continue
+		var span := maximum_x - minimum_x
+		if span < BOUNDARY_RIVER_MIN_LENGTH:
+			continue
+		var start_candidates: Array[int] = []
+		for node in component:
+			var x := (
+				float(_boundary_node_position(node, vertex_width).x)
+					/ float(size.x)
+			)
+			if x <= minimum_x + span * 0.12:
+				start_candidates.append(node)
+		for start in start_candidates:
+			var start_position := Vector2(
+				_boundary_node_position(start, vertex_width)
+			) / Vector2(size)
+			for goal in coast_nodes:
+				var goal_position := Vector2(
+					_boundary_node_position(goal, vertex_width)
+				) / Vector2(size)
+				var horizontal_span := goal_position.x - start_position.x
+				if horizontal_span < maxf(span * 0.55, 0.35):
+					continue
+				var endpoint_error := (
+					absf(start_position.y - source_target_y)
+					+ absf(goal_position.y - mouth_target_y)
+				)
+				# 起点/河口纬度是固定形态的主约束；横向跨度只在
+				# 同纬度候选之间择优，避免为了多向东一点跑到北部海岸。
+				var score := horizontal_span * 12.0 - endpoint_error * 100.0
+				if (
+					score > selected_score + 0.000001
+					or (
+						is_equal_approx(score, selected_score)
+						and _pair_key(start, goal)
+							< _pair_key(selected_start, selected_goal)
+					)
+				):
+					selected_score = score
+					selected_component = component
+					selected_start = start
+					selected_goal = goal
+	if selected_start < 0 or selected_goal < 0:
+		return {}
+	var component_lookup := {}
+	for node in selected_component:
+		component_lookup[node] = true
+	var astar := AStar2D.new()
+	for node in selected_component:
+		var position := Vector2(
+			_boundary_node_position(node, vertex_width)
+		) / Vector2(size)
+		astar.add_point(node, Vector2(
+			position.x * map_aspect_ratio, position.y * 2.8
+		))
+	for node in selected_component:
+		for edge_value in adjacency.get(node, []):
+			var edge_index := int(edge_value)
+			if blocked_edges.has(edge_index):
+				continue
+			var segment: Dictionary = segments[edge_index]
+			var neighbor := (
+				int(segment["to_key"])
+				if int(segment["from_key"]) == node
+				else int(segment["from_key"])
+			)
+			if (
+				not component_lookup.has(neighbor)
+				or astar.are_points_connected(node, neighbor)
+			):
+				continue
+			astar.connect_points(node, neighbor, true)
+	var id_path := astar.get_id_path(selected_start, selected_goal)
+	if id_path.size() < 2:
+		return {}
+	var nodes: Array[int] = []
+	var edge_indices: Array[int] = []
+	for node_value in id_path:
+		nodes.append(int(node_value))
+	for path_index in range(nodes.size() - 1):
+		var found_edge := -1
+		for edge_value in adjacency[nodes[path_index]]:
+			var edge_index := int(edge_value)
+			if blocked_edges.has(edge_index):
+				continue
+			var segment: Dictionary = segments[edge_index]
+			if nodes[path_index + 1] in [
+				int(segment["from_key"]), int(segment["to_key"])
+			]:
+				found_edge = edge_index
+				break
+		assert(found_edge >= 0, "省界河路径必须能还原每一条公共边界线段")
+		edge_indices.append(found_edge)
+	return {
+		"nodes": nodes,
+		"edge_indices": edge_indices,
+		"length": _boundary_trail_metric_length(
+			nodes, vertex_width, size, map_aspect_ratio
+		),
+		"source_node": selected_start,
+		"mouth_node": selected_goal,
+	}
+
+
+static func _boundary_node_is_coast_intersection(
+	province_ids: PackedInt32Array,
+	size: Vector2i,
+	vertex: Vector2i
+) -> bool:
+	var owners := {}
+	var touches_sea := false
+	for offset in [
+		Vector2i(-1, -1), Vector2i(0, -1),
+		Vector2i(-1, 0), Vector2i(0, 0),
+	]:
+		var cell: Vector2i = vertex + offset
+		if cell.x < 0 or cell.y < 0 or cell.x >= size.x or cell.y >= size.y:
+			continue
+		var owner := int(province_ids[cell.y * size.x + cell.x])
+		if owner < 0:
+			touches_sea = true
+		else:
+			owners[owner] = true
+	return touches_sea and owners.size() >= 2
+
+
+static func _boundary_component_nodes(
+	start: int,
+	adjacency: Dictionary,
+	segments: Array[Dictionary],
+	blocked_edges: Dictionary,
+	blocked_nodes: Dictionary
+) -> Array[int]:
+	var result: Array[int] = []
+	var visited := {start: true}
+	var queue: Array[int] = [start]
+	var head := 0
+	while head < queue.size():
+		var node := queue[head]
+		head += 1
+		result.append(node)
+		for edge_value in adjacency.get(node, []):
+			var edge_index := int(edge_value)
+			if blocked_edges.has(edge_index):
+				continue
+			var segment: Dictionary = segments[edge_index]
+			var neighbor := (
+				int(segment["to_key"])
+				if int(segment["from_key"]) == node
+				else int(segment["from_key"])
+			)
+			if blocked_nodes.has(neighbor) or visited.has(neighbor):
+				continue
+			visited[neighbor] = true
+			queue.append(neighbor)
+	return result
+
+
+static func _boundary_trail_metric_length(
+	nodes: Array,
+	vertex_width: int,
+	size: Vector2i,
+	map_aspect_ratio: float
+) -> float:
+	var result := 0.0
+	for index in range(nodes.size() - 1):
+		var from := Vector2(
+			_boundary_node_position(int(nodes[index]), vertex_width)
+		) / Vector2(size)
+		var to := Vector2(
+			_boundary_node_position(int(nodes[index + 1]), vertex_width)
+		) / Vector2(size)
+		result += metric_length_between(from, to, map_aspect_ratio)
+	return result
+
+
+static func _boundary_node_position(
+	node_key: int, vertex_width: int
+) -> Vector2i:
+	return Vector2i(node_key % vertex_width, node_key / vertex_width)
+
+
 ## 验证任一道路折线段只经过端点两省；按栅格尺度 2 倍超采样覆盖对角穿格。
 static func province_segment_stays_in_pair(
 	province_ids: PackedInt32Array,
@@ -1882,6 +2388,459 @@ static func province_pair_path(
 		result.append(raw[next_anchor])
 		anchor = next_anchor
 	return result
+
+
+## 新河运拓扑：码头只从已选省界河段上产生，每座码头恰好连接该点
+## 两岸省份的城市；河道覆盖的省份对删除直接 LAND，杜绝绕过抢滩。
+static func _build_boundary_river_transport(
+	image: Image,
+	samples: Dictionary,
+	base_roads: Array[Dictionary],
+	provinces: Dictionary,
+	boundary_rivers: Dictionary,
+	city_count: int,
+	map_aspect_ratio: float
+) -> Dictionary:
+	var positions: Array[Vector2] = samples["positions"]
+	var rivers: Array[Dictionary] = boundary_rivers["rivers"]
+	var graph: Dictionary = boundary_rivers["graph"]
+	var graph_segments: Array[Dictionary] = graph["segments"]
+	var occupied_positions: Array[Vector2] = positions.duplicate()
+	var docks: Array[Dictionary] = []
+	var river_groups := {}
+	for river in rivers:
+		var river_id := int(river["river_id"])
+		var river_docks := _select_boundary_river_docks(
+			image, river, graph_segments, positions, occupied_positions,
+			city_count + docks.size(), map_aspect_ratio
+		)
+		assert(
+			river_docks.size() >= RIVER_DOCK_MIN_PER_RIVER,
+			"每条省界河流必须至少生成%d座码头"
+				% RIVER_DOCK_MIN_PER_RIVER
+		)
+		for dock in river_docks:
+			dock["city_id"] = city_count + docks.size()
+			docks.append(dock)
+		river_groups[river_id] = river_docks
+
+	var roads: Array[Dictionary] = []
+	var river_pair_keys: Dictionary = boundary_rivers["river_pair_keys"]
+	var normalized_river_paths: Array[PackedVector2Array] = boundary_rivers["paths"]
+	for road in base_roads:
+		var kind := int(road.get("kind", Edge.Kind.LAND))
+		var pair_key := _pair_key(int(road["a"]), int(road["b"]))
+		if kind == Edge.Kind.LAND:
+			if river_pair_keys.has(pair_key):
+				continue
+			if _road_dictionary_crosses_rivers(
+				road, positions, normalized_river_paths
+			):
+				continue
+		roads.append(road.duplicate(true))
+
+	var city_positions := positions.duplicate()
+	for dock in docks:
+		city_positions.append(dock["position"])
+		var dock_city := int(dock["city_id"])
+		for bank_suffix in ["a", "b"]:
+			var bank_city := int(dock["bank_" + bank_suffix])
+			var bank_cell: Vector2i = dock["cell_" + bank_suffix]
+			var map_path := _province_to_boundary_dock_path(
+				provinces, positions[bank_city], bank_city,
+				bank_cell, dock["position"]
+			)
+			var metric_length := metric_polyline_length(
+				map_path, map_aspect_ratio
+			)
+			roads.append({
+				"a": bank_city,
+				"b": dock_city,
+				"map_path": map_path,
+				"length": metric_length,
+				"distance": distance_units_for_metric_length(metric_length),
+				"height_difference": absf(
+					float(samples["heights"][bank_city])
+						- float(dock["height"])
+				),
+				"land_ratio": 1.0,
+				"cost": metric_length,
+				"backbone": true,
+				"max_manpower": Edge.TERRAIN_LOW_MANPOWER,
+				"base_max_manpower": Edge.TERRAIN_LOW_MANPOWER,
+				"danger": LANDING_DANGER_MIN,
+				"kind": Edge.Kind.LANDING,
+				"travel_time_multiplier": 1.0,
+				"supply_loss_multiplier": 1.0,
+				"allows_holding": true,
+			})
+
+	var active_paths: Array[PackedVector2Array] = []
+	for river in rivers:
+		var river_id := int(river["river_id"])
+		var path: PackedVector2Array = river["path"]
+		active_paths.append(path.duplicate())
+		var group: Array = river_groups[river_id]
+		group.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return float(a["river_progress"]) < float(b["river_progress"])
+		)
+		for dock_index in range(group.size() - 1):
+			var from_dock: Dictionary = group[dock_index]
+			var to_dock: Dictionary = group[dock_index + 1]
+			var map_path := _river_path_between_docks(
+				path, from_dock["position"], to_dock["position"],
+				float(from_dock["river_progress"]),
+				float(to_dock["river_progress"])
+			)
+			var metric_length := metric_polyline_length(
+				map_path, map_aspect_ratio
+			)
+			roads.append({
+				"a": int(from_dock["city_id"]),
+				"b": int(to_dock["city_id"]),
+				"map_path": map_path,
+				"length": metric_length,
+				"distance": distance_units_for_metric_length(metric_length),
+				"height_difference": absf(
+					float(from_dock["height"]) - float(to_dock["height"])
+				),
+				"land_ratio": 1.0,
+				"cost": metric_length,
+				"backbone": true,
+				"max_manpower": Edge.WATER_MANPOWER,
+				"base_max_manpower": Edge.WATER_MANPOWER,
+				"danger": _boundary_river_link_danger(
+					image, map_path, river_id, dock_index
+				),
+				"kind": Edge.Kind.RIVER,
+				"travel_time_multiplier": RIVER_TRAVEL_TIME_MULTIPLIER,
+				"supply_loss_multiplier": RIVER_SUPPLY_LOSS_MULTIPLIER,
+				"allows_holding": false,
+			})
+	assert(active_paths.size() == RIVER_COUNT)
+	return {
+		"roads": roads,
+		"docks": docks,
+		"river_paths": active_paths,
+	}
+
+
+static func _road_dictionary_crosses_rivers(
+	road: Dictionary,
+	city_positions: Array[Vector2],
+	river_paths: Array[PackedVector2Array]
+) -> bool:
+	var road_path: PackedVector2Array = road.get(
+		"map_path", PackedVector2Array()
+	)
+	if road_path.size() < 2:
+		road_path = PackedVector2Array([
+			city_positions[int(road["a"])],
+			city_positions[int(road["b"])],
+		])
+	for road_index in range(road_path.size() - 1):
+		var road_from := road_path[road_index]
+		var road_to := road_path[road_index + 1]
+		var road_delta := road_to - road_from
+		var length_squared := road_delta.length_squared()
+		if length_squared <= 0.000000000001:
+			continue
+		for river_path in river_paths:
+			for river_index in range(river_path.size() - 1):
+				var hit = Geometry2D.segment_intersects_segment(
+					road_from, road_to,
+					river_path[river_index], river_path[river_index + 1]
+				)
+				if hit == null:
+					continue
+				var t := (
+					(Vector2(hit) - road_from).dot(road_delta)
+						/ length_squared
+				)
+				if t > RIVER_CROSSING_ENDPOINT_EPS and t < 1.0 - RIVER_CROSSING_ENDPOINT_EPS:
+					return true
+	return false
+
+
+static func _select_boundary_river_docks(
+	image: Image,
+	river: Dictionary,
+	graph_segments: Array[Dictionary],
+	land_positions: Array[Vector2],
+	occupied_positions: Array[Vector2],
+	first_city_id: int,
+	map_aspect_ratio: float
+) -> Array[Dictionary]:
+	var path: PackedVector2Array = river["path"]
+	var edge_indices: Array = river["edge_indices"]
+	var cumulative := PackedFloat32Array([0.0])
+	for path_index in range(path.size() - 1):
+		cumulative.append(
+			cumulative[-1] + metric_length_between(
+				path[path_index], path[path_index + 1], map_aspect_ratio
+			)
+		)
+	var total_length := float(cumulative[-1])
+	var target_count := clampi(
+		int(round(total_length / BOUNDARY_RIVER_DOCK_TARGET_SPACING)) + 1,
+		RIVER_DOCK_MIN_PER_RIVER, BOUNDARY_RIVER_DOCK_MAX_PER_RIVER
+	)
+	var result: Array[Dictionary] = []
+	for slot in range(target_count):
+		var random_center := _boundary_random_unit(
+			int(river["river_id"]), slot, path.size() + first_city_id
+		)
+		var best := {}
+		var best_clearance := -INF
+		for attempt in range(11):
+			var offset_step := 0.0
+			if attempt > 0:
+				offset_step = float((attempt + 1) / 2) * 0.07
+				if attempt % 2 == 0:
+					offset_step = -offset_step
+			var local_ratio := clampf(
+				0.18 + random_center * 0.64 + offset_step, 0.08, 0.92
+			)
+			var target_distance := (
+				(float(slot) + local_ratio) / float(target_count)
+					* total_length
+			)
+			var point := _boundary_river_point_at_distance(
+				path, edge_indices, cumulative, target_distance,
+				graph_segments, map_aspect_ratio
+			)
+			var position: Vector2 = point["position"]
+			var city_clearance := _minimum_metric_position_distance(
+				position, land_positions, map_aspect_ratio
+			)
+			var occupied_clearance := _minimum_metric_position_distance(
+				position, occupied_positions.slice(land_positions.size()),
+				map_aspect_ratio
+			)
+			var clearance := minf(city_clearance, occupied_clearance)
+			if clearance > best_clearance:
+				best_clearance = clearance
+				best = point
+		if best.is_empty():
+			continue
+		if (
+			_minimum_metric_position_distance(
+				best["position"], land_positions, map_aspect_ratio
+			) < RIVER_DOCK_CITY_MIN_SPACING
+			or _minimum_metric_position_distance(
+				best["position"], occupied_positions.slice(land_positions.size()),
+				map_aspect_ratio
+			) < RIVER_DOCK_MIN_SPACING
+		):
+			continue
+		var position: Vector2 = best["position"]
+		var pixel := Vector2i(
+			clampi(int(floor(position.x * image.get_width())), 0, image.get_width() - 1),
+			clampi(int(floor(position.y * image.get_height())), 0, image.get_height() - 1)
+		)
+		var owner_a := int(best["bank_a"])
+		var owner_b := int(best["bank_b"])
+		var owner_pick := _boundary_random_unit(
+			int(river["river_id"]), slot, 7919
+		)
+		result.append({
+			"city_id": first_city_id + result.size(),
+			"river_id": int(river["river_id"]),
+			"river_progress": float(best["river_progress"]),
+			"position": position,
+			"pixel_position": Vector2(
+				position.x * float(image.get_width()) - 0.5,
+				position.y * float(image.get_height()) - 0.5
+			),
+			"height": packed_altitude(image.get_pixelv(pixel)),
+			"relief": _local_relief(image, pixel.x, pixel.y, RELIEF_RADIUS),
+			"bank_a": owner_a,
+			"bank_b": owner_b,
+			"cell_a": best["cell_a"],
+			"cell_b": best["cell_b"],
+			"road_a": owner_a,
+			"road_b": owner_b,
+			"road_t": 0.25 if owner_pick < 0.5 else 0.75,
+			"owner_city": owner_a if owner_pick < 0.5 else owner_b,
+		})
+		occupied_positions.append(position)
+	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["river_progress"]) < float(b["river_progress"])
+	)
+	return result
+
+
+static func _boundary_river_point_at_distance(
+	path: PackedVector2Array,
+	edge_indices: Array,
+	cumulative: PackedFloat32Array,
+	target_distance: float,
+	graph_segments: Array[Dictionary],
+	map_aspect_ratio: float
+) -> Dictionary:
+	var path_index := 0
+	while (
+		path_index + 1 < cumulative.size() - 1
+		and float(cumulative[path_index + 1]) < target_distance
+	):
+		path_index += 1
+	var segment_length := metric_length_between(
+		path[path_index], path[path_index + 1], map_aspect_ratio
+	)
+	var ratio := clampf(
+		(target_distance - float(cumulative[path_index]))
+			/ maxf(segment_length, 0.000001),
+		0.001, 0.999
+	)
+	var graph_segment: Dictionary = graph_segments[int(edge_indices[path_index])]
+	return {
+		"position": path[path_index].lerp(path[path_index + 1], ratio),
+		"river_progress": float(path_index) + ratio,
+		"bank_a": int(graph_segment["a"]),
+		"bank_b": int(graph_segment["b"]),
+		"cell_a": graph_segment["cell_a"],
+		"cell_b": graph_segment["cell_b"],
+	}
+
+
+static func _province_to_boundary_dock_path(
+	provinces: Dictionary,
+	city_position: Vector2,
+	city_id: int,
+	bank_cell: Vector2i,
+	dock_position: Vector2
+) -> PackedVector2Array:
+	var size: Vector2i = provinces["size"]
+	var ids: PackedInt32Array = provinces["ids"]
+	var start := Vector2i(
+		clampi(int(floor(city_position.x * size.x)), 0, size.x - 1),
+		clampi(int(floor(city_position.y * size.y)), 0, size.y - 1)
+	)
+	var raw_cells := _province_owner_cell_path(
+		ids, size, start, bank_cell, city_id
+	)
+	assert(not raw_cells.is_empty(), "岸边城市必须能在本省内连接到省界码头")
+	var result := PackedVector2Array([city_position])
+	for cell_index in range(1, raw_cells.size() - 1):
+		var incoming: Vector2i = raw_cells[cell_index] - raw_cells[cell_index - 1]
+		var outgoing: Vector2i = raw_cells[cell_index + 1] - raw_cells[cell_index]
+		if incoming != outgoing:
+			result.append(
+				(Vector2(raw_cells[cell_index]) + Vector2(0.5, 0.5))
+					/ Vector2(size)
+			)
+	var bank_center := (Vector2(bank_cell) + Vector2(0.5, 0.5)) / Vector2(size)
+	if result[-1].distance_squared_to(bank_center) > 0.000000000001:
+		result.append(bank_center)
+	if result[-1].distance_squared_to(dock_position) > 0.000000000001:
+		result.append(dock_position)
+	else:
+		result[-1] = dock_position
+	return result
+
+
+static func _province_owner_cell_path(
+	province_ids: PackedInt32Array,
+	size: Vector2i,
+	start: Vector2i,
+	goal: Vector2i,
+	owner: int
+) -> Array[Vector2i]:
+	var empty: Array[Vector2i] = []
+	var start_index := start.y * size.x + start.x
+	var goal_index := goal.y * size.x + goal.x
+	if (
+		int(province_ids[start_index]) != owner
+		or int(province_ids[goal_index]) != owner
+	):
+		return empty
+	var previous := PackedInt32Array()
+	previous.resize(size.x * size.y)
+	previous.fill(-2)
+	previous[start_index] = -1
+	var queue: Array[int] = [start_index]
+	var head := 0
+	var offsets := [
+		Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN,
+	]
+	while head < queue.size() and previous[goal_index] == -2:
+		var current_index := queue[head]
+		head += 1
+		var current := Vector2i(
+			current_index % size.x, current_index / size.x
+		)
+		for offset_value in offsets:
+			var next: Vector2i = current + offset_value
+			if next.x < 0 or next.y < 0 or next.x >= size.x or next.y >= size.y:
+				continue
+			var next_index := next.y * size.x + next.x
+			if previous[next_index] != -2 or int(province_ids[next_index]) != owner:
+				continue
+			previous[next_index] = current_index
+			queue.append(next_index)
+	if previous[goal_index] == -2:
+		return empty
+	var result: Array[Vector2i] = []
+	var cursor := goal_index
+	while cursor >= 0:
+		result.append(Vector2i(cursor % size.x, cursor / size.x))
+		cursor = previous[cursor]
+	result.reverse()
+	return result
+
+
+static func _minimum_metric_position_distance(
+	position: Vector2, others: Array, map_aspect_ratio: float
+) -> float:
+	if others.is_empty():
+		return INF
+	var result := INF
+	for other_value in others:
+		result = minf(
+			result, metric_length_between(
+				position, Vector2(other_value), map_aspect_ratio
+			)
+		)
+	return result
+
+
+static func _boundary_random_unit(a: int, b: int, c: int) -> float:
+	var value := posmod(
+		a * 73856093 + b * 19349663 + c * 83492791 + 104729,
+		2147483647
+	)
+	value = posmod(value * 48271 + 31, 2147483647)
+	return float(value) / 2147483647.0
+
+
+static func _boundary_river_link_danger(
+	image: Image,
+	path: PackedVector2Array,
+	river_id: int,
+	link_index: int
+) -> float:
+	var minimum := 1.0
+	var maximum := 0.0
+	var turn_total := 0.0
+	for point_index in range(path.size()):
+		var point := path[point_index]
+		var pixel := Vector2i(
+			clampi(int(floor(point.x * image.get_width())), 0, image.get_width() - 1),
+			clampi(int(floor(point.y * image.get_height())), 0, image.get_height() - 1)
+		)
+		var altitude := packed_altitude(image.get_pixelv(pixel))
+		minimum = minf(minimum, altitude)
+		maximum = maxf(maximum, altitude)
+		if point_index > 0 and point_index + 1 < path.size():
+			var incoming := (path[point_index] - path[point_index - 1]).normalized()
+			var outgoing := (path[point_index + 1] - path[point_index]).normalized()
+			turn_total += 1.0 - clampf(incoming.dot(outgoing), -1.0, 1.0)
+	return clampf(
+		0.12 + (maximum - minimum) * 2.5
+			+ turn_total / float(maxi(path.size() - 2, 1)) * 0.10
+			+ _boundary_random_unit(river_id, link_index, 3571) * 0.08,
+		0.12, 0.60
+	)
 
 
 static func _build_river_transport(

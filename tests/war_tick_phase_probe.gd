@@ -69,6 +69,30 @@ const DIPLOMACY_STAGES: Array[String] = [
 	"diplomacy_alliance",
 	"diplomacy_enfeoff",
 	"diplomacy_centralization",
+	"peace_blocs",
+	"peace_coalition_breakdown",
+	"peace_power_wars",
+	"peace_situation",
+	"peace_resources",
+	"peace_external_threat",
+	"peace_attitude",
+	"war_gate",
+	"war_resources_food",
+	"war_objective",
+	"war_power_scoring",
+	"war_attitude_unification",
+	"war_collect_precheck",
+	"war_collect_candidates",
+	"war_collect_finalize",
+	"war_existing_preparation",
+	"alliance_gate",
+	"alliance_common_power",
+	"alliance_shared_threat",
+	"alliance_frontier_release",
+	"alliance_attitude_unification",
+	"attitude_history",
+	"attitude_frontier_objective",
+	"attitude_political",
 ]
 
 
@@ -90,6 +114,16 @@ func _init() -> void:
 	)
 	sim.ai_decision_context_disabled = (
 		OS.get_environment("PHASE_DISABLE_AI_CONTEXT") == "1"
+	)
+	sim.reinforcement_network_cache_disabled = (
+		OS.get_environment(
+			"PHASE_LEGACY_REINFORCEMENT_NETWORKS"
+		) == "1"
+	)
+	sim.diplomacy_structure_cache_disabled = (
+		OS.get_environment(
+			"PHASE_LEGACY_DIPLOMACY_STRUCTURE_CACHE"
+		) == "1"
 	)
 
 	var peaceful := _new_bucket()

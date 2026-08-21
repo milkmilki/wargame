@@ -56,6 +56,11 @@ func _init() -> void:
 	_sim.ai_parallel_defense_disabled = (
 		OS.get_environment("AI_STUT_SERIAL_AI_DEFENSE") == "1"
 	)
+	_sim.reinforcement_network_cache_disabled = (
+		OS.get_environment(
+			"AI_STUT_LEGACY_REINFORCEMENT_NETWORKS"
+		) == "1"
+	)
 	_sim.set_speed_multiplier(float(speed))
 
 	print(

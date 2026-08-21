@@ -1,44 +1,47 @@
 extends SceneTree
-## Both generated rivers must terminate in ocean and concentrate at least three
-## docks in their low-elevation eastern reaches.
+## Compatibility-named gate for the new rule: docks are deterministic points on
+## province-boundary rivers and each one exposes exactly both adjacent banks.
 
 
 func _init() -> void:
-	var state := GameState.new()
-	state.generate_world(12345)
-	if state.river_paths.size() != TerrainMapGenerator.RIVER_COUNT:
-		_fail("missing rivers")
+	var first := TerrainMapGenerator.build(
+		GameState.terrain_map_path(), GameState.TERRAIN_CITY_COUNT
+	)
+	TerrainMapGenerator._cache.clear()
+	var second := TerrainMapGenerator.build(
+		GameState.terrain_map_path(), GameState.TERRAIN_CITY_COUNT
+	)
+	var first_docks: Array = first.get("docks", [])
+	var second_docks: Array = second.get("docks", [])
+	if first_docks.size() != second_docks.size():
+		_fail("dock count is not deterministic")
 		return
-	for river_id in range(state.river_paths.size()):
-		var path := state.river_paths[river_id]
-		if path.size() < 2 or TerrainMapGenerator.is_land_map_position(
-			GameState.terrain_map_path(), path[-1]
-		):
-			_fail("river %d does not terminate in ocean" % river_id)
-			return
-		if not TerrainMapGenerator.is_land_map_position(
-			GameState.terrain_map_path(), path[-2]
-		):
-			_fail("river %d lacks a 0m coastal mouth" % river_id)
-			return
-		var eastern_docks := 0
-		for city in state.cities:
-			if not city.is_dock or city.map_position.x < TerrainMapGenerator.RIVER_DOCK_EASTERN_MIN_X:
-				continue
-			var minimum := INF
-			for point in path:
-				var delta := city.map_position - point
-				delta.x *= state.map_aspect_ratio
-				minimum = minf(minimum, delta.length())
-			if minimum <= 0.012 and city.terrain_height <= TerrainMapGenerator.RIVER_DOCK_LOWLAND_ALTITUDE:
-				eastern_docks += 1
-		if eastern_docks < TerrainMapGenerator.RIVER_DOCK_EASTERN_MIN_PER_RIVER:
-			_fail("river %d eastern lowland docks=%d" % [river_id, eastern_docks])
-			return
-	print("RIVER_MOUTH_DOCKS_OK rivers=", state.river_paths.size())
+	var valid: bool = (
+		(first.get("river_paths", []) as Array).size()
+			== TerrainMapGenerator.RIVER_COUNT
+	)
+	var counts := {}
+	for index in range(first_docks.size()):
+		var a: Dictionary = first_docks[index]
+		var b: Dictionary = second_docks[index]
+		var river_id := int(a["river_id"])
+		counts[river_id] = int(counts.get(river_id, 0)) + 1
+		valid = (
+			valid
+			and a["position"] == b["position"]
+			and is_equal_approx(float(a["river_progress"]), float(b["river_progress"]))
+			and int(a["bank_a"]) != int(a["bank_b"])
+			and int(a["owner_city"]) in [int(a["bank_a"]), int(a["bank_b"])]
+		)
+	for river_id in range(TerrainMapGenerator.RIVER_COUNT):
+		valid = valid and int(counts.get(river_id, 0)) >= 2
+	if not valid:
+		_fail("boundary docks invalid: %s" % counts)
+		return
+	print("BOUNDARY_RIVER_DOCKS_OK counts=", counts)
 	quit(0)
 
 
 func _fail(message: String) -> void:
-	push_error("RIVER_MOUTH_DOCKS_FAILED: " + message)
+	push_error("BOUNDARY_RIVER_DOCKS_FAILED: " + message)
 	quit(1)
