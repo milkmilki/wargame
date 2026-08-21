@@ -737,6 +737,8 @@ func _init() -> void:
 		total_turnovers == 0
 		or total_war_declarations == 0
 		or total_offensives <= total_war_declarations
+		or total_multi_target_preparations == 0
+		or global_max_parallel_targets < 4
 	):
 		failed = true
 	print(

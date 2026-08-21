@@ -41,8 +41,11 @@ var campaign_preparation_started_day: int = -1
 ## 当前波次并行准备的目标城，以及冻结的一军一目标分配。
 ## 多个目标共享国家级准备时钟，不能让同一军在多个方向重复计入已集结兵力。
 var campaign_preparation_targets: Array[int] = []
+## 下一波攻势的战团级唯一真源。旧 preparation_* 字段是兼容/执行投影。
+var campaign_preparation_plan: CampaignAllocationPlan = null
 var campaign_preparation_assignments: Dictionary = {}
-## target_city_id -> battle_group_id。每个目标只能由一个持久战团承担。
+## target_city_id -> representative battle_group_id 的兼容投影。真实的多团归属
+## 只保存在 campaign_preparation_plan.target_to_groups，不能从此字段反推预算。
 var campaign_preparation_group_assignments: Dictionary = {}
 ## 正在等待 180 天满准备的目标城集合。
 var campaign_full_preparation_targets: Array[int] = []

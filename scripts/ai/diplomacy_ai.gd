@@ -3742,56 +3742,66 @@ static func war_preparation_ready(state: GameState, nation_id: int) -> bool:
 			< WAR_PREPARATION_MIN_DAYS
 	):
 		return false
-	if (
-		state.uses_heightmap
-		and nation.campaign_preparation_group_assignments.has(
-			nation.war_preparation_objective_city
+	if state.uses_heightmap:
+		var plan := nation.campaign_preparation_plan
+		var objective_city := nation.war_preparation_objective_city
+		if (
+			plan == null
+			or not plan.assigned_target_ids.has(objective_city)
+		):
+			return false
+		var target_groups: Array[int] = (
+			plan.groups_for_target(objective_city)
 		)
-	):
-		var assigned_armies: Array[Army] = []
-		for army in state.armies:
-			if (
-				army.owner_nation == nation_id
-				and army.size > 0
-				and int(
-					nation.campaign_preparation_assignments.get(
-						army.id,
-						-1
-					)
-				) == nation.war_preparation_objective_city
-			):
-				assigned_armies.append(army)
-		if assigned_armies.is_empty():
+		if target_groups.is_empty():
 			return false
 		var staging := staging_cities_for_objective(
 			state,
 			nation_id,
-			nation.war_preparation_objective_city
+			objective_city
 		)
-		for army in assigned_armies:
-			var staged := (
-				army.state in [
-					Army.State.IDLE,
-					Army.State.RECOVERING,
-				]
-				and staging.has(army.location_city)
-			) or (
-				army.state == Army.State.HOLDING
-				and (
-					(
-						army.move_from
-							== nation.war_preparation_objective_city
-						and staging.has(army.move_to)
-					)
-					or (
-						army.move_to
-							== nation.war_preparation_objective_city
-						and staging.has(army.move_from)
+		for group_id in target_groups:
+			if state.battle_group_by_id(nation_id, group_id) == null:
+				return false
+			var eligible_ids: Array[int] = (
+				plan.member_ids_for_group(group_id)
+			)
+			if eligible_ids.is_empty():
+				return false
+			for army_id in eligible_ids:
+				var assigned_army: Army = null
+				for army in state.armies:
+					if (
+						army.id == army_id
+						and army.owner_nation == nation_id
+						and army.battle_group_id == group_id
+						and army.size > 0
+					):
+						assigned_army = army
+						break
+				if assigned_army == null:
+					return false
+				var staged := (
+					assigned_army.state in [
+						Army.State.IDLE,
+						Army.State.RECOVERING,
+					]
+					and staging.has(assigned_army.location_city)
+				) or (
+					assigned_army.state == Army.State.HOLDING
+					and (
+						(
+							assigned_army.move_from == objective_city
+							and staging.has(assigned_army.move_to)
+						)
+						or (
+							assigned_army.move_to == objective_city
+							and staging.has(assigned_army.move_from)
+						)
 					)
 				)
-			)
-			if not staged:
-				return false
+				if not staged:
+					return false
 		return true
 	return (
 		staged_troops_for_objective(

@@ -9506,6 +9506,91 @@ func _test_manpower_pool_and_force_commands() -> void:
 			].battle_groups.size() >= 4,
 		"备战期战团数量必须只由四个实际准备目标的统一需求决定"
 	)
+	var decisive_state := GameState.new()
+	decisive_state.generate_grid_world(7106)
+	for decisive_city in decisive_state.cities:
+		decisive_city.owner_nation = 0
+	var decisive_target := 1
+	decisive_state.cities[decisive_target].owner_nation = 1
+	decisive_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	var decisive_sim := Simulation.new()
+	decisive_sim.setup(decisive_state)
+	var decisive_demand := decisive_sim._campaign_target_group_demand(
+		0, decisive_target, null
+	)
+	var decisive_recruitment := (
+		decisive_sim._next_battle_group_recruitment(0, true, true)
+	)
+	decisive_state.nations[0].battle_groups.clear()
+	decisive_state.nations[0].next_battle_group_id = 0
+	var decisive_groups: Array[int] = []
+	for decisive_index in range(3):
+		var decisive_group := decisive_state.create_battle_group(0)
+		var decisive_army := _make_army(9700 + decisive_index, 0, 5000, 10, 10)
+		decisive_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+		decisive_army.location_city = 0
+		decisive_army.move_from = 0
+		decisive_state.armies.append(decisive_army)
+		decisive_state.assign_army_to_battle_group(
+			decisive_army, decisive_group.id
+		)
+		decisive_groups.append(decisive_group.id)
+	var decisive_view := AiWorldView.build(decisive_state, 0)
+	var decisive_plan := CityDefensePlan.new()
+	decisive_plan.view = decisive_view
+	decisive_plan.threat = ThreatField.build(decisive_view)
+	var decisive_allocation := (
+		decisive_sim._plan_campaign_allocation(
+			0,
+			decisive_target,
+			[decisive_target] as Array[int],
+			decisive_plan,
+			ArmyCoordinator.new(),
+			decisive_view,
+			false
+		)
+	)
+	var decisive_planned_groups := (
+		decisive_allocation.groups_for_target(decisive_target)
+	)
+	var decisive_unique_planned_groups := {}
+	for decisive_group_id in decisive_planned_groups:
+		decisive_unique_planned_groups[decisive_group_id] = true
+	_check(
+		decisive_allocation.assigned_target_ids
+			== [decisive_target]
+			and decisive_planned_groups.size()
+				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+			and decisive_unique_planned_groups.size()
+				== decisive_planned_groups.size()
+			and decisive_allocation.assigned_group_count
+				== decisive_planned_groups.size(),
+		"纯规划器必须为敌国最后一城直接配置至少三支互异战团：%s"
+			% str(decisive_allocation.group_to_target)
+	)
+	var decisive_assigned := (
+		decisive_sim._apply_campaign_plan_atomic(
+			0, decisive_allocation
+		)
+	)
+	var decisive_assigned_groups := {}
+	for decisive_army in decisive_state.armies:
+		if int(decisive_state.nations[0].campaign_preparation_assignments.get(
+			decisive_army.id, -1
+		)) == decisive_target:
+			decisive_assigned_groups[decisive_army.battle_group_id] = true
+	_check(
+		int(decisive_demand.get("groups", 0))
+			>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+			and bool(decisive_recruitment.get("create_group", false))
+			and decisive_assigned
+			and decisive_assigned_groups.size()
+				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
+		"消灭敌国最后一城必须至少组织三支独立战团，并优先建立新战团骨架"
+	)
+	decisive_sim.free()
 	var ungrouped_heavy := (
 		priority_force_sim._create_army_for_nation(
 			force_nation_id,
@@ -11142,13 +11227,21 @@ func _test_diplomacy_state_and_ai() -> void:
 		group_ready_state.day
 			- DiplomacyAI.WAR_PREPARATION_MIN_DAYS
 	)
-	group_ready_nation.campaign_preparation_group_assignments[
-		group_objective_city
-	] = preparation_group.id
-	for preparation_member in preparation_members:
-		group_ready_nation.campaign_preparation_assignments[
-			preparation_member.id
-		] = group_objective_city
+	var group_ready_sim := Simulation.new()
+	group_ready_sim.setup(group_ready_state)
+	var group_ready_view := AiWorldView.build(group_ready_state, 0)
+	var canonical_preparation := (
+		group_ready_sim._plan_campaign_allocation(
+			0, group_objective_city,
+			[group_objective_city] as Array[int], null, null,
+			group_ready_view, true
+		)
+	)
+	var canonical_preparation_applied := (
+		group_ready_sim._apply_campaign_plan_atomic(
+			0, canonical_preparation
+		)
+	)
 	var old_national_share_requirement := (
 		DiplomacyAI.required_assault_troops(
 			group_ready_state,
@@ -11170,7 +11263,8 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 	)
 	_check(
-		not group_objective.is_empty()
+		canonical_preparation_applied
+			and not group_objective.is_empty()
 			and not group_staging.is_empty()
 			and old_national_share_requirement
 				> preparation_group_troops
@@ -11267,12 +11361,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		stale_group_holder.on_edge = true
 		for preparation_member in preparation_members:
 			preparation_member.defensive_deployment_until_day = -1
-	var convergence_sim := Simulation.new()
-	convergence_sim.setup(group_ready_state)
-	group_ready_nation.campaign_preparation_targets = [
-		group_objective_city
-	] as Array[int]
-	convergence_sim._sync_campaign_group_members(0)
+	var convergence_sim := group_ready_sim
 	var convergence_view := AiWorldView.build(group_ready_state, 0)
 	var convergence_plan := CityDefensePlan.build(
 		convergence_view,
@@ -11307,20 +11396,18 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 		preparation_member.defensive_deployment_until_day = -1
 	ready_group_reserve.state = Army.State.RECOVERING
-	var partial_group_bound := (
-		convergence_sim._assign_battle_groups_to_campaign_targets(
-			0,
+	var strict_partial_view := AiWorldView.build(group_ready_state, 0)
+	var strict_partial_plan := (
+		convergence_sim._plan_campaign_allocation(
+			0, group_objective_city,
 			[group_objective_city] as Array[int],
-			convergence_plan,
-			ArmyCoordinator.new()
+			convergence_plan, ArmyCoordinator.new(),
+			strict_partial_view, true
 		)
 	)
 	_check(
-		not partial_group_bound
-			and not group_ready_nation
-				.campaign_preparation_group_assignments.has(
-					group_objective_city
-				),
+		strict_partial_plan.assigned_group_count == 0
+			and group_ready_nation.campaign_preparation_plan == null,
 		"团内存在恢复中或不可达成员时不得只绑定部分战团，否则外交全员门禁会永久等待"
 	)
 	convergence_sim.free()
@@ -11406,22 +11493,51 @@ func _test_diplomacy_state_and_ai() -> void:
 			1.0
 		)
 		and _approx(
-			Simulation.offensive_preparation_multiplier(90),
+			Simulation.offensive_preparation_multiplier(
+				Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS / 2
+			),
 			1.5
 		)
 		and _approx(
-			Simulation.offensive_preparation_multiplier(180),
+			Simulation.offensive_preparation_multiplier(
+				Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+			),
 			2.0
 		)
 		and _approx(
-			Simulation.offensive_preparation_multiplier(360),
+			Simulation.offensive_preparation_multiplier(
+				Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS * 2
+			),
 			2.0
-			)
-			and Simulation.offensive_bonus_duration_days(30) == 30
-			and Simulation.offensive_bonus_duration_days(60) == 60
-			and Simulation.offensive_bonus_duration_days(180) == 180
-			and Simulation.offensive_bonus_duration_days(360) == 180,
-		"攻势倍率和持续期应随准备天数增长，并都在180天封顶"
+		)
+		and Simulation.offensive_bonus_duration_days(30) == 30
+		and Simulation.offensive_bonus_duration_days(
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+		) == Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+		and Simulation.offensive_bonus_duration_days(
+			Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS * 2
+		) == Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		"攻势倍率和持续期应随准备天数增长，并在正式满准备窗口封顶"
+	)
+	var interval_nation := objective_state.nations[objective_attacker]
+	var original_aggression := interval_nation.ai_aggression
+	var personality_intervals: Array[int] = []
+	for aggression in [0.5, 1.0, 1.5]:
+		interval_nation.ai_aggression = aggression
+		personality_intervals.append(
+			objective_sim._campaign_offensive_interval(objective_attacker)
+		)
+	interval_nation.ai_aggression = original_aggression
+	_check(
+		personality_intervals == [40, 20, 13],
+		"低/中/高激进国家的攻势基础波次应分别为40/20/13天，当前=%s"
+			% str(personality_intervals)
+	)
+	_check(
+		Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS >= 8
+			and Simulation.CAMPAIGN_MAX_WARTIME_GROUPS
+				>= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS * 2,
+		"国家级攻势预算必须支持至少八路宽正面和每路双梯队"
 	)
 	var first_wave_army: Army = null
 	for army in objective_state.armies:
@@ -11723,7 +11839,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		ratio_at_normal_window < stalemate_threshold
 			and ratio_at_full_preparation >= stalemate_threshold,
-		"均势夹具应仅在180天满准备后跨过进攻阈值：60天%.2f，180天%.2f，阈值%.2f"
+		"均势夹具应仅在满准备窗口后跨过进攻阈值：常规窗%.2f，满准备%.2f，阈值%.2f"
 			% [
 				ratio_at_normal_window,
 				ratio_at_full_preparation,
@@ -11760,7 +11876,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 			and stalemate_nation.campaign_offensive_count == 0
 			and no_early_stalemate_attack,
-		"均势攻势在60至179天必须持续集结，不得拆成零散提前攻击"
+		"均势攻势在常规窗至满准备前必须持续集结，不得拆成零散提前攻击"
 	)
 	stalemate_state.day = (
 		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
@@ -11803,7 +11919,7 @@ func _test_diplomacy_state_and_ai() -> void:
 				.campaign_full_preparation_targets.is_empty()
 			and full_preparation_bonus_extended,
 		(
-			"第180天必须以2倍攻击加成统一发动满准备攻势："
+			"满准备截止日必须以2倍攻击加成统一发动攻势："
 			+ "launched=%s attackers=%d count=%d "
 			+ "targets=%s"
 		) % [
@@ -12124,6 +12240,680 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	plan_sim.free()
 
+	# 正式地图宽正面：即便主目标的局部需求足以吞掉全部战团，也必须
+	# 先让每个合法方向获得一个独立战团，再用剩余战团补强主目标。
+	var broad_state := GameState.new()
+	broad_state.generate_grid_world(32066)
+	broad_state.uses_heightmap = true
+	broad_state.armies.clear()
+	for broad_city in broad_state.cities:
+		broad_city.owner_nation = 0
+	var broad_origin := 9
+	var broad_targets: Array[int] = [10, 17, 8]
+	for broad_target in broad_targets:
+		broad_state.cities[broad_target].owner_nation = 1
+		broad_state.recognized_city_owners[broad_target] = 1
+		broad_state.edge_of(broad_origin, broad_target).max_manpower = 30000
+	# 主目标需要约60000兵力，旧“逐目标填满”会用光四个战团。
+	broad_state.cities[broad_targets[0]].fort_strength = 300
+	broad_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	var broad_nation := broad_state.nations[0]
+	broad_nation.battle_groups.clear()
+	broad_nation.next_battle_group_id = 0
+	var broad_armies: Array[Army] = []
+	for broad_index in range(4):
+		var broad_group := broad_state.create_battle_group(0)
+		var broad_army := _make_army(10800 + broad_index, 0, 15000, 10, 10)
+		broad_army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		broad_army.location_city = broad_origin
+		broad_army.move_from = broad_origin
+		broad_state.armies.append(broad_army)
+		broad_state.assign_army_to_battle_group(
+			broad_army, broad_group.id
+		)
+		broad_armies.append(broad_army)
+	var broad_sim := Simulation.new()
+	broad_sim.setup(broad_state)
+	var broad_view := AiWorldView.build(broad_state, 0)
+	var broad_plan := CityDefensePlan.new()
+	broad_plan.view = broad_view
+	broad_plan.threat = ThreatField.build(broad_view)
+	var broad_plan_before := broad_nation.campaign_preparation_plan
+	var broad_targets_before := (
+		broad_nation.campaign_preparation_targets.duplicate()
+	)
+	var broad_assignments_before := (
+		broad_nation.campaign_preparation_assignments.duplicate(true)
+	)
+	var broad_groups_before := (
+		broad_nation
+			.campaign_preparation_group_assignments.duplicate(true)
+	)
+	var broad_full_before := (
+		broad_nation.campaign_full_preparation_targets.duplicate()
+	)
+	var broad_started_before := (
+		broad_nation.campaign_preparation_started_day
+	)
+	var broad_multiplier_before := (
+		broad_nation.campaign_preparation_multiplier
+	)
+	var broad_attack_state_before := [
+		broad_nation.campaign_attack_assignments.duplicate(true),
+		broad_nation.campaign_attack_echelons.duplicate(true),
+		broad_nation.campaign_active_echelons.duplicate(true),
+		broad_nation.campaign_launched_armies.duplicate(true),
+		broad_nation.campaign_echelon_started_days.duplicate(true),
+		broad_nation.campaign_plan_targets.duplicate(),
+		broad_nation.campaign_plan_wave,
+		broad_nation.campaign_plan_primary_city,
+		broad_nation.campaign_last_offensive_day,
+		broad_nation.campaign_next_offensive_day,
+		broad_nation.campaign_offensive_count,
+		broad_nation.campaign_theater_anchor_city,
+		broad_nation.campaign_theater_started_day,
+		broad_nation.treasury_gold,
+	]
+	var broad_army_state_before := {}
+	for broad_army in broad_armies:
+		broad_army_state_before[broad_army.id] = [
+			broad_army.size,
+			broad_army.max_size,
+			broad_army.battle_group_id,
+			broad_army.strategic_role,
+			broad_army.line_assignment_city,
+			broad_army.line_assignment_posture,
+			broad_army.line_assignment_edge,
+			broad_army.state,
+			broad_army.location_city,
+			broad_army.move_from,
+			broad_army.move_to,
+			broad_army.path.duplicate(),
+			broad_army.defensive_deployment_until_day,
+			broad_army.ai_action,
+			broad_army.ai_target_city,
+			broad_army.ai_order_created_day,
+			broad_army.ai_order_until_day,
+		]
+	var pure_broad_a := broad_sim._plan_campaign_allocation(
+		0, broad_targets[0], broad_targets, broad_plan,
+		ArmyCoordinator.new(), broad_view, false
+	)
+	var pure_broad_b := broad_sim._plan_campaign_allocation(
+		0, broad_targets[0], broad_targets, broad_plan,
+		ArmyCoordinator.new(), broad_view, false
+	)
+	var broad_armies_unchanged := true
+	for broad_army in broad_armies:
+		broad_armies_unchanged = (
+			broad_armies_unchanged
+			and broad_army_state_before[broad_army.id] == [
+				broad_army.size,
+				broad_army.max_size,
+				broad_army.battle_group_id,
+				broad_army.strategic_role,
+				broad_army.line_assignment_city,
+				broad_army.line_assignment_posture,
+				broad_army.line_assignment_edge,
+				broad_army.state,
+				broad_army.location_city,
+				broad_army.move_from,
+				broad_army.move_to,
+				broad_army.path,
+				broad_army.defensive_deployment_until_day,
+				broad_army.ai_action,
+				broad_army.ai_target_city,
+				broad_army.ai_order_created_day,
+				broad_army.ai_order_until_day,
+			]
+		)
+	var planned_group_occurrences := {}
+	var broad_one_group_one_target := true
+	for planned_target in pure_broad_a.assigned_target_ids:
+		for planned_group_id in pure_broad_a.groups_for_target(
+			planned_target
+		):
+			planned_group_occurrences[planned_group_id] = int(
+				planned_group_occurrences.get(planned_group_id, 0)
+			) + 1
+			broad_one_group_one_target = (
+				broad_one_group_one_target
+				and pure_broad_a.target_for_group(planned_group_id)
+					== planned_target
+			)
+	for occurrence_count in planned_group_occurrences.values():
+		broad_one_group_one_target = (
+			broad_one_group_one_target
+			and int(occurrence_count) == 1
+		)
+	_check(
+		pure_broad_a != pure_broad_b
+			and pure_broad_a.same_allocation(pure_broad_b)
+			and planned_group_occurrences.size()
+				== pure_broad_a.assigned_group_count
+			and pure_broad_a.group_to_target.size()
+				== pure_broad_a.assigned_group_count
+			and broad_one_group_one_target,
+		"相同冻结输入的纯攻势规划必须确定，且每个战团只能属于一个目标"
+	)
+	_check(
+		broad_nation.campaign_preparation_plan == broad_plan_before
+			and broad_nation.campaign_preparation_targets
+				== broad_targets_before
+			and broad_nation.campaign_preparation_assignments
+				== broad_assignments_before
+			and broad_nation.campaign_preparation_group_assignments
+				== broad_groups_before
+			and broad_nation.campaign_full_preparation_targets
+				== broad_full_before
+			and broad_nation.campaign_preparation_started_day
+				== broad_started_before
+			and _approx(
+				broad_nation.campaign_preparation_multiplier,
+				broad_multiplier_before
+			)
+			and broad_attack_state_before == [
+				broad_nation.campaign_attack_assignments,
+				broad_nation.campaign_attack_echelons,
+				broad_nation.campaign_active_echelons,
+				broad_nation.campaign_launched_armies,
+				broad_nation.campaign_echelon_started_days,
+				broad_nation.campaign_plan_targets,
+				broad_nation.campaign_plan_wave,
+				broad_nation.campaign_plan_primary_city,
+				broad_nation.campaign_last_offensive_day,
+				broad_nation.campaign_next_offensive_day,
+				broad_nation.campaign_offensive_count,
+				broad_nation.campaign_theater_anchor_city,
+				broad_nation.campaign_theater_started_day,
+				broad_nation.treasury_gold,
+			]
+			and broad_armies_unchanged,
+		"纯攻势规划不得修改 Nation 投影或任何 Army 状态"
+	)
+	var pure_broad_applied := broad_sim._apply_campaign_plan_atomic(
+		0, pure_broad_a
+	)
+	var applied_broad_plan := broad_nation.campaign_preparation_plan
+	var applied_broad_snapshot := (
+		applied_broad_plan.duplicate_plan()
+		if applied_broad_plan != null
+		else CampaignAllocationPlan.new()
+	)
+	var applied_targets_snapshot := (
+		broad_nation.campaign_preparation_targets.duplicate()
+	)
+	var applied_assignments_snapshot := (
+		broad_nation.campaign_preparation_assignments.duplicate(true)
+	)
+	var applied_groups_snapshot := (
+		broad_nation
+			.campaign_preparation_group_assignments.duplicate(true)
+	)
+	var applied_full_snapshot := (
+		broad_nation.campaign_full_preparation_targets.duplicate()
+	)
+	var applied_started_snapshot := (
+		broad_nation.campaign_preparation_started_day
+	)
+	var applied_multiplier_snapshot := (
+		broad_nation.campaign_preparation_multiplier
+	)
+	var invalid_broad_plan := pure_broad_a.duplicate_plan()
+	var invalid_group_id := -1
+	if not invalid_broad_plan.group_to_target.is_empty():
+		invalid_group_id = int(
+			invalid_broad_plan.group_to_target.keys()[0]
+		)
+	var invalid_original_target := int(
+		invalid_broad_plan.group_to_target.get(invalid_group_id, -1)
+	)
+	var invalid_second_target := -1
+	for candidate_target in invalid_broad_plan.assigned_target_ids:
+		if candidate_target != invalid_original_target:
+			invalid_second_target = candidate_target
+			break
+	if invalid_second_target >= 0:
+		(
+			invalid_broad_plan.target_to_groups[invalid_second_target]
+			as Array[int]
+		).append(invalid_group_id)
+	var invalid_broad_applied := (
+		broad_sim._apply_campaign_plan_atomic(0, invalid_broad_plan)
+	)
+	_check(
+		pure_broad_applied
+			and invalid_second_target >= 0
+			and not invalid_broad_applied
+			and broad_nation.campaign_preparation_plan
+				== applied_broad_plan
+			and broad_nation.campaign_preparation_plan != null
+			and broad_nation.campaign_preparation_plan.same_allocation(
+				applied_broad_snapshot
+			)
+			and broad_nation.campaign_preparation_targets
+				== applied_targets_snapshot
+			and broad_nation.campaign_preparation_assignments
+				== applied_assignments_snapshot
+			and broad_nation.campaign_preparation_group_assignments
+				== applied_groups_snapshot
+			and broad_nation.campaign_full_preparation_targets
+				== applied_full_snapshot
+			and broad_nation.campaign_preparation_started_day
+				== applied_started_snapshot
+			and _approx(
+				broad_nation.campaign_preparation_multiplier,
+				applied_multiplier_snapshot
+			),
+		(
+			"非法双向战团映射必须原子失败，且旧 plan 引用与全部兼容投影逐字段不变"
+		)
+	)
+	var broad_built := pure_broad_applied
+	var broad_counts := {}
+	for broad_army in broad_armies:
+		var assigned_target := int(
+			broad_nation.campaign_preparation_assignments.get(
+				broad_army.id, -1
+			)
+		)
+		broad_counts[assigned_target] = int(
+			broad_counts.get(assigned_target, 0)
+		) + 1
+	_check(
+		broad_built
+			and broad_nation.campaign_preparation_targets.size() == 3
+			and int(broad_counts.get(broad_targets[0], 0)) == 2
+			and int(broad_counts.get(broad_targets[1], 0)) == 1
+			and int(broad_counts.get(broad_targets[2], 0)) == 1,
+		"正式地图攻势必须先覆盖全部合法方向再补强主目标：%s"
+			% broad_counts
+	)
+	broad_nation.treasury_gold = 100000
+	var transaction_treasury_before := broad_nation.treasury_gold
+	var transaction_offensive_count_before := (
+		broad_nation.campaign_offensive_count
+	)
+	var transaction_plan_before := (
+		broad_nation.campaign_preparation_plan
+	)
+	var transaction_plan_snapshot := (
+		transaction_plan_before.duplicate_plan()
+	)
+	var transaction_targets_before := (
+		broad_nation.campaign_preparation_targets.duplicate()
+	)
+	var transaction_assignments_before := (
+		broad_nation.campaign_preparation_assignments.duplicate(true)
+	)
+	var transaction_groups_before := (
+		broad_nation
+			.campaign_preparation_group_assignments.duplicate(true)
+	)
+	var transaction_active_before := [
+		broad_nation.campaign_attack_assignments.duplicate(true),
+		broad_nation.campaign_attack_echelons.duplicate(true),
+		broad_nation.campaign_active_echelons.duplicate(true),
+		broad_nation.campaign_launched_armies.duplicate(true),
+		broad_nation.campaign_echelon_started_days.duplicate(true),
+		broad_nation.campaign_plan_targets.duplicate(),
+		broad_nation.campaign_plan_wave,
+		broad_nation.campaign_plan_primary_city,
+	]
+	var transaction_armies_before := {}
+	for broad_army in broad_armies:
+		transaction_armies_before[broad_army.id] = [
+			broad_army.state,
+			broad_army.location_city,
+			broad_army.move_from,
+			broad_army.move_to,
+			broad_army.path.duplicate(),
+			broad_army.ai_action,
+			broad_army.ai_target_city,
+		]
+	broad_sim._begin_ai_command_collection()
+	var broad_collected := broad_sim._launch_campaign_offensive(
+		0, broad_targets[0],
+		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		broad_nation.campaign_preparation_targets.duplicate()
+	)
+	var transaction_payload: Dictionary = {}
+	if not broad_sim._pending_campaign_launch_transactions.is_empty():
+		transaction_payload = (
+			broad_sim._pending_campaign_launch_transactions.values()[0]
+		)
+	var transaction_cost := int(
+		transaction_payload.get("organization_cost", -1)
+	)
+	var collection_armies_unchanged := true
+	for broad_army in broad_armies:
+		collection_armies_unchanged = (
+			collection_armies_unchanged
+			and transaction_armies_before[broad_army.id] == [
+				broad_army.state,
+				broad_army.location_city,
+				broad_army.move_from,
+				broad_army.move_to,
+				broad_army.path,
+				broad_army.ai_action,
+				broad_army.ai_target_city,
+			]
+		)
+	_check(
+		broad_collected
+			and broad_sim._pending_campaign_launch_transactions.size() == 1
+			and transaction_cost > 0
+			and collection_armies_unchanged
+			and broad_nation.treasury_gold
+				== transaction_treasury_before
+			and broad_nation.campaign_offensive_count
+				== transaction_offensive_count_before
+			and transaction_active_before == [
+				broad_nation.campaign_attack_assignments,
+				broad_nation.campaign_attack_echelons,
+				broad_nation.campaign_active_echelons,
+				broad_nation.campaign_launched_armies,
+				broad_nation.campaign_echelon_started_days,
+				broad_nation.campaign_plan_targets,
+				broad_nation.campaign_plan_wave,
+				broad_nation.campaign_plan_primary_city,
+			]
+			and broad_nation.campaign_preparation_plan
+				== transaction_plan_before
+			and broad_nation.campaign_preparation_plan.same_allocation(
+				transaction_plan_snapshot
+			)
+			and broad_nation.campaign_preparation_targets
+				== transaction_targets_before
+			and broad_nation.campaign_preparation_assignments
+				== transaction_assignments_before
+			and broad_nation.campaign_preparation_group_assignments
+				== transaction_groups_before,
+		"正式攻势收集阶段只能登记待提交事务，不得提前修改军队、国库、波次或准备态"
+	)
+	var invalidated_broad_army := broad_armies[0]
+	invalidated_broad_army.state = Army.State.RECOVERING
+	broad_sim._commit_ai_command_collection([0] as Array[int])
+	var failed_batch_clean := true
+	for broad_army in broad_armies:
+		if broad_army == invalidated_broad_army:
+			failed_batch_clean = (
+				failed_batch_clean
+				and broad_army.state == Army.State.RECOVERING
+				and broad_army.ai_action
+					!= ActionCandidate.Kind.ATTACK
+			)
+		else:
+			failed_batch_clean = (
+				failed_batch_clean
+				and broad_army.state == Army.State.IDLE
+				and broad_army.ai_action
+					!= ActionCandidate.Kind.ATTACK
+			)
+	_check(
+		failed_batch_clean
+			and broad_sim.ai_last_command_commit_failures == 1
+			and broad_sim._pending_campaign_launch_transactions.is_empty()
+			and broad_nation.treasury_gold
+				== transaction_treasury_before
+			and broad_nation.campaign_offensive_count
+				== transaction_offensive_count_before
+			and transaction_active_before == [
+				broad_nation.campaign_attack_assignments,
+				broad_nation.campaign_attack_echelons,
+				broad_nation.campaign_active_echelons,
+				broad_nation.campaign_launched_armies,
+				broad_nation.campaign_echelon_started_days,
+				broad_nation.campaign_plan_targets,
+				broad_nation.campaign_plan_wave,
+				broad_nation.campaign_plan_primary_city,
+			]
+			and broad_nation.campaign_preparation_plan
+				== transaction_plan_before
+			and broad_nation.campaign_preparation_plan.same_allocation(
+				transaction_plan_snapshot
+			)
+			and broad_nation.campaign_preparation_targets
+				== transaction_targets_before
+			and broad_nation.campaign_preparation_assignments
+				== transaction_assignments_before
+			and broad_nation.campaign_preparation_group_assignments
+				== transaction_groups_before,
+		"首梯队一军在提交前失效时，正式攻势整批不得移动、扣费、消费准备态或写入 active wave"
+	)
+	invalidated_broad_army.state = Army.State.IDLE
+	broad_sim._begin_ai_command_collection()
+	var broad_recollected := broad_sim._launch_campaign_offensive(
+		0, broad_targets[0],
+		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		broad_nation.campaign_preparation_targets.duplicate()
+	)
+	broad_sim._commit_ai_command_collection([0] as Array[int])
+	var broad_attackers := 0
+	var broad_launched_targets := {}
+	for broad_army in broad_armies:
+		if broad_army.ai_action == ActionCandidate.Kind.ATTACK:
+			broad_attackers += 1
+			broad_launched_targets[broad_army.ai_target_city] = true
+	_check(
+		broad_recollected
+			and broad_sim.ai_last_command_commit_failures == 0
+			and broad_attackers == broad_armies.size()
+			and broad_launched_targets.size() == 3
+			and broad_nation.treasury_gold
+				== transaction_treasury_before - transaction_cost
+			and broad_nation.campaign_offensive_count
+				== transaction_offensive_count_before + 1
+			and not broad_nation.campaign_plan_targets.is_empty()
+			and not broad_nation.campaign_active_echelons.is_empty()
+			and broad_nation.campaign_preparation_plan == null
+			and broad_nation.campaign_preparation_targets.is_empty()
+			and broad_nation.campaign_preparation_assignments.is_empty()
+			and broad_nation
+				.campaign_preparation_group_assignments.is_empty(),
+		(
+			"事务恢复后应只扣一次费用，并在三个方向同步投入全部四个首梯队战团："
+			+ "armies=%d targets=%s"
+		) % [broad_attackers, broad_launched_targets]
+	)
+	broad_sim.free()
+
+	# 旧存档/外部调用也必须服从执行层硬预算：十个合法准备方向
+	# 最终只能冻结并发射八路，二十个已分配战团只能保留十六个。
+	var budget_state := GameState.new()
+	budget_state.generate_grid_world(32067)
+	budget_state.uses_heightmap = true
+	budget_state.armies.clear()
+	for budget_city in budget_state.cities:
+		budget_city.owner_nation = 0
+	var budget_targets: Array[int] = [
+		1, 3, 5, 7, 17, 19, 21, 23, 33, 35,
+	]
+	for budget_target in budget_targets:
+		budget_state.cities[budget_target].owner_nation = 1
+	budget_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	var budget_nation := budget_state.nations[0]
+	budget_nation.battle_groups.clear()
+	budget_nation.next_battle_group_id = 0
+	for budget_index in range(20):
+		var budget_target := budget_targets[
+			budget_index % budget_targets.size()
+		]
+		var budget_group := budget_state.create_battle_group(0)
+		var budget_army := _make_army(10900 + budget_index, 0, 5000, 10, 10)
+		budget_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+		budget_army.location_city = budget_target + 8
+		budget_army.move_from = budget_target + 8
+		budget_state.armies.append(budget_army)
+		budget_state.assign_army_to_battle_group(
+			budget_army, budget_group.id
+		)
+		budget_nation.campaign_preparation_assignments[
+			budget_army.id
+		] = budget_target
+		if not budget_nation.campaign_preparation_targets.has(
+			budget_target
+		):
+			budget_nation.campaign_preparation_targets.append(
+				budget_target
+			)
+			budget_nation.campaign_preparation_group_assignments[
+				budget_target
+			] = budget_group.id
+	var budget_sim := Simulation.new()
+	budget_sim.setup(budget_state)
+	var budget_view := AiWorldView.build(budget_state, 0)
+	var budget_allocation := budget_sim._plan_campaign_allocation(
+		0, budget_targets[0], budget_targets, null, null,
+		budget_view, false
+	)
+	var budget_plan_applied := budget_sim._apply_campaign_plan_atomic(
+		0, budget_allocation
+	)
+	budget_nation.treasury_gold = 100000
+	var budget_launched := budget_sim._launch_campaign_offensive(
+		0, budget_targets[0],
+		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS,
+		budget_targets
+	)
+	var bounded_groups := {}
+	for budget_army in budget_state.armies:
+		if budget_nation.campaign_preparation_assignments.has(
+			budget_army.id
+		):
+			bounded_groups[budget_army.battle_group_id] = true
+	var budget_launched_targets := {}
+	for budget_army in budget_state.armies:
+		if budget_army.ai_action == ActionCandidate.Kind.ATTACK:
+			budget_launched_targets[budget_army.ai_target_city] = true
+	_check(
+		budget_plan_applied
+			and budget_nation.campaign_preparation_targets.size()
+				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
+			and bounded_groups.size() <= Simulation.CAMPAIGN_MAX_WARTIME_GROUPS
+			and budget_launched
+			and budget_nation.campaign_plan_targets.size()
+				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
+			and budget_launched_targets.size()
+				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS,
+		"旧状态与外部准备列表必须在规划、冻结和发射三层裁到8路/16团"
+	)
+	budget_sim.free()
+
+	var rebalance_state := GameState.new()
+	rebalance_state.generate_grid_world(32068)
+	rebalance_state.uses_heightmap = true
+	rebalance_state.armies.clear()
+	for rebalance_city in rebalance_state.cities:
+		rebalance_city.owner_nation = 0
+	var rebalance_targets: Array[int] = [10, 17, 8]
+	for rebalance_target in rebalance_targets.slice(0, 2):
+		rebalance_state.cities[rebalance_target].owner_nation = 1
+		rebalance_state.edge_of(9, rebalance_target).max_manpower = 30000
+	# 第三方向是国2最后一城，满16团预算时必须为它一次预留三团。
+	rebalance_state.cities[rebalance_targets[2]].owner_nation = 2
+	rebalance_state.edge_of(9, rebalance_targets[2]).max_manpower = 30000
+	rebalance_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	rebalance_state.set_diplomatic_relation(
+		0, 2, GameState.DiplomaticRelation.WAR
+	)
+	var rebalance_nation := rebalance_state.nations[0]
+	rebalance_nation.battle_groups.clear()
+	rebalance_nation.next_battle_group_id = 0
+	for rebalance_index in range(Simulation.CAMPAIGN_MAX_WARTIME_GROUPS):
+		var rebalance_group := rebalance_state.create_battle_group(0)
+		var rebalance_army := _make_army(11000 + rebalance_index, 0, 5000, 10, 10)
+		rebalance_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+		rebalance_army.location_city = 9
+		rebalance_army.move_from = 9
+		rebalance_state.armies.append(rebalance_army)
+		rebalance_state.assign_army_to_battle_group(
+			rebalance_army, rebalance_group.id
+		)
+		var old_target := rebalance_targets[rebalance_index % 2]
+		rebalance_nation.campaign_preparation_assignments[
+			rebalance_army.id
+		] = old_target
+		if not rebalance_nation.campaign_preparation_targets.has(old_target):
+			rebalance_nation.campaign_preparation_targets.append(old_target)
+			rebalance_nation.campaign_preparation_group_assignments[
+				old_target
+			] = rebalance_group.id
+	var rebalance_sim := Simulation.new()
+	rebalance_sim.setup(rebalance_state)
+	var rebalance_view := AiWorldView.build(rebalance_state, 0)
+	var rebalance_plan := CityDefensePlan.new()
+	rebalance_plan.view = rebalance_view
+	rebalance_plan.threat = ThreatField.build(rebalance_view)
+	var rebalance_allocation := rebalance_sim._plan_campaign_allocation(
+		0, rebalance_targets[0], rebalance_targets, rebalance_plan,
+		ArmyCoordinator.new(), rebalance_view, false
+	)
+	var rebalanced := rebalance_sim._apply_campaign_plan_atomic(
+		0, rebalance_allocation
+	)
+	var groups_per_rebalance_target := {}
+	var seen_rebalance_groups := {}
+	for rebalance_army in rebalance_state.armies:
+		var rebalance_target := int(
+			rebalance_nation.campaign_preparation_assignments.get(
+				rebalance_army.id, -1
+			)
+		)
+		if rebalance_target < 0:
+			continue
+		seen_rebalance_groups[rebalance_army.battle_group_id] = true
+		groups_per_rebalance_target[rebalance_target] = int(
+			groups_per_rebalance_target.get(rebalance_target, 0)
+		) + 1
+	_check(
+		rebalanced
+			and int(groups_per_rebalance_target.get(rebalance_targets[0], 0)) > 0
+			and int(groups_per_rebalance_target.get(rebalance_targets[1], 0)) > 0
+			and int(groups_per_rebalance_target.get(rebalance_targets[2], 0))
+				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+			and seen_rebalance_groups.size()
+				<= Simulation.CAMPAIGN_MAX_WARTIME_GROUPS,
+		"16团已占旧方向时必须保留旧代表团并为新出现的最后一城释放三团：%s"
+			% groups_per_rebalance_target
+	)
+	# 模拟新方向三团全灭但目标/代表团记录仍残留。下一轮不能走
+	# “所有团已有分配”的快速路径，必须释放旧增援团并重新补足三团。
+	for rebalance_army in rebalance_state.armies:
+		if int(rebalance_nation.campaign_preparation_assignments.get(
+			rebalance_army.id, -1
+		)) == rebalance_targets[2]:
+			rebalance_army.size = 0
+	var restored_view := AiWorldView.build(rebalance_state, 0)
+	rebalance_plan.view = restored_view
+	rebalance_plan.snapshot = StrategicMapSnapshot.build(restored_view)
+	rebalance_plan.threat = ThreatField.build(restored_view)
+	var restored_plan := rebalance_sim._ensure_campaign_preparation_plan(
+		0, rebalance_targets[0], rebalance_plan, ArmyCoordinator.new(), true
+	)
+	var restored_decisive_groups := {}
+	for rebalance_army in rebalance_state.armies:
+		if (
+			rebalance_army.size > 0
+			and int(rebalance_nation.campaign_preparation_assignments.get(
+				rebalance_army.id, -1
+			)) == rebalance_targets[2]
+		):
+			restored_decisive_groups[rebalance_army.battle_group_id] = true
+	_check(
+		restored_plan
+			and restored_decisive_groups.size()
+				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
+		"零成员旧目标不得被快速路径永久保留，最后一城必须重新补足三团"
+	)
+	rebalance_sim.free()
+
 	var role_attack_state := GameState.new()
 	role_attack_state.generate_grid_world(32013)
 	role_attack_state.uses_heightmap = true
@@ -12254,6 +13044,10 @@ func _test_diplomacy_state_and_ai() -> void:
 			ArmyCoordinator.new()
 		)
 	)
+	role_assignments = (
+		role_attack_state.nations[0]
+			.campaign_preparation_assignments
+	)
 	_check(
 		persistent_plan_synced
 			and role_assignments.has(late_group_light.id)
@@ -12340,8 +13134,10 @@ func _test_diplomacy_state_and_ai() -> void:
 				== 10000
 			and int(unified_demand["required_manpower"])
 				== 22000
-			and int(unified_demand["groups"]) == 3,
-		"统一需求模型必须对三城国家的实际窄路目标同样配置3个战团，不得依赖两城终局特判"
+			and int(unified_demand["assault_groups"]) == 3
+			and int(unified_demand["groups"])
+				== 3 * Simulation.CAMPAIGN_PREPARED_ECHELONS,
+		"统一需求模型必须对三城国家的窄路目标配置3团首梯队和3团预备梯队"
 	)
 	unified_demand_sim.free()
 
@@ -12842,6 +13638,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	).max_manpower = 30000
 	var route_gate_nation := route_gate_state.nations[0]
 	for route_army_index in range(2):
+		var route_group := route_gate_state.create_battle_group(0)
 		var route_army := _make_army(
 			9880 + route_army_index,
 			0,
@@ -12855,6 +13652,9 @@ func _test_diplomacy_state_and_ai() -> void:
 		route_army.location_city = route_gate_origin
 		route_army.move_from = route_gate_origin
 		route_gate_state.armies.append(route_army)
+		route_gate_state.assign_army_to_battle_group(
+			route_army, route_group.id
+		)
 		route_gate_nation.campaign_preparation_assignments[
 			route_army.id
 		] = route_gate_target
@@ -12864,6 +13664,16 @@ func _test_diplomacy_state_and_ai() -> void:
 	route_gate_nation.treasury_gold = 1000
 	var route_gate_sim := Simulation.new()
 	route_gate_sim.setup(route_gate_state)
+	var route_gate_view := AiWorldView.build(route_gate_state, 0)
+	var route_gate_allocation := route_gate_sim._plan_campaign_allocation(
+		0, route_gate_target, [route_gate_target] as Array[int],
+		null, null, route_gate_view, false
+	)
+	var route_gate_plan_applied := (
+		route_gate_sim._apply_campaign_plan_atomic(
+			0, route_gate_allocation
+		)
+	)
 	var route_gate_gold := route_gate_nation.treasury_gold
 	var route_gate_launched := (
 		route_gate_sim._launch_campaign_offensive(
@@ -12874,7 +13684,8 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 	)
 	_check(
-		route_gate_launched
+		route_gate_plan_applied
+			and route_gate_launched
 			and route_gate_nation
 				.campaign_preparation_targets.is_empty()
 			and route_gate_nation

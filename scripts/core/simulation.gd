@@ -92,17 +92,30 @@ const FOOD_SECURITY_RESERVE_MONTHS: int = 6
 const FOOD_RESERVE_RECOVERY_MONTHS: int = 6
 const DEMOBILIZATION_STEP_MIN: int = 500
 const WAR_MOBILIZATION_DAYS: int = 180
-const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 30
-const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 45
+## 国家级攻势以约二十天为基础波次。AI 仍按性格缩放，且必须完成实际
+## 集结/战力门槛；这里只缩短成功攻势后的重整空窗，不放宽送兵条件。
+const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 20
+const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 30
 const CAMPAIGN_ARROW_DURATION_DAYS: int = 20
-const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 3
+## 一次 AI 规划允许同时调动更多战团，避免十天决策周期内只移动三军，
+## 导致大国需要数月才能把已经决定的全面攻势摆到前线。
+const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 6
 const CAMPAIGN_ATTACK_ENTER_RATIO: float = 1.00
 const CAMPAIGN_TARGET_COMMIT_RATIO: float = 1.00
 const CAMPAIGN_STAGED_TROOP_RATIO: float = 0.75
-const CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO: float = 0.50
-const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 12.0
+const CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO: float = 0.33
+const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 18.0
+## 单波最多覆盖八个方向：是旧生产运行峰值（2）的四倍，足够形成宽正面；
+## 同时阻止全地图十几路目标每轮重复做路径/战力规划。
+const CAMPAIGN_MAX_PARALLEL_TARGETS: int = 8
+## 八路双梯队对应最多十六个战时主战团。决定性单目标仍可获得至少三团，
+## 但不会因前线目标总数增长而无限扩编到三十余团。
+const CAMPAIGN_MAX_WARTIME_GROUPS: int = 16
 const CAMPAIGN_PREPARED_ECHELONS: int = 2
-const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = DAYS_PER_HALF_YEAR
+## 敌国最后一城会持续集中守军、补员并享首都防御。至少三支独立战团
+## 轮换投入，避免一团在窄路上反复消耗、全国主力却留作填线。
+const CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS: int = 3
+const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = 120
 const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
 const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
@@ -151,6 +164,12 @@ var _ai_planned_armies: Dictionary = {}
 var _ai_planned_first_legs: Dictionary = {}
 var _ai_command_sequence: Dictionary = {}
 var _ai_snapshot_armies: Dictionary = {}
+var _ai_queue_transaction_id: int = -1
+var _next_ai_command_transaction_id: int = 1
+var _pending_campaign_launch_transactions: Dictionary = {}
+## campaign transaction 预留整波所有成员（含后续梯队），防止同批普通
+## 战术/紧急防御 intent 在事务提交前改写其状态。army_id -> transaction_id。
+var _ai_transaction_reserved_armies: Dictionary = {}
 var _parallel_ai_context_jobs: Array[Dictionary] = []
 var _pending_declaration_launches: Dictionary = {}
 var _pending_war_mobilizations: Array[Dictionary] = []
@@ -554,6 +573,7 @@ func _campaign_preparation_days(nation_id: int) -> int:
 
 func _clear_campaign_preparation_plan(nation_id: int) -> void:
 	var nation := state.nations[nation_id]
+	nation.campaign_preparation_plan = null
 	nation.campaign_preparation_targets.clear()
 	nation.campaign_preparation_assignments.clear()
 	nation.campaign_preparation_group_assignments.clear()
@@ -567,6 +587,10 @@ func _remove_campaign_preparation_target(
 	target_city: int
 ) -> void:
 	var nation := state.nations[nation_id]
+	# 目标级原地删除只供网格地图的旧军队规划使用。正式地图必须重新
+	# 生成完整 CampaignAllocationPlan 后原子替换，不能局部改写真源。
+	if state.uses_heightmap:
+		return
 	nation.campaign_preparation_targets.erase(target_city)
 	nation.campaign_full_preparation_targets.erase(target_city)
 	nation.campaign_preparation_group_assignments.erase(
@@ -669,11 +693,12 @@ func _campaign_minimum_staged_troops(
 ) -> int:
 	if (
 		state.uses_heightmap
-		and state.nations[nation_id]
-			.campaign_preparation_group_assignments.has(
-				target_city
-			)
+		and state.nations[nation_id].campaign_preparation_plan != null
+		and state.nations[nation_id].campaign_preparation_plan
+			.assigned_target_ids.has(target_city)
 	):
+		# 这里只是本波能否开始的最低哨兵。完整集结量由
+		# _campaign_planned_staging_troops 独立计算。
 		return 1
 	return maxi(
 		int(ceil(
@@ -687,6 +712,27 @@ func _campaign_minimum_staged_troops(
 		)),
 		1
 	)
+
+
+func _campaign_planned_staging_troops(
+	nation_id: int,
+	target_city: int
+) -> int:
+	var nation := state.nations[nation_id]
+	var plan := nation.campaign_preparation_plan
+	if plan == null or not plan.assigned_target_ids.has(target_city):
+		return _campaign_minimum_staged_troops(nation_id, target_city)
+	var army_by_id := {}
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			army_by_id[army.id] = army
+	var planned_troops := 0
+	for group_id in plan.groups_for_target(target_city):
+		for army_id in plan.member_ids_for_group(group_id):
+			var planned_army: Army = army_by_id.get(army_id)
+			if planned_army != null:
+				planned_troops += planned_army.size
+	return maxi(planned_troops, 1)
 
 
 func _campaign_offensive_interval(nation_id: int) -> int:
@@ -3085,7 +3131,6 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 				# 只清目标相关的军事 Assignment；战略备战开始日、资源
 				# 宽限时钟和既有动员成果全部保留。
 				_clear_campaign_preparation_plan(nation_a)
-				_clear_campaign_attack_plan(nation_a)
 				changed = true
 		DiplomacyAI.Action.ENFEOFF:
 			if not enfeoff_enabled:
@@ -3767,7 +3812,7 @@ func _start_war_preparation(
 	nation.war_preparation_started_day = state.day
 	nation.war_preparation_reason = str(action.get("objective_reason", ""))
 	nation.war_preparation_unready_since_day = -1
-	_clear_campaign_attack_plan(nation_id)
+	_clear_campaign_preparation_plan(nation_id)
 	var requested_armies := int(action.get("mobilization_armies", 0))
 	var current_troops := DiplomacyAI._troop_count(state, nation_id)
 	nation.war_mobilization_target_troops = maxi(
@@ -3796,7 +3841,7 @@ func _clear_war_preparation(
 	nation.war_preparation_reason = ""
 	nation.war_preparation_unready_since_day = -1
 	if clear_mobilization:
-		_clear_campaign_attack_plan(nation_id)
+		_clear_campaign_preparation_plan(nation_id)
 	if clear_mobilization and state.wars_of(nation_id).is_empty():
 		nation.war_mobilization_target_troops = 0
 		nation.war_mobilization_until_day = -1
@@ -4743,11 +4788,19 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			strongest_first
 		)
 		for army in decision_order:
-			var campaign_target := int(
+			var active_campaign_target := int(
 				nation.campaign_attack_assignments.get(
 					army.id,
 					-1
 				)
+			)
+			var preparation_target := int(
+				nation.campaign_preparation_assignments.get(army.id, -1)
+			)
+			var campaign_target := (
+				active_campaign_target
+				if active_campaign_target >= 0
+				else preparation_target
 			)
 			var campaign_locked := (
 				campaign_target >= 0
@@ -4774,9 +4827,12 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 						army,
 						nation_id
 					)
-				if defense_plan.urgent_defense_at(
-					defense_anchor
-				):
+				var actual_emergency := (
+					state.city_under_siege(defense_anchor)
+					if preparation_target >= 0
+					else defense_plan.urgent_defense_at(defense_anchor)
+				)
+				if actual_emergency:
 					campaign_locked = false
 			if (
 				campaign_locked
@@ -4784,7 +4840,7 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 				and not _ai_planned_armies.has(army.id)
 			):
 				if (
-					campaign_target >= 0
+					active_campaign_target >= 0
 					and state.is_enemy(
 						nation_id,
 						state.cities[
@@ -5010,8 +5066,8 @@ func _reconcile_strategic_roles(
 		if (
 			assigned_army != null
 			and assigned_army.battle_group_id >= 0
-			and _campaign_preparation_target_for_group(
-				nation_id,
+			and nation.campaign_preparation_plan != null
+			and nation.campaign_preparation_plan.target_for_group(
 				assigned_army.battle_group_id
 			) == target_city
 		):
@@ -5574,20 +5630,46 @@ func _ai_manage_force_structure(
 			or not wars.is_empty()
 		)
 		var force_demand_targets: Array[int] = []
+		var campaign_allocation: CampaignAllocationPlan = null
 		if active_offense:
 			force_demand_targets = _campaign_force_demand_targets(
 				view.nation_id,
 				snapshot
 			)
 		var required_group_count := (
-			_campaign_required_group_count(
-				view.nation_id,
-				force_demand_targets,
-				threat
-			)
+			1
 			if active_offense
 			else 1
 		)
+		if (
+			active_offense
+			and state.uses_heightmap
+			and not force_demand_targets.is_empty()
+		):
+			campaign_allocation = _plan_campaign_allocation(
+				view.nation_id,
+				force_demand_targets[0],
+				force_demand_targets,
+				defense_plan,
+				ArmyCoordinator.from_view(view),
+				view,
+				nation.war_preparation_target_nation >= 0
+					and wars.is_empty()
+			)
+			decision_context["campaign_allocation_plan"] = (
+				campaign_allocation
+			)
+			required_group_count = maxi(
+				campaign_allocation.required_group_count, 1
+			)
+			if campaign_allocation.assigned_group_count > 0:
+				_apply_campaign_plan_atomic(
+					view.nation_id, campaign_allocation
+				)
+		elif active_offense:
+			required_group_count = _campaign_required_group_count(
+				view.nation_id, force_demand_targets, threat
+			)
 		var target_group_count := (
 			maxi(nation.battle_groups.size(), required_group_count)
 			if active_offense
@@ -5619,15 +5701,28 @@ func _ai_manage_force_structure(
 		var recruit_main := (
 			main_deficit > 0
 			and (
+				# 国家已经确定进攻方向时，先建立满足局部攻城需求的
+				# 最低战团数量。旧比例竞争会在第一个战团后转去补
+				# 数十个填线槽，使几十万现役只有一团能参加决战。
+				nation.battle_groups.size() < required_group_count
+				or
 				line_deficit <= 0
 				or main_deficit_ratio >= line_deficit_ratio
 			)
 		)
 		if recruit_main:
+			var needs_new_campaign_group := (
+				active_offense
+				and nation.battle_groups.size() < required_group_count
+				and (
+					campaign_allocation == null
+					or campaign_allocation.unfilled_group_slots > 0
+				)
+			)
 			recruitment = _next_battle_group_recruitment(
 				view.nation_id,
-				nation.battle_groups.size()
-					< target_group_count
+				nation.battle_groups.size() < target_group_count,
+				needs_new_campaign_group
 			)
 		elif line_deficit > 0:
 			recruitment = {
@@ -5837,9 +5932,19 @@ func _demobilize_excess_peacetime_battle_group(
 
 func _next_battle_group_recruitment(
 	nation_id: int,
-	allow_new_group: bool = true
+	allow_new_group: bool = true,
+	prioritize_new_group: bool = false
 ) -> Dictionary:
 	var nation := state.nations[nation_id]
+	# 攻势明确需要多个独立方向/梯队时，先建立战团骨架，再逐团补齐。
+	# 否则“补满第一团才建第二团”会让决定性战役等待数百天。
+	if allow_new_group and prioritize_new_group:
+		return {
+			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+			"group_id": -1,
+			"create_group": true,
+			"reason": "攻势扩编：创建新战团并补充第一支轻军",
+		}
 	for group in nation.battle_groups:
 		var light_count := 0
 		var heavy_count := 0
@@ -6049,11 +6154,72 @@ func _clear_campaign_attack_plan(nation_id: int) -> void:
 	nation.campaign_active_echelons.clear()
 	nation.campaign_launched_armies.clear()
 	nation.campaign_echelon_started_days.clear()
+	nation.campaign_post_capture_plans.clear()
 	nation.campaign_launched_attack_multiplier = 1.0
 	nation.campaign_launched_bonus_days = 0
 	nation.campaign_plan_targets.clear()
 	nation.campaign_plan_wave = -1
 	nation.campaign_plan_primary_city = -1
+
+
+func _reconcile_campaign_active_wave(nation_id: int) -> void:
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return
+	var nation := state.nations[nation_id]
+	if nation.campaign_plan_targets.is_empty():
+		if (
+			not nation.campaign_attack_assignments.is_empty()
+			or not nation.campaign_attack_echelons.is_empty()
+			or not nation.campaign_active_echelons.is_empty()
+			or not nation.campaign_launched_armies.is_empty()
+			or not nation.campaign_echelon_started_days.is_empty()
+			or not nation.campaign_post_capture_plans.is_empty()
+			or nation.campaign_plan_wave >= 0
+		):
+			_clear_campaign_attack_plan(nation_id)
+		return
+	var active := false
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or not nation.campaign_attack_assignments.has(army.id)
+		):
+			continue
+		var assigned_target := int(
+			nation.campaign_attack_assignments.get(army.id, -1)
+		)
+		var target_still_enemy := (
+			assigned_target >= 0
+			and assigned_target < state.cities.size()
+			and state.is_enemy(
+				nation_id, state.cities[assigned_target].owner_nation
+			)
+		)
+		if (
+			target_still_enemy
+			and army.state in [Army.State.MOVING, Army.State.FIGHTING]
+		):
+			active = true
+			break
+		# 已冻结但尚未发射的后续梯队仍属于 active wave；只要它的
+		# 目标有效且确实能从当前位置出发，就不能被下一波抢占。
+		var target_city := assigned_target
+		if (
+			not nation.campaign_launched_armies.has(army.id)
+			and target_city >= 0
+			and target_city < state.cities.size()
+			and state.is_enemy(
+				nation_id, state.cities[target_city].owner_nation
+			)
+			and _campaign_army_can_attack_target(
+				army, nation_id, target_city
+			)
+		):
+			active = true
+			break
+	if not active:
+		_clear_campaign_attack_plan(nation_id)
 
 
 func _ensure_campaign_attack_plan(
@@ -6072,22 +6238,14 @@ func _ensure_campaign_attack_plan(
 		)
 	):
 		return true
+	if state.uses_heightmap:
+		return false
 	_clear_campaign_attack_plan(nation_id)
 	if (
 		primary_city < 0
 		or primary_city >= state.cities.size()
 	):
 		return false
-	if (
-		state.uses_heightmap
-		and nation.campaign_preparation_group_assignments.has(
-			primary_city
-		)
-	):
-		return _build_campaign_attack_plan_from_preparation(
-			nation_id,
-			nation.campaign_preparation_targets
-		)
 	var attackers := _campaign_staged_armies(
 		nation_id,
 		primary_city
@@ -6165,6 +6323,8 @@ func _ensure_campaign_attack_plan(
 			)
 		)
 		for target_id_value in target_ids:
+			if nation.campaign_plan_targets.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+				break
 			var target_id := int(target_id_value)
 			var required := (
 				DiplomacyAI.required_assault_troops(
@@ -6419,9 +6579,12 @@ func _can_assign_campaign_preparation_army(
 		state.uses_heightmap
 		and army.battle_group_id >= 0
 	):
-		var group_target := _campaign_preparation_target_for_group(
-			nation_id,
-			army.battle_group_id
+		var group_target := (
+			nation.campaign_preparation_plan.target_for_group(
+				army.battle_group_id
+			)
+			if nation.campaign_preparation_plan != null
+			else -1
 		)
 		if group_target >= 0 and group_target != target_city:
 			return false
@@ -6444,7 +6607,10 @@ func _can_assign_campaign_preparation_army(
 	return (
 		attack_target < 0
 		or attack_target == target_city
-		or nation.campaign_launched_armies.has(army.id)
+		or (
+			not state.uses_heightmap
+			and nation.campaign_launched_armies.has(army.id)
+		)
 	)
 
 
@@ -6454,16 +6620,21 @@ func _assign_campaign_preparation_army(
 	target_city: int
 ) -> void:
 	var nation := state.nations[nation_id]
-	var attack_target := int(
-		nation.campaign_attack_assignments.get(
-			army.id,
-			-1
+	# 准备态与 active wave 是两个互不相交的 write-set。上一波成员在
+	# planner 中已整团排除，这里绝不能为了下一波删除执行态。
+	if (
+		state.uses_heightmap
+		and nation.campaign_attack_assignments.has(army.id)
+	):
+		return
+	if not state.uses_heightmap:
+		var attack_target := int(
+			nation.campaign_attack_assignments.get(army.id, -1)
 		)
-	)
-	if attack_target >= 0 and attack_target != target_city:
-		nation.campaign_attack_assignments.erase(army.id)
-		nation.campaign_attack_echelons.erase(army.id)
-		nation.campaign_launched_armies.erase(army.id)
+		if attack_target >= 0 and attack_target != target_city:
+			nation.campaign_attack_assignments.erase(army.id)
+			nation.campaign_attack_echelons.erase(army.id)
+			nation.campaign_launched_armies.erase(army.id)
 	if army.is_line_role():
 		army.clear_line_assignment()
 	nation.campaign_preparation_assignments[army.id] = target_city
@@ -6489,9 +6660,16 @@ func _campaign_force_demand_targets(
 ) -> Array[int]:
 	var nation := state.nations[nation_id]
 	var candidates: Array[int] = []
-	for target_city in nation.campaign_preparation_targets:
-		if not candidates.has(target_city):
-			candidates.append(target_city)
+	if nation.campaign_preparation_plan != null:
+		for target_city in (
+			nation.campaign_preparation_plan.candidate_target_ids
+		):
+			if not candidates.has(target_city):
+				candidates.append(target_city)
+	else:
+		for target_city in nation.campaign_preparation_targets:
+			if not candidates.has(target_city):
+				candidates.append(target_city)
 	if candidates.is_empty():
 		for target_city in nation.campaign_plan_targets:
 			if not candidates.has(target_city):
@@ -6526,8 +6704,18 @@ func _campaign_force_demand_targets(
 		and snapshot.campaign_target >= 0
 	):
 		candidates.append(snapshot.campaign_target)
+	# 战时扩军不能只看首次建立的计划；把当前所有合法前线按战略
+	# 优先级补入需求，新的主战团建成后动态计划才能扩宽到这些方向。
+	if snapshot != null and not state.wars_of(nation_id).is_empty():
+		for target_city in snapshot.priority_enemy_cities:
+			if candidates.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+				break
+			if not candidates.has(target_city):
+				candidates.append(target_city)
 	var result: Array[int] = []
 	for target_city in candidates:
+		if result.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
 		if (
 			not _campaign_force_demand_target_valid(
 				nation_id,
@@ -6578,7 +6766,7 @@ func _campaign_required_group_count(
 			threat
 		)
 		required_groups += int(demand.get("groups", 0))
-	return maxi(required_groups, 1)
+	return clampi(required_groups, 1, CAMPAIGN_MAX_WARTIME_GROUPS)
 
 
 func _campaign_target_group_demand(
@@ -6630,11 +6818,23 @@ func _campaign_target_group_demand(
 	var groups_by_power := int(ceil(
 		required_power / route_power
 	))
+	var defender_owner := state.cities[target_city].owner_nation
+	var decisive_minimum := (
+		CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+		if defender_owner >= 0
+			and state.land_cities_of(defender_owner).size() <= 1
+		else 1
+	)
+	var assault_groups := maxi(
+		maxi(groups_by_manpower, groups_by_power), decisive_minimum
+	)
 	return {
-		"groups": maxi(
-			maxi(groups_by_manpower, groups_by_power),
-			1
-		),
+		# 每个方向不仅形成第一批接敌兵力，还冻结一个独立战团梯队。
+		# 八路目标因此自然对应最多十六团，而非靠发射阶段临时加码。
+		"groups": assault_groups * CAMPAIGN_PREPARED_ECHELONS,
+		"assault_groups": assault_groups,
+		"is_decisive": decisive_minimum
+			>= CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
 		"required_manpower": required_manpower,
 		"required_power": required_power,
 		"route_group_manpower": route_manpower,
@@ -6678,102 +6878,6 @@ func _campaign_route_group_capacity(
 		"entry_capacity": entry_capacity,
 		"manpower": manpower,
 		"power": power,
-	}
-
-
-func _campaign_formation_fits_target_entry(
-	army: Army,
-	target_city: int
-) -> bool:
-	if army == null or army.size <= 0:
-		return false
-	for staging_city in DiplomacyAI.staging_cities_for_objective(
-		state,
-		army.owner_nation,
-		target_city
-	):
-		var edge := state.edge_of(staging_city, target_city)
-		if edge != null and edge.max_manpower >= army.max_size:
-			return true
-	return false
-
-
-func _campaign_group_availability(
-	nation_id: int,
-	target_city: int,
-	group_members: Array[Army],
-	staging: Array[int],
-	view: AiWorldView,
-	defense_plan: CityDefensePlan,
-	coordinator: ArmyCoordinator
-) -> Dictionary:
-	var members: Array[Army] = []
-	var power := 0.0
-	var manpower := 0
-	var distance := 0.0
-	for army in group_members:
-		var entry_staging: Array[int] = []
-		for staging_city in staging:
-			var entry_edge := state.edge_of(
-				staging_city,
-				target_city
-			)
-			if (
-				entry_edge != null
-				and entry_edge.max_manpower >= army.max_size
-			):
-				entry_staging.append(staging_city)
-		# 战团可按道路容量拆分投射；无法进入目标的重军不应阻塞轻军分遣队。
-		if entry_staging.is_empty():
-			continue
-		var origin := _campaign_army_origin(army, nation_id)
-		if (
-			origin < 0
-			or army.state not in [
-				Army.State.IDLE,
-				Army.State.HOLDING,
-			]
-			or state.day < army.defensive_deployment_until_day
-			or not _can_assign_campaign_preparation_army(
-				nation_id,
-				army,
-				target_city
-			)
-			or not _can_use_army_for_offensive(
-				defense_plan,
-				coordinator,
-				army,
-				target_city
-			)
-		):
-			return {}
-		var field := view.path_field(
-			origin,
-			nation_id,
-			false,
-			true,
-			-1,
-			army.max_size
-		)
-		var member_distance := INF
-		for staging_city in entry_staging:
-			member_distance = minf(
-				member_distance,
-				float(field["dist"].get(staging_city, INF))
-			)
-		if member_distance == INF:
-			return {}
-		members.append(army)
-		power += ArmyPower.effective(army)
-		manpower += army.size
-		distance = maxf(distance, member_distance)
-	if members.is_empty():
-		return {}
-	return {
-		"members": members,
-		"power": power,
-		"manpower": manpower,
-		"distance": distance,
 	}
 
 
@@ -6884,8 +6988,17 @@ func _ensure_campaign_preparation_plan(
 	primary_city: int,
 	defense_plan: CityDefensePlan = null,
 	coordinator: ArmyCoordinator = null,
-	roles_reconciled: bool = false
+	roles_reconciled: bool = false,
+	decision_context: Dictionary = {}
 ) -> bool:
+	if state.uses_heightmap:
+		# attack_* 只表示上一支已冻结/已发射波次。先终结已经没有在途、
+		# 作战或待发梯队的旧波，随后 planner 才能安全复用这些战团。
+		_reconcile_campaign_active_wave(nation_id)
+		return _ensure_group_campaign_preparation_plan(
+			nation_id, primary_city, defense_plan, coordinator,
+			roles_reconciled, decision_context
+		)
 	var nation := state.nations[nation_id]
 	var plan_valid := (
 		not nation.campaign_preparation_targets.is_empty()
@@ -6903,25 +7016,7 @@ func _ensure_campaign_preparation_plan(
 			):
 				plan_valid = false
 				break
-	if plan_valid and state.uses_heightmap:
-		plan_valid = _sync_campaign_group_members(nation_id)
 	if plan_valid:
-		if state.uses_heightmap:
-			var existing_targets: Array[int] = (
-				nation.campaign_preparation_targets.duplicate()
-			)
-			_assign_battle_groups_to_campaign_targets(
-				nation_id,
-				existing_targets,
-				defense_plan,
-				coordinator,
-				(
-					defense_plan.view
-					if defense_plan != null
-					else null
-				),
-				roles_reconciled
-			)
 		return true
 
 	_clear_campaign_preparation_plan(nation_id)
@@ -6952,6 +7047,8 @@ func _ensure_campaign_preparation_plan(
 	)
 	var target_candidates: Array[int] = [primary_city]
 	for target_city in snapshot.priority_enemy_cities:
+		if target_candidates.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
 		if (
 			target_city == primary_city
 			or not state.is_enemy(
@@ -6966,15 +7063,6 @@ func _ensure_campaign_preparation_plan(
 		):
 			continue
 		target_candidates.append(target_city)
-	if state.uses_heightmap:
-		return _assign_battle_groups_to_campaign_targets(
-			nation_id,
-			target_candidates,
-			defense_plan,
-			coordinator,
-			view,
-			roles_reconciled
-		)
 	var threat := (
 		defense_plan.threat
 		if (
@@ -7327,232 +7415,146 @@ func _ensure_campaign_preparation_plan(
 	return true
 
 
-func _assign_battle_groups_to_campaign_targets(
+## 正式地图的攻势只有这一条规划入口：纯规划器一次决定目标预算和战团归属，
+## 原子应用器再投影到兼容字段。扩军、集结、发射只能消费这份计划。
+func _ensure_group_campaign_preparation_plan(
 	nation_id: int,
+	primary_city: int,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator,
+	roles_reconciled: bool,
+	decision_context: Dictionary = {}
+) -> bool:
+	if (
+		primary_city < 0
+		or primary_city >= state.cities.size()
+		or not _campaign_force_demand_target_valid(
+			nation_id, primary_city
+		)
+	):
+		return false
+	if not roles_reconciled:
+		_reconcile_strategic_roles(nation_id)
+	var view := (
+		defense_plan.view
+		if defense_plan != null and defense_plan.view != null
+		else _build_ai_view(nation_id)
+	)
+	var snapshot := (
+		defense_plan.snapshot
+		if defense_plan != null and defense_plan.snapshot != null
+		else _strategy_snapshot_for(view)
+	)
+	var targets := _campaign_allocation_target_candidates(
+		nation_id, primary_city, snapshot
+	)
+	var strict_readiness := (
+		state.nations[nation_id].war_preparation_target_nation >= 0
+		and state.wars_of(nation_id).is_empty()
+	)
+	var plan: CampaignAllocationPlan = decision_context.get(
+		"campaign_allocation_plan"
+	)
+	if (
+		plan == null
+		or plan.nation_id != nation_id
+		or not plan.candidate_target_ids.has(primary_city)
+	):
+		plan = _plan_campaign_allocation(
+			nation_id, primary_city, targets, defense_plan, coordinator, view,
+			strict_readiness
+		)
+		if not decision_context.is_empty():
+			decision_context["campaign_allocation_plan"] = plan
+	if plan == null or plan.assigned_group_count <= 0:
+		return false
+	return _apply_campaign_plan_atomic(nation_id, plan)
+
+
+func _campaign_allocation_target_candidates(
+	nation_id: int,
+	primary_city: int,
+	snapshot: StrategicMapSnapshot
+) -> Array[int]:
+	var nation := state.nations[nation_id]
+	var result: Array[int] = []
+	var append_valid := func(target_city: int) -> void:
+		if (
+			result.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS
+			or result.has(target_city)
+			or not _campaign_force_demand_target_valid(
+				nation_id, target_city
+			)
+			or DiplomacyAI.staging_cities_for_objective(
+				state, nation_id, target_city
+			).is_empty()
+		):
+			return
+		result.append(target_city)
+	append_valid.call(primary_city)
+	# 保留仍合法的旧方向，避免战略评分轻微变化导致全线来回换防。
+	var previous := nation.campaign_preparation_plan
+	if previous != null:
+		for target_city in previous.assigned_target_ids:
+			append_valid.call(target_city)
+	else:
+		for target_city in nation.campaign_preparation_targets:
+			append_valid.call(target_city)
+	if snapshot != null:
+		for target_city in snapshot.priority_enemy_cities:
+			append_valid.call(target_city)
+	return result
+
+
+## 只读当前世界快照并返回完整结果。除 AiWorldView 自身的路径缓存外，不修改
+## Nation、Army 或任何攻势字段；相同输入必然产生相同分配。
+func _plan_campaign_allocation(
+	nation_id: int,
+	primary_city: int,
 	target_candidates: Array[int],
 	defense_plan: CityDefensePlan,
 	coordinator: ArmyCoordinator,
-	context_view: AiWorldView = null,
-	roles_reconciled: bool = false
-) -> bool:
-	if not roles_reconciled:
-		_reconcile_strategic_roles(nation_id)
-		# 调用方在角色整理前构建的视图已经过期；保持原调用顺序，
-		# 仅在明确声明角色已整理时复用当前 tick 的冻结视图。
-		context_view = null
-	var nation := state.nations[nation_id]
-	var view := (
-		context_view
-		if context_view != null
-		else _build_ai_view(nation_id)
-	)
-	var used_groups := {}
-	var group_members_by_id := {}
-	for army in view.friendly_armies:
-		if (
-			army.size > 0
-			and army.battle_group_id >= 0
-		):
-			if not group_members_by_id.has(army.battle_group_id):
-				group_members_by_id[army.battle_group_id] = (
-					[] as Array[Army]
-				)
-			(
-				group_members_by_id[army.battle_group_id]
-				as Array[Army]
-			).append(army)
-			if int(
-				nation.campaign_preparation_assignments.get(
-					army.id,
-					-1
-				)
-			) >= 0:
-				used_groups[army.battle_group_id] = true
-	for target_city in target_candidates:
-		var staging := DiplomacyAI.staging_cities_for_objective(
-			state,
-			nation_id,
-			target_city
-		)
-		if staging.is_empty():
-			continue
-		var demand := _campaign_target_group_demand(
-			nation_id,
-			target_city,
-			defense_plan.threat if defense_plan != null else null
-		)
-		if demand.is_empty():
-			continue
-		var required_base_power := float(
-			demand["required_power"]
-		)
-		var required_commit_manpower := int(
-			demand["required_manpower"]
-		)
-		var assigned_power := 0.0
-		var assigned_commit_manpower := 0
-		for army in view.friendly_armies:
-			if (
-				army.size > 0
-				and int(
-					nation.campaign_preparation_assignments.get(
-						army.id,
-						-1
-					)
-				) == target_city
-				and _campaign_army_can_attack_target(
-					army,
-					nation_id,
-					target_city
-				)
-			):
-				assigned_power += ArmyPower.effective(army)
-				assigned_commit_manpower += army.size
-		var target_bound := (
-			nation.campaign_preparation_targets.has(target_city)
-		)
-		while (
-			not target_bound
-			or assigned_power < required_base_power
-			or assigned_commit_manpower
-				< required_commit_manpower
-		):
-			var best_group_id := -1
-			var best_members: Array[Army] = []
-			var best_power := -1.0
-			var best_commit_manpower := 0
-			var best_distance := INF
-			for group in nation.battle_groups:
-				if used_groups.has(group.id):
-					continue
-				var group_members: Array[Army] = (
-					group_members_by_id.get(
-						group.id,
-						[] as Array[Army]
-					)
-				)
-				if group_members.is_empty():
-					continue
-				var availability := _campaign_group_availability(
-					nation_id,
-					target_city,
-					group_members,
-					staging,
-					view,
-					defense_plan,
-					coordinator
-				)
-				if availability.is_empty():
-					continue
-				var members: Array[Army] = availability["members"]
-				var group_power := float(availability["power"])
-				var group_commit_manpower := int(
-					availability["manpower"]
-				)
-				var group_distance := float(
-					availability["distance"]
-				)
-				if (
-					group_power > best_power
-					or (
-						is_equal_approx(group_power, best_power)
-						and (
-							group_distance < best_distance
-							or (
-								is_equal_approx(
-									group_distance,
-									best_distance
-								)
-								and (
-									best_group_id < 0
-									or group.id < best_group_id
-								)
-							)
-						)
-					)
-				):
-					best_group_id = group.id
-					best_members = members
-					best_power = group_power
-					best_commit_manpower = (
-						group_commit_manpower
-					)
-					best_distance = group_distance
-			if best_group_id < 0:
-				break
-			if not target_bound:
-				nation.campaign_preparation_targets.append(
-					target_city
-				)
-				nation.campaign_preparation_group_assignments[
-					target_city
-				] = best_group_id
-				target_bound = true
-			used_groups[best_group_id] = true
-			assigned_power += best_power
-			assigned_commit_manpower += best_commit_manpower
-			for army in best_members:
-				_assign_campaign_preparation_army(
-					nation_id,
-					army,
-					target_city
-				)
-	if nation.campaign_preparation_targets.is_empty():
-		return false
-	if nation.campaign_preparation_started_day < 0:
-		nation.campaign_preparation_started_day = (
-			nation.campaign_last_offensive_day
-			if nation.campaign_last_offensive_day >= 0
-			else state.day
-		)
-	return true
-
-
-func _campaign_preparation_target_for_group(
-	nation_id: int,
-	group_id: int
-) -> int:
-	if group_id < 0:
-		return -1
-	var nation := state.nations[nation_id]
-	var target_city := -1
-	for member in state.battle_group_members(nation_id, group_id):
-		var member_target := int(
-			nation.campaign_preparation_assignments.get(
-				member.id,
-				-1
-			)
-		)
-		if member_target < 0:
-			continue
-		if target_city >= 0 and target_city != member_target:
-			return -2
-		target_city = member_target
-	return target_city
-
-
-func _sync_campaign_group_members(nation_id: int) -> bool:
-	var nation := state.nations[nation_id]
+	view: AiWorldView,
+	strict_group_readiness: bool = false
+) -> CampaignAllocationPlan:
+	var plan := CampaignAllocationPlan.new()
+	plan.nation_id = nation_id
+	plan.generated_day = state.day
+	plan.strict_group_readiness = strict_group_readiness
+	plan.requested_primary_city = primary_city
 	if (
-		nation.campaign_preparation_group_assignments.size()
-			!= nation.campaign_preparation_targets.size()
+		nation_id < 0
+		or nation_id >= state.nations.size()
+		or view == null
 	):
-		return false
-	var group_targets := {}
-	var desired_assignments := {}
-	for target_city in nation.campaign_preparation_targets:
-		if not nation.campaign_preparation_group_assignments.has(
-			target_city
-		):
-			return false
-		var group_id := int(
-			nation.campaign_preparation_group_assignments[
-				target_city
-			]
+		return plan
+	var nation := state.nations[nation_id]
+	var previous_plan: CampaignAllocationPlan = (
+		nation.campaign_preparation_plan
+	)
+	var previous_group_targets := {}
+	if previous_plan != null:
+		previous_group_targets = (
+			previous_plan.group_to_target.duplicate()
 		)
-		if state.battle_group_by_id(nation_id, group_id) == null:
-			return false
-		group_targets[group_id] = target_city
+	else:
+		# 旧运行态只在首次迁移时读取一次，之后不再反向推断规划。
+		for army in view.friendly_armies:
+			var legacy_target := int(
+				nation.campaign_preparation_assignments.get(army.id, -1)
+			)
+			if army.battle_group_id >= 0 and legacy_target >= 0:
+				previous_group_targets[army.battle_group_id] = legacy_target
+	var active_reserved_groups := {}
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.size > 0
+			and army.battle_group_id >= 0
+			and nation.campaign_attack_assignments.has(army.id)
+		):
+			active_reserved_groups[army.battle_group_id] = true
+	var group_members_by_id := {}
 	for army in state.armies:
 		if (
 			army.owner_nation != nation_id
@@ -7560,42 +7562,613 @@ func _sync_campaign_group_members(nation_id: int) -> bool:
 			or army.battle_group_id < 0
 		):
 			continue
-		var target_city := int(
-			nation.campaign_preparation_assignments.get(
-				army.id,
-				-1
+		if not group_members_by_id.has(army.battle_group_id):
+			group_members_by_id[army.battle_group_id] = [] as Array[Army]
+		(group_members_by_id[army.battle_group_id] as Array[Army]).append(army)
+	for group_id_value in group_members_by_id:
+		var members: Array[Army] = group_members_by_id[group_id_value]
+		members.sort_custom(func(a: Army, b: Army) -> bool:
+			return EquivariantOrder.army_less(state, nation_id, a, b)
+		)
+
+	# 目标预算严格分三轮：广度覆盖、决定性三团、按需求补强。
+	var target_staging := {}
+	for target_value in target_candidates:
+		if plan.candidate_target_ids.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
+		var target_city := int(target_value)
+		if plan.candidate_target_ids.has(target_city):
+			continue
+		var demand := _campaign_target_group_demand(
+			nation_id, target_city,
+			defense_plan.threat if defense_plan != null else null
+		)
+		if demand.is_empty():
+			continue
+		var staging := DiplomacyAI.staging_cities_for_objective(
+			state, nation_id, target_city
+		)
+		if staging.is_empty():
+			continue
+		plan.candidate_target_ids.append(target_city)
+		plan.target_demands[target_city] = demand.duplicate(true)
+		plan.target_group_budget[target_city] = 1
+		target_staging[target_city] = staging
+	if plan.candidate_target_ids.is_empty():
+		return plan
+	plan.primary_city = (
+		primary_city
+		if plan.candidate_target_ids.has(primary_city)
+		else plan.candidate_target_ids[0]
+	)
+	var budget_used := plan.candidate_target_ids.size()
+	plan.desired_group_count = 0
+	for target_city in plan.candidate_target_ids:
+		plan.desired_group_count += maxi(
+			int(plan.target_demands[target_city].get("groups", 1)), 1
+		)
+	for target_city in plan.candidate_target_ids:
+		var desired := int(plan.target_demands[target_city].get("groups", 1))
+		var decisive := bool(
+			plan.target_demands[target_city].get("is_decisive", false)
+		)
+		if not decisive:
+			continue
+		while (
+			int(plan.target_group_budget[target_city])
+				< CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+					* CAMPAIGN_PREPARED_ECHELONS
+			and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS
+		):
+			plan.target_group_budget[target_city] = (
+				int(plan.target_group_budget[target_city]) + 1
+			)
+			budget_used += 1
+	var budget_progress := true
+	while budget_progress and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS:
+		budget_progress = false
+		for target_city in plan.candidate_target_ids:
+			var desired := int(
+				plan.target_demands[target_city].get("groups", 1)
+			)
+			if int(plan.target_group_budget[target_city]) >= desired:
+				continue
+			plan.target_group_budget[target_city] = (
+				int(plan.target_group_budget[target_city]) + 1
+			)
+			budget_used += 1
+			budget_progress = true
+			if budget_used >= CAMPAIGN_MAX_WARTIME_GROUPS:
+				break
+	plan.required_group_count = budget_used
+
+	var evaluations := {}
+	for target_city in plan.candidate_target_ids:
+		for group in nation.battle_groups:
+			if active_reserved_groups.has(group.id):
+				continue
+			var members: Array[Army] = group_members_by_id.get(
+				group.id, [] as Array[Army]
+			)
+			if members.is_empty():
+				continue
+			var retained_ids: Array[int] = []
+			if (
+				previous_plan != null
+				and previous_plan.target_for_group(group.id) == target_city
+			):
+				retained_ids = previous_plan.member_ids_for_group(group.id)
+			var evaluation := _evaluate_campaign_group_for_target(
+				nation_id, target_city, members, target_staging[target_city],
+				view, defense_plan, coordinator, strict_group_readiness,
+				retained_ids
+			)
+			if not evaluation.is_empty():
+				evaluations["%d:%d" % [target_city, group.id]] = evaluation
+	var used_groups := {}
+	var assigned_manpower := {}
+	var assigned_power := {}
+	# 三轮槽位顺序与预算顺序一致，保证分配结果和扩军需求是同一模型。
+	var slots: Array[int] = []
+	for target_city in plan.candidate_target_ids:
+		slots.append(target_city)
+	for target_city in plan.candidate_target_ids:
+		var decisive := bool(
+			plan.target_demands[target_city].get("is_decisive", false)
+		)
+		if not decisive:
+			continue
+		for unused in range(1, mini(
+			int(plan.target_demands[target_city].get("groups", 1)),
+			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+				* CAMPAIGN_PREPARED_ECHELONS
+		)):
+			slots.append(target_city)
+	var already_slotted := {}
+	for target_city in slots:
+		already_slotted[target_city] = int(
+			already_slotted.get(target_city, 0)
+		) + 1
+	var add_slots := true
+	while add_slots and slots.size() < plan.required_group_count:
+		add_slots = false
+		for target_city in plan.candidate_target_ids:
+			if int(already_slotted.get(target_city, 0)) >= int(
+				plan.target_group_budget[target_city]
+			):
+				continue
+			slots.append(target_city)
+			already_slotted[target_city] = int(
+				already_slotted.get(target_city, 0)
+			) + 1
+			add_slots = true
+			if slots.size() >= plan.required_group_count:
+				break
+	for target_city in slots:
+		var best := _best_planned_campaign_group(
+			target_city, used_groups, nation.battle_groups, evaluations,
+			previous_group_targets
+		)
+		if best.is_empty():
+			continue
+		var group_id := int(best["group_id"])
+		used_groups[group_id] = true
+		plan.group_to_target[group_id] = target_city
+		if not plan.target_to_groups.has(target_city):
+			plan.target_to_groups[target_city] = [] as Array[int]
+		(plan.target_to_groups[target_city] as Array[int]).append(group_id)
+		var all_ids: Array[int] = []
+		for member in group_members_by_id[group_id] as Array[Army]:
+			all_ids.append(member.id)
+		plan.all_member_ids[group_id] = all_ids
+		plan.eligible_member_ids[group_id] = (
+			best["eligible_member_ids"] as Array[int]
+		).duplicate()
+		plan.excluded_member_reasons[group_id] = (
+			best.get("excluded_member_reasons", {}) as Dictionary
+		).duplicate(true)
+		assigned_manpower[target_city] = int(
+			assigned_manpower.get(target_city, 0)
+		) + int(best["manpower"])
+		assigned_power[target_city] = float(
+			assigned_power.get(target_city, 0.0)
+		) + float(best["power"])
+	# 理论团槽只是扩军预算；实际分配还必须填平当前兵力和战力缺口。
+	# 残缺战团可以占一个方向，但不能冒充满编团阻止后续补强。
+	var reinforcement_progress := true
+	while (
+		reinforcement_progress
+		and used_groups.size() < CAMPAIGN_MAX_WARTIME_GROUPS
+	):
+		reinforcement_progress = false
+		for target_city in plan.candidate_target_ids:
+			var demand: Dictionary = plan.target_demands[target_city]
+			var assigned_groups := (
+				(plan.target_to_groups[target_city] as Array).size()
+				if plan.target_to_groups.has(target_city) else 0
+			)
+			if (
+				assigned_groups >= int(plan.target_group_budget[target_city])
+				and int(assigned_manpower.get(target_city, 0))
+					>= int(demand["required_manpower"])
+				and float(assigned_power.get(target_city, 0.0))
+					>= float(demand["required_power"])
+			):
+				continue
+			var best := _best_planned_campaign_group(
+				target_city, used_groups, nation.battle_groups, evaluations,
+				previous_group_targets
+			)
+			if best.is_empty():
+				continue
+			var group_id := int(best["group_id"])
+			if assigned_groups >= int(plan.target_group_budget[target_city]):
+				plan.target_group_budget[target_city] = assigned_groups + 1
+			used_groups[group_id] = true
+			plan.group_to_target[group_id] = target_city
+			if not plan.target_to_groups.has(target_city):
+				plan.target_to_groups[target_city] = [] as Array[int]
+			(plan.target_to_groups[target_city] as Array[int]).append(group_id)
+			var all_ids: Array[int] = []
+			for member in group_members_by_id[group_id] as Array[Army]:
+				all_ids.append(member.id)
+			plan.all_member_ids[group_id] = all_ids
+			plan.eligible_member_ids[group_id] = (
+				best["eligible_member_ids"] as Array[int]
+			).duplicate()
+			plan.excluded_member_reasons[group_id] = (
+				best.get("excluded_member_reasons", {}) as Dictionary
+			).duplicate(true)
+			assigned_manpower[target_city] = int(
+				assigned_manpower.get(target_city, 0)
+			) + int(best["manpower"])
+			assigned_power[target_city] = float(
+				assigned_power.get(target_city, 0.0)
+			) + float(best["power"])
+			reinforcement_progress = true
+			if used_groups.size() >= CAMPAIGN_MAX_WARTIME_GROUPS:
+				break
+	for target_city in plan.candidate_target_ids:
+		if (
+			plan.target_to_groups.has(target_city)
+			and not (plan.target_to_groups[target_city] as Array).is_empty()
+		):
+			plan.assigned_target_ids.append(target_city)
+	plan.assigned_group_count = plan.group_to_target.size()
+	plan.required_group_count = maxi(
+		plan.required_group_count, plan.assigned_group_count
+	)
+	plan.target_assigned_manpower = assigned_manpower.duplicate(true)
+	plan.target_assigned_power = assigned_power.duplicate(true)
+	plan.unfilled_group_slots = maxi(
+		plan.required_group_count - plan.assigned_group_count, 0
+	)
+	return plan
+
+
+func _evaluate_campaign_group_for_target(
+	nation_id: int,
+	target_city: int,
+	group_members: Array[Army],
+	staging: Array[int],
+	view: AiWorldView,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator,
+	strict_group_readiness: bool,
+	retained_member_ids: Array[int] = []
+) -> Dictionary:
+	var eligible_members: Array[Army] = []
+	var eligible_ids: Array[int] = []
+	var excluded := {}
+	var power := 0.0
+	var manpower := 0
+	var distance := 0.0
+	for army in group_members:
+		var entry_staging: Array[int] = []
+		for staging_city in staging:
+			var edge := state.edge_of(staging_city, target_city)
+			if edge != null and edge.max_manpower >= army.max_size:
+				entry_staging.append(staging_city)
+		if entry_staging.is_empty():
+			excluded[army.id] = "entry_capacity"
+			continue
+		var origin := _campaign_army_origin(army, nation_id)
+		var retained_in_plan := retained_member_ids.has(army.id)
+		if (
+			origin < 0
+			or army.state not in [Army.State.IDLE, Army.State.HOLDING]
+			or state.day < army.defensive_deployment_until_day
+			or not _can_use_army_for_offensive(
+				defense_plan, coordinator, army, target_city
+			)
+		):
+			if retained_in_plan:
+				eligible_members.append(army)
+				eligible_ids.append(army.id)
+				power += ArmyPower.effective(army)
+				manpower += army.size
+				excluded[army.id] = "in_transit"
+				continue
+			excluded[army.id] = "temporarily_unavailable"
+			continue
+		var field := view.path_field(
+			origin, nation_id, false, true, -1, army.max_size
+		)
+		var member_distance := INF
+		for staging_city in entry_staging:
+			member_distance = minf(
+				member_distance,
+				float(field["dist"].get(staging_city, INF))
+			)
+		if member_distance == INF:
+			excluded[army.id] = "unreachable"
+			continue
+		eligible_members.append(army)
+		eligible_ids.append(army.id)
+		power += ArmyPower.effective(army)
+		manpower += army.size
+		distance = maxf(distance, member_distance)
+	if eligible_members.is_empty():
+		return {}
+	if strict_group_readiness:
+		for reason in excluded.values():
+			if str(reason) not in ["entry_capacity", "in_transit"]:
+				return {}
+	return {
+		"members": eligible_members,
+		"eligible_member_ids": eligible_ids,
+		"excluded_member_reasons": excluded,
+		"power": power,
+		"manpower": manpower,
+		"distance": distance,
+	}
+
+
+func _best_planned_campaign_group(
+	target_city: int,
+	used_groups: Dictionary,
+	groups: Array[BattleGroup],
+	evaluations: Dictionary,
+	previous_group_targets: Dictionary
+) -> Dictionary:
+	var best := {}
+	for group in groups:
+		if used_groups.has(group.id):
+			continue
+		var key := "%d:%d" % [target_city, group.id]
+		if not evaluations.has(key):
+			continue
+		var evaluation: Dictionary = evaluations[key]
+		var stable := int(previous_group_targets.get(group.id, -1)) == target_city
+		if (
+			best.is_empty()
+			or stable and not bool(best["stable"])
+			or stable == bool(best["stable"]) and (
+				float(evaluation["power"]) > float(best["power"])
+				or is_equal_approx(
+					float(evaluation["power"]), float(best["power"])
+				) and (
+					float(evaluation["distance"]) < float(best["distance"])
+					or is_equal_approx(
+						float(evaluation["distance"]), float(best["distance"])
+					) and group.id < int(best["group_id"])
+				)
+			)
+		):
+			best = evaluation.duplicate(true)
+			best["group_id"] = group.id
+			best["stable"] = stable
+	return best
+
+
+func _apply_campaign_plan_atomic(
+	nation_id: int,
+	plan: CampaignAllocationPlan
+) -> bool:
+	if (
+		plan == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+		or plan.nation_id != nation_id
+		or plan.assigned_target_ids.is_empty()
+		or plan.assigned_target_ids.size() > CAMPAIGN_MAX_PARALLEL_TARGETS
+		or plan.group_to_target.size() > CAMPAIGN_MAX_WARTIME_GROUPS
+		or plan.assigned_group_count != plan.group_to_target.size()
+		or plan.required_group_count < plan.assigned_group_count
+		or plan.required_group_count > CAMPAIGN_MAX_WARTIME_GROUPS
+		or plan.unfilled_group_slots != maxi(
+			plan.required_group_count - plan.assigned_group_count, 0
+		)
+	):
+		return false
+	var nation := state.nations[nation_id]
+	var new_targets: Array[int] = []
+	var new_assignments := {}
+	var new_representatives := {}
+	var seen_groups := {}
+	for target_city in plan.assigned_target_ids:
+		if (
+			new_targets.has(target_city)
+			or not _campaign_force_demand_target_valid(nation_id, target_city)
+			or not plan.target_to_groups.has(target_city)
+		):
+			return false
+		var target_groups: Array[int] = []
+		target_groups.assign(plan.target_to_groups[target_city])
+		if target_groups.is_empty():
+			return false
+		if target_groups.size() > int(
+			plan.target_group_budget.get(target_city, 0)
+		):
+			return false
+		target_groups.sort()
+		new_targets.append(target_city)
+		new_representatives[target_city] = target_groups[0]
+		for group_id in target_groups:
+			if (
+				seen_groups.has(group_id)
+				or int(plan.group_to_target.get(group_id, -1)) != target_city
+				or state.battle_group_by_id(nation_id, group_id) == null
+			):
+				return false
+			seen_groups[group_id] = true
+			var eligible_ids: Array[int] = []
+			eligible_ids.assign(plan.eligible_member_ids.get(group_id, []))
+			if eligible_ids.is_empty():
+				return false
+			var member_by_id := {}
+			var current_member_ids: Array[int] = []
+			for member in state.battle_group_members(nation_id, group_id):
+				member_by_id[member.id] = member
+				current_member_ids.append(member.id)
+				if nation.campaign_attack_assignments.has(member.id):
+					return false
+			current_member_ids.sort()
+			var planned_member_ids: Array[int] = []
+			planned_member_ids.assign(plan.all_member_ids.get(group_id, []))
+			planned_member_ids.sort()
+			if planned_member_ids != current_member_ids:
+				return false
+			for army_id in eligible_ids:
+				if (
+					not member_by_id.has(army_id)
+				):
+					return false
+				new_assignments[army_id] = target_city
+	if seen_groups.size() != plan.group_to_target.size():
+		return false
+	for group_id_value in plan.group_to_target:
+		var group_id := int(group_id_value)
+		var target_city := int(plan.group_to_target[group_id_value])
+		if (
+			not seen_groups.has(group_id)
+			or not plan.target_to_groups.has(target_city)
+			or not (plan.target_to_groups[target_city] as Array).has(group_id)
+		):
+			return false
+	var new_full_targets: Array[int] = []
+	for target_city in nation.campaign_full_preparation_targets:
+		if new_targets.has(target_city):
+			new_full_targets.append(target_city)
+	var started_day := nation.campaign_preparation_started_day
+	if started_day < 0:
+		started_day = (
+			nation.campaign_last_offensive_day
+			if nation.campaign_last_offensive_day >= 0
+			else state.day
+		)
+	# 从这里开始才提交；上方任一校验失败时旧状态逐字段不变。
+	nation.campaign_preparation_plan = plan.duplicate_plan()
+	nation.campaign_preparation_targets = new_targets
+	nation.campaign_preparation_assignments = new_assignments
+	nation.campaign_preparation_group_assignments = new_representatives
+	nation.campaign_full_preparation_targets = new_full_targets
+	nation.campaign_preparation_started_day = started_day
+	return true
+
+
+## 网格地图逐军计划的兼容预算裁剪；正式高度图只消费 CampaignAllocationPlan，
+## 不会进入此函数。
+func _trim_campaign_preparation_budget(
+	nation_id: int,
+	target_candidates: Array[int]
+) -> Array[int]:
+	var nation := state.nations[nation_id]
+	var bounded_targets: Array[int] = []
+	for target_city in target_candidates:
+		if bounded_targets.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
+		if not bounded_targets.has(target_city):
+			bounded_targets.append(target_city)
+	# 旧存档可能带有超过八路的准备状态；先移除超额目标及其 Assignment。
+	for target_value in nation.campaign_preparation_targets.duplicate():
+		var target_city := int(target_value)
+		if not bounded_targets.has(target_city):
+			_remove_campaign_preparation_target(nation_id, target_city)
+	var ordered_groups: Array[int] = []
+	var reserved_group_slots := 0
+	var existing_assigned_groups := {}
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.size > 0
+			and army.battle_group_id >= 0
+			and nation.campaign_preparation_assignments.has(army.id)
+		):
+			existing_assigned_groups[army.battle_group_id] = true
+	# 每个方向的代表战团优先保留，避免裁剪把某一路整个清空。
+	for target_city in bounded_targets:
+		var representative := int(
+			nation.campaign_preparation_group_assignments.get(
+				target_city, -1
 			)
 		)
-		if target_city < 0:
-			continue
-		var existing_target := int(
-			group_targets.get(army.battle_group_id, -1)
-		)
-		if existing_target >= 0 and existing_target != target_city:
-			return false
-		group_targets[army.battle_group_id] = target_city
-	for group_id_value in group_targets:
-		var group_id := int(group_id_value)
-		var target_city := int(group_targets[group_id])
-		for member in state.battle_group_members(
-			nation_id,
-			group_id
+		var representative_valid := false
+		if (
+			representative >= 0
+			and state.battle_group_by_id(nation_id, representative) != null
 		):
-				if _campaign_formation_fits_target_entry(
-					member,
-					target_city
-				):
-					desired_assignments[member.id] = target_city
-	for army_id in (
-		nation.campaign_preparation_assignments.keys().duplicate()
-	):
-		if not desired_assignments.has(army_id):
-			nation.campaign_preparation_assignments.erase(army_id)
-	for army_id in desired_assignments:
-		nation.campaign_preparation_assignments[army_id] = int(
-			desired_assignments[army_id]
+			for member in state.battle_group_members(
+				nation_id, representative
+			):
+				if int(nation.campaign_preparation_assignments.get(
+					member.id, -1
+				)) == target_city:
+					representative_valid = true
+					break
+		if representative_valid:
+			if not ordered_groups.has(representative):
+				ordered_groups.append(representative)
+		else:
+			nation.campaign_preparation_group_assignments.erase(
+				target_city
+			)
+		var valid_group_count := 0
+		var counted_groups := {}
+		for army in state.armies:
+			if (
+				army.owner_nation == nation_id
+				and army.size > 0
+				and army.battle_group_id >= 0
+				and int(nation.campaign_preparation_assignments.get(
+					army.id, -1
+				)) == target_city
+				and not counted_groups.has(army.battle_group_id)
+			):
+				counted_groups[army.battle_group_id] = true
+				valid_group_count += 1
+		var defender_owner := state.cities[target_city].owner_nation
+		var required_floor := (
+			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+			if defender_owner >= 0
+				and state.land_cities_of(defender_owner).size() <= 1
+			else 1
 		)
-	return true
+		reserved_group_slots += maxi(
+			required_floor - valid_group_count, 0
+		)
+	# 为尚未覆盖的新方向预留战团预算；若16团已全部堆在旧方向，
+	# 从额外增援团中释放相同数量，下一阶段即可重平衡到新前线。
+	var retained_existing_limit := maxi(
+		mini(
+			CAMPAIGN_MAX_WARTIME_GROUPS - reserved_group_slots,
+			maxi(
+				existing_assigned_groups.size() - reserved_group_slots,
+				0
+			)
+		),
+		ordered_groups.size()
+	)
+	# 其余增援战团按目标优先级、团号稳定收进预算。
+	for target_city in bounded_targets:
+		var target_groups: Array[int] = []
+		for army in state.armies:
+			if (
+				army.owner_nation == nation_id
+				and army.size > 0
+				and army.battle_group_id >= 0
+				and int(nation.campaign_preparation_assignments.get(
+					army.id, -1
+				)) == target_city
+				and not target_groups.has(army.battle_group_id)
+			):
+				target_groups.append(army.battle_group_id)
+		target_groups.sort()
+		for group_id in target_groups:
+			if ordered_groups.size() >= retained_existing_limit:
+				break
+			if not ordered_groups.has(group_id):
+				ordered_groups.append(group_id)
+	var allowed_groups := {}
+	for group_id in ordered_groups.slice(
+		0, CAMPAIGN_MAX_WARTIME_GROUPS
+	):
+		allowed_groups[int(group_id)] = true
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.battle_group_id >= 0
+			and nation.campaign_preparation_assignments.has(army.id)
+			and not allowed_groups.has(army.battle_group_id)
+		):
+			nation.campaign_preparation_assignments.erase(army.id)
+	# 若代表团本身已无有效成员，删掉映射；第一阶段会重新绑定，
+	# 没有可用战团的目标则暂时退出，待下一轮恢复后重新加入。
+	for target_city in bounded_targets.duplicate():
+		var has_member := false
+		for army in state.armies:
+			if (
+				army.owner_nation == nation_id
+				and army.size > 0
+				and int(nation.campaign_preparation_assignments.get(
+					army.id, -1
+				)) == target_city
+			):
+				has_member = true
+				break
+		if not has_member and nation.campaign_preparation_targets.has(target_city):
+			nation.campaign_preparation_group_assignments.erase(target_city)
+	return bounded_targets
 
 
 func _campaign_preparation_staged_armies(
@@ -7663,18 +8236,12 @@ func _assign_offensive_staging_orders(
 	)
 	if state.uses_heightmap:
 		var nation := state.nations[nation_id]
-		if not nation.campaign_preparation_group_assignments.has(
-			objective_city
+		if (
+			nation.campaign_preparation_plan == null
+			or not nation.campaign_preparation_plan
+				.assigned_target_ids.has(objective_city)
 		):
-			if not _assign_battle_groups_to_campaign_targets(
-				nation_id,
-				[objective_city] as Array[int],
-				defense_plan,
-				coordinator,
-				path_view,
-				roles_reconciled
-			):
-				return false
+			return false
 		assigned_only = true
 	var committed_heavy := 0
 	var committed_light := 0
@@ -7774,12 +8341,6 @@ func _assign_offensive_staging_orders(
 			hold.target_edge_b = objective_city
 			hold.minimum_commit_days = DiplomacyAI.WAR_PREPARATION_MIN_DAYS
 			if _execute_ai_candidate(army, hold):
-				if assigned_only:
-					_assign_campaign_preparation_army(
-						nation_id,
-						army,
-						objective_city
-					)
 				changed = true
 				orders += 1
 				if not assigned_only:
@@ -7815,24 +8376,13 @@ func _assign_offensive_staging_orders(
 		var nation := state.nations[nation_id]
 		if (
 			state.uses_heightmap
-				and nation.war_preparation_target_nation >= 0
-			and nation.campaign_preparation_group_assignments.has(
-				objective_city
-			)
+			and nation.campaign_preparation_plan != null
+			and nation.campaign_preparation_plan
+				.assigned_target_ids.has(objective_city)
 		):
-			required = 0
-			for army in path_view.friendly_armies:
-				if (
-					army.size > 0
-					and int(
-						nation.campaign_preparation_assignments.get(
-							army.id,
-							-1
-						)
-					) == objective_city
-				):
-					required += army.size
-			required = maxi(required, 1)
+			required = _campaign_planned_staging_troops(
+				nation_id, objective_city
+			)
 		else:
 			required = _campaign_minimum_staged_troops(
 				nation_id,
@@ -7941,12 +8491,6 @@ func _assign_offensive_staging_orders(
 		)
 		reinforce.minimum_commit_days = DiplomacyAI.WAR_PREPARATION_MIN_DAYS
 		if _execute_ai_candidate(army, reinforce):
-			if assigned_only:
-				_assign_campaign_preparation_army(
-					nation_id,
-					army,
-					objective_city
-				)
 			changed = true
 			orders += 1
 			staged += army.size
@@ -8050,12 +8594,6 @@ func _assign_offensive_staging_orders(
 		)
 		withdraw.minimum_commit_days = AI_DECISION_INTERVAL_DAYS
 		if _execute_ai_candidate(army, withdraw):
-			if assigned_only:
-				_assign_campaign_preparation_army(
-					nation_id,
-					army,
-					objective_city
-				)
 			changed = true
 			orders += 1
 			if not assigned_only:
@@ -8078,13 +8616,19 @@ func _build_campaign_attack_plan_from_preparation(
 ) -> bool:
 	var nation := state.nations[nation_id]
 	_clear_campaign_attack_plan(nation_id)
-	var ordered_targets := targets.duplicate()
+	# 外部调用或旧存档可能直接传入超额准备列表；发射入口自身必须
+	# 裁到8路/16团，不能依赖调用方预先经过正常规划流水线。
+	var ordered_targets := _trim_campaign_preparation_budget(
+		nation_id, targets
+	)
 	EquivariantOrder.sort_city_ids(
 		ordered_targets,
 		state,
 		nation_id
 	)
 	for target_city in ordered_targets:
+		if nation.campaign_plan_targets.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
 		var staged_troops := (
 			_campaign_preparation_staged_troops(
 				nation_id,
@@ -8157,6 +8701,11 @@ func _launch_campaign_offensive(
 		)
 	):
 		return false
+	if state.uses_heightmap:
+		return _launch_group_campaign_offensive(
+			nation_id, objective_city, preparation_days, prepared_targets,
+			route_threat_override
+		)
 	if prepared_targets.is_empty():
 		var required := DiplomacyAI.required_assault_troops(
 			state, nation_id, objective_city
@@ -8206,6 +8755,8 @@ func _launch_campaign_offensive(
 	var launchable_targets: Array[int] = []
 	var route_plans := {}
 	for target_city in plan_targets:
+		if launchable_targets.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
 		if not state.is_enemy(
 			nation_id,
 			state.cities[target_city].owner_nation
@@ -8262,6 +8813,12 @@ func _launch_campaign_offensive(
 			nation_id,
 			target_city
 		)
+		# 首批必须同步投入整个第0梯队。正式地图用“1”表示持久战团
+		# 已完成资格校验，不能把这个资格哨兵误当成实际提交兵力，
+		# 否则一个完整战团首日只会冲出第一支军，形成低烈度添油。
+		var initial_commit_target := 0
+		for attacker in target_attackers:
+			initial_commit_target += attacker.size
 		var route_plan: Dictionary = route_plans[target_city]
 		var target_committed := 0
 		var origin_cities: Array[int] = []
@@ -8305,10 +8862,7 @@ func _launch_campaign_offensive(
 					)
 				):
 					origin_cities.append(origin_city)
-			if target_committed >= int(ceil(
-				float(target_required)
-					* CAMPAIGN_TARGET_COMMIT_RATIO
-			)):
+			if target_committed >= initial_commit_target:
 				break
 		if not origin_cities.is_empty():
 			launched_origins[target_city] = origin_cities
@@ -8359,6 +8913,575 @@ func _launch_campaign_offensive(
 				CAMPAIGN_ARROW_DURATION_DAYS
 			)
 	return launched
+
+
+## 正式地图从 CampaignAllocationPlan 一次冻结并发射。所有 payload 先在
+## 局部变量中完成校验，旧 active wave、国库和准备态在提交前均保持不变。
+func _launch_group_campaign_offensive(
+	nation_id: int,
+	objective_city: int,
+	preparation_days: int,
+	prepared_targets: Array[int],
+	route_threat_override: ThreatField
+) -> bool:
+	var nation := state.nations[nation_id]
+	_reconcile_campaign_active_wave(nation_id)
+	# 当前模型只有一个 active-wave 容器；允许并行准备下一波，但不能
+	# 在上一波仍执行时覆盖它。若未来要求多波同时在途，应按 wave_id 建模。
+	if not nation.campaign_plan_targets.is_empty():
+		return false
+	var plan := nation.campaign_preparation_plan
+	if plan == null or plan.nation_id != nation_id:
+		return false
+	var requested_targets: Array[int] = []
+	if prepared_targets.is_empty():
+		requested_targets.append(objective_city)
+	else:
+		for target_value in prepared_targets:
+			var target_city := int(target_value)
+			if not requested_targets.has(target_city):
+				requested_targets.append(target_city)
+	var army_by_id := {}
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			army_by_id[army.id] = army
+	var wave_targets: Array[int] = []
+	var wave_assignments := {}
+	var wave_echelons := {}
+	var initial_attackers_by_target := {}
+	for target_city in plan.assigned_target_ids:
+		if (
+			not requested_targets.has(target_city)
+			or target_city < 0
+			or target_city >= state.cities.size()
+			or not state.is_enemy(
+				nation_id, state.cities[target_city].owner_nation
+			)
+		):
+			continue
+		var members_by_group := {}
+		var staging := DiplomacyAI.staging_cities_for_objective(
+			state, nation_id, target_city
+		)
+		var planned_group_ids := plan.groups_for_target(target_city)
+		for group_id in planned_group_ids:
+			if state.battle_group_by_id(nation_id, group_id) == null:
+				return false
+			for army_id in plan.member_ids_for_group(group_id):
+				var army: Army = army_by_id.get(army_id)
+				if (
+					army == null
+					or army.battle_group_id != group_id
+					or int(nation.campaign_preparation_assignments.get(
+						army.id, -1
+					)) != target_city
+				):
+					return false
+				var ready := _army_ready_for_campaign_target(
+					army, nation_id, target_city
+				)
+				var staging_in_transit := (
+					army.state == Army.State.MOVING
+					and army.ai_action in [
+						ActionCandidate.Kind.REINFORCE,
+						ActionCandidate.Kind.RETREAT,
+					]
+					and staging.has(army.ai_target_city)
+				)
+				if not ready and not staging_in_transit:
+					continue
+				if (
+					ready
+					and not _campaign_army_can_attack_target(
+						army, nation_id, target_city
+					)
+				):
+					return false
+				if not members_by_group.has(group_id):
+					members_by_group[group_id] = [] as Array[Army]
+				(members_by_group[group_id] as Array[Army]).append(army)
+		if members_by_group.is_empty():
+			continue
+		# 梯队以战团为原子。先按“团内至少一员已到集结线”稳定分区，
+		# 再保持 planner 的团序；同团成员绝不拆到不同 echelon。
+		var ordered_groups: Array[int] = []
+		for ready_pass in [true, false]:
+			for group_id in planned_group_ids:
+				if not members_by_group.has(group_id):
+					continue
+				var group_ready := false
+				for army in members_by_group[group_id] as Array[Army]:
+					if _army_ready_for_campaign_target(
+						army, nation_id, target_city
+					):
+						group_ready = true
+						break
+				if group_ready == ready_pass:
+					ordered_groups.append(group_id)
+		var demand: Dictionary = plan.target_demands.get(target_city, {})
+		var assault_group_count := maxi(
+			int(demand.get("assault_groups", 1)), 1
+		)
+		var initial_attackers: Array[Army] = []
+		for group_index in range(ordered_groups.size()):
+			var group_id := ordered_groups[group_index]
+			var echelon := int(group_index / assault_group_count)
+			var group_members: Array[Army] = members_by_group[group_id]
+			group_members = _sort_campaign_priority(
+				group_members, nation_id, target_city
+			)
+			for army in group_members:
+				wave_assignments[army.id] = target_city
+				wave_echelons[army.id] = echelon
+				if (
+					echelon == 0
+					and _army_ready_for_campaign_target(
+						army, nation_id, target_city
+					)
+				):
+					initial_attackers.append(army)
+		if initial_attackers.is_empty():
+			continue
+		wave_targets.append(target_city)
+		initial_attackers_by_target[target_city] = initial_attackers
+	if wave_targets.is_empty() or not wave_targets.has(objective_city):
+		return false
+	# 只为真正进入本波的目标计费；未就绪目标不会把其成员带入费用。
+	for army_id_value in wave_assignments.keys().duplicate():
+		var army_id := int(army_id_value)
+		if not wave_targets.has(int(wave_assignments[army_id])):
+			wave_assignments.erase(army_id)
+			wave_echelons.erase(army_id)
+	var participants: Array[Army] = []
+	for army_id in wave_assignments:
+		var participant: Army = army_by_id.get(int(army_id))
+		if participant != null:
+			participants.append(participant)
+	var base_organization_cost := offensive_organization_gold_cost(
+		participants
+	)
+	var organization_cost := int(ceil(
+		float(base_organization_cost)
+			* (1.0 - DiplomacyAI.unification_era_factor(state))
+	))
+	if (
+		base_organization_cost <= 0
+		or nation.treasury_gold < organization_cost
+	):
+		return false
+	if preparation_days < 0:
+		preparation_days = _campaign_preparation_days(nation_id)
+	var multiplier := offensive_preparation_multiplier(preparation_days)
+	var bonus_days := offensive_bonus_duration_days(preparation_days)
+	var route_threat := route_threat_override
+	if route_threat == null:
+		route_threat = ThreatField.build(
+			_build_ai_view(nation_id), _threat_travel_cache
+		)
+	var route_plans := {}
+	for target_city in wave_targets:
+		route_plans[target_city] = _campaign_two_step_route_plan_for_group(
+			nation_id, target_city,
+			initial_attackers_by_target[target_city], route_threat, plan
+		)
+
+	# 构造不可变提交 payload。命令收集模式下，只有统一提交阶段确认
+	# 同一 transaction 的全部命令实际成功后，才消费准备态并扣费。
+	var launched_origins := {}
+	var initial_army_ids := {}
+	var transaction_id := -1
+	var transaction_buffer_start := _ai_command_buffer.size()
+	var immediate_intents: Array[AiCommandIntent] = []
+	if _collect_ai_commands:
+		transaction_id = _next_ai_command_transaction_id
+		_next_ai_command_transaction_id += 1
+		_ai_queue_transaction_id = transaction_id
+	var queued_or_executed := 0
+	for target_city in wave_targets:
+		var origin_cities: Array[int] = []
+		for army in initial_attackers_by_target[target_city] as Array[Army]:
+			var origin_city := _campaign_army_origin(army, nation_id)
+			var attack := ActionCandidate.make(
+				ActionCandidate.Kind.ATTACK, 2000.0,
+				"国家战役第%d波：军%d按统一计划准备%d天，以%.2f倍攻击城市%d"
+					% [nation.campaign_offensive_count + 1, army.id,
+						preparation_days, multiplier, target_city],
+				target_city
+			)
+			attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+			attack.offensive_attack_multiplier = multiplier
+			attack.offensive_bonus_days = bonus_days
+			if _collect_ai_commands:
+				if not _execute_ai_candidate(army, attack):
+					continue
+			else:
+				var immediate_intent := _build_campaign_attack_intent(
+					army, attack
+				)
+				if immediate_intent == null:
+					continue
+				immediate_intents.append(immediate_intent)
+			queued_or_executed += 1
+			initial_army_ids[army.id] = true
+			if origin_city >= 0 and not origin_cities.has(origin_city):
+				origin_cities.append(origin_city)
+		if not origin_cities.is_empty():
+			launched_origins[target_city] = origin_cities
+	if _collect_ai_commands:
+		_ai_queue_transaction_id = -1
+	if queued_or_executed <= 0:
+		return false
+	var expected_initial_commands := 0
+	for target_city in wave_targets:
+		expected_initial_commands += (
+			initial_attackers_by_target[target_city] as Array
+		).size()
+	if queued_or_executed != expected_initial_commands:
+		if _collect_ai_commands:
+			# 一笔战役事务必须整批入队；释放本批预留并重建此前普通
+			# intent 的首段容量，不能留下半批游离攻击命令。
+			_ai_command_buffer.resize(transaction_buffer_start)
+			_rebuild_ai_command_reservations()
+		return false
+	var payload := {
+		"created_day": state.day,
+		"nation_id": nation_id,
+		"expected_offensive_count": nation.campaign_offensive_count,
+		"expected_plan": plan.duplicate_plan(),
+		"expected_preparation_targets": (
+			nation.campaign_preparation_targets.duplicate()
+		),
+		"expected_preparation_assignments": (
+			nation.campaign_preparation_assignments.duplicate(true)
+		),
+		"expected_preparation_group_assignments": (
+			nation.campaign_preparation_group_assignments.duplicate(true)
+		),
+		"expected_full_preparation_targets": (
+			nation.campaign_full_preparation_targets.duplicate()
+		),
+		"expected_preparation_started_day": (
+			nation.campaign_preparation_started_day
+		),
+		"expected_intent_count": initial_army_ids.size(),
+		"objective_city": objective_city,
+		"wave_assignments": wave_assignments.duplicate(true),
+		"wave_echelons": wave_echelons.duplicate(true),
+		"wave_targets": wave_targets.duplicate(),
+		"initial_army_ids": initial_army_ids.duplicate(true),
+		"launched_origins": launched_origins.duplicate(true),
+		"route_plans": route_plans.duplicate(true),
+		"organization_cost": organization_cost,
+		"multiplier": multiplier,
+		"bonus_days": bonus_days,
+	}
+	var participant_fingerprints := {}
+	for army_id in wave_assignments:
+		var participant: Army = army_by_id.get(int(army_id))
+		if participant == null:
+			return false
+		participant_fingerprints[int(army_id)] = (
+			_campaign_transaction_army_fingerprint(participant)
+		)
+	payload["participant_fingerprints"] = participant_fingerprints
+	if _collect_ai_commands:
+		_pending_campaign_launch_transactions[transaction_id] = payload
+		for army_id in wave_assignments:
+			_ai_transaction_reserved_armies[int(army_id)] = transaction_id
+		return true
+	if not _validate_campaign_launch_payload(payload, immediate_intents):
+		return false
+	for intent in immediate_intents:
+		_apply_prevalidated_campaign_intent(intent)
+	_apply_campaign_launch_payload_unchecked(payload)
+	return true
+
+
+func _rebuild_ai_command_reservations() -> void:
+	_ai_planned_armies.clear()
+	_ai_planned_first_legs.clear()
+	_ai_command_sequence.clear()
+	_ai_transaction_reserved_armies.clear()
+	for transaction_id_value in _pending_campaign_launch_transactions:
+		var transaction_id := int(transaction_id_value)
+		var payload: Dictionary = (
+			_pending_campaign_launch_transactions[transaction_id_value]
+		)
+		for army_id in (payload.get("wave_assignments", {}) as Dictionary):
+			_ai_transaction_reserved_armies[int(army_id)] = transaction_id
+	for intent in _ai_command_buffer:
+		_ai_planned_armies[intent.army.id] = true
+		_ai_command_sequence[intent.nation_id] = maxi(
+			int(_ai_command_sequence.get(intent.nation_id, 0)),
+			intent.sequence + 1
+		)
+		if intent.prepared_path.is_empty() or intent.army.state != Army.State.IDLE:
+			continue
+		var first_leg := intent.prepared_path[0]
+		var key := _ai_first_leg_key(
+			intent.nation_id, intent.army.location_city, first_leg
+		)
+		_ai_planned_first_legs[key] = int(
+			_ai_planned_first_legs.get(key, 0)
+		) + intent.army.max_size
+
+
+func _build_campaign_attack_intent(
+	army: Army,
+	candidate: ActionCandidate,
+	transaction_id: int = -1
+) -> AiCommandIntent:
+	if (
+		army == null or army.size <= 0
+		or candidate == null
+		or candidate.kind != ActionCandidate.Kind.ATTACK
+		or not _can_queue_ai_candidate(army, candidate)
+	):
+		return null
+	var prepared_path: Array[int] = []
+	var path_prevalidated := false
+	if army.state == Army.State.IDLE:
+		var field := _cached_ai_path_field(
+			army.owner_nation, army.location_city, army.owner_nation,
+			false, false, candidate.target_city, army.max_size
+		)
+		prepared_path = Pathfinding.reconstruct(
+			field["prev"], army.location_city, candidate.target_city
+		)
+		if prepared_path.is_empty():
+			return null
+		path_prevalidated = true
+	return AiCommandIntent.make(
+		army, candidate, 0, prepared_path, path_prevalidated, transaction_id
+	)
+
+
+func _campaign_transaction_army_fingerprint(army: Army) -> Array:
+	return [
+		army.owner_nation, army.size, army.max_size, army.battle_group_id,
+		army.state, army.location_city, army.move_from, army.move_to,
+		army.on_edge, army.battle_id,
+	]
+
+
+func _campaign_active_wave_present(nation: Nation) -> bool:
+	return (
+		not nation.campaign_plan_targets.is_empty()
+		or not nation.campaign_attack_assignments.is_empty()
+		or not nation.campaign_attack_echelons.is_empty()
+		or not nation.campaign_active_echelons.is_empty()
+		or not nation.campaign_launched_armies.is_empty()
+		or not nation.campaign_echelon_started_days.is_empty()
+		or not nation.campaign_post_capture_plans.is_empty()
+		or nation.campaign_plan_wave >= 0
+	)
+
+
+func _validate_campaign_launch_payload(
+	payload: Dictionary,
+	intents: Array[AiCommandIntent]
+) -> bool:
+	var nation_id := int(payload.get("nation_id", -1))
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return false
+	var nation := state.nations[nation_id]
+	var organization_cost := int(payload.get("organization_cost", 0))
+	if (
+		int(payload.get("created_day", -1)) != state.day
+		or int(payload.get("expected_offensive_count", -1))
+			!= nation.campaign_offensive_count
+		or organization_cost < 0
+		or nation.treasury_gold < organization_cost
+		or _campaign_active_wave_present(nation)
+		or nation.campaign_preparation_plan == null
+	):
+		return false
+	var expected_plan: CampaignAllocationPlan = payload.get("expected_plan")
+	if (
+		expected_plan == null
+		or not nation.campaign_preparation_plan.same_allocation(expected_plan)
+		or nation.campaign_preparation_targets
+			!= payload.get("expected_preparation_targets", [])
+		or nation.campaign_preparation_assignments
+			!= payload.get("expected_preparation_assignments", {})
+		or nation.campaign_preparation_group_assignments
+			!= payload.get("expected_preparation_group_assignments", {})
+		or nation.campaign_full_preparation_targets
+			!= payload.get("expected_full_preparation_targets", [])
+		or nation.campaign_preparation_started_day
+			!= int(payload.get("expected_preparation_started_day", -1))
+		or intents.size() != int(payload.get("expected_intent_count", -1))
+	):
+		return false
+	var initial_ids: Dictionary = payload.get("initial_army_ids", {})
+	var wave_assignments: Dictionary = payload.get("wave_assignments", {})
+	var wave_echelons: Dictionary = payload.get("wave_echelons", {})
+	for target_value in payload.get("wave_targets", []):
+		var target_city := int(target_value)
+		if (
+			target_city < 0 or target_city >= state.cities.size()
+			or not state.is_enemy(
+				nation_id, state.cities[target_city].owner_nation
+			)
+		):
+			return false
+	if wave_assignments.keys().size() != wave_echelons.keys().size():
+		return false
+	var participant_armies: Array[Army] = []
+	var expected_fingerprints: Dictionary = payload.get(
+		"participant_fingerprints", {}
+	)
+	for army_id_value in wave_assignments:
+		var army_id := int(army_id_value)
+		var participant: Army = null
+		for candidate_army in state.armies:
+			if candidate_army.id == army_id:
+				participant = candidate_army
+				break
+		var target_city := int(wave_assignments[army_id_value])
+		if (
+			participant == null or participant.size <= 0
+			or participant.owner_nation != nation_id
+			or not wave_echelons.has(army_id_value)
+			or expected_plan.target_for_group(participant.battle_group_id)
+				!= target_city
+			or _campaign_transaction_army_fingerprint(participant)
+				!= expected_fingerprints.get(army_id, [])
+		):
+			return false
+		participant_armies.append(participant)
+	var current_base_cost := offensive_organization_gold_cost(
+		participant_armies
+	)
+	var current_cost := int(ceil(
+		float(current_base_cost)
+			* (1.0 - DiplomacyAI.unification_era_factor(state))
+	))
+	if current_cost != organization_cost:
+		return false
+	var seen_ids := {}
+	for intent in intents:
+		if (
+			intent == null or intent.army == null
+			or intent.nation_id != nation_id
+			or intent.candidate.kind != ActionCandidate.Kind.ATTACK
+			or seen_ids.has(intent.army.id)
+			or not initial_ids.has(intent.army.id)
+			or intent.army.size <= 0
+			or intent.army.owner_nation != nation_id
+			or int(wave_assignments.get(intent.army.id, -1))
+				!= intent.candidate.target_city
+			or int(wave_echelons.get(intent.army.id, -1)) != 0
+		):
+			return false
+		seen_ids[intent.army.id] = true
+		if intent.army.state == Army.State.HOLDING:
+			if intent.candidate.target_city not in [
+				intent.army.move_from, intent.army.move_to
+			]:
+				return false
+			continue
+		if (
+			intent.army.state != Army.State.IDLE
+			or intent.prepared_path.is_empty()
+			or intent.prepared_path[-1] != intent.candidate.target_city
+		):
+			return false
+		var from_city := intent.army.location_city
+		for to_city in intent.prepared_path:
+			var edge := state.edge_of(from_city, to_city)
+			if edge == null or edge.max_manpower < intent.army.max_size:
+				return false
+			from_city = to_city
+		# 同批多军可共享首段并排队；_begin_next_leg 对暂时满载的边
+		# 保留完整路径和 move_to=-1，待后续日容量释放，不是事务失败。
+	if seen_ids.size() != initial_ids.size():
+		return false
+	return true
+
+
+func _apply_prevalidated_campaign_intent(intent: AiCommandIntent) -> void:
+	var army := intent.army
+	var candidate := intent.candidate
+	if army.state == Army.State.HOLDING:
+		if candidate.target_city == army.move_from:
+			var old_from := army.move_from
+			army.move_from = army.move_to
+			army.move_to = old_from
+			army.move_progress = 1.0 - army.move_progress
+		_set_occupation_claimant_for_crossing(
+			army, army.move_from, army.move_to
+		)
+		army.state = Army.State.MOVING
+		army.holding_days = 0
+		army.hold_target_progress = -1.0
+		army.path.clear()
+		_record_ai_order(army, candidate)
+		return
+	army.path = intent.prepared_path.duplicate()
+	army.hold_target_progress = -1.0
+	army.state = Army.State.MOVING
+	army.move_from = army.location_city
+	army.move_to = -1
+	army.move_progress = 0.0
+	_begin_next_leg(army)
+	_record_ai_order(army, candidate)
+
+
+func _apply_campaign_launch_payload_unchecked(payload: Dictionary) -> void:
+	var nation_id := int(payload["nation_id"])
+	var nation := state.nations[nation_id]
+	var organization_cost := int(payload["organization_cost"])
+	var wave_targets: Array[int] = []
+	wave_targets.assign(payload["wave_targets"])
+	var initial_army_ids: Dictionary = payload["initial_army_ids"]
+	var route_plans: Dictionary = payload["route_plans"]
+	nation.campaign_attack_assignments = (
+		(payload["wave_assignments"] as Dictionary).duplicate(true)
+	)
+	nation.campaign_attack_echelons = (
+		(payload["wave_echelons"] as Dictionary).duplicate(true)
+	)
+	nation.campaign_plan_targets = wave_targets
+	nation.campaign_plan_wave = int(payload["expected_offensive_count"]) + 1
+	nation.campaign_plan_primary_city = int(payload["objective_city"])
+	nation.campaign_active_echelons.clear()
+	nation.campaign_launched_armies = initial_army_ids.duplicate(true)
+	nation.campaign_echelon_started_days.clear()
+	for target_city in wave_targets:
+		var target_launched := false
+		for army_id in initial_army_ids:
+			if int(nation.campaign_attack_assignments.get(army_id, -1)) == target_city:
+				target_launched = true
+				break
+		if not target_launched:
+			continue
+		nation.campaign_active_echelons[target_city] = 0
+		nation.campaign_echelon_started_days[target_city] = state.day
+		var route_plan: Dictionary = route_plans.get(target_city, {})
+		if route_plan.is_empty():
+			nation.campaign_post_capture_plans.erase(target_city)
+		else:
+			nation.campaign_post_capture_plans[target_city] = route_plan
+	nation.treasury_gold -= organization_cost
+	nation.last_offensive_gold_cost = organization_cost
+	nation.last_offensive_gold_day = state.day
+	nation.campaign_launched_attack_multiplier = float(payload["multiplier"])
+	nation.campaign_launched_bonus_days = int(payload["bonus_days"])
+	nation.campaign_last_offensive_day = state.day
+	nation.campaign_theater_anchor_city = int(payload["objective_city"])
+	nation.campaign_theater_started_day = state.day
+	_clear_campaign_preparation_plan(nation_id)
+	nation.campaign_next_offensive_day = (
+		state.day + _campaign_offensive_interval(nation_id)
+	)
+	nation.campaign_offensive_count += 1
+	var launched_origins: Dictionary = payload["launched_origins"]
+	for target_city in launched_origins:
+		state.add_campaign_visual_event(
+			nation_id, int(target_city), launched_origins[target_city],
+			nation.campaign_offensive_count, CAMPAIGN_ARROW_DURATION_DAYS
+		)
 
 
 func _campaign_initial_attackers(
@@ -8469,6 +9592,40 @@ func _campaign_two_step_route_plan(
 				-1
 			)
 		),
+		"heavy_army_id": heavy_army_id,
+		"execution_army_id": route_army.id,
+		"enemy_nation": defender_nation,
+		"created_day": state.day,
+		"steps": CAMPAIGN_REQUIRED_ATTACK_STEPS,
+	}
+
+
+func _campaign_two_step_route_plan_for_group(
+	nation_id: int,
+	target_city: int,
+	target_attackers: Array[Army],
+	threat: ThreatField,
+	plan: CampaignAllocationPlan
+) -> Dictionary:
+	if target_attackers.is_empty() or plan == null:
+		return {}
+	var route_army: Army = target_attackers[0]
+	var heavy_army_id := -1
+	for candidate in target_attackers:
+		if candidate.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+			route_army = candidate
+			heavy_army_id = candidate.id
+			break
+	var defender_nation := state.cities[target_city].owner_nation
+	var next_step := _campaign_post_capture_target(
+		route_army, state.cities[target_city], threat, defender_nation
+	)
+	if next_step.is_empty():
+		return {}
+	var groups := plan.groups_for_target(target_city)
+	return {
+		"next_city": int(next_step["city_id"]),
+		"group_id": groups[0] if not groups.is_empty() else -1,
 		"heavy_army_id": heavy_army_id,
 		"execution_army_id": route_army.id,
 		"enemy_nation": defender_nation,
@@ -9356,7 +10513,8 @@ func _manage_campaign_offensive(
 		objective_city,
 		defense_plan,
 		coordinator,
-		true
+		true,
+		decision_context
 	)
 	if not plan_ready:
 		var fallback := _weak_garrison_campaign_fallback(
@@ -9370,7 +10528,8 @@ func _manage_campaign_offensive(
 				objective_city,
 				defense_plan,
 				coordinator,
-				true
+				true,
+				decision_context
 			)
 			if plan_ready:
 				# 在下一轮外交/战役评估前固定当前战区方向，避免又被
@@ -9420,8 +10579,7 @@ func _manage_campaign_offensive(
 		if not can_launch and not recent_legal_reclamation:
 			continue
 		var required := _campaign_minimum_staged_troops(
-			nation_id,
-			target_city
+			nation_id, target_city
 		)
 		var staged_armies: Array[Army] = (
 			decision_context[
@@ -9450,7 +10608,32 @@ func _manage_campaign_offensive(
 		if decision_context.is_empty():
 			for army in staged_armies:
 				staged_troops += army.size
-		if staged_troops < required:
+		var planned_groups_ready := true
+		if state.uses_heightmap and nation.campaign_preparation_plan != null:
+			var planned_groups := (
+				nation.campaign_preparation_plan.groups_for_target(
+					target_city
+				)
+			)
+			var demand: Dictionary = (
+				nation.campaign_preparation_plan.target_demands.get(
+					target_city, {}
+				)
+			)
+			var minimum_groups := (
+				CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+				if bool(demand.get("is_decisive", false))
+				else 1
+			)
+			var staged_group_ids := {}
+			for staged_army in staged_armies:
+				if staged_army.battle_group_id >= 0:
+					staged_group_ids[staged_army.battle_group_id] = true
+			planned_groups_ready = (
+				planned_groups.size() >= minimum_groups
+				and staged_group_ids.size() >= minimum_groups
+			)
+		if staged_troops < required or not planned_groups_ready:
 			continue
 		if threat == null:
 			threat = ThreatField.build(
@@ -10032,12 +11215,22 @@ func _clear_ai_command_collection() -> void:
 	_ai_planned_first_legs.clear()
 	_ai_command_sequence.clear()
 	_ai_snapshot_armies.clear()
+	_ai_queue_transaction_id = -1
+	_pending_campaign_launch_transactions.clear()
+	_ai_transaction_reserved_armies.clear()
 
 
 func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
+	var reserved_transaction := int(
+		_ai_transaction_reserved_armies.get(army.id, -1)
+	) if army != null else -1
 	if (
 		army == null
 		or army.size <= 0
+		or (
+			reserved_transaction >= 0
+			and reserved_transaction != _ai_queue_transaction_id
+		)
 		or not _ai_snapshot_armies.has(army.id)
 		or _ai_planned_armies.has(army.id)
 		or not _can_queue_ai_candidate(army, candidate)
@@ -10106,6 +11299,7 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			+ reserved_manpower
 			+ army.max_size
 			> first_edge.max_manpower
+			and _ai_queue_transaction_id < 0
 		):
 			return false
 		_ai_planned_first_legs[leg_key] = (
@@ -10120,7 +11314,8 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 		candidate,
 		sequence,
 		prepared_path,
-		path_prevalidated
+		path_prevalidated,
+		_ai_queue_transaction_id
 	))
 	_ai_planned_armies[army.id] = true
 	return true
@@ -10194,31 +11389,68 @@ func _commit_ai_command_collection(
 				< int(nation_rank.get(b.nation_id, 999999))
 			)
 	)
+	var processed_transactions := {}
 	for intent in _ai_command_buffer:
+		if intent.transaction_id >= 0:
+			var transaction_id := intent.transaction_id
+			if processed_transactions.has(transaction_id):
+				continue
+			processed_transactions[transaction_id] = true
+			var transaction_intents: Array[AiCommandIntent] = []
+			for candidate_intent in _ai_command_buffer:
+				if candidate_intent.transaction_id == transaction_id:
+					transaction_intents.append(candidate_intent)
+			var payload: Dictionary = (
+				_pending_campaign_launch_transactions.get(
+					transaction_id, {}
+				)
+			)
+			if not _validate_campaign_launch_payload(
+				payload, transaction_intents
+			):
+				_pending_campaign_launch_transactions.erase(transaction_id)
+				_release_ai_transaction_armies(transaction_id)
+				_record_ai_command_commit_failure(
+					intent, "campaign_transaction_preflight"
+				)
+				continue
+			_pending_campaign_launch_transactions.erase(transaction_id)
+			_release_ai_transaction_armies(transaction_id)
+			for transaction_intent in transaction_intents:
+				_apply_prevalidated_campaign_intent(transaction_intent)
+			_apply_campaign_launch_payload_unchecked(payload)
+			continue
 		if not _execute_ai_candidate(
-			intent.army,
-			intent.candidate,
-			intent.prepared_path,
+			intent.army, intent.candidate, intent.prepared_path,
 			intent.path_prevalidated
 		):
-			ai_last_command_commit_failures += 1
-			ai_command_commit_failure_total += 1
-			if ai_command_commit_failure_log.size() < 20:
-				ai_command_commit_failure_log.append(
-					(
-						"day=%d army=%d nation=%d state=%d kind=%d target=%d "
-						+ "reason=%s"
-					) % [
-						state.day,
-						intent.army.id,
-						intent.army.owner_nation,
-						intent.army.state,
-						intent.candidate.kind,
-						intent.candidate.target_city,
-						intent.candidate.reason,
-					]
-				)
+			_record_ai_command_commit_failure(intent, "ordinary_intent")
 	_clear_ai_command_collection()
+
+
+func _release_ai_transaction_armies(transaction_id: int) -> void:
+	for army_id in _ai_transaction_reserved_armies.keys().duplicate():
+		if int(_ai_transaction_reserved_armies[army_id]) == transaction_id:
+			_ai_transaction_reserved_armies.erase(army_id)
+
+
+func _record_ai_command_commit_failure(
+	intent: AiCommandIntent,
+	stage: String
+) -> void:
+	ai_last_command_commit_failures += 1
+	ai_command_commit_failure_total += 1
+	if ai_command_commit_failure_log.size() < 20:
+		ai_command_commit_failure_log.append(
+			(
+				"day=%d army=%d nation=%d state=%d kind=%d target=%d "
+				+ "stage=%s reason=%s"
+			) % [
+				state.day, intent.army.id, intent.army.owner_nation,
+				intent.army.state, intent.candidate.kind,
+				intent.candidate.target_city, stage, intent.candidate.reason,
+			]
+		)
 
 
 static func _ai_first_leg_key(
@@ -11903,7 +13135,11 @@ func _execute_campaign_post_capture_plan(
 			nation.campaign_launched_armies[
 				execution_army.id
 			] = true
-			if not nation.campaign_plan_targets.has(next_city):
+			if (
+				not nation.campaign_plan_targets.has(next_city)
+				and nation.campaign_plan_targets.size()
+					< CAMPAIGN_MAX_PARALLEL_TARGETS
+			):
 				nation.campaign_plan_targets.append(next_city)
 			state.add_campaign_visual_event(
 				execution_army.owner_nation,
