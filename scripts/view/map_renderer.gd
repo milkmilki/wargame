@@ -56,6 +56,7 @@ const BORDER_ALLIED := Color(0.025, 0.095, 0.235, 1.0)
 const BORDER_ENEMY := Color(0.285, 0.025, 0.018, 1.0)
 const BORDER_SUZERAINTY := Color(0.18, 0.19, 0.20, 1.0)
 const POLITICAL_MAP_DEFAULT_STRENGTH: float = 1.0
+const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
 const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
 const VASSAL_BRIGHTNESS_STEP: float = 0.15
 const CAMPAIGN_ARROW_TEXTURE := preload(
@@ -85,7 +86,9 @@ var _side_margin: float = BASE_SIDE_MARGIN
 var _font: Font
 var _terrain_texture: Texture2D
 var _province_texture: ImageTexture
+var _political_base_texture: ImageTexture
 var _political_texture: ImageTexture
+var _political_line_texture: ImageTexture
 var _province_strength: float = POLITICAL_MAP_DEFAULT_STRENGTH
 var _province_boundary_segments := PackedVector2Array()
 var _coast_segments := PackedVector2Array()
@@ -158,7 +161,9 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 			_on_runtime_day_committed
 		)
 	_province_texture = null
+	_political_base_texture = null
 	_political_texture = null
+	_political_line_texture = null
 	_province_boundary_segments = PackedVector2Array()
 	_coast_segments = PackedVector2Array()
 	_nation_boundary_segments = PackedVector2Array()
@@ -1524,6 +1529,10 @@ func _draw_paper_canvas() -> void:
 func _draw_terrain_background() -> void:
 	if not state.uses_heightmap or _terrain_texture == null:
 		return
+	# Satellite imagery belongs exclusively to exact terrain mode. Political
+	# modes draw their opaque white low-poly-equivalent base in fills below.
+	if _province_strength > 0.0:
+		return
 	var texture_size := Vector2(_terrain_texture.get_size())
 	var normalized_region := state.map_source_region_normalized
 	var source_region := Rect2(
@@ -1583,9 +1592,13 @@ func _ensure_province_visual_cache() -> void:
 		or _province_ownership_revision != state.ownership_revision
 		or _province_diplomacy_revision != state.diplomacy_revision
 	):
-		var image := build_province_overlay_image(state)
-		_province_texture = ImageTexture.create_from_image(image)
-		var political_image := image.duplicate()
+		var canvas := build_political_canvas_images(state)
+		var political_image: Image = canvas["fill"]
+		var political_line_image: Image = canvas["lines"]
+		_province_texture = ImageTexture.create_from_image(
+			political_image
+		)
+		var political_base_image := political_image.duplicate()
 		var packed_height := (
 			load(GameState.terrain_map_path()) as Texture2D
 		).get_image()
@@ -1618,8 +1631,25 @@ func _ensure_province_visual_cache() -> void:
 							Color(0.025, 0.060, 0.130), deep_mix
 						)
 					)
+					political_base_image.set_pixel(
+						political_x, political_y,
+						POLITICAL_LAND_BASE_COLOR
+					)
+				else:
+					# Political mode paints on a neutral white map base. Satellite
+					# RGB belongs exclusively to the exact 0% terrain mode.
+					political_base_image.set_pixel(
+						political_x, political_y,
+						POLITICAL_LAND_BASE_COLOR
+					)
+		_political_base_texture = ImageTexture.create_from_image(
+			political_base_image
+		)
 		_political_texture = ImageTexture.create_from_image(
 			political_image
+		)
+		_political_line_texture = ImageTexture.create_from_image(
+			political_line_image
 		)
 		if geometry.is_empty():
 			geometry = build_province_boundary_segments(state)
@@ -1661,27 +1691,141 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 			image.set_pixel(x, y, base)
 	return image
 
-static func build_smooth_province_overlay_image(
+
+## One categorical paint canvas is the shared source for political fill and
+## border ink. Both images use the same nearest-neighbor pixel grid, so a line
+## can never drift away from the region it encloses.
+static func build_political_canvas_images(
 	game_state: GameState
-) -> Image:
+) -> Dictionary:
 	var source := build_province_overlay_image(game_state)
 	if source == null or source.is_empty():
-		return source
-	var target := source.duplicate()
-	target.resize(
+		return {"fill": source, "lines": source}
+	var fill := source.duplicate()
+	fill.resize(
 		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
 		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
-		Image.INTERPOLATE_CUBIC
+		Image.INTERPOLATE_NEAREST
 	)
-	# Interpolation may create colored transparent pixels outside the province
-	# mask. Clear them; the signed 0m height mask performs the final coast clip.
-	for y in range(target.get_height()):
-		for x in range(target.get_width()):
-			var color: Color = target.get_pixel(x, y)
-			if color.a <= 0.01:
-				target.set_pixel(x, y, Color.TRANSPARENT)
-	return target
+	var terrain_fill := _dilate_political_fill(
+		fill, PROVINCE_VISUAL_SUPERSAMPLE * 2
+	)
+	var lines := Image.create(
+		fill.get_width(), fill.get_height(), false, Image.FORMAT_RGBA8
+	)
+	lines.fill(Color.TRANSPARENT)
+	var size := game_state.province_map_size
+	for y in range(size.y):
+		for x in range(size.x):
+			var province_id := game_state.province_ids[y * size.x + x]
+			if x + 1 < size.x:
+				var right := game_state.province_ids[y * size.x + x + 1]
+				if right != province_id:
+					var style := _political_canvas_border_style(
+						game_state, province_id, right
+					)
+					_paint_canvas_vertical_border(
+						lines,
+						(x + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
+						y * PROVINCE_VISUAL_SUPERSAMPLE,
+						(y + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
+						style["color"], int(style["width"])
+					)
+			if y + 1 < size.y:
+				var bottom := game_state.province_ids[(y + 1) * size.x + x]
+				if bottom != province_id:
+					var style := _political_canvas_border_style(
+						game_state, province_id, bottom
+					)
+					_paint_canvas_horizontal_border(
+						lines,
+						x * PROVINCE_VISUAL_SUPERSAMPLE,
+						(x + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
+						(y + 1) * PROVINCE_VISUAL_SUPERSAMPLE,
+						style["color"], int(style["width"])
+					)
+	return {
+		"fill": fill,
+		"terrain_fill": terrain_fill,
+		"lines": lines,
+	}
 
+
+static func _dilate_political_fill(
+	source: Image, radius: int
+) -> Image:
+	var result := source.duplicate()
+	for _pass in range(maxi(radius, 0)):
+		var previous := result.duplicate()
+		var changed := false
+		for y in range(result.get_height()):
+			for x in range(result.get_width()):
+				if previous.get_pixel(x, y).a > 0.5:
+					continue
+				for offset in [
+					Vector2i.LEFT, Vector2i.RIGHT,
+					Vector2i.UP, Vector2i.DOWN,
+				]:
+					var sample: Vector2i = Vector2i(x, y) + offset
+					if (
+						sample.x < 0 or sample.y < 0
+						or sample.x >= result.get_width()
+						or sample.y >= result.get_height()
+					):
+						continue
+					var color: Color = previous.get_pixelv(sample)
+					if color.a > 0.5:
+						result.set_pixel(x, y, color)
+						changed = true
+						break
+		if not changed:
+			break
+	return result
+
+
+static func _political_canvas_border_style(
+	game_state: GameState, province_a: int, province_b: int
+) -> Dictionary:
+	if province_a < 0 or province_b < 0:
+		# Coast is not a province-grid line. The terrain Shader draws it from
+		# the modeled 0m contour, which is the same boundary used for ocean fill.
+		return {"color": Color.TRANSPARENT, "width": 0}
+	if not _province_owners_differ(game_state, province_a, province_b):
+		return {"color": Color(0.10, 0.12, 0.12, 1.0), "width": 1}
+	if _province_owners_same_peaceful_suzerainty(
+		game_state, province_a, province_b
+	):
+		return {"color": BORDER_SUZERAINTY, "width": 3}
+	if _province_owners_allied(game_state, province_a, province_b):
+		return {"color": BORDER_ALLIED, "width": 3}
+	if _province_owners_enemy(game_state, province_a, province_b):
+		return {"color": BORDER_ENEMY, "width": 3}
+	return {"color": BORDER_NEUTRAL, "width": 3}
+
+
+static func _paint_canvas_vertical_border(
+	image: Image, x: int, y_from: int, y_to: int, color: Color, width: int
+) -> void:
+	if width <= 0:
+		return
+	var half := width / 2
+	for py in range(y_from, y_to):
+		for px in range(x - half, x - half + width):
+			if px >= 0 and px < image.get_width():
+				image.set_pixel(px, py, color)
+
+
+static func _paint_canvas_horizontal_border(
+	image: Image, x_from: int, x_to: int, y: int, color: Color, width: int
+) -> void:
+	if width <= 0:
+		return
+	var half := width / 2
+	for py in range(y - half, y - half + width):
+		if py < 0 or py >= image.get_height():
+			continue
+		for px in range(x_from, x_to):
+			image.set_pixel(px, py, color)
 
 static func paper_nation_color(color: Color) -> Color:
 	return GameState.normalize_nation_color(color)
@@ -2311,14 +2455,32 @@ static func _boundary_edge_key(
 
 
 func _draw_province_fills() -> void:
-	if _political_texture == null or _province_strength <= 0.0:
+	if (
+		_political_texture == null
+		or _political_base_texture == null
+		or _province_strength <= 0.0
+	):
 		return
+	# Any political mode first replaces the satellite with one neutral white
+	# primer. Nation colors and unowned ocean color then share the same opacity.
+	draw_texture_rect(
+		_political_base_texture,
+		Rect2(_origin, _map_size),
+		false,
+		Color.WHITE
+	)
 	draw_texture_rect(
 		_political_texture,
 		Rect2(_origin, _map_size),
 		false,
 		Color(1.0, 1.0, 1.0, _province_strength)
 	)
+	if _political_line_texture != null:
+		draw_texture_rect(
+			_political_line_texture,
+			Rect2(_origin, _map_size),
+			false, Color.WHITE
+		)
 
 
 func set_province_strength(strength: float) -> void:
@@ -2337,6 +2499,8 @@ func _normalized_segments_to_pixels(
 
 
 func _draw_province_boundaries() -> void:
+	if _province_strength > 0.0:
+		return
 	if not _province_boundary_segments.is_empty():
 		draw_multiline(
 			_normalized_segments_to_pixels(_province_boundary_segments),
@@ -2355,6 +2519,10 @@ func _draw_national_boundaries() -> void:
 			maxf(1.20 * _display_scale, 1.0),
 			true
 		)
+	if _province_strength > 0.0:
+		# Province/nation lines are already painted into the same categorical
+		# texture as the fill. Only the packed 0m coast remains a separate 2D line.
+		return
 	if not _nation_boundary_segments.is_empty():
 		var nation_pixels := _normalized_segments_to_pixels(
 			_nation_boundary_segments

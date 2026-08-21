@@ -73,28 +73,33 @@ func _run() -> void:
 	var terrain_normals: PackedVector3Array = terrain_arrays[
 		Mesh.ARRAY_NORMAL
 	]
-	var expected_vertices := (
+	var terrain_indices: PackedInt32Array = terrain_arrays[
+		Mesh.ARRAY_INDEX
+	]
+	var expected_indices := (
 		(map_3d._terrain.resolution.x - 1)
 		* (map_3d._terrain.resolution.y - 1)
 		* 6
 	)
-	var flat_faces := terrain_normals.size() == terrain_vertices.size()
-	var has_facet_variation := false
-	for face_start in range(0, terrain_normals.size(), 3):
-		if face_start + 2 >= terrain_normals.size():
-			flat_faces = false
-			break
-		var face_normal := terrain_normals[face_start]
-		flat_faces = flat_faces and (
-			face_normal.distance_to(terrain_normals[face_start + 1]) < 0.000001
-			and face_normal.distance_to(terrain_normals[face_start + 2]) < 0.000001
-			and face_normal.y >= -0.000001
+	var expected_vertices := (
+		map_3d._terrain.resolution.x
+		* map_3d._terrain.resolution.y
+	)
+	var smooth_normals_valid := (
+		terrain_normals.size() == expected_vertices
+		and terrain_vertices.size() == expected_vertices
+	)
+	var has_normal_variation := false
+	for normal_index in range(terrain_normals.size()):
+		var normal := terrain_normals[normal_index]
+		smooth_normals_valid = smooth_normals_valid and (
+			normal.is_normalized() and normal.y >= -0.000001
 		)
 		if (
-			face_start >= 3
-			and face_normal.distance_to(terrain_normals[face_start - 3]) > 0.0001
+			normal_index > 0
+			and normal.distance_to(terrain_normals[normal_index - 1]) > 0.0001
 		):
-			has_facet_variation = true
+			has_normal_variation = true
 	var terrain_material := (
 		map_3d._terrain.mesh_instance().material_override
 		as ShaderMaterial
@@ -115,6 +120,32 @@ func _run() -> void:
 	var political_geometry := (
 		MapRenderer.build_province_boundary_segments(state)
 	)
+	var political_canvas := MapRenderer.build_political_canvas_images(state)
+	var canvas_fill: Image = political_canvas["fill"]
+	var canvas_lines: Image = political_canvas["lines"]
+	var canvas_line_pixels := 0
+	var canvas_lines_touch_fill := true
+	for canvas_y in range(canvas_lines.get_height()):
+		for canvas_x in range(canvas_lines.get_width()):
+			if canvas_lines.get_pixel(canvas_x, canvas_y).a <= 0.5:
+				continue
+			canvas_line_pixels += 1
+			var touches_fill := false
+			for offset in [
+				Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN,
+			]:
+				var sample: Vector2i = (
+					Vector2i(canvas_x, canvas_y) + offset
+				)
+				if (
+					sample.x >= 0 and sample.y >= 0
+					and sample.x < canvas_fill.get_width()
+					and sample.y < canvas_fill.get_height()
+					and canvas_fill.get_pixelv(sample).a > 0.5
+				):
+					touches_fill = true
+					break
+			canvas_lines_touch_fill = canvas_lines_touch_fill and touches_fill
 	var zero_meter_city_boundary: PackedVector2Array = (
 		political_geometry["coast"]
 	)
@@ -203,17 +234,28 @@ func _run() -> void:
 		map_3d._update_edge_selection()
 	var checks := {
 		"terrain_mesh": terrain_mesh != null and terrain_mesh.get_surface_count() > 0,
-		"terrain_unindexed_low_poly": (
+		"terrain_indexed_low_poly": (
 			terrain_vertices.size() == expected_vertices
-			and (terrain_arrays[Mesh.ARRAY_INDEX] == null
-				or (terrain_arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty())
+			and terrain_indices.size() == expected_indices
 		),
-		"terrain_flat_faces": flat_faces and has_facet_variation,
-		"alpha_threshold": is_equal_approx(
-			float(terrain_material.get_shader_parameter(
-				"land_alpha_threshold"
-			)),
-			TerrainMapGenerator.ALPHA_THRESHOLD
+		"terrain_smooth_normals": (
+			smooth_normals_valid and has_normal_variation
+		),
+		"geometry_ocean_threshold": (
+			is_equal_approx(
+				float(terrain_material.get_shader_parameter(
+					"ocean_height_threshold"
+				)),
+				StrategicTerrainRenderer.OCEAN_HEIGHT_THRESHOLD
+			)
+			and terrain_shader_code.contains("terrain_elevation = VERTEX.y")
+			and terrain_shader_code.contains(
+				"step(ocean_height_threshold, terrain_elevation)"
+			)
+			and terrain_shader_code.contains(
+				"ocean_height_threshold - terrain_elevation"
+			)
+			and not terrain_shader_code.contains("height_texture")
 		),
 		"default_political_mode": is_equal_approx(
 			float(terrain_material.get_shader_parameter(
@@ -225,6 +267,32 @@ func _run() -> void:
 			not terrain_shader_code.contains("unshaded")
 			and not terrain_shader_code.contains("height_left")
 			and not terrain_shader_code.contains("detail_normal_strength")
+		),
+		"categorical_political_paint": (
+			terrain_shader_code.contains("filter_nearest")
+			and terrain_shader_code.contains("texelFetch(province_texture")
+			and terrain_shader_code.contains("step(0.5, province.a)")
+			and not terrain_shader_code.contains("unclaimed_mix")
+		),
+		"white_base_political_modes": (
+			terrain_shader_code.contains("political_land_base_color")
+			and terrain_shader_code.contains(
+				"white_low_poly_base = political_land_base_color"
+			)
+			and terrain_shader_code.contains("political_target")
+			and terrain_shader_code.contains("province_strength")
+			and terrain_shader_code.contains("province_strength <= 0.000001")
+			and terrain_shader_code.contains("only mode that samples satellite RGB")
+		),
+		"single_canvas_lines": (
+			map_3d._political_line_texture != null
+			and map_3d._political_line_texture.get_size()
+				== map_3d._province_texture.get_size()
+			and terrain_shader_code.contains("political_line_texture")
+			and terrain_shader_code.contains("political_line.a * hard_land")
+			and map_3d._boundaries.mesh == null
+			and canvas_line_pixels > 0
+			and canvas_lines_touch_fill
 		),
 		"vertical_plane_light": (
 			vertical_light_direction.distance_to(Vector3.DOWN) < 0.0001
@@ -263,8 +331,8 @@ func _run() -> void:
 			and shallow_sea.b > shallow_sea.r
 			and deep_sea.b > deep_sea.r
 		),
-		"hard_coast_height_sampling": terrain_shader_code.contains(
-			"texelFetch(height_texture"
+		"strict_zero_meter_coast": terrain_shader_code.contains(
+			"strictly below the 0m contour"
 		),
 		"overview_angle": absf(
 			overview_angle
@@ -308,7 +376,9 @@ func _run() -> void:
 		"zero_meter_city_boundary_retained": (
 			not zero_meter_city_boundary.is_empty()
 			and zero_meter_city_boundary.size() % 2 == 0
-			and map_3d._boundaries.mesh != null
+			and terrain_shader_code.contains("coast_band")
+			and terrain_shader_code.contains("fwidth(terrain_elevation)")
+			and terrain_shader_code.contains("step(0.00001, elevation_width)")
 		),
 		"selection": map_3d._selection.visible,
 		"edge_selection": selected_edge != null and map_3d._edge_selection.mesh != null,

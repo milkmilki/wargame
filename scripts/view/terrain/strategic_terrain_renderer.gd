@@ -1,6 +1,6 @@
 class_name StrategicTerrainRenderer
 extends Node3D
-## 直接采样权威高度图，输出带独立面法线的低模 ArrayMesh，
+## 直接采样权威高度图，输出共享顶点、海陆域内平滑法线的低模 ArrayMesh，
 ## 并提供与逻辑地图共用的 UV -> 世界坐标/高度映射。
 
 signal generation_finished
@@ -14,8 +14,11 @@ var world_size := Vector2(64.0, 40.0)
 var height_scale: float = 7.0
 var height_steps: int = 24
 var smoothing_passes: int = 2
-const SEA_FLOOR_HEIGHT: float = -0.72
-const WATER_SURFACE_HEIGHT: float = -0.10
+const OCEAN_HEIGHT_THRESHOLD: float = 0.0
+const SHALLOW_SEA_HEIGHT: float = -0.06
+const SEA_FLOOR_HEIGHT: float = -2.20
+## Compatibility name for callers that position legacy water artifacts.
+const WATER_SURFACE_HEIGHT: float = OCEAN_HEIGHT_THRESHOLD
 const UNCLAIMED_POLITICAL_COLOR := Color(0.035, 0.090, 0.190)
 const SHALLOW_SEA_COLOR := Color(0.090, 0.310, 0.470)
 const DEEP_SEA_COLOR := Color(0.025, 0.060, 0.130)
@@ -55,6 +58,11 @@ func set_province_texture(texture: Texture2D) -> void:
 	_material.set_shader_parameter("province_texture", texture)
 
 
+func set_political_line_texture(texture: Texture2D) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter("political_line_texture", texture)
+
+
 func set_province_strength(strength: float) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
@@ -68,7 +76,6 @@ func set_height_texture(
 	source_region: Rect2
 ) -> void:
 	_ensure_render_nodes()
-	_material.set_shader_parameter("height_texture", texture)
 	_material.set_shader_parameter(
 		"height_source_origin",
 		source_region.position
@@ -92,10 +99,6 @@ func generate_from_height_texture(
 ) -> void:
 	_reset()
 	set_height_texture(texture, source_region)
-	_material.set_shader_parameter(
-		"land_alpha_threshold",
-		alpha_threshold
-	)
 	if texture == null:
 		generation_finished.emit()
 		return
@@ -108,9 +111,9 @@ func generate_from_height_texture(
 	_land_cell_count = 0
 	var image_size := Vector2(image.get_size())
 	for z in range(resolution.y):
-		var v := (float(z) + 0.5) / float(resolution.y)
+		var v := float(z) / float(maxi(resolution.y - 1, 1))
 		for x in range(resolution.x):
-			var u := (float(x) + 0.5) / float(resolution.x)
+			var u := float(x) / float(maxi(resolution.x - 1, 1))
 			var source_uv := (
 				source_region.position
 				+ Vector2(u, v) * source_region.size
@@ -131,7 +134,7 @@ func generate_from_height_texture(
 			if not TerrainMapGenerator.packed_is_land(pixel):
 				var sea_depth := -TerrainMapGenerator.packed_signed_elevation(pixel)
 				_height_samples[z * resolution.x + x] = lerpf(
-					WATER_SURFACE_HEIGHT - 0.04,
+					SHALLOW_SEA_HEIGHT,
 					SEA_FLOOR_HEIGHT, sea_depth
 				)
 				continue
@@ -230,7 +233,7 @@ func height_at_map_position(map_position: Vector2) -> float:
 
 
 func is_water_at_map_position(map_position: Vector2) -> bool:
-	return height_at_map_position(map_position) < WATER_SURFACE_HEIGHT
+	return height_at_map_position(map_position) < OCEAN_HEIGHT_THRESHOLD
 
 
 func _reset() -> void:
@@ -253,32 +256,42 @@ func _ensure_render_nodes() -> void:
 			"unclaimed_political_color",
 			UNCLAIMED_POLITICAL_COLOR
 		)
+		_material.set_shader_parameter(
+			"political_land_base_color",
+			MapRenderer.POLITICAL_LAND_BASE_COLOR
+		)
 		_material.set_shader_parameter("shallow_sea_color", SHALLOW_SEA_COLOR)
 		_material.set_shader_parameter("deep_sea_color", DEEP_SEA_COLOR)
+		_material.set_shader_parameter(
+			"ocean_height_threshold", OCEAN_HEIGHT_THRESHOLD
+		)
+		_material.set_shader_parameter(
+			"sea_floor_height", SEA_FLOOR_HEIGHT
+		)
 	_mesh_instance.material_override = _material
 
 
 func _build_surface_mesh() -> ArrayMesh:
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for z in range(resolution.y):
+		for x in range(resolution.x):
+			var uv := _grid_uv(x, z)
+			surface_tool.set_normal(_smooth_normal_at(x, z))
+			surface_tool.set_uv(uv)
+			surface_tool.add_vertex(_world_vertex(x, z, uv))
 	for z in range(resolution.y - 1):
 		for x in range(resolution.x - 1):
-			var uv00 := _grid_uv(x, z)
-			var uv10 := _grid_uv(x + 1, z)
-			var uv01 := _grid_uv(x, z + 1)
-			var uv11 := _grid_uv(x + 1, z + 1)
-			_add_low_poly_face(
-				surface_tool,
-				_world_vertex(x, z, uv00), uv00,
-				_world_vertex(x + 1, z, uv10), uv10,
-				_world_vertex(x, z + 1, uv01), uv01
-			)
-			_add_low_poly_face(
-				surface_tool,
-				_world_vertex(x + 1, z, uv10), uv10,
-				_world_vertex(x + 1, z + 1, uv11), uv11,
-				_world_vertex(x, z + 1, uv01), uv01
-			)
+			var i00 := z * resolution.x + x
+			var i10 := i00 + 1
+			var i01 := i00 + resolution.x
+			var i11 := i01 + 1
+			surface_tool.add_index(i00)
+			surface_tool.add_index(i10)
+			surface_tool.add_index(i01)
+			surface_tool.add_index(i10)
+			surface_tool.add_index(i11)
+			surface_tool.add_index(i01)
 	return surface_tool.commit()
 
 
@@ -297,21 +310,29 @@ func _world_vertex(x: int, z: int, uv: Vector2) -> Vector3:
 	)
 
 
-func _add_low_poly_face(
-	surface_tool: SurfaceTool,
-	a: Vector3, uv_a: Vector2,
-	b: Vector3, uv_b: Vector2,
-	c: Vector3, uv_c: Vector2
-) -> void:
-	var normal := (b - a).cross(c - a).normalized()
-	if normal.y < 0.0:
-		normal = -normal
-	for vertex_data in [
-		[a, uv_a], [b, uv_b], [c, uv_c],
-	]:
-		surface_tool.set_normal(normal)
-		surface_tool.set_uv(vertex_data[1])
-		surface_tool.add_vertex(vertex_data[0])
+func _smooth_normal_at(x: int, z: int) -> Vector3:
+	var center := _sample_height(x, z)
+	var center_is_land := center >= 0.0
+	var left := _same_domain_height(x - 1, z, center, center_is_land)
+	var right := _same_domain_height(x + 1, z, center, center_is_land)
+	var up := _same_domain_height(x, z - 1, center, center_is_land)
+	var down := _same_domain_height(x, z + 1, center, center_is_land)
+	var cell_x := world_size.x / float(maxi(resolution.x - 1, 1))
+	var cell_z := world_size.y / float(maxi(resolution.y - 1, 1))
+	return Vector3(
+		(left - right) / maxf(2.0 * cell_x, 0.000001),
+		1.0,
+		(up - down) / maxf(2.0 * cell_z, 0.000001)
+	).normalized()
+
+
+func _same_domain_height(
+	x: int, z: int, fallback: float, land: bool
+) -> float:
+	var height := _sample_height(x, z)
+	if is_nan(height) or (height >= 0.0) != land:
+		return fallback
+	return height
 
 
 func _sample_height(x: int, z: int) -> float:
@@ -333,7 +354,7 @@ func _smooth_height_samples() -> void:
 		for z in range(resolution.y):
 			for x in range(resolution.x):
 				var index := z * resolution.x + x
-				if source[index] < WATER_SURFACE_HEIGHT:
+				if source[index] < OCEAN_HEIGHT_THRESHOLD:
 					continue
 				var total := source[index] * 4.0
 				var weight := 4.0
@@ -359,7 +380,7 @@ func _smooth_height_samples() -> void:
 					var nearby := source[
 						sample_z * resolution.x + sample_x
 					]
-					if nearby < WATER_SURFACE_HEIGHT:
+					if nearby < OCEAN_HEIGHT_THRESHOLD:
 						continue
 					var sample_weight := (
 						1.0

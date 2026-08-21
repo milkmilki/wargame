@@ -22,6 +22,7 @@ func _run() -> void:
 	var map_3d := StrategicMap3D.new()
 	root.add_child(map_3d)
 	map_3d.setup(state, simulation, overlay)
+	map_3d.set_province_strength(1.0)
 	var started := Time.get_ticks_msec()
 	while map_3d._terrain == null or map_3d._terrain.land_cell_count() <= 0:
 		if Time.get_ticks_msec() - started > 15000:
@@ -36,6 +37,7 @@ func _run() -> void:
 	var packed := (load(GameState.terrain_map_path()) as Texture2D).get_image()
 	var bright_gray := 0
 	var coast_samples := 0
+	var sampled_screen_pixels := {}
 	for y in range(1, packed.get_height() - 1, 8):
 		for x in range(1, packed.get_width() - 1, 8):
 			var land := TerrainMapGenerator.packed_is_land(packed.get_pixel(x, y))
@@ -48,13 +50,29 @@ func _run() -> void:
 				continue
 			var map_position := Vector2((float(x) + 0.5) / packed.get_width(), (float(y) + 0.5) / packed.get_height())
 			var screen := map_3d._camera.unproject_position(map_3d._terrain.map_to_world(map_position))
-			var sx := clampi(int(round(screen.x)), 0, frame.get_width() - 1)
-			var sy := clampi(int(round(screen.y)), 0, frame.get_height() - 1)
-			var color := frame.get_pixel(sx, sy)
-			coast_samples += 1
-			if color.v > 0.72 and color.s < 0.22:
-				bright_gray += 1
+			var center := Vector2i(int(round(screen.x)), int(round(screen.y)))
+			for screen_y in range(center.y - 2, center.y + 3):
+				for screen_x in range(center.x - 2, center.x + 3):
+					if (
+						screen_x < 0 or screen_y < 0
+						or screen_x >= frame.get_width()
+						or screen_y >= frame.get_height()
+					):
+						continue
+					var key := screen_y * frame.get_width() + screen_x
+					if sampled_screen_pixels.has(key):
+						continue
+					sampled_screen_pixels[key] = true
+					var color := frame.get_pixel(screen_x, screen_y)
+					coast_samples += 1
+					# Full political colors are saturated/dark. A bright, nearly
+					# neutral pixel within two screen pixels of 0m is leaked primer.
+					if color.v > 0.48 and color.s < 0.32:
+						bright_gray += 1
 	if coast_samples <= 0 or bright_gray > 0:
+		var output := OS.get_environment("WW_VISUAL_OUTPUT")
+		if not output.is_empty():
+			frame.save_png(output)
 		push_error("COAST_FRINGE_FAILED samples=%d bright_gray=%d" % [coast_samples, bright_gray])
 		quit(1)
 		return

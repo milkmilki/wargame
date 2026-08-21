@@ -29,6 +29,13 @@ func _run() -> void:
 	var map_3d := StrategicMap3D.new()
 	root.add_child(map_3d)
 	map_3d.setup(state, simulation, overlay)
+	var political_strength := OS.get_environment(
+		"WW_VISUAL_POLITICAL_STRENGTH"
+	)
+	if not political_strength.is_empty():
+		map_3d.set_province_strength(
+			clampf(float(political_strength), 0.0, 1.0)
+		)
 	var sculpt_strength := OS.get_environment(
 		"WW_VISUAL_SCULPT_LIGHT"
 	)

@@ -6,7 +6,7 @@ extends Node3D
 const BASE_WORLD_SPAN: float = 64.0
 ## Low-poly terrain contract: coarse enough for readable facets at overview,
 ## while retaining coast and major mountain silhouettes.
-const BASE_MESH_RESOLUTION: int = 160
+const BASE_MESH_RESOLUTION: int = 256
 const HEIGHT_STEPS: int = 128
 const HEIGHT_SCALE: float = 4.8
 const VERTICAL_TERRAIN_LIGHT_ENERGY: float = 0.92
@@ -75,6 +75,7 @@ var _city_labels: Array[Label3D] = []
 var _nation_labels: Array[Label3D] = []
 var _battle_labels: Array[Label3D] = []
 var _province_texture: ImageTexture
+var _political_line_texture: ImageTexture
 var _map_font: Font
 
 var _world_size := Vector2(BASE_WORLD_SPAN, BASE_WORLD_SPAN)
@@ -656,53 +657,18 @@ func set_elevation_shadow_strength(strength: float) -> void:
 func _update_province_visuals() -> void:
 	if _terrain == null or _terrain.land_cell_count() <= 0:
 		return
-	var image := MapRenderer.build_smooth_province_overlay_image(state)
+	var canvas := MapRenderer.build_political_canvas_images(state)
+	var image: Image = canvas["terrain_fill"]
+	var line_image: Image = canvas["lines"]
 	if image != null and not image.is_empty():
 		_province_texture = ImageTexture.create_from_image(image)
 		_terrain.set_province_texture(_province_texture)
-	var geometry := MapRenderer.build_province_boundary_segments(state)
-	var surface_tool := SurfaceTool.new()
-	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_append_segment_ribbons(
-		surface_tool,
-		geometry["province"],
-		0.026,
-		Color(0.1, 0.12, 0.12, 1.00),
-		0.205
-	)
-	_append_segment_ribbons(
-		surface_tool,
-		geometry["coast"],
-		0.026,
-		Color(0.075, 0.085, 0.088, 1.0),
-		0.207
-	)
-	_append_segment_ribbons(
-		surface_tool,
-		geometry["nation"],
-		0.070,
-		MapRenderer.BORDER_NEUTRAL,
-		0.215
-	)
-	_append_segment_ribbons(
-		surface_tool,
-		geometry["alliance"],
-		0.070,
-		MapRenderer.BORDER_ALLIED,
-		0.225
-	)
-	_append_segment_ribbons(
-		surface_tool, geometry["enemy"], 0.078,
-		MapRenderer.BORDER_ENEMY, 0.228
-	)
-	_append_segment_ribbons(
-		surface_tool,
-		geometry["suzerainty"],
-		0.060,
-		MapRenderer.BORDER_SUZERAINTY,
-		0.230
-	)
-	_boundaries.mesh = surface_tool.commit()
+		_political_line_texture = ImageTexture.create_from_image(line_image)
+		_terrain.set_political_line_texture(_political_line_texture)
+	# Political fill and political boundaries now share one terrain material
+	# canvas. Keep the legacy MeshInstance empty to prevent a second geometry
+	# from drifting away from the painted regions.
+	_boundaries.mesh = null
 	_boundaries.material_override = _political_boundary_material()
 
 

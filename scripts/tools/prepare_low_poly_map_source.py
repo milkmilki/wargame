@@ -3,7 +3,7 @@
 
 The height image is treated as numeric data only. It is packed into Alpha using
 the runtime contract; RGB comes from an optional co-registered surface image or
-from neutral land/sea colors. Runtime Godot code then builds the faceted mesh and
+from neutral land/sea colors. Runtime Godot code then builds the low-poly mesh and
 lights it with the two-light rig. No hillshade is baked into this output.
 """
 
@@ -313,7 +313,7 @@ def main() -> None:
             "water_pixels": int(np.count_nonzero(elevation <= 0.0)),
         },
         "render_contract": {
-            "mesh": "runtime deterministic faceted low-poly grid",
+            "mesh": "runtime deterministic smooth-shaded low-poly grid",
             "height_is_color": False,
             "baked_hillshade": False,
             "lighting": "vertical plane light + northwest-to-southeast horizontal sculpt light",
