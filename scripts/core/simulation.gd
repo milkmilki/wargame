@@ -78,7 +78,6 @@ const AI_DEFENSE_MAX_WORKERS: int = 4
 const SUPPLY_NETWORK_MAX_WORKERS: int = 4
 const DIPLOMACY_DECISION_INTERVAL_DAYS: int = DAYS_PER_MONTH
 const NEW_ARMY_SIZE: int = 5000
-const NARROW_ROUTE_FORMATION_SIZE: int = Edge.MIN_MANPOWER
 const DISBAND_SIZE_MAX: int = 499
 const REINFORCE_PER_ARMY_PER_MONTH: int = 750
 const PEACETIME_MANPOWER_RESERVE: int = 5000
@@ -878,6 +877,11 @@ static func effective_tribute_rate(
 		or subject_id >= game_state.nations.size()
 		or not game_state.suzerainty.has(subject_id)
 	):
+		return 0.0
+	# A rebelling vassal no longer recognizes the overlord's fiscal authority.
+	# Keep the suzerainty record for civil-war victory/inheritance semantics,
+	# but suspend this direct tribute edge until the civil war is resolved.
+	if game_state.is_in_civil_war(subject_id):
 		return 0.0
 	var rate := float(
 		game_state.suzerainty[subject_id].get(
@@ -5416,10 +5420,10 @@ func _ai_manage_force_structure(
 	decision_context: Dictionary = {}
 ) -> bool:
 	if not state.uses_heightmap:
-		return _split_army_for_narrow_objective(
-			view,
-			state.nations[view.nation_id]
-		)
+		# Road clearance is transport-footprint based in every map mode. A heavy
+		# formation traverses a narrow route in batches and must not be split into
+		# separate Army entities merely to satisfy road capacity.
+		return false
 	if not roles_reconciled:
 		_reconcile_strategic_roles(view.nation_id)
 	if defense_plan == null:
@@ -5981,172 +5985,6 @@ func _next_battle_group_recruitment(
 	}
 
 
-func _split_army_for_narrow_objective(
-	view: AiWorldView,
-	nation: Nation
-) -> bool:
-	var objective_city := (
-		nation.war_preparation_objective_city
-	)
-	if objective_city < 0:
-		objective_city = nation.campaign_plan_primary_city
-	if objective_city < 0:
-		for enemy_id in state.wars_of(nation.id):
-			var objective := state.war_objective(
-				nation.id,
-				enemy_id
-			)
-			if (
-				not objective.is_empty()
-				and int(objective.get("attacker", -1))
-					== nation.id
-			):
-				objective_city = int(
-					objective.get("city_id", -1)
-				)
-				break
-	if (
-		objective_city < 0
-		or objective_city >= state.cities.size()
-		or not state.is_enemy(
-			nation.id,
-			state.cities[objective_city].owner_nation
-		)
-	):
-		return false
-	var candidates: Array[Army] = []
-	for army in view.friendly_armies:
-		if (
-			army.state == Army.State.IDLE
-			and army.size > 0
-			and not army.starving
-				and army.combat_morale() >= 0.5
-			and army.supply_ratio >= 0.75
-			and army.max_size
-				> NARROW_ROUTE_FORMATION_SIZE
-		):
-			candidates.append(army)
-	candidates.sort_custom(func(a: Army, b: Army) -> bool:
-			if a.max_size != b.max_size:
-				return a.max_size > b.max_size
-			return EquivariantOrder.army_less(
-				state,
-				view.nation_id,
-				a,
-				b,
-				objective_city
-			)
-	)
-	for army in candidates:
-		var wide_field := view.path_field(
-			army.location_city,
-			nation.id,
-			false,
-			true,
-			objective_city,
-			army.max_size
-		)
-		if (
-			float(
-				wide_field["dist"].get(
-					objective_city,
-					INF
-				)
-			) < INF
-		):
-			continue
-		var narrow_field := view.path_field(
-			army.location_city,
-			nation.id,
-			false,
-			true,
-			objective_city,
-			NARROW_ROUTE_FORMATION_SIZE
-		)
-		if (
-			float(
-				narrow_field["dist"].get(
-					objective_city,
-					INF
-				)
-			) == INF
-		):
-			continue
-		var route := Pathfinding.reconstruct(
-			narrow_field["prev"],
-			army.location_city,
-			objective_city
-		)
-		if route.is_empty():
-			continue
-		var bottleneck := army.max_size
-		var from_city := army.location_city
-		for to_city in route:
-			var edge := state.edge_of(
-				from_city,
-				to_city
-			)
-			if edge == null:
-				bottleneck = 0
-				break
-			bottleneck = mini(
-				bottleneck,
-				edge.max_manpower
-			)
-			from_city = to_city
-		if (
-			bottleneck < Edge.MIN_MANPOWER
-			or bottleneck >= army.max_size
-			or army.max_size % bottleneck != 0
-		):
-			continue
-		var assigned_target := int(
-			nation.campaign_attack_assignments.get(
-				army.id,
-				-1
-			)
-		)
-		var parts := state.split_army(
-			army,
-			bottleneck
-		)
-		if parts.is_empty():
-			continue
-		for part in parts:
-			part.ai_action = (
-				ActionCandidate.Kind.SPLIT_ARMY
-			)
-			part.ai_order_created_day = state.day
-			part.ai_order_reason = (
-				"为通过%d人容量道路，将军%d拆为%d支%d人编制"
-				% [
-					bottleneck,
-					army.id,
-					parts.size(),
-					bottleneck,
-				]
-			)
-			if assigned_target >= 0:
-				nation.campaign_attack_assignments[
-					part.id
-				] = assigned_target
-				if nation.campaign_attack_echelons.has(army.id):
-					nation.campaign_attack_echelons[part.id] = int(
-						nation.campaign_attack_echelons[army.id]
-					)
-				if nation.campaign_launched_armies.has(army.id):
-					nation.campaign_launched_armies[part.id] = true
-		nation.ai_last_force_action = (
-			ActionCandidate.Kind.SPLIT_ARMY
-		)
-		nation.ai_last_force_day = state.day
-		nation.ai_last_force_reason = (
-			parts[0].ai_order_reason
-		)
-		return true
-	return false
-
-
 func _clear_campaign_attack_plan(nation_id: int) -> void:
 	var nation := state.nations[nation_id]
 	nation.campaign_attack_assignments.clear()
@@ -6643,12 +6481,14 @@ func _assign_campaign_preparation_army(
 func _campaign_theater_required_manpower(
 	nation_id: int
 ) -> int:
+	# Theater reachability uses the largest formation's travel time. Dijkstra
+	# converts this to the common 5000 clearance footprint while charging extra
+	# batches on narrow roads, so heavy formations remain mobile but not free.
 	for army in state.armies:
 		if (
 			army.owner_nation == nation_id
 			and army.size > 0
-			and army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
 		):
 			return GameState.INITIAL_HEAVY_ARMY_SIZE
 	return GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -6865,6 +6705,10 @@ func _campaign_route_group_capacity(
 			BattleGroup.MAX_LIGHT_ARMIES
 			* GameState.INITIAL_LIGHT_ARMY_SIZE
 		)
+	# Demand uses effective first-contact capacity, not eventual transport
+	# reachability. A heavy formation can traverse a narrow route in packets,
+	# but only contributes its full 15000 here when the entry road can deploy it
+	# without serial delay; this keeps narrow-front assault sizing conservative.
 	if entry_capacity >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 		manpower += (
 			BattleGroup.MAX_HEAVY_ARMIES
@@ -7827,7 +7671,7 @@ func _evaluate_campaign_group_for_target(
 		var entry_staging: Array[int] = []
 		for staging_city in staging:
 			var edge := state.edge_of(staging_city, target_city)
-			if edge != null and edge.max_manpower >= army.max_size:
+			if edge != null and edge.max_manpower >= army.road_footprint():
 				entry_staging.append(staging_city)
 		if entry_staging.is_empty():
 			excluded[army.id] = "entry_capacity"
@@ -9218,12 +9062,19 @@ func _rebuild_ai_command_reservations() -> void:
 		if intent.prepared_path.is_empty() or intent.army.state != Army.State.IDLE:
 			continue
 		var first_leg := intent.prepared_path[0]
+		var first_edge := state.edge_of(
+			intent.army.location_city, first_leg
+		)
+		if first_edge == null or first_edge.max_manpower <= 0:
+			continue
 		var key := _ai_first_leg_key(
 			intent.nation_id, intent.army.location_city, first_leg
 		)
 		_ai_planned_first_legs[key] = int(
 			_ai_planned_first_legs.get(key, 0)
-		) + intent.army.max_size
+		) + intent.army.road_capacity_load(
+			first_edge.max_manpower
+		)
 
 
 func _build_campaign_attack_intent(
@@ -9390,7 +9241,10 @@ func _validate_campaign_launch_payload(
 		var from_city := intent.army.location_city
 		for to_city in intent.prepared_path:
 			var edge := state.edge_of(from_city, to_city)
-			if edge == null or edge.max_manpower < intent.army.max_size:
+			if (
+				edge == null
+				or edge.max_manpower < intent.army.road_footprint()
+			):
 				return false
 			from_city = to_city
 		# 同批多军可共享首段并排队；_begin_next_leg 对暂时满载的边
@@ -11274,13 +11128,16 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			first_leg = prepared_path[0]
 	if first_leg != -1:
 		var first_edge := state.edge_of(army.location_city, first_leg)
-		if first_edge == null or first_edge.max_manpower <= 0:
+		if (
+			first_edge == null
+			or first_edge.max_manpower < army.road_footprint()
+		):
 			return false
-			if (
-				candidate.kind == ActionCandidate.Kind.HOLD
-				and not first_edge.allows_holding
-			):
-				return false
+		if (
+			candidate.kind == ActionCandidate.Kind.HOLD
+			and not first_edge.allows_holding
+		):
+			return false
 		var leg_key := _ai_first_leg_key(
 			army.owner_nation,
 			army.location_city,
@@ -11294,16 +11151,19 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 		var reserved_manpower := int(
 			_ai_planned_first_legs.get(leg_key, 0)
 		)
+		var transport_load := army.road_capacity_load(
+			first_edge.max_manpower
+		)
 		if (
 			occupied_manpower
 			+ reserved_manpower
-			+ army.max_size
+			+ transport_load
 			> first_edge.max_manpower
 			and _ai_queue_transaction_id < 0
 		):
 			return false
 		_ai_planned_first_legs[leg_key] = (
-			reserved_manpower + army.max_size
+			reserved_manpower + transport_load
 		)
 	var sequence := int(
 		_ai_command_sequence.get(army.owner_nation, 0)
@@ -11654,14 +11514,16 @@ static func march_days(distance: int) -> float:
 	)
 
 
-static func edge_travel_days(edge: Edge) -> float:
+static func edge_travel_days(edge: Edge, formation_size: int = 0) -> float:
 	if edge == null:
 		return MISSING_EDGE_TRAVEL_DAYS
 	return maxf(
 		march_days(edge.distance)
 			* maxf(edge.travel_time_multiplier, 0.05),
 		1.0
-	)
+	) * float(Army.road_transport_batches_for_formation(
+		formation_size, edge.max_manpower
+	))
 
 
 func _advance_movement() -> void:
@@ -11682,7 +11544,7 @@ func _advance_movement() -> void:
 			if army.move_to == -1:
 				continue
 		var edge := state.edge_of(army.move_from, army.move_to)
-		var travel_days := edge_travel_days(edge)
+		var travel_days := edge_travel_days(edge, army.max_size)
 		army.move_progress += 1.0 / travel_days   # 可能 >= 1.0（走到边末端），稍后统一判定到达
 		if army.state == Army.State.MOVING and army.hold_target_progress >= 0.0:
 			if army.move_progress >= army.hold_target_progress:
@@ -11719,7 +11581,8 @@ func _advance_movement() -> void:
 	_purge_dead_armies()
 
 
-## 尝试进入 path 的下一段边。capacity 仅限制同国同方向友军；反向与敌军独立。
+## 尝试进入 path 的下一段边。capacity 仅限制同国同方向运输负载；
+## 反向与敌军独立。重军可分批通过窄路，不拆成多个 Army。
 ## 前置约定：调用前 army.move_from 已锚定为当前所在城。
 func _begin_next_leg(army: Army) -> void:
 	var from_city := army.move_from
@@ -11731,8 +11594,9 @@ func _begin_next_leg(army: Army) -> void:
 		return
 	var next_city: int = army.path[0]
 	var edge := state.edge_of(from_city, next_city)
-	if edge == null or edge.max_manpower <= 0:
-		# 路径失效或道路禁止大军通行：普通军等待 AI 重规划，撤退军立即改走合法路线。
+	if edge == null or edge.max_manpower < army.road_footprint():
+		# 路径失效或道路连一个运输包都无法承载：普通军等待 AI 重规划，
+		# 撤退军立即改走合法路线。
 		army.path.clear()
 		if army.state == Army.State.RETREATING:
 			if (
@@ -11780,10 +11644,10 @@ func _begin_next_leg(army: Army) -> void:
 	)
 	if (
 		not forced_evacuation
-		and occupied_manpower + army.max_size
+		and occupied_manpower + army.road_capacity_load(edge.max_manpower)
 			> edge.max_manpower
 	):
-		# 只累计同国同方向的满编兵力；反向友军和敌军不占本方向容量。
+		# 只累计同国同方向的运输负载；反向友军和敌军不占本方向容量。
 		army.move_to = -1
 		return
 	_set_occupation_claimant_for_crossing(
@@ -11813,7 +11677,9 @@ func _friendly_same_direction_manpower(
 		if not other.on_edge or other.move_to == -1:
 			continue
 		if other.move_from == from_city and other.move_to == to_city:
-			manpower += maxi(other.max_size, 0)
+			var edge := state.edge_of(from_city, to_city)
+			if edge != null:
+				manpower += other.road_capacity_load(edge.max_manpower)
 	return manpower
 
 
@@ -13067,7 +12933,7 @@ func _execute_campaign_post_capture_plan(
 	route_valid = (
 		route_valid
 		and route_edge != null
-		and route_edge.max_manpower >= army.max_size
+		and route_edge.max_manpower >= army.road_footprint()
 	)
 	var heavy_army_id := int(
 		plan.get("heavy_army_id", -1)
@@ -13096,7 +12962,7 @@ func _execute_campaign_post_capture_plan(
 	if route_valid and execution_army != null:
 		route_valid = (
 			route_edge.max_manpower
-				>= execution_army.max_size
+				>= execution_army.road_footprint()
 		)
 	if (
 		route_valid
@@ -13189,7 +13055,7 @@ func _campaign_post_capture_target(
 		var edge := state.edge_of(city.id, target_id)
 		if (
 			edge == null
-			or edge.max_manpower < army.max_size
+			or edge.max_manpower < army.road_footprint()
 			or not state.is_enemy(
 				army.owner_nation,
 				state.cities[target_id].owner_nation

@@ -77,7 +77,7 @@ func _aggregate_sources(state: GameState, armies: Array[Army]) -> Dictionary:
 			var edge := state.edge_of(army.move_from, army.move_to)
 			if edge == null:
 				continue
-			var days := _edge_days(edge)
+			var days := _edge_days(edge, army.max_size)
 			var progress := clampf(army.move_progress, 0.0, 1.0)
 			_add_source(sources, army.move_from, power, progress * days)
 			_add_source(sources, army.move_to, power, (1.0 - progress) * days)
@@ -204,12 +204,17 @@ func _travel_days_field(
 			continue
 		for neighbor in state.neighbors(city_id):
 			var edge := state.edge_of(city_id, neighbor)
+			var route_footprint := (
+				Army.road_footprint_for_formation(required_manpower)
+			)
 			if (
 				edge == null
-				or edge.max_manpower < required_manpower
+				or edge.max_manpower < route_footprint
 			):
 				continue
-			var next_dist := current_dist + _edge_days(edge)
+			var next_dist := current_dist + _edge_days(
+				edge, required_manpower
+			)
 			if next_dist > HORIZON_DAYS:
 				continue
 			if next_dist < float(dist.get(neighbor, INF)):
@@ -232,8 +237,8 @@ func _travel_cache_get(key: String) -> Variant:
 	return travel_distance_base_cache[key]
 
 
-static func _edge_days(edge: Edge) -> float:
-	return Simulation.edge_travel_days(edge)
+static func _edge_days(edge: Edge, formation_size: int = 0) -> float:
+	return Simulation.edge_travel_days(edge, formation_size)
 
 
 static func _heap_push(heap: Array, item: Array) -> void:

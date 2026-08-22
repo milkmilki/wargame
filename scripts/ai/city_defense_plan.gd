@@ -475,7 +475,7 @@ func urgent_defense_at(city_id: int) -> bool:
 			if (
 				approach_edge != null
 				and approach_edge.max_manpower
-					>= enemy.max_size
+					>= enemy.road_footprint()
 			):
 				return true
 	return false
@@ -1964,7 +1964,8 @@ func _role_assignment_distance(
 		return -1.5 if posture == Posture.EDGE else -0.5
 	if posture == Posture.CITY and origin == city_id:
 		return -1.0
-	if not _role_path_dist_by_origin.has(origin):
+	var route_key := Vector2i(origin, army.max_size)
+	if not _role_path_dist_by_origin.has(route_key):
 		var field := view.path_field(
 			origin,
 			view.nation_id,
@@ -1973,11 +1974,11 @@ func _role_assignment_distance(
 			-1,
 			army.max_size
 		)
-		_role_path_dist_by_origin[origin] = (
+		_role_path_dist_by_origin[route_key] = (
 			field["dist"] as Dictionary
 		)
 	var distances: Dictionary = (
-		_role_path_dist_by_origin[origin]
+		_role_path_dist_by_origin[route_key]
 	)
 	return float(
 		distances.get(city_id, INF)
@@ -2178,19 +2179,19 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 						0.0,
 						1.0
 					)
-				) * _edge_travel_days(edge)
+				) * _edge_travel_days(edge, enemy.max_size)
 				pressure += power * exp(
 					-remaining_days
 						/ ThreatField.DECAY_DAYS
 				)
 		for enemy in view.enemy_armies_at_city(neighbor):
-			if edge.max_manpower < enemy.max_size:
+			if edge.max_manpower < enemy.road_footprint():
 				continue
 			var power := ArmyPower.effective(enemy)
 			if power <= 0.0:
 				continue
 			pressure += power * exp(
-				-_edge_travel_days(edge)
+				-_edge_travel_days(edge, enemy.max_size)
 					/ ThreatField.DECAY_DAYS
 			)
 		if pressure > 0.0:
@@ -2660,5 +2661,8 @@ func _defense_reason(
 	]
 
 
-static func _edge_travel_days(edge: Edge) -> float:
-	return Simulation.edge_travel_days(edge)
+static func _edge_travel_days(
+	edge: Edge,
+	formation_size: int = 0
+) -> float:
+	return Simulation.edge_travel_days(edge, formation_size)

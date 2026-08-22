@@ -41,11 +41,14 @@ func _init() -> void:
 	_test_crosspass_field_priority()
 	_test_capacity_no_block_enemy()
 	_test_directional_friendly_capacity()
+	_test_heightmap_heavy_transport_footprint()
 	_test_march_time_linear()
 	_test_siege_time_curve()
 	_test_siege_food_clock()
 	_test_weak_attack_retreat()
 	_test_morale_retreat_recovery()
+	_test_retreat_transport_footprint()
+	_test_edge_retreat_transport_batches()
 	_test_besieged_city_retreat_depth()
 	_test_supply_morale_and_passive_retreat_battle()
 	_test_rolling_supply_settlement()
@@ -4029,10 +4032,10 @@ func _test_crosspass_field_priority() -> void:
 	)
 	endpoint_sim.free()
 
-# ------------------------------------------------------------------ 17. 一万五容量边错身：敌军不占本国方向容量
+# ------------------------------------------------------------------ 17. 五千容量边错身：敌军不占本国方向容量
 
 func _test_capacity_no_block_enemy() -> void:
-	print("[17] 一万五容量边：敌军先占边，迎战方不得被交通容量挡在城里错身穿过")
+	print("[17] 五千容量边：敌军先占边，迎战方不得被交通容量挡在城里错身穿过")
 
 	var gs := GameState.new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
@@ -4042,17 +4045,18 @@ func _test_capacity_no_block_enemy() -> void:
 			c1 = e.city_a; c2 = e.city_b; break
 	_check(c1 != -1, "应存在一条敌对相邻边")
 	var edge := gs.edge_of(c1, c2)
-	edge.max_manpower = 15000        # 单槽：复现容量满
+	edge.max_manpower = Edge.MIN_MANPOWER  # 单个运输足迹：复现同向容量满
 	edge.distance = 3; edge.danger = 0.0
 	gs.armies.clear(); gs.battles.clear()
 
-	# R 从 c1 出发，先占满单槽边
+	# R 虽是重军编制，运输足迹仍只有 5000，先占满该方向。
 	var R := _make_army(1, gs.cities[c1].owner_nation, 1000, 10)
+	R.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
 	R.state = Army.State.MOVING; R.move_from = c1; R.move_to = -1
 	R.location_city = c1; R.path = [c2] as Array[int]
 	gs.armies.append(R)
 	sim._begin_next_leg(R)
-	_check(R.on_edge and R.move_to == c2, "R 应占用单槽边 (on_edge)")
+	_check(R.on_edge and R.move_to == c2, "R 应占用五千运输边 (on_edge)")
 	_check(edge.passing_count == 1, "边容量应已打满 passing_count=1")
 
 	# G 从 c2 出发迎战：容量已满，但对手在边上 → 必须放行，不得被卡在城里
@@ -4081,7 +4085,7 @@ func _test_capacity_no_block_enemy() -> void:
 # ------------------------------------------------------------------ 17b. 分方向友军容量
 
 func _test_directional_friendly_capacity() -> void:
-	print("[17b] 边容量：同国同向受限，反向独立，敌军不占友军名额")
+	print("[17b] 边容量：重军按道路吞吐占满，同国同向受限，反向与敌军独立")
 	var gs := GameState.new()
 	gs.generate_grid_world(1717)
 	var sim := Simulation.new()
@@ -4101,6 +4105,7 @@ func _test_directional_friendly_capacity() -> void:
 	var nation_id := gs.cities[from_city].owner_nation
 
 	var first := _make_army(1700, nation_id, 13021, 10)
+	first.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
 	first.state = Army.State.MOVING
 	first.location_city = from_city
 	first.move_from = from_city
@@ -4110,15 +4115,21 @@ func _test_directional_friendly_capacity() -> void:
 	_check(first.on_edge and first.move_to == to_city, "首支同向友军应进入边")
 
 	var same_direction := _make_army(1701, nation_id, 1000, 10)
-	same_direction.max_size = 5000
+	same_direction.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
 	same_direction.state = Army.State.MOVING
 	same_direction.location_city = from_city
 	same_direction.move_from = from_city
 	same_direction.path = [to_city] as Array[int]
 	gs.armies.append(same_direction)
 	sim._begin_next_leg(same_direction)
-	_check(not same_direction.on_edge and same_direction.move_to == -1,
-		"同国同方向达到 max_manpower 后应等待")
+	_check(
+		not same_direction.on_edge
+			and same_direction.move_to == -1
+			and sim._friendly_same_direction_manpower(
+				nation_id, from_city, to_city
+			) == 15000,
+		"15000容量路上一支重军应占满同向吞吐，第二支重军必须排队"
+	)
 
 	var reverse := _make_army(1702, nation_id, 1000, 10)
 	reverse.state = Army.State.MOVING
@@ -4141,46 +4152,14 @@ func _test_directional_friendly_capacity() -> void:
 	_check(enemy.on_edge and enemy.move_to == to_city,
 		"敌军不得占用本国同方向 capacity，必须允许追逐/接战")
 	_check(edge.passing_count == 3,
-		"总占用可超过单方向上限：正向友军+反向友军+敌军应为 3")
+		"总占用可超过单方向上限：正向重军+反向友军+敌军应为3")
 
 	sim._release_edge(first)
 	sim._begin_next_leg(same_direction)
-	_check(same_direction.on_edge and same_direction.move_to == to_city,
-		"同向友军释放名额后，等待军应能进入")
-	for small_index in range(2):
-		var small := _make_army(
-			1710 + small_index,
-			nation_id,
-			1000,
-			10
-		)
-		small.max_size = 5000
-		small.state = Army.State.MOVING
-		small.location_city = from_city
-		small.move_from = from_city
-		small.path = [to_city] as Array[int]
-		gs.armies.append(small)
-		sim._begin_next_leg(small)
-		_check(
-			small.on_edge,
-			"三支满编合计15000人的小军应可同向进入一万五容量边"
-		)
-	var fourth_small := _make_army(
-		1712,
-		nation_id,
-		1000,
-		10
-	)
-	fourth_small.max_size = 5000
-	fourth_small.state = Army.State.MOVING
-	fourth_small.location_city = from_city
-	fourth_small.move_from = from_city
-	fourth_small.path = [to_city] as Array[int]
-	gs.armies.append(fourth_small)
-	sim._begin_next_leg(fourth_small)
 	_check(
-		not fourth_small.on_edge,
-		"满编总额超过道路容量后必须等待"
+		same_direction.on_edge
+			and same_direction.move_to == to_city,
+		"同向重军释放15000吞吐后，排队重军应能进入"
 	)
 
 	gs.armies.clear()
@@ -4188,54 +4167,43 @@ func _test_directional_friendly_capacity() -> void:
 	edge.passing_count = 0
 	edge.occupied = false
 	edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
-	var low_road_holder := _make_army(
+	var low_road_heavy := _make_army(
 		1720,
 		nation_id,
-		5000,
+		15000,
 		10
 	)
-	low_road_holder.max_size = Edge.MIN_MANPOWER
-	low_road_holder.state = Army.State.MOVING
-	low_road_holder.location_city = from_city
-	low_road_holder.move_from = from_city
-	low_road_holder.path = [to_city] as Array[int]
-	gs.armies.append(low_road_holder)
-	sim._begin_next_leg(low_road_holder)
-	low_road_holder.state = Army.State.HOLDING
-	var low_road_attacker := _make_army(
+	low_road_heavy.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+	low_road_heavy.state = Army.State.MOVING
+	low_road_heavy.location_city = from_city
+	low_road_heavy.move_from = from_city
+	low_road_heavy.path = [to_city] as Array[int]
+	gs.armies.append(low_road_heavy)
+	sim._begin_next_leg(low_road_heavy)
+	var low_road_waiter := _make_army(
 		1721,
 		nation_id,
 		5000,
 		10
 	)
-	low_road_attacker.max_size = Edge.MIN_MANPOWER
-	low_road_attacker.state = Army.State.MOVING
-	low_road_attacker.location_city = from_city
-	low_road_attacker.move_from = from_city
-	low_road_attacker.path = [to_city] as Array[int]
-	gs.armies.append(low_road_attacker)
-	sim._begin_next_leg(low_road_attacker)
+	low_road_waiter.max_size = Edge.MIN_MANPOWER
+	low_road_waiter.state = Army.State.MOVING
+	low_road_waiter.location_city = from_city
+	low_road_waiter.move_from = from_city
+	low_road_waiter.path = [to_city] as Array[int]
+	gs.armies.append(low_road_waiter)
+	sim._begin_next_leg(low_road_waiter)
 	_check(
-		low_road_holder.on_edge
-		and low_road_attacker.on_edge,
-		"10000 容量边应同时容纳5000驻边轻军和5000进攻轻军"
-	)
-	var low_road_overflow := _make_army(
-		1722,
-		nation_id,
-		5000,
-		10
-	)
-	low_road_overflow.max_size = Edge.MIN_MANPOWER
-	low_road_overflow.state = Army.State.MOVING
-	low_road_overflow.location_city = from_city
-	low_road_overflow.move_from = from_city
-	low_road_overflow.path = [to_city] as Array[int]
-	gs.armies.append(low_road_overflow)
-	sim._begin_next_leg(low_road_overflow)
-	_check(
-		not low_road_overflow.on_edge,
-		"10000 容量边已有两支轻军后，第三支同向军必须等待"
+		low_road_heavy.on_edge
+			and not low_road_waiter.on_edge
+			and low_road_waiter.move_to == -1
+			and sim._friendly_same_direction_manpower(
+				nation_id, from_city, to_city
+			) == Edge.TERRAIN_LOW_MANPOWER
+			and low_road_heavy.road_transport_batches(
+				Edge.TERRAIN_LOW_MANPOWER
+			) == 2,
+		"15000重军可进入10000道路但会占满同向吞吐并分两批运输"
 	)
 
 	gs.armies.clear()
@@ -4289,8 +4257,11 @@ func _test_directional_friendly_capacity() -> void:
 	gs.armies.append(standard_road_overflow)
 	sim._begin_next_leg(standard_road_overflow)
 	_check(
-		not standard_road_overflow.on_edge,
-		"20000 容量边已有驻军和重军后，额外同向军必须等待"
+		not standard_road_overflow.on_edge
+			and sim._friendly_same_direction_manpower(
+				nation_id, from_city, to_city
+			) == Edge.TERRAIN_STANDARD_MANPOWER,
+		"20000容量边上5000轻军+15000重军占满后，额外同向军必须等待"
 	)
 
 	var blocked_from := gs.nations[nation_id].capital_city_id
@@ -4314,6 +4285,201 @@ func _test_directional_friendly_capacity() -> void:
 	_check(
 		float(blocked_field["dist"][blocked_to]) == INF,
 		"军事寻路必须跳过 0 容量边"
+	)
+	sim.free()
+
+
+# ------------------------------------------------------------------ 17c. 正式高度图重军运输足迹
+
+func _test_heightmap_heavy_transport_footprint() -> void:
+	print("[17c] 正式高度图：15000重军可经10000出口完整移动且不拆编")
+	var gs := GameState.new()
+	gs.generate_world(12345)
+	var nation_id := -1
+	var capital_id := -1
+	var target_id := -1
+	var heavy: Army = null
+	for nation in gs.nations:
+		var candidate_capital := nation.capital_city_id
+		for neighbor in gs.neighbors(candidate_capital):
+			var candidate_edge := gs.edge_of(
+				candidate_capital, neighbor
+			)
+			if (
+				candidate_edge == null
+				or candidate_edge.kind != Edge.Kind.LAND
+				or candidate_edge.max_manpower <= 0
+				or gs.cities[neighbor].is_dock
+				or gs.cities[neighbor].owner_nation != nation.id
+			):
+				continue
+			for candidate_army in gs.armies:
+				if (
+					candidate_army.owner_nation == nation.id
+					and candidate_army.location_city == candidate_capital
+					and candidate_army.max_size
+						== GameState.INITIAL_HEAVY_ARMY_SIZE
+				):
+					heavy = candidate_army
+					break
+			if heavy != null:
+				nation_id = nation.id
+				capital_id = candidate_capital
+				target_id = neighbor
+				break
+		if heavy != null:
+			break
+	_check(
+		gs.uses_heightmap and heavy != null and target_id >= 0,
+		"正式高度图应存在拥有同国陆路出口的首都及其初始重军"
+	)
+	if heavy == null or target_id < 0:
+		return
+
+	for neighbor in gs.neighbors(capital_id):
+		var capital_edge := gs.edge_of(capital_id, neighbor)
+		capital_edge.max_manpower = 0
+		capital_edge.passing_count = 0
+		capital_edge.occupied = false
+	var exit_edge := gs.edge_of(capital_id, target_id)
+	exit_edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+	exit_edge.distance = 1
+	exit_edge.travel_time_multiplier = 1.0
+	exit_edge.danger = 0.0
+	var positive_capital_exits := 0
+	for neighbor in gs.neighbors(capital_id):
+		if gs.edge_of(capital_id, neighbor).max_manpower > 0:
+			positive_capital_exits += 1
+
+	var original_army_id := heavy.id
+	var original_group_id := heavy.battle_group_id
+	gs.armies.clear()
+	gs.armies.append(heavy)
+	gs.battles.clear()
+	var route_field := Pathfinding.dijkstra_field(
+		gs, capital_id, nation_id, false, true, -1,
+		heavy.max_size
+	)
+	var route := Pathfinding.reconstruct(
+		route_field["prev"], capital_id, target_id
+	)
+	_check(
+		positive_capital_exits == 1
+			and exit_edge.max_manpower == Edge.TERRAIN_LOW_MANPOWER
+			and heavy.road_footprint() == Edge.MIN_MANPOWER
+			and heavy.road_capacity_load(Edge.MIN_MANPOWER)
+				== Edge.MIN_MANPOWER
+			and heavy.road_capacity_load(Edge.TERRAIN_LOW_MANPOWER)
+				== Edge.TERRAIN_LOW_MANPOWER
+			and heavy.road_capacity_load(Edge.STANDARD_MANPOWER)
+				== GameState.INITIAL_HEAVY_ARMY_SIZE
+			and heavy.road_transport_batches(Edge.MIN_MANPOWER) == 3
+			and heavy.road_transport_batches(
+				Edge.TERRAIN_LOW_MANPOWER
+			) == 2
+			and heavy.road_transport_batches(
+				Edge.STANDARD_MANPOWER
+			) == 1
+			and _approx(
+				float(route_field["dist"][target_id]),
+				float(exit_edge.distance)
+					* exit_edge.travel_time_multiplier * 2.0
+			)
+			and route == [target_id],
+		(
+			"15000重军运输契约失败：exits=%d cap=%d footprint=%d "
+			+ "loads=%d/%d/%d batches=%d/%d/%d dist=%.1f expected=%.1f route=%s target=%d"
+		) % [
+			positive_capital_exits, exit_edge.max_manpower,
+			heavy.road_footprint(),
+			heavy.road_capacity_load(Edge.MIN_MANPOWER),
+			heavy.road_capacity_load(Edge.TERRAIN_LOW_MANPOWER),
+			heavy.road_capacity_load(Edge.STANDARD_MANPOWER),
+			heavy.road_transport_batches(Edge.MIN_MANPOWER),
+			heavy.road_transport_batches(Edge.TERRAIN_LOW_MANPOWER),
+			heavy.road_transport_batches(Edge.STANDARD_MANPOWER),
+			float(route_field["dist"][target_id]),
+			float(exit_edge.distance)
+				* exit_edge.travel_time_multiplier * 2.0,
+			str(route), target_id,
+		]
+	)
+
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var move_order := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		100.0,
+		"正式高度图重军运输足迹回归",
+		target_id
+	)
+	var issued := sim._execute_ai_candidate(heavy, move_order)
+	_check(
+		issued
+			and heavy.state == Army.State.MOVING
+			and heavy.on_edge
+			and heavy.move_from == capital_id
+			and heavy.move_to == target_id
+			and exit_edge.passing_count == 1,
+		"正式高度图15000重军应经10000出口完成寻路并开始移动"
+	)
+	var group_members := gs.battle_group_members(
+		nation_id, original_group_id
+	)
+	_check(
+		gs.armies.size() == 1
+			and gs.armies[0] == heavy
+			and heavy.id == original_army_id
+			and heavy.size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and heavy.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and heavy.max_morale == Army.HEAVY_MAX_MORALE
+			and heavy.is_main_battle_role()
+			and group_members.size() == 1
+			and group_members[0] == heavy,
+		"道路运输不得拆分Army或改变重军编制、士气与战团身份"
+	)
+	var frontage_probe := _make_field_battle(
+		[_make_army(1740, nation_id, 15000, 10)],
+		[_make_army(1741, (nation_id + 1) % gs.nations.size(), 15000, 10)],
+		0.0,
+		1
+	)
+	frontage_probe.edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+	_check(
+		Combat.combat_frontage(frontage_probe)
+			== Edge.TERRAIN_LOW_MANPOWER
+			and _approx(
+				Combat.frontage_engaged_ratio(
+					GameState.INITIAL_HEAVY_ARMY_SIZE,
+					Combat.combat_frontage(frontage_probe)
+				),
+				2.0 / 3.0
+			),
+		"运输足迹固定5000后，战斗正面仍必须读取道路的10000容量"
+	)
+	var travel_probe := Edge.new()
+	travel_probe.distance = 1
+	travel_probe.max_manpower = Edge.MIN_MANPOWER
+	var narrow_travel_days := Simulation.edge_travel_days(
+		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	travel_probe.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+	var low_road_travel_days := Simulation.edge_travel_days(
+		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	travel_probe.max_manpower = Edge.STANDARD_MANPOWER
+	var standard_travel_days := Simulation.edge_travel_days(
+		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	_check(
+		_approx(narrow_travel_days, Simulation.march_days(1) * 3.0)
+			and _approx(
+				low_road_travel_days, Simulation.march_days(1) * 2.0
+			)
+			and _approx(
+				standard_travel_days, Simulation.march_days(1)
+			),
+		"15000重军经5000/10000/20000道路应分别耗费3/2/1个运输批次"
 	)
 	sim.free()
 
@@ -4957,6 +5123,151 @@ func _test_morale_retreat_recovery() -> void:
 	_check(recovery_siege.siege_required == expected_required,
 		"破城所需兵力恒由工事推导（守军无关），实为 %d（期望 %d）" % [recovery_siege.siege_required, expected_required])
 	sim.free()
+
+
+func _test_retreat_transport_footprint() -> void:
+	print("[22a] 撤退运输足迹：残余重军可沿5000窄路撤退且不拆编")
+	var gs := GameState.new()
+	gs.generate_grid_world(783)
+	gs.armies.clear()
+	gs.battles.clear()
+	for city in gs.cities:
+		city.owner_nation = 1
+	gs.cities[0].owner_nation = 0
+	gs.cities[1].owner_nation = 0
+	gs.nations[0].capital_city_id = 1
+	for edge in gs.edges:
+		edge.max_manpower = 0
+		edge.passing_count = 0
+		edge.occupied = false
+	var narrow_edge := gs.edge_of(0, 1)
+	narrow_edge.max_manpower = Edge.MIN_MANPOWER
+	narrow_edge.distance = 1
+	narrow_edge.travel_time_multiplier = 1.0
+	narrow_edge.danger = 0.0
+
+	var remnant := _make_army(497, 0, 4000, 10, 10)
+	remnant.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+	remnant.max_morale = Army.HEAVY_MAX_MORALE
+	remnant.morale = Combat.MORALE_FLOOR
+	remnant.location_city = 0
+	remnant.move_from = 0
+	gs.armies.append(remnant)
+	var group := gs.create_battle_group(0)
+	_check(
+		gs.assign_army_to_battle_group(remnant, group.id),
+		"前置：残余重军应保留合法战团身份"
+	)
+
+	var sim := Simulation.new()
+	sim.setup(gs)
+	sim._retreat_defender(remnant, gs.cities[0])
+	_check(
+		remnant.size == 4000
+			and remnant.state == Army.State.RETREATING
+			and remnant.forced_retreat
+			and remnant.on_edge
+			and remnant.move_from == 0
+			and remnant.move_to == 1
+			and narrow_edge.passing_count == 1,
+		"残余4000人的15000编制重军应立即进入5000容量退路，不得溃散或卡住"
+	)
+	_check(
+		gs.armies.size() == 1
+			and gs.armies[0] == remnant
+			and remnant.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and remnant.max_morale == Army.HEAVY_MAX_MORALE
+			and remnant.is_main_battle_role()
+			and remnant.battle_group_id == group.id,
+		"撤退运输不得拆军或降编，必须保持单一Army、重军与战团语义"
+	)
+
+	var guard := 0
+	while remnant.state == Army.State.RETREATING and guard < 40:
+		sim._advance_movement()
+		guard += 1
+	var group_members := gs.battle_group_members(0, group.id)
+	_check(
+		remnant.state == Army.State.RECOVERING
+			and remnant.location_city == 1
+			and remnant.size == 4000
+			and not remnant.on_edge
+			and narrow_edge.passing_count == 0,
+		"残余重军应沿5000窄路抵达友方首都并进入RECOVERING"
+	)
+	_check(
+		gs.armies.size() == 1
+			and gs.armies[0] == remnant
+			and remnant.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and remnant.is_main_battle_role()
+			and remnant.battle_group_id == group.id
+			and group_members.size() == 1
+			and group_members[0] == remnant,
+		"完成撤退后仍须是原来的唯一重军Army及原战团成员"
+	)
+	sim.free()
+
+
+func _test_edge_retreat_transport_batches() -> void:
+	print("[22a2] 边上撤退：端点择路必须计入当前窄路的重军运输批次")
+	var gs := GameState.new()
+	gs.generate_grid_world(784)
+	gs.armies.clear()
+	gs.battles.clear()
+	for city in gs.cities:
+		city.owner_nation = 1
+	# 两端都是无通行权城市；每端各接一座本国安全城市。
+	# 重军位于 0→1 的 20% 处：若漏算当前 5000 道路的三批运输，
+	# 会误选表面更近的端点 1；正确总成本为 0 端 6+20 < 1 端 24+5。
+	gs.cities[8].owner_nation = 0
+	gs.cities[2].owner_nation = 0
+	# 让首都暂不可达，使战略撤退的两个候选同属 own-city tier，
+	# 确保本用例真正由总运输距离而非首都纵深优先级裁决。
+	gs.nations[0].capital_city_id = 16
+	for edge in gs.edges:
+		edge.max_manpower = 0
+		edge.passing_count = 0
+		edge.occupied = false
+	var current_edge := gs.edge_of(0, 1)
+	current_edge.max_manpower = Edge.MIN_MANPOWER
+	current_edge.distance = 10
+	current_edge.travel_time_multiplier = 1.0
+	current_edge.danger = 0.0
+	var left_exit := gs.edge_of(0, 8)
+	left_exit.max_manpower = Edge.STANDARD_MANPOWER
+	left_exit.distance = 20
+	left_exit.travel_time_multiplier = 1.0
+	left_exit.danger = 0.0
+	var right_exit := gs.edge_of(1, 2)
+	right_exit.max_manpower = Edge.STANDARD_MANPOWER
+	right_exit.distance = 5
+	right_exit.travel_time_multiplier = 1.0
+	right_exit.danger = 0.0
+
+	var heavy := _place_army_on_edge(gs, 498, 0, 0, 1, 0.2)
+	heavy.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+	var strategic := Pathfinding.strategic_retreat_route_from_edge(
+		gs, heavy
+	)
+	var repatriation := (
+		Pathfinding.nearest_home_route_from_edge_for_repatriation(
+			gs, heavy
+		)
+	)
+	_check(
+		int(strategic.get("endpoint", -1)) == 0
+			and strategic.get("path", []) == [8]
+			and _approx(float(strategic.get("distance", INF)), 26.0),
+		"战略撤退应按当前窄路三批运输选择真实更快的0端：%s"
+			% str(strategic)
+	)
+	_check(
+		int(repatriation.get("endpoint", -1)) == 0
+			and repatriation.get("path", []) == [8]
+			and _approx(float(repatriation.get("distance", INF)), 26.0),
+		"外交遣返应与战略撤退使用同一当前边运输成本：%s"
+			% str(repatriation)
+	)
 
 
 func _test_besieged_city_retreat_depth() -> void:
@@ -6681,10 +6992,12 @@ func _test_ai_strategic_map_and_threat() -> void:
 		"敌军威胁应随抵达时间衰减：c2=%.1f c1=%.1f c0=%.1f"
 			% [threat.threat_at(2), threat.threat_at(1), threat.threat_at(0)])
 	gs.edge_of(1, 2).max_manpower = 5000
+	gs.edge_of(1, 2).distance = 1
+	gs.edge_of(1, 2).travel_time_multiplier = 1.0
 	threat = ThreatField.build(AiWorldView.build(gs, 0))
 	_check(
-		_approx(threat.threat_at(1), 0.0),
-		"一万五满编敌军的威胁不得穿过五千容量道路"
+		threat.threat_at(1) > 0.0,
+		"一万五编制敌军的威胁应按五千运输足迹穿过五千容量道路"
 	)
 	enemy.max_size = 5000
 	threat = ThreatField.build(AiWorldView.build(gs, 0))
@@ -9686,18 +9999,14 @@ func _test_manpower_pool_and_force_commands() -> void:
 			ThreatField.build(narrow_view)
 		)
 	)
-	var narrow_parts_valid := true
-	for narrow_part in narrow_state.armies:
-		if (
-			narrow_part.owner_nation == 0
-			and narrow_part.max_size != 5000
-		):
-			narrow_parts_valid = false
 	_check(
-		narrow_split_changed
-		and narrow_state.active_army_count(0) == 3
-		and narrow_parts_valid,
-		"AI应在唯一进攻路线容量不足时主动拆分标准军"
+		not narrow_split_changed
+			and narrow_state.active_army_count(0) == 1
+			and narrow_state.armies[0] == narrow_army
+			and narrow_army.max_size
+				== GameState.INITIAL_HEAVY_ARMY_SIZE
+			and narrow_army.road_footprint() == Edge.MIN_MANPOWER,
+		"五千道路已可承载重军运输足迹，AI不得为通行而拆分15000编制"
 	)
 	narrow_army.state = Army.State.MOVING
 	narrow_army.move_from = 0
@@ -9706,7 +10015,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 	_check(
 		narrow_army.on_edge
 		and narrow_army.move_to == 1,
-		"拆分后的五千编制军应能进入五千容量道路"
+		"未拆分的15000重军应能直接进入5000容量道路"
 	)
 	narrow_sim.free()
 
@@ -10591,27 +10900,22 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 	)
 	var remnant_nation := remnant_state.nations[0]
-	var light_detachment_ready := remnant_plan_ready
-	for remnant_light in remnant_light_armies:
-		light_detachment_ready = (
-			light_detachment_ready
+	var remnant_full_group_ready := remnant_plan_ready
+	for remnant_member in remnant_state.battle_group_members(
+		0, remnant_group.id
+	):
+		remnant_full_group_ready = (
+			remnant_full_group_ready
 			and int(
 				remnant_nation
 					.campaign_preparation_assignments.get(
-						remnant_light.id,
+						remnant_member.id,
 						-1
 					)
 			) == remnant_first
 		)
-	light_detachment_ready = (
-		light_detachment_ready
-		and not remnant_nation
-			.campaign_preparation_assignments.has(
-				remnant_heavy.id
-			)
-	)
 	var remnant_launched := (
-		light_detachment_ready
+		remnant_full_group_ready
 		and remnant_sim._launch_campaign_offensive(
 			0,
 			remnant_first,
@@ -10620,7 +10924,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 	)
 	var remnant_terminated := false
-	for _remnant_day in range(240):
+	for _remnant_day in range(360):
 		if (
 			remnant_state.cities_of(1).is_empty()
 			or not remnant_state.is_enemy(0, 1)
@@ -10630,9 +10934,11 @@ func _test_diplomacy_state_and_ai() -> void:
 		remnant_sim._advance_day()
 	_check(
 		remnant_launched
-			and remnant_heavy.state == Army.State.IDLE
+			and remnant_state.armies.has(remnant_heavy)
+			and remnant_heavy.max_size
+				== GameState.INITIAL_HEAVY_ARMY_SIZE
 			and remnant_terminated,
-		"多数城对两座残城时，5000关隘必须允许轻军分遣队继续A→B→C，并在240天内灭国或双边议和"
+		"多数城对两座残城时，完整战团须经5000关隘继续A→B→C，重军保持单一编制，并在360天内灭国或双边议和"
 	)
 	remnant_sim.free()
 
@@ -15745,8 +16051,53 @@ func _test_vassal_tribute() -> void:
 		gs.external_territory_recipient(2) == 1,
 		"中间藩王反叛后，其子树对外领土收益必须止于反叛方，不得越过内战边"
 	)
+	var civil_war_flows := Simulation.monthly_gold_flows(gs)
+	for civil_war_nation in gs.nations:
+		civil_war_nation.treasury_gold = 1000
+	var civil_war_treasuries := [
+		gs.nations[0].treasury_gold,
+		gs.nations[1].treasury_gold,
+		gs.nations[2].treasury_gold,
+	]
+	var civil_war_income: Array[int] = [0, 400, 200]
+	var subordinate_rate := Simulation.effective_tribute_rate(gs, 2)
+	var subordinate_tribute := int(floor(
+		float(civil_war_income[2]) * subordinate_rate
+	))
+	var civil_war_sim := Simulation.new()
+	civil_war_sim.setup(gs)
+	civil_war_sim._resolve_tribute(civil_war_income)
+	_check(
+		is_zero_approx(Simulation.effective_tribute_rate(gs, 1))
+			and subordinate_rate > 0.0
+			and int(civil_war_flows[1]["tribute_paid"]) == 0
+			and int(civil_war_flows[0]["tribute_received"]) == 0
+			and int(civil_war_flows[2]["tribute_paid"]) > 0
+			and int(civil_war_flows[1]["tribute_received"]) > 0
+			and gs.nations[0].treasury_gold == civil_war_treasuries[0]
+			and gs.nations[1].treasury_gold
+				== civil_war_treasuries[1] + subordinate_tribute
+			and gs.nations[2].treasury_gold
+				== civil_war_treasuries[2] - subordinate_tribute,
+		(
+			"内战只应暂停反叛藩王向直属宗主的贡赋，反叛子树内部和平贡赋仍须结算："
+			+ "rates=%.2f/%.2f flows=%s treasuries=%d/%d/%d"
+		) % [
+			Simulation.effective_tribute_rate(gs, 1),
+			Simulation.effective_tribute_rate(gs, 2),
+			str(civil_war_flows),
+			gs.nations[0].treasury_gold,
+			gs.nations[1].treasury_gold,
+			gs.nations[2].treasury_gold,
+		]
+	)
+	civil_war_sim.free()
 	gs.suzerainty[1]["civil_war"] = false
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
+	_check(
+		_approx(Simulation.effective_tribute_rate(gs, 1), 0.25),
+		"内战结束后贡赋率必须恢复宗藩记录中的基础税率"
+	)
 	var sim := Simulation.new()
 	sim.setup(gs)
 

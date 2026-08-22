@@ -365,7 +365,7 @@ static func _attack_candidate(
 		var target_distance := float(dist[city_id])
 		if view.executable_attack_paths_enabled:
 			target_distance = _attack_approach_distance(
-				view, access_dist, city_id
+				view, access_dist, city_id, army.max_size
 			)
 		if target_distance == INF:
 			continue
@@ -521,7 +521,8 @@ static func _attack_candidate(
 static func _attack_approach_distance(
 	view: AiWorldView,
 	access_dist: Dictionary,
-	target_city: int
+	target_city: int,
+	formation_size: int = 0
 ) -> float:
 	var best := INF
 	for neighbor in view.state.neighbors(target_city):
@@ -536,6 +537,9 @@ static func _attack_approach_distance(
 			neighbor_dist
 				+ float(maxi(edge.distance, 1))
 					* maxf(edge.travel_time_multiplier, 0.05)
+					* float(Army.road_transport_batches_for_formation(
+						formation_size, edge.max_manpower
+					))
 				+ edge.danger * Pathfinding.DANGER_WEIGHT
 		)
 	return best
@@ -648,7 +652,7 @@ static func _breakout_candidate(
 		var edge := view.state.edge_of(start, neighbor)
 		if (
 			edge == null
-			or edge.max_manpower <= 0
+			or edge.max_manpower < army.road_footprint()
 			or not view.state.is_enemy(view.nation_id, view.state.cities[neighbor].owner_nation)
 		):
 			continue
@@ -660,6 +664,7 @@ static func _breakout_candidate(
 			- 0.25
 				* float(edge.distance)
 				* maxf(edge.travel_time_multiplier, 0.05)
+				* float(army.road_transport_batches(edge.max_manpower))
 		)
 		if score > best_score or (
 			is_equal_approx(score, best_score) and neighbor < best_city
@@ -811,7 +816,7 @@ static func _adjacent_assault_pool(
 					or army.combat_morale() < 0.5
 			):
 				continue
-			var march_days := Simulation.edge_travel_days(edge)
+			var march_days := Simulation.edge_travel_days(edge, army.max_size)
 			var arrival_days := march_days
 			if army.state in [Army.State.HOLDING, Army.State.MOVING]:
 				var remaining := (

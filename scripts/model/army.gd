@@ -23,6 +23,9 @@ enum LinePosture {
 }
 
 const DEFAULT_MAX_SIZE: int = 15000
+## 道路运输的最小编队包。max_size 仍表示战斗编制、补员上限与重军身份，
+## 不再兼任“整支编制必须一次塞进道路”的硬准入条件。
+const ROAD_PACKET_SIZE: int = 5000
 const LIGHT_MAX_MORALE: float = 1.0
 const HEAVY_MAX_MORALE: float = 2.0
 
@@ -125,6 +128,37 @@ static func max_morale_for_formation(formation_size: int) -> float:
 		if formation_size >= DEFAULT_MAX_SIZE
 		else LIGHT_MAX_MORALE
 	)
+
+
+static func road_footprint_for_formation(formation_size: int) -> int:
+	if formation_size <= 0:
+		return 0
+	return mini(formation_size, ROAD_PACKET_SIZE)
+
+
+func road_footprint() -> int:
+	return road_footprint_for_formation(max_size)
+
+
+## 一支军队在某条道路上同时占用的吞吐容量。窄路允许重军分批通过，
+## 但会占满可用方向容量；宽路则按完整编制占用。
+func road_capacity_load(edge_capacity: int) -> int:
+	if edge_capacity < road_footprint():
+		return 0
+	return mini(max_size, edge_capacity)
+
+
+static func road_transport_batches_for_formation(
+	formation_size: int,
+	edge_capacity: int
+) -> int:
+	if formation_size <= 0 or edge_capacity <= 0:
+		return 1
+	return maxi(int(ceil(float(formation_size) / float(edge_capacity))), 1)
+
+
+func road_transport_batches(edge_capacity: int) -> int:
+	return road_transport_batches_for_formation(max_size, edge_capacity)
 
 
 func morale_ratio() -> float:
