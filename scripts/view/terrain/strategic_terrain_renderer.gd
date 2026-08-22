@@ -60,14 +60,12 @@ func set_province_texture(texture: Texture2D) -> void:
 
 func set_boundary_textures(
 	province_texture: Texture2D,
-	coast_texture: Texture2D,
 	diplomatic_texture: Texture2D
 ) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
 		"province_boundary_texture", province_texture
 	)
-	_material.set_shader_parameter("coast_boundary_texture", coast_texture)
 	_material.set_shader_parameter(
 		"diplomatic_boundary_texture", diplomatic_texture
 	)
@@ -169,7 +167,7 @@ func generate_from_height_texture(
 			var altitude := TerrainMapGenerator.packed_altitude(pixel)
 			var discrete_height := clampi(
 				int(round(altitude * float(height_steps))),
-				0,
+				1,
 				height_steps
 			)
 			_height_samples[z * resolution.x + x] = (
@@ -295,6 +293,18 @@ func _ensure_render_nodes() -> void:
 		)
 		_material.set_shader_parameter(
 			"sea_floor_height", SEA_FLOOR_HEIGHT
+		)
+		_material.set_shader_parameter(
+			"local_boundary_alpha", MapRenderer.LOCAL_BOUNDARY_INK.a
+		)
+		_material.set_shader_parameter(
+			"local_boundary_core_radius_px",
+			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
+		)
+		_material.set_shader_parameter(
+			"local_boundary_outer_radius_px",
+			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
+				+ MapRenderer.BOUNDARY_FEATHER_PX
 		)
 	_mesh_instance.material_override = _material
 

@@ -80,7 +80,6 @@ var _battle_labels: Array[Label3D] = []
 var _province_texture: ImageTexture
 var _diplomatic_boundary_texture: ImageTexture
 var _province_boundary_texture: ImageTexture
-var _coast_boundary_texture: ImageTexture
 var _political_fill_signature := PackedInt64Array()
 var _boundary_topology := {}
 var _province_topology_ids := PackedInt32Array()
@@ -739,7 +738,6 @@ func _update_province_visuals() -> void:
 		state, geometry
 	)
 	var province_boundary_image: Image = null
-	var coast_boundary_image: Image = null
 	if topology_changed or _province_boundary_texture == null:
 		province_boundary_image = MapRenderer._rasterize_soft_boundary_layer(
 			geometry["province"], output_size, MapRenderer.LOCAL_BOUNDARY_INK,
@@ -749,22 +747,12 @@ func _update_province_visuals() -> void:
 		_province_boundary_texture = ImageTexture.create_from_image(
 			province_boundary_image
 		)
-	if topology_changed or _coast_boundary_texture == null:
-		coast_boundary_image = MapRenderer._rasterize_soft_boundary_layer(
-			geometry["coast"], output_size, MapRenderer.LOCAL_BOUNDARY_INK,
-			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, MapRenderer.BOUNDARY_FEATHER_PX
-		)
-		coast_boundary_image.generate_mipmaps()
-		_coast_boundary_texture = ImageTexture.create_from_image(
-			coast_boundary_image
-		)
 	if diplomatic_boundary_image != null and not diplomatic_boundary_image.is_empty():
 		_diplomatic_boundary_texture = ImageTexture.create_from_image(
 			diplomatic_boundary_image
 		)
 		_terrain.set_boundary_textures(
-			_province_boundary_texture, _coast_boundary_texture,
-			_diplomatic_boundary_texture
+			_province_boundary_texture, _diplomatic_boundary_texture
 		)
 		_update_boundary_lod()
 	# Political fill and political boundaries now share one terrain material

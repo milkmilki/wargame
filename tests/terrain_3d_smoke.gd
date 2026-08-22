@@ -40,6 +40,7 @@ func _run() -> void:
 	)
 	var first_land_count := map_3d._terrain.land_cell_count()
 	var negative_water_samples := 0
+	var zero_height_samples := 0
 	var shallow_water_samples := 0
 	var deep_water_samples := 0
 	for height in first_height_samples:
@@ -49,6 +50,8 @@ func _run() -> void:
 				shallow_water_samples += 1
 			elif height < -0.55:
 				deep_water_samples += 1
+		elif is_zero_approx(height):
+			zero_height_samples += 1
 	map_3d._terrain.generate_from_height_texture(
 		load(GameState.terrain_map_path()) as Texture2D,
 		state.map_source_region_normalized,
@@ -153,16 +156,12 @@ func _run() -> void:
 	var canvas_fill: Image = political_canvas["fill"]
 	var terrain_fill: Image = political_canvas["terrain_fill"]
 	var province_boundaries: Image = political_canvas["province_boundaries"]
-	var coast_boundaries: Image = political_canvas["coast_boundaries"]
 	var diplomatic_boundaries: Image = political_canvas["diplomatic_boundaries"]
 	var province_boundary_max_alpha := 0.0
-	var coast_boundary_max_alpha := 0.0
 	var diplomatic_boundary_max_alpha := 0.0
 	var province_boundary_pixels := 0
-	var coast_boundary_pixels := 0
 	var diplomatic_boundary_pixels := 0
 	var province_has_feather := false
-	var coast_has_feather := false
 	var diplomatic_has_feather := false
 	var terrain_fill_covers_land := true
 	for fill_y in range(canvas_fill.get_height()):
@@ -186,7 +185,6 @@ func _run() -> void:
 			boundary_sampler_lines += 1
 	for image_entry in [
 		[province_boundaries, "province"],
-		[coast_boundaries, "coast"],
 		[diplomatic_boundaries, "diplomatic"],
 	]:
 		var boundary_image: Image = image_entry[0]
@@ -201,9 +199,6 @@ func _run() -> void:
 					if image_entry[1] == "province":
 						province_boundary_pixels += 1
 						province_has_feather = province_has_feather or alpha < 0.45
-					elif image_entry[1] == "coast":
-						coast_boundary_pixels += 1
-						coast_has_feather = coast_has_feather or alpha < 0.45
 					else:
 						diplomatic_boundary_pixels += 1
 						diplomatic_has_feather = (
@@ -211,8 +206,6 @@ func _run() -> void:
 						)
 		if image_entry[1] == "province":
 			province_boundary_max_alpha = maximum
-		elif image_entry[1] == "coast":
-			coast_boundary_max_alpha = maximum
 		else:
 			diplomatic_boundary_max_alpha = maximum
 	var zero_meter_city_boundary: PackedVector2Array = (
@@ -231,14 +224,12 @@ func _run() -> void:
 	var lod_overview := StrategicMap3D.boundary_lod_strengths(92.0)
 	var fill_before_diplomacy_refresh := map_3d._province_texture
 	var province_boundary_before_refresh := map_3d._province_boundary_texture
-	var coast_boundary_before_refresh := map_3d._coast_boundary_texture
 	map_3d._update_province_visuals()
 	var diplomacy_refresh_kept_fill := (
 		map_3d._province_texture == fill_before_diplomacy_refresh
 	)
 	var dynamic_refresh_kept_static_boundaries := (
 		map_3d._province_boundary_texture == province_boundary_before_refresh
-		and map_3d._coast_boundary_texture == coast_boundary_before_refresh
 	)
 	var topology_refresh_rebuilds_fill := false
 	var topology_refresh_rebuilds_static_boundaries := false
@@ -247,14 +238,12 @@ func _run() -> void:
 		map_3d._province_topology_ids[0] = saved_topology_id - 1
 		var fill_before_topology_refresh := map_3d._province_texture
 		var province_before_topology_refresh := map_3d._province_boundary_texture
-		var coast_before_topology_refresh := map_3d._coast_boundary_texture
 		map_3d._update_province_visuals()
 		topology_refresh_rebuilds_fill = (
 			map_3d._province_texture != fill_before_topology_refresh
 		)
 		topology_refresh_rebuilds_static_boundaries = (
 			map_3d._province_boundary_texture != province_before_topology_refresh
-			and map_3d._coast_boundary_texture != coast_before_topology_refresh
 		)
 	overlay._ensure_province_visual_cache()
 	var overlay_fill_before_diplomacy_refresh := overlay._province_texture
@@ -428,30 +417,24 @@ func _run() -> void:
 			and map_3d._boundary_topology.size() > 0
 			and map_3d._diplomatic_boundary_texture != null
 			and map_3d._province_boundary_texture != null
-			and map_3d._coast_boundary_texture != null
 			and map_3d._diplomatic_boundary_texture.get_size()
 				== map_3d._province_texture.get_size()
 			and map_3d._province_boundary_texture.get_size()
 				== map_3d._province_texture.get_size()
-			and map_3d._coast_boundary_texture.get_size()
-				== map_3d._province_texture.get_size()
 			and terrain_shader_code.contains("diplomatic_boundary_texture")
 			and terrain_shader_code.contains("province_boundary_texture")
-			and terrain_shader_code.contains("coast_boundary_texture")
+			and not terrain_shader_code.contains("coast_boundary_texture")
 			and terrain_shader_code.contains(
 				"1.0 - smoothstep(0.01, 0.18, diplomatic_boundary.a)"
 			)
-			and boundary_sampler_lines == 3
+			and boundary_sampler_lines == 2
 			and map_3d._boundaries.mesh == null
 			and province_boundaries.get_size() == canvas_fill.get_size()
-			and coast_boundaries.get_size() == canvas_fill.get_size()
 			and diplomatic_boundaries.get_size() == canvas_fill.get_size()
 			and terrain_fill_covers_land
 			and province_boundaries.has_mipmaps()
-			and coast_boundaries.has_mipmaps()
 			and diplomatic_boundaries.has_mipmaps()
 			and map_3d._province_boundary_texture.get_image().has_mipmaps()
-			and map_3d._coast_boundary_texture.get_image().has_mipmaps()
 			and map_3d._diplomatic_boundary_texture.get_image().has_mipmaps()
 			and diplomacy_refresh_kept_fill
 			and dynamic_refresh_kept_static_boundaries
@@ -498,7 +481,7 @@ func _run() -> void:
 		),
 		"strict_zero_meter_coast": terrain_shader_code.contains(
 			"strictly below the 0m contour"
-		),
+		) and zero_height_samples == 0,
 		"overview_angle": absf(
 			overview_angle
 				- StrategicMap3D.CAMERA_OVERVIEW_NORMAL_ANGLE_DEGREES
@@ -536,24 +519,43 @@ func _run() -> void:
 				== state.province_map_size.y
 					* MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
 		),
-		# 海岸与城市边界共享平滑 coverage 样式，高程只保留海陆遮罩，
-		# 不再额外生成第二条 0m contour。
+		# 3D 海岸与政治上色共享 terrain_elevation 的同一条 0m 等值线，
+		# 但复用省界的墨量、线芯和羽化参数；省份栅格海岸不得再上传。
 		"unified_coast_boundary_style": (
 			not zero_meter_city_boundary.is_empty()
 			and zero_meter_city_boundary.size() % 2 == 0
-			and not terrain_shader_code.contains("coast_band")
-			and not terrain_shader_code.contains("contour_distance")
-			and terrain_shader_code.contains("coast_boundary_strength")
-			and is_equal_approx(
-				province_boundary_max_alpha, coast_boundary_max_alpha
+			and terrain_shader_code.contains("fwidth(terrain_elevation)")
+			and terrain_shader_code.contains("coast_distance_px")
+			and terrain_shader_code.contains("step(0.000001, coast_gradient)")
+			and terrain_shader_code.contains("fwidth(hard_land)")
+			and terrain_shader_code.contains("coast_domain_crossing")
+			and terrain_shader_code.contains(
+				"terrain_elevation - ocean_height_threshold"
 			)
+			and terrain_shader_code.contains("coast_boundary_strength")
+			and is_equal_approx(float(terrain_material.get_shader_parameter(
+				"local_boundary_alpha"
+			)), MapRenderer.LOCAL_BOUNDARY_INK.a)
+			and is_equal_approx(float(terrain_material.get_shader_parameter(
+				"local_boundary_core_radius_px"
+			)), MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5)
+			and is_equal_approx(float(terrain_material.get_shader_parameter(
+				"local_boundary_outer_radius_px"
+			)), (
+				MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
+					+ MapRenderer.BOUNDARY_FEATHER_PX
+			))
+			and terrain_shader_code.count(
+				"final_color *= 1.0 - "
+			) == 2
+			and absf(
+				province_boundary_max_alpha - MapRenderer.LOCAL_BOUNDARY_INK.a
+			) < 0.01
 			and province_boundary_max_alpha <= 0.53
 			and diplomatic_boundary_max_alpha <= 0.73
 			and province_boundary_pixels > 0
-			and coast_boundary_pixels > 0
 			and diplomatic_boundary_pixels > 0
 			and province_has_feather
-			and coast_has_feather
 			and diplomatic_has_feather
 		),
 		"boundary_lod": (
