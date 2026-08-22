@@ -4,13 +4,16 @@ extends Node3D
 ## 负责连续地形、国家覆色、道路、河流、城市、军队、战斗和相机交互。
 
 const BASE_WORLD_SPAN: float = 64.0
-## Low-poly terrain contract: coarse enough for readable facets at overview,
-## while retaining coast and major mountain silhouettes.
-const BASE_MESH_RESOLUTION: int = 256
+## Hybrid terrain contract: political boundaries are smoothed in texture space,
+## while a moderately denser mesh preserves the real 0m coast and small islands.
+## 512 adds roughly four times the old triangle count for little gain over 384.
+const BASE_MESH_RESOLUTION: int = 384
 const HEIGHT_STEPS: int = 128
 const HEIGHT_SCALE: float = 4.8
-const VERTICAL_TERRAIN_LIGHT_ENERGY: float = 0.92
-const SCULPT_TERRAIN_LIGHT_MAX_ENERGY: float = 1.35
+const VERTICAL_TERRAIN_LIGHT_MAX_ENERGY: float = 1.50
+const VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH: float = 0.62
+const SCULPT_TERRAIN_LIGHT_MAX_ENERGY: float = 2.00
+const SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH: float = 0.42
 const VERTICAL_TERRAIN_LIGHT_COLOR := Color(0.91, 0.94, 1.0)
 const SCULPT_TERRAIN_LIGHT_COLOR := Color(1.0, 0.82, 0.62)
 const MAP_PICK_CITY_PIXELS: float = 18.0
@@ -26,6 +29,9 @@ const MAP_GOLD := Color(0.94, 0.67, 0.20)
 const MAP_ALERT := Color(0.84, 0.13, 0.055)
 const MAP_SUPPLY := Color(0.20, 0.62, 0.48)
 const MAP_COUNTER_MARK := Color(0.32, 0.25, 0.12)
+const TRADE_ROUTE_ELEVATION: float = 0.185
+const TRADE_ROUTE_WIDTH: float = 0.055
+const TRADE_ROUTE_DASH_WORLD_LENGTH: float = 0.42
 const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
 const CAMPAIGN_ARROW_GRID := Vector2i(24, 16)
 ## 攻势箭头仍是原始红色贴图；这些参数只控制承载贴图的无光照拱形曲面。
@@ -54,6 +60,7 @@ var _water: MeshInstance3D
 var _roads: MeshInstance3D
 var _minor_roads: MeshInstance3D
 var _rivers: MeshInstance3D
+var _trade_routes: MeshInstance3D
 var _boundaries: MeshInstance3D
 var _campaigns: MeshInstance3D
 var _cities: MultiMeshInstance3D
@@ -78,9 +85,12 @@ var _city_labels: Array[Label3D] = []
 var _nation_labels: Array[Label3D] = []
 var _battle_labels: Array[Label3D] = []
 var _province_texture: ImageTexture
-var _diplomatic_boundary_texture: ImageTexture
+var _loyalty_texture: ImageTexture
+var _country_boundary_texture: ImageTexture
+var _country_color_texture: ImageTexture
 var _province_boundary_texture: ImageTexture
 var _political_fill_signature := PackedInt64Array()
+var _loyalty_fill_signature := PackedInt64Array()
 var _boundary_topology := {}
 var _province_topology_ids := PackedInt32Array()
 var _map_font: Font
@@ -101,11 +111,19 @@ var _last_day: int = -1
 var _last_ownership_revision: int = -1
 var _last_diplomacy_revision: int = -1
 var _last_road_network_revision: int = -1
+var _last_trade_revision: int = -1
+var _last_naming_revision: int = -1
+var _map_mode: int = MapRenderer.MapMode.POLITICAL
 var _last_selected_edge := Vector2i(-2, -2)
 var _province_strength: float = (
 	MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
 )
-var _elevation_shadow_strength: float = 0.62
+var _elevation_shadow_strength: float = (
+	SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+)
+var _vertical_terrain_light_strength: float = (
+	VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+)
 var _visual_time: float = 0.0
 
 
@@ -117,11 +135,27 @@ func setup(
 	state = game_state
 	sim = simulation
 	overlay = overlay_renderer
+	var mesh_resolution_override := int(OS.get_environment(
+		"WW_VISUAL_MESH_RESOLUTION"
+	))
 	if _map_font == null:
 		_map_font = MapRenderer.create_map_label_font()
 	_ensure_scene_nodes()
 	_clear_labels()
 	_configure_dimensions()
+	if mesh_resolution_override > 0:
+		var aspect := clampf(state.map_aspect_ratio, 0.5, 2.5)
+		_mesh_resolution = (
+			Vector2i(
+				mesh_resolution_override,
+				maxi(int(round(float(mesh_resolution_override) / aspect)), 72)
+			)
+			if aspect >= 1.0
+			else Vector2i(
+				maxi(int(round(float(mesh_resolution_override) * aspect)), 72),
+				mesh_resolution_override
+			)
+		)
 	_configure_camera()
 	_build_static_scene()
 	_start_terrain_generation()
@@ -129,9 +163,12 @@ func setup(
 	_last_ownership_revision = -1
 	_last_diplomacy_revision = -1
 	_political_fill_signature = PackedInt64Array()
+	_loyalty_fill_signature = PackedInt64Array()
 	_boundary_topology = {}
 	_province_topology_ids = PackedInt32Array()
 	_last_road_network_revision = -1
+	_last_trade_revision = -1
+	_last_naming_revision = -1
 	set_process(true)
 	set_process_unhandled_input(true)
 
@@ -150,7 +187,13 @@ func _process(delta: float) -> void:
 		_rebuild_nation_labels()
 		_last_ownership_revision = state.ownership_revision
 		_last_diplomacy_revision = state.diplomacy_revision
+	if state.naming_revision != _last_naming_revision:
+		_rebuild_city_labels()
+		_rebuild_nation_labels()
+		_last_naming_revision = state.naming_revision
 	if state.day != _last_day:
+		if _map_mode == MapRenderer.MapMode.LOYALTY:
+			_update_province_visuals()
 		_update_campaign_mesh()
 		_update_battle_instances()
 		_last_day = state.day
@@ -161,6 +204,12 @@ func _process(delta: float) -> void:
 	):
 		_build_road_mesh()
 		_last_road_network_revision = state.road_network_revision
+	if (
+		state.trade_revision != _last_trade_revision
+		and _terrain.land_cell_count() > 0
+	):
+		_build_trade_route_mesh()
+		_last_trade_revision = state.trade_revision
 	_update_army_instances()
 	_update_selection_marker()
 	_update_edge_selection()
@@ -306,7 +355,6 @@ func _ensure_terrain_lights() -> void:
 		# DirectionalLight3D emits along local -Z. X=-90° points straight down.
 		_vertical_terrain_light.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 		_vertical_terrain_light.light_color = VERTICAL_TERRAIN_LIGHT_COLOR
-		_vertical_terrain_light.light_energy = VERTICAL_TERRAIN_LIGHT_ENERGY
 		_vertical_terrain_light.light_cull_mask = (
 			StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
 		)
@@ -324,7 +372,16 @@ func _ensure_terrain_lights() -> void:
 		)
 		_sculpt_terrain_light.shadow_enabled = false
 		add_child(_sculpt_terrain_light)
+	_apply_vertical_terrain_light_strength()
 	_apply_terrain_sculpt_light_strength()
+
+
+func _apply_vertical_terrain_light_strength() -> void:
+	if _vertical_terrain_light != null:
+		_vertical_terrain_light.light_energy = (
+			_vertical_terrain_light_strength
+			* VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
+		)
 
 
 func _apply_terrain_sculpt_light_strength() -> void:
@@ -372,6 +429,10 @@ func _ensure_feature_nodes() -> void:
 		_rivers = MeshInstance3D.new()
 		_rivers.name = "Rivers"
 		_content.add_child(_rivers)
+	if _trade_routes == null:
+		_trade_routes = MeshInstance3D.new()
+		_trade_routes.name = "TradeRoutes"
+		_content.add_child(_trade_routes)
 	if _boundaries == null:
 		_boundaries = MeshInstance3D.new()
 		_boundaries.name = "Boundaries"
@@ -545,31 +606,22 @@ func _apply_camera_transform() -> void:
 func _update_boundary_lod() -> void:
 	if _terrain == null:
 		return
-	# EU4-style density hierarchy: local province borders are a close/mid zoom
-	# aid and fade from the overview. Coast and country borders remain legible.
+	# Political borders are cartographic information, not detail decoration.
+	# Keep every layer fully visible at every supported camera distance.
 	var lod := boundary_lod_strengths(_camera_distance)
 	var province_alpha := float(lod["province"])
-	var diplomatic_alpha := float(lod["diplomatic"])
-	_terrain.set_boundary_lod(province_alpha, 1.0, diplomatic_alpha)
+	var country_alpha := float(lod["country"])
+	_terrain.set_boundary_lod(province_alpha, 1.0, country_alpha)
 
 
 static func boundary_lod_strengths(camera_distance: float) -> Dictionary:
-	var province_alpha := 1.0
-	if camera_distance > 40.0 and camera_distance < 58.0:
-		province_alpha = lerpf(
-			1.0, 0.55, smoothstep(40.0, 58.0, camera_distance)
-		)
-	elif camera_distance >= 58.0:
-		province_alpha = 0.55 * (
-			1.0 - smoothstep(58.0, 72.0, camera_distance)
-		)
-	var diplomatic_alpha := lerpf(
-		1.0, 0.86, smoothstep(72.0, 92.0, camera_distance)
-	)
+	# Keep the argument for the public/tested API even though the new style has
+	# no zoom-dependent disappearance.
+	var _unused_distance := camera_distance
 	return {
-		"province": clampf(province_alpha, 0.0, 1.0),
+		"province": 1.0,
 		"coast": 1.0,
-		"diplomatic": clampf(diplomatic_alpha, 0.0, 1.0),
+		"country": 1.0,
 	}
 
 
@@ -673,8 +725,11 @@ func _on_terrain_ready() -> void:
 		push_error("Copernicus 3D 地形为空")
 		return
 	_update_province_visuals()
-	_terrain.set_province_strength(_province_strength)
+	_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
+		_map_mode, _province_strength
+	))
 	_build_road_mesh()
+	_build_trade_route_mesh()
 	_build_river_mesh()
 	_build_city_instances()
 	_update_city_instances()
@@ -685,17 +740,49 @@ func _on_terrain_ready() -> void:
 	_last_ownership_revision = state.ownership_revision
 	_last_diplomacy_revision = state.diplomacy_revision
 	_last_road_network_revision = state.road_network_revision
+	_last_trade_revision = state.trade_revision
+	_last_naming_revision = state.naming_revision
 
 
 func set_province_strength(strength: float) -> void:
 	_province_strength = clampf(strength, 0.0, 1.0)
 	if _terrain != null:
-		_terrain.set_province_strength(_province_strength)
+		_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
+			_map_mode, _province_strength
+		))
+
+
+func set_map_mode(mode: int) -> void:
+	var normalized := clampi(
+		mode, MapRenderer.MapMode.POLITICAL, MapRenderer.MapMode.TRADE
+	)
+	if normalized == _map_mode:
+		return
+	_map_mode = normalized
+	# The active fill signature belongs to the previous mode. Resetting it
+	# forces a political <-> loyalty texture swap even when numeric values happen
+	# to produce an equally sized signature.
+	_political_fill_signature = PackedInt64Array()
+	if overlay != null and overlay.map_mode() != normalized:
+		overlay.set_map_mode(normalized)
+	_update_province_visuals()
+	_update_city_instances()
+	_build_trade_route_mesh()
+	_apply_map_mode_visibility()
+
+
+func map_mode() -> int:
+	return _map_mode
 
 
 func set_elevation_shadow_strength(strength: float) -> void:
 	_elevation_shadow_strength = clampf(strength, 0.0, 1.0)
 	_apply_terrain_sculpt_light_strength()
+
+
+func set_vertical_terrain_light_strength(strength: float) -> void:
+	_vertical_terrain_light_strength = clampf(strength, 0.0, 1.0)
+	_apply_vertical_terrain_light_strength()
 
 
 func _update_province_visuals() -> void:
@@ -715,46 +802,74 @@ func _update_province_visuals() -> void:
 	# civil-war changes can also alter province colors. A semantic signature lets
 	# ordinary relations keep the existing GPU fill; a topology change always
 	# rebuilds it because the same city colors now occupy different pixels.
-	var fill_signature := MapRenderer.political_fill_signature(state)
+	var political_signature := MapRenderer.political_fill_signature(state)
+	var loyalty_signature := (
+		MapRenderer.loyalty_fill_signature(state)
+		if _map_mode == MapRenderer.MapMode.LOYALTY
+		else PackedInt64Array()
+	)
+	var fill_signature := (
+		loyalty_signature
+		if _map_mode == MapRenderer.MapMode.LOYALTY
+		else political_signature
+	)
 	var rebuild_fill := (
 		topology_changed
 		or _province_texture == null
 		or fill_signature != _political_fill_signature
 	)
 	if rebuild_fill:
-		var fill_source := MapRenderer.build_province_overlay_image(state)
+		var fill_source := (
+			MapRenderer.build_loyalty_overlay_image(state)
+			if _map_mode == MapRenderer.MapMode.LOYALTY
+			else MapRenderer.build_province_overlay_image(state)
+		)
 		var canvas := MapRenderer.build_political_canvas_images(
 			state, geometry, false, fill_source
 		)
 		var image: Image = canvas["terrain_fill"]
 		if image != null and not image.is_empty():
 			_province_texture = ImageTexture.create_from_image(image)
+			if _map_mode == MapRenderer.MapMode.LOYALTY:
+				_loyalty_texture = _province_texture
 			_terrain.set_province_texture(_province_texture)
 			_political_fill_signature = fill_signature
+			_loyalty_fill_signature = loyalty_signature
 	var output_size := (
 		state.province_map_size * MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
-	)
-	var diplomatic_boundary_image := MapRenderer.build_diplomatic_boundary_image(
-		state, geometry
 	)
 	var province_boundary_image: Image = null
 	if topology_changed or _province_boundary_texture == null:
 		province_boundary_image = MapRenderer._rasterize_soft_boundary_layer(
 			geometry["province"], output_size, MapRenderer.LOCAL_BOUNDARY_INK,
-			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, MapRenderer.BOUNDARY_FEATHER_PX
+			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX,
+			MapRenderer.BOUNDARY_ANTIALIAS_PX
 		)
 		province_boundary_image.generate_mipmaps()
 		_province_boundary_texture = ImageTexture.create_from_image(
 			province_boundary_image
 		)
-	if diplomatic_boundary_image != null and not diplomatic_boundary_image.is_empty():
-		_diplomatic_boundary_texture = ImageTexture.create_from_image(
-			diplomatic_boundary_image
+	if topology_changed or rebuild_fill or _country_boundary_texture == null:
+		var country_boundary_image := MapRenderer.build_country_boundary_image(
+			state, geometry, false
 		)
-		_terrain.set_boundary_textures(
-			_province_boundary_texture, _diplomatic_boundary_texture
+		_country_boundary_texture = ImageTexture.create_from_image(
+			country_boundary_image
 		)
-		_update_boundary_lod()
+		var country_color_image := MapRenderer.build_country_color_image(
+			state, true
+		)
+		_country_color_texture = ImageTexture.create_from_image(
+			country_color_image
+		)
+	_terrain.set_boundary_textures(
+		_province_boundary_texture, _country_boundary_texture,
+		_country_color_texture
+	)
+	_update_boundary_lod()
+	_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
+		_map_mode, _province_strength
+	))
 	# Political fill and political boundaries now share one terrain material
 	# canvas. Keep the legacy MeshInstance empty to prevent a second geometry
 	# from drifting away from the painted regions.
@@ -806,6 +921,95 @@ func _build_road_mesh() -> void:
 	_minor_roads.mesh = minor_tool.commit()
 	_minor_roads.material_override = _line_material(false)
 	_update_map_detail_visibility()
+
+
+func _build_trade_route_mesh() -> void:
+	if _trade_routes == null or _terrain == null:
+		return
+	var surface_tool := SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var emphasized := _map_mode == MapRenderer.MapMode.TRADE
+	for route in state.trade_routes:
+		var status := int(route.get("status", TradeNetwork.ACTIVE))
+		var color := MapRenderer.trade_route_color(route, emphasized)
+		var width := TRADE_ROUTE_WIDTH * (1.28 if emphasized else 1.0)
+		for map_path in MapRenderer.trade_route_map_paths(state, route):
+			if status == TradeNetwork.BLOCKED:
+				_append_dashed_draped_path(
+					surface_tool, map_path, width, color,
+					TRADE_ROUTE_ELEVATION
+				)
+			else:
+				_append_draped_path_ribbon(
+					surface_tool, map_path, width, color,
+					TRADE_ROUTE_ELEVATION
+				)
+	_trade_routes.mesh = surface_tool.commit()
+	_trade_routes.material_override = _trade_route_material()
+	_apply_map_mode_visibility()
+
+
+func _append_dashed_draped_path(
+	surface_tool: SurfaceTool,
+	path: PackedVector2Array,
+	width: float,
+	color: Color,
+	elevation: float
+) -> void:
+	for index in range(path.size() - 1):
+		var samples := _draped_world_samples(
+			path[index], path[index + 1], elevation
+		)
+		var travelled := 0.0
+		for sample_index in range(samples.size() - 1):
+			var from := samples[sample_index]
+			var to := samples[sample_index + 1]
+			var length := from.distance_to(to)
+			var midpoint_distance := travelled + length * 0.5
+			travelled += length
+			if int(floor(midpoint_distance / TRADE_ROUTE_DASH_WORLD_LENGTH)) % 2 != 0:
+				continue
+			_append_world_segment_quad(
+				surface_tool, from, to, width, color
+			)
+
+
+func _append_world_segment_quad(
+	surface_tool: SurfaceTool,
+	from: Vector3,
+	to: Vector3,
+	width: float,
+	color: Color
+) -> void:
+	var direction := Vector2(to.x - from.x, to.z - from.z)
+	if direction.length_squared() <= 0.000001:
+		return
+	var perpendicular := direction.normalized().orthogonal() * width
+	var offset := Vector3(perpendicular.x, 0.0, perpendicular.y)
+	_append_colored_quad(
+		surface_tool, from - offset, to - offset,
+		to + offset, from + offset, color
+	)
+
+
+func _trade_route_material() -> StandardMaterial3D:
+	var material := _line_material(false)
+	material.no_depth_test = false
+	material.render_priority = 5
+	return material
+
+
+func _apply_map_mode_visibility() -> void:
+	var trade_mode := _map_mode == MapRenderer.MapMode.TRADE
+	if _roads != null:
+		_roads.transparency = 0.70 if trade_mode else 0.0
+	if _minor_roads != null:
+		_minor_roads.transparency = 0.78 if trade_mode else 0.0
+		_minor_roads.visible = _camera_distance <= 62.0
+	if _rivers != null:
+		_rivers.transparency = 0.46 if trade_mode else 0.0
+	if _trade_routes != null:
+		_trade_routes.transparency = 0.0 if trade_mode else 0.34
 
 
 func _road_width_for_capacity(capacity: int) -> float:
@@ -884,7 +1088,14 @@ func _build_city_instances() -> void:
 		_capital_rings, capital_ring, 0,
 		_instance_color_material(true, true)
 	)
-	_clear_labels()
+	_rebuild_city_labels()
+
+
+func _rebuild_city_labels() -> void:
+	for label in _city_labels:
+		if is_instance_valid(label):
+			label.queue_free()
+	_city_labels.clear()
 	for city in state.cities:
 		if (
 			city.is_dock
@@ -897,7 +1108,11 @@ func _build_city_instances() -> void:
 		):
 			continue
 		var label := Label3D.new()
-		label.text = MapRenderer.city_label_text(city)
+		label.text = WorldNaming.city_display_name(state, city.id)
+		if city.is_food_hub:
+			label.text += " 粮"
+		if city.is_manpower_hub:
+			label.text += " 人"
 		label.font = _map_font
 		label.font_size = 28
 		label.outline_size = 8
@@ -946,13 +1161,17 @@ func _update_city_instances() -> void:
 			)
 		)
 		var color := (
-			MapRenderer.final_faction_visual_color(
-				state, city.owner_nation,
-				0.34 if city.at_war else 0.0,
-				0.08 if city.is_capital else 0.0
+			MapRenderer.loyalty_color(city.loyalty)
+			if _map_mode == MapRenderer.MapMode.LOYALTY
+			else (
+				MapRenderer.final_faction_visual_color(
+					state, city.owner_nation,
+					0.34 if city.at_war else 0.0,
+					0.08 if city.is_capital else 0.0
+				)
+				if city.owner_nation >= 0
+				else Color(0.45, 0.45, 0.42)
 			)
-			if city.owner_nation >= 0
-			else Color(0.45, 0.45, 0.42)
 		)
 		_cities.multimesh.set_instance_color(city.id, color)
 
@@ -1085,7 +1304,9 @@ func _nation_label_layout(nation_id: int) -> Dictionary:
 		projection_min = minf(projection_min, projection)
 		projection_max = maxf(projection_max, projection)
 	var territory_span := maxf(projection_max - projection_min, 2.0)
-	var text_value := "国%d" % nation_id
+	var text_value := WorldNaming.nation_display_name(
+		state, nation_id, true
+	)
 	return {
 		"text": text_value,
 		"center": Vector2(
@@ -1649,14 +1870,13 @@ func _update_map_detail_visibility() -> void:
 		label.visible = _camera_distance <= 50.0
 	if _minor_roads != null:
 		_minor_roads.visible = _camera_distance <= 62.0
+	_apply_map_mode_visibility()
 
 
 func _pick_map_feature(screen_position: Vector2) -> void:
 	var best_city := -1
 	var best_city_distance := INF
 	for city in state.cities:
-		if city.is_dock:
-			continue
 		var world := _terrain.map_to_world(city.map_position)
 		if _camera.is_position_behind(world):
 			continue

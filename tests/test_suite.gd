@@ -68,6 +68,7 @@ func _init() -> void:
 	_test_ai_encirclement_breakout_and_relief()
 	_test_manpower_pool_and_force_commands()
 	_test_gold_reserve_budget_and_war_snapshot()
+	_test_ruler_economy_integration()
 	_test_diplomacy_state_and_ai()
 	_test_war_preparation_cancel_cooldown()
 	_test_war_preparation_route_block_grace()
@@ -113,6 +114,12 @@ func _check(cond: bool, msg: String) -> void:
 
 func _approx(a: float, b: float, eps: float = 0.0001) -> bool:
 	return absf(a - b) <= eps
+
+
+func _set_neutral_ruler(nation: Nation) -> void:
+	nation.ruler_archetype = RulerProfile.BALANCED
+	nation.ruler_traits.clear()
+	nation.trade_policy = RulerProfile.POLICY_BALANCED
 
 # ------------------------------------------------------------------ 1. 世界生成
 func _test_world_generation() -> void:
@@ -416,11 +423,13 @@ func _test_world_generation() -> void:
 			* 6.0
 	))
 	var terrain_monthly_gold := 0
+	var terrain_base_monthly_gold := 0
 	var terrain_half_year_food := 0
 	var terrain_gold_min := 999999
 	var terrain_gold_max := 0
 	for city in gs.cities:
 		terrain_monthly_gold += Simulation.city_gold_output(gs, city)
+		terrain_base_monthly_gold += city.gold_per_month
 		terrain_half_year_food += Simulation.city_food_output(gs, city)
 		if not city.is_dock:
 			terrain_gold_min = mini(
@@ -432,26 +441,39 @@ func _test_world_generation() -> void:
 				city.gold_per_month
 			)
 	_check(
-		terrain_monthly_gold >= target_monthly_gold
-			and terrain_monthly_gold
+		terrain_base_monthly_gold >= target_monthly_gold
+			and terrain_base_monthly_gold
 				<= int(ceil(float(target_monthly_gold) * 1.15)),
-		"真实地图月金产出应约维持160轻军+40重军：产出%d，目标军费%d"
-			% [terrain_monthly_gold, target_monthly_gold]
+		"真实地图基础月金产出应约维持160轻军+40重军：产出%d，目标军费%d"
+			% [terrain_base_monthly_gold, target_monthly_gold]
 	)
 	_check(
-		terrain_monthly_gold
+		terrain_base_monthly_gold
 			== GameState.TERRAIN_CITY_COUNT
 				* GameState.TERRAIN_CITY_GOLD_TARGET_AVERAGE
 			and terrain_gold_min
 				== GameState.TERRAIN_CITY_GOLD_OUTPUT_MIN
 			and terrain_gold_max
 				== GameState.TERRAIN_CITY_GOLD_OUTPUT_MAX,
-		"真实地图金币必须拉开到1～15且平均7：总额%d，范围%d～%d"
+		"真实地图基础金币必须拉开到1～15且平均7：总额%d，范围%d～%d"
 			% [
-				terrain_monthly_gold,
+				terrain_base_monthly_gold,
 				terrain_gold_min,
 				terrain_gold_max,
 			]
+	)
+	var expected_effective_gold := 0
+	for city in gs.cities:
+		var ruler_multiplier := RulerProfile.gold_output_multiplier(
+			gs.nations[city.owner_nation]
+		)
+		expected_effective_gold += int(floor(
+			float(city.gold_per_month) * ruler_multiplier
+		))
+	_check(
+		terrain_monthly_gold == expected_effective_gold,
+		"正式地图有效金产出必须逐城应用当前君主倍率：预期%d，实为%d"
+			% [expected_effective_gold, terrain_monthly_gold]
 	)
 	_check(
 		terrain_half_year_food
@@ -1012,11 +1034,249 @@ func _test_world_generation() -> void:
 		)
 	_check(province_owners_stable, "省份必须保存不随占领变化的初始归属")
 	var province_geometry := MapRenderer.build_province_boundary_segments(gs)
+	var repeated_province_geometry := (
+		MapRenderer.build_province_boundary_segments(gs)
+	)
+	var curved_topology_deterministic := true
+	for topology_key in [
+		"province", "coast",
+		"country_owner_a", "country_owner_b",
+		"country_side_a", "country_side_b",
+		"coast_owner", "coast_side",
+	]:
+		curved_topology_deterministic = (
+			curved_topology_deterministic
+			and province_geometry[topology_key]
+				== repeated_province_geometry[topology_key]
+		)
+	var country_segment_count := (
+		province_geometry["country"] as PackedVector2Array
+	).size() / 2
+	var coast_segment_count := (
+		province_geometry["coast"] as PackedVector2Array
+	).size() / 2
+	var country_sides_valid := true
+	var country_segments: PackedVector2Array = province_geometry["country"]
+	var country_owners_a: PackedInt32Array = province_geometry["country_owner_a"]
+	var country_owners_b: PackedInt32Array = province_geometry["country_owner_b"]
+	var country_sides_a: PackedVector2Array = province_geometry["country_side_a"]
+	var country_sides_b: PackedVector2Array = province_geometry["country_side_b"]
+	for boundary_index in range(country_segment_count):
+		var from := country_segments[boundary_index * 2]
+		var to := country_segments[boundary_index * 2 + 1]
+		var direction := (to - from).normalized()
+		var normal := Vector2(-direction.y, direction.x)
+		var side_a := country_sides_a[boundary_index].dot(normal)
+		var side_b := country_sides_b[boundary_index].dot(normal)
+		country_sides_valid = (
+			country_sides_valid
+			and country_owners_a[boundary_index] != country_owners_b[boundary_index]
+			and absf(side_a) > 0.000001
+			and absf(side_b) > 0.000001
+			and side_a * side_b < 0.0
+		)
 	_check(
 		not (province_geometry["province"] as PackedVector2Array).is_empty()
-		and not (province_geometry["nation"] as PackedVector2Array).is_empty()
-		and not (province_geometry["coast"] as PackedVector2Array).is_empty(),
-		"省份栅格必须能提取省界、国境和地图外轮廓三种线段"
+		and not (province_geometry["country"] as PackedVector2Array).is_empty()
+		and not (province_geometry["coast"] as PackedVector2Array).is_empty()
+		and (province_geometry["country_owner_a"] as PackedInt32Array).size()
+			== country_segment_count
+		and (province_geometry["country_owner_b"] as PackedInt32Array).size()
+			== country_segment_count
+		and (province_geometry["country_side_a"] as PackedVector2Array).size()
+			== country_segment_count
+		and (province_geometry["country_side_b"] as PackedVector2Array).size()
+			== country_segment_count
+		and (province_geometry["coast_owner"] as PackedInt32Array).size()
+			== coast_segment_count
+		and (province_geometry["coast_side"] as PackedVector2Array).size()
+			== coast_segment_count
+		and country_sides_valid
+		and curved_topology_deterministic,
+		"省界、国境和海岸必须逐段保留两侧国家及内侧方向"
+	)
+	var synthetic_segments := PackedVector2Array([
+		Vector2(0.0, 0.0), Vector2(0.25, 0.0),
+		Vector2(0.25, 0.0), Vector2(0.25, 0.25),
+		Vector2(0.25, 0.25), Vector2(0.50, 0.25),
+		Vector2(0.50, 0.25), Vector2(0.50, 0.50),
+	])
+	var synthetic_curve := MapRenderer._curve_subdivide_boundary_graph(
+		synthetic_segments,
+		{
+			"kind": "province",
+			"province_a": PackedInt32Array([3, 3, 3, 3]),
+			"province_b": PackedInt32Array([7, 7, 7, 7]),
+			"side_a": PackedVector2Array([
+				Vector2.DOWN, Vector2.RIGHT, Vector2.DOWN, Vector2.RIGHT,
+			]),
+			"side_b": PackedVector2Array([
+				Vector2.UP, Vector2.LEFT, Vector2.UP, Vector2.LEFT,
+			]),
+		},
+		Vector2i(16, 16)
+	)
+	var synthetic_curve_segments: PackedVector2Array = (
+		synthetic_curve["segments"]
+	)
+	var synthetic_side_a: PackedVector2Array = (
+		synthetic_curve["province_side_a"]
+	)
+	var synthetic_side_b: PackedVector2Array = (
+		synthetic_curve["province_side_b"]
+	)
+	var synthetic_curve_valid := synthetic_curve_segments.size() > 8
+	for segment_index in range(synthetic_curve_segments.size() / 2):
+		var direction := (
+			synthetic_curve_segments[segment_index * 2 + 1]
+			- synthetic_curve_segments[segment_index * 2]
+		).normalized()
+		var normal := Vector2(-direction.y, direction.x)
+		synthetic_curve_valid = (
+			synthetic_curve_valid
+			and synthetic_side_a[segment_index].dot(normal) > 0.99
+			and synthetic_side_b[segment_index].dot(normal) < -0.99
+		)
+	_check(
+		synthetic_curve_valid,
+		"链级曲线必须消除单格台阶，并按微段局部法线携带两侧归属"
+	)
+	var junction_segments := PackedVector2Array([
+		Vector2(0.5, 0.5), Vector2(0.25, 0.5),
+		Vector2(0.5, 0.5), Vector2(0.75, 0.5),
+		Vector2(0.5, 0.5), Vector2(0.5, 0.75),
+	])
+	var junction_curve := MapRenderer._curve_subdivide_boundary_graph(
+		junction_segments,
+		{
+			"kind": "province",
+			"province_a": PackedInt32Array([1, 1, 2]),
+			"province_b": PackedInt32Array([2, 2, 3]),
+			"side_a": PackedVector2Array([
+				Vector2.DOWN, Vector2.UP, Vector2.RIGHT,
+			]),
+			"side_b": PackedVector2Array([
+				Vector2.UP, Vector2.DOWN, Vector2.LEFT,
+			]),
+		},
+		Vector2i(16, 16)
+	)
+	var junction_output: PackedVector2Array = junction_curve["segments"]
+	var junction_endpoint_count := 0
+	for junction_point in junction_output:
+		if junction_point.is_equal_approx(Vector2(0.5, 0.5)):
+			junction_endpoint_count += 1
+	_check(
+		junction_endpoint_count == 3,
+		"不同省份对共享的三岔点必须切成三条链并固定在原始交点"
+	)
+	var premultiplied_probe := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	premultiplied_probe.fill(Color(0.0, 0.0, 0.0, 0.0))
+	var probe_ink := Color(0.30, 0.045, 0.035, 1.0).srgb_to_linear()
+	for probe_y in range(4):
+		for probe_x in range(4):
+			premultiplied_probe.set_pixel(
+				probe_x, probe_y, Color(probe_ink.r, probe_ink.g, probe_ink.b, 1.0)
+			)
+	_check(
+		premultiplied_probe.generate_mipmaps() == OK,
+		"国界预乘纹理必须能生成完整 mip 链"
+	)
+	var probe_data := premultiplied_probe.get_data()
+	var probe_format := premultiplied_probe.get_format()
+	var probe_width := 8
+	var probe_height := 8
+	var premultiplied_mips_valid := true
+	for mip_level in range(premultiplied_probe.get_mipmap_count() + 1):
+		var mip_offset := premultiplied_probe.get_mipmap_offset(mip_level)
+		var mip_width := maxi(probe_width >> mip_level, 1)
+		var mip_height := maxi(probe_height >> mip_level, 1)
+		var mip_byte_count := mip_width * mip_height * 4
+		var mip_bytes := probe_data.slice(mip_offset, mip_offset + mip_byte_count)
+		var mip_image := Image.create_from_data(
+			mip_width, mip_height, false, probe_format, mip_bytes
+		)
+		for mip_y in range(mip_height):
+			for mip_x in range(mip_width):
+				var sample := mip_image.get_pixel(mip_x, mip_y)
+				if sample.a <= 0.01:
+					continue
+				var decoded := Vector3(sample.r, sample.g, sample.b) / sample.a
+				premultiplied_mips_valid = (
+					premultiplied_mips_valid
+					and decoded.distance_to(
+						Vector3(probe_ink.r, probe_ink.g, probe_ink.b)
+					) < 0.025
+				)
+	_check(
+		premultiplied_mips_valid,
+		"RGBA8 各级 mip 反预乘后必须保持国界墨色，禁止白边、黑边和色偏"
+	)
+	var micro_cell := 1.0 / 2048.0
+	var micro_curve := MapRenderer._curve_subdivide_boundary_graph(
+		PackedVector2Array([Vector2.ZERO, Vector2(micro_cell, 0.0)]),
+		{
+			"kind": "province",
+			"province_a": PackedInt32Array([3]),
+			"province_b": PackedInt32Array([7]),
+			"side_a": PackedVector2Array([Vector2.DOWN]),
+			"side_b": PackedVector2Array([Vector2.UP]),
+		},
+		Vector2i(2048, 2048)
+	)
+	_check(
+		(micro_curve["segments"] as PackedVector2Array).size() == 8
+		and (micro_curve["province_a"] as PackedInt32Array).size() == 4,
+		"一格尺度的真实边界不得被归一化 UV 退化阈值吞掉"
+	)
+	var reverse_edge := {
+		"from": Vector2(micro_cell, 0.0),
+		"to": Vector2.ZERO,
+		"province_a": 3,
+		"province_b": 7,
+		"side_a": Vector2.DOWN,
+		"side_b": Vector2.UP,
+	}
+	var reverse_side_info := MapRenderer._province_chain_side_info(reverse_edge)
+	var reverse_coast_sign := MapRenderer._coast_chain_side_sign({
+		"from": Vector2(micro_cell, 0.0),
+		"to": Vector2.ZERO,
+		"coast_side": Vector2.DOWN,
+	})
+	_check(
+		int(reverse_side_info["left_province"]) == 7
+		and int(reverse_side_info["right_province"]) == 3
+		and reverse_coast_sign < 0.0,
+		"反向追踪的一格边仍必须按真实切线保留国家与海岸内侧"
+	)
+	var tiny_loop := PackedVector2Array([
+		Vector2(0.0, 0.0), Vector2(micro_cell, 0.0),
+		Vector2(micro_cell, 0.0), Vector2(micro_cell, micro_cell),
+		Vector2(micro_cell, micro_cell), Vector2(0.0, micro_cell),
+		Vector2(0.0, micro_cell), Vector2(0.0, 0.0),
+	])
+	var tiny_loop_curve := MapRenderer._curve_subdivide_boundary_graph(
+		tiny_loop,
+		{
+			"kind": "coast",
+			"coast_province": PackedInt32Array([3, 3, 3, 3]),
+			"coast_side": PackedVector2Array([
+				Vector2.DOWN, Vector2.LEFT, Vector2.UP, Vector2.RIGHT,
+			]),
+		},
+		Vector2i(2048, 2048)
+	)
+	var tiny_loop_segments: PackedVector2Array = tiny_loop_curve["segments"]
+	var tiny_loop_points := PackedVector2Array()
+	for segment_index in range(tiny_loop_segments.size() / 2):
+		tiny_loop_points.append(tiny_loop_segments[segment_index * 2])
+	_check(
+		tiny_loop_segments.size() >= 24
+		and tiny_loop_segments[tiny_loop_segments.size() - 1]
+			.is_equal_approx(tiny_loop_segments[0])
+		and absf(MapRenderer._boundary_ring_area(tiny_loop_points))
+			> 0.000000000001,
+		"一格闭合小岛不得被 RDP 压成两点往返直线"
 	)
 	_check(
 		not (province_geometry["coast"] as PackedVector2Array).is_empty(),
@@ -2128,6 +2388,31 @@ func _test_responsive_map_layout() -> void:
 		ui_font.has_char("国".unicode_at(0)),
 		"HUD 字体必须包含中文字形，不能回退为乱码或方框"
 	)
+	var map_label_font := MapRenderer.create_map_label_font()
+	var renderer_source := FileAccess.get_file_as_string(
+		"res://scripts/view/map_renderer.gd"
+	)
+	var map_label_factory_start := renderer_source.find(
+		"static func create_map_label_font()"
+	)
+	var map_label_factory_end := renderer_source.find(
+		"\n\nfunc ", map_label_factory_start
+	)
+	var map_label_factory_source := ""
+	if map_label_factory_start >= 0 and map_label_factory_end > map_label_factory_start:
+		map_label_factory_source = renderer_source.substr(
+			map_label_factory_start,
+			map_label_factory_end - map_label_factory_start
+		).to_lower()
+	_check(
+		map_label_font != null
+			and map_label_font.has_char("国".unicode_at(0))
+			and map_label_factory_source.contains("return create_ui_font()")
+			and not map_label_factory_source.contains("fangsong")
+			and not map_label_factory_source.contains("noto serif")
+			and not map_label_factory_source.contains("source han serif"),
+		"国家地图标签必须复用可用的 CJK Sans/黑体字体，不得声明仿宋/衬线候选"
+	)
 	var hit_state := GameState.new()
 	hit_state.generate_grid_world(12346)
 	var list_state := GameState.new()
@@ -2332,6 +2617,10 @@ func _test_responsive_map_layout() -> void:
 	)
 	_check(
 		not (
+			peaceful_suzerainty_geometry["country"]
+				as PackedVector2Array
+		).is_empty()
+			and not (
 			peaceful_suzerainty_geometry["suzerainty"]
 				as PackedVector2Array
 		).is_empty()
@@ -2339,7 +2628,7 @@ func _test_responsive_map_layout() -> void:
 				peaceful_suzerainty_geometry["alliance"]
 					as PackedVector2Array
 			).is_empty(),
-		"和平宗主-藩王及兄弟藩王边界必须统一进入宗藩内部线，不得复用同盟青线"
+		"和平宗藩边界必须保留国家中心线；宗藩与同盟子集只用于语义诊断"
 	)
 	border_state.suzerainty.erase(3)
 	border_state.set_diplomatic_relation(
@@ -2367,10 +2656,17 @@ func _test_responsive_map_layout() -> void:
 				as PackedVector2Array
 		).is_empty()
 			and not (
-				civil_war_geometry["nation"]
+				civil_war_geometry["enemy"]
 					as PackedVector2Array
-			).is_empty(),
-		"削藩内战时宗藩弱边界必须消失，并恢复敌对国家边界"
+			).is_empty()
+			and (
+				civil_war_geometry["country"]
+					as PackedVector2Array
+			) == (
+				peaceful_suzerainty_geometry["country"]
+					as PackedVector2Array
+			),
+		"削藩内战只能改变外交语义子集，不得改变国家边界中心线"
 	)
 	var hit_origin := Vector2(80.0, 60.0)
 	var hit_map_size := Vector2(640.0, 640.0)
@@ -2978,19 +3274,15 @@ func _test_time_layering() -> void:
 	gs.cities[0].war_disruption_until_day = (
 		gs.day + Simulation.CITY_WAR_DISRUPTION_DAYS
 	)
-	var monthly := 0
-	for c in gs.cities:
-		monthly += Simulation.city_gold_output(gs, c)
-	var war_upkeep := 0
-	for nation in gs.nations:
-		war_upkeep += gs.nation_monthly_military_upkeep(
-			nation.id
-		)
+	var predicted_flows := Simulation.monthly_gold_flows(gs)
+	var expected_balance := 0
+	for flow in predicted_flows:
+		expected_balance += int(flow["balance"])
 	sim._advance_day()   # day==30
 	var after := 0
 	for n in gs.nations:
 		after += n.treasury_gold
-	var expected_treasury := before + monthly - war_upkeep
+	var expected_treasury := before + expected_balance
 	_check(after == expected_treasury,
 		"day30 应结算月收入并扣战争军费：应 %d，实为 %d"
 			% [expected_treasury, after])
@@ -5374,8 +5666,7 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 	sim._synchronize_war_gold_income_snapshots()
 	var frozen_after_loss := Simulation.gold_reserve_policy(gs, 0)
 	_check(
-		collapsed_income == 0
-		and gs.nations[0].war_gold_income_snapshot == expected_snapshot
+		gs.nations[0].war_gold_income_snapshot == expected_snapshot
 		and int(frozen_after_loss["reserve_target"]) == expected_snapshot * 6
 		and int(frozen_after_loss["budget_monthly_balance"])
 			== int(war["budget_monthly_balance"])
@@ -5386,12 +5677,121 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 	)
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	sim._synchronize_war_gold_income_snapshots()
+	var postwar_income := int(
+		Simulation.monthly_gold_flows(gs)[0]["net_income"]
+	)
 	var postwar := Simulation.gold_reserve_policy(gs, 0)
 	_check(
 		gs.nations[0].war_gold_income_snapshot == -1
 		and int(postwar["reserve_months"]) == 36
-		and int(postwar["reserve_target"]) == 0,
+		and int(postwar["reserve_target"])
+			== postwar_income * 36,
 		"最后一场战争结束后必须清空快照并恢复按当前收入计算三年目标"
+	)
+	sim.free()
+
+
+func _test_ruler_economy_integration() -> void:
+	print("[31c] 君主经济：产出、军费、储备与财政缩编使用同一有效口径")
+	var gs := GameState.new()
+	gs.generate_grid_world(7106)
+	gs.armies.clear()
+	for nation in gs.nations:
+		_set_neutral_ruler(nation)
+		nation.trade_policy = RulerProfile.POLICY_ISOLATION
+	for edge in gs.edges:
+		edge.max_manpower = 0
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	for city in gs.cities:
+		city.gold_per_month = 0
+		city.manpower_per_month = 0
+		city.food_per_half_year = 0
+	var nation := gs.nations[0]
+	nation.ruler_archetype = RulerProfile.INEPT
+	var nation_cities := gs.cities_of(0)
+	var city: City = null
+	for candidate in nation_cities:
+		if not candidate.is_dock:
+			city = candidate
+			break
+	_check(city != null, "君主经济测试需要一座国0陆城")
+	if city == null:
+		return
+	city.gold_per_month = 10
+	city.manpower_per_month = 10
+	city.food_per_half_year = 100
+	var army_city := city
+	for candidate in nation_cities:
+		if not candidate.is_dock and candidate != city:
+			army_city = candidate
+			break
+	var army := gs.create_army(0, army_city.id, 5000, 5000)
+	var base_upkeep := GameState.army_monthly_upkeep(army.size)
+	var expected_gold := int(floor(
+		10.0 * RulerProfile.gold_output_multiplier(nation)
+	))
+	var expected_food := int(floor(
+		100.0 * RulerProfile.food_output_multiplier(nation)
+	))
+	var expected_manpower := int(floor(
+		10.0 * RulerProfile.manpower_output_multiplier(nation)
+	))
+	var expected_upkeep := int(ceil(
+		float(base_upkeep) * RulerProfile.upkeep_multiplier(nation)
+	))
+	var flows := Simulation.monthly_gold_flows(gs)
+	var flow: Dictionary = flows[0]
+	_check(
+		Simulation.city_gold_output(gs, city) == expected_gold
+		and Simulation.city_food_output(gs, city) == expected_food
+		and Simulation.city_manpower_output(gs, city) == expected_manpower
+		and int(flow["military_upkeep"]) == expected_upkeep,
+		"非中性君主的城市产出与军费预测必须逐项落地且取整一致"
+	)
+	var reserve := Simulation.gold_reserve_policy(gs, 0, flows)
+	_check(
+		int(reserve["reserve_months"])
+			== Simulation.PEACE_GOLD_RESERVE_MONTHS
+				+ RulerProfile.reserve_months_bonus(nation),
+		"财政储备月数必须叠加当前君主加法修正"
+	)
+	var before_manpower := nation.manpower_pool
+	var before_gold := nation.treasury_gold
+	var sim := Simulation.new()
+	sim.setup(gs)
+	gs.day = Simulation.DAYS_PER_MONTH
+	sim._resolve_economy()
+	_check(
+		nation.manpower_pool - before_manpower == expected_manpower
+		and nation.treasury_gold - before_gold
+			== int(flow["balance"]),
+		"非中性君主的实际月结必须与产出和有效军费预测同源"
+	)
+	var upkeep_before_demobilization := (
+		Simulation.effective_monthly_military_upkeep(gs, 0)
+	)
+	var view := AiWorldView.build(gs, 0)
+	var demobilized := sim._demobilize_for_gold_security(
+		view, ThreatField.build(view), 1, 1
+	)
+	var upkeep_after_demobilization := (
+		Simulation.effective_monthly_military_upkeep(gs, 0)
+	)
+	_check(
+		demobilized
+		and upkeep_before_demobilization
+			- upkeep_after_demobilization >= 1
+		and nation.ai_last_force_reason.contains(
+			"月省%d金" % (
+				upkeep_before_demobilization
+					- upkeep_after_demobilization
+			)
+		),
+		"财政缩编必须按君主修正后的国家总军费记录并兑现节流"
 	)
 	sim.free()
 
@@ -10119,17 +10519,30 @@ func _test_diplomacy_state_and_ai() -> void:
 		"盟军不得进入威胁场的敌军来源"
 	)
 	var alliance_geometry := MapRenderer.build_province_boundary_segments(gs)
+	var alliance_country_geometry: PackedVector2Array = (
+		alliance_geometry["country"]
+	)
+	var alliance_boundary_color := MapRenderer.nation_boundary_color(gs, 0)
 	_check(
-		not (
+		not alliance_country_geometry.is_empty()
+		and not (
 			alliance_geometry["alliance"] as PackedVector2Array
 		).is_empty(),
-		"盟国接壤边界应生成独立深蓝色联盟线段"
+		"盟国接壤边界应保留国家中心线，联盟子集只记录外交语义"
 	)
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	var enemy_geometry := MapRenderer.build_province_boundary_segments(gs)
+	var enemy_boundary_color := MapRenderer.nation_boundary_color(gs, 0)
 	_check(
-		not (enemy_geometry["enemy"] as PackedVector2Array).is_empty(),
-		"交战国接壤边界应生成独立深红色敌对线段"
+		not (enemy_geometry["enemy"] as PackedVector2Array).is_empty()
+		and (enemy_geometry["country"] as PackedVector2Array)
+			== alliance_country_geometry
+		and enemy_boundary_color.is_equal_approx(alliance_boundary_color)
+		and is_equal_approx(
+			MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
+			1.15
+		),
+		"外交关系变化只能更新语义子集，国家边界几何与国家色不得变化"
 	)
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
@@ -16226,6 +16639,8 @@ func _test_vassal_tribute() -> void:
 				GameState.DiplomaticRelation.NEUTRAL
 			)
 	for nation in crisis.nations:
+		_set_neutral_ruler(nation)
+		nation.trade_policy = RulerProfile.POLICY_ISOLATION
 		nation.warehouse_city_ids.clear()
 		nation.battle_groups.clear()
 		nation.next_battle_group_id = 0
@@ -16264,6 +16679,10 @@ func _test_vassal_tribute() -> void:
 		"last_centralization_day": -1,
 		"civil_war": false,
 	}
+	# 本夹具只验证贡赋与军费缩编；封闭路网以隔离新增贸易税，维持
+	# “宗主恰好收支为零”的既有前置条件。
+	for crisis_edge in crisis.edges:
+		crisis_edge.max_manpower = 0
 	crisis.refresh_derived()
 	var subject_city_income := Simulation.city_gold_output(
 		crisis,
@@ -16363,8 +16782,8 @@ func _test_vassal_tribute() -> void:
 			)
 		)
 		subject_upkeep_after_ai.append(
-			crisis.nation_monthly_military_upkeep(
-				subject_id
+			Simulation.effective_monthly_military_upkeep(
+				crisis, subject_id
 			)
 		)
 		var overlord_view := AiWorldView.build(
@@ -17350,6 +17769,13 @@ func _test_centralization_decision() -> void:
 			)
 	)
 	var strong_ratio := DiplomacyAI.vassal_resist_ratio(rs, rs_sub)
+	# 削藩反抗现由 RebellionSystem 统一判断：除军力外，还必须满足
+	# 低忠诚持续三个月与双方叛乱冷却。显式构造该政治成熟状态。
+	for city in rs.land_cities_of(rs_sub):
+		city.loyalty = RebellionSystem.LOYALTY_REBEL
+		city.rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS
+	rs.nations[0].last_rebellion_day = -1
+	rs.nations[rs_sub].last_rebellion_day = -1
 	var rs_actions: Array[Dictionary] = []
 	DiplomacyAI._collect_centralization_actions(
 		rs,
@@ -17579,6 +18005,9 @@ func _test_shared_granary_and_relay_supply() -> void:
 			break
 	var subject := gs.enfeoff(0, region)
 	gs.refresh_derived()
+	# 本段只验证宗藩共享粮池聚合，禁用国际粮食贸易以隔离外部流量。
+	for pool_nation in gs.nations:
+		pool_nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	var sub_capital := gs.nations[subject].capital_city_id
 	_check(
 		subject > 0
@@ -17753,6 +18182,10 @@ func _test_vassal_governance_output_bonus() -> void:
 			break
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0 and gs.is_vassal(subject) and not gs.is_vassal(0), "分封应建立藩王且宗主非藩王")
+	# 本用例只隔离宗藩治理倍率；新藩王正常会获得独立随机君主，
+	# 若不显式中性化便会把治理倍率与君主产出倍率混在一起。
+	_set_neutral_ruler(gs.nations[0])
+	_set_neutral_ruler(gs.nations[subject])
 
 	# 取一座宗主直辖的非首都城作探针（owner=0，非藩王）。清战乱减产 + 清驻军，
 	# 使 garrison 惩罚在翻转 owner 前后都为 0，隔离出纯粹的治理倍率维度。
@@ -18665,6 +19098,9 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 	print("[33] 和平军备：30%编制、主动裁军屯粮、高威胁中立边境驻军")
 	var gs := GameState.new()
 	gs.generate_grid_world(33001)
+	# 本用例刻意制造零产粮压力，隔离国际粮食外援。
+	for nation in gs.nations:
+		nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	for nation_a in range(gs.nations.size()):
 		for nation_b in range(nation_a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(
@@ -19084,6 +19520,9 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	print("[34] 资源核心：AI价值识别；富粮国家宣战时有限爆兵")
 	var gs := GameState.new()
 	gs.generate_grid_world(34001)
+	# 本用例直接对比本国产粮动员能力，隔离国际粮食外援。
+	for nation in gs.nations:
+		nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	for nation_a in range(gs.nations.size()):
 		for nation_b in range(nation_a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(
@@ -19414,6 +19853,47 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 			and emergency_army.battle_id == siege.id,
 		"被围城市当日新征军必须进入现有围城守军侧，不能留在战斗外"
 	)
+	# 资源充足也不得继续把小国的单支机动预备队补成二轻一重完整战团。
+	# 连续多轮调用锁住稳定目标，而不是只验证第一次应急征兵。
+	gs.nations[0].manpower_pool = 100000
+	gs.nations[0].treasury_gold = 100000
+	var small_nation_grew_again := false
+	for _force_tick in range(5):
+		var stable_view := AiWorldView.build(gs, 0)
+		small_nation_grew_again = (
+			sim._ai_manage_force_structure(
+				stable_view,
+				StrategicMapSnapshot.build(stable_view),
+				ThreatField.build(stable_view)
+			)
+			or small_nation_grew_again
+		)
+	var small_line_count := 0
+	var small_main_light_count := 0
+	var small_main_heavy_count := 0
+	for small_army in gs.armies:
+		if small_army.owner_nation != 0 or small_army.size <= 0:
+			continue
+		if small_army.is_line_role():
+			small_line_count += 1
+		elif small_army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+			small_main_heavy_count += 1
+		else:
+			small_main_light_count += 1
+	_check(
+		not small_nation_grew_again
+			and gs.active_army_count(0) == 2
+			and small_line_count == 1
+			and small_main_light_count
+				== Simulation.SMALL_NATION_MOBILE_RESERVE_ARMIES
+			and small_main_heavy_count == 0
+			and emergency_army != null
+			and emergency_army.battle_group_id >= 0
+			and gs.battle_group_members(
+				0, emergency_army.battle_group_id
+			).size() == 1,
+		"一城小国长期应稳定为一支填线守军加一支轻型机动预备队，不得继续补满重军战团"
+	)
 	if emergency_army != null:
 		siege.side_b.erase(emergency_army)
 		emergency_army.battle_id = -1
@@ -19559,6 +20039,74 @@ func _test_combat_fairness_and_conservation() -> void:
 			0.000001
 		),
 		"无限正面混编军的侧级组织效率必须严格还原逐军火力求和"
+	)
+	# 君主倍率改变的是有效士气量纲。侵蚀回写必须同时除以攻势与君主倍率，
+	# 否则 ruler>1 的军队会被多扣、ruler<1 的军队会被少扣。
+	var high_ruler_morale := _make_army(5, 0, 1000, 10, 10)
+	var low_ruler_morale := _make_army(6, 0, 1000, 10, 10)
+	high_ruler_morale.morale = 0.8
+	low_ruler_morale.morale = 0.8
+	high_ruler_morale.offensive_attack_multiplier = 1.5
+	low_ruler_morale.offensive_attack_multiplier = 1.5
+	high_ruler_morale.ruler_morale_multiplier = 1.25
+	low_ruler_morale.ruler_morale_multiplier = 0.5
+	var ruler_morale_side: Array[Army] = [
+		high_ruler_morale,
+		low_ruler_morale,
+	]
+	var ruler_morale_frontline: Array[Dictionary] = [
+		{
+			"army": high_ruler_morale,
+			"committed": high_ruler_morale.size,
+			"size_before": high_ruler_morale.size,
+		},
+		{
+			"army": low_ruler_morale,
+			"committed": low_ruler_morale.size,
+			"size_before": low_ruler_morale.size,
+		},
+	]
+	var high_effective_before := high_ruler_morale.combat_morale()
+	var low_effective_before := low_ruler_morale.combat_morale()
+	var ruler_mass_before := (
+		float(high_ruler_morale.size) * high_effective_before
+		+ float(low_ruler_morale.size) * low_effective_before
+	)
+	Combat._erode_frontline_morale(
+		ruler_morale_side,
+		ruler_morale_frontline,
+		0,
+		ruler_mass_before / 2000.0
+	)
+	var ruler_mass_after := (
+		float(high_ruler_morale.size)
+			* high_ruler_morale.combat_morale()
+		+ float(low_ruler_morale.size)
+			* low_ruler_morale.combat_morale()
+	)
+	_check(
+		_approx(
+			ruler_mass_after,
+			ruler_mass_before
+				- 2000.0 * Combat.MORALE_BASE_DECAY,
+			0.000001
+		),
+		"不同君主倍率的前线侵蚀后，有效士气质量必须精确达到目标"
+	)
+	_check(
+		_approx(
+			high_effective_before
+				- high_ruler_morale.combat_morale(),
+			Combat.MORALE_BASE_DECAY,
+			0.000001
+		)
+		and _approx(
+			low_effective_before
+				- low_ruler_morale.combat_morale(),
+			Combat.MORALE_BASE_DECAY,
+			0.000001
+		),
+		"君主士气倍率不得放大或缩小每兵有效士气侵蚀"
 	)
 
 	# (g) 正面宽度/预备队（item 5）：窄路(frontage=5000)上大军(20000)无法全数展开。

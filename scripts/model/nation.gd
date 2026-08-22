@@ -4,6 +4,30 @@ extends RefCounted
 
 var id: int = 0
 var color: Color = Color.WHITE             ## 阵营色（渲染用）
+var name: String = ""                    ## 稳定国号；UI 不再直接展示裸 id
+var short_name: String = ""              ## 战略地图大字使用的 1～4 字简称
+var name_kind: String = "state"          ## dynasty/state/vassal/rebel
+## 建国/受封时的地域锚点。首次命名后不随迁都、失地或兼并改变；旧档缺失时
+## WorldNaming 仅以当时有效首都（再回退到首座直属陆城）确定性补一次。
+var founding_city_id: int = -1
+
+## 君主只保存身份与特质；所有效果由 RulerProfile 纯函数派生，禁止把加成
+## 永久烧入经济或军队基础属性，确保分封、兼并与未来继位不会叠层漂移。
+var ruler_name: String = ""
+var ruler_archetype: int = 0
+var ruler_traits: Array[String] = []
+var ruler_started_day: int = 0
+var ruler_revision: int = 0
+var trade_policy: int = 0
+
+## 最近一次月度内部政治与贸易快照，仅用于 UI/解释；真源分别是 City
+## 忠诚字段及 GameState.trade_routes。
+var average_loyalty: float = 70.0
+var last_trade_gold: int = 0
+var last_trade_food_import: int = 0
+var last_trade_food_export: int = 0
+var last_trade_route_count: int = 0
+var last_rebellion_day: int = -1
 
 var treasury_gold: int = 0                 ## 国家钱仓
 var manpower_pool: int = 0                 ## 全国统一可用人口库（人口 SSoT）

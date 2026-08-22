@@ -130,6 +130,25 @@ func _run() -> void:
 	if not bool(city_result.get("ok", false)):
 		_fail("city edit was rejected")
 		return
+	# Map templates keep initial identity, policy and loyalty, but deliberately
+	# omit active rebellion/trade-route snapshots from a running campaign.
+	var identity_nation = state.nations[city.owner_nation]
+	identity_nation.founding_city_id = city.id
+	identity_nation.name = "测"
+	identity_nation.short_name = "测"
+	identity_nation.name_kind = WorldNaming.KIND_SEPARATIST
+	identity_nation.ruler_name = "测试君主"
+	identity_nation.ruler_archetype = RulerProfile.MERCHANT
+	identity_nation.ruler_traits = [
+		RulerProfile.TRAIT_MERCANTILE
+	] as Array[String]
+	identity_nation.ruler_started_day = 17
+	identity_nation.ruler_revision = 3
+	identity_nation.trade_policy = RulerProfile.POLICY_GOLD
+	city.name = "测试城"
+	city.region_symbol = "测"
+	city.loyalty = 61.5
+	city.loyalty_target_nation = (city.owner_nation + 1) % state.nations.size()
 	var edited_edge: Edge = null
 	for edge in state.edges:
 		if edge.kind == Edge.Kind.LAND:
@@ -161,10 +180,104 @@ func _run() -> void:
 	if not bool(loaded.get("ok", false)):
 		_fail(str(loaded.get("error", "load failed")))
 		return
+	var loaded_data := loaded["data"] as Dictionary
+	var loaded_city_record := (loaded_data["cities"] as Array)[
+		original_city_id
+	] as Dictionary
+	var loaded_nation_record := (loaded_data["nations"] as Array)[
+		identity_nation.id
+	] as Dictionary
+	if (
+		int(loaded_data.get("version", -1)) != MapDefinition.VERSION
+		or loaded_data.has("rebellions")
+		or loaded_data.has("trade_routes")
+		or loaded_city_record.has("rebellion_progress")
+		or loaded_city_record.has("rebellion_cooldown_until_day")
+		or loaded_city_record.has("loyalty_trend")
+		or loaded_city_record.has("trade_route_count")
+		or loaded_city_record.has("trade_gold_bonus")
+		or loaded_nation_record.has("last_rebellion_day")
+		or loaded_nation_record.has("last_trade_route_count")
+	):
+		_fail("map v2 must omit campaign rebellion and trade-route state")
+		return
+	var v1_definition := loaded_data.duplicate(true)
+	v1_definition["version"] = 1
+	v1_definition.erase("nations")
+	for city_value in v1_definition["cities"]:
+		var legacy_city := city_value as Dictionary
+		legacy_city.erase("name")
+		legacy_city.erase("region_symbol")
+		legacy_city.erase("loyalty")
+		legacy_city.erase("loyalty_target_nation")
+	if not MapDefinition.validate(v1_definition).is_empty():
+		_fail("legacy v1 maps with missing v2 fields must remain valid")
+		return
+	var invalid_v1_no_land := v1_definition.duplicate(true)
+	_remove_nation_land(invalid_v1_no_land, 1, 0)
+	if MapDefinition.validate(invalid_v1_no_land).is_empty():
+		_fail("v1 maps must reject nations without a land city")
+		return
+	var legacy_restored := GameState.new()
+	legacy_restored.generate_from_map_definition(v1_definition, 24680)
+	if (
+		legacy_restored.nations[0].name.strip_edges().is_empty()
+		or legacy_restored.nations[0].short_name.strip_edges().is_empty()
+		or legacy_restored.cities[0].name.strip_edges().is_empty()
+		or not is_equal_approx(
+			legacy_restored.cities[0].loyalty,
+			RebellionSystem.LOYALTY_DEFAULT
+		)
+		or legacy_restored.cities[0].loyalty_target_nation
+			!= legacy_restored.cities[0].owner_nation
+	):
+		_fail("legacy v1 defaults were not rebuilt deterministically")
+		return
 	var invalid_version := (loaded["data"] as Dictionary).duplicate(true)
 	invalid_version["version"] = MapDefinition.VERSION + 1
 	if MapDefinition.validate(invalid_version).is_empty():
 		_fail("future map versions must be rejected")
+		return
+	var invalid_v2_no_land := loaded_data.duplicate(true)
+	_remove_nation_land(invalid_v2_no_land, 1, 0)
+	if MapDefinition.validate(invalid_v2_no_land).is_empty():
+		_fail("v2 maps must reject nations without a land city")
+		return
+	var invalid_nation_name := loaded_data.duplicate(true)
+	(invalid_nation_name["nations"] as Array)[0]["name"] = "双字"
+	if MapDefinition.validate(invalid_nation_name).is_empty():
+		_fail("v2 nation names must be one character")
+		return
+	var invalid_short_name := loaded_data.duplicate(true)
+	(invalid_short_name["nations"] as Array)[0]["short_name"] = ""
+	if MapDefinition.validate(invalid_short_name).is_empty():
+		_fail("v2 nation short names must be one character")
+		return
+	var invalid_vassal := loaded_data.duplicate(true)
+	(invalid_vassal["nations"] as Array)[0]["name_kind"] = (
+		WorldNaming.KIND_VASSAL
+	)
+	if MapDefinition.validate(invalid_vassal).is_empty():
+		_fail("v2 map templates must reject orphan vassal identities")
+		return
+	var invalid_city_name := loaded_data.duplicate(true)
+	(invalid_city_name["cities"] as Array)[0]["name"] = " "
+	if MapDefinition.validate(invalid_city_name).is_empty():
+		_fail("v2 city names must be non-empty")
+		return
+	var duplicate_city_name := loaded_data.duplicate(true)
+	(duplicate_city_name["cities"] as Array)[1]["name"] = (
+		(duplicate_city_name["cities"] as Array)[0]["name"]
+	)
+	if MapDefinition.validate(duplicate_city_name).is_empty():
+		_fail("v2 city names must be unique")
+		return
+	var invalid_transient_state := loaded_data.duplicate(true)
+	(invalid_transient_state["cities"] as Array)[0][
+		"rebellion_progress"
+	] = 3
+	if MapDefinition.validate(invalid_transient_state).is_empty():
+		_fail("map templates must reject active rebellion state")
 		return
 	var invalid_edge := (loaded["data"] as Dictionary).duplicate(true)
 	(invalid_edge["edges"] as Array)[0]["city_b"] = 999999
@@ -174,6 +287,11 @@ func _run() -> void:
 	var restored := GameState.new()
 	restored.generate_from_map_definition(loaded["data"], 24680)
 	var restored_edge := restored.edge_of(edge_a, edge_b)
+	var restored_identity = restored.nations[identity_nation.id]
+	var restored_city = restored.cities[original_city_id]
+	var expected_ruler_traits: Array[String] = [
+		RulerProfile.TRAIT_MERCANTILE
+	]
 	var map_paths_roundtrip := restored.edges.size() == state.edges.size()
 	if map_paths_roundtrip:
 		for edge_index in range(state.edges.size()):
@@ -209,6 +327,36 @@ func _run() -> void:
 		"sea_roundtrip": restored_sea_count == original_sea_count,
 		"map_paths_roundtrip": map_paths_roundtrip,
 		"density_roundtrip": restored.city_density_settings == state.city_density_settings,
+		"nation_name": restored_identity.name == identity_nation.name,
+		"nation_short_name": (
+			restored_identity.short_name == identity_nation.short_name
+		),
+		"nation_name_kind": (
+			restored_identity.name_kind == identity_nation.name_kind
+		),
+		"founding_city_id": (
+			restored_identity.founding_city_id == identity_nation.founding_city_id
+		),
+		"ruler_name": restored_identity.ruler_name == "测试君主",
+		"ruler_archetype": (
+			restored_identity.ruler_archetype == RulerProfile.MERCHANT
+		),
+		"ruler_traits": (
+			restored_identity.ruler_traits
+				== expected_ruler_traits
+		),
+		"ruler_started_day": restored_identity.ruler_started_day == 17,
+		"ruler_revision": restored_identity.ruler_revision == 3,
+		"trade_policy": (
+			restored_identity.trade_policy == RulerProfile.POLICY_GOLD
+		),
+		"city_name": restored_city.name == "测试城",
+		"city_region_symbol": restored_city.region_symbol == "测",
+		"city_loyalty": is_equal_approx(restored_city.loyalty, 61.5),
+		"city_loyalty_target": (
+			restored_city.loyalty_target_nation
+				== city.loyalty_target_nation
+		),
 		"armies": not restored.armies.is_empty(),
 		"day_zero": restored.day == 0,
 	}
@@ -219,6 +367,10 @@ func _run() -> void:
 		print("MAP_EDITOR_RUNTIME_DIAGNOSTIC checks=", checks)
 		_fail("saved map did not round-trip edited topology and properties")
 		return
+	if not _verify_annexed_map_roundtrip():
+		return
+	if not _verify_vassal_export_as_sovereign():
+		return
 	print(
 		"MAP_EDITOR_RUNTIME_OK cities=", restored.land_cities().size(),
 		" edges=", restored.edges.size(),
@@ -228,3 +380,154 @@ func _run() -> void:
 	)
 	renderer.free()
 	quit(0)
+
+
+func _remove_nation_land(
+	definition: Dictionary,
+	removed_nation: int,
+	recipient_nation: int
+) -> void:
+	for city_value in definition["cities"]:
+		var record := city_value as Dictionary
+		if int(record.get("owner_nation", -1)) == removed_nation:
+			record["owner_nation"] = recipient_nation
+		if int(record.get("loyalty_target_nation", -1)) == removed_nation:
+			record["loyalty_target_nation"] = recipient_nation
+
+
+func _verify_annexed_map_roundtrip() -> bool:
+	var annexed := GameState.new()
+	annexed.generate_grid_world(24681)
+	var survivor_old_ids: Array[int] = [0, 2, 3]
+	var absorbed_ruler := annexed.nations[1].ruler_name
+	var stale_target_city := annexed.land_cities_of(1)[0].id
+	annexed.annex_nation(0, 1)
+	annexed.cities[stale_target_city].loyalty_target_nation = 1
+	if (
+		annexed.nations[1].alive
+		or not annexed.cities_of(1).is_empty()
+	):
+		_fail("annex fixture did not produce a historical dead nation")
+		return false
+	var definition := MapDefinition.from_state(annexed)
+	var validation_error := MapDefinition.validate(definition)
+	if not validation_error.is_empty():
+		_fail("annexed map export was invalid: " + validation_error)
+		return false
+	var records := definition["nations"] as Array
+	if int(definition["nation_count"]) != 3 or records.size() != 3:
+		_fail("annexed map did not compact historical dead nations")
+		return false
+	for new_id in range(survivor_old_ids.size()):
+		var old_id := survivor_old_ids[new_id]
+		var record := records[new_id] as Dictionary
+		if (
+			int(record["id"]) != new_id
+			or str(record["ruler_name"])
+				!= annexed.nations[old_id].ruler_name
+			or int(record["founding_city_id"])
+				!= annexed.nations[old_id].founding_city_id
+		):
+			_fail("surviving nation identity was not remapped deterministically")
+			return false
+	if str(records[0]["ruler_name"]) == absorbed_ruler:
+		_fail("historical dead nation identity leaked into map template")
+		return false
+	var city_records := definition["cities"] as Array
+	for city_value in city_records:
+		var record := city_value as Dictionary
+		var owner := int(record["owner_nation"])
+		var target := int(record["loyalty_target_nation"])
+		if owner < 0 or owner >= 3 or target < 0 or target >= 3:
+			_fail("annexed map retained an invalid nation reference")
+			return false
+	if int((city_records[stale_target_city] as Dictionary)[
+		"loyalty_target_nation"
+	]) != 0:
+		_fail("dead loyalty target did not fall back to the remapped owner")
+		return false
+	var restored := GameState.new()
+	restored.generate_from_map_definition(definition, 24681)
+	if restored.nations.size() != 3 or not restored.territory_structure_valid():
+		_fail("annexed map did not load as a valid compact scenario")
+		return false
+	for nation in restored.nations:
+		if not nation.alive or restored.land_cities_of(nation.id).is_empty():
+			_fail("restored compact scenario retained a landless nation")
+			return false
+	return true
+
+
+func _verify_vassal_export_as_sovereign() -> bool:
+	var vassal_state := GameState.new()
+	vassal_state.generate_grid_world(24682)
+	var granted_region: Array[int] = []
+	for candidate in vassal_state.land_cities_of(0):
+		if not candidate.is_capital:
+			granted_region.append(candidate.id)
+			break
+	if granted_region.size() != 1:
+		_fail("could not construct vassal export fixture")
+		return false
+	var subject_id := vassal_state.enfeoff(0, granted_region)
+	if subject_id < 0 or not vassal_state.is_vassal(subject_id):
+		_fail("enfeoff fixture did not create a vassal")
+		return false
+	var definition := MapDefinition.from_state(vassal_state)
+	var validation_error := MapDefinition.validate(definition)
+	if not validation_error.is_empty():
+		_fail("vassal map export was invalid: " + validation_error)
+		return false
+	var subject_record := (definition["nations"] as Array)[
+		subject_id
+	] as Dictionary
+	var founding_city_id := int(subject_record["founding_city_id"])
+	var founding_symbol := str(
+		(definition["cities"] as Array)[founding_city_id]["region_symbol"]
+	)
+	if (
+		str(subject_record["name_kind"]) == WorldNaming.KIND_VASSAL
+		or str(subject_record["name"]) != founding_symbol
+		or str(subject_record["short_name"]) != founding_symbol
+		or str(subject_record["name"]).contains("王")
+	):
+		_fail("vassal was not normalized to a sovereign map identity")
+		return false
+	var restored := GameState.new()
+	restored.generate_from_map_definition(definition, 24682)
+	var restored_line_armies := 0
+	var restored_main_light_armies := 0
+	var restored_main_heavy_armies := 0
+	for army in restored.armies:
+		if army.owner_nation != subject_id or army.size <= 0:
+			continue
+		if army.is_line_role():
+			restored_line_armies += 1
+		elif army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+			restored_main_heavy_armies += 1
+		else:
+			restored_main_light_armies += 1
+	if (
+		restored.is_vassal(subject_id)
+		or restored.nation_display_name(subject_id).contains("王")
+		or restored.nations[subject_id].name != founding_symbol
+		or restored_line_armies != 1
+		or restored_main_light_armies
+			!= GameState.SMALL_NATION_MOBILE_RESERVE_ARMIES
+		or restored_main_heavy_armies != 0
+	):
+		_fail(
+			"loaded map retained orphan vassal identity or invalid small-nation force: "
+			+ "vassal=%s display=%s name=%s symbol=%s line=%d main_light=%d main_heavy=%d"
+			% [
+				str(restored.is_vassal(subject_id)),
+				restored.nation_display_name(subject_id),
+				restored.nations[subject_id].name,
+				founding_symbol,
+				restored_line_armies,
+				restored_main_light_armies,
+				restored_main_heavy_armies,
+			]
+		)
+		return false
+	return true

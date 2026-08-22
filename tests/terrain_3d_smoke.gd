@@ -88,6 +88,18 @@ func _run() -> void:
 		map_3d._terrain.resolution.x
 		* map_3d._terrain.resolution.y
 	)
+	var requested_mesh_resolution := int(OS.get_environment(
+		"WW_VISUAL_MESH_RESOLUTION"
+	))
+	if requested_mesh_resolution <= 0:
+		requested_mesh_resolution = StrategicMap3D.BASE_MESH_RESOLUTION
+	var production_mesh_resolution := (
+		StrategicMap3D.BASE_MESH_RESOLUTION == 384
+		and maxi(
+			map_3d._terrain.resolution.x,
+			map_3d._terrain.resolution.y
+		) == requested_mesh_resolution
+	)
 	var smooth_normals_valid := (
 		terrain_normals.size() == expected_vertices
 		and terrain_vertices.size() == expected_vertices
@@ -119,7 +131,9 @@ func _run() -> void:
 	var initial_sculpt_energy := map_3d._sculpt_terrain_light.light_energy
 	map_3d.set_elevation_shadow_strength(0.25)
 	var quarter_sculpt_energy := map_3d._sculpt_terrain_light.light_energy
-	map_3d.set_elevation_shadow_strength(0.62)
+	map_3d.set_elevation_shadow_strength(
+		StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+	)
 	var political_geometry := (
 		MapRenderer.build_province_boundary_segments(state)
 	)
@@ -129,7 +143,7 @@ func _run() -> void:
 	)
 	var cached_classification_matches := true
 	for geometry_key in [
-		"province", "local", "coast", "nation", "alliance",
+		"province", "local", "coast", "country", "nation", "alliance",
 		"enemy", "suzerainty",
 	]:
 		cached_classification_matches = (
@@ -137,32 +151,47 @@ func _run() -> void:
 			and classified_geometry[geometry_key]
 				== political_geometry[geometry_key]
 		)
-	var classified_segment_count := 0
-	for classified_key in [
-		"local", "nation", "alliance", "enemy", "suzerainty",
-	]:
-		classified_segment_count += (
+	var province_segments: PackedVector2Array = classified_geometry["province"]
+	var local_segments: PackedVector2Array = classified_geometry["local"]
+	var country_segments: PackedVector2Array = classified_geometry["country"]
+	var classified_segments := local_segments.duplicate()
+	classified_segments.append_array(country_segments)
+	var semantic_country_segments := PackedVector2Array()
+	for classified_key in ["nation", "alliance", "enemy", "suzerainty"]:
+		semantic_country_segments.append_array(
 			classified_geometry[classified_key] as PackedVector2Array
-		).size() / 2
+		)
 	var topology_partition_complete := (
-		classified_segment_count
-		== (cached_topology["province"] as PackedVector2Array).size() / 2
+		_same_segment_multiset(province_segments, classified_segments)
+		and _same_segment_multiset(
+			country_segments, semantic_country_segments
+		)
 		and (cached_topology["province_a"] as PackedInt32Array).size()
-			== classified_segment_count
+			== province_segments.size() / 2
 		and (cached_topology["province_b"] as PackedInt32Array).size()
-			== classified_segment_count
+			== province_segments.size() / 2
+		and (classified_geometry["country_owner_a"] as PackedInt32Array).size()
+			== country_segments.size() / 2
+		and (classified_geometry["country_owner_b"] as PackedInt32Array).size()
+			== country_segments.size() / 2
+		and (classified_geometry["country_side_a"] as PackedVector2Array).size()
+			== country_segments.size() / 2
+		and (classified_geometry["country_side_b"] as PackedVector2Array).size()
+			== country_segments.size() / 2
 	)
 	var political_canvas := MapRenderer.build_political_canvas_images(state)
 	var canvas_fill: Image = political_canvas["fill"]
 	var terrain_fill: Image = political_canvas["terrain_fill"]
 	var province_boundaries: Image = political_canvas["province_boundaries"]
-	var diplomatic_boundaries: Image = political_canvas["diplomatic_boundaries"]
+	var country_boundaries: Image = political_canvas["country_boundaries"]
+	var direct_country_boundaries := MapRenderer.build_country_boundary_image(
+		state, political_geometry, true
+	)
 	var province_boundary_max_alpha := 0.0
-	var diplomatic_boundary_max_alpha := 0.0
+	var country_boundary_max_alpha := 0.0
 	var province_boundary_pixels := 0
-	var diplomatic_boundary_pixels := 0
-	var province_has_feather := false
-	var diplomatic_has_feather := false
+	var country_boundary_pixels := 0
+	var province_has_antialias := false
 	var terrain_fill_covers_land := true
 	for fill_y in range(canvas_fill.get_height()):
 		for fill_x in range(canvas_fill.get_width()):
@@ -185,7 +214,7 @@ func _run() -> void:
 			boundary_sampler_lines += 1
 	for image_entry in [
 		[province_boundaries, "province"],
-		[diplomatic_boundaries, "diplomatic"],
+		[country_boundaries, "country"],
 	]:
 		var boundary_image: Image = image_entry[0]
 		var maximum := 0.0
@@ -198,16 +227,15 @@ func _run() -> void:
 				if alpha > 0.01:
 					if image_entry[1] == "province":
 						province_boundary_pixels += 1
-						province_has_feather = province_has_feather or alpha < 0.45
-					else:
-						diplomatic_boundary_pixels += 1
-						diplomatic_has_feather = (
-							diplomatic_has_feather or alpha < 0.65
+						province_has_antialias = (
+							province_has_antialias or alpha < 0.99
 						)
+					else:
+						country_boundary_pixels += 1
 		if image_entry[1] == "province":
 			province_boundary_max_alpha = maximum
 		else:
-			diplomatic_boundary_max_alpha = maximum
+			country_boundary_max_alpha = maximum
 	var zero_meter_city_boundary: PackedVector2Array = (
 		political_geometry["coast"]
 	)
@@ -215,13 +243,47 @@ func _run() -> void:
 	var shallow_sea := StrategicTerrainRenderer.SHALLOW_SEA_COLOR
 	var deep_sea := StrategicTerrainRenderer.DEEP_SEA_COLOR
 	var overview_angle := map_3d._camera_normal_angle_degrees()
-	var lod_close := StrategicMap3D.boundary_lod_strengths(24.0)
-	var lod_mid := StrategicMap3D.boundary_lod_strengths(50.0)
-	var lod_58_before := StrategicMap3D.boundary_lod_strengths(57.999)
-	var lod_58_at := StrategicMap3D.boundary_lod_strengths(58.0)
-	var lod_far := StrategicMap3D.boundary_lod_strengths(72.0)
-	var lod_country_mid := StrategicMap3D.boundary_lod_strengths(82.0)
-	var lod_overview := StrategicMap3D.boundary_lod_strengths(92.0)
+	var lod_always_visible := true
+	for camera_distance in [
+		-100.0, 0.0, 24.0, 50.0, 57.999, 58.0,
+		72.0, 82.0, 92.0, 1000.0,
+	]:
+		var strengths := StrategicMap3D.boundary_lod_strengths(camera_distance)
+		lod_always_visible = (
+			lod_always_visible
+			and strengths.size() == 3
+			and strengths.has("province")
+			and strengths.has("coast")
+			and strengths.has("country")
+			and not strengths.has("diplomatic")
+			and is_equal_approx(float(strengths["province"]), 1.0)
+			and is_equal_approx(float(strengths["coast"]), 1.0)
+			and is_equal_approx(float(strengths["country"]), 1.0)
+		)
+	var base_country_color := MapRenderer.paper_nation_color(
+		state.nations[0].color
+	)
+	var boundary_country_color := MapRenderer.nation_boundary_color(state, 0)
+	var nation_color_contract := (
+		absf(boundary_country_color.h - base_country_color.h) < 0.001
+		and is_equal_approx(
+			boundary_country_color.s,
+			clampf(
+				base_country_color.s
+					* MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
+				0.0, 1.0
+			)
+		)
+		and is_equal_approx(
+			boundary_country_color.v,
+			clampf(
+				base_country_color.v
+					* MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE,
+				0.0, 1.0
+			)
+		)
+		and is_equal_approx(boundary_country_color.a, 1.0)
+	)
 	var fill_before_diplomacy_refresh := map_3d._province_texture
 	var province_boundary_before_refresh := map_3d._province_boundary_texture
 	map_3d._update_province_visuals()
@@ -266,8 +328,8 @@ func _run() -> void:
 	var material_mid_coast := float(terrain_material.get_shader_parameter(
 		"coast_boundary_strength"
 	))
-	var material_mid_diplomatic := float(terrain_material.get_shader_parameter(
-		"diplomatic_boundary_strength"
+	var material_mid_country := float(terrain_material.get_shader_parameter(
+		"country_boundary_strength"
 	))
 	map_3d._camera_distance = 92.0
 	map_3d._apply_camera_transform()
@@ -277,8 +339,8 @@ func _run() -> void:
 	var material_far_coast := float(terrain_material.get_shader_parameter(
 		"coast_boundary_strength"
 	))
-	var material_far_diplomatic := float(terrain_material.get_shader_parameter(
-		"diplomatic_boundary_strength"
+	var material_far_country := float(terrain_material.get_shader_parameter(
+		"country_boundary_strength"
 	))
 	var overview_framed := true
 	for corner in [
@@ -365,6 +427,7 @@ func _run() -> void:
 			terrain_vertices.size() == expected_vertices
 			and terrain_indices.size() == expected_indices
 		),
+		"production_mesh_resolution": production_mesh_resolution,
 		"terrain_smooth_normals": (
 			smooth_normals_valid and has_normal_variation
 		),
@@ -384,11 +447,16 @@ func _run() -> void:
 			)
 			and not terrain_shader_code.contains("height_texture")
 		),
-		"default_political_mode": is_equal_approx(
-			float(terrain_material.get_shader_parameter(
-				"province_strength"
-			)),
-			MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
+		"default_political_mode": (
+			is_equal_approx(
+				MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH, 0.93
+			)
+			and is_equal_approx(
+				float(terrain_material.get_shader_parameter(
+					"province_strength"
+				)),
+				MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
+			)
 		),
 		"lit_low_poly_shader": (
 			not terrain_shader_code.contains("unshaded")
@@ -411,31 +479,68 @@ func _run() -> void:
 			and terrain_shader_code.contains("province_strength <= 0.000001")
 			and terrain_shader_code.contains("only mode that samples satellite RGB")
 		),
-		"shared_soft_boundary_layers": (
+		"solid_country_boundary_layers": (
 			cached_classification_matches
 			and topology_partition_complete
 			and map_3d._boundary_topology.size() > 0
-			and map_3d._diplomatic_boundary_texture != null
+			and map_3d._country_boundary_texture != null
+			and map_3d._country_color_texture != null
 			and map_3d._province_boundary_texture != null
-			and map_3d._diplomatic_boundary_texture.get_size()
+			and map_3d._country_boundary_texture.get_size()
+				== map_3d._province_texture.get_size()
+			and map_3d._country_color_texture.get_size()
 				== map_3d._province_texture.get_size()
 			and map_3d._province_boundary_texture.get_size()
 				== map_3d._province_texture.get_size()
-			and terrain_shader_code.contains("diplomatic_boundary_texture")
+			and terrain_shader_code.contains("country_boundary_texture")
+			and terrain_shader_code.contains(
+				"uniform sampler2D country_boundary_texture : filter_linear_mipmap_anisotropic"
+			)
+			and terrain_shader_code.contains("country_color_texture")
 			and terrain_shader_code.contains("province_boundary_texture")
 			and not terrain_shader_code.contains("coast_boundary_texture")
+			and not terrain_shader_code.contains("diplomatic_boundary_texture")
+			and not terrain_shader_code.contains("diplomatic_tint")
+			and terrain_shader_code.contains("local_boundary_color")
 			and terrain_shader_code.contains(
-				"1.0 - smoothstep(0.01, 0.18, diplomatic_boundary.a)"
+				"country_boundary.rgb / max(country_boundary.a, 0.00001)"
 			)
+			and terrain_shader_code.contains(
+				"final_color = mix(final_color, country_ink_color, country_ink)"
+			)
+			and not terrain_shader_code.contains("province_ink = step(")
+			and not terrain_shader_code.contains("country_ink = step(")
 			and boundary_sampler_lines == 2
 			and map_3d._boundaries.mesh == null
 			and province_boundaries.get_size() == canvas_fill.get_size()
-			and diplomatic_boundaries.get_size() == canvas_fill.get_size()
+			and country_boundaries.get_size() == canvas_fill.get_size()
+			and direct_country_boundaries.get_size()
+				== country_boundaries.get_size()
+			and direct_country_boundaries.get_data()
+				== country_boundaries.get_data()
 			and terrain_fill_covers_land
 			and province_boundaries.has_mipmaps()
-			and diplomatic_boundaries.has_mipmaps()
+			and country_boundaries.has_mipmaps()
 			and map_3d._province_boundary_texture.get_image().has_mipmaps()
-			and map_3d._diplomatic_boundary_texture.get_image().has_mipmaps()
+			and map_3d._country_boundary_texture.get_image().has_mipmaps()
+			and MapRenderer.LOCAL_BOUNDARY_INK.is_equal_approx(
+				Color(0.30, 0.045, 0.035, 1.0)
+			)
+			and is_equal_approx(MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, 1.0)
+			and is_equal_approx(MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 3.0)
+			and is_equal_approx(
+				MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE, 0.75
+			)
+			and is_equal_approx(
+				MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE, 1.15
+			)
+			and is_equal_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX, 0.50)
+			and nation_color_contract
+			and province_boundary_max_alpha > 0.98
+			and country_boundary_max_alpha > 0.98
+			and province_boundary_pixels > 0
+			and country_boundary_pixels > 0
+			and province_has_antialias
 			and diplomacy_refresh_kept_fill
 			and dynamic_refresh_kept_static_boundaries
 			and topology_refresh_rebuilds_fill
@@ -446,7 +551,8 @@ func _run() -> void:
 			vertical_light_direction.distance_to(Vector3.DOWN) < 0.0001
 			and is_equal_approx(
 				map_3d._vertical_terrain_light.light_energy,
-				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_ENERGY
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+					* StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
 			)
 			and map_3d._vertical_terrain_light.light_cull_mask
 				== StrategicTerrainRenderer.TERRAIN_VISUAL_LAYER
@@ -457,7 +563,8 @@ func _run() -> void:
 			and sculpt_light_direction.z > 0.70
 			and is_equal_approx(
 				initial_sculpt_energy,
-				0.62 * StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+				StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+					* StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
 			)
 			and is_equal_approx(
 				quarter_sculpt_energy,
@@ -520,19 +627,26 @@ func _run() -> void:
 					* MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
 		),
 		# 3D 海岸与政治上色共享 terrain_elevation 的同一条 0m 等值线，
-		# 但复用省界的墨量、线芯和羽化参数；省份栅格海岸不得再上传。
+		# 使用陆侧国家纯色和 3px 国家边界宽度；省份栅格海岸不得上传。
 		"unified_coast_boundary_style": (
 			not zero_meter_city_boundary.is_empty()
 			and zero_meter_city_boundary.size() % 2 == 0
 			and terrain_shader_code.contains("fwidth(terrain_elevation)")
 			and terrain_shader_code.contains("coast_distance_px")
 			and terrain_shader_code.contains("step(0.000001, coast_gradient)")
-			and terrain_shader_code.contains("fwidth(hard_land)")
-			and terrain_shader_code.contains("coast_domain_crossing")
+			and not terrain_shader_code.contains("coast_domain_crossing")
+			and terrain_shader_code.contains("coast_mesh_band")
+			and not terrain_shader_code.contains("coast_ink = step(")
 			and terrain_shader_code.contains(
 				"terrain_elevation - ocean_height_threshold"
 			)
 			and terrain_shader_code.contains("coast_boundary_strength")
+			and terrain_shader_code.contains(
+				"coast_coverage * coast_boundary_strength * coast_country.a"
+			)
+			and terrain_shader_code.contains(
+				"final_color = mix(final_color, coast_country.rgb, coast_ink)"
+			)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"local_boundary_alpha"
 			)), MapRenderer.LOCAL_BOUNDARY_INK.a)
@@ -543,53 +657,29 @@ func _run() -> void:
 				"local_boundary_outer_radius_px"
 			)), (
 				MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
-					+ MapRenderer.BOUNDARY_FEATHER_PX
+					+ MapRenderer.BOUNDARY_ANTIALIAS_PX
 			))
-			and terrain_shader_code.count(
-				"final_color *= 1.0 - "
-			) == 2
-			and absf(
-				province_boundary_max_alpha - MapRenderer.LOCAL_BOUNDARY_INK.a
-			) < 0.01
-			and province_boundary_max_alpha <= 0.53
-			and diplomatic_boundary_max_alpha <= 0.73
-			and province_boundary_pixels > 0
-			and diplomatic_boundary_pixels > 0
-			and province_has_feather
-			and diplomatic_has_feather
+			and is_equal_approx(float(terrain_material.get_shader_parameter(
+				"country_boundary_core_width_px"
+			)), MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX)
+			and is_equal_approx(float(terrain_material.get_shader_parameter(
+				"country_boundary_outer_width_px"
+			)), (
+				MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
+					+ MapRenderer.BOUNDARY_ANTIALIAS_PX
+			))
 		),
 		"boundary_lod": (
 			terrain_shader_code.contains("province_boundary_strength")
-			and terrain_shader_code.contains("diplomatic_boundary_strength")
+			and terrain_shader_code.contains("country_boundary_strength")
 			and map_3d.has_method("_update_boundary_lod")
-			and is_equal_approx(float(lod_close["province"]), 1.0)
-			and float(lod_mid["province"]) < 1.0
-			and float(lod_mid["province"]) > 0.55
-			and absf(
-				float(lod_58_before["province"])
-					- float(lod_58_at["province"])
-			) < 0.001
-			and is_zero_approx(float(lod_far["province"]))
-			and is_equal_approx(float(lod_far["coast"]), 1.0)
-			and float(lod_country_mid["diplomatic"]) < 1.0
-			and float(lod_country_mid["diplomatic"]) > 0.86
-			and is_equal_approx(float(lod_overview["diplomatic"]), 0.86)
-			and is_equal_approx(
-				material_mid_province, float(lod_mid["province"])
-			)
-			and is_equal_approx(material_mid_coast, float(lod_mid["coast"]))
-			and is_equal_approx(
-				material_mid_diplomatic, float(lod_mid["diplomatic"])
-			)
-			and is_equal_approx(
-				material_far_province, float(lod_overview["province"])
-			)
-			and is_equal_approx(
-				material_far_coast, float(lod_overview["coast"])
-			)
-			and is_equal_approx(
-				material_far_diplomatic, float(lod_overview["diplomatic"])
-			)
+			and lod_always_visible
+			and is_equal_approx(material_mid_province, 1.0)
+			and is_equal_approx(material_mid_coast, 1.0)
+			and is_equal_approx(material_mid_country, 1.0)
+			and is_equal_approx(material_far_province, 1.0)
+			and is_equal_approx(material_far_coast, 1.0)
+			and is_equal_approx(material_far_country, 1.0)
 		),
 		"selection": map_3d._selection.visible,
 		"edge_selection": selected_edge != null and map_3d._edge_selection.mesh != null,
@@ -618,3 +708,33 @@ func _run() -> void:
 	overlay.free()
 	simulation.free()
 	quit(0)
+
+
+func _same_segment_multiset(
+	left: PackedVector2Array,
+	right: PackedVector2Array
+) -> bool:
+	if left.size() != right.size() or left.size() % 2 != 0:
+		return false
+	var counts := {}
+	for index in range(0, left.size(), 2):
+		var key := Vector4(
+			left[index].x, left[index].y,
+			left[index + 1].x, left[index + 1].y
+		)
+		counts[key] = int(counts.get(key, 0)) + 1
+	for index in range(0, right.size(), 2):
+		var key := Vector4(
+			right[index].x, right[index].y,
+			right[index + 1].x, right[index + 1].y
+		)
+		if not counts.has(key):
+			return false
+		var remaining := int(counts[key]) - 1
+		if remaining < 0:
+			return false
+		counts[key] = remaining
+	for remaining in counts.values():
+		if int(remaining) != 0:
+			return false
+	return true

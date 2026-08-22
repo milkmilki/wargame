@@ -123,8 +123,12 @@ const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 2
 ## 防区快照交界：同一轮攻势最多接纳一支仍残留防区记录、但已归入战团成为 MAIN 的轻军，
 ## 避免旧防区快照让多个防守槽同时进入攻势。
 const CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES: int = 1
-const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
-const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = 1
+const SMALL_NATION_SURVIVAL_MAX_CITIES: int = (
+	GameState.SMALL_NATION_SURVIVAL_MAX_CITIES
+)
+const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = (
+	GameState.SMALL_NATION_MOBILE_RESERVE_ARMIES
+)
 const EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS: float = 0.25
 
 var state: GameState
@@ -388,6 +392,16 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
+		_set_runtime_profile_stage(&"monthly_rebellions")
+		RebellionSystem.resolve_month(state)
+		_record_tick_profile_stage(
+			"monthly_rebellions",
+			monthly_profile_started
+		)
+		monthly_profile_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
 		if spread_runtime_work:
 			_set_runtime_profile_stage(&"monthly_diplomacy")
 			await _resolve_diplomacy_over_frames()
@@ -497,6 +511,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"cleanup_suzerainty")
 	if state.prune_dead_suzerainty():
 		state.diplomacy_revision += 1
+	state.prune_rebellions()
 	# 再清理宗藩体系内因运行时被占而残留的飞地（优先体系内就近改归，否则割敌），
 	# 使地图不必等到议和即可自愈碎裂领土。
 	_set_runtime_profile_stage(&"cleanup_enclaves")
@@ -507,6 +522,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_check_victory()
 	if state.prune_dead_suzerainty():
 		state.diplomacy_revision += 1
+	state.prune_rebellions()
 	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留），
 	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
 	_set_runtime_profile_stage(&"cleanup_evict")
@@ -680,9 +696,9 @@ func _campaign_objective_defense_power(
 
 func _campaign_attack_ratio_threshold(nation_id: int) -> float:
 	return CAMPAIGN_ATTACK_ENTER_RATIO / clampf(
-		state.nations[nation_id].ai_aggression,
-		0.5,
-		1.5
+		state.effective_ai_aggression(nation_id),
+		0.35,
+		1.85
 	)
 
 
@@ -736,9 +752,9 @@ func _campaign_planned_staging_troops(
 
 func _campaign_offensive_interval(nation_id: int) -> int:
 	var aggression := clampf(
-		state.nations[nation_id].ai_aggression,
-		0.5,
-		1.5
+		state.effective_ai_aggression(nation_id),
+		0.35,
+		1.85
 	)
 	return int(round(
 		float(CAMPAIGN_OFFENSIVE_INTERVAL_DAYS)
@@ -907,6 +923,17 @@ static func effective_tribute_rate(
 static func monthly_gold_flows(
 	game_state: GameState
 ) -> Array[Dictionary]:
+	# 真实月结会把已经构建的贸易快照注入，保证昂贵的路线派生每月只做一次；
+	# 纯预测调用则在这里派生同一份结果。TradeNetwork 不依赖 Simulation，
+	# 因而这条默认路径不会递归回财政报告。
+	var trade := TradeNetwork.build(game_state)
+	return _monthly_gold_flows_from_trade(game_state, trade)
+
+
+static func _monthly_gold_flows_from_trade(
+	game_state: GameState,
+	trade: Dictionary
+) -> Array[Dictionary]:
 	# 军费是全局财政表的共享输入。旧实现逐国调用
 	# nation_monthly_military_upkeep()，每次都会重新扫描全部军队，
 	# 大地图因此退化为 O(国家数 × 军队数)，并把整段耗时挤到首个
@@ -924,11 +951,37 @@ static func monthly_gold_flows(
 		upkeep_by_nation[army.owner_nation] += (
 			GameState.army_monthly_upkeep(army.size)
 		)
+	for nation in game_state.nations:
+		upkeep_by_nation[nation.id] = effective_monthly_military_upkeep(
+			game_state, nation.id, upkeep_by_nation[nation.id]
+		)
 	var result: Array[Dictionary] = []
 	for nation in game_state.nations:
+		var food_trade_income := _trade_array_value(
+			trade, "nation_food_sale_income", nation.id
+		)
+		var food_trade_expense := _trade_array_value(
+			trade, "nation_food_cost", nation.id
+		)
+		var trade_gross_income := _trade_array_value(
+			trade, "nation_trade_gold", nation.id
+		)
+		var trade_tax_income := maxi(
+			trade_gross_income - food_trade_income,
+			0
+		)
+		var trade_net_income := (
+			trade_tax_income
+			+ food_trade_income
+			- food_trade_expense
+		)
 		result.append({
 			"nation_id": nation.id,
 			"city_income": 0,
+			"trade_tax_income": trade_tax_income,
+			"food_trade_income": food_trade_income,
+			"food_trade_expense": food_trade_expense,
+			"trade_net_income": trade_net_income,
 			"tribute_received": 0,
 			"tribute_paid": 0,
 			"net_income": 0,
@@ -976,6 +1029,7 @@ static func monthly_gold_flows(
 		var report: Dictionary = result[nation_id]
 		var net_income := (
 			int(report["city_income"])
+			+ int(report["trade_net_income"])
 			+ int(report["tribute_received"])
 			- int(report["tribute_paid"])
 		)
@@ -985,6 +1039,46 @@ static func monthly_gold_flows(
 			- int(report["military_upkeep"])
 		)
 	return result
+
+
+static func _trade_array_value(
+	trade_snapshot: Dictionary,
+	key: String,
+	index: int
+) -> int:
+	var values: Variant = trade_snapshot.get(key, [])
+	if not (values is Array) or index < 0 or index >= values.size():
+		return 0
+	return int(values[index])
+
+
+static func effective_monthly_military_upkeep(
+	game_state: GameState,
+	nation_id: int,
+	base_upkeep: int = -1
+) -> int:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return 0
+	var base := base_upkeep
+	if base < 0:
+		base = game_state.nation_monthly_military_upkeep(nation_id)
+	return _ruler_adjusted_upkeep(
+		base,
+		RulerProfile.upkeep_multiplier(game_state.nations[nation_id])
+	)
+
+
+static func _ruler_adjusted_upkeep(
+	base_upkeep: int,
+	multiplier: float
+) -> int:
+	return maxi(int(ceil(
+		float(maxi(base_upkeep, 0)) * maxf(multiplier, 0.0)
+	)), 0)
 
 
 ## 国家财政储备策略的唯一真源。收入使用“城市税收+净贡赋”，不扣军费：
@@ -1018,6 +1112,10 @@ static func gold_reserve_policy(
 	var reserve_months := (
 		WAR_GOLD_RESERVE_MONTHS
 		if at_war else PEACE_GOLD_RESERVE_MONTHS
+	)
+	reserve_months = maxi(
+		reserve_months + RulerProfile.reserve_months_bonus(nation),
+		0
 	)
 	var target := baseline_income * reserve_months
 	var gap := maxi(target - nation.treasury_gold, 0)
@@ -1123,6 +1221,9 @@ func _capture_war_gold_income_snapshots(
 
 
 func _resolve_economy() -> void:
+	var trade := TradeNetwork.build(state)
+	_publish_trade_snapshot(trade)
+	var gold_flows := _monthly_gold_flows_from_trade(state, trade)
 	# 累计每国当月金钱税收（含战乱减产），作为贡赋基数。
 	var gold_income: Array[int] = []
 	gold_income.resize(state.nations.size())
@@ -1132,7 +1233,14 @@ func _resolve_economy() -> void:
 		var gold := city_gold_output(state, city)
 		nation.treasury_gold += gold
 		gold_income[city.owner_nation] += gold
-		nation.manpower_pool += city.manpower_per_month
+		nation.manpower_pool += city_manpower_output(state, city)
+	# 贸易税是新增收入；粮款是出口/进口双方之间的守恒转移。
+	# 二者已经折叠为 trade_net_income，因此这里只应用一次。
+	for nation in state.nations:
+		nation.treasury_gold += int(
+			gold_flows[nation.id]["trade_net_income"]
+		)
+	_resolve_trade_food_transfers(trade)
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
 	_resolve_military_finance()
@@ -1149,6 +1257,92 @@ func _resolve_economy() -> void:
 			)
 		for nation in state.nations:
 			state.deposit_food(nation.id, produced[nation.id])
+
+
+func _publish_trade_snapshot(trade: Dictionary) -> void:
+	var next_routes: Array[Dictionary] = []
+	for route_value in trade.get("routes", []):
+		next_routes.append((route_value as Dictionary).duplicate(true))
+	var signature := int(trade.get("signature", 0))
+	var previous_signature := int(state.get_meta(&"trade_signature", -1))
+	if signature != previous_signature:
+		state.trade_revision += 1
+		state.set_meta(&"trade_signature", signature)
+	state.trade_routes = next_routes
+	for city in state.cities:
+		city.trade_gold_bonus = _trade_array_value(
+			trade, "city_gold_bonus", city.id
+		)
+		city.trade_route_count = 0
+		city.trade_food_balance = 0
+	for route in state.trade_routes:
+		if int(route.get("status", TradeNetwork.BLOCKED)) == TradeNetwork.BLOCKED:
+			continue
+		var seen_cities := {}
+		for city_value in route.get("city_path", []):
+			var city_id := int(city_value)
+			if (
+				city_id < 0 or city_id >= state.cities.size()
+				or seen_cities.has(city_id)
+			):
+				continue
+			seen_cities[city_id] = true
+			state.cities[city_id].trade_route_count += 1
+		var food_amount := int(route.get("food_transfer", 0))
+		var source_id := int(route.get("food_source_city", -1))
+		var destination_id := int(route.get("food_destination_city", -1))
+		if source_id >= 0 and source_id < state.cities.size():
+			state.cities[source_id].trade_food_balance -= food_amount
+		if destination_id >= 0 and destination_id < state.cities.size():
+			state.cities[destination_id].trade_food_balance += food_amount
+	for nation in state.nations:
+		var gross := _trade_array_value(trade, "nation_trade_gold", nation.id)
+		var cost := _trade_array_value(trade, "nation_food_cost", nation.id)
+		nation.last_trade_gold = gross - cost
+		nation.last_trade_food_import = _trade_array_value(
+			trade, "nation_food_import", nation.id
+		)
+		nation.last_trade_food_export = _trade_array_value(
+			trade, "nation_food_export", nation.id
+		)
+		nation.last_trade_route_count = 0
+		for route in state.trade_routes:
+			if int(route.get("status", TradeNetwork.BLOCKED)) == TradeNetwork.BLOCKED:
+				continue
+			if nation.id in [
+				int(route.get("nation_a", -1)),
+				int(route.get("nation_b", -1)),
+			]:
+				nation.last_trade_route_count += 1
+
+
+func _resolve_trade_food_transfers(trade: Dictionary) -> void:
+	for nation in state.nations:
+		var exported := _trade_array_value(
+			trade, "nation_food_export", nation.id
+		)
+		if exported > 0:
+			_withdraw_trade_food(nation.id, exported)
+	for nation in state.nations:
+		var imported := _trade_array_value(
+			trade, "nation_food_import", nation.id
+		)
+		if imported > 0:
+			state.deposit_food(nation.id, imported)
+	state.refresh_derived()
+
+
+func _withdraw_trade_food(nation_id: int, amount: int) -> void:
+	var holder := state.food_pool_holder(nation_id)
+	var remaining := maxi(amount, 0)
+	for warehouse in state.warehouse_cities_of(holder):
+		if state.city_under_siege(warehouse.id):
+			continue
+		var taken := mini(warehouse.food_storage, remaining)
+		warehouse.food_storage -= taken
+		remaining -= taken
+		if remaining <= 0:
+			break
 
 
 ## 贡赋：每个藩王把当月金钱税收的 tribute_rate 比例上缴直接宗主（守恒转移）。
@@ -1217,7 +1411,7 @@ static func city_food_output(
 		city,
 		city_garrison_troops(game_state, city, garrison_by_city)
 	)
-	return _apply_governance_multiplier(
+	var output := _apply_governance_multiplier(
 		game_state,
 		city,
 		_apply_city_war_disruption(
@@ -1226,13 +1420,16 @@ static func city_food_output(
 			garrison_output
 		)
 	)
+	return _apply_ruler_output_multiplier(
+		game_state, city, output, RulerProfile.KEY_FOOD_OUTPUT
+	)
 
 
 static func city_gold_output(
 	game_state: GameState,
 	city: City
 ) -> int:
-	return _apply_governance_multiplier(
+	var output := _apply_governance_multiplier(
 		game_state,
 		city,
 		city_gold_output_before_governance(
@@ -1240,6 +1437,40 @@ static func city_gold_output(
 			city
 		)
 	)
+	return _apply_ruler_output_multiplier(
+		game_state, city, output, RulerProfile.KEY_GOLD_OUTPUT
+	)
+
+
+static func city_manpower_output(
+	game_state: GameState,
+	city: City
+) -> int:
+	return _apply_ruler_output_multiplier(
+		game_state, city, maxi(city.manpower_per_month, 0),
+		RulerProfile.KEY_MANPOWER_OUTPUT
+	)
+
+
+static func _apply_ruler_output_multiplier(
+	game_state: GameState,
+	city: City,
+	output: int,
+	modifier_key: String
+) -> int:
+	if (
+		city == null
+		or city.owner_nation < 0
+		or city.owner_nation >= game_state.nations.size()
+	):
+		return maxi(output, 0)
+	var modifiers := RulerProfile.modifiers(
+		game_state.nations[city.owner_nation]
+	)
+	return maxi(int(floor(
+		float(maxi(output, 0))
+			* float(modifiers.get(modifier_key, 1.0))
+	)), 0)
 
 
 ## 城市当月金产出在治理倍率生效前的值。用于所有权变化的反事实评估，避免通过
@@ -1362,7 +1593,8 @@ static func city_garrison_food_loss(
 
 func _resolve_military_finance() -> void:
 	for nation in state.nations:
-		var upkeep := state.nation_monthly_military_upkeep(
+		var upkeep := effective_monthly_military_upkeep(
+			state,
 			nation.id
 		)
 		var paid := mini(nation.treasury_gold, upkeep)
@@ -1905,7 +2137,11 @@ func _build_supply_plan_for_army(
 		mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 	var base := int(ceil(army.size * FOOD_PER_CAPITA))
 	base = maxi(base, 1)
-	var monthly_demand := int(ceil(base * mult))
+	var monthly_demand := int(ceil(
+		base * mult * _ruler_food_consumption_multiplier(
+			state, army.owner_nation
+		)
+	))
 	demand_by_nation[army.owner_nation] += monthly_demand
 	army.supply_food_debt += (
 		float(monthly_demand) / float(DAYS_PER_MONTH)
@@ -2036,6 +2272,9 @@ func _recover_morale() -> void:
 				army.owner_nation
 			].military_payment_ratio
 		)
+		recovery_multiplier *= _ruler_morale_multiplier(
+			state, army.owner_nation
+		)
 		army.morale = minf(
 			army.morale
 				+ army.max_morale
@@ -2051,6 +2290,40 @@ static func morale_recovery_payment_multiplier(
 	return (
 		0.5
 		+ 0.5 * clampf(payment_ratio, 0.0, 1.0)
+	)
+
+
+static func _ruler_food_consumption_multiplier(
+	game_state: GameState,
+	nation_id: int
+) -> float:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return 1.0
+	return maxf(
+		RulerProfile.food_consumption_multiplier(
+			game_state.nations[nation_id]
+		),
+		0.1
+	)
+
+
+static func _ruler_morale_multiplier(
+	game_state: GameState,
+	nation_id: int
+) -> float:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return 1.0
+	return maxf(
+		RulerProfile.morale_multiplier(game_state.nations[nation_id]),
+		0.1
 	)
 
 
@@ -2078,6 +2351,9 @@ func _recover_garrisoned_army(army: Army) -> void:
 			army.owner_nation
 		].military_payment_ratio
 	)
+	recovery_multiplier *= _ruler_morale_multiplier(
+		state, army.owner_nation
+	)
 	var target_gain := minf(
 		army.max_morale
 			/ float(Combat.MORALE_RECOVERY_DAYS)
@@ -2092,6 +2368,8 @@ func _recover_garrisoned_army(army: Army) -> void:
 		minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 		if not sources.is_empty()
 		else 1.0
+	) * _ruler_food_consumption_multiplier(
+		state, army.owner_nation
 	) * target_gain / maxf(full_daily_gain, 0.0001)
 	army.supply_food_debt += (
 		monthly_demand / float(DAYS_PER_MONTH)
@@ -2778,6 +3056,7 @@ func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 	if state.overlord_of(claimant) == old_owner and state.is_in_civil_war(claimant):
 		# 兼并原语解除胜者与旧宗主的边，并把旧宗主其余藩王改投胜者。
 		state.annex_nation(claimant, old_owner)
+		WorldNaming.promote_vassal_to_sovereign(state, claimant)
 		state.prune_dead_suzerainty()
 		_synchronize_war_gold_income_snapshots()
 		_ai_last_decision_day = -1
@@ -3184,6 +3463,7 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 		event["war_outcome_b"] = war_outcome_b
 		event["territories_transferred"] = territories_transferred
 		event["enclaves_abandoned"] = enclaves_abandoned
+		state.resolve_rebellion_peace(nation_a, nation_b)
 	if kind in [
 		DiplomacyAI.Action.MAKE_PEACE,
 		DiplomacyAI.Action.DECLARE_WAR,
@@ -5449,7 +5729,7 @@ func _ai_manage_force_structure(
 	)
 	var small_nation_survival := (
 		not wars.is_empty()
-		and view.friendly_cities.size()
+		and state.land_cities_of(view.nation_id).size()
 			<= SMALL_NATION_SURVIVAL_MAX_CITIES
 	)
 	var active_war_mobilization := (
@@ -5466,18 +5746,12 @@ func _ai_manage_force_structure(
 		city_line_target + defense_plan.line_edge_slots
 	)
 	if small_nation_survival:
-		city_line_target = maxi(
-			city_line_target,
-			view.friendly_cities.size()
-		)
-		critical_city_line_target = maxi(
-			critical_city_line_target,
-			view.friendly_cities.size()
-		)
-		total_line_target = maxi(
-			total_line_target,
-			city_line_target
-		)
+		# 小国军制的稳定目标是“每城一支 LINE + 一支机动 MAIN”。
+		# 围城时 CityDefensePlan 可以临时建立第二城市槽，但该槽应由机动
+		# 预备队填补，不能把 LINE 目标抬高后再补一个完整三军战团。
+		city_line_target = state.land_cities_of(view.nation_id).size()
+		critical_city_line_target = city_line_target
+		total_line_target = city_line_target
 	var emergency_recruitment := (
 		small_nation_survival
 		or active_war_mobilization
@@ -5578,6 +5852,23 @@ func _ai_manage_force_structure(
 			"group_id": -1,
 			"reason": "补充核心城市填线槽",
 		}
+	elif small_nation_survival:
+		# 小国不进入通用的“二轻一重”战团补齐流程。一支轻型 MAIN
+		# 即为机动预备队；已有历史战团/重军在战时保留，但不会继续扩编。
+		if main_armies < SMALL_NATION_MOBILE_RESERVE_ARMIES:
+			var reserve_group_id := -1
+			for group in nation.battle_groups:
+				if state.battle_group_members(
+					view.nation_id, group.id
+				).is_empty():
+					reserve_group_id = group.id
+					break
+			recruitment = {
+				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+				"group_id": reserve_group_id,
+				"create_group": reserve_group_id < 0,
+				"reason": "小国补充机动预备队",
+			}
 	elif (
 		state.is_vassal(view.nation_id)
 		and not state.is_in_civil_war(
@@ -8538,6 +8829,12 @@ func _launch_campaign_offensive(
 	route_threat_override: ThreatField = null
 ) -> bool:
 	if (
+		nation_id < 0
+		or nation_id >= state.nations.size()
+		or not _ruler_allows_campaign_target(
+			nation_id, objective_city
+		)
+		or
 		objective_city < 0
 		or objective_city >= state.cities.size()
 		or not state.is_enemy(
@@ -10171,6 +10468,31 @@ func _enemy_holds_recent_legal_reclamation(
 	return false
 
 
+## 守成者、庸主和纵横家不组织侵略攻势；但任何本国法理失地收复，
+## 以及防御战争（本国不是该战争目标的 attacker）都继续允许。
+func _ruler_allows_campaign_target(
+	nation_id: int,
+	target_city: int
+) -> bool:
+	if (
+		nation_id < 0 or nation_id >= state.nations.size()
+		or target_city < 0 or target_city >= state.cities.size()
+	):
+		return false
+	if RulerProfile.offensive_allowed(state.nations[nation_id]):
+		return true
+	if state.recognized_owner_of(target_city) == nation_id:
+		return true
+	var enemy_id := state.cities[target_city].owner_nation
+	if enemy_id < 0 or enemy_id >= state.nations.size():
+		return false
+	var objective := state.war_objective(nation_id, enemy_id)
+	return (
+		objective.is_empty()
+		or int(objective.get("attacker", -1)) != nation_id
+	)
+
+
 ## 当前主目标无法形成可执行计划时，在所有敌国中找守军最少的可达城市。
 ## 守军是第一判据，集结入口数是第二判据，最终用镜像等变城市序稳定决胜。
 func _weak_garrison_campaign_fallback(
@@ -10245,6 +10567,7 @@ func _manage_campaign_offensive(
 			b
 		)
 	)
+	var ruler_allows_invasion := RulerProfile.offensive_allowed(nation)
 	# 仍在修复窗口内的本国法理失地优先于原进攻目标，形成真实反复争夺。
 	for enemy_id in enemy_ids:
 		if not _enemy_holds_recent_legal_reclamation(
@@ -10271,7 +10594,7 @@ func _manage_campaign_offensive(
 			objective = reclamation
 			defender_id = enemy_id
 			break
-	if objective.is_empty():
+	if objective.is_empty() and ruler_allows_invasion:
 		for enemy_id in enemy_ids:
 			var candidate := state.war_objective(
 				nation_id,
@@ -10289,6 +10612,17 @@ func _manage_campaign_offensive(
 	# 防御战争没有本国发起的外交目标，但仍必须主动选择敌城组织反攻。
 	if objective.is_empty():
 		for enemy_id in enemy_ids:
+			if not ruler_allows_invasion:
+				var defensive_objective := state.war_objective(
+					nation_id, enemy_id
+				)
+				if (
+					not defensive_objective.is_empty()
+					and int(defensive_objective.get(
+						"attacker", -1
+					)) == nation_id
+				):
+					continue
 			var counteroffensive := (
 				_cached_campaign_objective(
 					nation_id,
@@ -10355,6 +10689,8 @@ func _manage_campaign_offensive(
 			objective_city
 		].owner_nation
 		owns_diplomatic_objective = false
+	if not _ruler_allows_campaign_target(nation_id, objective_city):
+		return false
 	_record_tick_profile_stage(
 		"campaign_objective",
 		campaign_profile_started
@@ -10678,7 +11014,13 @@ func _projected_army_food_demand(army: Army) -> float:
 	if int(supply[0]) != -1:
 		multiplier = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 	var base := maxi(int(ceil(float(army.size) * FOOD_PER_CAPITA)), 1)
-	return ceil(float(base) * multiplier)
+	return ceil(
+		float(base)
+			* multiplier
+			* _ruler_food_consumption_multiplier(
+				state, army.owner_nation
+			)
+	)
 
 
 func _demobilize_for_food_security(
@@ -10773,6 +11115,18 @@ func _demobilize_for_gold_security(
 ) -> bool:
 	if required_savings <= 0:
 		return false
+	var upkeep_multiplier := RulerProfile.upkeep_multiplier(
+		state.nations[view.nation_id]
+	)
+	var current_base_upkeep := 0
+	for active_army in state.armies:
+		if active_army.owner_nation == view.nation_id and active_army.size > 0:
+			current_base_upkeep += GameState.army_monthly_upkeep(
+				active_army.size
+			)
+	var current_effective_upkeep := _ruler_adjusted_upkeep(
+		current_base_upkeep, upkeep_multiplier
+	)
 	var candidates: Array[Army] = []
 	for army in view.friendly_armies:
 		if (
@@ -10787,14 +11141,16 @@ func _demobilize_for_gold_security(
 			continue
 		candidates.append(army)
 	candidates.sort_custom(func(a: Army, b: Army) -> bool:
-		var upkeep_a := GameState.army_monthly_upkeep(
-			a.size
+		var base_a := GameState.army_monthly_upkeep(a.size)
+		var base_b := GameState.army_monthly_upkeep(b.size)
+		var savings_a := current_effective_upkeep - _ruler_adjusted_upkeep(
+			current_base_upkeep - base_a, upkeep_multiplier
 		)
-		var upkeep_b := GameState.army_monthly_upkeep(
-			b.size
+		var savings_b := current_effective_upkeep - _ruler_adjusted_upkeep(
+			current_base_upkeep - base_b, upkeep_multiplier
 		)
-		if upkeep_a != upkeep_b:
-			return upkeep_a > upkeep_b
+		if savings_a != savings_b:
+			return savings_a > savings_b
 		return EquivariantOrder.army_less(
 			state,
 			view.nation_id,
@@ -10812,7 +11168,7 @@ func _demobilize_for_gold_security(
 	for army in candidates:
 		if remaining_savings <= 0:
 			break
-		var current_upkeep := (
+		var current_army_base_upkeep := (
 			GameState.army_monthly_upkeep(army.size)
 		)
 		var minimum_size := int(ceil(
@@ -10821,11 +11177,17 @@ func _demobilize_for_gold_security(
 		))
 		if active_count > target_count:
 			minimum_size = 0
-		var minimum_upkeep := (
+		var minimum_base_upkeep := (
 			GameState.army_monthly_upkeep(minimum_size)
 		)
 		var possible_savings := (
-			current_upkeep - minimum_upkeep
+			current_effective_upkeep
+			- _ruler_adjusted_upkeep(
+				current_base_upkeep
+					- current_army_base_upkeep
+					+ minimum_base_upkeep,
+				upkeep_multiplier
+			)
 		)
 		if possible_savings <= 0:
 			continue
@@ -10833,14 +11195,23 @@ func _demobilize_for_gold_security(
 			remaining_savings,
 			possible_savings
 		)
-		var target_upkeep := (
-			current_upkeep - requested_savings
+		var target_nation_upkeep := (
+			current_effective_upkeep - requested_savings
 		)
-		var target_size := maxi(
-			minimum_size,
-			target_upkeep
-				* GameState.WAR_GOLD_TROOPS_PER_UNIT
-		)
+		var target_size := army.size
+		while (
+			target_size > minimum_size
+			and _ruler_adjusted_upkeep(
+				current_base_upkeep
+					- current_army_base_upkeep
+					+ GameState.army_monthly_upkeep(target_size),
+				upkeep_multiplier
+			) > target_nation_upkeep
+		):
+			target_size = maxi(
+				target_size - GameState.WAR_GOLD_TROOPS_PER_UNIT,
+				minimum_size
+			)
 		target_size = mini(target_size, army.size)
 		var demand_before := _projected_army_food_demand(
 			army
@@ -10876,12 +11247,17 @@ func _demobilize_for_gold_security(
 					- _projected_army_food_demand(army),
 				0.0
 			)
-		var saved := (
-			current_upkeep
-			- GameState.army_monthly_upkeep(
-				target_size
-			)
+		var next_base_upkeep := (
+			current_base_upkeep
+			- current_army_base_upkeep
+			+ GameState.army_monthly_upkeep(target_size)
 		)
+		var next_effective_upkeep := _ruler_adjusted_upkeep(
+		next_base_upkeep, upkeep_multiplier
+	)
+		var saved := current_effective_upkeep - next_effective_upkeep
+		current_base_upkeep = next_base_upkeep
+		current_effective_upkeep = next_effective_upkeep
 		total_returned += returned
 		total_saved += saved
 		remaining_savings = maxi(
@@ -12253,6 +12629,7 @@ func _resolve_combat_round(
 	shared_roll: int,
 	tactical_entropy: int
 ) -> void:
+	_sync_battle_ruler_modifiers(battle)
 	_refresh_battle_frontline_priorities(battle)
 	Combat.resolve_round(
 		battle,
@@ -12283,6 +12660,38 @@ func _resolve_combat_round(
 			_retreat_defender(army, battle.city)
 		else:
 			_retreat(army)
+
+
+func _sync_battle_ruler_modifiers(battle: Battle) -> void:
+	if battle == null:
+		return
+	if battle.city != null:
+		var base_city_defense := Combat.city_defense_modifier(
+			battle.city
+		)
+		battle.city.ruler_city_defense_multiplier = (
+			float(state.effective_city_defense(battle.city))
+				/ float(base_city_defense)
+			if base_city_defense > 0
+			else 1.0
+		)
+	for side in [battle.side_a, battle.side_b]:
+		for army_value in side:
+			var army: Army = army_value
+			if (
+				army.owner_nation < 0
+				or army.owner_nation >= state.nations.size()
+			):
+				army.ruler_defense_multiplier = 1.0
+				army.ruler_morale_multiplier = 1.0
+				continue
+			var ruler := state.nations[army.owner_nation]
+			army.ruler_defense_multiplier = maxf(
+				RulerProfile.defense_multiplier(ruler), 0.1
+			)
+			army.ruler_morale_multiplier = maxf(
+				RulerProfile.morale_multiplier(ruler), 0.1
+			)
 
 
 func _refresh_battle_frontline_priorities(battle: Battle) -> void:
@@ -12920,6 +13329,9 @@ func _execute_campaign_post_capture_plan(
 	var route_valid := (
 		next_city >= 0
 		and next_city < state.cities.size()
+		and _ruler_allows_campaign_target(
+			army.owner_nation, next_city
+		)
 		and state.is_enemy(
 			army.owner_nation,
 			state.cities[next_city].owner_nation

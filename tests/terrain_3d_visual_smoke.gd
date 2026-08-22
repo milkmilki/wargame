@@ -43,6 +43,13 @@ func _run() -> void:
 		map_3d.set_elevation_shadow_strength(
 			clampf(float(sculpt_strength), 0.0, 1.0)
 		)
+	var vertical_strength := OS.get_environment(
+		"WW_VISUAL_VERTICAL_LIGHT"
+	)
+	if not vertical_strength.is_empty():
+		map_3d.set_vertical_terrain_light_strength(
+			clampf(float(vertical_strength), 0.0, 1.0)
+		)
 
 	var started := Time.get_ticks_msec()
 	while (

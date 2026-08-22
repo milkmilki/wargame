@@ -10,6 +10,15 @@ func _init() -> void:
 	call_deferred("_run")
 
 
+func _mesh_vertex_count(mesh: ArrayMesh) -> int:
+	if mesh == null or mesh.get_surface_count() <= 0:
+		return 0
+	return (
+		mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		as PackedVector3Array
+	).size()
+
+
 func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	var state := GameState.new()
@@ -61,6 +70,28 @@ func _run() -> void:
 			return
 		await process_frame
 	await process_frame
+
+	var terrain_material := (
+		map_3d._terrain.mesh_instance().material_override
+		as ShaderMaterial
+	)
+	var terrain_shader_code := terrain_material.shader.code
+	var initial_vertical_strength := map_3d._vertical_terrain_light_strength
+	var initial_vertical_energy := map_3d._vertical_terrain_light.light_energy
+	var initial_sculpt_strength := map_3d._elevation_shadow_strength
+	var initial_sculpt_energy := map_3d._sculpt_terrain_light.light_energy
+	map_3d.set_vertical_terrain_light_strength(0.37)
+	var tuned_vertical_strength := map_3d._vertical_terrain_light_strength
+	var tuned_vertical_energy := map_3d._vertical_terrain_light.light_energy
+	map_3d.set_vertical_terrain_light_strength(-1.0)
+	var minimum_vertical_strength := map_3d._vertical_terrain_light_strength
+	var minimum_vertical_energy := map_3d._vertical_terrain_light.light_energy
+	map_3d.set_vertical_terrain_light_strength(2.0)
+	var maximum_vertical_strength := map_3d._vertical_terrain_light_strength
+	var maximum_vertical_energy := map_3d._vertical_terrain_light.light_energy
+	map_3d.set_vertical_terrain_light_strength(
+		StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+	)
 
 	var campaign_mesh := map_3d._campaigns.mesh as ArrayMesh
 	var campaign_material := map_3d._campaigns.material_override as StandardMaterial3D
@@ -140,6 +171,82 @@ func _run() -> void:
 				float(layout_a["glyph_scale"])
 				- float(layout_b["glyph_scale"])
 			)
+	var low_loyalty_color := MapRenderer.loyalty_color(10.0)
+	var middle_loyalty_color := MapRenderer.loyalty_color(50.0)
+	var high_loyalty_color := MapRenderer.loyalty_color(90.0)
+	var active_route := {
+		"status": TradeNetwork.ACTIVE,
+		"food_transfer": 0,
+	}
+	var food_route := {
+		"status": TradeNetwork.ACTIVE,
+		"food_transfer": 25,
+	}
+	var rerouted_route := {"status": TradeNetwork.REROUTED}
+	var blocked_route := {"status": TradeNetwork.BLOCKED}
+	var trade_style_contract := (
+		MapRenderer.trade_route_color(active_route, true)
+			.is_equal_approx(MapRenderer.TRADE_ACTIVE_GOLD)
+		and MapRenderer.trade_route_color(food_route, true)
+			.is_equal_approx(MapRenderer.TRADE_ACTIVE_CYAN)
+		and MapRenderer.trade_route_color(rerouted_route, true)
+			.is_equal_approx(MapRenderer.TRADE_REROUTED_ORANGE)
+		and MapRenderer.trade_route_color(blocked_route, true)
+			.is_equal_approx(MapRenderer.TRADE_BLOCKED_RED)
+	)
+	var visual_trade_route: Dictionary = {
+		"status": TradeNetwork.ACTIVE,
+		"food_transfer": 0,
+		"city_path": [frontier.city_a, frontier.city_b],
+	}
+	var visual_trade_routes: Array[Dictionary] = []
+	visual_trade_routes.append(visual_trade_route)
+	state.trade_routes = visual_trade_routes
+	state.trade_revision += 1
+	await process_frame
+	var active_trade_mesh := map_3d._trade_routes.mesh as ArrayMesh
+	var active_trade_vertices := _mesh_vertex_count(active_trade_mesh)
+	state.trade_routes[0]["status"] = TradeNetwork.REROUTED
+	state.trade_revision += 1
+	await process_frame
+	var rerouted_trade_mesh := map_3d._trade_routes.mesh as ArrayMesh
+	var rerouted_trade_vertices := _mesh_vertex_count(rerouted_trade_mesh)
+	state.trade_routes[0]["status"] = TradeNetwork.BLOCKED
+	state.trade_revision += 1
+	await process_frame
+	var blocked_trade_mesh := map_3d._trade_routes.mesh as ArrayMesh
+	var blocked_trade_vertices := _mesh_vertex_count(blocked_trade_mesh)
+	var trade_revision_rebuilt := (
+		map_3d._last_trade_revision == state.trade_revision
+		and active_trade_mesh != rerouted_trade_mesh
+		and rerouted_trade_mesh != blocked_trade_mesh
+	)
+	map_3d.set_map_mode(MapRenderer.MAP_MODE_TRADE)
+	var previous_camera_distance := map_3d._camera_distance
+	map_3d._camera_distance = StrategicMap3D.CAMERA_MAX_DISTANCE
+	map_3d._update_map_detail_visibility()
+	var trade_visible_far := map_3d._trade_routes.visible
+	map_3d._camera_distance = StrategicMap3D.CAMERA_MIN_DISTANCE
+	map_3d._update_map_detail_visibility()
+	var trade_visible_near := map_3d._trade_routes.visible
+	map_3d._camera_distance = previous_camera_distance
+	map_3d._update_map_detail_visibility()
+	var trade_mode_visibility := (
+		map_3d.map_mode() == MapRenderer.MAP_MODE_TRADE
+		and overlay.map_mode() == MapRenderer.MAP_MODE_TRADE
+		and is_equal_approx(map_3d._trade_routes.transparency, 0.0)
+		and map_3d._roads.transparency > 0.0
+		and map_3d._minor_roads.transparency > 0.0
+		and trade_visible_near
+		and trade_visible_far
+	)
+	map_3d.set_map_mode(MapRenderer.MAP_MODE_LOYALTY)
+	var loyalty_mode_contract := (
+		map_3d.map_mode() == MapRenderer.MAP_MODE_LOYALTY
+		and overlay.map_mode() == MapRenderer.MAP_MODE_LOYALTY
+		and map_3d._loyalty_texture != null
+	)
+	map_3d.set_map_mode(MapRenderer.MAP_MODE_POLITICAL)
 	var checks := {
 		"city_bases": map_3d._city_bases.multimesh.instance_count == state.cities.size(),
 		"city_resources": map_3d._city_resource_markers.multimesh.instance_count == state.cities.size(),
@@ -168,6 +275,120 @@ func _run() -> void:
 		"major_roads": major_mesh != null and major_mesh.get_surface_count() > 0,
 		"minor_roads": minor_mesh != null and minor_mesh.get_surface_count() > 0,
 		"road_hierarchy": map_3d._road_width_for_capacity(Edge.TERRAIN_STANDARD_MANPOWER) > map_3d._road_width_for_capacity(Edge.TERRAIN_LOW_MANPOWER) * 2.0,
+		"loyalty_gradient": (
+			high_loyalty_color.g > low_loyalty_color.g
+			and high_loyalty_color.g > high_loyalty_color.r
+			and low_loyalty_color.r > low_loyalty_color.g
+			and high_loyalty_color.g / high_loyalty_color.r
+				> middle_loyalty_color.g / middle_loyalty_color.r
+			and middle_loyalty_color.g / middle_loyalty_color.r
+				> low_loyalty_color.g / low_loyalty_color.r
+		),
+		"trade_route_styles": trade_style_contract,
+		"trade_route_geometry_styles": (
+			active_trade_vertices > 0
+			and rerouted_trade_vertices == active_trade_vertices
+			and blocked_trade_vertices > 0
+			and blocked_trade_vertices < active_trade_vertices
+		),
+		"trade_route_mesh_node": (
+			map_3d._trade_routes != null
+			and map_3d._trade_routes.name == "TradeRoutes"
+			and (map_3d._trade_routes.material_override as StandardMaterial3D)
+				.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		),
+		"trade_revision_rebuild": trade_revision_rebuilt,
+		"trade_mode_visibility": trade_mode_visibility,
+		"loyalty_mode_contract": loyalty_mode_contract,
+		"country_boundary_contract": (
+			map_3d._country_boundary_texture != null
+			and map_3d._country_color_texture != null
+			and map_3d._country_boundary_texture.get_size()
+				== map_3d._province_texture.get_size()
+			and map_3d._country_color_texture.get_size()
+				== map_3d._province_texture.get_size()
+			and terrain_material.get_shader_parameter(
+				"country_boundary_texture"
+			) == map_3d._country_boundary_texture
+			and terrain_material.get_shader_parameter(
+				"country_color_texture"
+			) == map_3d._country_color_texture
+			and is_equal_approx(
+				float(terrain_material.get_shader_parameter(
+					"country_boundary_strength"
+				)),
+				1.0
+			)
+			and map_3d._country_boundary_texture.get_image().has_mipmaps()
+			and terrain_shader_code.contains(
+				"uniform sampler2D country_boundary_texture"
+			)
+			and terrain_shader_code.contains(
+				"uniform sampler2D country_color_texture"
+			)
+			and terrain_shader_code.contains(
+				"uniform float country_boundary_strength"
+			)
+			and not terrain_shader_code.contains(
+				"diplomatic_boundary_texture"
+			)
+			and not terrain_shader_code.contains(
+				"diplomatic_boundary_strength"
+			)
+		),
+		"terrain_light_contract": (
+			map_3d.has_method("set_vertical_terrain_light_strength")
+			and is_equal_approx(
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY,
+				1.50
+			)
+			and is_equal_approx(
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH,
+				0.62
+			)
+			and is_equal_approx(
+				StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY,
+				2.00
+			)
+			and is_equal_approx(
+				StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH,
+				0.42
+			)
+			and is_equal_approx(
+				initial_vertical_strength,
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+			)
+			and is_equal_approx(
+				initial_vertical_energy,
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+					* StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
+			)
+			and is_equal_approx(
+				initial_sculpt_strength,
+				StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+			)
+			and is_equal_approx(
+				initial_sculpt_energy,
+				StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+					* StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+			)
+			and is_equal_approx(tuned_vertical_strength, 0.37)
+			and is_equal_approx(
+				tuned_vertical_energy,
+				0.37 * StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
+			)
+			and is_zero_approx(minimum_vertical_strength)
+			and is_zero_approx(minimum_vertical_energy)
+			and is_equal_approx(maximum_vertical_strength, 1.0)
+			and is_equal_approx(
+				maximum_vertical_energy,
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
+			)
+			and is_equal_approx(
+				map_3d._vertical_terrain_light_strength,
+				StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+			)
+		),
 		"territory_labels": territory_labels_valid,
 		"territory_label_scaling": territory_label_scale_ratio > 0.001,
 	}

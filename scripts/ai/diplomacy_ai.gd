@@ -119,8 +119,7 @@ const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内
 ## （分封 created_day 与削藩 last_centralization_day 是两套字段，缺此门控时新藩王当即满足削藩）。
 ## 拉长到约 4 年：一次分封的政治重组需长期稳定，杜绝"封了又撤"的高频横跳。
 const CENTRALIZE_MIN_VASSAL_AGE_DAYS: int = 1440
-## 反抗比 = 藩王军力 / 宗主可镇压军力；超此阈值藩王倾向反抗（内战），否则接受(和平撤藩)。
-## 文档第18节：和平0.45。第一版宗主削藩本就要求和平，故用单一阈值。
+# 兼容旧诊断/测试的展示阈值；实际反抗判定由 RebellionSystem 统一负责。
 const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
 ## 财政收益不为正时，只有达到此高威胁比才因政治风险削藩。该阈值显著高于反抗阈值，
 ## 因此威胁分支天然会进入内战，而不会让一般军力增长压过财政理性。
@@ -390,11 +389,7 @@ static func peace_willingness_breakdown(
 		if evaluation_cache.has("__profile")
 		else 0
 	)
-	var aggression := clampf(
-		state.nations[nation_id].ai_aggression,
-		0.5,
-		1.5
-	)
+	var aggression := state.effective_ai_aggression(nation_id)
 	var war_fatigue := (
 		float(war_days) / float(WAR_FATIGUE_REFERENCE_DAYS)
 	)
@@ -427,7 +422,7 @@ static func peace_willingness_breakdown(
 		part_started
 	)
 	var attitude_component := attitude * ATTITUDE_PEACE_WEIGHT
-	var score := (
+	var base_score := (
 		war_fatigue
 		+ situation_component
 		+ power_component
@@ -438,8 +433,16 @@ static func peace_willingness_breakdown(
 		+ no_front
 		- (aggression - 1.0) * 0.50
 	)
+	# 君主只缩放议和的软意愿；战争时长、双方接受线及资源生存判据仍由
+	# 各自的硬门槛独立约束，不能靠性格绕过。
+	var peace_multiplier := RulerProfile.peace_multiplier(
+		state.nations[nation_id]
+	)
+	var score := base_score * peace_multiplier
 	var result := {
 		"score": score,
+		"base_score": base_score,
+		"peace_multiplier": peace_multiplier,
 		"war_fatigue": war_fatigue,
 		"situation_score": situation_score,
 		"situation_component": situation_component,
@@ -1437,7 +1440,7 @@ static func alliance_willingness(
 	_record_evaluation_profile(
 		evaluation_cache, "alliance_attitude_unification", part_started
 	)
-	var result := (
+	var base_result := (
 		0.35
 		+ float(common_enemies) * 1.5
 		+ minf(shared_threat * 0.35, 0.80)
@@ -1446,6 +1449,9 @@ static func alliance_willingness(
 		+ frontier_release
 		+ attitude * ATTITUDE_ALLIANCE_WEIGHT
 		- unification_pressure
+	)
+	var result := base_result * RulerProfile.alliance_multiplier(
+		state.nations[nation_id]
 	)
 	evaluation_cache[cache_key] = result
 	return result
@@ -1744,10 +1750,24 @@ static func _ai_aggression(
 	state: GameState,
 	nation_id: int
 ) -> float:
-	return clampf(
-		state.nations[nation_id].ai_aggression,
-		0.5,
-		1.5
+	return state.effective_ai_aggression(nation_id)
+
+
+## 不允许主动攻势的君主仍可收复本国法理城市。该门控只用于主动备战/宣战，
+## 已经发生的防御战争、解围和被动接战均不经过此处。
+static func _ruler_allows_war_objective(
+	state: GameState,
+	nation_id: int,
+	objective_city: int
+) -> bool:
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return false
+	if RulerProfile.offensive_allowed(state.nations[nation_id]):
+		return true
+	return (
+		objective_city >= 0
+		and objective_city < state.cities.size()
+		and state.recognized_owner_of(objective_city) == nation_id
 	)
 
 
@@ -2036,6 +2056,50 @@ static func resource_report(
 		evaluation_cache[GOLD_FLOWS_CACHE_KEY]
 	)
 	var gold_flow: Dictionary = gold_flows[nation_id]
+	var trade_report := _trade_report(
+		state, nation_id, evaluation_cache
+	)
+	# 新版 monthly_gold_flows 会直接并入贸易；旧版没有这些字段。若流量表
+	# 已含贸易则以流量表为准；否则才把快照/预测净额补入，避免重复计算。
+	var gold_flow_has_trade := (
+		gold_flow.has("trade_net_income")
+		or gold_flow.has("trade_tax_income")
+		or gold_flow.has("food_trade_income")
+		or gold_flow.has("food_trade_expense")
+	)
+	var gold_flow_trade_balance := int(
+		gold_flow.get(
+			"trade_net_income",
+			int(gold_flow.get("trade_tax_income", 0))
+				+ int(gold_flow.get("food_trade_income", 0))
+				- int(gold_flow.get("food_trade_expense", 0))
+		)
+	)
+	var monthly_trade_gold := (
+		gold_flow_trade_balance
+		if gold_flow_has_trade
+		else int(trade_report["monthly_trade_gold"])
+	)
+	var monthly_trade_tax_income := (
+		int(gold_flow.get("trade_tax_income", 0))
+		if gold_flow_has_trade
+		else int(trade_report["monthly_trade_tax_income"])
+	)
+	var monthly_food_trade_income := (
+		int(gold_flow.get("food_trade_income", 0))
+		if gold_flow_has_trade
+		else int(trade_report["monthly_food_trade_income"])
+	)
+	var monthly_trade_food_cost := (
+		int(gold_flow.get("food_trade_expense", 0))
+		if gold_flow_has_trade
+		else int(trade_report["monthly_trade_food_cost"])
+	)
+	var monthly_trade_income := (
+		monthly_trade_tax_income + monthly_food_trade_income
+		if gold_flow_has_trade
+		else int(trade_report["monthly_trade_income"])
+	)
 	var monthly_city_income := int(
 		gold_flow["city_income"]
 	)
@@ -2045,7 +2109,15 @@ static func resource_report(
 	var monthly_tribute_expense := int(
 		gold_flow["tribute_paid"]
 	)
-	var monthly_income := int(gold_flow["net_income"])
+	var monthly_income := (
+		int(gold_flow["net_income"])
+		+ (0 if gold_flow_has_trade else monthly_trade_gold)
+	)
+	# 储备策略必须看到与本报告相同的贸易口径。只复制当前国家的一行，
+	# 不改写 Simulation 提供的共享流量缓存。
+	var policy_gold_flows: Array[Dictionary] = gold_flows.duplicate()
+	var policy_gold_flow: Dictionary = gold_flow.duplicate()
+	policy_gold_flow["net_income"] = monthly_income
 	var food_plan := war_food_report(
 		state,
 		nation_id,
@@ -2057,10 +2129,15 @@ static func resource_report(
 	var monthly_war_cost := int(
 		gold_flow["military_upkeep"]
 	)
-	var monthly_gold_balance := int(gold_flow["balance"])
+	var monthly_gold_balance := (
+		int(gold_flow["balance"])
+		+ (0 if gold_flow_has_trade else monthly_trade_gold)
+	)
+	policy_gold_flow["balance"] = monthly_gold_balance
+	policy_gold_flows[nation_id] = policy_gold_flow
 	var monthly_gold_deficit := maxi(-monthly_gold_balance, 0)
 	var gold_reserve := Simulation.gold_reserve_policy(
-		state, nation_id, gold_flows
+		state, nation_id, policy_gold_flows
 	)
 	var monthly_food_demand := int(ceil(
 		float(food_plan["current_monthly_demand"])
@@ -2102,6 +2179,24 @@ static func resource_report(
 		"monthly_city_gold_income": monthly_city_income,
 		"monthly_tribute_income": monthly_tribute_income,
 		"monthly_tribute_expense": monthly_tribute_expense,
+		"monthly_trade_gold": monthly_trade_gold,
+		"monthly_trade_balance": monthly_trade_gold,
+		"monthly_trade_tax_income": monthly_trade_tax_income,
+		"monthly_food_trade_income": monthly_food_trade_income,
+		"monthly_trade_income": monthly_trade_income,
+		"monthly_trade_food_cost": monthly_trade_food_cost,
+		"monthly_food_import": int(
+			trade_report["monthly_food_import"]
+		),
+		"monthly_food_export": int(
+			trade_report["monthly_food_export"]
+		),
+		"trade_route_count": int(
+			trade_report["trade_route_count"]
+		),
+		"blocked_trade_route_count": int(
+			trade_report["blocked_trade_route_count"]
+		),
 		"monthly_gold_income": monthly_income,
 		"monthly_war_cost": monthly_war_cost,
 		"monthly_gold_balance": monthly_gold_balance,
@@ -2141,6 +2236,121 @@ static func resource_report(
 	}
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 外交报告优先复用已结算的 Nation 月度快照；世界尚未做过贸易月结时，
+## 直接读取无副作用、且不依赖 Simulation 的 TradeNetwork 派生结果。
+static func _trade_report(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Dictionary:
+	var cache_key := "trade_report:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
+	var nation := state.nations[nation_id]
+	var snapshot_available := (
+		state.trade_revision > 0
+		or not state.trade_routes.is_empty()
+		or nation.last_trade_gold != 0
+		or nation.last_trade_food_import != 0
+		or nation.last_trade_food_export != 0
+		or nation.last_trade_route_count != 0
+	)
+	var result := {
+		"monthly_trade_gold": 0,
+		"monthly_trade_tax_income": 0,
+		"monthly_food_trade_income": 0,
+		"monthly_trade_income": 0,
+		"monthly_trade_food_cost": 0,
+		"monthly_food_import": 0,
+		"monthly_food_export": 0,
+		"trade_route_count": 0,
+		"blocked_trade_route_count": 0,
+		"from_snapshot": snapshot_available,
+	}
+	if snapshot_available:
+		# last_trade_gold 的统一口径是净金：路线税 + 售粮收入 - 购粮支出。
+		result["monthly_trade_gold"] = nation.last_trade_gold
+		result["monthly_trade_income"] = nation.last_trade_gold
+		result["monthly_food_import"] = nation.last_trade_food_import
+		result["monthly_food_export"] = nation.last_trade_food_export
+		result["trade_route_count"] = nation.last_trade_route_count
+		result["blocked_trade_route_count"] = _trade_route_count(
+			state.trade_routes, nation_id, true
+		)
+	else:
+		const TRADE_NETWORK_CACHE_KEY := "trade_network_result"
+		if not evaluation_cache.has(TRADE_NETWORK_CACHE_KEY):
+			evaluation_cache[TRADE_NETWORK_CACHE_KEY] = (
+				TradeNetwork.build(state)
+			)
+		var trade_network: Dictionary = (
+			evaluation_cache[TRADE_NETWORK_CACHE_KEY]
+		)
+		var trade_income := _trade_nation_value(
+			trade_network, "nation_trade_gold", nation_id
+		)
+		var food_cost := _trade_nation_value(
+			trade_network, "nation_food_cost", nation_id
+		)
+		var food_sale_income := _trade_nation_value(
+			trade_network, "nation_food_sale_income", nation_id
+		)
+		var trade_tax_income := _trade_nation_value(
+			trade_network, "nation_trade_tax", nation_id
+		)
+		result["monthly_trade_gold"] = trade_income - food_cost
+		result["monthly_trade_tax_income"] = trade_tax_income
+		result["monthly_food_trade_income"] = food_sale_income
+		result["monthly_trade_income"] = trade_income
+		result["monthly_trade_food_cost"] = food_cost
+		result["monthly_food_import"] = _trade_nation_value(
+			trade_network, "nation_food_import", nation_id
+		)
+		result["monthly_food_export"] = _trade_nation_value(
+			trade_network, "nation_food_export", nation_id
+		)
+		var routes: Array = trade_network.get("routes", [])
+		result["trade_route_count"] = _trade_route_count(
+			routes, nation_id, false
+		)
+		result["blocked_trade_route_count"] = _trade_route_count(
+			routes, nation_id, true
+		)
+	evaluation_cache[cache_key] = result
+	return result
+
+
+static func _trade_nation_value(
+	trade_network: Dictionary,
+	key: String,
+	nation_id: int
+) -> int:
+	var values: Array = trade_network.get(key, [])
+	return int(values[nation_id]) if nation_id < values.size() else 0
+
+
+static func _trade_route_count(
+	routes: Array,
+	nation_id: int,
+	blocked_only: bool
+) -> int:
+	var count := 0
+	for route_value in routes:
+		var route: Dictionary = route_value
+		if nation_id not in [
+			int(route.get("nation_a", -1)),
+			int(route.get("nation_b", -1)),
+		]:
+			continue
+		var blocked := (
+			int(route.get("status", TradeNetwork.STATUS_ACTIVE))
+			== TradeNetwork.STATUS_BLOCKED
+		)
+		if blocked == blocked_only:
+			count += 1
+	return count
 
 
 ## 宣战资源门槛随统一时代连续退火。era=0 时严格等价于 resource_report.ready；
@@ -2464,6 +2674,8 @@ static func war_food_report(
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
 	var monthly_production := 0.0
+	var monthly_trade_food_import := 0
+	var monthly_trade_food_export := 0
 	if not evaluation_cache.has("garrison_by_city"):
 		evaluation_cache["garrison_by_city"] = Simulation.build_garrison_index(state)
 	var garrison_by_city: Dictionary = evaluation_cache["garrison_by_city"]
@@ -2493,15 +2705,43 @@ static func war_food_report(
 			float(member_troops)
 				* FOOD_PER_CAPITA_MONTH
 				* DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
+				* maxf(
+					RulerProfile.food_consumption_multiplier(
+						state.nations[member_id]
+					),
+					0.1
+				)
 		)
 		pool_current_troops += member_troops
 		current_monthly_demand += member_demand
 		if member_id == nation_id:
 			nation_current_monthly_demand = member_demand
+		var member_trade := _trade_report(
+			state, member_id, evaluation_cache
+		)
+		monthly_trade_food_import += int(
+			member_trade["monthly_food_import"]
+		)
+		monthly_trade_food_export += int(
+			member_trade["monthly_food_export"]
+		)
+	# TradeNetwork 的粮食量就是本月真实转移量；净进口与自产共同构成
+	# 当前粮池可用流量，净出口则相应降低战役续航。
+	var monthly_trade_food_balance := (
+		monthly_trade_food_import - monthly_trade_food_export
+	)
+	monthly_production += float(monthly_trade_food_balance)
 	var food_per_troop := (
 		nation_current_monthly_demand / float(current_troops)
 		if current_troops > 0
-		else FOOD_PER_CAPITA_MONTH * DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
+		else (
+			FOOD_PER_CAPITA_MONTH
+			* DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
+			* maxf(
+				RulerProfile.food_consumption_multiplier(nation),
+				0.1
+			)
+		)
 	)
 	var other_members_monthly_demand := maxf(
 		current_monthly_demand - nation_current_monthly_demand,
@@ -2579,6 +2819,9 @@ static func war_food_report(
 		"target_troops": target_troops,
 		"full_strength_troops": full_strength_troops,
 		"monthly_food_production": monthly_production,
+		"monthly_trade_food_import": monthly_trade_food_import,
+		"monthly_trade_food_export": monthly_trade_food_export,
+		"monthly_trade_food_balance": monthly_trade_food_balance,
 		"annual_food_production": annual_production,
 		"food_stock": int(stock),
 		"food_per_troop_month": food_per_troop,
@@ -2671,11 +2914,13 @@ static func _cached_war_objective(
 	state: GameState,
 	nation_id: int,
 	target_id: int,
-	evaluation_cache: Dictionary
+	evaluation_cache: Dictionary,
+	legal_reclamation_only: bool = false
 ) -> Dictionary:
-	var cache_key := "objective:%d:%d" % [
+	var cache_key := "objective:%d:%d:%d" % [
 		nation_id,
 		target_id,
+		1 if legal_reclamation_only else 0,
 	]
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
@@ -2683,7 +2928,9 @@ static func _cached_war_objective(
 		state,
 		nation_id,
 		target_id,
-		evaluation_cache
+		evaluation_cache,
+		-1,
+		legal_reclamation_only
 	)
 	evaluation_cache[cache_key] = objective
 	return objective
@@ -2694,7 +2941,8 @@ static func select_war_objective(
 	nation_id: int,
 	target_id: int,
 	evaluation_cache: Dictionary = {},
-	excluded_city: int = -1
+	excluded_city: int = -1,
+	legal_reclamation_only: bool = false
 ) -> Dictionary:
 	var target_cities := (
 		_cached_cities_of(
@@ -2719,6 +2967,11 @@ static func select_war_objective(
 	var candidate_links := {}
 	var max_reachable_garrison := 1
 	for city in target_cities:
+		if (
+			legal_reclamation_only
+			and state.recognized_owner_of(city.id) != nation_id
+		):
+			continue
 		max_gold = maxi(max_gold, city.gold_per_month)
 		max_food = maxi(max_food, city.food_per_half_year)
 		max_manpower = maxi(max_manpower, city.manpower_per_month)
@@ -2860,7 +3113,8 @@ static func replacement_war_preparation_objective(
 	nation_id: int,
 	target_id: int,
 	current_city: int,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	legal_reclamation_only: bool = false
 ) -> Dictionary:
 	var defender_index := _city_defender_troop_index(
 		state, nation_id, evaluation_cache
@@ -2870,6 +3124,11 @@ static func replacement_war_preparation_objective(
 	var best_links := -1
 	for city in state.cities_of(target_id):
 		if city.id == current_city:
+			continue
+		if (
+			legal_reclamation_only
+			and state.recognized_owner_of(city.id) != nation_id
+		):
 			continue
 		var staging := staging_cities_for_objective(
 			state, nation_id, city.id
@@ -3407,7 +3666,8 @@ static func _collect_war_actions(
 			state,
 			nation.id,
 			best_target,
-			evaluation_cache
+			evaluation_cache,
+			not RulerProfile.offensive_allowed(nation)
 		)
 		var report := resource_report(
 			state,
@@ -3416,6 +3676,11 @@ static func _collect_war_actions(
 		)
 		if (
 			objective.is_empty()
+			or not _ruler_allows_war_objective(
+				state,
+				nation.id,
+				int(objective.get("city_id", -1))
+			)
 			or not offensive_resources_ready(
 				state,
 				nation.id,
@@ -3530,6 +3795,9 @@ static func _collect_existing_war_preparation(
 		and objective_city >= 0
 		and objective_city < state.cities.size()
 		and state.cities[objective_city].owner_nation == target_id
+		and _ruler_allows_war_objective(
+			state, nation_id, objective_city
+		)
 	)
 	var has_route := (
 		objective_valid
@@ -3541,7 +3809,12 @@ static func _collect_existing_war_preparation(
 	)
 	if target_nation_valid and (not objective_valid or not has_route):
 		var replacement := replacement_war_preparation_objective(
-			state, nation_id, target_id, objective_city, evaluation_cache
+			state,
+			nation_id,
+			target_id,
+			objective_city,
+			evaluation_cache,
+			not RulerProfile.offensive_allowed(nation)
 		)
 		if not replacement.is_empty():
 			actions.append({
@@ -3554,6 +3827,18 @@ static func _collect_existing_war_preparation(
 					"原备战目标城市%d不可用，保持对国%d备战并改向%s"
 					% [objective_city, target_id, replacement["reason"]]
 				),
+			})
+			committed[nation_id] = true
+			return
+		if (
+			not RulerProfile.offensive_allowed(nation)
+			and not objective_valid
+		):
+			actions.append({
+				"kind": Action.CANCEL_WAR_PREPARATION,
+				"a": nation_id,
+				"b": target_id,
+				"reason": "当前君主不发动主动侵略，且已无可收复的本国法理目标",
 			})
 			committed[nation_id] = true
 			return
@@ -3629,6 +3914,10 @@ static func _collect_existing_war_preparation(
 			evaluation_cache
 		):
 			return
+		return
+	if not _ruler_allows_war_objective(
+		state, nation_id, objective_city
+	):
 		return
 	var mobilization_armies := maxi(
 		int(ceil(
@@ -4697,6 +4986,7 @@ static func _collect_enfeoff_actions(
 		var burden := evaluate_region_burden(state, overlord_id, region)
 		var food_burden_justifies := (
 			float(burden["burden_ratio"])
+				* RulerProfile.enfeoff_multiplier(nation)
 			>= ENFEOFF_BURDEN_RATIO_THRESHOLD
 		)
 		var fiscal_benefit := int(
@@ -4738,8 +5028,8 @@ static func _recent_enfeoff_day(state: GameState, overlord_id: int) -> int:
 
 
 # ------------------------------------------------------------------ 削藩（藩王系统 C2）
-# 宗主在和平期、撤藩财政收益为正或藩王已成高威胁且冷却已过时发起削藩。藩王按「反抗比」即时决定：
-# 反抗比 = 藩王军力 / 宗主可镇压军力。低于阈值则接受（和平撤藩），高则反抗（内战）。
+# 宗主在和平期、撤藩财政收益为正或藩王已成高威胁且冷却已过时发起削藩。
+# 是否反抗统一委托 RebellionSystem，以忠诚、持续时间、冷却和军力共同决定。
 # 执行仍由 Simulation 完成；本层只产出候选动作并预判藩王反应，附在动作里供展示。
 
 ## 宗主当前可用于镇压内战的军力：总军力扣除被其它实战线占用的兵力。
@@ -4839,6 +5129,7 @@ static func evaluate_centralization_fiscal_benefit(
 ## 生成削藩候选动作。规则（文档 17、18 节）：
 ##   宗主非藩王、处于和平、冷却已过、当前无内战，且撤藩财政收益为正 → 削藩。
 ##   财政不划算时，仅高政治威胁比可例外触发；军力比不再作为宗主优势硬门槛。
+## 暴君无视财政/威胁收益门槛，但仍须满足和平、藩王年龄与削藩冷却。
 ## 动作附带预判：resist=true 表示藩王将反抗（执行时开内战），否则和平撤藩。
 static func _collect_centralization_actions(
 	state: GameState,
@@ -4885,11 +5176,21 @@ static func _collect_centralization_actions(
 			)
 			var political_threat := (
 				resist_ratio
+					* RulerProfile.centralize_multiplier(nation)
 				>= CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD
 			)
-			if fiscal_benefit <= 0 and not political_threat:
+			var tyrant_centralization := (
+				nation.ruler_archetype == RulerProfile.TYRANT
+			)
+			if (
+				fiscal_benefit <= 0
+				and not political_threat
+				and not tyrant_centralization
+			):
 				continue
-			var will_resist := resist_ratio > CENTRALIZE_RESIST_RATIO_THRESHOLD
+			var will_resist := RebellionSystem.should_vassal_rebel(
+				state, subject_id
+			)
 			var motive := (
 				"撤藩月增益%+d（直辖%d+下级贡赋%d-原贡赋%d-接军费%d）"
 				% [
@@ -4900,8 +5201,12 @@ static func _collect_centralization_actions(
 					int(fiscal["inherited_military_upkeep"]),
 				]
 				if fiscal_benefit > 0
-				else "政治威胁比%.2f达到高危阈值"
-					% resist_ratio
+				else (
+					"暴君强令收归直辖"
+					if tyrant_centralization
+					else "政治威胁比%.2f达到高危阈值"
+						% resist_ratio
+				)
 			)
 			actions.append({
 				"kind": Action.CENTRALIZE,

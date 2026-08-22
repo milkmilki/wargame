@@ -8,15 +8,29 @@ signal panel_closed
 signal regenerate_requested(settings: Dictionary)
 signal province_strength_changed(strength: float)
 signal elevation_shadow_strength_changed(strength: float)
+signal vertical_terrain_light_strength_changed(strength: float)
+signal map_mode_changed(mode: int)
 
 const PROVINCE_STRENGTH_KEY := "province_strength"
+const PROVINCE_STRENGTH_DEFAULT: float = (
+	MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH
+)
 const ELEVATION_SHADOW_STRENGTH_KEY := "elevation_shadow_strength"
+const VERTICAL_TERRAIN_LIGHT_STRENGTH_KEY := (
+	"vertical_terrain_light_strength"
+)
+const MAP_MODE_TERRAIN: String = "terrain"
+const MAP_MODE_MIXED: String = "mixed"
+const MAP_MODE_POLITICAL: String = "political"
+const MAP_MODE_LOYALTY: String = "loyalty"
+const MAP_MODE_TRADE: String = "trade"
 
 var _overlay: Control
 var _status: Label
 var _sliders: Dictionary = {}
 var _value_labels: Dictionary = {}
 var _map_mode_buttons: Dictionary = {}
+var _map_mode: String = MAP_MODE_POLITICAL
 
 
 func _ready() -> void:
@@ -28,8 +42,8 @@ func _ready() -> void:
 func _build_ui() -> void:
 	var open_button := Button.new()
 	open_button.name = "RoadTuningButton"
-	open_button.text = "路网"
-	open_button.tooltip_text = "调整道路通行、容量和国家颜色图"
+	open_button.text = "调校"
+	open_button.tooltip_text = "调整地图覆色、地形灯光和道路网络"
 	open_button.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	open_button.position = Vector2(116.0, -38.0)
 	open_button.size = Vector2(108.0, 30.0)
@@ -50,8 +64,8 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.position = Vector2(-270.0, -235.0)
-	panel.size = Vector2(540.0, 470.0)
+	panel.position = Vector2(-270.0, -280.0)
+	panel.size = Vector2(540.0, 560.0)
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.095, 0.085, 0.065, 0.98)
 	panel_style.border_color = Color(0.62, 0.46, 0.19, 0.95)
@@ -75,13 +89,13 @@ func _build_ui() -> void:
 	margin.add_child(content)
 
 	var title := Label.new()
-	title.text = "运行时路网调校"
+	title.text = "地图与路网调校"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 22)
 	content.add_child(title)
 
 	var hint := Label.new()
-	hint.text = "重算仅改变陆路通行性与容量；河运、城市和省份保持不变。"
+	hint.text = "地图与灯光即时生效；重新计算路网只改变陆路通行性与容量。"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.modulate = Color(0.78, 0.73, 0.62)
 	content.add_child(hint)
@@ -115,12 +129,17 @@ func _build_ui() -> void:
 	)
 	_add_slider(
 		grid, "国家覆色", PROVINCE_STRENGTH_KEY,
-		0.0, 1.0, 0.01, MapRenderer.POLITICAL_MAP_DEFAULT_STRENGTH,
-		0, true
+		0.0, 1.0, 0.01, PROVINCE_STRENGTH_DEFAULT, 0, true
+	)
+	_add_slider(
+		grid, "地形顶光", VERTICAL_TERRAIN_LIGHT_STRENGTH_KEY,
+		0.0, 1.0, 0.01,
+		StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH, 0, true
 	)
 	_add_slider(
 		grid, "地形塑形光", ELEVATION_SHADOW_STRENGTH_KEY,
-		0.0, 1.0, 0.01, 0.62, 0, true
+		0.0, 1.0, 0.01,
+		StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH, 0, true
 	)
 	var legend := HBoxContainer.new()
 	legend.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -179,31 +198,74 @@ func _build_map_mode_control(font: Font) -> void:
 	var modes := HBoxContainer.new()
 	modes.name = "MapModes"
 	modes.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	modes.position = Vector2(-306.0, -38.0)
-	modes.size = Vector2(294.0, 30.0)
+	modes.position = Vector2(-402.0, -38.0)
+	modes.size = Vector2(390.0, 30.0)
 	modes.add_theme_constant_override("separation", 4)
 	add_child(modes)
 	var group := ButtonGroup.new()
 	for mode in [
-		["地形", 0.0],
-		["混合", 0.42],
-		["政治", 1.0],
+		[MAP_MODE_TERRAIN, "地形"],
+		[MAP_MODE_MIXED, "混合"],
+		[MAP_MODE_POLITICAL, "政治"],
+		[MAP_MODE_LOYALTY, "忠诚"],
+		[MAP_MODE_TRADE, "贸易"],
 	]:
 		var button := Button.new()
-		button.text = str(mode[0])
-		button.tooltip_text = "切换%s地图模式" % mode[0]
+		var mode_id := str(mode[0])
+		button.text = str(mode[1])
+		button.tooltip_text = "切换%s地图模式" % mode[1]
 		button.toggle_mode = true
 		button.button_group = group
-		button.custom_minimum_size = Vector2(94.0, 30.0)
-		var strength := float(mode[1])
-		button.pressed.connect(func() -> void:
-			(_sliders[PROVINCE_STRENGTH_KEY] as HSlider).value = strength
-		)
+		button.custom_minimum_size = Vector2(74.0, 30.0)
+		button.set_meta(&"map_mode", mode_id)
+		button.set_meta(&"renderer_map_mode", _renderer_map_mode(mode_id))
+		button.pressed.connect(_on_map_mode_pressed.bind(mode_id))
 		_apply_command_button_style(button, true)
 		modes.add_child(button)
-		_map_mode_buttons[strength] = button
+		_map_mode_buttons[mode_id] = button
 	_apply_font(modes, font)
-	_sync_map_mode_buttons(province_strength())
+	_sync_map_mode_buttons()
+
+
+func _on_map_mode_pressed(mode: String) -> void:
+	set_map_mode(mode)
+
+
+func set_map_mode(mode: String) -> void:
+	if not _map_mode_buttons.has(mode):
+		return
+	_map_mode = mode
+	(_sliders[PROVINCE_STRENGTH_KEY] as HSlider).value = (
+		_map_mode_strength(mode)
+	)
+	_sync_map_mode_buttons()
+	map_mode_changed.emit(_renderer_map_mode(mode))
+
+
+func map_mode() -> String:
+	return _map_mode
+
+
+func renderer_map_mode() -> int:
+	return _renderer_map_mode(_map_mode)
+
+
+static func _map_mode_strength(mode: String) -> float:
+	match mode:
+		MAP_MODE_TERRAIN:
+			return 0.0
+		MAP_MODE_MIXED:
+			return 0.42
+	return PROVINCE_STRENGTH_DEFAULT
+
+
+static func _renderer_map_mode(mode: String) -> int:
+	match mode:
+		MAP_MODE_LOYALTY:
+			return MapRenderer.MAP_MODE_LOYALTY
+		MAP_MODE_TRADE:
+			return MapRenderer.MAP_MODE_TRADE
+	return MapRenderer.MAP_MODE_POLITICAL
 
 
 func _add_slider(
@@ -238,10 +300,16 @@ func _add_slider(
 	slider.value_changed.connect(func(value: float) -> void:
 		_update_value_label(key, value, decimals, as_percent)
 		if key == PROVINCE_STRENGTH_KEY:
+			if _map_mode in [
+				MAP_MODE_TERRAIN, MAP_MODE_MIXED, MAP_MODE_POLITICAL,
+			]:
+				_map_mode = _base_map_mode_for_strength(value)
+				_sync_map_mode_buttons()
 			province_strength_changed.emit(value)
-			_sync_map_mode_buttons(value)
 		elif key == ELEVATION_SHADOW_STRENGTH_KEY:
 			elevation_shadow_strength_changed.emit(value)
+		elif key == VERTICAL_TERRAIN_LIGHT_STRENGTH_KEY:
+			vertical_terrain_light_strength_changed.emit(value)
 	)
 	_update_value_label(key, initial, decimals, as_percent)
 
@@ -259,21 +327,28 @@ func _update_value_label(
 		label.text = ("%." + str(decimals) + "f") % value
 
 
-func _sync_map_mode_buttons(strength: float) -> void:
+func _sync_map_mode_buttons() -> void:
 	if _map_mode_buttons.is_empty():
 		return
-	var best_strength := 0.0
-	var best_distance := INF
-	for value in _map_mode_buttons.keys():
-		var candidate := float(value)
-		var distance := absf(candidate - strength)
-		if distance < best_distance:
-			best_distance = distance
-			best_strength = candidate
-	for value in _map_mode_buttons.keys():
-		(_map_mode_buttons[value] as Button).set_pressed_no_signal(
-			is_equal_approx(float(value), best_strength)
+	for key in _map_mode_buttons:
+		(_map_mode_buttons[key] as Button).set_pressed_no_signal(
+			str(key) == _map_mode
 		)
+
+
+static func _base_map_mode_for_strength(strength: float) -> String:
+	var best_mode := MAP_MODE_TERRAIN
+	var best_distance := INF
+	for candidate in [
+		[MAP_MODE_TERRAIN, 0.0],
+		[MAP_MODE_MIXED, 0.42],
+		[MAP_MODE_POLITICAL, PROVINCE_STRENGTH_DEFAULT],
+	]:
+		var distance := absf(strength - float(candidate[1]))
+		if distance < best_distance:
+			best_mode = str(candidate[0])
+			best_distance = distance
+	return best_mode
 
 
 func _apply_font(control: Control, font: Font) -> void:
@@ -334,6 +409,10 @@ func province_strength() -> float:
 
 func elevation_shadow_strength() -> float:
 	return _slider_value(ELEVATION_SHADOW_STRENGTH_KEY)
+
+
+func vertical_terrain_light_strength() -> float:
+	return _slider_value(VERTICAL_TERRAIN_LIGHT_STRENGTH_KEY)
 
 
 func _slider_value(key: String) -> float:

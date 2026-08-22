@@ -173,7 +173,10 @@ static func _side_combat_signature(
 			continue
 		total_size += army.size
 		attack_mass += army.size * army.attack
-		defense_mass += army.size * army.defense
+		defense_mass += int(round(
+			float(army.size * army.defense)
+				* maxf(army.ruler_defense_multiplier, 0.1)
+		))
 		morale_mass += army.size * int(round(army.morale * 1000000.0))
 		offensive_mass += army.size * int(round(
 			army.offensive_attack_multiplier * 1000000.0
@@ -430,7 +433,10 @@ static func resolve_round(
 	# 粮尽（城 food_storage<=0）时城防加成大幅衰减（规格 R3：战力大幅下降）。
 	var garrison_b := 0
 	if battle.kind == Battle.Kind.SIEGE and battle.has_garrison and battle.city != null:
-		garrison_b = city_defense_modifier(battle.city)
+		garrison_b = int(round(
+			float(city_defense_modifier(battle.city))
+				* maxf(battle.city.ruler_city_defense_multiplier, 0.1)
+		))
 		if battle.city.food_storage <= 0:
 			garrison_b = int(round(garrison_b * SIEGE_STARVE_DEF_MULT))
 
@@ -883,7 +889,10 @@ static func _frontline_avg_defense(
 	var weighted := 0.0
 	for entry in frontline:
 		var army: Army = entry["army"]
-		weighted += float(entry["committed"]) * float(army.defense)
+		weighted += (
+			float(entry["committed"]) * float(army.defense)
+				* maxf(army.ruler_defense_multiplier, 0.1)
+		)
 	return weighted / float(total)
 
 
@@ -1001,7 +1010,12 @@ static func _adjust_frontline_morale_mass(
 				/ float(total_weight)
 			)
 			var old_morale := army.morale
-			var morale_multiplier := army.offensive_multiplier()
+			# requested_mass 与 _side_morale_mass 都以 combat_morale 为量纲；
+			# 回写持久 morale 及统计 applied_mass 时必须使用完全相同的倍率。
+			var morale_multiplier := (
+				army.offensive_multiplier()
+				* maxf(army.ruler_morale_multiplier, 0.1)
+			)
 			army.morale = clampf(
 				army.morale
 					- requested_mass

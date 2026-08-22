@@ -51,20 +51,24 @@ const INK_COLOR := Color(0.105, 0.085, 0.055)
 const COMMAND_GREEN := Color(0.16, 0.20, 0.14)
 const ACCENT_RED := Color(0.55, 0.12, 0.10)
 const ACCENT_GOLD := Color(0.88, 0.67, 0.22)
-## EU4 式边界层级：省界与海岸是同一层柔和暗墨，国家/外交边界只在
-## 同一中心线上加粗覆盖，不再叠一条纯黑底边。色值为本项目视觉拟合，
-## 不是 Paradox 原始资产取样。
-const LOCAL_BOUNDARY_INK := Color(0.055, 0.067, 0.069, 0.52)
-const BORDER_NEUTRAL := Color(0.067, 0.082, 0.086, 0.72) # #111516
-const BORDER_ALLIED := Color(0.094, 0.227, 0.400, 0.72) # #183A66
-const BORDER_ENEMY := Color(0.416, 0.129, 0.110, 0.72) # #6A211C
-const BORDER_SUZERAINTY := Color(0.204, 0.227, 0.235, 0.68) # #343A3C
-const POLITICAL_MAP_DEFAULT_STRENGTH: float = 1.0
+const TRADE_ACTIVE_GOLD := Color(0.96, 0.72, 0.20, 0.96)
+const TRADE_ACTIVE_CYAN := Color(0.10, 0.76, 0.72, 0.98)
+const TRADE_REROUTED_ORANGE := Color(0.94, 0.39, 0.075, 0.98)
+const TRADE_BLOCKED_RED := Color(0.82, 0.075, 0.055, 0.98)
+const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
+const LOYALTY_MID_COLOR := Color(0.92, 0.68, 0.12, 1.0)
+const LOYALTY_HIGH_COLOR := Color(0.12, 0.58, 0.24, 1.0)
+## 政治边界统一使用纯色实线。省界位于城市分界中心；国界的两条国家色
+## 描边分别内缩到各自领土，因此同一国界能同时表达两侧国家。
+const LOCAL_BOUNDARY_INK := Color(0.30, 0.045, 0.035, 1.0)
+const POLITICAL_MAP_DEFAULT_STRENGTH: float = 0.93
 const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
 const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
-const LOCAL_BOUNDARY_WIDTH_PX: float = 0.85
-const DIPLOMATIC_BOUNDARY_WIDTH_PX: float = 2.20
-const BOUNDARY_FEATHER_PX: float = 0.42
+const LOCAL_BOUNDARY_WIDTH_PX: float = 1.0
+const COUNTRY_BOUNDARY_WIDTH_PX: float = 3.0
+const COUNTRY_BOUNDARY_VALUE_SCALE: float = 0.75
+const COUNTRY_BOUNDARY_SATURATION_SCALE: float = 1.15
+const BOUNDARY_ANTIALIAS_PX: float = 0.50
 const VASSAL_BRIGHTNESS_STEP: float = 0.15
 const CAMPAIGN_ARROW_TEXTURE := preload(
 	"res://assets/ui/strategic/offensive_arc_arrow.png"
@@ -76,6 +80,16 @@ enum FormationIcon {
 	INFANTRY,
 	ARMOR,
 }
+
+enum MapMode {
+	POLITICAL,
+	LOYALTY,
+	TRADE,
+}
+
+const MAP_MODE_POLITICAL: int = MapMode.POLITICAL
+const MAP_MODE_LOYALTY: int = MapMode.LOYALTY
+const MAP_MODE_TRADE: int = MapMode.TRADE
 
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
@@ -96,14 +110,14 @@ var _province_texture: ImageTexture
 var _political_base_texture: ImageTexture
 var _political_ocean_texture: ImageTexture
 var _political_texture: ImageTexture
+var _loyalty_texture: ImageTexture
 var _political_fill_signature := PackedInt64Array()
+var _loyalty_fill_signature := PackedInt64Array()
+var _map_mode: int = MapMode.POLITICAL
+var _province_visual_mode: int = -1
+var _province_loyalty_day: int = -1
 var _province_strength: float = POLITICAL_MAP_DEFAULT_STRENGTH
-var _local_boundary_segments := PackedVector2Array()
-var _coast_segments := PackedVector2Array()
-var _nation_boundary_segments := PackedVector2Array()
-var _alliance_boundary_segments := PackedVector2Array()
-var _enemy_boundary_segments := PackedVector2Array()
-var _suzerainty_boundary_segments := PackedVector2Array()
+var _classified_boundary_geometry := {}
 var _boundary_topology := {}
 var _province_topology_ids := PackedInt32Array()
 var _province_cache_ready: bool = false
@@ -129,9 +143,12 @@ var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
 var _nation_list_cache_day: int = -1
 var _nation_list_cache_ownership_revision: int = -1
 var _nation_list_cache_diplomacy_revision: int = -1
+var _nation_list_cache_naming_revision: int = -1
+var _nation_list_cache_trade_revision: int = -1
 var _nation_list_cache: Array[Dictionary] = []
 var _nation_list_alive_count: int = 0
 var _city_label_cache: Dictionary = {}
+var _city_label_cache_naming_revision: int = -1
 var _contested_city_cache_day: int = -1
 var _contested_city_cache: Dictionary = {}
 var _visual_animation_active: bool = false
@@ -174,13 +191,12 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_political_base_texture = null
 	_political_ocean_texture = null
 	_political_texture = null
+	_loyalty_texture = null
 	_political_fill_signature = PackedInt64Array()
-	_local_boundary_segments = PackedVector2Array()
-	_coast_segments = PackedVector2Array()
-	_nation_boundary_segments = PackedVector2Array()
-	_alliance_boundary_segments = PackedVector2Array()
-	_enemy_boundary_segments = PackedVector2Array()
-	_suzerainty_boundary_segments = PackedVector2Array()
+	_loyalty_fill_signature = PackedInt64Array()
+	_province_visual_mode = -1
+	_province_loyalty_day = -1
+	_classified_boundary_geometry = {}
 	_boundary_topology = {}
 	_province_topology_ids = PackedInt32Array()
 	_province_cache_ready = false
@@ -196,12 +212,15 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_nation_list_cache_day = -1
 	_nation_list_cache_ownership_revision = -1
 	_nation_list_cache_diplomacy_revision = -1
+	_nation_list_cache_naming_revision = -1
+	_nation_list_cache_trade_revision = -1
 	_nation_list_cache.clear()
 	_nation_list_alive_count = 0
 	_nation_stats_drag_active = false
 	_nation_stats_scroll = 0
 	_nation_stats_collapsed_nations.clear()
 	_city_label_cache.clear()
+	_city_label_cache_naming_revision = -1
 	_contested_city_cache_day = -1
 	_contested_city_cache.clear()
 	_visual_animation_active = false
@@ -369,6 +388,19 @@ func city_names_visible() -> bool:
 	return _city_names_visible
 
 
+func set_map_mode(mode: int) -> void:
+	var normalized := clampi(mode, MapMode.POLITICAL, MapMode.TRADE)
+	if normalized == _map_mode:
+		return
+	_map_mode = normalized
+	_province_visual_mode = -1
+	queue_redraw()
+
+
+func map_mode() -> int:
+	return _map_mode
+
+
 func set_world_layer_visible(visible: bool) -> void:
 	world_layer_visible = visible
 	_map_drag_active = false
@@ -449,6 +481,10 @@ static func create_ui_font() -> Font:
 		"C:/Windows/Fonts/simhei.ttf",
 		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 		"/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+		"/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+		"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+		"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
 	])
 	for path in candidates:
 		if not FileAccess.file_exists(path):
@@ -456,19 +492,21 @@ static func create_ui_font() -> Font:
 		var font_file := FontFile.new()
 		if font_file.load_dynamic_font(path) == OK:
 			return font_file
-	return ThemeDB.fallback_font
+	var portable := SystemFont.new()
+	portable.font_names = PackedStringArray([
+		"sans-serif", "Noto Sans CJK SC", "Source Han Sans SC",
+		"Microsoft YaHei", "SimHei", "PingFang SC", "Heiti SC",
+	])
+	portable.allow_system_fallback = true
+	return portable
 
 
 static func create_map_label_font() -> Font:
-	var fangsong := SystemFont.new()
-	fangsong.font_names = PackedStringArray([
-		"FangSong", "STFangsong", "仿宋", "仿宋_GB2312",
-		"FangSong_GB2312", "Noto Serif CJK SC",
-		"Source Han Serif SC",
-	])
-	fangsong.font_weight = 700
-	fangsong.allow_system_fallback = true
-	return fangsong
+	# The UI factory already resolves native CJK sans/Hei font files on every
+	# supported platform. Reusing its FontFile keeps headless/exported rendering
+	# stable on the supported desktop targets and avoids unnecessary SystemFont
+	# family discovery when a known CJK font file is present.
+	return create_ui_font()
 
 
 func _process(_delta: float) -> void:
@@ -1485,9 +1523,10 @@ func _draw() -> void:
 		_draw_province_fills()
 		_draw_rivers()
 		_draw_edges()
+		_draw_trade_routes()
 		_draw_selection_highlight()
-		# Political divisions form one multiply-like line layer above the map,
-		# terrain and transport network, while counters remain the topmost layer.
+		# Political divisions form one solid-color line layer above the map,
+		# terrain and transport network, while counters remain topmost.
 		_draw_province_boundaries()
 		_draw_national_boundaries()
 		_draw_campaign_arrows()
@@ -1544,7 +1583,7 @@ func _draw_terrain_background() -> void:
 		return
 	# Satellite imagery belongs exclusively to exact terrain mode. Political
 	# modes draw their opaque white low-poly-equivalent base in fills below.
-	if _province_strength > 0.0:
+	if effective_map_mode_strength(_map_mode, _province_strength) > 0.0:
 		return
 	var texture_size := Vector2(_terrain_texture.get_size())
 	var normalized_region := state.map_source_region_normalized
@@ -1594,10 +1633,27 @@ func _ensure_province_visual_cache() -> void:
 		or state.province_ids.is_empty()
 	):
 		return
+	var ownership_changed := (
+		_province_ownership_revision != state.ownership_revision
+	)
+	var loyalty_signature := (
+		loyalty_fill_signature(state)
+		if _map_mode == MapMode.LOYALTY
+		else PackedInt64Array()
+	)
+	var loyalty_changed := (
+		_map_mode == MapMode.LOYALTY
+		and (
+			_loyalty_texture == null
+			or loyalty_signature != _loyalty_fill_signature
+		)
+	)
 	var visual_revision_changed := (
 		_province_texture == null
-		or _province_ownership_revision != state.ownership_revision
+		or ownership_changed
 		or _province_diplomacy_revision != state.diplomacy_revision
+		or _province_visual_mode != _map_mode
+		or loyalty_changed
 	)
 	if not visual_revision_changed:
 		return
@@ -1613,7 +1669,7 @@ func _ensure_province_visual_cache() -> void:
 	var geometry := classify_province_boundary_topology(
 		state, _boundary_topology
 	)
-	_cache_boundary_geometry(geometry)
+	_classified_boundary_geometry = geometry
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
@@ -1641,8 +1697,21 @@ func _ensure_province_visual_cache() -> void:
 			political_image
 		)
 		_political_fill_signature = fill_signature
+	if loyalty_changed or (
+		_map_mode == MapMode.LOYALTY and topology_changed
+	):
+		var loyalty_source := build_loyalty_overlay_image(state)
+		loyalty_source.resize(
+			loyalty_source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
+			loyalty_source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
+			Image.INTERPOLATE_NEAREST
+		)
+		_loyalty_texture = ImageTexture.create_from_image(loyalty_source)
+		_loyalty_fill_signature = loyalty_signature
 	_province_ownership_revision = state.ownership_revision
 	_province_diplomacy_revision = state.diplomacy_revision
+	_province_visual_mode = _map_mode
+	_province_loyalty_day = state.day
 
 
 func _rebuild_political_base_texture(political_image: Image) -> void:
@@ -1694,19 +1763,6 @@ func _rebuild_political_base_texture(political_image: Image) -> void:
 	_political_ocean_texture = ImageTexture.create_from_image(ocean_image)
 
 
-func _cache_boundary_geometry(geometry: Dictionary) -> void:
-	# Cache every visible layer as one snapshot. Ownership revisions can also
-	# come from province-topology rebuilds (for example, moving a city in the
-	# map editor), so refreshing only diplomatic subsets would leave the coast
-	# at its previous position and make political/terrain modes disagree.
-	_local_boundary_segments = geometry["local"]
-	_coast_segments = geometry["coast"]
-	_nation_boundary_segments = geometry["nation"]
-	_alliance_boundary_segments = geometry["alliance"]
-	_enemy_boundary_segments = geometry["enemy"]
-	_suzerainty_boundary_segments = geometry["suzerainty"]
-
-
 static func build_province_overlay_image(game_state: GameState) -> Image:
 	var size := game_state.province_map_size
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
@@ -1745,6 +1801,45 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 				color = occupation_colors[province_id]
 			image.set_pixel(x, y, color)
 	return image
+
+
+static func loyalty_color(value: float) -> Color:
+	var normalized := clampf(value, 0.0, 100.0)
+	if normalized <= 50.0:
+		return LOYALTY_LOW_COLOR.lerp(
+			LOYALTY_MID_COLOR, normalized / 50.0
+		)
+	return LOYALTY_MID_COLOR.lerp(
+		LOYALTY_HIGH_COLOR, (normalized - 50.0) / 50.0
+	)
+
+
+static func build_loyalty_overlay_image(game_state: GameState) -> Image:
+	var size := game_state.province_map_size
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	image.fill(Color.TRANSPARENT)
+	var colors := PackedColorArray()
+	colors.resize(game_state.cities.size())
+	for city_id in range(game_state.cities.size()):
+		colors[city_id] = loyalty_color(game_state.cities[city_id].loyalty)
+	for y in range(size.y):
+		for x in range(size.x):
+			var province_id := game_state.province_ids[y * size.x + x]
+			if province_id >= 0 and province_id < colors.size():
+				image.set_pixel(x, y, colors[province_id])
+	return image
+
+
+static func loyalty_fill_signature(game_state: GameState) -> PackedInt64Array:
+	var signature := PackedInt64Array()
+	signature.resize(game_state.cities.size())
+	for city_id in range(game_state.cities.size()):
+		# A tenth of a point is finer than the visible gradient while preventing
+		# floating-point noise from rebuilding a million-pixel texture.
+		signature[city_id] = int(round(
+			game_state.cities[city_id].loyalty * 10.0
+		))
+	return signature
 
 
 ## Compact semantic signature for political fill. This avoids rebuilding the
@@ -1788,8 +1883,7 @@ static func build_political_canvas_images(
 			"fill": source,
 			"terrain_fill": source,
 			"province_boundaries": source,
-			"coast_boundaries": source,
-			"diplomatic_boundaries": source,
+			"country_boundaries": source,
 		}
 	var fill := source.duplicate()
 	fill.resize(
@@ -1821,8 +1915,7 @@ static func build_political_canvas_images(
 		"fill": fill,
 		"terrain_fill": terrain_fill,
 		"province_boundaries": soft_boundaries["province"],
-		"coast_boundaries": soft_boundaries["coast"],
-		"diplomatic_boundaries": soft_boundaries["diplomatic"],
+		"country_boundaries": soft_boundaries["country"],
 	}
 
 
@@ -1858,8 +1951,8 @@ static func _dilate_political_fill(
 	return result
 
 
-## 将共享平滑路径栅格化为带羽化的 coverage 图。纹理本身使用线性采样，
-## 因而政治填色仍保持 nearest 分类，而边界可以独立柔化、不串色。
+## 将共享平滑路径栅格化为抗锯齿实线。省界是 1px 暗红线；国家边界
+## 以共享中心为轴向两国各延伸 3px，RGB 由所在国家自身颜色决定。
 static func build_soft_boundary_images(
 	game_state: GameState,
 	boundary_geometry: Dictionary = {}
@@ -1873,36 +1966,107 @@ static func build_soft_boundary_images(
 		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1)
 	)
 	var province := _rasterize_soft_boundary_layer(
-		geometry.get("local", PackedVector2Array()),
+		geometry.get("province", PackedVector2Array()),
 		output_size, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX,
-		BOUNDARY_FEATHER_PX
+		BOUNDARY_ANTIALIAS_PX
 	)
-	var coast := _rasterize_soft_boundary_layer(
-		geometry.get("coast", PackedVector2Array()),
-		output_size, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX,
-		BOUNDARY_FEATHER_PX
-	)
-	var diplomatic := build_diplomatic_boundary_image(game_state, geometry)
+	var country := build_country_boundary_image(game_state, geometry, true)
 	# The shader uses trilinear/anisotropic sampling at oblique overview angles.
 	# Dynamic ImageTextures do not acquire mip levels automatically, so build
 	# them explicitly after all max-coverage compositing is complete.
-	for boundary_image in [province, coast]:
-		var mipmap_error: Error = boundary_image.generate_mipmaps()
-		if mipmap_error != OK:
-			push_error(
-				"Failed to generate political-boundary mipmaps: %d"
+	var mipmap_error: Error = province.generate_mipmaps()
+	if mipmap_error != OK:
+		push_error(
+			"Failed to generate province-boundary mipmaps: %d"
 				% mipmap_error
-			)
+		)
 	return {
 		"province": province,
-		"coast": coast,
-		"diplomatic": diplomatic,
+		"country": country,
 	}
 
 
-static func build_diplomatic_boundary_image(
+static func build_country_color_image(
 	game_state: GameState,
-	boundary_geometry: Dictionary = {}
+	extend_to_real_coast: bool = false
+) -> Image:
+	var source_size := game_state.province_map_size
+	var source := Image.create(
+		maxi(source_size.x, 1), maxi(source_size.y, 1),
+		false, Image.FORMAT_RGBA8
+	)
+	source.fill(Color.TRANSPARENT)
+	for y in range(source_size.y):
+		for x in range(source_size.x):
+			var province_id := game_state.province_ids[y * source_size.x + x]
+			if province_id < 0 or province_id >= game_state.cities.size():
+				continue
+			var owner_id := game_state.cities[province_id].owner_nation
+			source.set_pixel(x, y, nation_boundary_color(game_state, owner_id))
+	var result := (
+		_extend_nearest_country_color(source, 3)
+		if extend_to_real_coast
+		else source
+	)
+	result.resize(
+		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
+		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1),
+		Image.INTERPOLATE_NEAREST
+	)
+	return result
+
+
+## Extend owner colors just beyond the coarse province mask for the true 0m
+## mesh coastline. Each destination selects the nearest original land texel;
+## stable source-index tie-breaking prevents iteration order from leaking a
+## neighboring country's color into narrow straits or border river mouths.
+static func _extend_nearest_country_color(
+	source: Image, radius: int
+) -> Image:
+	var result := source.duplicate()
+	var width := source.get_width()
+	var height := source.get_height()
+	var search_radius := maxi(radius, 0)
+	for y in range(height):
+		for x in range(width):
+			if source.get_pixel(x, y).a > 0.5:
+				continue
+			var best_distance := INF
+			var best_index := 9223372036854775807
+			var best_color := Color.TRANSPARENT
+			for offset_y in range(-search_radius, search_radius + 1):
+				for offset_x in range(-search_radius, search_radius + 1):
+					var sample_x := x + offset_x
+					var sample_y := y + offset_y
+					if (
+						sample_x < 0 or sample_x >= width
+						or sample_y < 0 or sample_y >= height
+					):
+						continue
+					var color := source.get_pixel(sample_x, sample_y)
+					if color.a <= 0.5:
+						continue
+					var distance := float(offset_x * offset_x + offset_y * offset_y)
+					var source_index := sample_y * width + sample_x
+					if (
+						distance < best_distance
+						or (
+							is_equal_approx(distance, best_distance)
+							and source_index < best_index
+						)
+					):
+						best_distance = distance
+						best_index = source_index
+						best_color = color
+			if best_color.a > 0.5:
+				result.set_pixel(x, y, best_color)
+	return result
+
+
+static func build_country_boundary_image(
+	game_state: GameState,
+	boundary_geometry: Dictionary = {},
+	include_coast: bool = false
 ) -> Image:
 	var geometry := boundary_geometry
 	if geometry.is_empty():
@@ -1912,28 +2076,171 @@ static func build_diplomatic_boundary_image(
 		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
 		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1)
 	)
-	var diplomatic := Image.create(
+	var country := Image.create(
 		output_size.x, output_size.y, false, Image.FORMAT_RGBA8
 	)
-	diplomatic.fill(Color.TRANSPARENT)
-	for layer_spec in [
-		["nation", BORDER_NEUTRAL],
-		["suzerainty", BORDER_SUZERAINTY],
-		["alliance", BORDER_ALLIED],
-		["enemy", BORDER_ENEMY],
-	]:
-		_rasterize_soft_segments_into(
-			diplomatic, geometry.get(layer_spec[0], PackedVector2Array()),
-			layer_spec[1], DIPLOMATIC_BOUNDARY_WIDTH_PX,
-			BOUNDARY_FEATHER_PX
+	# Linear mip sampling must blend toward transparent black. Godot's
+	# Color.TRANSPARENT carries white RGB and otherwise creates a pale fringe.
+	country.fill(Color(0.0, 0.0, 0.0, 0.0))
+	var closest_distance_key := PackedInt32Array()
+	closest_distance_key.resize(output_size.x * output_size.y)
+	closest_distance_key.fill(2147483647)
+	var closest_owner := PackedInt32Array()
+	closest_owner.resize(output_size.x * output_size.y)
+	closest_owner.fill(2147483647)
+	_rasterize_owned_boundary_sides(
+		country, game_state,
+		geometry.get("country", PackedVector2Array()),
+		geometry.get("country_owner_a", PackedInt32Array()),
+		geometry.get("country_owner_b", PackedInt32Array()),
+		geometry.get("country_side_a", PackedVector2Array()),
+		geometry.get("country_side_b", PackedVector2Array()),
+		closest_distance_key, closest_owner
+	)
+	if include_coast:
+		_rasterize_owned_boundary_sides(
+			country, game_state,
+			geometry.get("coast", PackedVector2Array()),
+			geometry.get("coast_owner", PackedInt32Array()),
+			PackedInt32Array(),
+			geometry.get("coast_side", PackedVector2Array()),
+			PackedVector2Array(),
+			closest_distance_key, closest_owner
 		)
-	var mipmap_error: Error = diplomatic.generate_mipmaps()
+	var mipmap_error: Error = country.generate_mipmaps()
 	if mipmap_error != OK:
 		push_error(
-			"Failed to generate diplomatic-boundary mipmaps: %d"
+			"Failed to generate country-boundary mipmaps: %d"
 			% mipmap_error
 		)
-	return diplomatic
+	return country
+
+
+static func _rasterize_owned_boundary_sides(
+	image: Image,
+	game_state: GameState,
+	segments: PackedVector2Array,
+	owner_a: PackedInt32Array,
+	owner_b: PackedInt32Array,
+	side_a: PackedVector2Array,
+	side_b: PackedVector2Array,
+	closest_distance_key: PackedInt32Array = PackedInt32Array(),
+	closest_owner: PackedInt32Array = PackedInt32Array()
+) -> void:
+	var segment_count := segments.size() / 2
+	if segment_count <= 0:
+		return
+	var image_size := Vector2(image.get_size())
+	# Coverage alone is flat throughout the 3px core, so it cannot arbitrate
+	# overlaps at bends and three-country junctions. Keep the actual closest
+	# curve distance and owner beside the image; equal-distance ties resolve by
+	# owner id and therefore never depend on raster scan order.
+	var pixel_count := image.get_width() * image.get_height()
+	if closest_distance_key.size() != pixel_count:
+		closest_distance_key.resize(pixel_count)
+		closest_distance_key.fill(2147483647)
+	if closest_owner.size() != pixel_count:
+		closest_owner.resize(pixel_count)
+		closest_owner.fill(2147483647)
+	for index in range(segment_count):
+		var from := segments[index * 2] * image_size
+		var to := segments[index * 2 + 1] * image_size
+		if index < owner_a.size() and index < side_a.size():
+			_rasterize_owned_boundary_side(
+				image, game_state, from, to, owner_a[index],
+				side_a[index], closest_distance_key, closest_owner
+			)
+		if index < owner_b.size() and index < side_b.size():
+			_rasterize_owned_boundary_side(
+				image, game_state, from, to, owner_b[index],
+				side_b[index], closest_distance_key, closest_owner
+			)
+
+
+static func _rasterize_owned_boundary_side(
+	image: Image,
+	game_state: GameState,
+	from: Vector2,
+	to: Vector2,
+	owner_id: int,
+	side_vector: Vector2,
+	closest_distance_key: PackedInt32Array,
+	closest_owner: PackedInt32Array
+) -> void:
+	var direction := (to - from).normalized()
+	if direction.length_squared() <= 0.000001:
+		return
+	var normal := Vector2(-direction.y, direction.x)
+	if side_vector.dot(normal) < 0.0:
+		normal = -normal
+	var color := nation_boundary_color(game_state, owner_id)
+	var segment_length := from.distance_to(to)
+	var step_count := maxi(int(ceil(segment_length / 0.34)), 1)
+	var outer_width := (
+		COUNTRY_BOUNDARY_WIDTH_PX + BOUNDARY_ANTIALIAS_PX
+	)
+	for step in range(step_count + 1):
+		var center := from.lerp(to, float(step) / float(step_count))
+		var x_from := clampi(
+			int(floor(center.x - outer_width - 1.0)),
+			0, image.get_width() - 1
+		)
+		var x_to := clampi(
+			int(ceil(center.x + outer_width + 1.0)),
+			0, image.get_width() - 1
+		)
+		var y_from := clampi(
+			int(floor(center.y - outer_width - 1.0)),
+			0, image.get_height() - 1
+		)
+		var y_to := clampi(
+			int(ceil(center.y + outer_width + 1.0)),
+			0, image.get_height() - 1
+		)
+		for y in range(y_from, y_to + 1):
+			for x in range(x_from, x_to + 1):
+				var sample := Vector2(float(x) + 0.5, float(y) + 0.5)
+				var along := clampf(
+					(sample - from).dot(direction), 0.0, segment_length
+				)
+				var nearest := from + direction * along
+				var side_distance := (sample - nearest).dot(normal)
+				var distance := sample.distance_to(nearest)
+				if side_distance < 0.0 or distance >= outer_width:
+					continue
+				var pixel_index := y * image.get_width() + x
+				# A fixed-point pixel-distance key makes arbitration a strict,
+				# transitive lexicographic minimum instead of an epsilon relation.
+				var distance_key := int(round(distance * 1048576.0))
+				var old_distance_key := closest_distance_key[pixel_index]
+				var old_owner := closest_owner[pixel_index]
+				if (
+					distance_key > old_distance_key
+					or (
+						distance_key == old_distance_key
+						and owner_id >= old_owner
+					)
+				):
+					continue
+				var coverage := (
+					1.0
+					if distance <= COUNTRY_BOUNDARY_WIDTH_PX
+					else 1.0 - smoothstep(
+						COUNTRY_BOUNDARY_WIDTH_PX, outer_width, distance
+					)
+				)
+				# Store raw linear-premultiplied RGB. The texture sampler deliberately
+				# has no source_color conversion, so mip generation and filtering stay
+				# linear; the shader divides by alpha without dark/white halos.
+				var linear_color := color.srgb_to_linear()
+				linear_color.r *= coverage
+				linear_color.g *= coverage
+				linear_color.b *= coverage
+				var source := linear_color
+				source.a = coverage
+				closest_distance_key[pixel_index] = distance_key
+				closest_owner[pixel_index] = owner_id
+				image.set_pixel(x, y, source)
 
 
 static func _rasterize_soft_boundary_layer(
@@ -1944,7 +2251,7 @@ static func _rasterize_soft_boundary_layer(
 	feather_px: float
 ) -> Image:
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
-	image.fill(Color.TRANSPARENT)
+	image.fill(Color(0.0, 0.0, 0.0, 0.0))
 	_rasterize_soft_segments_into(
 		image, segments, color, core_width_px, feather_px
 	)
@@ -2009,6 +2316,27 @@ static func _rasterize_soft_segments_into(
 
 static func paper_nation_color(color: Color) -> Color:
 	return GameState.normalize_nation_color(color)
+
+
+## 国家边界使用国家自己的色相，而非外交关系色。相对本国底色降低 25%
+## 明度、提高 15% 饱和度，落在需求给出的 20-30% / 10-20% 区间中点。
+static func nation_boundary_color(
+	game_state: GameState,
+	nation_id: int
+) -> Color:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return Color.TRANSPARENT
+	var base := paper_nation_color(game_state.nations[nation_id].color)
+	return Color.from_hsv(
+		base.h,
+		clampf(base.s * COUNTRY_BOUNDARY_SATURATION_SCALE, 0.0, 1.0),
+		clampf(base.v * COUNTRY_BOUNDARY_VALUE_SCALE, 0.0, 1.0),
+		1.0
+	)
 
 
 ## Political-map color is intentionally shared by 2D and 3D renderers. A
@@ -2114,6 +2442,10 @@ static func build_province_boundary_topology(
 	var coast := PackedVector2Array()
 	var province_a := PackedInt32Array()
 	var province_b := PackedInt32Array()
+	var province_side_a := PackedVector2Array()
+	var province_side_b := PackedVector2Array()
+	var coast_province := PackedInt32Array()
+	var coast_side := PackedVector2Array()
 	var size := game_state.province_map_size
 	if size.x <= 0 or size.y <= 0:
 		return {
@@ -2121,6 +2453,10 @@ static func build_province_boundary_topology(
 			"coast": coast,
 			"province_a": province_a,
 			"province_b": province_b,
+			"province_side_a": province_side_a,
+			"province_side_b": province_side_b,
+			"coast_province": coast_province,
+			"coast_side": coast_side,
 		}
 	for y in range(size.y):
 		for x in range(size.x):
@@ -2149,34 +2485,67 @@ static func build_province_boundary_topology(
 			var y1 := float(y + 1) / float(size.y)
 			if left < 0:
 				_append_segment(coast, Vector2(x0, y0), Vector2(x0, y1))
+				coast_province.append(province_id)
+				coast_side.append(Vector2.RIGHT)
 			if top < 0:
 				_append_segment(coast, Vector2(x0, y0), Vector2(x1, y0))
+				coast_province.append(province_id)
+				coast_side.append(Vector2.DOWN)
 			if right < 0:
 				_append_segment(coast, Vector2(x1, y0), Vector2(x1, y1))
+				coast_province.append(province_id)
+				coast_side.append(Vector2.LEFT)
 			elif right != province_id:
 				_append_segment(province, Vector2(x1, y0), Vector2(x1, y1))
 				province_a.append(province_id)
 				province_b.append(right)
+				province_side_a.append(Vector2.LEFT)
+				province_side_b.append(Vector2.RIGHT)
 			if bottom < 0:
 				_append_segment(coast, Vector2(x0, y1), Vector2(x1, y1))
+				coast_province.append(province_id)
+				coast_side.append(Vector2.UP)
 			elif bottom != province_id:
 				_append_segment(province, Vector2(x0, y1), Vector2(x1, y1))
 				province_a.append(province_id)
 				province_b.append(bottom)
-	var shared := _smooth_shared_political_segments(
-		province, PackedVector2Array(), PackedVector2Array(),
-		PackedVector2Array(), PackedVector2Array(), PackedVector2Array()
+				province_side_a.append(Vector2.UP)
+				province_side_b.append(Vector2.DOWN)
+	var curved_province := _curve_subdivide_boundary_graph(
+		province,
+		{
+			"kind": "province",
+			"province_a": province_a,
+			"province_b": province_b,
+			"side_a": province_side_a,
+			"side_b": province_side_b,
+		},
+		size
+	)
+	var curved_coast := _curve_subdivide_boundary_graph(
+		coast,
+		{
+			"kind": "coast",
+			"coast_province": coast_province,
+			"coast_side": coast_side,
+		},
+		size
 	)
 	return {
-		"province": shared["province"],
-		"coast": _smooth_boundary_segments(coast, size),
-		"province_a": province_a,
-		"province_b": province_b,
+		"province": curved_province["segments"],
+		"coast": curved_coast["segments"],
+		"province_a": curved_province["province_a"],
+		"province_b": curved_province["province_b"],
+		"province_side_a": curved_province["province_side_a"],
+		"province_side_b": curved_province["province_side_b"],
+		"coast_province": curved_coast["coast_province"],
+		"coast_side": curved_coast["coast_side"],
 	}
 
 
-## Reclassify cached, already-smoothed city-border edges. This is the only
-## work required when ownership or diplomacy changes without topology edits.
+## Reclassify cached, already-smoothed city-border edges by current control.
+## Every cross-country edge belongs to one country layer regardless of alliance
+## or war: its two visible sides receive their respective national colors later.
 static func classify_province_boundary_topology(
 	game_state: GameState,
 	topology: Dictionary
@@ -2190,7 +2559,20 @@ static func classify_province_boundary_topology(
 	var province_b: PackedInt32Array = topology.get(
 		"province_b", PackedInt32Array()
 	)
+	var province_side_a: PackedVector2Array = topology.get(
+		"province_side_a", PackedVector2Array()
+	)
+	var province_side_b: PackedVector2Array = topology.get(
+		"province_side_b", PackedVector2Array()
+	)
 	var local := PackedVector2Array()
+	var country := PackedVector2Array()
+	var country_owner_a := PackedInt32Array()
+	var country_owner_b := PackedInt32Array()
+	var country_side_a := PackedVector2Array()
+	var country_side_b := PackedVector2Array()
+	# Keep diplomatic subsets as non-visual semantic diagnostics. Rendering uses
+	# only country, so alliances and wars never override either nation's color.
 	var nation := PackedVector2Array()
 	var alliance := PackedVector2Array()
 	var enemy := PackedVector2Array()
@@ -2205,24 +2587,46 @@ static func classify_province_boundary_topology(
 		var to := province[edge_index * 2 + 1]
 		if not _province_owners_differ(game_state, city_a, city_b):
 			_append_segment(local, from, to)
-		elif _province_owners_same_peaceful_suzerainty(
-			game_state, city_a, city_b
-		):
-			_append_segment(suzerainty, from, to)
-		elif _province_owners_allied(game_state, city_a, city_b):
-			_append_segment(alliance, from, to)
-		elif _province_owners_enemy(game_state, city_a, city_b):
-			_append_segment(enemy, from, to)
 		else:
-			_append_segment(nation, from, to)
+			_append_segment(country, from, to)
+			country_owner_a.append(game_state.cities[city_a].owner_nation)
+			country_owner_b.append(game_state.cities[city_b].owner_nation)
+			country_side_a.append(province_side_a[edge_index])
+			country_side_b.append(province_side_b[edge_index])
+			if _province_owners_same_peaceful_suzerainty(
+				game_state, city_a, city_b
+			):
+				_append_segment(suzerainty, from, to)
+			elif _province_owners_allied(game_state, city_a, city_b):
+				_append_segment(alliance, from, to)
+			elif _province_owners_enemy(game_state, city_a, city_b):
+				_append_segment(enemy, from, to)
+			else:
+				_append_segment(nation, from, to)
+	var coast_owner := PackedInt32Array()
+	var coast_province: PackedInt32Array = topology.get(
+		"coast_province", PackedInt32Array()
+	)
+	for coast_city in coast_province:
+		coast_owner.append(
+			game_state.cities[coast_city].owner_nation
+			if coast_city >= 0 and coast_city < game_state.cities.size() else -1
+		)
 	return {
 		"province": province,
 		"local": local,
+		"country": country,
+		"country_owner_a": country_owner_a,
+		"country_owner_b": country_owner_b,
+		"country_side_a": country_side_a,
+		"country_side_b": country_side_b,
 		"nation": nation,
 		"alliance": alliance,
 		"enemy": enemy,
 		"suzerainty": suzerainty,
 		"coast": topology.get("coast", PackedVector2Array()),
+		"coast_owner": coast_owner,
+		"coast_side": topology.get("coast_side", PackedVector2Array()),
 	}
 
 
@@ -2290,292 +2694,540 @@ static func _append_segment(
 	segments.append(to)
 
 
-## Smooth the single city-border graph once, then remap every diplomatic
-## subset through the same vertex table. A national border therefore remains
-## exactly on top of its underlying city border instead of drifting after each
-## class is smoothed independently.
-static func _smooth_shared_political_segments(
-	province: PackedVector2Array,
-	local: PackedVector2Array,
-	nation: PackedVector2Array,
-	alliance: PackedVector2Array,
-	enemy: PackedVector2Array,
-	suzerainty: PackedVector2Array
+## Trace the raster boundary graph by maximal constant-semantic chains first,
+## then run a light pixel-space RDP pass before centripetal curve subdivision.
+## This
+## keeps junctions/endpoints pinned, makes closed-loop ordering deterministic,
+## and lets every curved micro-segment carry explicit side-aware metadata.
+static func _curve_subdivide_boundary_graph(
+	segments: PackedVector2Array,
+	metadata: Dictionary,
+	raster_size: Vector2i,
+	subdivisions: int = 4,
+	rdp_tolerance_px: float = 0.85
 ) -> Dictionary:
+	var kind := str(metadata.get("kind", ""))
+	var result := {
+		"segments": PackedVector2Array(),
+		"province_a": PackedInt32Array(),
+		"province_b": PackedInt32Array(),
+		"province_side_a": PackedVector2Array(),
+		"province_side_b": PackedVector2Array(),
+		"coast_province": PackedInt32Array(),
+		"coast_side": PackedVector2Array(),
+	}
+	if segments.size() < 2:
+		return result
+	var semantic_edges := _build_boundary_semantic_edges(segments, metadata)
+	if semantic_edges.is_empty():
+		return result
+	var chains := _trace_boundary_semantic_chains(semantic_edges)
+	for chain in chains:
+		var source_points: PackedVector2Array = chain.get(
+			"points", PackedVector2Array()
+		)
+		if source_points.size() < 2:
+			continue
+		var closed := bool(chain.get("closed", false))
+		var simplified := _simplify_boundary_path(
+			source_points, raster_size, closed, rdp_tolerance_px
+		)
+		if simplified.size() < 2:
+			continue
+		if kind == "province":
+			_append_curved_province_boundary_chain(
+				result, simplified, closed, chain, maxi(subdivisions, 1)
+			)
+		elif kind == "coast":
+			_append_curved_coast_boundary_chain(
+				result, simplified, closed, chain, maxi(subdivisions, 1)
+			)
+	return result
+
+
+static func _build_boundary_semantic_edges(
+	segments: PackedVector2Array,
+	metadata: Dictionary
+) -> Array:
+	var kind := str(metadata.get("kind", ""))
+	var result: Array = []
+	var edge_count := segments.size() / 2
+	var province_a: PackedInt32Array = metadata.get(
+		"province_a", PackedInt32Array()
+	)
+	var province_b: PackedInt32Array = metadata.get(
+		"province_b", PackedInt32Array()
+	)
+	var side_a: PackedVector2Array = metadata.get(
+		"side_a", PackedVector2Array()
+	)
+	var side_b: PackedVector2Array = metadata.get(
+		"side_b", PackedVector2Array()
+	)
+	var coast_province: PackedInt32Array = metadata.get(
+		"coast_province", PackedInt32Array()
+	)
+	var coast_side: PackedVector2Array = metadata.get(
+		"coast_side", PackedVector2Array()
+	)
+	for edge_index in range(edge_count):
+		var from := segments[edge_index * 2]
+		var to := segments[edge_index * 2 + 1]
+		if from.is_equal_approx(to):
+			continue
+		var edge := {
+			"id": result.size(),
+			"from": from,
+			"to": to,
+			"from_key": _boundary_point_key(from),
+			"to_key": _boundary_point_key(to),
+			"kind": kind,
+		}
+		if kind == "province":
+			var city_a := (
+				province_a[edge_index]
+				if edge_index < province_a.size()
+				else -1
+			)
+			var city_b := (
+				province_b[edge_index]
+				if edge_index < province_b.size()
+				else -1
+			)
+			edge["province_a"] = city_a
+			edge["province_b"] = city_b
+			edge["side_a"] = (
+				side_a[edge_index]
+				if edge_index < side_a.size()
+				else Vector2.ZERO
+			)
+			edge["side_b"] = (
+				side_b[edge_index]
+				if edge_index < side_b.size()
+				else Vector2.ZERO
+			)
+			edge["semantic_key"] = _province_pair_key(city_a, city_b)
+		elif kind == "coast":
+			var province_id := (
+				coast_province[edge_index]
+				if edge_index < coast_province.size()
+				else -1
+			)
+			edge["coast_province"] = province_id
+			edge["coast_side"] = (
+				coast_side[edge_index]
+				if edge_index < coast_side.size()
+				else Vector2.ZERO
+			)
+			edge["semantic_key"] = "coast:%d" % province_id
+		else:
+			continue
+		result.append(edge)
+	return result
+
+
+static func _trace_boundary_semantic_chains(
+	semantic_edges: Array
+) -> Array:
 	var positions := {}
-	var neighbors := {}
-	for index in range(0, province.size(), 2):
-		var from := province[index]
-		var to := province[index + 1]
-		var from_key := _boundary_point_key(from)
-		var to_key := _boundary_point_key(to)
-		positions[from_key] = from
-		positions[to_key] = to
-		if not neighbors.has(from_key):
-			neighbors[from_key] = [] as Array[String]
-		if not neighbors.has(to_key):
-			neighbors[to_key] = [] as Array[String]
-		if not (neighbors[from_key] as Array[String]).has(to_key):
-			(neighbors[from_key] as Array[String]).append(to_key)
-		if not (neighbors[to_key] as Array[String]).has(from_key):
-			(neighbors[to_key] as Array[String]).append(from_key)
-	var smoothed := positions.duplicate()
-	for _iteration in range(3):
-		var next := smoothed.duplicate()
-		for key_value in neighbors:
-			var key := str(key_value)
-			var adjacent: Array[String] = neighbors[key]
-			if adjacent.size() != 2:
+	var adjacency := {}
+	var global_degree := {}
+	var edges_by_semantic := {}
+	for edge_value in semantic_edges:
+		var edge: Dictionary = edge_value
+		var semantic_key := str(edge.get("semantic_key", ""))
+		var from_key := str(edge.get("from_key", ""))
+		var to_key := str(edge.get("to_key", ""))
+		positions[from_key] = edge.get("from", Vector2.ZERO)
+		positions[to_key] = edge.get("to", Vector2.ZERO)
+		global_degree[from_key] = int(global_degree.get(from_key, 0)) + 1
+		global_degree[to_key] = int(global_degree.get(to_key, 0)) + 1
+		if not edges_by_semantic.has(semantic_key):
+			edges_by_semantic[semantic_key] = []
+		(edges_by_semantic[semantic_key] as Array).append(edge)
+		if not adjacency.has(semantic_key):
+			adjacency[semantic_key] = {}
+		var semantic_adjacency: Dictionary = adjacency[semantic_key]
+		if not semantic_adjacency.has(from_key):
+			semantic_adjacency[from_key] = []
+		if not semantic_adjacency.has(to_key):
+			semantic_adjacency[to_key] = []
+		(semantic_adjacency[from_key] as Array).append(int(edge["id"]))
+		(semantic_adjacency[to_key] as Array).append(int(edge["id"]))
+	var traced: Array = []
+	var visited := {}
+	var semantic_keys: Array = edges_by_semantic.keys()
+	semantic_keys.sort()
+	for semantic_key_value in semantic_keys:
+		var semantic_key := str(semantic_key_value)
+		var semantic_edges_list: Array = edges_by_semantic[semantic_key]
+		var semantic_adjacency: Dictionary = adjacency[semantic_key]
+		var vertex_keys: Array = semantic_adjacency.keys()
+		vertex_keys.sort()
+		for vertex_key_value in vertex_keys:
+			var vertex_key := str(vertex_key_value)
+			var incident := _sort_incident_edges(
+				semantic_adjacency[vertex_key], semantic_edges, vertex_key
+			)
+			if incident.size() == 2 and int(global_degree[vertex_key]) == 2:
 				continue
-			var current: Vector2 = smoothed[key]
-			var previous: Vector2 = smoothed[adjacent[0]]
-			var following: Vector2 = smoothed[adjacent[1]]
-			next[key] = current * 0.50 + (previous + following) * 0.25
-		smoothed = next
+			for edge_id_value in incident:
+				var edge_id := int(edge_id_value)
+				if bool(visited.get(edge_id, false)):
+					continue
+				var chain := _trace_boundary_semantic_chain(
+					vertex_key,
+					edge_id,
+					semantic_edges,
+					semantic_adjacency,
+					global_degree,
+					positions,
+					visited
+				)
+				var traced_points: PackedVector2Array = chain.get(
+					"points", PackedVector2Array()
+				)
+				if not traced_points.is_empty():
+					traced.append(chain)
+		var remaining := _sort_semantic_edges(semantic_edges_list)
+		for edge_value in remaining:
+			var edge: Dictionary = edge_value
+			var edge_id := int(edge.get("id", -1))
+			if edge_id < 0 or bool(visited.get(edge_id, false)):
+				continue
+			var loop_start := _deterministic_loop_start(edge)
+			var chain := _trace_boundary_semantic_chain(
+				str(loop_start["start_key"]),
+				int(loop_start["edge_id"]),
+				semantic_edges,
+				semantic_adjacency,
+				global_degree,
+				positions,
+				visited
+			)
+			var loop_points: PackedVector2Array = chain.get(
+				"points", PackedVector2Array()
+			)
+			if not loop_points.is_empty():
+				traced.append(chain)
+	return traced
+
+
+static func _sort_incident_edges(
+	incident_edges: Array,
+	semantic_edges: Array,
+	vertex_key: String
+) -> Array:
+	var sorted_edges := incident_edges.duplicate()
+	sorted_edges.sort_custom(func(a: int, b: int) -> bool:
+		return _incident_edge_sort_key(semantic_edges[a], vertex_key) < _incident_edge_sort_key(semantic_edges[b], vertex_key)
+	)
+	return sorted_edges
+
+
+static func _sort_semantic_edges(semantic_edges: Array) -> Array:
+	var sorted_edges := semantic_edges.duplicate()
+	sorted_edges.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return _semantic_edge_sort_key(a) < _semantic_edge_sort_key(b)
+	)
+	return sorted_edges
+
+
+static func _trace_boundary_semantic_chain(
+	start_key: String,
+	first_edge_id: int,
+	semantic_edges: Array,
+	adjacency: Dictionary,
+	global_degree: Dictionary,
+	positions: Dictionary,
+	visited: Dictionary
+) -> Dictionary:
+	var points := PackedVector2Array()
+	var oriented_edges: Array = []
+	if not positions.has(start_key):
+		return {"points": points, "closed": false, "edges": oriented_edges}
+	points.append(positions[start_key])
+	var current_key := start_key
+	var edge_id := first_edge_id
+	var closed := false
+	while edge_id >= 0:
+		if bool(visited.get(edge_id, false)):
+			break
+		visited[edge_id] = true
+		var edge: Dictionary = semantic_edges[edge_id]
+		var next_key := (
+			str(edge["to_key"])
+			if str(edge["from_key"]) == current_key
+			else str(edge["from_key"])
+		)
+		oriented_edges.append(
+			_orient_boundary_edge(edge, current_key, next_key)
+		)
+		points.append(positions[next_key])
+		if next_key == start_key:
+			closed = true
+			break
+		var incident: Array = adjacency.get(next_key, [])
+		if (
+			incident.size() != 2
+			or int(global_degree.get(next_key, 0)) != 2
+		):
+			break
+		var candidate := (
+			int(incident[1])
+			if int(incident[0]) == edge_id
+			else int(incident[0])
+		)
+		if bool(visited.get(candidate, false)):
+			break
+		current_key = next_key
+		edge_id = candidate
+	return {"points": points, "closed": closed, "edges": oriented_edges}
+
+
+static func _orient_boundary_edge(
+	edge: Dictionary,
+	from_key: String,
+	to_key: String
+) -> Dictionary:
+	var oriented := edge.duplicate()
+	if str(edge.get("from_key", "")) == from_key:
+		oriented["from"] = edge.get("from", Vector2.ZERO)
+		oriented["to"] = edge.get("to", Vector2.ZERO)
+	else:
+		oriented["from"] = edge.get("to", Vector2.ZERO)
+		oriented["to"] = edge.get("from", Vector2.ZERO)
+	oriented["from_key"] = from_key
+	oriented["to_key"] = to_key
+	return oriented
+
+
+static func _append_curved_province_boundary_chain(
+	result: Dictionary,
+	path: PackedVector2Array,
+	closed: bool,
+	chain: Dictionary,
+	subdivisions: int
+) -> void:
+	var oriented_edges: Array = chain.get("edges", [])
+	if oriented_edges.is_empty():
+		return
+	var side_info := _province_chain_side_info(oriented_edges[0])
+	var province_left := int(side_info["left_province"])
+	var province_right := int(side_info["right_province"])
+	var result_province_a: PackedInt32Array = result["province_a"]
+	var result_province_b: PackedInt32Array = result["province_b"]
+	var result_side_a: PackedVector2Array = result["province_side_a"]
+	var result_side_b: PackedVector2Array = result["province_side_b"]
+	_append_curved_boundary_chain_segments(
+		result,
+		path,
+		closed,
+		subdivisions,
+		func(normal: Vector2) -> void:
+			result_province_a.append(province_left)
+			result_province_b.append(province_right)
+			result_side_a.append(normal)
+			result_side_b.append(-normal)
+	)
+
+
+static func _append_curved_coast_boundary_chain(
+	result: Dictionary,
+	path: PackedVector2Array,
+	closed: bool,
+	chain: Dictionary,
+	subdivisions: int
+) -> void:
+	var oriented_edges: Array = chain.get("edges", [])
+	if oriented_edges.is_empty():
+		return
+	var first_edge: Dictionary = oriented_edges[0]
+	var side_sign := _coast_chain_side_sign(first_edge)
+	var province_id := int(first_edge.get("coast_province", -1))
+	var result_coast_province: PackedInt32Array = result["coast_province"]
+	var result_coast_side: PackedVector2Array = result["coast_side"]
+	_append_curved_boundary_chain_segments(
+		result,
+		path,
+		closed,
+		subdivisions,
+		func(normal: Vector2) -> void:
+			result_coast_province.append(province_id)
+			result_coast_side.append(normal * side_sign)
+	)
+
+
+static func _append_curved_boundary_chain_segments(
+	result: Dictionary,
+	path: PackedVector2Array,
+	closed: bool,
+	subdivisions: int,
+	append_metadata: Callable
+) -> void:
+	var result_segments: PackedVector2Array = result["segments"]
+	var point_count := path.size()
+	var segment_count := (
+		point_count
+		if closed
+		else point_count - 1
+	)
+	for segment_index in range(segment_count):
+		var next_index := (segment_index + 1) % point_count
+		var from := path[segment_index]
+		var previous := from
+		for sample_index in range(1, subdivisions + 1):
+			var ratio := float(sample_index) / float(subdivisions)
+			var point := _centripetal_boundary_point(
+				path, segment_index, closed, ratio
+			)
+			var direction := point - previous
+			# Coordinates are normalized UVs. A province raster cell can be
+			# smaller than 0.001 UV, so only discard true floating-point noise.
+			if direction.length_squared() <= 0.000000000001:
+				continue
+			var normal := Vector2(-direction.y, direction.x).normalized()
+			_append_segment(result_segments, previous, point)
+			append_metadata.call(normal)
+			previous = point
+
+
+static func _province_chain_side_info(edge: Dictionary) -> Dictionary:
+	var from: Vector2 = edge.get("from", Vector2.ZERO)
+	var to: Vector2 = edge.get("to", Vector2.ZERO)
+	var direction := (to - from).normalized()
+	if direction.length_squared() <= 0.000000000001:
+		return {
+			"left_province": int(edge.get("province_a", -1)),
+			"right_province": int(edge.get("province_b", -1)),
+		}
+	var normal := Vector2(-direction.y, direction.x)
+	var side_a: Vector2 = edge.get("side_a", Vector2.ZERO)
+	var side_b: Vector2 = edge.get("side_b", Vector2.ZERO)
+	if side_a.dot(normal) >= side_b.dot(normal):
+		return {
+			"left_province": int(edge.get("province_a", -1)),
+			"right_province": int(edge.get("province_b", -1)),
+		}
 	return {
-		"province": _remap_boundary_segments(province, smoothed),
-		"local": _remap_boundary_segments(local, smoothed),
-		"nation": _remap_boundary_segments(nation, smoothed),
-		"alliance": _remap_boundary_segments(alliance, smoothed),
-		"enemy": _remap_boundary_segments(enemy, smoothed),
-		"suzerainty": _remap_boundary_segments(suzerainty, smoothed),
+		"left_province": int(edge.get("province_b", -1)),
+		"right_province": int(edge.get("province_a", -1)),
 	}
 
 
-static func _remap_boundary_segments(
-	segments: PackedVector2Array,
-	positions: Dictionary
-) -> PackedVector2Array:
-	var result := PackedVector2Array()
-	result.resize(segments.size())
-	for index in range(segments.size()):
-		var key := _boundary_point_key(segments[index])
-		result[index] = positions.get(key, segments[index])
-	return result
+static func _coast_chain_side_sign(edge: Dictionary) -> float:
+	var from: Vector2 = edge.get("from", Vector2.ZERO)
+	var to: Vector2 = edge.get("to", Vector2.ZERO)
+	var direction := (to - from).normalized()
+	if direction.length_squared() <= 0.000000000001:
+		return 1.0
+	var normal := Vector2(-direction.y, direction.x)
+	var coast_side: Vector2 = edge.get("coast_side", Vector2.ZERO)
+	return (
+		1.0
+		if coast_side.dot(normal) >= 0.0
+		else -1.0
+	)
 
 
-## 将栅格边逐端点串成路径，并在保持分叉端点的前提下做两次 Chaikin 圆滑。
-## 输出仍是 draw_multiline 所需的成对线段，调用方无需维护多边形拓扑。
-static func _smooth_boundary_segments(
-	segments: PackedVector2Array,
-	raster_size: Vector2i
-) -> PackedVector2Array:
-	if segments.size() < 4:
-		return segments
-	var points := {}
-	var neighbors := {}
-	var edge_ends := {}
-	var used_edges := {}
-	for index in range(0, segments.size(), 2):
-		var from := segments[index]
-		var to := segments[index + 1]
-		var from_key := _boundary_point_key(from)
-		var to_key := _boundary_point_key(to)
-		if from_key == to_key:
-			continue
-		points[from_key] = from
-		points[to_key] = to
-		if not neighbors.has(from_key):
-			neighbors[from_key] = [] as Array[String]
-		if not neighbors.has(to_key):
-			neighbors[to_key] = [] as Array[String]
-		(neighbors[from_key] as Array[String]).append(to_key)
-		(neighbors[to_key] as Array[String]).append(from_key)
-		var edge_key := _boundary_edge_key(from_key, to_key)
-		edge_ends[edge_key] = [from_key, to_key]
-		used_edges[edge_key] = false
-	var paths: Array[PackedVector2Array] = []
-	for start_key_value in neighbors:
-		var start_key := str(start_key_value)
-		var adjacent: Array[String] = neighbors[start_key]
-		if adjacent.size() == 2:
-			continue
-		for next_key in adjacent:
-			var edge_key := _boundary_edge_key(
-				start_key,
-				next_key
-			)
-			if bool(used_edges[edge_key]):
-				continue
-			paths.append(_trace_boundary_path(
-				start_key,
-				next_key,
-				points,
-				neighbors,
-				used_edges
-			))
-	for edge_key_value in edge_ends:
-		var edge_key := str(edge_key_value)
-		if bool(used_edges[edge_key]):
-			continue
-		var ends: Array = edge_ends[edge_key]
-		paths.append(_trace_boundary_path(
-			str(ends[0]),
-			str(ends[1]),
-			points,
-			neighbors,
-			used_edges
-		))
-	var result := PackedVector2Array()
-	for path in paths:
-		_append_smoothed_path_segments(
-			result,
-			path,
-			raster_size
-		)
-	return result
-
-
-static func _trace_boundary_path(
-	start_key: String,
-	next_key: String,
-	points: Dictionary,
-	neighbors: Dictionary,
-	used_edges: Dictionary
-) -> PackedVector2Array:
-	var path := PackedVector2Array([
-		points[start_key],
-		points[next_key],
-	])
-	var previous_key := start_key
-	var current_key := next_key
-	used_edges[_boundary_edge_key(
-		previous_key,
-		current_key
-	)] = true
-	while true:
-		var adjacent: Array[String] = neighbors[current_key]
-		if adjacent.size() != 2:
-			break
-		var candidate := (
-			adjacent[1]
-			if adjacent[0] == previous_key
-			else adjacent[0]
-		)
-		var edge_key := _boundary_edge_key(
-			current_key,
-			candidate
-		)
-		if bool(used_edges[edge_key]):
-			break
-		used_edges[edge_key] = true
-		path.append(points[candidate])
-		previous_key = current_key
-		current_key = candidate
-	return path
-
-
-static func _append_smoothed_path_segments(
-	result: PackedVector2Array,
+## Centripetal Catmull-Rom (alpha=0.5) is stable when RDP leaves unevenly
+## spaced controls. Extrapolated endpoint controls preserve open-chain ends.
+static func _centripetal_boundary_point(
 	path: PackedVector2Array,
-	raster_size: Vector2i
-) -> void:
-	if path.size() < 2:
-		return
-	var closed := (
-		path.size() > 2
-		and path[0].is_equal_approx(path[path.size() - 1])
+	segment_index: int,
+	closed: bool,
+	ratio: float
+) -> Vector2:
+	var point_count := path.size()
+	if point_count < 2:
+		return Vector2.ZERO
+	var index_1 := segment_index % point_count
+	var index_2 := (segment_index + 1) % point_count
+	var point_1 := path[index_1]
+	var point_2 := path[index_2]
+	var point_0 := (
+		path[(index_1 - 1 + point_count) % point_count]
+		if closed or index_1 > 0
+		else point_1 * 2.0 - point_2
 	)
-	var source := path
-	if closed:
-		source = path.slice(0, path.size() - 1)
-	source = _simplify_boundary_path(
-		source,
-		raster_size,
-		closed
+	var point_3 := (
+		path[(index_2 + 1) % point_count]
+		if closed or index_2 + 1 < point_count
+		else point_2 * 2.0 - point_1
 	)
-	var smoothed := source
-	for _iteration in range(2):
-		smoothed = _chaikin_boundary_path(
-			smoothed,
-			closed
-		)
-	for index in range(smoothed.size() - 1):
-		_append_segment(
-			result,
-			smoothed[index],
-			smoothed[index + 1]
-		)
-	if closed and smoothed.size() > 2:
-		_append_segment(
-			result,
-			smoothed[smoothed.size() - 1],
-			smoothed[0]
-		)
+	var knot_0 := 0.0
+	var knot_1 := knot_0 + sqrt(maxf(point_0.distance_to(point_1), 0.00000001))
+	var knot_2 := knot_1 + sqrt(maxf(point_1.distance_to(point_2), 0.00000001))
+	var knot_3 := knot_2 + sqrt(maxf(point_2.distance_to(point_3), 0.00000001))
+	var parameter := lerpf(knot_1, knot_2, clampf(ratio, 0.0, 1.0))
+	var a_1 := point_0.lerp(point_1, (parameter - knot_0) / (knot_1 - knot_0))
+	var a_2 := point_1.lerp(point_2, (parameter - knot_1) / (knot_2 - knot_1))
+	var a_3 := point_2.lerp(point_3, (parameter - knot_2) / (knot_3 - knot_2))
+	var b_1 := a_1.lerp(a_2, (parameter - knot_0) / (knot_2 - knot_0))
+	var b_2 := a_2.lerp(a_3, (parameter - knot_1) / (knot_3 - knot_1))
+	return b_1.lerp(b_2, (parameter - knot_1) / (knot_2 - knot_1))
 
 
-static func _chaikin_boundary_path(
-	source: PackedVector2Array,
-	closed: bool
-) -> PackedVector2Array:
-	if source.size() < 2:
-		return source
-	var result := PackedVector2Array()
-	if not closed:
-		result.append(source[0])
-	for index in range(
-		source.size()
-		if closed
-		else source.size() - 1
-	):
-		var next_index := (index + 1) % source.size()
-		var current := source[index]
-		var next := source[next_index]
-		result.append(current.lerp(next, 0.25))
-		result.append(current.lerp(next, 0.75))
-	if not closed:
-		result.append(source[source.size() - 1])
-	return result
-
-
-## RDP 在全局误差不超过一个栅格像素时合并高频折点，将“横一格、竖一格”
-## 的台阶压缩成斜线。计算在栅格坐标中进行，因而不同地图尺寸视觉阈值一致。
+## Run a light RDP pass in source raster space so diagonal chains collapse
+## before curve generation, but topology breakpoints remain explicit.
 static func _simplify_boundary_path(
 	source: PackedVector2Array,
 	raster_size: Vector2i,
-	closed: bool
+	closed: bool,
+	tolerance: float
 ) -> PackedVector2Array:
 	if source.size() < 3:
 		return source
 	if not closed:
-		return _rdp_boundary_path(
-			source,
-			raster_size,
-			0.80
-		)
+		return _rdp_boundary_path(source, raster_size, tolerance)
+	var ring := source
+	if ring[0].is_equal_approx(ring[ring.size() - 1]):
+		ring = ring.slice(0, ring.size() - 1)
+	if ring.size() < 3:
+		return ring
 	var split_index := 1
-	var maximum_distance := 0.0
-	var origin := source[0] * Vector2(raster_size)
-	for index in range(1, source.size()):
+	var maximum_distance := -1.0
+	var origin := ring[0] * Vector2(raster_size)
+	for index in range(1, ring.size()):
 		var distance := origin.distance_squared_to(
-			source[index] * Vector2(raster_size)
+			ring[index] * Vector2(raster_size)
 		)
 		if distance > maximum_distance:
 			maximum_distance = distance
 			split_index = index
-	if split_index <= 0 or split_index >= source.size():
-		return source
-	var first_arc := source.slice(0, split_index + 1)
-	var second_arc := source.slice(
-		split_index,
-		source.size()
-	)
-	second_arc.append(source[0])
+	if split_index <= 0 or split_index >= ring.size():
+		return ring
+	var first_arc := ring.slice(0, split_index + 1)
+	var second_arc := ring.slice(split_index, ring.size())
+	second_arc.append(ring[0])
 	var first_simplified := _rdp_boundary_path(
-		first_arc,
-		raster_size,
-		0.80
+		first_arc, raster_size, tolerance
 	)
 	var second_simplified := _rdp_boundary_path(
-		second_arc,
-		raster_size,
-		0.80
+		second_arc, raster_size, tolerance
 	)
 	var result := PackedVector2Array()
 	result.append_array(first_simplified)
 	for index in range(1, second_simplified.size() - 1):
 		result.append(second_simplified[index])
+	# Never collapse a real closed province/island into a two-point backtrack.
+	# Small rings below the RDP tolerance keep their original topology.
+	if result.size() < 3 or absf(_boundary_ring_area(result)) <= 0.000000000001:
+		return ring
 	return result
+
+
+static func _boundary_ring_area(points: PackedVector2Array) -> float:
+	if points.size() < 3:
+		return 0.0
+	var twice_area := 0.0
+	for index in range(points.size()):
+		var following := (index + 1) % points.size()
+		twice_area += (
+			points[index].x * points[following].y
+			- points[following].x * points[index].y
+		)
+	return twice_area * 0.5
 
 
 static func _rdp_boundary_path(
@@ -2589,13 +3241,11 @@ static func _rdp_boundary_path(
 	keep.resize(source.size())
 	keep[0] = 1
 	keep[source.size() - 1] = 1
-	var stack: Array[Vector2i] = [
-		Vector2i(0, source.size() - 1)
-	]
+	var stack: Array = [Vector2i(0, source.size() - 1)]
 	while not stack.is_empty():
 		var range_pair: Vector2i = stack.pop_back()
-		var start: int = range_pair.x
-		var finish: int = range_pair.y
+		var start := range_pair.x
+		var finish := range_pair.y
 		var maximum_distance := 0.0
 		var maximum_index := -1
 		var from := source[start] * Vector2(raster_size)
@@ -2637,6 +3287,45 @@ static func _boundary_point_segment_distance(
 	return point.distance_to(from + segment * ratio)
 
 
+static func _province_pair_key(province_a: int, province_b: int) -> String:
+	return (
+		"%d:%d" % [province_a, province_b]
+		if province_a <= province_b
+		else "%d:%d" % [province_b, province_a]
+	)
+
+
+static func _incident_edge_sort_key(
+	edge: Dictionary,
+	vertex_key: String
+) -> String:
+	var other_key := (
+		str(edge.get("to_key", ""))
+		if str(edge.get("from_key", "")) == vertex_key
+		else str(edge.get("from_key", ""))
+	)
+	return "%s|%s" % [other_key, _semantic_edge_sort_key(edge)]
+
+
+static func _semantic_edge_sort_key(edge: Dictionary) -> String:
+	var from_key := str(edge.get("from_key", ""))
+	var to_key := str(edge.get("to_key", ""))
+	return (
+		"%s|%s" % [from_key, to_key]
+		if from_key <= to_key
+		else "%s|%s" % [to_key, from_key]
+	)
+
+
+static func _deterministic_loop_start(edge: Dictionary) -> Dictionary:
+	var from_key := str(edge.get("from_key", ""))
+	var to_key := str(edge.get("to_key", ""))
+	return {
+		"start_key": from_key if from_key <= to_key else to_key,
+		"edge_id": int(edge.get("id", -1)),
+	}
+
+
 static func _boundary_point_key(point: Vector2) -> String:
 	return "%d:%d" % [
 		int(round(point.x * 1000000.0)),
@@ -2644,23 +3333,15 @@ static func _boundary_point_key(point: Vector2) -> String:
 	]
 
 
-static func _boundary_edge_key(
-	from_key: String,
-	to_key: String
-) -> String:
-	return (
-		"%s|%s" % [from_key, to_key]
-		if from_key < to_key
-		else "%s|%s" % [to_key, from_key]
-	)
-
-
 func _draw_province_fills() -> void:
+	var fill_strength := effective_map_mode_strength(
+		_map_mode, _province_strength
+	)
 	if (
 		_political_texture == null
 		or _political_base_texture == null
 		or _political_ocean_texture == null
-		or _province_strength <= 0.0
+		or fill_strength <= 0.0
 	):
 		return
 	# Any political mode first replaces the satellite with one neutral white
@@ -2675,13 +3356,17 @@ func _draw_province_fills() -> void:
 		_political_ocean_texture,
 		Rect2(_origin, _map_size),
 		false,
-		Color(1.0, 1.0, 1.0, _province_strength)
+		Color(1.0, 1.0, 1.0, fill_strength)
 	)
 	draw_texture_rect(
-		_political_texture,
+		(
+			_loyalty_texture
+			if _map_mode == MapMode.LOYALTY
+			else _political_texture
+		),
 		Rect2(_origin, _map_size),
 		false,
-		Color(1.0, 1.0, 1.0, _province_strength)
+		Color(1.0, 1.0, 1.0, fill_strength)
 	)
 
 
@@ -2690,73 +3375,82 @@ func set_province_strength(strength: float) -> void:
 	queue_redraw()
 
 
-func _normalized_segments_to_pixels(
-	segments: PackedVector2Array
-) -> PackedVector2Array:
-	var result := PackedVector2Array()
-	result.resize(segments.size())
-	for i in range(segments.size()):
-		result[i] = _origin + segments[i] * _map_size
-	return result
+static func effective_map_mode_strength(
+	mode: int, configured_strength: float
+) -> float:
+	var configured := clampf(configured_strength, 0.0, 1.0)
+	if mode == MapMode.LOYALTY:
+		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
+	if mode == MapMode.TRADE:
+		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH) * 0.58
+	return configured
 
 
 func _draw_province_boundaries() -> void:
-	# Local borders deliberately exclude every diplomatic edge in both map
-	# modes. Country borders are drawn once by _draw_national_boundaries();
-	# putting the all-province graph underneath them creates a darker double
-	# stroke and makes 2D terrain mode disagree with political mode and 3D.
-	var segments := _local_boundary_segments
-	if not segments.is_empty():
-		draw_multiline(
-			_normalized_segments_to_pixels(segments),
-			LOCAL_BOUNDARY_INK,
-			maxf(LOCAL_BOUNDARY_WIDTH_PX * _display_scale, 0.75),
-			true
+	if _classified_boundary_geometry.is_empty():
+		return
+	var segments: PackedVector2Array = (
+		_classified_boundary_geometry.get(
+			"province", PackedVector2Array()
 		)
+	)
+	if segments.is_empty():
+		return
+	var pixels := PackedVector2Array()
+	pixels.resize(segments.size())
+	for index in range(segments.size()):
+		pixels[index] = _origin + segments[index] * _map_size
+	draw_multiline(pixels, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX, true)
 
 
 func _draw_national_boundaries() -> void:
-	var coast_pixels := _normalized_segments_to_pixels(_coast_segments)
-	if not coast_pixels.is_empty():
-		draw_multiline(
-			coast_pixels,
-			LOCAL_BOUNDARY_INK,
-			maxf(LOCAL_BOUNDARY_WIDTH_PX * _display_scale, 0.75),
-			true
+	if _classified_boundary_geometry.is_empty():
+		return
+	_draw_owned_boundary_sides_2d(
+		_classified_boundary_geometry.get("country", PackedVector2Array()),
+		_classified_boundary_geometry.get("country_owner_a", PackedInt32Array()),
+		_classified_boundary_geometry.get("country_side_a", PackedVector2Array())
+	)
+	_draw_owned_boundary_sides_2d(
+		_classified_boundary_geometry.get("country", PackedVector2Array()),
+		_classified_boundary_geometry.get("country_owner_b", PackedInt32Array()),
+		_classified_boundary_geometry.get("country_side_b", PackedVector2Array())
+	)
+	_draw_owned_boundary_sides_2d(
+		_classified_boundary_geometry.get("coast", PackedVector2Array()),
+		_classified_boundary_geometry.get("coast_owner", PackedInt32Array()),
+		_classified_boundary_geometry.get("coast_side", PackedVector2Array())
+	)
+
+
+func _draw_owned_boundary_sides_2d(
+	segments: PackedVector2Array,
+	owners: PackedInt32Array,
+	side_vectors: PackedVector2Array
+) -> void:
+	var segment_count := mini(
+		segments.size() / 2, mini(owners.size(), side_vectors.size())
+	)
+	for index in range(segment_count):
+		var from := _origin + segments[index * 2] * _map_size
+		var to := _origin + segments[index * 2 + 1] * _map_size
+		var direction := (to - from).normalized()
+		if direction.length_squared() <= 0.000001:
+			continue
+		var normal := Vector2(-direction.y, direction.x)
+		if side_vectors[index].dot(normal) < 0.0:
+			normal = -normal
+		var offset := normal * (COUNTRY_BOUNDARY_WIDTH_PX * 0.5)
+		var color := nation_boundary_color(state, owners[index])
+		draw_line(
+			from + offset, to + offset,
+			color,
+			COUNTRY_BOUNDARY_WIDTH_PX, true
 		)
-	if not _nation_boundary_segments.is_empty():
-		var nation_pixels := _normalized_segments_to_pixels(
-			_nation_boundary_segments
-		)
-		draw_multiline(
-			nation_pixels,
-			BORDER_NEUTRAL,
-			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
-			true
-		)
-	if not _alliance_boundary_segments.is_empty():
-		draw_multiline(
-			_normalized_segments_to_pixels(_alliance_boundary_segments),
-			BORDER_ALLIED,
-			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
-			true
-		)
-	if not _enemy_boundary_segments.is_empty():
-		draw_multiline(
-			_normalized_segments_to_pixels(_enemy_boundary_segments),
-			BORDER_ENEMY,
-			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
-			true
-		)
-	if not _suzerainty_boundary_segments.is_empty():
-		draw_multiline(
-			_normalized_segments_to_pixels(
-				_suzerainty_boundary_segments
-			),
-			BORDER_SUZERAINTY,
-			maxf(DIPLOMATIC_BOUNDARY_WIDTH_PX * _display_scale, 1.5),
-			true
-		)
+		# Round caps close the tiny wedges created where independently offset
+		# segments meet at bends and three-country junctions.
+		draw_circle(from + offset, COUNTRY_BOUNDARY_WIDTH_PX * 0.5, color)
+		draw_circle(to + offset, COUNTRY_BOUNDARY_WIDTH_PX * 0.5, color)
 
 
 func _draw_campaign_arrows() -> void:
@@ -2825,6 +3519,7 @@ func _draw_campaign_arrow(
 
 
 func _draw_edges() -> void:
+	var route_alpha := 0.28 if _map_mode == MapMode.TRADE else 1.0
 	for e in state.edges:
 		var pixel_points := PackedVector2Array()
 		for point in e.map_points(
@@ -2836,14 +3531,14 @@ func _draw_edges() -> void:
 		if not is_edge_visible(e):
 			continue
 		if e.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-			var river_color := Color(0.010, 0.105, 0.165)
+			var river_color := Color(0.010, 0.105, 0.165, route_alpha)
 			river_color = river_color.lerp(
 				Color(0.22, 0.018, 0.028),
 				danger * 0.45
 			)
 			draw_polyline(
 				pixel_points,
-				Color(0.04, 0.075, 0.075, 0.90),
+				Color(0.04, 0.075, 0.075, 0.90 * route_alpha),
 				7.0 * _display_scale
 			)
 			draw_polyline(
@@ -2856,7 +3551,7 @@ func _draw_edges() -> void:
 			for index in range(pixel_points.size() - 1):
 				draw_dashed_line(
 					pixel_points[index], pixel_points[index + 1],
-					Color(0.28, 0.018, 0.010, 0.96),
+					Color(0.28, 0.018, 0.010, 0.96 * route_alpha),
 					3.0 * _display_scale, 6.0 * _display_scale
 				)
 			continue
@@ -2871,11 +3566,12 @@ func _draw_edges() -> void:
 		]
 		var road_widths: Array[float] = [1.5, 3.5]
 		var col: Color = road_colors[road_level - 1]
+		col.a = route_alpha
 		col = col.lerp(ACCENT_RED, danger * 0.48)
 		var width: float = road_widths[road_level - 1] * _display_scale
 		if road_level >= 2:
 			draw_polyline(
-				pixel_points, Color(0.04, 0.028, 0.015, 0.82),
+				pixel_points, Color(0.04, 0.028, 0.015, 0.82 * route_alpha),
 				width + 2.0 * _display_scale
 			)
 		if e.occupied:
@@ -2887,6 +3583,78 @@ func _draw_edges() -> void:
 				_draw_edge_danger_ticks(
 					pixel_points[index], pixel_points[index + 1], danger
 				)
+
+
+func _draw_trade_routes() -> void:
+	if state.trade_routes.is_empty():
+		return
+	var emphasized := _map_mode == MapMode.TRADE
+	var width := (3.2 if emphasized else 2.0) * _display_scale
+	for route in state.trade_routes:
+		var status := int(route.get("status", TradeNetwork.ACTIVE))
+		var color := trade_route_color(route, emphasized)
+		for map_path in trade_route_map_paths(state, route):
+			var pixels := PackedVector2Array()
+			for point in map_path:
+				pixels.append(_grid_to_pixel(point))
+			if pixels.size() < 2:
+				continue
+			if status == TradeNetwork.BLOCKED:
+				for index in range(pixels.size() - 1):
+					draw_dashed_line(
+						pixels[index], pixels[index + 1], color,
+						width, 7.0 * _display_scale, true
+					)
+			else:
+				draw_polyline(pixels, color, width, true)
+
+
+static func trade_route_color(
+	route: Dictionary, emphasized: bool = true
+) -> Color:
+	var status := int(route.get("status", TradeNetwork.ACTIVE))
+	var color := TRADE_ACTIVE_GOLD
+	if status == TradeNetwork.REROUTED:
+		color = TRADE_REROUTED_ORANGE
+	elif status == TradeNetwork.BLOCKED:
+		color = TRADE_BLOCKED_RED
+	elif int(route.get("food_transfer", route.get("food", 0))) > 0:
+		color = TRADE_ACTIVE_CYAN
+	color.a *= 1.0 if emphasized else 0.52
+	return color
+
+
+static func trade_route_map_paths(
+	game_state: GameState, route: Dictionary
+) -> Array[PackedVector2Array]:
+	var result: Array[PackedVector2Array] = []
+	var city_path: Variant = route.get("city_path", [])
+	if not (city_path is Array or city_path is PackedInt32Array):
+		return result
+	for index in range(city_path.size() - 1):
+		var from_id := int(city_path[index])
+		var to_id := int(city_path[index + 1])
+		if (
+			from_id < 0 or to_id < 0
+			or from_id >= game_state.cities.size()
+			or to_id >= game_state.cities.size()
+		):
+			continue
+		var edge := game_state.edge_of(from_id, to_id)
+		if edge == null:
+			continue
+		var points := edge.map_points(
+			game_state.cities[edge.city_a].map_position,
+			game_state.cities[edge.city_b].map_position
+		)
+		if from_id == edge.city_a:
+			result.append(points)
+		else:
+			var reversed := PackedVector2Array()
+			for point_index in range(points.size() - 1, -1, -1):
+				reversed.append(points[point_index])
+			result.append(reversed)
+	return result
 
 
 func _draw_edge_danger_ticks(
@@ -2962,13 +3730,20 @@ static func is_edge_visible(edge: Edge) -> bool:
 func _draw_cities() -> void:
 	var half := 7.0 * _display_scale
 	var contested_cities := _contested_city_ids_cached()
+	if _city_label_cache_naming_revision != state.naming_revision:
+		_city_label_cache.clear()
+		_city_label_cache_naming_revision = state.naming_revision
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
-		var base := final_faction_visual_color(
-			state, city.owner_nation,
-			0.30 if contested_cities.has(city.id) else 0.0,
-			0.06 if city.is_capital else 0.0
+		var base := (
+			loyalty_color(city.loyalty)
+			if _map_mode == MapMode.LOYALTY
+			else final_faction_visual_color(
+				state, city.owner_nation,
+				0.30 if contested_cities.has(city.id) else 0.0,
+				0.06 if city.is_capital else 0.0
+			)
 		)
 		var border := (
 			ACCENT_RED
@@ -3037,7 +3812,7 @@ func _draw_cities() -> void:
 static func city_label_text(city: City) -> String:
 	if city == null:
 		return ""
-	var label := ("港%d" if city.is_dock else "城%d") % city.id
+	var label := WorldNaming.city_display_name(city)
 	if city.is_food_hub:
 		label += " 粮"
 	if city.is_manpower_hub:
@@ -3636,6 +4411,45 @@ func _grid_to_pixel(g: Vector2) -> Vector2:
 	return _origin + g * _map_size
 
 
+static func nation_debug_name(
+	game_state: GameState, nation_id: int, short_form: bool = false
+) -> String:
+	return "%s（国%d）" % [
+		WorldNaming.nation_display_name(game_state, nation_id, short_form),
+		nation_id,
+	]
+
+
+static func city_debug_name(game_state: GameState, city_id: int) -> String:
+	return "%s（城%d）" % [
+		WorldNaming.city_display_name(game_state, city_id), city_id,
+	]
+
+
+static func _nation_id_list_text(
+	game_state: GameState, nation_ids: Array[int]
+) -> String:
+	if nation_ids.is_empty():
+		return "无"
+	var names: Array[String] = []
+	for nation_id in nation_ids:
+		names.append(WorldNaming.nation_display_name(game_state, nation_id))
+	return "、".join(names)
+
+
+static func ruler_summary(nation: Nation) -> String:
+	if nation == null:
+		return "无君主"
+	var traits: Array[String] = []
+	for trait_id in nation.ruler_traits:
+		traits.append(RulerProfile.trait_name(trait_id))
+	return "%s·%s%s" % [
+		nation.ruler_name if not nation.ruler_name.is_empty() else "无名君主",
+		RulerProfile.archetype_name(nation.ruler_archetype),
+		"·%s" % ("/".join(traits) if not traits.is_empty() else "无特质"),
+	]
+
+
 static func nation_list_rows(
 	game_state: GameState,
 	collapsed_nations: Dictionary = {}
@@ -3680,33 +4494,30 @@ static func nation_list_rows(
 			resource_cache
 		)
 		var wars := game_state.wars_of(nation.id)
-		var allies := game_state.allies_of(nation.id)
 		row_by_nation[nation.id] = {
 			"nation_id": nation.id,
 			"color": nation.color,
 			"at_war": not wars.is_empty(),
-			"identity": "国%d  %s" % [
-				nation.id,
+			"identity": "%s  %s" % [
+				nation_debug_name(game_state, nation.id),
 				_nation_relation_text(game_state, nation.id),
 			],
-			"military": "城%d  军%d/%d  人%d" % [
+			"military": "城%d 军%d/%d 人%d 忠%.0f" % [
 				city_count_by_nation[nation.id],
 				army_count_by_nation[nation.id],
 				troops_by_nation[nation.id],
 				nation.manpower_pool,
+				nation.average_loyalty,
 			],
-			"economy": "金%d  月%+d  贡%+d  粮%d/%d" % [
+			"economy": "金%d 月%+d 商%d线 金%+d 粮+%d/-%d" % [
 				nation.treasury_gold,
 				int(report["monthly_gold_balance"]),
-				int(report["monthly_tribute_income"])
-					- int(report["monthly_tribute_expense"]),
-				nation.granary_food,
-				int(ceil(float(report["monthly_food_demand"]))),
+				nation.last_trade_route_count,
+				nation.last_trade_gold,
+				nation.last_trade_food_import,
+				nation.last_trade_food_export,
 			],
-			"diplomacy": "战%s  盟%s" % [
-				str(wars),
-				str(allies),
-			],
+			"diplomacy": ruler_summary(nation),
 			"action": nation_action_summary(game_state, nation.id),
 		}
 		visible_nation_ids.append(nation.id)
@@ -3854,10 +4665,13 @@ static func _nation_relation_text(
 ) -> String:
 	if game_state.is_vassal(nation_id):
 		var overlord_id := game_state.overlord_of(nation_id)
+		var overlord_name := WorldNaming.nation_display_name(
+			game_state, overlord_id
+		)
 		return (
-			"内战藩王→国%d" % overlord_id
+			"内战藩王→%s" % overlord_name
 			if game_state.is_in_civil_war(nation_id)
-			else "藩王→国%d" % overlord_id
+			else "藩王→%s" % overlord_name
 		)
 	var subjects := game_state.subjects_of(nation_id)
 	if not subjects.is_empty():
@@ -3875,9 +4689,13 @@ static func nation_action_summary(
 	var actions: Array[String] = []
 	if nation.war_preparation_target_nation >= 0:
 		actions.append(
-			"备战→国%d/城%d" % [
-				nation.war_preparation_target_nation,
-				nation.war_preparation_objective_city,
+			"备战→%s/%s" % [
+				WorldNaming.nation_display_name(
+					game_state, nation.war_preparation_target_nation
+				),
+				WorldNaming.city_display_name(
+					game_state, nation.war_preparation_objective_city
+				),
 			]
 		)
 	elif not nation.campaign_attack_assignments.is_empty():
@@ -3899,12 +4717,14 @@ static func nation_action_summary(
 		)
 	if nation.ai_last_diplomatic_day >= 0:
 		actions.append(
-			"外D%d:%s→国%d" % [
+			"外D%d:%s→%s" % [
 				nation.ai_last_diplomatic_day,
 				_diplomatic_action_name(
 					nation.ai_last_diplomatic_action
 				),
-				nation.ai_last_diplomatic_target,
+				WorldNaming.nation_display_name(
+					game_state, nation.ai_last_diplomatic_target
+				),
 			]
 		)
 	if actions.is_empty() and nation.last_offensive_gold_day >= 0:
@@ -3937,10 +4757,14 @@ func _nation_list_rows_cached() -> Array[Dictionary]:
 			!= state.ownership_revision
 		or _nation_list_cache_diplomacy_revision
 			!= state.diplomacy_revision
+		or _nation_list_cache_naming_revision != state.naming_revision
+		or _nation_list_cache_trade_revision != state.trade_revision
 	):
 		_nation_list_cache_day = state.day
 		_nation_list_cache_ownership_revision = state.ownership_revision
 		_nation_list_cache_diplomacy_revision = state.diplomacy_revision
+		_nation_list_cache_naming_revision = state.naming_revision
+		_nation_list_cache_trade_revision = state.trade_revision
 		_nation_list_cache = nation_list_rows(
 			state,
 			_nation_stats_collapsed_nations
@@ -3953,9 +4777,9 @@ func _draw_hud() -> void:
 	var status := "暂停" if sim.paused else "推演中"
 	if state.winner != -1:
 		status = (
-			"国%d 已统一 · %s"
+			"%s 已统一 · %s"
 			% [
-				state.winner,
+				WorldNaming.nation_display_name(state, state.winner),
 				"暂停" if sim.paused else "继续推演",
 			]
 		)
@@ -4141,9 +4965,9 @@ func _draw_nation_stats_window() -> void:
 		header_rect,
 		{
 			"identity": "国家 / 身份",
-			"military": "领土 / 军事",
-			"economy": "财政 / 粮食",
-			"diplomacy": "外交",
+			"military": "领土 / 军事 / 忠诚",
+			"economy": "财政 / 贸易金粮",
+			"diplomacy": "君主 / 原型 / 特质",
 			"action": "相关动作",
 		},
 		PAPER_LIGHT,
@@ -4236,11 +5060,11 @@ func _draw_nation_window_cells(
 	font_size: int
 ) -> void:
 	var columns := [
-		["identity", 0.02, 0.13],
-		["military", 0.15, 0.21],
-		["economy", 0.36, 0.20],
-		["diplomacy", 0.56, 0.19],
-		["action", 0.75, 0.23],
+		["identity", 0.02, 0.19],
+		["military", 0.21, 0.18],
+		["economy", 0.39, 0.24],
+		["diplomacy", 0.63, 0.23],
+		["action", 0.86, 0.12],
 	]
 	for column in columns:
 		var key := str(column[0])
@@ -4319,10 +5143,7 @@ func _draw_selection_detail() -> void:
 	var stripe_color := COMMAND_GREEN
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
 		var city := state.cities[_selected_city_id]
-		title = "城市作战档案  %s%d" % [
-			"港" if city.is_dock else "城",
-			city.id,
-		]
+		title = "城市作战档案  %s" % city_debug_name(state, city.id)
 		stripe_color = GameState.normalize_nation_color(
 			paper_nation_color(
 				state.nations[city.owner_nation].color
@@ -4332,9 +5153,9 @@ func _draw_selection_detail() -> void:
 	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
 		if edge != null:
-			title = "道路作战档案  %d ↔ %d" % [
-				edge.city_a,
-				edge.city_b,
+			title = "道路作战档案  %s ↔ %s" % [
+				WorldNaming.city_display_name(state, edge.city_a),
+				WorldNaming.city_display_name(state, edge.city_b),
 			]
 			lines = edge_detail_lines(state, edge)
 	if lines.is_empty():
@@ -4457,14 +5278,22 @@ static func city_detail_lines(
 		special.append("港市")
 	if city.is_crossroads:
 		special.append("枢纽")
+	var target_name := (
+		WorldNaming.nation_display_name(
+			game_state, city.loyalty_target_nation
+		)
+		if city.loyalty_target_nation >= 0
+		else "无"
+	)
+	var reason := loyalty_reason_text(city.last_loyalty_reason)
 	return [
 		"类型 %s   状态 %s" % [
 			type_name,
 			"交战中" if contested else "稳定",
 		],
-		"控制 国%d   法理 国%d   %s" % [
-			city.owner_nation,
-			legal_owner,
+		"控制 %s   法理 %s   %s" % [
+			nation_debug_name(game_state, city.owner_nation),
+			nation_debug_name(game_state, legal_owner),
 			" / ".join(special) if not special.is_empty() else "普通据点",
 		],
 		"工事 %d / %d   恢复剩余 %d 日" % [
@@ -4491,7 +5320,38 @@ static func city_detail_lines(
 			city.terrain_height,
 			city.terrain_relief,
 		],
+		"忠诚 %.1f  趋势 %+0.2f/月  动乱 %.1f  目标 %s" % [
+			city.loyalty, city.loyalty_trend, city.unrest, target_name,
+		],
+		"忠诚原因 %s   叛乱进度 %d 月" % [
+			reason, city.rebellion_progress,
+		],
+		"贸易 %d 路  金%+d/月  粮%+d/月" % [
+			city.trade_route_count, city.trade_gold_bonus,
+			city.trade_food_balance,
+		],
 	]
+
+
+static func loyalty_reason_text(raw_reason: String) -> String:
+	var labels := {
+		"foreign_rule": "异国统治",
+		"capital": "首都归属",
+		"distance": "远离中枢",
+		"war_disruption": "战争破坏",
+		"unpaid_military": "军饷拖欠",
+		"neighbor_unrest": "邻地动乱",
+		"ruler": "君主治理",
+		"garrison": "驻军维稳",
+		"regional_rebellion": "地方叛乱",
+		"invalid_city": "无效城市",
+	}
+	if raw_reason.strip_edges().is_empty():
+		return "暂无记录"
+	var translated: Array[String] = []
+	for reason in raw_reason.split(",", false):
+		translated.append(str(labels.get(reason, reason)))
+	return "、".join(translated)
 
 
 static func edge_detail_lines(
@@ -4502,16 +5362,31 @@ static func edge_detail_lines(
 		return []
 	var city_a := game_state.cities[edge.city_a]
 	var city_b := game_state.cities[edge.city_b]
+	var route_count := 0
+	var blocked_route_count := 0
+	for route in game_state.trade_routes:
+		var city_path: Variant = route.get("city_path", [])
+		for index in range(city_path.size() - 1):
+			var from_id := int(city_path[index])
+			var to_id := int(city_path[index + 1])
+			if (
+				mini(from_id, to_id) == edge.city_a
+				and maxi(from_id, to_id) == edge.city_b
+			):
+				route_count += 1
+				if int(route.get("status", TradeNetwork.ACTIVE)) == TradeNetwork.BLOCKED:
+					blocked_route_count += 1
+				break
 	return [
 		"类型 %s   %s" % [
 			_edge_kind_name(edge.kind),
 			"允许驻边" if edge.allows_holding else "禁止驻边",
 		],
-		"端点 城%d(国%d) ↔ 城%d(国%d)" % [
-			edge.city_a,
-			city_a.owner_nation,
-			edge.city_b,
-			city_b.owner_nation,
+		"端点 %s(%s) ↔ %s(%s)" % [
+			city_debug_name(game_state, edge.city_a),
+			WorldNaming.nation_display_name(game_state, city_a.owner_nation),
+			city_debug_name(game_state, edge.city_b),
+			WorldNaming.nation_display_name(game_state, city_b.owner_nation),
 		],
 		"距离 %d   行军 %.1f 天" % [
 			edge.distance,
@@ -4526,6 +5401,9 @@ static func edge_detail_lines(
 			edge.supply_loss_multiplier,
 			edge.passing_count,
 			"占用中" if edge.occupied else "畅通",
+		],
+		"贸易路线 %d   其中阻断 %d" % [
+			route_count, blocked_route_count,
 		],
 	]
 
@@ -4575,8 +5453,8 @@ static func nation_detail_lines(
 	var line_four := "粮%d 需%d/月  战%s  盟%s" % [
 		n.granary_food,
 		int(ceil(float(report["monthly_food_demand"]))),
-		str(game_state.wars_of(nation_id)),
-		str(game_state.allies_of(nation_id)),
+		_nation_id_list_text(game_state, game_state.wars_of(nation_id)),
+		_nation_id_list_text(game_state, game_state.allies_of(nation_id)),
 	]
 	var lines := [
 		line_one,
@@ -4594,7 +5472,9 @@ static func nation_detail_lines(
 		for target_value in target_ids:
 			if target_labels.size() >= 4:
 				break
-			target_labels.append("城%d" % int(target_value))
+			target_labels.append(WorldNaming.city_display_name(
+				game_state, int(target_value)
+			))
 		var omitted_targets := maxi(
 			target_ids.size() - target_labels.size(),
 			0

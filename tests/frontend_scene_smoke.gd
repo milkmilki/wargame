@@ -45,6 +45,35 @@ func _run() -> void:
 	var editor_button := editor_layer.get_node_or_null(
 		"MapEditorButton"
 	) as Button
+	var expected_mode_ids := PackedStringArray([
+		RoadTuningPanel.MAP_MODE_TERRAIN,
+		RoadTuningPanel.MAP_MODE_MIXED,
+		RoadTuningPanel.MAP_MODE_POLITICAL,
+		RoadTuningPanel.MAP_MODE_LOYALTY,
+		RoadTuningPanel.MAP_MODE_TRADE,
+	])
+	var expected_renderer_modes := PackedInt32Array([
+		MapRenderer.MAP_MODE_POLITICAL,
+		MapRenderer.MAP_MODE_POLITICAL,
+		MapRenderer.MAP_MODE_POLITICAL,
+		MapRenderer.MAP_MODE_LOYALTY,
+		MapRenderer.MAP_MODE_TRADE,
+	])
+	var mode_contract_valid := (
+		map_modes != null
+		and map_modes.get_child_count() == expected_mode_ids.size()
+	)
+	if mode_contract_valid:
+		for index in range(expected_mode_ids.size()):
+			var mode_button := map_modes.get_child(index) as Button
+			mode_contract_valid = (
+				mode_contract_valid
+				and mode_button != null
+				and str(mode_button.get_meta(&"map_mode", ""))
+					== expected_mode_ids[index]
+				and int(mode_button.get_meta(&"renderer_map_mode", -1))
+					== expected_renderer_modes[index]
+			)
 	var checks := {
 		"map_visible": map_3d.visible,
 		"overlay_hud_only": not renderer.world_layer_visible,
@@ -53,7 +82,16 @@ func _run() -> void:
 		"panel_style": settings_panel != null and settings_panel.get_theme_stylebox("panel") != null,
 		"road_control": road_button != null and road_button.get_theme_stylebox("normal") != null,
 		"map_modes": map_modes != null,
-		"map_mode_count": map_modes != null and map_modes.get_child_count() == 3,
+		"map_mode_count": map_modes != null and map_modes.get_child_count() == 5,
+		"map_mode_contract": mode_contract_valid,
+		"map_mode_default": (
+			road_layer.map_mode() == RoadTuningPanel.MAP_MODE_POLITICAL
+			and road_layer.renderer_map_mode()
+				== MapRenderer.MAP_MODE_POLITICAL
+			and (road_layer._map_mode_buttons[
+				RoadTuningPanel.MAP_MODE_POLITICAL
+			] as Button).button_pressed
+		),
 		"map_mode_style": map_modes != null and (map_modes.get_child(0) as Button).get_theme_stylebox("pressed") != null,
 		"map_editor": editor_button != null and editor_button.get_theme_stylebox("normal") != null,
 		"capital_rings": map_3d._capital_rings.multimesh.instance_count == main.state.nations.size(),

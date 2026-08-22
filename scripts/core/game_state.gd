@@ -13,6 +13,8 @@ const INITIAL_MANPOWER_RESERVE_MONTHS: int = 750
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
+const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
+const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = 1
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 1400
 const FORMATION_CREATION_UPKEEP_MONTHS: int = 10
@@ -136,6 +138,10 @@ var edge_lookup: Dictionary = {}
 var day: int = 0                            ## 时间真源（1 tick = 1 天）
 var month: int = 0                          ## 派生显示量：day / DAYS_PER_MONTH（每 tick 由 Simulation 刷新）
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var world_seed: int = 12345                 ## 命名/君主等独立确定性域的稳定种子
+## 正式世界/地图模板启用确定性君主；兼容网格夹具保持中性，且其运行时
+## 新建藩王/叛军沿用同一模式。不能借 uses_heightmap 判断，因为旧测试会单独切换它。
+var _random_ruler_profiles_enabled: bool = true
 var _next_army_id: int = 0
 var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
@@ -170,6 +176,13 @@ var river_paths: Array[PackedVector2Array] = []
 var recognized_city_owners: PackedInt32Array = PackedInt32Array()
 ## 短时战略箭头事件：{start_day,end_day,nation_id,target_city,origin_cities,wave}。
 var campaign_visual_events: Array[Dictionary] = []
+## 地方叛乱真源：rebel_nation_id -> {parent_id,started_day,core_city_ids,
+## recognized,active,reason}。削藩内战继续使用 suzerainty.civil_war。
+var rebellions: Dictionary = {}
+## 当月派生贸易路线；静态道路仍由 edges 持有。
+var trade_routes: Array[Dictionary] = []
+var trade_revision: int = 0
+var naming_revision: int = 0
 
 ## 结束态
 var winner: int = -1                        ## -1 表示未结束
@@ -228,6 +241,8 @@ func generate_world(
 	_initialize_terrain_development()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
+	WorldNaming.assign_initial_names(self, world_seed)
+	_initialize_city_loyalty()
 	_generate_armies()
 
 	assert(
@@ -254,12 +269,16 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	uses_heightmap = false
 	map_aspect_ratio = 1.0
 	map_source_region_normalized = Rect2(0.0, 0.0, 1.0, 1.0)
-	_generate_nations(DiplomaticRelation.WAR)
+	# 网格世界是严格镜像与旧状态机测试夹具：未显式设置君主时必须保持
+	# 中性参数，避免确定性随机原型改变既有外交、经济和攻势基线。
+	_generate_nations(DiplomaticRelation.WAR, NATION_COUNT, false)
 	_generate_grid_cities()
 	_generate_grid_provinces()
 	_initialize_recognized_city_owners()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
+	WorldNaming.assign_initial_names(self, world_seed)
+	_initialize_city_loyalty()
 	_generate_grid_edges()
 	_classify_road_capacity()
 	_generate_armies()
@@ -311,6 +330,8 @@ func generate_from_map_definition(
 		var record: Dictionary = record_value
 		var city := City.new()
 		city.id = int(record["id"])
+		city.name = str(record.get("name", ""))
+		city.region_symbol = str(record.get("region_symbol", ""))
 		var coord: Array = record.get("coord", [0, 0])
 		city.coord = Vector2i(int(coord[0]), int(coord[1]))
 		var position: Array = record["map_position"]
@@ -337,6 +358,22 @@ func generate_from_map_definition(
 		))
 		city.development_food_multiplier = float(record.get(
 			"development_food_multiplier", 1.0
+		))
+		city.loyalty = clampf(float(record.get(
+			"loyalty", RebellionSystem.LOYALTY_DEFAULT
+		)), RebellionSystem.LOYALTY_MIN, RebellionSystem.LOYALTY_MAX)
+		city.loyalty_target_nation = int(record.get(
+			"loyalty_target_nation", -1
+		))
+		city.loyalty_trend = float(record.get("loyalty_trend", 0.0))
+		city.unrest = clampf(float(record.get(
+			"unrest", 100.0 - city.loyalty
+		)), 0.0, 100.0)
+		city.rebellion_progress = maxi(int(record.get(
+			"rebellion_progress", 0
+		)), 0)
+		city.rebellion_cooldown_until_day = int(record.get(
+			"rebellion_cooldown_until_day", -1
 		))
 		city.food_storage = int(record.get("food_storage", 0))
 		cities.append(city)
@@ -384,6 +421,8 @@ func generate_from_map_definition(
 	_initialize_recognized_city_owners()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
+	WorldNaming.assign_from_definition(self, definition, world_seed)
+	_initialize_city_loyalty(false)
 	_generate_armies()
 	refresh_derived()
 
@@ -544,6 +583,7 @@ func apply_edge_editor_changes(
 
 
 func _reset_world(world_seed: int) -> void:
+	self.world_seed = world_seed
 	rng.seed = world_seed
 	cities.clear()
 	edges.clear()
@@ -573,12 +613,19 @@ func _reset_world(world_seed: int) -> void:
 	river_paths.clear()
 	recognized_city_owners = PackedInt32Array()
 	campaign_visual_events.clear()
+	rebellions.clear()
+	trade_routes.clear()
+	trade_revision = 0
+	naming_revision = 0
+	_random_ruler_profiles_enabled = true
 
 
 func _generate_nations(
 	initial_relation: int,
-	nation_count: int = NATION_COUNT
+	nation_count: int = NATION_COUNT,
+	initialize_rulers: bool = true
 ) -> void:
+	_random_ruler_profiles_enabled = initialize_rulers
 	for i in range(nation_count):
 		var n := Nation.new()
 		n.id = i
@@ -601,6 +648,12 @@ func _generate_nations(
 		n.treasury_gold = 10000
 		n.political_system = 0
 		n.alive = true
+		if initialize_rulers:
+			RulerProfile.initialize_nation(n, world_seed, i)
+		else:
+			n.ruler_archetype = RulerProfile.BALANCED
+			n.ruler_traits.clear()
+			n.trade_policy = RulerProfile.POLICY_BALANCED
 		nations.append(n)
 	for nation_a in range(nations.size()):
 		for nation_b in range(nation_a + 1, nations.size()):
@@ -1266,6 +1319,27 @@ func _initialize_capitals_and_warehouses() -> void:
 		capital.is_capital = true
 		capital.has_warehouse = true
 		capital.food_storage = initial_food[nation.id]
+
+
+func _initialize_city_loyalty(reset_values: bool = true) -> void:
+	for city in cities:
+		var recognized := recognized_owner_of(city.id)
+		if reset_values or city.loyalty_target_nation < 0:
+			city.loyalty_target_nation = (
+				recognized if recognized >= 0 else city.owner_nation
+			)
+		if reset_values:
+			city.loyalty = RebellionSystem.LOYALTY_DEFAULT
+			city.loyalty_trend = 0.0
+			city.unrest = 100.0 - city.loyalty
+			city.rebellion_progress = 0
+			city.rebellion_cooldown_until_day = -1
+			city.last_loyalty_reason = "initial"
+
+
+## 首都道路跳数的公共真源；忠诚、分封和未来行政范围共用。
+func capital_hop_distances(nation_id: int) -> Dictionary:
+	return RebellionSystem.capital_hops(self, nation_id)
 
 
 ## 四象限等分：每国 4x4=16 城
@@ -2010,6 +2084,43 @@ func _generate_armies() -> void:
 				b
 			)
 		)
+		var owned_land := land_cities_of(nation.id)
+		owned_land.sort_custom(func(a: City, b: City) -> bool:
+			return EquivariantOrder.city_less(
+				self,
+				nation.id,
+				a,
+				b
+			)
+		)
+		# 小型新开局直接采用生存军制：每座陆城一支轻型 LINE，另有
+		# 一支单成员轻型 MAIN 作为机动预备队。它不需要先生成完整
+		# 二轻一重战团，再等待战争中的运行时逻辑停止补员。
+		if (
+			not owned_land.is_empty()
+			and owned_land.size() <= SMALL_NATION_SURVIVAL_MAX_CITIES
+		):
+			for city in owned_land:
+				var line := create_army(
+					nation.id, city.id,
+					INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
+				)
+				if line != null:
+					_initialize_army_attributes(line)
+			for _reserve_index in range(SMALL_NATION_MOBILE_RESERVE_ARMIES):
+				if active_army_count(nation.id) >= max_army_count(nation.id):
+					break
+				var reserve_group := create_battle_group(nation.id)
+				var reserve := create_army(
+					nation.id, nation.capital_city_id,
+					INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
+				)
+				if reserve == null:
+					nation.battle_groups.erase(reserve_group)
+					break
+				_initialize_army_attributes(reserve)
+				assign_army_to_battle_group(reserve, reserve_group.id)
+			continue
 		var line_cities: Array[City] = []
 		for city in owned:
 			for neighbor in neighbors(city.id):
@@ -2020,6 +2131,17 @@ func _generate_armies() -> void:
 		# 网格世界是镜像测试夹具，保留每城一支填线军；正式地图按实际国界城市起步。
 		if not uses_heightmap:
 			line_cities = owned
+		# 每个有城国家随后还要生成二轻一重的完整初始战团。小型自定义
+		# 地图必须先为这三支军队预留上限，避免一城国在加载时越界。
+		var battle_group_slots := (
+			BattleGroup.MAX_LIGHT_ARMIES + BattleGroup.MAX_HEAVY_ARMIES
+		)
+		var maximum_line_armies := maxi(
+			max_army_count(nation.id) - battle_group_slots,
+			0
+		)
+		if line_cities.size() > maximum_line_armies:
+			line_cities.resize(maximum_line_armies)
 		for city in line_cities:
 			_initialize_army_attributes(create_army(
 				nation.id,
@@ -2214,6 +2336,45 @@ func max_army_count(nation_id: int) -> int:
 			* ARMY_COUNT_LIMIT_PER_CITY,
 		ARMY_COUNT_LIMIT_PER_CITY
 	)
+
+
+func effective_ai_aggression(nation_id: int) -> float:
+	if nation_id < 0 or nation_id >= nations.size():
+		return 1.0
+	var nation := nations[nation_id]
+	return clampf(
+		nation.ai_aggression
+			* RulerProfile.aggression_multiplier(nation),
+		0.35, 1.85
+	)
+
+
+func effective_army_defense(army: Army) -> float:
+	if army == null:
+		return 0.0
+	return float(army.defense) * maxf(army.ruler_defense_multiplier, 0.1)
+
+
+func effective_city_defense(city: City) -> int:
+	if city == null:
+		return 0
+	var owner_id := city.owner_nation
+	var multiplier := (
+		RulerProfile.city_defense_multiplier(nations[owner_id])
+		if owner_id >= 0 and owner_id < nations.size()
+		else 1.0
+	)
+	return maxi(int(round(
+		float(Combat.city_defense_modifier(city)) * multiplier
+	)), 0)
+
+
+func nation_display_name(nation_id: int) -> String:
+	return WorldNaming.nation_display_name(self, nation_id)
+
+
+func city_display_name(city_id: int, include_kind: bool = false) -> String:
+	return WorldNaming.city_display_name(self, city_id, include_kind)
 
 
 ## 将一支静止军队按满编容量等分，兵力和满编总额严格守恒。
@@ -2562,8 +2723,9 @@ func allies_of(nation_id: int) -> Array[int]:
 	return result
 
 
-## 当前联盟图中 nation_id 所在的完整连通分量。联盟上限虽通常使其退化为二元组，
-## 但按连通分量派生可避免外交层再维护一份易漂移的“战争集团成员”状态。
+## 当前联盟图中 nation_id 所在的确定性、冲突感知连通分量。按国家 id 顺序扫描
+## ALLIED 边；只有两个既有分量之间不存在任何 WAR 对时才合并。这样普通链式联盟
+## 仍组成一个集团，但互为敌国的两方不会经共同盟友被传递闭包错误地并入同一集团。
 func alliance_bloc(
 	nation_id: int,
 	alive_only: bool = true
@@ -2575,24 +2737,60 @@ func alliance_bloc(
 		or (alive_only and not nations[nation_id].alive)
 	):
 		return result
-	var seen := {nation_id: true}
-	var queue: Array[int] = [nation_id]
-	var cursor := 0
-	while cursor < queue.size():
-		var current := queue[cursor]
-		cursor += 1
-		result.append(current)
-		for other in nations:
+	var parent := PackedInt32Array()
+	parent.resize(nations.size())
+	parent.fill(-1)
+	var components: Dictionary = {}
+	for candidate_id in range(nations.size()):
+		if alive_only and not nations[candidate_id].alive:
+			continue
+		parent[candidate_id] = candidate_id
+		components[candidate_id] = [candidate_id] as Array[int]
+	# (a,b) 以字典序遍历，所以在矛盾联盟图上选择保留哪条盟约也不依赖调用者。
+	for nation_a in range(nations.size()):
+		if parent[nation_a] < 0:
+			continue
+		for nation_b in range(nation_a + 1, nations.size()):
 			if (
-				other.id == current
-				or seen.has(other.id)
-				or (alive_only and not other.alive)
-				or not is_allied(current, other.id)
+				parent[nation_b] < 0
+				or relation_between(nation_a, nation_b)
+					!= DiplomaticRelation.ALLIED
 			):
 				continue
-			seen[other.id] = true
-			queue.append(other.id)
-	result.sort()
+			var root_a := nation_a
+			while parent[root_a] != root_a:
+				root_a = parent[root_a]
+			var root_b := nation_b
+			while parent[root_b] != root_b:
+				root_b = parent[root_b]
+			if root_a == root_b:
+				continue
+			var blocked := false
+			for member_a in components[root_a]:
+				for member_b in components[root_b]:
+					if is_enemy(int(member_a), int(member_b)):
+						blocked = true
+						break
+				if blocked:
+					break
+			if blocked:
+				continue
+			var kept_root := mini(root_a, root_b)
+			var merged_root := maxi(root_a, root_b)
+			var merged: Array[int] = []
+			for member in components[kept_root]:
+				merged.append(int(member))
+			for member in components[merged_root]:
+				merged.append(int(member))
+			merged.sort()
+			parent[merged_root] = kept_root
+			components[kept_root] = merged
+			components.erase(merged_root)
+	var nation_root := nation_id
+	while parent[nation_root] != nation_root:
+		nation_root = parent[nation_root]
+	for member in components[nation_root]:
+		result.append(int(member))
 	return result
 
 
@@ -2687,6 +2885,434 @@ func start_civil_war(subject_id: int) -> bool:
 	_establish_rebel_food_pool(subject_id, holder_before, rebel_share)
 	# 4. 起兵资本：反叛方首都凭空动员火星兵（满编主战军团）。
 	_spawn_civil_war_uprising_armies(subject_id)
+	nations[subject_id].last_rebellion_day = day
+	nations[overlord_id].last_rebellion_day = day
+	return true
+
+
+## 地方叛乱事务：把同一亲叛政治目标的连续低忠诚城市转成新的反叛国。
+## 实控先转给叛军，法理仍留在母国；只有未来和平承认才改变 recognized owner。
+## 资源、人力和驻军均从当地/母国守恒划转，不复用削藩的满编“火星兵”。
+func start_regional_rebellion(
+	parent_id: int,
+	city_ids: Array[int]
+) -> int:
+	if (
+		parent_id < 0 or parent_id >= nations.size()
+		or not nations[parent_id].alive
+		or city_ids.is_empty()
+	):
+		return -1
+	var unique_ids: Array[int] = []
+	for city_value in city_ids:
+		var city_id := int(city_value)
+		if (
+			city_id < 0 or city_id >= cities.size()
+			or cities[city_id].is_dock
+			or cities[city_id].is_capital
+			or cities[city_id].owner_nation != parent_id
+			or unique_ids.has(city_id)
+		):
+			return -1
+		unique_ids.append(city_id)
+	unique_ids.sort()
+	if unique_ids.size() >= land_cities_of(parent_id).size():
+		return -1
+	# Region must be connected through usable roads.
+	var allowed := {}
+	for city_id in unique_ids:
+		allowed[city_id] = true
+	var seen := {unique_ids[0]: true}
+	var queue: Array[int] = [unique_ids[0]]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		for neighbor in neighbors(current):
+			var edge := edge_of(current, neighbor)
+			if (
+				not allowed.has(neighbor) or seen.has(neighbor)
+				or edge == null or edge.max_manpower <= 0
+			):
+				continue
+			seen[neighbor] = true
+			queue.append(neighbor)
+	if seen.size() != unique_ids.size():
+		return -1
+
+	var parent := nations[parent_id]
+	# 地方叛乱可能发生在和平藩王领内；它的库存真源是宗藩根粮池，
+	# 不能从零库存的藩王中继首都取数。城市易主前冻结分母与库存。
+	var food_holder_before := food_pool_holder(parent_id)
+	var food_pool_stock_before := _food_pool_stock(food_holder_before)
+	var food_pool_output_before := _food_pool_food_output(food_holder_before)
+	var rebel := Nation.new()
+	rebel.id = nations.size()
+	rebel.color = _derive_vassal_color(parent.color, rebel.id)
+	rebel.alive = true
+	rebel.political_system = parent.political_system
+	rebel.ai_aggression = 1.0
+	if _random_ruler_profiles_enabled:
+		RulerProfile.initialize_nation(
+			rebel, world_seed, rebel.id + day * 97
+		)
+	else:
+		# 兼容网格世界中的运行时新国家也保持中性；专项测试可显式覆写。
+		rebel.ruler_archetype = RulerProfile.BALANCED
+		rebel.ruler_traits.clear()
+		rebel.trade_policy = RulerProfile.POLICY_BALANCED
+	rebel.ruler_started_day = day
+	rebel.name_kind = WorldNaming.KIND_REBEL
+	nations.append(rebel)
+
+	var parent_manpower_output := 0
+	var rebel_manpower_output := 0
+	var parent_gold_output := 0
+	var rebel_gold_output := 0
+	var rebel_food_output := 0
+	for city in land_cities_of(parent_id):
+		parent_manpower_output += city.manpower_per_month
+		parent_gold_output += city.gold_per_month
+		if allowed.has(city.id):
+			rebel_manpower_output += city.manpower_per_month
+			rebel_gold_output += city.gold_per_month
+			rebel_food_output += city.food_per_half_year
+	var transferred_manpower := _proportional_share(
+		parent.manpower_pool, rebel_manpower_output, parent_manpower_output
+	)
+	var transferred_gold := _proportional_share(
+		parent.treasury_gold, rebel_gold_output, parent_gold_output
+	)
+	parent.manpower_pool -= transferred_manpower
+	parent.treasury_gold -= transferred_gold
+	rebel.manpower_pool = transferred_manpower
+	rebel.treasury_gold = transferred_gold
+
+	var region_centroid := Vector2.ZERO
+	for city_id in unique_ids:
+		var city := cities[city_id]
+		region_centroid += city.map_position
+		city.owner_nation = rebel.id
+		city.occupation_sponsor_nation = rebel.id
+		city.is_capital = false
+		city.has_warehouse = false
+	region_centroid /= float(unique_ids.size())
+	var capital_id := unique_ids[0]
+	var capital_distance := INF
+	for city_id in unique_ids:
+		var distance := cities[city_id].map_position.distance_squared_to(
+			region_centroid
+		)
+		if distance < capital_distance or (
+			is_equal_approx(distance, capital_distance) and city_id < capital_id
+		):
+			capital_distance = distance
+			capital_id = city_id
+	rebel.capital_city_id = capital_id
+	rebel.warehouse_city_ids = [capital_id] as Array[int]
+	cities[capital_id].is_capital = true
+	cities[capital_id].has_warehouse = true
+	var food_share := _proportional_share(
+		food_pool_stock_before, rebel_food_output, food_pool_output_before
+	)
+	if food_share > 0:
+		_withdraw_food_from_warehouses(
+			nations[food_holder_before], food_share
+		)
+		cities[capital_id].food_storage += food_share
+	WorldNaming.assign_rebel_name(self, rebel.id, parent_id, unique_ids)
+	_inherit_rebel_diplomacy(parent_id, rebel.id)
+	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
+
+	# Local stationed forces defect; if none do, mobilize only from transferred
+	# manpower and never conjure a full army without paying the pool.
+	var defected := 0
+	for army in armies:
+		if (
+			army.owner_nation == parent_id
+			and army.state in [Army.State.IDLE, Army.State.RECOVERING]
+			and not army.on_edge and allowed.has(army.location_city)
+		):
+			army.owner_nation = rebel.id
+			army.battle_group_id = -1
+			if army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+				var rebel_group := create_battle_group(rebel.id)
+				assign_army_to_battle_group(army, rebel_group.id)
+			else:
+				army.strategic_role = Army.StrategicRole.LINE
+			army.clear_line_assignment()
+			defected += 1
+	if defected == 0 and rebel.manpower_pool >= INITIAL_LIGHT_ARMY_SIZE:
+		var uprising := create_army(
+			rebel.id, capital_id, INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
+		)
+		if uprising != null:
+			rebel.manpower_pool -= INITIAL_LIGHT_ARMY_SIZE
+			_initialize_army_attributes(uprising)
+	rebellions[rebel.id] = {
+		"parent_id": parent_id,
+		"started_day": day,
+		"core_city_ids": unique_ids.duplicate(),
+		"recognized": false,
+		"active": true,
+		"reason": "连续低忠诚地区起义",
+	}
+	parent.last_rebellion_day = day
+	rebel.last_rebellion_day = day
+	ownership_revision += 1
+	ensure_valid_capital(parent_id)
+	refresh_derived()
+	return rebel.id
+
+
+## 低忠诚地区已有存活政治目标时，不再创造匿名地方叛军，而是恢复/归附该国。
+## 实控立即转给 target；法理本就属于 target 时清除占领声明，否则保留原法理并
+## 明确标记 target 为占领方。地方资源和静止驻军守恒迁移，既有外交关系不改写。
+func restore_regional_loyalty_target(
+	parent_id: int,
+	target_id: int,
+	city_ids: Array[int]
+) -> bool:
+	if (
+		parent_id < 0 or parent_id >= nations.size()
+		or target_id < 0 or target_id >= nations.size()
+		or parent_id == target_id
+		or not nations[parent_id].alive
+		or not nations[target_id].alive
+		or city_ids.is_empty()
+	):
+		return false
+	var unique_ids: Array[int] = []
+	for city_value in city_ids:
+		var city_id := int(city_value)
+		if (
+			city_id < 0 or city_id >= cities.size()
+			or cities[city_id].is_dock
+			or cities[city_id].is_capital
+			or cities[city_id].owner_nation != parent_id
+			or cities[city_id].loyalty_target_nation != target_id
+			or unique_ids.has(city_id)
+		):
+			return false
+		unique_ids.append(city_id)
+	unique_ids.sort()
+	if unique_ids.size() >= land_cities_of(parent_id).size():
+		return false
+
+	var allowed := {}
+	for city_id in unique_ids:
+		allowed[city_id] = true
+	var seen := {unique_ids[0]: true}
+	var queue: Array[int] = [unique_ids[0]]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		for neighbor in neighbors(current):
+			var edge := edge_of(current, neighbor)
+			if (
+				not allowed.has(neighbor) or seen.has(neighbor)
+				or edge == null or edge.max_manpower <= 0
+			):
+				continue
+			seen[neighbor] = true
+			queue.append(neighbor)
+	if seen.size() != unique_ids.size():
+		return false
+
+	var parent := nations[parent_id]
+	var target := nations[target_id]
+	var parent_manpower_output := 0
+	var moved_manpower_output := 0
+	var parent_gold_output := 0
+	var moved_gold_output := 0
+	var moved_food_output := 0
+	var food_holder_before := food_pool_holder(parent_id)
+	var food_pool_stock_before := _food_pool_stock(food_holder_before)
+	var food_pool_output_before := _food_pool_food_output(food_holder_before)
+	for city in land_cities_of(parent_id):
+		parent_manpower_output += city.manpower_per_month
+		parent_gold_output += city.gold_per_month
+		if allowed.has(city.id):
+			moved_manpower_output += city.manpower_per_month
+			moved_gold_output += city.gold_per_month
+			moved_food_output += city.food_per_half_year
+	var transferred_manpower := _proportional_share(
+		parent.manpower_pool, moved_manpower_output, parent_manpower_output
+	)
+	var transferred_gold := _proportional_share(
+		parent.treasury_gold, moved_gold_output, parent_gold_output
+	)
+	var transferred_food := _proportional_share(
+		food_pool_stock_before, moved_food_output, food_pool_output_before
+	)
+	parent.manpower_pool -= transferred_manpower
+	parent.treasury_gold -= transferred_gold
+	target.manpower_pool += transferred_manpower
+	target.treasury_gold += transferred_gold
+	if transferred_food > 0:
+		_withdraw_food_from_warehouses(
+			nations[food_holder_before], transferred_food
+		)
+		deposit_food(target_id, transferred_food)
+
+	for city_id in unique_ids:
+		var city := cities[city_id]
+		city.owner_nation = target_id
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		city.occupation_sponsor_nation = (
+			-1 if recognized_owner_of(city_id) == target_id else target_id
+		)
+	for army in armies:
+		if (
+			army.owner_nation == parent_id
+			and army.state in [Army.State.IDLE, Army.State.RECOVERING]
+			and not army.on_edge and allowed.has(army.location_city)
+		):
+			army.owner_nation = target_id
+			army.battle_group_id = -1
+			if army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+				var target_group := create_battle_group(target_id)
+				assign_army_to_battle_group(army, target_group.id)
+			else:
+				army.strategic_role = Army.StrategicRole.LINE
+			army.clear_line_assignment()
+	parent.last_rebellion_day = day
+	target.last_rebellion_day = day
+	ownership_revision += 1
+	ensure_valid_capital(parent_id)
+	refresh_derived()
+	return true
+
+
+func recognize_regional_rebellion(rebel_id: int) -> bool:
+	if not rebellions.has(rebel_id):
+		return false
+	var record: Dictionary = rebellions[rebel_id]
+	if not bool(record.get("active", false)):
+		return false
+	var changed := false
+	for city_value in record.get("core_city_ids", []):
+		var city_id := int(city_value)
+		if city_id < 0 or city_id >= cities.size():
+			continue
+		if cities[city_id].owner_nation == rebel_id:
+			recognized_city_owners[city_id] = rebel_id
+			cities[city_id].occupation_sponsor_nation = -1
+			cities[city_id].loyalty_target_nation = rebel_id
+			changed = true
+	record["recognized"] = true
+	record["active"] = false
+	rebellions[rebel_id] = record
+	if changed:
+		ownership_revision += 1
+	refresh_derived()
+	return changed
+
+
+func suppress_regional_rebellion(rebel_id: int) -> bool:
+	if not rebellions.has(rebel_id):
+		return false
+	var record: Dictionary = rebellions[rebel_id]
+	if not bool(record.get("active", false)):
+		return false
+	var parent_id := int(record.get("parent_id", -1))
+	if parent_id < 0 or parent_id >= nations.size():
+		return false
+	set_diplomatic_relation(
+		parent_id, rebel_id, DiplomaticRelation.NEUTRAL, DEFAULT_TRUCE_DAYS
+	)
+	annex_nation(parent_id, rebel_id)
+	record["active"] = false
+	record["recognized"] = false
+	rebellions[rebel_id] = record
+	for city_value in record.get("core_city_ids", []):
+		var city_id := int(city_value)
+		if city_id >= 0 and city_id < cities.size():
+			cities[city_id].loyalty_target_nation = parent_id
+			cities[city_id].loyalty = 45.0
+			cities[city_id].rebellion_progress = 0
+			cities[city_id].rebellion_cooldown_until_day = (
+				day + RebellionSystem.REBELLION_COOLDOWN_DAYS
+			)
+	return true
+
+
+func prune_rebellions() -> bool:
+	var changed := false
+	for rebel_value in rebellions.keys():
+		var rebel_id := int(rebel_value)
+		var record: Dictionary = rebellions[rebel_id]
+		if not bool(record.get("active", false)):
+			continue
+		var parent_id := int(record.get("parent_id", -1))
+		var rebel_alive := (
+			rebel_id >= 0 and rebel_id < nations.size()
+			and nations[rebel_id].alive
+		)
+		var parent_alive := (
+			parent_id >= 0 and parent_id < nations.size()
+			and nations[parent_id].alive
+		)
+		if not rebel_alive:
+			record["active"] = false
+			rebellions[rebel_id] = record
+			changed = true
+		elif not parent_alive:
+			changed = recognize_regional_rebellion(rebel_id) or changed
+	return changed
+
+
+## 地方叛乱战争在双方停战时结算：叛军仍持有任一核心城市即获得承认，
+## 否则视为被镇压。削藩内战不进入此表，继续由原首都通吃规则处理。
+func resolve_rebellion_peace(nation_a: int, nation_b: int) -> bool:
+	var rebel_id := -1
+	for candidate in [nation_a, nation_b]:
+		if (
+			rebellions.has(candidate)
+			and bool((rebellions[candidate] as Dictionary).get("active", false))
+		):
+			rebel_id = candidate
+			break
+	if rebel_id < 0:
+		return false
+	var record: Dictionary = rebellions[rebel_id]
+	var parent_id := int(record.get("parent_id", -1))
+	if parent_id not in [nation_a, nation_b]:
+		return false
+	var controls_core := false
+	for city_value in record.get("core_city_ids", []):
+		var city_id := int(city_value)
+		if city_id >= 0 and city_id < cities.size() and cities[city_id].owner_nation == rebel_id:
+			controls_core = true
+			break
+	return (
+		recognize_regional_rebellion(rebel_id)
+		if controls_core
+		else suppress_regional_rebellion(rebel_id)
+	)
+
+
+func rebellion_structure_valid() -> bool:
+	for rebel_value in rebellions:
+		var rebel_id := int(rebel_value)
+		var record: Dictionary = rebellions[rebel_id]
+		var parent_id := int(record.get("parent_id", -1))
+		if (
+			rebel_id < 0 or rebel_id >= nations.size()
+			or parent_id < 0 or parent_id >= nations.size()
+			or rebel_id == parent_id
+		):
+			return false
+		if bool(record.get("active", false)):
+			if not nations[rebel_id].alive or not is_enemy(rebel_id, parent_id):
+				return false
+			for city_value in record.get("core_city_ids", []):
+				var city_id := int(city_value)
+				if city_id < 0 or city_id >= cities.size():
+					return false
 	return true
 
 
@@ -3146,6 +3772,9 @@ func prune_dead_suzerainty() -> bool:
 			else:
 				suzerainty.erase(subject_id)
 				_establish_sovereign_food_pool(subject_id)
+				WorldNaming.promote_vassal_to_sovereign(
+					self, subject_id
+				)
 			changed = true
 			progressing = true
 	# 再移除死亡藩王自身的记录。
@@ -3270,7 +3899,17 @@ func enfeoff(
 	subject.color = _derive_vassal_color(overlord.color, subject.id)
 	subject.alive = true
 	subject.political_system = overlord.political_system
-	subject.ai_aggression = overlord.ai_aggression
+	subject.ai_aggression = 1.0
+	if _random_ruler_profiles_enabled:
+		RulerProfile.initialize_nation(
+			subject, world_seed, subject.id + day * 31
+		)
+	else:
+		# 网格世界是旧状态机/镜像夹具；未显式指定时新藩王同样保持中性。
+		subject.ruler_archetype = RulerProfile.BALANCED
+		subject.ruler_traits.clear()
+		subject.trade_policy = RulerProfile.POLICY_BALANCED
+	subject.ruler_started_day = day
 	nations.append(subject)
 
 	# 3. 迁移城市实控与法理归属；宗主与藩王间同色系，法理即刻归藩王。
@@ -3292,6 +3931,7 @@ func enfeoff(
 	# 5. 选藩王首都作为「共享粮仓」的补给中继节点（零库存）；封地城市自带的存粮
 	#    回流宗主根粮仓（共享池守恒，不凭空蒸发）。
 	_establish_vassal_capital(subject, overlord_id)
+	WorldNaming.assign_vassal_name(self, subject.id, city_ids)
 
 	# 5.5 地方化驻军并补齐：先转移封地内稳定驻防的宗主 LINE，再把缺口凭空补到
 	#     「陆城数」；MAIN 不转移、不凭空赐予，由藩王后续按经济能力自行组建。
@@ -3310,6 +3950,13 @@ func enfeoff(
 		"last_centralization_day": -1,
 		"civil_war": false,
 	}
+	for city_id in city_ids:
+		var granted_city := cities[city_id]
+		granted_city.loyalty_target_nation = subject.id
+		granted_city.loyalty = maxf(granted_city.loyalty, 68.0)
+		granted_city.loyalty_trend = 0.0
+		granted_city.unrest = 100.0 - granted_city.loyalty
+		granted_city.rebellion_progress = 0
 
 	refresh_derived()
 	assert(
@@ -3732,6 +4379,18 @@ func _inherit_overlord_diplomacy(overlord_id: int, subject_id: int) -> void:
 		overlord_id,
 		DiplomaticRelation.ALLIED
 	)
+
+
+## 地方叛军只继承母国已有的战争与中立关系，不继承母国盟约。母国盟友对新叛军
+## 默认为中立，避免叛军一出生便借第三方盟友重新落入母国的联盟集团。
+func _inherit_rebel_diplomacy(parent_id: int, rebel_id: int) -> void:
+	for third in nations:
+		if third.id == rebel_id or third.id == parent_id:
+			continue
+		var inherited := relation_between(parent_id, third.id)
+		if inherited == DiplomaticRelation.ALLIED:
+			inherited = DiplomaticRelation.NEUTRAL
+		set_diplomatic_relation(rebel_id, third.id, inherited)
 
 
 func _diplomacy_key(nation_a: int, nation_b: int) -> String:
@@ -4270,6 +4929,19 @@ func refresh_derived() -> void:
 	for city in cities:
 		var owner := nations[city.owner_nation]
 		owner.alive = true
+		city.ruler_city_defense_multiplier = (
+			RulerProfile.city_defense_multiplier(owner)
+		)
+	for army in armies:
+		if army.owner_nation < 0 or army.owner_nation >= nations.size():
+			continue
+		var ruler := nations[army.owner_nation]
+		army.ruler_defense_multiplier = (
+			RulerProfile.defense_multiplier(ruler)
+		)
+		army.ruler_morale_multiplier = (
+			RulerProfile.morale_multiplier(ruler)
+		)
 	for n in nations:
 		for warehouse in warehouse_cities_of(n.id):
 			n.granary_food += warehouse.food_storage

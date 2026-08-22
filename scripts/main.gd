@@ -187,6 +187,10 @@ func _setup_road_tuning() -> void:
 	road_tuning_panel.elevation_shadow_strength_changed.connect(
 		_on_elevation_shadow_strength_changed
 	)
+	road_tuning_panel.vertical_terrain_light_strength_changed.connect(
+		_on_vertical_terrain_light_strength_changed
+	)
+	road_tuning_panel.map_mode_changed.connect(_on_map_mode_changed)
 
 
 func _on_road_panel_opened() -> void:
@@ -242,9 +246,21 @@ func _on_province_strength_changed(strength: float) -> void:
 		map_3d.set_province_strength(strength)
 
 
+func _on_map_mode_changed(mode: int) -> void:
+	if renderer != null:
+		renderer.set_map_mode(mode)
+	if map_3d != null:
+		map_3d.set_map_mode(mode)
+
+
 func _on_elevation_shadow_strength_changed(strength: float) -> void:
 	if map_3d != null:
 		map_3d.set_elevation_shadow_strength(strength)
+
+
+func _on_vertical_terrain_light_strength_changed(strength: float) -> void:
+	if map_3d != null:
+		map_3d.set_vertical_terrain_light_strength(strength)
 
 
 func _setup_map_editor() -> void:
@@ -411,6 +427,9 @@ func _activate_state(next_state: GameState) -> void:
 			)
 			map_3d.set_elevation_shadow_strength(
 				road_tuning_panel.elevation_shadow_strength()
+			)
+			map_3d.set_vertical_terrain_light_strength(
+				road_tuning_panel.vertical_terrain_light_strength()
 			)
 	elif map_3d != null:
 		map_3d.visible = false

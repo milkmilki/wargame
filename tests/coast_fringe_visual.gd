@@ -2,6 +2,8 @@ extends SceneTree
 ## Pixel-level coast gate. Render only terrain, then inspect pixels near the
 ## packed 0m coastline. No bright low-saturation fringe may be introduced.
 
+const COAST_COLOR_CHANGE_THRESHOLD := 0.008
+
 
 func _init() -> void:
 	call_deferred("_run")
@@ -33,24 +35,29 @@ func _run() -> void:
 	map_3d._content.visible = false
 	await process_frame
 	await process_frame
-	var frame := root.get_texture().get_image()
+	var frame_with_all_boundaries := root.get_texture().get_image()
+	var frame := frame_with_all_boundaries
 	# Difference the exact production render with coast ink disabled. A valid
-	# coastline must darken pixels on the same interpolated 0m mesh contour that
-	# controls political land/sea fill; a province-raster coast would miss many
-	# of these samples even if it happened to avoid a bright fringe.
+	# coastline must change color on the same interpolated 0m mesh contour that
+	# controls political land/sea fill. The land-side country color may brighten,
+	# darken or shift hue; a province-raster coast would miss many samples.
 	map_3d._terrain.set_boundary_lod(0.0, 0.0, 0.0)
 	await process_frame
 	await process_frame
-	var frame_without_coast := root.get_texture().get_image()
+	var frame_without_boundaries := root.get_texture().get_image()
 	map_3d._terrain.set_boundary_lod(0.0, 1.0, 0.0)
 	await process_frame
 	await process_frame
 	frame = root.get_texture().get_image()
+	var frame_without_coast := frame_without_boundaries
 	var packed := (load(GameState.terrain_map_path()) as Texture2D).get_image()
-	var bright_gray := 0
 	var coast_samples := 0
 	var aligned_contour_samples := 0
-	var aligned_contour_inked := 0
+	var aligned_contour_changed := 0
+	var inland_false_positive_samples := 0
+	var inland_false_positive_changed := 0
+	var political_boundary_samples := 0
+	var political_boundary_bright_gray := 0
 	var sampled_screen_pixels := {}
 	for y in range(1, packed.get_height() - 1, 8):
 		for x in range(1, packed.get_width() - 1, 8):
@@ -65,8 +72,8 @@ func _run() -> void:
 			var map_position := Vector2((float(x) + 0.5) / packed.get_width(), (float(y) + 0.5) / packed.get_height())
 			var screen := map_3d._camera.unproject_position(map_3d._terrain.map_to_world(map_position))
 			var center := Vector2i(int(round(screen.x)), int(round(screen.y)))
-			for screen_y in range(center.y - 2, center.y + 3):
-				for screen_x in range(center.x - 2, center.x + 3):
+			for screen_y in range(center.y - 5, center.y + 6):
+				for screen_x in range(center.x - 5, center.x + 6):
 					if (
 						screen_x < 0 or screen_y < 0
 						or screen_x >= frame.get_width()
@@ -77,12 +84,7 @@ func _run() -> void:
 					if sampled_screen_pixels.has(key):
 						continue
 					sampled_screen_pixels[key] = true
-					var color := frame.get_pixel(screen_x, screen_y)
 					coast_samples += 1
-					# Full political colors are saturated/dark. A bright, nearly
-					# neutral pixel within two screen pixels of 0m is leaked primer.
-					if color.v > 0.48 and color.s < 0.32:
-						bright_gray += 1
 	var mesh_resolution := map_3d._terrain.resolution
 	var negative_mesh_heights := 0
 	var nonnegative_mesh_heights := 0
@@ -106,7 +108,7 @@ func _run() -> void:
 			if horizontal_result > 0:
 				aligned_contour_samples += 1
 				if horizontal_result > 1:
-					aligned_contour_inked += 1
+					aligned_contour_changed += 1
 	for grid_y in range(mesh_resolution.y - 1):
 		for grid_x in range(mesh_resolution.x):
 			var top_index := grid_y * mesh_resolution.x + grid_x
@@ -120,23 +122,95 @@ func _run() -> void:
 			if vertical_result > 0:
 				aligned_contour_samples += 1
 				if vertical_result > 1:
-					aligned_contour_inked += 1
+					aligned_contour_changed += 1
+	# The explicit UV2 coast-domain marker must suppress low-elevation inland
+	# slopes. At the 384 mesh a 3px coast can legitimately span more than one
+	# projected grid cell, so only classify vertices with a 7x7 all-land
+	# neighborhood as interior. Toggling coast may not change those pixels.
+	for grid_y in range(4, mesh_resolution.y - 4, 5):
+		for grid_x in range(4, mesh_resolution.x - 4, 5):
+			var index := grid_y * mesh_resolution.x + grid_x
+			if map_3d._terrain._height_samples[index] < 0.0:
+				continue
+			var interior := true
+			for offset_y in range(-3, 4):
+				for offset_x in range(-3, 4):
+					var nearby := (grid_y + offset_y) * mesh_resolution.x + grid_x + offset_x
+					if map_3d._terrain._height_samples[nearby] < 0.0:
+						interior = false
+			if not interior:
+				continue
+			var uv := Vector2(
+				float(grid_x) / float(mesh_resolution.x - 1),
+				float(grid_y) / float(mesh_resolution.y - 1)
+			)
+			var screen := map_3d._camera.unproject_position(
+				map_3d._terrain.map_to_world(uv)
+			)
+			var pixel := Vector2i(int(round(screen.x)), int(round(screen.y)))
+			if (
+				pixel.x < 0 or pixel.y < 0
+				or pixel.x >= frame.get_width() or pixel.y >= frame.get_height()
+			):
+				continue
+			inland_false_positive_samples += 1
+			var with_coast := frame.get_pixelv(pixel)
+			var without_coast := frame_without_coast.get_pixelv(pixel)
+			if _rgb_change(with_coast, without_coast) > COAST_COLOR_CHANGE_THRESHOLD:
+				inland_false_positive_changed += 1
+	var political_geometry := MapRenderer.build_province_boundary_segments(state)
+	for boundary_key in ["province", "country"]:
+		var segments: PackedVector2Array = political_geometry[boundary_key]
+		var stride := maxi((segments.size() / 2) / 800, 1)
+		for segment_index in range(0, segments.size() / 2, stride):
+			var midpoint := (
+				segments[segment_index * 2]
+				+ segments[segment_index * 2 + 1]
+			) * 0.5
+			var screen := map_3d._camera.unproject_position(
+				map_3d._terrain.map_to_world(midpoint)
+			)
+			var center := Vector2i(int(round(screen.x)), int(round(screen.y)))
+			for screen_y in range(center.y - 2, center.y + 3):
+				for screen_x in range(center.x - 2, center.x + 3):
+					if (
+						screen_x < 0 or screen_y < 0
+						or screen_x >= frame.get_width()
+						or screen_y >= frame.get_height()
+					):
+						continue
+					political_boundary_samples += 1
+					var color := frame_with_all_boundaries.get_pixel(
+						screen_x, screen_y
+					)
+					var without_boundary := frame_without_boundaries.get_pixel(
+						screen_x, screen_y
+					)
+					if (
+						_rgb_change(color, without_boundary)
+							> COAST_COLOR_CHANGE_THRESHOLD
+						and color.v > 0.48 and color.s < 0.32
+					):
+						political_boundary_bright_gray += 1
 	var aligned_ratio := (
-		float(aligned_contour_inked) / float(maxi(aligned_contour_samples, 1))
+		float(aligned_contour_changed) / float(maxi(aligned_contour_samples, 1))
 	)
 	if (
 		coast_samples <= 0
-		or bright_gray > 0
 		or aligned_contour_samples < 100
 		or aligned_ratio < 0.80
+		or inland_false_positive_samples < 100
+		or inland_false_positive_changed > 0
+		or political_boundary_samples < 100
+		or political_boundary_bright_gray > 0
 	):
 		var output := OS.get_environment("WW_VISUAL_OUTPUT")
 		if not output.is_empty():
-			frame.save_png(output)
-		push_error("COAST_FRINGE_FAILED samples=%d bright_gray=%d contour=%d inked=%d ratio=%.3f mesh_neg=%d mesh_land=%d hcross=%d vcross=%d" % [coast_samples, bright_gray, aligned_contour_samples, aligned_contour_inked, aligned_ratio, negative_mesh_heights, nonnegative_mesh_heights, horizontal_crossings, vertical_crossings])
+			frame_with_all_boundaries.save_png(output)
+		push_error("COAST_FRINGE_FAILED samples=%d contour=%d changed=%d ratio=%.3f inland=%d/%d boundary_gray=%d/%d mesh_neg=%d mesh_land=%d hcross=%d vcross=%d" % [coast_samples, aligned_contour_samples, aligned_contour_changed, aligned_ratio, inland_false_positive_changed, inland_false_positive_samples, political_boundary_bright_gray, political_boundary_samples, negative_mesh_heights, nonnegative_mesh_heights, horizontal_crossings, vertical_crossings])
 		quit(1)
 		return
-	print("COAST_FRINGE_OK samples=%d bright_gray=%d contour=%d inked=%d ratio=%.3f" % [coast_samples, bright_gray, aligned_contour_samples, aligned_contour_inked, aligned_ratio])
+	print("COAST_FRINGE_OK samples=%d contour=%d changed=%d ratio=%.3f inland=%d/%d boundary_gray=%d/%d" % [coast_samples, aligned_contour_samples, aligned_contour_changed, aligned_ratio, inland_false_positive_changed, inland_false_positive_samples, political_boundary_bright_gray, political_boundary_samples])
 	map_3d.free()
 	overlay.free()
 	simulation.free()
@@ -177,9 +251,12 @@ func _measure_mesh_contour_sample(
 	)
 	var screen := map_3d._camera.unproject_position(world)
 	var center := Vector2i(int(round(screen.x)), int(round(screen.y)))
-	var inked := false
-	for screen_y in range(center.y - 1, center.y + 2):
-		for screen_x in range(center.x - 1, center.x + 2):
+	# The country-color coast is a 3px land-side band. Search two screen pixels
+	# around the exact projected 0m point so subpixel rounding can land on either
+	# side without weakening the requirement that the contour itself is nearby.
+	var maximum_rgb_change := 0.0
+	for screen_y in range(center.y - 2, center.y + 3):
+		for screen_x in range(center.x - 2, center.x + 3):
 			if (
 				screen_x < 0 or screen_y < 0
 				or screen_x >= frame.get_width()
@@ -188,13 +265,11 @@ func _measure_mesh_contour_sample(
 				continue
 			var with_coast := frame.get_pixel(screen_x, screen_y)
 			var without_coast := frame_without_coast.get_pixel(screen_x, screen_y)
-			if (
-				without_coast.r - with_coast.r > 0.008
-				or without_coast.g - with_coast.g > 0.008
-				or without_coast.b - with_coast.b > 0.008
-			):
-				inked = true
-				break
-		if inked:
-			break
-	return 2 if inked else 1
+			maximum_rgb_change = maxf(
+				maximum_rgb_change, _rgb_change(with_coast, without_coast)
+			)
+	return 2 if maximum_rgb_change > COAST_COLOR_CHANGE_THRESHOLD else 1
+
+
+func _rgb_change(a: Color, b: Color) -> float:
+	return maxf(maxf(absf(a.r - b.r), absf(a.g - b.g)), absf(a.b - b.b))

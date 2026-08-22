@@ -60,21 +60,25 @@ func set_province_texture(texture: Texture2D) -> void:
 
 func set_boundary_textures(
 	province_texture: Texture2D,
-	diplomatic_texture: Texture2D
+	country_texture: Texture2D,
+	country_color_texture: Texture2D
 ) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
 		"province_boundary_texture", province_texture
 	)
 	_material.set_shader_parameter(
-		"diplomatic_boundary_texture", diplomatic_texture
+		"country_boundary_texture", country_texture
+	)
+	_material.set_shader_parameter(
+		"country_color_texture", country_color_texture
 	)
 
 
 func set_boundary_lod(
 	province_strength: float,
 	coast_strength: float = 1.0,
-	diplomatic_strength: float = 1.0
+	country_strength: float = 1.0
 ) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
@@ -84,8 +88,8 @@ func set_boundary_lod(
 		"coast_boundary_strength", clampf(coast_strength, 0.0, 1.0)
 	)
 	_material.set_shader_parameter(
-		"diplomatic_boundary_strength",
-		clampf(diplomatic_strength, 0.0, 1.0)
+		"country_boundary_strength",
+		clampf(country_strength, 0.0, 1.0)
 	)
 
 
@@ -298,13 +302,30 @@ func _ensure_render_nodes() -> void:
 			"local_boundary_alpha", MapRenderer.LOCAL_BOUNDARY_INK.a
 		)
 		_material.set_shader_parameter(
+			"local_boundary_color",
+			Vector3(
+				MapRenderer.LOCAL_BOUNDARY_INK.r,
+				MapRenderer.LOCAL_BOUNDARY_INK.g,
+				MapRenderer.LOCAL_BOUNDARY_INK.b
+			)
+		)
+		_material.set_shader_parameter(
 			"local_boundary_core_radius_px",
 			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
 		)
 		_material.set_shader_parameter(
 			"local_boundary_outer_radius_px",
 			MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
-				+ MapRenderer.BOUNDARY_FEATHER_PX
+				+ MapRenderer.BOUNDARY_ANTIALIAS_PX
+		)
+		_material.set_shader_parameter(
+			"country_boundary_core_width_px",
+			MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
+		)
+		_material.set_shader_parameter(
+			"country_boundary_outer_width_px",
+			MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
+				+ MapRenderer.BOUNDARY_ANTIALIAS_PX
 		)
 	_mesh_instance.material_override = _material
 
@@ -317,6 +338,10 @@ func _build_surface_mesh() -> ArrayMesh:
 			var uv := _grid_uv(x, z)
 			surface_tool.set_normal(_smooth_normal_at(x, z))
 			surface_tool.set_uv(uv)
+			# UV2.x marks only vertices adjacent to a real mesh-domain crossing.
+			# The shader can then grow the 0m contour to 3 screen pixels without
+			# mistaking unrelated low-altitude inland slopes for coastline.
+			surface_tool.set_uv2(Vector2(_coast_vertex_marker(x, z), 0.0))
 			surface_tool.add_vertex(_world_vertex(x, z, uv))
 	for z in range(resolution.y - 1):
 		for x in range(resolution.x - 1):
@@ -331,6 +356,28 @@ func _build_surface_mesh() -> ArrayMesh:
 			surface_tool.add_index(i11)
 			surface_tool.add_index(i01)
 	return surface_tool.commit()
+
+
+func _coast_vertex_marker(x: int, z: int) -> float:
+	var center_is_land := _sample_height(x, z) >= OCEAN_HEIGHT_THRESHOLD
+	for offset_z in range(-1, 2):
+		for offset_x in range(-1, 2):
+			if offset_x == 0 and offset_z == 0:
+				continue
+			var neighbor_x := x + offset_x
+			var neighbor_z := z + offset_z
+			if (
+				neighbor_x < 0 or neighbor_x >= resolution.x
+				or neighbor_z < 0 or neighbor_z >= resolution.y
+			):
+				continue
+			if (
+				(_sample_height(neighbor_x, neighbor_z)
+					>= OCEAN_HEIGHT_THRESHOLD)
+				!= center_is_land
+			):
+				return 1.0
+	return 0.0
 
 
 func _grid_uv(x: int, z: int) -> Vector2:

@@ -8,7 +8,9 @@ static func effective(army: Army) -> float:
 		return 0.0
 	var quality := (
 		sqrt(maxf(
-			float(army.attack * army.defense)
+			float(army.attack)
+				* float(army.defense)
+				* maxf(army.ruler_defense_multiplier, 0.1)
 				* maxf(
 					army.offensive_attack_multiplier,
 					1.0
@@ -27,7 +29,11 @@ static func effective(army: Army) -> float:
 ## 是不同量纲的两个量：前者进威胁评估，后者进围城比值分母（item 6：禁止量纲混用）。
 ## 基数经 Combat.city_defense_modifier 统一换算（含首都翻倍），与实战守军加成同源。
 static func city_defense(city: City) -> float:
-	return float(Combat.city_defense_modifier(city)) * 10.0
+	return (
+		float(Combat.city_defense_modifier(city))
+		* maxf(city.ruler_city_defense_multiplier, 0.1)
+		* 10.0
+	)
 
 
 static func combined(armies: Array[Army]) -> float:

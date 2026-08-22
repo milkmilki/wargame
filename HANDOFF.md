@@ -1,9 +1,9 @@
 # World-War 项目交接文档
 
 > 面向接手的 AI agent / 开发者。目标：不读全部源码即可理解架构、约定、当前状态与安全改动边界。
-> 最后更新：2026-08-22（**重军运输与内战财政**：15000 编制保留战斗/战团身份，道路改用 5000 运输包并按窄路批次计时；反叛藩王在内战期间暂停向直属宗主上贡。历史战斗系统重构见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）。
+> 最后更新：2026-08-23（新增确定性世界命名、君主档案、城市忠诚/叛乱与贸易网络；保留**政治地图与地形灯光**改动，以及重军 15000 编制/战团身份与 5000 运输包规则。历史战斗系统重构见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）。
 >
-> **接手第一件事**：读 §9（性能现状与剩余优化路线图）和 §10（40 国统一收敛）。当前 `./run_tests.sh` = **1431 passed / 0 failed**，strict-mirror 连续 3650 天优势分 `0.0`。
+> **接手第一件事**：读 §9（性能现状与剩余优化路线图）和 §10（40 国统一收敛）。当前 `tests/test_suite.gd` = **1448 passed / 0 failed**；strict-mirror 连续 3650 天优势分 `0.0`。
 
 ---
 
@@ -23,7 +23,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 五阶段：①headless 导入捕获脚本错误 ②运行 `tests/test_suite.gd`（当前 **1431 断言 / 0 失败**）③高程图源门禁 ④3D 地形 smoke ⑤真实海岸 GPU 白点门禁。
+`run_tests.sh` 十阶段（Godot 阶段使用隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（当前 **1448 断言 / 0 失败**）③政治/命名/贸易 smoke ④高程图源门禁 ⑤地图编辑器运行时与 MapDefinition 往返 smoke ⑥3D 地形 smoke ⑦默认前端场景 smoke ⑧道路调节与地图模式 UI smoke ⑨前端 3D 视觉构件 smoke ⑩真实海岸 GPU 白点门禁。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
 `tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
@@ -72,6 +72,11 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | 陆地/城市/省份/道路；高度图水系、道路交点码头、抢滩边和码头间水路 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路与补给网络；读取边级行军时间和粮损倍率 |
 | [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | 静态 | 镜像等变物理排序 SSoT：城市/军队/势力/边；禁止 ID/创建顺序参与行为决胜 |
+| [scripts/core/world_naming.gd](scripts/core/world_naming.gd) | 静态 | 不推进 `GameState.rng` 的确定性城市、地域字、主权国、藩王与叛军命名 |
+| [scripts/core/ruler_profile.gd](scripts/core/ruler_profile.gd) | 静态 | 君主姓名、9 种原型、最多 2 项特质、贸易政策及国政修正的确定性真源 |
+| [scripts/core/rebellion_system.gd](scripts/core/rebellion_system.gd) | 静态 | 城市忠诚月结、低忠诚连通区、藩王内战、归附/地方叛军与冷却规则 |
+| [scripts/core/trade_network.gd](scripts/core/trade_network.gd) | 静态 | 纯派生国内/国际贸易路线、阻断/改道、贸易税和粮食交易守恒 |
+| [scripts/core/map_definition.gd](scripts/core/map_definition.gd) | 地图模板 | `world-war-map` v2 校验与往返；兼容 v1，排除战役中的活动叛乱和贸易快照 |
 | [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算、纯函数、共享战场骰 + 独立战术修正、结构化日志，见 §4 |
 | [scripts/core/combat_log.gd](scripts/core/combat_log.gd) | 静态 | 战斗日志 JSONL 落盘/加载、逐回合确定性回放与篡改检测 |
 | [scripts/core/simulation.gd](scripts/core/simulation.gd) | 逻辑 | 按天推进主循环；`edge_travel_days(edge)` 为实际行军时长真源，见 §5 |
@@ -80,7 +85,12 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 默认真实高度图场景（Main + Simulation + MapRenderer） |
 | [square_map.tscn](square_map.tscn) | 场景 | 保留的原始 `8×8` 方形地图场景；Main 的 `use_grid_world=true` |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 1217 断言，含统一后持续推演、联盟集团战争、统一战团需求、攻势临时士气、飞地割让及既有门禁，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 1448 断言 / 0 失败；逻辑回归主套件，headless 运行 |
+| [tests/politics_trade_smoke.gd](tests/politics_trade_smoke.gd) | 测试 | 命名、君主、忠诚/叛乱、贸易守恒及月结发布集中 smoke |
+| [tests/map_editor_runtime.gd](tests/map_editor_runtime.gd) | 测试 | 地图编辑、MapDefinition v1/v2 校验与运行时往返 smoke |
+| [tests/frontend_scene_smoke.gd](tests/frontend_scene_smoke.gd) | 测试 | 默认场景、HUD、设置、地图编辑器与五种地图模式集成 smoke |
+| [tests/road_tuning_ui_smoke.gd](tests/road_tuning_ui_smoke.gd) | 测试 | 道路/灯光调节、暂停与地图模式 UI smoke |
+| [tests/frontend_visual_smoke.gd](tests/frontend_visual_smoke.gd) | 测试 | 3D 地形、兵牌、城市、战役箭头及政治边界视觉构件 smoke |
 | [tests/map_visual_smoke.gd](tests/map_visual_smoke.gd) | 视觉烟测 | 构造占领省份与攻势事件，用 Godot Movie Maker 验证真实渲染路径 |
 | [tests/ai_longrun.gd](tests/ai_longrun.gd) | 诊断 | 4 种子 × 1095 天 AI 长跑，统计战争活动并校验零城市战争残留、敌城节点军队必须属于有效围城、两国永久联盟锁和城市数稳定 30 天后的两档军制精确收敛；支持旧版固定城防 A/B |
 | [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 基准 | 64 城左右镜像；支持 `AI_DUEL_STRICT_MIRROR=1` 逐日全状态物理镜像门禁 |
@@ -281,6 +291,14 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - 友城和可接入本国粮仓网络的友方边允许补员；被围城、争夺边、`FIGHTING`、`RETREATING` 禁止补员。
 - HUD 中“人”表示人口库，“兵”表示已部署总人数。
 
+### 4.12 世界命名、君主、忠诚叛乱与贸易
+
+- **WorldNaming**：城市使用战役内唯一的中文全称，并各自持有单字 `region_symbol`。初始主权国及藩王升格后的主权身份严格取不可变 `founding_city_id` 对应的地域字，迁都和同名碰撞都不得改换建国锚点。藩王显示名按当前直属陆城数变化：不足 5 城为“首府全称王”，达到 5 城为“首府地域单字王”。全部抽取只依赖显式 seed、实体 ID 与稳定哈希，不推进 `GameState.rng`。
+- **RulerProfile**：每国确定性生成姓名、1 个原型和最多 2 个不重复特质；9 种原型为持衡者、征服者、守成者、庸主、暴君、商君、改革者、纵横家、营造者，12 项特质覆盖雄心、谨慎、魅力、节俭、勤政、粮秣、尚武、筑城、商贸、集权、分封与严酷，且集权/分封互斥。原型和特质共同派生外交、生产、维护、军粮、士气、防御、分封/集权、贸易与忠诚修正，守成者、庸主和纵横家禁止主动攻势。
+- **城市忠诚与叛乱**：`City.loyalty` 为 `0～100` 真源，认同对象另存于 `loyalty_target_nation`；每 30 天从同一月初快照结算，单月变化封顶 `±5`，驻军、首都距离、异族统治、战乱、欠饷、邻城、贡赋及君主共同影响目标值。非首都陆城忠诚 `≤25` 连续 3 个月后，按正容量道路和共同认同目标组成叛乱区；同目标仍存活则优先归附/复国且不新建 Nation，否则创建地方叛军。成功归附、起事或镇压后使用 720 天冷却；藩王低忠诚还需满足军力比后才进入内战。
+- **TradeNetwork**：由当前图、外交、围城/占边、国家政策与君主修正纯派生国内和国际路线；路线状态为 `ACTIVE / REROUTED / BLOCKED`，战争或通道阻断会改道或停运。贸易税在端点及过境城市间守恒分配，粮食进出口量与对应金钱支付分别严格守恒；`Simulation` 只在月结应用一次并发布 `GameState.trade_routes/trade_revision` 及城市/国家摘要。前端提供地形、混合、政治、忠诚、贸易五种模式；忠诚模式按城市忠诚覆色，贸易模式突出金色/青色正常路线、橙色改道和红色虚线阻断路线。
+- **MapDefinition v2**：地图模板持久化国家建国城/名称、君主档案、贸易政策，以及城市全称/地域字/初始忠诚目标；主动叛乱、忠诚趋势/进度/冷却和贸易路线/结算摘要属于战役瞬态，禁止写入模板。加载仍接受 v1，并用 seed 确定性补齐新增字段；未知未来版本和不合法 v2 身份数据直接拒绝。
+
 ---
 
 ## 5. 天推进主循环（[simulation.gd](scripts/core/simulation.gd) `_advance_day`）—— 天/月分层（第七轮）
@@ -356,7 +374,9 @@ if state.day % 30 == 0:                              # 每月结算块
 
 **二战战略规划图视觉（[map_renderer.gd](scripts/view/map_renderer.gd)，纯只读派生）**：
 - **牛皮纸主题**：全窗口深褐底、地图纸张投影、确定性纤维纹理和赭色高度图罩层统一色域；国家色先降饱和并混入纸色，避免覆盖道路、兵牌和箭头。
-- **国家与道路描边**：海岸和当前国境使用深墨外线/金色内线，盟国边界独立青灰线；陆路按容量分四档墨线，高危险段叠加红色短划，河运为双层蓝灰线，抢滩为红色虚线。
+- **政治边界与道路描边**：省界为常显 1px 暗红纯色实线；国界按共享城市边界向两国各自内侧绘制 3px 国家色实线，颜色取本国色的 75% 明度和 115% 饱和度，外交关系不覆盖国界色。真实 0m 海岸只在陆侧绘制同款 3px 国家色。陆路仍按容量分档，高危险段、河运和抢滩保留各自交通语义。
+- **边界视觉门禁**：2D 在 `1×/4×` 缩放都使用屏幕空间固定线宽；3D GPU 抽样要求真实海岸覆盖率至少 80%、内陆伪海岸为 0，并检查省界/国界附近不得出现亮灰白边。384 网格当前实测海岸 `1734/1765=0.982`、内陆误涂 `0/2567`、亮灰边 `0/39750`。
+- **锯齿治理分层**：内陆政治边界使用曲线化中心线、连续 coverage 和线性各向异性采样，不能用地形面数掩盖；真实 0 米海岸则将长边网格从 256 提到 384（当前地图约 `384×221 / 168520` 三角形）。固定截图 A/B 的总墙钟为 `11.24s / 11.52s / 12.10s`（256/384/512），384 已明显改善海岸与小岛，512 的额外收益不足以抵偿约 30 万三角形。
 - **固定视觉档位**：地图画布继续连续适配窗口，但图标、字体、线宽只使用 `0.80 / 1.00 / 1.25 / 1.50` 四档比例；同一档位内窗口变化不会改变符号尺寸。窄窗口仍自动减少国家卡片列数。
 - **兵牌独立倍率**：顶部 `10%～180%` 滑块只缩放军队兵牌、符号、文字、士气条与堆叠偏移，不改变城市、道路和全局视觉档位。
 - **地图视图导航**：地图内滚轮按 `1.2×` 档位连续缩放，范围 `1×～4×`，缩放前后鼠标所指地图坐标保持不变；左键移动超过 4 像素进入平移，平移被夹在地图有效范围内，缩回 `1×` 自动居中。短按左键仍执行城市/道路命中，HUD 控件不触发地图手势。

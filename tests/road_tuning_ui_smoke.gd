@@ -38,33 +38,133 @@ func _run() -> void:
 		quit(1)
 		return
 	if (
-		not is_equal_approx(panel.province_strength(), 1.0)
-		or not is_equal_approx(main.map_3d._province_strength, 1.0)
-		or not is_equal_approx(panel.elevation_shadow_strength(), 0.62)
-		or not is_equal_approx(main.map_3d._elevation_shadow_strength, 0.62)
+		not is_equal_approx(panel.province_strength(), 0.93)
+		or not is_equal_approx(main.renderer._province_strength, 0.93)
+		or not is_equal_approx(main.map_3d._province_strength, 0.93)
+		or not is_equal_approx(
+			panel.elevation_shadow_strength(),
+			StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+		)
+		or not is_equal_approx(
+			main.map_3d._elevation_shadow_strength,
+			StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+		)
+		or not is_equal_approx(
+			main.map_3d._sculpt_terrain_light.light_energy,
+			StrategicMap3D.SCULPT_TERRAIN_LIGHT_DEFAULT_STRENGTH
+				* StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+		)
+		or not is_equal_approx(
+			panel.vertical_terrain_light_strength(),
+			StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+		)
+		or not is_equal_approx(
+			main.map_3d._vertical_terrain_light_strength,
+			StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+		)
+		or not is_equal_approx(
+			main.map_3d._vertical_terrain_light.light_energy,
+			StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
+				* StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
+		)
 	):
 		push_error("ROAD_TUNING_UI_DEFAULT_POLITICAL_MODE_FAILED")
 		quit(1)
 		return
-	(panel._sliders[RoadTuningPanel.ELEVATION_SHADOW_STRENGTH_KEY] as HSlider).value = 0.61
+	var expected_modes := {
+		RoadTuningPanel.MAP_MODE_TERRAIN: MapRenderer.MAP_MODE_POLITICAL,
+		RoadTuningPanel.MAP_MODE_MIXED: MapRenderer.MAP_MODE_POLITICAL,
+		RoadTuningPanel.MAP_MODE_POLITICAL: MapRenderer.MAP_MODE_POLITICAL,
+		RoadTuningPanel.MAP_MODE_LOYALTY: MapRenderer.MAP_MODE_LOYALTY,
+		RoadTuningPanel.MAP_MODE_TRADE: MapRenderer.MAP_MODE_TRADE,
+	}
 	if (
-		not is_equal_approx(main.map_3d._elevation_shadow_strength, 0.61)
+		panel._map_mode_buttons.size() != expected_modes.size()
+		or panel.map_mode() != RoadTuningPanel.MAP_MODE_POLITICAL
+		or panel.renderer_map_mode() != MapRenderer.MAP_MODE_POLITICAL
+		or not (panel._map_mode_buttons[
+			RoadTuningPanel.MAP_MODE_POLITICAL
+		] as Button).button_pressed
+	):
+		push_error("ROAD_TUNING_UI_MODE_CONTRACT_FAILED")
+		quit(1)
+		return
+	for mode_id in expected_modes:
+		var mode_button := panel._map_mode_buttons[mode_id] as Button
+		if (
+			mode_button == null
+			or str(mode_button.get_meta(&"map_mode", "")) != mode_id
+			or int(mode_button.get_meta(&"renderer_map_mode", -1))
+				!= int(expected_modes[mode_id])
+		):
+			push_error("ROAD_TUNING_UI_MODE_METADATA_FAILED")
+			quit(1)
+			return
+	(
+		panel._sliders[
+			RoadTuningPanel.VERTICAL_TERRAIN_LIGHT_STRENGTH_KEY
+		] as HSlider
+	).value = 0.37
+	if (
+		not is_equal_approx(panel.vertical_terrain_light_strength(), 0.37)
+		or not is_equal_approx(
+			main.map_3d._vertical_terrain_light_strength, 0.37
+		)
+		or not is_equal_approx(
+			main.map_3d._vertical_terrain_light.light_energy,
+			0.37 * StrategicMap3D.VERTICAL_TERRAIN_LIGHT_MAX_ENERGY
+		)
+	):
+		push_error("ROAD_TUNING_UI_VERTICAL_LIGHT_FAILED")
+		quit(1)
+		return
+	(
+		panel._sliders[
+			RoadTuningPanel.ELEVATION_SHADOW_STRENGTH_KEY
+		] as HSlider
+	).value = 1.0
+	if (
+		not is_equal_approx(main.map_3d._elevation_shadow_strength, 1.0)
 		or not is_equal_approx(
 			main.map_3d._sculpt_terrain_light.light_energy,
-			0.61 * StrategicMap3D.SCULPT_TERRAIN_LIGHT_MAX_ENERGY
+			2.0
 		)
 	):
 		push_error("ROAD_TUNING_UI_ELEVATION_SHADOW_FAILED")
 		quit(1)
 		return
-	(panel._map_mode_buttons[0.42] as Button).pressed.emit()
-	if (
-		not is_equal_approx(panel.province_strength(), 0.42)
-		or not is_equal_approx(main.map_3d._province_strength, 0.42)
-	):
-		push_error("ROAD_TUNING_UI_MAP_MODE_FAILED")
-		quit(1)
-		return
+	for mode_case in [
+		[RoadTuningPanel.MAP_MODE_TERRAIN, 0.0, MapRenderer.MAP_MODE_POLITICAL],
+		[RoadTuningPanel.MAP_MODE_MIXED, 0.42, MapRenderer.MAP_MODE_POLITICAL],
+		[RoadTuningPanel.MAP_MODE_POLITICAL, 0.93, MapRenderer.MAP_MODE_POLITICAL],
+		[RoadTuningPanel.MAP_MODE_LOYALTY, 0.93, MapRenderer.MAP_MODE_LOYALTY],
+		[RoadTuningPanel.MAP_MODE_TRADE, 0.93, MapRenderer.MAP_MODE_TRADE],
+	]:
+		var mode_id := str(mode_case[0])
+		var expected_strength := float(mode_case[1])
+		var expected_renderer_mode := int(mode_case[2])
+		(panel._map_mode_buttons[mode_id] as Button).pressed.emit()
+		var unique_highlight := true
+		for other_mode_id in expected_modes:
+			unique_highlight = (
+				unique_highlight
+				and (panel._map_mode_buttons[other_mode_id] as Button).button_pressed
+					== (str(other_mode_id) == mode_id)
+			)
+		if (
+			panel.map_mode() != mode_id
+			or panel.renderer_map_mode() != expected_renderer_mode
+			or main.renderer.map_mode() != expected_renderer_mode
+			or main.map_3d.map_mode() != expected_renderer_mode
+			or not is_equal_approx(panel.province_strength(), expected_strength)
+			or not is_equal_approx(
+				main.map_3d._province_strength, expected_strength
+			)
+			or not unique_highlight
+		):
+			push_error("ROAD_TUNING_UI_MODE_SWITCH_FAILED_%s" % mode_id)
+			quit(1)
+			return
 	(panel._sliders["blocked_branch_share"] as HSlider).value = 0.20
 	(panel._sliders["capacity_multiplier"] as HSlider).value = 1.25
 	main._on_road_regenerate_requested(panel.road_settings())

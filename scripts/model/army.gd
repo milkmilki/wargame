@@ -37,6 +37,10 @@ var max_size: int = DEFAULT_MAX_SIZE       ## 满编人数上限
 var speed_factor: float = 0.5              ## 速度系数 (0,1)
 var attack: int = 10                       ## 攻击力
 var defense: int = 10                      ## 防御力
+## 当前所属君主的派生军事修正。GameState.refresh_derived() 按 owner 重放；
+## 基础 attack/defense/morale 永不被永久改写。
+var ruler_defense_multiplier: float = 1.0
+var ruler_morale_multiplier: float = 1.0
 var strategic_role: int = StrategicRole.LINE
 ## 所属持久战团；-1 表示独立填线军。战团内最多 2 支轻军和 1 支重军。
 var battle_group_id: int = -1
@@ -174,11 +178,11 @@ func offensive_multiplier() -> float:
 
 
 func combat_morale() -> float:
-	return morale * offensive_multiplier()
+	return morale * offensive_multiplier() * maxf(ruler_morale_multiplier, 0.1)
 
 
 func combat_max_morale() -> float:
-	return max_morale * offensive_multiplier()
+	return max_morale * offensive_multiplier() * maxf(ruler_morale_multiplier, 0.1)
 
 
 func combat_morale_ratio() -> float:
