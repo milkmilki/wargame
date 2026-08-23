@@ -23,7 +23,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 十阶段（Godot 阶段使用隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（当前 **1502 断言 / 0 失败**）③政治/命名/贸易 smoke ④高程图源门禁 ⑤地图编辑器运行时与 MapDefinition 往返 smoke ⑥3D 地形 smoke ⑦默认前端场景 smoke ⑧道路调节与地图模式 UI smoke ⑨前端 3D 视觉构件 smoke ⑩真实海岸 GPU 白点门禁。
+`run_tests.sh` 现为十九阶段（Godot 阶段使用同一个隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（最近已确认逻辑结果 **1503 断言 / 0 失败**）③贸易结构缓存等价门禁 ④贸易联通预筛等价门禁 ⑤贸易预测缓存等价门禁 ⑥行军容量索引等价门禁 ⑦包围索引等价门禁 ⑧忠诚/行政半径等价门禁 ⑨粮仓快照门禁 ⑩守军索引等价门禁 ⑪政治/命名/贸易 smoke ⑫高程图源门禁 ⑬地图编辑器运行时与 MapDefinition 往返 smoke ⑭3D 地形 smoke ⑮默认前端场景 smoke ⑯道路调节与地图模式 UI smoke ⑰前端 3D 视觉构件 smoke ⑱真实海岸 GPU 白点门禁 ⑲国家详情 single-build 门禁。默认快链现含 8 个快速专项门禁（原 5 个性能专项 + 忠诚/行政半径 + 粮仓快照 + 守军索引）；`diplomacy_structure_cache_equivalence.gd` 仍为手动长 A/B，不纳入默认快链。`nation_detail_single_build.gd` 当前作为独立专项记录；最终树 19 阶段 `run_tests.sh` 已 `exit 0` 全通过，`trade_forecast_cache_equivalence.gd` 为 setup 后 baseline 增量断言，单项 **78 checks** 且无 `SCRIPT ERROR`。本次完整链 wall time **未记录**，不得沿用旧的 `331.42s` 绿链口径。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
 `tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
@@ -269,9 +269,9 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - 攻势首攻只要求目标 B 存在合法入口；若能从实际首攻梯队冻结同一敌国的 `B→C` 路线，则破城后由执行军立即续攻 C，否则正常结束为一步攻势。是否存在第二步与敌国剩余城市数无关。续攻不重新检查 180 天准备、士气、补给或守备评分；仅在执行军士气归零/覆灭、目标失效或道路失效时终止。攻势加成持续期仍等于实际准备天数并在 180 天封顶，第二步只继承原剩余时长，不刷新截止日。
 - 宣战时通过统一的年度战争粮食报告计算 `0～4` 支额外动员军：报告同时给出当前兵力、目标兵力和现有全部编制满员时的年耗、年结余及粮仓可支撑年数。主动战争目标必须至少可维持 2 年，防御战争按 1 年生存线规划；动员窗口 180 天，每军仍消耗 5000 人并承担正常粮耗/军费。战争姿态不再强制保留额外 100 金，只要求现付本次建制费。
 - 联盟提供双向军事通行和共享补给：军队可穿越并驻留盟国城市，也可从盟国边境发起攻势；占领城市始终归实际占领军所属国。退盟立即撤销通行权，滞留军队自动返国。
-- `AiWorldView`、战略前线、威胁场、驻边与攻击候选统一通过 `GameState.is_enemy()` 筛选。外交和整数城防变化分别递增 `diplomacy_revision/fortification_revision`，立即使战略缓存失效。
+- `AiWorldView`、战略前线、威胁场、驻边与攻击候选统一通过 `GameState.is_enemy()` 筛选。外交和整数城防变化分别递增 `diplomacy_revision/fortification_revision`，立即使战略缓存失效；与外交/联盟语义相关的缓存剪枝不得假定“非接壤联盟可忽略”，因为远交、联盟通行与间接参战语义仍可能让远端盟友影响前线判断。
 - 和平期另计算潜在敌国威胁：综合联盟战力比、对方战争储备、直接接壤边数及对方宣战意愿。威胁达到阈值的中立边境进入 `potential_frontier_cities/edges`，参与补给走廊、增援和 `HOLDING` 驻边规划；盟国不计威胁。
-- 顶部“国家统计”按钮控制可折叠统计窗口，默认收起；展开后为每国绘制独立详情卡，展示城市、兵力、人力、国库及月净现金流、粮食月需求、战争和盟友，并在窗口底部显示最近外交原因。收起后布局立即回收顶部空间并扩大地图；开关仅存于 `MapRenderer`，重开游戏保持当前 UI 偏好但不进入存档。
+- 顶部“国家统计”按钮控制可折叠统计窗口，默认收起；展开后为每国绘制独立详情卡，展示城市、兵力、人力、国库及月净现金流、粮食月需求、战争和盟友，并在窗口底部显示最近外交原因。收起后布局立即回收顶部空间并扩大地图；开关仅存于 `MapRenderer`，重开游戏保持当前 UI 偏好但不进入存档。国家详情单帧 payload 只构建一次，再分发给各详情卡，避免同帧重复拼装相同数据。
 
 ### 4.11 全国人口与自动补员
 
@@ -296,9 +296,10 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 
 - **WorldNaming**：城市使用战役内唯一的中文全称，并各自持有单字 `region_symbol`。初始主权国及藩王升格后的主权身份严格取不可变 `founding_city_id` 对应的地域字，迁都和同名碰撞都不得改换建国锚点。藩王显示名按当前直属陆城数变化：不足 5 城为“首府全称王”，达到 5 城为“首府地域单字王”。全部抽取只依赖显式 seed、实体 ID 与稳定哈希，不推进 `GameState.rng`。
 - **RulerProfile**：每国确定性生成姓名、1 个原型和最多 2 个不重复特质；9 种原型为持衡者、征服者、守成者、庸主、暴君、商君、改革者、纵横家、营造者，12 项特质覆盖雄心、谨慎、魅力、节俭、勤政、粮秣、尚武、筑城、商贸、集权、分封与严酷，且集权/分封互斥。原型和特质共同派生外交、生产、维护、军粮、士气、防御、分封/集权、贸易与忠诚修正，守成者、庸主和纵横家禁止主动攻势。
-- **城市忠诚与叛乱**：`City.loyalty` 为 `0～100` 真源，认同对象另存于 `loyalty_target_nation`；每 30 天从同一月初快照结算，单月变化封顶 `±5`，驻军、首都距离、异族统治、战乱、欠饷、邻城、贡赋及君主共同影响目标值。非首都陆城忠诚 `≤25` 连续 3 个月后，按正容量道路和共同认同目标组成叛乱区；同目标仍存活则优先归附/复国且不新建 Nation，否则创建地方叛军。成功归附、起事或镇压后使用 720 天冷却；藩王低忠诚还需满足军力比后才进入内战。
+- **城市忠诚与叛乱**：`City.loyalty` 为 `0～100` 真源，认同对象另存于 `loyalty_target_nation`；每 30 天从同一月初快照结算，单月变化封顶 `±5`，驻军、首都距离、异族统治、战乱、欠饷、邻城、贡赋及君主共同影响目标值。行政半径改为基于首都 hops 的统一公式：soft 区间基准为 `55`，`INEPT` 君主按 `4` 跳、`balanced` 按 `7` 跳、`strong centralizer` 在集权值 `>=7` 时提高可承受半径；不可达飞地视为高治理压力。分封/直辖评估与忠诚结算共享同一份 `capital hops` BFS，避免同月重复扫描。非首都陆城忠诚 `≤25` 连续 3 个月后，按正容量道路和共同认同目标组成叛乱区；同目标仍存活则优先归附/复国且不新建 Nation，否则创建地方叛军。成功归附、起事或镇压后使用 720 天冷却；藩王低忠诚还需满足军力比后才进入内战。
 - **真实内战首都结算**：削藩内战中任一方实际攻陷对方首都即触发通吃；宗主攻陷藩王首都会兼并藩王全境，反叛藩王攻陷宗主首都会继承宗主全境与其余藩属并升格主权国。首都攻占与整国兼并由同一份虚拟领土/宗藩快照一次提交，首都库存仍只按 `CAPTURE_SPOILS=30%` 进入胜方粮池；不能先做普通单城占领再判断内战身份。
 - **TradeNetwork**：由当前图、外交、围城/占边、国家政策与君主修正纯派生国内和国际路线；路线状态为 `ACTIVE / REROUTED / BLOCKED`，战争或通道阻断会改道或停运。贸易税在端点及过境城市间守恒分配，粮食进出口量与对应金钱支付分别严格守恒；`Simulation` 只在月结应用一次并发布 `GameState.trade_routes/trade_revision` 及城市/国家摘要。前端提供地形、混合、政治、忠诚、贸易五种模式；忠诚模式按城市忠诚覆色，贸易模式突出金色/青色正常路线、橙色改道和红色虚线阻断路线。
+- **粮仓与粮食面板**：setup 即发布首份真实“月产/月需/月净”估算，并同步首份 `trade snapshot`；粮仓面板显示当前库存、预计月产、预计月需、预计月净以及贸易净流；值为 `0` 时不显示 `+0/-0`。粮食月产累计合并回既有城市循环，不另起第二套按城遍历。
 - **MapDefinition v2**：地图模板持久化国家建国城/名称、君主档案、贸易政策，以及城市全称/地域字/初始忠诚目标；主动叛乱、忠诚趋势/进度/冷却和贸易路线/结算摘要属于战役瞬态，禁止写入模板。加载仍接受 v1，并用 seed 确定性补齐新增字段；未知未来版本和不合法 v2 身份数据直接拒绝。
 
 ### 4.13 原子领土与集团和平事务
@@ -313,7 +314,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 
 ## 5. 天推进主循环（[simulation.gd](scripts/core/simulation.gd) `_advance_day`）—— 天/月分层（第七轮）
 
-实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城、补给与非战斗士气恢复每天推进；经济生产和补员每 30 天结算。粮食需求先通过小数债按日累计，满整粮后由确定性粮仓顺序严格实扣；扣取函数返回实际扣除量，库存不足时所有调用方只按实扣量转存或计供给，禁止按请求值记账、重复扣除或凭空补足。断粮后果同样每日滚动施加。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
+实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城、补给与非战斗士气恢复每天推进；经济生产和补员每 30 天结算。粮食需求先通过小数债按日累计，满整粮后由确定性粮仓顺序严格实扣；日常补给、围城扣粮与其他库存变更统一经 O(1) 库存 helper `change_city_food_storage()` 同步维护 `nation.granary_food` 汇总，所有调用方都只能按实际扣改量记账，禁止按请求值记账、重复扣除或凭空补足。断粮后果同样每日滚动施加。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
 
 ```
 state.day += 1;  state.month = state.day / 30       # month 为派生显示量
@@ -356,7 +357,7 @@ if state.day % 30 == 0:                              # 每月结算块
 
 每个围城日开始，`_reconcile_siege_city_defenders` 都会重新收集目标城内尚未参战的 `IDLE/RECOVERING` 本国守军。任何守军都会先把围城切回战斗阶段；守城或解围战期间，`siege_progress` 每天回退 `0.25` 点，守军被击败前不得继续推进或占领。
 
-**粮食/饥饿（首都粮仓 + 可扩展多粮仓）**：军队每天从本国及盟国全部可达粮仓取粮；路线、兵力与共享库存竞争每天重算。月需求仍为 `size×FOOD_PER_CAPITA×(1+加权route_loss)`，除以 30 累积进 `supply_food_debt`，满整粮才扣库存，因此 30 天总耗与旧月口径一致。
+**粮食/饥饿（首都粮仓 + 可扩展多粮仓）**：军队每天从本国及盟国全部可达粮仓取粮；路线、兵力与共享库存竞争每天重算。月需求仍为 `size×FOOD_PER_CAPITA×(1+加权route_loss)`，除以 30 累积进 `supply_food_debt`，满整粮才扣库存，因此 30 天总耗与旧月口径一致。setup 阶段就会发布首份真实月产/需/净估算并同步首份 `trade snapshot`；日常补给与围城都通过 O(1) 库存 helper `change_city_food_storage()` 维护城市库存与国家粮仓汇总的一致性，不再依赖后续全量重扫来“补正”。
 **首都失守**：旧首都粮仓注销，库存 30% 汇入胜方首都、70% 损毁；败方若仍有城市，选择防御最高（同防御按势力局部物理序）的城市迁都并建立空粮仓，无城则不迁都。
 **R3 补给孤岛**：被围城切断外部粮仓连接。若被围城市本身是有粮仓，则守军使用本地库存且由 `_drain_siege_food` 每日扣 1；普通城市无本地库存，被围后立即断供。粮尽后守军城防加成 ×`SIEGE_STARVE_DEF_MULT=0.3`。
 
@@ -496,13 +497,14 @@ if state.day % 30 == 0:                              # 每月结算块
 
 - **改战斗平衡** → 只动 [combat.gd](scripts/core/combat.gd) 顶部常量（伤害 `K_ROUND`/`DEF_REF`；士气 `MORALE_*`/`MIN_COMBAT_EFFICIENCY`/`SIDE_ROUT_THRESHOLD`；正面 `*_FRONTAGE`；地形 `CHOKEPOINT_*`；围城 `FORT_MANPOWER_PER_POINT`/`SIEGE_RATIO_STALL`/`SIEGE_DAYS_BASE/MIN/DECAY`/`SIEGE_STARVE_DEF_MULT`），跑 `./run_tests.sh` 确认不破坏断言。
 - **改行军时长/边距** → 边距唯一换算在 `TerrainMapGenerator.distance_units_for_metric_length()`，三类边均由端点几何长度生成；普通陆路基础值在 `march_days(distance)` 且不设长距离上限，实际时间唯一真源是 `edge_travel_days(edge)`。修改比例或特殊边倍率时同步 Pathfinding、ThreatField、Utility AI 和河运测试。
-- **改粮仓机制** → 首都/粮仓登记真源在 `Nation.capital_city_id/warehouse_city_ids`，库存真源在粮仓城市 `food_storage`；禁止重新让普通城市库存参与补给。
+- **改粮仓机制** → 首都/粮仓登记真源在 `Nation.capital_city_id/warehouse_city_ids`，库存真源在粮仓城市 `food_storage`；setup 必须能立即发布首份真实月产/需/净估算并同步首份 `trade snapshot`，日常补给/围城等库存变更必须统一走 O(1) 库存 helper `change_city_food_storage()` 维护 `nation.granary_food` 汇总，禁止重新让普通城市库存参与补给或回退到靠全量重扫修正汇总。
 - **改领土、兼并或集团和平** → 只能扩展 `apply_territory_transaction()` 的 phase-1 规划与 phase-2 单次提交；同城 operation 先合并，兼并复用 `append_annexation_to_territory_plan()` 与成功后的 `finalize_annexation_after_territory_commit()`。禁止逐城提交、预先拆首都/粮仓、在跨集团国家对循环中刷新，或在事务成功前修改军队、叛乱记录与战争目标。
 - **改库存扣取/转移** → `_withdraw_food_from_warehouses()` 返回实际扣除量；调用方只能按该返回值入账。多粮仓按确定性顺序严格扣到 `min(requested, available)`，不得按请求值预记、逐仓比例取整造成短扣，或在领土库存策略已结算后重复扣同一库存。
 - **改补给损耗** → 全局参数为 `Pathfinding.SUPPLY_DISTANCE_LOSS/SUPPLY_DANGER_MULT`，特殊边再乘 `Edge.supply_loss_multiplier`；保持边损耗非负可加。
 - **改战后恢复** → `RECOVERY_FOOD_PER_CAPITA` 决定基础需求，运输损耗与普通补给共用；必须同步 [22]，并保持 `RECOVERING` 不进入普通补给计划。
 - **改军队拆分或数量上限** → 拆分只允许静止军并要求 `sum(size)`、`sum(max_size)` 守恒；子军继承攻防、士气、补给和战役目标。建军与拆分都必须经过 `GameState.max_army_count`。
 - **改补给士气联动** → 路线、共享库存竞争、实际扣粮和 `supply_ratio` 每日重算；`supply_food_debt` 保持 30 天总耗量纲，`supply_debt` 保持减员整人化。拆分/合并必须守恒两类债；同步 [23]/[23b]/[38]。
+- **改守军索引** → `build_garrison_index()` 必须保留上界 guard，防止异常输入把索引构建放大成失控扫描；任何优化都不能去掉这个保护再赌调用方永远合法。
 - **改边地形** → 只动 `danger` 与 Combat 的 `ATTACK_DANGER_K/DEFENSE_DANGER_K/HOLDING_TAU_DAYS/CHOKEPOINT_*`；禁止增加关隘第二真源。关隘惩罚只有敌军实际驻边时才能进入 AI 进攻战力折算。
 - **改道路容量** → `Edge.max_manpower` 同时表示每国每方向的运输吞吐与野战正面；路径最低准入只看 `Army.ROAD_PACKET_SIZE=5000`，完整编制按 `ceil(max_size / 道路容量)` 批运输。修改时必须同步执行期、两阶段首段预留、军队寻路/撤退、ThreatField、行军 ETA、战略价值和渲染映射，禁止重新把 `max_size` 当硬准入门槛。
 - **改 AI** → 普通战术候选在 [utility_ai.gd](scripts/ai/utility_ai.gd)，城市防御需求和驻城/驻边姿态在 [city_defense_plan.gd](scripts/ai/city_defense_plan.gd)，战略价值在 [strategic_map.gd](scripts/ai/strategic_map.gd)，威胁窗口在 [threat_field.gd](scripts/ai/threat_field.gd)。修改后运行 `./run_tests.sh`、AI 长跑与严格镜像基准。
@@ -581,134 +583,103 @@ AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users
 
 ---
 
-## 9. 战争态性能收敛（2026-08-08 本次会话，接手必读）
+## 9. 战争态性能收敛（2026-08-23，本轮收口后）
 
-> 目标：8x+ 速度下"看海"丝滑，终局要撑 100 国 / 500 城规模。本次会话把战争态的周期性卡顿从"每十日一顿"压到"基本无感"，并留下清晰的下一步。**所有优化都必须先测再改、且不破坏确定性与 1208 项回归。**
+> 目标：在不破坏确定性和长跑收敛的前提下，把 40 国/160 城与 80 国/500 城压力场景的 AI 主耗时继续压缩，并把所有结构性优化纳入默认快链等价门禁。当前口径以 **19 阶段完整 `run_tests.sh` exit 0、1503/1503 逻辑回归、专项数字见 §9.3、365 天长跑 exit 0** 为准。
 
-### 9.1 本次做了什么（12 个 commit，HEAD=`0710398`）
+### 9.1 本轮底层优化（结构已落地）
 
-按依赖顺序（`git log` 可查）：
-
-| commit | 一句话 |
-|---|---|
-| `265c81b` | food_posture 邻居扫描 O(N×E)→O(E) |
-| `600e512` | war-preparation 结盟路径漏传 eval cache 修复 |
-| `6138e16` | MAX_CONCURRENT_WARS 放到 3，打破强制和平期 |
-| `0aa7867` | AI 只读上下文放 worker 线程构建（消除十日一卡的主因之一） |
-| `3f14660` | 参数化城市数，新增 500 城压力场景入口 |
-| `d076538` | `_frontier_edges` 预计算矩阵，O(E) 单遍替代逐对扫描（+25% 吞吐） |
-| `b8c6ea1` | garrison index + 补给网络指纹缓存（跨天复用） |
-| `fcde9b5` | **补给结算分帧**（消除 >100ms 战争 stall） |
-| `825e50a` | **月度补员分帧**（决策日峰值腰斩） |
-| `4abe577` | **投降迁都到最大连通分量**（飞地割让，保证地图物理连续） |
-| `7f38cb8` | 填线告急分帧 + 每扇区围城扫描收成 O(1) |
-| `9ef9d08` | **军队渲染改墙钟时间线性插值**（根治多帧 tick 下的军队顿挫） |
-| `6a34b2d` | **AI 决策错峰**（把每 10 天的计算尖峰均摊到每天） |
-| `0710398` | 错峰平衡性 A/B 开关 + 验证不导致一边倒 |
-
-四类核心手法（都是"长期正确"的结构性改动，非临时补丁）：
-
-1. **分帧（frame-slicing）**：把单帧内的重结算拆到多个渲染帧。模式见 §9.4。已覆盖 supply / reinforcement / line-edge。
-2. **跨天增量缓存**：补给网络按依赖指纹选择性失效（跨天复用率 82.8%）；garrison index 每 tick O(A) 预建供 O(1) 查询。
-3. **AI 决策错峰**：40 国按 `posmod(id, interval)` 分散到决策周期的不同天，每国仍每周期决策一次，但算力摊平。见 §9.3。
-4. **渲染墙钟插值**：军队位置按真实流逝时间线性插值，与"一个 tick 的计算跨了几帧"完全解耦。见 §9.5。
+- **贸易结构/结算拆层**：把贸易结构派生与月度结算拆为独立层，结构缓存只服务路网与候选集，结算层只消费稳定结构快照，避免月结重复重建整图。
+- **exact-token 两层预测缓存**：贸易预测改为“结构 fingerprint + exact token”双层缓存；粗层先判结构等价，细层再以 exact token 保证逐字节命中，不让国家状态微差错复用旧预测。
+- **月结/外交共享**：月结与外交评估共享可复用结构视图和国家级派生，减少同 tick 内同一国家重复做贸易/外交基础扫描。
+- **国际候选 BFS 预筛**：国际贸易候选先做 BFS 连通预筛，再进入昂贵的详细评估，避免对物理上不连通的国家对重复计算。
+- **行军 O(1) 有向容量索引**：把边方向容量查询改成 tick 内预建索引，移动提交和可达性校验都走 O(1) 查表，不再在热点路径里回扫军队。
+- **tick-scope 包围索引**：包围/围城相关查询改成当日 evaluation cache 内索引化，单 tick 内复用，同步替代原先多处按城市和军队交叉扫描。
+- **守军索引一次聚合**：守军查询改为每轮先做一次全军聚合索引，再按城市/战场读取，替代旧的“按 attacker 逐次扫描全部军队”。这里不能把“非接壤联盟”当成可安全剪枝条件，因为远交与联盟通行语义允许远端盟友继续参与守军与可达性判断。
 
 ### 9.2 验证过的性能数据（当前 HEAD，非记忆）
 
-`tests/tick_compute_budget_probe.gd` 实测（40 国 / 160 城 / 365 天，8x 视觉预算 = **125ms/tick**）：
+40 国 / 160 城 / 60 天基准：
 
 ```
-每日tick 纯计算: 峰值=749.9ms(第240天) 均值=89.0ms
-超视觉预算的天数: 27/365 (7.4%)，其中月结算日 12 天
-峰值/预算 = 6.00x   均值/预算 = 0.71x
+total: 71281.97ms -> 6047.59ms (-91.5%)
+avg: 1188.03ms -> 100.79ms
+ordinary: 861.47ms -> 63.49ms
+warm AI: 3938.35ms -> 276.26ms
+monthly: 10066.30ms -> 700.80ms
+peak: 18240.21ms -> 1050.78ms
 ```
 
-解读（诚实标注）：
-- **均值 0.71x 预算**：绝大多数天计算追得上播放，这是"基本丝滑"的根因。错峰前决策日均值曾达 2.47x。
-- **峰值仍 6.00x（749.9ms，第 240 天）**：这是**月结算日叠加外交/战役全量重算**的极端天，不是每日常态。7.4% 超预算天里 12 天是月结算日（`day%30==0`），其余多为外交事件 `force_all` 触发的全量重算。**这是剩余顿挫的唯一来源**，见 §9.6。
-- 用户实机确认：宣战后左上角日期计数不再卡；军队移动在错峰+墙钟插值后"顺畅不少"。
+最新补充口径是最终树 `war_tick_phase_probe`（40 国 / 160 城 / 60 天）：
 
-错峰平衡性 A/B（`tests/stagger_balance_ab.gd`，40 国 /160 城 /1200 天 /3 种子）：
+```text
+exit 0, wall 18.86s, no SCRIPT ERROR
+和平日 59 天: total avg 73.96ms, peak 513.73ms, AI 42.23ms (57.1%), monthly 4.71ms
+战争日 1 天: total 1066.63ms, AI 761.22ms (71.4%), snapshot 605.56ms, monthly 271.54ms
+外交: choose 117.24ms, war 111.97ms
 ```
-错峰ON : 存活国均值=35.7 最大国占比=0.077 HHI=0.0355
-错峰OFF: 存活国均值=35.7 最大国占比=0.084 HHI=0.0362
-verdict=STAGGER_BALANCE_OK
+
+说明：这里是最新最终树口径；上面的旧基准仍保留作更细历史对照，不反推 probe 未提供的其它缺失字段。
+
+500 城 / 80 国 / 20 天 simulation 基准：
+
 ```
-结论：**错峰不导致局势一边倒**。机制上：决策只设定目标，移动/战斗仍同帧解算，1 天的相位差在各战线对称，不产生系统性偏置。
+simulation total: 206989.5ms -> 11800.3ms (-94.3%)
+AI avg: 13300.0ms -> 4018.6ms
+AI peak: 16293.4ms -> 7843.0ms
+```
 
-### 9.3 AI 决策错峰（`_ai_nation_ids_for_day`，[simulation.gd:3201](file:///Users/bytedance/world-war/scripts/core/simulation.gd)）
+解读：
+- 40 国场景的收益已经不是单点热函数削尖峰，而是整条月结、外交、贸易和行军热点链条一起变薄；`monthly` 和 `warm AI` 同步下降，说明共享层与 exact-token 缓存都在生效。
+- 500 城/80 国仍然保留高绝对耗时，但总时长已降到原来的 5.7%，AI 均值与峰值都明显收缩，证明国际候选 BFS 预筛和 O(1) 行军索引在大图上同样成立。
 
-- 40 国按 `posmod(nation_id, interval)` 分相位；`day` 落在哪个相位，当天就只重算那批国家。每国仍每 `interval` 天决策一次，总决策次数不变，只是摊平。
-- **镜像安全退化**：`nation_count <= interval`（2 国镜像夹具）或 `force_all`（外交事件）时退化为整批同步——否则破坏 strict-mirror 的 `advantage=0.0`。
-- 开关：`ai_staggered_decisions`（**生产默认 `true`**）。A/B 只需翻这个 flag，同一运行时路径对比，零逻辑分叉。
-- `_advance_day` 的 `ai_decision_due` 门控同步走 `_ai_nation_ids_for_day(..., force_all=true)` 判"今天是否有国家要决策"。
+### 9.3 等价门禁与专项结果
 
-### 9.4 分帧模式（复制这个模式做下一处优化）
+- 默认快链现已纳入 8 个 headless 快速专项门禁：`trade_structure_cache_equivalence.gd`、`trade_connectivity_prefilter_equivalence.gd`、`trade_forecast_cache_equivalence.gd`、`movement_capacity_index_equivalence.gd`、`encirclement_index_equivalence.gd`、`loyalty_admin_radius_equivalence.gd`、`granary_snapshot_equivalence.gd`、`defender_index_equivalence.gd`。
+- 已确认的专项结果：
+  - `trade_structure` **56 checks**。
+  - `trade_connectivity` **89 checks**。
+  - `trade_forecast` **78 checks**。
+  - `movement` **36 ticks / 0 diff**。
+  - `encirclement` **572** 条检查通过。
+  - `diplomacy` 长 A/B 为**手动门禁**，365 天 state/action **0 diff**；因耗时较长，不并入默认 `run_tests.sh`。
+  - `loyalty` **13 checks**。
+  - `food` **39 checks**。
+  - `defender` **855 checks**。
+  - `nation detail single build` 独立专项 **11 checks**；若后续并入默认链，需要同步刷新 §1 的阶段数与本节记录。
+- 最终树 19 阶段 `./run_tests.sh` 已 `exit 0` 全通过；`tests/test_suite.gd` 为 **1503/1503**，专项数字如上更新。本次完整链 wall time **未记录**，因此这里不沿用旧的 `331.42s`。
 
-**唯一正确的分帧姿势**（避免逻辑重复、避免破坏测试同步路径）：
+### 9.4 长跑与回归基准
 
-1. 保留同步驱动 `_resolve_xxx()`（测试 / 快进 / 批量仿真走它，`_advance_day(false)`）。
-2. 新增异步驱动 `_resolve_xxx_over_frames()`，与同步版**共享所有纯函数 helper**（只有 loop 外壳不同）。
-3. 运行时路径 `_advance_day(true)` 在 `spread_runtime_work=true` 时 `await` 分帧版；预算 `AI_RUNTIME_SLICE_BUDGET_USEC=6000`（6ms），超预算就 `await get_tree().process_frame`。
-4. **隔离开关**：每处分帧配一个 `*_frame_slicing_disabled` flag，供等价性守护做 A/B。
+- 365 天活跃固定 `seed=12345` 长跑已通过，退出码 `0`，`total_ms=33323`；摘要为 `wars=1`、`offensives=8`、`multi_prep=2`、`max_parallel=7`、`orders=354`。
+- 核心硬指标：
+  - `territory_invalid=0@-1`
+  - `commit_failures=0`
+  - `finance_invalid=0`
+  - `force_mismatches=0/0`
+  - `hostile_stationed=0`
 
-**已有的分帧点**：`_resolve_supply` / `_resolve_reinforcements` / `_resolve_line_edge_assignment_emergencies`，均在 [simulation.gd](file:///Users/bytedance/world-war/scripts/core/simulation.gd) 各有 `_over_frames` 孪生。
+### 9.5 维护约束（后续改动必须守）
 
-### 9.5 渲染墙钟插值（[map_renderer.gd](file:///Users/bytedance/world-war/scripts/view/map_renderer.gd)，坑最深，改前必读）
+- **新增任何影响贸易结构或预测结果的字段**，必须同时更新对应的 structure fingerprint / exact token；只改其一会制造“命中但不等价”的脏缓存。
+- **`EncirclementIndex` 只允许存在于 tick-scope `evaluation_cache`**。禁止跨 tick 持久化，否则会把前一日军队位置、围城状态和外交边关系带入下一日。
+- **行军容量索引必须在阶段末清空**。它只对当前 tick 的有向容量快照负责，不能跨阶段或跨日复用。
 
-- **根因**：分帧后一个 tick 的计算跨越多个渲染帧，`runtime_day_in_progress()` 守卫会冻结旧的"指数追踪"插值目标 → 军队定格 → 顿挫。
-- **修复**：`_army_position` 改为 `prev.lerp(curr, smoothstep(0,1, _tick_elapsed/_tick_duration))`；`_advance_tick_interpolation` 每帧累加 `_tick_elapsed += delta`，**不被 `runtime_day_in_progress` 阻断**（这是关键）。`_sync_snapshots` 在 commit 时把 `_tick_duration` 平滑到 `max(measured_interval, seconds_per_day)`、`_tick_elapsed=0`。
-- **红线**：渲染插值必须基于墙钟（wall-clock），绝不能依赖"计算了几帧"。这是本项目 memory 里的硬约束。
-
-### 9.6 剩余优化路线图（按 ROI 排序，交给你）
-
-**P0 — `_advance_priority_city_defense_echelons`（[simulation.gd:6066](file:///Users/bytedance/world-war/scripts/core/simulation.gd#L6066-L6176)），峰值 ~17.7ms/day**
-- 每日对告急的重点被围城重建 `ThreatField.build` + `CityDefensePlan.build`。
-- **不能跨天缓存**：ThreatField 依赖每日移动的敌军位置。**只能分帧**（按 §9.4 模式）。
-- 附带 O(S×A) 隐患：第 6139 行 `for army in state.armies` 对每个告急围城全军扫描。国家越多、围城越多越糟。可用 §9.1 的 garrison/nation 索引收成局部扫描。
-
-**P1 — 月结算日 / 外交事件 `force_all` 尖峰（峰值 749.9ms 的来源）**
-- 月结算日（`day%30==0`）经济 + 补员叠加；外交宣战/议和触发全量重算。
-- 思路：外交事件的 `force_all` 目前重算**全部 40 国**，实际只有涉事国 + 其邻国的战略图需要失效。做**局部失效**（involved nations + neighbors）能把偶发 700ms 尖峰砍掉大半。这是当前唯一可感知顿挫的根，**ROI 最高的单点**。
-
-**P2 — 大函数复杂度债（可维护性，非性能）**
-`find_large_functions` 报告的生产热点（测试文件不算）：
-- `_ensure_campaign_preparation_plan` 428 行 · `_assign_offensive_staging_orders` 421 · `_ai_assign_targets` 420 · `_manage_campaign_offensive` 244 · `_launch_campaign_offensive` 228（均在 simulation.gd）
-- `combat.gd::resolve_round` 323 · `utility_ai.gd::_attack_candidate` 214
-- 这些不是性能瓶颈（`_detect_encounters` 已确认是 O(A) 边桶，非 O(A²)），但拆分能降低后续改动的熵。**动它们前务必有等价性守护**（见 §9.7）。
-
-**P3 — 规模化（终局目标）**
-- 500 城下 `CityDefensePlan.build` 曾测得 ~37s 级别（历史 backlog），是 100 国 / 500 城的主要拦路虎。入口已备好：`tests/ai_40_nation_stress.gd`、`generate_world(seed, nations, cities)` 参数化。
-- **禁忌**：`CityDefensePlan` 会写 Army Assignment 与 Nation 防区，**不得放回 WorkerThreadPool 并发**（曾触发 Godot 原生非法释放崩溃）。批量路径串行、实时路径逐国跨帧。
-
-### 9.7 等价性守护纪律（本次会话最重要的方法论，务必延续）
-
-**镜像测试查不出对称性错误**——两侧同时算错，`advantage` 仍是 0。所以每个性能改动都配了**逐字节等价守护**（old-vs-new 在**同一运行时路径**上对比）：
-
-- `tests/supply_network_cache_equivalence.gd` · `tests/supply_frame_slice_equivalence.gd` · `tests/reinforcement_frame_slice_equivalence.gd` · `tests/line_edge_frame_slice_equivalence.gd` · `tests/frontier_matrix_equivalence.gd`
-- **关键教训**：初版守护误用"同步路径 vs 运行时路径"做基线 → 有 4 支军队（296/313/436/498）在 `state` 字段上分歧。排查证明这是 AI/外交分帧导致的**同步 vs 运行时既有差异**，非本次改动引入。**正确姿势**：两个世界都跑运行时路径，baseline 世界把待测 flag（如 `supply_frame_slicing_disabled=true`）钉死 → 零分歧。**隔离单一变量、同路径对比。**
-
-### 9.8 性能工具箱（复现命令）
+### 9.6 性能工具箱（复现命令）
 
 ```bash
 GODOT=/Users/bytedance/Godot.app/Contents/MacOS/Godot
 
-# 每日纯计算 vs 视觉预算（判断计算是否追得上播放；可调 COMPUTE_NATIONS/CITIES/DAYS/SPEED）
-$GODOT --headless --path . --script res://tests/tick_compute_budget_probe.gd
+# 默认快链
+./run_tests.sh
 
-# 运行时路径真实逐帧 stall 探针
-$GODOT --headless --path . --script res://tests/ai_runtime_stutter_probe.gd
-
-# 错峰平衡性 A/B（HHI / 存活国 / 最大国占比）
-$GODOT --headless --path . --script res://tests/stagger_balance_ab.gd
-
-# 分帧/缓存等价性守护（四选一，改对应逻辑后必跑）
-$GODOT --headless --path . --script res://tests/supply_frame_slice_equivalence.gd
+# 手动 diplomacy 长 A/B（不入默认快链）
+$GODOT --headless --path . --script res://tests/diplomacy_structure_cache_equivalence.gd
 ```
 
-### 9.9 一句话给下一个 agent
+### 9.7 一句话给下一个 agent
 
-现状：**均值 0.71x 预算、战争态基本丝滑、1208 测试全绿、3650 天镜像 `advantage=0.0`**。想再进一步，先啃 §9.6 的 **P1（外交事件局部失效）**——那是唯一还能感知的偶发 700ms 尖峰的根，ROI 最高。动手前先跑 §9.8 的 probe 拿基线数字，改完用 §9.7 的等价守护证明没破坏确定性。**先测再改，别凭感觉优化。**
+现状：贸易、外交共享、行军与包围索引这轮优化已经收口，默认快链现记录为 8 个快速专项门禁；本轮新增粮仓生命周期改动后，`food` 专项已更新到 **39 checks**，并补充了 setup 首份真实产/需/净估算、同步 `trade snapshot`、`change_city_food_storage()` 的 O(1) helper 汇总维护以及 `build_garrison_index()` 上界 guard。最终树 19 阶段整链现已全通过，`trade_forecast` 为 setup 后 baseline 增量断言 `78 checks`，`nation detail single build` 为 `11 checks`；继续改贸易或 evaluation cache 前，先守住 §9.5 的三条维护约束，再补对应等价门禁。
 
 ---
 

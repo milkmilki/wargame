@@ -17,8 +17,19 @@ const REBELLION_COOLDOWN_DAYS: int = 720
 
 const FOREIGN_RULE_PENALTY: float = 45.0
 const CAPITAL_BONUS: float = 10.0
-const DISTANCE_PENALTY_PER_HOP: float = 2.0
-const DISTANCE_PENALTY_MAX: float = 20.0
+const LOYALTY_SOFT_STABILITY_THRESHOLD: float = 55.0
+const ADMIN_RADIUS_BASE: float = 6.1
+const ADMIN_RADIUS_LOYALTY_SCALE: float = 5.0
+const ADMIN_RADIUS_CENTRALIZE_SCALE: float = 2.0
+const DISTANCE_BASE_PENALTY_PER_HOP: float = 2.0
+const DISTANCE_BASE_PENALTY_MAX: float = 20.0
+const DISTANCE_PENALTY_PER_HOP: float = 6.0
+const DISTANCE_PENALTY_MAX: float = 36.0
+const UNREACHABLE_DISTANCE_EXCESS_FLOOR: float = (
+	float(DISTANCE_PENALTY_MAX) / DISTANCE_PENALTY_PER_HOP
+)
+const FLAT_LOYALTY_SCALE: float = 15.0
+const UPKEEP_PRESSURE_SCALE: float = 35.0
 const WAR_ZONE_PENALTY: float = 10.0
 const WAR_DISRUPTION_PENALTY: float = 10.0
 const UNPAID_MILITARY_PENALTY_MAX: float = 20.0
@@ -93,6 +104,108 @@ static func _garrison_manpower_by_city(state: GameState) -> Dictionary:
 	return result
 
 
+## 君主可稳定直辖领土的行政半径。忠诚代表基层认同与执行力，
+## 集权代表命令链条的可延展性；两者都只通过 RulerProfile 统一派生。
+static func administrative_radius(
+	profile_or_nation: Variant,
+	traits: Array = []
+) -> float:
+	var loyalty_multiplier := RulerProfile.loyalty_multiplier(
+		profile_or_nation,
+		traits
+	)
+	var centralize_multiplier := RulerProfile.centralize_multiplier(
+		profile_or_nation,
+		traits
+	)
+	return maxf(
+		1.0,
+		ADMIN_RADIUS_BASE
+			+ (loyalty_multiplier - 1.0) * ADMIN_RADIUS_LOYALTY_SCALE
+			+ (
+				centralize_multiplier - 1.0
+			) * ADMIN_RADIUS_CENTRALIZE_SCALE
+	)
+
+
+## 行政半径之外的“超距”量。不可达飞地统一视作最高治理摩擦，
+## 供忠诚扣分与分封治理压力复用同一语义。
+static func administrative_distance_excess(
+	hop_count: int,
+	admin_radius: float
+) -> float:
+	if hop_count < 0:
+		return maxf(
+			admin_radius + 1.0,
+			UNREACHABLE_DISTANCE_EXCESS_FLOOR
+		)
+	return maxf(float(hop_count) - admin_radius, 0.0)
+
+
+## 距首都 hop_count 跳时，超出行政半径造成的稳定惩罚。
+## 半径内不扣分；超半径后按每整跳阶梯递增，避免分数在半径边界抖动。
+static func administrative_distance_penalty(
+	hop_count: int,
+	admin_radius: float
+) -> float:
+	if hop_count < 0:
+		return DISTANCE_PENALTY_MAX
+	if hop_count == 0:
+		return 0.0
+	var base_penalty := minf(
+		float(maxi(hop_count - 1, 0)) * DISTANCE_BASE_PENALTY_PER_HOP,
+		DISTANCE_BASE_PENALTY_MAX
+	)
+	var over_radius := administrative_distance_excess(
+		hop_count,
+		admin_radius
+	)
+	return minf(
+		base_penalty + ceilf(over_radius) * DISTANCE_PENALTY_PER_HOP,
+		DISTANCE_PENALTY_MAX
+	)
+
+
+## 给定 ruler 与当前平面忠诚修正后，离首都多少跳仍处于“够稳定”区。
+## 该阈值只服务于 AI 和解释，不改变叛乱硬阈值与月度步长。
+static func administrative_soft_stability_hops(
+	profile_or_nation: Variant,
+	soft_threshold: float = LOYALTY_SOFT_STABILITY_THRESHOLD,
+	traits: Array = []
+) -> float:
+	var loyalty_multiplier := RulerProfile.loyalty_multiplier(
+		profile_or_nation,
+		traits
+	)
+	var flat_loyalty_bonus := (
+		(loyalty_multiplier - 1.0) * FLAT_LOYALTY_SCALE
+	)
+	var upkeep_pressure := maxf(
+		RulerProfile.upkeep_multiplier(profile_or_nation, traits) - 1.0,
+		0.0
+	) * UPKEEP_PRESSURE_SCALE
+	var admin_radius := administrative_radius(
+		profile_or_nation,
+		traits
+	)
+	var base_value := (
+		LOYALTY_DEFAULT
+		+ flat_loyalty_bonus
+		- upkeep_pressure
+	)
+	if base_value < soft_threshold:
+		return 0.0
+	var hop_count := 0
+	while administrative_distance_penalty(
+		hop_count + 1,
+		admin_radius
+	) <= base_value - soft_threshold:
+		hop_count += 1
+		if hop_count > 1024:
+			break
+	return float(hop_count)
+
+
 ## 城市的长期忠诚目标。返回值是纯快照，不改写 City。
 ## capital_hops 可注入同一 owner 的 BFS 结果；传空字典时本函数自行计算。
 static func loyalty_target(
@@ -120,6 +233,7 @@ static func loyalty_target(
 		}
 
 	var reasons: Array[String] = ["baseline"]
+	var reason_details: Array[String] = ["baseline"]
 	var value: float = LOYALTY_DEFAULT
 	var target_nation: int = _city_target_nation(state, city_id)
 	# 法理与实控不一致时 target 默认取法理国；显式政治目标也走同一分项，
@@ -127,11 +241,15 @@ static func loyalty_target(
 	if target_nation != owner_id:
 		value -= FOREIGN_RULE_PENALTY
 		reasons.append("foreign_rule")
+		reason_details.append(
+			"foreign_rule -%.0f" % FOREIGN_RULE_PENALTY
+		)
 
 	var capital_id: int = state.nations[owner_id].capital_city_id
 	if city_id == capital_id:
 		value += CAPITAL_BONUS
 		reasons.append("capital")
+		reason_details.append("capital +%.0f" % CAPITAL_BONUS)
 
 	# The public empty default falls back to the authoritative road graph. The
 	# monthly helper tags an explicitly supplied (possibly empty) owner cache.
@@ -139,23 +257,52 @@ static func loyalty_target(
 	var cache_present: bool = bool(hops.get(_CACHE_PRESENT_KEY, false))
 	if not cache_present and hops.is_empty():
 		hops = RebellionSystem.capital_hops(state, owner_id)
+	var hop_count := -1
+	var admin_radius := administrative_radius(
+		state.nations[owner_id]
+	)
 	var distance_penalty: float = DISTANCE_PENALTY_MAX
 	if hops.has(city_id):
-		var hop_count: int = maxi(int(hops[city_id]), 0)
-		distance_penalty = minf(
-			float(maxi(hop_count - 1, 0)) * DISTANCE_PENALTY_PER_HOP,
-			DISTANCE_PENALTY_MAX
-		)
+		hop_count = maxi(int(hops[city_id]), 0)
+	distance_penalty = administrative_distance_penalty(
+		hop_count,
+		admin_radius
+	)
 	value -= distance_penalty
 	if distance_penalty > 0.0:
 		reasons.append("distance")
+		var distance_excess := administrative_distance_excess(
+			hop_count,
+			admin_radius
+		)
+		if hop_count < 0:
+			reason_details.append(
+				"admin_radius %.1f, unreachable, excess %.1f, distance -%.0f"
+				% [admin_radius, distance_excess, distance_penalty]
+			)
+		else:
+			reason_details.append(
+				"admin_radius %.1f, hop %d, over %.1f, distance -%.0f"
+				% [admin_radius, hop_count, distance_excess, distance_penalty]
+			)
+	else:
+		reason_details.append(
+			"admin_radius %.1f, hop %d stable"
+			% [admin_radius, maxi(hop_count, 0)]
+		)
 
 	if city.at_war:
 		value -= WAR_ZONE_PENALTY
 		reasons.append("war_disruption")
+		reason_details.append(
+			"war_disruption -%.0f" % WAR_ZONE_PENALTY
+		)
 	elif state.day < city.war_disruption_until_day:
 		value -= WAR_DISRUPTION_PENALTY
 		reasons.append("war_disruption")
+		reason_details.append(
+			"war_disruption -%.0f" % WAR_DISRUPTION_PENALTY
+		)
 
 	var payment_ratio: float = clampf(
 		state.nations[owner_id].military_payment_ratio, 0.0, 1.0
@@ -166,15 +313,21 @@ static func loyalty_target(
 	value -= unpaid_penalty
 	if unpaid_penalty > 0.0:
 		reasons.append("unpaid_military")
+		reason_details.append(
+			"unpaid_military -%.1f" % unpaid_penalty
+		)
 	# 昏君/暴君的低效与挥霍不仅通过欠饷间接传导，也直接形成全国
 	# 财政信誉压力；其余君主的有效维护倍率接近 1，不产生额外扣分。
 	var upkeep_pressure := maxf(
 		RulerProfile.upkeep_multiplier(state.nations[owner_id]) - 1.0,
 		0.0
-	) * 30.0
+	) * UPKEEP_PRESSURE_SCALE
 	value -= upkeep_pressure
 	if upkeep_pressure > 0.01:
 		reasons.append("ruler_expenditure")
+		reason_details.append(
+			"ruler_expenditure -%.1f" % upkeep_pressure
+		)
 
 	var low_neighbors: int = _low_loyalty_neighbor_count(
 		state, city_id, owner_id
@@ -186,16 +339,22 @@ static func loyalty_target(
 	value -= spread_penalty
 	if spread_penalty > 0.0:
 		reasons.append("neighbor_unrest")
+		reason_details.append(
+			"neighbor_unrest -%.1f" % spread_penalty
+		)
 
 	# 君主只通过统一参数层改变长期稳定目标；昏庸/暴虐会把财政与
 	# 民心压力传导到全国，改革者、勤政或魅力特质则提高认同。
 	var ruler_stability := RulerProfile.loyalty_multiplier(
 		state.nations[owner_id]
 	)
-	var ruler_delta := (ruler_stability - 1.0) * 40.0
+	var ruler_delta := (
+		ruler_stability - 1.0
+	) * FLAT_LOYALTY_SCALE
 	value += ruler_delta
 	if absf(ruler_delta) > 0.01:
 		reasons.append("ruler")
+		reason_details.append("ruler %+0.1f" % ruler_delta)
 
 	value = clampf(value, LOYALTY_MIN, LOYALTY_MAX)
 	var current_loyalty: float = clampf(
@@ -205,7 +364,16 @@ static func loyalty_target(
 		"value": value,
 		"delta": value - current_loyalty,
 		"reasons": reasons,
+		"reason_details": reason_details,
 		"target_nation": target_nation,
+		"hop_count": hop_count,
+		"administrative_radius": admin_radius,
+		"distance_excess": administrative_distance_excess(
+			hop_count,
+			admin_radius
+		),
+		"distance_penalty": distance_penalty,
+		"soft_stability_threshold": LOYALTY_SOFT_STABILITY_THRESHOLD,
 	}
 
 
@@ -238,6 +406,9 @@ static func monthly_city_loyalty(
 	var reasons: Array[String] = []
 	for reason_value in target["reasons"]:
 		reasons.append(str(reason_value))
+	var reason_details: Array[String] = []
+	for reason_value in target.get("reason_details", []):
+		reason_details.append(str(reason_value))
 
 	var garrison_manpower: int = _garrison_manpower(
 		state, city_id, garrison_by_city
@@ -249,6 +420,7 @@ static func monthly_city_loyalty(
 	)
 	if garrison_bonus > 0.0:
 		reasons.append("garrison")
+		reason_details.append("garrison +%.0f" % garrison_bonus)
 
 	var previous_loyalty: float = clampf(
 		city.loyalty, LOYALTY_MIN, LOYALTY_MAX
@@ -280,7 +452,7 @@ static func monthly_city_loyalty(
 		and state.day >= cooldown_until
 	)
 	var progress: int = city.rebellion_progress + 1 if eligible else 0
-	var reason_text: String = ",".join(reasons)
+	var reason_text: String = "; ".join(reason_details)
 	return {
 		"city_id": city_id,
 		"owner_nation": owner_id,
@@ -297,6 +469,7 @@ static func monthly_city_loyalty(
 		"rebellion_progress": progress,
 		"rebellion_cooldown_until_day": cooldown_until,
 		"reasons": reasons,
+		"reason_details": reason_details,
 		"last_loyalty_reason": reason_text,
 		"eligible": eligible,
 	}

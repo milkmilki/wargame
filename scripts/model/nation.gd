@@ -116,6 +116,11 @@ var warehouse_city_ids: Array[int] = []
 var granary_food: int = 0
 var last_food_demand: int = 0              ## 最近月度全部军队计划粮食需求
 var food_demand_ema: float = 0.0           ## 历史真实需求平滑值，供裁军规划
+## 最近一次月结发布给 UI 的粮食快照。为避免把每日真实扣粮伪称为月累计实际，
+## 这里显式记录“预计月产/月需/月结余”；旧档缺失时默认 0，保持向后兼容。
+var last_food_estimated_production: int = 0
+var last_food_estimated_consumption: int = 0 ## 语义为预计月需，来源是 last_food_demand
+var last_food_estimated_balance: int = 0
 var political_system: int = 0              ## 政治制度（预留，暂未使用）
 ## 国家级 AI 风险偏好。1.0 为中性；更高时更愿意宣战、持续进攻并承担战术风险。
 ## 默认对所有国家一致，避免把 nation id 重新引入镜像公平性。

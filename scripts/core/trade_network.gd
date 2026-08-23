@@ -63,29 +63,59 @@ const INF_COST_UNITS: int = 0x3fffffffffffffff
 const SORT_SCALE: float = 1000000.0
 const UNREACHABLE_COST: float = -1.0
 
+## 仅用于性能等价测试/微基准，不写入 build()/build_structure() 返回值。
+static var _candidate_dijkstra_field_builds: int = 0
+static var _candidate_connectivity_queries: int = 0
+static var _candidate_connectivity_searches: int = 0
+static var _candidate_connectivity_rejections: int = 0
 
-## 权威入口。返回的整数数组均以 city_id / nation_id 为下标。
-static func build(state: GameState) -> Dictionary:
+
+static func reset_connectivity_prefilter_counters() -> void:
+	_candidate_dijkstra_field_builds = 0
+	_candidate_connectivity_queries = 0
+	_candidate_connectivity_searches = 0
+	_candidate_connectivity_rejections = 0
+
+
+static func connectivity_prefilter_counters() -> Dictionary:
+	return {
+		"candidate_dijkstra_field_builds": _candidate_dijkstra_field_builds,
+		"candidate_connectivity_queries": _candidate_connectivity_queries,
+		"candidate_connectivity_searches": _candidate_connectivity_searches,
+		"candidate_connectivity_rejections": (
+			_candidate_connectivity_rejections
+		),
+	}
+
+
+## 权威入口。结构派生与动态粮食结算分层后仍保持原返回结构逐字段等价。
+## 返回的整数数组均以 city_id / nation_id 为下标。
+static func build(
+	state: GameState, use_connectivity_prefilter: bool = true
+) -> Dictionary:
+	return settle(state, build_structure(state, use_connectivity_prefilter))
+
+
+## 可跨多次预测复用的昂贵结构层：图搜索、路线选择与路线税均只依赖
+## structure_fingerprint() 覆盖的字段，不读取库存、国库或粮食需求。
+static func build_structure(
+	state: GameState, use_connectivity_prefilter: bool = true
+) -> Dictionary:
 	if state == null:
-		return _empty_result(0, 0)
+		return _empty_structure(0, 0, structure_fingerprint(null))
 	var city_count := state.cities.size()
 	var nation_count := state.nations.size()
+	var fingerprint := structure_fingerprint(state)
 	if not _state_ids_indexable(state):
-		return _empty_result(city_count, nation_count)
+		return _empty_structure(city_count, nation_count, fingerprint)
 	var city_gold_bonus := _zero_int_array(city_count)
 	var nation_trade_gold := _zero_int_array(nation_count)
 	var nation_trade_tax := _zero_int_array(nation_count)
-	var nation_food_import := _zero_int_array(nation_count)
-	var nation_food_export := _zero_int_array(nation_count)
-	var nation_food_cost := _zero_int_array(nation_count)
-	var nation_food_sale_income := _zero_int_array(nation_count)
 	if city_count <= 0 or nation_count <= 0:
-		return _finish_result(
-			[] as Array[Dictionary],
-			city_gold_bonus, nation_trade_gold, nation_trade_tax,
-			nation_food_import, nation_food_export, nation_food_cost,
-			nation_food_sale_income,
-			[] as Array[int]
+		return _make_structure(
+			fingerprint, city_count, nation_count,
+			[] as Array[Dictionary], city_gold_bonus,
+			nation_trade_gold, nation_trade_tax, [] as Array[int]
 		)
 
 	var policies := _collect_policies(state)
@@ -93,12 +123,14 @@ static func build(state: GameState) -> Dictionary:
 	var besieged := state.besieged_city_ids()
 	var occupied_edges := _enemy_occupancy_records(state)
 	var field_cache := {}
+	var connectivity_cache := {}
 	var routes: Array[Dictionary] = []
 	routes.append_array(_build_domestic_routes(
 		state, graph, policies, besieged, occupied_edges, field_cache
 	))
 	routes.append_array(_build_international_routes(
-		state, graph, policies, besieged, occupied_edges, field_cache
+		state, graph, policies, besieged, occupied_edges, field_cache,
+		connectivity_cache, use_connectivity_prefilter
 	))
 
 	routes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -120,6 +152,48 @@ static func build(state: GameState) -> Dictionary:
 		state, routes, policies, city_gold_bonus,
 		nation_trade_gold, nation_trade_tax
 	)
+	return _make_structure(
+		fingerprint, city_count, nation_count, routes, city_gold_bonus,
+		nation_trade_gold, nation_trade_tax, policies
+	)
+
+
+## 在可缓存结构的深副本上执行库存/国库/需求相关的动态结算。返回值中的
+## routes、嵌套路径/分配字典和所有统计数组都不与 structure 共享可变容器。
+## 调用方负责先比较 structure_fingerprint()；这里仅检查尺寸，避免缓存命中时
+## 为新鲜度重复扫描全部城市、道路、战争和占边军队。
+static func settle(state: GameState, structure: Dictionary) -> Dictionary:
+	if state == null:
+		return _empty_result(0, 0)
+	var city_count := state.cities.size()
+	var nation_count := state.nations.size()
+	if not _state_ids_indexable(state) or city_count <= 0 or nation_count <= 0:
+		return _empty_result(city_count, nation_count)
+	if (
+		int(structure.get("city_count", -1)) != city_count
+		or int(structure.get("nation_count", -1)) != nation_count
+	):
+		# 尺寸变化时旧数组不可能安全复用；公开 API 保守地重建一次。
+		return settle(state, build_structure(state))
+	var routes := _copy_routes(structure.get(
+		"routes", [] as Array[Dictionary]
+	))
+	var city_gold_bonus := _copy_int_array(
+		structure.get("city_gold_bonus", []), city_count
+	)
+	var nation_trade_gold := _copy_int_array(
+		structure.get("nation_trade_gold", []), nation_count
+	)
+	var nation_trade_tax := _copy_int_array(
+		structure.get("nation_trade_tax", []), nation_count
+	)
+	var policies := _copy_int_array(
+		structure.get("policies", []), nation_count
+	)
+	var nation_food_import := _zero_int_array(nation_count)
+	var nation_food_export := _zero_int_array(nation_count)
+	var nation_food_cost := _zero_int_array(nation_count)
+	var nation_food_sale_income := _zero_int_array(nation_count)
 	_plan_food_transfers(
 		state, routes, policies,
 		nation_trade_gold, nation_food_import, nation_food_export,
@@ -131,6 +205,157 @@ static func build(state: GameState) -> Dictionary:
 		nation_food_sale_income,
 		policies
 	)
+
+
+static func _make_structure(
+	fingerprint: PackedByteArray,
+	city_count: int,
+	nation_count: int,
+	routes: Array[Dictionary],
+	city_gold_bonus: Array[int],
+	nation_trade_gold: Array[int],
+	nation_trade_tax: Array[int],
+	policies: Array[int]
+) -> Dictionary:
+	return {
+		"fingerprint": fingerprint,
+		"city_count": city_count,
+		"nation_count": nation_count,
+		"routes": routes,
+		"city_gold_bonus": city_gold_bonus,
+		"nation_trade_gold": nation_trade_gold,
+		"nation_trade_tax": nation_trade_tax,
+		"policies": policies,
+	}
+
+
+static func _empty_structure(
+	city_count: int, nation_count: int, fingerprint: PackedByteArray
+) -> Dictionary:
+	return _make_structure(
+		fingerprint, city_count, nation_count, [] as Array[Dictionary],
+		_zero_int_array(city_count), _zero_int_array(nation_count),
+		_zero_int_array(nation_count), [] as Array[int]
+	)
+
+
+static func _copy_routes(source: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not source is Array:
+		return result
+	for route_value in source as Array:
+		if route_value is Dictionary:
+			result.append((route_value as Dictionary).duplicate(true))
+	return result
+
+
+static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
+	var result := _zero_int_array(expected_size)
+	if not source is Array:
+		return result
+	var values: Array = source
+	for index in range(mini(result.size(), values.size())):
+		result[index] = int(values[index])
+	return result
+
+
+## 结构层的无碰撞 token。把所有实际结构依赖写成有标签的 Variant 数组后
+## 序列化成完整字节；不使用 hash，因而不会因哈希碰撞误复用。
+## 库存、国库、需求、日期和军队具体兵力刻意不在此处。军队仅以是否为
+## 正兵力的 active (owner, edge) 记录出现，且中立于所有贸易方的占边不入 token。
+static func structure_fingerprint(state: GameState) -> PackedByteArray:
+	if state == null:
+		return var_to_bytes(["trade_structure_v1", null])
+	var fields: Array = [
+		"trade_structure_v1",
+		["counts", state.cities.size(), state.nations.size()],
+		["map_aspect_ratio", state.map_aspect_ratio],
+	]
+	for city in state.cities:
+		fields.append([
+			"city", city.id, city.owner_nation, city.is_dock,
+			city.map_position, city.gold_per_month, city.food_per_half_year,
+			city.is_capital, city.has_warehouse, city.is_port_market,
+			city.is_crossroads, city.is_food_hub,
+		])
+	for nation in state.nations:
+		fields.append([
+			"nation", nation.id, nation.alive, nation.capital_city_id,
+			_policy_of(nation), _ruler_trade_multiplier(nation),
+		])
+
+	# relation_between 的其他状态对商路都等价；只编码实际 WAR 图。
+	var wars: Array = ["wars"]
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			if state.is_enemy(nation_a, nation_b):
+				wars.append([nation_a, nation_b])
+	fields.append(wars)
+
+	# edges 的数组顺序也保留：重复端点时 _build_graph() 采用第一条边。
+	var operational_edge_keys := {}
+	for edge in state.edges:
+		fields.append([
+			"edge", edge.city_a, edge.city_b, edge.kind,
+			edge.max_manpower, edge.base_max_manpower, edge.distance,
+			edge.travel_time_multiplier, edge.danger,
+			edge.supply_loss_multiplier,
+		])
+		var a := int(edge.city_a)
+		var b := int(edge.city_b)
+		if (
+			a >= 0 and b >= 0 and a < state.cities.size()
+			and b < state.cities.size() and a != b
+		):
+			var edge_key := _edge_key(a, b)
+			if not operational_edge_keys.has(edge_key):
+				operational_edge_keys[edge_key] = edge.max_manpower > 0
+
+	var besieged := state.besieged_city_ids().keys()
+	besieged.sort()
+	fields.append(["besieged", besieged])
+
+	var trade_parties := _possible_trade_parties(state)
+	var occupancy: Array = ["blocking_occupancy"]
+	for record in _enemy_occupancy_records(state):
+		var edge_key := int(record["edge_key"])
+		if not bool(operational_edge_keys.get(edge_key, false)):
+			continue
+		var owner := int(record["owner"])
+		var blocks_party := false
+		for party in trade_parties:
+			if state.is_enemy(owner, party):
+				blocks_party = true
+				break
+		if blocks_party:
+			occupancy.append([owner, edge_key])
+	fields.append(occupancy)
+	return var_to_bytes(fields)
+
+
+static func _possible_trade_parties(state: GameState) -> Array[int]:
+	var owned_all := _zero_int_array(state.nations.size())
+	var owned_land := _zero_int_array(state.nations.size())
+	for city in state.cities:
+		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
+			continue
+		owned_all[city.owner_nation] += 1
+		if not city.is_dock:
+			owned_land[city.owner_nation] += 1
+	var result: Array[int] = []
+	for nation in state.nations:
+		if (
+			nation.id >= 0 and nation.id < state.nations.size()
+			and nation.alive
+			and (
+				owned_all[nation.id] >= 2
+				or (owned_land[nation.id] > 0
+					and _policy_of(nation) != Policy.ISOLATION)
+			)
+		):
+			result.append(nation.id)
+	result.sort()
+	return result
 
 
 static func _state_ids_indexable(state: GameState) -> bool:
@@ -400,7 +625,9 @@ static func _build_international_routes(
 	policies: Array[int],
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
-	field_cache: Dictionary
+	field_cache: Dictionary,
+	connectivity_cache: Dictionary,
+	use_connectivity_prefilter: bool
 ) -> Array[Dictionary]:
 	var hubs_by_nation: Array = []
 	hubs_by_nation.resize(state.nations.size())
@@ -410,9 +637,9 @@ static func _build_international_routes(
 		)
 	var ideal_allowed := _ideal_city_mask(state)
 
-	# At 40 nations this is at most 780 cheap pair evaluations. Dijkstra fields
-	# are cached by access mask and source hubs, so neutral worlds need roughly
-	# one ideal and one operational field per nation, not one per nation pair.
+	# At 40 nations this is at most 780 cheap pair evaluations. Ideal endpoint
+	# ranking still uses cached Dijkstra fields; operational ordering only asks
+	# the cheaper reachability helper below.
 	var candidates: Array[Dictionary] = []
 	for nation_a in range(state.nations.size()):
 		if (
@@ -442,15 +669,23 @@ static func _build_international_routes(
 			var blocked_edges := _blocked_edges_for_parties(
 				state, nation_a, nation_b, occupied_edges
 			)
-			var operational := _select_preferred_endpoints(
-				state, graph, source_hubs, destination_hubs, allowed, true,
-				besieged, blocked_edges, nation_a, nation_b,
-				field_cache, false
-			)
+			var is_operational: bool
+			if use_connectivity_prefilter:
+				is_operational = _has_operational_connection(
+					state, graph, source_hubs, destination_hubs, allowed,
+					besieged, blocked_edges, connectivity_cache
+				)
+			else:
+				var operational := _select_preferred_endpoints(
+					state, graph, source_hubs, destination_hubs, allowed, true,
+					besieged, blocked_edges, nation_a, nation_b,
+					field_cache, false, true
+				)
+				is_operational = float(operational["cost"]) >= 0.0
 			candidates.append({
 				"nation_a": nation_a,
 				"nation_b": nation_b,
-				"operational": float(operational["cost"]) >= 0.0,
+				"operational": is_operational,
 				"preferred_transport_cost": float(preferred["cost"]),
 				"candidate_value": _international_candidate_value(
 					state, int(preferred["source"]),
@@ -496,6 +731,90 @@ static func _build_international_routes(
 		counts[nation_a] += 1
 		counts[nation_b] += 1
 	return result
+
+
+## 候选排序只需要“任一源点能否到达任一不同终点”。这里严格复用
+## operational Dijkstra 的准入条件，但不计算成本、前驱或具体路径。
+static func _has_operational_connection(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	destinations: Array[int],
+	allowed: PackedByteArray,
+	besieged: Dictionary,
+	blocked_edges: Dictionary,
+	connectivity_cache: Dictionary
+) -> bool:
+	_candidate_connectivity_queries += 1
+	var valid_sources: Array[int] = []
+	for source in sources:
+		if (
+			source >= 0 and source < state.cities.size()
+			and not valid_sources.has(source)
+		):
+			valid_sources.append(source)
+	valid_sources.sort()
+	var cache_key := "%s:%s:%s" % [
+		_int_array_key(valid_sources), _byte_mask_key(allowed),
+		_operational_block_key(besieged, blocked_edges),
+	]
+	var reachable: PackedByteArray
+	var active_sources := {}
+	if connectivity_cache.has(cache_key):
+		var cached: Dictionary = connectivity_cache[cache_key]
+		reachable = cached["reachable"]
+		active_sources = cached["active_sources"]
+	else:
+		_candidate_connectivity_searches += 1
+		reachable = PackedByteArray()
+		reachable.resize(state.cities.size())
+		reachable.fill(0)
+		var queue: Array[int] = []
+		for source in valid_sources:
+			if (
+				source >= allowed.size() or allowed[source] == 0
+				or besieged.has(source)
+			):
+				continue
+			reachable[source] = 1
+			queue.append(source)
+			active_sources[source] = true
+		var adjacency: Array = graph["adjacency"]
+		var edge_lookup: Dictionary = graph["edge_lookup"]
+		var head := 0
+		while head < queue.size():
+			var city_id := queue[head]
+			head += 1
+			var neighbors: Array[int] = adjacency[city_id]
+			for neighbor in neighbors:
+				if (
+					reachable[neighbor] != 0
+					or neighbor >= allowed.size() or allowed[neighbor] == 0
+					or besieged.has(neighbor)
+				):
+					continue
+				var edge_key := _edge_key(city_id, neighbor)
+				var edge: Edge = edge_lookup.get(edge_key, null)
+				if (
+					edge == null or edge.max_manpower <= 0
+					or blocked_edges.has(edge_key)
+				):
+					continue
+				reachable[neighbor] = 1
+				queue.append(neighbor)
+		connectivity_cache[cache_key] = {
+			"reachable": reachable,
+			"active_sources": active_sources,
+		}
+	for destination in destinations:
+		if (
+			destination >= 0 and destination < reachable.size()
+			and reachable[destination] != 0
+			and not active_sources.has(destination)
+		):
+			return true
+	_candidate_connectivity_rejections += 1
+	return false
 
 
 static func _owned_trade_cities(
@@ -699,7 +1018,8 @@ static func _select_preferred_endpoints(
 	nation_a: int,
 	nation_b: int,
 	field_cache: Dictionary,
-	reconstruct_path: bool = true
+	reconstruct_path: bool = true,
+	count_candidate_dijkstra: bool = false
 ) -> Dictionary:
 	var best_source := -1
 	var best_destination := -1
@@ -725,6 +1045,8 @@ static func _select_preferred_endpoints(
 	if field_cache.has(cache_key):
 		field = field_cache[cache_key]
 	else:
+		if count_candidate_dijkstra:
+			_candidate_dijkstra_field_builds += 1
 		field = _dijkstra_field(
 			state, graph, valid_sources, allowed, operational,
 			besieged, blocked_edges
@@ -1561,6 +1883,30 @@ static func _nation_monthly_food_demand(
 	# Settled values originate in Simulation._finalize_food_demand and already
 	# include real route loss plus the ruler multiplier. Never multiply again.
 	return settled_demand if settled_demand > 0 else maxi(projected_demand, 0)
+
+
+## Public cold-start wrapper used by Simulation.setup to seed
+## nation.last_food_demand before any real supply resolution has run.
+## Reuses _projected_army_monthly_food_demand / _nation_monthly_food_demand
+## without adding route loss (consistent with TradeNetwork's own fallback).
+static func projected_nation_monthly_food_demand(
+	state: GameState, nation_id: int
+) -> int:
+	if (
+		state == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+	):
+		return 0
+	var nation := state.nations[nation_id]
+	var projected := 0
+	for army in state.armies:
+		if (
+			army.size > 0
+			and army.owner_nation == nation_id
+		):
+			projected += _projected_army_monthly_food_demand(army, nation)
+	return _nation_monthly_food_demand(nation, projected)
 
 
 static func _ruler_food_consumption_multiplier(nation: Nation) -> float:

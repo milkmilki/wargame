@@ -159,6 +159,7 @@ var _army_icon_panel: PanelContainer
 var _army_icon_label: Label
 var _army_icon_slider: HSlider
 var _city_name_button: Button
+static var _nation_detail_section_build_count: int = 0
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
 var _prev_pos: Dictionary = {}             ## army.id -> 上一 tick 末的逻辑位置
@@ -1567,6 +1568,7 @@ func _draw() -> void:
 	if state == null:
 		return
 	_compute_layout()
+	var detail_payload := _selection_detail_payload()
 	if world_layer_visible:
 		_draw_paper_canvas()
 		_draw_terrain_background()
@@ -1584,7 +1586,7 @@ func _draw() -> void:
 		_draw_cities()
 		_draw_battles()
 		_draw_armies()
-	_draw_selection_detail()
+	_draw_selection_detail(detail_payload)
 	_draw_hud()
 
 
@@ -5332,37 +5334,16 @@ func _draw_nation_window_cells(
 			)
 
 
-func _draw_selection_detail() -> void:
-	var sections: Array[Dictionary] = []
-	var title := ""
-	var stripe_color := COMMAND_GREEN
-	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
-		var city := state.cities[_selected_city_id]
-		title = "城市信息  %s" % city_debug_name(state, city.id)
-		stripe_color = GameState.normalize_nation_color(
-			paper_nation_color(
-				state.nations[city.owner_nation].color
-			).darkened(0.22)
-		)
-		sections = city_detail_sections(state, city.id)
-	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
-		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
-		if edge != null:
-			title = "道路信息  %s ↔ %s" % [
-				WorldNaming.city_display_name(state, edge.city_a),
-				WorldNaming.city_display_name(state, edge.city_b),
-			]
-			sections = [{"title": "道路", "lines": edge_detail_lines(state, edge)}]
-	elif _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
-		var nation := state.nations[_selected_nation_id]
-		title = "国家信息  %s" % nation_debug_name(state, nation.id)
-		stripe_color = GameState.normalize_nation_color(
-			paper_nation_color(nation.color).darkened(0.22)
-		)
-		sections = nation_detail_sections(state, nation.id)
+func _draw_selection_detail(detail_payload: Dictionary) -> void:
+	var sections := detail_payload.get("sections", []) as Array[Dictionary]
 	if sections.is_empty():
 		return
-	var rect := _selection_detail_rect(_section_visual_line_count(sections))
+	var rect := _selection_detail_rect(int(detail_payload.get("line_count", 0)))
+	var title := str(detail_payload.get("title", ""))
+	var stripe_color := detail_payload.get(
+		"stripe_color",
+		COMMAND_GREEN
+	) as Color
 	draw_rect(
 		Rect2(
 			rect.position + Vector2(4.0, 5.0) * _display_scale,
@@ -5419,24 +5400,99 @@ func _draw_selection_detail() -> void:
 
 
 func _selection_detail_line_count() -> int:
+	if state == null:
+		return 0
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
-		return _section_visual_line_count(city_detail_sections(state, _selected_city_id))
+		return _city_detail_line_count()
 	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
-		var edge := state.edge_of(
-			_selected_edge_a,
-			_selected_edge_b
-		)
+		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
 		if edge != null:
-			return edge_detail_lines(state, edge).size() + 1
+			return _edge_detail_line_count()
 	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
-		return _section_visual_line_count(nation_detail_sections(state, _selected_nation_id))
+		return _nation_detail_line_count(state, _selected_nation_id)
 	return 0
+
+
+func _selection_detail_payload() -> Dictionary:
+	var payload := {
+		"title": "",
+		"stripe_color": COMMAND_GREEN,
+		"sections": [] as Array[Dictionary],
+		"line_count": 0,
+	}
+	if state == null:
+		return payload
+	var sections: Array[Dictionary] = []
+	var title := ""
+	var stripe_color := COMMAND_GREEN
+	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
+		var city := state.cities[_selected_city_id]
+		title = "城市信息  %s" % city_debug_name(state, city.id)
+		stripe_color = GameState.normalize_nation_color(
+			paper_nation_color(
+				state.nations[city.owner_nation].color
+			).darkened(0.22)
+		)
+		sections = city_detail_sections(state, city.id)
+	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
+		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
+		if edge != null:
+			title = "道路信息  %s ↔ %s" % [
+				WorldNaming.city_display_name(state, edge.city_a),
+				WorldNaming.city_display_name(state, edge.city_b),
+			]
+			sections = [{"title": "道路", "lines": edge_detail_lines(state, edge)}]
+	elif _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
+		var nation := state.nations[_selected_nation_id]
+		title = "国家信息  %s" % nation_debug_name(state, nation.id)
+		stripe_color = GameState.normalize_nation_color(
+			paper_nation_color(nation.color).darkened(0.22)
+		)
+		sections = nation_detail_sections(state, nation.id)
+	payload["title"] = title
+	payload["stripe_color"] = stripe_color
+	payload["sections"] = sections
+	payload["line_count"] = _section_visual_line_count(sections)
+	return payload
 
 
 static func _section_visual_line_count(sections: Array[Dictionary]) -> int:
 	var count := 0
 	for section in sections:
 		count += 1 + (section.get("lines", []) as Array).size()
+	return count
+
+
+static func _section_layout_line_count(line_counts: PackedInt32Array) -> int:
+	var count := line_counts.size()
+	for line_count in line_counts:
+		count += int(line_count)
+	return count
+
+
+static func _city_detail_line_count() -> int:
+	return _section_layout_line_count(PackedInt32Array([2, 2, 3, 3, 1]))
+
+
+static func _edge_detail_line_count() -> int:
+	return _section_layout_line_count(PackedInt32Array([6]))
+
+
+static func _nation_detail_line_count(
+	game_state: GameState,
+	nation_id: int
+) -> int:
+	if nation_id < 0 or nation_id >= game_state.nations.size():
+		return 0
+	var count := _section_layout_line_count(
+		PackedInt32Array([1, 2, 2, 2, 3])
+	)
+	var nation := game_state.nations[nation_id]
+	if (
+		not nation.campaign_attack_assignments.is_empty()
+		or nation.last_offensive_gold_day >= 0
+	):
+		count += 1
 	return count
 
 
@@ -5679,6 +5735,7 @@ static func nation_detail_sections(
 ) -> Array[Dictionary]:
 	if nation_id < 0 or nation_id >= game_state.nations.size():
 		return []
+	_nation_detail_section_build_count += 1
 	var n := game_state.nations[nation_id]
 	var troops := 0
 	var army_count := 0
@@ -5686,11 +5743,16 @@ static func nation_detail_sections(
 		if army.owner_nation == nation_id and army.size > 0:
 			troops += army.size
 			army_count += 1
-	var report := DiplomacyAI.resource_report(game_state, nation_id)
-	var gold_balance := int(report["monthly_gold_balance"])
-	var tribute_balance := (
-		int(report["monthly_tribute_income"])
-		- int(report["monthly_tribute_expense"])
+	var finance := _nation_detail_finance_snapshot(
+		game_state,
+		nation_id
+	)
+	var food_trade_text := _food_trade_flow_text(
+		n.last_trade_food_import,
+		n.last_trade_food_export
+	)
+	var monthly_food_balance_text := _signed_value_text(
+		n.last_food_estimated_balance
 	)
 	var sections: Array[Dictionary] = [
 		{"title": "身份与君主", "lines": [
@@ -5706,8 +5768,10 @@ static func nation_detail_sections(
 		]},
 		{"title": "财政与军费", "lines": [
 			"国库 %d    月净 %+d    城市收入 %d    贡赋 %+d" % [
-				n.treasury_gold, gold_balance,
-				int(report["monthly_city_gold_income"]), tribute_balance,
+				n.treasury_gold,
+				int(finance["monthly_gold_balance"]),
+				int(finance["monthly_city_gold_income"]),
+				int(finance["monthly_tribute_balance"]),
 			],
 			"军费 %d    欠饷 %d    支付率 %.0f%%" % [
 				n.last_military_upkeep, n.unpaid_military_upkeep,
@@ -5715,12 +5779,16 @@ static func nation_detail_sections(
 			],
 		]},
 		{"title": "粮食与贸易", "lines": [
-			"粮仓 %d    需求 %d/月" % [
-				n.granary_food, int(ceil(float(report["monthly_food_demand"]))),
+			"粮仓 %d    月产(预计) %d    月需(预计) %d    月净(预计) %s" % [
+				n.granary_food,
+				n.last_food_estimated_production,
+				n.last_food_estimated_consumption,
+				monthly_food_balance_text,
 			],
-			"商路 %d    商贸金 %+d    粮食 %+d/-%d" % [
-				n.last_trade_route_count, n.last_trade_gold,
-				n.last_trade_food_import, n.last_trade_food_export,
+			"商路 %d    商贸金 %s    粮食净流 %s" % [
+				n.last_trade_route_count,
+				_signed_value_text(n.last_trade_gold),
+				food_trade_text,
 			],
 		]},
 		{"title": "外交与行动", "lines": [
@@ -5766,6 +5834,89 @@ static func nation_detail_sections(
 				]
 		)
 	return sections
+
+
+static func reset_nation_detail_section_build_count() -> void:
+	_nation_detail_section_build_count = 0
+
+
+static func nation_detail_section_build_count() -> int:
+	return _nation_detail_section_build_count
+
+
+static func _nation_detail_finance_snapshot(
+	game_state: GameState,
+	nation_id: int
+) -> Dictionary:
+	var city_income := 0
+	for city in game_state.cities:
+		if city.owner_nation != nation_id:
+			continue
+		city_income += Simulation.city_gold_output(game_state, city)
+	var tribute_received := 0
+	var tribute_paid := 0
+	for subject_value in game_state.suzerainty:
+		var subject_id := int(subject_value)
+		var overlord_id := game_state.overlord_of(subject_id)
+		if (
+			subject_id < 0
+			or subject_id >= game_state.nations.size()
+			or overlord_id < 0
+			or overlord_id >= game_state.nations.size()
+		):
+			continue
+		var subject_city_income := 0
+		for city in game_state.cities:
+			if city.owner_nation != subject_id:
+				continue
+			subject_city_income += Simulation.city_gold_output(
+				game_state,
+				city
+			)
+		var tribute := int(floor(
+			float(subject_city_income)
+			* Simulation.effective_tribute_rate(
+				game_state,
+				subject_id
+			)
+		))
+		if subject_id == nation_id:
+			tribute_paid += tribute
+		if overlord_id == nation_id:
+			tribute_received += tribute
+	var tribute_balance := tribute_received - tribute_paid
+	var nation := game_state.nations[nation_id]
+	return {
+		"monthly_city_gold_income": city_income,
+		"monthly_tribute_balance": tribute_balance,
+		"monthly_gold_balance": (
+			city_income
+			+ nation.last_trade_gold
+			+ tribute_balance
+			- nation.last_military_upkeep
+		),
+	}
+
+
+static func _signed_value_text(value: int) -> String:
+	if value > 0:
+		return "+%d" % value
+	if value < 0:
+		return "%d" % value
+	return "0"
+
+
+static func _food_trade_flow_text(import_amount: int, export_amount: int) -> String:
+	var imports := maxi(import_amount, 0)
+	var exports := maxi(export_amount, 0)
+	if imports == 0 and exports == 0:
+		return "进口0 出口0"
+	var net := imports - exports
+	if net > 0:
+		return "进口%d" % net
+	if net < 0:
+		return "出口%d" % absi(net)
+	return "净流0"
 
 
 static func _diplomatic_action_name(action: int) -> String:

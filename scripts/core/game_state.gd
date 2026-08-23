@@ -5883,6 +5883,27 @@ func land_cities_of(nation_id: int) -> Array[City]:
 	return result
 
 
+## Applies an inventory delta to one city and keeps the owning nation's derived
+## granary total synchronized without rescanning every city. Returns actual delta.
+func change_city_food_storage(city_id: int, delta: int) -> int:
+	if city_id < 0 or city_id >= cities.size() or delta == 0:
+		return 0
+	var city := cities[city_id]
+	var raw_old := city.food_storage
+	var new_storage := maxi(raw_old + delta, 0)
+	var actual_delta := new_storage - raw_old
+	city.food_storage = new_storage
+	if (
+		actual_delta != 0
+		and city.has_warehouse
+		and city.owner_nation >= 0
+		and city.owner_nation < nations.size()
+	):
+		var owner := nations[city.owner_nation]
+		owner.granary_food = maxi(owner.granary_food + actual_delta, 0)
+	return actual_delta
+
+
 func warehouse_cities_of(nation_id: int) -> Array[City]:
 	var result: Array[City] = []
 	if nation_id < 0 or nation_id >= nations.size():

@@ -18510,8 +18510,8 @@ func _test_enfeoff_ai() -> void:
 		"低粮食负担但财政月增益为正时，AI 必须把分封作为开源节流策略"
 	)
 
-	# 5. 双收益否决：同类候选区无可转移 LINE 且直辖收入很高，财政为负、粮食负担
-	# 又低于阈值时，不得仅因地处偏远而分封。
+	# 5. 治理压力路径：旧双收益否决已被治理压力规则补全。若候选区虽财政为负、
+	# 粮食负担低，但存在超行政半径且低忠的远地压力，则仍可因治理收益而分封。
 	var loss_state := GameState.new()
 	loss_state.generate_grid_world(32055)
 	for a in range(loss_state.nations.size()):
@@ -18547,6 +18547,12 @@ func _test_enfeoff_ai() -> void:
 		0,
 		loss_region
 	)
+	var loss_governance := DiplomacyAI.evaluate_region_governance_pressure(
+		loss_state,
+		0,
+		loss_region,
+		RebellionSystem.capital_hops(loss_state, 0)
+	)
 	var loss_actions: Array[Dictionary] = []
 	DiplomacyAI._collect_enfeoff_actions(
 		loss_state,
@@ -18555,6 +18561,7 @@ func _test_enfeoff_ai() -> void:
 		{}
 	)
 	var loss_triggered := false
+	var loss_reason := ""
 	for action in loss_actions:
 		if (
 			int(action.get("kind", -1))
@@ -18562,6 +18569,7 @@ func _test_enfeoff_ai() -> void:
 			and int(action.get("a", -1)) == 0
 		):
 			loss_triggered = true
+			loss_reason = str(action.get("reason", ""))
 	_check(
 		loss_region.size()
 			>= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES
@@ -18573,8 +18581,139 @@ func _test_enfeoff_ai() -> void:
 			and float(loss_report["burden_ratio"])
 				< DiplomacyAI
 					.ENFEOFF_BURDEN_RATIO_THRESHOLD
-			and not loss_triggered,
-		"财政月增益为负且粮食负担低时，AI 不得分封"
+			and int(loss_governance["pressured_city_count"]) >= 1
+			and float(loss_governance["pressure_score"])
+				>= DiplomacyAI.ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
+			and loss_triggered
+			and loss_reason.contains("治理压力"),
+		"财政月增益为负且粮食负担低时，远地治理压力高仍可触发分封"
+	)
+
+	# 5b. 真正的负面对照：财政为负、粮食负担低且治理压力也低于阈值时，AI 不得分封。
+	var shallow_state := GameState.new()
+	for nation_id in range(3):
+		var shallow_nation := Nation.new()
+		shallow_nation.id = nation_id
+		shallow_nation.alive = true
+		shallow_nation.ruler_archetype = RulerProfile.BALANCED
+		shallow_nation.trade_policy = RulerProfile.POLICY_BALANCED
+		shallow_nation.capital_city_id = 0 if nation_id == 0 else -1
+		shallow_nation.treasury_gold = 1000
+		shallow_nation.manpower_pool = 100000
+		shallow_nation.military_payment_ratio = 1.0
+		shallow_state.nations.append(shallow_nation)
+	for city_id in range(11):
+		var shallow_city := City.new()
+		shallow_city.id = city_id
+		shallow_city.name = "浅压城%d" % city_id
+		shallow_city.region_symbol = "郡"
+		shallow_city.owner_nation = 0 if city_id < 9 else 1
+		shallow_city.map_position = Vector2(float(city_id) / 20.0, 0.5)
+		shallow_city.coord = Vector2i(city_id, 0)
+		shallow_city.loyalty = 75.0
+		shallow_city.loyalty_target_nation = shallow_city.owner_nation
+		shallow_city.gold_per_month = 10
+		shallow_city.manpower_per_month = 10
+		shallow_city.food_per_half_year = 600
+		shallow_city.is_capital = city_id == 0
+		shallow_city.has_warehouse = city_id == 0
+		if (
+			shallow_city.owner_nation == 1
+			and shallow_state.nations[1].capital_city_id < 0
+		):
+			shallow_state.nations[1].capital_city_id = city_id
+			shallow_city.is_capital = true
+			shallow_city.has_warehouse = true
+		shallow_state.cities.append(shallow_city)
+		shallow_state.adjacency[city_id] = [] as Array[int]
+	for city_id in range(shallow_state.cities.size() - 1):
+		var shallow_edge := Edge.new()
+		shallow_edge.city_a = city_id
+		shallow_edge.city_b = city_id + 1
+		shallow_edge.max_manpower = Edge.STANDARD_MANPOWER
+		shallow_edge.distance = 1
+		shallow_state.edge_lookup[
+			shallow_state.edge_key(shallow_edge.city_a, shallow_edge.city_b)
+		] = shallow_edge
+		(shallow_state.adjacency[shallow_edge.city_a] as Array[int]).append(
+			shallow_edge.city_b
+		)
+		(shallow_state.adjacency[shallow_edge.city_b] as Array[int]).append(
+			shallow_edge.city_a
+		)
+	for city_id in shallow_state.adjacency.keys():
+		(shallow_state.adjacency[city_id] as Array[int]).sort()
+	shallow_state.recognized_city_owners.resize(shallow_state.cities.size())
+	for city in shallow_state.cities:
+		shallow_state.recognized_city_owners[city.id] = city.owner_nation
+	for a in range(shallow_state.nations.size()):
+		for b in range(a + 1, shallow_state.nations.size()):
+			shallow_state.set_diplomatic_relation(
+				a,
+				b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var shallow_region := DiplomacyAI._grow_enfeoff_region(
+		shallow_state,
+		0
+	)
+	var shallow_retained_city := -1
+	for city in shallow_state.land_cities_of(0):
+		if not shallow_region.has(city.id):
+			shallow_retained_city = city.id
+			break
+	for army in shallow_state.armies:
+		if army.owner_nation == 0 and army.is_line_role():
+			army.location_city = shallow_retained_city
+			army.move_from = shallow_retained_city
+			army.move_to = -1
+			army.on_edge = false
+			army.state = Army.State.IDLE
+	for city_id in shallow_region:
+		shallow_state.cities[city_id].gold_per_month = 100
+		shallow_state.cities[city_id].food_per_half_year = 100000
+	var shallow_report := DiplomacyAI.evaluate_region_burden(
+		shallow_state,
+		0,
+		shallow_region
+	)
+	var shallow_governance := DiplomacyAI.evaluate_region_governance_pressure(
+		shallow_state,
+		0,
+		shallow_region,
+		RebellionSystem.capital_hops(shallow_state, 0)
+	)
+	var shallow_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(
+		shallow_state,
+		shallow_actions,
+		{},
+		{}
+	)
+	var shallow_triggered := false
+	for action in shallow_actions:
+		if (
+			int(action.get("kind", -1))
+				== DiplomacyAI.Action.ENFEOFF
+			and int(action.get("a", -1)) == 0
+		):
+			shallow_triggered = true
+	_check(
+		shallow_region.size()
+			>= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES
+			and shallow_retained_city >= 0
+			and int(shallow_report["transferable_line_count"])
+				== 0
+			and int(shallow_report["monthly_fiscal_benefit"])
+				< 0
+			and float(shallow_report["burden_ratio"])
+				< DiplomacyAI
+					.ENFEOFF_BURDEN_RATIO_THRESHOLD
+			and int(shallow_governance["pressured_city_count"]) >= 1
+			and float(shallow_governance["pressure_score"])
+				< DiplomacyAI.ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
+			and not shallow_triggered,
+		"财政月增益为负且粮食负担低、治理压力也低时，AI 不得分封"
 	)
 
 	# 6. 直接验证执行链：手动构造一个满足全部前置的分封并执行，校验不变量。

@@ -112,6 +112,8 @@ const ENFEOFF_BURDEN_RATIO_THRESHOLD: float = 0.60  ## 区域驻军粮耗/粮产
 const ENFEOFF_FAR_HOP_FRACTION: float = 0.5
 const ENFEOFF_MIN_OVERLORD_CITIES_AFTER: int = 6    ## 分封后宗主至少保留的陆城数
 const ENFEOFF_DECISION_COOLDOWN_DAYS: int = 360     ## 同一宗主两次分封的最短间隔
+const ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD: float = 3.5
+const ENFEOFF_GOVERNANCE_SCORE_WEIGHT: float = 0.75
 
 ## 削藩（藩王系统增量 C）调参。财政收益是主决策；高政治威胁是次级例外。
 const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内不再对同一藩王削藩
@@ -125,15 +127,120 @@ const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
 ## 因此威胁分支天然会进入内战，而不会让一般军力增长压过财政理性。
 const CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD: float = 0.80
 
+## A/B 与专项等价测试开关。关闭时逐次执行历史实现，不创建或命中
+## tick-scope EncirclementIndex。生产默认启用。
+static var encirclement_index_enabled: bool = true
+
+static var _encirclement_index_builds: int = 0
+static var _encirclement_cache_hits: int = 0
+static var _encirclement_cache_misses: int = 0
+static var _encirclement_legacy_evaluations: int = 0
+static var _capital_hops_cache_builds: int = 0
+
+
+static func reset_encirclement_cache_counters() -> void:
+	_encirclement_index_builds = 0
+	_encirclement_cache_hits = 0
+	_encirclement_cache_misses = 0
+	_encirclement_legacy_evaluations = 0
+	_capital_hops_cache_builds = 0
+
+
+static func encirclement_cache_counters() -> Dictionary:
+	return {
+		"index_builds": _encirclement_index_builds,
+		"cache_hits": _encirclement_cache_hits,
+		"cache_misses": _encirclement_cache_misses,
+		"legacy_evaluations": _encirclement_legacy_evaluations,
+		"capital_hops_builds": _capital_hops_cache_builds,
+	}
+
+
+static func _capital_hops_cached(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Dictionary:
+	var cache_key := "capital_hops:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		var cached: Variant = evaluation_cache[cache_key]
+		if cached is Dictionary:
+			return cached as Dictionary
+		return {}
+	var hops := RebellionSystem.capital_hops(state, nation_id)
+	evaluation_cache[cache_key] = hops
+	_capital_hops_cache_builds += 1
+	return hops
+
+
+## A/B 与专项等价测试开关。关闭时 _city_defender_troop_index 恢复到
+## legacy 的逐 attacker O(A) 全军扫描；默认启用共享 tick-scope 索引。
+static var city_defender_index_disabled: bool = false
+
+static var _city_defender_index_builds: int = 0
+static var _city_defender_index_hits: int = 0
+static var _city_defender_index_legacy_scans: int = 0
+
+
+static func reset_city_defender_index_counters() -> void:
+	_city_defender_index_builds = 0
+	_city_defender_index_hits = 0
+	_city_defender_index_legacy_scans = 0
+
+
+static func city_defender_index_counters() -> Dictionary:
+	return {
+		"builds": _city_defender_index_builds,
+		"hits": _city_defender_index_hits,
+		"legacy_scans": _city_defender_index_legacy_scans,
+	}
+
+
+static func reset_defender_index_counters() -> void:
+	reset_city_defender_index_counters()
+
+
+static func defender_index_counters() -> Dictionary:
+	return city_defender_index_counters()
+
+
+static func _build_city_defender_owner_index(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> Dictionary:
+	var cache_key := "__global_defender_troops"
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
+	_city_defender_index_builds += 1
+	var city_owner_troops := {}
+	for army in state.armies:
+		if army.size <= 0:
+			continue
+		if army.location_city < 0:
+			continue
+		if not army.state in [Army.State.IDLE, Army.State.RECOVERING]:
+			continue
+		var city_owners: Dictionary = city_owner_troops.get(
+			army.location_city, {}
+		)
+		city_owners[army.owner_nation] = (
+			int(city_owners.get(army.owner_nation, 0))
+			+ army.size
+		)
+		city_owner_troops[army.location_city] = city_owners
+	evaluation_cache[cache_key] = city_owner_troops
+	return city_owner_troops
+
 
 static func choose_actions(
 	state: GameState,
 	profile: Dictionary = {},
-	use_structure_cache: bool = true
+	use_structure_cache: bool = true,
+	seeded_evaluation_cache: Dictionary = {}
 ) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
 	var committed := {}
-	var evaluation_cache := {}
+	var evaluation_cache := seeded_evaluation_cache.duplicate()
 	if not use_structure_cache:
 		evaluation_cache["__disable_structure_cache"] = true
 	var profile_enabled := bool(profile.get("enabled", false))
@@ -3010,26 +3117,12 @@ static func select_war_objective(
 			+ (4.0 if city.is_food_hub else 0.0)
 			+ (4.0 if city.is_manpower_hub else 0.0)
 		)
-		var encirclement_cache_key := (
-			"encirclement:%d:%d" % [
-				city.id,
-				target_id,
-			]
+		var encirclement_score := encirclement_value(
+			state,
+			city.id,
+			target_id,
+			evaluation_cache
 		)
-		var encirclement_score := 0.0
-		if evaluation_cache.has(encirclement_cache_key):
-			encirclement_score = float(
-				evaluation_cache[encirclement_cache_key]
-			)
-		else:
-			encirclement_score = encirclement_value(
-				state,
-				city.id,
-				target_id
-			)
-			evaluation_cache[encirclement_cache_key] = (
-				encirclement_score
-			)
 		strategic_value += encirclement_score
 		var fort_vulnerability := Simulation.city_fort_vulnerability(
 			city,
@@ -3176,7 +3269,28 @@ static func _city_defender_troop_index(
 ) -> Dictionary:
 	var cache_key := "city_defender_troops:%d" % nation_id
 	if evaluation_cache.has(cache_key):
+		_city_defender_index_hits += 1
 		return evaluation_cache[cache_key]
+	if (
+		not city_defender_index_disabled
+		and not evaluation_cache.is_empty()
+	):
+		var global: Dictionary = _build_city_defender_owner_index(
+			state,
+			evaluation_cache
+		)
+		var result := {}
+		for city_id in global:
+			var city_owners: Dictionary = global[city_id]
+			var total := 0
+			for owner in city_owners:
+				if int(owner) != nation_id:
+					total += int(city_owners[owner])
+			if total > 0:
+				result[int(city_id)] = total
+		evaluation_cache[cache_key] = result
+		return result
+	_city_defender_index_legacy_scans += 1
 	var result := {}
 	for army in state.armies:
 		if (
@@ -4398,15 +4512,30 @@ static func _target_cut_ratio(
 static func encirclement_value(
 	state: GameState,
 	target_city: int,
-	target_nation: int
+	target_nation: int,
+	evaluation_cache: Dictionary = {}
 ) -> float:
 	if (
-		target_nation < 0
+		state == null
+		or target_nation < 0
 		or target_nation >= state.nations.size()
 		or target_city < 0
 		or target_city >= state.cities.size()
 	):
 		return 0.0
+	if encirclement_index_enabled:
+		var cache_key := "__encirclement_index:%d" % target_nation
+		var index: EncirclementIndex = evaluation_cache.get(cache_key)
+		if index == null:
+			index = EncirclementIndex.new(state, target_nation)
+			evaluation_cache[cache_key] = index
+			_encirclement_index_builds += 1
+		if index.has_cached(target_city):
+			_encirclement_cache_hits += 1
+		else:
+			_encirclement_cache_misses += 1
+		return index.value_for(target_city)
+	_encirclement_legacy_evaluations += 1
 	var effect := _target_encirclement_effect(
 		state,
 		target_city,
@@ -4793,6 +4922,87 @@ static func evaluate_region_burden(
 	}
 
 
+## 纯派生评估：候选封区里有多少城市已超出宗主行政半径且目标忠诚低于软稳定线。
+## 这描述的是“中央继续直辖的治理摩擦”，而非军事前线或财政收益。
+static func evaluate_region_governance_pressure(
+	state: GameState,
+	nation_id: int,
+	city_ids: Array[int],
+	capital_hops: Dictionary = {}
+) -> Dictionary:
+	var report := {
+		"city_ids": city_ids.duplicate(),
+		"administrative_radius": 0.0,
+		"soft_threshold": RebellionSystem.LOYALTY_SOFT_STABILITY_THRESHOLD,
+		"pressured_city_count": 0,
+		"pressured_excess": 0.0,
+		"pressure_score": 0.0,
+		"city_reports": [] as Array[Dictionary],
+	}
+	if (
+		state == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+		or not state.nations[nation_id].alive
+	):
+		return report
+	var hops := capital_hops
+	if hops.is_empty():
+		hops = RebellionSystem.capital_hops(state, nation_id)
+	var admin_radius := RebellionSystem.administrative_radius(
+		state.nations[nation_id]
+	)
+	report["administrative_radius"] = admin_radius
+	for city_id in city_ids:
+		if city_id < 0 or city_id >= state.cities.size():
+			continue
+		var city := state.cities[city_id]
+		if city.owner_nation != nation_id or city.is_dock:
+			continue
+		var target := RebellionSystem.loyalty_target(
+			state,
+			city_id,
+			hops
+		)
+		var hop_count := int(target.get("hop_count", -1))
+		var target_value := float(target.get("value", RebellionSystem.LOYALTY_MIN))
+		var distance_excess := float(target.get(
+			"distance_excess",
+			RebellionSystem.administrative_distance_excess(
+				hop_count,
+				admin_radius
+			)
+		))
+		var pressure_component := (
+			distance_excess
+			+ maxf(
+				RebellionSystem.LOYALTY_SOFT_STABILITY_THRESHOLD
+					- target_value,
+				0.0
+			) / RebellionSystem.DISTANCE_PENALTY_PER_HOP
+		)
+		var pressured := (
+			distance_excess > 0.0
+			and target_value < RebellionSystem.LOYALTY_SOFT_STABILITY_THRESHOLD
+		)
+		if pressured:
+			report["pressured_city_count"] = int(report["pressured_city_count"]) + 1
+			report["pressured_excess"] = float(report["pressured_excess"]) + distance_excess
+			report["pressure_score"] = (
+				float(report["pressure_score"])
+				+ pressure_component
+			)
+		(report["city_reports"] as Array[Dictionary]).append({
+			"city_id": city_id,
+			"hop_count": hop_count,
+			"target_loyalty": target_value,
+			"distance_excess": distance_excess,
+			"pressure_component": pressure_component,
+			"pressured": pressured,
+		})
+	return report
+
+
 ## 从最远的边疆城为种子，沿道路连续地生长一片候选封地（确定性 BFS）。
 ## 只纳入本国陆城、不含首都、避免超过上限。返回 city_ids（可能为空）。
 static func _grow_enfeoff_region(
@@ -4804,7 +5014,11 @@ static func _grow_enfeoff_region(
 	var capital := nation.capital_city_id
 	if capital < 0:
 		return [] as Array[int]
-	var hops := _capital_hop_distances(state, nation_id)
+	var hops := _capital_hops_cached(
+		state,
+		nation_id,
+		evaluation_cache
+	)
 	# 「远」相对本国疆域半径：取本国最大跳数的一定比例为外围门槛。
 	var max_hop := 0
 	for h_value in hops.values():
@@ -4881,39 +5095,6 @@ static func _grow_enfeoff_region(
 		region
 	)
 
-
-## 各城到本国首都的道路跳数（确定性 BFS，只走本国可通行边）。缓存于 evaluation_cache。
-static func _capital_hop_distances(
-	state: GameState,
-	nation_id: int
-) -> Dictionary:
-	var nation := state.nations[nation_id]
-	var capital := nation.capital_city_id
-	var dist := {}
-	if capital < 0:
-		return dist
-	dist[capital] = 0
-	var queue: Array[int] = [capital]
-	var cursor := 0
-	while cursor < queue.size():
-		var current: int = queue[cursor]
-		cursor += 1
-		var current_dist := int(dist[current])
-		var sorted_neighbors: Array[int] = state.neighbors(current).duplicate()
-		sorted_neighbors.sort()
-		for neighbor in sorted_neighbors:
-			if dist.has(neighbor):
-				continue
-			if state.cities[neighbor].owner_nation != nation_id:
-				continue
-			var edge := state.edge_of(current, neighbor)
-			if edge == null or edge.max_manpower <= 0:
-				continue
-			dist[neighbor] = current_dist + 1
-			queue.append(neighbor)
-	return dist
-
-
 ## 该城是否为本国边疆城：至少有一条正容量边通往非本国可通行的城。
 static func _city_is_frontier(
 	state: GameState,
@@ -4983,7 +5164,18 @@ static func _collect_enfeoff_actions(
 				< ENFEOFF_MIN_OVERLORD_CITIES_AFTER
 		):
 			continue
+		var hops := _capital_hops_cached(
+			state,
+			overlord_id,
+			evaluation_cache
+		)
 		var burden := evaluate_region_burden(state, overlord_id, region)
+		var governance := evaluate_region_governance_pressure(
+			state,
+			overlord_id,
+			region,
+			hops
+		)
 		var food_burden_justifies := (
 			float(burden["burden_ratio"])
 				* RulerProfile.enfeoff_multiplier(nation)
@@ -4992,9 +5184,51 @@ static func _collect_enfeoff_actions(
 		var fiscal_benefit := int(
 			burden["monthly_fiscal_benefit"]
 		)
-		if not food_burden_justifies and fiscal_benefit <= 0:
+		var governance_city_count := int(
+			governance["pressured_city_count"]
+		)
+		var governance_pressure_score := float(
+			governance["pressure_score"]
+		)
+		var governance_justifies := (
+			governance_pressure_score >= ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
+			and governance_city_count >= 1
+		)
+		if (
+			not food_burden_justifies
+			and fiscal_benefit <= 0
+			and not governance_justifies
+		):
 			continue
+		var motive_parts: Array[String] = []
+		if governance_justifies:
+			motive_parts.append(
+				"治理压力%d城超行政半径（半径%.1f，压力%.2f）"
+				% [
+					governance_city_count,
+					float(governance["administrative_radius"]),
+					governance_pressure_score,
+				]
+			)
+		if fiscal_benefit > 0:
+			motive_parts.append(
+				"财政月增益%+d（转军费%d+贡赋%d-直辖%d）"
+				% [
+					fiscal_benefit,
+					int(burden["transferable_line_upkeep"]),
+					int(burden["projected_tribute_income"]),
+					int(burden["direct_gold_income"]),
+				]
+			)
+		if food_burden_justifies:
+			motive_parts.append(
+				"边疆粮食负担比%.2f超阈"
+				% float(burden["burden_ratio"])
+			)
 		var motive := (
+			"、".join(motive_parts)
+			if not motive_parts.is_empty()
+			else (
 			"财政月增益%+d（转军费%d+贡赋%d-直辖%d）"
 			% [
 				fiscal_benefit,
@@ -5005,12 +5239,23 @@ static func _collect_enfeoff_actions(
 			if fiscal_benefit > 0
 			else "边疆粮食负担比%.2f超阈"
 				% float(burden["burden_ratio"])
+			)
 		)
 		actions.append({
 			"kind": Action.ENFEOFF,
 			"a": overlord_id,
 			"b": overlord_id,
 			"region_cities": region,
+			"governance_pressure": governance,
+			"score": (
+				maxf(float(fiscal_benefit), 0.0)
+				+ maxf(
+					float(burden["burden_ratio"])
+						- ENFEOFF_BURDEN_RATIO_THRESHOLD,
+					0.0
+				) * 100.0
+				+ governance_pressure_score * ENFEOFF_GOVERNANCE_SCORE_WEIGHT
+			),
 			"reason": "和平期偏远边疆%s，分封以转移地方防务"
 				% motive,
 		})

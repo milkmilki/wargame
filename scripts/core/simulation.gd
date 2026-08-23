@@ -152,6 +152,13 @@ var _prepared_supply_blocked_edges: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
 var _supply_network_fingerprints: Dictionary = {}
+## 贸易预测分两层缓存：结构层跨日复用昂贵图搜索；完整预测只在所有结算
+## 输入完全相同时复用。缓存结果只供 Simulation 内部只读消费者共享。
+var _trade_structure_fingerprint: PackedByteArray = PackedByteArray()
+var _trade_structure_cache: Dictionary = {}
+var _trade_settlement_fingerprint: PackedByteArray = PackedByteArray()
+var _trade_result_cache: Dictionary = {}
+var _trade_gold_flows_cache: Array[Dictionary] = []
 ## 战争财政快照只依赖外交关系转换。普通日以 O(1) 版本比较跳过，
 ## 外部脚本直接调用 set_diplomatic_relation 也会因 revision 变化被补同步。
 var _war_gold_snapshot_diplomacy_revision: int = -1
@@ -182,6 +189,12 @@ var ai_command_commit_failure_log: Array[String] = []
 var ai_defense_topology_rebuild_total: int = 0
 var ai_defense_topology_reuse_total: int = 0
 var ai_defense_dynamic_reuse_total: int = 0
+## 贸易预测缓存诊断计数。build 表示实际执行 build_structure/settle，
+## cache_hit 表示复用了对应层；setup() 会统一清零。
+var trade_structure_build_total: int = 0
+var trade_structure_cache_hit_total: int = 0
+var trade_forecast_build_total: int = 0
+var trade_forecast_cache_hit_total: int = 0
 ## 运行时 ThreatField worker 墙钟统计，供多核 A/B 与现场诊断。
 var ai_threat_worker_count_last: int = 0
 var ai_threat_worker_last_usec: int = 0
@@ -248,6 +261,21 @@ var reinforcement_frame_slicing_disabled: bool = false
 var reinforcement_network_cache_disabled: bool = false
 ## 外交结构缓存 A/B：true 恢复同一次月度评估内重复构建联盟/敌对集团。
 var diplomacy_structure_cache_disabled: bool = false
+## 外交动员共享资源缓存 A/B：true 时每个参战成员各建一份评估上下文。
+## 正式运行保持 false，同一次外交 action 的联盟成员共享只读派生。
+var diplomacy_mobilization_cache_disabled: bool = false
+var diplomacy_mobilization_evaluation_cache_total: int = 0
+## 贸易预测 A/B：true 时每次请求都重新 build_structure + settle。
+## 正式运行保持 false；该开关不改变结算路径或结果，只禁用两层复用。
+var trade_forecast_cache_disabled: bool = false
+## 行军容量索引 A/B：true 恢复每次入边都扫描全部军队的旧逻辑；正式运行 false。
+var movement_capacity_index_disabled: bool = false
+## 仅在单次 _advance_movement 内存活的局部索引。键为
+## Vector3i(owner_nation, from_city, to_city)，值为同国同向运输负载。
+var _movement_capacity_load_by_direction: Dictionary = {}
+## army instance id -> [direction key, indexed load]，用于离边、死亡与途中掉头时精确回滚。
+var _movement_capacity_entry_by_army: Dictionary = {}
+var _movement_capacity_index_active: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_line_edge_assignment_emergencies
 ## （不分帧），以隔离「填线防区分帧」在同一运行时路径下的等价性。正式游戏 false。
 var line_edge_frame_slicing_disabled: bool = false
@@ -260,6 +288,8 @@ func setup(game_state: GameState) -> void:
 	state = game_state
 	_normalize_city_fortifications()
 	state.refresh_derived()
+	_reset_trade_forecast_cache()
+	_publish_initial_food_snapshot()
 	_synchronize_war_gold_income_snapshots()
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
@@ -289,6 +319,7 @@ func setup(game_state: GameState) -> void:
 	ai_defense_topology_rebuild_total = 0
 	ai_defense_topology_reuse_total = 0
 	ai_defense_dynamic_reuse_total = 0
+	diplomacy_mobilization_evaluation_cache_total = 0
 	_clear_ai_command_collection()
 	_parallel_ai_context_jobs.clear()
 	_runtime_day_in_progress = false
@@ -906,6 +937,124 @@ static func effective_tribute_rate(
 	return clampf(rate, 0.0, 1.0)
 
 
+## 清空单个 Simulation 实例拥有的贸易预测缓存和诊断计数。
+func _reset_trade_forecast_cache() -> void:
+	_trade_structure_fingerprint = PackedByteArray()
+	_trade_structure_cache.clear()
+	_trade_settlement_fingerprint = PackedByteArray()
+	_trade_result_cache.clear()
+	_trade_gold_flows_cache.clear()
+	trade_structure_build_total = 0
+	trade_structure_cache_hit_total = 0
+	trade_forecast_build_total = 0
+	trade_forecast_cache_hit_total = 0
+
+
+## 当前贸易结算和财政预测的完整、无碰撞 token。结构 fingerprint 负责路线、
+## 战争、道路、围城与贸易政策；这里补齐粮池、库存、需求、国库、军费、
+## 战乱减产日期及君主经济输入。仅将这些字段序列化，不使用 hash。
+func _trade_settlement_token(
+	structure_fingerprint: PackedByteArray
+) -> PackedByteArray:
+	var fields: Array = [
+		"trade_settlement_v1",
+		structure_fingerprint,
+	]
+	for city in state.cities:
+		fields.append([
+			"city", city.id, city.food_storage,
+			city_war_disrupted(state, city),
+		])
+	var suzerainty_subjects := state.suzerainty.keys()
+	suzerainty_subjects.sort()
+	for subject_value in suzerainty_subjects:
+		var subject_id := int(subject_value)
+		var record: Dictionary = state.suzerainty[subject_value]
+		fields.append([
+			"suzerainty", subject_id,
+			int(record.get("overlord_id", -1)),
+			float(record.get("tribute_rate", 0.0)),
+			bool(record.get("civil_war", false)),
+		])
+	for nation in state.nations:
+		fields.append([
+			"nation", nation.id, nation.alive,
+			state.food_pool_holder(nation.id),
+			nation.granary_food, nation.last_food_demand,
+			nation.food_demand_ema, nation.treasury_gold,
+			nation.ruler_revision, nation.ruler_archetype,
+			nation.ruler_traits,
+			RulerProfile.gold_output_multiplier(nation),
+			RulerProfile.food_consumption_multiplier(nation),
+			RulerProfile.reserve_months_bonus(nation),
+			RulerProfile.upkeep_multiplier(nation),
+		])
+	for army in state.armies:
+		if army.size <= 0:
+			continue
+		fields.append([
+			"army", army.owner_nation, army.size,
+		])
+	return var_to_bytes(fields)
+
+
+## Simulation 级贸易/财政预测入口。所有生产内调用均经此处：结构相同可跨日
+## 复用；完整 token 相同则连 settle 与 gold_flows 也直接复用。
+func _forecast_trade_and_gold_flows() -> Dictionary:
+	var structure_fingerprint := TradeNetwork.structure_fingerprint(state)
+	var structure: Dictionary
+	if (
+		not trade_forecast_cache_disabled
+		and not _trade_structure_cache.is_empty()
+		and _trade_structure_fingerprint == structure_fingerprint
+	):
+		structure = _trade_structure_cache
+		trade_structure_cache_hit_total += 1
+	else:
+		structure = TradeNetwork.build_structure(state)
+		trade_structure_build_total += 1
+		if not trade_forecast_cache_disabled:
+			_trade_structure_fingerprint = structure_fingerprint
+			_trade_structure_cache = structure
+
+	var settlement_fingerprint := _trade_settlement_token(
+		structure_fingerprint
+	)
+	if (
+		not trade_forecast_cache_disabled
+		and not _trade_result_cache.is_empty()
+		and _trade_settlement_fingerprint == settlement_fingerprint
+	):
+		trade_forecast_cache_hit_total += 1
+		return {
+			"trade": _trade_result_cache,
+			"gold_flows": _trade_gold_flows_cache,
+		}
+
+	var trade := TradeNetwork.settle(state, structure)
+	var gold_flows := _monthly_gold_flows_from_trade(state, trade)
+	trade_forecast_build_total += 1
+	if not trade_forecast_cache_disabled:
+		_trade_settlement_fingerprint = settlement_fingerprint
+		_trade_result_cache = trade
+		_trade_gold_flows_cache = gold_flows
+	return {
+		"trade": trade,
+		"gold_flows": gold_flows,
+	}
+
+
+## 为只接受 Dictionary 的静态 AI 评估器注入同一份实例预测。Dictionary 每次
+## 新建，内部大型结果只读共享；AI 只会新增自己的派生 key，不改写预测值。
+func _seed_trade_forecast(
+	evaluation_cache: Dictionary
+) -> Dictionary:
+	var forecast := _forecast_trade_and_gold_flows()
+	evaluation_cache["trade_network_result"] = forecast["trade"]
+	evaluation_cache["monthly_gold_flows"] = forecast["gold_flows"]
+	return evaluation_cache
+
+
 ## 全体国家下一次月结算的财政派生。贡赋只对藩王自己的城市税收计征，
 ## 不对下级藩王汇入的贡赋重复征税；因此逐级宗藩与结算遍历顺序无关。
 static func monthly_gold_flows(
@@ -1168,7 +1317,9 @@ func _synchronize_war_gold_income_snapshots() -> void:
 		return
 	# 正常路径在宣战前已主动冻结，不会走到这里。只有旧存档、测试或
 	# 外部脚本直接改关系时才惰性汇总一次，避免每个普通日扫描全军/全城。
-	var flows := monthly_gold_flows(state)
+	var flows: Array[Dictionary] = (
+		_forecast_trade_and_gold_flows()["gold_flows"]
+	)
 	for nation_id in needs_snapshot:
 		var nation := state.nations[nation_id]
 		nation.war_gold_income_snapshot = maxi(
@@ -1178,7 +1329,8 @@ func _synchronize_war_gold_income_snapshots() -> void:
 
 
 func _capture_war_gold_income_snapshots(
-	nation_ids: Array[int]
+	nation_ids: Array[int],
+	frozen_gold_flows: Array[Dictionary] = []
 ) -> void:
 	if state == null or nation_ids.is_empty():
 		return
@@ -1196,7 +1348,11 @@ func _capture_war_gold_income_snapshots(
 			eligible.append(nation_id)
 	if eligible.is_empty():
 		return
-	var flows := monthly_gold_flows(state)
+	var flows: Array[Dictionary] = (
+		frozen_gold_flows
+		if not frozen_gold_flows.is_empty()
+		else _forecast_trade_and_gold_flows()["gold_flows"]
+	)
 	for nation_id in eligible:
 		var nation := state.nations[nation_id]
 		nation.war_gold_income_snapshot = maxi(
@@ -1209,19 +1365,29 @@ func _capture_war_gold_income_snapshots(
 
 
 func _resolve_economy() -> void:
-	var trade := TradeNetwork.build(state)
+	var forecast := _forecast_trade_and_gold_flows()
+	var trade: Dictionary = forecast["trade"]
 	_publish_trade_snapshot(trade)
-	var gold_flows := _monthly_gold_flows_from_trade(state, trade)
+	var gold_flows: Array[Dictionary] = forecast["gold_flows"]
+	var garrison_by_city := build_garrison_index(state)
 	# 累计每国当月金钱税收（含战乱减产），作为贡赋基数。
 	var gold_income: Array[int] = []
 	gold_income.resize(state.nations.size())
 	gold_income.fill(0)
+	var half_year_food_produced: Array[int] = []
+	half_year_food_produced.resize(state.nations.size())
+	half_year_food_produced.fill(0)
 	for city in state.cities:
 		var nation := state.nations[city.owner_nation]
 		var gold := city_gold_output(state, city)
 		nation.treasury_gold += gold
 		gold_income[city.owner_nation] += gold
 		nation.manpower_pool += city_manpower_output(state, city)
+		half_year_food_produced[city.owner_nation] += city_food_output(
+			state,
+			city,
+			garrison_by_city
+		)
 	# 贸易税是新增收入；粮款是出口/进口双方之间的守恒转移。
 	# 二者已经折叠为 trade_net_income，因此这里只应用一次。
 	for nation in state.nations:
@@ -1231,20 +1397,81 @@ func _resolve_economy() -> void:
 	_resolve_trade_food_transfers(trade)
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
-	_resolve_military_finance()
+	_resolve_military_finance(gold_flows)
+	_publish_food_snapshot(trade, half_year_food_produced)
 	if state.day % DAYS_PER_HALF_YEAR == 0:
-		var produced: Array[int] = []
-		produced.resize(state.nations.size())
-		produced.fill(0)
-		var garrison_by_city := build_garrison_index(state)
-		for city in state.cities:
-			produced[city.owner_nation] += city_food_output(
-				state,
-				city,
-				garrison_by_city
-			)
 		for nation in state.nations:
-			state.deposit_food(nation.id, produced[nation.id])
+			state.deposit_food(
+				nation.id,
+				half_year_food_produced[nation.id]
+			)
+		state.refresh_derived()
+		_publish_granary_snapshot()
+
+
+func _publish_food_snapshot(
+	trade: Dictionary,
+	half_year_produced: Array[int]
+) -> void:
+	for nation in state.nations:
+		var imports := _trade_array_value(
+			trade, "nation_food_import", nation.id
+		)
+		var exports := _trade_array_value(
+			trade, "nation_food_export", nation.id
+		)
+		var trade_net := imports - exports
+		nation.last_food_estimated_production = int(round(
+			float(half_year_produced[nation.id]) / 6.0
+		))
+		nation.last_food_estimated_consumption = nation.last_food_demand
+		nation.last_food_estimated_balance = (
+			nation.last_food_estimated_production
+			- nation.last_food_estimated_consumption
+			+ trade_net
+		)
+	_publish_granary_snapshot()
+
+
+func _publish_initial_food_snapshot() -> void:
+	# Cold-start snapshot: no state mutation (debt/army untouched).
+	# Production: aggregate city_food_output over all valid owner cities
+	# (half-year) then /6 rounding to monthly, mirroring _publish_food_snapshot.
+	# Trade: pure _forecast_trade_and_gold_flows()["trade"] — read-only.
+	# Demand: compute projected demand BEFORE forecast so trade settlement
+	# sees the same new demand values. Preserve settled last_food_demand
+	# if already authoritative (EMA > 0 on old saves); otherwise use
+	# projected values for cold-start.
+	var garrison_by_city: Dictionary = build_garrison_index(state)
+	var half_year_produced: Array[int] = []
+	half_year_produced.resize(state.nations.size())
+	half_year_produced.fill(0)
+	for city in state.cities:
+		if (
+			city.owner_nation < 0
+			or city.owner_nation >= state.nations.size()
+		):
+			continue
+		half_year_produced[city.owner_nation] += city_food_output(
+			state,
+			city,
+			garrison_by_city
+		)
+	for nation in state.nations:
+		var projected_demand: int = (
+			TradeNetwork.projected_nation_monthly_food_demand(
+				state, nation.id
+			)
+		)
+		nation.last_food_demand = projected_demand
+	var forecast: Dictionary = _forecast_trade_and_gold_flows()
+	var trade: Dictionary = forecast.get("trade", {})
+	_publish_trade_snapshot(trade)
+	_publish_food_snapshot(trade, half_year_produced)
+
+
+func _publish_granary_snapshot() -> void:
+	state.refresh_derived()
 
 
 func _publish_trade_snapshot(trade: Dictionary) -> void:
@@ -1263,9 +1490,22 @@ func _publish_trade_snapshot(trade: Dictionary) -> void:
 		)
 		city.trade_route_count = 0
 		city.trade_food_balance = 0
+	var nation_route_counts: Array[int] = []
+	nation_route_counts.resize(state.nations.size())
+	nation_route_counts.fill(0)
 	for route in state.trade_routes:
 		if int(route.get("status", TradeNetwork.BLOCKED)) == TradeNetwork.BLOCKED:
 			continue
+		var nation_a := int(route.get("nation_a", -1))
+		var nation_b := int(route.get("nation_b", -1))
+		if nation_a >= 0 and nation_a < nation_route_counts.size():
+			nation_route_counts[nation_a] += 1
+		if (
+			nation_b >= 0
+			and nation_b < nation_route_counts.size()
+			and nation_b != nation_a
+		):
+			nation_route_counts[nation_b] += 1
 		var seen_cities := {}
 		for city_value in route.get("city_path", []):
 			var city_id := int(city_value)
@@ -1293,15 +1533,7 @@ func _publish_trade_snapshot(trade: Dictionary) -> void:
 		nation.last_trade_food_export = _trade_array_value(
 			trade, "nation_food_export", nation.id
 		)
-		nation.last_trade_route_count = 0
-		for route in state.trade_routes:
-			if int(route.get("status", TradeNetwork.BLOCKED)) == TradeNetwork.BLOCKED:
-				continue
-			if nation.id in [
-				int(route.get("nation_a", -1)),
-				int(route.get("nation_b", -1)),
-			]:
-				nation.last_trade_route_count += 1
+		nation.last_trade_route_count = nation_route_counts[nation.id]
 
 
 func _resolve_trade_food_transfers(trade: Dictionary) -> void:
@@ -1540,8 +1772,14 @@ static func city_garrison_troops(
 ## 供经济/军粮结算共享，替代 city_garrison_troops 的逐城 O(A) 全表扫描。
 static func build_garrison_index(game_state: GameState) -> Dictionary:
 	var index := {}
+	var city_count := game_state.cities.size()
 	for army in game_state.armies:
-		if army.size <= 0 or army.on_edge or army.location_city < 0:
+		if (
+			army.size <= 0
+			or army.on_edge
+			or army.location_city < 0
+			or army.location_city >= city_count
+		):
 			continue
 		if army.owner_nation != game_state.cities[army.location_city].owner_nation:
 			continue
@@ -1579,11 +1817,14 @@ static func city_garrison_food_loss(
 	)
 
 
-func _resolve_military_finance() -> void:
+func _resolve_military_finance(
+	gold_flows: Array[Dictionary] = []
+) -> void:
 	for nation in state.nations:
-		var upkeep := effective_monthly_military_upkeep(
-			state,
-			nation.id
+		var upkeep := (
+			int(gold_flows[nation.id].get("military_upkeep", 0))
+			if nation.id >= 0 and nation.id < gold_flows.size()
+			else effective_monthly_military_upkeep(state, nation.id)
 		)
 		var paid := mini(nation.treasury_gold, upkeep)
 		nation.treasury_gold -= paid
@@ -2562,13 +2803,13 @@ func _withdraw_weighted_supply(
 		var remainders: Array[Dictionary] = []
 		for entry in weighted:
 			var exact := float(remaining) * float(entry["weight"]) / total_weight
-			var share := mini(
-				int(floor(exact)),
-				(entry["city"] as City).food_storage
-			)
+			var share := int(floor(exact))
 			if share > 0:
-				(entry["city"] as City).food_storage -= share
-				distributed += share
+				var actual_delta := state.change_city_food_storage(
+					int(entry["city_id"]), -share
+				)
+				var removed := -actual_delta
+				distributed += removed
 			remainders.append({
 				"city": entry["city"],
 				"city_id": entry["city_id"],
@@ -2597,10 +2838,14 @@ func _withdraw_weighted_supply(
 			var city: City = entry["city"]
 			if city.food_storage <= 0:
 				continue
-			city.food_storage -= 1
-			remaining -= 1
-			supplied += 1
-			residual_distributed += 1
+			var actual_delta := state.change_city_food_storage(
+				city.id, -1
+			)
+			var removed := -actual_delta
+			if removed > 0:
+				remaining -= removed
+				supplied += removed
+				residual_distributed += removed
 		if distributed == 0 and residual_distributed == 0:
 			break
 	return supplied
@@ -2622,8 +2867,7 @@ func _drain_siege_food() -> void:
 		if battle.finished or battle.kind != Battle.Kind.SIEGE or battle.city == null:
 			continue
 		var city := battle.city
-		if city.food_storage > 0:
-			city.food_storage = maxi(city.food_storage - SIEGE_CITY_FOOD_PER_DAY, 0)
+		state.change_city_food_storage(city.id, -SIEGE_CITY_FOOD_PER_DAY)
 		if battle.has_garrison:
 			var has_food := city.food_storage > 0
 			for defender in battle.side_b:
@@ -2899,25 +3143,64 @@ func _advance_holding_adaptation() -> void:
 func _resolve_diplomacy() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
+	var diplomacy_profile_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	_normalize_alliance_wars()
-	_refresh_war_preparation_viability()
+	_record_tick_profile_stage(
+		"diplomacy_normalize", diplomacy_profile_started
+	)
+	diplomacy_profile_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	var evaluation_cache := _seed_trade_forecast({})
+	var frozen_gold_flows: Array[Dictionary] = (
+		evaluation_cache["monthly_gold_flows"]
+	)
+	_record_tick_profile_stage(
+		"diplomacy_trade_seed", diplomacy_profile_started
+	)
+	diplomacy_profile_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	_refresh_war_preparation_viability(evaluation_cache)
+	_record_tick_profile_stage(
+		"diplomacy_preparation_viability",
+		diplomacy_profile_started
+	)
+	diplomacy_profile_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	if tick_phase_profiling_enabled:
 		var profile := {"enabled": true}
 		var actions := DiplomacyAI.choose_actions(
 			state,
 			profile,
-			not diplomacy_structure_cache_disabled
+			not diplomacy_structure_cache_disabled,
+			evaluation_cache
+		)
+		_record_tick_profile_stage(
+			"diplomacy_choose", diplomacy_profile_started
 		)
 		for stage in profile:
 			if stage != "enabled":
 				tick_profile_last_usec[stage] = profile[stage]
-		_commit_diplomacy_actions(actions)
+		diplomacy_profile_started = Time.get_ticks_usec()
+		_commit_diplomacy_actions(
+			actions, evaluation_cache, frozen_gold_flows
+		)
+		_record_tick_profile_stage(
+			"diplomacy_commit", diplomacy_profile_started
+		)
 	else:
 		_commit_diplomacy_actions(
 			DiplomacyAI.choose_actions(
 				state, {},
-				not diplomacy_structure_cache_disabled
-			)
+				not diplomacy_structure_cache_disabled,
+				evaluation_cache
+			),
+			evaluation_cache,
+			frozen_gold_flows
 		)
 
 
@@ -2925,9 +3208,14 @@ func _resolve_diplomacy_over_frames() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
 	_normalize_alliance_wars()
-	_refresh_war_preparation_viability()
+	var evaluation_cache := _seed_trade_forecast({})
+	var frozen_gold_flows: Array[Dictionary] = (
+		evaluation_cache["monthly_gold_flows"]
+	)
+	_refresh_war_preparation_viability(evaluation_cache)
 	var job := {
 		"actions": [] as Array[Dictionary],
+		"evaluation_cache": evaluation_cache,
 	}
 	var task_id := WorkerThreadPool.add_task(
 		_build_parallel_diplomacy_actions.bind(job),
@@ -2940,25 +3228,37 @@ func _resolve_diplomacy_over_frames() -> void:
 	WorkerThreadPool.wait_for_task_completion(task_id)
 	var actions: Array = job["actions"]
 	_set_runtime_profile_stage(&"diplomacy_commit")
-	await _commit_diplomacy_actions_over_frames(actions)
+	await _commit_diplomacy_actions_over_frames(
+		actions, evaluation_cache, frozen_gold_flows
+	)
 
 
 func _build_parallel_diplomacy_actions(job: Dictionary) -> void:
 	job["actions"] = DiplomacyAI.choose_actions(
 		state, {},
-		not diplomacy_structure_cache_disabled
+		not diplomacy_structure_cache_disabled,
+		job["evaluation_cache"]
 	)
 
 
-func _commit_diplomacy_actions_over_frames(actions: Array) -> void:
+func _commit_diplomacy_actions_over_frames(
+	actions: Array,
+	evaluation_cache: Dictionary = {},
+	frozen_gold_flows: Array[Dictionary] = []
+) -> void:
 	var runtime_slice_started := Time.get_ticks_usec()
 	_defer_declaration_launches = true
+	var action_cache := evaluation_cache
 	for action in actions:
-		_commit_diplomacy_action(action)
+		# action 之间可能改变外交、国库或军队；缓存只在单个 action 内共享。
+		_commit_diplomacy_action(
+			action, action_cache, frozen_gold_flows
+		)
 		for mobilization in _pending_war_mobilizations:
 			_start_war_mobilization(
 				int(mobilization["nation_id"]),
-				int(mobilization["requested_armies"])
+				int(mobilization["requested_armies"]),
+				action_cache
 			)
 			if (
 				Time.get_ticks_usec() - runtime_slice_started
@@ -2967,6 +3267,7 @@ func _commit_diplomacy_actions_over_frames(actions: Array) -> void:
 				await get_tree().process_frame
 				runtime_slice_started = Time.get_ticks_usec()
 		_pending_war_mobilizations.clear()
+		action_cache = {}
 		if (
 			Time.get_ticks_usec() - runtime_slice_started
 				>= AI_RUNTIME_SLICE_BUDGET_USEC
@@ -2976,13 +3277,38 @@ func _commit_diplomacy_actions_over_frames(actions: Array) -> void:
 	_defer_declaration_launches = false
 
 
-func _commit_diplomacy_actions(actions: Array) -> void:
+func _commit_diplomacy_actions(
+	actions: Array,
+	evaluation_cache: Dictionary = {},
+	frozen_gold_flows: Array[Dictionary] = []
+) -> void:
+	var action_cache := evaluation_cache
 	for action in actions:
-		_commit_diplomacy_action(action)
+		var action_started := (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		# action 之间不复用：前一个提交可能改变后一个的贸易与资源输入。
+		_commit_diplomacy_action(
+			action, action_cache, frozen_gold_flows
+		)
+		var kind := int(action.get("kind", DiplomacyAI.Action.NONE))
+		var stage := (
+			"diplomacy_commit_declare_war"
+			if kind == DiplomacyAI.Action.DECLARE_WAR
+			else "diplomacy_commit_other"
+		)
+		_record_tick_profile_stage(stage, action_started)
+		action_cache = {}
 
 
-func _commit_diplomacy_action(action: Dictionary) -> void:
-	_execute_diplomatic_action(action)
+func _commit_diplomacy_action(
+	action: Dictionary,
+	evaluation_cache: Dictionary = {},
+	frozen_gold_flows: Array[Dictionary] = []
+) -> void:
+	_execute_diplomatic_action(
+		action, evaluation_cache, frozen_gold_flows
+	)
 
 
 ## 失去全部城市的国家立即向所有交战国投降。该规则属于战争结算，
@@ -3136,14 +3462,17 @@ func _war_opponents_including_eliminated(nation_id: int) -> Array[int]:
 	return opponents
 
 
-func _refresh_war_preparation_viability() -> void:
+func _refresh_war_preparation_viability(
+	evaluation_cache: Dictionary = {}
+) -> void:
 	for nation in state.nations:
 		if nation.war_preparation_target_nation < 0:
 			nation.war_preparation_unready_since_day = -1
 			continue
 		var ready := DiplomacyAI.war_preparation_resources_ready(
 			state,
-			nation.id
+			nation.id,
+			evaluation_cache
 		)
 		if ready:
 			nation.war_preparation_unready_since_day = -1
@@ -3151,7 +3480,11 @@ func _refresh_war_preparation_viability() -> void:
 			nation.war_preparation_unready_since_day = state.day
 
 
-func _execute_diplomatic_action(action: Dictionary) -> bool:
+func _execute_diplomatic_action(
+	action: Dictionary,
+	evaluation_cache: Dictionary = {},
+	frozen_gold_flows: Array[Dictionary] = []
+) -> bool:
 	var kind := int(action.get("kind", DiplomacyAI.Action.NONE))
 	var nation_a := int(action.get("a", -1))
 	var nation_b := int(action.get("b", -1))
@@ -3208,13 +3541,34 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
 			if state.can_alliance_declare_war(nation_a, nation_b):
+				var declaration_part_started := (
+					Time.get_ticks_usec()
+					if tick_phase_profiling_enabled else 0
+				)
 				var attackers := state.alliance_bloc(nation_a)
 				var defenders := state.alliance_bloc(nation_b)
 				action_bloc_a = attackers
 				action_bloc_b = defenders
+				_record_tick_profile_stage(
+					"diplomacy_declare_blocs",
+					declaration_part_started
+				)
+				declaration_part_started = (
+					Time.get_ticks_usec()
+					if tick_phase_profiling_enabled else 0
+				)
 				changed = _set_coalition_war(
 					attackers,
-					defenders
+					defenders,
+					frozen_gold_flows
+				)
+				_record_tick_profile_stage(
+					"diplomacy_declare_set_war",
+					declaration_part_started
+				)
+				declaration_part_started = (
+					Time.get_ticks_usec()
+					if tick_phase_profiling_enabled else 0
 				)
 				var objective_city := int(action.get("objective_city", -1))
 				if changed and objective_city >= 0:
@@ -3225,7 +3579,26 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 						objective_city,
 						str(action.get("objective_reason", ""))
 					)
+				_record_tick_profile_stage(
+					"diplomacy_declare_objective",
+					declaration_part_started
+				)
+				declaration_part_started = (
+					Time.get_ticks_usec()
+					if tick_phase_profiling_enabled else 0
+				)
 				if changed:
+					_prepare_diplomacy_mobilization_cache(
+						evaluation_cache
+					)
+					_record_tick_profile_stage(
+						"diplomacy_declare_cache_seed",
+						declaration_part_started
+					)
+					declaration_part_started = (
+						Time.get_ticks_usec()
+						if tick_phase_profiling_enabled else 0
+					)
 					var preparation_days := 0
 					var preparation_started := (
 						state.nations[nation_a]
@@ -3244,14 +3617,24 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 							attacker_id,
 							requested_armies
 								if attacker_id == nation_a
-								else -1
+								else -1,
+							evaluation_cache
 						)
 					for defender_id in defenders:
 						_clear_war_preparation(defender_id)
 						_queue_or_start_war_mobilization(
 							defender_id,
-							-1
+							-1,
+							evaluation_cache
 						)
+					_record_tick_profile_stage(
+						"diplomacy_declare_mobilization",
+						declaration_part_started
+					)
+					declaration_part_started = (
+						Time.get_ticks_usec()
+						if tick_phase_profiling_enabled else 0
+					)
 					_clear_war_preparation(nation_a, false)
 					if _defer_declaration_launches:
 						_pending_declaration_launches[nation_a] = {
@@ -3264,6 +3647,10 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 							objective_city,
 							preparation_days
 						)
+					_record_tick_profile_stage(
+						"diplomacy_declare_launch",
+						declaration_part_started
+					)
 					# 宣战瞬间出现新前线：强制所有参战国（尤其被动防守方）
 					# 下一天重算国境与防区，立即沿新边界铺开填线军。
 					_ai_last_decision_day = -1
@@ -3278,7 +3665,10 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 					GameState.DiplomaticRelation.ALLIED
 				)
 				if changed:
-					_synchronize_alliance_wars(nation_a, nation_b)
+					_synchronize_alliance_wars(
+						nation_a, nation_b, evaluation_cache,
+						frozen_gold_flows
+					)
 		DiplomacyAI.Action.LEAVE_ALLIANCE:
 			if state.is_allied(nation_a, nation_b) and nation_a != nation_b:
 				changed = state.set_diplomatic_relation(
@@ -3336,7 +3726,7 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 				if bool(action.get("resist", false)):
 					_capture_war_gold_income_snapshots([
 						nation_a, nation_b
-					] as Array[int])
+					] as Array[int], frozen_gold_flows)
 					changed = state.start_civil_war(nation_b)
 				else:
 					changed = state.revoke_vassal(nation_b)
@@ -3392,7 +3782,8 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 
 func _queue_or_start_war_mobilization(
 	nation_id: int,
-	requested_armies: int
+	requested_armies: int,
+	evaluation_cache: Dictionary = {}
 ) -> void:
 	if _defer_declaration_launches:
 		_pending_war_mobilizations.append({
@@ -3400,14 +3791,28 @@ func _queue_or_start_war_mobilization(
 			"requested_armies": requested_armies,
 		})
 	else:
-		_start_war_mobilization(nation_id, requested_armies)
+		_start_war_mobilization(
+			nation_id, requested_armies, evaluation_cache
+		)
 
 
 func _set_coalition_war(
 	attackers: Array[int],
-	defenders: Array[int]
+	defenders: Array[int],
+	frozen_gold_flows: Array[Dictionary] = []
 ) -> bool:
-	_capture_war_gold_income_snapshots(attackers + defenders)
+	var coalition_war_part_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	_capture_war_gold_income_snapshots(
+		attackers + defenders, frozen_gold_flows
+	)
+	_record_tick_profile_stage(
+		"diplomacy_set_war_snapshot", coalition_war_part_started
+	)
+	coalition_war_part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	var changed := false
 	for attacker in attackers:
 		for defender in defenders:
@@ -3426,6 +3831,9 @@ func _set_coalition_war(
 				)
 				or changed
 			)
+	_record_tick_profile_stage(
+		"diplomacy_set_war_relations", coalition_war_part_started
+	)
 	return changed
 
 
@@ -3462,7 +3870,9 @@ func _set_coalition_war_objective(
 
 func _synchronize_alliance_wars(
 	nation_a: int,
-	nation_b: int
+	nation_b: int,
+	evaluation_cache: Dictionary = {},
+	frozen_gold_flows: Array[Dictionary] = []
 ) -> void:
 	var bloc := state.alliance_bloc(nation_a)
 	if not bloc.has(nation_b):
@@ -3484,9 +3894,12 @@ func _synchronize_alliance_wars(
 	enemies.sort()
 	if enemies.is_empty():
 		return
-	var joined_war := _set_coalition_war(bloc, enemies)
+	var joined_war := _set_coalition_war(
+		bloc, enemies, frozen_gold_flows
+	)
 	if not joined_war:
 		return
+	_prepare_diplomacy_mobilization_cache(evaluation_cache)
 	var objective_city := int(shared_objective.get("city_id", -1))
 	if objective_city >= 0:
 		_set_coalition_war_objective(
@@ -3502,7 +3915,9 @@ func _synchronize_alliance_wars(
 	for member in bloc:
 		if state.nations[member].war_preparation_target_nation >= 0:
 			_clear_war_preparation(member)
-		_queue_or_start_war_mobilization(member, -1)
+		_queue_or_start_war_mobilization(
+			member, -1, evaluation_cache
+		)
 	_ai_last_decision_day = -1
 
 
@@ -4451,13 +4866,79 @@ func _clear_war_preparation(
 		nation.war_mobilization_reason = ""
 
 
-func _start_war_mobilization(nation_id: int, requested_armies: int = -1) -> void:
+## 同一外交 action 内只创建一份评估上下文。宣战关系已原子提交后清空
+## preflight 派生，保证联盟成员共享、且不把缓存带到下一个 action。贸易报告
+## 保持惰性：有月度快照时无需因宣战重建整张路线图；无快照的外部调用仍由
+## DiplomacyAI._trade_report 按当前战后状态构建一次，结果与旧路径相同。
+func _prepare_diplomacy_mobilization_cache(
+	evaluation_cache: Dictionary
+) -> void:
+	if diplomacy_mobilization_cache_disabled:
+		return
+	evaluation_cache.clear()
+	evaluation_cache["__diplomacy_mobilization_cache_ready"] = true
+	diplomacy_mobilization_evaluation_cache_total += 1
+
+
+func _start_war_mobilization(
+	nation_id: int,
+	requested_armies: int = -1,
+	evaluation_cache: Dictionary = {}
+) -> void:
 	var nation := state.nations[nation_id]
-	var posture := DiplomacyAI.food_posture(state, nation_id)
+	var resource_cache := evaluation_cache
+	if diplomacy_mobilization_cache_disabled:
+		resource_cache = {}
+		diplomacy_mobilization_evaluation_cache_total += 1
+	elif not resource_cache.has(
+		"__diplomacy_mobilization_cache_ready"
+	):
+		_prepare_diplomacy_mobilization_cache(resource_cache)
+	var mobilization_part_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	var posture := DiplomacyAI.food_posture(
+		state, nation_id, resource_cache
+	)
+	# 战时动员的金币上限最终只读取冻结的战前收入；完整 resource_report
+	# 其余字段不会参与 capacity。预聚合这两个实际输入，避免仅为随后被覆盖
+	# 的当前贸易收入重建全图。异常旧档没有快照时仍走原始完整计算。
+	if (
+		not diplomacy_mobilization_cache_disabled
+		and posture in [
+			DiplomacyAI.FoodPosture.OFFENSIVE_WAR,
+			DiplomacyAI.FoodPosture.DEFENSIVE_WAR,
+		]
+		and nation.war_gold_income_snapshot >= 0
+	):
+		resource_cache["resource:%d" % nation_id] = {
+			"gold_reserve_target": (
+				nation.war_gold_income_snapshot
+				* WAR_GOLD_RESERVE_MONTHS
+			),
+			"gold_reserve_baseline_income": (
+				nation.war_gold_income_snapshot
+			),
+		}
+	_record_tick_profile_stage(
+		"diplomacy_mobilization_posture",
+		mobilization_part_started
+	)
+	mobilization_part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	var capacity := DiplomacyAI.mobilization_capacity(
 		state,
 		nation_id,
-		posture
+		posture,
+		resource_cache
+	)
+	_record_tick_profile_stage(
+		"diplomacy_mobilization_capacity",
+		mobilization_part_started
+	)
+	mobilization_part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	if requested_armies >= 0:
 		capacity = mini(capacity, requested_armies)
@@ -4465,12 +4946,24 @@ func _start_war_mobilization(nation_id: int, requested_armies: int = -1) -> void
 	for army in state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
 			current_troops += army.size
+	_record_tick_profile_stage(
+		"diplomacy_mobilization_troops",
+		mobilization_part_started
+	)
+	mobilization_part_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	var target := current_troops + capacity * NEW_ARMY_SIZE
 	var food_plan := DiplomacyAI.war_food_report(
 		state,
 		nation_id,
 		target,
-		posture
+		posture,
+		resource_cache
+	)
+	_record_tick_profile_stage(
+		"diplomacy_mobilization_food",
+		mobilization_part_started
 	)
 	nation.war_mobilization_target_troops = maxi(
 		nation.war_mobilization_target_troops,
@@ -4999,7 +5492,7 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	var snapshot_diplomacy_cache := {}
+	var snapshot_diplomacy_cache := _seed_trade_forecast({})
 	_parallel_ai_context_jobs = context_jobs
 	# 只读上下文（snapshot+threat）是卡顿主因。snapshot 先在一个后台任务中
 	# 按固定国家顺序构建；随后 ThreatField 按国家分片到最多4个worker。
@@ -5242,6 +5735,9 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			snapshot_diplomacy_cache
 		)
 	)
+	# 宣战提交/战役启动可能改变外交、军队或国库；强制按当前完整 token
+	# 重新取一次预测。未变化时命中完整缓存，变化时仅重做 settle。
+	_seed_trade_forecast(force_resource_cache)
 	var decision_contexts := {}
 	for nation_id in managed_nations:
 		var context: Dictionary = force_contexts[nation_id]
@@ -5569,6 +6065,7 @@ func _stable_force_resource_cache_from_snapshot(
 			key in [
 				"frontier_matrix_built",
 				"monthly_gold_flows",
+				"trade_network_result",
 			]
 			or key.begins_with("wars:")
 			or key.begins_with("allies:")
@@ -5746,7 +6243,7 @@ func _enrich_ai_decision_context(
 		)
 		_set_runtime_profile_stage(&"ai_force_gold_flows")
 		resource_evaluation_cache[GOLD_FLOWS_CACHE_KEY] = (
-			monthly_gold_flows(state)
+			_forecast_trade_and_gold_flows()["gold_flows"]
 		)
 		_record_tick_profile_stage(
 			"ai_force_gold_flows", part_started
@@ -5847,6 +6344,8 @@ func _strategy_snapshot_for(
 	view: AiWorldView,
 	diplomacy_cache: Dictionary = {}
 ) -> StrategicMapSnapshot:
+	if not diplomacy_cache.has("monthly_gold_flows"):
+		_seed_trade_forecast(diplomacy_cache)
 	var revision := [
 		state.ownership_revision,
 		state.diplomacy_revision,
@@ -12222,6 +12721,7 @@ static func edge_travel_days(edge: Edge, formation_size: int = 0) -> float:
 
 
 func _advance_movement() -> void:
+	_prepare_movement_capacity_index()
 	# 1. 先推进所有 MOVING / RETREATING 军队（本步骤不处理"到达节点"）。
 	#    关键时序：若在此就地 _arrive_at_node，先走到敌城的一方会在遭遇检测前离边进入攻城，
 	#    导致相向而行的两军错身穿过、永不野战交火。故推进与到达必须分离。
@@ -12274,6 +12774,80 @@ func _advance_movement() -> void:
 	# 5. 推进所有进行中的战斗各打一回合
 	_resolve_battles()
 	_purge_dead_armies()
+	_finish_movement_capacity_index()
+
+
+## 构建本次行军阶段的同国同向负载。遍历顺序仍完全由 state.armies 决定；
+## 索引只替代后续容量求和，不参与军队排序或批量准入。
+func _prepare_movement_capacity_index() -> void:
+	_movement_capacity_load_by_direction.clear()
+	_movement_capacity_entry_by_army.clear()
+	_movement_capacity_index_active = not movement_capacity_index_disabled
+	if not _movement_capacity_index_active:
+		return
+	for army in state.armies:
+		_track_movement_capacity(army)
+
+
+func _finish_movement_capacity_index() -> void:
+	_movement_capacity_index_active = false
+	_movement_capacity_load_by_direction.clear()
+	_movement_capacity_entry_by_army.clear()
+
+
+func _movement_capacity_key(
+	nation_id: int,
+	from_city: int,
+	to_city: int
+) -> Vector3i:
+	return Vector3i(nation_id, from_city, to_city)
+
+
+func _track_movement_capacity(army: Army) -> void:
+	if (
+		not _movement_capacity_index_active
+		or army == null
+		or army.size <= 0
+		or not army.on_edge
+		or army.move_to == -1
+	):
+		return
+	var edge := state.edge_of(army.move_from, army.move_to)
+	if edge == null:
+		return
+	var load := army.road_capacity_load(edge.max_manpower)
+	if load <= 0:
+		return
+	var instance_id := army.get_instance_id()
+	if _movement_capacity_entry_by_army.has(instance_id):
+		_untrack_movement_capacity(army)
+	var key := _movement_capacity_key(
+		army.owner_nation, army.move_from, army.move_to
+	)
+	_movement_capacity_load_by_direction[key] = (
+		int(_movement_capacity_load_by_direction.get(key, 0)) + load
+	)
+	_movement_capacity_entry_by_army[instance_id] = [key, load]
+
+
+func _untrack_movement_capacity(army: Army) -> void:
+	if not _movement_capacity_index_active or army == null:
+		return
+	var instance_id := army.get_instance_id()
+	if not _movement_capacity_entry_by_army.has(instance_id):
+		return
+	var entry: Array = _movement_capacity_entry_by_army[instance_id]
+	var key: Vector3i = entry[0]
+	var remaining := maxi(
+		int(_movement_capacity_load_by_direction.get(key, 0))
+			- int(entry[1]),
+		0
+	)
+	if remaining == 0:
+		_movement_capacity_load_by_direction.erase(key)
+	else:
+		_movement_capacity_load_by_direction[key] = remaining
+	_movement_capacity_entry_by_army.erase(instance_id)
 
 
 ## 尝试进入 path 的下一段边。capacity 仅限制同国同方向运输负载；
@@ -12358,6 +12932,7 @@ func _begin_next_leg(army: Army) -> void:
 	edge.passing_count += 1
 	edge.occupied = true
 	army.on_edge = true
+	_track_movement_capacity(army)
 
 
 func _friendly_same_direction_manpower(
@@ -12365,6 +12940,11 @@ func _friendly_same_direction_manpower(
 	from_city: int,
 	to_city: int
 ) -> int:
+	if _movement_capacity_index_active:
+		return int(_movement_capacity_load_by_direction.get(
+			_movement_capacity_key(nation_id, from_city, to_city),
+			0
+		))
 	var manpower := 0
 	for other in state.armies:
 		if other.size <= 0 or other.owner_nation != nation_id:
@@ -12957,6 +13537,15 @@ func _resolve_combat_round(
 		tactical_entropy,
 		state.day
 	)
+	# 战斗伤亡可能把仍标记 on_edge 的军队直接减至 0；旧扫描会立即排除它们，
+	# 局部索引也须在任何随后撤退军尝试入边前同步移除。
+	for side in [
+		battle.side_a, battle.side_b,
+		battle.routed_a, battle.routed_b,
+	]:
+		for participant in side:
+			if participant.size <= 0:
+				_untrack_movement_capacity(participant)
 	# Combat 只负责判定单军溃退并从战斗侧移出；Simulation 拥有路径与边占用，
 	# 因此在同一回合立即从真实战场位置启动撤退。
 	for army in battle.routed_a:
@@ -14024,9 +14613,11 @@ func _retreat(army: Army) -> void:
 		var old_progress := clampf(army.move_progress, 0.0, 1.0)
 		if endpoint == old_from:
 			# 原地掉头：交换边方向并反转 progress，像素位置保持不变。
+			_untrack_movement_capacity(army)
 			army.move_from = old_to
 			army.move_to = old_from
 			army.move_progress = 1.0 - old_progress
+			_track_movement_capacity(army)
 		else:
 			army.move_from = old_from
 			army.move_to = old_to
@@ -14261,6 +14852,7 @@ func _release_edge(army: Army) -> void:
 	army.encounter_blocked = false
 	if not army.on_edge:
 		return
+	_untrack_movement_capacity(army)
 	army.on_edge = false
 	var edge := state.edge_of(army.move_from, army.move_to)
 	if edge != null and edge.passing_count > 0:

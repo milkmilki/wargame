@@ -59,7 +59,7 @@ static func build(
 	snapshot._compute_connectivity()
 	snapshot._compute_supply_corridors(view)
 	snapshot._finalize_edge_values(shared_edge_values)
-	snapshot._compute_offensive_values(view)
+	snapshot._compute_offensive_values(view, diplomacy_cache)
 	snapshot._select_priority_targets(view)
 	return snapshot
 
@@ -505,7 +505,9 @@ func _finalize_edge_values(shared_edge_values: Dictionary = {}) -> void:
 	)
 
 
-func _compute_offensive_values(view: AiWorldView) -> void:
+func _compute_offensive_values(
+	view: AiWorldView, diplomacy_cache: Dictionary = {}
+) -> void:
 	for city_id in frontier_enemy_cities:
 		var base := value_of_city(city_id)
 		if not view.strategic_planning_enabled:
@@ -534,7 +536,8 @@ func _compute_offensive_values(view: AiWorldView) -> void:
 		var encirclement_value := DiplomacyAI.encirclement_value(
 			_state,
 			city_id,
-			target_owner
+			target_owner,
+			diplomacy_cache
 		)
 		offensive_value[city_id] = (
 			base
