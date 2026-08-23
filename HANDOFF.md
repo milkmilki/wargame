@@ -1,7 +1,7 @@
 # World-War 项目交接文档
 
 > 面向接手的 AI agent / 开发者。目标：不读全部源码即可理解架构、约定、当前状态与安全改动边界。
-> 最后更新：2026-08-23（领土、宗藩与外交结算已收口为批量原子事务；集团和平和真实内战首都通吃共用同一规划/提交边界；保留确定性命名、君主、忠诚/叛乱、贸易网络、**政治地图与地形灯光**及重军运输规则。历史战斗系统重构见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）。
+> 最后更新：2026-08-24（领土、宗藩与外交结算已收口为批量原子事务；集团和平和真实内战首都通吃共用同一规划/提交边界；保留确定性命名、君主、忠诚/叛乱、贸易网络、**政治地图与地形灯光**及重军运输规则。国家列表现已支持零安全粮食显示（负数补零）；前线容量分配已固化三级梯队（canonical tier1/tier2 + 去重 tier3）；同日占领刷新支持批量合并与 dirty 集合去重；新增 `frontline_capacity_allocator.gd` 与 `frontline_capture_refresh.gd` 两项专项门禁）。
 >
 > **接手第一件事**：读 §4.13（原子领土与和平事务）、§9（性能现状与剩余优化路线图）和 §10（40 国统一收敛）。当前 `tests/test_suite.gd` = **1502 passed / 0 failed**；strict-mirror 连续 3650 天优势分 `0.0`。
 
@@ -23,7 +23,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 现为十九阶段（Godot 阶段使用同一个隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（最近已确认逻辑结果 **1503 断言 / 0 失败**）③贸易结构缓存等价门禁 ④贸易联通预筛等价门禁 ⑤贸易预测缓存等价门禁 ⑥行军容量索引等价门禁 ⑦包围索引等价门禁 ⑧忠诚/行政半径等价门禁 ⑨粮仓快照门禁 ⑩守军索引等价门禁 ⑪政治/命名/贸易 smoke ⑫高程图源门禁 ⑬地图编辑器运行时与 MapDefinition 往返 smoke ⑭3D 地形 smoke ⑮默认前端场景 smoke ⑯道路调节与地图模式 UI smoke ⑰前端 3D 视觉构件 smoke ⑱真实海岸 GPU 白点门禁 ⑲国家详情 single-build 门禁。默认快链现含 8 个快速专项门禁（原 5 个性能专项 + 忠诚/行政半径 + 粮仓快照 + 守军索引）；`diplomacy_structure_cache_equivalence.gd` 仍为手动长 A/B，不纳入默认快链。`nation_detail_single_build.gd` 当前作为独立专项记录；最终树 19 阶段 `run_tests.sh` 已 `exit 0` 全通过，`trade_forecast_cache_equivalence.gd` 为 setup 后 baseline 增量断言，单项 **78 checks** 且无 `SCRIPT ERROR`。本次完整链 wall time **未记录**，不得沿用旧的 `331.42s` 绿链口径。
+`run_tests.sh` 现为二十一阶段（Godot 阶段使用同一个隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（最近已确认逻辑结果 **1503 断言 / 0 失败**）③贸易结构缓存等价门禁 ④贸易联通预筛等价门禁 ⑤贸易预测缓存等价门禁 ⑥行军容量索引等价门禁 ⑦包围索引等价门禁 ⑧忠诚/行政半径等价门禁 ⑨粮仓快照门禁 ⑩守军索引等价门禁 ⑪国家详情 single-build 门禁 ⑫前线容量分配器门禁（`frontline_capacity_allocator.gd`）⑬同日占领刷新门禁（`frontline_capture_refresh.gd`）⑭政治/命名/贸易 smoke ⑮高程图源门禁 ⑯地图编辑器运行时与 MapDefinition 往返 smoke ⑰3D 地形 smoke ⑱默认前端场景 smoke ⑲道路调节与地图模式 UI smoke ⑳前端 3D 视觉构件 smoke ㉑真实海岸 GPU 白点门禁。默认快链现含 8 个快速专项门禁（原 5 个性能专项 + 忠诚/行政半径 + 粮仓快照 + 守军索引）；`diplomacy_structure_cache_equivalence.gd` 仍为手动长 A/B，不纳入默认快链。`nation_detail_single_build.gd`、`frontline_capacity_allocator.gd`、`frontline_capture_refresh.gd` 均已并入默认链，不再作为独立记录；当前实测最终树 21 阶段 `run_tests.sh` 已 `exit 0` 全通过，wall time `334.514s`，无 `SCRIPT ERROR`。`tests/test_suite.gd` 为 **1503/1503**，`food=46`、`trade_connectivity=376`、`nation detail single build=11`、`frontline capacity allocator=OK`、`frontline capture refresh=OK`，`trade_forecast_cache_equivalence.gd` 为 setup 后 baseline 增量断言，单项 **78 checks**。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
 `tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
@@ -87,6 +87,8 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [main.tscn](main.tscn) | 场景 | 默认真实高度图场景（Main + Simulation + MapRenderer） |
 | [square_map.tscn](square_map.tscn) | 场景 | 保留的原始 `8×8` 方形地图场景；Main 的 `use_grid_world=true` |
 | [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 1502 断言 / 0 失败；逻辑回归主套件，headless 运行 |
+| [tests/frontline_capacity_allocator.gd](tests/frontline_capacity_allocator.gd) | 测试 | 三级前线容量分配：canonical tier1/tier2 保留防区归属，去重 tier3 不占归属；小民族生存路径回退；不可达边境冗余填充 |
+| [tests/frontline_capture_refresh.gd](tests/frontline_capture_refresh.gd) | 测试 | 同日占领批量刷新：dirty 集合去重、旧业主防区清理、新业主 LINE 同刷部署、非 LINE 战役/战团元数据不变 |
 | [tests/politics_trade_smoke.gd](tests/politics_trade_smoke.gd) | 测试 | 命名、君主、忠诚/叛乱、贸易守恒及月结发布集中 smoke |
 | [tests/map_editor_runtime.gd](tests/map_editor_runtime.gd) | 测试 | 地图编辑、MapDefinition v1/v2 校验与运行时往返 smoke |
 | [tests/frontend_scene_smoke.gd](tests/frontend_scene_smoke.gd) | 测试 | 默认场景、HUD、设置、地图编辑器与五种地图模式集成 smoke |
@@ -585,7 +587,7 @@ AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users
 
 ## 9. 战争态性能收敛（2026-08-23，本轮收口后）
 
-> 目标：在不破坏确定性和长跑收敛的前提下，把 40 国/160 城与 80 国/500 城压力场景的 AI 主耗时继续压缩，并把所有结构性优化纳入默认快链等价门禁。当前口径以 **19 阶段完整 `run_tests.sh` exit 0、1503/1503 逻辑回归、专项数字见 §9.3、365 天长跑 exit 0** 为准。
+> 目标：在不破坏确定性和长跑收敛的前提下，把 40 国/160 城与 80 国/500 城压力场景的 AI 主耗时继续压缩，并把所有结构性优化纳入默认快链等价门禁。当前口径以 **21 阶段完整 `run_tests.sh` exit 0、1503/1503 逻辑回归、专项数字见 §9.3、365 天长跑 exit 0** 为准。
 
 ### 9.1 本轮底层优化（结构已落地）
 
@@ -610,16 +612,31 @@ monthly: 10066.30ms -> 700.80ms
 peak: 18240.21ms -> 1050.78ms
 ```
 
-最新补充口径是最终树 `war_tick_phase_probe`（40 国 / 160 城 / 60 天）：
+最新补充口径是最终默认 union 单次 `40/160/60` 实测：
 
 ```text
-exit 0, wall 18.86s, no SCRIPT ERROR
-和平日 59 天: total avg 73.96ms, peak 513.73ms, AI 42.23ms (57.1%), monthly 4.71ms
-战争日 1 天: total 1066.63ms, AI 761.22ms (71.4%), snapshot 605.56ms, monthly 271.54ms
-外交: choose 117.24ms, war 111.97ms
+exit 0, wall 18.388s, no SCRIPT ERROR
+peace total 72.00ms
+war total 876.91ms
+snapshot 405.20ms
+cache_seed 365.18ms
+structure 351.47ms
+domestic 167.52ms
+candidates 104.67ms
+routes 71.59ms
 ```
 
-说明：这里是最新最终树口径；上面的旧基准仍保留作更细历史对照，不反推 probe 未提供的其它缺失字段。
+3 轮 A/B 中位性能对照：
+
+```text
+legacy war 1073.43ms -> optimized 872.17ms (-18.7%)
+legacy candidates 304.40ms -> optimized 104.76ms (-65.6%)
+legacy structure 550.16ms -> optimized 349.52ms (-36.5%)
+legacy snapshot 603.18ms -> optimized 402.81ms (-33.2%)
+legacy peace 72.33ms -> optimized 72.09ms
+```
+
+说明：这里是最新最终树口径。`corridor`、`pair memo`、`lazy seed` 三组被否决实验均已撤销，仅保留 coarse profiling 结论；上面的旧基准仍保留作更细历史对照。
 
 500 城 / 80 国 / 20 天 simulation 基准：
 
@@ -638,20 +655,22 @@ AI peak: 16293.4ms -> 7843.0ms
 - 默认快链现已纳入 8 个 headless 快速专项门禁：`trade_structure_cache_equivalence.gd`、`trade_connectivity_prefilter_equivalence.gd`、`trade_forecast_cache_equivalence.gd`、`movement_capacity_index_equivalence.gd`、`encirclement_index_equivalence.gd`、`loyalty_admin_radius_equivalence.gd`、`granary_snapshot_equivalence.gd`、`defender_index_equivalence.gd`。
 - 已确认的专项结果：
   - `trade_structure` **56 checks**。
-  - `trade_connectivity` **89 checks**。
+  - `trade_connectivity` **376 checks**。
   - `trade_forecast` **78 checks**。
   - `movement` **36 ticks / 0 diff**。
   - `encirclement` **572** 条检查通过。
   - `diplomacy` 长 A/B 为**手动门禁**，365 天 state/action **0 diff**；因耗时较长，不并入默认 `run_tests.sh`。
   - `loyalty` **13 checks**。
-  - `food` **39 checks**。
+  - `food` **46 checks**。
   - `defender` **855 checks**。
-  - `nation detail single build` 独立专项 **11 checks**；若后续并入默认链，需要同步刷新 §1 的阶段数与本节记录。
-- 最终树 19 阶段 `./run_tests.sh` 已 `exit 0` 全通过；`tests/test_suite.gd` 为 **1503/1503**，专项数字如上更新。本次完整链 wall time **未记录**，因此这里不沿用旧的 `331.42s`。
+  - `nation detail single build` **11 checks**，已并入默认链。
+  - `frontline capacity allocator` **OK**，三级梯队容量分配专项覆盖 canonical tier1/tier2 归属与 tier3 去重、小民族生存回退、不可达边境冗余填充。
+  - `frontline capture refresh` **OK**，同日占领批量刷新专项覆盖 dirty 集合去重、旧业主防区清理、新业主 LINE 同刷与非 LINE 元数据不变。
+- 当前实测最终树 21 阶段 `./run_tests.sh` 已 `exit 0` 全通过，wall time `334.514s`，无 `SCRIPT ERROR`；`tests/test_suite.gd` 为 **1503/1503**，`food=46`、`trade_connectivity=376`、`nation detail single build=11`，`frontline capacity allocator` 与 `frontline capture refresh` 均通过，专项数字如上更新。
 
 ### 9.4 长跑与回归基准
 
-- 365 天活跃固定 `seed=12345` 长跑已通过，退出码 `0`，`total_ms=33323`；摘要为 `wars=1`、`offensives=8`、`multi_prep=2`、`max_parallel=7`、`orders=354`。
+- 365 天活跃固定 `seed=12345` 长跑已通过，退出码 `0`，wall time `36.494s`，`total_ms=35539`；摘要为 `wars=1`、`offensives=8`、`multi_prep=3`、`max_parallel=8`。
 - 核心硬指标：
   - `territory_invalid=0@-1`
   - `commit_failures=0`
@@ -679,7 +698,7 @@ $GODOT --headless --path . --script res://tests/diplomacy_structure_cache_equiva
 
 ### 9.7 一句话给下一个 agent
 
-现状：贸易、外交共享、行军与包围索引这轮优化已经收口，默认快链现记录为 8 个快速专项门禁；本轮新增粮仓生命周期改动后，`food` 专项已更新到 **39 checks**，并补充了 setup 首份真实产/需/净估算、同步 `trade snapshot`、`change_city_food_storage()` 的 O(1) helper 汇总维护以及 `build_garrison_index()` 上界 guard。最终树 19 阶段整链现已全通过，`trade_forecast` 为 setup 后 baseline 增量断言 `78 checks`，`nation detail single build` 为 `11 checks`；继续改贸易或 evaluation cache 前，先守住 §9.5 的三条维护约束，再补对应等价门禁。
+现状：贸易、外交共享、行军与包围索引这轮优化已经收口，当前实测最终树 21 阶段整链已全通过，`suite=1503/0`、`food=46`、`trade_connectivity=376`、`trade_forecast=78`、`nation detail single build=11`，`frontline capacity allocator` 与 `frontline capture refresh` 也已通过。最终默认 union 单次 `40/160/60` 与 3 轮 A/B 中位性能对照已回填，`corridor`、`pair memo`、`lazy seed` 三组被否决实验均已撤销，仅保留 coarse profiling 结论；继续改贸易或 evaluation cache 前，先守住 §9.5 的三条维护约束，再补对应等价门禁。
 
 ---
 

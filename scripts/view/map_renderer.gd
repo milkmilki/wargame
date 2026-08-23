@@ -4660,6 +4660,23 @@ static func nation_list_rows(
 		for trait_id in nation.ruler_traits:
 			traits.append(RulerProfile.trait_name(trait_id))
 		var trait_text := "、".join(traits) if not traits.is_empty() else "无特质"
+		var monthly_food_balance_text := _signed_value_text(
+			nation.last_food_estimated_balance
+		)
+		var food_trade_text := _food_trade_flow_text(
+			nation.last_trade_food_import,
+			nation.last_trade_food_export
+		)
+		var food_snapshot_secondary := (
+			"粮仓 %d   月产 %d   月需 %d   月净 %s   流 %s"
+			% [
+				nation.granary_food,
+				nation.last_food_estimated_production,
+				nation.last_food_estimated_consumption,
+				monthly_food_balance_text,
+				food_trade_text,
+			]
+		)
 		row_by_nation[nation.id] = {
 			"nation_id": nation.id,
 			"color": nation.color,
@@ -4679,12 +4696,7 @@ static func nation_list_rows(
 				nation.treasury_gold,
 				int(report["monthly_gold_balance"]),
 			],
-			"economy_secondary": "商路 %d   商金 %+d   粮 %+d/-%d" % [
-				nation.last_trade_route_count,
-				nation.last_trade_gold,
-				nation.last_trade_food_import,
-				nation.last_trade_food_export,
-			],
+				"economy_secondary": food_snapshot_secondary,
 			"governance_primary": "%s · %s" % [
 				nation.ruler_name if not nation.ruler_name.is_empty() else "无名君主",
 				RulerProfile.archetype_name(nation.ruler_archetype),
@@ -4698,11 +4710,13 @@ static func nation_list_rows(
 				city_count_by_nation[nation.id], army_count_by_nation[nation.id],
 				troops_by_nation[nation.id], nation.manpower_pool, nation.average_loyalty,
 			],
-			"economy": "金%d 月%+d 商%d线 金%+d 粮+%d/-%d" % [
-				nation.treasury_gold, int(report["monthly_gold_balance"]),
-				nation.last_trade_route_count, nation.last_trade_gold,
-				nation.last_trade_food_import, nation.last_trade_food_export,
-			],
+				"economy": "金%d 月%+d 商%d线 金%s %s" % [
+					nation.treasury_gold,
+					int(report["monthly_gold_balance"]),
+					nation.last_trade_route_count,
+					_signed_value_text(nation.last_trade_gold),
+					food_snapshot_secondary,
+				],
 			"diplomacy": ruler_summary(nation),
 			"action": nation_action_summary(game_state, nation.id),
 		}

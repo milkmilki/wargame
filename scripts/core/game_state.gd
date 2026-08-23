@@ -3257,7 +3257,6 @@ func restore_regional_loyalty_target(
 		var target_food_holder := food_pool_holder(target_id)
 		if withdrawn_food > 0 and deposit_food(target_id, withdrawn_food):
 			nations[food_holder_before].granary_food -= withdrawn_food
-			nations[target_food_holder].granary_food += withdrawn_food
 	for army in armies:
 		if (
 			army.owner_nation == parent_id
@@ -5945,8 +5944,8 @@ func deposit_food(nation_id: int, amount: int) -> bool:
 			target = warehouses[0]
 	if target == null:
 		return false
-	target.food_storage += amount
-	return true
+	var actual := change_city_food_storage(target.id, amount)
+	return actual > 0
 
 
 func remove_warehouse(nation_id: int, city_id: int) -> void:

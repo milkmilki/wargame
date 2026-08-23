@@ -67,13 +67,16 @@ const UNREACHABLE_COST: float = -1.0
 static var _candidate_dijkstra_field_builds: int = 0
 static var _candidate_connectivity_queries: int = 0
 static var _candidate_connectivity_searches: int = 0
+static var _candidate_connectivity_union_graph_builds: int = 0
 static var _candidate_connectivity_rejections: int = 0
+static var _connectivity_prefilter_union_cache_enabled: bool = true
 
 
 static func reset_connectivity_prefilter_counters() -> void:
 	_candidate_dijkstra_field_builds = 0
 	_candidate_connectivity_queries = 0
 	_candidate_connectivity_searches = 0
+	_candidate_connectivity_union_graph_builds = 0
 	_candidate_connectivity_rejections = 0
 
 
@@ -82,10 +85,33 @@ static func connectivity_prefilter_counters() -> Dictionary:
 		"candidate_dijkstra_field_builds": _candidate_dijkstra_field_builds,
 		"candidate_connectivity_queries": _candidate_connectivity_queries,
 		"candidate_connectivity_searches": _candidate_connectivity_searches,
+		"candidate_connectivity_legacy_bfs_searches": (
+			_candidate_connectivity_searches
+		),
+		"candidate_connectivity_union_graph_builds": (
+			_candidate_connectivity_union_graph_builds
+		),
 		"candidate_connectivity_rejections": (
 			_candidate_connectivity_rejections
 		),
 	}
+
+
+static func set_connectivity_prefilter_union_cache_enabled(
+	enabled: bool
+) -> void:
+	_connectivity_prefilter_union_cache_enabled = enabled
+
+
+static func _union_connectivity_prefilter_enabled() -> bool:
+	var env_override := OS.get_environment(
+		"TRADE_LEGACY_CONNECTIVITY_PREFILTER"
+	)
+	if env_override == "1":
+		return false
+	if env_override == "0":
+		return true
+	return _connectivity_prefilter_union_cache_enabled
 
 
 ## 权威入口。结构派生与动态粮食结算分层后仍保持原返回结构逐字段等价。
@@ -99,7 +125,9 @@ static func build(
 ## 可跨多次预测复用的昂贵结构层：图搜索、路线选择与路线税均只依赖
 ## structure_fingerprint() 覆盖的字段，不读取库存、国库或粮食需求。
 static func build_structure(
-	state: GameState, use_connectivity_prefilter: bool = true
+	state: GameState,
+	use_connectivity_prefilter: bool = true,
+	build_profile: Dictionary = {}
 ) -> Dictionary:
 	if state == null:
 		return _empty_structure(0, 0, structure_fingerprint(null))
@@ -118,21 +146,47 @@ static func build_structure(
 			nation_trade_gold, nation_trade_tax, [] as Array[int]
 		)
 
+	var profile_enabled: bool = bool(build_profile.get("enabled", false))
+	var stage_started: int = (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	var policies := _collect_policies(state)
-	var graph := _build_graph(state)
 	var besieged := state.besieged_city_ids()
 	var occupied_edges := _enemy_occupancy_records(state)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_inputs",
+			Time.get_ticks_usec() - stage_started
+		)
+		stage_started = Time.get_ticks_usec()
+	var graph := _build_graph(state)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_graph",
+			Time.get_ticks_usec() - stage_started
+		)
+		stage_started = Time.get_ticks_usec()
 	var field_cache := {}
 	var connectivity_cache := {}
 	var routes: Array[Dictionary] = []
 	routes.append_array(_build_domestic_routes(
-		state, graph, policies, besieged, occupied_edges, field_cache
+		state, graph, policies, besieged, occupied_edges, field_cache,
+		build_profile
 	))
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic",
+			Time.get_ticks_usec() - stage_started
+		)
 	routes.append_array(_build_international_routes(
 		state, graph, policies, besieged, occupied_edges, field_cache,
-		connectivity_cache, use_connectivity_prefilter
+		connectivity_cache, use_connectivity_prefilter, build_profile
 	))
 
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	routes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var international_a := bool(a["international"])
 		var international_b := bool(b["international"])
@@ -152,9 +206,28 @@ static func build_structure(
 		state, routes, policies, city_gold_bonus,
 		nation_trade_gold, nation_trade_tax
 	)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_result",
+			Time.get_ticks_usec() - stage_started
+		)
 	return _make_structure(
 		fingerprint, city_count, nation_count, routes, city_gold_bonus,
 		nation_trade_gold, nation_trade_tax, policies
+	)
+
+
+static func _accumulate_build_profile(
+	build_profile: Dictionary,
+	stage: String,
+	elapsed_usec: int
+) -> void:
+	if not bool(build_profile.get("enabled", false)):
+		return
+	build_profile[stage] = (
+		int(build_profile.get(stage, 0))
+		+ elapsed_usec
 	)
 
 
@@ -572,7 +645,8 @@ static func _build_domestic_routes(
 	policies: Array[int],
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
-	field_cache: Dictionary
+	field_cache: Dictionary,
+	build_profile: Dictionary = {}
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for nation in state.nations:
@@ -627,8 +701,13 @@ static func _build_international_routes(
 	occupied_edges: Array[Dictionary],
 	field_cache: Dictionary,
 	connectivity_cache: Dictionary,
-	use_connectivity_prefilter: bool
+	use_connectivity_prefilter: bool,
+	build_profile: Dictionary = {}
 ) -> Array[Dictionary]:
+	var profile_enabled: bool = bool(build_profile.get("enabled", false))
+	var stage_started: int = (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	var hubs_by_nation: Array = []
 	hubs_by_nation.resize(state.nations.size())
 	for nation_id in range(state.nations.size()):
@@ -641,6 +720,10 @@ static func _build_international_routes(
 	# ranking still uses cached Dijkstra fields; operational ordering only asks
 	# the cheaper reachability helper below.
 	var candidates: Array[Dictionary] = []
+	var union_connectivity_prefilter := (
+		use_connectivity_prefilter
+		and _union_connectivity_prefilter_enabled()
+	)
 	for nation_a in range(state.nations.size()):
 		if (
 			not state.nations[nation_a].alive
@@ -665,17 +748,31 @@ static func _build_international_routes(
 			# No ideal path means there is no trade corridor to retain as BLOCKED.
 			if float(preferred["cost"]) < 0.0:
 				continue
-			var allowed := _allowed_city_mask(state, nation_a, nation_b)
-			var blocked_edges := _blocked_edges_for_parties(
-				state, nation_a, nation_b, occupied_edges
-			)
 			var is_operational: bool
 			if use_connectivity_prefilter:
-				is_operational = _has_operational_connection(
-					state, graph, source_hubs, destination_hubs, allowed,
-					besieged, blocked_edges, connectivity_cache
-				)
+				if union_connectivity_prefilter:
+					is_operational = _has_operational_connection_union(
+						state, graph, source_hubs, destination_hubs,
+						nation_a, nation_b, besieged, occupied_edges,
+						connectivity_cache
+					)
+				else:
+					var allowed := _allowed_city_mask(
+						state, nation_a, nation_b
+					)
+					var blocked_edges := _blocked_edges_for_parties(
+						state, nation_a, nation_b, occupied_edges
+					)
+					is_operational = _has_operational_connection(
+						state, graph, source_hubs, destination_hubs,
+						allowed, besieged, blocked_edges,
+						connectivity_cache
+					)
 			else:
+				var allowed := _allowed_city_mask(state, nation_a, nation_b)
+				var blocked_edges := _blocked_edges_for_parties(
+					state, nation_a, nation_b, occupied_edges
+				)
 				var operational := _select_preferred_endpoints(
 					state, graph, source_hubs, destination_hubs, allowed, true,
 					besieged, blocked_edges, nation_a, nation_b,
@@ -711,7 +808,14 @@ static func _build_international_routes(
 			return int(a["nation_a"]) < int(b["nation_a"])
 		return int(a["nation_b"]) < int(b["nation_b"])
 	)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates",
+			Time.get_ticks_usec() - stage_started
+		)
 
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	var counts := _zero_int_array(state.nations.size())
 	var result: Array[Dictionary] = []
 	for candidate in candidates:
@@ -730,11 +834,201 @@ static func _build_international_routes(
 		result.append(route)
 		counts[nation_a] += 1
 		counts[nation_b] += 1
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes",
+			Time.get_ticks_usec() - stage_started
+		)
 	return result
 
 
 ## 候选排序只需要“任一源点能否到达任一不同终点”。这里严格复用
 ## operational Dijkstra 的准入条件，但不计算成本、前驱或具体路径。
+static func _has_operational_connection_union(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	destinations: Array[int],
+	nation_a: int,
+	nation_b: int,
+	besieged: Dictionary,
+	occupied_edges: Array[Dictionary],
+	connectivity_cache: Dictionary
+) -> bool:
+	_candidate_connectivity_queries += 1
+	var union_context := _connectivity_union_context(
+		state, graph, nation_a, nation_b, besieged,
+		occupied_edges, connectivity_cache
+	)
+	var allowed: PackedByteArray = union_context["allowed"]
+	var component_ids: PackedInt32Array = union_context["component_ids"]
+	var active_sources := {}
+	var active_components := {}
+	for source in sources:
+		if (
+			source < 0 or source >= component_ids.size()
+			or active_sources.has(source)
+			or source >= allowed.size() or allowed[source] == 0
+			or besieged.has(source)
+		):
+			continue
+		var component_id := int(component_ids[source])
+		if component_id < 0:
+			continue
+		active_sources[source] = true
+		active_components[component_id] = true
+	for destination in destinations:
+		if (
+			destination < 0
+			or destination >= component_ids.size()
+			or active_sources.has(destination)
+		):
+			continue
+		if active_components.has(int(component_ids[destination])):
+			return true
+	_candidate_connectivity_rejections += 1
+	return false
+
+
+static func _connectivity_union_context(
+	state: GameState,
+	graph: Dictionary,
+	nation_a: int,
+	nation_b: int,
+	besieged: Dictionary,
+	occupied_edges: Array[Dictionary],
+	connectivity_cache: Dictionary
+) -> Dictionary:
+	var union_contexts := (
+		connectivity_cache.get("__union_contexts", {}) as Dictionary
+	)
+	if not connectivity_cache.has("__union_contexts"):
+		connectivity_cache["__union_contexts"] = union_contexts
+	var signature_info := _enemy_union_signature_info(
+		state, nation_a, nation_b
+	)
+	var signature := str(signature_info["signature"])
+	if union_contexts.has(signature):
+		return union_contexts[signature] as Dictionary
+	_candidate_connectivity_union_graph_builds += 1
+	var enemy_set: Dictionary = signature_info["enemy_set"]
+	var allowed := _allowed_city_mask_for_enemy_union(state, enemy_set)
+	var blocked_edges := _blocked_edges_for_enemy_union(
+		enemy_set, occupied_edges
+	)
+	var component_ids := _build_connectivity_components(
+		state, graph, allowed, besieged, blocked_edges
+	)
+	var context := {
+		"allowed": allowed,
+		"blocked_edges": blocked_edges,
+		"component_ids": component_ids,
+	}
+	union_contexts[signature] = context
+	return context
+
+
+static func _enemy_union_signature_info(
+	state: GameState, nation_a: int, nation_b: int
+) -> Dictionary:
+	var enemy_ids: Array[int] = []
+	var enemy_set := {}
+	for nation_id in range(state.nations.size()):
+		if (
+			state.is_enemy(nation_id, nation_a)
+			or state.is_enemy(nation_id, nation_b)
+		):
+			enemy_ids.append(nation_id)
+			enemy_set[nation_id] = true
+	enemy_ids.sort()
+	return {
+		"signature": _int_array_key(enemy_ids),
+		"enemy_set": enemy_set,
+	}
+
+
+static func _allowed_city_mask_for_enemy_union(
+	state: GameState, enemy_set: Dictionary
+) -> PackedByteArray:
+	var result := PackedByteArray()
+	result.resize(state.cities.size())
+	result.fill(0)
+	for city in state.cities:
+		if city.id < 0 or city.id >= result.size():
+			continue
+		var owner := city.owner_nation
+		if (
+			owner >= 0 and owner < state.nations.size()
+			and not enemy_set.has(owner)
+		):
+			result[city.id] = 1
+	return result
+
+
+static func _blocked_edges_for_enemy_union(
+	enemy_set: Dictionary,
+	occupied_edges: Array[Dictionary]
+) -> Dictionary:
+	var result := {}
+	for record in occupied_edges:
+		var owner := int(record["owner"])
+		if enemy_set.has(owner):
+			result[int(record["edge_key"])] = true
+	return result
+
+
+static func _build_connectivity_components(
+	state: GameState,
+	graph: Dictionary,
+	allowed: PackedByteArray,
+	besieged: Dictionary,
+	blocked_edges: Dictionary
+) -> PackedInt32Array:
+	var component_ids := PackedInt32Array()
+	component_ids.resize(state.cities.size())
+	for city_id in range(component_ids.size()):
+		component_ids[city_id] = -1
+	var adjacency: Array = graph["adjacency"]
+	var edge_lookup: Dictionary = graph["edge_lookup"]
+	var queue: Array[int] = []
+	var next_component_id := 0
+	for city_id in range(state.cities.size()):
+		if (
+			city_id >= allowed.size() or allowed[city_id] == 0
+			or besieged.has(city_id)
+			or component_ids[city_id] >= 0
+		):
+			continue
+		queue.clear()
+		queue.append(city_id)
+		component_ids[city_id] = next_component_id
+		var head := 0
+		while head < queue.size():
+			var current := queue[head]
+			head += 1
+			var neighbors: Array[int] = adjacency[current]
+			for neighbor in neighbors:
+				if (
+					neighbor < 0 or neighbor >= component_ids.size()
+					or component_ids[neighbor] >= 0
+					or neighbor >= allowed.size() or allowed[neighbor] == 0
+					or besieged.has(neighbor)
+				):
+					continue
+				var edge_key := _edge_key(current, neighbor)
+				var edge: Edge = edge_lookup.get(edge_key, null)
+				if (
+					edge == null or edge.max_manpower <= 0
+					or blocked_edges.has(edge_key)
+				):
+					continue
+				component_ids[neighbor] = next_component_id
+				queue.append(neighbor)
+		next_component_id += 1
+	return component_ids
+
+
 static func _has_operational_connection(
 	state: GameState,
 	graph: Dictionary,

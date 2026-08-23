@@ -46,22 +46,121 @@ static func build(
 	view: AiWorldView,
 	diplomacy_cache: Dictionary = {},
 	shared_city_values: Dictionary = {},
-	shared_edge_values: Dictionary = {}
+	shared_edge_values: Dictionary = {},
+	build_profile: Dictionary = {}
 ) -> StrategicMapSnapshot:
+	var profile_enabled: bool = bool(
+		build_profile.get("enabled", false)
+	)
+	var build_total_started: int = (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	var snapshot := StrategicMapSnapshot.new()
+	var stage_started: int = 0
+	var accounted_usec: int = 0
 	snapshot.nation_id = view.nation_id
 	snapshot.ownership_revision = view.state.ownership_revision
 	snapshot.strategic_planning_enabled = view.strategic_planning_enabled
 	snapshot._state = view.state
 	snapshot._view = view
+	if profile_enabled:
+		stage_started = Time.get_ticks_usec()
 	snapshot._initialize_city_values(shared_city_values)
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_initialize",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		stage_started = Time.get_ticks_usec()
 	snapshot._find_frontier(diplomacy_cache)
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_frontier",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		stage_started = Time.get_ticks_usec()
 	snapshot._compute_connectivity()
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_connectivity",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		stage_started = Time.get_ticks_usec()
 	snapshot._compute_supply_corridors(view)
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_supply_corridors",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		stage_started = Time.get_ticks_usec()
 	snapshot._finalize_edge_values(shared_edge_values)
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_finalize_edges",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		stage_started = Time.get_ticks_usec()
 	snapshot._compute_offensive_values(view, diplomacy_cache)
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_offensive",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		stage_started = Time.get_ticks_usec()
 	snapshot._select_priority_targets(view)
+	if profile_enabled:
+		var elapsed_usec := Time.get_ticks_usec() - stage_started
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_priority",
+			elapsed_usec
+		)
+		accounted_usec += elapsed_usec
+		var build_total_usec := (
+			Time.get_ticks_usec() - build_total_started
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_build_total",
+			build_total_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_unaccounted",
+			maxi(build_total_usec - accounted_usec, 0)
+		)
 	return snapshot
+
+
+static func _accumulate_build_profile(
+	build_profile: Dictionary,
+	stage: String,
+	elapsed_usec: int
+) -> void:
+	if not bool(build_profile.get("enabled", false)):
+		return
+	build_profile[stage] = (
+		int(build_profile.get(stage, 0))
+		+ elapsed_usec
+	)
 
 
 static func build_base_city_values(state: GameState) -> Dictionary:

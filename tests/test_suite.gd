@@ -2454,6 +2454,9 @@ func _test_responsive_map_layout() -> void:
 	list_state.nations[0].last_trade_gold = 7
 	list_state.nations[0].last_trade_food_import = 30
 	list_state.nations[0].last_trade_food_export = 10
+	list_state.nations[0].last_food_estimated_production = 0
+	list_state.nations[0].last_food_estimated_consumption = 0
+	list_state.nations[0].last_food_estimated_balance = 20
 	list_state.nations[0].ruler_name = "测试君"
 	list_state.nations[0].ruler_traits = [
 		RulerProfile.TRAIT_FRUGAL
@@ -2476,9 +2479,17 @@ func _test_responsive_map_layout() -> void:
 			and str(nation_rows[0]["power_primary"]).contains("兵力")
 			and str(nation_rows[0]["power_secondary"]).contains("忠诚")
 			and str(nation_rows[0]["economy_primary"]).contains("月净")
-			and str(nation_rows[0]["economy_secondary"]).contains("商路 2")
-			and str(nation_rows[0]["economy_secondary"]).contains("商金 +7")
-			and str(nation_rows[0]["economy_secondary"]).contains("粮 +30/-10")
+				and str(nation_rows[0]["economy_secondary"]).contains("粮仓 0")
+				and str(nation_rows[0]["economy_secondary"]).contains("月产 0")
+				and str(nation_rows[0]["economy_secondary"]).contains("月需 0")
+				and str(nation_rows[0]["economy_secondary"]).contains("月净 +20")
+				and str(nation_rows[0]["economy_secondary"]).contains("流 进口20")
+				and str(nation_rows[0]["economy_secondary"]).find("+0") == -1
+				and str(nation_rows[0]["economy_secondary"]).find("-0") == -1
+				and str(nation_rows[0]["economy"]).contains("商2线")
+				and str(nation_rows[0]["economy"]).contains("金+7")
+				and str(nation_rows[0]["economy"]).contains("粮仓 0")
+				and str(nation_rows[0]["economy"]).contains("流 进口20")
 			and str(nation_rows[0]["governance_primary"]).contains("测试君")
 			and str(nation_rows[0]["governance_secondary"]).contains("节俭")
 			and str(nation_rows[0]["governance_secondary"]).contains("建军"),
@@ -9009,13 +9020,13 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		):
 			assigned_light_orders += 1
 	_check(
-		stacked_army_ids.size() == 1
-			and stacked_plan.assigned_city_by_army.size() == 1
+		stacked_army_ids.size() == 2
+			and stacked_plan.assigned_city_by_army.size() == 2
 			and not stacked_plan.assigned_city_by_army.has(
 				heavy_guard.id
 			)
-			and assigned_light_orders == 1,
-		"单个常态防区最多一支5000填线军，不得再把多军和15000攻势军堆入同城"
+			and assigned_light_orders == 2,
+		"加权盈余：两支5000填线军可同赴唯一有效目标；15000攻势军排除"
 	)
 
 	var reserve_spread_state := GameState.new()

@@ -24,6 +24,28 @@ const AI_STAGES: Array[String] = [
 	"ai_reconcile_roles",
 	"ai_build_view",
 	"ai_snapshot",
+	"ai_snapshot_cache_seed",
+	"ai_snapshot_forecast_structure_fingerprint",
+	"ai_snapshot_forecast_structure_stage",
+	"ai_snapshot_forecast_structure_inputs",
+	"ai_snapshot_forecast_structure_graph",
+	"ai_snapshot_forecast_structure_domestic",
+	"ai_snapshot_forecast_structure_international_candidates",
+	"ai_snapshot_forecast_structure_international_routes",
+	"ai_snapshot_forecast_structure_result",
+	"ai_snapshot_forecast_settlement_token",
+	"ai_snapshot_forecast_settlement_stage",
+	"ai_snapshot_forecast_trade_settle",
+	"ai_snapshot_forecast_gold_flows",
+	"ai_snapshot_initialize",
+	"ai_snapshot_frontier",
+	"ai_snapshot_connectivity",
+	"ai_snapshot_supply_corridors",
+	"ai_snapshot_finalize_edges",
+	"ai_snapshot_offensive",
+	"ai_snapshot_priority",
+	"ai_snapshot_build_total",
+	"ai_snapshot_unaccounted",
 	"ai_threat",
 	"ai_snapshot_threat",
 	"ai_defense",
@@ -136,6 +158,9 @@ func _init() -> void:
 		OS.get_environment("PHASE_COLD_FORCE_RESOURCES") == "1"
 	)
 	sim.tick_phase_profiling_enabled = true
+	sim.ai_snapshot_substage_profiling_enabled = (
+		OS.get_environment("PHASE_SNAPSHOT_SUBSTAGES") == "1"
+	)
 	sim.ai_force_resource_cache_disabled = (
 		OS.get_environment("PHASE_DISABLE_FORCE_RESOURCE_CACHE") == "1"
 	)

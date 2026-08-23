@@ -16,6 +16,8 @@ func _init() -> void:
 func _run() -> void:
 	_test_legacy_defaults_and_zero_trade_ui()
 	_test_change_city_food_storage()
+	_test_deposit_food_immediate_aggregate()
+	_test_withdraw_trade_food_immediate_aggregate()
 	_test_setup_snapshot_production_estimate()
 	_test_monthly_production_rounds_after_nation_sum()
 	_test_monthly_snapshot_and_ui_math()
@@ -310,6 +312,70 @@ func _test_change_city_food_storage() -> void:
 		nation.granary_food == saved_granary,
 		"change_storage/invalid_owner_no_aggregate_change",
 		"granary=%d expected=%d" % [nation.granary_food, saved_granary]
+	)
+
+	sim.free()
+
+
+func _test_deposit_food_immediate_aggregate() -> void:
+	var state := _make_single_nation_state()
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+
+	var city := state.cities[0]
+	var nation := state.nations[0]
+	var initial_storage := city.food_storage
+	var initial_granary := nation.granary_food
+
+	_check(
+		state.deposit_food(0, 12),
+		"deposit/positive_returns_true"
+	)
+	_check(
+		city.food_storage == initial_storage + 12,
+		"deposit/city_storage_increased",
+		"old=%d new=%d" % [initial_storage, city.food_storage]
+	)
+	_check(
+		nation.granary_food == initial_granary + 12,
+		"deposit/nation_granary_increased_immediately",
+		"old=%d new=%d" % [initial_granary, nation.granary_food]
+	)
+
+	_check(
+		not state.deposit_food(0, 0),
+		"deposit/zero_amount_returns_false"
+	)
+	_check(
+		not state.deposit_food(-1, 5),
+		"deposit/invalid_nation_returns_false"
+	)
+
+	sim.free()
+
+
+func _test_withdraw_trade_food_immediate_aggregate() -> void:
+	var state := _make_single_nation_state()
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+
+	var city := state.cities[0]
+	var nation := state.nations[0]
+	var initial_storage := city.food_storage
+	var initial_granary := nation.granary_food
+
+	sim._withdraw_trade_food(0, 7)
+	_check(
+		city.food_storage == initial_storage - 7,
+		"withdraw_trade/city_storage_decreased",
+		"old=%d new=%d" % [initial_storage, city.food_storage]
+	)
+	_check(
+		nation.granary_food == initial_granary - 7,
+		"withdraw_trade/nation_granary_decreased_immediately",
+		"old=%d new=%d" % [initial_granary, nation.granary_food]
 	)
 
 	sim.free()

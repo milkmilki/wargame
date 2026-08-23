@@ -166,6 +166,8 @@ var _ai_last_decision_day: int = -1
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
 var _ai_forced_nations: Dictionary = {}
+## 同日城市实控变化后的窄域前线刷新集合；仅重建受影响国家的 LINE 防区。
+var _frontline_dirty_nations: Dictionary = {}
 var _collect_ai_commands: bool = false
 var _ai_command_buffer: Array[AiCommandIntent] = []
 var _ai_planned_armies: Dictionary = {}
@@ -189,6 +191,9 @@ var ai_command_commit_failure_log: Array[String] = []
 var ai_defense_topology_rebuild_total: int = 0
 var ai_defense_topology_reuse_total: int = 0
 var ai_defense_dynamic_reuse_total: int = 0
+var frontline_refresh_batch_total: int = 0
+var frontline_refresh_nation_total: int = 0
+var frontline_refresh_build_total: int = 0
 ## 贸易预测缓存诊断计数。build 表示实际执行 build_structure/settle，
 ## cache_hit 表示复用了对应层；setup() 会统一清零。
 var trade_structure_build_total: int = 0
@@ -243,6 +248,12 @@ var enfeoff_enabled: bool = true
 ## 正式运行不读取时钟，不引入每日 profiling 开销。
 var tick_phase_profiling_enabled: bool = false
 var tick_profile_last_usec: Dictionary = {}
+## StrategicMapSnapshot 细粒度 profiling。默认关闭；仅在 snapshot cache miss 时
+## 记录 frontier/connectivity/supply_corridors/finalize_edges/offensive/priority。
+## 关闭时不为 snapshot build 构造 profile sink，近零开销；开启后每次 build 仍写入
+## 任务私有 Dictionary，再由主线程合并到 tick_profile_last_usec。
+var ai_snapshot_substage_profiling_enabled: bool = false
+var _empty_snapshot_profile_sink: Dictionary = {}
 ## 运行时慢帧归因开关。默认关闭；探针开启后记录当前跨帧阶段，不读取时钟。
 var runtime_stage_profiling_enabled: bool = false
 var runtime_profile_stage: StringName = &""
@@ -310,6 +321,7 @@ func setup(game_state: GameState) -> void:
 	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
 	_ai_forced_nations.clear()
+	_frontline_dirty_nations.clear()
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
 	_defer_declaration_launches = false
@@ -319,6 +331,9 @@ func setup(game_state: GameState) -> void:
 	ai_defense_topology_rebuild_total = 0
 	ai_defense_topology_reuse_total = 0
 	ai_defense_dynamic_reuse_total = 0
+	frontline_refresh_batch_total = 0
+	frontline_refresh_nation_total = 0
+	frontline_refresh_build_total = 0
 	diplomacy_mobilization_evaluation_cache_total = 0
 	_clear_ai_command_collection()
 	_parallel_ai_context_jobs.clear()
@@ -546,6 +561,11 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
 	_set_runtime_profile_stage(&"cleanup_evict")
 	_evict_stranded_hostile_armies()
+	# 同日窄域前线刷新必须读取 cleanup 后的最终控制/存亡/驱离结果，避免按
+	# 中间态重建防区。它只重算 LINE 防御部署；_ai_forced_nations 刻意保留到次日，
+	# 继续触发完整 AI pass（campaign/force/diplomacy）。
+	_set_runtime_profile_stage(&"frontline_refresh")
+	_flush_same_day_frontline_refresh()
 	_set_runtime_profile_stage(&"cleanup_refresh")
 	state.refresh_derived()
 	_record_tick_profile_stage("cleanup", profile_stage_started)
@@ -562,6 +582,19 @@ func _record_tick_profile_stage(stage: String, started_usec: int) -> void:
 		int(tick_profile_last_usec.get(stage, 0))
 		+ Time.get_ticks_usec() - started_usec
 	)
+
+
+func _merge_tick_profile_stage_values(profile: Dictionary) -> void:
+	if not tick_phase_profiling_enabled or profile.is_empty():
+		return
+	for stage_value in profile.keys():
+		var stage := str(stage_value)
+		if stage == "enabled":
+			continue
+		tick_profile_last_usec[stage] = (
+			int(tick_profile_last_usec.get(stage, 0))
+			+ int(profile[stage_value])
+		)
 
 
 func _set_runtime_profile_stage(stage: StringName) -> void:
@@ -1001,8 +1034,26 @@ func _trade_settlement_token(
 ## Simulation 级贸易/财政预测入口。所有生产内调用均经此处：结构相同可跨日
 ## 复用；完整 token 相同则连 settle 与 gold_flows 也直接复用。
 func _forecast_trade_and_gold_flows() -> Dictionary:
+	var forecast_substage_enabled := (
+		tick_phase_profiling_enabled
+		and ai_snapshot_substage_profiling_enabled
+	)
+	var part_started := (
+		Time.get_ticks_usec() if forecast_substage_enabled else 0
+	)
 	var structure_fingerprint := TradeNetwork.structure_fingerprint(state)
+	if forecast_substage_enabled:
+		_record_tick_profile_stage(
+			"ai_snapshot_forecast_structure_fingerprint",
+			part_started
+		)
 	var structure: Dictionary
+	part_started = (
+		Time.get_ticks_usec() if forecast_substage_enabled else 0
+	)
+	var structure_profile: Dictionary = (
+		{"enabled": true} if forecast_substage_enabled else {}
+	)
 	if (
 		not trade_forecast_cache_disabled
 		and not _trade_structure_cache.is_empty()
@@ -1011,14 +1062,36 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 		structure = _trade_structure_cache
 		trade_structure_cache_hit_total += 1
 	else:
-		structure = TradeNetwork.build_structure(state)
+		structure = TradeNetwork.build_structure(
+			state,
+			true,
+			structure_profile
+		)
 		trade_structure_build_total += 1
 		if not trade_forecast_cache_disabled:
 			_trade_structure_fingerprint = structure_fingerprint
 			_trade_structure_cache = structure
+	if forecast_substage_enabled:
+		_merge_tick_profile_stage_values(structure_profile)
+	if forecast_substage_enabled:
+		_record_tick_profile_stage(
+			"ai_snapshot_forecast_structure_stage",
+			part_started
+		)
 
+	part_started = (
+		Time.get_ticks_usec() if forecast_substage_enabled else 0
+	)
 	var settlement_fingerprint := _trade_settlement_token(
 		structure_fingerprint
+	)
+	if forecast_substage_enabled:
+		_record_tick_profile_stage(
+			"ai_snapshot_forecast_settlement_token",
+			part_started
+		)
+	part_started = (
+		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
 	if (
 		not trade_forecast_cache_disabled
@@ -1026,13 +1099,39 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 		and _trade_settlement_fingerprint == settlement_fingerprint
 	):
 		trade_forecast_cache_hit_total += 1
+		if forecast_substage_enabled:
+			_record_tick_profile_stage(
+				"ai_snapshot_forecast_settlement_stage",
+				part_started
+			)
 		return {
 			"trade": _trade_result_cache,
 			"gold_flows": _trade_gold_flows_cache,
 		}
+	if forecast_substage_enabled:
+		_record_tick_profile_stage(
+			"ai_snapshot_forecast_settlement_stage",
+			part_started
+		)
 
+	part_started = (
+		Time.get_ticks_usec() if forecast_substage_enabled else 0
+	)
 	var trade := TradeNetwork.settle(state, structure)
+	if forecast_substage_enabled:
+		_record_tick_profile_stage(
+			"ai_snapshot_forecast_trade_settle",
+			part_started
+		)
+	part_started = (
+		Time.get_ticks_usec() if forecast_substage_enabled else 0
+	)
 	var gold_flows := _monthly_gold_flows_from_trade(state, trade)
+	if forecast_substage_enabled:
+		_record_tick_profile_stage(
+			"ai_snapshot_forecast_gold_flows",
+			part_started
+		)
 	trade_forecast_build_total += 1
 	if not trade_forecast_cache_disabled:
 		_trade_settlement_fingerprint = settlement_fingerprint
@@ -1558,9 +1657,8 @@ func _withdraw_trade_food(nation_id: int, amount: int) -> void:
 	for warehouse in state.warehouse_cities_of(holder):
 		if state.city_under_siege(warehouse.id):
 			continue
-		var taken := mini(warehouse.food_storage, remaining)
-		warehouse.food_storage -= taken
-		remaining -= taken
+		var delta := state.change_city_food_storage(warehouse.id, -remaining)
+		remaining -= (-delta)
 		if remaining <= 0:
 			break
 
@@ -5277,10 +5375,16 @@ func _build_ai_snapshot_context(
 	job: Dictionary,
 	diplomacy_cache: Dictionary = {}
 ) -> void:
+	var snapshot_profile: Dictionary = (
+		{"enabled": true} if ai_snapshot_substage_profiling_enabled
+		else _empty_snapshot_profile_sink
+	)
 	job["snapshot"] = _strategy_snapshot_for(
 		job["view"],
-		diplomacy_cache
+		diplomacy_cache,
+		snapshot_profile
 	)
+	job["snapshot_profile"] = snapshot_profile
 
 
 ## 后台线程构建全部国家的只读 AI 上下文（view/snapshot/threat）。运行期把这
@@ -5291,10 +5395,20 @@ func _build_ai_snapshot_context(
 func _build_ai_snapshots_serial(payload: Dictionary) -> void:
 	var jobs: Array = payload["jobs"]
 	var diplomacy_cache: Dictionary = payload["diplomacy_cache"]
+	var substage_profile_enabled: bool = bool(
+		payload.get("substage_profile_enabled", false)
+	)
 	for job in jobs:
-		job["snapshot"] = _strategy_snapshot_for(
-			job["view"], diplomacy_cache
+		var snapshot_profile: Dictionary = (
+			{"enabled": true} if substage_profile_enabled
+			else _empty_snapshot_profile_sink
 		)
+		job["snapshot"] = _strategy_snapshot_for(
+			job["view"],
+			diplomacy_cache,
+			snapshot_profile
+		)
+		job["snapshot_profile"] = snapshot_profile
 
 
 func _build_ai_threat_partition(
@@ -5492,7 +5606,14 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
+	var snapshot_cache_seed_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
 	var snapshot_diplomacy_cache := _seed_trade_forecast({})
+	_record_tick_profile_stage(
+		"ai_snapshot_cache_seed",
+		snapshot_cache_seed_started
+	)
 	_parallel_ai_context_jobs = context_jobs
 	# 只读上下文（snapshot+threat）是卡顿主因。snapshot 先在一个后台任务中
 	# 按固定国家顺序构建；随后 ThreatField 按国家分片到最多4个worker。
@@ -5502,6 +5623,8 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		var snapshot_payload := {
 			"jobs": context_jobs,
 			"diplomacy_cache": snapshot_diplomacy_cache,
+			"substage_profile_enabled":
+				ai_snapshot_substage_profiling_enabled,
 		}
 		var snapshot_task_id := WorkerThreadPool.add_task(
 			_build_ai_snapshots_serial.bind(snapshot_payload),
@@ -5511,6 +5634,11 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		while not WorkerThreadPool.is_task_completed(snapshot_task_id):
 			await get_tree().process_frame
 		WorkerThreadPool.wait_for_task_completion(snapshot_task_id)
+		if ai_snapshot_substage_profiling_enabled:
+			for job in context_jobs:
+				_merge_tick_profile_stage_values(
+					job.get("snapshot_profile", {})
+				)
 		var worker_count := (
 			1
 			if ai_parallel_threat_disabled
@@ -5587,6 +5715,10 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	else:
 		for job in context_jobs:
 			_build_ai_snapshot_context(job, snapshot_diplomacy_cache)
+			if ai_snapshot_substage_profiling_enabled:
+				_merge_tick_profile_stage_values(
+					job.get("snapshot_profile", {})
+				)
 		_record_tick_profile_stage("ai_snapshot", ai_profile_stage_started)
 		ai_profile_stage_started = (
 			Time.get_ticks_usec()
@@ -6342,10 +6474,10 @@ func _cached_ai_path_field(
 
 func _strategy_snapshot_for(
 	view: AiWorldView,
-	diplomacy_cache: Dictionary = {}
+	diplomacy_cache: Dictionary = {},
+	build_profile: Dictionary = {}
 ) -> StrategicMapSnapshot:
-	if not diplomacy_cache.has("monthly_gold_flows"):
-		_seed_trade_forecast(diplomacy_cache)
+	var snapshot_cache := diplomacy_cache
 	var revision := [
 		state.ownership_revision,
 		state.diplomacy_revision,
@@ -6375,9 +6507,10 @@ func _strategy_snapshot_for(
 			)
 		_ai_strategy_cache[view.nation_id] = StrategicMapSnapshot.build(
 			view,
-			diplomacy_cache,
+			snapshot_cache,
 			_ai_base_city_values,
-			_ai_base_edge_values
+			_ai_base_edge_values,
+			build_profile
 		)
 		_ai_strategy_revision[view.nation_id] = revision
 	return _ai_strategy_cache[view.nation_id]
@@ -6454,23 +6587,237 @@ static func merge_forced_ai_nation_order(
 	return result
 
 
+func _collect_capture_affected_nations(
+	old_owner: int,
+	claimant: int,
+	city_id: int
+) -> Array[int]:
+	var affected := {}
+	for nation_id in [old_owner, claimant]:
+		if (
+			nation_id >= 0
+			and nation_id < state.nations.size()
+			and state.nations[nation_id].alive
+		):
+			affected[nation_id] = true
+	if city_id < 0 or city_id >= state.cities.size():
+		var result: Array[int] = []
+		result.assign(affected.keys())
+		result.sort()
+		return result
+	for neighbor_id in state.neighbors(city_id):
+		var neighbor_owner := state.cities[
+			neighbor_id
+		].owner_nation
+		if (
+			neighbor_owner >= 0
+			and neighbor_owner < state.nations.size()
+			and state.nations[neighbor_owner].alive
+		):
+			affected[neighbor_owner] = true
+	var result: Array[int] = []
+	result.assign(affected.keys())
+	result.sort()
+	return result
+
+
+func _mark_capture_affected_nations(
+	old_owner: int,
+	claimant: int,
+	city_id: int
+) -> Array[int]:
+	var affected := _collect_capture_affected_nations(
+		old_owner,
+		claimant,
+		city_id
+	)
+	for nation_id in affected:
+		_ai_forced_nations[nation_id] = true
+		_frontline_dirty_nations[nation_id] = true
+	return affected
+
+
 func _force_ai_replan_for_capture(
 	old_owner: int,
 	claimant: int,
 	city_id: int
 ) -> void:
-	if old_owner >= 0:
-		_ai_forced_nations[old_owner] = true
-	if claimant >= 0:
-		_ai_forced_nations[claimant] = true
-	if city_id < 0 or city_id >= state.cities.size():
+	_mark_capture_affected_nations(
+		old_owner,
+		claimant,
+		city_id
+	)
+
+
+func _flush_same_day_frontline_refresh() -> void:
+	if _frontline_dirty_nations.is_empty():
 		return
-	for neighbor_id in state.neighbors(city_id):
-		var neighbor_owner := state.cities[
-			neighbor_id
-		].owner_nation
-		if neighbor_owner >= 0:
-			_ai_forced_nations[neighbor_owner] = true
+	var dirty_ids: Array[int] = []
+	for nation_value in _frontline_dirty_nations.keys():
+		var nation_id := int(nation_value)
+		if (
+			nation_id >= 0
+			and nation_id < state.nations.size()
+			and state.nations[nation_id].alive
+		):
+			dirty_ids.append(nation_id)
+	_frontline_dirty_nations.clear()
+	if dirty_ids.is_empty():
+		return
+	dirty_ids.sort()
+	frontline_refresh_batch_total += 1
+	var shared_army_index := (
+		AiWorldView.build_army_index(state)
+		if ai_policy_overrides.is_empty()
+		else {}
+	)
+	var diplomacy_cache := _seed_trade_forecast({})
+	var context_jobs: Array[Dictionary] = []
+	var snapshot_army_ids := {}
+	for nation_id in dirty_ids:
+		if ai_policy_overrides.has(nation_id):
+			continue
+		var nation := state.nations[nation_id]
+		if not nation.alive:
+			continue
+		var view := _build_ai_view(
+			nation_id,
+			shared_army_index
+		)
+		var job := {
+			"nation_id": nation_id,
+			"view": view,
+			"snapshot": null,
+			"threat_cache": _threat_travel_cache,
+			"previous_defense_plan":
+				_ai_defense_plan_cache.get(nation_id),
+			"threat": null,
+			"defense_plan": null,
+		}
+		_build_ai_snapshot_context(job, diplomacy_cache)
+		job["threat"] = ThreatField.build(
+			view,
+			_threat_travel_cache
+		)
+		var defense_plan := CityDefensePlan.build(
+			view,
+			job["snapshot"],
+			job["threat"],
+			job["previous_defense_plan"]
+		)
+		_record_defense_plan_cache_result(defense_plan)
+		_ai_defense_plan_cache[nation_id] = defense_plan
+		job["defense_plan"] = defense_plan
+		context_jobs.append(job)
+		for army in view.friendly_armies:
+			snapshot_army_ids[army.id] = true
+		frontline_refresh_nation_total += 1
+		frontline_refresh_build_total += 1
+	if context_jobs.is_empty():
+		return
+	_begin_ai_command_collection(snapshot_army_ids)
+	for job in context_jobs:
+		var view: AiWorldView = job["view"]
+		var snapshot: StrategicMapSnapshot = job["snapshot"]
+		var coordinator := ArmyCoordinator.from_view(view)
+		var defense_plan: CityDefensePlan = job["defense_plan"]
+		var nation_id := int(job["nation_id"])
+		var nation := state.nations[nation_id]
+		for army in _sort_ai_decision_order(
+			state,
+			view.friendly_armies,
+			snapshot,
+			true
+		):
+			if (
+				army.size <= 0
+				or _ai_planned_armies.has(army.id)
+				or not army.is_line_role()
+			):
+				continue
+			var active_campaign_target := int(
+				nation.campaign_attack_assignments.get(
+					army.id,
+					-1
+				)
+			)
+			var preparation_target := int(
+				nation.campaign_preparation_assignments.get(
+					army.id,
+					-1
+				)
+			)
+			var campaign_target := (
+				active_campaign_target
+				if active_campaign_target >= 0
+				else preparation_target
+			)
+			var campaign_locked := (
+				campaign_target >= 0
+				and (
+					nation.war_preparation_target_nation >= 0
+					or (
+						campaign_target < state.cities.size()
+						and state.is_enemy(
+							nation_id,
+							state.cities[
+								campaign_target
+							].owner_nation
+						)
+					)
+				)
+			)
+			if campaign_locked:
+				var defense_anchor := army.location_city
+				if (
+					army.state == Army.State.HOLDING
+					and army.move_to != -1
+				):
+					defense_anchor = _campaign_army_origin(
+						army,
+						nation_id
+					)
+				var actual_emergency := (
+					state.city_under_siege(defense_anchor)
+					if preparation_target >= 0
+					else defense_plan.urgent_defense_at(defense_anchor)
+				)
+				if actual_emergency:
+					campaign_locked = false
+			if campaign_locked:
+				continue
+			var line_candidate: ActionCandidate = defense_plan.candidate_for(
+				army,
+				coordinator
+			)
+			if (
+				line_candidate == null
+				or line_candidate.kind not in [
+					ActionCandidate.Kind.HOLD,
+					ActionCandidate.Kind.REINFORCE,
+					ActionCandidate.Kind.RETREAT,
+				]
+				or not _execute_ai_candidate(
+					army,
+					line_candidate
+				)
+			):
+				continue
+			if (
+				line_candidate.kind
+					== ActionCandidate.Kind.HOLD
+			):
+				coordinator.reserve_edge(
+					line_candidate.target_edge_a,
+					line_candidate.target_edge_b,
+					army
+				)
+			elif line_candidate.target_city != -1:
+				coordinator.reserve(
+					line_candidate.target_city,
+					army
+				)
+	_commit_ai_command_collection(dirty_ids)
 
 
 static func _sort_ai_decision_order(

@@ -2,19 +2,25 @@ extends SceneTree
 ## 国际贸易候选连通性预筛等价守卫。
 ## Godot --headless --path . --script res://tests/trade_connectivity_prefilter_equivalence.gd
 
-const SEEDS: Array[int] = [12345, 24680, 97531]
+const SEEDS: Array[int] = [12345, 24680, 97531, 86420, 13579]
 const SCENARIOS: Array[String] = [
-	"peace", "war", "closed_cut", "sieged_cut",
-	"enemy_occupied_cut",
+	"all_neutral",
+	"single_war",
+	"alliance_block",
+	"multi_war",
+	"closed_cut",
+	"sieged_cut",
+	"third_party_occupied_cut",
 ]
 
 var _checks := 0
 var _failures: Array[String] = []
-var _legacy_candidate_dijkstra_fields := 0
-var _fast_candidate_dijkstra_fields := 0
-var _fast_connectivity_queries := 0
-var _fast_connectivity_searches := 0
-var _fast_connectivity_rejections := 0
+var _direct_candidate_dijkstra_fields := 0
+var _legacy_connectivity_legacy_bfs_searches := 0
+var _union_candidate_dijkstra_fields := 0
+var _union_connectivity_queries := 0
+var _union_connectivity_union_graph_builds := 0
+var _union_connectivity_rejections := 0
 
 
 func _init() -> void:
@@ -25,42 +31,67 @@ func _run() -> void:
 	for seed in SEEDS:
 		for scenario in SCENARIOS:
 			_assert_equivalent(_make_state(seed, scenario), seed, scenario)
+	_assert_direct_union_cache_guards()
 	TradeNetwork.reset_connectivity_prefilter_counters()
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(true)
 	_check(
-		_legacy_candidate_dijkstra_fields > 0,
-		"counters/legacy_builds_candidate_dijkstra_fields"
+		_direct_candidate_dijkstra_fields > 0,
+		"counters/direct_builds_candidate_dijkstra_fields"
 	)
 	_check(
-		_fast_candidate_dijkstra_fields < _legacy_candidate_dijkstra_fields,
-		"counters/fast_reduces_candidate_dijkstra_fields",
-		"legacy=%d fast=%d" % [
-			_legacy_candidate_dijkstra_fields, _fast_candidate_dijkstra_fields,
+		_union_candidate_dijkstra_fields < _direct_candidate_dijkstra_fields,
+		"counters/union_reduces_candidate_dijkstra_fields",
+		"direct=%d union=%d" % [
+			_direct_candidate_dijkstra_fields, _union_candidate_dijkstra_fields,
 		]
 	)
 	_check(
-		_fast_candidate_dijkstra_fields == 0,
-		"counters/fast_uses_no_candidate_dijkstra_fields",
-		"fast=%d" % _fast_candidate_dijkstra_fields
+		_union_candidate_dijkstra_fields == 0,
+		"counters/union_uses_no_candidate_dijkstra_fields",
+		"union=%d" % _union_candidate_dijkstra_fields
 	)
 	_check(
-		_fast_connectivity_queries > 0 and _fast_connectivity_searches > 0
-			and _fast_connectivity_searches <= _fast_connectivity_queries,
-		"counters/fast_uses_connectivity_search",
-		"queries=%d searches=%d" % [
-			_fast_connectivity_queries, _fast_connectivity_searches,
+		_union_connectivity_queries > 0
+			and _union_connectivity_union_graph_builds > 0
+			and _union_connectivity_union_graph_builds
+				< _union_connectivity_queries,
+		"counters/union_graph_builds_below_queries",
+		"queries=%d builds=%d" % [
+			_union_connectivity_queries,
+			_union_connectivity_union_graph_builds,
 		]
 	)
 	_check(
-		_fast_connectivity_rejections > 0,
+		_union_connectivity_union_graph_builds
+			< _legacy_connectivity_legacy_bfs_searches,
+		"counters/union_graph_builds_below_legacy_searches",
+		"builds=%d legacy_searches=%d" % [
+			_union_connectivity_union_graph_builds,
+			_legacy_connectivity_legacy_bfs_searches,
+		]
+	)
+	_check(
+		_legacy_connectivity_legacy_bfs_searches > 0,
+		"counters/legacy_bfs_exercised",
+		"legacy_bfs=%d" % _legacy_connectivity_legacy_bfs_searches
+	)
+	_check(
+		int(_union_candidate_dijkstra_fields) == 0,
+		"counters/union_path_uses_no_candidate_dijkstra"
+	)
+	_check(
+		_union_connectivity_rejections > 0,
 		"counters/disconnected_candidates_rejected"
 	)
 	print("=== 贸易候选连通性预筛等价校验 ===")
-	print("candidate_dijkstra_fields legacy=%d fast=%d" % [
-		_legacy_candidate_dijkstra_fields, _fast_candidate_dijkstra_fields,
+	print("candidate_dijkstra_fields direct=%d union=%d" % [
+		_direct_candidate_dijkstra_fields, _union_candidate_dijkstra_fields,
 	])
-	print("fast_connectivity queries=%d searches=%d rejections=%d" % [
-		_fast_connectivity_queries, _fast_connectivity_searches,
-		_fast_connectivity_rejections,
+	print("connectivity legacy_bfs=%d union_queries=%d union_graph_builds=%d rejections=%d" % [
+		_legacy_connectivity_legacy_bfs_searches,
+		_union_connectivity_queries,
+		_union_connectivity_union_graph_builds,
+		_union_connectivity_rejections,
 	])
 	print("checks=%d failures=%d" % [_checks, _failures.size()])
 	if _failures.is_empty():
@@ -78,48 +109,155 @@ func _assert_equivalent(
 ) -> void:
 	var label := "%s/seed_%d" % [scenario, seed]
 	TradeNetwork.reset_connectivity_prefilter_counters()
-	var legacy_structure := TradeNetwork.build_structure(state, false)
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(false)
+	var direct_structure := TradeNetwork.build_structure(state, false)
+	var direct_structure_stats := (
+		TradeNetwork.connectivity_prefilter_counters()
+	)
+	TradeNetwork.reset_connectivity_prefilter_counters()
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(false)
+	var legacy_structure := TradeNetwork.build_structure(state, true)
 	var legacy_structure_stats := TradeNetwork.connectivity_prefilter_counters()
 	TradeNetwork.reset_connectivity_prefilter_counters()
-	var fast_structure := TradeNetwork.build_structure(state, true)
-	var fast_structure_stats := TradeNetwork.connectivity_prefilter_counters()
-	_check(fast_structure == legacy_structure, label + "/build_structure_exact")
-	_accumulate_stats(legacy_structure_stats, fast_structure_stats)
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(true)
+	var union_structure := TradeNetwork.build_structure(state, true)
+	var union_structure_stats := TradeNetwork.connectivity_prefilter_counters()
+	_check(direct_structure == legacy_structure, label + "/direct_vs_legacy_structure_exact")
+	_check(union_structure == legacy_structure, label + "/build_structure_exact")
+	_accumulate_stats(
+		direct_structure_stats, legacy_structure_stats, union_structure_stats
+	)
 
 	TradeNetwork.reset_connectivity_prefilter_counters()
-	var legacy_result := TradeNetwork.build(state, false)
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(false)
+	var direct_result := TradeNetwork.build(state, false)
+	var direct_build_stats := TradeNetwork.connectivity_prefilter_counters()
+	TradeNetwork.reset_connectivity_prefilter_counters()
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(false)
+	var legacy_result := TradeNetwork.build(state, true)
 	var legacy_build_stats := TradeNetwork.connectivity_prefilter_counters()
 	TradeNetwork.reset_connectivity_prefilter_counters()
-	# 不传第二参，锁定公开 build() 默认启用 fast prefilter。
-	var fast_result := TradeNetwork.build(state)
-	var fast_build_stats := TradeNetwork.connectivity_prefilter_counters()
-	_check(fast_result == legacy_result, label + "/build_exact")
-	_accumulate_stats(legacy_build_stats, fast_build_stats)
-	_check(
-		int(legacy_structure_stats["candidate_dijkstra_field_builds"]) > 0
-			and int(legacy_build_stats["candidate_dijkstra_field_builds"]) > 0,
-		label + "/legacy_candidate_dijkstra_exercised"
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(true)
+	# 不传第二参，锁定公开 build() 默认启用 union-cache prefilter。
+	var union_result := TradeNetwork.build(state)
+	var union_build_stats := TradeNetwork.connectivity_prefilter_counters()
+	_check(direct_result == legacy_result, label + "/direct_vs_legacy_build_exact")
+	_check(union_result == legacy_result, label + "/build_exact")
+	_accumulate_stats(
+		direct_build_stats, legacy_build_stats, union_build_stats
 	)
 	_check(
-		int(fast_structure_stats["candidate_dijkstra_field_builds"]) == 0
-			and int(fast_build_stats["candidate_dijkstra_field_builds"]) == 0,
-		label + "/fast_candidate_dijkstra_eliminated"
+		int(direct_structure_stats["candidate_dijkstra_field_builds"]) > 0
+			and int(direct_build_stats["candidate_dijkstra_field_builds"]) > 0,
+		label + "/direct_candidate_dijkstra_exercised"
 	)
 	_check(
-		int(fast_structure_stats["candidate_connectivity_queries"]) > 0
-			and int(fast_build_stats["candidate_connectivity_queries"]) > 0,
-		label + "/fast_connectivity_exercised"
+		int(union_structure_stats["candidate_dijkstra_field_builds"]) == 0
+			and int(union_build_stats["candidate_dijkstra_field_builds"]) == 0,
+		label + "/union_candidate_dijkstra_eliminated"
+	)
+	_check(
+		int(legacy_structure_stats["candidate_connectivity_legacy_bfs_searches"]) > 0
+			and int(legacy_build_stats["candidate_connectivity_legacy_bfs_searches"]) > 0,
+		label + "/legacy_bfs_exercised"
+	)
+	_check(
+		int(union_structure_stats["candidate_connectivity_queries"]) > 0
+			and int(union_build_stats["candidate_connectivity_queries"]) > 0,
+		label + "/union_connectivity_exercised"
+	)
+	_check(
+		int(union_structure_stats["candidate_connectivity_union_graph_builds"]) > 0
+			and int(union_build_stats["candidate_connectivity_union_graph_builds"]) > 0,
+		label + "/union_graph_builds_exercised"
+	)
+	_check(
+		int(union_structure_stats["candidate_connectivity_union_graph_builds"])
+			< int(union_structure_stats["candidate_connectivity_queries"])
+			and int(union_build_stats["candidate_connectivity_union_graph_builds"])
+				< int(union_build_stats["candidate_connectivity_queries"]),
+		label + "/union_graph_builds_below_queries"
+	)
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(true)
+
+
+func _accumulate_stats(
+	direct_stats: Dictionary,
+	legacy_stats: Dictionary,
+	union_stats: Dictionary
+) -> void:
+	_direct_candidate_dijkstra_fields += int(
+		direct_stats["candidate_dijkstra_field_builds"]
+	)
+	_legacy_connectivity_legacy_bfs_searches += int(
+		legacy_stats["candidate_connectivity_legacy_bfs_searches"]
+	)
+	_union_candidate_dijkstra_fields += int(
+		union_stats["candidate_dijkstra_field_builds"]
+	)
+	_union_connectivity_queries += int(
+		union_stats["candidate_connectivity_queries"]
+	)
+	_union_connectivity_union_graph_builds += int(
+		union_stats["candidate_connectivity_union_graph_builds"]
+	)
+	_union_connectivity_rejections += int(
+		union_stats["candidate_connectivity_rejections"]
 	)
 
 
-func _accumulate_stats(legacy: Dictionary, fast: Dictionary) -> void:
-	_legacy_candidate_dijkstra_fields += int(legacy["candidate_dijkstra_field_builds"])
-	_fast_candidate_dijkstra_fields += int(fast["candidate_dijkstra_field_builds"])
-	_fast_connectivity_queries += int(fast["candidate_connectivity_queries"])
-	_fast_connectivity_searches += int(fast["candidate_connectivity_searches"])
-	_fast_connectivity_rejections += int(
-		fast["candidate_connectivity_rejections"]
+func _assert_direct_union_cache_guards() -> void:
+	var state := _make_state(SEEDS[0], "all_neutral")
+	var graph := TradeNetwork._build_graph(state)
+	var cache := {}
+	var sources_a := [0] as Array[int]
+	var destinations_a := [1] as Array[int]
+	var sources_b := [2] as Array[int]
+	var destinations_b := [3] as Array[int]
+	var same_city_sources := [0, -1, state.cities.size()] as Array[int]
+	var same_city_destinations := [0] as Array[int]
+	var invalid_sources := [-1, state.cities.size(), state.cities.size() + 17] as Array[int]
+	var invalid_destinations := [-1, state.cities.size(), state.cities.size() + 23] as Array[int]
+	var pair_a := Vector2i(0, 1)
+	var pair_b := Vector2i(2, 3)
+	TradeNetwork.reset_connectivity_prefilter_counters()
+	var first_pair_connected := TradeNetwork._has_operational_connection_union(
+		state, graph, sources_a, destinations_a, pair_a.x, pair_a.y,
+		{}, [] as Array[Dictionary], cache
 	)
+	var second_pair_connected := TradeNetwork._has_operational_connection_union(
+		state, graph, sources_b, destinations_b, pair_b.x, pair_b.y,
+		{}, [] as Array[Dictionary], cache
+	)
+	var same_city_rejected := not TradeNetwork._has_operational_connection_union(
+		state, graph, same_city_sources, same_city_destinations, pair_a.x, pair_a.y,
+		{}, [] as Array[Dictionary], cache
+	)
+	var invalid_endpoint_rejected := not TradeNetwork._has_operational_connection_union(
+		state, graph, invalid_sources, invalid_destinations, pair_b.x, pair_b.y,
+		{}, [] as Array[Dictionary], cache
+	)
+	var stats := TradeNetwork.connectivity_prefilter_counters()
+	_check(
+		first_pair_connected and second_pair_connected,
+		"direct_helper/union_connectivity_accepts_distinct_valid_endpoints"
+	)
+	_check(
+		same_city_rejected and invalid_endpoint_rejected,
+		"direct_helper/union_connectivity_rejects_same_city_and_invalid_endpoints"
+	)
+	_check(
+		int(stats["candidate_connectivity_queries"]) == 4
+			and int(stats["candidate_connectivity_union_graph_builds"]) == 1
+			and int(stats["candidate_connectivity_rejections"]) == 2,
+		"direct_helper/same_enemy_union_signature_reuses_one_context",
+		"queries=%d builds=%d rejections=%d" % [
+			int(stats["candidate_connectivity_queries"]),
+			int(stats["candidate_connectivity_union_graph_builds"]),
+			int(stats["candidate_connectivity_rejections"]),
+		]
+	)
+	TradeNetwork.set_connectivity_prefilter_union_cache_enabled(true)
 
 
 func _make_state(seed: int, scenario: String) -> GameState:
@@ -131,9 +269,19 @@ func _make_state(seed: int, scenario: String) -> GameState:
 				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
 			)
 	match scenario:
-		"peace":
+		"all_neutral":
 			pass
-		"war":
+		"single_war":
+			state.set_diplomatic_relation(
+				0, 1, GameState.DiplomaticRelation.WAR
+			)
+		"alliance_block":
+			state.set_diplomatic_relation(
+				0, 2, GameState.DiplomaticRelation.ALLIED
+			)
+			state.set_diplomatic_relation(
+				1, 3, GameState.DiplomaticRelation.ALLIED
+			)
 			state.set_diplomatic_relation(
 				0, 1, GameState.DiplomaticRelation.WAR
 			)
@@ -142,12 +290,17 @@ func _make_state(seed: int, scenario: String) -> GameState:
 				_close_vertical_cut(state) == GameState.GRID,
 				"closed_cut/seed_%d/covers_full_cut" % seed
 			)
+		"multi_war":
+			for pair in [[0, 1], [0, 3], [2, 3], [1, 2]]:
+				state.set_diplomatic_relation(
+					pair[0], pair[1], GameState.DiplomaticRelation.WAR
+				)
 		"sieged_cut":
 			_check(
 				_add_sieged_column(state) == GameState.GRID,
 				"sieged_cut/seed_%d/covers_full_column" % seed
 			)
-		"enemy_occupied_cut":
+		"third_party_occupied_cut":
 			for other in [0, 1, 3]:
 				state.set_diplomatic_relation(
 					2, other, GameState.DiplomaticRelation.WAR
