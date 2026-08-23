@@ -174,6 +174,33 @@ func _run() -> void:
 	var low_loyalty_color := MapRenderer.loyalty_color(10.0)
 	var middle_loyalty_color := MapRenderer.loyalty_color(50.0)
 	var high_loyalty_color := MapRenderer.loyalty_color(90.0)
+	var renderer_source := FileAccess.get_file_as_string(
+		"res://scripts/view/map_renderer.gd"
+	)
+	var trade_draw_start := renderer_source.find("func _draw_trade_routes()")
+	var trade_draw_end := renderer_source.find(
+		"func _draw_trade_flow_markers", trade_draw_start
+	)
+	var trade_draw_source := ""
+	if trade_draw_start >= 0 and trade_draw_end > trade_draw_start:
+		trade_draw_source = renderer_source.substr(
+			trade_draw_start, trade_draw_end - trade_draw_start
+		)
+	var trade_2d_mode_visibility := trade_draw_source.contains(
+		"_map_mode != MapMode.TRADE"
+	)
+	var sample_path := PackedVector2Array([
+		Vector2(0.0, 0.0), Vector2(100.0, 0.0),
+	])
+	var sample_2d_before := MapRenderer.polyline_sample(sample_path, 10.0)
+	var sample_2d_after := MapRenderer.polyline_sample(sample_path, 20.0)
+	var trade_2d_marker_motion := (
+		(sample_2d_before["tangent"] as Vector2).is_equal_approx(
+			Vector2.RIGHT
+		)
+		and (sample_2d_after["position"] as Vector2).x
+			> (sample_2d_before["position"] as Vector2).x
+	)
 	var active_route := {
 		"status": TradeNetwork.ACTIVE,
 		"food_transfer": 0,
@@ -206,22 +233,61 @@ func _run() -> void:
 	await process_frame
 	var active_trade_mesh := map_3d._trade_routes.mesh as ArrayMesh
 	var active_trade_vertices := _mesh_vertex_count(active_trade_mesh)
+	var active_marker_count := map_3d._trade_flow_markers.multimesh.instance_count
 	state.trade_routes[0]["status"] = TradeNetwork.REROUTED
 	state.trade_revision += 1
 	await process_frame
 	var rerouted_trade_mesh := map_3d._trade_routes.mesh as ArrayMesh
 	var rerouted_trade_vertices := _mesh_vertex_count(rerouted_trade_mesh)
+	var rerouted_marker_count := map_3d._trade_flow_markers.multimesh.instance_count
 	state.trade_routes[0]["status"] = TradeNetwork.BLOCKED
 	state.trade_revision += 1
 	await process_frame
 	var blocked_trade_mesh := map_3d._trade_routes.mesh as ArrayMesh
 	var blocked_trade_vertices := _mesh_vertex_count(blocked_trade_mesh)
+	var blocked_marker_count := map_3d._trade_flow_markers.multimesh.instance_count
 	var trade_revision_rebuilt := (
 		map_3d._last_trade_revision == state.trade_revision
 		and active_trade_mesh != rerouted_trade_mesh
 		and rerouted_trade_mesh != blocked_trade_mesh
 	)
+	var political_trade_hidden := (
+		not map_3d._trade_routes.visible
+		and not map_3d._trade_flow_markers.visible
+	)
+	state.trade_routes[0]["status"] = TradeNetwork.ACTIVE
+	state.trade_revision += 1
+	await process_frame
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_TRADE)
+	var marker_material := (
+		map_3d._trade_flow_markers.material_override as StandardMaterial3D
+	)
+	var marker_path: Dictionary = map_3d._trade_flow_paths[0]
+	var marker_distance_before := fposmod(
+		map_3d._trade_flow_offsets[0]
+			+ map_3d._trade_flow_time * StrategicMap3D.TRADE_FLOW_SPEED,
+		float(marker_path["length"])
+	)
+	var marker_pose := map_3d._trade_flow_pose_at_distance(
+		marker_path, marker_distance_before
+	)
+	var marker_pose_after := map_3d._trade_flow_pose_at_distance(
+		marker_path,
+		fposmod(
+			marker_distance_before + 0.25 * StrategicMap3D.TRADE_FLOW_SPEED,
+			float(marker_path["length"])
+		)
+	)
+	var marker_orientation_and_motion := (
+		not marker_pose.is_empty()
+		and not marker_pose_after.is_empty()
+		and (marker_pose["transform"] as Transform3D).basis.z.normalized().dot(
+			(marker_pose["direction"] as Vector3).normalized()
+		) > 0.99
+		and (marker_pose["transform"] as Transform3D).origin.distance_to(
+			(marker_pose_after["transform"] as Transform3D).origin
+		) > 0.001
+	)
 	var previous_camera_distance := map_3d._camera_distance
 	map_3d._camera_distance = StrategicMap3D.CAMERA_MAX_DISTANCE
 	map_3d._update_map_detail_visibility()
@@ -234,6 +300,8 @@ func _run() -> void:
 	var trade_mode_visibility := (
 		map_3d.map_mode() == MapRenderer.MAP_MODE_TRADE
 		and overlay.map_mode() == MapRenderer.MAP_MODE_TRADE
+		and map_3d._trade_routes.visible
+		and map_3d._trade_flow_markers.visible
 		and is_equal_approx(map_3d._trade_routes.transparency, 0.0)
 		and map_3d._roads.transparency > 0.0
 		and map_3d._minor_roads.transparency > 0.0
@@ -245,6 +313,8 @@ func _run() -> void:
 		map_3d.map_mode() == MapRenderer.MAP_MODE_LOYALTY
 		and overlay.map_mode() == MapRenderer.MAP_MODE_LOYALTY
 		and map_3d._loyalty_texture != null
+		and not map_3d._trade_routes.visible
+		and not map_3d._trade_flow_markers.visible
 	)
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_POLITICAL)
 	var checks := {
@@ -296,8 +366,27 @@ func _run() -> void:
 			and map_3d._trade_routes.name == "TradeRoutes"
 			and (map_3d._trade_routes.material_override as StandardMaterial3D)
 				.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and not (map_3d._trade_routes.material_override as StandardMaterial3D)
+				.no_depth_test
 		),
+		"trade_flow_marker_node": (
+			map_3d._trade_flow_markers != null
+			and map_3d._trade_flow_markers.name == "TradeFlowMarkers"
+			and marker_material != null
+			and marker_material.shading_mode
+				== BaseMaterial3D.SHADING_MODE_UNSHADED
+			and not marker_material.no_depth_test
+		),
+		"trade_flow_marker_statuses": (
+			active_marker_count > 0
+			and rerouted_marker_count > 0
+			and blocked_marker_count == 0
+		),
+		"trade_flow_orientation_and_motion": marker_orientation_and_motion,
 		"trade_revision_rebuild": trade_revision_rebuilt,
+		"trade_2d_mode_visibility": trade_2d_mode_visibility,
+		"trade_2d_marker_motion": trade_2d_marker_motion,
+		"political_trade_hidden": political_trade_hidden,
 		"trade_mode_visibility": trade_mode_visibility,
 		"loyalty_mode_contract": loyalty_mode_contract,
 		"country_boundary_contract": (

@@ -2413,6 +2413,26 @@ func _test_responsive_map_layout() -> void:
 			and not map_label_factory_source.contains("source han serif"),
 		"国家地图标签必须复用可用的 CJK Sans/黑体字体，不得声明仿宋/衬线候选"
 	)
+	var trade_draw_start := renderer_source.find(
+		"func _draw_trade_routes()"
+	)
+	var trade_draw_end := renderer_source.find(
+		"\n\nfunc ", trade_draw_start + 1
+	)
+	var trade_draw_source := ""
+	if trade_draw_start >= 0 and trade_draw_end > trade_draw_start:
+		trade_draw_source = renderer_source.substr(
+			trade_draw_start, trade_draw_end - trade_draw_start
+		)
+	_check(
+		MapRenderer.MAP_MODE_TRADE == MapRenderer.MapMode.TRADE
+		and trade_draw_source.contains(
+			"_map_mode != MapMode.TRADE"
+		)
+		and trade_draw_source.contains("state.trade_routes.is_empty()")
+		and trade_draw_source.contains("_draw_trade_flow_markers"),
+		"2D贸易路线必须只在TRADE模式且存在路线时绘制"
+	)
 	var hit_state := GameState.new()
 	hit_state.generate_grid_world(12346)
 	var list_state := GameState.new()
@@ -2429,6 +2449,14 @@ func _test_responsive_map_layout() -> void:
 		ActionCandidate.Kind.CREATE_ARMY
 	)
 	list_state.nations[0].ai_last_force_day = 12
+	list_state.nations[0].last_trade_route_count = 2
+	list_state.nations[0].last_trade_gold = 7
+	list_state.nations[0].last_trade_food_import = 30
+	list_state.nations[0].last_trade_food_export = 10
+	list_state.nations[0].ruler_name = "测试君"
+	list_state.nations[0].ruler_traits = [
+		RulerProfile.TRAIT_FRUGAL
+	] as Array[String]
 	var nation_rows := MapRenderer.nation_list_rows(list_state)
 	var nation_ids: Array[int] = []
 	for row in nation_rows:
@@ -2441,9 +2469,38 @@ func _test_responsive_map_layout() -> void:
 			and int(nation_rows[1]["depth"]) == 1
 			and int(nation_rows[1]["parent_nation_id"]) == 0
 			and str(nation_rows[1]["identity"]).contains("藩王")
-			and str(nation_rows[0]["action"]).contains("建军"),
+			and str(nation_rows[0]["action"]).contains("建军")
+			and str(nation_rows[0]["identity_primary"]).length() > 0
+			and str(nation_rows[0]["identity_secondary"]).length() > 0
+			and str(nation_rows[0]["power_primary"]).contains("兵力")
+			and str(nation_rows[0]["power_secondary"]).contains("忠诚")
+			and str(nation_rows[0]["economy_primary"]).contains("月净")
+			and str(nation_rows[0]["economy_secondary"]).contains("商路 2")
+			and str(nation_rows[0]["economy_secondary"]).contains("商金 +7")
+			and str(nation_rows[0]["economy_secondary"]).contains("粮 +30/-10")
+			and str(nation_rows[0]["governance_primary"]).contains("测试君")
+			and str(nation_rows[0]["governance_secondary"]).contains("节俭")
+			and str(nation_rows[0]["governance_secondary"]).contains("建军"),
 		"国家列表必须过滤灭亡国家，并把直属藩王缩进到宗主之后"
 	)
+	var nation_selection_renderer := MapRenderer.new()
+	nation_selection_renderer.state = list_state
+	nation_selection_renderer.select_city(0)
+	nation_selection_renderer.select_edge(0, 1)
+	nation_selection_renderer.select_nation(0)
+	var valid_nation_selected := (
+		nation_selection_renderer.selected_nation_id() == 0
+		and nation_selection_renderer.selected_city_id() == -1
+		and nation_selection_renderer.selected_edge_pair()
+			== Vector2i(-1, -1)
+	)
+	nation_selection_renderer.select_nation(999)
+	_check(
+		valid_nation_selected
+		and nation_selection_renderer.selected_nation_id() == -1,
+		"选择国家必须清除城市/道路选择，并拒绝越界国家ID"
+	)
+	nation_selection_renderer.free()
 	list_state.suzerainty[2] = {
 		"overlord_id": 1,
 		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
@@ -2710,17 +2767,144 @@ func _test_responsive_map_layout() -> void:
 		hit_state,
 		city_to_pick.id
 	)
+	var city_sections := MapRenderer.city_detail_sections(
+		hit_state, city_to_pick.id
+	)
 	var edge_lines := MapRenderer.edge_detail_lines(
 		hit_state,
 		edge_to_pick
 	)
 	_check(
-		city_lines.size() >= 7
-			and "工事" in city_lines[2]
-			and "发展权重" in city_lines[5]
+		city_sections.size() == 5
+			and [
+				str(city_sections[0]["title"]),
+				str(city_sections[1]["title"]),
+				str(city_sections[2]["title"]),
+				str(city_sections[3]["title"]),
+				str(city_sections[4]["title"]),
+			] == ["概况", "军事", "经济", "治理", "贸易"]
+			and city_lines.size() == 11
+			and "工事" in str((city_sections[1]["lines"] as Array)[0])
+			and "驻军" in str((city_sections[1]["lines"] as Array)[1])
+			and "发展" in str((city_sections[2]["lines"] as Array)[1])
+			and "库存" in str((city_sections[2]["lines"] as Array)[2])
+			and "商路" in str((city_sections[4]["lines"] as Array)[0])
+			and "贸易金" in str((city_sections[4]["lines"] as Array)[0])
+			and "粮食净流" in str((city_sections[4]["lines"] as Array)[0])
+			and MapRenderer.city_detail_sections(hit_state, -1).is_empty()
 			and edge_lines.size() >= 5
 			and "行军" in edge_lines[2],
-		"城市与道路详情必须包含控制、工事、驻军、距离和行军信息"
+		"城市五段详情必须包含军事、经济、治理、贸易，道路详情保留行军信息"
+	)
+	var trade_edge_a := hit_state.edge_of(0, 1)
+	var trade_edge_b := hit_state.edge_of(1, 2)
+	var trade_path_ready := trade_edge_a != null and trade_edge_b != null
+	if trade_path_ready:
+		trade_edge_a.map_path = PackedVector2Array([
+			hit_state.cities[0].map_position,
+			hit_state.cities[0].map_position.lerp(
+				hit_state.cities[1].map_position, 0.5
+			),
+			hit_state.cities[1].map_position,
+		])
+		trade_edge_b.map_path = PackedVector2Array([
+			hit_state.cities[1].map_position,
+			hit_state.cities[1].map_position.lerp(
+				hit_state.cities[2].map_position, 0.5
+			),
+			hit_state.cities[2].map_position,
+		])
+	var canonical_route := {
+		"id": 7,
+		"status": TradeNetwork.ACTIVE,
+		"city_path": [0, 1, 2] as Array[int],
+		"food_transfer": 0,
+		"food_source_city": -1,
+		"food_destination_city": -1,
+	}
+	var canonical_segments := MapRenderer.trade_route_map_paths(
+		hit_state, canonical_route
+	)
+	var canonical_flow := MapRenderer.trade_route_flow_path(
+		hit_state, canonical_route
+	)
+	var reverse_food_route: Dictionary = canonical_route.duplicate(true)
+	reverse_food_route["food_transfer"] = 25
+	reverse_food_route["food_source_city"] = 2
+	reverse_food_route["food_destination_city"] = 0
+	var reverse_food_flow := MapRenderer.trade_route_flow_path(
+		hit_state, reverse_food_route
+	)
+	var invalid_food_route: Dictionary = canonical_route.duplicate(true)
+	invalid_food_route["food_transfer"] = 25
+	invalid_food_route["food_source_city"] = hit_state.cities.size() + 10
+	invalid_food_route["food_destination_city"] = hit_state.cities.size() + 11
+	var invalid_food_flow := MapRenderer.trade_route_flow_path(
+		hit_state, invalid_food_route
+	)
+	_check(
+		trade_path_ready
+		and canonical_segments.size() == 2
+		and canonical_segments[0][0].is_equal_approx(
+			hit_state.cities[0].map_position
+		)
+		and canonical_segments[0][-1].is_equal_approx(
+			hit_state.cities[1].map_position
+		)
+		and canonical_segments[1][0].is_equal_approx(
+			hit_state.cities[1].map_position
+		)
+		and canonical_segments[1][-1].is_equal_approx(
+			hit_state.cities[2].map_position
+		)
+		and canonical_flow.size() == 5
+		and canonical_flow[0].is_equal_approx(
+			hit_state.cities[0].map_position
+		)
+		and canonical_flow[-1].is_equal_approx(
+			hit_state.cities[2].map_position
+		)
+		and reverse_food_flow[0].is_equal_approx(
+			hit_state.cities[2].map_position
+		)
+		and reverse_food_flow[-1].is_equal_approx(
+			hit_state.cities[0].map_position
+		)
+		and invalid_food_flow == canonical_flow,
+		"贸易路径必须按city_path规范拼接，粮运方向相反时整体反向"
+	)
+	var polyline := PackedVector2Array([
+		Vector2.ZERO, Vector2(3.0, 0.0), Vector2(3.0, 4.0),
+	])
+	var sample_start := MapRenderer.polyline_sample(polyline, -1.0)
+	var sample_turn := MapRenderer.polyline_sample(polyline, 4.0)
+	var sample_end := MapRenderer.polyline_sample(polyline, 99.0)
+	_check(
+		_approx(MapRenderer.polyline_length(polyline), 7.0)
+		and (sample_start["position"] as Vector2).is_equal_approx(Vector2.ZERO)
+		and (sample_start["tangent"] as Vector2).is_equal_approx(Vector2.RIGHT)
+		and (sample_turn["position"] as Vector2).is_equal_approx(Vector2(3.0, 1.0))
+		and (sample_turn["tangent"] as Vector2).is_equal_approx(Vector2.DOWN)
+		and (sample_end["position"] as Vector2).is_equal_approx(Vector2(3.0, 4.0)),
+		"贸易流折线长度与起点/转角/终点采样必须稳定"
+	)
+	var active_routes: Array[Dictionary] = [
+		{"status": TradeNetwork.ACTIVE},
+	]
+	var rerouted_routes: Array[Dictionary] = [
+		{"status": TradeNetwork.REROUTED},
+	]
+	var blocked_routes: Array[Dictionary] = [
+		{"status": TradeNetwork.BLOCKED},
+	]
+	_check(
+		MapRenderer.has_animated_trade_routes(active_routes)
+		and MapRenderer.has_animated_trade_routes(rerouted_routes)
+		and not MapRenderer.has_animated_trade_routes(blocked_routes)
+		and not MapRenderer.has_animated_trade_routes(
+			[] as Array[Dictionary]
+		),
+		"ACTIVE/REROUTED商路必须驱动动画，BLOCKED/空路线不得刷新动画"
 	)
 	_check(
 		not MapRenderer.city_label_text(city_to_pick).is_empty(),
@@ -10546,16 +10730,30 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
+	var nation_sections := MapRenderer.nation_detail_sections(gs, 0)
 	_check(
-		nation_lines.size() == 4
-		and nation_lines[0].contains("金")
-		and nation_lines[1].contains("月净")
-		and nation_lines[1].contains("贡赋")
-		and nation_lines[2].contains("军费")
-		and nation_lines[2].contains("支付")
-		and nation_lines[3].contains("粮")
-		and nation_lines[3].contains("盟"),
-		"国家详情卡必须独立展示财政、贡赋、军费支付率、粮食和外交状态"
+		nation_sections.size() == 5
+		and [
+			str(nation_sections[0]["title"]),
+			str(nation_sections[1]["title"]),
+			str(nation_sections[2]["title"]),
+			str(nation_sections[3]["title"]),
+			str(nation_sections[4]["title"]),
+		] == [
+			"身份与君主", "国力与民心", "财政与军费",
+			"粮食与贸易", "外交与行动",
+		]
+		and nation_lines.size() >= 10
+		and "月净" in str((nation_sections[2]["lines"] as Array)[0])
+		and "贡赋" in str((nation_sections[2]["lines"] as Array)[0])
+		and "军费" in str((nation_sections[2]["lines"] as Array)[1])
+		and "支付" in str((nation_sections[2]["lines"] as Array)[1])
+		and "粮仓" in str((nation_sections[3]["lines"] as Array)[0])
+		and "商路" in str((nation_sections[3]["lines"] as Array)[1])
+		and "商贸金" in str((nation_sections[3]["lines"] as Array)[1])
+		and "盟国" in str((nation_sections[4]["lines"] as Array)[1])
+		and MapRenderer.nation_detail_sections(gs, -1).is_empty(),
+		"国家五段详情必须独立展示君主、国力、财政军费、粮食贸易和外交行动"
 	)
 	_check(
 		gs.has_military_access(0, 1)

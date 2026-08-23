@@ -31,12 +31,12 @@ const VISUAL_SCALE_LARGE: float = 1.25
 const VISUAL_SCALE_XL: float = 1.50
 const CITY_PICK_RADIUS: float = 14.0
 const EDGE_PICK_TOLERANCE: float = 10.0
-const DETAIL_PANEL_WIDTH: float = 350.0
+const DETAIL_PANEL_WIDTH: float = 430.0
 const DETAIL_PANEL_MARGIN: float = 18.0
 const NATION_WINDOW_WIDTH: float = 1120.0
 const NATION_WINDOW_TITLE_HEIGHT: float = 30.0
-const NATION_WINDOW_HEADER_HEIGHT: float = 25.0
-const NATION_WINDOW_ROW_HEIGHT: float = 31.0
+const NATION_WINDOW_HEADER_HEIGHT: float = 28.0
+const NATION_WINDOW_ROW_HEIGHT: float = 46.0
 const NATION_WINDOW_FOOTER_HEIGHT: float = 22.0
 const NATION_WINDOW_MARGIN: float = 18.0
 const NATION_TREE_INDENT: float = 14.0
@@ -55,6 +55,8 @@ const TRADE_ACTIVE_GOLD := Color(0.96, 0.72, 0.20, 0.96)
 const TRADE_ACTIVE_CYAN := Color(0.10, 0.76, 0.72, 0.98)
 const TRADE_REROUTED_ORANGE := Color(0.94, 0.39, 0.075, 0.98)
 const TRADE_BLOCKED_RED := Color(0.82, 0.075, 0.055, 0.98)
+const TRADE_FLOW_SPACING_PX: float = 52.0
+const TRADE_FLOW_SPEED_PX: float = 34.0
 const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
 const LOYALTY_MID_COLOR := Color(0.92, 0.68, 0.12, 1.0)
 const LOYALTY_HIGH_COLOR := Color(0.12, 0.58, 0.24, 1.0)
@@ -132,6 +134,7 @@ var _layout_map_aspect_ratio: float = -1.0
 var _selected_city_id: int = -1
 var _selected_edge_a: int = -1
 var _selected_edge_b: int = -1
+var _selected_nation_id: int = -1
 var _nation_stats_open: bool = false
 var _nation_stats_window_position := Vector2(-1.0, -1.0)
 var _nation_stats_drag_active: bool = false
@@ -205,6 +208,7 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_selected_city_id = -1
 	_selected_edge_a = -1
 	_selected_edge_b = -1
+	_selected_nation_id = -1
 	_map_zoom = MAP_ZOOM_MIN
 	_map_pan = Vector2.ZERO
 	_map_drag_active = false
@@ -417,6 +421,7 @@ func select_city(city_id: int) -> void:
 	_selected_city_id = city_id
 	_selected_edge_a = -1
 	_selected_edge_b = -1
+	_selected_nation_id = -1
 	queue_redraw()
 
 
@@ -424,6 +429,19 @@ func select_edge(city_a: int, city_b: int) -> void:
 	_selected_city_id = -1
 	_selected_edge_a = mini(city_a, city_b)
 	_selected_edge_b = maxi(city_a, city_b)
+	_selected_nation_id = -1
+	queue_redraw()
+
+
+func select_nation(nation_id: int) -> void:
+	_selected_city_id = -1
+	_selected_edge_a = -1
+	_selected_edge_b = -1
+	_selected_nation_id = (
+		nation_id
+		if state != null and nation_id >= 0 and nation_id < state.nations.size()
+		else -1
+	)
 	queue_redraw()
 
 
@@ -437,6 +455,10 @@ func selected_city_id() -> int:
 
 func selected_edge_pair() -> Vector2i:
 	return Vector2i(_selected_edge_a, _selected_edge_b)
+
+
+func selected_nation_id() -> int:
+	return _selected_nation_id
 
 
 func world_input_blocked(point: Vector2) -> bool:
@@ -519,9 +541,14 @@ func _process(_delta: float) -> void:
 	var viewport_changed := viewport_size != _last_viewport_size
 	if viewport_changed:
 		_last_viewport_size = viewport_size
+	var trade_flow_active := (
+		state != null
+		and _map_mode == MapMode.TRADE
+		and has_animated_trade_routes(state.trade_routes)
+	)
 	var target_fps := target_redraw_fps(
 		sim == null or sim.paused,
-		_visual_animation_active
+		_visual_animation_active or trade_flow_active
 	)
 	if (
 		state != null
@@ -730,10 +757,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					point - stats_rect.position
 				)
 			else:
-				_toggle_nation_tree_at_point(
+				var toggled := _toggle_nation_tree_at_point(
 					point,
 					stats_rect
 				)
+				if not toggled:
+					_select_nation_row_at_point(point, stats_rect)
 			queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
@@ -805,6 +834,7 @@ func _pick_map_feature(point: Vector2) -> void:
 		_selected_city_id = city_id
 		_selected_edge_a = -1
 		_selected_edge_b = -1
+		_selected_nation_id = -1
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -816,6 +846,7 @@ func _pick_map_feature(point: Vector2) -> void:
 		EDGE_PICK_TOLERANCE * _display_scale
 	)
 	_selected_city_id = -1
+	_selected_nation_id = -1
 	if edge == null:
 		_selected_edge_a = -1
 		_selected_edge_b = -1
@@ -858,6 +889,7 @@ func _clear_selection() -> void:
 	_selected_city_id = -1
 	_selected_edge_a = -1
 	_selected_edge_b = -1
+	_selected_nation_id = -1
 	queue_redraw()
 
 
@@ -1293,6 +1325,25 @@ func _toggle_nation_tree_at_point(
 				0
 			)
 		)
+		return true
+	return false
+
+
+func _select_nation_row_at_point(
+	point: Vector2,
+	window_rect: Rect2
+) -> bool:
+	var rows := _nation_list_rows_cached()
+	var capacity := nation_stats_visible_row_capacity(
+		window_rect.size, _display_scale
+	)
+	for visual_index in range(mini(capacity, rows.size() - _nation_stats_scroll)):
+		var row_rect := nation_stats_row_rect(
+			window_rect, _display_scale, visual_index
+		)
+		if not row_rect.has_point(point):
+			continue
+		select_nation(int(rows[_nation_stats_scroll + visual_index]["nation_id"]))
 		return true
 	return false
 
@@ -3586,27 +3637,97 @@ func _draw_edges() -> void:
 
 
 func _draw_trade_routes() -> void:
-	if state.trade_routes.is_empty():
+	if _map_mode != MapMode.TRADE or state.trade_routes.is_empty():
 		return
-	var emphasized := _map_mode == MapMode.TRADE
-	var width := (3.2 if emphasized else 2.0) * _display_scale
+	var width := 3.2 * _display_scale
 	for route in state.trade_routes:
 		var status := int(route.get("status", TradeNetwork.ACTIVE))
-		var color := trade_route_color(route, emphasized)
-		for map_path in trade_route_map_paths(state, route):
-			var pixels := PackedVector2Array()
-			for point in map_path:
-				pixels.append(_grid_to_pixel(point))
-			if pixels.size() < 2:
-				continue
-			if status == TradeNetwork.BLOCKED:
-				for index in range(pixels.size() - 1):
-					draw_dashed_line(
-						pixels[index], pixels[index + 1], color,
-						width, 7.0 * _display_scale, true
-					)
-			else:
-				draw_polyline(pixels, color, width, true)
+		var color := trade_route_color(route, true)
+		var flow_path := trade_route_flow_path(state, route)
+		if flow_path.size() < 2:
+			continue
+		var pixels := PackedVector2Array()
+		for point in flow_path:
+			pixels.append(_grid_to_pixel(point))
+		if status == TradeNetwork.BLOCKED:
+			for index in range(pixels.size() - 1):
+				draw_dashed_line(
+					pixels[index], pixels[index + 1], color,
+					width, 7.0 * _display_scale, true
+				)
+		else:
+			draw_polyline(pixels, color, width, true)
+			_draw_trade_flow_markers(
+				pixels, color, int(route.get("id", 0))
+			)
+
+
+func _draw_trade_flow_markers(
+	pixels: PackedVector2Array,
+	color: Color,
+	route_id: int
+) -> void:
+	var total_length := polyline_length(pixels)
+	if total_length <= 0.001:
+		return
+	var spacing := TRADE_FLOW_SPACING_PX * _display_scale
+	var phase := fposmod(
+		_blink * TRADE_FLOW_SPEED_PX
+			+ float(posmod(route_id * 17, 47)),
+		spacing
+	)
+	var distance := phase
+	while distance < total_length:
+		var sample := polyline_sample(pixels, distance)
+		var point: Vector2 = sample["position"]
+		var tangent: Vector2 = sample["tangent"]
+		var normal := tangent.orthogonal()
+		var length := 7.0 * _display_scale
+		var half_width := 3.0 * _display_scale
+		var tip := point + tangent * length
+		var tail := point - tangent * length * 0.55
+		draw_colored_polygon(PackedVector2Array([
+			tip, tail + normal * half_width, tail - normal * half_width,
+		]), color.lightened(0.18))
+		distance += spacing
+
+
+static func has_animated_trade_routes(routes: Array[Dictionary]) -> bool:
+	for route in routes:
+		if int(route.get("status", TradeNetwork.BLOCKED)) != TradeNetwork.BLOCKED:
+			return true
+	return false
+
+
+static func polyline_length(points: PackedVector2Array) -> float:
+	var result := 0.0
+	for index in range(points.size() - 1):
+		result += points[index].distance_to(points[index + 1])
+	return result
+
+
+static func polyline_sample(
+	points: PackedVector2Array, distance: float
+) -> Dictionary:
+	if points.size() < 2:
+		return {"position": Vector2.ZERO, "tangent": Vector2.RIGHT}
+	var remaining := clampf(distance, 0.0, polyline_length(points))
+	for index in range(points.size() - 1):
+		var delta := points[index + 1] - points[index]
+		var segment_length := delta.length()
+		if segment_length <= 0.000001:
+			continue
+		if remaining <= segment_length:
+			return {
+				"position": points[index] + delta * (remaining / segment_length),
+				"tangent": delta / segment_length,
+			}
+		remaining -= segment_length
+	var tail := points[points.size() - 1] - points[points.size() - 2]
+	return {
+		"position": points[points.size() - 1],
+		"tangent": tail.normalized() if tail.length_squared() > 0.0 else Vector2.RIGHT,
+	}
 
 
 static func trade_route_color(
@@ -3654,6 +3775,43 @@ static func trade_route_map_paths(
 			for point_index in range(points.size() - 1, -1, -1):
 				reversed.append(points[point_index])
 			result.append(reversed)
+	return result
+
+
+static func trade_route_flow_path(
+	game_state: GameState, route: Dictionary
+) -> PackedVector2Array:
+	var result := PackedVector2Array()
+	for edge_path in trade_route_map_paths(game_state, route):
+		for point in edge_path:
+			if result.is_empty() or not result[-1].is_equal_approx(point):
+				result.append(point)
+	if result.size() < 2:
+		return result
+	var food_amount := int(route.get("food_transfer", route.get("food", 0)))
+	if food_amount <= 0:
+		return result
+	var food_source := int(route.get("food_source_city", -1))
+	var food_destination := int(route.get("food_destination_city", -1))
+	if (
+		food_source < 0
+		or food_destination < 0
+		or food_source >= game_state.cities.size()
+		or food_destination >= game_state.cities.size()
+	):
+		return result
+	var source_position := game_state.cities[food_source].map_position
+	var destination_position := game_state.cities[food_destination].map_position
+	var forward_error := (
+		result[0].distance_squared_to(source_position)
+		+ result[-1].distance_squared_to(destination_position)
+	)
+	var reverse_error := (
+		result[-1].distance_squared_to(source_position)
+		+ result[0].distance_squared_to(destination_position)
+	)
+	if reverse_error < forward_error:
+		result.reverse()
 	return result
 
 
@@ -4494,28 +4652,54 @@ static func nation_list_rows(
 			resource_cache
 		)
 		var wars := game_state.wars_of(nation.id)
+		var relation_text := _nation_relation_text(game_state, nation.id)
+		var war_tag := " · 交战" if not wars.is_empty() else ""
+		var traits: Array[String] = []
+		for trait_id in nation.ruler_traits:
+			traits.append(RulerProfile.trait_name(trait_id))
+		var trait_text := "、".join(traits) if not traits.is_empty() else "无特质"
 		row_by_nation[nation.id] = {
 			"nation_id": nation.id,
 			"color": nation.color,
 			"at_war": not wars.is_empty(),
-			"identity": "%s  %s" % [
-				nation_debug_name(game_state, nation.id),
-				_nation_relation_text(game_state, nation.id),
-			],
-			"military": "城%d 军%d/%d 人%d 忠%.0f" % [
+			"identity_primary": nation_debug_name(game_state, nation.id),
+			"identity_secondary": relation_text + war_tag,
+			"power_primary": "城 %d   军 %d   兵力 %d" % [
 				city_count_by_nation[nation.id],
 				army_count_by_nation[nation.id],
 				troops_by_nation[nation.id],
+			],
+			"power_secondary": "人力 %d   忠诚 %.0f" % [
 				nation.manpower_pool,
 				nation.average_loyalty,
 			],
-			"economy": "金%d 月%+d 商%d线 金%+d 粮+%d/-%d" % [
+			"economy_primary": "国库 %d   月净 %+d" % [
 				nation.treasury_gold,
 				int(report["monthly_gold_balance"]),
+			],
+			"economy_secondary": "商路 %d   商金 %+d   粮 %+d/-%d" % [
 				nation.last_trade_route_count,
 				nation.last_trade_gold,
 				nation.last_trade_food_import,
 				nation.last_trade_food_export,
+			],
+			"governance_primary": "%s · %s" % [
+				nation.ruler_name if not nation.ruler_name.is_empty() else "无名君主",
+				RulerProfile.archetype_name(nation.ruler_archetype),
+			],
+			"governance_secondary": "%s · %s" % [
+				trait_text, nation_action_summary(game_state, nation.id),
+			],
+			# 兼容旧调用与脚本检查；实际窗口读取上面的结构化双行字段。
+			"identity": "%s  %s" % [nation_debug_name(game_state, nation.id), relation_text],
+			"military": "城%d 军%d/%d 人%d 忠%.0f" % [
+				city_count_by_nation[nation.id], army_count_by_nation[nation.id],
+				troops_by_nation[nation.id], nation.manpower_pool, nation.average_loyalty,
+			],
+			"economy": "金%d 月%+d 商%d线 金%+d 粮+%d/-%d" % [
+				nation.treasury_gold, int(report["monthly_gold_balance"]),
+				nation.last_trade_route_count, nation.last_trade_gold,
+				nation.last_trade_food_import, nation.last_trade_food_export,
 			],
 			"diplomacy": ruler_summary(nation),
 			"action": nation_action_summary(game_state, nation.id),
@@ -4964,11 +5148,10 @@ func _draw_nation_stats_window() -> void:
 	_draw_nation_window_cells(
 		header_rect,
 		{
-			"identity": "国家 / 身份",
-			"military": "领土 / 军事 / 忠诚",
-			"economy": "财政 / 贸易金粮",
-			"diplomacy": "君主 / 原型 / 特质",
-			"action": "相关动作",
+			"identity_primary": "国家身份",
+			"power_primary": "国力与民心",
+			"economy_primary": "财政与贸易",
+			"governance_primary": "君主与政务",
 		},
 		PAPER_LIGHT,
 		_font_size(10)
@@ -5060,14 +5243,15 @@ func _draw_nation_window_cells(
 	font_size: int
 ) -> void:
 	var columns := [
-		["identity", 0.02, 0.19],
-		["military", 0.21, 0.18],
-		["economy", 0.39, 0.24],
-		["diplomacy", 0.63, 0.23],
-		["action", 0.86, 0.12],
+		["identity", 0.02, 0.23],
+		["power", 0.25, 0.22],
+		["economy", 0.47, 0.25],
+		["governance", 0.72, 0.26],
 	]
 	for column in columns:
-		var key := str(column[0])
+		var base_key := str(column[0])
+		var primary_key := base_key + "_primary"
+		var secondary_key := base_key + "_secondary"
 		var x_ratio := float(column[1])
 		var width_ratio := float(column[2])
 		var text_x := (
@@ -5075,7 +5259,7 @@ func _draw_nation_window_cells(
 			+ row_rect.size.x * x_ratio
 		)
 		var text_width := row_rect.size.x * width_ratio
-		if key == "identity" and row_data.has("depth"):
+		if base_key == "identity" and row_data.has("depth"):
 			var depth := int(row_data.get("depth", 0))
 			var toggle_rect := nation_tree_toggle_rect(
 				row_rect,
@@ -5122,46 +5306,63 @@ func _draw_nation_window_cells(
 					- text_x,
 				1.0
 			)
+		var primary := str(row_data.get(primary_key, ""))
+		var secondary := str(row_data.get(secondary_key, ""))
+		# Header dictionaries only carry the primary label.
+		if primary.is_empty():
+			primary = str(row_data.get(base_key, ""))
+		var primary_y := (
+			row_rect.position.y + row_rect.size.y * (0.60 if secondary.is_empty() else 0.42)
+		)
 		draw_string(
 			_font,
-			Vector2(
-				text_x,
-				row_rect.position.y
-					+ row_rect.size.y * 0.68
-			),
-			str(row_data.get(key, "")),
+			Vector2(text_x, primary_y),
+			primary,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			text_width,
 			font_size,
 			color
 		)
+		if not secondary.is_empty():
+			draw_string(
+				_font,
+				Vector2(text_x, row_rect.position.y + row_rect.size.y * 0.79),
+				secondary, HORIZONTAL_ALIGNMENT_LEFT, text_width,
+				maxi(font_size - 1, 8), color.darkened(0.18)
+			)
 
 
 func _draw_selection_detail() -> void:
-	var lines: Array[String] = []
+	var sections: Array[Dictionary] = []
 	var title := ""
 	var stripe_color := COMMAND_GREEN
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
 		var city := state.cities[_selected_city_id]
-		title = "城市作战档案  %s" % city_debug_name(state, city.id)
+		title = "城市信息  %s" % city_debug_name(state, city.id)
 		stripe_color = GameState.normalize_nation_color(
 			paper_nation_color(
 				state.nations[city.owner_nation].color
 			).darkened(0.22)
 		)
-		lines = city_detail_lines(state, city.id)
+		sections = city_detail_sections(state, city.id)
 	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
 		if edge != null:
-			title = "道路作战档案  %s ↔ %s" % [
+			title = "道路信息  %s ↔ %s" % [
 				WorldNaming.city_display_name(state, edge.city_a),
 				WorldNaming.city_display_name(state, edge.city_b),
 			]
-			lines = edge_detail_lines(state, edge)
-	if lines.is_empty():
+			sections = [{"title": "道路", "lines": edge_detail_lines(state, edge)}]
+	elif _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
+		var nation := state.nations[_selected_nation_id]
+		title = "国家信息  %s" % nation_debug_name(state, nation.id)
+		stripe_color = GameState.normalize_nation_color(
+			paper_nation_color(nation.color).darkened(0.22)
+		)
+		sections = nation_detail_sections(state, nation.id)
+	if sections.is_empty():
 		return
-	var line_height := 17.0 * _display_scale
-	var rect := _selection_detail_rect(lines.size())
+	var rect := _selection_detail_rect(_section_visual_line_count(sections))
 	draw_rect(
 		Rect2(
 			rect.position + Vector2(4.0, 5.0) * _display_scale,
@@ -5192,32 +5393,51 @@ func _draw_selection_detail() -> void:
 		_font_size(12),
 		PAPER_LIGHT
 	)
-	for index in range(lines.size()):
-		draw_string(
-			_font,
-			rect.position + Vector2(
-				12.0,
-				43.0 + float(index) * 17.0
-			) * _display_scale,
-			lines[index],
-			HORIZONTAL_ALIGNMENT_LEFT,
-			rect.size.x - 24.0 * _display_scale,
-			_font_size(10),
-			INK_COLOR
-		)
+	var visual_line := 0
+	for section in sections:
+		var section_title := str(section.get("title", ""))
+		if not section_title.is_empty():
+			var section_y := 43.0 + float(visual_line) * 17.0
+			draw_rect(Rect2(
+				rect.position + Vector2(10.0, section_y - 11.0) * _display_scale,
+				Vector2(rect.size.x / _display_scale - 20.0, 16.0) * _display_scale
+			), Color(0.30, 0.23, 0.14, 0.16), true)
+			draw_string(
+				_font, rect.position + Vector2(14.0, section_y) * _display_scale,
+				section_title, HORIZONTAL_ALIGNMENT_LEFT,
+				rect.size.x - 28.0 * _display_scale, _font_size(9),
+				stripe_color.darkened(0.05)
+			)
+			visual_line += 1
+		for line_value in section.get("lines", []):
+			draw_string(
+				_font, rect.position + Vector2(18.0, 43.0 + float(visual_line) * 17.0) * _display_scale,
+				str(line_value), HORIZONTAL_ALIGNMENT_LEFT,
+				rect.size.x - 34.0 * _display_scale, _font_size(10), INK_COLOR
+			)
+			visual_line += 1
 
 
 func _selection_detail_line_count() -> int:
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
-		return city_detail_lines(state, _selected_city_id).size()
+		return _section_visual_line_count(city_detail_sections(state, _selected_city_id))
 	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(
 			_selected_edge_a,
 			_selected_edge_b
 		)
 		if edge != null:
-			return edge_detail_lines(state, edge).size()
+			return edge_detail_lines(state, edge).size() + 1
+	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
+		return _section_visual_line_count(nation_detail_sections(state, _selected_nation_id))
 	return 0
+
+
+static func _section_visual_line_count(sections: Array[Dictionary]) -> int:
+	var count := 0
+	for section in sections:
+		count += 1 + (section.get("lines", []) as Array).size()
+	return count
 
 
 func _selection_detail_rect(line_count: int) -> Rect2:
@@ -5244,6 +5464,17 @@ static func city_detail_lines(
 	game_state: GameState,
 	city_id: int
 ) -> Array[String]:
+	var result: Array[String] = []
+	for section in city_detail_sections(game_state, city_id):
+		for line_value in section.get("lines", []):
+			result.append(str(line_value))
+	return result
+
+
+static func city_detail_sections(
+	game_state: GameState,
+	city_id: int
+) -> Array[Dictionary]:
 	if city_id < 0 or city_id >= game_state.cities.size():
 		return []
 	var city := game_state.cities[city_id]
@@ -5287,50 +5518,62 @@ static func city_detail_lines(
 	)
 	var reason := loyalty_reason_text(city.last_loyalty_reason)
 	return [
-		"类型 %s   状态 %s" % [
+		{"title": "概况", "lines": [
+			"%s · %s · %s" % [
 			type_name,
 			"交战中" if contested else "稳定",
+				" / ".join(special) if not special.is_empty() else "普通据点",
 		],
-		"控制 %s   法理 %s   %s" % [
+			"控制：%s    法理：%s" % [
 			nation_debug_name(game_state, city.owner_nation),
 			nation_debug_name(game_state, legal_owner),
-			" / ".join(special) if not special.is_empty() else "普通据点",
 		],
-		"工事 %d / %d   恢复剩余 %d 日" % [
+		]},
+		{"title": "军事", "lines": [
+			"工事：%d / %d    恢复：%d 日" % [
 			city.fort_strength,
 			city.fort_strength_max,
 			recovery_days,
 		],
-		"驻军 %d 支 / %d 人" % [
+			"驻军：%d 支，共 %d 人" % [
 			garrison_count,
 			garrison_troops,
 		],
-		"产出 人力 %+d/月  金钱 %+d/月  粮食 %+d/半年" % [
+		]},
+		{"title": "经济", "lines": [
+			"人力 %+d/月    金钱 %+d/月    粮食 %+d/半年" % [
 			city.manpower_per_month,
 			city.gold_per_month,
 			city.food_per_half_year,
 		],
-		"发展权重 金×%.2f  粮×%.2f  海拔产出×%.2f" % [
+			"发展：金×%.2f  粮×%.2f  地形×%.2f" % [
 			city.development_gold_multiplier,
 			city.development_food_multiplier,
 			city.terrain_output_multiplier,
 		],
-		"库存 %d   地形高度 %.2f / 起伏 %.2f" % [
+			"库存：%d    海拔 %.2f    起伏 %.2f" % [
 			city.food_storage,
 			city.terrain_height,
 			city.terrain_relief,
 		],
-		"忠诚 %.1f  趋势 %+0.2f/月  动乱 %.1f  目标 %s" % [
-			city.loyalty, city.loyalty_trend, city.unrest, target_name,
-		],
-		"忠诚原因 %s   叛乱进度 %d 月" % [
-			reason, city.rebellion_progress,
-		],
-		"贸易 %d 路  金%+d/月  粮%+d/月" % [
-			city.trade_route_count, city.trade_gold_bonus,
-			city.trade_food_balance,
-		],
-	]
+		]},
+		{"title": "治理", "lines": [
+			"忠诚 %.1f    趋势 %+0.2f/月    动乱 %.1f" % [
+				city.loyalty, city.loyalty_trend, city.unrest,
+			],
+			"认同：%s    原因：%s" % [
+				target_name, reason,
+			],
+			"叛乱进度：%d / %d 月" % [
+				city.rebellion_progress, RebellionSystem.REBELLION_PROGRESS_MONTHS,
+			],
+		]},
+		{"title": "贸易", "lines": [
+			"商路：%d    贸易金：%+d/月    粮食净流：%+d/月" % [
+				city.trade_route_count, city.trade_gold_bonus, city.trade_food_balance,
+			],
+		]},
+	] as Array[Dictionary]
 
 
 static func loyalty_reason_text(raw_reason: String) -> String:
@@ -5423,45 +5666,69 @@ static func nation_detail_lines(
 	game_state: GameState,
 	nation_id: int
 ) -> Array[String]:
+	var result: Array[String] = []
+	for section in nation_detail_sections(game_state, nation_id):
+		for line_value in section.get("lines", []):
+			result.append(str(line_value))
+	return result
+
+
+static func nation_detail_sections(
+	game_state: GameState,
+	nation_id: int
+) -> Array[Dictionary]:
+	if nation_id < 0 or nation_id >= game_state.nations.size():
+		return []
 	var n := game_state.nations[nation_id]
 	var troops := 0
+	var army_count := 0
 	for army in game_state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
 			troops += army.size
+			army_count += 1
 	var report := DiplomacyAI.resource_report(game_state, nation_id)
 	var gold_balance := int(report["monthly_gold_balance"])
 	var tribute_balance := (
 		int(report["monthly_tribute_income"])
 		- int(report["monthly_tribute_expense"])
 	)
-	var line_one := "城%d 兵%d 人%d  金%d" % [
-		game_state.cities_of(nation_id).size(),
-		troops,
-		n.manpower_pool,
-		n.treasury_gold,
+	var sections: Array[Dictionary] = [
+		{"title": "身份与君主", "lines": [
+			"%s    %s" % [
+				_nation_relation_text(game_state, nation_id), ruler_summary(n),
+			],
+		]},
+		{"title": "国力与民心", "lines": [
+			"城市 %d    军队 %d 支    总兵力 %d" % [
+				game_state.cities_of(nation_id).size(), army_count, troops,
+			],
+			"人力 %d    平均忠诚 %.1f" % [n.manpower_pool, n.average_loyalty],
+		]},
+		{"title": "财政与军费", "lines": [
+			"国库 %d    月净 %+d    城市收入 %d    贡赋 %+d" % [
+				n.treasury_gold, gold_balance,
+				int(report["monthly_city_gold_income"]), tribute_balance,
+			],
+			"军费 %d    欠饷 %d    支付率 %.0f%%" % [
+				n.last_military_upkeep, n.unpaid_military_upkeep,
+				n.military_payment_ratio * 100.0,
+			],
+		]},
+		{"title": "粮食与贸易", "lines": [
+			"粮仓 %d    需求 %d/月" % [
+				n.granary_food, int(ceil(float(report["monthly_food_demand"]))),
+			],
+			"商路 %d    商贸金 %+d    粮食 %+d/-%d" % [
+				n.last_trade_route_count, n.last_trade_gold,
+				n.last_trade_food_import, n.last_trade_food_export,
+			],
+		]},
+		{"title": "外交与行动", "lines": [
+			"战争：%s" % _nation_id_list_text(game_state, game_state.wars_of(nation_id)),
+			"盟国：%s" % _nation_id_list_text(game_state, game_state.allies_of(nation_id)),
+			nation_action_summary(game_state, nation_id),
+		]},
 	]
-	var line_two := "月净%+d  城收%d  贡赋%+d" % [
-		gold_balance,
-		int(report["monthly_city_gold_income"]),
-		tribute_balance,
-	]
-	var line_three := "军费%d  未付%d  支付%.0f%%" % [
-		n.last_military_upkeep,
-		n.unpaid_military_upkeep,
-		n.military_payment_ratio * 100.0,
-	]
-	var line_four := "粮%d 需%d/月  战%s  盟%s" % [
-		n.granary_food,
-		int(ceil(float(report["monthly_food_demand"]))),
-		_nation_id_list_text(game_state, game_state.wars_of(nation_id)),
-		_nation_id_list_text(game_state, game_state.allies_of(nation_id)),
-	]
-	var lines := [
-		line_one,
-		line_two,
-		line_three,
-		line_four,
-	] as Array[String]
 	if not n.campaign_attack_assignments.is_empty():
 		var target_set := {}
 		for target_value in n.campaign_attack_assignments.values():
@@ -5482,7 +5749,7 @@ static func nation_detail_lines(
 		var target_summary := " ".join(target_labels)
 		if omitted_targets > 0:
 			target_summary += " +%d" % omitted_targets
-		lines.append(
+		(sections[-1]["lines"] as Array).append(
 			"计划W%d %d路 费%d  %s" % [
 				n.campaign_plan_wave,
 				target_ids.size(),
@@ -5491,14 +5758,14 @@ static func nation_detail_lines(
 			]
 		)
 	elif n.last_offensive_gold_day >= 0:
-		lines.append(
+		(sections[-1]["lines"] as Array).append(
 			"上次攻势 Day%d 组织费%d"
 				% [
 					n.last_offensive_gold_day,
 					n.last_offensive_gold_cost,
 				]
 		)
-	return lines
+	return sections
 
 
 static func _diplomatic_action_name(action: int) -> String:

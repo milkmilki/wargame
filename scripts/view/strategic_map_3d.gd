@@ -32,6 +32,12 @@ const MAP_COUNTER_MARK := Color(0.32, 0.25, 0.12)
 const TRADE_ROUTE_ELEVATION: float = 0.185
 const TRADE_ROUTE_WIDTH: float = 0.055
 const TRADE_ROUTE_DASH_WORLD_LENGTH: float = 0.42
+const TRADE_FLOW_ELEVATION: float = 0.265
+const TRADE_FLOW_SPEED: float = 0.95
+const TRADE_FLOW_MARKER_SPACING: float = 2.40
+const TRADE_FLOW_MARKER_WIDTH: float = 0.26
+const TRADE_FLOW_MARKER_LENGTH: float = 0.50
+const TRADE_FLOW_MAX_MARKERS_PER_ROUTE: int = 24
 const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
 const CAMPAIGN_ARROW_GRID := Vector2i(24, 16)
 ## 攻势箭头仍是原始红色贴图；这些参数只控制承载贴图的无光照拱形曲面。
@@ -61,6 +67,7 @@ var _roads: MeshInstance3D
 var _minor_roads: MeshInstance3D
 var _rivers: MeshInstance3D
 var _trade_routes: MeshInstance3D
+var _trade_flow_markers: MultiMeshInstance3D
 var _boundaries: MeshInstance3D
 var _campaigns: MeshInstance3D
 var _cities: MultiMeshInstance3D
@@ -125,6 +132,10 @@ var _vertical_terrain_light_strength: float = (
 	VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
 )
 var _visual_time: float = 0.0
+var _trade_flow_time: float = 0.0
+var _trade_flow_paths: Array[Dictionary] = []
+var _trade_flow_path_indices := PackedInt32Array()
+var _trade_flow_offsets := PackedFloat32Array()
 
 
 func setup(
@@ -169,6 +180,16 @@ func setup(
 	_last_road_network_revision = -1
 	_last_trade_revision = -1
 	_last_naming_revision = -1
+	_trade_flow_time = 0.0
+	_trade_flow_paths.clear()
+	_trade_flow_path_indices = PackedInt32Array()
+	_trade_flow_offsets = PackedFloat32Array()
+	if (
+		_trade_flow_markers != null
+		and _trade_flow_markers.multimesh != null
+	):
+		_trade_flow_markers.multimesh.instance_count = 0
+	_apply_map_mode_visibility()
 	set_process(true)
 	set_process_unhandled_input(true)
 
@@ -177,6 +198,8 @@ func _process(delta: float) -> void:
 	if state == null or _terrain == null:
 		return
 	_visual_time += delta
+	if _map_mode == MapRenderer.MapMode.TRADE:
+		_trade_flow_time += delta
 	if (
 		state.ownership_revision != _last_ownership_revision
 		or state.diplomacy_revision
@@ -214,6 +237,8 @@ func _process(delta: float) -> void:
 	_update_selection_marker()
 	_update_edge_selection()
 	_update_city_label_visibility()
+	if _map_mode == MapRenderer.MapMode.TRADE:
+		_update_trade_flow_markers()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -433,6 +458,10 @@ func _ensure_feature_nodes() -> void:
 		_trade_routes = MeshInstance3D.new()
 		_trade_routes.name = "TradeRoutes"
 		_content.add_child(_trade_routes)
+	if _trade_flow_markers == null:
+		_trade_flow_markers = MultiMeshInstance3D.new()
+		_trade_flow_markers.name = "TradeFlowMarkers"
+		_content.add_child(_trade_flow_markers)
 	if _boundaries == null:
 		_boundaries = MeshInstance3D.new()
 		_boundaries.name = "Boundaries"
@@ -946,7 +975,176 @@ func _build_trade_route_mesh() -> void:
 				)
 	_trade_routes.mesh = surface_tool.commit()
 	_trade_routes.material_override = _trade_route_material()
+	_rebuild_trade_flow_markers()
 	_apply_map_mode_visibility()
+
+
+func _rebuild_trade_flow_markers() -> void:
+	_trade_flow_paths.clear()
+	var path_indices: Array[int] = []
+	var offsets: Array[float] = []
+	if _trade_flow_markers == null or _terrain == null or state == null:
+		return
+	for route in state.trade_routes:
+		if int(route.get("status", TradeNetwork.ACTIVE)) == TradeNetwork.BLOCKED:
+			continue
+		var route_points := PackedVector3Array()
+		var flow_path := MapRenderer.trade_route_flow_path(state, route)
+		for segment_index in range(flow_path.size() - 1):
+			var samples := _draped_world_samples(
+				flow_path[segment_index],
+				flow_path[segment_index + 1],
+				TRADE_FLOW_ELEVATION
+			)
+			for sample_index in range(samples.size()):
+				var sample := samples[sample_index]
+				if (
+					not route_points.is_empty()
+					and route_points[route_points.size() - 1]
+						.distance_squared_to(sample) <= 0.000001
+				):
+					continue
+				route_points.append(sample)
+		if route_points.size() < 2:
+			continue
+		var cumulative := PackedFloat32Array()
+		cumulative.resize(route_points.size())
+		var path_length := 0.0
+		for point_index in range(1, route_points.size()):
+			path_length += route_points[point_index - 1].distance_to(
+				route_points[point_index]
+			)
+			cumulative[point_index] = path_length
+		if path_length <= 0.001:
+			continue
+		var path_index := _trade_flow_paths.size()
+		_trade_flow_paths.append({
+			"points": route_points,
+			"cumulative": cumulative,
+			"length": path_length,
+			"color": MapRenderer.trade_route_color(route, true),
+		})
+		var marker_count := clampi(
+			int(ceil(path_length / TRADE_FLOW_MARKER_SPACING)),
+			1,
+			TRADE_FLOW_MAX_MARKERS_PER_ROUTE
+		)
+		for marker_index in range(marker_count):
+			path_indices.append(path_index)
+			offsets.append(
+				float(marker_index) / float(marker_count) * path_length
+			)
+	_trade_flow_path_indices = PackedInt32Array(path_indices)
+	_trade_flow_offsets = PackedFloat32Array(offsets)
+	_configure_multimesh(
+		_trade_flow_markers,
+		_trade_flow_marker_mesh(),
+		_trade_flow_path_indices.size(),
+		_trade_flow_material()
+	)
+	_update_trade_flow_markers()
+
+
+func _trade_flow_marker_mesh() -> ArrayMesh:
+	var surface_tool := SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# A long diamond has a readable tip in local +Z, which is aligned to the
+	# route tangent by each instance transform.
+	for vertex in [
+		Vector3(0.0, 0.0, 0.50),
+		Vector3(0.50, 0.0, -0.16),
+		Vector3(0.0, 0.0, -0.50),
+		Vector3(0.0, 0.0, 0.50),
+		Vector3(0.0, 0.0, -0.50),
+		Vector3(-0.50, 0.0, -0.16),
+	]:
+		surface_tool.add_vertex(vertex)
+	return surface_tool.commit()
+
+
+func _trade_flow_material() -> StandardMaterial3D:
+	var material := _instance_color_material(false, true)
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = false
+	material.render_priority = 6
+	return material
+
+
+func _update_trade_flow_markers() -> void:
+	if (
+		_map_mode != MapRenderer.MapMode.TRADE
+		or _trade_flow_markers == null
+		or _trade_flow_markers.multimesh == null
+	):
+		return
+	for instance_index in range(_trade_flow_path_indices.size()):
+		var path_index := _trade_flow_path_indices[instance_index]
+		if path_index < 0 or path_index >= _trade_flow_paths.size():
+			continue
+		var path: Dictionary = _trade_flow_paths[path_index]
+		var length := float(path.get("length", 0.0))
+		if length <= 0.001:
+			continue
+		var distance := fposmod(
+			_trade_flow_offsets[instance_index]
+				+ _trade_flow_time * TRADE_FLOW_SPEED,
+			length
+		)
+		var pose := _trade_flow_pose_at_distance(path, distance)
+		if pose.is_empty():
+			continue
+		_trade_flow_markers.multimesh.set_instance_transform(
+			instance_index, pose["transform"]
+		)
+		_trade_flow_markers.multimesh.set_instance_color(
+			instance_index, path["color"]
+		)
+
+
+func _trade_flow_pose_at_distance(
+	path: Dictionary, distance: float
+) -> Dictionary:
+	var points: PackedVector3Array = path.get(
+		"points", PackedVector3Array()
+	)
+	var cumulative: PackedFloat32Array = path.get(
+		"cumulative", PackedFloat32Array()
+	)
+	if points.size() < 2 or cumulative.size() != points.size():
+		return {}
+	var segment_index := 0
+	while (
+		segment_index + 1 < cumulative.size()
+		and cumulative[segment_index + 1] < distance
+	):
+		segment_index += 1
+	segment_index = mini(segment_index, points.size() - 2)
+	var from := points[segment_index]
+	var to := points[segment_index + 1]
+	var segment_length := maxf(
+		cumulative[segment_index + 1] - cumulative[segment_index],
+		0.000001
+	)
+	var ratio := clampf(
+		(distance - cumulative[segment_index]) / segment_length,
+		0.0,
+		1.0
+	)
+	var forward := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	if forward.length_squared() <= 0.000001:
+		return {}
+	forward = forward.normalized()
+	var right := Vector3.UP.cross(forward).normalized()
+	var basis := Basis(
+		right * TRADE_FLOW_MARKER_WIDTH,
+		Vector3.UP,
+		forward * TRADE_FLOW_MARKER_LENGTH
+	)
+	return {
+		"transform": Transform3D(basis, from.lerp(to, ratio)),
+		"direction": forward,
+	}
 
 
 func _append_dashed_draped_path(
@@ -1009,7 +1207,10 @@ func _apply_map_mode_visibility() -> void:
 	if _rivers != null:
 		_rivers.transparency = 0.46 if trade_mode else 0.0
 	if _trade_routes != null:
-		_trade_routes.transparency = 0.0 if trade_mode else 0.34
+		_trade_routes.visible = trade_mode
+		_trade_routes.transparency = 0.0
+	if _trade_flow_markers != null:
+		_trade_flow_markers.visible = trade_mode
 
 
 func _road_width_for_capacity(capacity: int) -> float:
