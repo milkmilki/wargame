@@ -23,7 +23,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 现为二十一阶段（Godot 阶段使用同一个隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（最近已确认逻辑结果 **1503 断言 / 0 失败**）③贸易结构缓存等价门禁 ④贸易联通预筛等价门禁 ⑤贸易预测缓存等价门禁 ⑥行军容量索引等价门禁 ⑦包围索引等价门禁 ⑧忠诚/行政半径等价门禁 ⑨粮仓快照门禁 ⑩守军索引等价门禁 ⑪国家详情 single-build 门禁 ⑫前线容量分配器门禁（`frontline_capacity_allocator.gd`）⑬同日占领刷新门禁（`frontline_capture_refresh.gd`）⑭政治/命名/贸易 smoke ⑮高程图源门禁 ⑯地图编辑器运行时与 MapDefinition 往返 smoke ⑰3D 地形 smoke ⑱默认前端场景 smoke ⑲道路调节与地图模式 UI smoke ⑳前端 3D 视觉构件 smoke ㉑真实海岸 GPU 白点门禁。默认快链现含 8 个快速专项门禁（原 5 个性能专项 + 忠诚/行政半径 + 粮仓快照 + 守军索引）；`diplomacy_structure_cache_equivalence.gd` 仍为手动长 A/B，不纳入默认快链。`nation_detail_single_build.gd`、`frontline_capacity_allocator.gd`、`frontline_capture_refresh.gd` 均已并入默认链，不再作为独立记录；当前实测最终树 21 阶段 `run_tests.sh` 已 `exit 0` 全通过，wall time `334.514s`，无 `SCRIPT ERROR`。`tests/test_suite.gd` 为 **1503/1503**，`food=46`、`trade_connectivity=376`、`nation detail single build=11`、`frontline capacity allocator=OK`、`frontline capture refresh=OK`，`trade_forecast_cache_equivalence.gd` 为 setup 后 baseline 增量断言，单项 **78 checks**。
+`run_tests.sh` 现为二十二阶段（Godot 阶段使用同一个隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（最近已确认逻辑结果 **1503 断言 / 0 失败**）③贸易结构缓存等价门禁 ④贸易联通预筛等价门禁 ⑤国内共享 field 等价门禁（`trade_domestic_shared_field_equivalence.gd`）⑥贸易预测缓存等价门禁 ⑦行军容量索引等价门禁 ⑧包围索引等价门禁 ⑨忠诚/行政半径等价门禁 ⑩粮仓快照门禁 ⑪守军索引等价门禁 ⑫国家详情 single-build 门禁 ⑬前线容量分配器门禁（`frontline_capacity_allocator.gd`）⑭同日占领刷新门禁（`frontline_capture_refresh.gd`）⑮政治/命名/贸易 smoke ⑯高程图源门禁 ⑰地图编辑器运行时与 MapDefinition 往返 smoke ⑱3D 地形 smoke ⑲默认前端场景 smoke ⑳道路调节与地图模式 UI smoke ㉑前端 3D 视觉构件 smoke ㉒真实海岸 GPU 白点门禁。默认快链现含 9 个快速专项门禁（原 8 个 + 国内共享 field）；`diplomacy_structure_cache_equivalence.gd` 仍为手动长 A/B，不纳入默认快链。`nation_detail_single_build.gd`、`frontline_capacity_allocator.gd`、`frontline_capture_refresh.gd` 均已并入默认链，不再作为独立记录；当前最终树 22 阶段 `run_tests.sh` 已 `exit 0` 全通过，wall time `339.29s`，`tests/test_suite.gd` 为 **1503/1503**，`trade_domestic_shared_field=13497/0`、`SCRIPT ERROR=0`、`food=46`、`trade_connectivity=376`、`nation detail single build=11`、`frontline capacity allocator=OK`、`frontline capture refresh=OK`，`trade_forecast_cache_equivalence.gd` 为 setup 后 baseline 增量断言，单项 **78 checks**。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
 `tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
@@ -612,18 +612,17 @@ monthly: 10066.30ms -> 700.80ms
 peak: 18240.21ms -> 1050.78ms
 ```
 
-最新补充口径是最终默认 union 单次 `40/160/60` 实测：
+最新补充口径是当前最终树默认 union 单次 `40/160/60` 实测：
 
 ```text
-exit 0, wall 18.388s, no SCRIPT ERROR
-peace total 72.00ms
-war total 876.91ms
-snapshot 405.20ms
-cache_seed 365.18ms
-structure 351.47ms
-domestic 167.52ms
-candidates 104.67ms
-routes 71.59ms
+exit 0, wall 18.39s, no SCRIPT ERROR
+peace total 72.07ms
+war total 833.45ms
+snapshot 370.38ms
+structure 314.79ms
+domestic 131.85ms
+candidates 104.61ms
+routes 70.68ms
 ```
 
 3 轮 A/B 中位性能对照：
@@ -631,12 +630,14 @@ routes 71.59ms
 ```text
 legacy war 1073.43ms -> optimized 872.17ms (-18.7%)
 legacy candidates 304.40ms -> optimized 104.76ms (-65.6%)
-legacy structure 550.16ms -> optimized 349.52ms (-36.5%)
-legacy snapshot 603.18ms -> optimized 402.81ms (-33.2%)
-legacy peace 72.33ms -> optimized 72.09ms
+legacy domestic 168.46ms -> optimized 131.22ms (-22.1%)
+legacy structure 351.93ms -> optimized 314.58ms (-10.6%)
+legacy snapshot 404.86ms -> optimized 367.74ms (-9.2%)
+legacy war total 868.64ms -> optimized 834.09ms (-4.0%)
+legacy peace 72.47ms -> optimized 72.29ms
 ```
 
-说明：这里是最新最终树口径。`corridor`、`pair memo`、`lazy seed` 三组被否决实验均已撤销，仅保留 coarse profiling 结论；上面的旧基准仍保留作更细历史对照。
+说明：这里是当前最终树的最新 profiling 口径。国内每国现在共享 `ideal/operational field context`；`corridor`、`pair memo`、`lazy seed` 三组被否决实验均已撤销，仅保留 coarse profiling 结论；上面的旧基准仍保留作更细历史对照。
 
 500 城 / 80 国 / 20 天 simulation 基准：
 
@@ -647,15 +648,16 @@ AI peak: 16293.4ms -> 7843.0ms
 ```
 
 解读：
-- 40 国场景的收益已经不是单点热函数削尖峰，而是整条月结、外交、贸易和行军热点链条一起变薄；`monthly` 和 `warm AI` 同步下降，说明共享层与 exact-token 缓存都在生效。
+- 40 国场景的收益已经不是单点热函数削尖峰，而是整条月结、外交、贸易和行军热点链条一起变薄；国内每国共享 `ideal/operational field context` 后，`domestic/structure/snapshot` 三条热点链继续下探，说明 shared-field 与既有 exact-token 缓存是叠加生效的。
 - 500 城/80 国仍然保留高绝对耗时，但总时长已降到原来的 5.7%，AI 均值与峰值都明显收缩，证明国际候选 BFS 预筛和 O(1) 行军索引在大图上同样成立。
 
 ### 9.3 等价门禁与专项结果
 
-- 默认快链现已纳入 8 个 headless 快速专项门禁：`trade_structure_cache_equivalence.gd`、`trade_connectivity_prefilter_equivalence.gd`、`trade_forecast_cache_equivalence.gd`、`movement_capacity_index_equivalence.gd`、`encirclement_index_equivalence.gd`、`loyalty_admin_radius_equivalence.gd`、`granary_snapshot_equivalence.gd`、`defender_index_equivalence.gd`。
+- 默认快链现已纳入 9 个 headless 快速专项门禁：`trade_structure_cache_equivalence.gd`、`trade_connectivity_prefilter_equivalence.gd`、`trade_domestic_shared_field_equivalence.gd`、`trade_forecast_cache_equivalence.gd`、`movement_capacity_index_equivalence.gd`、`encirclement_index_equivalence.gd`、`loyalty_admin_radius_equivalence.gd`、`granary_snapshot_equivalence.gd`、`defender_index_equivalence.gd`。
 - 已确认的专项结果：
   - `trade_structure` **56 checks**。
   - `trade_connectivity` **376 checks**。
+  - `trade_domestic_shared_field` **13497 checks / 0 diff**。
   - `trade_forecast` **78 checks**。
   - `movement` **36 ticks / 0 diff**。
   - `encirclement` **572** 条检查通过。
@@ -666,11 +668,12 @@ AI peak: 16293.4ms -> 7843.0ms
   - `nation detail single build` **11 checks**，已并入默认链。
   - `frontline capacity allocator` **OK**，三级梯队容量分配专项覆盖 canonical tier1/tier2 归属与 tier3 去重、小民族生存回退、不可达边境冗余填充。
   - `frontline capture refresh` **OK**，同日占领批量刷新专项覆盖 dirty 集合去重、旧业主防区清理、新业主 LINE 同刷与非 LINE 元数据不变。
-- 当前实测最终树 21 阶段 `./run_tests.sh` 已 `exit 0` 全通过，wall time `334.514s`，无 `SCRIPT ERROR`；`tests/test_suite.gd` 为 **1503/1503**，`food=46`、`trade_connectivity=376`、`nation detail single build=11`，`frontline capacity allocator` 与 `frontline capture refresh` 均通过，专项数字如上更新。
+- `trade_domestic_shared_field` coverage：`active=404`、`rerouted=11`、`blocked=8`；blocked reasons 为 `siege=6`、`capacity=8`、`enemy=3`、`unreachable=1`。
+- 当前最终树 22 阶段整链已 `exit 0` 全通过，wall time `339.29s`；新增 domestic shared-field 专项 `13497/0` 且 `SCRIPT ERROR=0`，其余专项与整链结果如上所示。
 
 ### 9.4 长跑与回归基准
 
-- 365 天活跃固定 `seed=12345` 长跑已通过，退出码 `0`，wall time `36.494s`，`total_ms=35539`；摘要为 `wars=1`、`offensives=8`、`multi_prep=3`、`max_parallel=8`。
+- 当前 tree 的 365 天活跃固定 `seed=12345` 长跑已通过，退出码 `0`，wall time `35.36s`，`total_ms=34446`；摘要为 `wars=1`、`offensives=8`、`multi_prep=3`、`max_parallel=8`。
 - 核心硬指标：
   - `territory_invalid=0@-1`
   - `commit_failures=0`
@@ -698,7 +701,7 @@ $GODOT --headless --path . --script res://tests/diplomacy_structure_cache_equiva
 
 ### 9.7 一句话给下一个 agent
 
-现状：贸易、外交共享、行军与包围索引这轮优化已经收口，当前实测最终树 21 阶段整链已全通过，`suite=1503/0`、`food=46`、`trade_connectivity=376`、`trade_forecast=78`、`nation detail single build=11`，`frontline capacity allocator` 与 `frontline capture refresh` 也已通过。最终默认 union 单次 `40/160/60` 与 3 轮 A/B 中位性能对照已回填，`corridor`、`pair memo`、`lazy seed` 三组被否决实验均已撤销，仅保留 coarse profiling 结论；继续改贸易或 evaluation cache 前，先守住 §9.5 的三条维护约束，再补对应等价门禁。
+现状：贸易、外交共享、行军与包围索引这轮优化已经收口；国内每国共享 `ideal/operational field context` 与专项 `trade_domestic_shared_field_equivalence.gd` 已并入最终树，单项 `13497/0`、coverage `active404/rerouted11/blocked8`、`SCRIPT ERROR=0` 已确认。当前最终树 22 阶段整链已全通过：`suite=1503/0`、`food=46`、`trade_connectivity=376`、`nation detail single build=11`、`frontline capacity allocator=OK`、`frontline capture refresh=OK`。`corridor`、`pair memo`、`lazy seed` 三组被否决实验均已撤销，仅保留 coarse profiling 结论；继续改贸易或 evaluation cache 前，先守住 §9.5 的三条维护约束，再补对应等价门禁。
 
 ---
 

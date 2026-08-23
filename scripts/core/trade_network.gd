@@ -70,6 +70,11 @@ static var _candidate_connectivity_searches: int = 0
 static var _candidate_connectivity_union_graph_builds: int = 0
 static var _candidate_connectivity_rejections: int = 0
 static var _connectivity_prefilter_union_cache_enabled: bool = true
+static var _domestic_shared_field_context_enabled: bool = true
+static var _domestic_context_builds: int = 0
+static var _domestic_field_builds: int = 0
+static var _domestic_route_queries: int = 0
+static var _domestic_legacy_derive_calls: int = 0
 
 
 static func reset_connectivity_prefilter_counters() -> void:
@@ -78,6 +83,10 @@ static func reset_connectivity_prefilter_counters() -> void:
 	_candidate_connectivity_searches = 0
 	_candidate_connectivity_union_graph_builds = 0
 	_candidate_connectivity_rejections = 0
+	_domestic_context_builds = 0
+	_domestic_field_builds = 0
+	_domestic_route_queries = 0
+	_domestic_legacy_derive_calls = 0
 
 
 static func connectivity_prefilter_counters() -> Dictionary:
@@ -94,6 +103,13 @@ static func connectivity_prefilter_counters() -> Dictionary:
 		"candidate_connectivity_rejections": (
 			_candidate_connectivity_rejections
 		),
+		"domestic_context_builds": _domestic_context_builds,
+		"domestic_field_builds": _domestic_field_builds,
+		"domestic_route_queries": _domestic_route_queries,
+		"domestic_legacy_derive_calls": _domestic_legacy_derive_calls,
+		"domestic_shared_field_context_enabled": (
+			_domestic_shared_field_context_enabled_now()
+		),
 	}
 
 
@@ -101,6 +117,12 @@ static func set_connectivity_prefilter_union_cache_enabled(
 	enabled: bool
 ) -> void:
 	_connectivity_prefilter_union_cache_enabled = enabled
+
+
+static func set_domestic_shared_field_context_enabled(
+	enabled: bool
+) -> void:
+	_domestic_shared_field_context_enabled = enabled
 
 
 static func _union_connectivity_prefilter_enabled() -> bool:
@@ -112,6 +134,17 @@ static func _union_connectivity_prefilter_enabled() -> bool:
 	if env_override == "0":
 		return true
 	return _connectivity_prefilter_union_cache_enabled
+
+
+static func _domestic_shared_field_context_enabled_now() -> bool:
+	var env_override := OS.get_environment(
+		"TRADE_LEGACY_DOMESTIC_CONTEXT"
+	)
+	if env_override == "1":
+		return false
+	if env_override == "0":
+		return true
+	return _domestic_shared_field_context_enabled
 
 
 ## 权威入口。结构派生与动态粮食结算分层后仍保持原返回结构逐字段等价。
@@ -649,6 +682,8 @@ static func _build_domestic_routes(
 	build_profile: Dictionary = {}
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	var ideal_allowed := _ideal_city_mask(state)
+	var shared_context_enabled := _domestic_shared_field_context_enabled_now()
 	for nation in state.nations:
 		if not nation.alive:
 			continue
@@ -682,7 +717,18 @@ static func _build_domestic_routes(
 		var limit := mini(
 			MAX_DOMESTIC_ROUTES_PER_NATION, destinations.size()
 		)
+		if shared_context_enabled:
+			var context := _build_domestic_route_context(
+				state, graph, nation_id, primary, ideal_allowed,
+				besieged, occupied_edges, field_cache
+			)
+			for index in range(limit):
+				result.append(_derive_route_from_precomputed_context(
+					state, graph, context, destinations[index]
+				))
+			continue
 		for index in range(limit):
+			_domestic_legacy_derive_calls += 1
 			var route := _derive_route(
 				state, graph, [primary] as Array[int],
 				[destinations[index]] as Array[int],
@@ -691,6 +737,42 @@ static func _build_domestic_routes(
 			)
 			result.append(route)
 	return result
+
+
+static func _build_domestic_route_context(
+	state: GameState,
+	graph: Dictionary,
+	nation_id: int,
+	primary: int,
+	ideal_allowed: PackedByteArray,
+	besieged: Dictionary,
+	occupied_edges: Array[Dictionary],
+	field_cache: Dictionary
+) -> Dictionary:
+	_domestic_context_builds += 1
+	var allowed := _allowed_city_mask(state, nation_id, nation_id)
+	var blocked_edges := _blocked_edges_for_parties(
+		state, nation_id, nation_id, occupied_edges
+	)
+	var sources := [primary] as Array[int]
+	var ideal_field := _get_domestic_preferred_endpoint_field(
+		state, graph, sources, ideal_allowed, false, {}, {}, field_cache
+	)
+	var operational_field := _get_domestic_preferred_endpoint_field(
+		state, graph, sources, allowed, true, besieged, blocked_edges,
+		field_cache
+	)
+	return {
+		"nation_id": nation_id,
+		"primary": primary,
+		"sources": sources,
+		"ideal_allowed": ideal_allowed,
+		"allowed": allowed,
+		"blocked_edges": blocked_edges,
+		"ideal_field": ideal_field,
+		"operational_field": operational_field,
+		"besieged": besieged,
+	}
 
 
 static func _build_international_routes(
@@ -1194,10 +1276,19 @@ static func _derive_route(
 	var blocked_edges := _blocked_edges_for_parties(
 		state, nation_a, nation_b, occupied_edges
 	)
-	var selection := _select_preferred_endpoints(
-		state, graph, sources, destinations, ideal_allowed, false, {}, {},
-		nation_a, nation_b, field_cache
-	)
+	var selection: Dictionary
+	if not international:
+		var ideal_field := _get_domestic_preferred_endpoint_field(
+			state, graph, sources, ideal_allowed, false, {}, {}, field_cache
+		)
+		selection = _select_preferred_endpoints_from_field(
+			state, sources, destinations, ideal_field
+		)
+	else:
+		selection = _select_preferred_endpoints(
+			state, graph, sources, destinations, ideal_allowed, false, {}, {},
+			nation_a, nation_b, field_cache
+		)
 	var source := int(selection["source"])
 	var destination := int(selection["destination"])
 	var preferred_path: Array[int] = selection["path"]
@@ -1207,11 +1298,20 @@ static func _derive_route(
 		"path": [] as Array[int], "cost": UNREACHABLE_COST,
 	}
 	if derive_operational:
-		operational = _select_preferred_endpoints(
-			state, graph, sources, destinations, allowed, true,
-			besieged, blocked_edges,
-			nation_a, nation_b, field_cache
-		)
+		if not international:
+			var operational_field := _get_domestic_preferred_endpoint_field(
+				state, graph, sources, allowed, true, besieged, blocked_edges,
+				field_cache
+			)
+			operational = _select_preferred_endpoints_from_field(
+				state, sources, destinations, operational_field
+			)
+		else:
+			operational = _select_preferred_endpoints(
+				state, graph, sources, destinations, allowed, true,
+				besieged, blocked_edges,
+				nation_a, nation_b, field_cache
+			)
 	var operational_source := int(operational["source"])
 	var operational_destination := int(operational["destination"])
 	var operational_path: Array[int] = operational["path"]
@@ -1300,54 +1400,131 @@ static func _derive_route(
 	}
 
 
-static func _select_preferred_endpoints(
+static func _derive_route_from_precomputed_context(
 	state: GameState,
 	graph: Dictionary,
+	context: Dictionary,
+	destination: int
+) -> Dictionary:
+	_domestic_route_queries += 1
+	var nation_id := int(context["nation_id"])
+	var sources: Array[int] = context["sources"]
+	var selection := _select_preferred_endpoints_from_field(
+		state, sources, [destination] as Array[int], context["ideal_field"]
+	)
+	var source := int(selection["source"])
+	var preferred_destination := int(selection["destination"])
+	var preferred_path: Array[int] = selection["path"]
+	var preferred_cost := float(selection["cost"])
+	var operational := _select_preferred_endpoints_from_field(
+		state, sources, [destination] as Array[int],
+		context["operational_field"]
+	)
+	var operational_source := int(operational["source"])
+	var operational_destination := int(operational["destination"])
+	var operational_path: Array[int] = operational["path"]
+	var operational_cost := float(operational["cost"])
+
+	var status := RouteStatus.BLOCKED
+	var city_path: Array[int] = []
+	if not operational_path.is_empty():
+		source = operational_source
+		preferred_destination = operational_destination
+		city_path = operational_path
+		status = (
+			RouteStatus.ACTIVE
+			if (
+				preferred_path.is_empty()
+				or (operational_source == int(selection["source"])
+				and operational_destination == int(selection["destination"])
+				and operational_path == preferred_path)
+			)
+			else RouteStatus.REROUTED
+		)
+	elif not preferred_path.is_empty():
+		city_path = preferred_path
+
+	var allowed: PackedByteArray = context["allowed"]
+	var blocked_edges: Dictionary = context["blocked_edges"]
+	var besieged: Dictionary = context["besieged"]
+	var obstruction := _first_obstruction(
+		state, graph, preferred_path, allowed, besieged, blocked_edges
+	)
+	if (
+		status == RouteStatus.BLOCKED
+		and str(obstruction["reason"]).is_empty()
+	):
+		obstruction["reason"] = "unreachable"
+	var route_cost := (
+		operational_cost
+		if operational_cost >= 0.0 else preferred_cost
+	)
+	if route_cost >= 0.0:
+		route_cost = _quantize_cost(route_cost)
+	var details := _path_details(state, graph, city_path, status)
+	var preferred_details := _path_details(
+		state, graph, preferred_path
+	)
+	return {
+		"id": -1,
+		"international": false,
+		"kind": "domestic",
+		"nation_a": nation_id,
+		"nation_b": nation_id,
+		"source": source,
+		"destination": preferred_destination,
+		"source_city": source,
+		"destination_city": preferred_destination,
+		"city_path": city_path,
+		"preferred_city_path": preferred_path,
+		"preferred_transport_cost": (
+			_quantize_cost(preferred_cost)
+			if preferred_cost >= 0.0 else UNREACHABLE_COST
+		),
+		"edge_keys": details["edge_keys"],
+		"bottleneck": details["bottleneck"],
+		"bottleneck_capacity": details["bottleneck"],
+		"transport_cost": route_cost,
+		"status": status,
+		"blocked_reason": obstruction["reason"],
+		"blocked_city": obstruction["city"],
+		"blocked_edge_key": obstruction["edge_key"],
+		"uses_water": details["uses_water"],
+		"preferred_uses_water": preferred_details["uses_water"],
+		"dock_count": details["dock_count"],
+		"gold": 0,
+		"gold_tax": 0,
+		"gold_to_a": 0,
+		"gold_to_b": 0,
+		"gold_a": 0,
+		"gold_b": 0,
+		"transit_gold": 0,
+		"city_gold_bonus": {},
+		"food": 0,
+		"food_transfer": 0,
+		"food_exporter": -1,
+		"food_importer": -1,
+		"food_source_city": -1,
+		"food_destination_city": -1,
+		"food_cost": 0,
+		"food_cost_gold": 0,
+	}
+
+
+static func _select_preferred_endpoints_from_field(
+	state: GameState,
 	sources: Array[int],
 	destinations: Array[int],
-	allowed: PackedByteArray,
-	operational: bool,
-	besieged: Dictionary,
-	blocked_edges: Dictionary,
-	nation_a: int,
-	nation_b: int,
-	field_cache: Dictionary,
-	reconstruct_path: bool = true,
-	count_candidate_dijkstra: bool = false
+	field: Dictionary,
+	reconstruct_path: bool = true
 ) -> Dictionary:
 	var best_source := -1
 	var best_destination := -1
 	var best_cost_units := INF_COST_UNITS
 	var best_path: Array[int] = []
-	var valid_sources: Array[int] = []
-	for source in sources:
-		if (
-			source >= 0 and source < state.cities.size()
-			and not valid_sources.has(source)
-		):
-			valid_sources.append(source)
-	valid_sources.sort()
-	var cache_key := "%d:%s:%s:%s" % [
-		1 if operational else 0, _int_array_key(valid_sources),
-		_byte_mask_key(allowed),
-		(
-			_operational_block_key(besieged, blocked_edges)
-			if operational else ""
-		),
-	]
-	var field: Dictionary
-	if field_cache.has(cache_key):
-		field = field_cache[cache_key]
-	else:
-		if count_candidate_dijkstra:
-			_candidate_dijkstra_field_builds += 1
-		field = _dijkstra_field(
-			state, graph, valid_sources, allowed, operational,
-			besieged, blocked_edges
-		)
-		field_cache[cache_key] = field
 	var distances: PackedInt64Array = field["dist"]
 	var origins: PackedInt32Array = field["origin"]
+	var prev: PackedInt32Array = field["prev"]
 	for destination in destinations:
 		if (
 			destination < 0 or destination >= distances.size()
@@ -1370,7 +1547,7 @@ static func _select_preferred_endpoints(
 			best_cost_units = cost_units
 			if reconstruct_path:
 				best_path = _reconstruct_path(
-					field["prev"], source, destination
+					prev, source, destination
 				)
 	if best_source < 0:
 		var fallback := _closest_endpoint_pair(state, sources, destinations)
@@ -1385,6 +1562,104 @@ static func _select_preferred_endpoints(
 			if best_cost_units < INF_COST_UNITS else UNREACHABLE_COST
 		),
 	}
+
+
+static func _select_preferred_endpoints(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	destinations: Array[int],
+	allowed: PackedByteArray,
+	operational: bool,
+	besieged: Dictionary,
+	blocked_edges: Dictionary,
+	nation_a: int,
+	nation_b: int,
+	field_cache: Dictionary,
+	reconstruct_path: bool = true,
+	count_candidate_dijkstra: bool = false
+) -> Dictionary:
+	var field := _get_preferred_endpoint_field(
+		state, graph, sources, allowed, operational, besieged,
+		blocked_edges, field_cache, count_candidate_dijkstra
+	)
+	return _select_preferred_endpoints_from_field(
+		state, sources, destinations, field, reconstruct_path
+	)
+
+
+static func _get_preferred_endpoint_field(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	allowed: PackedByteArray,
+	operational: bool,
+	besieged: Dictionary,
+	blocked_edges: Dictionary,
+	field_cache: Dictionary,
+	count_candidate_dijkstra: bool = false
+) -> Dictionary:
+	var valid_sources: Array[int] = []
+	for source in sources:
+		if (
+			source >= 0 and source < state.cities.size()
+			and not valid_sources.has(source)
+		):
+			valid_sources.append(source)
+	valid_sources.sort()
+	var cache_key := "%d:%s:%s:%s" % [
+		1 if operational else 0, _int_array_key(valid_sources),
+		_byte_mask_key(allowed),
+		(
+			_operational_block_key(besieged, blocked_edges)
+			if operational else ""
+		),
+	]
+	if field_cache.has(cache_key):
+		return field_cache[cache_key]
+	if count_candidate_dijkstra:
+		_candidate_dijkstra_field_builds += 1
+	var field = _dijkstra_field(
+		state, graph, valid_sources, allowed, operational,
+		besieged, blocked_edges
+	)
+	field_cache[cache_key] = field
+	return field
+
+
+static func _get_domestic_preferred_endpoint_field(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	allowed: PackedByteArray,
+	operational: bool,
+	besieged: Dictionary,
+	blocked_edges: Dictionary,
+	field_cache: Dictionary
+) -> Dictionary:
+	var valid_sources: Array[int] = []
+	for source in sources:
+		if (
+			source >= 0 and source < state.cities.size()
+			and not valid_sources.has(source)
+		):
+			valid_sources.append(source)
+	valid_sources.sort()
+	var cache_key := "%d:%s:%s:%s" % [
+		1 if operational else 0, _int_array_key(valid_sources),
+		_byte_mask_key(allowed),
+		(
+			_operational_block_key(besieged, blocked_edges)
+			if operational else ""
+		),
+	]
+	if field_cache.has(cache_key):
+		return field_cache[cache_key]
+	_domestic_field_builds += 1
+	return _get_preferred_endpoint_field(
+		state, graph, sources, allowed, operational, besieged,
+		blocked_edges, field_cache
+	)
 
 
 static func _int_array_key(values: Array[int]) -> String:
