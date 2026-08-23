@@ -1,9 +1,9 @@
 # World-War 项目交接文档
 
 > 面向接手的 AI agent / 开发者。目标：不读全部源码即可理解架构、约定、当前状态与安全改动边界。
-> 最后更新：2026-08-23（新增确定性世界命名、君主档案、城市忠诚/叛乱与贸易网络；保留**政治地图与地形灯光**改动，以及重军 15000 编制/战团身份与 5000 运输包规则。历史战斗系统重构见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）。
+> 最后更新：2026-08-23（领土、宗藩与外交结算已收口为批量原子事务；集团和平和真实内战首都通吃共用同一规划/提交边界；保留确定性命名、君主、忠诚/叛乱、贸易网络、**政治地图与地形灯光**及重军运输规则。历史战斗系统重构见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）。
 >
-> **接手第一件事**：读 §9（性能现状与剩余优化路线图）和 §10（40 国统一收敛）。当前 `tests/test_suite.gd` = **1448 passed / 0 failed**；strict-mirror 连续 3650 天优势分 `0.0`。
+> **接手第一件事**：读 §4.13（原子领土与和平事务）、§9（性能现状与剩余优化路线图）和 §10（40 国统一收敛）。当前 `tests/test_suite.gd` = **1502 passed / 0 failed**；strict-mirror 连续 3650 天优势分 `0.0`。
 
 ---
 
@@ -23,7 +23,7 @@ Godot 4.7.1 + GDScript 编写的 **2D 平面战略"看海"游戏**（简化版 E
 | **回归测试（改代码后必跑）** | `./run_tests.sh`（退出码 0=全过，非0=有失败） |
 | 仅编译检查 | `Godot --headless --path <项目> --editor --quit`（无 `SCRIPT ERROR` 即通过） |
 
-`run_tests.sh` 十阶段（Godot 阶段使用隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（当前 **1448 断言 / 0 失败**）③政治/命名/贸易 smoke ④高程图源门禁 ⑤地图编辑器运行时与 MapDefinition 往返 smoke ⑥3D 地形 smoke ⑦默认前端场景 smoke ⑧道路调节与地图模式 UI smoke ⑨前端 3D 视觉构件 smoke ⑩真实海岸 GPU 白点门禁。
+`run_tests.sh` 十阶段（Godot 阶段使用隔离 `HOME`，各阶段写独立日志，`set -euo pipefail` 任一失败即停）：①headless 导入捕获脚本错误 ②`tests/test_suite.gd`（当前 **1502 断言 / 0 失败**）③政治/命名/贸易 smoke ④高程图源门禁 ⑤地图编辑器运行时与 MapDefinition 往返 smoke ⑥3D 地形 smoke ⑦默认前端场景 smoke ⑧道路调节与地图模式 UI smoke ⑨前端 3D 视觉构件 smoke ⑩真实海岸 GPU 白点门禁。
 Godot 路径可用环境变量覆盖：`GODOT=/path/to/godot ./run_tests.sh`。
 战斗系统重构（item 1-17）另有两项独立验证脚本（不入快速回归以保持 `run_tests.sh` 快）：
 `tests/combat_statistics.gd`（item 17 万场统计，verdict=STATISTICS_PASS）、`tests/ai_symmetric_duel.gd`（`AI_DUEL_MODE=balanced-fairness` + `AI_DUEL_RNG_SEED=N` 镜像公平基准）。
@@ -52,6 +52,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 
 **核心原则（不可违背）**：
 - **SSoT（单一数据源）**：所有可变状态归 `GameState` 所有。派生量必须显式标注并由 `refresh_derived()` 重算，禁止第二真源。**时间真源是 `GameState.day`；`month = day / 30` 是派生显示量**。
+- **领土事务唯一入口**：运行期的实控、法理、占领 sponsor、政治目标、首都、粮仓与库存迁移必须先完整规划，再通过 `GameState.apply_territory_transaction()` 一次提交；禁止攻城、议和、叛乱或编辑器先手写任一局部状态再补救。
 - **数据/表现分离**：View 只读 GameState 渲染，任何游戏逻辑都不能写在 View。
 - **确定性可复现**：所有随机走 `GameState.rng`（固定种子，默认 12345）。禁止用 `randf()` 全局随机、禁止依赖 Dictionary 遍历顺序做逻辑分支——否则破坏 test_suite 的 #7 确定性断言。
 - **低熵渲染**：不为每个实体建节点，MapRenderer 用单个 `_draw()` 遍历数据绘制。
@@ -68,7 +69,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/model/army.gd](scripts/model/army.gd) | 数据 | 军队兵力/质量/位置/状态/士气；轻军 `max_morale=1`、重军 `max_morale=2`；两类补给债；含 AI 命令与占领元数据 |
 | [scripts/model/frontier_defense_sector.gd](scripts/model/frontier_defense_sector.gd) | 数据 | 持久动态边境防区；槽 0 为城市本体，槽 1..N 按稳定敌向边保存填线 Assignment 与召回/防守/恢复/撤退状态 |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：双方/战场/驻防/围城、每侧整场援军士气累计、前线优先级、单军溃退队列、稳定战术随机键 |
-| [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、码头城市、两档目标军制、无碰撞边键、粮仓、图查询、战斗和外交 |
+| [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、码头城市、两档目标军制、无碰撞边键、粮仓、图查询、战斗和外交；批量两阶段领土/宗藩/外交事务、兼并规划与无失败收尾 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | 陆地/城市/省份/道路；高度图水系、道路交点码头、抢滩边和码头间水路 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路与补给网络；读取边级行军时间和粮损倍率 |
 | [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | 静态 | 镜像等变物理排序 SSoT：城市/军队/势力/边；禁止 ID/创建顺序参与行为决胜 |
@@ -85,7 +86,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
 | [main.tscn](main.tscn) | 场景 | 默认真实高度图场景（Main + Simulation + MapRenderer） |
 | [square_map.tscn](square_map.tscn) | 场景 | 保留的原始 `8×8` 方形地图场景；Main 的 `use_grid_world=true` |
-| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 1448 断言 / 0 失败；逻辑回归主套件，headless 运行 |
+| [tests/test_suite.gd](tests/test_suite.gd) | 测试 | 1502 断言 / 0 失败；逻辑回归主套件，headless 运行 |
 | [tests/politics_trade_smoke.gd](tests/politics_trade_smoke.gd) | 测试 | 命名、君主、忠诚/叛乱、贸易守恒及月结发布集中 smoke |
 | [tests/map_editor_runtime.gd](tests/map_editor_runtime.gd) | 测试 | 地图编辑、MapDefinition v1/v2 校验与运行时往返 smoke |
 | [tests/frontend_scene_smoke.gd](tests/frontend_scene_smoke.gd) | 测试 | 默认场景、HUD、设置、地图编辑器与五种地图模式集成 smoke |
@@ -258,7 +259,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - 宣战线为 `0.85`。初始中立观察期为 90 天，战后停战期仍为 180 天；中立关系持续 180 天后开始增加战争压力，到第 540 天线性升至 `+0.75` 上限。该压力只进入效用评分，不绕过钱粮可持续、欠饷、接壤、合法目标、道路可达和每国最多一场战争的硬门禁。
 - 正式地图备战以“目标实际参与成员全部到达合法集结区”为宣战就绪条件，不再要求单个战团达到全国现役兵力的 25%。入口容量永久不允许通过的编制不属于该目标参与者；能通过入口但处于恢复、部署锁或暂时不可达状态的成员仍阻止整团绑定，不能把临时不可用伪装成分遣。360 天仍未完成集结则取消旧计划并重新评估，已就绪则直接宣战。网格兼容夹具继续使用旧的兵力门槛。
 - 全境失守是战争结算硬规则：任一方失去全部实际控制城市后，立即向其全部交战国逐一投降，不等待月度外交 tick，也不经过胜方和平接受线。每一条关系均复用普通和平路径，确认领土、结束战斗、清理战争目标并记录 `surrendering_nation`；零城市国家不得保留任何战争关系。
-- 求和一次性结束两个联盟集团间全部活跃战斗、战争关系和目标，并为所有跨集团国对设置同一停战期。实际占领成果归真实控制国，不归议和代表；各成员分别按首都连通性放弃飞地，飞地交给地理最近的敌方集团成员。非法驻军有路则遣返，无路则按协议复员。
+- 求和一次性结束两个联盟集团间全部活跃战斗、战争关系和目标，并为所有跨集团国对设置同一停战期。实际攻占成果按冻结的 `occupation_sponsor_nation` 确认给真实接收方，不归议和代表；合法飞地和道路断联都不会自动改实控，只有断联的临时占领会恢复给原法理国。`occupation_sponsor_nation` 是战争结算责任方，和平与 normalize 只按 `sponsor↔legal` 判断对应战争，controller 的另一场并行战争不得串案。整个集团和平先规划后以一次领土/宗藩/外交事务提交，成功后才无失败地收尾战斗、叛乱、遣返、目标和动员；非法驻军有路则遣返，无路则按协议复员。
 - 联盟是外交战争共同体：联盟图连通分量是派生集团，不另存易漂移成员表。宣战形成两个集团间完整敌对矩阵；战争中结盟会让新盟友立即加入现有战争、启动本国动员并继承主动方共同目标。联盟成员仍保留国家资源与军队主权。
 - 宣战要求两个联盟集团全部跨集团国对均无停战约束。主动方和防守方全体成员同时参战；主动集团共享外交战争目标，目标失效后同步更新。军事执行仍按国家分权：每国独立管理钱粮、守备、战团和军队 Assignment，再根据本国地理映射共同目标，禁止一个盟主 AI 直接调动盟军。
 - 全图只剩一国时，`winner` 记录统一里程碑但不再设置 `Simulation.paused`；日期、经济、补给、军队恢复和表现插值继续运行，HUD 显示“已统一 · 继续推演”。
@@ -296,14 +297,23 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 - **WorldNaming**：城市使用战役内唯一的中文全称，并各自持有单字 `region_symbol`。初始主权国及藩王升格后的主权身份严格取不可变 `founding_city_id` 对应的地域字，迁都和同名碰撞都不得改换建国锚点。藩王显示名按当前直属陆城数变化：不足 5 城为“首府全称王”，达到 5 城为“首府地域单字王”。全部抽取只依赖显式 seed、实体 ID 与稳定哈希，不推进 `GameState.rng`。
 - **RulerProfile**：每国确定性生成姓名、1 个原型和最多 2 个不重复特质；9 种原型为持衡者、征服者、守成者、庸主、暴君、商君、改革者、纵横家、营造者，12 项特质覆盖雄心、谨慎、魅力、节俭、勤政、粮秣、尚武、筑城、商贸、集权、分封与严酷，且集权/分封互斥。原型和特质共同派生外交、生产、维护、军粮、士气、防御、分封/集权、贸易与忠诚修正，守成者、庸主和纵横家禁止主动攻势。
 - **城市忠诚与叛乱**：`City.loyalty` 为 `0～100` 真源，认同对象另存于 `loyalty_target_nation`；每 30 天从同一月初快照结算，单月变化封顶 `±5`，驻军、首都距离、异族统治、战乱、欠饷、邻城、贡赋及君主共同影响目标值。非首都陆城忠诚 `≤25` 连续 3 个月后，按正容量道路和共同认同目标组成叛乱区；同目标仍存活则优先归附/复国且不新建 Nation，否则创建地方叛军。成功归附、起事或镇压后使用 720 天冷却；藩王低忠诚还需满足军力比后才进入内战。
+- **真实内战首都结算**：削藩内战中任一方实际攻陷对方首都即触发通吃；宗主攻陷藩王首都会兼并藩王全境，反叛藩王攻陷宗主首都会继承宗主全境与其余藩属并升格主权国。首都攻占与整国兼并由同一份虚拟领土/宗藩快照一次提交，首都库存仍只按 `CAPTURE_SPOILS=30%` 进入胜方粮池；不能先做普通单城占领再判断内战身份。
 - **TradeNetwork**：由当前图、外交、围城/占边、国家政策与君主修正纯派生国内和国际路线；路线状态为 `ACTIVE / REROUTED / BLOCKED`，战争或通道阻断会改道或停运。贸易税在端点及过境城市间守恒分配，粮食进出口量与对应金钱支付分别严格守恒；`Simulation` 只在月结应用一次并发布 `GameState.trade_routes/trade_revision` 及城市/国家摘要。前端提供地形、混合、政治、忠诚、贸易五种模式；忠诚模式按城市忠诚覆色，贸易模式突出金色/青色正常路线、橙色改道和红色虚线阻断路线。
 - **MapDefinition v2**：地图模板持久化国家建国城/名称、君主档案、贸易政策，以及城市全称/地域字/初始忠诚目标；主动叛乱、忠诚趋势/进度/冷却和贸易路线/结算摘要属于战役瞬态，禁止写入模板。加载仍接受 v1，并用 seed 确定性补齐新增字段；未知未来版本和不合法 v2 身份数据直接拒绝。
+
+### 4.13 原子领土与集团和平事务
+
+- `GameState.apply_territory_transaction()` 是运行期领土、宗藩和相关外交状态的统一两阶段事务。phase 1 从冻结快照合成每城最终 `(controller, legal_owner, sponsor)`、政治目标、首都、粮仓双向索引、库存账本、完整宗藩图及外交边，并以 `expected_ownership_revision/expected_diplomacy_revision` 做乐观锁；任一 operation、revision 或库存落点非法时返回 `ok=false` 且零副作用。phase 2 没有可失败分支，只提交一次，并按实际变化各递增一次 `ownership_revision/diplomacy_revision`、只调用一次 `refresh_derived()`。返回值稳定区分 `changed/territory_changed/political_changed/diplomacy_changed`，并给出 `error` 与 `changed_city_ids`。
+- 城市操作通过 `city_id` 唯一合并，支持 `RETURN_TO_OLD_POOL / MOVE_TO_NEW_POOL / CAPTURE_SPOILS / DESTROY`。旧控制者仍有最终粮池时 `RETURN_TO_OLD_POOL` 必须完整入账；没有落点则事务拒绝，不能静默丢粮。`append_annexation_to_territory_plan()` 在同一 draft 中合成实控、法理、sponsor 和宗藩改挂，提交后才由 `finalize_annexation_after_territory_commit()` 无失败地迁移军队、战团、人力、金钱及战斗状态。
+- `occupation_sponsor_nation` 不是当前 controller 的别名，而是该占领的**战争结算责任方**。`owner == legal` 时必须为 `-1`；`owner != legal` 时必须是有效国家。多场战争重叠时，和平确认、normalize 和 `excluded_war_pairs` 只检查 `sponsor ↔ legal` 这一对，controller 参加的另一场战争不得串案；死亡藩王的 sponsor 在法理继承中定向改为 successor。
+- 集团和平先冻结联盟集团、待结算战争对、城市三元组、宗藩图和两个 revision，再按“断联临时占领恢复 → 战果确认 → 地方叛乱承认/镇压兼并 → 和平占领 normalize”合成一个无重复城市的 draft。外交、领土、宗藩和粮仓只调用一次事务提交；叛乱记录、兼并军队/资源、战斗、遣返、战争目标和动员仅在成功后执行无失败收尾。事务失败时不得留下半和平、半兼并或提前清除的战争状态。
+- `territory_structure_valid()` 允许法理国暂时没有实控城；它校验的是 ID、owner/legal/sponsor 组合、国家存亡、唯一首都及粮仓双向索引。无实控法理并不自动转移；只有显式继承、承认、兼并或和平事务能改变法理。
 
 ---
 
 ## 5. 天推进主循环（[simulation.gd](scripts/core/simulation.gd) `_advance_day`）—— 天/月分层（第七轮）
 
-实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城、补给与非战斗士气恢复每天推进；经济生产和补员每 30 天结算。粮食实际扣除通过小数债按日累计、满整粮再扣，避免整数日扣放大；断粮后果同样每日滚动施加。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
+实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城、补给与非战斗士气恢复每天推进；经济生产和补员每 30 天结算。粮食需求先通过小数债按日累计，满整粮后由确定性粮仓顺序严格实扣；扣取函数返回实际扣除量，库存不足时所有调用方只按实扣量转存或计供给，禁止按请求值记账、重复扣除或凭空补足。断粮后果同样每日滚动施加。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
 
 ```
 state.day += 1;  state.month = state.day / 30       # month 为派生显示量
@@ -487,6 +497,8 @@ if state.day % 30 == 0:                              # 每月结算块
 - **改战斗平衡** → 只动 [combat.gd](scripts/core/combat.gd) 顶部常量（伤害 `K_ROUND`/`DEF_REF`；士气 `MORALE_*`/`MIN_COMBAT_EFFICIENCY`/`SIDE_ROUT_THRESHOLD`；正面 `*_FRONTAGE`；地形 `CHOKEPOINT_*`；围城 `FORT_MANPOWER_PER_POINT`/`SIEGE_RATIO_STALL`/`SIEGE_DAYS_BASE/MIN/DECAY`/`SIEGE_STARVE_DEF_MULT`），跑 `./run_tests.sh` 确认不破坏断言。
 - **改行军时长/边距** → 边距唯一换算在 `TerrainMapGenerator.distance_units_for_metric_length()`，三类边均由端点几何长度生成；普通陆路基础值在 `march_days(distance)` 且不设长距离上限，实际时间唯一真源是 `edge_travel_days(edge)`。修改比例或特殊边倍率时同步 Pathfinding、ThreatField、Utility AI 和河运测试。
 - **改粮仓机制** → 首都/粮仓登记真源在 `Nation.capital_city_id/warehouse_city_ids`，库存真源在粮仓城市 `food_storage`；禁止重新让普通城市库存参与补给。
+- **改领土、兼并或集团和平** → 只能扩展 `apply_territory_transaction()` 的 phase-1 规划与 phase-2 单次提交；同城 operation 先合并，兼并复用 `append_annexation_to_territory_plan()` 与成功后的 `finalize_annexation_after_territory_commit()`。禁止逐城提交、预先拆首都/粮仓、在跨集团国家对循环中刷新，或在事务成功前修改军队、叛乱记录与战争目标。
+- **改库存扣取/转移** → `_withdraw_food_from_warehouses()` 返回实际扣除量；调用方只能按该返回值入账。多粮仓按确定性顺序严格扣到 `min(requested, available)`，不得按请求值预记、逐仓比例取整造成短扣，或在领土库存策略已结算后重复扣同一库存。
 - **改补给损耗** → 全局参数为 `Pathfinding.SUPPLY_DISTANCE_LOSS/SUPPLY_DANGER_MULT`，特殊边再乘 `Edge.supply_loss_multiplier`；保持边损耗非负可加。
 - **改战后恢复** → `RECOVERY_FOOD_PER_CAPITA` 决定基础需求，运输损耗与普通补给共用；必须同步 [22]，并保持 `RECOVERING` 不进入普通补给计划。
 - **改军队拆分或数量上限** → 拆分只允许静止军并要求 `sum(size)`、`sum(max_size)` 守恒；子军继承攻防、士气、补给和战役目标。建军与拆分都必须经过 `GameState.max_army_count`。
@@ -528,7 +540,7 @@ AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users
 ```
 
 **战斗系统重构与动态边境防区（2026-08-06）验收状态**（战斗部分详见 [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)）：
-- 快速回归 `./run_tests.sh` = **1181 passed / 0 failed**（含满军费满补给下轻重军 10 天回满士气、恢复驻军日粮债、议和后首都断连飞地割让、正式地图 `10000/20000` 道路容量、金币 `1～15`/均值 `7`、残局终战及既有门禁）。
+- 历史快速回归 `./run_tests.sh` 曾为 **1181 passed / 0 failed**；其中旧的“议和按断联飞地自动割让”规则现已废弃，当前领土只由实际攻城与显式政治事务改变。
 - 地图导航与种田区位经济加入后快速回归为 **1167 passed / 0 failed**；四种子 × 1095 天共 `wars=13`、`offensives=94`、`turnovers=44`、`net_captures=10`、`full_prep=47`、`multi_prep=39`、`max_parallel=9`、`orders=4397`、`redeploy=3138`、`role_deploy=1384`。军队实体 `204～250`、常态饥饿为 0，各种子均 `force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`；总耗时 `217057ms`。
 - 正式地图动态防区通过持久槽位、规划内来源路径场缓存和敌军城/边局部索引控制复杂度；最新隔离基准为和平 `1332.967 μs/plan`、战争 `1391.987 μs/plan`，每轮均含 `55` 次角色分配。
 - item 17 万场统计 = **STATISTICS_PASS**：位置对称 10000/10000；独立战术修正 9997/10000 次不同，A 较高占比 0.5020；20% 明显优势方 10000/10000 获胜；无限正面拆分 2000 场逐位一致；受限正面固定夹具及随机 2000 场、2～10 支在胜负、伤亡、逐轮火力、全军加权士气和时长上逐位一致。
@@ -545,7 +557,7 @@ AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users
 - 国家级两步攻势与普通攻击收口后 4 种子 × 1095 天：共 `wars=11`、`offensives=143`、`turnovers=71`、`net_captures=7`、`full_prep=64`、`multi_prep=35`、`max_parallel=7`、`orders=4744`、`redeploy=3574`、`role_deploy=1415`；各种子均 `force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`，总耗时 `223610ms`。修正诊断口径后种子 `45678` 有 `8` 次真实第二步、`2` 次路线终止，证明正式地图续攻路径实际生效。
 - 金币 `1～15`/均值 `7`、军事财政重标定和残局轻军分遣加入后 4 种子 × 1095 天：共 `wars=14`、`offensives=102`、`turnovers=62`、`net_captures=17`、`full_prep=58`、`multi_prep=55`、`max_parallel=7`、`orders=4492`、`redeploy=3299`、`role_deploy=1411`；军队实体 `222～254`，各种子均 `force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `219352ms`。提高面板金币粒度后没有造成军队实体失控。
 - 正式地图道路低/中档提升到 `10000/20000` 后 4 种子 × 1095 天：共 `wars=11`、`offensives=148`、`turnovers=100`、`net_captures=18`、`full_prep=78`、`multi_prep=37`、`max_parallel=5`、第二步 `45/0/6`、`orders=5170`、`redeploy=4011`、`role_deploy=1590`；军队实体 `206～248`，各种子均 `force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `233644ms`。驻边轻军不再独占低档道路，攻势活动增加且实体数未膨胀。
-- 议和按首都连通分量割让飞地后 4 种子 × 1095 天：共 `wars=11`、`offensives=148`、`turnovers=103`、`net_captures=19`、`full_prep=78`、`multi_prep=37`、`max_parallel=6`、第二步 `45/0/6`、`orders=5146`、`redeploy=3997`、`role_deploy=1574`；军队实体 `199～241`、四种子终局断粮均为 0，各种子均 `eliminated_wars=0`、`force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `238505ms`。
+- 历史上“议和按首都连通分量割让飞地”版本的 4 种子 × 1095 天数据仅作旧基线；该自动割地规则现已删除，不能用于判断当前版本的领土收敛。
 - 非战斗士气改为满状态 10 天恢复后 4 种子 × 1095 天：共 `wars=11`、`offensives=180`、`turnovers=78`、`net_captures=10`、`full_prep=68`、`multi_prep=70`、`max_parallel=7`、第二步 `42/0/10`、`orders=5080`、`redeploy=3774`、`role_deploy=1649`；军队实体 `194～249`、四种子终局断粮均为 0，各种子均 `eliminated_wars=0`、`force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `229328ms`。快速恢复提高了持续攻势与多路准备频率，同时增强回防，使净占领数低于旧恢复节奏。
 - 十日尖峰优化前：普通 AI 日 `39.35～47.59ms`，第 30 日最坏 `199.66ms`。缓存与并行快路径将同步普通 AI 日降至 `21.69～29.41ms`，外交目标 tick 缓存将同步第 30 日降至 `72.58ms`；实时路径进一步把独立工作拆到多个渲染帧，用户已确认正式地图不再出现十日一卡顿。同步/跨帧路径 40 日逐日完整状态签名一致。
 - 性能收敛后 4 种子 × 1095 天：共 `wars=11`、`offensives=185`、`turnovers=87`、`net_captures=15`，军队实体 `199～249`；各种子均 `force_mismatches=0/0`、`hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`，总耗时 `212590ms`。严格镜像连续 3650 天、优势分 `0.0`。
@@ -553,10 +565,10 @@ AI_DUEL_MODE=balanced-fairness AI_DUEL_RNG_SEED=1 AI_DUEL_STRICT_MIRROR=1 /Users
 - 40 国多国 AI 优化后，同种子 60 天状态指标逐项一致：总耗时 `12.740s→8.610s`（`-32.4%`），冷启动 AI `5.188s→2.860s`（`-44.9%`），热 AI 平均 `1.036s→0.750s`（`-27.6%`），月度日平均 `2.229s→1.466s`（`-34.2%`）。实现为每个 AI tick 共享一次军队基础索引、所有国家共享与国家无关的威胁路网距离/影响缓存，以及每次 `DiplomacyAI.choose_actions()` 内复用国力、粮食、边界、关系和意愿派生值；缓存不跨 tick/月保存。优化后 40 国 180 天 `STRESS_PASS`，`armies=442`、`wars=22`、`alliances=19`、`diplomacy=67`、`commit_failures=0`。
 - 防区增量更新的 40 国 60 天命中统计为 `rebuild=80 / topology_reuse=200 / dynamic_reuse=71`，拓扑命中率 `71.4%`、动态需求命中率 `25.4%`。与同机 `3fe1260` 基线相比，总耗时 `12.908s→12.758s`（`-1.2%`）、热 AI 平均 `1.126s→1.104s`（`-1.9%`）；40 国总瓶颈已不在 `CityDefensePlan`，因此整体收益显著小于隔离收益。状态指标保持 `armies=343 / wars=11 / diplomacy=36 / commit_failures=0`。
 - 防区增量更新后正式地图 `seed=12345` 通过 1095 天长跑，期间发生 `turnovers=14`，最终 `hostile_stationed=0`、`commit_failures=0`、`finance_invalid=0`、`force_mismatches=0/0`，证明控制区变化后的拓扑失效与重建可在真实战争轨迹中闭环。
-- 首都失陷会在占领当日触发无条件投降。割地边界读取投降瞬间的**实控区快照**，从胜利国实控边境沿正容量道路向战败国实控区扩张最多两跳，同时确认控制权与法理；禁止逐城转移后形成新边境继续连锁吞并。战败国若仍有第三跳以外领土则迁都存续。议和、退盟、飞地割让和首都投降后，非法驻军进入 `diplomatic_repatriation`，可临时通过任意国家正容量道路返回本国，但不获得驻扎、补给、攻击或占领权。
+- 首都失陷会在占领当日触发无条件投降，但只确认被军队实际攻陷的城市，不再沿边境免费扩张或批量改写其他城市。战败国若仍有领土则迁都存续。所有运行期领土变化统一经过 `GameState` 的实控、法理和永久主权事务入口，永久转移会同步占领声明、忠诚目标、叛乱进度与冷却；议和和退盟后的非法驻军进入 `diplomatic_repatriation`，可临时通过任意国家正容量道路返回本国，但不获得驻扎、补给、攻击或占领权。
 - 驻边军紧急回援修复后默认种子 1095 天：`armies=176`、`offensives=46`、`turnovers=15`、`force_mismatches=0/0`、`role_deploy=226`、`hostile_stationed=0`、`commit_failures=0`，脚本 `total_ms=45780`。
 - 当前一个目标只能绑定一个战团，一支军队只能属于一个目标；并行目标数不设固定上限，由合法前线目标、可用战团和资源自然限制。关键城市没有固定人数保底，正式地图受威胁驻防由 `CityDefensePlan` 的角色槽位决定。
-- 重军运输足迹与内战停贡加入后，当前逻辑回归为 **1431 passed / 0 failed**；正式地图 `seed=12345` 连续 1095 天为 `offensives=53`、`net_captures=16`、`force_mismatches=0/0`、`hostile_stationed=0`、`territory_invalid=0`、`commit_failures=0`。残局夹具仍能攻克唯一剩余城市。strict-mirror 最近基线仍为 seed 1 连续 **3650 天逐日无破裂**、优势分 `0.0`。
+- 重军运输足迹与内战停贡加入时逻辑回归为 **1431 passed / 0 failed**；统一领土/宗藩/外交事务、真实内战首都通吃、集团和平单次提交、多战争 sponsor 与粮食精确扣除完成后，当前逻辑回归为 **1502 passed / 0 failed**。正式地图既有 `seed=12345` 连续 1095 天基线为 `offensives=53`、`net_captures=16`、`force_mismatches=0/0`、`hostile_stationed=0`、`territory_invalid=0`、`commit_failures=0`；strict-mirror 最近基线仍为 seed 1 连续 **3650 天逐日无破裂**、优势分 `0.0`。
 
 ---
 

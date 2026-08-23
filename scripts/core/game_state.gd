@@ -57,6 +57,17 @@ enum DiplomaticRelation {
 	ALLIED,
 }
 
+## 城市实控变化时，原城内库存的结算策略。所有运行期领土业务都必须显式
+## 选择一种去向；事务会在提交前确认对应的最终粮池确实可以入账。
+enum TerritoryStockDisposition {
+	RETURN_TO_OLD_POOL,
+	MOVE_TO_NEW_POOL,
+	CAPTURE_SPOILS,
+	DESTROY,
+}
+
+const TERRITORY_CAPTURE_SPOILS_RATE: float = 0.30
+
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
 const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 10.0
@@ -434,6 +445,7 @@ func apply_city_editor_changes(
 	if city_id < 0 or city_id >= cities.size():
 		return {"ok": false, "error": "城市不存在。"}
 	var city := cities[city_id]
+	# 先完成所有可能失败的校验；尤其不能在领土事务被拒绝前移动地图坐标。
 	var new_position := Vector2(
 		clampf(float(changes.get("map_x", city.map_position.x)), 0.0, 1.0),
 		clampf(float(changes.get("map_y", city.map_position.y)), 0.0, 1.0)
@@ -446,7 +458,6 @@ func apply_city_editor_changes(
 		))
 	):
 		return {"ok": false, "error": "陆地城市不能移动到海洋，码头位置暂不可手动移动。"}
-	city.map_position = new_position
 	var previous_owner := city.owner_nation
 	var owner := clampi(int(changes.get("owner_nation", previous_owner)), 0, nations.size() - 1)
 	var owner_changed := owner != previous_owner
@@ -456,38 +467,69 @@ func apply_city_editor_changes(
 		and land_cities_of(previous_owner).size() <= 1
 	):
 		return {"ok": false, "error": "不能转移一个国家的最后一座陆地城市。"}
-	if (
-		owner_changed
-		and (
-			city.is_capital
-			or city.has_warehouse
-			or nations[previous_owner].capital_city_id == city_id
+	# 先解析全部字段，避免任一无效值在领土或坐标已提交后才触发转换错误。
+	var fort_strength_max := maxi(int(changes.get(
+		"fort_strength_max", city.fort_strength_max
+	)), 0)
+	var fort_strength := clampi(int(changes.get(
+		"fort_strength", city.fort_strength
+	)), 0, fort_strength_max)
+	var manpower_per_month := maxi(int(changes.get(
+		"manpower_per_month", city.manpower_per_month
+	)), 0)
+	var gold_per_month := maxi(int(changes.get(
+		"gold_per_month", city.gold_per_month
+	)), 0)
+	var food_per_half_year := maxi(int(changes.get(
+		"food_per_half_year", city.food_per_half_year
+	)), 0)
+	var food_storage := maxi(int(changes.get(
+		"food_storage", city.food_storage
+	)), 0)
+	var terrain_height := clampf(float(changes.get(
+		"terrain_height", city.terrain_height
+	)), 0.0, 1.0)
+	var terrain_relief := clampf(float(changes.get(
+		"terrain_relief", city.terrain_relief
+	)), 0.0, 1.0)
+	var terrain_output_multiplier := clampf(float(changes.get(
+		"terrain_output_multiplier", city.terrain_output_multiplier
+	)), 0.0, 4.0)
+	var development_gold_multiplier := clampf(float(changes.get(
+		"development_gold_multiplier", city.development_gold_multiplier
+	)), 0.0, 10.0)
+	var development_food_multiplier := clampf(float(changes.get(
+		"development_food_multiplier", city.development_food_multiplier
+	)), 0.0, 10.0)
+	if owner_changed:
+		var territory_result := transfer_city_sovereignty(
+			city_id, owner, "city_editor_transfer",
+			TerritoryStockDisposition.MOVE_TO_NEW_POOL
 		)
-	):
-		remove_warehouse(previous_owner, city_id)
-	city.owner_nation = owner
-	city.fort_strength_max = maxi(int(changes.get("fort_strength_max", city.fort_strength_max)), 0)
-	city.fort_strength = clampi(int(changes.get("fort_strength", city.fort_strength)), 0, city.fort_strength_max)
-	city.manpower_per_month = maxi(int(changes.get("manpower_per_month", city.manpower_per_month)), 0)
-	city.gold_per_month = maxi(int(changes.get("gold_per_month", city.gold_per_month)), 0)
-	city.food_per_half_year = maxi(int(changes.get("food_per_half_year", city.food_per_half_year)), 0)
-	city.food_storage = maxi(int(changes.get("food_storage", city.food_storage)), 0)
-	city.terrain_height = clampf(float(changes.get("terrain_height", city.terrain_height)), 0.0, 1.0)
-	city.terrain_relief = clampf(float(changes.get("terrain_relief", city.terrain_relief)), 0.0, 1.0)
-	city.terrain_output_multiplier = clampf(float(changes.get("terrain_output_multiplier", city.terrain_output_multiplier)), 0.0, 4.0)
-	city.development_gold_multiplier = clampf(float(changes.get("development_gold_multiplier", city.development_gold_multiplier)), 0.0, 10.0)
-	city.development_food_multiplier = clampf(float(changes.get("development_food_multiplier", city.development_food_multiplier)), 0.0, 10.0)
+		if not bool(territory_result.get("ok", false)):
+			return {
+				"ok": false,
+				"error": str(territory_result.get(
+					"error", "领土转移失败。"
+				)),
+			}
+	city.map_position = new_position
+	city.fort_strength_max = fort_strength_max
+	city.fort_strength = fort_strength
+	city.manpower_per_month = manpower_per_month
+	city.gold_per_month = gold_per_month
+	city.food_per_half_year = food_per_half_year
+	city.food_storage = food_storage
+	city.terrain_height = terrain_height
+	city.terrain_relief = terrain_relief
+	city.terrain_output_multiplier = terrain_output_multiplier
+	city.development_gold_multiplier = development_gold_multiplier
+	city.development_food_multiplier = development_food_multiplier
 	city.is_food_hub = bool(changes.get("is_food_hub", city.is_food_hub))
 	city.is_manpower_hub = bool(changes.get("is_manpower_hub", city.is_manpower_hub))
 	city.is_plain_city = bool(changes.get("is_plain_city", city.is_plain_city))
 	city.is_port_market = bool(changes.get("is_port_market", city.is_port_market))
 	city.is_crossroads = bool(changes.get("is_crossroads", city.is_crossroads))
-	if owner_changed:
-		recognized_city_owners[city_id] = owner
-		city.occupation_sponsor_nation = -1
-		ownership_revision += 1
-		ensure_valid_capital(previous_owner)
-		ensure_valid_capital(owner)
 	if position_changed:
 		var land_positions: Array[Vector2] = []
 		for land_city in land_cities():
@@ -2869,20 +2911,47 @@ func start_civil_war(subject_id: int) -> bool:
 	if not suzerainty.has(subject_id) or is_in_civil_war(subject_id):
 		return false
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
+	if (
+		subject_id < 0
+		or subject_id >= nations.size()
+		or overlord_id < 0
+		or overlord_id >= nations.size()
+		or not nations[subject_id].alive
+		or not nations[overlord_id].alive
+		or cities_of(subject_id).is_empty()
+		or cities_of(overlord_id).is_empty()
+	):
+		return false
 	# 1. 切分前先量取：反叛方子树（沿非内战边）与整个原粮池的粮食产能，用于按比例分粮。
 	var holder_before := food_pool_holder(subject_id)
 	var rebel_food_output := _food_pool_food_output(subject_id)
 	var pool_food_output := _food_pool_food_output(holder_before)
 	var pool_stock := _food_pool_stock(holder_before)
-	# 2. 断开内战边（关系转 WAR、打标记）。此后 food_pool_holder(subject) 收敛到 subject 自身。
-	suzerainty[subject_id]["civil_war"] = true
-	suzerainty[subject_id]["last_centralization_day"] = day
-	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.WAR)
-	# 3. 反叛方自成一池：在其首都建独立粮仓，从原持有者粮仓按产能占比划入切分份额（守恒）。
 	var rebel_share := _proportional_share(
 		pool_stock, rebel_food_output, pool_food_output
 	)
-	_establish_rebel_food_pool(subject_id, holder_before, rebel_share)
+	# 2. 把内战边作为完整拟议图随行政/粮池一起提交；失败时 live 政治图
+	# 与外交仍保持原状。份额在旧快照上计算，实际切粮只在事务成功后进行。
+	var proposed := suzerainty.duplicate(true)
+	(proposed[subject_id] as Dictionary)["civil_war"] = true
+	(proposed[subject_id] as Dictionary)["last_centralization_day"] = day
+	var capital_id := nations[subject_id].capital_city_id
+	if capital_id < 0 or capital_id >= cities.size():
+		return false
+	var territory_result := apply_territory_transaction(
+		[] as Array[Dictionary],
+		{subject_id: capital_id},
+		-1,
+		proposed
+	)
+	if not bool(territory_result.get("ok", false)):
+		return false
+	if rebel_share > 0:
+		var withdrawn_food := _withdraw_food_from_warehouses(
+			nations[holder_before], rebel_share
+		)
+		cities[capital_id].food_storage += withdrawn_food
+		refresh_derived()
 	# 4. 起兵资本：反叛方首都凭空动员火星兵（满编主战军团）。
 	_spawn_civil_war_uprising_armies(subject_id)
 	nations[subject_id].last_rebellion_day = day
@@ -2983,19 +3052,9 @@ func start_regional_rebellion(
 	var transferred_gold := _proportional_share(
 		parent.treasury_gold, rebel_gold_output, parent_gold_output
 	)
-	parent.manpower_pool -= transferred_manpower
-	parent.treasury_gold -= transferred_gold
-	rebel.manpower_pool = transferred_manpower
-	rebel.treasury_gold = transferred_gold
-
 	var region_centroid := Vector2.ZERO
 	for city_id in unique_ids:
-		var city := cities[city_id]
-		region_centroid += city.map_position
-		city.owner_nation = rebel.id
-		city.occupation_sponsor_nation = rebel.id
-		city.is_capital = false
-		city.has_warehouse = false
+		region_centroid += cities[city_id].map_position
 	region_centroid /= float(unique_ids.size())
 	var capital_id := unique_ids[0]
 	var capital_distance := INF
@@ -3008,18 +3067,35 @@ func start_regional_rebellion(
 		):
 			capital_distance = distance
 			capital_id = city_id
-	rebel.capital_city_id = capital_id
-	rebel.warehouse_city_ids = [capital_id] as Array[int]
-	cities[capital_id].is_capital = true
-	cities[capital_id].has_warehouse = true
+	var territory_operations: Array[Dictionary] = []
+	for city_id in unique_ids:
+		territory_operations.append({
+			"city_id": city_id,
+			"controller_id": rebel.id,
+			"sponsor_id": rebel.id,
+			"stock_policy": TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+			"reason": "regional_rebellion",
+		})
+	var territory_result := apply_territory_transaction(
+		territory_operations, {rebel.id: capital_id}
+	)
+	if not bool(territory_result.get("ok", false)):
+		nations.pop_back()
+		return -1
+	parent.manpower_pool -= transferred_manpower
+	parent.treasury_gold -= transferred_gold
+	rebel.manpower_pool = transferred_manpower
+	rebel.treasury_gold = transferred_gold
 	var food_share := _proportional_share(
 		food_pool_stock_before, rebel_food_output, food_pool_output_before
 	)
 	if food_share > 0:
-		_withdraw_food_from_warehouses(
+		var withdrawn_food := _withdraw_food_from_warehouses(
 			nations[food_holder_before], food_share
 		)
-		cities[capital_id].food_storage += food_share
+		cities[capital_id].food_storage += withdrawn_food
+		nations[food_holder_before].granary_food -= withdrawn_food
+		rebel.granary_food += withdrawn_food
 	WorldNaming.assign_rebel_name(self, rebel.id, parent_id, unique_ids)
 	_inherit_rebel_diplomacy(parent_id, rebel.id)
 	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
@@ -3059,9 +3135,6 @@ func start_regional_rebellion(
 	}
 	parent.last_rebellion_day = day
 	rebel.last_rebellion_day = day
-	ownership_revision += 1
-	ensure_valid_capital(parent_id)
-	refresh_derived()
 	return rebel.id
 
 
@@ -3119,6 +3192,12 @@ func restore_regional_loyalty_target(
 			queue.append(neighbor)
 	if seen.size() != unique_ids.size():
 		return false
+	if is_suzerainty_pair(parent_id, target_id):
+		var subject_id := (
+			parent_id if overlord_of(parent_id) == target_id else target_id
+		)
+		if not is_in_civil_war(subject_id):
+			return false
 
 	var parent := nations[parent_id]
 	var target := nations[target_id]
@@ -3146,25 +3225,39 @@ func restore_regional_loyalty_target(
 	var transferred_food := _proportional_share(
 		food_pool_stock_before, moved_food_output, food_pool_output_before
 	)
+	var territory_operations: Array[Dictionary] = []
+	for city_id in unique_ids:
+		territory_operations.append({
+			"city_id": city_id,
+			"controller_id": target_id,
+			"sponsor_id": target_id,
+			# 先把随城易主的粮仓库存完整归回旧粮池；下方再以事务前
+			# 总库存为基数按产能比例划给目标，避免销毁后重复扣减。
+			"stock_policy": TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+			"reason": "regional_loyalty_restored",
+		})
+	var territory_result := apply_territory_transaction(territory_operations)
+	if not bool(territory_result.get("ok", false)):
+		return false
+	if (
+		not is_suzerainty_pair(parent_id, target_id)
+		and not is_enemy(parent_id, target_id)
+	):
+		set_diplomatic_relation(
+			parent_id, target_id, DiplomaticRelation.WAR
+		)
 	parent.manpower_pool -= transferred_manpower
 	parent.treasury_gold -= transferred_gold
 	target.manpower_pool += transferred_manpower
 	target.treasury_gold += transferred_gold
 	if transferred_food > 0:
-		_withdraw_food_from_warehouses(
+		var withdrawn_food := _withdraw_food_from_warehouses(
 			nations[food_holder_before], transferred_food
 		)
-		deposit_food(target_id, transferred_food)
-
-	for city_id in unique_ids:
-		var city := cities[city_id]
-		city.owner_nation = target_id
-		city.is_capital = false
-		city.has_warehouse = false
-		city.food_storage = 0
-		city.occupation_sponsor_nation = (
-			-1 if recognized_owner_of(city_id) == target_id else target_id
-		)
+		var target_food_holder := food_pool_holder(target_id)
+		if withdrawn_food > 0 and deposit_food(target_id, withdrawn_food):
+			nations[food_holder_before].granary_food -= withdrawn_food
+			nations[target_food_holder].granary_food += withdrawn_food
 	for army in armies:
 		if (
 			army.owner_nation == parent_id
@@ -3181,9 +3274,6 @@ func restore_regional_loyalty_target(
 			army.clear_line_assignment()
 	parent.last_rebellion_day = day
 	target.last_rebellion_day = day
-	ownership_revision += 1
-	ensure_valid_capital(parent_id)
-	refresh_derived()
 	return true
 
 
@@ -3193,22 +3283,28 @@ func recognize_regional_rebellion(rebel_id: int) -> bool:
 	var record: Dictionary = rebellions[rebel_id]
 	if not bool(record.get("active", false)):
 		return false
-	var changed := false
+	var operations: Array[Dictionary] = []
 	for city_value in record.get("core_city_ids", []):
 		var city_id := int(city_value)
 		if city_id < 0 or city_id >= cities.size():
 			continue
 		if cities[city_id].owner_nation == rebel_id:
-			recognized_city_owners[city_id] = rebel_id
-			cities[city_id].occupation_sponsor_nation = -1
-			cities[city_id].loyalty_target_nation = rebel_id
-			changed = true
+			operations.append({
+				"city_id": city_id,
+				"legal_owner_id": rebel_id,
+				"reset_political_target": true,
+				"stock_policy": TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+				"reason": "regional_rebellion_recognized",
+			})
+	var changed := false
+	if not operations.is_empty():
+		var territory_result := apply_territory_transaction(operations)
+		if not bool(territory_result.get("ok", false)):
+			return false
+		changed = bool(territory_result.get("changed", false))
 	record["recognized"] = true
 	record["active"] = false
 	rebellions[rebel_id] = record
-	if changed:
-		ownership_revision += 1
-	refresh_derived()
 	return changed
 
 
@@ -3221,10 +3317,11 @@ func suppress_regional_rebellion(rebel_id: int) -> bool:
 	var parent_id := int(record.get("parent_id", -1))
 	if parent_id < 0 or parent_id >= nations.size():
 		return false
+	if not annex_nation(parent_id, rebel_id):
+		return false
 	set_diplomatic_relation(
 		parent_id, rebel_id, DiplomaticRelation.NEUTRAL, DEFAULT_TRUCE_DAYS
 	)
-	annex_nation(parent_id, rebel_id)
 	record["active"] = false
 	record["recognized"] = false
 	rebellions[rebel_id] = record
@@ -3336,29 +3433,6 @@ func _food_pool_stock(holder_id: int) -> int:
 
 ## 反叛方脱离共享粮仓、自成一池：在其首都建独立粮仓，从原持有者粮仓扣除 share 并注入。
 ## 守恒：先从原持有者粮仓（按占比）扣，再存入反叛方首都，粮食总量不变。
-func _establish_rebel_food_pool(
-	rebel_id: int,
-	former_holder_id: int,
-	share: int
-) -> void:
-	if rebel_id < 0 or rebel_id >= nations.size():
-		return
-	var rebel := nations[rebel_id]
-	var capital_id := rebel.capital_city_id
-	if capital_id < 0 or capital_id >= cities.size():
-		return
-	# 反叛方首都升为独立粮仓（内战期它是自己粮池的持有者）。
-	var capital := cities[capital_id]
-	capital.has_warehouse = true
-	if not rebel.warehouse_city_ids.has(capital_id):
-		rebel.warehouse_city_ids = [capital_id] as Array[int]
-	# 从原持有者共享粮仓按占比扣除，等额注入反叛方首都（守恒转移）。
-	if share > 0 and former_holder_id >= 0 and former_holder_id < nations.size():
-		_withdraw_food_from_warehouses(nations[former_holder_id], share)
-		capital.food_storage += share
-	refresh_derived()
-
-
 ## 削藩内战起兵：反叛方首都凭空动员 ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
 ## 每个军团为一支满编重军（INITIAL_HEAVY_ARMY_SIZE、MAIN 角色），独立成团。起兵是离散
 ## 政治事件，属性沿用 _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
@@ -3568,34 +3642,34 @@ func end_civil_war(subject_id: int) -> bool:
 	if not suzerainty.has(subject_id) or not is_in_civil_war(subject_id):
 		return false
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
-	suzerainty[subject_id]["civil_war"] = false
-	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.ALLIED)
-	# 内战结束（藩王战败保留宗藩）：反叛方重新并入共享粮仓——撤销其独立粮仓，
-	# 剩余库存回流原持有者共享池，藩王首都复位为零库存中继节点。
-	_merge_rebel_food_pool_back(subject_id)
+	var proposed := suzerainty.duplicate(true)
+	(proposed[subject_id] as Dictionary)["civil_war"] = false
+	var operations: Array[Dictionary] = []
+	# 预先收集内战临时占领，与粮池合并及政治边在同一次事务提交。
+	for city in cities:
+		var legal_owner := recognized_owner_of(city.id)
+		if (
+			city.owner_nation == legal_owner
+			or city.owner_nation not in [subject_id, overlord_id]
+			or legal_owner not in [subject_id, overlord_id]
+			or city.occupation_sponsor_nation != city.owner_nation
+		):
+			continue
+		operations.append({
+			"city_id": city.id,
+			"controller_id": legal_owner,
+			"legal_owner_id": legal_owner,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"reason": "civil_war_ended",
+			"stock_policy": TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+		})
+	var result := apply_territory_transaction(
+		operations, {}, -1, proposed
+	)
+	if not bool(result.get("ok", false)):
+		return false
 	return true
-
-
-## 内战和平收场时把反叛方独立粮仓并回共享池：库存回流新的粮池持有者，首都复位零库存中继。
-func _merge_rebel_food_pool_back(subject_id: int) -> void:
-	if subject_id < 0 or subject_id >= nations.size():
-		return
-	var subject := nations[subject_id]
-	var capital_id := subject.capital_city_id
-	if capital_id < 0 or capital_id >= cities.size():
-		return
-	var leftover := 0
-	for warehouse in warehouse_cities_of(subject_id):
-		leftover += warehouse.food_storage
-		warehouse.food_storage = 0
-		warehouse.has_warehouse = false
-	subject.warehouse_city_ids = [] as Array[int]
-	cities[capital_id].has_warehouse = false
-	cities[capital_id].food_storage = 0
-	# 复位后 food_pool_holder(subject) 收敛到宗主根；库存回流共享池（守恒）。
-	if leftover > 0:
-		deposit_food(subject_id, leftover)
-	refresh_derived()
 
 
 ## 沿宗主链上溯到的最终宗主（自身不是藩王时返回自身）。含环保护。
@@ -3746,111 +3820,82 @@ func suzerainty_structure_valid() -> bool:
 ##   宗藩链因此保持连续、无悬空、无环。
 ## 返回是否发生了任何清理（供调用方决定是否刷新缓存）。
 func prune_dead_suzerainty() -> bool:
-	var changed := false
-	# 先处理死亡宗主：把它的直接藩王提升到它自己的上级。
-	# 反复扫描直到稳定，兼容一次结算中多级宗主同时消亡。
-	var progressing := true
-	while progressing:
-		progressing = false
-		for subject_value in suzerainty.keys():
-			var subject_id := int(subject_value)
-			var overlord_id := int(suzerainty[subject_id]["overlord_id"])
-			var overlord_dead := (
-				overlord_id < 0
-				or overlord_id >= nations.size()
-				or not nations[overlord_id].alive
-			)
-			if not overlord_dead:
-				continue
-			# 宗主已死：藩王上移到宗主的宗主（祖父），无则脱离宗藩成为独立主权。
-			var grand := overlord_of(overlord_id)
-			if grand >= 0 and grand != subject_id and nations[grand].alive:
-				suzerainty[subject_id]["overlord_id"] = grand
-				# 宗主死于内战则内战随之终结；继承为新宗主的藩属须对外 ALLIED。
-				suzerainty[subject_id]["civil_war"] = false
-				set_diplomatic_relation(subject_id, grand, DiplomaticRelation.ALLIED)
-			else:
-				suzerainty.erase(subject_id)
-				_establish_sovereign_food_pool(subject_id)
-				WorldNaming.promote_vassal_to_sovereign(
-					self, subject_id
-				)
-			changed = true
-			progressing = true
-	# 再移除死亡藩王自身的记录。
-	for subject_value in suzerainty.keys():
-		var subject_id := int(subject_value)
-		if (
-			subject_id < 0
-			or subject_id >= nations.size()
-			or not nations[subject_id].alive
-		):
-			var successor := overlord_of(subject_id)
-			if (
-				successor >= 0
-				and successor < nations.size()
-				and nations[successor].alive
-			):
-				_inherit_recognized_territory(
-					subject_id,
-					successor
-				)
-			suzerainty.erase(subject_id)
-			changed = true
-	return changed
-
-
-## 灭亡藩王的封地法理回归直接宗主。只迁移 recognized_owner，不改变当前实控；
-## 若继承者本来就控制该城，则同时清除已失去意义的占领声明。
-func _inherit_recognized_territory(
-	former_owner: int,
-	successor: int
-) -> void:
-	if (
-		former_owner < 0
-		or former_owner >= nations.size()
-		or successor < 0
-		or successor >= nations.size()
-		or former_owner == successor
-	):
-		return
-	var changed := false
+	# 运行时缺失法理数组属于损坏状态，不能把当前实控静默洗成法理。
+	if recognized_city_owners.size() != cities.size():
+		push_error("清理死亡宗藩失败：法理领土索引与城市数量不一致。")
+		return false
+	var final_city_counts: Array[int] = []
+	final_city_counts.resize(nations.size())
+	final_city_counts.fill(0)
 	for city in cities:
-		if recognized_owner_of(city.id) != former_owner:
+		if (
+			city.owner_nation >= 0
+			and city.owner_nation < nations.size()
+			and nations[city.owner_nation].alive
+		):
+			final_city_counts[city.owner_nation] += 1
+	var proposed := _normalized_suzerainty_for_city_counts(
+		suzerainty, final_city_counts
+	)
+	if proposed == suzerainty:
+		return false
+	var operations: Array[Dictionary] = []
+	var promoted: Array[int] = []
+	for subject_value in suzerainty:
+		var subject_id := int(subject_value)
+		if final_city_counts[subject_id] <= 0:
 			continue
-		recognized_city_owners[city.id] = successor
+		if not proposed.has(subject_id):
+			promoted.append(subject_id)
+			continue
+	# 灭亡藩王的法理在同一事务交给最近的存活祖先；sponsor 若指向
+	# 死亡节点也同步转移，避免 phase 2 留下无效战争责任方。
+	for city in cities:
+		var former_id := recognized_owner_of(city.id)
+		if (
+			former_id < 0 or former_id >= nations.size()
+			or final_city_counts[former_id] > 0
+			or not suzerainty.has(former_id)
+		):
+			continue
+		var successor := int(
+			(suzerainty[former_id] as Dictionary)["overlord_id"]
+		)
+		var guard := 0
+		while (
+			successor >= 0
+			and successor < nations.size()
+			and final_city_counts[successor] <= 0
+			and suzerainty.has(successor)
+			and guard <= nations.size()
+		):
+			successor = int(
+				(suzerainty[successor] as Dictionary)["overlord_id"]
+			)
+			guard += 1
+		if successor < 0 or successor >= nations.size():
+			continue
+		var sponsor := city.occupation_sponsor_nation
+		if sponsor == former_id:
+			sponsor = successor
 		if city.owner_nation == successor:
-			city.occupation_sponsor_nation = -1
-		changed = true
-	if changed:
-		ownership_revision += 1
-
-
-## 藩王脱离宗藩成为独立主权时，原“零库存中继首都”必须升格为自身粮池。
-## 这里只建立库存真源，不凭空切分已经失去的旧宗主库存。
-func _establish_sovereign_food_pool(nation_id: int) -> void:
-	if (
-		nation_id < 0
-		or nation_id >= nations.size()
-		or not nations[nation_id].alive
-	):
-		return
-	var nation := nations[nation_id]
-	var capital_id := nation.capital_city_id
-	if (
-		capital_id < 0
-		or capital_id >= cities.size()
-		or cities[capital_id].owner_nation != nation_id
-	):
-		var owned := land_cities_of(nation_id)
-		if owned.is_empty():
-			return
-		capital_id = owned[0].id
-		nation.capital_city_id = capital_id
-	var capital := cities[capital_id]
-	capital.is_capital = true
-	capital.has_warehouse = true
-	nation.warehouse_city_ids = [capital_id] as Array[int]
+			sponsor = -1
+		operations.append({
+			"city_id": city.id,
+			"legal_owner_id": successor,
+			"sponsor_id": sponsor,
+			"reset_political_target": true,
+			"stock_policy": TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+			"reason": "recognized_territory_inherited",
+		})
+	var result := apply_territory_transaction(
+		operations, {}, -1, proposed
+	)
+	if not bool(result.get("ok", false)):
+		return false
+	for nation_id in promoted:
+		WorldNaming.promote_vassal_to_sovereign(self, nation_id)
+	return true
 
 
 ## 分封：宗主 overlord_id 将 city_ids 划出，新建一个完整藩王 Nation。
@@ -3891,7 +3936,7 @@ func enfeoff(
 		overlord.treasury_gold, moved_gold_output, overlord_gold_output
 	)
 	# 粮食归「共享粮仓」：分封不划走粮食库存，全体系粮食继续留在宗主根粮仓。
-	# 藩王首都只作零库存补给中继节点（见 _establish_vassal_capital），不切分库存。
+	# 藩王首都只作零库存补给中继节点，由领土事务统一建立，不切分库存。
 
 	# 2. 建新藩王 Nation（完整实体，色调随宗主派生以体现同一政治共同体）。
 	var subject := Nation.new()
@@ -3912,12 +3957,51 @@ func enfeoff(
 	subject.ruler_started_day = day
 	nations.append(subject)
 
-	# 3. 迁移城市实控与法理归属；宗主与藩王间同色系，法理即刻归藩王。
+	# 3. 不预写 live 图；完整拟议图与封地迁移由同一事务提交。
+	var proposed_suzerainty := suzerainty.duplicate(true)
+	proposed_suzerainty[subject.id] = {
+		"overlord_id": overlord_id,
+		"tribute_rate": clampf(tribute_rate, 0.0, 1.0),
+		"created_day": day,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	var region_centroid := Vector2.ZERO
 	for city_id in city_ids:
-		var city := cities[city_id]
-		city.owner_nation = subject.id
-		recognized_city_owners[city_id] = subject.id
-	ownership_revision += 1
+		region_centroid += cities[city_id].map_position
+	region_centroid /= float(city_ids.size())
+	var capital_id := city_ids[0]
+	var capital_distance := INF
+	for city_id in city_ids:
+		var distance := cities[city_id].map_position.distance_squared_to(
+			region_centroid
+		)
+		if distance < capital_distance or (
+			is_equal_approx(distance, capital_distance)
+			and EquivariantOrder.city_id_less(
+				self, subject.id, city_id, capital_id
+			)
+		):
+			capital_distance = distance
+			capital_id = city_id
+	var territory_operations: Array[Dictionary] = []
+	for city_id in city_ids:
+		territory_operations.append({
+			"city_id": city_id,
+			"controller_id": subject.id,
+			"legal_owner_id": subject.id,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"stock_policy": TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+			"reason": "enfeoffment",
+		})
+	var territory_result := apply_territory_transaction(
+		territory_operations, {subject.id: capital_id}, -1,
+		proposed_suzerainty
+	)
+	if not bool(territory_result.get("ok", false)):
+		nations.pop_back()
+		return -1
 
 	# 3.5 军队归属在第 5.5 步统一处理：封地内稳定驻防的 LINE 地方化并补齐，
 	#     MAIN 战团与在途 LINE 继续归中央。
@@ -3928,9 +4012,7 @@ func enfeoff(
 	overlord.treasury_gold -= granted_gold
 	subject.treasury_gold = granted_gold
 
-	# 5. 选藩王首都作为「共享粮仓」的补给中继节点（零库存）；封地城市自带的存粮
-	#    回流宗主根粮仓（共享池守恒，不凭空蒸发）。
-	_establish_vassal_capital(subject, overlord_id)
+	# 5. 首都、零库存中继与封地存粮回流已由领土事务统一完成。
 	WorldNaming.assign_vassal_name(self, subject.id, city_ids)
 
 	# 5.5 地方化驻军并补齐：先转移封地内稳定驻防的宗主 LINE，再把缺口凭空补到
@@ -3942,14 +4024,7 @@ func enfeoff(
 	#    且不会因缺省 key 让新藩王与未建交国凭空开战（relation_between 缺省=WAR）。
 	_inherit_overlord_diplomacy(overlord_id, subject.id)
 
-	# 7. 写宗藩关系 SSoT。
-	suzerainty[subject.id] = {
-		"overlord_id": overlord_id,
-		"tribute_rate": clampf(tribute_rate, 0.0, 1.0),
-		"created_day": day,
-		"last_centralization_day": -1,
-		"civil_war": false,
-	}
+	# 7. 宗藩关系已在领土事务前写入，以参与最终粮池规划。
 	for city_id in city_ids:
 		var granted_city := cities[city_id]
 		granted_city.loyalty_target_nation = subject.id
@@ -3958,7 +4033,6 @@ func enfeoff(
 		granted_city.unrest = 100.0 - granted_city.loyalty
 		granted_city.rebellion_progress = 0
 
-	refresh_derived()
 	assert(
 		suzerainty_structure_valid(),
 		"分封后宗藩结构不变量必须成立"
@@ -3970,56 +4044,186 @@ func enfeoff(
 	return subject.id
 
 
-## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。通用兼并原语，
-## 同时服务于「和平撤藩」（宗主吸收藩王）与「削藩内战通吃」（胜者吸收败者）。
-## absorbed 随后成为无城死国；其直接藩王改投 absorber，被吸收节点的宗藩记录
-## 原子移除。这样多级宗藩不会因调用方先删父级记录而把下级藩王误释放为独立国。
-func annex_nation(absorber: int, absorbed: int) -> void:
+## 把一次兼并追加到现有虚拟领土计划。draft 的五个字段均是完整快照：
+## owners / legal / sponsors 为逐城最终值，operation_by_city 以 city_id 去重，
+## proposed_suzerainty 为完整拟议宗藩图。函数只在全部校验与合成成功后替换
+## draft 字段，因此失败不会留下半份兼并计划。
+func append_annexation_to_territory_plan(
+	draft: Dictionary,
+	absorber: int,
+	absorbed: int,
+	stock_policy_overrides: Dictionary = {}
+) -> bool:
+	if (
+		absorber < 0 or absorber >= nations.size()
+		or absorbed < 0 or absorbed >= nations.size()
+		or absorber == absorbed
+		or not draft.has("owners")
+		or not draft.has("legal")
+		or not draft.has("sponsors")
+		or not draft.has("operation_by_city")
+		or not draft.has("proposed_suzerainty")
+		or typeof(draft["owners"]) != TYPE_ARRAY
+		or typeof(draft["legal"]) != TYPE_ARRAY
+		or typeof(draft["sponsors"]) != TYPE_ARRAY
+		or typeof(draft["operation_by_city"]) != TYPE_DICTIONARY
+		or typeof(draft["proposed_suzerainty"]) != TYPE_DICTIONARY
+	):
+		return false
+	var owner_values: Array = draft["owners"]
+	var legal_values: Array = draft["legal"]
+	var sponsor_values: Array = draft["sponsors"]
+	if (
+		owner_values.size() != cities.size()
+		or legal_values.size() != cities.size()
+		or sponsor_values.size() != cities.size()
+	):
+		return false
+	for city_id in range(cities.size()):
+		if (
+			typeof(owner_values[city_id]) != TYPE_INT
+			or typeof(legal_values[city_id]) != TYPE_INT
+			or typeof(sponsor_values[city_id]) != TYPE_INT
+		):
+			return false
+	var planned_owners: Array[int] = []
+	var planned_legal: Array[int] = []
+	var planned_sponsors: Array[int] = []
+	planned_owners.assign(owner_values)
+	planned_legal.assign(legal_values)
+	planned_sponsors.assign(sponsor_values)
+	var operation_by_city: Dictionary = (
+		(draft["operation_by_city"] as Dictionary).duplicate(true)
+	)
+	var suzerainty_validation := _validated_suzerainty_snapshot(
+		draft["proposed_suzerainty"] as Dictionary
+	)
+	if not bool(suzerainty_validation.get("ok", false)):
+		return false
+	var proposed_suzerainty: Dictionary = (
+		suzerainty_validation["snapshot"] as Dictionary
+	)
+
+	# override 只对虚拟快照中仍由 absorbed 实控的城市有意义。
+	for city_value in stock_policy_overrides:
+		if typeof(city_value) != TYPE_INT:
+			return false
+		var city_id := int(city_value)
+		var policy_value: Variant = stock_policy_overrides[city_value]
+		if (
+			city_id < 0
+			or city_id >= cities.size()
+			or cities[city_id].owner_nation != absorbed
+			or typeof(policy_value) != TYPE_INT
+			or int(policy_value) not in [
+				TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+				TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+				TerritoryStockDisposition.CAPTURE_SPOILS,
+				TerritoryStockDisposition.DESTROY,
+			]
+		):
+			return false
+
+	# 若胜者原是败方藩属，先解除该边；败方的其他直接藩属改挂胜者。
+	if (
+		proposed_suzerainty.has(absorber)
+		and int((proposed_suzerainty[absorber] as Dictionary).get(
+			"overlord_id", -1
+		)) == absorbed
+	):
+		proposed_suzerainty.erase(absorber)
+	var absorbed_children: Array[int] = []
+	for subject_value in proposed_suzerainty:
+		var subject_id := int(subject_value)
+		if (
+			subject_id != absorber
+			and int((proposed_suzerainty[subject_id] as Dictionary).get(
+				"overlord_id", -1
+			)) == absorbed
+		):
+			absorbed_children.append(subject_id)
+	for child_id in absorbed_children:
+		(proposed_suzerainty[child_id] as Dictionary)["overlord_id"] = absorber
+		(proposed_suzerainty[child_id] as Dictionary)["civil_war"] = false
+	proposed_suzerainty.erase(absorbed)
+	if not bool(_validated_suzerainty_snapshot(
+		proposed_suzerainty
+	).get("ok", false)):
+		return false
+
+	# 所有判断都读取 draft 的虚拟快照；同一城市只覆盖一条最终 operation。
+	for city_id in range(cities.size()):
+		var controlled_by_absorbed := planned_owners[city_id] == absorbed
+		var legally_absorbed := planned_legal[city_id] == absorbed
+		var sponsored_by_absorbed := planned_sponsors[city_id] == absorbed
+		if not (
+			controlled_by_absorbed
+			or legally_absorbed
+			or sponsored_by_absorbed
+			or stock_policy_overrides.has(city_id)
+		):
+			continue
+		var controller := absorber if controlled_by_absorbed else planned_owners[city_id]
+		var legal_owner := absorber if legally_absorbed else planned_legal[city_id]
+		var sponsor := absorber if sponsored_by_absorbed else planned_sponsors[city_id]
+		if controller == legal_owner:
+			sponsor = -1
+		var operation: Dictionary = {}
+		if operation_by_city.has(city_id):
+			if typeof(operation_by_city[city_id]) != TYPE_DICTIONARY:
+				return false
+			operation = (operation_by_city[city_id] as Dictionary).duplicate(true)
+		operation["city_id"] = city_id
+		operation["controller_id"] = controller
+		operation["legal_owner_id"] = legal_owner
+		operation["sponsor_id"] = sponsor
+		operation["reset_political_target"] = (
+			bool(operation.get("reset_political_target", false))
+			or legally_absorbed
+		)
+		operation["reason"] = "annexation"
+		if stock_policy_overrides.has(city_id):
+			# override 针对事务开始时由 absorbed 实控的库存；即使前序
+			# draft 已先规划攻占该城，也必须覆盖已有 capture policy。
+			operation["stock_policy"] = int(
+				stock_policy_overrides[city_id]
+			)
+		elif not operation.has("stock_policy"):
+			operation["stock_policy"] = (
+				TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			)
+		operation_by_city[city_id] = operation
+		planned_owners[city_id] = controller
+		planned_legal[city_id] = legal_owner
+		planned_sponsors[city_id] = sponsor
+
+	var absorber_has_city := false
+	for owner_id in planned_owners:
+		if owner_id == absorber:
+			absorber_has_city = true
+			break
+	if not absorber_has_city:
+		return false
+	draft["owners"] = planned_owners
+	draft["legal"] = planned_legal
+	draft["sponsors"] = planned_sponsors
+	draft["operation_by_city"] = operation_by_city
+	draft["proposed_suzerainty"] = proposed_suzerainty
+	return true
+
+
+## 领土提交成功后的兼并收尾。这里只迁移无独立失败条件的军队、战团与资源；
+## 城市、宗藩、首都、粮仓和库存已由 apply_territory_transaction 一次提交。
+func finalize_annexation_after_territory_commit(
+	absorber: int,
+	absorbed: int
+) -> void:
 	if (
 		absorber < 0 or absorber >= nations.size()
 		or absorbed < 0 or absorbed >= nations.size()
 		or absorber == absorbed
 	):
 		return
-	# 0. 先迁移政治子树。若 absorber 本身正是 absorbed 的藩王（反叛方
-	# 吞并宗主），先解除这条边，避免把胜者改挂到自己名下形成环。
-	if overlord_of(absorber) == absorbed:
-		suzerainty.erase(absorber)
-	for child_id in subjects_of(absorbed):
-		if child_id == absorber:
-			continue
-		suzerainty[child_id]["overlord_id"] = absorber
-		suzerainty[child_id]["civil_war"] = false
-		set_diplomatic_relation(
-			child_id,
-			absorber,
-			DiplomaticRelation.ALLIED
-		)
-	suzerainty.erase(absorbed)
-	# 1. 主权：实控与法理是两个独立维度。分别迁移 absorbed 的实控区和法理区，
-	#    避免吞掉它暂时占领的第三方法理，也避免首都先失陷后遗留死国法理。
-	#    粮仓存粮先累加，稍后并入 absorber 首都粮仓（守恒）。
-	var absorbed_food := 0
-	var ownership_changed := false
-	for city in cities:
-		if city.owner_nation == absorbed:
-			if city.has_warehouse:
-				absorbed_food += city.food_storage
-			city.food_storage = 0
-			city.is_capital = false
-			city.has_warehouse = false
-			city.owner_nation = absorber
-			ownership_changed = true
-		if recognized_city_owners[city.id] == absorbed:
-			recognized_city_owners[city.id] = absorber
-			ownership_changed = true
-		if city.occupation_sponsor_nation == absorbed:
-			city.occupation_sponsor_nation = absorber
-		if city.owner_nation == recognized_city_owners[city.id]:
-			city.occupation_sponsor_nation = -1
-	if ownership_changed:
-		ownership_revision += 1
-	# 2. 军队与战团：整体改属 absorber。战团 id 重新分配到 absorber 的 id 空间。
 	for group in nations[absorbed].battle_groups:
 		var members := battle_group_members(absorbed, group.id)
 		var new_group_id := nations[absorber].next_battle_group_id
@@ -4038,20 +4242,66 @@ func annex_nation(absorber: int, absorbed: int) -> void:
 				army.clear_line_assignment()
 		if army.occupation_claimant_nation == absorbed:
 			army.occupation_claimant_nation = absorber
+		if army.owner_nation == absorber:
+			army.ruler_defense_multiplier = (
+				RulerProfile.defense_multiplier(nations[absorber])
+			)
+			army.ruler_morale_multiplier = (
+				RulerProfile.morale_multiplier(nations[absorber])
+			)
 	_reconcile_battles_after_annexation()
-	# 3. 资源：人力/金钱并入；粮食并入 absorber 首都粮仓。
 	nations[absorber].manpower_pool += nations[absorbed].manpower_pool
 	nations[absorbed].manpower_pool = 0
 	nations[absorber].treasury_gold += nations[absorbed].treasury_gold
 	nations[absorbed].treasury_gold = 0
-	var absorber_capital := nations[absorber].capital_city_id
-	if absorbed_food > 0 and absorber_capital >= 0 and absorber_capital < cities.size():
-		cities[absorber_capital].food_storage += absorbed_food
-	# 4. absorbed 成为无城死国。
-	nations[absorbed].capital_city_id = -1
-	nations[absorbed].warehouse_city_ids = [] as Array[int]
-	nations[absorbed].alive = false
-	refresh_derived()
+
+
+## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。普通兼并与
+## 集团和平中的叛乱镇压共用同一 planner/finalizer，避免两套语义漂移。
+func annex_nation(
+	absorber: int,
+	absorbed: int,
+	expected_ownership_revision: int = -1,
+	stock_policy_overrides: Dictionary = {}
+) -> bool:
+	var owners: Array[int] = []
+	var legal: Array[int] = []
+	var sponsors: Array[int] = []
+	owners.resize(cities.size())
+	legal.resize(cities.size())
+	sponsors.resize(cities.size())
+	for city in cities:
+		owners[city.id] = city.owner_nation
+		legal[city.id] = recognized_owner_of(city.id)
+		sponsors[city.id] = city.occupation_sponsor_nation
+	var draft := {
+		"owners": owners,
+		"legal": legal,
+		"sponsors": sponsors,
+		"operation_by_city": {},
+		"proposed_suzerainty": suzerainty.duplicate(true),
+	}
+	if not append_annexation_to_territory_plan(
+		draft, absorber, absorbed, stock_policy_overrides
+	):
+		return false
+	var operation_ids: Array[int] = []
+	for city_value in (draft["operation_by_city"] as Dictionary):
+		operation_ids.append(int(city_value))
+	operation_ids.sort()
+	var operations: Array[Dictionary] = []
+	for city_id in operation_ids:
+		operations.append(
+			(draft["operation_by_city"] as Dictionary)[city_id]
+		)
+	var territory_result := apply_territory_transaction(
+		operations, {}, expected_ownership_revision,
+		draft["proposed_suzerainty"]
+	)
+	if not bool(territory_result.get("ok", false)):
+		return false
+	finalize_annexation_after_territory_commit(absorber, absorbed)
+	return true
 
 
 ## 兼并可能让原战斗双方变成同国或不再敌对。Battle 持有 Army 引用，因此必须在
@@ -4131,8 +4381,8 @@ func revoke_vassal(subject_id: int) -> bool:
 	if overlord_id < 0 or overlord_id >= nations.size():
 		return false
 	# 兼并原语会原子移除 subject 并把其直接藩王改投宗主。
-	set_diplomatic_relation(subject_id, overlord_id, DiplomaticRelation.ALLIED)
-	annex_nation(overlord_id, subject_id)
+	if not annex_nation(overlord_id, subject_id):
+		return false
 	prune_dead_suzerainty()
 	assert(
 		suzerainty_structure_valid(),
@@ -4255,34 +4505,27 @@ func _proportional_share(pool: int, moved_output: int, total_output: int) -> int
 	return mini(pool, int(floor(float(pool) * ratio)))
 
 
-## 从宗主全部粮仓按库存占比扣除 amount 单位粮食（守恒地把粮食划给藩王）。
-## 当前每国仅首都一个粮仓；按占比分摊为未来多粮仓保留正确性。
-func _withdraw_food_from_warehouses(overlord: Nation, amount: int) -> void:
-	if amount <= 0:
-		return
+## 按确定性粮仓顺序扣除最多 amount 单位粮食，并返回实际扣除量。
+## requested 不超过总库存时必须精确扣足；超出时扣尽现有库存。
+func _withdraw_food_from_warehouses(overlord: Nation, amount: int) -> int:
+	if overlord == null or amount <= 0:
+		return 0
 	var warehouses := warehouse_cities_of(overlord.id)
 	var total := 0
 	for warehouse in warehouses:
 		total += warehouse.food_storage
 	if total <= 0:
-		return
+		return 0
 	var remaining := mini(amount, total)
-	for i in range(warehouses.size()):
+	var requested := remaining
+	for warehouse in warehouses:
 		if remaining <= 0:
 			break
-		var warehouse := warehouses[i]
-		var take := (
-			remaining
-			if i == warehouses.size() - 1
-			else mini(
-				warehouse.food_storage,
-				int(floor(float(amount) * float(warehouse.food_storage) / float(total)))
-			)
-		)
-		take = mini(take, warehouse.food_storage)
+		var take := mini(remaining, warehouse.food_storage)
 		warehouse.food_storage -= take
 		remaining -= take
 	# granary_food 是派生量，由 refresh_derived 统一重算，此处不手改。
+	return requested - remaining
 
 
 ## 藩王色调从宗主派生：色相小幅偏移、降低明度/饱和度，体现「同一政治共同体、
@@ -4312,45 +4555,6 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 		clampf(s + 0.10, NATION_COLOR_SATURATION_MIN, NATION_COLOR_SATURATION_MAX),
 		clampf(v * 0.85, 0.28, NATION_COLOR_VALUE_MAX)
 	)
-
-
-## 为藩王选定首都作为「共享粮仓」的补给中继节点：首都本身零库存、不建独立粮仓，
-## 封地城市自带的存粮全部回流宗主根粮仓（共享池守恒）。复用宗主首都选取的
-## 「领土重心 + EquivariantOrder 决定性打破平局」规则。overlord_id 是回流粮食的接收方。
-func _establish_vassal_capital(subject: Nation, overlord_id: int) -> void:
-	var owned := land_cities_of(subject.id)
-	if owned.is_empty():
-		return
-	var reclaimed_food := 0
-	for city in owned:
-		reclaimed_food += city.food_storage
-		city.food_storage = 0
-		city.is_capital = false
-		city.has_warehouse = false
-	var centroid := Vector2.ZERO
-	for city in owned:
-		centroid += city.map_position
-	centroid /= float(owned.size())
-	var capital_id := owned[0].id
-	var best_distance := INF
-	for city in owned:
-		var distance := city.map_position.distance_squared_to(centroid)
-		if distance < best_distance or (
-			is_equal_approx(distance, best_distance)
-			and EquivariantOrder.city_id_less(self, subject.id, city.id, capital_id)
-		):
-			best_distance = distance
-			capital_id = city.id
-	subject.capital_city_id = capital_id
-	# 藩王首都是补给中继节点，不是独立粮仓：warehouse_city_ids 保持空、has_warehouse=false。
-	subject.warehouse_city_ids = [] as Array[int]
-	var capital := cities[capital_id]
-	capital.is_capital = true
-	capital.has_warehouse = false
-	capital.food_storage = 0
-	# 封地存粮回流宗主共享池（deposit_food 会重定向到 food_pool_holder 首都）。
-	if reclaimed_food > 0 and overlord_id >= 0 and overlord_id < nations.size():
-		deposit_food(overlord_id, reclaimed_food)
 
 
 ## 军队是否静止驻扎在 nation_id 的领土内（可安全整体转隶）。
@@ -4509,44 +4713,1098 @@ func recognized_owner_of(city_id: int) -> int:
 	return recognized_city_owners[city_id]
 
 
-## 双边和平确认交战双方及其占领归属盟友取得的实际控制区。
-func recognize_occupied_territory(
-	nation_a: int,
-	nation_b: int
+## 按事务最终实控图选择确定性首都。已有首都仍合法时保持不动；需要修复时，
+## 复用迁都规则：优先最大陆地连通分量，再取工事最强城市。
+func _planned_territory_capital(
+	nation_id: int,
+	planned_owners: Array[int],
+	preferred_city_id: int = -1
+) -> int:
+	if (
+		nation_id < 0
+		or nation_id >= nations.size()
+		or planned_owners.size() != cities.size()
+	):
+		return -1
+	if (
+		preferred_city_id >= 0
+		and preferred_city_id < cities.size()
+		and planned_owners[preferred_city_id] == nation_id
+	):
+		return preferred_city_id
+	var current := nations[nation_id].capital_city_id
+	if (
+		current >= 0
+		and current < cities.size()
+		and planned_owners[current] == nation_id
+	):
+		return current
+	var candidates: Array[int] = []
+	for city in cities:
+		if planned_owners[city.id] == nation_id and not city.is_dock:
+			candidates.append(city.id)
+	if candidates.is_empty():
+		for city in cities:
+			if planned_owners[city.id] == nation_id:
+				candidates.append(city.id)
+	if candidates.is_empty():
+		return -1
+	var candidate_set := {}
+	for city_id in candidates:
+		candidate_set[city_id] = true
+	var visited := {}
+	var best_component: Array[int] = []
+	var best_rep := -1
+	for city_id in candidates:
+		if visited.has(city_id):
+			continue
+		var component: Array[int] = []
+		var queue: Array[int] = [city_id]
+		var cursor := 0
+		var representative := city_id
+		visited[city_id] = true
+		while cursor < queue.size():
+			var current_id := queue[cursor]
+			cursor += 1
+			component.append(current_id)
+			representative = mini(representative, current_id)
+			for neighbor in neighbors(current_id):
+				if visited.has(neighbor) or not candidate_set.has(neighbor):
+					continue
+				var edge := edge_of(current_id, neighbor)
+				if edge == null or edge.max_manpower <= 0:
+					continue
+				visited[neighbor] = true
+				queue.append(neighbor)
+		if (
+			component.size() > best_component.size()
+			or (
+				component.size() == best_component.size()
+				and (best_rep < 0 or representative < best_rep)
+			)
+		):
+			best_component = component
+			best_rep = representative
+	var best := best_component[0]
+	for city_id in best_component:
+		if (
+			cities[city_id].fort_strength > cities[best].fort_strength
+			or (
+				cities[city_id].fort_strength == cities[best].fort_strength
+				and EquivariantOrder.city_id_less(
+					self, nation_id, city_id, best
+				)
+			)
+		):
+			best = city_id
+	return best
+
+
+## 规范化一份任意宗藩快照。事务只能接收完整最终图，不能让调用方通过提前
+## 修改 live suzerainty 来影响规划。这里同时把 key 统一为 int 并拒绝环。
+## validate_relations 只用于对 live 快照作一致性检查；拟议图的对应外交变化由
+## 生命周期调用方在事务成功后无失败地落盘，不能用旧外交关系拒绝合法改图。
+func _validated_suzerainty_snapshot(
+	snapshot: Dictionary,
+	validate_relations: bool = false
+) -> Dictionary:
+	var normalized := {}
+	for subject_value in snapshot:
+		if typeof(subject_value) != TYPE_INT:
+			return {"ok": false, "error": "宗藩图包含非整数国家 id。"}
+		var subject_id := int(subject_value)
+		var record_value: Variant = snapshot[subject_value]
+		if (
+			subject_id < 0
+			or subject_id >= nations.size()
+			or typeof(record_value) != TYPE_DICTIONARY
+		):
+			return {"ok": false, "error": "宗藩图包含无效藩属记录。"}
+		var record: Dictionary = record_value
+		if not record.has("overlord_id"):
+			return {"ok": false, "error": "宗藩记录缺少宗主 id。"}
+		var overlord_id := int(record["overlord_id"])
+		if (
+			overlord_id < 0
+			or overlord_id >= nations.size()
+			or overlord_id == subject_id
+		):
+			return {"ok": false, "error": "宗藩图包含无效宗主。"}
+		normalized[subject_id] = record.duplicate(true)
+		if validate_relations:
+			var expected_relation := (
+				DiplomaticRelation.WAR
+				if bool(record.get("civil_war", false))
+				else DiplomaticRelation.ALLIED
+			)
+			if relation_between(subject_id, overlord_id) != expected_relation:
+				return {
+					"ok": false,
+					"error": "现有宗藩图与外交关系不一致。",
+				}
+	for subject_value in normalized:
+		var subject_id := int(subject_value)
+		var walker := subject_id
+		var seen := {}
+		while normalized.has(walker):
+			if seen.has(walker):
+				return {"ok": false, "error": "宗藩图不能包含环。"}
+			seen[walker] = true
+			walker = int((normalized[walker] as Dictionary)["overlord_id"])
+	return {"ok": true, "error": "", "snapshot": normalized}
+
+
+## 根据最终有城国家集合一次性跳过死亡宗主、删除死亡藩属。跨过死亡节点的
+## 新边不继承旧内战；它是死亡清理后与存活祖先建立的新和平宗藩边。
+func _normalized_suzerainty_for_city_counts(
+	snapshot: Dictionary,
+	final_city_counts: Array[int]
+) -> Dictionary:
+	var result := {}
+	for subject_value in snapshot:
+		var subject_id := int(subject_value)
+		if final_city_counts[subject_id] <= 0:
+			continue
+		var record: Dictionary = snapshot[subject_id]
+		var overlord_id := int(record["overlord_id"])
+		var skipped_dead := false
+		var guard := 0
+		while (
+			overlord_id >= 0
+			and overlord_id < nations.size()
+			and final_city_counts[overlord_id] <= 0
+			and snapshot.has(overlord_id)
+			and guard <= nations.size()
+		):
+			overlord_id = int(
+				(snapshot[overlord_id] as Dictionary)["overlord_id"]
+			)
+			skipped_dead = true
+			guard += 1
+		if (
+			overlord_id < 0
+			or overlord_id >= nations.size()
+			or final_city_counts[overlord_id] <= 0
+			or overlord_id == subject_id
+		):
+			continue
+		var final_record := record.duplicate(true)
+		final_record["overlord_id"] = overlord_id
+		if skipped_dead:
+			final_record["civil_war"] = false
+		result[subject_id] = final_record
+	return result
+
+
+## 按最终有城国家集合及任意宗藩快照解析粮池持有者。若宗主在本批失去
+## 最后一城，跳过死亡宗主并接到仍存活的祖先；没有祖先时返回自身（自身
+## 也死亡时返回 -1）。活节点上的内战边仍会截断共享关系。
+func _planned_territory_food_pool_holder(
+	nation_id: int,
+	final_city_counts: Array[int],
+	suzerainty_snapshot: Dictionary
+) -> int:
+	if (
+		nation_id < 0
+		or nation_id >= nations.size()
+		or final_city_counts.size() != nations.size()
+	):
+		return -1
+	var current := nation_id
+	var holder := nation_id if final_city_counts[nation_id] > 0 else -1
+	var guard := 0
+	while suzerainty_snapshot.has(current) and guard <= nations.size():
+		var record: Dictionary = suzerainty_snapshot[current]
+		# 只有仍存活的子节点可以维持一条内战边；死亡中间节点会被 prune 掉。
+		if (
+			final_city_counts[current] > 0
+			and bool(record.get("civil_war", false))
+		):
+			break
+		var overlord_id := int(record.get("overlord_id", -1))
+		if overlord_id < 0 or overlord_id >= nations.size():
+			break
+		if final_city_counts[overlord_id] > 0:
+			holder = overlord_id
+		current = overlord_id
+		guard += 1
+	return holder
+
+
+## 运行期领土状态的唯一写入口。phase 1 只读旧快照并完整规划所有城市、政治
+## 目标、首都、粮仓双向索引和库存账本；任一错误直接返回且没有副作用。phase 2
+## 才一次提交整批结果，ownership_revision 与 refresh_derived 都只发生一次。
+## operation 必须含 city_id；可含 controller_id、legal_owner_id、sponsor_id、
+## reset_political_target、reason、stock_policy。另接受三个旧字段名别名。
+## diplomatic_operations 每项必须含 nation_a、nation_b、relation，可选
+## truce_days；显式外交边会和最终宗藩图要求的 WAR/ALLIED 边合并规划。
+func apply_territory_transaction(
+	operations: Array[Dictionary],
+	preferred_capitals: Dictionary = {},
+	expected_ownership_revision: int = -1,
+	proposed_suzerainty: Variant = null,
+	diplomatic_operations: Array[Dictionary] = [],
+	expected_diplomacy_revision: int = -1
+) -> Dictionary:
+	# 乐观锁必须是入口第一项检查，冲突时连规划快照都不建立。
+	if (
+		expected_ownership_revision != -1
+		and expected_ownership_revision != ownership_revision
+	):
+		return {
+			"ok": false, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false,
+			"error": "领土版本已变化，请重试。",
+			"changed_city_ids": [] as Array[int],
+		}
+	if (
+		expected_diplomacy_revision != -1
+		and expected_diplomacy_revision != diplomacy_revision
+	):
+		return {
+			"ok": false, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false,
+			"error": "外交版本已变化，请重试。",
+			"changed_city_ids": [] as Array[int],
+		}
+	if recognized_city_owners.size() != cities.size():
+		return {
+			"ok": false, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false,
+			"error": "法理领土索引与城市数量不一致。",
+			"changed_city_ids": [] as Array[int],
+		}
+	if (
+		proposed_suzerainty != null
+		and typeof(proposed_suzerainty) != TYPE_DICTIONARY
+	):
+		return {
+			"ok": false, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false,
+			"error": "proposed_suzerainty 必须是完整宗藩图。",
+			"changed_city_ids": [] as Array[int],
+		}
+
+	# ------------------------------ phase 1a: 规范化并校验 operation。
+	var planned_owners: Array[int] = []
+	var planned_legal_owners: Array[int] = []
+	var planned_sponsors: Array[int] = []
+	planned_owners.resize(cities.size())
+	planned_legal_owners.resize(cities.size())
+	planned_sponsors.resize(cities.size())
+	for city in cities:
+		if (
+			city.id < 0
+			or city.id >= cities.size()
+			or city.owner_nation < 0
+			or city.owner_nation >= nations.size()
+			or recognized_owner_of(city.id) < 0
+			or recognized_owner_of(city.id) >= nations.size()
+			or city.occupation_sponsor_nation < -1
+			or city.occupation_sponsor_nation >= nations.size()
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "现有领土三元组包含无效国家。",
+				"changed_city_ids": [] as Array[int],
+			}
+		planned_owners[city.id] = city.owner_nation
+		planned_legal_owners[city.id] = recognized_owner_of(city.id)
+		planned_sponsors[city.id] = city.occupation_sponsor_nation
+	var normalized_operations: Array[Dictionary] = []
+	var operation_by_city := {}
+	var changed_city_ids: Array[int] = []
+	for operation in operations:
+		if not operation.has("city_id"):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "领土操作缺少 city_id。",
+				"changed_city_ids": [] as Array[int],
+			}
+		var city_id := int(operation["city_id"])
+		if (
+			city_id < 0
+			or city_id >= cities.size()
+			or operation_by_city.has(city_id)
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "领土操作包含无效或重复城市。",
+				"changed_city_ids": [] as Array[int],
+			}
+		var city := cities[city_id]
+		var controller_id := city.owner_nation
+		if operation.has("controller_id"):
+			controller_id = int(operation["controller_id"])
+		elif operation.has("owner_nation"):
+			controller_id = int(operation["owner_nation"])
+		var legal_owner_id := recognized_owner_of(city_id)
+		if operation.has("legal_owner_id"):
+			legal_owner_id = int(operation["legal_owner_id"])
+		elif operation.has("legal_owner_nation"):
+			legal_owner_id = int(operation["legal_owner_nation"])
+		var sponsor_id := city.occupation_sponsor_nation
+		if operation.has("sponsor_id"):
+			sponsor_id = int(operation["sponsor_id"])
+		elif operation.has("occupation_sponsor_nation"):
+			sponsor_id = int(operation["occupation_sponsor_nation"])
+		if (
+			controller_id < 0
+			or controller_id >= nations.size()
+			or legal_owner_id < 0
+			or legal_owner_id >= nations.size()
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "领土操作包含无效国家。",
+				"changed_city_ids": [] as Array[int],
+			}
+		if controller_id == legal_owner_id:
+			sponsor_id = -1
+		elif sponsor_id < 0 or sponsor_id >= nations.size():
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "临时占领必须指定有效的战争结算责任方。",
+				"changed_city_ids": [] as Array[int],
+			}
+		var stock_policy := int(operation.get(
+			"stock_policy", TerritoryStockDisposition.RETURN_TO_OLD_POOL
+		))
+		if stock_policy not in [
+			TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+			TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+			TerritoryStockDisposition.CAPTURE_SPOILS,
+			TerritoryStockDisposition.DESTROY,
+		]:
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "未知的领土库存结算策略。",
+				"changed_city_ids": [] as Array[int],
+			}
+		var reset_target := bool(operation.get(
+			"reset_political_target", false
+		))
+		var reason := str(operation.get("reason", "territory_transfer"))
+		var cooldown_until := city.rebellion_cooldown_until_day
+		if reset_target:
+			cooldown_until = maxi(
+				cooldown_until,
+				day + RebellionSystem.REBELLION_COOLDOWN_DAYS
+			)
+		var operation_changed := (
+			city.owner_nation != controller_id
+			or recognized_owner_of(city_id) != legal_owner_id
+			or city.occupation_sponsor_nation != sponsor_id
+			or (
+				reset_target
+				and (
+					city.loyalty_target_nation != legal_owner_id
+					or not is_zero_approx(city.loyalty_trend)
+					or city.unrest != 100.0 - city.loyalty
+					or city.rebellion_progress != 0
+					or city.rebellion_cooldown_until_day != cooldown_until
+					or city.last_loyalty_reason != reason
+				)
+			)
+		)
+		var normalized := {
+			"city_id": city_id,
+			"controller_id": controller_id,
+			"legal_owner_id": legal_owner_id,
+			"sponsor_id": sponsor_id,
+			"reset_political_target": reset_target,
+			"cooldown_until": cooldown_until,
+			"reason": reason,
+			"stock_policy": stock_policy,
+		}
+		normalized_operations.append(normalized)
+		operation_by_city[city_id] = normalized
+		planned_owners[city_id] = controller_id
+		planned_legal_owners[city_id] = legal_owner_id
+		planned_sponsors[city_id] = sponsor_id
+		if operation_changed:
+			changed_city_ids.append(city_id)
+	# operation 合成完后全量校验最终三元组；未触及城市也不得把历史脏值
+	# 带进 phase 2，尤其不能在 refresh_derived 时才因非法 owner 崩溃。
+	for city_id in range(cities.size()):
+		var owner_id := planned_owners[city_id]
+		var legal_id := planned_legal_owners[city_id]
+		var sponsor_id := planned_sponsors[city_id]
+		if (
+			owner_id < 0 or owner_id >= nations.size()
+			or legal_id < 0 or legal_id >= nations.size()
+			or (owner_id == legal_id and sponsor_id != -1)
+			or (
+				owner_id != legal_id
+				and (sponsor_id < 0 or sponsor_id >= nations.size())
+			)
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "最终领土三元组无效。",
+				"changed_city_ids": [] as Array[int],
+			}
+	# ------------------------------ phase 1b: 最终三元组、首都、粮池。
+	var final_city_counts: Array[int] = []
+	final_city_counts.resize(nations.size())
+	final_city_counts.fill(0)
+	for city_id in range(cities.size()):
+		var owner := planned_owners[city_id]
+		# 旧测试夹具及存档可能含与本批无关的历史脏 sponsor；原子事务只
+		# 拒绝本批 operation 的非法最终值，不能让无关城市阻断合法占领。
+		if owner >= 0 and owner < nations.size():
+			final_city_counts[owner] += 1
+	var requested_suzerainty := (
+		(proposed_suzerainty as Dictionary).duplicate(true)
+		if proposed_suzerainty != null
+		else suzerainty.duplicate(true)
+	)
+	var suzerainty_validation := _validated_suzerainty_snapshot(
+		requested_suzerainty
+	)
+	if not bool(suzerainty_validation.get("ok", false)):
+		return {
+			"ok": false, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false,
+			"error": str(suzerainty_validation.get("error", "宗藩图无效。")),
+			"changed_city_ids": [] as Array[int],
+		}
+	var validated_requested_suzerainty: Dictionary = (
+		suzerainty_validation["snapshot"] as Dictionary
+	)
+	# 默认政治图中死亡藩属的法理随同一次事务归入最近的存活祖先。显式
+	# overlay（如兼并）通常已由调用方给出更精确的法理 operation；这里只
+	# 补齐仍指向死亡藩属的城市，避免图已清理而法理继承永远丢失。
+	for former_value in validated_requested_suzerainty:
+		var former_id := int(former_value)
+		if final_city_counts[former_id] > 0:
+			continue
+		var successor := int(
+			(validated_requested_suzerainty[former_id] as Dictionary).get(
+				"overlord_id", -1
+			)
+		)
+		var guard := 0
+		while (
+			successor >= 0
+			and successor < nations.size()
+			and final_city_counts[successor] <= 0
+			and validated_requested_suzerainty.has(successor)
+			and guard <= nations.size()
+		):
+			successor = int(
+				(validated_requested_suzerainty[successor] as Dictionary).get(
+					"overlord_id", -1
+				)
+			)
+			guard += 1
+		if (
+			successor < 0
+			or successor >= nations.size()
+			or final_city_counts[successor] <= 0
+		):
+			continue
+		for city_id in range(cities.size()):
+			if planned_legal_owners[city_id] != former_id:
+				continue
+			planned_legal_owners[city_id] = successor
+			if planned_sponsors[city_id] == former_id:
+				planned_sponsors[city_id] = successor
+			if planned_owners[city_id] == successor:
+				planned_sponsors[city_id] = -1
+			if not changed_city_ids.has(city_id):
+				changed_city_ids.append(city_id)
+	var planned_suzerainty := _normalized_suzerainty_for_city_counts(
+		validated_requested_suzerainty,
+		final_city_counts
+	)
+	var normalized_suzerainty_validation := _validated_suzerainty_snapshot(
+		planned_suzerainty
+	)
+	if not bool(normalized_suzerainty_validation.get("ok", false)):
+		return {
+			"ok": false, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false,
+			"error": str(normalized_suzerainty_validation.get(
+				"error", "最终宗藩图无效。"
+			)),
+			"changed_city_ids": [] as Array[int],
+		}
+	var political_changed := planned_suzerainty != suzerainty
+	# 宗藩边的外交态属于同一政治事务：拟议图中每条边按 civil_war
+	# 归一为 WAR/ALLIED，phase 2 与 suzerainty 同批写入。非宗藩边不动。
+	var planned_diplomatic_relations := diplomatic_relations.duplicate(true)
+	var planned_diplomatic_since := diplomatic_since_day.duplicate(true)
+	var planned_truce_until := truce_until_day.duplicate(true)
+	var explicit_relations := {}
+	for operation in diplomatic_operations:
+		if (
+			not operation.has("nation_a")
+			or not operation.has("nation_b")
+			or not operation.has("relation")
+			or typeof(operation.get("nation_a")) != TYPE_INT
+			or typeof(operation.get("nation_b")) != TYPE_INT
+			or typeof(operation.get("relation")) != TYPE_INT
+			or (
+				operation.has("truce_days")
+				and typeof(operation.get("truce_days")) != TYPE_INT
+			)
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "外交操作缺少国家或关系字段。",
+				"changed_city_ids": [] as Array[int],
+			}
+		var nation_a := int(operation["nation_a"])
+		var nation_b := int(operation["nation_b"])
+		var relation := int(operation["relation"])
+		var truce_days := int(operation.get("truce_days", 0))
+		if (
+			nation_a < 0 or nation_a >= nations.size()
+			or nation_b < 0 or nation_b >= nations.size()
+			or nation_a == nation_b
+			or relation not in [
+				DiplomaticRelation.NEUTRAL,
+				DiplomaticRelation.WAR,
+				DiplomaticRelation.ALLIED,
+			]
+			or truce_days < 0
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "外交操作包含无效国家、关系或停战期。",
+				"changed_city_ids": [] as Array[int],
+			}
+		var key := _diplomacy_key(nation_a, nation_b)
+		if explicit_relations.has(key):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "外交操作包含重复国家对。",
+				"changed_city_ids": [] as Array[int],
+			}
+		explicit_relations[key] = {
+			"relation": relation, "truce_days": truce_days,
+		}
+	for subject_value in planned_suzerainty:
+		var subject_id := int(subject_value)
+		var record: Dictionary = planned_suzerainty[subject_id]
+		var overlord_id := int(record["overlord_id"])
+		var key := _diplomacy_key(subject_id, overlord_id)
+		var expected_relation := (
+			DiplomaticRelation.WAR
+			if bool(record.get("civil_war", false))
+			else DiplomaticRelation.ALLIED
+		)
+		if (
+			explicit_relations.has(key)
+			and int((explicit_relations[key] as Dictionary)["relation"])
+				!= expected_relation
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "显式外交操作与最终宗藩关系冲突。",
+				"changed_city_ids": [] as Array[int],
+			}
+	# 先把显式操作应用到旧快照；同一宗藩边若显式给出相同关系，
+	# 其 truce_days 由这里保留。随后只补没有显式指定的宗藩必需边。
+	for key_value in explicit_relations:
+		var key := str(key_value)
+		var operation: Dictionary = explicit_relations[key_value]
+		var relation := int(operation["relation"])
+		var previous_relation := int(diplomatic_relations.get(
+			key, DiplomaticRelation.WAR
+		))
+		if previous_relation != relation:
+			planned_diplomatic_relations[key] = relation
+			planned_diplomatic_since[key] = day
+			if (
+				previous_relation == DiplomaticRelation.WAR
+				and relation != DiplomaticRelation.WAR
+			):
+				planned_truce_until[key] = maxi(
+					int(planned_truce_until.get(key, 0)),
+					day + int(operation["truce_days"])
+				)
+	for subject_value in planned_suzerainty:
+		var subject_id := int(subject_value)
+		var record: Dictionary = planned_suzerainty[subject_id]
+		var overlord_id := int(record["overlord_id"])
+		var key := _diplomacy_key(subject_id, overlord_id)
+		if explicit_relations.has(key):
+			continue
+		var relation := (
+			DiplomaticRelation.WAR
+			if bool(record.get("civil_war", false))
+			else DiplomaticRelation.ALLIED
+		)
+		var previous_relation := int(diplomatic_relations.get(
+			key, DiplomaticRelation.WAR
+		))
+		if previous_relation == relation:
+			continue
+		planned_diplomatic_relations[key] = relation
+		planned_diplomatic_since[key] = day
+		if (
+			previous_relation == DiplomaticRelation.WAR
+			and relation != DiplomaticRelation.WAR
+		):
+			planned_truce_until[key] = maxi(
+				int(planned_truce_until.get(key, 0)), day
+			)
+	var diplomacy_changed := (
+		planned_diplomatic_relations != diplomatic_relations
+		or planned_diplomatic_since != diplomatic_since_day
+		or planned_truce_until != truce_until_day
+	)
+	var normalized_preferred := {}
+	for nation_value in preferred_capitals:
+		var nation_id := int(nation_value)
+		var preferred_id := int(preferred_capitals[nation_value])
+		if (
+			nation_id < 0 or nation_id >= nations.size()
+			or preferred_id < 0 or preferred_id >= cities.size()
+			or planned_owners[preferred_id] != nation_id
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "preferred_capitals 包含无效首都。",
+				"changed_city_ids": [] as Array[int],
+			}
+		normalized_preferred[nation_id] = preferred_id
+	var planned_capitals: Array[int] = []
+	planned_capitals.resize(nations.size())
+	planned_capitals.fill(-1)
+	for nation in nations:
+		if final_city_counts[nation.id] <= 0:
+			continue
+		planned_capitals[nation.id] = _planned_territory_capital(
+			nation.id, planned_owners,
+			int(normalized_preferred.get(nation.id, -1))
+		)
+		if planned_capitals[nation.id] < 0:
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "无法为有城国家规划首都。",
+				"changed_city_ids": [] as Array[int],
+			}
+	var final_pool_holders: Array[int] = []
+	final_pool_holders.resize(nations.size())
+	final_pool_holders.fill(-1)
+	for nation in nations:
+		if final_city_counts[nation.id] <= 0:
+			continue
+		var holder_id := _planned_territory_food_pool_holder(
+			nation.id, final_city_counts, planned_suzerainty
+		)
+		if (
+			holder_id < 0
+			or holder_id >= nations.size()
+			or final_city_counts[holder_id] <= 0
+			or planned_capitals[holder_id] < 0
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "领土操作后的粮池持有者没有可用首都。",
+				"changed_city_ids": [] as Array[int],
+			}
+		final_pool_holders[nation.id] = holder_id
+
+	var planned_warehouse_flags: Array[bool] = []
+	planned_warehouse_flags.resize(cities.size())
+	planned_warehouse_flags.fill(false)
+	for city in cities:
+		var final_owner := planned_owners[city.id]
+		planned_warehouse_flags[city.id] = (
+			city.has_warehouse
+			and city.owner_nation == final_owner
+			and final_pool_holders[final_owner] == final_owner
+		)
+	for nation in nations:
+		if (
+			final_city_counts[nation.id] > 0
+			and final_pool_holders[nation.id] == nation.id
+		):
+			planned_warehouse_flags[planned_capitals[nation.id]] = true
+
+	# ------------------------------ phase 1c: 以旧快照计算库存账本。
+	var planned_food: Array[int] = []
+	planned_food.resize(cities.size())
+	for city in cities:
+		planned_food[city.id] = city.food_storage
+	var stock_credits := {}
+	for normalized in normalized_operations:
+		var city_id := int(normalized["city_id"])
+		var city := cities[city_id]
+		if city.owner_nation == int(normalized["controller_id"]):
+			continue
+		var stock := city.food_storage
+		planned_food[city_id] = 0
+		if stock <= 0:
+			continue
+		var policy := int(normalized["stock_policy"])
+		var recipient := -1
+		var credited := stock
+		match policy:
+			TerritoryStockDisposition.RETURN_TO_OLD_POOL:
+				recipient = _planned_territory_food_pool_holder(
+					city.owner_nation, final_city_counts,
+					validated_requested_suzerainty
+				)
+			TerritoryStockDisposition.MOVE_TO_NEW_POOL:
+				recipient = final_pool_holders[int(normalized["controller_id"])]
+			TerritoryStockDisposition.CAPTURE_SPOILS:
+				recipient = final_pool_holders[int(normalized["controller_id"])]
+				credited = int(floor(
+					float(stock) * TERRITORY_CAPTURE_SPOILS_RATE
+				))
+			TerritoryStockDisposition.DESTROY:
+				credited = 0
+		if credited <= 0:
+			continue
+		if (
+			recipient < 0
+			or recipient >= nations.size()
+			or final_city_counts[recipient] <= 0
+			or planned_capitals[recipient] < 0
+			or not planned_warehouse_flags[planned_capitals[recipient]]
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "库存策略在最终版图中没有可入账粮池。",
+				"changed_city_ids": [] as Array[int],
+			}
+		stock_credits[recipient] = (
+			int(stock_credits.get(recipient, 0)) + credited
+		)
+	# 宗藩关系刚改变时，旧的非持有者粮仓也在本批摘除并全额归入最终共享池。
+	for city in cities:
+		if (
+			city.owner_nation != planned_owners[city.id]
+			or not city.has_warehouse
+			or planned_warehouse_flags[city.id]
+		):
+			continue
+		var stock := planned_food[city.id]
+		planned_food[city.id] = 0
+		if stock <= 0:
+			continue
+		var recipient := final_pool_holders[planned_owners[city.id]]
+		if recipient < 0 or planned_capitals[recipient] < 0:
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "被摘除粮仓的库存没有可入账粮池。",
+				"changed_city_ids": [] as Array[int],
+			}
+		stock_credits[recipient] = (
+			int(stock_credits.get(recipient, 0)) + stock
+		)
+	# 和平藩属的首都必须是零库存中继；关系变化前遗留的库存同样回池。
+	for nation in nations:
+		if (
+			final_city_counts[nation.id] <= 0
+			or final_pool_holders[nation.id] == nation.id
+		):
+			continue
+		var capital_id := planned_capitals[nation.id]
+		var stock := planned_food[capital_id]
+		planned_food[capital_id] = 0
+		if stock > 0:
+			var recipient := final_pool_holders[nation.id]
+			stock_credits[recipient] = (
+				int(stock_credits.get(recipient, 0)) + stock
+			)
+	for recipient_value in stock_credits:
+		var recipient := int(recipient_value)
+		planned_food[planned_capitals[recipient]] += int(
+			stock_credits[recipient_value]
+		)
+
+	var planned_warehouse_ids: Array = []
+	for _nation in nations:
+		planned_warehouse_ids.append([] as Array[int])
+	for city_id in range(cities.size()):
+		if planned_warehouse_flags[city_id]:
+			(planned_warehouse_ids[planned_owners[city_id]] as Array[int]).append(
+				city_id
+			)
+	var territory_changed := not changed_city_ids.is_empty()
+	for nation in nations:
+		if (
+			nation.capital_city_id != planned_capitals[nation.id]
+			or nation.warehouse_city_ids != (
+				planned_warehouse_ids[nation.id] as Array[int]
+			)
+		):
+			territory_changed = true
+			break
+	if not territory_changed:
+		for city_id in range(cities.size()):
+			var city := cities[city_id]
+			if (
+				city.is_capital != (planned_capitals[city.owner_nation] == city_id)
+				or city.has_warehouse != planned_warehouse_flags[city_id]
+				or city.food_storage != planned_food[city_id]
+			):
+				territory_changed = true
+				break
+	if not territory_changed and not political_changed and not diplomacy_changed:
+		return {
+			"ok": true, "changed": false,
+			"territory_changed": false,
+			"political_changed": false,
+			"diplomacy_changed": false, "error": "",
+			"changed_city_ids": [] as Array[int],
+		}
+
+	# ------------------------------ phase 2: 一次提交，不再包含可失败分支。
+	for city_id in range(cities.size()):
+		var city := cities[city_id]
+		city.owner_nation = planned_owners[city_id]
+		recognized_city_owners[city_id] = planned_legal_owners[city_id]
+		city.occupation_sponsor_nation = planned_sponsors[city_id]
+		city.is_capital = false
+		city.has_warehouse = planned_warehouse_flags[city_id]
+		city.food_storage = planned_food[city_id]
+	for normalized in normalized_operations:
+		if not bool(normalized["reset_political_target"]):
+			continue
+		var city := cities[int(normalized["city_id"])]
+		city.loyalty_target_nation = int(normalized["legal_owner_id"])
+		city.loyalty_trend = 0.0
+		city.unrest = 100.0 - city.loyalty
+		city.rebellion_progress = 0
+		city.rebellion_cooldown_until_day = int(normalized["cooldown_until"])
+		city.last_loyalty_reason = str(normalized["reason"])
+	for nation in nations:
+		nation.capital_city_id = planned_capitals[nation.id]
+		nation.warehouse_city_ids = (
+			planned_warehouse_ids[nation.id] as Array[int]
+		).duplicate()
+		if nation.capital_city_id >= 0:
+			cities[nation.capital_city_id].is_capital = true
+	suzerainty = planned_suzerainty.duplicate(true)
+	diplomatic_relations = planned_diplomatic_relations
+	diplomatic_since_day = planned_diplomatic_since
+	truce_until_day = planned_truce_until
+	if territory_changed or political_changed:
+		ownership_revision += 1
+	if diplomacy_changed:
+		diplomacy_revision += 1
+	refresh_derived()
+	changed_city_ids.sort()
+	return {
+		"ok": true, "changed": true,
+		"territory_changed": territory_changed,
+		"political_changed": political_changed,
+		"diplomacy_changed": diplomacy_changed, "error": "",
+		"changed_city_ids": changed_city_ids,
+	}
+
+
+## 只转移城市实控及其战争结算责任方。
+func transfer_city_control(
+	city_id: int,
+	controller_id: int,
+	sponsor_id: int = -1,
+	stock_policy: int = TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+	reason: String = "control_transfer"
+) -> Dictionary:
+	var normalized_sponsor := sponsor_id
+	if (
+		city_id >= 0
+		and city_id < cities.size()
+		and controller_id != recognized_owner_of(city_id)
+		and normalized_sponsor == -1
+	):
+		normalized_sponsor = controller_id
+	return apply_territory_transaction([{
+		"city_id": city_id,
+		"controller_id": controller_id,
+		"sponsor_id": normalized_sponsor,
+		"stock_policy": stock_policy,
+		"reason": reason,
+	}] as Array[Dictionary])
+
+
+## 只迁移城市法理；可一并重置政治目标与叛乱进度。
+func transfer_city_legal_title(
+	city_id: int,
+	legal_owner_id: int,
+	reset_political_target: bool = true,
+	stock_policy: int = TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+	reason: String = "legal_title_transfer"
+) -> Dictionary:
+	return apply_territory_transaction([{
+		"city_id": city_id,
+		"legal_owner_id": legal_owner_id,
+		"reset_political_target": reset_political_target,
+		"stock_policy": stock_policy,
+		"reason": reason,
+	}] as Array[Dictionary])
+
+
+## 原子统一城市实控、法理与政治目标；调用方不得预先拆首都或粮仓。
+func transfer_city_sovereignty(
+	city_id: int,
+	sovereign_id: int,
+	reason: String = "sovereignty_transfer",
+	stock_policy: int = TerritoryStockDisposition.RETURN_TO_OLD_POOL
+) -> Dictionary:
+	return apply_territory_transaction([{
+		"city_id": city_id,
+		"controller_id": sovereign_id,
+		"legal_owner_id": sovereign_id,
+		"sponsor_id": -1,
+		"reset_political_target": true,
+		"stock_policy": stock_policy,
+		"reason": reason,
+	}] as Array[Dictionary])
+
+
+## 和平事务尾部兜底：只依据“战争结算责任方 sponsor ↔ 法理方”判断。
+## controller 正在参与的另一场战争与本城占领无关，不能阻止该城恢复法理。
+func normalize_peaceful_occupations(
+	excluded_war_pairs: Dictionary = {}
 ) -> Array[int]:
-	var transferred: Array[int] = []
-	var former_controllers := {}
+	var operations: Array[Dictionary] = []
+	for city in cities:
+		var legal_owner := recognized_owner_of(city.id)
+		if city.owner_nation == legal_owner:
+			continue
+		var sponsor := city.occupation_sponsor_nation
+		if (
+			sponsor >= 0
+			and sponsor < nations.size()
+			and excluded_war_pairs.has(edge_key(sponsor, legal_owner))
+		):
+			continue
+		var sponsor_at_war := (
+			sponsor >= 0
+			and sponsor < nations.size()
+			and nations[sponsor].alive
+			and is_enemy(sponsor, legal_owner)
+		)
+		if sponsor_at_war:
+			continue
+		operations.append({
+			"city_id": city.id,
+			"controller_id": legal_owner,
+			"legal_owner_id": legal_owner,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"reason": "peaceful_occupation_normalized",
+			"stock_policy": TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+		})
+	if operations.is_empty():
+		return [] as Array[int]
+	var result := apply_territory_transaction(operations)
+	if not bool(result.get("ok", false)):
+		return [] as Array[int]
+	return result.get("changed_city_ids", []) as Array[int]
+
+
+## 联盟整体议和确认两个集团之间的全部实际占领。实际控制者保留自己的占领成果，
+## 不把盟军占领地错误归给发起议和的代表国。
+func recognize_coalition_occupied_territory(
+	bloc_a: Array[int],
+	bloc_b: Array[int],
+	settled_war_pairs: Dictionary = {}
+) -> Array[int]:
+	var side_a := {}
+	var side_b := {}
+	for nation_id in bloc_a:
+		side_a[nation_id] = true
+	for nation_id in bloc_b:
+		side_b[nation_id] = true
+	var operations: Array[Dictionary] = []
 	for city in cities:
 		var recognized_owner := recognized_owner_of(city.id)
 		if city.owner_nation == recognized_owner:
 			continue
 		var occupying_side := -1
-		if city.occupation_sponsor_nation in [
-			nation_a,
-			nation_b,
-		]:
-			occupying_side = city.occupation_sponsor_nation
-		elif (
-			city.owner_nation == nation_a
-			or is_allied(city.owner_nation, nation_a)
-		):
-			occupying_side = nation_a
-		elif (
-			city.owner_nation == nation_b
-			or is_allied(city.owner_nation, nation_b)
-		):
-			occupying_side = nation_b
-		var recognized_side := -1
+		var sponsor := city.occupation_sponsor_nation
 		if (
-			recognized_owner == nation_a
-			or is_allied(recognized_owner, nation_a)
+			not settled_war_pairs.is_empty()
+			and sponsor >= 0
+			and sponsor < nations.size()
+			and not settled_war_pairs.has(
+				edge_key(sponsor, recognized_owner)
+			)
 		):
-			recognized_side = nation_a
-		elif (
-			recognized_owner == nation_b
-			or is_allied(recognized_owner, nation_b)
-		):
-			recognized_side = nation_b
+			continue
+		if side_a.has(sponsor):
+			occupying_side = 0
+		elif side_b.has(sponsor):
+			occupying_side = 1
+		elif side_a.has(city.owner_nation):
+			occupying_side = 0
+		elif side_b.has(city.owner_nation):
+			occupying_side = 1
+		var recognized_side := -1
+		if side_a.has(recognized_owner):
+			recognized_side = 0
+		elif side_b.has(recognized_owner):
+			recognized_side = 1
 		if (
 			occupying_side < 0
 			or recognized_side < 0
@@ -4558,81 +5816,23 @@ func recognize_occupied_territory(
 		)
 		if recipient < 0:
 			continue
-		if city.owner_nation != recipient:
-			var former_controller := city.owner_nation
-			if (
-				city.is_capital
-				or city.has_warehouse
-				or nations[former_controller].capital_city_id
-					== city.id
-			):
-				remove_warehouse(former_controller, city.id)
-			city.owner_nation = recipient
-			former_controllers[former_controller] = true
-		recognized_city_owners[city.id] = recipient
-		city.occupation_sponsor_nation = -1
-		transferred.append(city.id)
-	if not transferred.is_empty():
-		ownership_revision += 1
-		for former_value in former_controllers:
-			ensure_valid_capital(int(former_value))
-		refresh_derived()
-		if prune_dead_suzerainty():
-			diplomacy_revision += 1
-	return transferred
-
-
-## 联盟整体议和确认两个集团之间的全部实际占领。实际控制者保留自己的占领成果，
-## 不把盟军占领地错误归给发起议和的代表国。
-func recognize_coalition_occupied_territory(
-	bloc_a: Array[int],
-	bloc_b: Array[int]
-) -> Array[int]:
-	var side_a := {}
-	var side_b := {}
-	for nation_id in bloc_a:
-		side_a[nation_id] = true
-	for nation_id in bloc_b:
-		side_b[nation_id] = true
-	var transferred: Array[int] = []
-	var former_controllers := {}
-	for city in cities:
-		var recognized_owner := recognized_owner_of(city.id)
-		if city.owner_nation == recognized_owner:
-			continue
-		var opposing_sides := (
-			(side_a.has(city.owner_nation) and side_b.has(recognized_owner))
-			or (side_b.has(city.owner_nation) and side_a.has(recognized_owner))
-		)
-		if not opposing_sides:
-			continue
-		var recipient := external_territory_recipient(
-			city.owner_nation
-		)
-		if recipient < 0:
-			continue
-		if city.owner_nation != recipient:
-			var former_controller := city.owner_nation
-			if (
-				city.is_capital
-				or city.has_warehouse
-				or nations[former_controller].capital_city_id
-					== city.id
-			):
-				remove_warehouse(former_controller, city.id)
-			city.owner_nation = recipient
-			former_controllers[former_controller] = true
-		recognized_city_owners[city.id] = recipient
-		city.occupation_sponsor_nation = -1
-		transferred.append(city.id)
-	if not transferred.is_empty():
-		ownership_revision += 1
-		for former_value in former_controllers:
-			ensure_valid_capital(int(former_value))
-		refresh_derived()
-		if prune_dead_suzerainty():
-			diplomacy_revision += 1
-	return transferred
+		operations.append({
+			"city_id": city.id,
+			"controller_id": recipient,
+			"legal_owner_id": recipient,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"reason": "coalition_territory_recognized",
+			"stock_policy": TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+		})
+	if operations.is_empty():
+		return [] as Array[int]
+	var result := apply_territory_transaction(operations)
+	if not bool(result.get("ok", false)):
+		return [] as Array[int]
+	if bool(result.get("changed", false)):
+		prune_dead_suzerainty()
+	return result.get("changed_city_ids", []) as Array[int]
 
 
 func add_campaign_visual_event(
@@ -4818,9 +6018,21 @@ func territory_structure_valid() -> bool:
 			or city.occupation_sponsor_nation >= nations.size()
 		):
 			return false
-		if cities_of(legal_owner).is_empty():
-			return false
 		if owner == legal_owner and city.occupation_sponsor_nation != -1:
+			return false
+		if (
+			owner != legal_owner
+			and (
+				city.occupation_sponsor_nation < 0
+				or city.occupation_sponsor_nation >= nations.size()
+			)
+		):
+			return false
+		if (
+			city.loyalty_target_nation < 0
+			or city.loyalty_target_nation >= nations.size()
+			or city.rebellion_progress < 0
+		):
 			return false
 		if city.is_capital:
 			if nations[owner].capital_city_id != city.id:

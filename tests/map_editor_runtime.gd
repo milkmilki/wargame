@@ -116,6 +116,8 @@ func _run() -> void:
 	if moved_position == original_position:
 		_fail("could not find nearby editable land position")
 		return
+	if not _verify_rejected_city_edit_is_atomic(moved_position):
+		return
 	var city_result := state.apply_city_editor_changes(city.id, {
 		"map_x": moved_position.x,
 		"map_y": moved_position.y,
@@ -380,6 +382,94 @@ func _run() -> void:
 	)
 	renderer.free()
 	quit(0)
+
+
+func _verify_rejected_city_edit_is_atomic(moved_position: Vector2) -> bool:
+	var state := GameState.new()
+	state.generate_world(24683, 4, 4)
+	var target: City = null
+	for candidate in state.land_cities():
+		if state.land_cities_of(candidate.owner_nation).size() == 1:
+			target = candidate
+			break
+	if target == null:
+		_fail("could not construct a nation with one last land city")
+		return false
+	var owner_before := target.owner_nation
+	var recipient := (owner_before + 1) % state.nations.size()
+	var position_before := target.map_position
+	var ownership_revision_before := state.ownership_revision
+	var road_revision_before := state.road_network_revision
+	var fingerprint_before := _territory_fingerprint(state)
+	var requested_position := moved_position
+	if not TerrainMapGenerator.is_land_map_position(
+		GameState.terrain_map_path(), requested_position
+	):
+		requested_position = position_before
+	for offset in [
+		Vector2(0.002, 0.0),
+		Vector2(-0.002, 0.0),
+		Vector2(0.0, 0.002),
+		Vector2(0.0, -0.002),
+	]:
+		var candidate_position: Vector2 = position_before + offset
+		if TerrainMapGenerator.is_land_map_position(
+			GameState.terrain_map_path(), candidate_position
+		):
+			requested_position = candidate_position
+			break
+	if requested_position == position_before:
+		_fail("could not find a nearby land position for atomic edit rejection")
+		return false
+	var result := state.apply_city_editor_changes(target.id, {
+		"map_x": requested_position.x,
+		"map_y": requested_position.y,
+		"owner_nation": recipient,
+	})
+	if (
+		bool(result.get("ok", true))
+		or bool(result.get("changed", false))
+		or str(result.get("error", "")).is_empty()
+		or target.map_position != position_before
+		or state.ownership_revision != ownership_revision_before
+		or state.road_network_revision != road_revision_before
+		or _territory_fingerprint(state) != fingerprint_before
+	):
+		_fail(
+			"moving and illegally transferring the last land city was not atomic"
+		)
+		return false
+	return true
+
+
+func _territory_fingerprint(state: GameState) -> Dictionary:
+	var cities: Array[Dictionary] = []
+	for city in state.cities:
+		cities.append({
+			"id": city.id,
+			"owner": city.owner_nation,
+			"legal": state.recognized_owner_of(city.id),
+			"sponsor": city.occupation_sponsor_nation,
+			"position": city.map_position,
+			"capital": city.is_capital,
+			"warehouse": city.has_warehouse,
+			"food": city.food_storage,
+		})
+	var nations: Array[Dictionary] = []
+	for nation in state.nations:
+		nations.append({
+			"id": nation.id,
+			"alive": nation.alive,
+			"capital_city_id": nation.capital_city_id,
+			"warehouse_city_ids": nation.warehouse_city_ids.duplicate(),
+			"granary_food": nation.granary_food,
+		})
+	return {
+		"cities": cities,
+		"nations": nations,
+		"ownership_revision": state.ownership_revision,
+		"road_network_revision": state.road_network_revision,
+	}
 
 
 func _remove_nation_land(

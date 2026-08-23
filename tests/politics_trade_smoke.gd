@@ -233,6 +233,9 @@ func _make_vassal_naming_state(vassal_city_count: int) -> GameState:
 		state.adjacency[city_id] = [] as Array[int]
 	state.nations[0].capital_city_id = 0
 	state.nations[1].capital_city_id = 1
+	state.recognized_city_owners.resize(state.cities.size())
+	for city in state.cities:
+		state.recognized_city_owners[city.id] = city.owner_nation
 	return state
 
 
@@ -282,9 +285,6 @@ func _test_naming_sovereign_promotions() -> void:
 	var civil_symbol := civil.cities[civil_founding].region_symbol
 	civil.nations[0].name = civil_symbol
 	civil.nations[0].short_name = civil_symbol
-	civil.recognized_city_owners.resize(civil.cities.size())
-	for city in civil.cities:
-		civil.recognized_city_owners[city.id] = city.owner_nation
 	civil.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	civil.suzerainty[1] = {
 		"overlord_id": 0, "tribute_rate": 0.25, "created_day": 0,
@@ -914,6 +914,81 @@ func _test_rebellion_system() -> void:
 		"events=%s before=%s after=%s" % [
 			restore_events, restore_totals_before, restore_totals_after,
 		]
+	)
+
+	# 同一恢复事务从和平开始时，必须先原子进入战争再形成 owner/legal
+	# 不一致；任何完整事务都不能留下和平占领。
+	var peaceful_restore_state := _make_loyalty_restoration_state()
+	peaceful_restore_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.NEUTRAL
+	)
+	var peaceful_restore_events := RebellionSystem.resolve_month(
+		peaceful_restore_state
+	)
+	var peaceful_restore_event_count := 0
+	for event_value in peaceful_restore_events:
+		var restore_event: Dictionary = event_value
+		if str(restore_event.get("kind", "")) == "loyalty_target_restored":
+			peaceful_restore_event_count += 1
+	_check(
+		peaceful_restore_event_count == 1
+			and peaceful_restore_state.is_enemy(0, 1)
+			and peaceful_restore_state.cities[1].owner_nation == 1
+			and peaceful_restore_state.recognized_owner_of(1) == 1
+			and peaceful_restore_state.cities[1]
+				.occupation_sponsor_nation == -1
+			and peaceful_restore_state.cities[2].owner_nation == 1
+			and peaceful_restore_state.recognized_owner_of(2) == 0
+			and peaceful_restore_state.cities[2]
+				.occupation_sponsor_nation == 1
+			and peaceful_restore_state.territory_structure_valid(),
+		"rebellion/peacetime_restore_declares_war_before_control_transfer",
+		"events=%s relation=%d owner/legal=%d/%d" % [
+			peaceful_restore_events,
+			peaceful_restore_state.relation_between(0, 1),
+			peaceful_restore_state.cities[2].owner_nation,
+			peaceful_restore_state.recognized_owner_of(2),
+		]
+	)
+
+	# 和平宗藩关系不能由地方忠诚事务擅自改成内战或外战；拒绝时状态原子不变。
+	var vassal_restore_state := _make_loyalty_restoration_state()
+	vassal_restore_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.ALLIED
+	)
+	vassal_restore_state.suzerainty[1] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	for warehouse_id in vassal_restore_state.nations[1].warehouse_city_ids:
+		vassal_restore_state.cities[warehouse_id].has_warehouse = false
+		vassal_restore_state.cities[warehouse_id].food_storage = 0
+	vassal_restore_state.nations[1].warehouse_city_ids.clear()
+	vassal_restore_state.refresh_derived()
+	var vassal_owner_before := vassal_restore_state.cities[2].owner_nation
+	var vassal_legal_before := vassal_restore_state.recognized_owner_of(2)
+	var vassal_totals_before := _nation_resource_totals(vassal_restore_state)
+	var vassal_restore_rejected := (
+		not vassal_restore_state.restore_regional_loyalty_target(
+			0, 1, [1, 2] as Array[int]
+		)
+	)
+	_check(
+		vassal_restore_rejected
+			and vassal_restore_state.is_allied(0, 1)
+			and not vassal_restore_state.is_enemy(0, 1)
+			and vassal_restore_state.cities[2].owner_nation
+				== vassal_owner_before
+			and vassal_restore_state.recognized_owner_of(2)
+				== vassal_legal_before
+			and _nation_resource_totals(vassal_restore_state)
+				== vassal_totals_before
+			and vassal_restore_state.suzerainty_structure_valid()
+			and vassal_restore_state.territory_structure_valid(),
+		"rebellion/peaceful_suzerainty_restore_rejected_atomically"
 	)
 
 	var dead_target_state := _make_dead_loyalty_target_state()

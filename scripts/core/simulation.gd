@@ -53,8 +53,6 @@ const SIEGE_CITY_FOOD_PER_DAY: int = 1     ## 被围城每日粮草消耗系数
 # ---- 占领 ----
 const CITY_FORT_CAPTURE_MULTIPLIER: float = 0.50
 const CITY_FORT_RECOVERY_DAYS: int = 365
-const CAPITAL_FOOD_CAPTURE_RATE: float = 0.30 ## 首都失守时库存缴获比例，其余损毁
-const CAPITAL_CAPITULATION_CESSION_DEPTH: int = 2
 ## 分封战争加成：宗藩体系处于对外战争时，「不接壤敌国」的后方藩王把贡赋率临时提到此值，
 ## 用后方财税支撑中央战争机器；接壤敌国的前线藩王不加税、以自有军团守卫封地。
 const VASSAL_WARTIME_REAR_TRIBUTE_RATE: float = 0.60
@@ -509,20 +507,10 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_check_victory()
 	# 领土/存亡结算后修复死亡国造成的悬空宗藩记录，保持宗藩不变量。
 	_set_runtime_profile_stage(&"cleanup_suzerainty")
-	if state.prune_dead_suzerainty():
-		state.diplomacy_revision += 1
+	state.prune_dead_suzerainty()
 	state.prune_rebellions()
-	# 再清理宗藩体系内因运行时被占而残留的飞地（优先体系内就近改归，否则割敌），
-	# 使地图不必等到议和即可自愈碎裂领土。
-	_set_runtime_profile_stage(&"cleanup_enclaves")
-	_reassign_disconnected_suzerainty_enclaves()
-	# 飞地清理本身也可能让国家失去最后一城；同日完成投降，再刷新存亡
-	# 与宗藩关系，不能留下“无城但仍参战/仍挂宗藩”的一天中间态。
-	_resolve_eliminated_nation_capitulations()
-	_check_victory()
-	if state.prune_dead_suzerainty():
-		state.diplomacy_revision += 1
-	state.prune_rebellions()
+	# 道路断联只影响通行、补给和防守，不再凭空改变城市实控。
+	# 领土易手必须来自真实攻城、叛乱、分封、兼并或明确和平事务。
 	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留），
 	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
 	_set_runtime_profile_stage(&"cleanup_evict")
@@ -3044,31 +3032,50 @@ func _resolve_eliminated_nation_capitulations() -> void:
 ##   宗主占藩王首都 → 吞并藩王全境，宗藩记录移除。
 ##   藩王占宗主首都 → 藩王继承宗主全部领土；宗主的其余藩王转投胜利藩王；
 ##                    胜利藩王自身升为独立主权（继承整个宗藩体系顶点）。
-func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
-	# 情形一：宗主(claimant)攻破藩王(old_owner)首都 → 吞并藩王。
-	if state.overlord_of(old_owner) == claimant and state.is_in_civil_war(old_owner):
-		state.annex_nation(claimant, old_owner)
-		state.prune_dead_suzerainty()
-		_synchronize_war_gold_income_snapshots()
-		_ai_last_decision_day = -1
-		return true
-	# 情形二：藩王(claimant)攻破宗主(old_owner)首都 → 藩王夺取宗主全部领土并继承体系。
-	if state.overlord_of(claimant) == old_owner and state.is_in_civil_war(claimant):
-		# 兼并原语解除胜者与旧宗主的边，并把旧宗主其余藩王改投胜者。
-		state.annex_nation(claimant, old_owner)
+func _is_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
+	return (
+		(
+			state.overlord_of(old_owner) == claimant
+			and state.is_in_civil_war(old_owner)
+		)
+		or (
+			state.overlord_of(claimant) == old_owner
+			and state.is_in_civil_war(claimant)
+		)
+	)
+
+
+func _finalize_civil_war_capital_annexation(
+	claimant: int,
+	claimant_was_rebel_vassal: bool
+) -> void:
+	if claimant_was_rebel_vassal:
 		WorldNaming.promote_vassal_to_sovereign(state, claimant)
-		state.prune_dead_suzerainty()
-		_synchronize_war_gold_income_snapshots()
-		_ai_last_decision_day = -1
-		return true
-	return false
+	_synchronize_war_gold_income_snapshots()
+	_ai_last_decision_day = -1
 
 
-## 首都失陷后，战败国立即退出全部战争。额外割地严格读取投降瞬间的实控区：
-## 从胜利国实控边境进入战败国实控区最多两跳，禁止逐城转移后继续扩张边界。
+func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
+	if not _is_civil_war_capital_capture(old_owner, claimant):
+		return false
+	var claimant_was_rebel_vassal := (
+		state.overlord_of(claimant) == old_owner
+		and state.is_in_civil_war(claimant)
+	)
+	if not state.annex_nation(claimant, old_owner):
+		return false
+	_finalize_civil_war_capital_annexation(
+		claimant, claimant_was_rebel_vassal
+	)
+	return true
+
+
+## 首都失陷后，战败国立即退出全部战争。首都之外不再免费割让领土；
+## 只有战争中已经实际占领的城市会在集团议和中确认法理。
 func _resolve_capital_capture_capitulation(
 	surrendering: int,
-	victor: int
+	victor: int,
+	captured_capital_id: int
 ) -> Array[int]:
 	if (
 		surrendering < 0
@@ -3078,10 +3085,27 @@ func _resolve_capital_capture_capitulation(
 		or surrendering == victor
 	):
 		return [] as Array[int]
-	var ceded := _cede_capital_frontier_territory(
-		victor,
-		surrendering
-	)
+	var confirmed: Array[int] = []
+	# 首都本身已经被军队实际攻陷，是强制投降协议中唯一直接确认的战果。
+	# 必须先于普通集团和平确认，否则“断联临时占领恢复”会把深入敌境的
+	# 首都误当成普通飞地还给败方。其余未实际占领城市一律不免费割让。
+	var confirmation := {"ok": false, "changed": false}
+	if (
+		captured_capital_id >= 0
+		and captured_capital_id < state.cities.size()
+		and state.cities[captured_capital_id].owner_nation == victor
+	):
+		confirmation = state.transfer_city_sovereignty(
+			captured_capital_id,
+			victor,
+			"capital_capture_capitulation"
+		)
+	if not bool(confirmation.get("ok", false)):
+		return confirmed
+	if (
+		bool(confirmation.get("changed", false))
+	):
+		confirmed.append(captured_capital_id)
 	var opponents := _war_opponents_including_eliminated(
 		surrendering
 	)
@@ -3091,138 +3115,17 @@ func _resolve_capital_capture_capitulation(
 	for opponent in opponents:
 		if not state.is_enemy(surrendering, opponent):
 			continue
-		var cession_reason := ""
-		if opponent == victor and not ceded.is_empty():
-			cession_reason = (
-				"；按国%d实控边境向外两跳割让%d座城市"
-				% [victor, ceded.size()]
-			)
 		_execute_diplomatic_action({
 			"kind": DiplomacyAI.Action.MAKE_PEACE,
 			"a": opponent,
 			"b": surrendering,
 			"surrendering_nation": surrendering,
 			"reason": (
-				"国%d首都失守，向交战国%d投降%s"
-				% [surrendering, opponent, cession_reason]
+				"国%d首都失守，向交战国%d投降"
+				% [surrendering, opponent]
 			),
 		})
-	var remaining := state.cities_of(surrendering)
-	if not remaining.is_empty():
-		var capital_id := state.nations[
-			surrendering
-		].capital_city_id
-		if (
-			capital_id < 0
-			or capital_id >= state.cities.size()
-			or state.cities[capital_id].owner_nation
-				!= surrendering
-		):
-			state.relocate_capital(surrendering)
-	if not ceded.is_empty():
-		_repatriate_abandoned_enclave_armies(ceded)
-	state.refresh_derived()
-	return ceded
-
-
-## 返回投降结算快照中应割让的城市。起点只看 owner_nation（实控），
-## recognized_owner_of（法理）不参与边界判定。
-func _capital_capitulation_cession_cities(
-	victor: int,
-	surrendering: int
-) -> Array[int]:
-	if (
-		victor < 0
-		or surrendering < 0
-		or victor >= state.nations.size()
-		or surrendering >= state.nations.size()
-		or victor == surrendering
-	):
-		return [] as Array[int]
-	var control_snapshot := PackedInt32Array()
-	control_snapshot.resize(state.cities.size())
-	for city in state.cities:
-		control_snapshot[city.id] = city.owner_nation
-	var queued := {}
-	var queue: Array[int] = []
-	var depths := {}
-	for city in state.cities:
-		var controller := int(control_snapshot[city.id])
-		if (
-			controller < 0
-			or state.external_territory_recipient(controller)
-				!= victor
-		):
-			continue
-		for neighbor in state.neighbors(city.id):
-			var edge := state.edge_of(city.id, neighbor)
-			if (
-				control_snapshot[neighbor] != surrendering
-				or edge == null
-				or edge.max_manpower <= 0
-				or queued.has(neighbor)
-			):
-				continue
-			queued[neighbor] = true
-			depths[neighbor] = 1
-			queue.append(neighbor)
-	var cursor := 0
-	while cursor < queue.size():
-		var city_id := queue[cursor]
-		cursor += 1
-		var depth := int(depths[city_id])
-		if depth >= CAPITAL_CAPITULATION_CESSION_DEPTH:
-			continue
-		for neighbor in state.neighbors(city_id):
-			var edge := state.edge_of(city_id, neighbor)
-			if (
-				control_snapshot[neighbor] != surrendering
-				or edge == null
-				or edge.max_manpower <= 0
-				or queued.has(neighbor)
-			):
-				continue
-			queued[neighbor] = true
-			depths[neighbor] = depth + 1
-			queue.append(neighbor)
-	EquivariantOrder.sort_city_ids(queue, state, victor)
-	return queue
-
-
-func _cede_capital_frontier_territory(
-	victor: int,
-	surrendering: int
-) -> Array[int]:
-	var recipient := state.external_territory_recipient(victor)
-	if recipient < 0:
-		return [] as Array[int]
-	var selected := _capital_capitulation_cession_cities(
-		recipient,
-		surrendering
-	)
-	var ceded: Array[int] = []
-	var captured_food := 0
-	for city_id in selected:
-		var city := state.cities[city_id]
-		if city.owner_nation != surrendering:
-			continue
-		if city.has_warehouse:
-			captured_food += city.food_storage
-			state.remove_warehouse(surrendering, city.id)
-			city.food_storage = 0
-		city.is_capital = false
-		city.owner_nation = recipient
-		city.occupation_sponsor_nation = -1
-		state.recognized_city_owners[city.id] = recipient
-		ceded.append(city.id)
-	if ceded.is_empty():
-		return ceded
-	state.ownership_revision += 1
-	state.refresh_derived()
-	_ai_last_decision_day = -1
-	if captured_food > 0:
-		state.deposit_food(recipient, captured_food)
-	return ceded
+	return confirmed
 
 
 func _war_opponents_including_eliminated(nation_id: int) -> Array[int]:
@@ -3264,7 +3167,7 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 	var war_outcome_a := 0.0
 	var war_outcome_b := 0.0
 	var territories_transferred := 0
-	var enclaves_abandoned := 0
+	var occupations_restored := 0
 	var action_bloc_a: Array[int] = [nation_a]
 	var action_bloc_b: Array[int] = [nation_b]
 	match kind:
@@ -3284,8 +3187,8 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 				territories_transferred = int(
 					peace_result.get("territories_transferred", 0)
 				)
-				enclaves_abandoned = int(
-					peace_result.get("enclaves_abandoned", 0)
+				occupations_restored = int(
+					peace_result.get("occupations_restored", 0)
 				)
 				action_bloc_a.assign(
 					peace_result.get("bloc_a", [nation_a])
@@ -3298,10 +3201,10 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 						"；联盟和平确认%d座城市的领土转移"
 						% territories_transferred
 					)
-				if enclaves_abandoned > 0:
+				if occupations_restored > 0:
 					reason += (
-						"；联盟和平割让%d座无法连接首都的飞地"
-						% enclaves_abandoned
+						"；联盟和平恢复%d座断联的临时占领城市"
+						% occupations_restored
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
 			if state.can_alliance_declare_war(nation_a, nation_b):
@@ -3462,8 +3365,7 @@ func _execute_diplomatic_action(action: Dictionary) -> bool:
 		event["war_outcome_a"] = war_outcome_a
 		event["war_outcome_b"] = war_outcome_b
 		event["territories_transferred"] = territories_transferred
-		event["enclaves_abandoned"] = enclaves_abandoned
-		state.resolve_rebellion_peace(nation_a, nation_b)
+		event["occupations_restored"] = occupations_restored
 	if kind in [
 		DiplomacyAI.Action.MAKE_PEACE,
 		DiplomacyAI.Action.DECLARE_WAR,
@@ -3621,10 +3523,30 @@ func _make_coalition_peace(
 	nation_a: int,
 	nation_b: int
 ) -> Dictionary:
+	var plan := _plan_coalition_peace(nation_a, nation_b)
+	if not bool(plan.get("ok", false)):
+		return {
+			"changed": false,
+			"error": str(plan.get("error", "无法规划集团和平。")),
+		}
+	if not bool(plan.get("changed", false)):
+		return {"changed": false}
+	return _commit_coalition_peace_plan(plan)
+
+
+## 只读旧快照；保存两类 revision，并把全部和平效果合成到共享 draft。
+func _plan_coalition_peace(
+	nation_a: int,
+	nation_b: int
+) -> Dictionary:
+	if state == null:
+		return {"ok": false, "changed": false, "error": "游戏状态不存在。"}
+	var expected_ownership_revision := state.ownership_revision
+	var expected_diplomacy_revision := state.diplomacy_revision
 	var bloc_a := state.alliance_bloc(nation_a, false)
 	var bloc_b := state.alliance_bloc(nation_b, false)
 	if bloc_a.is_empty() or bloc_b.is_empty():
-		return {"changed": false}
+		return {"ok": true, "changed": false}
 	var war_outcome_a := DiplomacyAI.war_situation_score(
 		state,
 		nation_a,
@@ -3635,7 +3557,9 @@ func _make_coalition_peace(
 		nation_b,
 		nation_a
 	)
-	var changed := false
+	var settled_war_pairs := {}
+	var settled_pairs: Array[Vector2i] = []
+	var diplomatic_operations: Array[Dictionary] = []
 	for member_a in bloc_a:
 		for member_b in bloc_b:
 			if not state.is_enemy(member_a, member_b):
@@ -3645,159 +3569,743 @@ func _make_coalition_peace(
 			# 关系 WAR）尤其危险：宗主与内战藩王可能分属对立集团，bloc 展开会把这对
 			# WAR 扫进来，若在此停战会抹掉 WAR 却留下 civil_war 标记，破坏宗藩不变量
 			# 第2条。内战只能由占首都通吃终结，故整对跳过（关系与双边战斗都不动）。
-			if state.is_suzerainty_pair(member_a, member_b):
-				continue
-			changed = (
-				state.set_diplomatic_relation(
-					member_a,
-					member_b,
-					GameState.DiplomaticRelation.NEUTRAL,
-					GameState.DEFAULT_TRUCE_DAYS
+			if (
+				state.is_suzerainty_pair(member_a, member_b)
+				and (
+					state.is_in_civil_war(member_a)
+					or state.is_in_civil_war(member_b)
 				)
-				or changed
+			):
+				continue
+			settled_war_pairs[
+				GameState.edge_key(member_a, member_b)
+			] = true
+			settled_pairs.append(Vector2i(member_a, member_b))
+			diplomatic_operations.append({
+				"nation_a": member_a,
+				"nation_b": member_b,
+				"relation": GameState.DiplomaticRelation.NEUTRAL,
+				"truce_days": GameState.DEFAULT_TRUCE_DAYS,
+			})
+	if diplomatic_operations.is_empty():
+		return {"ok": true, "changed": false}
+
+	# 关系提交后已无法反推 parent/rebel 原战争边，故同样冻结于议和前。
+	var rebellion_peace_pairs: Array[Vector2i] = []
+	var rebel_ids: Array[int] = []
+	for rebel_value in state.rebellions:
+		var rebel_id := int(rebel_value)
+		var rebellion: Dictionary = state.rebellions[rebel_id]
+		if bool(rebellion.get("active", false)):
+			rebel_ids.append(rebel_id)
+	rebel_ids.sort()
+	for rebel_id in rebel_ids:
+		var rebellion: Dictionary = state.rebellions[rebel_id]
+		var parent_id := int(rebellion.get("parent_id", -1))
+		if (
+			parent_id >= 0
+			and parent_id < state.nations.size()
+			and rebel_id >= 0
+			and rebel_id < state.nations.size()
+			and settled_war_pairs.has(
+				GameState.edge_key(parent_id, rebel_id)
 			)
-	if not changed:
-		return {"changed": false}
-	_synchronize_war_gold_income_snapshots()
-	_reconcile_battles_after_coalition_peace(
-		bloc_a,
-		bloc_b
+		):
+			rebellion_peace_pairs.append(Vector2i(parent_id, rebel_id))
+
+	var owners: Array[int] = []
+	var legal: Array[int] = []
+	var sponsors: Array[int] = []
+	owners.resize(state.cities.size())
+	legal.resize(state.cities.size())
+	sponsors.resize(state.cities.size())
+	for city in state.cities:
+		owners[city.id] = city.owner_nation
+		legal[city.id] = state.recognized_owner_of(city.id)
+		sponsors[city.id] = city.occupation_sponsor_nation
+	var draft := {
+		"owners": owners,
+		"legal": legal,
+		"sponsors": sponsors,
+		"operation_by_city": {},
+		"proposed_suzerainty": state.suzerainty.duplicate(true),
+	}
+	_plan_disconnected_coalition_occupation_restoration(
+		draft, bloc_a, bloc_b, settled_war_pairs
 	)
-	var abandoned := _abandon_coalition_disconnected_enclaves(
-		bloc_a,
-		bloc_b
+	_plan_coalition_occupation_recognition(
+		draft, bloc_a, bloc_b, settled_war_pairs
 	)
-	var transferred := (
-		state.recognize_coalition_occupied_territory(
-			bloc_a,
-			bloc_b
+	var rebellion_plan := _plan_coalition_rebellion_peace(
+		draft, rebellion_peace_pairs
+	)
+	if not bool(rebellion_plan.get("ok", false)):
+		return {
+			"ok": false,
+			"changed": false,
+			"error": str(rebellion_plan.get(
+				"error", "无法规划地方叛乱和平。"
+			)),
+		}
+	_plan_peaceful_occupation_normalization(
+		draft, settled_war_pairs
+	)
+	var territories_transferred := _coalition_plan_operation_count(
+		draft, "coalition_territory_recognized"
+	)
+	var occupations_restored := _coalition_plan_operation_count(
+		draft, "peace_occupation_restored"
+	)
+	var occupations_normalized := _coalition_plan_operation_count(
+		draft, "peaceful_occupation_normalized"
+	)
+	# annex planner 可能替换 map；最终只从 operation_by_city 重建数组。
+	var operation_ids: Array[int] = []
+	var operation_by_city: Dictionary = draft["operation_by_city"]
+	for city_value in operation_by_city:
+		operation_ids.append(int(city_value))
+	operation_ids.sort()
+	var operations: Array[Dictionary] = []
+	for city_id in operation_ids:
+		operations.append(
+			(operation_by_city[city_id] as Dictionary).duplicate(true)
 		)
+	return {
+		"ok": true,
+		"changed": true,
+		"war_outcome_a": war_outcome_a,
+		"war_outcome_b": war_outcome_b,
+		"territories_transferred": territories_transferred,
+		"occupations_restored": occupations_restored,
+		"occupations_normalized": occupations_normalized,
+		"bloc_a": bloc_a,
+		"bloc_b": bloc_b,
+		"settled_pairs": settled_pairs,
+		"operations": operations,
+		"diplomatic_operations": diplomatic_operations,
+		"proposed_suzerainty": (
+			(draft["proposed_suzerainty"] as Dictionary).duplicate(true)
+		),
+		"pre_suzerainty": state.suzerainty.duplicate(true),
+		"rebellion_updates": rebellion_plan.get("updates", []),
+		"annexations": rebellion_plan.get("annexations", []),
+		"expected_ownership_revision": expected_ownership_revision,
+		"expected_diplomacy_revision": expected_diplomacy_revision,
+	}
+
+
+## 唯一提交点。事务拒绝时不执行战斗、军队、叛乱、目标、动员或财政收尾；
+## 成功后剩余动作只消费已提交结果，不再含可失败的状态转换。
+func _commit_coalition_peace_plan(plan: Dictionary) -> Dictionary:
+	if not bool(plan.get("ok", false)) or not bool(
+		plan.get("changed", false)
+	):
+		return {
+			"changed": false,
+			"error": str(plan.get("error", "集团和平计划无效。")),
+		}
+	var operations: Array[Dictionary] = []
+	for operation_value in plan.get("operations", []):
+		operations.append(operation_value as Dictionary)
+	var diplomatic_operations: Array[Dictionary] = []
+	for operation_value in plan.get("diplomatic_operations", []):
+		diplomatic_operations.append(operation_value as Dictionary)
+	var transaction := state.apply_territory_transaction(
+		operations,
+		{},
+		int(plan.get("expected_ownership_revision", -1)),
+		plan.get("proposed_suzerainty", null),
+		diplomatic_operations,
+		int(plan.get("expected_diplomacy_revision", -1))
 	)
-	# 议和中的割地与占领确认可能消灭藩王/宗主；必须在同一外交事务
-	# 清理悬空宗藩，不能留下到下一日才修复的无城成员。
-	state.refresh_derived()
-	if state.prune_dead_suzerainty():
-		state.diplomacy_revision += 1
-	for member_a in bloc_a:
-		for member_b in bloc_b:
-			state.clear_war_objective(member_a, member_b)
+	if not bool(transaction.get("ok", false)):
+		return {
+			"changed": false,
+			"error": str(transaction.get("error", "集团和平提交失败。")),
+		}
+	if not bool(transaction.get("changed", false)):
+		return {"changed": false}
+
+	for annexation_value in plan.get("annexations", []):
+		var annexation := Vector2i(annexation_value)
+		state.finalize_annexation_after_territory_commit(
+			annexation.x, annexation.y
+		)
+	for update_value in plan.get("rebellion_updates", []):
+		var update: Dictionary = update_value
+		var rebel_id := int(update.get("rebel_id", -1))
+		if rebel_id < 0 or not state.rebellions.has(rebel_id):
+			continue
+		var record: Dictionary = state.rebellions[rebel_id]
+		record["active"] = false
+		record["recognized"] = bool(update.get("recognized", false))
+		state.rebellions[rebel_id] = record
+		if not bool(update.get("suppressed", false)):
+			continue
+		var parent_id := int(update.get("parent_id", -1))
+		for city_value in update.get("core_city_ids", []):
+			var city_id := int(city_value)
+			if city_id < 0 or city_id >= state.cities.size():
+				continue
+			var city := state.cities[city_id]
+			city.loyalty_target_nation = parent_id
+			city.loyalty = 45.0
+			city.unrest = 55.0
+			city.rebellion_progress = 0
+			city.rebellion_cooldown_until_day = (
+				state.day + RebellionSystem.REBELLION_COOLDOWN_DAYS
+			)
+
+	# 事务自动清理死亡宗主时，存活而独立的旧藩王需要同步命名身份。
+	var pre_suzerainty: Dictionary = plan.get("pre_suzerainty", {})
+	for subject_value in pre_suzerainty:
+		var subject_id := int(subject_value)
+		if (
+			subject_id >= 0
+			and subject_id < state.nations.size()
+			and state.nations[subject_id].alive
+			and not state.suzerainty.has(subject_id)
+		):
+			WorldNaming.promote_vassal_to_sovereign(state, subject_id)
+
+	_synchronize_war_gold_income_snapshots()
+	var bloc_a: Array[int] = []
+	bloc_a.assign(plan.get("bloc_a", []))
+	var bloc_b: Array[int] = []
+	bloc_b.assign(plan.get("bloc_b", []))
+	_reconcile_battles_after_coalition_peace(bloc_a, bloc_b)
+	var changed_city_ids: Array[int] = []
+	for city_value in transaction.get("changed_city_ids", []):
+		changed_city_ids.append(int(city_value))
+	if not changed_city_ids.is_empty():
+		_repatriate_after_territory_settlement(changed_city_ids)
+	for pair_value in plan.get("settled_pairs", []):
+		var pair := Vector2i(pair_value)
+		state.clear_war_objective(pair.x, pair.y)
 	for member in bloc_a + bloc_b:
 		_clear_finished_war_mobilization(member)
 	_ai_last_decision_day = -1
 	return {
 		"changed": true,
-		"war_outcome_a": war_outcome_a,
-		"war_outcome_b": war_outcome_b,
-		"territories_transferred": transferred.size(),
-		"enclaves_abandoned": abandoned.size(),
+		"war_outcome_a": float(plan.get("war_outcome_a", 0.0)),
+		"war_outcome_b": float(plan.get("war_outcome_b", 0.0)),
+		"territories_transferred": int(plan.get(
+			"territories_transferred", 0
+		)),
+		"occupations_restored": int(plan.get(
+			"occupations_restored", 0
+		)),
+		"occupations_normalized": int(plan.get(
+			"occupations_normalized", 0
+		)),
 		"bloc_a": bloc_a,
 		"bloc_b": bloc_b,
 	}
 
 
-func _abandon_coalition_disconnected_enclaves(
+func _append_coalition_territory_operation(
+	draft: Dictionary,
+	city_id: int,
+	controller_id: int,
+	legal_owner_id: int,
+	sponsor_id: int,
+	reason: String,
+	stock_policy: int
+) -> void:
+	var owners: Array = draft["owners"]
+	var legal: Array = draft["legal"]
+	var sponsors: Array = draft["sponsors"]
+	var operation_by_city: Dictionary = draft["operation_by_city"]
+	owners[city_id] = controller_id
+	legal[city_id] = legal_owner_id
+	sponsors[city_id] = sponsor_id
+	operation_by_city[city_id] = {
+		"city_id": city_id,
+		"controller_id": controller_id,
+		"legal_owner_id": legal_owner_id,
+		"sponsor_id": sponsor_id,
+		"reset_political_target": true,
+		"reason": reason,
+		"stock_policy": stock_policy,
+	}
+
+
+func _coalition_plan_operation_count(
+	draft: Dictionary,
+	reason: String
+) -> int:
+	var count := 0
+	var operation_by_city: Dictionary = draft["operation_by_city"]
+	for city_value in operation_by_city:
+		var operation: Dictionary = operation_by_city[city_value]
+		if str(operation.get("reason", "")) == reason:
+			count += 1
+	return count
+
+
+func _plan_disconnected_coalition_occupation_restoration(
+	draft: Dictionary,
 	bloc_a: Array[int],
-	bloc_b: Array[int]
+	bloc_b: Array[int],
+	settled_war_pairs: Dictionary
 ) -> Array[int]:
+	var side_a := {}
+	var side_b := {}
+	for nation_id in bloc_a:
+		side_a[nation_id] = true
+	for nation_id in bloc_b:
+		side_b[nation_id] = true
+	var connected_by_nation := {}
+	for nation_id in bloc_a + bloc_b:
+		if _coalition_plan_nation_has_city(draft, nation_id):
+			connected_by_nation[nation_id] = (
+				_planned_capital_connected_territory(nation_id, draft)
+			)
+	var restored: Array[int] = []
+	var owners: Array = draft["owners"]
+	var legal: Array = draft["legal"]
+	var sponsors: Array = draft["sponsors"]
+	for controller in bloc_a + bloc_b:
+		if not connected_by_nation.has(controller):
+			continue
+		var current_side: Dictionary = side_a if side_a.has(controller) else side_b
+		var opposing_side: Dictionary = side_b if side_a.has(controller) else side_a
+		var connected: Dictionary = connected_by_nation[controller]
+		for city_id in range(state.cities.size()):
+			var recognized_owner := int(legal[city_id])
+			if (
+				int(owners[city_id]) != controller
+				or recognized_owner == controller
+				or not opposing_side.has(recognized_owner)
+				or connected.has(city_id)
+			):
+				continue
+			var sponsor := int(sponsors[city_id])
+			var valid_sponsor := sponsor >= 0 and sponsor < state.nations.size()
+			if valid_sponsor:
+				if not current_side.has(sponsor):
+					continue
+				if not settled_war_pairs.has(
+					GameState.edge_key(sponsor, recognized_owner)
+				):
+					continue
+			_append_coalition_territory_operation(
+				draft, city_id, recognized_owner, recognized_owner, -1,
+				"peace_occupation_restored",
+				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			)
+			restored.append(city_id)
+	return restored
+
+
+func _plan_coalition_occupation_recognition(
+	draft: Dictionary,
+	bloc_a: Array[int],
+	bloc_b: Array[int],
+	settled_war_pairs: Dictionary
+) -> Array[int]:
+	var side_a := {}
+	var side_b := {}
+	for nation_id in bloc_a:
+		side_a[nation_id] = true
+	for nation_id in bloc_b:
+		side_b[nation_id] = true
+	var transferred: Array[int] = []
+	var owners: Array = draft["owners"]
+	var legal: Array = draft["legal"]
+	var sponsors: Array = draft["sponsors"]
+	for city_id in range(state.cities.size()):
+		var controller := int(owners[city_id])
+		var recognized_owner := int(legal[city_id])
+		if controller == recognized_owner:
+			continue
+		var sponsor := int(sponsors[city_id])
+		if (
+			sponsor >= 0
+			and sponsor < state.nations.size()
+			and not settled_war_pairs.has(
+				GameState.edge_key(sponsor, recognized_owner)
+			)
+		):
+			continue
+		var occupying_side := -1
+		if side_a.has(sponsor):
+			occupying_side = 0
+		elif side_b.has(sponsor):
+			occupying_side = 1
+		elif side_a.has(controller):
+			occupying_side = 0
+		elif side_b.has(controller):
+			occupying_side = 1
+		var recognized_side := -1
+		if side_a.has(recognized_owner):
+			recognized_side = 0
+		elif side_b.has(recognized_owner):
+			recognized_side = 1
+		if (
+			occupying_side < 0
+			or recognized_side < 0
+			or occupying_side == recognized_side
+		):
+			continue
+		var recipient := _planned_external_territory_recipient(
+			controller, draft
+		)
+		if recipient < 0:
+			continue
+		_append_coalition_territory_operation(
+			draft, city_id, recipient, recipient, -1,
+			"coalition_territory_recognized",
+			GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+		)
+		transferred.append(city_id)
+	return transferred
+
+
+func _plan_coalition_rebellion_peace(
+	draft: Dictionary,
+	rebellion_peace_pairs: Array[Vector2i]
+) -> Dictionary:
+	var updates: Array[Dictionary] = []
+	var annexations: Array[Vector2i] = []
+	var frozen_owners: Array = (draft["owners"] as Array).duplicate()
+	var outcomes := {}
+	var suppressed_parents := {}
+	# 所有结果必须读取同一份 restore/recognize 后快照；前一场叛乱的
+	# recognize/annex 计划不得改变后一场叛乱是承认还是镇压的判定。
+	for rebellion_pair in rebellion_peace_pairs:
+		var parent_id := rebellion_pair.x
+		var rebel_id := rebellion_pair.y
+		if not state.rebellions.has(rebel_id):
+			continue
+		var record: Dictionary = state.rebellions[rebel_id]
+		var core_city_ids: Array[int] = []
+		var controls_core := false
+		for city_value in record.get("core_city_ids", []):
+			var city_id := int(city_value)
+			core_city_ids.append(city_id)
+			if (
+				city_id >= 0
+				and city_id < state.cities.size()
+				and int(frozen_owners[city_id]) == rebel_id
+			):
+				controls_core = true
+		outcomes[rebel_id] = {
+			"parent_id": parent_id,
+			"core_city_ids": core_city_ids,
+			"recognized": controls_core,
+		}
+		if not controls_core:
+			suppressed_parents[rebel_id] = parent_id
+
+	# 承认项先基于冻结分类落法理；这一步仍不改变任何后续 outcome。
+	var outcome_ids: Array[int] = []
+	for rebel_value in outcomes:
+		outcome_ids.append(int(rebel_value))
+	outcome_ids.sort()
+	for rebel_id in outcome_ids:
+		var outcome: Dictionary = outcomes[rebel_id]
+		if not bool(outcome["recognized"]):
+			continue
+		var core_city_ids: Array[int] = []
+		core_city_ids.assign(outcome["core_city_ids"])
+		for city_id in core_city_ids:
+			if (
+				city_id < 0
+				or city_id >= state.cities.size()
+				or int(frozen_owners[city_id]) != rebel_id
+			):
+				continue
+			_append_coalition_territory_operation(
+				draft, city_id, rebel_id, rebel_id, -1,
+				"regional_rebellion_recognized",
+				GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL
+			)
+		updates.append({
+			"rebel_id": rebel_id,
+			"parent_id": int(outcome["parent_id"]),
+			"recognized": true,
+			"suppressed": false,
+			"core_city_ids": core_city_ids,
+		})
+
+	# 镇压链统一解析到最终仍存活的 absorber。P<-R1、R1<-R2 必须规划为
+	# P<-R1 与 P<-R2；否则先吞 R1 再让 R1 吞 R2 会把中间叛军复活。
+	for rebel_id in outcome_ids:
+		var outcome: Dictionary = outcomes[rebel_id]
+		if bool(outcome["recognized"]):
+			continue
+		var final_absorber := int(outcome["parent_id"])
+		var seen := {rebel_id: true}
+		var guard := 0
+		while suppressed_parents.has(final_absorber):
+			if seen.has(final_absorber) or guard > state.nations.size():
+				return {"ok": false, "error": "地方叛乱镇压链包含环。"}
+			seen[final_absorber] = true
+			final_absorber = int(suppressed_parents[final_absorber])
+			guard += 1
+		if (
+			final_absorber < 0
+			or final_absorber >= state.nations.size()
+			or final_absorber == rebel_id
+			or not _coalition_plan_nation_has_city(
+				draft, final_absorber
+			)
+		):
+			return {"ok": false, "error": "地方叛乱镇压链没有有效最终接收者。"}
+		if not state.append_annexation_to_territory_plan(
+			draft, final_absorber, rebel_id
+		):
+			return {
+				"ok": false,
+				"error": "无法把地方叛乱镇压合并进和平事务。",
+			}
+		var core_city_ids: Array[int] = []
+		core_city_ids.assign(outcome["core_city_ids"])
+		annexations.append(Vector2i(final_absorber, rebel_id))
+		updates.append({
+			"rebel_id": rebel_id,
+			"parent_id": final_absorber,
+			"recognized": false,
+			"suppressed": true,
+			"core_city_ids": core_city_ids,
+		})
+	return {
+		"ok": true,
+		"updates": updates,
+		"annexations": annexations,
+	}
+
+
+func _plan_peaceful_occupation_normalization(
+	draft: Dictionary,
+	settled_war_pairs: Dictionary
+) -> Array[int]:
+	var normalized: Array[int] = []
+	var owners: Array = draft["owners"]
+	var legal: Array = draft["legal"]
+	var sponsors: Array = draft["sponsors"]
+	for city_id in range(state.cities.size()):
+		var controller := int(owners[city_id])
+		var legal_owner := int(legal[city_id])
+		if controller == legal_owner:
+			continue
+		var sponsor := int(sponsors[city_id])
+		var sponsor_at_war := (
+			sponsor >= 0
+			and sponsor < state.nations.size()
+			and _planned_coalition_relation(
+				sponsor, legal_owner, draft, settled_war_pairs
+			) == GameState.DiplomaticRelation.WAR
+		)
+		if sponsor_at_war:
+			continue
+		_append_coalition_territory_operation(
+			draft, city_id, legal_owner, legal_owner, -1,
+			"peaceful_occupation_normalized",
+			GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+		)
+		normalized.append(city_id)
+	return normalized
+
+
+func _coalition_plan_nation_has_city(
+	draft: Dictionary,
+	nation_id: int
+) -> bool:
+	for owner_value in draft["owners"]:
+		if int(owner_value) == nation_id:
+			return true
+	return false
+
+
+func _planned_suzerainty_root(
+	nation_id: int,
+	proposed_suzerainty: Dictionary
+) -> int:
+	var current := nation_id
+	var guard := 0
+	while proposed_suzerainty.has(current) and guard <= state.nations.size():
+		current = int(
+			(proposed_suzerainty[current] as Dictionary).get(
+				"overlord_id", current
+			)
+		)
+		guard += 1
+	return current
+
+
+func _planned_external_territory_recipient(
+	nation_id: int,
+	draft: Dictionary
+) -> int:
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return -1
+	var proposed_suzerainty: Dictionary = draft["proposed_suzerainty"]
+	var current := nation_id
+	var guard := 0
+	while proposed_suzerainty.has(current) and guard <= state.nations.size():
+		var record: Dictionary = proposed_suzerainty[current]
+		if bool(record.get("civil_war", false)):
+			break
+		var overlord_id := int(record.get("overlord_id", -1))
+		if (
+			overlord_id < 0
+			or overlord_id >= state.nations.size()
+			or not _coalition_plan_nation_has_city(draft, overlord_id)
+		):
+			break
+		current = overlord_id
+		guard += 1
+	return current
+
+
+func _planned_coalition_relation(
+	nation_a: int,
+	nation_b: int,
+	draft: Dictionary,
+	settled_war_pairs: Dictionary
+) -> int:
+	if nation_a == nation_b:
+		return GameState.DiplomaticRelation.ALLIED
+	if settled_war_pairs.has(GameState.edge_key(nation_a, nation_b)):
+		return GameState.DiplomaticRelation.NEUTRAL
+	var proposed_suzerainty: Dictionary = draft["proposed_suzerainty"]
+	for subject_id in [nation_a, nation_b]:
+		if not proposed_suzerainty.has(subject_id):
+			continue
+		var record: Dictionary = proposed_suzerainty[subject_id]
+		var other_id := nation_b if subject_id == nation_a else nation_a
+		if int(record.get("overlord_id", -1)) == other_id:
+			return (
+				GameState.DiplomaticRelation.WAR
+				if bool(record.get("civil_war", false))
+				else GameState.DiplomaticRelation.ALLIED
+			)
+	return state.relation_between(nation_a, nation_b)
+
+
+func _planned_capital_connected_territory(
+	nation_id: int,
+	draft: Dictionary
+) -> Dictionary:
+	var capital_id := state.nations[nation_id].capital_city_id
+	var owners: Array = draft["owners"]
+	if (
+		capital_id < 0
+		or capital_id >= state.cities.size()
+		or int(owners[capital_id]) != nation_id
+	):
+		return {}
+	var proposed_suzerainty: Dictionary = draft["proposed_suzerainty"]
+	var root := _planned_suzerainty_root(nation_id, proposed_suzerainty)
+	var connected := {capital_id: true}
+	var queue: Array[int] = [capital_id]
+	var cursor := 0
+	while cursor < queue.size():
+		var city_id := queue[cursor]
+		cursor += 1
+		for neighbor in state.neighbors(city_id):
+			var edge := state.edge_of(city_id, neighbor)
+			var neighbor_owner := int(owners[neighbor])
+			if (
+				connected.has(neighbor)
+				or edge == null
+				or edge.max_manpower <= 0
+				or _planned_suzerainty_root(
+					neighbor_owner, proposed_suzerainty
+				) != root
+				or _planned_coalition_relation(
+					nation_id, neighbor_owner, draft, {}
+				) != GameState.DiplomaticRelation.ALLIED
+			):
+				continue
+			connected[neighbor] = true
+			queue.append(neighbor)
+	return connected
+
+
+func _restore_disconnected_coalition_occupations(
+	bloc_a: Array[int],
+	bloc_b: Array[int],
+	settled_war_pairs: Dictionary = {}
+) -> Array[int]:
+	var side_a := {}
+	var side_b := {}
+	for nation_id in bloc_a:
+		side_a[nation_id] = true
+	for nation_id in bloc_b:
+		side_b[nation_id] = true
 	var connected_by_nation := {}
 	for nation_id in bloc_a + bloc_b:
 		if not state.cities_of(nation_id).is_empty():
 			connected_by_nation[nation_id] = (
 				_capital_connected_territory(nation_id)
 			)
-	var cessions: Array[Dictionary] = []
-	for former_owner in bloc_a + bloc_b:
-		if not connected_by_nation.has(former_owner):
+	# 合法飞地不会仅因议和而割让。这里只撤销无法连接控制者首都、
+	# 法理属于对方集团的临时占领；有效 sponsor 还必须来自控制方集团。
+	var restorations: Array[Dictionary] = []
+	for controller in bloc_a + bloc_b:
+		if not connected_by_nation.has(controller):
 			continue
-		var opposing_bloc := bloc_b if bloc_a.has(former_owner) else bloc_a
-		var connected: Dictionary = connected_by_nation[former_owner]
+		var current_side: Dictionary = side_a if side_a.has(controller) else side_b
+		var opposing_side: Dictionary = side_b if side_a.has(controller) else side_a
+		var connected: Dictionary = connected_by_nation[controller]
 		for city in state.cities:
+			var recognized_owner := state.recognized_owner_of(city.id)
 			if (
-				city.owner_nation != former_owner
+				city.owner_nation != controller
+				or recognized_owner == controller
+				or not opposing_side.has(recognized_owner)
 				or connected.has(city.id)
 			):
 				continue
-			var recipient := _nearest_coalition_recipient(
-				city.id,
-				former_owner,
-				opposing_bloc
+			var sponsor := city.occupation_sponsor_nation
+			var valid_sponsor := (
+				sponsor >= 0 and sponsor < state.nations.size()
 			)
-			recipient = state.external_territory_recipient(recipient)
-			if recipient >= 0:
-				cessions.append({
-					"city": city,
-					"former_owner": former_owner,
-					"recipient": recipient,
-				})
-	if cessions.is_empty():
-		return [] as Array[int]
-	var abandoned: Array[int] = []
-	for cession in cessions:
-		var city: City = cession["city"]
-		var former_owner := int(cession["former_owner"])
-		var recipient := int(cession["recipient"])
-		var stored_food := city.food_storage if city.has_warehouse else 0
-		if (
-			city.has_warehouse
-			or city.is_capital
-			or state.nations[former_owner].capital_city_id
-				== city.id
-		):
-			state.remove_warehouse(former_owner, city.id)
-			city.food_storage = 0
-		city.owner_nation = recipient
-		city.occupation_sponsor_nation = -1
-		state.recognized_city_owners[city.id] = recipient
-		if stored_food > 0:
-			state.deposit_food(recipient, stored_food)
-		abandoned.append(city.id)
-	state.ownership_revision += 1
-	var former_owners := {}
-	for cession in cessions:
-		former_owners[int(cession["former_owner"])] = true
-	for former_value in former_owners:
-		state.ensure_valid_capital(int(former_value))
-	state.refresh_derived()
-	_ai_last_decision_day = -1
-	_repatriate_abandoned_enclave_armies(abandoned)
-	return abandoned
-
-
-func _nearest_coalition_recipient(
-	city_id: int,
-	former_owner: int,
-	opposing_bloc: Array[int]
-) -> int:
-	var city := state.cities[city_id]
-	var best_nation := -1
-	var best_distance := INF
-	for candidate in opposing_bloc:
-		for candidate_city in state.cities_of(candidate):
-			var distance := city.map_position.distance_squared_to(
-				candidate_city.map_position
-			)
-			if (
-				distance < best_distance
-				or (
-					is_equal_approx(distance, best_distance)
-					and (
-						best_nation < 0
-						or EquivariantOrder.nation_less(
-							state,
-							former_owner,
-							candidate,
-							best_nation
-						)
+			# 有效声明只随 sponsor 与法理方的这场战争结算；controller
+			# 与法理方的另一场战争不能串案。无效声明视为脏状态并恢复法理。
+			if valid_sponsor:
+				if not current_side.has(sponsor):
+					continue
+				if (
+					not settled_war_pairs.has(
+						GameState.edge_key(sponsor, recognized_owner)
 					)
-				)
-			):
-				best_distance = distance
-				best_nation = candidate
-	return best_nation
-
+				):
+					continue
+			restorations.append({
+				"city_id": city.id,
+				"controller_id": recognized_owner,
+				"legal_owner_id": recognized_owner,
+				"sponsor_id": -1,
+				"reset_political_target": true,
+				"reason": "peace_occupation_restored",
+				"stock_policy": (
+					GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+				),
+			})
+	if restorations.is_empty():
+		return [] as Array[int]
+	var restore_result := state.apply_territory_transaction(
+		restorations
+	)
+	if not bool(restore_result.get("ok", false)):
+		return [] as Array[int]
+	var restored: Array[int] = []
+	for city_value in restore_result.get(
+		"changed_city_ids", []
+	):
+		restored.append(int(city_value))
+	if restored.is_empty():
+		return restored
+	_ai_last_decision_day = -1
+	_repatriate_after_territory_settlement(restored)
+	return restored
 
 ## 返回 nation_id 所属和平宗藩体系内，从该国首都沿正容量道路可达的实控区。
-## 用于集团议和与每日宗藩飞地判断；普通盟国不提供领土连续性。
+## 仅用于集团议和识别断联临时占领；普通盟国不提供领土连续性。
 func _capital_connected_territory(nation_id: int) -> Dictionary:
 	var capital_id := state.nations[nation_id].capital_city_id
 	if (
@@ -3805,8 +4313,6 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 		or capital_id >= state.cities.size()
 		or state.cities[capital_id].owner_nation != nation_id
 	):
-		capital_id = state.relocate_capital(nation_id)
-	if capital_id < 0:
 		return {}
 	var suzerainty_root := state.suzerainty_root(nation_id)
 	var connected := {capital_id: true}
@@ -3841,17 +4347,17 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 	return connected
 
 
-func _repatriate_abandoned_enclave_armies(
-	abandoned: Array[int]
+func _repatriate_after_territory_settlement(
+	settled_cities: Array[int]
 ) -> void:
-	var abandoned_set := {}
-	for city_id in abandoned:
-		abandoned_set[city_id] = true
+	var settled_set := {}
+	for city_id in settled_cities:
+		settled_set[city_id] = true
 	for army in state.armies:
 		if army.size <= 0:
 			continue
 		var affected := false
-		for city_id in abandoned:
+		for city_id in settled_cities:
 			if (
 				not state.has_military_access(
 					army.owner_nation,
@@ -3875,7 +4381,7 @@ func _repatriate_abandoned_enclave_armies(
 		if army.on_edge and army.move_to != -1:
 			army.diplomatic_repatriation = true
 			_retreat(army)
-		elif abandoned_set.has(army.location_city):
+		elif settled_set.has(army.location_city):
 			_start_diplomatic_repatriation(
 				army,
 				army.location_city
@@ -3887,195 +4393,8 @@ func _repatriate_abandoned_enclave_armies(
 				army.owner_nation
 			].manpower_pool += repatriated_manpower
 			army.ai_action = ActionCandidate.Kind.DISBAND_ARMY
-			army.ai_order_reason = "和平割让飞地，无陆路可撤时按协议复员"
+			army.ai_order_reason = "和平领土结算，无陆路可撤时按协议复员"
 	_purge_dead_armies()
-
-
-## 每日维护：清理宗藩体系内因运行时被占而残留的飞地（非议和路径也能自愈）。
-## 飞地 = 体系成员实控、但无法沿「体系可通行道路」连回体系首都的城（体系被视为一个整体，
-## 藩王领土经宗主领土连通亦算连续）。这里只结算战时实际控制，不直接改写法理：
-##  - 和平或仅邻接中立国时不转移；地理断联本身不是合法割地协议。
-##  - 被敌对体系隔断且组件内无本体系军队时，整块进入敌方宗主的临时占领；
-##    recognized_owner 保持原值，只有后续集团议和才会确认法理转移。
-## 只在存在宗藩关系且归属发生变化后运行，避免每日热路径空转。
-func _reassign_disconnected_suzerainty_enclaves() -> void:
-	if state.suzerainty.is_empty():
-		return
-	var members_by_root := {}
-	for nation in state.nations:
-		if not nation.alive or state.cities_of(nation.id).is_empty():
-			continue
-		var root := state.suzerainty_root(nation.id)
-		if not members_by_root.has(root):
-			members_by_root[root] = [] as Array[int]
-		(members_by_root[root] as Array[int]).append(nation.id)
-	var roots := members_by_root.keys()
-	roots.sort()
-	var reassigned_any := false
-	for root_value in roots:
-		var root := int(root_value)
-		var members: Array[int] = members_by_root[root]
-		if members.size() < 2:
-			continue
-		if _reassign_system_enclaves(root, members):
-			reassigned_any = true
-	if reassigned_any:
-		state.ownership_revision += 1
-		state.diplomacy_revision += 1
-		_ai_last_decision_day = -1
-
-
-## 处理单个宗藩体系（根 root、成员 members）的飞地。返回是否发生任何归属变更。
-## connected = 从体系首都出发、沿「同体系成员实控 + 正容量道路」可达的全部城（体系本土）。
-## 把每个「非本土」的体系城按其飞地连通组件聚合。仅相邻敌对体系且无本体系守军
-## 时改变实控；同体系内部不因断联自动重划封地，体系外中立邻国也不能无协议受领。
-func _reassign_system_enclaves(root: int, members: Array[int]) -> bool:
-	var member_set := {}
-	for member_id in members:
-		member_set[member_id] = true
-	var connected := _capital_connected_territory(root)
-	var enclave_cities: Array[int] = []
-	for member_id in members:
-		for city in state.cities_of(member_id):
-			var legal_owner := state.recognized_owner_of(city.id)
-			if (
-				member_set.has(legal_owner)
-				and not connected.has(city.id)
-			):
-				enclave_cities.append(city.id)
-	if enclave_cities.is_empty():
-		return false
-	enclave_cities.sort()
-	var visited := {}
-	var changed := false
-	var affected_former_owners := {}
-	for seed_city in enclave_cities:
-		if visited.has(seed_city):
-			continue
-		# BFS 出该飞地的连通组件（只沿体系成员实控的城 + 正容量道路），
-		# 同时记录组件外沿相邻的体系外国家（用于决定和平改归或战争割敌）。
-		var component: Array[int] = []
-		var adjacent_external_owners := {}
-		var queue: Array[int] = [seed_city]
-		visited[seed_city] = true
-		var cursor := 0
-		while cursor < queue.size():
-			var cid := queue[cursor]
-			cursor += 1
-			component.append(cid)
-			for neighbor in state.neighbors(cid):
-				var edge := state.edge_of(cid, neighbor)
-				if edge == null or edge.max_manpower <= 0:
-					continue
-				var owner := state.cities[neighbor].owner_nation
-				if member_set.has(owner) and not connected.has(neighbor):
-					# 只把本体系法理本土纳入飞地组件；刚占到的外国法理地
-					# 是另一笔占领，不能随本土飞地被整包转手。
-					if (
-						member_set.has(
-							state.recognized_owner_of(neighbor)
-						)
-						and not visited.has(neighbor)
-					):
-						visited[neighbor] = true
-						queue.append(neighbor)
-				elif owner >= 0 and not member_set.has(owner):
-					adjacent_external_owners[owner] = true
-		var recipient := -1
-		for external_value in adjacent_external_owners:
-			var external_owner := int(external_value)
-			if not _enclave_component_at_war_with(
-				component,
-				external_owner
-			):
-				continue
-			var sovereign := state.external_territory_recipient(
-				external_owner
-			)
-			if (
-				sovereign < 0
-				or sovereign == root
-				or state.cities_of(sovereign).is_empty()
-			):
-				continue
-			if (
-				recipient < 0
-				or EquivariantOrder.nation_less(
-					state,
-					root,
-					sovereign,
-					recipient
-				)
-			):
-				recipient = sovereign
-		if recipient < 0:
-			continue
-		if (
-			_enclave_component_has_system_army(
-				component,
-				member_set
-			)
-		):
-			continue
-		for cid in component:
-			var city := state.cities[cid]
-			if city.owner_nation == recipient:
-				continue
-			var former_owner := city.owner_nation
-			if (
-				city.has_warehouse
-				or city.is_capital
-				or state.nations[former_owner].capital_city_id
-					== city.id
-			):
-				state.remove_warehouse(city.owner_nation, city.id)
-				city.food_storage = 0
-			city.owner_nation = recipient
-			city.occupation_sponsor_nation = recipient
-			affected_former_owners[former_owner] = true
-			changed = true
-	for former_value in affected_former_owners:
-		state.ensure_valid_capital(int(former_value))
-	return changed
-
-
-func _enclave_component_at_war_with(
-	component: Array[int],
-	recipient: int
-) -> bool:
-	for city_id in component:
-		if state.is_enemy(
-			state.cities[city_id].owner_nation,
-			recipient
-		):
-			return true
-	return false
-
-
-func _enclave_component_has_system_army(
-	component: Array[int],
-	member_set: Dictionary
-) -> bool:
-	var component_set := {}
-	for city_id in component:
-		component_set[city_id] = true
-	for army in state.armies:
-		if (
-			army.size <= 0
-			or not member_set.has(army.owner_nation)
-		):
-			continue
-		if component_set.has(army.current_city_node()):
-			return true
-		if (
-			army.on_edge
-			and (
-				component_set.has(army.move_from)
-				or component_set.has(army.move_to)
-			)
-		):
-			return true
-	return false
 
 
 func _start_war_preparation(
@@ -13203,6 +13522,15 @@ func _capture_city(
 	owner_override: int = -1,
 	execute_post_capture_plan: bool = true
 ) -> void:
+	# 领土只能通过 GameState 中的权威 City 实体变更；拒绝脱离状态树的
+	# 值对象，防止画面对象已变而领土真源未变。
+	if (
+		city == null
+		or city.id < 0
+		or city.id >= state.cities.size()
+		or state.cities[city.id] != city
+	):
+		return
 	var old_owner := city.owner_nation
 	var claimant := _occupation_claimant_for_army(army, city)
 	if owner_override >= 0:
@@ -13211,33 +13539,60 @@ func _capture_city(
 			if state.recognized_owner_of(city.id) == owner_override
 			else state.external_territory_recipient(owner_override)
 		)
-	var captured_food := city.food_storage if city.has_warehouse else 0
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
-	if (
-		old_owner_valid
-		and (
-			city.has_warehouse
-			or captured_capital
-			or city.is_capital
-		)
-	):
-		state.remove_warehouse(old_owner, city.id)
-	else:
-		city.is_capital = false
-		city.has_warehouse = false
-	city.food_storage = 0
-	city.owner_nation = claimant
-	city.occupation_sponsor_nation = (
+	var civil_war_capital_capture := (
+		captured_capital
+		and claimant != old_owner
+		and _is_civil_war_capital_capture(old_owner, claimant)
+	)
+	var claimant_was_rebel_vassal := (
+		civil_war_capital_capture
+		and state.overlord_of(claimant) == old_owner
+		and state.is_in_civil_war(claimant)
+	)
+	var occupation_sponsor := (
 		-1
 		if state.recognized_owner_of(city.id) == claimant
-		else army.owner_nation
+		else state.external_territory_recipient(army.owner_nation)
 	)
-	state.ownership_revision += 1
+	# 首都身份和 revision 都冻结在攻城前快照。削藩内战的首都通吃必须把
+	# 正在失守的首都与败方其余领土放进同一笔兼并事务；一旦兼并被拒绝，
+	# 不得降级成普通占领或普通投降。
+	var expected_ownership_revision := state.ownership_revision
+	var territory_changed := false
+	if civil_war_capital_capture:
+		if not state.annex_nation(
+			claimant,
+			old_owner,
+			expected_ownership_revision,
+			{
+				city.id: (
+					GameState.TerritoryStockDisposition.CAPTURE_SPOILS
+				),
+			}
+		):
+			return
+		_finalize_civil_war_capital_annexation(
+			claimant, claimant_was_rebel_vassal
+		)
+		territory_changed = true
+	else:
+		var capture_result := state.transfer_city_control(
+			city.id,
+			claimant,
+			occupation_sponsor,
+			GameState.TerritoryStockDisposition.CAPTURE_SPOILS,
+			"city_capture"
+		)
+		if not bool(capture_result.get("ok", false)):
+			return
+		territory_changed = bool(capture_result.get("changed", false))
 	# 普通占领只重塑局部边境：旧主、占领者和该城相邻势力下一日提前重算。
 	# 全局外交/宗藩重构仍使用 _ai_last_decision_day=-1。
-	_force_ai_replan_for_capture(old_owner, claimant, city.id)
-	if claimant != old_owner:
+	if territory_changed:
+		_force_ai_replan_for_capture(old_owner, claimant, city.id)
+	if territory_changed and claimant != old_owner:
 		city.fort_strength_max = maxi(
 			city.fort_strength_max,
 			city.fort_strength
@@ -13247,8 +13602,6 @@ func _capture_city(
 			city.fort_strength_max,
 			0
 		)
-	var spoils := int(floor(float(captured_food) * CAPITAL_FOOD_CAPTURE_RATE))
-	state.deposit_food(claimant, spoils)
 	# 城市易主后，所有不再拥有通行权且尚未离开城市节点的军队都必须撤退。
 	# 覆盖 IDLE/RECOVERING、容量阻塞的 MOVING/RETREATING 以及残留 FIGHTING 状态。
 	for displaced in state.armies:
@@ -13288,21 +13641,18 @@ func _capture_city(
 	if captured_capital and claimant != old_owner:
 		# 削藩内战：占领对方首都即通吃。宗主占藩王首都→吞并藩王全境；
 		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。
-		if _resolve_civil_war_capital_capture(old_owner, claimant):
+		if civil_war_capital_capture:
 			pass
 		elif not state.is_vassal(old_owner):
 			# 首都失陷通吃投降只适用于宗主级/独立主权国。藩王首都被占仅丢该城，
 			# 其宗藩纽带的悬空/继承由每日 prune_dead_suzerainty 结算，不整国投降割地。
 			_resolve_capital_capture_capitulation(
 				old_owner,
-				claimant
+				claimant,
+				city.id
 			)
-		else:
-			# 和平藩王不整国投降，但仍须立即迁都；新首都保持共享粮仓
-			# 的零库存中继语义。若已经失去最后一城，日末会先让它退出
-			# 自身战争，再清理宗藩记录；不能在这里提前丢失藩王身份。
-			state.ensure_valid_capital(old_owner)
-			state.refresh_derived()
+		# 和平藩王不整国投降；原子领土事务已同步处理迁都、共享粮仓
+		# 与派生状态。若已经失去最后一城，日末再清理其宗藩记录。
 	if execute_post_capture_plan and captor_can_remain:
 		_execute_campaign_post_capture_plan(army, city)
 
