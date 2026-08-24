@@ -44,7 +44,38 @@ const AI_STAGES: Array[String] = [
 	"ai_snapshot_forecast_structure_domestic_route_materialize",
 	"ai_snapshot_forecast_structure_domestic_unaccounted",
 	"ai_snapshot_forecast_structure_international_candidates",
+	"ai_snapshot_forecast_structure_international_candidates_hubs_prep",
+	"ai_snapshot_forecast_structure_international_candidates_ideal_field",
+	"ai_snapshot_forecast_structure_international_candidates_ideal_field_builds",
+	"ai_snapshot_forecast_structure_international_candidates_ideal_field_local_hits",
+	"ai_snapshot_forecast_structure_international_candidates_ideal_field_source_sets",
+	"ai_snapshot_forecast_structure_international_candidates_endpoint_scan",
+	"ai_snapshot_forecast_structure_international_candidates_union_gate",
+	"ai_snapshot_forecast_structure_international_candidates_score",
+	"ai_snapshot_forecast_structure_international_candidates_value",
+	"ai_snapshot_forecast_structure_international_candidates_emit",
+	"ai_snapshot_forecast_structure_international_candidates_sort",
+	"ai_snapshot_forecast_structure_international_candidates_emitted",
+	"ai_snapshot_forecast_structure_international_candidates_pair_loop_total",
+	"ai_snapshot_forecast_structure_international_candidates_pair_iteration_total",
+	"ai_snapshot_forecast_structure_international_candidates_pair_iteration_count",
+	"ai_snapshot_forecast_structure_international_candidates_hub_score_calls",
+	"ai_snapshot_forecast_structure_international_candidates_hub_sort_calls",
+	"ai_snapshot_forecast_structure_international_candidates_hub_value_calls",
+	"ai_snapshot_forecast_structure_international_candidates_unaccounted",
 	"ai_snapshot_forecast_structure_international_routes",
+	"ai_snapshot_forecast_structure_international_routes_ideal_lookup",
+	"ai_snapshot_forecast_structure_international_routes_ideal_lookup_builds",
+	"ai_snapshot_forecast_structure_international_routes_ideal_lookup_local_hits",
+	"ai_snapshot_forecast_structure_international_routes_ideal_lookup_source_sets",
+	"ai_snapshot_forecast_structure_international_routes_endpoint_select",
+	"ai_snapshot_forecast_structure_international_routes_operational_field",
+	"ai_snapshot_forecast_structure_international_routes_operational_field_builds",
+	"ai_snapshot_forecast_structure_international_routes_operational_field_local_hits",
+	"ai_snapshot_forecast_structure_international_routes_operational_field_source_sets",
+	"ai_snapshot_forecast_structure_international_routes_explain_details",
+	"ai_snapshot_forecast_structure_international_routes_materialize",
+	"ai_snapshot_forecast_structure_international_routes_unaccounted",
 	"ai_snapshot_forecast_structure_result",
 	"ai_snapshot_forecast_settlement_token",
 	"ai_snapshot_forecast_settlement_stage",
@@ -519,11 +550,18 @@ func _print_bucket(label: String, bucket: Dictionary) -> void:
 		var avg := _average(values[stage])
 		if avg <= 0.0:
 			continue
-		print("    %-22s 均值=%7.2fms 峰值=%7.2fms" % [
-			stage,
-			avg / 1000.0,
-			float(_peak(values[stage])) / 1000.0,
-		])
+		if _is_count_stage(stage):
+			print("    %-22s 均值=%7.2f 峰值=%7d" % [
+				stage,
+				avg,
+				_peak(values[stage]),
+			])
+		else:
+			print("    %-22s 均值=%7.2fms 峰值=%7.2fms" % [
+				stage,
+				avg / 1000.0,
+				float(_peak(values[stage])) / 1000.0,
+			])
 	print("  战役规划内部：")
 	for stage in CAMPAIGN_STAGES:
 		var avg := _average(values[stage])
@@ -580,6 +618,20 @@ func _peak(values: Array) -> int:
 	for value in values:
 		result = maxi(result, int(value))
 	return result
+
+
+func _is_count_stage(stage: String) -> bool:
+	return (
+		stage.ends_with("_builds")
+		or stage.ends_with("_hits")
+		or stage.ends_with("_misses")
+		or stage.ends_with("_source_sets")
+		or stage.ends_with("_emitted")
+		or stage.ends_with("_count")
+		or stage.ends_with("_hub_score_calls")
+		or stage.ends_with("_hub_sort_calls")
+		or stage.ends_with("_hub_value_calls")
+	)
 
 
 func _war_pairs(state: GameState) -> int:

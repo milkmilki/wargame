@@ -72,6 +72,9 @@ static var _candidate_connectivity_searches: int = 0
 static var _candidate_connectivity_union_graph_builds: int = 0
 static var _candidate_connectivity_rejections: int = 0
 static var _connectivity_prefilter_union_cache_enabled: bool = true
+static var _connectivity_gate_context_enabled: bool = true
+static var _connectivity_gate_build_contexts: int = 0
+static var _connectivity_gate_signature_context_builds: int = 0
 static var _domestic_shared_field_context_enabled: bool = true
 static var _domestic_ideal_shared_cache_enabled: bool = true
 static var _domestic_context_builds: int = 0
@@ -91,6 +94,8 @@ static func reset_connectivity_prefilter_counters() -> void:
 	_candidate_connectivity_searches = 0
 	_candidate_connectivity_union_graph_builds = 0
 	_candidate_connectivity_rejections = 0
+	_connectivity_gate_build_contexts = 0
+	_connectivity_gate_signature_context_builds = 0
 	_domestic_context_builds = 0
 	_domestic_field_builds = 0
 	_domestic_route_queries = 0
@@ -115,6 +120,15 @@ static func connectivity_prefilter_counters() -> Dictionary:
 		),
 		"candidate_connectivity_rejections": (
 			_candidate_connectivity_rejections
+		),
+		"connectivity_gate_context_enabled": (
+			_connectivity_gate_context_enabled_now()
+		),
+		"connectivity_gate_build_contexts": (
+			_connectivity_gate_build_contexts
+		),
+		"connectivity_gate_signature_context_builds": (
+			_connectivity_gate_signature_context_builds
 		),
 		"domestic_context_builds": _domestic_context_builds,
 		"domestic_field_builds": _domestic_field_builds,
@@ -150,6 +164,12 @@ static func set_connectivity_prefilter_union_cache_enabled(
 	_connectivity_prefilter_union_cache_enabled = enabled
 
 
+static func set_connectivity_gate_context_enabled(
+	enabled: bool
+) -> void:
+	_connectivity_gate_context_enabled = enabled
+
+
 static func set_domestic_shared_field_context_enabled(
 	enabled: bool
 ) -> void:
@@ -171,6 +191,17 @@ static func _union_connectivity_prefilter_enabled() -> bool:
 	if env_override == "0":
 		return true
 	return _connectivity_prefilter_union_cache_enabled
+
+
+static func _connectivity_gate_context_enabled_now() -> bool:
+	var env_override := OS.get_environment(
+		"TRADE_LEGACY_CONNECTIVITY_GATE_CONTEXT"
+	)
+	if env_override == "1":
+		return false
+	if env_override == "0":
+		return true
+	return _connectivity_gate_context_enabled
 
 
 static func _domestic_shared_field_context_enabled_now() -> bool:
@@ -1048,22 +1079,67 @@ static func _build_international_routes(
 	var stage_started: int = (
 		Time.get_ticks_usec() if profile_enabled else 0
 	)
+	var phase_started := (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
+	var pair_loop_started := (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
+	var candidate_hubs_prep_usec := 0
+	var candidate_ideal_field_usec := 0
+	var candidate_ideal_field_builds := 0
+	var candidate_ideal_field_local_hits := 0
+	var candidate_ideal_field_source_sets := 0
+	var candidate_endpoint_scan_usec := 0
+	var candidate_union_gate_usec := 0
+	var candidate_value_usec := 0
+	var candidate_emit_usec := 0
+	var candidate_sort_usec := 0
+	var candidate_emitted := 0
+	var candidate_pair_loop_total_usec := 0
+	var candidate_pair_iteration_total_usec := 0
+	var candidate_pair_iteration_count := 0
+	var candidate_hub_score_calls := 0
+	var candidate_hub_sort_calls := 0
+	var candidate_hub_value_calls := 0
 	var hubs_by_nation: Array = []
 	hubs_by_nation.resize(state.nations.size())
+	var international_candidate_nation_ids: Array[int] = []
+	var hub_sort_counts := [0, 0]
 	for nation_id in range(state.nations.size()):
 		hubs_by_nation[nation_id] = _international_hubs(
-			state, nation_id, policies[nation_id]
+			state,
+			nation_id,
+			policies[nation_id],
+			{} if not profile_enabled else {"enabled": true},
+			hub_sort_counts
 		)
+		if (
+			state.nations[nation_id].alive
+			and policies[nation_id] != Policy.ISOLATION
+			and not (hubs_by_nation[nation_id] as Array[int]).is_empty()
+		):
+			international_candidate_nation_ids.append(nation_id)
+	if profile_enabled:
+		candidate_hub_score_calls += hub_sort_counts[0]
+		candidate_hub_sort_calls += hub_sort_counts[1]
 	var ideal_allowed := _ideal_city_mask(state)
+	var union_connectivity_prefilter := (
+		use_connectivity_prefilter
+		and _union_connectivity_prefilter_enabled()
+	)
+	var gate_context_enabled := (
+		union_connectivity_prefilter
+		and _connectivity_gate_context_enabled_now()
+	)
+	var gate_build_context := {}
+	if profile_enabled:
+		candidate_hubs_prep_usec = Time.get_ticks_usec() - phase_started
 
 	# At 40 nations this is at most 780 cheap pair evaluations. Ideal endpoint
 	# ranking still uses cached Dijkstra fields; operational ordering only asks
 	# the cheaper reachability helper below.
 	var candidates: Array[Dictionary] = []
-	var union_connectivity_prefilter := (
-		use_connectivity_prefilter
-		and _union_connectivity_prefilter_enabled()
-	)
 	for nation_a in range(state.nations.size()):
 		if (
 			not state.nations[nation_a].alive
@@ -1080,21 +1156,65 @@ static func _build_international_routes(
 				continue
 			var source_hubs: Array[int] = hubs_by_nation[nation_a]
 			var destination_hubs: Array[int] = hubs_by_nation[nation_b]
-			var preferred := _select_preferred_endpoints(
-				state, graph, source_hubs, destination_hubs,
-				ideal_allowed, false, {}, {}, nation_a, nation_b,
-				field_cache, false
+			var pair_iteration_started := (
+				Time.get_ticks_usec() if profile_enabled else 0
 			)
+			var pair_phase_started := (
+				Time.get_ticks_usec() if profile_enabled else 0
+			)
+			var preferred_field_result := (
+				_get_preferred_endpoint_field_with_stats(
+					state, graph, source_hubs, ideal_allowed,
+					false, {}, {}, field_cache
+				)
+			)
+			if profile_enabled:
+				candidate_ideal_field_usec += (
+					Time.get_ticks_usec() - pair_phase_started
+				)
+				candidate_ideal_field_builds += int(
+					preferred_field_result.get("builds", 0)
+				)
+				candidate_ideal_field_local_hits += int(
+					preferred_field_result.get("local_hits", 0)
+				)
+				candidate_ideal_field_source_sets += int(
+					preferred_field_result.get("source_sets", 0)
+				)
+				pair_phase_started = Time.get_ticks_usec()
+			var preferred := _select_preferred_endpoints_from_field(
+				state, source_hubs, destination_hubs,
+				preferred_field_result["field"], false
+			)
+			if profile_enabled:
+				candidate_endpoint_scan_usec += (
+					Time.get_ticks_usec() - pair_phase_started
+				)
+				pair_phase_started = Time.get_ticks_usec()
 			# No ideal path means there is no trade corridor to retain as BLOCKED.
 			if float(preferred["cost"]) < 0.0:
+				if profile_enabled:
+					candidate_pair_iteration_total_usec += (
+						Time.get_ticks_usec() - pair_iteration_started
+					)
+					candidate_pair_iteration_count += 1
 				continue
 			var is_operational: bool
 			if use_connectivity_prefilter:
+				var gate_started := (
+					Time.get_ticks_usec() if profile_enabled else 0
+				)
 				if union_connectivity_prefilter:
+					if gate_context_enabled and gate_build_context.is_empty():
+						gate_build_context = _build_connectivity_gate_build_context(
+							state,
+							connectivity_cache,
+							international_candidate_nation_ids
+						)
 					is_operational = _has_operational_connection_union(
 						state, graph, source_hubs, destination_hubs,
 						nation_a, nation_b, besieged, occupied_edges,
-						connectivity_cache
+						connectivity_cache, gate_build_context
 					)
 				else:
 					var allowed := _allowed_city_mask(
@@ -1108,29 +1228,71 @@ static func _build_international_routes(
 						allowed, besieged, blocked_edges,
 						connectivity_cache
 					)
+				if profile_enabled:
+					candidate_union_gate_usec += (
+						Time.get_ticks_usec() - gate_started
+					)
+					pair_phase_started = Time.get_ticks_usec()
 			else:
 				var allowed := _allowed_city_mask(state, nation_a, nation_b)
 				var blocked_edges := _blocked_edges_for_parties(
 					state, nation_a, nation_b, occupied_edges
 				)
-				var operational := _select_preferred_endpoints(
-					state, graph, source_hubs, destination_hubs, allowed, true,
-					besieged, blocked_edges, nation_a, nation_b,
-					field_cache, false, true
+				var operational_field_result := (
+					_get_preferred_endpoint_field_with_stats(
+						state, graph, source_hubs, allowed,
+						true, besieged, blocked_edges, field_cache,
+						true
+					)
+				)
+				var operational := _select_preferred_endpoints_from_field(
+					state, source_hubs, destination_hubs,
+					operational_field_result["field"], false
 				)
 				is_operational = float(operational["cost"]) >= 0.0
+				if profile_enabled:
+					candidate_union_gate_usec += (
+						Time.get_ticks_usec() - pair_phase_started
+					)
+					pair_phase_started = Time.get_ticks_usec()
+			if profile_enabled:
+				candidate_hub_score_calls += 2
+				candidate_hub_value_calls += 2
+			var value_started := (
+				Time.get_ticks_usec() if profile_enabled else 0
+			)
+			var candidate_value := _international_candidate_value(
+				state, int(preferred["source"]),
+				int(preferred["destination"]),
+				float(preferred["cost"]),
+				policies[nation_a], policies[nation_b]
+			)
+			if profile_enabled:
+				candidate_value_usec += (
+					Time.get_ticks_usec() - value_started
+				)
+				pair_phase_started = Time.get_ticks_usec()
 			candidates.append({
 				"nation_a": nation_a,
 				"nation_b": nation_b,
 				"operational": is_operational,
 				"preferred_transport_cost": float(preferred["cost"]),
-				"candidate_value": _international_candidate_value(
-					state, int(preferred["source"]),
-					int(preferred["destination"]),
-					float(preferred["cost"]),
-					policies[nation_a], policies[nation_b]
-				),
+				"candidate_value": candidate_value,
 			})
+			if profile_enabled:
+				candidate_emit_usec += (
+					Time.get_ticks_usec() - pair_phase_started
+				)
+				candidate_emitted += 1
+				candidate_pair_iteration_total_usec += (
+					Time.get_ticks_usec() - pair_iteration_started
+				)
+				candidate_pair_iteration_count += 1
+	if profile_enabled:
+		candidate_pair_loop_total_usec = (
+			Time.get_ticks_usec() - pair_loop_started
+		)
+		phase_started = Time.get_ticks_usec()
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var operational_a := bool(a["operational"])
 		var operational_b := bool(b["operational"])
@@ -1149,13 +1311,122 @@ static func _build_international_routes(
 		return int(a["nation_b"]) < int(b["nation_b"])
 	)
 	if profile_enabled:
+		candidate_sort_usec = Time.get_ticks_usec() - phase_started
+		var candidate_total := Time.get_ticks_usec() - stage_started
+		var candidate_measured := (
+			candidate_hubs_prep_usec
+			+ candidate_ideal_field_usec
+			+ candidate_endpoint_scan_usec
+			+ candidate_union_gate_usec
+			+ candidate_value_usec
+			+ candidate_emit_usec
+			+ candidate_sort_usec
+		)
 		_accumulate_build_profile(
 			build_profile,
 			"ai_snapshot_forecast_structure_international_candidates",
-			Time.get_ticks_usec() - stage_started
+			candidate_total
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_hubs_prep",
+			candidate_hubs_prep_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_ideal_field",
+			candidate_ideal_field_usec
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_ideal_field_builds",
+			candidate_ideal_field_builds
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_ideal_field_local_hits",
+			candidate_ideal_field_local_hits
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_ideal_field_source_sets",
+			candidate_ideal_field_source_sets
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_endpoint_scan",
+			candidate_endpoint_scan_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_union_gate",
+			candidate_union_gate_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_score",
+			candidate_value_usec + candidate_emit_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_value",
+			candidate_value_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_emit",
+			candidate_emit_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_sort",
+			candidate_sort_usec
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_emitted",
+			candidate_emitted
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_pair_loop_total",
+			candidate_pair_loop_total_usec
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_pair_iteration_total",
+			candidate_pair_iteration_total_usec
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_pair_iteration_count",
+			candidate_pair_iteration_count
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_hub_score_calls",
+			candidate_hub_score_calls
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_hub_sort_calls",
+			candidate_hub_sort_calls
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_hub_value_calls",
+			candidate_hub_value_calls
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_candidates_unaccounted",
+			maxi(candidate_total - candidate_measured, 0)
 		)
 
 	stage_started = Time.get_ticks_usec() if profile_enabled else 0
+	var route_profile_sink := (
+		{"enabled": true} if profile_enabled else {}
+	)
 	var counts := _zero_int_array(state.nations.size())
 	var result: Array[Dictionary] = []
 	for candidate in candidates:
@@ -1169,16 +1440,106 @@ static func _build_international_routes(
 		var route := _derive_route(
 			state, graph, hubs_by_nation[nation_a],
 			hubs_by_nation[nation_b], nation_a, nation_b, true,
-			besieged, occupied_edges, field_cache
+			besieged, occupied_edges, field_cache, true, route_profile_sink
 		)
 		result.append(route)
 		counts[nation_a] += 1
 		counts[nation_b] += 1
 	if profile_enabled:
+		var route_total := Time.get_ticks_usec() - stage_started
+		var route_measured := (
+			int(route_profile_sink.get("international_route_ideal_lookup", 0))
+			+ int(route_profile_sink.get("international_route_endpoint_select", 0))
+			+ int(route_profile_sink.get(
+				"international_route_operational_field", 0
+			))
+			+ int(route_profile_sink.get(
+				"international_route_explain_details", 0
+			))
+			+ int(route_profile_sink.get(
+				"international_route_materialize", 0
+			))
+		)
 		_accumulate_build_profile(
 			build_profile,
 			"ai_snapshot_forecast_structure_international_routes",
-			Time.get_ticks_usec() - stage_started
+			route_total
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_ideal_lookup",
+			int(route_profile_sink.get("international_route_ideal_lookup", 0))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_ideal_lookup_builds",
+			int(route_profile_sink.get(
+				"international_route_ideal_lookup_builds", 0
+			))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_ideal_lookup_local_hits",
+			int(route_profile_sink.get(
+				"international_route_ideal_lookup_local_hits", 0
+			))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_ideal_lookup_source_sets",
+			int(route_profile_sink.get(
+				"international_route_ideal_lookup_source_sets", 0
+			))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_endpoint_select",
+			int(route_profile_sink.get("international_route_endpoint_select", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_operational_field",
+			int(route_profile_sink.get(
+				"international_route_operational_field", 0
+			))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_operational_field_builds",
+			int(route_profile_sink.get(
+				"international_route_operational_field_builds", 0
+			))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_operational_field_local_hits",
+			int(route_profile_sink.get(
+				"international_route_operational_field_local_hits", 0
+			))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_operational_field_source_sets",
+			int(route_profile_sink.get(
+				"international_route_operational_field_source_sets", 0
+			))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_explain_details",
+			int(route_profile_sink.get(
+				"international_route_explain_details", 0
+			))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_materialize",
+			int(route_profile_sink.get("international_route_materialize", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_international_routes_unaccounted",
+			maxi(route_total - route_measured, 0)
 		)
 	return result
 
@@ -1194,12 +1555,13 @@ static func _has_operational_connection_union(
 	nation_b: int,
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
-	connectivity_cache: Dictionary
+	connectivity_cache: Dictionary,
+	gate_build_context: Dictionary = {}
 ) -> bool:
 	_candidate_connectivity_queries += 1
 	var union_context := _connectivity_union_context(
 		state, graph, nation_a, nation_b, besieged,
-		occupied_edges, connectivity_cache
+		occupied_edges, connectivity_cache, gate_build_context
 	)
 	var allowed: PackedByteArray = union_context["allowed"]
 	var component_ids: PackedInt32Array = union_context["component_ids"]
@@ -1231,6 +1593,72 @@ static func _has_operational_connection_union(
 	return false
 
 
+static func _build_connectivity_gate_build_context(
+	state: GameState,
+	connectivity_cache: Dictionary,
+	candidate_nation_ids: Array[int] = []
+) -> Dictionary:
+	if connectivity_cache.has("__gate_build_context"):
+		return connectivity_cache["__gate_build_context"] as Dictionary
+	_connectivity_gate_build_contexts += 1
+	var nation_enemy_ids: Array = []
+	var nation_enemy_signatures: Array = []
+	var nation_enemy_sets: Array = []
+	nation_enemy_ids.resize(state.nations.size())
+	nation_enemy_signatures.resize(state.nations.size())
+	nation_enemy_sets.resize(state.nations.size())
+	if candidate_nation_ids.is_empty():
+		for nation_id in range(state.nations.size()):
+			candidate_nation_ids.append(nation_id)
+	for nation_id in candidate_nation_ids:
+		var enemy_ids: Array[int] = []
+		var enemy_set := {}
+		for other_id in range(state.nations.size()):
+			if state.is_enemy(other_id, nation_id):
+				enemy_ids.append(other_id)
+				enemy_set[other_id] = true
+		enemy_ids.sort()
+		nation_enemy_ids[nation_id] = enemy_ids
+		nation_enemy_signatures[nation_id] = _int_array_key(enemy_ids)
+		nation_enemy_sets[nation_id] = enemy_set
+	var context := {
+		"nation_enemy_ids": nation_enemy_ids,
+		"nation_enemy_signatures": nation_enemy_signatures,
+		"nation_enemy_sets": nation_enemy_sets,
+	}
+	connectivity_cache["__gate_build_context"] = context
+	return context
+
+
+static func _merge_sorted_unique_int_arrays(
+	left: Array,
+	right: Array
+) -> Array[int]:
+	var result: Array[int] = []
+	var left_index := 0
+	var right_index := 0
+	while left_index < left.size() and right_index < right.size():
+		var left_value := int(left[left_index])
+		var right_value := int(right[right_index])
+		if left_value == right_value:
+			result.append(left_value)
+			left_index += 1
+			right_index += 1
+		elif left_value < right_value:
+			result.append(left_value)
+			left_index += 1
+		else:
+			result.append(right_value)
+			right_index += 1
+	while left_index < left.size():
+		result.append(int(left[left_index]))
+		left_index += 1
+	while right_index < right.size():
+		result.append(int(right[right_index]))
+		right_index += 1
+	return result
+
+
 static func _connectivity_union_context(
 	state: GameState,
 	graph: Dictionary,
@@ -1238,8 +1666,59 @@ static func _connectivity_union_context(
 	nation_b: int,
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
-	connectivity_cache: Dictionary
+	connectivity_cache: Dictionary,
+	gate_build_context: Dictionary = {}
 ) -> Dictionary:
+	if not gate_build_context.is_empty():
+		var union_contexts := (
+			connectivity_cache.get("__union_contexts", {}) as Dictionary
+		)
+		if not connectivity_cache.has("__union_contexts"):
+			connectivity_cache["__union_contexts"] = union_contexts
+		var nation_enemy_ids: Array = gate_build_context["nation_enemy_ids"]
+		var nation_enemy_signatures: Array = (
+			gate_build_context["nation_enemy_signatures"]
+		)
+		var nation_enemy_sets: Array = gate_build_context["nation_enemy_sets"]
+		var signature_a := str(nation_enemy_signatures[nation_a])
+		var signature_b := str(nation_enemy_signatures[nation_b])
+		var enemy_set := {}
+		var signature := ""
+		if signature_a == signature_b:
+			signature = signature_a
+			enemy_set = (nation_enemy_sets[nation_a] as Dictionary).duplicate()
+		elif signature_a.is_empty():
+			signature = signature_b
+			enemy_set = (nation_enemy_sets[nation_b] as Dictionary).duplicate()
+		elif signature_b.is_empty():
+			signature = signature_a
+			enemy_set = (nation_enemy_sets[nation_a] as Dictionary).duplicate()
+		else:
+			var enemy_ids := _merge_sorted_unique_int_arrays(
+				nation_enemy_ids[nation_a] as Array,
+				nation_enemy_ids[nation_b] as Array
+			)
+			signature = _int_array_key(enemy_ids)
+			for enemy_id in enemy_ids:
+				enemy_set[enemy_id] = true
+		if union_contexts.has(signature):
+			return union_contexts[signature] as Dictionary
+		_connectivity_gate_signature_context_builds += 1
+		_candidate_connectivity_union_graph_builds += 1
+		var allowed := _allowed_city_mask_for_enemy_union(state, enemy_set)
+		var blocked_edges := _blocked_edges_for_enemy_union(
+			enemy_set, occupied_edges
+		)
+		var component_ids := _build_connectivity_components(
+			state, graph, allowed, besieged, blocked_edges
+		)
+		var signature_context := {
+			"allowed": allowed,
+			"blocked_edges": blocked_edges,
+			"component_ids": component_ids,
+		}
+		union_contexts[signature] = signature_context
+		return signature_context
 	var union_contexts := (
 		connectivity_cache.get("__union_contexts", {}) as Dictionary
 	)
@@ -1466,7 +1945,11 @@ static func _owned_trade_cities(
 
 
 static func _international_hubs(
-	state: GameState, nation_id: int, policy: int
+	state: GameState,
+	nation_id: int,
+	policy: int,
+	profile_sink: Dictionary = {},
+	hub_sort_counts: Array = []
 ) -> Array[int]:
 	if (
 		nation_id < 0 or nation_id >= state.nations.size()
@@ -1474,7 +1957,7 @@ static func _international_hubs(
 	):
 		return [] as Array[int]
 	var candidates := _owned_trade_cities(state, nation_id, false)
-	_sort_hubs(state, candidates, policy)
+	_sort_hubs(state, candidates, policy, profile_sink, hub_sort_counts)
 	var capital := state.nations[nation_id].capital_city_id
 	if capital in candidates:
 		candidates.erase(capital)
@@ -1485,9 +1968,26 @@ static func _international_hubs(
 
 
 static func _sort_hubs(
-	state: GameState, city_ids: Array[int], policy: int
+	state: GameState,
+	city_ids: Array[int],
+	policy: int,
+	profile_sink: Dictionary = {},
+	hub_sort_counts: Array = []
 ) -> void:
+	var profile_enabled := bool(profile_sink.get("enabled", false))
+	if not profile_enabled:
+		city_ids.sort_custom(func(a: int, b: int) -> bool:
+			var score_a := _sort_units(_hub_score(state.cities[a], policy))
+			var score_b := _sort_units(_hub_score(state.cities[b], policy))
+			if score_a != score_b:
+				return score_a > score_b
+			return a < b
+		)
+		return
 	city_ids.sort_custom(func(a: int, b: int) -> bool:
+		if profile_enabled and hub_sort_counts.size() >= 2:
+			hub_sort_counts[0] += 2
+			hub_sort_counts[1] += 2
 		var score_a := _sort_units(_hub_score(state.cities[a], policy))
 		var score_b := _sort_units(_hub_score(state.cities[b], policy))
 		if score_a != score_b:
@@ -1533,8 +2033,13 @@ static func _derive_route(
 	var domestic_profile_enabled := (
 		not international and bool(profile_sink.get("enabled", false))
 	)
+	var international_profile_enabled := (
+		international and bool(profile_sink.get("enabled", false))
+	)
 	var phase_started := (
-		Time.get_ticks_usec() if domestic_profile_enabled else 0
+		Time.get_ticks_usec() if (
+			domestic_profile_enabled or international_profile_enabled
+		) else 0
 	)
 	var allowed := _allowed_city_mask(state, nation_a, nation_b)
 	var ideal_allowed := _ideal_city_mask(state)
@@ -1550,14 +2055,46 @@ static func _derive_route(
 			state, sources, destinations, ideal_field
 		)
 	else:
-		selection = _select_preferred_endpoints(
-			state, graph, sources, destinations, ideal_allowed, false, {}, {},
-			nation_a, nation_b, field_cache
+		var ideal_field_result := _get_preferred_endpoint_field_with_stats(
+			state, graph, sources, ideal_allowed, false, {}, {},
+			field_cache
+		)
+		if international_profile_enabled:
+			_accumulate_profile_sink(
+				profile_sink,
+				"international_route_ideal_lookup",
+				Time.get_ticks_usec() - phase_started
+			)
+			_accumulate_profile_sink(
+				profile_sink,
+				"international_route_ideal_lookup_builds",
+				int(ideal_field_result.get("builds", 0))
+			)
+			_accumulate_profile_sink(
+				profile_sink,
+				"international_route_ideal_lookup_local_hits",
+				int(ideal_field_result.get("local_hits", 0))
+			)
+			_accumulate_profile_sink(
+				profile_sink,
+				"international_route_ideal_lookup_source_sets",
+				int(ideal_field_result.get("source_sets", 0))
+			)
+			phase_started = Time.get_ticks_usec()
+		selection = _select_preferred_endpoints_from_field(
+			state, sources, destinations, ideal_field_result["field"]
 		)
 	if domestic_profile_enabled:
 		_accumulate_profile_sink(
 			profile_sink,
 			"domestic_context",
+			Time.get_ticks_usec() - phase_started
+		)
+		phase_started = Time.get_ticks_usec()
+	elif international_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"international_route_endpoint_select",
 			Time.get_ticks_usec() - phase_started
 		)
 		phase_started = Time.get_ticks_usec()
@@ -1579,15 +2116,48 @@ static func _derive_route(
 				state, sources, destinations, operational_field
 			)
 		else:
-			operational = _select_preferred_endpoints(
-				state, graph, sources, destinations, allowed, true,
-				besieged, blocked_edges,
-				nation_a, nation_b, field_cache
+			var operational_field_result := (
+				_get_preferred_endpoint_field_with_stats(
+					state, graph, sources, allowed, true,
+					besieged, blocked_edges, field_cache
+				)
+			)
+			if international_profile_enabled:
+				_accumulate_profile_sink(
+					profile_sink,
+					"international_route_operational_field",
+					Time.get_ticks_usec() - phase_started
+				)
+				_accumulate_profile_sink(
+					profile_sink,
+					"international_route_operational_field_builds",
+					int(operational_field_result.get("builds", 0))
+				)
+				_accumulate_profile_sink(
+					profile_sink,
+					"international_route_operational_field_local_hits",
+					int(operational_field_result.get("local_hits", 0))
+				)
+				_accumulate_profile_sink(
+					profile_sink,
+					"international_route_operational_field_source_sets",
+					int(operational_field_result.get("source_sets", 0))
+				)
+				phase_started = Time.get_ticks_usec()
+			operational = _select_preferred_endpoints_from_field(
+				state, sources, destinations,
+				operational_field_result["field"]
 			)
 	if domestic_profile_enabled:
 		_accumulate_profile_sink(
 			profile_sink,
 			"domestic_route_select",
+			Time.get_ticks_usec() - phase_started
+		)
+	elif international_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"international_route_endpoint_select",
 			Time.get_ticks_usec() - phase_started
 		)
 	var operational_source := int(operational["source"])
@@ -1614,7 +2184,7 @@ static func _derive_route(
 	elif not preferred_path.is_empty():
 		city_path = preferred_path
 
-	if domestic_profile_enabled:
+	if domestic_profile_enabled or international_profile_enabled:
 		phase_started = Time.get_ticks_usec()
 	var obstruction := _first_obstruction(
 		state, graph, preferred_path, allowed, besieged, blocked_edges
@@ -1638,6 +2208,13 @@ static func _derive_route(
 		_accumulate_profile_sink(
 			profile_sink,
 			"domestic_route_explain",
+			Time.get_ticks_usec() - phase_started
+		)
+		phase_started = Time.get_ticks_usec()
+	elif international_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"international_route_explain_details",
 			Time.get_ticks_usec() - phase_started
 		)
 		phase_started = Time.get_ticks_usec()
@@ -1689,6 +2266,12 @@ static func _derive_route(
 		_accumulate_profile_sink(
 			profile_sink,
 			"domestic_route_materialize",
+			Time.get_ticks_usec() - phase_started
+		)
+	elif international_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"international_route_materialize",
 			Time.get_ticks_usec() - phase_started
 		)
 	return route
@@ -1951,6 +2534,50 @@ static func _get_preferred_endpoint_field(
 	)
 	field_cache[cache_key] = field
 	return field
+
+
+static func _get_preferred_endpoint_field_with_stats(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	allowed: PackedByteArray,
+	operational: bool,
+	besieged: Dictionary,
+	blocked_edges: Dictionary,
+	field_cache: Dictionary,
+	count_candidate_dijkstra: bool = false
+) -> Dictionary:
+	var valid_sources: Array[int] = []
+	for source in sources:
+		if (
+			source >= 0 and source < state.cities.size()
+			and not valid_sources.has(source)
+		):
+			valid_sources.append(source)
+	valid_sources.sort()
+	var cache_key := _preferred_endpoint_field_cache_key(
+		valid_sources, allowed, operational, besieged, blocked_edges
+	)
+	if field_cache.has(cache_key):
+		return {
+			"field": field_cache[cache_key],
+			"builds": 0,
+			"local_hits": 1,
+			"source_sets": 1,
+		}
+	if count_candidate_dijkstra:
+		_candidate_dijkstra_field_builds += 1
+	var field := _dijkstra_field(
+		state, graph, valid_sources, allowed, operational,
+		besieged, blocked_edges
+	)
+	field_cache[cache_key] = field
+	return {
+		"field": field,
+		"builds": 1,
+		"local_hits": 0,
+		"source_sets": 1,
+	}
 
 
 static func _get_domestic_preferred_endpoint_field(
@@ -2552,7 +3179,8 @@ static func _international_candidate_value(
 		or source >= state.cities.size() or destination >= state.cities.size()
 	):
 		return 0.0
-	var value := (
+	var value := 0.0
+	value = (
 		_hub_score(state.cities[source], policy_a)
 		+ _hub_score(state.cities[destination], policy_b)
 	)
