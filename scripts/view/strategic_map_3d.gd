@@ -47,6 +47,13 @@ const CAMPAIGN_ARROW_MIN_ARCH_HEIGHT: float = 1.60
 const CAMPAIGN_ARROW_MAX_ARCH_HEIGHT: float = 4.20
 const CAMPAIGN_ARROW_ARCH_LENGTH_RATIO: float = 0.070
 const CAMPAIGN_ARROW_TERRAIN_SAMPLES: int = 32
+const NATION_LABEL_FONT_SIZE: int = 84
+const NATION_LABEL_OUTLINE_SIZE: int = 3
+const NATION_LABEL_SAFETY: float = 0.86
+const NATION_LABEL_FIT_EPSILON: float = 0.0001
+const NATION_LABEL_BASE_PIXEL_SIZE: float = 0.026
+const NATION_LABEL_MAX_PIXEL_SIZE: float = 0.080
+const NATION_LABEL_MIN_READABLE_PIXEL_SIZE: float = 0.014
 const ANTIQUE_OVERLAY_SHADER := preload(
 	"res://scripts/view/terrain/antique_overlay.gdshader"
 )
@@ -880,7 +887,7 @@ func _update_province_visuals() -> void:
 		)
 	if topology_changed or rebuild_fill or _country_boundary_texture == null:
 		var country_boundary_image := MapRenderer.build_country_boundary_image(
-			state, geometry, false
+			state, geometry, true
 		)
 		_country_boundary_texture = ImageTexture.create_from_image(
 			country_boundary_image
@@ -1442,82 +1449,367 @@ func _rebuild_nation_labels() -> void:
 		var layout := _nation_label_layout(nation.id)
 		if layout.is_empty():
 			continue
+		if (
+			bool(layout.get("hidden", true))
+			or not bool(layout.get("inside_mask", false))
+			or not bool(layout.get("fits_mask", false))
+			or float(layout.get("pixel_size", 0.0)) <= 0.0
+		):
+			continue
 		var text_value := str(layout["text"])
-		var center: Vector2 = layout["center"]
-		var axis: Vector2 = layout["axis"]
-		var glyph_scale := float(layout["glyph_scale"])
+		var anchor: Vector2 = layout["anchor"]
 		var label := Label3D.new()
 		label.text = text_value
 		label.font = _map_font
-		label.font_size = 84
-		label.outline_size = 3
-		label.pixel_size = 0.026 * glyph_scale
+		label.font_size = NATION_LABEL_FONT_SIZE
+		label.outline_size = NATION_LABEL_OUTLINE_SIZE
+		label.pixel_size = float(layout["pixel_size"])
 		label.modulate = Color(0.075, 0.078, 0.082, 0.86)
 		label.outline_modulate = Color(0.62, 0.60, 0.54, 0.18)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 		label.no_depth_test = true
 		label.render_priority = 8
-		var local_x := Vector3(axis.x, 0.0, axis.y)
-		var local_y := Vector3(axis.y, 0.0, -axis.x)
-		label.basis = Basis(local_x, local_y, Vector3.UP)
+		label.basis = _nation_label_basis()
 		label.position = (
-			_terrain.map_to_world(center)
+			_terrain.map_to_world(anchor)
 			+ Vector3(0.0, 0.34, 0.0)
 		)
+		label.set_meta("nation_id", nation.id)
+		label.set_meta("layout", layout)
 		_content.add_child(label)
 		_nation_labels.append(label)
 
 
 func _nation_label_layout(nation_id: int) -> Dictionary:
-	var points := PackedVector2Array()
-	var center := Vector2.ZERO
+	if (
+		state == null
+		or _map_font == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+	):
+		return {}
+	var fallback := _nation_label_fallback_layout(nation_id)
+	var size := state.province_map_size
+	var total := size.x * size.y
+	if (
+		size.x <= 0
+		or size.y <= 0
+		or total <= 0
+		or state.province_ids.size() != total
+	):
+		return fallback
+	var nation_mask := PackedByteArray()
+	nation_mask.resize(total)
+	var has_mask_data := false
+	for index in range(total):
+		var province_id := state.province_ids[index]
+		if province_id < 0 or province_id >= state.cities.size():
+			continue
+		if state.cities[province_id].owner_nation != nation_id:
+			continue
+		nation_mask[index] = 1
+		has_mask_data = true
+	if not has_mask_data:
+		return fallback
+	var component_data: Dictionary = _largest_connected_mask_component(
+		nation_mask, size.x, size.y
+	)
+	var component_mask: PackedByteArray = component_data["mask"]
+	var component_area := int(component_data["area"])
+	if component_area <= 0:
+		return fallback
+	var rect := _largest_mask_rectangle(component_mask, size.x, size.y)
+	if rect.size.x <= 0 or rect.size.y <= 0:
+		return fallback
+	var rect_inside_component := _rect_fully_inside_mask(
+		component_mask, size.x, size.y, rect
+	)
+	if not rect_inside_component:
+		return fallback
+	var anchor_px := Vector2(
+		float(rect.position.x) + float(rect.size.x) * 0.5,
+		float(rect.position.y) + float(rect.size.y) * 0.5
+	)
+	var anchor := Vector2(
+		anchor_px.x / float(size.x),
+		anchor_px.y / float(size.y)
+	)
+	var anchor_cell := Vector2i(
+		clampi(int(floor(anchor_px.x)), rect.position.x, rect.end.x - 1),
+		clampi(int(floor(anchor_px.y)), rect.position.y, rect.end.y - 1)
+	)
+	var inside_mask := (
+		anchor_cell.x >= 0
+		and anchor_cell.x < size.x
+		and anchor_cell.y >= 0
+		and anchor_cell.y < size.y
+		and component_mask[anchor_cell.y * size.x + anchor_cell.x] > 0
+	)
+	var map_rect := Rect2(
+		Vector2(rect.position) / Vector2(size),
+		Vector2(rect.size) / Vector2(size)
+	)
+	var rect_world_size := Vector2(
+		float(rect.size.x) / float(size.x) * _world_size.x,
+		float(rect.size.y) / float(size.y) * _world_size.y
+	)
+	var chosen := _nation_label_choose_text(
+		nation_id, rect_world_size, NATION_LABEL_FONT_SIZE
+	)
+	var pixel_size: float = float(chosen.get("pixel_size", 0.0))
+	var bbox_world_size := Vector2(
+		float(chosen.get("bbox_width", 0.0)) * pixel_size,
+		float(chosen.get("bbox_height", 0.0)) * pixel_size
+	)
+	var fits_mask := (
+		rect_inside_component
+		and not bool(chosen.get("hidden", true))
+		and pixel_size > 0.0
+		and bbox_world_size.x
+			<= rect_world_size.x * NATION_LABEL_SAFETY
+				+ NATION_LABEL_FIT_EPSILON
+		and bbox_world_size.y
+			<= rect_world_size.y * NATION_LABEL_SAFETY
+				+ NATION_LABEL_FIT_EPSILON
+	)
+	return {
+		"text": str(chosen.get("text", "")),
+		"glyph_scale": (
+			pixel_size / NATION_LABEL_BASE_PIXEL_SIZE
+			if pixel_size > 0.0
+			else 0.0
+		),
+		"pixel_size": pixel_size,
+		"inside_mask": inside_mask,
+		"fits_mask": fits_mask,
+		"hidden": bool(chosen.get("hidden", true)),
+		"component_area": component_area,
+		"rect": rect,
+		"map_rect": map_rect,
+		"anchor": anchor,
+		"bbox_world_size": bbox_world_size,
+	}
+
+
+func _nation_label_basis() -> Basis:
+	return Basis(Vector3.RIGHT, Vector3.FORWARD, Vector3.UP)
+
+
+func _nation_label_choose_text(
+	nation_id: int, rect_world_size: Vector2, font_size: int
+) -> Dictionary:
+	var nation := state.nations[nation_id]
+	var candidates: Array[String] = []
+	var full_name := str(
+		WorldNaming.nation_display_name(state, nation_id, false)
+	).strip_edges()
+	_nation_label_append_candidate(candidates, full_name, "")
+	_nation_label_append_candidate(
+		candidates, str(nation.short_name).strip_edges(), full_name
+	)
+	var capital_id := int(nation.capital_city_id)
+	if capital_id >= 0 and capital_id < state.cities.size():
+		_nation_label_append_candidate(
+			candidates,
+			str(state.cities[capital_id].region_symbol).strip_edges(),
+			full_name
+		)
+	_nation_label_append_candidate(
+		candidates,
+		str(WorldNaming.nation_display_name(state, nation_id, true)).strip_edges(),
+		full_name
+	)
+	for candidate in candidates:
+		var text_size: Vector2 = _map_font.get_string_size(
+			candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size
+		)
+		if text_size.x <= 0.0 or text_size.y <= 0.0:
+			continue
+		var bbox_size := Vector2(
+			text_size.x + float(NATION_LABEL_OUTLINE_SIZE * 2),
+			text_size.y + float(NATION_LABEL_OUTLINE_SIZE * 2)
+		)
+		var pixel_size: float = clampf(
+			minf(
+				rect_world_size.x * NATION_LABEL_SAFETY / bbox_size.x,
+				rect_world_size.y * NATION_LABEL_SAFETY / bbox_size.y
+			),
+			0.0, NATION_LABEL_MAX_PIXEL_SIZE
+		)
+		if pixel_size >= NATION_LABEL_MIN_READABLE_PIXEL_SIZE:
+			return {
+				"text": candidate,
+				"pixel_size": pixel_size,
+				"bbox_width": bbox_size.x,
+				"bbox_height": bbox_size.y,
+				"hidden": false,
+			}
+	return {
+		"text": candidates[0] if not candidates.is_empty() else full_name,
+		"pixel_size": 0.0,
+		"bbox_width": 0.0,
+		"bbox_height": 0.0,
+		"hidden": true,
+	}
+
+
+func _nation_label_append_candidate(
+	candidates: Array[String], candidate: String, full_name: String
+) -> void:
+	var value := candidate.strip_edges()
+	if value.is_empty():
+		return
+	if not full_name.is_empty() and value.length() >= full_name.length():
+		if value != full_name:
+			return
+	if candidates.has(value):
+		return
+	candidates.append(value)
+
+
+func _largest_connected_mask_component(
+	mask: PackedByteArray, width: int, height: int
+) -> Dictionary:
+	var total := width * height
+	var visited := PackedByteArray()
+	visited.resize(total)
+	var best_area := 0
+	var best_indices: Array[int] = []
+	for index in range(total):
+		if mask[index] == 0 or visited[index] > 0:
+			continue
+		var queue: Array[int] = [index]
+		var head := 0
+		visited[index] = 1
+		var component_indices: Array[int] = []
+		while head < queue.size():
+			var current: int = queue[head]
+			head += 1
+			component_indices.append(current)
+			var x: int = current % width
+			var y: int = current / width
+			for offset in [
+				Vector2i(-1, 0), Vector2i(1, 0),
+				Vector2i(0, -1), Vector2i(0, 1),
+			]:
+				var nx: int = x + offset.x
+				var ny: int = y + offset.y
+				if nx < 0 or nx >= width or ny < 0 or ny >= height:
+					continue
+				var neighbor: int = ny * width + nx
+				if mask[neighbor] == 0 or visited[neighbor] > 0:
+					continue
+				visited[neighbor] = 1
+				queue.append(neighbor)
+		if component_indices.size() > best_area:
+			best_area = component_indices.size()
+			best_indices = component_indices
+	var component_mask := PackedByteArray()
+	component_mask.resize(total)
+	for index in best_indices:
+		component_mask[index] = 1
+	return {
+		"mask": component_mask,
+		"area": best_area,
+	}
+
+
+func _largest_mask_rectangle(
+	mask: PackedByteArray, width: int, height: int
+) -> Rect2i:
+	var heights := PackedInt32Array()
+	heights.resize(width)
+	var best_area := 0
+	var best_rect := Rect2i()
+	for y in range(height):
+		for x in range(width):
+			var index: int = y * width + x
+			if mask[index] > 0:
+				heights[x] += 1
+			else:
+				heights[x] = 0
+		var stack: Array[int] = []
+		for x in range(width + 1):
+			var current_height: int = 0
+			if x < width:
+				current_height = heights[x]
+			while (
+				not stack.is_empty()
+				and current_height < heights[stack[stack.size() - 1]]
+			):
+				var top: int = stack[stack.size() - 1]
+				stack.pop_back()
+				var rect_height: int = heights[top]
+				if rect_height <= 0:
+					continue
+				var rect_left: int = (
+					stack[stack.size() - 1] + 1
+					if not stack.is_empty()
+					else 0
+				)
+				var rect_width: int = x - rect_left
+				var area: int = rect_height * rect_width
+				if area <= best_area:
+					continue
+				best_area = area
+				best_rect = Rect2i(
+					rect_left,
+					y - rect_height + 1,
+					rect_width,
+					rect_height
+				)
+			stack.append(x)
+	return best_rect
+
+
+func _rect_fully_inside_mask(
+	mask: PackedByteArray, width: int, height: int, rect: Rect2i
+) -> bool:
+	if (
+		rect.position.x < 0
+		or rect.position.y < 0
+		or rect.end.x > width
+		or rect.end.y > height
+	):
+		return false
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if mask[y * width + x] == 0:
+				return false
+	return true
+
+
+func _nation_label_fallback_layout(nation_id: int) -> Dictionary:
+	var center := Vector2(0.5, 0.5)
+	var count := 0
 	for city in state.cities:
 		if city.owner_nation != nation_id or city.is_dock:
 			continue
-		var metric := Vector2(
-			city.map_position.x * _world_size.x,
-			city.map_position.y * _world_size.y
-		)
-		points.append(metric)
-		center += metric
-	if points.is_empty():
-		return {}
-	center /= float(points.size())
-	var covariance_xx := 0.0
-	var covariance_xy := 0.0
-	var covariance_yy := 0.0
-	for point in points:
-		var delta := point - center
-		covariance_xx += delta.x * delta.x
-		covariance_xy += delta.x * delta.y
-		covariance_yy += delta.y * delta.y
-	var axis_angle := 0.5 * atan2(
-		2.0 * covariance_xy, covariance_xx - covariance_yy
-	)
-	var axis := Vector2(cos(axis_angle), sin(axis_angle)).normalized()
-	if axis.x < 0.0:
-		axis = -axis
-	var projection_min := INF
-	var projection_max := -INF
-	for point in points:
-		var projection := (point - center).dot(axis)
-		projection_min = minf(projection_min, projection)
-		projection_max = maxf(projection_max, projection)
-	var territory_span := maxf(projection_max - projection_min, 2.0)
-	var text_value := WorldNaming.nation_display_name(
-		state, nation_id, true
-	)
+		center += city.map_position
+		count += 1
+	if count > 0:
+		center /= float(count + 1)
 	return {
-		"text": text_value,
-		"center": Vector2(
-			center.x / _world_size.x, center.y / _world_size.y
+		"text": str(WorldNaming.nation_display_name(state, nation_id, false)),
+		"glyph_scale": 0.0,
+		"pixel_size": 0.0,
+		"inside_mask": false,
+		"fits_mask": false,
+		"hidden": true,
+		"component_area": 0,
+		"rect": Rect2i(),
+		"map_rect": Rect2(
+			Vector2(
+				clampf(center.x - 0.01, 0.0, 0.98),
+				clampf(center.y - 0.01, 0.0, 0.98)
+			),
+			Vector2(0.02, 0.02)
 		),
-		"axis": axis,
-		"territory_span": territory_span,
-		"glyph_scale": clampf(
-			pow(territory_span / 8.0, 0.76), 1.10, 3.10
+		"anchor": Vector2(
+			clampf(center.x, 0.0, 1.0), clampf(center.y, 0.0, 1.0)
 		),
+		"bbox_world_size": Vector2.ZERO,
 	}
 
 

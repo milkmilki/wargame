@@ -154,29 +154,81 @@ func _run() -> void:
 		)
 	var major_mesh := map_3d._roads.mesh as ArrayMesh
 	var minor_mesh := map_3d._minor_roads.mesh as ArrayMesh
-	var territory_labels_valid := not map_3d._nation_labels.is_empty()
-	for nation_label in map_3d._nation_labels:
+	var visible_layouts: Array[Dictionary] = []
+	var hidden_layouts_valid := true
+	for nation in state.nations:
+		if not nation.alive:
+			continue
+		var layout := map_3d._nation_label_layout(nation.id)
+		if layout.is_empty():
+			continue
+		var has_layout_contract := (
+			layout.has("inside_mask")
+			and layout.has("fits_mask")
+			and layout.has("hidden")
+			and layout.has("glyph_scale")
+		)
+		if not has_layout_contract:
+			hidden_layouts_valid = false
+			continue
+		if bool(layout["hidden"]):
+			hidden_layouts_valid = (
+				hidden_layouts_valid
+				and not bool(layout["fits_mask"])
+			)
+			continue
+		visible_layouts.append(layout)
+	var territory_labels_valid: bool = (
+		not map_3d._nation_labels.is_empty()
+		and map_3d._nation_labels.size() == visible_layouts.size()
+		and hidden_layouts_valid
+	)
+	var territory_label_basis_valid: bool = territory_labels_valid
+	var reference_basis := Basis.IDENTITY
+	if territory_labels_valid and not map_3d._nation_labels.is_empty():
+		reference_basis = map_3d._nation_labels[0].basis
+	for index in range(map_3d._nation_labels.size()):
+		var nation_label := map_3d._nation_labels[index]
+		var layout := visible_layouts[index]
+		var label_basis := nation_label.basis
 		territory_labels_valid = (
 			territory_labels_valid
 			and nation_label.billboard == BaseMaterial3D.BILLBOARD_DISABLED
 			and nation_label.no_depth_test
 			and nation_label.position.y < StrategicMap3D.HEIGHT_SCALE + 0.5
+			and nation_label.pixel_size > 0.0
+			and bool(layout["inside_mask"])
+			and bool(layout["fits_mask"])
+			and not bool(layout["hidden"])
 		)
-	var territory_label_scale_ratio := 0.0
-	if state.nations.size() >= 2:
-		var layout_a := map_3d._nation_label_layout(0)
-		var layout_b := map_3d._nation_label_layout(1)
-		if not layout_a.is_empty() and not layout_b.is_empty():
-			territory_label_scale_ratio = absf(
-				float(layout_a["glyph_scale"])
-				- float(layout_b["glyph_scale"])
-			)
+		territory_label_basis_valid = (
+			territory_label_basis_valid
+			and label_basis.x.normalized().dot(reference_basis.x.normalized())
+				> 0.999
+			and label_basis.y.normalized().dot(reference_basis.y.normalized())
+				> 0.999
+			and label_basis.z.normalized().dot(reference_basis.z.normalized())
+				> 0.999
+			and label_basis.x.x > 0.0
+			and label_basis.z.y > 0.99
+		)
 	var low_loyalty_color := MapRenderer.loyalty_color(10.0)
 	var middle_loyalty_color := MapRenderer.loyalty_color(50.0)
 	var high_loyalty_color := MapRenderer.loyalty_color(90.0)
 	var renderer_source := FileAccess.get_file_as_string(
 		"res://scripts/view/map_renderer.gd"
 	)
+	var map_label_font_start := renderer_source.find(
+		"static func create_map_label_font()"
+	)
+	var map_label_font_end := renderer_source.find(
+		"func _process", map_label_font_start
+	)
+	var map_label_font_source := ""
+	if map_label_font_start >= 0 and map_label_font_end > map_label_font_start:
+		map_label_font_source = renderer_source.substr(
+			map_label_font_start, map_label_font_end - map_label_font_start
+		)
 	var trade_draw_start := renderer_source.find("func _draw_trade_routes()")
 	var trade_draw_end := renderer_source.find(
 		"func _draw_trade_flow_markers", trade_draw_start
@@ -308,6 +360,24 @@ func _run() -> void:
 		and trade_visible_near
 		and trade_visible_far
 	)
+	var map_label_font_contract := (
+		map_label_font_source.contains(
+			"/System/Library/Fonts/Supplemental/Songti.ttc"
+		)
+		and map_label_font_source.contains(
+			"FileAccess.file_exists(mac_songti_path)"
+		)
+		and map_label_font_source.contains(
+			"mac_songti.load_dynamic_font(mac_songti_path) == OK"
+		)
+		and map_label_font_source.contains("\"serif\"")
+		and map_label_font_source.contains("\"Songti SC\"")
+		and map_label_font_source.contains("\"SimSun\"")
+		and map_label_font_source.contains("\"Noto Serif CJK SC\"")
+		and map_label_font_source.contains(
+			"portable_serif.allow_system_fallback = true"
+		)
+	)
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_LOYALTY)
 	var loyalty_mode_contract := (
 		map_3d.map_mode() == MapRenderer.MAP_MODE_LOYALTY
@@ -316,7 +386,139 @@ func _run() -> void:
 		and not map_3d._trade_routes.visible
 		and not map_3d._trade_flow_markers.visible
 	)
+	var sample_boundary_nation := state.cities[frontier.city_a].owner_nation
+	var expected_boundary_color := MapRenderer.nation_boundary_color(
+		state, sample_boundary_nation
+	)
+	var boundary_base := MapRenderer.paper_nation_color(
+		state.nations[sample_boundary_nation].color
+	)
+	var local_boundary_color_variant: Variant = terrain_material.get_shader_parameter(
+		"local_boundary_color"
+	)
+	var local_boundary_color := Color.BLACK
+	if local_boundary_color_variant is Vector3:
+		var local_boundary_rgb := local_boundary_color_variant as Vector3
+		local_boundary_color = Color(
+			local_boundary_rgb.x,
+			local_boundary_rgb.y,
+			local_boundary_rgb.z,
+			1.0
+		)
+	elif local_boundary_color_variant is Color:
+		local_boundary_color = local_boundary_color_variant as Color
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_POLITICAL)
+	var boundary_local_ink: bool = MapRenderer.LOCAL_BOUNDARY_INK.is_equal_approx(
+		Color(0.0, 0.0, 0.0, 1.0)
+	)
+	var boundary_local_width: bool = is_equal_approx(
+		MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, 1.0
+	)
+	var boundary_country_width: bool = is_equal_approx(
+		MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 3.0
+	)
+	var boundary_value_scale: bool = is_equal_approx(
+		MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE, 1.08
+	)
+	var boundary_saturation_scale: bool = is_equal_approx(
+		MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE, 1.35
+	)
+	var boundary_aa: bool = is_zero_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX)
+	var boundary_texture_bound: bool = (
+		terrain_material.get_shader_parameter(
+			"country_boundary_texture"
+		) == map_3d._country_boundary_texture
+	)
+	var boundary_strength: bool = is_equal_approx(
+		float(terrain_material.get_shader_parameter(
+			"country_boundary_strength"
+		)),
+		1.0
+	)
+	var boundary_shader_color: bool = (
+		local_boundary_color.is_equal_approx(
+			MapRenderer.LOCAL_BOUNDARY_INK
+		)
+		and is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"local_boundary_alpha"
+			)),
+			1.0
+		)
+	)
+	var boundary_shader_alpha: bool = is_equal_approx(
+		float(terrain_material.get_shader_parameter(
+			"local_boundary_alpha"
+		)),
+		1.0
+	)
+	var boundary_shader_widths: bool = (
+		is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"local_boundary_core_radius_px"
+			)),
+			0.5
+		)
+		and is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"local_boundary_outer_radius_px"
+			)),
+			0.5
+		)
+		and is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"country_boundary_core_width_px"
+			)),
+			3.0
+		)
+		and is_equal_approx(
+			float(terrain_material.get_shader_parameter(
+				"country_boundary_outer_width_px"
+			)),
+			3.0
+		)
+	)
+	var boundary_shader_source_contract: bool = (
+		terrain_shader_code.contains(
+			"uniform sampler2D country_boundary_texture"
+		)
+		and terrain_shader_code.contains(
+			"uniform float country_boundary_strength"
+		)
+		and terrain_shader_code.contains(
+			"uniform vec3 local_boundary_color"
+		)
+		and terrain_shader_code.contains(
+			"uniform float local_boundary_alpha"
+		)
+		and terrain_shader_code.contains(
+			"uniform float local_boundary_core_radius_px = 0.5"
+		)
+		and terrain_shader_code.contains(
+			"uniform float local_boundary_outer_radius_px = 0.5"
+		)
+		and terrain_shader_code.contains(
+			"uniform float country_boundary_core_width_px = 3.0"
+		)
+		and terrain_shader_code.contains(
+			"uniform float country_boundary_outer_width_px = 3.0"
+		)
+		and not terrain_shader_code.contains(
+			"final_color = mix(final_color, coast_country.rgb, coast_ink)"
+		)
+		and not terrain_shader_code.contains("coast_distance_px")
+	)
+	var boundary_texture_mipmaps: bool = (
+		map_3d._country_boundary_texture != null
+		and not map_3d._country_boundary_texture.get_image().has_mipmaps()
+	)
+	var boundary_texture_size: bool = (
+		map_3d._country_boundary_texture != null
+		and map_3d._province_texture != null
+		and map_3d._country_boundary_texture.get_size()
+			== map_3d._province_texture.get_size()
+	)
+
 	var checks := {
 		"city_bases": map_3d._city_bases.multimesh.instance_count == state.cities.size(),
 		"city_resources": map_3d._city_resource_markers.multimesh.instance_count == state.cities.size(),
@@ -335,6 +537,7 @@ func _run() -> void:
 			and campaign_material.albedo_texture
 				== MapRenderer.CAMPAIGN_ARROW_TEXTURE
 		),
+			"map_label_font_contract": map_label_font_contract,
 		"campaign_unlit_surface": (
 			campaign_material != null
 			and campaign_material.shading_mode
@@ -389,40 +592,68 @@ func _run() -> void:
 		"political_trade_hidden": political_trade_hidden,
 		"trade_mode_visibility": trade_mode_visibility,
 		"loyalty_mode_contract": loyalty_mode_contract,
+		"boundary_local_ink": boundary_local_ink,
+		"boundary_local_width": boundary_local_width,
+		"boundary_country_width": boundary_country_width,
+		"boundary_value_scale": boundary_value_scale,
+		"boundary_saturation_scale": boundary_saturation_scale,
+		"boundary_aa": boundary_aa,
+		"boundary_texture_bound": boundary_texture_bound,
+		"boundary_strength": boundary_strength,
+		"boundary_shader_color": boundary_shader_color,
+		"boundary_shader_alpha": boundary_shader_alpha,
+		"boundary_shader_widths": boundary_shader_widths,
+		"boundary_shader_source_contract": boundary_shader_source_contract,
+		"boundary_texture_mipmaps": boundary_texture_mipmaps,
+		"boundary_texture_size": boundary_texture_size,
 		"country_boundary_contract": (
-			map_3d._country_boundary_texture != null
-			and map_3d._country_color_texture != null
-			and map_3d._country_boundary_texture.get_size()
-				== map_3d._province_texture.get_size()
-			and map_3d._country_color_texture.get_size()
-				== map_3d._province_texture.get_size()
-			and terrain_material.get_shader_parameter(
-				"country_boundary_texture"
-			) == map_3d._country_boundary_texture
-			and terrain_material.get_shader_parameter(
-				"country_color_texture"
-			) == map_3d._country_color_texture
-			and is_equal_approx(
-				float(terrain_material.get_shader_parameter(
-					"country_boundary_strength"
-				)),
-				1.0
-			)
-			and map_3d._country_boundary_texture.get_image().has_mipmaps()
-			and terrain_shader_code.contains(
-				"uniform sampler2D country_boundary_texture"
-			)
-			and terrain_shader_code.contains(
-				"uniform sampler2D country_color_texture"
-			)
-			and terrain_shader_code.contains(
-				"uniform float country_boundary_strength"
-			)
-			and not terrain_shader_code.contains(
-				"diplomatic_boundary_texture"
-			)
-			and not terrain_shader_code.contains(
-				"diplomatic_boundary_strength"
+			boundary_local_ink
+			and boundary_local_width
+			and boundary_country_width
+			and boundary_value_scale
+			and boundary_saturation_scale
+			and boundary_aa
+			and boundary_texture_bound
+			and boundary_strength
+			and boundary_shader_color
+			and boundary_shader_alpha
+			and boundary_shader_widths
+			and boundary_shader_source_contract
+			and boundary_texture_mipmaps
+			and boundary_texture_size
+		),
+		"nation_boundary_color_contract": (
+			is_equal_approx(expected_boundary_color.a, 1.0)
+			and expected_boundary_color.v
+				>= clampf(
+					maxf(boundary_base.v, 0.72)
+						* MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE,
+					0.0, 1.0
+				) - 0.0001
+			and expected_boundary_color.s
+				>= clampf(
+					maxf(boundary_base.s, 0.72)
+						* MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
+					0.0, 1.0
+				) - 0.0001
+			and expected_boundary_color.v >= boundary_base.v
+			and expected_boundary_color.s >= boundary_base.s
+			and is_equal_approx(expected_boundary_color.h, boundary_base.h)
+			and expected_boundary_color.is_equal_approx(
+				Color.from_hsv(
+					boundary_base.h,
+					clampf(
+						maxf(boundary_base.s, 0.72)
+							* MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
+						0.0, 1.0
+					),
+					clampf(
+						maxf(boundary_base.v, 0.72)
+							* MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE,
+						0.0, 1.0
+					),
+					1.0
+				)
 			)
 		),
 		"terrain_light_contract": (
@@ -479,7 +710,7 @@ func _run() -> void:
 			)
 		),
 		"territory_labels": territory_labels_valid,
-		"territory_label_scaling": territory_label_scale_ratio > 0.001,
+		"territory_label_basis": territory_label_basis_valid,
 	}
 	var valid := true
 	for check_value in checks.values():

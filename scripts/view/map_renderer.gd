@@ -60,17 +60,17 @@ const TRADE_FLOW_SPEED_PX: float = 34.0
 const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
 const LOYALTY_MID_COLOR := Color(0.92, 0.68, 0.12, 1.0)
 const LOYALTY_HIGH_COLOR := Color(0.12, 0.58, 0.24, 1.0)
-## 政治边界统一使用纯色实线。省界位于城市分界中心；国界的两条国家色
-## 描边分别内缩到各自领土，因此同一国界能同时表达两侧国家。
-const LOCAL_BOUNDARY_INK := Color(0.30, 0.045, 0.035, 1.0)
+## 政治边界统一使用纯色实线。省界是纯黑 1px；国界的两条国家色描边分别
+## 内缩到各自领土，因此同一国界能同时表达两侧国家。
+const LOCAL_BOUNDARY_INK := Color(0.0, 0.0, 0.0, 1.0)
 const POLITICAL_MAP_DEFAULT_STRENGTH: float = 0.93
 const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
 const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
 const LOCAL_BOUNDARY_WIDTH_PX: float = 1.0
 const COUNTRY_BOUNDARY_WIDTH_PX: float = 3.0
-const COUNTRY_BOUNDARY_VALUE_SCALE: float = 0.75
-const COUNTRY_BOUNDARY_SATURATION_SCALE: float = 1.15
-const BOUNDARY_ANTIALIAS_PX: float = 0.50
+const COUNTRY_BOUNDARY_VALUE_SCALE: float = 1.08
+const COUNTRY_BOUNDARY_SATURATION_SCALE: float = 1.35
+const BOUNDARY_ANTIALIAS_PX: float = 0.0
 const VASSAL_BRIGHTNESS_STEP: float = 0.15
 const CAMPAIGN_ARROW_TEXTURE := preload(
 	"res://assets/ui/strategic/offensive_arc_arrow.png"
@@ -525,11 +525,19 @@ static func create_ui_font() -> Font:
 
 
 static func create_map_label_font() -> Font:
-	# The UI factory already resolves native CJK sans/Hei font files on every
-	# supported platform. Reusing its FontFile keeps headless/exported rendering
-	# stable on the supported desktop targets and avoids unnecessary SystemFont
-	# family discovery when a known CJK font file is present.
-	return create_ui_font()
+	var mac_songti_path := "/System/Library/Fonts/Supplemental/Songti.ttc"
+	if FileAccess.file_exists(mac_songti_path):
+		var mac_songti := FontFile.new()
+		if mac_songti.load_dynamic_font(mac_songti_path) == OK:
+			return mac_songti
+	var portable_serif := SystemFont.new()
+	portable_serif.font_names = PackedStringArray([
+		"serif", "Songti SC", "Songti TC", "STSong",
+		"SimSun", "NSimSun", "Noto Serif CJK SC",
+		"Source Han Serif SC",
+	])
+	portable_serif.allow_system_fallback = true
+	return portable_serif
 
 
 func _process(_delta: float) -> void:
@@ -2004,8 +2012,8 @@ static func _dilate_political_fill(
 	return result
 
 
-## 将共享平滑路径栅格化为抗锯齿实线。省界是 1px 暗红线；国家边界
-## 以共享中心为轴向两国各延伸 3px，RGB 由所在国家自身颜色决定。
+## 将共享平滑路径栅格化为硬实线。省界是纯黑 1px；国家边界
+## 以共享中心为轴向两国各延伸 3px，RGB 由所在国家自身鲜艳颜色决定。
 static func build_soft_boundary_images(
 	game_state: GameState,
 	boundary_geometry: Dictionary = {}
@@ -2024,15 +2032,6 @@ static func build_soft_boundary_images(
 		BOUNDARY_ANTIALIAS_PX
 	)
 	var country := build_country_boundary_image(game_state, geometry, true)
-	# The shader uses trilinear/anisotropic sampling at oblique overview angles.
-	# Dynamic ImageTextures do not acquire mip levels automatically, so build
-	# them explicitly after all max-coverage compositing is complete.
-	var mipmap_error: Error = province.generate_mipmaps()
-	if mipmap_error != OK:
-		push_error(
-			"Failed to generate province-boundary mipmaps: %d"
-				% mipmap_error
-		)
 	return {
 		"province": province,
 		"country": country,
@@ -2132,8 +2131,6 @@ static func build_country_boundary_image(
 	var country := Image.create(
 		output_size.x, output_size.y, false, Image.FORMAT_RGBA8
 	)
-	# Linear mip sampling must blend toward transparent black. Godot's
-	# Color.TRANSPARENT carries white RGB and otherwise creates a pale fringe.
 	country.fill(Color(0.0, 0.0, 0.0, 0.0))
 	var closest_distance_key := PackedInt32Array()
 	closest_distance_key.resize(output_size.x * output_size.y)
@@ -2159,12 +2156,6 @@ static func build_country_boundary_image(
 			geometry.get("coast_side", PackedVector2Array()),
 			PackedVector2Array(),
 			closest_distance_key, closest_owner
-		)
-	var mipmap_error: Error = country.generate_mipmaps()
-	if mipmap_error != OK:
-		push_error(
-			"Failed to generate country-boundary mipmaps: %d"
-			% mipmap_error
 		)
 	return country
 
@@ -2229,9 +2220,7 @@ static func _rasterize_owned_boundary_side(
 	var color := nation_boundary_color(game_state, owner_id)
 	var segment_length := from.distance_to(to)
 	var step_count := maxi(int(ceil(segment_length / 0.34)), 1)
-	var outer_width := (
-		COUNTRY_BOUNDARY_WIDTH_PX + BOUNDARY_ANTIALIAS_PX
-	)
+	var outer_width := COUNTRY_BOUNDARY_WIDTH_PX + BOUNDARY_ANTIALIAS_PX
 	for step in range(step_count + 1):
 		var center := from.lerp(to, float(step) / float(step_count))
 		var x_from := clampi(
@@ -2277,19 +2266,15 @@ static func _rasterize_owned_boundary_side(
 					continue
 				var coverage := (
 					1.0
-					if distance <= COUNTRY_BOUNDARY_WIDTH_PX
+					if (
+						BOUNDARY_ANTIALIAS_PX <= 0.000001
+						or distance <= COUNTRY_BOUNDARY_WIDTH_PX
+					)
 					else 1.0 - smoothstep(
 						COUNTRY_BOUNDARY_WIDTH_PX, outer_width, distance
 					)
 				)
-				# Store raw linear-premultiplied RGB. The texture sampler deliberately
-				# has no source_color conversion, so mip generation and filtering stay
-				# linear; the shader divides by alpha without dark/white halos.
-				var linear_color := color.srgb_to_linear()
-				linear_color.r *= coverage
-				linear_color.g *= coverage
-				linear_color.b *= coverage
-				var source := linear_color
+				var source := color
 				source.a = coverage
 				closest_distance_key[pixel_index] = distance_key
 				closest_owner[pixel_index] = owner_id
@@ -2322,7 +2307,7 @@ static func _rasterize_soft_segments_into(
 		return
 	var image_size := Vector2(image.get_width(), image.get_height())
 	var core_radius := maxf(core_width_px * 0.5, 0.05)
-	var outer_radius := core_radius + maxf(feather_px, 0.05)
+	var outer_radius := core_radius + maxf(feather_px, 0.0)
 	for index in range(0, segments.size(), 2):
 		var from := segments[index] * image_size
 		var to := segments[index + 1] * image_size
@@ -2352,7 +2337,7 @@ static func _rasterize_soft_segments_into(
 						continue
 					var coverage := (
 						1.0
-						if distance <= core_radius
+						if feather_px <= 0.000001 or distance <= core_radius
 						else 1.0 - smoothstep(core_radius, outer_radius, distance)
 					)
 					var source := color
@@ -2371,8 +2356,7 @@ static func paper_nation_color(color: Color) -> Color:
 	return GameState.normalize_nation_color(color)
 
 
-## 国家边界使用国家自己的色相，而非外交关系色。相对本国底色降低 25%
-## 明度、提高 15% 饱和度，落在需求给出的 20-30% / 10-20% 区间中点。
+## 国家边界保持国家自身 hue，但改成更鲜艳、更亮的纯色实线。
 static func nation_boundary_color(
 	game_state: GameState,
 	nation_id: int
@@ -2386,8 +2370,8 @@ static func nation_boundary_color(
 	var base := paper_nation_color(game_state.nations[nation_id].color)
 	return Color.from_hsv(
 		base.h,
-		clampf(base.s * COUNTRY_BOUNDARY_SATURATION_SCALE, 0.0, 1.0),
-		clampf(base.v * COUNTRY_BOUNDARY_VALUE_SCALE, 0.0, 1.0),
+		clampf(maxf(base.s, 0.72) * COUNTRY_BOUNDARY_SATURATION_SCALE, 0.0, 1.0),
+		clampf(maxf(base.v, 0.72) * COUNTRY_BOUNDARY_VALUE_SCALE, 0.0, 1.0),
 		1.0
 	)
 
@@ -3453,7 +3437,7 @@ func _draw_province_boundaries() -> void:
 	pixels.resize(segments.size())
 	for index in range(segments.size()):
 		pixels[index] = _origin + segments[index] * _map_size
-	draw_multiline(pixels, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX, true)
+	draw_multiline(pixels, LOCAL_BOUNDARY_INK, LOCAL_BOUNDARY_WIDTH_PX, false)
 
 
 func _draw_national_boundaries() -> void:
@@ -3498,12 +3482,8 @@ func _draw_owned_boundary_sides_2d(
 		draw_line(
 			from + offset, to + offset,
 			color,
-			COUNTRY_BOUNDARY_WIDTH_PX, true
+			COUNTRY_BOUNDARY_WIDTH_PX, false
 		)
-		# Round caps close the tiny wedges created where independently offset
-		# segments meet at bends and three-country junctions.
-		draw_circle(from + offset, COUNTRY_BOUNDARY_WIDTH_PX * 0.5, color)
-		draw_circle(to + offset, COUNTRY_BOUNDARY_WIDTH_PX * 0.5, color)
 
 
 func _draw_campaign_arrows() -> void:

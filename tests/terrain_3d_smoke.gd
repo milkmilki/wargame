@@ -208,7 +208,7 @@ func _run() -> void:
 		if (
 			shader_line.contains("boundary_texture")
 			and shader_line.contains("uniform sampler2D")
-			and shader_line.contains("filter_linear_mipmap_anisotropic")
+			and shader_line.contains("filter_nearest")
 			and shader_line.contains("repeat_disable")
 		):
 			boundary_sampler_lines += 1
@@ -269,7 +269,7 @@ func _run() -> void:
 		and is_equal_approx(
 			boundary_country_color.s,
 			clampf(
-				base_country_color.s
+				maxf(base_country_color.s, 0.72)
 					* MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
 				0.0, 1.0
 			)
@@ -277,7 +277,7 @@ func _run() -> void:
 		and is_equal_approx(
 			boundary_country_color.v,
 			clampf(
-				base_country_color.v
+				maxf(base_country_color.v, 0.72)
 					* MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE,
 				0.0, 1.0
 			)
@@ -494,7 +494,7 @@ func _run() -> void:
 				== map_3d._province_texture.get_size()
 			and terrain_shader_code.contains("country_boundary_texture")
 			and terrain_shader_code.contains(
-				"uniform sampler2D country_boundary_texture : filter_linear_mipmap_anisotropic"
+				"uniform sampler2D country_boundary_texture : source_color, filter_nearest"
 			)
 			and terrain_shader_code.contains("country_color_texture")
 			and terrain_shader_code.contains("province_boundary_texture")
@@ -503,13 +503,14 @@ func _run() -> void:
 			and not terrain_shader_code.contains("diplomatic_tint")
 			and terrain_shader_code.contains("local_boundary_color")
 			and terrain_shader_code.contains(
-				"country_boundary.rgb / max(country_boundary.a, 0.00001)"
+				"final_color = mix(final_color, country_boundary.rgb, country_ink)"
 			)
 			and terrain_shader_code.contains(
-				"final_color = mix(final_color, country_ink_color, country_ink)"
+				"float province_ink = smoothstep("
 			)
-			and not terrain_shader_code.contains("province_ink = step(")
-			and not terrain_shader_code.contains("country_ink = step(")
+			and terrain_shader_code.contains(
+				"float country_ink = smoothstep("
+			)
 			and boundary_sampler_lines == 2
 			and map_3d._boundaries.mesh == null
 			and province_boundaries.get_size() == canvas_fill.get_size()
@@ -519,28 +520,23 @@ func _run() -> void:
 			and direct_country_boundaries.get_data()
 				== country_boundaries.get_data()
 			and terrain_fill_covers_land
-			and province_boundaries.has_mipmaps()
-			and country_boundaries.has_mipmaps()
-			and map_3d._province_boundary_texture.get_image().has_mipmaps()
-			and map_3d._country_boundary_texture.get_image().has_mipmaps()
 			and MapRenderer.LOCAL_BOUNDARY_INK.is_equal_approx(
-				Color(0.30, 0.045, 0.035, 1.0)
+				Color(0.0, 0.0, 0.0, 1.0)
 			)
 			and is_equal_approx(MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, 1.0)
 			and is_equal_approx(MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 3.0)
 			and is_equal_approx(
-				MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE, 0.75
+				MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE, 1.08
 			)
 			and is_equal_approx(
-				MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE, 1.15
+				MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE, 1.35
 			)
-			and is_equal_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX, 0.50)
+			and is_equal_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX, 0.0)
 			and nation_color_contract
 			and province_boundary_max_alpha > 0.98
 			and country_boundary_max_alpha > 0.98
 			and province_boundary_pixels > 0
 			and country_boundary_pixels > 0
-			and province_has_antialias
 			and diplomacy_refresh_kept_fill
 			and dynamic_refresh_kept_static_boundaries
 			and topology_refresh_rebuilds_fill
@@ -626,25 +622,17 @@ func _run() -> void:
 				== state.province_map_size.y
 					* MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
 		),
-		# 3D 海岸与政治上色共享 terrain_elevation 的同一条 0m 等值线，
-		# 使用陆侧国家纯色和 3px 国家边界宽度；省份栅格海岸不得上传。
+		# 海岸仍保留 0m 语义与国家边界参数，但本轮边界合同改为 nearest +
+		# 硬核心，不再要求旧的 coast soft-coverage 高程混色公式。
 		"unified_coast_boundary_style": (
 			not zero_meter_city_boundary.is_empty()
 			and zero_meter_city_boundary.size() % 2 == 0
-			and terrain_shader_code.contains("fwidth(terrain_elevation)")
-			and terrain_shader_code.contains("coast_distance_px")
-			and terrain_shader_code.contains("step(0.000001, coast_gradient)")
-			and not terrain_shader_code.contains("coast_domain_crossing")
-			and terrain_shader_code.contains("coast_mesh_band")
-			and not terrain_shader_code.contains("coast_ink = step(")
-			and terrain_shader_code.contains(
-				"terrain_elevation - ocean_height_threshold"
-			)
 			and terrain_shader_code.contains("coast_boundary_strength")
-			and terrain_shader_code.contains(
-				"coast_coverage * coast_boundary_strength * coast_country.a"
+			and not terrain_shader_code.contains("coast_distance_px")
+			and not terrain_shader_code.contains(
+				"coast_coverage * coast_boundary_strength"
 			)
-			and terrain_shader_code.contains(
+			and not terrain_shader_code.contains(
 				"final_color = mix(final_color, coast_country.rgb, coast_ink)"
 			)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
@@ -655,19 +643,13 @@ func _run() -> void:
 			)), MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"local_boundary_outer_radius_px"
-			)), (
-				MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
-					+ MapRenderer.BOUNDARY_ANTIALIAS_PX
-			))
+			)), MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"country_boundary_core_width_px"
 			)), MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"country_boundary_outer_width_px"
-			)), (
-				MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
-					+ MapRenderer.BOUNDARY_ANTIALIAS_PX
-			))
+			)), MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX)
 		),
 		"boundary_lod": (
 			terrain_shader_code.contains("province_boundary_strength")
