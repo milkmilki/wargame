@@ -156,6 +156,8 @@ var _supply_network_fingerprints: Dictionary = {}
 ## 输入完全相同时复用。缓存结果只供 Simulation 内部只读消费者共享。
 var _trade_structure_fingerprint: PackedByteArray = PackedByteArray()
 var _trade_structure_cache: Dictionary = {}
+var _trade_shared_caches: Dictionary = {}
+var _trade_domestic_ideal_cache_generation: Array[int] = []
 var _trade_settlement_fingerprint: PackedByteArray = PackedByteArray()
 var _trade_result_cache: Dictionary = {}
 var _trade_gold_flows_cache: Array[Dictionary] = []
@@ -200,6 +202,12 @@ var trade_structure_build_total: int = 0
 var trade_structure_cache_hit_total: int = 0
 var trade_forecast_build_total: int = 0
 var trade_forecast_cache_hit_total: int = 0
+var trade_domestic_ideal_cache_build_total: int = 0
+var trade_domestic_ideal_cache_hit_total: int = 0
+var trade_domestic_ideal_cache_miss_total: int = 0
+var trade_domestic_ideal_cache_generation_clear_total: int = 0
+var trade_domestic_ideal_graph_fingerprint_total: int = 0
+var trade_domestic_ideal_graph_fingerprint_usec_total: int = 0
 ## 运行时 ThreatField worker 墙钟统计，供多核 A/B 与现场诊断。
 var ai_threat_worker_count_last: int = 0
 var ai_threat_worker_last_usec: int = 0
@@ -279,6 +287,9 @@ var diplomacy_mobilization_evaluation_cache_total: int = 0
 ## 贸易预测 A/B：true 时每次请求都重新 build_structure + settle。
 ## 正式运行保持 false；该开关不改变结算路径或结果，只禁用两层复用。
 var trade_forecast_cache_disabled: bool = false
+## domestic ideal field 跨 build shared cache A/B：true 时不传 shared cache 且清空。
+## 正式运行保持 false；关闭后仅回退该层缓存，其余 trade forecast 行为不变。
+var trade_domestic_ideal_field_cache_disabled: bool = false
 ## 行军容量索引 A/B：true 恢复每次入边都扫描全部军队的旧逻辑；正式运行 false。
 var movement_capacity_index_disabled: bool = false
 ## 仅在单次 _advance_movement 内存活的局部索引。键为
@@ -297,6 +308,12 @@ var priority_defense_frame_slicing_disabled: bool = false
 
 func setup(game_state: GameState) -> void:
 	state = game_state
+	trade_domestic_ideal_field_cache_disabled = (
+		trade_domestic_ideal_field_cache_disabled
+		or OS.get_environment(
+			"TRADE_DISABLE_DOMESTIC_IDEAL_CACHE"
+		) == "1"
+	)
 	_normalize_city_fortifications()
 	state.refresh_derived()
 	_reset_trade_forecast_cache()
@@ -974,6 +991,8 @@ static func effective_tribute_rate(
 func _reset_trade_forecast_cache() -> void:
 	_trade_structure_fingerprint = PackedByteArray()
 	_trade_structure_cache.clear()
+	_trade_shared_caches.clear()
+	_trade_domestic_ideal_cache_generation.clear()
 	_trade_settlement_fingerprint = PackedByteArray()
 	_trade_result_cache.clear()
 	_trade_gold_flows_cache.clear()
@@ -981,6 +1000,12 @@ func _reset_trade_forecast_cache() -> void:
 	trade_structure_cache_hit_total = 0
 	trade_forecast_build_total = 0
 	trade_forecast_cache_hit_total = 0
+	trade_domestic_ideal_cache_build_total = 0
+	trade_domestic_ideal_cache_hit_total = 0
+	trade_domestic_ideal_cache_miss_total = 0
+	trade_domestic_ideal_cache_generation_clear_total = 0
+	trade_domestic_ideal_graph_fingerprint_total = 0
+	trade_domestic_ideal_graph_fingerprint_usec_total = 0
 
 
 ## 当前贸易结算和财政预测的完整、无碰撞 token。结构 fingerprint 负责路线、
@@ -1054,6 +1079,9 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 	var structure_profile: Dictionary = (
 		{"enabled": true} if forecast_substage_enabled else {}
 	)
+	var domestic_shared_caches := _trade_domestic_ideal_shared_caches(
+		structure_profile
+	)
 	if (
 		not trade_forecast_cache_disabled
 		and not _trade_structure_cache.is_empty()
@@ -1065,9 +1093,20 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 		structure = TradeNetwork.build_structure(
 			state,
 			true,
-			structure_profile
+			structure_profile,
+			domestic_shared_caches
 		)
 		trade_structure_build_total += 1
+		var counters := TradeNetwork.connectivity_prefilter_counters()
+		trade_domestic_ideal_cache_build_total += int(
+			counters.get("domestic_ideal_shared_cache_builds", 0)
+		)
+		trade_domestic_ideal_cache_hit_total += int(
+			counters.get("domestic_ideal_shared_cache_hits", 0)
+		)
+		trade_domestic_ideal_cache_miss_total += int(
+			counters.get("domestic_ideal_shared_cache_misses", 0)
+		)
 		if not trade_forecast_cache_disabled:
 			_trade_structure_fingerprint = structure_fingerprint
 			_trade_structure_cache = structure
@@ -1141,6 +1180,26 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 		"trade": trade,
 		"gold_flows": gold_flows,
 	}
+
+
+func _trade_domestic_ideal_shared_caches(
+	structure_profile: Dictionary
+) -> Dictionary:
+	if trade_forecast_cache_disabled or trade_domestic_ideal_field_cache_disabled:
+		_trade_shared_caches.clear()
+		_trade_domestic_ideal_cache_generation.clear()
+		return {}
+	var generation: Array[int] = [
+		state.ownership_revision,
+		state.road_network_revision,
+	]
+	if _trade_domestic_ideal_cache_generation != generation:
+		_trade_shared_caches.clear()
+		_trade_domestic_ideal_cache_generation = generation.duplicate()
+		trade_domestic_ideal_cache_generation_clear_total += 1
+	if not _trade_shared_caches.has("domestic_ideal_fields"):
+		_trade_shared_caches["domestic_ideal_fields"] = {}
+	return _trade_shared_caches
 
 
 ## 为只接受 Dictionary 的静态 AI 评估器注入同一份实例预测。Dictionary 每次

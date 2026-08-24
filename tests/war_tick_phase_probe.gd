@@ -30,6 +30,19 @@ const AI_STAGES: Array[String] = [
 	"ai_snapshot_forecast_structure_inputs",
 	"ai_snapshot_forecast_structure_graph",
 	"ai_snapshot_forecast_structure_domestic",
+	"ai_snapshot_forecast_structure_domestic_ideal_graph_fingerprint",
+	"ai_snapshot_forecast_structure_domestic_prep",
+	"ai_snapshot_forecast_structure_domestic_context",
+	"ai_snapshot_forecast_structure_domestic_context_mask_block_key",
+	"ai_snapshot_forecast_structure_domestic_context_ideal_field",
+	"ai_snapshot_forecast_structure_domestic_context_ideal_field_cache_hits",
+	"ai_snapshot_forecast_structure_domestic_context_ideal_field_cache_misses",
+	"ai_snapshot_forecast_structure_domestic_context_ideal_field_cache_builds",
+	"ai_snapshot_forecast_structure_domestic_context_operational_field",
+	"ai_snapshot_forecast_structure_domestic_route_select",
+	"ai_snapshot_forecast_structure_domestic_route_explain",
+	"ai_snapshot_forecast_structure_domestic_route_materialize",
+	"ai_snapshot_forecast_structure_domestic_unaccounted",
 	"ai_snapshot_forecast_structure_international_candidates",
 	"ai_snapshot_forecast_structure_international_routes",
 	"ai_snapshot_forecast_structure_result",
@@ -177,6 +190,17 @@ func _init() -> void:
 			"PHASE_LEGACY_DIPLOMACY_STRUCTURE_CACHE"
 		) == "1"
 	)
+	var domestic_ideal_cache_disabled := (
+		OS.get_environment(
+			"PHASE_LEGACY_DOMESTIC_IDEAL_FIELD_CACHE"
+		) == "1"
+	)
+	sim.trade_domestic_ideal_field_cache_disabled = (
+		domestic_ideal_cache_disabled
+	)
+	TradeNetwork.set_domestic_ideal_shared_cache_enabled(
+		not domestic_ideal_cache_disabled
+	)
 
 	var peaceful := _new_bucket()
 	var wartime := _new_bucket()
@@ -194,6 +218,14 @@ func _init() -> void:
 	_print_bucket("战争日", wartime)
 	print("外交动员 action 缓存构建=%d" % [
 		sim.diplomacy_mobilization_evaluation_cache_total,
+	])
+	print("贸易 domestic ideal cache build=%d hit=%d miss=%d generation_clear=%d graph_fp_build=%d graph_fp_total=%.2fms" % [
+		sim.trade_domestic_ideal_cache_build_total,
+		sim.trade_domestic_ideal_cache_hit_total,
+		sim.trade_domestic_ideal_cache_miss_total,
+		sim.trade_domestic_ideal_cache_generation_clear_total,
+		sim.trade_domestic_ideal_graph_fingerprint_total,
+		float(sim.trade_domestic_ideal_graph_fingerprint_usec_total) / 1000.0,
 	])
 	print("verdict=WAR_PHASE_PROBE_DONE")
 	sim.free()

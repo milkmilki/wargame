@@ -62,8 +62,10 @@ const COST_SCALE: int = 1000
 const INF_COST_UNITS: int = 0x3fffffffffffffff
 const SORT_SCALE: float = 1000000.0
 const UNREACHABLE_COST: float = -1.0
+const DOMESTIC_IDEAL_SHARED_CACHE_MAX_ENTRIES: int = 128
 
 ## 仅用于性能等价测试/微基准，不写入 build()/build_structure() 返回值。
+## build_structure 当前在主线程串行执行；这些静态计数不做并发同步。
 static var _candidate_dijkstra_field_builds: int = 0
 static var _candidate_connectivity_queries: int = 0
 static var _candidate_connectivity_searches: int = 0
@@ -71,10 +73,16 @@ static var _candidate_connectivity_union_graph_builds: int = 0
 static var _candidate_connectivity_rejections: int = 0
 static var _connectivity_prefilter_union_cache_enabled: bool = true
 static var _domestic_shared_field_context_enabled: bool = true
+static var _domestic_ideal_shared_cache_enabled: bool = true
 static var _domestic_context_builds: int = 0
 static var _domestic_field_builds: int = 0
 static var _domestic_route_queries: int = 0
 static var _domestic_legacy_derive_calls: int = 0
+static var _domestic_ideal_shared_cache_hits: int = 0
+static var _domestic_ideal_shared_cache_misses: int = 0
+static var _domestic_ideal_shared_cache_builds: int = 0
+static var _domestic_ideal_shared_cache_clears: int = 0
+static var _domestic_ideal_shared_cache_evictions: int = 0
 
 
 static func reset_connectivity_prefilter_counters() -> void:
@@ -87,6 +95,11 @@ static func reset_connectivity_prefilter_counters() -> void:
 	_domestic_field_builds = 0
 	_domestic_route_queries = 0
 	_domestic_legacy_derive_calls = 0
+	_domestic_ideal_shared_cache_hits = 0
+	_domestic_ideal_shared_cache_misses = 0
+	_domestic_ideal_shared_cache_builds = 0
+	_domestic_ideal_shared_cache_clears = 0
+	_domestic_ideal_shared_cache_evictions = 0
 
 
 static func connectivity_prefilter_counters() -> Dictionary:
@@ -110,6 +123,24 @@ static func connectivity_prefilter_counters() -> Dictionary:
 		"domestic_shared_field_context_enabled": (
 			_domestic_shared_field_context_enabled_now()
 		),
+		"domestic_ideal_shared_cache_enabled": (
+			_domestic_ideal_shared_cache_enabled_now()
+		),
+		"domestic_ideal_shared_cache_hits": (
+			_domestic_ideal_shared_cache_hits
+		),
+		"domestic_ideal_shared_cache_misses": (
+			_domestic_ideal_shared_cache_misses
+		),
+		"domestic_ideal_shared_cache_builds": (
+			_domestic_ideal_shared_cache_builds
+		),
+		"domestic_ideal_shared_cache_clears": (
+			_domestic_ideal_shared_cache_clears
+		),
+		"domestic_ideal_shared_cache_evictions": (
+			_domestic_ideal_shared_cache_evictions
+		),
 	}
 
 
@@ -123,6 +154,12 @@ static func set_domestic_shared_field_context_enabled(
 	enabled: bool
 ) -> void:
 	_domestic_shared_field_context_enabled = enabled
+
+
+static func set_domestic_ideal_shared_cache_enabled(
+	enabled: bool
+) -> void:
+	_domestic_ideal_shared_cache_enabled = enabled
 
 
 static func _union_connectivity_prefilter_enabled() -> bool:
@@ -147,6 +184,12 @@ static func _domestic_shared_field_context_enabled_now() -> bool:
 	return _domestic_shared_field_context_enabled
 
 
+static func _domestic_ideal_shared_cache_enabled_now() -> bool:
+	if OS.get_environment("TRADE_DISABLE_DOMESTIC_IDEAL_CACHE") == "1":
+		return false
+	return _domestic_ideal_shared_cache_enabled
+
+
 ## 权威入口。结构派生与动态粮食结算分层后仍保持原返回结构逐字段等价。
 ## 返回的整数数组均以 city_id / nation_id 为下标。
 static func build(
@@ -157,10 +200,15 @@ static func build(
 
 ## 可跨多次预测复用的昂贵结构层：图搜索、路线选择与路线税均只依赖
 ## structure_fingerprint() 覆盖的字段，不读取库存、国库或粮食需求。
+## domestic ideal shared cache 的正确性在此函数内自包含：exact graph
+## fingerprint 每次 build 只在入口计算一次，且 shared key 显式包含
+## valid_sources + ideal_allowed_key + exact graph fingerprint，不依赖
+## Simulation generation 是否正确；generation 仅用于粗粒度清理。
 static func build_structure(
 	state: GameState,
 	use_connectivity_prefilter: bool = true,
-	build_profile: Dictionary = {}
+	build_profile: Dictionary = {},
+	shared_caches: Dictionary = {}
 ) -> Dictionary:
 	if state == null:
 		return _empty_structure(0, 0, structure_fingerprint(null))
@@ -201,12 +249,33 @@ static func build_structure(
 			Time.get_ticks_usec() - stage_started
 		)
 		stage_started = Time.get_ticks_usec()
+	var domestic_ideal_graph_fingerprint := PackedByteArray()
+	var domestic_ideal_allowed := _ideal_city_mask(state)
+	var domestic_ideal_allowed_key := _byte_mask_key(domestic_ideal_allowed)
+	var shared_ideal_cache_enabled := (
+		_domestic_ideal_shared_cache_enabled_now()
+		and shared_caches.has("domestic_ideal_fields")
+	)
+	if shared_ideal_cache_enabled:
+		var fingerprint_started := (
+			Time.get_ticks_usec() if profile_enabled else 0
+		)
+		domestic_ideal_graph_fingerprint = (
+			domestic_ideal_graph_fingerprint_exact(state)
+		)
+		if profile_enabled:
+			_accumulate_build_profile(
+				build_profile,
+				"ai_snapshot_forecast_structure_domestic_ideal_graph_fingerprint",
+				Time.get_ticks_usec() - fingerprint_started
+			)
 	var field_cache := {}
 	var connectivity_cache := {}
 	var routes: Array[Dictionary] = []
 	routes.append_array(_build_domestic_routes(
 		state, graph, policies, besieged, occupied_edges, field_cache,
-		build_profile
+		shared_caches, domestic_ideal_graph_fingerprint,
+		domestic_ideal_allowed, domestic_ideal_allowed_key, build_profile
 	))
 	if profile_enabled:
 		_accumulate_build_profile(
@@ -262,6 +331,16 @@ static func _accumulate_build_profile(
 		int(build_profile.get(stage, 0))
 		+ elapsed_usec
 	)
+
+
+static func _accumulate_build_profile_count(
+	build_profile: Dictionary,
+	stage: String,
+	count: int
+) -> void:
+	if count <= 0:
+		return
+	build_profile[stage] = int(build_profile.get(stage, 0)) + count
 
 
 ## 在可缓存结构的深副本上执行库存/国库/需求相关的动态结算。返回值中的
@@ -436,6 +515,25 @@ static func structure_fingerprint(state: GameState) -> PackedByteArray:
 		if blocks_party:
 			occupancy.append([owner, edge_key])
 	fields.append(occupancy)
+	return var_to_bytes(fields)
+
+
+static func domestic_ideal_graph_fingerprint_exact(
+	state: GameState
+) -> PackedByteArray:
+	if state == null:
+		return var_to_bytes(["trade_domestic_ideal_graph_v1", null])
+	var fields: Array = [
+		"trade_domestic_ideal_graph_v1",
+		["counts", state.cities.size(), state.edges.size()],
+	]
+	for edge in state.edges:
+		fields.append([
+			"edge", edge.city_a, edge.city_b, edge.kind,
+			edge.max_manpower, edge.base_max_manpower, edge.distance,
+			edge.travel_time_multiplier, edge.danger,
+			edge.supply_loss_multiplier,
+		])
 	return var_to_bytes(fields)
 
 
@@ -679,17 +777,42 @@ static func _build_domestic_routes(
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
 	field_cache: Dictionary,
+	shared_caches: Dictionary,
+	shared_graph_fingerprint: PackedByteArray,
+	ideal_allowed: PackedByteArray,
+	ideal_allowed_key: String,
 	build_profile: Dictionary = {}
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	var ideal_allowed := _ideal_city_mask(state)
 	var shared_context_enabled := _domestic_shared_field_context_enabled_now()
+	var shared_ideal_cache_enabled := (
+		_domestic_ideal_shared_cache_enabled_now()
+		and shared_caches.has("domestic_ideal_fields")
+	)
+	var profile_enabled: bool = bool(build_profile.get("enabled", false))
+	var profile_sink := (
+		{"enabled": true} if profile_enabled else {}
+	)
+	var shared_domestic_ideal_fields := {}
+	if shared_ideal_cache_enabled:
+		var cache_value: Variant = shared_caches.get(
+			"domestic_ideal_fields",
+			null
+		)
+		if cache_value is Dictionary:
+			shared_domestic_ideal_fields = cache_value as Dictionary
+	var domestic_started := (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	for nation in state.nations:
 		if not nation.alive:
 			continue
 		var nation_id := nation.id
 		if nation_id < 0 or nation_id >= policies.size():
 			continue
+		var prep_started := (
+			Time.get_ticks_usec() if profile_enabled else 0
+		)
 		var owned_land := _owned_trade_cities(state, nation_id, false)
 		var owned_all := _owned_trade_cities(state, nation_id, true)
 		if owned_all.size() < 2:
@@ -708,6 +831,12 @@ static func _build_domestic_routes(
 			if city_id != primary:
 				destinations.append(city_id)
 		_sort_hubs(state, destinations, policies[nation_id])
+		if profile_enabled:
+			_accumulate_profile_sink(
+				profile_sink,
+				"domestic_prep",
+				Time.get_ticks_usec() - prep_started
+			)
 		# A one-land-city port state still gets a domestic capital-to-dock route.
 		if destinations.is_empty():
 			for city_id in owned_all:
@@ -720,11 +849,14 @@ static func _build_domestic_routes(
 		if shared_context_enabled:
 			var context := _build_domestic_route_context(
 				state, graph, nation_id, primary, ideal_allowed,
-				besieged, occupied_edges, field_cache
+				besieged, occupied_edges, field_cache,
+				shared_domestic_ideal_fields, shared_graph_fingerprint,
+				ideal_allowed_key,
+				profile_sink
 			)
 			for index in range(limit):
 				result.append(_derive_route_from_precomputed_context(
-					state, graph, context, destinations[index]
+					state, graph, context, destinations[index], profile_sink
 				))
 			continue
 		for index in range(limit):
@@ -733,9 +865,78 @@ static func _build_domestic_routes(
 				state, graph, [primary] as Array[int],
 				[destinations[index]] as Array[int],
 				nation_id, nation_id, false, besieged, occupied_edges,
-				field_cache
+				field_cache, true, profile_sink
 			)
 			result.append(route)
+	if profile_enabled:
+		var domestic_total := Time.get_ticks_usec() - domestic_started
+		var measured := (
+			int(profile_sink.get("domestic_prep", 0))
+			+ int(profile_sink.get("domestic_context", 0))
+			+ int(profile_sink.get("domestic_route_select", 0))
+			+ int(profile_sink.get("domestic_route_explain", 0))
+			+ int(profile_sink.get("domestic_route_materialize", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_prep",
+			int(profile_sink.get("domestic_prep", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context",
+			int(profile_sink.get("domestic_context", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context_mask_block_key",
+			int(profile_sink.get("domestic_context_mask_block_key", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context_ideal_field",
+			int(profile_sink.get("domestic_context_ideal_field", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context_operational_field",
+			int(profile_sink.get("domestic_context_operational_field", 0))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context_ideal_field_cache_hits",
+			int(profile_sink.get("domestic_context_ideal_field_cache_hits", 0))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context_ideal_field_cache_misses",
+			int(profile_sink.get("domestic_context_ideal_field_cache_misses", 0))
+		)
+		_accumulate_build_profile_count(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_context_ideal_field_cache_builds",
+			int(profile_sink.get("domestic_context_ideal_field_cache_builds", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_route_select",
+			int(profile_sink.get("domestic_route_select", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_route_explain",
+			int(profile_sink.get("domestic_route_explain", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_route_materialize",
+			int(profile_sink.get("domestic_route_materialize", 0))
+		)
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_domestic_unaccounted",
+			maxi(domestic_total - measured, 0)
+		)
 	return result
 
 
@@ -747,21 +948,78 @@ static func _build_domestic_route_context(
 	ideal_allowed: PackedByteArray,
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
-	field_cache: Dictionary
+	field_cache: Dictionary,
+	shared_domestic_ideal_fields: Dictionary,
+	shared_graph_fingerprint: PackedByteArray,
+	ideal_allowed_key: String,
+	profile_sink: Dictionary = {}
 ) -> Dictionary:
 	_domestic_context_builds += 1
+	var profile_enabled := bool(profile_sink.get("enabled", false))
+	var phase_started := (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	var allowed := _allowed_city_mask(state, nation_id, nation_id)
 	var blocked_edges := _blocked_edges_for_parties(
 		state, nation_id, nation_id, occupied_edges
 	)
 	var sources := [primary] as Array[int]
-	var ideal_field := _get_domestic_preferred_endpoint_field(
-		state, graph, sources, ideal_allowed, false, {}, {}, field_cache
+	var mask_block_key_usec := 0
+	if profile_enabled:
+		mask_block_key_usec = Time.get_ticks_usec() - phase_started
+		phase_started = Time.get_ticks_usec()
+	var ideal_field_result := _get_shared_domestic_ideal_field(
+		state, graph, sources, ideal_allowed, field_cache,
+		shared_domestic_ideal_fields, shared_graph_fingerprint,
+		ideal_allowed_key
 	)
+	var ideal_field: Dictionary = ideal_field_result["field"]
+	var ideal_field_usec := 0
+	if profile_enabled:
+		ideal_field_usec = Time.get_ticks_usec() - phase_started
+		phase_started = Time.get_ticks_usec()
 	var operational_field := _get_domestic_preferred_endpoint_field(
 		state, graph, sources, allowed, true, besieged, blocked_edges,
 		field_cache
 	)
+	var operational_field_usec := 0
+	if profile_enabled:
+		operational_field_usec = Time.get_ticks_usec() - phase_started
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context_mask_block_key",
+			mask_block_key_usec
+		)
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context_ideal_field",
+			ideal_field_usec
+		)
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context_ideal_field_cache_hits",
+			int(ideal_field_result.get("cache_hits", 0))
+		)
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context_ideal_field_cache_misses",
+			int(ideal_field_result.get("cache_misses", 0))
+		)
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context_ideal_field_cache_builds",
+			int(ideal_field_result.get("cache_builds", 0))
+		)
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context_operational_field",
+			operational_field_usec
+		)
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context",
+			mask_block_key_usec + ideal_field_usec + operational_field_usec
+		)
 	return {
 		"nation_id": nation_id,
 		"primary": primary,
@@ -1269,8 +1527,15 @@ static func _derive_route(
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
 	field_cache: Dictionary,
-	derive_operational: bool = true
+	derive_operational: bool = true,
+	profile_sink: Dictionary = {}
 ) -> Dictionary:
+	var domestic_profile_enabled := (
+		not international and bool(profile_sink.get("enabled", false))
+	)
+	var phase_started := (
+		Time.get_ticks_usec() if domestic_profile_enabled else 0
+	)
 	var allowed := _allowed_city_mask(state, nation_a, nation_b)
 	var ideal_allowed := _ideal_city_mask(state)
 	var blocked_edges := _blocked_edges_for_parties(
@@ -1289,6 +1554,13 @@ static func _derive_route(
 			state, graph, sources, destinations, ideal_allowed, false, {}, {},
 			nation_a, nation_b, field_cache
 		)
+	if domestic_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_context",
+			Time.get_ticks_usec() - phase_started
+		)
+		phase_started = Time.get_ticks_usec()
 	var source := int(selection["source"])
 	var destination := int(selection["destination"])
 	var preferred_path: Array[int] = selection["path"]
@@ -1312,6 +1584,12 @@ static func _derive_route(
 				besieged, blocked_edges,
 				nation_a, nation_b, field_cache
 			)
+	if domestic_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_route_select",
+			Time.get_ticks_usec() - phase_started
+		)
 	var operational_source := int(operational["source"])
 	var operational_destination := int(operational["destination"])
 	var operational_path: Array[int] = operational["path"]
@@ -1336,6 +1614,8 @@ static func _derive_route(
 	elif not preferred_path.is_empty():
 		city_path = preferred_path
 
+	if domestic_profile_enabled:
+		phase_started = Time.get_ticks_usec()
 	var obstruction := _first_obstruction(
 		state, graph, preferred_path, allowed, besieged, blocked_edges
 	)
@@ -1354,7 +1634,14 @@ static func _derive_route(
 	var preferred_details := _path_details(
 		state, graph, preferred_path
 	)
-	return {
+	if domestic_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_route_explain",
+			Time.get_ticks_usec() - phase_started
+		)
+		phase_started = Time.get_ticks_usec()
+	var route := {
 		"id": -1,
 		"international": international,
 		"kind": "international" if international else "domestic",
@@ -1398,17 +1685,29 @@ static func _derive_route(
 		"food_cost": 0,
 		"food_cost_gold": 0,
 	}
+	if domestic_profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_route_materialize",
+			Time.get_ticks_usec() - phase_started
+		)
+	return route
 
 
 static func _derive_route_from_precomputed_context(
 	state: GameState,
 	graph: Dictionary,
 	context: Dictionary,
-	destination: int
+	destination: int,
+	profile_sink: Dictionary = {}
 ) -> Dictionary:
 	_domestic_route_queries += 1
 	var nation_id := int(context["nation_id"])
 	var sources: Array[int] = context["sources"]
+	var profile_enabled := bool(profile_sink.get("enabled", false))
+	var phase_started := (
+		Time.get_ticks_usec() if profile_enabled else 0
+	)
 	var selection := _select_preferred_endpoints_from_field(
 		state, sources, [destination] as Array[int], context["ideal_field"]
 	)
@@ -1420,6 +1719,12 @@ static func _derive_route_from_precomputed_context(
 		state, sources, [destination] as Array[int],
 		context["operational_field"]
 	)
+	if profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_route_select",
+			Time.get_ticks_usec() - phase_started
+		)
 	var operational_source := int(operational["source"])
 	var operational_destination := int(operational["destination"])
 	var operational_path: Array[int] = operational["path"]
@@ -1447,6 +1752,8 @@ static func _derive_route_from_precomputed_context(
 	var allowed: PackedByteArray = context["allowed"]
 	var blocked_edges: Dictionary = context["blocked_edges"]
 	var besieged: Dictionary = context["besieged"]
+	if profile_enabled:
+		phase_started = Time.get_ticks_usec()
 	var obstruction := _first_obstruction(
 		state, graph, preferred_path, allowed, besieged, blocked_edges
 	)
@@ -1465,7 +1772,14 @@ static func _derive_route_from_precomputed_context(
 	var preferred_details := _path_details(
 		state, graph, preferred_path
 	)
-	return {
+	if profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_route_explain",
+			Time.get_ticks_usec() - phase_started
+		)
+		phase_started = Time.get_ticks_usec()
+	var route := {
 		"id": -1,
 		"international": false,
 		"kind": "domestic",
@@ -1509,6 +1823,23 @@ static func _derive_route_from_precomputed_context(
 		"food_cost": 0,
 		"food_cost_gold": 0,
 	}
+	if profile_enabled:
+		_accumulate_profile_sink(
+			profile_sink,
+			"domestic_route_materialize",
+			Time.get_ticks_usec() - phase_started
+		)
+	return route
+
+
+static func _accumulate_profile_sink(
+	profile_sink: Dictionary,
+	key: String,
+	elapsed_usec: int
+) -> void:
+	if elapsed_usec <= 0:
+		return
+	profile_sink[key] = int(profile_sink.get(key, 0)) + elapsed_usec
 
 
 static func _select_preferred_endpoints_from_field(
@@ -1607,14 +1938,9 @@ static func _get_preferred_endpoint_field(
 		):
 			valid_sources.append(source)
 	valid_sources.sort()
-	var cache_key := "%d:%s:%s:%s" % [
-		1 if operational else 0, _int_array_key(valid_sources),
-		_byte_mask_key(allowed),
-		(
-			_operational_block_key(besieged, blocked_edges)
-			if operational else ""
-		),
-	]
+	var cache_key := _preferred_endpoint_field_cache_key(
+		valid_sources, allowed, operational, besieged, blocked_edges
+	)
 	if field_cache.has(cache_key):
 		return field_cache[cache_key]
 	if count_candidate_dijkstra:
@@ -1645,14 +1971,9 @@ static func _get_domestic_preferred_endpoint_field(
 		):
 			valid_sources.append(source)
 	valid_sources.sort()
-	var cache_key := "%d:%s:%s:%s" % [
-		1 if operational else 0, _int_array_key(valid_sources),
-		_byte_mask_key(allowed),
-		(
-			_operational_block_key(besieged, blocked_edges)
-			if operational else ""
-		),
-	]
+	var cache_key := _preferred_endpoint_field_cache_key(
+		valid_sources, allowed, operational, besieged, blocked_edges
+	)
 	if field_cache.has(cache_key):
 		return field_cache[cache_key]
 	_domestic_field_builds += 1
@@ -1660,6 +1981,203 @@ static func _get_domestic_preferred_endpoint_field(
 		state, graph, sources, allowed, operational, besieged,
 		blocked_edges, field_cache
 	)
+
+
+static func _get_shared_domestic_ideal_field(
+	state: GameState,
+	graph: Dictionary,
+	sources: Array[int],
+	allowed: PackedByteArray,
+	field_cache: Dictionary,
+	shared_domestic_ideal_fields: Dictionary,
+	shared_graph_fingerprint: PackedByteArray,
+	ideal_allowed_key: String
+) -> Dictionary:
+	var valid_sources: Array[int] = []
+	for source in sources:
+		if (
+			source >= 0 and source < state.cities.size()
+			and not valid_sources.has(source)
+		):
+			valid_sources.append(source)
+	valid_sources.sort()
+	var local_cache_key := _preferred_endpoint_field_cache_key(
+		valid_sources, allowed, false, {}, {}
+	)
+	if field_cache.has(local_cache_key):
+		return {
+			"field": field_cache[local_cache_key],
+			"cache_hits": 0,
+			"cache_misses": 0,
+			"cache_builds": 0,
+		}
+	var shared_cache_enabled := (
+		_domestic_ideal_shared_cache_enabled_now()
+		and not shared_graph_fingerprint.is_empty()
+	)
+	if shared_cache_enabled:
+		var shared_cache_key := _shared_domestic_ideal_field_cache_key(
+			valid_sources, ideal_allowed_key, shared_graph_fingerprint
+		)
+		if shared_domestic_ideal_fields.has(shared_cache_key):
+			var shared_snapshot: Variant = shared_domestic_ideal_fields[
+				shared_cache_key
+			]
+			if shared_snapshot is PackedByteArray:
+				var field := _deserialize_preferred_endpoint_field_snapshot(
+					shared_snapshot,
+					state.cities.size()
+				)
+				if not field.is_empty():
+					_domestic_ideal_shared_cache_hits += 1
+					field_cache[local_cache_key] = field
+					return {
+						"field": field,
+						"cache_hits": 1,
+						"cache_misses": 0,
+						"cache_builds": 0,
+					}
+			shared_domestic_ideal_fields.erase(shared_cache_key)
+		_domestic_ideal_shared_cache_misses += 1
+	var field := _get_domestic_preferred_endpoint_field(
+		state, graph, sources, allowed, false, {}, {}, field_cache
+	)
+	if shared_cache_enabled:
+		var shared_cache_key := _shared_domestic_ideal_field_cache_key(
+			valid_sources, ideal_allowed_key, shared_graph_fingerprint
+		)
+		if (
+			not shared_domestic_ideal_fields.has(shared_cache_key)
+			and shared_domestic_ideal_fields.size()
+				>= DOMESTIC_IDEAL_SHARED_CACHE_MAX_ENTRIES
+		):
+			_domestic_ideal_shared_cache_evictions += (
+				shared_domestic_ideal_fields.size()
+			)
+			_domestic_ideal_shared_cache_clears += 1
+			shared_domestic_ideal_fields.clear()
+		shared_domestic_ideal_fields[shared_cache_key] = (
+			_serialize_preferred_endpoint_field_snapshot(field)
+		)
+		_domestic_ideal_shared_cache_builds += 1
+	return {
+		"field": field,
+		"cache_hits": 0,
+		"cache_misses": (1 if shared_cache_enabled else 0),
+		"cache_builds": (1 if shared_cache_enabled else 0),
+	}
+
+
+static func _preferred_endpoint_field_cache_key(
+	valid_sources: Array[int],
+	allowed: PackedByteArray,
+	operational: bool,
+	besieged: Dictionary,
+	blocked_edges: Dictionary
+) -> String:
+	return "%d:%s:%s:%s" % [
+		1 if operational else 0, _int_array_key(valid_sources),
+		_byte_mask_key(allowed),
+		(
+			_operational_block_key(besieged, blocked_edges)
+			if operational else ""
+		),
+	]
+
+
+static func _shared_domestic_ideal_field_cache_key(
+	valid_sources: Array[int],
+	ideal_allowed_key: String,
+	graph_fingerprint: PackedByteArray
+) -> PackedByteArray:
+	return var_to_bytes([
+		"trade_domestic_ideal_field_v1",
+		valid_sources,
+		ideal_allowed_key,
+		graph_fingerprint,
+	])
+
+
+static func _serialize_preferred_endpoint_field_snapshot(
+	field: Dictionary
+) -> PackedByteArray:
+	return var_to_bytes([
+		field.get("dist", PackedInt64Array()),
+		field.get("prev", PackedInt32Array()),
+		field.get("origin", PackedInt32Array()),
+	])
+
+
+static func _deserialize_preferred_endpoint_field_snapshot(
+	snapshot: PackedByteArray,
+	expected_city_count: int
+) -> Dictionary:
+	var payload: Variant = bytes_to_var(snapshot)
+	if not payload is Array:
+		return {}
+	var values: Array = payload
+	if values.size() != 3:
+		return {}
+	var dist_result := _coerce_packed_int64_array(values[0])
+	var prev_result := _coerce_packed_int32_array(values[1])
+	var origin_result := _coerce_packed_int32_array(values[2])
+	if (
+		not bool(dist_result.get("ok", false))
+		or not bool(prev_result.get("ok", false))
+		or not bool(origin_result.get("ok", false))
+	):
+		return {}
+	var dist: PackedInt64Array = dist_result["value"]
+	var prev: PackedInt32Array = prev_result["value"]
+	var origin: PackedInt32Array = origin_result["value"]
+	if (
+		dist.size() != expected_city_count
+		or prev.size() != expected_city_count
+		or origin.size() != expected_city_count
+	):
+		return {}
+	return {
+		"dist": dist,
+		"prev": prev,
+		"origin": origin,
+	}
+
+
+static func _coerce_packed_int64_array(value: Variant) -> Dictionary:
+	if value is PackedInt64Array:
+		return {
+			"ok": true,
+			"value": (value as PackedInt64Array).duplicate(),
+		}
+	if value is PackedInt32Array:
+		var widened := PackedInt64Array()
+		for item in value as PackedInt32Array:
+			widened.append(int(item))
+		return {"ok": true, "value": widened}
+	if not value is Array:
+		return {"ok": false, "value": PackedInt64Array()}
+	var result := PackedInt64Array()
+	for item in value as Array:
+		if typeof(item) not in [TYPE_INT, TYPE_FLOAT]:
+			return {"ok": false, "value": PackedInt64Array()}
+		result.append(int(item))
+	return {"ok": true, "value": result}
+
+
+static func _coerce_packed_int32_array(value: Variant) -> Dictionary:
+	if value is PackedInt32Array:
+		return {
+			"ok": true,
+			"value": (value as PackedInt32Array).duplicate(),
+		}
+	if not value is Array:
+		return {"ok": false, "value": PackedInt32Array()}
+	var result := PackedInt32Array()
+	for item in value as Array:
+		if typeof(item) not in [TYPE_INT, TYPE_FLOAT]:
+			return {"ok": false, "value": PackedInt32Array()}
+		result.append(int(item))
+	return {"ok": true, "value": result}
 
 
 static func _int_array_key(values: Array[int]) -> String:
