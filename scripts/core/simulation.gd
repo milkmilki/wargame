@@ -11761,28 +11761,16 @@ func _enemy_holds_recent_legal_reclamation(
 	return false
 
 
-## 守成者、庸主和纵横家不组织侵略攻势；但任何本国法理失地收复，
-## 以及防御战争（本国不是该战争目标的 attacker）都继续允许。
+## 攻势目标合法性只看城市本身有效即可。君主的好战/温和差异统一由外交层
+## 的开战欲望（KEY_AGGRESSION 连续乘子）体现，而不是在战役执行层硬门控——
+## 否则温和君主宣了战却永远打不出攻势，是终局僵持的根因之一。
 func _ruler_allows_campaign_target(
 	nation_id: int,
 	target_city: int
 ) -> bool:
-	if (
-		nation_id < 0 or nation_id >= state.nations.size()
-		or target_city < 0 or target_city >= state.cities.size()
-	):
-		return false
-	if RulerProfile.offensive_allowed(state.nations[nation_id]):
-		return true
-	if state.recognized_owner_of(target_city) == nation_id:
-		return true
-	var enemy_id := state.cities[target_city].owner_nation
-	if enemy_id < 0 or enemy_id >= state.nations.size():
-		return false
-	var objective := state.war_objective(nation_id, enemy_id)
 	return (
-		objective.is_empty()
-		or int(objective.get("attacker", -1)) != nation_id
+		nation_id >= 0 and nation_id < state.nations.size()
+		and target_city >= 0 and target_city < state.cities.size()
 	)
 
 
@@ -11860,7 +11848,8 @@ func _manage_campaign_offensive(
 			b
 		)
 	)
-	var ruler_allows_invasion := RulerProfile.offensive_allowed(nation)
+	# 君主好战差异已在外交层用连续侵略欲望体现；一旦真的进入战争，任何君主都
+	# 会主动组织攻势去实现其战争目标，不再在执行层区分“能否侵略”。
 	# 仍在修复窗口内的本国法理失地优先于原进攻目标，形成真实反复争夺。
 	for enemy_id in enemy_ids:
 		if not _enemy_holds_recent_legal_reclamation(
@@ -11887,7 +11876,7 @@ func _manage_campaign_offensive(
 			objective = reclamation
 			defender_id = enemy_id
 			break
-	if objective.is_empty() and ruler_allows_invasion:
+	if objective.is_empty():
 		for enemy_id in enemy_ids:
 			var candidate := state.war_objective(
 				nation_id,
@@ -11905,17 +11894,6 @@ func _manage_campaign_offensive(
 	# 防御战争没有本国发起的外交目标，但仍必须主动选择敌城组织反攻。
 	if objective.is_empty():
 		for enemy_id in enemy_ids:
-			if not ruler_allows_invasion:
-				var defensive_objective := state.war_objective(
-					nation_id, enemy_id
-				)
-				if (
-					not defensive_objective.is_empty()
-					and int(defensive_objective.get(
-						"attacker", -1
-					)) == nation_id
-				):
-					continue
 			var counteroffensive := (
 				_cached_campaign_objective(
 					nation_id,

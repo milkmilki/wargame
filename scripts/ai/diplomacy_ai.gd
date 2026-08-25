@@ -1860,8 +1860,11 @@ static func _ai_aggression(
 	return state.effective_ai_aggression(nation_id)
 
 
-## 不允许主动攻势的君主仍可收复本国法理城市。该门控只用于主动备战/宣战，
-## 已经发生的防御战争、解围和被动接战均不经过此处。
+## 目标合法性只看城市本身是否可作为攻势目标（有效城市索引即可）。君主的
+## 好战/温和差异不再表现为“能不能选目标”的硬门控——那会让温和君主永远算出
+## 空目标、被 war_desire 一票否决，是终局全局僵持的根因。改由 war_desire 里的
+## 侵略性乘子（KEY_AGGRESSION）连续地降低温和君主的开战欲望即可，从而“所有 AI
+## 始终想要边境最高价值的非己方城市”，只是好战程度不同。
 static func _ruler_allows_war_objective(
 	state: GameState,
 	nation_id: int,
@@ -1869,12 +1872,9 @@ static func _ruler_allows_war_objective(
 ) -> bool:
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return false
-	if RulerProfile.offensive_allowed(state.nations[nation_id]):
-		return true
 	return (
 		objective_city >= 0
 		and objective_city < state.cities.size()
-		and state.recognized_owner_of(objective_city) == nation_id
 	)
 
 
@@ -3781,7 +3781,7 @@ static func _collect_war_actions(
 			nation.id,
 			best_target,
 			evaluation_cache,
-			not RulerProfile.offensive_allowed(nation)
+			false
 		)
 		var report := resource_report(
 			state,
@@ -3928,7 +3928,7 @@ static func _collect_existing_war_preparation(
 			target_id,
 			objective_city,
 			evaluation_cache,
-			not RulerProfile.offensive_allowed(nation)
+			false
 		)
 		if not replacement.is_empty():
 			actions.append({
@@ -3941,18 +3941,6 @@ static func _collect_existing_war_preparation(
 					"原备战目标城市%d不可用，保持对国%d备战并改向%s"
 					% [objective_city, target_id, replacement["reason"]]
 				),
-			})
-			committed[nation_id] = true
-			return
-		if (
-			not RulerProfile.offensive_allowed(nation)
-			and not objective_valid
-		):
-			actions.append({
-				"kind": Action.CANCEL_WAR_PREPARATION,
-				"a": nation_id,
-				"b": target_id,
-				"reason": "当前君主不发动主动侵略，且已无可收复的本国法理目标",
 			})
 			committed[nation_id] = true
 			return
