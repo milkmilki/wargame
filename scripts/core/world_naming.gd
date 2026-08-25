@@ -19,6 +19,7 @@ const KIND_REBEL: String = "rebel"
 
 const _NATION_REGISTRY_META: StringName = &"world_naming_used_nations"
 const _CITY_REGISTRY_META: StringName = &"world_naming_used_cities"
+const _CITY_SHORT_REGISTRY_META: StringName = &"world_naming_used_city_shorts"
 const _RULER_REGISTRY_META: StringName = &"world_naming_used_rulers"
 
 ## 帝国级、初始独立主权国只从单字国号中取名。三个词典有意保留历史
@@ -283,6 +284,29 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 		)
 		changed = true
 
+	# 城市简称：单字、战役唯一。优先复用 region_symbol，冲突再从全称派生。
+	# 城市 id 升序保证同 seed 稳定去重；藩王单字王封号取自首都简称。
+	var short_registry := _registry(game_state, _CITY_SHORT_REGISTRY_META)
+	for city_index in range(game_state.cities.size()):
+		var city = game_state.cities[city_index]
+		var current_short := str(city.short_name).strip_edges()
+		if (
+			_is_single_character(current_short)
+			and _reserve(short_registry, current_short, int(city.id))
+		):
+			if city.short_name != current_short:
+				city.short_name = current_short
+				changed = true
+			continue
+		var allocated := _allocate_city_short_name(
+			world_seed, int(city.id),
+			city_region_symbol(game_state, int(city.id)),
+			str(city.name), short_registry
+		)
+		if city.short_name != allocated:
+			city.short_name = allocated
+			changed = true
+
 	var nation_registry := _registry(game_state, _NATION_REGISTRY_META)
 	var ruler_registry := _registry(game_state, _RULER_REGISTRY_META)
 	for nation_index in range(game_state.nations.size()):
@@ -545,6 +569,7 @@ static func assign_city_name(game_state, city_id: int) -> String:
 				)
 			)
 			_bump_revision(game_state)
+		_ensure_city_short_name(game_state, city_id)
 		return str(city.name)
 	var registry := _registry(game_state, _CITY_REGISTRY_META)
 	_backfill_city_registry(game_state, registry, city_id)
@@ -564,8 +589,32 @@ static func assign_city_name(game_state, city_id: int) -> String:
 			int(game_state.world_seed), city_id, str(city.name)
 		)
 	)
+	_ensure_city_short_name(game_state, city_id)
 	_bump_revision(game_state)
 	return str(city.name)
+
+
+## 为运行时新增城市补一个战役唯一的单字简称：优先复用 region_symbol，
+## 冲突再从全称派生。已合法且未冲突的简称保留。
+static func _ensure_city_short_name(game_state, city_id: int) -> void:
+	if not _valid_city_id(game_state, city_id):
+		return
+	var city = game_state.cities[city_id]
+	var short_registry := _registry(game_state, _CITY_SHORT_REGISTRY_META)
+	_backfill_city_short_registry(game_state, short_registry, city_id)
+	var current_short := str(city.short_name).strip_edges()
+	if (
+		_is_single_character(current_short)
+		and _reserve(short_registry, current_short, city_id)
+	):
+		if city.short_name != current_short:
+			city.short_name = current_short
+		return
+	city.short_name = _allocate_city_short_name(
+		int(game_state.world_seed), city_id,
+		city_region_symbol(game_state, city_id),
+		str(city.name), short_registry
+	)
 
 
 ## 可传 (game_state, nation_id)；也可直接传 Nation。short_form 用于地图
@@ -627,6 +676,27 @@ static func city_display_name(
 	return ("港%d" if city.is_dock else "城%d") % int(city.id)
 
 
+## 城市信息页展示的单字简称。接口接受 City 或 (GameState, city_id)。已持久化
+## 的单字简称直接返回；缺失时回退到 region_symbol（不去重，仅即时展示）。
+static func city_short_name(
+	game_state_or_city,
+	city_id: Variant = null
+) -> String:
+	var city = null
+	if city_id == null:
+		city = game_state_or_city
+	elif game_state_or_city != null:
+		var resolved_id := int(city_id)
+		if _valid_city_id(game_state_or_city, resolved_id):
+			city = game_state_or_city.cities[resolved_id]
+	if city == null:
+		return ""
+	var assigned := str(city.short_name).strip_edges()
+	if _is_single_character(assigned):
+		return assigned
+	return city_region_symbol(game_state_or_city, city_id)
+
+
 ## 返回城市对应的单字地域国号。接口接受 City 或 (GameState, city_id)。
 static func city_region_symbol(
 	game_state_or_city,
@@ -669,8 +739,8 @@ static func _founding_sovereign_identity(
 
 
 ## 藩王展示：封号单向棘轮。陆城数达到过 5 座即永久升为「单字王」（藩都
-## 地域字 + 王），之后即使失地也保持单字王，绝不降回双字王；未达到过 5 座
-## 前采用藩都全称 + 王。基础 Nation.name 保留建立时的稳定值。
+## 简称 + 王），之后即使失地也保持单字王，绝不降回双字王；未达到过 5 座
+## 前采用藩都全称 + 王。单字取自首都的战役唯一简称，故不同藩王不会撞字。
 static func _vassal_display_name(game_state, nation_id: int) -> String:
 	if not _valid_nation_id(game_state, nation_id):
 		return ""
@@ -689,7 +759,7 @@ static func _vassal_display_name(game_state, nation_id: int) -> String:
 	if owned.size() >= 5:
 		nation.vassal_single_char = true
 	var base := (
-		city_region_symbol(game_state, capital_id)
+		city_short_name(game_state, capital_id)
 		if bool(nation.vassal_single_char)
 		else city_display_name(game_state, capital_id)
 	)
@@ -795,6 +865,59 @@ static func _allocate_sovereign_name(
 				"kind": KIND_SEPARATIST,
 			}
 	return {"base": "国", "name": "国", "kind": KIND_SEPARATIST}
+
+
+## 战役唯一的单字城市简称分配。候选顺序：先 region_symbol，再全称各单字
+## （首、尾、其余），最后从 CJK 基本区确定性扫描兜底。城市 id 升序保证同
+## seed 稳定去重，因此不同城市的简称永不重复。
+static func _allocate_city_short_name(
+	world_seed: int,
+	city_id: int,
+	region_symbol: String,
+	city_name: String,
+	registry: Dictionary
+) -> String:
+	for candidate in _city_short_candidates(region_symbol, city_name):
+		if _reserve(registry, candidate, city_id):
+			return candidate
+	# 单字词典理论上够用；极端自定义地图撞满时从 CJK 基本区扫描保持单字唯一。
+	var cjk_count := 0x9FFF - 0x4E00 + 1
+	var cjk_start := stable_index(
+		world_seed, city_id, "city/short/cjk", cjk_count
+	)
+	for offset in range(cjk_count):
+		var candidate := String.chr(0x4E00 + (cjk_start + offset) % cjk_count)
+		if _reserve(registry, candidate, city_id):
+			return candidate
+	return region_symbol.strip_edges()
+
+
+## 单字简称候选的确定性展开：region_symbol 优先，其次全称首字、尾字、
+## 其余各字。所有候选去重且顺序稳定，均为单字。
+static func _city_short_candidates(
+	region_symbol: String,
+	city_name: String
+) -> Array[String]:
+	var result: Array[String] = []
+	_append_short_candidate(result, region_symbol)
+	var clean := city_name.strip_edges()
+	var length := clean.length()
+	if length >= 1:
+		_append_short_candidate(result, clean.substr(0, 1))
+	if length >= 2:
+		_append_short_candidate(result, clean.substr(length - 1, 1))
+	for index in range(1, maxi(length - 1, 1)):
+		_append_short_candidate(result, clean.substr(index, 1))
+	return result
+
+
+static func _append_short_candidate(
+	target: Array[String], candidate: String
+) -> void:
+	var value := candidate.strip_edges()
+	if not _is_single_character(value) or target.has(value):
+		return
+	target.append(value)
 
 
 ## 陆地城市全称分配：优先历史城市池，其次地域词根组合，最后中文序号兜底。
@@ -1159,6 +1282,7 @@ static func _chinese_digits(value: int) -> String:
 static func _reset_registries(game_state) -> void:
 	game_state.set_meta(_NATION_REGISTRY_META, {})
 	game_state.set_meta(_CITY_REGISTRY_META, {})
+	game_state.set_meta(_CITY_SHORT_REGISTRY_META, {})
 	game_state.set_meta(_RULER_REGISTRY_META, {})
 
 
@@ -1206,6 +1330,19 @@ static func _backfill_city_registry(
 			continue
 		var assigned := str(city.name).strip_edges()
 		if not assigned.is_empty():
+			_reserve(registry, assigned, int(city.id))
+
+
+static func _backfill_city_short_registry(
+	game_state,
+	registry: Dictionary,
+	excluded_id: int
+) -> void:
+	for city in game_state.cities:
+		if int(city.id) == excluded_id:
+			continue
+		var assigned := str(city.short_name).strip_edges()
+		if _is_single_character(assigned):
 			_reserve(registry, assigned, int(city.id))
 
 

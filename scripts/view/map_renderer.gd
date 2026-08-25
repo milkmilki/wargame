@@ -5699,7 +5699,7 @@ static func city_detail_sections(
 	var reason := loyalty_reason_text(city.last_loyalty_reason)
 	return [
 		{"title": "概况", "lines": [
-			"简称：%s" % WorldNaming.city_region_symbol(game_state, city_id),
+			"简称：%s" % WorldNaming.city_short_name(game_state, city_id),
 			"%s · %s · %s" % [
 			type_name,
 			"交战中" if contested else "稳定",

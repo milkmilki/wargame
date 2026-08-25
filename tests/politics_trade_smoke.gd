@@ -77,20 +77,25 @@ func _test_world_naming() -> void:
 	)
 
 	var city_names := {}
+	var city_shorts := {}
 	var city_contract := true
 	for city in first.cities:
 		var clean_name := city.name.strip_edges()
+		var clean_short := city.short_name.strip_edges()
 		city_contract = city_contract and (
 			not clean_name.is_empty()
 			and not city_names.has(clean_name)
 			and city.region_symbol.strip_edges().length() == 1
+			and clean_short.length() == 1
+			and not city_shorts.has(clean_short)
 		)
 		city_names[clean_name] = true
+		city_shorts[clean_short] = true
 	_check(
 		city_contract,
-		"naming/unique_full_city_names_and_single_region_symbols",
-		"cities=%d unique=%d" % [
-			first.cities.size(), city_names.size()
+		"naming/unique_full_city_names_single_region_symbols_and_unique_shorts",
+		"cities=%d unique=%d shorts=%d" % [
+			first.cities.size(), city_names.size(), city_shorts.size()
 		]
 	)
 
@@ -311,8 +316,8 @@ func _test_naming_sovereign_promotions() -> void:
 func _naming_fingerprint(state: GameState) -> String:
 	var fields: Array[String] = []
 	for city in state.cities:
-		fields.append("C%d:%s:%s" % [
-			city.id, city.name, city.region_symbol
+		fields.append("C%d:%s:%s:%s" % [
+			city.id, city.name, city.short_name, city.region_symbol
 		])
 	for nation in state.nations:
 		fields.append("N%d:%s:%s:%s:%s:%d" % [
