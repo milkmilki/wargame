@@ -77,19 +77,26 @@ func _test_world_naming() -> void:
 	)
 
 	var city_names := {}
+	var city_shorts := {}
 	var city_contract := true
 	for city in first.cities:
 		var clean_name := city.name.strip_edges()
+		var clean_short := city.short_name.strip_edges()
 		city_contract = city_contract and (
 			not clean_name.is_empty()
 			and not city_names.has(clean_name)
 			and city.region_symbol.strip_edges().length() == 1
+			and not clean_short.is_empty()
+			and not city_shorts.has(clean_short)
 		)
 		city_names[clean_name] = true
+		city_shorts[clean_short] = true
 	_check(
 		city_contract,
 		"naming/unique_full_city_names_and_single_region_symbols",
-		"cities=%d unique=%d" % [first.cities.size(), city_names.size()]
+		"cities=%d unique=%d shorts=%d" % [
+			first.cities.size(), city_names.size(), city_shorts.size()
+		]
 	)
 
 	var sovereign_contract := true
@@ -309,7 +316,9 @@ func _test_naming_sovereign_promotions() -> void:
 func _naming_fingerprint(state: GameState) -> String:
 	var fields: Array[String] = []
 	for city in state.cities:
-		fields.append("C%d:%s:%s" % [city.id, city.name, city.region_symbol])
+		fields.append("C%d:%s:%s:%s" % [
+			city.id, city.name, city.short_name, city.region_symbol
+		])
 	for nation in state.nations:
 		fields.append("N%d:%s:%s:%s:%s:%d" % [
 			nation.id, nation.name, nation.short_name,
@@ -499,6 +508,8 @@ func _test_trade_network() -> void:
 	var exports := _sum_int_array(food_trade["nation_food_export"])
 	var costs := _sum_int_array(food_trade["nation_food_cost"])
 	var sales := _sum_int_array(food_trade["nation_food_sale_income"])
+	# 简化版 EU4 贸易：钱凭空买粮，所以进口>0、出口恒为 0、销售收入恒为 0；
+	# 贸易金恒等于路线税（无销售收入项）。
 	var gold_identity := true
 	for nation_id in range(food_state.nations.size()):
 		gold_identity = gold_identity and (
@@ -507,28 +518,33 @@ func _test_trade_network() -> void:
 				+ int(food_trade["nation_food_sale_income"][nation_id])
 		)
 	_check(
-		imports > 0 and imports == exports and costs == sales and gold_identity,
-		"trade/food_and_payment_plans_conserve",
-		"food=%d/%d gold=%d/%d" % [imports, exports, costs, sales]
+		imports > 0 and exports == 0 and sales == 0 and costs > 0
+			and gold_identity,
+		"trade/food_conjured_from_gold",
+		"food=%d/%d gold_cost=%d sales=%d" % [imports, exports, costs, sales]
 	)
 	var food_before := food_state.cities[0].food_storage + food_state.cities[1].food_storage
 	var treasury_before := food_state.nations[0].treasury_gold + food_state.nations[1].treasury_gold
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(food_state)
-	sim._resolve_trade_food_transfers(food_trade)
+	sim._resolve_trade_purchases(food_trade)
 	var flows := Simulation._monthly_gold_flows_from_trade(food_state, food_trade)
 	for nation_id in range(food_state.nations.size()):
 		food_state.nations[nation_id].treasury_gold += int(flows[nation_id]["trade_net_income"])
 	var food_after := food_state.cities[0].food_storage + food_state.cities[1].food_storage
 	var treasury_after := food_state.nations[0].treasury_gold + food_state.nations[1].treasury_gold
 	var tax_total := _sum_int_array(food_trade["nation_trade_tax"])
+	var manpower_cost_total := _sum_int_array(food_trade["nation_manpower_cost"])
+	# 粮食凭空产生：库存净增 = 进口量；国库净变动 = 路线税 - 买粮花费 - 买人花费。
 	_check(
-		food_after == food_before
-			and treasury_after - treasury_before == tax_total,
-		"trade/applied_food_and_gold_conservation",
-		"food %d->%d gold_delta=%d tax=%d" % [
-			food_before, food_after, treasury_after - treasury_before, tax_total,
+		food_after - food_before == imports
+			and treasury_after - treasury_before
+				== tax_total - costs - manpower_cost_total,
+		"trade/applied_conjured_food_and_gold_cost",
+		"food %d->%d gold_delta=%d tax=%d food_cost=%d mp_cost=%d" % [
+			food_before, food_after, treasury_after - treasury_before,
+			tax_total, costs, manpower_cost_total,
 		]
 	)
 	sim.free()
@@ -878,6 +894,9 @@ func _test_rebellion_system() -> void:
 	)
 	_check(suppress_ok, "rebellion/suppress_restores_parent_and_cooldown")
 
+	# 战时被占领的法理地（城1：实控0、法理1、双方交战）属于活跃前线战果，
+	# 不能再通过忠诚复国机制凭空反正——这正是"打下的城过一阵自己跳回原主"的
+	# 根因。只有本国自有边境城（城2：实控0、法理0、政治目标1）可离心归附敌国。
 	var restore_state := _make_loyalty_restoration_state()
 	var restore_count_before := restore_state.nations.size()
 	var restore_totals_before := _nation_resource_totals(restore_state)
@@ -890,29 +909,34 @@ func _test_rebellion_system() -> void:
 		and str(restore_events[0].get("kind", ""))
 			== "loyalty_target_restored"
 		and int(restore_events[0].get("target_id", -1)) == 1
+		and (restore_events[0].get("city_ids", []) as Array) == [2]
 		and restore_totals_before == restore_totals_after
 	)
-	for city_id in [1, 2]:
-		restore_ok = restore_ok and (
-			restore_state.cities[city_id].owner_nation == 1
-			and restore_state.cities[city_id].loyalty_target_nation == 1
-			and restore_state.cities[city_id].rebellion_progress == 0
-			and restore_state.cities[city_id].rebellion_cooldown_until_day
-				== restore_state.day + RebellionSystem.REBELLION_COOLDOWN_DAYS
-		)
+	# 城2离心归附：实控转给敌国 1，法理仍属 0。
 	restore_ok = restore_ok and (
-		restore_state.recognized_owner_of(1) == 1
-		and restore_state.cities[1].occupation_sponsor_nation == -1
+		restore_state.cities[2].owner_nation == 1
+		and restore_state.cities[2].loyalty_target_nation == 1
+		and restore_state.cities[2].rebellion_progress == 0
+		and restore_state.cities[2].rebellion_cooldown_until_day
+			== restore_state.day + RebellionSystem.REBELLION_COOLDOWN_DAYS
 		and restore_state.recognized_owner_of(2) == 0
 		and restore_state.cities[2].occupation_sponsor_nation == 1
+	)
+	# 城1是战时占领地：实控与占领声明必须原样保留，不得被忠诚机制自动反正。
+	restore_ok = restore_ok and (
+		restore_state.cities[1].owner_nation == 0
+		and restore_state.recognized_owner_of(1) == 1
+		and restore_state.cities[1].occupation_sponsor_nation == 0
 		and restore_state.is_enemy(0, 1)
 		and restore_state.territory_structure_valid()
 	)
 	_check(
 		restore_ok,
-		"rebellion/living_loyalty_target_restored_without_new_nation",
-		"events=%s before=%s after=%s" % [
+		"rebellion/wartime_occupation_locked_only_defection_restored",
+		"events=%s before=%s after=%s owner1=%d owner2=%d" % [
 			restore_events, restore_totals_before, restore_totals_after,
+			restore_state.cities[1].owner_nation,
+			restore_state.cities[2].owner_nation,
 		]
 	)
 

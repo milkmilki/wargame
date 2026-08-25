@@ -18,6 +18,8 @@ extends Node
 	MapRenderer.ARMY_ICON_SCALE_DEFAULT
 )
 @export var initial_city_names_visible: bool = true
+@export var initial_nation_names_visible: bool = true
+@export var initial_trade_price_enabled: bool = true
 
 @onready var simulation: Simulation = $Simulation
 @onready var renderer: MapRenderer = $MapRenderer
@@ -407,7 +409,10 @@ func _activate_state(next_state: GameState) -> void:
 	simulation.set_speed_multiplier(_speed_mult)
 	renderer.set_army_icon_scale(initial_army_icon_scale)
 	renderer.set_city_names_visible(initial_city_names_visible)
+	renderer.set_nation_names_visible(initial_nation_names_visible)
+	state.trade_price_enabled = initial_trade_price_enabled
 	renderer.setup(state, simulation)
+	renderer.set_trade_price_enabled(initial_trade_price_enabled)
 	if road_tuning_panel != null:
 		renderer.set_province_strength(
 			road_tuning_panel.province_strength()

@@ -14,8 +14,10 @@ const BASE_SIDE_MARGIN := 40.0
 const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HEADER_ONLY_TOP := 44.0
 const NATION_STATS_BUTTON_WIDTH := 104.0
-const ARMY_ICON_CONTROL_WIDTH := 320.0
+const ARMY_ICON_CONTROL_WIDTH := 500.0
 const CITY_NAME_BUTTON_WIDTH := 82.0
+const NATION_NAME_BUTTON_WIDTH := 82.0
+const PRICE_TOGGLE_BUTTON_WIDTH := 82.0
 const ARMY_ICON_SCALE_MIN: float = 0.10
 const ARMY_ICON_SCALE_MAX: float = 1.80
 const ARMY_ICON_SCALE_STEP: float = 0.10
@@ -142,6 +144,8 @@ var _nation_stats_drag_offset := Vector2.ZERO
 var _nation_stats_scroll: int = 0
 var _nation_stats_collapsed_nations: Dictionary = {}
 var _city_names_visible: bool = true
+var _nation_names_visible: bool = true
+var _trade_price_enabled: bool = true
 var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
 var _nation_list_cache_day: int = -1
 var _nation_list_cache_ownership_revision: int = -1
@@ -159,6 +163,8 @@ var _army_icon_panel: PanelContainer
 var _army_icon_label: Label
 var _army_icon_slider: HSlider
 var _city_name_button: Button
+var _nation_name_button: Button
+var _price_toggle_button: Button
 static var _nation_detail_section_build_count: int = 0
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
@@ -341,8 +347,90 @@ func _create_army_icon_scale_control() -> void:
 		_on_city_names_toggled
 	)
 	row.add_child(_city_name_button)
+
+	_nation_name_button = Button.new()
+	_nation_name_button.name = "NationNameToggle"
+	_nation_name_button.toggle_mode = true
+	_nation_name_button.button_pressed = _nation_names_visible
+	_nation_name_button.custom_minimum_size = Vector2(
+		NATION_NAME_BUTTON_WIDTH,
+		0.0
+	)
+	_nation_name_button.add_theme_font_override("font", _font)
+	_nation_name_button.add_theme_font_size_override("font_size", 10)
+	_nation_name_button.add_theme_color_override(
+		"font_color",
+		PAPER_LIGHT
+	)
+	_nation_name_button.add_theme_color_override(
+		"font_hover_color",
+		Color.WHITE
+	)
+	_nation_name_button.add_theme_color_override(
+		"font_pressed_color",
+		PAPER_LIGHT
+	)
+	_nation_name_button.add_theme_stylebox_override(
+		"normal",
+		city_button_normal.duplicate()
+	)
+	_nation_name_button.add_theme_stylebox_override(
+		"hover",
+		city_button_hover.duplicate()
+	)
+	_nation_name_button.add_theme_stylebox_override(
+		"pressed",
+		city_button_pressed.duplicate()
+	)
+	_nation_name_button.tooltip_text = "开启或关闭地图国家名称"
+	_nation_name_button.toggled.connect(
+		_on_nation_names_toggled
+	)
+	row.add_child(_nation_name_button)
+
+	_price_toggle_button = Button.new()
+	_price_toggle_button.name = "TradePriceToggle"
+	_price_toggle_button.toggle_mode = true
+	_price_toggle_button.button_pressed = _trade_price_enabled
+	_price_toggle_button.custom_minimum_size = Vector2(
+		PRICE_TOGGLE_BUTTON_WIDTH,
+		0.0
+	)
+	_price_toggle_button.add_theme_font_override("font", _font)
+	_price_toggle_button.add_theme_font_size_override("font_size", 10)
+	_price_toggle_button.add_theme_color_override(
+		"font_color",
+		PAPER_LIGHT
+	)
+	_price_toggle_button.add_theme_color_override(
+		"font_hover_color",
+		Color.WHITE
+	)
+	_price_toggle_button.add_theme_color_override(
+		"font_pressed_color",
+		PAPER_LIGHT
+	)
+	_price_toggle_button.add_theme_stylebox_override(
+		"normal",
+		city_button_normal.duplicate()
+	)
+	_price_toggle_button.add_theme_stylebox_override(
+		"hover",
+		city_button_hover.duplicate()
+	)
+	_price_toggle_button.add_theme_stylebox_override(
+		"pressed",
+		city_button_pressed.duplicate()
+	)
+	_price_toggle_button.tooltip_text = "开启或关闭贸易价格：开启时国家用贸易金买粮买人"
+	_price_toggle_button.toggled.connect(
+		_on_trade_price_toggled
+	)
+	row.add_child(_price_toggle_button)
 	set_army_icon_scale(_army_icon_scale)
 	set_city_names_visible(_city_names_visible)
+	set_nation_names_visible(_nation_names_visible)
+	set_trade_price_enabled(_trade_price_enabled)
 
 
 func _on_army_icon_scale_changed(value: float) -> void:
@@ -391,6 +479,45 @@ func set_city_names_visible(visible: bool) -> void:
 
 func city_names_visible() -> bool:
 	return _city_names_visible
+
+
+func _on_nation_names_toggled(visible: bool) -> void:
+	set_nation_names_visible(visible)
+
+
+func set_nation_names_visible(visible: bool) -> void:
+	_nation_names_visible = visible
+	if _nation_name_button != null:
+		_nation_name_button.set_pressed_no_signal(visible)
+		_nation_name_button.text = (
+			"国名 开" if visible else "国名 关"
+		)
+	queue_redraw()
+
+
+func nation_names_visible() -> bool:
+	return _nation_names_visible
+
+
+func _on_trade_price_toggled(enabled: bool) -> void:
+	set_trade_price_enabled(enabled)
+
+
+## 贸易价格开关（简化版 EU4）：开启时国家用当月贸易金凭空买粮买人；
+## 关闭时只结算路线税进国库，不产生任何粮/人采购。写入 GameState 供结算读取。
+func set_trade_price_enabled(enabled: bool) -> void:
+	_trade_price_enabled = enabled
+	if _price_toggle_button != null:
+		_price_toggle_button.set_pressed_no_signal(enabled)
+		_price_toggle_button.text = (
+			"价格 开" if enabled else "价格 关"
+		)
+	if state != null:
+		state.trade_price_enabled = enabled
+
+
+func trade_price_enabled() -> bool:
+	return _trade_price_enabled
 
 
 func set_map_mode(mode: int) -> void:
@@ -525,19 +652,9 @@ static func create_ui_font() -> Font:
 
 
 static func create_map_label_font() -> Font:
-	var mac_songti_path := "/System/Library/Fonts/Supplemental/Songti.ttc"
-	if FileAccess.file_exists(mac_songti_path):
-		var mac_songti := FontFile.new()
-		if mac_songti.load_dynamic_font(mac_songti_path) == OK:
-			return mac_songti
-	var portable_serif := SystemFont.new()
-	portable_serif.font_names = PackedStringArray([
-		"serif", "Songti SC", "Songti TC", "STSong",
-		"SimSun", "NSimSun", "Noto Serif CJK SC",
-		"Source Han Serif SC",
-	])
-	portable_serif.allow_system_fallback = true
-	return portable_serif
+	# 地图标签统一复用 UI 的 CJK Sans/黑体字体：黑体在任意缩放下笔画更清晰、
+	# 与国名大字风格一致，不再声明仿宋/衬线候选。
+	return create_ui_font()
 
 
 func _process(_delta: float) -> void:
@@ -1410,6 +1527,22 @@ func _layout_army_icon_scale_control() -> void:
 	)
 	_city_name_button.custom_minimum_size = Vector2(
 		CITY_NAME_BUTTON_WIDTH * _display_scale,
+		0.0
+	)
+	_nation_name_button.add_theme_font_size_override(
+		"font_size",
+		_font_size(10)
+	)
+	_nation_name_button.custom_minimum_size = Vector2(
+		NATION_NAME_BUTTON_WIDTH * _display_scale,
+		0.0
+	)
+	_price_toggle_button.add_theme_font_size_override(
+		"font_size",
+		_font_size(10)
+	)
+	_price_toggle_button.custom_minimum_size = Vector2(
+		PRICE_TOGGLE_BUTTON_WIDTH * _display_scale,
 		0.0
 	)
 
@@ -4643,18 +4776,15 @@ static func nation_list_rows(
 		var monthly_food_balance_text := _signed_value_text(
 			nation.last_food_estimated_balance
 		)
-		var food_trade_text := _food_trade_flow_text(
-			nation.last_trade_food_import,
-			nation.last_trade_food_export
-		)
 		var food_snapshot_secondary := (
-			"粮仓 %d   月产 %d   月需 %d   月净 %s   流 %s"
+			"粮仓 %d   月产 %d   月需 %d   月净 %s   购粮 %d   购人 %d"
 			% [
 				nation.granary_food,
 				nation.last_food_estimated_production,
 				nation.last_food_estimated_consumption,
 				monthly_food_balance_text,
-				food_trade_text,
+				maxi(nation.last_trade_food_import, 0),
+				maxi(nation.last_trade_manpower_import, 0),
 			]
 		)
 		row_by_nation[nation.id] = {
@@ -5465,7 +5595,7 @@ static func _section_layout_line_count(line_counts: PackedInt32Array) -> int:
 
 
 static func _city_detail_line_count() -> int:
-	return _section_layout_line_count(PackedInt32Array([2, 2, 3, 3, 1]))
+	return _section_layout_line_count(PackedInt32Array([3, 2, 3, 3, 1]))
 
 
 static func _edge_detail_line_count() -> int:
@@ -5569,6 +5699,7 @@ static func city_detail_sections(
 	var reason := loyalty_reason_text(city.last_loyalty_reason)
 	return [
 		{"title": "概况", "lines": [
+			"简称：%s" % WorldNaming.city_short_name(game_state, city_id),
 			"%s · %s · %s" % [
 			type_name,
 			"交战中" if contested else "稳定",
@@ -5741,10 +5872,6 @@ static func nation_detail_sections(
 		game_state,
 		nation_id
 	)
-	var food_trade_text := _food_trade_flow_text(
-		n.last_trade_food_import,
-		n.last_trade_food_export
-	)
 	var monthly_food_balance_text := _signed_value_text(
 		n.last_food_estimated_balance
 	)
@@ -5779,10 +5906,11 @@ static func nation_detail_sections(
 				n.last_food_estimated_consumption,
 				monthly_food_balance_text,
 			],
-			"商路 %d    商贸金 %s    粮食净流 %s" % [
+			"商路 %d    商贸金 %s    购粮 %d    购人 %d" % [
 				n.last_trade_route_count,
 				_signed_value_text(n.last_trade_gold),
-				food_trade_text,
+				maxi(n.last_trade_food_import, 0),
+				maxi(n.last_trade_manpower_import, 0),
 			],
 		]},
 		{"title": "外交与行动", "lines": [
@@ -5898,19 +6026,6 @@ static func _signed_value_text(value: int) -> String:
 	if value < 0:
 		return "%d" % value
 	return "0"
-
-
-static func _food_trade_flow_text(import_amount: int, export_amount: int) -> String:
-	var imports := maxi(import_amount, 0)
-	var exports := maxi(export_amount, 0)
-	if imports == 0 and exports == 0:
-		return "进口0 出口0"
-	var net := imports - exports
-	if net > 0:
-		return "进口%d" % net
-	if net < 0:
-		return "出口%d" % absi(net)
-	return "净流0"
 
 
 static func _diplomatic_action_name(action: int) -> String:

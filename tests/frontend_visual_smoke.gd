@@ -362,21 +362,9 @@ func _run() -> void:
 	)
 	var map_label_font_contract := (
 		map_label_font_source.contains(
-			"/System/Library/Fonts/Supplemental/Songti.ttc"
+			"return create_ui_font()"
 		)
-		and map_label_font_source.contains(
-			"FileAccess.file_exists(mac_songti_path)"
-		)
-		and map_label_font_source.contains(
-			"mac_songti.load_dynamic_font(mac_songti_path) == OK"
-		)
-		and map_label_font_source.contains("\"serif\"")
-		and map_label_font_source.contains("\"Songti SC\"")
-		and map_label_font_source.contains("\"SimSun\"")
-		and map_label_font_source.contains("\"Noto Serif CJK SC\"")
-		and map_label_font_source.contains(
-			"portable_serif.allow_system_fallback = true"
-		)
+		and not map_label_font_source.contains("\"serif\"")
 	)
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_LOYALTY)
 	var loyalty_mode_contract := (

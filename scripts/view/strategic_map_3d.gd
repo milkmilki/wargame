@@ -1620,6 +1620,9 @@ func _nation_label_choose_text(
 		str(WorldNaming.nation_display_name(state, nation_id, true)).strip_edges(),
 		full_name
 	)
+	var best_pixel_size := 0.0
+	var best_candidate := ""
+	var best_bbox := Vector2.ZERO
 	for candidate in candidates:
 		var text_size: Vector2 = _map_font.get_string_size(
 			candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size
@@ -1645,6 +1648,21 @@ func _nation_label_choose_text(
 				"bbox_height": bbox_size.y,
 				"hidden": false,
 			}
+		# 小封国兜底：领土矩形放不下可读字号时不再整条隐藏，改用能塞进矩形的
+		# 最大字号（即最短候选）。像素尺寸仍严格 <= 矩形安全边界，fits_mask 成立；
+		# 字很小但在任意缩放下都存在，玩家拉近即可辨认。
+		if pixel_size > best_pixel_size:
+			best_pixel_size = pixel_size
+			best_candidate = candidate
+			best_bbox = bbox_size
+	if not best_candidate.is_empty() and best_pixel_size > 0.0:
+		return {
+			"text": best_candidate,
+			"pixel_size": best_pixel_size,
+			"bbox_width": best_bbox.x,
+			"bbox_height": best_bbox.y,
+			"hidden": false,
+		}
 	return {
 		"text": candidates[0] if not candidates.is_empty() else full_name,
 		"pixel_size": 0.0,
@@ -1838,7 +1856,11 @@ func _update_army_instances() -> void:
 			if army.max_size >= Army.DEFAULT_MAX_SIZE
 			else 0.78
 		)
-		var origin := world + offset + Vector3(0.0, 0.82, 0.0)
+		# Ground the counter on the terrain surface like city bases and roads
+		# instead of hovering above it. The base box is 0.16 tall, so a 0.10
+		# lift keeps its underside flush with the map while the stacked face,
+		# symbols and morale bar rise from there.
+		var origin := world + offset + Vector3(0.0, 0.10, 0.0)
 		_set_counter_transform(
 			_army_bases, index, origin, scale, Vector3(1.12, 1.0, 1.12)
 		)
@@ -2357,8 +2379,9 @@ func _update_map_detail_visibility() -> void:
 	var visible := overlay.city_names_visible()
 	for label in _city_labels:
 		label.visible = visible and _camera_distance <= 40.0
+	var nation_visible := overlay.nation_names_visible()
 	for label in _nation_labels:
-		label.visible = _camera_distance >= 56.0
+		label.visible = nation_visible
 	for label in _battle_labels:
 		label.visible = _camera_distance <= 50.0
 	if _minor_roads != null:

@@ -17,7 +17,7 @@ func _run() -> void:
 	_test_legacy_defaults_and_zero_trade_ui()
 	_test_change_city_food_storage()
 	_test_deposit_food_immediate_aggregate()
-	_test_withdraw_trade_food_immediate_aggregate()
+	_test_resolve_trade_purchases_conjures_resources()
 	_test_setup_snapshot_production_estimate()
 	_test_monthly_production_rounds_after_nation_sum()
 	_test_monthly_snapshot_and_ui_math()
@@ -62,7 +62,8 @@ func _test_legacy_defaults_and_zero_trade_ui() -> void:
 	_check(
 		trade_line.find("商路 0") >= 0
 			and trade_line.find("商贸金 0") >= 0
-			and trade_line.find("进口0 出口0") >= 0
+			and trade_line.find("购粮 0") >= 0
+			and trade_line.find("购人 0") >= 0
 			and trade_line.find("+0") == -1
 			and trade_line.find("-0") == -1,
 		"legacy/zero_trade_ui_without_signed_zero",
@@ -164,10 +165,6 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 
 	var food_line_0 := _section_line(sections_0, "粮食与贸易", 0)
 	var trade_line_0 := _section_line(sections_0, "粮食与贸易", 1)
-	var expected_trade_text_0 := _expected_trade_flow_text(
-		nation_0.last_trade_food_import,
-		nation_0.last_trade_food_export
-	)
 	_check(
 		food_line_0.find("粮仓 %d" % nation_0.granary_food) >= 0
 			and food_line_0.find("月产(预计) %d" % nation_0.last_food_estimated_production) >= 0
@@ -184,7 +181,10 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 				"商贸金 %s" % _signed_or_zero(nation_0.last_trade_gold)
 			) >= 0
 			and trade_line_0.find(
-				"粮食净流 %s" % expected_trade_text_0
+				"购粮 %d" % maxi(nation_0.last_trade_food_import, 0)
+			) >= 0
+			and trade_line_0.find(
+				"购人 %d" % maxi(nation_0.last_trade_manpower_import, 0)
 			) >= 0,
 		"ui/trade_line_matches_snapshot",
 		trade_line_0
@@ -355,27 +355,32 @@ func _test_deposit_food_immediate_aggregate() -> void:
 	sim.free()
 
 
-func _test_withdraw_trade_food_immediate_aggregate() -> void:
+func _test_resolve_trade_purchases_conjures_resources() -> void:
 	var state := _make_single_nation_state()
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
 
-	var city := state.cities[0]
 	var nation := state.nations[0]
-	var initial_storage := city.food_storage
 	var initial_granary := nation.granary_food
+	var initial_manpower := nation.manpower_pool
 
-	sim._withdraw_trade_food(0, 7)
+	# 简化版 EU4 贸易：钱凭空买粮、买人；直接落到粮池与人力库，不动他国。
+	var trade := {
+		"nation_food_import": [9] as Array[int],
+		"nation_food_export": [0] as Array[int],
+		"nation_manpower_import": [400] as Array[int],
+	}
+	sim._resolve_trade_purchases(trade)
 	_check(
-		city.food_storage == initial_storage - 7,
-		"withdraw_trade/city_storage_decreased",
-		"old=%d new=%d" % [initial_storage, city.food_storage]
+		nation.granary_food == initial_granary + 9,
+		"trade_purchase/nation_granary_increased_immediately",
+		"old=%d new=%d" % [initial_granary, nation.granary_food]
 	)
 	_check(
-		nation.granary_food == initial_granary - 7,
-		"withdraw_trade/nation_granary_decreased_immediately",
-		"old=%d new=%d" % [initial_granary, nation.granary_food]
+		nation.manpower_pool == initial_manpower + 400,
+		"trade_purchase/manpower_pool_increased_immediately",
+		"old=%d new=%d" % [initial_manpower, nation.manpower_pool]
 	)
 
 	sim.free()
@@ -771,16 +776,3 @@ func _signed_or_zero(value: int) -> String:
 	if value < 0:
 		return "%d" % value
 	return "0"
-
-
-func _expected_trade_flow_text(import_amount: int, export_amount: int) -> String:
-	var imports := maxi(import_amount, 0)
-	var exports := maxi(export_amount, 0)
-	if imports == 0 and exports == 0:
-		return "进口0 出口0"
-	var net := imports - exports
-	if net > 0:
-		return "进口%d" % net
-	if net < 0:
-		return "出口%d" % absi(net)
-	return "净流0"

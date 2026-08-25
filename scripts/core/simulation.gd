@@ -80,6 +80,9 @@ const DISBAND_SIZE_MAX: int = 499
 const REINFORCE_PER_ARMY_PER_MONTH: int = 750
 const PEACETIME_MANPOWER_RESERVE: int = 5000
 const PEACETIME_STRENGTH_RATIO: float = 0.30
+## 战时也保留的人力下限：即使在战争中也不把 manpower_pool 抽到 0，
+## 保证每月补员始终有燃料，避免暴兵后全军长期缺编、攻势因战力门槛卡死。
+const WARTIME_MANPOWER_RESERVE: int = 3000
 ## 财政储备不是“现金不得为负”的补丁，而是军队规模预算的目标状态：
 ## 和平积累约三年月收入；进入连续战争时冻结战前月收入并只保留半年。
 const PEACE_GOLD_RESERVE_MONTHS: int = 36
@@ -1017,6 +1020,7 @@ func _trade_settlement_token(
 	var fields: Array = [
 		"trade_settlement_v1",
 		structure_fingerprint,
+		["trade_price_enabled", state.trade_price_enabled],
 	]
 	for city in state.cities:
 		fields.append([
@@ -1040,6 +1044,7 @@ func _trade_settlement_token(
 			state.food_pool_holder(nation.id),
 			nation.granary_food, nation.last_food_demand,
 			nation.food_demand_ema, nation.treasury_gold,
+			nation.manpower_pool,
 			nation.ruler_revision, nation.ruler_archetype,
 			nation.ruler_traits,
 			RulerProfile.gold_output_multiplier(nation),
@@ -1252,11 +1257,17 @@ static func _monthly_gold_flows_from_trade(
 		)
 	var result: Array[Dictionary] = []
 	for nation in game_state.nations:
+		# 简化版 EU4 贸易：路线税（贸易节点竞争力→金钱）是唯一贸易收入；
+		# 买粮、买人都是凭空产生，只从国库扣钱，因此计入支出。不再有他国
+		# 之间守恒的粮食销售收入（nation_food_sale_income 恒为 0）。
 		var food_trade_income := _trade_array_value(
 			trade, "nation_food_sale_income", nation.id
 		)
 		var food_trade_expense := _trade_array_value(
 			trade, "nation_food_cost", nation.id
+		)
+		var manpower_trade_expense := _trade_array_value(
+			trade, "nation_manpower_cost", nation.id
 		)
 		var trade_gross_income := _trade_array_value(
 			trade, "nation_trade_gold", nation.id
@@ -1269,6 +1280,7 @@ static func _monthly_gold_flows_from_trade(
 			trade_tax_income
 			+ food_trade_income
 			- food_trade_expense
+			- manpower_trade_expense
 		)
 		result.append({
 			"nation_id": nation.id,
@@ -1276,6 +1288,7 @@ static func _monthly_gold_flows_from_trade(
 			"trade_tax_income": trade_tax_income,
 			"food_trade_income": food_trade_income,
 			"food_trade_expense": food_trade_expense,
+			"manpower_trade_expense": manpower_trade_expense,
 			"trade_net_income": trade_net_income,
 			"tribute_received": 0,
 			"tribute_paid": 0,
@@ -1546,13 +1559,13 @@ func _resolve_economy() -> void:
 			city,
 			garrison_by_city
 		)
-	# 贸易税是新增收入；粮款是出口/进口双方之间的守恒转移。
-	# 二者已经折叠为 trade_net_income，因此这里只应用一次。
+	# 贸易税是新增收入；买粮、买人的金钱支出已在 trade_net_income 内一次性
+	# 扣除。这里只应用国库净变动，再把「凭空买到」的粮/人落到库存/人力。
 	for nation in state.nations:
 		nation.treasury_gold += int(
 			gold_flows[nation.id]["trade_net_income"]
 		)
-	_resolve_trade_food_transfers(trade)
+	_resolve_trade_purchases(trade)
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
 	_resolve_military_finance(gold_flows)
@@ -1684,42 +1697,40 @@ func _publish_trade_snapshot(trade: Dictionary) -> void:
 	for nation in state.nations:
 		var gross := _trade_array_value(trade, "nation_trade_gold", nation.id)
 		var cost := _trade_array_value(trade, "nation_food_cost", nation.id)
-		nation.last_trade_gold = gross - cost
+		var manpower_cost := _trade_array_value(
+			trade, "nation_manpower_cost", nation.id
+		)
+		nation.last_trade_gold = gross - cost - manpower_cost
 		nation.last_trade_food_import = _trade_array_value(
 			trade, "nation_food_import", nation.id
 		)
 		nation.last_trade_food_export = _trade_array_value(
 			trade, "nation_food_export", nation.id
 		)
+		nation.last_trade_manpower_import = _trade_array_value(
+			trade, "nation_manpower_import", nation.id
+		)
 		nation.last_trade_route_count = nation_route_counts[nation.id]
 
 
-func _resolve_trade_food_transfers(trade: Dictionary) -> void:
-	for nation in state.nations:
-		var exported := _trade_array_value(
-			trade, "nation_food_export", nation.id
-		)
-		if exported > 0:
-			_withdraw_trade_food(nation.id, exported)
+## 简化版 EU4 贸易结算：把 TradeNetwork 规划的「凭空采购」落到库存与人力。
+## 粮食直接存入国家粮池（不从任何他国抽调），人力直接加进 manpower_pool。
+## 金钱支出已在 _monthly_gold_flows_from_trade 的 trade_net_income 里扣过，
+## 这里只负责让资源到账，保持「钱→粮/人凭空产生」的单向语义。
+func _resolve_trade_purchases(trade: Dictionary) -> void:
 	for nation in state.nations:
 		var imported := _trade_array_value(
 			trade, "nation_food_import", nation.id
 		)
 		if imported > 0:
 			state.deposit_food(nation.id, imported)
+	for nation in state.nations:
+		var manpower := _trade_array_value(
+			trade, "nation_manpower_import", nation.id
+		)
+		if manpower > 0:
+			nation.manpower_pool += manpower
 	state.refresh_derived()
-
-
-func _withdraw_trade_food(nation_id: int, amount: int) -> void:
-	var holder := state.food_pool_holder(nation_id)
-	var remaining := maxi(amount, 0)
-	for warehouse in state.warehouse_cities_of(holder):
-		if state.city_under_siege(warehouse.id):
-			continue
-		var delta := state.change_city_food_storage(warehouse.id, -remaining)
-		remaining -= (-delta)
-		if remaining <= 0:
-			break
 
 
 ## 贡赋：每个藩王把当月金钱税收的 tribute_rate 比例上缴直接宗主（守恒转移）。
@@ -2188,6 +2199,22 @@ func _reinforcement_priority(army: Army) -> int:
 	if city.is_food_hub or city.is_manpower_hub or city.at_war:
 		return 3
 	return 1
+
+
+## 战时新建战团前必须预留的人力：等于把现役军队本月补满编所需的人力
+## （每军至多一个月补员量），并以 WARTIME_MANPOWER_RESERVE 为下限。这样
+## 暴兵不会把 manpower_pool 抽到 0，月度补员始终有燃料，现役军队得以维持
+## 满编，从而满足攻势的集结与战力门槛。现役越缺编，预留越多、越优先补员。
+func _wartime_manpower_reserve(armies: Array[Army]) -> int:
+	var monthly_refill_need := 0
+	for army in armies:
+		if army.size <= 0 or army.size >= army.max_size:
+			continue
+		monthly_refill_need += mini(
+			army.max_size - army.size,
+			REINFORCE_PER_ARMY_PER_MONTH
+		)
+	return maxi(WARTIME_MANPOWER_RESERVE, monthly_refill_need)
 
 
 func _can_reinforce_army(
@@ -7061,10 +7088,17 @@ func _ai_manage_force_structure(
 			force_structure_target
 		):
 			return true
+	# 应急动员（小国最后城市保卫战 / 战争动员窗口）是生死存亡的最后一搏，
+	# 允许把人力抽到底，不设战时预留；否则仅在常规战时扩军时预留补员燃料，
+	# 使现役军队每月补满编，避免爆兵抽干 manpower_pool 后军团长期缺编。
 	var protected_reserve := (
 		PEACETIME_MANPOWER_RESERVE
 		if wars.is_empty()
-		else 0
+		else (
+			0
+			if emergency_recruitment
+			else _wartime_manpower_reserve(view.friendly_armies)
+		)
 	)
 	var available_manpower := (
 		state.nations[view.nation_id].manpower_pool - protected_reserve
@@ -12067,8 +12101,32 @@ func _manage_campaign_offensive(
 				target_city
 			)
 		)
+		# 满准备（120 天）是给“常规兵力打不动”的僵局目标兜底的发动截止期，
+		# 而不是一旦标记就必须空等满期的锁。若本方兵力已恢复到无需集结加成、
+		# 仅凭常规集结窗口的基准倍率即可跨过进攻阈值，说明僵局已解除，应立即
+		# 发动，杜绝“明明能打却拖很久不触发”的情况。基准窗口与均势夹具判据
+		# 同源（CAMPAIGN_OFFENSIVE_INTERVAL_DAYS），真正的僵局目标基准比值仍
+		# 低于阈值，因此不会被提前触发。
+		var attack_ratio_threshold := _campaign_attack_ratio_threshold(
+			nation_id
+		)
+		var force_ready_without_bonus := (
+			full_preparation_active
+			and _campaign_projected_assault_ratio(
+				nation_id,
+				target_city,
+				mini(
+					preparation_days,
+					CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
+				),
+				threat,
+				true,
+				staged_armies
+			) >= attack_ratio_threshold
+		)
 		if (
 			recent_legal_reclamation
+			or force_ready_without_bonus
 			or (
 				full_preparation_active
 				and preparation_days
@@ -12077,9 +12135,7 @@ func _manage_campaign_offensive(
 			or (
 				not full_preparation_active
 				and projected_ratio
-					>= _campaign_attack_ratio_threshold(
-						nation_id
-					)
+					>= attack_ratio_threshold
 			)
 		):
 			launch_targets.append(target_city)

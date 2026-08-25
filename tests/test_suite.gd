@@ -2454,6 +2454,7 @@ func _test_responsive_map_layout() -> void:
 	list_state.nations[0].last_trade_gold = 7
 	list_state.nations[0].last_trade_food_import = 30
 	list_state.nations[0].last_trade_food_export = 10
+	list_state.nations[0].last_trade_manpower_import = 40
 	list_state.nations[0].last_food_estimated_production = 0
 	list_state.nations[0].last_food_estimated_consumption = 0
 	list_state.nations[0].last_food_estimated_balance = 20
@@ -2483,13 +2484,14 @@ func _test_responsive_map_layout() -> void:
 				and str(nation_rows[0]["economy_secondary"]).contains("月产 0")
 				and str(nation_rows[0]["economy_secondary"]).contains("月需 0")
 				and str(nation_rows[0]["economy_secondary"]).contains("月净 +20")
-				and str(nation_rows[0]["economy_secondary"]).contains("流 进口20")
+				and str(nation_rows[0]["economy_secondary"]).contains("购粮 30")
+				and str(nation_rows[0]["economy_secondary"]).contains("购人 40")
 				and str(nation_rows[0]["economy_secondary"]).find("+0") == -1
 				and str(nation_rows[0]["economy_secondary"]).find("-0") == -1
 				and str(nation_rows[0]["economy"]).contains("商2线")
 				and str(nation_rows[0]["economy"]).contains("金+7")
 				and str(nation_rows[0]["economy"]).contains("粮仓 0")
-				and str(nation_rows[0]["economy"]).contains("流 进口20")
+				and str(nation_rows[0]["economy"]).contains("购粮 30")
 			and str(nation_rows[0]["governance_primary"]).contains("测试君")
 			and str(nation_rows[0]["governance_secondary"]).contains("节俭")
 			and str(nation_rows[0]["governance_secondary"]).contains("建军"),
@@ -2795,7 +2797,8 @@ func _test_responsive_map_layout() -> void:
 				str(city_sections[3]["title"]),
 				str(city_sections[4]["title"]),
 			] == ["概况", "军事", "经济", "治理", "贸易"]
-			and city_lines.size() == 11
+			and city_lines.size() == 12
+			and "简称" in str((city_sections[0]["lines"] as Array)[0])
 			and "工事" in str((city_sections[1]["lines"] as Array)[0])
 			and "驻军" in str((city_sections[1]["lines"] as Array)[1])
 			and "发展" in str((city_sections[2]["lines"] as Array)[1])
@@ -11507,7 +11510,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		and enemy_boundary_color.is_equal_approx(alliance_boundary_color)
 		and is_equal_approx(
 			MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
-			1.15
+			1.35
 		),
 		"外交关系变化只能更新语义子集，国家边界几何与国家色不得变化"
 	)
@@ -19784,7 +19787,8 @@ func _test_shared_granary_and_relay_supply() -> void:
 			break
 	var subject := gs.enfeoff(0, region)
 	gs.refresh_derived()
-	# 本段只验证宗藩共享粮池聚合，禁用国际粮食贸易以隔离外部流量。
+	# 本段只验证宗藩共享粮池聚合；关闭贸易价格开关以隔离「钱买粮」外部流量。
+	gs.trade_price_enabled = false
 	for pool_nation in gs.nations:
 		pool_nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	var sub_capital := gs.nations[subject].capital_city_id
@@ -21458,7 +21462,9 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	print("[34] 资源核心：AI价值识别；富粮国家宣战时有限爆兵")
 	var gs := GameState.new()
 	gs.generate_grid_world(34001)
-	# 本用例直接对比本国产粮动员能力，隔离国际粮食外援。
+	# 本用例直接对比本国产粮动员能力，隔离国际粮食外援：关闭贸易价格开关，
+	# 使「钱凭空买粮买人」不生效，回到纯自产口径。
+	gs.trade_price_enabled = false
 	for nation in gs.nations:
 		nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	for nation_a in range(gs.nations.size()):

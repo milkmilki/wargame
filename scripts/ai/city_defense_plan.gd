@@ -24,6 +24,9 @@ const STRATEGIC_BORDER_PROXIMITY_WEIGHT: float = 0.60
 const STRATEGIC_CAPITAL_PROXIMITY_WEIGHT: float = 0.40
 const STRATEGIC_PROXIMITY_DECAY_HOPS: float = 2.0
 const STRATEGIC_PROXIMITY_MIN_FACTOR: float = 0.35
+## 填线军盈余分配的基线权重：保证每个候选边疆城市（含无经济价值者）都能被覆盖，
+## 且让静态结构权重成为主导排序项，杜绝随兵力/敌情逐日抖动导致的来回换城。
+const FILLER_SLOT_BASE_WEIGHT: float = 1.0
 
 var view: AiWorldView
 var snapshot: StrategicMapSnapshot
@@ -50,6 +53,9 @@ var assigned_armies_by_city: Dictionary = {} ## city_id -> Array[army.id]
 var assigned_posture_by_army: Dictionary = {} ## army.id -> Posture
 var assigned_edge_by_army: Dictionary = {} ## army.id -> neighbor_id
 var _role_city_priority_cache: Dictionary = {}
+## 结构性（静态）城市重要度缓存：只由领土价值、粮道枢纽与地理区位决定，
+## 不含即时威胁与兵力分布。填线军盈余分配用它，边疆城市集合不变则权重恒定。
+var _role_city_structural_cache: Dictionary = {}
 var _role_path_dist_by_origin: Dictionary = {}
 ## 内线部署地理修正用的拓扑跳数场（本国领土内 BFS）。惰性构建、随规划复用。
 var _border_hop_distance: Dictionary = {}   ## city_id -> 到最近国界城市的跳数
@@ -569,6 +575,9 @@ func _reuse_dynamic_plan(
 	)
 	_role_city_priority_cache = (
 		previous._role_city_priority_cache.duplicate(true)
+	)
+	_role_city_structural_cache = (
+		previous._role_city_structural_cache.duplicate(true)
 	)
 	dynamic_plan_reused = true
 
@@ -1604,7 +1613,9 @@ func _build_role_defense_slots(capacity: int = -1) -> Array[Dictionary]:
 		for city_id_value in snapshot.potential_frontier_cities:
 			if not frontier_ids.has(city_id_value):
 				frontier_ids.append(city_id_value)
-	_sort_role_city_ids(frontier_ids)
+	# 前线城市槽的 canonical 顺序只用结构性重要度，与即时威胁解耦：这样 active_slots
+	# 窗口在边疆城市集合不变时恒定，填线军战线成型后保持静止不来回换城。
+	_sort_role_city_ids_static(frontier_ids)
 	var sectors: Dictionary = (
 		view.state.nations[view.nation_id]
 			.frontier_defense_sectors
@@ -1674,7 +1685,8 @@ func _build_role_defense_slots(capacity: int = -1) -> Array[Dictionary]:
 		):
 			continue
 		strategic_ids.append(city.id)
-	_sort_role_city_ids(strategic_ids)
+	# LINE 战略纵深槽也用结构性顺序，保持与前线/边缘槽同源、与即时威胁解耦。
+	_sort_role_city_ids_static(strategic_ids)
 	if use_default_layout:
 		# Default (no-arg) path: build canonical tier1+tier2 once + one deterministic
 		# tier3 slot per eligible strategic city.  Stable layout independent of army
@@ -1691,7 +1703,7 @@ func _build_role_defense_slots(capacity: int = -1) -> Array[Dictionary]:
 			})
 		if result.is_empty():
 			var fallback_ids := required_power.keys()
-			_sort_role_city_ids(fallback_ids)
+			_sort_role_city_ids_static(fallback_ids)
 			for city_id_value in fallback_ids:
 				result.append({
 					"city_id": int(city_id_value),
@@ -1761,8 +1773,10 @@ func _sort_role_slots(slots: Array[Dictionary]) -> void:
 			return priority_a < priority_b
 		var city_a := int(a.get("city_id", -1))
 		var city_b := int(b.get("city_id", -1))
-		var score_a := _line_city_priority(city_a)
-		var score_b := _line_city_priority(city_b)
+		# 边缘槽 canonical 顺序只用结构性重要度，与即时威胁解耦，保证边疆集合不变时
+		# 槽序恒定，填线军不因敌军移动导致的威胁抖动而在边缘槽间来回换防。
+		var score_a := _line_city_structural_priority(city_a)
+		var score_b := _line_city_structural_priority(city_b)
 		if not is_equal_approx(score_a, score_b):
 			return score_a > score_b
 		if city_a != city_b:
@@ -1795,7 +1809,8 @@ func _build_weighted_city_role_slots(
 			continue
 		seen[city_id] = true
 		unique_city_ids.append(city_id)
-	_sort_role_city_ids(unique_city_ids)
+	# 盈余槽集只用结构性重要度排序/加权，与即时威胁解耦，边疆集合不变时恒定。
+	_sort_role_city_ids_static(unique_city_ids)
 	var active_city_ids: Array[int] = []
 	var weights := {}
 	var total_weight := 0.0
@@ -1809,7 +1824,11 @@ func _build_weighted_city_role_slots(
 			requirement_at(city_id),
 			floor_power
 		)
-		var weight := _role_slot_weight(city_id)
+		# 盈余槽的权重只用结构性重要度（价值/粮道/地理区位），与即时威胁、
+		# frontline_allocation、required_power 等逐日变化项解耦。配合下方顺序最大
+		# 亏空分配（house-monotone），边疆/战略城市集合不变时槽集恒定，扩军只会
+		# 追加槽而不打乱已有归属，杜绝填线军因动态权重抖动来回换城。
+		var weight := _role_slot_static_weight(city_id)
 		if weight <= 0.0:
 			continue
 		active_city_ids.append(city_id)
@@ -1838,7 +1857,7 @@ func _build_weighted_city_role_slots(
 					is_equal_approx(deficit, chosen_deficit)
 					and (
 						chosen_city == -1
-						or _role_slot_city_less(
+						or _role_slot_static_city_less(
 							city_id,
 							chosen_city
 						)
@@ -1861,24 +1880,20 @@ func _build_weighted_city_role_slots(
 	return result
 
 
-func _role_slot_weight(city_id: int) -> float:
-	var weight := _line_city_priority(city_id)
-	weight += maxf(
-		float(frontline_allocation.get(city_id, 0.0)),
-		0.0
-	)
-	weight += maxf(
-		float(required_power.get(city_id, 0.0)),
-		0.0
-	)
-	return maxf(weight, 0.0)
+## 填线军盈余分配专用的静态权重：只由结构性重要度（价值/粮道/地理区位）决定，
+## 不含即时威胁、frontline_allocation 与 required_power 等随兵力/敌情逐日变化的项。
+## 边疆城市集合不变时权重恒定，避免盈余填线军因权重抖动而反复换城。
+## 加一个基线权重，保证每个候选城市（含零经济价值的边境城）都能被填线军覆盖。
+func _role_slot_static_weight(city_id: int) -> float:
+	return _line_city_structural_priority(city_id) + FILLER_SLOT_BASE_WEIGHT
 
 
-func _role_slot_city_less(city_a: int, city_b: int) -> bool:
+## 填线军盈余分配的静态排序：与 _role_slot_static_weight 同源，只比较结构性重要度。
+func _role_slot_static_city_less(city_a: int, city_b: int) -> bool:
 	if city_a == city_b:
 		return false
-	var score_a := _line_city_priority(city_a)
-	var score_b := _line_city_priority(city_b)
+	var score_a := _line_city_structural_priority(city_a)
+	var score_b := _line_city_structural_priority(city_b)
 	if not is_equal_approx(score_a, score_b):
 		return score_a > score_b
 	return city_a < city_b
@@ -1899,7 +1914,8 @@ func _build_small_nation_defense_slots(capacity: int = -1) -> Array[Dictionary]:
 	var city_ids: Array = []
 	for city in view.friendly_cities:
 		city_ids.append(city.id)
-	_sort_role_city_ids(city_ids)
+	# 小国求生：每城都建一个 priority0 守城槽，用结构性顺序保持稳定、与威胁抖动解耦。
+	_sort_role_city_ids_static(city_ids)
 	for city_id_value in city_ids:
 		var city_id := int(city_id_value)
 		required_power[city_id] = maxf(
@@ -1967,10 +1983,26 @@ func _fill_surplus_line_armies(
 		if not seen.has(city_id):
 			candidate_city_ids.append(city_id)
 			seen[city_id] = true
-	_sort_role_city_ids(candidate_city_ids)
+	# 盈余填线军的候选排序与权重只用结构性重要度（价值/粮道/地理区位），
+	# 不掺入即时威胁、frontline_allocation、required_power 等逐日变化项，
+	# 边疆城市集合不变时结果恒定，杜绝填线军因动态权重抖动来回换城。
+	candidate_city_ids.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var city_a := int(a)
+		var city_b := int(b)
+		var score_a := _line_city_structural_priority(city_a)
+		var score_b := _line_city_structural_priority(city_b)
+		if not is_equal_approx(score_a, score_b):
+			return score_a > score_b
+		return EquivariantOrder.city_id_less(
+			view.state,
+			view.nation_id,
+			city_a,
+			city_b
+		)
+	)
 	var candidates_with_weight: Array = []
 	for city_id in candidate_city_ids:
-		var weight := _role_slot_weight(city_id)
+		var weight := _role_slot_static_weight(city_id)
 		if weight > 0.0:
 			candidates_with_weight.append({
 				"city_id": city_id,
@@ -1978,8 +2010,34 @@ func _fill_surplus_line_armies(
 			})
 	if candidates_with_weight.is_empty():
 		return
-	for army_index in range(remaining_armies.size()):
-		var army: Army = remaining_armies[army_index]
+	# 优先保留仍然有效的既有防区：军队现驻/在守的城市仍是候选且可达时留在原地，
+	# 让战线成型后的填线军保持静止，不因每周期重规划而无意义换防。
+	var candidate_set := {}
+	for cand in candidates_with_weight:
+		candidate_set[int(cand["city_id"])] = true
+	var pending_armies: Array[Army] = []
+	for army in remaining_armies:
+		var kept_city := army.line_assignment_city
+		if (
+			kept_city >= 0
+			and candidate_set.has(kept_city)
+			and _role_assignment_distance(
+				army, kept_city, Posture.CITY, -1
+			) != INF
+		):
+			_record_role_assignment(army, {
+				"city_id": kept_city,
+				"posture": Posture.CITY,
+				"edge_neighbor": -1,
+				"priority": 0,
+			})
+			city_assigned_counts[kept_city] = int(
+				city_assigned_counts.get(kept_city, 0)
+			) + 1
+		else:
+			pending_armies.append(army)
+	for army_index in range(pending_armies.size()):
+		var army: Army = pending_armies[army_index]
 		var best_city := -1
 		var best_score := -INF
 		var best_distance := INF
@@ -2008,7 +2066,7 @@ func _fill_surplus_line_armies(
 							distance < best_distance
 							or (
 								is_equal_approx(distance, best_distance)
-								and _role_slot_city_less(
+								and _role_slot_static_city_less(
 									city_id, best_city
 								)
 							)
@@ -2075,27 +2133,62 @@ func _sort_role_city_ids(city_ids: Array) -> void:
 	)
 
 
+## 填线（LINE）常态防区槽排序：只用结构性重要度（价值/粮道/地理区位），不含即时
+## 威胁。canonical 槽集顺序因此与敌军移动、兵力分布解耦，边疆城市集合不变时恒定，
+## 保证 active_slots 窗口稳定、既有归属不掉出窗口，填线军战线成型后保持静止。
+## 即时威胁反应交给动态的 MAIN 预备队/救援/攻势逻辑（仍用 _sort_role_city_ids）。
+func _sort_role_city_ids_static(city_ids: Array) -> void:
+	city_ids.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var city_a := int(a)
+		var city_b := int(b)
+		var score_a := _line_city_structural_priority(city_a)
+		var score_b := _line_city_structural_priority(city_b)
+		if not is_equal_approx(score_a, score_b):
+			return score_a > score_b
+		return EquivariantOrder.city_id_less(
+			view.state,
+			view.nation_id,
+			city_a,
+			city_b
+		)
+	)
+
+
 func _line_city_priority(city_id: int) -> float:
 	if _role_city_priority_cache.has(city_id):
 		return float(
 			_role_city_priority_cache[city_id]
 		)
-	# 基础重要性（城市价值 + 补给枢纽价值）按地理区位放大：优先部署在
-	# 离国境、离首都都近的重要城市。威胁项是对敌情的即时反应，不参与地理修正。
-	var base_importance := (
-		snapshot.value_of_city(city_id) * 100.0
-		+ snapshot.supply_importance_at(city_id) * 100.0
-	)
+	# 威胁项是对敌情的即时反应，叠加在结构性重要度之上。用于攻势/换防的动态排序。
 	var priority := (
 		maxf(threat.threat_at(city_id), 0.0)
 		+ maxf(
 			snapshot.potential_threat_at(city_id),
 			0.0
 		)
-		+ base_importance * _strategic_proximity_factor(city_id)
+		+ _line_city_structural_priority(city_id)
 	)
 	_role_city_priority_cache[city_id] = priority
 	return priority
+
+
+## 结构性城市重要度：只由领土价值、粮道枢纽和地理区位（离国境/离首都的跳数）
+## 决定，与即时威胁、兵力分布、军队移动完全无关。边疆城市集合不变时恒定，
+## 用于填线军盈余分配的权重与排序，保证战线成型后填线军保持静止不来回换防。
+func _line_city_structural_priority(city_id: int) -> float:
+	if _role_city_structural_cache.has(city_id):
+		return float(
+			_role_city_structural_cache[city_id]
+		)
+	# 基础重要性（城市价值 + 补给枢纽价值）按地理区位放大：优先部署在
+	# 离国境、离首都都近的重要城市。
+	var base_importance := (
+		snapshot.value_of_city(city_id) * 100.0
+		+ snapshot.supply_importance_at(city_id) * 100.0
+	)
+	var structural := base_importance * _strategic_proximity_factor(city_id)
+	_role_city_structural_cache[city_id] = structural
+	return structural
 
 
 ## 地理区位修正因子 ∈ [MIN_FACTOR, 1]：离国境越近、离首都越近，因子越大。

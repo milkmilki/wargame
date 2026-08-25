@@ -193,6 +193,9 @@ var rebellions: Dictionary = {}
 ## 当月派生贸易路线；静态道路仍由 edges 持有。
 var trade_routes: Array[Dictionary] = []
 var trade_revision: int = 0
+## 简化版 EU4 贸易的「价格开关」：开启时国家用贸易金凭空买粮买人；
+## 关闭时只结算路线税进国库，不再产生任何粮/人采购。UI 可随时开关。
+var trade_price_enabled: bool = true
 var naming_revision: int = 0
 
 ## 结束态

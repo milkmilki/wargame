@@ -4,6 +4,9 @@ extends RefCounted
 
 var id: int = 0
 var name: String = ""                    ## 稳定地名，由 WorldNaming 确定性分配
+## 战役唯一的城市简称（1~2 字），由 WorldNaming 从 name 确定性派生并去重，
+## 只用于 UI 展示；不参与国号/主权语义，与 region_symbol 无关。
+var short_name: String = ""
 var region_symbol: String = ""           ## 发迹国号字，如“幽州”对应“燕”
 var coord: Vector2i = Vector2i.ZERO       ## 兼容测试/镜像基准的逻辑 8x8 索引
 var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [0,1]²

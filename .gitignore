@@ -4,6 +4,9 @@
 *.import
 !assets/terrain/china_natural_earth2_2048.png.import
 
+# Headless test Godot HOME (created by test runs via HOME override)
+.tmp-godot-home/
+
 # Local Python/tooling state
 .venv/
 .code-review-graph/

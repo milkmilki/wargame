@@ -515,6 +515,7 @@ static func collect_rebellion_regions(
 			or city.rebellion_progress < REBELLION_PROGRESS_MONTHS
 			or state.day < city.rebellion_cooldown_until_day
 			or active_city_ids.has(city_id)
+			or _wartime_occupation_locked(state, city_id)
 		):
 			continue
 		eligible[city_id] = true
@@ -552,6 +553,25 @@ static func collect_rebellion_regions(
 		region.sort()
 		regions.append(region)
 	return regions
+
+
+## 战时占领锁：正被军事占领（实控者非法理国）且占领方仍与法理国交战的
+## 城市属于前线战果，只能靠军事结果或和约易主，不能在战争期间通过“忠诚复国”
+## 机制凭空反正回敌国——这正是玩家反馈的“打下的城过一阵自己跳回原主”的根因。
+## 和平后的文化归附（实控==法理，但政治目标为另一存活国）不受影响，仍可离心。
+static func _wartime_occupation_locked(state: GameState, city_id: int) -> bool:
+	if not _valid_city(state, city_id):
+		return false
+	var city: City = state.cities[city_id]
+	var legal_owner: int = state.recognized_owner_of(city_id)
+	if not _valid_nation(state, legal_owner) or legal_owner == city.owner_nation:
+		return false
+	# 实控方（占领者）仍与法理国交战：这是活跃前线，禁止民变式反正。
+	if state.is_enemy(city.owner_nation, legal_owner):
+		return true
+	# 战争结算责任方（sponsor）与法理国交战时同样按活跃占领处理。
+	var sponsor: int = city.occupation_sponsor_nation
+	return _valid_nation(state, sponsor) and state.is_enemy(sponsor, legal_owner)
 
 
 ## 藩王忠诚取其直辖陆城忠诚均值，再扣除贡赋负担。无效对象返回 100，

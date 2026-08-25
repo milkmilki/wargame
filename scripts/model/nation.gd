@@ -26,6 +26,7 @@ var average_loyalty: float = 70.0
 var last_trade_gold: int = 0
 var last_trade_food_import: int = 0
 var last_trade_food_export: int = 0
+var last_trade_manpower_import: int = 0
 var last_trade_route_count: int = 0
 var last_rebellion_day: int = -1
 

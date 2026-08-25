@@ -78,7 +78,7 @@ func _verify_capacity_and_tier_order() -> void:
 			tier3_start = idx
 			break
 	if tier3_start >= 0:
-		var tier3_expected := [25, 9]
+		var tier3_expected := [25, 17]
 		for local_index in range(tier3_expected.size()):
 			var slot: Dictionary = slots[tier3_start + local_index]
 			_assert(
