@@ -7,6 +7,9 @@ var color: Color = Color.WHITE             ## 阵营色（渲染用）
 var name: String = ""                    ## 稳定国号；UI 不再直接展示裸 id
 var short_name: String = ""              ## 战略地图大字使用的 1～4 字简称
 var name_kind: String = "state"          ## dynasty/state/vassal/rebel
+## 藩王封号单向棘轮：一旦陆城数达到过 5 座即永久升为「单字王」。之后即使
+## 失地也只保持单字王，绝不降回双字王。仅对 name_kind==vassal 有意义。
+var vassal_single_char: bool = false
 ## 建国/受封时的地域锚点。首次命名后不随迁都、失地或兼并改变；旧档缺失时
 ## WorldNaming 仅以当时有效首都（再回退到首座直属陆城）确定性补一次。
 var founding_city_id: int = -1
