@@ -1187,6 +1187,9 @@ func _assign_main_reserves() -> void:
 			target_cities.append(city_id)
 	if target_cities.is_empty():
 		return
+	var target_set := {}
+	for city_id in target_cities:
+		target_set[int(city_id)] = true
 	var members_by_group := {}
 	for army in view.friendly_armies:
 		if (
@@ -1225,40 +1228,102 @@ func _assign_main_reserves() -> void:
 			members_b[0]
 		)
 	)
-	for group_index in range(group_ids.size()):
-		var members: Array[Army] = members_by_group[
-			group_ids[group_index]
-		]
+	var groups_by_id := {}
+	for group in view.state.nations[view.nation_id].battle_groups:
+		groups_by_id[group.id] = group
+	# 相持稳定期才复用持久驻防：一旦有本国城市正被围/告急（relief），战团必须优先解围，
+	# 不能因为原驻防城仍是合法候选就留在原地。relief 是真实的疆域压力事件，不属于要
+	# 解耦的“动态威胁抖动”。有 relief 时直接进入按优先级贪心的 Pass 2。
+	var stable_reuse := relief_cities.is_empty()
+	# Pass 1：保留每个战团上一次的持久驻防城。疆域/编成不变时（既有目标仍是本国
+	# 可达的候选驻防城），战团原地不动，杜绝目标城列表随即时威胁重排导致的横跳。
+	var taken_counts := {}
+	var pending_groups: Array = []
+	for group_id in group_ids:
+		var members: Array[Army] = members_by_group[group_id]
 		var representative := members[0]
+		var group_obj: BattleGroup = groups_by_id.get(group_id)
+		var kept_city := -1
+		if stable_reuse and group_obj != null:
+			var persisted := group_obj.reserve_target_city
+			if (
+				persisted >= 0
+				and target_set.has(persisted)
+				and _role_assignment_distance(
+					representative,
+					persisted,
+					Posture.CITY,
+					-1
+				) != INF
+			):
+				kept_city = persisted
+		if kept_city >= 0:
+			_commit_main_reserve_group(members, kept_city)
+			taken_counts[kept_city] = int(
+				taken_counts.get(kept_city, 0)
+			) + 1
+		else:
+			pending_groups.append({
+				"group_id": group_id,
+				"members": members,
+				"representative": representative,
+				"group_obj": group_obj,
+			})
+	# Pass 2：新战团或持久目标已失效者，按优先级 target_cities 就位。优先补尚未
+	# 被占用的高优先城市，保证覆盖；一旦落位即写入持久目标，之后稳定期不再变动。
+	for entry in pending_groups:
+		var members: Array[Army] = entry["members"]
+		var representative: Army = entry["representative"]
+		var group_obj: BattleGroup = entry["group_obj"]
 		var target_city := -1
-		for offset in range(target_cities.size()):
-			var candidate_city := int(target_cities[
-				(group_index + offset)
-					% target_cities.size()
-			])
+		var fallback_city := -1
+		var fallback_count := -1
+		for city_id_value in target_cities:
+			var candidate_city := int(city_id_value)
 			if _role_assignment_distance(
 				representative,
 				candidate_city,
 				Posture.CITY,
 				-1
-			) != INF:
+			) == INF:
+				continue
+			var count := int(taken_counts.get(candidate_city, 0))
+			if count == 0:
 				target_city = candidate_city
 				break
+			if fallback_count < 0 or count < fallback_count:
+				fallback_count = count
+				fallback_city = candidate_city
+		if target_city < 0:
+			target_city = fallback_city
 		if target_city < 0:
 			continue
-		for member in members:
-			assigned_city_by_army[member.id] = target_city
-			assigned_posture_by_army[member.id] = (
-				Posture.CITY
+		_commit_main_reserve_group(members, target_city)
+		taken_counts[target_city] = int(
+			taken_counts.get(target_city, 0)
+		) + 1
+		if group_obj != null:
+			group_obj.reserve_target_city = target_city
+
+
+## 把整支战团落位到同一驻防城；成员防区归属与城市索引同步更新。
+func _commit_main_reserve_group(
+	members: Array[Army],
+	target_city: int
+) -> void:
+	for member in members:
+		assigned_city_by_army[member.id] = target_city
+		assigned_posture_by_army[member.id] = (
+			Posture.CITY
+		)
+		var assigned: Array[int] = (
+			assigned_armies_by_city.get(
+				target_city,
+				[] as Array[int]
 			)
-			var assigned: Array[int] = (
-				assigned_armies_by_city.get(
-					target_city,
-					[] as Array[int]
-				)
-			)
-			assigned.append(member.id)
-			assigned_armies_by_city[target_city] = assigned
+		)
+		assigned.append(member.id)
+		assigned_armies_by_city[target_city] = assigned
 
 
 func _persistent_role_slot_index(
