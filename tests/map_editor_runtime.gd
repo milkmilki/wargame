@@ -148,7 +148,7 @@ func _run() -> void:
 	identity_nation.ruler_revision = 3
 	identity_nation.trade_policy = RulerProfile.POLICY_GOLD
 	city.name = "测试城"
-	city.region_symbol = "测"
+	city.short_name = "测"
 	city.loyalty = 61.5
 	city.loyalty_target_nation = (city.owner_nation + 1) % state.nations.size()
 	var edited_edge: Edge = null
@@ -201,78 +201,76 @@ func _run() -> void:
 		or loaded_nation_record.has("last_rebellion_day")
 		or loaded_nation_record.has("last_trade_route_count")
 	):
-		_fail("map v2 must omit campaign rebellion and trade-route state")
+		_fail("map v3 must omit campaign rebellion and trade-route state")
 		return
 	var v1_definition := loaded_data.duplicate(true)
 	v1_definition["version"] = 1
-	v1_definition.erase("nations")
-	for city_value in v1_definition["cities"]:
-		var legacy_city := city_value as Dictionary
-		legacy_city.erase("name")
-		legacy_city.erase("region_symbol")
-		legacy_city.erase("loyalty")
-		legacy_city.erase("loyalty_target_nation")
-	if not MapDefinition.validate(v1_definition).is_empty():
-		_fail("legacy v1 maps with missing v2 fields must remain valid")
+	if MapDefinition.validate(v1_definition).is_empty():
+		_fail("legacy v1 maps must be rejected")
 		return
-	var invalid_v1_no_land := v1_definition.duplicate(true)
-	_remove_nation_land(invalid_v1_no_land, 1, 0)
-	if MapDefinition.validate(invalid_v1_no_land).is_empty():
-		_fail("v1 maps must reject nations without a land city")
+	var v2_definition := loaded_data.duplicate(true)
+	v2_definition["version"] = 2
+	if MapDefinition.validate(v2_definition).is_empty():
+		_fail("legacy v2 maps must be rejected")
 		return
-	var legacy_restored := GameState.new()
-	legacy_restored.generate_from_map_definition(v1_definition, 24680)
-	if (
-		legacy_restored.nations[0].name.strip_edges().is_empty()
-		or legacy_restored.nations[0].short_name.strip_edges().is_empty()
-		or legacy_restored.cities[0].name.strip_edges().is_empty()
-		or not is_equal_approx(
-			legacy_restored.cities[0].loyalty,
-			RebellionSystem.LOYALTY_DEFAULT
-		)
-		or legacy_restored.cities[0].loyalty_target_nation
-			!= legacy_restored.cities[0].owner_nation
-	):
-		_fail("legacy v1 defaults were not rebuilt deterministically")
+	var obsolete_region_field := loaded_data.duplicate(true)
+	var obsolete_city := (
+		(obsolete_region_field["cities"] as Array)[0] as Dictionary
+	)
+	obsolete_city["region_symbol"] = obsolete_city["short_name"]
+	if MapDefinition.validate(obsolete_region_field).is_empty():
+		_fail("v3 maps must reject the deleted region_symbol field")
 		return
 	var invalid_version := (loaded["data"] as Dictionary).duplicate(true)
 	invalid_version["version"] = MapDefinition.VERSION + 1
 	if MapDefinition.validate(invalid_version).is_empty():
 		_fail("future map versions must be rejected")
 		return
-	var invalid_v2_no_land := loaded_data.duplicate(true)
-	_remove_nation_land(invalid_v2_no_land, 1, 0)
-	if MapDefinition.validate(invalid_v2_no_land).is_empty():
-		_fail("v2 maps must reject nations without a land city")
+	var invalid_v3_no_land := loaded_data.duplicate(true)
+	_remove_nation_land(invalid_v3_no_land, 1, 0)
+	if MapDefinition.validate(invalid_v3_no_land).is_empty():
+		_fail("v3 maps must reject nations without a land city")
 		return
 	var invalid_nation_name := loaded_data.duplicate(true)
 	(invalid_nation_name["nations"] as Array)[0]["name"] = "双字"
 	if MapDefinition.validate(invalid_nation_name).is_empty():
-		_fail("v2 nation names must be one character")
+		_fail("v3 nation names must be one character")
 		return
 	var invalid_short_name := loaded_data.duplicate(true)
 	(invalid_short_name["nations"] as Array)[0]["short_name"] = ""
 	if MapDefinition.validate(invalid_short_name).is_empty():
-		_fail("v2 nation short names must be one character")
+		_fail("v3 nation short names must be one character")
 		return
 	var invalid_vassal := loaded_data.duplicate(true)
 	(invalid_vassal["nations"] as Array)[0]["name_kind"] = (
 		WorldNaming.KIND_VASSAL
 	)
 	if MapDefinition.validate(invalid_vassal).is_empty():
-		_fail("v2 map templates must reject orphan vassal identities")
+		_fail("v3 map templates must reject orphan vassal identities")
 		return
 	var invalid_city_name := loaded_data.duplicate(true)
 	(invalid_city_name["cities"] as Array)[0]["name"] = " "
 	if MapDefinition.validate(invalid_city_name).is_empty():
-		_fail("v2 city names must be non-empty")
+		_fail("v3 city names must be non-empty")
 		return
 	var duplicate_city_name := loaded_data.duplicate(true)
 	(duplicate_city_name["cities"] as Array)[1]["name"] = (
 		(duplicate_city_name["cities"] as Array)[0]["name"]
 	)
 	if MapDefinition.validate(duplicate_city_name).is_empty():
-		_fail("v2 city names must be unique")
+		_fail("v3 city names must be unique")
+		return
+	var invalid_city_short := loaded_data.duplicate(true)
+	(invalid_city_short["cities"] as Array)[0]["short_name"] = "双字"
+	if MapDefinition.validate(invalid_city_short).is_empty():
+		_fail("v3 city short names must be one character")
+		return
+	var duplicate_city_short := loaded_data.duplicate(true)
+	(duplicate_city_short["cities"] as Array)[1]["short_name"] = (
+		(duplicate_city_short["cities"] as Array)[0]["short_name"]
+	)
+	if MapDefinition.validate(duplicate_city_short).is_empty():
+		_fail("v3 city short names must be globally unique")
 		return
 	var invalid_transient_state := loaded_data.duplicate(true)
 	(invalid_transient_state["cities"] as Array)[0][
@@ -353,7 +351,7 @@ func _run() -> void:
 			restored_identity.trade_policy == RulerProfile.POLICY_GOLD
 		),
 		"city_name": restored_city.name == "测试城",
-		"city_region_symbol": restored_city.region_symbol == "测",
+		"city_short_name": restored_city.short_name == "测",
 		"city_loyalty": is_equal_approx(restored_city.loyalty, 61.5),
 		"city_loyalty_target": (
 			restored_city.loyalty_target_nation
@@ -573,7 +571,7 @@ func _verify_vassal_export_as_sovereign() -> bool:
 	] as Dictionary
 	var founding_city_id := int(subject_record["founding_city_id"])
 	var founding_symbol := str(
-		(definition["cities"] as Array)[founding_city_id]["region_symbol"]
+		(definition["cities"] as Array)[founding_city_id]["short_name"]
 	)
 	if (
 		str(subject_record["name_kind"]) == WorldNaming.KIND_VASSAL

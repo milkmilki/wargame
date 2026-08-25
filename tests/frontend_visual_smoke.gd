@@ -156,6 +156,12 @@ func _run() -> void:
 	var minor_mesh := map_3d._minor_roads.mesh as ArrayMesh
 	var visible_layouts: Array[Dictionary] = []
 	var hidden_layouts_valid := true
+	var label_index_builds_before := (
+		map_3d._nation_label_territory_index_builds
+	)
+	var label_index_visits_before := (
+		map_3d._nation_label_territory_index_pixel_visits
+	)
 	for nation in state.nations:
 		if not nation.alive:
 			continue
@@ -178,6 +184,14 @@ func _run() -> void:
 			)
 			continue
 		visible_layouts.append(layout)
+	var territory_label_cache_valid := (
+		label_index_builds_before == 1
+		and label_index_visits_before == state.province_ids.size() * 2
+		and map_3d._nation_label_territory_index_builds
+			== label_index_builds_before
+		and map_3d._nation_label_territory_index_pixel_visits
+			== label_index_visits_before
+	)
 	var territory_labels_valid: bool = (
 		not map_3d._nation_labels.is_empty()
 		and map_3d._nation_labels.size() == visible_layouts.size()
@@ -212,6 +226,49 @@ func _run() -> void:
 			and label_basis.x.x > 0.0
 			and label_basis.z.y > 0.99
 		)
+	# 回归：城市只有全称“雍州”和唯一简称“快”。地图必须与详情页都显示
+	# 正式称号“快王”；即使完整名需缩到旧 0.014 下限以下，也不能只剩“快”。
+	var label_probe_nation := state.nations[0]
+	var label_probe_capital_id := int(label_probe_nation.capital_city_id)
+	var label_probe_city := state.cities[label_probe_capital_id]
+	var original_name_kind := str(label_probe_nation.name_kind)
+	var original_single_char := bool(label_probe_nation.vassal_single_char)
+	var original_founding_city_id := int(label_probe_nation.founding_city_id)
+	var original_city_name := str(label_probe_city.name)
+	var original_city_short_name := str(label_probe_city.short_name)
+	label_probe_nation.name_kind = WorldNaming.KIND_VASSAL
+	label_probe_nation.vassal_single_char = true
+	label_probe_nation.founding_city_id = label_probe_capital_id
+	label_probe_city.name = "雍州"
+	label_probe_city.short_name = "快"
+	var compact_formal_name := WorldNaming.nation_display_name(
+		state, label_probe_nation.id, false
+	)
+	var compact_label := map_3d._nation_label_choose_text(
+		label_probe_nation.id, Vector2(0.25, 1.0),
+		StrategicMap3D.NATION_LABEL_FONT_SIZE
+	)
+	var compact_city_details := MapRenderer.city_detail_lines(
+		state, label_probe_capital_id
+	)
+	var detail_uses_formal_name := false
+	for detail_line in compact_city_details:
+		if detail_line.contains("法理：快王（国%d）" % label_probe_nation.id):
+			detail_uses_formal_name = true
+			break
+	var compact_vassal_name_valid := (
+		compact_formal_name == "快王"
+		and str(compact_label.get("text", "")) == compact_formal_name
+		and detail_uses_formal_name
+		and float(compact_label.get("pixel_size", 0.0)) > 0.0
+		and float(compact_label.get("pixel_size", 0.0)) < 0.014
+		and not bool(compact_label.get("hidden", true))
+	)
+	label_probe_nation.name_kind = original_name_kind
+	label_probe_nation.vassal_single_char = original_single_char
+	label_probe_nation.founding_city_id = original_founding_city_id
+	label_probe_city.name = original_city_name
+	label_probe_city.short_name = original_city_short_name
 	var low_loyalty_color := MapRenderer.loyalty_color(10.0)
 	var middle_loyalty_color := MapRenderer.loyalty_color(50.0)
 	var high_loyalty_color := MapRenderer.loyalty_color(90.0)
@@ -698,7 +755,9 @@ func _run() -> void:
 			)
 		),
 		"territory_labels": territory_labels_valid,
+		"territory_label_batched_cache": territory_label_cache_valid,
 		"territory_label_basis": territory_label_basis_valid,
+		"compact_vassal_full_name": compact_vassal_name_valid,
 	}
 	var valid := true
 	for check_value in checks.values():

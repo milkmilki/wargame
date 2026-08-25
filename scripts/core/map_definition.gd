@@ -4,8 +4,8 @@ extends RefCounted
 ## armies, battles, diplomacy and the simulation clock are rebuilt on load.
 
 const FORMAT := "world-war-map"
-const VERSION := 2
-const MIN_SUPPORTED_VERSION := 1
+const VERSION := 3
+const MIN_SUPPORTED_VERSION := 3
 const USER_MAP_DIRECTORY := "user://maps"
 
 
@@ -38,7 +38,7 @@ static func from_state(state: GameState) -> Dictionary:
 		var exported_name_kind := str(nation.name_kind)
 		if founding_city_id >= 0:
 			var founding_symbol := str(
-				state.cities[founding_city_id].region_symbol
+				state.cities[founding_city_id].short_name
 			).strip_edges()
 			if founding_symbol.length() == 1:
 				exported_name = founding_symbol
@@ -70,7 +70,7 @@ static func from_state(state: GameState) -> Dictionary:
 		city_records.append({
 			"id": city.id,
 			"name": city.name,
-			"region_symbol": city.region_symbol,
+			"short_name": city.short_name,
 			"coord": [city.coord.x, city.coord.y],
 			"map_position": [city.map_position.x, city.map_position.y],
 			"terrain_height": city.terrain_height,
@@ -232,11 +232,11 @@ static func validate(data: Dictionary) -> String:
 	var nation_count := int(nation_count_value)
 	if cities.is_empty() or nation_count <= 0:
 		return "地图必须包含城市和国家。"
-	if version >= 2:
-		var nation_error := _validate_v2_nations(data, nation_count)
-		if not nation_error.is_empty():
-			return nation_error
+	var nation_error := _validate_nations(data, nation_count)
+	if not nation_error.is_empty():
+		return nation_error
 	var city_names := {}
+	var city_short_names := {}
 	var land_city_counts: Array[int] = []
 	land_city_counts.resize(nation_count)
 	land_city_counts.fill(0)
@@ -245,6 +245,8 @@ static func validate(data: Dictionary) -> String:
 		if not record_value is Dictionary:
 			return "城市 %d 的资料格式无效。" % index
 		var record := record_value as Dictionary
+		if record.has("region_symbol"):
+			return "城市 %d 仍含已删除的地域字字段。" % index
 		var id_value: Variant = record.get("id")
 		if not _is_integer_value(id_value) or int(id_value) != index:
 			return "城市 ID 必须从 0 连续排列。"
@@ -256,42 +258,42 @@ static func validate(data: Dictionary) -> String:
 			return "城市 %d 的国家归属无效。" % index
 		if not bool(record.get("is_dock", false)):
 			land_city_counts[owner] += 1
-		if version >= 2:
-			var name_value: Variant = record.get("name")
-			if not name_value is String or str(name_value).strip_edges().is_empty():
-				return "城市 %d 的名称不能为空。" % index
-			var city_name := str(name_value).strip_edges()
-			if city_names.has(city_name):
-				return "城市名称不能重复：%s" % city_name
-			city_names[city_name] = true
-			var region_value: Variant = record.get("region_symbol")
-			if (
-				not region_value is String
-				or str(region_value).strip_edges().length() != 1
-			):
-				return "城市 %d 的地域名号必须是单字。" % index
-			var loyalty_value: Variant = record.get("loyalty")
-			if not loyalty_value is float and not loyalty_value is int:
-				return "城市 %d 的忠诚度格式无效。" % index
-			var loyalty := float(loyalty_value)
-			if not is_finite(loyalty) or loyalty < 0.0 or loyalty > 100.0:
-				return "城市 %d 的忠诚度无效。" % index
-			var loyalty_target_value: Variant = record.get(
-				"loyalty_target_nation"
-			)
-			if not _is_integer_value(loyalty_target_value):
-				return "城市 %d 的忠诚目标无效。" % index
-			var loyalty_target := int(loyalty_target_value)
-			if loyalty_target < 0 or loyalty_target >= nation_count:
-				return "城市 %d 的忠诚目标无效。" % index
-			for transient_key in [
-				"loyalty_trend", "unrest", "rebellion_progress",
-				"rebellion_cooldown_until_day", "last_loyalty_reason",
-				"trade_gold_bonus", "trade_route_count",
-				"trade_food_balance",
-			]:
-				if record.has(transient_key):
-					return "地图城市不能包含活动叛乱或贸易状态。"
+		var name_value: Variant = record.get("name")
+		if not name_value is String or str(name_value).strip_edges().is_empty():
+			return "城市 %d 的名称不能为空。" % index
+		var city_name := str(name_value).strip_edges()
+		if city_names.has(city_name):
+			return "城市名称不能重复：%s" % city_name
+		city_names[city_name] = true
+		var short_value: Variant = record.get("short_name")
+		if not short_value is String or str(short_value).strip_edges().length() != 1:
+			return "城市 %d 的简称必须是单字。" % index
+		var city_short_name := str(short_value).strip_edges()
+		if city_short_names.has(city_short_name):
+			return "城市简称不能重复：%s" % city_short_name
+		city_short_names[city_short_name] = true
+		var loyalty_value: Variant = record.get("loyalty")
+		if not loyalty_value is float and not loyalty_value is int:
+			return "城市 %d 的忠诚度格式无效。" % index
+		var loyalty := float(loyalty_value)
+		if not is_finite(loyalty) or loyalty < 0.0 or loyalty > 100.0:
+			return "城市 %d 的忠诚度无效。" % index
+		var loyalty_target_value: Variant = record.get(
+			"loyalty_target_nation"
+		)
+		if not _is_integer_value(loyalty_target_value):
+			return "城市 %d 的忠诚目标无效。" % index
+		var loyalty_target := int(loyalty_target_value)
+		if loyalty_target < 0 or loyalty_target >= nation_count:
+			return "城市 %d 的忠诚目标无效。" % index
+		for transient_key in [
+			"loyalty_trend", "unrest", "rebellion_progress",
+			"rebellion_cooldown_until_day", "last_loyalty_reason",
+			"trade_gold_bonus", "trade_route_count",
+			"trade_food_balance",
+		]:
+			if record.has(transient_key):
+				return "地图城市不能包含活动叛乱或贸易状态。"
 	for nation_id in range(nation_count):
 		if land_city_counts[nation_id] <= 0:
 			return "国家 %d 必须至少拥有一座陆地城市。" % nation_id
@@ -332,7 +334,7 @@ static func validate(data: Dictionary) -> String:
 	return ""
 
 
-static func _validate_v2_nations(
+static func _validate_nations(
 	data: Dictionary,
 	nation_count: int
 ) -> String:
@@ -351,20 +353,19 @@ static func _validate_v2_nations(
 		var id_value: Variant = record.get("id")
 		if not _is_integer_value(id_value) or int(id_value) != index:
 			return "国家 ID 必须从 0 连续排列。"
-		var founding_city_id := -1
-		var founding_record: Dictionary = {}
-		if record.has("founding_city_id"):
-			var founding_value: Variant = record["founding_city_id"]
-			if not _is_integer_value(founding_value):
-				return "国家 %d 的建国城市格式无效。" % index
-			founding_city_id = int(founding_value)
-			if founding_city_id < 0 or founding_city_id >= cities.size():
-				return "国家 %d 的建国城市无效。" % index
-			if not cities[founding_city_id] is Dictionary:
-				return "国家 %d 的建国城市资料无效。" % index
-			founding_record = cities[founding_city_id] as Dictionary
-			if bool(founding_record.get("is_dock", false)):
-				return "国家 %d 的建国城市不能是码头。" % index
+		if not record.has("founding_city_id"):
+			return "国家 %d 缺少建国城市。" % index
+		var founding_value: Variant = record["founding_city_id"]
+		if not _is_integer_value(founding_value):
+			return "国家 %d 的建国城市格式无效。" % index
+		var founding_city_id := int(founding_value)
+		if founding_city_id < 0 or founding_city_id >= cities.size():
+			return "国家 %d 的建国城市无效。" % index
+		if not cities[founding_city_id] is Dictionary:
+			return "国家 %d 的建国城市资料无效。" % index
+		var founding_record := cities[founding_city_id] as Dictionary
+		if bool(founding_record.get("is_dock", false)):
+			return "国家 %d 的建国城市不能是码头。" % index
 		var name_kind_value: Variant = record.get("name_kind")
 		if (
 			not name_kind_value is String
@@ -395,9 +396,9 @@ static func _validate_v2_nations(
 			if (
 				founding_city_id >= 0
 				and resolved_names[0]
-					!= str(founding_record.get("region_symbol", "")).strip_edges()
+					!= str(founding_record.get("short_name", "")).strip_edges()
 			):
-				return "国家 %d 的主权名必须对应建国城市地域字。" % index
+				return "国家 %d 的主权名必须对应建国城市简称。" % index
 		var ruler_name_value: Variant = record.get("ruler_name")
 		if (
 			not ruler_name_value is String

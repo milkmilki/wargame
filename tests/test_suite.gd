@@ -37,6 +37,7 @@ func _init() -> void:
 	_test_three_way_siege()
 	_test_multi_army_aggregation()
 	_test_three_way_serial()
+	_test_campaign_active_wave_reconciliation()
 	_test_siege_arrival_triggers()
 	_test_crosspass_field_priority()
 	_test_capacity_no_block_enemy()
@@ -1332,6 +1333,8 @@ func _test_world_generation() -> void:
 		)
 		hardcoded_palette_valid = (
 			hardcoded_palette_valid
+			and palette_color.h >= GameState.NATION_COLOR_HUE_MIN - 0.001
+			and palette_color.h <= GameState.NATION_COLOR_HUE_MAX + 0.001
 			and palette_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.001
 			and palette_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.001
 			and palette_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.001
@@ -1339,22 +1342,31 @@ func _test_world_generation() -> void:
 		)
 	gs.suzerainty = original_suzerainty
 	for nation in gs.nations:
-		var palette_color := MapRenderer.political_map_color(gs, nation.id)
+		var political_color := MapRenderer.political_map_color(gs, nation.id)
 		var counter_color := MapRenderer.command_marker_color(gs, nation.id)
 		var alert_color := MapRenderer.final_faction_visual_color(
 			gs, nation.id, 0.62, 0.08
 		)
-		for visual_color in [nation.color, palette_color, counter_color, alert_color]:
+		for visual_color in [nation.color, political_color, counter_color]:
 			faction_colors_valid = (
 				faction_colors_valid
+				and visual_color.h >= GameState.NATION_COLOR_HUE_MIN - 0.0001
+				and visual_color.h <= GameState.NATION_COLOR_HUE_MAX + 0.0001
 				and visual_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.0001
 				and visual_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.0001
 				and visual_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.0001
 				and visual_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.0001
 			)
+		faction_colors_valid = (
+			faction_colors_valid
+			and alert_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.0001
+			and alert_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.0001
+			and alert_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.0001
+			and alert_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.0001
+		)
 	_check(
 		faction_colors_valid and hardcoded_palette_valid,
-		"主权阵营、政治覆色和兵棋颜色必须使用暗色高饱和硬编码调色板"
+		"主权阵营、政治覆色和兵棋颜色必须使用全色相中低饱和 HSV 范围"
 	)
 	var occupied_test_city := 0
 	var original_test_owner := gs.cities[occupied_test_city].owner_nation
@@ -4240,10 +4252,116 @@ func _test_three_way_serial() -> void:
 	_check(
 		core_nations.size() == 1
 			and core_nations.has("none")
-			and ambiguous_frozen,
-		"完全同构多方接战应一致延迟，不能按 ID/数组顺序任取核心对：%s"
+			and not ambiguous_frozen,
+		"完全同构三国接战应一致脱离，不能永久冻结或按 ID 任取核心对：%s"
 			% str(core_nations.keys())
 	)
+
+	# 同一国家的多支等价军不构成“核心国家对”歧义。生产故障中的
+	# 2v1 形状必须直接聚合开战，不能把三军永久冻结在接触面。
+	var gs3 := GameState.new(); gs3.generate_grid_world(12345)
+	var sim3 := Simulation.new(); sim3.setup(gs3)
+	gs3.armies.clear(); gs3.battles.clear()
+	var attackers: Array[Army] = [
+		_place_army_on_edge(gs3, 173, 0, 0, 1, 0.45),
+		_place_army_on_edge(gs3, 243, 0, 0, 1, 0.45),
+	]
+	for attacker in attackers:
+		attacker.size = 4727
+		attacker.max_size = 5000
+	var defender := _place_army_on_edge(gs3, 500, 1, 1, 0, 0.45)
+	defender.size = 15000
+	defender.max_size = 15000
+	sim3._detect_encounters()
+	var symmetric_two_vs_one := (
+		gs3.battles.size() == 1
+		and gs3.battles[0].side_a.size() + gs3.battles[0].side_b.size() == 3
+	)
+	for participant in attackers + [defender]:
+		symmetric_two_vs_one = (
+			symmetric_two_vs_one
+			and participant.state == Army.State.FIGHTING
+			and not participant.encounter_blocked
+		)
+	_check(
+		symmetric_two_vs_one,
+		"完全同构 2v1 必须按国家对聚合成一场战斗，不得冻结"
+	)
+	sim3.free()
+
+
+func _test_campaign_active_wave_reconciliation() -> void:
+	print("[14b] 战役波次回收：战术改派不得让旧波永久阻塞后续攻势")
+	var gs := GameState.new(); gs.generate_grid_world(12345)
+	var sim := Simulation.new(); sim.setup(gs)
+	gs.armies.clear(); gs.battles.clear()
+	var target_city := -1
+	for city in gs.cities:
+		if city.owner_nation != 0:
+			target_city = city.id
+			break
+	var army := _place_army_on_edge(gs, 9000, 0, 0, 1, 0.50)
+	var reassigned := _place_army_on_edge(
+		gs, 9001, 0, 0, 1, 0.45
+	)
+	var nation := gs.nations[0]
+	nation.campaign_plan_targets.append(target_city)
+	nation.campaign_attack_assignments[army.id] = target_city
+	nation.campaign_attack_assignments[reassigned.id] = target_city
+	nation.campaign_attack_echelons[army.id] = 0
+	nation.campaign_attack_echelons[reassigned.id] = 0
+	nation.campaign_active_echelons[target_city] = 0
+	nation.campaign_launched_armies[army.id] = true
+	nation.campaign_launched_armies[reassigned.id] = true
+	nation.campaign_plan_wave = 1
+	army.ai_action = ActionCandidate.Kind.ATTACK
+	army.ai_target_city = target_city
+	reassigned.ai_action = ActionCandidate.Kind.RETREAT
+	reassigned.ai_target_city = nation.capital_city_id
+	sim._reconcile_campaign_active_wave(0)
+	_check(
+		nation.campaign_plan_targets == [target_city]
+			and nation.campaign_attack_assignments.has(army.id)
+			and nation.campaign_launched_armies.has(army.id)
+			and not nation.campaign_attack_assignments.has(reassigned.id)
+			and not nation.campaign_launched_armies.has(reassigned.id),
+		"混合波次必须保留真实攻击者并立即剔除已改派成员"
+	)
+
+	# 最后一支执行者也被改派后，整个 active wave 必须释放。
+	army.ai_action = ActionCandidate.Kind.RETREAT
+	army.ai_target_city = nation.capital_city_id
+	sim._reconcile_campaign_active_wave(0)
+	_check(
+		nation.campaign_plan_targets.is_empty()
+			and nation.campaign_attack_assignments.is_empty()
+			and nation.campaign_launched_armies.is_empty(),
+		"最后一支攻击者改派后必须释放 active wave"
+	)
+
+	# 当前梯队的先发成员消失后，已经抵达集结位的同梯队成员必须
+	# 接替发射；不能直接跳到下一梯队并让本梯队永远留在计划中。
+	var staging := DiplomacyAI.staging_cities_for_objective(
+		gs, 0, target_city
+	)
+	_check(not staging.is_empty(), "active-wave 回归夹具必须有合法集结城")
+	if not staging.is_empty():
+		sim._settle_idle(army, staging[0])
+		army.ai_action = ActionCandidate.Kind.HOLD
+		army.ai_target_city = target_city
+		nation.campaign_plan_targets.append(target_city)
+		nation.campaign_attack_assignments[army.id] = target_city
+		nation.campaign_attack_echelons[army.id] = 0
+		nation.campaign_active_echelons[target_city] = 0
+		nation.campaign_plan_wave = 1
+		sim._advance_campaign_echelons()
+		_check(
+			nation.campaign_launched_armies.has(army.id)
+				and army.ai_action == ActionCandidate.Kind.ATTACK
+				and army.ai_target_city == target_city,
+			"当前梯队的就绪遗留成员必须补发，不能被下一梯队跳过"
+		)
+	sim.free()
 
 # ------------------------------------------------------------------ 15. 到达被围城必触发（修复：城主回援/援军入城不旁观）
 
@@ -18620,7 +18738,7 @@ func _test_enfeoff_ai() -> void:
 		var shallow_city := City.new()
 		shallow_city.id = city_id
 		shallow_city.name = "浅压城%d" % city_id
-		shallow_city.region_symbol = "郡"
+		shallow_city.short_name = String.chr(0x4E00 + city_id)
 		shallow_city.owner_nation = 0 if city_id < 9 else 1
 		shallow_city.map_position = Vector2(float(city_id) / 20.0, 0.5)
 		shallow_city.coord = Vector2i(city_id, 0)

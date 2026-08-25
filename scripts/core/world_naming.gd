@@ -4,7 +4,7 @@ extends RefCounted
 ##
 ## 所有选择只依赖显式 seed、稳定实体 id 和字符串域；本类从不读取或推进
 ## GameState.rng。城市全称与君主姓名保持战役唯一；国家称号则严格服从
-## founding_city / 首府的地域语义，即使历史政权因此同名也不改换地域锚点。
+## founding_city / 首府的城市简称，不再维护独立的地域字语义。
 
 const HASH_MODULUS: int = 2147483647
 const HASH_MULTIPLIER: int = 48271
@@ -75,7 +75,7 @@ const REGIONAL_TITLES: Array[String] = [
 	"日南", "武昌", "夷陵", "建宁", "朱提", "越嶲",
 ]
 
-## 历史城市池。超过词典容量后使用“地域字 + 城邑古称”的确定性组合，
+## 历史城市池。超过词典容量后使用“地理词根 + 城邑古称”的确定性组合，
 ## 组合空间远大于 500，最后仍有纯汉字的 id 兜底。
 const HISTORIC_CITY_NAMES: Array[String] = [
 	"幽州", "冀州", "并州", "兖州", "青州", "徐州",
@@ -157,9 +157,10 @@ const RULER_GIVEN_NAMES: Array[String] = [
 	"道济", "怀德", "承礼", "守仁", "知远", "思齐",
 ]
 
-## 城市全称到传统地域国号字的优先映射。没有明确历史对应的城市会从
-## 单字国号池稳定派生；城市名与地域字因此都是 seed-stable 的。
-const CITY_REGION_OVERRIDES: Dictionary = {
+## 城市全称到首选简称的映射。它只参与 short_name 的唯一分配，不再形成
+## 第三套“地域字”运行时字段；同一首选字冲突时由分配器继续尝试城市全称
+## 中的其他单字，最终从 CJK 字符池确定性补齐。
+const CITY_SHORT_OVERRIDES: Dictionary = {
 	"幽州": "燕", "冀州": "赵", "并州": "晋",
 	"兖州": "鲁", "青州": "齐", "徐州": "徐",
 	"扬州": "吴", "荆州": "楚", "豫州": "韩",
@@ -225,7 +226,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 	game_state.world_seed = world_seed
 	_reset_registries(game_state)
 	var changed := false
-	# 城市必须先命名，国家国号随后才可从首都或发迹城市的地域字产生。
+	# 城市必须先命名，国家国号随后才可从首都或发迹城市的简称产生。
 	var city_registry := _registry(game_state, _CITY_REGISTRY_META)
 	var unnamed_land: Array[int] = []
 	var unnamed_docks: Array[int] = []
@@ -253,38 +254,13 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 			world_seed, int(city.id), city, city_registry
 		)
 		changed = true
-	for city_index in range(game_state.cities.size()):
-		var city = game_state.cities[city_index]
-		if city.is_dock:
-			continue
-		var symbol := str(city.region_symbol).strip_edges()
-		if not _is_single_character(symbol):
-			city.region_symbol = _region_symbol_for_city(
-				world_seed, int(city.id), str(city.name)
-			)
-			changed = true
 	for city_index in unnamed_docks:
 		var city = game_state.cities[city_index]
 		city.name = _allocate_dock_name(
 			game_state, world_seed, int(city.id), city_registry
 		)
 		changed = true
-	for city_index in range(game_state.cities.size()):
-		var city = game_state.cities[city_index]
-		if not city.is_dock:
-			continue
-		var symbol := str(city.region_symbol).strip_edges()
-		if _is_single_character(symbol):
-			continue
-		var anchor_id := _dock_anchor_id(game_state, int(city.id))
-		city.region_symbol = (
-			city_region_symbol(game_state, anchor_id)
-			if anchor_id >= 0
-			else _region_symbol_for_city(world_seed, int(city.id), str(city.name))
-		)
-		changed = true
-
-	# 城市简称：单字、战役唯一。优先复用 region_symbol，冲突再从全称派生。
+	# 城市简称：单字、战役唯一，直接从全称派生。
 	# 城市 id 升序保证同 seed 稳定去重；藩王单字王封号取自首都简称。
 	var short_registry := _registry(game_state, _CITY_SHORT_REGISTRY_META)
 	for city_index in range(game_state.cities.size()):
@@ -299,9 +275,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 				changed = true
 			continue
 		var allocated := _allocate_city_short_name(
-			world_seed, int(city.id),
-			city_region_symbol(game_state, int(city.id)),
-			str(city.name), short_registry
+			world_seed, int(city.id), str(city.name), short_registry
 		)
 		if city.short_name != allocated:
 			city.short_name = allocated
@@ -360,7 +334,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 		_bump_revision(game_state)
 
 
-## 地图模板可选地携带名称；旧版模板没有这些键时，自动回退到稳定生成。
+## 从已通过 MapDefinition v3 校验的地图模板注入完整命名资料。
 static func assign_from_definition(
 	game_state,
 	definition: Dictionary,
@@ -393,14 +367,6 @@ static func assign_from_definition(
 						else:
 							nation.set(field, int(record[field]))
 						injected = true
-	var legacy_names: Variant = definition.get("nation_names", [])
-	if legacy_names is Array:
-		for index in range(mini(legacy_names.size(), game_state.nations.size())):
-			if str(legacy_names[index]).strip_edges().is_empty():
-				continue
-			game_state.nations[index].name = str(legacy_names[index])
-			injected = true
-
 	var city_records: Variant = definition.get("cities", [])
 	if city_records is Array:
 		for index in range(mini(city_records.size(), game_state.cities.size())):
@@ -411,8 +377,8 @@ static func assign_from_definition(
 			if record.has("name"):
 				game_state.cities[index].name = str(record["name"])
 				injected = true
-			if record.has("region_symbol"):
-				game_state.cities[index].region_symbol = str(record["region_symbol"])
+			if record.has("short_name"):
+				game_state.cities[index].short_name = str(record["short_name"])
 				injected = true
 	var revision_before := int(game_state.naming_revision)
 	assign_initial_names(game_state, world_seed)
@@ -421,7 +387,7 @@ static func assign_from_definition(
 
 
 ## 为运行时新建藩王分配稳定基础名；不足五城用藩都全称，五城起用
-## 藩都地域字，正式显示统一追加“王”。
+## 藩都简称，正式显示统一追加“王”。
 static func assign_vassal_name(
 	game_state,
 	subject_id: int,
@@ -495,7 +461,7 @@ static func assign_rebel_name(
 
 
 ## 把一个已脱离宗藩关系的藩王统一升格为主权国。建国城市只在旧状态
-## 缺失时补一次；国号严格取该城 region_symbol，不因历史同名而换锚点。
+## 缺失时补一次；国号严格取该城 short_name，不因迁都而换锚点。
 static func promote_vassal_to_sovereign(
 	game_state,
 	nation_id: int
@@ -511,7 +477,7 @@ static func promote_vassal_to_sovereign(
 	var founding_id := ensure_founding_city_id(game_state, nation_id)
 	if founding_id < 0:
 		return str(nation.name)
-	var symbol := city_region_symbol(game_state, founding_id)
+	var symbol := city_short_name(game_state, founding_id)
 	if not _is_single_character(symbol):
 		return str(nation.name)
 	var kind := _sovereign_kind(symbol)
@@ -559,16 +525,6 @@ static func assign_city_name(game_state, city_id: int) -> String:
 		return ""
 	var city = game_state.cities[city_id]
 	if not str(city.name).strip_edges().is_empty():
-		if not _is_single_character(str(city.region_symbol)):
-			var anchor_id := _dock_anchor_id(game_state, city_id) if city.is_dock else -1
-			city.region_symbol = (
-				city_region_symbol(game_state, anchor_id)
-				if anchor_id >= 0
-				else _region_symbol_for_city(
-					int(game_state.world_seed), city_id, str(city.name)
-				)
-			)
-			_bump_revision(game_state)
 		_ensure_city_short_name(game_state, city_id)
 		return str(city.name)
 	var registry := _registry(game_state, _CITY_REGISTRY_META)
@@ -581,21 +537,13 @@ static func assign_city_name(game_state, city_id: int) -> String:
 		city.name = _allocate_land_city_name(
 			int(game_state.world_seed), city_id, city, registry
 		)
-	var anchor_id := _dock_anchor_id(game_state, city_id) if city.is_dock else -1
-	city.region_symbol = (
-		city_region_symbol(game_state, anchor_id)
-		if anchor_id >= 0
-		else _region_symbol_for_city(
-			int(game_state.world_seed), city_id, str(city.name)
-		)
-	)
 	_ensure_city_short_name(game_state, city_id)
 	_bump_revision(game_state)
 	return str(city.name)
 
 
-## 为运行时新增城市补一个战役唯一的单字简称：优先复用 region_symbol，
-## 冲突再从全称派生。已合法且未冲突的简称保留。
+## 为运行时新增城市补一个战役唯一的单字简称：优先使用简称表，冲突再从
+## 全称派生。已合法且未冲突的简称保留。
 static func _ensure_city_short_name(game_state, city_id: int) -> void:
 	if not _valid_city_id(game_state, city_id):
 		return
@@ -611,9 +559,7 @@ static func _ensure_city_short_name(game_state, city_id: int) -> void:
 			city.short_name = current_short
 		return
 	city.short_name = _allocate_city_short_name(
-		int(game_state.world_seed), city_id,
-		city_region_symbol(game_state, city_id),
-		str(city.name), short_registry
+		int(game_state.world_seed), city_id, str(city.name), short_registry
 	)
 
 
@@ -676,47 +622,16 @@ static func city_display_name(
 	return ("港%d" if city.is_dock else "城%d") % int(city.id)
 
 
-## 城市信息页展示的单字简称。接口接受 City 或 (GameState, city_id)。已持久化
-## 的单字简称直接返回；缺失时回退到 region_symbol（不去重，仅即时展示）。
-static func city_short_name(
-	game_state_or_city,
-	city_id: Variant = null
-) -> String:
-	var city = null
-	if city_id == null:
-		city = game_state_or_city
-	elif game_state_or_city != null:
-		var resolved_id := int(city_id)
-		if _valid_city_id(game_state_or_city, resolved_id):
-			city = game_state_or_city.cities[resolved_id]
-	if city == null:
+## 返回城市持久化的唯一单字简称。简称缺失或非法时不现场派生，避免绕过
+## assign_initial_names() 的全局去重注册表而制造同名城市。
+static func city_short_name(game_state, city_id: int) -> String:
+	if not _valid_city_id(game_state, city_id):
 		return ""
+	var city = game_state.cities[city_id]
 	var assigned := str(city.short_name).strip_edges()
 	if _is_single_character(assigned):
 		return assigned
-	return city_region_symbol(game_state_or_city, city_id)
-
-
-## 返回城市对应的单字地域国号。接口接受 City 或 (GameState, city_id)。
-static func city_region_symbol(
-	game_state_or_city,
-	city_id: Variant = null
-) -> String:
-	var city = null
-	var world_seed := 0
-	if city_id == null:
-		city = game_state_or_city
-	elif game_state_or_city != null:
-		world_seed = int(game_state_or_city.world_seed)
-		var resolved_id := int(city_id)
-		if _valid_city_id(game_state_or_city, resolved_id):
-			city = game_state_or_city.cities[resolved_id]
-	if city == null:
-		return ""
-	var assigned := str(city.region_symbol).strip_edges()
-	if _is_single_character(assigned):
-		return assigned
-	return _region_symbol_for_city(world_seed, int(city.id), str(city.name))
+	return ""
 
 
 ## 主权身份严格锚定不可变 founding_city_id；历史同名单字不会触发换城。
@@ -728,7 +643,7 @@ static func _founding_sovereign_identity(
 ) -> Dictionary:
 	var founding_id := ensure_founding_city_id(game_state, nation_id)
 	if founding_id >= 0:
-		var symbol := city_region_symbol(game_state, founding_id)
+		var symbol := city_short_name(game_state, founding_id)
 		if _is_single_character(symbol):
 			return {
 				"base": symbol,
@@ -792,17 +707,15 @@ static func _allocate_regional_formal(
 	return ""
 
 
-static func _region_symbol_for_city(
-	world_seed: int,
-	city_id: int,
-	city_name: String
+static func _preferred_city_short_name(
+	city_id: int, city_name: String, world_seed: int
 ) -> String:
 	var clean := city_name.strip_edges()
-	if CITY_REGION_OVERRIDES.has(clean):
-		return str(CITY_REGION_OVERRIDES[clean])
+	if CITY_SHORT_OVERRIDES.has(clean):
+		return str(CITY_SHORT_OVERRIDES[clean])
 	var pool := _sovereign_pool()
 	return pool[stable_index(
-		world_seed, city_id, "city/region_symbol", pool.size()
+		world_seed, city_id, "city/short_name", pool.size()
 	)]
 
 
@@ -867,17 +780,17 @@ static func _allocate_sovereign_name(
 	return {"base": "国", "name": "国", "kind": KIND_SEPARATIST}
 
 
-## 战役唯一的单字城市简称分配。候选顺序：先 region_symbol，再全称各单字
+## 战役唯一的单字城市简称分配。候选顺序：先简称表，再全称各单字
 ## （首、尾、其余），最后从 CJK 基本区确定性扫描兜底。城市 id 升序保证同
 ## seed 稳定去重，因此不同城市的简称永不重复。
 static func _allocate_city_short_name(
 	world_seed: int,
 	city_id: int,
-	region_symbol: String,
 	city_name: String,
 	registry: Dictionary
 ) -> String:
-	for candidate in _city_short_candidates(region_symbol, city_name):
+	var preferred := _preferred_city_short_name(city_id, city_name, world_seed)
+	for candidate in _city_short_candidates(preferred, city_name):
 		if _reserve(registry, candidate, city_id):
 			return candidate
 	# 单字词典理论上够用；极端自定义地图撞满时从 CJK 基本区扫描保持单字唯一。
@@ -889,17 +802,17 @@ static func _allocate_city_short_name(
 		var candidate := String.chr(0x4E00 + (cjk_start + offset) % cjk_count)
 		if _reserve(registry, candidate, city_id):
 			return candidate
-	return region_symbol.strip_edges()
+	push_error("城市简称字符池已耗尽，无法为城市 %d 分配唯一简称。" % city_id)
+	return ""
 
 
-## 单字简称候选的确定性展开：region_symbol 优先，其次全称首字、尾字、
+## 单字简称候选的确定性展开：简称表首选字优先，其次全称首字、尾字、
 ## 其余各字。所有候选去重且顺序稳定，均为单字。
 static func _city_short_candidates(
-	region_symbol: String,
-	city_name: String
+	preferred: String, city_name: String
 ) -> Array[String]:
 	var result: Array[String] = []
-	_append_short_candidate(result, region_symbol)
+	_append_short_candidate(result, preferred)
 	var clean := city_name.strip_edges()
 	var length := clean.length()
 	if length >= 1:

@@ -73,7 +73,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | 陆地/城市/省份/道路；高度图水系、道路交点码头、抢滩边和码头间水路 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路与补给网络；读取边级行军时间和粮损倍率 |
 | [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | 静态 | 镜像等变物理排序 SSoT：城市/军队/势力/边；禁止 ID/创建顺序参与行为决胜 |
-| [scripts/core/world_naming.gd](scripts/core/world_naming.gd) | 静态 | 不推进 `GameState.rng` 的确定性城市、地域字、主权国、藩王与叛军命名 |
+| [scripts/core/world_naming.gd](scripts/core/world_naming.gd) | 静态 | 不推进 `GameState.rng` 的确定性城市全称、唯一简称、主权国、藩王与叛军命名 |
 | [scripts/core/ruler_profile.gd](scripts/core/ruler_profile.gd) | 静态 | 君主姓名、9 种原型、最多 2 项特质、贸易政策及国政修正的确定性真源 |
 | [scripts/core/rebellion_system.gd](scripts/core/rebellion_system.gd) | 静态 | 城市忠诚月结、低忠诚连通区、藩王内战、归附/地方叛军与冷却规则 |
 | [scripts/core/trade_network.gd](scripts/core/trade_network.gd) | 静态 | 纯派生国内/国际贸易路线、阻断/改道、贸易税和粮食交易守恒 |
@@ -90,7 +90,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [tests/frontline_capacity_allocator.gd](tests/frontline_capacity_allocator.gd) | 测试 | 三级前线容量分配：canonical tier1/tier2 保留防区归属，去重 tier3 不占归属；小民族生存路径回退；不可达边境冗余填充 |
 | [tests/frontline_capture_refresh.gd](tests/frontline_capture_refresh.gd) | 测试 | 同日占领批量刷新：dirty 集合去重、旧业主防区清理、新业主 LINE 同刷部署、非 LINE 战役/战团元数据不变 |
 | [tests/politics_trade_smoke.gd](tests/politics_trade_smoke.gd) | 测试 | 命名、君主、忠诚/叛乱、贸易守恒及月结发布集中 smoke |
-| [tests/map_editor_runtime.gd](tests/map_editor_runtime.gd) | 测试 | 地图编辑、MapDefinition v1/v2 校验与运行时往返 smoke |
+| [tests/map_editor_runtime.gd](tests/map_editor_runtime.gd) | 测试 | 地图编辑、MapDefinition v3 校验与运行时往返 smoke；明确拒绝旧 v1/v2 |
 | [tests/frontend_scene_smoke.gd](tests/frontend_scene_smoke.gd) | 测试 | 默认场景、HUD、设置、地图编辑器与五种地图模式集成 smoke |
 | [tests/road_tuning_ui_smoke.gd](tests/road_tuning_ui_smoke.gd) | 测试 | 道路/灯光调节、暂停与地图模式 UI smoke |
 | [tests/frontend_visual_smoke.gd](tests/frontend_visual_smoke.gd) | 测试 | 3D 地形、兵牌、城市、战役箭头及政治边界视觉构件 smoke |
@@ -296,13 +296,14 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 
 ### 4.12 世界命名、君主、忠诚叛乱与贸易
 
-- **WorldNaming**：城市使用战役内唯一的中文全称，并各自持有单字 `region_symbol`。初始主权国及藩王升格后的主权身份严格取不可变 `founding_city_id` 对应的地域字，迁都和同名碰撞都不得改换建国锚点。藩王显示名按当前直属陆城数变化：不足 5 城为“首府全称王”，达到 5 城为“首府地域单字王”。全部抽取只依赖显式 seed、实体 ID 与稳定哈希，不推进 `GameState.rng`。
+- **WorldNaming**：城市运行时只保留战役内唯一的中文全称 `name` 与全局唯一单字简称 `short_name`。原地域字映射内容保留为简称首选表 `CITY_SHORT_OVERRIDES`，首选撞字时按城市 ID 确定性改用全称中的其他字或 CJK 字符池，绝不允许不同城市共享简称。初始主权国及藩王升格后的主权身份严格取不可变 `founding_city_id` 对应的城市简称，迁都不得改换建国锚点。藩王显示名按当前直属陆城数变化：不足 5 城为“首府全称王”，达到 5 城为“首府简称王”；地图始终显示完整正式称号，不降级为单字。全部抽取只依赖显式 seed、实体 ID 与稳定哈希，不推进 `GameState.rng`。
+- **国家标签性能**：3D 地图按 `ownership_revision` 对省份栅格做一次批处理并同时提取所有国家的最大连通领土，再仅在各自连通域包围盒内求最大内接矩形。每个藩王复用同一份领土索引；纯命名/外交变化只重算文字布局，不再按国家重复扫描整张图。
 - **RulerProfile**：每国确定性生成姓名、1 个原型和最多 2 个不重复特质；9 种原型为持衡者、征服者、守成者、庸主、暴君、商君、改革者、纵横家、营造者，12 项特质覆盖雄心、谨慎、魅力、节俭、勤政、粮秣、尚武、筑城、商贸、集权、分封与严酷，且集权/分封互斥。原型和特质共同派生外交、生产、维护、军粮、士气、防御、分封/集权、贸易与忠诚修正，守成者、庸主和纵横家禁止主动攻势。
 - **城市忠诚与叛乱**：`City.loyalty` 为 `0～100` 真源，认同对象另存于 `loyalty_target_nation`；每 30 天从同一月初快照结算，单月变化封顶 `±5`，驻军、首都距离、异族统治、战乱、欠饷、邻城、贡赋及君主共同影响目标值。行政半径改为基于首都 hops 的统一公式：soft 区间基准为 `55`，`INEPT` 君主按 `4` 跳、`balanced` 按 `7` 跳、`strong centralizer` 在集权值 `>=7` 时提高可承受半径；不可达飞地视为高治理压力。分封/直辖评估与忠诚结算共享同一份 `capital hops` BFS，避免同月重复扫描。非首都陆城忠诚 `≤25` 连续 3 个月后，按正容量道路和共同认同目标组成叛乱区；同目标仍存活则优先归附/复国且不新建 Nation，否则创建地方叛军。成功归附、起事或镇压后使用 720 天冷却；藩王低忠诚还需满足军力比后才进入内战。
 - **真实内战首都结算**：削藩内战中任一方实际攻陷对方首都即触发通吃；宗主攻陷藩王首都会兼并藩王全境，反叛藩王攻陷宗主首都会继承宗主全境与其余藩属并升格主权国。首都攻占与整国兼并由同一份虚拟领土/宗藩快照一次提交，首都库存仍只按 `CAPTURE_SPOILS=30%` 进入胜方粮池；不能先做普通单城占领再判断内战身份。
 - **TradeNetwork**：由当前图、外交、围城/占边、国家政策与君主修正纯派生国内和国际路线；路线状态为 `ACTIVE / REROUTED / BLOCKED`，战争或通道阻断会改道或停运。贸易税在端点及过境城市间守恒分配，粮食进出口量与对应金钱支付分别严格守恒；`Simulation` 只在月结应用一次并发布 `GameState.trade_routes/trade_revision` 及城市/国家摘要。前端提供地形、混合、政治、忠诚、贸易五种模式；忠诚模式按城市忠诚覆色，贸易模式突出金色/青色正常路线、橙色改道和红色虚线阻断路线。
 - **粮仓与粮食面板**：setup 即发布首份真实“月产/月需/月净”估算，并同步首份 `trade snapshot`；粮仓面板显示当前库存、预计月产、预计月需、预计月净以及贸易净流；值为 `0` 时不显示 `+0/-0`。粮食月产累计合并回既有城市循环，不另起第二套按城遍历。
-- **MapDefinition v2**：地图模板持久化国家建国城/名称、君主档案、贸易政策，以及城市全称/地域字/初始忠诚目标；主动叛乱、忠诚趋势/进度/冷却和贸易路线/结算摘要属于战役瞬态，禁止写入模板。加载仍接受 v1，并用 seed 确定性补齐新增字段；未知未来版本和不合法 v2 身份数据直接拒绝。
+- **MapDefinition v3**：地图模板持久化国家建国城/名称、君主档案、贸易政策，以及城市全称/全局唯一单字简称/初始忠诚目标；独立 `region_symbol` 已删除，v3 文件若仍含该字段会被拒绝。主动叛乱、忠诚趋势/进度/冷却和贸易路线/结算摘要属于战役瞬态，禁止写入模板。加载不再兼容 v1/v2；旧版、未知未来版本和不合法 v3 身份数据直接拒绝。
 
 ### 4.13 原子领土与集团和平事务
 

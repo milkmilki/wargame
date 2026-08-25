@@ -85,7 +85,6 @@ func _test_world_naming() -> void:
 		city_contract = city_contract and (
 			not clean_name.is_empty()
 			and not city_names.has(clean_name)
-			and city.region_symbol.strip_edges().length() == 1
 			and clean_short.length() == 1
 			and not city_shorts.has(clean_short)
 		)
@@ -93,7 +92,7 @@ func _test_world_naming() -> void:
 		city_shorts[clean_short] = true
 	_check(
 		city_contract,
-		"naming/unique_full_city_names_single_region_symbols_and_unique_shorts",
+		"naming/unique_full_city_names_and_unique_single_shorts",
 		"cities=%d unique=%d shorts=%d" % [
 			first.cities.size(), city_names.size(), city_shorts.size()
 		]
@@ -107,7 +106,7 @@ func _test_world_naming() -> void:
 			and founding_id < first.cities.size()
 			and nation.name.length() == 1
 			and nation.short_name == nation.name
-			and nation.name == first.cities[founding_id].region_symbol
+			and nation.name == first.cities[founding_id].short_name
 		)
 	_check(
 		sovereign_contract,
@@ -119,10 +118,23 @@ func _test_world_naming() -> void:
 	WorldNaming.assign_initial_names(first, SEED)
 	_check(
 		first.nations[0].founding_city_id == founding_before
-			and first.nations[0].name == first.cities[founding_before].region_symbol,
+			and first.nations[0].name == first.cities[founding_before].short_name,
 		"naming/founding_city_survives_capital_relocation"
 	)
 	var definition := MapDefinition.from_state(first)
+	var definition_uses_two_city_names := true
+	for city_value in definition["cities"]:
+		var city_record := city_value as Dictionary
+		definition_uses_two_city_names = (
+			definition_uses_two_city_names
+			and city_record.has("name")
+			and city_record.has("short_name")
+			and not city_record.has("region_symbol")
+		)
+	_check(
+		definition_uses_two_city_names,
+		"naming/map_definition_contains_only_full_and_short_city_names"
+	)
 	var restored := _make_naming_state()
 	WorldNaming.assign_from_definition(restored, definition, SEED)
 	var persisted := true
@@ -131,33 +143,28 @@ func _test_world_naming() -> void:
 			(definition["nations"] as Array)[nation.id]["founding_city_id"]
 		)
 	_check(persisted, "naming/founding_city_roundtrip")
-	var legacy_definition := definition.duplicate(true)
-	for record_value in legacy_definition["nations"]:
-		(record_value as Dictionary).erase("founding_city_id")
-	var legacy := _make_naming_state()
-	WorldNaming.assign_from_definition(legacy, legacy_definition, SEED)
-	var legacy_backfilled := true
-	for nation in legacy.nations:
-		legacy_backfilled = (
-			legacy_backfilled
-			and nation.founding_city_id == nation.capital_city_id
-		)
-	_check(legacy_backfilled, "naming/legacy_founding_city_backfilled")
+	var missing_founding := definition.duplicate(true)
+	(missing_founding["nations"] as Array)[0].erase("founding_city_id")
+	_check(
+		not MapDefinition.validate(missing_founding).is_empty(),
+		"naming/v3_requires_founding_city"
+	)
 
 	var sovereign_collision := _make_naming_state()
-	sovereign_collision.cities[1].region_symbol = (
-		sovereign_collision.cities[0].region_symbol
+	sovereign_collision.cities[1].short_name = (
+		sovereign_collision.cities[0].short_name
 	)
 	WorldNaming.assign_initial_names(sovereign_collision, SEED)
 	_check(
 		sovereign_collision.nations[0].name
-			== sovereign_collision.cities[0].region_symbol
+			== sovereign_collision.cities[0].short_name
 			and sovereign_collision.nations[1].name
-				== sovereign_collision.cities[1].region_symbol
+				== sovereign_collision.cities[1].short_name
 			and sovereign_collision.nations[0].name
-				== sovereign_collision.nations[1].name,
-		"naming/sovereign_collision_never_changes_founding_anchor"
+				!= sovereign_collision.nations[1].name,
+		"naming/duplicate_city_short_is_repaired_before_sovereign_naming"
 	)
+	_test_preferred_city_short_collision()
 
 	var vassal := _make_vassal_naming_state(4)
 	WorldNaming.assign_initial_names(vassal, SEED)
@@ -175,7 +182,7 @@ func _test_world_naming() -> void:
 	fifth.id = vassal.cities.size()
 	fifth.owner_nation = 1
 	fifth.name = "襄阳"
-	fifth.region_symbol = "荆"
+	fifth.short_name = "荆"
 	fifth.map_position = Vector2(0.85, 0.75)
 	vassal.cities.append(fifth)
 	var large_display := WorldNaming.nation_display_name(vassal, 1)
@@ -205,13 +212,13 @@ func _make_naming_state() -> GameState:
 		nation.capital_city_id = nation_id
 		state.nations.append(nation)
 	var names: Array[String] = ["幽州", "冀州", "荆州", "长安", "成都", "建业"]
-	var symbols: Array[String] = ["燕", "赵", "楚", "秦", "蜀", "吴"]
+	var shorts: Array[String] = ["燕", "赵", "楚", "秦", "蜀", "吴"]
 	var owners: Array[int] = [0, 1, 2, 0, 1, 2]
 	for city_id in range(names.size()):
 		var city := City.new()
 		city.id = city_id
 		city.name = names[city_id]
-		city.region_symbol = symbols[city_id]
+		city.short_name = shorts[city_id]
 		city.owner_nation = owners[city_id]
 		city.map_position = Vector2(0.1 + 0.15 * city_id, 0.4)
 		state.cities.append(city)
@@ -228,13 +235,13 @@ func _make_vassal_naming_state(vassal_city_count: int) -> GameState:
 		nation.alive = true
 		state.nations.append(nation)
 	var names: Array[String] = ["幽州", "河间", "常山", "中山", "巨鹿"]
-	var symbols: Array[String] = ["燕", "冀", "赵", "赵", "赵"]
+	var shorts: Array[String] = ["燕", "冀", "赵", "赵", "赵"]
 	for city_id in range(1 + vassal_city_count):
 		var city := City.new()
 		city.id = city_id
 		city.owner_nation = 0 if city_id == 0 else 1
 		city.name = names[city_id]
-		city.region_symbol = symbols[city_id]
+		city.short_name = shorts[city_id]
 		city.map_position = Vector2(0.15 * city_id, 0.5)
 		state.cities.append(city)
 		state.adjacency[city_id] = [] as Array[int]
@@ -244,6 +251,29 @@ func _make_vassal_naming_state(vassal_city_count: int) -> GameState:
 	for city in state.cities:
 		state.recognized_city_owners[city.id] = city.owner_nation
 	return state
+
+
+func _test_preferred_city_short_collision() -> void:
+	var state := GameState.new()
+	var names: Array[String] = ["雍州", "咸阳", "长安"]
+	for city_id in range(names.size()):
+		var city := City.new()
+		city.id = city_id
+		city.name = names[city_id]
+		state.cities.append(city)
+		state.adjacency[city_id] = [] as Array[int]
+	WorldNaming.assign_initial_names(state, SEED)
+	var allocated := {}
+	var resolved_shorts: Array[String] = []
+	for city in state.cities:
+		allocated[city.short_name] = true
+		resolved_shorts.append(city.short_name)
+	_check(
+		resolved_shorts == ["秦", "咸", "长"]
+			and allocated.size() == names.size(),
+		"naming/preferred_short_collision_is_deterministically_unique",
+		"shorts=%s" % str(resolved_shorts)
+	)
 
 
 func _add_historical_name_collision(state: GameState, name: String) -> void:
@@ -262,7 +292,7 @@ func _test_naming_sovereign_promotions() -> void:
 	succession.nations[1].name_kind = WorldNaming.KIND_VASSAL
 	WorldNaming.assign_vassal_name(succession, 1, [1, 2, 3, 4])
 	var succession_founding := succession.nations[1].founding_city_id
-	var succession_symbol := succession.cities[succession_founding].region_symbol
+	var succession_symbol := succession.cities[succession_founding].short_name
 	succession.nations[0].name = succession_symbol
 	succession.nations[0].short_name = succession_symbol
 	succession.set_diplomatic_relation(
@@ -289,7 +319,7 @@ func _test_naming_sovereign_promotions() -> void:
 	civil.nations[1].name_kind = WorldNaming.KIND_VASSAL
 	WorldNaming.assign_vassal_name(civil, 1, [1, 2, 3, 4])
 	var civil_founding := civil.nations[1].founding_city_id
-	var civil_symbol := civil.cities[civil_founding].region_symbol
+	var civil_symbol := civil.cities[civil_founding].short_name
 	civil.nations[0].name = civil_symbol
 	civil.nations[0].short_name = civil_symbol
 	civil.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
@@ -316,8 +346,8 @@ func _test_naming_sovereign_promotions() -> void:
 func _naming_fingerprint(state: GameState) -> String:
 	var fields: Array[String] = []
 	for city in state.cities:
-		fields.append("C%d:%s:%s:%s" % [
-			city.id, city.name, city.short_name, city.region_symbol
+		fields.append("C%d:%s:%s" % [
+			city.id, city.name, city.short_name
 		])
 	for nation in state.nations:
 		fields.append("N%d:%s:%s:%s:%s:%d" % [

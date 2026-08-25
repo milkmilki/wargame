@@ -7566,6 +7566,11 @@ func _reconcile_campaign_active_wave(nation_id: int) -> void:
 			_clear_campaign_attack_plan(nation_id)
 		return
 	var active := false
+	# 默认把快照中已无实体承载的 assignment 视为陈旧；扫描到仍合法的
+	# 待发成员或仍执行原目标的已发成员时再从集合移除。
+	var stale_assignment_ids := {}
+	for army_id_value in nation.campaign_attack_assignments:
+		stale_assignment_ids[int(army_id_value)] = true
 	for army in state.armies:
 		if (
 			army.owner_nation != nation_id
@@ -7583,12 +7588,27 @@ func _reconcile_campaign_active_wave(nation_id: int) -> void:
 				nation_id, state.cities[assigned_target].owner_nation
 			)
 		)
-		if (
+		var launched := nation.campaign_launched_armies.has(army.id)
+		# launched 只是“曾经从本波发射”的历史集合；真正的执行态必须仍是
+		# 对同一目标的 ATTACK。紧急防守或撤退会覆盖 Army 的 AI 命令，若仍仅
+		# 凭 MOVING/FIGHTING 判活，旧波会把下一轮攻势永久挡住。
+		if launched and not (
 			target_still_enemy
 			and army.state in [Army.State.MOVING, Army.State.FIGHTING]
+			and army.ai_action == ActionCandidate.Kind.ATTACK
+			and army.ai_target_city == assigned_target
+		):
+			continue
+		if target_still_enemy:
+			# 未发射梯队可能仍在去集结地的途中，因此只要实体和敌对目标
+			# 有效就保留；它是否足以让整波继续存活由下面的 readiness 判定。
+			stale_assignment_ids.erase(army.id)
+		if (
+			target_still_enemy
+			and launched
 		):
 			active = true
-			break
+			continue
 		# 已冻结但尚未发射的后续梯队仍属于 active wave；只要它的
 		# 目标有效且确实能从当前位置出发，就不能被下一波抢占。
 		var target_city := assigned_target
@@ -7599,12 +7619,24 @@ func _reconcile_campaign_active_wave(nation_id: int) -> void:
 			and state.is_enemy(
 				nation_id, state.cities[target_city].owner_nation
 			)
+			and _army_ready_for_campaign_target(
+				army, nation_id, target_city
+			)
 			and _campaign_army_can_attack_target(
 				army, nation_id, target_city
 			)
 		):
 			active = true
-			break
+	for army_id in stale_assignment_ids:
+		nation.campaign_attack_assignments.erase(army_id)
+		nation.campaign_attack_echelons.erase(army_id)
+		nation.campaign_launched_armies.erase(army_id)
+	# 部分方向已无任何成员时立即释放其 target/echelon/后续计划；否则
+	# 其他方向尚在执行会让空目标一直残留到整波结束。
+	for target_value in nation.campaign_plan_targets.duplicate():
+		var target_city := int(target_value)
+		if not nation.campaign_attack_assignments.values().has(target_city):
+			_remove_campaign_target(nation_id, target_city)
 	if not active:
 		_clear_campaign_attack_plan(nation_id)
 
@@ -11133,21 +11165,24 @@ func _advance_campaign_echelons() -> void:
 			)
 			if active_echelon < 0:
 				continue
+			# 首批成员可能受道路容量限制而稍后抵达集结位，也可能已有
+			# 成员在途中阵亡。每日至少先补发当前梯队的就绪成员；否则
+			# operational=false 时直接跳到下一梯队，会把当前梯队遗留成员
+			# 永久锁在 active wave 中。
+			_launch_campaign_echelon_members(
+				nation.id,
+				target_city,
+				active_echelon,
+				false,
+				false,
+				nation_armies
+			)
 			if _campaign_echelon_operational(
 				nation.id,
 				target_city,
 				active_echelon,
 				nation_armies
 			):
-				# 同梯队可能因首段道路容量暂未出发；容量释放后继续执行同一命令。
-				_launch_campaign_echelon_members(
-					nation.id,
-					target_city,
-					active_echelon,
-					false,
-					false,
-					nation_armies
-				)
 				if _campaign_echelon_engaged_at_target(
 					nation.id,
 					target_city,
@@ -13516,7 +13551,8 @@ func _is_edge_unit(army: Army) -> bool:
 ## 检测新遭遇（位置驱动的两两交战）：同边上的敌对军队，按物理位置判断是否接触。
 ##  - 相向：正向者推进到与反向者接近/交错才触发；相距远则不触发（边内可能不开战）。
 ##  - 同向：后军追上前军（位置差 <= CONTACT_EPS）才触发（修复"追逐永不开战"）。
-## 一条边选归一化位置差最小的敌对接触对为核心，其余按归侧规则加入（第三方不与敌对同侧）。
+## 一条边先选归一化位置差最小的敌对国家对，再把同国抵达者聚合进对应侧；
+## 真正无法二分的完全同构多国接触统一脱离，第三方不与敌对方并肩。
 func _detect_encounters() -> void:
 	# 索引进行中的 FIELD 战斗（按边）
 	var field_by_edge: Dictionary = {}
@@ -13588,7 +13624,7 @@ func _detect_encounters() -> void:
 		if group.size() < 2:
 			continue
 
-		# 在所有「敌对且已接触」的对中选交战核心。主判据=归一化位置差 gap 最小（物理逼近程度）。
+		# 在所有「敌对且已接触」的对中选交战国家对。主判据=归一化位置差 gap 最小（物理逼近程度）。
 		# gap 相等时按纯物理/稳定身份判据裁决，绝不依赖 army.id 或遍历顺序（item 11 验收）：
 		#   次判据=双方合计兵力更大者优先（更决定性的对撞先形成核心，镜像不变量）；
 		#   再相等=镜像轨道上的实体物理键较小者优先。
@@ -13598,6 +13634,7 @@ func _detect_encounters() -> void:
 		var best_size := -1
 		var best_ambiguous := false
 		var best_equivalent_contacts := {}
+		var best_equivalent_nation_pairs := {}
 		for i in range(group.size()):
 			for j in range(i + 1, group.size()):
 				var x: Army = group[i]
@@ -13637,6 +13674,10 @@ func _detect_encounters() -> void:
 						)
 					):
 						best_ambiguous = true
+						best_equivalent_nation_pairs[Vector2i(
+							mini(x.owner_nation, y.owner_nation),
+							maxi(x.owner_nation, y.owner_nation)
+						)] = true
 						var equivalent_contact := (
 							_norm_pos(x, edge)
 							+ _norm_pos(y, edge)
@@ -13665,25 +13706,24 @@ func _detect_encounters() -> void:
 						x: [best_contact],
 						y: [best_contact],
 					}
+					best_equivalent_nation_pairs = {
+						Vector2i(
+							mini(x.owner_nation, y.owner_nation),
+							maxi(x.owner_nation, y.owner_nation)
+						): true,
+					}
 		if best_x == null:
 			continue   # 本边无满足接触的敌对对 → 不开战（"边内可能不触发"）
-		if best_ambiguous:
-			# 两个核心对在全部可观察物理键上完全同构时，不存在既确定
-			# 又镜像等变的二选一。冻结在共同接触面，等待外部状态打破
-			# 对称；不能读取数组顺序任取一对，也不能让军队继续穿透。
+		if best_ambiguous and best_equivalent_nation_pairs.size() > 1:
+			# Battle 目前是严格两方模型。三个以上互相敌对、且全部物理键
+			# 完全同构时，没有镜像等变的国家对可被指定为首战双方。让全部
+			# 等价接触者沿各自战略退路脱离，保证有限收敛；绝不能冻结等待
+			# 一个不会出现的外部破缺。只有一个国家对时则以任一等价军为
+			# 核心继续建战，随后把
+			# 同国等价军全部聚合进同一侧（典型 2v1 / NvM）。
 			for army in best_equivalent_contacts:
-				var contacts: Array = best_equivalent_contacts[army]
-				contacts.sort()
-				var frozen_norm := 0.0
-				for contact in contacts:
-					frozen_norm += float(contact)
-				frozen_norm /= float(maxi(contacts.size(), 1))
-				army.move_progress = (
-					frozen_norm
-					if army.move_from == edge.city_a
-					else 1.0 - frozen_norm
-				)
-				army.encounter_blocked = true
+				army.encounter_blocked = false
+				_retreat(army)
 			continue
 
 		var length := float(maxi(edge.distance, 1))

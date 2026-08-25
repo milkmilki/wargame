@@ -74,15 +74,22 @@ const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 10.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
 const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
-const NATION_COLOR_SATURATION_MIN: float = 0.74
-const NATION_COLOR_SATURATION_MAX: float = 0.84
-const NATION_COLOR_VALUE_MIN: float = 0.34
-const NATION_COLOR_VALUE_MAX: float = 0.46
-## Hard-coded HSV palette. All procedural colors reuse the same bounded S/V
-## bands; only hue changes for additional nations.
-const NATION_PALETTE_HUES := [0.000, 0.610, 0.350, 0.140]
-const NATION_PALETTE_SATURATIONS := [0.82, 0.78, 0.76, 0.81]
-const NATION_PALETTE_VALUES := [0.44, 0.41, 0.37, 0.46]
+const NATION_COLOR_HUE_MIN: float = 0.0
+const NATION_COLOR_HUE_MAX: float = 1.0
+const NATION_COLOR_SATURATION_MIN: float = 0.35
+const NATION_COLOR_SATURATION_MAX: float = 0.55
+const NATION_COLOR_VALUE_MIN: float = 0.35
+const NATION_COLOR_VALUE_MAX: float = 0.50
+## Hard-coded HSV palette. All procedural colors reuse the same bounded HSV
+## band; hue spans the full ring while saturation stays map-friendly.
+const NATION_PALETTE_HUES := [
+	0.000,
+	0.610,
+	0.350,
+	0.140,
+]
+const NATION_PALETTE_SATURATIONS := [0.52, 0.46, 0.40, 0.50]
+const NATION_PALETTE_VALUES := [0.48, 0.43, 0.38, 0.50]
 
 
 static func army_monthly_upkeep(troops: int) -> int:
@@ -97,7 +104,7 @@ static func army_monthly_upkeep(troops: int) -> int:
 ## saturation/value stay inside the requested non-neon palette rectangle.
 static func normalize_nation_color(color: Color) -> Color:
 	return Color.from_hsv(
-		color.h,
+		clampf(color.h, NATION_COLOR_HUE_MIN, NATION_COLOR_HUE_MAX),
 		clampf(
 			color.s,
 			NATION_COLOR_SATURATION_MIN,
@@ -345,7 +352,7 @@ func generate_from_map_definition(
 		var city := City.new()
 		city.id = int(record["id"])
 		city.name = str(record.get("name", ""))
-		city.region_symbol = str(record.get("region_symbol", ""))
+		city.short_name = str(record.get("short_name", ""))
 		var coord: Array = record.get("coord", [0, 0])
 		city.coord = Vector2i(int(coord[0]), int(coord[1]))
 		var position: Array = record["map_position"]
@@ -682,12 +689,13 @@ func _generate_nations(
 			)
 			if nation_count == NATION_COUNT
 			else Color.from_hsv(
-				fposmod(
-					float(i) * 0.61803398875,
-					1.0
+				lerpf(
+					NATION_COLOR_HUE_MIN,
+					NATION_COLOR_HUE_MAX,
+					fposmod(float(i) * 0.61803398875, 1.0)
 				),
-				0.76 + float(i % 3) * 0.03,
-				0.36 + float(i % 4) * 0.025
+				0.36 + float(i % 4) * 0.05,
+				0.36 + float(i % 5) * 0.03
 			)
 		)
 		n.treasury_gold = 10000
@@ -4537,10 +4545,25 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 		float(subject_id) * 1.61803398875,
 		VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES
 	)
-	var h := fposmod(
-		overlord_color.h
-			+ (VASSAL_COLOR_HUE_OFFSET_DEGREES + subject_hue_variance) / 360.0,
-		1.0
+	var hue_span := maxf(
+		NATION_COLOR_HUE_MAX - NATION_COLOR_HUE_MIN,
+		0.0001
+	)
+	var hue_span_degrees := hue_span * 360.0
+	var overlord_hue_progress := inverse_lerp(
+		NATION_COLOR_HUE_MIN,
+		NATION_COLOR_HUE_MAX,
+		clampf(overlord_color.h, NATION_COLOR_HUE_MIN, NATION_COLOR_HUE_MAX)
+	)
+	var h := lerpf(
+		NATION_COLOR_HUE_MIN,
+		NATION_COLOR_HUE_MAX,
+		fposmod(
+			overlord_hue_progress
+				+ (VASSAL_COLOR_HUE_OFFSET_DEGREES + subject_hue_variance)
+				/ hue_span_degrees,
+			1.0
+		)
 	)
 	var s := clampf(
 		overlord_color.s - VASSAL_COLOR_SATURATION_OFFSET,
@@ -4553,9 +4576,9 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 		1.0
 	)
 	return Color.from_hsv(
-		h,
+		clampf(h, NATION_COLOR_HUE_MIN, NATION_COLOR_HUE_MAX),
 		clampf(s + 0.10, NATION_COLOR_SATURATION_MIN, NATION_COLOR_SATURATION_MAX),
-		clampf(v * 0.85, 0.28, NATION_COLOR_VALUE_MAX)
+		clampf(v * 0.85, NATION_COLOR_VALUE_MIN, NATION_COLOR_VALUE_MAX)
 	)
 
 

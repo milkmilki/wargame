@@ -63,8 +63,8 @@ var battle_id: int = -1
 ## 是否正在边上。passing_count 由此维护总占用；方向容量则从全部 on_edge 军队实时派生。
 var on_edge: bool = false
 
-## 完全同构多方接触时的瞬态阻塞。该状态只暂停下一次行军推进，
-## 不伪装成 HOLDING，也不授予驻防地形身份。
+## 瞬态遭遇阻塞兼容标记。只能暂停一次行军推进；遭遇裁决不得依赖它
+## 无限等待外部状态破坏对称，也不伪装成 HOLDING 或授予驻防身份。
 var encounter_blocked: bool = false
 
 ## 派生标记：当日是否缺粮（供渲染标记饥饿）。由 Simulation 每日刷新。

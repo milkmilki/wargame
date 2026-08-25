@@ -53,7 +53,6 @@ const NATION_LABEL_SAFETY: float = 0.86
 const NATION_LABEL_FIT_EPSILON: float = 0.0001
 const NATION_LABEL_BASE_PIXEL_SIZE: float = 0.026
 const NATION_LABEL_MAX_PIXEL_SIZE: float = 0.080
-const NATION_LABEL_MIN_READABLE_PIXEL_SIZE: float = 0.014
 const ANTIQUE_OVERLAY_SHADER := preload(
 	"res://scripts/view/terrain/antique_overlay.gdshader"
 )
@@ -108,6 +107,17 @@ var _loyalty_fill_signature := PackedInt64Array()
 var _boundary_topology := {}
 var _province_topology_ids := PackedInt32Array()
 var _map_font: Font
+## 国家标签的领土几何按 ownership_revision 批量构建一次。名称或外交变化只
+## 重算文字尺寸，不再让每个国家各自扫描整张 province map。
+var _nation_label_territory_cache := {}
+var _nation_label_layout_cache := {}
+var _nation_label_cache_ownership_revision: int = -1
+var _nation_label_cache_naming_revision: int = -1
+var _nation_label_cache_diplomacy_revision: int = -1
+var _nation_label_cache_map_size := Vector2i.ZERO
+var _nation_label_cache_nation_count: int = -1
+var _nation_label_territory_index_builds: int = 0
+var _nation_label_territory_index_pixel_visits: int = 0
 
 var _world_size := Vector2(BASE_WORLD_SPAN, BASE_WORLD_SPAN)
 var _mesh_resolution := Vector2i(
@@ -184,6 +194,15 @@ func setup(
 	_loyalty_fill_signature = PackedInt64Array()
 	_boundary_topology = {}
 	_province_topology_ids = PackedInt32Array()
+	_nation_label_territory_cache.clear()
+	_nation_label_layout_cache.clear()
+	_nation_label_cache_ownership_revision = -1
+	_nation_label_cache_naming_revision = -1
+	_nation_label_cache_diplomacy_revision = -1
+	_nation_label_cache_map_size = Vector2i.ZERO
+	_nation_label_cache_nation_count = -1
+	_nation_label_territory_index_builds = 0
+	_nation_label_territory_index_pixel_visits = 0
 	_last_road_network_revision = -1
 	_last_trade_revision = -1
 	_last_naming_revision = -1
@@ -831,6 +850,8 @@ func _update_province_visuals() -> void:
 	if topology_changed:
 		_boundary_topology = MapRenderer.build_province_boundary_topology(state)
 		_province_topology_ids = state.province_ids.duplicate()
+		# 省份栅格几何变化会改变标签连通域，即使所有权 revision 未变。
+		_nation_label_cache_ownership_revision = -1
 	var geometry := MapRenderer.classify_province_boundary_topology(
 		state, _boundary_topology
 	)
@@ -1443,6 +1464,7 @@ func _rebuild_nation_labels() -> void:
 		if is_instance_valid(label):
 			label.queue_free()
 	_nation_labels.clear()
+	_ensure_nation_label_layout_cache()
 	for nation in state.nations:
 		if not nation.alive:
 			continue
@@ -1489,44 +1511,179 @@ func _nation_label_layout(nation_id: int) -> Dictionary:
 		or nation_id >= state.nations.size()
 	):
 		return {}
-	var fallback := _nation_label_fallback_layout(nation_id)
+	_ensure_nation_label_layout_cache()
+	if _nation_label_layout_cache.has(nation_id):
+		return _nation_label_layout_cache[nation_id]
+	return _nation_label_fallback_layout(nation_id)
+
+
+func _ensure_nation_label_layout_cache() -> void:
+	if state == null or _map_font == null:
+		return
 	var size := state.province_map_size
 	var total := size.x * size.y
+	var territory_stale := (
+		_nation_label_cache_ownership_revision != state.ownership_revision
+		or _nation_label_cache_map_size != size
+		or _nation_label_cache_nation_count != state.nations.size()
+	)
+	if territory_stale:
+		_rebuild_nation_label_territory_cache(size, total)
+	var layout_stale := (
+		territory_stale
+		or _nation_label_cache_naming_revision != state.naming_revision
+		or _nation_label_cache_diplomacy_revision != state.diplomacy_revision
+	)
+	if not layout_stale:
+		return
+	_nation_label_layout_cache.clear()
+	for nation in state.nations:
+		if not nation.alive:
+			continue
+		var nation_id := int(nation.id)
+		var territory: Dictionary = _nation_label_territory_cache.get(
+			nation_id, {}
+		)
+		_nation_label_layout_cache[nation_id] = (
+			_nation_label_layout_from_territory(nation_id, territory, size)
+		)
+	_nation_label_cache_naming_revision = state.naming_revision
+	_nation_label_cache_diplomacy_revision = state.diplomacy_revision
+
+
+func _rebuild_nation_label_territory_cache(
+	size: Vector2i, total: int
+) -> void:
+	_nation_label_territory_cache.clear()
+	_nation_label_layout_cache.clear()
+	_nation_label_cache_ownership_revision = state.ownership_revision
+	_nation_label_cache_map_size = size
+	_nation_label_cache_nation_count = state.nations.size()
+	_nation_label_territory_index_builds += 1
+	_nation_label_territory_index_pixel_visits = 0
 	if (
 		size.x <= 0
 		or size.y <= 0
 		or total <= 0
 		or state.province_ids.size() != total
 	):
-		return fallback
-	var nation_mask := PackedByteArray()
-	nation_mask.resize(total)
-	var has_mask_data := false
+		return
+	var owner_by_cell := PackedInt32Array()
+	owner_by_cell.resize(total)
+	owner_by_cell.fill(-1)
 	for index in range(total):
-		var province_id := state.province_ids[index]
+		_nation_label_territory_index_pixel_visits += 1
+		var province_id := int(state.province_ids[index])
 		if province_id < 0 or province_id >= state.cities.size():
 			continue
-		if state.cities[province_id].owner_nation != nation_id:
+		var owner := int(state.cities[province_id].owner_nation)
+		if owner < 0 or owner >= state.nations.size():
 			continue
-		nation_mask[index] = 1
-		has_mask_data = true
-	if not has_mask_data:
-		return fallback
-	var component_data: Dictionary = _largest_connected_mask_component(
-		nation_mask, size.x, size.y
-	)
-	var component_mask: PackedByteArray = component_data["mask"]
-	var component_area := int(component_data["area"])
+		owner_by_cell[index] = owner
+	var visited := PackedByteArray()
+	visited.resize(total)
+	var largest_components := {}
+	for index in range(total):
+		_nation_label_territory_index_pixel_visits += 1
+		var owner := int(owner_by_cell[index])
+		if owner < 0 or visited[index] > 0:
+			continue
+		var queue: Array[int] = [index]
+		var head := 0
+		visited[index] = 1
+		var component_indices: Array[int] = []
+		var min_x := size.x
+		var min_y := size.y
+		var max_x := -1
+		var max_y := -1
+		while head < queue.size():
+			var current := queue[head]
+			head += 1
+			component_indices.append(current)
+			var x: int = current % size.x
+			var y: int = current / size.x
+			min_x = mini(min_x, x)
+			min_y = mini(min_y, y)
+			max_x = maxi(max_x, x)
+			max_y = maxi(max_y, y)
+			for offset in [
+				Vector2i(-1, 0), Vector2i(1, 0),
+				Vector2i(0, -1), Vector2i(0, 1),
+			]:
+				var nx: int = x + offset.x
+				var ny: int = y + offset.y
+				if nx < 0 or nx >= size.x or ny < 0 or ny >= size.y:
+					continue
+				var neighbor := ny * size.x + nx
+				if visited[neighbor] > 0 or owner_by_cell[neighbor] != owner:
+					continue
+				visited[neighbor] = 1
+				queue.append(neighbor)
+		var previous: Dictionary = largest_components.get(owner, {})
+		if component_indices.size() > int(previous.get("area", 0)):
+			largest_components[owner] = {
+				"area": component_indices.size(),
+				"indices": component_indices,
+				"bounds": Rect2i(
+					min_x, min_y, max_x - min_x + 1, max_y - min_y + 1
+				),
+			}
+	for owner_value in largest_components:
+		var owner := int(owner_value)
+		var component: Dictionary = largest_components[owner]
+		var bounds: Rect2i = component["bounds"]
+		var local_mask := PackedByteArray()
+		local_mask.resize(bounds.size.x * bounds.size.y)
+		for cell_value in component["indices"]:
+			var cell := int(cell_value)
+			var local_x: int = cell % size.x - bounds.position.x
+			var local_y: int = cell / size.x - bounds.position.y
+			local_mask[local_y * bounds.size.x + local_x] = 1
+		var local_rect := _largest_mask_rectangle(
+			local_mask, bounds.size.x, bounds.size.y
+		)
+		if local_rect.size.x <= 0 or local_rect.size.y <= 0:
+			continue
+		var local_anchor := Vector2i(
+			clampi(
+				int(floor(float(local_rect.position.x) + float(local_rect.size.x) * 0.5)),
+				local_rect.position.x, local_rect.end.x - 1
+			),
+			clampi(
+				int(floor(float(local_rect.position.y) + float(local_rect.size.y) * 0.5)),
+				local_rect.position.y, local_rect.end.y - 1
+			)
+		)
+		_nation_label_territory_cache[owner] = {
+			"component_area": int(component["area"]),
+			"rect": Rect2i(
+				bounds.position + local_rect.position, local_rect.size
+			),
+			"inside_mask": (
+				local_mask[local_anchor.y * bounds.size.x + local_anchor.x] > 0
+			),
+			"rect_inside_component": _rect_fully_inside_mask(
+				local_mask, bounds.size.x, bounds.size.y, local_rect
+			),
+		}
+
+
+func _nation_label_layout_from_territory(
+	nation_id: int, territory: Dictionary, size: Vector2i
+) -> Dictionary:
+	if territory.is_empty():
+		return _nation_label_fallback_layout(nation_id)
+	var component_area := int(territory.get("component_area", 0))
 	if component_area <= 0:
-		return fallback
-	var rect := _largest_mask_rectangle(component_mask, size.x, size.y)
+		return _nation_label_fallback_layout(nation_id)
+	var rect: Rect2i = territory.get("rect", Rect2i())
 	if rect.size.x <= 0 or rect.size.y <= 0:
-		return fallback
-	var rect_inside_component := _rect_fully_inside_mask(
-		component_mask, size.x, size.y, rect
-	)
+		return _nation_label_fallback_layout(nation_id)
+	var rect_inside_component := bool(territory.get(
+		"rect_inside_component", false
+	))
 	if not rect_inside_component:
-		return fallback
+		return _nation_label_fallback_layout(nation_id)
 	var anchor_px := Vector2(
 		float(rect.position.x) + float(rect.size.x) * 0.5,
 		float(rect.position.y) + float(rect.size.y) * 0.5
@@ -1535,17 +1692,7 @@ func _nation_label_layout(nation_id: int) -> Dictionary:
 		anchor_px.x / float(size.x),
 		anchor_px.y / float(size.y)
 	)
-	var anchor_cell := Vector2i(
-		clampi(int(floor(anchor_px.x)), rect.position.x, rect.end.x - 1),
-		clampi(int(floor(anchor_px.y)), rect.position.y, rect.end.y - 1)
-	)
-	var inside_mask := (
-		anchor_cell.x >= 0
-		and anchor_cell.x < size.x
-		and anchor_cell.y >= 0
-		and anchor_cell.y < size.y
-		and component_mask[anchor_cell.y * size.x + anchor_cell.x] > 0
-	)
+	var inside_mask := bool(territory.get("inside_mask", false))
 	var map_rect := Rect2(
 		Vector2(rect.position) / Vector2(size),
 		Vector2(rect.size) / Vector2(size)
@@ -1599,137 +1746,48 @@ func _nation_label_basis() -> Basis:
 func _nation_label_choose_text(
 	nation_id: int, rect_world_size: Vector2, font_size: int
 ) -> Dictionary:
-	var nation := state.nations[nation_id]
-	var candidates: Array[String] = []
 	var full_name := str(
 		WorldNaming.nation_display_name(state, nation_id, false)
 	).strip_edges()
-	_nation_label_append_candidate(candidates, full_name, "")
-	_nation_label_append_candidate(
-		candidates, str(nation.short_name).strip_edges(), full_name
-	)
-	var capital_id := int(nation.capital_city_id)
-	if capital_id >= 0 and capital_id < state.cities.size():
-		_nation_label_append_candidate(
-			candidates,
-			str(state.cities[capital_id].region_symbol).strip_edges(),
-			full_name
-		)
-	_nation_label_append_candidate(
-		candidates,
-		str(WorldNaming.nation_display_name(state, nation_id, true)).strip_edges(),
-		full_name
-	)
-	var best_pixel_size := 0.0
-	var best_candidate := ""
-	var best_bbox := Vector2.ZERO
-	for candidate in candidates:
-		var text_size: Vector2 = _map_font.get_string_size(
-			candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size
-		)
-		if text_size.x <= 0.0 or text_size.y <= 0.0:
-			continue
-		var bbox_size := Vector2(
-			text_size.x + float(NATION_LABEL_OUTLINE_SIZE * 2),
-			text_size.y + float(NATION_LABEL_OUTLINE_SIZE * 2)
-		)
-		var pixel_size: float = clampf(
-			minf(
-				rect_world_size.x * NATION_LABEL_SAFETY / bbox_size.x,
-				rect_world_size.y * NATION_LABEL_SAFETY / bbox_size.y
-			),
-			0.0, NATION_LABEL_MAX_PIXEL_SIZE
-		)
-		if pixel_size >= NATION_LABEL_MIN_READABLE_PIXEL_SIZE:
-			return {
-				"text": candidate,
-				"pixel_size": pixel_size,
-				"bbox_width": bbox_size.x,
-				"bbox_height": bbox_size.y,
-				"hidden": false,
-			}
-		# 小封国兜底：领土矩形放不下可读字号时不再整条隐藏，改用能塞进矩形的
-		# 最大字号（即最短候选）。像素尺寸仍严格 <= 矩形安全边界，fits_mask 成立；
-		# 字很小但在任意缩放下都存在，玩家拉近即可辨认。
-		if pixel_size > best_pixel_size:
-			best_pixel_size = pixel_size
-			best_candidate = candidate
-			best_bbox = bbox_size
-	if not best_candidate.is_empty() and best_pixel_size > 0.0:
+	if full_name.is_empty():
 		return {
-			"text": best_candidate,
-			"pixel_size": best_pixel_size,
-			"bbox_width": best_bbox.x,
-			"bbox_height": best_bbox.y,
-			"hidden": false,
+			"text": "",
+			"pixel_size": 0.0,
+			"bbox_width": 0.0,
+			"bbox_height": 0.0,
+			"hidden": true,
 		}
+	var text_size: Vector2 = _map_font.get_string_size(
+		full_name, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size
+	)
+	if text_size.x <= 0.0 or text_size.y <= 0.0:
+		return {
+			"text": full_name,
+			"pixel_size": 0.0,
+			"bbox_width": 0.0,
+			"bbox_height": 0.0,
+			"hidden": true,
+		}
+	var bbox_size := Vector2(
+		text_size.x + float(NATION_LABEL_OUTLINE_SIZE * 2),
+		text_size.y + float(NATION_LABEL_OUTLINE_SIZE * 2)
+	)
+	# 地图和详情面板必须展示同一个正式国名。领土再小也只缩放完整名称，
+	# 不再跨过可读字号下限后改用城市简称；否则“快王”会只剩“快”，
+	# 漏掉“王”并与详情页法理归属不一致。
+	var pixel_size: float = clampf(
+		minf(
+			rect_world_size.x * NATION_LABEL_SAFETY / bbox_size.x,
+			rect_world_size.y * NATION_LABEL_SAFETY / bbox_size.y
+		),
+		0.0, NATION_LABEL_MAX_PIXEL_SIZE
+	)
 	return {
-		"text": candidates[0] if not candidates.is_empty() else full_name,
-		"pixel_size": 0.0,
-		"bbox_width": 0.0,
-		"bbox_height": 0.0,
-		"hidden": true,
-	}
-
-
-func _nation_label_append_candidate(
-	candidates: Array[String], candidate: String, full_name: String
-) -> void:
-	var value := candidate.strip_edges()
-	if value.is_empty():
-		return
-	if not full_name.is_empty() and value.length() >= full_name.length():
-		if value != full_name:
-			return
-	if candidates.has(value):
-		return
-	candidates.append(value)
-
-
-func _largest_connected_mask_component(
-	mask: PackedByteArray, width: int, height: int
-) -> Dictionary:
-	var total := width * height
-	var visited := PackedByteArray()
-	visited.resize(total)
-	var best_area := 0
-	var best_indices: Array[int] = []
-	for index in range(total):
-		if mask[index] == 0 or visited[index] > 0:
-			continue
-		var queue: Array[int] = [index]
-		var head := 0
-		visited[index] = 1
-		var component_indices: Array[int] = []
-		while head < queue.size():
-			var current: int = queue[head]
-			head += 1
-			component_indices.append(current)
-			var x: int = current % width
-			var y: int = current / width
-			for offset in [
-				Vector2i(-1, 0), Vector2i(1, 0),
-				Vector2i(0, -1), Vector2i(0, 1),
-			]:
-				var nx: int = x + offset.x
-				var ny: int = y + offset.y
-				if nx < 0 or nx >= width or ny < 0 or ny >= height:
-					continue
-				var neighbor: int = ny * width + nx
-				if mask[neighbor] == 0 or visited[neighbor] > 0:
-					continue
-				visited[neighbor] = 1
-				queue.append(neighbor)
-		if component_indices.size() > best_area:
-			best_area = component_indices.size()
-			best_indices = component_indices
-	var component_mask := PackedByteArray()
-	component_mask.resize(total)
-	for index in best_indices:
-		component_mask[index] = 1
-	return {
-		"mask": component_mask,
-		"area": best_area,
+		"text": full_name,
+		"pixel_size": pixel_size,
+		"bbox_width": bbox_size.x,
+		"bbox_height": bbox_size.y,
+		"hidden": pixel_size <= 0.0,
 	}
 
 

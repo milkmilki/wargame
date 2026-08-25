@@ -59,7 +59,7 @@ func _make_linear_state(
 		var city := City.new()
 		city.id = city_id
 		city.name = "城%d" % city_id
-		city.region_symbol = "郡"
+		city.short_name = String.chr(0x4E00 + city_id)
 		city.owner_nation = 0 if city_id < owner_count else 1
 		city.map_position = Vector2(float(city_id) / 20.0, 0.5)
 		city.coord = Vector2i(city_id, 0)

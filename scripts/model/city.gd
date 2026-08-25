@@ -4,11 +4,9 @@ extends RefCounted
 
 var id: int = 0
 var name: String = ""                    ## 稳定地名，由 WorldNaming 确定性分配
-## 城市信息页展示的单字「简称」。由 WorldNaming 确定性分配并去重：优先复用
-## region_symbol，冲突时再从全称单字派生，保证战役内唯一。藩王封满五城后的
-## 单字王封号就取自其首都的这个简称。
+## 城市唯一的单字「简称」。由 WorldNaming 从全称确定性分配并在战役内去重；
+## 主权国号及藩王封满五城后的单字王封号都取自建国城/藩都的这个简称。
 var short_name: String = ""
-var region_symbol: String = ""           ## 发迹国号字，如“幽州”对应“燕”
 var coord: Vector2i = Vector2i.ZERO       ## 兼容测试/镜像基准的逻辑 8x8 索引
 var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [0,1]²
 var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
