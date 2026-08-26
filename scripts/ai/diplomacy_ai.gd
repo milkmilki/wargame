@@ -59,6 +59,9 @@ const ATTITUDE_LEAVE_WEIGHT: float = 0.50
 const REVENGE_PER_LOST_SITUATION_POINT: float = 0.10
 const REVENGE_SURRENDER_PENALTY: float = 0.85
 const REVENGE_ATTITUDE_FLOOR: float = -1.25
+## 母国把从自身分裂出去的地方叛军视为天然敌对政治实体；该项不随一次
+## 议和消失，并通过态度统一影响结盟、宣战、退盟与再次议和。
+const PARENT_REBEL_ATTITUDE: float = -1.25
 const BORDER_ATTITUDE_PER_EDGE: float = 0.08
 const BORDER_ATTITUDE_FLOOR: float = -0.48
 const OBJECTIVE_ATTITUDE_PER_VALUE: float = 0.035
@@ -584,6 +587,16 @@ static func peace_assessment(
 			"proposer": -1,
 			"responder": -1,
 		}
+	if state.regional_rebellion_peace_locked(nation_a, nation_b):
+		return {
+			"acceptable": false,
+			"score_a": -INF,
+			"score_b": -INF,
+			"combined_score": -INF,
+			"proposer": -1,
+			"responder": -1,
+			"rebellion_war_locked": true,
+		}
 	var part_started := (
 		Time.get_ticks_usec()
 		if evaluation_cache.has("__profile")
@@ -1023,6 +1036,12 @@ static func diplomatic_attitude_breakdown(
 		+ frontier_relief
 		+ float(enemy_allies) * ENEMY_ALLY_ATTITUDE
 	)
+	var parent_rebel_component := (
+		PARENT_REBEL_ATTITUDE
+		if state.regional_rebellion_parent(other_id) == nation_id
+		else 0.0
+	)
+	political += parent_rebel_component
 	var result := {
 		"score": historical + military + political,
 		"historical": historical,
@@ -1036,6 +1055,7 @@ static func diplomatic_attitude_breakdown(
 		"common_enemies": common_enemies,
 		"enemy_allies": enemy_allies,
 		"frontier_relief": frontier_relief,
+		"parent_rebel_component": parent_rebel_component,
 	}
 	evaluation_cache[cache_key] = result
 	return result
@@ -3396,6 +3416,8 @@ static func _collect_peace_actions(
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
 			if committed.has(a) or committed.has(b) or not state.is_enemy(a, b):
+				continue
+			if state.regional_rebellion_peace_locked(a, b):
 				continue
 			# 削藩内战不走普通议和：宗藩内战只能由明确政治结果（占首都通吃）终结。
 			if state.is_suzerainty_pair(a, b) and (

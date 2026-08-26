@@ -879,6 +879,14 @@ func _test_rebellion_system() -> void:
 		)
 	start_ok = start_ok and (
 		start_state.is_enemy(0, rebel_id)
+		and not start_state.nations[rebel_id].color.is_equal_approx(
+			start_state.nations[0].color
+		)
+		and not start_state.nations[rebel_id].color.is_equal_approx(
+			start_state._derive_vassal_color(
+				start_state.nations[0].color, rebel_id
+			)
+		)
 		and start_state.rebellion_structure_valid()
 		and start_state.territory_structure_valid()
 		and totals_before == totals_after
@@ -887,6 +895,69 @@ func _test_rebellion_system() -> void:
 		start_ok,
 		"rebellion/start_changes_control_not_legal_title_and_conserves",
 		"rebel=%d before=%s after=%s" % [rebel_id, totals_before, totals_after]
+	)
+	var uprising_main_armies := 0
+	for army in start_state.armies:
+		if (
+			army.owner_nation == rebel_id
+			and army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.strategic_role == Army.StrategicRole.MAIN
+			and army.location_city == start_state.nations[rebel_id].capital_city_id
+		):
+			uprising_main_armies += 1
+	_check(
+		uprising_main_armies
+			== int(ceil(
+				0.1 * float(start_state.land_cities_of(rebel_id).size())
+			))
+			and start_state._battle_group_structure_valid(),
+		"rebellion/regional_rebel_gets_civil_war_mars_armies",
+		"main=%d" % uprising_main_armies
+	)
+	var parent_attitude := DiplomacyAI.diplomatic_attitude_breakdown(
+		start_state, 0, rebel_id
+	)
+	var rebel_attitude := DiplomacyAI.diplomatic_attitude_breakdown(
+		start_state, rebel_id, 0
+	)
+	_check(
+		_approx(
+			float(parent_attitude.get("parent_rebel_component", 0.0)),
+			DiplomacyAI.PARENT_REBEL_ATTITUDE
+		)
+			and _approx(
+				float(rebel_attitude.get("parent_rebel_component", 0.0)),
+				0.0
+			),
+		"rebellion/parent_has_directional_natural_hostility"
+	)
+	start_state.day += (
+		RebellionSystem.REGIONAL_REBELLION_MIN_WAR_DAYS - 1
+	)
+	var early_sim := Simulation.new()
+	early_sim.setup(start_state)
+	var early_coalition_peace := early_sim._make_coalition_peace(
+		0, rebel_id
+	)
+	early_sim.free()
+	var early_peace_blocked := not start_state.set_diplomatic_relation(
+		0, rebel_id, GameState.DiplomaticRelation.NEUTRAL
+	)
+	var early_assessment := DiplomacyAI.peace_assessment(
+		start_state, 0, rebel_id
+	)
+	start_state.day += 1
+	var peace_unlocked := start_state.set_diplomatic_relation(
+		0, rebel_id, GameState.DiplomaticRelation.NEUTRAL
+	)
+	_check(
+		not bool(early_coalition_peace.get("changed", false))
+			and early_peace_blocked
+			and start_state.day == 450
+			and bool(early_assessment.get("rebellion_war_locked", false))
+			and peace_unlocked,
+		"rebellion/parent_war_locked_for_one_year"
 	)
 	var recognized := start_state.recognize_regional_rebellion(rebel_id)
 	var recognize_ok := recognized

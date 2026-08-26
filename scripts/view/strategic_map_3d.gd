@@ -134,6 +134,7 @@ var _drag_target_start := Vector3.ZERO
 var _last_day: int = -1
 var _last_ownership_revision: int = -1
 var _last_diplomacy_revision: int = -1
+var _last_diplomatic_view_nation_id: int = -2
 var _last_road_network_revision: int = -1
 var _last_trade_revision: int = -1
 var _last_naming_revision: int = -1
@@ -190,6 +191,7 @@ func setup(
 	_last_day = -1
 	_last_ownership_revision = -1
 	_last_diplomacy_revision = -1
+	_last_diplomatic_view_nation_id = -2
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
 	_boundary_topology = {}
@@ -230,12 +232,20 @@ func _process(delta: float) -> void:
 		state.ownership_revision != _last_ownership_revision
 		or state.diplomacy_revision
 			!= _last_diplomacy_revision
+		or (
+			overlay != null
+			and overlay.diplomatic_view_nation_id()
+				!= _last_diplomatic_view_nation_id
+		)
 	):
 		_update_province_visuals()
 		_update_city_instances()
 		_rebuild_nation_labels()
 		_last_ownership_revision = state.ownership_revision
 		_last_diplomacy_revision = state.diplomacy_revision
+		_last_diplomatic_view_nation_id = (
+			overlay.diplomatic_view_nation_id() if overlay != null else -1
+		)
 	if state.naming_revision != _last_naming_revision:
 		_rebuild_city_labels()
 		_rebuild_nation_labels()
@@ -794,6 +804,9 @@ func _on_terrain_ready() -> void:
 	_rebuild_nation_labels()
 	_last_ownership_revision = state.ownership_revision
 	_last_diplomacy_revision = state.diplomacy_revision
+	_last_diplomatic_view_nation_id = (
+		overlay.diplomatic_view_nation_id() if overlay != null else -1
+	)
 	_last_road_network_revision = state.road_network_revision
 	_last_trade_revision = state.trade_revision
 	_last_naming_revision = state.naming_revision
@@ -859,15 +872,26 @@ func _update_province_visuals() -> void:
 	# civil-war changes can also alter province colors. A semantic signature lets
 	# ordinary relations keep the existing GPU fill; a topology change always
 	# rebuilds it because the same city colors now occupy different pixels.
-	var political_signature := MapRenderer.political_fill_signature(state)
+	var view_nation_id := (
+		overlay.diplomatic_view_nation_id() if overlay != null else -1
+	)
+	var political_signature := MapRenderer.political_fill_signature(
+		state, view_nation_id
+	)
 	var loyalty_signature := (
 		MapRenderer.loyalty_fill_signature(state)
-		if _map_mode == MapRenderer.MapMode.LOYALTY
+		if (
+			_map_mode == MapRenderer.MapMode.LOYALTY
+			and view_nation_id < 0
+		)
 		else PackedInt64Array()
 	)
 	var fill_signature := (
 		loyalty_signature
-		if _map_mode == MapRenderer.MapMode.LOYALTY
+		if (
+			_map_mode == MapRenderer.MapMode.LOYALTY
+			and view_nation_id < 0
+		)
 		else political_signature
 	)
 	var rebuild_fill := (
@@ -878,8 +902,13 @@ func _update_province_visuals() -> void:
 	if rebuild_fill:
 		var fill_source := (
 			MapRenderer.build_loyalty_overlay_image(state)
-			if _map_mode == MapRenderer.MapMode.LOYALTY
-			else MapRenderer.build_province_overlay_image(state)
+			if (
+				_map_mode == MapRenderer.MapMode.LOYALTY
+				and view_nation_id < 0
+			)
+			else MapRenderer.build_province_overlay_image(
+				state, view_nation_id
+			)
 		)
 		var canvas := MapRenderer.build_political_canvas_images(
 			state, geometry, false, fill_source
@@ -887,7 +916,10 @@ func _update_province_visuals() -> void:
 		var image: Image = canvas["terrain_fill"]
 		if image != null and not image.is_empty():
 			_province_texture = ImageTexture.create_from_image(image)
-			if _map_mode == MapRenderer.MapMode.LOYALTY:
+			if (
+				_map_mode == MapRenderer.MapMode.LOYALTY
+				and view_nation_id < 0
+			):
 				_loyalty_texture = _province_texture
 			_terrain.set_province_texture(_province_texture)
 			_political_fill_signature = fill_signature
@@ -908,13 +940,13 @@ func _update_province_visuals() -> void:
 		)
 	if topology_changed or rebuild_fill or _country_boundary_texture == null:
 		var country_boundary_image := MapRenderer.build_country_boundary_image(
-			state, geometry, true
+			state, geometry, true, view_nation_id
 		)
 		_country_boundary_texture = ImageTexture.create_from_image(
 			country_boundary_image
 		)
 		var country_color_image := MapRenderer.build_country_color_image(
-			state, true
+			state, true, view_nation_id
 		)
 		_country_color_texture = ImageTexture.create_from_image(
 			country_color_image
@@ -2503,7 +2535,39 @@ func _pick_map_feature(screen_position: Vector2) -> void:
 	):
 		overlay.select_edge(best_edge.city_a, best_edge.city_b)
 		return
-	overlay.clear_map_selection()
+	var map_position := _screen_to_map_position(screen_position)
+	var nation_id := MapRenderer.nation_at_map_position(state, map_position)
+	if nation_id >= 0:
+		overlay.select_nation(nation_id)
+	else:
+		overlay.clear_map_selection()
+
+
+## 由相机射线迭代求与高度场的交点。先落到海平面，再按该 UV 的地形高度
+## 修正数次，足以用于国家疆域拾取且不依赖额外物理碰撞体。
+func _screen_to_map_position(screen_position: Vector2) -> Vector2:
+	if _camera == null or _terrain == null:
+		return Vector2(-1.0, -1.0)
+	var ray_origin := _camera.project_ray_origin(screen_position)
+	var ray_direction := _camera.project_ray_normal(screen_position)
+	if absf(ray_direction.y) <= 0.000001:
+		return Vector2(-1.0, -1.0)
+	var target_height := 0.0
+	var map_position := Vector2(-1.0, -1.0)
+	for _iteration in range(4):
+		var distance := (target_height - ray_origin.y) / ray_direction.y
+		if distance < 0.0:
+			return Vector2(-1.0, -1.0)
+		map_position = _terrain.world_to_map(
+			ray_origin + ray_direction * distance
+		)
+		if (
+			map_position.x < 0.0 or map_position.x >= 1.0
+			or map_position.y < 0.0 or map_position.y >= 1.0
+		):
+			return Vector2(-1.0, -1.0)
+		target_height = _terrain.height_at_map_position(map_position)
+	return map_position
 
 
 func _battle_map_position(battle: Battle) -> Vector2:

@@ -3580,8 +3580,12 @@ func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 	return true
 
 
-## 首都失陷后，战败国立即退出全部战争。首都之外不再免费割让领土；
-## 只有战争中已经实际占领的城市会在集团议和中确认法理。
+const CAPITAL_CAPTURE_TRANSFER_HOPS: int = 2
+
+
+## 首都失陷后，以首都为中心沿可通行道路两跳内、仍由战败国实控的城市
+## 一并转为胜方实控与法理，然后战败国立即退出全部战争。范围转移使用
+## 单笔领土事务，避免逐城迁都、粮仓与存亡状态在半成品之间反复变化。
 func _resolve_capital_capture_capitulation(
 	surrendering: int,
 	victor: int,
@@ -3595,27 +3599,36 @@ func _resolve_capital_capture_capitulation(
 		or surrendering == victor
 	):
 		return [] as Array[int]
-	var confirmed: Array[int] = []
-	# 首都本身已经被军队实际攻陷，是强制投降协议中唯一直接确认的战果。
-	# 必须先于普通集团和平确认，否则“断联临时占领恢复”会把深入敌境的
-	# 首都误当成普通飞地还给败方。其余未实际占领城市一律不免费割让。
-	var confirmation := {"ok": false, "changed": false}
 	if (
-		captured_capital_id >= 0
-		and captured_capital_id < state.cities.size()
-		and state.cities[captured_capital_id].owner_nation == victor
+		captured_capital_id < 0
+		or captured_capital_id >= state.cities.size()
+		or state.cities[captured_capital_id].owner_nation != surrendering
 	):
-		confirmation = state.transfer_city_sovereignty(
-			captured_capital_id,
-			victor,
-			"capital_capture_capitulation"
-		)
+		return [] as Array[int]
+	var transfer_ids := _capital_capture_transfer_city_ids(
+		surrendering, captured_capital_id
+	)
+	var operations: Array[Dictionary] = []
+	for city_id in transfer_ids:
+		operations.append({
+			"city_id": city_id,
+			"controller_id": victor,
+			"legal_owner_id": victor,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"reason": "capital_capture_capitulation",
+			"stock_policy": (
+				GameState.TerritoryStockDisposition.CAPTURE_SPOILS
+				if city_id == captured_capital_id
+				else GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			),
+		})
+	var confirmation := state.apply_territory_transaction(operations)
 	if not bool(confirmation.get("ok", false)):
-		return confirmed
-	if (
-		bool(confirmation.get("changed", false))
-	):
-		confirmed.append(captured_capital_id)
+		return [] as Array[int]
+	var confirmed: Array[int] = []
+	for city_value in confirmation.get("changed_city_ids", []):
+		confirmed.append(int(city_value))
 	var opponents := _war_opponents_including_eliminated(
 		surrendering
 	)
@@ -3636,6 +3649,44 @@ func _resolve_capital_capture_capitulation(
 			),
 		})
 	return confirmed
+
+
+func _capital_capture_transfer_city_ids(
+	surrendering: int,
+	captured_capital_id: int
+) -> Array[int]:
+	var result: Array[int] = []
+	if (
+		captured_capital_id < 0
+		or captured_capital_id >= state.cities.size()
+	):
+		return result
+	var distances := {captured_capital_id: 0}
+	var queue: Array[int] = [captured_capital_id]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		var distance := int(distances[current])
+		if state.cities[current].owner_nation == surrendering:
+			result.append(current)
+		if distance >= CAPITAL_CAPTURE_TRANSFER_HOPS:
+			continue
+		var neighbors: Array[int] = state.neighbors(current).duplicate()
+		neighbors.sort()
+		for neighbor in neighbors:
+			if distances.has(neighbor):
+				continue
+			var edge := state.edge_of(current, neighbor)
+			if (
+				edge == null
+				or edge.max_manpower <= 0
+			):
+				continue
+			distances[neighbor] = distance + 1
+			queue.append(neighbor)
+	result.sort()
+	return result
 
 
 func _war_opponents_including_eliminated(nation_id: int) -> Array[int]:
@@ -4163,6 +4214,10 @@ func _plan_coalition_peace(
 		for member_b in bloc_b:
 			if not state.is_enemy(member_a, member_b):
 				continue
+			# 地方叛军与母国至少交战一年；集团其他战争仍可各自议和，
+			# 但不得把这条受保护的战争边顺带结算掉。
+			if state.regional_rebellion_peace_locked(member_a, member_b):
+				continue
 			# 宗藩对的关系态由宗藩机制独占管理，普通联盟议和不得触碰（与退盟/议和
 			# 收集器层的 is_suzerainty_pair 门控同源）。内战宗藩对（civil_war=true →
 			# 关系 WAR）尤其危险：宗主与内战藩王可能分属对立集团，bloc 展开会把这对
@@ -4547,8 +4602,12 @@ func _plan_coalition_occupation_recognition(
 			or occupying_side == recognized_side
 		):
 			continue
-		var recipient := _planned_external_territory_recipient(
-			controller, draft
+		# 占领控制权已经在军队跨入敌境时按实际出发领土冻结。和平
+		# 只确认当前 controller 的法理，不再把藩王成果二次上收到宗主。
+		var recipient := (
+			controller
+			if _coalition_plan_nation_has_city(draft, controller)
+			else _planned_external_territory_recipient(controller, draft)
 		)
 		if recipient < 0:
 			continue
@@ -14603,11 +14662,7 @@ func _capture_city(
 	var old_owner := city.owner_nation
 	var claimant := _occupation_claimant_for_army(army, city)
 	if owner_override >= 0:
-		claimant = (
-			owner_override
-			if state.recognized_owner_of(city.id) == owner_override
-			else state.external_territory_recipient(owner_override)
-		)
+		claimant = owner_override
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
 	var civil_war_capital_capture := (
@@ -14623,13 +14678,14 @@ func _capture_city(
 	var occupation_sponsor := (
 		-1
 		if state.recognized_owner_of(city.id) == claimant
-		else state.external_territory_recipient(army.owner_nation)
+		else army.owner_nation
 	)
 	# 首都身份和 revision 都冻结在攻城前快照。削藩内战的首都通吃必须把
 	# 正在失守的首都与败方其余领土放进同一笔兼并事务；一旦兼并被拒绝，
 	# 不得降级成普通占领或普通投降。
 	var expected_ownership_revision := state.ownership_revision
 	var territory_changed := false
+	var captured_city_ids: Array[int] = [city.id]
 	if civil_war_capital_capture:
 		if not state.annex_nation(
 			claimant,
@@ -14646,6 +14702,14 @@ func _capture_city(
 			claimant, claimant_was_rebel_vassal
 		)
 		territory_changed = true
+	elif captured_capital and not state.is_vassal(old_owner):
+		var capital_transfers := _resolve_capital_capture_capitulation(
+			old_owner, claimant, city.id
+		)
+		if capital_transfers.is_empty():
+			return
+		captured_city_ids = capital_transfers
+		territory_changed = true
 	else:
 		var capture_result := state.transfer_city_control(
 			city.id,
@@ -14657,10 +14721,14 @@ func _capture_city(
 		if not bool(capture_result.get("ok", false)):
 			return
 		territory_changed = bool(capture_result.get("changed", false))
-	# 普通占领只重塑局部边境：旧主、占领者和该城相邻势力下一日提前重算。
+	# 占领只重塑局部边境：旧主、占领者和每座易主城的相邻势力下一日
+	# 提前重算。首都两跳批量转移必须逐城标脏，不能只刷新首都邻域。
 	# 全局外交/宗藩重构仍使用 _ai_last_decision_day=-1。
 	if territory_changed:
-		_force_ai_replan_for_capture(old_owner, claimant, city.id)
+		for captured_city_id in captured_city_ids:
+			_force_ai_replan_for_capture(
+				old_owner, claimant, captured_city_id
+			)
 	if territory_changed and claimant != old_owner:
 		city.fort_strength_max = maxi(
 			city.fort_strength_max,
@@ -14673,10 +14741,14 @@ func _capture_city(
 		)
 	# 城市易主后，所有不再拥有通行权且尚未离开城市节点的军队都必须撤退。
 	# 覆盖 IDLE/RECOVERING、容量阻塞的 MOVING/RETREATING 以及残留 FIGHTING 状态。
+	var captured_city_set := {}
+	for captured_city_id in captured_city_ids:
+		captured_city_set[captured_city_id] = true
 	for displaced in state.armies:
 		if displaced == army or displaced.size <= 0:
 			continue
-		if not displaced.is_at_city_node(city.id):
+		var displaced_city_id := displaced.current_city_node()
+		if not captured_city_set.has(displaced_city_id):
 			continue
 		if state.has_military_access(
 			displaced.owner_nation,
@@ -14685,8 +14757,8 @@ func _capture_city(
 			continue
 		_start_morale_retreat_from_city(
 			displaced,
-			city.id,
-			city.id
+			displaced_city_id,
+			displaced_city_id
 		)
 	var captor_can_remain := state.has_military_access(
 		army.owner_nation,
@@ -14712,14 +14784,7 @@ func _capture_city(
 		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。
 		if civil_war_capital_capture:
 			pass
-		elif not state.is_vassal(old_owner):
-			# 首都失陷通吃投降只适用于宗主级/独立主权国。藩王首都被占仅丢该城，
-			# 其宗藩纽带的悬空/继承由每日 prune_dead_suzerainty 结算，不整国投降割地。
-			_resolve_capital_capture_capitulation(
-				old_owner,
-				claimant,
-				city.id
-			)
+		# 普通主权国的两跳领土转移与投降已在上面的原子占领分支完成。
 		# 和平藩王不整国投降；原子领土事务已同步处理迁都、共享粮仓
 		# 与派生状态。若已经失去最后一城，日末再清理其宗藩记录。
 	if execute_post_capture_plan and captor_can_remain:
@@ -14976,9 +15041,7 @@ func _occupation_claimant_for_army(
 			army.occupation_claimant_nation
 		).is_empty()
 	):
-		return state.external_territory_recipient(
-			army.occupation_claimant_nation
-		)
+		return army.occupation_claimant_nation
 	var origin_city := army.move_from
 	if origin_city < 0 or origin_city >= state.cities.size():
 		origin_city = army.location_city
@@ -14991,8 +15054,8 @@ func _occupation_claimant_for_army(
 				origin_owner
 			)
 		):
-			return state.external_territory_recipient(origin_owner)
-	return state.external_territory_recipient(army.owner_nation)
+			return origin_owner
+	return army.owner_nation
 
 # ------------------------------------------------------------------ 6. 战争状态刷新
 

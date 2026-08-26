@@ -11,7 +11,18 @@ func _init() -> void:
 
 func _run() -> void:
 	root.size = Vector2i(1280, 720)
-	var packed := load("res://main.tscn") as PackedScene
+	var scene_path := OS.get_environment("WW_FRONTEND_SCENE")
+	if scene_path.is_empty():
+		scene_path = "res://main.tscn"
+	var expected_nation_count := int(OS.get_environment(
+		"WW_EXPECTED_NATION_COUNT"
+	))
+	if expected_nation_count <= 0:
+		expected_nation_count = GameState.NATION_COUNT
+	var expect_random_start := (
+		OS.get_environment("WW_EXPECT_RANDOM_START") == "1"
+	)
+	var packed := load(scene_path) as PackedScene
 	var main := packed.instantiate()
 	root.add_child(main)
 	var simulation := main.get_node("Simulation") as Simulation
@@ -75,6 +86,15 @@ func _run() -> void:
 					== expected_renderer_modes[index]
 			)
 	var checks := {
+		"nation_count": main.state.nations.size() == expected_nation_count,
+		"random_start": (
+			not expect_random_start
+			or (
+				bool(main.get("randomize_world_seed_on_start"))
+				and int(main.get("_seed")) == main.state.world_seed
+				and int(main.get("_seed")) != int(main.get("world_seed"))
+			)
+		),
 		"map_visible": map_3d.visible,
 		"overlay_hud_only": not renderer.world_layer_visible,
 		"settings_button": settings_button != null,
@@ -114,7 +134,9 @@ func _run() -> void:
 	print(
 		"FRONTEND_SCENE_OK settings=1 road=1 modes=",
 		map_modes.get_child_count(),
+		" nations=", main.state.nations.size(),
 		" cities=", main.state.cities.size(),
+		" seed=", main.state.world_seed,
 		" output=", output
 	)
 	main.free()

@@ -410,6 +410,13 @@ func _run() -> void:
 	)
 	map_3d._pick_map_feature(city_screen_position)
 	map_3d._update_selection_marker()
+	var diplomatic_view_from_city := (
+		overlay.diplomatic_view_nation_id()
+			== state.cities[0].owner_nation
+		and map_3d._screen_to_map_position(city_screen_position).distance_to(
+			state.cities[0].map_position
+		) < 0.01
+	)
 	var selected_edge: Edge = null
 	for edge in state.edges:
 		if MapRenderer.is_edge_visible(edge):
@@ -663,7 +670,9 @@ func _run() -> void:
 			and is_equal_approx(material_far_coast, 1.0)
 			and is_equal_approx(material_far_country, 1.0)
 		),
-		"selection": map_3d._selection.visible,
+		"selection": (
+			map_3d._selection.visible and diplomatic_view_from_city
+		),
 		"edge_selection": selected_edge != null and map_3d._edge_selection.mesh != null,
 		"capitals": map_3d._capital_rings.multimesh != null and map_3d._capital_rings.multimesh.instance_count == state.nations.size(),
 	}

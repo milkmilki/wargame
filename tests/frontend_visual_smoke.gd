@@ -19,6 +19,15 @@ func _mesh_vertex_count(mesh: ArrayMesh) -> int:
 	).size()
 
 
+func _color_near(actual: Color, expected: Color, tolerance: float = 0.01) -> bool:
+	return (
+		absf(actual.r - expected.r) <= tolerance
+		and absf(actual.g - expected.g) <= tolerance
+		and absf(actual.b - expected.b) <= tolerance
+		and absf(actual.a - expected.a) <= tolerance
+	)
+
+
 func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	var state := GameState.new()
@@ -40,6 +49,22 @@ func _run() -> void:
 		state.cities[frontier.city_a].owner_nation,
 		frontier.city_b, [frontier.city_a], 1, 30
 	)
+	# 固定四类外交关系，验证选中国家后 2D/3D 共用红绿灰黑视角。
+	for relation_a in range(state.nations.size()):
+		for relation_b in range(relation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				relation_a, relation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
+	state.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.ALLIED)
+	state.suzerainty[3] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
 	var battle := state.new_battle(Battle.Kind.FIELD)
 	battle.edge = frontier
 	battle.contact_dist_a = float(frontier.distance) * 0.5
@@ -468,6 +493,41 @@ func _run() -> void:
 	var boundary_saturation_scale: bool = is_equal_approx(
 		MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE, 1.35
 	)
+	overlay.select_nation(0)
+	map_3d._process(0.0)
+	var diplomatic_fill := MapRenderer.build_province_overlay_image(state, 0)
+	var diplomatic_colors_valid := true
+	for nation_id in range(4):
+		var sample_city := state.cities_of(nation_id)[0]
+		var sample_pixel := Vector2i(
+			clampi(int(floor(
+				sample_city.map_position.x * state.province_map_size.x
+			)), 0, state.province_map_size.x - 1),
+			clampi(int(floor(
+				sample_city.map_position.y * state.province_map_size.y
+			)), 0, state.province_map_size.y - 1)
+		)
+		diplomatic_colors_valid = diplomatic_colors_valid and (
+			_color_near(
+				diplomatic_fill.get_pixelv(sample_pixel),
+				MapRenderer.political_map_color_for_view(
+					state, nation_id, 0
+				)
+			)
+		)
+	var diplomatic_view_contract := (
+		overlay.diplomatic_view_nation_id() == 0
+		and map_3d._last_diplomatic_view_nation_id == 0
+		and diplomatic_colors_valid
+		and MapRenderer.political_map_color_for_view(state, 1, 0)
+			.is_equal_approx(MapRenderer.DIPLOMACY_ENEMY_COLOR)
+		and MapRenderer.political_map_color_for_view(state, 2, 0)
+			.is_equal_approx(MapRenderer.DIPLOMACY_ALLY_COLOR)
+		and MapRenderer.political_map_color_for_view(state, 3, 0)
+			.is_equal_approx(MapRenderer.DIPLOMACY_VASSAL_COLOR)
+	)
+	overlay.clear_map_selection()
+	map_3d._process(0.0)
 	var boundary_aa: bool = is_zero_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX)
 	var boundary_texture_bound: bool = (
 		terrain_material.get_shader_parameter(
@@ -701,6 +761,7 @@ func _run() -> void:
 				)
 			)
 		),
+		"diplomatic_view_contract": diplomatic_view_contract,
 		"terrain_light_contract": (
 			map_3d.has_method("set_vertical_terrain_light_strength")
 			and is_equal_approx(

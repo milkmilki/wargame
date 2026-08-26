@@ -14,6 +14,8 @@ const LOYALTY_REBEL: float = 25.0
 
 const REBELLION_PROGRESS_MONTHS: int = 3
 const REBELLION_COOLDOWN_DAYS: int = 720
+## 地方叛军建国后，母国与叛军至少交战一个游戏年，不能刚起兵便议和。
+const REGIONAL_REBELLION_MIN_WAR_DAYS: int = 360
 
 const FOREIGN_RULE_PENALTY: float = 45.0
 const CAPITAL_BONUS: float = 10.0

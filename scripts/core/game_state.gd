@@ -215,7 +215,8 @@ func generate_world(
 	nation_count: int = NATION_COUNT,
 	terrain_city_count: int = TERRAIN_CITY_COUNT,
 	city_mask_path: String = DEFAULT_CITY_MASK_PATH,
-	density_settings: Dictionary = {}
+	density_settings: Dictionary = {},
+	map_generation_seed: int = 0
 ) -> void:
 	assert(
 		nation_count > 0
@@ -238,7 +239,9 @@ func generate_world(
 		terrain_map_path(),
 		terrain_city_count,
 		city_generation_mask_path,
-		city_density_settings
+		city_density_settings,
+		map_generation_seed,
+		nation_count
 	)
 	_generate_terrain_cities(terrain)
 	_assign_balanced_nations()
@@ -269,10 +272,6 @@ func generate_world(
 	assert(
 		land_cities().size() == terrain_city_count,
 		"正式地图陆地城市数应为 %d" % terrain_city_count
-	)
-	assert(
-		cities.size() > terrain_city_count,
-		"正式地图应生成河运码头"
 	)
 	assert(
 		edges.size() >= terrain_city_count - 1,
@@ -1797,8 +1796,6 @@ func _repair_initial_nation_connectivity() -> void:
 			"初始国%d领土必须经合法交通图连通"
 				% nation.id
 		)
-
-
 func _reopen_initial_component_connector(
 	component: Array, owner_nation: int
 ) -> bool:
@@ -2749,6 +2746,14 @@ func set_diplomatic_relation(
 	var previous := relation_between(nation_a, nation_b)
 	if previous == relation:
 		return false
+	# 地方叛乱是有最低持续时间的政治战争。把门禁放在关系真源，
+	# 避免 AI 之外的脚本或调试入口绕过一年交战期直接改成和平/盟约。
+	if (
+		previous == DiplomaticRelation.WAR
+		and relation != DiplomaticRelation.WAR
+		and regional_rebellion_peace_locked(nation_a, nation_b)
+	):
+		return false
 	diplomatic_relations[key] = relation
 	diplomatic_since_day[key] = day
 	if previous == DiplomaticRelation.WAR and relation != DiplomaticRelation.WAR:
@@ -2766,6 +2771,53 @@ func wars_of(nation_id: int) -> Array[int]:
 		if other.id != nation_id and other.alive and is_enemy(nation_id, other.id):
 			result.append(other.id)
 	return result
+
+
+## rebel_id 对应的地方叛乱母国；不是地方叛军时返回 -1。记录在叛乱结束后
+## 仍保留，因此可供长期的母国敌视与历史解释使用。
+func regional_rebellion_parent(rebel_id: int) -> int:
+	if not rebellions.has(rebel_id):
+		return -1
+	return int((rebellions[rebel_id] as Dictionary).get("parent_id", -1))
+
+
+func is_regional_rebellion_pair(nation_a: int, nation_b: int) -> bool:
+	return (
+		regional_rebellion_parent(nation_a) == nation_b
+		or regional_rebellion_parent(nation_b) == nation_a
+	)
+
+
+## 活跃且双方仍存续的母国—地方叛军，在起兵后 360 天内不得结束战争。
+## 旧档若缺 started_day，则以当前战争关系的起始日作为兼容回退。
+func regional_rebellion_peace_locked(nation_a: int, nation_b: int) -> bool:
+	var rebel_id := -1
+	var parent_id := -1
+	if regional_rebellion_parent(nation_a) == nation_b:
+		rebel_id = nation_a
+		parent_id = nation_b
+	elif regional_rebellion_parent(nation_b) == nation_a:
+		rebel_id = nation_b
+		parent_id = nation_a
+	if (
+		rebel_id < 0
+		or parent_id < 0
+		or rebel_id >= nations.size()
+		or parent_id >= nations.size()
+		or not nations[rebel_id].alive
+		or not nations[parent_id].alive
+	):
+		return false
+	var record: Dictionary = rebellions[rebel_id]
+	if not bool(record.get("active", false)):
+		return false
+	var started_day := int(record.get(
+		"started_day", relation_since(parent_id, rebel_id)
+	))
+	return (
+		day - started_day
+			< RebellionSystem.REGIONAL_REBELLION_MIN_WAR_DAYS
+	)
 
 
 func allies_of(nation_id: int) -> Array[int]:
@@ -2964,7 +3016,7 @@ func start_civil_war(subject_id: int) -> bool:
 		cities[capital_id].food_storage += withdrawn_food
 		refresh_derived()
 	# 4. 起兵资本：反叛方首都凭空动员火星兵（满编主战军团）。
-	_spawn_civil_war_uprising_armies(subject_id)
+	_spawn_rebellion_uprising_armies(subject_id)
 	nations[subject_id].last_rebellion_day = day
 	nations[overlord_id].last_rebellion_day = day
 	return true
@@ -2972,7 +3024,8 @@ func start_civil_war(subject_id: int) -> bool:
 
 ## 地方叛乱事务：把同一亲叛政治目标的连续低忠诚城市转成新的反叛国。
 ## 实控先转给叛军，法理仍留在母国；只有未来和平承认才改变 recognized owner。
-## 资源、人力和驻军均从当地/母国守恒划转，不复用削藩的满编“火星兵”。
+## 资源、人力和驻军从当地/母国守恒划转，并额外按削藩内战同一公式在首都
+## 动员满编“火星兵”，让新生叛军具备实际作战能力。
 func start_regional_rebellion(
 	parent_id: int,
 	city_ids: Array[int]
@@ -3028,7 +3081,9 @@ func start_regional_rebellion(
 	var food_pool_output_before := _food_pool_food_output(food_holder_before)
 	var rebel := Nation.new()
 	rebel.id = nations.size()
-	rebel.color = _derive_vassal_color(parent.color, rebel.id)
+	# 地方叛军是独立政治实体，从全局色环选择与现存国家区分度最大的颜色，
+	# 不沿用母国色，也不走藩王的宗主派生色。
+	rebel.color = _derive_independent_nation_color(rebel.id)
 	rebel.alive = true
 	rebel.political_system = parent.political_system
 	rebel.ai_aggression = 1.0
@@ -3136,6 +3191,9 @@ func start_regional_rebellion(
 		if uprising != null:
 			rebel.manpower_pool -= INITIAL_LIGHT_ARMY_SIZE
 			_initialize_army_attributes(uprising)
+	# 与削藩内战共用同一火星军口径：ceil(0.1 × 叛军陆城数) 个满编
+	# MAIN 战团。它是叛乱政治事件的额外动员，不替代当地驻军倒戈。
+	_spawn_rebellion_uprising_armies(rebel.id)
 	rebellions[rebel.id] = {
 		"parent_id": parent_id,
 		"started_day": day,
@@ -3293,6 +3351,9 @@ func recognize_regional_rebellion(rebel_id: int) -> bool:
 	var record: Dictionary = rebellions[rebel_id]
 	if not bool(record.get("active", false)):
 		return false
+	var parent_id := int(record.get("parent_id", -1))
+	if regional_rebellion_peace_locked(parent_id, rebel_id):
+		return false
 	var operations: Array[Dictionary] = []
 	for city_value in record.get("core_city_ids", []):
 		var city_id := int(city_value)
@@ -3375,6 +3436,8 @@ func prune_rebellions() -> bool:
 ## 地方叛乱战争在双方停战时结算：叛军仍持有任一核心城市即获得承认，
 ## 否则视为被镇压。削藩内战不进入此表，继续由原首都通吃规则处理。
 func resolve_rebellion_peace(nation_a: int, nation_b: int) -> bool:
+	if regional_rebellion_peace_locked(nation_a, nation_b):
+		return false
 	var rebel_id := -1
 	for candidate in [nation_a, nation_b]:
 		if (
@@ -3443,10 +3506,10 @@ func _food_pool_stock(holder_id: int) -> int:
 
 ## 反叛方脱离共享粮仓、自成一池：在其首都建独立粮仓，从原持有者粮仓扣除 share 并注入。
 ## 守恒：先从原持有者粮仓（按占比）扣，再存入反叛方首都，粮食总量不变。
-## 削藩内战起兵：反叛方首都凭空动员 ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
+## 叛乱起兵：反叛方首都凭空动员 ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
 ## 每个军团为一支满编重军（INITIAL_HEAVY_ARMY_SIZE、MAIN 角色），独立成团。起兵是离散
 ## 政治事件，属性沿用 _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
-func _spawn_civil_war_uprising_armies(rebel_id: int) -> void:
+func _spawn_rebellion_uprising_armies(rebel_id: int) -> void:
 	if rebel_id < 0 or rebel_id >= nations.size():
 		return
 	var capital_id := nations[rebel_id].capital_city_id
@@ -3480,7 +3543,7 @@ func _spawn_uprising_army(nation_id: int, city_id: int) -> Army:
 
 
 ## 凭空动员一支指定编制/角色的满编军队（不扣人力/金钱、不受军队数上限约束）。
-## 用于分封赐军（LINE）与削藩起兵火星兵（MAIN）等离散政治动员事件的单一真源。
+## 用于分封赐军（LINE）与叛乱起兵火星兵（MAIN）等离散政治动员事件的单一真源。
 func _spawn_conjured_army(
 	nation_id: int,
 	city_id: int,
@@ -4582,6 +4645,35 @@ func _derive_vassal_color(overlord_color: Color, subject_id: int) -> Color:
 	)
 
 
+## 为运行时新生的独立国家选择颜色。候选均来自固定色环，选择与所有现存
+## 存活国家 hue 的最小环距最大者；平局由 world_seed 与 id 决定的起点稳定打破。
+## 该算法不接收母国颜色，因此不会把地方叛军误画成母国或藩王的派生色。
+func _derive_independent_nation_color(nation_id: int) -> Color:
+	const CANDIDATE_COUNT: int = 72
+	var start := posmod(world_seed + nation_id * 17, CANDIDATE_COUNT)
+	var best_hue := 0.0
+	var best_distance := -1.0
+	for offset in range(CANDIDATE_COUNT):
+		var candidate_index := (start + offset) % CANDIDATE_COUNT
+		var candidate_hue := float(candidate_index) / float(CANDIDATE_COUNT)
+		var nearest_distance := 0.5
+		for existing in nations:
+			if not existing.alive:
+				continue
+			var direct_distance := absf(candidate_hue - existing.color.h)
+			nearest_distance = minf(
+				nearest_distance, minf(direct_distance, 1.0 - direct_distance)
+			)
+		if nearest_distance > best_distance + 0.000001:
+			best_distance = nearest_distance
+			best_hue = candidate_hue
+	return normalize_nation_color(Color.from_hsv(
+		best_hue,
+		0.42 + float(nation_id % 3) * 0.05,
+		0.40 + float(nation_id % 4) * 0.03
+	))
+
+
 ## 军队是否静止驻扎在 nation_id 的领土内（可安全整体转隶）。
 ## 只认已停在城节点且处于静止态的军队；行军/战斗/边上驻防/撤退一律不迁移，
 ## 以免破坏 battle、边通行占用与撤退路线的连续性。
@@ -5339,6 +5431,20 @@ func apply_territory_transaction(
 				"error": "外交操作包含无效国家、关系或停战期。",
 				"changed_city_ids": [] as Array[int],
 			}
+		if (
+			relation != DiplomaticRelation.WAR
+			and relation_between(nation_a, nation_b)
+				== DiplomaticRelation.WAR
+			and regional_rebellion_peace_locked(nation_a, nation_b)
+		):
+			return {
+				"ok": false, "changed": false,
+				"territory_changed": false,
+				"political_changed": false,
+				"diplomacy_changed": false,
+				"error": "地方叛乱战争尚未满一年。",
+				"changed_city_ids": [] as Array[int],
+			}
 		var key := _diplomacy_key(nation_a, nation_b)
 		if explicit_relations.has(key):
 			return {
@@ -5836,9 +5942,9 @@ func recognize_coalition_occupied_territory(
 			or occupying_side == recognized_side
 		):
 			continue
-		var recipient := external_territory_recipient(
-			city.owner_nation
-		)
+		# 占领时已经冻结并写入实际控制者；和平只确认该控制者的
+		# 法理，不能把藩王或盟友取得的战果重新上收到宗主。
+		var recipient := city.owner_nation
 		if recipient < 0:
 			continue
 		operations.append({

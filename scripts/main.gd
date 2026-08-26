@@ -10,6 +10,9 @@ extends Node
 	GameState.TERRAIN_CITY_COUNT
 )
 @export var world_seed: int = 12345
+## 场景启动时忽略固定 world_seed，使用新的随机种子生成地图与国家。
+## 专项大地图场景开启；默认场景与测试保持可复现。
+@export var randomize_world_seed_on_start: bool = false
 @export_range(
 	MapRenderer.ARMY_ICON_SCALE_MIN,
 	MapRenderer.ARMY_ICON_SCALE_MAX,
@@ -65,8 +68,17 @@ func _ready() -> void:
 		_setup_road_tuning()
 	if map_editor_panel != null:
 		_setup_map_editor()
-	_seed = world_seed
+	_seed = _random_startup_seed() if randomize_world_seed_on_start else world_seed
 	_start_new_game(_seed)
+
+
+func _random_startup_seed() -> int:
+	var startup_rng := RandomNumberGenerator.new()
+	startup_rng.randomize()
+	var generated_seed := int(startup_rng.randi())
+	# 即使极小概率撞上场景里配置的回退种子，也要保证随机场景不会
+	# 表现得像仍在读取那张固定地图。
+	return generated_seed + 1 if generated_seed == world_seed else generated_seed
 
 
 func _setup_display_settings() -> void:
@@ -387,7 +399,8 @@ func _start_new_game(world_seed: int) -> void:
 			nation_count,
 			terrain_city_count,
 			_city_generation_mask_path,
-			_city_density_settings
+			_city_density_settings,
+			world_seed if randomize_world_seed_on_start else 0
 		)
 	_activate_state(next_state)
 

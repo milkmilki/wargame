@@ -62,6 +62,10 @@ const TRADE_FLOW_SPEED_PX: float = 34.0
 const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
 const LOYALTY_MID_COLOR := Color(0.92, 0.68, 0.12, 1.0)
 const LOYALTY_HIGH_COLOR := Color(0.12, 0.58, 0.24, 1.0)
+const DIPLOMACY_ENEMY_COLOR := Color(0.72, 0.08, 0.06, 1.0)
+const DIPLOMACY_ALLY_COLOR := Color(0.10, 0.56, 0.20, 1.0)
+const DIPLOMACY_VASSAL_COLOR := Color(0.42, 0.42, 0.42, 1.0)
+const DIPLOMACY_NEUTRAL_COLOR := Color(0.0, 0.0, 0.0, 1.0)
 ## 政治边界统一使用纯色实线。省界是纯黑 1px；国界的两条国家色描边分别
 ## 内缩到各自领土，因此同一国界能同时表达两侧国家。
 const LOCAL_BOUNDARY_INK := Color(0.0, 0.0, 0.0, 1.0)
@@ -137,6 +141,10 @@ var _selected_city_id: int = -1
 var _selected_edge_a: int = -1
 var _selected_edge_b: int = -1
 var _selected_nation_id: int = -1
+## 与详情选择解耦的外交观察方。点城市仍显示城市详情，同时以其所属国
+## 重绘整张地图；点道路不会丢失视角，右键/空白海面才清除。
+var _diplomatic_view_nation_id: int = -1
+var _province_visual_view_nation_id: int = -2
 var _nation_stats_open: bool = false
 var _nation_stats_window_position := Vector2(-1.0, -1.0)
 var _nation_stats_drag_active: bool = false
@@ -216,6 +224,8 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_selected_edge_a = -1
 	_selected_edge_b = -1
 	_selected_nation_id = -1
+	_diplomatic_view_nation_id = -1
+	_province_visual_view_nation_id = -2
 	_map_zoom = MAP_ZOOM_MIN
 	_map_pan = Vector2.ZERO
 	_map_drag_active = false
@@ -550,6 +560,10 @@ func select_city(city_id: int) -> void:
 	_selected_edge_a = -1
 	_selected_edge_b = -1
 	_selected_nation_id = -1
+	var next_view := -1
+	if state != null and city_id >= 0 and city_id < state.cities.size():
+		next_view = state.cities[city_id].owner_nation
+	_set_diplomatic_view_nation(next_view)
 	queue_redraw()
 
 
@@ -570,6 +584,7 @@ func select_nation(nation_id: int) -> void:
 		if state != null and nation_id >= 0 and nation_id < state.nations.size()
 		else -1
 	)
+	_set_diplomatic_view_nation(_selected_nation_id)
 	queue_redraw()
 
 
@@ -587,6 +602,28 @@ func selected_edge_pair() -> Vector2i:
 
 func selected_nation_id() -> int:
 	return _selected_nation_id
+
+
+func diplomatic_view_nation_id() -> int:
+	return _diplomatic_view_nation_id
+
+
+func _set_diplomatic_view_nation(nation_id: int) -> void:
+	var normalized := (
+		nation_id
+		if (
+			state != null
+			and nation_id >= 0
+			and nation_id < state.nations.size()
+			and state.nations[nation_id].alive
+		)
+		else -1
+	)
+	if normalized == _diplomatic_view_nation_id:
+		return
+	_diplomatic_view_nation_id = normalized
+	_province_visual_view_nation_id = -2
+	_political_fill_signature = PackedInt64Array()
 
 
 func world_input_blocked(point: Vector2) -> bool:
@@ -957,11 +994,7 @@ func _pick_map_feature(point: Vector2) -> void:
 		CITY_PICK_RADIUS * _display_scale
 	)
 	if city_id >= 0:
-		_selected_city_id = city_id
-		_selected_edge_a = -1
-		_selected_edge_b = -1
-		_selected_nation_id = -1
-		queue_redraw()
+		select_city(city_id)
 		get_viewport().set_input_as_handled()
 		return
 	var edge := pick_edge_at_pixel(
@@ -971,15 +1004,16 @@ func _pick_map_feature(point: Vector2) -> void:
 		_map_size,
 		EDGE_PICK_TOLERANCE * _display_scale
 	)
-	_selected_city_id = -1
-	_selected_nation_id = -1
-	if edge == null:
-		_selected_edge_a = -1
-		_selected_edge_b = -1
+	if edge != null:
+		select_edge(edge.city_a, edge.city_b)
+		return
+	var nation_id := nation_at_map_position(
+		state, (point - _origin) / _map_size
+	)
+	if nation_id >= 0:
+		select_nation(nation_id)
 	else:
-		_selected_edge_a = edge.city_a
-		_selected_edge_b = edge.city_b
-	queue_redraw()
+		_clear_selection()
 
 
 func _set_map_zoom_at(value: float, anchor: Vector2) -> void:
@@ -1016,6 +1050,7 @@ func _clear_selection() -> void:
 	_selected_edge_a = -1
 	_selected_edge_b = -1
 	_selected_nation_id = -1
+	_set_diplomatic_view_nation(-1)
 	queue_redraw()
 
 
@@ -1847,6 +1882,10 @@ func _ensure_province_visual_cache() -> void:
 		or ownership_changed
 		or _province_diplomacy_revision != state.diplomacy_revision
 		or _province_visual_mode != _map_mode
+		or (
+			_province_visual_view_nation_id
+				!= _diplomatic_view_nation_id
+		)
 		or loyalty_changed
 	)
 	if not visual_revision_changed:
@@ -1867,14 +1906,18 @@ func _ensure_province_visual_cache() -> void:
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
-	var fill_signature := political_fill_signature(state)
+	var fill_signature := political_fill_signature(
+		state, _diplomatic_view_nation_id
+	)
 	var fill_changed := (
 		topology_changed
 		or _province_texture == null
 		or fill_signature != _political_fill_signature
 	)
 	if fill_changed:
-		var fill_source := build_province_overlay_image(state)
+		var fill_source := build_province_overlay_image(
+			state, _diplomatic_view_nation_id
+		)
 		var canvas := build_political_canvas_images(
 			state, geometry, false, fill_source
 		)
@@ -1905,6 +1948,7 @@ func _ensure_province_visual_cache() -> void:
 	_province_ownership_revision = state.ownership_revision
 	_province_diplomacy_revision = state.diplomacy_revision
 	_province_visual_mode = _map_mode
+	_province_visual_view_nation_id = _diplomatic_view_nation_id
 	_province_loyalty_day = state.day
 
 
@@ -1957,7 +2001,10 @@ func _rebuild_political_base_texture(political_image: Image) -> void:
 	_political_ocean_texture = ImageTexture.create_from_image(ocean_image)
 
 
-static func build_province_overlay_image(game_state: GameState) -> Image:
+static func build_province_overlay_image(
+	game_state: GameState,
+	view_nation_id: int = -1
+) -> Image:
 	var size := game_state.province_map_size
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
 	image.fill(Color.TRANSPARENT)
@@ -1975,13 +2022,20 @@ static func build_province_overlay_image(game_state: GameState) -> Image:
 		var recognized_owner := game_state.recognized_owner_of(city_id)
 		if recognized_owner < 0:
 			recognized_owner = current_owner
-		var base := political_map_color(game_state, recognized_owner)
+		# 外交视角回答“谁实际控制这片疆域、与观察国是什么关系”，
+		# 因而不以法理底色加占领斜线稀释红/绿/灰/黑分类。
+		var display_owner := (
+			current_owner if view_nation_id >= 0 else recognized_owner
+		)
+		var base := political_map_color_for_view(
+			game_state, display_owner, view_nation_id
+		)
 		base.a = 1.0
 		province_colors[city_id] = base
-		if current_owner != recognized_owner:
-			var occupation := GameState.normalize_nation_color(
-				political_map_color(game_state, current_owner).darkened(0.08)
-			)
+		if view_nation_id < 0 and current_owner != recognized_owner:
+			var occupation := political_map_color_for_view(
+				game_state, current_owner, view_nation_id
+			).darkened(0.08)
 			occupation.a = 1.0
 			occupation_colors[city_id] = occupation
 			occupied[city_id] = 1
@@ -2040,23 +2094,29 @@ static func loyalty_fill_signature(game_state: GameState) -> PackedInt64Array:
 ## 256x256 source image merely to discover that an alliance/war revision did
 ## not change any province color. Province topology is tracked separately.
 static func political_fill_signature(
-	game_state: GameState
+	game_state: GameState,
+	view_nation_id: int = -1
 ) -> PackedInt64Array:
 	var signature := PackedInt64Array()
-	signature.resize(game_state.cities.size() * 4)
+	signature.resize(game_state.cities.size() * 4 + 1)
+	signature[0] = view_nation_id
 	for city_id in range(game_state.cities.size()):
 		var current_owner := game_state.cities[city_id].owner_nation
 		var recognized_owner := game_state.recognized_owner_of(city_id)
 		if recognized_owner < 0:
 			recognized_owner = current_owner
-		var offset := city_id * 4
+		var offset := city_id * 4 + 1
 		signature[offset] = current_owner
 		signature[offset + 1] = recognized_owner
 		signature[offset + 2] = int(
-			political_map_color(game_state, recognized_owner).to_rgba32()
+			political_map_color_for_view(
+				game_state, recognized_owner, view_nation_id
+			).to_rgba32()
 		)
 		signature[offset + 3] = int(
-			political_map_color(game_state, current_owner).to_rgba32()
+			political_map_color_for_view(
+				game_state, current_owner, view_nation_id
+			).to_rgba32()
 		)
 	return signature
 
@@ -2173,7 +2233,8 @@ static func build_soft_boundary_images(
 
 static func build_country_color_image(
 	game_state: GameState,
-	extend_to_real_coast: bool = false
+	extend_to_real_coast: bool = false,
+	view_nation_id: int = -1
 ) -> Image:
 	var source_size := game_state.province_map_size
 	var source := Image.create(
@@ -2187,7 +2248,10 @@ static func build_country_color_image(
 			if province_id < 0 or province_id >= game_state.cities.size():
 				continue
 			var owner_id := game_state.cities[province_id].owner_nation
-			source.set_pixel(x, y, nation_boundary_color(game_state, owner_id))
+			source.set_pixel(
+				x, y,
+				nation_boundary_color(game_state, owner_id, view_nation_id)
+			)
 	var result := (
 		_extend_nearest_country_color(source, 3)
 		if extend_to_real_coast
@@ -2251,7 +2315,8 @@ static func _extend_nearest_country_color(
 static func build_country_boundary_image(
 	game_state: GameState,
 	boundary_geometry: Dictionary = {},
-	include_coast: bool = false
+	include_coast: bool = false,
+	view_nation_id: int = -1
 ) -> Image:
 	var geometry := boundary_geometry
 	if geometry.is_empty():
@@ -2278,7 +2343,7 @@ static func build_country_boundary_image(
 		geometry.get("country_owner_b", PackedInt32Array()),
 		geometry.get("country_side_a", PackedVector2Array()),
 		geometry.get("country_side_b", PackedVector2Array()),
-		closest_distance_key, closest_owner
+		closest_distance_key, closest_owner, view_nation_id
 	)
 	if include_coast:
 		_rasterize_owned_boundary_sides(
@@ -2288,7 +2353,7 @@ static func build_country_boundary_image(
 			PackedInt32Array(),
 			geometry.get("coast_side", PackedVector2Array()),
 			PackedVector2Array(),
-			closest_distance_key, closest_owner
+			closest_distance_key, closest_owner, view_nation_id
 		)
 	return country
 
@@ -2302,7 +2367,8 @@ static func _rasterize_owned_boundary_sides(
 	side_a: PackedVector2Array,
 	side_b: PackedVector2Array,
 	closest_distance_key: PackedInt32Array = PackedInt32Array(),
-	closest_owner: PackedInt32Array = PackedInt32Array()
+	closest_owner: PackedInt32Array = PackedInt32Array(),
+	view_nation_id: int = -1
 ) -> void:
 	var segment_count := segments.size() / 2
 	if segment_count <= 0:
@@ -2325,12 +2391,14 @@ static func _rasterize_owned_boundary_sides(
 		if index < owner_a.size() and index < side_a.size():
 			_rasterize_owned_boundary_side(
 				image, game_state, from, to, owner_a[index],
-				side_a[index], closest_distance_key, closest_owner
+				side_a[index], closest_distance_key, closest_owner,
+				view_nation_id
 			)
 		if index < owner_b.size() and index < side_b.size():
 			_rasterize_owned_boundary_side(
 				image, game_state, from, to, owner_b[index],
-				side_b[index], closest_distance_key, closest_owner
+				side_b[index], closest_distance_key, closest_owner,
+				view_nation_id
 			)
 
 
@@ -2342,7 +2410,8 @@ static func _rasterize_owned_boundary_side(
 	owner_id: int,
 	side_vector: Vector2,
 	closest_distance_key: PackedInt32Array,
-	closest_owner: PackedInt32Array
+	closest_owner: PackedInt32Array,
+	view_nation_id: int = -1
 ) -> void:
 	var direction := (to - from).normalized()
 	if direction.length_squared() <= 0.000001:
@@ -2350,7 +2419,9 @@ static func _rasterize_owned_boundary_side(
 	var normal := Vector2(-direction.y, direction.x)
 	if side_vector.dot(normal) < 0.0:
 		normal = -normal
-	var color := nation_boundary_color(game_state, owner_id)
+	var color := nation_boundary_color(
+		game_state, owner_id, view_nation_id
+	)
 	var segment_length := from.distance_to(to)
 	var step_count := maxi(int(ceil(segment_length / 0.34)), 1)
 	var outer_width := COUNTRY_BOUNDARY_WIDTH_PX + BOUNDARY_ANTIALIAS_PX
@@ -2492,7 +2563,8 @@ static func paper_nation_color(color: Color) -> Color:
 ## 国家边界保持国家自身 hue，但改成更鲜艳、更亮的纯色实线。
 static func nation_boundary_color(
 	game_state: GameState,
-	nation_id: int
+	nation_id: int,
+	view_nation_id: int = -1
 ) -> Color:
 	if (
 		game_state == null
@@ -2500,7 +2572,15 @@ static func nation_boundary_color(
 		or nation_id >= game_state.nations.size()
 	):
 		return Color.TRANSPARENT
-	var base := paper_nation_color(game_state.nations[nation_id].color)
+	var base := political_map_color_for_view(
+		game_state, nation_id, view_nation_id
+	)
+	if (
+		view_nation_id >= 0
+		and view_nation_id < game_state.nations.size()
+		and game_state.nations[view_nation_id].alive
+	):
+		return base
 	return Color.from_hsv(
 		base.h,
 		clampf(maxf(base.s, 0.72) * COUNTRY_BOUNDARY_SATURATION_SCALE, 0.0, 1.0),
@@ -2551,6 +2631,87 @@ static func political_map_color(
 		clampf(result.v * (1.0 - accumulated_darken), 0.24, GameState.NATION_COLOR_VALUE_MAX),
 		result.a
 	)
+
+
+## 外交视角的领土分类色。观察国保留自身阵营色；其他国家按战争、
+## 本国宗藩体系、盟友、中立依次映射为红、灰、绿、黑。
+static func political_map_color_for_view(
+	game_state: GameState,
+	nation_id: int,
+	view_nation_id: int = -1
+) -> Color:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return Color(0.45, 0.45, 0.43)
+	if (
+		view_nation_id < 0
+		or view_nation_id >= game_state.nations.size()
+		or not game_state.nations[view_nation_id].alive
+	):
+		return political_map_color(game_state, nation_id)
+	if nation_id == view_nation_id:
+		return political_map_color(game_state, nation_id)
+	if game_state.is_enemy(view_nation_id, nation_id):
+		return DIPLOMACY_ENEMY_COLOR
+	if _is_peaceful_subject_of(game_state, nation_id, view_nation_id):
+		return DIPLOMACY_VASSAL_COLOR
+	if game_state.is_allied(view_nation_id, nation_id):
+		return DIPLOMACY_ALLY_COLOR
+	return DIPLOMACY_NEUTRAL_COLOR
+
+
+static func _is_peaceful_subject_of(
+	game_state: GameState,
+	candidate_id: int,
+	view_nation_id: int
+) -> bool:
+	var current := candidate_id
+	var guard := game_state.nations.size()
+	while game_state.is_vassal(current) and guard > 0:
+		if game_state.is_in_civil_war(current):
+			return false
+		current = game_state.overlord_of(current)
+		if current == view_nation_id:
+			return true
+		guard -= 1
+	return false
+
+
+## 将地图归一化坐标解析为省份的当前实控国家；海面与越界点返回 -1。
+static func nation_at_map_position(
+	game_state: GameState,
+	map_position: Vector2
+) -> int:
+	if (
+		game_state == null
+		or game_state.province_map_size.x <= 0
+		or game_state.province_map_size.y <= 0
+		or game_state.province_ids.is_empty()
+		or map_position.x < 0.0
+		or map_position.x >= 1.0
+		or map_position.y < 0.0
+		or map_position.y >= 1.0
+	):
+		return -1
+	var pixel := Vector2i(
+		clampi(
+			int(floor(map_position.x * game_state.province_map_size.x)),
+			0, game_state.province_map_size.x - 1
+		),
+		clampi(
+			int(floor(map_position.y * game_state.province_map_size.y)),
+			0, game_state.province_map_size.y - 1
+		)
+	)
+	var province_id := game_state.province_ids[
+		pixel.y * game_state.province_map_size.x + pixel.x
+	]
+	if province_id < 0 or province_id >= game_state.cities.size():
+		return -1
+	return game_state.cities[province_id].owner_nation
 
 
 ## Counters and offensive arrows need a denser ink than the broad political
@@ -3531,7 +3692,10 @@ func _draw_province_fills() -> void:
 	draw_texture_rect(
 		(
 			_loyalty_texture
-			if _map_mode == MapMode.LOYALTY
+			if (
+				_map_mode == MapMode.LOYALTY
+				and _diplomatic_view_nation_id < 0
+			)
 			else _political_texture
 		),
 		Rect2(_origin, _map_size),
@@ -3611,7 +3775,9 @@ func _draw_owned_boundary_sides_2d(
 		if side_vectors[index].dot(normal) < 0.0:
 			normal = -normal
 		var offset := normal * (COUNTRY_BOUNDARY_WIDTH_PX * 0.5)
-		var color := nation_boundary_color(state, owners[index])
+		var color := nation_boundary_color(
+			state, owners[index], _diplomatic_view_nation_id
+		)
 		draw_line(
 			from + offset, to + offset,
 			color,

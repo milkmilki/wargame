@@ -922,6 +922,34 @@ func _test_world_generation() -> void:
 		GameState.terrain_map_path(),
 		GameState.TERRAIN_CITY_COUNT
 	)
+	var seeded_geometry_a := TerrainMapGenerator.build(
+		GameState.terrain_map_path(),
+		GameState.TERRAIN_CITY_COUNT,
+		GameState.DEFAULT_CITY_MASK_PATH,
+		{},
+		71001
+	)
+	var seeded_geometry_b := TerrainMapGenerator.build(
+		GameState.terrain_map_path(),
+		GameState.TERRAIN_CITY_COUNT,
+		GameState.DEFAULT_CITY_MASK_PATH,
+		{},
+		71002
+	)
+	var seeded_geometry_a_repeat := TerrainMapGenerator.build(
+		GameState.terrain_map_path(),
+		GameState.TERRAIN_CITY_COUNT,
+		GameState.DEFAULT_CITY_MASK_PATH,
+		{},
+		71001
+	)
+	_check(
+		seeded_geometry_a["positions"]
+			== seeded_geometry_a_repeat["positions"]
+			and seeded_geometry_a["positions"]
+				!= seeded_geometry_b["positions"],
+		"程序化地图必须同种子可复现、不同种子生成不同城市与省界布局"
+	)
 	var terrain_bounds: Rect2i = terrain_geometry["bounds"]
 	var province_ids_valid := (
 		gs.province_map_size.x > 0
@@ -1398,12 +1426,17 @@ func _test_world_generation() -> void:
 		ResourceLoader.exists("res://forty_nations.tscn"),
 		"40国可玩场景 forty_nations.tscn 必须存在"
 	)
-	var forty_scene := (
-		load("res://forty_nations.tscn") as PackedScene
-	).instantiate()
+	var forty_packed := load("res://forty_nations.tscn") as PackedScene
+	var forty_scene := forty_packed.instantiate()
 	_check(
 		int(forty_scene.get("nation_count")) == 40
 			and int(forty_scene.get("terrain_city_count")) == 160
+			and bool(forty_scene.get("randomize_world_seed_on_start"))
+			and forty_scene.get_node_or_null("StrategicMap3D") != null
+			and forty_scene.get_node_or_null("RoadTuningLayer") != null
+			and forty_scene.get_node_or_null("MapEditorLayer") != null
+			and forty_scene.get_node_or_null("SettingsLayer/SettingsButton")
+				!= null
 			and _approx(
 				float(forty_scene.get("initial_army_icon_scale")),
 				0.40
@@ -1411,7 +1444,7 @@ func _test_world_generation() -> void:
 			and not bool(
 				forty_scene.get("initial_city_names_visible")
 			),
-		"40国场景必须配置40国、160陆城，并使用低密度初始地图显示"
+		"40国场景必须继承完整主界面、配置40国/160陆城并在启动时随机生成"
 	)
 	forty_scene.free()
 	# 每国只有首都一个粮仓；本国全部陆城初始储备归集到该粮仓。
@@ -1685,13 +1718,6 @@ func _test_river_transport() -> void:
 				and not gs.river_paths.is_empty(),
 		"正式地图必须生成两条各有有效码头连接的主河道"
 	)
-	_check(
-		docks.size() >= TerrainMapGenerator.RIVER_COUNT * 2
-			and docks.size()
-				<= TerrainMapGenerator.RIVER_COUNT
-					* TerrainMapGenerator.BOUNDARY_RIVER_DOCK_MAX_PER_RIVER,
-		"省界河流应按河长生成适量码头，当前=%d" % docks.size()
-	)
 	var minimum_dock_spacing := INF
 	var minimum_dock_city_spacing := INF
 	for dock_a_index in range(docks.size()):
@@ -1745,6 +1771,41 @@ func _test_river_transport() -> void:
 	var generated := TerrainMapGenerator.build(
 		GameState.terrain_map_path(), GameState.TERRAIN_CITY_COUNT,
 		gs.city_generation_mask_path, gs.city_density_settings
+	)
+	var bank_region_count := (
+		generated.get("dock_bank_regions", []) as Array
+	).size()
+	_check(
+		docks.size() >= int(ceil(float(bank_region_count) * 0.75))
+			and docks.size() <= bank_region_count,
+		"渡口数量应接近单侧沿河省份数，不能退化成逐河段密集港口：%d/%d"
+			% [docks.size(), bank_region_count]
+	)
+	var all_lowland_candidates_covered := true
+	for candidate_value in generated.get(
+		"lowland_dock_regions", []
+	):
+		var candidate: Dictionary = candidate_value
+		var covered := false
+		for dock_value in generated.get("docks", []):
+			var dock: Dictionary = dock_value
+			if int(dock["river_id"]) != int(candidate["river_id"]):
+				continue
+			covered = (
+				TerrainMapGenerator.metric_length_between(
+					candidate["position"], dock["position"],
+					gs.map_aspect_ratio
+				) < TerrainMapGenerator.RIVER_DOCK_MIN_SPACING
+				or candidate["position"] == dock["position"]
+			)
+			if covered:
+				break
+		if not covered:
+			all_lowland_candidates_covered = false
+			break
+	_check(
+		all_lowland_candidates_covered,
+		"每个低海拔沿河省份区域都必须生成渡口或被最小间距内的渡口覆盖"
 	)
 	var docks_per_river := {}
 	var dock_banks_valid := true
@@ -2448,6 +2509,51 @@ func _test_responsive_map_layout() -> void:
 	)
 	var hit_state := GameState.new()
 	hit_state.generate_grid_world(12346)
+	for relation_a in range(hit_state.nations.size()):
+		for relation_b in range(relation_a + 1, hit_state.nations.size()):
+			hit_state.set_diplomatic_relation(
+				relation_a, relation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	hit_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	hit_state.set_diplomatic_relation(
+		0, 2, GameState.DiplomaticRelation.ALLIED
+	)
+	hit_state.set_diplomatic_relation(
+		0, 3, GameState.DiplomaticRelation.ALLIED
+	)
+	hit_state.suzerainty[3] = {
+		"overlord_id": 0,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	_check(
+		MapRenderer.political_map_color_for_view(hit_state, 1, 0)
+			.is_equal_approx(MapRenderer.DIPLOMACY_ENEMY_COLOR)
+			and MapRenderer.political_map_color_for_view(hit_state, 2, 0)
+				.is_equal_approx(MapRenderer.DIPLOMACY_ALLY_COLOR)
+			and MapRenderer.political_map_color_for_view(hit_state, 3, 0)
+				.is_equal_approx(MapRenderer.DIPLOMACY_VASSAL_COLOR)
+			and MapRenderer.political_map_color_for_view(hit_state, 0, 1)
+				.is_equal_approx(MapRenderer.DIPLOMACY_ENEMY_COLOR)
+			and MapRenderer.political_map_color_for_view(hit_state, 3, 2)
+				.is_equal_approx(MapRenderer.DIPLOMACY_NEUTRAL_COLOR),
+		"外交视角必须把敌国/盟友/直属藩王/中立国映射为红/绿/灰/黑"
+	)
+	var hit_city := hit_state.cities[0]
+	_check(
+		MapRenderer.nation_at_map_position(
+			hit_state, hit_city.map_position
+		) == hit_city.owner_nation
+			and MapRenderer.nation_at_map_position(
+				hit_state, Vector2(-0.1, 0.5)
+			) == -1,
+		"地图国土拾取必须返回当前实控国，并拒绝地图外坐标"
+	)
 	var list_state := GameState.new()
 	list_state.generate_grid_world(12347)
 	list_state.nations[3].alive = false
@@ -2512,19 +2618,27 @@ func _test_responsive_map_layout() -> void:
 	var nation_selection_renderer := MapRenderer.new()
 	nation_selection_renderer.state = list_state
 	nation_selection_renderer.select_city(0)
+	var city_view_selected := (
+		nation_selection_renderer.selected_city_id() == 0
+		and nation_selection_renderer.diplomatic_view_nation_id()
+			== list_state.cities[0].owner_nation
+	)
 	nation_selection_renderer.select_edge(0, 1)
 	nation_selection_renderer.select_nation(0)
 	var valid_nation_selected := (
 		nation_selection_renderer.selected_nation_id() == 0
+		and nation_selection_renderer.diplomatic_view_nation_id() == 0
 		and nation_selection_renderer.selected_city_id() == -1
 		and nation_selection_renderer.selected_edge_pair()
 			== Vector2i(-1, -1)
 	)
 	nation_selection_renderer.select_nation(999)
 	_check(
-		valid_nation_selected
-		and nation_selection_renderer.selected_nation_id() == -1,
-		"选择国家必须清除城市/道路选择，并拒绝越界国家ID"
+		city_view_selected
+		and valid_nation_selected
+		and nation_selection_renderer.selected_nation_id() == -1
+		and nation_selection_renderer.diplomatic_view_nation_id() == -1,
+		"点击城市或国家必须进入所属国外交视角，非法国家ID必须清除视角"
 	)
 	nation_selection_renderer.free()
 	list_state.suzerainty[2] = {
@@ -7568,7 +7682,7 @@ func _test_atomic_territory_transactions() -> void:
 
 
 func _test_capital_capture_capitulation() -> void:
-	print("[26c] 首都失陷：仅确认实际攻陷城市、立即投降、不免费割地")
+	print("[26c] 首都失陷：两跳范围归胜方、范围外保留、立即投降")
 	var surrender_state := GameState.new()
 	surrender_state.generate_grid_world(6365)
 	surrender_state.armies.clear()
@@ -7620,6 +7734,10 @@ func _test_capital_capture_capitulation() -> void:
 	capital_captor.location_city = 0
 	capital_captor.move_from = 0
 	surrender_state.armies.append(capital_captor)
+	var expected_capital_transfers := (
+		surrender_sim._capital_capture_transfer_city_ids(1, 1)
+	)
+	var capital_capture_revision_before := surrender_state.ownership_revision
 	surrender_sim._capture_city(
 		capital_captor,
 		surrender_state.cities[1]
@@ -7632,16 +7750,21 @@ func _test_capital_capture_capitulation() -> void:
 		and surrender_state.cities[1].rebellion_cooldown_until_day
 			> surrender_state.day
 	)
-	var unoccupied_cities_retained := true
-	for retained_city in [2, 3, 4]:
-		unoccupied_cities_retained = (
-			unoccupied_cities_retained
-			and surrender_state.cities[retained_city].owner_nation == 1
-			and surrender_state.recognized_owner_of(retained_city) == 1
+	var two_hop_cities_transferred := true
+	for transferred_city in [1, 2, 3]:
+		two_hop_cities_transferred = (
+			two_hop_cities_transferred
+			and surrender_state.cities[transferred_city].owner_nation == 0
+			and surrender_state.recognized_owner_of(transferred_city) == 0
 			and surrender_state.cities[
-				retained_city
+				transferred_city
 			].occupation_sponsor_nation == -1
 		)
+	var outside_city_retained := (
+		surrender_state.cities[4].owner_nation == 1
+		and surrender_state.recognized_owner_of(4) == 1
+		and surrender_state.cities[4].occupation_sponsor_nation == -1
+	)
 	var capital_surrender_recorded := (
 		not surrender_state.diplomatic_history.is_empty()
 		and int(
@@ -7652,11 +7775,19 @@ func _test_capital_capture_capitulation() -> void:
 		) == 1
 	)
 	_check(
-		captured_capital_transferred and unoccupied_cities_retained,
+		captured_capital_transferred
+			and two_hop_cities_transferred
+			and outside_city_retained,
 		(
-			"首都1失陷后只允许确认实际攻陷的城1；"
-			+ "未被军队占领的城2/3/4必须全部保留给战败国"
+			"首都1失陷后城1/2/3须归胜方；"
+			+ "距首都三跳的城4必须保留给战败国"
 		)
+	)
+	_check(
+		expected_capital_transfers == ([1, 2, 3] as Array[int])
+			and surrender_state.ownership_revision
+				== capital_capture_revision_before + 1,
+		"首都两跳城市必须一次原子事务提交，范围为 [1,2,3]"
 	)
 	_check(
 		not surrender_state.is_enemy(0, 1)
@@ -7666,7 +7797,7 @@ func _test_capital_capture_capitulation() -> void:
 		"首都失陷当日必须直接结束战争并记录战败国投降"
 	)
 	_check(
-		surrender_state.nations[1].capital_city_id in [2, 3, 4]
+		surrender_state.nations[1].capital_city_id == 4
 			and surrender_state.cities[
 				surrender_state.nations[1].capital_city_id
 			].owner_nation == 1
@@ -7676,7 +7807,7 @@ func _test_capital_capture_capitulation() -> void:
 			and surrender_state.cities[
 				surrender_state.nations[1].capital_city_id
 			].has_warehouse,
-		"战败国应迁都到城2/3/4中的其余合法领土并继续存续"
+		"战败国应迁都到两跳范围外的城4并继续存续"
 	)
 	# 被实际攻陷的首都已永久确认并进入冷却，后续忠诚月不能把它当作
 	# 和平期临时占领，重新“恢复”给旧法理国。
@@ -7711,17 +7842,22 @@ func _test_capital_capture_capitulation() -> void:
 		and surrender_state.recognized_owner_of(1) == 0
 		and surrender_state.cities[1].loyalty_target_nation == 0
 	)
-	for retained_city in [2, 3, 4]:
+	for transferred_city in [2, 3]:
 		permanent_cession_held = (
 			permanent_cession_held
-			and surrender_state.cities[retained_city].owner_nation == 1
-			and surrender_state.recognized_owner_of(retained_city) == 1
+			and surrender_state.cities[transferred_city].owner_nation == 0
+			and surrender_state.recognized_owner_of(transferred_city) == 0
 		)
+	permanent_cession_held = (
+		permanent_cession_held
+		and surrender_state.cities[4].owner_nation == 1
+		and surrender_state.recognized_owner_of(4) == 1
+	)
 	_check(
 		permanent_cession_held
 			and not surrender_state.is_enemy(0, 1)
 			and surrender_state.territory_structure_valid(),
-		"实际攻陷首都永久确认后推进三个忠诚月不得和平归还，且未占领城市仍属旧国"
+		"首都两跳割让永久确认后推进三个忠诚月不得和平归还，范围外城市仍属旧国"
 	)
 	surrender_sim.free()
 
@@ -17237,6 +17373,9 @@ func _test_alliance_war_coalitions() -> void:
 	var statistics_rebel := statistics_state.start_regional_rebellion(
 		0, [statistics_city_id] as Array[int]
 	)
+	statistics_state.day += (
+		RebellionSystem.REGIONAL_REBELLION_MIN_WAR_DAYS
+	)
 	var statistics_sim := Simulation.new()
 	statistics_sim.setup(statistics_state)
 	var statistics_plan := statistics_sim._plan_coalition_peace(
@@ -17320,12 +17459,14 @@ func _test_alliance_war_coalitions() -> void:
 	var nested_core_two := nested_state.land_cities_of(1)[0].id
 	nested_state.rebellions[1] = {
 		"parent_id": 0,
+		"started_day": 0,
 		"core_city_ids": [nested_core_one] as Array[int],
 		"recognized": false,
 		"active": true,
 	}
 	nested_state.rebellions[2] = {
 		"parent_id": 1,
+		"started_day": 0,
 		"core_city_ids": [nested_core_two] as Array[int],
 		"recognized": false,
 		"active": true,
@@ -17333,6 +17474,7 @@ func _test_alliance_war_coalitions() -> void:
 	nested_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	nested_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
 	nested_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
+	nested_state.day = RebellionSystem.REGIONAL_REBELLION_MIN_WAR_DAYS
 	var nested_sim := Simulation.new()
 	nested_sim.setup(nested_state)
 	var nested_owners: Array[int] = []
@@ -17421,6 +17563,9 @@ func _test_alliance_war_coalitions() -> void:
 				rebel_side,
 				GameState.DiplomaticRelation.WAR
 			)
+	rebellion_peace_state.day += (
+		RebellionSystem.REGIONAL_REBELLION_MIN_WAR_DAYS
+	)
 	var rebellion_peace_sim := Simulation.new()
 	rebellion_peace_sim.setup(rebellion_peace_state)
 	var representative_peace := rebellion_peace_sim._make_coalition_peace(
@@ -20325,7 +20470,7 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 # ------------------------------------------------------------------ 32i4b. 对外领土主权接收者
 
 func _test_external_territory_sovereignty() -> void:
-	print("[32i4b] 对外领土：藩王参战但战果归宗主，法理收复仍归原藩王")
+	print("[32i4b] 对外领土：藩王与盟友出发地决定战果，法理收复仍归原藩王")
 	var gs := GameState.new()
 	gs.generate_grid_world(51003)
 	gs.armies.clear()
@@ -20361,28 +20506,55 @@ func _test_external_territory_sovereignty() -> void:
 				attacker, defender, GameState.DiplomaticRelation.WAR
 			)
 	gs.refresh_derived()
-	var targets: Array[City] = []
+	var subject_origin: City = null
+	var subject_target: City = null
+	for border_edge in gs.edges:
+		var border_a := gs.cities[border_edge.city_a]
+		var border_b := gs.cities[border_edge.city_b]
+		if border_a.owner_nation == 1 and border_b.owner_nation == 3:
+			subject_origin = border_a
+			subject_target = border_b
+			border_edge.max_manpower = Edge.STANDARD_MANPOWER
+			break
+		if border_b.owner_nation == 1 and border_a.owner_nation == 3:
+			subject_origin = border_b
+			subject_target = border_a
+			border_edge.max_manpower = Edge.STANDARD_MANPOWER
+			break
+	var second_target: City = null
 	for city in gs.land_cities_of(3):
-		if not city.is_capital and not city.has_warehouse:
-			targets.append(city)
-			if targets.size() >= 2:
-				break
-	_check(targets.size() == 2, "跨宗藩领土测试必须找到两个普通敌方藩王城市")
+		if city != subject_target and not city.is_capital and not city.has_warehouse:
+			second_target = city
+			break
+	_check(
+		subject_origin != null and subject_target != null and second_target != null,
+		"跨宗藩领土测试必须找到藩王到敌方藩王的真实边界及第二座普通城"
+	)
 	var sim := Simulation.new()
 	sim.setup(gs)
-	# A 藩王亲自攻下 B 藩王城市：实控归 A 宗主，B 藩王法理暂时保留。
-	var subject_army := _make_army(12991, 1, 5000, 10, 10)
-	subject_army.location_city = targets[0].id
-	subject_army.move_from = targets[0].id
+	# A 宗主军从自己的藩王领土出发攻下 B 藩王城市：实控归提供
+	# 进攻出发地的 A 藩王，B 藩王法理暂时保留，sponsor 仍是实际交战军。
+	var subject_army := _make_army(12991, 0, 5000, 10, 10)
+	subject_army.location_city = subject_origin.id
+	subject_army.move_from = subject_origin.id
+	subject_army.state = Army.State.MOVING
+	subject_army.path = [subject_target.id] as Array[int]
 	gs.armies.append(subject_army)
-	sim._capture_city(subject_army, targets[0])
+	sim._begin_next_leg(subject_army)
+	var frozen_subject_claimant := subject_army.occupation_claimant_nation
+	sim._release_edge(subject_army)
+	subject_army.location_city = subject_target.id
+	subject_army.move_from = subject_target.id
+	sim._capture_city(subject_army, subject_target)
 	_check(
-		targets[0].owner_nation == 0
-			and gs.recognized_owner_of(targets[0].id) == 3
-			and targets[0].occupation_sponsor_nation == 0,
+		frozen_subject_claimant == 1
+			and subject_army.occupation_claimant_nation == -1
+			and subject_target.owner_nation == 1
+			and gs.recognized_owner_of(subject_target.id) == 3
+			and subject_target.occupation_sponsor_nation == 0,
 		(
-			"藩王攻占外国领土时实控与战争结算 sponsor 必须归宗主，"
-			+ "不能直接扩张藩王法理"
+			"宗主军从藩王领土进攻时实控必须归该藩王，"
+			+ "sponsor 保留宗主且不能把控制权上收"
 		)
 	)
 	var recognized := gs.recognize_coalition_occupied_territory(
@@ -20390,15 +20562,15 @@ func _test_external_territory_sovereignty() -> void:
 		[2, 3] as Array[int]
 	)
 	_check(
-		recognized.has(targets[0].id)
-			and targets[0].owner_nation == 0
-			and gs.recognized_owner_of(targets[0].id) == 0
-			and targets[0].occupation_sponsor_nation == -1,
-		"集团议和确认战果时，外国藩王旧地必须成为获胜宗主法理领土"
+		recognized.has(subject_target.id)
+			and subject_target.owner_nation == 1
+			and gs.recognized_owner_of(subject_target.id) == 1
+			and subject_target.occupation_sponsor_nation == -1,
+		"集团议和确认战果时，外国藩王旧地必须成为实际占领藩王的法理领土"
 	)
 
-	# 集团和平：claimant 1 控制并持有库存的粮仓上收到主权接收者 0 时，
-	# 库存必须完整进入 0 的有效粮仓，原城清仓且不再保留粮仓索引。
+	# 集团和平：claimant 1 控制并持有库存的粮仓确认给自身时，作为
+	# 和平藩王仍共享宗主 0 的粮池，库存必须完整进入根粮仓。
 	var coalition_warehouse: City = null
 	for candidate in gs.land_cities_of(2):
 		if not candidate.is_capital and not candidate.has_warehouse:
@@ -20427,8 +20599,8 @@ func _test_external_territory_sovereignty() -> void:
 			coalition_warehouse_recognized.has(
 				coalition_warehouse.id
 			)
-				and coalition_warehouse.owner_nation == 0
-				and gs.recognized_owner_of(coalition_warehouse.id) == 0
+				and coalition_warehouse.owner_nation == 1
+				and gs.recognized_owner_of(coalition_warehouse.id) == 1
 				and coalition_warehouse.occupation_sponsor_nation == -1
 				and not coalition_warehouse.has_warehouse
 				and coalition_warehouse.food_storage == 0
@@ -20438,20 +20610,20 @@ func _test_external_territory_sovereignty() -> void:
 				and coalition_recipient_warehouse.food_storage
 					== coalition_food_before + coalition_captured_food
 				and gs.territory_structure_valid(),
-			"集团和平上收 claimant 粮仓时必须完整迁移库存并清理原城粮仓状态"
+			"集团和平确认藩王 claimant 粮仓时必须完整回流共享粮池并清理原城粮仓状态"
 		)
 
 	# 宗主替本体系藩王收复其法理旧地时，法理优先，仍归原藩王。
-	gs.recognized_city_owners[targets[1].id] = 1
+	gs.recognized_city_owners[second_target.id] = 1
 	var root_army := _make_army(12992, 0, 5000, 10, 10)
-	root_army.location_city = targets[1].id
-	root_army.move_from = targets[1].id
+	root_army.location_city = second_target.id
+	root_army.move_from = second_target.id
 	gs.armies.append(root_army)
-	sim._capture_city(root_army, targets[1])
+	sim._capture_city(root_army, second_target)
 	_check(
-		targets[1].owner_nation == 1
-			and gs.recognized_owner_of(targets[1].id) == 1
-			and targets[1].occupation_sponsor_nation == -1,
+		second_target.owner_nation == 1
+			and gs.recognized_owner_of(second_target.id) == 1
+			and second_target.occupation_sponsor_nation == -1,
 		"宗主或同体系盟军收复藩王法理领土时必须归还藩王，不能上收宗主"
 	)
 	_check(gs.suzerainty_structure_valid(), "跨体系领土结算后宗藩结构必须保持合法")
@@ -20462,9 +20634,8 @@ func _test_external_territory_sovereignty() -> void:
 	)
 	sim.free()
 
-	# 宗主0/藩王1/敌2：藩王攻城时战果实控与 sponsor 都归宗主。
-	# 即使藩王随后失去全部城市、退出 1-2 战争，0-2 集团议和仍须
-	# 按存活的宗主 sponsor 把该城永久确认给0。
+	# 宗主0/藩王1/敌2：藩王攻城时战果实控与 sponsor 都归藩王。
+	# 藩王随后灭亡时，正常的死亡宗藩继承再把其法理交给宗主。
 	var departed_state := GameState.new()
 	departed_state.generate_grid_world(51005)
 	departed_state.armies.clear()
@@ -20516,10 +20687,10 @@ func _test_external_territory_sovereignty() -> void:
 		departed_state.armies.append(departed_army)
 		departed_sim._capture_city(departed_army, departed_target)
 		_check(
-			departed_target.owner_nation == 0
+			departed_target.owner_nation == 1
 				and departed_state.recognized_owner_of(departed_target.id) == 2
-				and departed_target.occupation_sponsor_nation == 0,
-			"藩王军攻下敌城后必须形成 owner=0 sponsor=0 legal=2"
+				and departed_target.occupation_sponsor_nation == 1,
+			"藩王军攻下敌城后必须形成 owner=1 sponsor=1 legal=2"
 		)
 		var subject_operations: Array[Dictionary] = []
 		for subject_city in departed_state.cities_of(1):
