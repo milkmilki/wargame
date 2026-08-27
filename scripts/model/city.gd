@@ -12,7 +12,7 @@ var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [
 var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
 var terrain_relief: float = 0.0           ## 城市周边局部最大高度差 [0,1]
 var terrain_output_multiplier: float = 1.0 ## 正式地图海拔产出倍率，Logistic 曲线从低地1降至最高地0.2
-var is_dock: bool = false                 ## 河运码头；仍复用完整城市占领/补给/经济状态
+var is_dock: bool = false                 ## 河运码头交通节点；复用占领/补给数据，但不计作行政城市
 var owner_nation: int = -1                ## 所属国家 id
 ## 当前占领归属哪一个战争结算责任方；和平确认后清空。和平宗藩的军队
 ## 对外攻城时记录其主权宗主，避免执行攻城的藩王先灭亡后丢失战果来源。
