@@ -75,7 +75,7 @@ var campaign_preparation_assignments: Dictionary = {}
 ## target_city_id -> representative battle_group_id 的兼容投影。真实的多团归属
 ## 只保存在 campaign_preparation_plan.target_to_groups，不能从此字段反推预算。
 var campaign_preparation_group_assignments: Dictionary = {}
-## 正在等待 180 天满准备的目标城集合。
+## 正在等待 120 天满准备的目标城集合。
 var campaign_full_preparation_targets: Array[int] = []
 ## 当前波次的具体战役计划：army_id -> target_city_id。
 var campaign_attack_assignments: Dictionary = {}
