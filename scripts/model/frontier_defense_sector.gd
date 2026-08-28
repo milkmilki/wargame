@@ -1,6 +1,6 @@
 class_name FrontierDefenseSector
 extends RefCounted
-## 持久边境防区。槽 0 固定为城市本体，后续槽按稳定顺序对应敌向边。
+## 持久静态边境防区。槽 0 固定为城市本体，后续槽按稳定顺序对应敌向边。
 
 enum State {
 	NORMAL,

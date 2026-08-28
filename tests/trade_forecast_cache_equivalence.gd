@@ -85,6 +85,9 @@ func _run() -> void:
 	_test_static_cross_day_hits()
 	_test_single_dependency_miss()
 	_test_war_preparation_shared_forecast()
+	_test_nation_summary_equivalence()
+	_test_runtime_probe_ignores_war_state()
+	_test_summary_runtime_equivalence()
 
 	print("=== 贸易预测缓存等价校验 (%d国/%d城/%d天) ===" % [
 		nations, cities, compared_days,
@@ -225,6 +228,145 @@ func _test_war_preparation_shared_forecast() -> void:
 		_counter_detail(sim)
 	)
 	sim.free()
+
+
+func _test_nation_summary_equivalence() -> void:
+	var sim := _make_simulation(8, 32, false)
+	var structure := TradeNetwork.build_structure(sim.state)
+	var full := TradeNetwork.settle(sim.state, structure)
+	var summary := TradeNetwork.settle_nation_summary(
+		sim.state, structure
+	)
+	for key in [
+		"nation_trade_gold", "nation_trade_tax",
+		"nation_food_import", "nation_food_export",
+		"nation_food_cost", "nation_food_sale_income",
+		"nation_manpower_import", "nation_manpower_cost",
+	]:
+		_check(
+			summary.get(key, []) == full.get(key, []),
+			"nation_summary/" + key
+		)
+	_check(
+		Simulation._monthly_gold_flows_from_trade(sim.state, summary)
+			== Simulation._monthly_gold_flows_from_trade(sim.state, full),
+		"nation_summary/monthly_gold_flows"
+	)
+	_check(
+		full.has("signature")
+			and not (full.get("routes", []) as Array).is_empty()
+			and not summary.has("signature")
+			and summary.get("routes", []) == structure.get("routes", []),
+		"nation_summary/full_result_contract_preserved"
+	)
+	sim.free()
+
+
+func _test_runtime_probe_ignores_war_state() -> void:
+	var sim := _make_simulation(4, 20, false)
+	var state := sim.state
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	var army := state.armies[0]
+	var first_edge := state.edges[0]
+	var second_edge := state.edges[1]
+	army.on_edge = true
+	army.move_from = first_edge.city_a
+	army.move_to = first_edge.city_b
+	var peaceful_first := sim._trade_structure_runtime_probe()
+	army.move_from = second_edge.city_a
+	army.move_to = second_edge.city_b
+	var peaceful_second := sim._trade_structure_runtime_probe()
+	_check(
+		peaceful_first == peaceful_second,
+		"runtime_probe/ignores_peacetime_army_movement"
+	)
+	var peaceful_forecast := sim._forecast_trade_and_gold_flows()
+	var structure_builds_before_war := sim.trade_structure_build_total
+	var forecast_builds_before_war := sim.trade_forecast_build_total
+	var probe_before_war := sim._trade_structure_runtime_probe()
+	var enemy_id := (army.owner_nation + 1) % state.nations.size()
+	state.set_diplomatic_relation(
+		army.owner_nation, enemy_id, GameState.DiplomaticRelation.WAR
+	)
+	var probe_after_war := sim._trade_structure_runtime_probe()
+	var wartime_forecast := sim._forecast_trade_and_gold_flows()
+	_check(
+		probe_after_war == probe_before_war
+			and sim.trade_structure_build_total == structure_builds_before_war
+			and sim.trade_forecast_build_total == forecast_builds_before_war + 1,
+		"runtime_probe/war_rebuilds_settlement_not_structure",
+		_counter_detail(sim)
+	)
+	_check(
+		_trade_route_geometry(wartime_forecast["trade"])
+			== _trade_route_geometry(peaceful_forecast["trade"]),
+		"runtime_probe/war_keeps_route_geometry"
+	)
+	var neutral_owner := (enemy_id + 1) % state.nations.size()
+	if neutral_owner == army.owner_nation:
+		neutral_owner = (neutral_owner + 1) % state.nations.size()
+	var neutral_army: Army = null
+	for candidate in state.armies:
+		if candidate.owner_nation == neutral_owner and candidate.size > 0:
+			neutral_army = candidate
+			break
+	var local_war_before_neutral_move := sim._trade_structure_runtime_probe()
+	if neutral_army != null:
+		neutral_army.on_edge = true
+		neutral_army.move_from = second_edge.city_a
+		neutral_army.move_to = second_edge.city_b
+	var local_war_after_neutral_move := sim._trade_structure_runtime_probe()
+	_check(
+		neutral_army != null
+			and local_war_before_neutral_move == local_war_after_neutral_move,
+		"runtime_probe/ignores_neutral_army_during_other_war"
+	)
+	var wartime_second := sim._trade_structure_runtime_probe()
+	army.move_from = first_edge.city_a
+	army.move_to = first_edge.city_b
+	var wartime_first := sim._trade_structure_runtime_probe()
+	_check(
+		wartime_first == wartime_second,
+		"runtime_probe/ignores_wartime_edge_occupancy"
+	)
+	sim.free()
+
+
+func _trade_route_geometry(trade: Dictionary) -> Array:
+	var result: Array = []
+	for route_value in trade.get("routes", []):
+		var route: Dictionary = route_value
+		result.append([
+			int(route.get("id", -1)),
+			int(route.get("nation_a", -1)),
+			int(route.get("nation_b", -1)),
+			int(route.get("status", -1)),
+			route.get("city_path", []),
+			route.get("edge_keys", []),
+			str(route.get("blocked_reason", "")),
+		])
+	return result
+
+
+func _test_summary_runtime_equivalence() -> void:
+	var full := _make_simulation(8, 32, false)
+	var summary := _make_simulation(8, 32, false)
+	full.trade_summary_forecast_disabled = true
+	for day_index in range(60):
+		full._advance_day(false)
+		summary._advance_day(false)
+		_check(
+			_state_fingerprint(full.state)
+				== _state_fingerprint(summary.state),
+			"nation_summary/runtime_day_%d" % (day_index + 1)
+		)
+	full.free()
+	summary.free()
 
 
 func _counter_detail(sim: Simulation) -> String:

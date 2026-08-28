@@ -128,6 +128,26 @@ func _test_world_generation() -> void:
 	print("[1] 世界生成不变量")
 	var gs := GameState.new()
 	gs.generate_world(12345)
+	var legacy_road_flow := {}
+	var tree_road_flow := {}
+	for edge in gs.edges:
+		var edge_key := GameState.edge_key(edge.city_a, edge.city_b)
+		legacy_road_flow[edge_key] = 0.0
+		tree_road_flow[edge_key] = 0.0
+	for road_source in range(gs.cities.size()):
+		var road_field := gs._road_dijkstra(road_source)
+		for road_goal in range(road_source + 1, gs.cities.size()):
+			gs._accumulate_road_flow(
+				road_field["prev"], road_source, road_goal,
+				legacy_road_flow, 1.0
+			)
+		gs._accumulate_road_flow_tree(
+			road_field["prev"], road_source, tree_road_flow
+		)
+	_check(
+		legacy_road_flow == tree_road_flow,
+		"所有起点的道路流量树汇总必须与逐终点路径回溯完全等价"
+	)
 	var land_cities := gs.land_cities()
 	_check(
 		land_cities.size() == GameState.TERRAIN_CITY_COUNT
@@ -2115,6 +2135,55 @@ func _test_river_transport() -> void:
 	)
 	guard_sim.free()
 
+	# 码头只是一种交通节点，不是行政城市：不能成为首都/粮仓，也不能在
+	# 最后一座陆城失守后让国家继续存活。用真实生成的码头覆盖迁都与事务路径。
+	var dock_owner := docks[0].owner_nation
+	var dock_id := docks[0].id
+	var original_capital := gs.nations[dock_owner].capital_city_id
+	gs.cities[original_capital].is_capital = false
+	gs.cities[dock_id].is_capital = true
+	gs.cities[dock_id].has_warehouse = true
+	gs.cities[dock_id].food_storage = 25
+	gs.nations[dock_owner].capital_city_id = dock_id
+	gs.nations[dock_owner].warehouse_city_ids.append(dock_id)
+	var repaired_capital := gs.ensure_valid_capital(dock_owner)
+	_check(
+		repaired_capital >= 0
+			and not gs.cities[repaired_capital].is_dock
+			and gs.cities[repaired_capital].is_capital
+			and not gs.cities[dock_id].is_capital
+			and not gs.cities[dock_id].has_warehouse
+			and not gs.nations[dock_owner].warehouse_city_ids.has(dock_id),
+		"迁都修复必须拒绝码头首都并清除码头粮仓标记"
+	)
+	var dock_recipient := (dock_owner + 1) % gs.nations.size()
+	var remove_land_operations: Array[Dictionary] = []
+	for owned_land in gs.land_cities_of(dock_owner):
+		remove_land_operations.append({
+			"city_id": owned_land.id,
+			"controller_id": dock_recipient,
+			"legal_owner_id": dock_recipient,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"stock_policy": GameState.TerritoryStockDisposition.DESTROY,
+			"reason": "dock_is_not_a_city_regression",
+		})
+	var dock_only_result := gs.apply_territory_transaction(
+		remove_land_operations
+	)
+	_check(
+		bool(dock_only_result.get("ok", false))
+			and gs.land_cities_of(dock_owner).is_empty()
+			and not gs.cities_of(dock_owner).is_empty()
+			and not gs.nations[dock_owner].alive
+			and gs.nations[dock_owner].capital_city_id == -1
+			and gs.nations[dock_owner].warehouse_city_ids.is_empty()
+			and not gs.cities[dock_id].is_capital
+			and not gs.cities[dock_id].has_warehouse
+			and gs.territory_structure_valid(),
+		"仅剩码头的势力必须按无城市灭亡，且不得保留首都或粮仓"
+	)
+
 
 func _test_responsive_map_layout() -> void:
 	print("[1b] 战略图界面：地图响应式、图标四档缩放、城市/道路可点选")
@@ -2322,10 +2391,16 @@ func _test_responsive_map_layout() -> void:
 		"军队图标滑块应按10%步长取整，并限制在10%至180%"
 	)
 	var light_counter := MapRenderer.army_counter_profile(
-		GameState.INITIAL_LIGHT_ARMY_SIZE
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		Army.StrategicRole.LINE
+	)
+	var main_light_counter := MapRenderer.army_counter_profile(
+		GameState.INITIAL_LIGHT_ARMY_SIZE,
+		Army.StrategicRole.MAIN
 	)
 	var heavy_counter := MapRenderer.army_counter_profile(
-		GameState.INITIAL_HEAVY_ARMY_SIZE
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		Army.StrategicRole.MAIN
 	)
 	_check(
 		city_names_hidden
@@ -2341,13 +2416,21 @@ func _test_responsive_map_layout() -> void:
 		"城市名称按钮必须可逆切换；无动画时应降到静态刷新频率"
 	)
 	_check(
-		int(light_counter["icon"])
-			!= int(heavy_counter["icon"])
+		not bool(light_counter["main_role"])
+			and bool(main_light_counter["main_role"])
+			and str(light_counter["role_code"]) == "线"
+			and str(main_light_counter["role_code"]) == "主"
+			and float(main_light_counter["width"])
+				> float(light_counter["width"])
+			and int(main_light_counter["marks"])
+				> int(light_counter["marks"])
+			and int(light_counter["icon"])
+				!= int(heavy_counter["icon"])
 			and float(heavy_counter["width"])
 				> float(light_counter["width"])
 			and int(light_counter["marks"]) == 1
 			and int(heavy_counter["marks"]) == 3,
-		"5000轻军与15000重军必须使用不同图标、轮廓宽度和编制标记"
+		"同为5000人时主战/填线必须使用不同角色文字、轮廓与标记，15000重军另有装甲符号"
 	)
 	var map_base_origin := Vector2(100.0, 80.0)
 	var map_base_size := Vector2(600.0, 400.0)
@@ -8350,6 +8433,25 @@ func _test_ai_strategic_map_and_threat() -> void:
 		and Simulation._ai_nation_ids_for_day(2, 3, false, stagger_interval).size() == 2,
 		"强制重算或国家数不超过周期时必须全体今天决策，退化保持镜像对称"
 	)
+	var startup_state := GameState.new()
+	startup_state.generate_world(7002, 12, 48)
+	var startup_sim := Simulation.new()
+	startup_sim.setup(startup_state)
+	startup_sim._ai_assign_targets()
+	var startup_due := Simulation._ai_nation_ids_for_day(
+		startup_state.nations.size(), startup_state.day, true,
+		Simulation.AI_DECISION_INTERVAL_DAYS, false, true
+	)
+	var startup_cached_nations := startup_sim._ai_defense_plan_cache.keys()
+	startup_cached_nations.sort()
+	startup_due.sort()
+	_check(
+		startup_cached_nations == startup_due
+			and startup_sim._ai_last_decision_day == startup_state.day,
+		"大地图首轮 AI 必须按相位错峰，不能因未初始化标记全量计算：%s/%s"
+			% [startup_cached_nations, startup_due]
+	)
+	startup_sim.free()
 	var normally_due := Simulation._ai_nation_ids_for_day(
 		40,
 		3,
@@ -8969,10 +9071,13 @@ func _test_city_defense_incremental_topology() -> void:
 		diplomacy_plan
 	)
 	_check(
-		ownership_plan.topology_rebuilt
+		(
+			ownership_plan.topology_rebuilt
+			or ownership_plan.topology_reused
+		)
 			and not state.nations[0]
 				.frontier_defense_sectors.has(9),
-		"控制区revision变化必须重建拓扑并删除失效防区"
+		"控制区变化必须删除失效防区；若前线签名等价可继续复用拓扑对象"
 	)
 
 
@@ -9389,8 +9494,10 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	}
 	var free_line_army := _make_army(943, 0, 5000, 10, 10)
 	free_line_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	heavy_guard.defensive_deployment_until_day = assignment_state.day + 90
 	_check(
-		assignment_plan.can_join_offensive(heavy_guard, 2)
+		not assignment_plan.can_join_offensive(heavy_guard, 2)
+			and assignment_plan.can_join_offensive(heavy_guard, 2, true)
 			and not assignment_plan.can_join_offensive(
 				reserve_guard,
 				2
@@ -9407,8 +9514,9 @@ func _test_ai_merge_and_retreat_utility() -> void:
 				free_line_army,
 				2
 			),
-		"正式地图攻势只能使用战团主战军，禁止临时借入任何填线军"
+		"已分配攻势的 MAIN 可覆盖普通预备队锁，任何 LINE 均不得进入正式攻势"
 	)
+	heavy_guard.defensive_deployment_until_day = -1
 	assignment_plan.assigned_armies_by_city[1] = [
 		reserve_guard.id,
 	]
@@ -9444,6 +9552,10 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	priority_plan.threat = ThreatField.build(priority_view)
 	var priority_slots := priority_plan._build_role_defense_slots()
 	priority_plan._assign_role_based_defense()
+	var priority_edge_neighbor := (
+		int(priority_slots[1]["edge_neighbor"])
+		if priority_slots.size() > 1 else -1
+	)
 	_check(
 		priority_slots.size() >= 3
 			and int(priority_slots[0]["city_id"]) == 1
@@ -9452,7 +9564,9 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			and int(priority_slots[1]["city_id"]) == 1
 			and int(priority_slots[1]["posture"])
 				== CityDefensePlan.Posture.EDGE
-			and int(priority_slots[1]["edge_neighbor"]) == 2
+			and priority_edge_neighbor >= 0
+			and assignment_state.cities[priority_edge_neighbor]
+				.owner_nation != 0
 			and int(priority_slots[2]["city_id"]) == 10
 			and int(priority_slots[2]["posture"])
 				== CityDefensePlan.Posture.CITY,
@@ -9470,7 +9584,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			and int(priority_plan.assigned_edge_by_army.get(
 				recovering_guard.id,
 				-1
-			)) == 2
+			)) == priority_edge_neighbor
 			and priority_plan.candidate_for(
 				recovering_guard,
 				ArmyCoordinator.new()
@@ -9505,7 +9619,7 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		int(moving_priority_plan.assigned_edge_by_army.get(
 			moving_line_guard.id,
 			-1
-		)) == 2
+		)) == priority_edge_neighbor
 			and moving_priority_plan.candidate_for(
 				moving_line_guard,
 				ArmyCoordinator.new()
@@ -9561,15 +9675,12 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		int(edge_priority_plan.assigned_posture_by_army.get(
 			edge_only_guard.id,
 			CityDefensePlan.Posture.NONE
-		)) == CityDefensePlan.Posture.CITY
-			and not edge_priority_plan.assigned_edge_by_army.has(
-				edge_only_guard.id
-			)
-			and return_to_city != null
-			and return_to_city.kind
-				== ActionCandidate.Kind.RETREAT
-			and return_to_city.target_city == 1,
-		"边境城市为空且兵力不足时，旧边槽军必须放弃驻边并立即回城"
+		)) == CityDefensePlan.Posture.EDGE
+			and int(edge_priority_plan.assigned_edge_by_army.get(
+				edge_only_guard.id, -1
+			)) == 2
+			and return_to_city == null,
+		"边境城市暂时空缺属于动态兵力状态，不得改写旧边槽 LINE 的驻地"
 	)
 	var edge_switch_plan := CityDefensePlan.new()
 	edge_switch_plan.view = edge_priority_view
@@ -9606,11 +9717,8 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		ArmyCoordinator.new()
 	)
 	_check(
-		empty_edge_switch_order != null
-			and empty_edge_switch_order.kind
-				== ActionCandidate.Kind.RETREAT
-			and empty_edge_switch_order.target_city == 1,
-		"当前驻边完全无压力时，LINE 应允许回城换防到更高压力方向"
+		empty_edge_switch_order == null,
+		"当前驻边压力归零也属于动态因素，LINE 不得因此回城换防"
 	)
 	var edge_city_guard := _make_army(947, 0, 5000, 10, 10)
 	edge_city_guard.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -9675,12 +9783,13 @@ func _test_ai_merge_and_retreat_utility() -> void:
 			and int(siege_edge_plan.assigned_posture_by_army.get(
 				edge_only_guard.id,
 				CityDefensePlan.Posture.NONE
-			)) == CityDefensePlan.Posture.CITY
-			and siege_edge_recall != null
-			and siege_edge_recall.kind
-				== ActionCandidate.Kind.RETREAT
-			and siege_edge_recall.target_city == 1,
-		"锚点受围时边槽身份必须保留、有效姿态转为城市，驻边军立即回城"
+			)) == CityDefensePlan.Posture.EDGE
+			and int(siege_edge_plan.assigned_edge_by_army.get(
+				edge_only_guard.id, -1
+			)) == 2
+			and siege_edge_recall == null
+			and edge_only_guard.state == Army.State.HOLDING,
+		"锚点受围属于动态战况，LINE 必须保持原边槽，解围由 MAIN 承担"
 	)
 	var layered_state := GameState.new()
 	layered_state.generate_grid_world(7005)
@@ -11495,6 +11604,18 @@ func _test_manpower_pool_and_force_commands() -> void:
 	var decisive_unique_planned_groups := {}
 	for decisive_group_id in decisive_planned_groups:
 		decisive_unique_planned_groups[decisive_group_id] = true
+	var decisive_locked_member := decisive_state.battle_group_members(
+		0, decisive_groups[0]
+	)[0]
+	decisive_locked_member.defensive_deployment_until_day = (
+		decisive_state.day + Simulation.DEFENSIVE_DEPLOYMENT_LOCK_DAYS
+	)
+	var locked_decisive_allocation := (
+		decisive_sim._plan_campaign_allocation(
+			0, decisive_target, [decisive_target] as Array[int],
+			decisive_plan, ArmyCoordinator.new(), decisive_view, false
+		)
+	)
 	_check(
 		decisive_allocation.assigned_target_ids
 			== [decisive_target]
@@ -11503,7 +11624,10 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and decisive_unique_planned_groups.size()
 				== decisive_planned_groups.size()
 			and decisive_allocation.assigned_group_count
-				== decisive_planned_groups.size(),
+				== decisive_planned_groups.size()
+			and locked_decisive_allocation.groups_for_target(
+				decisive_target
+			).size() >= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
 		"纯规划器必须为敌国最后一城直接配置至少三支互异战团：%s"
 			% str(decisive_allocation.group_to_target)
 	)
@@ -11684,6 +11808,154 @@ func _test_manpower_pool_and_force_commands() -> void:
 
 func _test_diplomacy_state_and_ai() -> void:
 	print("[32] 外交：求和、宣战、结盟、退盟、停战与敌我筛选")
+	var distance_state := GameState.new()
+	distance_state.generate_grid_world(32000)
+	# 四个纵向条带形成严格的国家接触链 0-1-2-3。外交距离按领土
+	# 接触图计算，不依赖地图坐标或固定场景尺寸。
+	for city in distance_state.cities:
+		var owner := clampi(city.coord.x / 2, 0, 3)
+		city.owner_nation = owner
+		distance_state.recognized_city_owners[city.id] = owner
+	for distance_a in range(distance_state.nations.size()):
+		for distance_b in range(
+			distance_a + 1, distance_state.nations.size()
+		):
+			distance_state.set_diplomatic_relation(
+				distance_a, distance_b,
+				GameState.DiplomaticRelation.NEUTRAL
+			)
+	for distance_nation in distance_state.nations:
+		distance_state.relocate_capital(distance_nation.id)
+	distance_state.refresh_derived()
+	var distant_sea_link := Edge.new()
+	distant_sea_link.city_a = distance_state.cities_of(0)[0].id
+	distant_sea_link.city_b = distance_state.cities_of(3)[0].id
+	distant_sea_link.kind = Edge.Kind.SEA
+	distant_sea_link.max_manpower = Edge.WATER_MANPOWER
+	distance_state.edges.append(distant_sea_link)
+	var distance_cache := {}
+	_check(
+		DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 1, distance_cache
+		)
+		and DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 2, distance_cache
+		)
+		and not DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 3, distance_cache
+		)
+		and DiplomacyAI._diplomatic_range_nation_ids(
+			distance_state, 0, distance_cache
+		) == [1, 2],
+		"外交距离应允许一至两跳国家，拒绝三跳外目标，且远程海运不得缩短外交距离"
+	)
+	distant_sea_link.kind = Edge.Kind.LANDING
+	distance_state.road_network_revision += 1
+	_check(
+		DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 3, distance_cache
+		),
+		"跨河登陆连接应视为地理接壤，边类型变化后必须重建外交距离缓存"
+	)
+	distant_sea_link.kind = Edge.Kind.RIVER
+	distance_state.road_network_revision += 1
+	_check(
+		not DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 3, distance_cache
+		),
+		"沿河远程运输不得缩短外交距离，也不得沿用登陆边的近邻缓存"
+	)
+	distant_sea_link.kind = Edge.Kind.SEA
+	distance_state.road_network_revision += 1
+	_check(
+		not DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 3, distance_cache
+		),
+		"远程海运不得缩短外交距离"
+	)
+	distance_state.set_diplomatic_relation(
+		0, 2, GameState.DiplomaticRelation.ALLIED
+	)
+	var alliance_reach_cache := {}
+	_check(
+		DiplomacyAI._frontier_edges(
+			distance_state, 0, 3, alliance_reach_cache
+		) > 0
+		and not DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 3, alliance_reach_cache
+		)
+		and DiplomacyAI.war_desire(
+			distance_state, 0, 3, alliance_reach_cache
+		) == -INF,
+		"远方盟友提供的军事接触不得绕过本国两跳外交距离"
+	)
+	distance_state.set_diplomatic_relation(
+		0, 2, GameState.DiplomaticRelation.NEUTRAL
+	)
+	_check(
+		DiplomacyAI.alliance_willingness(
+			distance_state, 0, 3, distance_cache
+		) == -INF
+		and DiplomacyAI.war_desire(
+			distance_state, 0, 3, distance_cache
+		) == -INF,
+		"超出外交距离的国家不得形成新联盟或主动战争候选"
+	)
+	var distance_sim := Simulation.new()
+	distance_sim.setup(distance_state)
+	var distant_alliance_committed := (
+		distance_sim._execute_diplomatic_action({
+			"kind": DiplomacyAI.Action.FORM_ALLIANCE,
+			"a": 0,
+			"b": 3,
+			"reason": "远距外交门禁测试",
+		})
+	)
+	var distant_preparation_committed := (
+		distance_sim._execute_diplomatic_action({
+			"kind": DiplomacyAI.Action.PREPARE_WAR,
+			"a": 0,
+			"b": 3,
+			"objective_city": distance_state.nations[3].capital_city_id,
+			"reason": "远距备战门禁测试",
+		})
+	)
+	var distant_war_committed := (
+		distance_sim._execute_diplomatic_action({
+			"kind": DiplomacyAI.Action.DECLARE_WAR,
+			"a": 0,
+			"b": 3,
+			"reason": "远距宣战门禁测试",
+		})
+	)
+	_check(
+		not distant_alliance_committed
+		and not distant_preparation_committed
+		and not distant_war_committed
+		and distance_state.relation_between(0, 3)
+			== GameState.DiplomaticRelation.NEUTRAL
+		and distance_state.nations[0].war_preparation_target_nation == -1,
+		"动作提交层必须拒绝绕过候选评分的远距结盟、备战和宣战"
+	)
+	_check(
+		distance_state.set_diplomatic_relation(
+			0, 3, GameState.DiplomaticRelation.ALLIED
+		)
+		and distance_state.is_allied(0, 3),
+		"剧本或政治事件建立的既有远距关系不得被距离规则强制拆除"
+	)
+	for distance_city in distance_state.cities:
+		if distance_city.owner_nation == 2:
+			distance_city.owner_nation = 1
+			distance_state.recognized_city_owners[distance_city.id] = 1
+	distance_state.ownership_revision += 1
+	_check(
+		DiplomacyAI.within_diplomatic_range(
+			distance_state, 0, 3, distance_cache
+		),
+		"领土易主将三跳链缩为两跳后，外交距离缓存必须按所有权版本失效"
+	)
+	distance_sim.free()
 	var gs := GameState.new()
 	gs.generate_grid_world(32001)
 	_check(
@@ -16282,27 +16554,22 @@ func _test_diplomacy_state_and_ai() -> void:
 	] = local_sector
 	local_relief_sim._resolve_line_edge_assignment_emergencies()
 	_check(
-		edge_guard.state == Army.State.MOVING
-			and edge_guard.ai_action
-				== ActionCandidate.Kind.RETREAT
-			and edge_guard.ai_target_city == local_target
-			and edge_guard.ai_order_reason.contains(
-				"立即回城"
-			),
-		"受围城市自己的边槽填线军必须每日紧急回城，不等待AI决策周期"
+		edge_guard.state == Army.State.HOLDING
+			and edge_guard.line_assignment_city == local_target
+			and edge_guard.line_assignment_edge == local_source
+			and local_sector.state == FrontierDefenseSector.State.NORMAL,
+		"受围属于动态战况，边槽 LINE 必须继续原防区而不是回城横跳"
 	)
 	local_relief_state.cities[local_source].owner_nation = 1
 	local_siege.finished = true
-	local_relief_sim._settle_idle(edge_guard, local_target)
 	local_relief_sim._resolve_line_edge_assignment_emergencies()
 	_check(
 		local_sector.state
-			== FrontierDefenseSector.State.RESTORING
-			and edge_guard.state == Army.State.MOVING
-			and edge_guard.ai_action == ActionCandidate.Kind.HOLD
-			and edge_guard.ai_target_city == local_source
-			and edge_guard.ai_order_reason.contains("恢复边槽"),
-		"城市防守成功且战斗消失后，防区军必须返回原持久边槽"
+			== FrontierDefenseSector.State.NORMAL
+			and edge_guard.state == Army.State.HOLDING
+			and edge_guard.line_assignment_city == local_target
+			and edge_guard.line_assignment_edge == local_source,
+		"战斗消失也不得生成恢复边槽命令，LINE 全程保持原驻地"
 	)
 	local_relief_state.cities[local_source].owner_nation = 0
 	edge_guard.state = Army.State.HOLDING
@@ -22035,14 +22302,11 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 		peaceful_slots.size() == 1
 			and int(peaceful_slots[0]["posture"])
 				== CityDefensePlan.Posture.CITY
-			and siege_slots.size() == 2
+			and siege_slots.size() == 1
 			and int(siege_slots[0]["city_id"]) == last_city_id
-			and int(siege_slots[1]["city_id"]) == last_city_id
 			and int(siege_slots[0]["posture"])
-				== CityDefensePlan.Posture.CITY
-			and int(siege_slots[1]["posture"])
 				== CityDefensePlan.Posture.CITY,
-		"一城小国平时只设1个城市守备槽并保留机动军，被围后才把预备队投入第2守城槽"
+		"一城小国的 LINE 槽不随围城增减，机动 MAIN 独立承担解围"
 	)
 	var creation_cost := (
 		GameState.formation_creation_gold_cost(

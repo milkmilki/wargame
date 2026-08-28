@@ -36,6 +36,7 @@ void fragment() {
 	vec2 source_uv = height_source_origin + UV * height_source_size;
 	vec4 province_boundary = texture(province_boundary_texture, UV);
 	vec4 country_boundary = texture(country_boundary_texture, UV);
+	vec4 coast_country = texture(country_color_texture, UV);
 	float hard_land = step(ocean_height_threshold, terrain_elevation);
 	vec3 final_color;
 	if (province_strength <= 0.000001) {
@@ -71,13 +72,12 @@ void fragment() {
 			white_low_poly_base, political_target, province_strength
 		);
 	}
-	// Boundary textures are authored as hard solid strokes. Keep the core fully
-	// opaque and only allow a sub-half-pixel derivative transition at sampling.
+	// Boundary textures are authored as hard solid strokes. Country borders and
+	// the mesh-derived 0m coast have independent LOD controls.
 	float province_alpha = province_boundary.a * province_boundary_strength
 		* hard_land * local_boundary_alpha;
 	float country_alpha = country_boundary.a
 		* country_boundary_strength
-		* coast_boundary_strength
 		* hard_land;
 	float province_aa = max(fwidth(province_alpha), 0.00001);
 	float country_aa = max(fwidth(country_alpha), 0.00001);
@@ -87,7 +87,29 @@ void fragment() {
 	float country_ink = smoothstep(
 		0.5 - country_aa, 0.5 + country_aa, country_alpha
 	);
+	// Coastline follows the exact interpolated terrain 0m crossing. UV2 confines
+	// the derivative band to cells that really cross land/sea, so flat lowland
+	// cannot be mistaken for coast. Keep it independent from country_strength:
+	// the visual gate and map LOD intentionally toggle either layer alone.
+	float coast_gradient = fwidth(terrain_elevation);
+	// UV2 is interpolated across triangles. Reject tiny interpolation tails so
+	// the coastal marker cannot bleed into unrelated inland fragments.
+	float coast_mesh_band = step(0.05, UV2.x);
+	float coast_distance_px = max(
+		terrain_elevation - ocean_height_threshold, 0.0
+	) / max(coast_gradient, 0.000001);
+	float coast_coverage = (
+		1.0 - smoothstep(
+			country_boundary_core_width_px,
+			country_boundary_outer_width_px,
+			coast_distance_px
+		)
+	) * hard_land * step(0.000001, coast_gradient) * coast_mesh_band;
+	float coast_ink = clamp(
+		coast_coverage * coast_boundary_strength * coast_country.a, 0.0, 1.0
+	);
 	final_color = mix(final_color, local_boundary_color, province_ink);
+	final_color = mix(final_color, coast_country.rgb, coast_ink);
 	final_color = mix(final_color, country_boundary.rgb, country_ink);
 	ALBEDO = final_color;
 	ROUGHNESS = 1.0;

@@ -213,7 +213,8 @@ func _invariant_error(
 				city.id,
 				city.owner_nation,
 			]
-		owned_counts[city.owner_nation] += 1
+		if not city.is_dock:
+			owned_counts[city.owner_nation] += 1
 	for nation in state.nations:
 		if (
 			nation.alive

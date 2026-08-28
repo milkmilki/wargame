@@ -629,17 +629,17 @@ func _run() -> void:
 				== state.province_map_size.y
 					* MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
 		),
-		# 海岸仍保留 0m 语义与国家边界参数，但本轮边界合同改为 nearest +
-		# 硬核心，不再要求旧的 coast soft-coverage 高程混色公式。
+		# 海岸使用独立的 0m 几何轮廓和国家色；关闭国家边界时海岸仍须
+		# 可见，UV2 域标记负责阻止轮廓向低海拔内陆扩散。
 		"unified_coast_boundary_style": (
 			not zero_meter_city_boundary.is_empty()
 			and zero_meter_city_boundary.size() % 2 == 0
 			and terrain_shader_code.contains("coast_boundary_strength")
-			and not terrain_shader_code.contains("coast_distance_px")
-			and not terrain_shader_code.contains(
+			and terrain_shader_code.contains("coast_distance_px")
+			and terrain_shader_code.contains(
 				"coast_coverage * coast_boundary_strength"
 			)
-			and not terrain_shader_code.contains(
+			and terrain_shader_code.contains(
 				"final_color = mix(final_color, coast_country.rgb, coast_ink)"
 			)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(

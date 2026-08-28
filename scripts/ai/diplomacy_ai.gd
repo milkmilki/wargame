@@ -31,6 +31,9 @@ const MIN_ALLIANCE_DAYS: int = 360
 ## 饱和进攻的乱世感；经济/粮食仍逐国把关，统一时代只连续退火储备量，不移除底线。
 const MAX_CONCURRENT_WARS: int = 3
 const MAX_DEFENSIVE_ALLIES: int = 1
+## 新结盟、主动备战与主动宣战只允许在国家领土接触图的两跳范围内。
+## 一跳是直接接壤，二跳是共享一个邻国；已有关系、议和和防御盟约参战不受影响。
+const MAX_DIPLOMATIC_DISTANCE_HOPS: int = 2
 const PEACE_PROPOSE_SCORE: float = 1.25
 const PEACE_ACCEPT_SCORE: float = 0.60
 const PEACE_SITUATION_WEIGHT: float = 0.40
@@ -1458,6 +1461,11 @@ static func alliance_willingness(
 	)
 	if state.relation_between(nation_id, target_id) != GameState.DiplomaticRelation.NEUTRAL:
 		return -INF
+	if not within_diplomatic_range(
+		state, nation_id, target_id, evaluation_cache
+	):
+		evaluation_cache[cache_key] = -INF
+		return -INF
 	if (
 		_cached_allies_of(
 			state,
@@ -1668,7 +1676,12 @@ static func war_desire(
 		else 0
 	)
 	if (
-		not state.can_alliance_declare_war(nation_id, target_id)
+		not within_diplomatic_range(
+			state, nation_id, target_id, evaluation_cache
+		)
+		or not _cached_can_alliance_declare_war(
+			state, nation_id, target_id, evaluation_cache
+		)
 		or _cached_wars_of(
 			state,
 			nation_id,
@@ -1843,6 +1856,50 @@ static func war_desire(
 	)
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 与 GameState.can_alliance_declare_war 完全相同的检查，但复用同一轮外交
+## 已缓存的联盟集团。旧入口每评估一个边境对象都会从头重建双方联盟分量，
+## 80 国时把一次月度候选收集放大成大量重复 O(N²) 扫描。
+static func _cached_can_alliance_declare_war(
+	state: GameState,
+	nation_a: int,
+	nation_b: int,
+	evaluation_cache: Dictionary
+) -> bool:
+	var cache_key := "can_alliance_war:%d:%d" % [nation_a, nation_b]
+	if evaluation_cache.has(cache_key):
+		return bool(evaluation_cache[cache_key])
+	if not state.can_declare_war(nation_a, nation_b):
+		evaluation_cache[cache_key] = false
+		return false
+	var attackers := _cached_alliance_bloc(
+		state, nation_a, evaluation_cache
+	)
+	var defenders := _cached_alliance_bloc(
+		state, nation_b, evaluation_cache
+	)
+	if attackers.is_empty() or defenders.is_empty():
+		evaluation_cache[cache_key] = false
+		return false
+	for attacker in attackers:
+		for defender in defenders:
+			if (
+				attacker == defender
+				or state.is_allied(attacker, defender)
+				or (
+					not state.is_enemy(attacker, defender)
+					and (
+						state.relation_between(attacker, defender)
+							!= GameState.DiplomaticRelation.NEUTRAL
+						or state.day < state.truce_until(attacker, defender)
+					)
+				)
+			):
+				evaluation_cache[cache_key] = false
+				return false
+	evaluation_cache[cache_key] = true
+	return true
 
 
 static func neutral_peace_escalation(
@@ -2403,8 +2460,9 @@ static func _trade_report(
 		result["monthly_food_import"] = nation.last_trade_food_import
 		result["monthly_food_export"] = nation.last_trade_food_export
 		result["trade_route_count"] = nation.last_trade_route_count
-		result["blocked_trade_route_count"] = _trade_route_count(
-			state.trade_routes, nation_id, true
+		result["blocked_trade_route_count"] = _cached_trade_route_count(
+			state.trade_routes, state.nations.size(), nation_id, true,
+			evaluation_cache, "published"
 		)
 	else:
 		const TRADE_NETWORK_CACHE_KEY := "trade_network_result"
@@ -2439,11 +2497,13 @@ static func _trade_report(
 			trade_network, "nation_food_export", nation_id
 		)
 		var routes: Array = trade_network.get("routes", [])
-		result["trade_route_count"] = _trade_route_count(
-			routes, nation_id, false
+		result["trade_route_count"] = _cached_trade_route_count(
+			routes, state.nations.size(), nation_id, false,
+			evaluation_cache, "forecast"
 		)
-		result["blocked_trade_route_count"] = _trade_route_count(
-			routes, nation_id, true
+		result["blocked_trade_route_count"] = _cached_trade_route_count(
+			routes, state.nations.size(), nation_id, true,
+			evaluation_cache, "forecast"
 		)
 	evaluation_cache[cache_key] = result
 	return result
@@ -2458,26 +2518,52 @@ static func _trade_nation_value(
 	return int(values[nation_id]) if nation_id < values.size() else 0
 
 
-static func _trade_route_count(
+## 同一轮资源评估会依次查询许多国家。旧实现每个国家分别扫完整路线表两次；
+## 这里一次汇总全部国家的 active/blocked 数量，后续查询 O(1)。国内路线的
+## nation_a == nation_b 仍只计一次，与旧逐国 contains 判定严格一致。
+static func _cached_trade_route_count(
 	routes: Array,
+	nation_count: int,
 	nation_id: int,
-	blocked_only: bool
+	blocked_only: bool,
+	evaluation_cache: Dictionary,
+	cache_scope: String
 ) -> int:
-	var count := 0
-	for route_value in routes:
-		var route: Dictionary = route_value
-		if nation_id not in [
-			int(route.get("nation_a", -1)),
-			int(route.get("nation_b", -1)),
-		]:
-			continue
-		var blocked := (
-			int(route.get("status", TradeNetwork.STATUS_ACTIVE))
-			== TradeNetwork.STATUS_BLOCKED
-		)
-		if blocked == blocked_only:
-			count += 1
-	return count
+	if nation_id < 0 or nation_id >= nation_count:
+		return 0
+	var cache_key := "trade_route_counts:%s" % cache_scope
+	if not evaluation_cache.has(cache_key):
+		var active: Array[int] = []
+		var blocked: Array[int] = []
+		active.resize(nation_count)
+		active.fill(0)
+		blocked.resize(nation_count)
+		blocked.fill(0)
+		for route_value in routes:
+			var route: Dictionary = route_value
+			var counts := (
+				blocked
+				if (
+					int(route.get("status", TradeNetwork.STATUS_ACTIVE))
+					== TradeNetwork.STATUS_BLOCKED
+				)
+				else active
+			)
+			var nation_a := int(route.get("nation_a", -1))
+			var nation_b := int(route.get("nation_b", -1))
+			if nation_a >= 0 and nation_a < nation_count:
+				counts[nation_a] += 1
+			if nation_b >= 0 and nation_b < nation_count and nation_b != nation_a:
+				counts[nation_b] += 1
+		evaluation_cache[cache_key] = {
+			"active": active,
+			"blocked": blocked,
+		}
+	var totals: Dictionary = evaluation_cache[cache_key]
+	var values: Array[int] = (
+		totals["blocked"] if blocked_only else totals["active"]
+	)
+	return values[nation_id]
 
 
 ## 宣战资源门槛随统一时代连续退火。era=0 时严格等价于 resource_report.ready；
@@ -2747,26 +2833,167 @@ static func _bordering_nation_ids(
 	var cache_key := "borders:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
-	if not evaluation_cache.has("frontier_matrix_built"):
-		_build_frontier_matrix(state, evaluation_cache)
+	var topology_cache := _ensure_frontier_matrix_cache(
+		state, evaluation_cache
+	)
+	var by_observer: Array = topology_cache.get(
+		"frontier_neighbors_by_observer", []
+	)
 	var result: Array[int] = []
-	for other in state.nations:
-		if (
-			other.id != nation_id
-			and not state.has_military_access(
-				nation_id,
-				other.id
-			)
-			and _frontier_edges(
-				state,
-				nation_id,
-				other.id,
-				evaluation_cache
-			) > 0
-		):
-			result.append(other.id)
+	if nation_id >= 0 and nation_id < by_observer.size():
+		result = (by_observer[nation_id] as Array[int]).duplicate()
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 国家外交距离使用领土接触图，而不是会随地图缩放变化的屏幕/坐标距离。
+## 直接接壤为 1 跳，经一个存活国家中转为 2 跳；关系建立后不会因疆域变化
+## 自动拆除，防御盟约拉入战争也不重新套此主动外交门禁。
+static func within_diplomatic_range(
+	state: GameState,
+	nation_a: int,
+	nation_b: int,
+	evaluation_cache: Dictionary = {}
+) -> bool:
+	if (
+		state == null
+		or nation_a < 0 or nation_b < 0
+		or nation_a >= state.nations.size()
+		or nation_b >= state.nations.size()
+		or nation_a == nation_b
+		or not state.nations[nation_a].alive
+		or not state.nations[nation_b].alive
+	):
+		return false
+	var range_cache := _diplomacy_topology_cache_store(evaluation_cache)
+	_ensure_diplomatic_range_cache(state, range_cache)
+	var masks: Array = range_cache.get(
+		"diplomatic_range_masks", []
+	)
+	return (
+		nation_a < masks.size()
+		and nation_b < (masks[nation_a] as PackedByteArray).size()
+		and (masks[nation_a] as PackedByteArray)[nation_b] != 0
+	)
+
+
+static func _diplomatic_range_nation_ids(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var range_cache := _diplomacy_topology_cache_store(evaluation_cache)
+	_ensure_diplomatic_range_cache(state, range_cache)
+	var masks: Array = range_cache.get(
+		"diplomatic_range_masks", []
+	)
+	var result: Array[int] = []
+	if nation_id < 0 or nation_id >= masks.size():
+		return result
+	var reachable: PackedByteArray = masks[nation_id]
+	for target_id in range(reachable.size()):
+		if reachable[target_id] != 0:
+			result.append(target_id)
+	return result
+
+
+static func _diplomacy_topology_cache_store(
+	evaluation_cache: Dictionary
+) -> Dictionary:
+	var shared: Variant = evaluation_cache.get(
+		"__diplomacy_topology_cache", null
+	)
+	return shared as Dictionary if shared is Dictionary else evaluation_cache
+
+
+static func _ensure_diplomatic_range_cache(
+	state: GameState,
+	evaluation_cache: Dictionary,
+	provided_neighbor_sets: Array[Dictionary] = []
+) -> void:
+	var revision: Array[int] = [
+		state.get_instance_id(),
+		state.ownership_revision,
+		state.road_network_revision,
+		state.cities.size(),
+		state.nations.size(),
+		state.edges.size(),
+	]
+	if (
+		evaluation_cache.get("diplomatic_range_revision", []) == revision
+		and evaluation_cache.has("diplomatic_range_masks")
+	):
+		return
+	_build_diplomatic_range_masks(
+		state, evaluation_cache, provided_neighbor_sets
+	)
+	evaluation_cache["diplomatic_range_revision"] = revision
+
+
+static func _build_diplomatic_range_masks(
+	state: GameState,
+	evaluation_cache: Dictionary,
+	provided_neighbor_sets: Array[Dictionary] = []
+) -> void:
+	var nation_count := state.nations.size()
+	var territory_neighbor_sets := provided_neighbor_sets
+	if territory_neighbor_sets.is_empty():
+		territory_neighbor_sets.resize(nation_count)
+		for nation_id in range(nation_count):
+			territory_neighbor_sets[nation_id] = {}
+		for edge in state.edges:
+			# 外交接壤只认陆路和短程登陆连接；河运与海运都是
+			# 远程运输网络，不能把地图两端的国家变成外交近邻。
+			if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
+				continue
+			var owner_a := state.cities[edge.city_a].owner_nation
+			var owner_b := state.cities[edge.city_b].owner_nation
+			if (
+				owner_a < 0 or owner_a >= nation_count
+				or owner_b < 0 or owner_b >= nation_count
+				or owner_a == owner_b
+			):
+				continue
+			territory_neighbor_sets[owner_a][owner_b] = true
+			territory_neighbor_sets[owner_b][owner_a] = true
+	var diplomatic_range_masks: Array[PackedByteArray] = []
+	diplomatic_range_masks.resize(nation_count)
+	for observer in range(nation_count):
+		var reachable := PackedByteArray()
+		reachable.resize(nation_count)
+		reachable.fill(0)
+		var distance := PackedInt32Array()
+		distance.resize(nation_count)
+		distance.fill(-1)
+		distance[observer] = 0
+		var queue: Array[int] = [observer]
+		var head := 0
+		while head < queue.size():
+			var current := queue[head]
+			head += 1
+			if distance[current] >= MAX_DIPLOMATIC_DISTANCE_HOPS:
+				continue
+			for neighbor_value in territory_neighbor_sets[current]:
+				var neighbor := int(neighbor_value)
+				if (
+					neighbor == observer
+					or not state.nations[neighbor].alive
+					or distance[neighbor] >= 0
+				):
+					continue
+				distance[neighbor] = distance[current] + 1
+				reachable[neighbor] = 1
+				queue.append(neighbor)
+		diplomatic_range_masks[observer] = reachable
+	evaluation_cache["diplomatic_range_masks"] = diplomatic_range_masks
+	evaluation_cache["diplomatic_range_revision"] = [
+		state.get_instance_id(),
+		state.ownership_revision,
+		state.road_network_revision,
+		state.cities.size(),
+		state.nations.size(),
+		state.edges.size(),
+	]
 
 
 static func war_food_report(
@@ -3635,7 +3862,11 @@ static func _collect_alliance_actions(
 	evaluation_cache: Dictionary
 ) -> void:
 	for a in range(state.nations.size()):
-		for b in range(a + 1, state.nations.size()):
+		for b in _diplomatic_range_nation_ids(
+			state, a, evaluation_cache
+		):
+			if b <= a:
+				continue
 			if (
 				committed.has(a)
 				or committed.has(b)
@@ -3924,6 +4155,9 @@ static func _collect_existing_war_preparation(
 		target_id >= 0
 		and target_id < state.nations.size()
 		and state.nations[target_id].alive
+		and within_diplomatic_range(
+			state, nation_id, target_id, evaluation_cache
+		)
 		and state.can_alliance_declare_war(nation_id, target_id)
 	)
 	var objective_valid := (
@@ -4086,12 +4320,18 @@ static func _collect_preparation_alliance(
 ) -> bool:
 	var best_target := -1
 	var best_score := -INF
-	for candidate in state.nations:
+	for candidate_id in _diplomatic_range_nation_ids(
+		state, nation_id, evaluation_cache
+	):
+		var candidate := state.nations[candidate_id]
 		if (
 			candidate.id in [nation_id, war_target_id]
 			or not candidate.alive
 			or committed.has(candidate.id)
 			or state.is_allied(candidate.id, war_target_id)
+			or not within_diplomatic_range(
+				state, nation_id, candidate.id, evaluation_cache
+			)
 		):
 			continue
 		var score_a := alliance_willingness(
@@ -4466,6 +4706,13 @@ static func _cached_alliance_bloc(
 		return state.alliance_bloc(nation_id)
 	var cache_key := "alliance_bloc:%d" % nation_id
 	if not evaluation_cache.has(cache_key):
+		# 单国集团无需构造全局冲突感知并查集。大规模和平开局中这是
+		# 绝大多数情况；allies 列表本轮已缓存，结果与 alliance_bloc 一致。
+		if _cached_allies_of(
+			state, nation_id, evaluation_cache
+		).is_empty():
+			evaluation_cache[cache_key] = [nation_id] as Array[int]
+			return evaluation_cache[cache_key] as Array[int]
 		var bloc := state.alliance_bloc(nation_id)
 		for member_id in bloc:
 			evaluation_cache[
@@ -4776,11 +5023,51 @@ static func _frontier_edges(
 ) -> int:
 	# 首次调用时一次遍历边表填满全部国家对的接壤边数矩阵（O(E)），后续查表 O(1)。
 	# 原实现每对国家都全表扫描（每次 O(E)），同一 AI tick 内被数千次冷调用，
-	# 是外交/威胁场的头号开销。矩阵键沿用 "frontier:a:b"，语义完全一致：
+	# 是外交/威胁场的头号开销。矩阵按 observer*N+target 索引，语义保持为：
 	# pair(a,b) = 一端归 b、另一端可被 a 军事通行（a 本国或其盟友）的边数。
-	if not evaluation_cache.has("frontier_matrix_built"):
-		_build_frontier_matrix(state, evaluation_cache)
-	return int(evaluation_cache.get("frontier:%d:%d" % [nation_a, nation_b], 0))
+	var topology_cache := _ensure_frontier_matrix_cache(
+		state, evaluation_cache
+	)
+	var nation_count := state.nations.size()
+	var matrix: PackedInt32Array = topology_cache.get(
+		"frontier_matrix", PackedInt32Array()
+	)
+	if (
+		nation_a < 0 or nation_a >= nation_count
+		or nation_b < 0 or nation_b >= nation_count
+		or matrix.size() != nation_count * nation_count
+	):
+		return 0
+	return int(matrix[nation_a * nation_count + nation_b])
+
+
+static func _ensure_frontier_matrix_cache(
+	state: GameState, evaluation_cache: Dictionary
+) -> Dictionary:
+	var topology_cache := _diplomacy_topology_cache_store(
+		evaluation_cache
+	)
+	var revision: Array[int] = [
+		state.get_instance_id(),
+		state.ownership_revision,
+		state.diplomacy_revision,
+		state.road_network_revision,
+		state.cities.size(),
+		state.nations.size(),
+		state.edges.size(),
+	]
+	var matrix_value: Variant = topology_cache.get(
+		"frontier_matrix", null
+	)
+	if (
+		topology_cache.get("frontier_matrix_revision", []) != revision
+		or not matrix_value is PackedInt32Array
+		or (matrix_value as PackedInt32Array).size()
+			!= state.nations.size() * state.nations.size()
+	):
+		_build_frontier_matrix(state, topology_cache)
+		topology_cache["frontier_matrix_revision"] = revision
+	return topology_cache
 
 
 static func _build_frontier_matrix(
@@ -4788,41 +5075,91 @@ static func _build_frontier_matrix(
 	evaluation_cache: Dictionary
 ) -> void:
 	evaluation_cache["frontier_matrix_built"] = true
+	var nation_count := state.nations.size()
+	var matrix := PackedInt32Array()
+	matrix.resize(nation_count * nation_count)
+	matrix.fill(0)
+	var territory_neighbor_sets: Array[Dictionary] = []
+	territory_neighbor_sets.resize(nation_count)
+	for nation_id in range(nation_count):
+		territory_neighbor_sets[nation_id] = {}
 	# 预计算每国的「可通行观察者」集合：本国 + 其盟友（结盟上限低，规模极小）。
-	var accessors_of := {}
+	var accessors_of: Array[Array] = []
+	accessors_of.resize(nation_count)
 	for nation in state.nations:
-		var accessors: Array[int] = [nation.id]
-		for ally_id in state.allies_of(nation.id):
-			if ally_id != nation.id:
-				accessors.append(ally_id)
-		accessors_of[nation.id] = accessors
+		accessors_of[nation.id] = [nation.id] as Array[int]
+	# 一次扫描无序国家对建立双向军事通行。不能用 allies_of()，因为它会
+	# 过滤死国，而 has_military_access() 的历史查询语义不要求观察国存活。
+	for nation_a in range(nation_count):
+		for nation_b in range(nation_a + 1, nation_count):
+			if not state.is_allied(nation_a, nation_b):
+				continue
+			accessors_of[nation_a].append(nation_b)
+			accessors_of[nation_b].append(nation_a)
 	for edge in state.edges:
-		if edge.max_manpower <= 0:
-			continue
 		var owner_a := state.cities[edge.city_a].owner_nation
 		var owner_b := state.cities[edge.city_b].owner_nation
-		if owner_a < 0 or owner_b < 0:
+		if (
+			owner_a < 0 or owner_a >= nation_count
+			or owner_b < 0 or owner_b >= nation_count
+		):
+			continue
+		if (
+			owner_a != owner_b
+			and edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
+		):
+			territory_neighbor_sets[owner_a][owner_b] = true
+			territory_neighbor_sets[owner_b][owner_a] = true
+		# 外交接触读取省份/节点邻接；军事前线仍只读取当前可通行边。
+		# 因此道路封闭、容量调整和敌军屯兵不会让既有备战越界失效。
+		if edge.max_manpower <= 0:
 			continue
 		if owner_a == owner_b:
 			# 旧逻辑对同主边亦计入：pair(a, owner) 命中当 a 可通行 owner。
 			# 保留该行为以维持字节等价（观察者含 owner 本身及其盟友）。
-			for x in (accessors_of.get(owner_a, [owner_a]) as Array):
-				_bump_frontier(evaluation_cache, int(x), owner_a)
+			for x in accessors_of[owner_a]:
+				_bump_frontier(matrix, nation_count, int(x), owner_a)
 			continue
 		# 跨主边：(观察者 X 可通行 owner_a) → 目标 owner_b 贡献 +1，反向亦然。
-		for x in (accessors_of.get(owner_a, [owner_a]) as Array):
-			_bump_frontier(evaluation_cache, int(x), owner_b)
-		for x in (accessors_of.get(owner_b, [owner_b]) as Array):
-			_bump_frontier(evaluation_cache, int(x), owner_a)
+		for x in accessors_of[owner_a]:
+			_bump_frontier(matrix, nation_count, int(x), owner_b)
+		for x in accessors_of[owner_b]:
+			_bump_frontier(matrix, nation_count, int(x), owner_a)
+	var neighbors_by_observer: Array[Array] = []
+	neighbors_by_observer.resize(nation_count)
+	for observer in range(nation_count):
+		var filtered: Array[int] = []
+		for target in range(nation_count):
+			if (
+				target != observer
+				and matrix[observer * nation_count + target] > 0
+				and not state.has_military_access(observer, target)
+			):
+				filtered.append(target)
+		neighbors_by_observer[observer] = filtered
+	_ensure_diplomatic_range_cache(
+		state, _diplomacy_topology_cache_store(evaluation_cache),
+		territory_neighbor_sets
+	)
+	evaluation_cache["frontier_matrix"] = matrix
+	evaluation_cache["frontier_neighbors_by_observer"] = (
+		neighbors_by_observer
+	)
 
 
 static func _bump_frontier(
-	evaluation_cache: Dictionary,
+	matrix: PackedInt32Array,
+	nation_count: int,
 	observer: int,
 	target: int
 ) -> void:
-	var key := "frontier:%d:%d" % [observer, target]
-	evaluation_cache[key] = int(evaluation_cache.get(key, 0)) + 1
+	if (
+		observer < 0 or observer >= nation_count
+		or target < 0 or target >= nation_count
+	):
+		return
+	var index := observer * nation_count + target
+	matrix[index] += 1
 
 
 # ------------------------------------------------------------------ 分封（藩王系统 B3）

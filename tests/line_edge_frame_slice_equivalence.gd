@@ -2,7 +2,8 @@ extends SceneTree
 ## 等价性守卫：在「同一运行时分帧路径」下，证明填线防区分帧驱动
 ## (_resolve_line_edge_assignment_emergencies_over_frames) 与同步驱动逐军逐字节
 ## 等价。两个世界都由引擎逐帧驱动 _advance_day(true)，唯一区别是基线世界置
-## line_edge_frame_slicing_disabled=true。防区状态每天推进，200 天覆盖大量召回/恢复。
+## line_edge_frame_slicing_disabled=true。LINE 不响应动态围城；该门禁主要覆盖
+## 锚点失守后的结构性清理与撤退。
 
 var _phase := 0
 var _baseline_by_id: Dictionary = {}

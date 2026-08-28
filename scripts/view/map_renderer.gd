@@ -4383,10 +4383,10 @@ func _draw_armies() -> void:
 	for army in state.armies:
 		if army.size <= 0:
 			continue
-		var profile := army_counter_profile(army.max_size)
-		var is_heavy := (
-			int(profile["icon"]) == FormationIcon.ARMOR
+		var profile := army_counter_profile(
+			army.max_size, army.strategic_role
 		)
+		var is_main_role := bool(profile["main_role"])
 		var pos := (
 			_army_position(army)
 			+ _army_counter_offset(army.id) * icon_scale
@@ -4420,7 +4420,7 @@ func _draw_armies() -> void:
 			rect,
 			counter_color,
 			GameState.normalize_nation_color(army_color.darkened(0.10)),
-			is_heavy,
+			is_main_role,
 			icon_scale
 		)
 		_draw_army_formation_symbol(
@@ -4433,13 +4433,25 @@ func _draw_armies() -> void:
 			int(profile["marks"]),
 			icon_scale
 		)
-		var state_code := _army_state_code(army.state)
+		var role_code := str(profile["role_code"])
 		draw_string(
 			_font,
 			rect.position + Vector2(2.5, 4.5) * icon_scale,
-			state_code,
+			role_code,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
+			_army_font_size(8 if is_main_role else 7),
+			ACCENT_GOLD if is_main_role else PAPER_LIGHT
+		)
+		draw_string(
+			_font,
+			rect.position + Vector2(
+				rect.size.x - 10.0 * icon_scale,
+				4.5 * icon_scale
+			),
+			_army_state_code(army.state),
+			HORIZONTAL_ALIGNMENT_RIGHT,
+			8.0 * icon_scale,
 			_army_font_size(6),
 			PAPER_LIGHT
 		)
@@ -4496,19 +4508,36 @@ func _draw_armies() -> void:
 		)
 
 
-static func army_counter_profile(max_size: int) -> Dictionary:
-	if max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+static func army_counter_profile(
+	max_size: int,
+	strategic_role: int = -1
+) -> Dictionary:
+	# 角色是兵棋轮廓的第一判据：战团里的5000轻军也必须和独立
+	# 5000填线军明显不同。省略角色的旧调用仍按重军推断 MAIN。
+	var main_role := (
+		strategic_role == Army.StrategicRole.MAIN
+		or (
+			strategic_role < 0
+			and max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
+	)
+	var heavy := max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE
+	if main_role:
 		return {
-			"icon": FormationIcon.ARMOR,
-			"width": 44.0,
-			"height": 26.0,
-			"marks": 3,
+			"icon": FormationIcon.ARMOR if heavy else FormationIcon.INFANTRY,
+			"width": 52.0 if heavy else 46.0,
+			"height": 28.0,
+			"marks": 3 if heavy else 2,
+			"main_role": true,
+			"role_code": "主",
 		}
 	return {
 		"icon": FormationIcon.INFANTRY,
-		"width": 34.0,
-		"height": 23.0,
+		"width": 31.0,
+		"height": 21.0,
 		"marks": 1,
+		"main_role": false,
+		"role_code": "线",
 	}
 
 
@@ -4516,11 +4545,11 @@ func _draw_army_counter_body(
 	rect: Rect2,
 	fill: Color,
 	nation_color: Color,
-	is_heavy: bool,
+	is_main_role: bool,
 	icon_scale: float
 ) -> void:
 	var shadow_offset := Vector2(2.5, 3.0) * icon_scale
-	if not is_heavy:
+	if not is_main_role:
 		draw_rect(
 			Rect2(rect.position + shadow_offset, rect.size),
 			Color(0.03, 0.02, 0.01, 0.58),
@@ -4555,6 +4584,11 @@ func _draw_army_counter_body(
 		Color(0.03, 0.02, 0.01, 0.60)
 	)
 	draw_colored_polygon(shape, fill)
+	draw_polyline(
+		PackedVector2Array(Array(shape) + [shape[0]]),
+		ACCENT_GOLD,
+		4.2 * icon_scale
+	)
 	draw_line(
 		Vector2(
 			rect.position.x + chamfer,
@@ -4564,7 +4598,7 @@ func _draw_army_counter_body(
 			rect.end.x - chamfer,
 			rect.position.y + 2.5 * icon_scale
 		),
-		nation_color,
+		ACCENT_GOLD.lerp(nation_color, 0.28),
 		5.0 * icon_scale
 	)
 	draw_polyline(

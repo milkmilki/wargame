@@ -75,7 +75,7 @@ static func build(
 		)
 		accounted_usec += elapsed_usec
 		stage_started = Time.get_ticks_usec()
-	snapshot._find_frontier(diplomacy_cache)
+	snapshot._find_frontier(diplomacy_cache, build_profile)
 	if profile_enabled:
 		var elapsed_usec := Time.get_ticks_usec() - stage_started
 		_accumulate_build_profile(
@@ -223,7 +223,12 @@ func _initialize_city_values(shared_city_values: Dictionary) -> void:
 			_total_friendly_value += value
 
 
-func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
+func _find_frontier(
+	diplomacy_cache: Dictionary = {},
+	build_profile: Dictionary = {}
+) -> void:
+	var profile_enabled := bool(build_profile.get("enabled", false))
+	var stage_started := Time.get_ticks_usec() if profile_enabled else 0
 	var frontier_seen := {}
 	var enemy_seen := {}
 	var neutral_cities_by_nation := {}
@@ -260,6 +265,12 @@ func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 				neutral_edges_by_nation[other_nation].append(
 					edge
 				)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile, "ai_snapshot_frontier_scan",
+			Time.get_ticks_usec() - stage_started
+		)
+		stage_started = Time.get_ticks_usec()
 	var neutral_nations := neutral_cities_by_nation.keys()
 	neutral_nations.sort_custom(func(a, b) -> bool:
 		return EquivariantOrder.nation_less(
@@ -275,14 +286,52 @@ func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 	var diplomacy_evaluation_cache := diplomacy_cache
 	for other_nation_value in neutral_nations:
 		var other_nation := int(other_nation_value)
+		var threat_cached := false
+		if profile_enabled:
+			var threat_cache_key := "threat:%d:%d" % [
+				nation_id, other_nation
+			]
+			threat_cached = diplomacy_evaluation_cache.has(
+				threat_cache_key
+			)
+		var threat_started := Time.get_ticks_usec() if profile_enabled else 0
 		var threat_score := DiplomacyAI.threat_from_nation(
 			_state,
 			nation_id,
 			other_nation,
 			diplomacy_evaluation_cache
 		)
+		if profile_enabled:
+			var threat_elapsed := Time.get_ticks_usec() - threat_started
+			_accumulate_build_profile(
+				build_profile, "ai_snapshot_frontier_threat_score",
+				threat_elapsed
+			)
+			_accumulate_build_profile(
+				build_profile,
+				("ai_snapshot_frontier_threat_hit_time"
+					if threat_cached
+					else "ai_snapshot_frontier_threat_miss_time"),
+				threat_elapsed
+			)
+			build_profile["ai_snapshot_frontier_threat_queries"] = (
+				int(build_profile.get(
+					"ai_snapshot_frontier_threat_queries", 0
+				)) + 1
+			)
+			var result_count_key := (
+				"ai_snapshot_frontier_threat_hits"
+				if threat_cached
+				else "ai_snapshot_frontier_threat_misses"
+			)
+			build_profile[result_count_key] = int(
+				build_profile.get(result_count_key, 0)
+			) + 1
 		if threat_score < 1.0:
 			continue
+		var concentration_started := (
+			Time.get_ticks_usec() if profile_enabled else 0
+		)
 		var border_city_ids: Array = neutral_cities_by_nation[other_nation].keys()
 		EquivariantOrder.sort_city_ids(
 			border_city_ids,
@@ -312,6 +361,17 @@ func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 			if not potential_frontier_edges.has(edge):
 				potential_frontier_edges.append(edge)
 			potential_edge_threat[_edge_key(edge.city_a, edge.city_b)] = threat_score
+		if profile_enabled:
+			_accumulate_build_profile(
+				build_profile, "ai_snapshot_frontier_concentration",
+				Time.get_ticks_usec() - concentration_started
+			)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile, "ai_snapshot_frontier_threat",
+			Time.get_ticks_usec() - stage_started
+		)
+		stage_started = Time.get_ticks_usec()
 	EquivariantOrder.sort_edges(
 		frontier_edges,
 		_state,
@@ -333,6 +393,11 @@ func _find_frontier(diplomacy_cache: Dictionary = {}) -> void:
 		_state,
 		nation_id
 	)
+	if profile_enabled:
+		_accumulate_build_profile(
+			build_profile, "ai_snapshot_frontier_sort",
+			Time.get_ticks_usec() - stage_started
+		)
 
 
 func _army_power_of(owner_nation: int) -> float:

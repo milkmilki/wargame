@@ -692,21 +692,32 @@ func _make_trade_pair_state() -> GameState:
 	state.cities.append(importer)
 	state.adjacency[1] = [] as Array[int]
 
-	var edge := Edge.new()
-	edge.city_a = 0
-	edge.city_b = 1
-	edge.max_manpower = 20000
-	edge.base_max_manpower = 20000
-	edge.distance = 2
-	state.edges.append(edge)
-	state.edge_lookup[GameState.edge_key(0, 1)] = edge
-	(state.adjacency[0] as Array[int]).append(1)
-	(state.adjacency[1] as Array[int]).append(0)
+	for dock_owner in range(2):
+		var dock := City.new()
+		dock.id = state.cities.size()
+		dock.owner_nation = dock_owner
+		dock.map_position = Vector2(0.4 + 0.2 * dock_owner, 0.5)
+		dock.is_dock = true
+		dock.loyalty = RebellionSystem.LOYALTY_DEFAULT
+		dock.loyalty_target_nation = dock_owner
+		state.cities.append(dock)
+		state.adjacency[dock.id] = [] as Array[int]
+	for pair in [[0, 2], [2, 3], [3, 1]]:
+		var edge := Edge.new()
+		edge.city_a = mini(int(pair[0]), int(pair[1]))
+		edge.city_b = maxi(int(pair[0]), int(pair[1]))
+		edge.max_manpower = 20000
+		edge.base_max_manpower = 20000
+		edge.distance = 1
+		state.edges.append(edge)
+		state.edge_lookup[GameState.edge_key(edge.city_a, edge.city_b)] = edge
+		(state.adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+		(state.adjacency[edge.city_b] as Array[int]).append(edge.city_a)
 
 	for nation_id in range(2):
 		state.nations[nation_id].capital_city_id = nation_id
 		state.nations[nation_id].warehouse_city_ids = [nation_id] as Array[int]
-	state.recognized_city_owners = PackedInt32Array([0, 1])
+	state.recognized_city_owners = PackedInt32Array([0, 1, 0, 1])
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	state.refresh_derived()
 	return state

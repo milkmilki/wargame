@@ -608,10 +608,13 @@ func _run() -> void:
 		and terrain_shader_code.contains(
 			"uniform float country_boundary_outer_width_px = 3.0"
 		)
-		and not terrain_shader_code.contains(
+		and terrain_shader_code.contains(
 			"final_color = mix(final_color, coast_country.rgb, coast_ink)"
 		)
-		and not terrain_shader_code.contains("coast_distance_px")
+		and terrain_shader_code.contains("coast_distance_px")
+		and terrain_shader_code.contains(
+			"float coast_mesh_band = step(0.05, UV2.x)"
+		)
 	)
 	var boundary_texture_mipmaps: bool = (
 		map_3d._country_boundary_texture != null

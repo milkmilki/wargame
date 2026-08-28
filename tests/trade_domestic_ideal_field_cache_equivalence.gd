@@ -329,6 +329,8 @@ func _build_with_shared(
 func _make_shared_cache(state: GameState) -> Dictionary:
 	return {
 		"domestic_ideal_fields": {},
+		"international_ideal_fields": {},
+		"operational_fields": {},
 	}
 
 

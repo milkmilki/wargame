@@ -184,11 +184,10 @@ static func build(
 			game_state,
 			owner_nation
 		)
-		EquivariantOrder.sort_cities(
-			view.neutral_cities,
-			game_state,
-			owner_nation
-		)
+		# 中立城市仅作为完整关系分区缓存保留，当前没有任何 AI 消费者读取
+		# 或依赖其顺序。大地图和平开局里它通常占全部城市的九成以上；逐国
+		# 为这份未使用数组构造镜像排名并排序，会把首轮 view 构建放大为
+		# O(N * C log C)。保持生成时稳定 city_id 顺序即可。
 		shared_city_partition_cache[city_partition_key] = {
 			"friendly": view.friendly_cities.duplicate(),
 			"enemy": view.enemy_cities.duplicate(),

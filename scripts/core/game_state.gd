@@ -1971,8 +1971,9 @@ func _classify_road_capacity() -> void:
 	# 全点对确定性最短路径流量，近似道路介数。
 	for source in range(cities.size()):
 		var field := _road_dijkstra(source)
-		for goal in range(source + 1, cities.size()):
-			_accumulate_road_flow(field["prev"], source, goal, flow, 1.0)
+		_accumulate_road_flow_tree(
+			field["prev"], source, flow
+		)
 	# 首都到本国城市及初始前线是战略主通路，给予额外权重。
 	for nation in nations:
 		var capital := nation.capital_city_id
@@ -2040,18 +2041,18 @@ func _road_dijkstra(start: int) -> Dictionary:
 	for city in cities:
 		dist[city.id] = INF
 	dist[start] = 0.0
-	while true:
-		var current := -1
-		var best := INF
-		for city_id in dist.keys():
-			if visited.has(city_id):
-				continue
-			var value: float = dist[city_id]
-			if value < best:
-				best = value
-				current = city_id
-		if current == -1:
-			break
+	var queue: Array[Dictionary] = [{
+		"city": start, "distance": 0.0, "rank": start,
+	}]
+	while not queue.is_empty():
+		var entry := Pathfinding._heap_pop(queue)
+		var current := int(entry["city"])
+		if (
+			visited.has(current)
+			or float(entry["distance"])
+				> float(dist[current]) + 0.000001
+		):
+			continue
 		visited[current] = true
 		for neighbor in neighbors(current):
 			if visited.has(neighbor):
@@ -2068,7 +2069,52 @@ func _road_dijkstra(start: int) -> Dictionary:
 			):
 				dist[neighbor] = next_dist
 				prev[neighbor] = current
+				Pathfinding._heap_push(queue, {
+					"city": neighbor,
+					"distance": next_dist,
+					"rank": neighbor,
+				})
 	return {"dist": dist, "prev": prev}
+
+
+## 对固定 source，旧实现逐 goal 回溯 prev 树；同一树干会被重复遍历 O(V²)。
+## 这里给 goal>source 的节点各放一个单位，自叶到根汇总子树权重，每条父边一次
+## 得到完全相同的累计流量，单个源点降为 O(V)。
+func _accumulate_road_flow_tree(
+	prev: Dictionary,
+	source: int,
+	flow: Dictionary
+) -> void:
+	var child_counts := PackedInt32Array()
+	child_counts.resize(cities.size())
+	child_counts.fill(0)
+	var contributions := PackedFloat64Array()
+	contributions.resize(cities.size())
+	contributions.fill(0.0)
+	for child_value in prev:
+		var child := int(child_value)
+		var parent := int(prev[child_value])
+		if parent >= 0 and parent < child_counts.size():
+			child_counts[parent] += 1
+		if child > source:
+			contributions[child] = 1.0
+	var leaves: Array[int] = []
+	for city_id in range(cities.size()):
+		if city_id != source and prev.has(city_id) and child_counts[city_id] == 0:
+			leaves.append(city_id)
+	var cursor := 0
+	while cursor < leaves.size():
+		var child := leaves[cursor]
+		cursor += 1
+		var parent := int(prev[child])
+		var weight := contributions[child]
+		if weight > 0.0:
+			var key := _edge_key(parent, child)
+			flow[key] = float(flow[key]) + weight
+			contributions[parent] += weight
+		child_counts[parent] -= 1
+		if parent != source and child_counts[parent] == 0:
+			leaves.append(parent)
 
 
 func _accumulate_road_flow(
@@ -2382,7 +2428,7 @@ func active_army_count(nation_id: int) -> int:
 
 func max_army_count(nation_id: int) -> int:
 	return maxi(
-		cities_of(nation_id).size()
+		land_cities_of(nation_id).size()
 			* ARMY_COUNT_LIMIT_PER_CITY,
 		ARMY_COUNT_LIMIT_PER_CITY
 	)
@@ -2981,8 +3027,8 @@ func start_civil_war(subject_id: int) -> bool:
 		or overlord_id >= nations.size()
 		or not nations[subject_id].alive
 		or not nations[overlord_id].alive
-		or cities_of(subject_id).is_empty()
-		or cities_of(overlord_id).is_empty()
+		or land_cities_of(subject_id).is_empty()
+		or land_cities_of(overlord_id).is_empty()
 	):
 		return false
 	# 1. 切分前先量取：反叛方子树（沿非内战边）与整个原粮池的粮食产能，用于按比例分粮。
@@ -3772,7 +3818,7 @@ func external_territory_recipient(nation_id: int) -> int:
 		if (
 			overlord_id < 0
 			or overlord_id >= nations.size()
-			or cities_of(overlord_id).is_empty()
+			or land_cities_of(overlord_id).is_empty()
 		):
 			break
 		current = overlord_id
@@ -3905,6 +3951,7 @@ func prune_dead_suzerainty() -> bool:
 			city.owner_nation >= 0
 			and city.owner_nation < nations.size()
 			and nations[city.owner_nation].alive
+			and not city.is_dock
 		):
 			final_city_counts[city.owner_nation] += 1
 	var proposed := _normalized_suzerainty_for_city_counts(
@@ -4847,6 +4894,7 @@ func _planned_territory_capital(
 		preferred_city_id >= 0
 		and preferred_city_id < cities.size()
 		and planned_owners[preferred_city_id] == nation_id
+		and not cities[preferred_city_id].is_dock
 	):
 		return preferred_city_id
 	var current := nations[nation_id].capital_city_id
@@ -4854,16 +4902,13 @@ func _planned_territory_capital(
 		current >= 0
 		and current < cities.size()
 		and planned_owners[current] == nation_id
+		and not cities[current].is_dock
 	):
 		return current
 	var candidates: Array[int] = []
 	for city in cities:
 		if planned_owners[city.id] == nation_id and not city.is_dock:
 			candidates.append(city.id)
-	if candidates.is_empty():
-		for city in cities:
-			if planned_owners[city.id] == nation_id:
-				candidates.append(city.id)
 	if candidates.is_empty():
 		return -1
 	var candidate_set := {}
@@ -5298,7 +5343,11 @@ func apply_territory_transaction(
 		var owner := planned_owners[city_id]
 		# 旧测试夹具及存档可能含与本批无关的历史脏 sponsor；原子事务只
 		# 拒绝本批 operation 的非法最终值，不能让无关城市阻断合法占领。
-		if owner >= 0 and owner < nations.size():
+		if (
+			owner >= 0
+			and owner < nations.size()
+			and not cities[city_id].is_dock
+		):
 			final_city_counts[owner] += 1
 	var requested_suzerainty := (
 		(proposed_suzerainty as Dictionary).duplicate(true)
@@ -5540,6 +5589,7 @@ func apply_territory_transaction(
 			nation_id < 0 or nation_id >= nations.size()
 			or preferred_id < 0 or preferred_id >= cities.size()
 			or planned_owners[preferred_id] != nation_id
+			or cities[preferred_id].is_dock
 		):
 			return {
 				"ok": false, "changed": false,
@@ -5600,7 +5650,8 @@ func apply_territory_transaction(
 	for city in cities:
 		var final_owner := planned_owners[city.id]
 		planned_warehouse_flags[city.id] = (
-			city.has_warehouse
+			not city.is_dock
+			and city.has_warehouse
 			and city.owner_nation == final_owner
 			and final_pool_holders[final_owner] == final_owner
 		)
@@ -6043,7 +6094,11 @@ func warehouse_cities_of(nation_id: int) -> Array[City]:
 		if city_id < 0 or city_id >= cities.size():
 			continue
 		var city := cities[city_id]
-		if city.owner_nation == nation_id and city.has_warehouse:
+		if (
+			city.owner_nation == nation_id
+			and not city.is_dock
+			and city.has_warehouse
+		):
 			result.append(city)
 	result.sort_custom(func(a: City, b: City) -> bool:
 		return EquivariantOrder.city_less(
@@ -6068,7 +6123,11 @@ func deposit_food(nation_id: int, amount: int) -> bool:
 	var target: City = null
 	if nation.capital_city_id >= 0 and nation.capital_city_id < cities.size():
 		var capital := cities[nation.capital_city_id]
-		if capital.owner_nation == holder_id and capital.has_warehouse:
+		if (
+			capital.owner_nation == holder_id
+			and not capital.is_dock
+			and capital.has_warehouse
+		):
 			target = capital
 	if target == null:
 		var warehouses := warehouse_cities_of(holder_id)
@@ -6100,12 +6159,21 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 func relocate_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
+	var nation := nations[nation_id]
+	# 迁都入口同时修复旧档/编辑器留下的码头行政标记。码头可被占领和
+	# 通行，但永远不能是首都或粮仓。
+	for city in cities:
+		if city.owner_nation != nation_id:
+			continue
+		city.is_capital = false
+		if city.is_dock:
+			city.has_warehouse = false
+			city.food_storage = 0
+			nation.warehouse_city_ids.erase(city.id)
 	var candidates: Array[City] = land_cities_of(nation_id)
 	if candidates.is_empty():
-		candidates = cities_of(nation_id)
-	if candidates.is_empty():
-		nations[nation_id].capital_city_id = -1
-		nations[nation_id].warehouse_city_ids.clear()
+		nation.capital_city_id = -1
+		nation.warehouse_city_ids.clear()
 		return -1
 	var best_component := _largest_owned_component(nation_id, candidates)
 	best_component.sort_custom(func(a: City, b: City) -> bool:
@@ -6119,7 +6187,6 @@ func relocate_capital(nation_id: int) -> int:
 		)
 	)
 	var capital := best_component[0]
-	var nation := nations[nation_id]
 	nation.capital_city_id = capital.id
 	capital.is_capital = true
 	var owns_food_pool := food_pool_holder(nation_id) == nation_id
@@ -6145,6 +6212,7 @@ func ensure_valid_capital(nation_id: int) -> int:
 		capital_id >= 0
 		and capital_id < cities.size()
 		and cities[capital_id].owner_nation == nation_id
+		and not cities[capital_id].is_dock
 		and cities[capital_id].is_capital
 	):
 		return capital_id
@@ -6187,18 +6255,21 @@ func territory_structure_valid() -> bool:
 		):
 			return false
 		if city.is_capital:
-			if nations[owner].capital_city_id != city.id:
+			if city.is_dock or nations[owner].capital_city_id != city.id:
 				return false
 			capital_count_by_nation[owner] = (
 				int(capital_count_by_nation.get(owner, 0)) + 1
 			)
 		if (
 			city.has_warehouse
-			and not nations[owner].warehouse_city_ids.has(city.id)
+			and (
+				city.is_dock
+				or not nations[owner].warehouse_city_ids.has(city.id)
+			)
 		):
 			return false
 	for nation in nations:
-		var has_city := not cities_of(nation.id).is_empty()
+		var has_city := not land_cities_of(nation.id).is_empty()
 		if nation.alive != has_city:
 			return false
 		if not has_city:
@@ -6213,6 +6284,7 @@ func territory_structure_valid() -> bool:
 			capital_id < 0
 			or capital_id >= cities.size()
 			or cities[capital_id].owner_nation != nation.id
+			or cities[capital_id].is_dock
 			or not cities[capital_id].is_capital
 			or int(capital_count_by_nation.get(nation.id, 0)) != 1
 		):
@@ -6224,6 +6296,7 @@ func territory_structure_valid() -> bool:
 				or warehouse_id < 0
 				or warehouse_id >= cities.size()
 				or cities[warehouse_id].owner_nation != nation.id
+				or cities[warehouse_id].is_dock
 				or not cities[warehouse_id].has_warehouse
 			):
 				return false
@@ -6285,14 +6358,16 @@ func _largest_owned_component(
 	return best
 
 
-## 刷新派生量：国家 granary_food（粮仓求和）与 alive（是否还有城市）
+## 刷新派生量：国家 granary_food（粮仓求和）与 alive（是否还有陆地城市）。
+## 码头只是交通节点；即使仍被某国控制，也不能单独维持国家存续。
 func refresh_derived() -> void:
 	for n in nations:
 		n.granary_food = 0
 		n.alive = false
 	for city in cities:
 		var owner := nations[city.owner_nation]
-		owner.alive = true
+		if not city.is_dock:
+			owner.alive = true
 		city.ruler_city_defense_multiplier = (
 			RulerProfile.city_defense_multiplier(owner)
 		)

@@ -13,6 +13,9 @@ extends Node
 ## 场景启动时忽略固定 world_seed，使用新的随机种子生成地图与国家。
 ## 专项大地图场景开启；默认场景与测试保持可复现。
 @export var randomize_world_seed_on_start: bool = false
+## 3D 地图的线性物理跨度倍率。只改变呈现空间与镜头覆盖，不改变归一化
+## 地形/省份拓扑；大地图场景可在不复制生成逻辑的前提下扩大单位间距。
+@export_range(0.5, 4.0, 0.1) var map_world_scale: float = 1.0
 @export_range(
 	MapRenderer.ARMY_ICON_SCALE_MIN,
 	MapRenderer.ARMY_ICON_SCALE_MAX,
@@ -438,6 +441,7 @@ func _activate_state(next_state: GameState) -> void:
 	renderer.set_world_layer_visible(not enable_3d)
 	if enable_3d:
 		map_3d.visible = true
+		map_3d.world_span_scale = map_world_scale
 		map_3d.setup(state, simulation, renderer)
 		if road_tuning_panel != null:
 			map_3d.set_province_strength(

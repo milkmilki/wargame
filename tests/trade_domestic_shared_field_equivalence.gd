@@ -81,12 +81,7 @@ func _run() -> void:
 			int(_status_counts[status_name]) > 0,
 			"coverage/status_%s_exercised" % status_name.to_lower()
 		)
-	for blocked_reason in [
-		"siege",
-		"capacity",
-		"enemy_occupied_edge",
-		"unreachable",
-	]:
+	for blocked_reason in ["capacity", "unreachable"]:
 		_check(
 			int(_obstruction_reason_counts.get(blocked_reason, 0)) > 0,
 			"coverage/obstruction_reason_%s_exercised" % blocked_reason
@@ -293,27 +288,15 @@ func _record_coverage(
 				_has_status(domestic_routes, TradeNetwork.ACTIVE),
 				label + "/hits_active"
 			)
-		"deterministic_rerouted_siege":
+		"deterministic_rerouted_siege", "deterministic_blocked_siege", "deterministic_blocked_enemy_occupied":
 			_check(
-				_has_status(domestic_routes, TradeNetwork.REROUTED),
-				label + "/rerouted_siege_hits_rerouted"
-			)
-		"deterministic_blocked_siege":
-			_check(
-				_has_blocked_reason(domestic_routes, "siege"),
-				label + "/blocked_siege_hits_reason"
+				_has_status(domestic_routes, TradeNetwork.ACTIVE),
+				label + "/war_events_keep_route_active"
 			)
 		"deterministic_blocked_capacity":
 			_check(
 				_has_blocked_reason(domestic_routes, "capacity"),
 				label + "/blocked_capacity_hits_reason"
-			)
-		"deterministic_blocked_enemy_occupied":
-			_check(
-				_has_blocked_reason(
-					domestic_routes, "enemy_occupied_edge"
-				),
-				label + "/blocked_enemy_occupied_hits_reason"
 			)
 		"deterministic_blocked_unreachable":
 			_check(
@@ -403,8 +386,8 @@ func _validate_deterministic_legacy(
 			var rerouted := _find_domestic_route(structure["routes"], 0, 2)
 			_check(not rerouted.is_empty(), label + "/legacy_route_present")
 			_check(
-				int(rerouted.get("status", -1)) == TradeNetwork.REROUTED,
-				label + "/legacy_status_rerouted",
+				int(rerouted.get("status", -1)) == TradeNetwork.ACTIVE,
+				label + "/siege_does_not_reroute",
 				"status=%s" % str(rerouted.get("status"))
 			)
 			_check(
@@ -413,16 +396,16 @@ func _validate_deterministic_legacy(
 				"path=%s" % str(rerouted.get("preferred_city_path"))
 			)
 			_check(
-				rerouted.get("city_path", []) == [0, 3, 2],
-				label + "/legacy_city_path_rerouted",
+				rerouted.get("city_path", []) == [0, 1, 2],
+				label + "/siege_keeps_preferred_path",
 				"path=%s" % str(rerouted.get("city_path"))
 			)
 		"deterministic_blocked_siege":
 			var blocked_siege := _find_domestic_route(structure["routes"], 0, 2)
 			_check(not blocked_siege.is_empty(), label + "/legacy_route_present")
 			_check(
-				int(blocked_siege.get("status", -1)) == TradeNetwork.BLOCKED,
-				label + "/legacy_status_blocked",
+				int(blocked_siege.get("status", -1)) == TradeNetwork.ACTIVE,
+				label + "/siege_does_not_block",
 				"status=%s" % str(blocked_siege.get("status"))
 			)
 			_check(
@@ -431,8 +414,8 @@ func _validate_deterministic_legacy(
 				"path=%s" % str(blocked_siege.get("city_path"))
 			)
 			_check(
-				str(blocked_siege.get("blocked_reason", "")) == "siege",
-				label + "/legacy_blocked_reason_siege",
+				str(blocked_siege.get("blocked_reason", "")).is_empty(),
+				label + "/siege_has_no_blocked_reason",
 				"reason=%s" % str(blocked_siege.get("blocked_reason"))
 			)
 		"deterministic_blocked_capacity":
@@ -456,22 +439,17 @@ func _validate_deterministic_legacy(
 			)
 		"deterministic_blocked_enemy_occupied":
 			var blocked_enemy := _find_domestic_route(structure["routes"], 0, 2)
-			var occupied_edge_key := GameState.edge_key(1, 2)
 			_check(not blocked_enemy.is_empty(), label + "/legacy_route_present")
 			_check(
-				int(blocked_enemy.get("status", -1)) == TradeNetwork.BLOCKED,
-				label + "/legacy_status_blocked",
+				int(blocked_enemy.get("status", -1)) == TradeNetwork.ACTIVE,
+				label + "/enemy_occupancy_does_not_block",
 				"status=%s" % str(blocked_enemy.get("status"))
 			)
 			_check(
-				str(blocked_enemy.get("blocked_reason", "")) == "enemy_occupied_edge",
-				label + "/legacy_blocked_reason_enemy_occupied",
-				"reason=%s" % str(blocked_enemy.get("blocked_reason"))
-			)
-			_check(
-				int(blocked_enemy.get("blocked_edge_key", -1)) == occupied_edge_key,
-				label + "/legacy_enemy_occupied_edge_key",
-				"edge=%s" % str(blocked_enemy.get("blocked_edge_key"))
+				blocked_enemy.get("city_path", []) == [0, 1, 2]
+					and str(blocked_enemy.get("blocked_reason", "")).is_empty(),
+				label + "/enemy_occupancy_keeps_path",
+				"route=%s" % str(blocked_enemy)
 			)
 		"deterministic_blocked_unreachable":
 			var unreachable := _find_domestic_route(structure["routes"], 0, 2)

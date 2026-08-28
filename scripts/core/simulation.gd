@@ -71,6 +71,10 @@ const AI_CONTEXT_SLICE_BUDGET_USEC: int = 6000
 ## ThreatField 按国家并行；4 路通常能覆盖性能核且避免图搜索争抢内存带宽。
 const AI_THREAT_MAX_WORKERS: int = 4
 const AI_DEFENSE_MAX_WORKERS: int = 4
+## 大地图开局没有既有战争或占领事件，不需要第1天让所有国家同时构建完整
+## 战略快照。超过一个决策周期的国家从首日即按相位铺开；后续外交/领土突变
+## 仍使用 force_all，保证真正需要同步响应时不延迟。
+const AI_INITIAL_STAGGER_NATION_THRESHOLD: int = AI_DECISION_INTERVAL_DAYS
 ## 补给网络含大量图搜索与内存访问；超过 4 路后通常受缓存/内存带宽限制，并会制造
 ## 过多短生命周期任务。保留一个逻辑核给主线程，再以此上限约束实际并发。
 const SUPPLY_NETWORK_MAX_WORKERS: int = 4
@@ -97,9 +101,9 @@ const WAR_MOBILIZATION_DAYS: int = 180
 const CAMPAIGN_OFFENSIVE_INTERVAL_DAYS: int = 20
 const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 30
 const CAMPAIGN_ARROW_DURATION_DAYS: int = 20
-## 一次 AI 规划允许同时调动更多战团，避免十天决策周期内只移动三军，
-## 导致大国需要数月才能把已经决定的全面攻势摆到前线。
-const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 6
+## 一次 AI 规划可为整批已分配主战军写入集结路径；道路状态机随后按
+## 真实容量逐日放行。此值只防止异常旧档产生无界命令量。
+const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 64
 const CAMPAIGN_ATTACK_ENTER_RATIO: float = 1.00
 const CAMPAIGN_TARGET_COMMIT_RATIO: float = 1.00
 const CAMPAIGN_STAGED_TROOP_RATIO: float = 0.75
@@ -144,7 +148,13 @@ var _ai_path_field_cache_by_nation: Dictionary = {}
 var _ai_supply_source_cache: Dictionary = {}
 var _ai_supply_network_cache: Dictionary = {}
 var _ai_city_partition_cache: Dictionary = {}
+## 外交拓扑缓存：军事接壤矩阵依赖外交关系，两跳距离只依赖领土与边类型。
+## 两者均按各自 revision 跨外交动作、月度外交与 AI 决策复用。
+var _diplomacy_topology_cache: Dictionary = {}
 var _ai_defense_plan_cache: Dictionary = {}
+## nation_id -> 最后一次完成战争攻势管理的日期。120天硬截止兜底只补漏，
+## 不得在同一日常规 AI 已评估后再无上下文重复构建快照/威胁/防区。
+var _campaign_evaluated_day_by_nation: Dictionary = {}
 ## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
 var _daily_supply_source_cache: Dictionary = {}
 var _stable_supply_city_source_cache: Dictionary = {}
@@ -158,12 +168,16 @@ var _supply_network_fingerprints: Dictionary = {}
 ## 贸易预测分两层缓存：结构层跨日复用昂贵图搜索；完整预测只在所有结算
 ## 输入完全相同时复用。缓存结果只供 Simulation 内部只读消费者共享。
 var _trade_structure_fingerprint: PackedByteArray = PackedByteArray()
+var _trade_structure_probe: Array = []
 var _trade_structure_cache: Dictionary = {}
 var _trade_shared_caches: Dictionary = {}
 var _trade_domestic_ideal_cache_generation: Array[int] = []
 var _trade_settlement_fingerprint: PackedByteArray = PackedByteArray()
 var _trade_result_cache: Dictionary = {}
 var _trade_gold_flows_cache: Array[Dictionary] = []
+var _trade_summary_settlement_fingerprint: PackedByteArray = PackedByteArray()
+var _trade_summary_result_cache: Dictionary = {}
+var _trade_summary_gold_flows_cache: Array[Dictionary] = []
 ## 战争财政快照只依赖外交关系转换。普通日以 O(1) 版本比较跳过，
 ## 外部脚本直接调用 set_diplomatic_relation 也会因 revision 变化被补同步。
 var _war_gold_snapshot_diplomacy_revision: int = -1
@@ -290,6 +304,8 @@ var diplomacy_mobilization_evaluation_cache_total: int = 0
 ## 贸易预测 A/B：true 时每次请求都重新 build_structure + settle。
 ## 正式运行保持 false；该开关不改变结算路径或结果，只禁用两层复用。
 var trade_forecast_cache_disabled: bool = false
+## 等价性门禁用：true 时 AI/外交也强制使用完整贸易结算；正式游戏 false。
+var trade_summary_forecast_disabled: bool = false
 ## domestic ideal field 跨 build shared cache A/B：true 时不传 shared cache 且清空。
 ## 正式运行保持 false；关闭后仅回退该层缓存，其余 trade forecast 行为不变。
 var trade_domestic_ideal_field_cache_disabled: bool = false
@@ -332,7 +348,9 @@ func setup(game_state: GameState) -> void:
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
 	_ai_city_partition_cache.clear()
+	_diplomacy_topology_cache.clear()
 	_ai_defense_plan_cache.clear()
+	_campaign_evaluated_day_by_nation.clear()
 	_daily_supply_source_cache.clear()
 	_stable_supply_city_source_cache.clear()
 	_supply_source_besieged_cities.clear()
@@ -513,6 +531,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		if state.uses_heightmap
 		else GRID_AI_DECISION_INTERVAL_DAYS
 	)
+	_force_mature_campaign_evaluations()
 	# 错峰下几乎每天都有一批国家到期；力求「有到期国家或需强制重算」即进入决策。
 	# 关闭错峰（A/B 对照）时退回旧门控：仅在 day%interval==0 全体决策。
 	var force_recompute := (
@@ -537,6 +556,9 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			await _ai_assign_targets(true)
 		else:
 			_ai_assign_targets()
+	# 满准备截止后每天复核一次，避免错峰/其他外交备战分支让国家跳过
+	# 当日战争攻势检查。正常准备期仍只在 AI 周期评估。
+	_launch_mature_campaign_offensives()
 	_record_tick_profile_stage("ai", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -993,12 +1015,16 @@ static func effective_tribute_rate(
 ## 清空单个 Simulation 实例拥有的贸易预测缓存和诊断计数。
 func _reset_trade_forecast_cache() -> void:
 	_trade_structure_fingerprint = PackedByteArray()
+	_trade_structure_probe.clear()
 	_trade_structure_cache.clear()
 	_trade_shared_caches.clear()
 	_trade_domestic_ideal_cache_generation.clear()
 	_trade_settlement_fingerprint = PackedByteArray()
 	_trade_result_cache.clear()
 	_trade_gold_flows_cache.clear()
+	_trade_summary_settlement_fingerprint = PackedByteArray()
+	_trade_summary_result_cache.clear()
+	_trade_summary_gold_flows_cache.clear()
 	trade_structure_build_total = 0
 	trade_structure_cache_hit_total = 0
 	trade_forecast_build_total = 0
@@ -1012,8 +1038,8 @@ func _reset_trade_forecast_cache() -> void:
 
 
 ## 当前贸易结算和财政预测的完整、无碰撞 token。结构 fingerprint 负责路线、
-## 战争、道路、围城与贸易政策；这里补齐粮池、库存、需求、国库、军费、
-## 战乱减产日期及君主经济输入。仅将这些字段序列化，不使用 hash。
+## 道路、领土与贸易政策；这里补齐战时收益倍率、粮池、库存、需求、国库、
+## 军费、战乱减产日期及君主经济输入。仅将这些字段序列化，不使用 hash。
 func _trade_settlement_token(
 	structure_fingerprint: PackedByteArray
 ) -> PackedByteArray:
@@ -1021,6 +1047,7 @@ func _trade_settlement_token(
 		"trade_settlement_v1",
 		structure_fingerprint,
 		["trade_price_enabled", state.trade_price_enabled],
+		["wartime_nations", TradeNetwork.wartime_nation_mask(state)],
 	]
 	for city in state.cities:
 		fields.append([
@@ -1063,7 +1090,9 @@ func _trade_settlement_token(
 
 ## Simulation 级贸易/财政预测入口。所有生产内调用均经此处：结构相同可跨日
 ## 复用；完整 token 相同则连 settle 与 gold_flows 也直接复用。
-func _forecast_trade_and_gold_flows() -> Dictionary:
+func _forecast_trade_and_gold_flows(
+	summary_only: bool = false
+) -> Dictionary:
 	var forecast_substage_enabled := (
 		tick_phase_profiling_enabled
 		and ai_snapshot_substage_profiling_enabled
@@ -1071,7 +1100,17 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 	var part_started := (
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
-	var structure_fingerprint := TradeNetwork.structure_fingerprint(state)
+	var structure_probe := _trade_structure_runtime_probe()
+	var structure_fingerprint := (
+		_trade_structure_fingerprint
+		if (
+			not trade_forecast_cache_disabled
+			and not _trade_structure_fingerprint.is_empty()
+			and _trade_structure_probe == structure_probe
+		)
+		else TradeNetwork.structure_fingerprint(state)
+	)
+	_trade_structure_probe = structure_probe
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
 			"ai_snapshot_forecast_structure_fingerprint",
@@ -1139,8 +1178,18 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 	)
 	if (
 		not trade_forecast_cache_disabled
-		and not _trade_result_cache.is_empty()
-		and _trade_settlement_fingerprint == settlement_fingerprint
+		and (
+			(
+				not _trade_result_cache.is_empty()
+				and _trade_settlement_fingerprint == settlement_fingerprint
+			)
+			or (
+				summary_only
+				and not _trade_summary_result_cache.is_empty()
+				and _trade_summary_settlement_fingerprint
+					== settlement_fingerprint
+			)
+		)
 	):
 		trade_forecast_cache_hit_total += 1
 		if forecast_substage_enabled:
@@ -1148,9 +1197,17 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 				"ai_snapshot_forecast_settlement_stage",
 				part_started
 			)
+		if (
+			not _trade_result_cache.is_empty()
+			and _trade_settlement_fingerprint == settlement_fingerprint
+		):
+			return {
+				"trade": _trade_result_cache,
+				"gold_flows": _trade_gold_flows_cache,
+			}
 		return {
-			"trade": _trade_result_cache,
-			"gold_flows": _trade_gold_flows_cache,
+			"trade": _trade_summary_result_cache,
+			"gold_flows": _trade_summary_gold_flows_cache,
 		}
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
@@ -1161,7 +1218,11 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 	part_started = (
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
-	var trade := TradeNetwork.settle(state, structure)
+	var trade := (
+		TradeNetwork.settle_nation_summary(state, structure)
+		if summary_only
+		else TradeNetwork.settle(state, structure)
+	)
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
 			"ai_snapshot_forecast_trade_settle",
@@ -1178,13 +1239,38 @@ func _forecast_trade_and_gold_flows() -> Dictionary:
 		)
 	trade_forecast_build_total += 1
 	if not trade_forecast_cache_disabled:
-		_trade_settlement_fingerprint = settlement_fingerprint
-		_trade_result_cache = trade
-		_trade_gold_flows_cache = gold_flows
+		if summary_only:
+			_trade_summary_settlement_fingerprint = settlement_fingerprint
+			_trade_summary_result_cache = trade
+			_trade_summary_gold_flows_cache = gold_flows
+		else:
+			_trade_settlement_fingerprint = settlement_fingerprint
+			_trade_result_cache = trade
+			_trade_gold_flows_cache = gold_flows
 	return {
 		"trade": trade,
 		"gold_flows": gold_flows,
 	}
+
+
+## Simulation 内部的低成本失效探针。结构 fingerprint 仍是最终权威；
+## 这里只在能证明同一运行态没有相关变更时复用上次结果，避免一日内多个
+## 财政/AI消费者反复序列化整张地图。战争、围城和军队位置不属于路线结构。
+func _trade_structure_runtime_probe() -> Array:
+	var result: Array = [
+		state.get_instance_id(),
+		state.cities.size(),
+		state.nations.size(),
+		state.edges.size(),
+		state.ownership_revision,
+		state.road_network_revision,
+	]
+	for nation in state.nations:
+		result.append_array([
+			nation.id, nation.alive, nation.capital_city_id,
+			nation.trade_policy, nation.ruler_revision,
+		])
+	return result
 
 
 func _trade_domestic_ideal_shared_caches(
@@ -1195,7 +1281,6 @@ func _trade_domestic_ideal_shared_caches(
 		_trade_domestic_ideal_cache_generation.clear()
 		return {}
 	var generation: Array[int] = [
-		state.ownership_revision,
 		state.road_network_revision,
 	]
 	if _trade_domestic_ideal_cache_generation != generation:
@@ -1204,6 +1289,10 @@ func _trade_domestic_ideal_shared_caches(
 		trade_domestic_ideal_cache_generation_clear_total += 1
 	if not _trade_shared_caches.has("domestic_ideal_fields"):
 		_trade_shared_caches["domestic_ideal_fields"] = {}
+	if not _trade_shared_caches.has("international_ideal_fields"):
+		_trade_shared_caches["international_ideal_fields"] = {}
+	if not _trade_shared_caches.has("operational_fields"):
+		_trade_shared_caches["operational_fields"] = {}
 	return _trade_shared_caches
 
 
@@ -1212,7 +1301,13 @@ func _trade_domestic_ideal_shared_caches(
 func _seed_trade_forecast(
 	evaluation_cache: Dictionary
 ) -> Dictionary:
-	var forecast := _forecast_trade_and_gold_flows()
+	var forecast := _forecast_trade_and_gold_flows(
+		not trade_summary_forecast_disabled
+	)
+	if not diplomacy_structure_cache_disabled:
+		evaluation_cache["__diplomacy_topology_cache"] = (
+			_diplomacy_topology_cache
+		)
 	evaluation_cache["trade_network_result"] = forecast["trade"]
 	evaluation_cache["monthly_gold_flows"] = forecast["gold_flows"]
 	return evaluation_cache
@@ -1489,7 +1584,7 @@ func _synchronize_war_gold_income_snapshots() -> void:
 	# 正常路径在宣战前已主动冻结，不会走到这里。只有旧存档、测试或
 	# 外部脚本直接改关系时才惰性汇总一次，避免每个普通日扫描全军/全城。
 	var flows: Array[Dictionary] = (
-		_forecast_trade_and_gold_flows()["gold_flows"]
+		_forecast_trade_and_gold_flows(true)["gold_flows"]
 	)
 	for nation_id in needs_snapshot:
 		var nation := state.nations[nation_id]
@@ -1522,7 +1617,7 @@ func _capture_war_gold_income_snapshots(
 	var flows: Array[Dictionary] = (
 		frozen_gold_flows
 		if not frozen_gold_flows.is_empty()
-		else _forecast_trade_and_gold_flows()["gold_flows"]
+		else _forecast_trade_and_gold_flows(true)["gold_flows"]
 	)
 	for nation_id in eligible:
 		var nation := state.nations[nation_id]
@@ -2062,6 +2157,32 @@ func _reinforce_nation(
 	food_cache: Dictionary
 ) -> void:
 	var at_war := not state.wars_of(nation.id).is_empty()
+	# 先做不需要粮食报告和路径网络的纯状态/缺额筛选。和平军通常已经达到
+	# 30% 编制；旧路径仍会为这些国家构建完整粮食预算和补员网络，却最终
+	# 得到空 plans。500 城月结算中这部分完全是无效工作。
+	var refill_candidates: Array[Army] = []
+	for army in nation_armies:
+		if (
+			army.size <= 0
+			or army.size >= army.max_size
+			or army.state in [Army.State.FIGHTING, Army.State.RETREATING]
+			or army.state not in [
+				Army.State.IDLE,
+				Army.State.MOVING,
+				Army.State.RECOVERING,
+				Army.State.HOLDING,
+			]
+		):
+			continue
+		var target_size := army.max_size
+		if not at_war:
+			target_size = int(ceil(
+				float(army.max_size) * PEACETIME_STRENGTH_RATIO
+			))
+		if army.size < target_size:
+			refill_candidates.append(army)
+	if refill_candidates.is_empty():
+		return
 	var food_report := _food_security_report(
 		nation.id,
 		nation_armies,
@@ -2092,7 +2213,7 @@ func _reinforce_nation(
 	)
 	var plans: Array = []
 	var total_deficit := 0
-	for army in nation_armies:
+	for army in refill_candidates:
 		if not _can_reinforce_army(
 			army,
 			manpower_hub_network
@@ -3076,10 +3197,8 @@ func _siege_garrison_battle_of(army: Army) -> Battle:
 ## 同步驱动：一次性处理全国防区（测试与快进路径用）。运行时改走分帧版。
 func _resolve_line_edge_assignment_emergencies() -> void:
 	var army_by_id := _living_army_index()
-	# 一次性收集被围城集合（O(B)），替代逐防区 city_under_siege 的 O(防区×B) 扫描。
-	var besieged := state.besieged_city_ids()
 	for nation in state.nations:
-		_resolve_nation_line_edge_sectors(nation, army_by_id, besieged)
+		_resolve_nation_line_edge_sectors(nation, army_by_id)
 
 
 ## 运行时分帧驱动：与同步版逐国等价，但在国与国之间按墙钟预算 yield。各国只处理
@@ -3087,10 +3206,9 @@ func _resolve_line_edge_assignment_emergencies() -> void:
 ## 不改变任何结果（由等价守卫覆盖）。
 func _resolve_line_edge_assignment_emergencies_over_frames() -> void:
 	var army_by_id := _living_army_index()
-	var besieged := state.besieged_city_ids()
 	var slice_started := Time.get_ticks_usec()
 	for nation in state.nations:
-		_resolve_nation_line_edge_sectors(nation, army_by_id, besieged)
+		_resolve_nation_line_edge_sectors(nation, army_by_id)
 		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
 			await get_tree().process_frame
 			slice_started = Time.get_ticks_usec()
@@ -3104,12 +3222,11 @@ func _living_army_index() -> Dictionary:
 	return army_by_id
 
 
-## 单国防区每日状态推进（逐国独立：只读 army_by_id/besieged 快照，只改本国防区
-## 与本国军队）。丢失城的防区撤退并移除；被围城召回；否则逐步恢复驻边。
+## 单国防区每日状态推进。LINE 防区不读取围城、敌军位置或临时压力；
+## 唯一会改变既有防区的运行时事件是锚点控制权丢失。
 func _resolve_nation_line_edge_sectors(
 	nation: Nation,
-	army_by_id: Dictionary,
-	besieged: Dictionary
+	army_by_id: Dictionary
 ) -> void:
 	var sectors: Dictionary = nation.frontier_defense_sectors
 	for city_id_value in sectors.keys().duplicate():
@@ -3128,116 +3245,8 @@ func _resolve_nation_line_edge_sectors(
 			)
 			sectors.erase(city_id)
 			continue
-		if besieged.has(city_id):
-			if sector.state in [
-				FrontierDefenseSector.State.NORMAL,
-				FrontierDefenseSector.State.RESTORING,
-			]:
-				sector.state = (
-					FrontierDefenseSector.State.RECALLING
-				)
-			else:
-				sector.state = (
-					FrontierDefenseSector.State.DEFENDING
-				)
-			_recall_frontier_sector(sector, army_by_id)
-			continue
-		if sector.state in [
-			FrontierDefenseSector.State.RECALLING,
-			FrontierDefenseSector.State.DEFENDING,
-		]:
-			sector.state = FrontierDefenseSector.State.RESTORING
-		if sector.state == FrontierDefenseSector.State.RESTORING:
-			_restore_frontier_sector(sector, army_by_id)
-	nation.frontier_defense_sectors = sectors
-
-
-func _recall_frontier_sector(
-	sector: FrontierDefenseSector,
-	army_by_id: Dictionary
-) -> void:
-	for slot_index in range(1, sector.slot_count()):
-		var army: Army = army_by_id.get(
-			sector.assigned_army_at(slot_index)
-		)
-		if army == null or army.state == Army.State.FIGHTING:
-			continue
-		if army.is_at_city_node(sector.city_id):
-			if army.state != Army.State.IDLE:
-				_settle_idle(army, sector.city_id)
-			continue
-		var recall := ActionCandidate.make(
-			ActionCandidate.Kind.RETREAT,
-			2000.0,
-			"填线防区：城市%d受攻，槽%d军%d立即回城"
-				% [sector.city_id, slot_index, army.id],
-			sector.city_id
-		)
-		recall.minimum_commit_days = AI_DECISION_INTERVAL_DAYS
-		recall.defensive_deployment = true
-		if army.on_edge and sector.city_id in [
-			army.move_from,
-			army.move_to,
-		]:
-			recall.target_edge_a = army.move_from
-			recall.target_edge_b = army.move_to
-			_redirect_edge_army_to_endpoint(
-				army,
-				sector.city_id,
-				recall
-			)
-		elif army.state == Army.State.IDLE:
-			recall.kind = ActionCandidate.Kind.REINFORCE
-			_execute_ai_candidate(army, recall)
-
-
-func _restore_frontier_sector(
-	sector: FrontierDefenseSector,
-	army_by_id: Dictionary
-) -> void:
-	var restored := true
-	for slot_index in range(1, sector.slot_count()):
-		var edge_neighbor := sector.edge_for_slot(slot_index)
-		var army: Army = army_by_id.get(
-			sector.assigned_army_at(slot_index)
-		)
-		if army == null:
-			continue
-		if (
-			army.state == Army.State.HOLDING
-			and edge_neighbor in [army.move_from, army.move_to]
-			and sector.city_id in [army.move_from, army.move_to]
-		):
-			continue
-		restored = false
-		if (
-			army.state != Army.State.IDLE
-			or army.location_city != sector.city_id
-		):
-			continue
-		var edge := state.edge_of(sector.city_id, edge_neighbor)
-		if (
-			edge == null
-			or edge.max_manpower <= 0
-			or not edge.allows_holding
-			or state.cities[edge_neighbor].owner_nation
-				== sector.owner_nation
-		):
-			continue
-		var hold := ActionCandidate.make(
-			ActionCandidate.Kind.HOLD,
-			2000.0,
-			"填线防区：城市%d防守成功，军%d恢复边槽%d"
-				% [sector.city_id, army.id, slot_index],
-			edge_neighbor
-		)
-		hold.target_edge_a = sector.city_id
-		hold.target_edge_b = edge_neighbor
-		hold.minimum_commit_days = AI_DECISION_INTERVAL_DAYS
-		hold.defensive_deployment = true
-		_execute_ai_candidate(army, hold)
-	if restored:
 		sector.state = FrontierDefenseSector.State.NORMAL
+	nation.frontier_defense_sectors = sectors
 
 
 func _retreat_lost_frontier_sector(
@@ -3277,32 +3286,6 @@ func _retreat_lost_frontier_sector(
 				sector.city_id,
 				sector.city_id
 			)
-
-
-func _redirect_edge_army_to_endpoint(
-	army: Army,
-	target_city: int,
-	candidate: ActionCandidate
-) -> bool:
-	if (
-		not army.on_edge
-		or army.move_to == -1
-		or target_city not in [army.move_from, army.move_to]
-	):
-		return false
-	if target_city == army.move_from:
-		var old_from := army.move_from
-		army.move_from = army.move_to
-		army.move_to = old_from
-		army.move_progress = 1.0 - army.move_progress
-	army.state = Army.State.MOVING
-	army.forced_retreat = false
-	army.holding_days = 0
-	army.hold_target_progress = -1.0
-	army.resume_holding_after_battle = false
-	army.path.clear()
-	_record_ai_order(army, candidate)
-	return true
 
 
 func _advance_holding_adaptation() -> void:
@@ -3392,7 +3375,8 @@ func _resolve_diplomacy_over_frames() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
 	_normalize_alliance_wars()
-	var evaluation_cache := _seed_trade_forecast({})
+	_set_runtime_profile_stage(&"trade_forecast_worker")
+	var evaluation_cache := await _seed_trade_forecast_over_frames()
 	var frozen_gold_flows: Array[Dictionary] = (
 		evaluation_cache["monthly_gold_flows"]
 	)
@@ -3425,6 +3409,23 @@ func _build_parallel_diplomacy_actions(job: Dictionary) -> void:
 	)
 
 
+func _seed_trade_forecast_over_frames() -> Dictionary:
+	var job := {"cache": {}}
+	var task_id := WorkerThreadPool.add_task(
+		_build_trade_forecast_cache_job.bind(job),
+		true,
+		"WorldWar trade forecast"
+	)
+	while not WorkerThreadPool.is_task_completed(task_id):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task_id)
+	return job["cache"] as Dictionary
+
+
+func _build_trade_forecast_cache_job(job: Dictionary) -> void:
+	job["cache"] = _seed_trade_forecast({})
+
+
 func _commit_diplomacy_actions_over_frames(
 	actions: Array,
 	evaluation_cache: Dictionary = {},
@@ -3451,7 +3452,7 @@ func _commit_diplomacy_actions_over_frames(
 				await get_tree().process_frame
 				runtime_slice_started = Time.get_ticks_usec()
 		_pending_war_mobilizations.clear()
-		action_cache = {}
+		action_cache = _new_diplomacy_action_cache()
 		if (
 			Time.get_ticks_usec() - runtime_slice_started
 				>= AI_RUNTIME_SLICE_BUDGET_USEC
@@ -3459,6 +3460,14 @@ func _commit_diplomacy_actions_over_frames(
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
 	_defer_declaration_launches = false
+
+
+func _new_diplomacy_action_cache() -> Dictionary:
+	if diplomacy_structure_cache_disabled:
+		return {}
+	return {
+		"__diplomacy_topology_cache": _diplomacy_topology_cache,
+	}
 
 
 func _commit_diplomacy_actions(
@@ -3482,7 +3491,7 @@ func _commit_diplomacy_actions(
 			else "diplomacy_commit_other"
 		)
 		_record_tick_profile_stage(stage, action_started)
-		action_cache = {}
+		action_cache = _new_diplomacy_action_cache()
 
 
 func _commit_diplomacy_action(
@@ -3499,7 +3508,9 @@ func _commit_diplomacy_action(
 ## 不经过和平意愿评分、不等待月度外交 tick，也不保留多国战争残余关系。
 func _resolve_eliminated_nation_capitulations() -> void:
 	for surrendering in range(state.nations.size()):
-		if not state.cities_of(surrendering).is_empty():
+		# 所有领土事务都会 refresh_derived；直接读取唯一存续真源，避免
+		# 每日为每个国家重新扫描全部城市。
+		if state.nations[surrendering].alive:
 			continue
 		var opponents := _war_opponents_including_eliminated(
 			surrendering
@@ -3775,7 +3786,12 @@ func _execute_diplomatic_action(
 						% occupations_restored
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
-			if state.can_alliance_declare_war(nation_a, nation_b):
+			if (
+				DiplomacyAI.within_diplomatic_range(
+					state, nation_a, nation_b, evaluation_cache
+				)
+				and state.can_alliance_declare_war(nation_a, nation_b)
+			):
 				var declaration_part_started := (
 					Time.get_ticks_usec()
 					if tick_phase_profiling_enabled else 0
@@ -3893,6 +3909,9 @@ func _execute_diplomatic_action(
 			if (
 				state.relation_between(nation_a, nation_b)
 				== GameState.DiplomaticRelation.NEUTRAL
+				and DiplomacyAI.within_diplomatic_range(
+					state, nation_a, nation_b, evaluation_cache
+				)
 			):
 				changed = state.set_diplomatic_relation(
 					nation_a,
@@ -3914,7 +3933,12 @@ func _execute_diplomatic_action(
 				if changed:
 					_repatriate_after_access_revoked(nation_a, nation_b)
 		DiplomacyAI.Action.PREPARE_WAR:
-			if state.can_alliance_declare_war(nation_a, nation_b):
+			if (
+				DiplomacyAI.within_diplomatic_range(
+					state, nation_a, nation_b, evaluation_cache
+				)
+				and state.can_alliance_declare_war(nation_a, nation_b)
+			):
 				changed = _start_war_preparation(nation_a, nation_b, action)
 		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
 			if state.nations[nation_a].war_preparation_target_nation >= 0:
@@ -4160,6 +4184,11 @@ func _normalize_alliance_wars() -> void:
 	var processed := {}
 	for nation in state.nations:
 		if not nation.alive or processed.has(nation.id):
+			continue
+		# 单国集团没有需要同步的战争。先做 O(N) 邻接检查，避免为每个
+		# 无盟友国家分别运行一次 O(N²) 的冲突感知 alliance_bloc。
+		if state.allies_of(nation.id).is_empty():
+			processed[nation.id] = true
 			continue
 		var bloc := state.alliance_bloc(nation.id)
 		for member in bloc:
@@ -4896,7 +4925,7 @@ func _restore_disconnected_coalition_occupations(
 		side_b[nation_id] = true
 	var connected_by_nation := {}
 	for nation_id in bloc_a + bloc_b:
-		if not state.cities_of(nation_id).is_empty():
+		if not state.land_cities_of(nation_id).is_empty():
 			connected_by_nation[nation_id] = (
 				_capital_connected_territory(nation_id)
 			)
@@ -5656,7 +5685,16 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
 	# 全局外交变化强制全体重算；局部占领只把直接受影响国家并入当天错峰集合。
-	var force_all_nations := _ai_last_decision_day == -1
+	var first_world_decision := (
+		_ai_last_decision_day == -1
+		and state.day <= 1
+		and state.uses_heightmap
+		and ai_staggered_decisions
+		and state.nations.size() > AI_INITIAL_STAGGER_NATION_THRESHOLD
+	)
+	var force_all_nations := (
+		_ai_last_decision_day == -1 and not first_world_decision
+	)
 	_ai_last_decision_day = state.day
 	var decision_interval := (
 		AI_DECISION_INTERVAL_DAYS
@@ -5754,7 +5792,11 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	var snapshot_cache_seed_started := (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	var snapshot_diplomacy_cache := _seed_trade_forecast({})
+	var snapshot_diplomacy_cache := (
+		await _seed_trade_forecast_over_frames()
+		if spread_runtime_work
+		else _seed_trade_forecast({})
+	)
 	_record_tick_profile_stage(
 		"ai_snapshot_cache_seed",
 		snapshot_cache_seed_started
@@ -6100,7 +6142,14 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			and not state.is_in_civil_war(nation_id)
 		):
 			pass
-		elif nation.war_preparation_target_nation >= 0:
+		elif (
+			nation.war_preparation_target_nation >= 0
+			and (
+				(decision_context["wars"] as Array).is_empty()
+				if decision_context.has("wars")
+				else state.wars_of(nation_id).is_empty()
+			)
+		):
 			_assign_offensive_staging_orders(
 				nation_id,
 				nation.war_preparation_objective_city,
@@ -6164,6 +6213,13 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 			strongest_first
 		)
 		for army in decision_order:
+			if (
+				spread_runtime_work
+				and Time.get_ticks_usec() - runtime_slice_started
+					>= AI_RUNTIME_SLICE_BUDGET_USEC
+			):
+				await get_tree().process_frame
+				runtime_slice_started = Time.get_ticks_usec()
 			var active_campaign_target := int(
 				nation.campaign_attack_assignments.get(
 					army.id,
@@ -6341,6 +6397,9 @@ func _stable_force_resource_cache_from_snapshot(
 		if (
 			key in [
 				"frontier_matrix_built",
+				"frontier_matrix",
+				"frontier_neighbors_by_observer",
+				"__diplomacy_topology_cache",
 				"monthly_gold_flows",
 				"trade_network_result",
 			]
@@ -6520,7 +6579,7 @@ func _enrich_ai_decision_context(
 		)
 		_set_runtime_profile_stage(&"ai_force_gold_flows")
 		resource_evaluation_cache[GOLD_FLOWS_CACHE_KEY] = (
-			_forecast_trade_and_gold_flows()["gold_flows"]
+			_forecast_trade_and_gold_flows(true)["gold_flows"]
 		)
 		_record_tick_profile_stage(
 			"ai_force_gold_flows", part_started
@@ -6730,6 +6789,48 @@ static func merge_forced_ai_nation_order(
 		if included.has(nation_id):
 			result.append(nation_id)
 	return result
+
+
+## 满准备是日历截止而不是“恰好轮到本国 AI”时才检查的软提示。
+## 错峰调度、占领强制重算或外交备战都可能改变下一次常规决策日；
+## 到达120天的交战国必须在当天进入完整军事规划，不能再额外等待。
+func _force_mature_campaign_evaluations() -> void:
+	for nation in state.nations:
+		if (
+			not nation.alive
+			or state.wars_of(nation.id).is_empty()
+			or nation.campaign_preparation_started_day < 0
+			or state.day - nation.campaign_preparation_started_day
+				< OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+			or _campaign_active_wave_present(nation)
+		):
+			continue
+		_ai_forced_nations[nation.id] = true
+
+
+func _launch_mature_campaign_offensives() -> void:
+	for nation in state.nations:
+		if (
+			not nation.alive
+			or state.wars_of(nation.id).is_empty()
+			or nation.campaign_preparation_plan == null
+			or nation.campaign_preparation_started_day < 0
+			or state.day - nation.campaign_preparation_started_day
+				< OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+			or _campaign_active_wave_present(nation)
+			or int(_campaign_evaluated_day_by_nation.get(
+				nation.id, -1
+			)) == state.day
+			or (
+				state.is_vassal(nation.id)
+				and not state.is_in_civil_war(nation.id)
+			)
+		):
+			continue
+		var objective_city := nation.campaign_preparation_plan.primary_city
+		if objective_city < 0:
+			continue
+		_manage_campaign_offensive(nation.id)
 
 
 func _collect_capture_affected_nations(
@@ -8039,11 +8140,28 @@ func _can_use_army_for_offensive(
 	if state.uses_heightmap:
 		return defense_plan.can_join_offensive(
 			army,
-			target_city
+			target_city,
+			true
 		)
 	return (
 		coordinator == null
 		or defense_plan.can_redeploy(army, coordinator)
+	)
+
+
+func _campaign_assignment_overrides_defensive_lock(
+	nation_id: int,
+	army: Army,
+	target_city: int
+) -> bool:
+	return (
+		state.uses_heightmap
+		and army != null
+		and army.is_main_battle_role()
+		and int(
+			state.nations[nation_id]
+				.campaign_preparation_assignments.get(army.id, -1)
+		) == target_city
 	)
 
 
@@ -8976,11 +9094,17 @@ func _campaign_allocation_target_candidates(
 			return
 		result.append(target_city)
 	append_valid.call(primary_city)
-	# 保留仍合法的旧方向，避免战略评分轻微变化导致全线来回换防。
 	var previous := nation.campaign_preparation_plan
 	if previous != null:
-		for target_city in previous.assigned_target_ids:
+		# 一次准备期内冻结目标集合。不能每十天把最新动态评分目标插到
+		# 第一位，否则既有战团会持续改派、永远无法在同一集结线会合。
+		result.clear()
+		for target_city in previous.candidate_target_ids:
 			append_valid.call(target_city)
+		if result.is_empty():
+			for target_city in previous.assigned_target_ids:
+				append_valid.call(target_city)
+		return result
 	else:
 		for target_city in nation.campaign_preparation_targets:
 			append_valid.call(target_city)
@@ -9016,6 +9140,10 @@ func _plan_campaign_allocation(
 	var previous_plan: CampaignAllocationPlan = (
 		nation.campaign_preparation_plan
 	)
+	if previous_plan != null:
+		plan.requested_primary_city = (
+			previous_plan.requested_primary_city
+		)
 	var previous_group_targets := {}
 	if previous_plan != null:
 		previous_group_targets = (
@@ -9063,9 +9191,17 @@ func _plan_campaign_allocation(
 		var target_city := int(target_value)
 		if plan.candidate_target_ids.has(target_city):
 			continue
-		var demand := _campaign_target_group_demand(
-			nation_id, target_city,
-			defense_plan.threat if defense_plan != null else null
+		var demand := (
+			(previous_plan.target_demands[target_city] as Dictionary)
+				.duplicate(true)
+			if (
+				previous_plan != null
+				and previous_plan.target_demands.has(target_city)
+			)
+			else _campaign_target_group_demand(
+				nation_id, target_city,
+				defense_plan.threat if defense_plan != null else null
+			)
 		)
 		if demand.is_empty():
 			continue
@@ -9076,16 +9212,28 @@ func _plan_campaign_allocation(
 			continue
 		plan.candidate_target_ids.append(target_city)
 		plan.target_demands[target_city] = demand.duplicate(true)
-		plan.target_group_budget[target_city] = 1
+		plan.target_group_budget[target_city] = (
+			maxi(int(previous_plan.target_group_budget.get(
+				target_city, 1
+			)), 1)
+			if previous_plan != null else 1
+		)
 		target_staging[target_city] = staging
 	if plan.candidate_target_ids.is_empty():
 		return plan
 	plan.primary_city = (
-		primary_city
+		previous_plan.primary_city
+		if (
+			previous_plan != null
+			and plan.candidate_target_ids.has(previous_plan.primary_city)
+		)
+		else primary_city
 		if plan.candidate_target_ids.has(primary_city)
 		else plan.candidate_target_ids[0]
 	)
-	var budget_used := plan.candidate_target_ids.size()
+	var budget_used := 0
+	for target_city in plan.candidate_target_ids:
+		budget_used += int(plan.target_group_budget[target_city])
 	plan.desired_group_count = 0
 	for target_city in plan.candidate_target_ids:
 		plan.desired_group_count += maxi(
@@ -9152,17 +9300,31 @@ func _plan_campaign_allocation(
 	var used_groups := {}
 	var assigned_manpower := {}
 	var assigned_power := {}
-	# 三轮槽位顺序与预算顺序一致，保证分配结果和扩军需求是同一模型。
+	# 决定性主目标先拿到首轮所需三团，再做广度覆盖。旧顺序先给八路
+	# 各一团，现有战团不足时主目标的第三团只能等待后续逐次扩军。
 	var slots: Array[int] = []
+	if (
+		plan.target_demands.has(plan.primary_city)
+		and bool(plan.target_demands[plan.primary_city].get(
+			"is_decisive", false
+		))
+	):
+		for _slot in range(mini(
+			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
+			int(plan.target_group_budget[plan.primary_city])
+		)):
+			slots.append(plan.primary_city)
 	for target_city in plan.candidate_target_ids:
-		slots.append(target_city)
+		if not slots.has(target_city):
+			slots.append(target_city)
 	for target_city in plan.candidate_target_ids:
 		var decisive := bool(
 			plan.target_demands[target_city].get("is_decisive", false)
 		)
 		if not decisive:
 			continue
-		for unused in range(1, mini(
+		var already_reserved := slots.count(target_city)
+		for unused in range(already_reserved, mini(
 			int(plan.target_demands[target_city].get("groups", 1)),
 			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
 				* CAMPAIGN_PREPARED_ECHELONS
@@ -9318,20 +9480,31 @@ func _evaluate_campaign_group_for_target(
 			continue
 		var origin := _campaign_army_origin(army, nation_id)
 		var retained_in_plan := retained_member_ids.has(army.id)
+		var staging_in_transit := (
+			retained_in_plan
+			and army.state == Army.State.MOVING
+			and army.ai_action in [
+				ActionCandidate.Kind.REINFORCE,
+				ActionCandidate.Kind.RETREAT,
+			]
+			and staging.has(army.ai_target_city)
+		)
 		if (
 			origin < 0
 			or army.state not in [Army.State.IDLE, Army.State.HOLDING]
-			or state.day < army.defensive_deployment_until_day
 			or not _can_use_army_for_offensive(
 				defense_plan, coordinator, army, target_city
 			)
 		):
-			if retained_in_plan:
+			# 只保留确实正在前往本目标集结城的旧成员。FIGHTING、
+			# RECOVERING 或执行其他目标的军队不能伪装成“在途第三团”，
+			# 否则 planner 会一直占着团槽而实际永不到位。
+			if staging_in_transit:
 				eligible_members.append(army)
 				eligible_ids.append(army.id)
 				power += ArmyPower.effective(army)
 				manpower += army.size
-				excluded[army.id] = "in_transit"
+				excluded[army.id] = "staging_in_transit"
 				continue
 			excluded[army.id] = "temporarily_unavailable"
 			continue
@@ -9356,7 +9529,7 @@ func _evaluate_campaign_group_for_target(
 		return {}
 	if strict_group_readiness:
 		for reason in excluded.values():
-			if str(reason) not in ["entry_capacity", "in_transit"]:
+			if str(reason) not in ["entry_capacity", "staging_in_transit"]:
 				return {}
 	return {
 		"members": eligible_members,
@@ -9785,7 +9958,12 @@ func _assign_offensive_staging_orders(
 							objective_city
 						)
 				)
-				or state.day < army.defensive_deployment_until_day
+				or (
+					state.day < army.defensive_deployment_until_day
+					and not _campaign_assignment_overrides_defensive_lock(
+						nation_id, army, objective_city
+					)
+				)
 				or not _can_use_army_for_offensive(
 					defense_plan,
 					coordinator,
@@ -9900,7 +10078,12 @@ func _assign_offensive_staging_orders(
 						objective_city
 					)
 			)
-			or state.day < army.defensive_deployment_until_day
+			or (
+				state.day < army.defensive_deployment_until_day
+				and not _campaign_assignment_overrides_defensive_lock(
+					nation_id, army, objective_city
+				)
+			)
 			or not _can_use_army_for_offensive(
 				defense_plan,
 				coordinator,
@@ -10023,7 +10206,12 @@ func _assign_offensive_staging_orders(
 						objective_city
 					)
 			)
-			or state.day < army.defensive_deployment_until_day
+			or (
+				state.day < army.defensive_deployment_until_day
+				and not _campaign_assignment_overrides_defensive_lock(
+					nation_id, army, objective_city
+				)
+			)
 			or _army_ready_for_campaign_target(
 				army,
 				nation_id,
@@ -11188,16 +11376,25 @@ func _campaign_offensive_gold_cost(
 ## 既有战役计划的执行续接。前梯队进入目标城市后即开放下一梯队，让道路容量
 ## 自然形成连续纵队；若前梯队提前失去作战能力，仍沿用次日接替规则。
 func _advance_campaign_echelons() -> void:
+	var armies_by_nation := {}
+	for nation in state.nations:
+		if nation.alive and not nation.campaign_plan_targets.is_empty():
+			armies_by_nation[nation.id] = [] as Array[Army]
+	if armies_by_nation.is_empty():
+		return
+	# 每日只扫描一次全军。旧实现会为每个有战役计划的国家再扫一遍，
+	# 多国并行战争时退化为 O(活跃战役国×全军数)。保留 state.armies
+	# 原顺序，后续梯队判定与发令结果不变。
+	for army in state.armies:
+		if (
+			army.size > 0
+			and armies_by_nation.has(army.owner_nation)
+		):
+			(armies_by_nation[army.owner_nation] as Array[Army]).append(army)
 	for nation in state.nations:
 		if not nation.alive or nation.campaign_plan_targets.is_empty():
 			continue
-		# 本国军队一次成表，供下方三个梯队函数按 (目标,梯队) 反复筛选时复用，替代
-		# 各自 for army in state.armies 全表扫描。40 国实测帧收益微小（campaign 目标
-		# 通常很少），但把 O(国×目标×A) 降为 O(国×目标×本国军)，为百国规模留出余量。
-		var nation_armies: Array[Army] = []
-		for army in state.armies:
-			if army.owner_nation == nation.id and army.size > 0:
-				nation_armies.append(army)
+		var nation_armies: Array[Army] = armies_by_nation[nation.id]
 		var targets := nation.campaign_plan_targets.duplicate()
 		EquivariantOrder.sort_city_ids(
 			targets,
@@ -11449,6 +11646,7 @@ func _advance_priority_city_defense_echelons(
 	_set_runtime_profile_stage(&"priority_defense_scan")
 	var sieges: Array[Battle] = []
 	var context_by_nation := {}
+	var diplomacy_cache := {}
 	for battle in state.battles:
 		if (
 			not battle.finished
@@ -11514,7 +11712,14 @@ func _advance_priority_city_defense_echelons(
 		var snapshot: StrategicMapSnapshot = context["snapshot"]
 		if snapshot == null:
 			var initial_view := _build_ai_view(nation_id)
-			snapshot = _strategy_snapshot_for(initial_view)
+			# 同一日的所有重点城解围共享一份贸易/财政预测。旧路径给每个
+			# 受围国家传空缓存，StrategicMapSnapshot._find_frontier() 会经
+			# threat_from_nation 重复构建整张贸易网，500 城多围城时成为主热点。
+			if diplomacy_cache.is_empty():
+				_seed_trade_forecast(diplomacy_cache)
+			snapshot = _strategy_snapshot_for(
+				initial_view, diplomacy_cache
+			)
 			context["view"] = initial_view
 			context["snapshot"] = snapshot
 		var priority_defense := _is_priority_defense_city(
@@ -11882,6 +12087,7 @@ func _manage_campaign_offensive(
 	threat: ThreatField = null,
 	decision_context: Dictionary = {}
 ) -> bool:
+	_campaign_evaluated_day_by_nation[nation_id] = state.day
 	var campaign_profile_started := (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
@@ -12061,7 +12267,7 @@ func _manage_campaign_offensive(
 	)
 	if not plan_ready:
 		return false
-	if not decision_context.is_empty():
+	if decision_context.has("view"):
 		_refresh_ai_campaign_staging_context(
 			decision_context
 		)
@@ -12125,7 +12331,9 @@ func _manage_campaign_offensive(
 			)
 			else 0
 		)
-		if decision_context.is_empty():
+		if not decision_context.has(
+			"campaign_staged_troops_by_target"
+		):
 			for army in staged_armies:
 				staged_troops += army.size
 		var planned_groups_ready := true
@@ -12153,7 +12361,20 @@ func _manage_campaign_offensive(
 				planned_groups.size() >= minimum_groups
 				and staged_group_ids.size() >= minimum_groups
 			)
-		if staged_troops < required or not planned_groups_ready:
+		var preparation_deadline_reached := (
+			preparation_days
+				>= OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
+		)
+		# 决定性方向平时要求足额战团同步集结；120天是硬发动截止，
+		# 到期后只要求至少一个已分配战团真正到位。旧逻辑在这里先用
+		# planned_groups_ready continue，导致后面的满准备分支永远不可达。
+		if (
+			staged_troops < required
+			or (
+				not planned_groups_ready
+				and not preparation_deadline_reached
+			)
+		):
 			continue
 		if threat == null:
 			threat = ThreatField.build(
@@ -12199,11 +12420,7 @@ func _manage_campaign_offensive(
 		if (
 			recent_legal_reclamation
 			or force_ready_without_bonus
-			or (
-				full_preparation_active
-				and preparation_days
-					>= OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
-			)
+			or preparation_deadline_reached
 			or (
 				not full_preparation_active
 				and projected_ratio
@@ -12806,6 +13023,20 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 	var reserved_transaction := int(
 		_ai_transaction_reserved_armies.get(army.id, -1)
 	) if army != null else -1
+	var campaign_staging_queue := (
+		army != null
+		and army.is_main_battle_role()
+		and army.owner_nation >= 0
+		and army.owner_nation < state.nations.size()
+		and state.nations[army.owner_nation]
+			.campaign_preparation_assignments.has(army.id)
+		and candidate != null
+		and candidate.kind in [
+			ActionCandidate.Kind.REINFORCE,
+			ActionCandidate.Kind.RETREAT,
+		]
+		and candidate.reason.begins_with("战前")
+	)
 	if (
 		army == null
 		or army.size <= 0
@@ -12888,6 +13119,7 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			+ transport_load
 			> first_edge.max_manpower
 			and _ai_queue_transaction_id < 0
+			and not campaign_staging_queue
 		):
 			return false
 		_ai_planned_first_legs[leg_key] = (
@@ -15019,7 +15251,7 @@ func _occupation_claimant_for_army(
 		if (
 			recognized_owner >= 0
 			and recognized_owner < state.nations.size()
-			and not state.cities_of(recognized_owner).is_empty()
+			and not state.land_cities_of(recognized_owner).is_empty()
 			and state.is_enemy(
 				recognized_owner,
 				target_city.owner_nation
@@ -15037,9 +15269,7 @@ func _occupation_claimant_for_army(
 		army.occupation_claimant_nation >= 0
 		and army.occupation_claimant_nation
 			< state.nations.size()
-		and not state.cities_of(
-			army.occupation_claimant_nation
-		).is_empty()
+		and state.nations[army.occupation_claimant_nation].alive
 	):
 		return army.occupation_claimant_nation
 	var origin_city := army.move_from
@@ -15078,13 +15308,19 @@ func _refresh_war_flags() -> void:
 # ------------------------------------------------------------------ 7. 胜负
 
 func _check_victory() -> void:
+	var has_land_city := PackedByteArray()
+	has_land_city.resize(state.nations.size())
+	has_land_city.fill(0)
+	for city in state.cities:
+		if (
+			not city.is_dock
+			and city.owner_nation >= 0
+			and city.owner_nation < has_land_city.size()
+		):
+			has_land_city[city.owner_nation] = 1
 	var alive_nations: Array[int] = []
 	for n in state.nations:
-		var has_city := false
-		for city in state.cities:
-			if city.owner_nation == n.id:
-				has_city = true
-				break
+		var has_city := has_land_city[n.id] != 0
 		n.alive = has_city
 		if has_city:
 			alive_nations.append(n.id)

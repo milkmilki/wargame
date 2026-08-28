@@ -494,17 +494,43 @@ func _test_trade_network() -> void:
 		"trade/neutral_nations_trade",
 		str(neutral_route)
 	)
+	_check(
+		(neutral_route.get("preferred_city_path", []) as Array).size() - 1
+			>= TradeNetwork.MIN_INTERNATIONAL_ROUTE_HOPS,
+		"trade/international_endpoints_respect_minimum_hops",
+		str(neutral_route.get("preferred_city_path", []))
+	)
 	pair_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	var wartime := TradeNetwork.build(pair_state)
-	var blocked := _international_route(wartime, 0, 1)
+	var wartime_route := _international_route(wartime, 0, 1)
 	_check(
-		not blocked.is_empty()
-			and int(blocked["status"]) == TradeNetwork.BLOCKED
-			and str(blocked["blocked_reason"]) == "hostile_territory"
-			and int(blocked["gold_tax"]) == 0
-			and int(blocked["food_transfer"]) == 0,
-		"trade/war_blocks_route",
-		str(blocked)
+		not wartime_route.is_empty()
+			and int(wartime_route["status"]) == int(neutral_route["status"])
+			and wartime_route["city_path"] == neutral_route["city_path"]
+			and wartime_route["edge_keys"] == neutral_route["edge_keys"]
+			and str(wartime_route["blocked_reason"])
+				== str(neutral_route["blocked_reason"]),
+		"trade/war_keeps_route_fixed",
+		str(wartime_route)
+	)
+	_check(
+		int(wartime_route["gold_to_a"]) == int(floor(
+			float(neutral_route["gold_to_a"])
+			* TradeNetwork.WARTIME_TRADE_GOLD_MULTIPLIER
+		))
+			and int(wartime_route["gold_to_b"]) == int(floor(
+				float(neutral_route["gold_to_b"])
+				* TradeNetwork.WARTIME_TRADE_GOLD_MULTIPLIER
+			)),
+		"trade/war_halves_belligerent_bonus",
+		"neutral=%s wartime=%s" % [str(neutral_route), str(wartime_route)]
+	)
+	pair_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.NEUTRAL
+	)
+	_check(
+		TradeNetwork.build(pair_state) == neutral,
+		"trade/peace_restores_bonus_and_original_routes"
 	)
 
 	var transit_state := _make_trade_transit_state()
@@ -524,6 +550,39 @@ func _test_trade_network() -> void:
 			and int(transit_route["transit_gold"]) > 0,
 		"trade/tax_allocation_conserved_including_transit",
 		str(transit_route)
+	)
+	var transit_peace_gold: Array = (
+		transit["nation_trade_gold"] as Array
+	).duplicate()
+	transit_state.set_diplomatic_relation(
+		0, 2, GameState.DiplomaticRelation.WAR
+	)
+	var transit_war := TradeNetwork.build(transit_state)
+	for nation_id in range(transit_state.nations.size()):
+		var expected_trade_gold := int(transit_peace_gold[nation_id])
+		if nation_id in [0, 2]:
+			expected_trade_gold = int(floor(
+				float(expected_trade_gold)
+				* TradeNetwork.WARTIME_TRADE_GOLD_MULTIPLIER
+			))
+		_check(
+			int(transit_war["nation_trade_gold"][nation_id])
+				== expected_trade_gold,
+			"trade/wartime_multiplier_nation_%d" % nation_id,
+			"peace=%d war=%d expected=%d" % [
+				int(transit_peace_gold[nation_id]),
+				int(transit_war["nation_trade_gold"][nation_id]),
+				expected_trade_gold,
+			]
+		)
+	var nation_zero_once := int(transit_war["nation_trade_gold"][0])
+	transit_state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	_check(
+		int(TradeNetwork.build(transit_state)["nation_trade_gold"][0])
+			== nation_zero_once,
+		"trade/multiple_wars_do_not_stack_penalty"
 	)
 
 	var food_state := _make_trade_pair_state()
@@ -597,7 +656,13 @@ func _make_trade_pair_state() -> GameState:
 	var state := _make_empty_state(2)
 	_add_city(state, 0, Vector2(0.2, 0.5), 20, 600)
 	_add_city(state, 1, Vector2(0.8, 0.5), 18, 600)
-	_add_edge(state, 0, 1, 20000, 2)
+	var dock_a := _add_city(state, 0, Vector2(0.4, 0.5), 0, 0)
+	var dock_b := _add_city(state, 1, Vector2(0.6, 0.5), 0, 0)
+	state.cities[dock_a].is_dock = true
+	state.cities[dock_b].is_dock = true
+	_add_edge(state, 0, dock_a, 20000, 1)
+	_add_edge(state, dock_a, dock_b, 20000, 1)
+	_add_edge(state, dock_b, 1, 20000, 1)
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	_configure_capitals_and_warehouses(state, 20)
 	state.refresh_derived()
@@ -610,7 +675,12 @@ func _make_trade_transit_state() -> GameState:
 	_add_city(state, 1, Vector2(0.5, 0.5), 8, 300)
 	_add_city(state, 2, Vector2(0.9, 0.5), 28, 600)
 	_add_edge(state, 0, 1, 20000, 1)
-	_add_edge(state, 1, 2, 20000, 1)
+	var transit_dock := _add_city(
+		state, 1, Vector2(0.7, 0.5), 0, 0
+	)
+	state.cities[transit_dock].is_dock = true
+	_add_edge(state, 1, transit_dock, 20000, 1)
+	_add_edge(state, transit_dock, 2, 20000, 1)
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	_configure_capitals_and_warehouses(state, 20)
 	state.refresh_derived()
@@ -683,7 +753,7 @@ func _configure_capitals_and_warehouses(state: GameState, food: int) -> void:
 	for nation in state.nations:
 		var capital_id := -1
 		for city in state.cities:
-			if city.owner_nation == nation.id:
+			if city.owner_nation == nation.id and not city.is_dock:
 				capital_id = city.id
 				break
 		if capital_id < 0:

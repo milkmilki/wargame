@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://main.tscn" id="1_main"]
+
+[node name="FiveHundredCityStress" instance=ExtResource("1_main")]
+nation_count = 80
+terrain_city_count = 500
+randomize_world_seed_on_start = true
+map_world_scale = 2.0
+initial_army_icon_scale = 0.25
+initial_city_names_visible = false
+initial_nation_names_visible = true

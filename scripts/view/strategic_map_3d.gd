@@ -4,6 +4,7 @@ extends Node3D
 ## 负责连续地形、国家覆色、道路、河流、城市、军队、战斗和相机交互。
 
 const BASE_WORLD_SPAN: float = 64.0
+@export_range(0.5, 4.0, 0.1) var world_span_scale: float = 1.0
 ## Hybrid terrain contract: political boundaries are smoothed in texture space,
 ## while a moderately denser mesh preserves the real 0m coast and small islands.
 ## 512 adds roughly four times the old triangle count for little gain over 384.
@@ -592,10 +593,11 @@ func _ensure_feature_nodes() -> void:
 
 func _configure_dimensions() -> void:
 	var aspect := clampf(state.map_aspect_ratio, 0.5, 2.5)
+	var world_span := BASE_WORLD_SPAN * maxf(world_span_scale, 0.5)
 	if aspect >= 1.0:
 		_world_size = Vector2(
-			BASE_WORLD_SPAN,
-			BASE_WORLD_SPAN / aspect
+			world_span,
+			world_span / aspect
 		)
 		_mesh_resolution = Vector2i(
 			BASE_MESH_RESOLUTION,
@@ -608,8 +610,8 @@ func _configure_dimensions() -> void:
 		)
 	else:
 		_world_size = Vector2(
-			BASE_WORLD_SPAN * aspect,
-			BASE_WORLD_SPAN
+			world_span * aspect,
+			world_span
 		)
 		_mesh_resolution = Vector2i(
 			maxi(
@@ -627,7 +629,7 @@ func _configure_camera() -> void:
 	_camera_distance = clampf(
 		_overview_distance_for_viewport(),
 		CAMERA_MIN_DISTANCE,
-		CAMERA_MAX_DISTANCE
+		_camera_max_distance()
 	)
 	_camera_overview_distance = _camera_distance
 	_apply_camera_transform()
@@ -711,9 +713,13 @@ func _zoom_camera(factor: float) -> void:
 	_camera_distance = clampf(
 		_camera_distance * factor,
 		CAMERA_MIN_DISTANCE,
-		CAMERA_MAX_DISTANCE
+		_camera_max_distance()
 	)
 	_apply_camera_transform()
+
+
+func _camera_max_distance() -> float:
+	return CAMERA_MAX_DISTANCE * maxf(world_span_scale, 1.0)
 
 
 func _pan_camera(screen_delta: Vector2) -> void:
@@ -1937,29 +1943,31 @@ func _update_army_instances() -> void:
 		layer.multimesh.instance_count = living.size()
 	for index in range(living.size()):
 		var army := living[index]
+		var is_main_role := army.is_main_battle_role()
 		var map_position := overlay.army_map_position(army)
 		var world := _terrain.map_to_world(map_position)
 		var angle := float(army.id % 11) / 11.0 * TAU
 		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.34
-		var scale := overlay.army_icon_scale() * (
-			1.02
-			if army.max_size >= Army.DEFAULT_MAX_SIZE
-			else 0.78
-		)
+		var scale := overlay.army_icon_scale() * army_role_scale(army)
 		# Ground the counter on the terrain surface like city bases and roads
 		# instead of hovering above it. The base box is 0.16 tall, so a 0.10
 		# lift keeps its underside flush with the map while the stacked face,
 		# symbols and morale bar rise from there.
 		var origin := world + offset + Vector3(0.0, 0.10, 0.0)
 		_set_counter_transform(
-			_army_bases, index, origin, scale, Vector3(1.12, 1.0, 1.12)
+			_army_bases, index, origin, scale,
+			Vector3(1.30, 1.0, 1.12)
+				if is_main_role else Vector3(0.88, 1.0, 0.82)
 		)
 		_set_counter_transform(
 			_armies, index, origin + Vector3(0.0, 0.10, 0.0),
-			scale, Vector3.ONE
+			scale,
+			Vector3(1.16, 1.0, 1.0)
+				if is_main_role else Vector3(0.90, 1.0, 0.82)
 		)
-		var is_heavy := army.max_size >= Army.DEFAULT_MAX_SIZE
-		var first_angle := 0.0 if is_heavy else PI * 0.25
+		# 主战军使用醒目的“+”号与金色厚底；填线军使用“×”号与
+		# 紧凑黑底。战团中的5000轻军也按 MAIN 外观显示。
+		var first_angle := 0.0 if is_main_role else PI * 0.25
 		var symbol_basis := Basis(Vector3.UP, first_angle).scaled(
 			Vector3(scale, scale, scale)
 		)
@@ -1968,7 +1976,7 @@ func _update_army_instances() -> void:
 			index, Transform3D(symbol_basis, symbol_origin)
 		)
 		var second_angle := (
-			PI * 0.5 if is_heavy else -PI * 0.25
+			PI * 0.5 if is_main_role else -PI * 0.25
 		)
 		_army_symbol_b.multimesh.set_instance_transform(
 			index,
@@ -1991,18 +1999,30 @@ func _update_army_instances() -> void:
 			0.62 if army.starving else 0.0,
 			0.06 if army.state == Army.State.FIGHTING else 0.0
 		)
-		_army_bases.multimesh.set_instance_color(index, MAP_INK)
+		_army_bases.multimesh.set_instance_color(
+			index, army_role_base_color(army)
+		)
 		_armies.multimesh.set_instance_color(index, color)
 		_army_symbol_a.multimesh.set_instance_color(
-			index, MAP_COUNTER_MARK
+			index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
 		)
 		_army_symbol_b.multimesh.set_instance_color(
-			index, MAP_COUNTER_MARK
+			index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
 		)
 		_army_morale_backs.multimesh.set_instance_color(index, MAP_INK)
 		_army_morale_bars.multimesh.set_instance_color(
 			index, _morale_color(morale_ratio, army.starving)
 		)
+
+
+static func army_role_scale(army: Army) -> float:
+	if army == null or not army.is_main_battle_role():
+		return 0.68
+	return 1.18 if army.max_size >= Army.DEFAULT_MAX_SIZE else 1.02
+
+
+static func army_role_base_color(army: Army) -> Color:
+	return MAP_GOLD if army != null and army.is_main_battle_role() else MAP_INK
 
 
 func _build_army_counter_meshes() -> void:

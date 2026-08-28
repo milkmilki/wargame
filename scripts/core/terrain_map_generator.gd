@@ -68,6 +68,12 @@ static func build(
 	generation_seed: int = 0,
 	initial_nation_count: int = 4
 ) -> Dictionary:
+	var profile_enabled := (
+		OS.get_environment("WORLD_GENERATION_PROFILE") == "1"
+	)
+	var profile_started := Time.get_ticks_usec() if profile_enabled else 0
+	var profile_last := profile_started
+	var profile := {}
 	var mask_signature := city_mask_signature(city_mask_path)
 	var density_settings := normalize_city_density_settings(
 		city_density_settings
@@ -109,6 +115,9 @@ static func build(
 	)
 	var bounds := Rect2i(Vector2i.ZERO, analysis.get_size())
 	var map_aspect_ratio := MapSource.aspect_ratio()
+	if profile_enabled:
+		profile["input"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	# 城市与省份先独立生成；河流随后从既有公共省界中选择。这样河流
 	# 不再反过来扭曲城市位置或省界，省界也成为河道几何的唯一真源。
 	var empty_river_paths: Array[Array] = []
@@ -122,6 +131,9 @@ static func build(
 		density_settings,
 		generation_seed
 	)
+	if profile_enabled:
+		profile["settlements"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	# Settlement density and spacing are solved in the tight land domain, then
 	# projected once into the complete geographic rectangle used by rendering.
 	var full_positions: Array[Vector2] = []
@@ -137,9 +149,15 @@ static func build(
 		samples["pixels"],
 		empty_river_paths
 	)
+	if profile_enabled:
+		profile["provinces"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	var boundary_rivers := _build_boundary_river_network(
 		provinces, samples["positions"], map_aspect_ratio
 	)
+	if profile_enabled:
+		profile["rivers"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	var road_result := _build_roads(
 		analysis,
 		mask,
@@ -148,12 +166,18 @@ static func build(
 		provinces,
 		boundary_rivers["pixel_paths"]
 	)
+	if profile_enabled:
+		profile["roads"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	_attach_province_land_paths(
 		road_result["roads"],
 		provinces,
 		samples["positions"],
 		city_count
 	)
+	if profile_enabled:
+		profile["road_paths"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	var transport := _build_boundary_river_transport(
 		analysis,
 		samples,
@@ -164,6 +188,9 @@ static func build(
 		map_aspect_ratio,
 		initial_nation_count
 	)
+	if profile_enabled:
+		profile["river_transport"] = Time.get_ticks_usec() - profile_last
+		profile_last = Time.get_ticks_usec()
 	var result := {
 		"positions": samples["positions"],
 		"pixels": samples["pixels"],
@@ -191,6 +218,12 @@ static func build(
 		"generation_seed": generation_seed,
 	}
 	_cache[cache_key] = result.duplicate(true)
+	if profile_enabled:
+		profile["materialize_cache"] = Time.get_ticks_usec() - profile_last
+		print("WORLD_GENERATION_PROFILE total=%.2fms stages=%s" % [
+			float(Time.get_ticks_usec() - profile_started) / 1000.0,
+			str(profile),
+		])
 	return result
 
 
@@ -1063,6 +1096,9 @@ static func _sample_cities(
 			)
 			candidates.append({
 				"pixel": Vector2i(x, y),
+				"metric_position": Vector2(
+					normalized.x * map_aspect, normalized.y
+				),
 				"height": height,
 				"relief": relief,
 				"density": density,
@@ -1097,53 +1133,33 @@ static func _sample_cities(
 	)
 	var first_index := 0
 	var selected: Array[Dictionary] = [candidates[first_index]]
-	var selected_pixels := {candidates[first_index]["pixel"]: true}
+	var selected_flags := PackedByteArray()
+	selected_flags.resize(candidates.size())
+	selected_flags.fill(0)
+	selected_flags[first_index] = 1
+	var minimum_distance_sq := PackedFloat64Array()
+	minimum_distance_sq.resize(candidates.size())
+	minimum_distance_sq.fill(INF)
+	var minimum_clearance_sq := PackedFloat64Array()
+	minimum_clearance_sq.resize(candidates.size())
+	minimum_clearance_sq.fill(INF)
+	_update_city_candidate_distance_cache(
+		candidates, first_index, selected_flags,
+		minimum_distance_sq, minimum_clearance_sq
+	)
 	var spacing_scale := 1.0
 	while selected.size() < city_count:
 		var best_index := -1
 		var best_score := -INF
+		var required_clearance_sq := spacing_scale * spacing_scale
 		for i in range(candidates.size()):
 			var candidate := candidates[i]
-			if selected_pixels.has(candidate["pixel"]):
+			if selected_flags[i] != 0:
 				continue
-			var candidate_norm := (
-				Vector2(candidate["pixel"]) - Vector2(bounds.position)
-			) / scale
-			var candidate_metric := Vector2(
-				candidate_norm.x * map_aspect,
-				candidate_norm.y
-			)
-			var min_distance_sq := INF
-			for chosen in selected:
-				var chosen_norm := (
-					Vector2(chosen["pixel"]) - Vector2(bounds.position)
-				) / scale
-				var chosen_metric := Vector2(
-					chosen_norm.x * map_aspect,
-					chosen_norm.y
-				)
-				min_distance_sq = minf(
-					min_distance_sq,
-					candidate_metric.distance_squared_to(chosen_metric)
-				)
-				var required_spacing := (
-					(
-						float(candidate["spacing"])
-						+ float(chosen["spacing"])
-					) * 0.5 * spacing_scale
-				)
-				if (
-					candidate_metric.distance_squared_to(
-						chosen_metric
-					)
-					< required_spacing * required_spacing
-				):
-					min_distance_sq = -INF
-					break
-			if min_distance_sq < 0.0:
+			if minimum_clearance_sq[i] < required_clearance_sq:
 				continue
 			var score := (
-				min_distance_sq * float(candidate["density"])
+				minimum_distance_sq[i] * float(candidate["density"])
 					* float(candidate["seed_weight"])
 				- float(candidate["relief"]) * RELIEF_SPACING_WEIGHT
 			)
@@ -1177,7 +1193,11 @@ static func _sample_cities(
 				spacing_scale = 0.0
 			continue
 		selected.append(candidates[best_index])
-		selected_pixels[candidates[best_index]["pixel"]] = true
+		selected_flags[best_index] = 1
+		_update_city_candidate_distance_cache(
+			candidates, best_index, selected_flags,
+			minimum_distance_sq, minimum_clearance_sq
+		)
 	selected.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var pa: Vector2i = a["pixel"]
 		var pb: Vector2i = b["pixel"]
@@ -1202,6 +1222,39 @@ static func _sample_cities(
 		"heights": heights,
 		"reliefs": reliefs,
 	}
+
+
+## farthest-point 采样的增量缓存。旧实现每轮都把全部已选点重扫一遍；
+## 最近距离与“距离/双方平均间距”都只会随新点单调减小，因此每加入一个点
+## 更新一次即可，选点顺序与放宽间距后的结果保持不变。
+static func _update_city_candidate_distance_cache(
+	candidates: Array[Dictionary],
+	chosen_index: int,
+	selected_flags: PackedByteArray,
+	minimum_distance_sq: PackedFloat64Array,
+	minimum_clearance_sq: PackedFloat64Array
+) -> void:
+	var chosen: Dictionary = candidates[chosen_index]
+	var chosen_metric: Vector2 = chosen["metric_position"]
+	var chosen_spacing := float(chosen["spacing"])
+	for candidate_index in range(candidates.size()):
+		if selected_flags[candidate_index] != 0:
+			continue
+		var candidate: Dictionary = candidates[candidate_index]
+		var candidate_metric: Vector2 = candidate["metric_position"]
+		var distance_sq := candidate_metric.distance_squared_to(chosen_metric)
+		minimum_distance_sq[candidate_index] = minf(
+			minimum_distance_sq[candidate_index], distance_sq
+		)
+		var pair_spacing := (
+			float(candidate["spacing"]) + chosen_spacing
+		) * 0.5
+		var clearance_sq := (
+			distance_sq / maxf(pair_spacing * pair_spacing, 0.000000000001)
+		)
+		minimum_clearance_sq[candidate_index] = minf(
+			minimum_clearance_sq[candidate_index], clearance_sq
+		)
 
 
 static func minimum_city_spacing_for_count(city_count: int) -> float:

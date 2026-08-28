@@ -12,7 +12,7 @@ func _init() -> void:
 	_test_direct_and_reused_settlement()
 	_test_structure_dependencies()
 	_test_dynamic_exclusions()
-	_test_blocking_army_selection()
+	_test_war_and_battle_exclusions()
 	_test_result_alias_safety()
 	_test_stale_dimensions_rebuild()
 	print("=== 贸易结构缓存等价校验 ===")
@@ -129,10 +129,6 @@ func _test_structure_dependencies() -> void:
 			s.nations[0].ruler_traits = (
 				[RulerProfile.TRAIT_MERCANTILE] as Array[String]
 			)},
-		{"name": "war_graph", "mutate": func(s: GameState) -> void:
-			s.set_diplomatic_relation(
-				0, 1, GameState.DiplomaticRelation.WAR
-			)},
 		{"name": "edge_endpoint", "mutate": func(s: GameState) -> void:
 			s.edges[0].city_b = 2},
 		{"name": "edge_kind", "mutate": func(s: GameState) -> void:
@@ -151,8 +147,6 @@ func _test_structure_dependencies() -> void:
 			s.edges[0].supply_loss_multiplier += 0.125},
 		{"name": "map_aspect_ratio", "mutate": func(s: GameState) -> void:
 			s.map_aspect_ratio += 0.25},
-		{"name": "besieged_city", "mutate": func(s: GameState) -> void:
-			_add_siege(s, 1)},
 	]
 	for case in cases:
 		var state := _make_state()
@@ -181,6 +175,14 @@ func _test_dynamic_exclusions() -> void:
 			s.month += 13},
 		{"name": "in_city_army_size", "mutate": func(s: GameState) -> void:
 			s.armies[0].size += 7777},
+		{"name": "war_graph", "mutate": func(s: GameState) -> void:
+			s.set_diplomatic_relation(
+				0, 2, GameState.DiplomaticRelation.WAR
+			)},
+		{"name": "besieged_city", "mutate": func(s: GameState) -> void:
+			_add_siege(s, 1)},
+		{"name": "army_edge_occupancy", "mutate": func(s: GameState) -> void:
+			_add_edge_army(s, 2, 1, 3, 500)},
 	]
 	for case in cases:
 		var state := _make_state()
@@ -192,42 +194,56 @@ func _test_dynamic_exclusions() -> void:
 		)
 
 
-func _test_blocking_army_selection() -> void:
+func _test_war_and_battle_exclusions() -> void:
 	var state := _make_state()
+	var peaceful_structure := TradeNetwork.build_structure(state)
+	var peaceful_result := TradeNetwork.settle(state, peaceful_structure)
+	var peaceful_token := TradeNetwork.structure_fingerprint(state)
 	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.WAR)
-	var before := TradeNetwork.structure_fingerprint(state)
-	var blocker := _add_edge_army(state, 2, 1, 3, 500)
-	var active_token := TradeNetwork.structure_fingerprint(state)
+	var wartime_structure := TradeNetwork.build_structure(state)
+	var wartime_result := TradeNetwork.settle(state, peaceful_structure)
 	_check(
-		active_token != before,
-		"fingerprint/includes_active_enemy_owner_edge"
+		TradeNetwork.structure_fingerprint(state) == peaceful_token
+			and wartime_structure == peaceful_structure,
+		"fixed_network/war_keeps_structure_exact"
+	)
+	var wartime_mask := TradeNetwork.wartime_nation_mask(state)
+	for city in state.cities:
+		var peaceful_bonus := int(peaceful_result["city_gold_bonus"][city.id])
+		var expected := (
+			int(floor(
+				float(peaceful_bonus)
+				* TradeNetwork.WARTIME_TRADE_GOLD_MULTIPLIER
+			))
+			if wartime_mask[city.owner_nation] != 0
+			else peaceful_bonus
+		)
+		_check(
+			int(wartime_result["city_gold_bonus"][city.id]) == expected,
+			"fixed_network/wartime_city_bonus_%d" % city.id
+		)
+	_check(
+		wartime_result == TradeNetwork.build(state),
+		"fixed_network/reused_wartime_settlement_matches_direct"
+	)
+	var blocker := _add_edge_army(state, 2, 1, 3, 500)
+	_add_siege(state, 1)
+	_check(
+		TradeNetwork.structure_fingerprint(state) == peaceful_token
+			and TradeNetwork.build_structure(state) == peaceful_structure,
+		"fixed_network/siege_and_enemy_occupancy_keep_structure_exact"
 	)
 	blocker.size = 15000
+	blocker.move_from = 3
+	blocker.move_to = 2
 	_check(
-		TradeNetwork.structure_fingerprint(state) == active_token,
-		"fingerprint/ignores_positive_blocker_size"
+		TradeNetwork.structure_fingerprint(state) == peaceful_token,
+		"fixed_network/ignores_blocker_size_and_position"
 	)
-	blocker.size = 0
+	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.NEUTRAL)
 	_check(
-		TradeNetwork.structure_fingerprint(state) == before,
-		"fingerprint/drops_inactive_zero_size_blocker"
-	)
-
-	var neutral_state := _make_state()
-	var neutral_before := TradeNetwork.structure_fingerprint(neutral_state)
-	_add_edge_army(neutral_state, 2, 1, 3, 500)
-	_check(
-		TradeNetwork.structure_fingerprint(neutral_state) == neutral_before,
-		"fingerprint/ignores_active_army_that_blocks_no_trade_party"
-	)
-
-	var off_graph := _make_state()
-	off_graph.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.WAR)
-	var off_graph_before := TradeNetwork.structure_fingerprint(off_graph)
-	_add_edge_army(off_graph, 2, 0, 5, 500)
-	_check(
-		TradeNetwork.structure_fingerprint(off_graph) == off_graph_before,
-		"fingerprint/ignores_blocker_on_nonexistent_edge"
+		TradeNetwork.build(state) == peaceful_result,
+		"fixed_network/peace_restores_full_trade_bonus"
 	)
 
 

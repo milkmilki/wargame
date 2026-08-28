@@ -148,6 +148,8 @@ func candidate_for(
 	):
 		return null
 	else:
+		# 正式地图 LINE 的防区由持久 assignment 唯一决定。即时威胁只影响
+		# MAIN；不得把同锚点的 CITY/EDGE 姿态动态互换。
 		var assigned_city := int(
 			assigned_city_by_army.get(army.id, -1)
 		)
@@ -361,12 +363,19 @@ func can_redeploy(
 
 func can_join_offensive(
 	army: Army,
-	target_city: int
+	target_city: int,
+	override_main_reserve_lock: bool = false
 ) -> bool:
 	if (
 		army == null
 		or army.size <= 0
-		or view.day < army.defensive_deployment_until_day
+		or (
+			view.day < army.defensive_deployment_until_day
+			and not (
+				override_main_reserve_lock
+				and army.is_main_battle_role()
+			)
+		)
 	):
 		return false
 	if army.is_main_battle_role():
@@ -982,10 +991,29 @@ func _assign_role_based_defense() -> void:
 		line_armies.size()
 	)
 	var eligible_line_armies := line_armies.duplicate()
-	var active_slots := defense_slots.slice(
-		0,
-		defense_assignment_slots
-	)
+	# 先把每支存活 LINE 的旧槽放入 active set，再用 canonical 前缀补空。
+	# 这样扩军、伤亡或恢复不会让窗口截断把其余军队整体错位；只有旧槽
+	# 已从结构拓扑消失时才重新分配。
+	var active_slots: Array[Dictionary] = []
+	var active_slot_indices := {}
+	for army in line_armies:
+		var persistent_index := _persistent_role_slot_index(
+			defense_slots, army
+		)
+		if (
+			persistent_index >= 0
+			and not active_slot_indices.has(persistent_index)
+		):
+			active_slots.append(defense_slots[persistent_index])
+			active_slot_indices[persistent_index] = true
+	for slot_index in range(defense_slots.size()):
+		if active_slots.size() >= defense_assignment_slots:
+			break
+		if active_slot_indices.has(slot_index):
+			continue
+		active_slots.append(defense_slots[slot_index])
+		active_slot_indices[slot_index] = true
+	_sort_role_slots(active_slots)
 	var remaining_slots := active_slots.duplicate()
 	var remaining_armies := line_armies.duplicate()
 	var city_assigned_counts := {}
@@ -1008,6 +1036,17 @@ func _assign_role_based_defense() -> void:
 			continue
 		var army := _friendly_line_army_by_id(army_id)
 		if army == null:
+			sector.clear_slot(slot_index)
+			sector_slot_index += 1
+			continue
+		if (
+			army.line_assignment_city != int(slot["city_id"])
+			or army.line_assignment_posture != int(slot["posture"])
+			or army.line_assignment_edge
+				!= int(slot.get("edge_neighbor", -1))
+		):
+			# 防区表与军队侧索引必须成对一致。旧防区残留军号不能
+			# 抢先把已经拥有合法持久驻地的 LINE 拉到另一个槽。
 			sector.clear_slot(slot_index)
 			sector_slot_index += 1
 			continue
@@ -1049,6 +1088,17 @@ func _assign_role_based_defense() -> void:
 			continue
 		_record_role_assignment(army, slot)
 		remaining_slots.remove_at(slot_index)
+		remaining_armies.erase(army)
+	# 盈余城市槽会随 LINE 总数增减而改变重复次数，但这不应改写仍处于
+	# 合法结构位置的旧军队。即使本轮 canonical 列表里少了该重复槽，
+	# 也保留其既有防区，仅让新军消费新产生的空槽。
+	for army in line_armies:
+		if not remaining_armies.has(army):
+			continue
+		var persistent_slot := _persistent_line_assignment_slot(army)
+		if persistent_slot.is_empty():
+			continue
+		_record_role_assignment(army, persistent_slot)
 		remaining_armies.erase(army)
 	for slot in remaining_slots:
 		if remaining_armies.is_empty():
@@ -1350,6 +1400,49 @@ func _persistent_role_slot_index(
 	return -1
 
 
+func _persistent_line_assignment_slot(army: Army) -> Dictionary:
+	var city_id := army.line_assignment_city
+	if (
+		city_id < 0
+		or city_id >= view.state.cities.size()
+		or view.state.cities[city_id].owner_nation != view.nation_id
+	):
+		return {}
+	if army.line_assignment_posture == Army.LinePosture.EDGE:
+		var edge_neighbor := army.line_assignment_edge
+		var sector: FrontierDefenseSector = view.state.nations[
+			view.nation_id
+		].frontier_defense_sectors.get(city_id)
+		if (
+			sector == null
+			or not sector.edge_neighbors.has(edge_neighbor)
+		):
+			return {}
+		var sector_slot := sector.edge_neighbors.find(edge_neighbor) + 1
+		return {
+			"city_id": city_id,
+			"posture": Posture.EDGE,
+			"edge_neighbor": edge_neighbor,
+			"priority": sector_slot,
+			"sector_city": city_id,
+			"sector_slot": sector_slot,
+		}
+	if army.line_assignment_posture != Army.LinePosture.CITY:
+		return {}
+	if (
+		topology != null
+		and not topology.primary_city_ids.has(city_id)
+		and not _is_line_strategic_city(city_id)
+	):
+		return {}
+	return {
+		"city_id": city_id,
+		"posture": Posture.CITY,
+		"edge_neighbor": -1,
+		"priority": 0,
+	}
+
+
 func _record_role_assignment(
 	army: Army,
 	slot: Dictionary
@@ -1561,7 +1654,7 @@ func _stored_sector_topology_matches(
 
 func _refresh_frontier_sector_runtime(
 	sector: FrontierDefenseSector,
-	city_id: int
+	_city_id: int
 ) -> void:
 	for slot_index in range(sector.slot_count()):
 		var army_id := sector.assigned_army_at(slot_index)
@@ -1570,23 +1663,11 @@ func _refresh_frontier_sector_runtime(
 			and _friendly_line_army_by_id(army_id) == null
 		):
 			sector.clear_slot(slot_index)
-	if view.state.city_under_siege(city_id):
-		if sector.state in [
-			FrontierDefenseSector.State.NORMAL,
-			FrontierDefenseSector.State.RESTORING,
-		]:
-			sector.state = (
-				FrontierDefenseSector.State.RECALLING
-			)
-		else:
-			sector.state = (
-				FrontierDefenseSector.State.DEFENDING
-			)
-	elif sector.state in [
-		FrontierDefenseSector.State.RECALLING,
-		FrontierDefenseSector.State.DEFENDING,
-	]:
-		sector.state = FrontierDefenseSector.State.RESTORING
+	# LINE 是静态防区，不追随围城、敌军位置或临时压力召回/恢复。
+	# 旧存档里遗留的动态状态在首次规划时归一；锚点失守仍由 Simulation
+	# 的结构性撤退路径处理。
+	if sector.state != FrontierDefenseSector.State.RETREATING:
+		sector.state = FrontierDefenseSector.State.NORMAL
 
 
 func _frontier_sector_edges(city_id: int) -> Array[int]:
@@ -1610,17 +1691,12 @@ func _frontier_sector_edges(city_id: int) -> Array[int]:
 		)
 		if enemy_edge or potential_edge:
 			result.append(neighbor)
-	var preferred := preferred_edge_at(city_id)
 	result.sort_custom(func(a: int, b: int) -> bool:
 		var score_a := _frontier_edge_rank(
-			city_id,
-			a,
-			preferred
+			city_id, a
 		)
 		var score_b := _frontier_edge_rank(
-			city_id,
-			b,
-			preferred
+			city_id, b
 		)
 		if not is_equal_approx(score_a, score_b):
 			return score_a > score_b
@@ -1637,15 +1713,18 @@ func _frontier_sector_edges(city_id: int) -> Array[int]:
 
 func _frontier_edge_rank(
 	city_id: int,
-	neighbor: int,
-	preferred: int
+	neighbor: int
 ) -> float:
-	# 地形据守价值已由 snapshot.value_of_edge 单一承载（其内部按 danger 计入敌对前线边加成），
-	# 此处不再重复叠加，避免双重计数。
+	# LINE 边槽顺序只读取道路自身的静态地形/容量价值。preferred_edge
+	# 和 potential_threat 都随敌军位置、国力及威胁阈值变化，若参与排序，
+	# 同一组边也会交换槽号，进而把持久 assignment 配给另一支军队。
+	var edge := view.state.edge_of(city_id, neighbor)
+	if edge == null:
+		return -INF
 	return (
-		(1000.0 if neighbor == preferred else 0.0)
-		+ snapshot.value_of_edge(city_id, neighbor)
-		+ snapshot.potential_threat_of_edge(city_id, neighbor)
+		edge.danger * 100.0
+		+ float(edge.max_manpower)
+			/ float(maxi(Edge.STANDARD_MANPOWER, 1))
 	)
 
 
@@ -1993,18 +2072,7 @@ func _build_small_nation_defense_slots(capacity: int = -1) -> Array[Dictionary]:
 			"edge_neighbor": -1,
 			"priority": 0,
 		})
-	# 平时保留最后一支机动军反攻；只有城市已经被围时才把机动军投入第二守城槽。
-	for city_id_value in city_ids:
-		var city_id := int(city_id_value)
-		if not view.state.city_under_siege(city_id):
-			continue
-		result.append({
-			"city_id": city_id,
-			"posture": Posture.CITY,
-			"edge_neighbor": -1,
-			"priority": 0,
-		})
-		break
+	# 围城是动态战况，不改变 LINE 槽位；小国的机动 MAIN 负责解围。
 	if capacity > result.size():
 		var extra_slots := _build_weighted_city_role_slots(
 			city_ids,
@@ -2043,11 +2111,6 @@ func _fill_surplus_line_armies(
 			continue
 		candidate_city_ids.append(city.id)
 		seen[city.id] = true
-	for city_id_value in required_power.keys():
-		var city_id := int(city_id_value)
-		if not seen.has(city_id):
-			candidate_city_ids.append(city_id)
-			seen[city_id] = true
 	# 盈余填线军的候选排序与权重只用结构性重要度（价值/粮道/地理区位），
 	# 不掺入即时威胁、frontline_allocation、required_power 等逐日变化项，
 	# 边疆城市集合不变时结果恒定，杜绝填线军因动态权重抖动来回换城。
@@ -2245,11 +2308,19 @@ func _line_city_structural_priority(city_id: int) -> float:
 		return float(
 			_role_city_structural_cache[city_id]
 		)
-	# 基础重要性（城市价值 + 补给枢纽价值）按地理区位放大：优先部署在
-	# 离国境、离首都都近的重要城市。
+	# 不读取 snapshot.value_of_city/supply_importance：其中包含当前库存、
+	# 城防恢复与潜在威胁路径，会让“结构性”排序随动态状态变化。
+	var city := view.state.cities[city_id]
 	var base_importance := (
-		snapshot.value_of_city(city_id) * 100.0
-		+ snapshot.supply_importance_at(city_id) * 100.0
+		1.0
+		+ float(maxi(city.gold_per_month, 0)) * 0.04
+		+ float(maxi(city.food_per_half_year, 0)) * 0.002
+		+ (600.0 if city.id == view.capital_city_id else 0.0)
+		+ (350.0 if city.has_warehouse else 0.0)
+		+ (250.0 if city.is_food_hub else 0.0)
+		+ (250.0 if city.is_manpower_hub else 0.0)
+		+ (180.0 if city.is_dock else 0.0)
+		+ float(maxi(city.fort_strength_max, 0)) * 2.0
 	)
 	var structural := base_importance * _strategic_proximity_factor(city_id)
 	_role_city_structural_cache[city_id] = structural
@@ -2286,10 +2357,10 @@ func _ensure_proximity_fields() -> void:
 		return
 	_proximity_fields_ready = true
 	var border_sources: Array[int] = []
-	for city_id in snapshot.frontier_cities:
-		border_sources.append(int(city_id))
-	for city_id in snapshot.potential_frontier_cities:
-		if not border_sources.has(int(city_id)):
+	if topology != null:
+		border_sources.assign(topology.primary_city_ids)
+	else:
+		for city_id in snapshot.frontier_cities:
 			border_sources.append(int(city_id))
 	_border_hop_distance = _friendly_hop_field(border_sources)
 	var capital := view.capital_city_id
@@ -2385,8 +2456,11 @@ func _is_line_strategic_city(city_id: int) -> bool:
 	var city := view.state.cities[city_id]
 	return (
 		city.is_dock
+		or city.id == view.capital_city_id
+		or city.has_warehouse
+		or city.is_food_hub
+		or city.is_manpower_hub
 		or city.fort_strength_max >= 24
-		or _is_strategic_must_hold_city(city_id)
 	)
 
 
@@ -2493,19 +2567,8 @@ func _assigned_defense_candidate(
 				army.move_to,
 			]:
 				return null
-			# 同锚点换边时，已有压力的当前边必须继续由原 LINE 驻守；只有当前边完全
-			# 无压力才允许回城换防。改派回 CITY、换锚点和锚点失守仍走既有撤离路径。
-			var current_edge := (
-				army.move_to
-				if origin == army.move_from
-				else army.move_from
-			)
-			var pressures: Dictionary = directional_pressure.get(
-				city_id,
-				{}
-			)
-			if float(pressures.get(current_edge, 0.0)) > 0.0:
-				return null
+			# 结构拓扑仍有效时不追逐另一条边；旧槽只有在重建时才会消失。
+			return null
 		var retreat := ActionCandidate.make(
 			ActionCandidate.Kind.RETREAT,
 			ROLE_DEPLOYMENT_SCORE,
