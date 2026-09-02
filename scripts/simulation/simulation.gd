@@ -6872,71 +6872,14 @@ func _ai_manage_force_structure(
 			assessment.main_armies,
 			assessment.active_war_mobilization
 		)
-	var missing_formation_size := int(
-		recruitment.get("size", 0)
+	return _try_recruit_force_structure(
+		view,
+		defense_plan,
+		nation,
+		assessment,
+		recruitment,
+		available_manpower
 	)
-	# 防区命令与征兵共享同一条部署流水线。若已有军队获得远端防区却仍
-	# 因首段道路容量留在征兵节点，本轮停止继续生产；否则枢纽会每轮多
-	# 一支新军，而前线仍旧空缺。紧急动员也必须服从真实道路吞吐。
-	if (
-		missing_formation_size > 0
-		and (
-			(
-				bool(recruitment.get("create_group", false))
-				and defense_plan.pending_deployment_army_count(1) > 0
-			)
-			or (
-				int(recruitment.get("group_id", -1)) < 0
-				and not bool(recruitment.get("create_group", false))
-				and defense_plan.pending_deployment_army_count(0) > 0
-			)
-		)
-	):
-		return false
-	var creation_cost := (
-		GameState.formation_creation_gold_cost(
-			missing_formation_size
-		)
-		if missing_formation_size > 0 else 0
-	)
-	var reserve_target := int(assessment.gold_reserve.get(
-		"reserve_target", 0
-	))
-	var gold_growth_allowed := (
-		assessment.emergency_recruitment
-		or (
-			not assessment.gold_pressure
-			and nation.treasury_gold - creation_cost >= reserve_target
-		)
-	)
-	var food_recruitment_allowed := (
-		not assessment.food_pressure
-		and assessment.food_growth_budget >= missing_formation_size
-	)
-	if assessment.emergency_recruitment:
-		food_recruitment_allowed = (
-			int(assessment.food_report["stock"]) > 0
-			and (
-				float(assessment.food_report["monthly_surplus"]) >= 0.0
-				or float(assessment.food_report["runway_years"])
-					>= EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS
-			)
-		)
-	if (
-		missing_formation_size > 0
-		and available_manpower >= missing_formation_size
-		and food_recruitment_allowed
-		and gold_growth_allowed
-	):
-		return _try_create_force_recruitment(
-			view.nation_id,
-			nation,
-			recruitment,
-			missing_formation_size,
-			assessment.emergency_recruitment,
-			assessment.small_nation_survival
-		)
-	return false
 
 
 func _try_force_structure_demobilization(
@@ -6971,6 +6914,74 @@ func _try_force_structure_demobilization(
 		assessment.force_structure_target
 	):
 		return true
+	return false
+
+
+func _try_recruit_force_structure(
+	view: AiWorldView,
+	defense_plan: CityDefensePlan,
+	nation: Nation,
+	assessment: ForceStructureAssessment,
+	recruitment: Dictionary,
+	available_manpower: int
+) -> bool:
+	var missing_formation_size := int(recruitment.get("size", 0))
+	# Defense orders and recruitment share deployment throughput. Do not keep
+	# producing at a hub while an earlier assignment is blocked on the first edge.
+	if (
+		missing_formation_size > 0
+		and (
+			(
+				bool(recruitment.get("create_group", false))
+				and defense_plan.pending_deployment_army_count(1) > 0
+			)
+			or (
+				int(recruitment.get("group_id", -1)) < 0
+				and not bool(recruitment.get("create_group", false))
+				and defense_plan.pending_deployment_army_count(0) > 0
+			)
+		)
+	):
+		return false
+	var creation_cost := (
+		GameState.formation_creation_gold_cost(missing_formation_size)
+		if missing_formation_size > 0 else 0
+	)
+	var reserve_target := int(assessment.gold_reserve.get("reserve_target", 0))
+	var gold_growth_allowed := (
+		assessment.emergency_recruitment
+		or (
+			not assessment.gold_pressure
+			and nation.treasury_gold - creation_cost >= reserve_target
+		)
+	)
+	var food_recruitment_allowed := (
+		not assessment.food_pressure
+		and assessment.food_growth_budget >= missing_formation_size
+	)
+	if assessment.emergency_recruitment:
+		food_recruitment_allowed = (
+			int(assessment.food_report["stock"]) > 0
+			and (
+				float(assessment.food_report["monthly_surplus"]) >= 0.0
+				or float(assessment.food_report["runway_years"])
+					>= EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS
+			)
+		)
+	if (
+		missing_formation_size > 0
+		and available_manpower >= missing_formation_size
+		and food_recruitment_allowed
+		and gold_growth_allowed
+	):
+		return _try_create_force_recruitment(
+			view.nation_id,
+			nation,
+			recruitment,
+			missing_formation_size,
+			assessment.emergency_recruitment,
+			assessment.small_nation_survival
+		)
 	return false
 
 
