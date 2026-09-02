@@ -9021,6 +9021,17 @@ func _plan_campaign_allocation(
 	used_groups = reinforcement["used_groups"]
 	assigned_manpower = reinforcement["manpower"]
 	assigned_power = reinforcement["power"]
+	_finalize_campaign_allocation_plan(
+		plan, assigned_manpower, assigned_power
+	)
+	return plan
+
+
+func _finalize_campaign_allocation_plan(
+	plan: CampaignAllocationPlan,
+	assigned_manpower: Dictionary,
+	assigned_power: Dictionary
+) -> void:
 	for target_city in plan.candidate_target_ids:
 		if (
 			plan.target_to_groups.has(target_city)
@@ -9036,7 +9047,6 @@ func _plan_campaign_allocation(
 	plan.unfilled_group_slots = maxi(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
-	return plan
 
 
 func _reinforce_campaign_group_assignments(
