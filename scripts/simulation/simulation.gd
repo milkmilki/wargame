@@ -5293,73 +5293,15 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	)
 	runtime_slice_started = int(snapshot_phase["slice_started"])
 	ai_profile_stage_started = int(snapshot_phase["profile_stage_started"])
-	_set_runtime_profile_stage(&"ai_defense")
-	if spread_runtime_work and not context_jobs.is_empty():
-		for job in context_jobs:
-			job["defense_plan"] = CityDefensePlan.prepare_evaluation(
-				job["view"], job["snapshot"], job["threat"]
-			)
-		var defense_worker_count := (
-			1 if ai_parallel_defense_disabled else mini(
-				context_jobs.size(),
-				mini(maxi(OS.get_processor_count() - 1, 1), AI_DEFENSE_MAX_WORKERS)
-			)
-		)
-		var defense_task_ids: Array[int] = []
-		var defense_started_usec := Time.get_ticks_usec()
-		ai_defense_worker_count_last = defense_worker_count
-		for worker_index in range(defense_worker_count):
-			defense_task_ids.append(WorkerThreadPool.add_task(
-				_build_ai_defense_partition.bind(
-					worker_index, defense_worker_count, context_jobs.size()
-				),
-				true, "WorldWar AI defense evaluation"
-			))
-		_set_runtime_profile_stage(&"ai_defense_workers")
-		await _run_worker_tasks_over_frames(defense_task_ids)
-		ai_defense_worker_last_usec = Time.get_ticks_usec() - defense_started_usec
-		ai_defense_worker_total_usec += ai_defense_worker_last_usec
-		ai_defense_worker_runs += 1
-		_set_runtime_profile_stage(&"ai_defense_commit")
-		# worker 完成后仍需按国家固定顺序把防区结果写回 GameState。
-		# 大地图首日可能同时提交全部国家；按运行时预算切帧，既保持
-		# 确定性提交顺序，也避免这段主线程工作集中到一帧。
-		runtime_slice_started = Time.get_ticks_usec()
-		for job in context_jobs:
-			var defense_plan: CityDefensePlan = job["defense_plan"]
-			defense_plan.commit_assignments()
-			_record_defense_plan_cache_result(defense_plan)
-			if (
-				spread_runtime_work
-				and Time.get_ticks_usec() - runtime_slice_started
-					>= AI_RUNTIME_SLICE_BUDGET_USEC
-			):
-				await get_tree().process_frame
-				runtime_slice_started = Time.get_ticks_usec()
-	else:
-		for job in context_jobs:
-			var defense_plan := CityDefensePlan.build(
-				job["view"], job["snapshot"], job["threat"],
-				job["previous_defense_plan"]
-			)
-			job["defense_plan"] = defense_plan
-			_record_defense_plan_cache_result(defense_plan)
-	_record_tick_profile_stage("ai_defense", ai_profile_stage_started)
-	ai_profile_stage_started = (
-		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	var defense_phase: Dictionary = await _build_ai_defense_phase(
+		context_jobs,
+		force_contexts,
+		spread_runtime_work,
+		runtime_slice_started,
+		ai_profile_stage_started
 	)
-	for job in context_jobs:
-		var nation_id := int(job["nation_id"])
-		_ai_defense_plan_cache[nation_id] = (
-			job["defense_plan"]
-		)
-		force_contexts[nation_id] = {
-			"view": job["view"],
-			"snapshot": job["snapshot"],
-			"threat": job["threat"],
-			"defense_plan": job["defense_plan"],
-		}
-	_parallel_ai_context_jobs.clear()
+	runtime_slice_started = int(defense_phase["slice_started"])
+	ai_profile_stage_started = int(defense_phase["profile_stage_started"])
 	# 宣战提交只落盘外交状态；同日 AI 上下文完成后复用其 ThreatField
 	# 发动已准备攻势，避免在外交阶段重复构建整张威胁场。
 	_set_runtime_profile_stage(&"ai_declaration_launches")
@@ -5669,6 +5611,82 @@ func _build_ai_snapshot_threat_phase(
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
+	return {
+		"slice_started": runtime_slice_started,
+		"profile_stage_started": ai_profile_stage_started,
+	}
+
+
+func _build_ai_defense_phase(
+	context_jobs: Array[Dictionary],
+	force_contexts: Dictionary,
+	spread_runtime_work: bool,
+	runtime_slice_started: int,
+	ai_profile_stage_started: int
+) -> Dictionary:
+	_set_runtime_profile_stage(&"ai_defense")
+	if spread_runtime_work and not context_jobs.is_empty():
+		for job in context_jobs:
+			job["defense_plan"] = CityDefensePlan.prepare_evaluation(
+				job["view"], job["snapshot"], job["threat"]
+			)
+		var defense_worker_count := (
+			1 if ai_parallel_defense_disabled else mini(
+				context_jobs.size(),
+				mini(maxi(OS.get_processor_count() - 1, 1), AI_DEFENSE_MAX_WORKERS)
+			)
+		)
+		var defense_task_ids: Array[int] = []
+		var defense_started_usec := Time.get_ticks_usec()
+		ai_defense_worker_count_last = defense_worker_count
+		for worker_index in range(defense_worker_count):
+			defense_task_ids.append(WorkerThreadPool.add_task(
+				_build_ai_defense_partition.bind(
+					worker_index, defense_worker_count, context_jobs.size()
+				),
+				true, "WorldWar AI defense evaluation"
+			))
+		_set_runtime_profile_stage(&"ai_defense_workers")
+		await _run_worker_tasks_over_frames(defense_task_ids)
+		ai_defense_worker_last_usec = Time.get_ticks_usec() - defense_started_usec
+		ai_defense_worker_total_usec += ai_defense_worker_last_usec
+		ai_defense_worker_runs += 1
+		_set_runtime_profile_stage(&"ai_defense_commit")
+		# Commit in deterministic nation order while keeping frames responsive.
+		runtime_slice_started = Time.get_ticks_usec()
+		for job in context_jobs:
+			var defense_plan: CityDefensePlan = job["defense_plan"]
+			defense_plan.commit_assignments()
+			_record_defense_plan_cache_result(defense_plan)
+			if (
+				spread_runtime_work
+				and Time.get_ticks_usec() - runtime_slice_started
+					>= AI_RUNTIME_SLICE_BUDGET_USEC
+			):
+				await get_tree().process_frame
+				runtime_slice_started = Time.get_ticks_usec()
+	else:
+		for job in context_jobs:
+			var defense_plan := CityDefensePlan.build(
+				job["view"], job["snapshot"], job["threat"],
+				job["previous_defense_plan"]
+			)
+			job["defense_plan"] = defense_plan
+			_record_defense_plan_cache_result(defense_plan)
+	_record_tick_profile_stage("ai_defense", ai_profile_stage_started)
+	ai_profile_stage_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	for job in context_jobs:
+		var nation_id := int(job["nation_id"])
+		_ai_defense_plan_cache[nation_id] = job["defense_plan"]
+		force_contexts[nation_id] = {
+			"view": job["view"],
+			"snapshot": job["snapshot"],
+			"threat": job["threat"],
+			"defense_plan": job["defense_plan"],
+		}
+	_parallel_ai_context_jobs.clear()
 	return {
 		"slice_started": runtime_slice_started,
 		"profile_stage_started": ai_profile_stage_started,
