@@ -6951,72 +6951,25 @@ func _ai_manage_force_structure(
 			"reason": "补充核心城市填线槽",
 		}
 	elif small_nation_survival:
-		# 小国不进入通用的“二轻一重”战团补齐流程。一支轻型 MAIN
-		# 即为机动预备队；已有历史战团/重军在战时保留，但不会继续扩编。
-		if main_armies < SMALL_NATION_MOBILE_RESERVE_ARMIES:
-			var reserve_group_id := -1
-			for group in nation.battle_groups:
-				if state.battle_group_members(
-					view.nation_id, group.id
-				).is_empty():
-					reserve_group_id = group.id
-					break
-			recruitment = {
-				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-				"group_id": reserve_group_id,
-				"create_group": reserve_group_id < 0,
-				"reason": "小国补充机动预备队",
-			}
+		recruitment = _small_nation_force_recruitment(
+			view.nation_id,
+			nation,
+			main_armies
+		)
 	elif (
 		state.is_vassal(view.nation_id)
 		and not state.is_in_civil_war(
 			view.nation_id
 		)
 	):
-		var vassal_line_deficit := maxi(total_line_target - line_armies, 0)
-		# 一个重点驻防城市对应一个完整 MAIN 战团需求。城市集合由
-		# CityDefensePlan 的战略价值/补给单一派生。与 LINE 使用归一化
-		# 缺口竞争征兵资源，避免高边数封地永远补不出第一支 MAIN。
-		var target_group_count := (
-			defense_plan.main_reserve_target_group_count()
+		recruitment = _vassal_force_recruitment(
+			view.nation_id,
+			nation,
+			defense_plan,
+			total_line_target,
+			line_armies,
+			main_armies
 		)
-		var target_main_armies := (
-			target_group_count * (
-				BattleGroup.MAX_LIGHT_ARMIES
-					+ BattleGroup.MAX_HEAVY_ARMIES
-			)
-		)
-		var vassal_main_deficit := maxi(
-			target_main_armies - main_armies,
-			0
-		)
-		var main_deficit_ratio := (
-			float(vassal_main_deficit)
-			/ float(target_main_armies)
-		)
-		var line_deficit_ratio := (
-			float(vassal_line_deficit)
-			/ float(maxi(total_line_target, 1))
-		)
-		if (
-			vassal_main_deficit > 0
-			and (
-				vassal_line_deficit <= 0
-				or main_deficit_ratio
-					>= line_deficit_ratio
-			)
-		):
-			recruitment = _next_battle_group_recruitment(
-				view.nation_id,
-				nation.battle_groups.size()
-					< target_group_count
-			)
-		elif vassal_line_deficit > 0:
-			recruitment = {
-				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-				"group_id": -1,
-				"reason": "藩王补充填线槽",
-			}
 	else:
 		var active_offense := (
 			nation.war_preparation_target_nation >= 0
@@ -7248,6 +7201,69 @@ func _ai_manage_force_structure(
 				nation.battle_groups.erase(created_group)
 			return created_army != null
 	return false
+
+
+func _small_nation_force_recruitment(
+	nation_id: int,
+	nation: Nation,
+	main_armies: int
+) -> Dictionary:
+	# One light MAIN is the mobile reserve; existing wartime groups stay intact.
+	if main_armies >= SMALL_NATION_MOBILE_RESERVE_ARMIES:
+		return {}
+	var reserve_group_id := -1
+	for group in nation.battle_groups:
+		if state.battle_group_members(nation_id, group.id).is_empty():
+			reserve_group_id = group.id
+			break
+	return {
+		"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+		"group_id": reserve_group_id,
+		"create_group": reserve_group_id < 0,
+		"reason": "小国补充机动预备队",
+	}
+
+
+func _vassal_force_recruitment(
+	nation_id: int,
+	nation: Nation,
+	defense_plan: CityDefensePlan,
+	total_line_target: int,
+	line_armies: int,
+	main_armies: int
+) -> Dictionary:
+	var line_deficit := maxi(total_line_target - line_armies, 0)
+	# Each priority defense city demands a complete MAIN battle group.
+	var target_group_count := defense_plan.main_reserve_target_group_count()
+	var target_main_armies := (
+		target_group_count
+		* (BattleGroup.MAX_LIGHT_ARMIES + BattleGroup.MAX_HEAVY_ARMIES)
+	)
+	var main_deficit := maxi(target_main_armies - main_armies, 0)
+	var main_deficit_ratio := (
+		float(main_deficit) / float(target_main_armies)
+	)
+	var line_deficit_ratio := (
+		float(line_deficit) / float(maxi(total_line_target, 1))
+	)
+	if (
+		main_deficit > 0
+		and (
+			line_deficit <= 0
+			or main_deficit_ratio >= line_deficit_ratio
+		)
+	):
+		return _next_battle_group_recruitment(
+			nation_id,
+			nation.battle_groups.size() < target_group_count
+		)
+	if line_deficit > 0:
+		return {
+			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+			"group_id": -1,
+			"reason": "藩王补充填线槽",
+		}
+	return {}
 
 
 ## 和平时期战团数量由当前防区规模决定，而不是由历次战争动员的历史峰值决定。
