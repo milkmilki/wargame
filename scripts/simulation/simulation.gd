@@ -9703,31 +9703,11 @@ func _assign_offensive_staging_orders(
 	var committed_heavy := 0
 	var committed_light := 0
 	if not assigned_only:
-		var objective_token := "目标城市%d" % objective_city
-		for committed_army in path_view.friendly_armies:
-			if (
-				committed_army.size <= 0
-				or not committed_army.ai_order_reason.contains(
-					objective_token
-				)
-				or (
-					committed_army.state == Army.State.IDLE
-					and not staging.has(
-						committed_army.location_city
-					)
-				)
-			):
-				continue
-			if (
-				committed_army.max_size
-					== GameState.INITIAL_HEAVY_ARMY_SIZE
-			):
-				committed_heavy += 1
-			elif (
-				committed_army.max_size
-					== GameState.INITIAL_LIGHT_ARMY_SIZE
-			):
-				committed_light += 1
+		var committed := _count_campaign_committed_armies(
+			objective_city, staging, path_view.friendly_armies
+		)
+		committed_heavy = int(committed["heavy"])
+		committed_light = int(committed["light"])
 	var changed := false
 	var orders := 0
 	for staging_city in staging:
@@ -9986,6 +9966,31 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _count_campaign_committed_armies(
+	objective_city: int,
+	staging: Array,
+	armies: Array[Army]
+) -> Dictionary:
+	var committed_heavy := 0
+	var committed_light := 0
+	var objective_token := "目标城市%d" % objective_city
+	for committed_army in armies:
+		if (
+			committed_army.size <= 0
+			or not committed_army.ai_order_reason.contains(objective_token)
+			or (
+				committed_army.state == Army.State.IDLE
+				and not staging.has(committed_army.location_city)
+			)
+		):
+			continue
+		if committed_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+			committed_heavy += 1
+		elif committed_army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
+			committed_light += 1
+	return {"heavy": committed_heavy, "light": committed_light}
 
 
 func _collect_staging_hold_candidates(
