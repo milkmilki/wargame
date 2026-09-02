@@ -8978,29 +8978,19 @@ func _plan_campaign_allocation(
 	var budget_used := _expand_campaign_group_budget(plan)
 	plan.required_group_count = budget_used
 
-	var evaluations := {}
-	for target_city in plan.candidate_target_ids:
-		for group in nation.battle_groups:
-			if active_reserved_groups.has(group.id):
-				continue
-			var members: Array[Army] = group_members_by_id.get(
-				group.id, [] as Array[Army]
-			)
-			if members.is_empty():
-				continue
-			var retained_ids: Array[int] = []
-			if (
-				previous_plan != null
-				and previous_plan.target_for_group(group.id) == target_city
-			):
-				retained_ids = previous_plan.member_ids_for_group(group.id)
-			var evaluation := _evaluate_campaign_group_for_target(
-				nation_id, target_city, members, target_staging[target_city],
-				view, defense_plan, coordinator, strict_group_readiness,
-				retained_ids
-			)
-			if not evaluation.is_empty():
-				evaluations["%d:%d" % [target_city, group.id]] = evaluation
+	var evaluations: Dictionary = _evaluate_campaign_groups(
+		nation_id,
+		nation,
+		plan,
+		target_staging,
+		group_members_by_id,
+		active_reserved_groups,
+		previous_plan,
+		view,
+		defense_plan,
+		coordinator,
+		strict_group_readiness
+	)
 	var used_groups := {}
 	var assigned_manpower := {}
 	var assigned_power := {}
@@ -9154,6 +9144,45 @@ func _plan_campaign_allocation(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
 	return plan
+
+
+func _evaluate_campaign_groups(
+	nation_id: int,
+	nation: Nation,
+	plan: CampaignAllocationPlan,
+	target_staging: Dictionary,
+	group_members_by_id: Dictionary,
+	active_reserved_groups: Dictionary,
+	previous_plan: CampaignAllocationPlan,
+	view: AiWorldView,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator,
+	strict_group_readiness: bool
+) -> Dictionary:
+	var evaluations := {}
+	for target_city in plan.candidate_target_ids:
+		for group in nation.battle_groups:
+			if active_reserved_groups.has(group.id):
+				continue
+			var members: Array[Army] = group_members_by_id.get(
+				group.id, [] as Array[Army]
+			)
+			if members.is_empty():
+				continue
+			var retained_ids: Array[int] = []
+			if (
+				previous_plan != null
+				and previous_plan.target_for_group(group.id) == target_city
+			):
+				retained_ids = previous_plan.member_ids_for_group(group.id)
+			var evaluation := _evaluate_campaign_group_for_target(
+				nation_id, target_city, members, target_staging[target_city],
+				view, defense_plan, coordinator, strict_group_readiness,
+				retained_ids
+			)
+			if not evaluation.is_empty():
+				evaluations["%d:%d" % [target_city, group.id]] = evaluation
+	return evaluations
 
 
 func _expand_campaign_group_budget(plan: CampaignAllocationPlan) -> int:
