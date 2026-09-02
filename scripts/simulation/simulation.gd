@@ -5674,156 +5674,17 @@ func _run_ai_army_decision_phase(
 			):
 				await get_tree().process_frame
 				runtime_slice_started = Time.get_ticks_usec()
-			var active_campaign_target := int(
-				nation.campaign_attack_assignments.get(
-					army.id,
-					-1
-				)
-			)
-			var preparation_target := int(
-				nation.campaign_preparation_assignments.get(army.id, -1)
-			)
-			var campaign_target := (
-				active_campaign_target
-				if active_campaign_target >= 0
-				else preparation_target
-			)
-			var campaign_locked := (
-				campaign_target >= 0
-				and (
-					nation.war_preparation_target_nation >= 0
-					or (
-						campaign_target < state.cities.size()
-						and state.is_enemy(
-							nation_id,
-							state.cities[
-								campaign_target
-							].owner_nation
-						)
-					)
-				)
-			)
-			if campaign_locked:
-				var defense_anchor := army.location_city
-				if (
-					army.state == Army.State.HOLDING
-					and army.move_to != -1
-				):
-					defense_anchor = _campaign_army_origin(
-						army,
-						nation_id
-					)
-				var actual_emergency := (
-					state.city_under_siege(defense_anchor)
-					if preparation_target >= 0
-					else defense_plan.urgent_defense_at(defense_anchor)
-				)
-				if actual_emergency:
-					campaign_locked = false
-			if (
-				campaign_locked
-				and army.size > 0
-				and not _ai_planned_armies.has(army.id)
-			):
-				if (
-					active_campaign_target >= 0
-					and state.is_enemy(
-						nation_id,
-						state.cities[
-							campaign_target
-						].owner_nation
-					)
-					and nation.campaign_launched_armies.has(
-						army.id
-					)
-					and _army_ready_for_campaign_target(
-						army,
-						nation_id,
-						campaign_target
-					)
-				):
-					var continue_campaign := (
-						ActionCandidate.make(
-							ActionCandidate.Kind.ATTACK,
-							2000.0,
-							(
-								"继续执行国家战役计划："
-								+ "军%d攻击城市%d"
-							) % [
-								army.id,
-								campaign_target,
-							],
-							campaign_target
-						)
-					)
-					continue_campaign.minimum_commit_days = (
-						CAMPAIGN_OFFENSIVE_COMMIT_DAYS
-					)
-					if _execute_ai_candidate(
-						army,
-						continue_campaign
-					):
-						coordinator.reserve(
-							campaign_target,
-							army
-						)
-			if (
-				army.size <= 0
-				or _ai_planned_armies.has(army.id)
-				or campaign_locked
-			):
-				continue
-			if army.is_line_role():
-				var line_candidate := (
-					defense_plan.candidate_for(
-						army,
-						coordinator
-					)
-				)
-				if (
-					line_candidate != null
-					and line_candidate.kind
-						!= ActionCandidate.Kind.NONE
-					and _execute_ai_candidate(
-						army,
-						line_candidate
-					)
-				):
-					if (
-						line_candidate.kind
-							== ActionCandidate.Kind.HOLD
-					):
-						coordinator.reserve_edge(
-							line_candidate.target_edge_a,
-							line_candidate.target_edge_b,
-							army
-						)
-					elif line_candidate.target_city != -1:
-						coordinator.reserve(
-							line_candidate.target_city,
-							army
-						)
-				continue
-			var candidate := UtilityAI.choose(
+			_decide_ai_army(
+				nation_id,
+				nation,
+				army,
 				view,
 				snapshot,
 				threat,
 				coordinator,
-				army,
 				minimum_participant_ratio,
 				defense_plan
 			)
-			if candidate.kind == ActionCandidate.Kind.NONE:
-				continue
-			if _execute_ai_candidate(army, candidate):
-				if candidate.kind == ActionCandidate.Kind.HOLD:
-					coordinator.reserve_edge(
-						candidate.target_edge_a,
-						candidate.target_edge_b,
-						army
-					)
-				elif candidate.target_city != -1:
-					coordinator.reserve(candidate.target_city, army)
 		if (
 			spread_runtime_work
 			and Time.get_ticks_usec() - runtime_slice_started
@@ -5832,6 +5693,128 @@ func _run_ai_army_decision_phase(
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
 	return runtime_slice_started
+
+
+func _decide_ai_army(
+	nation_id: int,
+	nation: Nation,
+	army: Army,
+	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
+	threat: ThreatField,
+	coordinator: ArmyCoordinator,
+	minimum_participant_ratio: float,
+	defense_plan: CityDefensePlan
+) -> void:
+	var active_campaign_target := int(
+		nation.campaign_attack_assignments.get(army.id, -1)
+	)
+	var preparation_target := int(
+		nation.campaign_preparation_assignments.get(army.id, -1)
+	)
+	var campaign_target := (
+		active_campaign_target
+		if active_campaign_target >= 0
+		else preparation_target
+	)
+	var campaign_locked := (
+		campaign_target >= 0
+		and (
+			nation.war_preparation_target_nation >= 0
+			or (
+				campaign_target < state.cities.size()
+				and state.is_enemy(
+					nation_id,
+					state.cities[campaign_target].owner_nation
+				)
+			)
+		)
+	)
+	if campaign_locked:
+		var defense_anchor := army.location_city
+		if army.state == Army.State.HOLDING and army.move_to != -1:
+			defense_anchor = _campaign_army_origin(army, nation_id)
+		var actual_emergency := (
+			state.city_under_siege(defense_anchor)
+			if preparation_target >= 0
+			else defense_plan.urgent_defense_at(defense_anchor)
+		)
+		if actual_emergency:
+			campaign_locked = false
+	if (
+		campaign_locked
+		and army.size > 0
+		and not _ai_planned_armies.has(army.id)
+	):
+		if (
+			active_campaign_target >= 0
+			and state.is_enemy(
+				nation_id,
+				state.cities[campaign_target].owner_nation
+			)
+			and nation.campaign_launched_armies.has(army.id)
+			and _army_ready_for_campaign_target(
+				army,
+				nation_id,
+				campaign_target
+			)
+		):
+			var continue_campaign := ActionCandidate.make(
+				ActionCandidate.Kind.ATTACK,
+				2000.0,
+				("继续执行国家战役计划：" + "军%d攻击城市%d") % [
+					army.id,
+					campaign_target,
+				],
+				campaign_target
+			)
+			continue_campaign.minimum_commit_days = (
+				CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+			)
+			if _execute_ai_candidate(army, continue_campaign):
+				coordinator.reserve(campaign_target, army)
+	if (
+		army.size <= 0
+		or _ai_planned_armies.has(army.id)
+		or campaign_locked
+	):
+		return
+	if army.is_line_role():
+		var line_candidate := defense_plan.candidate_for(army, coordinator)
+		if (
+			line_candidate != null
+			and line_candidate.kind != ActionCandidate.Kind.NONE
+			and _execute_ai_candidate(army, line_candidate)
+		):
+			if line_candidate.kind == ActionCandidate.Kind.HOLD:
+				coordinator.reserve_edge(
+					line_candidate.target_edge_a,
+					line_candidate.target_edge_b,
+					army
+				)
+			elif line_candidate.target_city != -1:
+				coordinator.reserve(line_candidate.target_city, army)
+		return
+	var candidate := UtilityAI.choose(
+		view,
+		snapshot,
+		threat,
+		coordinator,
+		army,
+		minimum_participant_ratio,
+		defense_plan
+	)
+	if candidate.kind == ActionCandidate.Kind.NONE:
+		return
+	if _execute_ai_candidate(army, candidate):
+		if candidate.kind == ActionCandidate.Kind.HOLD:
+			coordinator.reserve_edge(
+				candidate.target_edge_a,
+				candidate.target_edge_b,
+				army
+			)
+		elif candidate.target_city != -1:
+			coordinator.reserve(candidate.target_city, army)
 
 
 func _launch_pending_declaration_offensives(
