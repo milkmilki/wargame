@@ -6810,31 +6810,13 @@ func _ai_manage_force_structure(
 		resource_evaluation_cache,
 		decision_context
 	)
-	if (
-		assessment.wars.is_empty()
-		and nation.war_preparation_target_nation < 0
-		and _demobilize_excess_peacetime_battle_group(
-			view,
-			threat,
-			assessment.baseline_group_count
-		)
+	if _try_force_structure_demobilization(
+		view,
+		threat,
+		nation,
+		assessment
 	):
 		return true
-	if not assessment.emergency_recruitment:
-		if assessment.food_pressure and _demobilize_for_food_security(
-			view,
-			threat,
-			assessment.food_report,
-			assessment.force_structure_target
-		):
-			return true
-		if assessment.gold_pressure and _demobilize_for_gold_security(
-			view,
-			threat,
-			assessment.required_gold_savings,
-			assessment.force_structure_target
-		):
-			return true
 	# 应急动员（小国最后城市保卫战 / 战争动员窗口）是生死存亡的最后一搏，
 	# 允许把人力抽到底，不设战时预留；否则仅在常规战时扩军时预留补员燃料，
 	# 使现役军队每月补满编，避免爆兵抽干 manpower_pool 后军团长期缺编。
@@ -6954,6 +6936,41 @@ func _ai_manage_force_structure(
 			assessment.emergency_recruitment,
 			assessment.small_nation_survival
 		)
+	return false
+
+
+func _try_force_structure_demobilization(
+	view: AiWorldView,
+	threat: ThreatField,
+	nation: Nation,
+	assessment: ForceStructureAssessment
+) -> bool:
+	if (
+		assessment.wars.is_empty()
+		and nation.war_preparation_target_nation < 0
+		and _demobilize_excess_peacetime_battle_group(
+			view,
+			threat,
+			assessment.baseline_group_count
+		)
+	):
+		return true
+	if assessment.emergency_recruitment:
+		return false
+	if assessment.food_pressure and _demobilize_for_food_security(
+		view,
+		threat,
+		assessment.food_report,
+		assessment.force_structure_target
+	):
+		return true
+	if assessment.gold_pressure and _demobilize_for_gold_security(
+		view,
+		threat,
+		assessment.required_gold_savings,
+		assessment.force_structure_target
+	):
+		return true
 	return false
 
 
