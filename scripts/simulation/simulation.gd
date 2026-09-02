@@ -9008,8 +9008,48 @@ func _plan_campaign_allocation(
 			plan, target_city, best, group_members_by_id,
 			assigned_manpower, assigned_power
 		)
+	var reinforcement := _reinforce_campaign_group_assignments(
+		plan,
+		nation,
+		evaluations,
+		previous_group_targets,
+		group_members_by_id,
+		used_groups,
+		assigned_manpower,
+		assigned_power
+	)
+	used_groups = reinforcement["used_groups"]
+	assigned_manpower = reinforcement["manpower"]
+	assigned_power = reinforcement["power"]
+	for target_city in plan.candidate_target_ids:
+		if (
+			plan.target_to_groups.has(target_city)
+			and not (plan.target_to_groups[target_city] as Array).is_empty()
+		):
+			plan.assigned_target_ids.append(target_city)
+	plan.assigned_group_count = plan.group_to_target.size()
+	plan.required_group_count = maxi(
+		plan.required_group_count, plan.assigned_group_count
+	)
+	plan.target_assigned_manpower = assigned_manpower.duplicate(true)
+	plan.target_assigned_power = assigned_power.duplicate(true)
+	plan.unfilled_group_slots = maxi(
+		plan.required_group_count - plan.assigned_group_count, 0
+	)
+	return plan
+
+
+func _reinforce_campaign_group_assignments(
+	plan: CampaignAllocationPlan,
+	nation: Nation,
+	evaluations: Dictionary,
+	previous_group_targets: Dictionary,
+	group_members_by_id: Dictionary,
+	used_groups: Dictionary,
+	assigned_manpower: Dictionary,
+	assigned_power: Dictionary
+) -> Dictionary:
 	# 理论团槽只是扩军预算；实际分配还必须填平当前兵力和战力缺口。
-	# 残缺战团可以占一个方向，但不能冒充满编团阻止后续补强。
 	var reinforcement_progress := true
 	while (
 		reinforcement_progress
@@ -9024,10 +9064,8 @@ func _plan_campaign_allocation(
 			)
 			if (
 				assigned_groups >= int(plan.target_group_budget[target_city])
-				and int(assigned_manpower.get(target_city, 0))
-					>= int(demand["required_manpower"])
-				and float(assigned_power.get(target_city, 0.0))
-					>= float(demand["required_power"])
+				and int(assigned_manpower.get(target_city, 0)) >= int(demand["required_manpower"])
+				and float(assigned_power.get(target_city, 0.0)) >= float(demand["required_power"])
 			):
 				continue
 			var best := _best_planned_campaign_group(
@@ -9047,22 +9085,11 @@ func _plan_campaign_allocation(
 			reinforcement_progress = true
 			if used_groups.size() >= CAMPAIGN_MAX_WARTIME_GROUPS:
 				break
-	for target_city in plan.candidate_target_ids:
-		if (
-			plan.target_to_groups.has(target_city)
-			and not (plan.target_to_groups[target_city] as Array).is_empty()
-		):
-			plan.assigned_target_ids.append(target_city)
-	plan.assigned_group_count = plan.group_to_target.size()
-	plan.required_group_count = maxi(
-		plan.required_group_count, plan.assigned_group_count
-	)
-	plan.target_assigned_manpower = assigned_manpower.duplicate(true)
-	plan.target_assigned_power = assigned_power.duplicate(true)
-	plan.unfilled_group_slots = maxi(
-		plan.required_group_count - plan.assigned_group_count, 0
-	)
-	return plan
+	return {
+		"used_groups": used_groups,
+		"manpower": assigned_manpower,
+		"power": assigned_power,
+	}
 
 
 func _assign_campaign_group_to_plan(
