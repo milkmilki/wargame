@@ -9956,14 +9956,9 @@ func _assign_offensive_staging_orders(
 			and committed_light >= committed_heavy
 		):
 			continue
-		var reinforce := ActionCandidate.make(
-			ActionCandidate.Kind.REINFORCE,
-			900.0,
-			"战前集结：向目标城市%d的进攻出发地%d调兵"
-				% [objective_city, best_city],
-			best_city
+		var reinforce := _make_campaign_reinforce_order(
+			objective_city, best_city
 		)
-		reinforce.minimum_commit_days = DiplomacyAI.WAR_PREPARATION_MIN_DAYS
 		if _execute_ai_candidate(army, reinforce):
 			changed = true
 			orders += 1
@@ -10034,14 +10029,9 @@ func _assign_offensive_staging_orders(
 			nation_id, state.cities[friendly_endpoint].owner_nation
 		):
 			friendly_endpoint = army.move_to
-		var withdraw := ActionCandidate.make(
-			ActionCandidate.Kind.RETREAT,
-			850.0,
-			"战前重部署：从次要边境撤回，转向目标城市%d集结"
-				% objective_city,
-			friendly_endpoint
+		var withdraw := _make_campaign_redeployment_order(
+			objective_city, friendly_endpoint
 		)
-		withdraw.minimum_commit_days = AI_DECISION_INTERVAL_DAYS
 		if _execute_ai_candidate(army, withdraw):
 			changed = true
 			orders += 1
@@ -10057,6 +10047,36 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _make_campaign_redeployment_order(
+	objective_city: int,
+	friendly_endpoint: int
+) -> ActionCandidate:
+	var withdraw := ActionCandidate.make(
+		ActionCandidate.Kind.RETREAT,
+		850.0,
+		"战前重部署：从次要边境撤回，转向目标城市%d集结"
+			% objective_city,
+		friendly_endpoint
+	)
+	withdraw.minimum_commit_days = AI_DECISION_INTERVAL_DAYS
+	return withdraw
+
+
+func _make_campaign_reinforce_order(
+	objective_city: int,
+	staging_city: int
+) -> ActionCandidate:
+	var reinforce := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		900.0,
+		"战前集结：向目标城市%d的进攻出发地%d调兵"
+			% [objective_city, staging_city],
+		staging_city
+	)
+	reinforce.minimum_commit_days = DiplomacyAI.WAR_PREPARATION_MIN_DAYS
+	return reinforce
 
 
 func _make_campaign_staging_hold_order(
