@@ -8590,73 +8590,15 @@ func _ensure_campaign_preparation_plan(
 			1
 		)
 		if not state.uses_heightmap:
-			var grid_target_limit := int(ceil(
-				float(_campaign_minimum_staged_troops(
-					nation_id,
-					target_city
-				)) * CAMPAIGN_TARGET_COMMIT_RATIO
-			))
-			var grid_direct_defense := 0.0
-			for defender in state.armies_at_city(target_city):
-				if state.is_enemy(
-					nation_id,
-					defender.owner_nation
-				):
-					grid_direct_defense += ArmyPower.effective(
-						defender
-					)
-			var grid_target_defense := maxf(
-				grid_direct_defense,
-				threat.threat_at(target_city)
+			_assign_grid_campaign_target(
+				nation_id,
+				target_city,
+				ranked,
+				selection_limit,
+				threat,
+				nation,
+				available
 			)
-			if (
-				state.recognized_owner_of(target_city)
-					!= nation_id
-			):
-				grid_target_defense += ArmyPower.city_defense(
-					state.cities[target_city]
-				)
-			var grid_preparation_days := (
-				_campaign_offensive_interval(nation_id)
-				if nation.campaign_last_offensive_day >= 0
-				else 0
-			)
-			var grid_target_power := (
-				grid_target_defense
-				* _campaign_attack_ratio_threshold(nation_id)
-				/ offensive_preparation_multiplier(
-					grid_preparation_days
-				)
-			)
-			var grid_selected_power := 0.0
-			for entry in ranked:
-				if (
-					selected.size() >= selection_limit
-					or (
-						selected_troops >= grid_target_limit
-						and grid_selected_power
-							>= grid_target_power
-					)
-				):
-					break
-				var grid_army: Army = entry["army"]
-				selected.append(grid_army)
-				selected_troops += grid_army.size
-				grid_selected_power += ArmyPower.effective(
-					grid_army
-				)
-			if selected_troops <= 0:
-				continue
-			nation.campaign_preparation_targets.append(
-				target_city
-			)
-			for grid_army in selected:
-				_assign_campaign_preparation_army(
-					nation_id,
-					grid_army,
-					target_city
-				)
-				available.erase(grid_army)
 			continue
 		var ranked_heavy: Array[Dictionary] = []
 		var ranked_light: Array[Dictionary] = []
@@ -8799,6 +8741,71 @@ func _ensure_campaign_preparation_plan(
 
 ## 正式地图的攻势只有这一条规划入口：纯规划器一次决定目标预算和战团归属，
 ## 原子应用器再投影到兼容字段。扩军、集结、发射只能消费这份计划。
+func _assign_grid_campaign_target(
+	nation_id: int,
+	target_city: int,
+	ranked: Array[Dictionary],
+	selection_limit: int,
+	threat: ThreatField,
+	nation: Nation,
+	available: Array[Army]
+) -> void:
+	var grid_target_limit := int(ceil(
+		float(_campaign_minimum_staged_troops(
+			nation_id,
+			target_city
+		)) * CAMPAIGN_TARGET_COMMIT_RATIO
+	))
+	var grid_direct_defense := 0.0
+	for defender in state.armies_at_city(target_city):
+		if state.is_enemy(nation_id, defender.owner_nation):
+			grid_direct_defense += ArmyPower.effective(defender)
+	var grid_target_defense := maxf(
+		grid_direct_defense,
+		threat.threat_at(target_city)
+	)
+	if state.recognized_owner_of(target_city) != nation_id:
+		grid_target_defense += ArmyPower.city_defense(
+			state.cities[target_city]
+		)
+	var grid_preparation_days := (
+		_campaign_offensive_interval(nation_id)
+		if nation.campaign_last_offensive_day >= 0
+		else 0
+	)
+	var grid_target_power := (
+		grid_target_defense
+		* _campaign_attack_ratio_threshold(nation_id)
+		/ offensive_preparation_multiplier(grid_preparation_days)
+	)
+	var selected: Array[Army] = []
+	var selected_troops := 0
+	var grid_selected_power := 0.0
+	for entry in ranked:
+		if (
+			selected.size() >= selection_limit
+			or (
+				selected_troops >= grid_target_limit
+				and grid_selected_power >= grid_target_power
+			)
+		):
+			break
+		var grid_army: Army = entry["army"]
+		selected.append(grid_army)
+		selected_troops += grid_army.size
+		grid_selected_power += ArmyPower.effective(grid_army)
+	if selected_troops <= 0:
+		return
+	nation.campaign_preparation_targets.append(target_city)
+	for grid_army in selected:
+		_assign_campaign_preparation_army(
+			nation_id,
+			grid_army,
+			target_city
+		)
+		available.erase(grid_army)
+
+
 func _ensure_group_campaign_preparation_plan(
 	nation_id: int,
 	primary_city: int,
