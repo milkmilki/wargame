@@ -5602,78 +5602,17 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	# 军事规划复用 tick 开始时的冻结上下文；军制变化从下一次决策起生效。
 	_set_runtime_profile_stage(&"ai_campaign_planning")
 	var military_contexts := force_contexts
-	var snapshot_army_ids := {}
-	for nation_id in managed_nations:
-		var context: Dictionary = military_contexts[nation_id]
-		var snapshot_view: AiWorldView = context["view"]
-		for army in snapshot_view.friendly_armies:
-			snapshot_army_ids[army.id] = true
-	_begin_ai_command_collection(snapshot_army_ids)
-	var coordinators := {}
-	var defense_plans := {}
-	for nation_id in managed_nations:
-		var context: Dictionary = military_contexts[nation_id]
-		var view: AiWorldView = context["view"]
-		var coordinator := ArmyCoordinator.from_view(view)
-		coordinators[nation_id] = coordinator
-		defense_plans[nation_id] = context["defense_plan"]
-	for nation_id in managed_nations:
-		var context: Dictionary = military_contexts[nation_id]
-		var decision_context: Dictionary = (
-			decision_contexts[nation_id]
-		)
-		var nation := state.nations[nation_id]
-		var defense_plan: CityDefensePlan = defense_plans[nation_id]
-		var coordinator: ArmyCoordinator = coordinators[nation_id]
-		# 藩王不做体系级攻势规划：自有 MAIN 只接受封国内线换防、解围和法理失地收复任务。
-		# 独立 LINE 继续只执行防区部署，不进入正式地图攻势候选。
-		if (
-			state.is_vassal(nation_id)
-			and not state.is_in_civil_war(nation_id)
-		):
-			pass
-		elif (
-			nation.war_preparation_target_nation >= 0
-			and (
-				(decision_context["wars"] as Array).is_empty()
-				if decision_context.has("wars")
-				else state.wars_of(nation_id).is_empty()
-			)
-		):
-			_assign_offensive_staging_orders(
-				nation_id,
-				nation.war_preparation_objective_city,
-				defense_plan,
-				coordinator,
-				true,
-				false,
-				true,
-				decision_context
-			)
-		elif (
-			not declaration_launched_nations.has(nation_id)
-			and (
-				not (
-					decision_context["wars"] as Array
-				).is_empty()
-				if decision_context.has("wars")
-				else not state.wars_of(nation_id).is_empty()
-			)
-		):
-			_manage_campaign_offensive(
-				nation_id,
-				defense_plan,
-				coordinator,
-				context["threat"] as ThreatField,
-				decision_context
-			)
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_RUNTIME_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
+	var campaign_phase: Dictionary = await _run_ai_campaign_planning_phase(
+		managed_nations,
+		military_contexts,
+		decision_contexts,
+		declaration_launched_nations,
+		spread_runtime_work,
+		runtime_slice_started
+	)
+	var coordinators: Dictionary = campaign_phase["coordinators"]
+	var defense_plans: Dictionary = campaign_phase["defense_plans"]
+	runtime_slice_started = int(campaign_phase["slice_started"])
 	_record_tick_profile_stage("ai_campaign_planning", ai_profile_stage_started)
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -5985,6 +5924,84 @@ func _run_ai_force_structure_phase(
 			runtime_slice_started = Time.get_ticks_usec()
 	return {
 		"decision_contexts": decision_contexts,
+		"slice_started": runtime_slice_started,
+	}
+
+
+func _run_ai_campaign_planning_phase(
+	managed_nations: Array[int],
+	military_contexts: Dictionary,
+	decision_contexts: Dictionary,
+	declaration_launched_nations: Dictionary,
+	spread_runtime_work: bool,
+	runtime_slice_started: int
+) -> Dictionary:
+	var snapshot_army_ids := {}
+	for nation_id in managed_nations:
+		var context: Dictionary = military_contexts[nation_id]
+		var view: AiWorldView = context["view"]
+		for army in view.friendly_armies:
+			snapshot_army_ids[army.id] = true
+	_begin_ai_command_collection(snapshot_army_ids)
+	var coordinators := {}
+	var defense_plans := {}
+	for nation_id in managed_nations:
+		var context: Dictionary = military_contexts[nation_id]
+		var coordinator := ArmyCoordinator.from_view(context["view"])
+		coordinators[nation_id] = coordinator
+		defense_plans[nation_id] = context["defense_plan"]
+	for nation_id in managed_nations:
+		var context: Dictionary = military_contexts[nation_id]
+		var decision_context: Dictionary = decision_contexts[nation_id]
+		var nation := state.nations[nation_id]
+		var defense_plan: CityDefensePlan = defense_plans[nation_id]
+		var coordinator: ArmyCoordinator = coordinators[nation_id]
+		# Peaceful subjects only manage their own internal defense and claims.
+		if state.is_vassal(nation_id) and not state.is_in_civil_war(nation_id):
+			pass
+		elif (
+			nation.war_preparation_target_nation >= 0
+			and (
+				(decision_context["wars"] as Array).is_empty()
+				if decision_context.has("wars")
+				else state.wars_of(nation_id).is_empty()
+			)
+		):
+			_assign_offensive_staging_orders(
+				nation_id,
+				nation.war_preparation_objective_city,
+				defense_plan,
+				coordinator,
+				true,
+				false,
+				true,
+				decision_context
+			)
+		elif (
+			not declaration_launched_nations.has(nation_id)
+			and (
+				not (decision_context["wars"] as Array).is_empty()
+				if decision_context.has("wars")
+				else not state.wars_of(nation_id).is_empty()
+			)
+		):
+			_manage_campaign_offensive(
+				nation_id,
+				defense_plan,
+				coordinator,
+				context["threat"] as ThreatField,
+				decision_context
+			)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	return {
+		"coordinators": coordinators,
+		"defense_plans": defense_plans,
 		"slice_started": runtime_slice_started,
 	}
 
