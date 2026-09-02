@@ -740,85 +740,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if state == null:
 		return
 	if event is InputEventMagnifyGesture:
-		if not world_layer_visible:
-			return
-		var magnify := event as InputEventMagnifyGesture
-		_compute_layout()
-		if (
-			not _point_blocked_by_nation_stats(magnify.position)
-			and Rect2(_origin, _map_size).has_point(
-				magnify.position
-			)
-		):
-			_set_map_zoom_at(
-				_map_zoom * magnify_zoom_multiplier(
-					magnify.factor
-				),
-				magnify.position
-			)
-			get_viewport().set_input_as_handled()
+		_handle_magnify_gesture(event as InputEventMagnifyGesture)
 		return
 	if event is InputEventPanGesture:
-		if not world_layer_visible:
-			return
-		var pan_gesture := event as InputEventPanGesture
-		_compute_layout()
-		if (
-			not _point_blocked_by_nation_stats(
-				pan_gesture.position
-			)
-			and Rect2(_origin, _map_size).has_point(
-				pan_gesture.position
-			)
-		):
-			_map_pan -= (
-				pan_gesture.delta
-				* MAP_PAN_GESTURE_SCALE
-				* _display_scale
-			)
-			_apply_map_view_transform()
-			queue_redraw()
-			get_viewport().set_input_as_handled()
+		_handle_pan_gesture(event as InputEventPanGesture)
 		return
 	if event is InputEventMouseMotion:
-		var motion := event as InputEventMouseMotion
-		if _nation_stats_drag_active:
-			if (
-				motion.button_mask
-					& MOUSE_BUTTON_MASK_LEFT
-			) == 0:
-				_nation_stats_drag_active = false
-				return
-			_nation_stats_window_position = (
-				motion.position - _nation_stats_drag_offset
-			)
-			_clamp_nation_stats_window_position()
-			queue_redraw()
-			get_viewport().set_input_as_handled()
-			return
-		if not world_layer_visible:
-			return
-		if (
-			not _map_drag_active
-			or (
-				motion.button_mask
-					& MOUSE_BUTTON_MASK_LEFT
-			) == 0
-		):
-			return
-		if (
-			not _map_drag_moved
-			and motion.position.distance_to(_map_drag_start)
-				>= MAP_PAN_DRAG_THRESHOLD * _display_scale
-		):
-			_map_drag_moved = true
-		if _map_drag_moved:
-			_map_pan = _map_drag_start_pan + (
-				motion.position - _map_drag_start
-			)
-			_apply_map_view_transform()
-			queue_redraw()
-			get_viewport().set_input_as_handled()
+		_handle_mouse_motion(event as InputEventMouseMotion)
 		return
 	if not event is InputEventMouseButton:
 		return
@@ -957,6 +885,69 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	_pick_map_feature(point)
 	get_viewport().set_input_as_handled()
+
+
+func _handle_magnify_gesture(event: InputEventMagnifyGesture) -> void:
+	if not world_layer_visible:
+		return
+	_compute_layout()
+	if (
+		not _point_blocked_by_nation_stats(event.position)
+		and Rect2(_origin, _map_size).has_point(event.position)
+	):
+		_set_map_zoom_at(
+			_map_zoom * magnify_zoom_multiplier(event.factor),
+			event.position
+		)
+		get_viewport().set_input_as_handled()
+
+
+func _handle_pan_gesture(event: InputEventPanGesture) -> void:
+	if not world_layer_visible:
+		return
+	_compute_layout()
+	if (
+		not _point_blocked_by_nation_stats(event.position)
+		and Rect2(_origin, _map_size).has_point(event.position)
+	):
+		_map_pan -= (
+			event.delta * MAP_PAN_GESTURE_SCALE * _display_scale
+		)
+		_apply_map_view_transform()
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+
+
+func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+	if _nation_stats_drag_active:
+		if (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+			_nation_stats_drag_active = false
+			return
+		_nation_stats_window_position = (
+			event.position - _nation_stats_drag_offset
+		)
+		_clamp_nation_stats_window_position()
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if not world_layer_visible:
+		return
+	if (
+		not _map_drag_active
+		or (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0
+	):
+		return
+	if (
+		not _map_drag_moved
+		and event.position.distance_to(_map_drag_start)
+			>= MAP_PAN_DRAG_THRESHOLD * _display_scale
+	):
+		_map_drag_moved = true
+	if _map_drag_moved:
+		_map_pan = _map_drag_start_pan + (event.position - _map_drag_start)
+		_apply_map_view_transform()
+		queue_redraw()
+		get_viewport().set_input_as_handled()
 
 
 func _point_blocked_by_nation_stats(point: Vector2) -> bool:
