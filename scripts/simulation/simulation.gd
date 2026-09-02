@@ -12078,64 +12078,14 @@ func _manage_campaign_offensive(
 		nation_id, decision_context
 	)
 	var objective_cache := {}
-	# 君主好战差异已在外交层用连续侵略欲望体现；一旦真的进入战争，任何君主都
-	# 会主动组织攻势去实现其战争目标，不再在执行层区分“能否侵略”。
-	# 仍在修复窗口内的本国法理失地优先于原进攻目标，形成真实反复争夺。
-	for enemy_id in enemy_ids:
-		if not _enemy_holds_recent_legal_reclamation(
-			nation_id,
-			enemy_id
-		):
-			continue
-		var reclamation := _cached_campaign_objective(
-			nation_id,
-			enemy_id,
-			objective_cache
-		)
-		if reclamation.is_empty():
-			continue
-		var reclamation_city := int(reclamation["city_id"])
-		if (
-			state.recognized_owner_of(reclamation_city)
-				== nation_id
-			and Simulation.city_fort_vulnerability(
-				state.cities[reclamation_city],
-				state.day
-			) > 0.0
-		):
-			objective = reclamation
-			defender_id = enemy_id
-			break
-	if objective.is_empty():
-		for enemy_id in enemy_ids:
-			var candidate := state.war_objective(
-				nation_id,
-				enemy_id
-			)
-			if (
-				not candidate.is_empty()
-				and int(candidate.get("attacker", -1))
-					== nation_id
-			):
-				objective = candidate
-				defender_id = enemy_id
-				owns_diplomatic_objective = true
-				break
-	# 防御战争没有本国发起的外交目标，但仍必须主动选择敌城组织反攻。
-	if objective.is_empty():
-		for enemy_id in enemy_ids:
-			var counteroffensive := (
-				_cached_campaign_objective(
-					nation_id,
-					enemy_id,
-					objective_cache
-				)
-			)
-			if counteroffensive.is_empty():
-				continue
-			objective = counteroffensive
-			defender_id = enemy_id
-			break
+	var selected_objective := _select_campaign_objective(
+		nation_id, enemy_ids, objective_cache
+	)
+	objective = selected_objective["objective"]
+	defender_id = int(selected_objective["defender_id"])
+	owns_diplomatic_objective = bool(
+		selected_objective["owns_diplomatic_objective"]
+	)
 	if objective.is_empty():
 		return false
 	var objective_city := int(objective["city_id"])
@@ -12446,6 +12396,62 @@ func _manage_campaign_offensive(
 		campaign_profile_started
 	)
 	return changed
+
+
+func _select_campaign_objective(
+	nation_id: int,
+	enemy_ids: Array,
+	objective_cache: Dictionary
+) -> Dictionary:
+	var objective: Dictionary = {}
+	var defender_id := -1
+	var owns_diplomatic_objective := false
+	# 法理失地优先于原进攻目标，形成真实反复争夺。
+	for enemy_id in enemy_ids:
+		if not _enemy_holds_recent_legal_reclamation(nation_id, enemy_id):
+			continue
+		var reclamation := _cached_campaign_objective(
+			nation_id, enemy_id, objective_cache
+		)
+		if reclamation.is_empty():
+			continue
+		var reclamation_city := int(reclamation["city_id"])
+		if (
+			state.recognized_owner_of(reclamation_city) == nation_id
+			and Simulation.city_fort_vulnerability(
+				state.cities[reclamation_city], state.day
+			) > 0.0
+		):
+			objective = reclamation
+			defender_id = enemy_id
+			break
+	if objective.is_empty():
+		for enemy_id in enemy_ids:
+			var candidate := state.war_objective(nation_id, enemy_id)
+			if (
+				not candidate.is_empty()
+				and int(candidate.get("attacker", -1)) == nation_id
+			):
+				objective = candidate
+				defender_id = enemy_id
+				owns_diplomatic_objective = true
+				break
+	# 防御战争没有本国发起的外交目标，主动选择敌城反攻。
+	if objective.is_empty():
+		for enemy_id in enemy_ids:
+			var counteroffensive := _cached_campaign_objective(
+				nation_id, enemy_id, objective_cache
+			)
+			if counteroffensive.is_empty():
+				continue
+			objective = counteroffensive
+			defender_id = enemy_id
+			break
+	return {
+		"objective": objective,
+		"defender_id": defender_id,
+		"owns_diplomatic_objective": owns_diplomatic_objective,
+	}
 
 
 func _sorted_campaign_enemy_ids(
