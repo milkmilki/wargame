@@ -9004,26 +9004,10 @@ func _plan_campaign_allocation(
 			continue
 		var group_id := int(best["group_id"])
 		used_groups[group_id] = true
-		plan.group_to_target[group_id] = target_city
-		if not plan.target_to_groups.has(target_city):
-			plan.target_to_groups[target_city] = [] as Array[int]
-		(plan.target_to_groups[target_city] as Array[int]).append(group_id)
-		var all_ids: Array[int] = []
-		for member in group_members_by_id[group_id] as Array[Army]:
-			all_ids.append(member.id)
-		plan.all_member_ids[group_id] = all_ids
-		plan.eligible_member_ids[group_id] = (
-			best["eligible_member_ids"] as Array[int]
-		).duplicate()
-		plan.excluded_member_reasons[group_id] = (
-			best.get("excluded_member_reasons", {}) as Dictionary
-		).duplicate(true)
-		assigned_manpower[target_city] = int(
-			assigned_manpower.get(target_city, 0)
-		) + int(best["manpower"])
-		assigned_power[target_city] = float(
-			assigned_power.get(target_city, 0.0)
-		) + float(best["power"])
+		_assign_campaign_group_to_plan(
+			plan, target_city, best, group_members_by_id,
+			assigned_manpower, assigned_power
+		)
 	# 理论团槽只是扩军预算；实际分配还必须填平当前兵力和战力缺口。
 	# 残缺战团可以占一个方向，但不能冒充满编团阻止后续补强。
 	var reinforcement_progress := true
@@ -9056,26 +9040,10 @@ func _plan_campaign_allocation(
 			if assigned_groups >= int(plan.target_group_budget[target_city]):
 				plan.target_group_budget[target_city] = assigned_groups + 1
 			used_groups[group_id] = true
-			plan.group_to_target[group_id] = target_city
-			if not plan.target_to_groups.has(target_city):
-				plan.target_to_groups[target_city] = [] as Array[int]
-			(plan.target_to_groups[target_city] as Array[int]).append(group_id)
-			var all_ids: Array[int] = []
-			for member in group_members_by_id[group_id] as Array[Army]:
-				all_ids.append(member.id)
-			plan.all_member_ids[group_id] = all_ids
-			plan.eligible_member_ids[group_id] = (
-				best["eligible_member_ids"] as Array[int]
-			).duplicate()
-			plan.excluded_member_reasons[group_id] = (
-				best.get("excluded_member_reasons", {}) as Dictionary
-			).duplicate(true)
-			assigned_manpower[target_city] = int(
-				assigned_manpower.get(target_city, 0)
-			) + int(best["manpower"])
-			assigned_power[target_city] = float(
-				assigned_power.get(target_city, 0.0)
-			) + float(best["power"])
+			_assign_campaign_group_to_plan(
+				plan, target_city, best, group_members_by_id,
+				assigned_manpower, assigned_power
+			)
 			reinforcement_progress = true
 			if used_groups.size() >= CAMPAIGN_MAX_WARTIME_GROUPS:
 				break
@@ -9095,6 +9063,37 @@ func _plan_campaign_allocation(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
 	return plan
+
+
+func _assign_campaign_group_to_plan(
+	plan: CampaignAllocationPlan,
+	target_city: int,
+	best: Dictionary,
+	group_members_by_id: Dictionary,
+	assigned_manpower: Dictionary,
+	assigned_power: Dictionary
+) -> void:
+	var group_id := int(best["group_id"])
+	plan.group_to_target[group_id] = target_city
+	if not plan.target_to_groups.has(target_city):
+		plan.target_to_groups[target_city] = [] as Array[int]
+	(plan.target_to_groups[target_city] as Array[int]).append(group_id)
+	var all_ids: Array[int] = []
+	for member in group_members_by_id[group_id] as Array[Army]:
+		all_ids.append(member.id)
+	plan.all_member_ids[group_id] = all_ids
+	plan.eligible_member_ids[group_id] = (
+		best["eligible_member_ids"] as Array[int]
+	).duplicate()
+	plan.excluded_member_reasons[group_id] = (
+		best.get("excluded_member_reasons", {}) as Dictionary
+	).duplicate(true)
+	assigned_manpower[target_city] = int(
+		assigned_manpower.get(target_city, 0)
+	) + int(best["manpower"])
+	assigned_power[target_city] = float(
+		assigned_power.get(target_city, 0.0)
+	) + float(best["power"])
 
 
 func _build_campaign_group_slots(plan: CampaignAllocationPlan) -> Array[int]:
