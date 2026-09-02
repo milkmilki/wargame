@@ -750,14 +750,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event is InputEventMouseButton:
 		return
-	var mouse_event := event as InputEventMouseButton
+	_handle_mouse_button(event as InputEventMouseButton)
+
+
+func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	_compute_layout()
 	var stats_rect := _nation_stats_window_rect()
+	if _handle_nation_stats_wheel(event, stats_rect):
+		return
+	if _handle_map_wheel(event):
+		return
+	if _handle_right_mouse_button(event, stats_rect):
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	_handle_left_mouse_button(event, stats_rect)
+
+
+func _handle_nation_stats_wheel(
+	event: InputEventMouseButton,
+	stats_rect: Rect2
+) -> bool:
 	if (
 		_nation_stats_open
-		and stats_rect.has_point(mouse_event.position)
-		and mouse_event.pressed
-		and mouse_event.button_index in [
+		and stats_rect.has_point(event.position)
+		and event.pressed
+		and event.button_index in [
 			MOUSE_BUTTON_WHEEL_UP,
 			MOUSE_BUTTON_WHEEL_DOWN,
 		]
@@ -772,7 +790,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_nation_stats_scroll
 				+ (
 					-1
-					if mouse_event.button_index
+					if event.button_index
 						== MOUSE_BUTTON_WHEEL_UP
 					else 1
 				),
@@ -781,46 +799,55 @@ func _unhandled_input(event: InputEvent) -> void:
 		)
 		queue_redraw()
 		get_viewport().set_input_as_handled()
-		return
+		return true
+	return false
+
+
+func _handle_map_wheel(event: InputEventMouseButton) -> bool:
 	if (
-		mouse_event.pressed
-		and mouse_event.button_index in [
+		event.pressed
+		and event.button_index in [
 			MOUSE_BUTTON_WHEEL_UP,
 			MOUSE_BUTTON_WHEEL_DOWN,
 		]
 		and world_layer_visible
-		and Rect2(_origin, _map_size).has_point(
-			mouse_event.position
-		)
+		and Rect2(_origin, _map_size).has_point(event.position)
 	):
 		var factor := wheel_zoom_multiplier(
-			mouse_event.button_index,
-			mouse_event.factor
+			event.button_index,
+			event.factor
 		)
-		_set_map_zoom_at(
-			_map_zoom * factor,
-			mouse_event.position
-		)
+		_set_map_zoom_at(_map_zoom * factor, event.position)
 		get_viewport().set_input_as_handled()
-		return
+		return true
+	return false
+
+
+func _handle_right_mouse_button(
+	event: InputEventMouseButton,
+	stats_rect: Rect2
+) -> bool:
 	if (
-		mouse_event.pressed
-		and mouse_event.button_index == MOUSE_BUTTON_RIGHT
+		event.pressed
+		and event.button_index == MOUSE_BUTTON_RIGHT
 	):
-		if _nation_stats_open and stats_rect.has_point(
-			mouse_event.position
-		):
+		if _nation_stats_open and stats_rect.has_point(event.position):
 			get_viewport().set_input_as_handled()
-			return
+			return true
 		if not world_layer_visible:
-			return
+			return true
 		_clear_selection()
 		get_viewport().set_input_as_handled()
-		return
-	if mouse_event.button_index != MOUSE_BUTTON_LEFT:
-		return
-	var point := mouse_event.position
-	if mouse_event.pressed:
+		return true
+	return false
+
+
+func _handle_left_mouse_button(
+	event: InputEventMouseButton,
+	stats_rect: Rect2
+) -> void:
+	var point := event.position
+	if event.pressed:
 		if nation_stats_button_rect(
 			get_viewport_rect().size,
 			_display_scale,
@@ -867,8 +894,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			_map_drag_start = point
 			_map_drag_start_pan = _map_pan
 			get_viewport().set_input_as_handled()
-		return
-		_clear_selection()
 		return
 	if _nation_stats_drag_active:
 		_nation_stats_drag_active = false
