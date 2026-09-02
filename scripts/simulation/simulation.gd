@@ -9845,15 +9845,9 @@ func _assign_offensive_staging_orders(
 				and committed_light >= committed_heavy
 			):
 				continue
-			var hold := ActionCandidate.make(
-				ActionCandidate.Kind.HOLD,
-				1000.0,
-				"战前集结：在己方侧监视目标城市%d" % objective_city,
-				objective_city
+			var hold := _make_campaign_staging_hold_order(
+				objective_city, staging_city
 			)
-			hold.target_edge_a = staging_city
-			hold.target_edge_b = objective_city
-			hold.minimum_commit_days = DiplomacyAI.WAR_PREPARATION_MIN_DAYS
 			if _execute_ai_candidate(army, hold):
 				changed = true
 				orders += 1
@@ -10063,6 +10057,22 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _make_campaign_staging_hold_order(
+	objective_city: int,
+	staging_city: int
+) -> ActionCandidate:
+	var hold := ActionCandidate.make(
+		ActionCandidate.Kind.HOLD,
+		1000.0,
+		"战前集结：在己方侧监视目标城市%d" % objective_city,
+		objective_city
+	)
+	hold.target_edge_a = staging_city
+	hold.target_edge_b = objective_city
+	hold.minimum_commit_days = DiplomacyAI.WAR_PREPARATION_MIN_DAYS
+	return hold
 
 
 func _count_campaign_committed_armies(
