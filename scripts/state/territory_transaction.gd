@@ -285,6 +285,155 @@ static func plan_diplomacy(
 	}
 
 
+static func plan_structure(
+	cities: Array,
+	nations: Array,
+	planned_owners: Array[int],
+	final_city_counts: Array[int],
+	planned_suzerainty: Dictionary,
+	preferred_capitals: Dictionary,
+	select_capital: Callable,
+	select_pool_holder: Callable
+) -> Dictionary:
+	var preferred := _normalize_preferred_capitals(
+		cities, nations.size(), planned_owners, preferred_capitals
+	)
+	if not bool(preferred.get("ok", false)):
+		return preferred
+	var capitals := _plan_capitals(
+		nations,
+		planned_owners,
+		final_city_counts,
+		preferred["capitals"],
+		select_capital
+	)
+	if not bool(capitals.get("ok", false)):
+		return capitals
+	var planned_capitals: Array[int] = capitals["planned_capitals"]
+	var pools := _plan_pool_holders(
+		nations,
+		final_city_counts,
+		planned_suzerainty,
+		planned_capitals,
+		select_pool_holder
+	)
+	if not bool(pools.get("ok", false)):
+		return pools
+	var final_pool_holders: Array[int] = pools["final_pool_holders"]
+	return {
+		"ok": true,
+		"planned_capitals": planned_capitals,
+		"final_pool_holders": final_pool_holders,
+		"planned_warehouse_flags": _plan_warehouse_flags(
+			cities,
+			nations,
+			planned_owners,
+			final_city_counts,
+			planned_capitals,
+			final_pool_holders
+		),
+	}
+
+
+static func _normalize_preferred_capitals(
+	cities: Array,
+	nation_count: int,
+	planned_owners: Array[int],
+	preferred_capitals: Dictionary
+) -> Dictionary:
+	var normalized := {}
+	for nation_value in preferred_capitals:
+		var nation_id := int(nation_value)
+		var preferred_id := int(preferred_capitals[nation_value])
+		if (
+			nation_id < 0 or nation_id >= nation_count
+			or preferred_id < 0 or preferred_id >= cities.size()
+			or planned_owners[preferred_id] != nation_id
+			or cities[preferred_id].is_dock
+		):
+			return _failure("preferred_capitals 包含无效首都。")
+		normalized[nation_id] = preferred_id
+	return {"ok": true, "capitals": normalized}
+
+
+static func _plan_capitals(
+	nations: Array,
+	planned_owners: Array[int],
+	final_city_counts: Array[int],
+	preferred_capitals: Dictionary,
+	select_capital: Callable
+) -> Dictionary:
+	var planned_capitals: Array[int] = []
+	planned_capitals.resize(nations.size())
+	planned_capitals.fill(-1)
+	for nation in nations:
+		if final_city_counts[nation.id] <= 0:
+			continue
+		planned_capitals[nation.id] = int(select_capital.call(
+			nation.id,
+			planned_owners,
+			int(preferred_capitals.get(nation.id, -1))
+		))
+		if planned_capitals[nation.id] < 0:
+			return _failure("无法为有城国家规划首都。")
+	return {"ok": true, "planned_capitals": planned_capitals}
+
+
+static func _plan_pool_holders(
+	nations: Array,
+	final_city_counts: Array[int],
+	planned_suzerainty: Dictionary,
+	planned_capitals: Array[int],
+	select_pool_holder: Callable
+) -> Dictionary:
+	var final_pool_holders: Array[int] = []
+	final_pool_holders.resize(nations.size())
+	final_pool_holders.fill(-1)
+	for nation in nations:
+		if final_city_counts[nation.id] <= 0:
+			continue
+		var holder_id := int(select_pool_holder.call(
+			nation.id, final_city_counts, planned_suzerainty
+		))
+		if (
+			holder_id < 0
+			or holder_id >= nations.size()
+			or final_city_counts[holder_id] <= 0
+			or planned_capitals[holder_id] < 0
+		):
+			return _failure("领土操作后的粮池持有者没有可用首都。")
+		final_pool_holders[nation.id] = holder_id
+	return {"ok": true, "final_pool_holders": final_pool_holders}
+
+
+static func _plan_warehouse_flags(
+	cities: Array,
+	nations: Array,
+	planned_owners: Array[int],
+	final_city_counts: Array[int],
+	planned_capitals: Array[int],
+	final_pool_holders: Array[int]
+) -> Array[bool]:
+	var flags: Array[bool] = []
+	flags.resize(cities.size())
+	flags.fill(false)
+	for city in cities:
+		var final_owner := planned_owners[city.id]
+		flags[city.id] = (
+			not city.is_dock
+			and city.has_warehouse
+			and city.owner_nation == final_owner
+			and final_pool_holders[final_owner] == final_owner
+		)
+	for nation in nations:
+		if (
+			final_city_counts[nation.id] > 0
+			and final_pool_holders[nation.id] == nation.id
+		):
+			flags[planned_capitals[nation.id]] = true
+	return flags
+
+
 static func _normalize_diplomatic_operations(
 	operations: Array[Dictionary],
 	nation_count: int,

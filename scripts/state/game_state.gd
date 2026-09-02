@@ -5300,86 +5300,23 @@ func apply_territory_transaction(
 	var planned_diplomatic_since: Dictionary = diplomacy_plan["planned_since"]
 	var planned_truce_until: Dictionary = diplomacy_plan["planned_truce"]
 	var diplomacy_changed := bool(diplomacy_plan["changed"])
-	var normalized_preferred := {}
-	for nation_value in preferred_capitals:
-		var nation_id := int(nation_value)
-		var preferred_id := int(preferred_capitals[nation_value])
-		if (
-			nation_id < 0 or nation_id >= nations.size()
-			or preferred_id < 0 or preferred_id >= cities.size()
-			or planned_owners[preferred_id] != nation_id
-			or cities[preferred_id].is_dock
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "preferred_capitals 包含无效首都。",
-				"changed_city_ids": [] as Array[int],
-			}
-		normalized_preferred[nation_id] = preferred_id
-	var planned_capitals: Array[int] = []
-	planned_capitals.resize(nations.size())
-	planned_capitals.fill(-1)
-	for nation in nations:
-		if final_city_counts[nation.id] <= 0:
-			continue
-		planned_capitals[nation.id] = _planned_territory_capital(
-			nation.id, planned_owners,
-			int(normalized_preferred.get(nation.id, -1))
-		)
-		if planned_capitals[nation.id] < 0:
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "无法为有城国家规划首都。",
-				"changed_city_ids": [] as Array[int],
-			}
-	var final_pool_holders: Array[int] = []
-	final_pool_holders.resize(nations.size())
-	final_pool_holders.fill(-1)
-	for nation in nations:
-		if final_city_counts[nation.id] <= 0:
-			continue
-		var holder_id := _planned_territory_food_pool_holder(
-			nation.id, final_city_counts, planned_suzerainty
-		)
-		if (
-			holder_id < 0
-			or holder_id >= nations.size()
-			or final_city_counts[holder_id] <= 0
-			or planned_capitals[holder_id] < 0
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "领土操作后的粮池持有者没有可用首都。",
-				"changed_city_ids": [] as Array[int],
-			}
-		final_pool_holders[nation.id] = holder_id
-
-	var planned_warehouse_flags: Array[bool] = []
-	planned_warehouse_flags.resize(cities.size())
-	planned_warehouse_flags.fill(false)
-	for city in cities:
-		var final_owner := planned_owners[city.id]
-		planned_warehouse_flags[city.id] = (
-			not city.is_dock
-			and city.has_warehouse
-			and city.owner_nation == final_owner
-			and final_pool_holders[final_owner] == final_owner
-		)
-	for nation in nations:
-		if (
-			final_city_counts[nation.id] > 0
-			and final_pool_holders[nation.id] == nation.id
-		):
-			planned_warehouse_flags[planned_capitals[nation.id]] = true
+	var structure_plan := TerritoryTransaction.plan_structure(
+		cities,
+		nations,
+		planned_owners,
+		final_city_counts,
+		planned_suzerainty,
+		preferred_capitals,
+		_planned_territory_capital,
+		_planned_territory_food_pool_holder
+	)
+	if not bool(structure_plan.get("ok", false)):
+		return structure_plan
+	var planned_capitals: Array[int] = structure_plan["planned_capitals"]
+	var final_pool_holders: Array[int] = structure_plan["final_pool_holders"]
+	var planned_warehouse_flags: Array[bool] = (
+		structure_plan["planned_warehouse_flags"]
+	)
 
 	# ------------------------------ phase 1c: 以旧快照计算库存账本。
 	var planned_food: Array[int] = []
