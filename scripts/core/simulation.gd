@@ -81,12 +81,20 @@ const SUPPLY_NETWORK_MAX_WORKERS: int = 4
 const DIPLOMACY_DECISION_INTERVAL_DAYS: int = DAYS_PER_MONTH
 const NEW_ARMY_SIZE: int = 5000
 const DISBAND_SIZE_MAX: int = 499
-const REINFORCE_PER_ARMY_PER_MONTH: int = 750
-const PEACETIME_MANPOWER_RESERVE: int = 5000
-const PEACETIME_STRENGTH_RATIO: float = 0.30
+const REINFORCE_PER_ARMY_PER_MONTH: int = (
+	ReinforcementRules.REINFORCE_PER_ARMY_PER_MONTH
+)
+const PEACETIME_MANPOWER_RESERVE: int = (
+	ReinforcementRules.PEACETIME_MANPOWER_RESERVE
+)
+const PEACETIME_STRENGTH_RATIO: float = (
+	ReinforcementRules.PEACETIME_STRENGTH_RATIO
+)
 ## 战时也保留的人力下限：即使在战争中也不把 manpower_pool 抽到 0，
 ## 保证每月补员始终有燃料，避免暴兵后全军长期缺编、攻势因战力门槛卡死。
-const WARTIME_MANPOWER_RESERVE: int = 3000
+const WARTIME_MANPOWER_RESERVE: int = (
+	ReinforcementRules.WARTIME_MANPOWER_RESERVE
+)
 ## 财政储备不是“现金不得为负”的补丁，而是军队规模预算的目标状态：
 ## 和平积累约三年月收入；进入连续战争时冻结战前月收入并只保留半年。
 const PEACE_GOLD_RESERVE_MONTHS: int = 36
@@ -2140,12 +2148,7 @@ func _resolve_reinforcements_over_frames() -> void:
 ## 按国家给 state.armies 分桶（O(A)），桶内保持原序。避免每国全表扫描（原 O(N×A），
 ## 40 国 × 数百军是月结算主线程卡顿的根因）；桶序与旧实现一致，补员结果不变。
 func _bucket_armies_by_nation() -> Dictionary:
-	var armies_by_nation := {}
-	for army in state.armies:
-		if not armies_by_nation.has(army.owner_nation):
-			armies_by_nation[army.owner_nation] = [] as Array[Army]
-		(armies_by_nation[army.owner_nation] as Array[Army]).append(army)
-	return armies_by_nation
+	return ReinforcementRules.bucket_armies_by_nation(state)
 
 
 ## 单国当月补员（逐国独立：只读食物评估共享 food_cache，只写本国 manpower_pool
@@ -2304,22 +2307,7 @@ func _reinforce_nation(
 
 
 func _reinforcement_priority(army: Army) -> int:
-	if army.state == Army.State.HOLDING:
-		return 3
-	var city_id := army.location_city
-	if city_id < 0 and army.move_to >= 0:
-		city_id = army.move_to
-	if city_id < 0 or city_id >= state.cities.size():
-		return 0
-	var city := state.cities[city_id]
-	if (
-		city.id == state.nations[army.owner_nation].capital_city_id
-		or city.has_warehouse
-	):
-		return 4
-	if city.is_food_hub or city.is_manpower_hub or city.at_war:
-		return 3
-	return 1
+	return ReinforcementRules.reinforcement_priority(state, army)
 
 
 ## 战时新建战团前必须预留的人力：等于把现役军队本月补满编所需的人力
@@ -2327,40 +2315,17 @@ func _reinforcement_priority(army: Army) -> int:
 ## 暴兵不会把 manpower_pool 抽到 0，月度补员始终有燃料，现役军队得以维持
 ## 满编，从而满足攻势的集结与战力门槛。现役越缺编，预留越多、越优先补员。
 func _wartime_manpower_reserve(armies: Array[Army]) -> int:
-	var monthly_refill_need := 0
-	for army in armies:
-		if army.size <= 0 or army.size >= army.max_size:
-			continue
-		monthly_refill_need += mini(
-			army.max_size - army.size,
-			REINFORCE_PER_ARMY_PER_MONTH
-		)
-	return maxi(WARTIME_MANPOWER_RESERVE, monthly_refill_need)
+	return ReinforcementRules.wartime_manpower_reserve(armies)
 
 
 func _can_reinforce_army(
 	army: Army,
 	manpower_hub_network: Dictionary = {}
 ) -> bool:
-	if army.size <= 0 or army.size >= army.max_size:
-		return false
-	if army.state in [Army.State.FIGHTING, Army.State.RETREATING]:
-		return false
-	if army.state not in [
-		Army.State.IDLE,
-		Army.State.MOVING,
-		Army.State.RECOVERING,
-		Army.State.HOLDING,
-	]:
-		return false
-	if (
-		reinforcement_network_cache_disabled
-		or manpower_hub_network.is_empty()
-	):
-		return Pathfinding.can_reach_manpower_hub(state, army)
-	return Pathfinding.can_reach_manpower_hub_from_network(
+	return ReinforcementRules.can_reinforce_army(
 		state,
 		army,
+		reinforcement_network_cache_disabled,
 		manpower_hub_network
 	)
 
