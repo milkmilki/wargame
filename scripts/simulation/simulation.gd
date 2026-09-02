@@ -8944,39 +8944,12 @@ func _plan_campaign_allocation(
 		plan.requested_primary_city = (
 			previous_plan.requested_primary_city
 		)
-	var previous_group_targets := {}
-	if previous_plan != null:
-		previous_group_targets = (
-			previous_plan.group_to_target.duplicate()
-		)
-	else:
-		# 旧运行态只在首次迁移时读取一次，之后不再反向推断规划。
-		for army in view.friendly_armies:
-			var legacy_target := int(
-				nation.campaign_preparation_assignments.get(army.id, -1)
-			)
-			if army.battle_group_id >= 0 and legacy_target >= 0:
-				previous_group_targets[army.battle_group_id] = legacy_target
-	var active_reserved_groups := {}
-	for army in state.armies:
-		if (
-			army.owner_nation == nation_id
-			and army.size > 0
-			and army.battle_group_id >= 0
-			and nation.campaign_attack_assignments.has(army.id)
-		):
-			active_reserved_groups[army.battle_group_id] = true
-	var group_members_by_id := {}
-	for army in state.armies:
-		if (
-			army.owner_nation != nation_id
-			or army.size <= 0
-			or army.battle_group_id < 0
-		):
-			continue
-		if not group_members_by_id.has(army.battle_group_id):
-			group_members_by_id[army.battle_group_id] = [] as Array[Army]
-		(group_members_by_id[army.battle_group_id] as Array[Army]).append(army)
+	var group_context := _prepare_campaign_group_context(
+		nation_id, nation, view, previous_plan
+	)
+	var previous_group_targets: Dictionary = group_context["previous_targets"]
+	var active_reserved_groups: Dictionary = group_context["active_reserved"]
+	var group_members_by_id: Dictionary = group_context["members"]
 	for group_id_value in group_members_by_id:
 		var members: Array[Army] = group_members_by_id[group_id_value]
 		members.sort_custom(func(a: Army, b: Army) -> bool:
@@ -9250,6 +9223,55 @@ func _plan_campaign_allocation(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
 	return plan
+
+
+func _prepare_campaign_group_context(
+	nation_id: int,
+	nation: Nation,
+	view: AiWorldView,
+	previous_plan: CampaignAllocationPlan
+) -> Dictionary:
+	var previous_group_targets := {}
+	if previous_plan != null:
+		previous_group_targets = previous_plan.group_to_target.duplicate()
+	else:
+		# 旧运行态只在首次迁移时读取一次，之后不再反向推断规划。
+		for army in view.friendly_armies:
+			var legacy_target := int(
+				nation.campaign_preparation_assignments.get(army.id, -1)
+			)
+			if army.battle_group_id >= 0 and legacy_target >= 0:
+				previous_group_targets[army.battle_group_id] = legacy_target
+	var active_reserved_groups := {}
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.size > 0
+			and army.battle_group_id >= 0
+			and nation.campaign_attack_assignments.has(army.id)
+		):
+			active_reserved_groups[army.battle_group_id] = true
+	var group_members_by_id := {}
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or army.battle_group_id < 0
+		):
+			continue
+		if not group_members_by_id.has(army.battle_group_id):
+			group_members_by_id[army.battle_group_id] = [] as Array[Army]
+		(group_members_by_id[army.battle_group_id] as Array[Army]).append(army)
+	for group_id_value in group_members_by_id:
+		var members: Array[Army] = group_members_by_id[group_id_value]
+		members.sort_custom(func(a: Army, b: Army) -> bool:
+			return EquivariantOrder.army_less(state, nation_id, a, b)
+		)
+	return {
+		"previous_targets": previous_group_targets,
+		"active_reserved": active_reserved_groups,
+		"members": group_members_by_id,
+	}
 
 
 func _evaluate_campaign_group_for_target(
