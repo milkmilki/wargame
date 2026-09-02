@@ -2159,151 +2159,15 @@ func _reinforce_nation(
 	nation_armies: Array[Army],
 	food_cache: Dictionary
 ) -> void:
-	var at_war := not state.wars_of(nation.id).is_empty()
-	# 先做不需要粮食报告和路径网络的纯状态/缺额筛选。和平军通常已经达到
-	# 30% 编制；旧路径仍会为这些国家构建完整粮食预算和补员网络，却最终
-	# 得到空 plans。500 城月结算中这部分完全是无效工作。
-	var refill_candidates: Array[Army] = []
-	for army in nation_armies:
-		if (
-			army.size <= 0
-			or army.size >= army.max_size
-			or army.state in [Army.State.FIGHTING, Army.State.RETREATING]
-			or army.state not in [
-				Army.State.IDLE,
-				Army.State.MOVING,
-				Army.State.RECOVERING,
-				Army.State.HOLDING,
-			]
-		):
-			continue
-		var target_size := army.max_size
-		if not at_war:
-			target_size = int(ceil(
-				float(army.max_size) * PEACETIME_STRENGTH_RATIO
-			))
-		if army.size < target_size:
-			refill_candidates.append(army)
-	if refill_candidates.is_empty():
-		return
-	var food_report := _food_security_report(
-		nation.id,
+	ReinforcementPhase.reinforce_nation(
+		state,
+		nation,
 		nation_armies,
-		food_cache
+		food_cache,
+		Callable(self, "_food_security_report"),
+		Callable(self, "_food_growth_manpower_budget"),
+		reinforcement_network_cache_disabled
 	)
-	var food_manpower_budget := _food_growth_manpower_budget(food_report)
-	if food_manpower_budget <= 0:
-		return
-	var protected_reserve := (
-		PEACETIME_MANPOWER_RESERVE
-		if not at_war
-		else 0
-	)
-	var available_manpower := maxi(
-		nation.manpower_pool - protected_reserve,
-		0
-	)
-	available_manpower = mini(available_manpower, food_manpower_budget)
-	if available_manpower <= 0:
-		return
-	var manpower_hub_network := (
-		{}
-		if reinforcement_network_cache_disabled
-		else Pathfinding.build_manpower_hub_network(
-			state,
-			nation.id
-		)
-	)
-	var plans: Array = []
-	var total_deficit := 0
-	for army in refill_candidates:
-		if not _can_reinforce_army(
-			army,
-			manpower_hub_network
-		):
-			continue
-		var target_size := army.max_size
-		if not at_war:
-			target_size = int(ceil(
-				float(army.max_size) * PEACETIME_STRENGTH_RATIO
-			))
-		var deficit := mini(
-			maxi(target_size - army.size, 0),
-			REINFORCE_PER_ARMY_PER_MONTH
-		)
-		if deficit <= 0:
-			continue
-		plans.append({
-			"army": army,
-			"deficit": deficit,
-			"grant": 0,
-			"priority": _reinforcement_priority(army),
-		})
-		total_deficit += deficit
-	if plans.is_empty():
-		return
-	plans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var army_a: Army = a["army"]
-		var army_b: Army = b["army"]
-		var priority_a := int(a["priority"])
-		var priority_b := int(b["priority"])
-		if priority_a != priority_b:
-			return priority_a > priority_b
-		var fill_a := float(army_a.size) / float(maxi(army_a.max_size, 1))
-		var fill_b := float(army_b.size) / float(maxi(army_b.max_size, 1))
-		if not is_equal_approx(fill_a, fill_b):
-			return fill_a < fill_b
-		return EquivariantOrder.army_less(
-			state,
-			nation.id,
-			army_a,
-			army_b
-		)
-	)
-	var budget := mini(available_manpower, total_deficit)
-	if budget >= total_deficit:
-		for plan in plans:
-			plan["grant"] = plan["deficit"]
-	else:
-		var remainder := budget
-		var index := 0
-		while index < plans.size() and remainder > 0:
-			var priority := int(plans[index]["priority"])
-			var end := index
-			var tier_deficit := 0
-			while (
-				end < plans.size()
-				and int(plans[end]["priority"]) == priority
-			):
-				tier_deficit += int(plans[end]["deficit"])
-				end += 1
-			var tier_budget := mini(remainder, tier_deficit)
-			var tier_granted := 0
-			for i in range(index, end):
-				var share := int(floor(
-					float(tier_budget)
-					* float(plans[i]["deficit"])
-					/ float(maxi(tier_deficit, 1))
-				))
-				plans[i]["grant"] = share
-				tier_granted += share
-			var tier_remainder := tier_budget - tier_granted
-			for i in range(index, end):
-				if tier_remainder <= 0:
-					break
-				if int(plans[i]["grant"]) >= int(plans[i]["deficit"]):
-					continue
-				plans[i]["grant"] = int(plans[i]["grant"]) + 1
-				tier_remainder -= 1
-			remainder -= tier_budget
-			index = end
-	var spent := 0
-	for plan in plans:
-		var grant: int = plan["grant"]
-		var army: Army = plan["army"]
-		army.size += grant
-		spent += grant
-	nation.manpower_pool -= spent
 
 
 func _reinforcement_priority(army: Army) -> int:
