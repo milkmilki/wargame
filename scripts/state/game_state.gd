@@ -5183,100 +5183,29 @@ func apply_territory_transaction(
 	)
 	var changed_city_ids: Array[int] = operation_plan["changed_city_ids"]
 	# ------------------------------ phase 1b: 最终三元组、首都、粮池。
-	var final_city_counts: Array[int] = []
-	final_city_counts.resize(nations.size())
-	final_city_counts.fill(0)
-	for city_id in range(cities.size()):
-		var owner := planned_owners[city_id]
-		# 旧测试夹具及存档可能含与本批无关的历史脏 sponsor；原子事务只
-		# 拒绝本批 operation 的非法最终值，不能让无关城市阻断合法占领。
-		if (
-			owner >= 0
-			and owner < nations.size()
-			and not cities[city_id].is_dock
-		):
-			final_city_counts[owner] += 1
-	var requested_suzerainty := (
-		(proposed_suzerainty as Dictionary).duplicate(true)
-		if proposed_suzerainty != null
-		else suzerainty.duplicate(true)
-	)
-	var suzerainty_validation := _validated_suzerainty_snapshot(
-		requested_suzerainty
-	)
-	if not bool(suzerainty_validation.get("ok", false)):
-		return {
-			"ok": false, "changed": false,
-			"territory_changed": false,
-			"political_changed": false,
-			"diplomacy_changed": false,
-			"error": str(suzerainty_validation.get("error", "宗藩图无效。")),
-			"changed_city_ids": [] as Array[int],
-		}
-	var validated_requested_suzerainty: Dictionary = (
-		suzerainty_validation["snapshot"] as Dictionary
-	)
 	# 默认政治图中死亡藩属的法理随同一次事务归入最近的存活祖先。显式
 	# overlay（如兼并）通常已由调用方给出更精确的法理 operation；这里只
 	# 补齐仍指向死亡藩属的城市，避免图已清理而法理继承永远丢失。
-	for former_value in validated_requested_suzerainty:
-		var former_id := int(former_value)
-		if final_city_counts[former_id] > 0:
-			continue
-		var successor := int(
-			(validated_requested_suzerainty[former_id] as Dictionary).get(
-				"overlord_id", -1
-			)
-		)
-		var guard := 0
-		while (
-			successor >= 0
-			and successor < nations.size()
-			and final_city_counts[successor] <= 0
-			and validated_requested_suzerainty.has(successor)
-			and guard <= nations.size()
-		):
-			successor = int(
-				(validated_requested_suzerainty[successor] as Dictionary).get(
-					"overlord_id", -1
-				)
-			)
-			guard += 1
-		if (
-			successor < 0
-			or successor >= nations.size()
-			or final_city_counts[successor] <= 0
-		):
-			continue
-		for city_id in range(cities.size()):
-			if planned_legal_owners[city_id] != former_id:
-				continue
-			planned_legal_owners[city_id] = successor
-			if planned_sponsors[city_id] == former_id:
-				planned_sponsors[city_id] = successor
-			if planned_owners[city_id] == successor:
-				planned_sponsors[city_id] = -1
-			if not changed_city_ids.has(city_id):
-				changed_city_ids.append(city_id)
-	var planned_suzerainty := _normalized_suzerainty_for_city_counts(
-		validated_requested_suzerainty,
-		final_city_counts
+	var suzerainty_plan := TerritoryTransaction.plan_suzerainty(
+		cities,
+		nations.size(),
+		planned_owners,
+		planned_legal_owners,
+		planned_sponsors,
+		changed_city_ids,
+		proposed_suzerainty,
+		suzerainty,
+		_validated_suzerainty_snapshot,
+		_normalized_suzerainty_for_city_counts
 	)
-	var normalized_suzerainty_validation := _validated_suzerainty_snapshot(
-		planned_suzerainty
+	if not bool(suzerainty_plan.get("ok", false)):
+		return suzerainty_plan
+	var final_city_counts: Array[int] = suzerainty_plan["final_city_counts"]
+	var validated_requested_suzerainty: Dictionary = (
+		suzerainty_plan["validated_requested_suzerainty"]
 	)
-	if not bool(normalized_suzerainty_validation.get("ok", false)):
-		return {
-			"ok": false, "changed": false,
-			"territory_changed": false,
-			"political_changed": false,
-			"diplomacy_changed": false,
-			"error": str(normalized_suzerainty_validation.get(
-				"error", "最终宗藩图无效。"
-			)),
-			"changed_city_ids": [] as Array[int],
-		}
-	var political_changed := planned_suzerainty != suzerainty
+	var planned_suzerainty: Dictionary = suzerainty_plan["planned_suzerainty"]
+	var political_changed := bool(suzerainty_plan["changed"])
 	# 宗藩边的外交态属于同一政治事务：拟议图中每条边按 civil_war
 	# 归一为 WAR/ALLIED，phase 2 与 suzerainty 同批写入。非宗藩边不动。
 	var diplomacy_plan := TerritoryTransaction.plan_diplomacy(

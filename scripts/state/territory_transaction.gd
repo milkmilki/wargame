@@ -50,6 +50,123 @@ static func plan_operations(
 	}
 
 
+static func plan_suzerainty(
+	cities: Array,
+	nation_count: int,
+	planned_owners: Array[int],
+	planned_legal_owners: Array[int],
+	planned_sponsors: Array[int],
+	changed_city_ids: Array[int],
+	proposed_suzerainty: Variant,
+	current_suzerainty: Dictionary,
+	validate_suzerainty: Callable,
+	normalize_suzerainty: Callable
+) -> Dictionary:
+	var final_city_counts := _count_land_cities(
+		cities, nation_count, planned_owners
+	)
+	var requested_suzerainty := (
+		(proposed_suzerainty as Dictionary).duplicate(true)
+		if proposed_suzerainty != null
+		else current_suzerainty.duplicate(true)
+	)
+	var validation: Dictionary = validate_suzerainty.call(requested_suzerainty)
+	if not bool(validation.get("ok", false)):
+		return _failure(str(validation.get("error", "宗藩图无效。")))
+	var validated_requested: Dictionary = validation["snapshot"]
+	_inherit_dead_subject_claims(
+		validated_requested,
+		final_city_counts,
+		planned_owners,
+		planned_legal_owners,
+		planned_sponsors,
+		changed_city_ids,
+		nation_count
+	)
+	var planned_suzerainty: Dictionary = normalize_suzerainty.call(
+		validated_requested, final_city_counts
+	)
+	var final_validation: Dictionary = validate_suzerainty.call(
+		planned_suzerainty
+	)
+	if not bool(final_validation.get("ok", false)):
+		return _failure(str(final_validation.get(
+			"error", "最终宗藩图无效。"
+		)))
+	return {
+		"ok": true,
+		"final_city_counts": final_city_counts,
+		"validated_requested_suzerainty": validated_requested,
+		"planned_suzerainty": planned_suzerainty,
+		"changed": planned_suzerainty != current_suzerainty,
+	}
+
+
+static func _count_land_cities(
+	cities: Array,
+	nation_count: int,
+	planned_owners: Array[int]
+) -> Array[int]:
+	var counts: Array[int] = []
+	counts.resize(nation_count)
+	counts.fill(0)
+	for city_id in range(cities.size()):
+		var owner := planned_owners[city_id]
+		if owner >= 0 and owner < nation_count and not cities[city_id].is_dock:
+			counts[owner] += 1
+	return counts
+
+
+static func _inherit_dead_subject_claims(
+	validated_suzerainty: Dictionary,
+	final_city_counts: Array[int],
+	planned_owners: Array[int],
+	planned_legal_owners: Array[int],
+	planned_sponsors: Array[int],
+	changed_city_ids: Array[int],
+	nation_count: int
+) -> void:
+	for former_value in validated_suzerainty:
+		var former_id := int(former_value)
+		if final_city_counts[former_id] > 0:
+			continue
+		var successor := int(
+			(validated_suzerainty[former_id] as Dictionary).get(
+				"overlord_id", -1
+			)
+		)
+		var guard := 0
+		while (
+			successor >= 0
+			and successor < nation_count
+			and final_city_counts[successor] <= 0
+			and validated_suzerainty.has(successor)
+			and guard <= nation_count
+		):
+			successor = int(
+				(validated_suzerainty[successor] as Dictionary).get(
+					"overlord_id", -1
+				)
+			)
+			guard += 1
+		if (
+			successor < 0
+			or successor >= nation_count
+			or final_city_counts[successor] <= 0
+		):
+			continue
+		for city_id in range(planned_owners.size()):
+			if planned_legal_owners[city_id] != former_id:
+				continue
+			planned_legal_owners[city_id] = successor
+			if planned_sponsors[city_id] == former_id:
+				planned_sponsors[city_id] = successor
+			if planned_owners[city_id] == successor:
+				planned_sponsors[city_id] = -1
+			if not changed_city_ids.has(city_id):
+				changed_city_ids.append(city_id)
+
+
 static func _snapshot_territory_tuples(
 	cities: Array,
 	recognized_city_owners: Array[int],
