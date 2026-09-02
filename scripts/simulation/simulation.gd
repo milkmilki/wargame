@@ -8975,47 +8975,7 @@ func _plan_campaign_allocation(
 		if plan.candidate_target_ids.has(primary_city)
 		else plan.candidate_target_ids[0]
 	)
-	var budget_used := 0
-	for target_city in plan.candidate_target_ids:
-		budget_used += int(plan.target_group_budget[target_city])
-	plan.desired_group_count = 0
-	for target_city in plan.candidate_target_ids:
-		plan.desired_group_count += maxi(
-			int(plan.target_demands[target_city].get("groups", 1)), 1
-		)
-	for target_city in plan.candidate_target_ids:
-		var desired := int(plan.target_demands[target_city].get("groups", 1))
-		var decisive := bool(
-			plan.target_demands[target_city].get("is_decisive", false)
-		)
-		if not decisive:
-			continue
-		while (
-			int(plan.target_group_budget[target_city])
-				< CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
-					* CAMPAIGN_PREPARED_ECHELONS
-			and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS
-		):
-			plan.target_group_budget[target_city] = (
-				int(plan.target_group_budget[target_city]) + 1
-			)
-			budget_used += 1
-	var budget_progress := true
-	while budget_progress and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS:
-		budget_progress = false
-		for target_city in plan.candidate_target_ids:
-			var desired := int(
-				plan.target_demands[target_city].get("groups", 1)
-			)
-			if int(plan.target_group_budget[target_city]) >= desired:
-				continue
-			plan.target_group_budget[target_city] = (
-				int(plan.target_group_budget[target_city]) + 1
-			)
-			budget_used += 1
-			budget_progress = true
-			if budget_used >= CAMPAIGN_MAX_WARTIME_GROUPS:
-				break
+	var budget_used := _expand_campaign_group_budget(plan)
 	plan.required_group_count = budget_used
 
 	var evaluations := {}
@@ -9194,6 +9154,48 @@ func _plan_campaign_allocation(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
 	return plan
+
+
+func _expand_campaign_group_budget(plan: CampaignAllocationPlan) -> int:
+	var budget_used := 0
+	for target_city in plan.candidate_target_ids:
+		budget_used += int(plan.target_group_budget[target_city])
+	plan.desired_group_count = 0
+	for target_city in plan.candidate_target_ids:
+		plan.desired_group_count += maxi(
+			int(plan.target_demands[target_city].get("groups", 1)), 1
+		)
+	for target_city in plan.candidate_target_ids:
+		var decisive := bool(
+			plan.target_demands[target_city].get("is_decisive", false)
+		)
+		if not decisive:
+			continue
+		while (
+			int(plan.target_group_budget[target_city])
+				< CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+					* CAMPAIGN_PREPARED_ECHELONS
+			and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS
+		):
+			plan.target_group_budget[target_city] = (
+				int(plan.target_group_budget[target_city]) + 1
+			)
+			budget_used += 1
+	var budget_progress := true
+	while budget_progress and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS:
+		budget_progress = false
+		for target_city in plan.candidate_target_ids:
+			var desired := int(plan.target_demands[target_city].get("groups", 1))
+			if int(plan.target_group_budget[target_city]) >= desired:
+				continue
+			plan.target_group_budget[target_city] = (
+				int(plan.target_group_budget[target_city]) + 1
+			)
+			budget_used += 1
+			budget_progress = true
+			if budget_used >= CAMPAIGN_MAX_WARTIME_GROUPS:
+				break
+	return budget_used
 
 
 func _prepare_campaign_targets(
