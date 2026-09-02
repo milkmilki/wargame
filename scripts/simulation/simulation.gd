@@ -5259,109 +5259,15 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	var ai_profile_stage_started := (
 		runtime_slice_started if tick_phase_profiling_enabled else 0
 	)
-	_ai_supply_source_cache.clear()
-	_ai_supply_network_cache.clear()
-	# 全局外交变化强制全体重算；局部占领只把直接受影响国家并入当天错峰集合。
-	var first_world_decision := (
-		_ai_last_decision_day == -1
-		and state.day <= 1
-		and state.uses_heightmap
-		and ai_staggered_decisions
-		and state.nations.size() > AI_INITIAL_STAGGER_NATION_THRESHOLD
+	var view_phase: Dictionary = await _prepare_ai_view_phase(
+		spread_runtime_work,
+		runtime_slice_started
 	)
-	var force_all_nations := (
-		_ai_last_decision_day == -1 and not first_world_decision
-	)
-	_ai_last_decision_day = state.day
-	var decision_interval := (
-		AI_DECISION_INTERVAL_DAYS
-		if state.uses_heightmap
-		else GRID_AI_DECISION_INTERVAL_DAYS
-	)
-	var nation_order := _ai_nation_ids_for_day(
-		state.nations.size(),
-		state.day,
-		rotate_ai_nation_order,
-		decision_interval,
-		force_all_nations,
-		ai_staggered_decisions
-	)
-	if not force_all_nations and not _ai_forced_nations.is_empty():
-		nation_order = merge_forced_ai_nation_order(
-			nation_order,
-			_ai_forced_nations.keys(),
-			state.nations.size(),
-			state.day,
-			rotate_ai_nation_order,
-			decision_interval
-		)
-	for nation_id in nation_order:
-		_ai_forced_nations.erase(nation_id)
-	var managed_nations: Array[int] = []
+	var nation_order: Array[int] = view_phase["nation_order"]
+	var managed_nations: Array[int] = view_phase["managed_nations"]
+	var context_jobs: Array[Dictionary] = view_phase["context_jobs"]
+	runtime_slice_started = int(view_phase["slice_started"])
 	var force_contexts := {}
-	var context_jobs: Array[Dictionary] = []
-	var ai_view_detail_started := (
-		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-	)
-	var shared_army_index := (
-		AiWorldView.build_army_index(state)
-		if ai_policy_overrides.is_empty()
-		else {}
-	)
-	_record_tick_profile_stage(
-		"ai_shared_army_index",
-		ai_view_detail_started
-	)
-	for nation_id in nation_order:
-		var nation := state.nations[nation_id]
-		if not nation.alive:
-			continue
-		ai_view_detail_started = (
-			Time.get_ticks_usec()
-			if tick_phase_profiling_enabled else 0
-		)
-		_reconcile_strategic_roles(
-			nation_id,
-			shared_army_index
-		)
-		_record_tick_profile_stage(
-			"ai_reconcile_roles",
-			ai_view_detail_started
-		)
-		if ai_policy_overrides.has(nation.id):
-			var policy: Callable = ai_policy_overrides[nation.id]
-			policy.call(state, nation.id, self)
-			continue
-		managed_nations.append(nation_id)
-		ai_view_detail_started = (
-			Time.get_ticks_usec()
-			if tick_phase_profiling_enabled else 0
-		)
-		var view := _build_ai_view(
-			nation_id,
-			shared_army_index
-		)
-		_record_tick_profile_stage(
-			"ai_build_view",
-			ai_view_detail_started
-		)
-		context_jobs.append({
-			"nation_id": nation_id,
-			"view": view,
-			"snapshot": null,
-			"threat_cache": _threat_travel_cache,
-			"previous_defense_plan":
-				_ai_defense_plan_cache.get(nation_id),
-			"threat": null,
-			"defense_plan": null,
-		})
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_CONTEXT_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
 	_record_tick_profile_stage("ai_view_setup", ai_profile_stage_started)
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -5633,6 +5539,120 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"ai_commit")
 	_commit_ai_command_collection(nation_order)
 	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
+
+
+func _prepare_ai_view_phase(
+	spread_runtime_work: bool,
+	runtime_slice_started: int
+) -> Dictionary:
+	_ai_supply_source_cache.clear()
+	_ai_supply_network_cache.clear()
+	# 全局外交变化强制全体重算；局部占领只把直接受影响国家并入当天错峰集合。
+	var first_world_decision := (
+		_ai_last_decision_day == -1
+		and state.day <= 1
+		and state.uses_heightmap
+		and ai_staggered_decisions
+		and state.nations.size() > AI_INITIAL_STAGGER_NATION_THRESHOLD
+	)
+	var force_all_nations := (
+		_ai_last_decision_day == -1 and not first_world_decision
+	)
+	_ai_last_decision_day = state.day
+	var decision_interval := (
+		AI_DECISION_INTERVAL_DAYS
+		if state.uses_heightmap
+		else GRID_AI_DECISION_INTERVAL_DAYS
+	)
+	var nation_order := _ai_nation_ids_for_day(
+		state.nations.size(),
+		state.day,
+		rotate_ai_nation_order,
+		decision_interval,
+		force_all_nations,
+		ai_staggered_decisions
+	)
+	if not force_all_nations and not _ai_forced_nations.is_empty():
+		nation_order = merge_forced_ai_nation_order(
+			nation_order,
+			_ai_forced_nations.keys(),
+			state.nations.size(),
+			state.day,
+			rotate_ai_nation_order,
+			decision_interval
+		)
+	for nation_id in nation_order:
+		_ai_forced_nations.erase(nation_id)
+	var managed_nations: Array[int] = []
+	var context_jobs: Array[Dictionary] = []
+	var ai_view_detail_started := (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	var shared_army_index := (
+		AiWorldView.build_army_index(state)
+		if ai_policy_overrides.is_empty()
+		else {}
+	)
+	_record_tick_profile_stage(
+		"ai_shared_army_index",
+		ai_view_detail_started
+	)
+	for nation_id in nation_order:
+		var nation := state.nations[nation_id]
+		if not nation.alive:
+			continue
+		ai_view_detail_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
+		_reconcile_strategic_roles(
+			nation_id,
+			shared_army_index
+		)
+		_record_tick_profile_stage(
+			"ai_reconcile_roles",
+			ai_view_detail_started
+		)
+		if ai_policy_overrides.has(nation.id):
+			var policy: Callable = ai_policy_overrides[nation.id]
+			policy.call(state, nation.id, self)
+			continue
+		managed_nations.append(nation_id)
+		ai_view_detail_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
+		var view := _build_ai_view(
+			nation_id,
+			shared_army_index
+		)
+		_record_tick_profile_stage(
+			"ai_build_view",
+			ai_view_detail_started
+		)
+		context_jobs.append({
+			"nation_id": nation_id,
+			"view": view,
+			"snapshot": null,
+			"threat_cache": _threat_travel_cache,
+			"previous_defense_plan":
+				_ai_defense_plan_cache.get(nation_id),
+			"threat": null,
+			"defense_plan": null,
+		})
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_CONTEXT_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	return {
+		"nation_order": nation_order,
+		"managed_nations": managed_nations,
+		"context_jobs": context_jobs,
+		"slice_started": runtime_slice_started,
+	}
 
 
 func _run_ai_army_decision_phase(
