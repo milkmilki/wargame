@@ -9864,56 +9864,17 @@ func _assign_offensive_staging_orders(
 		return changed
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
-	var candidates: Array[Dictionary] = []
-	for army in path_view.friendly_armies:
-		if (
-			army.size <= 0
-			or army.state != Army.State.IDLE
-			or staging.has(army.location_city)
-			or (
-				assigned_only
-					and not _can_assign_campaign_preparation_army(
-						nation_id,
-						army,
-						objective_city
-					)
-			)
-			or (
-				state.day < army.defensive_deployment_until_day
-				and not _campaign_assignment_overrides_defensive_lock(
-					nation_id, army, objective_city
-				)
-			)
-			or not _can_use_army_for_offensive(
-				defense_plan,
-				coordinator,
-				army,
-				objective_city
-			)
-		):
-			continue
-		var field: Dictionary = path_view.path_field(
-			army.location_city,
+	var candidates: Array[Dictionary] = (
+		_collect_campaign_reinforcement_candidates(
 			nation_id,
-			false,
-			true,
-			-1,
-			army.max_size
+			objective_city,
+			staging,
+			path_view,
+			assigned_only,
+			defense_plan,
+			coordinator
 		)
-		var best_city := -1
-		var best_distance := INF
-		for staging_city in staging:
-			var distance := float(field["dist"][staging_city])
-			if distance < best_distance:
-				best_distance = distance
-				best_city = staging_city
-		if best_city == -1 or best_distance == INF:
-			continue
-		candidates.append({
-			"army": army,
-			"best_city": best_city,
-			"best_distance": best_distance,
-		})
+	)
 	# 距集结出发地更近者优先增援：距离取自镜像对称的静态最短路
 	# （Dijkstra 的 dist 与松弛顺序无关，镜像世界左右严格相等），
 	# 消除“先创建者（低 id）先动”的偏置，保证左右选出互为镜像的援军。
@@ -10080,6 +10041,63 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _collect_campaign_reinforcement_candidates(
+	nation_id: int,
+	objective_city: int,
+	staging: Array,
+	path_view: AiWorldView,
+	assigned_only: bool,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator
+) -> Array[Dictionary]:
+	var candidates: Array[Dictionary] = []
+	for army in path_view.friendly_armies:
+		if (
+			army.size <= 0
+			or army.state != Army.State.IDLE
+			or staging.has(army.location_city)
+			or (
+				assigned_only
+					and not _can_assign_campaign_preparation_army(
+						nation_id, army, objective_city
+					)
+			)
+			or (
+				state.day < army.defensive_deployment_until_day
+				and not _campaign_assignment_overrides_defensive_lock(
+					nation_id, army, objective_city
+				)
+			)
+			or not _can_use_army_for_offensive(
+				defense_plan, coordinator, army, objective_city
+			)
+		):
+			continue
+		var field: Dictionary = path_view.path_field(
+			army.location_city,
+			nation_id,
+			false,
+			true,
+			-1,
+			army.max_size
+		)
+		var best_city := -1
+		var best_distance := INF
+		for staging_city in staging:
+			var distance := float(field["dist"][staging_city])
+			if distance < best_distance:
+				best_distance = distance
+				best_city = staging_city
+		if best_city == -1 or best_distance == INF:
+			continue
+		candidates.append({
+			"army": army,
+			"best_city": best_city,
+			"best_distance": best_distance,
+		})
+	return candidates
 
 
 func _build_campaign_attack_plan_from_preparation(
