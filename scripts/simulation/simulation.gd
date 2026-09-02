@@ -7119,48 +7119,20 @@ func _regular_force_recruitment(
 	active_war_mobilization: bool
 ) -> Dictionary:
 	var nation := state.nations[view.nation_id]
-	var active_offense := (
-		nation.war_preparation_target_nation >= 0
-		or not wars.is_empty()
+	var demand := _campaign_force_recruitment_demand(
+		view,
+		snapshot,
+		threat,
+		defense_plan,
+		decision_context,
+		wars
 	)
-	var force_demand_targets: Array[int] = []
-	var campaign_allocation: CampaignAllocationPlan = null
-	if active_offense:
-		force_demand_targets = _campaign_force_demand_targets(
-			view.nation_id,
-			snapshot
-		)
-	var required_group_count := 1
-	if (
-		active_offense
-		and state.uses_heightmap
-		and not force_demand_targets.is_empty()
-	):
-		campaign_allocation = _plan_campaign_allocation(
-			view.nation_id,
-			force_demand_targets[0],
-			force_demand_targets,
-			defense_plan,
-			ArmyCoordinator.from_view(view),
-			view,
-			nation.war_preparation_target_nation >= 0
-				and wars.is_empty()
-		)
-		decision_context["campaign_allocation_plan"] = campaign_allocation
-		required_group_count = maxi(
-			campaign_allocation.required_group_count, 1
-		)
-		if campaign_allocation.assigned_group_count > 0:
-			_apply_campaign_plan_atomic(view.nation_id, campaign_allocation)
-	elif active_offense:
-		required_group_count = _campaign_required_group_count(
-			view.nation_id, force_demand_targets, threat
-		)
-	var target_group_count := (
-		maxi(nation.battle_groups.size(), required_group_count)
-		if active_offense
-		else defense_plan.main_reserve_target_group_count()
+	var active_offense := bool(demand["active_offense"])
+	var campaign_allocation: CampaignAllocationPlan = (
+		demand["campaign_allocation"]
 	)
+	var required_group_count := int(demand["required_group_count"])
+	var target_group_count := int(demand["target_group_count"])
 	var target_main_armies := maxi(
 		target_group_count * (
 			BattleGroup.MAX_LIGHT_ARMIES
@@ -7214,6 +7186,65 @@ func _regular_force_recruitment(
 				and nation.battle_groups.size() < required_group_count
 			)
 	)
+
+
+func _campaign_force_recruitment_demand(
+	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
+	threat: ThreatField,
+	defense_plan: CityDefensePlan,
+	decision_context: Dictionary,
+	wars: Array
+) -> Dictionary:
+	var nation := state.nations[view.nation_id]
+	var active_offense := (
+		nation.war_preparation_target_nation >= 0
+		or not wars.is_empty()
+	)
+	var force_demand_targets: Array[int] = []
+	var campaign_allocation: CampaignAllocationPlan = null
+	if active_offense:
+		force_demand_targets = _campaign_force_demand_targets(
+			view.nation_id,
+			snapshot
+		)
+	var required_group_count := 1
+	if (
+		active_offense
+		and state.uses_heightmap
+		and not force_demand_targets.is_empty()
+	):
+		campaign_allocation = _plan_campaign_allocation(
+			view.nation_id,
+			force_demand_targets[0],
+			force_demand_targets,
+			defense_plan,
+			ArmyCoordinator.from_view(view),
+			view,
+			nation.war_preparation_target_nation >= 0
+				and wars.is_empty()
+		)
+		decision_context["campaign_allocation_plan"] = campaign_allocation
+		required_group_count = maxi(
+			campaign_allocation.required_group_count, 1
+		)
+		if campaign_allocation.assigned_group_count > 0:
+			_apply_campaign_plan_atomic(view.nation_id, campaign_allocation)
+	elif active_offense:
+		required_group_count = _campaign_required_group_count(
+			view.nation_id, force_demand_targets, threat
+		)
+	var target_group_count := (
+		maxi(nation.battle_groups.size(), required_group_count)
+		if active_offense
+		else defense_plan.main_reserve_target_group_count()
+	)
+	return {
+		"active_offense": active_offense,
+		"campaign_allocation": campaign_allocation,
+		"required_group_count": required_group_count,
+		"target_group_count": target_group_count,
+	}
 
 
 func _small_nation_force_recruitment(
