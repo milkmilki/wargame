@@ -149,6 +149,212 @@ static func plan_operations(
 	}
 
 
+static func plan_diplomacy(
+	planned_suzerainty: Dictionary,
+	diplomatic_operations: Array[Dictionary],
+	nation_count: int,
+	diplomatic_relations: Dictionary,
+	diplomatic_since_day: Dictionary,
+	truce_until_day: Dictionary,
+	day: int,
+	neutral_relation: int,
+	war_relation: int,
+	allied_relation: int,
+	regional_peace_locked: Callable
+) -> Dictionary:
+	var normalized := _normalize_diplomatic_operations(
+		diplomatic_operations,
+		nation_count,
+		diplomatic_relations,
+		war_relation,
+		neutral_relation,
+		allied_relation,
+		regional_peace_locked
+	)
+	if not bool(normalized.get("ok", false)):
+		return normalized
+	var explicit_relations: Dictionary = normalized["explicit_relations"]
+	var conflict := _validate_suzerainty_relations(
+		planned_suzerainty,
+		explicit_relations,
+		war_relation,
+		allied_relation
+	)
+	if not bool(conflict.get("ok", false)):
+		return conflict
+
+	var planned_relations := diplomatic_relations.duplicate(true)
+	var planned_since := diplomatic_since_day.duplicate(true)
+	var planned_truce := truce_until_day.duplicate(true)
+	_apply_explicit_relations(
+		explicit_relations,
+		diplomatic_relations,
+		planned_relations,
+		planned_since,
+		planned_truce,
+		day,
+		war_relation
+	)
+	_apply_suzerainty_relations(
+		planned_suzerainty,
+		explicit_relations,
+		diplomatic_relations,
+		planned_relations,
+		planned_since,
+		planned_truce,
+		day,
+		war_relation,
+		allied_relation
+	)
+	return {
+		"ok": true,
+		"planned_relations": planned_relations,
+		"planned_since": planned_since,
+		"planned_truce": planned_truce,
+		"changed": (
+			planned_relations != diplomatic_relations
+			or planned_since != diplomatic_since_day
+			or planned_truce != truce_until_day
+		),
+	}
+
+
+static func _normalize_diplomatic_operations(
+	operations: Array[Dictionary],
+	nation_count: int,
+	current_relations: Dictionary,
+	war_relation: int,
+	neutral_relation: int,
+	allied_relation: int,
+	regional_peace_locked: Callable
+) -> Dictionary:
+	var explicit_relations := {}
+	for operation in operations:
+		if (
+			not operation.has("nation_a")
+			or not operation.has("nation_b")
+			or not operation.has("relation")
+			or typeof(operation.get("nation_a")) != TYPE_INT
+			or typeof(operation.get("nation_b")) != TYPE_INT
+			or typeof(operation.get("relation")) != TYPE_INT
+			or (
+				operation.has("truce_days")
+				and typeof(operation.get("truce_days")) != TYPE_INT
+			)
+		):
+			return _failure("外交操作缺少国家或关系字段。")
+		var nation_a := int(operation["nation_a"])
+		var nation_b := int(operation["nation_b"])
+		var relation := int(operation["relation"])
+		var truce_days := int(operation.get("truce_days", 0))
+		if (
+			nation_a < 0 or nation_a >= nation_count
+			or nation_b < 0 or nation_b >= nation_count
+			or nation_a == nation_b
+			or relation not in [
+				neutral_relation, war_relation, allied_relation,
+			]
+			or truce_days < 0
+		):
+			return _failure("外交操作包含无效国家、关系或停战期。")
+		var key := _diplomacy_key(nation_a, nation_b)
+		if (
+			relation != war_relation
+			and int(current_relations.get(key, war_relation)) == war_relation
+			and bool(regional_peace_locked.call(nation_a, nation_b))
+		):
+			return _failure("地方叛乱战争尚未满一年。")
+		if explicit_relations.has(key):
+			return _failure("外交操作包含重复国家对。")
+		explicit_relations[key] = {
+			"relation": relation, "truce_days": truce_days,
+		}
+	return {"ok": true, "explicit_relations": explicit_relations}
+
+
+static func _validate_suzerainty_relations(
+	planned_suzerainty: Dictionary,
+	explicit_relations: Dictionary,
+	war_relation: int,
+	allied_relation: int
+) -> Dictionary:
+	for subject_value in planned_suzerainty:
+		var subject_id := int(subject_value)
+		var record: Dictionary = planned_suzerainty[subject_id]
+		var key := _diplomacy_key(subject_id, int(record["overlord_id"]))
+		var expected_relation := (
+			war_relation
+			if bool(record.get("civil_war", false))
+			else allied_relation
+		)
+		if (
+			explicit_relations.has(key)
+			and int((explicit_relations[key] as Dictionary)["relation"])
+				!= expected_relation
+		):
+			return _failure("显式外交操作与最终宗藩关系冲突。")
+	return {"ok": true}
+
+
+static func _apply_explicit_relations(
+	explicit_relations: Dictionary,
+	current_relations: Dictionary,
+	planned_relations: Dictionary,
+	planned_since: Dictionary,
+	planned_truce: Dictionary,
+	day: int,
+	war_relation: int
+) -> void:
+	for key_value in explicit_relations:
+		var key := str(key_value)
+		var operation: Dictionary = explicit_relations[key_value]
+		var relation := int(operation["relation"])
+		var previous_relation := int(current_relations.get(key, war_relation))
+		if previous_relation != relation:
+			planned_relations[key] = relation
+			planned_since[key] = day
+			if previous_relation == war_relation and relation != war_relation:
+				planned_truce[key] = maxi(
+					int(planned_truce.get(key, 0)),
+					day + int(operation["truce_days"])
+				)
+
+
+static func _apply_suzerainty_relations(
+	planned_suzerainty: Dictionary,
+	explicit_relations: Dictionary,
+	current_relations: Dictionary,
+	planned_relations: Dictionary,
+	planned_since: Dictionary,
+	planned_truce: Dictionary,
+	day: int,
+	war_relation: int,
+	allied_relation: int
+) -> void:
+	for subject_value in planned_suzerainty:
+		var subject_id := int(subject_value)
+		var record: Dictionary = planned_suzerainty[subject_id]
+		var key := _diplomacy_key(subject_id, int(record["overlord_id"]))
+		if explicit_relations.has(key):
+			continue
+		var relation := (
+			war_relation
+			if bool(record.get("civil_war", false))
+			else allied_relation
+		)
+		var previous_relation := int(current_relations.get(key, war_relation))
+		if previous_relation == relation:
+			continue
+		planned_relations[key] = relation
+		planned_since[key] = day
+		if previous_relation == war_relation and relation != war_relation:
+			planned_truce[key] = maxi(int(planned_truce.get(key, 0)), day)
+
+
+static func _diplomacy_key(nation_a: int, nation_b: int) -> String:
+	return "%d:%d" % [mini(nation_a, nation_b), maxi(nation_a, nation_b)]
+
+
 static func _failure(error: String) -> Dictionary:
 	return {
 		"ok": false, "changed": false,

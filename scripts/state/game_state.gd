@@ -5279,155 +5279,27 @@ func apply_territory_transaction(
 	var political_changed := planned_suzerainty != suzerainty
 	# 宗藩边的外交态属于同一政治事务：拟议图中每条边按 civil_war
 	# 归一为 WAR/ALLIED，phase 2 与 suzerainty 同批写入。非宗藩边不动。
-	var planned_diplomatic_relations := diplomatic_relations.duplicate(true)
-	var planned_diplomatic_since := diplomatic_since_day.duplicate(true)
-	var planned_truce_until := truce_until_day.duplicate(true)
-	var explicit_relations := {}
-	for operation in diplomatic_operations:
-		if (
-			not operation.has("nation_a")
-			or not operation.has("nation_b")
-			or not operation.has("relation")
-			or typeof(operation.get("nation_a")) != TYPE_INT
-			or typeof(operation.get("nation_b")) != TYPE_INT
-			or typeof(operation.get("relation")) != TYPE_INT
-			or (
-				operation.has("truce_days")
-				and typeof(operation.get("truce_days")) != TYPE_INT
-			)
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "外交操作缺少国家或关系字段。",
-				"changed_city_ids": [] as Array[int],
-			}
-		var nation_a := int(operation["nation_a"])
-		var nation_b := int(operation["nation_b"])
-		var relation := int(operation["relation"])
-		var truce_days := int(operation.get("truce_days", 0))
-		if (
-			nation_a < 0 or nation_a >= nations.size()
-			or nation_b < 0 or nation_b >= nations.size()
-			or nation_a == nation_b
-			or relation not in [
-				DiplomaticRelation.NEUTRAL,
-				DiplomaticRelation.WAR,
-				DiplomaticRelation.ALLIED,
-			]
-			or truce_days < 0
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "外交操作包含无效国家、关系或停战期。",
-				"changed_city_ids": [] as Array[int],
-			}
-		if (
-			relation != DiplomaticRelation.WAR
-			and relation_between(nation_a, nation_b)
-				== DiplomaticRelation.WAR
-			and regional_rebellion_peace_locked(nation_a, nation_b)
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "地方叛乱战争尚未满一年。",
-				"changed_city_ids": [] as Array[int],
-			}
-		var key := _diplomacy_key(nation_a, nation_b)
-		if explicit_relations.has(key):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "外交操作包含重复国家对。",
-				"changed_city_ids": [] as Array[int],
-			}
-		explicit_relations[key] = {
-			"relation": relation, "truce_days": truce_days,
-		}
-	for subject_value in planned_suzerainty:
-		var subject_id := int(subject_value)
-		var record: Dictionary = planned_suzerainty[subject_id]
-		var overlord_id := int(record["overlord_id"])
-		var key := _diplomacy_key(subject_id, overlord_id)
-		var expected_relation := (
-			DiplomaticRelation.WAR
-			if bool(record.get("civil_war", false))
-			else DiplomaticRelation.ALLIED
-		)
-		if (
-			explicit_relations.has(key)
-			and int((explicit_relations[key] as Dictionary)["relation"])
-				!= expected_relation
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "显式外交操作与最终宗藩关系冲突。",
-				"changed_city_ids": [] as Array[int],
-			}
-	# 先把显式操作应用到旧快照；同一宗藩边若显式给出相同关系，
-	# 其 truce_days 由这里保留。随后只补没有显式指定的宗藩必需边。
-	for key_value in explicit_relations:
-		var key := str(key_value)
-		var operation: Dictionary = explicit_relations[key_value]
-		var relation := int(operation["relation"])
-		var previous_relation := int(diplomatic_relations.get(
-			key, DiplomaticRelation.WAR
-		))
-		if previous_relation != relation:
-			planned_diplomatic_relations[key] = relation
-			planned_diplomatic_since[key] = day
-			if (
-				previous_relation == DiplomaticRelation.WAR
-				and relation != DiplomaticRelation.WAR
-			):
-				planned_truce_until[key] = maxi(
-					int(planned_truce_until.get(key, 0)),
-					day + int(operation["truce_days"])
-				)
-	for subject_value in planned_suzerainty:
-		var subject_id := int(subject_value)
-		var record: Dictionary = planned_suzerainty[subject_id]
-		var overlord_id := int(record["overlord_id"])
-		var key := _diplomacy_key(subject_id, overlord_id)
-		if explicit_relations.has(key):
-			continue
-		var relation := (
-			DiplomaticRelation.WAR
-			if bool(record.get("civil_war", false))
-			else DiplomaticRelation.ALLIED
-		)
-		var previous_relation := int(diplomatic_relations.get(
-			key, DiplomaticRelation.WAR
-		))
-		if previous_relation == relation:
-			continue
-		planned_diplomatic_relations[key] = relation
-		planned_diplomatic_since[key] = day
-		if (
-			previous_relation == DiplomaticRelation.WAR
-			and relation != DiplomaticRelation.WAR
-		):
-			planned_truce_until[key] = maxi(
-				int(planned_truce_until.get(key, 0)), day
-			)
-	var diplomacy_changed := (
-		planned_diplomatic_relations != diplomatic_relations
-		or planned_diplomatic_since != diplomatic_since_day
-		or planned_truce_until != truce_until_day
+	var diplomacy_plan := TerritoryTransaction.plan_diplomacy(
+		planned_suzerainty,
+		diplomatic_operations,
+		nations.size(),
+		diplomatic_relations,
+		diplomatic_since_day,
+		truce_until_day,
+		day,
+		DiplomaticRelation.NEUTRAL,
+		DiplomaticRelation.WAR,
+		DiplomaticRelation.ALLIED,
+		regional_rebellion_peace_locked
 	)
+	if not bool(diplomacy_plan.get("ok", false)):
+		return diplomacy_plan
+	var planned_diplomatic_relations: Dictionary = (
+		diplomacy_plan["planned_relations"]
+	)
+	var planned_diplomatic_since: Dictionary = diplomacy_plan["planned_since"]
+	var planned_truce_until: Dictionary = diplomacy_plan["planned_truce"]
+	var diplomacy_changed := bool(diplomacy_plan["changed"])
 	var normalized_preferred := {}
 	for nation_value in preferred_capitals:
 		var nation_id := int(nation_value)
