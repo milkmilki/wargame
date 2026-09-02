@@ -8994,56 +8994,7 @@ func _plan_campaign_allocation(
 	var used_groups := {}
 	var assigned_manpower := {}
 	var assigned_power := {}
-	# 决定性主目标先拿到首轮所需三团，再做广度覆盖。旧顺序先给八路
-	# 各一团，现有战团不足时主目标的第三团只能等待后续逐次扩军。
-	var slots: Array[int] = []
-	if (
-		plan.target_demands.has(plan.primary_city)
-		and bool(plan.target_demands[plan.primary_city].get(
-			"is_decisive", false
-		))
-	):
-		for _slot in range(mini(
-			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
-			int(plan.target_group_budget[plan.primary_city])
-		)):
-			slots.append(plan.primary_city)
-	for target_city in plan.candidate_target_ids:
-		if not slots.has(target_city):
-			slots.append(target_city)
-	for target_city in plan.candidate_target_ids:
-		var decisive := bool(
-			plan.target_demands[target_city].get("is_decisive", false)
-		)
-		if not decisive:
-			continue
-		var already_reserved := slots.count(target_city)
-		for unused in range(already_reserved, mini(
-			int(plan.target_demands[target_city].get("groups", 1)),
-			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
-				* CAMPAIGN_PREPARED_ECHELONS
-		)):
-			slots.append(target_city)
-	var already_slotted := {}
-	for target_city in slots:
-		already_slotted[target_city] = int(
-			already_slotted.get(target_city, 0)
-		) + 1
-	var add_slots := true
-	while add_slots and slots.size() < plan.required_group_count:
-		add_slots = false
-		for target_city in plan.candidate_target_ids:
-			if int(already_slotted.get(target_city, 0)) >= int(
-				plan.target_group_budget[target_city]
-			):
-				continue
-			slots.append(target_city)
-			already_slotted[target_city] = int(
-				already_slotted.get(target_city, 0)
-			) + 1
-			add_slots = true
-			if slots.size() >= plan.required_group_count:
-				break
+	var slots: Array[int] = _build_campaign_group_slots(plan)
 	for target_city in slots:
 		var best := _best_planned_campaign_group(
 			target_city, used_groups, nation.battle_groups, evaluations,
@@ -9144,6 +9095,47 @@ func _plan_campaign_allocation(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
 	return plan
+
+
+func _build_campaign_group_slots(plan: CampaignAllocationPlan) -> Array[int]:
+	# 决定性主目标先拿到首轮所需三团，再做广度覆盖。
+	var slots: Array[int] = []
+	if (
+		plan.target_demands.has(plan.primary_city)
+		and bool(plan.target_demands[plan.primary_city].get("is_decisive", false))
+	):
+		for _slot in range(mini(
+			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
+			int(plan.target_group_budget[plan.primary_city])
+		)):
+			slots.append(plan.primary_city)
+	for target_city in plan.candidate_target_ids:
+		if not slots.has(target_city):
+			slots.append(target_city)
+	for target_city in plan.candidate_target_ids:
+		if not bool(plan.target_demands[target_city].get("is_decisive", false)):
+			continue
+		var already_reserved := slots.count(target_city)
+		for unused in range(already_reserved, mini(
+			int(plan.target_demands[target_city].get("groups", 1)),
+			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS * CAMPAIGN_PREPARED_ECHELONS
+		)):
+			slots.append(target_city)
+	var already_slotted := {}
+	for target_city in slots:
+		already_slotted[target_city] = int(already_slotted.get(target_city, 0)) + 1
+	var add_slots := true
+	while add_slots and slots.size() < plan.required_group_count:
+		add_slots = false
+		for target_city in plan.candidate_target_ids:
+			if int(already_slotted.get(target_city, 0)) >= int(plan.target_group_budget[target_city]):
+				continue
+			slots.append(target_city)
+			already_slotted[target_city] = int(already_slotted.get(target_city, 0)) + 1
+			add_slots = true
+			if slots.size() >= plan.required_group_count:
+				break
+	return slots
 
 
 func _evaluate_campaign_groups(
