@@ -6804,128 +6804,35 @@ func _ai_manage_force_structure(
 			threat
 		)
 	var nation := state.nations[view.nation_id]
-	var line_armies := 0
-	var main_armies := 0
-	var current_troops := 0
-	for army in view.friendly_armies:
-		current_troops += army.size
-		if army.is_line_role():
-			line_armies += 1
-		elif army.is_main_battle_role():
-			main_armies += 1
-	var wars: Array = (
-		decision_context["wars"]
-		if decision_context.has("wars")
-		else state.wars_of(view.nation_id)
-	)
-	var small_nation_survival := (
-		not wars.is_empty()
-		and state.land_cities_of(view.nation_id).size()
-			<= SMALL_NATION_SURVIVAL_MAX_CITIES
-	)
-	var active_war_mobilization := (
-		not wars.is_empty()
-		and state.day <= nation.war_mobilization_until_day
-		and nation.war_mobilization_target_troops
-			> current_troops
-	)
-	var city_line_target := defense_plan.line_city_slots
-	var critical_city_line_target := (
-		defense_plan.line_critical_city_slots
-	)
-	var total_line_target := (
-		city_line_target + defense_plan.line_edge_slots
-	)
-	if small_nation_survival:
-		# 小国军制的稳定目标是“每城一支 LINE + 一支机动 MAIN”。
-		# 围城时 CityDefensePlan 可以临时建立第二城市槽，但该槽应由机动
-		# 预备队填补，不能把 LINE 目标抬高后再补一个完整三军战团。
-		city_line_target = state.land_cities_of(view.nation_id).size()
-		critical_city_line_target = city_line_target
-		total_line_target = city_line_target
-	var emergency_recruitment := (
-		small_nation_survival
-		or active_war_mobilization
-	)
-	var food_report: Dictionary = (
-		decision_context["food_report"]
-		if decision_context.has("food_report")
-		else _food_security_report(
-			view.nation_id,
-			view.friendly_armies,
-			(
-				{}
-				if ai_force_resource_cache_disabled
-				else resource_evaluation_cache
-			)
-		)
-	)
-	var food_pressure := bool(food_report["needs_demobilization"])
-	var gold_report: Dictionary = (
-		decision_context["gold_report"]
-		if decision_context.has("gold_report")
-		else DiplomacyAI.resource_report(
-			state,
-			view.nation_id,
-			resource_evaluation_cache
-		)
-	)
-	var gold_flows: Array[Dictionary] = []
-	if resource_evaluation_cache.has("monthly_gold_flows"):
-		gold_flows = resource_evaluation_cache["monthly_gold_flows"]
-	var gold_reserve: Dictionary = gold_reserve_policy(
-		state, view.nation_id, gold_flows
-	)
-	var required_gold_savings := int(
-		gold_reserve.get("required_upkeep_savings", 0)
-	)
-	var current_financial_month := state.day / DAYS_PER_MONTH
-	var gold_pressure := (
-		required_gold_savings > 0
-		and nation.last_gold_demobilization_month
-			< current_financial_month
-	)
-	var food_growth_budget := _food_growth_manpower_budget(
-		food_report
-	)
-	# 现存战团数量是历史结果，不能反向成为永久最低编制。战争动员结束后，
-	# 只按当前战区需求保留战团；否则每轮战争创建的战团会不断抬高缩编下限。
-	var baseline_group_count := (
-		defense_plan.main_reserve_target_group_count()
-		if wars.is_empty()
-		else maxi(nation.battle_groups.size(), 1)
-	)
-	var force_structure_target := (
-		total_line_target
-		+ baseline_group_count
-			* (
-				BattleGroup.MAX_LIGHT_ARMIES
-				+ BattleGroup.MAX_HEAVY_ARMIES
-			)
+	var assessment: ForceStructureAssessment = _build_force_structure_assessment(
+		view,
+		defense_plan,
+		resource_evaluation_cache,
+		decision_context
 	)
 	if (
-		wars.is_empty()
+		assessment.wars.is_empty()
 		and nation.war_preparation_target_nation < 0
 		and _demobilize_excess_peacetime_battle_group(
 			view,
 			threat,
-			baseline_group_count
+			assessment.baseline_group_count
 		)
 	):
 		return true
-	if not emergency_recruitment:
-		if food_pressure and _demobilize_for_food_security(
+	if not assessment.emergency_recruitment:
+		if assessment.food_pressure and _demobilize_for_food_security(
 			view,
 			threat,
-			food_report,
-			force_structure_target
+			assessment.food_report,
+			assessment.force_structure_target
 		):
 			return true
-		if gold_pressure and _demobilize_for_gold_security(
+		if assessment.gold_pressure and _demobilize_for_gold_security(
 			view,
 			threat,
-			required_gold_savings,
-			force_structure_target
+			assessment.required_gold_savings,
+			assessment.force_structure_target
 		):
 			return true
 	# 应急动员（小国最后城市保卫战 / 战争动员窗口）是生死存亡的最后一搏，
@@ -6933,10 +6840,10 @@ func _ai_manage_force_structure(
 	# 使现役军队每月补满编，避免爆兵抽干 manpower_pool 后军团长期缺编。
 	var protected_reserve := (
 		PEACETIME_MANPOWER_RESERVE
-		if wars.is_empty()
+		if assessment.wars.is_empty()
 		else (
 			0
-			if emergency_recruitment
+			if assessment.emergency_recruitment
 			else _wartime_manpower_reserve(view.friendly_armies)
 		)
 	)
@@ -6944,17 +6851,17 @@ func _ai_manage_force_structure(
 		state.nations[view.nation_id].manpower_pool - protected_reserve
 	)
 	var recruitment := {}
-	if line_armies < critical_city_line_target:
+	if assessment.line_armies < assessment.critical_city_line_target:
 		recruitment = {
 			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
 			"group_id": -1,
 			"reason": "补充核心城市填线槽",
 		}
-	elif small_nation_survival:
+	elif assessment.small_nation_survival:
 		recruitment = _small_nation_force_recruitment(
 			view.nation_id,
 			nation,
-			main_armies
+			assessment.main_armies
 		)
 	elif (
 		state.is_vassal(view.nation_id)
@@ -6966,9 +6873,9 @@ func _ai_manage_force_structure(
 			view.nation_id,
 			nation,
 			defense_plan,
-			total_line_target,
-			line_armies,
-			main_armies
+			assessment.total_line_target,
+			assessment.line_armies,
+			assessment.main_armies
 		)
 	else:
 		recruitment = _regular_force_recruitment(
@@ -6977,11 +6884,11 @@ func _ai_manage_force_structure(
 			threat,
 			defense_plan,
 			decision_context,
-			wars,
-			total_line_target,
-			line_armies,
-			main_armies,
-			active_war_mobilization
+			assessment.wars,
+			assessment.total_line_target,
+			assessment.line_armies,
+			assessment.main_armies,
+			assessment.active_war_mobilization
 		)
 	var missing_formation_size := int(
 		recruitment.get("size", 0)
@@ -7010,26 +6917,26 @@ func _ai_manage_force_structure(
 		)
 		if missing_formation_size > 0 else 0
 	)
-	var reserve_target := int(gold_reserve.get(
+	var reserve_target := int(assessment.gold_reserve.get(
 		"reserve_target", 0
 	))
 	var gold_growth_allowed := (
-		emergency_recruitment
+		assessment.emergency_recruitment
 		or (
-			not gold_pressure
+			not assessment.gold_pressure
 			and nation.treasury_gold - creation_cost >= reserve_target
 		)
 	)
 	var food_recruitment_allowed := (
-		not food_pressure
-		and food_growth_budget >= missing_formation_size
+		not assessment.food_pressure
+		and assessment.food_growth_budget >= missing_formation_size
 	)
-	if emergency_recruitment:
+	if assessment.emergency_recruitment:
 		food_recruitment_allowed = (
-			int(food_report["stock"]) > 0
+			int(assessment.food_report["stock"]) > 0
 			and (
-				float(food_report["monthly_surplus"]) >= 0.0
-				or float(food_report["runway_years"])
+				float(assessment.food_report["monthly_surplus"]) >= 0.0
+				or float(assessment.food_report["runway_years"])
 					>= EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS
 			)
 		)
@@ -7044,10 +6951,115 @@ func _ai_manage_force_structure(
 			nation,
 			recruitment,
 			missing_formation_size,
-			emergency_recruitment,
-			small_nation_survival
+			assessment.emergency_recruitment,
+			assessment.small_nation_survival
 		)
 	return false
+
+
+func _build_force_structure_assessment(
+	view: AiWorldView,
+	defense_plan: CityDefensePlan,
+	resource_evaluation_cache: Dictionary,
+	decision_context: Dictionary
+) -> ForceStructureAssessment:
+	var assessment := ForceStructureAssessment.new()
+	var nation := state.nations[view.nation_id]
+	var current_troops := 0
+	for army in view.friendly_armies:
+		current_troops += army.size
+		if army.is_line_role():
+			assessment.line_armies += 1
+		elif army.is_main_battle_role():
+			assessment.main_armies += 1
+	assessment.wars = (
+		decision_context["wars"]
+		if decision_context.has("wars")
+		else state.wars_of(view.nation_id)
+	)
+	assessment.small_nation_survival = (
+		not assessment.wars.is_empty()
+		and state.land_cities_of(view.nation_id).size()
+			<= SMALL_NATION_SURVIVAL_MAX_CITIES
+	)
+	assessment.active_war_mobilization = (
+		not assessment.wars.is_empty()
+		and state.day <= nation.war_mobilization_until_day
+		and nation.war_mobilization_target_troops > current_troops
+	)
+	var city_line_target := defense_plan.line_city_slots
+	assessment.critical_city_line_target = (
+		defense_plan.line_critical_city_slots
+	)
+	assessment.total_line_target = (
+		city_line_target + defense_plan.line_edge_slots
+	)
+	if assessment.small_nation_survival:
+		# Small nations keep one LINE per city and one mobile MAIN reserve.
+		city_line_target = state.land_cities_of(view.nation_id).size()
+		assessment.critical_city_line_target = city_line_target
+		assessment.total_line_target = city_line_target
+	assessment.emergency_recruitment = (
+		assessment.small_nation_survival
+		or assessment.active_war_mobilization
+	)
+	assessment.food_report = (
+		decision_context["food_report"]
+		if decision_context.has("food_report")
+		else _food_security_report(
+			view.nation_id,
+			view.friendly_armies,
+			(
+				{}
+				if ai_force_resource_cache_disabled
+				else resource_evaluation_cache
+			)
+		)
+	)
+	assessment.food_pressure = bool(
+		assessment.food_report["needs_demobilization"]
+	)
+	var _gold_report: Dictionary = (
+		decision_context["gold_report"]
+		if decision_context.has("gold_report")
+		else DiplomacyAI.resource_report(
+			state,
+			view.nation_id,
+			resource_evaluation_cache
+		)
+	)
+	var gold_flows: Array[Dictionary] = []
+	if resource_evaluation_cache.has("monthly_gold_flows"):
+		gold_flows = resource_evaluation_cache["monthly_gold_flows"]
+	assessment.gold_reserve = gold_reserve_policy(
+		state, view.nation_id, gold_flows
+	)
+	assessment.required_gold_savings = int(
+		assessment.gold_reserve.get("required_upkeep_savings", 0)
+	)
+	var current_financial_month := state.day / DAYS_PER_MONTH
+	assessment.gold_pressure = (
+		assessment.required_gold_savings > 0
+		and nation.last_gold_demobilization_month < current_financial_month
+	)
+	assessment.food_growth_budget = _food_growth_manpower_budget(
+		assessment.food_report
+	)
+	# Historical wartime groups must not permanently raise the peacetime floor.
+	assessment.baseline_group_count = (
+		defense_plan.main_reserve_target_group_count()
+		if assessment.wars.is_empty()
+		else maxi(nation.battle_groups.size(), 1)
+	)
+	assessment.force_structure_target = (
+		assessment.total_line_target
+		+ assessment.baseline_group_count
+			* (
+				BattleGroup.MAX_LIGHT_ARMIES
+				+ BattleGroup.MAX_HEAVY_ARMIES
+			)
+	)
+	return assessment
 
 
 func _try_create_force_recruitment(
