@@ -5586,67 +5586,15 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	)
 	# 军制调整只消耗本国资源；所有国家先基于同一时刻的冻结上下文决策。
 	_set_runtime_profile_stage(&"ai_force_structure")
-	# 战略快照已经在同一冻结世界上构建了外交、疆界及部分财政原语。
-	# 只复用在宣战攻势启动后仍不变的只读索引；
-	# resource:/food: 等包含当前国库、库存或姿态的动态报告必须重算。
-	var force_resource_cache := (
-		{}
-		if ai_snapshot_resource_cache_reuse_disabled
-		else _stable_force_resource_cache_from_snapshot(
-			snapshot_diplomacy_cache
-		)
+	var force_phase: Dictionary = await _run_ai_force_structure_phase(
+		managed_nations,
+		force_contexts,
+		snapshot_diplomacy_cache,
+		spread_runtime_work,
+		runtime_slice_started
 	)
-	# 宣战提交/战役启动可能改变外交、军队或国库；强制按当前完整 token
-	# 重新取一次预测。未变化时命中完整缓存，变化时仅重做 settle。
-	_seed_trade_forecast(force_resource_cache)
-	var decision_contexts := {}
-	for nation_id in managed_nations:
-		var context: Dictionary = force_contexts[nation_id]
-		var decision_context := {}
-		var force_context_started := (
-			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-		)
-		_set_runtime_profile_stage(&"ai_force_context")
-		if not ai_decision_context_disabled:
-			_enrich_ai_decision_context(
-				context,
-				force_resource_cache
-			)
-			decision_context = context
-		_record_tick_profile_stage(
-			"ai_force_context", force_context_started
-		)
-		decision_contexts[nation_id] = decision_context
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_RUNTIME_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
-		var force_commit_started := (
-			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-		)
-		_set_runtime_profile_stage(&"ai_force_commit")
-		_ai_manage_force_structure(
-			context["view"],
-			context["snapshot"],
-			context["threat"],
-			context["defense_plan"],
-			true,
-			force_resource_cache,
-			decision_context
-		)
-		_record_tick_profile_stage(
-			"ai_force_commit", force_commit_started
-		)
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_RUNTIME_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
+	var decision_contexts: Dictionary = force_phase["decision_contexts"]
+	runtime_slice_started = int(force_phase["slice_started"])
 	_record_tick_profile_stage("ai_force_structure", ai_profile_stage_started)
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -5973,6 +5921,70 @@ func _launch_pending_declaration_offensives(
 			runtime_slice_started = Time.get_ticks_usec()
 	return {
 		"launched_nations": launched_nations,
+		"slice_started": runtime_slice_started,
+	}
+
+
+func _run_ai_force_structure_phase(
+	managed_nations: Array[int],
+	force_contexts: Dictionary,
+	snapshot_diplomacy_cache: Dictionary,
+	spread_runtime_work: bool,
+	runtime_slice_started: int
+) -> Dictionary:
+	# Only stable diplomatic/topology primitives survive declaration launches;
+	# dynamic resource and food reports are rebuilt against the current state.
+	var resource_cache := (
+		{}
+		if ai_snapshot_resource_cache_reuse_disabled
+		else _stable_force_resource_cache_from_snapshot(
+			snapshot_diplomacy_cache
+		)
+	)
+	_seed_trade_forecast(resource_cache)
+	var decision_contexts := {}
+	for nation_id in managed_nations:
+		var context: Dictionary = force_contexts[nation_id]
+		var decision_context := {}
+		var context_started := (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		_set_runtime_profile_stage(&"ai_force_context")
+		if not ai_decision_context_disabled:
+			_enrich_ai_decision_context(context, resource_cache)
+			decision_context = context
+		_record_tick_profile_stage("ai_force_context", context_started)
+		decision_contexts[nation_id] = decision_context
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+		var commit_started := (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		_set_runtime_profile_stage(&"ai_force_commit")
+		_ai_manage_force_structure(
+			context["view"],
+			context["snapshot"],
+			context["threat"],
+			context["defense_plan"],
+			true,
+			resource_cache,
+			decision_context
+		)
+		_record_tick_profile_stage("ai_force_commit", commit_started)
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	return {
+		"decision_contexts": decision_contexts,
 		"slice_started": runtime_slice_started,
 	}
 
