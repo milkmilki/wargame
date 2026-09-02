@@ -9737,42 +9737,17 @@ func _assign_offensive_staging_orders(
 			nation_id, staging_city, objective_city
 		):
 			continue
-		var staging_armies: Array[Army] = []
-		var armies_at_staging: Array[Army] = (
-			path_view.armies_by_city.get(
+		var staging_armies: Array[Army] = (
+			_collect_staging_hold_candidates(
+				nation_id,
+				objective_city,
 				staging_city,
-				[] as Array[Army]
-			) as Array[Army]
+				path_view,
+				assigned_only,
+				defense_plan,
+				coordinator
+			)
 		)
-		for army in armies_at_staging:
-			if (
-				army.size <= 0
-				or army.owner_nation != nation_id
-				or army.state != Army.State.IDLE
-				or army.location_city != staging_city
-				or (
-					assigned_only
-						and not _can_assign_campaign_preparation_army(
-							nation_id,
-							army,
-							objective_city
-						)
-				)
-				or (
-					state.day < army.defensive_deployment_until_day
-					and not _campaign_assignment_overrides_defensive_lock(
-						nation_id, army, objective_city
-					)
-				)
-				or not _can_use_army_for_offensive(
-					defense_plan,
-					coordinator,
-					army,
-					objective_city
-				)
-			):
-				continue
-			staging_armies.append(army)
 		staging_armies.sort_custom(
 			func(a: Army, b: Army) -> bool:
 				if a.max_size != b.max_size:
@@ -10011,6 +9986,49 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _collect_staging_hold_candidates(
+	nation_id: int,
+	objective_city: int,
+	staging_city: int,
+	path_view: AiWorldView,
+	assigned_only: bool,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator
+) -> Array[Army]:
+	var staging_armies: Array[Army] = []
+	var armies_at_staging: Array[Army] = (
+		path_view.armies_by_city.get(
+			staging_city,
+			[] as Array[Army]
+		) as Array[Army]
+	)
+	for army in armies_at_staging:
+		if (
+			army.size <= 0
+			or army.owner_nation != nation_id
+			or army.state != Army.State.IDLE
+			or army.location_city != staging_city
+			or (
+				assigned_only
+					and not _can_assign_campaign_preparation_army(
+						nation_id, army, objective_city
+					)
+			)
+			or (
+				state.day < army.defensive_deployment_until_day
+				and not _campaign_assignment_overrides_defensive_lock(
+					nation_id, army, objective_city
+				)
+			)
+			or not _can_use_army_for_offensive(
+				defense_plan, coordinator, army, objective_city
+			)
+		):
+			continue
+		staging_armies.append(army)
+	return staging_armies
 
 
 func _collect_campaign_redeployment_holders(
