@@ -9807,62 +9807,21 @@ func _assign_offensive_staging_orders(
 		committed_light = int(committed["light"])
 	var changed := false
 	var orders := 0
-	for staging_city in staging:
-		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
-			break
-		if _edge_has_friendly_holder_or_order(
-			nation_id, staging_city, objective_city
-		):
-			continue
-		var staging_armies: Array[Army] = (
-			_collect_staging_hold_candidates(
-				nation_id,
-				objective_city,
-				staging_city,
-				path_view,
-				assigned_only,
-				defense_plan,
-				coordinator
-			)
-		)
-		staging_armies.sort_custom(
-			func(a: Army, b: Army) -> bool:
-				if a.max_size != b.max_size:
-					return a.max_size > b.max_size
-				return EquivariantOrder.army_less(
-					state,
-					nation_id,
-					a,
-					b,
-					objective_city
-				)
-		)
-		for army in staging_armies:
-			if (
-				not assigned_only
-				and army.max_size
-					== GameState.INITIAL_LIGHT_ARMY_SIZE
-				and committed_light >= committed_heavy
-			):
-				continue
-			var hold := _make_campaign_staging_hold_order(
-				objective_city, staging_city
-			)
-			if _execute_ai_candidate(army, hold):
-				changed = true
-				orders += 1
-				if not assigned_only:
-					if (
-						army.max_size
-							== GameState.INITIAL_HEAVY_ARMY_SIZE
-					):
-						committed_heavy += 1
-					elif (
-						army.max_size
-							== GameState.INITIAL_LIGHT_ARMY_SIZE
-					):
-						committed_light += 1
-			break
+	var hold_assignments := _assign_campaign_staging_holds(
+		nation_id,
+		objective_city,
+		staging,
+		path_view,
+		assigned_only,
+		defense_plan,
+		coordinator,
+		committed_heavy,
+		committed_light
+	)
+	changed = bool(hold_assignments["changed"])
+	orders = int(hold_assignments["orders"])
+	committed_heavy = int(hold_assignments["committed_heavy"])
+	committed_light = int(hold_assignments["committed_light"])
 	var staged := (
 		_campaign_preparation_staged_troops(
 			nation_id,
@@ -10047,6 +10006,65 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _assign_campaign_staging_holds(
+	nation_id: int,
+	objective_city: int,
+	staging: Array,
+	path_view: AiWorldView,
+	assigned_only: bool,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator,
+	committed_heavy: int,
+	committed_light: int
+) -> Dictionary:
+	var changed := false
+	var orders := 0
+	for staging_city in staging:
+		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
+			break
+		if _edge_has_friendly_holder_or_order(
+			nation_id, staging_city, objective_city
+		):
+			continue
+		var staging_armies: Array[Army] = _collect_staging_hold_candidates(
+			nation_id, objective_city, staging_city, path_view,
+			assigned_only, defense_plan, coordinator
+		)
+		staging_armies.sort_custom(
+			func(a: Army, b: Army) -> bool:
+				if a.max_size != b.max_size:
+					return a.max_size > b.max_size
+				return EquivariantOrder.army_less(
+					state, nation_id, a, b, objective_city
+				)
+		)
+		for army in staging_armies:
+			if (
+				not assigned_only
+				and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
+				and committed_light >= committed_heavy
+			):
+				continue
+			var hold := _make_campaign_staging_hold_order(
+				objective_city, staging_city
+			)
+			if _execute_ai_candidate(army, hold):
+				changed = true
+				orders += 1
+				if not assigned_only:
+					if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+						committed_heavy += 1
+					elif army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
+						committed_light += 1
+			break
+	return {
+		"changed": changed,
+		"orders": orders,
+		"committed_heavy": committed_heavy,
+		"committed_light": committed_light,
+	}
 
 
 func _make_campaign_redeployment_order(
