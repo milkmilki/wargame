@@ -80,7 +80,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/core/map_definition.gd](scripts/core/map_definition.gd) | 地图模板 | `world-war-map` v2 校验与往返；兼容 v1，排除战役中的活动叛乱和贸易快照 |
 | [scripts/core/combat.gd](scripts/core/combat.gd) | 静态 | 战斗解算、纯函数、共享战场骰 + 独立战术修正、结构化日志，见 §4 |
 | [scripts/core/combat_log.gd](scripts/core/combat_log.gd) | 静态 | 战斗日志 JSONL 落盘/加载、逐回合确定性回放与篡改检测 |
-| [scripts/core/simulation.gd](scripts/core/simulation.gd) | 逻辑 | 按天推进主循环；`edge_travel_days(edge)` 为实际行军时长真源，见 §5 |
+| [scripts/simulation/simulation.gd](scripts/simulation/simulation.gd) | 逻辑 | 按天推进主循环；`edge_travel_days(edge)` 为实际行军时长真源，见 §5 |
 | [scripts/ai/](scripts/ai) | AI | 军事 Utility AI、战略图、威胁场、协调器，以及 `DiplomacyAI` 双边外交评分 |
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 渲染 | 只读 `_draw` 的二战战略图风格渲染；牛皮纸、省份/国境、持续攻势箭头、军图城市/码头、NATO 兵牌、鼠标锚点缩放与拖动平移、四档 UI、兵牌大小滑块和城市/道路点击详情 |
 | [scripts/main.gd](scripts/main.gd) | 入口 | 装配 GameState/Simulation/MapRenderer |
@@ -315,7 +315,7 @@ defense_multiplier = 1 − 0.40 × danger × exp(−holding_days / 30)
 
 ---
 
-## 5. 天推进主循环（[simulation.gd](scripts/core/simulation.gd) `_advance_day`）—— 天/月分层（第七轮）
+## 5. 天推进主循环（[simulation.gd](scripts/simulation/simulation.gd) `_advance_day`）—— 天/月分层（第七轮）
 
 实时时钟：`_process(delta)` 累积到 `seconds_per_day`（默认 1.0，即 1 秒=1 天）触发一次 `_advance_day`。**基础 tick = 1 天**，行军/战斗/攻城、补给与非战斗士气恢复每天推进；经济生产和补员每 30 天结算。粮食需求先通过小数债按日累计，满整粮后由确定性粮仓顺序严格实扣；日常补给、围城扣粮与其他库存变更统一经 O(1) 库存 helper `change_city_food_storage()` 同步维护 `nation.granary_food` 汇总，所有调用方都只能按实际扣改量记账，禁止按请求值记账、重复扣除或凭空补足。断粮后果同样每日滚动施加。常量：`DAYS_PER_MONTH=30`、`DAYS_PER_HALF_YEAR=180`。
 

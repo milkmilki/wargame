@@ -17,7 +17,7 @@
 | [scripts/core/combat.gd](scripts/core/combat.gd) | 集中常量；纯函数骨架；对称判定 + 平局；士气→战斗效率；正面宽度/预备队；共享战场骰 + 镜像等变独立战术修正；连续地形/围城曲线；`_canonicalize_side`；可回放结构化日志 |
 | [scripts/core/combat_log.gd](scripts/core/combat_log.gd) | **新建**：结构化日志 JSONL 落盘、加载、逐回合确定性回放与篡改检测 |
 | [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | **新建**：城市/军队/势力/边的镜像等变物理排序唯一真源，禁止 ID/创建顺序参与行为决胜 |
-| [scripts/core/simulation.gd](scripts/core/simulation.gd) | 增援 ETA；每日滚动补给；多方战斗；围城状态机；最多三目标攻势；两档军制；邻接驰援；零城市国家向全部交战国立即投降；长距离行军不封顶 |
+| [scripts/simulation/simulation.gd](scripts/simulation/simulation.gd) | 增援 ETA；每日滚动补给；多方战斗；围城状态机；最多三目标攻势；两档军制；邻接驰援；零城市国家向全部交战国立即投降；长距离行军不封顶 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 确定性二叉最小堆 Dijkstra 与等长裁决；寻路读取行军倍率，补给读取边级损耗倍率 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 160 城低地/中东南/河岸加权采样；黄河/长江控制点模板与纬向走廊；均匀保留约25% crossing并最小连通补点；其余穿河道路禁用；三类边统一由端点几何长度生成距离 |
 | [scripts/model/city.gd](scripts/model/city.gd) | 当前/完整工事及易手恢复字段；`is_dock` 标识复用完整城市能力的码头 |
