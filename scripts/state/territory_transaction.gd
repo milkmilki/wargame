@@ -521,6 +521,49 @@ static func plan_food_ledger(
 	return {"ok": true, "planned_food": planned_food}
 
 
+static func plan_commit_layout(
+	cities: Array,
+	nations: Array,
+	planned_owners: Array[int],
+	changed_city_ids: Array[int],
+	planned_capitals: Array[int],
+	planned_warehouse_flags: Array[bool],
+	planned_food: Array[int]
+) -> Dictionary:
+	var planned_warehouse_ids: Array = []
+	for _nation in nations:
+		planned_warehouse_ids.append([] as Array[int])
+	for city_id in range(cities.size()):
+		if planned_warehouse_flags[city_id]:
+			(planned_warehouse_ids[planned_owners[city_id]] as Array[int]).append(
+				city_id
+			)
+	var changed := not changed_city_ids.is_empty()
+	for nation in nations:
+		if (
+			nation.capital_city_id != planned_capitals[nation.id]
+			or nation.warehouse_city_ids != (
+				planned_warehouse_ids[nation.id] as Array[int]
+			)
+		):
+			changed = true
+			break
+	if not changed:
+		for city_id in range(cities.size()):
+			var city = cities[city_id]
+			if (
+				city.is_capital != (planned_capitals[city.owner_nation] == city_id)
+				or city.has_warehouse != planned_warehouse_flags[city_id]
+				or city.food_storage != planned_food[city_id]
+			):
+				changed = true
+				break
+	return {
+		"planned_warehouse_ids": planned_warehouse_ids,
+		"territory_changed": changed,
+	}
+
+
 static func _settle_moved_city_stock(
 	cities: Array,
 	nation_count: int,

@@ -5269,34 +5269,17 @@ func apply_territory_transaction(
 		return food_plan
 	var planned_food: Array[int] = food_plan["planned_food"]
 
-	var planned_warehouse_ids: Array = []
-	for _nation in nations:
-		planned_warehouse_ids.append([] as Array[int])
-	for city_id in range(cities.size()):
-		if planned_warehouse_flags[city_id]:
-			(planned_warehouse_ids[planned_owners[city_id]] as Array[int]).append(
-				city_id
-			)
-	var territory_changed := not changed_city_ids.is_empty()
-	for nation in nations:
-		if (
-			nation.capital_city_id != planned_capitals[nation.id]
-			or nation.warehouse_city_ids != (
-				planned_warehouse_ids[nation.id] as Array[int]
-			)
-		):
-			territory_changed = true
-			break
-	if not territory_changed:
-		for city_id in range(cities.size()):
-			var city := cities[city_id]
-			if (
-				city.is_capital != (planned_capitals[city.owner_nation] == city_id)
-				or city.has_warehouse != planned_warehouse_flags[city_id]
-				or city.food_storage != planned_food[city_id]
-			):
-				territory_changed = true
-				break
+	var commit_layout := TerritoryTransaction.plan_commit_layout(
+		cities,
+		nations,
+		planned_owners,
+		changed_city_ids,
+		planned_capitals,
+		planned_warehouse_flags,
+		planned_food
+	)
+	var planned_warehouse_ids: Array = commit_layout["planned_warehouse_ids"]
+	var territory_changed := bool(commit_layout["territory_changed"])
 	if not territory_changed and not political_changed and not diplomacy_changed:
 		return {
 			"ok": true, "changed": false,
@@ -5307,6 +5290,32 @@ func apply_territory_transaction(
 		}
 
 	# ------------------------------ phase 2: 一次提交，不再包含可失败分支。
+	return _commit_territory_transaction({
+		"planned_owners": planned_owners,
+		"planned_legal_owners": planned_legal_owners,
+		"planned_sponsors": planned_sponsors,
+		"planned_warehouse_flags": planned_warehouse_flags,
+		"planned_food": planned_food,
+		"normalized_operations": normalized_operations,
+		"planned_capitals": planned_capitals,
+		"planned_warehouse_ids": planned_warehouse_ids,
+		"planned_suzerainty": planned_suzerainty,
+		"planned_diplomatic_relations": planned_diplomatic_relations,
+		"planned_diplomatic_since": planned_diplomatic_since,
+		"planned_truce_until": planned_truce_until,
+		"territory_changed": territory_changed,
+		"political_changed": political_changed,
+		"diplomacy_changed": diplomacy_changed,
+		"changed_city_ids": changed_city_ids,
+	})
+
+
+func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
+	var planned_owners: Array[int] = plan["planned_owners"]
+	var planned_legal_owners: Array[int] = plan["planned_legal_owners"]
+	var planned_sponsors: Array[int] = plan["planned_sponsors"]
+	var planned_warehouse_flags: Array[bool] = plan["planned_warehouse_flags"]
+	var planned_food: Array[int] = plan["planned_food"]
 	for city_id in range(cities.size()):
 		var city := cities[city_id]
 		city.owner_nation = planned_owners[city_id]
@@ -5315,6 +5324,7 @@ func apply_territory_transaction(
 		city.is_capital = false
 		city.has_warehouse = planned_warehouse_flags[city_id]
 		city.food_storage = planned_food[city_id]
+	var normalized_operations: Array[Dictionary] = plan["normalized_operations"]
 	for normalized in normalized_operations:
 		if not bool(normalized["reset_political_target"]):
 			continue
@@ -5325,6 +5335,8 @@ func apply_territory_transaction(
 		city.rebellion_progress = 0
 		city.rebellion_cooldown_until_day = int(normalized["cooldown_until"])
 		city.last_loyalty_reason = str(normalized["reason"])
+	var planned_capitals: Array[int] = plan["planned_capitals"]
+	var planned_warehouse_ids: Array = plan["planned_warehouse_ids"]
 	for nation in nations:
 		nation.capital_city_id = planned_capitals[nation.id]
 		nation.warehouse_city_ids = (
@@ -5332,15 +5344,20 @@ func apply_territory_transaction(
 		).duplicate()
 		if nation.capital_city_id >= 0:
 			cities[nation.capital_city_id].is_capital = true
+	var planned_suzerainty: Dictionary = plan["planned_suzerainty"]
 	suzerainty = planned_suzerainty.duplicate(true)
-	diplomatic_relations = planned_diplomatic_relations
-	diplomatic_since_day = planned_diplomatic_since
-	truce_until_day = planned_truce_until
+	diplomatic_relations = plan["planned_diplomatic_relations"]
+	diplomatic_since_day = plan["planned_diplomatic_since"]
+	truce_until_day = plan["planned_truce_until"]
+	var territory_changed := bool(plan["territory_changed"])
+	var political_changed := bool(plan["political_changed"])
+	var diplomacy_changed := bool(plan["diplomacy_changed"])
 	if territory_changed or political_changed:
 		ownership_revision += 1
 	if diplomacy_changed:
 		diplomacy_revision += 1
 	refresh_derived()
+	var changed_city_ids: Array[int] = plan["changed_city_ids"]
 	changed_city_ids.sort()
 	return {
 		"ok": true, "changed": true,
