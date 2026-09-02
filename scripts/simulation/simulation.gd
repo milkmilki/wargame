@@ -8956,43 +8956,14 @@ func _plan_campaign_allocation(
 			return EquivariantOrder.army_less(state, nation_id, a, b)
 		)
 
-	# 目标预算严格分三轮：广度覆盖、决定性三团、按需求补强。
-	var target_staging := {}
-	for target_value in target_candidates:
-		if plan.candidate_target_ids.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
-			break
-		var target_city := int(target_value)
-		if plan.candidate_target_ids.has(target_city):
-			continue
-		var demand := (
-			(previous_plan.target_demands[target_city] as Dictionary)
-				.duplicate(true)
-			if (
-				previous_plan != null
-				and previous_plan.target_demands.has(target_city)
-			)
-			else _campaign_target_group_demand(
-				nation_id, target_city,
-				defense_plan.threat if defense_plan != null else null
-			)
-		)
-		if demand.is_empty():
-			continue
-		var staging := DiplomacyAI.staging_cities_for_objective(
-			state, nation_id, target_city
-		)
-		if staging.is_empty():
-			continue
-		plan.candidate_target_ids.append(target_city)
-		plan.target_demands[target_city] = demand.duplicate(true)
-		plan.target_group_budget[target_city] = (
-			maxi(int(previous_plan.target_group_budget.get(
-				target_city, 1
-			)), 1)
-			if previous_plan != null else 1
-		)
-		target_staging[target_city] = staging
-	if plan.candidate_target_ids.is_empty():
+	var target_staging: Dictionary = _prepare_campaign_targets(
+		nation_id,
+		target_candidates,
+		defense_plan,
+		previous_plan,
+		plan
+	)
+	if target_staging.is_empty():
 		return plan
 	plan.primary_city = (
 		previous_plan.primary_city
@@ -9223,6 +9194,51 @@ func _plan_campaign_allocation(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
 	return plan
+
+
+func _prepare_campaign_targets(
+	nation_id: int,
+	target_candidates: Array[int],
+	defense_plan: CityDefensePlan,
+	previous_plan: CampaignAllocationPlan,
+	plan: CampaignAllocationPlan
+) -> Dictionary:
+	# 目标候选按调用方给定顺序过滤，预算字段随后由主规划器扩充。
+	var target_staging := {}
+	for target_value in target_candidates:
+		if plan.candidate_target_ids.size() >= CAMPAIGN_MAX_PARALLEL_TARGETS:
+			break
+		var target_city := int(target_value)
+		if plan.candidate_target_ids.has(target_city):
+			continue
+		var demand := (
+			(previous_plan.target_demands[target_city] as Dictionary)
+				.duplicate(true)
+			if (
+				previous_plan != null
+				and previous_plan.target_demands.has(target_city)
+			)
+			else _campaign_target_group_demand(
+				nation_id,
+				target_city,
+				defense_plan.threat if defense_plan != null else null
+			)
+		)
+		if demand.is_empty():
+			continue
+		var staging := DiplomacyAI.staging_cities_for_objective(
+			state, nation_id, target_city
+		)
+		if staging.is_empty():
+			continue
+		plan.candidate_target_ids.append(target_city)
+		plan.target_demands[target_city] = demand.duplicate(true)
+		plan.target_group_budget[target_city] = (
+			maxi(int(previous_plan.target_group_budget.get(target_city, 1)), 1)
+			if previous_plan != null else 1
+		)
+		target_staging[target_city] = staging
+	return target_staging
 
 
 func _prepare_campaign_group_context(
