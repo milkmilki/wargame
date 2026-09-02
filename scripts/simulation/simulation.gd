@@ -9954,44 +9954,14 @@ func _assign_offensive_staging_orders(
 		return changed
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
-	var holders: Array[Army] = []
-	for army in path_view.friendly_armies:
-		if (
-			army.size <= 0
-			or army.state != Army.State.HOLDING
-			or (
-				assigned_only
-					and not _can_assign_campaign_preparation_army(
-						nation_id,
-						army,
-						objective_city
-					)
-			)
-			or (
-				state.day < army.defensive_deployment_until_day
-				and not _campaign_assignment_overrides_defensive_lock(
-					nation_id, army, objective_city
-				)
-			)
-			or _army_ready_for_campaign_target(
-				army,
-				nation_id,
-				objective_city
-			)
-			or not _can_use_army_for_offensive(
-				defense_plan,
-				coordinator,
-				army,
-				objective_city
-			)
-		):
-			continue
-		var friendly_endpoint: int = army.move_from
-		if not state.has_military_access(
-			nation_id, state.cities[friendly_endpoint].owner_nation
-		):
-			friendly_endpoint = army.move_to
-		holders.append(army)
+	var holders: Array[Army] = _collect_campaign_redeployment_holders(
+		nation_id,
+		objective_city,
+		path_view,
+		assigned_only,
+		defense_plan,
+		coordinator
+	)
 	holders.sort_custom(func(a: Army, b: Army) -> bool:
 			if a.size != b.size:
 				return a.size > b.size
@@ -10041,6 +10011,43 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _collect_campaign_redeployment_holders(
+	nation_id: int,
+	objective_city: int,
+	path_view: AiWorldView,
+	assigned_only: bool,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator
+) -> Array[Army]:
+	var holders: Array[Army] = []
+	for army in path_view.friendly_armies:
+		if (
+			army.size <= 0
+			or army.state != Army.State.HOLDING
+			or (
+				assigned_only
+					and not _can_assign_campaign_preparation_army(
+						nation_id, army, objective_city
+					)
+			)
+			or (
+				state.day < army.defensive_deployment_until_day
+				and not _campaign_assignment_overrides_defensive_lock(
+					nation_id, army, objective_city
+				)
+			)
+			or _army_ready_for_campaign_target(
+				army, nation_id, objective_city
+			)
+			or not _can_use_army_for_offensive(
+				defense_plan, coordinator, army, objective_city
+			)
+		):
+			continue
+		holders.append(army)
+	return holders
 
 
 func _collect_campaign_reinforcement_candidates(
