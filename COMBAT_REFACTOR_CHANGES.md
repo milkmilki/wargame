@@ -24,7 +24,7 @@
 | [scripts/model/edge.gd](scripts/model/edge.gd) | 新增 `LAND/LANDING/RIVER` 类型、行军/粮损倍率和 `allows_holding` |
 | [scripts/model/army.gd](scripts/model/army.gd) | 两类补给债；完全同构多方接触的瞬态 `encounter_blocked`（不伪装为驻防） |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 每侧整场援军士气累计；显式前线优先级；单军溃退队列；驻防/围城/稳定战术随机字段 |
-| [scripts/core/game_state.gd](scripts/core/game_state.gd) | 正式地图 160 个陆城之外创建码头，64 城仅保留为网格夹具；按全部当前城市计算 5000/15000 两档目标军制；首都/资源核心只读取陆城；边键改为 int64 打包 |
+| [scripts/state/game_state.gd](scripts/state/game_state.gd) | 正式地图 160 个陆城之外创建码头，64 城仅保留为网格夹具；按全部当前城市计算 5000/15000 两档目标军制；首都/资源核心只读取陆城；边键改为 int64 打包 |
 | [scripts/ai](scripts/ai) | Hungarian 军队到城市多槽离散驻防；威胁与抵达时间读取河运速度；水路不生成驻边姿态；外交按战局、军力、钱粮和第三国边境集结计算双边和平意愿 |
 | [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 牛皮纸战略图、国家/道路描边、持续攻势箭头、军图城市/码头、NATO 兵牌、四档固定 UI、可折叠国家统计窗口、城市/道路点击详情；运行时最高 30 FPS、暂停 5 FPS 重绘 |
 | [tests/test_suite.gd](tests/test_suite.gd) | 826 断言：既有机制 + 战略图 UI + 黄河0.50～0.60/双河走向/国家内部与全图最小连通/硬阻隔 + 真实边距 + 多国灭国投降 + 邻接驰援 + 两档军制/同城多军驻防 |

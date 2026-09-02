@@ -69,7 +69,7 @@ View / MapRenderer（Node2D，单一 _draw 数据驱动渲染，绝不写状态�
 | [scripts/model/army.gd](scripts/model/army.gd) | 数据 | 军队兵力/质量/位置/状态/士气；轻军 `max_morale=1`、重军 `max_morale=2`；两类补给债；含 AI 命令与占领元数据 |
 | [scripts/model/frontier_defense_sector.gd](scripts/model/frontier_defense_sector.gd) | 数据 | 持久动态边境防区；槽 0 为城市本体，槽 1..N 按稳定敌向边保存填线 Assignment 与召回/防守/恢复/撤退状态 |
 | [scripts/model/battle.gd](scripts/model/battle.gd) | 数据 | 持久多回合战斗：双方/战场/驻防/围城、每侧整场援军士气累计、前线优先级、单军溃退队列、稳定战术随机键 |
-| [scripts/core/game_state.gd](scripts/core/game_state.gd) | SSoT | 世界生成、码头城市、两档目标军制、无碰撞边键、粮仓、图查询、战斗和外交；批量两阶段领土/宗藩/外交事务、兼并规划与无失败收尾 |
+| [scripts/state/game_state.gd](scripts/state/game_state.gd) | SSoT | 世界生成、码头城市、两档目标军制、无碰撞边键、粮仓、图查询、战斗和外交；批量两阶段领土/宗藩/外交事务、兼并规划与无失败收尾 |
 | [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 地图生成 | 陆地/城市/省份/道路；高度图水系、道路交点码头、抢滩边和码头间水路 |
 | [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 静态 | 寻路与补给网络；读取边级行军时间和粮损倍率 |
 | [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | 静态 | 镜像等变物理排序 SSoT：城市/军队/势力/边；禁止 ID/创建顺序参与行为决胜 |
