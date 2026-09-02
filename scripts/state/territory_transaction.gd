@@ -13,6 +13,48 @@ static func plan_operations(
 	default_stock_policy: int,
 	allowed_stock_policies: Array[int]
 ) -> Dictionary:
+	var snapshot := _snapshot_territory_tuples(
+		cities, recognized_city_owners, nation_count
+	)
+	if not bool(snapshot.get("ok", false)):
+		return snapshot
+	var planned_owners: Array[int] = snapshot["planned_owners"]
+	var planned_legal_owners: Array[int] = snapshot["planned_legal_owners"]
+	var planned_sponsors: Array[int] = snapshot["planned_sponsors"]
+	var normalized := _normalize_operations(
+		cities,
+		recognized_city_owners,
+		nation_count,
+		operations,
+		day,
+		rebellion_cooldown_days,
+		default_stock_policy,
+		allowed_stock_policies,
+		planned_owners,
+		planned_legal_owners,
+		planned_sponsors
+	)
+	if not bool(normalized.get("ok", false)):
+		return normalized
+	if not _territory_tuples_valid(
+		planned_owners, planned_legal_owners, planned_sponsors, nation_count
+	):
+		return _failure("最终领土三元组无效。")
+	return {
+		"ok": true,
+		"planned_owners": planned_owners,
+		"planned_legal_owners": planned_legal_owners,
+		"planned_sponsors": planned_sponsors,
+		"normalized_operations": normalized["normalized_operations"],
+		"changed_city_ids": normalized["changed_city_ids"],
+	}
+
+
+static func _snapshot_territory_tuples(
+	cities: Array,
+	recognized_city_owners: Array[int],
+	nation_count: int
+) -> Dictionary:
 	var planned_owners: Array[int] = []
 	var planned_legal_owners: Array[int] = []
 	var planned_sponsors: Array[int] = []
@@ -34,7 +76,27 @@ static func plan_operations(
 		planned_owners[city.id] = city.owner_nation
 		planned_legal_owners[city.id] = recognized_city_owners[city.id]
 		planned_sponsors[city.id] = city.occupation_sponsor_nation
+	return {
+		"ok": true,
+		"planned_owners": planned_owners,
+		"planned_legal_owners": planned_legal_owners,
+		"planned_sponsors": planned_sponsors,
+	}
 
+
+static func _normalize_operations(
+	cities: Array,
+	recognized_city_owners: Array[int],
+	nation_count: int,
+	operations: Array[Dictionary],
+	day: int,
+	rebellion_cooldown_days: int,
+	default_stock_policy: int,
+	allowed_stock_policies: Array[int],
+	planned_owners: Array[int],
+	planned_legal_owners: Array[int],
+	planned_sponsors: Array[int]
+) -> Dictionary:
 	var normalized_operations: Array[Dictionary] = []
 	var operation_by_city := {}
 	var changed_city_ids: Array[int] = []
@@ -123,8 +185,20 @@ static func plan_operations(
 		planned_sponsors[city_id] = sponsor_id
 		if operation_changed:
 			changed_city_ids.append(city_id)
+	return {
+		"ok": true,
+		"normalized_operations": normalized_operations,
+		"changed_city_ids": changed_city_ids,
+	}
 
-	for city_id in range(cities.size()):
+
+static func _territory_tuples_valid(
+	planned_owners: Array[int],
+	planned_legal_owners: Array[int],
+	planned_sponsors: Array[int],
+	nation_count: int
+) -> bool:
+	for city_id in range(planned_owners.size()):
 		var owner_id := planned_owners[city_id]
 		var legal_id := planned_legal_owners[city_id]
 		var sponsor_id := planned_sponsors[city_id]
@@ -137,16 +211,8 @@ static func plan_operations(
 				and (sponsor_id < 0 or sponsor_id >= nation_count)
 			)
 		):
-			return _failure("最终领土三元组无效。")
-
-	return {
-		"ok": true,
-		"planned_owners": planned_owners,
-		"planned_legal_owners": planned_legal_owners,
-		"planned_sponsors": planned_sponsors,
-		"normalized_operations": normalized_operations,
-		"changed_city_ids": changed_city_ids,
-	}
+			return false
+	return true
 
 
 static func plan_diplomacy(
