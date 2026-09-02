@@ -6971,121 +6971,18 @@ func _ai_manage_force_structure(
 			main_armies
 		)
 	else:
-		var active_offense := (
-			nation.war_preparation_target_nation >= 0
-			or not wars.is_empty()
+		recruitment = _regular_force_recruitment(
+			view,
+			snapshot,
+			threat,
+			defense_plan,
+			decision_context,
+			wars,
+			total_line_target,
+			line_armies,
+			main_armies,
+			active_war_mobilization
 		)
-		var force_demand_targets: Array[int] = []
-		var campaign_allocation: CampaignAllocationPlan = null
-		if active_offense:
-			force_demand_targets = _campaign_force_demand_targets(
-				view.nation_id,
-				snapshot
-			)
-		var required_group_count := (
-			1
-			if active_offense
-			else 1
-		)
-		if (
-			active_offense
-			and state.uses_heightmap
-			and not force_demand_targets.is_empty()
-		):
-			campaign_allocation = _plan_campaign_allocation(
-				view.nation_id,
-				force_demand_targets[0],
-				force_demand_targets,
-				defense_plan,
-				ArmyCoordinator.from_view(view),
-				view,
-				nation.war_preparation_target_nation >= 0
-					and wars.is_empty()
-			)
-			decision_context["campaign_allocation_plan"] = (
-				campaign_allocation
-			)
-			required_group_count = maxi(
-				campaign_allocation.required_group_count, 1
-			)
-			if campaign_allocation.assigned_group_count > 0:
-				_apply_campaign_plan_atomic(
-					view.nation_id, campaign_allocation
-				)
-		elif active_offense:
-			required_group_count = _campaign_required_group_count(
-				view.nation_id, force_demand_targets, threat
-			)
-		var target_group_count := (
-			maxi(nation.battle_groups.size(), required_group_count)
-			if active_offense
-			else defense_plan.main_reserve_target_group_count()
-		)
-		var target_main_armies := maxi(
-			target_group_count * (
-				BattleGroup.MAX_LIGHT_ARMIES
-				+ BattleGroup.MAX_HEAVY_ARMIES
-			),
-			1
-		)
-		var main_deficit := maxi(
-			target_main_armies - main_armies,
-			0
-		)
-		var line_deficit := maxi(
-			total_line_target - line_armies,
-			0
-		)
-		var main_deficit_ratio := (
-			float(main_deficit)
-			/ float(target_main_armies)
-		)
-		var line_deficit_ratio := (
-			float(line_deficit)
-			/ float(maxi(total_line_target, 1))
-		)
-		var recruit_main := (
-			main_deficit > 0
-			and (
-				# 国家已经确定进攻方向时，先建立满足局部攻城需求的
-				# 最低战团数量。旧比例竞争会在第一个战团后转去补
-				# 数十个填线槽，使几十万现役只有一团能参加决战。
-				nation.battle_groups.size() < required_group_count
-				or
-				line_deficit <= 0
-				or main_deficit_ratio >= line_deficit_ratio
-			)
-		)
-		if recruit_main:
-			var needs_new_campaign_group := (
-				active_offense
-				and nation.battle_groups.size() < required_group_count
-				and (
-					campaign_allocation == null
-					or campaign_allocation.unfilled_group_slots > 0
-				)
-			)
-			recruitment = _next_battle_group_recruitment(
-				view.nation_id,
-				nation.battle_groups.size() < target_group_count,
-				needs_new_campaign_group
-			)
-		elif line_deficit > 0:
-			recruitment = {
-				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-				"group_id": -1,
-					"reason": "补充常规填线槽",
-			}
-		else:
-			recruitment = _next_battle_group_recruitment(
-				view.nation_id,
-					active_war_mobilization
-						or (
-							active_offense
-							and nation.battle_groups.size()
-								< required_group_count
-						)
-			)
 	var missing_formation_size := int(
 		recruitment.get("size", 0)
 	)
@@ -7207,6 +7104,116 @@ func _try_create_force_recruitment(
 	if created_army == null and created_group != null:
 		nation.battle_groups.erase(created_group)
 	return created_army != null
+
+
+func _regular_force_recruitment(
+	view: AiWorldView,
+	snapshot: StrategicMapSnapshot,
+	threat: ThreatField,
+	defense_plan: CityDefensePlan,
+	decision_context: Dictionary,
+	wars: Array,
+	total_line_target: int,
+	line_armies: int,
+	main_armies: int,
+	active_war_mobilization: bool
+) -> Dictionary:
+	var nation := state.nations[view.nation_id]
+	var active_offense := (
+		nation.war_preparation_target_nation >= 0
+		or not wars.is_empty()
+	)
+	var force_demand_targets: Array[int] = []
+	var campaign_allocation: CampaignAllocationPlan = null
+	if active_offense:
+		force_demand_targets = _campaign_force_demand_targets(
+			view.nation_id,
+			snapshot
+		)
+	var required_group_count := 1
+	if (
+		active_offense
+		and state.uses_heightmap
+		and not force_demand_targets.is_empty()
+	):
+		campaign_allocation = _plan_campaign_allocation(
+			view.nation_id,
+			force_demand_targets[0],
+			force_demand_targets,
+			defense_plan,
+			ArmyCoordinator.from_view(view),
+			view,
+			nation.war_preparation_target_nation >= 0
+				and wars.is_empty()
+		)
+		decision_context["campaign_allocation_plan"] = campaign_allocation
+		required_group_count = maxi(
+			campaign_allocation.required_group_count, 1
+		)
+		if campaign_allocation.assigned_group_count > 0:
+			_apply_campaign_plan_atomic(view.nation_id, campaign_allocation)
+	elif active_offense:
+		required_group_count = _campaign_required_group_count(
+			view.nation_id, force_demand_targets, threat
+		)
+	var target_group_count := (
+		maxi(nation.battle_groups.size(), required_group_count)
+		if active_offense
+		else defense_plan.main_reserve_target_group_count()
+	)
+	var target_main_armies := maxi(
+		target_group_count * (
+			BattleGroup.MAX_LIGHT_ARMIES
+			+ BattleGroup.MAX_HEAVY_ARMIES
+		),
+		1
+	)
+	var main_deficit := maxi(target_main_armies - main_armies, 0)
+	var line_deficit := maxi(total_line_target - line_armies, 0)
+	var main_deficit_ratio := (
+		float(main_deficit) / float(target_main_armies)
+	)
+	var line_deficit_ratio := (
+		float(line_deficit) / float(maxi(total_line_target, 1))
+	)
+	var recruit_main := (
+		main_deficit > 0
+		and (
+			# Once an offensive has a target, establish its minimum battle groups
+			# before filling a potentially much larger set of line slots.
+			nation.battle_groups.size() < required_group_count
+			or line_deficit <= 0
+			or main_deficit_ratio >= line_deficit_ratio
+		)
+	)
+	if recruit_main:
+		var needs_new_campaign_group := (
+			active_offense
+			and nation.battle_groups.size() < required_group_count
+			and (
+				campaign_allocation == null
+				or campaign_allocation.unfilled_group_slots > 0
+			)
+		)
+		return _next_battle_group_recruitment(
+			view.nation_id,
+			nation.battle_groups.size() < target_group_count,
+			needs_new_campaign_group
+		)
+	if line_deficit > 0:
+		return {
+			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+			"group_id": -1,
+			"reason": "补充常规填线槽",
+		}
+	return _next_battle_group_recruitment(
+		view.nation_id,
+		active_war_mobilization
+			or (
+				active_offense
+				and nation.battle_groups.size() < required_group_count
+			)
+	)
 
 
 func _small_nation_force_recruitment(
