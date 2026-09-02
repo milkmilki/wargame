@@ -5319,103 +5319,26 @@ func apply_territory_transaction(
 	)
 
 	# ------------------------------ phase 1c: 以旧快照计算库存账本。
-	var planned_food: Array[int] = []
-	planned_food.resize(cities.size())
-	for city in cities:
-		planned_food[city.id] = city.food_storage
-	var stock_credits := {}
-	for normalized in normalized_operations:
-		var city_id := int(normalized["city_id"])
-		var city := cities[city_id]
-		if city.owner_nation == int(normalized["controller_id"]):
-			continue
-		var stock := city.food_storage
-		planned_food[city_id] = 0
-		if stock <= 0:
-			continue
-		var policy := int(normalized["stock_policy"])
-		var recipient := -1
-		var credited := stock
-		match policy:
-			TerritoryStockDisposition.RETURN_TO_OLD_POOL:
-				recipient = _planned_territory_food_pool_holder(
-					city.owner_nation, final_city_counts,
-					validated_requested_suzerainty
-				)
-			TerritoryStockDisposition.MOVE_TO_NEW_POOL:
-				recipient = final_pool_holders[int(normalized["controller_id"])]
-			TerritoryStockDisposition.CAPTURE_SPOILS:
-				recipient = final_pool_holders[int(normalized["controller_id"])]
-				credited = int(floor(
-					float(stock) * TERRITORY_CAPTURE_SPOILS_RATE
-				))
-			TerritoryStockDisposition.DESTROY:
-				credited = 0
-		if credited <= 0:
-			continue
-		if (
-			recipient < 0
-			or recipient >= nations.size()
-			or final_city_counts[recipient] <= 0
-			or planned_capitals[recipient] < 0
-			or not planned_warehouse_flags[planned_capitals[recipient]]
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "库存策略在最终版图中没有可入账粮池。",
-				"changed_city_ids": [] as Array[int],
-			}
-		stock_credits[recipient] = (
-			int(stock_credits.get(recipient, 0)) + credited
-		)
-	# 宗藩关系刚改变时，旧的非持有者粮仓也在本批摘除并全额归入最终共享池。
-	for city in cities:
-		if (
-			city.owner_nation != planned_owners[city.id]
-			or not city.has_warehouse
-			or planned_warehouse_flags[city.id]
-		):
-			continue
-		var stock := planned_food[city.id]
-		planned_food[city.id] = 0
-		if stock <= 0:
-			continue
-		var recipient := final_pool_holders[planned_owners[city.id]]
-		if recipient < 0 or planned_capitals[recipient] < 0:
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "被摘除粮仓的库存没有可入账粮池。",
-				"changed_city_ids": [] as Array[int],
-			}
-		stock_credits[recipient] = (
-			int(stock_credits.get(recipient, 0)) + stock
-		)
-	# 和平藩属的首都必须是零库存中继；关系变化前遗留的库存同样回池。
-	for nation in nations:
-		if (
-			final_city_counts[nation.id] <= 0
-			or final_pool_holders[nation.id] == nation.id
-		):
-			continue
-		var capital_id := planned_capitals[nation.id]
-		var stock := planned_food[capital_id]
-		planned_food[capital_id] = 0
-		if stock > 0:
-			var recipient := final_pool_holders[nation.id]
-			stock_credits[recipient] = (
-				int(stock_credits.get(recipient, 0)) + stock
-			)
-	for recipient_value in stock_credits:
-		var recipient := int(recipient_value)
-		planned_food[planned_capitals[recipient]] += int(
-			stock_credits[recipient_value]
-		)
+	var food_plan := TerritoryTransaction.plan_food_ledger(
+		cities,
+		nations,
+		normalized_operations,
+		planned_owners,
+		final_city_counts,
+		validated_requested_suzerainty,
+		final_pool_holders,
+		planned_capitals,
+		planned_warehouse_flags,
+		TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+		TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+		TerritoryStockDisposition.CAPTURE_SPOILS,
+		TerritoryStockDisposition.DESTROY,
+		TERRITORY_CAPTURE_SPOILS_RATE,
+		_planned_territory_food_pool_holder
+	)
+	if not bool(food_plan.get("ok", false)):
+		return food_plan
+	var planned_food: Array[int] = food_plan["planned_food"]
 
 	var planned_warehouse_ids: Array = []
 	for _nation in nations:

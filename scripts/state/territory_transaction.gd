@@ -335,6 +335,185 @@ static func plan_structure(
 	}
 
 
+static func plan_food_ledger(
+	cities: Array,
+	nations: Array,
+	normalized_operations: Array[Dictionary],
+	planned_owners: Array[int],
+	final_city_counts: Array[int],
+	requested_suzerainty: Dictionary,
+	final_pool_holders: Array[int],
+	planned_capitals: Array[int],
+	planned_warehouse_flags: Array[bool],
+	return_to_old_pool_policy: int,
+	move_to_new_pool_policy: int,
+	capture_spoils_policy: int,
+	destroy_policy: int,
+	capture_spoils_rate: float,
+	select_pool_holder: Callable
+) -> Dictionary:
+	var planned_food: Array[int] = []
+	planned_food.resize(cities.size())
+	for city in cities:
+		planned_food[city.id] = city.food_storage
+	var stock_credits := {}
+	var moved_stock := _settle_moved_city_stock(
+		cities,
+		nations.size(),
+		normalized_operations,
+		final_city_counts,
+		requested_suzerainty,
+		final_pool_holders,
+		planned_capitals,
+		planned_warehouse_flags,
+		planned_food,
+		stock_credits,
+		return_to_old_pool_policy,
+		move_to_new_pool_policy,
+		capture_spoils_policy,
+		destroy_policy,
+		capture_spoils_rate,
+		select_pool_holder
+	)
+	if not bool(moved_stock.get("ok", false)):
+		return moved_stock
+	var removed_stock := _return_removed_warehouse_stock(
+		cities,
+		planned_owners,
+		final_pool_holders,
+		planned_capitals,
+		planned_warehouse_flags,
+		planned_food,
+		stock_credits
+	)
+	if not bool(removed_stock.get("ok", false)):
+		return removed_stock
+	_return_subject_capital_stock(
+		nations,
+		final_city_counts,
+		final_pool_holders,
+		planned_capitals,
+		planned_food,
+		stock_credits
+	)
+	for recipient_value in stock_credits:
+		var recipient := int(recipient_value)
+		planned_food[planned_capitals[recipient]] += int(
+			stock_credits[recipient_value]
+		)
+	return {"ok": true, "planned_food": planned_food}
+
+
+static func _settle_moved_city_stock(
+	cities: Array,
+	nation_count: int,
+	normalized_operations: Array[Dictionary],
+	final_city_counts: Array[int],
+	requested_suzerainty: Dictionary,
+	final_pool_holders: Array[int],
+	planned_capitals: Array[int],
+	planned_warehouse_flags: Array[bool],
+	planned_food: Array[int],
+	stock_credits: Dictionary,
+	return_to_old_pool_policy: int,
+	move_to_new_pool_policy: int,
+	capture_spoils_policy: int,
+	destroy_policy: int,
+	capture_spoils_rate: float,
+	select_pool_holder: Callable
+) -> Dictionary:
+	for normalized in normalized_operations:
+		var city_id := int(normalized["city_id"])
+		var city = cities[city_id]
+		if city.owner_nation == int(normalized["controller_id"]):
+			continue
+		var stock: int = city.food_storage
+		planned_food[city_id] = 0
+		if stock <= 0:
+			continue
+		var policy := int(normalized["stock_policy"])
+		var recipient := -1
+		var credited := stock
+		if policy == return_to_old_pool_policy:
+			recipient = int(select_pool_holder.call(
+				city.owner_nation, final_city_counts, requested_suzerainty
+			))
+		elif policy == move_to_new_pool_policy:
+			recipient = final_pool_holders[int(normalized["controller_id"])]
+		elif policy == capture_spoils_policy:
+			recipient = final_pool_holders[int(normalized["controller_id"])]
+			credited = int(floor(float(stock) * capture_spoils_rate))
+		elif policy == destroy_policy:
+			credited = 0
+		if credited <= 0:
+			continue
+		if (
+			recipient < 0
+			or recipient >= nation_count
+			or final_city_counts[recipient] <= 0
+			or planned_capitals[recipient] < 0
+			or not planned_warehouse_flags[planned_capitals[recipient]]
+		):
+			return _failure("库存策略在最终版图中没有可入账粮池。")
+		stock_credits[recipient] = (
+			int(stock_credits.get(recipient, 0)) + credited
+		)
+	return {"ok": true}
+
+
+static func _return_removed_warehouse_stock(
+	cities: Array,
+	planned_owners: Array[int],
+	final_pool_holders: Array[int],
+	planned_capitals: Array[int],
+	planned_warehouse_flags: Array[bool],
+	planned_food: Array[int],
+	stock_credits: Dictionary
+) -> Dictionary:
+	for city in cities:
+		if (
+			city.owner_nation != planned_owners[city.id]
+			or not city.has_warehouse
+			or planned_warehouse_flags[city.id]
+		):
+			continue
+		var stock := planned_food[city.id]
+		planned_food[city.id] = 0
+		if stock <= 0:
+			continue
+		var recipient := final_pool_holders[planned_owners[city.id]]
+		if recipient < 0 or planned_capitals[recipient] < 0:
+			return _failure("被摘除粮仓的库存没有可入账粮池。")
+		stock_credits[recipient] = (
+			int(stock_credits.get(recipient, 0)) + stock
+		)
+	return {"ok": true}
+
+
+static func _return_subject_capital_stock(
+	nations: Array,
+	final_city_counts: Array[int],
+	final_pool_holders: Array[int],
+	planned_capitals: Array[int],
+	planned_food: Array[int],
+	stock_credits: Dictionary
+) -> void:
+	for nation in nations:
+		if (
+			final_city_counts[nation.id] <= 0
+			or final_pool_holders[nation.id] == nation.id
+		):
+			continue
+		var capital_id := planned_capitals[nation.id]
+		var stock := planned_food[capital_id]
+		planned_food[capital_id] = 0
+		if stock > 0:
+			var recipient := final_pool_holders[nation.id]
+			stock_credits[recipient] = (
+				int(stock_credits.get(recipient, 0)) + stock
+			)
+
+
 static func _normalize_preferred_capitals(
 	cities: Array,
 	nation_count: int,
