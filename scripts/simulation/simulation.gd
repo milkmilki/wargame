@@ -8457,42 +8457,13 @@ func _ensure_campaign_preparation_plan(
 		)
 	)
 
-	var available: Array[Army] = []
-	for army in view.friendly_armies:
-		var origin := _campaign_army_origin(army, nation_id)
-		if (
-			army.size <= 0
-			or origin < 0
-			or army.state not in [
-				Army.State.IDLE,
-				Army.State.HOLDING,
-			]
-			or state.day < army.defensive_deployment_until_day
-		):
-			continue
-		available.append(army)
-
-	var available_troops := 0
-	for army in available:
-		available_troops += army.size
-	var primary_staged_required := _campaign_minimum_staged_troops(
+	var readiness := _campaign_preparation_readiness(
 		nation_id,
-		primary_city
+		primary_city,
+		view
 	)
-	var primary_surplus := maxi(
-		available_troops - primary_staged_required,
-		0
-	)
-	var parallel_capacity := maxi(
-		1 + int(floor(
-			float(primary_surplus)
-				/ (
-					float(maxi(primary_staged_required, 1))
-					* CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO
-				)
-		)),
-		1
-	)
+	var available: Array[Army] = readiness["available"]
+	var parallel_capacity := int(readiness["parallel_capacity"])
 	var defense_assigned_armies := 0
 	for target_index in range(target_candidates.size()):
 		var target_city := target_candidates[target_index]
@@ -8741,6 +8712,49 @@ func _ensure_campaign_preparation_plan(
 
 ## 正式地图的攻势只有这一条规划入口：纯规划器一次决定目标预算和战团归属，
 ## 原子应用器再投影到兼容字段。扩军、集结、发射只能消费这份计划。
+func _campaign_preparation_readiness(
+	nation_id: int,
+	primary_city: int,
+	view: AiWorldView
+) -> Dictionary:
+	var available: Array[Army] = []
+	for army in view.friendly_armies:
+		var origin := _campaign_army_origin(army, nation_id)
+		if (
+			army.size <= 0
+			or origin < 0
+			or army.state not in [Army.State.IDLE, Army.State.HOLDING]
+			or state.day < army.defensive_deployment_until_day
+		):
+			continue
+		available.append(army)
+	var available_troops := 0
+	for army in available:
+		available_troops += army.size
+	var primary_staged_required := _campaign_minimum_staged_troops(
+		nation_id,
+		primary_city
+	)
+	var primary_surplus := maxi(
+		available_troops - primary_staged_required,
+		0
+	)
+	var parallel_capacity := maxi(
+		1 + int(floor(
+			float(primary_surplus)
+			/ (
+				float(maxi(primary_staged_required, 1))
+				* CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO
+			)
+		)),
+		1
+	)
+	return {
+		"available": available,
+		"parallel_capacity": parallel_capacity,
+	}
+
+
 func _assign_grid_campaign_target(
 	nation_id: int,
 	target_city: int,
