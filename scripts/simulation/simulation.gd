@@ -1337,119 +1337,13 @@ static func _monthly_gold_flows_from_trade(
 	game_state: GameState,
 	trade: Dictionary
 ) -> Array[Dictionary]:
-	# 军费是全局财政表的共享输入。旧实现逐国调用
-	# nation_monthly_military_upkeep()，每次都会重新扫描全部军队，
-	# 大地图因此退化为 O(国家数 × 军队数)，并把整段耗时挤到首个
-	# 查询财政报告的国家。一次扫描按 owner 汇总即可保持结果完全一致。
-	var upkeep_by_nation: Array[int] = []
-	upkeep_by_nation.resize(game_state.nations.size())
-	upkeep_by_nation.fill(0)
-	for army in game_state.armies:
-		if (
-			army.size <= 0
-			or army.owner_nation < 0
-			or army.owner_nation >= upkeep_by_nation.size()
-		):
-			continue
-		upkeep_by_nation[army.owner_nation] += (
-			GameState.army_monthly_upkeep(army.size)
-		)
-	for nation in game_state.nations:
-		upkeep_by_nation[nation.id] = effective_monthly_military_upkeep(
-			game_state, nation.id, upkeep_by_nation[nation.id]
-		)
-	var result: Array[Dictionary] = []
-	for nation in game_state.nations:
-		# 简化版 EU4 贸易：路线税（贸易节点竞争力→金钱）是唯一贸易收入；
-		# 买粮、买人都是凭空产生，只从国库扣钱，因此计入支出。不再有他国
-		# 之间守恒的粮食销售收入（nation_food_sale_income 恒为 0）。
-		var food_trade_income := _trade_array_value(
-			trade, "nation_food_sale_income", nation.id
-		)
-		var food_trade_expense := _trade_array_value(
-			trade, "nation_food_cost", nation.id
-		)
-		var manpower_trade_expense := _trade_array_value(
-			trade, "nation_manpower_cost", nation.id
-		)
-		var trade_gross_income := _trade_array_value(
-			trade, "nation_trade_gold", nation.id
-		)
-		var trade_tax_income := maxi(
-			trade_gross_income - food_trade_income,
-			0
-		)
-		var trade_net_income := (
-			trade_tax_income
-			+ food_trade_income
-			- food_trade_expense
-			- manpower_trade_expense
-		)
-		result.append({
-			"nation_id": nation.id,
-			"city_income": 0,
-			"trade_tax_income": trade_tax_income,
-			"food_trade_income": food_trade_income,
-			"food_trade_expense": food_trade_expense,
-			"manpower_trade_expense": manpower_trade_expense,
-			"trade_net_income": trade_net_income,
-			"tribute_received": 0,
-			"tribute_paid": 0,
-			"net_income": 0,
-			"military_upkeep": upkeep_by_nation[nation.id],
-			"balance": 0,
-		})
-	for city in game_state.cities:
-		if (
-			city.owner_nation < 0
-			or city.owner_nation >= result.size()
-		):
-			continue
-		result[city.owner_nation]["city_income"] = (
-			int(result[city.owner_nation]["city_income"])
-			+ city_gold_output(game_state, city)
-		)
-	for subject_value in game_state.suzerainty:
-		var subject_id := int(subject_value)
-		var overlord_id := game_state.overlord_of(
-			subject_id
-		)
-		if (
-			subject_id < 0
-			or subject_id >= result.size()
-			or overlord_id < 0
-			or overlord_id >= result.size()
-		):
-			continue
-		var tribute := int(floor(
-			float(result[subject_id]["city_income"])
-			* effective_tribute_rate(
-				game_state,
-				subject_id
-			)
-		))
-		result[subject_id]["tribute_paid"] = (
-			int(result[subject_id]["tribute_paid"])
-			+ tribute
-		)
-		result[overlord_id]["tribute_received"] = (
-			int(result[overlord_id]["tribute_received"])
-			+ tribute
-		)
-	for nation_id in range(result.size()):
-		var report: Dictionary = result[nation_id]
-		var net_income := (
-			int(report["city_income"])
-			+ int(report["trade_net_income"])
-			+ int(report["tribute_received"])
-			- int(report["tribute_paid"])
-		)
-		report["net_income"] = net_income
-		report["balance"] = (
-			net_income
-			- int(report["military_upkeep"])
-		)
-	return result
+	return EconomyRules.monthly_gold_flows_from_trade(
+		game_state,
+		trade,
+		effective_monthly_military_upkeep,
+		city_gold_output,
+		effective_tribute_rate
+	)
 
 
 static func _trade_array_value(
@@ -1457,10 +1351,7 @@ static func _trade_array_value(
 	key: String,
 	index: int
 ) -> int:
-	var values: Variant = trade_snapshot.get(key, [])
-	if not (values is Array) or index < 0 or index >= values.size():
-		return 0
-	return int(values[index])
+	return EconomyRules.trade_array_value(trade_snapshot, key, index)
 
 
 static func effective_monthly_military_upkeep(
