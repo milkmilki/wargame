@@ -8474,78 +8474,14 @@ func _ensure_campaign_preparation_plan(
 		)
 		if staging.is_empty():
 			continue
-		var ranked: Array[Dictionary] = []
-		for army in available:
-			if not _can_assign_campaign_preparation_army(
-				nation_id,
-				army,
-				target_city
-			):
-				continue
-			if not _can_use_army_for_offensive(
-				defense_plan,
-				coordinator,
-				army,
-				target_city
-			):
-				continue
-			var origin := _campaign_army_origin(
-				army,
-				nation_id
-			)
-			if origin < 0:
-				continue
-			var field := view.path_field(
-				origin,
-				nation_id,
-				false,
-				true,
-				-1,
-				army.max_size
-			)
-			var best_distance := INF
-			for staging_city in staging:
-				best_distance = minf(
-					best_distance,
-					float(
-						field["dist"].get(
-							staging_city,
-							INF
-						)
-					)
-				)
-			if best_distance == INF:
-				continue
-			ranked.append({
-				"army": army,
-				"distance": best_distance,
-			})
-		ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			var army_a: Army = a["army"]
-			var army_b: Army = b["army"]
-			if (
-				state.uses_heightmap
-				and army_a.max_size != army_b.max_size
-			):
-				return army_a.max_size > army_b.max_size
-			if (
-				army_a.is_main_battle_role()
-				!= army_b.is_main_battle_role()
-			):
-				return army_a.is_main_battle_role()
-			var distance_a := float(a["distance"])
-			var distance_b := float(b["distance"])
-			if not is_equal_approx(distance_a, distance_b):
-				return distance_a < distance_b
-			if army_a.size != army_b.size:
-				return army_a.size > army_b.size
-			return EquivariantOrder.army_less(
-				state,
-				nation_id,
-				army_a,
-				army_b,
-				target_city
-			)
+		var ranked: Array[Dictionary] = _rank_campaign_preparation_armies(
+			nation_id,
+			target_city,
+			staging,
+			available,
+			view,
+			defense_plan,
+			coordinator
 		)
 		var selected: Array[Army] = []
 		var selected_troops := 0
@@ -8712,6 +8648,77 @@ func _ensure_campaign_preparation_plan(
 
 ## 正式地图的攻势只有这一条规划入口：纯规划器一次决定目标预算和战团归属，
 ## 原子应用器再投影到兼容字段。扩军、集结、发射只能消费这份计划。
+func _rank_campaign_preparation_armies(
+	nation_id: int,
+	target_city: int,
+	staging: Array,
+	available: Array[Army],
+	view: AiWorldView,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator
+) -> Array[Dictionary]:
+	var ranked: Array[Dictionary] = []
+	for army in available:
+		if not _can_assign_campaign_preparation_army(
+			nation_id,
+			army,
+			target_city
+		):
+			continue
+		if not _can_use_army_for_offensive(
+			defense_plan,
+			coordinator,
+			army,
+			target_city
+		):
+			continue
+		var origin := _campaign_army_origin(army, nation_id)
+		if origin < 0:
+			continue
+		var field := view.path_field(
+			origin,
+			nation_id,
+			false,
+			true,
+			-1,
+			army.max_size
+		)
+		var best_distance := INF
+		for staging_city in staging:
+			best_distance = minf(
+				best_distance,
+				float(field["dist"].get(staging_city, INF))
+			)
+		if best_distance == INF:
+			continue
+		ranked.append({
+			"army": army,
+			"distance": best_distance,
+		})
+	ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var army_a: Army = a["army"]
+		var army_b: Army = b["army"]
+		if state.uses_heightmap and army_a.max_size != army_b.max_size:
+			return army_a.max_size > army_b.max_size
+		if army_a.is_main_battle_role() != army_b.is_main_battle_role():
+			return army_a.is_main_battle_role()
+		var distance_a := float(a["distance"])
+		var distance_b := float(b["distance"])
+		if not is_equal_approx(distance_a, distance_b):
+			return distance_a < distance_b
+		if army_a.size != army_b.size:
+			return army_a.size > army_b.size
+		return EquivariantOrder.army_less(
+			state,
+			nation_id,
+			army_a,
+			army_b,
+			target_city
+		)
+	)
+	return ranked
+
+
 func _campaign_preparation_readiness(
 	nation_id: int,
 	primary_city: int,
