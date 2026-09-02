@@ -12074,20 +12074,10 @@ func _manage_campaign_offensive(
 	var objective: Dictionary = {}
 	var defender_id := -1
 	var owns_diplomatic_objective := false
-	var enemy_ids: Array = (
-		(decision_context["wars"] as Array).duplicate()
-		if decision_context.has("wars")
-		else state.wars_of(nation_id)
+	var enemy_ids: Array = _sorted_campaign_enemy_ids(
+		nation_id, decision_context
 	)
 	var objective_cache := {}
-	enemy_ids.sort_custom(func(a: int, b: int) -> bool:
-		return EquivariantOrder.nation_less(
-			state,
-			nation_id,
-			a,
-			b
-		)
-	)
 	# 君主好战差异已在外交层用连续侵略欲望体现；一旦真的进入战争，任何君主都
 	# 会主动组织攻势去实现其战争目标，不再在执行层区分“能否侵略”。
 	# 仍在修复窗口内的本国法理失地优先于原进攻目标，形成真实反复争夺。
@@ -12456,6 +12446,21 @@ func _manage_campaign_offensive(
 		campaign_profile_started
 	)
 	return changed
+
+
+func _sorted_campaign_enemy_ids(
+	nation_id: int,
+	decision_context: Dictionary
+) -> Array:
+	var enemy_ids: Array = (
+		(decision_context["wars"] as Array).duplicate()
+		if decision_context.has("wars")
+		else state.wars_of(nation_id)
+	)
+	enemy_ids.sort_custom(func(a: int, b: int) -> bool:
+		return EquivariantOrder.nation_less(state, nation_id, a, b)
+	)
+	return enemy_ids
 
 
 func _food_security_report(
