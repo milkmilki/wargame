@@ -7142,65 +7142,71 @@ func _ai_manage_force_structure(
 		and food_recruitment_allowed
 		and gold_growth_allowed
 	):
-		var creation_site := -1
-		var capital_id := nation.capital_city_id
-		if _is_available_recruitment_hub(
+		return _try_create_force_recruitment(
 			view.nation_id,
-			capital_id,
+			nation,
+			recruitment,
+			missing_formation_size,
+			emergency_recruitment,
 			small_nation_survival
-		):
-			creation_site = capital_id
-		else:
-			for warehouse in state.warehouse_cities_of(
-				view.nation_id
-			):
-				if _is_available_recruitment_hub(
-					view.nation_id,
-					warehouse.id,
-					small_nation_survival
-				):
-					creation_site = warehouse.id
-					break
-		if creation_site != -1:
-			var recruitment_reason := str(
-				recruitment.get(
-					"reason",
-					"资源结余扩军"
-				)
-			)
-			if emergency_recruitment:
-				recruitment_reason = (
-					"战争生存动员%d编制"
-					% missing_formation_size
-				)
-			var battle_group_id := int(
-				recruitment.get("group_id", -1)
-			)
-			var created_group: BattleGroup = null
-			if bool(recruitment.get("create_group", false)):
-				created_group = state.create_battle_group(
-					view.nation_id
-				)
-				battle_group_id = created_group.id
-				recruitment_reason = (
-					"战争生存动员%d编制：创建战团%d并补充第一支轻军"
-					% [missing_formation_size, battle_group_id]
-					if emergency_recruitment
-					else "创建战团%d并补充第一支轻军"
-						% battle_group_id
-				)
-			var created_army := _create_army_for_nation(
-				view.nation_id,
-				creation_site,
-				missing_formation_size,
-				recruitment_reason,
-				small_nation_survival,
-				battle_group_id
-			)
-			if created_army == null and created_group != null:
-				nation.battle_groups.erase(created_group)
-			return created_army != null
+		)
 	return false
+
+
+func _try_create_force_recruitment(
+	nation_id: int,
+	nation: Nation,
+	recruitment: Dictionary,
+	formation_size: int,
+	emergency_recruitment: bool,
+	small_nation_survival: bool
+) -> bool:
+	var creation_site := -1
+	var capital_id := nation.capital_city_id
+	if _is_available_recruitment_hub(
+		nation_id,
+		capital_id,
+		small_nation_survival
+	):
+		creation_site = capital_id
+	else:
+		for warehouse in state.warehouse_cities_of(nation_id):
+			if _is_available_recruitment_hub(
+				nation_id,
+				warehouse.id,
+				small_nation_survival
+			):
+				creation_site = warehouse.id
+				break
+	if creation_site == -1:
+		return false
+	var recruitment_reason := str(
+		recruitment.get("reason", "资源结余扩军")
+	)
+	if emergency_recruitment:
+		recruitment_reason = "战争生存动员%d编制" % formation_size
+	var battle_group_id := int(recruitment.get("group_id", -1))
+	var created_group: BattleGroup = null
+	if bool(recruitment.get("create_group", false)):
+		created_group = state.create_battle_group(nation_id)
+		battle_group_id = created_group.id
+		recruitment_reason = (
+			"战争生存动员%d编制：创建战团%d并补充第一支轻军"
+			% [formation_size, battle_group_id]
+			if emergency_recruitment
+			else "创建战团%d并补充第一支轻军" % battle_group_id
+		)
+	var created_army := _create_army_for_nation(
+		nation_id,
+		creation_site,
+		formation_size,
+		recruitment_reason,
+		small_nation_survival,
+		battle_group_id
+	)
+	if created_army == null and created_group != null:
+		nation.battle_groups.erase(created_group)
+	return created_army != null
 
 
 func _small_nation_force_recruitment(
