@@ -2650,10 +2650,7 @@ func _recover_morale() -> void:
 static func morale_recovery_payment_multiplier(
 	payment_ratio: float
 ) -> float:
-	return (
-		0.5
-		+ 0.5 * clampf(payment_ratio, 0.0, 1.0)
-	)
+	return SupplyRules.morale_recovery_payment_multiplier(payment_ratio)
 
 
 static func _ruler_food_consumption_multiplier(
@@ -2776,15 +2773,7 @@ func _recover_garrisoned_army(army: Army) -> void:
 
 
 func _supply_sources_have_food(sources: Array[Dictionary]) -> bool:
-	for source in sources:
-		var city_id := int(source["city_id"])
-		if (
-			city_id >= 0
-			and city_id < state.cities.size()
-			and state.cities[city_id].food_storage > 0
-		):
-			return true
-	return false
+	return SupplyRules.sources_have_food(state, sources)
 
 
 ## 逐国补给网络依赖指纹：捕获 build_supply_network 读取的全部动态量——可达
@@ -2797,48 +2786,15 @@ func _supply_network_fingerprint(
 	enemy_edges: Dictionary,
 	besieged: Dictionary
 ) -> Array[int]:
-	var result: Array[int] = [
-		state.ownership_revision,
-		state.diplomacy_revision,
-	]
-	for owner in state.nations:
-		if not state.has_military_access(nation_id, owner.id):
-			continue
-		result.append(-1)
-		result.append(owner.id)
-		result.append_array(
-			warehouse_state.get(
-				owner.id,
-				[] as Array[int]
-			) as Array[int]
-		)
-		# 共享粮仓中继起点：owner 名下藩王首都（零库存中继）及其被围态。分封/撤藩改 owner-
-		# ship_revision、内战改 diplomacy_revision 已覆盖成员集变化；此处补齐「中继被围」维度。
-		if not owner.warehouse_city_ids.is_empty():
-			result.append(-3)
-			for capital_id in state.food_pool_relay_capitals(owner.id):
-				result.append(capital_id)
-				result.append(1 if besieged.has(capital_id) else 0)
-	result.append(-2)
-	var enemy_keys := enemy_edges.keys()
-	enemy_keys.sort()
-	for edge_key_value in enemy_keys:
-		result.append(int(edge_key_value))
-	return result
+	return SupplyRules.network_fingerprint(
+		state, nation_id, warehouse_state, enemy_edges, besieged
+	)
 
 
 ## 预算各国可用粮仓（存量>0 且未被围）为 owner_id -> Array[city_id]，供逐国
 ## 指纹复用，避免每国重复遍历全部粮仓与逐粮仓 city_under_siege。
 func _supply_warehouse_availability(besieged: Dictionary) -> Dictionary:
-	var result := {}
-	for owner in state.nations:
-		var usable: Array[int] = []
-		for warehouse in state.warehouse_cities_of(owner.id):
-			if warehouse.food_storage > 0 and not besieged.has(warehouse.id):
-				usable.append(warehouse.id)
-		usable.sort()
-		result[owner.id] = usable
-	return result
+	return SupplyRules.warehouse_availability(state, besieged)
 
 
 func _cached_supply_sources(
@@ -2874,35 +2830,11 @@ func _cached_supply_sources(
 
 
 static func _supply_position_key(army: Army) -> String:
-	return (
-		"E:%d:%d:%d"
-		% [
-			army.move_from,
-			army.move_to,
-			int(round(army.move_progress * 10000.0)),
-		]
-		if army.on_edge and army.move_to != -1
-		else "C:%d" % army.location_city
-	)
+	return SupplyRules.position_key(army)
 
 
 func _weighted_supply_loss(sources: Array[Dictionary]) -> float:
-	if sources.is_empty():
-		return INF
-	var total_weight := 0.0
-	var weighted_loss := 0.0
-	for source in sources:
-		var city_id := int(source["city_id"])
-		if city_id < 0 or city_id >= state.cities.size():
-			continue
-		var stock := state.cities[city_id].food_storage
-		if stock <= 0:
-			continue
-		var loss := float(source["loss"])
-		var weight := _supply_source_weight(stock, loss)
-		total_weight += weight
-		weighted_loss += loss * weight
-	return weighted_loss / maxf(total_weight, 0.001)
+	return SupplyRules.weighted_loss(state, sources)
 
 
 func _withdraw_weighted_supply(
@@ -2910,86 +2842,11 @@ func _withdraw_weighted_supply(
 	demand: int,
 	order_nation: int
 ) -> int:
-	var remaining := maxi(demand, 0)
-	var supplied := 0
-	while remaining > 0:
-		var weighted: Array[Dictionary] = []
-		var total_weight := 0.0
-		for source in sources:
-			var city_id := int(source["city_id"])
-			if city_id < 0 or city_id >= state.cities.size():
-				continue
-			var city := state.cities[city_id]
-			if city.food_storage <= 0:
-				continue
-			var weight := _supply_source_weight(
-				city.food_storage, float(source["loss"])
-			)
-			total_weight += weight
-			weighted.append({
-				"city": city,
-				"weight": weight,
-				"city_id": city_id,
-			})
-		if weighted.is_empty() or total_weight <= 0.0:
-			break
-		var distributed := 0
-		var remainders: Array[Dictionary] = []
-		for entry in weighted:
-			var exact := float(remaining) * float(entry["weight"]) / total_weight
-			var share := int(floor(exact))
-			if share > 0:
-				var actual_delta := state.change_city_food_storage(
-					int(entry["city_id"]), -share
-				)
-				var removed := -actual_delta
-				distributed += removed
-			remainders.append({
-				"city": entry["city"],
-				"city_id": entry["city_id"],
-				"fraction": exact - floor(exact),
-			})
-		remaining -= distributed
-		supplied += distributed
-		if remaining <= 0:
-			break
-		remainders.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			if not is_equal_approx(
-				float(a["fraction"]), float(b["fraction"])
-			):
-				return float(a["fraction"]) > float(b["fraction"])
-			return EquivariantOrder.city_id_less(
-				state,
-				order_nation,
-				int(a["city_id"]),
-				int(b["city_id"])
-			)
-		)
-		var residual_distributed := 0
-		for entry in remainders:
-			if remaining <= 0:
-				break
-			var city: City = entry["city"]
-			if city.food_storage <= 0:
-				continue
-			var actual_delta := state.change_city_food_storage(
-				city.id, -1
-			)
-			var removed := -actual_delta
-			if removed > 0:
-				remaining -= removed
-				supplied += removed
-				residual_distributed += removed
-		if distributed == 0 and residual_distributed == 0:
-			break
-	return supplied
+	return SupplyRules.withdraw_weighted(state, sources, demand, order_nation)
 
 
 static func _supply_source_weight(stock: int, route_loss: float) -> float:
-	return (
-		float(maxi(stock, 0))
-		/ sqrt(maxf(1.0 + route_loss, 0.001))
-	)
+	return SupplyRules.source_weight(stock, route_loss)
 
 # ------------------------------------------------------------------ 2c. 被围城粮草时钟（每日）
 
