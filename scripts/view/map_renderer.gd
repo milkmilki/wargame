@@ -22,15 +22,15 @@ const ARMY_ICON_SCALE_MIN: float = 0.10
 const ARMY_ICON_SCALE_MAX: float = 1.80
 const ARMY_ICON_SCALE_STEP: float = 0.10
 const ARMY_ICON_SCALE_DEFAULT: float = 1.00
-const MAP_ZOOM_MIN: float = 1.0
-const MAP_ZOOM_MAX: float = 4.0
-const MAP_ZOOM_WHEEL_FACTOR: float = 1.2
+const MAP_ZOOM_MIN: float = MapViewMath.MAP_ZOOM_MIN
+const MAP_ZOOM_MAX: float = MapViewMath.MAP_ZOOM_MAX
+const MAP_ZOOM_WHEEL_FACTOR: float = MapViewMath.MAP_ZOOM_WHEEL_FACTOR
 const MAP_PAN_GESTURE_SCALE: float = 24.0
 const MAP_PAN_DRAG_THRESHOLD: float = 4.0
-const VISUAL_SCALE_COMPACT: float = 0.80
-const VISUAL_SCALE_STANDARD: float = 1.00
-const VISUAL_SCALE_LARGE: float = 1.25
-const VISUAL_SCALE_XL: float = 1.50
+const VISUAL_SCALE_COMPACT: float = MapViewMath.VISUAL_SCALE_COMPACT
+const VISUAL_SCALE_STANDARD: float = MapViewMath.VISUAL_SCALE_STANDARD
+const VISUAL_SCALE_LARGE: float = MapViewMath.VISUAL_SCALE_LARGE
+const VISUAL_SCALE_XL: float = MapViewMath.VISUAL_SCALE_XL
 const CITY_PICK_RADIUS: float = 14.0
 const EDGE_PICK_TOLERANCE: float = 10.0
 const DETAIL_PANEL_WIDTH: float = 430.0
@@ -967,22 +967,14 @@ func _point_blocked_by_nation_stats(point: Vector2) -> bool:
 
 
 static func magnify_zoom_multiplier(factor: float) -> float:
-	return clampf(factor, 0.5, 2.0)
+	return MapViewMath.magnify_zoom_multiplier(factor)
 
 
 static func wheel_zoom_multiplier(
 	button_index: int,
 	factor: float
 ) -> float:
-	var direction := (
-		1.0
-		if button_index == MOUSE_BUTTON_WHEEL_UP
-		else -1.0
-	)
-	return pow(
-		MAP_ZOOM_WHEEL_FACTOR,
-		direction * maxf(factor, 0.05)
-	)
+	return MapViewMath.wheel_zoom_multiplier(button_index, factor)
 
 
 func _pick_map_feature(point: Vector2) -> void:
@@ -1125,14 +1117,7 @@ static func clamp_map_pan(
 	zoom: float,
 	base_map_size: Vector2
 ) -> Vector2:
-	var clamped_zoom := maxf(zoom, MAP_ZOOM_MIN)
-	var limit := (
-		base_map_size * (clamped_zoom - MAP_ZOOM_MIN) * 0.5
-	)
-	return Vector2(
-		clampf(pan.x, -limit.x, limit.x),
-		clampf(pan.y, -limit.y, limit.y)
-	)
+	return MapViewMath.clamp_map_pan(pan, zoom, base_map_size)
 
 
 static func map_view_origin(
@@ -1141,11 +1126,11 @@ static func map_view_origin(
 	zoom: float,
 	pan: Vector2
 ) -> Vector2:
-	var zoomed_size := base_map_size * zoom
-	return (
-		base_origin
-		+ (base_map_size - zoomed_size) * 0.5
-		+ clamp_map_pan(pan, zoom, base_map_size)
+	return MapViewMath.map_view_origin(
+		base_origin,
+		base_map_size,
+		zoom,
+		pan
 	)
 
 
@@ -1157,30 +1142,13 @@ static func map_pan_for_zoom_anchor(
 	new_zoom: float,
 	anchor: Vector2
 ) -> Vector2:
-	var old_size := base_map_size * old_zoom
-	var old_origin := map_view_origin(
+	return MapViewMath.map_pan_for_zoom_anchor(
 		base_origin,
 		base_map_size,
 		old_zoom,
-		old_pan
-	)
-	var normalized_anchor := Vector2(
-		(anchor.x - old_origin.x) / maxf(old_size.x, 0.0001),
-		(anchor.y - old_origin.y) / maxf(old_size.y, 0.0001)
-	)
-	var new_size := base_map_size * new_zoom
-	var centered_origin := (
-		base_origin + (base_map_size - new_size) * 0.5
-	)
-	var desired_pan := (
-		anchor
-		- centered_origin
-		- normalized_anchor * new_size
-	)
-	return clamp_map_pan(
-		desired_pan,
+		old_pan,
 		new_zoom,
-		base_map_size
+		anchor
 	)
 
 
@@ -1583,14 +1551,7 @@ func _layout_army_icon_scale_control() -> void:
 
 
 static func visual_scale_for_viewport(viewport_size: Vector2) -> float:
-	var short_side := minf(viewport_size.x, viewport_size.y)
-	if short_side < 600.0:
-		return VISUAL_SCALE_COMPACT
-	if short_side < 900.0:
-		return VISUAL_SCALE_STANDARD
-	if short_side < 1400.0:
-		return VISUAL_SCALE_LARGE
-	return VISUAL_SCALE_XL
+	return MapViewMath.visual_scale_for_viewport(viewport_size)
 
 
 func _font_size(base_size: float) -> int:
