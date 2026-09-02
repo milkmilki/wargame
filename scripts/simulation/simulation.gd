@@ -5618,6 +5618,31 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	_set_runtime_profile_stage(&"ai_army_decisions")
+	runtime_slice_started = await _run_ai_army_decision_phase(
+		managed_nations,
+		military_contexts,
+		coordinators,
+		defense_plans,
+		spread_runtime_work,
+		runtime_slice_started
+	)
+	_record_tick_profile_stage("ai_army_decisions", ai_profile_stage_started)
+	ai_profile_stage_started = (
+		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	)
+	_set_runtime_profile_stage(&"ai_commit")
+	_commit_ai_command_collection(nation_order)
+	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
+
+
+func _run_ai_army_decision_phase(
+	managed_nations: Array[int],
+	military_contexts: Dictionary,
+	coordinators: Dictionary,
+	defense_plans: Dictionary,
+	spread_runtime_work: bool,
+	runtime_slice_started: int
+) -> int:
 	for nation_id in managed_nations:
 		var context: Dictionary = military_contexts[nation_id]
 		var nation := state.nations[nation_id]
@@ -5806,13 +5831,7 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		):
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
-	_record_tick_profile_stage("ai_army_decisions", ai_profile_stage_started)
-	ai_profile_stage_started = (
-		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-	)
-	_set_runtime_profile_stage(&"ai_commit")
-	_commit_ai_command_collection(nation_order)
-	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
+	return runtime_slice_started
 
 
 func _launch_pending_declaration_offensives(
