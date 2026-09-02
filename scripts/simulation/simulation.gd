@@ -8483,8 +8483,6 @@ func _ensure_campaign_preparation_plan(
 			defense_plan,
 			coordinator
 		)
-		var selected: Array[Army] = []
-		var selected_troops := 0
 		var future_target_slots := mini(
 			mini(
 				target_candidates.size(),
@@ -8507,117 +8505,17 @@ func _ensure_campaign_preparation_plan(
 				available
 			)
 			continue
-		var ranked_heavy: Array[Dictionary] = []
-		var ranked_light: Array[Dictionary] = []
-		for entry in ranked:
-			var ranked_army: Army = entry["army"]
-			if (
-				ranked_army.max_size
-					== GameState.INITIAL_HEAVY_ARMY_SIZE
-			):
-				ranked_heavy.append(entry)
-			elif (
-				ranked_army.max_size
-					== GameState.INITIAL_LIGHT_ARMY_SIZE
-			):
-				ranked_light.append(entry)
-		var rank_equivalent := func(
-			a: Dictionary,
-			b: Dictionary
-		) -> bool:
-			var army_a: Army = a["army"]
-			var army_b: Army = b["army"]
-			return (
-				is_equal_approx(
-					float(a["distance"]),
-					float(b["distance"])
-				)
-				and army_a.size == army_b.size
-				and not EquivariantOrder.army_less(
-					state,
-					nation_id,
-					army_a,
-					army_b,
-					target_city
-				)
-				and not EquivariantOrder.army_less(
-					state,
-					nation_id,
-					army_b,
-					army_a,
-					target_city
-				)
-			)
-		if ranked_heavy.is_empty():
-			var fallback_limit := mini(
-				LIGHT_ONLY_OFFENSIVE_MAX_ARMIES,
-				mini(ranked_light.size(), selection_limit)
-			)
-			for fallback_entry in ranked_light:
-				if selected.size() >= fallback_limit:
-					break
-				var fallback_army: Army = fallback_entry["army"]
-				var has_defense_assignment := (
-					defense_plan != null
-					and defense_plan.assigned_city_for(
-						fallback_army
-					) >= 0
-				)
-				if (
-					has_defense_assignment
-					and defense_assigned_armies
-						>= CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES
-				):
-					continue
-				selected.append(fallback_army)
-				selected_troops += fallback_army.size
-				if has_defense_assignment:
-					defense_assigned_armies += 1
-		else:
-			for heavy_entry in ranked_heavy:
-				var spearhead: Army = heavy_entry["army"]
-				selected.append(spearhead)
-				selected_troops += spearhead.size
-		if (
-			not ranked_heavy.is_empty()
-			and not ranked_light.is_empty()
-		):
-			var support_candidates: Array[Dictionary] = []
-			for light_entry in ranked_light:
-				var light_army: Army = light_entry["army"]
-				var has_defense_assignment := (
-					defense_plan != null
-					and defense_plan.assigned_city_for(
-						light_army
-					) >= 0
-				)
-				if (
-					has_defense_assignment
-					and defense_assigned_armies
-						>= CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES
-				):
-					continue
-				support_candidates.append(light_entry)
-			var support_is_unique: bool = (
-				support_candidates.size() == 1
-				or not rank_equivalent.call(
-					support_candidates[0],
-					support_candidates[1]
-				)
-			) if not support_candidates.is_empty() else false
-			if support_is_unique and not support_candidates.is_empty():
-				var support: Army = (
-					support_candidates[0]["army"]
-				)
-				selected.append(support)
-				selected_troops += support.size
-				if (
-					defense_plan != null
-					and defense_plan.assigned_city_for(
-						support
-					) >= 0
-				):
-					defense_assigned_armies += 1
+		var selection := _select_campaign_preparation_armies(
+			nation_id,
+			target_city,
+			ranked,
+			selection_limit,
+			defense_plan,
+			defense_assigned_armies
+		)
+		var selected: Array[Army] = selection["armies"]
+		var selected_troops := int(selection["troops"])
+		defense_assigned_armies = int(selection["defense_assigned"])
 		if (
 			selected_troops <= 0
 			or (
@@ -8644,6 +8542,100 @@ func _ensure_campaign_preparation_plan(
 		else state.day
 	)
 	return true
+
+
+func _select_campaign_preparation_armies(
+	nation_id: int,
+	target_city: int,
+	ranked: Array[Dictionary],
+	selection_limit: int,
+	defense_plan: CityDefensePlan,
+	defense_assigned_armies: int
+) -> Dictionary:
+	var ranked_heavy: Array[Dictionary] = []
+	var ranked_light: Array[Dictionary] = []
+	for entry in ranked:
+		var ranked_army: Army = entry["army"]
+		if ranked_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+			ranked_heavy.append(entry)
+		elif ranked_army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
+			ranked_light.append(entry)
+	var selected: Array[Army] = []
+	var selected_troops := 0
+	var rank_equivalent := func(a: Dictionary, b: Dictionary) -> bool:
+		var army_a: Army = a["army"]
+		var army_b: Army = b["army"]
+		return (
+			is_equal_approx(float(a["distance"]), float(b["distance"]))
+			and army_a.size == army_b.size
+			and not EquivariantOrder.army_less(
+				state, nation_id, army_a, army_b, target_city
+			)
+			and not EquivariantOrder.army_less(
+				state, nation_id, army_b, army_a, target_city
+			)
+		)
+	if ranked_heavy.is_empty():
+		var fallback_limit := mini(
+			LIGHT_ONLY_OFFENSIVE_MAX_ARMIES,
+			mini(ranked_light.size(), selection_limit)
+		)
+		for fallback_entry in ranked_light:
+			if selected.size() >= fallback_limit:
+				break
+			var fallback_army: Army = fallback_entry["army"]
+			var has_defense_assignment := (
+				defense_plan != null
+				and defense_plan.assigned_city_for(fallback_army) >= 0
+			)
+			if (
+				has_defense_assignment
+				and defense_assigned_armies >= CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES
+			):
+				continue
+			selected.append(fallback_army)
+			selected_troops += fallback_army.size
+			if has_defense_assignment:
+				defense_assigned_armies += 1
+	else:
+		for heavy_entry in ranked_heavy:
+			var spearhead: Army = heavy_entry["army"]
+			selected.append(spearhead)
+			selected_troops += spearhead.size
+	if not ranked_heavy.is_empty() and not ranked_light.is_empty():
+		var support_candidates: Array[Dictionary] = []
+		for light_entry in ranked_light:
+			var light_army: Army = light_entry["army"]
+			var has_defense_assignment := (
+				defense_plan != null
+				and defense_plan.assigned_city_for(light_army) >= 0
+			)
+			if (
+				has_defense_assignment
+				and defense_assigned_armies >= CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES
+			):
+				continue
+			support_candidates.append(light_entry)
+		var support_is_unique: bool = (
+			support_candidates.size() == 1
+			or not rank_equivalent.call(
+				support_candidates[0], support_candidates[1]
+			)
+		) if not support_candidates.is_empty() else false
+		if support_is_unique and not support_candidates.is_empty():
+			var support: Army = support_candidates[0]["army"]
+			selected.append(support)
+			selected_troops += support.size
+			if (
+				defense_plan != null
+				and defense_plan.assigned_city_for(support) >= 0
+			):
+				defense_assigned_armies += 1
+	return {
+		"armies": selected,
+		"troops": selected_troops,
+		"defense_assigned": defense_assigned_armies,
+	}
 
 
 ## 正式地图的攻势只有这一条规划入口：纯规划器一次决定目标预算和战团归属，
