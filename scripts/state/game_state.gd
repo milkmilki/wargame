@@ -3,6 +3,8 @@ extends RefCounted
 ## 单一数据源（SSoT）：持有全部 cities / edges / nations / armies，
 ## 并负责确定性世界生成。所有可变游戏状态都归此对象所有。
 
+const TerritoryTransaction = preload("res://scripts/state/territory_transaction.gd")
+
 const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64 城兼容网格夹具
 const TERRAIN_CITY_COUNT: int = 160         ## 正式高度图基础陆城；动态码头另计
@@ -5156,185 +5158,30 @@ func apply_territory_transaction(
 		}
 
 	# ------------------------------ phase 1a: 规范化并校验 operation。
-	var planned_owners: Array[int] = []
-	var planned_legal_owners: Array[int] = []
-	var planned_sponsors: Array[int] = []
-	planned_owners.resize(cities.size())
-	planned_legal_owners.resize(cities.size())
-	planned_sponsors.resize(cities.size())
-	for city in cities:
-		if (
-			city.id < 0
-			or city.id >= cities.size()
-			or city.owner_nation < 0
-			or city.owner_nation >= nations.size()
-			or recognized_owner_of(city.id) < 0
-			or recognized_owner_of(city.id) >= nations.size()
-			or city.occupation_sponsor_nation < -1
-			or city.occupation_sponsor_nation >= nations.size()
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "现有领土三元组包含无效国家。",
-				"changed_city_ids": [] as Array[int],
-			}
-		planned_owners[city.id] = city.owner_nation
-		planned_legal_owners[city.id] = recognized_owner_of(city.id)
-		planned_sponsors[city.id] = city.occupation_sponsor_nation
-	var normalized_operations: Array[Dictionary] = []
-	var operation_by_city := {}
-	var changed_city_ids: Array[int] = []
-	for operation in operations:
-		if not operation.has("city_id"):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "领土操作缺少 city_id。",
-				"changed_city_ids": [] as Array[int],
-			}
-		var city_id := int(operation["city_id"])
-		if (
-			city_id < 0
-			or city_id >= cities.size()
-			or operation_by_city.has(city_id)
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "领土操作包含无效或重复城市。",
-				"changed_city_ids": [] as Array[int],
-			}
-		var city := cities[city_id]
-		var controller_id := city.owner_nation
-		if operation.has("controller_id"):
-			controller_id = int(operation["controller_id"])
-		elif operation.has("owner_nation"):
-			controller_id = int(operation["owner_nation"])
-		var legal_owner_id := recognized_owner_of(city_id)
-		if operation.has("legal_owner_id"):
-			legal_owner_id = int(operation["legal_owner_id"])
-		elif operation.has("legal_owner_nation"):
-			legal_owner_id = int(operation["legal_owner_nation"])
-		var sponsor_id := city.occupation_sponsor_nation
-		if operation.has("sponsor_id"):
-			sponsor_id = int(operation["sponsor_id"])
-		elif operation.has("occupation_sponsor_nation"):
-			sponsor_id = int(operation["occupation_sponsor_nation"])
-		if (
-			controller_id < 0
-			or controller_id >= nations.size()
-			or legal_owner_id < 0
-			or legal_owner_id >= nations.size()
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "领土操作包含无效国家。",
-				"changed_city_ids": [] as Array[int],
-			}
-		if controller_id == legal_owner_id:
-			sponsor_id = -1
-		elif sponsor_id < 0 or sponsor_id >= nations.size():
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "临时占领必须指定有效的战争结算责任方。",
-				"changed_city_ids": [] as Array[int],
-			}
-		var stock_policy := int(operation.get(
-			"stock_policy", TerritoryStockDisposition.RETURN_TO_OLD_POOL
-		))
-		if stock_policy not in [
+	var operation_plan := TerritoryTransaction.plan_operations(
+		cities,
+		recognized_city_owners,
+		nations.size(),
+		operations,
+		day,
+		RebellionSystem.REBELLION_COOLDOWN_DAYS,
+		TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+		[
 			TerritoryStockDisposition.RETURN_TO_OLD_POOL,
 			TerritoryStockDisposition.MOVE_TO_NEW_POOL,
 			TerritoryStockDisposition.CAPTURE_SPOILS,
 			TerritoryStockDisposition.DESTROY,
-		]:
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "未知的领土库存结算策略。",
-				"changed_city_ids": [] as Array[int],
-			}
-		var reset_target := bool(operation.get(
-			"reset_political_target", false
-		))
-		var reason := str(operation.get("reason", "territory_transfer"))
-		var cooldown_until := city.rebellion_cooldown_until_day
-		if reset_target:
-			cooldown_until = maxi(
-				cooldown_until,
-				day + RebellionSystem.REBELLION_COOLDOWN_DAYS
-			)
-		var operation_changed := (
-			city.owner_nation != controller_id
-			or recognized_owner_of(city_id) != legal_owner_id
-			or city.occupation_sponsor_nation != sponsor_id
-			or (
-				reset_target
-				and (
-					city.loyalty_target_nation != legal_owner_id
-					or not is_zero_approx(city.loyalty_trend)
-					or city.unrest != 100.0 - city.loyalty
-					or city.rebellion_progress != 0
-					or city.rebellion_cooldown_until_day != cooldown_until
-					or city.last_loyalty_reason != reason
-				)
-			)
-		)
-		var normalized := {
-			"city_id": city_id,
-			"controller_id": controller_id,
-			"legal_owner_id": legal_owner_id,
-			"sponsor_id": sponsor_id,
-			"reset_political_target": reset_target,
-			"cooldown_until": cooldown_until,
-			"reason": reason,
-			"stock_policy": stock_policy,
-		}
-		normalized_operations.append(normalized)
-		operation_by_city[city_id] = normalized
-		planned_owners[city_id] = controller_id
-		planned_legal_owners[city_id] = legal_owner_id
-		planned_sponsors[city_id] = sponsor_id
-		if operation_changed:
-			changed_city_ids.append(city_id)
-	# operation 合成完后全量校验最终三元组；未触及城市也不得把历史脏值
-	# 带进 phase 2，尤其不能在 refresh_derived 时才因非法 owner 崩溃。
-	for city_id in range(cities.size()):
-		var owner_id := planned_owners[city_id]
-		var legal_id := planned_legal_owners[city_id]
-		var sponsor_id := planned_sponsors[city_id]
-		if (
-			owner_id < 0 or owner_id >= nations.size()
-			or legal_id < 0 or legal_id >= nations.size()
-			or (owner_id == legal_id and sponsor_id != -1)
-			or (
-				owner_id != legal_id
-				and (sponsor_id < 0 or sponsor_id >= nations.size())
-			)
-		):
-			return {
-				"ok": false, "changed": false,
-				"territory_changed": false,
-				"political_changed": false,
-				"diplomacy_changed": false,
-				"error": "最终领土三元组无效。",
-				"changed_city_ids": [] as Array[int],
-			}
+		] as Array[int]
+	)
+	if not bool(operation_plan.get("ok", false)):
+		return operation_plan
+	var planned_owners: Array[int] = operation_plan["planned_owners"]
+	var planned_legal_owners: Array[int] = operation_plan["planned_legal_owners"]
+	var planned_sponsors: Array[int] = operation_plan["planned_sponsors"]
+	var normalized_operations: Array[Dictionary] = (
+		operation_plan["normalized_operations"]
+	)
+	var changed_city_ids: Array[int] = operation_plan["changed_city_ids"]
 	# ------------------------------ phase 1b: 最终三元组、首都、粮池。
 	var final_city_counts: Array[int] = []
 	final_city_counts.resize(nations.size())
