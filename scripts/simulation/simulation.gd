@@ -5565,53 +5565,18 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	# 宣战提交只落盘外交状态；同日 AI 上下文完成后复用其 ThreatField
 	# 发动已准备攻势，避免在外交阶段重复构建整张威胁场。
 	_set_runtime_profile_stage(&"ai_declaration_launches")
-	var declaration_launched_nations := {}
-	for nation_id in managed_nations:
-		if not _pending_declaration_launches.has(nation_id):
-			continue
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_RUNTIME_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
-		var pending_launch: Dictionary = (
-			_pending_declaration_launches[nation_id]
+	var declaration_phase: Dictionary = await (
+		_launch_pending_declaration_offensives(
+			managed_nations,
+			force_contexts,
+			spread_runtime_work,
+			runtime_slice_started
 		)
-		_pending_declaration_launches.erase(nation_id)
-		var pending_objective := int(
-			pending_launch.get("objective_city", -1)
-		)
-		if (
-			pending_objective >= 0
-			and pending_objective < state.cities.size()
-			and state.is_enemy(
-				nation_id,
-				state.cities[pending_objective].owner_nation
-			)
-		):
-			var pending_context: Dictionary = (
-				force_contexts[nation_id]
-			)
-			if _launch_campaign_offensive(
-				nation_id,
-				pending_objective,
-				int(pending_launch.get(
-					"preparation_days",
-					0
-				)),
-				[],
-				pending_context["threat"]
-			):
-				declaration_launched_nations[nation_id] = true
-		if (
-			spread_runtime_work
-			and Time.get_ticks_usec() - runtime_slice_started
-				>= AI_RUNTIME_SLICE_BUDGET_USEC
-		):
-			await get_tree().process_frame
-			runtime_slice_started = Time.get_ticks_usec()
+	)
+	var declaration_launched_nations: Dictionary = (
+		declaration_phase["launched_nations"]
+	)
+	runtime_slice_started = int(declaration_phase["slice_started"])
 	_record_tick_profile_stage(
 		"ai_declaration_launches",
 		ai_profile_stage_started
@@ -5961,6 +5926,55 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"ai_commit")
 	_commit_ai_command_collection(nation_order)
 	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
+
+
+func _launch_pending_declaration_offensives(
+	managed_nations: Array[int],
+	force_contexts: Dictionary,
+	spread_runtime_work: bool,
+	runtime_slice_started: int
+) -> Dictionary:
+	var launched_nations := {}
+	for nation_id in managed_nations:
+		if not _pending_declaration_launches.has(nation_id):
+			continue
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+		var pending_launch: Dictionary = _pending_declaration_launches[nation_id]
+		_pending_declaration_launches.erase(nation_id)
+		var objective := int(pending_launch.get("objective_city", -1))
+		if (
+			objective >= 0
+			and objective < state.cities.size()
+			and state.is_enemy(
+				nation_id, state.cities[objective].owner_nation
+			)
+		):
+			var context: Dictionary = force_contexts[nation_id]
+			if _launch_campaign_offensive(
+				nation_id,
+				objective,
+				int(pending_launch.get("preparation_days", 0)),
+				[],
+				context["threat"]
+			):
+				launched_nations[nation_id] = true
+		if (
+			spread_runtime_work
+			and Time.get_ticks_usec() - runtime_slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+	return {
+		"launched_nations": launched_nations,
+		"slice_started": runtime_slice_started,
+	}
 
 
 func _stable_force_resource_cache_from_snapshot(
