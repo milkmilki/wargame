@@ -5284,123 +5284,15 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		"ai_snapshot_cache_seed",
 		snapshot_cache_seed_started
 	)
-	_parallel_ai_context_jobs = context_jobs
-	# 只读上下文（snapshot+threat）是卡顿主因。snapshot 先在一个后台任务中
-	# 按固定国家顺序构建；随后 ThreatField 按国家分片到最多4个worker。
-	# 主线程在两段等待期间持续渲染插值；
-	# 测试/快进等同步路径仍在主线程内串行执行以保持单帧确定性语义。
-	if spread_runtime_work and not context_jobs.is_empty():
-		var snapshot_payload := {
-			"jobs": context_jobs,
-			"diplomacy_cache": snapshot_diplomacy_cache,
-			"substage_profile_enabled":
-				ai_snapshot_substage_profiling_enabled,
-		}
-		var snapshot_task_id := WorkerThreadPool.add_task(
-			_build_ai_snapshots_serial.bind(snapshot_payload),
-			true, "WorldWar AI snapshots"
-		)
-		_set_runtime_profile_stage(&"ai_snapshot_worker")
-		while not WorkerThreadPool.is_task_completed(snapshot_task_id):
-			await get_tree().process_frame
-		WorkerThreadPool.wait_for_task_completion(snapshot_task_id)
-		if ai_snapshot_substage_profiling_enabled:
-			for job in context_jobs:
-				_merge_tick_profile_stage_values(
-					job.get("snapshot_profile", {})
-				)
-		var worker_count := (
-			1
-			if ai_parallel_threat_disabled
-			else mini(
-				context_jobs.size(),
-				mini(maxi(OS.get_processor_count() - 1, 1), AI_THREAT_MAX_WORKERS)
-			)
-		)
-		var travel_requests := _ai_threat_travel_requests().filter(
-			func(request: Vector2i) -> bool:
-				return not _threat_travel_cache.has(
-					"I:%d:%d" % [request.x, request.y]
-				)
-		)
-		if not travel_requests.is_empty():
-			var travel_worker_count := mini(
-				worker_count, travel_requests.size()
-			)
-			var travel_worker_deltas: Array = []
-			for _worker_index in range(travel_worker_count):
-				travel_worker_deltas.append({})
-			var travel_payload := {
-				"requests": travel_requests,
-				"worker_deltas": travel_worker_deltas,
-			}
-			var travel_task_ids: Array[int] = []
-			for worker_index in range(travel_worker_count):
-				travel_task_ids.append(WorkerThreadPool.add_task(
-					_build_ai_travel_partition.bind(
-						worker_index, travel_worker_count, travel_payload
-					),
-					true,
-					"WorldWar AI travel fields"
-				))
-			_set_runtime_profile_stage(&"ai_travel_workers")
-			await _run_worker_tasks_over_frames(travel_task_ids)
-			_merge_parallel_threat_cache_deltas(travel_worker_deltas)
-		var threat_payload := {
-			"jobs": context_jobs,
-			"threat_base_cache": _threat_travel_cache,
-			"worker_cache_deltas": [],
-		}
-		var worker_cache_deltas: Array = threat_payload["worker_cache_deltas"]
-		for _worker_index in range(worker_count):
-			worker_cache_deltas.append({})
-		var threat_task_ids: Array[int] = []
-		var threat_started_usec := Time.get_ticks_usec()
-		ai_threat_worker_count_last = worker_count
-		for worker_index in range(worker_count):
-			threat_task_ids.append(WorkerThreadPool.add_task(
-				_build_ai_threat_partition.bind(
-					worker_index, worker_count, threat_payload
-				),
-				true,
-				"WorldWar AI threats"
-			))
-		_set_runtime_profile_stage(&"ai_threat_workers")
-		await _run_worker_tasks_over_frames(threat_task_ids)
-		ai_threat_worker_last_usec = (
-			Time.get_ticks_usec() - threat_started_usec
-		)
-		ai_threat_worker_total_usec += ai_threat_worker_last_usec
-		ai_threat_worker_runs += 1
-		_merge_parallel_threat_cache_deltas(worker_cache_deltas)
-		runtime_slice_started = Time.get_ticks_usec()
-		_record_tick_profile_stage(
-			"ai_snapshot_threat",
-			ai_profile_stage_started
-		)
-		ai_profile_stage_started = (
-			Time.get_ticks_usec()
-			if tick_phase_profiling_enabled else 0
-		)
-	else:
-		for job in context_jobs:
-			_build_ai_snapshot_context(job, snapshot_diplomacy_cache)
-			if ai_snapshot_substage_profiling_enabled:
-				_merge_tick_profile_stage_values(
-					job.get("snapshot_profile", {})
-				)
-		_record_tick_profile_stage("ai_snapshot", ai_profile_stage_started)
-		ai_profile_stage_started = (
-			Time.get_ticks_usec()
-			if tick_phase_profiling_enabled else 0
-		)
-		for job_index in range(context_jobs.size()):
-			_build_parallel_ai_threat(job_index)
-		_record_tick_profile_stage("ai_threat", ai_profile_stage_started)
-		ai_profile_stage_started = (
-			Time.get_ticks_usec()
-			if tick_phase_profiling_enabled else 0
-		)
+	var snapshot_phase: Dictionary = await _build_ai_snapshot_threat_phase(
+		context_jobs,
+		snapshot_diplomacy_cache,
+		spread_runtime_work,
+		runtime_slice_started,
+		ai_profile_stage_started
+	)
+	runtime_slice_started = int(snapshot_phase["slice_started"])
+	ai_profile_stage_started = int(snapshot_phase["profile_stage_started"])
 	_set_runtime_profile_stage(&"ai_defense")
 	if spread_runtime_work and not context_jobs.is_empty():
 		for job in context_jobs:
@@ -5652,6 +5544,134 @@ func _prepare_ai_view_phase(
 		"managed_nations": managed_nations,
 		"context_jobs": context_jobs,
 		"slice_started": runtime_slice_started,
+	}
+
+
+func _build_ai_snapshot_threat_phase(
+	context_jobs: Array[Dictionary],
+	snapshot_diplomacy_cache: Dictionary,
+	spread_runtime_work: bool,
+	runtime_slice_started: int,
+	ai_profile_stage_started: int
+) -> Dictionary:
+	_parallel_ai_context_jobs = context_jobs
+	# Read-only snapshot and threat construction dominates the decision cost.
+	# Runtime mode keeps rendering while deterministic worker batches complete.
+	if spread_runtime_work and not context_jobs.is_empty():
+		var snapshot_payload := {
+			"jobs": context_jobs,
+			"diplomacy_cache": snapshot_diplomacy_cache,
+			"substage_profile_enabled":
+				ai_snapshot_substage_profiling_enabled,
+		}
+		var snapshot_task_id := WorkerThreadPool.add_task(
+			_build_ai_snapshots_serial.bind(snapshot_payload),
+			true, "WorldWar AI snapshots"
+		)
+		_set_runtime_profile_stage(&"ai_snapshot_worker")
+		while not WorkerThreadPool.is_task_completed(snapshot_task_id):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(snapshot_task_id)
+		if ai_snapshot_substage_profiling_enabled:
+			for job in context_jobs:
+				_merge_tick_profile_stage_values(
+					job.get("snapshot_profile", {})
+				)
+		var worker_count := (
+			1
+			if ai_parallel_threat_disabled
+			else mini(
+				context_jobs.size(),
+				mini(maxi(OS.get_processor_count() - 1, 1), AI_THREAT_MAX_WORKERS)
+			)
+		)
+		var travel_requests := _ai_threat_travel_requests().filter(
+			func(request: Vector2i) -> bool:
+				return not _threat_travel_cache.has(
+					"I:%d:%d" % [request.x, request.y]
+				)
+		)
+		if not travel_requests.is_empty():
+			var travel_worker_count := mini(
+				worker_count, travel_requests.size()
+			)
+			var travel_worker_deltas: Array = []
+			for _worker_index in range(travel_worker_count):
+				travel_worker_deltas.append({})
+			var travel_payload := {
+				"requests": travel_requests,
+				"worker_deltas": travel_worker_deltas,
+			}
+			var travel_task_ids: Array[int] = []
+			for worker_index in range(travel_worker_count):
+				travel_task_ids.append(WorkerThreadPool.add_task(
+					_build_ai_travel_partition.bind(
+						worker_index, travel_worker_count, travel_payload
+					),
+					true,
+					"WorldWar AI travel fields"
+				))
+			_set_runtime_profile_stage(&"ai_travel_workers")
+			await _run_worker_tasks_over_frames(travel_task_ids)
+			_merge_parallel_threat_cache_deltas(travel_worker_deltas)
+		var threat_payload := {
+			"jobs": context_jobs,
+			"threat_base_cache": _threat_travel_cache,
+			"worker_cache_deltas": [],
+		}
+		var worker_cache_deltas: Array = threat_payload["worker_cache_deltas"]
+		for _worker_index in range(worker_count):
+			worker_cache_deltas.append({})
+		var threat_task_ids: Array[int] = []
+		var threat_started_usec := Time.get_ticks_usec()
+		ai_threat_worker_count_last = worker_count
+		for worker_index in range(worker_count):
+			threat_task_ids.append(WorkerThreadPool.add_task(
+				_build_ai_threat_partition.bind(
+					worker_index, worker_count, threat_payload
+				),
+				true,
+				"WorldWar AI threats"
+			))
+		_set_runtime_profile_stage(&"ai_threat_workers")
+		await _run_worker_tasks_over_frames(threat_task_ids)
+		ai_threat_worker_last_usec = (
+			Time.get_ticks_usec() - threat_started_usec
+		)
+		ai_threat_worker_total_usec += ai_threat_worker_last_usec
+		ai_threat_worker_runs += 1
+		_merge_parallel_threat_cache_deltas(worker_cache_deltas)
+		runtime_slice_started = Time.get_ticks_usec()
+		_record_tick_profile_stage(
+			"ai_snapshot_threat",
+			ai_profile_stage_started
+		)
+		ai_profile_stage_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
+	else:
+		for job in context_jobs:
+			_build_ai_snapshot_context(job, snapshot_diplomacy_cache)
+			if ai_snapshot_substage_profiling_enabled:
+				_merge_tick_profile_stage_values(
+					job.get("snapshot_profile", {})
+				)
+		_record_tick_profile_stage("ai_snapshot", ai_profile_stage_started)
+		ai_profile_stage_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
+		for job_index in range(context_jobs.size()):
+			_build_parallel_ai_threat(job_index)
+		_record_tick_profile_stage("ai_threat", ai_profile_stage_started)
+		ai_profile_stage_started = (
+			Time.get_ticks_usec()
+			if tick_phase_profiling_enabled else 0
+		)
+	return {
+		"slice_started": runtime_slice_started,
+		"profile_stage_started": ai_profile_stage_started,
 	}
 
 
