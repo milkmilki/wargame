@@ -10781,38 +10781,21 @@ func _launch_group_campaign_offensive(
 			_ai_command_buffer.resize(transaction_buffer_start)
 			_rebuild_ai_command_reservations()
 		return false
-	var payload := {
-		"created_day": state.day,
-		"nation_id": nation_id,
-		"expected_offensive_count": nation.campaign_offensive_count,
-		"expected_plan": plan.duplicate_plan(),
-		"expected_preparation_targets": (
-			nation.campaign_preparation_targets.duplicate()
-		),
-		"expected_preparation_assignments": (
-			nation.campaign_preparation_assignments.duplicate(true)
-		),
-		"expected_preparation_group_assignments": (
-			nation.campaign_preparation_group_assignments.duplicate(true)
-		),
-		"expected_full_preparation_targets": (
-			nation.campaign_full_preparation_targets.duplicate()
-		),
-		"expected_preparation_started_day": (
-			nation.campaign_preparation_started_day
-		),
-		"expected_intent_count": initial_army_ids.size(),
-		"objective_city": objective_city,
-		"wave_assignments": wave_assignments.duplicate(true),
-		"wave_echelons": wave_echelons.duplicate(true),
-		"wave_targets": wave_targets.duplicate(),
-		"initial_army_ids": initial_army_ids.duplicate(true),
-		"launched_origins": launched_origins.duplicate(true),
-		"route_plans": route_plans.duplicate(true),
-		"organization_cost": organization_cost,
-		"multiplier": multiplier,
-		"bonus_days": bonus_days,
-	}
+	var payload: Dictionary = _build_campaign_launch_payload(
+		nation,
+		nation_id,
+		plan,
+		initial_army_ids,
+		objective_city,
+		wave_assignments,
+		wave_echelons,
+		wave_targets,
+		launched_origins,
+		route_plans,
+		organization_cost,
+		multiplier,
+		bonus_days
+	)
 	var participant_fingerprints: Dictionary = (
 		_build_campaign_participant_fingerprints(wave_assignments, army_by_id)
 	)
@@ -10830,6 +10813,45 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _build_campaign_launch_payload(
+	nation: Nation,
+	nation_id: int,
+	plan: CampaignAllocationPlan,
+	initial_army_ids: Dictionary,
+	objective_city: int,
+	wave_assignments: Dictionary,
+	wave_echelons: Dictionary,
+	wave_targets: Array[int],
+	launched_origins: Dictionary,
+	route_plans: Dictionary,
+	organization_cost: int,
+	multiplier: float,
+	bonus_days: int
+) -> Dictionary:
+	return {
+		"created_day": state.day,
+		"nation_id": nation_id,
+		"expected_offensive_count": nation.campaign_offensive_count,
+		"expected_plan": plan.duplicate_plan(),
+		"expected_preparation_targets": nation.campaign_preparation_targets.duplicate(),
+		"expected_preparation_assignments": nation.campaign_preparation_assignments.duplicate(true),
+		"expected_preparation_group_assignments": nation.campaign_preparation_group_assignments.duplicate(true),
+		"expected_full_preparation_targets": nation.campaign_full_preparation_targets.duplicate(),
+		"expected_preparation_started_day": nation.campaign_preparation_started_day,
+		"expected_intent_count": initial_army_ids.size(),
+		"objective_city": objective_city,
+		"wave_assignments": wave_assignments.duplicate(true),
+		"wave_echelons": wave_echelons.duplicate(true),
+		"wave_targets": wave_targets.duplicate(),
+		"initial_army_ids": initial_army_ids.duplicate(true),
+		"launched_origins": launched_origins.duplicate(true),
+		"route_plans": route_plans.duplicate(true),
+		"organization_cost": organization_cost,
+		"multiplier": multiplier,
+		"bonus_days": bonus_days,
+	}
 
 
 func _build_campaign_participant_fingerprints(
