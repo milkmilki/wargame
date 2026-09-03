@@ -10674,44 +10674,14 @@ func _launch_group_campaign_offensive(
 		var planned_group_ids: Array[int] = target_groups["planned_ids"]
 		if members_by_group.is_empty():
 			continue
-		# 梯队以战团为原子。先按“团内至少一员已到集结线”稳定分区，
-		# 再保持 planner 的团序；同团成员绝不拆到不同 echelon。
-		var ordered_groups: Array[int] = []
-		for ready_pass in [true, false]:
-			for group_id in planned_group_ids:
-				if not members_by_group.has(group_id):
-					continue
-				var group_ready := false
-				for army in members_by_group[group_id] as Array[Army]:
-					if _army_ready_for_campaign_target(
-						army, nation_id, target_city
-					):
-						group_ready = true
-						break
-				if group_ready == ready_pass:
-					ordered_groups.append(group_id)
-		var demand: Dictionary = plan.target_demands.get(target_city, {})
-		var assault_group_count := maxi(
-			int(demand.get("assault_groups", 1)), 1
+		var target_wave := _build_campaign_target_wave(
+			nation_id, target_city, plan, members_by_group, planned_group_ids
 		)
-		var initial_attackers: Array[Army] = []
-		for group_index in range(ordered_groups.size()):
-			var group_id := ordered_groups[group_index]
-			var echelon := int(group_index / assault_group_count)
-			var group_members: Array[Army] = members_by_group[group_id]
-			group_members = _sort_campaign_priority(
-				group_members, nation_id, target_city
-			)
-			for army in group_members:
-				wave_assignments[army.id] = target_city
-				wave_echelons[army.id] = echelon
-				if (
-					echelon == 0
-					and _army_ready_for_campaign_target(
-						army, nation_id, target_city
-					)
-				):
-					initial_attackers.append(army)
+		var initial_attackers: Array[Army] = target_wave["initial_attackers"]
+		for army_id in target_wave["assignments"]:
+			wave_assignments[army_id] = target_city
+		for army_id in target_wave["echelons"]:
+			wave_echelons[army_id] = target_wave["echelons"][army_id]
 		if initial_attackers.is_empty():
 			continue
 		wave_targets.append(target_city)
@@ -10867,6 +10837,51 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _build_campaign_target_wave(
+	nation_id: int,
+	target_city: int,
+	plan: CampaignAllocationPlan,
+	members_by_group: Dictionary,
+	planned_group_ids: Array[int]
+) -> Dictionary:
+	# 梯队以战团为原子：先按是否已有成员到达集结线分区，再保持团序。
+	var ordered_groups: Array[int] = []
+	for ready_pass in [true, false]:
+		for group_id in planned_group_ids:
+			if not members_by_group.has(group_id):
+				continue
+			var group_ready := false
+			for army in members_by_group[group_id] as Array[Army]:
+				if _army_ready_for_campaign_target(army, nation_id, target_city):
+					group_ready = true
+					break
+			if group_ready == ready_pass:
+				ordered_groups.append(group_id)
+	var demand: Dictionary = plan.target_demands.get(target_city, {})
+	var assault_group_count := maxi(int(demand.get("assault_groups", 1)), 1)
+	var assignments := {}
+	var echelons := {}
+	var initial_attackers: Array[Army] = []
+	for group_index in range(ordered_groups.size()):
+		var group_id := ordered_groups[group_index]
+		var echelon := int(group_index / assault_group_count)
+		var group_members: Array[Army] = _sort_campaign_priority(
+			members_by_group[group_id], nation_id, target_city
+		)
+		for army in group_members:
+			assignments[army.id] = true
+			echelons[army.id] = echelon
+			if echelon == 0 and _army_ready_for_campaign_target(
+				army, nation_id, target_city
+			):
+				initial_attackers.append(army)
+	return {
+		"assignments": assignments,
+		"echelons": echelons,
+		"initial_attackers": initial_attackers,
+	}
 
 
 func _collect_campaign_target_groups(
