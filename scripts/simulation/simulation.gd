@@ -169,6 +169,7 @@ var _stable_supply_city_source_cache: Dictionary = {}
 var _supply_source_besieged_cities: Dictionary = {}
 var _daily_supply_network_cache: Dictionary = {}
 var _battle_lookup_cache: Dictionary = {}
+var _daily_food_multiplier_cache: Dictionary = {}
 ## 当日指纹阶段已按国家汇总的敌军占据边；后台建网直接复用，避免再次全军扫描。
 var _prepared_supply_blocked_edges: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
@@ -2166,6 +2167,7 @@ func _resolve_supply_over_frames() -> void:
 ## 或该城围城状态变化时失效。网络损耗场继续按依赖指纹选择性失效。
 func _prepare_supply_network_caches() -> Array[int]:
 	_daily_supply_source_cache.clear()
+	_daily_food_multiplier_cache.clear()
 	_battle_lookup_cache.clear()
 	for battle in state.battles:
 		_battle_lookup_cache[battle.id] = battle
@@ -2395,8 +2397,8 @@ func _build_supply_plan_for_army(
 	var base := int(ceil(army.size * FOOD_PER_CAPITA))
 	base = maxi(base, 1)
 	var monthly_demand := int(ceil(
-		base * mult * _ruler_food_consumption_multiplier(
-			state, army.owner_nation
+		base * mult * _daily_food_consumption_multiplier(
+			army.owner_nation
 		)
 	))
 	demand_by_nation[army.owner_nation] += monthly_demand
@@ -2581,6 +2583,14 @@ static func _ruler_morale_multiplier(
 	)
 
 
+func _daily_food_consumption_multiplier(nation_id: int) -> float:
+	if not _daily_food_multiplier_cache.has(nation_id):
+		_daily_food_multiplier_cache[nation_id] = (
+			_ruler_food_consumption_multiplier(state, nation_id)
+		)
+	return float(_daily_food_multiplier_cache[nation_id])
+
+
 func _recover_garrisoned_army(army: Army) -> void:
 	var city_id := army.location_city
 	if city_id < 0 or city_id >= state.cities.size():
@@ -2622,8 +2632,8 @@ func _recover_garrisoned_army(army: Army) -> void:
 		minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 		if not sources.is_empty()
 		else 1.0
-	) * _ruler_food_consumption_multiplier(
-		state, army.owner_nation
+	) * _daily_food_consumption_multiplier(
+		army.owner_nation
 	) * target_gain / maxf(full_daily_gain, 0.0001)
 	army.supply_food_debt += (
 		monthly_demand / float(DAYS_PER_MONTH)
