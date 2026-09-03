@@ -10664,47 +10664,14 @@ func _launch_group_campaign_offensive(
 			)
 		):
 			continue
-		var members_by_group := {}
-		var staging := DiplomacyAI.staging_cities_for_objective(
-			state, nation_id, target_city
+		var target_groups := _collect_campaign_target_groups(
+			nation_id, target_city, plan, army_by_id, nation
 		)
-		var planned_group_ids := plan.groups_for_target(target_city)
-		for group_id in planned_group_ids:
-			if state.battle_group_by_id(nation_id, group_id) == null:
-				return false
-			for army_id in plan.member_ids_for_group(group_id):
-				var army: Army = army_by_id.get(army_id)
-				if (
-					army == null
-					or army.battle_group_id != group_id
-					or int(nation.campaign_preparation_assignments.get(
-						army.id, -1
-					)) != target_city
-				):
-					return false
-				var ready := _army_ready_for_campaign_target(
-					army, nation_id, target_city
-				)
-				var staging_in_transit := (
-					army.state == Army.State.MOVING
-					and army.ai_action in [
-						ActionCandidate.Kind.REINFORCE,
-						ActionCandidate.Kind.RETREAT,
-					]
-					and staging.has(army.ai_target_city)
-				)
-				if not ready and not staging_in_transit:
-					continue
-				if (
-					ready
-					and not _campaign_army_can_attack_target(
-						army, nation_id, target_city
-					)
-				):
-					return false
-				if not members_by_group.has(group_id):
-					members_by_group[group_id] = [] as Array[Army]
-				(members_by_group[group_id] as Array[Army]).append(army)
+		if not bool(target_groups["valid"]):
+			return false
+		var members_by_group: Dictionary = target_groups["members"]
+		var staging: Array = target_groups["staging"]
+		var planned_group_ids: Array[int] = target_groups["planned_ids"]
 		if members_by_group.is_empty():
 			continue
 		# 梯队以战团为原子。先按“团内至少一员已到集结线”稳定分区，
@@ -10900,6 +10867,58 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _collect_campaign_target_groups(
+	nation_id: int,
+	target_city: int,
+	plan: CampaignAllocationPlan,
+	army_by_id: Dictionary,
+	nation: Nation
+) -> Dictionary:
+	var members_by_group := {}
+	var staging := DiplomacyAI.staging_cities_for_objective(
+		state, nation_id, target_city
+	)
+	var planned_group_ids := plan.groups_for_target(target_city)
+	for group_id in planned_group_ids:
+		if state.battle_group_by_id(nation_id, group_id) == null:
+			return {"valid": false}
+		for army_id in plan.member_ids_for_group(group_id):
+			var army: Army = army_by_id.get(army_id)
+			if (
+				army == null
+				or army.battle_group_id != group_id
+				or int(nation.campaign_preparation_assignments.get(army.id, -1))
+					!= target_city
+			):
+				return {"valid": false}
+			var ready := _army_ready_for_campaign_target(
+				army, nation_id, target_city
+			)
+			var staging_in_transit := (
+				army.state == Army.State.MOVING
+				and army.ai_action in [
+					ActionCandidate.Kind.REINFORCE,
+					ActionCandidate.Kind.RETREAT,
+				]
+				and staging.has(army.ai_target_city)
+			)
+			if not ready and not staging_in_transit:
+				continue
+			if ready and not _campaign_army_can_attack_target(
+				army, nation_id, target_city
+			):
+				return {"valid": false}
+			if not members_by_group.has(group_id):
+				members_by_group[group_id] = [] as Array[Army]
+			(members_by_group[group_id] as Array[Army]).append(army)
+	return {
+		"valid": true,
+		"members": members_by_group,
+		"staging": staging,
+		"planned_ids": planned_group_ids,
+	}
 
 
 func _campaign_requested_targets(
