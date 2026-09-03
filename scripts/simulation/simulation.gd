@@ -68,6 +68,7 @@ const AI_DECISION_INTERVAL_DAYS: int = 10
 const GRID_AI_DECISION_INTERVAL_DAYS: int = 5
 const AI_RUNTIME_SLICE_BUDGET_USEC: int = 6000
 const AI_CONTEXT_SLICE_BUDGET_USEC: int = 6000
+const SUPPLY_RUNTIME_SLICE_BUDGET_USEC: int = 3000
 ## ThreatField 按国家并行；4 路通常能覆盖性能核且避免图搜索争抢内存带宽。
 const AI_THREAT_MAX_WORKERS: int = 4
 const AI_DEFENSE_MAX_WORKERS: int = 4
@@ -424,8 +425,13 @@ func _process(delta: float) -> void:
 
 func _advance_runtime_day() -> void:
 	await _advance_day(true)
+	var commit_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_runtime_day_in_progress = false
 	runtime_day_committed.emit(state.day)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"runtime_commit_signal", commit_started)
 
 
 func set_speed_multiplier(mult: float) -> void:
@@ -579,13 +585,28 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			_ai_assign_targets()
 	# 满准备截止后每天复核一次，避免错峰/其他外交备战分支让国家跳过
 	# 当日战争攻势检查。正常准备期仍只在 AI 周期评估。
+	if spread_runtime_work:
+		await get_tree().process_frame
+	_set_runtime_profile_stage(&"ai_finalize")
+	var ai_finalize_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_launch_mature_campaign_offensives()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"ai_finalize", ai_finalize_started)
+	if spread_runtime_work:
+		await get_tree().process_frame
 	_record_tick_profile_stage("ai", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	_set_runtime_profile_stage(&"campaign_echelons")
+	var campaign_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_advance_campaign_echelons()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"campaign_echelons", campaign_started)
 	if (
 		spread_runtime_work
 		and not priority_defense_frame_slicing_disabled
@@ -599,38 +620,95 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	_set_runtime_profile_stage(&"movement_battles")
+	var movement_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_advance_movement()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"movement_battles", movement_started)
+	if spread_runtime_work:
+		await get_tree().process_frame
 	_record_tick_profile_stage("movement_battles", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	_set_runtime_profile_stage(&"cleanup_capitulations")
+	var cleanup_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
+	var cleanup_part_started := cleanup_started
 	_resolve_eliminated_nation_capitulations()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(
+			&"cleanup_capitulations", cleanup_part_started
+		)
 	_set_runtime_profile_stage(&"cleanup_holding")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_advance_holding_adaptation()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_holding", cleanup_part_started)
 	_set_runtime_profile_stage(&"cleanup_siege_food")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_drain_siege_food()   # 规格 R3：被围城每日耗粮（补给孤岛的粮草时钟）
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_siege_food", cleanup_part_started)
 	_set_runtime_profile_stage(&"cleanup_war_flags")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_refresh_war_flags()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_war_flags", cleanup_part_started)
 	_set_runtime_profile_stage(&"cleanup_victory")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_check_victory()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_victory", cleanup_part_started)
 	# 领土/存亡结算后修复死亡国造成的悬空宗藩记录，保持宗藩不变量。
 	_set_runtime_profile_stage(&"cleanup_suzerainty")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	state.prune_dead_suzerainty()
 	state.prune_rebellions()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_suzerainty", cleanup_part_started)
 	# 道路断联只影响通行、补给和防守，不再凭空改变城市实控。
 	# 领土易手必须来自真实攻城、叛乱、分封、兼并或明确和平事务。
 	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留），
 	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
 	_set_runtime_profile_stage(&"cleanup_evict")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_evict_stranded_hostile_armies()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_evict", cleanup_part_started)
 	# 同日窄域前线刷新必须读取 cleanup 后的最终控制/存亡/驱离结果，避免按
 	# 中间态重建防区。它只重算 LINE 防御部署；_ai_forced_nations 刻意保留到次日，
 	# 继续触发完整 AI pass（campaign/force/diplomacy）。
 	_set_runtime_profile_stage(&"frontline_refresh")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_flush_same_day_frontline_refresh()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_frontline", cleanup_part_started)
 	_set_runtime_profile_stage(&"cleanup_refresh")
+	cleanup_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	state.refresh_derived()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_refresh", cleanup_part_started)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"cleanup_total", cleanup_started)
 	_record_tick_profile_stage("cleanup", profile_stage_started)
 	if tick_phase_profiling_enabled:
 		tick_profile_last_usec["total"] = (
@@ -2053,7 +2131,10 @@ func _resolve_reinforcements_over_frames() -> void:
 			armies_by_nation.get(nation.id, [] as Array[Army]) as Array[Army],
 			food_cache
 		)
-		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+		if (
+			Time.get_ticks_usec() - slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
 			await get_tree().process_frame
 			slice_started = Time.get_ticks_usec()
 
@@ -2174,7 +2255,10 @@ func _resolve_supply_over_frames() -> void:
 			_record_runtime_span(&"supply_plan_army", plan_started)
 		if not plan.is_empty():
 			plans.append(plan)
-		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+		if (
+			Time.get_ticks_usec() - slice_started
+				>= SUPPLY_RUNTIME_SLICE_BUDGET_USEC
+		):
 			await get_tree().process_frame
 			slice_started = Time.get_ticks_usec()
 	var finalize_started := (
@@ -2198,7 +2282,10 @@ func _resolve_supply_over_frames() -> void:
 	_set_runtime_profile_stage(&"supply_withdraw")
 	for p in plans:
 		_withdraw_supply_for_plan(p)
-		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+		if (
+			Time.get_ticks_usec() - slice_started
+				>= SUPPLY_RUNTIME_SLICE_BUDGET_USEC
+		):
 			await get_tree().process_frame
 			slice_started = Time.get_ticks_usec()
 

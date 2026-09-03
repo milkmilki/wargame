@@ -128,6 +128,35 @@ func _test_world_generation() -> void:
 	print("[1] 世界生成不变量")
 	var gs := GameState.new()
 	gs.generate_world(12345)
+	gs.refresh_derived()
+	var ruler_modifiers_match := true
+	for city in gs.cities:
+		ruler_modifiers_match = (
+			ruler_modifiers_match
+			and _approx(
+				city.ruler_city_defense_multiplier,
+				RulerProfile.city_defense_multiplier(
+					gs.nations[city.owner_nation]
+				)
+			)
+		)
+	for army in gs.armies:
+		var ruler := gs.nations[army.owner_nation]
+		ruler_modifiers_match = (
+			ruler_modifiers_match
+			and _approx(
+				army.ruler_defense_multiplier,
+				RulerProfile.defense_multiplier(ruler)
+			)
+			and _approx(
+				army.ruler_morale_multiplier,
+				RulerProfile.morale_multiplier(ruler)
+			)
+		)
+	_check(
+		ruler_modifiers_match,
+		"refresh_derived 的按国缓存必须与逐城市/逐军队君主修正完全一致"
+	)
 	var legacy_road_flow := {}
 	var tree_road_flow := {}
 	for edge in gs.edges:

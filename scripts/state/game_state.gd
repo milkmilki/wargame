@@ -5886,26 +5886,39 @@ func _largest_owned_component(
 ## 刷新派生量：国家 granary_food（粮仓求和）与 alive（是否还有陆地城市）。
 ## 码头只是交通节点；即使仍被某国控制，也不能单独维持国家存续。
 func refresh_derived() -> void:
+	var city_defense_by_nation := PackedFloat64Array()
+	var army_defense_by_nation := PackedFloat64Array()
+	var army_morale_by_nation := PackedFloat64Array()
+	city_defense_by_nation.resize(nations.size())
+	army_defense_by_nation.resize(nations.size())
+	army_morale_by_nation.resize(nations.size())
 	for n in nations:
 		n.granary_food = 0
 		n.alive = false
+		var modifiers := RulerProfile.modifiers(n)
+		city_defense_by_nation[n.id] = float(
+			modifiers[RulerProfile.KEY_CITY_DEFENSE]
+		)
+		army_defense_by_nation[n.id] = float(
+			modifiers[RulerProfile.KEY_DEFENSE]
+		)
+		army_morale_by_nation[n.id] = float(
+			modifiers[RulerProfile.KEY_MORALE]
+		)
 	for city in cities:
 		var owner := nations[city.owner_nation]
 		if not city.is_dock:
 			owner.alive = true
-		city.ruler_city_defense_multiplier = (
-			RulerProfile.city_defense_multiplier(owner)
-		)
+		city.ruler_city_defense_multiplier = city_defense_by_nation[owner.id]
 	for army in armies:
 		if army.owner_nation < 0 or army.owner_nation >= nations.size():
 			continue
-		var ruler := nations[army.owner_nation]
-		army.ruler_defense_multiplier = (
-			RulerProfile.defense_multiplier(ruler)
-		)
-		army.ruler_morale_multiplier = (
-			RulerProfile.morale_multiplier(ruler)
-		)
+		army.ruler_defense_multiplier = army_defense_by_nation[
+			army.owner_nation
+		]
+		army.ruler_morale_multiplier = army_morale_by_nation[
+			army.owner_nation
+		]
 	for n in nations:
 		for warehouse in warehouse_cities_of(n.id):
 			n.granary_food += warehouse.food_storage

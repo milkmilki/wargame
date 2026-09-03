@@ -6,6 +6,14 @@ extends SceneTree
 var _frame_samples: Array[float] = []
 
 
+class FrameSampler:
+	extends Node
+	signal sampled
+
+	func _process(_delta: float) -> void:
+		sampled.emit()
+
+
 func _init() -> void:
 	var scene_path := OS.get_environment("RENDER_BENCH_SCENE")
 	if scene_path.is_empty():
@@ -72,15 +80,17 @@ func _sample_frames(
 	var primitives: Array[float] = []
 	var objects: Array[float] = []
 	var slow_frames_by_stage := {}
-	var interval_stage: StringName = &"idle"
 	var starting_day := simulation.state.day if simulation != null else 0
+	var sampler := FrameSampler.new()
+	sampler.process_priority = 2_147_483_647
+	root.add_child(sampler)
+	await sampler.sampled
 	for _i in range(maxi(frame_count, 1)):
 		var started := Time.get_ticks_usec()
-		await process_frame
+		await sampler.sampled
 		var frame_ms := float(Time.get_ticks_usec() - started) / 1000.0
 		samples.append(frame_ms)
-		var elapsed_stage := interval_stage
-		interval_stage = _runtime_stage(simulation)
+		var elapsed_stage := _runtime_stage(simulation)
 		if simulation != null and frame_ms > 16.0:
 			var key := str(elapsed_stage)
 			var report: Dictionary = slow_frames_by_stage.get(key, {
@@ -105,7 +115,7 @@ func _sample_frames(
 	var total := 0.0
 	for value in samples:
 		total += value
-	return {
+	var result := {
 		"avg_ms": total / float(samples.size()),
 		"p95_ms": samples[mini(int(samples.size() * 0.95), samples.size() - 1)],
 		"max_ms": samples.back(),
@@ -119,6 +129,8 @@ func _sample_frames(
 			simulation.state.day - starting_day if simulation != null else 0
 		),
 	}
+	sampler.queue_free()
+	return result
 
 
 func _print_stats(label: String, stats: Dictionary) -> void:

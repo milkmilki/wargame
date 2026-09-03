@@ -1509,6 +1509,11 @@ func _sync_snapshots() -> void:
 		return
 	if state.day == _last_day:
 		return
+	var snapshot_started := (
+		Time.get_ticks_usec()
+		if sim != null and sim.runtime_stage_profiling_enabled
+		else 0
+	)
 	var old_curr: Dictionary = _curr_pos
 	var presented_before: Dictionary = _presented_pos.duplicate()
 	_last_day = state.day
@@ -1549,6 +1554,10 @@ func _sync_snapshots() -> void:
 			)
 		):
 			_visual_animation_active = true
+	if sim != null and sim.runtime_stage_profiling_enabled:
+		sim._record_runtime_span(
+			&"render_sync_army_snapshots", snapshot_started
+		)
 # ================================================================== 绘制
 
 func _draw() -> void:
