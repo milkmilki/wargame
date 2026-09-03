@@ -9919,13 +9919,34 @@ func _assign_offensive_staging_orders(
 				objective_city
 			)
 	)
+	var redeployments := _assign_campaign_redeployment_orders(
+		nation_id, objective_city, holders, assigned_only, orders,
+		committed_heavy, committed_light
+	)
+	changed = changed or bool(redeployments["changed"])
+	orders += int(redeployments["orders"])
+	committed_heavy = int(redeployments["committed_heavy"])
+	committed_light = int(redeployments["committed_light"])
+	return changed
+
+
+func _assign_campaign_redeployment_orders(
+	nation_id: int,
+	objective_city: int,
+	holders: Array[Army],
+	assigned_only: bool,
+	initial_orders: int,
+	committed_heavy: int,
+	committed_light: int
+) -> Dictionary:
+	var changed := false
+	var orders := 0
 	for army in holders:
-		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
+		if initial_orders + orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 			break
 		if (
 			not assigned_only
-			and army.max_size
-				== GameState.INITIAL_LIGHT_ARMY_SIZE
+			and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
 			and committed_light >= committed_heavy
 		):
 			continue
@@ -9941,17 +9962,16 @@ func _assign_offensive_staging_orders(
 			changed = true
 			orders += 1
 			if not assigned_only:
-				if (
-					army.max_size
-						== GameState.INITIAL_HEAVY_ARMY_SIZE
-				):
+				if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
 					committed_heavy += 1
-				elif (
-					army.max_size
-						== GameState.INITIAL_LIGHT_ARMY_SIZE
-				):
+				elif army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
 					committed_light += 1
-	return changed
+	return {
+		"changed": changed,
+		"orders": orders,
+		"committed_heavy": committed_heavy,
+		"committed_light": committed_light,
+	}
 
 
 func _assign_campaign_reinforcement_orders(
