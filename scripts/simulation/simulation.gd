@@ -10741,16 +10741,14 @@ func _launch_group_campaign_offensive(
 		var origin_cities: Array[int] = []
 		for army in initial_attackers_by_target[target_city] as Array[Army]:
 			var origin_city := _campaign_army_origin(army, nation_id)
-			var attack := ActionCandidate.make(
-				ActionCandidate.Kind.ATTACK, 2000.0,
-				"国家战役第%d波：军%d按统一计划准备%d天，以%.2f倍攻击城市%d"
-					% [nation.campaign_offensive_count + 1, army.id,
-						preparation_days, multiplier, target_city],
+			var attack := _make_campaign_attack_order(
+				nation.campaign_offensive_count + 1,
+				army.id,
+				preparation_days,
+				multiplier,
+				bonus_days,
 				target_city
 			)
-			attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
-			attack.offensive_attack_multiplier = multiplier
-			attack.offensive_bonus_days = bonus_days
 			if _collect_ai_commands:
 				if not _execute_ai_candidate(army, attack):
 					continue
@@ -10835,6 +10833,27 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _make_campaign_attack_order(
+	wave_number: int,
+	army_id: int,
+	preparation_days: int,
+	multiplier: float,
+	bonus_days: int,
+	target_city: int
+) -> ActionCandidate:
+	var attack := ActionCandidate.make(
+		ActionCandidate.Kind.ATTACK,
+		2000.0,
+		"国家战役第%d波：军%d按统一计划准备%d天，以%.2f倍攻击城市%d"
+			% [wave_number, army_id, preparation_days, multiplier, target_city],
+		target_city
+	)
+	attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+	attack.offensive_attack_multiplier = multiplier
+	attack.offensive_bonus_days = bonus_days
+	return attack
 
 
 func _build_campaign_route_plans(
