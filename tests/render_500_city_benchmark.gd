@@ -10,6 +10,10 @@ func _init() -> void:
 	if scene_path.is_empty():
 		scene_path = "res://five_hundred_city_stress.tscn"
 	var frame_count := _env_int("RENDER_BENCH_FRAMES", 180)
+	var sample_gpu_counters := _env_int("RENDER_BENCH_GPU_COUNTERS", 0) != 0
+	var seconds_per_day := float(OS.get_environment(
+		"RENDER_BENCH_SECONDS_PER_DAY"
+	))
 	var packed := load(scene_path) as PackedScene
 	if packed == null:
 		printerr("render benchmark scene load failed: %s" % scene_path)
@@ -22,10 +26,12 @@ func _init() -> void:
 	var simulation := main.get_node_or_null("Simulation") as Simulation
 	if simulation != null:
 		simulation.paused = true
-	var render_only := await _sample_frames(frame_count)
+	var render_only := await _sample_frames(frame_count, sample_gpu_counters)
 	if simulation != null:
 		simulation.paused = false
-	var with_simulation := await _sample_frames(frame_count)
+		if seconds_per_day > 0.0:
+			simulation.seconds_per_day = seconds_per_day
+	var with_simulation := await _sample_frames(frame_count, sample_gpu_counters)
 	print("=== 渲染基准 scene=%s frames=%d ===" % [scene_path, frame_count])
 	print("节点数=%d" % _count_nodes(main))
 	_print_stats("纯渲染（模拟暂停）", render_only)
@@ -33,7 +39,7 @@ func _init() -> void:
 	quit(0)
 
 
-func _sample_frames(frame_count: int) -> Dictionary:
+func _sample_frames(frame_count: int, sample_gpu_counters: bool) -> Dictionary:
 	var samples: Array[float] = []
 	var draw_calls: Array[float] = []
 	var primitives: Array[float] = []
@@ -42,15 +48,16 @@ func _sample_frames(frame_count: int) -> Dictionary:
 		var started := Time.get_ticks_usec()
 		await process_frame
 		samples.append(float(Time.get_ticks_usec() - started) / 1000.0)
-		draw_calls.append(float(Performance.get_monitor(
-			Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME
-		)))
-		primitives.append(float(Performance.get_monitor(
-			Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME
-		)))
-		objects.append(float(Performance.get_monitor(
-			Performance.RENDER_TOTAL_OBJECTS_IN_FRAME
-		)))
+		if sample_gpu_counters:
+			draw_calls.append(float(Performance.get_monitor(
+				Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME
+			)))
+			primitives.append(float(Performance.get_monitor(
+				Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME
+			)))
+			objects.append(float(Performance.get_monitor(
+				Performance.RENDER_TOTAL_OBJECTS_IN_FRAME
+			)))
 	samples.sort()
 	var total := 0.0
 	for value in samples:

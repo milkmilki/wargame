@@ -140,6 +140,7 @@ var _last_road_network_revision: int = -1
 var _last_trade_revision: int = -1
 var _last_army_instances_day: int = -1
 var _army_instances_initialized: bool = false
+var _last_detail_visibility_signature: Array = []
 var _last_naming_revision: int = -1
 var _map_mode: int = MapRenderer.MapMode.POLITICAL
 var _last_selected_edge := Vector2i(-2, -2)
@@ -1362,6 +1363,7 @@ func _build_city_instances() -> void:
 
 
 func _rebuild_city_labels() -> void:
+	_last_detail_visibility_signature.clear()
 	for label in _city_labels:
 		if is_instance_valid(label):
 			label.queue_free()
@@ -1501,6 +1503,7 @@ func _update_capital_rings() -> void:
 
 
 func _rebuild_nation_labels() -> void:
+	_last_detail_visibility_signature.clear()
 	for label in _nation_labels:
 		if is_instance_valid(label):
 			label.queue_free()
@@ -2505,15 +2508,25 @@ func _update_map_detail_visibility() -> void:
 	if overlay == null:
 		return
 	var visible := overlay.city_names_visible()
-	for label in _city_labels:
-		label.visible = visible and _camera_distance <= 40.0
 	var nation_visible := overlay.nation_names_visible()
+	var signature: Array = [
+		visible and _camera_distance <= 40.0,
+		nation_visible,
+		_camera_distance <= 50.0,
+		_camera_distance <= 62.0,
+		_map_mode,
+	]
+	if signature == _last_detail_visibility_signature:
+		return
+	_last_detail_visibility_signature = signature
+	for label in _city_labels:
+		label.visible = bool(signature[0])
 	for label in _nation_labels:
 		label.visible = nation_visible
 	for label in _battle_labels:
-		label.visible = _camera_distance <= 50.0
+		label.visible = bool(signature[2])
 	if _minor_roads != null:
-		_minor_roads.visible = _camera_distance <= 62.0
+		_minor_roads.visible = bool(signature[3])
 	_apply_map_mode_visibility()
 
 
