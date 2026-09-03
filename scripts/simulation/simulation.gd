@@ -10643,14 +10643,9 @@ func _launch_group_campaign_offensive(
 	var plan := nation.campaign_preparation_plan
 	if plan == null or plan.nation_id != nation_id:
 		return false
-	var requested_targets: Array[int] = []
-	if prepared_targets.is_empty():
-		requested_targets.append(objective_city)
-	else:
-		for target_value in prepared_targets:
-			var target_city := int(target_value)
-			if not requested_targets.has(target_city):
-				requested_targets.append(target_city)
+	var requested_targets: Array[int] = _campaign_requested_targets(
+		objective_city, prepared_targets
+	)
 	var army_by_id := {}
 	for army in state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
@@ -10905,6 +10900,21 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _campaign_requested_targets(
+	objective_city: int,
+	prepared_targets: Array[int]
+) -> Array[int]:
+	var requested_targets: Array[int] = []
+	if prepared_targets.is_empty():
+		requested_targets.append(objective_city)
+	else:
+		for target_value in prepared_targets:
+			var target_city := int(target_value)
+			if not requested_targets.has(target_city):
+				requested_targets.append(target_city)
+	return requested_targets
 
 
 func _rebuild_ai_command_reservations() -> void:
