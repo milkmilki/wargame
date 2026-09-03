@@ -10720,12 +10720,10 @@ func _launch_group_campaign_offensive(
 		route_threat = ThreatField.build(
 			_build_ai_view(nation_id), _threat_travel_cache
 		)
-	var route_plans := {}
-	for target_city in wave_targets:
-		route_plans[target_city] = _campaign_two_step_route_plan_for_group(
-			nation_id, target_city,
-			initial_attackers_by_target[target_city], route_threat, plan
-		)
+	var route_plans: Dictionary = _build_campaign_route_plans(
+		nation_id, wave_targets, initial_attackers_by_target,
+		route_threat, plan
+	)
 
 	# 构造不可变提交 payload。命令收集模式下，只有统一提交阶段确认
 	# 同一 transaction 的全部命令实际成功后，才消费准备态并扣费。
@@ -10837,6 +10835,25 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _build_campaign_route_plans(
+	nation_id: int,
+	wave_targets: Array[int],
+	initial_attackers_by_target: Dictionary,
+	route_threat: ThreatField,
+	plan: CampaignAllocationPlan
+) -> Dictionary:
+	var route_plans := {}
+	for target_city in wave_targets:
+		route_plans[target_city] = _campaign_two_step_route_plan_for_group(
+			nation_id,
+			target_city,
+			initial_attackers_by_target[target_city],
+			route_threat,
+			plan
+		)
+	return route_plans
 
 
 func _build_campaign_target_wave(
