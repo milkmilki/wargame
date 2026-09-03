@@ -140,6 +140,10 @@ var _last_road_network_revision: int = -1
 var _last_trade_revision: int = -1
 var _last_army_instances_day: int = -1
 var _army_instances_initialized: bool = false
+var _army_instance_ids: Array[int] = []
+var _army_render_positions: Dictionary = {}
+var _army_render_signatures: Dictionary = {}
+var _last_army_icon_scale: float = -1.0
 var _last_detail_visibility_signature: Array = []
 var _last_naming_revision: int = -1
 var _map_mode: int = MapRenderer.MapMode.POLITICAL
@@ -244,6 +248,7 @@ func _process(delta: float) -> void:
 	):
 		_update_province_visuals()
 		_update_city_instances()
+		_army_instances_initialized = false
 		_rebuild_nation_labels()
 		_last_ownership_revision = state.ownership_revision
 		_last_diplomacy_revision = state.diplomacy_revision
@@ -1942,15 +1947,45 @@ func _update_army_instances() -> void:
 			living.append(army)
 	if _armies.multimesh == null:
 		_build_army_counter_meshes()
-	for layer in [
-		_army_bases, _armies, _army_symbol_a, _army_symbol_b,
-		_army_morale_backs, _army_morale_bars,
-	]:
-		layer.multimesh.instance_count = living.size()
+	var living_ids: Array[int] = []
+	for army in living:
+		living_ids.append(army.id)
+	var rebuild_all := living_ids != _army_instance_ids
+	if rebuild_all:
+		_army_instance_ids = living_ids
+		_army_render_positions.clear()
+		_army_render_signatures.clear()
+		for layer in [
+			_army_bases, _armies, _army_symbol_a, _army_symbol_b,
+			_army_morale_backs, _army_morale_bars,
+		]:
+			layer.multimesh.instance_count = living.size()
 	for index in range(living.size()):
 		var army := living[index]
 		var is_main_role := army.is_main_battle_role()
 		var map_position := overlay.army_map_position(army)
+		var morale_ratio := army.morale_ratio()
+		var render_signature: Array = [
+			is_main_role,
+			army.max_size,
+			morale_ratio,
+			army.starving,
+			army.state,
+			army.owner_nation,
+			overlay.army_icon_scale(),
+			state.diplomacy_revision,
+			overlay.diplomatic_view_nation_id(),
+		]
+		var position_changed: bool = (
+			rebuild_all
+			or _army_render_positions.get(army.id) != map_position
+		)
+		var appearance_changed: bool = (
+			rebuild_all
+			or _army_render_signatures.get(army.id) != render_signature
+		)
+		if not position_changed and not appearance_changed:
+			continue
 		var world := _terrain.map_to_world(map_position)
 		var angle := float(army.id % 11) / 11.0 * TAU
 		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.34
@@ -1996,7 +2031,6 @@ func _update_army_instances() -> void:
 		_set_morale_bar_transform(
 			_army_morale_backs, index, origin, scale, 1.0
 		)
-		var morale_ratio := army.morale_ratio()
 		_set_morale_bar_transform(
 			_army_morale_bars, index, origin, scale, morale_ratio
 		)
@@ -2019,12 +2053,17 @@ func _update_army_instances() -> void:
 		_army_morale_bars.multimesh.set_instance_color(
 			index, _morale_color(morale_ratio, army.starving)
 		)
+		_army_render_positions[army.id] = map_position
+		_army_render_signatures[army.id] = render_signature
 	_last_army_instances_day = state.day
 	_army_instances_initialized = true
+	_last_army_icon_scale = overlay.army_icon_scale()
 
 
 func _should_update_army_instances() -> bool:
 	if not _army_instances_initialized or _last_army_instances_day != state.day:
+		return true
+	if not is_equal_approx(_last_army_icon_scale, overlay.army_icon_scale()):
 		return true
 	if sim != null and sim.runtime_day_in_progress():
 		return true

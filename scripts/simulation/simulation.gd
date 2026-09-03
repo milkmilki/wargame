@@ -201,6 +201,7 @@ var _collect_ai_commands: bool = false
 var _ai_command_buffer: Array[AiCommandIntent] = []
 var _ai_planned_armies: Dictionary = {}
 var _ai_planned_first_legs: Dictionary = {}
+var _ai_occupied_first_leg_loads: Dictionary = {}
 var _ai_command_sequence: Dictionary = {}
 var _ai_snapshot_armies: Dictionary = {}
 var _ai_queue_transaction_id: int = -1
@@ -294,6 +295,8 @@ var _empty_snapshot_profile_sink: Dictionary = {}
 ## 运行时慢帧归因开关。默认关闭；探针开启后记录当前跨帧阶段，不读取时钟。
 var runtime_stage_profiling_enabled: bool = false
 var runtime_profile_stage: StringName = &""
+var runtime_span_total_usec: Dictionary = {}
+var runtime_span_peak_usec: Dictionary = {}
 ## 等价性守卫用：置 true 强制补给网络每天全量重建（指纹缓存前的旧行为），
 ## 正式游戏始终 false，走指纹选择性失效。
 var supply_network_cache_disabled: bool = false
@@ -385,6 +388,8 @@ func setup(game_state: GameState) -> void:
 	ai_defense_topology_rebuild_total = 0
 	ai_defense_topology_reuse_total = 0
 	ai_defense_dynamic_reuse_total = 0
+	runtime_span_total_usec.clear()
+	runtime_span_peak_usec.clear()
 	frontline_refresh_batch_total = 0
 	frontline_refresh_nation_total = 0
 	frontline_refresh_build_total = 0
@@ -658,6 +663,18 @@ func _merge_tick_profile_stage_values(profile: Dictionary) -> void:
 func _set_runtime_profile_stage(stage: StringName) -> void:
 	if runtime_stage_profiling_enabled:
 		runtime_profile_stage = stage
+
+
+func _record_runtime_span(stage: StringName, started_usec: int) -> void:
+	if not runtime_stage_profiling_enabled:
+		return
+	var elapsed := Time.get_ticks_usec() - started_usec
+	runtime_span_total_usec[stage] = int(
+		runtime_span_total_usec.get(stage, 0)
+	) + elapsed
+	runtime_span_peak_usec[stage] = maxi(
+		int(runtime_span_peak_usec.get(stage, 0)), elapsed
+	)
 
 
 static func offensive_preparation_multiplier(
@@ -5746,12 +5763,17 @@ func _run_ai_army_decision_phase(
 		var strongest_first := bool(
 			ai_tactical_decision_order_overrides.get(nation_id, true)
 		)
+		_set_runtime_profile_stage(&"ai_army_sort")
+		var sort_started := (
+			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		)
 		var decision_order := _sort_ai_decision_order(
 			state,
 			view.friendly_armies,
 			snapshot,
 			strongest_first
 		)
+		_record_runtime_span(&"ai_army_sort", sort_started)
 		for army in decision_order:
 			if (
 				spread_runtime_work
@@ -5792,6 +5814,7 @@ func _decide_ai_army(
 	minimum_participant_ratio: float,
 	defense_plan: CityDefensePlan
 ) -> void:
+	_set_runtime_profile_stage(&"ai_army_campaign")
 	var active_campaign_target := int(
 		nation.campaign_attack_assignments.get(army.id, -1)
 	)
@@ -5866,11 +5889,24 @@ func _decide_ai_army(
 	):
 		return
 	if army.is_line_role():
+		_set_runtime_profile_stage(&"ai_army_line")
+		var line_started := (
+			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		)
 		var line_candidate := defense_plan.candidate_for(army, coordinator)
-		if (
+		_record_runtime_span(&"ai_army_line_candidate", line_started)
+		_set_runtime_profile_stage(&"ai_army_line_execute")
+		var line_execute_started := (
+			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		)
+		var line_executed := (
 			line_candidate != null
 			and line_candidate.kind != ActionCandidate.Kind.NONE
 			and _execute_ai_candidate(army, line_candidate)
+		)
+		_record_runtime_span(&"ai_army_line_execute", line_execute_started)
+		if (
+			line_executed
 		):
 			if line_candidate.kind == ActionCandidate.Kind.HOLD:
 				coordinator.reserve_edge(
@@ -5881,6 +5917,10 @@ func _decide_ai_army(
 			elif line_candidate.target_city != -1:
 				coordinator.reserve(line_candidate.target_city, army)
 		return
+	_set_runtime_profile_stage(&"ai_army_choose")
+	var choose_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	var candidate := UtilityAI.choose(
 		view,
 		snapshot,
@@ -5890,9 +5930,16 @@ func _decide_ai_army(
 		minimum_participant_ratio,
 		defense_plan
 	)
+	_record_runtime_span(&"ai_army_choose", choose_started)
 	if candidate.kind == ActionCandidate.Kind.NONE:
 		return
-	if _execute_ai_candidate(army, candidate):
+	_set_runtime_profile_stage(&"ai_army_execute")
+	var execute_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
+	var executed := _execute_ai_candidate(army, candidate)
+	_record_runtime_span(&"ai_army_execute", execute_started)
+	if executed:
 		if candidate.kind == ActionCandidate.Kind.HOLD:
 			coordinator.reserve_edge(
 				candidate.target_edge_a,
@@ -13180,6 +13227,18 @@ func _begin_ai_command_collection(
 	snapshot_army_ids: Dictionary = {}
 ) -> void:
 	_clear_ai_command_collection()
+	for army in state.armies:
+		if army.size <= 0 or not army.on_edge or army.move_to < 0:
+			continue
+		var edge := state.edge_of(army.move_from, army.move_to)
+		if edge == null or edge.max_manpower <= 0:
+			continue
+		var key := _ai_first_leg_key(
+			army.owner_nation, army.move_from, army.move_to
+		)
+		_ai_occupied_first_leg_loads[key] = int(
+			_ai_occupied_first_leg_loads.get(key, 0)
+		) + army.road_capacity_load(edge.max_manpower)
 	if snapshot_army_ids.is_empty():
 		for army in state.armies:
 			if army.size > 0:
@@ -13194,6 +13253,7 @@ func _clear_ai_command_collection() -> void:
 	_ai_command_buffer.clear()
 	_ai_planned_armies.clear()
 	_ai_planned_first_legs.clear()
+	_ai_occupied_first_leg_loads.clear()
 	_ai_command_sequence.clear()
 	_ai_snapshot_armies.clear()
 	_ai_queue_transaction_id = -1
@@ -13242,6 +13302,7 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			ActionCandidate.Kind.RETREAT,
 		]
 	):
+		_set_runtime_profile_stage(&"ai_army_path_field")
 		var field := _cached_ai_path_field(
 			army.owner_nation,
 			army.location_city,
@@ -13253,6 +13314,7 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 				else -1,
 			army.max_size
 		)
+		_set_runtime_profile_stage(&"ai_army_path_reconstruct")
 		prepared_path = Pathfinding.reconstruct(
 			field["prev"],
 			army.location_city,
@@ -13268,6 +13330,7 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 		elif path_prevalidated:
 			first_leg = prepared_path[0]
 	if first_leg != -1:
+		_set_runtime_profile_stage(&"ai_army_capacity")
 		var first_edge := state.edge_of(army.location_city, first_leg)
 		if (
 			first_edge == null
@@ -13284,10 +13347,8 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 			army.location_city,
 			first_leg
 		)
-		var occupied_manpower := _friendly_same_direction_manpower(
-			army.owner_nation,
-			army.location_city,
-			first_leg
+		var occupied_manpower := int(
+			_ai_occupied_first_leg_loads.get(leg_key, 0)
 		)
 		var reserved_manpower := int(
 			_ai_planned_first_legs.get(leg_key, 0)
@@ -13311,6 +13372,7 @@ func _queue_ai_candidate(army: Army, candidate: ActionCandidate) -> bool:
 		_ai_command_sequence.get(army.owner_nation, 0)
 	)
 	_ai_command_sequence[army.owner_nation] = sequence + 1
+	_set_runtime_profile_stage(&"ai_army_buffer")
 	_ai_command_buffer.append(AiCommandIntent.make(
 		army,
 		candidate,

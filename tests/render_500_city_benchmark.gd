@@ -26,28 +26,54 @@ func _init() -> void:
 	var simulation := main.get_node_or_null("Simulation") as Simulation
 	if simulation != null:
 		simulation.paused = true
-	var render_only := await _sample_frames(frame_count, sample_gpu_counters)
+	var render_only := await _sample_frames(
+		frame_count, sample_gpu_counters, null
+	)
 	if simulation != null:
 		simulation.paused = false
+		simulation.runtime_stage_profiling_enabled = true
 		if seconds_per_day > 0.0:
 			simulation.seconds_per_day = seconds_per_day
-	var with_simulation := await _sample_frames(frame_count, sample_gpu_counters)
+	var with_simulation := await _sample_frames(
+		frame_count, sample_gpu_counters, simulation
+	)
 	print("=== 渲染基准 scene=%s frames=%d ===" % [scene_path, frame_count])
 	print("节点数=%d" % _count_nodes(main))
 	_print_stats("纯渲染（模拟暂停）", render_only)
 	_print_stats("渲染+模拟", with_simulation)
+	if simulation != null:
+		_print_runtime_spans(simulation)
 	quit(0)
 
 
-func _sample_frames(frame_count: int, sample_gpu_counters: bool) -> Dictionary:
+func _sample_frames(
+	frame_count: int,
+	sample_gpu_counters: bool,
+	simulation: Simulation
+) -> Dictionary:
 	var samples: Array[float] = []
 	var draw_calls: Array[float] = []
 	var primitives: Array[float] = []
 	var objects: Array[float] = []
+	var slow_frames_by_stage := {}
+	var interval_stage: StringName = &"idle"
 	for _i in range(maxi(frame_count, 1)):
 		var started := Time.get_ticks_usec()
 		await process_frame
-		samples.append(float(Time.get_ticks_usec() - started) / 1000.0)
+		var frame_ms := float(Time.get_ticks_usec() - started) / 1000.0
+		samples.append(frame_ms)
+		var elapsed_stage := interval_stage
+		interval_stage = _runtime_stage(simulation)
+		if simulation != null and frame_ms > 16.0:
+			var key := str(elapsed_stage)
+			var report: Dictionary = slow_frames_by_stage.get(key, {
+				"over_16": 0, "over_33": 0, "peak_ms": 0.0,
+			})
+			report["over_16"] = int(report["over_16"]) + 1
+			if frame_ms > 33.0:
+				report["over_33"] = int(report["over_33"]) + 1
+			report["peak_ms"] = maxf(float(report["peak_ms"]), frame_ms)
+			slow_frames_by_stage[key] = report
 		if sample_gpu_counters:
 			draw_calls.append(float(Performance.get_monitor(
 				Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME
@@ -71,6 +97,7 @@ func _sample_frames(frame_count: int, sample_gpu_counters: bool) -> Dictionary:
 		"primitives_avg": _average(primitives),
 		"objects_avg": _average(objects),
 		"draw_calls_max": _max_value(draw_calls),
+		"slow_frames_by_stage": slow_frames_by_stage,
 	}
 
 
@@ -88,6 +115,42 @@ func _print_stats(label: String, stats: Dictionary) -> void:
 		float(stats["primitives_avg"]),
 		float(stats["objects_avg"]),
 	])
+	var stage_reports: Dictionary = stats["slow_frames_by_stage"]
+	var stages := stage_reports.keys()
+	stages.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return float(stage_reports[a]["peak_ms"]) > float(stage_reports[b]["peak_ms"])
+	)
+	for stage in stages:
+		var report: Dictionary = stage_reports[stage]
+		print("  %-24s >16ms=%d >33ms=%d peak=%.2fms" % [
+			stage, int(report["over_16"]), int(report["over_33"]),
+			float(report["peak_ms"]),
+		])
+
+
+func _runtime_stage(simulation: Simulation) -> StringName:
+	if simulation == null or not simulation.runtime_day_in_progress():
+		return &"idle"
+	return (
+		simulation.runtime_profile_stage
+		if not simulation.runtime_profile_stage.is_empty()
+		else &"unknown"
+	)
+
+
+func _print_runtime_spans(simulation: Simulation) -> void:
+	var peaks := simulation.runtime_span_peak_usec
+	var stages := peaks.keys()
+	stages.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return int(peaks[a]) > int(peaks[b])
+	)
+	print("同步跨度计时:")
+	for stage in stages:
+		print("  %-24s total=%.2fms peak=%.2fms" % [
+			stage,
+			float(simulation.runtime_span_total_usec.get(stage, 0)) / 1000.0,
+			float(peaks[stage]) / 1000.0,
+		])
 
 
 func _average(values: Array[float]) -> float:
