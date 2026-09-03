@@ -839,10 +839,7 @@ func _campaign_planned_staging_troops(
 	var plan := nation.campaign_preparation_plan
 	if plan == null or not plan.assigned_target_ids.has(target_city):
 		return _campaign_minimum_staged_troops(nation_id, target_city)
-	var army_by_id := {}
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			army_by_id[army.id] = army
+	var army_by_id: Dictionary = _campaign_army_index(nation_id)
 	var planned_troops := 0
 	for group_id in plan.groups_for_target(target_city):
 		for army_id in plan.member_ids_for_group(group_id):
@@ -3166,6 +3163,14 @@ func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
 		claimant, claimant_was_rebel_vassal
 	)
 	return true
+
+
+func _campaign_army_index(nation_id: int) -> Dictionary:
+	var army_by_id := {}
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			army_by_id[army.id] = army
+	return army_by_id
 
 
 const CAPITAL_CAPTURE_TRANSFER_HOPS: int = 2
