@@ -9869,70 +9869,16 @@ func _assign_offensive_staging_orders(
 		return changed
 	if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 		return changed
-	var candidates: Array[Dictionary] = (
-		_collect_campaign_reinforcement_candidates(
-			nation_id,
-			objective_city,
-			staging,
-			path_view,
-			assigned_only,
-			defense_plan,
-			coordinator
-		)
+	var reinforcement := _assign_campaign_reinforcement_orders(
+		nation_id, objective_city, staging, path_view, assigned_only,
+		defense_plan, coordinator, staged, sustained_required, orders,
+		committed_heavy, committed_light
 	)
-	# 距集结出发地更近者优先增援：距离取自镜像对称的静态最短路
-	# （Dijkstra 的 dist 与松弛顺序无关，镜像世界左右严格相等），
-	# 消除“先创建者（低 id）先动”的偏置，保证左右选出互为镜像的援军。
-	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var army_a: Army = a["army"]
-		var army_b: Army = b["army"]
-		if army_a.max_size != army_b.max_size:
-			return army_a.max_size > army_b.max_size
-		var da: float = a["best_distance"]
-		var db: float = b["best_distance"]
-		if not is_equal_approx(da, db):
-			return da < db
-		return EquivariantOrder.army_less(
-			state,
-			nation_id,
-			army_a,
-			army_b,
-			objective_city
-		)
-	)
-	for entry in candidates:
-		if (
-			orders >= PREPARATION_MAX_ORDERS_PER_CYCLE
-			or staged >= sustained_required
-		):
-			break
-		var army: Army = entry["army"]
-		var best_city: int = entry["best_city"]
-		if (
-			not assigned_only
-			and army.max_size
-				== GameState.INITIAL_LIGHT_ARMY_SIZE
-			and committed_light >= committed_heavy
-		):
-			continue
-		var reinforce := _make_campaign_reinforce_order(
-			objective_city, best_city
-		)
-		if _execute_ai_candidate(army, reinforce):
-			changed = true
-			orders += 1
-			staged += army.size
-			if not assigned_only:
-				if (
-					army.max_size
-						== GameState.INITIAL_HEAVY_ARMY_SIZE
-				):
-					committed_heavy += 1
-				elif (
-					army.max_size
-						== GameState.INITIAL_LIGHT_ARMY_SIZE
-				):
-					committed_light += 1
+	changed = changed or bool(reinforcement["changed"])
+	orders += int(reinforcement["orders"])
+	staged = int(reinforcement["staged"])
+	committed_heavy = int(reinforcement["committed_heavy"])
+	committed_light = int(reinforcement["committed_light"])
 	var actual_staged := (
 		_campaign_preparation_staged_troops(
 			nation_id,
@@ -10006,6 +9952,74 @@ func _assign_offensive_staging_orders(
 				):
 					committed_light += 1
 	return changed
+
+
+func _assign_campaign_reinforcement_orders(
+	nation_id: int,
+	objective_city: int,
+	staging: Array,
+	path_view: AiWorldView,
+	assigned_only: bool,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator,
+	staged: int,
+	sustained_required: int,
+	initial_orders: int,
+	committed_heavy: int,
+	committed_light: int
+) -> Dictionary:
+	var changed := false
+	var orders := 0
+	var candidates := _collect_campaign_reinforcement_candidates(
+		nation_id, objective_city, staging, path_view, assigned_only,
+		defense_plan, coordinator
+	)
+	# 距离相等时使用等变军队顺序，避免创建顺序影响镜像结果。
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var army_a: Army = a["army"]
+		var army_b: Army = b["army"]
+		if army_a.max_size != army_b.max_size:
+			return army_a.max_size > army_b.max_size
+		var da: float = a["best_distance"]
+		var db: float = b["best_distance"]
+		if not is_equal_approx(da, db):
+			return da < db
+		return EquivariantOrder.army_less(
+			state, nation_id, army_a, army_b, objective_city
+		)
+	)
+	for entry in candidates:
+		if (
+			initial_orders + orders >= PREPARATION_MAX_ORDERS_PER_CYCLE
+			or staged >= sustained_required
+		):
+			break
+		var army: Army = entry["army"]
+		if (
+			not assigned_only
+			and army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE
+			and committed_light >= committed_heavy
+		):
+			continue
+		var reinforce := _make_campaign_reinforce_order(
+			objective_city, int(entry["best_city"])
+		)
+		if _execute_ai_candidate(army, reinforce):
+			changed = true
+			orders += 1
+			staged += army.size
+			if not assigned_only:
+				if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+					committed_heavy += 1
+				elif army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
+					committed_light += 1
+	return {
+		"changed": changed,
+		"orders": orders,
+		"staged": staged,
+		"committed_heavy": committed_heavy,
+		"committed_light": committed_light,
+	}
 
 
 func _assign_campaign_staging_holds(
