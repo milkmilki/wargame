@@ -410,7 +410,15 @@ static func _accumulate_build_profile_count(
 ## routes、嵌套路径/分配字典和所有统计数组都不与 structure 共享可变容器。
 ## 调用方负责先比较 structure_fingerprint()；这里仅检查尺寸，避免缓存命中时
 ## 为新鲜度重复扫描全部城市、道路、战争和占边军队。
-static func settle(state: GameState, structure: Dictionary) -> Dictionary:
+static func settle(
+	state: GameState,
+	structure: Dictionary,
+	profile: Dictionary = {},
+	cached_wartime_mask: PackedByteArray = PackedByteArray()
+) -> Dictionary:
+	var profile_enabled := bool(profile.get("enabled", false))
+	var total_started := Time.get_ticks_usec() if profile_enabled else 0
+	var stage_started := total_started
 	if state == null:
 		return _empty_result(0, 0)
 	var city_count := state.cities.size()
@@ -422,10 +430,14 @@ static func settle(state: GameState, structure: Dictionary) -> Dictionary:
 		or int(structure.get("nation_count", -1)) != nation_count
 	):
 		# 尺寸变化时旧数组不可能安全复用；公开 API 保守地重建一次。
-		return settle(state, build_structure(state))
+		return settle(
+			state, build_structure(state), profile, cached_wartime_mask
+		)
 	var routes := _copy_routes(structure.get(
 		"routes", [] as Array[Dictionary]
 	))
+	_record_settle_profile(profile, "settle_copy_routes", stage_started)
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	var city_gold_bonus := _copy_int_array(
 		structure.get("city_gold_bonus", []), city_count
 	)
@@ -438,10 +450,14 @@ static func settle(state: GameState, structure: Dictionary) -> Dictionary:
 	var policies := _copy_int_array(
 		structure.get("policies", []), nation_count
 	)
+	_record_settle_profile(profile, "settle_copy_arrays", stage_started)
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	_apply_wartime_trade_gold(
 		state, routes, city_gold_bonus, nation_trade_gold, nation_trade_tax,
-		true
+		true, cached_wartime_mask
 	)
+	_record_settle_profile(profile, "settle_wartime_gold", stage_started)
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	var nation_food_import := _zero_int_array(nation_count)
 	var nation_food_export := _zero_int_array(nation_count)
 	var nation_food_cost := _zero_int_array(nation_count)
@@ -453,21 +469,33 @@ static func settle(state: GameState, structure: Dictionary) -> Dictionary:
 		nation_trade_gold, nation_food_import, nation_food_cost,
 		nation_manpower_import, nation_manpower_cost
 	)
-	return _finish_result(
+	_record_settle_profile(profile, "settle_purchases", stage_started)
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
+	var result := _finish_result(
 		routes, city_gold_bonus, nation_trade_gold, nation_trade_tax,
 		nation_food_import, nation_food_export, nation_food_cost,
 		nation_food_sale_income,
 		nation_manpower_import, nation_manpower_cost,
 		policies
 	)
+	_record_settle_profile(profile, "settle_finish", stage_started)
+	if profile_enabled:
+		profile["settle_total"] = Time.get_ticks_usec() - total_started
+	return result
 
 
 ## AI/外交只读摘要结算。动态采购只依赖并写入国家级数组，不修改路线；
 ## 因此这里直接共享结构层 routes，跳过数百条路线及其路径字典的深复制，也
 ## 不计算只供月结发布/前端刷新使用的完整结果签名。调用方不得修改 routes。
 static func settle_nation_summary(
-	state: GameState, structure: Dictionary
+	state: GameState,
+	structure: Dictionary,
+	profile: Dictionary = {},
+	cached_wartime_mask: PackedByteArray = PackedByteArray()
 ) -> Dictionary:
+	var profile_enabled := bool(profile.get("enabled", false))
+	var total_started := Time.get_ticks_usec() if profile_enabled else 0
+	var stage_started := total_started
 	if state == null:
 		return _empty_nation_summary(0)
 	var city_count := state.cities.size()
@@ -478,7 +506,9 @@ static func settle_nation_summary(
 		int(structure.get("city_count", -1)) != city_count
 		or int(structure.get("nation_count", -1)) != nation_count
 	):
-		return settle_nation_summary(state, build_structure(state))
+		return settle_nation_summary(
+			state, build_structure(state), profile, cached_wartime_mask
+		)
 	var nation_trade_gold := _copy_int_array(
 		structure.get("nation_trade_gold", []), nation_count
 	)
@@ -488,12 +518,16 @@ static func settle_nation_summary(
 	var policies := _copy_int_array(
 		structure.get("policies", []), nation_count
 	)
+	_record_settle_profile(profile, "summary_copy_arrays", stage_started)
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	# 摘要结果共享只读 routes，不得改写结构缓存；这里只从同一份路线分配
 	# 重新汇总战时实收国家数组，保证与完整 settle() 完全一致。
 	_apply_wartime_trade_gold(
 		state, structure.get("routes", []), [] as Array[int],
-		nation_trade_gold, nation_trade_tax, false
+		nation_trade_gold, nation_trade_tax, false, cached_wartime_mask
 	)
+	_record_settle_profile(profile, "summary_wartime_gold", stage_started)
+	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	var nation_food_import := _zero_int_array(nation_count)
 	var nation_food_export := _zero_int_array(nation_count)
 	var nation_food_cost := _zero_int_array(nation_count)
@@ -505,7 +539,8 @@ static func settle_nation_summary(
 		nation_trade_gold, nation_food_import, nation_food_cost,
 		nation_manpower_import, nation_manpower_cost
 	)
-	return {
+	_record_settle_profile(profile, "summary_purchases", stage_started)
+	var result := {
 		"routes": structure.get("routes", []),
 		"nation_trade_gold": nation_trade_gold,
 		"nation_trade_tax": nation_trade_tax,
@@ -516,6 +551,18 @@ static func settle_nation_summary(
 		"nation_manpower_import": nation_manpower_import,
 		"nation_manpower_cost": nation_manpower_cost,
 	}
+	if profile_enabled:
+		profile["summary_total"] = Time.get_ticks_usec() - total_started
+	return result
+
+
+static func _record_settle_profile(
+	profile: Dictionary,
+	stage: String,
+	started_usec: int
+) -> void:
+	if bool(profile.get("enabled", false)):
+		profile[stage] = Time.get_ticks_usec() - started_usec
 
 
 static func _empty_nation_summary(nation_count: int) -> Dictionary:
@@ -3701,12 +3748,29 @@ static func _apply_wartime_trade_gold(
 	city_gold_bonus: Array[int],
 	nation_trade_gold: Array[int],
 	nation_trade_tax: Array[int],
-	mutate_routes: bool
+	mutate_routes: bool,
+	cached_wartime_mask: PackedByteArray = PackedByteArray()
 ) -> void:
-	var wartime := wartime_nation_mask(state)
+	var wartime := (
+		cached_wartime_mask
+		if cached_wartime_mask.size() == state.nations.size()
+		else wartime_nation_mask(state)
+	)
 	if not wartime.has(1):
 		return
-	var base_nation_trade_gold := nation_trade_gold.duplicate()
+	# 外交摘要不发布路线/城市分配。逐路线最大余数分配的国家级守恒结果
+	# 恒等于和平总额乘战时倍率后取 floor，可直接更新国家数组。
+	if not mutate_routes:
+		for nation_id in range(state.nations.size()):
+			if wartime[nation_id] == 0:
+				continue
+			var adjusted_total := int(floor(
+				float(nation_trade_gold[nation_id])
+					* WARTIME_TRADE_GOLD_MULTIPLIER
+			))
+			nation_trade_gold[nation_id] = adjusted_total
+			nation_trade_tax[nation_id] = adjusted_total
+		return
 	var wartime_floor_sum := _zero_int_array(state.nations.size())
 	for route_value in routes:
 		var base_route: Dictionary = route_value
@@ -3727,14 +3791,11 @@ static func _apply_wartime_trade_gold(
 			continue
 		wartime_extra_remaining[nation_id] = maxi(
 			int(floor(
-				float(base_nation_trade_gold[nation_id])
-				* WARTIME_TRADE_GOLD_MULTIPLIER
+				float(nation_trade_gold[nation_id])
+					* WARTIME_TRADE_GOLD_MULTIPLIER
 			)) - wartime_floor_sum[nation_id],
 			0
 		)
-	city_gold_bonus.fill(0)
-	nation_trade_gold.fill(0)
-	nation_trade_tax.fill(0)
 	for route_index in range(routes.size()):
 		var route: Dictionary = routes[route_index]
 		var base_allocation: Dictionary = route.get("city_gold_bonus", {})
@@ -3752,7 +3813,8 @@ static func _apply_wartime_trade_gold(
 			if city_id < 0 or city_id >= state.cities.size():
 				continue
 			var owner := state.cities[city_id].owner_nation
-			var bonus := maxi(int(base_allocation[city_value]), 0)
+			var base_bonus := maxi(int(base_allocation[city_value]), 0)
+			var bonus := base_bonus
 			if owner >= 0 and owner < wartime.size() and wartime[owner] != 0:
 				bonus = int(floor(
 					float(bonus) * WARTIME_TRADE_GOLD_MULTIPLIER
@@ -3760,13 +3822,16 @@ static func _apply_wartime_trade_gold(
 				if wartime_extra_remaining[owner] > 0:
 					bonus += 1
 					wartime_extra_remaining[owner] -= 1
+				var delta := bonus - base_bonus
+				if city_id < city_gold_bonus.size():
+					city_gold_bonus[city_id] += delta
+				if owner < nation_trade_gold.size():
+					nation_trade_gold[owner] += delta
+					nation_trade_tax[owner] += delta
+			if not mutate_routes:
+				continue
 			adjusted_allocation[city_id] = bonus
 			tax += bonus
-			if city_id < city_gold_bonus.size():
-				city_gold_bonus[city_id] += bonus
-			if owner >= 0 and owner < nation_trade_gold.size():
-				nation_trade_gold[owner] += bonus
-				nation_trade_tax[owner] += bonus
 			if owner == nation_a:
 				gold_a += bonus
 			elif owner == nation_b:
@@ -3981,6 +4046,18 @@ static func _plan_trade_purchases(
 			accessible_warehouse_count[nation.id] = 1
 
 	var projected_minimum_demand := _zero_int_array(nation_count)
+	var food_consumption_multiplier := PackedFloat64Array()
+	var food_reserve_months_bonus := PackedInt32Array()
+	food_consumption_multiplier.resize(nation_count)
+	food_reserve_months_bonus.resize(nation_count)
+	for nation in state.nations:
+		var modifiers := RulerProfile.modifiers(nation)
+		food_consumption_multiplier[nation.id] = maxf(
+			float(modifiers[RulerProfile.KEY_FOOD_CONSUMPTION]), 0.1
+		)
+		food_reserve_months_bonus[nation.id] = int(
+			modifiers[RulerProfile.KEY_RESERVE_MONTHS]
+		)
 	for army in state.armies:
 		if (
 			army.size > 0 and army.owner_nation >= 0
@@ -3988,7 +4065,9 @@ static func _plan_trade_purchases(
 		):
 			projected_minimum_demand[army.owner_nation] += (
 				_projected_army_monthly_food_demand(
-					army, state.nations[army.owner_nation]
+					army,
+					state.nations[army.owner_nation],
+					food_consumption_multiplier[army.owner_nation]
 				)
 			)
 	var demand := _zero_int_array(nation_count)
@@ -4003,7 +4082,10 @@ static func _plan_trade_purchases(
 		var holder := pool_holder[nation.id]
 		pool_reserve[holder] += (
 			demand[nation.id]
-			* _food_reserve_months(policies[nation.id], nation)
+			* _food_reserve_months(
+				policies[nation.id], nation,
+				food_reserve_months_bonus[nation.id]
+			)
 		)
 	# 共享粮仓的剩余采购缺口：由粮池成员按 id 序依次用各自贸易金填补。
 	var pool_food_deficit := _zero_int_array(nation_count)
@@ -4062,14 +4144,21 @@ static func _plan_trade_purchases(
 ## exactly 1.0. Once daily settlement exists, last/EMA demand (used above) is
 ## authoritative and already carries the real route loss.
 static func _projected_army_monthly_food_demand(
-	army: Army, nation: Nation
+	army: Army,
+	nation: Nation,
+	cached_multiplier: float = -1.0
 ) -> int:
 	var base := maxi(
 		int(ceil(float(army.size) * FOOD_PER_CAPITA_MONTH)),
 		1
 	)
+	var multiplier := (
+		cached_multiplier
+		if cached_multiplier >= 0.0
+		else _ruler_food_consumption_multiplier(nation)
+	)
 	return maxi(int(ceil(
-		float(base) * _ruler_food_consumption_multiplier(nation)
+		float(base) * multiplier
 	)), 1)
 
 
@@ -4114,7 +4203,11 @@ static func _ruler_food_consumption_multiplier(nation: Nation) -> float:
 	return maxf(RulerProfile.food_consumption_multiplier(nation), 0.1)
 
 
-static func _food_reserve_months(policy: int, nation: Nation) -> int:
+static func _food_reserve_months(
+	policy: int,
+	nation: Nation,
+	cached_bonus: int = -2_147_483_648
+) -> int:
 	var base := BALANCED_FOOD_RESERVE_MONTHS
 	match policy:
 		Policy.GOLD:
@@ -4123,7 +4216,12 @@ static func _food_reserve_months(policy: int, nation: Nation) -> int:
 			base = FOOD_POLICY_RESERVE_MONTHS
 		Policy.ISOLATION:
 			base = ISOLATION_FOOD_RESERVE_MONTHS
-	return maxi(base + RulerProfile.reserve_months_bonus(nation), 0)
+	var bonus := (
+		cached_bonus
+		if cached_bonus != -2_147_483_648
+		else RulerProfile.reserve_months_bonus(nation)
+	)
+	return maxi(base + bonus, 0)
 
 
 static func _result_signature(

@@ -21,8 +21,10 @@ func _start_world(disable_optimized_scheduling: bool) -> void:
 	_active_sim = Simulation.new()
 	root.add_child(_active_sim)
 	_active_sim.setup(_active_state)
+	_seed_sieges(_active_sim, 4)
 	_active_sim.monthly_economy_worker_disabled = disable_optimized_scheduling
 	_active_sim.movement_frame_slicing_disabled = disable_optimized_scheduling
+	_active_sim.siege_defender_index_disabled = disable_optimized_scheduling
 	_active_sim.runtime_day_committed.connect(_on_runtime_day_committed)
 	_active_sim.set_speed_multiplier(32.0)
 
@@ -83,6 +85,43 @@ func _force_adjacent_wars(state: GameState, count: int) -> void:
 		used[pair.x] = true
 		used[pair.y] = true
 		selected += 1
+
+
+func _seed_sieges(simulation: Simulation, count: int) -> void:
+	var state := simulation.state
+	var seeded := 0
+	var used_cities := {}
+	for edge in state.edges:
+		if seeded >= count:
+			break
+		var owner_a := state.cities[edge.city_a].owner_nation
+		var owner_b := state.cities[edge.city_b].owner_nation
+		if (
+			owner_a < 0 or owner_b < 0 or owner_a == owner_b
+			or not state.is_enemy(owner_a, owner_b)
+			or used_cities.has(edge.city_b)
+		):
+			continue
+		var attacker: Army = null
+		for army in state.armies:
+			if army.owner_nation == owner_a and army.size > 0:
+				attacker = army
+				break
+		if attacker == null or attacker.state == Army.State.FIGHTING:
+			continue
+		var target := state.cities[edge.city_b]
+		target.fort_strength = maxi(target.fort_strength, 100)
+		attacker.state = Army.State.IDLE
+		attacker.on_edge = false
+		attacker.location_city = target.id
+		attacker.move_from = target.id
+		attacker.move_to = -1
+		attacker.move_progress = 0.0
+		attacker.path.clear()
+		simulation._start_or_join_siege(attacker, target, edge)
+		if attacker.state == Army.State.FIGHTING:
+			used_cities[target.id] = true
+			seeded += 1
 
 
 func _state_fingerprint(game_state: GameState) -> PackedByteArray:

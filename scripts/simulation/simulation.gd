@@ -189,6 +189,8 @@ var _trade_gold_flows_cache: Array[Dictionary] = []
 var _trade_summary_settlement_fingerprint: PackedByteArray = PackedByteArray()
 var _trade_summary_result_cache: Dictionary = {}
 var _trade_summary_gold_flows_cache: Array[Dictionary] = []
+var _trade_wartime_mask_diplomacy_revision: int = -1
+var _trade_wartime_mask := PackedByteArray()
 ## 战争财政快照只依赖外交关系转换。普通日以 O(1) 版本比较跳过，
 ## 外部脚本直接调用 set_diplomatic_relation 也会因 revision 变化被补同步。
 var _war_gold_snapshot_diplomacy_revision: int = -1
@@ -331,6 +333,8 @@ var trade_domestic_ideal_field_cache_disabled: bool = false
 var movement_capacity_index_disabled: bool = false
 ## 等价性守卫：true 时运行时行军/遭遇/战斗保持在同一帧；正式运行 false。
 var movement_frame_slicing_disabled: bool = false
+## 等价性守卫：true 时每场围城恢复全军扫描守军；正式运行 false。
+var siege_defender_index_disabled: bool = false
 ## 仅在单次 _advance_movement 内存活的局部索引。键为
 ## Vector3i(owner_nation, from_city, to_city)，值为同国同向运输负载。
 var _movement_capacity_load_by_direction: Dictionary = {}
@@ -1150,6 +1154,8 @@ func _reset_trade_forecast_cache() -> void:
 	_trade_summary_settlement_fingerprint = PackedByteArray()
 	_trade_summary_result_cache.clear()
 	_trade_summary_gold_flows_cache.clear()
+	_trade_wartime_mask_diplomacy_revision = -1
+	_trade_wartime_mask = PackedByteArray()
 	trade_structure_build_total = 0
 	trade_structure_cache_hit_total = 0
 	trade_forecast_build_total = 0
@@ -1166,13 +1172,19 @@ func _reset_trade_forecast_cache() -> void:
 ## 道路、领土与贸易政策；这里补齐战时收益倍率、粮池、库存、需求、国库、
 ## 军费、战乱减产日期及君主经济输入。仅将这些字段序列化，不使用 hash。
 func _trade_settlement_token(
-	structure_fingerprint: PackedByteArray
+	structure_fingerprint: PackedByteArray,
+	wartime_mask: PackedByteArray = PackedByteArray()
 ) -> PackedByteArray:
+	var effective_wartime_mask := (
+		wartime_mask
+		if wartime_mask.size() == state.nations.size()
+		else TradeNetwork.wartime_nation_mask(state)
+	)
 	var fields: Array = [
 		"trade_settlement_v1",
 		structure_fingerprint,
 		["trade_price_enabled", state.trade_price_enabled],
-		["wartime_nations", TradeNetwork.wartime_nation_mask(state)],
+		["wartime_nations", effective_wartime_mask],
 	]
 	for city in state.cities:
 		fields.append([
@@ -1291,8 +1303,10 @@ func _forecast_trade_and_gold_flows(
 	part_started = (
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
+	var wartime_mask := _cached_trade_wartime_mask()
 	var settlement_fingerprint := _trade_settlement_token(
-		structure_fingerprint
+		structure_fingerprint,
+		wartime_mask
 	)
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
@@ -1345,9 +1359,11 @@ func _forecast_trade_and_gold_flows(
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
 	var trade := (
-		TradeNetwork.settle_nation_summary(state, structure)
+		TradeNetwork.settle_nation_summary(
+			state, structure, {}, wartime_mask
+		)
 		if summary_only
-		else TradeNetwork.settle(state, structure)
+		else TradeNetwork.settle(state, structure, {}, wartime_mask)
 	)
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
@@ -1377,6 +1393,16 @@ func _forecast_trade_and_gold_flows(
 		"trade": trade,
 		"gold_flows": gold_flows,
 	}
+
+
+func _cached_trade_wartime_mask() -> PackedByteArray:
+	if (
+		_trade_wartime_mask_diplomacy_revision != state.diplomacy_revision
+		or _trade_wartime_mask.size() != state.nations.size()
+	):
+		_trade_wartime_mask = TradeNetwork.wartime_nation_mask(state)
+		_trade_wartime_mask_diplomacy_revision = state.diplomacy_revision
+	return _trade_wartime_mask
 
 
 ## Simulation 内部的低成本失效探针。结构 fingerprint 仍是最终权威；
@@ -14008,20 +14034,37 @@ func _advance_movement() -> void:
 func _advance_movement_over_frames() -> void:
 	_prepare_movement_capacity_index()
 	_set_runtime_profile_stage(&"movement_travel")
+	var phase_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	var holding_arrivals := _advance_travelling_armies()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"movement_travel", phase_started)
 	await get_tree().process_frame
 	_set_runtime_profile_stage(&"movement_retreat_arrivals")
+	phase_started = Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	_arrive_retreating_armies()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"movement_retreat_arrivals", phase_started)
 	await get_tree().process_frame
 	_set_runtime_profile_stage(&"movement_contacts")
+	phase_started = Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	_resolve_movement_contacts(holding_arrivals)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"movement_contacts", phase_started)
 	await get_tree().process_frame
 	_set_runtime_profile_stage(&"movement_arrivals")
+	phase_started = Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	_arrive_travelling_armies()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"movement_arrivals", phase_started)
 	await get_tree().process_frame
 	_set_runtime_profile_stage(&"movement_combat")
+	phase_started = Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	_resolve_battles()
 	_purge_dead_armies()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"movement_combat", phase_started)
 	_finish_movement_capacity_index()
 
 
@@ -14774,9 +14817,18 @@ func _siege_side_defends_city(
 	return living_count > 0
 
 
-func _siege_city_defenders(city: City) -> Array[Army]:
+func _siege_city_defenders(
+	city: City,
+	armies_by_city: Dictionary = {}
+) -> Array[Army]:
 	var result: Array[Army] = []
-	for army in state.armies:
+	var candidates: Array = (
+		armies_by_city.get(city.id, [] as Array[Army])
+		if not armies_by_city.is_empty()
+		else state.armies
+	)
+	for army_value in candidates:
+		var army: Army = army_value
 		if (
 			army.size <= 0
 			or not _nation_defends_city(
@@ -14814,6 +14866,11 @@ func _resolve_battles() -> void:
 	# 不依赖 battle 数组顺序，也不会因军队拆分增加随机消费次数。
 	var shared_roll := state.rng.randi_range(Combat.DICE_MIN, Combat.DICE_MAX)
 	var tactical_entropy := int(state.rng.randi())
+	var armies_by_city := (
+		{}
+		if siege_defender_index_disabled
+		else _bucket_armies_by_location_city()
+	)
 	for battle in state.battles:
 		if battle.finished:
 			continue
@@ -14821,7 +14878,8 @@ func _resolve_battles() -> void:
 			_advance_siege(
 				battle,
 				shared_roll,
-				tactical_entropy
+				tactical_entropy,
+				armies_by_city
 			)
 		else:
 			_resolve_combat_round(
@@ -14832,6 +14890,17 @@ func _resolve_battles() -> void:
 			if battle.finished:
 				_finish_field_battle(battle)
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
+
+
+func _bucket_armies_by_location_city() -> Dictionary:
+	var result := {}
+	for army in state.armies:
+		if army.location_city < 0 or army.location_city >= state.cities.size():
+			continue
+		if not result.has(army.location_city):
+			result[army.location_city] = [] as Array[Army]
+		(result[army.location_city] as Array[Army]).append(army)
+	return result
 
 
 func _resolve_combat_round(
@@ -14983,7 +15052,8 @@ func _mark_city_war_disruption(city: City) -> void:
 func _advance_siege(
 	battle: Battle,
 	shared_roll: int = -1,
-	tactical_entropy: int = -1
+	tactical_entropy: int = -1,
+	armies_by_city: Dictionary = {}
 ) -> void:
 	if battle.city != null:
 		_mark_city_war_disruption(battle.city)
@@ -14991,7 +15061,7 @@ func _advance_siege(
 	# 纯围城阶段也必须执行单军溃败阈值；不能因没有正面守军而让失去组织的
 	# 围城军无限停留并贡献（哪怕为 0 的）封锁兵力。
 	battle.side_a = _withdraw_broken_armies(battle.side_a)
-	_reconcile_siege_city_defenders(battle)
+	_reconcile_siege_city_defenders(battle, armies_by_city)
 	_refresh_battle_frontline_priorities(battle)
 	var atk_alive := battle.side_size(battle.side_a) > 0
 
@@ -15146,7 +15216,10 @@ func _advance_siege(
 
 ## 围城建立后仍可能有撤退军抵达、恢复军落位等状态转换。每个围城日都重新收集
 ## 目标城内未参战的防卫共同体军队，确保城主与盟军使用同一入场规则。
-func _reconcile_siege_city_defenders(battle: Battle) -> void:
+func _reconcile_siege_city_defenders(
+	battle: Battle,
+	armies_by_city: Dictionary = {}
+) -> void:
 	if (
 		battle.city == null
 		or battle.city.id < 0
@@ -15154,7 +15227,7 @@ func _reconcile_siege_city_defenders(battle: Battle) -> void:
 		or state.cities[battle.city.id] != battle.city
 	):
 		return
-	var defenders := _siege_city_defenders(battle.city)
+	var defenders := _siege_city_defenders(battle.city, armies_by_city)
 	if defenders.is_empty():
 		return
 	if (

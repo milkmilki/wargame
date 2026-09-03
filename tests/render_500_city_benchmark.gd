@@ -3,7 +3,8 @@ extends SceneTree
 ## 可调：RENDER_BENCH_FRAMES（默认180）、RENDER_BENCH_SCENE（默认五百城场景）、
 ## RENDER_BENCH_SEED（默认12345，覆盖压力场景的启动随机种子）、
 ## RENDER_BENCH_DAYS（大于0时至少推进指定天数）、RENDER_BENCH_WAR_PAIRS
-## （从接壤国家中确定性选取的强制战争对数）。
+## （从接壤国家中确定性选取的强制战争对数）、RENDER_BENCH_SIEGES
+## （在这些战争对上注入的持续围城数）。
 
 var _frame_samples: Array[float] = []
 
@@ -23,6 +24,7 @@ func _init() -> void:
 	var frame_count := _env_int("RENDER_BENCH_FRAMES", 180)
 	var target_days := _env_int("RENDER_BENCH_DAYS", 0)
 	var requested_war_pairs := _env_int("RENDER_BENCH_WAR_PAIRS", 0)
+	var requested_sieges := _env_int("RENDER_BENCH_SIEGES", 0)
 	var world_seed := _env_int("RENDER_BENCH_SEED", 12345)
 	var sample_gpu_counters := _env_int("RENDER_BENCH_GPU_COUNTERS", 0) != 0
 	var seconds_per_day := float(OS.get_environment(
@@ -47,6 +49,9 @@ func _init() -> void:
 		forced_wars = _force_adjacent_wars(
 			simulation.state, requested_war_pairs
 		)
+	var seeded_sieges := _seed_sieges(
+		simulation, forced_wars, requested_sieges
+	)
 	var render_only := await _sample_frames(
 		frame_count, 0, sample_gpu_counters, null
 	)
@@ -70,6 +75,9 @@ func _init() -> void:
 	])
 	print("强制战争 requested=%d actual=%d pairs=%s" % [
 		requested_war_pairs, forced_wars.size(), str(forced_wars),
+	])
+	print("注入围城 requested=%d actual=%d" % [
+		requested_sieges, seeded_sieges,
 	])
 	print("节点数=%d" % _count_nodes(main))
 	_print_stats("纯渲染（模拟暂停）", render_only)
@@ -243,6 +251,64 @@ func _force_adjacent_wars(
 			pair.x, pair.y, GameState.DiplomaticRelation.WAR
 		)
 	return selected
+
+
+func _seed_sieges(
+	simulation: Simulation,
+	war_pairs: Array[Vector2i],
+	requested_sieges: int
+) -> int:
+	if simulation == null or requested_sieges <= 0:
+		return 0
+	var state := simulation.state
+	var seeded := 0
+	var used_armies := {}
+	var used_cities := {}
+	for pair in war_pairs:
+		if seeded >= requested_sieges:
+			break
+		var siege_edge: Edge = null
+		var target_city_id := -1
+		for edge in state.edges:
+			var owner_a := state.cities[edge.city_a].owner_nation
+			var owner_b := state.cities[edge.city_b].owner_nation
+			if owner_a == pair.x and owner_b == pair.y:
+				siege_edge = edge
+				target_city_id = edge.city_b
+				break
+			if owner_a == pair.y and owner_b == pair.x:
+				siege_edge = edge
+				target_city_id = edge.city_a
+				break
+		if siege_edge == null or used_cities.has(target_city_id):
+			continue
+		var attacker: Army = null
+		for army in state.armies:
+			if (
+				army.owner_nation == pair.x
+				and army.size > 0
+				and not used_armies.has(army.id)
+			):
+				attacker = army
+				break
+		if attacker == null:
+			continue
+		var target := state.cities[target_city_id]
+		target.fort_strength = maxi(target.fort_strength, 100)
+		attacker.state = Army.State.IDLE
+		attacker.on_edge = false
+		attacker.location_city = target_city_id
+		attacker.move_from = target_city_id
+		attacker.move_to = -1
+		attacker.move_progress = 0.0
+		attacker.path.clear()
+		simulation._start_or_join_siege(attacker, target, siege_edge)
+		if attacker.state != Army.State.FIGHTING:
+			continue
+		used_armies[attacker.id] = true
+		used_cities[target_city_id] = true
+		seeded += 1
+	return seeded
 
 
 func _sample_activity(state: GameState, peak: Dictionary) -> void:
