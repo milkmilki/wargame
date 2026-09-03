@@ -552,42 +552,26 @@ func _append_army_signature(
 func _reuse_dynamic_plan(
 	previous: CityDefensePlan
 ) -> void:
-	required_power = previous.required_power.duplicate(true)
-	posture_by_city = (
-		previous.posture_by_city.duplicate(true)
-	)
-	preferred_edge_by_city = (
-		previous.preferred_edge_by_city.duplicate(true)
-	)
-	directional_pressure = (
-		previous.directional_pressure.duplicate(true)
-	)
-	relief_need = previous.relief_need.duplicate(true)
-	local_pressure = previous.local_pressure.duplicate(true)
-	must_hold_cities = (
-		previous.must_hold_cities.duplicate(true)
-	)
+	# 这些字典的值是数值、布尔值或只读压力数组；只需隔离顶层键空间，
+	# 避免每个国家每次复用防区计划时递归复制整张压力图。
+	required_power = previous.required_power.duplicate()
+	posture_by_city = previous.posture_by_city.duplicate()
+	preferred_edge_by_city = previous.preferred_edge_by_city.duplicate()
+	directional_pressure = previous.directional_pressure.duplicate()
+	relief_need = previous.relief_need.duplicate()
+	local_pressure = previous.local_pressure.duplicate()
+	must_hold_cities = previous.must_hold_cities.duplicate()
 	frontline_distribution_enabled = (
 		previous.frontline_distribution_enabled
 	)
-	primary_frontline_cities = (
-		previous.primary_frontline_cities.duplicate(true)
-	)
-	frontline_cities = (
-		previous.frontline_cities.duplicate(true)
-	)
-	frontline_allocation = (
-		previous.frontline_allocation.duplicate(true)
-	)
+	primary_frontline_cities = previous.primary_frontline_cities.duplicate()
+	frontline_cities = previous.frontline_cities.duplicate()
+	frontline_allocation = previous.frontline_allocation.duplicate()
 	defense_assignment_slots = (
 		previous.defense_assignment_slots
 	)
-	_role_city_priority_cache = (
-		previous._role_city_priority_cache.duplicate(true)
-	)
-	_role_city_structural_cache = (
-		previous._role_city_structural_cache.duplicate(true)
-	)
+	_role_city_priority_cache = previous._role_city_priority_cache.duplicate()
+	_role_city_structural_cache = previous._role_city_structural_cache.duplicate()
 	dynamic_plan_reused = true
 
 
