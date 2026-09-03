@@ -2996,6 +2996,14 @@ static func _get_shared_international_ideal_field(
 		])
 		if shared_international_ideal_fields.has(shared_key):
 			var snapshot: Variant = shared_international_ideal_fields[shared_key]
+			# 同一进程内的共享缓存可直接复用已解码字段，避免每个候选伙伴
+			# 重复执行 var_to_bytes/bytes_to_var；旧的序列化条目仍兼容读取。
+			if snapshot is Dictionary:
+				field_cache[local_cache_key] = snapshot
+				return {
+					"field": snapshot, "builds": 0,
+					"local_hits": 1, "source_sets": 1,
+				}
 			if snapshot is PackedByteArray:
 				var cached := _deserialize_preferred_endpoint_field_snapshot(
 					snapshot, state.cities.size()
@@ -3017,9 +3025,7 @@ static func _get_shared_international_ideal_field(
 				>= INTERNATIONAL_IDEAL_SHARED_CACHE_MAX_ENTRIES
 		):
 			shared_international_ideal_fields.clear()
-		shared_international_ideal_fields[shared_key] = (
-			_serialize_preferred_endpoint_field_snapshot(field)
-		)
+		shared_international_ideal_fields[shared_key] = field
 	return {
 		"field": field, "builds": 1,
 		"local_hits": 0, "source_sets": 1,
