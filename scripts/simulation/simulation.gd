@@ -10813,14 +10813,11 @@ func _launch_group_campaign_offensive(
 		"multiplier": multiplier,
 		"bonus_days": bonus_days,
 	}
-	var participant_fingerprints := {}
-	for army_id in wave_assignments:
-		var participant: Army = army_by_id.get(int(army_id))
-		if participant == null:
-			return false
-		participant_fingerprints[int(army_id)] = (
-			_campaign_transaction_army_fingerprint(participant)
-		)
+	var participant_fingerprints: Dictionary = (
+		_build_campaign_participant_fingerprints(wave_assignments, army_by_id)
+	)
+	if participant_fingerprints.is_empty() and not wave_assignments.is_empty():
+		return false
 	payload["participant_fingerprints"] = participant_fingerprints
 	if _collect_ai_commands:
 		_pending_campaign_launch_transactions[transaction_id] = payload
@@ -10833,6 +10830,21 @@ func _launch_group_campaign_offensive(
 		_apply_prevalidated_campaign_intent(intent)
 	_apply_campaign_launch_payload_unchecked(payload)
 	return true
+
+
+func _build_campaign_participant_fingerprints(
+	wave_assignments: Dictionary,
+	army_by_id: Dictionary
+) -> Dictionary:
+	var participant_fingerprints := {}
+	for army_id in wave_assignments:
+		var participant: Army = army_by_id.get(int(army_id))
+		if participant == null:
+			return {}
+		participant_fingerprints[int(army_id)] = (
+			_campaign_transaction_army_fingerprint(participant)
+		)
+	return participant_fingerprints
 
 
 func _make_campaign_attack_order(
