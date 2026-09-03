@@ -329,6 +329,8 @@ var _movement_capacity_load_by_direction: Dictionary = {}
 ## army instance id -> [direction key, indexed load]，用于离边、死亡与途中掉头时精确回滚。
 var _movement_capacity_entry_by_army: Dictionary = {}
 var _movement_capacity_index_active: bool = false
+var _war_flags_ownership_revision: int = -1
+var _war_flags_diplomacy_revision: int = -1
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_line_edge_assignment_emergencies
 ## （不分帧），以隔离「填线防区分帧」在同一运行时路径下的等价性。正式游戏 false。
 var line_edge_frame_slicing_disabled: bool = false
@@ -360,6 +362,8 @@ func setup(game_state: GameState) -> void:
 	_ai_supply_source_cache.clear()
 	_ai_supply_network_cache.clear()
 	_ai_city_partition_cache.clear()
+	_war_flags_ownership_revision = -1
+	_war_flags_diplomacy_revision = -1
 	_diplomacy_topology_cache.clear()
 	_ai_defense_plan_cache.clear()
 	_campaign_evaluated_day_by_nation.clear()
@@ -15471,7 +15475,13 @@ func _refresh_war_flags() -> void:
 	# 边 occupied 由 passing_count 决定
 	for e in state.edges:
 		e.occupied = e.passing_count > 0
-	# 城 at_war：与任一相邻敌国城市接壤。
+	# 城 at_war：与任一相邻敌国城市接壤。只在领土/外交版本变化时重算；
+	# 边 occupied 仍需每天读取 passing_count。
+	if (
+		_war_flags_ownership_revision == state.ownership_revision
+		and _war_flags_diplomacy_revision == state.diplomacy_revision
+	):
+		return
 	for city in state.cities:
 		var war := false
 		for nb in state.neighbors(city.id):
@@ -15482,6 +15492,8 @@ func _refresh_war_flags() -> void:
 				war = true
 				break
 		city.at_war = war
+	_war_flags_ownership_revision = state.ownership_revision
+	_war_flags_diplomacy_revision = state.diplomacy_revision
 
 # ------------------------------------------------------------------ 7. 胜负
 
