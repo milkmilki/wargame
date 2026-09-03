@@ -266,6 +266,8 @@ var diplomacy_enabled: bool = true
 ## AI 决策错峰：true 时各国按相位分散到决策周期内的不同天（削峰）；false 时全体
 ## 在 day%interval==0 同日决策（错峰前的旧行为）。仅用于 A/B 对照平衡性影响。
 var ai_staggered_decisions: bool = true
+## AI 战争迷雾实验：-1 全知，非负值限制为边境城市外的道路跳数。
+var ai_visibility_hops: int = -1
 ## 性能 A/B 守卫：正式运行均为 false；分别关闭资源缓存贯通和单 tick 决策上下文。
 var ai_force_resource_cache_disabled: bool = false
 var ai_decision_context_disabled: bool = false
@@ -6208,7 +6210,8 @@ func _build_ai_view(
 		_ai_path_field_cache_by_nation[nation_id],
 		_ai_supply_network_cache,
 		_ai_city_partition_cache,
-		shared_army_index
+		shared_army_index,
+		ai_visibility_hops
 	)
 	view.strategic_planning_enabled = bool(
 		ai_strategic_planning_overrides.get(nation_id, true)

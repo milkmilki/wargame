@@ -3,12 +3,14 @@ extends SceneTree
 ## 报告生成可行性、贸易结构规模/耗时和 AI 分阶段耗时（稀疏化前后对比用）。可调环境变量：
 ##   AI_STRESS_CITIES(默认500) AI_STRESS_NATIONS(默认80) AI_STRESS_DAYS(默认120)
 ##   AI_STRESS_SEED(默认12345)
+##   AI_STRESS_VISIBILITY_HOPS(默认-1；A/B 基准使用 7 或 10)
 
 func _init() -> void:
 	var cities := _env_int("AI_STRESS_CITIES", 500)
 	var nations := _env_int("AI_STRESS_NATIONS", 80)
 	var days := _env_int("AI_STRESS_DAYS", 120)
 	var world_seed := _env_int("AI_STRESS_SEED", 12345)
+	var visibility_hops := _env_int("AI_STRESS_VISIBILITY_HOPS", -1)
 	var gen_start := Time.get_ticks_usec()
 	var state := GameState.new()
 	state.generate_world(world_seed, nations, cities)
@@ -16,6 +18,7 @@ func _init() -> void:
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
+	sim.ai_visibility_hops = visibility_hops
 	var diplomatic_range_cache := {}
 	var diplomatic_pairs := 0
 	var diplomatic_range_symmetric := true
@@ -44,6 +47,9 @@ func _init() -> void:
 	print("=== 500城压力测试 请求城=%d 国=%d seed=%d ===" % [
 		cities, nations, world_seed,
 	])
+	print("AI 可见范围=%s" % (
+		"全知" if visibility_hops < 0 else "%d 跳" % visibility_hops
+	))
 	print("生成耗时=%.1fms 实际陆城=%d 总城(含码头)=%d 边=%d 军=%d" % [
 		gen_ms,
 		state.land_cities().size(),

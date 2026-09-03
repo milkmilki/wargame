@@ -6,6 +6,8 @@ var state: GameState
 var nation_id: int
 var day: int
 var capital_city_id: int
+## -1 表示全知；非负值表示从本国边境城市向外的最大道路跳数。
+var visibility_hops: int = -1
 var strategic_planning_enabled: bool = true
 var adaptive_garrison_enabled: bool = true
 var supply_corridor_defense_enabled: bool = true
@@ -122,21 +124,27 @@ static func build(
 	shared_path_cache: Dictionary = {},
 	shared_supply_network_cache: Dictionary = {},
 	shared_city_partition_cache: Dictionary = {},
-	shared_army_index: Dictionary = {}
+	shared_army_index: Dictionary = {},
+	visibility_hops: int = -1
 ) -> AiWorldView:
 	var view := AiWorldView.new()
 	view.state = game_state
 	view.nation_id = owner_nation
 	view.day = game_state.day
 	view.capital_city_id = game_state.nations[owner_nation].capital_city_id
+	view.visibility_hops = visibility_hops
 	view._path_field_cache = shared_path_cache
 	view._supply_network_cache = shared_supply_network_cache
 	view.warehouses = game_state.warehouse_cities_of(owner_nation)
-	var city_partition_key := "%d:%d:%d" % [
+	var city_partition_key := "%d:%d:%d:%d" % [
 		owner_nation,
 		game_state.ownership_revision,
 		game_state.diplomacy_revision,
+		visibility_hops,
 	]
+	var visible_city_ids := _visible_city_ids(
+		game_state, owner_nation, visibility_hops
+	)
 	if shared_city_partition_cache.has(city_partition_key):
 		var cached: Dictionary = shared_city_partition_cache[
 			city_partition_key
@@ -157,6 +165,8 @@ static func build(
 		for city in game_state.cities:
 			if city.owner_nation == owner_nation:
 				view.friendly_cities.append(city)
+			elif visibility_hops >= 0 and not visible_city_ids.has(city.id):
+				continue
 			elif game_state.is_enemy(
 				owner_nation,
 				city.owner_nation
@@ -229,6 +239,12 @@ static func build(
 				[] as Array[Army]
 			) as Array[Army]
 		)
+		if visibility_hops >= 0:
+			var visible_armies: Array[Army] = []
+			for army in other_armies:
+				if _army_is_visible(army, visible_city_ids):
+					visible_armies.append(army)
+			other_armies = visible_armies
 		if game_state.is_enemy(owner_nation, other.id):
 			view.enemy_armies.append_array(other_armies)
 		elif game_state.is_allied(owner_nation, other.id):
@@ -279,6 +295,54 @@ static func build(
 		owner_nation
 	)
 	return view
+
+
+static func _visible_city_ids(
+	game_state: GameState,
+	owner_nation: int,
+	hops: int
+) -> Dictionary:
+	var visible := {}
+	if hops < 0:
+		return visible
+	var queue: Array[int] = []
+	var distance := {}
+	for city in game_state.cities:
+		if city.owner_nation != owner_nation:
+			continue
+		var border := false
+		for neighbor in game_state.neighbors(city.id):
+			if game_state.cities[neighbor].owner_nation != owner_nation:
+				border = true
+				break
+		if border:
+			distance[city.id] = 0
+			queue.append(city.id)
+	if queue.is_empty():
+		for city in game_state.cities:
+			if city.owner_nation == owner_nation:
+				distance[city.id] = 0
+				queue.append(city.id)
+	var head := 0
+	while head < queue.size():
+		var city_id := queue[head]
+		head += 1
+		var depth := int(distance[city_id])
+		visible[city_id] = true
+		if depth >= hops:
+			continue
+		for neighbor in game_state.neighbors(city_id):
+			if distance.has(neighbor):
+				continue
+			distance[neighbor] = depth + 1
+			queue.append(neighbor)
+	return visible
+
+
+static func _army_is_visible(army: Army, visible_city_ids: Dictionary) -> bool:
+	if army.on_edge and army.move_to >= 0:
+		return visible_city_ids.has(army.move_from) or visible_city_ids.has(army.move_to)
+	return army.location_city >= 0 and visible_city_ids.has(army.location_city)
 
 
 func armies_at_city(city_id: int) -> Array[Army]:
