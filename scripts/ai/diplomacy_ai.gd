@@ -1969,6 +1969,9 @@ static func _alliance_frontier_release_value(
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
+	if not bool(evaluation_cache.get("__disable_structure_cache", false)):
+		_build_frontier_release_values(state, evaluation_cache)
+		return float(evaluation_cache.get(cache_key, 0.0))
 	if _frontier_edges(
 		state,
 		nation_id,
@@ -2012,6 +2015,77 @@ static func _alliance_frontier_release_value(
 	)
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 一轮外交内边境和军队位置冻结。旧路径为每个候选国家对各扫一遍 E+A；
+## 这里一次构建所有有实际接壤的方向，并按 state.armies 原序累计，保持结果一致。
+static func _build_frontier_release_values(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> void:
+	if evaluation_cache.has("frontier_release_values_built"):
+		return
+	evaluation_cache["frontier_release_values_built"] = true
+	var cities_by_pair := {}
+	var targets_by_nation := {}
+	for edge in state.edges:
+		var owner_a := state.cities[edge.city_a].owner_nation
+		var owner_b := state.cities[edge.city_b].owner_nation
+		if owner_a == owner_b or owner_a < 0 or owner_b < 0:
+			continue
+		var key_a := Vector2i(owner_a, owner_b)
+		var key_b := Vector2i(owner_b, owner_a)
+		if not cities_by_pair.has(key_a):
+			cities_by_pair[key_a] = {}
+		if not cities_by_pair.has(key_b):
+			cities_by_pair[key_b] = {}
+		(cities_by_pair[key_a] as Dictionary)[edge.city_a] = true
+		(cities_by_pair[key_b] as Dictionary)[edge.city_b] = true
+		if not targets_by_nation.has(owner_a):
+			targets_by_nation[owner_a] = [] as Array[int]
+		if not targets_by_nation.has(owner_b):
+			targets_by_nation[owner_b] = [] as Array[int]
+		var targets_a: Array[int] = targets_by_nation[owner_a]
+		var targets_b: Array[int] = targets_by_nation[owner_b]
+		if not targets_a.has(owner_b):
+			targets_a.append(owner_b)
+		if not targets_b.has(owner_a):
+			targets_b.append(owner_a)
+	var committed_by_pair := {}
+	for army in state.armies:
+		if army.size <= 0 or not targets_by_nation.has(army.owner_nation):
+			continue
+		for target_id in targets_by_nation[army.owner_nation] as Array[int]:
+			var pair := Vector2i(army.owner_nation, target_id)
+			var frontier_cities: Dictionary = cities_by_pair[pair]
+			var committed := (
+				army.state == Army.State.IDLE
+				and frontier_cities.has(army.location_city)
+			) or (
+				army.state == Army.State.HOLDING
+				and army.move_to != -1
+				and (
+					frontier_cities.has(army.move_from)
+					or frontier_cities.has(army.move_to)
+				)
+			)
+			if committed:
+				committed_by_pair[pair] = (
+					float(committed_by_pair.get(pair, 0.0))
+					+ ArmyPower.effective(army)
+				)
+	for pair_value in cities_by_pair:
+		var pair: Vector2i = pair_value
+		var national_power := _national_power(
+			state, pair.x, evaluation_cache
+		)
+		evaluation_cache[
+			"frontier_release:%d:%d" % [pair.x, pair.y]
+		] = minf(
+			float(committed_by_pair.get(pair, 0.0))
+				/ maxf(national_power, 1.0),
+			0.75
+		)
 
 
 ## 只统计当前敌国之外的中立第三国在本国边境实际部署的战力。

@@ -309,6 +309,8 @@ var supply_frame_slicing_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_reinforcements（不分帧），
 ## 以隔离「补员分帧」在同一运行时路径下的等价性。正式游戏 false。
 var reinforcement_frame_slicing_disabled: bool = false
+## 等价性守卫：true 时月度经济恢复主线程同步预测；正式运行 false。
+var monthly_economy_worker_disabled: bool = false
 ## 等价性/性能 A/B：true 时恢复逐军图搜索判断补员枢纽可达性；正式游戏 false。
 var reinforcement_network_cache_disabled: bool = false
 ## 外交结构缓存 A/B：true 恢复同一次月度评估内重复构建联盟/敌对集团。
@@ -327,6 +329,8 @@ var trade_summary_forecast_disabled: bool = false
 var trade_domestic_ideal_field_cache_disabled: bool = false
 ## 行军容量索引 A/B：true 恢复每次入边都扫描全部军队的旧逻辑；正式运行 false。
 var movement_capacity_index_disabled: bool = false
+## 等价性守卫：true 时运行时行军/遭遇/战斗保持在同一帧；正式运行 false。
+var movement_frame_slicing_disabled: bool = false
 ## 仅在单次 _advance_movement 内存活的局部索引。键为
 ## Vector3i(owner_nation, from_city, to_city)，值为同国同向运输负载。
 var _movement_capacity_load_by_direction: Dictionary = {}
@@ -479,11 +483,16 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
-		_resolve_economy()
+		if spread_runtime_work and not monthly_economy_worker_disabled:
+			await _resolve_economy_over_frames()
+		else:
+			_resolve_economy()
 		_record_tick_profile_stage(
 			"monthly_economy",
 			monthly_profile_started
 		)
+		if spread_runtime_work:
+			await get_tree().process_frame
 		monthly_profile_started = (
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
@@ -497,6 +506,8 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			"monthly_reinforcements",
 			monthly_profile_started
 		)
+		if spread_runtime_work:
+			await get_tree().process_frame
 		monthly_profile_started = (
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
@@ -623,8 +634,14 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	var movement_started := (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
-	_advance_movement()
-	if runtime_stage_profiling_enabled:
+	if spread_runtime_work and not movement_frame_slicing_disabled:
+		await _advance_movement_over_frames()
+	else:
+		_advance_movement()
+	if (
+		runtime_stage_profiling_enabled
+		and (not spread_runtime_work or movement_frame_slicing_disabled)
+	):
 		_record_runtime_span(&"movement_battles", movement_started)
 	if spread_runtime_work:
 		await get_tree().process_frame
@@ -1174,6 +1191,7 @@ func _trade_settlement_token(
 			bool(record.get("civil_war", false)),
 		])
 	for nation in state.nations:
+		var modifiers := RulerProfile.modifiers(nation)
 		fields.append([
 			"nation", nation.id, nation.alive,
 			state.food_pool_holder(nation.id),
@@ -1182,10 +1200,10 @@ func _trade_settlement_token(
 			nation.manpower_pool,
 			nation.ruler_revision, nation.ruler_archetype,
 			nation.ruler_traits,
-			RulerProfile.gold_output_multiplier(nation),
-			RulerProfile.food_consumption_multiplier(nation),
-			RulerProfile.reserve_months_bonus(nation),
-			RulerProfile.upkeep_multiplier(nation),
+			float(modifiers[RulerProfile.KEY_GOLD_OUTPUT]),
+			float(modifiers[RulerProfile.KEY_FOOD_CONSUMPTION]),
+			int(modifiers[RulerProfile.KEY_RESERVE_MONTHS]),
+			float(modifiers[RulerProfile.KEY_UPKEEP]),
 		])
 	for army in state.armies:
 		if army.size <= 0:
@@ -1629,10 +1647,25 @@ func _capture_war_gold_income_snapshots(
 	)
 
 
-func _resolve_economy() -> void:
-	var forecast := _forecast_trade_and_gold_flows()
+func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
+	var forecast := (
+		prepared_forecast
+		if not prepared_forecast.is_empty()
+		else _forecast_trade_and_gold_flows()
+	)
 	var trade: Dictionary = forecast["trade"]
-	_publish_trade_snapshot(trade)
+	var economy_part_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
+	_publish_trade_snapshot(
+		trade,
+		forecast.get("__publication", {}) as Dictionary
+	)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"monthly_publish_trade", economy_part_started)
+	economy_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	var gold_flows: Array[Dictionary] = forecast["gold_flows"]
 	var garrison_by_city := build_garrison_index(state)
 	# 累计每国当月金钱税收（含战乱减产），作为贡赋基数。
@@ -1642,17 +1675,28 @@ func _resolve_economy() -> void:
 	var half_year_food_produced: Array[int] = []
 	half_year_food_produced.resize(state.nations.size())
 	half_year_food_produced.fill(0)
+	var ruler_output_modifiers: Array[Dictionary] = []
+	ruler_output_modifiers.resize(state.nations.size())
+	for nation in state.nations:
+		ruler_output_modifiers[nation.id] = RulerProfile.modifiers(nation)
 	for city in state.cities:
 		var nation := state.nations[city.owner_nation]
-		var gold := city_gold_output(state, city)
+		var modifiers: Dictionary = ruler_output_modifiers[city.owner_nation]
+		var gold := city_gold_output(state, city, modifiers)
 		nation.treasury_gold += gold
 		gold_income[city.owner_nation] += gold
-		nation.manpower_pool += city_manpower_output(state, city)
+		nation.manpower_pool += city_manpower_output(state, city, modifiers)
 		half_year_food_produced[city.owner_nation] += city_food_output(
 			state,
 			city,
-			garrison_by_city
+			garrison_by_city,
+			modifiers
 		)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"monthly_city_outputs", economy_part_started)
+	economy_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	# 贸易税是新增收入；买粮、买人的金钱支出已在 trade_net_income 内一次性
 	# 扣除。这里只应用国库净变动，再把「凭空买到」的粮/人落到库存/人力。
 	for nation in state.nations:
@@ -1660,9 +1704,19 @@ func _resolve_economy() -> void:
 			gold_flows[nation.id]["trade_net_income"]
 		)
 	_resolve_trade_purchases(trade)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"monthly_trade_purchases", economy_part_started)
+	economy_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
 	_resolve_military_finance(gold_flows)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"monthly_finance", economy_part_started)
+	economy_part_started = (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_publish_food_snapshot(trade, half_year_food_produced)
 	if state.day % DAYS_PER_HALF_YEAR == 0:
 		for nation in state.nations:
@@ -1672,6 +1726,34 @@ func _resolve_economy() -> void:
 			)
 		state.refresh_derived()
 		_publish_granary_snapshot()
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"monthly_food_publish", economy_part_started)
+
+
+## 贸易结构搜索和结算只读 GameState，但在 500 城月结中足以阻塞渲染。
+## 运行时交给普通优先级 worker；完成后仍由主线程按原顺序提交国库、粮食与人力。
+func _resolve_economy_over_frames() -> void:
+	_set_runtime_profile_stage(&"monthly_economy_worker")
+	var job := {"forecast": {}}
+	var task_id := WorkerThreadPool.add_task(
+		_build_monthly_economy_forecast_job.bind(job),
+		false,
+		"WorldWar monthly economy"
+	)
+	while not WorkerThreadPool.is_task_completed(task_id):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task_id)
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"monthly_economy_commit")
+	_resolve_economy(job["forecast"] as Dictionary)
+
+
+func _build_monthly_economy_forecast_job(job: Dictionary) -> void:
+	var forecast := _forecast_trade_and_gold_flows()
+	forecast["__publication"] = _prepare_trade_publication(
+		forecast["trade"] as Dictionary
+	)
+	job["forecast"] = forecast
 
 
 func _publish_food_snapshot(
@@ -1739,26 +1821,63 @@ func _publish_granary_snapshot() -> void:
 	state.refresh_derived()
 
 
-func _publish_trade_snapshot(trade: Dictionary) -> void:
-	var next_routes: Array[Dictionary] = []
-	for route_value in trade.get("routes", []):
-		next_routes.append((route_value as Dictionary).duplicate(true))
+func _publish_trade_snapshot(
+	trade: Dictionary,
+	prepared: Dictionary = {}
+) -> void:
+	var publication := (
+		prepared
+		if not prepared.is_empty()
+		else _prepare_trade_publication(trade)
+	)
+	var next_routes: Array[Dictionary] = publication["routes"]
 	var signature := int(trade.get("signature", 0))
 	var previous_signature := int(state.get_meta(&"trade_signature", -1))
 	if signature != previous_signature:
 		state.trade_revision += 1
 		state.set_meta(&"trade_signature", signature)
 	state.trade_routes = next_routes
+	var city_route_counts: PackedInt32Array = publication["city_route_counts"]
+	var city_food_balances: PackedInt32Array = publication["city_food_balances"]
 	for city in state.cities:
 		city.trade_gold_bonus = _trade_array_value(
 			trade, "city_gold_bonus", city.id
 		)
-		city.trade_route_count = 0
-		city.trade_food_balance = 0
-	var nation_route_counts: Array[int] = []
+		city.trade_route_count = city_route_counts[city.id]
+		city.trade_food_balance = city_food_balances[city.id]
+	var nation_route_counts: PackedInt32Array = publication["nation_route_counts"]
+	for nation in state.nations:
+		var gross := _trade_array_value(trade, "nation_trade_gold", nation.id)
+		var cost := _trade_array_value(trade, "nation_food_cost", nation.id)
+		var manpower_cost := _trade_array_value(
+			trade, "nation_manpower_cost", nation.id
+		)
+		nation.last_trade_gold = gross - cost - manpower_cost
+		nation.last_trade_food_import = _trade_array_value(
+			trade, "nation_food_import", nation.id
+		)
+		nation.last_trade_food_export = _trade_array_value(
+			trade, "nation_food_export", nation.id
+		)
+		nation.last_trade_manpower_import = _trade_array_value(
+			trade, "nation_manpower_import", nation.id
+		)
+		nation.last_trade_route_count = nation_route_counts[nation.id]
+
+
+func _prepare_trade_publication(trade: Dictionary) -> Dictionary:
+	var routes: Array[Dictionary] = []
+	for route_value in trade.get("routes", []):
+		# 完整 settle() 已把路线与长期结构缓存深度隔离；月结发布后动态
+		# 结算 token 立即失效，因此这里可转交该批路线，无需再深拷贝一次。
+		routes.append(route_value as Dictionary)
+	var city_route_counts := PackedInt32Array()
+	city_route_counts.resize(state.cities.size())
+	var city_food_balances := PackedInt32Array()
+	city_food_balances.resize(state.cities.size())
+	var nation_route_counts := PackedInt32Array()
 	nation_route_counts.resize(state.nations.size())
-	nation_route_counts.fill(0)
-	for route in state.trade_routes:
+	for route in routes:
 		if int(route.get("status", TradeNetwork.BLOCKED)) == TradeNetwork.BLOCKED:
 			continue
 		var nation_a := int(route.get("nation_a", -1))
@@ -1780,31 +1899,20 @@ func _publish_trade_snapshot(trade: Dictionary) -> void:
 			):
 				continue
 			seen_cities[city_id] = true
-			state.cities[city_id].trade_route_count += 1
+			city_route_counts[city_id] += 1
 		var food_amount := int(route.get("food_transfer", 0))
 		var source_id := int(route.get("food_source_city", -1))
 		var destination_id := int(route.get("food_destination_city", -1))
 		if source_id >= 0 and source_id < state.cities.size():
-			state.cities[source_id].trade_food_balance -= food_amount
+			city_food_balances[source_id] -= food_amount
 		if destination_id >= 0 and destination_id < state.cities.size():
-			state.cities[destination_id].trade_food_balance += food_amount
-	for nation in state.nations:
-		var gross := _trade_array_value(trade, "nation_trade_gold", nation.id)
-		var cost := _trade_array_value(trade, "nation_food_cost", nation.id)
-		var manpower_cost := _trade_array_value(
-			trade, "nation_manpower_cost", nation.id
-		)
-		nation.last_trade_gold = gross - cost - manpower_cost
-		nation.last_trade_food_import = _trade_array_value(
-			trade, "nation_food_import", nation.id
-		)
-		nation.last_trade_food_export = _trade_array_value(
-			trade, "nation_food_export", nation.id
-		)
-		nation.last_trade_manpower_import = _trade_array_value(
-			trade, "nation_manpower_import", nation.id
-		)
-		nation.last_trade_route_count = nation_route_counts[nation.id]
+			city_food_balances[destination_id] += food_amount
+	return {
+		"routes": routes,
+		"city_route_counts": city_route_counts,
+		"city_food_balances": city_food_balances,
+		"nation_route_counts": nation_route_counts,
+	}
 
 
 ## 简化版 EU4 贸易结算：把 TradeNetwork 规划的「凭空采购」落到库存与人力。
@@ -1887,7 +1995,8 @@ static func _apply_governance_multiplier(
 static func city_food_output(
 	game_state: GameState,
 	city: City,
-	garrison_by_city: Dictionary = {}
+	garrison_by_city: Dictionary = {},
+	ruler_modifiers: Dictionary = {}
 ) -> int:
 	var garrison_output := city_food_output_for_garrison(
 		city,
@@ -1903,13 +2012,15 @@ static func city_food_output(
 		)
 	)
 	return _apply_ruler_output_multiplier(
-		game_state, city, output, RulerProfile.KEY_FOOD_OUTPUT
+		game_state, city, output, RulerProfile.KEY_FOOD_OUTPUT,
+		ruler_modifiers
 	)
 
 
 static func city_gold_output(
 	game_state: GameState,
-	city: City
+	city: City,
+	ruler_modifiers: Dictionary = {}
 ) -> int:
 	var output := _apply_governance_multiplier(
 		game_state,
@@ -1920,17 +2031,19 @@ static func city_gold_output(
 		)
 	)
 	return _apply_ruler_output_multiplier(
-		game_state, city, output, RulerProfile.KEY_GOLD_OUTPUT
+		game_state, city, output, RulerProfile.KEY_GOLD_OUTPUT,
+		ruler_modifiers
 	)
 
 
 static func city_manpower_output(
 	game_state: GameState,
-	city: City
+	city: City,
+	ruler_modifiers: Dictionary = {}
 ) -> int:
 	return _apply_ruler_output_multiplier(
 		game_state, city, maxi(city.manpower_per_month, 0),
-		RulerProfile.KEY_MANPOWER_OUTPUT
+		RulerProfile.KEY_MANPOWER_OUTPUT, ruler_modifiers
 	)
 
 
@@ -1938,7 +2051,8 @@ static func _apply_ruler_output_multiplier(
 	game_state: GameState,
 	city: City,
 	output: int,
-	modifier_key: String
+	modifier_key: String,
+	ruler_modifiers: Dictionary = {}
 ) -> int:
 	if (
 		city == null
@@ -1946,8 +2060,10 @@ static func _apply_ruler_output_multiplier(
 		or city.owner_nation >= game_state.nations.size()
 	):
 		return maxi(output, 0)
-	var modifiers := RulerProfile.modifiers(
-		game_state.nations[city.owner_nation]
+	var modifiers := (
+		ruler_modifiers
+		if not ruler_modifiers.is_empty()
+		else RulerProfile.modifiers(game_state.nations[city.owner_nation])
 	)
 	return maxi(int(floor(
 		float(maxi(output, 0))
@@ -3104,6 +3220,7 @@ func _resolve_diplomacy_over_frames() -> void:
 	_normalize_alliance_wars()
 	_set_runtime_profile_stage(&"trade_forecast_worker")
 	var evaluation_cache := await _seed_trade_forecast_over_frames()
+	await get_tree().process_frame
 	var frozen_gold_flows: Array[Dictionary] = (
 		evaluation_cache["monthly_gold_flows"]
 	)
@@ -3114,13 +3231,14 @@ func _resolve_diplomacy_over_frames() -> void:
 	}
 	var task_id := WorkerThreadPool.add_task(
 		_build_parallel_diplomacy_actions.bind(job),
-		true,
+		false,
 		"WorldWar diplomacy"
 	)
 	_set_runtime_profile_stage(&"diplomacy_worker")
 	while not WorkerThreadPool.is_task_completed(task_id):
 		await get_tree().process_frame
 	WorkerThreadPool.wait_for_task_completion(task_id)
+	await get_tree().process_frame
 	var actions: Array = job["actions"]
 	_set_runtime_profile_stage(&"diplomacy_commit")
 	await _commit_diplomacy_actions_over_frames(
@@ -3140,7 +3258,7 @@ func _seed_trade_forecast_over_frames() -> Dictionary:
 	var job := {"cache": {}}
 	var task_id := WorkerThreadPool.add_task(
 		_build_trade_forecast_cache_job.bind(job),
-		true,
+		false,
 		"WorldWar trade forecast"
 	)
 	while not WorkerThreadPool.is_task_completed(task_id):
@@ -3162,10 +3280,18 @@ func _commit_diplomacy_actions_over_frames(
 	_defer_declaration_launches = true
 	var action_cache := evaluation_cache
 	for action in actions:
+		var kind := int(action.get("kind", DiplomacyAI.Action.NONE))
+		var action_stage := _runtime_diplomacy_action_stage(kind)
+		_set_runtime_profile_stage(action_stage)
+		var action_started := (
+			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		)
 		# action 之间可能改变外交、国库或军队；缓存只在单个 action 内共享。
 		_commit_diplomacy_action(
 			action, action_cache, frozen_gold_flows
 		)
+		if runtime_stage_profiling_enabled:
+			_record_runtime_span(action_stage, action_started)
 		for mobilization in _pending_war_mobilizations:
 			_start_war_mobilization(
 				int(mobilization["nation_id"]),
@@ -3187,6 +3313,30 @@ func _commit_diplomacy_actions_over_frames(
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
 	_defer_declaration_launches = false
+
+
+func _runtime_diplomacy_action_stage(kind: int) -> StringName:
+	match kind:
+		DiplomacyAI.Action.MAKE_PEACE:
+			return &"diplomacy_commit_peace"
+		DiplomacyAI.Action.DECLARE_WAR:
+			return &"diplomacy_commit_war"
+		DiplomacyAI.Action.FORM_ALLIANCE:
+			return &"diplomacy_commit_alliance"
+		DiplomacyAI.Action.LEAVE_ALLIANCE:
+			return &"diplomacy_commit_leave"
+		DiplomacyAI.Action.PREPARE_WAR:
+			return &"diplomacy_commit_prepare_war"
+		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
+			return &"diplomacy_commit_cancel_war"
+		DiplomacyAI.Action.RETARGET_WAR_PREPARATION:
+			return &"diplomacy_commit_retarget_war"
+		DiplomacyAI.Action.ENFEOFF:
+			return &"diplomacy_commit_enfeoff"
+		DiplomacyAI.Action.CENTRALIZE:
+			return &"diplomacy_commit_centralize"
+		_:
+			return &"diplomacy_commit_other"
 
 
 func _new_diplomacy_action_cache() -> Dictionary:
@@ -13845,6 +13995,37 @@ static func edge_travel_days(edge: Edge, formation_size: int = 0) -> float:
 
 func _advance_movement() -> void:
 	_prepare_movement_capacity_index()
+	var holding_arrivals := _advance_travelling_armies()
+	_arrive_retreating_armies()
+	_resolve_movement_contacts(holding_arrivals)
+	_arrive_travelling_armies()
+	_resolve_battles()
+	_purge_dead_armies()
+	_finish_movement_capacity_index()
+
+
+## 只在既有阶段边界让帧；每个阶段内部的军队/战斗顺序与同步路径完全相同。
+func _advance_movement_over_frames() -> void:
+	_prepare_movement_capacity_index()
+	_set_runtime_profile_stage(&"movement_travel")
+	var holding_arrivals := _advance_travelling_armies()
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"movement_retreat_arrivals")
+	_arrive_retreating_armies()
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"movement_contacts")
+	_resolve_movement_contacts(holding_arrivals)
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"movement_arrivals")
+	_arrive_travelling_armies()
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"movement_combat")
+	_resolve_battles()
+	_purge_dead_armies()
+	_finish_movement_capacity_index()
+
+
+func _advance_travelling_armies() -> Array[Army]:
 	# 1. 先推进所有 MOVING / RETREATING 军队（本步骤不处理"到达节点"）。
 	#    关键时序：若在此就地 _arrive_at_node，先走到敌城的一方会在遭遇检测前离边进入攻城，
 	#    导致相向而行的两军错身穿过、永不野战交火。故推进与到达必须分离。
@@ -13868,7 +14049,10 @@ func _advance_movement() -> void:
 			if army.move_progress >= army.hold_target_progress:
 				army.move_progress = army.hold_target_progress
 				holding_arrivals.append(army)
+	return holding_arrivals
 
+
+func _arrive_retreating_armies() -> void:
 	# 2. 已到道路终点的溃退军先完成节点落位。否则它会在下一次遭遇检测中
 	#    反复拦截刚击败自己的胜方，使双方永久卡在城市端点而无法触发攻城。
 	for army in state.armies:
@@ -13880,6 +14064,8 @@ func _advance_movement() -> void:
 		):
 			_arrive_at_node(army)
 
+
+func _resolve_movement_contacts(holding_arrivals: Array[Army]) -> void:
 	# 3. 遭遇检测（普通行军到达节点之前）：同边敌军按物理位置接触即交火。
 	#    走到边末端（norm→1.0）的一方与任何相向敌军必接触 → 优先野战，杜绝错身。
 	_detect_encounters()
@@ -13889,15 +14075,12 @@ func _advance_movement() -> void:
 		if army.state == Army.State.MOVING and army.battle_id == -1:
 			_start_holding(army)
 
+
+func _arrive_travelling_armies() -> void:
 	# 4. 到达节点：处理普通行军；未到终点或重新寻路的撤退军保持在道路上。
 	for army in state.armies:
 		if _is_travelling(army) and army.size > 0 and army.move_to != -1 and army.move_progress >= 1.0:
 			_arrive_at_node(army)
-
-	# 5. 推进所有进行中的战斗各打一回合
-	_resolve_battles()
-	_purge_dead_armies()
-	_finish_movement_capacity_index()
 
 
 ## 构建本次行军阶段的同国同向负载。遍历顺序仍完全由 state.armies 决定；

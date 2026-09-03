@@ -1,7 +1,9 @@
 extends SceneTree
 ## 非 headless 的 500 城渲染基准。先暂停模拟测纯渲染，再开启模拟测端到端帧耗时。
 ## 可调：RENDER_BENCH_FRAMES（默认180）、RENDER_BENCH_SCENE（默认五百城场景）、
-## RENDER_BENCH_SEED（默认12345，覆盖压力场景的启动随机种子）。
+## RENDER_BENCH_SEED（默认12345，覆盖压力场景的启动随机种子）、
+## RENDER_BENCH_DAYS（大于0时至少推进指定天数）、RENDER_BENCH_WAR_PAIRS
+## （从接壤国家中确定性选取的强制战争对数）。
 
 var _frame_samples: Array[float] = []
 
@@ -19,6 +21,8 @@ func _init() -> void:
 	if scene_path.is_empty():
 		scene_path = "res://five_hundred_city_stress.tscn"
 	var frame_count := _env_int("RENDER_BENCH_FRAMES", 180)
+	var target_days := _env_int("RENDER_BENCH_DAYS", 0)
+	var requested_war_pairs := _env_int("RENDER_BENCH_WAR_PAIRS", 0)
 	var world_seed := _env_int("RENDER_BENCH_SEED", 12345)
 	var sample_gpu_counters := _env_int("RENDER_BENCH_GPU_COUNTERS", 0) != 0
 	var seconds_per_day := float(OS.get_environment(
@@ -37,10 +41,14 @@ func _init() -> void:
 	for _i in range(60):
 		await process_frame
 	var simulation := main.get_node_or_null("Simulation") as Simulation
+	var forced_wars: Array[Vector2i] = []
 	if simulation != null:
 		simulation.paused = true
+		forced_wars = _force_adjacent_wars(
+			simulation.state, requested_war_pairs
+		)
 	var render_only := await _sample_frames(
-		frame_count, sample_gpu_counters, null
+		frame_count, 0, sample_gpu_counters, null
 	)
 	if simulation != null:
 		simulation.paused = false
@@ -51,14 +59,17 @@ func _init() -> void:
 		if seconds_per_day > 0.0:
 			simulation.seconds_per_day = seconds_per_day
 	var with_simulation := await _sample_frames(
-		frame_count, sample_gpu_counters, simulation
+		frame_count, target_days, sample_gpu_counters, simulation
 	)
 	if simulation != null:
 		simulation.paused = true
 		while simulation.runtime_day_in_progress():
 			await process_frame
-	print("=== 渲染基准 scene=%s seed=%d frames=%d ===" % [
-		scene_path, world_seed, frame_count,
+	print("=== 渲染基准 scene=%s seed=%d frames=%d target_days=%d ===" % [
+		scene_path, world_seed, frame_count, target_days,
+	])
+	print("强制战争 requested=%d actual=%d pairs=%s" % [
+		requested_war_pairs, forced_wars.size(), str(forced_wars),
 	])
 	print("节点数=%d" % _count_nodes(main))
 	_print_stats("纯渲染（模拟暂停）", render_only)
@@ -72,6 +83,7 @@ func _init() -> void:
 
 func _sample_frames(
 	frame_count: int,
+	target_days: int,
 	sample_gpu_counters: bool,
 	simulation: Simulation
 ) -> Dictionary:
@@ -80,14 +92,30 @@ func _sample_frames(
 	var primitives: Array[float] = []
 	var objects: Array[float] = []
 	var slow_frames_by_stage := {}
+	var peak_activity := {
+		"moving_armies": 0,
+		"field_battles": 0,
+		"sieges": 0,
+		"war_pairs": 0,
+	}
 	var starting_day := simulation.state.day if simulation != null else 0
+	var activity_sampled_day := -1
 	var sampler := FrameSampler.new()
 	sampler.process_priority = 2_147_483_647
 	root.add_child(sampler)
 	await sampler.sampled
-	for _i in range(maxi(frame_count, 1)):
+	var sampled_frames := 0
+	while (
+		sampled_frames < maxi(frame_count, 1)
+		or (
+			simulation != null
+			and target_days > 0
+			and simulation.state.day - starting_day < target_days
+		)
+	):
 		var started := Time.get_ticks_usec()
 		await sampler.sampled
+		sampled_frames += 1
 		var frame_ms := float(Time.get_ticks_usec() - started) / 1000.0
 		samples.append(frame_ms)
 		var elapsed_stage := _runtime_stage(simulation)
@@ -111,6 +139,12 @@ func _sample_frames(
 			objects.append(float(Performance.get_monitor(
 				Performance.RENDER_TOTAL_OBJECTS_IN_FRAME
 			)))
+		if (
+			simulation != null
+			and simulation.state.day != activity_sampled_day
+		):
+			_sample_activity(simulation.state, peak_activity)
+			activity_sampled_day = simulation.state.day
 	samples.sort()
 	var total := 0.0
 	for value in samples:
@@ -125,6 +159,8 @@ func _sample_frames(
 		"objects_avg": _average(objects),
 		"draw_calls_max": _max_value(draw_calls),
 		"slow_frames_by_stage": slow_frames_by_stage,
+		"sampled_frames": sampled_frames,
+		"peak_activity": peak_activity,
 		"days_advanced": (
 			simulation.state.day - starting_day if simulation != null else 0
 		),
@@ -141,6 +177,7 @@ func _print_stats(label: String, stats: Dictionary) -> void:
 		float(stats["max_ms"]),
 		float(stats["fps_avg"]),
 	])
+	print("  sampled_frames=%d" % int(stats["sampled_frames"]))
 	if int(stats["days_advanced"]) > 0:
 		print("  advanced_days=%d" % int(stats["days_advanced"]))
 	print("  draw_calls avg=%.1f max=%.1f primitives=%.1f objects=%.1f" % [
@@ -160,6 +197,79 @@ func _print_stats(label: String, stats: Dictionary) -> void:
 			stage, int(report["over_16"]), int(report["over_33"]),
 			float(report["peak_ms"]),
 		])
+	var activity: Dictionary = stats["peak_activity"]
+	if int(activity["war_pairs"]) > 0:
+		print("  activity peak: wars=%d moving=%d field=%d siege=%d" % [
+			int(activity["war_pairs"]), int(activity["moving_armies"]),
+			int(activity["field_battles"]), int(activity["sieges"]),
+		])
+
+
+func _force_adjacent_wars(
+	state: GameState, requested_pairs: int
+) -> Array[Vector2i]:
+	var candidates: Array[Vector2i] = []
+	var seen := {}
+	for edge in state.edges:
+		var owner_a := state.cities[edge.city_a].owner_nation
+		var owner_b := state.cities[edge.city_b].owner_nation
+		if owner_a == owner_b or owner_a < 0 or owner_b < 0:
+			continue
+		var pair := Vector2i(mini(owner_a, owner_b), maxi(owner_a, owner_b))
+		if not seen.has(pair):
+			seen[pair] = true
+			candidates.append(pair)
+	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.x < b.x or (a.x == b.x and a.y < b.y)
+	)
+	var selected: Array[Vector2i] = []
+	var used_nations := {}
+	for pair in candidates:
+		if selected.size() >= requested_pairs:
+			break
+		if used_nations.has(pair.x) or used_nations.has(pair.y):
+			continue
+		selected.append(pair)
+		used_nations[pair.x] = true
+		used_nations[pair.y] = true
+	for pair in candidates:
+		if selected.size() >= requested_pairs:
+			break
+		if selected.has(pair):
+			continue
+		selected.append(pair)
+	for pair in selected:
+		state.set_diplomatic_relation(
+			pair.x, pair.y, GameState.DiplomaticRelation.WAR
+		)
+	return selected
+
+
+func _sample_activity(state: GameState, peak: Dictionary) -> void:
+	var moving := 0
+	for army in state.armies:
+		if army.size > 0 and army.state in [
+			Army.State.MOVING, Army.State.RETREATING,
+		]:
+			moving += 1
+	var fields := 0
+	var sieges := 0
+	for battle in state.battles:
+		if battle.finished:
+			continue
+		if battle.kind == Battle.Kind.FIELD:
+			fields += 1
+		else:
+			sieges += 1
+	var wars := 0
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			if state.is_enemy(nation_a, nation_b):
+				wars += 1
+	peak["moving_armies"] = maxi(int(peak["moving_armies"]), moving)
+	peak["field_battles"] = maxi(int(peak["field_battles"]), fields)
+	peak["sieges"] = maxi(int(peak["sieges"]), sieges)
+	peak["war_pairs"] = maxi(int(peak["war_pairs"]), wars)
 
 
 func _runtime_stage(simulation: Simulation) -> StringName:
