@@ -142,13 +142,18 @@ static func build(
 		game_state.diplomacy_revision,
 		visibility_hops,
 	]
-	var visible_city_ids := _visible_city_ids(
-		game_state, owner_nation, visibility_hops
-	)
+	var visible_city_ids: Dictionary = {}
 	if shared_city_partition_cache.has(city_partition_key):
 		var cached: Dictionary = shared_city_partition_cache[
 			city_partition_key
 		]
+		visible_city_ids = (
+			cached.get("visible_ids", {}) as Dictionary
+		)
+		if visibility_hops >= 0 and visible_city_ids.is_empty():
+			visible_city_ids = _visible_city_ids(
+				game_state, owner_nation, visibility_hops
+			)
 		view.friendly_cities = (
 			cached["friendly"] as Array[City]
 		).duplicate()
@@ -162,6 +167,9 @@ static func build(
 			cached["neutral"] as Array[City]
 		).duplicate()
 	else:
+		visible_city_ids = _visible_city_ids(
+			game_state, owner_nation, visibility_hops
+		)
 		for city in game_state.cities:
 			if city.owner_nation == owner_nation:
 				view.friendly_cities.append(city)
@@ -203,6 +211,7 @@ static func build(
 			"enemy": view.enemy_cities.duplicate(),
 			"allied": view.allied_cities.duplicate(),
 			"neutral": view.neutral_cities.duplicate(),
+			"visible_ids": visible_city_ids.duplicate(),
 		}
 	var army_index := (
 		shared_army_index
