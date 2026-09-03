@@ -138,6 +138,8 @@ var _last_diplomacy_revision: int = -1
 var _last_diplomatic_view_nation_id: int = -2
 var _last_road_network_revision: int = -1
 var _last_trade_revision: int = -1
+var _last_army_instances_day: int = -1
+var _army_instances_initialized: bool = false
 var _last_naming_revision: int = -1
 var _map_mode: int = MapRenderer.MapMode.POLITICAL
 var _last_selected_edge := Vector2i(-2, -2)
@@ -270,7 +272,8 @@ func _process(delta: float) -> void:
 	):
 		_build_trade_route_mesh()
 		_last_trade_revision = state.trade_revision
-	_update_army_instances()
+	if _should_update_army_instances():
+		_update_army_instances()
 	_update_selection_marker()
 	_update_edge_selection()
 	_update_city_label_visibility()
@@ -2013,6 +2016,21 @@ func _update_army_instances() -> void:
 		_army_morale_bars.multimesh.set_instance_color(
 			index, _morale_color(morale_ratio, army.starving)
 		)
+	_last_army_instances_day = state.day
+	_army_instances_initialized = true
+
+
+func _should_update_army_instances() -> bool:
+	if not _army_instances_initialized or _last_army_instances_day != state.day:
+		return true
+	if sim != null and sim.runtime_day_in_progress():
+		return true
+	for army in state.armies:
+		if army.size <= 0:
+			continue
+		if army.on_edge or army.state in [Army.State.MOVING, Army.State.RETREATING]:
+			return true
+	return false
 
 
 static func army_role_scale(army: Army) -> float:
