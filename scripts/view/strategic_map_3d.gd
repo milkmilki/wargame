@@ -260,10 +260,19 @@ func _process(delta: float) -> void:
 		_rebuild_nation_labels()
 		_last_naming_revision = state.naming_revision
 	if state.day != _last_day:
+		var daily_render_started := (
+			Time.get_ticks_usec()
+			if sim != null and sim.runtime_stage_profiling_enabled
+			else 0
+		)
 		if _map_mode == MapRenderer.MapMode.LOYALTY:
 			_update_province_visuals()
 		_update_campaign_mesh()
 		_update_battle_instances()
+		if sim != null and sim.runtime_stage_profiling_enabled:
+			sim._record_runtime_span(
+				&"render_daily_updates", daily_render_started
+			)
 		_last_day = state.day
 	if (
 		state.road_network_revision
@@ -279,12 +288,30 @@ func _process(delta: float) -> void:
 		_build_trade_route_mesh()
 		_last_trade_revision = state.trade_revision
 	if _should_update_army_instances():
+		var army_render_started := (
+			Time.get_ticks_usec()
+			if sim != null and sim.runtime_stage_profiling_enabled
+			else 0
+		)
 		_update_army_instances()
+		if sim != null and sim.runtime_stage_profiling_enabled:
+			sim._record_runtime_span(
+				&"render_army_instances", army_render_started
+			)
+	var overlay_render_started := (
+		Time.get_ticks_usec()
+		if sim != null and sim.runtime_stage_profiling_enabled
+		else 0
+	)
 	_update_selection_marker()
 	_update_edge_selection()
 	_update_city_label_visibility()
 	if _map_mode == MapRenderer.MapMode.TRADE:
 		_update_trade_flow_markers()
+	if sim != null and sim.runtime_stage_profiling_enabled:
+		sim._record_runtime_span(
+			&"render_overlay_updates", overlay_render_started
+		)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1951,6 +1978,14 @@ func _update_army_instances() -> void:
 	for army in living:
 		living_ids.append(army.id)
 	var rebuild_all := living_ids != _army_instance_ids
+	var refresh_appearance := (
+		rebuild_all
+		or not _army_instances_initialized
+		or _last_army_instances_day != state.day
+		or not is_equal_approx(
+			_last_army_icon_scale, overlay.army_icon_scale()
+		)
+	)
 	if rebuild_all:
 		_army_instance_ids = living_ids
 		_army_render_positions.clear()
@@ -1962,28 +1997,37 @@ func _update_army_instances() -> void:
 			layer.multimesh.instance_count = living.size()
 	for index in range(living.size()):
 		var army := living[index]
-		var is_main_role := army.is_main_battle_role()
+		var position_may_change := (
+			army.on_edge
+			or army.state in [Army.State.MOVING, Army.State.RETREATING]
+		)
+		if not refresh_appearance and not position_may_change:
+			continue
 		var map_position := overlay.army_map_position(army)
-		var morale_ratio := army.morale_ratio()
-		var render_signature: Array = [
-			is_main_role,
-			army.max_size,
-			morale_ratio,
-			army.starving,
-			army.state,
-			army.owner_nation,
-			overlay.army_icon_scale(),
-			state.diplomacy_revision,
-			overlay.diplomatic_view_nation_id(),
-		]
 		var position_changed: bool = (
 			rebuild_all
 			or _army_render_positions.get(army.id) != map_position
 		)
-		var appearance_changed: bool = (
-			rebuild_all
-			or _army_render_signatures.get(army.id) != render_signature
-		)
+		var is_main_role := army.is_main_battle_role()
+		var morale_ratio := army.morale_ratio()
+		var render_signature: Array = []
+		var appearance_changed := rebuild_all
+		if refresh_appearance:
+			render_signature = [
+				is_main_role,
+				army.max_size,
+				morale_ratio,
+				army.starving,
+				army.state,
+				army.owner_nation,
+				overlay.army_icon_scale(),
+				state.diplomacy_revision,
+				overlay.diplomatic_view_nation_id(),
+			]
+			appearance_changed = (
+				rebuild_all
+				or _army_render_signatures.get(army.id) != render_signature
+			)
 		if not position_changed and not appearance_changed:
 			continue
 		var world := _terrain.map_to_world(map_position)
@@ -2034,38 +2078,43 @@ func _update_army_instances() -> void:
 		_set_morale_bar_transform(
 			_army_morale_bars, index, origin, scale, morale_ratio
 		)
-		var color := MapRenderer.final_faction_visual_color(
-			state, army.owner_nation,
-			0.62 if army.starving else 0.0,
-			0.06 if army.state == Army.State.FIGHTING else 0.0
-		)
-		_army_bases.multimesh.set_instance_color(
-			index, army_role_base_color(army)
-		)
-		_armies.multimesh.set_instance_color(index, color)
-		_army_symbol_a.multimesh.set_instance_color(
-			index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
-		)
-		_army_symbol_b.multimesh.set_instance_color(
-			index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
-		)
-		_army_morale_backs.multimesh.set_instance_color(index, MAP_INK)
-		_army_morale_bars.multimesh.set_instance_color(
-			index, _morale_color(morale_ratio, army.starving)
-		)
+		if appearance_changed:
+			var color := MapRenderer.final_faction_visual_color(
+				state, army.owner_nation,
+				0.62 if army.starving else 0.0,
+				0.06 if army.state == Army.State.FIGHTING else 0.0
+			)
+			_army_bases.multimesh.set_instance_color(
+				index, army_role_base_color(army)
+			)
+			_armies.multimesh.set_instance_color(index, color)
+			_army_symbol_a.multimesh.set_instance_color(
+				index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
+			)
+			_army_symbol_b.multimesh.set_instance_color(
+				index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
+			)
+			_army_morale_backs.multimesh.set_instance_color(index, MAP_INK)
+			_army_morale_bars.multimesh.set_instance_color(
+				index, _morale_color(morale_ratio, army.starving)
+			)
 		_army_render_positions[army.id] = map_position
-		_army_render_signatures[army.id] = render_signature
+		if appearance_changed:
+			_army_render_signatures[army.id] = render_signature
 	_last_army_instances_day = state.day
 	_army_instances_initialized = true
 	_last_army_icon_scale = overlay.army_icon_scale()
 
 
 func _should_update_army_instances() -> bool:
+	# MapRenderer only publishes new army position snapshots after the sliced
+	# simulation day commits. Rendering during the coroutine exposes partial
+	# state and repeats the full army scan on every intermediate frame.
+	if sim != null and sim.runtime_day_in_progress():
+		return false
 	if not _army_instances_initialized or _last_army_instances_day != state.day:
 		return true
 	if not is_equal_approx(_last_army_icon_scale, overlay.army_icon_scale()):
-		return true
-	if sim != null and sim.runtime_day_in_progress():
 		return true
 	for army in state.armies:
 		if army.size <= 0:

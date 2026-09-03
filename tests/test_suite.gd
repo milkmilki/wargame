@@ -8289,6 +8289,21 @@ func _test_retreat_contact_and_position_continuity() -> void:
 			% [third_party.state, third_party.move_from, third_party.move_to, third_party.move_progress])
 
 	# 重开游戏复用 Renderer 时必须丢弃旧世界位置快照，防止相同 army id 跨世界飞行。
+	var strategic_map := StrategicMap3D.new()
+	strategic_map.state = gs
+	strategic_map.sim = sim
+	strategic_map._army_instances_initialized = true
+	strategic_map._last_army_instances_day = gs.day - 1
+	sim._runtime_day_in_progress = true
+	_check(
+		not strategic_map._should_update_army_instances(),
+		"异步日结算未提交时 3D 军队实例不得读取并刷新部分状态"
+	)
+	sim._runtime_day_in_progress = false
+	_check(
+		strategic_map._should_update_army_instances(),
+		"异步日结算提交后 3D 军队实例必须刷新到新日期"
+	)
 	var renderer := MapRenderer.new()
 	renderer._prev_pos = {0: Vector2(7.5, 7.5)}
 	renderer._curr_pos = {0: Vector2(7.5, 7.5)}

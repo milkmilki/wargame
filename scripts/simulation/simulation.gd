@@ -2166,15 +2166,34 @@ func _resolve_supply_over_frames() -> void:
 	var slice_started := Time.get_ticks_usec()
 	_set_runtime_profile_stage(&"supply_build_plans")
 	for army in state.armies:
+		var plan_started := (
+			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		)
 		var plan := _build_supply_plan_for_army(army, demand_by_nation)
+		if runtime_stage_profiling_enabled:
+			_record_runtime_span(&"supply_plan_army", plan_started)
 		if not plan.is_empty():
 			plans.append(plan)
 		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
 			await get_tree().process_frame
 			slice_started = Time.get_ticks_usec()
+	var finalize_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_finalize_food_demand(demand_by_nation)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"supply_finalize_demand", finalize_started)
+	# Keep the final build chunk, the indivisible mirror-order sort and the
+	# first withdrawal chunk out of the same rendered frame.
+	await get_tree().process_frame
 	_set_runtime_profile_stage(&"supply_sort")
+	var sort_started := (
+		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+	)
 	_sort_supply_plans(plans)
+	if runtime_stage_profiling_enabled:
+		_record_runtime_span(&"supply_sort", sort_started)
+	await get_tree().process_frame
 	slice_started = Time.get_ticks_usec()
 	_set_runtime_profile_stage(&"supply_withdraw")
 	for p in plans:
@@ -2746,11 +2765,18 @@ func _cached_supply_sources(
 					army.owner_nation
 				)
 			)
+		var sources_started := (
+			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		)
 		source_cache[key] = Pathfinding.supply_sources_from_network(
 			state,
 			army,
 			network_cache[army.owner_nation]
 		)
+		if runtime_stage_profiling_enabled:
+			_record_runtime_span(
+				&"supply_sources_from_network", sources_started
+			)
 	return source_cache[key]
 
 

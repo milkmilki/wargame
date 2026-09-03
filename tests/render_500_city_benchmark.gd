@@ -1,6 +1,7 @@
 extends SceneTree
 ## 非 headless 的 500 城渲染基准。先暂停模拟测纯渲染，再开启模拟测端到端帧耗时。
-## 可调：RENDER_BENCH_FRAMES（默认180）、RENDER_BENCH_SCENE（默认五百城场景）。
+## 可调：RENDER_BENCH_FRAMES（默认180）、RENDER_BENCH_SCENE（默认五百城场景）、
+## RENDER_BENCH_SEED（默认12345，覆盖压力场景的启动随机种子）。
 
 var _frame_samples: Array[float] = []
 
@@ -10,16 +11,20 @@ func _init() -> void:
 	if scene_path.is_empty():
 		scene_path = "res://five_hundred_city_stress.tscn"
 	var frame_count := _env_int("RENDER_BENCH_FRAMES", 180)
+	var world_seed := _env_int("RENDER_BENCH_SEED", 12345)
 	var sample_gpu_counters := _env_int("RENDER_BENCH_GPU_COUNTERS", 0) != 0
 	var seconds_per_day := float(OS.get_environment(
 		"RENDER_BENCH_SECONDS_PER_DAY"
 	))
+	var serial_workers := _env_int("RENDER_BENCH_SERIAL_WORKERS", 0) != 0
 	var packed := load(scene_path) as PackedScene
 	if packed == null:
 		printerr("render benchmark scene load failed: %s" % scene_path)
 		quit(1)
 		return
 	var main := packed.instantiate()
+	main.set("randomize_world_seed_on_start", false)
+	main.set("world_seed", world_seed)
 	root.add_child(main)
 	for _i in range(60):
 		await process_frame
@@ -32,17 +37,28 @@ func _init() -> void:
 	if simulation != null:
 		simulation.paused = false
 		simulation.runtime_stage_profiling_enabled = true
+		simulation.ai_parallel_threat_disabled = serial_workers
+		simulation.ai_parallel_defense_disabled = serial_workers
+		simulation.supply_network_parallel_prebuild_disabled = serial_workers
 		if seconds_per_day > 0.0:
 			simulation.seconds_per_day = seconds_per_day
 	var with_simulation := await _sample_frames(
 		frame_count, sample_gpu_counters, simulation
 	)
-	print("=== 渲染基准 scene=%s frames=%d ===" % [scene_path, frame_count])
+	if simulation != null:
+		simulation.paused = true
+		while simulation.runtime_day_in_progress():
+			await process_frame
+	print("=== 渲染基准 scene=%s seed=%d frames=%d ===" % [
+		scene_path, world_seed, frame_count,
+	])
 	print("节点数=%d" % _count_nodes(main))
 	_print_stats("纯渲染（模拟暂停）", render_only)
 	_print_stats("渲染+模拟", with_simulation)
 	if simulation != null:
 		_print_runtime_spans(simulation)
+	main.queue_free()
+	await process_frame
 	quit(0)
 
 
@@ -57,6 +73,7 @@ func _sample_frames(
 	var objects: Array[float] = []
 	var slow_frames_by_stage := {}
 	var interval_stage: StringName = &"idle"
+	var starting_day := simulation.state.day if simulation != null else 0
 	for _i in range(maxi(frame_count, 1)):
 		var started := Time.get_ticks_usec()
 		await process_frame
@@ -98,6 +115,9 @@ func _sample_frames(
 		"objects_avg": _average(objects),
 		"draw_calls_max": _max_value(draw_calls),
 		"slow_frames_by_stage": slow_frames_by_stage,
+		"days_advanced": (
+			simulation.state.day - starting_day if simulation != null else 0
+		),
 	}
 
 
@@ -109,6 +129,8 @@ func _print_stats(label: String, stats: Dictionary) -> void:
 		float(stats["max_ms"]),
 		float(stats["fps_avg"]),
 	])
+	if int(stats["days_advanced"]) > 0:
+		print("  advanced_days=%d" % int(stats["days_advanced"]))
 	print("  draw_calls avg=%.1f max=%.1f primitives=%.1f objects=%.1f" % [
 		float(stats["draw_calls_avg"]),
 		float(stats["draw_calls_max"]),
