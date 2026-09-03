@@ -168,6 +168,7 @@ var _daily_supply_source_cache: Dictionary = {}
 var _stable_supply_city_source_cache: Dictionary = {}
 var _supply_source_besieged_cities: Dictionary = {}
 var _daily_supply_network_cache: Dictionary = {}
+var _battle_lookup_cache: Dictionary = {}
 ## 当日指纹阶段已按国家汇总的敌军占据边；后台建网直接复用，避免再次全军扫描。
 var _prepared_supply_blocked_edges: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
@@ -2165,6 +2166,9 @@ func _resolve_supply_over_frames() -> void:
 ## 或该城围城状态变化时失效。网络损耗场继续按依赖指纹选择性失效。
 func _prepare_supply_network_caches() -> Array[int]:
 	_daily_supply_source_cache.clear()
+	_battle_lookup_cache.clear()
+	for battle in state.battles:
+		_battle_lookup_cache[battle.id] = battle
 	# 一次性预算共享依赖：被围城集合（O(B)）与各粮仓可用性，供逐国指纹复用，
 	# 避免在指纹里逐粮仓 city_under_siege 的 O(B) 扫描退化成 O(城×B)。
 	var besieged := state.besieged_city_ids()
@@ -2761,7 +2765,10 @@ func _drain_siege_food() -> void:
 func _siege_garrison_battle_of(army: Army) -> Battle:
 	if army.state != Army.State.FIGHTING or army.battle_id == -1:
 		return null
-	var battle := state.battle_by_id(army.battle_id)
+	var battle: Battle = _battle_lookup_cache.get(army.battle_id)
+	if battle == null:
+		# 允许本日后续阶段新建的战斗走原始查询，避免缓存改变动态语义。
+		battle = state.battle_by_id(army.battle_id)
 	if battle == null or battle.finished or battle.kind != Battle.Kind.SIEGE:
 		return null
 	if not battle.has_garrison or not battle.side_b.has(army):
