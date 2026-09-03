@@ -147,7 +147,7 @@ const EMERGENCY_RECRUITMENT_MIN_RUNWAY_YEARS: float = 0.25
 var state: GameState
 var _time_acc: float = 0.0
 var _ai_strategy_cache: Dictionary = {}    ## nation_id -> StrategicMapSnapshot
-var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership, diplomacy, fortification]
+var _ai_strategy_revision: Dictionary = {} ## nation_id -> [ownership, diplomacy, fortification, visibility]
 var _ai_base_city_values_revision: Array[int] = []
 var _ai_base_city_values: Dictionary = {}
 var _ai_base_edge_values: Dictionary = {}
@@ -6374,6 +6374,7 @@ func _strategy_snapshot_for(
 		state.ownership_revision,
 		state.diplomacy_revision,
 		state.fortification_revision,
+		ai_visibility_hops,
 	]
 	if (
 		not _ai_strategy_cache.has(view.nation_id)
