@@ -135,7 +135,10 @@ func _init() -> void:
 				int(phase_totals.get(stage, 0))
 				+ int(sim.tick_profile_last_usec[stage_value])
 			)
-		if sim.tick_profile_last_usec.has("ai_view_setup"):
+		if (
+			sim.tick_profile_last_usec.has("ai_view_setup")
+			or sim.tick_profile_last_usec.has("ai")
+		):
 			ai_times.append(dt)
 		if invariant_failure_day < 0 and not state.territory_structure_valid():
 			invariant_failure_day = state.day
