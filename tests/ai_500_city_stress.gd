@@ -4,6 +4,7 @@ extends SceneTree
 ##   AI_STRESS_CITIES(默认500) AI_STRESS_NATIONS(默认80) AI_STRESS_DAYS(默认120)
 ##   AI_STRESS_SEED(默认12345)
 ##   AI_STRESS_VISIBILITY_HOPS(默认-1；A/B 基准使用 7 或 10)
+##   AI_STRESS_SPREAD_RUNTIME(默认0；1 模拟实际分帧/工作线程路径)
 
 func _init() -> void:
 	var cities := _env_int("AI_STRESS_CITIES", 500)
@@ -11,6 +12,7 @@ func _init() -> void:
 	var days := _env_int("AI_STRESS_DAYS", 120)
 	var world_seed := _env_int("AI_STRESS_SEED", 12345)
 	var visibility_hops := _env_int("AI_STRESS_VISIBILITY_HOPS", -1)
+	var spread_runtime_work := _env_int("AI_STRESS_SPREAD_RUNTIME", 0) != 0
 	var gen_start := Time.get_ticks_usec()
 	var state := GameState.new()
 	state.generate_world(world_seed, nations, cities)
@@ -50,6 +52,7 @@ func _init() -> void:
 	print("AI 可见范围=%s" % (
 		"全知" if visibility_hops < 0 else "%d 跳" % visibility_hops
 	))
+	print("运行时分帧/工作线程=%s" % ("开启" if spread_runtime_work else "关闭"))
 	print("生成耗时=%.1fms 实际陆城=%d 总城(含码头)=%d 边=%d 军=%d" % [
 		gen_ms,
 		state.land_cities().size(),
@@ -123,7 +126,7 @@ func _init() -> void:
 		if state.winner != -1:
 			break
 		var t := Time.get_ticks_usec()
-		sim._advance_day(false)
+		sim._advance_day(spread_runtime_work)
 		var dt := Time.get_ticks_usec() - t
 		all_times.append(dt)
 		for stage_value in sim.tick_profile_last_usec:
