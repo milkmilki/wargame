@@ -123,6 +123,7 @@ func _sample_frames(
 	root.add_child(sampler)
 	await sampler.sampled
 	var sampled_frames := 0
+	var interval_stage := _runtime_stage(simulation)
 	while (
 		sampled_frames < maxi(frame_count, 1)
 		or (
@@ -140,7 +141,8 @@ func _sample_frames(
 		sampled_frames += 1
 		var frame_ms := float(Time.get_ticks_usec() - started) / 1000.0
 		samples.append(frame_ms)
-		var elapsed_stage := _runtime_stage(simulation)
+		var elapsed_stage := interval_stage
+		interval_stage = _runtime_stage(simulation)
 		if simulation != null and frame_ms > 16.0:
 			var key := str(elapsed_stage)
 			var report: Dictionary = slow_frames_by_stage.get(key, {
