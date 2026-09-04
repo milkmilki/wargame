@@ -327,6 +327,9 @@ var monthly_economy_worker_disabled: bool = false
 var reinforcement_network_cache_disabled: bool = false
 ## 外交结构缓存 A/B：true 恢复同一次月度评估内重复构建联盟/敌对集团。
 var diplomacy_structure_cache_disabled: bool = false
+## A/B 等价守卫：true 恢复把整轮外交候选计算放入单个 worker 的旧路径。
+## 正式运行 false，按阶段及国家在主循环中分帧，避免长 GDScript 任务饿死渲染。
+var diplomacy_frame_slicing_disabled: bool = false
 ## 外交动员共享资源缓存 A/B：true 时每个参战成员各建一份评估上下文。
 ## 正式运行保持 false，同一次外交 action 的联盟成员共享只读派生。
 var diplomacy_mobilization_cache_disabled: bool = false
@@ -3352,15 +3355,24 @@ func _resolve_diplomacy_over_frames() -> void:
 		"actions": [] as Array[Dictionary],
 		"evaluation_cache": evaluation_cache,
 	}
-	var task_id := WorkerThreadPool.add_task(
-		_build_parallel_diplomacy_actions.bind(job),
-		false,
-		"WorldWar diplomacy"
-	)
-	_set_runtime_profile_stage(&"diplomacy_worker")
-	while not WorkerThreadPool.is_task_completed(task_id):
-		await get_tree().process_frame
-	WorkerThreadPool.wait_for_task_completion(task_id)
+	if diplomacy_frame_slicing_disabled:
+		var task_id := WorkerThreadPool.add_task(
+			_build_parallel_diplomacy_actions.bind(job),
+			false,
+			"WorldWar diplomacy"
+		)
+		_set_runtime_profile_stage(&"diplomacy_worker")
+		while not WorkerThreadPool.is_task_completed(task_id):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(task_id)
+	else:
+		_set_runtime_profile_stage(&"diplomacy_sliced")
+		job["actions"] = await DiplomacyAI.choose_actions_over_frames(
+			state,
+			not diplomacy_structure_cache_disabled,
+			evaluation_cache,
+			AI_RUNTIME_SLICE_BUDGET_USEC
+		)
 	await get_tree().process_frame
 	var actions: Array = job["actions"]
 	_set_runtime_profile_stage(&"diplomacy_commit")

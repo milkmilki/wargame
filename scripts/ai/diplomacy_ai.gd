@@ -335,6 +335,78 @@ static func choose_actions(
 	return actions
 
 
+## 运行时版本保持与 choose_actions 完全相同的收集/提交顺序，只在阶段边界及
+## 单国战争评估后让出主循环。外交计算主要是 GDScript 图搜索；把整个调用塞进
+## 单个 worker 仍可能长期占用解释器与内存带宽，无法保证渲染及时获得执行机会。
+static func choose_actions_over_frames(
+	state: GameState,
+	use_structure_cache: bool = true,
+	seeded_evaluation_cache: Dictionary = {},
+	slice_budget_usec: int = 6000
+) -> Array[Dictionary]:
+	var actions: Array[Dictionary] = []
+	var committed := {}
+	var evaluation_cache := seeded_evaluation_cache.duplicate()
+	if not use_structure_cache:
+		evaluation_cache["__disable_structure_cache"] = true
+	var slice_started := Time.get_ticks_usec()
+	_collect_peace_actions(state, actions, committed, evaluation_cache)
+	slice_started = await _yield_diplomacy_slice(
+		slice_started, slice_budget_usec
+	)
+	_collect_leave_alliance_actions(
+		state, actions, committed, evaluation_cache
+	)
+	slice_started = await _yield_diplomacy_slice(
+		slice_started, slice_budget_usec
+	)
+	for nation_index in range(state.nations.size()):
+		_collect_war_actions(
+			state,
+			actions,
+			committed,
+			evaluation_cache,
+			nation_index,
+			nation_index + 1
+		)
+		slice_started = await _yield_diplomacy_slice(
+			slice_started, slice_budget_usec
+		)
+	for nation_index in range(state.nations.size()):
+		_collect_alliance_actions(
+			state,
+			actions,
+			committed,
+			evaluation_cache,
+			nation_index,
+			nation_index + 1
+		)
+		slice_started = await _yield_diplomacy_slice(
+			slice_started, slice_budget_usec
+		)
+	_collect_enfeoff_actions(state, actions, committed, evaluation_cache)
+	slice_started = await _yield_diplomacy_slice(
+		slice_started, slice_budget_usec
+	)
+	_collect_centralization_actions(
+		state, actions, committed, evaluation_cache
+	)
+	return actions
+
+
+static func _yield_diplomacy_slice(
+	slice_started: int,
+	slice_budget_usec: int
+) -> int:
+	if (
+		slice_budget_usec > 0
+		and Time.get_ticks_usec() - slice_started >= slice_budget_usec
+	):
+		await (Engine.get_main_loop() as SceneTree).process_frame
+		return Time.get_ticks_usec()
+	return slice_started
+
+
 static func _record_profile_stage(
 	profile: Dictionary,
 	stage: String,
@@ -3933,9 +4005,16 @@ static func _collect_alliance_actions(
 	state: GameState,
 	actions: Array[Dictionary],
 	committed: Dictionary,
-	evaluation_cache: Dictionary
+	evaluation_cache: Dictionary,
+	start_nation_index: int = 0,
+	end_nation_index: int = -1
 ) -> void:
-	for a in range(state.nations.size()):
+	var end_index := (
+		state.nations.size()
+		if end_nation_index < 0
+		else mini(end_nation_index, state.nations.size())
+	)
+	for a in range(maxi(start_nation_index, 0), end_index):
 		for b in _diplomatic_range_nation_ids(
 			state, a, evaluation_cache
 		):
@@ -3996,9 +4075,17 @@ static func _collect_war_actions(
 	state: GameState,
 	actions: Array[Dictionary],
 	committed: Dictionary,
-	evaluation_cache: Dictionary
+	evaluation_cache: Dictionary,
+	start_nation_index: int = 0,
+	end_nation_index: int = -1
 ) -> void:
-	for nation in state.nations:
+	var end_index := (
+		state.nations.size()
+		if end_nation_index < 0
+		else mini(end_nation_index, state.nations.size())
+	)
+	for nation_index in range(maxi(start_nation_index, 0), end_index):
+		var nation := state.nations[nation_index]
 		if committed.has(nation.id) or not nation.alive:
 			continue
 		# 藩王不主动宣战：进攻性外交与开战决策统一由宗主代理（藩王作战体系简化）。
