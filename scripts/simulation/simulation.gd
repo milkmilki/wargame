@@ -69,6 +69,9 @@ const GRID_AI_DECISION_INTERVAL_DAYS: int = 5
 const AI_RUNTIME_SLICE_BUDGET_USEC: int = 6000
 const AI_CONTEXT_SLICE_BUDGET_USEC: int = 6000
 const SUPPLY_RUNTIME_SLICE_BUDGET_USEC: int = 3000
+## 单个重计算日结束后至少留出这段墙钟时间处理输入与绘制，避免时间债务让
+## 后续多天逐帧连续启动。普通日仍累计计算期间经过的时间，保持设定倍速。
+const RUNTIME_POST_DAY_IDLE_SECONDS: float = 0.1
 ## ThreatField 按国家并行；4 路通常能覆盖性能核且避免图搜索争抢内存带宽。
 const AI_THREAT_MAX_WORKERS: int = 4
 const AI_DEFENSE_MAX_WORKERS: int = 4
@@ -218,6 +221,9 @@ var _pending_declaration_launches: Dictionary = {}
 var _pending_war_mobilizations: Array[Dictionary] = []
 var _defer_declaration_launches: bool = false
 var _runtime_day_in_progress: bool = false
+## A/B 开关：旧行为允许异步日计算期间无限累计时间债务，重负载后会连续追赶。
+## 正式运行关闭，只保留普通日的有限累计。
+var runtime_catchup_during_day_enabled: bool = false
 var ai_last_command_commit_failures: int = 0
 var ai_command_commit_failure_total: int = 0
 var ai_command_commit_failure_log: Array[String] = []
@@ -426,9 +432,16 @@ func _process(delta: float) -> void:
 		or paused
 	):
 		return
-	_time_acc += delta
 	if _runtime_day_in_progress:
+		if runtime_catchup_during_day_enabled:
+			_time_acc += delta
+		else:
+			_time_acc = minf(
+				_time_acc + delta,
+				maxf(seconds_per_day - RUNTIME_POST_DAY_IDLE_SECONDS, 0.0)
+			)
 		return
+	_time_acc += delta
 	if _time_acc >= seconds_per_day:
 		_time_acc -= seconds_per_day
 		_runtime_day_in_progress = true

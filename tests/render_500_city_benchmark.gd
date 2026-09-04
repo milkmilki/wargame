@@ -32,6 +32,7 @@ func _init() -> void:
 		"RENDER_BENCH_SECONDS_PER_DAY"
 	))
 	var serial_workers := _env_int("RENDER_BENCH_SERIAL_WORKERS", 0) != 0
+	var runtime_catchup := _env_int("RENDER_BENCH_RUNTIME_CATCHUP", 0) != 0
 	var packed := load(scene_path) as PackedScene
 	if packed == null:
 		printerr("render benchmark scene load failed: %s" % scene_path)
@@ -68,6 +69,7 @@ func _init() -> void:
 		simulation.ai_parallel_threat_disabled = serial_workers
 		simulation.ai_parallel_defense_disabled = serial_workers
 		simulation.supply_network_parallel_prebuild_disabled = serial_workers
+		simulation.runtime_catchup_during_day_enabled = runtime_catchup
 		if seconds_per_day > 0.0:
 			simulation.seconds_per_day = seconds_per_day
 	var with_simulation := await _sample_frames(
@@ -110,6 +112,10 @@ func _sample_frames(
 	var primitives: Array[float] = []
 	var objects: Array[float] = []
 	var slow_frames_by_stage := {}
+	var slow_streak_16 := 0
+	var slow_streak_33 := 0
+	var max_slow_streak_16 := 0
+	var max_slow_streak_33 := 0
 	var peak_activity := {
 		"moving_armies": 0,
 		"field_battles": 0,
@@ -141,6 +147,10 @@ func _sample_frames(
 		sampled_frames += 1
 		var frame_ms := float(Time.get_ticks_usec() - started) / 1000.0
 		samples.append(frame_ms)
+		slow_streak_16 = slow_streak_16 + 1 if frame_ms > 16.0 else 0
+		slow_streak_33 = slow_streak_33 + 1 if frame_ms > 33.0 else 0
+		max_slow_streak_16 = maxi(max_slow_streak_16, slow_streak_16)
+		max_slow_streak_33 = maxi(max_slow_streak_33, slow_streak_33)
 		var elapsed_stage := interval_stage
 		interval_stage = _runtime_stage(simulation)
 		if simulation != null and frame_ms > 16.0:
@@ -186,6 +196,8 @@ func _sample_frames(
 		"objects_avg": _average(objects),
 		"draw_calls_max": _max_value(draw_calls),
 		"slow_frames_by_stage": slow_frames_by_stage,
+		"max_slow_streak_16": max_slow_streak_16,
+		"max_slow_streak_33": max_slow_streak_33,
 		"sampled_frames": sampled_frames,
 		"peak_activity": peak_activity,
 		"days_advanced": (
@@ -205,6 +217,10 @@ func _print_stats(label: String, stats: Dictionary) -> void:
 		float(stats["fps_avg"]),
 	])
 	print("  sampled_frames=%d" % int(stats["sampled_frames"]))
+	print("  max_slow_streak >16ms=%d >33ms=%d" % [
+		int(stats["max_slow_streak_16"]),
+		int(stats["max_slow_streak_33"]),
+	])
 	if int(stats["days_advanced"]) > 0:
 		print("  advanced_days=%d" % int(stats["days_advanced"]))
 	print("  draw_calls avg=%.1f max=%.1f primitives=%.1f objects=%.1f" % [

@@ -8343,6 +8343,17 @@ func _test_retreat_contact_and_position_continuity() -> void:
 	sim.seconds_per_day = 1.0
 	sim._time_acc = 0.2
 	sim._runtime_day_in_progress = true
+	sim.paused = false
+	sim._process(0.5)
+	_check(
+		is_equal_approx(sim._time_acc, 0.7),
+		"异步日计算期间应累计未超限的时间，保持普通日设定倍速"
+	)
+	sim._process(0.5)
+	_check(
+		is_equal_approx(sim._time_acc, 0.9),
+		"异步日的时间债务应封顶，提交后至少留出输入与绘制时间"
+	)
 	renderer._last_day = gs.day - 2
 	renderer._curr_pos = {999: Vector2(0.25, 0.5)}
 	var presentation_anchor := Vector2(0.31, 0.47)
