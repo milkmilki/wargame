@@ -283,6 +283,8 @@ var ai_visibility_hops: int = -1
 ## 性能 A/B 守卫：正式运行均为 false；分别关闭资源缓存贯通和单 tick 决策上下文。
 var ai_force_resource_cache_disabled: bool = false
 var ai_decision_context_disabled: bool = false
+## A/B 等价守卫：true 恢复 AI 事务逐条扫描整张命令表并单帧提交的旧路径。
+var ai_command_commit_slicing_disabled: bool = false
 ## 等价/性能 A/B：true 时军制不复用战略快照已构建的同 tick 外交资源缓存。
 var ai_snapshot_resource_cache_reuse_disabled: bool = false
 ## A/B 与等价性测试开关；正式运行 false，按国家多核构建威胁场。
@@ -5814,7 +5816,10 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	_set_runtime_profile_stage(&"ai_commit")
-	_commit_ai_command_collection(nation_order)
+	if spread_runtime_work and not ai_command_commit_slicing_disabled:
+		await _commit_ai_command_collection_over_frames(nation_order)
+	else:
+		_commit_ai_command_collection(nation_order)
 	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
 
 
@@ -13866,6 +13871,69 @@ func _commit_ai_command_collection(
 ) -> void:
 	_collect_ai_commands = false
 	ai_last_command_commit_failures = 0
+	_sort_ai_command_buffer_for_commit(nation_order)
+	var processed_transactions := {}
+	for intent in _ai_command_buffer:
+		if intent.transaction_id >= 0:
+			var transaction_id := intent.transaction_id
+			if processed_transactions.has(transaction_id):
+				continue
+			processed_transactions[transaction_id] = true
+			var transaction_intents: Array[AiCommandIntent] = []
+			for candidate_intent in _ai_command_buffer:
+				if candidate_intent.transaction_id == transaction_id:
+					transaction_intents.append(candidate_intent)
+			_commit_ai_transaction(intent, transaction_intents)
+			continue
+		_commit_ordinary_ai_intent(intent)
+	_clear_ai_command_collection()
+
+
+func _commit_ai_command_collection_over_frames(
+	nation_order: Array[int]
+) -> void:
+	_collect_ai_commands = false
+	ai_last_command_commit_failures = 0
+	_sort_ai_command_buffer_for_commit(nation_order)
+	var transaction_intents_by_id := {}
+	for intent in _ai_command_buffer:
+		if intent.transaction_id < 0:
+			continue
+		if not transaction_intents_by_id.has(intent.transaction_id):
+			transaction_intents_by_id[intent.transaction_id] = (
+				[] as Array[AiCommandIntent]
+			)
+		(
+			transaction_intents_by_id[intent.transaction_id]
+				as Array[AiCommandIntent]
+		).append(intent)
+	var processed_transactions := {}
+	var slice_started := Time.get_ticks_usec()
+	for intent in _ai_command_buffer:
+		if intent.transaction_id >= 0:
+			var transaction_id := intent.transaction_id
+			if processed_transactions.has(transaction_id):
+				continue
+			processed_transactions[transaction_id] = true
+			_commit_ai_transaction(
+				intent,
+				transaction_intents_by_id[transaction_id]
+					as Array[AiCommandIntent]
+			)
+		else:
+			_commit_ordinary_ai_intent(intent)
+		if (
+			Time.get_ticks_usec() - slice_started
+				>= AI_RUNTIME_SLICE_BUDGET_USEC
+		):
+			await get_tree().process_frame
+			slice_started = Time.get_ticks_usec()
+	_clear_ai_command_collection()
+
+
+func _sort_ai_command_buffer_for_commit(
+	nation_order: Array[int]
+) -> void:
 	var nation_rank := {}
 	for index in range(nation_order.size()):
 		nation_rank[nation_order[index]] = index
@@ -13878,43 +13946,36 @@ func _commit_ai_command_collection(
 				< int(nation_rank.get(b.nation_id, 999999))
 			)
 	)
-	var processed_transactions := {}
-	for intent in _ai_command_buffer:
-		if intent.transaction_id >= 0:
-			var transaction_id := intent.transaction_id
-			if processed_transactions.has(transaction_id):
-				continue
-			processed_transactions[transaction_id] = true
-			var transaction_intents: Array[AiCommandIntent] = []
-			for candidate_intent in _ai_command_buffer:
-				if candidate_intent.transaction_id == transaction_id:
-					transaction_intents.append(candidate_intent)
-			var payload: Dictionary = (
-				_pending_campaign_launch_transactions.get(
-					transaction_id, {}
-				)
-			)
-			if not _validate_campaign_launch_payload(
-				payload, transaction_intents
-			):
-				_pending_campaign_launch_transactions.erase(transaction_id)
-				_release_ai_transaction_armies(transaction_id)
-				_record_ai_command_commit_failure(
-					intent, "campaign_transaction_preflight"
-				)
-				continue
-			_pending_campaign_launch_transactions.erase(transaction_id)
-			_release_ai_transaction_armies(transaction_id)
-			for transaction_intent in transaction_intents:
-				_apply_prevalidated_campaign_intent(transaction_intent)
-			_apply_campaign_launch_payload_unchecked(payload)
-			continue
-		if not _execute_ai_candidate(
-			intent.army, intent.candidate, intent.prepared_path,
-			intent.path_prevalidated
-		):
-			_record_ai_command_commit_failure(intent, "ordinary_intent")
-	_clear_ai_command_collection()
+
+
+func _commit_ai_transaction(
+	representative: AiCommandIntent,
+	transaction_intents: Array[AiCommandIntent]
+) -> void:
+	var transaction_id := representative.transaction_id
+	var payload: Dictionary = _pending_campaign_launch_transactions.get(
+		transaction_id, {}
+	)
+	if not _validate_campaign_launch_payload(payload, transaction_intents):
+		_pending_campaign_launch_transactions.erase(transaction_id)
+		_release_ai_transaction_armies(transaction_id)
+		_record_ai_command_commit_failure(
+			representative, "campaign_transaction_preflight"
+		)
+		return
+	_pending_campaign_launch_transactions.erase(transaction_id)
+	_release_ai_transaction_armies(transaction_id)
+	for transaction_intent in transaction_intents:
+		_apply_prevalidated_campaign_intent(transaction_intent)
+	_apply_campaign_launch_payload_unchecked(payload)
+
+
+func _commit_ordinary_ai_intent(intent: AiCommandIntent) -> void:
+	if not _execute_ai_candidate(
+		intent.army, intent.candidate, intent.prepared_path,
+		intent.path_prevalidated
+	):
+		_record_ai_command_commit_failure(intent, "ordinary_intent")
 
 
 func _release_ai_transaction_armies(transaction_id: int) -> void:

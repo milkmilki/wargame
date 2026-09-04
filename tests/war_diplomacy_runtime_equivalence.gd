@@ -36,6 +36,7 @@ func _start_world(disable_optimized_scheduling: bool) -> void:
 	_active_sim.supply_source_parallel_disabled = disable_optimized_scheduling
 	_active_sim.frontline_refresh_worker_disabled = disable_optimized_scheduling
 	_active_sim.diplomacy_frame_slicing_disabled = disable_optimized_scheduling
+	_active_sim.ai_command_commit_slicing_disabled = disable_optimized_scheduling
 	_active_sim.runtime_day_committed.connect(_on_runtime_day_committed)
 	_active_sim.set_speed_multiplier(32.0)
 

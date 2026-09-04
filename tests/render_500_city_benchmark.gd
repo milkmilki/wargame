@@ -34,6 +34,7 @@ func _init() -> void:
 	var serial_workers := _env_int("RENDER_BENCH_SERIAL_WORKERS", 0) != 0
 	var runtime_catchup := _env_int("RENDER_BENCH_RUNTIME_CATCHUP", 0) != 0
 	var diplomacy_worker := _env_int("RENDER_BENCH_DIPLOMACY_WORKER", 0) != 0
+	var legacy_ai_commit := _env_int("RENDER_BENCH_LEGACY_AI_COMMIT", 0) != 0
 	var packed := load(scene_path) as PackedScene
 	if packed == null:
 		printerr("render benchmark scene load failed: %s" % scene_path)
@@ -72,6 +73,7 @@ func _init() -> void:
 		simulation.supply_network_parallel_prebuild_disabled = serial_workers
 		simulation.runtime_catchup_during_day_enabled = runtime_catchup
 		simulation.diplomacy_frame_slicing_disabled = diplomacy_worker
+		simulation.ai_command_commit_slicing_disabled = legacy_ai_commit
 		if seconds_per_day > 0.0:
 			simulation.seconds_per_day = seconds_per_day
 	var with_simulation := await _sample_frames(
