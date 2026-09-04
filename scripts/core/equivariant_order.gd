@@ -665,6 +665,21 @@ static func mirror_orbit_edge_less(
 	)
 
 
+## 按与 mirror_orbit_edge_less 相同的词典序批量排序，避免比较器重复构造边键。
+static func sort_edges_by_mirror_orbit(
+	values: Array[Edge],
+	state: GameState
+) -> void:
+	if values.size() < 2:
+		return
+	var keys := {}
+	for edge in values:
+		keys[edge] = _mirror_orbit_edge_key(state, edge)
+	values.sort_custom(func(a: Edge, b: Edge) -> bool:
+		return _key_less(keys[a], keys[b])
+	)
+
+
 static func encounter_pair_less(
 	state: GameState,
 	a1: Army,

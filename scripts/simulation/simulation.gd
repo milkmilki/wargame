@@ -14498,39 +14498,27 @@ func _detect_encounters() -> void:
 			continue
 		var key := _edge_key_of(army.move_from, army.move_to)
 		if not by_edge.has(key):
-			by_edge[key] = []
+			var edge_armies: Array[Army] = []
+			by_edge[key] = edge_armies
 		by_edge[key].append(army)
 
-	var keys := by_edge.keys()
-	keys.sort_custom(func(a, b) -> bool:
-		var group_a: Array = by_edge[a]
-		var group_b: Array = by_edge[b]
-		var edge_a := state.edge_of(
-			(group_a[0] as Army).move_from,
-			(group_a[0] as Army).move_to
+	var ordered_edges: Array[Edge] = []
+	var key_by_edge := {}
+	for key in by_edge:
+		var edge_group: Array[Army] = by_edge[key]
+		var grouped_edge := state.edge_of(
+			(edge_group[0] as Army).move_from,
+			(edge_group[0] as Army).move_to
 		)
-		var edge_b := state.edge_of(
-			(group_b[0] as Army).move_from,
-			(group_b[0] as Army).move_to
-		)
-		return EquivariantOrder.mirror_orbit_edge_less(
-			state,
-			edge_a,
-			edge_b
-		)
-	)
-	for key in keys:
-		var group: Array = by_edge[key]
-		group.sort_custom(func(x: Army, y: Army) -> bool:
-			return EquivariantOrder.mirror_orbit_army_less(
-				state,
-				x,
-				y
-			)
-		)
-		var edge := state.edge_of(group[0].move_from, group[0].move_to)
-		if edge == null:
+		if grouped_edge == null:
 			continue
+		ordered_edges.append(grouped_edge)
+		key_by_edge[grouped_edge] = key
+	EquivariantOrder.sort_edges_by_mirror_orbit(ordered_edges, state)
+	for edge in ordered_edges:
+		var key = key_by_edge[edge]
+		var group: Array[Army] = by_edge[key]
+		EquivariantOrder.sort_armies_by_mirror_orbit(group, state)
 
 		# 已有战斗：先按回合开始时冻结的战线位置筛出全部抵达者，再统一加入。
 		# 逐支边判边加会让先加入者移动 contact_dist，进而改变后续军队资格，
@@ -14554,6 +14542,23 @@ func _detect_encounters() -> void:
 
 		if group.size() < 2:
 			continue
+		# 同一国家的军队不可能互相触发遭遇；跳过后续 O(k²) 配对扫描。
+		# 仅依据国家集合短路，不改变任何跨国配对的遍历或裁决顺序。
+		var group_nations := {}
+		for army in group:
+			group_nations[army.owner_nation] = true
+		if group_nations.size() < 2:
+			continue
+
+		# 位置和方向在本次边扫描期间不变，避免每个候选对重复计算。
+		var group_positions: Array[float] = []
+		var group_directions: Array[int] = []
+		group_positions.resize(group.size())
+		group_directions.resize(group.size())
+		for index in range(group.size()):
+			var positioned_army: Army = group[index]
+			group_positions[index] = _norm_pos(positioned_army, edge)
+			group_directions[index] = _edge_dir(positioned_army, edge)
 
 		# 在所有「敌对且已接触」的对中选交战国家对。主判据=归一化位置差 gap 最小（物理逼近程度）。
 		# gap 相等时按纯物理/稳定身份判据裁决，绝不依赖 army.id 或遍历顺序（item 11 验收）：
@@ -14574,9 +14579,20 @@ func _detect_encounters() -> void:
 					continue   # 仅两支溃逃军都无主动交战意图；驻防军可截击溃逃军
 				if not state.is_enemy(x.owner_nation, y.owner_nation):
 					continue
-				if not _edge_contact(x, y, edge):
+				var px := group_positions[i]
+				var py := group_positions[j]
+				var x_dir := group_directions[i]
+				var y_dir := group_directions[j]
+				var contact := false
+				if x_dir == y_dir:
+					contact = absf(px - py) <= CONTACT_EPS
+				else:
+					var plus_pos := px if x_dir > 0 else py
+					var minus_pos := py if x_dir > 0 else px
+					contact = plus_pos >= minus_pos - CONTACT_EPS
+				if not contact:
 					continue
-				var gap := absf(_norm_pos(x, edge) - _norm_pos(y, edge))
+				var gap := absf(px - py)
 				var psize := x.size + y.size
 				# 词典序 argmin：gap 升 → 合计兵力降 → 镜像轨道实体键升。
 				var better := false
@@ -14609,10 +14625,7 @@ func _detect_encounters() -> void:
 							mini(x.owner_nation, y.owner_nation),
 							maxi(x.owner_nation, y.owner_nation)
 						)] = true
-						var equivalent_contact := (
-							_norm_pos(x, edge)
-							+ _norm_pos(y, edge)
-						) * 0.5
+						var equivalent_contact := (px + py) * 0.5
 						for equivalent_army in [x, y]:
 							if not best_equivalent_contacts.has(
 								equivalent_army
@@ -14629,10 +14642,7 @@ func _detect_encounters() -> void:
 					best_x = x
 					best_y = y
 					best_ambiguous = false
-					var best_contact := (
-						_norm_pos(x, edge)
-						+ _norm_pos(y, edge)
-					) * 0.5
+					var best_contact := (px + py) * 0.5
 					best_equivalent_contacts = {
 						x: [best_contact],
 						y: [best_contact],
