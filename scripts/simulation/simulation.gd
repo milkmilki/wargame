@@ -308,6 +308,8 @@ var supply_network_parallel_prebuild_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_supply（不分帧），
 ## 以隔离「补给分帧」相对「补给同步」在同一运行时路径下的等价性。正式游戏 false。
 var supply_frame_slicing_disabled: bool = false
+## 等价性守卫：true 时补给来源保持主线程逐军计算；正式运行 false。
+var supply_source_parallel_disabled: bool = false
 ## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_reinforcements（不分帧），
 ## 以隔离「补员分帧」在同一运行时路径下的等价性。正式游戏 false。
 var reinforcement_frame_slicing_disabled: bool = false
@@ -2386,13 +2388,22 @@ func _resolve_supply_over_frames() -> void:
 	)
 	var plans: Array = []
 	var demand_by_nation := _new_food_demand_accumulator()
+	var precomputed_sources := (
+		await _precompute_supply_sources_over_frames()
+		if not supply_source_parallel_disabled
+		else {}
+	)
 	var slice_started := Time.get_ticks_usec()
 	_set_runtime_profile_stage(&"supply_build_plans")
 	for army in state.armies:
 		var plan_started := (
 			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 		)
-		var plan := _build_supply_plan_for_army(army, demand_by_nation)
+		var plan := _build_supply_plan_for_army(
+			army,
+			demand_by_nation,
+			precomputed_sources
+		)
 		if runtime_stage_profiling_enabled:
 			_record_runtime_span(&"supply_plan_army", plan_started)
 		if not plan.is_empty():
@@ -2430,6 +2441,69 @@ func _resolve_supply_over_frames() -> void:
 		):
 			await get_tree().process_frame
 			slice_started = Time.get_ticks_usec()
+
+
+## 补给来源只读于冻结的 state、网络和军队位置；把它从主线程的逐军计划中
+## 提前并行计算。债务、国家需求累加与取粮仍由原循环按 state.armies 顺序提交。
+func _precompute_supply_sources_over_frames() -> Dictionary:
+	var payloads: Array[Dictionary] = []
+	var chunk: Array[Army] = []
+	const CHUNK_SIZE: int = 32
+	for army in state.armies:
+		if army.size <= 0 or army.state == Army.State.RECOVERING:
+			continue
+		var siege_garrison := _siege_garrison_battle_of(army)
+		if siege_garrison != null and siege_garrison.city.food_storage > 0:
+			continue
+		chunk.append(army)
+		if chunk.size() >= CHUNK_SIZE:
+			payloads.append(_make_supply_source_job(chunk))
+			chunk = [] as Array[Army]
+	if not chunk.is_empty():
+		payloads.append(_make_supply_source_job(chunk))
+	if payloads.is_empty():
+		return {}
+	var task_ids: Array[int] = []
+	for payload in payloads:
+		task_ids.append(WorkerThreadPool.add_task(
+			_compute_supply_source_job.bind(payload), false,
+			"WorldWar supply sources"
+		))
+	while true:
+		var complete := true
+		for task_id in task_ids:
+			if not WorkerThreadPool.is_task_completed(task_id):
+				complete = false
+				break
+		if complete:
+			break
+		await get_tree().process_frame
+	for task_id in task_ids:
+		WorkerThreadPool.wait_for_task_completion(task_id)
+	var result := {}
+	for payload in payloads:
+		for key in payload["results"] as Dictionary:
+			result[key] = (payload["results"] as Dictionary)[key]
+	return result
+
+
+func _make_supply_source_job(armies: Array[Army]) -> Dictionary:
+	return {
+		"armies": armies.duplicate(),
+		"results": {},
+	}
+
+
+func _compute_supply_source_job(payload: Dictionary) -> void:
+	var results: Dictionary = payload["results"]
+	for army_value in payload["armies"] as Array:
+		var army: Army = army_value
+		var network: Array[Dictionary] = _daily_supply_network_cache.get(
+			army.owner_nation, [] as Array[Dictionary]
+		)
+		results[army.get_instance_id()] = Pathfinding.supply_sources_from_network(
+			state, army, network
+		)
 
 
 ## 每日重算前的补给缓存维护：行军位置查表每天失效；驻城位置仅在该国网络
@@ -2642,7 +2716,8 @@ func _new_food_demand_accumulator() -> Array[int]:
 ## 在此直接落定状态并返回空字典（不参与竞争）。
 func _build_supply_plan_for_army(
 	army: Army,
-	demand_by_nation: Array[int]
+	demand_by_nation: Array[int],
+	precomputed_sources: Dictionary = {}
 ) -> Dictionary:
 	if army.size <= 0 or army.state == Army.State.RECOVERING:
 		return {}
@@ -2653,11 +2728,15 @@ func _build_supply_plan_for_army(
 		army.supply_ratio = 1.0
 		army.supply_food_debt = 0.0
 		return {}
-	var sources := _cached_supply_sources(
-		army,
-		_daily_supply_source_cache,
-		_daily_supply_network_cache,
-		_stable_supply_city_source_cache
+	var sources: Array[Dictionary] = (
+		precomputed_sources[army.get_instance_id()]
+		if precomputed_sources.has(army.get_instance_id())
+		else _cached_supply_sources(
+			army,
+			_daily_supply_source_cache,
+			_daily_supply_network_cache,
+			_stable_supply_city_source_cache
+		)
 	)
 	var route_loss := _weighted_supply_loss(sources)
 	var mult: float = MAX_SUPPLY_MULT
