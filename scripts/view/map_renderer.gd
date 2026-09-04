@@ -647,11 +647,16 @@ func world_input_blocked(point: Vector2) -> bool:
 
 
 func army_map_position(army: Army) -> Vector2:
+	return army_snapshot_position(army.id, _logical_grid_pos(army))
+
+
+## 返回最近两次已提交日快照之间的显示位置；调用者无需读取正在推进的军队状态。
+func army_snapshot_position(army_id: int, fallback: Vector2) -> Vector2:
 	var curr: Vector2 = _curr_pos.get(
-		army.id,
-		_logical_grid_pos(army)
+		army_id,
+		fallback
 	)
-	var prev: Vector2 = _prev_pos.get(army.id, curr)
+	var prev: Vector2 = _prev_pos.get(army_id, curr)
 	var t := clampf(
 		_tick_elapsed / maxf(_tick_duration, 0.0001),
 		0.0,

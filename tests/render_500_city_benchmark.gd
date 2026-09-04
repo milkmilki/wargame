@@ -27,6 +27,7 @@ func _init() -> void:
 	var requested_sieges := _env_int("RENDER_BENCH_SIEGES", 0)
 	var world_seed := _env_int("RENDER_BENCH_SEED", 12345)
 	var sample_gpu_counters := _env_int("RENDER_BENCH_GPU_COUNTERS", 0) != 0
+	var zoom_frames := _env_int("RENDER_BENCH_ZOOM_FRAMES", 0)
 	var seconds_per_day := float(OS.get_environment(
 		"RENDER_BENCH_SECONDS_PER_DAY"
 	))
@@ -55,6 +56,12 @@ func _init() -> void:
 	var render_only := await _sample_frames(
 		frame_count, 0, sample_gpu_counters, null
 	)
+	var zoom_render := {}
+	if zoom_frames > 0:
+		zoom_render = await _sample_frames(
+			zoom_frames, 0, sample_gpu_counters, null,
+			main.get_node_or_null("StrategicMap3D") as StrategicMap3D
+		)
 	if simulation != null:
 		simulation.paused = false
 		simulation.runtime_stage_profiling_enabled = true
@@ -81,6 +88,8 @@ func _init() -> void:
 	])
 	print("节点数=%d" % _count_nodes(main))
 	_print_stats("纯渲染（模拟暂停）", render_only)
+	if not zoom_render.is_empty():
+		_print_stats("连续缩放（模拟暂停）", zoom_render)
 	_print_stats("渲染+模拟", with_simulation)
 	if simulation != null:
 		_print_runtime_spans(simulation)
@@ -93,7 +102,8 @@ func _sample_frames(
 	frame_count: int,
 	target_days: int,
 	sample_gpu_counters: bool,
-	simulation: Simulation
+	simulation: Simulation,
+	zoom_map: StrategicMap3D = null
 ) -> Dictionary:
 	var samples: Array[float] = []
 	var draw_calls: Array[float] = []
@@ -122,6 +132,10 @@ func _sample_frames(
 		)
 	):
 		var started := Time.get_ticks_usec()
+		if zoom_map != null:
+			zoom_map._zoom_camera(
+				0.88 if sampled_frames % 2 == 0 else 1.0 / 0.88
+			)
 		await sampler.sampled
 		sampled_frames += 1
 		var frame_ms := float(Time.get_ticks_usec() - started) / 1000.0

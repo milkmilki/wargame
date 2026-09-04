@@ -40,14 +40,14 @@ const TRADE_FLOW_MARKER_WIDTH: float = 0.26
 const TRADE_FLOW_MARKER_LENGTH: float = 0.50
 const TRADE_FLOW_MAX_MARKERS_PER_ROUTE: int = 24
 const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
-const CAMPAIGN_ARROW_GRID := Vector2i(24, 16)
+const CAMPAIGN_ARROW_GRID := Vector2i(12, 8)
 ## 攻势箭头仍是原始红色贴图；这些参数只控制承载贴图的无光照拱形曲面。
 const CAMPAIGN_ARROW_ENDPOINT_CLEARANCE: float = 0.72
 const CAMPAIGN_ARROW_SURFACE_CLEARANCE: float = 0.52
 const CAMPAIGN_ARROW_MIN_ARCH_HEIGHT: float = 1.60
 const CAMPAIGN_ARROW_MAX_ARCH_HEIGHT: float = 4.20
 const CAMPAIGN_ARROW_ARCH_LENGTH_RATIO: float = 0.070
-const CAMPAIGN_ARROW_TERRAIN_SAMPLES: int = 32
+const CAMPAIGN_ARROW_TERRAIN_SAMPLES: int = 16
 const NATION_LABEL_FONT_SIZE: int = 84
 const NATION_LABEL_OUTLINE_SIZE: int = 3
 const NATION_LABEL_SAFETY: float = 0.86
@@ -220,6 +220,10 @@ func setup(
 	_trade_flow_paths.clear()
 	_trade_flow_path_indices = PackedInt32Array()
 	_trade_flow_offsets = PackedFloat32Array()
+	if not sim.runtime_day_committed.is_connected(
+		_on_runtime_day_committed
+	):
+		sim.runtime_day_committed.connect(_on_runtime_day_committed)
 	if (
 		_trade_flow_markers != null
 		and _trade_flow_markers.multimesh != null
@@ -287,6 +291,13 @@ func _process(delta: float) -> void:
 	):
 		_build_trade_route_mesh()
 		_last_trade_revision = state.trade_revision
+	if (
+		_army_instances_initialized
+		and not is_equal_approx(
+			_last_army_icon_scale, overlay.army_icon_scale()
+		)
+	):
+		_rescale_army_instances(overlay.army_icon_scale())
 	if _should_update_army_instances():
 		var army_render_started := (
 			Time.get_ticks_usec()
@@ -298,6 +309,8 @@ func _process(delta: float) -> void:
 			sim._record_runtime_span(
 				&"render_army_instances", army_render_started
 			)
+	elif _army_instances_initialized:
+		_update_army_snapshot_positions()
 	var overlay_render_started := (
 		Time.get_ticks_usec()
 		if sim != null and sim.runtime_stage_profiling_enabled
@@ -2106,6 +2119,90 @@ func _update_army_instances() -> void:
 	_last_army_icon_scale = overlay.army_icon_scale()
 
 
+func _on_runtime_day_committed(_day: int) -> void:
+	# MapRenderer 在本节点之前连接同一信号，会先发布位置快照。此处立即
+	# 消费完整日状态，避免模拟因积压连续启动下一日时永远错过空闲帧。
+	_update_army_instances()
+
+
+## 模拟推进期间只移动已有实例，位置来自 MapRenderer 的已提交快照。
+## 不扫描可变军队集合，也不更新阵营、士气等外观状态。
+func _update_army_snapshot_positions() -> void:
+	if _army_bases.multimesh == null:
+		return
+	var count := mini(
+		_army_instance_ids.size(),
+		_army_bases.multimesh.instance_count
+	)
+	var layers: Array[MultiMeshInstance3D] = [
+		_army_bases, _armies, _army_symbol_a, _army_symbol_b,
+		_army_morale_backs, _army_morale_bars,
+	]
+	for index in range(count):
+		var army_id := _army_instance_ids[index]
+		var fallback: Vector2 = _army_render_positions.get(
+			army_id, Vector2.ZERO
+		)
+		var map_position := overlay.army_snapshot_position(
+			army_id, fallback
+		)
+		if _army_render_positions.get(army_id) == map_position:
+			continue
+		var angle := float(army_id % 11) / 11.0 * TAU
+		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.34
+		var target_base_origin := (
+			_terrain.map_to_world(map_position)
+			+ offset
+			+ Vector3(0.0, 0.10, 0.0)
+		)
+		var current_base := _army_bases.multimesh.get_instance_transform(index)
+		var translation := target_base_origin - current_base.origin
+		for layer in layers:
+			var transform := layer.multimesh.get_instance_transform(index)
+			transform.origin += translation
+			layer.multimesh.set_instance_transform(index, transform)
+		_army_render_positions[army_id] = map_position
+
+
+## 大小滑块只缩放已经发布的实例，避免等待一个可能持续数秒的模拟日。
+func _rescale_army_instances(next_scale: float) -> void:
+	if _army_bases.multimesh == null or _last_army_icon_scale <= 0.0:
+		_last_army_icon_scale = next_scale
+		return
+	var ratio := next_scale / _last_army_icon_scale
+	if is_equal_approx(ratio, 1.0):
+		return
+	var count := _army_bases.multimesh.instance_count
+	var layers: Array[MultiMeshInstance3D] = [
+		_army_bases, _armies, _army_symbol_a, _army_symbol_b,
+		_army_morale_backs, _army_morale_bars,
+	]
+	for index in range(count):
+		var base_transform := (
+			_army_bases.multimesh.get_instance_transform(index)
+		)
+		var base_origin := base_transform.origin
+		for layer in layers:
+			var transform := layer.multimesh.get_instance_transform(index)
+			transform = scaled_counter_transform(
+				transform, base_origin, ratio
+			)
+			layer.multimesh.set_instance_transform(index, transform)
+	_last_army_icon_scale = next_scale
+
+
+static func scaled_counter_transform(
+	transform: Transform3D,
+	base_origin: Vector3,
+	ratio: float
+) -> Transform3D:
+	transform.basis = transform.basis.scaled(Vector3.ONE * ratio)
+	transform.origin = (
+		base_origin + (transform.origin - base_origin) * ratio
+	)
+	return transform
+
+
 func _should_update_army_instances() -> bool:
 	# MapRenderer only publishes new army position snapshots after the sliced
 	# simulation day commits. Rendering during the coroutine exposes partial
@@ -2116,11 +2213,6 @@ func _should_update_army_instances() -> bool:
 		return true
 	if not is_equal_approx(_last_army_icon_scale, overlay.army_icon_scale()):
 		return true
-	for army in state.armies:
-		if army.size <= 0:
-			continue
-		if army.on_edge or army.state in [Army.State.MOVING, Army.State.RETREATING]:
-			return true
 	return false
 
 
@@ -2220,7 +2312,6 @@ func _update_battle_instances() -> void:
 		_battles, _battle_rings, _battle_cross_a, _battle_cross_b,
 	]:
 		layer.multimesh.instance_count = active.size()
-	_clear_battle_labels()
 	for index in range(active.size()):
 		var battle := active[index]
 		var map_position := _battle_map_position(battle)
@@ -2260,7 +2351,9 @@ func _update_battle_instances() -> void:
 		_battle_rings.multimesh.set_instance_color(index, MAP_GOLD)
 		_battle_cross_a.multimesh.set_instance_color(index, MAP_IVORY)
 		_battle_cross_b.multimesh.set_instance_color(index, MAP_IVORY)
-		_add_battle_label(battle, origin)
+		_update_battle_label(index, battle, origin)
+	for index in range(active.size(), _battle_labels.size()):
+		_battle_labels[index].visible = false
 
 
 func _build_battle_marker_meshes() -> void:
@@ -2290,8 +2383,24 @@ func _build_battle_marker_meshes() -> void:
 	)
 
 
-func _add_battle_label(battle: Battle, origin: Vector3) -> void:
-	var label := Label3D.new()
+func _update_battle_label(
+	index: int,
+	battle: Battle,
+	origin: Vector3
+) -> void:
+	while _battle_labels.size() <= index:
+		var created := Label3D.new()
+		created.font = _map_font
+		created.font_size = 25
+		created.outline_size = 8
+		created.pixel_size = 0.0125
+		created.modulate = MAP_IVORY
+		created.outline_modulate = MAP_INK
+		created.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		created.no_depth_test = true
+		_content.add_child(created)
+		_battle_labels.append(created)
+	var label := _battle_labels[index]
 	if battle.kind == Battle.Kind.SIEGE:
 		label.text = "围城 %d%%" % int(round(
 			clampf(
@@ -2302,17 +2411,8 @@ func _add_battle_label(battle: Battle, origin: Vector3) -> void:
 		))
 	else:
 		label.text = "会战 · %d回合" % battle.round_no
-	label.font = _map_font
-	label.font_size = 25
-	label.outline_size = 8
-	label.pixel_size = 0.0125
-	label.modulate = MAP_IVORY
-	label.outline_modulate = MAP_INK
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
 	label.position = origin + Vector3(0.0, 0.86, 0.0)
-	_content.add_child(label)
-	_battle_labels.append(label)
+	label.visible = true
 
 
 func _clear_battle_labels() -> void:
