@@ -2353,6 +2353,7 @@ func _update_battle_instances() -> void:
 		_battle_cross_b.multimesh.set_instance_color(index, MAP_IVORY)
 		_update_battle_label(index, battle, origin)
 	for index in range(active.size(), _battle_labels.size()):
+		_battle_labels[index].set_meta("active", false)
 		_battle_labels[index].visible = false
 
 
@@ -2388,18 +2389,7 @@ func _update_battle_label(
 	battle: Battle,
 	origin: Vector3
 ) -> void:
-	while _battle_labels.size() <= index:
-		var created := Label3D.new()
-		created.font = _map_font
-		created.font_size = 25
-		created.outline_size = 8
-		created.pixel_size = 0.0125
-		created.modulate = MAP_IVORY
-		created.outline_modulate = MAP_INK
-		created.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		created.no_depth_test = true
-		_content.add_child(created)
-		_battle_labels.append(created)
+	_ensure_battle_label(index)
 	var label := _battle_labels[index]
 	if battle.kind == Battle.Kind.SIEGE:
 		label.text = "围城 %d%%" % int(round(
@@ -2412,7 +2402,25 @@ func _update_battle_label(
 	else:
 		label.text = "会战 · %d回合" % battle.round_no
 	label.position = origin + Vector3(0.0, 0.86, 0.0)
-	label.visible = true
+	label.set_meta("active", true)
+	label.visible = _camera_distance <= 50.0
+
+
+func _ensure_battle_label(index: int) -> void:
+	while _battle_labels.size() <= index:
+		var created := Label3D.new()
+		created.font = _map_font
+		created.font_size = 25
+		created.outline_size = 8
+		created.pixel_size = 0.0125
+		created.modulate = MAP_IVORY
+		created.outline_modulate = MAP_INK
+		created.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		created.no_depth_test = true
+		created.visible = false
+		created.set_meta("active", false)
+		_content.add_child(created)
+		_battle_labels.append(created)
 
 
 func _clear_battle_labels() -> void:
@@ -2712,7 +2720,9 @@ func _update_map_detail_visibility() -> void:
 	for label in _nation_labels:
 		label.visible = nation_visible
 	for label in _battle_labels:
-		label.visible = bool(signature[2])
+		label.visible = (
+			bool(signature[2]) and bool(label.get_meta("active", false))
+		)
 	if _minor_roads != null:
 		_minor_roads.visible = bool(signature[3])
 	_apply_map_mode_visibility()

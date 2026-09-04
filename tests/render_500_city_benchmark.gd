@@ -145,11 +145,14 @@ func _sample_frames(
 			var key := str(elapsed_stage)
 			var report: Dictionary = slow_frames_by_stage.get(key, {
 				"over_16": 0, "over_33": 0, "peak_ms": 0.0,
+				"peak_day": -1,
 			})
 			report["over_16"] = int(report["over_16"]) + 1
 			if frame_ms > 33.0:
 				report["over_33"] = int(report["over_33"]) + 1
-			report["peak_ms"] = maxf(float(report["peak_ms"]), frame_ms)
+			if frame_ms > float(report["peak_ms"]):
+				report["peak_ms"] = frame_ms
+				report["peak_day"] = simulation.state.day
 			slow_frames_by_stage[key] = report
 		if sample_gpu_counters:
 			draw_calls.append(float(Performance.get_monitor(
@@ -215,9 +218,10 @@ func _print_stats(label: String, stats: Dictionary) -> void:
 	)
 	for stage in stages:
 		var report: Dictionary = stage_reports[stage]
-		print("  %-24s >16ms=%d >33ms=%d peak=%.2fms" % [
+		print("  %-24s >16ms=%d >33ms=%d peak=%.2fms day=%d" % [
 			stage, int(report["over_16"]), int(report["over_33"]),
 			float(report["peak_ms"]),
+			int(report.get("peak_day", -1)),
 		])
 	var activity: Dictionary = stats["peak_activity"]
 	if int(activity["war_pairs"]) > 0:

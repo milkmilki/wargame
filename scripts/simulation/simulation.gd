@@ -282,6 +282,8 @@ var ai_snapshot_resource_cache_reuse_disabled: bool = false
 ## A/B 与等价性测试开关；正式运行 false，按国家多核构建威胁场。
 var ai_parallel_threat_disabled: bool = false
 var ai_parallel_defense_disabled: bool = false
+## A/B 等价守卫：true 时占城后的同日前线刷新保留主线程同步构建。
+var frontline_refresh_worker_disabled: bool = false
 ## 分封开关：true 时执行 AI 产出的 ENFEOFF 动作；false 时忽略（评估仍算，无副作用）。
 ## 正式游戏保持 true；仅供分封收益 A/B 对照关闭。
 var enfeoff_enabled: bool = true
@@ -720,7 +722,10 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	cleanup_part_started = (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
-	_flush_same_day_frontline_refresh()
+	if spread_runtime_work and not frontline_refresh_worker_disabled:
+		await _flush_same_day_frontline_refresh(true)
+	else:
+		_flush_same_day_frontline_refresh(false)
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"cleanup_frontline", cleanup_part_started)
 	_set_runtime_profile_stage(&"cleanup_refresh")
@@ -5907,7 +5912,8 @@ func _build_ai_snapshot_threat_phase(
 	snapshot_diplomacy_cache: Dictionary,
 	spread_runtime_work: bool,
 	runtime_slice_started: int,
-	ai_profile_stage_started: int
+	ai_profile_stage_started: int,
+	worker_high_priority: bool = true
 ) -> Dictionary:
 	_parallel_ai_context_jobs = context_jobs
 	# Read-only snapshot and threat construction dominates the decision cost.
@@ -5921,7 +5927,7 @@ func _build_ai_snapshot_threat_phase(
 		}
 		var snapshot_task_id := WorkerThreadPool.add_task(
 			_build_ai_snapshots_serial.bind(snapshot_payload),
-			true, "WorldWar AI snapshots"
+			worker_high_priority, "WorldWar AI snapshots"
 		)
 		_set_runtime_profile_stage(&"ai_snapshot_worker")
 		while not WorkerThreadPool.is_task_completed(snapshot_task_id):
@@ -5963,7 +5969,7 @@ func _build_ai_snapshot_threat_phase(
 					_build_ai_travel_partition.bind(
 						worker_index, travel_worker_count, travel_payload
 					),
-					true,
+					worker_high_priority,
 					"WorldWar AI travel fields"
 				))
 			_set_runtime_profile_stage(&"ai_travel_workers")
@@ -5985,7 +5991,7 @@ func _build_ai_snapshot_threat_phase(
 				_build_ai_threat_partition.bind(
 					worker_index, worker_count, threat_payload
 				),
-				true,
+				worker_high_priority,
 				"WorldWar AI threats"
 			))
 		_set_runtime_profile_stage(&"ai_threat_workers")
@@ -6035,7 +6041,8 @@ func _build_ai_defense_phase(
 	force_contexts: Dictionary,
 	spread_runtime_work: bool,
 	runtime_slice_started: int,
-	ai_profile_stage_started: int
+	ai_profile_stage_started: int,
+	worker_high_priority: bool = true
 ) -> Dictionary:
 	_set_runtime_profile_stage(&"ai_defense")
 	if spread_runtime_work and not context_jobs.is_empty():
@@ -6057,7 +6064,7 @@ func _build_ai_defense_phase(
 				_build_ai_defense_partition.bind(
 					worker_index, defense_worker_count, context_jobs.size()
 				),
-				true, "WorldWar AI defense evaluation"
+				worker_high_priority, "WorldWar AI defense evaluation"
 			))
 		_set_runtime_profile_stage(&"ai_defense_workers")
 		await _run_worker_tasks_over_frames(defense_task_ids)
@@ -7020,7 +7027,9 @@ func _force_ai_replan_for_capture(
 	)
 
 
-func _flush_same_day_frontline_refresh() -> void:
+func _flush_same_day_frontline_refresh(
+	use_runtime_workers: bool = false
+) -> void:
 	if _frontline_dirty_nations.is_empty():
 		return
 	var dirty_ids: Array[int] = []
@@ -7065,20 +7074,21 @@ func _flush_same_day_frontline_refresh() -> void:
 			"threat": null,
 			"defense_plan": null,
 		}
-		_build_ai_snapshot_context(job, diplomacy_cache)
-		job["threat"] = ThreatField.build(
-			view,
-			_threat_travel_cache
-		)
-		var defense_plan := CityDefensePlan.build(
-			view,
-			job["snapshot"],
-			job["threat"],
-			job["previous_defense_plan"]
-		)
-		_record_defense_plan_cache_result(defense_plan)
-		_ai_defense_plan_cache[nation_id] = defense_plan
-		job["defense_plan"] = defense_plan
+		if not use_runtime_workers:
+			_build_ai_snapshot_context(job, diplomacy_cache)
+			job["threat"] = ThreatField.build(
+				view,
+				_threat_travel_cache
+			)
+			var defense_plan := CityDefensePlan.build(
+				view,
+				job["snapshot"],
+				job["threat"],
+				job["previous_defense_plan"]
+			)
+			_record_defense_plan_cache_result(defense_plan)
+			_ai_defense_plan_cache[nation_id] = defense_plan
+			job["defense_plan"] = defense_plan
 		context_jobs.append(job)
 		for army in view.friendly_armies:
 			snapshot_army_ids[army.id] = true
@@ -7086,6 +7096,28 @@ func _flush_same_day_frontline_refresh() -> void:
 		frontline_refresh_build_total += 1
 	if context_jobs.is_empty():
 		return
+	if use_runtime_workers:
+		var runtime_slice_started := Time.get_ticks_usec()
+		var profile_started := (
+			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		)
+		var snapshot_phase := await _build_ai_snapshot_threat_phase(
+			context_jobs,
+			diplomacy_cache,
+			true,
+			runtime_slice_started,
+			profile_started,
+			false
+		)
+		var unused_force_contexts := {}
+		await _build_ai_defense_phase(
+			context_jobs,
+			unused_force_contexts,
+			true,
+			int(snapshot_phase["slice_started"]),
+			int(snapshot_phase["profile_stage_started"]),
+			false
+		)
 	_begin_ai_command_collection(snapshot_army_ids)
 	for job in context_jobs:
 		var view: AiWorldView = job["view"]

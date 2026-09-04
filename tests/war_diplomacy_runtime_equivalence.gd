@@ -7,25 +7,34 @@ var _baseline_fingerprint := PackedByteArray()
 var _active_sim: Simulation
 var _active_state: GameState
 var _target_days: int
+var _nation_count: int
+var _city_count: int
+var _forced_war_pairs: int
+var _seeded_sieges: int
 
 
 func _init() -> void:
 	_target_days = _env_int("WAR_RUNTIME_EQ_DAYS", 60)
+	_nation_count = _env_int("WAR_RUNTIME_EQ_NATIONS", 20)
+	_city_count = _env_int("WAR_RUNTIME_EQ_CITIES", 100)
+	_forced_war_pairs = _env_int("WAR_RUNTIME_EQ_WAR_PAIRS", 4)
+	_seeded_sieges = _env_int("WAR_RUNTIME_EQ_SIEGES", 4)
 	_start_world(true)
 
 
 func _start_world(disable_optimized_scheduling: bool) -> void:
 	_active_state = GameState.new()
-	_active_state.generate_world(12345, 20, 100)
-	_force_adjacent_wars(_active_state, 4)
+	_active_state.generate_world(12345, _nation_count, _city_count)
+	_force_adjacent_wars(_active_state, _forced_war_pairs)
 	_active_sim = Simulation.new()
 	root.add_child(_active_sim)
 	_active_sim.setup(_active_state)
-	_seed_sieges(_active_sim, 4)
+	_seed_sieges(_active_sim, _seeded_sieges)
 	_active_sim.monthly_economy_worker_disabled = disable_optimized_scheduling
 	_active_sim.movement_frame_slicing_disabled = disable_optimized_scheduling
 	_active_sim.siege_defender_index_disabled = disable_optimized_scheduling
 	_active_sim.supply_source_parallel_disabled = disable_optimized_scheduling
+	_active_sim.frontline_refresh_worker_disabled = disable_optimized_scheduling
 	_active_sim.runtime_day_committed.connect(_on_runtime_day_committed)
 	_active_sim.set_speed_multiplier(32.0)
 
