@@ -14,6 +14,7 @@ func _init() -> void:
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
+	sim.tick_phase_profiling_enabled = true
 	var budget_ms := 1000.0 / float(speed)
 
 	var peak := 0.0
@@ -22,6 +23,7 @@ func _init() -> void:
 	var over_budget := 0
 	var peak_day := 0
 	var over_month := 0
+	var peak_profile := {}
 	for _d in range(days):
 		if state.winner != -1:
 			break
@@ -31,6 +33,7 @@ func _init() -> void:
 		if ms > peak:
 			peak = ms
 			peak_day = state.day
+			peak_profile = sim.tick_profile_last_usec.duplicate()
 		sum += ms
 		n += 1
 		if ms > budget_ms:
@@ -52,6 +55,15 @@ func _init() -> void:
 		peak / budget_ms,
 		(sum / maxf(float(n), 1.0)) / budget_ms,
 	])
+	var profile_stages := peak_profile.keys()
+	profile_stages.sort_custom(func(a, b) -> bool:
+		return int(peak_profile[a]) > int(peak_profile[b])
+	)
+	print("峰值日阶段细分:")
+	for stage in profile_stages:
+		print("  %-34s %.2fms" % [
+			stage, float(peak_profile[stage]) / 1000.0,
+		])
 	print("verdict=COMPUTE_MEASURE_DONE")
 	sim.free()
 	quit(0)
