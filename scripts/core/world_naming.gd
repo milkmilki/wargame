@@ -460,6 +460,30 @@ static func assign_rebel_name(
 	return nation.name
 
 
+## 继位后确认新君主姓名未被其他国家占用。RulerProfile 负责抽取身份，
+## 本层只维护战役命名注册表与 UI 使用的 naming_revision。
+static func register_successor_name(
+	game_state,
+	nation_id: int,
+	identity: int,
+	disallowed_name: String = ""
+) -> String:
+	if not _valid_nation_id(game_state, nation_id):
+		return ""
+	var nation = game_state.nations[nation_id]
+	var rulers := _registry(game_state, _RULER_REGISTRY_META)
+	_backfill_ruler_registry(game_state, rulers, nation_id)
+	_assign_unique_ruler(
+		nation,
+		int(game_state.world_seed),
+		identity,
+		rulers,
+		disallowed_name
+	)
+	_bump_revision(game_state)
+	return str(nation.ruler_name)
+
+
 ## 把一个已脱离宗藩关系的藩王统一升格为主权国。建国城市只在旧状态
 ## 缺失时补一次；国号严格取该城 short_name，不因迁都而换锚点。
 static func promote_vassal_to_sovereign(
@@ -982,11 +1006,16 @@ static func _assign_unique_ruler(
 	nation,
 	world_seed: int,
 	identity: int,
-	registry: Dictionary
+	registry: Dictionary,
+	excluded_name: String = ""
 ) -> bool:
 	var nation_id := int(nation.id)
 	var current := str(nation.ruler_name).strip_edges()
-	if not current.is_empty() and _reserve(registry, current, nation_id):
+	if (
+		not current.is_empty()
+		and current != excluded_name
+		and _reserve(registry, current, nation_id)
+	):
 		if nation.ruler_name != current:
 			nation.ruler_name = current
 			return true
@@ -1001,12 +1030,17 @@ static func _assign_unique_ruler(
 			RULER_SURNAMES[pair / RULER_GIVEN_NAMES.size()]
 			+ RULER_GIVEN_NAMES[pair % RULER_GIVEN_NAMES.size()]
 		)
+		if candidate == excluded_name:
+			continue
 		if _reserve(registry, candidate, nation_id):
 			nation.ruler_name = candidate
 			return true
 	var serial := nation_id + 1
 	while true:
 		var candidate := RULER_SURNAMES[start % RULER_SURNAMES.size()] + _chinese_digits(serial)
+		if candidate == excluded_name:
+			serial += 1
+			continue
 		if _reserve(registry, candidate, nation_id):
 			nation.ruler_name = candidate
 			return true

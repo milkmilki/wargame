@@ -7,7 +7,7 @@ const ANALYSIS_WIDTH: int = 256
 ## geographic rectangle as the runtime map instead of cropping to the land
 ## alpha bounds; the land mask still exclusively controls city placement.
 const FULL_MAP_ASPECT_RATIO: float = 62.5 / 36.0  ## Legacy default for old map definitions.
-## Packed map source contract: RGB=satellite color, Alpha=signed elevation.
+## Packed map source contract: RGB=solid white, Alpha=signed elevation.
 ## 1..128 is -8000..0m sea; 129..255 is positive land..6200m.
 const SEA_LEVEL_ALPHA: float = 128.0 / 255.0
 const ALPHA_THRESHOLD: float = SEA_LEVEL_ALPHA
@@ -66,7 +66,8 @@ static func build(
 	city_mask_path: String = "",
 	city_density_settings: Dictionary = {},
 	generation_seed: int = 0,
-	initial_nation_count: int = 4
+	initial_nation_count: int = 4,
+	political_mask_path: String = ""
 ) -> Dictionary:
 	var profile_enabled := (
 		OS.get_environment("WORLD_GENERATION_PROFILE") == "1"
@@ -75,11 +76,13 @@ static func build(
 	var profile_last := profile_started
 	var profile := {}
 	var mask_signature := city_mask_signature(city_mask_path)
+	var political_mask_signature := city_mask_signature(political_mask_path)
 	var density_settings := normalize_city_density_settings(
 		city_density_settings
 	)
-	var cache_key := "settlement-v18-bank-scaled-docks:%s:%d:%s:%s:%d:%d" % [
+	var cache_key := "settlement-v19-political-mask:%s:%d:%s:%s:%s:%d:%d" % [
 		source_path, city_count, mask_signature,
+		political_mask_signature,
 		city_density_signature(density_settings),
 		generation_seed,
 		initial_nation_count,
@@ -114,6 +117,13 @@ static func build(
 		"白色蒙版内真实陆地不足以生成%d座城市" % city_count
 	)
 	var bounds := Rect2i(Vector2i.ZERO, analysis.get_size())
+	var political_mask_result := build_city_candidate_mask(
+		mask, analysis.get_size(), political_mask_path
+	)
+	assert(bool(political_mask_result.get("ok", false)), str(
+		political_mask_result.get("error", "政治蒙版加载失败")
+	))
+	var political_mask: PackedByteArray = political_mask_result["mask"]
 	var map_aspect_ratio := MapSource.aspect_ratio()
 	if profile_enabled:
 		profile["input"] = Time.get_ticks_usec() - profile_last
@@ -137,9 +147,17 @@ static func build(
 	# Settlement density and spacing are solved in the tight land domain, then
 	# projected once into the complete geographic rectangle used by rendering.
 	var full_positions: Array[Vector2] = []
-	for pixel in samples["pixels"]:
+	var political_active := PackedByteArray()
+	political_active.resize(samples["pixels"].size())
+	for city_id in range(samples["pixels"].size()):
+		var pixel: Vector2i = samples["pixels"][city_id]
 		full_positions.append(_normalized_map_point(pixel, bounds))
+		political_active[city_id] = political_mask[
+			pixel.y * analysis.get_width() + pixel.x
+		]
+	var politically_active_count := _count_mask(political_active)
 	samples["positions"] = full_positions
+	samples["politically_active"] = political_active
 	# 省份是地形/河流上的基础行政分区；道路只能消费省份接壤关系，
 	# 不能反过来塑造省界，否则会形成“道路决定省界、省界又决定道路”的循环。
 	var provinces := _build_province_raster(
@@ -196,6 +214,8 @@ static func build(
 		"pixels": samples["pixels"],
 		"heights": samples["heights"],
 		"reliefs": samples["reliefs"],
+		"politically_active": samples["politically_active"],
+		"politically_active_count": politically_active_count,
 		"roads": transport["roads"],
 		"docks": transport["docks"],
 		"lowland_dock_regions": transport.get(
@@ -205,6 +225,9 @@ static func build(
 			"dock_bank_regions", [] as Array[Dictionary]
 		),
 		"river_paths": transport["river_paths"],
+		"river_features": MapFeatureContract.from_legacy_river_paths(
+			transport["river_paths"]
+		),
 		"bounds": bounds,
 		"land_bounds": land_bounds,
 		"image_size": analysis.get_size(),
@@ -216,6 +239,7 @@ static func build(
 		"city_mask_signature": mask_signature,
 		"city_density_settings": density_settings.duplicate(true),
 		"generation_seed": generation_seed,
+		"political_mask_path": political_mask_path,
 	}
 	_cache[cache_key] = result.duplicate(true)
 	if profile_enabled:
@@ -436,6 +460,37 @@ static func validate_city_mask(
 	return {"ok": true, "white_land_count": available, "path": city_mask_path}
 
 
+static func validate_political_mask(
+	source_path: String,
+	political_mask_path: String
+) -> Dictionary:
+	var texture := load(source_path) as Texture2D
+	var source := texture.get_image() if texture != null else null
+	if source == null or source.is_empty():
+		return {"ok": false, "error": "地图源纹理不可用。"}
+	var analysis := source.duplicate()
+	var analysis_height := maxi(
+		int(round(float(source.get_height()) * float(ANALYSIS_WIDTH) / float(source.get_width()))), 1
+	)
+	analysis.resize(ANALYSIS_WIDTH, analysis_height, Image.INTERPOLATE_NEAREST)
+	var land_geometry := _all_land_geometry(analysis)
+	var result := build_city_candidate_mask(
+		land_geometry["mask"], analysis.get_size(), political_mask_path
+	)
+	if not bool(result.get("ok", false)):
+		if str(result.get("error", "")).contains("城市蒙版"):
+			result["error"] = str(result["error"]).replace("城市蒙版", "政治蒙版")
+		return result
+	var available := int(result.get("white_land_count", 0))
+	if available <= 0:
+		return {"ok": false, "error": "政治蒙版未覆盖任何真实陆地。"}
+	return {
+		"ok": true,
+		"white_land_count": available,
+		"path": political_mask_path,
+	}
+
+
 static func _count_mask(mask: PackedByteArray) -> int:
 	var count := 0
 	for value in mask:
@@ -615,11 +670,6 @@ static func _build_province_raster(
 	var metric_points := PackedVector2Array()
 	metric_points.resize(width * height)
 	var image_width := image.get_width()
-	var warped_cities: Array[Vector2] = []
-	for city_pixel in city_pixels:
-		warped_cities.append(province_metric_point(
-			Vector2(city_pixel - bounds.position)
-		))
 	for local_y in range(height):
 		var image_y := bounds.position.y + clampi(
 			local_y / PROVINCE_RASTER_SCALE,
@@ -728,31 +778,8 @@ static func _build_province_raster(
 						owner
 					)
 				)
-	for local_y in range(height):
-		for local_x in range(width):
-			var index := local_y * width + local_x
-			if land[index] == 0 or ids[index] >= 0:
-				continue
-			var warped_point := metric_points[index]
-			var best_city := -1
-			var best_distance := INF
-			for city_id in range(warped_cities.size()):
-				var distance := warped_point.distance_squared_to(
-					warped_cities[city_id]
-				)
-				if (
-					distance < best_distance
-					or (
-						is_equal_approx(
-							distance,
-							best_distance
-						)
-						and city_id < best_city
-					)
-				):
-					best_distance = distance
-					best_city = city_id
-			ids[index] = best_city
+	# Land components without a settlement remain unassigned. Assigning them to
+	# the nearest seed in screen space creates disconnected provinces across sea.
 	return {
 		"size": raster_size,
 		"ids": ids,
@@ -1932,12 +1959,13 @@ static func _build_boundary_river_network(
 			trail = _coastal_boundary_river_trail(
 				graph, ids, {}, {}, river_id, map_aspect_ratio
 			)
-		assert(
-			not trail.is_empty()
-				and float(trail["length"]) >= BOUNDARY_RIVER_MIN_LENGTH,
-			"省界图必须能够生成%d条有效长河，失败河流=%d length=%.3f"
-				% [RIVER_COUNT, river_id, float(trail.get("length", 0.0))]
-		)
+		if (
+			trail.is_empty()
+			or float(trail.get("length", 0.0)) < BOUNDARY_RIVER_MIN_LENGTH
+		):
+			# 极小地图可能没有足够长的公共省界。河流只能消费真实省界，
+			# 因此宁可少生成，也不能用跨海或屏幕直线补齐固定数量。
+			break
 		var node_keys: Array = trail["nodes"]
 		var edge_indices: Array = trail["edge_indices"]
 		var path := PackedVector2Array()

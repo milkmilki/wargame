@@ -4,7 +4,7 @@ extends RefCounted
 ## armies, battles, diplomacy and the simulation clock are rebuilt on load.
 
 const FORMAT := "world-war-map"
-const VERSION := 3
+const VERSION := 5
 const MIN_SUPPORTED_VERSION := 3
 const USER_MAP_DIRECTORY := "user://maps"
 
@@ -77,6 +77,7 @@ static func from_state(state: GameState) -> Dictionary:
 			"terrain_relief": city.terrain_relief,
 			"terrain_output_multiplier": city.terrain_output_multiplier,
 			"is_dock": city.is_dock,
+			"politically_active": city.politically_active,
 			"owner_nation": owner_nation,
 			"fort_strength": city.fort_strength,
 			"fort_strength_max": city.fort_strength_max,
@@ -115,8 +116,15 @@ static func from_state(state: GameState) -> Dictionary:
 			"map_path": edge_map_path,
 			"is_backbone": edge.is_backbone,
 		})
+	var exported_river_features: Array = (
+		state.river_features
+		if not state.river_features.is_empty()
+		else MapFeatureContract.from_legacy_river_paths(state.river_paths)
+	)
 	var river_records: Array[Array] = []
-	for river in state.river_paths:
+	for river in MapFeatureContract.authoritative_paths(
+		exported_river_features
+	):
 		var points: Array[Array] = []
 		for point in river:
 			points.append([point.x, point.y])
@@ -126,6 +134,7 @@ static func from_state(state: GameState) -> Dictionary:
 		"version": VERSION,
 		"map_source_manifest": GameState.MAP_SOURCE_MANIFEST,
 		"city_generation_mask_path": state.city_generation_mask_path,
+		"political_mask_path": state.political_mask_path,
 		"city_density_settings": state.city_density_settings.duplicate(true),
 		"nation_count": exported_nations.size(),
 		"nations": nation_records,
@@ -140,6 +149,7 @@ static func from_state(state: GameState) -> Dictionary:
 			state.province_map_size.x, state.province_map_size.y
 		],
 		"province_ids": Array(state.province_ids),
+		"rivers": MapFeatureContract.serialize_rivers(exported_river_features),
 		"river_paths": river_records,
 		"cities": city_records,
 		"edges": edge_records,
@@ -181,6 +191,8 @@ static func _export_city_owner_id(
 	city,
 	nation_id_map: Dictionary
 ) -> int:
+	if not city.politically_active:
+		return -1
 	var mapped_owner := int(nation_id_map.get(int(city.owner_nation), -1))
 	if mapped_owner >= 0:
 		return mapped_owner
@@ -254,9 +266,14 @@ static func validate(data: Dictionary) -> String:
 		if not _is_integer_value(owner_value):
 			return "城市 %d 的国家归属无效。" % index
 		var owner := int(owner_value)
-		if owner < 0 or owner >= nation_count:
+		var politically_active := bool(record.get("politically_active", true))
+		if (
+			owner >= nation_count
+			or (politically_active and owner < 0)
+			or (not politically_active and owner != -1)
+		):
 			return "城市 %d 的国家归属无效。" % index
-		if not bool(record.get("is_dock", false)):
+		if politically_active and not bool(record.get("is_dock", false)):
 			land_city_counts[owner] += 1
 		var name_value: Variant = record.get("name")
 		if not name_value is String or str(name_value).strip_edges().is_empty():
@@ -284,7 +301,11 @@ static func validate(data: Dictionary) -> String:
 		if not _is_integer_value(loyalty_target_value):
 			return "城市 %d 的忠诚目标无效。" % index
 		var loyalty_target := int(loyalty_target_value)
-		if loyalty_target < 0 or loyalty_target >= nation_count:
+		if (
+			loyalty_target >= nation_count
+			or (politically_active and loyalty_target < 0)
+			or (not politically_active and loyalty_target != -1)
+		):
 			return "城市 %d 的忠诚目标无效。" % index
 		for transient_key in [
 			"loyalty_trend", "unrest", "rebellion_progress",
@@ -331,6 +352,44 @@ static func validate(data: Dictionary) -> String:
 				or absf(float(last[1]) - float(city_b_position[1])) > 0.0001
 			):
 				return "道路折线路径首尾必须匹配端点城市。"
+	var river_error := _validate_river_features(data, version)
+	if not river_error.is_empty():
+		return river_error
+	return ""
+
+
+static func _validate_river_features(data: Dictionary, version: int) -> String:
+	var records_value: Variant = data.get("rivers", [])
+	if version >= 5 and not records_value is Array:
+		return "地图河流特征格式无效。"
+	var records: Array = records_value if records_value is Array else []
+	if version >= 5 and not data.has("rivers"):
+		return "地图缺少版本化河流特征。"
+	if not records.is_empty():
+		var serialized_error := (
+			MapFeatureContract.validate_serialized_rivers(records)
+		)
+		if not serialized_error.is_empty():
+			return serialized_error
+	var features := (
+		MapFeatureContract.deserialize_rivers(records)
+		if not records.is_empty()
+		else MapFeatureContract.from_legacy_river_paths(
+			data.get("river_paths", [])
+		)
+	)
+	var error := MapFeatureContract.validate_rivers(features)
+	if not error.is_empty():
+		return error
+	if data.has("river_paths"):
+		var legacy := MapFeatureContract.from_legacy_river_paths(
+			data.get("river_paths", [])
+		)
+		if (
+			MapFeatureContract.authoritative_paths(features)
+			!= MapFeatureContract.authoritative_paths(legacy)
+		):
+			return "结构化河流与兼容河流折线不一致。"
 	return ""
 
 

@@ -7,6 +7,8 @@ var state: GameState
 var sim: Simulation
 ## false 时仅保留 HUD、详情与控件；地图世界由 StrategicMap3D 绘制和拾取。
 var world_layer_visible: bool = true
+var _history_mode: bool = false
+var _history_preview_active: bool = false
 
 # 地图画布连续适配窗口；图标、字体和线宽只使用四档离散视觉比例。
 const BASE_VIEWPORT_SIZE := Vector2(1280.0, 720.0)
@@ -17,7 +19,6 @@ const NATION_STATS_BUTTON_WIDTH := MapLayout.NATION_STATS_BUTTON_WIDTH
 const ARMY_ICON_CONTROL_WIDTH := MapLayout.ARMY_ICON_CONTROL_WIDTH
 const CITY_NAME_BUTTON_WIDTH := 82.0
 const NATION_NAME_BUTTON_WIDTH := 82.0
-const PRICE_TOGGLE_BUTTON_WIDTH := 82.0
 const ARMY_ICON_SCALE_MIN: float = 0.10
 const ARMY_ICON_SCALE_MAX: float = 1.80
 const ARMY_ICON_SCALE_STEP: float = 0.10
@@ -33,6 +34,10 @@ const VISUAL_SCALE_LARGE: float = MapViewMath.VISUAL_SCALE_LARGE
 const VISUAL_SCALE_XL: float = MapViewMath.VISUAL_SCALE_XL
 const CITY_PICK_RADIUS: float = 14.0
 const EDGE_PICK_TOLERANCE: float = 10.0
+const MINOR_ROAD_COLOR := Color(0.46, 0.48, 0.50, 0.30)
+const MAJOR_ROAD_COLOR := Color(0.38, 0.40, 0.42, 0.42)
+const MINOR_ROAD_WIDTH: float = 0.75
+const MAJOR_ROAD_WIDTH: float = 1.15
 const DETAIL_PANEL_WIDTH: float = 430.0
 const DETAIL_PANEL_MARGIN: float = 18.0
 const NATION_WINDOW_WIDTH: float = MapLayout.NATION_WINDOW_WIDTH
@@ -43,7 +48,6 @@ const NATION_WINDOW_FOOTER_HEIGHT: float = MapLayout.NATION_WINDOW_FOOTER_HEIGHT
 const NATION_WINDOW_MARGIN: float = MapLayout.NATION_WINDOW_MARGIN
 const NATION_TREE_INDENT: float = MapLayout.NATION_TREE_INDENT
 const NATION_TREE_TOGGLE_SIZE: float = MapLayout.NATION_TREE_TOGGLE_SIZE
-const TERRAIN_BACKGROUND_PATH := MapSource.DEFAULT_MANIFEST
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
 const PAPER_COLOR := Color(0.73, 0.61, 0.42)
@@ -74,10 +78,14 @@ const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
 const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
 const LOCAL_BOUNDARY_WIDTH_PX: float = 1.0
 const COUNTRY_BOUNDARY_WIDTH_PX: float = 3.0
-const COUNTRY_BOUNDARY_VALUE_SCALE: float = 1.08
-const COUNTRY_BOUNDARY_SATURATION_SCALE: float = 1.35
+const COUNTRY_BOUNDARY_VALUE_OFFSET: float = -0.15
+const COUNTRY_BOUNDARY_SATURATION_OFFSET: float = 0.10
+## 以省份归属源贴图像素为单位。增大后，国家色向腹地消退得更快。
+const COUNTRY_FILL_FADE_COEFFICIENT: float = 0.035
+## 国家腹地保留的最低不透明度。设为 0.0 时大国中心可完全露出白模。
+const COUNTRY_FILL_MIN_OPACITY: float = 0.0
 const BOUNDARY_ANTIALIAS_PX: float = 0.0
-const VASSAL_BRIGHTNESS_STEP: float = 0.15
+const VASSAL_BRIGHTNESS_STEP: float = 0.05
 const CAMPAIGN_ARROW_TEXTURE := preload(
 	"res://assets/ui/strategic/offensive_arc_arrow.png"
 )
@@ -113,12 +121,13 @@ var _map_drag_start_pan: Vector2 = Vector2.ZERO
 var _display_scale: float = 1.0
 var _side_margin: float = BASE_SIDE_MARGIN
 var _font: Font
-var _terrain_texture: Texture2D
 var _province_texture: ImageTexture
 var _political_base_texture: ImageTexture
 var _political_ocean_texture: ImageTexture
 var _political_texture: ImageTexture
 var _loyalty_texture: ImageTexture
+var _country_fill_opacity_image: Image
+var _country_fill_opacity_ownership_revision: int = -1
 var _political_fill_signature := PackedInt64Array()
 var _loyalty_fill_signature := PackedInt64Array()
 var _map_mode: int = MapMode.POLITICAL
@@ -153,7 +162,6 @@ var _nation_stats_scroll: int = 0
 var _nation_stats_collapsed_nations: Dictionary = {}
 var _city_names_visible: bool = true
 var _nation_names_visible: bool = true
-var _trade_price_enabled: bool = true
 var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
 var _nation_list_cache_day: int = -1
 var _nation_list_cache_ownership_revision: int = -1
@@ -172,7 +180,6 @@ var _army_icon_label: Label
 var _army_icon_slider: HSlider
 var _city_name_button: Button
 var _nation_name_button: Button
-var _price_toggle_button: Button
 static var _nation_detail_section_build_count: int = 0
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
@@ -191,6 +198,10 @@ var _last_day: int = -1
 func setup(game_state: GameState, simulation: Simulation) -> void:
 	state = game_state
 	sim = simulation
+	_history_mode = false
+	_history_preview_active = false
+	if _army_icon_panel != null:
+		_army_icon_panel.visible = true
 	# Main 重开会复用 Renderer，army id 也会从 0 重排；旧快照不可跨 GameState 复用。
 	_prev_pos.clear()
 	_curr_pos.clear()
@@ -210,6 +221,8 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_political_ocean_texture = null
 	_political_texture = null
 	_loyalty_texture = null
+	_country_fill_opacity_image = null
+	_country_fill_opacity_ownership_revision = -1
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
 	_province_visual_mode = -1
@@ -252,9 +265,6 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 
 func _ready() -> void:
 	_font = create_ui_font()
-	_terrain_texture = load(
-		MapSource.texture_path(TERRAIN_BACKGROUND_PATH)
-	) as Texture2D
 	_create_army_icon_scale_control()
 
 
@@ -398,49 +408,9 @@ func _create_army_icon_scale_control() -> void:
 	)
 	row.add_child(_nation_name_button)
 
-	_price_toggle_button = Button.new()
-	_price_toggle_button.name = "TradePriceToggle"
-	_price_toggle_button.toggle_mode = true
-	_price_toggle_button.button_pressed = _trade_price_enabled
-	_price_toggle_button.custom_minimum_size = Vector2(
-		PRICE_TOGGLE_BUTTON_WIDTH,
-		0.0
-	)
-	_price_toggle_button.add_theme_font_override("font", _font)
-	_price_toggle_button.add_theme_font_size_override("font_size", 10)
-	_price_toggle_button.add_theme_color_override(
-		"font_color",
-		PAPER_LIGHT
-	)
-	_price_toggle_button.add_theme_color_override(
-		"font_hover_color",
-		Color.WHITE
-	)
-	_price_toggle_button.add_theme_color_override(
-		"font_pressed_color",
-		PAPER_LIGHT
-	)
-	_price_toggle_button.add_theme_stylebox_override(
-		"normal",
-		city_button_normal.duplicate()
-	)
-	_price_toggle_button.add_theme_stylebox_override(
-		"hover",
-		city_button_hover.duplicate()
-	)
-	_price_toggle_button.add_theme_stylebox_override(
-		"pressed",
-		city_button_pressed.duplicate()
-	)
-	_price_toggle_button.tooltip_text = "开启或关闭贸易价格：开启时国家用贸易金买粮买人"
-	_price_toggle_button.toggled.connect(
-		_on_trade_price_toggled
-	)
-	row.add_child(_price_toggle_button)
 	set_army_icon_scale(_army_icon_scale)
 	set_city_names_visible(_city_names_visible)
 	set_nation_names_visible(_nation_names_visible)
-	set_trade_price_enabled(_trade_price_enabled)
 
 
 func _on_army_icon_scale_changed(value: float) -> void:
@@ -509,27 +479,6 @@ func nation_names_visible() -> bool:
 	return _nation_names_visible
 
 
-func _on_trade_price_toggled(enabled: bool) -> void:
-	set_trade_price_enabled(enabled)
-
-
-## 贸易价格开关（简化版 EU4）：开启时国家用当月贸易金凭空买粮买人；
-## 关闭时只结算路线税进国库，不产生任何粮/人采购。写入 GameState 供结算读取。
-func set_trade_price_enabled(enabled: bool) -> void:
-	_trade_price_enabled = enabled
-	if _price_toggle_button != null:
-		_price_toggle_button.set_pressed_no_signal(enabled)
-		_price_toggle_button.text = (
-			"价格 开" if enabled else "价格 关"
-		)
-	if state != null:
-		state.trade_price_enabled = enabled
-
-
-func trade_price_enabled() -> bool:
-	return _trade_price_enabled
-
-
 func set_map_mode(mode: int) -> void:
 	var normalized := clampi(mode, MapMode.POLITICAL, MapMode.TRADE)
 	if normalized == _map_mode:
@@ -550,12 +499,83 @@ func set_world_layer_visible(visible: bool) -> void:
 	queue_redraw()
 
 
+func set_display_state(
+	game_state: GameState,
+	historical: bool,
+	map_mode_override: int = -1,
+	fast_preview: bool = false
+) -> void:
+	state = game_state
+	_history_mode = historical
+	_history_preview_active = fast_preview
+	if map_mode_override >= 0:
+		_map_mode = clampi(
+			map_mode_override, MapMode.POLITICAL, MapMode.TRADE
+		)
+	_selected_city_id = -1
+	_selected_edge_a = -1
+	_selected_edge_b = -1
+	_selected_nation_id = -1
+	_diplomatic_view_nation_id = -1
+	_province_texture = null
+	_political_texture = null
+	_loyalty_texture = null
+	_country_fill_opacity_image = null
+	_political_fill_signature = PackedInt64Array()
+	_loyalty_fill_signature = PackedInt64Array()
+	_province_visual_mode = -1
+	_province_ownership_revision = -1
+	_province_diplomacy_revision = -1
+	_province_visual_view_nation_id = -2
+	_nation_list_cache_day = -1
+	_nation_list_cache_ownership_revision = -1
+	_nation_list_cache_diplomacy_revision = -1
+	_nation_list_cache.clear()
+	_contested_city_cache_day = -1
+	_contested_city_cache.clear()
+	_last_day = -1
+	if fast_preview and world_layer_visible:
+		var preview_image := build_province_overlay_image(
+			state, _diplomatic_view_nation_id
+		)
+		preview_image.resize(
+			preview_image.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
+			preview_image.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
+			Image.INTERPOLATE_NEAREST
+		)
+		_province_texture = ImageTexture.create_from_image(preview_image)
+		_political_texture = _province_texture
+		_political_fill_signature = political_fill_signature(
+			state, _diplomatic_view_nation_id
+		)
+		_province_ownership_revision = state.ownership_revision
+		_province_diplomacy_revision = state.diplomacy_revision
+		_province_visual_mode = _map_mode
+		_province_visual_view_nation_id = _diplomatic_view_nation_id
+		_province_loyalty_day = state.day
+	if _army_icon_panel != null:
+		_army_icon_panel.visible = not historical
+	queue_redraw()
+
+
+func history_mode() -> bool:
+	return _history_mode
+
+
 func refresh_road_network() -> void:
 	_clear_selection()
 	queue_redraw()
 
 
 func select_city(city_id: int) -> void:
+	if (
+		_history_mode
+		and state != null
+		and city_id >= 0
+		and city_id < state.cities.size()
+	):
+		select_nation(state.cities[city_id].owner_nation)
+		return
 	_selected_city_id = city_id
 	_selected_edge_a = -1
 	_selected_edge_b = -1
@@ -1441,14 +1461,6 @@ func _layout_army_icon_scale_control() -> void:
 		NATION_NAME_BUTTON_WIDTH * _display_scale,
 		0.0
 	)
-	_price_toggle_button.add_theme_font_size_override(
-		"font_size",
-		_font_size(10)
-	)
-	_price_toggle_button.custom_minimum_size = Vector2(
-		PRICE_TOGGLE_BUTTON_WIDTH * _display_scale,
-		0.0
-	)
 
 
 static func visual_scale_for_viewport(viewport_size: Vector2) -> float:
@@ -1582,7 +1594,8 @@ func _draw() -> void:
 		# Political divisions form one solid-color line layer above the map,
 		# terrain and transport network, while counters remain topmost.
 		_draw_province_boundaries()
-		_draw_national_boundaries()
+		if not _history_preview_active:
+			_draw_national_boundaries()
 		_draw_campaign_arrows()
 		_draw_cities()
 		_draw_battles()
@@ -1633,34 +1646,33 @@ func _draw_paper_canvas() -> void:
 
 
 func _draw_terrain_background() -> void:
-	if not state.uses_heightmap or _terrain_texture == null:
+	if not state.uses_heightmap:
 		return
-	# Satellite imagery belongs exclusively to exact terrain mode. Political
-	# modes draw their opaque white low-poly-equivalent base in fills below.
 	if effective_map_mode_strength(_map_mode, _province_strength) > 0.0:
 		return
-	var texture_size := Vector2(_terrain_texture.get_size())
-	var normalized_region := state.map_source_region_normalized
-	var source_region := Rect2(
-		normalized_region.position * texture_size,
-		normalized_region.size * texture_size
-	)
-	draw_texture_rect_region(
-		_terrain_texture,
-		Rect2(_origin, _map_size),
-		source_region,
-		Color(0.62, 0.52, 0.35, 0.52)
-	)
-	# 赭色罩层把卫星底图统一进战略图纸色域。
 	draw_rect(
 		Rect2(_origin, _map_size),
-		Color(0.30, 0.22, 0.12, 0.22),
+		POLITICAL_LAND_BASE_COLOR,
 		true
 	)
+	if _political_ocean_texture != null:
+		draw_texture_rect(
+			_political_ocean_texture,
+			Rect2(_origin, _map_size),
+			false,
+			Color.WHITE
+		)
 
 
 func _draw_rivers() -> void:
-	for river in state.river_paths:
+	var features: Array = state.river_features
+	if features.is_empty():
+		features = MapFeatureContract.from_legacy_river_paths(state.river_paths)
+	for feature_value in features:
+		var feature := feature_value as Dictionary
+		var river := MapFeatureContract.build_river_render_path(
+			feature, state.province_map_size, 4
+		)
 		if river.size() < 2:
 			continue
 		var points := PackedVector2Array()
@@ -1669,13 +1681,17 @@ func _draw_rivers() -> void:
 		draw_polyline(
 			points,
 				Color(0.08, 0.16, 0.19, 0.86),
-				5.0 * _display_scale,
+				5.0 * _display_scale * MapFeatureContract.width_at_progress(
+					feature, 0.5
+				),
 			true
 		)
 		draw_polyline(
 			points,
 				Color(0.24, 0.48, 0.55, 0.90),
-				2.0 * _display_scale,
+				2.0 * _display_scale * MapFeatureContract.width_at_progress(
+					feature, 0.5
+				),
 			true
 		)
 
@@ -1740,11 +1756,20 @@ func _ensure_province_visual_cache() -> void:
 		or fill_signature != _political_fill_signature
 	)
 	if fill_changed:
+		if (
+			topology_changed
+			or _country_fill_opacity_image == null
+			or _country_fill_opacity_ownership_revision
+				!= state.ownership_revision
+		):
+			_country_fill_opacity_image = build_country_fill_opacity_image(state)
+			_country_fill_opacity_ownership_revision = state.ownership_revision
 		var fill_source := build_province_overlay_image(
 			state, _diplomatic_view_nation_id
 		)
 		var canvas := build_political_canvas_images(
-			state, geometry, false, fill_source
+			state, geometry, false, fill_source, true,
+			_country_fill_opacity_image
 		)
 		var political_image: Image = canvas["fill"]
 		_province_texture = ImageTexture.create_from_image(
@@ -1778,40 +1803,47 @@ func _ensure_province_visual_cache() -> void:
 
 
 func _rebuild_political_base_texture(political_image: Image) -> void:
+	var packed_height := (
+		load(GameState.terrain_map_path()) as Texture2D
+	).get_image()
+	var images := build_political_base_images(
+		political_image.get_size(), packed_height
+	)
+	_political_base_texture = ImageTexture.create_from_image(images["land"])
+	_political_ocean_texture = ImageTexture.create_from_image(images["ocean"])
+
+
+static func build_political_base_images(
+	output_size: Vector2i, packed_height: Image
+) -> Dictionary:
 	var political_base_image := Image.create(
-		political_image.get_width(), political_image.get_height(),
+		output_size.x, output_size.y,
 		false, Image.FORMAT_RGBA8
 	)
 	political_base_image.fill(POLITICAL_LAND_BASE_COLOR)
 	var ocean_image := Image.create(
-		political_image.get_width(), political_image.get_height(),
+		output_size.x, output_size.y,
 		false, Image.FORMAT_RGBA8
 	)
 	ocean_image.fill(Color.TRANSPARENT)
-	var packed_height := (
-		load(GameState.terrain_map_path()) as Texture2D
-	).get_image()
-	for political_y in range(political_image.get_height()):
-		for political_x in range(political_image.get_width()):
-			var political_pixel: Color = political_image.get_pixel(
-				political_x, political_y
-			)
-			if political_pixel.a <= 0.001:
-				var source_x := clampi(int(
-					(float(political_x) + 0.5)
-					/ float(political_image.get_width())
-					* float(packed_height.get_width())
-				), 0, packed_height.get_width() - 1)
-				var source_y := clampi(int(
-					(float(political_y) + 0.5)
-					/ float(political_image.get_height())
-					* float(packed_height.get_height())
-				), 0, packed_height.get_height() - 1)
-				var signed_elevation := (
-					TerrainMapGenerator.packed_signed_elevation(
-						packed_height.get_pixel(source_x, source_y)
-					)
+	for political_y in range(output_size.y):
+		for political_x in range(output_size.x):
+			var source_x := clampi(int(
+				(float(political_x) + 0.5)
+				/ float(output_size.x)
+				* float(packed_height.get_width())
+			), 0, packed_height.get_width() - 1)
+			var source_y := clampi(int(
+				(float(political_y) + 0.5)
+				/ float(output_size.y)
+				* float(packed_height.get_height())
+			), 0, packed_height.get_height() - 1)
+			var signed_elevation := (
+				TerrainMapGenerator.packed_signed_elevation(
+					packed_height.get_pixel(source_x, source_y)
 				)
+			)
+			if signed_elevation < 0.0:
 				var sea_depth := maxf(-signed_elevation, 0.0)
 				var deep_mix := smoothstep(0.06, 0.375, sea_depth)
 				ocean_image.set_pixel(
@@ -1820,10 +1852,7 @@ func _rebuild_political_base_texture(political_image: Image) -> void:
 						Color(0.025, 0.060, 0.130), deep_mix
 					)
 				)
-	_political_base_texture = ImageTexture.create_from_image(
-		political_base_image
-	)
-	_political_ocean_texture = ImageTexture.create_from_image(ocean_image)
+	return {"land": political_base_image, "ocean": ocean_image}
 
 
 static func build_province_overlay_image(
@@ -1844,6 +1873,10 @@ static func build_province_overlay_image(
 	# instead of tens of thousands of times during every capture refresh.
 	for city_id in range(game_state.cities.size()):
 		var current_owner := game_state.cities[city_id].owner_nation
+		if not game_state.cities[city_id].politically_active:
+			province_colors[city_id] = Color.TRANSPARENT
+			occupation_colors[city_id] = Color.TRANSPARENT
+			continue
 		var recognized_owner := game_state.recognized_owner_of(city_id)
 		if recognized_owner < 0:
 			recognized_owner = current_owner
@@ -1894,7 +1927,11 @@ static func build_loyalty_overlay_image(game_state: GameState) -> Image:
 	var colors := PackedColorArray()
 	colors.resize(game_state.cities.size())
 	for city_id in range(game_state.cities.size()):
-		colors[city_id] = loyalty_color(game_state.cities[city_id].loyalty)
+		colors[city_id] = (
+			loyalty_color(game_state.cities[city_id].loyalty)
+			if game_state.cities[city_id].politically_active
+			else Color.TRANSPARENT
+		)
 	for y in range(size.y):
 		for x in range(size.x):
 			var province_id := game_state.province_ids[y * size.x + x]
@@ -1952,7 +1989,9 @@ static func build_political_canvas_images(
 	game_state: GameState,
 	boundary_geometry: Dictionary = {},
 	include_soft_boundaries: bool = true,
-	prebuilt_source: Image = null
+	prebuilt_source: Image = null,
+	apply_country_fade: bool = true,
+	prebuilt_country_opacity: Image = null
 ) -> Dictionary:
 	var source := prebuilt_source
 	if source == null:
@@ -1961,10 +2000,16 @@ static func build_political_canvas_images(
 		return {
 			"fill": source,
 			"terrain_fill": source,
+			"country_opacity": source,
 			"province_boundaries": source,
 			"country_boundaries": source,
 		}
+	var country_opacity := prebuilt_country_opacity
+	if country_opacity == null or country_opacity.is_empty():
+		country_opacity = build_country_fill_opacity_image(game_state)
 	var fill := source.duplicate()
+	if apply_country_fade:
+		_apply_country_fill_opacity(fill, country_opacity)
 	fill.resize(
 		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
 		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
@@ -1988,14 +2033,144 @@ static func build_political_canvas_images(
 		return {
 			"fill": fill,
 			"terrain_fill": terrain_fill,
+			"country_opacity": country_opacity,
 		}
 	var soft_boundaries := build_soft_boundary_images(game_state, boundary_geometry)
 	return {
 		"fill": fill,
 		"terrain_fill": terrain_fill,
+		"country_opacity": country_opacity,
 		"province_boundaries": soft_boundaries["province"],
 		"country_boundaries": soft_boundaries["country"],
 	}
+
+
+static func country_fill_opacity_for_distance(distance: float) -> float:
+	return maxf(
+		COUNTRY_FILL_MIN_OPACITY,
+		1.0 - maxf(distance, 0.0) * COUNTRY_FILL_FADE_COEFFICIENT
+	)
+
+
+## 多源洪泛只在 256x256 所有权源图上运行。边界与海岸像素为 1，向同一
+## 国家腹地按像素距离线性衰减；国家之间不会互相传播距离。
+static func build_country_fill_opacity_image(game_state: GameState) -> Image:
+	var city_owners := PackedInt32Array()
+	city_owners.resize(game_state.cities.size())
+	for city_id in range(game_state.cities.size()):
+		city_owners[city_id] = game_state.cities[city_id].owner_nation
+	return build_country_fill_opacity_image_from_owners(
+		game_state.province_map_size,
+		game_state.province_ids,
+		city_owners
+	)
+
+
+## Worker-safe variant using detached packed arrays instead of GameState.
+static func build_country_fill_opacity_image_from_owners(
+	size: Vector2i,
+	province_ids: PackedInt32Array,
+	city_owners: PackedInt32Array
+) -> Image:
+	var width := maxi(size.x, 1)
+	var height := maxi(size.y, 1)
+	var pixel_count := width * height
+	var owners := PackedInt32Array()
+	owners.resize(pixel_count)
+	owners.fill(-1)
+	for y in range(size.y):
+		for x in range(size.x):
+			var index := y * width + x
+			var province_id := province_ids[index]
+			if province_id >= 0 and province_id < city_owners.size():
+				owners[index] = city_owners[province_id]
+	var distances := PackedFloat32Array()
+	distances.resize(pixel_count)
+	distances.fill(INF)
+	var queue := PackedInt32Array()
+	queue.resize(pixel_count)
+	var tail := 0
+	for y in range(height):
+		for x in range(width):
+			var index := y * width + x
+			var owner := owners[index]
+			if owner < 0:
+				continue
+			var is_boundary := (
+				x == 0 or x == width - 1 or y == 0 or y == height - 1
+				or owners[index - 1] != owner
+				or owners[index + 1] != owner
+				or owners[index - width] != owner
+				or owners[index + width] != owner
+			)
+			if is_boundary:
+				distances[index] = 0.0
+				queue[tail] = index
+				tail += 1
+	var head := 0
+	while head < tail:
+		var index := queue[head]
+		head += 1
+		var owner := owners[index]
+		var x := index % width
+		var y := index / width
+		var next_distance := distances[index] + 1.0
+		if (
+			x > 0
+			and owners[index - 1] == owner
+			and distances[index - 1] > next_distance
+		):
+			distances[index - 1] = next_distance
+			queue[tail] = index - 1
+			tail += 1
+		if (
+			x + 1 < width
+			and owners[index + 1] == owner
+			and distances[index + 1] > next_distance
+		):
+			distances[index + 1] = next_distance
+			queue[tail] = index + 1
+			tail += 1
+		if (
+			y > 0
+			and owners[index - width] == owner
+			and distances[index - width] > next_distance
+		):
+			distances[index - width] = next_distance
+			queue[tail] = index - width
+			tail += 1
+		if (
+			y + 1 < height
+			and owners[index + width] == owner
+			and distances[index + width] > next_distance
+		):
+			distances[index + width] = next_distance
+			queue[tail] = index + width
+			tail += 1
+	var opacity := Image.create(width, height, false, Image.FORMAT_RGBA8)
+	opacity.fill(Color.TRANSPARENT)
+	for index in range(pixel_count):
+		if owners[index] < 0:
+			continue
+		var value := country_fill_opacity_for_distance(distances[index])
+		opacity.set_pixel(
+			index % width, index / width, Color(value, value, value, 1.0)
+		)
+	return opacity
+
+
+static func _apply_country_fill_opacity(
+	fill: Image, country_opacity: Image
+) -> void:
+	if fill == null or fill.is_empty() or country_opacity == null:
+		return
+	for y in range(fill.get_height()):
+		for x in range(fill.get_width()):
+			var color := fill.get_pixel(x, y)
+			if color.a <= 0.001:
+				continue
+			color.a = country_opacity.get_pixel(x, y).r
+			fill.set_pixel(x, y, color)
 
 
 static func _dilate_political_fill(
@@ -2059,9 +2234,45 @@ static func build_soft_boundary_images(
 static func build_country_color_image(
 	game_state: GameState,
 	extend_to_real_coast: bool = false,
-	view_nation_id: int = -1
+	view_nation_id: int = -1,
+	prebuilt_country_opacity: Image = null
 ) -> Image:
-	var source_size := game_state.province_map_size
+	var source := build_country_color_source_image(
+		game_state, view_nation_id
+	)
+	var country_opacity := prebuilt_country_opacity
+	if country_opacity == null or country_opacity.is_empty():
+		country_opacity = build_country_fill_opacity_image(game_state)
+	return build_country_color_image_from_source(
+		source, country_opacity, extend_to_real_coast
+	)
+
+
+static func build_country_color_source_image(
+	game_state: GameState, view_nation_id: int = -1
+) -> Image:
+	var city_owners := PackedInt32Array()
+	city_owners.resize(game_state.cities.size())
+	for city_id in range(game_state.cities.size()):
+		city_owners[city_id] = game_state.cities[city_id].owner_nation
+	var boundary_colors := country_boundary_colors(
+		game_state, view_nation_id
+	)
+	return build_country_color_source_image_from_owners(
+		game_state.province_map_size,
+		game_state.province_ids,
+		city_owners,
+		boundary_colors
+	)
+
+
+## Worker-safe country-color source builder for immutable ownership snapshots.
+static func build_country_color_source_image_from_owners(
+	source_size: Vector2i,
+	province_ids: PackedInt32Array,
+	city_owners: PackedInt32Array,
+	boundary_colors: PackedColorArray
+) -> Image:
 	var source := Image.create(
 		maxi(source_size.x, 1), maxi(source_size.y, 1),
 		false, Image.FORMAT_RGBA8
@@ -2069,19 +2280,43 @@ static func build_country_color_image(
 	source.fill(Color.TRANSPARENT)
 	for y in range(source_size.y):
 		for x in range(source_size.x):
-			var province_id := game_state.province_ids[y * source_size.x + x]
-			if province_id < 0 or province_id >= game_state.cities.size():
+			var index := y * source_size.x + x
+			if index < 0 or index >= province_ids.size():
 				continue
-			var owner_id := game_state.cities[province_id].owner_nation
+			var province_id := province_ids[index]
+			if province_id < 0 or province_id >= city_owners.size():
+				continue
+			var owner_id := city_owners[province_id]
 			source.set_pixel(
 				x, y,
-				nation_boundary_color(game_state, owner_id, view_nation_id)
+				boundary_colors[owner_id]
+				if owner_id >= 0 and owner_id < boundary_colors.size()
+				else Color.TRANSPARENT
 			)
+	return source
+
+
+## Worker-safe finishing pass over immutable source images.
+static func build_country_color_image_from_source(
+	source: Image,
+	country_opacity: Image,
+	extend_to_real_coast: bool = false
+) -> Image:
+	var source_size := source.get_size()
 	var result := (
 		_extend_nearest_country_color(source, 3)
 		if extend_to_real_coast
 		else source
 	)
+	# Only original claimed texels fade. The short extension beyond the coarse
+	# province mask stays opaque so the exact mesh coastline retains solid ink.
+	for y in range(source_size.y):
+		for x in range(source_size.x):
+			if source.get_pixel(x, y).a <= 0.5:
+				continue
+			var color := result.get_pixel(x, y)
+			color.a = country_opacity.get_pixel(x, y).r
+			result.set_pixel(x, y, color)
 	result.resize(
 		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
 		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1),
@@ -2146,7 +2381,22 @@ static func build_country_boundary_image(
 	var geometry := boundary_geometry
 	if geometry.is_empty():
 		geometry = build_province_boundary_segments(game_state)
-	var source_size := game_state.province_map_size
+	return build_country_boundary_image_from_visuals(
+		game_state.province_map_size,
+		country_boundary_colors(game_state, view_nation_id),
+		geometry,
+		include_coast
+	)
+
+
+## Worker-safe boundary raster entry: every input is an immutable visual
+## snapshot, so no background task needs to retain or read live GameState.
+static func build_country_boundary_image_from_visuals(
+	source_size: Vector2i,
+	boundary_colors: PackedColorArray,
+	geometry: Dictionary,
+	include_coast: bool = false
+) -> Image:
 	var output_size := Vector2i(
 		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
 		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1)
@@ -2162,38 +2412,37 @@ static func build_country_boundary_image(
 	closest_owner.resize(output_size.x * output_size.y)
 	closest_owner.fill(2147483647)
 	_rasterize_owned_boundary_sides(
-		country, game_state,
+		country, boundary_colors,
 		geometry.get("country", PackedVector2Array()),
 		geometry.get("country_owner_a", PackedInt32Array()),
 		geometry.get("country_owner_b", PackedInt32Array()),
 		geometry.get("country_side_a", PackedVector2Array()),
 		geometry.get("country_side_b", PackedVector2Array()),
-		closest_distance_key, closest_owner, view_nation_id
+		closest_distance_key, closest_owner
 	)
 	if include_coast:
 		_rasterize_owned_boundary_sides(
-			country, game_state,
+			country, boundary_colors,
 			geometry.get("coast", PackedVector2Array()),
 			geometry.get("coast_owner", PackedInt32Array()),
 			PackedInt32Array(),
 			geometry.get("coast_side", PackedVector2Array()),
 			PackedVector2Array(),
-			closest_distance_key, closest_owner, view_nation_id
+			closest_distance_key, closest_owner
 		)
 	return country
 
 
 static func _rasterize_owned_boundary_sides(
 	image: Image,
-	game_state: GameState,
+	boundary_colors: PackedColorArray,
 	segments: PackedVector2Array,
 	owner_a: PackedInt32Array,
 	owner_b: PackedInt32Array,
 	side_a: PackedVector2Array,
 	side_b: PackedVector2Array,
 	closest_distance_key: PackedInt32Array = PackedInt32Array(),
-	closest_owner: PackedInt32Array = PackedInt32Array(),
-	view_nation_id: int = -1
+	closest_owner: PackedInt32Array = PackedInt32Array()
 ) -> void:
 	var segment_count := segments.size() / 2
 	if segment_count <= 0:
@@ -2215,28 +2464,25 @@ static func _rasterize_owned_boundary_sides(
 		var to := segments[index * 2 + 1] * image_size
 		if index < owner_a.size() and index < side_a.size():
 			_rasterize_owned_boundary_side(
-				image, game_state, from, to, owner_a[index],
-				side_a[index], closest_distance_key, closest_owner,
-				view_nation_id
+				image, boundary_colors, from, to, owner_a[index],
+				side_a[index], closest_distance_key, closest_owner
 			)
 		if index < owner_b.size() and index < side_b.size():
 			_rasterize_owned_boundary_side(
-				image, game_state, from, to, owner_b[index],
-				side_b[index], closest_distance_key, closest_owner,
-				view_nation_id
+				image, boundary_colors, from, to, owner_b[index],
+				side_b[index], closest_distance_key, closest_owner
 			)
 
 
 static func _rasterize_owned_boundary_side(
 	image: Image,
-	game_state: GameState,
+	boundary_colors: PackedColorArray,
 	from: Vector2,
 	to: Vector2,
 	owner_id: int,
 	side_vector: Vector2,
 	closest_distance_key: PackedInt32Array,
-	closest_owner: PackedInt32Array,
-	view_nation_id: int = -1
+	closest_owner: PackedInt32Array
 ) -> void:
 	var direction := (to - from).normalized()
 	if direction.length_squared() <= 0.000001:
@@ -2244,70 +2490,72 @@ static func _rasterize_owned_boundary_side(
 	var normal := Vector2(-direction.y, direction.x)
 	if side_vector.dot(normal) < 0.0:
 		normal = -normal
-	var color := nation_boundary_color(
-		game_state, owner_id, view_nation_id
+	var color := (
+		boundary_colors[owner_id]
+		if owner_id >= 0 and owner_id < boundary_colors.size()
+		else Color.TRANSPARENT
 	)
 	var segment_length := from.distance_to(to)
-	var step_count := maxi(int(ceil(segment_length / 0.34)), 1)
 	var outer_width := COUNTRY_BOUNDARY_WIDTH_PX + BOUNDARY_ANTIALIAS_PX
-	for step in range(step_count + 1):
-		var center := from.lerp(to, float(step) / float(step_count))
-		var x_from := clampi(
-			int(floor(center.x - outer_width - 1.0)),
-			0, image.get_width() - 1
-		)
-		var x_to := clampi(
-			int(ceil(center.x + outer_width + 1.0)),
-			0, image.get_width() - 1
-		)
-		var y_from := clampi(
-			int(floor(center.y - outer_width - 1.0)),
-			0, image.get_height() - 1
-		)
-		var y_to := clampi(
-			int(ceil(center.y + outer_width + 1.0)),
-			0, image.get_height() - 1
-		)
-		for y in range(y_from, y_to + 1):
-			for x in range(x_from, x_to + 1):
-				var sample := Vector2(float(x) + 0.5, float(y) + 0.5)
-				var along := clampf(
-					(sample - from).dot(direction), 0.0, segment_length
+	# Curved topology is already split into short micro-segments (about 3 px on
+	# the 500-city map). Visit each candidate pixel once instead of stamping a
+	# heavily overlapping round brush every 0.34 px along the same segment.
+	var x_from := clampi(
+		int(floor(minf(from.x, to.x) - outer_width - 1.0)),
+		0, image.get_width() - 1
+	)
+	var x_to := clampi(
+		int(ceil(maxf(from.x, to.x) + outer_width + 1.0)),
+		0, image.get_width() - 1
+	)
+	var y_from := clampi(
+		int(floor(minf(from.y, to.y) - outer_width - 1.0)),
+		0, image.get_height() - 1
+	)
+	var y_to := clampi(
+		int(ceil(maxf(from.y, to.y) + outer_width + 1.0)),
+		0, image.get_height() - 1
+	)
+	for y in range(y_from, y_to + 1):
+		for x in range(x_from, x_to + 1):
+			var sample := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var along := clampf(
+				(sample - from).dot(direction), 0.0, segment_length
+			)
+			var nearest := from + direction * along
+			var side_distance := (sample - nearest).dot(normal)
+			var distance := sample.distance_to(nearest)
+			if side_distance < 0.0 or distance >= outer_width:
+				continue
+			var pixel_index := y * image.get_width() + x
+			# A fixed-point pixel-distance key makes arbitration a strict,
+			# transitive lexicographic minimum instead of an epsilon relation.
+			var distance_key := int(round(distance * 1048576.0))
+			var old_distance_key := closest_distance_key[pixel_index]
+			var old_owner := closest_owner[pixel_index]
+			if (
+				distance_key > old_distance_key
+				or (
+					distance_key == old_distance_key
+					and owner_id >= old_owner
 				)
-				var nearest := from + direction * along
-				var side_distance := (sample - nearest).dot(normal)
-				var distance := sample.distance_to(nearest)
-				if side_distance < 0.0 or distance >= outer_width:
-					continue
-				var pixel_index := y * image.get_width() + x
-				# A fixed-point pixel-distance key makes arbitration a strict,
-				# transitive lexicographic minimum instead of an epsilon relation.
-				var distance_key := int(round(distance * 1048576.0))
-				var old_distance_key := closest_distance_key[pixel_index]
-				var old_owner := closest_owner[pixel_index]
+			):
+				continue
+			var coverage := (
+				1.0
 				if (
-					distance_key > old_distance_key
-					or (
-						distance_key == old_distance_key
-						and owner_id >= old_owner
-					)
-				):
-					continue
-				var coverage := (
-					1.0
-					if (
-						BOUNDARY_ANTIALIAS_PX <= 0.000001
-						or distance <= COUNTRY_BOUNDARY_WIDTH_PX
-					)
-					else 1.0 - smoothstep(
-						COUNTRY_BOUNDARY_WIDTH_PX, outer_width, distance
-					)
+					BOUNDARY_ANTIALIAS_PX <= 0.000001
+					or distance <= COUNTRY_BOUNDARY_WIDTH_PX
 				)
-				var source := color
-				source.a = coverage
-				closest_distance_key[pixel_index] = distance_key
-				closest_owner[pixel_index] = owner_id
-				image.set_pixel(x, y, source)
+				else 1.0 - smoothstep(
+					COUNTRY_BOUNDARY_WIDTH_PX, outer_width, distance
+				)
+			)
+			var source := color
+			source.a = coverage
+			closest_distance_key[pixel_index] = distance_key
+			closest_owner[pixel_index] = owner_id
+			image.set_pixel(x, y, source)
 
 
 static func _rasterize_soft_boundary_layer(
@@ -2385,11 +2633,32 @@ static func paper_nation_color(color: Color) -> Color:
 	return GameState.normalize_nation_color(color)
 
 
-## 国家边界保持国家自身 hue，但改成更鲜艳、更亮的纯色实线。
+static func country_boundary_display_color(color: Color) -> Color:
+	return Color.from_hsv(
+		color.h,
+		clampf(color.s + COUNTRY_BOUNDARY_SATURATION_OFFSET, 0.0, 1.0),
+		clampf(color.v + COUNTRY_BOUNDARY_VALUE_OFFSET, 0.0, 1.0),
+		1.0
+	)
+
+
+static func country_boundary_colors(
+	game_state: GameState, view_nation_id: int = -1
+) -> PackedColorArray:
+	var colors := PackedColorArray()
+	colors.resize(game_state.nations.size())
+	for nation_id in range(game_state.nations.size()):
+		colors[nation_id] = nation_boundary_color(
+			game_state, nation_id, view_nation_id
+		)
+	return colors
+
+
+## 国界始终使用所属国家本色，不随外交观察模式切换成关系分类色。
 static func nation_boundary_color(
 	game_state: GameState,
 	nation_id: int,
-	view_nation_id: int = -1
+	_view_nation_id: int = -1
 ) -> Color:
 	if (
 		game_state == null
@@ -2397,25 +2666,13 @@ static func nation_boundary_color(
 		or nation_id >= game_state.nations.size()
 	):
 		return Color.TRANSPARENT
-	var base := political_map_color_for_view(
-		game_state, nation_id, view_nation_id
-	)
-	if (
-		view_nation_id >= 0
-		and view_nation_id < game_state.nations.size()
-		and game_state.nations[view_nation_id].alive
-	):
-		return base
-	return Color.from_hsv(
-		base.h,
-		clampf(maxf(base.s, 0.72) * COUNTRY_BOUNDARY_SATURATION_SCALE, 0.0, 1.0),
-		clampf(maxf(base.v, 0.72) * COUNTRY_BOUNDARY_VALUE_SCALE, 0.0, 1.0),
-		1.0
+	return country_boundary_display_color(
+		paper_nation_color(game_state.nations[nation_id].color)
 	)
 
 
 ## Political-map color is intentionally shared by 2D and 3D renderers. A
-## peaceful vassal inherits its ultimate sovereign's hue and is 15% darker per
+## peaceful vassal inherits its ultimate sovereign's hue and is 5% darker per
 ## level, so each fief remains legible without looking like a foreign bloc.
 static func political_map_color(
 	game_state: GameState,
@@ -2603,8 +2860,14 @@ static func build_province_boundary_topology(
 	var coast_province := PackedInt32Array()
 	var coast_side := PackedVector2Array()
 	var size := game_state.province_map_size
+	var contract_metadata := {
+		"contract_version": 1,
+		"render_only": true,
+		"source_size": size,
+		"source_hash": hash(game_state.province_ids),
+	}
 	if size.x <= 0 or size.y <= 0:
-		return {
+		return contract_metadata.merged({
 			"province": province,
 			"coast": coast,
 			"province_a": province_a,
@@ -2613,7 +2876,7 @@ static func build_province_boundary_topology(
 			"province_side_b": province_side_b,
 			"coast_province": coast_province,
 			"coast_side": coast_side,
-		}
+		})
 	for y in range(size.y):
 		for x in range(size.x):
 			var province_id := game_state.province_ids[y * size.x + x]
@@ -2687,7 +2950,7 @@ static func build_province_boundary_topology(
 		},
 		size
 	)
-	return {
+	return contract_metadata.merged({
 		"province": curved_province["segments"],
 		"coast": curved_coast["segments"],
 		"province_a": curved_province["province_a"],
@@ -2696,7 +2959,7 @@ static func build_province_boundary_topology(
 		"province_side_b": curved_province["province_side_b"],
 		"coast_province": curved_coast["coast_province"],
 		"coast_side": curved_coast["coast_side"],
-	}
+	})
 
 
 ## Reclassify cached, already-smoothed city-border edges by current control.
@@ -3500,8 +3763,8 @@ func _draw_province_fills() -> void:
 		or fill_strength <= 0.0
 	):
 		return
-	# Any political mode first replaces the satellite with one neutral white
-	# primer. Nation colors and unowned ocean color then share the same opacity.
+	# Political modes start from the same neutral white terrain primer. Nation
+	# colors and ocean color then share the configured opacity.
 	draw_texture_rect(
 		_political_base_texture,
 		Rect2(_origin, _map_size),
@@ -3717,23 +3980,11 @@ func _draw_edges() -> void:
 			if e.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
 			else 1
 		)
-		var road_colors: Array[Color] = [
-			Color(0.075, 0.025, 0.008),
-			Color(0.20, 0.060, 0.012),
-		]
-		var road_widths: Array[float] = [1.5, 3.5]
-		var col: Color = road_colors[road_level - 1]
-		col.a = route_alpha
-		col = col.lerp(ACCENT_RED, danger * 0.48)
-		var width: float = road_widths[road_level - 1] * _display_scale
-		if road_level >= 2:
-			draw_polyline(
-				pixel_points, Color(0.04, 0.028, 0.015, 0.82 * route_alpha),
-				width + 2.0 * _display_scale
-			)
-		if e.occupied:
-			col = col.lerp(ACCENT_GOLD, 0.55)
-			width += 1.5 * _display_scale
+		var col := MAJOR_ROAD_COLOR if road_level >= 2 else MINOR_ROAD_COLOR
+		col.a *= route_alpha
+		var width := (
+			MAJOR_ROAD_WIDTH if road_level >= 2 else MINOR_ROAD_WIDTH
+		) * _display_scale
 		draw_polyline(pixel_points, col, width, true)
 		if danger >= 0.72:
 			for index in range(pixel_points.size() - 1):
@@ -4735,16 +4986,37 @@ static func _nation_id_list_text(
 	return "、".join(names)
 
 
-static func ruler_summary(nation: Nation) -> String:
+static func ruler_summary(
+	nation: Nation,
+	game_state: GameState = null
+) -> String:
 	if nation == null:
 		return "无君主"
 	var traits: Array[String] = []
 	for trait_id in nation.ruler_traits:
 		traits.append(RulerProfile.trait_name(trait_id))
-	return "%s·%s%s" % [
+	var reign_text := ""
+	if game_state != null:
+		var reign_years := RulerProfile.reign_years(
+			game_state.world_seed,
+			nation.id,
+			nation.ruler_revision
+		)
+		var remaining_days := maxi(
+			RulerProfile.succession_due_day(
+				nation, game_state.world_seed
+			) - game_state.day,
+			0
+		)
+		var remaining_years := int(ceil(
+			float(remaining_days) / float(RulerProfile.DAYS_PER_YEAR)
+		))
+		reign_text = "·任期%d年/余%d年" % [reign_years, remaining_years]
+	return "%s·%s%s%s" % [
 		nation.ruler_name if not nation.ruler_name.is_empty() else "无名君主",
 		RulerProfile.archetype_name(nation.ruler_archetype),
 		"·%s" % ("/".join(traits) if not traits.is_empty() else "无特质"),
+		reign_text,
 	]
 
 
@@ -4802,14 +5074,12 @@ static func nation_list_rows(
 			nation.last_food_estimated_balance
 		)
 		var food_snapshot_secondary := (
-			"粮仓 %d   月产 %d   月需 %d   月净 %s   购粮 %d   购人 %d"
+			"粮仓 %d   月产 %d   月需 %d   月净 %s"
 			% [
 				nation.granary_food,
 				nation.last_food_estimated_production,
 				nation.last_food_estimated_consumption,
 				monthly_food_balance_text,
-				maxi(nation.last_trade_food_import, 0),
-				maxi(nation.last_trade_manpower_import, 0),
 			]
 		)
 		row_by_nation[nation.id] = {
@@ -4852,7 +5122,7 @@ static func nation_list_rows(
 					_signed_value_text(nation.last_trade_gold),
 					food_snapshot_secondary,
 				],
-			"diplomacy": ruler_summary(nation),
+			"diplomacy": ruler_summary(nation, game_state),
 			"action": nation_action_summary(game_state, nation.id),
 		}
 		visible_nation_ids.append(nation.id)
@@ -5109,7 +5379,7 @@ func _nation_list_rows_cached() -> Array[Dictionary]:
 
 
 func _draw_hud() -> void:
-	var status := "暂停" if sim.paused else "推演中"
+	var status := "历史" if _history_mode else ("暂停" if sim.paused else "推演中")
 	if state.winner != -1:
 		status = (
 			"%s 已统一 · %s"
@@ -5195,7 +5465,11 @@ func _draw_hud() -> void:
 		["第 %d 日" % state.day, 66.0, PAPER_LIGHT],
 		["第 %d 月" % state.month, 60.0, PAPER_LIGHT],
 		[status, 72.0, ACCENT_GOLD if sim.paused else Color(0.48, 0.78, 0.56)],
-		["速度 ×%.2f" % sim.speed_multiplier(), 82.0, PAPER_LIGHT],
+		[
+			"只读政治地图" if _history_mode else "速度 ×%.2f" % sim.speed_multiplier(),
+			92.0 if _history_mode else 82.0,
+			PAPER_LIGHT,
+		],
 	]
 	for chip in chip_values:
 		var chip_width := float(chip[1]) * _display_scale
@@ -5558,7 +5832,9 @@ func _selection_detail_line_count() -> int:
 		if edge != null:
 			return _edge_detail_line_count()
 	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
-		return _nation_detail_line_count(state, _selected_nation_id)
+		return _section_visual_line_count(
+			_display_nation_detail_sections(_selected_nation_id)
+		)
 	return 0
 
 
@@ -5577,11 +5853,12 @@ func _selection_detail_payload() -> Dictionary:
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
 		var city := state.cities[_selected_city_id]
 		title = "城市信息  %s" % city_debug_name(state, city.id)
-		stripe_color = GameState.normalize_nation_color(
-			paper_nation_color(
-				state.nations[city.owner_nation].color
-			).darkened(0.22)
-		)
+		if city.owner_nation >= 0 and city.owner_nation < state.nations.size():
+			stripe_color = GameState.normalize_nation_color(
+				paper_nation_color(
+					state.nations[city.owner_nation].color
+				).darkened(0.22)
+			)
 		sections = city_detail_sections(state, city.id)
 	elif _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
@@ -5597,12 +5874,50 @@ func _selection_detail_payload() -> Dictionary:
 		stripe_color = GameState.normalize_nation_color(
 			paper_nation_color(nation.color).darkened(0.22)
 		)
-		sections = nation_detail_sections(state, nation.id)
+		sections = _display_nation_detail_sections(nation.id)
 	payload["title"] = title
 	payload["stripe_color"] = stripe_color
 	payload["sections"] = sections
 	payload["line_count"] = _section_visual_line_count(sections)
 	return payload
+
+
+func _display_nation_detail_sections(nation_id: int) -> Array[Dictionary]:
+	if not _history_mode:
+		return nation_detail_sections(state, nation_id)
+	return historical_nation_detail_sections(state, nation_id)
+
+
+static func historical_nation_detail_sections(
+	game_state: GameState,
+	nation_id: int
+) -> Array[Dictionary]:
+	if nation_id < 0 or nation_id >= game_state.nations.size():
+		return []
+	var relation_lines: Array[String] = [
+		"战争：%s" % _nation_id_list_text(
+			game_state, game_state.wars_of(nation_id)
+		),
+		"盟国：%s" % _nation_id_list_text(
+			game_state, game_state.allies_of(nation_id)
+		),
+	]
+	var subjects := game_state.subjects_of(nation_id)
+	if not subjects.is_empty():
+		relation_lines.append(
+			"藩属：%s" % _nation_id_list_text(game_state, subjects)
+		)
+	return [
+		{"title": "历史身份", "lines": [
+			"第 %d 日    第 %d 月    %s" % [
+				game_state.day,
+				game_state.month,
+				_nation_relation_text(game_state, nation_id),
+			],
+			"控制城市 %d" % game_state.cities_of(nation_id).size(),
+		]},
+		{"title": "历史外交", "lines": relation_lines},
+	]
 
 
 static func _section_visual_line_count(sections: Array[Dictionary]) -> int:
@@ -5903,7 +6218,7 @@ static func nation_detail_sections(
 	var sections: Array[Dictionary] = [
 		{"title": "身份与君主", "lines": [
 			"%s    %s" % [
-				_nation_relation_text(game_state, nation_id), ruler_summary(n),
+				_nation_relation_text(game_state, nation_id), ruler_summary(n, game_state),
 			],
 		]},
 		{"title": "国力与民心", "lines": [
@@ -5931,11 +6246,9 @@ static func nation_detail_sections(
 				n.last_food_estimated_consumption,
 				monthly_food_balance_text,
 			],
-			"商路 %d    商贸金 %s    购粮 %d    购人 %d" % [
+			"商路 %d    商贸金 %s" % [
 				n.last_trade_route_count,
 				_signed_value_text(n.last_trade_gold),
-				maxi(n.last_trade_food_import, 0),
-				maxi(n.last_trade_manpower_import, 0),
 			],
 		]},
 		{"title": "外交与行动", "lines": [

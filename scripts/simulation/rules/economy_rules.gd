@@ -51,6 +51,7 @@ static func _empty_reports(
 		var food_trade_income := trade_array_value(
 			trade, "nation_food_sale_income", nation.id
 		)
+		# 采购相关字段为兼容旧快照保留；当前贸易结算固定返回 0。
 		var food_trade_expense := trade_array_value(
 			trade, "nation_food_cost", nation.id
 		)

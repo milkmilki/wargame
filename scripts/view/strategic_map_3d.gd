@@ -39,6 +39,9 @@ const TRADE_FLOW_MARKER_SPACING: float = 2.40
 const TRADE_FLOW_MARKER_WIDTH: float = 0.26
 const TRADE_FLOW_MARKER_LENGTH: float = 0.50
 const TRADE_FLOW_MAX_MARKERS_PER_ROUTE: int = 24
+const RIVER_BASE_HALF_WIDTH: float = 0.075
+const RIVER_ELEVATION: float = 0.11
+const RIVER_RENDER_SUBDIVISIONS: int = 4
 const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
 const CAMPAIGN_ARROW_GRID := Vector2i(12, 8)
 ## 攻势箭头仍是原始红色贴图；这些参数只控制承载贴图的无光照拱形曲面。
@@ -59,6 +62,9 @@ const ANTIQUE_OVERLAY_SHADER := preload(
 )
 const WATER_SHADER := preload(
 	"res://scripts/view/terrain/strategic_water.gdshader"
+)
+const PROVINCE_VISUAL_LOOKUP := preload(
+	"res://scripts/view/province_visual_lookup.gd"
 )
 var state: GameState
 var sim: Simulation
@@ -98,15 +104,25 @@ var _antique_overlay_layer: CanvasLayer
 var _city_labels: Array[Label3D] = []
 var _nation_labels: Array[Label3D] = []
 var _battle_labels: Array[Label3D] = []
-var _province_texture: ImageTexture
+var _province_id_texture: ImageTexture
+var _province_visual_lut_texture: ImageTexture
 var _loyalty_texture: ImageTexture
 var _country_boundary_texture: ImageTexture
 var _country_color_texture: ImageTexture
+var _country_fill_opacity_image: Image
+var _country_visual_task_id: int = -1
+var _country_visual_task_job := {}
+var _pending_country_visual_request := {}
+var _country_visual_request_serial: int = 0
+var _history_preview_active: bool = false
 var _province_boundary_texture: ImageTexture
 var _political_fill_signature := PackedInt64Array()
 var _loyalty_fill_signature := PackedInt64Array()
 var _boundary_topology := {}
+var _classified_boundary_geometry := {}
+var _classified_boundary_ownership_revision: int = -1
 var _province_topology_ids := PackedInt32Array()
+var _province_lookup_topology_ids := PackedInt32Array()
 var _map_font: Font
 ## 国家标签的领土几何按 ownership_revision 批量构建一次。名称或外交变化只
 ## 重算文字尺寸，不再让每个国家各自扫描整张 province map。
@@ -119,6 +135,7 @@ var _nation_label_cache_map_size := Vector2i.ZERO
 var _nation_label_cache_nation_count: int = -1
 var _nation_label_territory_index_builds: int = 0
 var _nation_label_territory_index_pixel_visits: int = 0
+var _nation_label_rebuild_pending_frames: int = 0
 
 var _world_size := Vector2(BASE_WORLD_SPAN, BASE_WORLD_SPAN)
 var _mesh_resolution := Vector2i(
@@ -169,6 +186,7 @@ func setup(
 	simulation: Simulation,
 	overlay_renderer: MapRenderer
 ) -> void:
+	_finish_country_visual_task(false)
 	state = game_state
 	sim = simulation
 	overlay = overlay_renderer
@@ -202,7 +220,14 @@ func setup(
 	_last_diplomatic_view_nation_id = -2
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
+	_province_lookup_topology_ids = PackedInt32Array()
+	_country_fill_opacity_image = null
+	_pending_country_visual_request.clear()
+	_country_visual_request_serial = 0
+	_history_preview_active = false
 	_boundary_topology = {}
+	_classified_boundary_geometry = {}
+	_classified_boundary_ownership_revision = -1
 	_province_topology_ids = PackedInt32Array()
 	_nation_label_territory_cache.clear()
 	_nation_label_layout_cache.clear()
@@ -213,6 +238,7 @@ func setup(
 	_nation_label_cache_nation_count = -1
 	_nation_label_territory_index_builds = 0
 	_nation_label_territory_index_pixel_visits = 0
+	_nation_label_rebuild_pending_frames = 0
 	_last_road_network_revision = -1
 	_last_trade_revision = -1
 	_last_naming_revision = -1
@@ -234,6 +260,98 @@ func setup(
 	set_process_unhandled_input(true)
 
 
+func set_display_state(
+	game_state: GameState,
+	map_mode_override: int = -1,
+	fast_preview: bool = false
+) -> void:
+	_pending_country_visual_request.clear()
+	# In-flight images belong to the previous display state. Let the worker
+	# finish naturally; its serial mismatch prevents a stale GPU upload.
+	_country_visual_request_serial += 1
+	state = game_state
+	_history_preview_active = fast_preview
+	if map_mode_override >= 0:
+		_map_mode = clampi(
+			map_mode_override,
+			MapRenderer.MapMode.POLITICAL,
+			MapRenderer.MapMode.TRADE
+		)
+	_last_day = -1
+	_last_ownership_revision = -1
+	_last_diplomacy_revision = -1
+	_last_diplomatic_view_nation_id = -2
+	_political_fill_signature = PackedInt64Array()
+	_loyalty_fill_signature = PackedInt64Array()
+	_country_fill_opacity_image = null
+	_classified_boundary_geometry = {}
+	_classified_boundary_ownership_revision = -1
+	_nation_label_cache_ownership_revision = -1
+	_nation_label_cache_diplomacy_revision = -1
+	_nation_label_rebuild_pending_frames = 0
+	_army_instances_initialized = false
+	if _terrain == null or _terrain.land_cell_count() <= 0:
+		return
+	if fast_preview:
+		_ensure_province_id_texture()
+		_update_province_visual_lut(
+			overlay.diplomatic_view_nation_id() if overlay != null else -1,
+			false
+		)
+		_terrain.set_country_fill_fade_enabled(false)
+		_last_day = state.day
+		_last_ownership_revision = state.ownership_revision
+		_last_diplomacy_revision = state.diplomacy_revision
+		_last_diplomatic_view_nation_id = (
+			overlay.diplomatic_view_nation_id() if overlay != null else -1
+		)
+		for label in _nation_labels:
+			label.visible = false
+	else:
+		_update_province_visuals()
+		if (
+			_country_visual_task_id >= 0
+			or not _pending_country_visual_request.is_empty()
+		):
+			_history_preview_active = true
+			_terrain.set_country_fill_fade_enabled(false)
+	_update_city_instances()
+	if fast_preview:
+		_clear_military_visuals()
+		_nation_label_rebuild_pending_frames = 0
+	else:
+		_update_army_instances()
+		_update_battle_instances()
+		_update_campaign_mesh()
+		for label in _nation_labels:
+			label.visible = false
+		_nation_label_rebuild_pending_frames = 2
+	_last_detail_visibility_signature = []
+	_update_boundary_lod()
+
+
+func history_preview_active() -> bool:
+	return _history_preview_active
+
+
+func _clear_military_visuals() -> void:
+	_army_instance_ids.clear()
+	_army_render_positions.clear()
+	_army_render_signatures.clear()
+	for layer in [
+		_army_bases, _armies, _army_symbol_a, _army_symbol_b,
+		_army_morale_backs, _army_morale_bars,
+		_battles, _battle_rings, _battle_cross_a, _battle_cross_b,
+	]:
+		if layer != null and layer.multimesh != null:
+			layer.multimesh.instance_count = 0
+	for label in _battle_labels:
+		label.set_meta("active", false)
+		label.visible = false
+	if _campaigns != null:
+		_campaigns.mesh = null
+
+
 func _process(delta: float) -> void:
 	if state == null or _terrain == null:
 		return
@@ -250,18 +368,41 @@ func _process(delta: float) -> void:
 				!= _last_diplomatic_view_nation_id
 		)
 	):
+		var revision_update_started := (
+			Time.get_ticks_usec()
+			if sim != null and sim.runtime_stage_profiling_enabled
+			else 0
+		)
 		_update_province_visuals()
+		if sim != null and sim.runtime_stage_profiling_enabled:
+			sim._record_runtime_span(
+				&"render_revision_province_visuals",
+				revision_update_started
+			)
+			revision_update_started = Time.get_ticks_usec()
 		_update_city_instances()
+		if sim != null and sim.runtime_stage_profiling_enabled:
+			sim._record_runtime_span(
+				&"render_revision_city_instances",
+				revision_update_started
+			)
 		_army_instances_initialized = false
-		_rebuild_nation_labels()
+		# Labels scan the full ownership raster. Submit them on the following
+		# frame so a capture never stacks this pass onto political textures.
+		_nation_label_rebuild_pending_frames = 2
 		_last_ownership_revision = state.ownership_revision
 		_last_diplomacy_revision = state.diplomacy_revision
 		_last_diplomatic_view_nation_id = (
 			overlay.diplomatic_view_nation_id() if overlay != null else -1
 		)
+	var country_visual_committed := _poll_country_visual_task()
 	if state.naming_revision != _last_naming_revision:
 		_rebuild_city_labels()
-		_rebuild_nation_labels()
+		if (
+			not _history_preview_active
+			and _nation_label_rebuild_pending_frames <= 0
+		):
+			_rebuild_nation_labels()
 		_last_naming_revision = state.naming_revision
 	if state.day != _last_day:
 		var daily_render_started := (
@@ -278,6 +419,29 @@ func _process(delta: float) -> void:
 				&"render_daily_updates", daily_render_started
 			)
 		_last_day = state.day
+	if _nation_label_rebuild_pending_frames > 0:
+		if (
+			country_visual_committed
+			or _country_visual_task_id >= 0
+			or not _pending_country_visual_request.is_empty()
+		):
+			_nation_label_rebuild_pending_frames = maxi(
+				_nation_label_rebuild_pending_frames, 2
+			)
+		else:
+			_nation_label_rebuild_pending_frames -= 1
+		if _nation_label_rebuild_pending_frames == 0:
+			var label_rebuild_started := (
+				Time.get_ticks_usec()
+				if sim != null and sim.runtime_stage_profiling_enabled
+				else 0
+			)
+			_rebuild_nation_labels()
+			if sim != null and sim.runtime_stage_profiling_enabled:
+				sim._record_runtime_span(
+					&"render_deferred_nation_labels",
+					label_rebuild_started
+				)
 	if (
 		state.road_network_revision
 		!= _last_road_network_revision
@@ -727,7 +891,10 @@ func _update_boundary_lod() -> void:
 	var lod := boundary_lod_strengths(_camera_distance)
 	var province_alpha := float(lod["province"])
 	var country_alpha := float(lod["country"])
-	_terrain.set_boundary_lod(province_alpha, 1.0, country_alpha)
+	if _history_preview_active:
+		_terrain.set_boundary_lod(province_alpha, 0.0, 0.0)
+	else:
+		_terrain.set_boundary_lod(province_alpha, 1.0, country_alpha)
 
 
 static func boundary_lod_strengths(camera_distance: float) -> Dictionary:
@@ -823,13 +990,8 @@ func _start_terrain_generation() -> void:
 	var height_texture := load(
 		GameState.terrain_map_path()
 	) as Texture2D
-	_terrain.set_height_texture(
-		height_texture,
-		state.map_source_region_normalized
-	)
-	# Packed map source: RGB=satellite color, Alpha=elevation. The same texture
-	# drives rendering, terrain height and city/road/province generation.
-	_terrain.set_surface_texture(height_texture)
+	# Packed map source keeps white RGB and numeric elevation in Alpha. Rendering
+	# uses the white material directly; Alpha remains the shared geography source.
 	_terrain.generation_finished.connect(_on_terrain_ready)
 	_terrain.call_deferred(
 		"generate_from_height_texture",
@@ -920,9 +1082,21 @@ func _update_province_visuals() -> void:
 		_province_topology_ids = state.province_ids.duplicate()
 		# 省份栅格几何变化会改变标签连通域，即使所有权 revision 未变。
 		_nation_label_cache_ownership_revision = -1
-	var geometry := MapRenderer.classify_province_boundary_topology(
-		state, _boundary_topology
-	)
+	var city_owners := PackedInt32Array()
+	if (
+		topology_changed
+		or _classified_boundary_geometry.is_empty()
+		or _classified_boundary_ownership_revision
+			!= state.ownership_revision
+	):
+		city_owners = _city_owner_snapshot()
+		_classified_boundary_geometry = (
+			PROVINCE_VISUAL_LOOKUP.build_country_boundary_geometry(
+				_boundary_topology, city_owners
+			)
+		)
+		_classified_boundary_ownership_revision = state.ownership_revision
+	var geometry := _classified_boundary_geometry
 	# Most diplomacy revisions only reclassify country edges, but suzerainty and
 	# civil-war changes can also alter province colors. A semantic signature lets
 	# ordinary relations keep the existing GPU fill; a topology change always
@@ -941,6 +1115,10 @@ func _update_province_visuals() -> void:
 		)
 		else PackedInt64Array()
 	)
+	var loyalty_mode := (
+		_map_mode == MapRenderer.MapMode.LOYALTY
+		and view_nation_id < 0
+	)
 	var fill_signature := (
 		loyalty_signature
 		if (
@@ -951,34 +1129,27 @@ func _update_province_visuals() -> void:
 	)
 	var rebuild_fill := (
 		topology_changed
-		or _province_texture == null
+		or _province_visual_lut_texture == null
 		or fill_signature != _political_fill_signature
 	)
+	if topology_changed or _province_id_texture == null:
+		_ensure_province_id_texture()
 	if rebuild_fill:
-		var fill_source := (
-			MapRenderer.build_loyalty_overlay_image(state)
-			if (
-				_map_mode == MapRenderer.MapMode.LOYALTY
-				and view_nation_id < 0
-			)
-			else MapRenderer.build_province_overlay_image(
-				state, view_nation_id
-			)
+		_update_province_visual_lut(view_nation_id, loyalty_mode)
+		_political_fill_signature = fill_signature
+		_loyalty_fill_signature = loyalty_signature
+	var country_visuals_changed := (
+		topology_changed
+		or _country_fill_opacity_image == null
+		or state.ownership_revision != _last_ownership_revision
+	)
+	var async_country_refresh := (
+		country_visuals_changed and _country_boundary_texture != null
+	)
+	if country_visuals_changed and not async_country_refresh:
+		_country_fill_opacity_image = (
+			MapRenderer.build_country_fill_opacity_image(state)
 		)
-		var canvas := MapRenderer.build_political_canvas_images(
-			state, geometry, false, fill_source
-		)
-		var image: Image = canvas["terrain_fill"]
-		if image != null and not image.is_empty():
-			_province_texture = ImageTexture.create_from_image(image)
-			if (
-				_map_mode == MapRenderer.MapMode.LOYALTY
-				and view_nation_id < 0
-			):
-				_loyalty_texture = _province_texture
-			_terrain.set_province_texture(_province_texture)
-			_political_fill_signature = fill_signature
-			_loyalty_fill_signature = loyalty_signature
 	var output_size := (
 		state.province_map_size * MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
 	)
@@ -993,22 +1164,42 @@ func _update_province_visuals() -> void:
 		_province_boundary_texture = ImageTexture.create_from_image(
 			province_boundary_image
 		)
-	if topology_changed or rebuild_fill or _country_boundary_texture == null:
-		var country_boundary_image := MapRenderer.build_country_boundary_image(
-			state, geometry, true, view_nation_id
-		)
-		_country_boundary_texture = ImageTexture.create_from_image(
-			country_boundary_image
-		)
-		var country_color_image := MapRenderer.build_country_color_image(
-			state, true, view_nation_id
-		)
-		_country_color_texture = ImageTexture.create_from_image(
-			country_color_image
-		)
+	if (
+		country_visuals_changed
+		or _country_boundary_texture == null
+		or _country_color_texture == null
+	):
+		if _country_boundary_texture == null:
+			var country_color_image := MapRenderer.build_country_color_image(
+				state, true, view_nation_id, _country_fill_opacity_image
+			)
+			# 3D coast ink comes only from the interpolated 0m terrain contour.
+			var country_boundary_image := MapRenderer.build_country_boundary_image(
+				state, geometry, false, view_nation_id
+			)
+			_country_boundary_texture = ImageTexture.create_from_image(
+				country_boundary_image
+			)
+			_country_color_texture = ImageTexture.create_from_image(
+				country_color_image
+			)
+		else:
+			if city_owners.is_empty():
+				city_owners = _city_owner_snapshot()
+			_queue_country_visual_rebuild(
+				geometry,
+				view_nation_id,
+				city_owners
+			)
 	_terrain.set_boundary_textures(
 		_province_boundary_texture, _country_boundary_texture,
 		_country_color_texture
+	)
+	_terrain.set_country_fill_fade_enabled(
+		not (
+			_map_mode == MapRenderer.MapMode.LOYALTY
+			and view_nation_id < 0
+		)
 	)
 	_update_boundary_lod()
 	_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
@@ -1019,6 +1210,238 @@ func _update_province_visuals() -> void:
 	# from drifting away from the painted regions.
 	_boundaries.mesh = null
 	_boundaries.material_override = null
+
+
+func _ensure_province_id_texture() -> void:
+	if (
+		_province_id_texture != null
+		and _province_lookup_topology_ids == state.province_ids
+	):
+		return
+	var image := PROVINCE_VISUAL_LOOKUP.build_id_image(
+		state.province_map_size,
+		state.province_ids,
+		3,
+		MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
+	)
+	_province_id_texture = ImageTexture.create_from_image(image)
+	_province_lookup_topology_ids = state.province_ids.duplicate()
+	if _province_visual_lut_texture != null:
+		_terrain.set_province_lookup_textures(
+			_province_id_texture, _province_visual_lut_texture
+		)
+
+
+func _update_province_visual_lut(
+	view_nation_id: int,
+	loyalty_mode: bool
+) -> void:
+	var image := PROVINCE_VISUAL_LOOKUP.build_visual_lut(
+		state, view_nation_id, loyalty_mode
+	)
+	if (
+		_province_visual_lut_texture == null
+		or Vector2i(_province_visual_lut_texture.get_size()) != image.get_size()
+	):
+		_province_visual_lut_texture = ImageTexture.create_from_image(image)
+	else:
+		_province_visual_lut_texture.update(image)
+	if loyalty_mode:
+		_loyalty_texture = _province_visual_lut_texture
+	if _province_id_texture != null:
+		_terrain.set_province_lookup_textures(
+			_province_id_texture, _province_visual_lut_texture
+		)
+
+
+func _queue_country_visual_rebuild(
+	geometry: Dictionary,
+	view_nation_id: int,
+	city_owners: PackedInt32Array
+) -> void:
+	_country_visual_request_serial += 1
+	var request := {
+		"serial": _country_visual_request_serial,
+		"ownership_revision": state.ownership_revision,
+		"source_size": state.province_map_size,
+		"colors": MapRenderer.country_boundary_colors(
+			state, view_nation_id
+		).duplicate(),
+		"geometry": _country_boundary_geometry_snapshot(geometry),
+		"province_ids": state.province_ids.duplicate(),
+		"city_owners": city_owners,
+	}
+	if _country_visual_task_id >= 0:
+		_pending_country_visual_request = request
+		return
+	_start_country_visual_task(request)
+
+
+func _city_owner_snapshot() -> PackedInt32Array:
+	var owners := PackedInt32Array()
+	owners.resize(state.cities.size())
+	for city_id in range(state.cities.size()):
+		owners[city_id] = state.cities[city_id].owner_nation
+	return owners
+
+
+func _country_boundary_geometry_snapshot(geometry: Dictionary) -> Dictionary:
+	return {
+		"country": (
+			geometry.get("country", PackedVector2Array())
+			as PackedVector2Array
+		).duplicate(),
+		"country_owner_a": (
+			geometry.get("country_owner_a", PackedInt32Array())
+			as PackedInt32Array
+		).duplicate(),
+		"country_owner_b": (
+			geometry.get("country_owner_b", PackedInt32Array())
+			as PackedInt32Array
+		).duplicate(),
+		"country_side_a": (
+			geometry.get("country_side_a", PackedVector2Array())
+			as PackedVector2Array
+		).duplicate(),
+		"country_side_b": (
+			geometry.get("country_side_b", PackedVector2Array())
+			as PackedVector2Array
+		).duplicate(),
+	}
+
+
+func _start_country_visual_task(request: Dictionary) -> void:
+	_country_visual_task_job = {
+		"serial": int(request["serial"]),
+		"ownership_revision": int(request["ownership_revision"]),
+		"country_boundary": null,
+		"country_color": null,
+		"country_opacity": null,
+	}
+	_country_visual_task_id = WorkerThreadPool.add_task(
+		_build_country_visual_snapshot_job.bind(
+			_country_visual_task_job,
+			request["source_size"],
+			request["colors"],
+			request["geometry"],
+			request["province_ids"],
+			request["city_owners"]
+		),
+		false,
+		"WorldWar country visual images"
+	)
+
+
+func _poll_country_visual_task() -> bool:
+	if (
+		_country_visual_task_id < 0
+		or not WorkerThreadPool.is_task_completed(
+			_country_visual_task_id
+		)
+	):
+		return false
+	var committed := _finish_country_visual_task(true)
+	if not _pending_country_visual_request.is_empty():
+		var request := _pending_country_visual_request
+		_pending_country_visual_request = {}
+		_start_country_visual_task(request)
+	return committed
+
+
+func _finish_country_visual_task(commit_result: bool) -> bool:
+	if _country_visual_task_id < 0:
+		return false
+	WorkerThreadPool.wait_for_task_completion(_country_visual_task_id)
+	_country_visual_task_id = -1
+	var completed_job := _country_visual_task_job
+	_country_visual_task_job = {}
+	if not commit_result:
+		return false
+	var country_boundary: Image = completed_job.get("country_boundary")
+	var country_color: Image = completed_job.get("country_color")
+	if (
+		int(completed_job.get("serial", -1))
+			!= _country_visual_request_serial
+		or int(completed_job.get("ownership_revision", -1))
+			!= state.ownership_revision
+		or country_boundary == null
+		or country_boundary.is_empty()
+		or country_color == null
+		or country_color.is_empty()
+	):
+		return false
+	var commit_started := (
+		Time.get_ticks_usec()
+		if sim != null and sim.runtime_stage_profiling_enabled
+		else 0
+	)
+	_country_boundary_texture = ImageTexture.create_from_image(
+		country_boundary
+	)
+	_country_color_texture = ImageTexture.create_from_image(country_color)
+	_country_fill_opacity_image = completed_job.get("country_opacity")
+	_history_preview_active = false
+	var current_view_nation_id := (
+		overlay.diplomatic_view_nation_id() if overlay != null else -1
+	)
+	if (
+		_terrain != null
+		and _province_boundary_texture != null
+		and _country_color_texture != null
+	):
+		_terrain.set_boundary_textures(
+			_province_boundary_texture,
+			_country_boundary_texture,
+			_country_color_texture
+		)
+		_terrain.set_country_fill_fade_enabled(
+			not (
+				_map_mode == MapRenderer.MapMode.LOYALTY
+				and current_view_nation_id < 0
+			)
+		)
+		_update_boundary_lod()
+		_last_detail_visibility_signature = []
+	if sim != null and sim.runtime_stage_profiling_enabled:
+		sim._record_runtime_span(
+			&"render_async_country_visual_commit", commit_started
+		)
+	return true
+
+
+func _build_country_visual_snapshot_job(
+	job: Dictionary,
+	source_size: Vector2i,
+	boundary_colors: PackedColorArray,
+	geometry: Dictionary,
+	province_ids: PackedInt32Array,
+	city_owners: PackedInt32Array
+) -> void:
+	var country_opacity := (
+		MapRenderer.build_country_fill_opacity_image_from_owners(
+			source_size, province_ids, city_owners
+		)
+	)
+	var country_color_source := (
+		MapRenderer.build_country_color_source_image_from_owners(
+			source_size, province_ids, city_owners, boundary_colors
+		)
+	)
+	job["country_opacity"] = country_opacity
+	# Do not bake the province-raster coast into the 3D country border layer.
+	job["country_boundary"] = (
+		MapRenderer.build_country_boundary_image_from_visuals(
+			source_size, boundary_colors, geometry, false
+		)
+	)
+	job["country_color"] = MapRenderer.build_country_color_image_from_source(
+		country_color_source, country_opacity, true
+	)
+
+
+func _exit_tree() -> void:
+	_finish_country_visual_task(false)
+	_pending_country_visual_request.clear()
 
 
 func _build_road_mesh() -> void:
@@ -1046,11 +1469,16 @@ func _build_road_mesh() -> void:
 			if edge.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
 			else minor_tool
 		)
+		var is_land_road := edge.kind == Edge.Kind.LAND
 		_append_draped_path_ribbon(
 			surface_tool,
 			path,
-			width * 1.58,
-			Color(0.055, 0.038, 0.022, 0.54),
+			width * (1.20 if is_land_road else 1.58),
+			(
+				Color(0.34, 0.36, 0.38, 0.10)
+				if is_land_road
+				else Color(0.055, 0.038, 0.022, 0.54)
+			),
 			0.105
 		)
 		_append_draped_path_ribbon(
@@ -1332,33 +1760,116 @@ func _road_width_for_capacity(capacity: int) -> float:
 	if capacity >= Edge.WATER_MANPOWER:
 		return 0.106
 	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
-		return 0.079
-	return 0.036
+		return 0.032
+	return 0.014
 
 
 func _road_color_for_capacity(capacity: int) -> Color:
 	if capacity >= Edge.WATER_MANPOWER:
 		return Color(0.012, 0.105, 0.165, 0.94)
 	if capacity >= Edge.TERRAIN_STANDARD_MANPOWER:
-		return Color(0.20, 0.065, 0.018, 0.92)
-	return Color(0.085, 0.028, 0.010, 0.78)
+		return Color(0.38, 0.40, 0.42, 0.42)
+	return Color(0.46, 0.48, 0.50, 0.30)
 
 
 func _build_river_mesh() -> void:
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for river in state.river_paths:
-		for index in range(river.size() - 1):
-			_append_world_ribbon(
-				surface_tool,
-				river[index],
-				river[index + 1],
-				0.075,
-				Color(0.008, 0.095, 0.165, 0.96),
-				0.11
-			)
+	var features: Array = state.river_features
+	if features.is_empty():
+		features = MapFeatureContract.from_legacy_river_paths(state.river_paths)
+	for feature_value in features:
+		var feature := feature_value as Dictionary
+		var render_path := MapFeatureContract.build_river_render_path(
+			feature, state.province_map_size, RIVER_RENDER_SUBDIVISIONS
+		)
+		_append_variable_width_river(
+			surface_tool, render_path, feature,
+			Color(0.008, 0.095, 0.165, 0.96)
+		)
 	_rivers.mesh = surface_tool.commit()
 	_rivers.material_override = _line_material(false)
+
+
+func _append_variable_width_river(
+	surface_tool: SurfaceTool,
+	path: PackedVector2Array,
+	feature: Dictionary,
+	color: Color
+) -> void:
+	if path.size() < 2:
+		return
+	var centers := PackedVector3Array()
+	var cumulative := PackedFloat32Array()
+	centers.resize(path.size())
+	cumulative.resize(path.size())
+	var total_length := 0.0
+	for index in range(path.size()):
+		var center := _terrain.map_to_world(path[index])
+		center.y += RIVER_ELEVATION
+		centers[index] = center
+		if index > 0:
+			total_length += Vector2(
+				center.x - centers[index - 1].x,
+				center.z - centers[index - 1].z
+			).length()
+		cumulative[index] = total_length
+	if total_length <= 0.000001:
+		return
+	var left := PackedVector3Array()
+	var right := PackedVector3Array()
+	left.resize(path.size())
+	right.resize(path.size())
+	for index in range(path.size()):
+		var previous := centers[maxi(index - 1, 0)]
+		var following := centers[mini(index + 1, centers.size() - 1)]
+		var tangent := Vector2(
+			following.x - previous.x,
+			following.z - previous.z
+		).normalized()
+		if tangent.length_squared() <= 0.000001:
+			continue
+		var progress := cumulative[index] / total_length
+		var width := RIVER_BASE_HALF_WIDTH * (
+			MapFeatureContract.width_at_progress(feature, progress)
+		)
+		var perpendicular := tangent.orthogonal() * width
+		var offset := Vector3(perpendicular.x, 0.0, perpendicular.y)
+		left[index] = centers[index] - offset
+		right[index] = centers[index] + offset
+	for index in range(path.size() - 1):
+		var progress_a := cumulative[index] / total_length
+		var progress_b := cumulative[index + 1] / total_length
+		_append_river_quad(
+			surface_tool,
+			left[index], right[index],
+			left[index + 1], right[index + 1],
+			progress_a, progress_b, color
+		)
+
+
+func _append_river_quad(
+	surface_tool: SurfaceTool,
+	left_a: Vector3,
+	right_a: Vector3,
+	left_b: Vector3,
+	right_b: Vector3,
+	progress_a: float,
+	progress_b: float,
+	color: Color
+) -> void:
+	var vertices := [
+		[left_a, Vector2(progress_a, 0.0)],
+		[left_b, Vector2(progress_b, 0.0)],
+		[right_a, Vector2(progress_a, 1.0)],
+		[left_b, Vector2(progress_b, 0.0)],
+		[right_b, Vector2(progress_b, 1.0)],
+		[right_a, Vector2(progress_a, 1.0)],
+	]
+	for vertex_data in vertices:
+		surface_tool.set_color(color)
+		surface_tool.set_uv(vertex_data[1])
+		surface_tool.add_vertex(vertex_data[0])
 
 
 func _build_city_instances() -> void:
@@ -2704,7 +3215,9 @@ func _update_map_detail_visibility() -> void:
 	if overlay == null:
 		return
 	var visible := overlay.city_names_visible()
-	var nation_visible := overlay.nation_names_visible()
+	var nation_visible := (
+		overlay.nation_names_visible() and not _history_preview_active
+	)
 	var signature: Array = [
 		visible and _camera_distance <= 40.0,
 		nation_visible,

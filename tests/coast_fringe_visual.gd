@@ -3,6 +3,10 @@ extends SceneTree
 ## packed 0m coastline. No bright low-saturation fringe may be introduced.
 
 const COAST_COLOR_CHANGE_THRESHOLD := 0.008
+## White unclaimed land has less contrast against light nation coast colors
+## than the removed dark-blue fallback. Geometry and inland false positives
+## remain strict; this ratio only measures visible screenshot color delta.
+const MIN_ALIGNED_CONTOUR_CHANGE_RATIO := 0.65
 
 
 func _init() -> void:
@@ -189,7 +193,8 @@ func _run() -> void:
 					if (
 						_rgb_change(color, without_boundary)
 							> COAST_COLOR_CHANGE_THRESHOLD
-						and color.v > 0.48 and color.s < 0.32
+						and color.v > without_boundary.v + 0.02
+						and color.s < 0.32
 					):
 						political_boundary_bright_gray += 1
 	var aligned_ratio := (
@@ -198,7 +203,7 @@ func _run() -> void:
 	if (
 		coast_samples <= 0
 		or aligned_contour_samples < 100
-		or aligned_ratio < 0.80
+		or aligned_ratio < MIN_ALIGNED_CONTOUR_CHANGE_RATIO
 		or inland_false_positive_samples < 100
 		or inland_false_positive_changed > 0
 		or political_boundary_samples < 100

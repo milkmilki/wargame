@@ -360,7 +360,7 @@ func _naming_fingerprint(state: GameState) -> String:
 func _test_ruler_profiles() -> void:
 	var archetypes := RulerProfile.all_archetypes()
 	var traits := RulerProfile.all_traits()
-	var valid_catalog := archetypes.size() == 9 and traits.size() == 12
+	var valid_catalog := archetypes.size() == 10 and traits.size() == 12
 	for archetype in archetypes:
 		valid_catalog = valid_catalog and (
 			RulerProfile.is_valid_archetype(archetype)
@@ -373,7 +373,7 @@ func _test_ruler_profiles() -> void:
 			and not RulerProfile.trait_name(trait_id).is_empty()
 			and not RulerProfile.trait_description(trait_id).is_empty()
 		)
-	_check(valid_catalog, "ruler/catalog_9_archetypes_12_traits")
+	_check(valid_catalog, "ruler/catalog_10_archetypes_12_traits")
 
 	var deterministic := true
 	for nation_id in range(128):
@@ -398,37 +398,47 @@ func _test_ruler_profiles() -> void:
 	var inept := RulerProfile.modifiers(RulerProfile.INEPT)
 	var tyrant := RulerProfile.modifiers(RulerProfile.TYRANT)
 	_check(
-		_approx(float(conqueror[RulerProfile.KEY_AGGRESSION]), 1.35)
-			and _approx(float(conqueror[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.12)
-			and _approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 1.08)
+		_approx(float(conqueror[RulerProfile.KEY_AGGRESSION]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.50)
+			and _approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 1.35)
+			and _approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 2.00)
 			and bool(conqueror[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
 		"ruler/conqueror_key_multipliers"
 	)
 	_check(
-		_approx(float(guardian[RulerProfile.KEY_DEFENSE]), 1.18)
-			and _approx(float(guardian[RulerProfile.KEY_CITY_DEFENSE]), 1.25)
-			and int(guardian[RulerProfile.KEY_RESERVE_MONTHS]) == 3
+		_approx(float(guardian[RulerProfile.KEY_DEFENSE]), 1.60)
+			and _approx(float(guardian[RulerProfile.KEY_CITY_DEFENSE]), 2.00)
+			and _approx(float(guardian[RulerProfile.KEY_TRADE]), 2.00)
+			and int(guardian[RulerProfile.KEY_RESERVE_MONTHS]) == 8
 			and not bool(guardian[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
 		"ruler/guardian_key_multipliers_and_gate"
 	)
 	_check(
-		_approx(float(inept[RulerProfile.KEY_GOLD_OUTPUT]), 0.82)
-			and _approx(float(inept[RulerProfile.KEY_UPKEEP]), 1.20)
-			and _approx(float(inept[RulerProfile.KEY_LOYALTY]), 0.80)
+		_approx(float(inept[RulerProfile.KEY_GOLD_OUTPUT]), 0.50)
+			and _approx(float(inept[RulerProfile.KEY_UPKEEP]), 1.80)
+			and _approx(float(inept[RulerProfile.KEY_LOYALTY]), 0.45)
 			and not bool(inept[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
 		"ruler/inept_key_multipliers_and_gate"
 	)
 	_check(
-		_approx(float(tyrant[RulerProfile.KEY_GOLD_OUTPUT]), 1.12)
-			and _approx(float(tyrant[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.12)
-			and _approx(float(tyrant[RulerProfile.KEY_CENTRALIZE]), 1.42)
-			and _approx(float(tyrant[RulerProfile.KEY_LOYALTY]), 0.76)
+		_approx(float(tyrant[RulerProfile.KEY_GOLD_OUTPUT]), 1.60)
+			and _approx(float(tyrant[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.70)
+			and _approx(float(tyrant[RulerProfile.KEY_CENTRALIZE]), 3.00)
+			and _approx(float(tyrant[RulerProfile.KEY_LOYALTY]), 0.35)
 			and bool(tyrant[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
 		"ruler/tyrant_key_multipliers_and_gate"
 	)
 	_check(
 		not RulerProfile.offensive_allowed(RulerProfile.DIPLOMAT),
 		"ruler/diplomat_offensive_gate"
+	)
+	var puppet := RulerProfile.modifiers(RulerProfile.PUPPET)
+	_check(
+		_approx(float(puppet[RulerProfile.KEY_ENFEOFF]), 5.00)
+			and _approx(float(puppet[RulerProfile.KEY_CENTRALIZE]), 0.05)
+			and not bool(puppet[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
+		"ruler/puppet_extreme_enfeoff_profile"
 	)
 
 
@@ -597,8 +607,7 @@ func _test_trade_network() -> void:
 	var exports := _sum_int_array(food_trade["nation_food_export"])
 	var costs := _sum_int_array(food_trade["nation_food_cost"])
 	var sales := _sum_int_array(food_trade["nation_food_sale_income"])
-	# 简化版 EU4 贸易：钱凭空买粮，所以进口>0、出口恒为 0、销售收入恒为 0；
-	# 贸易金恒等于路线税（无销售收入项）。
+	# 贸易只产生路线金；兼容的资源贸易字段全部保持为 0。
 	var gold_identity := true
 	for nation_id in range(food_state.nations.size()):
 		gold_identity = gold_identity and (
@@ -607,33 +616,33 @@ func _test_trade_network() -> void:
 				+ int(food_trade["nation_food_sale_income"][nation_id])
 		)
 	_check(
-		imports > 0 and exports == 0 and sales == 0 and costs > 0
+		imports == 0 and exports == 0 and sales == 0 and costs == 0
 			and gold_identity,
-		"trade/food_conjured_from_gold",
+		"trade/no_automatic_resource_purchase",
 		"food=%d/%d gold_cost=%d sales=%d" % [imports, exports, costs, sales]
 	)
+	for city in food_state.cities:
+		city.manpower_per_month = 0
+		city.food_per_half_year = 0
 	var food_before := food_state.cities[0].food_storage + food_state.cities[1].food_storage
+	var manpower_before := food_state.nations[0].manpower_pool + food_state.nations[1].manpower_pool
 	var treasury_before := food_state.nations[0].treasury_gold + food_state.nations[1].treasury_gold
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(food_state)
-	sim._resolve_trade_purchases(food_trade)
-	var flows := Simulation._monthly_gold_flows_from_trade(food_state, food_trade)
-	for nation_id in range(food_state.nations.size()):
-		food_state.nations[nation_id].treasury_gold += int(flows[nation_id]["trade_net_income"])
+	food_state.day = Simulation.DAYS_PER_MONTH
+	sim._resolve_economy()
 	var food_after := food_state.cities[0].food_storage + food_state.cities[1].food_storage
+	var manpower_after := food_state.nations[0].manpower_pool + food_state.nations[1].manpower_pool
 	var treasury_after := food_state.nations[0].treasury_gold + food_state.nations[1].treasury_gold
-	var tax_total := _sum_int_array(food_trade["nation_trade_tax"])
-	var manpower_cost_total := _sum_int_array(food_trade["nation_manpower_cost"])
-	# 粮食凭空产生：库存净增 = 进口量；国库净变动 = 路线税 - 买粮花费 - 买人花费。
 	_check(
-		food_after - food_before == imports
-			and treasury_after - treasury_before
-				== tax_total - costs - manpower_cost_total,
-		"trade/applied_conjured_food_and_gold_cost",
-		"food %d->%d gold_delta=%d tax=%d food_cost=%d mp_cost=%d" % [
-			food_before, food_after, treasury_after - treasury_before,
-			tax_total, costs, manpower_cost_total,
+		food_after == food_before
+			and manpower_after == manpower_before
+			and treasury_after > treasury_before,
+		"trade/monthly_settlement_only_adds_gold",
+		"food %d->%d manpower %d->%d gold %d->%d" % [
+			food_before, food_after, manpower_before, manpower_after,
+			treasury_before, treasury_after,
 		]
 	)
 	sim.free()

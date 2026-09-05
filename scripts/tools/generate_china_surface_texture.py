@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the complete rectangular satellite texture from NASA Blue Marble.
+"""Build the complete rectangular white/elevation runtime texture.
 
 The playable China alpha mask is intentionally not used here. It remains a
 simulation-only city/province constraint; rendering always shows the complete
@@ -15,18 +15,13 @@ import urllib.request
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT = REPO_ROOT / "assets/terrain/china_natural_earth2_2048.png"
-DEFAULT_METADATA = REPO_ROOT / "assets/terrain/china_natural_earth2_2048.json"
-DEFAULT_CACHE_DIR = REPO_ROOT / "assets/terrain/source/blue_marble"
-SOURCE_URL = (
-    "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/74167/"
-    "world.200410.3x5400x2700.jpg"
-)
-SOURCE_NAME = "world.200410.3x5400x2700.jpg"
+DEFAULT_OUTPUT = REPO_ROOT / "assets/terrain/china_elevation_white_2048.png"
+DEFAULT_METADATA = REPO_ROOT / "assets/terrain/china_elevation_white_2048.json"
+DEFAULT_CACHE_DIR = REPO_ROOT / "assets/terrain/source/elevation_tiles"
 ELEVATION_URL = (
     "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/"
     "{zoom}/{x}/{y}.png"
@@ -39,13 +34,12 @@ DEFAULT_BBOX = (73.0, 18.0, 135.5, 54.0)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate the complete China rectangle from NASA Blue Marble."
+        description="Generate the complete white/elevation China rectangle."
     )
     parser.add_argument("--resolution", type=int, default=2048)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
-    parser.add_argument("--source-image", type=Path)
     parser.add_argument("--elevation-zoom", type=int, default=ELEVATION_ZOOM)
     parser.add_argument("--high-clip-m", type=float, default=ELEVATION_HIGH_CLIP_M)
     parser.add_argument("--low-clip-m", type=float, default=ELEVATION_LOW_CLIP_M)
@@ -55,27 +49,6 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BBOX,
     )
     return parser.parse_args()
-
-
-def ensure_source(cache_dir: Path, source_image: Path | None) -> Path:
-    if source_image is not None:
-        if not source_image.exists():
-            raise FileNotFoundError(source_image)
-        return source_image
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / SOURCE_NAME
-    if not path.exists():
-        print(f"downloading {SOURCE_URL}", flush=True)
-        urllib.request.urlretrieve(SOURCE_URL, path)
-    return path
-
-
-def longitude_x(longitude: float, width: int) -> float:
-    return (longitude + 180.0) / 360.0 * width
-
-
-def latitude_y(latitude: float, height: int) -> float:
-    return (90.0 - latitude) / 180.0 * height
 
 
 def mercator_position(longitude: float, latitude: float, zoom: int) -> tuple[float, float]:
@@ -154,25 +127,9 @@ def build_texture(args: argparse.Namespace) -> dict:
         raise ValueError("--high-clip-m must be positive")
     if args.low_clip_m >= 0.0:
         raise ValueError("--low-clip-m must be negative")
-    source_path = ensure_source(args.cache_dir, args.source_image)
-    source = Image.open(source_path).convert("RGB")
     west, south, east, north = map(float, args.bbox)
-    crop_box = (
-        int(round(longitude_x(west, source.width))),
-        int(round(latitude_y(north, source.height))),
-        int(round(longitude_x(east, source.width))),
-        int(round(latitude_y(south, source.height))),
-    )
-    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+    if east <= west or north <= south:
         raise ValueError("invalid --bbox")
-    crop = source.crop(crop_box).resize(
-        (args.resolution, args.resolution), Image.Resampling.LANCZOS
-    )
-    # Keep the image recognizably satellite-based while muting it enough for
-    # political overlays, counters and roads to remain legible.
-    crop = ImageEnhance.Color(crop).enhance(0.86)
-    crop = ImageEnhance.Contrast(crop).enhance(1.04)
-    crop = ImageEnhance.Brightness(crop).enhance(0.92)
     elevation, elevation_tiles = build_elevation(
         args.cache_dir, (west, south, east, north),
         args.resolution, args.elevation_zoom
@@ -195,21 +152,12 @@ def build_texture(args: argparse.Namespace) -> dict:
     elevation_alpha[land] = (
         129 + np.rint(land_normalized * 126.0).astype(np.uint8)
     )
-    rgba = np.asarray(crop.convert("RGBA"), dtype=np.uint8).copy()
+    rgba = np.full((args.resolution, args.resolution, 4), 255, dtype=np.uint8)
     rgba[:, :, 3] = elevation_alpha
     args.output.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgba, mode="RGBA").save(args.output, optimize=True)
     metadata = {
-        "source": {
-            "dataset": "NASA Blue Marble Next Generation",
-            "date": "2004-10",
-            "download_url": SOURCE_URL,
-            "source_page": (
-                "https://visibleearth.nasa.gov/collection/1484/"
-                "blue-marble"
-            ),
-            "credit": "NASA Earth Observatory",
-        },
+        "surface": "solid white RGB terrain base",
         "elevation_source": {
             "dataset": "AWS Open Terrain Tiles (Terrarium)",
             "url_template": ELEVATION_URL,
@@ -218,9 +166,6 @@ def build_texture(args: argparse.Namespace) -> dict:
             "component_sources": "SRTM, GMTED and ETOPO1 as recorded per tile",
             "tiles": elevation_tiles,
         },
-        "source_file": SOURCE_NAME,
-        "source_raster_size": [source.width, source.height],
-        "source_crop_px": list(crop_box),
         "bbox_wgs84": {
             "west": west, "south": south,
             "east": east, "north": north,
@@ -230,17 +175,14 @@ def build_texture(args: argparse.Namespace) -> dict:
         "processing": {
             "full_rectangle": True,
             "playable_mask_applied": False,
-            "packed_texture": "RGB=satellite, A=elevation",
+            "packed_texture": "RGB=solid white, A=elevation",
             "elevation_alpha": (
                 "1..128=low_clip_m..0m sea, "
                 "129..255=positive land..high_clip_m"
             ),
             "low_clip_m": args.low_clip_m,
             "high_clip_m": args.high_clip_m,
-            "saturation": 0.86,
-            "contrast": 1.04,
-            "brightness": 0.92,
-            "resampling": "Lanczos",
+            "rgb_fill": 255,
         },
         "elevation_stats_m": {
             "min": float(np.min(elevation)),

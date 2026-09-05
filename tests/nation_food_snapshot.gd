@@ -2,7 +2,7 @@ extends SceneTree
 ## 国家粮食快照专项：
 ## 1. 旧档兼容：Nation 新字段默认 0，未月结时详情面板不报错。
 ## 2. 月结入口：_resolve_economy() 一次性发布粮仓存量、预计月产/月需/月净。
-## 3. UI 文本：粮食与贸易两行数学一致，零值不显示 +0/-0。
+## 3. UI 文本：粮食与贸易两行数学一致，不再显示已删除的采购字段。
 ## 4. 产量口径：按 nation 汇总完整半年产量后统一 /6 rounding，不逐城 rounding。
 
 var _checks: int = 0
@@ -17,7 +17,6 @@ func _run() -> void:
 	_test_legacy_defaults_and_zero_trade_ui()
 	_test_change_city_food_storage()
 	_test_deposit_food_immediate_aggregate()
-	_test_resolve_trade_purchases_conjures_resources()
 	_test_setup_snapshot_production_estimate()
 	_test_monthly_production_rounds_after_nation_sum()
 	_test_monthly_snapshot_and_ui_math()
@@ -62,8 +61,8 @@ func _test_legacy_defaults_and_zero_trade_ui() -> void:
 	_check(
 		trade_line.find("商路 0") >= 0
 			and trade_line.find("商贸金 0") >= 0
-			and trade_line.find("购粮 0") >= 0
-			and trade_line.find("购人 0") >= 0
+			and trade_line.find("购粮") == -1
+			and trade_line.find("购人") == -1
 			and trade_line.find("+0") == -1
 			and trade_line.find("-0") == -1,
 		"legacy/zero_trade_ui_without_signed_zero",
@@ -79,8 +78,9 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 	var expected_import_1 := int(expected_trade["nation_food_import"][1])
 	var expected_export_1 := int(expected_trade["nation_food_export"][1])
 	_check(
-		expected_import_0 + expected_import_1 > 0,
-		"snapshot/fixture_has_nonzero_food_trade",
+		expected_import_0 == 0 and expected_import_1 == 0
+			and expected_export_0 == 0 and expected_export_1 == 0,
+		"snapshot/resource_trade_fields_stay_zero",
 		str(expected_trade)
 	)
 
@@ -100,8 +100,8 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 		float(Simulation.city_food_output(state, state.cities[1], {})) / 6.0
 	))
 	_check(
-		nation_0.granary_food > 0 and nation_1.granary_food > 0,
-		"snapshot/granary_food_nonzero_after_settlement",
+		nation_0.granary_food == 100 and nation_1.granary_food == 0,
+		"snapshot/monthly_trade_does_not_change_granaries",
 		"n0=%d n1=%d" % [nation_0.granary_food, nation_1.granary_food]
 	)
 	_check(
@@ -180,12 +180,8 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 			and trade_line_0.find(
 				"商贸金 %s" % _signed_or_zero(nation_0.last_trade_gold)
 			) >= 0
-			and trade_line_0.find(
-				"购粮 %d" % maxi(nation_0.last_trade_food_import, 0)
-			) >= 0
-			and trade_line_0.find(
-				"购人 %d" % maxi(nation_0.last_trade_manpower_import, 0)
-			) >= 0,
+			and trade_line_0.find("购粮") == -1
+			and trade_line_0.find("购人") == -1,
 		"ui/trade_line_matches_snapshot",
 		trade_line_0
 	)
@@ -350,37 +346,6 @@ func _test_deposit_food_immediate_aggregate() -> void:
 	_check(
 		not state.deposit_food(-1, 5),
 		"deposit/invalid_nation_returns_false"
-	)
-
-	sim.free()
-
-
-func _test_resolve_trade_purchases_conjures_resources() -> void:
-	var state := _make_single_nation_state()
-	var sim := Simulation.new()
-	root.add_child(sim)
-	sim.setup(state)
-
-	var nation := state.nations[0]
-	var initial_granary := nation.granary_food
-	var initial_manpower := nation.manpower_pool
-
-	# 简化版 EU4 贸易：钱凭空买粮、买人；直接落到粮池与人力库，不动他国。
-	var trade := {
-		"nation_food_import": [9] as Array[int],
-		"nation_food_export": [0] as Array[int],
-		"nation_manpower_import": [400] as Array[int],
-	}
-	sim._resolve_trade_purchases(trade)
-	_check(
-		nation.granary_food == initial_granary + 9,
-		"trade_purchase/nation_granary_increased_immediately",
-		"old=%d new=%d" % [initial_granary, nation.granary_food]
-	)
-	_check(
-		nation.manpower_pool == initial_manpower + 400,
-		"trade_purchase/manpower_pool_increased_immediately",
-		"old=%d new=%d" % [initial_manpower, nation.manpower_pool]
 	)
 
 	sim.free()

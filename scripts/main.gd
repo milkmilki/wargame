@@ -25,7 +25,10 @@ extends Node
 )
 @export var initial_city_names_visible: bool = true
 @export var initial_nation_names_visible: bool = true
-@export var initial_trade_price_enabled: bool = true
+@export_file("*.png", "*.jpg", "*.jpeg", "*.webp") var initial_political_mask_path: String = ""
+@export_range(1, 365, 1) var history_interval_days: int = (
+	PoliticalHistory.DEFAULT_INTERVAL_DAYS
+)
 
 @onready var simulation: Simulation = $Simulation
 @onready var renderer: MapRenderer = $MapRenderer
@@ -38,6 +41,9 @@ extends Node
 @onready var map_editor_panel: MapEditorPanel = get_node_or_null(
 	"MapEditorLayer"
 ) as MapEditorPanel
+@onready var history_timeline: HistoryTimeline = get_node_or_null(
+	"HistoryTimeline"
+) as HistoryTimeline
 @onready var settings_button: Button = $SettingsLayer/SettingsButton
 @onready var settings_overlay: Control = $SettingsLayer/SettingsOverlay
 @onready var resolution_option: OptionButton = (
@@ -60,19 +66,40 @@ var _settings_previous_pause: bool = false
 var _road_previous_pause: bool = false
 var _editor_previous_pause: bool = false
 var _city_generation_mask_path: String = GameState.DEFAULT_CITY_MASK_PATH
+var _political_mask_path: String = ""
 var _city_density_settings: Dictionary = (
 	TerrainMapGenerator.default_city_density_settings()
 )
+var _political_history := PoliticalHistory.new()
+var _history_active: bool = false
+var _history_previous_pause: bool = false
+var _history_previous_map_mode: int = MapRenderer.MapMode.POLITICAL
 
 
 func _ready() -> void:
 	_setup_display_settings()
+	_setup_political_history()
 	if road_tuning_panel != null:
 		_setup_road_tuning()
 	if map_editor_panel != null:
 		_setup_map_editor()
+	_political_mask_path = initial_political_mask_path.strip_edges()
 	_seed = _random_startup_seed() if randomize_world_seed_on_start else world_seed
 	_start_new_game(_seed)
+
+
+func _setup_political_history() -> void:
+	if history_timeline != null:
+		history_timeline.preview_requested.connect(
+			_on_history_preview_requested
+		)
+		history_timeline.position_requested.connect(
+			_on_history_position_requested
+		)
+	if not simulation.runtime_day_committed.is_connected(
+		_on_history_day_committed
+	):
+		simulation.runtime_day_committed.connect(_on_history_day_committed)
 
 
 func _random_startup_seed() -> int:
@@ -312,6 +339,7 @@ func _on_map_editor_closed() -> void:
 func _on_map_regenerate_requested(
 	city_count: int,
 	city_mask_path: String,
+	political_mask_path: String,
 	density_settings: Dictionary
 ) -> void:
 	var requested_count := clampi(city_count, nation_count, 500)
@@ -324,20 +352,54 @@ func _on_map_regenerate_requested(
 			str(validation.get("error", "城市蒙版无效。")), true
 		)
 		return
-	terrain_city_count = requested_count
-	_city_generation_mask_path = requested_mask
-	_city_density_settings = (
+	var requested_political_mask := political_mask_path.strip_edges()
+	var political_validation := TerrainMapGenerator.validate_political_mask(
+		GameState.terrain_map_path(), requested_political_mask
+	)
+	if not bool(political_validation.get("ok", false)):
+		map_editor_panel.set_status(
+			str(political_validation.get("error", "政治蒙版无效。")), true
+		)
+		return
+	var normalized_density := (
 		TerrainMapGenerator.normalize_city_density_settings(
 			density_settings
 		)
 	)
+	var preview := TerrainMapGenerator.build(
+		GameState.terrain_map_path(),
+		requested_count,
+		requested_mask,
+		normalized_density,
+		_seed if randomize_world_seed_on_start else 0,
+		nation_count,
+		requested_political_mask
+	)
+	var active_city_count := int(preview.get(
+		"politically_active_count", requested_count
+	))
+	if active_city_count < nation_count:
+		map_editor_panel.set_status(
+			"政治蒙版仅覆盖%d座实际城市，至少需要%d座。" % [
+				active_city_count, nation_count,
+			],
+			true
+		)
+		return
+	terrain_city_count = requested_count
+	_city_generation_mask_path = requested_mask
+	_political_mask_path = requested_political_mask
+	_city_density_settings = normalized_density
 	_start_new_game(_seed)
 	map_editor_panel.set_status(
-		"已按 %d 座城市重新生成；%s。" % [
+		"已按 %d 座城市重新生成；%s；%s。" % [
 			terrain_city_count,
 			"仅白色蒙版内真实陆地可生成"
 				if not _city_generation_mask_path.is_empty()
 				else "未启用城市蒙版，所有真实陆地可生成",
+			"仅政治蒙版内城市参与国家模拟"
+				if not _political_mask_path.is_empty()
+				else "未启用政治蒙版，所有城市参与国家模拟",
 		]
 	)
 
@@ -403,7 +465,8 @@ func _start_new_game(world_seed: int) -> void:
 			terrain_city_count,
 			_city_generation_mask_path,
 			_city_density_settings,
-			world_seed if randomize_world_seed_on_start else 0
+			world_seed if randomize_world_seed_on_start else 0,
+			_political_mask_path
 		)
 	_activate_state(next_state)
 
@@ -414,11 +477,15 @@ func _start_from_map_definition(definition: Dictionary) -> void:
 	nation_count = next_state.nations.size()
 	terrain_city_count = next_state.land_cities().size()
 	_city_generation_mask_path = next_state.city_generation_mask_path
+	_political_mask_path = next_state.political_mask_path
 	_city_density_settings = next_state.city_density_settings.duplicate(true)
 	_activate_state(next_state)
 
 
 func _activate_state(next_state: GameState) -> void:
+	if _history_active:
+		simulation.paused = _history_previous_pause
+	_history_active = false
 	state = next_state
 	simulation.setup(state)
 	simulation.diplomacy_enabled = not use_grid_world
@@ -426,9 +493,7 @@ func _activate_state(next_state: GameState) -> void:
 	renderer.set_army_icon_scale(initial_army_icon_scale)
 	renderer.set_city_names_visible(initial_city_names_visible)
 	renderer.set_nation_names_visible(initial_nation_names_visible)
-	state.trade_price_enabled = initial_trade_price_enabled
 	renderer.setup(state, simulation)
-	renderer.set_trade_price_enabled(initial_trade_price_enabled)
 	if road_tuning_panel != null:
 		renderer.set_province_strength(
 			road_tuning_panel.province_strength()
@@ -457,6 +522,63 @@ func _activate_state(next_state: GameState) -> void:
 		map_3d.visible = false
 	if map_editor_panel != null:
 		map_editor_panel.bind(state, renderer)
+	_political_history.reset(state, history_interval_days)
+	if history_timeline != null:
+		history_timeline.set_history_points(
+			_political_history.snapshot_days(), state.day
+		)
+
+
+func _on_history_day_committed(_day: int) -> void:
+	if _history_active:
+		return
+	_political_history.maybe_capture(state)
+	if history_timeline != null:
+		history_timeline.set_history_points(
+			_political_history.snapshot_days(), state.day
+		)
+
+
+func _on_history_preview_requested(index: int) -> void:
+	_on_history_position_requested(index, false)
+
+
+func _on_history_position_requested(index: int, finalize: bool = true) -> void:
+	if state == null:
+		return
+	if index >= _political_history.snapshot_count():
+		if finalize:
+			_leave_history_view()
+		return
+	var history_state := _political_history.build_view_state(state, index)
+	if history_state == null:
+		return
+	if not _history_active:
+		_history_previous_pause = simulation.paused
+		_history_previous_map_mode = renderer.map_mode()
+	_history_active = true
+	simulation.paused = true
+	renderer.set_display_state(
+		history_state, true, MapRenderer.MapMode.POLITICAL,
+		not finalize
+	)
+	if map_3d != null and map_3d.visible:
+		map_3d.set_display_state(
+			history_state, MapRenderer.MapMode.POLITICAL,
+			not finalize
+		)
+
+
+func _leave_history_view() -> void:
+	if not _history_active:
+		return
+	_history_active = false
+	renderer.set_display_state(
+		state, false, _history_previous_map_mode
+	)
+	if map_3d != null and map_3d.visible:
+		map_3d.set_display_state(state, _history_previous_map_mode)
+	simulation.paused = _history_previous_pause
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -468,6 +590,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	match event.keycode:
 		KEY_SPACE:
+			if _history_active:
+				return
 			simulation.paused = not simulation.paused
 		KEY_EQUAL, KEY_KP_ADD, KEY_BRACKETRIGHT:
 			_speed_mult = clampf(_speed_mult * 2.0, Simulation.SPEED_MIN, Simulation.SPEED_MAX)

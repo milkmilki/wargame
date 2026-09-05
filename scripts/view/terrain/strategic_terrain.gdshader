@@ -1,13 +1,11 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_disabled;
 
-uniform sampler2D province_texture : source_color, filter_nearest;
+uniform sampler2D province_id_texture : filter_nearest, repeat_disable;
+uniform sampler2D province_visual_lut : source_color, filter_nearest, repeat_disable;
 uniform sampler2D province_boundary_texture : source_color, filter_nearest, repeat_disable;
 uniform sampler2D country_boundary_texture : source_color, filter_nearest, repeat_disable;
 uniform sampler2D country_color_texture : source_color, filter_nearest, repeat_disable;
-uniform sampler2D surface_texture : source_color, filter_linear_mipmap_anisotropic;
-uniform vec2 height_source_origin = vec2(0.0);
-uniform vec2 height_source_size = vec2(1.0);
 uniform float province_strength : hint_range(0.0, 1.0) = 0.93;
 uniform float province_boundary_strength : hint_range(0.0, 1.0) = 1.0;
 uniform float coast_boundary_strength : hint_range(0.0, 1.0) = 1.0;
@@ -18,10 +16,10 @@ uniform float local_boundary_core_radius_px = 0.5;
 uniform float local_boundary_outer_radius_px = 0.5;
 uniform float country_boundary_core_width_px = 3.0;
 uniform float country_boundary_outer_width_px = 3.0;
+uniform float country_fill_fade_enabled : hint_range(0.0, 1.0) = 1.0;
 uniform float ocean_height_threshold = 0.0;
 uniform float sea_floor_height = -2.2;
 uniform vec3 political_land_base_color : source_color = vec3(0.82, 0.82, 0.80);
-uniform vec3 unclaimed_political_color : source_color = vec3(0.035, 0.090, 0.190);
 uniform vec3 shallow_sea_color : source_color = vec3(0.090, 0.310, 0.470);
 uniform vec3 deep_sea_color : source_color = vec3(0.025, 0.060, 0.130);
 
@@ -33,40 +31,62 @@ void vertex() {
 }
 
 void fragment() {
-	vec2 source_uv = height_source_origin + UV * height_source_size;
 	vec4 province_boundary = texture(province_boundary_texture, UV);
 	vec4 country_boundary = texture(country_boundary_texture, UV);
 	vec4 coast_country = texture(country_color_texture, UV);
 	float hard_land = step(ocean_height_threshold, terrain_elevation);
+	float sea_depth = clamp(
+		(ocean_height_threshold - terrain_elevation)
+		/ max(ocean_height_threshold - sea_floor_height, 0.001),
+		0.0, 1.0
+	);
+	float deep_sea_mix = smoothstep(0.06, 0.375, sea_depth);
+	vec3 sea_color = mix(shallow_sea_color, deep_sea_color, deep_sea_mix);
+	vec3 white_low_poly_base = political_land_base_color;
 	vec3 final_color;
 	if (province_strength <= 0.000001) {
-		// Terrain mode is the only mode that samples satellite RGB.
-		final_color = texture(surface_texture, source_uv).rgb;
+		// The terrain option is a white terrain mode; elevation and lighting
+		// provide relief without any satellite color texture.
+		final_color = mix(sea_color, white_low_poly_base, hard_land);
 	} else {
-		ivec2 province_size = textureSize(province_texture, 0);
+		ivec2 province_size = textureSize(province_id_texture, 0);
 		ivec2 province_pixel = clamp(
 			ivec2(floor(UV * vec2(province_size))),
 			ivec2(0), province_size - ivec2(1)
 		);
-		vec4 province = texelFetch(province_texture, province_pixel, 0);
+		vec4 encoded_province = texelFetch(
+			province_id_texture, province_pixel, 0
+		);
+		int province_code = int(floor(encoded_province.r * 255.0 + 0.5))
+			| (int(floor(encoded_province.g * 255.0 + 0.5)) << 8);
+		int province_id = province_code - 1;
+		ivec2 lut_size = textureSize(province_visual_lut, 0);
+		vec4 province = vec4(0.0);
+		if (province_id >= 0 && province_id < lut_size.x) {
+			province = texelFetch(
+				province_visual_lut, ivec2(province_id, 0), 0
+			);
+			vec4 occupation = texelFetch(
+				province_visual_lut, ivec2(province_id, 1), 0
+			);
+			if (encoded_province.b > 0.5 && occupation.a > 0.5) {
+				province = occupation;
+			}
+		}
 		// Geometry is the sole geography truth: strictly below the 0m contour is
 		// unowned ocean; the 0m contour and everything above it are land.
 		float province_alpha = step(0.5, province.a) * hard_land;
-		float sea_depth = clamp(
-			(ocean_height_threshold - terrain_elevation)
-			/ max(ocean_height_threshold - sea_floor_height, 0.001),
-			0.0, 1.0
+		float country_fill_opacity = mix(
+			1.0, coast_country.a, country_fill_fade_enabled
 		);
-		float deep_sea_mix = smoothstep(0.06, 0.375, sea_depth);
-		vec3 sea_political_color = mix(
-			shallow_sea_color, deep_sea_color, deep_sea_mix
+		vec3 faded_country_color = mix(
+			white_low_poly_base, province.rgb, country_fill_opacity
 		);
-		vec3 white_low_poly_base = political_land_base_color;
 		vec3 political_land = mix(
-			unclaimed_political_color, province.rgb, province_alpha
+			white_low_poly_base, faded_country_color, province_alpha
 		);
 		vec3 political_target = mix(
-			sea_political_color, political_land, hard_land
+			sea_color, political_land, hard_land
 		);
 		final_color = mix(
 			white_low_poly_base, political_target, province_strength

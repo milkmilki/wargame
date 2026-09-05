@@ -201,8 +201,22 @@ func _run() -> void:
 		or loaded_nation_record.has("last_rebellion_day")
 		or loaded_nation_record.has("last_trade_route_count")
 	):
-		_fail("map v3 must omit campaign rebellion and trade-route state")
+		_fail("map template must omit campaign rebellion and trade-route state")
 		return
+	var v3_definition := loaded_data.duplicate(true)
+	v3_definition["version"] = 3
+	v3_definition.erase("political_mask_path")
+	for record_value in v3_definition["cities"] as Array:
+		(record_value as Dictionary).erase("politically_active")
+	if not MapDefinition.validate(v3_definition).is_empty():
+		_fail("legacy v3 maps must remain valid")
+		return
+	var restored_v3 := GameState.new()
+	restored_v3.generate_from_map_definition(v3_definition, 24680)
+	for legacy_city in restored_v3.cities:
+		if not legacy_city.politically_active:
+			_fail("legacy v3 cities must default to politically active")
+			return
 	var v1_definition := loaded_data.duplicate(true)
 	v1_definition["version"] = 1
 	if MapDefinition.validate(v1_definition).is_empty():
@@ -219,7 +233,7 @@ func _run() -> void:
 	)
 	obsolete_city["region_symbol"] = obsolete_city["short_name"]
 	if MapDefinition.validate(obsolete_region_field).is_empty():
-		_fail("v3 maps must reject the deleted region_symbol field")
+		_fail("maps must reject the deleted region_symbol field")
 		return
 	var invalid_version := (loaded["data"] as Dictionary).duplicate(true)
 	invalid_version["version"] = MapDefinition.VERSION + 1
@@ -229,7 +243,7 @@ func _run() -> void:
 	var invalid_v3_no_land := loaded_data.duplicate(true)
 	_remove_nation_land(invalid_v3_no_land, 1, 0)
 	if MapDefinition.validate(invalid_v3_no_land).is_empty():
-		_fail("v3 maps must reject nations without a land city")
+		_fail("maps must reject nations without a land city")
 		return
 	var invalid_nation_name := loaded_data.duplicate(true)
 	(invalid_nation_name["nations"] as Array)[0]["name"] = "双字"

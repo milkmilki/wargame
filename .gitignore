@@ -2,7 +2,7 @@
 .godot/
 /android/
 *.import
-!assets/terrain/china_natural_earth2_2048.png.import
+!assets/terrain/china_elevation_white_2048.png.import
 
 # Headless test Godot HOME (created by test runs via HOME override)
 .tmp-godot-home/

@@ -20,7 +20,7 @@ SOURCE_URL = (
 CACHE = REPO_ROOT / "assets/terrain/source/natural_earth_admin"
 OUTPUT = REPO_ROOT / "assets/terrain/default_china_city_mask.png"
 METADATA = REPO_ROOT / "assets/terrain/default_china_city_mask.json"
-MAP_SOURCE_METADATA = REPO_ROOT / "assets/terrain/china_natural_earth2_2048.json"
+MAP_SOURCE_METADATA = REPO_ROOT / "assets/terrain/map_source.json"
 RESOLUTION = 2048
 
 
@@ -36,10 +36,7 @@ def ensure_source() -> Path:
 def main() -> None:
     metadata = json.loads(MAP_SOURCE_METADATA.read_text(encoding="utf-8"))
     bbox = metadata["bbox_wgs84"]
-    west, south, east, north = (
-        float(bbox["west"]), float(bbox["south"]),
-        float(bbox["east"]), float(bbox["north"]),
-    )
+    west, south, east, north = map(float, bbox)
     geojson_path = ensure_source()
     shapes = []
     geojson = json.loads(geojson_path.read_text(encoding="utf-8"))

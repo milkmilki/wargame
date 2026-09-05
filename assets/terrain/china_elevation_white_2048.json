@@ -1,11 +1,5 @@
 {
-  "source": {
-    "dataset": "NASA Blue Marble Next Generation",
-    "date": "2004-10",
-    "download_url": "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/74167/world.200410.3x5400x2700.jpg",
-    "source_page": "https://visibleearth.nasa.gov/collection/1484/blue-marble",
-    "credit": "NASA Earth Observatory"
-  },
+  "surface": "solid white RGB terrain base",
   "elevation_source": {
     "dataset": "AWS Open Terrain Tiles (Terrarium)",
     "url_template": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{zoom}/{x}/{y}.png",
@@ -423,24 +417,13 @@
       "7/112/57"
     ]
   },
-  "source_file": "world.200410.3x5400x2700.jpg",
-  "source_raster_size": [
-    5400,
-    2700
-  ],
-  "source_crop_px": [
-    3795,
-    540,
-    4732,
-    1080
-  ],
   "bbox_wgs84": {
     "west": 73.0,
     "south": 18.0,
     "east": 135.5,
     "north": 54.0
   },
-  "output": "assets/terrain/china_natural_earth2_2048.png",
+  "output": "assets/terrain/china_elevation_white_2048.png",
   "output_size": [
     2048,
     2048
@@ -448,14 +431,11 @@
   "processing": {
     "full_rectangle": true,
     "playable_mask_applied": false,
-    "packed_texture": "RGB=satellite, A=elevation",
+    "packed_texture": "RGB=solid white, A=elevation",
     "elevation_alpha": "1..128=low_clip_m..0m sea, 129..255=positive land..high_clip_m",
     "low_clip_m": -8000.0,
     "high_clip_m": 6200.0,
-    "saturation": 0.86,
-    "contrast": 1.04,
-    "brightness": 0.92,
-    "resampling": "Lanczos"
+    "rgb_fill": 255
   },
   "elevation_stats_m": {
     "min": -7425.0,

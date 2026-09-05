@@ -120,6 +120,8 @@ const ENFEOFF_MIN_OVERLORD_CITIES_AFTER: int = 6    ## 分封后宗主至少保�
 const ENFEOFF_DECISION_COOLDOWN_DAYS: int = 360     ## 同一宗主两次分封的最短间隔
 const ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD: float = 3.5
 const ENFEOFF_GOVERNANCE_SCORE_WEIGHT: float = 0.75
+const PUPPET_ENFEOFF_COOLDOWN_DAYS: int = 180
+const PUPPET_DIRECT_CORE_CITIES: int = 3
 
 ## 削藩（藩王系统增量 C）调参。财政收益是主决策；高政治威胁是次级例外。
 const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内不再对同一藩王削藩
@@ -2583,8 +2585,6 @@ static func _trade_report(
 		state.trade_revision > 0
 		or not state.trade_routes.is_empty()
 		or nation.last_trade_gold != 0
-		or nation.last_trade_food_import != 0
-		or nation.last_trade_food_export != 0
 		or nation.last_trade_route_count != 0
 	)
 	var result := {
@@ -2600,11 +2600,9 @@ static func _trade_report(
 		"from_snapshot": snapshot_available,
 	}
 	if snapshot_available:
-		# last_trade_gold 的统一口径是净金：路线税 + 售粮收入 - 购粮支出。
+		# 月度贸易只产生路线金；粮食和人力不在贸易阶段自动转换。
 		result["monthly_trade_gold"] = nation.last_trade_gold
 		result["monthly_trade_income"] = nation.last_trade_gold
-		result["monthly_food_import"] = nation.last_trade_food_import
-		result["monthly_food_export"] = nation.last_trade_food_export
 		result["trade_route_count"] = nation.last_trade_route_count
 		result["blocked_trade_route_count"] = _cached_trade_route_count(
 			state.trade_routes, state.nations.size(), nation_id, true,
@@ -2622,26 +2620,12 @@ static func _trade_report(
 		var trade_income := _trade_nation_value(
 			trade_network, "nation_trade_gold", nation_id
 		)
-		var food_cost := _trade_nation_value(
-			trade_network, "nation_food_cost", nation_id
-		)
-		var food_sale_income := _trade_nation_value(
-			trade_network, "nation_food_sale_income", nation_id
-		)
 		var trade_tax_income := _trade_nation_value(
 			trade_network, "nation_trade_tax", nation_id
 		)
-		result["monthly_trade_gold"] = trade_income - food_cost
+		result["monthly_trade_gold"] = trade_income
 		result["monthly_trade_tax_income"] = trade_tax_income
-		result["monthly_food_trade_income"] = food_sale_income
 		result["monthly_trade_income"] = trade_income
-		result["monthly_trade_food_cost"] = food_cost
-		result["monthly_food_import"] = _trade_nation_value(
-			trade_network, "nation_food_import", nation_id
-		)
-		result["monthly_food_export"] = _trade_nation_value(
-			trade_network, "nation_food_export", nation_id
-		)
 		var routes: Array = trade_network.get("routes", [])
 		result["trade_route_count"] = _cached_trade_route_count(
 			routes, state.nations.size(), nation_id, false,
@@ -4801,6 +4785,8 @@ static func _build_nation_aggregates(
 	for nation in state.nations:
 		cities_by_nation[nation.id] = [] as Array[City]
 	for city in state.cities:
+		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
+			continue
 		(cities_by_nation[city.owner_nation] as Array[City]).append(
 			city
 		)
@@ -5516,7 +5502,9 @@ static func evaluate_region_governance_pressure(
 static func _grow_enfeoff_region(
 	state: GameState,
 	nation_id: int,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	max_region_cities: int = ENFEOFF_MAX_REGION_CITIES,
+	require_foreign_frontier: bool = true
 ) -> Array[int]:
 	var nation := state.nations[nation_id]
 	var capital := nation.capital_city_id
@@ -5529,8 +5517,8 @@ static func _grow_enfeoff_region(
 	)
 	# 「远」相对本国疆域半径：取本国最大跳数的一定比例为外围门槛。
 	var max_hop := 0
-	for h_value in hops.values():
-		max_hop = maxi(max_hop, int(h_value))
+	for city in state.land_cities_of(nation_id):
+		max_hop = maxi(max_hop, int(hops.get(city.id, -1)))
 	var min_hops := maxi(1, int(ceil(float(max_hop) * ENFEOFF_FAR_HOP_FRACTION)))
 	# 种子：本国非首都陆城中，距首都跳数最大且接敌（边疆）的城。
 	var seed := -1
@@ -5541,7 +5529,10 @@ static func _grow_enfeoff_region(
 		var h := int(hops.get(city.id, -1))
 		if h < min_hops:
 			continue
-		if not _city_is_frontier(state, nation_id, city.id):
+		if (
+			require_foreign_frontier
+			and not _city_is_frontier(state, nation_id, city.id)
+		):
 			continue
 		if h > seed_hops or (
 			h == seed_hops
@@ -5558,7 +5549,7 @@ static func _grow_enfeoff_region(
 	var frontier_queue: Array[int] = [seed]
 	while (
 		not frontier_queue.is_empty()
-		and region.size() < ENFEOFF_MAX_REGION_CITIES
+		and region.size() < max_region_cities
 	):
 		# 在当前边界里选跳数最大的城扩张（确定性打破平局），偏向外围。
 		var best_idx := 0
@@ -5578,7 +5569,7 @@ static func _grow_enfeoff_region(
 		var sorted_neighbors: Array[int] = neighbor_ids.duplicate()
 		sorted_neighbors.sort()
 		for neighbor in sorted_neighbors:
-			if region.size() >= ENFEOFF_MAX_REGION_CITIES:
+			if region.size() >= max_region_cities:
 				break
 			if in_region.has(neighbor):
 				continue
@@ -5650,26 +5641,45 @@ static func _collect_enfeoff_actions(
 		if not nation.alive:
 			continue
 		var overlord_id := nation.id
+		var puppet_rule := nation.ruler_archetype == RulerProfile.PUPPET
 		# 藩王不得再分封（第一版不做多级自动分封）；已在本 tick 有动作的国家跳过。
 		if state.is_vassal(overlord_id) or committed.has(overlord_id):
 			continue
 		# 冷却：距上次分封任一藩王不足冷却期则跳过。
+		var enfeoff_cooldown := (
+			PUPPET_ENFEOFF_COOLDOWN_DAYS
+			if puppet_rule else ENFEOFF_DECISION_COOLDOWN_DAYS
+		)
 		if _recent_enfeoff_day(state, overlord_id) >= 0 and (
 			state.day - _recent_enfeoff_day(state, overlord_id)
-				< ENFEOFF_DECISION_COOLDOWN_DAYS
+				< enfeoff_cooldown
 		):
 			continue
 		# 只有和平时期才分封：战时把前线连同弱藩王一起甩出去反而会导致边疆崩溃，
 		# 且与削藩「宗主须和平」对称——分封与削藩都是和平期的政治重组，逻辑自洽。
 		if _overlord_under_war_pressure(state, overlord_id, evaluation_cache):
 			continue
-		var region := _grow_enfeoff_region(state, overlord_id, evaluation_cache)
-		if region.size() < ENFEOFF_MIN_REGION_CITIES:
+		var owned_city_count := state.land_cities_of(overlord_id).size()
+		var minimum_core := (
+			PUPPET_DIRECT_CORE_CITIES
+			if puppet_rule else ENFEOFF_MIN_OVERLORD_CITIES_AFTER
+		)
+		var max_grant := owned_city_count - minimum_core
+		if max_grant <= 0:
+			continue
+		var region := _grow_enfeoff_region(
+			state,
+			overlord_id,
+			evaluation_cache,
+			mini(ENFEOFF_MAX_REGION_CITIES, max_grant),
+			not puppet_rule
+		)
+		var minimum_region := 1 if puppet_rule else ENFEOFF_MIN_REGION_CITIES
+		if region.size() < minimum_region or region.size() > max_grant:
 			continue
 		# 分封后宗主必须保留足够核心领土。
 		if (
-			state.land_cities_of(overlord_id).size() - region.size()
-				< ENFEOFF_MIN_OVERLORD_CITIES_AFTER
+			owned_city_count - region.size() < minimum_core
 		):
 			continue
 		var hops := _capital_hops_cached(
@@ -5706,9 +5716,15 @@ static func _collect_enfeoff_actions(
 			not food_burden_justifies
 			and fiscal_benefit <= 0
 			and not governance_justifies
+			and not puppet_rule
 		):
 			continue
 		var motive_parts: Array[String] = []
+		if puppet_rule:
+			motive_parts.append(
+				"傀儡君主主动缩减直辖，目标保留首都核心%d城"
+				% PUPPET_DIRECT_CORE_CITIES
+			)
 		if governance_justifies:
 			motive_parts.append(
 				"治理压力%d城超行政半径（半径%.1f，压力%.2f）"
@@ -5895,6 +5911,9 @@ static func _collect_centralization_actions(
 			continue
 		var overlord_id := nation.id
 		if state.is_vassal(overlord_id) or committed.has(overlord_id):
+			continue
+		# 傀儡君主的核心效果是持续分封；任内不会反向削藩。
+		if nation.ruler_archetype == RulerProfile.PUPPET:
 			continue
 		# 削藩须和平：与分封同样要求中央无实战压力（攘外必先安内的对称）。
 		if _overlord_under_war_pressure(state, overlord_id, evaluation_cache):

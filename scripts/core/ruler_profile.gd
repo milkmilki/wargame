@@ -16,6 +16,7 @@ enum Archetype {
 	REFORMER,
 	DIPLOMAT,
 	BUILDER,
+	PUPPET,
 }
 
 ## 本地定义贸易政策值，避免依赖尚未落地的外部枚举。
@@ -40,6 +41,7 @@ const MERCHANT: int = Archetype.MERCHANT
 const REFORMER: int = Archetype.REFORMER
 const DIPLOMAT: int = Archetype.DIPLOMAT
 const BUILDER: int = Archetype.BUILDER
+const PUPPET: int = Archetype.PUPPET
 
 const POLICY_BALANCED: int = TradePolicy.BALANCED
 const POLICY_GOLD: int = TradePolicy.GOLD
@@ -69,6 +71,7 @@ const ARCHETYPE_IDS: Array[int] = [
 	Archetype.REFORMER,
 	Archetype.DIPLOMAT,
 	Archetype.BUILDER,
+	Archetype.PUPPET,
 ]
 
 const TRAIT_IDS: Array[String] = [
@@ -96,6 +99,7 @@ const ARCHETYPE_NAMES: Dictionary = {
 	Archetype.REFORMER: "改革者",
 	Archetype.DIPLOMAT: "纵横家",
 	Archetype.BUILDER: "营造者",
+	Archetype.PUPPET: "傀儡君主",
 }
 
 const ARCHETYPE_DESCRIPTIONS: Dictionary = {
@@ -108,6 +112,7 @@ const ARCHETYPE_DESCRIPTIONS: Dictionary = {
 	Archetype.REFORMER: "整饬制度、提升生产和征募效率，并倾向收拢中央权力。",
 	Archetype.DIPLOMAT: "长于议和、结盟与贸易，不会主动发动攻势，但正面作战稍弱。",
 	Archetype.BUILDER: "经营粮产、工事和长期储备，扩张欲较低而国土防御出色。",
+	Archetype.PUPPET: "畏惧直辖重负，会不断把边疆分封给藩王，只保留首都附近的核心领土。",
 }
 
 const TRAIT_NAMES: Dictionary = {
@@ -168,6 +173,9 @@ const KEY_LOYALTY: String = "loyalty_multiplier"
 const HASH_MODULUS: int = 2147483647
 const HASH_MULTIPLIER: int = 48271
 const HASH_INITIAL: int = 216613626
+const DAYS_PER_YEAR: int = 360
+const MIN_REIGN_YEARS: int = 10
+const MAX_REIGN_YEARS: int = 30
 
 const RULER_SURNAMES: Array[String] = [
 	"赵", "钱", "孙", "李", "周", "吴", "郑", "王",
@@ -199,6 +207,65 @@ static func initialize_nation(
 	nation.ruler_name = ruler_name_for(world_seed, nation_id, salt)
 	nation.ruler_started_day = 0
 	nation.trade_policy = trade_policy_for(archetype, assigned_traits)
+
+
+## 每任君主寿命只由世界种子、国家和君主版本决定，范围含首尾 10..30 年。
+static func reign_years(
+	world_seed: int,
+	nation_id: int,
+	ruler_revision: int
+) -> int:
+	return MIN_REIGN_YEARS + stable_index(
+		world_seed,
+		nation_id,
+		"ruler/reign_years",
+		MAX_REIGN_YEARS - MIN_REIGN_YEARS + 1,
+		ruler_revision
+	)
+
+
+static func succession_due_day(nation, world_seed: int) -> int:
+	if nation == null:
+		return 0
+	return int(nation.ruler_started_day) + reign_years(
+		world_seed,
+		int(nation.id),
+		int(nation.ruler_revision)
+	) * DAYS_PER_YEAR
+
+
+## 更换整套君主身份。重抽会避开与上一任完全相同的姓名或性格组合，
+## 但仍保持跨平台、跨存档重放确定性。
+static func appoint_successor(nation, world_seed: int, started_day: int) -> void:
+	if nation == null:
+		return
+	var previous_name := str(nation.ruler_name)
+	var previous_archetype := int(nation.ruler_archetype)
+	var previous_traits: Array[String] = nation.ruler_traits.duplicate()
+	var next_revision := maxi(int(nation.ruler_revision) + 1, 1)
+	var nation_id := int(nation.id)
+	var selected_archetype := previous_archetype
+	var selected_traits := previous_traits
+	var selected_name := previous_name
+	for attempt in range(32):
+		var salt := next_revision * 1009 + attempt
+		selected_archetype = archetype_for(world_seed, nation_id, salt)
+		selected_traits = traits_for(world_seed, nation_id, salt)
+		selected_name = ruler_name_for(world_seed, nation_id, salt)
+		if (
+			selected_name != previous_name
+			and (
+				selected_archetype != previous_archetype
+				or selected_traits != previous_traits
+			)
+		):
+			break
+	nation.ruler_archetype = selected_archetype
+	nation.ruler_traits = selected_traits
+	nation.ruler_name = selected_name
+	nation.ruler_started_day = started_day
+	nation.ruler_revision = next_revision
+	nation.trade_policy = trade_policy_for(nation)
 
 
 static func archetype_for(
@@ -337,6 +404,8 @@ static func trade_policy_for(
 			return TradePolicy.GOLD
 		Archetype.GUARDIAN, Archetype.BUILDER:
 			return TradePolicy.FOOD
+		Archetype.PUPPET:
+			return TradePolicy.ISOLATION
 		Archetype.TYRANT:
 			return TradePolicy.ISOLATION
 		_:
@@ -496,149 +565,161 @@ static func _base_modifiers(archetype: int) -> Dictionary:
 	match _normalized_archetype(archetype):
 		Archetype.CONQUEROR:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 1.35, KEY_PEACE: 0.78, KEY_ALLIANCE: 0.92,
-				KEY_GOLD_OUTPUT: 0.96, KEY_FOOD_OUTPUT: 0.96,
-				KEY_MANPOWER_OUTPUT: 1.12, KEY_UPKEEP: 1.08,
-				KEY_FOOD_CONSUMPTION: 1.10, KEY_MORALE: 1.14,
-				KEY_DEFENSE: 0.96, KEY_CITY_DEFENSE: 0.94,
-				KEY_ENFEOFF: 0.88, KEY_CENTRALIZE: 1.12, KEY_TRADE: 0.92,
+				KEY_AGGRESSION: 2.00, KEY_PEACE: 0.45, KEY_ALLIANCE: 0.80,
+				KEY_GOLD_OUTPUT: 0.90, KEY_FOOD_OUTPUT: 0.90,
+				KEY_MANPOWER_OUTPUT: 1.50, KEY_UPKEEP: 1.35,
+				KEY_FOOD_CONSUMPTION: 1.35, KEY_MORALE: 2.00,
+				KEY_DEFENSE: 2.00, KEY_CITY_DEFENSE: 0.80,
+				KEY_ENFEOFF: 0.55, KEY_CENTRALIZE: 1.50, KEY_TRADE: 0.75,
 			})
-			result[KEY_RESERVE_MONTHS] = -1
+			result[KEY_RESERVE_MONTHS] = -3
 		Archetype.GUARDIAN:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 0.72, KEY_PEACE: 1.22, KEY_ALLIANCE: 1.08,
-				KEY_GOLD_OUTPUT: 1.02, KEY_FOOD_OUTPUT: 1.08,
-				KEY_MANPOWER_OUTPUT: 0.96, KEY_UPKEEP: 0.96,
-				KEY_FOOD_CONSUMPTION: 0.95, KEY_MORALE: 1.05,
-				KEY_DEFENSE: 1.18, KEY_CITY_DEFENSE: 1.25,
-				KEY_ENFEOFF: 1.05, KEY_CENTRALIZE: 0.95, KEY_TRADE: 0.95,
+				KEY_AGGRESSION: 0.35, KEY_PEACE: 1.80, KEY_ALLIANCE: 1.20,
+				KEY_GOLD_OUTPUT: 1.15, KEY_FOOD_OUTPUT: 1.35,
+				KEY_MANPOWER_OUTPUT: 0.85, KEY_UPKEEP: 0.75,
+				KEY_FOOD_CONSUMPTION: 0.70, KEY_MORALE: 1.25,
+				KEY_DEFENSE: 1.60, KEY_CITY_DEFENSE: 2.00,
+				KEY_ENFEOFF: 1.20, KEY_CENTRALIZE: 0.80, KEY_TRADE: 2.00,
 			})
-			result[KEY_RESERVE_MONTHS] = 3
+			result[KEY_RESERVE_MONTHS] = 8
 			result[KEY_OFFENSIVE_ALLOWED] = false
 		Archetype.INEPT:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 0.70, KEY_PEACE: 1.08, KEY_ALLIANCE: 0.82,
-				KEY_GOLD_OUTPUT: 0.82, KEY_FOOD_OUTPUT: 0.84,
-				KEY_MANPOWER_OUTPUT: 0.80, KEY_UPKEEP: 1.20,
-				KEY_FOOD_CONSUMPTION: 1.15, KEY_MORALE: 0.82,
-				KEY_DEFENSE: 0.84, KEY_CITY_DEFENSE: 0.84,
-				KEY_ENFEOFF: 1.12, KEY_CENTRALIZE: 0.72, KEY_TRADE: 0.80,
+				KEY_AGGRESSION: 0.30, KEY_PEACE: 1.40, KEY_ALLIANCE: 0.50,
+				KEY_GOLD_OUTPUT: 0.50, KEY_FOOD_OUTPUT: 0.55,
+				KEY_MANPOWER_OUTPUT: 0.50, KEY_UPKEEP: 1.80,
+				KEY_FOOD_CONSUMPTION: 1.50, KEY_MORALE: 0.50,
+				KEY_DEFENSE: 0.50, KEY_CITY_DEFENSE: 0.55,
+				KEY_ENFEOFF: 1.80, KEY_CENTRALIZE: 0.30, KEY_TRADE: 0.50,
 			})
-			result[KEY_LOYALTY] = 0.80
-			result[KEY_RESERVE_MONTHS] = -2
+			result[KEY_LOYALTY] = 0.45
+			result[KEY_RESERVE_MONTHS] = -6
 			result[KEY_OFFENSIVE_ALLOWED] = false
 		Archetype.TYRANT:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 1.18, KEY_PEACE: 0.82, KEY_ALLIANCE: 0.72,
-				KEY_GOLD_OUTPUT: 1.12, KEY_FOOD_OUTPUT: 0.94,
-				KEY_MANPOWER_OUTPUT: 1.12, KEY_UPKEEP: 1.04,
-				KEY_FOOD_CONSUMPTION: 1.04, KEY_MORALE: 0.92,
-				KEY_DEFENSE: 1.00, KEY_CITY_DEFENSE: 1.06,
-				KEY_ENFEOFF: 0.62, KEY_CENTRALIZE: 1.42, KEY_TRADE: 0.88,
+				KEY_AGGRESSION: 1.80, KEY_PEACE: 0.45, KEY_ALLIANCE: 0.35,
+				KEY_GOLD_OUTPUT: 1.60, KEY_FOOD_OUTPUT: 0.75,
+				KEY_MANPOWER_OUTPUT: 1.70, KEY_UPKEEP: 1.25,
+				KEY_FOOD_CONSUMPTION: 1.20, KEY_MORALE: 0.80,
+				KEY_DEFENSE: 1.15, KEY_CITY_DEFENSE: 1.25,
+				KEY_ENFEOFF: 0.20, KEY_CENTRALIZE: 3.00, KEY_TRADE: 0.50,
 			})
-			result[KEY_LOYALTY] = 0.76
+			result[KEY_LOYALTY] = 0.35
 		Archetype.MERCHANT:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 0.82, KEY_PEACE: 1.16, KEY_ALLIANCE: 1.12,
-				KEY_GOLD_OUTPUT: 1.25, KEY_FOOD_OUTPUT: 1.04,
-				KEY_MANPOWER_OUTPUT: 0.90, KEY_UPKEEP: 0.90,
-				KEY_FOOD_CONSUMPTION: 0.98, KEY_MORALE: 0.95,
-				KEY_DEFENSE: 0.94, KEY_CITY_DEFENSE: 1.00,
-				KEY_ENFEOFF: 0.96, KEY_CENTRALIZE: 0.94, KEY_TRADE: 1.35,
+				KEY_AGGRESSION: 0.50, KEY_PEACE: 1.60, KEY_ALLIANCE: 1.40,
+				KEY_GOLD_OUTPUT: 1.60, KEY_FOOD_OUTPUT: 1.10,
+				KEY_MANPOWER_OUTPUT: 0.60, KEY_UPKEEP: 0.65,
+				KEY_FOOD_CONSUMPTION: 0.90, KEY_MORALE: 0.75,
+				KEY_DEFENSE: 0.70, KEY_CITY_DEFENSE: 0.90,
+				KEY_ENFEOFF: 1.10, KEY_CENTRALIZE: 0.70, KEY_TRADE: 2.50,
 			})
-			result[KEY_RESERVE_MONTHS] = 2
+			result[KEY_RESERVE_MONTHS] = 6
 		Archetype.REFORMER:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 0.96, KEY_PEACE: 1.05, KEY_ALLIANCE: 1.05,
-				KEY_GOLD_OUTPUT: 1.10, KEY_FOOD_OUTPUT: 1.10,
-				KEY_MANPOWER_OUTPUT: 1.15, KEY_UPKEEP: 0.95,
-				KEY_FOOD_CONSUMPTION: 0.95, KEY_MORALE: 1.05,
-				KEY_DEFENSE: 1.05, KEY_CITY_DEFENSE: 1.05,
-				KEY_ENFEOFF: 0.82, KEY_CENTRALIZE: 1.28, KEY_TRADE: 1.10,
+				KEY_AGGRESSION: 0.90, KEY_PEACE: 1.15, KEY_ALLIANCE: 1.15,
+				KEY_GOLD_OUTPUT: 1.40, KEY_FOOD_OUTPUT: 1.30,
+				KEY_MANPOWER_OUTPUT: 1.60, KEY_UPKEEP: 0.75,
+				KEY_FOOD_CONSUMPTION: 0.75, KEY_MORALE: 1.25,
+				KEY_DEFENSE: 1.25, KEY_CITY_DEFENSE: 1.25,
+				KEY_ENFEOFF: 0.45, KEY_CENTRALIZE: 2.00, KEY_TRADE: 1.40,
 			})
-			result[KEY_LOYALTY] = 1.10
-			result[KEY_RESERVE_MONTHS] = 1
+			result[KEY_LOYALTY] = 1.40
+			result[KEY_RESERVE_MONTHS] = 4
 		Archetype.DIPLOMAT:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 0.62, KEY_PEACE: 1.38, KEY_ALLIANCE: 1.42,
-				KEY_GOLD_OUTPUT: 1.02, KEY_FOOD_OUTPUT: 1.00,
-				KEY_MANPOWER_OUTPUT: 0.96, KEY_UPKEEP: 0.97,
-				KEY_FOOD_CONSUMPTION: 1.00, KEY_MORALE: 1.00,
-				KEY_DEFENSE: 0.95, KEY_CITY_DEFENSE: 0.95,
-				KEY_ENFEOFF: 1.10, KEY_CENTRALIZE: 0.85, KEY_TRADE: 1.18,
+				KEY_AGGRESSION: 0.20, KEY_PEACE: 2.50, KEY_ALLIANCE: 2.50,
+				KEY_GOLD_OUTPUT: 1.10, KEY_FOOD_OUTPUT: 1.00,
+				KEY_MANPOWER_OUTPUT: 0.75, KEY_UPKEEP: 0.85,
+				KEY_FOOD_CONSUMPTION: 0.95, KEY_MORALE: 0.85,
+				KEY_DEFENSE: 0.75, KEY_CITY_DEFENSE: 0.85,
+				KEY_ENFEOFF: 1.50, KEY_CENTRALIZE: 0.45, KEY_TRADE: 1.80,
 			})
-			result[KEY_RESERVE_MONTHS] = 1
+			result[KEY_RESERVE_MONTHS] = 5
 			result[KEY_OFFENSIVE_ALLOWED] = false
 		Archetype.BUILDER:
 			_set_multipliers(result, {
-				KEY_AGGRESSION: 0.80, KEY_PEACE: 1.15, KEY_ALLIANCE: 1.00,
-				KEY_GOLD_OUTPUT: 1.10, KEY_FOOD_OUTPUT: 1.18,
-				KEY_MANPOWER_OUTPUT: 1.05, KEY_UPKEEP: 0.94,
-				KEY_FOOD_CONSUMPTION: 0.95, KEY_MORALE: 1.00,
-				KEY_DEFENSE: 1.10, KEY_CITY_DEFENSE: 1.30,
-				KEY_ENFEOFF: 0.90, KEY_CENTRALIZE: 1.10, KEY_TRADE: 1.05,
+				KEY_AGGRESSION: 0.40, KEY_PEACE: 1.60, KEY_ALLIANCE: 1.05,
+				KEY_GOLD_OUTPUT: 1.25, KEY_FOOD_OUTPUT: 1.80,
+				KEY_MANPOWER_OUTPUT: 1.15, KEY_UPKEEP: 0.70,
+				KEY_FOOD_CONSUMPTION: 0.65, KEY_MORALE: 1.10,
+				KEY_DEFENSE: 1.50, KEY_CITY_DEFENSE: 2.25,
+				KEY_ENFEOFF: 0.70, KEY_CENTRALIZE: 1.30, KEY_TRADE: 1.20,
 			})
-			result[KEY_RESERVE_MONTHS] = 3
+			result[KEY_RESERVE_MONTHS] = 8
+		Archetype.PUPPET:
+			_set_multipliers(result, {
+				KEY_AGGRESSION: 0.25, KEY_PEACE: 1.80, KEY_ALLIANCE: 1.35,
+				KEY_GOLD_OUTPUT: 0.75, KEY_FOOD_OUTPUT: 0.80,
+				KEY_MANPOWER_OUTPUT: 0.70, KEY_UPKEEP: 1.15,
+				KEY_FOOD_CONSUMPTION: 1.10, KEY_MORALE: 0.70,
+				KEY_DEFENSE: 0.70, KEY_CITY_DEFENSE: 0.85,
+				KEY_ENFEOFF: 5.00, KEY_CENTRALIZE: 0.05, KEY_TRADE: 0.75,
+			})
+			result[KEY_LOYALTY] = 0.65
+			result[KEY_RESERVE_MONTHS] = -3
+			result[KEY_OFFENSIVE_ALLOWED] = false
 	return result
 
 
 static func _apply_trait(result: Dictionary, trait_id: String) -> void:
 	match trait_id:
 		TRAIT_AMBITIOUS:
-			_multiply(result, KEY_AGGRESSION, 1.12)
-			_multiply(result, KEY_PEACE, 0.94)
-			_multiply(result, KEY_CENTRALIZE, 1.08)
+			_multiply(result, KEY_AGGRESSION, 1.50)
+			_multiply(result, KEY_PEACE, 0.75)
+			_multiply(result, KEY_CENTRALIZE, 1.35)
 		TRAIT_CAUTIOUS:
-			_multiply(result, KEY_AGGRESSION, 0.90)
-			_multiply(result, KEY_PEACE, 1.08)
-			_multiply(result, KEY_DEFENSE, 1.06)
-			_multiply(result, KEY_CITY_DEFENSE, 1.04)
-			_add_reserve_months(result, 1)
+			_multiply(result, KEY_AGGRESSION, 0.65)
+			_multiply(result, KEY_PEACE, 1.35)
+			_multiply(result, KEY_DEFENSE, 1.30)
+			_multiply(result, KEY_CITY_DEFENSE, 1.25)
+			_add_reserve_months(result, 3)
 		TRAIT_CHARISMATIC:
-			_multiply(result, KEY_ALLIANCE, 1.12)
-			_multiply(result, KEY_MORALE, 1.08)
-			_multiply(result, KEY_LOYALTY, 1.08)
+			_multiply(result, KEY_ALLIANCE, 1.50)
+			_multiply(result, KEY_MORALE, 1.35)
+			_multiply(result, KEY_LOYALTY, 1.35)
 		TRAIT_FRUGAL:
-			_multiply(result, KEY_GOLD_OUTPUT, 1.05)
-			_multiply(result, KEY_UPKEEP, 0.92)
-			_add_reserve_months(result, 1)
+			_multiply(result, KEY_GOLD_OUTPUT, 1.30)
+			_multiply(result, KEY_UPKEEP, 0.65)
+			_add_reserve_months(result, 4)
 		TRAIT_DILIGENT:
-			_multiply(result, KEY_GOLD_OUTPUT, 1.05)
-			_multiply(result, KEY_FOOD_OUTPUT, 1.05)
-			_multiply(result, KEY_MANPOWER_OUTPUT, 1.05)
-			_multiply(result, KEY_LOYALTY, 1.05)
+			_multiply(result, KEY_GOLD_OUTPUT, 1.25)
+			_multiply(result, KEY_FOOD_OUTPUT, 1.25)
+			_multiply(result, KEY_MANPOWER_OUTPUT, 1.25)
+			_multiply(result, KEY_LOYALTY, 1.20)
 		TRAIT_LOGISTICIAN:
-			_multiply(result, KEY_FOOD_OUTPUT, 1.04)
-			_multiply(result, KEY_FOOD_CONSUMPTION, 0.90)
-			_add_reserve_months(result, 2)
+			_multiply(result, KEY_FOOD_OUTPUT, 1.35)
+			_multiply(result, KEY_FOOD_CONSUMPTION, 0.60)
+			_add_reserve_months(result, 5)
 		TRAIT_MARTIAL:
-			_multiply(result, KEY_AGGRESSION, 1.08)
-			_multiply(result, KEY_MORALE, 1.10)
-			_multiply(result, KEY_DEFENSE, 1.04)
+			_multiply(result, KEY_AGGRESSION, 1.35)
+			_multiply(result, KEY_MORALE, 1.45)
+			_multiply(result, KEY_DEFENSE, 1.35)
 		TRAIT_FORTIFIER:
-			_multiply(result, KEY_AGGRESSION, 0.95)
-			_multiply(result, KEY_DEFENSE, 1.08)
-			_multiply(result, KEY_CITY_DEFENSE, 1.15)
-			_add_reserve_months(result, 1)
+			_multiply(result, KEY_AGGRESSION, 0.75)
+			_multiply(result, KEY_DEFENSE, 1.40)
+			_multiply(result, KEY_CITY_DEFENSE, 1.60)
+			_add_reserve_months(result, 3)
 		TRAIT_MERCANTILE:
-			_multiply(result, KEY_GOLD_OUTPUT, 1.08)
-			_multiply(result, KEY_TRADE, 1.16)
-			_multiply(result, KEY_ALLIANCE, 1.04)
+			_multiply(result, KEY_GOLD_OUTPUT, 1.35)
+			_multiply(result, KEY_TRADE, 1.60)
+			_multiply(result, KEY_ALLIANCE, 1.20)
 		TRAIT_CENTRALIZER:
-			_multiply(result, KEY_ENFEOFF, 0.80)
-			_multiply(result, KEY_CENTRALIZE, 1.25)
-			_multiply(result, KEY_MANPOWER_OUTPUT, 1.04)
+			_multiply(result, KEY_ENFEOFF, 0.45)
+			_multiply(result, KEY_CENTRALIZE, 1.80)
+			_multiply(result, KEY_MANPOWER_OUTPUT, 1.20)
 		TRAIT_FEUDALIST:
-			_multiply(result, KEY_ENFEOFF, 1.25)
-			_multiply(result, KEY_CENTRALIZE, 0.80)
-			_multiply(result, KEY_DEFENSE, 1.04)
+			_multiply(result, KEY_ENFEOFF, 1.80)
+			_multiply(result, KEY_CENTRALIZE, 0.45)
+			_multiply(result, KEY_DEFENSE, 1.20)
 		TRAIT_HARSH:
-			_multiply(result, KEY_PEACE, 0.92)
-			_multiply(result, KEY_ALLIANCE, 0.92)
-			_multiply(result, KEY_GOLD_OUTPUT, 1.03)
-			_multiply(result, KEY_MANPOWER_OUTPUT, 1.08)
-			_multiply(result, KEY_MORALE, 0.96)
-			_multiply(result, KEY_LOYALTY, 0.92)
+			_multiply(result, KEY_PEACE, 0.70)
+			_multiply(result, KEY_ALLIANCE, 0.70)
+			_multiply(result, KEY_GOLD_OUTPUT, 1.25)
+			_multiply(result, KEY_MANPOWER_OUTPUT, 1.40)
+			_multiply(result, KEY_MORALE, 0.80)
+			_multiply(result, KEY_LOYALTY, 0.65)
 
 
 static func _set_multipliers(result: Dictionary, values: Dictionary) -> void:

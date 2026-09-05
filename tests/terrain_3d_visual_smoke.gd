@@ -16,7 +16,11 @@ func _run() -> void:
 		height if height > 0 else 720
 	)
 	var state := GameState.new()
-	state.generate_world(12345)
+	state.generate_world(
+		12345, GameState.NATION_COUNT, GameState.TERRAIN_CITY_COUNT,
+		GameState.DEFAULT_CITY_MASK_PATH, {}, 0,
+		OS.get_environment("WW_VISUAL_POLITICAL_MASK")
+	)
 	_prepare_frontend_showcase(state)
 	var simulation := Simulation.new()
 	root.add_child(simulation)

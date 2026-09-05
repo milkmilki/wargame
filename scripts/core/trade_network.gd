@@ -51,22 +51,9 @@ const WARTIME_TRADE_GOLD_MULTIPLIER: float = 0.50
 
 ## 与现有模型匹配的本地常量。刻意不引用 Simulation，避免 core 层循环依赖。
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
-const BALANCED_FOOD_RESERVE_MONTHS: int = 6
-const GOLD_FOOD_RESERVE_MONTHS: int = 3
-const FOOD_POLICY_RESERVE_MONTHS: int = 12
-const ISOLATION_FOOD_RESERVE_MONTHS: int = 9
-const FOOD_UNITS_PER_GOLD: int = 25
 const TRADE_CAPACITY_UNIT: int = 10000
 const FOOD_CAPACITY_DIVISOR: int = 100
 const MAX_ROUTE_GOLD: int = 64
-## 简化版 EU4 贸易：固定的贸易节点城市（路线端点）派生「贸易竞争力」，
-## 竞争力先转成金钱（路线税）；国家再用当月贸易金「凭空」买粮、买人，
-## 不再与他国互相转移库存。以下是买入转换率。
-## 1 金 → FOOD_UNITS_PER_GOLD 粮；1 金 → MANPOWER_UNITS_PER_GOLD 人。
-const MANPOWER_UNITS_PER_GOLD: int = 50
-## 贸易金买人的目标储备月数：仅在人力库低于「约一年月产人力」时补充，
-## 让暴兵抽干人力后能靠贸易恢复到可满编攻势的水平，但不无限灌满。
-const MANPOWER_PURCHASE_RESERVE_MONTHS: int = 12
 
 const EDGE_KIND_LAND: int = 0
 const EDGE_KIND_LANDING: int = 1
@@ -464,12 +451,6 @@ static func settle(
 	var nation_food_sale_income := _zero_int_array(nation_count)
 	var nation_manpower_import := _zero_int_array(nation_count)
 	var nation_manpower_cost := _zero_int_array(nation_count)
-	_plan_trade_purchases(
-		state, policies,
-		nation_trade_gold, nation_food_import, nation_food_cost,
-		nation_manpower_import, nation_manpower_cost
-	)
-	_record_settle_profile(profile, "settle_purchases", stage_started)
 	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	var result := _finish_result(
 		routes, city_gold_bonus, nation_trade_gold, nation_trade_tax,
@@ -484,9 +465,9 @@ static func settle(
 	return result
 
 
-## AI/外交只读摘要结算。动态采购只依赖并写入国家级数组，不修改路线；
-## 因此这里直接共享结构层 routes，跳过数百条路线及其路径字典的深复制，也
-## 不计算只供月结发布/前端刷新使用的完整结果签名。调用方不得修改 routes。
+## AI/外交只读摘要结算。这里只重算战时路线金，资源贸易数组作为兼容字段
+## 固定为零；直接共享结构层 routes，跳过数百条路线及其路径字典的深复制。
+## 调用方不得修改 routes。
 static func settle_nation_summary(
 	state: GameState,
 	structure: Dictionary,
@@ -534,12 +515,6 @@ static func settle_nation_summary(
 	var nation_food_sale_income := _zero_int_array(nation_count)
 	var nation_manpower_import := _zero_int_array(nation_count)
 	var nation_manpower_cost := _zero_int_array(nation_count)
-	_plan_trade_purchases(
-		state, policies,
-		nation_trade_gold, nation_food_import, nation_food_cost,
-		nation_manpower_import, nation_manpower_cost
-	)
-	_record_settle_profile(profile, "summary_purchases", stage_started)
 	var result := {
 		"routes": structure.get("routes", []),
 		"nation_trade_gold": nation_trade_gold,
@@ -3986,159 +3961,6 @@ static func _allocate_route_tax(
 	return result
 
 
-static func _plan_trade_purchases(
-	state: GameState,
-	policies: Array[int],
-	nation_trade_gold: Array[int],
-	nation_food_import: Array[int],
-	nation_food_cost: Array[int],
-	nation_manpower_import: Array[int],
-	nation_manpower_cost: Array[int]
-) -> void:
-	# 简化版 EU4 贸易结算：路线税（贸易节点竞争力→金钱）已在 build_structure
-	# 阶段累计进 nation_trade_gold / nation_trade_tax。这里把「钱买粮、钱买人」
-	# 落到派生数组：每国用当月贸易金作预算，先补粮再补人，两者都凭空产生
-	# （import>0，无 export），不再从他国粮仓抽调库存。价格开关关闭时不买。
-	var nation_count := state.nations.size()
-	if nation_count <= 0 or not state.trade_price_enabled:
-		return
-	# 1) 按粮池持有者汇总可用库存与月需，得到共享粮仓的储备缺口。口径与
-	#    旧的守恒实现一致：藩属并入 holder，避免被误判为零库存。
-	var stock := _zero_int_array(nation_count)
-	var configured_warehouse_count := _zero_int_array(nation_count)
-	var accessible_warehouse_count := _zero_int_array(nation_count)
-	var monthly_manpower_income := _zero_int_array(nation_count)
-	for city in state.cities:
-		if city.owner_nation >= 0 and city.owner_nation < nation_count:
-			monthly_manpower_income[city.owner_nation] += maxi(
-				city.manpower_per_month, 0
-			)
-		if (
-			city.has_warehouse and city.owner_nation >= 0
-			and city.owner_nation < nation_count
-		):
-			configured_warehouse_count[city.owner_nation] += 1
-			stock[city.owner_nation] += maxi(city.food_storage, 0)
-			accessible_warehouse_count[city.owner_nation] += 1
-	var pool_holder := _zero_int_array(nation_count)
-	for nation in state.nations:
-		pool_holder[nation.id] = state.food_pool_holder(nation.id)
-	var pooled_stock := _zero_int_array(nation_count)
-	var pooled_configured := _zero_int_array(nation_count)
-	var pooled_accessible := _zero_int_array(nation_count)
-	for nation_id in range(nation_count):
-		var holder := pool_holder[nation_id]
-		if holder < 0 or holder >= nation_count:
-			holder = nation_id
-		pool_holder[nation_id] = holder
-		pooled_stock[holder] += stock[nation_id]
-		pooled_configured[holder] += configured_warehouse_count[nation_id]
-		pooled_accessible[holder] += accessible_warehouse_count[nation_id]
-	stock = pooled_stock
-	configured_warehouse_count = pooled_configured
-	accessible_warehouse_count = pooled_accessible
-	for nation in state.nations:
-		if (
-			configured_warehouse_count[nation.id] == 0
-			and pool_holder[nation.id] == nation.id
-		):
-			stock[nation.id] = maxi(nation.granary_food, 0)
-			accessible_warehouse_count[nation.id] = 1
-
-	var projected_minimum_demand := _zero_int_array(nation_count)
-	var food_consumption_multiplier := PackedFloat64Array()
-	var food_reserve_months_bonus := PackedInt32Array()
-	food_consumption_multiplier.resize(nation_count)
-	food_reserve_months_bonus.resize(nation_count)
-	for nation in state.nations:
-		var modifiers := RulerProfile.modifiers(nation)
-		food_consumption_multiplier[nation.id] = maxf(
-			float(modifiers[RulerProfile.KEY_FOOD_CONSUMPTION]), 0.1
-		)
-		food_reserve_months_bonus[nation.id] = int(
-			modifiers[RulerProfile.KEY_RESERVE_MONTHS]
-		)
-	for army in state.armies:
-		if (
-			army.size > 0 and army.owner_nation >= 0
-			and army.owner_nation < nation_count
-		):
-			projected_minimum_demand[army.owner_nation] += (
-				_projected_army_monthly_food_demand(
-					army,
-					state.nations[army.owner_nation],
-					food_consumption_multiplier[army.owner_nation]
-				)
-			)
-	var demand := _zero_int_array(nation_count)
-	for nation in state.nations:
-		demand[nation.id] = _nation_monthly_food_demand(
-			nation, projected_minimum_demand[nation.id]
-		)
-		if nation.alive and demand[nation.id] <= 0:
-			demand[nation.id] = 1
-	var pool_reserve := _zero_int_array(nation_count)
-	for nation in state.nations:
-		var holder := pool_holder[nation.id]
-		pool_reserve[holder] += (
-			demand[nation.id]
-			* _food_reserve_months(
-				policies[nation.id], nation,
-				food_reserve_months_bonus[nation.id]
-			)
-		)
-	# 共享粮仓的剩余采购缺口：由粮池成员按 id 序依次用各自贸易金填补。
-	var pool_food_deficit := _zero_int_array(nation_count)
-	for holder in range(nation_count):
-		if accessible_warehouse_count[holder] <= 0:
-			continue
-		pool_food_deficit[holder] = maxi(pool_reserve[holder] - stock[holder], 0)
-
-	# 2) 逐国采购：预算 = 当月贸易金（路线税）。先买粮补共享缺口，再买人补
-	#    本国人力储备缺口。资源凭空产生，只从国库扣钱，不动他国库存。
-	for nation in state.nations:
-		var nation_id := nation.id
-		if not nation.alive:
-			continue
-		var budget := maxi(nation_trade_gold[nation_id], 0)
-		if budget <= 0:
-			continue
-		var holder := pool_holder[nation_id]
-		var food_deficit := pool_food_deficit[holder]
-		if food_deficit > 0:
-			var food_gold := mini(
-				budget,
-				(food_deficit + FOOD_UNITS_PER_GOLD - 1) / FOOD_UNITS_PER_GOLD
-			)
-			var food_bought := mini(
-				food_deficit, food_gold * FOOD_UNITS_PER_GOLD
-			)
-			if food_bought > 0:
-				nation_food_import[nation_id] += food_bought
-				nation_food_cost[nation_id] += food_gold
-				pool_food_deficit[holder] = maxi(food_deficit - food_bought, 0)
-				budget -= food_gold
-		if budget <= 0:
-			continue
-		var manpower_target := (
-			monthly_manpower_income[nation_id]
-			* MANPOWER_PURCHASE_RESERVE_MONTHS
-		)
-		var manpower_deficit := maxi(
-			manpower_target - maxi(nation.manpower_pool, 0), 0
-		)
-		if manpower_deficit > 0:
-			var manpower_gold := mini(
-				budget,
-				(manpower_deficit + MANPOWER_UNITS_PER_GOLD - 1)
-					/ MANPOWER_UNITS_PER_GOLD
-			)
-			var manpower_bought := mini(
-				manpower_deficit, manpower_gold * MANPOWER_UNITS_PER_GOLD
-			)
-			if manpower_bought > 0:
-				nation_manpower_import[nation_id] += manpower_bought
-				nation_manpower_cost[nation_id] += manpower_gold
 ## ceil(max(ceil(size * FOOD_PER_CAPITA), 1) * route_mult * ruler_mult).
 ## TradeNetwork has no supply-cache dependency, so its cold-start route_mult is
 ## exactly 1.0. Once daily settlement exists, last/EMA demand (used above) is
@@ -4201,27 +4023,6 @@ static func projected_nation_monthly_food_demand(
 static func _ruler_food_consumption_multiplier(nation: Nation) -> float:
 	# Keep the clamp identical to Simulation._ruler_food_consumption_multiplier.
 	return maxf(RulerProfile.food_consumption_multiplier(nation), 0.1)
-
-
-static func _food_reserve_months(
-	policy: int,
-	nation: Nation,
-	cached_bonus: int = -2_147_483_648
-) -> int:
-	var base := BALANCED_FOOD_RESERVE_MONTHS
-	match policy:
-		Policy.GOLD:
-			base = GOLD_FOOD_RESERVE_MONTHS
-		Policy.FOOD:
-			base = FOOD_POLICY_RESERVE_MONTHS
-		Policy.ISOLATION:
-			base = ISOLATION_FOOD_RESERVE_MONTHS
-	var bonus := (
-		cached_bonus
-		if cached_bonus != -2_147_483_648
-		else RulerProfile.reserve_months_bonus(nation)
-	)
-	return maxi(base + bonus, 0)
 
 
 static func _result_signature(

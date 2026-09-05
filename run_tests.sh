@@ -158,6 +158,18 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-politics-trade.log"
 echo
 
+echo "==> [22a/29] 年度人钱粮自动平衡门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/automatic_resource_balance.gd \
+  --log-file "$LOG_DIR/world-war-automatic-resource-balance.log"
+echo
+
+echo "==> [22b/29] 君主继位与夸张特质门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/ruler_succession_extremes.gd \
+  --log-file "$LOG_DIR/world-war-ruler-succession-extremes.log"
+echo
+
 echo "==> [23/29] 高程图打包与海岸无插值门禁"
 python3 "$PROJECT_DIR/tests/low_poly_map_source_tool.py" 2>&1 \
   | tee "$LOG_DIR/world-war-low-poly-map-source.log"
@@ -167,6 +179,24 @@ echo "==> [24/29] 地图编辑器运行时与 MapDefinition 往返 smoke"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/map_editor_runtime.gd \
   --log-file "$LOG_DIR/world-war-map-editor-runtime.log"
+echo
+
+echo "==> [24a/29] 省份陆地连通性门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/province_land_connectivity.gd \
+  --log-file "$LOG_DIR/world-war-province-land-connectivity.log"
+echo
+
+echo "==> [24b/29] 独立政治蒙版与 30 天推演门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/political_generation_mask.gd \
+  --log-file "$LOG_DIR/world-war-political-generation-mask.log"
+echo
+
+echo "==> [24c/29] Province ID 与政治视觉 LUT 像素等价门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/province_visual_lookup_test.gd \
+  --log-file "$LOG_DIR/world-war-province-visual-lookup.log"
 echo
 
 echo "==> [25/29] 3D 低模平滑着色与双灯光门禁"

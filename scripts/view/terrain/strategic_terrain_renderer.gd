@@ -19,7 +19,6 @@ const SHALLOW_SEA_HEIGHT: float = -0.06
 const SEA_FLOOR_HEIGHT: float = -2.20
 ## Compatibility name for callers that position legacy water artifacts.
 const WATER_SURFACE_HEIGHT: float = OCEAN_HEIGHT_THRESHOLD
-const UNCLAIMED_POLITICAL_COLOR := Color(0.035, 0.090, 0.190)
 const SHALLOW_SEA_COLOR := Color(0.090, 0.310, 0.470)
 const DEEP_SEA_COLOR := Color(0.025, 0.060, 0.130)
 const TERRAIN_VISUAL_LAYER: int = 2
@@ -53,9 +52,13 @@ func configure(
 	_ensure_render_nodes()
 
 
-func set_province_texture(texture: Texture2D) -> void:
+func set_province_lookup_textures(
+	province_id_texture: Texture2D,
+	province_visual_lut: Texture2D
+) -> void:
 	_ensure_render_nodes()
-	_material.set_shader_parameter("province_texture", texture)
+	_material.set_shader_parameter("province_id_texture", province_id_texture)
+	_material.set_shader_parameter("province_visual_lut", province_visual_lut)
 
 
 func set_boundary_textures(
@@ -101,24 +104,11 @@ func set_province_strength(strength: float) -> void:
 	)
 
 
-func set_height_texture(
-	texture: Texture2D,
-	source_region: Rect2
-) -> void:
+func set_country_fill_fade_enabled(enabled: bool) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
-		"height_source_origin",
-		source_region.position
+		"country_fill_fade_enabled", 1.0 if enabled else 0.0
 	)
-	_material.set_shader_parameter(
-		"height_source_size",
-		source_region.size
-	)
-
-
-func set_surface_texture(texture: Texture2D) -> void:
-	_ensure_render_nodes()
-	_material.set_shader_parameter("surface_texture", texture)
 
 
 func generate_from_height_texture(
@@ -128,7 +118,6 @@ func generate_from_height_texture(
 	luma_threshold: float
 ) -> void:
 	_reset()
-	set_height_texture(texture, source_region)
 	if texture == null:
 		generation_finished.emit()
 		return
@@ -282,10 +271,6 @@ func _ensure_render_nodes() -> void:
 	if _material == null:
 		_material = ShaderMaterial.new()
 		_material.shader = TERRAIN_SHADER
-		_material.set_shader_parameter(
-			"unclaimed_political_color",
-			UNCLAIMED_POLITICAL_COLOR
-		)
 		_material.set_shader_parameter(
 			"political_land_base_color",
 			MapRenderer.POLITICAL_LAND_BASE_COLOR

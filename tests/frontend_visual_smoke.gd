@@ -487,11 +487,11 @@ func _run() -> void:
 	var boundary_country_width: bool = is_equal_approx(
 		MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 3.0
 	)
-	var boundary_value_scale: bool = is_equal_approx(
-		MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE, 1.08
+	var boundary_value_offset: bool = is_equal_approx(
+		MapRenderer.COUNTRY_BOUNDARY_VALUE_OFFSET, -0.15
 	)
-	var boundary_saturation_scale: bool = is_equal_approx(
-		MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE, 1.35
+	var boundary_saturation_offset: bool = is_equal_approx(
+		MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET, 0.10
 	)
 	overlay.select_nation(0)
 	map_3d._process(0.0)
@@ -622,9 +622,9 @@ func _run() -> void:
 	)
 	var boundary_texture_size: bool = (
 		map_3d._country_boundary_texture != null
-		and map_3d._province_texture != null
+		and map_3d._province_id_texture != null
 		and map_3d._country_boundary_texture.get_size()
-			== map_3d._province_texture.get_size()
+			== map_3d._province_id_texture.get_size()
 	)
 
 	var checks := {
@@ -656,6 +656,20 @@ func _run() -> void:
 		"major_roads": major_mesh != null and major_mesh.get_surface_count() > 0,
 		"minor_roads": minor_mesh != null and minor_mesh.get_surface_count() > 0,
 		"road_hierarchy": map_3d._road_width_for_capacity(Edge.TERRAIN_STANDARD_MANPOWER) > map_3d._road_width_for_capacity(Edge.TERRAIN_LOW_MANPOWER) * 2.0,
+		"road_visual_subdued": (
+			MapRenderer.MAJOR_ROAD_WIDTH <= 1.2
+			and MapRenderer.MINOR_ROAD_WIDTH <= 0.8
+			and MapRenderer.MAJOR_ROAD_COLOR.s <= 0.10
+			and MapRenderer.MINOR_ROAD_COLOR.s <= 0.10
+			and MapRenderer.MAJOR_ROAD_COLOR.a <= 0.45
+			and MapRenderer.MINOR_ROAD_COLOR.a <= 0.32
+			and map_3d._road_width_for_capacity(
+				Edge.TERRAIN_STANDARD_MANPOWER
+			) <= 0.032
+			and map_3d._road_color_for_capacity(
+				Edge.TERRAIN_STANDARD_MANPOWER
+			).s <= 0.10
+		),
 		"loyalty_gradient": (
 			high_loyalty_color.g > low_loyalty_color.g
 			and high_loyalty_color.g > high_loyalty_color.r
@@ -703,8 +717,8 @@ func _run() -> void:
 		"boundary_local_ink": boundary_local_ink,
 		"boundary_local_width": boundary_local_width,
 		"boundary_country_width": boundary_country_width,
-		"boundary_value_scale": boundary_value_scale,
-		"boundary_saturation_scale": boundary_saturation_scale,
+		"boundary_value_offset": boundary_value_offset,
+		"boundary_saturation_offset": boundary_saturation_offset,
 		"boundary_aa": boundary_aa,
 		"boundary_texture_bound": boundary_texture_bound,
 		"boundary_strength": boundary_strength,
@@ -718,8 +732,8 @@ func _run() -> void:
 			boundary_local_ink
 			and boundary_local_width
 			and boundary_country_width
-			and boundary_value_scale
-			and boundary_saturation_scale
+			and boundary_value_offset
+			and boundary_saturation_offset
 			and boundary_aa
 			and boundary_texture_bound
 			and boundary_strength
@@ -732,32 +746,36 @@ func _run() -> void:
 		),
 		"nation_boundary_color_contract": (
 			is_equal_approx(expected_boundary_color.a, 1.0)
-			and expected_boundary_color.v
-				>= clampf(
-					maxf(boundary_base.v, 0.72)
-						* MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE,
+			and is_equal_approx(
+				expected_boundary_color.v,
+				clampf(
+					boundary_base.v
+						+ MapRenderer.COUNTRY_BOUNDARY_VALUE_OFFSET,
 					0.0, 1.0
-				) - 0.0001
-			and expected_boundary_color.s
-				>= clampf(
-					maxf(boundary_base.s, 0.72)
-						* MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
+				)
+			)
+			and is_equal_approx(
+				expected_boundary_color.s,
+				clampf(
+					boundary_base.s
+						+ MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET,
 					0.0, 1.0
-				) - 0.0001
-			and expected_boundary_color.v >= boundary_base.v
+				)
+			)
+			and expected_boundary_color.v <= boundary_base.v
 			and expected_boundary_color.s >= boundary_base.s
 			and is_equal_approx(expected_boundary_color.h, boundary_base.h)
 			and expected_boundary_color.is_equal_approx(
 				Color.from_hsv(
 					boundary_base.h,
 					clampf(
-						maxf(boundary_base.s, 0.72)
-							* MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
+						boundary_base.s
+							+ MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET,
 						0.0, 1.0
 					),
 					clampf(
-						maxf(boundary_base.v, 0.72)
-							* MapRenderer.COUNTRY_BOUNDARY_VALUE_SCALE,
+						boundary_base.v
+							+ MapRenderer.COUNTRY_BOUNDARY_VALUE_OFFSET,
 						0.0, 1.0
 					),
 					1.0

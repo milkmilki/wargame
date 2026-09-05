@@ -8,6 +8,7 @@ signal panel_closed
 signal regenerate_requested(
 	city_count: int,
 	city_mask_path: String,
+	political_mask_path: String,
 	city_density_settings: Dictionary
 )
 signal save_requested(file_name: String)
@@ -20,12 +21,14 @@ var _dock_panel: PanelContainer
 var _status: Label
 var _city_count: SpinBox
 var _city_mask_path: LineEdit
+var _political_mask_path: LineEdit
 var _latitude_min: SpinBox
 var _latitude_max: SpinBox
 var _density_peak_latitude: SpinBox
 var _south_density: SpinBox
 var _north_density: SpinBox
 var _mask_file_dialog: FileDialog
+var _mask_target: LineEdit
 var _file_name: LineEdit
 var _selection_title: Label
 var _city_form: VBoxContainer
@@ -53,6 +56,8 @@ func bind(game_state: GameState, renderer: MapRenderer) -> void:
 		_city_count.value = game_state.land_cities().size()
 	if _city_mask_path != null:
 		_city_mask_path.text = game_state.city_generation_mask_path
+	if _political_mask_path != null:
+		_political_mask_path.text = game_state.political_mask_path
 	_apply_density_settings_to_ui(
 		game_state.city_density_settings
 	)
@@ -129,6 +134,7 @@ func _build_ui() -> void:
 	regenerate.pressed.connect(func() -> void:
 		regenerate_requested.emit(
 			int(_city_count.value), _city_mask_path.text,
+			_political_mask_path.text,
 			city_density_settings()
 		)
 	)
@@ -150,6 +156,8 @@ func _build_ui() -> void:
 	var browse_mask := Button.new()
 	browse_mask.text = "浏览"
 	browse_mask.pressed.connect(func() -> void:
+		_mask_target = _city_mask_path
+		_mask_file_dialog.title = "选择黑白城市生成蒙版"
 		_mask_file_dialog.popup_centered_ratio(0.72)
 	)
 	_style_button(browse_mask)
@@ -164,17 +172,43 @@ func _build_ui() -> void:
 	_style_button(clear_mask)
 	mask_row.add_child(clear_mask)
 	_mask_file_dialog = FileDialog.new()
-	_mask_file_dialog.title = "选择黑白城市生成蒙版"
 	_mask_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	_mask_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_mask_file_dialog.filters = PackedStringArray([
 		"*.png,*.jpg,*.jpeg,*.webp ; 图片文件"
 	])
 	_mask_file_dialog.file_selected.connect(func(path: String) -> void:
-		_city_mask_path.text = path
+		if _mask_target != null:
+			_mask_target.text = path
 		set_status("已选择蒙版；点击重新生成以应用。")
 	)
 	add_child(_mask_file_dialog)
+	var political_mask_row := HBoxContainer.new()
+	political_mask_row.add_theme_constant_override("separation", 8)
+	content.add_child(political_mask_row)
+	political_mask_row.add_child(_label("政治蒙版", 82.0))
+	_political_mask_path = LineEdit.new()
+	_political_mask_path.placeholder_text = "白色参与国家与政治模拟"
+	_political_mask_path.custom_minimum_size = Vector2(250.0, 32.0)
+	political_mask_row.add_child(_political_mask_path)
+	var browse_political_mask := Button.new()
+	browse_political_mask.text = "浏览"
+	browse_political_mask.pressed.connect(func() -> void:
+		_mask_target = _political_mask_path
+		_mask_file_dialog.title = "选择黑白政治范围蒙版"
+		_mask_file_dialog.popup_centered_ratio(0.72)
+	)
+	_style_button(browse_political_mask)
+	political_mask_row.add_child(browse_political_mask)
+	var clear_political_mask := Button.new()
+	clear_political_mask.text = "清除"
+	clear_political_mask.tooltip_text = "清除后所有已生成城市参与政治模拟"
+	clear_political_mask.pressed.connect(func() -> void:
+		_political_mask_path.text = ""
+		set_status("已清除政治蒙版配置；点击重新生成后生效。")
+	)
+	_style_button(clear_political_mask)
+	political_mask_row.add_child(clear_political_mask)
 	var latitude_grid := GridContainer.new()
 	latitude_grid.columns = 4
 	latitude_grid.add_theme_constant_override("h_separation", 8)
@@ -278,7 +312,7 @@ func _build_ui() -> void:
 func _build_city_form() -> void:
 	_city_fields["map_x"] = _spin_field(_city_form, "地图 X", 0, 1, 0.001)
 	_city_fields["map_y"] = _spin_field(_city_form, "地图 Y", 0, 1, 0.001)
-	_city_fields["owner_nation"] = _spin_field(_city_form, "所属国家", 0, 999, 1)
+	_city_fields["owner_nation"] = _spin_field(_city_form, "所属国家", -1, 999, 1)
 	_city_fields["fort_strength"] = _spin_field(_city_form, "当前工事", 0, 100, 1)
 	_city_fields["fort_strength_max"] = _spin_field(_city_form, "最大工事", 0, 100, 1)
 	_city_fields["manpower_per_month"] = _spin_field(_city_form, "每月人力", 0, 10000, 1)
@@ -432,6 +466,7 @@ func _refresh_selection_form() -> void:
 		var city := _state.cities[_last_city_id]
 		_selection_title.text = "编辑城市 %d%s" % [city.id, "（码头）" if city.is_dock else ""]
 		(_city_fields["owner_nation"] as SpinBox).max_value = _state.nations.size() - 1
+		(_city_fields["owner_nation"] as SpinBox).editable = city.politically_active
 		_set_spin(_city_fields, "map_x", city.map_position.x)
 		_set_spin(_city_fields, "map_y", city.map_position.y)
 		_set_spin(_city_fields, "owner_nation", city.owner_nation)

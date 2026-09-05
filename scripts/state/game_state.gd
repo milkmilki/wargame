@@ -72,16 +72,16 @@ const TERRITORY_CAPTURE_SPOILS_RATE: float = 0.30
 
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
-const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 10.0
+const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 5.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
 const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
 const NATION_COLOR_HUE_MIN: float = 0.0
 const NATION_COLOR_HUE_MAX: float = 1.0
-const NATION_COLOR_SATURATION_MIN: float = 0.35
-const NATION_COLOR_SATURATION_MAX: float = 0.55
-const NATION_COLOR_VALUE_MIN: float = 0.35
-const NATION_COLOR_VALUE_MAX: float = 0.50
+const NATION_COLOR_SATURATION_MIN: float = 0.55
+const NATION_COLOR_SATURATION_MAX: float = 0.85
+const NATION_COLOR_VALUE_MIN: float = 0.55
+const NATION_COLOR_VALUE_MAX: float = 0.80
 ## Hard-coded HSV palette. All procedural colors reuse the same bounded HSV
 ## band; hue spans the full ring while saturation stays map-friendly.
 const NATION_PALETTE_HUES := [
@@ -162,6 +162,10 @@ var world_seed: int = 12345                 ## 命名/君主等独立确定性�
 ## 正式世界/地图模板启用确定性君主；兼容网格夹具保持中性，且其运行时
 ## 新建藩王/叛军沿用同一模式。不能借 uses_heightmap 判断，因为旧测试会单独切换它。
 var _random_ruler_profiles_enabled: bool = true
+
+
+func random_ruler_profiles_enabled() -> bool:
+	return _random_ruler_profiles_enabled
 var _next_army_id: int = 0
 var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
@@ -186,11 +190,15 @@ var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 var city_generation_mask_path: String = ""
+var political_mask_path: String = ""
 var city_density_settings: Dictionary = {}
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
-## 正式地图河流折线（归一化地图坐标），仅用于渲染；通行真源仍是 Edge。
+## 版本化自然特征记录。河流点严格按源头到下游排列；程序化水文、导入
+## 地图和当前省界生成器都必须输出同一契约。通行真源仍是 Edge。
+var river_features: Array[Dictionary] = []
+## 兼容旧地图和既有算法的只读式投影。只能由 _set_river_features() 同步。
 var river_paths: Array[PackedVector2Array] = []
 ## 法理归属用于区分“本国底色”和“占领国斜线”；和平协议会确认实际控制区。
 var recognized_city_owners: PackedInt32Array = PackedInt32Array()
@@ -202,9 +210,6 @@ var rebellions: Dictionary = {}
 ## 当月派生贸易路线；静态道路仍由 edges 持有。
 var trade_routes: Array[Dictionary] = []
 var trade_revision: int = 0
-## 简化版 EU4 贸易的「价格开关」：开启时国家用贸易金凭空买粮买人；
-## 关闭时只结算路线税进国库，不再产生任何粮/人采购。UI 可随时开关。
-var trade_price_enabled: bool = true
 var naming_revision: int = 0
 
 ## 结束态
@@ -218,7 +223,8 @@ func generate_world(
 	terrain_city_count: int = TERRAIN_CITY_COUNT,
 	city_mask_path: String = DEFAULT_CITY_MASK_PATH,
 	density_settings: Dictionary = {},
-	map_generation_seed: int = 0
+	map_generation_seed: int = 0,
+	initial_political_mask_path: String = ""
 ) -> void:
 	assert(
 		nation_count > 0
@@ -228,6 +234,7 @@ func generate_world(
 	_reset_world(world_seed)
 	uses_heightmap = true
 	city_generation_mask_path = city_mask_path.strip_edges()
+	political_mask_path = initial_political_mask_path.strip_edges()
 	city_density_settings = (
 		TerrainMapGenerator.normalize_city_density_settings(
 			density_settings
@@ -243,12 +250,19 @@ func generate_world(
 		city_generation_mask_path,
 		city_density_settings,
 		map_generation_seed,
-		nation_count
+		nation_count,
+		political_mask_path
+	)
+	assert(
+		int(terrain.get("politically_active_count", terrain_city_count))
+			>= nation_count,
+		"政治蒙版内实际城市不足以保证每国至少一城"
 	)
 	_generate_terrain_cities(terrain)
-	_assign_balanced_nations()
 	_generate_terrain_docks(terrain)
 	_generate_terrain_edges(terrain)
+	_assign_balanced_nations()
+	_assign_terrain_dock_nations()
 	# 初始归属服从合法省份邻接/水运图；飞地通过归属调整消除，
 	# 不得为保留空间配额临时创建跨省陆路。
 	_repair_initial_nation_connectivity()
@@ -326,6 +340,7 @@ func generate_from_map_definition(
 	city_generation_mask_path = str(definition.get(
 		"city_generation_mask_path", ""
 	))
+	political_mask_path = str(definition.get("political_mask_path", ""))
 	city_density_settings = (
 		TerrainMapGenerator.normalize_city_density_settings(
 			definition.get(
@@ -364,6 +379,9 @@ func generate_from_map_definition(
 			"terrain_output_multiplier", 1.0
 		))
 		city.is_dock = bool(record.get("is_dock", false))
+		city.politically_active = bool(record.get(
+			"politically_active", true
+		))
 		city.owner_nation = int(record["owner_nation"])
 		city.fort_strength = int(record.get("fort_strength", 10))
 		city.fort_strength_max = int(record.get("fort_strength_max", 10))
@@ -433,13 +451,15 @@ func generate_from_map_definition(
 	var province_size: Array = definition.get("province_map_size", [0, 0])
 	province_map_size = Vector2i(int(province_size[0]), int(province_size[1]))
 	province_ids = PackedInt32Array(definition.get("province_ids", []))
-	river_paths.clear()
-	for river_value in definition.get("river_paths", []):
-		var river := PackedVector2Array()
-		for point_value in river_value:
-			var point: Array = point_value
-			river.append(Vector2(float(point[0]), float(point[1])))
-		river_paths.append(river)
+	var serialized_rivers: Array = definition.get("rivers", [])
+	if serialized_rivers.is_empty():
+		_set_river_features(MapFeatureContract.from_legacy_river_paths(
+			definition.get("river_paths", [])
+		))
+	else:
+		_set_river_features(
+			MapFeatureContract.deserialize_rivers(serialized_rivers)
+		)
 	_initialize_recognized_city_owners()
 	_initialize_manpower_pools()
 	_initialize_capitals_and_warehouses()
@@ -660,9 +680,11 @@ func _reset_world(world_seed: int) -> void:
 	war_objectives.clear()
 	suzerainty.clear()
 	city_generation_mask_path = ""
+	political_mask_path = ""
 	city_density_settings = {}
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
+	river_features.clear()
 	river_paths.clear()
 	recognized_city_owners = PackedInt32Array()
 	campaign_visual_events.clear()
@@ -752,6 +774,9 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 	var positions: Array[Vector2] = terrain["positions"]
 	var heights: Array[float] = terrain["heights"]
 	var reliefs: Array[float] = terrain["reliefs"]
+	var political_active: PackedByteArray = terrain.get(
+		"politically_active", PackedByteArray()
+	)
 	map_aspect_ratio = clampf(float(terrain["map_aspect_ratio"]), 0.5, 2.5)
 	map_source_region_normalized = terrain["source_region_normalized"]
 	province_map_size = terrain["province_map_size"]
@@ -763,6 +788,9 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.map_position = positions[id]
 		city.terrain_height = heights[id]
 		city.terrain_relief = reliefs[id]
+		city.politically_active = (
+			political_active.is_empty() or political_active[id] != 0
+		)
 		city.fort_strength = rng.randi_range(10, 30)
 		city.fort_strength_max = city.fort_strength
 		city.manpower_per_month = rng.randi_range(
@@ -787,10 +815,12 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 
 
 func _generate_terrain_docks(terrain: Dictionary) -> void:
-	river_paths.clear()
-	for path_value in terrain.get("river_paths", []):
-		var path: PackedVector2Array = path_value
-		river_paths.append(path.duplicate())
+	var generated_features: Array = terrain.get("river_features", [])
+	if generated_features.is_empty():
+		generated_features = MapFeatureContract.from_legacy_river_paths(
+			terrain.get("river_paths", [])
+		)
+	_set_river_features(generated_features)
 	var docks: Array[Dictionary] = terrain.get(
 		"docks",
 		[] as Array[Dictionary]
@@ -818,7 +848,9 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 				if road_t <= 0.5
 				else int(dock_data["road_b"])
 		))
-		city.owner_nation = cities[owner_city].owner_nation
+		city.politically_active = cities[owner_city].politically_active
+		city.owner_nation = -1
+		city.set_meta("initial_owner_city", owner_city)
 		city.fort_strength = 10
 		city.fort_strength_max = 10
 		# 码头是完整可占领城市，但不凭空扩大开局四国经济盘子。
@@ -829,6 +861,17 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 		city.at_war = false
 		cities.append(city)
 		adjacency[city.id] = [] as Array[int]
+
+
+func _set_river_features(features: Array) -> void:
+	var copied: Array[Dictionary] = []
+	for feature_value in features:
+		assert(feature_value is Dictionary, "河流特征必须是结构化记录")
+		copied.append((feature_value as Dictionary).duplicate(true))
+	var validation_error := MapFeatureContract.validate_rivers(copied)
+	assert(validation_error.is_empty(), validation_error)
+	river_features = copied
+	river_paths = MapFeatureContract.authoritative_paths(river_features)
 
 
 func _generate_grid_provinces() -> void:
@@ -845,15 +888,52 @@ func _initialize_recognized_city_owners() -> void:
 
 
 func _assign_balanced_nations() -> void:
-	if nations.size() != NATION_COUNT:
-		var partition_cities: Array[City] = cities.duplicate()
-		_assign_spatial_nation_partition(
-			partition_cities,
-			0,
-			nations.size()
-		)
+	var active_cities: Array[City] = []
+	for city in cities:
+		if city.politically_active and not city.is_dock:
+			active_cities.append(city)
+		else:
+			city.owner_nation = -1
+	var components := _politically_active_land_components()
+	assert(
+		not components.is_empty()
+			and components.size() <= nations.size(),
+		"政治遮罩的独立交通区域不能多于国家数"
+	)
+	if components.size() > 1:
+		var allocations: Array[int] = []
+		allocations.resize(components.size())
+		allocations.fill(1)
+		var remaining := nations.size() - components.size()
+		while remaining > 0:
+			var best := -1
+			var best_ratio := -INF
+			for index in range(components.size()):
+				var component: Array[City] = components[index]
+				if allocations[index] >= component.size():
+					continue
+				var ratio := float(component.size()) / float(allocations[index])
+				if ratio > best_ratio:
+					best_ratio = ratio
+					best = index
+			assert(best >= 0, "政治激活城市不足以分配全部国家")
+			allocations[best] += 1
+			remaining -= 1
+		var first_nation := 0
+		for index in range(components.size()):
+			_assign_spatial_nation_partition(
+				components[index], first_nation, allocations[index]
+			)
+			first_nation += allocations[index]
 		return
-	var ordered: Array[City] = cities.duplicate()
+	if (
+		nations.size() != NATION_COUNT
+		or active_cities.size() != cities.size()
+		or active_cities.size() % NATION_COUNT != 0
+	):
+		_assign_spatial_nation_partition(active_cities, 0, nations.size())
+		return
+	var ordered: Array[City] = active_cities
 	ordered.sort_custom(func(a: City, b: City) -> bool:
 		if not is_equal_approx(a.map_position.x, b.map_position.x):
 			return a.map_position.x < b.map_position.x
@@ -872,6 +952,60 @@ func _assign_balanced_nations() -> void:
 		for index in range(side_cities.size()):
 			var row_half := 0 if index < side_cities.size() / 2 else 1
 			side_cities[index].owner_nation = row_half * 2 + side
+
+
+func _politically_active_land_components() -> Array[Array]:
+	var result: Array[Array] = []
+	var visited := {}
+	for seed in cities:
+		if seed.is_dock or not seed.politically_active or visited.has(seed.id):
+			continue
+		var queue: Array[int] = [seed.id]
+		var component: Array[City] = []
+		visited[seed.id] = true
+		var cursor := 0
+		while cursor < queue.size():
+			var city_id := queue[cursor]
+			cursor += 1
+			var city := cities[city_id]
+			if not city.is_dock:
+				component.append(city)
+			for neighbor in neighbors(city_id):
+				if visited.has(neighbor):
+					continue
+				var edge := edge_of(city_id, neighbor)
+				if (
+					edge == null or edge.max_manpower <= 0
+					or not cities[neighbor].politically_active
+				):
+					continue
+				visited[neighbor] = true
+				queue.append(neighbor)
+		if not component.is_empty():
+			component.sort_custom(func(a: City, b: City) -> bool:
+				return a.id < b.id
+			)
+			result.append(component)
+	result.sort_custom(func(a: Array, b: Array) -> bool:
+		return int((a[0] as City).id) < int((b[0] as City).id)
+	)
+	return result
+
+
+func _assign_terrain_dock_nations() -> void:
+	for city in cities:
+		if not city.is_dock:
+			continue
+		var owner_city := int(city.get_meta("initial_owner_city", -1))
+		if (
+			city.politically_active
+			and owner_city >= 0
+			and owner_city < cities.size()
+		):
+			city.owner_nation = cities[owner_city].owner_nation
+		else:
+			city.politically_active = false
+			city.owner_nation = -1
 
 
 func _assign_spatial_nation_partition(
@@ -959,6 +1093,8 @@ func _initialize_manpower_pools() -> void:
 	for nation in nations:
 		nation.manpower_pool = 0
 	for city in cities:
+		if city.owner_nation < 0 or city.owner_nation >= nations.size():
+			continue
 		nations[city.owner_nation].manpower_pool += (
 			city.manpower_per_month * INITIAL_MANPOWER_RESERVE_MONTHS
 		)
@@ -1342,7 +1478,8 @@ func _initialize_capitals_and_warehouses() -> void:
 	initial_food.resize(nations.size())
 	initial_food.fill(0)
 	for city in cities:
-		initial_food[city.owner_nation] += city.food_storage
+		if city.owner_nation >= 0 and city.owner_nation < nations.size():
+			initial_food[city.owner_nation] += city.food_storage
 		city.food_storage = 0
 		city.is_capital = false
 		city.has_warehouse = false
@@ -1878,7 +2015,13 @@ func _rebalance_initial_nation_land_quotas() -> void:
 	# 分区，只要求每国非空且交通连通，不强加全局均值±1。
 	if nations.size() != NATION_COUNT:
 		return
-	var average := float(land_cities().size()) / float(nations.size())
+	var active_land_count := 0
+	for city in land_cities():
+		if city.politically_active:
+			active_land_count += 1
+	if active_land_count != land_cities().size():
+		return
+	var average := float(active_land_count) / float(nations.size())
 	var target_count := int(round(average))
 	var minimum_count := maxi(int(floor(average)) - 1, 1)
 	var maximum_count := int(ceil(average)) + 1
@@ -5906,6 +6049,9 @@ func refresh_derived() -> void:
 			modifiers[RulerProfile.KEY_MORALE]
 		)
 	for city in cities:
+		if city.owner_nation < 0 or city.owner_nation >= nations.size():
+			city.ruler_city_defense_multiplier = 1.0
+			continue
 		var owner := nations[city.owner_nation]
 		if not city.is_dock:
 			owner.alive = true

@@ -19,6 +19,7 @@ func _init() -> void:
 	_test_world_generation()
 	_test_river_transport()
 	_test_responsive_map_layout()
+	_test_country_display_fade()
 	_test_terrain_multiplier()
 	_test_battle_basics()
 	_test_retreat_mechanic()
@@ -476,12 +477,22 @@ func _test_world_generation() -> void:
 	var terrain_monthly_gold := 0
 	var terrain_base_monthly_gold := 0
 	var terrain_half_year_food := 0
+	var terrain_base_half_year_food := 0
 	var terrain_gold_min := 999999
 	var terrain_gold_max := 0
+	var neutral_ruler_modifiers := RulerProfile.modifiers(
+		RulerProfile.BALANCED
+	)
 	for city in gs.cities:
 		terrain_monthly_gold += Simulation.city_gold_output(gs, city)
 		terrain_base_monthly_gold += city.gold_per_month
 		terrain_half_year_food += Simulation.city_food_output(gs, city)
+		terrain_base_half_year_food += Simulation.city_food_output(
+			gs,
+			city,
+			{},
+			neutral_ruler_modifiers
+		)
 		if not city.is_dock:
 			terrain_gold_min = mini(
 				terrain_gold_min,
@@ -527,12 +538,16 @@ func _test_world_generation() -> void:
 			% [expected_effective_gold, terrain_monthly_gold]
 	)
 	_check(
-		terrain_half_year_food
+		terrain_base_half_year_food
 			>= int(floor(float(target_half_year_food) * 0.95))
-			and terrain_half_year_food
+			and terrain_base_half_year_food
 				<= int(ceil(float(target_half_year_food) * 1.15)),
-		"真实地图半年粮产出应约维持160轻军+40重军：产出%d，目标需求%d"
-			% [terrain_half_year_food, target_half_year_food]
+		"中性君主下的真实地图半年粮产出应约维持160轻军+40重军：基础产出%d，当前君主实际产出%d，目标需求%d"
+			% [
+				terrain_base_half_year_food,
+				terrain_half_year_food,
+				target_half_year_food,
+			]
 	)
 	var plain_city_count := 0
 	var port_market_count := 0
@@ -1401,22 +1416,16 @@ func _test_world_generation() -> void:
 		GameState.NATION_PALETTE_HUES.size() == 4
 		and GameState.NATION_PALETTE_SATURATIONS.size() == 4
 		and GameState.NATION_PALETTE_VALUES.size() == 4
+		and GameState.NATION_PALETTE_HUES == [
+			0.000, 0.610, 0.350, 0.140,
+		]
+		and GameState.NATION_PALETTE_SATURATIONS == [
+			0.52, 0.46, 0.40, 0.50,
+		]
+		and GameState.NATION_PALETTE_VALUES == [
+			0.48, 0.43, 0.38, 0.50,
+		]
 	)
-	for palette_index in range(GameState.NATION_PALETTE_HUES.size()):
-		var palette_color := Color.from_hsv(
-			float(GameState.NATION_PALETTE_HUES[palette_index]),
-			float(GameState.NATION_PALETTE_SATURATIONS[palette_index]),
-			float(GameState.NATION_PALETTE_VALUES[palette_index])
-		)
-		hardcoded_palette_valid = (
-			hardcoded_palette_valid
-			and palette_color.h >= GameState.NATION_COLOR_HUE_MIN - 0.001
-			and palette_color.h <= GameState.NATION_COLOR_HUE_MAX + 0.001
-			and palette_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.001
-			and palette_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.001
-			and palette_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.001
-			and palette_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.001
-		)
 	gs.suzerainty = original_suzerainty
 	for nation in gs.nations:
 		var political_color := MapRenderer.political_map_color(gs, nation.id)
@@ -1443,7 +1452,7 @@ func _test_world_generation() -> void:
 		)
 	_check(
 		faction_colors_valid and hardcoded_palette_valid,
-		"主权阵营、政治覆色和兵棋颜色必须使用全色相中低饱和 HSV 范围"
+		"四国调色板必须保持当前低饱和暗色 HSV 基准，派生显示色必须保持规范范围"
 	)
 	var occupied_test_city := 0
 	var original_test_owner := gs.cities[occupied_test_city].owner_nation
@@ -2714,14 +2723,15 @@ func _test_responsive_map_layout() -> void:
 				and str(nation_rows[0]["economy_secondary"]).contains("月产 0")
 				and str(nation_rows[0]["economy_secondary"]).contains("月需 0")
 				and str(nation_rows[0]["economy_secondary"]).contains("月净 +20")
-				and str(nation_rows[0]["economy_secondary"]).contains("购粮 30")
-				and str(nation_rows[0]["economy_secondary"]).contains("购人 40")
+				and str(nation_rows[0]["economy_secondary"]).find("购粮") == -1
+				and str(nation_rows[0]["economy_secondary"]).find("购人") == -1
 				and str(nation_rows[0]["economy_secondary"]).find("+0") == -1
 				and str(nation_rows[0]["economy_secondary"]).find("-0") == -1
 				and str(nation_rows[0]["economy"]).contains("商2线")
 				and str(nation_rows[0]["economy"]).contains("金+7")
 				and str(nation_rows[0]["economy"]).contains("粮仓 0")
-				and str(nation_rows[0]["economy"]).contains("购粮 30")
+				and str(nation_rows[0]["economy"]).find("购粮") == -1
+				and str(nation_rows[0]["economy"]).find("购人") == -1
 			and str(nation_rows[0]["governance_primary"]).contains("测试君")
 			and str(nation_rows[0]["governance_secondary"]).contains("节俭")
 			and str(nation_rows[0]["governance_secondary"]).contains("建军"),
@@ -3176,6 +3186,44 @@ func _test_responsive_map_layout() -> void:
 	)
 
 # ------------------------------------------------------------------ 2. 地形惩罚
+
+func _test_country_display_fade() -> void:
+	var source := Color.from_hsv(0.37, 0.42, 0.68, 1.0)
+	var adjusted := MapRenderer.country_boundary_display_color(source)
+	_check(
+		is_equal_approx(adjusted.h, source.h)
+		and is_equal_approx(adjusted.s, 0.52)
+		and is_equal_approx(adjusted.v, 0.53)
+		and is_equal_approx(adjusted.a, 1.0),
+		"国家边界色应保持色相，饱和度 +0.10、明度 -0.15"
+	)
+	var clamped := MapRenderer.country_boundary_display_color(
+		Color.from_hsv(0.2, 0.96, 0.20, 0.4)
+	)
+	_check(
+		is_equal_approx(clamped.s, 1.0)
+		and is_equal_approx(clamped.v, 0.05)
+		and is_equal_approx(clamped.a, 1.0),
+		"国家边界色的饱和度和明度偏移必须钳制在有效范围"
+	)
+	var edge_opacity := MapRenderer.country_fill_opacity_for_distance(0.0)
+	var near_opacity := MapRenderer.country_fill_opacity_for_distance(4.0)
+	var far_opacity := MapRenderer.country_fill_opacity_for_distance(40.0)
+	_check(
+		is_equal_approx(edge_opacity, 1.0)
+		and near_opacity < edge_opacity
+		and far_opacity < near_opacity
+		and far_opacity >= MapRenderer.COUNTRY_FILL_MIN_OPACITY,
+		"国家填充应从边界向腹地单调变透明且不低于最低不透明度"
+	)
+	_check(
+		is_equal_approx(
+			MapRenderer.country_fill_opacity_for_distance(100000.0),
+			MapRenderer.COUNTRY_FILL_MIN_OPACITY
+		),
+		"超大国家中心应收敛到统一的最低不透明度"
+	)
+
 
 func _test_terrain_multiplier() -> void:
 	print("[2] danger 地形：攻击惩罚固定，防御惩罚随驻防时间趋近零")
@@ -12090,8 +12138,8 @@ func _test_diplomacy_state_and_ai() -> void:
 			== alliance_country_geometry
 		and enemy_boundary_color.is_equal_approx(alliance_boundary_color)
 		and is_equal_approx(
-			MapRenderer.COUNTRY_BOUNDARY_SATURATION_SCALE,
-			1.35
+			MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET,
+			0.10
 		),
 		"外交关系变化只能更新语义子集，国家边界几何与国家色不得变化"
 	)
@@ -20372,8 +20420,7 @@ func _test_shared_granary_and_relay_supply() -> void:
 			break
 	var subject := gs.enfeoff(0, region)
 	gs.refresh_derived()
-	# 本段只验证宗藩共享粮池聚合；关闭贸易价格开关以隔离「钱买粮」外部流量。
-	gs.trade_price_enabled = false
+	# 本段只验证宗藩共享粮池聚合；贸易已不再产生粮食外部流量。
 	for pool_nation in gs.nations:
 		pool_nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	var sub_capital := gs.nations[subject].capital_city_id
@@ -22073,9 +22120,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	print("[34] 资源核心：AI价值识别；富粮国家宣战时有限爆兵")
 	var gs := GameState.new()
 	gs.generate_grid_world(34001)
-	# 本用例直接对比本国产粮动员能力，隔离国际粮食外援：关闭贸易价格开关，
-	# 使「钱凭空买粮买人」不生效，回到纯自产口径。
-	gs.trade_price_enabled = false
+	# 本用例直接对比本国产粮动员能力；贸易不再自动购买粮食或人力。
 	for nation in gs.nations:
 		nation.trade_policy = RulerProfile.POLICY_ISOLATION
 	for nation_a in range(gs.nations.size()):

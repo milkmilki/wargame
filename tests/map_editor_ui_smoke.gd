@@ -27,14 +27,28 @@ func _run() -> void:
 		push_error("MAP_EDITOR_UI_DEFAULT_MASK_FAILED")
 		quit(1)
 		return
+	if not panel._political_mask_path.text.is_empty():
+		push_error("MAP_EDITOR_UI_DEFAULT_POLITICAL_MASK_FAILED")
+		quit(1)
+		return
+	var density_defaults := TerrainMapGenerator.default_city_density_settings()
 	if (
-		not is_equal_approx(panel._latitude_min.value, 18.0)
-		or not is_equal_approx(panel._latitude_max.value, 54.0)
-		or not is_equal_approx(panel._density_peak_latitude.value, 30.0)
-		or not is_equal_approx(panel._south_density.value, 0.5)
-		or not is_equal_approx(panel._north_density.value, 0.2)
+		not is_equal_approx(panel._latitude_min.value, float(density_defaults["latitude_min"]))
+		or not is_equal_approx(panel._latitude_max.value, float(density_defaults["latitude_max"]))
+		or not is_equal_approx(panel._density_peak_latitude.value, float(density_defaults["density_peak_latitude"]))
+		or not is_equal_approx(panel._south_density.value, float(density_defaults["south_density"]))
+		or not is_equal_approx(panel._north_density.value, float(density_defaults["north_density"]))
 	):
-		push_error("MAP_EDITOR_UI_LATITUDE_DENSITY_DEFAULT_FAILED")
+		push_error(
+			"MAP_EDITOR_UI_LATITUDE_DENSITY_DEFAULT_FAILED "
+			+ "min=%.2f max=%.2f peak=%.2f south=%.2f north=%.2f" % [
+				panel._latitude_min.value,
+				panel._latitude_max.value,
+				panel._density_peak_latitude.value,
+				panel._south_density.value,
+				panel._north_density.value,
+			]
+		)
 		quit(1)
 		return
 	main.renderer.select_city(0)
@@ -52,6 +66,7 @@ func _run() -> void:
 		return
 	main._on_map_regenerate_requested(
 		72, main.state.city_generation_mask_path,
+		main.state.political_mask_path,
 		{
 			"latitude_min": 10.0,
 			"latitude_max": 70.0,
@@ -75,10 +90,20 @@ func _run() -> void:
 	var state_before_bad_mask: GameState = main.state
 	main._on_map_regenerate_requested(
 		72, "/private/tmp/not-a-real-city-mask.png",
+		main.state.political_mask_path,
 		main.state.city_density_settings
 	)
 	if main.state != state_before_bad_mask or not panel._status.text.contains("无法读取"):
 		push_error("MAP_EDITOR_UI_BAD_MASK_GUARD_FAILED")
+		quit(1)
+		return
+	main._on_map_regenerate_requested(
+		72, main.state.city_generation_mask_path,
+		"/private/tmp/not-a-real-political-mask.png",
+		main.state.city_density_settings
+	)
+	if main.state != state_before_bad_mask or not panel._status.text.contains("无法读取"):
+		push_error("MAP_EDITOR_UI_BAD_POLITICAL_MASK_GUARD_FAILED")
 		quit(1)
 		return
 	main.renderer.select_city(0)

@@ -17,6 +17,8 @@ enum SiegeRole {
 ## 基础 tick = 1 天。军粮月耗通过小数债摊到每天，经济生产等仍每 DAYS_PER_MONTH 天结算。
 const DAYS_PER_MONTH: int = 30
 const DAYS_PER_HALF_YEAR: int = 180        ## 半年 = 180 天（粮食注入周期）
+const DAYS_PER_YEAR: int = 360
+const MONTHS_PER_YEAR: int = 12
 # ---- 行军时长（平衡规格 R1：纯距离线性）----
 const MARCH_DAYS_MIN: float = 10.0         ## 任意边最短行军 10 天（distance=1）
 const MARCH_DAYS_PER_DISTANCE_STEP: float = 5.0
@@ -341,6 +343,8 @@ var diplomacy_mobilization_evaluation_cache_total: int = 0
 var trade_forecast_cache_disabled: bool = false
 ## 等价性门禁用：true 时 AI/外交也强制使用完整贸易结算；正式游戏 false。
 var trade_summary_forecast_disabled: bool = false
+## 最近一次真实月结使用的财政流。只在同日年终平衡阶段读取，避免重新构建贸易。
+var _latest_monthly_gold_flows: Array[Dictionary] = []
 ## domestic ideal field 跨 build shared cache A/B：true 时不传 shared cache 且清空。
 ## 正式运行保持 false；关闭后仅回退该层缓存，其余 trade forecast 行为不变。
 var trade_domestic_ideal_field_cache_disabled: bool = false
@@ -377,6 +381,7 @@ func setup(game_state: GameState) -> void:
 	_normalize_city_fortifications()
 	state.refresh_derived()
 	_reset_trade_forecast_cache()
+	_latest_monthly_gold_flows.clear()
 	_publish_initial_food_snapshot()
 	_synchronize_war_gold_income_snapshots()
 	_ai_strategy_cache.clear()
@@ -490,6 +495,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"maintenance")
 	state.day += 1
 	state.month = state.day / DAYS_PER_MONTH
+	_resolve_ruler_successions()
 	if (
 		state.diplomacy_revision
 		!= _war_gold_snapshot_diplomacy_revision
@@ -517,6 +523,11 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			"monthly_economy",
 			monthly_profile_started
 		)
+		if state.day % DAYS_PER_YEAR == 0:
+			_set_runtime_profile_stage(&"annual_resource_balance")
+			_resolve_annual_resource_balance(
+				_latest_monthly_gold_flows
+			)
 		if spread_runtime_work:
 			await get_tree().process_frame
 		monthly_profile_started = (
@@ -1208,7 +1219,6 @@ func _trade_settlement_token(
 	var fields: Array = [
 		"trade_settlement_v1",
 		structure_fingerprint,
-		["trade_price_enabled", state.trade_price_enabled],
 		["wartime_nations", effective_wartime_mask],
 	]
 	for city in state.cities:
@@ -1718,6 +1728,7 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
 	var gold_flows: Array[Dictionary] = forecast["gold_flows"]
+	_latest_monthly_gold_flows = gold_flows
 	var garrison_by_city := build_garrison_index(state)
 	# 累计每国当月金钱税收（含战乱减产），作为贡赋基数。
 	var gold_income: Array[int] = []
@@ -1731,6 +1742,8 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 	for nation in state.nations:
 		ruler_output_modifiers[nation.id] = RulerProfile.modifiers(nation)
 	for city in state.cities:
+		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
+			continue
 		var nation := state.nations[city.owner_nation]
 		var modifiers: Dictionary = ruler_output_modifiers[city.owner_nation]
 		var gold := city_gold_output(state, city, modifiers)
@@ -1748,18 +1761,11 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 	economy_part_started = (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
-	# 贸易税是新增收入；买粮、买人的金钱支出已在 trade_net_income 内一次性
-	# 扣除。这里只应用国库净变动，再把「凭空买到」的粮/人落到库存/人力。
+	# 贸易路线只产生贸易金；资源库存转换统一由年度自动平衡阶段处理。
 	for nation in state.nations:
 		nation.treasury_gold += int(
 			gold_flows[nation.id]["trade_net_income"]
 		)
-	_resolve_trade_purchases(trade)
-	if runtime_stage_profiling_enabled:
-		_record_runtime_span(&"monthly_trade_purchases", economy_part_started)
-	economy_part_started = (
-		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
-	)
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
 	_resolve_military_finance(gold_flows)
@@ -1966,24 +1972,88 @@ func _prepare_trade_publication(trade: Dictionary) -> Dictionary:
 	}
 
 
-## 简化版 EU4 贸易结算：把 TradeNetwork 规划的「凭空采购」落到库存与人力。
-## 粮食直接存入国家粮池（不从任何他国抽调），人力直接加进 manpower_pool。
-## 金钱支出已在 _monthly_gold_flows_from_trade 的 trade_net_income 里扣过，
-## 这里只负责让资源到账，保持「钱→粮/人凭空产生」的单向语义。
-func _resolve_trade_purchases(trade: Dictionary) -> void:
-	for nation in state.nations:
-		var imported := _trade_array_value(
-			trade, "nation_food_import", nation.id
-		)
-		if imported > 0:
-			state.deposit_food(nation.id, imported)
-	for nation in state.nations:
-		var manpower := _trade_array_value(
-			trade, "nation_manpower_import", nation.id
-		)
-		if manpower > 0:
-			nation.manpower_pool += manpower
+## 年度人、钱、粮自动平衡。转换完全由经济结算驱动，不进入 AI 候选、
+## 不做路径搜索。宗藩共享粮池只由 holder 兑换一次，避免重复消费同一库存。
+func _resolve_annual_resource_balance(
+	gold_flows: Array[Dictionary]
+) -> void:
 	state.refresh_derived()
+	for nation in state.nations:
+		if not nation.alive:
+			continue
+		var include_food := (
+			state.food_pool_holder(nation.id) == nation.id
+			and not state.warehouse_cities_of(nation.id).is_empty()
+		)
+		var monthly_income := (
+			maxi(int(gold_flows[nation.id].get("net_income", 0)), 0)
+			if nation.id >= 0 and nation.id < gold_flows.size()
+			else 0
+		)
+		var plan := ResourceBalanceRules.plan(
+			nation.treasury_gold,
+			nation.manpower_pool,
+			nation.granary_food if include_food else 0,
+			monthly_income * MONTHS_PER_YEAR,
+			include_food
+		)
+		var gold_delta := int(plan["gold_delta"])
+		var manpower_delta := int(plan["manpower_delta"])
+		var food_delta := int(plan["food_delta"])
+		nation.treasury_gold = maxi(
+			nation.treasury_gold + gold_delta, 0
+		)
+		nation.manpower_pool = maxi(
+			nation.manpower_pool + manpower_delta, 0
+		)
+		if food_delta > 0:
+			assert(
+				state.deposit_food(nation.id, food_delta),
+				"年度资源平衡粮食入库失败"
+			)
+		elif food_delta < 0:
+			var withdrawn := state._withdraw_food_from_warehouses(
+				nation, -food_delta
+			)
+			assert(withdrawn == -food_delta, "年度资源平衡粮食扣除不完整")
+		nation.set_meta(&"last_automatic_resource_balance", {
+			"day": state.day,
+			"gold": gold_delta,
+			"manpower": manpower_delta,
+			"food": food_delta,
+			"transferred_value": int(plan["transferred_value"]),
+		})
+	state.refresh_derived()
+
+
+## 君主寿命与继位是确定性的日历事件，不进入 AI 决策。每日成本仅为一次
+## 国家数组扫描；实际继位时才刷新军事派生和贸易预测缓存。
+func _resolve_ruler_successions() -> void:
+	if state == null or not state.random_ruler_profiles_enabled():
+		return
+	var changed := false
+	for nation in state.nations:
+		if (
+			not nation.alive
+			or state.day < RulerProfile.succession_due_day(
+				nation, state.world_seed
+			)
+		):
+			continue
+		var previous_name := nation.ruler_name
+		RulerProfile.appoint_successor(nation, state.world_seed, state.day)
+		WorldNaming.register_successor_name(
+			state,
+			nation.id,
+			nation.id + nation.ruler_revision * 1009,
+			previous_name
+		)
+		changed = true
+	if not changed:
+		return
+	state.refresh_derived()
+	_reset_trade_forecast_cache()
+	_ai_strategy_cache.clear()
 
 
 ## 贡赋：每个藩王把当月金钱税收的 tribute_rate 比例上缴直接宗主（守恒转移）。

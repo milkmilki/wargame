@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://l5kar4e33q4k"
-path="res://.godot/imported/china_natural_earth2_2048.png-69668cde6d51ee085e819e39eb3a141b.ctex"
+uid="uid://ccsjvus1s8wq2"
+path="res://.godot/imported/china_elevation_white_2048.png-9a1db18f06266ad354276052eec33d93.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/terrain/china_natural_earth2_2048.png"
-dest_files=["res://.godot/imported/china_natural_earth2_2048.png-69668cde6d51ee085e819e39eb3a141b.ctex"]
+source_file="res://assets/terrain/china_elevation_white_2048.png"
+dest_files=["res://.godot/imported/china_elevation_white_2048.png-9a1db18f06266ad354276052eec33d93.ctex"]
 
 [params]
 
