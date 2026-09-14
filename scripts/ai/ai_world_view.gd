@@ -455,7 +455,7 @@ static func cached_path_field(
 		int(block_contested_edges),
 		int(use_danger_weight),
 		normalized_goal,
-		required_manpower,
+		0,
 	]
 	if not cache.has(key):
 		cache[key] = Pathfinding.dijkstra_field(
@@ -465,7 +465,7 @@ static func cached_path_field(
 			block_contested_edges,
 			use_danger_weight,
 			normalized_goal,
-			required_manpower
+			0
 		)
 	return cache[key]
 

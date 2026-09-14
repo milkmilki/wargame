@@ -39,8 +39,8 @@ static func build(
 	return field
 
 
-## ThreatField 中 D/I 缓存与观察国无关。多核阶段先按唯一
-## (起点,编制容量) 预热这些图搜索结果，随后各国 worker 只读复用。
+## ThreatField 中 D/I 缓存与观察国无关。军队无视正容量道路的吞吐后，
+## 多核阶段只需按唯一的起点预热，随后各国 worker 只读复用。
 static func build_shared_travel_request(
 	state: GameState,
 	start: int,
@@ -67,7 +67,7 @@ func _aggregate_sources(state: GameState, armies: Array[Army]) -> Dictionary:
 		var power := ArmyPower.effective(army)
 		if power <= 0.0:
 			continue
-		var required_manpower := maxi(army.max_size, 1)
+		var required_manpower := 0
 		if not sources_by_manpower.has(required_manpower):
 			sources_by_manpower[required_manpower] = {}
 		var sources: Dictionary = (
@@ -185,10 +185,7 @@ func _travel_days_field(
 	start: int,
 	required_manpower: int
 ) -> Dictionary:
-	var cache_key := "D:%d:%d" % [
-		start,
-		required_manpower,
-	]
+	var cache_key := "D:%d" % start
 	if _travel_cache_has(cache_key):
 		return _travel_cache_get(cache_key)
 	var dist := {start: 0.0}
@@ -204,12 +201,9 @@ func _travel_days_field(
 			continue
 		for neighbor in state.neighbors(city_id):
 			var edge := state.edge_of(city_id, neighbor)
-			var route_footprint := (
-				Army.road_footprint_for_formation(required_manpower)
-			)
 			if (
 				edge == null
-				or edge.max_manpower < route_footprint
+				or edge.max_manpower <= 0
 			):
 				continue
 			var next_dist := current_dist + _edge_days(

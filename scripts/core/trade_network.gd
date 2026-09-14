@@ -34,17 +34,15 @@ const GOLD: int = Policy.GOLD
 const FOOD: int = Policy.FOOD
 const ISOLATION: int = Policy.ISOLATION
 
-## 40 国地图上的硬上限。国际候选按可达性、运输成本和市场价值排序，
-## 再以双方都未达到上限为条件贪心选取，因此任何国家都不会超过此值。
-const MAX_INTERNATIONAL_ROUTES_PER_NATION: int = 3
 const MAX_DOMESTIC_ROUTES_PER_NATION: int = 4
 const INTERNATIONAL_HUBS_PER_NATION: int = 3
 ## 国际商路不是相邻小国之间的逐边集市。端点至少跨过三条交通边；每国只把
 ## 拓扑上最近的有限数量远程市场送入昂贵的路径/战时连通性评估。最终路线仍受
-## MAX_INTERNATIONAL_ROUTES_PER_NATION 双边上限约束。这样国家数量增加时，
-## 候选从 O(N²) 收敛为 O(N*K)，同时保留足够冗余供贪心匹配。
+## 双方按国土城市数计算的动态上限约束。这样国家数量增加时，候选从 O(N²)
+## 收敛为 O(N*K)，同时保留足够冗余供贪心匹配。
 const MIN_INTERNATIONAL_ROUTE_HOPS: int = 3
 const MAX_INTERNATIONAL_PARTNERS_PER_NATION: int = 8
+const DISTANCE_PREMIUM_EXPONENT: float = 1.5
 ## 战争不拆除、封锁或改道既有贸易网络，只降低参战国实际取得的贸易金。
 ## 与城市战乱减产使用同一 50% 口径；多场战争不会重复叠乘。
 const WARTIME_TRADE_GOLD_MULTIPLIER: float = 0.50
@@ -53,7 +51,6 @@ const WARTIME_TRADE_GOLD_MULTIPLIER: float = 0.50
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
 const TRADE_CAPACITY_UNIT: int = 10000
 const FOOD_CAPACITY_DIVISOR: int = 100
-const MAX_ROUTE_GOLD: int = 64
 
 const EDGE_KIND_LAND: int = 0
 const EDGE_KIND_LANDING: int = 1
@@ -1271,18 +1268,16 @@ static func _build_international_routes(
 	var candidate_hub_score_calls := 0
 	var candidate_hub_sort_calls := 0
 	var candidate_hub_value_calls := 0
-	var hubs_by_nation: Array = []
-	hubs_by_nation.resize(state.nations.size())
-	var international_candidate_nation_ids: Array[int] = []
 	var hub_sort_counts := [0, 0]
+	var hubs_by_nation := _international_hubs_by_nation(
+		state,
+		graph,
+		policies,
+		{} if not profile_enabled else {"enabled": true},
+		hub_sort_counts
+	)
+	var international_candidate_nation_ids: Array[int] = []
 	for nation_id in range(state.nations.size()):
-		hubs_by_nation[nation_id] = _international_hubs(
-			state,
-			nation_id,
-			policies[nation_id],
-			{} if not profile_enabled else {"enabled": true},
-			hub_sort_counts
-		)
 		if (
 			state.nations[nation_id].alive
 			and policies[nation_id] != Policy.ISOLATION
@@ -1617,13 +1612,26 @@ static func _build_international_routes(
 		{"enabled": true} if profile_enabled else {}
 	)
 	var counts := _zero_int_array(state.nations.size())
+	var route_limits := _zero_int_array(state.nations.size())
+	var land_city_counts := _zero_int_array(state.nations.size())
+	for city in state.cities:
+		if (
+			not city.is_dock
+			and city.owner_nation >= 0
+			and city.owner_nation < land_city_counts.size()
+		):
+			land_city_counts[city.owner_nation] += 1
+	for nation_id in range(state.nations.size()):
+		route_limits[nation_id] = _international_route_limit_for_city_count(
+			land_city_counts[nation_id]
+		)
 	var result: Array[Dictionary] = []
 	for candidate in candidates:
 		var nation_a := int(candidate["nation_a"])
 		var nation_b := int(candidate["nation_b"])
 		if (
-			counts[nation_a] >= MAX_INTERNATIONAL_ROUTES_PER_NATION
-			or counts[nation_b] >= MAX_INTERNATIONAL_ROUTES_PER_NATION
+			counts[nation_a] >= route_limits[nation_a]
+			or counts[nation_b] >= route_limits[nation_b]
 		):
 			continue
 		var route := _derive_route(
@@ -2212,27 +2220,103 @@ static func _owned_trade_cities(
 	return result
 
 
-static func _international_hubs(
+static func international_route_limit(state: GameState, nation_id: int) -> int:
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return 0
+	var land_city_count := 0
+	for city in state.cities:
+		if city.owner_nation == nation_id and not city.is_dock:
+			land_city_count += 1
+	if land_city_count <= 0:
+		return 0
+	return _international_route_limit_for_city_count(land_city_count)
+
+
+static func _international_route_limit_for_city_count(
+	land_city_count: int
+) -> int:
+	if land_city_count <= 0:
+		return 0
+	return 1 + floori(
+		float(land_city_count) / float(MIN_INTERNATIONAL_ROUTE_HOPS)
+	)
+
+
+## 全世界共用同一组国际 hub 间距。首都只有价值加分，不会绕过跳数门禁；
+## 因此版图碎裂出大量相邻小国时，不会为每个一城国家都建立贸易节点。
+static func _international_hubs_by_nation(
 	state: GameState,
-	nation_id: int,
-	policy: int,
+	graph: Dictionary,
+	policies: Array[int],
 	profile_sink: Dictionary = {},
 	hub_sort_counts: Array = []
-) -> Array[int]:
-	if (
-		nation_id < 0 or nation_id >= state.nations.size()
-		or not state.nations[nation_id].alive
-	):
-		return [] as Array[int]
-	var candidates := _owned_trade_cities(state, nation_id, false)
-	_sort_hubs(state, candidates, policy, profile_sink, hub_sort_counts)
-	var capital := state.nations[nation_id].capital_city_id
-	if capital in candidates:
-		candidates.erase(capital)
-		candidates.push_front(capital)
-	if candidates.size() > INTERNATIONAL_HUBS_PER_NATION:
-		candidates.resize(INTERNATIONAL_HUBS_PER_NATION)
-	return candidates
+) -> Array:
+	var result: Array = []
+	result.resize(state.nations.size())
+	var ranked: Array[Dictionary] = []
+	var profile_enabled := bool(profile_sink.get("enabled", false))
+	for nation_id in range(state.nations.size()):
+		result[nation_id] = [] as Array[int]
+		if (
+			not state.nations[nation_id].alive
+			or policies[nation_id] == Policy.ISOLATION
+		):
+			continue
+		var candidates := _owned_trade_cities(state, nation_id, false)
+		for city_id in candidates:
+			if profile_enabled and hub_sort_counts.size() >= 2:
+				hub_sort_counts[0] += 1
+			ranked.append({
+				"city": city_id,
+				"nation": nation_id,
+				"score": _sort_units(_hub_score(
+					state.cities[city_id], policies[nation_id]
+				)),
+			})
+	ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if profile_enabled and hub_sort_counts.size() >= 2:
+			hub_sort_counts[1] += 1
+		if int(a["score"]) != int(b["score"]):
+			return int(a["score"]) > int(b["score"])
+		return int(a["city"]) < int(b["city"])
+	)
+	var blocked_cities := {}
+	var adjacency: Array = graph.get("adjacency", [])
+	for candidate in ranked:
+		var city_id := int(candidate["city"])
+		var nation_id := int(candidate["nation"])
+		var nation_hubs: Array[int] = result[nation_id]
+		if (
+			nation_hubs.size() >= INTERNATIONAL_HUBS_PER_NATION
+			or blocked_cities.has(city_id)
+		):
+			continue
+		nation_hubs.append(city_id)
+		_block_hub_radius(adjacency, city_id, blocked_cities)
+	return result
+
+
+static func _block_hub_radius(
+	adjacency: Array, source: int, blocked_cities: Dictionary
+) -> void:
+	var queue: Array[Vector2i] = [Vector2i(source, 0)]
+	var visited := {source: true}
+	var cursor := 0
+	while cursor < queue.size():
+		var entry := queue[cursor]
+		cursor += 1
+		var city_id := entry.x
+		var hops := entry.y
+		blocked_cities[city_id] = true
+		if hops + 1 >= MIN_INTERNATIONAL_ROUTE_HOPS:
+			continue
+		if city_id < 0 or city_id >= adjacency.size():
+			continue
+		for neighbor in adjacency[city_id] as Array[int]:
+			if visited.has(neighbor):
+				continue
+			visited[neighbor] = true
+			queue.append(Vector2i(neighbor, hops + 1))
 
 
 static func _sort_hubs(
@@ -3848,6 +3932,17 @@ static func wartime_nation_mask(state: GameState) -> PackedByteArray:
 	return result
 
 
+## 远途互通有无溢价。n 是超过路线类别最低有效距离的额外跳数：国内线
+## 从 1 跳、国际线从 MIN_INTERNATIONAL_ROUTE_HOPS 起算，乘数为 1 + n^1.5。
+static func distance_premium_multiplier(
+	hops: int,
+	international: bool
+) -> float:
+	var baseline_hops := MIN_INTERNATIONAL_ROUTE_HOPS if international else 1
+	var extra_hops := float(maxi(hops - baseline_hops, 0))
+	return 1.0 + pow(extra_hops, DISTANCE_PREMIUM_EXPONENT)
+
+
 static func _route_tax_gold(
 	state: GameState,
 	route: Dictionary,
@@ -3888,11 +3983,18 @@ static func _route_tax_gold(
 	var route_factor := 1.45 if bool(route["international"]) else 1.0
 	if bool(route["uses_water"]):
 		route_factor *= 1.12
+	var preferred_path: Array = route.get("preferred_city_path", [])
+	if preferred_path.is_empty():
+		preferred_path = route.get("city_path", [])
+	var route_hops := maxi(preferred_path.size() - 1, 0)
+	var distance_premium := distance_premium_multiplier(
+		route_hops, bool(route["international"])
+	)
 	var raw := int(round(
 		commerce * capacity_factor * distance_factor
-		* policy_factor * ruler_factor * route_factor
+		* policy_factor * ruler_factor * route_factor * distance_premium
 	))
-	return maxi(mini(raw, MAX_ROUTE_GOLD), eligible_city_count)
+	return maxi(raw, eligible_city_count)
 
 
 static func _gold_policy_factor(policy: int) -> float:

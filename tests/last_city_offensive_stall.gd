@@ -1,7 +1,7 @@
 extends SceneTree
 ## 终局回归：国家0仅剩城9和四支5000守军；国家1控制其他全部城市，
-## 从零重建主战军。城9入口容量10000；15000重军可以分批运输通过，
-## 但攻势规划仍只按该入口能立即展开的正面计算首轮可入场兵力。
+## 从零重建主战军。测试主动把城9入口正面设为10000；15000重军可完整通行，
+## 但攻势规划仍只按该入口战斗正面计算首轮可展开兵力。
 
 const REMNANT_ID: int = 0
 const DOMINANT_ID: int = 1
@@ -89,9 +89,11 @@ func _build_fixture() -> GameState:
 	var entry_edge := state.edge_of(staging[0], LAST_CITY_ID)
 	assert(
 		entry_edge != null
-			and entry_edge.max_manpower == 10000,
-		"回归夹具要求城9入口容量为10000"
+			and entry_edge.max_manpower > 0,
+		"城9必须存在正容量入口"
 	)
+	entry_edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+	entry_edge.base_max_manpower = Edge.TERRAIN_LOW_MANPOWER
 	var dominant_capital := staging[0]
 	var farthest_distance := -1.0
 	for city in state.land_cities_of(DOMINANT_ID):

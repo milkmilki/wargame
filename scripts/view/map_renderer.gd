@@ -38,10 +38,16 @@ const MINOR_ROAD_COLOR := Color(0.46, 0.48, 0.50, 0.30)
 const MAJOR_ROAD_COLOR := Color(0.38, 0.40, 0.42, 0.42)
 const MINOR_ROAD_WIDTH: float = 0.75
 const MAJOR_ROAD_WIDTH: float = 1.15
+const LANDING_ROAD_COLOR := MINOR_ROAD_COLOR
+const LANDING_ROAD_WIDTH: float = MINOR_ROAD_WIDTH
+const WATER_ROUTE_COLOR := Color(0.01, 0.01, 0.01, 0.78)
+const WATER_ROUTE_WIDTH: float = 1.25
+const WATER_ROUTE_DASH_LENGTH: float = 5.0
 const DETAIL_PANEL_WIDTH: float = 430.0
 const DETAIL_PANEL_MARGIN: float = 18.0
 const NATION_WINDOW_WIDTH: float = MapLayout.NATION_WINDOW_WIDTH
 const NATION_WINDOW_TITLE_HEIGHT: float = MapLayout.NATION_WINDOW_TITLE_HEIGHT
+const NATION_WINDOW_SORT_HEIGHT: float = MapLayout.NATION_WINDOW_SORT_HEIGHT
 const NATION_WINDOW_HEADER_HEIGHT: float = MapLayout.NATION_WINDOW_HEADER_HEIGHT
 const NATION_WINDOW_ROW_HEIGHT: float = MapLayout.NATION_WINDOW_ROW_HEIGHT
 const NATION_WINDOW_FOOTER_HEIGHT: float = MapLayout.NATION_WINDOW_FOOTER_HEIGHT
@@ -50,6 +56,8 @@ const NATION_TREE_INDENT: float = MapLayout.NATION_TREE_INDENT
 const NATION_TREE_TOGGLE_SIZE: float = MapLayout.NATION_TREE_TOGGLE_SIZE
 const ACTIVE_REDRAW_FPS: float = 30.0
 const STATIC_REDRAW_FPS: float = 5.0
+const RULER_MENU_ARCHETYPE_BASE: int = 1000
+const RULER_MENU_TRAIT_BASE: int = 2000
 const PAPER_COLOR := Color(0.73, 0.61, 0.42)
 const PAPER_LIGHT := Color(0.86, 0.76, 0.57)
 const PAPER_DARK := Color(0.24, 0.19, 0.12)
@@ -103,9 +111,19 @@ enum MapMode {
 	TRADE,
 }
 
+enum NationSort {
+	ID,
+	CITY_COUNT,
+	TREASURY,
+	ARMY_COUNT,
+}
+
 const MAP_MODE_POLITICAL: int = MapMode.POLITICAL
 const MAP_MODE_LOYALTY: int = MapMode.LOYALTY
 const MAP_MODE_TRADE: int = MapMode.TRADE
+const NATION_SORT_CITY_COUNT: int = NationSort.CITY_COUNT
+const NATION_SORT_TREASURY: int = NationSort.TREASURY
+const NATION_SORT_ARMY_COUNT: int = NationSort.ARMY_COUNT
 
 var _cell: float = 64.0
 var _origin: Vector2 = Vector2(40.0, 90.0)
@@ -158,8 +176,13 @@ var _nation_stats_open: bool = false
 var _nation_stats_window_position := Vector2(-1.0, -1.0)
 var _nation_stats_drag_active: bool = false
 var _nation_stats_drag_offset := Vector2.ZERO
+var _selection_detail_window_position := Vector2(-1.0, -1.0)
+var _selection_detail_drag_active: bool = false
+var _selection_detail_drag_offset := Vector2.ZERO
 var _nation_stats_scroll: int = 0
 var _nation_stats_collapsed_nations: Dictionary = {}
+var _nation_stats_sort_key: int = NationSort.CITY_COUNT
+var _nation_stats_sort_descending: bool = true
 var _city_names_visible: bool = true
 var _nation_names_visible: bool = true
 var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
@@ -168,6 +191,8 @@ var _nation_list_cache_ownership_revision: int = -1
 var _nation_list_cache_diplomacy_revision: int = -1
 var _nation_list_cache_naming_revision: int = -1
 var _nation_list_cache_trade_revision: int = -1
+var _nation_list_cache_sort_key: int = -1
+var _nation_list_cache_sort_descending: bool = false
 var _nation_list_cache: Array[Dictionary] = []
 var _nation_list_alive_count: int = 0
 var _city_label_cache: Dictionary = {}
@@ -180,6 +205,7 @@ var _army_icon_label: Label
 var _army_icon_slider: HSlider
 var _city_name_button: Button
 var _nation_name_button: Button
+var _ruler_profile_menu: PopupMenu
 static var _nation_detail_section_build_count: int = 0
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
@@ -248,16 +274,23 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_nation_list_cache_diplomacy_revision = -1
 	_nation_list_cache_naming_revision = -1
 	_nation_list_cache_trade_revision = -1
+	_nation_list_cache_sort_key = -1
+	_nation_list_cache_sort_descending = false
 	_nation_list_cache.clear()
 	_nation_list_alive_count = 0
 	_nation_stats_drag_active = false
+	_selection_detail_window_position = Vector2(-1.0, -1.0)
+	_selection_detail_drag_active = false
 	_nation_stats_scroll = 0
 	_nation_stats_collapsed_nations.clear()
+	_nation_stats_sort_key = NationSort.CITY_COUNT
+	_nation_stats_sort_descending = true
 	_city_label_cache.clear()
 	_city_label_cache_naming_revision = -1
 	_contested_city_cache_day = -1
 	_contested_city_cache.clear()
 	_visual_animation_active = false
+	_close_ruler_profile_menu()
 	_layout_viewport_size = Vector2.ZERO
 	_layout_nation_count = -1
 	_layout_map_aspect_ratio = -1.0
@@ -266,6 +299,154 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 func _ready() -> void:
 	_font = create_ui_font()
 	_create_army_icon_scale_control()
+	_create_ruler_profile_menu()
+
+
+func _create_ruler_profile_menu() -> void:
+	_ruler_profile_menu = PopupMenu.new()
+	_ruler_profile_menu.name = "RulerProfileMenu"
+	_ruler_profile_menu.hide_on_checkable_item_selection = false
+	_ruler_profile_menu.hide_on_item_selection = false
+	_ruler_profile_menu.add_theme_font_override("font", _font)
+	_ruler_profile_menu.add_theme_font_size_override("font_size", 12)
+	_ruler_profile_menu.add_theme_color_override("font_color", INK_COLOR)
+	_ruler_profile_menu.add_theme_color_override(
+		"font_hover_color", PAPER_LIGHT
+	)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(PAPER_LIGHT, 0.99)
+	panel_style.border_color = INK_COLOR
+	panel_style.set_border_width_all(1)
+	panel_style.set_corner_radius_all(2)
+	panel_style.content_margin_left = 6.0
+	panel_style.content_margin_right = 6.0
+	panel_style.content_margin_top = 6.0
+	panel_style.content_margin_bottom = 6.0
+	_ruler_profile_menu.add_theme_stylebox_override("panel", panel_style)
+	add_child(_ruler_profile_menu)
+	_ruler_profile_menu.id_pressed.connect(
+		_on_ruler_profile_menu_id_pressed
+	)
+
+
+func open_ruler_profile_menu(viewport_position: Vector2) -> bool:
+	if (
+		_history_mode
+		or state == null
+		or sim == null
+		or _selected_nation_id < 0
+		or _selected_nation_id >= state.nations.size()
+		or _ruler_profile_menu == null
+	):
+		return false
+	_populate_ruler_profile_menu()
+	_ruler_profile_menu.position = Vector2i(
+		roundi(viewport_position.x),
+		roundi(viewport_position.y)
+	)
+	_ruler_profile_menu.popup()
+	return true
+
+
+func _close_ruler_profile_menu() -> void:
+	if _ruler_profile_menu != null:
+		_ruler_profile_menu.hide()
+
+
+func _populate_ruler_profile_menu() -> void:
+	if (
+		_ruler_profile_menu == null
+		or state == null
+		or _selected_nation_id < 0
+		or _selected_nation_id >= state.nations.size()
+	):
+		return
+	var nation := state.nations[_selected_nation_id]
+	_ruler_profile_menu.clear()
+	_ruler_profile_menu.add_item("君主原型", -1)
+	_ruler_profile_menu.set_item_disabled(0, true)
+	for archetype in RulerProfile.all_archetypes():
+		var item_id := RULER_MENU_ARCHETYPE_BASE + archetype
+		_ruler_profile_menu.add_radio_check_item(
+			RulerProfile.archetype_name(archetype), item_id
+		)
+		var item_index := _ruler_profile_menu.get_item_index(item_id)
+		_ruler_profile_menu.set_item_checked(
+			item_index, nation.ruler_archetype == archetype
+		)
+		_ruler_profile_menu.set_item_tooltip(
+			item_index, RulerProfile.archetype_description(archetype)
+		)
+	_ruler_profile_menu.add_separator(
+		"君主特质（最多%d项）" % RulerProfile.MAX_TRAITS
+	)
+	var all_traits := RulerProfile.all_traits()
+	for trait_index in range(all_traits.size()):
+		var trait_id := all_traits[trait_index]
+		var item_id := RULER_MENU_TRAIT_BASE + trait_index
+		var selected := nation.ruler_traits.has(trait_id)
+		var replaces_opposite := (
+			trait_id == RulerProfile.TRAIT_CENTRALIZER
+				and nation.ruler_traits.has(RulerProfile.TRAIT_FEUDALIST)
+		) or (
+			trait_id == RulerProfile.TRAIT_FEUDALIST
+				and nation.ruler_traits.has(RulerProfile.TRAIT_CENTRALIZER)
+		)
+		_ruler_profile_menu.add_check_item(
+			RulerProfile.trait_name(trait_id), item_id
+		)
+		var item_index := _ruler_profile_menu.get_item_index(item_id)
+		_ruler_profile_menu.set_item_checked(item_index, selected)
+		_ruler_profile_menu.set_item_disabled(
+			item_index,
+			not selected
+				and nation.ruler_traits.size() >= RulerProfile.MAX_TRAITS
+				and not replaces_opposite
+		)
+		_ruler_profile_menu.set_item_tooltip(
+			item_index, RulerProfile.trait_description(trait_id)
+		)
+
+
+func _on_ruler_profile_menu_id_pressed(item_id: int) -> void:
+	if (
+		_history_mode
+		or state == null
+		or sim == null
+		or _selected_nation_id < 0
+		or _selected_nation_id >= state.nations.size()
+	):
+		return
+	var nation := state.nations[_selected_nation_id]
+	var archetype := nation.ruler_archetype
+	var traits: Array[String] = nation.ruler_traits.duplicate()
+	if item_id >= RULER_MENU_ARCHETYPE_BASE and item_id < RULER_MENU_TRAIT_BASE:
+		var candidate := item_id - RULER_MENU_ARCHETYPE_BASE
+		if not RulerProfile.is_valid_archetype(candidate):
+			return
+		archetype = candidate
+	elif item_id >= RULER_MENU_TRAIT_BASE:
+		var trait_index := item_id - RULER_MENU_TRAIT_BASE
+		var all_traits := RulerProfile.all_traits()
+		if trait_index < 0 or trait_index >= all_traits.size():
+			return
+		var trait_id := all_traits[trait_index]
+		if traits.has(trait_id):
+			traits.erase(trait_id)
+		else:
+			if trait_id == RulerProfile.TRAIT_CENTRALIZER:
+				traits.erase(RulerProfile.TRAIT_FEUDALIST)
+			elif trait_id == RulerProfile.TRAIT_FEUDALIST:
+				traits.erase(RulerProfile.TRAIT_CENTRALIZER)
+			if traits.size() >= RulerProfile.MAX_TRAITS:
+				return
+			traits.append(trait_id)
+	else:
+		return
+	if sim.set_ruler_profile(_selected_nation_id, archetype, traits):
+		_nation_list_cache_day = -1
+		_populate_ruler_profile_menu()
+		queue_redraw()
 
 
 func _create_army_icon_scale_control() -> void:
@@ -506,6 +687,7 @@ func set_display_state(
 	fast_preview: bool = false
 ) -> void:
 	state = game_state
+	_close_ruler_profile_menu()
 	_history_mode = historical
 	_history_preview_active = fast_preview
 	if map_mode_override >= 0:
@@ -568,6 +750,7 @@ func refresh_road_network() -> void:
 
 
 func select_city(city_id: int) -> void:
+	_close_ruler_profile_menu()
 	if (
 		_history_mode
 		and state != null
@@ -577,6 +760,7 @@ func select_city(city_id: int) -> void:
 		select_nation(state.cities[city_id].owner_nation)
 		return
 	_selected_city_id = city_id
+	_selection_detail_drag_active = false
 	_selected_edge_a = -1
 	_selected_edge_b = -1
 	_selected_nation_id = -1
@@ -588,7 +772,9 @@ func select_city(city_id: int) -> void:
 
 
 func select_edge(city_a: int, city_b: int) -> void:
+	_close_ruler_profile_menu()
 	_selected_city_id = -1
+	_selection_detail_drag_active = false
 	_selected_edge_a = mini(city_a, city_b)
 	_selected_edge_b = maxi(city_a, city_b)
 	_selected_nation_id = -1
@@ -596,7 +782,9 @@ func select_edge(city_a: int, city_b: int) -> void:
 
 
 func select_nation(nation_id: int) -> void:
+	_close_ruler_profile_menu()
 	_selected_city_id = -1
+	_selection_detail_drag_active = false
 	_selected_edge_a = -1
 	_selected_edge_b = -1
 	_selected_nation_id = (
@@ -783,6 +971,18 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	var stats_rect := _nation_stats_window_rect()
 	if _handle_nation_stats_wheel(event, stats_rect):
 		return
+	if (
+		_selection_detail_drag_active
+		and event.button_index == MOUSE_BUTTON_LEFT
+		and not event.pressed
+	):
+		_handle_selection_detail_mouse_button(event)
+		return
+	if (
+		not (_nation_stats_open and stats_rect.has_point(event.position))
+		and _handle_selection_detail_mouse_button(event)
+	):
+		return
 	if _handle_map_wheel(event):
 		return
 	if _handle_right_mouse_button(event, stats_rect):
@@ -790,6 +990,51 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	_handle_left_mouse_button(event, stats_rect)
+
+
+func _handle_selection_detail_mouse_button(
+	event: InputEventMouseButton
+) -> bool:
+	if (
+		event.button_index == MOUSE_BUTTON_LEFT
+		and not event.pressed
+		and _selection_detail_drag_active
+	):
+		_selection_detail_drag_active = false
+		get_viewport().set_input_as_handled()
+		return true
+	var line_count := _selection_detail_line_count()
+	if line_count <= 0:
+		return false
+	var rect := _selection_detail_rect(line_count)
+	if not rect.has_point(event.position):
+		if event.pressed:
+			_close_ruler_profile_menu()
+		return false
+	if (
+		event.button_index == MOUSE_BUTTON_LEFT
+		and event.pressed
+		and _selected_nation_id >= 0
+		and not _history_mode
+		and ruler_profile_trigger_rect(
+			rect, _display_scale
+		).has_point(event.position)
+	):
+		open_ruler_profile_menu(event.position)
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return true
+	if (
+		event.button_index == MOUSE_BUTTON_LEFT
+		and event.pressed
+		and _selection_detail_title_rect(rect).has_point(event.position)
+	):
+		_selection_detail_drag_active = true
+		_selection_detail_window_position = rect.position
+		_selection_detail_drag_offset = event.position - rect.position
+	queue_redraw()
+	get_viewport().set_input_as_handled()
+	return true
 
 
 func _handle_nation_stats_wheel(
@@ -900,11 +1145,16 @@ func _handle_left_mouse_button(
 					point - stats_rect.position
 				)
 			else:
-				var toggled := _toggle_nation_tree_at_point(
-					point,
-					stats_rect
+				var sorted := _handle_nation_sort_at_point(
+					point, stats_rect
 				)
-				if not toggled:
+				var toggled := false
+				if not sorted:
+					toggled = _toggle_nation_tree_at_point(
+						point,
+						stats_rect
+					)
+				if not sorted and not toggled:
 					_select_nation_row_at_point(point, stats_rect)
 			queue_redraw()
 			get_viewport().set_input_as_handled()
@@ -942,7 +1192,7 @@ func _handle_magnify_gesture(event: InputEventMagnifyGesture) -> void:
 		return
 	_compute_layout()
 	if (
-		not _point_blocked_by_nation_stats(event.position)
+		not world_input_blocked(event.position)
 		and Rect2(_origin, _map_size).has_point(event.position)
 	):
 		_set_map_zoom_at(
@@ -957,7 +1207,7 @@ func _handle_pan_gesture(event: InputEventPanGesture) -> void:
 		return
 	_compute_layout()
 	if (
-		not _point_blocked_by_nation_stats(event.position)
+		not world_input_blocked(event.position)
 		and Rect2(_origin, _map_size).has_point(event.position)
 	):
 		_map_pan -= (
@@ -980,6 +1230,17 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
+	if _selection_detail_drag_active:
+		if (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+			_selection_detail_drag_active = false
+			return
+		_selection_detail_window_position = (
+			event.position - _selection_detail_drag_offset
+		)
+		_clamp_selection_detail_window_position()
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
 	if not world_layer_visible:
 		return
 	if (
@@ -998,13 +1259,6 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_apply_map_view_transform()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
-
-
-func _point_blocked_by_nation_stats(point: Vector2) -> bool:
-	return (
-		_nation_stats_open
-		and _nation_stats_window_rect().has_point(point)
-	)
 
 
 static func magnify_zoom_multiplier(factor: float) -> float:
@@ -1079,10 +1333,12 @@ func map_pan() -> Vector2:
 
 
 func _clear_selection() -> void:
+	_close_ruler_profile_menu()
 	_selected_city_id = -1
 	_selected_edge_a = -1
 	_selected_edge_b = -1
 	_selected_nation_id = -1
+	_selection_detail_drag_active = false
 	_set_diplomatic_view_nation(-1)
 	queue_redraw()
 
@@ -1130,6 +1386,8 @@ func _compute_layout() -> void:
 	if _nation_stats_open:
 		_clamp_nation_stats_window_position()
 		_clamp_nation_stats_scroll()
+	if _selection_detail_line_count() > 0:
+		_clamp_selection_detail_window_position()
 
 
 func _apply_map_view_transform() -> void:
@@ -1263,6 +1521,25 @@ static func nation_stats_close_rect(
 	return MapLayout.nation_stats_close_rect(window_rect, display_scale)
 
 
+static func nation_stats_sort_bar_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return MapLayout.nation_stats_sort_bar_rect(
+		window_rect, display_scale
+	)
+
+
+static func nation_stats_sort_button_rect(
+	window_rect: Rect2,
+	display_scale: float,
+	button_index: int
+) -> Rect2:
+	return MapLayout.nation_stats_sort_button_rect(
+		window_rect, display_scale, button_index
+	)
+
+
 static func nation_stats_row_rect(
 	window_rect: Rect2,
 	display_scale: float,
@@ -1300,7 +1577,7 @@ func _ensure_nation_stats_window_position() -> void:
 		_nation_list_rows_cached().size()
 	)
 	_nation_stats_window_position = Vector2(
-		(viewport_size.x - size.x) * 0.5,
+		NATION_WINDOW_MARGIN * _display_scale,
 		46.0 * _display_scale
 	)
 
@@ -1392,6 +1669,32 @@ func _toggle_nation_tree_at_point(
 	return false
 
 
+func _handle_nation_sort_at_point(
+	point: Vector2,
+	window_rect: Rect2
+) -> bool:
+	var sort_keys := [
+		NationSort.CITY_COUNT,
+		NationSort.TREASURY,
+		NationSort.ARMY_COUNT,
+	]
+	for button_index in range(4):
+		if not nation_stats_sort_button_rect(
+			window_rect, _display_scale, button_index
+		).has_point(point):
+			continue
+		if button_index < sort_keys.size():
+			_nation_stats_sort_key = int(sort_keys[button_index])
+		else:
+			_nation_stats_sort_descending = (
+				not _nation_stats_sort_descending
+			)
+		_nation_stats_scroll = 0
+		_nation_list_cache_day = -1
+		return true
+	return false
+
+
 func _select_nation_row_at_point(
 	point: Vector2,
 	window_rect: Rect2
@@ -1407,6 +1710,12 @@ func _select_nation_row_at_point(
 		if not row_rect.has_point(point):
 			continue
 		select_nation(int(rows[_nation_stats_scroll + visual_index]["nation_id"]))
+		if get_viewport_rect().size.x < (
+			NATION_WINDOW_WIDTH
+				+ DETAIL_PANEL_WIDTH
+				+ NATION_WINDOW_MARGIN * 3.0
+		) * _display_scale:
+			_nation_stats_open = false
 		return true
 	return false
 
@@ -3950,40 +4259,38 @@ func _draw_edges() -> void:
 		var danger := clampf(e.danger, 0.0, 1.0)
 		if not is_edge_visible(e):
 			continue
-		if e.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-			var river_color := Color(0.010, 0.105, 0.165, route_alpha)
-			river_color = river_color.lerp(
-				Color(0.22, 0.018, 0.028),
-				danger * 0.45
-			)
-			draw_polyline(
-				pixel_points,
-				Color(0.04, 0.075, 0.075, 0.90 * route_alpha),
-				7.0 * _display_scale
-			)
-			draw_polyline(
-				pixel_points,
-				river_color,
-				4.5 * _display_scale
-			)
-			continue
-		if e.kind == Edge.Kind.LANDING:
+		if edge_uses_water_ant_line(e.kind):
+			var water_color := WATER_ROUTE_COLOR
+			water_color.a *= route_alpha
 			for index in range(pixel_points.size() - 1):
 				draw_dashed_line(
 					pixel_points[index], pixel_points[index + 1],
-					Color(0.28, 0.018, 0.010, 0.96 * route_alpha),
-					3.0 * _display_scale, 6.0 * _display_scale
+					water_color,
+					WATER_ROUTE_WIDTH * _display_scale,
+					WATER_ROUTE_DASH_LENGTH * _display_scale,
+					true
 				)
 			continue
-		var road_level := (
-			2
-			if e.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
-			else 1
+		if not edge_uses_land_road_style(e.kind):
+			continue
+		var is_landing := e.kind == Edge.Kind.LANDING
+		var road_level := 1
+		if not is_landing and e.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER:
+			road_level = 2
+		var col := (
+			LANDING_ROAD_COLOR
+			if is_landing
+			else MAJOR_ROAD_COLOR
+			if road_level >= 2
+			else MINOR_ROAD_COLOR
 		)
-		var col := MAJOR_ROAD_COLOR if road_level >= 2 else MINOR_ROAD_COLOR
 		col.a *= route_alpha
 		var width := (
-			MAJOR_ROAD_WIDTH if road_level >= 2 else MINOR_ROAD_WIDTH
+			LANDING_ROAD_WIDTH
+			if is_landing
+			else MAJOR_ROAD_WIDTH
+			if road_level >= 2
+			else MINOR_ROAD_WIDTH
 		) * _display_scale
 		draw_polyline(pixel_points, col, width, true)
 		if danger >= 0.72:
@@ -4240,6 +4547,14 @@ func _draw_selection_highlight() -> void:
 
 static func is_edge_visible(edge: Edge) -> bool:
 	return MapHitTesting.is_edge_visible(edge)
+
+
+static func edge_uses_land_road_style(edge_kind: int) -> bool:
+	return edge_kind in [Edge.Kind.LAND, Edge.Kind.LANDING]
+
+
+static func edge_uses_water_ant_line(edge_kind: int) -> bool:
+	return edge_kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
 
 
 func _draw_cities() -> void:
@@ -5022,7 +5337,9 @@ static func ruler_summary(
 
 static func nation_list_rows(
 	game_state: GameState,
-	collapsed_nations: Dictionary = {}
+	collapsed_nations: Dictionary = {},
+	sort_key: int = NationSort.CITY_COUNT,
+	sort_descending: bool = true
 ) -> Array[Dictionary]:
 	var city_count_by_nation: Array[int] = []
 	var army_count_by_nation: Array[int] = []
@@ -5084,24 +5401,33 @@ static func nation_list_rows(
 		)
 		row_by_nation[nation.id] = {
 			"nation_id": nation.id,
+			"city_count": city_count_by_nation[nation.id],
+			"army_count": army_count_by_nation[nation.id],
+			"troop_count": troops_by_nation[nation.id],
+			"treasury_gold": nation.treasury_gold,
 			"color": nation.color,
 			"at_war": not wars.is_empty(),
 			"identity_primary": nation_debug_name(game_state, nation.id),
 			"identity_secondary": relation_text + war_tag,
-			"power_primary": "城 %d   军 %d   兵力 %d" % [
+			"power_primary": "城市 %d   军队 %d   兵力 %s" % [
 				city_count_by_nation[nation.id],
 				army_count_by_nation[nation.id],
-				troops_by_nation[nation.id],
+				_compact_quantity(troops_by_nation[nation.id]),
 			],
-			"power_secondary": "人力 %d   忠诚 %.0f" % [
-				nation.manpower_pool,
+			"power_secondary": "人力 %s   忠诚 %.0f" % [
+				_compact_quantity(nation.manpower_pool),
 				nation.average_loyalty,
 			],
-			"economy_primary": "国库 %d   月净 %+d" % [
-				nation.treasury_gold,
-				int(report["monthly_gold_balance"]),
+			"economy_primary": "国库 %s   月净 %s   商贸 %s" % [
+				_compact_quantity(nation.treasury_gold),
+				_signed_compact_quantity(int(report["monthly_gold_balance"])),
+				_signed_compact_quantity(nation.last_trade_gold),
 			],
-				"economy_secondary": food_snapshot_secondary,
+			"economy_secondary": "粮仓 %s   粮净 %s   商路 %d" % [
+				_compact_quantity(nation.granary_food),
+				_signed_compact_quantity(nation.last_food_estimated_balance),
+				nation.last_trade_route_count,
+			],
 			"governance_primary": "%s · %s" % [
 				nation.ruler_name if not nation.ruler_name.is_empty() else "无名君主",
 				RulerProfile.archetype_name(nation.ruler_archetype),
@@ -5152,9 +5478,17 @@ static func nation_list_rows(
 		(
 			children_by_parent[parent_id] as Array[int]
 		).append(nation_id)
-	root_ids.sort()
-	for child_values in children_by_parent.values():
-		(child_values as Array[int]).sort()
+	root_ids = _sorted_nation_ids(
+		root_ids, row_by_nation, sort_key, sort_descending
+	)
+	for parent_value in children_by_parent.keys():
+		var parent_id := int(parent_value)
+		children_by_parent[parent_id] = _sorted_nation_ids(
+			children_by_parent[parent_id],
+			row_by_nation,
+			sort_key,
+			sort_descending
+		)
 	var rows: Array[Dictionary] = []
 	var visited := {}
 	for root_id in root_ids:
@@ -5168,7 +5502,9 @@ static func nation_list_rows(
 			visited
 		)
 	# 宗藩数据若暂时损坏成环，仍保证每个存活国家显示一次。
-	for nation_id in visible_nation_ids:
+	for nation_id in _sorted_nation_ids(
+		visible_nation_ids, row_by_nation, sort_key, sort_descending
+	):
 		if visited.has(nation_id):
 			continue
 		_append_nation_tree_rows(
@@ -5181,6 +5517,45 @@ static func nation_list_rows(
 			visited
 		)
 	return rows
+
+
+static func _sorted_nation_ids(
+	nation_ids: Array[int],
+	row_by_nation: Dictionary,
+	sort_key: int,
+	sort_descending: bool
+) -> Array[int]:
+	var result := nation_ids.duplicate()
+	result.sort_custom(func(a: int, b: int) -> bool:
+		var row_a: Dictionary = row_by_nation[a]
+		var row_b: Dictionary = row_by_nation[b]
+		var value_a := _nation_sort_value(row_a, sort_key)
+		var value_b := _nation_sort_value(row_b, sort_key)
+		if value_a == value_b:
+			return a < b
+		return value_a > value_b if sort_descending else value_a < value_b
+	)
+	return result
+
+
+static func _nation_sort_value(row: Dictionary, sort_key: int) -> int:
+	match sort_key:
+		NationSort.CITY_COUNT:
+			return int(row.get("city_count", 0))
+		NationSort.TREASURY:
+			return int(row.get("treasury_gold", 0))
+		NationSort.ARMY_COUNT:
+			return int(row.get("army_count", 0))
+	return int(row.get("nation_id", -1))
+
+
+static func _nation_sort_label(sort_key: int) -> String:
+	match sort_key:
+		NationSort.TREASURY:
+			return "国库"
+		NationSort.ARMY_COUNT:
+			return "军队"
+	return "城市"
 
 
 static func _append_nation_tree_rows(
@@ -5294,7 +5669,13 @@ static func nation_action_summary(
 	var actions: Array[String] = []
 	if nation.war_preparation_target_nation >= 0:
 		actions.append(
-			"备战→%s/%s" % [
+			"%s→%s/%s" % [
+				(
+					"私战备战"
+					if nation.war_preparation_scope
+						== GameState.WarScope.VASSAL_PRIVATE
+					else "备战"
+				),
 				WorldNaming.nation_display_name(
 					game_state, nation.war_preparation_target_nation
 				),
@@ -5364,15 +5745,24 @@ func _nation_list_rows_cached() -> Array[Dictionary]:
 			!= state.diplomacy_revision
 		or _nation_list_cache_naming_revision != state.naming_revision
 		or _nation_list_cache_trade_revision != state.trade_revision
+		or _nation_list_cache_sort_key != _nation_stats_sort_key
+		or _nation_list_cache_sort_descending
+			!= _nation_stats_sort_descending
 	):
 		_nation_list_cache_day = state.day
 		_nation_list_cache_ownership_revision = state.ownership_revision
 		_nation_list_cache_diplomacy_revision = state.diplomacy_revision
 		_nation_list_cache_naming_revision = state.naming_revision
 		_nation_list_cache_trade_revision = state.trade_revision
+		_nation_list_cache_sort_key = _nation_stats_sort_key
+		_nation_list_cache_sort_descending = (
+			_nation_stats_sort_descending
+		)
 		_nation_list_cache = nation_list_rows(
 			state,
-			_nation_stats_collapsed_nations
+			_nation_stats_collapsed_nations,
+			_nation_stats_sort_key,
+			_nation_stats_sort_descending
 		)
 		_nation_list_alive_count = nation_list_alive_count(state)
 	return _nation_list_cache
@@ -5509,8 +5899,12 @@ func _draw_nation_stats_window() -> void:
 		window_rect,
 		_display_scale
 	)
+	var sort_bar_rect := nation_stats_sort_bar_rect(
+		window_rect,
+		_display_scale
+	)
 	var header_rect := Rect2(
-		Vector2(window_rect.position.x, title_rect.end.y),
+		Vector2(window_rect.position.x, sort_bar_rect.end.y),
 		Vector2(
 			window_rect.size.x,
 			NATION_WINDOW_HEADER_HEIGHT * _display_scale
@@ -5546,7 +5940,7 @@ func _draw_nation_stats_window() -> void:
 	draw_string(
 		_font,
 		title_rect.position + Vector2(12.0, 20.0) * _display_scale,
-		"国家列表  显示 %d / 存活 %d  · 拖动标题栏移动"
+		"国家列表  %d / %d"
 			% [rows.size(), _nation_list_alive_count],
 		HORIZONTAL_ALIGNMENT_LEFT,
 		title_rect.size.x - 48.0 * _display_scale,
@@ -5569,14 +5963,63 @@ func _draw_nation_stats_window() -> void:
 		_font_size(14),
 		PAPER_LIGHT
 	)
+	draw_rect(sort_bar_rect, Color(0.19, 0.16, 0.11, 0.98), true)
+	draw_string(
+		_font,
+		sort_bar_rect.position + Vector2(8.0, 19.0) * _display_scale,
+		"排序",
+		HORIZONTAL_ALIGNMENT_LEFT,
+		38.0 * _display_scale,
+		_font_size(9),
+		PAPER_LIGHT
+	)
+	var sort_keys := [
+		NationSort.CITY_COUNT,
+		NationSort.TREASURY,
+		NationSort.ARMY_COUNT,
+	]
+	var sort_labels := ["城市", "国库", "军队"]
+	for button_index in range(4):
+		var sort_button := nation_stats_sort_button_rect(
+			window_rect, _display_scale, button_index
+		)
+		var selected := (
+			button_index < sort_keys.size()
+			and int(sort_keys[button_index]) == _nation_stats_sort_key
+		)
+		draw_rect(
+			sort_button,
+			ACCENT_GOLD.darkened(0.36) if selected else PAPER_DARK,
+			true
+		)
+		draw_rect(
+			sort_button,
+			ACCENT_GOLD if selected else PAPER_LIGHT.darkened(0.28),
+			false,
+			1.0 * _display_scale
+		)
+		var label := (
+			str(sort_labels[button_index])
+			if button_index < sort_labels.size()
+			else "↓" if _nation_stats_sort_descending else "↑"
+		)
+		draw_string(
+			_font,
+			sort_button.position + Vector2(2.0, 14.0) * _display_scale,
+			label,
+			HORIZONTAL_ALIGNMENT_CENTER,
+			sort_button.size.x - 4.0 * _display_scale,
+			_font_size(9),
+			PAPER_LIGHT
+		)
 	draw_rect(header_rect, Color(0.28, 0.22, 0.14, 0.96), true)
 	_draw_nation_window_cells(
 		header_rect,
 		{
-			"identity_primary": "国家身份",
-			"power_primary": "国力与民心",
-			"economy_primary": "财政与贸易",
-			"governance_primary": "君主与政务",
+			"identity_primary": "国家与关系",
+			"power_primary": "城市与军力",
+			"economy_primary": "财政与粮储",
+			"governance_primary": "君主与行动",
 		},
 		PAPER_LIGHT,
 		_font_size(10)
@@ -5641,8 +6084,10 @@ func _draw_nation_stats_window() -> void:
 	)
 	draw_rect(footer_rect, Color(0.25, 0.20, 0.13, 0.96), true)
 	var footer := (
-		"箭头展开/收起 · 滚轮浏览  %d-%d / %d"
+		"%s%s  ·  %d-%d / %d"
 		% [
+			_nation_sort_label(_nation_stats_sort_key),
+			"↓" if _nation_stats_sort_descending else "↑",
 			mini(_nation_stats_scroll + 1, rows.size()),
 			visible_end,
 			rows.size(),
@@ -5777,10 +6222,7 @@ func _draw_selection_detail(detail_payload: Dictionary) -> void:
 	)
 	draw_rect(rect, PAPER_LIGHT, true)
 	draw_rect(rect, INK_COLOR, false, 2.0 * _display_scale)
-	var title_rect := Rect2(
-		rect.position,
-		Vector2(rect.size.x, 28.0 * _display_scale)
-	)
+	var title_rect := _selection_detail_title_rect(rect)
 	draw_rect(title_rect, stripe_color, true)
 	draw_line(
 		Vector2(rect.position.x, title_rect.end.y),
@@ -5793,10 +6235,25 @@ func _draw_selection_detail(detail_payload: Dictionary) -> void:
 		rect.position + Vector2(12.0, 19.0) * _display_scale,
 		title,
 		HORIZONTAL_ALIGNMENT_LEFT,
-		rect.size.x - 24.0 * _display_scale,
+		rect.size.x - 52.0 * _display_scale,
 		_font_size(12),
 		PAPER_LIGHT
 	)
+	for grip_index in range(3):
+		var grip_y := (
+			title_rect.position.y
+			+ (10.0 + 4.0 * grip_index) * _display_scale
+		)
+		draw_line(
+			Vector2(title_rect.end.x - 24.0 * _display_scale, grip_y),
+			Vector2(title_rect.end.x - 10.0 * _display_scale, grip_y),
+			Color(PAPER_LIGHT, 0.65),
+			1.0 * _display_scale
+		)
+	if _selected_nation_id >= 0 and not _history_mode:
+		var trigger_rect := ruler_profile_trigger_rect(rect, _display_scale)
+		draw_rect(trigger_rect, Color(INK_COLOR, 0.07), true)
+		draw_rect(trigger_rect, Color(INK_COLOR, 0.30), false, 1.0)
 	var visual_line := 0
 	for section in sections:
 		var section_title := str(section.get("title", ""))
@@ -5826,15 +6283,13 @@ func _selection_detail_line_count() -> int:
 	if state == null:
 		return 0
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
-		return _city_detail_line_count()
+		return _city_detail_line_count(state, _selected_city_id)
 	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
 		if edge != null:
 			return _edge_detail_line_count()
 	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
-		return _section_visual_line_count(
-			_display_nation_detail_sections(_selected_nation_id)
-		)
+		return _nation_detail_line_count(state, _selected_nation_id)
 	return 0
 
 
@@ -5852,7 +6307,7 @@ func _selection_detail_payload() -> Dictionary:
 	var stripe_color := COMMAND_GREEN
 	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
 		var city := state.cities[_selected_city_id]
-		title = "城市信息  %s" % city_debug_name(state, city.id)
+		title = "城市信息  %s" % WorldNaming.city_display_name(state, city.id)
 		if city.owner_nation >= 0 and city.owner_nation < state.nations.size():
 			stripe_color = GameState.normalize_nation_color(
 				paper_nation_color(
@@ -5934,12 +6389,22 @@ static func _section_layout_line_count(line_counts: PackedInt32Array) -> int:
 	return count
 
 
-static func _city_detail_line_count() -> int:
-	return _section_layout_line_count(PackedInt32Array([3, 2, 3, 3, 1]))
-
-
 static func _edge_detail_line_count() -> int:
 	return _section_layout_line_count(PackedInt32Array([6]))
+
+
+static func _city_detail_line_count(
+	game_state: GameState,
+	city_id: int
+) -> int:
+	if city_id < 0 or city_id >= game_state.cities.size():
+		return 0
+	var governance_lines := (
+		3 if game_state.cities[city_id].rebellion_progress > 0 else 2
+	)
+	return _section_layout_line_count(PackedInt32Array([
+		2, 2, 2, governance_lines,
+	]))
 
 
 static func _nation_detail_line_count(
@@ -5971,12 +6436,53 @@ func _selection_detail_rect(line_count: int) -> Rect2:
 		43.0 * _display_scale
 		+ 17.0 * _display_scale * float(line_count)
 	)
-	return Rect2(
-		Vector2(
+	var size := Vector2(width, height)
+	var top_inset := BASE_HEADER_ONLY_TOP * _display_scale
+	var bottom_inset := BASE_BOTTOM_MARGIN * _display_scale
+	var position := _selection_detail_window_position
+	if position.x < 0.0 or position.y < 0.0:
+		position = Vector2(
 			viewport_size.x - width - margin,
-			viewport_size.y - height - margin
-		),
-		Vector2(width, height)
+			viewport_size.y - height - bottom_inset
+		)
+	var maximum := Vector2(
+		maxf(viewport_size.x - size.x - margin, margin),
+		maxf(viewport_size.y - size.y - bottom_inset, top_inset)
+	)
+	position = Vector2(
+		clampf(position.x, margin, maximum.x),
+		clampf(position.y, top_inset, maximum.y)
+	)
+	_selection_detail_window_position = position
+	return Rect2(position, size)
+
+
+func _clamp_selection_detail_window_position() -> void:
+	var line_count := _selection_detail_line_count()
+	if line_count <= 0:
+		return
+	_selection_detail_window_position = _selection_detail_rect(
+		line_count
+	).position
+
+
+func _selection_detail_title_rect(window_rect: Rect2) -> Rect2:
+	return Rect2(
+		window_rect.position,
+		Vector2(window_rect.size.x, 28.0 * _display_scale)
+	)
+
+
+static func ruler_profile_trigger_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return Rect2(
+		window_rect.position + Vector2(10.0, 63.0) * display_scale,
+		Vector2(
+			window_rect.size.x / display_scale - 20.0,
+			18.0
+		) * display_scale
 	)
 
 
@@ -6016,7 +6522,13 @@ static func city_detail_sections(
 	var type_name := "河运码头" if city.is_dock else "陆地城市"
 	var special: Array[String] = []
 	if city.is_capital:
-		special.append("首都")
+		var capital_bonus := Simulation.capital_development_gold_bonus(
+			game_state, city
+		)
+		special.append("首都·%d年·金+%d" % [
+			Simulation.capital_development_years(game_state, city),
+			capital_bonus,
+		])
 	if city.has_warehouse:
 		special.append("粮仓")
 	if city.is_food_hub:
@@ -6037,68 +6549,75 @@ static func city_detail_sections(
 		else "无"
 	)
 	var reason := loyalty_reason_text(city.last_loyalty_reason)
+	var controller_name := (
+		WorldNaming.nation_display_name(game_state, city.owner_nation)
+		if (
+			city.owner_nation >= 0
+			and city.owner_nation < game_state.nations.size()
+		)
+		else "无主"
+	)
+	var legal_owner_name := (
+		WorldNaming.nation_display_name(game_state, legal_owner)
+		if legal_owner >= 0 and legal_owner < game_state.nations.size()
+		else "无"
+	)
+	var fort_line := "工事 %d / %d" % [
+		city.fort_strength, city.fort_strength_max,
+	]
+	if recovery_days > 0:
+		fort_line += " · 恢复 %d 日" % recovery_days
+	var governance_lines: Array[String] = [
+		"忠诚 %.1f    趋势 %+0.2f/月    动乱 %.1f" % [
+			city.loyalty, city.loyalty_trend, city.unrest,
+		],
+		"认同：%s    原因：%s" % [target_name, reason],
+	]
+	if city.rebellion_progress > 0:
+		governance_lines.append(
+			"叛乱进度：%d / %d 月" % [
+				city.rebellion_progress,
+				RebellionSystem.REBELLION_PROGRESS_MONTHS,
+			]
+		)
 	return [
 		{"title": "概况", "lines": [
-			"简称：%s" % WorldNaming.city_short_name(game_state, city_id),
 			"%s · %s · %s" % [
-			type_name,
-			"交战中" if contested else "稳定",
+				type_name,
+				"交战中" if contested else "稳定",
 				" / ".join(special) if not special.is_empty() else "普通据点",
-		],
+			],
 			"控制：%s    法理：%s" % [
-			nation_debug_name(game_state, city.owner_nation),
-			nation_debug_name(game_state, legal_owner),
-		],
+				controller_name, legal_owner_name,
+			],
 		]},
 		{"title": "军事", "lines": [
-			"工事：%d / %d    恢复：%d 日" % [
-			city.fort_strength,
-			city.fort_strength_max,
-			recovery_days,
-		],
+			fort_line,
 			"驻军：%d 支，共 %d 人" % [
-			garrison_count,
-			garrison_troops,
-		],
+				garrison_count, garrison_troops,
+			],
 		]},
 		{"title": "经济", "lines": [
-			"人力 %+d/月    金钱 %+d/月    粮食 %+d/半年" % [
-			city.manpower_per_month,
-			city.gold_per_month,
-			city.food_per_half_year,
-		],
-			"发展：金×%.2f  粮×%.2f  地形×%.2f" % [
-			city.development_gold_multiplier,
-			city.development_food_multiplier,
-			city.terrain_output_multiplier,
-		],
-			"库存：%d    海拔 %.2f    起伏 %.2f" % [
-			city.food_storage,
-			city.terrain_height,
-			city.terrain_relief,
-		],
-		]},
-		{"title": "治理", "lines": [
-			"忠诚 %.1f    趋势 %+0.2f/月    动乱 %.1f" % [
-				city.loyalty, city.loyalty_trend, city.unrest,
+			"月产：人力 %+d    金钱 %+d    粮食 %+d/半年" % [
+				Simulation.city_manpower_output(game_state, city),
+				Simulation.city_gold_output(game_state, city),
+				Simulation.city_food_output(
+					game_state, city, {city_id: garrison_troops}
+				),
 			],
-			"认同：%s    原因：%s" % [
-				target_name, reason,
-			],
-			"叛乱进度：%d / %d 月" % [
-				city.rebellion_progress, RebellionSystem.REBELLION_PROGRESS_MONTHS,
+			"库存：%d    商路：%d    贸易金：%+d/月" % [
+				city.food_storage,
+				city.trade_route_count,
+				city.trade_gold_bonus,
 			],
 		]},
-		{"title": "贸易", "lines": [
-			"商路：%d    贸易金：%+d/月    粮食净流：%+d/月" % [
-				city.trade_route_count, city.trade_gold_bonus, city.trade_food_balance,
-			],
-		]},
+		{"title": "治理", "lines": governance_lines},
 	] as Array[Dictionary]
 
 
 static func loyalty_reason_text(raw_reason: String) -> String:
 	var labels := {
+		"initial": "初始归属",
 		"foreign_rule": "异国统治",
 		"capital": "首都归属",
 		"distance": "远离中枢",
@@ -6215,11 +6734,44 @@ static func nation_detail_sections(
 	var monthly_food_balance_text := _signed_value_text(
 		n.last_food_estimated_balance
 	)
+	var cohesion_root := game_state.suzerainty_root(nation_id)
+	var cohesion := game_state.suzerainty_cohesion(cohesion_root)
+	var private_war_count := 0
+	for enemy_id in game_state.wars_of(nation_id):
+		if game_state.is_private_war(nation_id, enemy_id):
+			private_war_count += 1
+	var suzerainty_status := "宗藩凝聚力 %.0f%%" % (cohesion * 100.0)
+	if game_state.is_vassal(nation_id):
+		suzerainty_status += (
+			"    私战已解锁"
+			if cohesion
+				< GameState.VASSAL_PRIVATE_WAR_COHESION_THRESHOLD
+			else "    私战受约束"
+		)
+	if private_war_count > 0:
+		suzerainty_status += "    私人战争 %d" % private_war_count
+	var diplomacy_lines: Array[String] = []
+	if (
+		game_state.is_vassal(nation_id)
+		or game_state.is_overlord(nation_id)
+		or private_war_count > 0
+	):
+		diplomacy_lines.append(suzerainty_status)
+	diplomacy_lines.append(
+		"战争：%s" % _nation_id_list_text(
+			game_state, game_state.wars_of(nation_id)
+		)
+	)
+	diplomacy_lines.append(
+		"盟国：%s" % _nation_id_list_text(
+			game_state, game_state.allies_of(nation_id)
+		)
+	)
+	diplomacy_lines.append(nation_action_summary(game_state, nation_id))
 	var sections: Array[Dictionary] = [
 		{"title": "身份与君主", "lines": [
-			"%s    %s" % [
-				_nation_relation_text(game_state, nation_id), ruler_summary(n, game_state),
-			],
+			_nation_relation_text(game_state, nation_id),
+			"君主 %s  ▼" % ruler_summary(n, game_state),
 		]},
 		{"title": "国力与民心", "lines": [
 			"城市 %d    军队 %d 支    总兵力 %d" % [
@@ -6234,28 +6786,24 @@ static func nation_detail_sections(
 				int(finance["monthly_city_gold_income"]),
 				int(finance["monthly_tribute_balance"]),
 			],
+			"商路 %d    商贸金 %s/月" % [
+				n.last_trade_route_count,
+				_signed_value_text(n.last_trade_gold),
+			],
 			"军费 %d    欠饷 %d    支付率 %.0f%%" % [
 				n.last_military_upkeep, n.unpaid_military_upkeep,
 				n.military_payment_ratio * 100.0,
 			],
 		]},
-		{"title": "粮食与贸易", "lines": [
+		{"title": "粮食储备", "lines": [
 			"粮仓 %d    月产(预计) %d    月需(预计) %d    月净(预计) %s" % [
 				n.granary_food,
 				n.last_food_estimated_production,
 				n.last_food_estimated_consumption,
 				monthly_food_balance_text,
 			],
-			"商路 %d    商贸金 %s" % [
-				n.last_trade_route_count,
-				_signed_value_text(n.last_trade_gold),
-			],
 		]},
-		{"title": "外交与行动", "lines": [
-			"战争：%s" % _nation_id_list_text(game_state, game_state.wars_of(nation_id)),
-			"盟国：%s" % _nation_id_list_text(game_state, game_state.allies_of(nation_id)),
-			nation_action_summary(game_state, nation_id),
-		]},
+		{"title": "外交与行动", "lines": diplomacy_lines},
 	]
 	if not n.campaign_attack_assignments.is_empty():
 		var target_set := {}
@@ -6364,6 +6912,19 @@ static func _signed_value_text(value: int) -> String:
 	if value < 0:
 		return "%d" % value
 	return "0"
+
+
+static func _compact_quantity(value: int) -> String:
+	var magnitude := absi(value)
+	if magnitude >= 100000000:
+		return "%.1f亿" % (float(value) / 100000000.0)
+	if magnitude >= 10000:
+		return "%.1f万" % (float(value) / 10000.0)
+	return str(value)
+
+
+static func _signed_compact_quantity(value: int) -> String:
+	return ("+" if value > 0 else "") + _compact_quantity(value)
 
 
 static func _diplomatic_action_name(action: int) -> String:

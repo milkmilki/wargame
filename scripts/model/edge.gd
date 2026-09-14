@@ -21,8 +21,7 @@ var city_a: int = -1                       ## 端点 A（较小 id）
 var city_b: int = -1                       ## 端点 B（较大 id）
 
 var kind: int = Kind.LAND                  ## 陆路 / 码头抢滩连接 / 码头间水路
-## 每个国家、每个方向的道路运输吞吐与战斗正面。军队最低准入按
-## Army.road_footprint()，大编制在窄路上分批通行而不拆成多个 Army。
+## 0 表示断路；正数继续作为贸易吞吐与战斗正面，但不限制军队通行。
 var max_manpower: int = STANDARD_MANPOWER
 var distance: int = 1                      ## 距离
 var danger: float = 0.0                    ## 地形危险系数 (0,1)

@@ -16,8 +16,8 @@ var is_dock: bool = false                 ## 河运码头交通节点；复用�
 ## false 表示仅作为自然地理/交通节点存在，不参与初始政治与模拟。
 var politically_active: bool = true
 var owner_nation: int = -1                ## 所属国家 id
-## 当前占领归属哪一个战争结算责任方；和平确认后清空。和平宗藩的军队
-## 对外攻城时记录其主权宗主，避免执行攻城的藩王先灭亡后丢失战果来源。
+## 当前占领归属哪一个战争结算责任方；和平确认后清空。普通共同战争与
+## 低凝聚力私人战争都记录实际发起占领的一方，议和据此确认战果。
 var occupation_sponsor_nation: int = -1
 
 ## 当前有效城墙/工事强度（量纲：城防点数，值域通常 0~30；非兵力）。
@@ -58,6 +58,8 @@ var trade_food_balance: int = 0
 var ruler_city_defense_multiplier: float = 1.0
 
 var is_capital: bool = false               ## 是否为当前所属国家首都
+## 连续成为当前首都的起始世界日；降为普通城市后立即恢复 -1。
+var capital_since_day: int = -1
 var has_warehouse: bool = false            ## 是否设有粮仓（当前仅首都为 true）
 
 ## 本城粮仓库存（仅 has_warehouse=true 时有效，是该粮仓库存 SSoT）。

@@ -9,8 +9,8 @@ const SUPPLY_DISTANCE_LOSS: float = 0.10   ## 每单位边长的基础运输损�
 const SUPPLY_DANGER_MULT: float = 1.0      ## danger 对该边距离损耗的乘性放大系数
 
 ## 单源最短路场：返回 { "dist": {id->float}, "prev": {id->int} }。
-## required_manpower 表示运输编制规模：道路只需容纳一个 5000 人运输包，
-## 但窄路会按 ceil(编制/容量) 增加完整编制的通过时间。
+## required_manpower 为兼容现有调用保留；军事通行只区分 0 容量断路与
+## 正容量可通行，道路数值大小不再影响军队准入或行军时间。
 static func dijkstra_field(
 	state: GameState,
 	start: int,
@@ -41,12 +41,6 @@ static func dijkstra_field(
 		_enemy_occupied_edge_keys(state, allowed_nation)
 		if block_contested_edges
 		else {}
-	)
-	# required_manpower is the transported formation size. Eligibility uses one
-	# 5000-man packet; edge cost accounts for how many sequential batches the
-	# complete formation needs. Strategic force size remains otherwise intact.
-	var route_footprint := (
-		Army.road_footprint_for_formation(required_manpower)
 	)
 	var queue: Array[Dictionary] = [{
 		"city": start,
@@ -87,11 +81,7 @@ static func dijkstra_field(
 				):
 					continue
 			var e := state.edge_of(u, v)
-			if (
-				e == null
-				or e.max_manpower <= 0
-				or e.max_manpower < route_footprint
-			):
+			if e == null or e.max_manpower <= 0:
 				continue
 			if (
 				block_contested_edges
@@ -124,18 +114,15 @@ static func dijkstra_field(
 	return { "dist": dist, "prev": prev }
 
 
-## 寻路使用的运输距离。与实际行军一样，大编制经过窄路时按运输批次放大；
-## danger 是路线风险而非运输时间，由调用方另行叠加。
+## 寻路使用的军事距离。正容量道路对所有编制拥有相同通行时间；danger
+## 是路线风险而非运输时间，由调用方另行叠加。
 static func _edge_transport_distance(
 	edge: Edge,
-	formation_size: int
+	_formation_size: int
 ) -> float:
 	return (
 		float(maxi(edge.distance, 1))
 		* maxf(edge.travel_time_multiplier, 0.05)
-		* float(Army.road_transport_batches_for_formation(
-			formation_size, edge.max_manpower
-		))
 	)
 
 
@@ -349,7 +336,7 @@ static func _nearest_retreat_city(
 
 
 ## 城市中的军队是否存在通往其他本国/盟友城市的合法撤退路径。
-## 当前城本身不算退路；道路只需容纳一个运输包，敌国城市不能作为中间节点。
+## 当前城本身不算退路；任意正容量道路均可通行，敌国城市不能作为中间节点。
 static func has_friendly_retreat_route_from_city(
 	state: GameState,
 	nation_id: int,
@@ -363,15 +350,11 @@ static func has_friendly_retreat_route_from_city(
 		or city_id >= state.cities.size()
 	):
 		return false
-	var route_footprint := (
-		Army.road_footprint_for_formation(required_manpower)
-	)
 	for neighbor in state.neighbors(city_id):
 		var edge := state.edge_of(city_id, neighbor)
 		if (
 			edge != null
 			and edge.max_manpower > 0
-			and edge.max_manpower >= route_footprint
 			and state.has_military_access(
 				nation_id,
 				state.cities[neighbor].owner_nation

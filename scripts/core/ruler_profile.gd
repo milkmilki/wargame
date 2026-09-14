@@ -104,7 +104,7 @@ const ARCHETYPE_NAMES: Dictionary = {
 
 const ARCHETYPE_DESCRIPTIONS: Dictionary = {
 	Archetype.BALANCED: "行事稳健，各项国政均衡，没有明显长处或短板。",
-	Archetype.CONQUEROR: "崇尚武功，善于鼓舞军队并扩充兵源，但更难休战且军需沉重。",
+	Archetype.CONQUEROR: "崇尚武功，战争收益更高、攻势更频繁，并能以更低成本维持强军。",
 	Archetype.GUARDIAN: "专注守土与积储，城防坚固，不会主动发动攻势。",
 	Archetype.INEPT: "才具平庸，生产、军备与外交皆受拖累，也无力组织主动攻势。",
 	Archetype.TYRANT: "以高压榨取财富和兵员，热衷集权，却损害民心、外交与长期稳定。",
@@ -159,6 +159,8 @@ const KEY_GOLD_OUTPUT: String = "gold_output_multiplier"
 const KEY_FOOD_OUTPUT: String = "food_output_multiplier"
 const KEY_MANPOWER_OUTPUT: String = "manpower_output_multiplier"
 const KEY_UPKEEP: String = "upkeep_multiplier"
+const KEY_WAR_BENEFIT: String = "war_benefit_multiplier"
+const KEY_OFFENSIVE_INTERVAL: String = "offensive_interval_multiplier"
 const KEY_FOOD_CONSUMPTION: String = "food_consumption_multiplier"
 const KEY_MORALE: String = "morale_multiplier"
 const KEY_DEFENSE: String = "defense_multiplier"
@@ -466,6 +468,18 @@ static func upkeep_multiplier(
 	return float(modifiers(profile_or_archetype, traits)[KEY_UPKEEP])
 
 
+static func war_benefit_multiplier(
+	profile_or_archetype: Variant, traits: Array = []
+) -> float:
+	return float(modifiers(profile_or_archetype, traits)[KEY_WAR_BENEFIT])
+
+
+static func offensive_interval_multiplier(
+	profile_or_archetype: Variant, traits: Array = []
+) -> float:
+	return float(modifiers(profile_or_archetype, traits)[KEY_OFFENSIVE_INTERVAL])
+
+
 static func food_consumption_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
@@ -551,6 +565,8 @@ static func _base_modifiers(archetype: int) -> Dictionary:
 		KEY_FOOD_OUTPUT: 1.0,
 		KEY_MANPOWER_OUTPUT: 1.0,
 		KEY_UPKEEP: 1.0,
+		KEY_WAR_BENEFIT: 1.0,
+		KEY_OFFENSIVE_INTERVAL: 1.0,
 		KEY_FOOD_CONSUMPTION: 1.0,
 		KEY_MORALE: 1.0,
 		KEY_DEFENSE: 1.0,
@@ -567,7 +583,8 @@ static func _base_modifiers(archetype: int) -> Dictionary:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 2.00, KEY_PEACE: 0.45, KEY_ALLIANCE: 0.80,
 				KEY_GOLD_OUTPUT: 0.90, KEY_FOOD_OUTPUT: 0.90,
-				KEY_MANPOWER_OUTPUT: 1.50, KEY_UPKEEP: 1.35,
+				KEY_MANPOWER_OUTPUT: 1.50, KEY_UPKEEP: 0.50,
+				KEY_WAR_BENEFIT: 2.00, KEY_OFFENSIVE_INTERVAL: 0.50,
 				KEY_FOOD_CONSUMPTION: 1.35, KEY_MORALE: 2.00,
 				KEY_DEFENSE: 2.00, KEY_CITY_DEFENSE: 0.80,
 				KEY_ENFEOFF: 0.55, KEY_CENTRALIZE: 1.50, KEY_TRADE: 0.75,

@@ -1,10 +1,9 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://daq2ao86r7uod"]
 
 [ext_resource type="PackedScene" path="res://main.tscn" id="1_main"]
 
-[node name="FortyNations" instance=ExtResource("1_main")]
+[node name="FortyNations" unique_id=449707416 instance=ExtResource("1_main")]
 nation_count = 40
-terrain_city_count = 160
 randomize_world_seed_on_start = true
 initial_army_icon_scale = 0.4
 initial_city_names_visible = false

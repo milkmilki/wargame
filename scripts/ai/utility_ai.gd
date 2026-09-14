@@ -47,28 +47,7 @@ static func choose(
 			snapshot,
 			threat
 		)
-	var vassal_main_reserve := (
-		army.is_main_battle_role()
-		and view.state.is_vassal(view.nation_id)
-		and not view.state.is_in_civil_war(
-			view.nation_id
-		)
-	)
 	if army.state == Army.State.HOLDING:
-		if vassal_main_reserve:
-			var reserve_recall := (
-				active_defense_plan.candidate_for(
-					army,
-					coordinator
-				)
-			)
-			if reserve_recall != null:
-				return reserve_recall
-			return ActionCandidate.make(
-				ActionCandidate.Kind.NONE,
-				0.0,
-				"藩王主战预备队等待返回封地重点城市"
-			)
 		return _choose_holding(
 			view,
 			snapshot,
@@ -121,42 +100,7 @@ static func choose(
 		)
 	if defense != null:
 		candidates.append(defense)
-	if (
-		vassal_main_reserve
-		and not view.state.wars_of(
-			view.nation_id
-		).is_empty()
-	):
-		var reclamation := _attack_candidate(
-			view,
-			snapshot,
-			threat,
-			coordinator,
-			army,
-			minimum_participant_ratio,
-			true
-		)
-		if reclamation != null:
-			var assigned_city := (
-				active_defense_plan.assigned_city_for(
-					army
-				)
-			)
-			if (
-				not active_defense_plan.relief_required_at(
-					assigned_city
-				)
-			):
-				reclamation.score = maxf(
-					reclamation.score,
-					CityDefensePlan.ROLE_DEPLOYMENT_SCORE
-						+ 1.0
-				)
-			candidates.append(reclamation)
-	if (
-		not view.state.uses_heightmap
-		and not vassal_main_reserve
-	):
+	if not view.state.uses_heightmap:
 		var attack := _attack_candidate(
 			view,
 			snapshot,
@@ -537,9 +481,6 @@ static func _attack_approach_distance(
 			neighbor_dist
 				+ float(maxi(edge.distance, 1))
 					* maxf(edge.travel_time_multiplier, 0.05)
-					* float(Army.road_transport_batches_for_formation(
-						formation_size, edge.max_manpower
-					))
 				+ edge.danger * Pathfinding.DANGER_WEIGHT
 		)
 	return best
@@ -652,7 +593,7 @@ static func _breakout_candidate(
 		var edge := view.state.edge_of(start, neighbor)
 		if (
 			edge == null
-			or edge.max_manpower < army.road_footprint()
+			or edge.max_manpower <= 0
 			or not view.state.is_enemy(view.nation_id, view.state.cities[neighbor].owner_nation)
 		):
 			continue
@@ -664,7 +605,6 @@ static func _breakout_candidate(
 			- 0.25
 				* float(edge.distance)
 				* maxf(edge.travel_time_multiplier, 0.05)
-				* float(army.road_transport_batches(edge.max_manpower))
 		)
 		if score > best_score or (
 			is_equal_approx(score, best_score) and neighbor < best_city

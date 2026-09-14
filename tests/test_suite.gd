@@ -119,6 +119,13 @@ func _approx(a: float, b: float, eps: float = 0.0001) -> bool:
 	return absf(a - b) <= eps
 
 
+func _nation_ids_from_rows(rows: Array[Dictionary]) -> Array[int]:
+	var result: Array[int] = []
+	for row in rows:
+		result.append(int(row["nation_id"]))
+	return result
+
+
 func _set_neutral_ruler(nation: Nation) -> void:
 	nation.ruler_archetype = RulerProfile.BALANCED
 	nation.ruler_traits.clear()
@@ -439,7 +446,7 @@ func _test_world_generation() -> void:
 			"国%d 初始满编军制应保持战时月金正收益：收入%d，军费%d"
 				% [n.id, monthly_gold_income, monthly_war_upkeep]
 		)
-	var target_light_armies := 160
+	var target_light_armies := GameState.TERRAIN_CITY_COUNT
 	var target_heavy_armies := 40
 	var target_troops := (
 		target_light_armies * GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -506,18 +513,19 @@ func _test_world_generation() -> void:
 		terrain_base_monthly_gold >= target_monthly_gold
 			and terrain_base_monthly_gold
 				<= int(ceil(float(target_monthly_gold) * 1.15)),
-		"真实地图基础月金产出应约维持160轻军+40重军：产出%d，目标军费%d"
-			% [terrain_base_monthly_gold, target_monthly_gold]
+		"真实地图基础月金产出应约维持%d轻军+40重军：产出%d，目标军费%d"
+			% [target_light_armies, terrain_base_monthly_gold, target_monthly_gold]
 	)
 	_check(
 		terrain_base_monthly_gold
-			== GameState.TERRAIN_CITY_COUNT
+			== land_cities.size()
 				* GameState.TERRAIN_CITY_GOLD_TARGET_AVERAGE
 			and terrain_gold_min
-				== GameState.TERRAIN_CITY_GOLD_OUTPUT_MIN
+				>= GameState.TERRAIN_CITY_GOLD_OUTPUT_MIN
 			and terrain_gold_max
-				== GameState.TERRAIN_CITY_GOLD_OUTPUT_MAX,
-		"真实地图基础金币必须拉开到1～15且平均7：总额%d，范围%d～%d"
+				<= GameState.TERRAIN_CITY_GOLD_OUTPUT_MAX
+			and terrain_gold_max - terrain_gold_min >= 10,
+		"真实地图基础金币必须保持配置范围、足够跨度且平均7：总额%d，范围%d～%d"
 			% [
 				terrain_base_monthly_gold,
 				terrain_gold_min,
@@ -542,8 +550,9 @@ func _test_world_generation() -> void:
 			>= int(floor(float(target_half_year_food) * 0.95))
 			and terrain_base_half_year_food
 				<= int(ceil(float(target_half_year_food) * 1.15)),
-		"中性君主下的真实地图半年粮产出应约维持160轻军+40重军：基础产出%d，当前君主实际产出%d，目标需求%d"
+		"中性君主下的真实地图半年粮产出应约维持%d轻军+40重军：基础产出%d，当前君主实际产出%d，目标需求%d"
 			% [
+				target_light_armies,
 				terrain_base_half_year_food,
 				terrain_half_year_food,
 				target_half_year_food,
@@ -788,8 +797,8 @@ func _test_world_generation() -> void:
 				* TerrainMapGenerator.LOCAL_SPACING_MIN_FACTOR
 				* TerrainMapGenerator.SPACING_RELAXATION_FLOOR
 			),
-		"160城动态采样仍须保持硬间距下界，实为 %.4f"
-			% minimum_city_spacing
+		"%d城动态采样仍须保持硬间距下界，实为 %.4f"
+			% [GameState.TERRAIN_CITY_COUNT, minimum_city_spacing]
 	)
 	var height_ordered: Array[City] = land_cities.duplicate()
 	height_ordered.sort_custom(func(a: City, b: City) -> bool:
@@ -1034,7 +1043,8 @@ func _test_world_generation() -> void:
 		province_ids_valid
 		and province_has_sea
 		and province_seen.size() == GameState.TERRAIN_CITY_COUNT,
-		"完整矩形省份图必须为160城各生成独立省份，海洋保持透明"
+		"完整矩形省份图必须为%d城各生成独立省份，海洋保持透明"
+			% GameState.TERRAIN_CITY_COUNT
 	)
 	var warp_sample := Vector2(47.0, 83.0)
 	var warped_sample := TerrainMapGenerator.province_metric_point(
@@ -1488,7 +1498,8 @@ func _test_world_generation() -> void:
 	var forty_scene := forty_packed.instantiate()
 	_check(
 		int(forty_scene.get("nation_count")) == 40
-			and int(forty_scene.get("terrain_city_count")) == 160
+			and int(forty_scene.get("terrain_city_count"))
+				== GameState.TERRAIN_CITY_COUNT
 			and bool(forty_scene.get("randomize_world_seed_on_start"))
 			and forty_scene.get_node_or_null("StrategicMap3D") != null
 			and forty_scene.get_node_or_null("RoadTuningLayer") != null
@@ -1502,7 +1513,7 @@ func _test_world_generation() -> void:
 			and not bool(
 				forty_scene.get("initial_city_names_visible")
 			),
-		"40国场景必须继承完整主界面、配置40国/160陆城并在启动时随机生成"
+		"40国场景必须继承完整主界面、使用当前默认陆城数并在启动时随机生成"
 	)
 	forty_scene.free()
 	# 每国只有首都一个粮仓；本国全部陆城初始储备归集到该粮仓。
@@ -2366,6 +2377,22 @@ func _test_responsive_map_layout() -> void:
 			float(base["display_scale"])
 		)
 	)
+	var nation_sort_bar := MapRenderer.nation_stats_sort_bar_rect(
+		nation_window,
+		float(base["display_scale"])
+	)
+	var nation_sort_buttons_valid := true
+	for sort_button_index in range(4):
+		nation_sort_buttons_valid = (
+			nation_sort_buttons_valid
+			and nation_sort_bar.encloses(
+				MapRenderer.nation_stats_sort_button_rect(
+					nation_window,
+					float(base["display_scale"]),
+					sort_button_index
+				)
+			)
+		)
 	_check(
 		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
 			nation_window
@@ -2383,8 +2410,9 @@ func _test_responsive_map_layout() -> void:
 					nation_window,
 					float(base["display_scale"])
 				)
-			),
-		"国家列表浮窗必须可约束在视口内，并提供标题拖动区、关闭区和滚动容量"
+			)
+			and nation_sort_buttons_valid,
+		"国家列表浮窗必须约束在视口内，并提供标题、排序、关闭和滚动区域"
 	)
 	var army_scale_control := (
 		MapRenderer.army_icon_scale_control_rect(
@@ -2719,10 +2747,10 @@ func _test_responsive_map_layout() -> void:
 			and str(nation_rows[0]["power_primary"]).contains("兵力")
 			and str(nation_rows[0]["power_secondary"]).contains("忠诚")
 			and str(nation_rows[0]["economy_primary"]).contains("月净")
+				and str(nation_rows[0]["economy_primary"]).contains("商贸 +7")
 				and str(nation_rows[0]["economy_secondary"]).contains("粮仓 0")
-				and str(nation_rows[0]["economy_secondary"]).contains("月产 0")
-				and str(nation_rows[0]["economy_secondary"]).contains("月需 0")
-				and str(nation_rows[0]["economy_secondary"]).contains("月净 +20")
+				and str(nation_rows[0]["economy_secondary"]).contains("粮净 +20")
+				and str(nation_rows[0]["economy_secondary"]).contains("商路 2")
 				and str(nation_rows[0]["economy_secondary"]).find("购粮") == -1
 				and str(nation_rows[0]["economy_secondary"]).find("购人") == -1
 				and str(nation_rows[0]["economy_secondary"]).find("+0") == -1
@@ -2736,6 +2764,46 @@ func _test_responsive_map_layout() -> void:
 			and str(nation_rows[0]["governance_secondary"]).contains("节俭")
 			and str(nation_rows[0]["governance_secondary"]).contains("建军"),
 		"国家列表必须过滤灭亡国家，并把直属藩王缩进到宗主之后"
+	)
+	var sort_state := GameState.new()
+	sort_state.generate_grid_world(12348)
+	for city_index in range(sort_state.cities.size()):
+		var sorted_owner := (
+			0 if city_index < 4
+			else 1 if city_index < 12
+			else 2 if city_index < 32
+			else 3
+		)
+		sort_state.cities[city_index].owner_nation = sorted_owner
+	var treasuries := [40, 10, 30, 20]
+	for nation_index in range(sort_state.nations.size()):
+		sort_state.nations[nation_index].treasury_gold = treasuries[nation_index]
+	sort_state.armies.clear()
+	var army_counts := [1, 3, 2, 4]
+	var next_army_id := 0
+	for owner_id in range(army_counts.size()):
+		for _army_index in range(army_counts[owner_id]):
+			var sorted_army := Army.new()
+			sorted_army.id = next_army_id
+			sorted_army.owner_nation = owner_id
+			sorted_army.size = 100
+			sorted_army.max_size = 100
+			sort_state.armies.append(sorted_army)
+			next_army_id += 1
+	var city_ascending := MapRenderer.nation_list_rows(
+		sort_state, {}, MapRenderer.NATION_SORT_CITY_COUNT, false
+	)
+	var treasury_descending := MapRenderer.nation_list_rows(
+		sort_state, {}, MapRenderer.NATION_SORT_TREASURY, true
+	)
+	var army_ascending := MapRenderer.nation_list_rows(
+		sort_state, {}, MapRenderer.NATION_SORT_ARMY_COUNT, false
+	)
+	_check(
+		_nation_ids_from_rows(city_ascending) == [0, 1, 2, 3]
+			and _nation_ids_from_rows(treasury_descending) == [0, 2, 3, 1]
+			and _nation_ids_from_rows(army_ascending) == [0, 2, 1, 3],
+		"国家列表必须支持按城市、国库和军队支数稳定正序或倒序"
 	)
 	var nation_selection_renderer := MapRenderer.new()
 	nation_selection_renderer.state = list_state
@@ -2881,6 +2949,23 @@ func _test_responsive_map_layout() -> void:
 			collapsed_rect
 		)
 	)
+	var treasury_sort_clicked := tree_renderer._handle_nation_sort_at_point(
+		MapRenderer.nation_stats_sort_button_rect(
+			expanded_rect,
+			tree_renderer._display_scale,
+			1
+		).get_center(),
+		expanded_rect
+	)
+	var descending_before := tree_renderer._nation_stats_sort_descending
+	var direction_clicked := tree_renderer._handle_nation_sort_at_point(
+		MapRenderer.nation_stats_sort_button_rect(
+			expanded_rect,
+			tree_renderer._display_scale,
+			3
+		).get_center(),
+		expanded_rect
+	)
 	_check(
 		collapsed_by_click
 			and collapsed_runtime_rows.size() == 1
@@ -2888,6 +2973,15 @@ func _test_responsive_map_layout() -> void:
 			and expanded_by_click
 			and tree_renderer._nation_list_rows_cached().size() == 3,
 		"点击宗主箭头必须折叠支系并缩小窗口，再次点击恢复全部藩属"
+	)
+	_check(
+		treasury_sort_clicked
+			and tree_renderer._nation_stats_sort_key
+				== MapRenderer.NATION_SORT_TREASURY
+			and direction_clicked
+			and tree_renderer._nation_stats_sort_descending
+				!= descending_before,
+		"国家列表排序字段和正倒序按钮必须拥有独立命中区并立即生效"
 	)
 	tree_renderer.free()
 	var border_state := GameState.new()
@@ -3037,27 +3131,27 @@ func _test_responsive_map_layout() -> void:
 		edge_to_pick
 	)
 	_check(
-		city_sections.size() == 5
+		city_sections.size() == 4
 			and [
 				str(city_sections[0]["title"]),
 				str(city_sections[1]["title"]),
 				str(city_sections[2]["title"]),
 				str(city_sections[3]["title"]),
-				str(city_sections[4]["title"]),
-			] == ["概况", "军事", "经济", "治理", "贸易"]
-			and city_lines.size() == 12
-			and "简称" in str((city_sections[0]["lines"] as Array)[0])
+			] == ["概况", "军事", "经济", "治理"]
 			and "工事" in str((city_sections[1]["lines"] as Array)[0])
 			and "驻军" in str((city_sections[1]["lines"] as Array)[1])
-			and "发展" in str((city_sections[2]["lines"] as Array)[1])
-			and "库存" in str((city_sections[2]["lines"] as Array)[2])
-			and "商路" in str((city_sections[4]["lines"] as Array)[0])
-			and "贸易金" in str((city_sections[4]["lines"] as Array)[0])
-			and "粮食净流" in str((city_sections[4]["lines"] as Array)[0])
+			and "月产" in str((city_sections[2]["lines"] as Array)[0])
+			and "库存" in str((city_sections[2]["lines"] as Array)[1])
+			and "商路" in str((city_sections[2]["lines"] as Array)[1])
+			and "贸易金" in str((city_sections[2]["lines"] as Array)[1])
+			and not "简称" in "|".join(city_lines)
+			and not "发展：" in "|".join(city_lines)
+			and not "海拔" in "|".join(city_lines)
+			and not "粮食净流" in "|".join(city_lines)
 			and MapRenderer.city_detail_sections(hit_state, -1).is_empty()
 			and edge_lines.size() >= 5
 			and "行军" in edge_lines[2],
-		"城市五段详情必须包含军事、经济、治理、贸易，道路详情保留行军信息"
+		"城市详情必须精简为有效的概况、军事、经济与治理信息"
 	)
 	var trade_edge_a := hit_state.edge_of(0, 1)
 	var trade_edge_b := hit_state.edge_of(1, 2)
@@ -4969,11 +5063,11 @@ func _test_capacity_no_block_enemy() -> void:
 			c1 = e.city_a; c2 = e.city_b; break
 	_check(c1 != -1, "应存在一条敌对相邻边")
 	var edge := gs.edge_of(c1, c2)
-	edge.max_manpower = Edge.MIN_MANPOWER  # 单个运输足迹：复现同向容量满
+	edge.max_manpower = Edge.MIN_MANPOWER
 	edge.distance = 3; edge.danger = 0.0
 	gs.armies.clear(); gs.battles.clear()
 
-	# R 虽是重军编制，运输足迹仍只有 5000，先占满该方向。
+	# R 是重军编制，但任意正容量道路都允许其完整进入。
 	var R := _make_army(1, gs.cities[c1].owner_nation, 1000, 10)
 	R.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
 	R.state = Army.State.MOVING; R.move_from = c1; R.move_to = -1
@@ -5009,7 +5103,7 @@ func _test_capacity_no_block_enemy() -> void:
 # ------------------------------------------------------------------ 17b. 分方向友军容量
 
 func _test_directional_friendly_capacity() -> void:
-	print("[17b] 边容量：重军按道路吞吐占满，同国同向受限，反向与敌军独立")
+	print("[17b] 军事二值通行：正容量不限同向军队，0容量断路")
 	var gs := GameState.new()
 	gs.generate_grid_world(1717)
 	var sim := Simulation.new()
@@ -5047,12 +5141,9 @@ func _test_directional_friendly_capacity() -> void:
 	gs.armies.append(same_direction)
 	sim._begin_next_leg(same_direction)
 	_check(
-		not same_direction.on_edge
-			and same_direction.move_to == -1
-			and sim._friendly_same_direction_manpower(
-				nation_id, from_city, to_city
-			) == 15000,
-		"15000容量路上一支重军应占满同向吞吐，第二支重军必须排队"
+		same_direction.on_edge
+			and same_direction.move_to == to_city,
+		"任意正容量道路必须允许第二支同向重军同时进入"
 	)
 
 	var reverse := _make_army(1702, nation_id, 1000, 10)
@@ -5075,16 +5166,8 @@ func _test_directional_friendly_capacity() -> void:
 	sim._begin_next_leg(enemy)
 	_check(enemy.on_edge and enemy.move_to == to_city,
 		"敌军不得占用本国同方向 capacity，必须允许追逐/接战")
-	_check(edge.passing_count == 3,
-		"总占用可超过单方向上限：正向重军+反向友军+敌军应为3")
-
-	sim._release_edge(first)
-	sim._begin_next_leg(same_direction)
-	_check(
-		same_direction.on_edge
-			and same_direction.move_to == to_city,
-		"同向重军释放15000吞吐后，排队重军应能进入"
-	)
+	_check(edge.passing_count == 4,
+		"正向双重军、反向友军和敌军应能同时位于道路上")
 
 	gs.armies.clear()
 	gs.battles.clear()
@@ -5119,15 +5202,9 @@ func _test_directional_friendly_capacity() -> void:
 	sim._begin_next_leg(low_road_waiter)
 	_check(
 		low_road_heavy.on_edge
-			and not low_road_waiter.on_edge
-			and low_road_waiter.move_to == -1
-			and sim._friendly_same_direction_manpower(
-				nation_id, from_city, to_city
-			) == Edge.TERRAIN_LOW_MANPOWER
-			and low_road_heavy.road_transport_batches(
-				Edge.TERRAIN_LOW_MANPOWER
-			) == 2,
-		"15000重军可进入10000道路但会占满同向吞吐并分两批运输"
+			and low_road_waiter.on_edge
+			and low_road_waiter.move_to == to_city,
+		"10000正面道路必须允许15000重军与后续军队同时通行"
 	)
 
 	gs.armies.clear()
@@ -5181,11 +5258,9 @@ func _test_directional_friendly_capacity() -> void:
 	gs.armies.append(standard_road_overflow)
 	sim._begin_next_leg(standard_road_overflow)
 	_check(
-		not standard_road_overflow.on_edge
-			and sim._friendly_same_direction_manpower(
-				nation_id, from_city, to_city
-			) == Edge.TERRAIN_STANDARD_MANPOWER,
-		"20000容量边上5000轻军+15000重军占满后，额外同向军必须等待"
+		standard_road_overflow.on_edge
+			and standard_road_overflow.move_to == to_city,
+		"正容量道路已有轻重军时，额外同向军仍应立即进入"
 	)
 
 	var blocked_from := gs.nations[nation_id].capital_city_id
@@ -5213,7 +5288,7 @@ func _test_directional_friendly_capacity() -> void:
 	sim.free()
 
 
-# ------------------------------------------------------------------ 17c. 正式高度图重军运输足迹
+# ------------------------------------------------------------------ 17c. 正式高度图重军二值通行
 
 func _test_heightmap_heavy_transport_footprint() -> void:
 	print("[17c] 正式高度图：15000重军可经10000出口完整移动且不拆编")
@@ -5290,41 +5365,20 @@ func _test_heightmap_heavy_transport_footprint() -> void:
 	_check(
 		positive_capital_exits == 1
 			and exit_edge.max_manpower == Edge.TERRAIN_LOW_MANPOWER
-			and heavy.road_footprint() == Edge.MIN_MANPOWER
-			and heavy.road_capacity_load(Edge.MIN_MANPOWER)
-				== Edge.MIN_MANPOWER
-			and heavy.road_capacity_load(Edge.TERRAIN_LOW_MANPOWER)
-				== Edge.TERRAIN_LOW_MANPOWER
-			and heavy.road_capacity_load(Edge.STANDARD_MANPOWER)
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
-			and heavy.road_transport_batches(Edge.MIN_MANPOWER) == 3
-			and heavy.road_transport_batches(
-				Edge.TERRAIN_LOW_MANPOWER
-			) == 2
-			and heavy.road_transport_batches(
-				Edge.STANDARD_MANPOWER
-			) == 1
 			and _approx(
 				float(route_field["dist"][target_id]),
 				float(exit_edge.distance)
-					* exit_edge.travel_time_multiplier * 2.0
+					* exit_edge.travel_time_multiplier
 			)
 			and route == [target_id],
 		(
-			"15000重军运输契约失败：exits=%d cap=%d footprint=%d "
-			+ "loads=%d/%d/%d batches=%d/%d/%d dist=%.1f expected=%.1f route=%s target=%d"
+			"15000重军二值通行契约失败：exits=%d cap=%d "
+			+ "dist=%.1f expected=%.1f route=%s target=%d"
 		) % [
 			positive_capital_exits, exit_edge.max_manpower,
-			heavy.road_footprint(),
-			heavy.road_capacity_load(Edge.MIN_MANPOWER),
-			heavy.road_capacity_load(Edge.TERRAIN_LOW_MANPOWER),
-			heavy.road_capacity_load(Edge.STANDARD_MANPOWER),
-			heavy.road_transport_batches(Edge.MIN_MANPOWER),
-			heavy.road_transport_batches(Edge.TERRAIN_LOW_MANPOWER),
-			heavy.road_transport_batches(Edge.STANDARD_MANPOWER),
 			float(route_field["dist"][target_id]),
 			float(exit_edge.distance)
-				* exit_edge.travel_time_multiplier * 2.0,
+				* exit_edge.travel_time_multiplier,
 			str(route), target_id,
 		]
 	)
@@ -5334,7 +5388,7 @@ func _test_heightmap_heavy_transport_footprint() -> void:
 	var move_order := ActionCandidate.make(
 		ActionCandidate.Kind.REINFORCE,
 		100.0,
-		"正式高度图重军运输足迹回归",
+		"正式高度图重军二值通行回归",
 		target_id
 	)
 	var issued := sim._execute_ai_candidate(heavy, move_order)
@@ -5379,7 +5433,7 @@ func _test_heightmap_heavy_transport_footprint() -> void:
 				),
 				2.0 / 3.0
 			),
-		"运输足迹固定5000后，战斗正面仍必须读取道路的10000容量"
+		"军事通行打平后，战斗正面仍必须读取道路的10000容量"
 	)
 	var travel_probe := Edge.new()
 	travel_probe.distance = 1
@@ -5396,14 +5450,12 @@ func _test_heightmap_heavy_transport_footprint() -> void:
 		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
 	_check(
-		_approx(narrow_travel_days, Simulation.march_days(1) * 3.0)
-			and _approx(
-				low_road_travel_days, Simulation.march_days(1) * 2.0
-			)
+		_approx(narrow_travel_days, Simulation.march_days(1))
+			and _approx(low_road_travel_days, Simulation.march_days(1))
 			and _approx(
 				standard_travel_days, Simulation.march_days(1)
 			),
-		"15000重军经5000/10000/20000道路应分别耗费3/2/1个运输批次"
+		"15000重军经任意正容量道路都应使用相同行军时间"
 	)
 	sim.free()
 
@@ -6067,7 +6119,7 @@ func _test_morale_retreat_recovery() -> void:
 
 
 func _test_retreat_transport_footprint() -> void:
-	print("[22a] 撤退运输足迹：残余重军可沿5000窄路撤退且不拆编")
+	print("[22a] 撤退二值通行：残余重军可沿5000窄路撤退且不拆编")
 	var gs := GameState.new()
 	gs.generate_grid_world(783)
 	gs.armies.clear()
@@ -6150,7 +6202,7 @@ func _test_retreat_transport_footprint() -> void:
 
 
 func _test_edge_retreat_transport_batches() -> void:
-	print("[22a2] 边上撤退：端点择路必须计入当前窄路的重军运输批次")
+	print("[22a2] 边上撤退：端点择路无视正容量大小")
 	var gs := GameState.new()
 	gs.generate_grid_world(784)
 	gs.armies.clear()
@@ -6158,8 +6210,8 @@ func _test_edge_retreat_transport_batches() -> void:
 	for city in gs.cities:
 		city.owner_nation = 1
 	# 两端都是无通行权城市；每端各接一座本国安全城市。
-	# 重军位于 0→1 的 20% 处：若漏算当前 5000 道路的三批运输，
-	# 会误选表面更近的端点 1；正确总成本为 0 端 6+20 < 1 端 24+5。
+	# 重军位于 0→1 的 20% 处。正容量不再增加运输批次，因此
+	# 0 端总成本为 2+20，1 端为 8+5，应选择端点 1。
 	gs.cities[8].owner_nation = 0
 	gs.cities[2].owner_nation = 0
 	# 让首都暂不可达，使战略撤退的两个候选同属 own-city tier，
@@ -6196,17 +6248,17 @@ func _test_edge_retreat_transport_batches() -> void:
 		)
 	)
 	_check(
-		int(strategic.get("endpoint", -1)) == 0
-			and strategic.get("path", []) == [8]
-			and _approx(float(strategic.get("distance", INF)), 26.0),
-		"战略撤退应按当前窄路三批运输选择真实更快的0端：%s"
+		int(strategic.get("endpoint", -1)) == 1
+			and strategic.get("path", []) == [2]
+			and _approx(float(strategic.get("distance", INF)), 13.0),
+		"战略撤退应无视正容量大小并选择真实更快的1端：%s"
 			% str(strategic)
 	)
 	_check(
-		int(repatriation.get("endpoint", -1)) == 0
-			and repatriation.get("path", []) == [8]
-			and _approx(float(repatriation.get("distance", INF)), 26.0),
-		"外交遣返应与战略撤退使用同一当前边运输成本：%s"
+		int(repatriation.get("endpoint", -1)) == 1
+			and repatriation.get("path", []) == [2]
+			and _approx(float(repatriation.get("distance", INF)), 13.0),
+		"外交遣返应与战略撤退使用同一二值通行成本：%s"
 			% str(repatriation)
 	)
 
@@ -6281,7 +6333,7 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var flows := Simulation.monthly_gold_flows(gs)
-	var income := int(flows[0]["net_income"])
+	var income := int(flows[0]["city_income"])
 	gs.nations[0].treasury_gold = 0
 	var peace := Simulation.gold_reserve_policy(gs, 0, flows)
 	_check(
@@ -6289,8 +6341,25 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 		and int(peace["reserve_months"]) == 36
 		and int(peace["reserve_target"]) == income * 36
 		and int(peace["target_monthly_savings"]) == income,
-		"和平财政应以当前月收入%d建立36个月目标%d，并从空库至少月存%d：%s"
+		"和平财政应以当前城市月产出%d建立36个月目标%d，并从空库至少月存%d：%s"
 			% [income, income * 36, income, str(peace)]
+	)
+	var trade_rich_flows: Array[Dictionary] = flows.duplicate(true)
+	trade_rich_flows[0]["trade_net_income"] = 10000
+	trade_rich_flows[0]["net_income"] = (
+		int(trade_rich_flows[0]["net_income"]) + 10000
+	)
+	trade_rich_flows[0]["balance"] = (
+		int(trade_rich_flows[0]["balance"]) + 10000
+	)
+	var trade_rich_peace := Simulation.gold_reserve_policy(
+		gs, 0, trade_rich_flows
+	)
+	_check(
+		int(trade_rich_peace["baseline_monthly_income"]) == income
+			and int(trade_rich_peace["reserve_target"]) == income * 36,
+		"贸易收入不得抬高财政储备目标：基础%d，贸易后策略=%s"
+			% [income, str(trade_rich_peace)]
 	)
 	var expected_snapshot := income
 	sim._capture_war_gold_income_snapshots([0, 1] as Array[int])
@@ -6327,7 +6396,7 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	sim._synchronize_war_gold_income_snapshots()
 	var postwar_income := int(
-		Simulation.monthly_gold_flows(gs)[0]["net_income"]
+		Simulation.monthly_gold_flows(gs)[0]["city_income"]
 	)
 	var postwar := Simulation.gold_reserve_policy(gs, 0)
 	_check(
@@ -6922,7 +6991,7 @@ func _test_siege_interruption_and_late_garrison() -> void:
 
 
 func _test_edge_holding_state() -> void:
-	print("[25] HOLDING：AI 进入高 danger 边、固定位置、占用容量、补给控制适应")
+	print("[25] HOLDING：AI 进入高 danger 边、固定位置、补给控制适应")
 	var gs := GameState.new()
 	gs.generate_grid_world(5150)
 	var sim := Simulation.new()
@@ -7012,7 +7081,7 @@ func _test_edge_holding_state() -> void:
 			% [holder.state, holder.move_progress]
 	)
 	_check(holder.on_edge and hold_edge.passing_count == 1,
-		"HOLDING 必须继续占用道路容量")
+		"HOLDING 必须继续登记为道路上的军队")
 	var fixed_pos := holder.move_progress
 	for i in range(5):
 		sim._advance_movement()
@@ -8247,7 +8316,7 @@ func _test_holding_combat_adaptation() -> void:
 # ------------------------------------------------------------------ 28. 溃逃接战 + 位置连续性
 
 func _test_retreat_contact_and_position_continuity() -> void:
-	print("[28] 溃逃接战与位置连续性：驻防截击、中间城拥堵锚点、掉头、新局快照")
+	print("[28] 溃逃接战与位置连续性：驻防截击、连续行军、掉头、新局快照")
 	var gs := GameState.new()
 	gs.generate_grid_world(8282)
 	var sim := Simulation.new()
@@ -8267,7 +8336,7 @@ func _test_retreat_contact_and_position_continuity() -> void:
 		and retreater.state == Army.State.FIGHTING,
 		"驻防敌军接触溃逃军时必须截击，不能因双方都非 MOVING 而漏战")
 
-	# 到达中间城后下一边拥堵：move_to=-1 时渲染依赖 location_city，必须同步为中间城。
+	# 到达中间城后即使下一边已有同向军，也应连续进入下一段。
 	gs.armies.clear()
 	gs.battles.clear()
 	var mover := _make_army(902, gs.cities[0].owner_nation, 1000, 10)
@@ -8295,9 +8364,10 @@ func _test_retreat_contact_and_position_continuity() -> void:
 		gs.armies.append(blocker)
 		blocked_edge.passing_count += 1
 	sim._arrive_at_node(mover)
-	_check(mover.state == Army.State.MOVING and mover.move_to == -1
-		and mover.move_from == 1 and mover.location_city == 1,
-		"下一边拥堵时应停在中间城 1；from=%d to=%d location=%d"
+	_check(mover.state == Army.State.MOVING and mover.move_to == 2
+		and mover.move_from == 1 and mover.location_city == 1
+		and mover.on_edge and mover.path.is_empty(),
+		"正容量下一边已有同向军时仍应从中间城连续前进；from=%d to=%d location=%d"
 			% [mover.move_from, mover.move_to, mover.location_city])
 
 	# 边上撤退若选择原出发端，交换方向并反转 progress 后物理位置必须完全不变。
@@ -8826,13 +8896,13 @@ func _test_ai_strategic_map_and_threat() -> void:
 	threat = ThreatField.build(AiWorldView.build(gs, 0))
 	_check(
 		threat.threat_at(1) > 0.0,
-		"一万五编制敌军的威胁应按五千运输足迹穿过五千容量道路"
+		"一万五编制敌军的威胁应穿过任意正容量道路"
 	)
 	enemy.max_size = 5000
 	threat = ThreatField.build(AiWorldView.build(gs, 0))
 	_check(
 		threat.threat_at(1) > 0.0,
-		"五千满编敌军的威胁应能穿过五千容量道路"
+		"五千满编敌军的威胁应穿过任意正容量道路"
 	)
 
 	var deep_state := GameState.new()
@@ -10542,13 +10612,14 @@ func _test_ai_merge_and_retreat_utility() -> void:
 		"同一规划批次中每支军队只能接受一条命令"
 	)
 	_check(
-		not batch_sim._execute_ai_candidate(batch_left_extra, left_order),
-		"同国同向首段容量满后，后续命令应在收集期被仲裁"
+		batch_sim._execute_ai_candidate(batch_left_extra, left_order),
+		"正容量首段不得仲裁后续同向军队命令"
 	)
 	batch_sim._commit_ai_command_collection([0, 1] as Array[int])
 	_check(
 		batch_left.state == Army.State.MOVING
 		and batch_right.state == Army.State.MOVING
+		and batch_left_extra.state == Army.State.MOVING
 		and batch_left_reverse.state == Army.State.MOVING
 		and batch_left.ai_target_city == 1
 		and batch_right.ai_target_city == 6
@@ -10595,18 +10666,12 @@ func _test_ai_merge_and_retreat_utility() -> void:
 	_check(
 		capacity_queued
 			and capacity_waiter.state == Army.State.MOVING
-			and capacity_waiter.move_to == -1
-			and capacity_waiter.path == [1]
+			and capacity_waiter.move_to == 1
+			and capacity_waiter.path.is_empty()
 			and capacity_race_sim.ai_last_command_commit_failures == 0,
-		"冻结快照后首段临时满载时应保留命令等待容量，不得提交失败"
+		"冻结快照后同向军进入首段，不得被既有军队容量阻塞"
 	)
 	capacity_race_state.armies.erase(late_blocker)
-	capacity_race_sim._begin_next_leg(capacity_waiter)
-	_check(
-		capacity_waiter.move_to == 1
-			and capacity_waiter.path.is_empty(),
-		"首段容量释放后，等待中的批量命令必须继续行军"
-	)
 	capacity_race_sim.free()
 
 
@@ -11701,12 +11766,6 @@ func _test_manpower_pool_and_force_commands() -> void:
 			false
 		)
 	)
-	var decisive_planned_groups := (
-		decisive_allocation.groups_for_target(decisive_target)
-	)
-	var decisive_unique_planned_groups := {}
-	for decisive_group_id in decisive_planned_groups:
-		decisive_unique_planned_groups[decisive_group_id] = true
 	var decisive_locked_member := decisive_state.battle_group_members(
 		0, decisive_groups[0]
 	)[0]
@@ -11719,6 +11778,12 @@ func _test_manpower_pool_and_force_commands() -> void:
 			decisive_plan, ArmyCoordinator.new(), decisive_view, false
 		)
 	)
+	var decisive_planned_groups := (
+		decisive_allocation.groups_for_target(decisive_target)
+	)
+	var decisive_unique_planned_groups := {}
+	for decisive_group_id in decisive_planned_groups:
+		decisive_unique_planned_groups[decisive_group_id] = true
 	_check(
 		decisive_allocation.assigned_target_ids
 			== [decisive_target]
@@ -11855,9 +11920,8 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and narrow_state.active_army_count(0) == 1
 			and narrow_state.armies[0] == narrow_army
 			and narrow_army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
-			and narrow_army.road_footprint() == Edge.MIN_MANPOWER,
-		"五千道路已可承载重军运输足迹，AI不得为通行而拆分15000编制"
+				== GameState.INITIAL_HEAVY_ARMY_SIZE,
+		"正容量道路可供重军完整通行，AI不得为通行而拆分15000编制"
 	)
 	narrow_army.state = Army.State.MOVING
 	narrow_army.move_from = 0
@@ -12156,19 +12220,20 @@ func _test_diplomacy_state_and_ai() -> void:
 			str(nation_sections[4]["title"]),
 		] == [
 			"身份与君主", "国力与民心", "财政与军费",
-			"粮食与贸易", "外交与行动",
+			"粮食储备", "外交与行动",
 		]
 		and nation_lines.size() >= 10
 		and "月净" in str((nation_sections[2]["lines"] as Array)[0])
 		and "贡赋" in str((nation_sections[2]["lines"] as Array)[0])
-		and "军费" in str((nation_sections[2]["lines"] as Array)[1])
-		and "支付" in str((nation_sections[2]["lines"] as Array)[1])
+		and "商路" in str((nation_sections[2]["lines"] as Array)[1])
+		and "商贸金" in str((nation_sections[2]["lines"] as Array)[1])
+		and "军费" in str((nation_sections[2]["lines"] as Array)[2])
+		and "支付" in str((nation_sections[2]["lines"] as Array)[2])
 		and "粮仓" in str((nation_sections[3]["lines"] as Array)[0])
-		and "商路" in str((nation_sections[3]["lines"] as Array)[1])
-		and "商贸金" in str((nation_sections[3]["lines"] as Array)[1])
+		and (nation_sections[3]["lines"] as Array).size() == 1
 		and "盟国" in str((nation_sections[4]["lines"] as Array)[1])
 		and MapRenderer.nation_detail_sections(gs, -1).is_empty(),
-		"国家五段详情必须独立展示君主、国力、财政军费、粮食贸易和外交行动"
+		"国家详情必须把商路与商贸金归入财政军费，并独立展示粮食储备"
 	)
 	_check(
 		gs.has_military_access(0, 1)
@@ -15491,8 +15556,6 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	_check(
 		unified_demand_state.cities_of(1).size() == 3
-			and DiplomacyAI.objective_staging_capacity()
-				== Edge.MIN_MANPOWER
 			and unified_targets == [demand_target]
 			and int(unified_demand["route_group_manpower"])
 				== 10000
@@ -16529,33 +16592,25 @@ func _test_diplomacy_state_and_ai() -> void:
 	var relief_sim := Simulation.new()
 	relief_sim.setup(relief_state)
 	relief_sim._advance_priority_city_defense_echelons()
-	var first_relief: Army = null
-	var waiting_relief: Army = null
-	for relief_army in relief_armies:
-		if relief_army.state == Army.State.MOVING:
-			first_relief = relief_army
-		elif relief_army.state == Army.State.IDLE:
-			waiting_relief = relief_army
+	var first_relief: Army = relief_armies[0]
+	var second_relief: Army = relief_armies[1]
 	_check(
-		first_relief != null
-		and waiting_relief != null
-		and relief_route.passing_count == 1,
-		"重点城市首支援军进入满容量道路后，下一支必须在纵深等待"
+		first_relief.state == Army.State.MOVING
+		and second_relief.state == Army.State.MOVING
+		and relief_route.passing_count == 2,
+		"重点城市两支援军必须无视正容量大小同时进入救援道路"
 	)
-	if first_relief != null:
-		first_relief.move_progress = 1.0
-		relief_sim._arrive_at_node(first_relief)
+	first_relief.move_progress = 1.0
+	relief_sim._arrive_at_node(first_relief)
 	relief_sim._advance_priority_city_defense_echelons()
 	_check(
-		first_relief != null
-		and first_relief.state == Army.State.FIGHTING
-		and waiting_relief != null
-		and waiting_relief.state == Army.State.MOVING
-		and waiting_relief.ai_action
+		first_relief.state == Army.State.FIGHTING
+		and second_relief.state == Army.State.MOVING
+		and second_relief.ai_action
 			== ActionCandidate.Kind.REINFORCE
-		and waiting_relief.ai_target_city == relief_target
+		and second_relief.ai_target_city == relief_target
 		and relief_route.passing_count == 1,
-		"重点城市前一援军入城参战并释放道路后，后一援军必须立即流水跟进"
+		"首支援军入城参战后，同批第二支援军应保持在途"
 	)
 	relief_sim.free()
 
@@ -17841,9 +17896,17 @@ func _test_alliance_war_coalitions() -> void:
 		"recognized": false,
 		"active": true,
 	}
-	nested_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
-	nested_state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
-	nested_state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
+	# 直接注入旧版可产生的嵌套叛乱外交快照，验证新规则上线后仍能清理
+	# 历史坏状态；当前公共入口会拒绝活跃叛军之间新建战争。
+	nested_state.diplomatic_relations["0:1"] = (
+		GameState.DiplomaticRelation.WAR
+	)
+	nested_state.diplomatic_relations["1:2"] = (
+		GameState.DiplomaticRelation.WAR
+	)
+	nested_state.diplomatic_relations["0:2"] = (
+		GameState.DiplomaticRelation.ALLIED
+	)
 	nested_state.day = RebellionSystem.REGIONAL_REBELLION_MIN_WAR_DAYS
 	var nested_sim := Simulation.new()
 	nested_sim.setup(nested_state)
@@ -17953,6 +18016,11 @@ func _test_alliance_war_coalitions() -> void:
 				(rebellion_peace_state.rebellions[coalition_rebel]
 					as Dictionary).get("recognized", false)
 			)
+			and rebellion_peace_state.nations[coalition_rebel].name.length() == 1
+			and rebellion_peace_state.nations[coalition_rebel].short_name
+				== rebellion_peace_state.nations[coalition_rebel].name
+			and rebellion_peace_state.nations[coalition_rebel].name_kind
+				!= WorldNaming.KIND_REBEL
 			and not rebellion_peace_state.is_enemy(0, coalition_rebel)
 			and rebellion_peace_state.recognized_owner_of(
 				rebellion_core
@@ -18644,7 +18712,7 @@ func _test_vassal_tribute() -> void:
 
 	# 长期财政压力：藩王月亏、宗主靠贡赋恰好覆盖军费且国库始终为 0。
 	# 藩王 AI 应在首月缩编到收支平衡，后续月份不得因旧 unpaid 记录重复缩编；
-	# 宗主月净为 0，不应仅因国库为 0 被误判为财政危机。
+	# 宗主没有城市基础收益，储备目标为 0，月净为 0 时不得误判为财政危机。
 	var crisis := GameState.new()
 	crisis.generate_grid_world(32043)
 	crisis.armies.clear()
@@ -18827,24 +18895,18 @@ func _test_vassal_tribute() -> void:
 				)
 			)
 		)
-	var overlord_treasury_grows := true
 	var subject_treasury_grows := true
 	var no_repeat_demobilization := true
-	var overlord_only_initial_demobilization := true
+	var overlord_never_demobilizes := true
 	for month_index in range(6):
+		overlord_never_demobilizes = (
+			overlord_never_demobilizes
+			and not overlord_demobilized[month_index]
+		)
 		if month_index > 0:
 			no_repeat_demobilization = (
 				no_repeat_demobilization
 				and not subject_demobilized[month_index]
-			)
-			overlord_only_initial_demobilization = (
-				overlord_only_initial_demobilization
-				and not overlord_demobilized[month_index]
-			)
-			overlord_treasury_grows = (
-				overlord_treasury_grows
-				and overlord_treasuries[month_index]
-					> overlord_treasuries[month_index - 1]
 			)
 			subject_treasury_grows = (
 				subject_treasury_grows
@@ -18860,17 +18922,16 @@ func _test_vassal_tribute() -> void:
 				== 0
 			and expected_subject_deficit > 0
 			and subject_demobilized[0]
-			and overlord_demobilized[0]
+			and overlord_never_demobilizes
 			and subject_upkeep_after_ai[0]
 				< subject_city_income - subject_tribute
 			and subject_unpaid[0]
 				== expected_subject_deficit
 			and subject_unpaid[1] == 0
 			and no_repeat_demobilization
-			and overlord_only_initial_demobilization
-			and overlord_treasury_grows
+			and overlord_treasuries == [0, 0, 0, 0, 0, 0]
 			and subject_treasury_grows,
-		"长期贡赋财政：双方应只在首轮按三年储备预算缩编一次，随后国库稳定正增长"
+		"长期贡赋财政：储备只看城市收益；零城市收益宗主收支平衡时不得缩编"
 	)
 	print(
 		"  [32d-finance] 城收=%d 贡赋=%d 藩王军费=%d→%d 月亏=%d "
@@ -19908,6 +19969,72 @@ func _test_centralization_decision() -> void:
 		"和平撤藩：藩王全境并回宗主、资源守恒、宗藩记录清除、不变量成立"
 	)
 	sim.free()
+
+	# 征服者藩王面对削藩必定反抗；执行入口不得相信缓存动作中的
+	# resist=false，并按普通削藩火星兵数量的两倍动员。
+	var conqueror_state := GameState.new()
+	conqueror_state.generate_grid_world(32084)
+	for a in range(conqueror_state.nations.size()):
+		for b in range(a + 1, conqueror_state.nations.size()):
+			conqueror_state.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	var conqueror_region: Array[int] = []
+	for city in conqueror_state.land_cities_of(0):
+		if not city.is_capital:
+			conqueror_region.append(city.id)
+		if conqueror_region.size() >= 3:
+			break
+	var conqueror_subject := conqueror_state.enfeoff(0, conqueror_region)
+	conqueror_state.nations[conqueror_subject].ruler_archetype = (
+		RulerProfile.CONQUEROR
+	)
+	conqueror_state.day = DiplomacyAI.CENTRALIZE_MIN_VASSAL_AGE_DAYS + 1
+	var conqueror_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_centralization_actions(
+		conqueror_state, conqueror_actions, {}, {}
+	)
+	var conqueror_action: Dictionary = {}
+	for action in conqueror_actions:
+		if (
+			int(action.get("kind", -1)) == DiplomacyAI.Action.CENTRALIZE
+			and int(action.get("b", -1)) == conqueror_subject
+		):
+			conqueror_action = action
+			break
+	var conqueror_land := conqueror_state.land_cities_of(
+		conqueror_subject
+	).size()
+	var expected_conqueror_uprising := (
+		2 * int(ceil(0.1 * float(conqueror_land)))
+	)
+	var conqueror_armies_before := conqueror_state.armies.size()
+	var stale_conqueror_action := conqueror_action.duplicate(true)
+	stale_conqueror_action["resist"] = false
+	var conqueror_sim := Simulation.new()
+	conqueror_sim.setup(conqueror_state)
+	var conqueror_executed := conqueror_sim._execute_diplomatic_action(
+		stale_conqueror_action
+	)
+	_check(
+		conqueror_subject >= 0
+			and not conqueror_action.is_empty()
+			and bool(conqueror_action.get("resist", false))
+			and conqueror_executed
+			and conqueror_state.is_in_civil_war(conqueror_subject)
+			and conqueror_state.armies.size() - conqueror_armies_before
+				== expected_conqueror_uprising
+			and conqueror_state.suzerainty_structure_valid()
+			and conqueror_state._battle_group_structure_valid(),
+		(
+			"征服者藩王被削藩必须开战，并动员普通数量两倍的火星兵"
+			+ "（期望%d，实增%d）"
+		) % [
+			expected_conqueror_uprising,
+			conqueror_state.armies.size() - conqueror_armies_before,
+		]
+	)
+	conqueror_sim.free()
 
 	# 财政亏损且威胁不高时不得撤藩，防止移除军力优势门槛后周期性无条件削藩。
 	var loss_state := GameState.new()
@@ -21105,7 +21232,7 @@ func _test_external_territory_sovereignty() -> void:
 # ------------------------------------------------------------------ 32i5. 藩王 MAIN 封国内线指挥
 
 func _test_vassal_local_main_command() -> void:
-	print("[32i5] 藩王军制：分封赐LINE、自主征MAIN、封国内线换防与法理收复")
+	print("[32i5] 藩王军制：分封赐LINE、复用普通扩军与战役AI、高凝聚力时外交归宗主")
 	var gs := GameState.new()
 	gs.generate_grid_world(52001)
 	for a in range(gs.nations.size()):
@@ -21219,7 +21346,7 @@ func _test_vassal_local_main_command() -> void:
 		"宗主必须能征召 MAIN 主战军团（对照）"
 	)
 
-	# 平时 MAIN 归入完整战团并驻扎在本藩王重点城市。
+	# 平时 MAIN 与普通国家一样归入完整战团并驻扎在本国城市。
 	var reserve_view := AiWorldView.build(gs, subject)
 	var reserve_snapshot := StrategicMapSnapshot.build(
 		reserve_view
@@ -21234,14 +21361,14 @@ func _test_vassal_local_main_command() -> void:
 		vassal_main
 	)
 	_check(
-		reserve_plan.vassal_main_reserve_city_count() >= 1
+		reserve_plan.main_reserve_cities.size() >= 1
 			and reserve_city >= 0
 			and gs.cities[reserve_city].owner_nation
 				== subject,
-		"藩王 MAIN 必须被分配到本国重点城市（reserve=%d count=%d）"
+		"藩王 MAIN 必须按普通国家部署逻辑分配到本国城市（reserve=%d count=%d）"
 			% [
 				reserve_city,
-				reserve_plan.vassal_main_reserve_city_count(),
+				reserve_plan.main_reserve_cities.size(),
 			]
 	)
 
@@ -21300,7 +21427,7 @@ func _test_vassal_local_main_command() -> void:
 			% relief_city
 	)
 
-	# 法理失地收复：失守封地是唯一允许的攻击目标，且仍按普通围城门槛评估。
+	# 制造一座法理失地，验证小藩王仍使用普通军制与普通攻势资格。
 	gs.battles.clear()
 	gs.armies.erase(besieger)
 	for army in gs.armies.duplicate():
@@ -21315,31 +21442,35 @@ func _test_vassal_local_main_command() -> void:
 	var reclaim_snapshot := StrategicMapSnapshot.build(
 		reclaim_view
 	)
-	var reclaim_candidate := UtilityAI.choose(
+	var reclaim_threat := ThreatField.build(reclaim_view)
+	var reclaim_plan := CityDefensePlan.build(
 		reclaim_view,
 		reclaim_snapshot,
-		ThreatField.build(reclaim_view),
-		ArmyCoordinator.new(),
-		vassal_main,
-		UtilityAI.ASSAULT_PARTICIPANT_MIN_RATIO,
-		CityDefensePlan.build(
-			reclaim_view,
-			reclaim_snapshot,
-			ThreatField.build(reclaim_view)
-		)
+		reclaim_threat
+	)
+	var wartime_assessment := sim._build_force_structure_assessment(
+		reclaim_view,
+		reclaim_plan,
+		{},
+		{}
 	)
 	_check(
-		reclaim_candidate.kind
-				== ActionCandidate.Kind.ATTACK
-			and reclaim_candidate.target_city
-				== relief_city,
-		"藩王 MAIN 应主动收复本国法理失地%d，不得攻击其他敌城（kind=%d target=%d reason=%s）"
-			% [
-				relief_city,
-				reclaim_candidate.kind,
-				reclaim_candidate.target_city,
-				reclaim_candidate.reason,
-			]
+		not wartime_assessment.small_nation_survival,
+		"和平宗藩参加盟主共同战争后应走普通军制，不得被四城小国模式压成一支轻型 MAIN"
+	)
+	var foreign_enemy_city := -1
+	for enemy_city in gs.land_cities_of(enemy_id):
+		if gs.recognized_owner_of(enemy_city.id) != subject:
+			foreign_enemy_city = enemy_city.id
+			break
+	_check(foreign_enemy_city >= 0, "藩王普通军事 AI 测试需要非本藩法理的敌城")
+	_check(
+		foreign_enemy_city >= 0
+			and reclaim_plan.can_join_offensive(
+				vassal_main,
+				foreign_enemy_city
+			),
+		"共同战争中的藩王 MAIN 应与普通国家一样可攻击非本藩法理敌城"
 	)
 
 	# 攻势外交门控：藩王与敌国交战也不主动宣战（进攻性外交由宗主代理）。
@@ -21425,7 +21556,7 @@ func _test_stranded_hostile_army_eviction() -> void:
 # ------------------------------------------------------------------ 32j. 分封战争加成 + 藩王首都失陷不投降
 
 func _test_vassal_wartime_support_and_capital() -> void:
-	print("[32j] 分封战争加成：前线藩王自有军团守土、后方藩王提贡赋、藩王首都失陷不投降割地")
+	print("[32j] 分封战争加成：前线藩王自主参战、后方藩王提贡赋、藩王首都失陷不投降割地")
 	var gs := GameState.new()
 	gs.generate_grid_world(32095)
 	for a in range(gs.nations.size()):
@@ -21487,7 +21618,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 			]
 	)
 
-	# 给前线藩王一支静止在本土的 MAIN 战团（重军），验证战时仍归藩王守土。
+	# 给前线藩王一支静止在本土的 MAIN 战团（重军），验证战时仍归藩王自主指挥。
 	# 复用藩王已有军队并迁到封地首都：新建会撞军队数上限（藩王城少、配额已被
 	# 网格初始填线军占满），故改造既有军队为静止 MAIN，语义等价且不违反数量约束。
 	var heavy: Army = null
@@ -21513,7 +21644,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 		heavy.owner_nation == front_vassal
 			and gs._battle_group_structure_valid()
 			and gs.suzerainty_structure_valid(),
-		"前线藩王的 MAIN 战团必须保留本国所有权、只承担封地防御（army=%d owner=%d）"
+		"前线藩王的 MAIN 战团必须保留本国所有权并自主参战（army=%d owner=%d）"
 			% [heavy_id, heavy.owner_nation]
 	)
 
@@ -22481,7 +22612,7 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 		not small_nation_grew_again
 			and gs.active_army_count(0) == 2
 			and small_line_count == 1
-			and small_main_light_count
+		and small_main_light_count
 				== Simulation.SMALL_NATION_MOBILE_RESERVE_ARMIES
 			and small_main_heavy_count == 0
 			and emergency_army != null

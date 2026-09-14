@@ -29,6 +29,7 @@ func _run() -> void:
 
 	await _test_nation_redraw_builds_once(renderer, state)
 	await _test_city_and_edge_paths_do_not_regress(renderer, state)
+	await _test_city_detail_window_drag(renderer, state)
 
 	renderer.free()
 	simulation.free()
@@ -106,6 +107,7 @@ func _test_nation_redraw_builds_once(
 	var detail_rect := renderer._selection_detail_rect(
 		renderer._selection_detail_line_count()
 	)
+	MapRenderer.reset_nation_detail_section_build_count()
 	var blocked := renderer.world_input_blocked(detail_rect.get_center())
 	_check(
 		blocked,
@@ -158,6 +160,47 @@ func _test_city_and_edge_paths_do_not_regress(
 		"count=%d" % MapRenderer.nation_detail_section_build_count()
 	)
 
+
+func _test_city_detail_window_drag(
+	renderer: MapRenderer,
+	state: GameState
+) -> void:
+	var city_id := _pick_city_with_edge(state)
+	renderer.select_city(city_id)
+	await process_frame
+	var initial_rect := renderer._selection_detail_rect(
+		renderer._selection_detail_line_count()
+	)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = initial_rect.position + Vector2(20.0, 12.0)
+	renderer._handle_mouse_button(press)
+	_check(
+		renderer.get("_selection_detail_drag_active") == true,
+		"city/detail_title_starts_drag"
+	)
+	var motion := InputEventMouseMotion.new()
+	motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	motion.position = press.position + Vector2(-140.0, -90.0)
+	renderer._handle_mouse_motion(motion)
+	var moved_rect := renderer._selection_detail_rect(
+		renderer._selection_detail_line_count()
+	)
+	_check(
+		moved_rect.position.distance_to(initial_rect.position) > 20.0,
+		"city/detail_drag_moves_window",
+		"initial=%s moved=%s" % [initial_rect, moved_rect]
+	)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = motion.position
+	renderer._handle_mouse_button(release)
+	_check(
+		renderer.get("_selection_detail_drag_active") != true,
+		"city/detail_release_stops_drag"
+	)
 
 func _pick_alive_nation_id(state: GameState) -> int:
 	for nation in state.nations:

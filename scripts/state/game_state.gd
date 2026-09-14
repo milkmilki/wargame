@@ -7,7 +7,7 @@ const TerritoryTransaction = preload("res://scripts/state/territory_transaction.
 
 const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64 城兼容网格夹具
-const TERRAIN_CITY_COUNT: int = 160         ## 正式高度图基础陆城；动态码头另计
+const TERRAIN_CITY_COUNT: int = 200         ## 正式高度图基础陆城；动态码头另计
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
@@ -59,6 +59,11 @@ enum DiplomaticRelation {
 	ALLIED,
 }
 
+enum WarScope {
+	COALITION,
+	VASSAL_PRIVATE,
+}
+
 ## 城市实控变化时，原城内库存的结算策略。所有运行期领土业务都必须显式
 ## 选择一种去向；事务会在提交前确认对应的最终粮池确实可以入账。
 enum TerritoryStockDisposition {
@@ -72,10 +77,12 @@ const TERRITORY_CAPTURE_SPOILS_RATE: float = 0.30
 
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
+const VASSAL_PRIVATE_WAR_COHESION_THRESHOLD: float = 0.35
 const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 5.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
 const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
+const ADJACENT_SOVEREIGN_MIN_HUE_DEGREES: float = 15.0
 const NATION_COLOR_HUE_MIN: float = 0.0
 const NATION_COLOR_HUE_MAX: float = 1.0
 const NATION_COLOR_SATURATION_MIN: float = 0.55
@@ -177,7 +184,7 @@ var diplomatic_relations: Dictionary = {}
 var diplomatic_since_day: Dictionary = {}
 var truce_until_day: Dictionary = {}
 var diplomatic_history: Array[Dictionary] = []
-## 规范化国家对 key -> {attacker, defender, city_id, reason, started_day}。
+## 规范化国家对 key -> {attacker, defender, city_id, reason, started_day, scope}。
 var war_objectives: Dictionary = {}
 ## 宗藩关系有向真源（SSoT）：subject_id -> {
 ##     overlord_id, tribute_rate, created_day,
@@ -186,6 +193,8 @@ var war_objectives: Dictionary = {}
 ## 不变量：一个藩王至多一个宗主；宗主链无环；非内战宗藩对为 ALLIED，
 ## 削藩内战宗藩对为 WAR。
 var suzerainty: Dictionary = {}
+var _suzerainty_cohesion_revision: int = -1
+var _suzerainty_cohesion_by_root: Dictionary = {}
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
@@ -195,6 +204,9 @@ var city_density_settings: Dictionary = {}
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
+## 省份栅格的静态拓扑缓存。领土变化只重新聚合宗藩根，不重复扫描贴图。
+var _province_neighbor_pairs: Array[Vector2i] = []
+var _province_neighbor_pairs_ready: bool = false
 ## 版本化自然特征记录。河流点严格按源头到下游排列；程序化水文、导入
 ## 地图和当前省界生成器都必须输出同一契约。通行真源仍是 Edge。
 var river_features: Array[Dictionary] = []
@@ -284,6 +296,7 @@ func generate_world(
 	WorldNaming.assign_initial_names(self, world_seed)
 	_initialize_city_loyalty()
 	_generate_armies()
+	reconcile_adjacent_sovereign_colors()
 
 	assert(
 		land_cities().size() == terrain_city_count,
@@ -318,6 +331,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_generate_grid_edges()
 	_classify_road_capacity()
 	_generate_armies()
+	reconcile_adjacent_sovereign_colors()
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
@@ -467,6 +481,7 @@ func generate_from_map_definition(
 	_initialize_city_loyalty(false)
 	_generate_armies()
 	refresh_derived()
+	reconcile_adjacent_sovereign_colors()
 
 
 func apply_city_editor_changes(
@@ -570,10 +585,14 @@ func apply_city_editor_changes(
 		)
 		province_map_size = provinces["size"]
 		province_ids = provinces["ids"]
+		_province_neighbor_pairs_ready = false
+		_province_neighbor_pairs.clear()
 		_refresh_land_edge_paths_after_province_rebuild()
 		ownership_revision += 1
 		road_network_revision += 1
 	refresh_derived()
+	if position_changed:
+		reconcile_adjacent_sovereign_colors()
 	return {"ok": true, "city_id": city_id}
 
 
@@ -679,11 +698,15 @@ func _reset_world(world_seed: int) -> void:
 	diplomatic_history.clear()
 	war_objectives.clear()
 	suzerainty.clear()
+	_suzerainty_cohesion_revision = -1
+	_suzerainty_cohesion_by_root.clear()
 	city_generation_mask_path = ""
 	political_mask_path = ""
 	city_density_settings = {}
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
+	_province_neighbor_pairs.clear()
+	_province_neighbor_pairs_ready = false
 	river_features.clear()
 	river_paths.clear()
 	recognized_city_owners = PackedInt32Array()
@@ -1482,6 +1505,7 @@ func _initialize_capitals_and_warehouses() -> void:
 			initial_food[city.owner_nation] += city.food_storage
 		city.food_storage = 0
 		city.is_capital = false
+		city.capital_since_day = -1
 		city.has_warehouse = false
 	for nation in nations:
 		var owned := land_cities_of(nation.id)
@@ -1508,6 +1532,7 @@ func _initialize_capitals_and_warehouses() -> void:
 		nation.warehouse_city_ids = [capital_id] as Array[int]
 		var capital := cities[capital_id]
 		capital.is_capital = true
+		capital.capital_since_day = day
 		capital.has_warehouse = true
 		capital.food_storage = initial_food[nation.id]
 
@@ -2857,7 +2882,8 @@ func set_war_objective(
 	attacker: int,
 	defender: int,
 	city_id: int,
-	reason: String
+	reason: String,
+	scope: int = WarScope.COALITION
 ) -> void:
 	war_objectives[_diplomacy_key(attacker, defender)] = {
 		"attacker": attacker,
@@ -2865,7 +2891,21 @@ func set_war_objective(
 		"city_id": city_id,
 		"reason": reason,
 		"started_day": day,
+		"scope": scope,
 	}
+
+
+func war_scope(nation_a: int, nation_b: int) -> int:
+	return int(war_objective(nation_a, nation_b).get(
+		"scope", WarScope.COALITION
+	))
+
+
+func is_private_war(nation_a: int, nation_b: int) -> bool:
+	return (
+		is_enemy(nation_a, nation_b)
+		and war_scope(nation_a, nation_b) == WarScope.VASSAL_PRIVATE
+	)
 
 
 func clear_war_objective(nation_a: int, nation_b: int) -> void:
@@ -2914,6 +2954,56 @@ func can_alliance_declare_war(
 	return true
 
 
+func suzerainty_cohesion(nation_id: int) -> float:
+	if nation_id < 0 or nation_id >= nations.size():
+		return 1.0
+	var root := suzerainty_root(nation_id)
+	if _suzerainty_cohesion_revision != ownership_revision:
+		_rebuild_suzerainty_cohesion_cache()
+	return float(_suzerainty_cohesion_by_root.get(root, 1.0))
+
+
+func can_vassal_declare_private_war(nation_id: int) -> bool:
+	if (
+		nation_id < 0
+		or nation_id >= nations.size()
+		or not nations[nation_id].alive
+		or not is_vassal(nation_id)
+		or is_in_civil_war(nation_id)
+		or not wars_of(nation_id).is_empty()
+	):
+		return false
+	var root := suzerainty_root(nation_id)
+	return (
+		root >= 0
+		and root < nations.size()
+		and nations[root].alive
+		and suzerainty_cohesion(root)
+			< VASSAL_PRIVATE_WAR_COHESION_THRESHOLD
+	)
+
+
+func can_declare_private_war(attacker: int, defender: int) -> bool:
+	if (
+		not can_vassal_declare_private_war(attacker)
+		or defender < 0
+		or defender >= nations.size()
+		or attacker == defender
+		or not nations[defender].alive
+		or day < truce_until(attacker, defender)
+		or is_suzerainty_pair(attacker, defender)
+		or not _regional_rebellion_war_allowed(attacker, defender)
+	):
+		return false
+	var attacker_root := suzerainty_root(attacker)
+	var defender_root := suzerainty_root(defender)
+	if defender == attacker_root:
+		return false
+	if defender_root == attacker_root:
+		return is_vassal(defender) and not is_in_civil_war(defender)
+	return relation_between(attacker, defender) == DiplomaticRelation.NEUTRAL
+
+
 func set_diplomatic_relation(
 	nation_a: int,
 	nation_b: int,
@@ -2931,6 +3021,13 @@ func set_diplomatic_relation(
 			DiplomaticRelation.WAR,
 			DiplomaticRelation.ALLIED,
 		]
+	):
+		return false
+	# 活跃地方叛军的战争严格限定为母国独立战争，不能向第三国宣战，
+	# 第三国也不能把叛军拖入另一场战争。
+	if (
+		relation == DiplomaticRelation.WAR
+		and not _regional_rebellion_war_allowed(nation_a, nation_b)
 	):
 		return false
 	var key := _diplomacy_key(nation_a, nation_b)
@@ -3091,9 +3188,8 @@ func alliance_bloc(
 
 
 # ------------------------------------------------------------------ 宗藩关系
-# 宗藩是一层挂在对外「联盟共同体」之上的有向元数据：宗主与藩王对外恒为 ALLIED，
-# 故对外战争、威胁、防区等逻辑仍只依赖 is_enemy()/alliance_bloc()，无需理解藩王。
-# 本区只维护「谁是谁的宗主」这一有向真源及其不变量，不涉及削藩/内战机制。
+# 宗藩平时仍是对外联盟共同体；当宗主直辖法理陆城占比过低时，藩王可发动
+# 严格双边的私人战争。战争作用域由 war_objectives 标记，联盟同步不得传播私人战争边。
 
 ## 藩王的宗主 id；不是藩王返回 -1。
 func overlord_of(nation_id: int) -> int:
@@ -3130,8 +3226,21 @@ func is_suzerainty_pair(nation_a: int, nation_b: int) -> bool:
 	return overlord_of(nation_a) == nation_b or overlord_of(nation_b) == nation_a
 
 
+## 两国是否属于同一宗藩体系。兄弟藩王间的 ALLIED 同样是制度性关系，
+## 不能因双方不是直接宗主—藩属就被普通结盟/退盟逻辑处理。
+func is_same_suzerainty_system(nation_a: int, nation_b: int) -> bool:
+	return (
+		nation_a >= 0
+		and nation_b >= 0
+		and nation_a < nations.size()
+		and nation_b < nations.size()
+		and nation_a != nation_b
+		and suzerainty_root(nation_a) == suzerainty_root(nation_b)
+	)
+
+
 ## 藩王领土是否与本宗藩体系的任一敌国接壤（存在一条正容量边通往体系敌国的城）。
-## 用于分封战争加成：接壤敌国的藩王须以自有军团守卫封地，
+## 用于分封战争加成：接壤敌国的藩王须以自有军团参与共同战争，
 ## 非接壤藩王只提高贡赋、不承担前线。判据只看实控归属与道路容量，确定性。
 func vassal_borders_system_enemy(subject_id: int) -> bool:
 	if not is_vassal(subject_id):
@@ -3159,9 +3268,13 @@ func is_in_civil_war(subject_id: int) -> bool:
 ## 发起削藩内战：把宗主↔藩王从 ALLIED 改为 WAR，并在记录上打内战标记。
 ## 反叛藩王随即退出共享粮仓、按其（含下级和平藩属）领土粮食产能占原粮池的比例
 ## 切分库存到自己新建的首都粮仓（自成一池），并在首都凭空动员一批「火星兵」满编
-## 主战军团（数量 = ceil(0.1 × 反叛方陆城数)）作为起兵资本。
+## 主战军团（普通数量 = ceil(0.1 × 反叛方陆城数)）作为起兵资本。
+## uprising_multiplier 仅供削藩动作施加君主效果；自发反叛保持默认 1 倍。
 ## 返回是否成功（须是既有宗藩对且当前非内战）。
-func start_civil_war(subject_id: int) -> bool:
+func start_civil_war(
+	subject_id: int,
+	uprising_multiplier: int = 1
+) -> bool:
 	if not suzerainty.has(subject_id) or is_in_civil_war(subject_id):
 		return false
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
@@ -3207,7 +3320,7 @@ func start_civil_war(subject_id: int) -> bool:
 		cities[capital_id].food_storage += withdrawn_food
 		refresh_derived()
 	# 4. 起兵资本：反叛方首都凭空动员火星兵（满编主战军团）。
-	_spawn_rebellion_uprising_armies(subject_id)
+	_spawn_rebellion_uprising_armies(subject_id, uprising_multiplier)
 	nations[subject_id].last_rebellion_day = day
 	nations[overlord_id].last_rebellion_day = day
 	return true
@@ -3224,6 +3337,12 @@ func start_regional_rebellion(
 	if (
 		parent_id < 0 or parent_id >= nations.size()
 		or not nations[parent_id].alive
+		or (
+			rebellions.has(parent_id)
+			and bool((rebellions[parent_id] as Dictionary).get(
+				"active", false
+			))
+		)
 		or city_ids.is_empty()
 	):
 		return -1
@@ -3354,7 +3473,7 @@ func start_regional_rebellion(
 		nations[food_holder_before].granary_food -= withdrawn_food
 		rebel.granary_food += withdrawn_food
 	WorldNaming.assign_rebel_name(self, rebel.id, parent_id, unique_ids)
-	_inherit_rebel_diplomacy(parent_id, rebel.id)
+	_initialize_rebel_diplomacy(parent_id, rebel.id)
 	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
 
 	# Local stationed forces defect; if none do, mobilize only from transferred
@@ -3567,6 +3686,9 @@ func recognize_regional_rebellion(rebel_id: int) -> bool:
 	record["recognized"] = true
 	record["active"] = false
 	rebellions[rebel_id] = record
+	var old_name := str(nations[rebel_id].name)
+	WorldNaming.promote_special_nation_to_sovereign(self, rebel_id)
+	changed = changed or str(nations[rebel_id].name) != old_name
 	return changed
 
 
@@ -3670,6 +3792,13 @@ func rebellion_structure_valid() -> bool:
 		if bool(record.get("active", false)):
 			if not nations[rebel_id].alive or not is_enemy(rebel_id, parent_id):
 				return false
+			for third in nations:
+				if (
+					third.id != rebel_id
+					and third.id != parent_id
+					and is_enemy(rebel_id, third.id)
+				):
+					return false
 			for city_value in record.get("core_city_ids", []):
 				var city_id := int(city_value)
 				if city_id < 0 or city_id >= cities.size():
@@ -3697,10 +3826,14 @@ func _food_pool_stock(holder_id: int) -> int:
 
 ## 反叛方脱离共享粮仓、自成一池：在其首都建独立粮仓，从原持有者粮仓扣除 share 并注入。
 ## 守恒：先从原持有者粮仓（按占比）扣，再存入反叛方首都，粮食总量不变。
-## 叛乱起兵：反叛方首都凭空动员 ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
+## 叛乱起兵：反叛方首都凭空动员
+## multiplier × ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
 ## 每个军团为一支满编重军（INITIAL_HEAVY_ARMY_SIZE、MAIN 角色），独立成团。起兵是离散
 ## 政治事件，属性沿用 _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
-func _spawn_rebellion_uprising_armies(rebel_id: int) -> void:
+func _spawn_rebellion_uprising_armies(
+	rebel_id: int,
+	multiplier: int = 1
+) -> void:
 	if rebel_id < 0 or rebel_id >= nations.size():
 		return
 	var capital_id := nations[rebel_id].capital_city_id
@@ -3709,7 +3842,9 @@ func _spawn_rebellion_uprising_armies(rebel_id: int) -> void:
 	var land_count := land_cities_of(rebel_id).size()
 	if land_count <= 0:
 		return
-	var uprising_count := int(ceil(0.1 * float(land_count)))
+	var uprising_count := (
+		maxi(multiplier, 1) * int(ceil(0.1 * float(land_count)))
+	)
 	for _index in range(uprising_count):
 		var group := create_battle_group(rebel_id)
 		if group == null:
@@ -3946,9 +4081,33 @@ func suzerainty_root(nation_id: int) -> int:
 	return current
 
 
-## 对外战争中新取得领土的主权接收者。和平宗藩没有独立议和权，故沿非内战
-## 宗藩链上溯到当前主权方；削藩内战边在政治上已经断开，反叛方及其和平子树
-## 以反叛方为接收者。死亡或非法宗主不会获得新领土，避免悬空记录复活死国。
+func _rebuild_suzerainty_cohesion_cache() -> void:
+	var total_by_root: Dictionary = {}
+	var direct_by_root: Dictionary = {}
+	for city in cities:
+		if city.is_dock:
+			continue
+		var legal_owner := recognized_owner_of(city.id)
+		if legal_owner < 0 or legal_owner >= nations.size():
+			continue
+		var root := suzerainty_root(legal_owner)
+		total_by_root[root] = int(total_by_root.get(root, 0)) + 1
+		if legal_owner == root:
+			direct_by_root[root] = int(direct_by_root.get(root, 0)) + 1
+	_suzerainty_cohesion_by_root.clear()
+	for root_value in total_by_root:
+		var root := int(root_value)
+		var total := int(total_by_root[root])
+		_suzerainty_cohesion_by_root[root] = (
+			float(int(direct_by_root.get(root, 0))) / float(total)
+			if total > 0
+			else 1.0
+		)
+	_suzerainty_cohesion_revision = ownership_revision
+
+
+## 无城控制者的对外领土接收回退。正常占领优先保留实际控制者；仅当控制者已
+## 无城时沿非内战宗藩链寻找存活接收方。私人战争的存活藩王因此不会上缴战果。
 func external_territory_recipient(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
@@ -4103,16 +4262,8 @@ func prune_dead_suzerainty() -> bool:
 		suzerainty, final_city_counts
 	)
 	if proposed == suzerainty:
-		return false
+		return _promote_independent_vassal_names()
 	var operations: Array[Dictionary] = []
-	var promoted: Array[int] = []
-	for subject_value in suzerainty:
-		var subject_id := int(subject_value)
-		if final_city_counts[subject_id] <= 0:
-			continue
-		if not proposed.has(subject_id):
-			promoted.append(subject_id)
-			continue
 	# 灭亡藩王的法理在同一事务交给最近的存活祖先；sponsor 若指向
 	# 死亡节点也同步转移，避免 phase 2 留下无效战争责任方。
 	for city in cities:
@@ -4158,9 +4309,23 @@ func prune_dead_suzerainty() -> bool:
 	)
 	if not bool(result.get("ok", false)):
 		return false
-	for nation_id in promoted:
-		WorldNaming.promote_vassal_to_sovereign(self, nation_id)
 	return true
+
+
+## 修复旧档或领土事务留下的命名脱节：实际已无宗主边的存活国家不能继续
+## 保留 vassal 身份和“王”后缀。放在每日宗藩清理中可覆盖所有独立路径。
+func _promote_independent_vassal_names() -> bool:
+	var changed := false
+	for nation in nations:
+		if (
+			not nation.alive
+			or suzerainty.has(nation.id)
+			or str(nation.name_kind) != WorldNaming.KIND_VASSAL
+		):
+			continue
+		WorldNaming.promote_vassal_to_sovereign(self, nation.id)
+		changed = true
+	return changed
 
 
 ## 分封：宗主 overlord_id 将 city_ids 划出，新建一个完整藩王 Nation。
@@ -4238,6 +4403,8 @@ func enfeoff(
 	var capital_id := city_ids[0]
 	var capital_distance := INF
 	for city_id in city_ids:
+		if cities[city_id].is_dock:
+			continue
 		var distance := cities[city_id].map_position.distance_squared_to(
 			region_centroid
 		)
@@ -4735,6 +4902,7 @@ func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 	):
 		return false
 	var seen := {}
+	var granted_land := 0
 	for city_id in city_ids:
 		if (
 			city_id < 0
@@ -4746,6 +4914,10 @@ func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 		):
 			return false
 		seen[city_id] = true
+		if not cities[city_id].is_dock:
+			granted_land += 1
+	if granted_land <= 0:
+		return false
 	var remaining_land := 0
 	for city in land_cities_of(overlord_id):
 		if not seen.has(city.id):
@@ -4866,6 +5038,242 @@ func _derive_independent_nation_color(nation_id: int) -> Color:
 	))
 
 
+static func _circular_hue_distance(hue_a: float, hue_b: float) -> float:
+	var direct := absf(hue_a - hue_b)
+	return minf(direct, 1.0 - direct)
+
+
+func _province_neighbors_for_sovereign_colors() -> Array[Vector2i]:
+	if _province_neighbor_pairs_ready:
+		return _province_neighbor_pairs
+	_province_neighbor_pairs.clear()
+	var seen := {}
+	var width := province_map_size.x
+	var height := province_map_size.y
+	if width > 0 and height > 0 and province_ids.size() == width * height:
+		for y in range(height):
+			for x in range(width):
+				var city_id := province_ids[y * width + x]
+				if city_id < 0 or city_id >= cities.size():
+					continue
+				if x + 1 < width:
+					_add_province_neighbor_pair(
+						city_id, province_ids[y * width + x + 1], seen
+					)
+				if y + 1 < height:
+					_add_province_neighbor_pair(
+						city_id, province_ids[(y + 1) * width + x], seen
+					)
+	else:
+		# 无省份栅格的轻量测试/旧地图退回交通图，正式地图不走此分支。
+		for edge in edges:
+			_add_province_neighbor_pair(edge.city_a, edge.city_b, seen)
+	_province_neighbor_pairs.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.x < b.x or (a.x == b.x and a.y < b.y)
+	)
+	_province_neighbor_pairs_ready = true
+	return _province_neighbor_pairs
+
+
+func _add_province_neighbor_pair(
+	city_a: int,
+	city_b: int,
+	seen: Dictionary
+) -> void:
+	if (
+		city_a < 0 or city_a >= cities.size()
+		or city_b < 0 or city_b >= cities.size()
+		or city_a == city_b
+	):
+		return
+	var lo := mini(city_a, city_b)
+	var hi := maxi(city_a, city_b)
+	var key := edge_key(lo, hi)
+	if seen.has(key):
+		return
+	seen[key] = true
+	_province_neighbor_pairs.append(Vector2i(lo, hi))
+
+
+func _sovereign_color_graph() -> Dictionary:
+	var graph := {}
+	var territory_sizes := {}
+	for city in cities:
+		if city.is_dock or city.owner_nation < 0 or city.owner_nation >= nations.size():
+			continue
+		var root := suzerainty_root(city.owner_nation)
+		if root < 0 or root >= nations.size():
+			continue
+		territory_sizes[root] = int(territory_sizes.get(root, 0)) + 1
+		if not graph.has(root):
+			graph[root] = {}
+	for pair in _province_neighbors_for_sovereign_colors():
+		var owner_a := cities[pair.x].owner_nation
+		var owner_b := cities[pair.y].owner_nation
+		if (
+			owner_a < 0 or owner_a >= nations.size()
+			or owner_b < 0 or owner_b >= nations.size()
+		):
+			continue
+		var root_a := suzerainty_root(owner_a)
+		var root_b := suzerainty_root(owner_b)
+		if root_a == root_b or not graph.has(root_a) or not graph.has(root_b):
+			continue
+		(graph[root_a] as Dictionary)[root_b] = true
+		(graph[root_b] as Dictionary)[root_a] = true
+	return {"graph": graph, "territory_sizes": territory_sizes}
+
+
+func _first_sovereign_hue_conflict(graph: Dictionary) -> Vector2i:
+	var roots: Array = graph.keys()
+	roots.sort()
+	var minimum := ADJACENT_SOVEREIGN_MIN_HUE_DEGREES / 360.0
+	for root_value in roots:
+		var root := int(root_value)
+		var neighbors: Array = (graph[root] as Dictionary).keys()
+		neighbors.sort()
+		for neighbor_value in neighbors:
+			var neighbor := int(neighbor_value)
+			if neighbor <= root:
+				continue
+			if (
+				_circular_hue_distance(
+					nations[root].color.h, nations[neighbor].color.h
+				) + 0.000001 < minimum
+			):
+				return Vector2i(root, neighbor)
+	return Vector2i(-1, -1)
+
+
+func _nearest_compatible_sovereign_hue(
+	root: int,
+	graph: Dictionary
+) -> float:
+	var original_hue := nations[root].color.h
+	var minimum := ADJACENT_SOVEREIGN_MIN_HUE_DEGREES / 360.0
+	var positive_first := posmod(world_seed + root, 2) == 0
+	for offset_degrees in range(181):
+		var candidates: Array[float] = []
+		candidates.append(original_hue)
+		if offset_degrees > 0:
+			var offset := float(offset_degrees) / 360.0
+			candidates.clear()
+			if positive_first:
+				candidates.append(fposmod(original_hue + offset, 1.0))
+				candidates.append(fposmod(original_hue - offset, 1.0))
+			else:
+				candidates.append(fposmod(original_hue - offset, 1.0))
+				candidates.append(fposmod(original_hue + offset, 1.0))
+		for candidate in candidates:
+			var valid := true
+			for neighbor_value in (graph[root] as Dictionary).keys():
+				var neighbor := int(neighbor_value)
+				if (
+					_circular_hue_distance(
+						candidate, nations[neighbor].color.h
+					) + 0.000001 < minimum
+				):
+					valid = false
+					break
+			if valid:
+				return candidate
+	return -1.0
+
+
+func _apply_global_sovereign_hue_palette(graph: Dictionary) -> bool:
+	const PALETTE_SIZE: int = 24
+	var roots: Array = graph.keys()
+	roots.sort_custom(func(a: Variant, b: Variant) -> bool:
+		var degree_a := (graph[int(a)] as Dictionary).size()
+		var degree_b := (graph[int(b)] as Dictionary).size()
+		return degree_a > degree_b or (degree_a == degree_b and int(a) < int(b))
+	)
+	var assigned_indices := {}
+	for root_value in roots:
+		var root := int(root_value)
+		var unavailable := {}
+		for neighbor_value in (graph[root] as Dictionary).keys():
+			var neighbor := int(neighbor_value)
+			if assigned_indices.has(neighbor):
+				unavailable[int(assigned_indices[neighbor])] = true
+		var best_index := -1
+		var best_distance := INF
+		var stable_start := posmod(world_seed + root * 17, PALETTE_SIZE)
+		for candidate_index in range(PALETTE_SIZE):
+			if unavailable.has(candidate_index):
+				continue
+			var candidate_hue := float(candidate_index) / float(PALETTE_SIZE)
+			var distance := _circular_hue_distance(
+				nations[root].color.h, candidate_hue
+			)
+			var stable_rank := posmod(candidate_index - stable_start, PALETTE_SIZE)
+			var best_rank := posmod(best_index - stable_start, PALETTE_SIZE)
+			if (
+				distance < best_distance - 0.000001
+				or (
+					is_equal_approx(distance, best_distance)
+					and (best_index < 0 or stable_rank < best_rank)
+				)
+			):
+				best_distance = distance
+				best_index = candidate_index
+		if best_index < 0:
+			return false
+		assigned_indices[root] = best_index
+	var changed := false
+	for root_value in roots:
+		var root := int(root_value)
+		var replacement := (
+			float(assigned_indices[root]) / float(PALETTE_SIZE)
+		)
+		var previous: Color = nations[root].color
+		if _circular_hue_distance(previous.h, replacement) <= 0.000001:
+			continue
+		nations[root].color = Color.from_hsv(
+			replacement, previous.s, previous.v, previous.a
+		)
+		changed = true
+	return changed
+
+
+## 保证视觉上共享省界的不同宗藩体系根至少相差 15 度。藩王仍由渲染层
+## 从宗主色派生；本方法只在领土或宗藩结构变化时调用，不参与逐帧渲染。
+func reconcile_adjacent_sovereign_colors() -> bool:
+	var data := _sovereign_color_graph()
+	var graph: Dictionary = data["graph"]
+	var territory_sizes: Dictionary = data["territory_sizes"]
+	var changed := false
+	var remaining_conflicts := maxi(graph.size() * graph.size(), 1)
+	while remaining_conflicts > 0:
+		remaining_conflicts -= 1
+		var conflict := _first_sovereign_hue_conflict(graph)
+		if conflict.x < 0:
+			return changed
+		var root_a := conflict.x
+		var root_b := conflict.y
+		var size_a := int(territory_sizes.get(root_a, 0))
+		var size_b := int(territory_sizes.get(root_b, 0))
+		var victim := root_a if size_a < size_b else root_b
+		if size_a == size_b:
+			victim = maxi(root_a, root_b)
+		var replacement := _nearest_compatible_sovereign_hue(victim, graph)
+		if replacement < 0.0:
+			victim = root_b if victim == root_a else root_a
+			replacement = _nearest_compatible_sovereign_hue(victim, graph)
+		if replacement < 0.0:
+			var globally_changed := _apply_global_sovereign_hue_palette(graph)
+			if _first_sovereign_hue_conflict(graph).x >= 0:
+				push_warning("国家邻接图超过 24 色容量，无法满足 15 度色差。")
+			return changed or globally_changed
+		var previous: Color = nations[victim].color
+		nations[victim].color = Color.from_hsv(
+			replacement, previous.s, previous.v, previous.a
+		)
+		changed = true
+	var globally_changed := _apply_global_sovereign_hue_palette(graph)
+	return changed or globally_changed
+
+
 ## 军队是否静止驻扎在 nation_id 的领土内（可安全整体转隶）。
 ## 只认已停在城节点且处于静止态的军队；行军/战斗/边上驻防/撤退一律不迁移，
 ## 以免破坏 battle、边通行占用与撤退路线的连续性。
@@ -4894,16 +5302,28 @@ func _inherit_overlord_diplomacy(overlord_id: int, subject_id: int) -> void:
 	)
 
 
-## 地方叛军只继承母国已有的战争与中立关系，不继承母国盟约。母国盟友对新叛军
-## 默认为中立，避免叛军一出生便借第三方盟友重新落入母国的联盟集团。
-func _inherit_rebel_diplomacy(parent_id: int, rebel_id: int) -> void:
+## 地方叛军只建立与母国的独立战争；所有第三国统一为中立，不继承母国的
+## 战争或盟约，也不会因同源关系自动与另一支叛军敌对。
+func _initialize_rebel_diplomacy(parent_id: int, rebel_id: int) -> void:
 	for third in nations:
 		if third.id == rebel_id or third.id == parent_id:
 			continue
-		var inherited := relation_between(parent_id, third.id)
-		if inherited == DiplomaticRelation.ALLIED:
-			inherited = DiplomaticRelation.NEUTRAL
-		set_diplomatic_relation(rebel_id, third.id, inherited)
+		set_diplomatic_relation(
+			rebel_id, third.id, DiplomaticRelation.NEUTRAL
+		)
+
+
+func _regional_rebellion_war_allowed(nation_a: int, nation_b: int) -> bool:
+	for candidate in [nation_a, nation_b]:
+		if not rebellions.has(candidate):
+			continue
+		var record: Dictionary = rebellions[candidate]
+		if not bool(record.get("active", false)):
+			continue
+		var other := nation_b if candidate == nation_a else nation_a
+		if other != int(record.get("parent_id", -1)):
+			return false
+	return true
 
 
 func _diplomacy_key(nation_a: int, nation_b: int) -> String:
@@ -5459,12 +5879,23 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 	var planned_sponsors: Array[int] = plan["planned_sponsors"]
 	var planned_warehouse_flags: Array[bool] = plan["planned_warehouse_flags"]
 	var planned_food: Array[int] = plan["planned_food"]
+	var planned_capitals: Array[int] = plan["planned_capitals"]
 	for city_id in range(cities.size()):
 		var city := cities[city_id]
+		var previous_owner := city.owner_nation
+		var continues_as_capital := (
+			city.is_capital
+			and previous_owner >= 0
+			and previous_owner < planned_capitals.size()
+			and planned_owners[city_id] == previous_owner
+			and planned_capitals[previous_owner] == city_id
+		)
 		city.owner_nation = planned_owners[city_id]
 		recognized_city_owners[city_id] = planned_legal_owners[city_id]
 		city.occupation_sponsor_nation = planned_sponsors[city_id]
 		city.is_capital = false
+		if not continues_as_capital:
+			city.capital_since_day = -1
 		city.has_warehouse = planned_warehouse_flags[city_id]
 		city.food_storage = planned_food[city_id]
 	var normalized_operations: Array[Dictionary] = plan["normalized_operations"]
@@ -5478,7 +5909,6 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 		city.rebellion_progress = 0
 		city.rebellion_cooldown_until_day = int(normalized["cooldown_until"])
 		city.last_loyalty_reason = str(normalized["reason"])
-	var planned_capitals: Array[int] = plan["planned_capitals"]
 	var planned_warehouse_ids: Array = plan["planned_warehouse_ids"]
 	for nation in nations:
 		nation.capital_city_id = planned_capitals[nation.id]
@@ -5486,7 +5916,10 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 			planned_warehouse_ids[nation.id] as Array[int]
 		).duplicate()
 		if nation.capital_city_id >= 0:
-			cities[nation.capital_city_id].is_capital = true
+			var capital := cities[nation.capital_city_id]
+			capital.is_capital = true
+			if capital.capital_since_day < 0:
+				capital.capital_since_day = day
 	var planned_suzerainty: Dictionary = plan["planned_suzerainty"]
 	suzerainty = planned_suzerainty.duplicate(true)
 	diplomatic_relations = plan["planned_diplomatic_relations"]
@@ -5500,6 +5933,9 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 	if diplomacy_changed:
 		diplomacy_revision += 1
 	refresh_derived()
+	_promote_independent_vassal_names()
+	if territory_changed or political_changed:
+		reconcile_adjacent_sovereign_colors()
 	var changed_city_ids: Array[int] = plan["changed_city_ids"]
 	changed_city_ids.sort()
 	return {
@@ -5816,6 +6252,7 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 		nation.capital_city_id = -1
 	if city_id >= 0 and city_id < cities.size():
 		cities[city_id].is_capital = false
+		cities[city_id].capital_since_day = -1
 		cities[city_id].has_warehouse = false
 
 
@@ -5828,12 +6265,18 @@ func relocate_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
 	var nation := nations[nation_id]
+	var previous_capital_id := nation.capital_city_id
+	var previous_capital_since := -1
+	if previous_capital_id >= 0 and previous_capital_id < cities.size():
+		previous_capital_since = cities[previous_capital_id].capital_since_day
+		cities[previous_capital_id].capital_since_day = -1
 	# 迁都入口同时修复旧档/编辑器留下的码头行政标记。码头可被占领和
 	# 通行，但永远不能是首都或粮仓。
 	for city in cities:
 		if city.owner_nation != nation_id:
 			continue
 		city.is_capital = false
+		city.capital_since_day = -1
 		if city.is_dock:
 			city.has_warehouse = false
 			city.food_storage = 0
@@ -5857,6 +6300,11 @@ func relocate_capital(nation_id: int) -> int:
 	var capital := best_component[0]
 	nation.capital_city_id = capital.id
 	capital.is_capital = true
+	capital.capital_since_day = (
+		previous_capital_since
+		if capital.id == previous_capital_id and previous_capital_since >= 0
+		else day
+	)
 	var owns_food_pool := food_pool_holder(nation_id) == nation_id
 	if owns_food_pool:
 		if not nation.warehouse_city_ids.has(capital.id):

@@ -407,7 +407,14 @@ static func assign_vassal_name(
 	nation.name = formal
 	var rulers := _registry(game_state, _RULER_REGISTRY_META)
 	_backfill_ruler_registry(game_state, rulers, subject_id)
-	_assign_unique_ruler(nation, int(game_state.world_seed), subject_id, rulers)
+	_assign_unique_ruler(
+		nation,
+		int(game_state.world_seed),
+		subject_id,
+		rulers,
+		"",
+		suzerainty_ruler_surname(game_state, subject_id)
+	)
 	var new_signature := "%s|%s|%s|%s|%d" % [
 		nation.name, nation.short_name, nation.name_kind, nation.ruler_name,
 		nation.founding_city_id,
@@ -417,8 +424,8 @@ static func assign_vassal_name(
 	return nation.name
 
 
-## 为地方叛军分配二至四字地域基础名。叛军保留“地域军”身份，不会在
-## 独立后改用任何单字帝国国号。
+## 为地方叛军分配二至四字地域基础名。获承认成为主权国后，统一通过
+## promote_special_nation_to_sovereign() 改用建国城的单字国号。
 static func assign_rebel_name(
 	game_state,
 	rebel_id: int,
@@ -466,7 +473,8 @@ static func register_successor_name(
 	game_state,
 	nation_id: int,
 	identity: int,
-	disallowed_name: String = ""
+	disallowed_name: String = "",
+	preferred_surname: String = ""
 ) -> String:
 	if not _valid_nation_id(game_state, nation_id):
 		return ""
@@ -478,15 +486,39 @@ static func register_successor_name(
 		int(game_state.world_seed),
 		identity,
 		rulers,
-		disallowed_name
+		disallowed_name,
+		preferred_surname
 	)
 	_bump_revision(game_state)
 	return str(nation.ruler_name)
 
 
-## 把一个已脱离宗藩关系的藩王统一升格为主权国。建国城市只在旧状态
+## 宗藩体系采用根宗主的当前姓氏。根宗主继位时，只要仍有藩王，就以
+## 自己上一任的姓作为本宗姓；完全独立且无藩属的国家不施加姓氏约束。
+static func suzerainty_ruler_surname(
+	game_state,
+	nation_id: int
+) -> String:
+	if not _valid_nation_id(game_state, nation_id):
+		return ""
+	var root_id := int(game_state.suzerainty_root(nation_id))
+	if not _valid_nation_id(game_state, root_id):
+		return ""
+	if root_id != nation_id:
+		return ruler_surname(str(game_state.nations[root_id].ruler_name))
+	if not game_state.subjects_of(nation_id).is_empty():
+		return ruler_surname(str(game_state.nations[nation_id].ruler_name))
+	return ""
+
+
+static func ruler_surname(ruler_name: String) -> String:
+	var normalized := ruler_name.strip_edges()
+	return normalized.substr(0, 1) if not normalized.is_empty() else ""
+
+
+## 把已独立的藩王或获承认的地方叛军升格为普通主权国。建国城市只在旧状态
 ## 缺失时补一次；国号严格取该城 short_name，不因迁都而换锚点。
-static func promote_vassal_to_sovereign(
+static func promote_special_nation_to_sovereign(
 	game_state,
 	nation_id: int
 ) -> String:
@@ -495,16 +527,17 @@ static func promote_vassal_to_sovereign(
 	var nation = game_state.nations[nation_id]
 	if not nation.alive:
 		return str(nation.name)
-	if str(nation.name_kind) != KIND_VASSAL:
+	if str(nation.name_kind) not in [KIND_VASSAL, KIND_REBEL]:
 		return str(nation.name)
 	var founding_before := int(nation.founding_city_id)
 	var founding_id := ensure_founding_city_id(game_state, nation_id)
 	if founding_id < 0:
 		return str(nation.name)
-	var symbol := city_short_name(game_state, founding_id)
-	if not _is_single_character(symbol):
-		return str(nation.name)
-	var kind := _sovereign_kind(symbol)
+	var identity := _founding_sovereign_identity(
+		game_state, int(game_state.world_seed), nation_id
+	)
+	var symbol := str(identity["base"])
+	var kind := str(identity["kind"])
 	var changed: bool = (
 		founding_id != founding_before
 		or nation.name != symbol
@@ -517,6 +550,18 @@ static func promote_vassal_to_sovereign(
 	if changed:
 		_bump_revision(game_state)
 	return symbol
+
+
+## 兼容既有调用者；只有藩王身份会通过此入口升格。
+static func promote_vassal_to_sovereign(
+	game_state,
+	nation_id: int
+) -> String:
+	if not _valid_nation_id(game_state, nation_id):
+		return ""
+	if str(game_state.nations[nation_id].name_kind) != KIND_VASSAL:
+		return str(game_state.nations[nation_id].name)
+	return promote_special_nation_to_sovereign(game_state, nation_id)
 
 
 ## 首次确定并持久化建国城。已经有效的历史锚点即使失地也不改变。
@@ -617,6 +662,36 @@ static func nation_display_name(
 	if not short_name.is_empty():
 		return short_name
 	return "国%d" % int(nation.id)
+
+
+## 场景级单国开局可覆盖主权国号。主权名仍遵守单字契约，并同步正式名、
+## 地图简称和朝代/诸侯分类；不会改动君主身份或建国城市锚点。
+static func override_sovereign_name(
+	game_state,
+	nation_id: int,
+	sovereign_name: String
+) -> bool:
+	if (
+		game_state == null
+		or not _valid_nation_id(game_state, nation_id)
+	):
+		return false
+	var normalized := sovereign_name.strip_edges()
+	if not _is_single_character(normalized):
+		return false
+	var nation = game_state.nations[nation_id]
+	var resolved_kind := _sovereign_kind(normalized)
+	if (
+		nation.name == normalized
+		and nation.short_name == normalized
+		and nation.name_kind == resolved_kind
+	):
+		return true
+	nation.name = normalized
+	nation.short_name = normalized
+	nation.name_kind = resolved_kind
+	_bump_revision(game_state)
+	return true
 
 
 ## 可传 (game_state, city_id)；也可直接传 City。码头名本身已经含
@@ -1007,27 +1082,39 @@ static func _assign_unique_ruler(
 	world_seed: int,
 	identity: int,
 	registry: Dictionary,
-	excluded_name: String = ""
+	excluded_name: String = "",
+	preferred_surname: String = ""
 ) -> bool:
 	var nation_id := int(nation.id)
 	var current := str(nation.ruler_name).strip_edges()
+	var required_surname := ruler_surname(preferred_surname)
 	if (
 		not current.is_empty()
 		and current != excluded_name
+		and (
+			required_surname.is_empty()
+			or ruler_surname(current) == required_surname
+		)
 		and _reserve(registry, current, nation_id)
 	):
 		if nation.ruler_name != current:
 			nation.ruler_name = current
 			return true
 		return false
-	var total := RULER_SURNAMES.size() * RULER_GIVEN_NAMES.size()
+	var surname_count := 1 if not required_surname.is_empty() else RULER_SURNAMES.size()
+	var total := surname_count * RULER_GIVEN_NAMES.size()
 	var start := stable_index(
 		world_seed, identity, "ruler/name", total, nation_id
 	)
 	for offset in range(total):
 		var pair := (start + offset) % total
+		var surname := (
+			required_surname
+			if not required_surname.is_empty()
+			else RULER_SURNAMES[pair / RULER_GIVEN_NAMES.size()]
+		)
 		var candidate := (
-			RULER_SURNAMES[pair / RULER_GIVEN_NAMES.size()]
+			surname
 			+ RULER_GIVEN_NAMES[pair % RULER_GIVEN_NAMES.size()]
 		)
 		if candidate == excluded_name:
@@ -1037,7 +1124,12 @@ static func _assign_unique_ruler(
 			return true
 	var serial := nation_id + 1
 	while true:
-		var candidate := RULER_SURNAMES[start % RULER_SURNAMES.size()] + _chinese_digits(serial)
+		var fallback_surname := (
+			required_surname
+			if not required_surname.is_empty()
+			else RULER_SURNAMES[start % RULER_SURNAMES.size()]
+		)
+		var candidate := fallback_surname + _chinese_digits(serial)
 		if candidate == excluded_name:
 			serial += 1
 			continue

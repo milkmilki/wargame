@@ -314,6 +314,57 @@ func _test_naming_sovereign_promotions() -> void:
 		"naming/dead_overlord_uses_unified_sovereign_promotion"
 	)
 
+	# 兼容旧档或事务漏网状态：宗藩边已经不存在，但名称身份仍残留为藩王。
+	# 即使宗藩图无需改动，每日清理也必须去掉“王”并升格为普通国号。
+	var orphan := _make_vassal_naming_state(4)
+	WorldNaming.assign_initial_names(orphan, SEED)
+	orphan.nations[1].name_kind = WorldNaming.KIND_VASSAL
+	WorldNaming.assign_vassal_name(orphan, 1, [1, 2, 3, 4])
+	var orphan_vassal_name := orphan.nations[1].name
+	var orphan_repaired := orphan.prune_dead_suzerainty()
+	_check(
+		orphan_vassal_name.ends_with("王")
+			and orphan_repaired
+			and not orphan.nations[1].name.ends_with("王")
+			and orphan.nations[1].name.length() == 1
+			and orphan.nations[1].short_name == orphan.nations[1].name
+			and orphan.nations[1].name_kind != WorldNaming.KIND_VASSAL,
+		"naming/orphaned_vassal_identity_is_promoted_without_graph_change",
+		"before=%s after=%s kind=%s" % [
+			orphan_vassal_name,
+			orphan.nations[1].name,
+			orphan.nations[1].name_kind,
+		]
+	)
+
+	var detached := _make_vassal_naming_state(4)
+	WorldNaming.assign_initial_names(detached, SEED)
+	detached.nations[1].name_kind = WorldNaming.KIND_VASSAL
+	WorldNaming.assign_vassal_name(detached, 1, [1, 2, 3, 4])
+	detached.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.ALLIED
+	)
+	detached.suzerainty[1] = {
+		"overlord_id": 0, "tribute_rate": 0.25, "created_day": 0,
+		"last_centralization_day": -1, "civil_war": false,
+	}
+	var detached_result := detached.apply_territory_transaction(
+		[] as Array[Dictionary], {}, -1, {}
+	)
+	_check(
+		bool(detached_result.get("ok", false))
+			and not detached.is_vassal(1)
+			and not detached.nations[1].name.ends_with("王")
+			and detached.nations[1].name.length() == 1
+			and detached.nations[1].name_kind != WorldNaming.KIND_VASSAL,
+		"naming/territory_transaction_promotes_detached_vassal_immediately",
+		"result=%s name=%s kind=%s" % [
+			detached_result,
+			detached.nations[1].name,
+			detached.nations[1].name_kind,
+		]
+	)
+
 	var civil := _make_vassal_naming_state(4)
 	WorldNaming.assign_initial_names(civil, SEED)
 	civil.nations[1].name_kind = WorldNaming.KIND_VASSAL
@@ -400,7 +451,9 @@ func _test_ruler_profiles() -> void:
 	_check(
 		_approx(float(conqueror[RulerProfile.KEY_AGGRESSION]), 2.00)
 			and _approx(float(conqueror[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.50)
-			and _approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 1.35)
+			and _approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 0.50)
+			and _approx(float(conqueror[RulerProfile.KEY_WAR_BENEFIT]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_OFFENSIVE_INTERVAL]), 0.50)
 			and _approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.00)
 			and _approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 2.00)
 			and bool(conqueror[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
@@ -484,14 +537,92 @@ func _test_trade_network() -> void:
 		if bool(route.get("international", false)):
 			international_counts[int(route["nation_a"])] += 1
 			international_counts[int(route["nation_b"])] += 1
-	for count in international_counts:
+	for nation_id in range(international_counts.size()):
+		var count := international_counts[nation_id]
 		route_contract = route_contract and (
-			count <= TradeNetwork.MAX_INTERNATIONAL_ROUTES_PER_NATION
+			count <= TradeNetwork.international_route_limit(
+				limit_state, nation_id
+			)
 		)
 	_check(
 		route_contract,
 		"trade/route_schema_and_per_nation_limit",
 		"counts=%s" % str(international_counts)
+	)
+	var capacity_state := _make_dynamic_trade_capacity_state()
+	_check(
+		TradeNetwork.international_route_limit(capacity_state, 0) == 1
+			and TradeNetwork.international_route_limit(capacity_state, 1) == 2
+			and TradeNetwork.international_route_limit(capacity_state, 2) == 3,
+		"trade/international_route_limit_scales_by_hop_sized_city_blocks"
+	)
+
+	var spaced_hub_state := _make_spaced_capital_hub_state()
+	var spaced_hub_result := TradeNetwork.build(spaced_hub_state)
+	var spaced_route := _international_route(spaced_hub_result, 1, 2)
+	var crowded_capital_used := false
+	for route_value in spaced_hub_result.get("routes", []):
+		var route: Dictionary = route_value
+		if not bool(route.get("international", false)):
+			continue
+		crowded_capital_used = crowded_capital_used or (
+			int(route.get("source_city", -1)) == 0
+			or int(route.get("destination_city", -1)) == 0
+		)
+	_check(
+		not spaced_route.is_empty()
+			and not crowded_capital_used
+			and (spaced_route["preferred_city_path"] as Array).size() - 1
+				>= TradeNetwork.MIN_INTERNATIONAL_ROUTE_HOPS,
+		"trade/capitals_obey_global_trade_hub_hop_spacing",
+		str(spaced_hub_result.get("routes", []))
+	)
+	_check(
+		is_equal_approx(
+			TradeNetwork.distance_premium_multiplier(1, false), 1.0
+		)
+			and is_equal_approx(
+				TradeNetwork.distance_premium_multiplier(2, false), 2.0
+			)
+			and is_equal_approx(
+				TradeNetwork.distance_premium_multiplier(4, false),
+				6.1961524227
+			)
+			and is_equal_approx(
+				TradeNetwork.distance_premium_multiplier(3, true), 1.0
+			)
+			and is_equal_approx(
+				TradeNetwork.distance_premium_multiplier(4, true), 2.0
+			)
+			and is_equal_approx(
+				TradeNetwork.distance_premium_multiplier(6, true),
+				6.1961524227
+			),
+		"trade/distance_premium_uses_1_5_power_extra_hops_curve"
+	)
+	var short_distance_trade := TradeNetwork.build(
+		_make_distance_premium_state(3)
+	)
+	var long_distance_trade := TradeNetwork.build(
+		_make_distance_premium_state(6)
+	)
+	var short_distance_route := _international_route(
+		short_distance_trade, 0, 1
+	)
+	var long_distance_route := _international_route(
+		long_distance_trade, 0, 1
+	)
+	_check(
+		not short_distance_route.is_empty()
+			and not long_distance_route.is_empty()
+			and int(long_distance_route["gold_tax"])
+				> int(short_distance_route["gold_tax"])
+			and int(long_distance_route["gold_tax"]) > 64,
+		"trade/long_route_premium_exceeds_removed_legacy_cap",
+		"short=%s long=%s" % [
+			short_distance_route.get("gold_tax", -1),
+			long_distance_route.get("gold_tax", -1),
+		]
 	)
 
 	var pair_state := _make_trade_pair_state()
@@ -657,6 +788,69 @@ func _make_trade_limit_state() -> GameState:
 			_add_edge(state, a, b, 20000, 1 + abs(a - b))
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	_configure_capitals_and_warehouses(state, 50)
+	state.refresh_derived()
+	return state
+
+
+func _make_dynamic_trade_capacity_state() -> GameState:
+	var state := _make_empty_state(3)
+	for nation_id in range(3):
+		var city_count: int = [1, 3, 6][nation_id]
+		for city_index in range(city_count):
+			_add_city(
+				state,
+				nation_id,
+				Vector2(0.1 * float(city_index), 0.2 * float(nation_id)),
+				10,
+				300
+			)
+	return state
+
+
+func _make_spaced_capital_hub_state() -> GameState:
+	var state := _make_empty_state(3)
+	for city_index in range(5):
+		var owner := 0
+		var gold := 1
+		if city_index == 1:
+			owner = 1
+			gold = 100
+		elif city_index == 4:
+			owner = 2
+			gold = 90
+		_add_city(
+			state, owner, Vector2(0.1 + 0.2 * city_index, 0.5), gold, 600
+		)
+		if city_index > 0:
+			_add_edge(state, city_index - 1, city_index, 20000, 1)
+	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
+	_configure_capitals_and_warehouses(state, 20)
+	# 城 0 是国家 0 的首都，和更高价值的城 1 仅相隔一跳，不能绕过 hub 门禁。
+	state.nations[0].capital_city_id = 0
+	for city in state.cities:
+		city.is_capital = city.id in [0, 1, 4]
+	state.refresh_derived()
+	return state
+
+
+func _make_distance_premium_state(hops: int) -> GameState:
+	var state := _make_empty_state(2)
+	for city_index in range(hops + 1):
+		var owner := 0 if city_index < hops else 1
+		var gold := 100 if city_index in [0, hops] else 0
+		var city_id := _add_city(
+			state,
+			owner,
+			Vector2(0.1 + 0.8 * float(city_index) / float(hops), 0.5),
+			gold,
+			600 if city_index in [0, hops] else 0
+		)
+		if city_index > 0 and city_index < hops:
+			state.cities[city_id].is_dock = true
+		if city_index > 0:
+			_add_edge(state, city_index - 1, city_index, 20000, 1)
+	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
+	_configure_capitals_and_warehouses(state, 20)
 	state.refresh_derived()
 	return state
 
@@ -933,13 +1127,42 @@ func _test_rebellion_system() -> void:
 			and diplomacy_state.is_enemy(0, diplomacy_rebel)
 			and diplomacy_state.relation_between(1, diplomacy_rebel)
 				== GameState.DiplomaticRelation.NEUTRAL
-			and diplomacy_state.is_enemy(2, diplomacy_rebel)
+			and diplomacy_state.relation_between(2, diplomacy_rebel)
+				== GameState.DiplomaticRelation.NEUTRAL
 			and not diplomacy_state.alliance_bloc(0).has(diplomacy_rebel),
-		"rebellion/local_rebel_does_not_inherit_parent_alliance",
-		"bloc=%s ally_relation=%d" % [
+		"rebellion/local_rebel_only_wars_with_parent",
+		"bloc=%s ally_relation=%d enemy_relation=%d" % [
 			diplomacy_state.alliance_bloc(0),
 			diplomacy_state.relation_between(1, diplomacy_rebel),
+			diplomacy_state.relation_between(2, diplomacy_rebel),
 		]
+	)
+	var sibling_state := _make_rebellion_transaction_state()
+	var first_rebel := sibling_state.start_regional_rebellion(0, [1])
+	var second_rebel := sibling_state.start_regional_rebellion(0, [2])
+	_check(
+		first_rebel == 1
+			and second_rebel == 2
+			and sibling_state.is_enemy(0, first_rebel)
+			and sibling_state.is_enemy(0, second_rebel)
+			and sibling_state.relation_between(first_rebel, second_rebel)
+				== GameState.DiplomaticRelation.NEUTRAL
+			and sibling_state.rebellion_structure_valid(),
+		"rebellion/sibling_rebels_remain_neutral"
+	)
+	var nested_spawn_state := _make_rebellion_transaction_state()
+	var nested_parent_rebel := nested_spawn_state.start_regional_rebellion(
+		0, [1, 2]
+	)
+	var rejected_nested_rebel := nested_spawn_state.start_regional_rebellion(
+		nested_parent_rebel, [2]
+	)
+	_check(
+		nested_parent_rebel == 1
+			and rejected_nested_rebel == -1
+			and nested_spawn_state.nations.size() == 2
+			and nested_spawn_state.rebellion_structure_valid(),
+		"rebellion/active_rebel_cannot_spawn_nested_rebellion"
 	)
 
 	var start_state := _make_rebellion_transaction_state()
@@ -1038,6 +1261,8 @@ func _test_rebellion_system() -> void:
 			and peace_unlocked,
 		"rebellion/parent_war_locked_for_one_year"
 	)
+	var rebel_name_before := start_state.nations[rebel_id].name
+	var naming_revision_before := start_state.naming_revision
 	var recognized := start_state.recognize_regional_rebellion(rebel_id)
 	var recognize_ok := recognized
 	for city_id in [1, 2]:
@@ -1048,10 +1273,29 @@ func _test_rebellion_system() -> void:
 	recognize_ok = recognize_ok and (
 		not bool(start_state.rebellions[rebel_id]["active"])
 		and bool(start_state.rebellions[rebel_id]["recognized"])
+		and rebel_name_before.ends_with("军")
+		and start_state.nations[rebel_id].name.length() == 1
+		and start_state.nations[rebel_id].short_name
+			== start_state.nations[rebel_id].name
+		and start_state.nations[rebel_id].name_kind
+			!= WorldNaming.KIND_REBEL
+		and start_state.naming_revision > naming_revision_before
 		and start_state.rebellion_structure_valid()
 		and start_state.territory_structure_valid()
 	)
-	_check(recognize_ok, "rebellion/recognize_commits_legal_title")
+	_check(
+		recognize_ok,
+		"rebellion/recognize_commits_title_and_single_char_sovereign_name",
+		"before=%s after=%s short=%s kind=%s founding=%d revision=%d->%d" % [
+			rebel_name_before,
+			start_state.nations[rebel_id].name,
+			start_state.nations[rebel_id].short_name,
+			start_state.nations[rebel_id].name_kind,
+			start_state.nations[rebel_id].founding_city_id,
+			naming_revision_before,
+			start_state.naming_revision,
+		]
+	)
 
 	var suppress_state := _make_rebellion_transaction_state()
 	var suppress_rebel := suppress_state.start_regional_rebellion(0, [1, 2])

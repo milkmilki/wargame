@@ -402,7 +402,7 @@ func _legacy_isolated_garrison_power_ratio(
 	var isolated_power := 0.0
 	var retreat_route_by_capacity := {}
 	# 与 legacy 一致按 state.armies 原顺序累加，且以 max_size（不是 size）
-	# 作为完整编制撤退所需道路容量。
+	# 作为完整编制撤退的正容量通路。
 	for army in state.armies:
 		if army.owner_nation != nation_id or army.size <= 0:
 			continue

@@ -1,0 +1,8 @@
+[gd_scene format=3 uid="uid://o04q4yrnq1av"]
+
+[ext_resource type="PackedScene" path="res://main.tscn" id="1_main"]
+
+[node name="ZhouUnified" instance=ExtResource("1_main")]
+nation_count = 1
+initial_single_nation_name = "周"
+initial_city_names_visible = false

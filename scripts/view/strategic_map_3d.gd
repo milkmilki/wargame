@@ -33,6 +33,8 @@ const MAP_COUNTER_MARK := Color(0.32, 0.25, 0.12)
 const TRADE_ROUTE_ELEVATION: float = 0.185
 const TRADE_ROUTE_WIDTH: float = 0.055
 const TRADE_ROUTE_DASH_WORLD_LENGTH: float = 0.42
+const WATER_ROUTE_WIDTH: float = 0.025
+const WATER_ROUTE_DASH_WORLD_LENGTH: float = 0.32
 const TRADE_FLOW_ELEVATION: float = 0.265
 const TRADE_FLOW_SPEED: float = 0.95
 const TRADE_FLOW_MARKER_SPACING: float = 2.40
@@ -1456,29 +1458,40 @@ func _build_road_mesh() -> void:
 			state.cities[edge.city_a].map_position,
 			state.cities[edge.city_b].map_position
 		)
-		var color := _road_color_for_capacity(edge.max_manpower)
-		var width := _road_width_for_capacity(edge.max_manpower)
-		if edge.kind == Edge.Kind.LANDING:
-			color = Color(0.25, 0.075, 0.020, 0.92)
-			width = 0.080
-		elif edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-			color = Color(0.012, 0.105, 0.165, 0.94)
-			width = 0.090
+		if MapRenderer.edge_uses_water_ant_line(edge.kind):
+			_append_dashed_draped_path(
+				major_tool,
+				path,
+				WATER_ROUTE_WIDTH,
+				MapRenderer.WATER_ROUTE_COLOR,
+				0.125,
+				WATER_ROUTE_DASH_WORLD_LENGTH
+			)
+			continue
+		if not MapRenderer.edge_uses_land_road_style(edge.kind):
+			continue
+		var is_landing := edge.kind == Edge.Kind.LANDING
+		var visual_capacity := (
+			Edge.TERRAIN_LOW_MANPOWER
+			if is_landing
+			else edge.max_manpower
+		)
+		var color := (
+			MapRenderer.LANDING_ROAD_COLOR
+			if is_landing
+			else _road_color_for_capacity(visual_capacity)
+		)
+		var width := _road_width_for_capacity(visual_capacity)
 		var surface_tool := (
 			major_tool
-			if edge.max_manpower >= Edge.TERRAIN_STANDARD_MANPOWER
+			if visual_capacity >= Edge.TERRAIN_STANDARD_MANPOWER
 			else minor_tool
 		)
-		var is_land_road := edge.kind == Edge.Kind.LAND
 		_append_draped_path_ribbon(
 			surface_tool,
 			path,
-			width * (1.20 if is_land_road else 1.58),
-			(
-				Color(0.34, 0.36, 0.38, 0.10)
-				if is_land_road
-				else Color(0.055, 0.038, 0.022, 0.54)
-			),
+			width * 1.20,
+			Color(0.34, 0.36, 0.38, 0.10),
 			0.105
 		)
 		_append_draped_path_ribbon(
@@ -1695,20 +1708,21 @@ func _append_dashed_draped_path(
 	path: PackedVector2Array,
 	width: float,
 	color: Color,
-	elevation: float
+	elevation: float,
+	dash_world_length: float = TRADE_ROUTE_DASH_WORLD_LENGTH
 ) -> void:
+	var travelled := 0.0
 	for index in range(path.size() - 1):
 		var samples := _draped_world_samples(
 			path[index], path[index + 1], elevation
 		)
-		var travelled := 0.0
 		for sample_index in range(samples.size() - 1):
 			var from := samples[sample_index]
 			var to := samples[sample_index + 1]
 			var length := from.distance_to(to)
 			var midpoint_distance := travelled + length * 0.5
 			travelled += length
-			if int(floor(midpoint_distance / TRADE_ROUTE_DASH_WORLD_LENGTH)) % 2 != 0:
+			if int(floor(midpoint_distance / dash_world_length)) % 2 != 0:
 				continue
 			_append_world_segment_quad(
 				surface_tool, from, to, width, color

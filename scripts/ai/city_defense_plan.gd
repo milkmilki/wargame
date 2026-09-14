@@ -46,7 +46,6 @@ var defense_assignment_slots: int = 0
 var line_city_slots: int = 0
 var line_critical_city_slots: int = 0
 var line_edge_slots: int = 0
-var vassal_main_reserve_cities: Array[int] = []
 var main_reserve_cities: Array[int] = []
 var assigned_city_by_army: Dictionary = {} ## army.id -> city_id
 var assigned_armies_by_city: Dictionary = {} ## city_id -> Array[army.id]
@@ -206,10 +205,6 @@ func must_hold_city(city_id: int) -> bool:
 	return bool(must_hold_cities.get(city_id, false))
 
 
-func vassal_main_reserve_city_count() -> int:
-	return vassal_main_reserve_cities.size()
-
-
 func main_reserve_target_group_count() -> int:
 	return maxi(
 		1,
@@ -248,7 +243,7 @@ func has_uncovered_frontline_minimum(
 
 
 ## 已有明确防区但仍堵在出发节点的军队。军制层用它作为部署流水线背压：
-## 先让既有编制离开征兵枢纽，再创建下一支，避免生产速度超过道路吞吐。
+## 先让既有编制离开征兵枢纽，再创建下一支，避免同城短时堆积过多兵牌。
 func pending_deployment_army_count(
 	main_battle_role: int = -1
 ) -> int:
@@ -379,16 +374,6 @@ func can_join_offensive(
 	):
 		return false
 	if army.is_main_battle_role():
-		if (
-			view.state.is_vassal(view.nation_id)
-			and not view.state.is_in_civil_war(
-				view.nation_id
-			)
-		):
-			return (
-				view.state.recognized_owner_of(target_city)
-					== view.nation_id
-			)
 		return true
 	if view.state.uses_heightmap:
 		return false
@@ -489,8 +474,7 @@ func urgent_defense_at(city_id: int) -> bool:
 			)
 			if (
 				approach_edge != null
-				and approach_edge.max_manpower
-					>= enemy.road_footprint()
+				and approach_edge.max_manpower > 0
 			):
 				return true
 	return false
@@ -917,9 +901,6 @@ func _assign_role_based_defense() -> void:
 	assigned_armies_by_city.clear()
 	assigned_posture_by_army.clear()
 	assigned_edge_by_army.clear()
-	vassal_main_reserve_cities = (
-		_build_vassal_main_reserve_cities()
-	)
 	main_reserve_cities = _build_main_reserve_cities()
 	var line_armies: Array[Army] = []
 	for army in view.friendly_armies:
@@ -1133,28 +1114,6 @@ func _assign_role_based_defense() -> void:
 			_clear_army_from_frontier_sector(army)
 			army.clear_line_assignment()
 	_assign_main_reserves()
-
-
-func _build_vassal_main_reserve_cities() -> Array[int]:
-	var result: Array[int] = []
-	if (
-		not view.state.is_vassal(view.nation_id)
-		or view.state.is_in_civil_war(view.nation_id)
-	):
-		return result
-	for city in view.friendly_cities:
-		if _is_strategic_must_hold_city(city.id):
-			result.append(city.id)
-	if result.is_empty() and (
-		view.capital_city_id >= 0
-		and view.capital_city_id < view.state.cities.size()
-		and view.state.cities[
-			view.capital_city_id
-		].owner_nation == view.nation_id
-	):
-		result.append(view.capital_city_id)
-	_sort_role_city_ids(result)
-	return result
 
 
 func _build_main_reserve_cities() -> Array[int]:
@@ -2706,8 +2665,6 @@ func _directional_pressure_at(city_id: int) -> Dictionary:
 						/ ThreatField.DECAY_DAYS
 				)
 		for enemy in view.enemy_armies_at_city(neighbor):
-			if edge.max_manpower < enemy.road_footprint():
-				continue
 			var power := ArmyPower.effective(enemy)
 			if power <= 0.0:
 				continue

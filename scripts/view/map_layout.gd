@@ -7,8 +7,9 @@ const BASE_BOTTOM_MARGIN := 40.0
 const BASE_HEADER_ONLY_TOP := 44.0
 const NATION_STATS_BUTTON_WIDTH := 104.0
 const ARMY_ICON_CONTROL_WIDTH := 500.0
-const NATION_WINDOW_WIDTH: float = 1120.0
+const NATION_WINDOW_WIDTH: float = 800.0
 const NATION_WINDOW_TITLE_HEIGHT: float = 30.0
+const NATION_WINDOW_SORT_HEIGHT: float = 30.0
 const NATION_WINDOW_HEADER_HEIGHT: float = 28.0
 const NATION_WINDOW_ROW_HEIGHT: float = 46.0
 const NATION_WINDOW_FOOTER_HEIGHT: float = 22.0
@@ -76,6 +77,7 @@ static func nation_stats_window_size(
 	)
 	var fixed_height := (
 		NATION_WINDOW_TITLE_HEIGHT
+		+ NATION_WINDOW_SORT_HEIGHT
 		+ NATION_WINDOW_HEADER_HEIGHT
 		+ NATION_WINDOW_FOOTER_HEIGHT
 	) * display_scale
@@ -100,6 +102,7 @@ static func nation_stats_visible_row_capacity(
 ) -> int:
 	var fixed_height := (
 		NATION_WINDOW_TITLE_HEIGHT
+		+ NATION_WINDOW_SORT_HEIGHT
 		+ NATION_WINDOW_HEADER_HEIGHT
 		+ NATION_WINDOW_FOOTER_HEIGHT
 	) * display_scale
@@ -161,6 +164,59 @@ static func nation_stats_close_rect(
 	)
 
 
+static func nation_stats_sort_bar_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return Rect2(
+		Vector2(
+			window_rect.position.x,
+			window_rect.position.y
+				+ NATION_WINDOW_TITLE_HEIGHT * display_scale
+		),
+		Vector2(
+			window_rect.size.x,
+			NATION_WINDOW_SORT_HEIGHT * display_scale
+		)
+	)
+
+
+static func nation_stats_sort_button_rect(
+	window_rect: Rect2,
+	display_scale: float,
+	button_index: int
+) -> Rect2:
+	var bar := nation_stats_sort_bar_rect(window_rect, display_scale)
+	var padding := 7.0 * display_scale
+	var label_width := 42.0 * display_scale
+	var gap := 4.0 * display_scale
+	var direction_width := 38.0 * display_scale
+	var field_width := maxf(
+		(
+			bar.size.x
+			- padding * 2.0
+			- label_width
+			- direction_width
+			- gap * 4.0
+		) / 3.0,
+		1.0
+	)
+	var height := bar.size.y - padding * 2.0
+	if button_index >= 3:
+		return Rect2(
+			Vector2(bar.end.x - padding - direction_width, bar.position.y + padding),
+			Vector2(direction_width, height)
+		)
+	return Rect2(
+		Vector2(
+			bar.position.x + padding + label_width
+				+ float(clampi(button_index, 0, 2)) * (field_width + gap),
+			bar.position.y + padding
+		),
+		Vector2(field_width, height)
+	)
+
+
 static func nation_stats_row_rect(
 	window_rect: Rect2,
 	display_scale: float,
@@ -172,6 +228,7 @@ static func nation_stats_row_rect(
 			window_rect.position.y
 				+ (
 					NATION_WINDOW_TITLE_HEIGHT
+					+ NATION_WINDOW_SORT_HEIGHT
 					+ NATION_WINDOW_HEADER_HEIGHT
 					+ float(maxi(visual_index, 0)) * NATION_WINDOW_ROW_HEIGHT
 				) * display_scale

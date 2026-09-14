@@ -39,7 +39,8 @@ func _test_direct_and_reused_settlement() -> void:
 		"structure/embeds_exact_fingerprint"
 	)
 
-	# 库存反转使粮食方向改变，但路线与税收结构仍可复用。
+	# 资源自动互换已从贸易结算移除；库存变化不影响纯金钱商路结果，
+	# 但仍须证明复用结构与直接重建完全等价。
 	state.cities[0].food_storage = 0
 	state.cities[2].food_storage = 1400
 	state.refresh_derived()
@@ -47,8 +48,8 @@ func _test_direct_and_reused_settlement() -> void:
 		state, structure, baseline_token, "dynamic/inventory"
 	)
 	_check(
-		TradeNetwork.build(state) != initial_direct,
-		"dynamic/inventory_actually_changes_settlement"
+		TradeNetwork.build(state) == initial_direct,
+		"dynamic/inventory_does_not_change_gold_only_trade_settlement"
 	)
 
 	state.nations[0].treasury_gold = 0

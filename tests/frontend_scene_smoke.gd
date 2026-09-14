@@ -124,6 +124,16 @@ func _run() -> void:
 		push_error("FRONTEND_SCENE_INVALID")
 		quit(1)
 		return
+	if OS.get_environment("WW_VISUAL_NATION_LIST") == "1":
+		renderer._nation_stats_open = true
+		renderer.select_nation(0)
+		renderer.queue_redraw()
+		await process_frame
+	if OS.get_environment("WW_VISUAL_CITY_DETAIL") == "1":
+		var capital_id := int(main.state.nations[0].capital_city_id)
+		renderer.select_city(capital_id)
+		renderer.queue_redraw()
+		await process_frame
 	var output := OS.get_environment("WW_VISUAL_OUTPUT")
 	if not output.is_empty():
 		var image := root.get_texture().get_image()

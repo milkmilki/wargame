@@ -13,6 +13,8 @@ extends Node
 ## 场景启动时忽略固定 world_seed，使用新的随机种子生成地图与国家。
 ## 专项大地图场景开启；默认场景与测试保持可复现。
 @export var randomize_world_seed_on_start: bool = false
+## 仅在 nation_count=1 时应用的单字主权国号；空字符串保持程序化命名。
+@export var initial_single_nation_name: String = ""
 ## 3D 地图的线性物理跨度倍率。只改变呈现空间与镜头覆盖，不改变归一化
 ## 地形/省份拓扑；大地图场景可在不复制生成逻辑的前提下扩大单位间距。
 @export_range(0.5, 4.0, 0.1) var map_world_scale: float = 1.0
@@ -467,6 +469,14 @@ func _start_new_game(world_seed: int) -> void:
 			_city_density_settings,
 			world_seed if randomize_world_seed_on_start else 0,
 			_political_mask_path
+		)
+	var single_name := initial_single_nation_name.strip_edges()
+	if next_state.nations.size() == 1 and not single_name.is_empty():
+		assert(
+			WorldNaming.override_sovereign_name(
+				next_state, 0, single_name
+			),
+			"单国场景国号必须是一个有效单字"
 		)
 	_activate_state(next_state)
 

@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 11
+const SCHEMA_VERSION: int = 12
 
 
 static func build(state: GameState) -> Dictionary:
@@ -65,6 +65,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var war_preparation_target := PackedInt32Array()
 	var war_preparation_objective := PackedInt32Array()
 	var war_preparation_started_day := PackedInt32Array()
+	var war_preparation_scope := PackedByteArray()
 	var campaign_last_offensive_day := PackedInt32Array()
 	var campaign_next_offensive_day := PackedInt32Array()
 	var campaign_offensive_count := PackedInt32Array()
@@ -134,6 +135,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 		war_preparation_started_day.append(
 			nation.war_preparation_started_day
 		)
+		war_preparation_scope.append(nation.war_preparation_scope)
 		campaign_last_offensive_day.append(
 			nation.campaign_last_offensive_day
 		)
@@ -169,6 +171,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var truce_until_day := PackedInt32Array()
 	var war_objective_city := PackedInt32Array()
 	var war_objective_started_day := PackedInt32Array()
+	var war_objective_scope := PackedByteArray()
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(state.nations.size()):
 			diplomacy.append(
@@ -198,6 +201,13 @@ static func _build_nations(state: GameState) -> Dictionary:
 				int(objective.get("started_day", -1))
 				if directed
 				else -1
+			)
+			war_objective_scope.append(
+				int(objective.get(
+					"scope", GameState.WarScope.COALITION
+				))
+				if directed
+				else GameState.WarScope.COALITION
 			)
 	return {
 		"count": state.nations.size(),
@@ -230,6 +240,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"war_preparation_objective": war_preparation_objective,
 		"war_preparation_started_day":
 			war_preparation_started_day,
+		"war_preparation_scope": war_preparation_scope,
 		"campaign_last_offensive_day":
 			campaign_last_offensive_day,
 		"campaign_next_offensive_day":
@@ -256,6 +267,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"war_objective_city": war_objective_city,
 		"war_objective_started_day":
 			war_objective_started_day,
+		"war_objective_scope": war_objective_scope,
 	}
 
 

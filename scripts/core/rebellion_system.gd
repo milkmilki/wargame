@@ -615,6 +615,21 @@ static func vassal_loyalty(
 	)
 
 
+## 征服者藩王绝不接受和平削藩。该判定由外交预告和动作执行共同调用，
+## 避免缓存动作中的 resist 字段过期后绕过君主效果。
+static func must_resist_centralization(
+	state: GameState,
+	subject_id: int
+) -> bool:
+	return (
+		_valid_living_nation(state, subject_id)
+		and state.is_vassal(subject_id)
+		and not state.is_in_civil_war(subject_id)
+		and state.nations[subject_id].ruler_archetype
+			== RulerProfile.CONQUEROR
+	)
+
+
 static func should_vassal_rebel(
 	state: GameState,
 	subject_id: int,

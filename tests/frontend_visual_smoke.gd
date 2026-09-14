@@ -278,7 +278,7 @@ func _run() -> void:
 	)
 	var detail_uses_formal_name := false
 	for detail_line in compact_city_details:
-		if detail_line.contains("法理：快王（国%d）" % label_probe_nation.id):
+		if detail_line.contains("法理：快王"):
 			detail_uses_formal_name = true
 			break
 	var compact_vassal_name_valid := (
@@ -447,6 +447,27 @@ func _run() -> void:
 			"return create_ui_font()"
 		)
 		and not map_label_font_source.contains("\"serif\"")
+	)
+	var road_type_style_contract := (
+		MapRenderer.edge_uses_land_road_style(Edge.Kind.LAND)
+		and MapRenderer.edge_uses_land_road_style(Edge.Kind.LANDING)
+		and not MapRenderer.edge_uses_land_road_style(Edge.Kind.RIVER)
+		and not MapRenderer.edge_uses_land_road_style(Edge.Kind.SEA)
+		and MapRenderer.edge_uses_water_ant_line(Edge.Kind.RIVER)
+		and MapRenderer.edge_uses_water_ant_line(Edge.Kind.SEA)
+		and not MapRenderer.edge_uses_water_ant_line(Edge.Kind.LANDING)
+		and MapRenderer.LANDING_ROAD_COLOR.is_equal_approx(
+			MapRenderer.MINOR_ROAD_COLOR
+		)
+		and is_equal_approx(
+			MapRenderer.LANDING_ROAD_WIDTH,
+			MapRenderer.MINOR_ROAD_WIDTH
+		)
+		and MapRenderer.WATER_ROUTE_COLOR.r <= 0.02
+		and MapRenderer.WATER_ROUTE_COLOR.g <= 0.02
+		and MapRenderer.WATER_ROUTE_COLOR.b <= 0.02
+		and MapRenderer.WATER_ROUTE_DASH_LENGTH > 0.0
+		and StrategicMap3D.WATER_ROUTE_DASH_WORLD_LENGTH > 0.0
 	)
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_LOYALTY)
 	var loyalty_mode_contract := (
@@ -670,6 +691,7 @@ func _run() -> void:
 				Edge.TERRAIN_STANDARD_MANPOWER
 			).s <= 0.10
 		),
+		"road_type_styles": road_type_style_contract,
 		"loyalty_gradient": (
 			high_loyalty_color.g > low_loyalty_color.g
 			and high_loyalty_color.g > high_loyalty_color.r

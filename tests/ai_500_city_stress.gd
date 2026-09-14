@@ -70,15 +70,28 @@ func _init() -> void:
 		Time.get_ticks_usec() - trade_started
 	) / 1000.0
 	var international_routes := 0
+	var international_trade_gold := 0
+	var maximum_international_route_gold := 0
 	var minimum_international_hops := 2147483647
 	var international_counts := PackedInt32Array()
 	international_counts.resize(state.nations.size())
 	international_counts.fill(0)
+	var initial_route_limits := PackedInt32Array()
+	initial_route_limits.resize(state.nations.size())
+	for nation_id in range(state.nations.size()):
+		initial_route_limits[nation_id] = (
+			TradeNetwork.international_route_limit(state, nation_id)
+		)
 	for route_value in trade_structure.get("routes", []):
 		var route: Dictionary = route_value
 		if not bool(route.get("international", false)):
 			continue
 		international_routes += 1
+		var route_gold := int(route.get("gold_tax", 0))
+		international_trade_gold += route_gold
+		maximum_international_route_gold = maxi(
+			maximum_international_route_gold, route_gold
+		)
 		international_counts[int(route["nation_a"])] += 1
 		international_counts[int(route["nation_b"])] += 1
 		var preferred_path: Array = route.get(
@@ -96,6 +109,9 @@ func _init() -> void:
 			str(minimum_international_hops)
 			if minimum_international_hops < 2147483647 else "无"
 		),
+	])
+	print("国际贸易金=%d 单线最高=%d" % [
+		international_trade_gold, maximum_international_route_gold,
 	])
 	print("外交两跳候选=%d/%d (%.1f%%)" % [
 		diplomatic_pairs, all_diplomatic_pairs,
@@ -170,10 +186,11 @@ func _init() -> void:
 	])
 	_print_runtime_hotspots(phase_totals, maxi(state.day, 1))
 	var route_limits_valid := true
-	for count in international_counts:
+	for nation_id in range(international_counts.size()):
+		var count := international_counts[nation_id]
 		route_limits_valid = (
 			route_limits_valid
-			and count <= TradeNetwork.MAX_INTERNATIONAL_ROUTES_PER_NATION
+			and count <= initial_route_limits[nation_id]
 		)
 	var candidate_bound := (
 		nations * TradeNetwork.MAX_INTERNATIONAL_PARTNERS_PER_NATION

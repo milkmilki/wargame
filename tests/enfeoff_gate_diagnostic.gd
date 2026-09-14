@@ -3,7 +3,7 @@ extends SceneTree
 ## 的通过率，定位「分封在自然演化中几乎不发生」的真正瓶颈条件。
 ##
 ## 门控链：
-##   非藩王 → 冷却已过 → 中央处于和平 → 候选封地≥MIN城 → 分封后仍留足核心
+##   非藩王 → 中央处于和平 → 候选封地≥MIN城 → 分封后仍留足核心
 ##   →（负担比≥阈 OR 财政月增益>0）
 ## 输出各阶段的幸存国家数，最后一段掉得最多的即瓶颈。
 
@@ -23,7 +23,6 @@ func _init() -> void:
 	var cache := {}
 	var alive := 0
 	var non_vassal := 0
-	var cooldown_ok := 0
 	var peace_ok := 0
 	var region_ok := 0
 	var core_retained := 0
@@ -40,10 +39,6 @@ func _init() -> void:
 		if state.is_vassal(oid):
 			continue
 		non_vassal += 1
-		var recent := DiplomacyAI._recent_enfeoff_day(state, oid)
-		if recent >= 0 and state.day - recent < DiplomacyAI.ENFEOFF_DECISION_COOLDOWN_DAYS:
-			continue
-		cooldown_ok += 1
 		if DiplomacyAI._overlord_under_war_pressure(state, oid, cache):
 			continue
 		peace_ok += 1
@@ -77,13 +72,12 @@ func _init() -> void:
 	])
 	print("存活国=%d" % alive)
 	print("① 非藩王           : %d" % non_vassal)
-	print("② 且冷却已过       : %d" % cooldown_ok)
-	print("③ 且中央处于和平   : %d   <- 和平前置" % peace_ok)
-	print("④ 且候选封地≥%d城   : %d   <- 区域生成" % [
+	print("② 且中央处于和平   : %d   <- 和平前置" % peace_ok)
+	print("③ 且候选封地≥%d城   : %d   <- 区域生成" % [
 		DiplomacyAI.ENFEOFF_MIN_REGION_CITIES, region_ok,
 	])
-	print("⑤ 且分封后留足核心 : %d" % core_retained)
-	print("⑥ 且负担比≥%.2f或财政>0: %d   <- 最终触发" % [
+	print("④ 且分封后留足核心 : %d" % core_retained)
+	print("⑤ 且负担比≥%.2f或财政>0: %d   <- 最终触发" % [
 		DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD, benefit_pass,
 	])
 	if not region_sizes.is_empty():
@@ -94,7 +88,7 @@ func _init() -> void:
 			rmin = mini(rmin, r)
 			rmax = maxi(rmax, r)
 			rsum += r
-		print("候选封地城数(通过③的国家): min=%d max=%d avg=%.1f n=%d" % [
+		print("候选封地城数(通过②的国家): min=%d max=%d avg=%.1f n=%d" % [
 			rmin, rmax, float(rsum) / float(region_sizes.size()), region_sizes.size(),
 		])
 	if not burden_samples.is_empty():
