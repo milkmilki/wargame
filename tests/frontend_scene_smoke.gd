@@ -62,6 +62,7 @@ func _run() -> void:
 		RoadTuningPanel.MAP_MODE_POLITICAL,
 		RoadTuningPanel.MAP_MODE_LOYALTY,
 		RoadTuningPanel.MAP_MODE_TRADE,
+		RoadTuningPanel.MAP_MODE_MILITARY,
 	])
 	var expected_renderer_modes := PackedInt32Array([
 		MapRenderer.MAP_MODE_POLITICAL,
@@ -69,6 +70,7 @@ func _run() -> void:
 		MapRenderer.MAP_MODE_POLITICAL,
 		MapRenderer.MAP_MODE_LOYALTY,
 		MapRenderer.MAP_MODE_TRADE,
+		MapRenderer.MAP_MODE_MILITARY,
 	])
 	var mode_contract_valid := (
 		map_modes != null
@@ -102,7 +104,10 @@ func _run() -> void:
 		"panel_style": settings_panel != null and settings_panel.get_theme_stylebox("panel") != null,
 		"road_control": road_button != null and road_button.get_theme_stylebox("normal") != null,
 		"map_modes": map_modes != null,
-		"map_mode_count": map_modes != null and map_modes.get_child_count() == 5,
+		"map_mode_count": (
+			map_modes != null
+			and map_modes.get_child_count() == expected_mode_ids.size()
+		),
 		"map_mode_contract": mode_contract_valid,
 		"map_mode_default": (
 			road_layer.map_mode() == RoadTuningPanel.MAP_MODE_POLITICAL

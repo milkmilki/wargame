@@ -14,7 +14,9 @@ static func reinforce_nation(
 	network_cache_disabled: bool
 ) -> void:
 	var at_war := not state.wars_of(nation.id).is_empty()
-	var refill_candidates := _collect_refill_candidates(nation_armies, at_war)
+	var refill_candidates := _collect_refill_candidates(
+		state, nation_armies, at_war
+	)
 	if refill_candidates.is_empty():
 		return
 	var food_report: Dictionary = food_report_builder.call(
@@ -62,6 +64,7 @@ static func reinforce_nation(
 
 
 static func _collect_refill_candidates(
+	state: GameState,
 	nation_armies: Array[Army],
 	at_war: bool
 ) -> Array[Army]:
@@ -79,7 +82,7 @@ static func _collect_refill_candidates(
 			]
 		):
 			continue
-		if army.size < _target_size(army, at_war):
+		if army.size < _target_size(state, army, at_war):
 			candidates.append(army)
 	return candidates
 
@@ -103,7 +106,7 @@ static func _build_plans(
 		):
 			continue
 		var deficit := mini(
-			maxi(_target_size(army, at_war) - army.size, 0),
+			maxi(_target_size(state, army, at_war) - army.size, 0),
 			ReinforcementRules.REINFORCE_PER_ARMY_PER_MONTH
 		)
 		if deficit <= 0:
@@ -196,7 +199,13 @@ static func _apply_grants(plans: Array) -> int:
 	return spent
 
 
-static func _target_size(army: Army, at_war: bool) -> int:
+static func _target_size(
+	state: GameState,
+	army: Army,
+	at_war: bool
+) -> int:
+	if state.is_capital_guard_army(army):
+		return army.max_size
 	if at_war:
 		return army.max_size
 	return int(ceil(

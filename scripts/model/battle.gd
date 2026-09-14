@@ -54,6 +54,11 @@ var routed_b: Array[Army] = []
 var frontline_priority_a: Dictionary = {}
 var frontline_priority_b: Dictionary = {}
 
+## 单场伤亡上限的真源。军队首次进入本场战斗时冻结兵力，Combat 只累计
+## 本场直接造成的伤亡；断粮等战斗外减员不会挤占这一额度。
+var entry_strength_by_army: Dictionary = {}
+var combat_casualties_by_army: Dictionary = {}
+
 ## item 8：两侧稳定战术随机键。由首次入场军队的镜像轨道位置/势力中心生成，
 ## 不含实体 id、兵力、士气或攻防参数；战斗期间参数变化不会“重抽运气”。
 ## 完全镜像的空间角色可得到相同键，此时独立修正按等变性要求自动退化为同值。
@@ -101,6 +106,40 @@ func side_size(side: Array[Army]) -> int:
 func prune_dead() -> void:
 	side_a = side_a.filter(func(a: Army) -> bool: return a.size > 0)
 	side_b = side_b.filter(func(a: Army) -> bool: return a.size > 0)
+
+
+func register_entry_strengths() -> void:
+	for army in side_a + side_b:
+		if army != null and not entry_strength_by_army.has(army):
+			entry_strength_by_army[army] = maxi(army.size, 0)
+			combat_casualties_by_army[army] = 0
+
+
+func remaining_combat_casualty_capacity(
+	army: Army,
+	maximum_ratio: float
+) -> int:
+	if army == null:
+		return 0
+	if not entry_strength_by_army.has(army):
+		entry_strength_by_army[army] = maxi(army.size, 0)
+		combat_casualties_by_army[army] = 0
+	var maximum := int(floor(
+		float(entry_strength_by_army[army])
+			* clampf(maximum_ratio, 0.0, 1.0)
+	))
+	return maxi(
+		maximum - int(combat_casualties_by_army.get(army, 0)),
+		0
+	)
+
+
+func record_combat_casualties(army: Army, casualties: int) -> void:
+	if army == null or casualties <= 0:
+		return
+	combat_casualties_by_army[army] = (
+		int(combat_casualties_by_army.get(army, 0)) + casualties
+	)
 
 
 func has_army(army: Army) -> bool:

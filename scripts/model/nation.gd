@@ -108,6 +108,10 @@ var campaign_theater_started_day: int = -1
 ## 持久战团容器。空战团也保留，后续按“轻、轻、重”顺序补充成员。
 var battle_groups: Array[BattleGroup] = []
 var next_battle_group_id: int = 0
+## enemy_id -> 开战时现役军力。只用于相对伤亡议和压力，停战时清除。
+var war_initial_military_strength: Dictionary = {}
+## enemy_id -> 本场战争累计战斗伤亡；补员不会冲销已经发生的损失。
+var war_military_losses: Dictionary = {}
 ## 当前控制区派生的持久边境防区。city_id -> FrontierDefenseSector。
 var frontier_defense_sectors: Dictionary = {}
 ## 控制区、外交关系与实际/潜在边境共同派生的防区拓扑缓存。

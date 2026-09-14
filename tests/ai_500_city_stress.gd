@@ -135,6 +135,12 @@ func _init() -> void:
 	var all_times: Array[int] = []
 	var phase_totals := {}
 	var invariant_failure_day := -1
+	var missing_war_corridor_day := -1
+	var empty_field_route_day := -1
+	var invalid_guard_day := -1
+	var active_war_pair_days := 0
+	var missing_corridor_context := ""
+	var war_pair_first_seen := {}
 	sim.tick_phase_profiling_enabled = true
 	sim.ai_snapshot_substage_profiling_enabled = true
 	var run_start := Time.get_ticks_usec()
@@ -158,6 +164,105 @@ func _init() -> void:
 			ai_times.append(dt)
 		if invariant_failure_day < 0 and not state.territory_structure_valid():
 			invariant_failure_day = state.day
+		var corridors := SimplifiedWarAI.build_war_corridors(state)
+		for nation_a in range(state.nations.size()):
+			if not state.nations[nation_a].alive:
+				continue
+			for nation_b in range(nation_a + 1, state.nations.size()):
+				if not state.is_enemy(nation_a, nation_b):
+					continue
+				var pair_key := Vector2i(nation_a, nation_b)
+				if not war_pair_first_seen.has(pair_key):
+					war_pair_first_seen[pair_key] = state.day
+				active_war_pair_days += 1
+				if (
+					not corridors.has(Vector2i(nation_a, nation_b))
+					or not corridors.has(Vector2i(nation_b, nation_a))
+				):
+					if missing_war_corridor_day < 0:
+						missing_war_corridor_day = state.day
+						var capital_a := state.nations[nation_a].capital_city_id
+						var capital_b := state.nations[nation_b].capital_city_id
+						var physical_route := Pathfinding.dijkstra(
+							state, capital_a, capital_b
+						)
+						var route_owners: Array[int] = []
+						for city_id in [capital_a] + physical_route:
+							route_owners.append(
+								state.cities[city_id].owner_nation
+							)
+						var declaration_day := -1
+						for event in state.diplomatic_history:
+							if (
+								int(event.get("action", -1))
+									== DiplomacyAI.Action.DECLARE_WAR
+								and [
+									int(event.get("nation_a", -1)),
+									int(event.get("nation_b", -1)),
+								].has(nation_a)
+								and [
+									int(event.get("nation_a", -1)),
+									int(event.get("nation_b", -1)),
+								].has(nation_b)
+							):
+								declaration_day = int(event.get("day", -1))
+						var blockers := {}
+						for owner in route_owners:
+							if owner not in [nation_a, nation_b]:
+								blockers[owner] = true
+						var blocker_relations: Array[String] = []
+						for blocker_value in blockers:
+							var blocker := int(blocker_value)
+							blocker_relations.append(
+								"%d(root=%d over=%d rel=%d/%d created=%d)" % [
+									blocker,
+									state.suzerainty_root(blocker),
+									state.overlord_of(blocker),
+									state.relation_between(nation_a, blocker),
+									state.relation_between(nation_b, blocker),
+									int(state.suzerainty_record(blocker).get(
+										"created_day", -1
+									)),
+								]
+							)
+						missing_corridor_context = (
+							"pair=%d:%d capitals=%d:%d capital_owners=%d:%d "
+							+ "physical_route=%s route_owners=%s roots=%d:%d "
+							+ "first_enemy_day=%d declaration_day=%d blockers=%s"
+						) % [
+							nation_a, nation_b, capital_a, capital_b,
+							state.cities[capital_a].owner_nation,
+							state.cities[capital_b].owner_nation,
+							str(physical_route), str(route_owners),
+							state.suzerainty_root(nation_a),
+							state.suzerainty_root(nation_b),
+							int(war_pair_first_seen[pair_key]),
+							declaration_day,
+							str(blocker_relations),
+						]
+		for nation in state.nations:
+			if not nation.alive:
+				continue
+			var guard_count := 0
+			for group in nation.battle_groups:
+				var strength := SimplifiedWarAI.group_strength(state, group)
+				if group.role == BattleGroup.Role.CAPITAL_GUARD:
+					guard_count += 1
+					if (
+						strength > BattleGroup.CAPITAL_GUARD_MANPOWER
+						or group.posture == BattleGroup.Posture.ATTACK
+					):
+						invalid_guard_day = state.day
+				elif strength > BattleGroup.MAX_MANPOWER:
+					invalid_guard_day = state.day
+				elif (
+					group.posture == BattleGroup.Posture.ATTACK
+					and group.route.size() < 2
+					and empty_field_route_day < 0
+				):
+					empty_field_route_day = state.day
+			if guard_count != 1 and invalid_guard_day < 0:
+				invalid_guard_day = state.day
 	var run_ms := float(Time.get_ticks_usec() - run_start) / 1000.0
 
 	var ai_avg := 0
@@ -209,11 +314,24 @@ func _init() -> void:
 		and diplomatic_pairs < all_diplomatic_pairs
 		and minimum_diplomatic_degree > 0
 		and invariant_failure_day < 0
+		and empty_field_route_day < 0
+		and invalid_guard_day < 0
 		and sim.ai_command_commit_failure_total == 0
 	)
 	print("健康检查 territory_invalid_day=%d commit_failures=%d candidate_bound=%d" % [
 		invariant_failure_day, sim.ai_command_commit_failure_total, candidate_bound,
 	])
+	print(
+		"战争走廊 active_pair_days=%d unroutable_pair_day=%d empty_field_route_day=%d guard_invalid_day=%d"
+		% [
+			active_war_pair_days,
+			missing_war_corridor_day,
+			empty_field_route_day,
+			invalid_guard_day,
+		]
+	)
+	if not missing_corridor_context.is_empty():
+		print("首个走廊缺失上下文 %s" % missing_corridor_context)
 	print("verdict=%s" % ("STRESS_PASS" if ok else "STRESS_FAIL"))
 	sim.free()
 	quit(0 if ok else 1)

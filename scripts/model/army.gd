@@ -14,6 +14,7 @@ enum State {
 enum StrategicRole {
 	LINE,       ## 独立填线军：只执行统一防区规划；正式地图国家级攻势不会临时抽调
 	MAIN,       ## 主战军：包含重军与战团轻军，执行完整 Utility AI 与国家级攻势
+	CAPITAL_GUARD, ## 首都禁军：独立于填线与主战军，永不分配到军事走廊
 }
 
 enum LinePosture {
@@ -39,7 +40,7 @@ var defense: int = 10                      ## 防御力
 var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
 var strategic_role: int = StrategicRole.LINE
-## 所属持久战团；-1 表示独立填线军。战团内最多 2 支轻军和 1 支重军。
+## 所属持久战团；-1 表示独立填线军。战团总现役兵力最多 15 万。
 var battle_group_id: int = -1
 ## 填线军的持久防区 Assignment。前线未变化时跨 AI 周期保留，避免每次从零匹配换防。
 var line_assignment_city: int = -1
@@ -161,8 +162,11 @@ func combat_morale_ratio() -> float:
 
 func is_main_battle_role() -> bool:
 	return (
-		max_size >= DEFAULT_MAX_SIZE
-		or strategic_role == StrategicRole.MAIN
+		strategic_role != StrategicRole.CAPITAL_GUARD
+		and (
+			max_size >= DEFAULT_MAX_SIZE
+			or strategic_role == StrategicRole.MAIN
+		)
 	)
 
 

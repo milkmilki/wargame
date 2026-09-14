@@ -7,7 +7,8 @@ extends RefCounted
 ## 不负责 armies 增删 / passing_count / 占领 / 撤退落位——那些由 Simulation 处理。
 
 const DEF_REF: float = 10.0                ## 防御减伤参考：减伤系数 = DEF_REF/(DEF_REF+eff_def)
-const K_ROUND: float = 120.0               ## 单回合伤害除数（越大每回合伤亡越小，战斗越久）
+const K_ROUND: float = 360.0               ## 降低直接杀伤，让胜负主要由士气崩溃决定
+const MAX_BATTLE_CASUALTY_RATIO: float = 0.50 ## 单场战斗每支军队最多损失入场兵力的一半
 
 # ---- 战斗随机：共享战场因素 + 镜像等变的独立战术因素（item 8）----
 const DICE_MIN: int = 0
@@ -335,6 +336,7 @@ static func resolve_round(
 ) -> void:
 	battle.routed_a.clear()
 	battle.routed_b.clear()
+	battle.register_entry_strengths()
 	battle.prune_dead()
 	_extract_routed_armies(battle.side_a, battle.routed_a)
 	_extract_routed_armies(battle.side_b, battle.routed_b)
@@ -524,8 +526,8 @@ static func resolve_round(
 	loss_b = minf(loss_b, float(frontline_size_b))
 
 	# 伤亡只在前线兵力池中按最大余数法守恒分配；完整预备队保持原兵力。
-	var actual_a := _apply_frontline_losses(frontline_a, loss_a)
-	var actual_b := _apply_frontline_losses(frontline_b, loss_b)
+	var actual_a := _apply_frontline_losses(battle, frontline_a, loss_a)
+	var actual_b := _apply_frontline_losses(battle, frontline_b, loss_b)
 
 	# 战斗士气侵蚀按前线伤亡率形成拆分无关的组织度质量目标，再只回写
 	# 本轮前线军；完整预备队不因前线伤亡或战斗基础衰减丢失士气。
@@ -897,19 +899,27 @@ static func _frontline_avg_defense(
 
 
 static func _apply_frontline_losses(
+	battle: Battle,
 	frontline: Array[Dictionary],
 	total_loss: float
 ) -> int:
 	if frontline.is_empty() or total_loss <= 0.0:
 		return 0
-	var committed: Array[int] = []
+	var casualty_capacity: Array[int] = []
 	for entry in frontline:
-		committed.append(int(entry["committed"]))
-	var casualties := distribute_casualties(committed, total_loss)
+		var army: Army = entry["army"]
+		casualty_capacity.append(mini(
+			int(entry["committed"]),
+			battle.remaining_combat_casualty_capacity(
+				army, MAX_BATTLE_CASUALTY_RATIO
+			)
+		))
+	var casualties := distribute_casualties(casualty_capacity, total_loss)
 	var applied := 0
 	for index in range(frontline.size()):
 		var army: Army = frontline[index]["army"]
 		army.size -= casualties[index]
+		battle.record_combat_casualties(army, casualties[index])
 		frontline[index]["casualties"] = casualties[index]
 		applied += casualties[index]
 	return applied

@@ -41,6 +41,10 @@ const TRADE_FLOW_MARKER_SPACING: float = 2.40
 const TRADE_FLOW_MARKER_WIDTH: float = 0.26
 const TRADE_FLOW_MARKER_LENGTH: float = 0.50
 const TRADE_FLOW_MAX_MARKERS_PER_ROUTE: int = 24
+const MILITARY_ROUTE_ELEVATION: float = 0.31
+const MILITARY_ROUTE_ATTACK_WIDTH: float = 0.082
+const MILITARY_ROUTE_DEFEND_WIDTH: float = 0.064
+const MILITARY_ROUTE_DASH_WORLD_LENGTH: float = 0.46
 const RIVER_BASE_HALF_WIDTH: float = 0.075
 const RIVER_ELEVATION: float = 0.11
 const RIVER_RENDER_SUBDIVISIONS: int = 4
@@ -83,6 +87,8 @@ var _minor_roads: MeshInstance3D
 var _rivers: MeshInstance3D
 var _trade_routes: MeshInstance3D
 var _trade_flow_markers: MultiMeshInstance3D
+var _military_routes: MeshInstance3D
+var _military_flow_markers: MultiMeshInstance3D
 var _boundaries: MeshInstance3D
 var _campaigns: MeshInstance3D
 var _cities: MultiMeshInstance3D
@@ -157,6 +163,7 @@ var _last_diplomacy_revision: int = -1
 var _last_diplomatic_view_nation_id: int = -2
 var _last_road_network_revision: int = -1
 var _last_trade_revision: int = -1
+var _last_military_route_signature: int = -1
 var _last_army_instances_day: int = -1
 var _army_instances_initialized: bool = false
 var _army_instance_ids: Array[int] = []
@@ -181,6 +188,9 @@ var _trade_flow_time: float = 0.0
 var _trade_flow_paths: Array[Dictionary] = []
 var _trade_flow_path_indices := PackedInt32Array()
 var _trade_flow_offsets := PackedFloat32Array()
+var _military_flow_paths: Array[Dictionary] = []
+var _military_flow_path_indices := PackedInt32Array()
+var _military_flow_offsets := PackedFloat32Array()
 
 
 func setup(
@@ -243,11 +253,15 @@ func setup(
 	_nation_label_rebuild_pending_frames = 0
 	_last_road_network_revision = -1
 	_last_trade_revision = -1
+	_last_military_route_signature = -1
 	_last_naming_revision = -1
 	_trade_flow_time = 0.0
 	_trade_flow_paths.clear()
 	_trade_flow_path_indices = PackedInt32Array()
 	_trade_flow_offsets = PackedFloat32Array()
+	_military_flow_paths.clear()
+	_military_flow_path_indices = PackedInt32Array()
+	_military_flow_offsets = PackedFloat32Array()
 	if not sim.runtime_day_committed.is_connected(
 		_on_runtime_day_committed
 	):
@@ -257,6 +271,11 @@ func setup(
 		and _trade_flow_markers.multimesh != null
 	):
 		_trade_flow_markers.multimesh.instance_count = 0
+	if (
+		_military_flow_markers != null
+		and _military_flow_markers.multimesh != null
+	):
+		_military_flow_markers.multimesh.instance_count = 0
 	_apply_map_mode_visibility()
 	set_process(true)
 	set_process_unhandled_input(true)
@@ -277,7 +296,7 @@ func set_display_state(
 		_map_mode = clampi(
 			map_mode_override,
 			MapRenderer.MapMode.POLITICAL,
-			MapRenderer.MapMode.TRADE
+			MapRenderer.MapMode.MILITARY
 		)
 	_last_day = -1
 	_last_ownership_revision = -1
@@ -292,6 +311,7 @@ func set_display_state(
 	_nation_label_cache_diplomacy_revision = -1
 	_nation_label_rebuild_pending_frames = 0
 	_army_instances_initialized = false
+	_last_military_route_signature = -1
 	if _terrain == null or _terrain.land_cell_count() <= 0:
 		return
 	if fast_preview:
@@ -325,6 +345,11 @@ func set_display_state(
 		_update_army_instances()
 		_update_battle_instances()
 		_update_campaign_mesh()
+		if _map_mode == MapRenderer.MapMode.MILITARY:
+			_build_military_route_mesh()
+			_last_military_route_signature = (
+				MapRenderer.military_route_signature(state)
+			)
 		for label in _nation_labels:
 			label.visible = false
 		_nation_label_rebuild_pending_frames = 2
@@ -352,6 +377,13 @@ func _clear_military_visuals() -> void:
 		label.visible = false
 	if _campaigns != null:
 		_campaigns.mesh = null
+	if _military_routes != null:
+		_military_routes.mesh = null
+	if (
+		_military_flow_markers != null
+		and _military_flow_markers.multimesh != null
+	):
+		_military_flow_markers.multimesh.instance_count = 0
 
 
 func _process(delta: float) -> void:
@@ -359,6 +391,8 @@ func _process(delta: float) -> void:
 		return
 	_visual_time += delta
 	if _map_mode == MapRenderer.MapMode.TRADE:
+		_trade_flow_time += delta
+	elif _map_mode == MapRenderer.MapMode.MILITARY:
 		_trade_flow_time += delta
 	if (
 		state.ownership_revision != _last_ownership_revision
@@ -416,6 +450,11 @@ func _process(delta: float) -> void:
 			_update_province_visuals()
 		_update_campaign_mesh()
 		_update_battle_instances()
+		if _map_mode == MapRenderer.MapMode.MILITARY:
+			var military_signature := MapRenderer.military_route_signature(state)
+			if military_signature != _last_military_route_signature:
+				_build_military_route_mesh()
+				_last_military_route_signature = military_signature
 		if sim != null and sim.runtime_stage_profiling_enabled:
 			sim._record_runtime_span(
 				&"render_daily_updates", daily_render_started
@@ -487,6 +526,8 @@ func _process(delta: float) -> void:
 	_update_city_label_visibility()
 	if _map_mode == MapRenderer.MapMode.TRADE:
 		_update_trade_flow_markers()
+	elif _map_mode == MapRenderer.MapMode.MILITARY:
+		_update_military_flow_markers()
 	if sim != null and sim.runtime_stage_profiling_enabled:
 		sim._record_runtime_span(
 			&"render_overlay_updates", overlay_render_started
@@ -714,6 +755,14 @@ func _ensure_feature_nodes() -> void:
 		_trade_flow_markers = MultiMeshInstance3D.new()
 		_trade_flow_markers.name = "TradeFlowMarkers"
 		_content.add_child(_trade_flow_markers)
+	if _military_routes == null:
+		_military_routes = MeshInstance3D.new()
+		_military_routes.name = "MilitaryRoutes"
+		_content.add_child(_military_routes)
+	if _military_flow_markers == null:
+		_military_flow_markers = MultiMeshInstance3D.new()
+		_military_flow_markers.name = "MilitaryFlowMarkers"
+		_content.add_child(_military_flow_markers)
 	if _boundaries == null:
 		_boundaries = MeshInstance3D.new()
 		_boundaries.name = "Boundaries"
@@ -1014,6 +1063,8 @@ func _on_terrain_ready() -> void:
 	))
 	_build_road_mesh()
 	_build_trade_route_mesh()
+	if _map_mode == MapRenderer.MapMode.MILITARY:
+		_build_military_route_mesh()
 	_build_river_mesh()
 	_build_city_instances()
 	_update_city_instances()
@@ -1028,6 +1079,11 @@ func _on_terrain_ready() -> void:
 	)
 	_last_road_network_revision = state.road_network_revision
 	_last_trade_revision = state.trade_revision
+	_last_military_route_signature = (
+		MapRenderer.military_route_signature(state)
+		if _map_mode == MapRenderer.MapMode.MILITARY
+		else -1
+	)
 	_last_naming_revision = state.naming_revision
 
 
@@ -1041,7 +1097,7 @@ func set_province_strength(strength: float) -> void:
 
 func set_map_mode(mode: int) -> void:
 	var normalized := clampi(
-		mode, MapRenderer.MapMode.POLITICAL, MapRenderer.MapMode.TRADE
+		mode, MapRenderer.MapMode.POLITICAL, MapRenderer.MapMode.MILITARY
 	)
 	if normalized == _map_mode:
 		return
@@ -1055,6 +1111,11 @@ func set_map_mode(mode: int) -> void:
 	_update_province_visuals()
 	_update_city_instances()
 	_build_trade_route_mesh()
+	if normalized == MapRenderer.MapMode.MILITARY:
+		_build_military_route_mesh()
+		_last_military_route_signature = (
+			MapRenderer.military_route_signature(state)
+		)
 	_apply_map_mode_visibility()
 
 
@@ -1535,6 +1596,151 @@ func _build_trade_route_mesh() -> void:
 	_apply_map_mode_visibility()
 
 
+func _build_military_route_mesh() -> void:
+	if _military_routes == null or _terrain == null or state == null:
+		return
+	var surface_tool := SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var drawn_corridors := {}
+	for route in MapRenderer.military_route_records(state):
+		var corridor_key := str(route.get("corridor_key", ""))
+		if drawn_corridors.has(corridor_key):
+			continue
+		drawn_corridors[corridor_key] = true
+		var defending := bool(route.get("dashed", false))
+		var color: Color = (
+			route.get("color", Color.WHITE)
+			if defending
+			else MapRenderer.MILITARY_CORRIDOR_COLOR
+		)
+		var width := (
+			MILITARY_ROUTE_DEFEND_WIDTH
+			if defending
+			else MILITARY_ROUTE_ATTACK_WIDTH
+		)
+		for map_path in MapRenderer.trade_route_map_paths(state, route):
+			if defending:
+				_append_dashed_draped_path(
+					surface_tool, map_path, width * 1.45,
+					Color(0.035, 0.025, 0.018, 0.70),
+					MILITARY_ROUTE_ELEVATION - 0.01,
+					MILITARY_ROUTE_DASH_WORLD_LENGTH
+				)
+				_append_dashed_draped_path(
+					surface_tool, map_path, width, color,
+					MILITARY_ROUTE_ELEVATION,
+					MILITARY_ROUTE_DASH_WORLD_LENGTH
+				)
+			else:
+				_append_draped_path_ribbon(
+					surface_tool, map_path, width * 1.45,
+					Color(0.035, 0.025, 0.018, 0.70),
+					MILITARY_ROUTE_ELEVATION - 0.01
+				)
+				_append_draped_path_ribbon(
+					surface_tool, map_path, width, color,
+					MILITARY_ROUTE_ELEVATION
+				)
+	_military_routes.mesh = surface_tool.commit()
+	_military_routes.material_override = _trade_route_material()
+	_rebuild_military_flow_markers()
+	_apply_map_mode_visibility()
+
+
+func _rebuild_military_flow_markers() -> void:
+	_military_flow_paths.clear()
+	var path_indices: Array[int] = []
+	var offsets: Array[float] = []
+	if _military_flow_markers == null or _terrain == null or state == null:
+		return
+	for route in MapRenderer.military_route_records(state):
+		if bool(route.get("dashed", false)):
+			continue
+		var route_points := PackedVector3Array()
+		var flow_path := MapRenderer.military_route_flow_path(state, route)
+		for segment_index in range(flow_path.size() - 1):
+			var samples := _draped_world_samples(
+				flow_path[segment_index], flow_path[segment_index + 1],
+				MILITARY_ROUTE_ELEVATION + 0.02
+			)
+			for sample in samples:
+				if (
+					not route_points.is_empty()
+					and route_points[-1].distance_squared_to(sample)
+						<= 0.000001
+				):
+					continue
+				route_points.append(sample)
+		if route_points.size() < 2:
+			continue
+		var cumulative := PackedFloat32Array()
+		cumulative.resize(route_points.size())
+		var path_length := 0.0
+		for point_index in range(1, route_points.size()):
+			path_length += route_points[point_index - 1].distance_to(
+				route_points[point_index]
+			)
+			cumulative[point_index] = path_length
+		if path_length <= 0.001:
+			continue
+		var path_index := _military_flow_paths.size()
+		_military_flow_paths.append({
+			"points": route_points,
+			"cumulative": cumulative,
+			"length": path_length,
+			"color": route.get("color", Color.WHITE),
+		})
+		var marker_count := clampi(
+			int(ceil(path_length / TRADE_FLOW_MARKER_SPACING)),
+			1, TRADE_FLOW_MAX_MARKERS_PER_ROUTE
+		)
+		for marker_index in range(marker_count):
+			path_indices.append(path_index)
+			offsets.append(
+				float(marker_index) / float(marker_count) * path_length
+			)
+	_military_flow_path_indices = PackedInt32Array(path_indices)
+	_military_flow_offsets = PackedFloat32Array(offsets)
+	_configure_multimesh(
+		_military_flow_markers,
+		_trade_flow_marker_mesh(),
+		_military_flow_path_indices.size(),
+		_trade_flow_material()
+	)
+	_update_military_flow_markers()
+
+
+func _update_military_flow_markers() -> void:
+	if (
+		_map_mode != MapRenderer.MapMode.MILITARY
+		or _military_flow_markers == null
+		or _military_flow_markers.multimesh == null
+	):
+		return
+	for instance_index in range(_military_flow_path_indices.size()):
+		var path_index := _military_flow_path_indices[instance_index]
+		if path_index < 0 or path_index >= _military_flow_paths.size():
+			continue
+		var path: Dictionary = _military_flow_paths[path_index]
+		var length := float(path.get("length", 0.0))
+		if length <= 0.001:
+			continue
+		var distance := fposmod(
+			_military_flow_offsets[instance_index]
+				+ _trade_flow_time * TRADE_FLOW_SPEED,
+			length
+		)
+		var pose := _trade_flow_pose_at_distance(path, distance)
+		if pose.is_empty():
+			continue
+		_military_flow_markers.multimesh.set_instance_transform(
+			instance_index, pose["transform"]
+		)
+		_military_flow_markers.multimesh.set_instance_color(
+			instance_index, path["color"]
+		)
+
+
 func _rebuild_trade_flow_markers() -> void:
 	_trade_flow_paths.clear()
 	var path_indices: Array[int] = []
@@ -1756,18 +1962,27 @@ func _trade_route_material() -> StandardMaterial3D:
 
 func _apply_map_mode_visibility() -> void:
 	var trade_mode := _map_mode == MapRenderer.MapMode.TRADE
+	var military_mode := _map_mode == MapRenderer.MapMode.MILITARY
+	var route_mode := trade_mode or military_mode
 	if _roads != null:
-		_roads.transparency = 0.70 if trade_mode else 0.0
+		_roads.transparency = 0.70 if route_mode else 0.0
 	if _minor_roads != null:
-		_minor_roads.transparency = 0.78 if trade_mode else 0.0
+		_minor_roads.transparency = 0.78 if route_mode else 0.0
 		_minor_roads.visible = _camera_distance <= 62.0
 	if _rivers != null:
-		_rivers.transparency = 0.46 if trade_mode else 0.0
+		_rivers.transparency = 0.46 if route_mode else 0.0
 	if _trade_routes != null:
 		_trade_routes.visible = trade_mode
 		_trade_routes.transparency = 0.0
 	if _trade_flow_markers != null:
 		_trade_flow_markers.visible = trade_mode
+	if _military_routes != null:
+		_military_routes.visible = military_mode
+		_military_routes.transparency = 0.0
+	if _military_flow_markers != null:
+		_military_flow_markers.visible = military_mode
+	if _campaigns != null:
+		_campaigns.visible = not military_mode
 
 
 func _road_width_for_capacity(capacity: int) -> float:
@@ -2648,6 +2863,11 @@ func _on_runtime_day_committed(_day: int) -> void:
 	# MapRenderer 在本节点之前连接同一信号，会先发布位置快照。此处立即
 	# 消费完整日状态，避免模拟因积压连续启动下一日时永远错过空闲帧。
 	_update_army_instances()
+	if _map_mode == MapRenderer.MapMode.MILITARY:
+		var signature := MapRenderer.military_route_signature(state)
+		if signature != _last_military_route_signature:
+			_build_military_route_mesh()
+			_last_military_route_signature = signature
 
 
 ## 模拟推进期间只移动已有实例，位置来自 MapRenderer 的已提交快照。
@@ -2742,12 +2962,18 @@ func _should_update_army_instances() -> bool:
 
 
 static func army_role_scale(army: Army) -> float:
-	if army == null or not army.is_main_battle_role():
+	if army == null:
+		return 0.68
+	if army.strategic_role == Army.StrategicRole.CAPITAL_GUARD:
+		return 0.92
+	if not army.is_main_battle_role():
 		return 0.68
 	return 1.18 if army.max_size >= Army.DEFAULT_MAX_SIZE else 1.02
 
 
 static func army_role_base_color(army: Army) -> Color:
+	if army != null and army.strategic_role == Army.StrategicRole.CAPITAL_GUARD:
+		return MAP_IVORY
 	return MAP_GOLD if army != null and army.is_main_battle_role() else MAP_INK
 
 

@@ -71,6 +71,12 @@ const TRADE_REROUTED_ORANGE := Color(0.94, 0.39, 0.075, 0.98)
 const TRADE_BLOCKED_RED := Color(0.82, 0.075, 0.055, 0.98)
 const TRADE_FLOW_SPACING_PX: float = 52.0
 const TRADE_FLOW_SPEED_PX: float = 34.0
+const MILITARY_ROUTE_ATTACK_WIDTH: float = 4.0
+const MILITARY_ROUTE_DEFEND_WIDTH: float = 3.2
+const MILITARY_ROUTE_DASH_LENGTH: float = 8.0
+const MILITARY_FLOW_SPACING_PX: float = 58.0
+const MILITARY_FLOW_SPEED_PX: float = 42.0
+const MILITARY_CORRIDOR_COLOR := Color(0.62, 0.105, 0.075, 0.94)
 const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
 const LOYALTY_MID_COLOR := Color(0.92, 0.68, 0.12, 1.0)
 const LOYALTY_HIGH_COLOR := Color(0.12, 0.58, 0.24, 1.0)
@@ -109,6 +115,7 @@ enum MapMode {
 	POLITICAL,
 	LOYALTY,
 	TRADE,
+	MILITARY,
 }
 
 enum NationSort {
@@ -121,6 +128,7 @@ enum NationSort {
 const MAP_MODE_POLITICAL: int = MapMode.POLITICAL
 const MAP_MODE_LOYALTY: int = MapMode.LOYALTY
 const MAP_MODE_TRADE: int = MapMode.TRADE
+const MAP_MODE_MILITARY: int = MapMode.MILITARY
 const NATION_SORT_CITY_COUNT: int = NationSort.CITY_COUNT
 const NATION_SORT_TREASURY: int = NationSort.TREASURY
 const NATION_SORT_ARMY_COUNT: int = NationSort.ARMY_COUNT
@@ -661,7 +669,7 @@ func nation_names_visible() -> bool:
 
 
 func set_map_mode(mode: int) -> void:
-	var normalized := clampi(mode, MapMode.POLITICAL, MapMode.TRADE)
+	var normalized := clampi(mode, MapMode.POLITICAL, MapMode.MILITARY)
 	if normalized == _map_mode:
 		return
 	_map_mode = normalized
@@ -692,7 +700,7 @@ func set_display_state(
 	_history_preview_active = fast_preview
 	if map_mode_override >= 0:
 		_map_mode = clampi(
-			map_mode_override, MapMode.POLITICAL, MapMode.TRADE
+			map_mode_override, MapMode.POLITICAL, MapMode.MILITARY
 		)
 	_selected_city_id = -1
 	_selected_edge_a = -1
@@ -922,9 +930,15 @@ func _process(_delta: float) -> void:
 		and _map_mode == MapMode.TRADE
 		and has_animated_trade_routes(state.trade_routes)
 	)
+	var military_flow_active := (
+		state != null
+		and world_layer_visible
+		and _map_mode == MapMode.MILITARY
+		and not military_route_records(state).is_empty()
+	)
 	var target_fps := target_redraw_fps(
 		sim == null or sim.paused,
-		_visual_animation_active or trade_flow_active
+		_visual_animation_active or trade_flow_active or military_flow_active
 	)
 	if (
 		state != null
@@ -1899,6 +1913,7 @@ func _draw() -> void:
 		_draw_rivers()
 		_draw_edges()
 		_draw_trade_routes()
+		_draw_military_routes()
 		_draw_selection_highlight()
 		# Political divisions form one solid-color line layer above the map,
 		# terrain and transport network, while counters remain topmost.
@@ -4112,7 +4127,7 @@ static func effective_map_mode_strength(
 	var configured := clampf(configured_strength, 0.0, 1.0)
 	if mode == MapMode.LOYALTY:
 		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
-	if mode == MapMode.TRADE:
+	if mode in [MapMode.TRADE, MapMode.MILITARY]:
 		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH) * 0.58
 	return configured
 
@@ -4183,6 +4198,8 @@ func _draw_owned_boundary_sides_2d(
 
 
 func _draw_campaign_arrows() -> void:
+	if _map_mode == MapMode.MILITARY:
+		return
 	for event in state.campaign_visual_events:
 		var target_city := int(event.get("target_city", -1))
 		var nation_id := int(event.get("nation_id", -1))
@@ -4248,7 +4265,9 @@ func _draw_campaign_arrow(
 
 
 func _draw_edges() -> void:
-	var route_alpha := 0.28 if _map_mode == MapMode.TRADE else 1.0
+	var route_alpha := (
+		0.28 if _map_mode in [MapMode.TRADE, MapMode.MILITARY] else 1.0
+	)
 	for e in state.edges:
 		var pixel_points := PackedVector2Array()
 		for point in e.map_points(
@@ -4326,6 +4345,84 @@ func _draw_trade_routes() -> void:
 			)
 
 
+func _draw_military_routes() -> void:
+	if _map_mode != MapMode.MILITARY:
+		return
+	var drawn_corridors := {}
+	for route in military_route_records(state):
+		var pixels := PackedVector2Array()
+		for point in military_route_flow_path(state, route):
+			pixels.append(_grid_to_pixel(point))
+		if pixels.size() < 2:
+			continue
+		var marker_color: Color = route.get("color", Color.WHITE)
+		var corridor_key := str(route.get("corridor_key", ""))
+		var width := (
+			MILITARY_ROUTE_DEFEND_WIDTH
+			if bool(route.get("dashed", false))
+			else MILITARY_ROUTE_ATTACK_WIDTH
+		) * _display_scale
+		var outline := Color(0.035, 0.025, 0.018, 0.72)
+		if not drawn_corridors.has(corridor_key):
+			drawn_corridors[corridor_key] = true
+			var corridor_color := (
+				marker_color
+				if bool(route.get("dashed", false))
+				else MILITARY_CORRIDOR_COLOR
+			)
+			if bool(route.get("dashed", false)):
+				for index in range(pixels.size() - 1):
+					draw_dashed_line(
+						pixels[index], pixels[index + 1], outline,
+						width + 2.0 * _display_scale,
+						MILITARY_ROUTE_DASH_LENGTH * _display_scale, true
+					)
+					draw_dashed_line(
+						pixels[index], pixels[index + 1], corridor_color, width,
+						MILITARY_ROUTE_DASH_LENGTH * _display_scale, true
+					)
+			else:
+				draw_polyline(
+					pixels, outline, width + 2.0 * _display_scale, true
+				)
+				draw_polyline(pixels, corridor_color, width, true)
+		if not bool(route.get("dashed", false)):
+			_draw_military_flow_markers(
+				pixels, marker_color,
+				int(route.get("owner_nation", 0)) * 97
+					+ int(route.get("group_id", 0))
+			)
+
+
+func _draw_military_flow_markers(
+	pixels: PackedVector2Array,
+	color: Color,
+	route_seed: int
+) -> void:
+	var total_length := polyline_length(pixels)
+	if total_length <= 0.001:
+		return
+	var spacing := MILITARY_FLOW_SPACING_PX * _display_scale
+	var distance := fposmod(
+		_blink * MILITARY_FLOW_SPEED_PX
+			+ float(posmod(route_seed * 17, 53)),
+		spacing
+	)
+	while distance < total_length:
+		var sample := polyline_sample(pixels, distance)
+		var point: Vector2 = sample["position"]
+		var tangent: Vector2 = sample["tangent"]
+		var normal := tangent.orthogonal()
+		var length := 7.5 * _display_scale
+		var half_width := 3.4 * _display_scale
+		var tip := point + tangent * length
+		var tail := point - tangent * length * 0.55
+		draw_colored_polygon(PackedVector2Array([
+			tip, tail + normal * half_width, tail - normal * half_width,
+		]), color.lightened(0.22))
+		distance += spacing
+
+
 func _draw_trade_flow_markers(
 	pixels: PackedVector2Array,
 	color: Color,
@@ -4392,6 +4489,85 @@ static func polyline_sample(
 		"position": points[points.size() - 1],
 		"tangent": tail.normalized() if tail.length_squared() > 0.0 else Vector2.RIGHT,
 	}
+
+
+static func military_route_records(game_state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if game_state == null:
+		return result
+	for nation in game_state.nations:
+		if not nation.alive:
+			continue
+		for group in nation.battle_groups:
+			if (
+				group.route.size() < 2
+				or group.posture not in [
+					BattleGroup.Posture.ATTACK,
+					BattleGroup.Posture.DEFEND,
+				]
+				or (
+					group.posture == BattleGroup.Posture.ATTACK
+					and not game_state.is_enemy(
+						nation.id, group.target_nation
+					)
+				)
+				or (
+					group.posture == BattleGroup.Posture.DEFEND
+					and game_state.wars_of(nation.id).is_empty()
+				)
+			):
+				continue
+			var city_path: Array[int] = []
+			for city_value in group.route:
+				var city_id := int(city_value)
+				if city_id < 0 or city_id >= game_state.cities.size():
+					city_path.clear()
+					break
+				city_path.append(city_id)
+			if city_path.size() < 2:
+				continue
+			var defending := group.posture == BattleGroup.Posture.DEFEND
+			var merged := group.merge_group_owner >= 0
+			var color: Color = nation.color.lightened(0.12)
+			if defending:
+				color = color.lerp(Color(0.18, 0.46, 0.70), 0.58)
+			color.a = 0.70 if merged else 0.94
+			result.append({
+				"owner_nation": nation.id,
+				"group_id": group.id,
+				"posture": group.posture,
+				"target_nation": group.target_nation,
+				"target_city": group.target_city,
+				"city_path": city_path,
+				"merged": merged,
+				"dashed": defending,
+				"color": color,
+				"corridor_key": (
+					"%d:%d:%d" % [
+						mini(nation.id, group.target_nation),
+						maxi(nation.id, group.target_nation),
+						group.corridor_lane,
+					]
+					if group.target_nation >= 0
+					else "%d:%d:defend" % [nation.id, group.id]
+				),
+			})
+	return result
+
+
+static func military_route_flow_path(
+	game_state: GameState, route: Dictionary
+) -> PackedVector2Array:
+	var result := PackedVector2Array()
+	for edge_path in trade_route_map_paths(game_state, route):
+		for point in edge_path:
+			if result.is_empty() or not result[-1].is_equal_approx(point):
+				result.append(point)
+	return result
+
+
+static func military_route_signature(game_state: GameState) -> int:
+	return hash(military_route_records(game_state))
 
 
 static func trade_route_color(
@@ -4912,7 +5088,17 @@ static func army_counter_profile(
 			and max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
 	)
+	var capital_guard := strategic_role == Army.StrategicRole.CAPITAL_GUARD
 	var heavy := max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE
+	if capital_guard:
+		return {
+			"icon": FormationIcon.INFANTRY,
+			"width": 43.0,
+			"height": 27.0,
+			"marks": 2,
+			"main_role": false,
+			"role_code": "禁",
+		}
 	if main_role:
 		return {
 			"icon": FormationIcon.ARMOR if heavy else FormationIcon.INFANTRY,

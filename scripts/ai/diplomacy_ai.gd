@@ -26,16 +26,14 @@ const MIN_WAR_DAYS: int = 180
 const WAR_FATIGUE_REFERENCE_DAYS: int = 360
 const MIN_NEUTRAL_DAYS: int = 90
 const MIN_ALLIANCE_DAYS: int = 360
-## 单国同时主动开战上限。诊断显示宣战「意愿分」恒在阈值 3× 以上，长和平期的
-## 真因是该上限=1：一旦入战，其余所有战线被硬门槛拦死。放开到 3 以支持多线
-## 饱和进攻的乱世感；经济/粮食仍逐国把关，统一时代只连续退火储备量，不移除底线。
-const MAX_CONCURRENT_WARS: int = 3
+## 国家最多主动维持两个主要战争目标；防御参战不受此上限影响。
+const MAX_CONCURRENT_WARS: int = 2
 const MAX_DEFENSIVE_ALLIES: int = 1
 ## 新结盟、主动备战与主动宣战只允许在国家领土接触图的两跳范围内。
 ## 一跳是直接接壤，二跳是共享一个邻国；已有关系、议和和防御盟约参战不受影响。
 const MAX_DIPLOMATIC_DISTANCE_HOPS: int = 2
-const PEACE_PROPOSE_SCORE: float = 1.25
-const PEACE_ACCEPT_SCORE: float = 0.60
+const PEACE_PROPOSE_SCORE: float = 70.0
+const PEACE_ACCEPT_SCORE: float = 20.0
 const PEACE_SITUATION_WEIGHT: float = 0.40
 const PEACE_POWER_BALANCE_WEIGHT: float = 1.20
 const PEACE_RESOURCE_ENDURANCE_WEIGHT: float = 1.00
@@ -490,193 +488,162 @@ static func peace_willingness_breakdown(
 		return evaluation_cache[cache_key]
 	if not state.is_enemy(nation_id, enemy_id):
 		return {"score": -INF}
-	var part_started := (
-		Time.get_ticks_usec()
-		if evaluation_cache.has("__profile")
-		else 0
-	)
-	var own_power := _national_power(
-		state,
-		nation_id,
-		evaluation_cache
-	)
-	var enemy_power := _national_power(
-		state,
-		enemy_id,
-		evaluation_cache
-	)
-	var power_balance := (
-		(own_power - enemy_power)
-		/ maxf(maxf(own_power, enemy_power), 1.0)
-	)
 	var war_days := state.day - state.relation_since(nation_id, enemy_id)
-	var extra_wars := maxi(
-		_distinct_enemy_coalition_count(
-			state,
-			nation_id,
-			evaluation_cache
-		) - 1,
-		0
+	var nation := state.nations[nation_id]
+	var initial_strength := maxi(
+		int(nation.war_initial_military_strength.get(
+			enemy_id, state.active_military_strength(nation_id)
+		)),
+		1
 	)
-	_record_evaluation_profile(
-		evaluation_cache,
-		"peace_power_wars",
-		part_started
+	var military_losses := maxi(
+		int(nation.war_military_losses.get(enemy_id, 0)), 0
 	)
-	part_started = (
-		Time.get_ticks_usec()
-		if evaluation_cache.has("__profile")
-		else 0
+	var military_loss_ratio := clampf(
+		float(military_losses) / float(initial_strength), 0.0, 1.0
 	)
-	var no_front := (
-		1.0
-		if _frontier_edges(
-			state,
-			nation_id,
-			enemy_id,
-			evaluation_cache
-		) == 0
-		else 0.0
+	var military_loss := military_loss_ratio * 60.0
+	var capital_threat := _peace_capital_threat(
+		state, nation_id, evaluation_cache
 	)
-	var situation_score := war_situation_score(
-		state,
-		nation_id,
-		enemy_id,
-		evaluation_cache
+	var uncovered_threat := _peace_uncovered_threat(
+		state, nation_id, evaluation_cache
 	)
-	_record_evaluation_profile(
-		evaluation_cache,
-		"peace_situation",
-		part_started
-	)
-	part_started = (
-		Time.get_ticks_usec()
-		if evaluation_cache.has("__profile")
-		else 0
-	)
-	var resource_report := resource_report(
-		state,
-		nation_id,
-		evaluation_cache
-	)
-	_record_evaluation_profile(
-		evaluation_cache,
-		"peace_resources",
-		part_started
-	)
-	part_started = (
-		Time.get_ticks_usec()
-		if evaluation_cache.has("__profile")
-		else 0
-	)
-	var gold_endurance := clampf(
-		float(resource_report["gold_runway_months"])
-			/ PEACE_RESOURCE_REFERENCE_MONTHS,
+	var war_duration := minf(float(maxi(war_days, 0)) / 360.0 * 5.0, 25.0)
+	var score := clampf(
+		military_loss + capital_threat + uncovered_threat + war_duration,
 		0.0,
-		1.0
+		100.0
 	)
-	var food_endurance := clampf(
-		float(resource_report["food_coverage_months"])
-			/ PEACE_RESOURCE_REFERENCE_MONTHS,
-		0.0,
-		1.0
-	)
-	var resource_endurance := minf(
-		gold_endurance,
-		food_endurance
-	)
-	var resource_pressure := (
-		1.0 - 2.0 * resource_endurance
-	)
-	if state.nations[nation_id].unpaid_military_upkeep > 0:
-		resource_pressure += 1.0
-	var external_threat := _neutral_border_massing_ratio(
-		state,
-		nation_id,
-		enemy_id,
-		evaluation_cache
-	)
-	_record_evaluation_profile(
-		evaluation_cache,
-		"peace_external_threat",
-		part_started
-	)
-	part_started = (
-		Time.get_ticks_usec()
-		if evaluation_cache.has("__profile")
-		else 0
-	)
-	var aggression := state.effective_ai_aggression(nation_id)
-	var war_fatigue := (
-		float(war_days) / float(WAR_FATIGUE_REFERENCE_DAYS)
-	)
-	# 统一时代衰减战争疲劳：均势期战争疲劳随时间无界推高求和，是“打起来却灭不掉国”
-	# 的主因。时代成熟后，占优方（power_balance>0）的时间疲劳逐步归零，战争必须以
-	# 逆转、资源崩溃或一方灭亡收敛；劣势方仍保留原求和意愿。
-	if power_balance > 0.0:
-		war_fatigue *= 1.0 - unification_era_factor(state)
-	var situation_component := (
-		-situation_score * PEACE_SITUATION_WEIGHT
-	)
-	var power_component := (
-		-power_balance * PEACE_POWER_BALANCE_WEIGHT
-	)
-	var resource_component := (
-		resource_pressure * PEACE_RESOURCE_ENDURANCE_WEIGHT
-	)
-	var international_component := (
-		external_threat * PEACE_EXTERNAL_THREAT_WEIGHT
-	)
-	var attitude := diplomatic_attitude(
-		state,
-		nation_id,
-		enemy_id,
-		evaluation_cache
-	)
-	_record_evaluation_profile(
-		evaluation_cache,
-		"peace_attitude",
-		part_started
-	)
-	var attitude_component := attitude * ATTITUDE_PEACE_WEIGHT
-	var base_score := (
-		war_fatigue
-		+ situation_component
-		+ power_component
-		+ resource_component
-		+ international_component
-		+ attitude_component
-		+ float(extra_wars) * 0.75
-		+ no_front
-		- (aggression - 1.0) * 0.50
-	)
-	# 君主只缩放议和的软意愿；战争时长、双方接受线及资源生存判据仍由
-	# 各自的硬门槛独立约束，不能靠性格绕过。
-	var peace_multiplier := RulerProfile.peace_multiplier(
-		state.nations[nation_id]
-	)
-	var score := base_score * peace_multiplier
 	var result := {
 		"score": score,
-		"base_score": base_score,
-		"peace_multiplier": peace_multiplier,
-		"war_fatigue": war_fatigue,
-		"situation_score": situation_score,
-		"situation_component": situation_component,
-		"power_balance": power_balance,
-		"power_component": power_component,
-		"resource_endurance": resource_endurance,
-		"resource_component": resource_component,
-		"external_threat": external_threat,
-		"international_component": international_component,
-		"attitude": attitude,
-		"attitude_component": attitude_component,
-		"extra_wars": extra_wars,
-		"no_front": no_front,
-		"aggression": aggression,
+		"base_score": score,
+		"peace_multiplier": 1.0,
+		"military_losses": military_losses,
+		"military_loss_ratio": military_loss_ratio,
+		"military_loss": military_loss,
+		"capital_threat": capital_threat,
+		"uncovered_threat": uncovered_threat,
+		"war_duration": war_duration,
+		# 兼容既有解释 UI；这些旧维度不再参与议和计算。
+		"war_fatigue": war_duration,
+		"situation_score": 0.0,
+		"situation_component": 0.0,
+		"power_balance": 0.0,
+		"power_component": 0.0,
+		"resource_endurance": 0.0,
+		"resource_component": 0.0,
+		"external_threat": 0.0,
+		"international_component": 0.0,
+		"attitude": 0.0,
+		"attitude_component": 0.0,
+		"extra_wars": 0,
+		"no_front": 0.0,
+		"aggression": state.effective_ai_aggression(nation_id),
 	}
 	evaluation_cache[cache_key] = result
 	return result
+
+
+static func _peace_capital_threat(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var cache_key := "peace_capital_threat:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return float(evaluation_cache[cache_key])
+	var capital := state.nations[nation_id].capital_city_id
+	if capital < 0 or capital >= state.cities.size():
+		return 0.0
+	if state.cities[capital].owner_nation != nation_id:
+		evaluation_cache[cache_key] = 40.0
+		return 40.0
+	var capital_hops := _road_hop_field(state, capital)
+	var radius := 1
+	for city in state.land_cities_of(nation_id):
+		if capital_hops.has(city.id):
+			radius = maxi(radius, int(capital_hops[city.id]))
+	var nearest := 1 << 20
+	for enemy in state.nations:
+		if not enemy.alive or not state.is_enemy(nation_id, enemy.id):
+			continue
+		for group in enemy.battle_groups:
+			if (
+				group.posture != BattleGroup.Posture.ATTACK
+				or group.target_nation != nation_id
+				or SimplifiedWarAI.group_strength(state, group) <= 0
+			):
+				continue
+			var origin := SimplifiedWarAI.group_origin(state, group)
+			if capital_hops.has(origin):
+				nearest = mini(nearest, int(capital_hops[origin]))
+	if nearest == 1 << 20:
+		evaluation_cache[cache_key] = 0.0
+		return 0.0
+	var result := 40.0 * clampf(
+		1.0 - float(nearest - 1) / float(radius + 1), 0.0, 1.0
+	)
+	evaluation_cache[cache_key] = result
+	return result
+
+
+static func _peace_uncovered_threat(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	var all_threats: Dictionary
+	if evaluation_cache.has("__simplified_node_threats"):
+		all_threats = evaluation_cache["__simplified_node_threats"]
+	else:
+		all_threats = SimplifiedWarAI.all_node_threats(state)
+		evaluation_cache["__simplified_node_threats"] = all_threats
+	var threats := all_threats.get(nation_id, {}) as Dictionary
+	var total := 0
+	for value in threats.values():
+		total += int(value)
+	if total <= 0:
+		return 0.0
+	var coverage := {}
+	for group in state.nations[nation_id].battle_groups:
+		if group.posture != BattleGroup.Posture.ATTACK or group.route.is_empty():
+			continue
+		for node_value in threats:
+			var node := int(node_value)
+			if not group.route.has(node):
+				continue
+			coverage[node] = (
+				int(coverage.get(node, 0))
+				+ SimplifiedWarAI.group_strength(state, group)
+			)
+	var uncovered := 0
+	for node_value in threats:
+		var node := int(node_value)
+		uncovered += maxi(
+			int(threats[node]) - int(coverage.get(node, 0)), 0
+		)
+	return 25.0 * clampf(float(uncovered) / float(total), 0.0, 1.0)
+
+
+static func _road_hops(state: GameState, start: int, goal: int) -> int:
+	return int(_road_hop_field(state, start).get(goal, -1))
+
+
+static func _road_hop_field(state: GameState, start: int) -> Dictionary:
+	if start < 0 or start >= state.cities.size():
+		return {}
+	var depth := {start: 0}
+	var queue: Array[int] = [start]
+	while not queue.is_empty():
+		var node: int = queue.pop_front()
+		for neighbor in state.neighbors(node):
+			var edge := state.edge_of(node, neighbor)
+			if edge == null or edge.max_manpower <= 0 or depth.has(neighbor):
+				continue
+			depth[neighbor] = int(depth[node]) + 1
+			queue.append(neighbor)
+	return depth
 
 
 static func peace_assessment(
@@ -771,8 +738,10 @@ static func peace_assessment(
 		"acceptable": (
 			war_days >= MIN_WAR_DAYS
 			and proposal_score >= PEACE_PROPOSE_SCORE
-			and consent_a
-			and consent_b
+			and (
+				(consent_a and consent_b)
+				or proposal_score >= 90.0
+			)
 		),
 		"consent_a": consent_a,
 		"consent_b": consent_b,
@@ -4687,66 +4656,41 @@ static func war_preparation_ready(state: GameState, nation_id: int) -> bool:
 	):
 		return false
 	if state.uses_heightmap:
-		var plan := nation.campaign_preparation_plan
 		var objective_city := nation.war_preparation_objective_city
-		if (
-			plan == null
-			or not plan.assigned_target_ids.has(objective_city)
-		):
-			return false
-		var target_groups: Array[int] = (
-			plan.groups_for_target(objective_city)
-		)
-		if target_groups.is_empty():
-			return false
 		var staging := staging_cities_for_objective(
 			state,
 			nation_id,
 			objective_city
 		)
-		for group_id in target_groups:
-			if state.battle_group_by_id(nation_id, group_id) == null:
-				return false
-			var eligible_ids: Array[int] = (
-				plan.member_ids_for_group(group_id)
-			)
-			if eligible_ids.is_empty():
-				return false
-			for army_id in eligible_ids:
-				var assigned_army: Army = null
-				for army in state.armies:
-					if (
-						army.id == army_id
-						and army.owner_nation == nation_id
-						and army.battle_group_id == group_id
-						and army.size > 0
-					):
-						assigned_army = army
-						break
-				if assigned_army == null:
-					return false
+		if staging.is_empty():
+			return false
+		var preparation_groups := 0
+		for group in nation.battle_groups:
+			if (
+				group.posture != BattleGroup.Posture.RECOVER
+				or group.target_nation
+					!= nation.war_preparation_target_nation
+				or not staging.has(group.target_city)
+			):
+				continue
+			var members := state.battle_group_members(nation_id, group.id)
+			if members.is_empty():
+				continue
+			preparation_groups += 1
+			for army in members:
 				var staged := (
-					assigned_army.state in [
-						Army.State.IDLE,
-						Army.State.RECOVERING,
-					]
-					and staging.has(assigned_army.location_city)
+					army.state in [Army.State.IDLE, Army.State.RECOVERING]
+					and staging.has(army.location_city)
 				) or (
-					assigned_army.state == Army.State.HOLDING
+					army.state == Army.State.HOLDING
 					and (
-						(
-							assigned_army.move_from == objective_city
-							and staging.has(assigned_army.move_to)
-						)
-						or (
-							assigned_army.move_to == objective_city
-							and staging.has(assigned_army.move_from)
-						)
+						(army.move_from == objective_city and staging.has(army.move_to))
+						or (army.move_to == objective_city and staging.has(army.move_from))
 					)
 				)
 				if not staged:
 					return false
-		return true
+		return preparation_groups > 0
 	return (
 		staged_troops_for_objective(
 			state,

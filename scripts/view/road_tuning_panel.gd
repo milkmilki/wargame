@@ -24,6 +24,7 @@ const MAP_MODE_MIXED: String = "mixed"
 const MAP_MODE_POLITICAL: String = "political"
 const MAP_MODE_LOYALTY: String = "loyalty"
 const MAP_MODE_TRADE: String = "trade"
+const MAP_MODE_MILITARY: String = "military"
 
 var _overlay: Control
 var _status: Label
@@ -198,8 +199,8 @@ func _build_map_mode_control(font: Font) -> void:
 	var modes := HBoxContainer.new()
 	modes.name = "MapModes"
 	modes.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	modes.position = Vector2(-402.0, -38.0)
-	modes.size = Vector2(390.0, 30.0)
+	modes.position = Vector2(-476.0, -38.0)
+	modes.size = Vector2(464.0, 30.0)
 	modes.add_theme_constant_override("separation", 4)
 	add_child(modes)
 	var group := ButtonGroup.new()
@@ -209,6 +210,7 @@ func _build_map_mode_control(font: Font) -> void:
 		[MAP_MODE_POLITICAL, "政治"],
 		[MAP_MODE_LOYALTY, "忠诚"],
 		[MAP_MODE_TRADE, "贸易"],
+		[MAP_MODE_MILITARY, "军事"],
 	]:
 		var button := Button.new()
 		var mode_id := str(mode[0])
@@ -265,6 +267,8 @@ static func _renderer_map_mode(mode: String) -> int:
 			return MapRenderer.MAP_MODE_LOYALTY
 		MAP_MODE_TRADE:
 			return MapRenderer.MAP_MODE_TRADE
+		MAP_MODE_MILITARY:
+			return MapRenderer.MAP_MODE_MILITARY
 	return MapRenderer.MAP_MODE_POLITICAL
 
 

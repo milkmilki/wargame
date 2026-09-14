@@ -206,6 +206,116 @@ static func dijkstra(state: GameState, start: int, goal: int) -> Array[int]:
 	return reconstruct(field["prev"], start, goal)
 
 
+## 主战军团前往敌国腹地的路线。可穿过本方/盟方与指定敌国领土，不能借道中立国。
+static func campaign_route(
+	state: GameState,
+	start: int,
+	goal: int,
+	mover_nation: int,
+	target_nation: int,
+	edge_penalties: Dictionary = {}
+) -> Array[int]:
+	return campaign_route_to_any(
+		state, start, [goal] as Array[int], mover_nation, target_nation,
+		edge_penalties
+	)
+
+
+## 主战军团前往多个战略节点中行军成本最低的一个；返回值含接入节点，
+## 不含起点。用于让走廊外军团就近汇入，而不是固定绕回首都端点。
+static func campaign_route_to_any(
+	state: GameState,
+	start: int,
+	goals: Array[int],
+	mover_nation: int,
+	target_nation: int,
+	edge_penalties: Dictionary = {}
+) -> Array[int]:
+	var goal_set := {}
+	for goal in goals:
+		if goal >= 0 and goal < state.cities.size():
+			goal_set[goal] = true
+	if goal_set.is_empty() or goal_set.has(start):
+		return [] as Array[int]
+	var dist := {start: 0.0}
+	var prev := {}
+	var visited := {}
+	var order_rank := EquivariantOrder.city_rank_map(
+		state, mover_nation, start
+	)
+	var queue: Array[Dictionary] = [{
+		"city": start,
+		"distance": 0.0,
+		"rank": int(order_rank[start]),
+	}]
+	while not queue.is_empty():
+		var entry := _heap_pop(queue)
+		var node := int(entry["city"])
+		if visited.has(node):
+			continue
+		visited[node] = true
+		if goal_set.has(node):
+			return reconstruct(prev, start, node)
+		for neighbor in state.neighbors(node):
+			if visited.has(neighbor):
+				continue
+			var owner := state.cities[neighbor].owner_nation
+			var hostile_territory := (
+				owner >= 0
+				and owner < state.nations.size()
+				and state.is_enemy(mover_nation, owner)
+			)
+			if (
+				owner != target_nation
+				and not hostile_territory
+				and not state.has_military_access(mover_nation, owner)
+			):
+				continue
+			var edge := state.edge_of(node, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			var next_distance := (
+				float(entry["distance"])
+				+ _edge_transport_distance(edge, 0)
+				+ edge.danger * DANGER_WEIGHT
+				+ float(edge_penalties.get(
+					Vector2i(mini(node, neighbor), maxi(node, neighbor)), 0.0
+				))
+			)
+			if (
+				not dist.has(neighbor)
+				or next_distance < float(dist[neighbor])
+			):
+				dist[neighbor] = next_distance
+				prev[neighbor] = node
+				_heap_push(queue, {
+					"city": neighbor,
+					"distance": next_distance,
+					"rank": int(order_rank[neighbor]),
+				})
+	return [] as Array[int]
+
+
+## 计算既有战役路径的加权行军成本，口径与 campaign_route 一致。
+static func campaign_path_cost(
+	state: GameState,
+	start: int,
+	path: Array[int]
+) -> float:
+	var result := 0.0
+	var from_city := start
+	for to_city in path:
+		var edge := state.edge_of(from_city, to_city)
+		if edge == null or edge.max_manpower <= 0:
+			return INF
+		result += (
+			_edge_transport_distance(edge, 0)
+			+ edge.danger * DANGER_WEIGHT
+		)
+		from_city = to_city
+	return result
+
+
 ## 找最近的敌方城市，返回到该城的路径（不含起点）。无敌城 / 不可达返回空。
 static func nearest_enemy_city(state: GameState, army: Army) -> Array[int]:
 	var start := _origin_of(army)

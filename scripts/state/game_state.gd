@@ -337,8 +337,8 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
 	assert(
 		armies.size()
-			== CITY_COUNT + NATION_COUNT * 3,
-		"网格状态机夹具必须保留每城填线军和每国一个满编战团"
+			== CITY_COUNT + NATION_COUNT * 4,
+		"网格状态机夹具必须保留每城填线军、每国禁军和一个初始战团"
 	)
 	assert(_battle_group_structure_valid(), "网格战团结构必须合法")
 
@@ -2359,6 +2359,18 @@ func _generate_armies() -> void:
 				b
 			)
 		)
+		if owned_land.is_empty():
+			continue
+		var guard_group := create_battle_group(nation.id)
+		guard_group.role = BattleGroup.Role.CAPITAL_GUARD
+		var guard := create_army(
+			nation.id,
+			nation.capital_city_id,
+			BattleGroup.CAPITAL_GUARD_MANPOWER,
+			BattleGroup.CAPITAL_GUARD_MANPOWER
+		)
+		_initialize_army_attributes(guard)
+		assign_army_to_battle_group(guard, guard_group.id)
 		# 小型新开局直接采用生存军制：每座陆城一支轻型 LINE，另有
 		# 一支单成员轻型 MAIN 作为机动预备队。它不需要先生成完整
 		# 二轻一重战团，再等待战争中的运行时逻辑停止补员。
@@ -2379,7 +2391,7 @@ func _generate_armies() -> void:
 				var reserve_group := create_battle_group(nation.id)
 				var reserve := create_army(
 					nation.id, nation.capital_city_id,
-					INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
+					INITIAL_HEAVY_ARMY_SIZE, INITIAL_HEAVY_ARMY_SIZE
 				)
 				if reserve == null:
 					nation.battle_groups.erase(reserve_group)
@@ -2400,7 +2412,7 @@ func _generate_armies() -> void:
 		# 每个有城国家随后还要生成二轻一重的完整初始战团。小型自定义
 		# 地图必须先为这三支军队预留上限，避免一城国在加载时越界。
 		var battle_group_slots := (
-			BattleGroup.MAX_LIGHT_ARMIES + BattleGroup.MAX_HEAVY_ARMIES
+			1 + BattleGroup.MAX_LIGHT_ARMIES + BattleGroup.MAX_HEAVY_ARMIES
 		)
 		var maximum_line_armies := maxi(
 			max_army_count(nation.id) - battle_group_slots,
@@ -2415,8 +2427,6 @@ func _generate_armies() -> void:
 				INITIAL_LIGHT_ARMY_SIZE,
 				INITIAL_LIGHT_ARMY_SIZE
 			))
-		if owned.is_empty():
-			continue
 		var group := create_battle_group(nation.id)
 		var group_city := nation.capital_city_id
 		for _index in range(BattleGroup.MAX_LIGHT_ARMIES):
@@ -2428,6 +2438,9 @@ func _generate_armies() -> void:
 			)
 			_initialize_army_attributes(light)
 			assign_army_to_battle_group(light, group.id)
+		# 1.5万人重军本身就是一个完整主战调度单位，不能再塞进
+		# 已有两支轻军组成的1万人战团。
+		var heavy_group := create_battle_group(nation.id)
 		var heavy := create_army(
 			nation.id,
 			group_city,
@@ -2435,23 +2448,16 @@ func _generate_armies() -> void:
 			INITIAL_HEAVY_ARMY_SIZE
 		)
 		_initialize_army_attributes(heavy)
-		assign_army_to_battle_group(heavy, group.id)
+		assign_army_to_battle_group(heavy, heavy_group.id)
 
 
 func _battle_group_structure_valid() -> bool:
 	for nation in nations:
 		for group in nation.battle_groups:
-			var light_count := 0
-			var heavy_count := 0
+			var manpower := 0
 			for army in battle_group_members(nation.id, group.id):
-				if army.max_size == INITIAL_LIGHT_ARMY_SIZE:
-					light_count += 1
-				elif army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-					heavy_count += 1
-			if (
-				light_count > BattleGroup.MAX_LIGHT_ARMIES
-				or heavy_count > BattleGroup.MAX_HEAVY_ARMIES
-			):
+				manpower += army.size
+			if manpower > group.manpower_limit():
 				return false
 	for army in armies:
 		if (
@@ -2516,6 +2522,13 @@ func battle_group_members(
 	return result
 
 
+func is_capital_guard_army(army: Army) -> bool:
+	if army == null:
+		return false
+	var group := battle_group_by_id(army.owner_nation, army.battle_group_id)
+	return group != null and group.role == BattleGroup.Role.CAPITAL_GUARD
+
+
 func assign_army_to_battle_group(
 	army: Army,
 	group_id: int
@@ -2529,25 +2542,20 @@ func assign_army_to_battle_group(
 		) == null
 	):
 		return false
-	var light_count := 0
-	var heavy_count := 0
+	var assigned_manpower := 0
 	for member in battle_group_members(army.owner_nation, group_id):
 		if member == army:
 			continue
-		if member.max_size == INITIAL_LIGHT_ARMY_SIZE:
-			light_count += 1
-		elif member.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-			heavy_count += 1
-	if (
-		army.max_size == INITIAL_LIGHT_ARMY_SIZE
-		and light_count >= BattleGroup.MAX_LIGHT_ARMIES
-	) or (
-		army.max_size >= INITIAL_HEAVY_ARMY_SIZE
-		and heavy_count >= BattleGroup.MAX_HEAVY_ARMIES
-	):
+		assigned_manpower += member.size
+	var group := battle_group_by_id(army.owner_nation, group_id)
+	if assigned_manpower + army.size > group.manpower_limit():
 		return false
 	army.battle_group_id = group_id
-	army.strategic_role = Army.StrategicRole.MAIN
+	army.strategic_role = (
+		Army.StrategicRole.CAPITAL_GUARD
+		if group.role == BattleGroup.Role.CAPITAL_GUARD
+		else Army.StrategicRole.MAIN
+	)
 	army.clear_line_assignment()
 	return true
 
@@ -3044,13 +3052,34 @@ func set_diplomatic_relation(
 		return false
 	diplomatic_relations[key] = relation
 	diplomatic_since_day[key] = day
+	if relation == DiplomaticRelation.WAR:
+		nations[nation_a].war_initial_military_strength[nation_b] = (
+			active_military_strength(nation_a)
+		)
+		nations[nation_b].war_initial_military_strength[nation_a] = (
+			active_military_strength(nation_b)
+		)
+		nations[nation_a].war_military_losses[nation_b] = 0
+		nations[nation_b].war_military_losses[nation_a] = 0
 	if previous == DiplomaticRelation.WAR and relation != DiplomaticRelation.WAR:
+		nations[nation_a].war_initial_military_strength.erase(nation_b)
+		nations[nation_b].war_initial_military_strength.erase(nation_a)
+		nations[nation_a].war_military_losses.erase(nation_b)
+		nations[nation_b].war_military_losses.erase(nation_a)
 		truce_until_day[key] = maxi(
 			int(truce_until_day.get(key, 0)),
 			day + maxi(truce_days, 0)
 		)
 	diplomacy_revision += 1
 	return true
+
+
+func active_military_strength(nation_id: int) -> int:
+	var result := 0
+	for army in armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			result += army.size
+	return result
 
 
 func wars_of(nation_id: int) -> Array[int]:
@@ -3504,6 +3533,7 @@ func start_regional_rebellion(
 	# 与削藩内战共用同一火星军口径：ceil(0.1 × 叛军陆城数) 个满编
 	# MAIN 战团。它是叛乱政治事件的额外动员，不替代当地驻军倒戈。
 	_spawn_rebellion_uprising_armies(rebel.id)
+	_create_capital_guard(rebel.id)
 	rebellions[rebel.id] = {
 		"parent_id": parent_id,
 		"started_day": day,
@@ -3855,6 +3885,31 @@ func _spawn_rebellion_uprising_armies(
 			nations[rebel_id].battle_groups.erase(group)
 			return
 		assign_army_to_battle_group(heavy, group.id)
+
+
+func _create_capital_guard(nation_id: int) -> BattleGroup:
+	if nation_id < 0 or nation_id >= nations.size():
+		return null
+	for group in nations[nation_id].battle_groups:
+		if group.role == BattleGroup.Role.CAPITAL_GUARD:
+			return group
+	var capital_id := nations[nation_id].capital_city_id
+	if capital_id < 0 or capital_id >= cities.size():
+		return null
+	var group := create_battle_group(nation_id)
+	group.role = BattleGroup.Role.CAPITAL_GUARD
+	var guard := _spawn_conjured_army(
+		nation_id,
+		capital_id,
+		BattleGroup.CAPITAL_GUARD_MANPOWER,
+		Army.StrategicRole.CAPITAL_GUARD
+	)
+	if guard == null or not assign_army_to_battle_group(guard, group.id):
+		nations[nation_id].battle_groups.erase(group)
+		if guard != null:
+			armies.erase(guard)
+		return null
+	return group
 
 
 ## 凭空动员一支满编重军（绕过 create_army 的城市归属校验：火星兵可在被围/新夺首都起兵）。
@@ -4450,6 +4505,7 @@ func enfeoff(
 	# 5.5 地方化驻军并补齐：先转移封地内稳定驻防的宗主 LINE，再把缺口凭空补到
 	#     「陆城数」；MAIN 不转移、不凭空赐予，由藩王后续按经济能力自行组建。
 	_grant_vassal_line_armies(subject.id, overlord_id)
+	_create_capital_guard(subject.id)
 
 	# 6. 外交：藩王继承宗主对每个第三方的关系，并与宗主结盟。
 	#    这样 alliance_bloc 天然把宗藩聚为一体，对外 is_enemy 自动正确，
@@ -4656,8 +4712,24 @@ func finalize_annexation_after_territory_commit(
 		or absorber == absorbed
 	):
 		return
-	for group in nations[absorbed].battle_groups:
+	var absorber_has_guard := false
+	var demobilized_guard_manpower := 0
+	for existing_group in nations[absorber].battle_groups:
+		if existing_group.role == BattleGroup.Role.CAPITAL_GUARD:
+			absorber_has_guard = true
+			break
+	for group in nations[absorbed].battle_groups.duplicate():
 		var members := battle_group_members(absorbed, group.id)
+		if group.role == BattleGroup.Role.CAPITAL_GUARD:
+			if absorber_has_guard:
+				# 一个国家只保留一支5万禁军；败方禁军不能降格塞进
+				# 1.5万野战军团，故解散并把幸存人力并入胜方兵源。
+				for member in members:
+					demobilized_guard_manpower += member.size
+					armies.erase(member)
+				continue
+			else:
+				absorber_has_guard = true
 		var new_group_id := nations[absorber].next_battle_group_id
 		nations[absorber].next_battle_group_id += 1
 		group.id = new_group_id
@@ -4682,7 +4754,9 @@ func finalize_annexation_after_territory_commit(
 				RulerProfile.morale_multiplier(nations[absorber])
 			)
 	_reconcile_battles_after_annexation()
-	nations[absorber].manpower_pool += nations[absorbed].manpower_pool
+	nations[absorber].manpower_pool += (
+		nations[absorbed].manpower_pool + demobilized_guard_manpower
+	)
 	nations[absorbed].manpower_pool = 0
 	nations[absorber].treasury_gold += nations[absorbed].treasury_gold
 	nations[absorbed].treasury_gold = 0

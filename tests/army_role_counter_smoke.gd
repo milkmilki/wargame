@@ -13,6 +13,10 @@ func _run() -> void:
 	var main_profile := MapRenderer.army_counter_profile(
 		GameState.INITIAL_LIGHT_ARMY_SIZE, Army.StrategicRole.MAIN
 	)
+	var guard_profile := MapRenderer.army_counter_profile(
+		BattleGroup.CAPITAL_GUARD_MANPOWER,
+		Army.StrategicRole.CAPITAL_GUARD
+	)
 	var state := GameState.new()
 	state.generate_world(12345)
 	var line_army: Army = null
@@ -46,15 +50,29 @@ func _run() -> void:
 		await process_frame
 	var line_scale := StrategicMap3D.army_role_scale(line_army)
 	var main_scale := StrategicMap3D.army_role_scale(main_army)
+	var guard_army: Army = null
+	for army in state.armies:
+		if state.is_capital_guard_army(army):
+			guard_army = army
+			break
+	if guard_army == null:
+		_fail("fixture must contain a capital guard")
+		return
+	var guard_scale := StrategicMap3D.army_role_scale(guard_army)
 	var line_color := StrategicMap3D.army_role_base_color(line_army)
 	var main_color := StrategicMap3D.army_role_base_color(main_army)
+	var guard_color := StrategicMap3D.army_role_base_color(guard_army)
 	var valid := (
 		str(line_profile["role_code"]) == "线"
 		and str(main_profile["role_code"]) == "主"
+		and str(guard_profile["role_code"]) == "禁"
 		and float(main_profile["width"]) > float(line_profile["width"])
+		and float(guard_profile["width"]) > float(line_profile["width"])
 		and main_scale > line_scale * 1.45
+		and guard_scale > line_scale
 		and main_color.is_equal_approx(StrategicMap3D.MAP_GOLD)
 		and line_color.is_equal_approx(StrategicMap3D.MAP_INK)
+		and not guard_color.is_equal_approx(StrategicMap3D.MAP_INK)
 	)
 	if not valid:
 		_fail("role counters are not visually distinct: scales=%.2f/%.2f colors=%s/%s profiles=%s/%s" % [

@@ -82,9 +82,14 @@ func _init() -> void:
 	var transferred_total := 0
 	var transferred_max := 0
 	var surrender_peaces := 0
+	var first_declaration_day := -1
 	for event in state.diplomatic_history:
 		var k := int(event.get("action", -1))
 		action_counts[k] = int(action_counts.get(k, 0)) + 1
+		if k == DiplomacyAI.Action.DECLARE_WAR:
+			var event_day := int(event.get("day", -1))
+			if first_declaration_day < 0 or event_day < first_declaration_day:
+				first_declaration_day = event_day
 		if k != DiplomacyAI.Action.MAKE_PEACE:
 			continue
 		peace_count += 1
@@ -96,6 +101,7 @@ func _init() -> void:
 		if int(event.get("surrendering_nation", -1)) >= 0:
 			surrender_peaces += 1
 	print("外交事件累计分布(action_kind:次数): %s" % str(action_counts))
+	print("首次主动宣战日=%d" % first_declaration_day)
 	print("  (参考 DiplomacyAI.Action 枚举：NONE/MAKE_PEACE/DECLARE_WAR/FORM_ALLIANCE/LEAVE_ALLIANCE/PREPARE_WAR/CANCEL_WAR_PREPARATION)")
 	print(
 		"议和成果: peaces=%d zero_transfer=%d transferred_total=%d max=%d surrenders=%d"

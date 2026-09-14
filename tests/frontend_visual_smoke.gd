@@ -32,6 +32,23 @@ func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	var state := GameState.new()
 	state.generate_world(12345)
+	var guard_count := 0
+	var guards_at_capitals := true
+	for nation in state.nations:
+		var nation_guards := 0
+		for army in state.armies:
+			if (
+				army.owner_nation == nation.id
+				and state.is_capital_guard_army(army)
+			):
+				nation_guards += 1
+				guard_count += 1
+				guards_at_capitals = (
+					guards_at_capitals
+					and army.size == BattleGroup.CAPITAL_GUARD_MANPOWER
+					and army.current_city_node() == nation.capital_city_id
+				)
+		guards_at_capitals = guards_at_capitals and nation_guards == 1
 	var frontier: Edge = null
 	for edge in state.edges:
 		if (
@@ -58,6 +75,20 @@ func _run() -> void:
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
 	state.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.ALLIED)
+	var route_owner := state.cities[frontier.city_a].owner_nation
+	var route_enemy := state.cities[frontier.city_b].owner_nation
+	state.set_diplomatic_relation(
+		route_owner, route_enemy, GameState.DiplomaticRelation.WAR
+	)
+	var attack_group := state.create_battle_group(route_owner)
+	attack_group.posture = BattleGroup.Posture.ATTACK
+	attack_group.target_nation = route_enemy
+	attack_group.target_city = frontier.city_b
+	attack_group.route = [frontier.city_a, frontier.city_b] as Array[int]
+	var defend_group := state.create_battle_group(route_enemy)
+	defend_group.posture = BattleGroup.Posture.DEFEND
+	defend_group.target_city = frontier.city_b
+	defend_group.route = [frontier.city_b, frontier.city_a] as Array[int]
 	state.suzerainty[3] = {
 		"overlord_id": 0,
 		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
@@ -442,6 +473,20 @@ func _run() -> void:
 		and trade_visible_near
 		and trade_visible_far
 	)
+	map_3d.set_map_mode(MapRenderer.MAP_MODE_MILITARY)
+	var military_mesh := map_3d._military_routes.mesh as ArrayMesh
+	var military_mode_visibility := (
+		map_3d.map_mode() == MapRenderer.MAP_MODE_MILITARY
+		and overlay.map_mode() == MapRenderer.MAP_MODE_MILITARY
+		and map_3d._military_routes.visible
+		and map_3d._military_flow_markers.visible
+		and _mesh_vertex_count(military_mesh) > 0
+		and map_3d._military_flow_markers.multimesh.instance_count > 0
+		and not map_3d._trade_routes.visible
+		and not map_3d._trade_flow_markers.visible
+		and not map_3d._campaigns.visible
+		and map_3d._roads.transparency > 0.0
+	)
 	var map_label_font_contract := (
 		map_label_font_source.contains(
 			"return create_ui_font()"
@@ -649,6 +694,10 @@ func _run() -> void:
 	)
 
 	var checks := {
+		"capital_guards": (
+			guard_count == state.nations.size()
+			and guards_at_capitals
+		),
 		"city_bases": map_3d._city_bases.multimesh.instance_count == state.cities.size(),
 		"city_resources": map_3d._city_resource_markers.multimesh.instance_count == state.cities.size(),
 		"dock_rings": map_3d._dock_rings.multimesh.instance_count == state.cities.size(),
@@ -735,6 +784,7 @@ func _run() -> void:
 		"trade_2d_marker_motion": trade_2d_marker_motion,
 		"political_trade_hidden": political_trade_hidden,
 		"trade_mode_visibility": trade_mode_visibility,
+		"military_mode_visibility": military_mode_visibility,
 		"loyalty_mode_contract": loyalty_mode_contract,
 		"boundary_local_ink": boundary_local_ink,
 		"boundary_local_width": boundary_local_width,
@@ -874,6 +924,14 @@ func _run() -> void:
 		push_error("FRONTEND_VISUAL_INVALID")
 		quit(1)
 		return
+	var output := OS.get_environment("WW_VISUAL_OUTPUT")
+	if not output.is_empty():
+		await process_frame
+		var image := root.get_texture().get_image()
+		if image == null or image.is_empty() or image.save_png(output) != OK:
+			push_error("FRONTEND_VISUAL_SCREENSHOT_FAILED")
+			quit(1)
+			return
 	print(
 		"FRONTEND_VISUAL_OK counters=",
 		map_3d._armies.multimesh.instance_count,
