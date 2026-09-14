@@ -4,6 +4,8 @@ extends RefCounted
 
 const ROUTE_MERGE_HOPS: int = 2
 const DEFENSIVE_EDGE_HOLD_BIAS_MIN: float = 1.35
+const FRONTLINE_CITIES_PER_FIELD_GROUP: int = 3
+const MAX_FIELD_GROUPS: int = 16
 
 static func group_strength(state: GameState, group: BattleGroup) -> int:
 	var result := 0
@@ -21,6 +23,42 @@ static func group_origin(state: GameState, group: BattleGroup) -> int:
 		if army.location_city >= 0:
 			return army.location_city
 	return -1
+
+
+static func target_field_group_count(
+	state: GameState,
+	nation_id: int
+) -> int:
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return 0
+	var frontline_cities := 0
+	for city in state.land_cities_of(nation_id):
+		for neighbor in state.neighbors(city.id):
+			if (
+				not state.cities[neighbor].is_dock
+				and state.cities[neighbor].owner_nation != nation_id
+			):
+				frontline_cities += 1
+				break
+	var territorial_target := maxi(
+		int(ceil(
+			float(frontline_cities)
+				/ float(FRONTLINE_CITIES_PER_FIELD_GROUP)
+		)),
+		1
+	)
+	var wartime_threat := 0
+	for enemy_id in state.wars_of(nation_id):
+		wartime_threat += _corridor_threat(state, nation_id, enemy_id)
+	var threat_target := (
+		int(ceil(float(wartime_threat) / float(BattleGroup.MAX_MANPOWER)))
+		if wartime_threat > 0 else 0
+	)
+	return clampi(
+		maxi(territorial_target, threat_target),
+		1,
+		MAX_FIELD_GROUPS
+	)
 
 
 static func reconcile_groups(state: GameState, nation_id: int) -> void:
@@ -47,42 +85,56 @@ static func reconcile_groups(state: GameState, nation_id: int) -> void:
 		):
 			main_armies.append(army)
 	main_armies.sort_custom(func(a: Army, b: Army) -> bool: return a.id < b.id)
-	var required := 0
-	var planned_fill := 0
-	for army in main_armies:
-		if (
-			required == 0
-			or planned_fill + army.size > BattleGroup.MAX_MANPOWER
-		):
-			required += 1
-			planned_fill = 0
-		planned_fill += army.size
 	nation.battle_groups.sort_custom(
 		func(a: BattleGroup, b: BattleGroup) -> bool: return a.id < b.id
 	)
 	field_groups.sort_custom(
 		func(a: BattleGroup, b: BattleGroup) -> bool: return a.id < b.id
 	)
-	while field_groups.size() < required:
-		field_groups.append(state.create_battle_group(nation_id))
-	while field_groups.size() > required:
-		nation.battle_groups.erase(field_groups.pop_back())
+	var field_group_by_id := {}
+	var filled_by_group := {}
+	for group in field_groups:
+		field_group_by_id[group.id] = group
+		filled_by_group[group.id] = 0
+	var unassigned: Array[Army] = []
 	for army in main_armies:
-		army.battle_group_id = -1
 		army.strategic_role = Army.StrategicRole.MAIN
-	var group_index := 0
-	var filled := 0
-	for army in main_armies:
-		if group_index >= field_groups.size():
-			break
-		if filled > 0 and filled + army.size > BattleGroup.MAX_MANPOWER:
-			group_index += 1
-			filled = 0
-		if group_index >= field_groups.size():
-			break
-		army.battle_group_id = field_groups[group_index].id
 		army.clear_line_assignment()
-		filled += army.size
+		var current_group: BattleGroup = field_group_by_id.get(
+			army.battle_group_id
+		)
+		if (
+			current_group != null
+			and int(filled_by_group[current_group.id]) + army.size
+				<= BattleGroup.MAX_MANPOWER
+		):
+			filled_by_group[current_group.id] = (
+				int(filled_by_group[current_group.id]) + army.size
+			)
+			continue
+		army.battle_group_id = -1
+		unassigned.append(army)
+	for army in unassigned:
+		var destination: BattleGroup = null
+		for group in field_groups:
+			if (
+				int(filled_by_group[group.id]) + army.size
+					<= BattleGroup.MAX_MANPOWER
+			):
+				destination = group
+				break
+		if destination == null:
+			destination = state.create_battle_group(nation_id)
+			field_groups.append(destination)
+			filled_by_group[destination.id] = 0
+		army.battle_group_id = destination.id
+		filled_by_group[destination.id] = (
+			int(filled_by_group[destination.id]) + army.size
+		)
+	for group in field_groups.duplicate():
+		if int(filled_by_group.get(group.id, 0)) > 0:
+			continue
+		nation.battle_groups.erase(group)
 
 
 static func route_to_city(
@@ -344,6 +396,7 @@ static func plan_nation(
 			if (
 				group.role == BattleGroup.Role.CAPITAL_GUARD
 				or preparation_groups.has(group.id)
+				or _group_is_retreating_or_recovering(state, group)
 			):
 				continue
 			_set_group_order(
@@ -357,6 +410,8 @@ static func plan_nation(
 			group.role == BattleGroup.Role.CAPITAL_GUARD
 			or preparation_groups.has(group.id)
 		):
+			continue
+		if _group_is_retreating_or_recovering(state, group):
 			continue
 		field_groups.append(group)
 	field_groups.sort_custom(
@@ -376,6 +431,16 @@ static func plan_nation(
 				state, group, BattleGroup.Posture.ATTACK, enemy_id,
 				state.nations[enemy_id].capital_city_id, route
 			)
+
+
+static func _group_is_retreating_or_recovering(
+	state: GameState,
+	group: BattleGroup
+) -> bool:
+	for army in state.battle_group_members(group.owner_nation, group.id):
+		if army.state in [Army.State.RETREATING, Army.State.RECOVERING]:
+			return true
+	return false
 
 
 static func _threat_weighted_corridor_targets(

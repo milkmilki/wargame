@@ -12,6 +12,7 @@ func _run() -> void:
 	_test_initial_force_has_one_capital_guard()
 	_test_group_capacity_follows_actual_strength()
 	_test_group_reconciliation_preserves_indivisible_remnants()
+	_test_reconciliation_preserves_retreating_group_corridor()
 	_test_capital_guard_never_receives_war_corridor()
 	_test_recruitment_fills_current_group_before_creating_next()
 	_test_peace_and_capital_attack_routes()
@@ -28,8 +29,11 @@ func _run() -> void:
 	_test_node_threat_follows_capital_corridor()
 	_test_peace_pressure_has_only_four_components()
 	_test_simulation_issues_group_route_orders()
+	_test_runtime_reuses_stable_war_corridors()
+	_test_simplified_runtime_recruits_all_required_groups()
 	_test_defeated_group_retreats_back_along_corridor()
 	_test_defeated_group_at_city_retreats_back_along_corridor()
+	_test_recovered_defender_resumes_corridor_defense()
 	_test_battle_losses_accumulate_and_clear_on_peace()
 	_finish()
 
@@ -127,6 +131,33 @@ func _test_group_reconciliation_preserves_indivisible_remnants() -> void:
 	_check(
 		assigned and state._battle_group_structure_valid(),
 		"不可拆分残编必须按实际装箱数保留军团归属，不能按总兵力向上取整后漏军"
+	)
+
+
+func _test_reconciliation_preserves_retreating_group_corridor() -> void:
+	var state := _base_state()
+	var capital := state.nations[0].capital_city_id
+	var groups: Array[BattleGroup] = []
+	var armies: Array[Army] = []
+	for index in range(3):
+		var group := state.create_battle_group(0)
+		group.posture = BattleGroup.Posture.DEFEND
+		group.target_nation = index + 1
+		group.route = [capital, index + 1] as Array[int]
+		var army := _add_main_army(state, 0, capital, 5000)
+		state.assign_army_to_battle_group(army, group.id)
+		groups.append(group)
+		armies.append(army)
+	armies[2].state = Army.State.RETREATING
+	var retreating_group_id := armies[2].battle_group_id
+	var retreating_route := groups[2].route.duplicate()
+	SimplifiedWarAI.reconcile_groups(state, 0)
+	var preserved_group := state.battle_group_by_id(0, retreating_group_id)
+	_check(
+		preserved_group != null
+			and armies[2].battle_group_id == retreating_group_id
+			and preserved_group.route == retreating_route,
+		"战败和恢复中的残编不得因重新装箱换团，必须保留原军事走廊"
 	)
 
 
@@ -425,15 +456,68 @@ func _test_defeated_group_at_city_retreats_back_along_corridor() -> void:
 	group.target_nation = 1
 	group.target_city = 3
 	group.route = [0, 1, 2, 3] as Array[int]
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	state.set_war_objective(1, 0, 0, "撤退走廊保持测试")
+	# 战败后即使首都迁移，本次撤退也必须走完战败瞬间保存的旧走廊。
+	state.nations[0].capital_city_id = 4
 	var simulation := Simulation.new()
 	simulation.setup(state)
 	simulation._start_morale_retreat_from_city(army, 2, 2)
+	var retreat_route := group.route.duplicate()
+	SimplifiedWarAI.plan_nation(state, 0)
 	_check(
 		army.state == Army.State.RETREATING
 			and army.move_from == 2
 			and army.move_to == 1
-			and army.path == ([0] as Array[int]),
-		"城市节点战败的主战军也必须沿走廊反向连续撤退，不能另寻捷径"
+			and army.path == ([0] as Array[int])
+			and group.route == retreat_route,
+		"城市节点战败的主战军必须走完原走廊；首都迁移和恢复期重算不得改走通用路径"
+	)
+	simulation.free()
+
+
+func _test_recovered_defender_resumes_corridor_defense() -> void:
+	var state := _base_state()
+	for edge in state.edges:
+		edge.max_manpower = 0
+	var corridor := [0, 1, 2, 3] as Array[int]
+	for index in range(corridor.size() - 1):
+		state.edge_of(corridor[index], corridor[index + 1]).max_manpower = 15000
+	for city_id in corridor:
+		state.cities[city_id].owner_nation = 0 if city_id < 3 else 1
+		state.recognized_city_owners[city_id] = 0 if city_id < 3 else 1
+	state.nations[0].capital_city_id = 0
+	state.nations[1].capital_city_id = 3
+	var defender := _add_main_army(state, 0, 1, 15000)
+	_add_main_army(state, 1, 3, 15000)
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	state.set_war_objective(1, 0, 0, "恢复后继续走廊防御测试")
+	SimplifiedWarAI.plan_nation(state, 0)
+	var group := state.battle_group_by_id(0, defender.battle_group_id)
+	var saved_route := group.route.duplicate()
+	var saved_target := group.target_city
+	defender.state = Army.State.RECOVERING
+	defender.forced_retreat = true
+	SimplifiedWarAI.plan_nation(state, 0)
+	var recovery_preserved := (
+		group.route == saved_route
+		and group.target_city == saved_target
+		and group.posture == BattleGroup.Posture.DEFEND
+	)
+	defender.state = Army.State.IDLE
+	defender.forced_retreat = false
+	defender.morale = defender.max_morale
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	SimplifiedWarAI.plan_nation(state, 0)
+	simulation._issue_battle_group_order(group)
+	_check(
+		recovery_preserved
+			and group.route == corridor
+			and group.target_city == 2
+			and defender.state == Army.State.MOVING
+			and defender.ai_target_city == 2,
+		"防守军团恢复期间必须冻结原走廊，恢复后继续前往走廊前线城市驻防"
 	)
 	simulation.free()
 
@@ -799,6 +883,75 @@ func _test_simulation_issues_group_route_orders() -> void:
 			and army.state == Army.State.MOVING
 			and army.ai_target_city == state.nations[1].capital_city_id,
 		"Simulation 必须把军团的敌首都路线提交为真实移动命令"
+	)
+	simulation.free()
+
+
+func _test_runtime_reuses_stable_war_corridors() -> void:
+	var state := _base_state()
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	var first: Dictionary = simulation._cached_simplified_war_corridors()
+	var second: Dictionary = simulation._cached_simplified_war_corridors()
+	_check(
+		first == second
+			and simulation.simplified_war_corridor_build_total == 1
+			and simulation.simplified_war_corridor_cache_hit_total == 1,
+		"道路、领土、外交与首都不变时必须复用军事走廊，不能每日重复寻路"
+	)
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+	var after_peace: Dictionary = simulation._cached_simplified_war_corridors()
+	_check(
+		after_peace.is_empty()
+			and simulation.simplified_war_corridor_build_total == 2,
+		"外交关系变化必须使军事走廊缓存失效"
+	)
+	simulation.free()
+
+
+func _test_simplified_runtime_recruits_all_required_groups() -> void:
+	var state := GameState.new()
+	state.generate_world(12345, GameState.NATION_COUNT)
+	for a in range(state.nations.size()):
+		for b in range(a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				a, b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	for nation in state.nations:
+		nation.manpower_pool = 1000000
+		nation.treasury_gold = 1000000
+	for city in state.cities:
+		city.food_per_half_year = 1000000
+		if city.has_warehouse:
+			city.food_storage = 1000000
+	var nation_id := 0
+	var initial_groups := 0
+	for group in state.nations[nation_id].battle_groups:
+		if group.role == BattleGroup.Role.FIELD:
+			initial_groups += 1
+	var target_groups := SimplifiedWarAI.target_field_group_count(
+		state, nation_id
+	)
+	_check(
+		target_groups > initial_groups,
+		"四国扩军回归夹具必须要求超过初始主战军团数"
+	)
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	simulation._run_simplified_war_ai(false)
+	var final_groups := 0
+	var final_field_manpower := 0
+	for group in state.nations[nation_id].battle_groups:
+		if group.role == BattleGroup.Role.FIELD:
+			final_groups += 1
+			final_field_manpower += SimplifiedWarAI.group_strength(state, group)
+	_check(
+		final_groups >= target_groups
+			and final_field_manpower
+				>= target_groups * BattleGroup.MAX_MANPOWER,
+		"简化AI单次决策必须把目标军团全部补至1.5万人，不能按军团个数提前停止：%d团/%d团，%d人"
+			% [final_groups, target_groups, final_field_manpower]
 	)
 	simulation.free()
 

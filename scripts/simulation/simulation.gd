@@ -208,6 +208,11 @@ var _ai_last_decision_day: int = -1
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
 var _ai_forced_nations: Dictionary = {}
+var _simplified_force_blocked_signature_by_nation: Dictionary = {}
+var _simplified_force_gold_flows_month: int = -1
+var _simplified_force_gold_flows: Array[Dictionary] = []
+var _simplified_war_corridor_signature: Array[int] = []
+var _simplified_war_corridor_cache: Dictionary = {}
 ## 同日城市实控变化后的窄域前线刷新集合；仅重建受影响国家的 LINE 防区。
 var _frontline_dirty_nations: Dictionary = {}
 var _collect_ai_commands: bool = false
@@ -238,6 +243,8 @@ var ai_defense_dynamic_reuse_total: int = 0
 var frontline_refresh_batch_total: int = 0
 var frontline_refresh_nation_total: int = 0
 var frontline_refresh_build_total: int = 0
+var simplified_war_corridor_build_total: int = 0
+var simplified_war_corridor_cache_hit_total: int = 0
 ## 贸易预测缓存诊断计数。build 表示实际执行 build_structure/settle，
 ## cache_hit 表示复用了对应层；setup() 会统一清零。
 var trade_structure_build_total: int = 0
@@ -402,6 +409,11 @@ func setup(game_state: GameState) -> void:
 	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
 	_ai_forced_nations.clear()
+	_simplified_force_blocked_signature_by_nation.clear()
+	_simplified_force_gold_flows_month = -1
+	_simplified_force_gold_flows.clear()
+	_simplified_war_corridor_signature.clear()
+	_simplified_war_corridor_cache.clear()
 	_frontline_dirty_nations.clear()
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
@@ -417,6 +429,8 @@ func setup(game_state: GameState) -> void:
 	frontline_refresh_batch_total = 0
 	frontline_refresh_nation_total = 0
 	frontline_refresh_build_total = 0
+	simplified_war_corridor_build_total = 0
+	simplified_war_corridor_cache_hit_total = 0
 	diplomacy_mobilization_evaluation_cache_total = 0
 	_clear_ai_command_collection()
 	_parallel_ai_context_jobs.clear()
@@ -6345,11 +6359,11 @@ func _run_simplified_war_ai(spread_runtime_work: bool = false) -> void:
 		# 旧战役字段不再驱动任何命令，清除残留以免 UI 和测试把它误认为活跃计划。
 		_clear_campaign_preparation_plan(nation_id)
 		_clear_campaign_attack_plan(nation_id)
-		SimplifiedWarPlanner.reconcile_groups(state, nation_id)
+		_expand_simplified_field_groups(nation_id)
 		managed_nations.append(nation_id)
 		if spread_runtime_work:
 			await get_tree().process_frame
-	var war_corridors := SimplifiedWarPlanner.build_war_corridors(state)
+	var war_corridors := _cached_simplified_war_corridors()
 	for nation_id in managed_nations:
 		SimplifiedWarPlanner.plan_nation(
 			state, nation_id, null, war_corridors
@@ -6359,6 +6373,170 @@ func _run_simplified_war_ai(spread_runtime_work: bool = false) -> void:
 			_issue_battle_group_order(group)
 		if spread_runtime_work:
 			await get_tree().process_frame
+
+
+func _cached_simplified_war_corridors() -> Dictionary:
+	var signature: Array[int] = [
+		state.ownership_revision,
+		state.diplomacy_revision,
+		state.road_network_revision,
+		state.nations.size(),
+	]
+	for nation in state.nations:
+		signature.append(1 if nation.alive else 0)
+		signature.append(nation.capital_city_id)
+	if signature == _simplified_war_corridor_signature:
+		simplified_war_corridor_cache_hit_total += 1
+		return _simplified_war_corridor_cache
+	_simplified_war_corridor_cache = (
+		SimplifiedWarPlanner.build_war_corridors(state)
+	)
+	_simplified_war_corridor_signature = signature
+	simplified_war_corridor_build_total += 1
+	return _simplified_war_corridor_cache
+
+
+func _expand_simplified_field_groups(nation_id: int) -> void:
+	if not state.uses_heightmap:
+		return
+	var nation := state.nations[nation_id]
+	var target_groups := SimplifiedWarPlanner.target_field_group_count(
+		state, nation_id
+	)
+	if _field_battle_group_count(nation) >= target_groups:
+		_simplified_force_blocked_signature_by_nation.erase(nation_id)
+		return
+	var block_signature := [
+		state.day / DAYS_PER_MONTH,
+		target_groups,
+	]
+	if (
+		_simplified_force_blocked_signature_by_nation.get(nation_id, [])
+			== block_signature
+	):
+		return
+	var nation_armies: Array[Army] = []
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			nation_armies.append(army)
+	var initial_recruitment := _next_battle_group_recruitment(
+		nation_id, true, true
+	)
+	var initial_size := int(initial_recruitment.get("size", 0))
+	var protected_manpower := (
+		PEACETIME_MANPOWER_RESERVE
+		if state.wars_of(nation_id).is_empty()
+		else _wartime_manpower_reserve(nation_armies)
+	)
+	var cached_gold_flows: Array[Dictionary] = []
+	if _latest_monthly_gold_flows.size() == state.nations.size():
+		cached_gold_flows = _latest_monthly_gold_flows
+	else:
+		var current_month := state.day / DAYS_PER_MONTH
+		if (
+			_simplified_force_gold_flows_month != current_month
+			or _simplified_force_gold_flows.size() != state.nations.size()
+		):
+			_simplified_force_gold_flows = monthly_gold_flows(state)
+			_simplified_force_gold_flows_month = current_month
+		cached_gold_flows = _simplified_force_gold_flows
+	var gold_policy := gold_reserve_policy(
+		state, nation_id, cached_gold_flows
+	)
+	var initial_creation_cost := GameState.formation_creation_gold_cost(
+		initial_size
+	)
+	var initial_upkeep := _ruler_adjusted_upkeep(
+		GameState.army_monthly_upkeep(initial_size),
+		RulerProfile.upkeep_multiplier(nation)
+	)
+	if (
+		initial_size <= 0
+		or nation.manpower_pool - protected_manpower < initial_size
+		or int(gold_policy.get("required_upkeep_savings", 0)) > 0
+		or int(gold_policy.get("budget_monthly_balance", 0))
+			< initial_upkeep
+		or nation.treasury_gold - initial_creation_cost
+			< int(gold_policy.get("reserve_target", 0))
+	):
+		_simplified_force_blocked_signature_by_nation[nation_id] = (
+			block_signature
+		)
+		return
+	var food_growth_budget := _simplified_food_growth_manpower_budget(nation)
+	var added_monthly_upkeep := 0
+	while _field_battle_group_count(nation) < target_groups:
+		var recruitment := _next_battle_group_recruitment(
+			nation_id, true, true
+		)
+		var formation_size := int(recruitment.get("size", 0))
+		if formation_size <= 0:
+			break
+		protected_manpower = (
+			PEACETIME_MANPOWER_RESERVE
+			if state.wars_of(nation_id).is_empty()
+			else _wartime_manpower_reserve(nation_armies)
+		)
+		var creation_cost := GameState.formation_creation_gold_cost(
+			formation_size
+		)
+		var formation_upkeep := _ruler_adjusted_upkeep(
+			GameState.army_monthly_upkeep(formation_size),
+			RulerProfile.upkeep_multiplier(nation)
+		)
+		if (
+			nation.manpower_pool - protected_manpower < formation_size
+			or food_growth_budget < formation_size
+			or int(gold_policy.get("required_upkeep_savings", 0)) > 0
+			or int(gold_policy.get("budget_monthly_balance", 0))
+				- added_monthly_upkeep < formation_upkeep
+			or nation.treasury_gold - creation_cost
+				< int(gold_policy.get("reserve_target", 0))
+		):
+			_simplified_force_blocked_signature_by_nation[nation_id] = (
+				block_signature
+			)
+			break
+		var created_group: BattleGroup = null
+		var group_id := int(recruitment.get("group_id", -1))
+		if bool(recruitment.get("create_group", false)):
+			created_group = state.create_battle_group(nation_id)
+			group_id = created_group.id
+		var army := _create_army_for_nation(
+			nation_id,
+			nation.capital_city_id,
+			formation_size,
+			str(recruitment.get("reason", "简化军制扩建")),
+			false,
+			group_id
+		)
+		if army != null:
+			nation_armies.append(army)
+			food_growth_budget -= formation_size
+			added_monthly_upkeep += formation_upkeep
+			continue
+		if created_group != null:
+			nation.battle_groups.erase(created_group)
+		_simplified_force_blocked_signature_by_nation[nation_id] = (
+			block_signature
+		)
+		break
+	_ai_forced_nations.erase(nation_id)
+
+
+static func _simplified_food_growth_manpower_budget(nation: Nation) -> int:
+	var monthly_budget := (
+		float(maxi(nation.last_food_estimated_production, 0))
+		+ float(maxi(nation.granary_food, 0)) / 24.0
+	)
+	var monthly_demand := maxf(
+		float(maxi(nation.last_food_estimated_consumption, 0)),
+		nation.food_demand_ema
+	)
+	var food_headroom := maxf(monthly_budget - monthly_demand - 1.0, 0.0)
+	return int(floor(
+		food_headroom / (FOOD_PER_CAPITA * MAX_SUPPLY_MULT)
+	))
 
 
 func _issue_battle_group_order(group: BattleGroup) -> void:
@@ -8376,7 +8554,7 @@ func _regular_force_recruitment(
 	wars: Array,
 	total_line_target: int,
 	line_armies: int,
-	main_armies: int,
+	_main_armies: int,
 	active_war_mobilization: bool
 ) -> Dictionary:
 	var nation := state.nations[view.nation_id]
@@ -8395,11 +8573,11 @@ func _regular_force_recruitment(
 	)
 	var required_group_count := int(demand["required_group_count"])
 	var target_group_count := int(demand["target_group_count"])
-	var target_main_armies := maxi(target_group_count, 1)
-	var main_deficit := maxi(target_main_armies - main_armies, 0)
+	var target_main_groups := maxi(target_group_count, 1)
+	var main_deficit := maxi(target_main_groups - field_group_count, 0)
 	var line_deficit := maxi(total_line_target - line_armies, 0)
 	var main_deficit_ratio := (
-		float(main_deficit) / float(target_main_armies)
+		float(main_deficit) / float(target_main_groups)
 	)
 	var line_deficit_ratio := (
 		float(line_deficit) / float(maxi(total_line_target, 1))
@@ -17035,8 +17213,6 @@ func _valid_retreat_corridor(group: BattleGroup) -> bool:
 			BattleGroup.Posture.DEFEND,
 		]
 		and group.route.size() >= 2
-		and group.route[0]
-			== state.nations[group.owner_nation].capital_city_id
 	)
 
 
