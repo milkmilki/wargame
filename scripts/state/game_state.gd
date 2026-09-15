@@ -78,6 +78,7 @@ const TERRITORY_CAPTURE_SPOILS_RATE: float = 0.30
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
 const VASSAL_PRIVATE_WAR_COHESION_THRESHOLD: float = 0.35
+const VASSAL_SYSTEM_DISSOLUTION_DAYS: int = 360
 const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 5.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
@@ -193,6 +194,8 @@ var war_objectives: Dictionary = {}
 ## 不变量：一个藩王至多一个宗主；宗主链无环；非内战宗藩对为 ALLIED，
 ## 削藩内战宗藩对为 WAR。
 var suzerainty: Dictionary = {}
+## 宗藩根 id -> 本轮连续低于私人战争阈值的首日。
+var suzerainty_low_cohesion_since_day: Dictionary = {}
 var _suzerainty_cohesion_revision: int = -1
 var _suzerainty_cohesion_by_root: Dictionary = {}
 var uses_heightmap: bool = false
@@ -204,6 +207,15 @@ var city_density_settings: Dictionary = {}
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
+## Static transport-graph analysis. Region IDs are assigned by deterministic
+## Leiden; node betweenness and key cities use the same passable graph,
+## including docks and their landing, river and sea connections.
+var region_ids: PackedInt32Array = PackedInt32Array()
+var region_count: int = 0
+var region_colors: PackedColorArray = PackedColorArray()
+var node_betweenness: PackedFloat32Array = PackedFloat32Array()
+var region_key_city_ids: PackedInt32Array = PackedInt32Array()
+var region_analysis_revision: int = 0
 ## 省份栅格的静态拓扑缓存。领土变化只重新聚合宗藩根，不重复扫描贴图。
 var _province_neighbor_pairs: Array[Vector2i] = []
 var _province_neighbor_pairs_ready: bool = false
@@ -330,6 +342,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_initialize_city_loyalty()
 	_generate_grid_edges()
 	_classify_road_capacity()
+	rebuild_region_analysis()
 	_generate_armies()
 	reconcile_adjacent_sovereign_colors()
 
@@ -479,6 +492,7 @@ func generate_from_map_definition(
 	_initialize_capitals_and_warehouses()
 	WorldNaming.assign_from_definition(self, definition, world_seed)
 	_initialize_city_loyalty(false)
+	rebuild_region_analysis()
 	_generate_armies()
 	refresh_derived()
 	reconcile_adjacent_sovereign_colors()
@@ -590,6 +604,7 @@ func apply_city_editor_changes(
 		_refresh_land_edge_paths_after_province_rebuild()
 		ownership_revision += 1
 		road_network_revision += 1
+		rebuild_region_analysis()
 	refresh_derived()
 	if position_changed:
 		reconcile_adjacent_sovereign_colors()
@@ -652,6 +667,7 @@ func apply_edge_editor_changes(
 	var edge := edge_of(city_a, city_b)
 	if edge == null:
 		return {"ok": false, "error": "道路不存在。"}
+	var was_region_link := _edge_participates_in_region_graph(edge)
 	edge.kind = clampi(int(changes.get("kind", edge.kind)), Edge.Kind.LAND, Edge.Kind.SEA)
 	var requested_capacity := int(changes.get("max_manpower", edge.max_manpower))
 	edge.max_manpower = (
@@ -671,6 +687,8 @@ func apply_edge_editor_changes(
 	if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
 		edge.allows_holding = false
 	road_network_revision += 1
+	if was_region_link != _edge_participates_in_region_graph(edge):
+		rebuild_region_analysis()
 	return {"ok": true, "city_a": edge.city_a, "city_b": edge.city_b}
 
 
@@ -698,6 +716,7 @@ func _reset_world(world_seed: int) -> void:
 	diplomatic_history.clear()
 	war_objectives.clear()
 	suzerainty.clear()
+	suzerainty_low_cohesion_since_day.clear()
 	_suzerainty_cohesion_revision = -1
 	_suzerainty_cohesion_by_root.clear()
 	city_generation_mask_path = ""
@@ -705,6 +724,12 @@ func _reset_world(world_seed: int) -> void:
 	city_density_settings = {}
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
+	region_ids = PackedInt32Array()
+	region_count = 0
+	region_colors = PackedColorArray()
+	node_betweenness = PackedFloat32Array()
+	region_key_city_ids = PackedInt32Array()
+	region_analysis_revision = 0
 	_province_neighbor_pairs.clear()
 	_province_neighbor_pairs_ready = false
 	river_features.clear()
@@ -1654,6 +1679,59 @@ static func default_road_tuning() -> Dictionary:
 	}
 
 
+func rebuild_region_analysis(
+	resolution: float = RegionGraphAnalysis.DEFAULT_RESOLUTION
+) -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var active := PackedInt32Array()
+	for city in cities:
+		active.append(city.id)
+	var links: Array[Vector2i] = []
+	for edge in edges:
+		if not _edge_participates_in_region_graph(edge):
+			continue
+		links.append(Vector2i(edge.city_a, edge.city_b))
+	var analysis := RegionGraphAnalysis.analyze(
+		cities.size(), active, links, resolution
+	)
+	region_ids = analysis["region_ids"]
+	region_count = int(analysis["region_count"])
+	node_betweenness = analysis["betweenness"]
+	region_key_city_ids = analysis["key_city_ids"]
+	region_colors.resize(region_count)
+	for region_id in range(region_count):
+		region_colors[region_id] = region_color(region_id)
+	region_analysis_revision += 1
+	return {
+		"region_count": region_count,
+		"key_city_count": region_key_city_ids.size(),
+		"node_count": active.size(),
+		"edge_count": links.size(),
+		"elapsed_usec": Time.get_ticks_usec() - started,
+		"revision": region_analysis_revision,
+	}
+
+
+func _edge_participates_in_region_graph(edge: Edge) -> bool:
+	return (
+		edge != null
+		and edge.max_manpower > 0
+		and edge.city_a >= 0
+		and edge.city_b >= 0
+		and edge.city_a < cities.size()
+		and edge.city_b < cities.size()
+	)
+
+
+static func region_color(region_id: int) -> Color:
+	if region_id < 0:
+		return Color.TRANSPARENT
+	var hue := fposmod(0.08 + float(region_id) * 0.61803398875, 1.0)
+	var saturation := 0.50 + 0.07 * float(region_id % 3)
+	var value := 0.68 + 0.07 * float(floori(float(region_id) / 3.0) % 2)
+	return Color.from_hsv(hue, saturation, value, 1.0)
+
+
 func road_network_rebuild_block_reason() -> String:
 	if edges.is_empty():
 		return "当前世界没有可调校的道路。"
@@ -1829,6 +1907,7 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 		nation.frontier_defense_sectors.clear()
 		nation.frontier_defense_topology = null
 	road_network_revision += 1
+	var region_analysis := rebuild_region_analysis()
 	return {
 		"ok": true,
 		"open_count": open_count,
@@ -1838,6 +1917,8 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 		),
 		"protected_count": protected_keys.size(),
 		"revision": road_network_revision,
+		"region_count": int(region_analysis["region_count"]),
+		"key_city_count": int(region_analysis["key_city_count"]),
 	}
 
 func _initial_owner_components(
@@ -4104,6 +4185,197 @@ func _rebuild_suzerainty_cohesion_cache() -> void:
 			else 1.0
 		)
 	_suzerainty_cohesion_revision = ownership_revision
+
+
+## 每日推进宗藩体系的低凝聚力连续计时。恢复到阈值即清零；连续满一年时，
+## 整个宗藩树同时解体。返回本日解体的原宗主根，按 id 升序。
+func advance_suzerainty_dissolution() -> Array[int]:
+	var active_roots := {}
+	for subject_value in suzerainty:
+		var subject_id := int(subject_value)
+		if subject_id < 0 or subject_id >= nations.size():
+			continue
+		var root := suzerainty_root(subject_id)
+		if root >= 0 and root < nations.size() and nations[root].alive:
+			active_roots[root] = true
+	for tracked_value in suzerainty_low_cohesion_since_day.keys():
+		var tracked_root := int(tracked_value)
+		if not active_roots.has(tracked_root):
+			suzerainty_low_cohesion_since_day.erase(tracked_root)
+	var roots: Array[int] = []
+	roots.assign(active_roots.keys())
+	roots.sort()
+	var dissolved: Array[int] = []
+	for root in roots:
+		if suzerainty_cohesion(root) >= VASSAL_PRIVATE_WAR_COHESION_THRESHOLD:
+			suzerainty_low_cohesion_since_day.erase(root)
+			continue
+		if not suzerainty_low_cohesion_since_day.has(root):
+			suzerainty_low_cohesion_since_day[root] = day
+			continue
+		if (
+			day - int(suzerainty_low_cohesion_since_day[root])
+			< VASSAL_SYSTEM_DISSOLUTION_DAYS
+		):
+			continue
+		if _dissolve_suzerainty_system(root):
+			dissolved.append(root)
+			suzerainty_low_cohesion_since_day.erase(root)
+	return dissolved
+
+
+func suzerainty_dissolution_days_remaining(nation_id: int) -> int:
+	if nation_id < 0 or nation_id >= nations.size():
+		return -1
+	var root := suzerainty_root(nation_id)
+	if not suzerainty_low_cohesion_since_day.has(root):
+		return -1
+	return maxi(
+		VASSAL_SYSTEM_DISSOLUTION_DAYS
+			- (day - int(suzerainty_low_cohesion_since_day[root])),
+		0
+	)
+
+
+## 把同一宗藩根下的全部层级同时升格为独立国家，并把全体原成员组成
+## 两两结盟的大联盟。内部战争按解体时的实际控制确认领土后结束；共享粮仓
+## 按各成员粮产拆分。
+func _dissolve_suzerainty_system(root_id: int) -> bool:
+	if (
+		root_id < 0
+		or root_id >= nations.size()
+		or suzerainty_root(root_id) != root_id
+	):
+		return false
+	var members := suzerainty_members(root_id)
+	if members.size() <= 1:
+		return false
+	var member_set := {}
+	for member_id in members:
+		member_set[member_id] = true
+	var food_members_by_holder := {}
+	for member_id in members:
+		if not nations[member_id].alive:
+			continue
+		var holder_id := food_pool_holder(member_id)
+		if not food_members_by_holder.has(holder_id):
+			food_members_by_holder[holder_id] = [] as Array[int]
+		(food_members_by_holder[holder_id] as Array[int]).append(member_id)
+	var food_split_plans: Array[Dictionary] = []
+	var holder_ids: Array[int] = []
+	holder_ids.assign(food_members_by_holder.keys())
+	holder_ids.sort()
+	for holder_id in holder_ids:
+		var pool_members: Array[int] = food_members_by_holder[holder_id]
+		pool_members.sort()
+		var output_by_member := {}
+		var total_output := 0
+		for member_id in pool_members:
+			var member_output := 0
+			for city in land_cities_of(member_id):
+				member_output += city.food_per_half_year
+			output_by_member[member_id] = member_output
+			total_output += member_output
+		food_split_plans.append({
+			"holder_id": holder_id,
+			"members": pool_members,
+			"stock": _food_pool_stock(holder_id),
+			"total_output": total_output,
+			"output_by_member": output_by_member,
+		})
+	var proposed := suzerainty.duplicate(true)
+	for subject_value in suzerainty:
+		var subject_id := int(subject_value)
+		if member_set.has(subject_id):
+			proposed.erase(subject_id)
+	var territory_operations: Array[Dictionary] = []
+	for city in cities:
+		var legal_owner := recognized_owner_of(city.id)
+		if (
+			city.owner_nation == legal_owner
+			or not member_set.has(city.owner_nation)
+			or not member_set.has(legal_owner)
+			or not member_set.has(city.occupation_sponsor_nation)
+		):
+			continue
+		territory_operations.append({
+			"city_id": city.id,
+			"controller_id": city.owner_nation,
+			"legal_owner_id": city.owner_nation,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"reason": "suzerainty_dissolution_occupation_recognized",
+			"stock_policy": TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+		})
+	var diplomacy_operations: Array[Dictionary] = []
+	for first_index in range(members.size()):
+		for second_index in range(first_index + 1, members.size()):
+			var nation_a := members[first_index]
+			var nation_b := members[second_index]
+			diplomacy_operations.append({
+				"nation_a": nation_a,
+				"nation_b": nation_b,
+				"relation": DiplomaticRelation.ALLIED,
+				"truce_days": 0,
+			})
+	var result := apply_territory_transaction(
+		territory_operations,
+		{},
+		-1,
+		proposed,
+		diplomacy_operations
+	)
+	if not bool(result.get("ok", false)) or not bool(result.get("changed", false)):
+		return false
+	for split_plan in food_split_plans:
+		var holder_id := int(split_plan["holder_id"])
+		var stock := int(split_plan["stock"])
+		var total_output := int(split_plan["total_output"])
+		var output_by_member: Dictionary = split_plan["output_by_member"]
+		for member_value in split_plan["members"]:
+			var member_id := int(member_value)
+			if member_id == holder_id:
+				continue
+			var share := _proportional_share(
+				stock, int(output_by_member.get(member_id, 0)), total_output
+			)
+			var capital_id := nations[member_id].capital_city_id
+			if (
+				share <= 0
+				or capital_id < 0
+				or capital_id >= cities.size()
+				or not cities[capital_id].has_warehouse
+			):
+				continue
+			var withdrawn := _withdraw_food_from_warehouses(
+				nations[holder_id], share
+			)
+			cities[capital_id].food_storage += withdrawn
+	for objective_key in war_objectives.keys():
+		var objective: Dictionary = war_objectives[objective_key]
+		if (
+			member_set.has(int(objective.get("attacker", -1)))
+			and member_set.has(int(objective.get("defender", -1)))
+		):
+			war_objectives.erase(objective_key)
+	for member_id in members:
+		var nation := nations[member_id]
+		if member_set.has(nation.war_preparation_target_nation):
+			nation.war_preparation_target_nation = -1
+			nation.war_preparation_objective_city = -1
+			nation.war_preparation_started_day = -1
+			nation.war_preparation_reason = ""
+			nation.war_preparation_unready_since_day = -1
+		nation.war_preparation_scope = WarScope.COALITION
+	refresh_derived()
+	diplomatic_history.append({
+		"day": day,
+		"kind": "suzerainty_dissolved",
+		"root_nation": root_id,
+		"member_nations": members.duplicate(),
+		"alliance_formed": true,
+	})
+	return true
 
 
 ## 无城控制者的对外领土接收回退。正常占领优先保留实际控制者；仅当控制者已

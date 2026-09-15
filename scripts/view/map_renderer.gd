@@ -74,6 +74,9 @@ const TRADE_FLOW_SPEED_PX: float = 34.0
 const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
 const LOYALTY_MID_COLOR := Color(0.92, 0.68, 0.12, 1.0)
 const LOYALTY_HIGH_COLOR := Color(0.12, 0.58, 0.24, 1.0)
+const REGION_SCORE_COLOR := Color(0.78, 0.08, 0.06, 0.62)
+const REGION_SCORE_MIN_RADIUS_PX: float = 3.0
+const REGION_SCORE_MAX_RADIUS_PX: float = 18.0
 const DIPLOMACY_ENEMY_COLOR := Color(0.72, 0.08, 0.06, 1.0)
 const DIPLOMACY_ALLY_COLOR := Color(0.10, 0.56, 0.20, 1.0)
 const DIPLOMACY_VASSAL_COLOR := Color(0.42, 0.42, 0.42, 1.0)
@@ -109,6 +112,7 @@ enum MapMode {
 	POLITICAL,
 	LOYALTY,
 	TRADE,
+	REGION,
 }
 
 enum NationSort {
@@ -121,6 +125,7 @@ enum NationSort {
 const MAP_MODE_POLITICAL: int = MapMode.POLITICAL
 const MAP_MODE_LOYALTY: int = MapMode.LOYALTY
 const MAP_MODE_TRADE: int = MapMode.TRADE
+const MAP_MODE_REGION: int = MapMode.REGION
 const NATION_SORT_CITY_COUNT: int = NationSort.CITY_COUNT
 const NATION_SORT_TREASURY: int = NationSort.TREASURY
 const NATION_SORT_ARMY_COUNT: int = NationSort.ARMY_COUNT
@@ -146,6 +151,7 @@ var _political_texture: ImageTexture
 var _loyalty_texture: ImageTexture
 var _country_fill_opacity_image: Image
 var _country_fill_opacity_ownership_revision: int = -1
+var _country_fill_opacity_mode: int = -1
 var _political_fill_signature := PackedInt64Array()
 var _loyalty_fill_signature := PackedInt64Array()
 var _map_mode: int = MapMode.POLITICAL
@@ -158,6 +164,7 @@ var _province_topology_ids := PackedInt32Array()
 var _province_cache_ready: bool = false
 var _province_ownership_revision: int = -1
 var _province_diplomacy_revision: int = -1
+var _province_region_analysis_revision: int = -1
 var _blink: float = 0.0                    ## 饥饿闪烁计时
 var _redraw_elapsed: float = 0.0
 var _last_viewport_size: Vector2 = Vector2.ZERO
@@ -249,6 +256,7 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_loyalty_texture = null
 	_country_fill_opacity_image = null
 	_country_fill_opacity_ownership_revision = -1
+	_country_fill_opacity_mode = -1
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
 	_province_visual_mode = -1
@@ -259,6 +267,7 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_province_cache_ready = false
 	_province_ownership_revision = -1
 	_province_diplomacy_revision = -1
+	_province_region_analysis_revision = -1
 	_selected_city_id = -1
 	_selected_edge_a = -1
 	_selected_edge_b = -1
@@ -661,7 +670,7 @@ func nation_names_visible() -> bool:
 
 
 func set_map_mode(mode: int) -> void:
-	var normalized := clampi(mode, MapMode.POLITICAL, MapMode.TRADE)
+	var normalized := clampi(mode, MapMode.POLITICAL, MapMode.REGION)
 	if normalized == _map_mode:
 		return
 	_map_mode = normalized
@@ -692,7 +701,7 @@ func set_display_state(
 	_history_preview_active = fast_preview
 	if map_mode_override >= 0:
 		_map_mode = clampi(
-			map_mode_override, MapMode.POLITICAL, MapMode.TRADE
+			map_mode_override, MapMode.POLITICAL, MapMode.REGION
 		)
 	_selected_city_id = -1
 	_selected_edge_a = -1
@@ -703,11 +712,13 @@ func set_display_state(
 	_political_texture = null
 	_loyalty_texture = null
 	_country_fill_opacity_image = null
+	_country_fill_opacity_mode = -1
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
 	_province_visual_mode = -1
 	_province_ownership_revision = -1
 	_province_diplomacy_revision = -1
+	_province_region_analysis_revision = -1
 	_province_visual_view_nation_id = -2
 	_nation_list_cache_day = -1
 	_nation_list_cache_ownership_revision = -1
@@ -2015,6 +2026,12 @@ func _ensure_province_visual_cache() -> void:
 	var ownership_changed := (
 		_province_ownership_revision != state.ownership_revision
 	)
+	var region_mode := _map_mode == MapMode.REGION
+	var region_changed := (
+		region_mode
+		and _province_region_analysis_revision
+			!= state.region_analysis_revision
+	)
 	var loyalty_signature := (
 		loyalty_fill_signature(state)
 		if _map_mode == MapMode.LOYALTY
@@ -2030,6 +2047,7 @@ func _ensure_province_visual_cache() -> void:
 	var visual_revision_changed := (
 		_province_texture == null
 		or ownership_changed
+		or region_changed
 		or _province_diplomacy_revision != state.diplomacy_revision
 		or _province_visual_mode != _map_mode
 		or (
@@ -2050,14 +2068,18 @@ func _ensure_province_visual_cache() -> void:
 		_province_topology_ids = state.province_ids.duplicate()
 		_province_cache_ready = true
 	var geometry := classify_province_boundary_topology(
-		state, _boundary_topology
+		state,
+		_boundary_topology,
+		state.region_ids if region_mode else PackedInt32Array()
 	)
 	_classified_boundary_geometry = geometry
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
-	var fill_signature := political_fill_signature(
-		state, _diplomatic_view_nation_id
+	var fill_signature := (
+		region_fill_signature(state)
+		if region_mode
+		else political_fill_signature(state, _diplomatic_view_nation_id)
 	)
 	var fill_changed := (
 		topology_changed
@@ -2068,13 +2090,28 @@ func _ensure_province_visual_cache() -> void:
 		if (
 			topology_changed
 			or _country_fill_opacity_image == null
+			or _country_fill_opacity_mode != _map_mode
 			or _country_fill_opacity_ownership_revision
 				!= state.ownership_revision
+			or region_changed
 		):
-			_country_fill_opacity_image = build_country_fill_opacity_image(state)
+			_country_fill_opacity_image = (
+				build_country_fill_opacity_image_from_owners(
+					state.province_map_size,
+					state.province_ids,
+					state.region_ids
+				)
+				if region_mode
+				else build_country_fill_opacity_image(state)
+			)
 			_country_fill_opacity_ownership_revision = state.ownership_revision
-		var fill_source := build_province_overlay_image(
-			state, _diplomatic_view_nation_id
+			_country_fill_opacity_mode = _map_mode
+		var fill_source := (
+			build_region_overlay_image(state)
+			if region_mode
+			else build_province_overlay_image(
+				state, _diplomatic_view_nation_id
+			)
 		)
 		var canvas := build_political_canvas_images(
 			state, geometry, false, fill_source, true,
@@ -2106,6 +2143,7 @@ func _ensure_province_visual_cache() -> void:
 		_loyalty_fill_signature = loyalty_signature
 	_province_ownership_revision = state.ownership_revision
 	_province_diplomacy_revision = state.diplomacy_revision
+	_province_region_analysis_revision = state.region_analysis_revision
 	_province_visual_mode = _map_mode
 	_province_visual_view_nation_id = _diplomatic_view_nation_id
 	_province_loyalty_day = state.day
@@ -2216,6 +2254,55 @@ static func build_province_overlay_image(
 				color = occupation_colors[province_id]
 			image.set_pixel(x, y, color)
 	return image
+
+
+static func build_region_overlay_image(game_state: GameState) -> Image:
+	var size := game_state.province_map_size
+	var image := Image.create(
+		maxi(size.x, 1), maxi(size.y, 1), false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color.TRANSPARENT)
+	if game_state.region_ids.size() != game_state.cities.size():
+		return image
+	for y in range(size.y):
+		for x in range(size.x):
+			var province_id := game_state.province_ids[y * size.x + x]
+			if province_id < 0 or province_id >= game_state.region_ids.size():
+				continue
+			var region_id := game_state.region_ids[province_id]
+			if region_id < 0 or region_id >= game_state.region_colors.size():
+				continue
+			image.set_pixel(x, y, game_state.region_colors[region_id])
+	return image
+
+
+static func region_fill_signature(game_state: GameState) -> PackedInt64Array:
+	var signature := PackedInt64Array()
+	signature.resize(game_state.region_ids.size() + 1)
+	signature[0] = game_state.region_analysis_revision
+	for city_id in range(game_state.region_ids.size()):
+		signature[city_id + 1] = game_state.region_ids[city_id]
+	return signature
+
+
+static func region_boundary_colors(game_state: GameState) -> PackedColorArray:
+	var colors := game_state.region_colors.duplicate()
+	for region_id in range(colors.size()):
+		colors[region_id] = colors[region_id].darkened(0.24)
+		colors[region_id].a = 1.0
+	return colors
+
+
+static func region_score_radius(
+	score: float,
+	max_score: float,
+	minimum_radius: float,
+	maximum_radius: float
+) -> float:
+	if score <= 0.0 or max_score <= 0.0:
+		return 0.0
+	var normalized := sqrt(clampf(score / max_score, 0.0, 1.0))
+	return lerpf(minimum_radius, maximum_radius, normalized)
 
 
 static func loyalty_color(value: float) -> Color:
@@ -3276,7 +3363,8 @@ static func build_province_boundary_topology(
 ## or war: its two visible sides receive their respective national colors later.
 static func classify_province_boundary_topology(
 	game_state: GameState,
-	topology: Dictionary
+	topology: Dictionary,
+	group_ids: PackedInt32Array = PackedInt32Array()
 ) -> Dictionary:
 	var province: PackedVector2Array = topology.get(
 		"province", PackedVector2Array()
@@ -3313,15 +3401,34 @@ static func classify_province_boundary_topology(
 		var city_b := province_b[edge_index]
 		var from := province[edge_index * 2]
 		var to := province[edge_index * 2 + 1]
-		if not _province_owners_differ(game_state, city_a, city_b):
+		var grouped := (
+			group_ids.size() == game_state.cities.size()
+			and city_a >= 0
+			and city_b >= 0
+			and city_a < group_ids.size()
+			and city_b < group_ids.size()
+		)
+		var group_a := (
+			group_ids[city_a]
+			if grouped
+			else game_state.cities[city_a].owner_nation
+		)
+		var group_b := (
+			group_ids[city_b]
+			if grouped
+			else game_state.cities[city_b].owner_nation
+		)
+		if group_a == group_b:
 			_append_segment(local, from, to)
 		else:
 			_append_segment(country, from, to)
-			country_owner_a.append(game_state.cities[city_a].owner_nation)
-			country_owner_b.append(game_state.cities[city_b].owner_nation)
+			country_owner_a.append(group_a)
+			country_owner_b.append(group_b)
 			country_side_a.append(province_side_a[edge_index])
 			country_side_b.append(province_side_b[edge_index])
-			if _province_owners_same_peaceful_suzerainty(
+			if grouped:
+				_append_segment(nation, from, to)
+			elif _province_owners_same_peaceful_suzerainty(
 				game_state, city_a, city_b
 			):
 				_append_segment(suzerainty, from, to)
@@ -3336,10 +3443,14 @@ static func classify_province_boundary_topology(
 		"coast_province", PackedInt32Array()
 	)
 	for coast_city in coast_province:
-		coast_owner.append(
-			game_state.cities[coast_city].owner_nation
-			if coast_city >= 0 and coast_city < game_state.cities.size() else -1
-		)
+		var coast_group := -1
+		if coast_city >= 0 and coast_city < game_state.cities.size():
+			coast_group = (
+				group_ids[coast_city]
+				if group_ids.size() == game_state.cities.size()
+				else game_state.cities[coast_city].owner_nation
+			)
+		coast_owner.append(coast_group)
 	return {
 		"province": province,
 		"local": local,
@@ -4114,6 +4225,8 @@ static func effective_map_mode_strength(
 		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
 	if mode == MapMode.TRADE:
 		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH) * 0.58
+	if mode == MapMode.REGION:
+		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
 	return configured
 
 
@@ -4175,6 +4288,13 @@ func _draw_owned_boundary_sides_2d(
 		var color := nation_boundary_color(
 			state, owners[index], _diplomatic_view_nation_id
 		)
+		if _map_mode == MapMode.REGION:
+			color = (
+				state.region_colors[owners[index]].darkened(0.24)
+				if owners[index] >= 0
+					and owners[index] < state.region_colors.size()
+				else Color.TRANSPARENT
+			)
 		draw_line(
 			from + offset, to + offset,
 			color,
@@ -4563,12 +4683,37 @@ func _draw_cities() -> void:
 	if _city_label_cache_naming_revision != state.naming_revision:
 		_city_label_cache.clear()
 		_city_label_cache_naming_revision = state.naming_revision
+	var max_betweenness := 0.0
+	if _map_mode == MapMode.REGION:
+		for score in state.node_betweenness:
+			max_betweenness = maxf(max_betweenness, float(score))
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
+		if (
+			_map_mode == MapMode.REGION
+			and city.id >= 0
+			and city.id < state.node_betweenness.size()
+		):
+			var score_radius := region_score_radius(
+				state.node_betweenness[city.id],
+				max_betweenness,
+				REGION_SCORE_MIN_RADIUS_PX * _display_scale,
+				REGION_SCORE_MAX_RADIUS_PX * _display_scale
+			)
+			if score_radius > 0.0:
+				draw_circle(center, score_radius, REGION_SCORE_COLOR)
+		var region_id := (
+			state.region_ids[city.id]
+			if city.id >= 0 and city.id < state.region_ids.size()
+			else -1
+		)
 		var base := (
 			loyalty_color(city.loyalty)
 			if _map_mode == MapMode.LOYALTY
+			else state.region_colors[region_id]
+			if _map_mode == MapMode.REGION
+				and region_id >= 0 and region_id < state.region_colors.size()
 			else final_faction_visual_color(
 				state, city.owner_nation,
 				0.30 if contested_cities.has(city.id) else 0.0,
@@ -6403,7 +6548,7 @@ static func _city_detail_line_count(
 		3 if game_state.cities[city_id].rebellion_progress > 0 else 2
 	)
 	return _section_layout_line_count(PackedInt32Array([
-		2, 2, 2, governance_lines,
+		3, 2, 7, governance_lines,
 	]))
 
 
@@ -6512,6 +6657,19 @@ static func city_detail_sections(
 			garrison_count += 1
 			garrison_troops += army.size
 	var contested := contested_city_ids(game_state).has(city_id)
+	var output := Simulation.city_output_breakdown(
+		game_state, city, garrison_troops
+	)
+	var region_id := (
+		int(game_state.region_ids[city_id])
+		if city_id < game_state.region_ids.size()
+		else -1
+	)
+	var betweenness := (
+		float(game_state.node_betweenness[city_id])
+		if city_id < game_state.node_betweenness.size()
+		else 0.0
+	)
 	var recovery_days := 0
 	if city.fort_last_capture_day >= 0:
 		recovery_days = maxi(
@@ -6590,6 +6748,10 @@ static func city_detail_sections(
 			"控制：%s    法理：%s" % [
 				controller_name, legal_owner_name,
 			],
+			"区域：%s    交通中心分 %.3f" % [
+				str(region_id) if region_id >= 0 else "未划分",
+				betweenness,
+			],
 		]},
 		{"title": "军事", "lines": [
 			fort_line,
@@ -6598,17 +6760,41 @@ static func city_detail_sections(
 			],
 		]},
 		{"title": "经济", "lines": [
-			"月产：人力 %+d    金钱 %+d    粮食 %+d/半年" % [
-				Simulation.city_manpower_output(game_state, city),
-				Simulation.city_gold_output(game_state, city),
-				Simulation.city_food_output(
-					game_state, city, {city_id: garrison_troops}
-				),
+			"实际：金 %+d/月    人 %+d/月    粮 %+d/半年" % [
+				int(output["gold_output"]),
+				int(output["manpower_output"]),
+				int(output["food_output"]),
 			],
-			"库存：%d    商路：%d    贸易金：%+d/月" % [
-				city.food_storage,
-				city.trade_route_count,
-				city.trade_gold_bonus,
+			"基础产值：金 %d    人 %d    粮 %d" % [
+				int(output["base_gold"]),
+				int(output["base_manpower"]),
+				int(output["base_food"]),
+			],
+			"地形与发展：海拔×%.2f    金×%.2f    粮×%.2f（已计入基础）" % [
+				float(output["terrain_multiplier"]),
+				float(output["development_gold_multiplier"]),
+				float(output["development_food_multiplier"]),
+			],
+			"首都发展：%d 年    金 %+d/月" % [
+				int(output["capital_years"]),
+				int(output["capital_gold_bonus"]),
+			],
+			"治理与君主：治理×%.2f    金×%.2f 粮×%.2f 人×%.2f" % [
+				float(output["governance_multiplier"]),
+				float(output["ruler_gold_multiplier"]),
+				float(output["ruler_food_multiplier"]),
+				float(output["ruler_manpower_multiplier"]),
+			],
+			"战乱与驻军：战乱×%.2f    %d 人    粮×%.2f" % [
+				float(output["war_multiplier"]),
+				int(output["garrison_troops"]),
+				float(output["garrison_food_multiplier"]),
+			],
+			"贸易：%d 条    金 %+d/月    粮 %+d/月    库存 %d" % [
+				int(output["trade_routes"]),
+				int(output["trade_gold"]),
+				int(output["trade_food_balance"]),
+				int(output["food_storage"]),
 			],
 		]},
 		{"title": "治理", "lines": governance_lines},
@@ -6748,6 +6934,11 @@ static func nation_detail_sections(
 				< GameState.VASSAL_PRIVATE_WAR_COHESION_THRESHOLD
 			else "    私战受约束"
 		)
+	var dissolution_days := (
+		game_state.suzerainty_dissolution_days_remaining(nation_id)
+	)
+	if dissolution_days >= 0:
+		suzerainty_status += "    体系解体倒计时 %d天" % dissolution_days
 	if private_war_count > 0:
 		suzerainty_status += "    私人战争 %d" % private_war_count
 	var diplomacy_lines: Array[String] = []

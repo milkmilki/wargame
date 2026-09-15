@@ -55,7 +55,8 @@ static func build_id_image(
 static func build_visual_lut(
 	game_state: GameState,
 	view_nation_id: int = -1,
-	loyalty_mode: bool = false
+	loyalty_mode: bool = false,
+	region_mode: bool = false
 ) -> Image:
 	var city_count := game_state.cities.size() if game_state != null else 0
 	var image := Image.create(maxi(city_count, 1), LUT_ROWS, false, Image.FORMAT_RGBA8)
@@ -70,6 +71,17 @@ static func build_visual_lut(
 			image.set_pixel(
 				city_id, BASE_ROW, MapRenderer.loyalty_color(city.loyalty)
 			)
+			continue
+		if region_mode:
+			var region_id := (
+				game_state.region_ids[city_id]
+				if city_id < game_state.region_ids.size()
+				else -1
+			)
+			if region_id >= 0 and region_id < game_state.region_colors.size():
+				image.set_pixel(
+					city_id, BASE_ROW, game_state.region_colors[region_id]
+				)
 			continue
 		var current_owner := city.owner_nation
 		var recognized_owner := game_state.recognized_owner_of(city_id)

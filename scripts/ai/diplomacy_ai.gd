@@ -54,6 +54,9 @@ const RECENT_RECLAMATION_OBJECTIVE_BONUS: float = 20.0
 ## 守军最少的接壤城，填补“攻势找不到目标”的空档。值域约 [0, 此上限]，故意小于
 ## 资源/战略权重，只在其他信号平手时决胜，不喧宾夺主推翻高价值目标。
 const WEAK_GARRISON_OBJECTIVE_BONUS: float = 0.90
+## 区域统一偏好：已有立足点的区域才加分，且随已控制比例平方增长。
+## 最高值与首都、资源核心等战略项同阶，形成强倾向但不作为硬门槛。
+const REGION_UNIFICATION_OBJECTIVE_BONUS: float = 6.0
 const LEAVE_ALLIANCE_SCORE: float = 0.90
 const ATTITUDE_PEACE_WEIGHT: float = 0.25
 const ATTITUDE_ALLIANCE_WEIGHT: float = 0.35
@@ -3599,6 +3602,14 @@ static func select_war_objective(
 			1.0 - float(defender_troops)
 				/ float(max_reachable_garrison)
 		) * WEAK_GARRISON_OBJECTIVE_BONUS
+		var region_unification_value := region_unification_objective_bonus(
+			state, nation_id, city.id, evaluation_cache
+		)
+		var node_betweenness_value := (
+			StrategicMapSnapshot.node_betweenness_city_value(
+				state, city.id
+			)
+		)
 		var value := (
 			gold_value
 			+ food_value
@@ -3606,6 +3617,8 @@ static func select_war_objective(
 			+ strategic_value
 			+ contest_value
 			+ weak_garrison_value
+			+ region_unification_value
+			+ node_betweenness_value
 		)
 		if (
 			best.is_empty()
@@ -3624,7 +3637,7 @@ static func select_war_objective(
 				"city_id": city.id,
 				"value": value,
 				"reason": (
-					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、包围值%.2f、争夺值%.2f、守军%d空虚值%.2f）"
+					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、包围值%.2f、争夺值%.2f、守军%d空虚值%.2f、区域统一值%.2f、交通中心值%.2f）"
 					% [
 						city.id,
 						(
@@ -3649,10 +3662,62 @@ static func select_war_objective(
 						contest_value,
 						defender_troops,
 						weak_garrison_value,
+						region_unification_value,
+						node_betweenness_value,
 					]
 				),
 			}
 	return best
+
+
+static func region_unification_objective_bonus(
+	state: GameState,
+	nation_id: int,
+	city_id: int,
+	evaluation_cache: Dictionary = {}
+) -> float:
+	if (
+		state == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+		or city_id < 0
+		or city_id >= state.cities.size()
+		or state.region_ids.size() != state.cities.size()
+	):
+		return 0.0
+	var target_region := state.region_ids[city_id]
+	if target_region < 0:
+		return 0.0
+	var cache_key := "region_control:%d:%d:%d" % [
+		nation_id,
+		state.ownership_revision,
+		state.region_analysis_revision,
+	]
+	var counts_by_region: Dictionary = evaluation_cache.get(cache_key, {})
+	if counts_by_region.is_empty():
+		for city in state.cities:
+			if not city.politically_active:
+				continue
+			var region_id := state.region_ids[city.id]
+			if region_id < 0:
+				continue
+			var counts := Vector2i(
+				counts_by_region.get(region_id, Vector2i.ZERO)
+			)
+			counts.y += 1
+			if city.owner_nation == nation_id:
+				counts.x += 1
+			counts_by_region[region_id] = counts
+		evaluation_cache[cache_key] = counts_by_region
+	var target_counts := Vector2i(
+		counts_by_region.get(target_region, Vector2i.ZERO)
+	)
+	if target_counts.x <= 0 or target_counts.y <= 0:
+		return 0.0
+	var controlled_share := clampf(
+		float(target_counts.x) / float(target_counts.y), 0.0, 1.0
+	)
+	return REGION_UNIFICATION_OBJECTIVE_BONUS * controlled_share * controlled_share
 
 
 ## 原目标被占、易手或道路封闭时，直接在同一敌国可达城市里选择守军最少者。

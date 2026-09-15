@@ -153,7 +153,7 @@ func _run() -> void:
 	city.loyalty_target_nation = (city.owner_nation + 1) % state.nations.size()
 	var edited_edge: Edge = null
 	for edge in state.edges:
-		if edge.kind == Edge.Kind.LAND:
+		if edge.kind == Edge.Kind.LAND and edge.max_manpower > 0:
 			edited_edge = edge
 			break
 	if edited_edge == null:
@@ -161,6 +161,17 @@ func _run() -> void:
 		return
 	var edge_a := edited_edge.city_a
 	var edge_b := edited_edge.city_b
+	var region_revision_before_edge_edit := state.region_analysis_revision
+	var close_edge_result := state.apply_edge_editor_changes(edge_a, edge_b, {
+		"max_manpower": 0,
+	})
+	if (
+		not bool(close_edge_result.get("ok", false))
+		or state.region_analysis_revision
+			!= region_revision_before_edge_edit + 1
+	):
+		_fail("closing an edited land edge did not refresh region analysis")
+		return
 	var edge_result := state.apply_edge_editor_changes(edge_a, edge_b, {
 		"max_manpower": 10000,
 		"distance": 9,
@@ -171,6 +182,9 @@ func _run() -> void:
 	})
 	if not bool(edge_result.get("ok", false)):
 		_fail("edge edit was rejected")
+		return
+	if state.region_analysis_revision != region_revision_before_edge_edit + 2:
+		_fail("reopening an edited land edge did not refresh region analysis")
 		return
 
 	var file_name := "map_editor_runtime_roundtrip.json"

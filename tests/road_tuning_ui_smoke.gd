@@ -77,6 +77,7 @@ func _run() -> void:
 		RoadTuningPanel.MAP_MODE_POLITICAL: MapRenderer.MAP_MODE_POLITICAL,
 		RoadTuningPanel.MAP_MODE_LOYALTY: MapRenderer.MAP_MODE_LOYALTY,
 		RoadTuningPanel.MAP_MODE_TRADE: MapRenderer.MAP_MODE_TRADE,
+		RoadTuningPanel.MAP_MODE_REGION: MapRenderer.MAP_MODE_REGION,
 	}
 	if (
 		panel._map_mode_buttons.size() != expected_modes.size()
@@ -139,6 +140,7 @@ func _run() -> void:
 		[RoadTuningPanel.MAP_MODE_POLITICAL, 0.93, MapRenderer.MAP_MODE_POLITICAL],
 		[RoadTuningPanel.MAP_MODE_LOYALTY, 0.93, MapRenderer.MAP_MODE_LOYALTY],
 		[RoadTuningPanel.MAP_MODE_TRADE, 0.93, MapRenderer.MAP_MODE_TRADE],
+		[RoadTuningPanel.MAP_MODE_REGION, 0.93, MapRenderer.MAP_MODE_REGION],
 	]:
 		var mode_id := str(mode_case[0])
 		var expected_strength := float(mode_case[1])

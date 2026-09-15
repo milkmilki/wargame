@@ -723,6 +723,44 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
 	state.prune_dead_suzerainty()
+	var dissolution_members_by_root := {}
+	var internal_preparation_members := {}
+	for tracked_value in state.suzerainty_low_cohesion_since_day:
+		var tracked_root := int(tracked_value)
+		if state.suzerainty_dissolution_days_remaining(tracked_root) != 0:
+			continue
+		dissolution_members_by_root[tracked_root] = (
+			state.suzerainty_members(tracked_root)
+		)
+	for members_value in dissolution_members_by_root.values():
+		var member_ids: Array[int] = members_value
+		var member_set := {}
+		for member_id in member_ids:
+			member_set[member_id] = true
+		for member_id in member_ids:
+			if member_set.has(
+				state.nations[member_id].war_preparation_target_nation
+			):
+				internal_preparation_members[member_id] = true
+	var dissolved_suzerainty_roots := (
+		state.advance_suzerainty_dissolution()
+	)
+	if not dissolved_suzerainty_roots.is_empty():
+		for dissolved_root in dissolved_suzerainty_roots:
+			var dissolved_members: Array[int] = (
+				dissolution_members_by_root.get(
+					dissolved_root, [] as Array[int]
+				)
+			)
+			_reconcile_battles_after_coalition_peace(
+				dissolved_members, dissolved_members
+			)
+			for member_id in dissolved_members:
+				if internal_preparation_members.has(member_id):
+					_clear_war_preparation(member_id)
+				_clear_finished_war_mobilization(member_id)
+		_ai_last_decision_day = -1
+		_synchronize_war_gold_income_snapshots()
 	state.prune_rebellions()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"cleanup_suzerainty", cleanup_part_started)
@@ -2212,6 +2250,84 @@ static func city_manpower_output(
 		game_state, city, maxi(city.manpower_per_month, 0),
 		RulerProfile.KEY_MANPOWER_OUTPUT, ruler_modifiers
 	)
+
+
+## 城市详情使用的只读结算明细。最终值仍调用正式产量函数，界面无需复制 floor
+## 顺序；地形与发展倍率标记为已烘焙因素，不会对当前基础产值重复相乘。
+static func city_output_breakdown(
+	game_state: GameState,
+	city: City,
+	garrison_troops: int = -1,
+	ruler_modifiers: Dictionary = {}
+) -> Dictionary:
+	if game_state == null or city == null:
+		return {}
+	var resolved_garrison := (
+		city_garrison_troops(game_state, city)
+		if garrison_troops < 0
+		else maxi(garrison_troops, 0)
+	)
+	var modifiers := (
+		ruler_modifiers
+		if not ruler_modifiers.is_empty()
+		else (
+			RulerProfile.modifiers(game_state.nations[city.owner_nation])
+			if (
+				city.owner_nation >= 0
+				and city.owner_nation < game_state.nations.size()
+			)
+			else {}
+		)
+	)
+	var adjusted_food := city_food_output_for_garrison(
+		city, resolved_garrison
+	)
+	var food_lookup := {city.id: resolved_garrison}
+	var capital_bonus := capital_development_gold_bonus(game_state, city)
+	return {
+		"base_gold": maxi(city.gold_per_month, 0),
+		"base_food": maxi(city.food_per_half_year, 0),
+		"base_manpower": maxi(city.manpower_per_month, 0),
+		"terrain_multiplier": city.terrain_output_multiplier,
+		"development_gold_multiplier": city.development_gold_multiplier,
+		"development_food_multiplier": city.development_food_multiplier,
+		"capital_years": capital_development_years(game_state, city),
+		"capital_gold_bonus": capital_bonus,
+		"governance_multiplier": city_governance_output_multiplier(
+			game_state, city
+		),
+		"ruler_gold_multiplier": float(modifiers.get(
+			RulerProfile.KEY_GOLD_OUTPUT, 1.0
+		)),
+		"ruler_food_multiplier": float(modifiers.get(
+			RulerProfile.KEY_FOOD_OUTPUT, 1.0
+		)),
+		"ruler_manpower_multiplier": float(modifiers.get(
+			RulerProfile.KEY_MANPOWER_OUTPUT, 1.0
+		)),
+		"war_multiplier": (
+			CITY_WAR_OUTPUT_MULTIPLIER
+			if city_war_disrupted(game_state, city)
+			else 1.0
+		),
+		"garrison_troops": resolved_garrison,
+		"garrison_food_multiplier": (
+			float(adjusted_food) / float(city.food_per_half_year)
+			if city.food_per_half_year > 0
+			else 1.0
+		),
+		"gold_output": city_gold_output(game_state, city, modifiers),
+		"food_output": city_food_output(
+			game_state, city, food_lookup, modifiers
+		),
+		"manpower_output": city_manpower_output(
+			game_state, city, modifiers
+		),
+		"trade_routes": city.trade_route_count,
+		"trade_gold": city.trade_gold_bonus,
+		"trade_food_balance": city.trade_food_balance,
+		"food_storage": city.food_storage,
+	}
 
 
 static func _apply_ruler_output_multiplier(
@@ -3785,9 +3901,10 @@ func _campaign_army_index(nation_id: int) -> Dictionary:
 const CAPITAL_CAPTURE_TRANSFER_HOPS: int = 2
 
 
-## 首都失陷后，以首都为中心沿可通行道路两跳内、仍由战败国实控的城市
-## 一并转为胜方实控与法理，然后战败国立即退出全部战争。范围转移使用
-## 单笔领土事务，避免逐城迁都、粮仓与存亡状态在半成品之间反复变化。
+## 首都失陷后，以首都为中心沿可通行道路两跳内、仍由战败国实控的城市，
+## 加上胜方此前已经实际占领的战败方法理城市，一并确认给胜方，然后立即
+## 结束战争。范围转移使用单笔领土事务，避免死亡藩王在和平确认占领之前
+## 被宗主继承，也避免逐城迁都、粮仓与存亡状态经过半成品。
 func _resolve_capital_capture_capitulation(
 	surrendering: int,
 	victor: int,
@@ -3810,6 +3927,18 @@ func _resolve_capital_capture_capitulation(
 	var transfer_ids := _capital_capture_transfer_city_ids(
 		surrendering, captured_capital_id
 	)
+	var transfer_set := {}
+	for city_id in transfer_ids:
+		transfer_set[city_id] = true
+	for occupied_city in state.cities:
+		if (
+			occupied_city.owner_nation == victor
+			and state.recognized_owner_of(occupied_city.id) == surrendering
+			and not transfer_set.has(occupied_city.id)
+		):
+			transfer_set[occupied_city.id] = true
+			transfer_ids.append(occupied_city.id)
+	transfer_ids.sort()
 	var operations: Array[Dictionary] = []
 	for city_id in transfer_ids:
 		operations.append({
@@ -15776,6 +15905,13 @@ func _capture_city(
 		and state.overlord_of(claimant) == old_owner
 		and state.is_in_civil_war(claimant)
 	)
+	var private_war_capital_capture := (
+		captured_capital
+		and state.is_vassal(old_owner)
+		and state.is_private_war(old_owner, army.owner_nation)
+	)
+	if private_war_capital_capture:
+		claimant = army.owner_nation
 	var occupation_sponsor := (
 		-1
 		if state.recognized_owner_of(city.id) == claimant
@@ -15803,7 +15939,13 @@ func _capture_city(
 			claimant, claimant_was_rebel_vassal
 		)
 		territory_changed = true
-	elif captured_capital and not state.is_vassal(old_owner):
+	elif (
+		captured_capital
+		and (
+			not state.is_vassal(old_owner)
+			or private_war_capital_capture
+		)
+	):
 		var capital_transfers := _resolve_capital_capture_capitulation(
 			old_owner, claimant, city.id
 		)
@@ -15885,7 +16027,7 @@ func _capture_city(
 		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。
 		if civil_war_capital_capture:
 			pass
-		# 普通主权国的两跳领土转移与投降已在上面的原子占领分支完成。
+		# 普通战争与藩王私战的两跳领土转移、投降已在上面的原子分支完成。
 		# 和平藩王不整国投降；原子领土事务已同步处理迁都、共享粮仓
 		# 与派生状态。若已经失去最后一城，日末再清理其宗藩记录。
 	if execute_post_capture_plan and captor_can_remain:
@@ -16107,6 +16249,15 @@ func _occupation_claimant_for_army(
 	army: Army,
 	target_city: City = null
 ) -> int:
+	# 私战没有联盟参战方；宗主只提供宗藩通行，不能因军队从其直辖道路
+	# 进入战场就截取战果。控制权始终归实际参战的军队所属藩王。
+	if (
+		target_city != null
+		and state.is_private_war(
+			army.owner_nation, target_city.owner_nation
+		)
+	):
+		return army.owner_nation
 	# 此函数只在真正破城后决定控制权接收者，与围城阶段的 CITY_DEFENDER/
 	# CHALLENGER 角色正交：战斗阵营按当前控制与军事通行权，控制权则优先归还
 	# 仍存活且与攻方结盟的法理所有者。

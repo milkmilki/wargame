@@ -24,6 +24,9 @@ const STRATEGIC_BORDER_PROXIMITY_WEIGHT: float = 0.60
 const STRATEGIC_CAPITAL_PROXIMITY_WEIGHT: float = 0.40
 const STRATEGIC_PROXIMITY_DECAY_HOPS: float = 2.0
 const STRATEGIC_PROXIMITY_MIN_FACTOR: float = 0.35
+## 长期驻防比一般城市价值使用更大的量纲，因此单独换算交通中心权重。
+## 它只提高同类驻防候选的排序，不把交通中心直接钉成 must_hold。
+const NODE_BETWEENNESS_STRUCTURAL_WEIGHT: float = 250.0
 ## 填线军盈余分配的基线权重：保证每个候选边疆城市（含无经济价值者）都能被覆盖，
 ## 且让静态结构权重成为主导排序项，杜绝随兵力/敌情逐日抖动导致的来回换城。
 const FILLER_SLOT_BASE_WEIGHT: float = 1.0
@@ -2265,9 +2268,27 @@ func _line_city_structural_priority(city_id: int) -> float:
 		+ (180.0 if city.is_dock else 0.0)
 		+ float(maxi(city.fort_strength_max, 0)) * 2.0
 	)
-	var structural := base_importance * _strategic_proximity_factor(city_id)
+	var structural := (
+		base_importance * _strategic_proximity_factor(city_id)
+		+ node_betweenness_structural_bonus(view.state, city_id)
+	)
 	_role_city_structural_cache[city_id] = structural
 	return structural
+
+
+static func node_betweenness_structural_bonus(
+	state: GameState,
+	city_id: int
+) -> float:
+	if (
+		state == null
+		or city_id < 0
+		or city_id >= state.node_betweenness.size()
+	):
+		return 0.0
+	return clampf(
+		float(state.node_betweenness[city_id]), 0.0, 1.0
+	) * NODE_BETWEENNESS_STRUCTURAL_WEIGHT
 
 
 ## 地理区位修正因子 ∈ [MIN_FACTOR, 1]：离国境越近、离首都越近，因子越大。
@@ -2602,7 +2623,7 @@ func _is_strategic_must_hold_city(city_id: int) -> bool:
 		or city.is_food_hub
 		or city.is_manpower_hub
 		or snapshot.critical_supply_cities.has(city_id)
-		or snapshot.value_of_city(city_id)
+		or snapshot.value_of_city_without_betweenness(city_id)
 			>= MUST_HOLD_CITY_VALUE_FLOOR
 	)
 
@@ -2687,7 +2708,7 @@ func _requires_frontier_screen(city_id: int) -> bool:
 		or city.is_food_hub
 		or city.is_manpower_hub
 		or snapshot.critical_supply_cities.has(city_id)
-		or snapshot.value_of_city(city_id)
+		or snapshot.value_of_city_without_betweenness(city_id)
 			>= STRATEGIC_CITY_VALUE_FLOOR
 	)
 

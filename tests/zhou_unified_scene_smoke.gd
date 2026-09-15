@@ -36,16 +36,18 @@ func _run() -> void:
 	var ok := (
 		int(scenario.nation_count) == 1
 		and str(scenario.initial_single_nation_name) == "周"
+		and int(scenario.initial_single_nation_ruler_archetype)
+			== RulerProfile.PUPPET
 		and state.nations.size() == 1
 		and state.land_cities().size() == GameState.TERRAIN_CITY_COUNT
 		and WorldNaming.nation_display_name(state, 0) == "周"
 		and state.nations[0].short_name == "周"
 		and state.nations[0].name_kind == WorldNaming.KIND_DYNASTY
+		and state.nations[0].ruler_archetype == RulerProfile.PUPPET
+		and state.nations[0].ruler_traits.is_empty()
 		and all_controlled
 		and all_recognized
 	)
-	state.nations[0].ruler_archetype = RulerProfile.PUPPET
-	state.nations[0].ruler_traits.clear()
 	var enfeoff_started := Time.get_ticks_msec()
 	while state.day < Simulation.DIPLOMACY_DECISION_INTERVAL_DAYS:
 		await scenario.simulation._advance_day(true)

@@ -9,6 +9,9 @@ func _init() -> void:
 
 
 func _run() -> void:
+	_test_private_war_capital_uses_normal_two_hop_cession()
+	_test_low_cohesion_year_dissolves_suzerainty()
+	_test_cohesion_recovery_resets_dissolution_timer()
 	var fixture := _fixture()
 	var state: GameState = fixture["state"]
 	var root := int(fixture["root"])
@@ -222,6 +225,239 @@ func _run() -> void:
 	)
 	simulation.free()
 	_finish()
+
+
+func _test_private_war_capital_uses_normal_two_hop_cession() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(95002)
+	state.armies.clear()
+	state.battles.clear()
+	var attacker := 0
+	var defender := 1
+	var root := 2
+	var outsider := 3
+	for city in state.cities:
+		city.owner_nation = outsider
+		city.is_capital = false
+		city.has_warehouse = false
+		city.food_storage = 0
+		state.recognized_city_owners[city.id] = outsider
+	for city_id in [1, 2, 3, 4]:
+		state.cities[city_id].owner_nation = defender
+		state.recognized_city_owners[city_id] = defender
+	state.cities[0].owner_nation = attacker
+	state.recognized_city_owners[0] = attacker
+	state.cities[63].owner_nation = root
+	state.recognized_city_owners[63] = root
+	for edge in state.edges:
+		edge.max_manpower = 0
+	for road in [[0, 1], [1, 2], [2, 3], [3, 4]]:
+		state.edge_of(int(road[0]), int(road[1])).max_manpower = (
+			Edge.STANDARD_MANPOWER
+		)
+	for nation in state.nations:
+		nation.warehouse_city_ids.clear()
+	state.nations[attacker].capital_city_id = 0
+	state.cities[0].is_capital = true
+	state.nations[defender].capital_city_id = 1
+	state.cities[1].is_capital = true
+	state.nations[root].capital_city_id = 63
+	state.cities[63].is_capital = true
+	state.cities[63].has_warehouse = true
+	state.nations[root].warehouse_city_ids.append(63)
+	state.suzerainty = {
+		attacker: {"overlord_id": root, "civil_war": false},
+		defender: {"overlord_id": root, "civil_war": false},
+	}
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	state.set_diplomatic_relation(root, attacker, GameState.DiplomaticRelation.ALLIED)
+	state.set_diplomatic_relation(root, defender, GameState.DiplomaticRelation.ALLIED)
+	state.set_diplomatic_relation(attacker, defender, GameState.DiplomaticRelation.WAR)
+	state.set_war_objective(
+		attacker,
+		defender,
+		1,
+		"私人战争首都两跳割地回归",
+		GameState.WarScope.VASSAL_PRIVATE
+	)
+	state.refresh_derived()
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	var expected_transfers := simulation._capital_capture_transfer_city_ids(
+		defender, 1
+	)
+	var retained_cities: Array[int] = []
+	for city_id in [1, 2, 3, 4]:
+		if not expected_transfers.has(city_id):
+			retained_cities.append(city_id)
+	_check(
+		expected_transfers.has(1) and not retained_cities.is_empty(),
+		"私人战争两跳回归夹具必须同时包含割让范围内外城市"
+	)
+	var root_city_count_before := state.land_cities_of(root).size()
+	var attacker_city_count_before := state.land_cities_of(attacker).size()
+	var army := Army.new()
+	army.id = 99001
+	army.owner_nation = attacker
+	army.size = 5000
+	army.max_size = 5000
+	# 从宗主城市进入战场，验证战果仍归实际参战藩王。
+	army.location_city = 63
+	army.move_from = 63
+	state.armies.append(army)
+	simulation._capture_city(army, state.cities[1])
+	var transferred_correctly := true
+	for city_id in expected_transfers:
+		transferred_correctly = (
+			transferred_correctly
+			and state.cities[city_id].owner_nation == attacker
+			and state.recognized_owner_of(city_id) == attacker
+		)
+	var retained_correctly := true
+	for city_id in retained_cities:
+		retained_correctly = (
+			retained_correctly
+			and state.cities[city_id].owner_nation == defender
+			and state.recognized_owner_of(city_id) == defender
+		)
+	_check(
+		transferred_correctly
+			and retained_correctly
+			and state.nations[defender].alive
+			and state.is_vassal(defender)
+			and state.land_cities_of(root).size() == root_city_count_before
+			and state.land_cities_of(attacker).size()
+				== attacker_city_count_before + expected_transfers.size(),
+		"藩王私战攻占首都必须复用普通战争两跳割地，范围外领土不得通吃或归宗主"
+	)
+	_check(
+		not state.is_enemy(attacker, defender)
+			and state.truce_until(attacker, defender) > state.day,
+		"藩王私战攻占首都后必须像普通战争一样立即投降停战"
+	)
+	simulation.free()
+
+
+func _test_low_cohesion_year_dissolves_suzerainty() -> void:
+	var fixture := _fixture()
+	var state: GameState = fixture["state"]
+	var root := int(fixture["root"])
+	var attacker := int(fixture["attacker"])
+	var defender := int(fixture["defender"])
+	var nested_subject := int(fixture["outsider"])
+	state.nations[attacker].name_kind = WorldNaming.KIND_VASSAL
+	state.nations[defender].name_kind = WorldNaming.KIND_VASSAL
+	state.nations[nested_subject].name_kind = WorldNaming.KIND_VASSAL
+	state.suzerainty[nested_subject] = {
+		"overlord_id": attacker,
+		"tribute_rate": 0.2,
+		"created_day": 0,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	state.set_diplomatic_relation(
+		attacker, nested_subject, GameState.DiplomaticRelation.ALLIED
+	)
+	state.set_diplomatic_relation(
+		attacker, defender, GameState.DiplomaticRelation.WAR
+	)
+	state.set_war_objective(
+		attacker,
+		defender,
+		state.nations[defender].capital_city_id,
+		"宗藩解体保留既有战争",
+		GameState.WarScope.VASSAL_PRIVATE
+	)
+	var root_capital := state.nations[root].capital_city_id
+	state.cities[root_capital].has_warehouse = true
+	state.cities[root_capital].food_storage = 900
+	state.nations[root].warehouse_city_ids = [root_capital]
+	state.refresh_derived()
+	var food_before := 0
+	for city in state.cities:
+		food_before += city.food_storage
+	var started_day := 100
+	state.day = started_day
+	_check(
+		state.advance_suzerainty_dissolution().is_empty(),
+		"低凝聚力首日只能开始计时，不能立即解体"
+	)
+	state.day = started_day + GameState.VASSAL_SYSTEM_DISSOLUTION_DAYS - 1
+	_check(
+		state.advance_suzerainty_dissolution().is_empty()
+			and state.is_vassal(attacker)
+			and state.is_vassal(defender),
+		"低凝聚力持续未满一年时宗藩体系必须保留"
+	)
+	state.day += 1
+	var dissolved_roots := state.advance_suzerainty_dissolution()
+	var food_after := 0
+	for city in state.cities:
+		food_after += city.food_storage
+	_check(
+		dissolved_roots == ([root] as Array[int])
+			and not state.is_vassal(attacker)
+			and not state.is_vassal(defender)
+			and not state.is_vassal(nested_subject)
+			and state.relation_between(root, attacker)
+				== GameState.DiplomaticRelation.ALLIED
+			and state.relation_between(root, defender)
+				== GameState.DiplomaticRelation.ALLIED
+			and state.relation_between(attacker, defender)
+				== GameState.DiplomaticRelation.ALLIED
+			and state.relation_between(attacker, nested_subject)
+				== GameState.DiplomaticRelation.ALLIED
+			and state.war_objective(attacker, defender).is_empty(),
+		"宗藩解体必须结束内部私战，并让原体系全部成员组成共同大联盟"
+	)
+	_check(
+		state.nations[attacker].name_kind != WorldNaming.KIND_VASSAL
+			and state.nations[defender].name_kind != WorldNaming.KIND_VASSAL
+			and state.nations[nested_subject].name_kind
+				!= WorldNaming.KIND_VASSAL
+			and state.nations[attacker].capital_city_id
+				in state.nations[attacker].warehouse_city_ids
+			and state.nations[defender].capital_city_id
+				in state.nations[defender].warehouse_city_ids
+			and state.nations[nested_subject].capital_city_id
+				in state.nations[nested_subject].warehouse_city_ids
+			and state.nations[attacker].granary_food > 0
+			and state.nations[defender].granary_food > 0
+			and state.nations[nested_subject].granary_food > 0
+			and food_after == food_before
+			and state.suzerainty_structure_valid(),
+		"宗藩解体必须同步升格命名、建立独立粮仓并保持粮食守恒"
+	)
+
+
+func _test_cohesion_recovery_resets_dissolution_timer() -> void:
+	var fixture := _fixture()
+	var state: GameState = fixture["state"]
+	var root := int(fixture["root"])
+	var attacker := int(fixture["attacker"])
+	var legal_snapshot := state.recognized_city_owners.duplicate()
+	state.day = 100
+	state.advance_suzerainty_dissolution()
+	for city in state.land_cities():
+		if state.suzerainty_root(state.recognized_owner_of(city.id)) == root:
+			state.recognized_city_owners[city.id] = root
+	state.ownership_revision += 1
+	state.day = 200
+	state.advance_suzerainty_dissolution()
+	state.recognized_city_owners = legal_snapshot
+	state.ownership_revision += 1
+	state.day = 201
+	state.advance_suzerainty_dissolution()
+	state.day = 460
+	_check(
+		state.advance_suzerainty_dissolution().is_empty()
+			and state.is_vassal(attacker),
+		"凝聚力恢复到阈值后必须清零旧计时，不能沿用此前低凝聚力天数"
+	)
 
 
 func _border_target(state: GameState, attacker: int, defender: int) -> int:

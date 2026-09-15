@@ -3140,18 +3140,20 @@ func _test_responsive_map_layout() -> void:
 			] == ["概况", "军事", "经济", "治理"]
 			and "工事" in str((city_sections[1]["lines"] as Array)[0])
 			and "驻军" in str((city_sections[1]["lines"] as Array)[1])
-			and "月产" in str((city_sections[2]["lines"] as Array)[0])
-			and "库存" in str((city_sections[2]["lines"] as Array)[1])
-			and "商路" in str((city_sections[2]["lines"] as Array)[1])
-			and "贸易金" in str((city_sections[2]["lines"] as Array)[1])
+			and "实际" in str((city_sections[2]["lines"] as Array)[0])
+			and "基础产值" in str((city_sections[2]["lines"] as Array)[1])
+			and "地形与发展" in str((city_sections[2]["lines"] as Array)[2])
+			and "首都发展" in str((city_sections[2]["lines"] as Array)[3])
+			and "治理与君主" in str((city_sections[2]["lines"] as Array)[4])
+			and "战乱与驻军" in str((city_sections[2]["lines"] as Array)[5])
+			and "贸易" in str((city_sections[2]["lines"] as Array)[6])
+			and "库存" in str((city_sections[2]["lines"] as Array)[6])
 			and not "简称" in "|".join(city_lines)
-			and not "发展：" in "|".join(city_lines)
-			and not "海拔" in "|".join(city_lines)
-			and not "粮食净流" in "|".join(city_lines)
+			and "交通中心分" in "|".join(city_lines)
 			and MapRenderer.city_detail_sections(hit_state, -1).is_empty()
 			and edge_lines.size() >= 5
 			and "行军" in edge_lines[2],
-		"城市详情必须精简为有效的概况、军事、经济与治理信息"
+		"城市详情必须显示战略属性及完整的资源产量因素"
 	)
 	var trade_edge_a := hit_state.edge_of(0, 1)
 	var trade_edge_b := hit_state.edge_of(1, 2)

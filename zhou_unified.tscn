@@ -5,4 +5,5 @@
 [node name="ZhouUnified" instance=ExtResource("1_main")]
 nation_count = 1
 initial_single_nation_name = "周"
+initial_single_nation_ruler_archetype = 9
 initial_city_names_visible = false

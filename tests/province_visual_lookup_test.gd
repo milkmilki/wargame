@@ -102,6 +102,21 @@ func _init() -> void:
 			loyalty.get_pixel(city_id, LOOKUP.OCCUPATION_ROW).a < 0.001,
 			"loyalty LUT must not contain occupation stripes"
 		)
+	var region := LOOKUP.build_visual_lut(state, -1, false, true)
+	for city_id in range(state.cities.size()):
+		var region_id := state.region_ids[city_id]
+		var expected_region_color := Color.TRANSPARENT
+		if region_id >= 0 and region_id < state.region_colors.size():
+			expected_region_color = state.region_colors[region_id]
+		_assert_color(
+			region.get_pixel(city_id, LOOKUP.BASE_ROW),
+			expected_region_color,
+			"region LUT mismatch for city %d" % city_id
+		)
+		_assert(
+			region.get_pixel(city_id, LOOKUP.OCCUPATION_ROW).a < 0.001,
+			"region LUT must not contain occupation stripes"
+		)
 	var topology := MapRenderer.build_province_boundary_topology(state)
 	var complete_geometry := MapRenderer.classify_province_boundary_topology(
 		state, topology
@@ -120,6 +135,22 @@ func _init() -> void:
 		_assert(
 			lookup_geometry[key] == complete_geometry[key],
 			"compact country-boundary classification mismatch: %s" % key
+		)
+	var complete_region_geometry := (
+		MapRenderer.classify_province_boundary_topology(
+			state, topology, state.region_ids
+		)
+	)
+	var lookup_region_geometry := LOOKUP.build_country_boundary_geometry(
+		topology, state.region_ids
+	)
+	for key in [
+		"province", "country", "country_owner_a", "country_owner_b",
+		"country_side_a", "country_side_b",
+	]:
+		_assert(
+			lookup_region_geometry[key] == complete_region_geometry[key],
+			"compact region-boundary classification mismatch: %s" % key
 		)
 
 	if _failed:

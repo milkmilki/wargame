@@ -44,6 +44,20 @@ func _run() -> void:
 		if not label.text.strip_edges().is_empty():
 			named_labels += 1
 	var state: GameState = scenario.state
+	var region_started := Time.get_ticks_usec()
+	var region_analysis := state.rebuild_region_analysis()
+	var region_elapsed_usec := Time.get_ticks_usec() - region_started
+	var dock_count := 0
+	var analyzed_dock_count := 0
+	var central_dock_count := 0
+	for city in state.cities:
+		if not city.is_dock:
+			continue
+		dock_count += 1
+		if state.region_ids[city.id] >= 0:
+			analyzed_dock_count += 1
+		if state.node_betweenness[city.id] > 0.0:
+			central_dock_count += 1
 	var aspect := clampf(state.map_aspect_ratio, 0.5, 2.5)
 	var expected_span := StrategicMap3D.BASE_WORLD_SPAN * 2.0
 	var expected_world_size := (
@@ -54,6 +68,13 @@ func _run() -> void:
 	var ok: bool = (
 		config_ok
 		and state.land_cities().size() == 500
+		and state.region_count > 1
+		and state.region_count < state.land_cities().size()
+		and not state.region_key_city_ids.is_empty()
+		and int(region_analysis["node_count"]) == state.cities.size()
+		and dock_count > 0
+		and analyzed_dock_count == dock_count
+		and central_dock_count > 0
 		and scenario.renderer.nation_names_visible()
 		and not map_3d._nation_labels.is_empty()
 		and visible_labels == map_3d._nation_labels.size()
@@ -64,8 +85,12 @@ func _run() -> void:
 			StrategicMap3D.CAMERA_MAX_DISTANCE * 2.0
 		)
 	)
-	print("FIVE_HUNDRED_CITY_SCENE_%s span=%s labels=%d/%d" % [
+	print(
+		"FIVE_HUNDRED_CITY_SCENE_%s span=%s labels=%d/%d regions=%d keys=%d docks=%d/%d central_docks=%d analysis=%.2fms"
+		% [
 		"OK" if ok else "FAILED", str(map_3d._world_size),
-		visible_labels, state.nations.size(),
+		visible_labels, state.nations.size(), state.region_count,
+		state.region_key_city_ids.size(), analyzed_dock_count, dock_count,
+		central_dock_count, float(region_elapsed_usec) / 1000.0,
 	])
 	quit(0 if ok else 1)

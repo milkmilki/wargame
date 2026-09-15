@@ -6,6 +6,9 @@ extends RefCounted
 ## 与历史线性 danger*2.0 在 danger=0/1 端点对齐（bias-1 在 danger=1 约 0.5，×4≈2.0），
 ## 差异仅在曲线形状——凸曲线令中段更低、隘口带更陡。是可调的单一权重真源。
 const EDGE_TERRAIN_HOLD_GAIN: float = 4.0
+## 全图 Node Betweenness 已归一化到 0..1。作为城市的一般战略价值加分，
+## 同时进入守备与战时攻势排序，但不改变可达性或硬守备规则。
+const NODE_BETWEENNESS_CITY_VALUE_WEIGHT: float = 10.0
 
 ## AB 实验开关（默认 true=生产行为）：敌对前线边地形加成是否用 terrain_hold_bias 凸曲线。
 ## 关闭时退回历史线性 danger*2.0，仅供地形收益 A/B 长跑对照，不影响生产与确定性回归。
@@ -184,8 +187,24 @@ static func build_base_city_values(state: GameState) -> Dictionary:
 			value += 4.0
 		if city.is_manpower_hub:
 			value += 4.0
+		value += node_betweenness_city_value(state, city.id)
 		result[city.id] = value
 	return result
+
+
+static func node_betweenness_city_value(
+	state: GameState,
+	city_id: int
+) -> float:
+	if (
+		state == null
+		or city_id < 0
+		or city_id >= state.node_betweenness.size()
+	):
+		return 0.0
+	return clampf(
+		float(state.node_betweenness[city_id]), 0.0, 1.0
+	) * NODE_BETWEENNESS_CITY_VALUE_WEIGHT
 
 
 ## 道路危险、容量与关隘价值在运行期不随观察国变化。AI tick 内共享这部分，
@@ -747,6 +766,14 @@ func _select_priority_targets(view: AiWorldView) -> void:
 
 func value_of_city(city_id: int) -> float:
 	return float(city_value.get(city_id, 0.0))
+
+
+func value_of_city_without_betweenness(city_id: int) -> float:
+	return maxf(
+		value_of_city(city_id)
+			- node_betweenness_city_value(_state, city_id),
+		0.0
+	)
 
 
 func value_of_offense(city_id: int) -> float:

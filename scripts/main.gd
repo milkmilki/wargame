@@ -15,6 +15,20 @@ extends Node
 @export var randomize_world_seed_on_start: bool = false
 ## 仅在 nation_count=1 时应用的单字主权国号；空字符串保持程序化命名。
 @export var initial_single_nation_name: String = ""
+## 仅在单国场景中固定初始君主原型；-1 保持程序化随机结果。
+@export_enum(
+	"随机:-1",
+	"持衡者:0",
+	"征服者:1",
+	"守成者:2",
+	"庸主:3",
+	"暴君:4",
+	"商君:5",
+	"改革者:6",
+	"纵横家:7",
+	"营造者:8",
+	"傀儡君主:9"
+) var initial_single_nation_ruler_archetype: int = -1
 ## 3D 地图的线性物理跨度倍率。只改变呈现空间与镜头覆盖，不改变归一化
 ## 地形/省份拓扑；大地图场景可在不复制生成逻辑的前提下扩大单位间距。
 @export_range(0.5, 4.0, 0.1) var map_world_scale: float = 1.0
@@ -477,6 +491,24 @@ func _start_new_game(world_seed: int) -> void:
 				next_state, 0, single_name
 			),
 			"单国场景国号必须是一个有效单字"
+		)
+	if (
+		next_state.nations.size() == 1
+		and initial_single_nation_ruler_archetype >= 0
+	):
+		assert(
+			RulerProfile.is_valid_archetype(
+				initial_single_nation_ruler_archetype
+			),
+			"单国场景初始君主原型必须有效"
+		)
+		var initial_ruler := next_state.nations[0]
+		initial_ruler.ruler_archetype = (
+			initial_single_nation_ruler_archetype
+		)
+		initial_ruler.ruler_traits.clear()
+		initial_ruler.trade_policy = RulerProfile.trade_policy_for(
+			initial_ruler
 		)
 	_activate_state(next_state)
 
