@@ -11,7 +11,9 @@ const TERRAIN_CITY_COUNT: int = 200         ## 正式高度图基础陆城；动
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 10
 const CITY_MANPOWER_PER_MONTH_MAX: int = 30
-const INITIAL_MANPOWER_RESERVE_MONTHS: int = 750
+const RESOURCE_CAPACITY_YEARS: int = 3
+const FOOD_CAPACITY_HALF_YEARS: int = RESOURCE_CAPACITY_YEARS * 2
+const INITIAL_MANPOWER_RESERVE_MONTHS: int = RESOURCE_CAPACITY_YEARS * 12
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
@@ -3518,7 +3520,7 @@ func start_regional_rebellion(
 		return -1
 	parent.manpower_pool -= transferred_manpower
 	parent.treasury_gold -= transferred_gold
-	rebel.manpower_pool = transferred_manpower
+	add_manpower(rebel.id, transferred_manpower)
 	rebel.treasury_gold = transferred_gold
 	var food_share := _proportional_share(
 		food_pool_stock_before, rebel_food_output, food_pool_output_before
@@ -3685,13 +3687,21 @@ func restore_regional_loyalty_target(
 		)
 	parent.manpower_pool -= transferred_manpower
 	parent.treasury_gold -= transferred_gold
-	target.manpower_pool += transferred_manpower
+	add_manpower(target_id, transferred_manpower)
 	target.treasury_gold += transferred_gold
 	if transferred_food > 0:
-		var withdrawn_food := _withdraw_food_from_warehouses(
-			nations[food_holder_before], transferred_food
-		)
 		var target_food_holder := food_pool_holder(target_id)
+		var transferable_food := mini(
+			transferred_food,
+			maxi(
+				food_storage_capacity(target_id)
+					- _food_pool_stock(target_food_holder),
+				0
+			)
+		)
+		var withdrawn_food := _withdraw_food_from_warehouses(
+			nations[food_holder_before], transferable_food
+		)
 		if withdrawn_food > 0 and deposit_food(target_id, withdrawn_food):
 			nations[food_holder_before].granary_food -= withdrawn_food
 	for army in armies:
@@ -4431,6 +4441,67 @@ func food_pool_members(holder_id: int) -> Array[int]:
 	return result
 
 
+## 粮食上限按共享粮池全体和平成员的城市基础半年产量计算。
+## 藩王查询时仍返回其根宗主共享粮仓的同一个上限。
+func food_storage_capacity(nation_id: int) -> int:
+	if nation_id < 0 or nation_id >= nations.size():
+		return 0
+	var holder_id := food_pool_holder(nation_id)
+	var member_set := {}
+	for member_id in food_pool_members(holder_id):
+		member_set[member_id] = true
+	var half_year_output := 0
+	for city in cities:
+		if not city.is_dock and member_set.has(city.owner_nation):
+			half_year_output += maxi(city.food_per_half_year, 0)
+	return half_year_output * FOOD_CAPACITY_HALF_YEARS
+
+
+## 人力池不在宗藩间共享；宗主（或任一藩王）的容量包含自己及其和平藩属子树。
+func manpower_pool_capacity(nation_id: int) -> int:
+	if nation_id < 0 or nation_id >= nations.size():
+		return 0
+	var member_set := {}
+	for member_id in food_pool_members(nation_id):
+		member_set[member_id] = true
+	var monthly_output := 0
+	for city in cities:
+		if not city.is_dock and member_set.has(city.owner_nation):
+			monthly_output += maxi(city.manpower_per_month, 0)
+	return monthly_output * INITIAL_MANPOWER_RESERVE_MONTHS
+
+
+## 唯一的人力正向写入口。返回实际进入人力池的数量。
+func add_manpower(nation_id: int, amount: int) -> int:
+	if amount <= 0 or nation_id < 0 or nation_id >= nations.size():
+		return 0
+	var nation := nations[nation_id]
+	var accepted := mini(
+		amount,
+		maxi(manpower_pool_capacity(nation_id) - nation.manpower_pool, 0)
+	)
+	nation.manpower_pool += accepted
+	return accepted
+
+
+## 领土和宗藩结构变化会降低容量；在月结算边界统一清除超额库存，
+## 避免插入领土事务的多阶段守恒划转中间破坏账目。
+func clamp_resource_capacities() -> void:
+	var food_changed := false
+	for nation in nations:
+		nation.manpower_pool = clampi(
+			nation.manpower_pool, 0, manpower_pool_capacity(nation.id)
+		)
+		if food_pool_holder(nation.id) != nation.id:
+			continue
+		var excess := _food_pool_stock(nation.id) - food_storage_capacity(nation.id)
+		if excess > 0:
+			_withdraw_food_from_warehouses(nation, excess)
+			food_changed = true
+	if food_changed:
+		refresh_derived()
+
+
 ## holder 粮池里可作补给中继起点的藩王首都（不含 holder 自己首都，那是主源；不含被围首都）。
 ## 补给损耗场与网络缓存指纹共用此单一真源，保证「降损耗中继」与「缓存失效」判据一致。
 func food_pool_relay_capitals(holder_id: int) -> Array[int]:
@@ -4689,7 +4760,7 @@ func enfeoff(
 
 	# 4. 划转人力与金钱（守恒：从宗主池扣除、注入藩王池）。
 	overlord.manpower_pool -= granted_manpower
-	subject.manpower_pool = granted_manpower
+	add_manpower(subject.id, granted_manpower)
 	overlord.treasury_gold -= granted_gold
 	subject.treasury_gold = granted_gold
 
@@ -4931,7 +5002,7 @@ func finalize_annexation_after_territory_commit(
 				RulerProfile.morale_multiplier(nations[absorber])
 			)
 	_reconcile_battles_after_annexation()
-	nations[absorber].manpower_pool += nations[absorbed].manpower_pool
+	add_manpower(absorber, nations[absorbed].manpower_pool)
 	nations[absorbed].manpower_pool = 0
 	nations[absorber].treasury_gold += nations[absorbed].treasury_gold
 	nations[absorbed].treasury_gold = 0
@@ -6488,7 +6559,12 @@ func deposit_food(nation_id: int, amount: int) -> bool:
 			target = warehouses[0]
 	if target == null:
 		return false
-	var actual := change_city_food_storage(target.id, amount)
+	var remaining_capacity := maxi(
+		food_storage_capacity(holder_id) - _food_pool_stock(holder_id), 0
+	)
+	var actual := change_city_food_storage(
+		target.id, mini(amount, remaining_capacity)
+	)
 	return actual > 0
 
 

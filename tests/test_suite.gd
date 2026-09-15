@@ -83,6 +83,7 @@ func _init() -> void:
 	_test_civil_war_relations()
 	_test_centralization_decision()
 	_test_civil_war_annexation()
+	_test_resource_capacity_limits()
 	_test_shared_granary_and_relay_supply()
 	_test_vassal_governance_output_bonus()
 	_test_suzerainty_disconnection_requires_capture()
@@ -6479,6 +6480,7 @@ func _test_ruler_economy_integration() -> void:
 				+ RulerProfile.reserve_months_bonus(nation),
 		"财政储备月数必须叠加当前君主加法修正"
 	)
+	nation.manpower_pool = 0
 	var before_manpower := nation.manpower_pool
 	var before_gold := nation.treasury_gold
 	var sim := Simulation.new()
@@ -7728,6 +7730,14 @@ func _test_atomic_territory_transactions() -> void:
 		var global_food_after := 0
 		for city in restore_state.cities:
 			global_food_after += city.food_storage
+		var accepted_food_transfer := mini(
+			expected_food_transfer,
+			maxi(
+				restore_state.food_storage_capacity(restore_target)
+					- target_pool_stock_before,
+				0
+			)
+		)
 		_check(
 			restored
 				and parent_holder_before == restore_parent
@@ -7749,9 +7759,9 @@ func _test_atomic_territory_transactions() -> void:
 				and not restore_state.nations[restore_target]
 					.warehouse_city_ids.has(restore_city.id)
 				and parent_pool_stock_after
-					== parent_pool_stock_before - expected_food_transfer
+					== parent_pool_stock_before - accepted_food_transfer
 				and target_pool_stock_after
-					== target_pool_stock_before + expected_food_transfer
+					== target_pool_stock_before + accepted_food_transfer
 				and parent_pool_stock_after + target_pool_stock_after
 					== parent_pool_stock_before + target_pool_stock_before
 				and global_food_after == global_food_before
@@ -11218,9 +11228,9 @@ func _test_manpower_pool_and_force_commands() -> void:
 			"城市月度人口恢复应位于新标定区间"
 		)
 	_check(
-		GameState.INITIAL_MANPOWER_RESERVE_MONTHS == 750
+		GameState.INITIAL_MANPOWER_RESERVE_MONTHS == 36
 			and gs.nations[nation_id].manpower_pool == expected_initial,
-		"开局人口库应按 750 个月产出储备（旧值 150 的 5 倍）：应 %d，实为 %d"
+		"开局人口库应等于三十六个月产出：应 %d，实为 %d"
 			% [expected_initial, gs.nations[nation_id].manpower_pool]
 	)
 	var initial_light_armies := 0
@@ -11243,11 +11253,11 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and initial_heavy_armies == 1,
 		"网格状态机夹具应保留16支城市填线军和一个单重军战团"
 	)
-	var pool_before_income := gs.nations[nation_id].manpower_pool
+	gs.nations[nation_id].manpower_pool -= monthly_income
 	gs.day = Simulation.DAYS_PER_MONTH
 	sim._resolve_economy()
-	_check(gs.nations[nation_id].manpower_pool == pool_before_income + monthly_income,
-		"每月城市人口产出应立即汇入全国人口库")
+	_check(gs.nations[nation_id].manpower_pool == expected_initial,
+		"每月城市人口产出应汇入全国人口库但不得突破三年上限")
 
 	gs.armies.clear()
 	var owned := gs.cities_of(nation_id)
@@ -20281,7 +20291,91 @@ func _test_civil_war_annexation() -> void:
 	vs_sim.free()
 
 
-# ------------------------------------------------------------------ 32i2. 共享粮仓 + 补给中继节点 + 内战切分
+# ------------------------------------------------------------------ 32i2. 三年资源容量
+
+func _test_resource_capacity_limits() -> void:
+	print("[32i2] 资源容量：粮食与人力最多储备三年，宗主递归计入藩属城市")
+	var gs := GameState.new()
+	gs.generate_grid_world(41000)
+	var own_food_output := 0
+	var own_manpower_output := 0
+	for city in gs.land_cities_of(0):
+		own_food_output += city.food_per_half_year
+		own_manpower_output += city.manpower_per_month
+	var own_food_capacity := own_food_output * 6
+	var own_manpower_capacity := own_manpower_output * 36
+	_check(
+		gs.food_storage_capacity(0) == own_food_capacity
+			and gs.manpower_pool_capacity(0) == own_manpower_capacity
+			and gs.nations[0].manpower_pool == own_manpower_capacity,
+		"独立国粮食容量须为六个半年产量，人力容量须为三十六个月产量"
+	)
+	var warehouse := gs.warehouse_cities_of(0)[0]
+	warehouse.food_storage = own_food_capacity - 10
+	gs.refresh_derived()
+	_check(
+		gs.deposit_food(0, 100)
+			and warehouse.food_storage == own_food_capacity,
+		"粮食入库必须在三年容量处截断"
+	)
+	gs.nations[0].manpower_pool = own_manpower_capacity - 10
+	_check(
+		gs.add_manpower(0, 100) == 10
+			and gs.nations[0].manpower_pool == own_manpower_capacity,
+		"人力增加必须在三年容量处截断"
+	)
+	warehouse.food_storage = own_food_capacity + 100
+	gs.nations[0].manpower_pool = own_manpower_capacity + 100
+	gs.refresh_derived()
+	gs.clamp_resource_capacities()
+	_check(
+		warehouse.food_storage == own_food_capacity
+			and gs.nations[0].manpower_pool == own_manpower_capacity,
+		"月结算边界必须清除领土或宗藩变化留下的超额库存"
+	)
+
+	var region: Array[int] = []
+	for city in gs.land_cities_of(0):
+		if city.is_capital:
+			continue
+		region.append(city.id)
+		if region.size() >= 8:
+			break
+	var subject := gs.enfeoff(0, region)
+	var child_region: Array[int] = []
+	var subject_land_count := gs.land_cities_of(subject).size()
+	for candidate in gs.land_cities_of(subject):
+		if candidate.is_capital:
+			continue
+		var closure := gs.enfeoff_region_closure(
+			subject, [candidate.id] as Array[int]
+		)
+		if not closure.is_empty() and closure.size() < subject_land_count:
+			child_region = closure
+			break
+	var child := gs.enfeoff(subject, child_region)
+	_check(subject >= 0 and child >= 0, "资源容量测试须建立两级藩属")
+	var root_food_output := 0
+	var root_manpower_output := 0
+	var subject_manpower_output := 0
+	for member_id in gs.food_pool_members(0):
+		for city in gs.land_cities_of(member_id):
+			root_food_output += city.food_per_half_year
+			root_manpower_output += city.manpower_per_month
+	for member_id in gs.food_pool_members(subject):
+		for city in gs.land_cities_of(member_id):
+			subject_manpower_output += city.manpower_per_month
+	_check(
+		gs.food_storage_capacity(0) == root_food_output * 6
+			and gs.food_storage_capacity(child) == root_food_output * 6
+			and gs.manpower_pool_capacity(0) == root_manpower_output * 36
+			and gs.manpower_pool_capacity(subject)
+				== subject_manpower_output * 36,
+		"宗主容量须递归包含全部藩属城市，藩王人力容量只包含自己的子树"
+	)
+
+
+# ------------------------------------------------------------------ 32i3. 共享粮仓 + 补给中继节点 + 内战切分
 
 func _test_shared_granary_and_relay_supply() -> void:
 	print("[32i2] 共享粮仓：分封守恒归根池、藩王首都零库存中继降损耗、内战切分守恒+火星兵")
@@ -21931,6 +22025,7 @@ func _test_peacetime_demobilization_and_border_defense() -> void:
 	var food_before := sim._food_security_report(0)
 	var troops_before := 0
 	var formations_before := view.friendly_armies.size()
+	gs.nations[0].manpower_pool = 0
 	for army in view.friendly_armies:
 		troops_before += army.size
 	var manpower_before := gs.nations[0].manpower_pool

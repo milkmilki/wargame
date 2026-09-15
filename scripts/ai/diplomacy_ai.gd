@@ -2568,6 +2568,9 @@ static func resource_report(
 		MIN_MANPOWER_RESERVE,
 		int(ceil(float(troops) * 0.15))
 	)
+	var manpower_capacity := state.manpower_pool_capacity(nation_id)
+	if manpower_capacity > 0:
+		manpower_required = mini(manpower_required, manpower_capacity)
 	var food_stock := _food_stock(
 		state,
 		nation_id,
@@ -2812,6 +2815,9 @@ static func offensive_resources_ready(
 		manpower_floor,
 		int(ceil(float(report["troops"]) * manpower_share))
 	)
+	var manpower_capacity := state.manpower_pool_capacity(nation_id)
+	if manpower_capacity > 0:
+		required_manpower = mini(required_manpower, manpower_capacity)
 	var food_runway := lerpf(
 		DEFENSIVE_CAMPAIGN_YEARS,
 		TOTAL_WAR_FOOD_RUNWAY_YEARS,

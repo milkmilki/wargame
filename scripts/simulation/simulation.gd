@@ -1767,6 +1767,9 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 	var half_year_food_produced: Array[int] = []
 	half_year_food_produced.resize(state.nations.size())
 	half_year_food_produced.fill(0)
+	var monthly_manpower_produced: Array[int] = []
+	monthly_manpower_produced.resize(state.nations.size())
+	monthly_manpower_produced.fill(0)
 	var ruler_output_modifiers: Array[Dictionary] = []
 	ruler_output_modifiers.resize(state.nations.size())
 	for nation in state.nations:
@@ -1779,13 +1782,17 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 		var gold := city_gold_output(state, city, modifiers)
 		nation.treasury_gold += gold
 		gold_income[city.owner_nation] += gold
-		nation.manpower_pool += city_manpower_output(state, city, modifiers)
+		monthly_manpower_produced[city.owner_nation] += city_manpower_output(
+			state, city, modifiers
+		)
 		half_year_food_produced[city.owner_nation] += city_food_output(
 			state,
 			city,
 			garrison_by_city,
 			modifiers
 		)
+	for nation in state.nations:
+		state.add_manpower(nation.id, monthly_manpower_produced[nation.id])
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"monthly_city_outputs", economy_part_started)
 	economy_part_started = (
@@ -1813,6 +1820,7 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 			)
 		state.refresh_derived()
 		_publish_granary_snapshot()
+	state.clamp_resource_capacities()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"monthly_food_publish", economy_part_started)
 
@@ -2005,7 +2013,7 @@ func _prepare_trade_publication(trade: Dictionary) -> Dictionary:
 ## 年度人、钱、粮自动平衡。转换完全由经济结算驱动，不进入 AI 候选、
 ## 不做路径搜索。宗藩共享粮池只由 holder 兑换一次，避免重复消费同一库存。
 func _resolve_annual_resource_balance(
-	gold_flows: Array[Dictionary]
+	_gold_flows: Array[Dictionary]
 ) -> void:
 	state.refresh_derived()
 	for nation in state.nations:
@@ -2015,27 +2023,36 @@ func _resolve_annual_resource_balance(
 			state.food_pool_holder(nation.id) == nation.id
 			and not state.warehouse_cities_of(nation.id).is_empty()
 		)
-		var monthly_income := (
-			maxi(int(gold_flows[nation.id].get("net_income", 0)), 0)
-			if nation.id >= 0 and nation.id < gold_flows.size()
-			else 0
-		)
 		var plan := ResourceBalanceRules.plan(
 			nation.treasury_gold,
 			nation.manpower_pool,
 			nation.granary_food if include_food else 0,
-			monthly_income * MONTHS_PER_YEAR,
 			include_food
 		)
 		var gold_delta := int(plan["gold_delta"])
 		var manpower_delta := int(plan["manpower_delta"])
 		var food_delta := int(plan["food_delta"])
+		# 容量不足时整笔跳过年度转换，避免只截断接收端而凭空销毁供给端价值。
+		if (
+			manpower_delta > maxi(
+				state.manpower_pool_capacity(nation.id) - nation.manpower_pool, 0
+			)
+			or food_delta > maxi(
+				state.food_storage_capacity(nation.id) - nation.granary_food, 0
+			)
+		):
+			gold_delta = 0
+			manpower_delta = 0
+			food_delta = 0
 		nation.treasury_gold = maxi(
 			nation.treasury_gold + gold_delta, 0
 		)
-		nation.manpower_pool = maxi(
-			nation.manpower_pool + manpower_delta, 0
-		)
+		if manpower_delta > 0:
+			state.add_manpower(nation.id, manpower_delta)
+		elif manpower_delta < 0:
+			nation.manpower_pool = maxi(
+				nation.manpower_pool + manpower_delta, 0
+			)
 		if food_delta > 0:
 			assert(
 				state.deposit_food(nation.id, food_delta),
@@ -5550,9 +5567,7 @@ func _repatriate_after_territory_settlement(
 		else:
 			_settle_idle(army, army.location_city)
 		if army.size <= 0:
-			state.nations[
-				army.owner_nation
-			].manpower_pool += repatriated_manpower
+			state.add_manpower(army.owner_nation, repatriated_manpower)
 			army.ai_action = ActionCandidate.Kind.DISBAND_ARMY
 			army.ai_order_reason = "和平领土结算，无陆路可撤时按协议复员"
 	_purge_dead_armies()
@@ -13715,7 +13730,7 @@ func _demobilize_for_food_security(
 			continue
 		var saved := food_per_person * float(returned)
 		army.size -= returned
-		state.nations[army.owner_nation].manpower_pool += returned
+		state.add_manpower(army.owner_nation, returned)
 		army.ai_action = ActionCandidate.Kind.DISBAND_ARMY
 		army.ai_order_created_day = state.day
 		total_returned += returned
@@ -13876,9 +13891,7 @@ func _demobilize_for_gold_security(
 			target_size = 0
 		else:
 			army.size = target_size
-			state.nations[
-				army.owner_nation
-			].manpower_pool += returned
+			state.add_manpower(army.owner_nation, returned)
 			army.ai_action = (
 				ActionCandidate.Kind.DISBAND_ARMY
 			)
@@ -14010,7 +14023,7 @@ func _create_army_for_nation(
 		formation_size
 	)
 	if army == null:
-		nation.manpower_pool += formation_size
+		state.add_manpower(nation_id, formation_size)
 		nation.treasury_gold += creation_cost
 		return null
 	if (
@@ -14021,7 +14034,7 @@ func _create_army_for_nation(
 		)
 	):
 		state.armies.erase(army)
-		nation.manpower_pool += formation_size
+		state.add_manpower(nation_id, formation_size)
 		nation.treasury_gold += creation_cost
 		return null
 	army.ai_action = ActionCandidate.Kind.CREATE_ARMY
@@ -14056,7 +14069,7 @@ func _disband_army(army: Army, reason: String = "") -> bool:
 		return false
 	var nation := state.nations[army.owner_nation]
 	var returned := army.size
-	nation.manpower_pool += returned
+	state.add_manpower(army.owner_nation, returned)
 	army.ai_action = ActionCandidate.Kind.DISBAND_ARMY
 	nation.ai_last_force_action = ActionCandidate.Kind.DISBAND_ARMY
 	nation.ai_last_force_day = state.day

@@ -5,8 +5,6 @@ extends RefCounted
 
 const FOOD_PER_GOLD: int = 25
 const MANPOWER_PER_GOLD: int = 50
-const ANNUAL_INCOME_SHARE: float = 0.25
-
 const GOLD_INDEX: int = 0
 const MANPOWER_INDEX: int = 1
 const FOOD_INDEX: int = 2
@@ -16,7 +14,6 @@ static func plan(
 	gold: int,
 	manpower: int,
 	food: int,
-	annual_gold_income: int,
 	include_food: bool
 ) -> Dictionary:
 	var before := PackedInt32Array([
@@ -29,12 +26,6 @@ static func plan(
 	var total_value := 0
 	for index in range(resource_count):
 		total_value += after[index]
-	var transfer_cap := (
-		maxi(int(floor(
-			float(maxi(annual_gold_income, 0)) * ANNUAL_INCOME_SHARE
-		)), 1)
-		if total_value > 0 else 0
-	)
 	var targets := _balanced_targets(before, resource_count, total_value)
 	var donor_amounts := PackedInt32Array()
 	var receiver_amounts := PackedInt32Array()
@@ -45,7 +36,7 @@ static func plan(
 		donor_amounts[index] = maxi(before[index] - targets[index], 0)
 		receiver_amounts[index] = maxi(targets[index] - before[index], 0)
 		required_transfer += receiver_amounts[index]
-	var transferred := mini(required_transfer, transfer_cap)
+	var transferred := required_transfer
 	var donor_moves := _proportional_allocation(
 		donor_amounts, required_transfer, transferred
 	)
@@ -64,7 +55,6 @@ static func plan(
 			if include_food else 0
 		),
 		"transferred_value": transferred,
-		"transfer_cap": transfer_cap,
 	}
 
 
