@@ -2725,7 +2725,7 @@ func _update_army_instances() -> void:
 				if is_main_role else Vector3(0.90, 1.0, 0.82)
 		)
 		# 主战军使用醒目的“+”号与金色厚底；填线军使用“×”号与
-		# 紧凑黑底。战团中的5000轻军也按 MAIN 外观显示。
+		# 紧凑黑底。单重军战团按 MAIN 外观显示。
 		var first_angle := 0.0 if is_main_role else PI * 0.25
 		var symbol_basis := Basis(Vector3.UP, first_angle).scaled(
 			Vector3(scale, scale, scale)

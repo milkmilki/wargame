@@ -126,12 +126,10 @@ const CAMPAIGN_TARGET_COMMIT_RATIO: float = 1.00
 const CAMPAIGN_STAGED_TROOP_RATIO: float = 0.75
 const CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO: float = 0.33
 const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 18.0
-## 单波最多覆盖八个方向：是旧生产运行峰值（2）的四倍，足够形成宽正面；
-## 同时阻止全地图十几路目标每轮重复做路径/战力规划。
-const CAMPAIGN_MAX_PARALLEL_TARGETS: int = 8
-## 八路双梯队对应最多十六个战时主战团。决定性单目标仍可获得至少三团，
-## 但不会因前线目标总数增长而无限扩编到三十余团。
-const CAMPAIGN_MAX_WARTIME_GROUPS: int = 16
+## 同一攻势只经营一个主目标和最多两个次目标，避免宽正面重复规划。
+const CAMPAIGN_MAX_PARALLEL_TARGETS: int = 3
+## 三路双梯队最多需要六团，额外保留两个团用于决定性方向补强。
+const CAMPAIGN_MAX_WARTIME_GROUPS: int = 8
 const CAMPAIGN_PREPARED_ECHELONS: int = 2
 ## 敌国最后一城会持续集中守军、补员并享首都防御。至少三支独立战团
 ## 轮换投入，避免一团在窄路上反复消耗、全国主力却留作填线。
@@ -141,10 +139,8 @@ const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
 const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 2
-## 正式地图的独立 LINE 已由 CityDefensePlan.can_join_offensive 拒绝。此上限只处理角色整理与
-## 防区快照交界：同一轮攻势最多接纳一支仍残留防区记录、但已归入战团成为 MAIN 的轻军，
-## 避免旧防区快照让多个防守槽同时进入攻势。
-const CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES: int = 1
+## 主战团只含重军；独立轻军始终由 CityDefensePlan 留在 LINE 防区。
+const CAMPAIGN_DEFENSE_ASSIGNED_MAX_ARMIES: int = 0
 const SMALL_NATION_SURVIVAL_MAX_CITIES: int = (
 	GameState.SMALL_NATION_SURVIVAL_MAX_CITIES
 )
@@ -7059,7 +7055,6 @@ func _reconcile_strategic_roles(
 			b
 		)
 	)
-	var light_by_group := {}
 	var heavy_by_group := {}
 	for army in armies:
 		if (
@@ -7069,18 +7064,14 @@ func _reconcile_strategic_roles(
 			army.battle_group_id = -1
 			continue
 		var group_id := army.battle_group_id
-		if army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
-			var light_count := int(light_by_group.get(group_id, 0))
-			if light_count >= BattleGroup.MAX_LIGHT_ARMIES:
-				army.battle_group_id = -1
-				continue
-			light_by_group[group_id] = light_count + 1
-		elif army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+		if army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 			var heavy_count := int(heavy_by_group.get(group_id, 0))
 			if heavy_count >= BattleGroup.MAX_HEAVY_ARMIES:
 				army.battle_group_id = -1
 				continue
 			heavy_by_group[group_id] = heavy_count + 1
+		else:
+			army.battle_group_id = -1
 	for army in armies:
 		if (
 			army.max_size < GameState.INITIAL_HEAVY_ARMY_SIZE
@@ -8076,10 +8067,10 @@ func _try_create_force_recruitment(
 		created_group = state.create_battle_group(nation_id)
 		battle_group_id = created_group.id
 		recruitment_reason = (
-			"战争生存动员%d编制：创建战团%d并补充第一支轻军"
+			"战争生存动员%d编制：创建单重军战团%d"
 			% [formation_size, battle_group_id]
 			if emergency_recruitment
-			else "创建战团%d并补充第一支轻军" % battle_group_id
+			else "创建单重军战团%d" % battle_group_id
 		)
 	var created_army := _create_army_for_nation(
 		nation_id,
@@ -8122,10 +8113,7 @@ func _regular_force_recruitment(
 	var required_group_count := int(demand["required_group_count"])
 	var target_group_count := int(demand["target_group_count"])
 	var target_main_armies := maxi(
-		target_group_count * (
-			BattleGroup.MAX_LIGHT_ARMIES
-			+ BattleGroup.MAX_HEAVY_ARMIES
-		),
+		target_group_count * BattleGroup.MAX_HEAVY_ARMIES,
 		1
 	)
 	var main_deficit := maxi(target_main_armies - main_armies, 0)
@@ -8240,7 +8228,7 @@ func _small_nation_force_recruitment(
 	nation: Nation,
 	main_armies: int
 ) -> Dictionary:
-	# One light MAIN is the mobile reserve; existing wartime groups stay intact.
+	# One heavy MAIN is the mobile reserve; existing wartime groups stay intact.
 	if main_armies >= SMALL_NATION_MOBILE_RESERVE_ARMIES:
 		return {}
 	var reserve_group_id := -1
@@ -8249,7 +8237,7 @@ func _small_nation_force_recruitment(
 			reserve_group_id = group.id
 			break
 	return {
-		"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+		"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
 		"group_id": reserve_group_id,
 		"create_group": reserve_group_id < 0,
 		"reason": "小国补充机动预备队",
@@ -8339,31 +8327,19 @@ func _next_battle_group_recruitment(
 	# 否则“补满第一团才建第二团”会让决定性战役等待数百天。
 	if allow_new_group and prioritize_new_group:
 		return {
-			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+			"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
 			"group_id": -1,
 			"create_group": true,
-			"reason": "攻势扩编：创建新战团并补充第一支轻军",
+			"reason": "攻势扩编：创建单重军战团",
 		}
 	for group in nation.battle_groups:
-		var light_count := 0
 		var heavy_count := 0
 		for member in state.battle_group_members(
 			nation_id,
 			group.id
 		):
-			if member.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
-				light_count += 1
-			elif member.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
+			if member.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 				heavy_count += 1
-		if light_count < BattleGroup.MAX_LIGHT_ARMIES:
-			return {
-				"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-				"group_id": group.id,
-				"reason": "战团%d补充第%d支轻军" % [
-					group.id,
-					light_count + 1,
-				],
-			}
 		if heavy_count < BattleGroup.MAX_HEAVY_ARMIES:
 			return {
 				"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
@@ -8373,10 +8349,10 @@ func _next_battle_group_recruitment(
 	if not allow_new_group:
 		return {}
 	return {
-		"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
+		"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
 		"group_id": -1,
 		"create_group": true,
-		"reason": "创建新战团并补充第一支轻军",
+		"reason": "创建单重军战团",
 	}
 
 
@@ -9114,7 +9090,7 @@ func _campaign_target_group_demand(
 	)
 	return {
 		# 每个方向不仅形成第一批接敌兵力，还冻结一个独立战团梯队。
-		# 八路目标因此自然对应最多十六团，而非靠发射阶段临时加码。
+		# 三路目标因此自然对应最多六团，而非靠发射阶段临时加码。
 		"groups": assault_groups * CAMPAIGN_PREPARED_ECHELONS,
 		"assault_groups": assault_groups,
 		"is_decisive": decisive_minimum
@@ -9138,30 +9114,13 @@ func _campaign_route_group_capacity(
 				entry_capacity,
 				edge.max_manpower
 			)
-	var manpower := 0
-	var power := 0.0
-	if entry_capacity >= GameState.INITIAL_LIGHT_ARMY_SIZE:
-		manpower += (
-			BattleGroup.MAX_LIGHT_ARMIES
-			* GameState.INITIAL_LIGHT_ARMY_SIZE
-		)
-		power += float(
-			BattleGroup.MAX_LIGHT_ARMIES
-			* GameState.INITIAL_LIGHT_ARMY_SIZE
-		)
-	# Demand uses effective first-contact capacity, not eventual transport
-	# reachability. A heavy formation can traverse a narrow route in packets,
-	# but only contributes its full 15000 here when the entry road can deploy it
-	# without serial delay; this keeps narrow-front assault sizing conservative.
-	if entry_capacity >= GameState.INITIAL_HEAVY_ARMY_SIZE:
-		manpower += (
-			BattleGroup.MAX_HEAVY_ARMIES
-			* GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-		power += float(
-			BattleGroup.MAX_HEAVY_ARMIES
-			* GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
+	# 军事通行是二值规则：任何正容量道路都能让完整重军分批通过。
+	# 道路宽度只影响行军时间，不应把单重军战团算成零接敌能力。
+	var manpower := (
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+		if entry_capacity > 0 else 0
+	)
+	var power := float(manpower)
 	return {
 		"entry_capacity": entry_capacity,
 		"manpower": manpower,
@@ -9760,6 +9719,19 @@ func _ensure_group_campaign_preparation_plan(
 		state.nations[nation_id].war_preparation_target_nation >= 0
 		and state.wars_of(nation_id).is_empty()
 	)
+	var previous_plan: CampaignAllocationPlan = (
+		state.nations[nation_id].campaign_preparation_plan
+	)
+	if _campaign_preparation_plan_reusable(
+		nation_id,
+		previous_plan,
+		targets,
+		strict_readiness,
+		defense_plan
+	):
+		if not decision_context.is_empty():
+			decision_context["campaign_allocation_plan"] = previous_plan
+		return true
 	var plan: CampaignAllocationPlan = decision_context.get(
 		"campaign_allocation_plan"
 	)
@@ -9777,6 +9749,69 @@ func _ensure_group_campaign_preparation_plan(
 	if plan == null or plan.assigned_group_count <= 0:
 		return false
 	return _apply_campaign_plan_atomic(nation_id, plan)
+
+
+## 已冻结计划只在其结构输入变化时重算。敌军即时战力仍由发动门槛每轮检查，
+## 不需要为了数值波动重新枚举全部“目标 × 战团 × 成员”。
+func _campaign_preparation_plan_reusable(
+	nation_id: int,
+	plan: CampaignAllocationPlan,
+	targets: Array[int],
+	strict_readiness: bool,
+	defense_plan: CityDefensePlan
+) -> bool:
+	if (
+		plan == null
+		or plan.nation_id != nation_id
+		or plan.strict_group_readiness != strict_readiness
+		or plan.candidate_target_ids != targets
+		or plan.assigned_target_ids.is_empty()
+		or plan.group_to_target.is_empty()
+	):
+		return false
+	var nation := state.nations[nation_id]
+	for target_city in plan.assigned_target_ids:
+		if (
+			target_city < 0
+			or target_city >= state.cities.size()
+			or not state.is_enemy(
+				nation_id, state.cities[target_city].owner_nation
+			)
+			or not plan.target_to_groups.has(target_city)
+		):
+			return false
+	for group_id_value in plan.group_to_target:
+		var group_id := int(group_id_value)
+		var target_city := int(plan.group_to_target[group_id_value])
+		if (
+			state.battle_group_by_id(nation_id, group_id) == null
+			or not plan.assigned_target_ids.has(target_city)
+		):
+			return false
+		var current_member_ids: Array[int] = []
+		for army in state.battle_group_members(nation_id, group_id):
+			current_member_ids.append(army.id)
+			if (
+				defense_plan != null
+				and defense_plan.urgent_defense_at(
+					_campaign_army_origin(army, nation_id)
+				)
+			):
+				return false
+		current_member_ids.sort()
+		var planned_member_ids: Array[int] = []
+		planned_member_ids.assign(
+			plan.all_member_ids.get(group_id, [] as Array[int])
+		)
+		planned_member_ids.sort()
+		if current_member_ids != planned_member_ids:
+			return false
+		for army_id in plan.member_ids_for_group(group_id):
+			if int(nation.campaign_preparation_assignments.get(
+				army_id, -1
+			)) != target_city:
+				return false
+	return true
 
 
 func _campaign_allocation_target_candidates(
@@ -10500,7 +10535,7 @@ func _trim_campaign_preparation_budget(
 			break
 		if not bounded_targets.has(target_city):
 			bounded_targets.append(target_city)
-	# 旧存档可能带有超过八路的准备状态；先移除超额目标及其 Assignment。
+	# 旧存档可能带有超过三路的准备状态；先移除超额目标及其 Assignment。
 	for target_value in nation.campaign_preparation_targets.duplicate():
 		var target_city := int(target_value)
 		if not bounded_targets.has(target_city):
@@ -10567,7 +10602,7 @@ func _trim_campaign_preparation_budget(
 		reserved_group_slots += maxi(
 			required_floor - valid_group_count, 0
 		)
-	# 为尚未覆盖的新方向预留战团预算；若16团已全部堆在旧方向，
+	# 为尚未覆盖的新方向预留战团预算；若8团已全部堆在旧方向，
 	# 从额外增援团中释放相同数量，下一阶段即可重平衡到新前线。
 	var retained_existing_limit := maxi(
 		mini(
@@ -11222,7 +11257,7 @@ func _build_campaign_attack_plan_from_preparation(
 	var nation := state.nations[nation_id]
 	_clear_campaign_attack_plan(nation_id)
 	# 外部调用或旧存档可能直接传入超额准备列表；发射入口自身必须
-	# 裁到8路/16团，不能依赖调用方预先经过正常规划流水线。
+	# 裁到3路/8团，不能依赖调用方预先经过正常规划流水线。
 	var ordered_targets := _trim_campaign_preparation_budget(
 		nation_id, targets
 	)

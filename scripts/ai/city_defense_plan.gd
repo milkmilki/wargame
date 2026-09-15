@@ -491,9 +491,9 @@ func _input_signature() -> Array:
 		view.state.fortification_revision,
 		view.capital_city_id,
 	]
-	_append_army_signature(result, view.friendly_armies)
+	_append_army_signature(result, view.friendly_armies, false)
 	result.append(-1001)
-	_append_army_signature(result, view.enemy_armies)
+	_append_army_signature(result, view.enemy_armies, true)
 	result.append(-1002)
 	for battle in view.state.battles:
 		if (
@@ -514,7 +514,8 @@ func _input_signature() -> Array:
 
 func _append_army_signature(
 	result: Array,
-	armies: Array[Army]
+	armies: Array[Army],
+	include_move_progress: bool
 ) -> void:
 	result.append(armies.size())
 	for army in armies:
@@ -528,7 +529,7 @@ func _append_army_signature(
 			army.move_from,
 			army.move_to,
 			army.on_edge,
-			army.move_progress,
+			army.move_progress if include_move_progress else 0.0,
 			army.starving,
 			army.supply_ratio,
 			army.battle_id,

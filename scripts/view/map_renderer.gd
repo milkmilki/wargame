@@ -5048,8 +5048,7 @@ static func army_counter_profile(
 	max_size: int,
 	strategic_role: int = -1
 ) -> Dictionary:
-	# 角色是兵棋轮廓的第一判据：战团里的5000轻军也必须和独立
-	# 5000填线军明显不同。省略角色的旧调用仍按重军推断 MAIN。
+	# 角色是兵棋轮廓的第一判据；省略角色的旧调用仍按重军推断 MAIN。
 	var main_role := (
 		strategic_role == Army.StrategicRole.MAIN
 		or (

@@ -34,12 +34,13 @@ func _run() -> void:
 	state.set_diplomatic_relation(subject, enemy, GameState.DiplomaticRelation.WAR)
 	state.uses_heightmap = true
 	state.refresh_derived()
-	var main: Army = null
-	for army in state.armies:
-		if army.owner_nation == subject and army.size > 0:
-			main = army
-			break
-	_check(main != null, "藩王必须有可转为 MAIN 的本国军队")
+	var main := state.create_army(
+		subject,
+		state.nations[subject].capital_city_id,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	_check(main != null, "藩王必须能建立单重军 MAIN 战团")
 	if main == null:
 		_finish()
 		return

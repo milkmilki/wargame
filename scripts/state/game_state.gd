@@ -350,7 +350,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
 	assert(
 		armies.size()
-			== CITY_COUNT + NATION_COUNT * 3,
+			== CITY_COUNT + NATION_COUNT,
 		"网格状态机夹具必须保留每城填线军和每国一个满编战团"
 	)
 	assert(_battle_group_structure_valid(), "网格战团结构必须合法")
@@ -2441,8 +2441,7 @@ func _generate_armies() -> void:
 			)
 		)
 		# 小型新开局直接采用生存军制：每座陆城一支轻型 LINE，另有
-		# 一支单成员轻型 MAIN 作为机动预备队。它不需要先生成完整
-		# 二轻一重战团，再等待战争中的运行时逻辑停止补员。
+		# 一支单成员重型 MAIN 作为机动预备队。
 		if (
 			not owned_land.is_empty()
 			and owned_land.size() <= SMALL_NATION_SURVIVAL_MAX_CITIES
@@ -2460,7 +2459,7 @@ func _generate_armies() -> void:
 				var reserve_group := create_battle_group(nation.id)
 				var reserve := create_army(
 					nation.id, nation.capital_city_id,
-					INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
+					INITIAL_HEAVY_ARMY_SIZE, INITIAL_HEAVY_ARMY_SIZE
 				)
 				if reserve == null:
 					nation.battle_groups.erase(reserve_group)
@@ -2478,8 +2477,8 @@ func _generate_armies() -> void:
 		# 网格世界是镜像测试夹具，保留每城一支填线军；正式地图按实际国界城市起步。
 		if not uses_heightmap:
 			line_cities = owned
-		# 每个有城国家随后还要生成二轻一重的完整初始战团。小型自定义
-		# 地图必须先为这三支军队预留上限，避免一城国在加载时越界。
+		# 每个有城国家随后还要生成一支重军组成的初始战团。小型自定义
+		# 地图必须先为这支军队预留上限，避免一城国在加载时越界。
 		var battle_group_slots := (
 			BattleGroup.MAX_LIGHT_ARMIES + BattleGroup.MAX_HEAVY_ARMIES
 		)
@@ -2500,15 +2499,6 @@ func _generate_armies() -> void:
 			continue
 		var group := create_battle_group(nation.id)
 		var group_city := nation.capital_city_id
-		for _index in range(BattleGroup.MAX_LIGHT_ARMIES):
-			var light := create_army(
-				nation.id,
-				group_city,
-				INITIAL_LIGHT_ARMY_SIZE,
-				INITIAL_LIGHT_ARMY_SIZE
-			)
-			_initialize_army_attributes(light)
-			assign_army_to_battle_group(light, group.id)
 		var heavy := create_army(
 			nation.id,
 			group_city,
@@ -2522,17 +2512,12 @@ func _generate_armies() -> void:
 func _battle_group_structure_valid() -> bool:
 	for nation in nations:
 		for group in nation.battle_groups:
-			var light_count := 0
 			var heavy_count := 0
 			for army in battle_group_members(nation.id, group.id):
-				if army.max_size == INITIAL_LIGHT_ARMY_SIZE:
-					light_count += 1
-				elif army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-					heavy_count += 1
-			if (
-				light_count > BattleGroup.MAX_LIGHT_ARMIES
-				or heavy_count > BattleGroup.MAX_HEAVY_ARMIES
-			):
+				if army.max_size < INITIAL_HEAVY_ARMY_SIZE:
+					return false
+				heavy_count += 1
+			if heavy_count > BattleGroup.MAX_HEAVY_ARMIES:
 				return false
 	for army in armies:
 		if (
@@ -2604,28 +2589,20 @@ func assign_army_to_battle_group(
 	if (
 		army == null
 		or army.size <= 0
+		or army.max_size < INITIAL_HEAVY_ARMY_SIZE
 		or battle_group_by_id(
 			army.owner_nation,
 			group_id
 		) == null
 	):
 		return false
-	var light_count := 0
 	var heavy_count := 0
 	for member in battle_group_members(army.owner_nation, group_id):
 		if member == army:
 			continue
-		if member.max_size == INITIAL_LIGHT_ARMY_SIZE:
-			light_count += 1
-		elif member.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+		if member.max_size >= INITIAL_HEAVY_ARMY_SIZE:
 			heavy_count += 1
-	if (
-		army.max_size == INITIAL_LIGHT_ARMY_SIZE
-		and light_count >= BattleGroup.MAX_LIGHT_ARMIES
-	) or (
-		army.max_size >= INITIAL_HEAVY_ARMY_SIZE
-		and heavy_count >= BattleGroup.MAX_HEAVY_ARMIES
-	):
+	if heavy_count >= BattleGroup.MAX_HEAVY_ARMIES:
 		return false
 	army.battle_group_id = group_id
 	army.strategic_role = Army.StrategicRole.MAIN
