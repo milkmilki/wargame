@@ -135,7 +135,8 @@ static func _build_nations(state: GameState) -> Dictionary:
 		war_preparation_started_day.append(
 			nation.war_preparation_started_day
 		)
-		war_preparation_scope.append(nation.war_preparation_scope)
+		# 原生快照 ABI 保留该数组键；唯一战争作用域固定为 0。
+		war_preparation_scope.append(0)
 		campaign_last_offensive_day.append(
 			nation.campaign_last_offensive_day
 		)
@@ -202,13 +203,8 @@ static func _build_nations(state: GameState) -> Dictionary:
 				if directed
 				else -1
 			)
-			war_objective_scope.append(
-				int(objective.get(
-					"scope", GameState.WarScope.COALITION
-				))
-				if directed
-				else GameState.WarScope.COALITION
-			)
+			# 原生快照 ABI 保留该数组键；所有战争均为联盟战争。
+			war_objective_scope.append(0)
 	return {
 		"count": state.nations.size(),
 		"ids": ids,

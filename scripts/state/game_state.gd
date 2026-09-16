@@ -61,11 +61,6 @@ enum DiplomaticRelation {
 	ALLIED,
 }
 
-enum WarScope {
-	COALITION,
-	VASSAL_PRIVATE,
-}
-
 ## 城市实控变化时，原城内库存的结算策略。所有运行期领土业务都必须显式
 ## 选择一种去向；事务会在提交前确认对应的最终粮池确实可以入账。
 enum TerritoryStockDisposition {
@@ -79,7 +74,7 @@ const TERRITORY_CAPTURE_SPOILS_RATE: float = 0.30
 
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
-const VASSAL_PRIVATE_WAR_COHESION_THRESHOLD: float = 0.35
+const VASSAL_DISSOLUTION_COHESION_THRESHOLD: float = 0.35
 const VASSAL_SYSTEM_DISSOLUTION_DAYS: int = 360
 const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 5.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
@@ -1674,7 +1669,7 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 static func default_road_tuning() -> Dictionary:
 	return {
 		"minimum_land_ratio": 0.90,
-		"maximum_relief": 0.25,
+		"maximum_relief": 0.20,
 		"blocked_branch_share": 0.10,
 		"terrain_capacity_penalty": 0.35,
 		"capacity_multiplier": 1.0,
@@ -2942,8 +2937,7 @@ func set_war_objective(
 	attacker: int,
 	defender: int,
 	city_id: int,
-	reason: String,
-	scope: int = WarScope.COALITION
+	reason: String
 ) -> void:
 	war_objectives[_diplomacy_key(attacker, defender)] = {
 		"attacker": attacker,
@@ -2951,21 +2945,7 @@ func set_war_objective(
 		"city_id": city_id,
 		"reason": reason,
 		"started_day": day,
-		"scope": scope,
 	}
-
-
-func war_scope(nation_a: int, nation_b: int) -> int:
-	return int(war_objective(nation_a, nation_b).get(
-		"scope", WarScope.COALITION
-	))
-
-
-func is_private_war(nation_a: int, nation_b: int) -> bool:
-	return (
-		is_enemy(nation_a, nation_b)
-		and war_scope(nation_a, nation_b) == WarScope.VASSAL_PRIVATE
-	)
 
 
 func clear_war_objective(nation_a: int, nation_b: int) -> void:
@@ -3021,47 +3001,6 @@ func suzerainty_cohesion(nation_id: int) -> float:
 	if _suzerainty_cohesion_revision != ownership_revision:
 		_rebuild_suzerainty_cohesion_cache()
 	return float(_suzerainty_cohesion_by_root.get(root, 1.0))
-
-
-func can_vassal_declare_private_war(nation_id: int) -> bool:
-	if (
-		nation_id < 0
-		or nation_id >= nations.size()
-		or not nations[nation_id].alive
-		or not is_vassal(nation_id)
-		or is_in_civil_war(nation_id)
-		or not wars_of(nation_id).is_empty()
-	):
-		return false
-	var root := suzerainty_root(nation_id)
-	return (
-		root >= 0
-		and root < nations.size()
-		and nations[root].alive
-		and suzerainty_cohesion(root)
-			< VASSAL_PRIVATE_WAR_COHESION_THRESHOLD
-	)
-
-
-func can_declare_private_war(attacker: int, defender: int) -> bool:
-	if (
-		not can_vassal_declare_private_war(attacker)
-		or defender < 0
-		or defender >= nations.size()
-		or attacker == defender
-		or not nations[defender].alive
-		or day < truce_until(attacker, defender)
-		or is_suzerainty_pair(attacker, defender)
-		or not _regional_rebellion_war_allowed(attacker, defender)
-	):
-		return false
-	var attacker_root := suzerainty_root(attacker)
-	var defender_root := suzerainty_root(defender)
-	if defender == attacker_root:
-		return false
-	if defender_root == attacker_root:
-		return is_vassal(defender) and not is_in_civil_war(defender)
-	return relation_between(attacker, defender) == DiplomaticRelation.NEUTRAL
 
 
 func set_diplomatic_relation(
@@ -4194,7 +4133,7 @@ func advance_suzerainty_dissolution() -> Array[int]:
 	roots.sort()
 	var dissolved: Array[int] = []
 	for root in roots:
-		if suzerainty_cohesion(root) >= VASSAL_PRIVATE_WAR_COHESION_THRESHOLD:
+		if suzerainty_cohesion(root) >= VASSAL_DISSOLUTION_COHESION_THRESHOLD:
 			suzerainty_low_cohesion_since_day.erase(root)
 			continue
 		if not suzerainty_low_cohesion_since_day.has(root):
@@ -4353,7 +4292,6 @@ func _dissolve_suzerainty_system(root_id: int) -> bool:
 			nation.war_preparation_started_day = -1
 			nation.war_preparation_reason = ""
 			nation.war_preparation_unready_since_day = -1
-		nation.war_preparation_scope = WarScope.COALITION
 	refresh_derived()
 	diplomatic_history.append({
 		"day": day,
@@ -4366,7 +4304,7 @@ func _dissolve_suzerainty_system(root_id: int) -> bool:
 
 
 ## 无城控制者的对外领土接收回退。正常占领优先保留实际控制者；仅当控制者已
-## 无城时沿非内战宗藩链寻找存活接收方。私人战争的存活藩王因此不会上缴战果。
+## 无城时沿非内战宗藩链寻找存活接收方。
 func external_territory_recipient(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1

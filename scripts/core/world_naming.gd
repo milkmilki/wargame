@@ -261,7 +261,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 		)
 		changed = true
 	# 城市简称：单字、战役唯一，直接从全称派生。
-	# 城市 id 升序保证同 seed 稳定去重；藩王单字王封号取自首都简称。
+	# 城市 id 升序保证同 seed 稳定去重；藩王单字王封号取自受封锚点简称。
 	var short_registry := _registry(game_state, _CITY_SHORT_REGISTRY_META)
 	for city_index in range(game_state.cities.size()):
 		var city = game_state.cities[city_index]
@@ -386,8 +386,8 @@ static func assign_from_definition(
 		_bump_revision(game_state)
 
 
-## 为运行时新建藩王分配稳定基础名；不足五城用藩都全称，五城起用
-## 藩都简称，正式显示统一追加“王”。
+## 为运行时新建藩王分配稳定封号；不足五城用受封锚点全称，五城起用
+## 同一锚点简称，正式显示统一追加“王”。
 static func assign_vassal_name(
 	game_state,
 	subject_id: int,
@@ -752,30 +752,25 @@ static func _founding_sovereign_identity(
 	return _allocate_sovereign_name(world_seed, nation_id, {})
 
 
-## 藩王展示：封号单向棘轮。陆城数达到过 5 座即永久升为「单字王」（藩都
-## 简称 + 王），之后即使失地也保持单字王，绝不降回双字王；未达到过 5 座
-## 前采用藩都全称 + 王。单字取自首都的战役唯一简称，故不同藩王不会撞字。
+## 藩王展示：封号锚定受封时的 founding_city_id，迁都、失地或该城被占均不
+## 改号。陆城数达到过 5 座时只允许从锚点全称王升为锚点简称王；之后即使
+## 失地也保持单字王，绝不降回双字王。
 static func _vassal_display_name(game_state, nation_id: int) -> String:
 	if not _valid_nation_id(game_state, nation_id):
 		return ""
 	var nation = game_state.nations[nation_id]
 	var owned := _owned_land_city_ids(game_state, nation_id)
-	var capital_id := int(nation.capital_city_id)
-	if (
-		not _valid_land_city_id(game_state, capital_id)
-		or game_state.cities[capital_id].owner_nation != nation_id
-	):
-		capital_id = owned[0] if not owned.is_empty() else -1
-	if capital_id < 0:
+	var title_city_id := ensure_founding_city_id(game_state, nation_id)
+	if title_city_id < 0:
 		var stored := str(nation.name).strip_edges()
 		return stored if not stored.is_empty() else "无名王"
 	# 单向棘轮：陆城数达到过 5 即永久锁定单字王，失地不再降回双字王。
 	if owned.size() >= 5:
 		nation.vassal_single_char = true
 	var base := (
-		city_short_name(game_state, capital_id)
+		city_short_name(game_state, title_city_id)
 		if bool(nation.vassal_single_char)
-		else city_display_name(game_state, capital_id)
+		else city_display_name(game_state, title_city_id)
 	)
 	return base + "王"
 

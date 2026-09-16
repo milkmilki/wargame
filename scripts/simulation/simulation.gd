@@ -42,13 +42,19 @@ const CITY_GARRISON_CAPACITY_PER_MANPOWER: float = 1000.0
 const CITY_GARRISON_FOOD_PENALTY_RATE: float = 0.20
 const CITY_GARRISON_FOOD_PENALTY_MAX: float = 0.30
 const CITY_WAR_DISRUPTION_DAYS: int = 365
-const CITY_WAR_OUTPUT_MULTIPLIER: float = 0.50
+const CITY_WAR_OUTPUT_MULTIPLIER: float = (
+	CityOutputRules.CITY_WAR_OUTPUT_MULTIPLIER
+)
 ## 藩王就近治理加成：藩王实控疆域内城市的钱/粮产出乘此系数（体现分权就近治理的
 ## 更高产出，并弥补藩王需上缴的贡赋）。仅按「城市实控 owner 是否为藩王」派生，不烧进
 ## 城市基础字段——owner 变更（分封/兼并/割地/易手）后自动生效，零维护、单一真源。
-const VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER: float = 1.5
+const VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER: float = (
+	CityOutputRules.VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+)
 ## 首都汇集全国财赋：本国全部陆城基础金产出的固定比例作为首都加性产出。
-const CAPITAL_NATIONAL_GOLD_SHARE: float = 0.20
+const CAPITAL_NATIONAL_GOLD_SHARE: float = (
+	CityOutputRules.CAPITAL_NATIONAL_GOLD_SHARE
+)
 ## 撤退驻城恢复每月消耗：复用普通驻军月耗口径（size × FOOD_PER_CAPITA）。
 ## 资源不足时按实际供给比例恢复；士气回满或本城粮尽后解除 RECOVERING。
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
@@ -1480,6 +1486,9 @@ func _trade_structure_runtime_probe() -> Array:
 		state.ownership_revision,
 		state.road_network_revision,
 	]
+	for city in state.cities:
+		if city_war_disrupted(state, city):
+			result.append([city.id, city.war_disruption_until_day])
 	for nation in state.nations:
 		result.append_array([
 			nation.id, nation.alive, nation.capital_city_id,
@@ -2194,14 +2203,9 @@ static func city_governance_output_multiplier(
 	game_state: GameState,
 	city: City
 ) -> float:
-	if (
-		city == null
-		or city.owner_nation < 0
-		or city.owner_nation >= game_state.nations.size()
-		or not game_state.is_vassal(city.owner_nation)
-	):
-		return 1.0
-	return VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+	return CityOutputRules.city_governance_output_multiplier(
+		game_state, city
+	)
 
 
 static func _apply_governance_multiplier(
@@ -2245,17 +2249,8 @@ static func city_gold_output(
 	city: City,
 	ruler_modifiers: Dictionary = {}
 ) -> int:
-	var output := _apply_governance_multiplier(
-		game_state,
-		city,
-		city_gold_output_before_governance(
-			game_state,
-			city
-		)
-	)
-	return _apply_ruler_output_multiplier(
-		game_state, city, output, RulerProfile.KEY_GOLD_OUTPUT,
-		ruler_modifiers
+	return CityOutputRules.city_gold_output(
+		game_state, city, ruler_modifiers
 	)
 
 
@@ -2377,12 +2372,8 @@ static func city_gold_output_before_governance(
 	game_state: GameState,
 	city: City
 ) -> int:
-	return _apply_city_war_disruption(
-		game_state,
-		city,
-		city.gold_per_month + capital_national_gold_addition(
-			game_state, city
-		)
+	return CityOutputRules.city_gold_output_before_governance(
+		game_state, city
 	)
 
 
@@ -2392,28 +2383,14 @@ static func capital_national_gold_addition(
 	game_state: GameState,
 	city: City
 ) -> int:
-	if (
-		game_state == null
-		or city == null
-		or not city.is_capital
-		or city.owner_nation < 0
-		or city.owner_nation >= game_state.nations.size()
-		or game_state.nations[city.owner_nation].capital_city_id != city.id
-	):
-		return 0
-	var national_base_gold := 0
-	for owned_city in game_state.land_cities_of(city.owner_nation):
-		national_base_gold += maxi(owned_city.gold_per_month, 0)
-	return int(floor(
-		float(national_base_gold) * CAPITAL_NATIONAL_GOLD_SHARE
-	))
+	return CityOutputRules.capital_national_gold_addition(game_state, city)
 
 
 static func city_war_disrupted(
 	game_state: GameState,
 	city: City
 ) -> bool:
-	return game_state.day < city.war_disruption_until_day
+	return CityOutputRules.city_war_disrupted(game_state, city)
 
 
 static func _apply_city_war_disruption(
@@ -4112,36 +4089,18 @@ func _execute_diplomatic_action(
 						% occupations_restored
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
-			var war_scope := int(action.get(
-				"war_scope", GameState.WarScope.COALITION
-			))
-			var private_war := (
-				war_scope == GameState.WarScope.VASSAL_PRIVATE
-			)
 			if (
 				DiplomacyAI.within_diplomatic_range(
 					state, nation_a, nation_b, evaluation_cache
 				)
-				and (
-					state.can_declare_private_war(nation_a, nation_b)
-					if private_war
-					else state.can_alliance_declare_war(nation_a, nation_b)
-				)
+				and state.can_alliance_declare_war(nation_a, nation_b)
 			):
 				var declaration_part_started := (
 					Time.get_ticks_usec()
 					if tick_phase_profiling_enabled else 0
 				)
-				var attackers := (
-					[nation_a] as Array[int]
-					if private_war
-					else state.alliance_bloc(nation_a)
-				)
-				var defenders := (
-					[nation_b] as Array[int]
-					if private_war
-					else state.alliance_bloc(nation_b)
-				)
+				var attackers := state.alliance_bloc(nation_a)
+				var defenders := state.alliance_bloc(nation_b)
 				action_bloc_a = attackers
 				action_bloc_b = defenders
 				_record_tick_profile_stage(
@@ -4152,12 +4111,8 @@ func _execute_diplomatic_action(
 					Time.get_ticks_usec()
 					if tick_phase_profiling_enabled else 0
 				)
-				changed = (
-					_set_private_war(nation_a, nation_b, frozen_gold_flows)
-					if private_war
-					else _set_coalition_war(
-						attackers, defenders, frozen_gold_flows
-					)
+				changed = _set_coalition_war(
+					attackers, defenders, frozen_gold_flows
 				)
 				_record_tick_profile_stage(
 					"diplomacy_declare_set_war",
@@ -4168,24 +4123,14 @@ func _execute_diplomatic_action(
 					if tick_phase_profiling_enabled else 0
 				)
 				var objective_city := int(action.get("objective_city", -1))
-				if changed:
-					if private_war:
-						# 作用域是联盟隔离的真源，不能因目标城在提交前易主而丢失。
-						state.set_war_objective(
-							nation_a,
-							nation_b,
-							objective_city,
-							str(action.get("objective_reason", "")),
-							war_scope
-						)
-					elif objective_city >= 0:
-						_set_coalition_war_objective(
-							attackers,
-							defenders,
-							nation_a,
-							objective_city,
-							str(action.get("objective_reason", ""))
-						)
+				if changed and objective_city >= 0:
+					_set_coalition_war_objective(
+						attackers,
+						defenders,
+						nation_a,
+						objective_city,
+						str(action.get("objective_reason", ""))
+					)
 				_record_tick_profile_stage(
 					"diplomacy_declare_objective",
 					declaration_part_started
@@ -4289,19 +4234,11 @@ func _execute_diplomatic_action(
 				if changed:
 					_repatriate_after_access_revoked(nation_a, nation_b)
 		DiplomacyAI.Action.PREPARE_WAR:
-			var preparation_scope := int(action.get(
-				"war_scope", GameState.WarScope.COALITION
-			))
 			if (
 				DiplomacyAI.within_diplomatic_range(
 					state, nation_a, nation_b, evaluation_cache
 				)
-				and (
-					state.can_declare_private_war(nation_a, nation_b)
-					if preparation_scope
-						== GameState.WarScope.VASSAL_PRIVATE
-					else state.can_alliance_declare_war(nation_a, nation_b)
-				)
+				and state.can_alliance_declare_war(nation_a, nation_b)
 			):
 				changed = _start_war_preparation(nation_a, nation_b, action)
 		DiplomacyAI.Action.CANCEL_WAR_PREPARATION:
@@ -4385,8 +4322,6 @@ func _execute_diplomatic_action(
 	if action.has("objective_city"):
 		event["objective_city"] = int(action["objective_city"])
 		event["objective_reason"] = str(action.get("objective_reason", ""))
-	if action.has("war_scope"):
-		event["war_scope"] = int(action["war_scope"])
 	if action.has("mobilization_armies"):
 		event["mobilization_armies"] = int(action["mobilization_armies"])
 	if action.has("subject_nation"):
@@ -4554,19 +4489,6 @@ func _set_coalition_war(
 	return changed
 
 
-func _set_private_war(
-	attacker: int,
-	defender: int,
-	frozen_gold_flows: Array[Dictionary] = []
-) -> bool:
-	_capture_war_gold_income_snapshots(
-		[attacker, defender] as Array[int], frozen_gold_flows
-	)
-	return state.set_diplomatic_relation(
-		attacker, defender, GameState.DiplomaticRelation.WAR
-	)
-
-
 func _set_coalition_war_objective(
 	attackers: Array[int],
 	defenders: Array[int],
@@ -4612,8 +4534,6 @@ func _synchronize_alliance_wars(
 	for member in bloc:
 		for enemy_id in state.wars_of(member):
 			if bloc.has(enemy_id):
-				continue
-			if state.is_private_war(member, enemy_id):
 				continue
 			for enemy_member in state.alliance_bloc(enemy_id):
 				if not bloc.has(enemy_member):
@@ -4695,17 +4615,8 @@ func _plan_coalition_peace(
 		return {"ok": false, "changed": false, "error": "游戏状态不存在。"}
 	var expected_ownership_revision := state.ownership_revision
 	var expected_diplomacy_revision := state.diplomacy_revision
-	var private_war := state.is_private_war(nation_a, nation_b)
-	var bloc_a := (
-		[nation_a] as Array[int]
-		if private_war
-		else state.alliance_bloc(nation_a, false)
-	)
-	var bloc_b := (
-		[nation_b] as Array[int]
-		if private_war
-		else state.alliance_bloc(nation_b, false)
-	)
+	var bloc_a := state.alliance_bloc(nation_a, false)
+	var bloc_b := state.alliance_bloc(nation_b, false)
 	if bloc_a.is_empty() or bloc_b.is_empty():
 		return {"ok": true, "changed": false}
 	var war_outcome_a := DiplomacyAI.war_situation_score(
@@ -5583,9 +5494,6 @@ func _start_war_preparation(
 	nation.war_preparation_objective_city = objective_city
 	nation.war_preparation_started_day = state.day
 	nation.war_preparation_reason = str(action.get("objective_reason", ""))
-	nation.war_preparation_scope = int(action.get(
-		"war_scope", GameState.WarScope.COALITION
-	))
 	nation.war_preparation_unready_since_day = -1
 	_clear_campaign_preparation_plan(nation_id)
 	var requested_armies := int(action.get("mobilization_armies", 0))
@@ -5614,7 +5522,6 @@ func _clear_war_preparation(
 	nation.war_preparation_objective_city = -1
 	nation.war_preparation_started_day = -1
 	nation.war_preparation_reason = ""
-	nation.war_preparation_scope = GameState.WarScope.COALITION
 	nation.war_preparation_unready_since_day = -1
 	if clear_mobilization:
 		_clear_campaign_preparation_plan(nation_id)
@@ -15946,13 +15853,6 @@ func _capture_city(
 		and state.overlord_of(claimant) == old_owner
 		and state.is_in_civil_war(claimant)
 	)
-	var private_war_capital_capture := (
-		captured_capital
-		and state.is_vassal(old_owner)
-		and state.is_private_war(old_owner, army.owner_nation)
-	)
-	if private_war_capital_capture:
-		claimant = army.owner_nation
 	var occupation_sponsor := (
 		-1
 		if state.recognized_owner_of(city.id) == claimant
@@ -15982,10 +15882,7 @@ func _capture_city(
 		territory_changed = true
 	elif (
 		captured_capital
-		and (
-			not state.is_vassal(old_owner)
-			or private_war_capital_capture
-		)
+		and not state.is_vassal(old_owner)
 	):
 		var capital_transfers := _resolve_capital_capture_capitulation(
 			old_owner, claimant, city.id
@@ -16068,7 +15965,7 @@ func _capture_city(
 		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。
 		if civil_war_capital_capture:
 			pass
-		# 普通战争与藩王私战的两跳领土转移、投降已在上面的原子分支完成。
+		# 普通战争的两跳领土转移、投降已在上面的原子分支完成。
 		# 和平藩王不整国投降；原子领土事务已同步处理迁都、共享粮仓
 		# 与派生状态。若已经失去最后一城，日末再清理其宗藩记录。
 	if execute_post_capture_plan and captor_can_remain:
@@ -16290,15 +16187,6 @@ func _occupation_claimant_for_army(
 	army: Army,
 	target_city: City = null
 ) -> int:
-	# 私战没有联盟参战方；宗主只提供宗藩通行，不能因军队从其直辖道路
-	# 进入战场就截取战果。控制权始终归实际参战的军队所属藩王。
-	if (
-		target_city != null
-		and state.is_private_war(
-			army.owner_nation, target_city.owner_nation
-		)
-	):
-		return army.owner_nation
 	# 此函数只在真正破城后决定控制权接收者，与围城阶段的 CITY_DEFENDER/
 	# CHALLENGER 角色正交：战斗阵营按当前控制与军事通行权，控制权则优先归还
 	# 仍存活且与攻方结盟的法理所有者。

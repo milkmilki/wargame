@@ -57,7 +57,6 @@ var war_preparation_objective_city: int = -1
 var war_preparation_started_day: int = -1
 var war_preparation_reason: String = ""
 ## 0=普通联盟战争，1=低凝聚力宗藩私人战争。使用整数以保持模型不反向依赖 GameState。
-var war_preparation_scope: int = 0
 var war_preparation_unready_since_day: int = -1
 ## 上次「取消备战」的世界日；用于取消后冷却，杜绝取消→隔一个决策周期立即重开的横跳。
 ## -1 表示无冷却在途。仅由取消路径盖戳，宣战成功清空备战不盖戳（成功不该被冷却惩罚）。

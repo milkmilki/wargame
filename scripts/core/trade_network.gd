@@ -41,6 +41,8 @@ const MAX_INTERNATIONAL_PARTNERS_PER_NATION: int = 8
 ## 战争不拆除、封锁或改道既有贸易网络，只降低参战国实际取得的贸易金。
 ## 与城市战乱减产使用同一 50% 口径；多场战争不会重复叠乘。
 const WARTIME_TRADE_GOLD_MULTIPLIER: float = 0.50
+## 闭关不禁止节点或路线，只把相关路线的政策产值压到正常水平的一成。
+const ISOLATION_TRADE_OUTPUT_MULTIPLIER: float = 0.10
 
 ## 与现有模型匹配的本地常量。刻意不引用 Simulation，避免 core 层循环依赖。
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
@@ -285,7 +287,7 @@ static func build_structure(
 	)
 	var field_cache := {}
 	var routes := _build_regional_routes(
-		state, graph, policies, besieged, occupied_edges, field_cache,
+		state, graph, besieged, occupied_edges, field_cache,
 		build_profile, shared_caches, party_context
 	)
 
@@ -555,24 +557,32 @@ static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
 
 ## 结构层的无碰撞 token。把所有实际结构依赖写成有标签的 Variant 数组后
 ## 序列化成完整字节；不使用 hash，因而不会因哈希碰撞误复用。
-## 战争、围城、军队位置、库存、国库、需求与日期都不属于路线结构。
+## 围城、军队位置、库存、国库与需求不属于路线结构。日期只通过城市当前是否
+## 处于战乱减产期影响贸易中心产值，不直接写入 token。
 static func structure_fingerprint(state: GameState) -> PackedByteArray:
 	if state == null:
-		return var_to_bytes(["trade_structure_v4", null])
+		return var_to_bytes(["trade_structure_v5", null])
 	var fields: Array = [
-		"trade_structure_v4",
+		"trade_structure_v5",
 		["counts", state.cities.size(), state.nations.size()],
 		["map_aspect_ratio", state.map_aspect_ratio],
 	]
+	var non_trade_gold_outputs := CityOutputRules.city_gold_outputs(state)
 	for city in state.cities:
 		var region_id := (
 			int(state.region_ids[city.id])
 			if city.id >= 0 and city.id < state.region_ids.size()
 			else -1
 		)
+		var non_trade_gold_output := (
+			int(non_trade_gold_outputs[city.id])
+			if city.id >= 0 and city.id < non_trade_gold_outputs.size()
+			else CityOutputRules.city_gold_output(state, city)
+		)
 		fields.append([
 			"city", city.id, city.owner_nation, city.is_dock,
 			city.map_position, city.gold_per_month, city.food_per_half_year,
+			non_trade_gold_output,
 			city.is_capital, city.has_warehouse, city.is_port_market,
 			city.is_crossroads, city.is_food_hub, region_id,
 			int(city.get_meta("initial_owner_city", -1)),
@@ -629,8 +639,7 @@ static func _possible_trade_parties(state: GameState) -> Array[int]:
 			and nation.alive
 			and (
 				owned_all[nation.id] >= 2
-				or (owned_land[nation.id] > 0
-					and _policy_of(nation) != Policy.ISOLATION)
+				or owned_land[nation.id] > 0
 			)
 		):
 			result.append(nation.id)
@@ -901,7 +910,6 @@ static func _ideal_city_mask(state: GameState) -> PackedByteArray:
 static func _build_regional_routes(
 	state: GameState,
 	graph: Dictionary,
-	policies: Array[int],
 	besieged: Dictionary,
 	occupied_edges: Array[Dictionary],
 	field_cache: Dictionary,
@@ -915,15 +923,7 @@ static func _build_regional_routes(
 	region_ids.sort()
 	var active_centers: Array[int] = []
 	for region_value in region_ids:
-		var city_id := int(centers[region_value])
-		var owner := state.cities[city_id].owner_nation
-		if (
-			owner < 0 or owner >= state.nations.size()
-			or not state.nations[owner].alive
-			or policies[owner] == Policy.ISOLATION
-		):
-			continue
-		active_centers.append(city_id)
+		active_centers.append(int(centers[region_value]))
 	var result: Array[Dictionary] = []
 	for source_index in range(active_centers.size()):
 		var source := active_centers[source_index]
@@ -1297,7 +1297,6 @@ static func _build_international_routes(
 	for nation_id in range(state.nations.size()):
 		if (
 			state.nations[nation_id].alive
-			and policies[nation_id] != Policy.ISOLATION
 			and not (hubs_by_nation[nation_id] as Array[int]).is_empty()
 		):
 			international_candidate_nation_ids.append(nation_id)
@@ -2356,11 +2355,11 @@ static func _route_region_crossings_from_ids(
 	return crossings
 
 
-## 每个区域全世界只保留一个贸易中心。不同国家的陆地城市直接按基础金产出
-## 竞争；同产出时较小 city_id 获胜，保证重建结果确定。
+## 每个区域全世界只保留一个贸易中心。不同国家的陆地城市按排除贸易收益后的
+## 最终金产出竞争；同产出时较小 city_id 获胜，保证重建结果确定。
 static func _international_hubs_by_nation(
 	state: GameState,
-	policies: Array[int],
+	_policies: Array[int],
 	profile_sink: Dictionary = {},
 	hub_sort_counts: Array = []
 ) -> Array:
@@ -2378,7 +2377,6 @@ static func _international_hubs_by_nation(
 		if (
 			nation_id < 0 or nation_id >= state.nations.size()
 			or not state.nations[nation_id].alive
-			or policies[nation_id] == Policy.ISOLATION
 		):
 			continue
 		(result[nation_id] as Array[int]).append(city_id)
@@ -2393,6 +2391,7 @@ static func regional_trade_centers(
 	var result := {}
 	if state == null:
 		return result
+	var output_by_city := CityOutputRules.city_gold_outputs(state)
 	var regions := trade_region_ids(state)
 	for city in state.cities:
 		if city.is_dock or city.id < 0 or city.id >= regions.size():
@@ -2408,11 +2407,12 @@ static func regional_trade_centers(
 		if incumbent_id < 0:
 			result[region_id] = city.id
 			continue
-		var incumbent := state.cities[incumbent_id]
+		var city_output := int(output_by_city[city.id])
+		var incumbent_output := int(output_by_city[incumbent_id])
 		if (
-			city.gold_per_month > incumbent.gold_per_month
+			city_output > incumbent_output
 			or (
-				city.gold_per_month == incumbent.gold_per_month
+				city_output == incumbent_output
 				and city.id < incumbent_id
 			)
 		):
@@ -4080,8 +4080,15 @@ static func _route_tax_gold(
 	)
 	if nation_b != nation_a:
 		policy_factor = (
-			policy_factor + _gold_policy_factor(policies[nation_b])
-		) * 0.5
+			ISOLATION_TRADE_OUTPUT_MULTIPLIER
+			if (
+				policies[nation_a] == Policy.ISOLATION
+				or policies[nation_b] == Policy.ISOLATION
+			)
+			else (
+				policy_factor + _gold_policy_factor(policies[nation_b])
+			) * 0.5
+		)
 		ruler_factor = (
 			ruler_factor + _ruler_trade_multiplier(state.nations[nation_b])
 		) * 0.5
@@ -4104,7 +4111,7 @@ static func _gold_policy_factor(policy: int) -> float:
 		Policy.FOOD:
 			return 0.85
 		Policy.ISOLATION:
-			return 0.80
+			return ISOLATION_TRADE_OUTPUT_MULTIPLIER
 		_:
 			return 1.0
 

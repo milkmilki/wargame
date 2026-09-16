@@ -120,6 +120,8 @@ func _test_structure_dependencies() -> void:
 			s.cities[1].is_crossroads = not s.cities[1].is_crossroads},
 		{"name": "city_food_hub", "mutate": func(s: GameState) -> void:
 			s.cities[1].is_food_hub = not s.cities[1].is_food_hub},
+		{"name": "city_war_disruption", "mutate": func(s: GameState) -> void:
+			s.cities[0].war_disruption_until_day = s.day + 30},
 		{"name": "nation_alive", "mutate": func(s: GameState) -> void:
 			s.nations[0].alive = false},
 		{"name": "nation_capital", "mutate": func(s: GameState) -> void:
@@ -130,6 +132,14 @@ func _test_structure_dependencies() -> void:
 			s.nations[0].ruler_traits = (
 				[RulerProfile.TRAIT_MERCANTILE] as Array[String]
 			)},
+		{"name": "vassal_governance", "mutate": func(s: GameState) -> void:
+			s.suzerainty[0] = {
+				"overlord_id": 1,
+				"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+				"created_day": s.day,
+				"last_centralization_day": -1,
+				"civil_war": false,
+			}},
 		{"name": "edge_endpoint", "mutate": func(s: GameState) -> void:
 			s.edges[0].city_b = 2},
 		{"name": "edge_kind", "mutate": func(s: GameState) -> void:

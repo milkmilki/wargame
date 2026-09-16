@@ -712,16 +712,11 @@ static func peace_assessment(
 		if evaluation_cache.has("__profile")
 		else 0
 	)
-	var private_war := state.is_private_war(nation_a, nation_b)
-	var bloc_a := (
-		[nation_a] as Array[int]
-		if private_war
-		else _cached_alliance_bloc(state, nation_a, evaluation_cache)
+	var bloc_a := _cached_alliance_bloc(
+		state, nation_a, evaluation_cache
 	)
-	var bloc_b := (
-		[nation_b] as Array[int]
-		if private_war
-		else _cached_alliance_bloc(state, nation_b, evaluation_cache)
+	var bloc_b := _cached_alliance_bloc(
+		state, nation_b, evaluation_cache
 	)
 	_record_evaluation_profile(
 		evaluation_cache,
@@ -1774,14 +1769,9 @@ static func war_desire(
 	state: GameState,
 	nation_id: int,
 	target_id: int,
-	evaluation_cache: Dictionary = {},
-	private_war: bool = false
+	evaluation_cache: Dictionary = {}
 ) -> float:
-	var cache_key := "war_desire:%d:%d:%d" % [
-		nation_id,
-		target_id,
-		1 if private_war else 0,
-	]
+	var cache_key := "war_desire:%d:%d" % [nation_id, target_id]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
 	var part_started := (
@@ -1793,33 +1783,23 @@ static func war_desire(
 		not within_diplomatic_range(
 			state, nation_id, target_id, evaluation_cache
 		)
-		or (
-			not state.can_declare_private_war(nation_id, target_id)
-			if private_war
-			else not _cached_can_alliance_declare_war(
-				state, nation_id, target_id, evaluation_cache
-			)
+		or not _cached_can_alliance_declare_war(
+			state, nation_id, target_id, evaluation_cache
 		)
 		or _cached_wars_of(
 			state,
 			nation_id,
 			evaluation_cache
 		).size() >= MAX_CONCURRENT_WARS
-		or (
-			_direct_frontier_edges(
-				state, nation_id, target_id, evaluation_cache
-			)
-			if private_war
-			else _frontier_edges(
-				state, nation_id, target_id, evaluation_cache
-			)
+		or _frontier_edges(
+			state, nation_id, target_id, evaluation_cache
 		) <= 0
-		or (not private_war and _has_shared_ally(
+		or _has_shared_ally(
 			state,
 			nation_id,
 			target_id,
 			evaluation_cache
-		))
+		)
 	):
 		evaluation_cache[cache_key] = -INF
 		return -INF
@@ -1890,10 +1870,8 @@ static func war_desire(
 		nation_id,
 		evaluation_cache
 	)
-	var target_power := (
-		_national_power(state, target_id, evaluation_cache)
-		if private_war
-		else _coalition_power(state, target_id, evaluation_cache)
+	var target_power := _coalition_power(
+		state, target_id, evaluation_cache
 	)
 	var ratio := own_power / maxf(target_power, 1.0)
 	var target_distraction := float(_cached_wars_of(
@@ -1907,15 +1885,9 @@ static func war_desire(
 		evaluation_cache
 	).size()) * 0.75
 	var border_value := minf(
-		float(
-			_direct_frontier_edges(
-				state, nation_id, target_id, evaluation_cache
-			)
-			if private_war
-			else _frontier_edges(
-				state, nation_id, target_id, evaluation_cache
-			)
-		) * 0.10,
+		float(_frontier_edges(
+			state, nation_id, target_id, evaluation_cache
+		)) * 0.10,
 		0.50
 	)
 	var reserve_quality := minf(
@@ -3931,16 +3903,11 @@ static func _collect_peace_actions(
 				state.is_in_civil_war(a) or state.is_in_civil_war(b)
 			):
 				continue
-			var private_war := state.is_private_war(a, b)
-			var bloc_a := (
-				[a] as Array[int]
-				if private_war
-				else _cached_alliance_bloc(state, a, evaluation_cache)
+			var bloc_a := _cached_alliance_bloc(
+				state, a, evaluation_cache
 			)
-			var bloc_b := (
-				[b] as Array[int]
-				if private_war
-				else _cached_alliance_bloc(state, b, evaluation_cache)
+			var bloc_b := _cached_alliance_bloc(
+				state, b, evaluation_cache
 			)
 			var war_key := _coalition_pair_key(bloc_a, bloc_b)
 			if processed_wars.has(war_key):
@@ -4094,7 +4061,7 @@ static func _collect_leave_alliance_actions(
 			if committed.has(a) or committed.has(b) or not state.is_allied(a, b):
 				continue
 			# 同一宗藩体系内的 ALLIED 是制度性共同体关系，不是普通盟约。
-			# 宗主、直属藩王和兄弟藩王都只能通过内战/私战改变关系。
+			# 宗主、直属藩王和兄弟藩王只能通过削藩内战改变关系。
 			if state.is_same_suzerainty_system(a, b):
 				continue
 			var score_a := leave_alliance_desire(
@@ -4280,8 +4247,8 @@ static func _collect_war_actions(
 					evaluation_cache
 				)
 			continue
-		var private_war := state.is_vassal(nation.id)
-		if private_war and not state.can_vassal_declare_private_war(nation.id):
+		# 藩王不独立发动战争；宗藩体系的对外战争由宗主及联盟共同承担。
+		if state.is_vassal(nation.id):
 			continue
 		# 取消备战冷却：刚取消过备战的国家在冷却期内不得重新发起，打断终局横跳正反馈。
 		if (
@@ -4324,14 +4291,8 @@ static func _collect_war_actions(
 		)
 		var best_target := -1
 		var best_score := -INF
-		var bordering_nations := (
-			_direct_bordering_nation_ids(
-				state, nation.id, evaluation_cache
-			)
-			if private_war
-			else _bordering_nation_ids(
-				state, nation.id, evaluation_cache
-			)
+		var bordering_nations := _bordering_nation_ids(
+			state, nation.id, evaluation_cache
 		)
 		for target_id in bordering_nations:
 			var target := state.nations[target_id]
@@ -4341,8 +4302,7 @@ static func _collect_war_actions(
 				state,
 				nation.id,
 				target.id,
-				evaluation_cache,
-				private_war
+				evaluation_cache
 			)
 			if score > best_score or (
 				is_equal_approx(score, best_score)
@@ -4436,11 +4396,6 @@ static func _collect_war_actions(
 			"objective_city": int(objective["city_id"]),
 			"objective_reason": str(objective["reason"]),
 			"mobilization_armies": mobilization_armies,
-			"war_scope": (
-				GameState.WarScope.VASSAL_PRIVATE
-				if private_war
-				else GameState.WarScope.COALITION
-			),
 			"reason": (
 				(
 					"准备对国%d发动战争，目标%s；储备金%d/%d、粮%d/%d、人%d/%d；"
@@ -4474,16 +4429,12 @@ static func _collect_war_actions(
 		_record_evaluation_profile(
 			evaluation_cache, "war_collect_finalize", part_started
 		)
-		if private_war:
-			committed[nation.id] = true
-			committed[best_target] = true
-		else:
-			_commit_alliance_bloc(
-				state, nation.id, committed, evaluation_cache
-			)
-			_commit_alliance_bloc(
-				state, best_target, committed, evaluation_cache
-			)
+		_commit_alliance_bloc(
+			state, nation.id, committed, evaluation_cache
+		)
+		_commit_alliance_bloc(
+			state, best_target, committed, evaluation_cache
+		)
 
 
 static func _collect_existing_war_preparation(
@@ -4496,10 +4447,6 @@ static func _collect_existing_war_preparation(
 	var nation := state.nations[nation_id]
 	var target_id := nation.war_preparation_target_nation
 	var objective_city := nation.war_preparation_objective_city
-	var private_war := (
-		nation.war_preparation_scope
-			== GameState.WarScope.VASSAL_PRIVATE
-	)
 	# 备战是战略状态，不依赖瞬时道路容量或边境屯兵。目标国仍是合法敌手时，
 	# 先在同国改选一个可达的薄弱城市；如果整个边境暂时封闭则保持备战等待，
 	# 绝不因道路状态发出取消，从根上消除“封路→取消→恢复→重开”的横跳。
@@ -4510,11 +4457,7 @@ static func _collect_existing_war_preparation(
 		and within_diplomatic_range(
 			state, nation_id, target_id, evaluation_cache
 		)
-		and (
-			state.can_declare_private_war(nation_id, target_id)
-			if private_war
-			else state.can_alliance_declare_war(nation_id, target_id)
-		)
+		and state.can_alliance_declare_war(nation_id, target_id)
 	)
 	var objective_valid := (
 		target_nation_valid
@@ -4549,7 +4492,6 @@ static func _collect_existing_war_preparation(
 				"b": target_id,
 				"objective_city": int(replacement["city_id"]),
 				"objective_reason": str(replacement["reason"]),
-				"war_scope": nation.war_preparation_scope,
 				"reason": (
 					"原备战目标城市%d不可用，保持对国%d备战并改向%s"
 					% [objective_city, target_id, replacement["reason"]]
@@ -4620,7 +4562,7 @@ static func _collect_existing_war_preparation(
 	if not resources_ready and not best_effort_launch:
 		return
 	if not preparation_ready and not best_effort_launch:
-		if not private_war and _collect_preparation_alliance(
+		if _collect_preparation_alliance(
 			state,
 			nation_id,
 			target_id,
@@ -4650,7 +4592,6 @@ static func _collect_existing_war_preparation(
 		"objective_city": objective_city,
 		"objective_reason": nation.war_preparation_reason,
 		"mobilization_armies": mobilization_armies,
-		"war_scope": nation.war_preparation_scope,
 		"reason": (
 			"完成%d天战争准备，目标城市%d方向已集结%d人，立即宣战并发动攻势"
 			% [
@@ -4660,16 +4601,12 @@ static func _collect_existing_war_preparation(
 			]
 		),
 	})
-	if private_war:
-		committed[nation_id] = true
-		committed[target_id] = true
-	else:
-		_commit_alliance_bloc(
-			state, nation_id, committed, evaluation_cache
-		)
-		_commit_alliance_bloc(
-			state, target_id, committed, evaluation_cache
-		)
+	_commit_alliance_bloc(
+		state, nation_id, committed, evaluation_cache
+	)
+	_commit_alliance_bloc(
+		state, target_id, committed, evaluation_cache
+	)
 
 
 static func _collect_preparation_alliance(
@@ -5399,57 +5336,6 @@ static func _frontier_edges(
 	return int(matrix[nation_a * nation_count + nation_b])
 
 
-## 两国实控领土之间正容量道路的直接边数，不考虑联盟或军事通行。
-## 私人战争必须读取该物理边界，不能用共同体通行关系抹掉兄弟藩王接壤。
-static func _direct_frontier_edges(
-	state: GameState,
-	nation_a: int,
-	nation_b: int,
-	evaluation_cache: Dictionary = {}
-) -> int:
-	var topology_cache := _ensure_frontier_matrix_cache(
-		state, evaluation_cache
-	)
-	var nation_count := state.nations.size()
-	var matrix: PackedInt32Array = topology_cache.get(
-		"direct_frontier_matrix", PackedInt32Array()
-	)
-	if (
-		nation_a < 0 or nation_a >= nation_count
-		or nation_b < 0 or nation_b >= nation_count
-		or matrix.size() != nation_count * nation_count
-	):
-		return 0
-	return int(matrix[nation_a * nation_count + nation_b])
-
-
-static func _direct_bordering_nation_ids(
-	state: GameState,
-	nation_id: int,
-	evaluation_cache: Dictionary = {}
-) -> Array[int]:
-	var topology_cache := _ensure_frontier_matrix_cache(
-		state, evaluation_cache
-	)
-	var nation_count := state.nations.size()
-	var matrix: PackedInt32Array = topology_cache.get(
-		"direct_frontier_matrix", PackedInt32Array()
-	)
-	var result: Array[int] = []
-	if (
-		nation_id < 0 or nation_id >= nation_count
-		or matrix.size() != nation_count * nation_count
-	):
-		return result
-	for target_id in range(nation_count):
-		if (
-			target_id != nation_id
-			and matrix[nation_id * nation_count + target_id] > 0
-		):
-			result.append(target_id)
-	return result
-
-
 static func _ensure_frontier_matrix_cache(
 	state: GameState, evaluation_cache: Dictionary
 ) -> Dictionary:
@@ -5488,9 +5374,6 @@ static func _build_frontier_matrix(
 	var matrix := PackedInt32Array()
 	matrix.resize(nation_count * nation_count)
 	matrix.fill(0)
-	var direct_matrix := PackedInt32Array()
-	direct_matrix.resize(nation_count * nation_count)
-	direct_matrix.fill(0)
 	var territory_neighbor_sets: Array[Dictionary] = []
 	territory_neighbor_sets.resize(nation_count)
 	for nation_id in range(nation_count):
@@ -5526,9 +5409,6 @@ static func _build_frontier_matrix(
 		# 因此道路封闭、容量调整和敌军屯兵不会让既有备战越界失效。
 		if edge.max_manpower <= 0:
 			continue
-		if owner_a != owner_b:
-			_bump_frontier(direct_matrix, nation_count, owner_a, owner_b)
-			_bump_frontier(direct_matrix, nation_count, owner_b, owner_a)
 		if owner_a == owner_b:
 			# 旧逻辑对同主边亦计入：pair(a, owner) 命中当 a 可通行 owner。
 			# 保留该行为以维持字节等价（观察者含 owner 本身及其盟友）。
@@ -5557,7 +5437,6 @@ static func _build_frontier_matrix(
 		territory_neighbor_sets
 	)
 	evaluation_cache["frontier_matrix"] = matrix
-	evaluation_cache["direct_frontier_matrix"] = direct_matrix
 	evaluation_cache["frontier_neighbors_by_observer"] = (
 		neighbors_by_observer
 	)

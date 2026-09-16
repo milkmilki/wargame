@@ -5841,13 +5841,7 @@ static func nation_action_summary(
 	var actions: Array[String] = []
 	if nation.war_preparation_target_nation >= 0:
 		actions.append(
-			"%s→%s/%s" % [
-				(
-					"私战备战"
-					if nation.war_preparation_scope
-						== GameState.WarScope.VASSAL_PRIVATE
-					else "备战"
-				),
+			"备战→%s/%s" % [
 				WorldNaming.nation_display_name(
 					game_state, nation.war_preparation_target_nation
 				),
@@ -6947,30 +6941,16 @@ static func nation_detail_sections(
 	var food_capacity := game_state.food_storage_capacity(nation_id)
 	var cohesion_root := game_state.suzerainty_root(nation_id)
 	var cohesion := game_state.suzerainty_cohesion(cohesion_root)
-	var private_war_count := 0
-	for enemy_id in game_state.wars_of(nation_id):
-		if game_state.is_private_war(nation_id, enemy_id):
-			private_war_count += 1
 	var suzerainty_status := "宗藩凝聚力 %.0f%%" % (cohesion * 100.0)
-	if game_state.is_vassal(nation_id):
-		suzerainty_status += (
-			"    私战已解锁"
-			if cohesion
-				< GameState.VASSAL_PRIVATE_WAR_COHESION_THRESHOLD
-			else "    私战受约束"
-		)
 	var dissolution_days := (
 		game_state.suzerainty_dissolution_days_remaining(nation_id)
 	)
 	if dissolution_days >= 0:
 		suzerainty_status += "    体系解体倒计时 %d天" % dissolution_days
-	if private_war_count > 0:
-		suzerainty_status += "    私人战争 %d" % private_war_count
 	var diplomacy_lines: Array[String] = []
 	if (
 		game_state.is_vassal(nation_id)
 		or game_state.is_overlord(nation_id)
-		or private_war_count > 0
 	):
 		diplomacy_lines.append(suzerainty_status)
 	diplomacy_lines.append(

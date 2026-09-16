@@ -178,6 +178,20 @@ func _test_world_naming() -> void:
 		"naming/vassal_under_five_exact_capital_despite_collision",
 		small_display
 	)
+	var title_anchor := vassal.nations[1].founding_city_id
+	vassal.nations[1].capital_city_id = 2
+	var renamed_capital_display := WorldNaming.nation_display_name(vassal, 1)
+	vassal.cities[title_anchor].owner_nation = 0
+	var occupied_anchor_display := WorldNaming.nation_display_name(vassal, 1)
+	_check(
+		renamed_capital_display == "河间王"
+			and occupied_anchor_display == "河间王",
+		"naming/vassal_title_survives_recapitalization_and_anchor_occupation",
+		"capital=%s occupied=%s" % [
+			renamed_capital_display, occupied_anchor_display,
+		]
+	)
+	vassal.cities[title_anchor].owner_nation = 1
 	var fifth := City.new()
 	fifth.id = vassal.cities.size()
 	fifth.owner_nation = 1
@@ -556,8 +570,29 @@ func _test_trade_network() -> void:
 			and not non_center_used
 			and int(regional_route.get("source_city", -1)) == 1
 			and int(regional_route.get("destination_city", -1)) == 3,
-		"trade/one_global_center_per_region_uses_highest_base_gold",
+		"trade/one_global_center_per_region_uses_highest_non_trade_output",
 		str(regional_center_result.get("routes", []))
+	)
+	var capital_center_state := _make_capital_trade_center_state()
+	var capital_centers := TradeNetwork.regional_trade_centers(
+		capital_center_state
+	)
+	_check(
+		int(capital_centers.get(0, -1)) == 0
+			and capital_center_state.cities[0].gold_per_month
+				< capital_center_state.cities[1].gold_per_month
+			and CityOutputRules.city_gold_output(
+				capital_center_state, capital_center_state.cities[0]
+			) > CityOutputRules.city_gold_output(
+				capital_center_state, capital_center_state.cities[1]
+			)
+			and CityOutputRules.city_gold_output(
+				capital_center_state, capital_center_state.cities[0]
+			) == Simulation.city_gold_output(
+				capital_center_state, capital_center_state.cities[0]
+			),
+		"trade/regional_center_uses_capital_adjusted_non_trade_output",
+		str(capital_centers)
 	)
 	var domestic_center_state := _make_regional_domestic_route_state()
 	var domestic_center_result := TradeNetwork.build(domestic_center_state)
@@ -627,6 +662,26 @@ func _test_trade_network() -> void:
 		"trade/regional_route_records_region_crossings",
 		str(neutral_route)
 	)
+	pair_state.nations[0].trade_policy = TradeNetwork.ISOLATION
+	var isolation := TradeNetwork.build(pair_state)
+	var isolation_route := _international_route(isolation, 0, 1)
+	_check(
+		not isolation_route.is_empty()
+			and isolation_route["city_path"] == neutral_route["city_path"]
+			and isolation_route["edge_keys"] == neutral_route["edge_keys"]
+			and int(isolation_route["gold_tax"]) > 0
+			and int(isolation_route["gold_tax"])
+				<= ceili(
+					float(neutral_route["gold_tax"])
+						* (TradeNetwork.ISOLATION_TRADE_OUTPUT_MULTIPLIER + 0.01)
+				),
+		"trade/isolation_keeps_route_and_only_reduces_output",
+		"neutral=%s isolation=%s" % [
+			str(neutral_route), str(isolation_route),
+		]
+	)
+	for nation in pair_state.nations:
+		nation.trade_policy = TradeNetwork.BALANCED
 	pair_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	var wartime := TradeNetwork.build(pair_state)
 	var wartime_route := _international_route(wartime, 0, 1)
@@ -809,6 +864,22 @@ func _make_regional_trade_center_state() -> GameState:
 	state.region_count = 2
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	_configure_capitals_and_warehouses(state, 20)
+	state.refresh_derived()
+	return state
+
+
+func _make_capital_trade_center_state() -> GameState:
+	var state := _make_empty_state(2)
+	_add_city(state, 0, Vector2(0.1, 0.5), 20, 600)
+	_add_city(state, 1, Vector2(0.4, 0.5), 30, 600)
+	_add_city(state, 0, Vector2(0.8, 0.5), 100, 600)
+	state.region_ids = PackedInt32Array([0, 0, 1])
+	state.region_count = 2
+	_configure_capitals_and_warehouses(state, 20)
+	state.nations[0].capital_city_id = 0
+	state.nations[1].capital_city_id = 1
+	for city in state.cities:
+		city.is_capital = city.id in [0, 1]
 	state.refresh_derived()
 	return state
 

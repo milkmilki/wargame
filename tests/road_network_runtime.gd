@@ -15,9 +15,9 @@ func _fail(message: String) -> void:
 func _run() -> void:
 	if not is_equal_approx(
 		float(GameState.default_road_tuning()["maximum_relief"]),
-		0.25
+		0.20
 	):
-		_fail("default maximum relief must be 0.25")
+		_fail("default maximum relief must be 0.20")
 		return
 	var state := GameState.new()
 	state.generate_world(12345)
