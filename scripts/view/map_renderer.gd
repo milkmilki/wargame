@@ -5534,10 +5534,13 @@ static func nation_list_rows(
 		var monthly_food_balance_text := _signed_value_text(
 			nation.last_food_estimated_balance
 		)
+		var manpower_capacity := game_state.manpower_pool_capacity(nation.id)
+		var food_capacity := game_state.food_storage_capacity(nation.id)
 		var food_snapshot_secondary := (
-			"粮仓 %d   月产 %d   月需 %d   月净 %s"
+			"粮仓 %d / %d   月产 %d   月需 %d   月净 %s"
 			% [
 				nation.granary_food,
+				food_capacity,
 				nation.last_food_estimated_production,
 				nation.last_food_estimated_consumption,
 				monthly_food_balance_text,
@@ -5558,8 +5561,9 @@ static func nation_list_rows(
 				army_count_by_nation[nation.id],
 				_compact_quantity(troops_by_nation[nation.id]),
 			],
-			"power_secondary": "人力 %s   忠诚 %.0f" % [
+			"power_secondary": "人力 %s / %s   忠诚 %.0f" % [
 				_compact_quantity(nation.manpower_pool),
+				_compact_quantity(manpower_capacity),
 				nation.average_loyalty,
 			],
 			"economy_primary": "国库 %s   月净 %s   商贸 %s" % [
@@ -5567,8 +5571,9 @@ static func nation_list_rows(
 				_signed_compact_quantity(int(report["monthly_gold_balance"])),
 				_signed_compact_quantity(nation.last_trade_gold),
 			],
-			"economy_secondary": "粮仓 %s   粮净 %s   商路 %d" % [
+			"economy_secondary": "粮仓 %s / %s   粮净 %s   商路 %d" % [
 				_compact_quantity(nation.granary_food),
+				_compact_quantity(food_capacity),
 				_signed_compact_quantity(nation.last_food_estimated_balance),
 				nation.last_trade_route_count,
 			],
@@ -5581,9 +5586,10 @@ static func nation_list_rows(
 			],
 			# 兼容旧调用与脚本检查；实际窗口读取上面的结构化双行字段。
 			"identity": "%s  %s" % [nation_debug_name(game_state, nation.id), relation_text],
-			"military": "城%d 军%d/%d 人%d 忠%.0f" % [
+			"military": "城%d 军%d/%d 人%d/%d 忠%.0f" % [
 				city_count_by_nation[nation.id], army_count_by_nation[nation.id],
-				troops_by_nation[nation.id], nation.manpower_pool, nation.average_loyalty,
+				troops_by_nation[nation.id], nation.manpower_pool, manpower_capacity,
+				nation.average_loyalty,
 			],
 				"economy": "金%d 月%+d 商%d线 金%s %s" % [
 					nation.treasury_gold,
@@ -6679,13 +6685,10 @@ static func city_detail_sections(
 	var type_name := "河运码头" if city.is_dock else "陆地城市"
 	var special: Array[String] = []
 	if city.is_capital:
-		var capital_bonus := Simulation.capital_development_gold_bonus(
+		var capital_addition := Simulation.capital_national_gold_addition(
 			game_state, city
 		)
-		special.append("首都·%d年·金+%d" % [
-			Simulation.capital_development_years(game_state, city),
-			capital_bonus,
-		])
+		special.append("首都·金+%d" % capital_addition)
 	if city.has_warehouse:
 		special.append("粮仓")
 	if city.is_food_hub:
@@ -6774,9 +6777,8 @@ static func city_detail_sections(
 				float(output["development_gold_multiplier"]),
 				float(output["development_food_multiplier"]),
 			],
-			"首都发展：%d 年    金 %+d/月" % [
-				int(output["capital_years"]),
-				int(output["capital_gold_bonus"]),
+			"首都加成：本国城市基础金20%%    金 %+d/月" % [
+				int(output["capital_gold_addition"]),
 			],
 			"治理与君主：治理×%.2f    金×%.2f 粮×%.2f 人×%.2f" % [
 				float(output["governance_multiplier"]),
@@ -6919,6 +6921,8 @@ static func nation_detail_sections(
 	var monthly_food_balance_text := _signed_value_text(
 		n.last_food_estimated_balance
 	)
+	var manpower_capacity := game_state.manpower_pool_capacity(nation_id)
+	var food_capacity := game_state.food_storage_capacity(nation_id)
 	var cohesion_root := game_state.suzerainty_root(nation_id)
 	var cohesion := game_state.suzerainty_cohesion(cohesion_root)
 	var private_war_count := 0
@@ -6967,7 +6971,9 @@ static func nation_detail_sections(
 			"城市 %d    军队 %d 支    总兵力 %d" % [
 				game_state.cities_of(nation_id).size(), army_count, troops,
 			],
-			"人力 %d    平均忠诚 %.1f" % [n.manpower_pool, n.average_loyalty],
+			"人力 %d / %d    平均忠诚 %.1f" % [
+				n.manpower_pool, manpower_capacity, n.average_loyalty,
+			],
 		]},
 		{"title": "财政与军费", "lines": [
 			"国库 %d    月净 %+d    城市收入 %d    贡赋 %+d" % [
@@ -6986,8 +6992,9 @@ static func nation_detail_sections(
 			],
 		]},
 		{"title": "粮食储备", "lines": [
-			"粮仓 %d    月产(预计) %d    月需(预计) %d    月净(预计) %s" % [
+			"粮仓 %d / %d    月产(预计) %d    月需(预计) %d    月净(预计) %s" % [
 				n.granary_food,
+				food_capacity,
 				n.last_food_estimated_production,
 				n.last_food_estimated_consumption,
 				monthly_food_balance_text,

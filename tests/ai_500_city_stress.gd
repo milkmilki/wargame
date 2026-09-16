@@ -72,7 +72,7 @@ func _init() -> void:
 	var international_routes := 0
 	var international_trade_gold := 0
 	var maximum_international_route_gold := 0
-	var minimum_international_hops := 2147483647
+	var minimum_international_region_crossings := 2147483647
 	var international_counts := PackedInt32Array()
 	international_counts.resize(state.nations.size())
 	international_counts.fill(0)
@@ -94,20 +94,17 @@ func _init() -> void:
 		)
 		international_counts[int(route["nation_a"])] += 1
 		international_counts[int(route["nation_b"])] += 1
-		var preferred_path: Array = route.get(
-			"preferred_city_path", []
+		minimum_international_region_crossings = mini(
+			minimum_international_region_crossings,
+			int(route.get("region_crossings", 0))
 		)
-		if not preferred_path.is_empty():
-			minimum_international_hops = mini(
-				minimum_international_hops, preferred_path.size() - 1
-			)
-	print("贸易结构=%.1fms 路线=%d 国际=%d 国际最短跳数=%s" % [
+	print("贸易结构=%.1fms 路线=%d 国际=%d 国际最少跨区=%s" % [
 		trade_ms,
 		(trade_structure.get("routes", []) as Array).size(),
 		international_routes,
 		(
-			str(minimum_international_hops)
-			if minimum_international_hops < 2147483647 else "无"
+			str(minimum_international_region_crossings)
+			if minimum_international_region_crossings < 2147483647 else "无"
 		),
 	])
 	print("国际贸易金=%d 单线最高=%d" % [
@@ -197,8 +194,7 @@ func _init() -> void:
 	)
 	var ok := (
 		state.land_cities().size() == cities
-		and minimum_international_hops
-			>= TradeNetwork.MIN_INTERNATIONAL_ROUTE_HOPS
+		and minimum_international_region_crossings >= 1
 		and route_limits_valid
 		and international_routes > 0
 		and int(initial_trade_counters.get(

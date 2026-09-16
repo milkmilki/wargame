@@ -512,6 +512,7 @@ func _test_trade_network() -> void:
 		"bottleneck_capacity", "transport_cost", "status", "gold_tax",
 		"gold_to_a", "gold_to_b", "transit_gold", "city_gold_bonus",
 		"food_transfer", "food_exporter", "food_importer", "food_cost_gold",
+		"region_crossings",
 	]
 	var route_contract := true
 	var international_counts: Array[int] = []
@@ -554,75 +555,50 @@ func _test_trade_network() -> void:
 		TradeNetwork.international_route_limit(capacity_state, 0) == 1
 			and TradeNetwork.international_route_limit(capacity_state, 1) == 2
 			and TradeNetwork.international_route_limit(capacity_state, 2) == 3,
-		"trade/international_route_limit_scales_by_hop_sized_city_blocks"
+		"trade/international_route_limit_scales_by_city_blocks"
 	)
 
-	var spaced_hub_state := _make_spaced_capital_hub_state()
-	var spaced_hub_result := TradeNetwork.build(spaced_hub_state)
-	var spaced_route := _international_route(spaced_hub_result, 1, 2)
-	var crowded_capital_used := false
-	for route_value in spaced_hub_result.get("routes", []):
+	var regional_center_state := _make_regional_trade_center_state()
+	var regional_center_result := TradeNetwork.build(regional_center_state)
+	var regional_route := _international_route(
+		regional_center_result, 1, 3
+	)
+	var non_center_used := false
+	for route_value in regional_center_result.get("routes", []):
 		var route: Dictionary = route_value
 		if not bool(route.get("international", false)):
 			continue
-		crowded_capital_used = crowded_capital_used or (
-			int(route.get("source_city", -1)) == 0
-			or int(route.get("destination_city", -1)) == 0
+		non_center_used = non_center_used or (
+			int(route.get("source_city", -1)) in [0, 2]
+			or int(route.get("destination_city", -1)) in [0, 2]
 		)
 	_check(
-		not spaced_route.is_empty()
-			and not crowded_capital_used
-			and (spaced_route["preferred_city_path"] as Array).size() - 1
-				>= TradeNetwork.MIN_INTERNATIONAL_ROUTE_HOPS,
-		"trade/capitals_obey_global_trade_hub_hop_spacing",
-		str(spaced_hub_result.get("routes", []))
+		not regional_route.is_empty()
+			and not non_center_used
+			and int(regional_route.get("source_city", -1)) == 1
+			and int(regional_route.get("destination_city", -1)) == 3,
+		"trade/one_global_center_per_region_uses_highest_base_gold",
+		str(regional_center_result.get("routes", []))
 	)
 	_check(
 		is_equal_approx(
-			TradeNetwork.distance_premium_multiplier(1, false), 1.0
+			TradeNetwork.region_premium_multiplier(0), 1.0
 		)
 			and is_equal_approx(
-				TradeNetwork.distance_premium_multiplier(2, false), 2.0
+				TradeNetwork.region_premium_multiplier(1), 4.0
 			)
 			and is_equal_approx(
-				TradeNetwork.distance_premium_multiplier(4, false),
-				6.1961524227
-			)
-			and is_equal_approx(
-				TradeNetwork.distance_premium_multiplier(3, true), 1.0
-			)
-			and is_equal_approx(
-				TradeNetwork.distance_premium_multiplier(4, true), 2.0
-			)
-			and is_equal_approx(
-				TradeNetwork.distance_premium_multiplier(6, true),
-				6.1961524227
+				TradeNetwork.region_premium_multiplier(2), 9.0
 			),
-		"trade/distance_premium_uses_1_5_power_extra_hops_curve"
-	)
-	var short_distance_trade := TradeNetwork.build(
-		_make_distance_premium_state(3)
-	)
-	var long_distance_trade := TradeNetwork.build(
-		_make_distance_premium_state(6)
-	)
-	var short_distance_route := _international_route(
-		short_distance_trade, 0, 1
-	)
-	var long_distance_route := _international_route(
-		long_distance_trade, 0, 1
+		"trade/region_premium_uses_squared_boundary_crossings"
 	)
 	_check(
-		not short_distance_route.is_empty()
-			and not long_distance_route.is_empty()
-			and int(long_distance_route["gold_tax"])
-				> int(short_distance_route["gold_tax"])
-			and int(long_distance_route["gold_tax"]) > 64,
-		"trade/long_route_premium_exceeds_removed_legacy_cap",
-		"short=%s long=%s" % [
-			short_distance_route.get("gold_tax", -1),
-			long_distance_route.get("gold_tax", -1),
-		]
+		TradeNetwork.route_region_crossings(
+			regional_center_state, [0, 1, 2, 3] as Array[int]
+		) == 1
+			and int(regional_route.get("region_crossings", -1)) == 1,
+		"trade/route_counts_region_boundaries_instead_of_hops",
+		str(regional_route)
 	)
 
 	var pair_state := _make_trade_pair_state()
@@ -636,10 +612,9 @@ func _test_trade_network() -> void:
 		str(neutral_route)
 	)
 	_check(
-		(neutral_route.get("preferred_city_path", []) as Array).size() - 1
-			>= TradeNetwork.MIN_INTERNATIONAL_ROUTE_HOPS,
-		"trade/international_endpoints_respect_minimum_hops",
-		str(neutral_route.get("preferred_city_path", []))
+		int(neutral_route.get("region_crossings", -1)) == 1,
+		"trade/international_route_records_region_crossings",
+		str(neutral_route)
 	)
 	pair_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	var wartime := TradeNetwork.build(pair_state)
@@ -754,7 +729,7 @@ func _test_trade_network() -> void:
 	)
 	for city in food_state.cities:
 		city.manpower_per_month = 0
-		city.food_per_half_year = 0
+	# 月结不会触发半年粮产出；保留基础产值，避免三年粮仓上限把测试库存截为零。
 	var food_before := food_state.cities[0].food_storage + food_state.cities[1].food_storage
 	var manpower_before := food_state.nations[0].manpower_pool + food_state.nations[1].manpower_pool
 	var treasury_before := food_state.nations[0].treasury_gold + food_state.nations[1].treasury_gold
@@ -807,48 +782,20 @@ func _make_dynamic_trade_capacity_state() -> GameState:
 	return state
 
 
-func _make_spaced_capital_hub_state() -> GameState:
-	var state := _make_empty_state(3)
-	for city_index in range(5):
-		var owner := 0
-		var gold := 1
-		if city_index == 1:
-			owner = 1
-			gold = 100
-		elif city_index == 4:
-			owner = 2
-			gold = 90
+func _make_regional_trade_center_state() -> GameState:
+	var state := _make_empty_state(4)
+	for city_index in range(4):
 		_add_city(
-			state, owner, Vector2(0.1 + 0.2 * city_index, 0.5), gold, 600
-		)
-		if city_index > 0:
-			_add_edge(state, city_index - 1, city_index, 20000, 1)
-	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
-	_configure_capitals_and_warehouses(state, 20)
-	# 城 0 是国家 0 的首都，和更高价值的城 1 仅相隔一跳，不能绕过 hub 门禁。
-	state.nations[0].capital_city_id = 0
-	for city in state.cities:
-		city.is_capital = city.id in [0, 1, 4]
-	state.refresh_derived()
-	return state
-
-
-func _make_distance_premium_state(hops: int) -> GameState:
-	var state := _make_empty_state(2)
-	for city_index in range(hops + 1):
-		var owner := 0 if city_index < hops else 1
-		var gold := 100 if city_index in [0, hops] else 0
-		var city_id := _add_city(
 			state,
-			owner,
-			Vector2(0.1 + 0.8 * float(city_index) / float(hops), 0.5),
-			gold,
-			600 if city_index in [0, hops] else 0
+			city_index,
+			Vector2(0.1 + 0.25 * city_index, 0.5),
+			[10, 30, 20, 40][city_index],
+			600
 		)
-		if city_index > 0 and city_index < hops:
-			state.cities[city_id].is_dock = true
 		if city_index > 0:
 			_add_edge(state, city_index - 1, city_index, 20000, 1)
+	state.region_ids = PackedInt32Array([0, 0, 1, 1])
+	state.region_count = 2
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	_configure_capitals_and_warehouses(state, 20)
 	state.refresh_derived()

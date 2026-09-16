@@ -1,29 +1,29 @@
 extends SceneTree
 ## Annual resource balancing is deterministic economic settlement, not an AI
-## action. It must conserve gold-equivalent value without an annual quota.
+## action. It must conserve gold-equivalent value and respect the annual cap.
 
 var _valid := true
 
 
 func _init() -> void:
 	var manpower_zero := ResourceBalanceRules.plan(
-		100, 0, 2500, true
+		100, 0, 2500, 40, true
 	)
 	_check(int(manpower_zero["manpower_delta"]) > 0, "zero manpower was not replenished")
 	_check(
-		int(manpower_zero["transferred_value"]) == 66,
-		"annual balancing did not complete the required uncapped transfer"
+		int(manpower_zero["transferred_value"]) <= 10,
+		"annual income cap was exceeded"
 	)
 	_check(_value_delta(manpower_zero) == 0, "manpower conversion minted value")
 
 	var treasury_zero := ResourceBalanceRules.plan(
-		0, 5000, 2500, true
+		0, 5000, 2500, 40, true
 	)
 	_check(int(treasury_zero["gold_delta"]) > 0, "zero treasury was not replenished")
 	_check(_value_delta(treasury_zero) == 0, "treasury conversion minted value")
 
 	var balanced := ResourceBalanceRules.plan(
-		20, 1000, 500, true
+		20, 1000, 500, 1000, true
 	)
 	_check(int(balanced["transferred_value"]) == 0, "balanced reserves were moved")
 

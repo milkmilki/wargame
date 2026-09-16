@@ -7,7 +7,7 @@ var _valid := true
 
 func _init() -> void:
 	_test_reign_range_and_succession()
-	_test_capital_development_and_succession_relocation()
+	_test_capital_income_and_succession_relocation()
 	_test_suzerainty_rulers_share_surname()
 	_test_extreme_modifiers()
 	_test_conqueror_war_benefits()
@@ -66,25 +66,31 @@ func _test_reign_range_and_succession() -> void:
 	simulation.free()
 
 
-func _test_capital_development_and_succession_relocation() -> void:
+func _test_capital_income_and_succession_relocation() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(71239)
 	state._random_ruler_profiles_enabled = true
 	var nation := state.nations[0]
 	var old_capital := state.cities[nation.capital_city_id]
 	var base_gold := old_capital.gold_per_month
+	var expected_capital_addition := 0
+	for city in state.land_cities_of(nation.id):
+		expected_capital_addition += city.gold_per_month
+	expected_capital_addition = int(floor(
+		float(expected_capital_addition) * 0.20
+	))
 	old_capital.set("capital_since_day", 0)
 	state.day = 10 * RulerProfile.DAYS_PER_YEAR
 	_check(
 		Simulation.city_gold_output_before_governance(state, old_capital)
-			== base_gold + 10,
-		"capital development did not add one gold per completed year"
+			== base_gold + expected_capital_addition,
+		"capital did not receive twenty percent of national base city gold"
 	)
 	state.day = 60 * RulerProfile.DAYS_PER_YEAR
 	_check(
 		Simulation.city_gold_output_before_governance(state, old_capital)
-			== base_gold + 50,
-		"capital development did not cap at fifty gold"
+			== base_gold + expected_capital_addition,
+		"capital gold addition still changed with capital tenure"
 	)
 
 	var component := state._largest_owned_component(
@@ -98,7 +104,7 @@ func _test_capital_development_and_succession_relocation() -> void:
 	_check(successor_capital != null, "capital relocation fixture has no alternative city")
 	if successor_capital == null:
 		return
-	# 继位只重新评估首都价值；旧都仍然最优时继续作为首都，并保留发展年限。
+	# 继位只重新评估首都价值；旧都仍然最优时继续作为首都，并保留任期起点。
 	old_capital.fort_strength = 999
 	successor_capital.fort_strength = 100
 	var due_day := RulerProfile.succession_due_day(nation, state.world_seed)
@@ -112,7 +118,7 @@ func _test_capital_development_and_succession_relocation() -> void:
 	)
 	_check(
 		int(old_capital.get("capital_since_day")) == 0,
-		"retained capital lost its accumulated development duration"
+		"retained capital lost its tenure start day"
 	)
 
 	# 下一任继位时出现价值更高的候选，才按同一套既有规则迁都。
@@ -129,18 +135,18 @@ func _test_capital_development_and_succession_relocation() -> void:
 	)
 	_check(
 		int(old_capital.get("capital_since_day")) == -1,
-		"demoted capital retained its development duration"
+		"demoted capital retained its tenure start day"
 	)
 	_check(
 		int(successor_capital.get("capital_since_day")) == next_due_day,
-		"new capital did not start development on the succession day"
+		"new capital did not start its tenure on the succession day"
 	)
 	state.day += 5 * RulerProfile.DAYS_PER_YEAR
 	_check(
 		Simulation.city_gold_output_before_governance(
 			state, successor_capital
-		) == successor_capital.gold_per_month + 5,
-		"new capital did not restart development from zero"
+		) == successor_capital.gold_per_month + expected_capital_addition,
+		"new capital did not receive the national base city gold addition"
 	)
 	simulation.free()
 

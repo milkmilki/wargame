@@ -538,8 +538,13 @@ func _test_world_generation() -> void:
 		var ruler_multiplier := RulerProfile.gold_output_multiplier(
 			gs.nations[city.owner_nation]
 		)
+		var capital_addition := (
+			Simulation.capital_national_gold_addition(gs, city)
+			if city.is_capital else 0
+		)
 		expected_effective_gold += int(floor(
-			float(city.gold_per_month) * ruler_multiplier
+			float(city.gold_per_month + capital_addition)
+				* ruler_multiplier
 		))
 	_check(
 		terrain_monthly_gold == expected_effective_gold,
@@ -2731,6 +2736,8 @@ func _test_responsive_map_layout() -> void:
 		RulerProfile.TRAIT_FRUGAL
 	] as Array[String]
 	var nation_rows := MapRenderer.nation_list_rows(list_state)
+	var list_manpower_capacity := list_state.manpower_pool_capacity(0)
+	var list_food_capacity := list_state.food_storage_capacity(0)
 	var nation_ids: Array[int] = []
 	for row in nation_rows:
 		nation_ids.append(int(row["nation_id"]))
@@ -2747,9 +2754,21 @@ func _test_responsive_map_layout() -> void:
 			and str(nation_rows[0]["identity_secondary"]).length() > 0
 			and str(nation_rows[0]["power_primary"]).contains("兵力")
 			and str(nation_rows[0]["power_secondary"]).contains("忠诚")
+			and str(nation_rows[0]["power_secondary"]).contains(
+				"人力 %s / %s" % [
+					MapRenderer._compact_quantity(list_state.nations[0].manpower_pool),
+					MapRenderer._compact_quantity(list_manpower_capacity),
+				]
+			)
 			and str(nation_rows[0]["economy_primary"]).contains("月净")
 				and str(nation_rows[0]["economy_primary"]).contains("商贸 +7")
 				and str(nation_rows[0]["economy_secondary"]).contains("粮仓 0")
+				and str(nation_rows[0]["economy_secondary"]).contains(
+					"粮仓 %s / %s" % [
+						MapRenderer._compact_quantity(list_state.nations[0].granary_food),
+						MapRenderer._compact_quantity(list_food_capacity),
+					]
+				)
 				and str(nation_rows[0]["economy_secondary"]).contains("粮净 +20")
 				and str(nation_rows[0]["economy_secondary"]).contains("商路 2")
 				and str(nation_rows[0]["economy_secondary"]).find("购粮") == -1
@@ -3144,7 +3163,8 @@ func _test_responsive_map_layout() -> void:
 			and "实际" in str((city_sections[2]["lines"] as Array)[0])
 			and "基础产值" in str((city_sections[2]["lines"] as Array)[1])
 			and "地形与发展" in str((city_sections[2]["lines"] as Array)[2])
-			and "首都发展" in str((city_sections[2]["lines"] as Array)[3])
+			and "首都加成" in str((city_sections[2]["lines"] as Array)[3])
+			and "20%" in str((city_sections[2]["lines"] as Array)[3])
 			and "治理与君主" in str((city_sections[2]["lines"] as Array)[4])
 			and "战乱与驻军" in str((city_sections[2]["lines"] as Array)[5])
 			and "贸易" in str((city_sections[2]["lines"] as Array)[6])
@@ -12210,6 +12230,8 @@ func _test_diplomacy_state_and_ai() -> void:
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	var nation_lines := MapRenderer.nation_detail_lines(gs, 0)
 	var nation_sections := MapRenderer.nation_detail_sections(gs, 0)
+	var manpower_capacity := gs.manpower_pool_capacity(0)
+	var food_capacity := gs.food_storage_capacity(0)
 	_check(
 		nation_sections.size() == 5
 		and [
@@ -12229,7 +12251,11 @@ func _test_diplomacy_state_and_ai() -> void:
 		and "商贸金" in str((nation_sections[2]["lines"] as Array)[1])
 		and "军费" in str((nation_sections[2]["lines"] as Array)[2])
 		and "支付" in str((nation_sections[2]["lines"] as Array)[2])
+		and "人力 %d / %d" % [gs.nations[0].manpower_pool, manpower_capacity]
+			in str((nation_sections[1]["lines"] as Array)[1])
 		and "粮仓" in str((nation_sections[3]["lines"] as Array)[0])
+		and "粮仓 %d / %d" % [gs.nations[0].granary_food, food_capacity]
+			in str((nation_sections[3]["lines"] as Array)[0])
 		and (nation_sections[3]["lines"] as Array).size() == 1
 		and "盟国" in str((nation_sections[4]["lines"] as Array)[1])
 		and MapRenderer.nation_detail_sections(gs, -1).is_empty(),
@@ -13450,11 +13476,15 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	for city in ai_state.cities_of(0):
 		city.gold_per_month = 0
+	ai_state.nations[0].unpaid_military_upkeep = 1
+	ai_state.nations[0].military_payment_ratio = 0.0
 	_check(
 		not bool(DiplomacyAI.resource_report(ai_state, 0)["ready"])
 		and DiplomacyAI.war_desire(ai_state, 0, 1) == -INF,
-		"最高激进值也不得绕过负现金流和国库不足的宣战硬约束"
+		"最高激进值也不得绕过欠饷与支付率宣战硬约束"
 	)
+	ai_state.nations[0].unpaid_military_upkeep = 0
+	ai_state.nations[0].military_payment_ratio = 1.0
 	for city_id in original_gold_income:
 		ai_state.cities[int(city_id)].gold_per_month = int(
 			original_gold_income[city_id]

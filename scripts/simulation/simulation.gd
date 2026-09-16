@@ -47,9 +47,8 @@ const CITY_WAR_OUTPUT_MULTIPLIER: float = 0.50
 ## 更高产出，并弥补藩王需上缴的贡赋）。仅按「城市实控 owner 是否为藩王」派生，不烧进
 ## 城市基础字段——owner 变更（分封/兼并/割地/易手）后自动生效，零维护、单一真源。
 const VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER: float = 1.5
-## 首都连续发展：每满一年增加固定月度金产出，迁都/失去首都后旧城清零。
-const CAPITAL_DEVELOPMENT_GOLD_PER_YEAR: int = 1
-const CAPITAL_DEVELOPMENT_MAX_GOLD: int = 50
+## 首都汇集全国财赋：本国全部陆城基础金产出的固定比例作为首都加性产出。
+const CAPITAL_NATIONAL_GOLD_SHARE: float = 0.20
 ## 撤退驻城恢复每月消耗：复用普通驻军月耗口径（size × FOOD_PER_CAPITA）。
 ## 资源不足时按实际供给比例恢复；士气回满或本城粮尽后解除 RECOVERING。
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
@@ -2013,7 +2012,7 @@ func _prepare_trade_publication(trade: Dictionary) -> Dictionary:
 ## 年度人、钱、粮自动平衡。转换完全由经济结算驱动，不进入 AI 候选、
 ## 不做路径搜索。宗藩共享粮池只由 holder 兑换一次，避免重复消费同一库存。
 func _resolve_annual_resource_balance(
-	_gold_flows: Array[Dictionary]
+	gold_flows: Array[Dictionary]
 ) -> void:
 	state.refresh_derived()
 	for nation in state.nations:
@@ -2023,10 +2022,16 @@ func _resolve_annual_resource_balance(
 			state.food_pool_holder(nation.id) == nation.id
 			and not state.warehouse_cities_of(nation.id).is_empty()
 		)
+		var monthly_income := (
+			maxi(int(gold_flows[nation.id].get("net_income", 0)), 0)
+			if nation.id >= 0 and nation.id < gold_flows.size()
+			else 0
+		)
 		var plan := ResourceBalanceRules.plan(
 			nation.treasury_gold,
 			nation.manpower_pool,
 			nation.granary_food if include_food else 0,
+			monthly_income * MONTHS_PER_YEAR,
 			include_food
 		)
 		var gold_delta := int(plan["gold_delta"])
@@ -2296,7 +2301,7 @@ static func city_output_breakdown(
 		city, resolved_garrison
 	)
 	var food_lookup := {city.id: resolved_garrison}
-	var capital_bonus := capital_development_gold_bonus(game_state, city)
+	var capital_addition := capital_national_gold_addition(game_state, city)
 	return {
 		"base_gold": maxi(city.gold_per_month, 0),
 		"base_food": maxi(city.food_per_half_year, 0),
@@ -2304,8 +2309,7 @@ static func city_output_breakdown(
 		"terrain_multiplier": city.terrain_output_multiplier,
 		"development_gold_multiplier": city.development_gold_multiplier,
 		"development_food_multiplier": city.development_food_multiplier,
-		"capital_years": capital_development_years(game_state, city),
-		"capital_gold_bonus": capital_bonus,
+		"capital_gold_addition": capital_addition,
 		"governance_multiplier": city_governance_output_multiplier(
 			game_state, city
 		),
@@ -2376,26 +2380,15 @@ static func city_gold_output_before_governance(
 	return _apply_city_war_disruption(
 		game_state,
 		city,
-		city.gold_per_month + capital_development_gold_bonus(
+		city.gold_per_month + capital_national_gold_addition(
 			game_state, city
 		)
 	)
 
 
-## 首都连续任职每满 360 天增加 1 点月度金产出，最多增加 50。
-## 只读取当前首都双向索引；普通城市或损坏的悬空首都标记一律没有加成。
-static func capital_development_gold_bonus(
-	game_state: GameState,
-	city: City
-) -> int:
-	return mini(
-		capital_development_years(game_state, city)
-			* CAPITAL_DEVELOPMENT_GOLD_PER_YEAR,
-		CAPITAL_DEVELOPMENT_MAX_GOLD
-	)
-
-
-static func capital_development_years(
+## 当前首都获得本国全部陆城基础月金产出之和的 20%，向下取整。
+## 该值先加到城市基础产出，再进入战乱、治理和君主等乘性结算。
+static func capital_national_gold_addition(
 	game_state: GameState,
 	city: City
 ) -> int:
@@ -2403,16 +2396,16 @@ static func capital_development_years(
 		game_state == null
 		or city == null
 		or not city.is_capital
-		or city.capital_since_day < 0
-		or game_state.day < city.capital_since_day
 		or city.owner_nation < 0
 		or city.owner_nation >= game_state.nations.size()
 		or game_state.nations[city.owner_nation].capital_city_id != city.id
 	):
 		return 0
+	var national_base_gold := 0
+	for owned_city in game_state.land_cities_of(city.owner_nation):
+		national_base_gold += maxi(owned_city.gold_per_month, 0)
 	return int(floor(
-		float(game_state.day - city.capital_since_day)
-			/ float(DAYS_PER_YEAR)
+		float(national_base_gold) * CAPITAL_NATIONAL_GOLD_SHARE
 	))
 
 
