@@ -374,6 +374,7 @@ func setup(game_state: GameState) -> void:
 	)
 	_normalize_city_fortifications()
 	state.refresh_derived()
+	FamilyTree.ensure_all(state)
 	_reset_trade_forecast_cache()
 	_latest_monthly_gold_flows.clear()
 	_publish_initial_food_snapshot()
@@ -2102,6 +2103,7 @@ func _resolve_ruler_successions() -> void:
 		):
 			continue
 		var previous_name := nation.ruler_name
+		var previous_person_id := nation.ruler_person_id
 		var preferred_surname := WorldNaming.suzerainty_ruler_surname(
 			state, nation.id
 		)
@@ -2112,6 +2114,9 @@ func _resolve_ruler_successions() -> void:
 			nation.id + nation.ruler_revision * 1009,
 			previous_name,
 			preferred_surname
+		)
+		FamilyTree.record_succession(
+			state, nation.id, previous_person_id
 		)
 		state.relocate_capital(nation.id)
 		changed = true

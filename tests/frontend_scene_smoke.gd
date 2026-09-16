@@ -56,6 +56,29 @@ func _run() -> void:
 	var editor_button := editor_layer.get_node_or_null(
 		"MapEditorButton"
 	) as Button
+	var family_panel := main.get_node("FamilyTreePanel") as FamilyTreePanel
+	simulation.paused = false
+	var family_opened := family_panel.open_for_nation(0)
+	await process_frame
+	var family_pause_applied := simulation.paused
+	var family_overlay := family_panel.get_node(
+		"FamilyTreeOverlay"
+	) as Control
+	var family_pause_restored := true
+	if OS.get_environment("WW_VISUAL_FAMILY_TREE") != "1":
+		family_panel.close_panel()
+		family_pause_restored = not simulation.paused
+		simulation.paused = true
+	else:
+		var family_frame := family_overlay.get_node("Frame") as Control
+		var family_dim := family_overlay.get_node("DimBackground") as Control
+		print(
+			"FAMILY_TREE_VISUAL visible=", family_overlay.visible,
+			" size=", family_overlay.size,
+			" dim=", family_dim.size,
+			" frame=", family_frame.size,
+			" layer=", family_panel.layer
+		)
 	var expected_mode_ids := PackedStringArray([
 		RoadTuningPanel.MAP_MODE_TERRAIN,
 		RoadTuningPanel.MAP_MODE_MIXED,
@@ -119,6 +142,15 @@ func _run() -> void:
 		),
 		"map_mode_style": map_modes != null and (map_modes.get_child(0) as Button).get_theme_stylebox("pressed") != null,
 		"map_editor": editor_button != null and editor_button.get_theme_stylebox("normal") != null,
+		"family_tree": family_opened,
+		"family_tree_content": (
+			family_overlay.size.x > 0.0
+			and family_overlay.size.y > 0.0
+			and family_panel.get_node_or_null(
+				"FamilyTreeOverlay/Frame/Content/Header/Title"
+			) != null
+		),
+		"family_tree_pause": family_pause_applied and family_pause_restored,
 		"capital_rings": map_3d._capital_rings.multimesh.instance_count == main.state.nations.size(),
 	}
 	var valid: bool = true

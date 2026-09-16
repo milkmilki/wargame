@@ -154,6 +154,11 @@ var edges: Array[Edge] = []
 var nations: Array[Nation] = []
 var armies: Array[Army] = []
 var battles: Array[Battle] = []            ## 进行中的多回合战斗
+## 王族谱共享真源；Nation 仅保存 tree/person id，避免独立后复制谱系。
+var family_trees: Dictionary = {}
+var next_family_tree_id: int = 0
+var next_family_person_id: int = 0
+var family_revision: int = 0
 
 ## 邻接表：city_id -> Array[int]（相邻 city_id）
 var adjacency: Dictionary = {}
@@ -4582,6 +4587,7 @@ func _promote_independent_vassal_names() -> bool:
 		):
 			continue
 		WorldNaming.promote_vassal_to_sovereign(self, nation.id)
+		FamilyTree.record_current_title(self, nation.id)
 		changed = true
 	return changed
 
@@ -4704,6 +4710,7 @@ func enfeoff(
 
 	# 5. 首都、零库存中继与封地存粮回流已由领土事务统一完成。
 	WorldNaming.assign_vassal_name(self, subject.id, city_ids)
+	FamilyTree.record_enfeoffment(self, overlord_id, subject.id)
 
 	# 5.5 地方化驻军并补齐：先转移封地内稳定驻防的宗主 LINE，再把缺口凭空补到
 	#     「陆城数」；MAIN 不转移、不凭空赐予，由藩王后续按经济能力自行组建。

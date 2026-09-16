@@ -60,6 +60,9 @@ extends Node
 @onready var history_timeline: HistoryTimeline = get_node_or_null(
 	"HistoryTimeline"
 ) as HistoryTimeline
+@onready var family_tree_panel: FamilyTreePanel = get_node_or_null(
+	"FamilyTreePanel"
+) as FamilyTreePanel
 @onready var settings_button: Button = $SettingsLayer/SettingsButton
 @onready var settings_overlay: Control = $SettingsLayer/SettingsOverlay
 @onready var resolution_option: OptionButton = (
@@ -81,6 +84,7 @@ var _speed_mult: float = 1.0
 var _settings_previous_pause: bool = false
 var _road_previous_pause: bool = false
 var _editor_previous_pause: bool = false
+var _family_tree_previous_pause: bool = false
 var _city_generation_mask_path: String = GameState.DEFAULT_CITY_MASK_PATH
 var _political_mask_path: String = ""
 var _city_density_settings: Dictionary = (
@@ -95,6 +99,16 @@ var _history_previous_map_mode: int = MapRenderer.MapMode.POLITICAL
 func _ready() -> void:
 	_setup_display_settings()
 	_setup_political_history()
+	if family_tree_panel != null:
+		renderer.family_tree_requested.connect(
+			family_tree_panel.open_for_nation
+		)
+		family_tree_panel.panel_opened.connect(
+			_on_family_tree_opened
+		)
+		family_tree_panel.panel_closed.connect(
+			_on_family_tree_closed
+		)
 	if road_tuning_panel != null:
 		_setup_road_tuning()
 	if map_editor_panel != null:
@@ -116,6 +130,15 @@ func _setup_political_history() -> void:
 		_on_history_day_committed
 	):
 		simulation.runtime_day_committed.connect(_on_history_day_committed)
+
+
+func _on_family_tree_opened() -> void:
+	_family_tree_previous_pause = simulation.paused
+	simulation.paused = true
+
+
+func _on_family_tree_closed() -> void:
+	simulation.paused = _family_tree_previous_pause
 
 
 func _random_startup_seed() -> int:
@@ -530,6 +553,8 @@ func _activate_state(next_state: GameState) -> void:
 	_history_active = false
 	state = next_state
 	simulation.setup(state)
+	if family_tree_panel != null:
+		family_tree_panel.bind(state)
 	simulation.diplomacy_enabled = not use_grid_world
 	simulation.set_speed_multiplier(_speed_mult)
 	renderer.set_army_icon_scale(initial_army_icon_scale)

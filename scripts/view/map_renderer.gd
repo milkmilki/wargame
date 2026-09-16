@@ -3,6 +3,8 @@ extends Node2D
 ## 表现层：只读 GameState，用 _draw() 单一渲染源绘制地图/城市/边/军队/HUD。
 ## 鼠标选择仅保存在表现层，不进入模拟状态或存档。
 
+signal family_tree_requested(nation_id: int)
+
 var state: GameState
 var sim: Simulation
 ## false 时仅保留 HUD、详情与控件；地图世界由 StrategicMap3D 绘制和拾取。
@@ -1023,6 +1025,18 @@ func _handle_selection_detail_mouse_button(
 		if event.pressed:
 			_close_ruler_profile_menu()
 		return false
+	if (
+		event.button_index == MOUSE_BUTTON_LEFT
+		and event.pressed
+		and _selected_nation_id >= 0
+		and not _history_mode
+		and family_tree_trigger_rect(
+			rect, _display_scale
+		).has_point(event.position)
+	):
+		family_tree_requested.emit(_selected_nation_id)
+		get_viewport().set_input_as_handled()
+		return true
 	if (
 		event.button_index == MOUSE_BUTTON_LEFT
 		and event.pressed
@@ -6420,6 +6434,14 @@ func _draw_selection_detail(detail_payload: Dictionary) -> void:
 		var trigger_rect := ruler_profile_trigger_rect(rect, _display_scale)
 		draw_rect(trigger_rect, Color(INK_COLOR, 0.07), true)
 		draw_rect(trigger_rect, Color(INK_COLOR, 0.30), false, 1.0)
+		var tree_rect := family_tree_trigger_rect(rect, _display_scale)
+		draw_rect(tree_rect, Color(COMMAND_GREEN, 0.92), true)
+		draw_rect(tree_rect, ACCENT_GOLD, false, 1.0)
+		draw_string(
+			_font, tree_rect.position + Vector2(0.0, 12.0) * _display_scale,
+			"查看家族树", HORIZONTAL_ALIGNMENT_CENTER, tree_rect.size.x,
+			_font_size(9), PAPER_LIGHT
+		)
 	var visual_line := 0
 	for section in sections:
 		var section_title := str(section.get("title", ""))
@@ -6500,6 +6522,8 @@ func _selection_detail_payload() -> Dictionary:
 	payload["stripe_color"] = stripe_color
 	payload["sections"] = sections
 	payload["line_count"] = _section_visual_line_count(sections)
+	if _selected_nation_id >= 0 and not _history_mode:
+		payload["line_count"] = int(payload["line_count"]) + 1
 	return payload
 
 
@@ -6579,7 +6603,7 @@ static func _nation_detail_line_count(
 ) -> int:
 	if nation_id < 0 or nation_id >= game_state.nations.size():
 		return 0
-	var count := _section_layout_line_count(
+	var count := 1 + _section_layout_line_count(
 		PackedInt32Array([1, 2, 2, 2, 3])
 	)
 	var nation := game_state.nations[nation_id]
@@ -6649,6 +6673,22 @@ static func ruler_profile_trigger_rect(
 			window_rect.size.x / display_scale - 20.0,
 			18.0
 		) * display_scale
+	)
+
+
+static func family_tree_trigger_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return Rect2(
+		Vector2(
+			window_rect.position.x + 10.0 * display_scale,
+			window_rect.end.y - 20.0 * display_scale
+		),
+		Vector2(
+			window_rect.size.x - 20.0 * display_scale,
+			16.0 * display_scale
+		)
 	)
 
 

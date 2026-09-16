@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/simulation/simulation.gd" id="2_sim"]
@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://scripts/view/road_tuning_panel.gd" id="5_roads"]
 [ext_resource type="Script" path="res://scripts/view/map_editor_panel.gd" id="6_editor"]
 [ext_resource type="Script" path="res://scripts/view/history_timeline.gd" id="7_history"]
+[ext_resource type="Script" path="res://scripts/view/family_tree_panel.gd" id="8_family"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -28,6 +29,9 @@ script = ExtResource("6_editor")
 
 [node name="HistoryTimeline" type="CanvasLayer" parent="."]
 script = ExtResource("7_history")
+
+[node name="FamilyTreePanel" type="CanvasLayer" parent="."]
+script = ExtResource("8_family")
 
 [node name="SettingsLayer" type="CanvasLayer" parent="."]
 layer = 20

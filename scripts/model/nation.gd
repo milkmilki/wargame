@@ -22,6 +22,9 @@ var ruler_traits: Array[String] = []
 var ruler_started_day: int = 0
 var ruler_revision: int = 0
 var trade_policy: int = 0
+## 王族谱由 GameState 统一持有；多个独立国家可继续引用同一棵谱。
+var family_tree_id: int = -1
+var ruler_person_id: int = -1
 
 ## 最近一次月度内部政治与贸易快照，仅用于 UI/解释；真源分别是 City
 ## 忠诚字段及 GameState.trade_routes。
