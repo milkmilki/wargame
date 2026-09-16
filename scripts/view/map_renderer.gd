@@ -1028,6 +1028,21 @@ func _handle_selection_detail_mouse_button(
 	if (
 		event.button_index == MOUSE_BUTTON_LEFT
 		and event.pressed
+		and _selected_city_id >= 0
+		and _selected_city_id < state.cities.size()
+		and not _history_mode
+		and city_nation_trigger_rect(
+			rect, _display_scale
+		).has_point(event.position)
+	):
+		var owner_id := state.cities[_selected_city_id].owner_nation
+		if owner_id >= 0 and owner_id < state.nations.size():
+			select_nation(owner_id)
+			get_viewport().set_input_as_handled()
+			return true
+	if (
+		event.button_index == MOUSE_BUTTON_LEFT
+		and event.pressed
 		and _selected_nation_id >= 0
 		and not _history_mode
 		and family_tree_trigger_rect(
@@ -6430,7 +6445,22 @@ func _draw_selection_detail(detail_payload: Dictionary) -> void:
 			Color(PAPER_LIGHT, 0.65),
 			1.0 * _display_scale
 		)
-	if _selected_nation_id >= 0 and not _history_mode:
+	if (
+		_selected_city_id >= 0
+		and _selected_city_id < state.cities.size()
+		and state.cities[_selected_city_id].owner_nation >= 0
+		and state.cities[_selected_city_id].owner_nation < state.nations.size()
+		and not _history_mode
+	):
+		var nation_rect := city_nation_trigger_rect(rect, _display_scale)
+		draw_rect(nation_rect, Color(COMMAND_GREEN, 0.92), true)
+		draw_rect(nation_rect, ACCENT_GOLD, false, 1.0)
+		draw_string(
+			_font, nation_rect.position + Vector2(0.0, 12.0) * _display_scale,
+			"查看国家信息", HORIZONTAL_ALIGNMENT_CENTER, nation_rect.size.x,
+			_font_size(9), PAPER_LIGHT
+		)
+	elif _selected_nation_id >= 0 and not _history_mode:
 		var trigger_rect := ruler_profile_trigger_rect(rect, _display_scale)
 		draw_rect(trigger_rect, Color(INK_COLOR, 0.07), true)
 		draw_rect(trigger_rect, Color(INK_COLOR, 0.30), false, 1.0)
@@ -6522,7 +6552,15 @@ func _selection_detail_payload() -> Dictionary:
 	payload["stripe_color"] = stripe_color
 	payload["sections"] = sections
 	payload["line_count"] = _section_visual_line_count(sections)
-	if _selected_nation_id >= 0 and not _history_mode:
+	if (
+		_selected_city_id >= 0
+		and _selected_city_id < state.cities.size()
+		and state.cities[_selected_city_id].owner_nation >= 0
+		and state.cities[_selected_city_id].owner_nation < state.nations.size()
+		and not _history_mode
+	):
+		payload["line_count"] = int(payload["line_count"]) + 1
+	elif _selected_nation_id >= 0 and not _history_mode:
 		payload["line_count"] = int(payload["line_count"]) + 1
 	return payload
 
@@ -6592,9 +6630,13 @@ static func _city_detail_line_count(
 	var governance_lines := (
 		3 if game_state.cities[city_id].rebellion_progress > 0 else 2
 	)
-	return _section_layout_line_count(PackedInt32Array([
+	var count := _section_layout_line_count(PackedInt32Array([
 		3, 2, 7, governance_lines,
 	]))
+	var owner_id := game_state.cities[city_id].owner_nation
+	if owner_id >= 0 and owner_id < game_state.nations.size():
+		count += 1
+	return count
 
 
 static func _nation_detail_line_count(
@@ -6677,6 +6719,20 @@ static func ruler_profile_trigger_rect(
 
 
 static func family_tree_trigger_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return _selection_detail_bottom_action_rect(window_rect, display_scale)
+
+
+static func city_nation_trigger_rect(
+	window_rect: Rect2,
+	display_scale: float
+) -> Rect2:
+	return _selection_detail_bottom_action_rect(window_rect, display_scale)
+
+
+static func _selection_detail_bottom_action_rect(
 	window_rect: Rect2,
 	display_scale: float
 ) -> Rect2:
