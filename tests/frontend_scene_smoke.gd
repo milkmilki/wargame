@@ -101,6 +101,11 @@ func _run() -> void:
 	var nation_detail_rect := renderer._selection_detail_rect(
 		renderer._selection_detail_line_count()
 	)
+	var nation_payload := renderer._selection_detail_payload()
+	var nation_detail_geometry_matches := (
+		int(nation_payload["line_count"])
+		== renderer._selection_detail_line_count()
+	)
 	var family_tree_click := InputEventMouseButton.new()
 	family_tree_click.button_index = MOUSE_BUTTON_LEFT
 	family_tree_click.pressed = true
@@ -186,6 +191,7 @@ func _run() -> void:
 		"family_tree_pause": family_pause_applied and family_pause_restored,
 		"city_nation_jump": city_nation_jump,
 		"family_tree_button": family_tree_button_opens,
+		"nation_detail_geometry": nation_detail_geometry_matches,
 		"capital_rings": map_3d._capital_rings.multimesh.instance_count == main.state.nations.size(),
 	}
 	var valid: bool = true

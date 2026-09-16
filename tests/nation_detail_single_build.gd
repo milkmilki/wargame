@@ -62,7 +62,9 @@ func _test_nation_redraw_builds_once(
 	var nation_id := _pick_alive_nation_id(state)
 	var expected_sections := MapRenderer.nation_detail_sections(state, nation_id)
 	var expected_signature := _section_signature(expected_sections)
-	var expected_line_count := _section_visual_line_count(expected_sections)
+	var expected_line_count := (
+		_section_visual_line_count(expected_sections) + 1
+	)
 
 	MapRenderer.reset_nation_detail_section_build_count()
 	renderer.select_nation(nation_id)
@@ -91,6 +93,14 @@ func _test_nation_redraw_builds_once(
 		"nation/payload_line_count_matches_sections",
 		"expected=%d actual=%d" % [
 			expected_line_count, int(payload.get("line_count", -1)),
+		]
+	)
+	_check(
+		renderer._selection_detail_line_count() == expected_line_count,
+		"nation/input_geometry_matches_drawn_geometry",
+		"expected=%d actual=%d" % [
+			expected_line_count,
+			renderer._selection_detail_line_count(),
 		]
 	)
 	_check(

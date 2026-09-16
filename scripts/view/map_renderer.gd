@@ -6551,6 +6551,12 @@ func _selection_detail_line_count() -> int:
 		if edge != null:
 			return _edge_detail_line_count()
 	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
+		if _history_mode:
+			return _section_visual_line_count(
+				historical_nation_detail_sections(
+					state, _selected_nation_id
+				)
+			)
 		return _nation_detail_line_count(state, _selected_nation_id)
 	return 0
 
@@ -6689,10 +6695,16 @@ static func _nation_detail_line_count(
 ) -> int:
 	if nation_id < 0 or nation_id >= game_state.nations.size():
 		return 0
-	var count := 1 + _section_layout_line_count(
-		PackedInt32Array([1, 2, 2, 2, 3])
-	)
 	var nation := game_state.nations[nation_id]
+	var diplomacy_lines := 3
+	if (
+		game_state.is_vassal(nation_id)
+		or game_state.is_overlord(nation_id)
+	):
+		diplomacy_lines += 1
+	var count := 1 + _section_layout_line_count(
+		PackedInt32Array([2, 2, 3, 1, diplomacy_lines])
+	)
 	if (
 		not nation.campaign_attack_assignments.is_empty()
 		or nation.last_offensive_gold_day >= 0
