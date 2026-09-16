@@ -9,11 +9,11 @@ const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64 城兼容网格夹具
 const TERRAIN_CITY_COUNT: int = 200         ## 正式高度图基础陆城；动态码头另计
 const NATION_COUNT: int = 4
-const CITY_MANPOWER_PER_MONTH_MIN: int = 10
-const CITY_MANPOWER_PER_MONTH_MAX: int = 30
+const CITY_MANPOWER_PER_MONTH_MIN: int = 500
+const CITY_MANPOWER_PER_MONTH_MAX: int = 1000
 const RESOURCE_CAPACITY_YEARS: int = 3
 const FOOD_CAPACITY_HALF_YEARS: int = RESOURCE_CAPACITY_YEARS * 2
-const INITIAL_MANPOWER_RESERVE_MONTHS: int = RESOURCE_CAPACITY_YEARS * 12
+const INITIAL_MANPOWER_RESERVE_MONTHS: int = (RESOURCE_CAPACITY_YEARS+2) * 12
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
@@ -45,7 +45,7 @@ const CROSSROADS_MIN_ROADS: int = 6
 const INITIAL_CITY_FOOD_STOCK_MIN: int = 500
 const INITIAL_CITY_FOOD_STOCK_MAX: int = 600
 const FOOD_HUB_MIN_OUTPUT: int = 1600
-const MANPOWER_HUB_MIN_OUTPUT: int = 80
+const MANPOWER_HUB_MIN_OUTPUT: int = 800
 const MAP_SOURCE_MANIFEST := MapSource.DEFAULT_MANIFEST
 const DEFAULT_CITY_MASK_PATH := (
 	"res://assets/terrain/default_china_city_mask.png"
@@ -414,7 +414,9 @@ func generate_from_map_definition(
 		city.owner_nation = int(record["owner_nation"])
 		city.fort_strength = int(record.get("fort_strength", 10))
 		city.fort_strength_max = int(record.get("fort_strength_max", 10))
-		city.manpower_per_month = int(record.get("manpower_per_month", 10))
+		city.manpower_per_month = int(record.get(
+			"manpower_per_month", CITY_MANPOWER_PER_MONTH_MIN
+		))
 		city.gold_per_month = int(record.get("gold_per_month", 1))
 		city.food_per_half_year = int(record.get("food_per_half_year", 100))
 		city.is_food_hub = bool(record.get("is_food_hub", false))

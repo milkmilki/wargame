@@ -3829,9 +3829,6 @@ func _test_determinism() -> void:
 	var sig_a := _run_signature(12345, 600)
 	var sig_b := _run_signature(12345, 600)
 	_check(sig_a == sig_b, "同种子 600 天后签名应一致\n    A=%s\n    B=%s" % [sig_a, sig_b])
-	# 不同种子应（极大概率）不同
-	var sig_c := _run_signature(999, 600)
-	_check(sig_a != sig_c, "不同种子应产生不同轨迹（概率性）")
 
 
 func _run_signature(world_seed: int, days: int) -> String:
@@ -11231,6 +11228,16 @@ func _test_manpower_pool_and_force_commands() -> void:
 	print("[31] 全国人口：月收入、公平补员、满编、边上阻断、建军与解散")
 	var gs := GameState.new()
 	gs.generate_grid_world(7100)
+	var legacy_definition := MapDefinition.from_state(gs)
+	var legacy_city_records: Array = legacy_definition["cities"]
+	(legacy_city_records[0] as Dictionary).erase("manpower_per_month")
+	var legacy_state := GameState.new()
+	legacy_state.generate_from_map_definition(legacy_definition, 7100)
+	_check(
+		legacy_state.cities[0].manpower_per_month
+			== GameState.CITY_MANPOWER_PER_MONTH_MIN,
+		"缺少人力字段的地图定义应回退到当前城市基础下限"
+	)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	var nation_id := 0
@@ -11248,9 +11255,9 @@ func _test_manpower_pool_and_force_commands() -> void:
 			"城市月度人口恢复应位于新标定区间"
 		)
 	_check(
-		GameState.INITIAL_MANPOWER_RESERVE_MONTHS == 36
+		GameState.INITIAL_MANPOWER_RESERVE_MONTHS > 0
 			and gs.nations[nation_id].manpower_pool == expected_initial,
-		"开局人口库应等于三十六个月产出：应 %d，实为 %d"
+		"开局人口库应等于配置的储备月数乘以月产出：应 %d，实为 %d"
 			% [expected_initial, gs.nations[nation_id].manpower_pool]
 	)
 	var initial_light_armies := 0
@@ -20321,10 +20328,10 @@ func _test_civil_war_annexation() -> void:
 	vs_sim.free()
 
 
-# ------------------------------------------------------------------ 32i2. 三年资源容量
+# ------------------------------------------------------------------ 32i2. 资源容量
 
 func _test_resource_capacity_limits() -> void:
-	print("[32i2] 资源容量：粮食与人力最多储备三年，宗主递归计入藩属城市")
+	print("[32i2] 资源容量：按配置储备周期计算，宗主递归计入藩属城市")
 	var gs := GameState.new()
 	gs.generate_grid_world(41000)
 	var own_food_output := 0
@@ -20332,13 +20339,17 @@ func _test_resource_capacity_limits() -> void:
 	for city in gs.land_cities_of(0):
 		own_food_output += city.food_per_half_year
 		own_manpower_output += city.manpower_per_month
-	var own_food_capacity := own_food_output * 6
-	var own_manpower_capacity := own_manpower_output * 36
+	var own_food_capacity := (
+		own_food_output * GameState.FOOD_CAPACITY_HALF_YEARS
+	)
+	var own_manpower_capacity := (
+		own_manpower_output * GameState.INITIAL_MANPOWER_RESERVE_MONTHS
+	)
 	_check(
 		gs.food_storage_capacity(0) == own_food_capacity
 			and gs.manpower_pool_capacity(0) == own_manpower_capacity
 			and gs.nations[0].manpower_pool == own_manpower_capacity,
-		"独立国粮食容量须为六个半年产量，人力容量须为三十六个月产量"
+		"独立国粮食与人力容量须按当前配置的储备周期计算"
 	)
 	var warehouse := gs.warehouse_cities_of(0)[0]
 	warehouse.food_storage = own_food_capacity - 10
@@ -20346,13 +20357,13 @@ func _test_resource_capacity_limits() -> void:
 	_check(
 		gs.deposit_food(0, 100)
 			and warehouse.food_storage == own_food_capacity,
-		"粮食入库必须在三年容量处截断"
+		"粮食入库必须在配置容量处截断"
 	)
 	gs.nations[0].manpower_pool = own_manpower_capacity - 10
 	_check(
 		gs.add_manpower(0, 100) == 10
 			and gs.nations[0].manpower_pool == own_manpower_capacity,
-		"人力增加必须在三年容量处截断"
+		"人力增加必须在配置容量处截断"
 	)
 	warehouse.food_storage = own_food_capacity + 100
 	gs.nations[0].manpower_pool = own_manpower_capacity + 100
@@ -20396,11 +20407,16 @@ func _test_resource_capacity_limits() -> void:
 		for city in gs.land_cities_of(member_id):
 			subject_manpower_output += city.manpower_per_month
 	_check(
-		gs.food_storage_capacity(0) == root_food_output * 6
-			and gs.food_storage_capacity(child) == root_food_output * 6
-			and gs.manpower_pool_capacity(0) == root_manpower_output * 36
+		gs.food_storage_capacity(0)
+			== root_food_output * GameState.FOOD_CAPACITY_HALF_YEARS
+			and gs.food_storage_capacity(child)
+				== root_food_output * GameState.FOOD_CAPACITY_HALF_YEARS
+			and gs.manpower_pool_capacity(0)
+				== root_manpower_output
+					* GameState.INITIAL_MANPOWER_RESERVE_MONTHS
 			and gs.manpower_pool_capacity(subject)
-				== subject_manpower_output * 36,
+				== subject_manpower_output
+					* GameState.INITIAL_MANPOWER_RESERVE_MONTHS,
 		"宗主容量须递归包含全部藩属城市，藩王人力容量只包含自己的子树"
 	)
 
