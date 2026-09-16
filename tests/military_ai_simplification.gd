@@ -1,5 +1,5 @@
 extends SceneTree
-## 军事 AI 简化门禁：主战团只含一支重军，攻势规模有界，
+## 军事 AI 简化门禁：指挥单位只含一个聚合主战实体，攻势规模有界，
 ## 友军沿既定道路移动时不使整份动态驻防计划失效。
 
 var _failures: Array[String] = []
@@ -47,20 +47,21 @@ func _test_single_heavy_battle_group() -> void:
 	_check(
 		BattleGroup.MAX_LIGHT_ARMIES == 0
 			and BattleGroup.MAX_HEAVY_ARMIES == 1
+			and BattleGroup.MAX_COMMAND_UNITS == 6
 			and members.size() == 1
 			and heavy_count == 1
 			and light_count == 0
 			and light_rejected
 			and nonstandard_rejected,
-		"每个主战团必须且只能包含一支重军，轻军不得加入战团"
+		"每个指挥单位必须且只能包含一个聚合主战实体，轻军不得加入"
 	)
 
 
 func _test_campaign_bounds() -> void:
 	_check(
 		Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS == 3
-			and Simulation.CAMPAIGN_MAX_WARTIME_GROUPS == 8,
-		"攻势必须限制为最多三目标、八个战团"
+			and Simulation.CAMPAIGN_MAX_COMMAND_UNITS == 6,
+		"攻势必须限制为最多三目标、六个指挥单位"
 	)
 
 

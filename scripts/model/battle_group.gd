@@ -1,7 +1,10 @@
 class_name BattleGroup
 extends RefCounted
-## 持久战团。成员关系的真源是 Army.battle_group_id。
+## 持久指挥单位。成员关系的真源是 Army.battle_group_id。
+## 每国最多六个指挥单位；每个单位只保留一个聚合主战实体，内部军团仅由
+## max_size / INITIAL_HEAVY_ARMY_SIZE 派生展示，不再独立移动、补给或参战。
 
+const MAX_COMMAND_UNITS: int = 6
 const MAX_LIGHT_ARMIES: int = 0
 const MAX_HEAVY_ARMIES: int = 1
 

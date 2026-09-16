@@ -2515,6 +2515,8 @@ func _generate_armies() -> void:
 
 func _battle_group_structure_valid() -> bool:
 	for nation in nations:
+		if nation.battle_groups.size() > BattleGroup.MAX_COMMAND_UNITS:
+			return false
 		for group in nation.battle_groups:
 			var heavy_count := 0
 			for army in battle_group_members(nation.id, group.id):
@@ -2547,6 +2549,8 @@ func create_battle_group(nation_id: int) -> BattleGroup:
 	if nation_id < 0 or nation_id >= nations.size():
 		return null
 	var nation := nations[nation_id]
+	if nation.battle_groups.size() >= BattleGroup.MAX_COMMAND_UNITS:
+		return null
 	var group := BattleGroup.new()
 	group.id = nation.next_battle_group_id
 	nation.next_battle_group_id += 1
@@ -2612,6 +2616,86 @@ func assign_army_to_battle_group(
 	army.strategic_role = Army.StrategicRole.MAIN
 	army.clear_line_assignment()
 	return true
+
+
+## 把一支主战军放入空闲指挥槽；六槽已满时并入兵力池最小的现有单位。
+## 返回最终承载兵力的聚合实体。被并入的 army 会从 armies 中移除。
+func assign_or_merge_main_army(army: Army) -> Army:
+	if (
+		army == null
+		or army.size <= 0
+		or army.max_size < INITIAL_HEAVY_ARMY_SIZE
+		or army.owner_nation < 0
+		or army.owner_nation >= nations.size()
+	):
+		return null
+	var nation := nations[army.owner_nation]
+	for group in nation.battle_groups:
+		if battle_group_members(nation.id, group.id).is_empty():
+			return army if assign_army_to_battle_group(army, group.id) else null
+	if nation.battle_groups.size() < BattleGroup.MAX_COMMAND_UNITS:
+		var created_group := create_battle_group(nation.id)
+		if created_group != null and assign_army_to_battle_group(
+			army, created_group.id
+		):
+			return army
+	var targets: Array[Army] = []
+	for candidate in armies:
+		if (
+			candidate != army
+			and candidate.owner_nation == nation.id
+			and candidate.size > 0
+			and candidate.battle_group_id >= 0
+			and candidate.is_main_battle_role()
+		):
+			targets.append(candidate)
+	if targets.is_empty():
+		return null
+	targets.sort_custom(func(a: Army, b: Army) -> bool:
+		if a.max_size != b.max_size:
+			return a.max_size < b.max_size
+		return a.id < b.id
+	)
+	var target := targets[0]
+	var target_weight := maxi(target.max_size, 1)
+	var source_weight := maxi(army.max_size, 1)
+	var total_weight := target_weight + source_weight
+	target.speed_factor = (
+		target.speed_factor * target_weight + army.speed_factor * source_weight
+	) / float(total_weight)
+	target.attack = int(round(
+		float(target.attack * target_weight + army.attack * source_weight)
+			/ float(total_weight)
+	))
+	target.defense = int(round(
+		float(target.defense * target_weight + army.defense * source_weight)
+			/ float(total_weight)
+	))
+	var combined_size := target.size + army.size
+	target.supply_ratio = (
+		target.supply_ratio * target.size + army.supply_ratio * army.size
+	) / float(maxi(combined_size, 1))
+	target.morale = (
+		target.morale_ratio() * target.size
+			+ army.morale_ratio() * army.size
+	) / float(maxi(combined_size, 1)) * Army.HEAVY_MAX_MORALE
+	target.max_size += army.max_size
+	target.size = mini(combined_size, target.max_size)
+	target.max_morale = Army.HEAVY_MAX_MORALE
+	target.morale = minf(target.morale, target.max_morale)
+	target.supply_debt += army.supply_debt
+	target.supply_food_debt += army.supply_food_debt
+	for campaign_nation in nations:
+		_clear_army_campaign_references(campaign_nation, army.id)
+	armies.erase(army)
+	return target
+
+
+func _clear_army_campaign_references(nation: Nation, army_id: int) -> void:
+	nation.campaign_preparation_assignments.erase(army_id)
+	nation.campaign_attack_assignments.erase(army_id)
+	nation.campaign_attack_echelons.erase(army_id)
+	nation.campaign_launched_armies.erase(army_id)
 
 
 func create_army(
@@ -3484,7 +3568,7 @@ func start_regional_rebellion(
 
 	# Local stationed forces defect; if none do, mobilize only from transferred
 	# manpower and never conjure a full army without paying the pool.
-	var defected := 0
+	var defected_armies: Array[Army] = []
 	for army in armies:
 		if (
 			army.owner_nation == parent_id
@@ -3493,14 +3577,14 @@ func start_regional_rebellion(
 		):
 			army.owner_nation = rebel.id
 			army.battle_group_id = -1
-			if army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-				var rebel_group := create_battle_group(rebel.id)
-				assign_army_to_battle_group(army, rebel_group.id)
-			else:
-				army.strategic_role = Army.StrategicRole.LINE
 			army.clear_line_assignment()
-			defected += 1
-	if defected == 0 and rebel.manpower_pool >= INITIAL_LIGHT_ARMY_SIZE:
+			defected_armies.append(army)
+	for defected_army in defected_armies:
+		if defected_army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+			assign_or_merge_main_army(defected_army)
+		else:
+			defected_army.strategic_role = Army.StrategicRole.LINE
+	if defected_armies.is_empty() and rebel.manpower_pool >= INITIAL_LIGHT_ARMY_SIZE:
 		var uprising := create_army(
 			rebel.id, capital_id, INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
 		)
@@ -3650,6 +3734,7 @@ func restore_regional_loyalty_target(
 		)
 		if withdrawn_food > 0 and deposit_food(target_id, withdrawn_food):
 			nations[food_holder_before].granary_food -= withdrawn_food
+	var restored_armies: Array[Army] = []
 	for army in armies:
 		if (
 			army.owner_nation == parent_id
@@ -3658,12 +3743,13 @@ func restore_regional_loyalty_target(
 		):
 			army.owner_nation = target_id
 			army.battle_group_id = -1
-			if army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-				var target_group := create_battle_group(target_id)
-				assign_army_to_battle_group(army, target_group.id)
-			else:
-				army.strategic_role = Army.StrategicRole.LINE
 			army.clear_line_assignment()
+			restored_armies.append(army)
+	for restored_army in restored_armies:
+		if restored_army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
+			assign_or_merge_main_army(restored_army)
+		else:
+			restored_army.strategic_role = Army.StrategicRole.LINE
 	parent.last_rebellion_day = day
 	target.last_rebellion_day = day
 	return true
@@ -3842,7 +3928,7 @@ func _food_pool_stock(holder_id: int) -> int:
 ## 守恒：先从原持有者粮仓（按占比）扣，再存入反叛方首都，粮食总量不变。
 ## 叛乱起兵：反叛方首都凭空动员
 ## multiplier × ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
-## 每个军团为一支满编重军（INITIAL_HEAVY_ARMY_SIZE、MAIN 角色），独立成团。起兵是离散
+## 六个指挥槽用尽后，新军团直接并入现有聚合单位的共享兵力池。起兵是离散
 ## 政治事件，属性沿用 _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
 func _spawn_rebellion_uprising_armies(
 	rebel_id: int,
@@ -3860,15 +3946,12 @@ func _spawn_rebellion_uprising_armies(
 		maxi(multiplier, 1) * int(ceil(0.1 * float(land_count)))
 	)
 	for _index in range(uprising_count):
-		var group := create_battle_group(rebel_id)
-		if group == null:
-			return
 		var heavy := _spawn_uprising_army(rebel_id, capital_id)
 		if heavy == null:
-			# 军队数上限已满：撤掉空战团，停止动员（不留悬空战团破坏结构不变量）。
-			nations[rebel_id].battle_groups.erase(group)
 			return
-		assign_army_to_battle_group(heavy, group.id)
+		if assign_or_merge_main_army(heavy) == null:
+			armies.erase(heavy)
+			return
 
 
 ## 凭空动员一支满编重军（绕过 create_army 的城市归属校验：火星兵可在被围/新夺首都起兵）。

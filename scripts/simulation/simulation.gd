@@ -133,12 +133,9 @@ const CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO: float = 0.33
 const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 18.0
 ## 同一攻势只经营一个主目标和最多两个次目标，避免宽正面重复规划。
 const CAMPAIGN_MAX_PARALLEL_TARGETS: int = 3
-## 三路双梯队最多需要六团，额外保留两个团用于决定性方向补强。
-const CAMPAIGN_MAX_WARTIME_GROUPS: int = 8
-const CAMPAIGN_PREPARED_ECHELONS: int = 2
-## 敌国最后一城会持续集中守军、补员并享首都防御。至少三支独立战团
-## 轮换投入，避免一团在窄路上反复消耗、全国主力却留作填线。
-const CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS: int = 3
+## 每国最多六个聚合指挥单位。攻势不再按内部军团数或双梯队占槽；每个
+## 目标先分配一个指挥单位，是否发动只看到位兵力、有效战力与准备加成。
+const CAMPAIGN_MAX_COMMAND_UNITS: int = BattleGroup.MAX_COMMAND_UNITS
 const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = 120
 const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
 const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
@@ -170,7 +167,7 @@ var _ai_city_partition_cache: Dictionary = {}
 ## 两者均按各自 revision 跨外交动作、月度外交与 AI 决策复用。
 var _diplomacy_topology_cache: Dictionary = {}
 var _ai_defense_plan_cache: Dictionary = {}
-## nation_id -> 最后一次完成战争攻势管理的日期。120天硬截止兜底只补漏，
+## nation_id -> 最后一次完成战争攻势管理的日期。满准备后每日复核战力，
 ## 不得在同一日常规 AI 已评估后再无上下文重复构建快照/威胁/防区。
 var _campaign_evaluated_day_by_nation: Dictionary = {}
 ## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
@@ -626,8 +623,8 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			await _ai_assign_targets(true)
 		else:
 			_ai_assign_targets()
-	# 满准备截止后每天复核一次，避免错峰/其他外交备战分支让国家跳过
-	# 当日战争攻势检查。正常准备期仍只在 AI 周期评估。
+	# 满准备后每天复核一次，避免错峰/其他外交备战分支让国家错过
+	# 达标时机。正常准备期仍只在 AI 周期评估。
 	if spread_runtime_work:
 		await get_tree().process_frame
 	_set_runtime_profile_stage(&"ai_finalize")
@@ -1007,9 +1004,12 @@ func _campaign_minimum_staged_troops(
 		and state.nations[nation_id].campaign_preparation_plan
 			.assigned_target_ids.has(target_city)
 	):
-		# 这里只是本波能否开始的最低哨兵。完整集结量由
-		# _campaign_planned_staging_troops 独立计算。
-		return 1
+		var plan := state.nations[nation_id].campaign_preparation_plan
+		var demand: Dictionary = plan.target_demands.get(target_city, {})
+		return maxi(int(ceil(
+			float(demand.get("required_manpower", 0))
+				* CAMPAIGN_STAGED_TROOP_RATIO
+		)), 1)
 	return maxi(
 		int(ceil(
 			float(
@@ -6667,6 +6667,14 @@ func _decide_ai_army(
 		or campaign_locked
 	):
 		return
+	# 新建或扩编会使国家攻势需求与分配失效；本日先保持原地，下一次
+	# 国家级规划完成后再行动，避免在计划重建前由普通 Utility AI 单独冲城。
+	if (
+		army.is_main_battle_role()
+		and army.ai_action == ActionCandidate.Kind.CREATE_ARMY
+		and army.ai_order_created_day == state.day
+	):
+		return
 	if army.is_line_role():
 		_set_runtime_profile_stage(&"ai_army_line")
 		var line_started := (
@@ -7005,6 +7013,9 @@ func _reconcile_strategic_roles(
 				break
 		if destination < 0:
 			var group := state.create_battle_group(nation_id)
+			if group == null:
+				state.assign_or_merge_main_army(army)
+				continue
 			destination = group.id
 			valid_groups[destination] = true
 		if state.assign_army_to_battle_group(army, destination):
@@ -7319,9 +7330,9 @@ static func merge_forced_ai_nation_order(
 	return result
 
 
-## 满准备是日历截止而不是“恰好轮到本国 AI”时才检查的软提示。
+## 满准备后仍按日历复核，而不是等到“恰好轮到本国 AI”才检查。
 ## 错峰调度、占领强制重算或外交备战都可能改变下一次常规决策日；
-## 到达120天的交战国必须在当天进入完整军事规划，不能再额外等待。
+## 到达120天的交战国每天重算有效战力，但不会绕过兵力或战力门槛。
 func _force_mature_campaign_evaluations() -> void:
 	for nation in state.nations:
 		if (
@@ -7723,9 +7734,7 @@ func _ai_manage_force_structure(
 			decision_context,
 			assessment.wars,
 			assessment.total_line_target,
-			assessment.line_armies,
-			assessment.main_armies,
-			assessment.active_war_mobilization
+			assessment.line_armies
 		)
 	return _try_recruit_force_structure(
 		view,
@@ -7979,18 +7988,28 @@ func _try_create_force_recruitment(
 	var recruitment_reason := str(
 		recruitment.get("reason", "资源结余扩军")
 	)
+	var expand_army_id := int(recruitment.get("expand_army_id", -1))
+	if expand_army_id >= 0:
+		return _expand_main_command(
+			nation_id,
+			expand_army_id,
+			formation_size,
+			recruitment_reason
+		)
 	if emergency_recruitment:
 		recruitment_reason = "战争生存动员%d编制" % formation_size
 	var battle_group_id := int(recruitment.get("group_id", -1))
 	var created_group: BattleGroup = null
 	if bool(recruitment.get("create_group", false)):
 		created_group = state.create_battle_group(nation_id)
+		if created_group == null:
+			return false
 		battle_group_id = created_group.id
 		recruitment_reason = (
-			"战争生存动员%d编制：创建单重军战团%d"
+			"战争生存动员%d编制：创建指挥单位%d"
 			% [formation_size, battle_group_id]
 			if emergency_recruitment
-			else "创建单重军战团%d" % battle_group_id
+			else "创建指挥单位%d" % battle_group_id
 		)
 	var created_army := _create_army_for_nation(
 		nation_id,
@@ -8005,6 +8024,57 @@ func _try_create_force_recruitment(
 	return created_army != null
 
 
+func _expand_main_command(
+	nation_id: int,
+	army_id: int,
+	added_capacity: int,
+	reason: String
+) -> bool:
+	if added_capacity != GameState.INITIAL_HEAVY_ARMY_SIZE:
+		return false
+	var army: Army = null
+	for candidate in state.armies:
+		if candidate.id == army_id:
+			army = candidate
+			break
+	if (
+		army == null
+		or army.owner_nation != nation_id
+		or not army.is_main_battle_role()
+		or army.battle_group_id < 0
+	):
+		return false
+	var nation := state.nations[nation_id]
+	var gold_cost := GameState.formation_creation_gold_cost(added_capacity)
+	if (
+		nation.manpower_pool < added_capacity
+		or nation.treasury_gold < gold_cost
+	):
+		return false
+	nation.manpower_pool -= added_capacity
+	nation.treasury_gold -= gold_cost
+	var existing_size := army.size
+	var combined_size := existing_size + added_capacity
+	var combined_morale_ratio := (
+		army.morale_ratio() * existing_size + added_capacity
+	) / float(maxi(combined_size, 1))
+	army.supply_ratio = (
+		army.supply_ratio * existing_size + added_capacity
+	) / float(maxi(combined_size, 1))
+	army.max_size += added_capacity
+	army.size = mini(combined_size, army.max_size)
+	army.max_morale = Army.max_morale_for_formation(army.max_size)
+	army.morale = combined_morale_ratio * army.max_morale
+	army.ai_action = ActionCandidate.Kind.CREATE_ARMY
+	army.ai_order_created_day = state.day
+	army.ai_order_reason = "%s；支付扩编费%d金" % [reason, gold_cost]
+	nation.ai_last_force_action = ActionCandidate.Kind.CREATE_ARMY
+	nation.ai_last_force_day = state.day
+	nation.ai_last_force_reason = army.ai_order_reason
+	_ai_forced_nations[nation_id] = true
+	return true
+
+
 func _regular_force_recruitment(
 	view: AiWorldView,
 	snapshot: StrategicMapSnapshot,
@@ -8013,9 +8083,7 @@ func _regular_force_recruitment(
 	decision_context: Dictionary,
 	wars: Array,
 	total_line_target: int,
-	line_armies: int,
-	main_armies: int,
-	active_war_mobilization: bool
+	line_armies: int
 ) -> Dictionary:
 	var nation := state.nations[view.nation_id]
 	var demand := _campaign_force_recruitment_demand(
@@ -8032,14 +8100,22 @@ func _regular_force_recruitment(
 	)
 	var required_group_count := int(demand["required_group_count"])
 	var target_group_count := int(demand["target_group_count"])
-	var target_main_armies := maxi(
-		target_group_count * BattleGroup.MAX_HEAVY_ARMIES,
-		1
+	var target_main_capacity := maxi(
+		int(demand.get("target_main_capacity", 0)),
+		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
-	var main_deficit := maxi(target_main_armies - main_armies, 0)
+	var current_main_capacity := _main_command_capacity(view.nation_id)
+	var main_deficit := maxi(
+		int(ceil(
+			float(maxi(target_main_capacity - current_main_capacity, 0))
+				/ float(GameState.INITIAL_HEAVY_ARMY_SIZE)
+		)),
+		0
+	)
 	var line_deficit := maxi(total_line_target - line_armies, 0)
 	var main_deficit_ratio := (
-		float(main_deficit) / float(target_main_armies)
+		float(maxi(target_main_capacity - current_main_capacity, 0))
+			/ float(maxi(target_main_capacity, 1))
 	)
 	var line_deficit_ratio := (
 		float(line_deficit) / float(maxi(total_line_target, 1))
@@ -8065,7 +8141,9 @@ func _regular_force_recruitment(
 		)
 		return _next_battle_group_recruitment(
 			view.nation_id,
-			nation.battle_groups.size() < target_group_count,
+			nation.battle_groups.size() < mini(
+				target_group_count, CAMPAIGN_MAX_COMMAND_UNITS
+			),
 			needs_new_campaign_group
 		)
 	if line_deficit > 0:
@@ -8074,14 +8152,7 @@ func _regular_force_recruitment(
 			"group_id": -1,
 			"reason": "补充常规填线槽",
 		}
-	return _next_battle_group_recruitment(
-		view.nation_id,
-		active_war_mobilization
-			or (
-				active_offense
-				and nation.battle_groups.size() < required_group_count
-			)
-	)
+	return {}
 
 
 func _campaign_force_recruitment_demand(
@@ -8131,15 +8202,43 @@ func _campaign_force_recruitment_demand(
 			view.nation_id, force_demand_targets, threat
 		)
 	var target_group_count := (
-		maxi(nation.battle_groups.size(), required_group_count)
+		mini(
+			maxi(nation.battle_groups.size(), required_group_count),
+			CAMPAIGN_MAX_COMMAND_UNITS
+		)
 		if active_offense
-		else defense_plan.main_reserve_target_group_count()
+		else mini(
+			defense_plan.main_reserve_target_group_count(),
+			CAMPAIGN_MAX_COMMAND_UNITS
+		)
 	)
+	var target_main_capacity := (
+		target_group_count * GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	if campaign_allocation != null:
+		target_main_capacity = 0
+		for target_city in campaign_allocation.target_demands:
+			var target_demand := (
+				campaign_allocation.target_demands[target_city] as Dictionary
+			)
+			# required_power 已按满准备倍率折算；扩编容量还原为原始战力，
+			# 避免单位在尚未获得进攻加成的集结阶段被守军提前耗尽。
+			target_main_capacity += maxi(
+				maxi(
+					int(target_demand.get("required_manpower", 0)),
+					int(ceil(
+						float(target_demand.get("required_power", 0.0))
+							* OFFENSIVE_BONUS_MAX_MULTIPLIER
+					))
+				),
+				GameState.INITIAL_HEAVY_ARMY_SIZE,
+			)
 	return {
 		"active_offense": active_offense,
 		"campaign_allocation": campaign_allocation,
 		"required_group_count": required_group_count,
 		"target_group_count": target_group_count,
+		"target_main_capacity": target_main_capacity,
 	}
 
 
@@ -8243,37 +8342,59 @@ func _next_battle_group_recruitment(
 	prioritize_new_group: bool = false
 ) -> Dictionary:
 	var nation := state.nations[nation_id]
-	# 攻势明确需要多个独立方向/梯队时，先建立战团骨架，再逐团补齐。
-	# 否则“补满第一团才建第二团”会让决定性战役等待数百天。
-	if allow_new_group and prioritize_new_group:
+	# 新方向优先取得独立指挥单位；六个槽位满后只扩充现有单位的共享兵力池。
+	if (
+		allow_new_group
+		and prioritize_new_group
+		and nation.battle_groups.size() < CAMPAIGN_MAX_COMMAND_UNITS
+	):
 		return {
 			"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
 			"group_id": -1,
 			"create_group": true,
-			"reason": "攻势扩编：创建单重军战团",
+			"reason": "攻势扩编：建立指挥单位",
 		}
+	if (
+		allow_new_group
+		and nation.battle_groups.size() < CAMPAIGN_MAX_COMMAND_UNITS
+	):
+		return {
+			"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
+			"group_id": -1,
+			"create_group": true,
+			"reason": "建立指挥单位",
+		}
+	var expandable: Array[Army] = []
 	for group in nation.battle_groups:
-		var heavy_count := 0
-		for member in state.battle_group_members(
-			nation_id,
-			group.id
-		):
-			if member.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
-				heavy_count += 1
-		if heavy_count < BattleGroup.MAX_HEAVY_ARMIES:
-			return {
-				"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
-				"group_id": group.id,
-				"reason": "战团%d补充重军" % group.id,
-			}
-	if not allow_new_group:
+		for member in state.battle_group_members(nation_id, group.id):
+			if member.is_main_battle_role():
+				expandable.append(member)
+	if expandable.is_empty():
 		return {}
+	expandable.sort_custom(func(a: Army, b: Army) -> bool:
+		if a.max_size != b.max_size:
+			return a.max_size < b.max_size
+		return EquivariantOrder.army_less(state, nation_id, a, b)
+	)
 	return {
 		"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
-		"group_id": -1,
-		"create_group": true,
-		"reason": "创建单重军战团",
+		"expand_army_id": expandable[0].id,
+		"group_id": expandable[0].battle_group_id,
+		"reason": "扩充指挥单位%d共享兵力池"
+			% expandable[0].battle_group_id,
 	}
+
+
+func _main_command_capacity(nation_id: int) -> int:
+	var total := 0
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army.size > 0
+			and army.is_main_battle_role()
+		):
+			total += army.max_size
+	return total
 
 
 func _clear_campaign_attack_plan(nation_id: int) -> void:
@@ -8828,7 +8949,7 @@ func _campaign_theater_required_manpower(
 		if (
 			army.owner_nation == nation_id
 			and army.size > 0
-			and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE
 		):
 			return GameState.INITIAL_HEAVY_ARMY_SIZE
 	return GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -8938,15 +9059,16 @@ func _campaign_required_group_count(
 	targets: Array[int],
 	threat: ThreatField = null
 ) -> int:
-	var required_groups := 0
+	var required_commands := 0
 	for target_city in targets:
 		var demand := _campaign_target_group_demand(
 			nation_id,
 			target_city,
 			threat
 		)
-		required_groups += int(demand.get("groups", 0))
-	return clampi(required_groups, 1, CAMPAIGN_MAX_WARTIME_GROUPS)
+		if not demand.is_empty():
+			required_commands += 1
+	return clampi(required_commands, 1, CAMPAIGN_MAX_COMMAND_UNITS)
 
 
 func _campaign_target_group_demand(
@@ -8992,29 +9114,8 @@ func _campaign_target_group_demand(
 		* _campaign_attack_ratio_threshold(nation_id)
 		/ OFFENSIVE_BONUS_MAX_MULTIPLIER
 	)
-	var groups_by_manpower := int(ceil(
-		float(required_manpower) / float(route_manpower)
-	))
-	var groups_by_power := int(ceil(
-		required_power / route_power
-	))
-	var defender_owner := state.cities[target_city].owner_nation
-	var decisive_minimum := (
-		CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
-		if defender_owner >= 0
-			and state.land_cities_of(defender_owner).size() <= 1
-		else 1
-	)
-	var assault_groups := maxi(
-		maxi(groups_by_manpower, groups_by_power), decisive_minimum
-	)
 	return {
-		# 每个方向不仅形成第一批接敌兵力，还冻结一个独立战团梯队。
-		# 三路目标因此自然对应最多六团，而非靠发射阶段临时加码。
-		"groups": assault_groups * CAMPAIGN_PREPARED_ECHELONS,
-		"assault_groups": assault_groups,
-		"is_decisive": decisive_minimum
-			>= CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
+		"command_units": 1,
 		"required_manpower": required_manpower,
 		"required_power": required_power,
 		"route_group_manpower": route_manpower,
@@ -9341,7 +9442,7 @@ func _select_campaign_preparation_armies(
 	var ranked_light: Array[Dictionary] = []
 	for entry in ranked:
 		var ranked_army: Army = entry["army"]
-		if ranked_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+		if ranked_army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 			ranked_heavy.append(entry)
 		elif ranked_army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
 			ranked_light.append(entry)
@@ -9869,19 +9970,6 @@ func _plan_campaign_allocation(
 			plan, target_city, best, group_members_by_id,
 			assigned_manpower, assigned_power
 		)
-	var reinforcement := _reinforce_campaign_group_assignments(
-		plan,
-		nation,
-		evaluations,
-		previous_group_targets,
-		group_members_by_id,
-		used_groups,
-		assigned_manpower,
-		assigned_power
-	)
-	used_groups = reinforcement["used_groups"]
-	assigned_manpower = reinforcement["manpower"]
-	assigned_power = reinforcement["power"]
 	_finalize_campaign_allocation_plan(
 		plan, assigned_manpower, assigned_power
 	)
@@ -9908,59 +9996,6 @@ func _finalize_campaign_allocation_plan(
 	plan.unfilled_group_slots = maxi(
 		plan.required_group_count - plan.assigned_group_count, 0
 	)
-
-
-func _reinforce_campaign_group_assignments(
-	plan: CampaignAllocationPlan,
-	nation: Nation,
-	evaluations: Dictionary,
-	previous_group_targets: Dictionary,
-	group_members_by_id: Dictionary,
-	used_groups: Dictionary,
-	assigned_manpower: Dictionary,
-	assigned_power: Dictionary
-) -> Dictionary:
-	# 理论团槽只是扩军预算；实际分配还必须填平当前兵力和战力缺口。
-	var reinforcement_progress := true
-	while (
-		reinforcement_progress
-		and used_groups.size() < CAMPAIGN_MAX_WARTIME_GROUPS
-	):
-		reinforcement_progress = false
-		for target_city in plan.candidate_target_ids:
-			var demand: Dictionary = plan.target_demands[target_city]
-			var assigned_groups := (
-				(plan.target_to_groups[target_city] as Array).size()
-				if plan.target_to_groups.has(target_city) else 0
-			)
-			if (
-				assigned_groups >= int(plan.target_group_budget[target_city])
-				and int(assigned_manpower.get(target_city, 0)) >= int(demand["required_manpower"])
-				and float(assigned_power.get(target_city, 0.0)) >= float(demand["required_power"])
-			):
-				continue
-			var best := _best_planned_campaign_group(
-				target_city, used_groups, nation.battle_groups, evaluations,
-				previous_group_targets
-			)
-			if best.is_empty():
-				continue
-			var group_id := int(best["group_id"])
-			if assigned_groups >= int(plan.target_group_budget[target_city]):
-				plan.target_group_budget[target_city] = assigned_groups + 1
-			used_groups[group_id] = true
-			_assign_campaign_group_to_plan(
-				plan, target_city, best, group_members_by_id,
-				assigned_manpower, assigned_power
-			)
-			reinforcement_progress = true
-			if used_groups.size() >= CAMPAIGN_MAX_WARTIME_GROUPS:
-				break
-	return {
-		"used_groups": used_groups,
-		"manpower": assigned_manpower,
-		"power": assigned_power,
-	}
 
 
 func _assign_campaign_group_to_plan(
@@ -9995,43 +10030,11 @@ func _assign_campaign_group_to_plan(
 
 
 func _build_campaign_group_slots(plan: CampaignAllocationPlan) -> Array[int]:
-	# 决定性主目标先拿到首轮所需三团，再做广度覆盖。
 	var slots: Array[int] = []
-	if (
-		plan.target_demands.has(plan.primary_city)
-		and bool(plan.target_demands[plan.primary_city].get("is_decisive", false))
-	):
-		for _slot in range(mini(
-			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
-			int(plan.target_group_budget[plan.primary_city])
-		)):
-			slots.append(plan.primary_city)
 	for target_city in plan.candidate_target_ids:
-		if not slots.has(target_city):
-			slots.append(target_city)
-	for target_city in plan.candidate_target_ids:
-		if not bool(plan.target_demands[target_city].get("is_decisive", false)):
-			continue
-		var already_reserved := slots.count(target_city)
-		for unused in range(already_reserved, mini(
-			int(plan.target_demands[target_city].get("groups", 1)),
-			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS * CAMPAIGN_PREPARED_ECHELONS
-		)):
-			slots.append(target_city)
-	var already_slotted := {}
-	for target_city in slots:
-		already_slotted[target_city] = int(already_slotted.get(target_city, 0)) + 1
-	var add_slots := true
-	while add_slots and slots.size() < plan.required_group_count:
-		add_slots = false
-		for target_city in plan.candidate_target_ids:
-			if int(already_slotted.get(target_city, 0)) >= int(plan.target_group_budget[target_city]):
-				continue
-			slots.append(target_city)
-			already_slotted[target_city] = int(already_slotted.get(target_city, 0)) + 1
-			add_slots = true
-			if slots.size() >= plan.required_group_count:
-				break
+		if slots.size() >= plan.required_group_count:
+			break
+		slots.append(target_city)
 	return slots
 
 
@@ -10075,45 +10078,12 @@ func _evaluate_campaign_groups(
 
 
 func _expand_campaign_group_budget(plan: CampaignAllocationPlan) -> int:
-	var budget_used := 0
 	for target_city in plan.candidate_target_ids:
-		budget_used += int(plan.target_group_budget[target_city])
-	plan.desired_group_count = 0
-	for target_city in plan.candidate_target_ids:
-		plan.desired_group_count += maxi(
-			int(plan.target_demands[target_city].get("groups", 1)), 1
-		)
-	for target_city in plan.candidate_target_ids:
-		var decisive := bool(
-			plan.target_demands[target_city].get("is_decisive", false)
-		)
-		if not decisive:
-			continue
-		while (
-			int(plan.target_group_budget[target_city])
-				< CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
-					* CAMPAIGN_PREPARED_ECHELONS
-			and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS
-		):
-			plan.target_group_budget[target_city] = (
-				int(plan.target_group_budget[target_city]) + 1
-			)
-			budget_used += 1
-	var budget_progress := true
-	while budget_progress and budget_used < CAMPAIGN_MAX_WARTIME_GROUPS:
-		budget_progress = false
-		for target_city in plan.candidate_target_ids:
-			var desired := int(plan.target_demands[target_city].get("groups", 1))
-			if int(plan.target_group_budget[target_city]) >= desired:
-				continue
-			plan.target_group_budget[target_city] = (
-				int(plan.target_group_budget[target_city]) + 1
-			)
-			budget_used += 1
-			budget_progress = true
-			if budget_used >= CAMPAIGN_MAX_WARTIME_GROUPS:
-				break
-	return budget_used
+		plan.target_group_budget[target_city] = 1
+	plan.desired_group_count = mini(
+		plan.candidate_target_ids.size(), CAMPAIGN_MAX_COMMAND_UNITS
+	)
+	return plan.desired_group_count
 
 
 func _prepare_campaign_targets(
@@ -10347,10 +10317,10 @@ func _apply_campaign_plan_atomic(
 		or plan.nation_id != nation_id
 		or plan.assigned_target_ids.is_empty()
 		or plan.assigned_target_ids.size() > CAMPAIGN_MAX_PARALLEL_TARGETS
-		or plan.group_to_target.size() > CAMPAIGN_MAX_WARTIME_GROUPS
+		or plan.group_to_target.size() > CAMPAIGN_MAX_COMMAND_UNITS
 		or plan.assigned_group_count != plan.group_to_target.size()
 		or plan.required_group_count < plan.assigned_group_count
-		or plan.required_group_count > CAMPAIGN_MAX_WARTIME_GROUPS
+		or plan.required_group_count > CAMPAIGN_MAX_COMMAND_UNITS
 		or plan.unfilled_group_slots != maxi(
 			plan.required_group_count - plan.assigned_group_count, 0
 		)
@@ -10512,21 +10482,12 @@ func _trim_campaign_preparation_budget(
 			):
 				counted_groups[army.battle_group_id] = true
 				valid_group_count += 1
-		var defender_owner := state.cities[target_city].owner_nation
-		var required_floor := (
-			CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
-			if defender_owner >= 0
-				and state.land_cities_of(defender_owner).size() <= 1
-			else 1
-		)
-		reserved_group_slots += maxi(
-			required_floor - valid_group_count, 0
-		)
-	# 为尚未覆盖的新方向预留战团预算；若8团已全部堆在旧方向，
-	# 从额外增援团中释放相同数量，下一阶段即可重平衡到新前线。
+		reserved_group_slots += maxi(1 - valid_group_count, 0)
+	# 为尚未覆盖的新方向预留指挥单位；六个槽位已满时，从旧方向释放
+	# 空闲单位，下一阶段即可重分配到新前线。
 	var retained_existing_limit := maxi(
 		mini(
-			CAMPAIGN_MAX_WARTIME_GROUPS - reserved_group_slots,
+			CAMPAIGN_MAX_COMMAND_UNITS - reserved_group_slots,
 			maxi(
 				existing_assigned_groups.size() - reserved_group_slots,
 				0
@@ -10556,7 +10517,7 @@ func _trim_campaign_preparation_budget(
 				ordered_groups.append(group_id)
 	var allowed_groups := {}
 	for group_id in ordered_groups.slice(
-		0, CAMPAIGN_MAX_WARTIME_GROUPS
+		0, CAMPAIGN_MAX_COMMAND_UNITS
 	):
 		allowed_groups[int(group_id)] = true
 	for army in state.armies:
@@ -10716,11 +10677,7 @@ func _assign_offensive_staging_orders(
 				nation_id,
 				objective_city
 			)
-	var sustained_required := (
-		required
-		if assigned_only
-		else required * CAMPAIGN_PREPARED_ECHELONS
-	)
+	var sustained_required := required
 	if staged >= sustained_required:
 		if build_campaign_plan:
 			_ensure_campaign_attack_plan(
@@ -10823,7 +10780,7 @@ func _assign_campaign_redeployment_orders(
 			changed = true
 			orders += 1
 			if not assigned_only:
-				if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+				if army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 					committed_heavy += 1
 				elif army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
 					committed_light += 1
@@ -10890,7 +10847,7 @@ func _assign_campaign_reinforcement_orders(
 			orders += 1
 			staged += army.size
 			if not assigned_only:
-				if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+				if army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 					committed_heavy += 1
 				elif army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
 					committed_light += 1
@@ -10916,6 +10873,15 @@ func _assign_campaign_staging_holds(
 ) -> Dictionary:
 	var changed := false
 	var orders := 0
+	# 正式攻势的唯一指挥单位在己方集结城等待即可。推进到边上会在准备
+	# 加成尚未形成前被守军接战，既破坏统一行动，也造成无意义的提前消耗。
+	if assigned_only:
+		return {
+			"changed": false,
+			"orders": 0,
+			"committed_heavy": committed_heavy,
+			"committed_light": committed_light,
+		}
 	for staging_city in staging:
 		if orders >= PREPARATION_MAX_ORDERS_PER_CYCLE:
 			break
@@ -10949,7 +10915,7 @@ func _assign_campaign_staging_holds(
 				changed = true
 				orders += 1
 				if not assigned_only:
-					if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+					if army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 						committed_heavy += 1
 					elif army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
 						committed_light += 1
@@ -11026,7 +10992,7 @@ func _count_campaign_committed_armies(
 			)
 		):
 			continue
-		if committed_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+		if committed_army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
 			committed_heavy += 1
 		elif committed_army.max_size == GameState.INITIAL_LIGHT_ARMY_SIZE:
 			committed_light += 1
@@ -11177,7 +11143,7 @@ func _build_campaign_attack_plan_from_preparation(
 	var nation := state.nations[nation_id]
 	_clear_campaign_attack_plan(nation_id)
 	# 外部调用或旧存档可能直接传入超额准备列表；发射入口自身必须
-	# 裁到3路/8团，不能依赖调用方预先经过正常规划流水线。
+	# 裁到三路、六个指挥单位，不能依赖调用方预先经过正常规划流水线。
 	var ordered_targets := _trim_campaign_preparation_budget(
 		nation_id, targets
 	)
@@ -11772,7 +11738,7 @@ func _build_campaign_target_wave(
 	members_by_group: Dictionary,
 	planned_group_ids: Array[int]
 ) -> Dictionary:
-	# 梯队以战团为原子：先按是否已有成员到达集结线分区，再保持团序。
+	# 每个目标只有一个共享指挥单位；全部成员统一作为首轮投入。
 	var ordered_groups: Array[int] = []
 	for ready_pass in [true, false]:
 		for group_id in planned_group_ids:
@@ -11785,14 +11751,12 @@ func _build_campaign_target_wave(
 					break
 			if group_ready == ready_pass:
 				ordered_groups.append(group_id)
-	var demand: Dictionary = plan.target_demands.get(target_city, {})
-	var assault_group_count := maxi(int(demand.get("assault_groups", 1)), 1)
 	var assignments := {}
 	var echelons := {}
 	var initial_attackers: Array[Army] = []
 	for group_index in range(ordered_groups.size()):
 		var group_id := ordered_groups[group_index]
-		var echelon := int(group_index / assault_group_count)
+		var echelon := 0
 		var group_members: Array[Army] = _sort_campaign_priority(
 			members_by_group[group_id], nation_id, target_city
 		)
@@ -13257,45 +13221,7 @@ func _manage_campaign_offensive(
 		):
 			for army in staged_armies:
 				staged_troops += army.size
-		var planned_groups_ready := true
-		if state.uses_heightmap and nation.campaign_preparation_plan != null:
-			var planned_groups := (
-				nation.campaign_preparation_plan.groups_for_target(
-					target_city
-				)
-			)
-			var demand: Dictionary = (
-				nation.campaign_preparation_plan.target_demands.get(
-					target_city, {}
-				)
-			)
-			var minimum_groups := (
-				CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
-				if bool(demand.get("is_decisive", false))
-				else 1
-			)
-			var staged_group_ids := {}
-			for staged_army in staged_armies:
-				if staged_army.battle_group_id >= 0:
-					staged_group_ids[staged_army.battle_group_id] = true
-			planned_groups_ready = (
-				planned_groups.size() >= minimum_groups
-				and staged_group_ids.size() >= minimum_groups
-			)
-		var preparation_deadline_reached := (
-			preparation_days
-				>= OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
-		)
-		# 决定性方向平时要求足额战团同步集结；120天是硬发动截止，
-		# 到期后只要求至少一个已分配战团真正到位。旧逻辑在这里先用
-		# planned_groups_ready continue，导致后面的满准备分支永远不可达。
-		if (
-			staged_troops < required
-			or (
-				not planned_groups_ready
-				and not preparation_deadline_reached
-			)
-		):
+		if staged_armies.is_empty() or staged_troops < required:
 			continue
 		if threat == null:
 			threat = ThreatField.build(
@@ -13315,38 +13241,11 @@ func _manage_campaign_offensive(
 				target_city
 			)
 		)
-		# 满准备（120 天）是给“常规兵力打不动”的僵局目标兜底的发动截止期，
-		# 而不是一旦标记就必须空等满期的锁。若本方兵力已恢复到无需集结加成、
-		# 仅凭常规集结窗口的基准倍率即可跨过进攻阈值，说明僵局已解除，应立即
-		# 发动，杜绝“明明能打却拖很久不触发”的情况。基准窗口与均势夹具判据
-		# 同源（CAMPAIGN_OFFENSIVE_INTERVAL_DAYS），真正的僵局目标基准比值仍
-		# 低于阈值，因此不会被提前触发。
 		var attack_ratio_threshold := _campaign_attack_ratio_threshold(
 			nation_id
 		)
-		var force_ready_without_bonus := (
-			full_preparation_active
-			and _campaign_projected_assault_ratio(
-				nation_id,
-				target_city,
-				mini(
-					preparation_days,
-					CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
-				),
-				threat,
-				true,
-				staged_armies
-			) >= attack_ratio_threshold
-		)
 		if (
-			recent_legal_reclamation
-			or force_ready_without_bonus
-			or preparation_deadline_reached
-			or (
-				not full_preparation_active
-				and projected_ratio
-					>= attack_ratio_threshold
-			)
+			projected_ratio >= attack_ratio_threshold
 		):
 			launch_targets.append(target_city)
 		elif not nation.campaign_full_preparation_targets.has(

@@ -11814,16 +11814,15 @@ func _test_manpower_pool_and_force_commands() -> void:
 	_check(
 		decisive_allocation.assigned_target_ids
 			== [decisive_target]
-			and decisive_planned_groups.size()
-				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+			and decisive_planned_groups.size() == 1
 			and decisive_unique_planned_groups.size()
 				== decisive_planned_groups.size()
 			and decisive_allocation.assigned_group_count
 				== decisive_planned_groups.size()
 			and locked_decisive_allocation.groups_for_target(
 				decisive_target
-			).size() >= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
-		"纯规划器必须为敌国最后一城直接配置至少三支互异战团：%s"
+			).size() == 1,
+		"纯规划器必须为每个目标只配置一个可用指挥单位：%s"
 			% str(decisive_allocation.group_to_target)
 	)
 	var decisive_assigned := (
@@ -11838,13 +11837,12 @@ func _test_manpower_pool_and_force_commands() -> void:
 		)) == decisive_target:
 			decisive_assigned_groups[decisive_army.battle_group_id] = true
 	_check(
-		int(decisive_demand.get("groups", 0))
-			>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+		int(decisive_demand.get("command_units", 0)) == 1
+			and not decisive_demand.has("groups")
 			and bool(decisive_recruitment.get("create_group", false))
 			and decisive_assigned
-			and decisive_assigned_groups.size()
-				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
-		"消灭敌国最后一城必须至少组织三支独立战团，并优先建立新战团骨架"
+			and decisive_assigned_groups.size() == 1,
+		"最后一城与普通目标相同，只使用一个满足兵力与战力门槛的指挥单位"
 	)
 	decisive_sim.free()
 	var ungrouped_heavy := (
@@ -13010,24 +13008,21 @@ func _test_diplomacy_state_and_ai() -> void:
 	remnant_state.nations[0].treasury_gold = 10000
 	remnant_state.nations[1].treasury_gold = 0
 	remnant_state.nations[1].manpower_pool = 0
-	var remnant_groups: Array[BattleGroup] = []
 	var remnant_heavy_armies: Array[Army] = []
-	for remnant_index in range(3):
-		var remnant_group := remnant_state.create_battle_group(0)
-		var remnant_heavy := remnant_state.create_army(
-			0,
-			remnant_origin,
-			GameState.INITIAL_HEAVY_ARMY_SIZE,
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-		remnant_heavy.attack = 20
-		remnant_heavy.defense = 20
-		remnant_state.assign_army_to_battle_group(
-			remnant_heavy,
-			remnant_group.id
-		)
-		remnant_groups.append(remnant_group)
-		remnant_heavy_armies.append(remnant_heavy)
+	var remnant_group := remnant_state.create_battle_group(0)
+	var remnant_heavy := remnant_state.create_army(
+		0,
+		remnant_origin,
+		GameState.INITIAL_HEAVY_ARMY_SIZE * 3,
+		GameState.INITIAL_HEAVY_ARMY_SIZE * 3
+	)
+	remnant_heavy.attack = 20
+	remnant_heavy.defense = 20
+	remnant_state.assign_army_to_battle_group(
+		remnant_heavy,
+		remnant_group.id
+	)
+	remnant_heavy_armies.append(remnant_heavy)
 	remnant_state.refresh_derived()
 	var remnant_sim := Simulation.new()
 	remnant_sim.setup(remnant_state)
@@ -13047,20 +13042,17 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	var remnant_nation := remnant_state.nations[0]
 	var remnant_full_group_ready := remnant_plan_ready
-	for remnant_group in remnant_groups:
-		for remnant_member in remnant_state.battle_group_members(
-			0, remnant_group.id
-		):
-			remnant_full_group_ready = (
-				remnant_full_group_ready
-				and int(
-					remnant_nation
-						.campaign_preparation_assignments.get(
-							remnant_member.id,
-							-1
-						)
-				) == remnant_first
-			)
+	for remnant_member in remnant_state.battle_group_members(
+		0, remnant_group.id
+	):
+		remnant_full_group_ready = (
+			remnant_full_group_ready
+			and int(
+				remnant_nation.campaign_preparation_assignments.get(
+					remnant_member.id, -1
+				)
+			) == remnant_first
+		)
 	var remnant_launched := (
 		remnant_full_group_ready
 		and remnant_sim._launch_campaign_offensive(
@@ -13083,14 +13075,13 @@ func _test_diplomacy_state_and_ai() -> void:
 	for remnant_army in remnant_heavy_armies:
 		remnant_composition_valid = (
 			remnant_composition_valid
-			and remnant_army.max_size
-				== GameState.INITIAL_HEAVY_ARMY_SIZE
+			and remnant_army.main_legion_count() == 3
 		)
 	_check(
 		remnant_plan_ready
 			and remnant_composition_valid
 			and remnant_terminated,
-		"多数城对两座残城时，单重军战团须完成集结并经5000关隘继续A→B→C，在360天内灭国或议和"
+		"多数城对两座残城时，聚合指挥单位须完成集结并经5000关隘继续A→B→C，在360天内灭国或议和"
 	)
 	remnant_sim.free()
 
@@ -13929,9 +13920,8 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	_check(
 		Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS == 3
-			and Simulation.CAMPAIGN_MAX_WARTIME_GROUPS
-				== 8,
-		"国家级攻势预算必须限制为三路目标和最多八个单重军战团"
+			and Simulation.CAMPAIGN_MAX_COMMAND_UNITS == 6,
+		"国家级攻势预算必须限制为三路目标和最多六个聚合指挥单位"
 	)
 	var first_wave_army: Army = null
 	for army in objective_state.armies:
@@ -13999,28 +13989,17 @@ func _test_diplomacy_state_and_ai() -> void:
 		objective_state.nations[objective_attacker].campaign_next_offensive_day
 		- 1
 	)
-	var preorganized := objective_sim._manage_campaign_offensive(
+	objective_sim._manage_campaign_offensive(
 		objective_attacker
 	)
-	var cooldown_ordered := false
-	for army in objective_state.armies:
-		if (
-			army.owner_nation == objective_attacker
-			and army.ai_order_created_day == objective_state.day
-			and army.ai_order_reason.contains("战前集结")
-		):
-			cooldown_ordered = true
-			break
 	_check(
-		preorganized
-		and objective_state.nations[
+		objective_state.nations[
 			objective_attacker
 		].campaign_offensive_count == first_wave_count
-		and cooldown_ordered
 		and objective_state.nations[
 			objective_attacker
 		].campaign_plan_wave == first_wave_count,
-		"冷却期必须持续集结下一波军队，且不得提前发动或覆盖当前梯队计划"
+		"冷却期不得提前发动下一波攻势或覆盖当前指挥单位计划"
 	)
 	for army in objective_state.armies:
 		if army.owner_nation == objective_attacker and not staging.is_empty():
@@ -14147,24 +14126,22 @@ func _test_diplomacy_state_and_ai() -> void:
 		"均势僵局满准备测试"
 	)
 	var stalemate_attackers: Array[Army] = []
-	for attacker_index in range(2):
-		var stalemate_attacker := _make_army(
-			9900 + attacker_index,
-			0,
-			10000,
-			10,
-			10
-		)
-		stalemate_attacker.state = Army.State.HOLDING
-		stalemate_attacker.location_city = stalemate_origin
-		stalemate_attacker.move_from = stalemate_origin
-		stalemate_attacker.move_to = stalemate_target
-		stalemate_attacker.move_progress = (
-			Simulation.HOLDING_TARGET_PROGRESS
-		)
-		stalemate_attacker.on_edge = true
-		stalemate_state.armies.append(stalemate_attacker)
-		stalemate_attackers.append(stalemate_attacker)
+	stalemate_state.nations[0].battle_groups.clear()
+	stalemate_state.nations[0].next_battle_group_id = 0
+	var stalemate_group := stalemate_state.create_battle_group(0)
+	var stalemate_attacker := _make_army(9900, 0, 20000, 10, 10)
+	stalemate_attacker.max_size = 20000
+	stalemate_attacker.state = Army.State.HOLDING
+	stalemate_attacker.location_city = stalemate_origin
+	stalemate_attacker.move_from = stalemate_origin
+	stalemate_attacker.move_to = stalemate_target
+	stalemate_attacker.move_progress = Simulation.HOLDING_TARGET_PROGRESS
+	stalemate_attacker.on_edge = true
+	stalemate_state.armies.append(stalemate_attacker)
+	stalemate_state.assign_army_to_battle_group(
+		stalemate_attacker, stalemate_group.id
+	)
+	stalemate_attackers.append(stalemate_attacker)
 	stalemate_state.edge_of(
 		stalemate_origin,
 		stalemate_target
@@ -14199,9 +14176,9 @@ func _test_diplomacy_state_and_ai() -> void:
 	stalemate_nation.campaign_preparation_targets = [
 		stalemate_target
 	] as Array[int]
-	for stalemate_attacker in stalemate_attackers:
+	for prepared_attacker in stalemate_attackers:
 		stalemate_nation.campaign_preparation_assignments[
-			stalemate_attacker.id
+			prepared_attacker.id
 		] = stalemate_target
 	stalemate_state.day = (
 		Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS
@@ -14246,22 +14223,11 @@ func _test_diplomacy_state_and_ai() -> void:
 		null,
 		stalemate_threat
 	)
-	stalemate_state.day = (
-		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS - 1
-	)
-	stalemate_sim._manage_campaign_offensive(
-		0,
-		null,
-		null,
-		ThreatField.build(
-			AiWorldView.build(stalemate_state, 0)
-		)
-	)
 	var no_early_stalemate_attack := true
-	for stalemate_attacker in stalemate_attackers:
+	for prepared_attacker in stalemate_attackers:
 		no_early_stalemate_attack = (
 			no_early_stalemate_attack
-			and stalemate_attacker.ai_action
+			and prepared_attacker.ai_action
 				!= ActionCandidate.Kind.ATTACK
 		)
 	_check(
@@ -14270,7 +14236,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 			and stalemate_nation.campaign_offensive_count == 0
 			and no_early_stalemate_attack,
-		"均势攻势在常规窗至满准备前必须持续集结，不得拆成零散提前攻击"
+		"有效战力未达门槛时，聚合指挥单位必须继续准备而不得提前攻击"
 	)
 	stalemate_state.day = (
 		Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
@@ -14287,20 +14253,20 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	var full_preparation_attackers := 0
 	var full_preparation_bonus_extended := false
-	for stalemate_attacker in stalemate_attackers:
+	for prepared_attacker in stalemate_attackers:
 		if (
-			stalemate_attacker.ai_action
+			prepared_attacker.ai_action
 				== ActionCandidate.Kind.ATTACK
-			and stalemate_attacker.ai_target_city
+			and prepared_attacker.ai_target_city
 				== stalemate_target
 			and _approx(
-				stalemate_attacker.offensive_attack_multiplier,
+				prepared_attacker.offensive_attack_multiplier,
 				Simulation.OFFENSIVE_BONUS_MAX_MULTIPLIER
 			)
 		):
 			full_preparation_attackers += 1
 			full_preparation_bonus_extended = (
-				stalemate_attacker.offensive_bonus_until_day
+				prepared_attacker.offensive_bonus_until_day
 				== stalemate_state.day
 					+ Simulation
 						.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
@@ -14313,7 +14279,7 @@ func _test_diplomacy_state_and_ai() -> void:
 				.campaign_full_preparation_targets.is_empty()
 			and full_preparation_bonus_extended,
 		(
-			"满准备截止日必须以2倍攻击加成统一发动攻势："
+			"准备加成把有效战力推过门槛后，聚合指挥单位必须统一发动攻势："
 			+ "launched=%s attackers=%d count=%d "
 			+ "targets=%s"
 		) % [
@@ -14610,8 +14576,8 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	plan_sim.free()
 
-	# 正式地图宽正面：即便主目标的局部需求足以吞掉全部战团，也必须
-	# 先让每个合法方向获得一个独立战团，再用剩余战团补强主目标。
+	# 正式地图宽正面：每个合法方向只获得一个独立指挥单位，剩余单位
+	# 不再为了填平单个目标的兵力需求而重复分配。
 	var broad_state := GameState.new()
 	broad_state.generate_grid_world(32066)
 	broad_state.uses_heightmap = true
@@ -14624,7 +14590,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		broad_state.cities[broad_target].owner_nation = 1
 		broad_state.recognized_city_owners[broad_target] = 1
 		broad_state.edge_of(broad_origin, broad_target).max_manpower = 30000
-	# 主目标需要约60000兵力，旧“逐目标填满”会用光四个战团。
+	# 主目标需要约60000兵力，但分配器仍只给它一个聚合指挥单位。
 	broad_state.cities[broad_targets[0]].fort_strength = 300
 	broad_state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.WAR
@@ -14895,10 +14861,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		broad_built
 			and broad_nation.campaign_preparation_targets.size() == 3
-			and int(broad_counts.get(broad_targets[0], 0)) == 2
+			and int(broad_counts.get(broad_targets[0], 0)) == 1
 			and int(broad_counts.get(broad_targets[1], 0)) == 1
-			and int(broad_counts.get(broad_targets[2], 0)) == 1,
-		"正式地图攻势必须先覆盖全部合法方向再补强主目标：%s"
+			and int(broad_counts.get(broad_targets[2], 0)) == 1
+			and int(broad_counts.get(-1, 0)) == 1,
+		"正式地图攻势必须为三个方向各分配一个指挥单位，剩余单位保持空闲：%s"
 			% broad_counts
 	)
 	broad_nation.treasury_gold = 100000
@@ -15070,7 +15037,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		broad_recollected
 			and broad_sim.ai_last_command_commit_failures == 0
-			and broad_attackers == broad_armies.size()
+			and broad_attackers == 3
 			and broad_launched_targets.size() == 3
 			and broad_nation.treasury_gold
 				== transaction_treasury_before - transaction_cost
@@ -15084,14 +15051,14 @@ func _test_diplomacy_state_and_ai() -> void:
 			and broad_nation
 				.campaign_preparation_group_assignments.is_empty(),
 		(
-			"事务恢复后应只扣一次费用，并在三个方向同步投入全部四个首梯队战团："
+			"事务恢复后应只扣一次费用，并在三个方向各投入一个指挥单位："
 			+ "armies=%d targets=%s"
 		) % [broad_attackers, broad_launched_targets]
 	)
 	broad_sim.free()
 
-	# 旧存档/外部调用也必须服从执行层硬预算：十个合法准备方向
-	# 最终只能冻结并发射三路，超额战团只能保留八个。
+	# 外部调用也必须服从执行层硬预算：十个合法准备方向最终只能冻结
+	# 并发射三路，且国家最多保留六个指挥单位。
 	var budget_state := GameState.new()
 	budget_state.generate_grid_world(32067)
 	budget_state.uses_heightmap = true
@@ -15109,7 +15076,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	var budget_nation := budget_state.nations[0]
 	budget_nation.battle_groups.clear()
 	budget_nation.next_battle_group_id = 0
-	for budget_index in range(20):
+	for budget_index in range(Simulation.CAMPAIGN_MAX_COMMAND_UNITS):
 		var budget_target := budget_targets[
 			budget_index % budget_targets.size()
 		]
@@ -15164,13 +15131,13 @@ func _test_diplomacy_state_and_ai() -> void:
 		budget_plan_applied
 			and budget_nation.campaign_preparation_targets.size()
 				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
-			and bounded_groups.size() <= Simulation.CAMPAIGN_MAX_WARTIME_GROUPS
+			and bounded_groups.size() <= Simulation.CAMPAIGN_MAX_COMMAND_UNITS
 			and budget_launched
 			and budget_nation.campaign_plan_targets.size()
 				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
 			and budget_launched_targets.size()
 				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS,
-		"旧状态与外部准备列表必须在规划、冻结和发射三层裁到3路/8团"
+		"外部准备列表必须在规划、冻结和发射三层裁到三路、六个指挥单位"
 	)
 	budget_sim.free()
 
@@ -15184,7 +15151,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	for rebalance_target in rebalance_targets.slice(0, 2):
 		rebalance_state.cities[rebalance_target].owner_nation = 1
 		rebalance_state.edge_of(9, rebalance_target).max_manpower = 30000
-	# 第三方向是国2最后一城，满8团预算时必须为它一次预留三团。
+	# 第三方向是国2最后一城；它与普通目标一样只需一个指挥单位。
 	rebalance_state.cities[rebalance_targets[2]].owner_nation = 2
 	rebalance_state.edge_of(9, rebalance_targets[2]).max_manpower = 30000
 	rebalance_state.set_diplomatic_relation(
@@ -15196,7 +15163,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	var rebalance_nation := rebalance_state.nations[0]
 	rebalance_nation.battle_groups.clear()
 	rebalance_nation.next_battle_group_id = 0
-	for rebalance_index in range(Simulation.CAMPAIGN_MAX_WARTIME_GROUPS):
+	for rebalance_index in range(Simulation.CAMPAIGN_MAX_COMMAND_UNITS):
 		var rebalance_group := rebalance_state.create_battle_group(0)
 		var rebalance_army := _make_army(11000 + rebalance_index, 0, 15000, 10, 10)
 		rebalance_army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
@@ -15246,33 +15213,19 @@ func _test_diplomacy_state_and_ai() -> void:
 		rebalanced
 			and int(groups_per_rebalance_target.get(rebalance_targets[0], 0)) > 0
 			and int(groups_per_rebalance_target.get(rebalance_targets[1], 0)) > 0
-			and int(groups_per_rebalance_target.get(rebalance_targets[2], 0))
-				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS
+			and int(groups_per_rebalance_target.get(rebalance_targets[2], 0)) == 1
 			and seen_rebalance_groups.size()
-				<= Simulation.CAMPAIGN_MAX_WARTIME_GROUPS,
-		"8团已占旧方向时必须保留旧代表团并为新出现的最后一城释放三团：%s"
+				<= Simulation.CAMPAIGN_MAX_COMMAND_UNITS,
+		"六个指挥单位已分配时必须为每个新目标重分配一个单位：%s"
 			% groups_per_rebalance_target
 	)
-	# 模拟新方向三团全灭但目标/代表团记录仍残留。下一轮不能走
-	# “所有团已有分配”的快速路径，必须释放旧增援团并重新补足三团。
+	# 模拟新方向指挥单位全灭但目标记录仍残留。下一轮不能走
+	# “所有单位已有分配”的快速路径，必须改派一个仍存活的空闲单位。
 	for rebalance_army in rebalance_state.armies:
 		if int(rebalance_nation.campaign_preparation_assignments.get(
 			rebalance_army.id, -1
 		)) == rebalance_targets[2]:
 			rebalance_army.size = 0
-	# 模拟后续征募到位的替补团；旧计划必须因成员集合变化而失效并吸收它们。
-	for replacement_index in range(3):
-		var replacement_group := rebalance_state.create_battle_group(0)
-		var replacement_army := _make_army(
-			11100 + replacement_index, 0, 15000, 10, 10
-		)
-		replacement_army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
-		replacement_army.location_city = 9
-		replacement_army.move_from = 9
-		rebalance_state.armies.append(replacement_army)
-		rebalance_state.assign_army_to_battle_group(
-			replacement_army, replacement_group.id
-		)
 	var restored_view := AiWorldView.build(rebalance_state, 0)
 	rebalance_plan.view = restored_view
 	rebalance_plan.snapshot = StrategicMapSnapshot.build(restored_view)
@@ -15291,9 +15244,8 @@ func _test_diplomacy_state_and_ai() -> void:
 			restored_decisive_groups[rebalance_army.battle_group_id] = true
 	_check(
 		restored_plan
-			and restored_decisive_groups.size()
-				>= Simulation.CAMPAIGN_DECISIVE_ASSAULT_MIN_GROUPS,
-		"零成员旧目标不得被快速路径永久保留，最后一城必须重新补足三团"
+			and restored_decisive_groups.size() == 1,
+		"阵亡单位的旧目标不得被快速路径永久保留，必须改派一个空闲指挥单位"
 	)
 	rebalance_sim.free()
 
@@ -15398,8 +15350,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	_check(
 		role_preparation_built
-			and role_assignments.has(role_heavy.id)
-			and role_assignments.has(other_group_light.id)
+			and role_assignments.size() == 1
+			and (
+				role_assignments.has(role_heavy.id)
+				or role_assignments.has(other_group_light.id)
+			)
 			and not role_assignments.has(role_city_guard.id)
 			and not role_assignments.has(role_edge_support.id)
 			and role_attack_sim
@@ -15408,7 +15363,7 @@ func _test_diplomacy_state_and_ai() -> void:
 					other_group_light,
 					role_attack_target
 				),
-		"高防目标应允许多个单重军战团协同准备，独立填线军不得混入"
+		"高防目标也只分配一个聚合指挥单位，独立填线军不得混入"
 	)
 	var late_group_light := _make_army(1987, 0, 5000, 10, 10)
 	late_group_light.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -15514,10 +15469,10 @@ func _test_diplomacy_state_and_ai() -> void:
 				== 15000
 			and int(unified_demand["required_manpower"])
 				== 22000
-			and int(unified_demand["assault_groups"]) == 2
-			and int(unified_demand["groups"])
-				== 2 * Simulation.CAMPAIGN_PREPARED_ECHELONS,
-		"统一需求模型必须按单重军战团配置两团首梯队和两团预备梯队"
+			and int(unified_demand["command_units"]) == 1
+			and not unified_demand.has("assault_groups")
+			and not unified_demand.has("groups"),
+		"统一需求模型必须为目标配置一个聚合指挥单位，并保留兵力门槛"
 	)
 	unified_demand_sim.free()
 

@@ -15,26 +15,76 @@ func _init() -> void:
 	root.add_child(sim)
 	sim.setup(state)
 	sim.diplomacy_enabled = false
+	var initial_demand := sim._campaign_target_group_demand(
+		DOMINANT_ID, LAST_CITY_ID
+	)
 	var launched := false
 	var captured := false
+	var first_attack := {}
 	for _day in range(RUN_DAYS):
 		sim._advance_day()
 		var nation := state.nations[DOMINANT_ID]
+		if first_attack.is_empty():
+			for army in state.armies:
+				if (
+					army.owner_nation == DOMINANT_ID
+					and army.is_main_battle_role()
+					and army.ai_action == ActionCandidate.Kind.ATTACK
+				):
+					first_attack = {
+						"day": state.day,
+						"army": army.id,
+						"size": army.size,
+						"max": army.max_size,
+						"prep": nation.campaign_preparation_assignments
+							.duplicate(true),
+						"reason": army.ai_order_reason,
+					}
 		launched = launched or nation.campaign_offensive_count > 0
 		captured = state.cities[LAST_CITY_ID].owner_nation == DOMINANT_ID
 		if captured or not state.is_enemy(DOMINANT_ID, REMNANT_ID):
 			break
 	print(
-		"verdict=%s day=%d launched=%s owner9=%d"
+		"verdict=%s day=%d launched=%s owner9=%d groups=%d main=%s force=%s prep=%s first=%s initial=%s"
 		% [
 			"LAST_CITY_CAPTURED" if captured else "LAST_CITY_STALLED",
 			state.day,
 			str(launched),
 			state.cities[LAST_CITY_ID].owner_nation,
+			state.nations[DOMINANT_ID].battle_groups.size(),
+			str(_main_army_snapshot(state)),
+			state.nations[DOMINANT_ID].ai_last_force_reason,
+			str({
+				"targets": state.nations[DOMINANT_ID]
+					.campaign_preparation_targets,
+				"started": state.nations[DOMINANT_ID]
+					.campaign_preparation_started_day,
+				"demand": sim._campaign_target_group_demand(
+					DOMINANT_ID, LAST_CITY_ID
+				),
+			}),
+			str(first_attack),
+			str(initial_demand),
 		]
 	)
 	sim.free()
 	quit(0 if captured else 1)
+
+
+func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for army in state.armies:
+		if army.owner_nation == DOMINANT_ID and army.is_main_battle_role():
+			result.append({
+				"id": army.id,
+				"size": army.size,
+				"max": army.max_size,
+				"group": army.battle_group_id,
+				"state": army.state,
+				"action": army.ai_action,
+				"target": army.ai_target_city,
+			})
+	return result
 
 
 func _build_fixture() -> GameState:

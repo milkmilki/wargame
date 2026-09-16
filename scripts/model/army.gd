@@ -13,7 +13,7 @@ enum State {
 
 enum StrategicRole {
 	LINE,       ## 独立填线军：只执行统一防区规划；正式地图国家级攻势不会临时抽调
-	MAIN,       ## 主战军：单重军战团，执行完整 Utility AI 与国家级攻势
+	MAIN,       ## 聚合主战指挥单位：内部军团共享位置、补给、士气与命令
 }
 
 enum LinePosture {
@@ -39,7 +39,7 @@ var defense: int = 10                      ## 防御力
 var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
 var strategic_role: int = StrategicRole.LINE
-## 所属持久战团；-1 表示独立填线军。战团内只允许 1 支重军。
+## 所属持久指挥单位；-1 表示独立填线军。指挥单位只允许一个聚合主战实体。
 var battle_group_id: int = -1
 ## 填线军的持久防区 Assignment。前线未变化时跨 AI 周期保留，避免每次从零匹配换防。
 var line_assignment_city: int = -1
@@ -163,6 +163,15 @@ func is_main_battle_role() -> bool:
 	return (
 		max_size >= DEFAULT_MAX_SIZE
 		or strategic_role == StrategicRole.MAIN
+	)
+
+
+func main_legion_count(legion_size: int = DEFAULT_MAX_SIZE) -> int:
+	if not is_main_battle_role():
+		return 0
+	return maxi(
+		int(ceil(float(max_size) / float(maxi(legion_size, 1)))),
+		1
 	)
 
 
