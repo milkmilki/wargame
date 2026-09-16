@@ -283,60 +283,15 @@ static func build_structure(
 	var party_context := _build_trade_party_context(
 		state, occupied_edges
 	)
-	var domestic_ideal_graph_fingerprint := PackedByteArray()
-	var domestic_ideal_allowed := _ideal_city_mask(state)
-	var domestic_ideal_allowed_key := _byte_mask_key(domestic_ideal_allowed)
-	var shared_ideal_cache_enabled := (
-		_domestic_ideal_shared_cache_enabled_now()
-		and shared_caches.has("domestic_ideal_fields")
-	)
-	if shared_ideal_cache_enabled:
-		var fingerprint_started := (
-			Time.get_ticks_usec() if profile_enabled else 0
-		)
-		domestic_ideal_graph_fingerprint = (
-			domestic_ideal_graph_fingerprint_exact(state)
-		)
-		if profile_enabled:
-			_accumulate_build_profile(
-				build_profile,
-				"ai_snapshot_forecast_structure_domestic_ideal_graph_fingerprint",
-				Time.get_ticks_usec() - fingerprint_started
-			)
 	var field_cache := {}
-	var connectivity_cache := {}
-	var routes: Array[Dictionary] = []
-	routes.append_array(_build_domestic_routes(
+	var routes := _build_regional_routes(
 		state, graph, policies, besieged, occupied_edges, field_cache,
-		shared_caches, domestic_ideal_graph_fingerprint,
-		domestic_ideal_allowed, domestic_ideal_allowed_key, build_profile,
-		party_context
-	))
-	if profile_enabled:
-		_accumulate_build_profile(
-			build_profile,
-			"ai_snapshot_forecast_structure_domestic",
-			Time.get_ticks_usec() - stage_started
-		)
-	var international_shared_caches := (
-		shared_caches
-		if _domestic_ideal_shared_cache_enabled_now()
-		else {}
+		build_profile, shared_caches, party_context
 	)
-	routes.append_array(_build_international_routes(
-		state, graph, policies, besieged, occupied_edges, field_cache,
-		connectivity_cache, use_connectivity_prefilter, build_profile,
-		international_shared_caches, domestic_ideal_graph_fingerprint,
-		domestic_ideal_allowed_key, party_context
-	))
 
 	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	routes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var international_a := bool(a["international"])
-		var international_b := bool(b["international"])
-		if international_a != international_b:
-			return not international_a
-		for key in ["nation_a", "nation_b", "source", "destination"]:
+		for key in ["source", "destination", "nation_a", "nation_b"]:
 			var value_a := int(a[key])
 			var value_b := int(b[key])
 			if value_a != value_b:
@@ -603,9 +558,9 @@ static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
 ## 战争、围城、军队位置、库存、国库、需求与日期都不属于路线结构。
 static func structure_fingerprint(state: GameState) -> PackedByteArray:
 	if state == null:
-		return var_to_bytes(["trade_structure_v3", null])
+		return var_to_bytes(["trade_structure_v4", null])
 	var fields: Array = [
-		"trade_structure_v3",
+		"trade_structure_v4",
 		["counts", state.cities.size(), state.nations.size()],
 		["map_aspect_ratio", state.map_aspect_ratio],
 	]
@@ -938,6 +893,68 @@ static func _ideal_city_mask(state: GameState) -> PackedByteArray:
 			and city.owner_nation < state.nations.size()
 		):
 			result[city.id] = 1
+	return result
+
+
+## 全球只保留区域贸易中心之间的路线。所有有效节点两两连接；国家归属只决定
+## 通行与收益接收者，不再产生国内/国际两套候选、配额或收益规则。
+static func _build_regional_routes(
+	state: GameState,
+	graph: Dictionary,
+	policies: Array[int],
+	besieged: Dictionary,
+	occupied_edges: Array[Dictionary],
+	field_cache: Dictionary,
+	build_profile: Dictionary = {},
+	_shared_caches: Dictionary = {},
+	party_context: Dictionary = {}
+) -> Array[Dictionary]:
+	var started := Time.get_ticks_usec()
+	var centers := regional_trade_centers(state)
+	var region_ids := centers.keys()
+	region_ids.sort()
+	var active_centers: Array[int] = []
+	for region_value in region_ids:
+		var city_id := int(centers[region_value])
+		var owner := state.cities[city_id].owner_nation
+		if (
+			owner < 0 or owner >= state.nations.size()
+			or not state.nations[owner].alive
+			or policies[owner] == Policy.ISOLATION
+		):
+			continue
+		active_centers.append(city_id)
+	var result: Array[Dictionary] = []
+	for source_index in range(active_centers.size()):
+		var source := active_centers[source_index]
+		var nation_a := state.cities[source].owner_nation
+		for destination_index in range(
+			source_index + 1, active_centers.size()
+		):
+			var destination := active_centers[destination_index]
+			var nation_b := state.cities[destination].owner_nation
+			var route := _derive_route(
+				state, graph, [source] as Array[int],
+				[destination] as Array[int], nation_a, nation_b,
+				nation_a != nation_b, besieged, occupied_edges,
+				field_cache, true, {}, {}, PackedByteArray(), false,
+				party_context
+			)
+			if (
+				int(route.get("source", -1)) < 0
+				or int(route.get("destination", -1)) < 0
+				or (route.get("preferred_city_path", []) as Array).is_empty()
+			):
+				continue
+			route["international"] = false
+			route["kind"] = "regional"
+			result.append(route)
+	if bool(build_profile.get("enabled", false)):
+		_accumulate_build_profile(
+			build_profile,
+			"ai_snapshot_forecast_structure_regional_routes",
+			Time.get_ticks_usec() - started
+		)
 	return result
 
 
@@ -3879,7 +3896,7 @@ static func _apply_trade_taxes(
 				gold_b += bonus
 			else:
 				transit_gold += bonus
-		if not bool(route["international"]):
+		if int(route["nation_a"]) == int(route["nation_b"]):
 			gold_b = 0
 		route["gold"] = tax
 		route["gold_tax"] = tax
@@ -3992,7 +4009,7 @@ static func _apply_wartime_trade_gold(
 				transit_gold += bonus
 		if not mutate_routes:
 			continue
-		if not bool(route.get("international", false)):
+		if int(route.get("nation_a", -1)) == int(route.get("nation_b", -1)):
 			gold_b = 0
 		route["gold"] = tax
 		route["gold_tax"] = tax
@@ -4068,7 +4085,7 @@ static func _route_tax_gold(
 		ruler_factor = (
 			ruler_factor + _ruler_trade_multiplier(state.nations[nation_b])
 		) * 0.5
-	var route_factor := 1.45 if bool(route["international"]) else 1.0
+	var route_factor := 1.0
 	if bool(route["uses_water"]):
 		route_factor *= 1.12
 	var region_crossings := int(route.get("region_crossings", 0))

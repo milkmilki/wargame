@@ -515,9 +515,6 @@ func _test_trade_network() -> void:
 		"region_crossings",
 	]
 	var route_contract := true
-	var international_counts: Array[int] = []
-	international_counts.resize(limit_state.nations.size())
-	international_counts.fill(0)
 	var routes: Array = first["routes"]
 	for index in range(routes.size()):
 		var route: Dictionary = routes[index]
@@ -534,28 +531,12 @@ func _test_trade_network() -> void:
 			and int(route.get("food", -1)) == int(route.get("food_transfer", -2))
 			and int(route.get("food_cost", -1))
 				== int(route.get("food_cost_gold", -2))
-		)
-		if bool(route.get("international", false)):
-			international_counts[int(route["nation_a"])] += 1
-			international_counts[int(route["nation_b"])] += 1
-	for nation_id in range(international_counts.size()):
-		var count := international_counts[nation_id]
-		route_contract = route_contract and (
-			count <= TradeNetwork.international_route_limit(
-				limit_state, nation_id
-			)
+			and not bool(route.get("international", true))
+			and str(route.get("kind", "")) == "regional"
 		)
 	_check(
 		route_contract,
-		"trade/route_schema_and_per_nation_limit",
-		"counts=%s" % str(international_counts)
-	)
-	var capacity_state := _make_dynamic_trade_capacity_state()
-	_check(
-		TradeNetwork.international_route_limit(capacity_state, 0) == 1
-			and TradeNetwork.international_route_limit(capacity_state, 1) == 2
-			and TradeNetwork.international_route_limit(capacity_state, 2) == 3,
-		"trade/international_route_limit_scales_by_city_blocks"
+		"trade/route_schema_uses_single_regional_kind"
 	)
 
 	var regional_center_state := _make_regional_trade_center_state()
@@ -566,8 +547,6 @@ func _test_trade_network() -> void:
 	var non_center_used := false
 	for route_value in regional_center_result.get("routes", []):
 		var route: Dictionary = route_value
-		if not bool(route.get("international", false)):
-			continue
 		non_center_used = non_center_used or (
 			int(route.get("source_city", -1)) in [0, 2]
 			or int(route.get("destination_city", -1)) in [0, 2]
@@ -580,6 +559,38 @@ func _test_trade_network() -> void:
 		"trade/one_global_center_per_region_uses_highest_base_gold",
 		str(regional_center_result.get("routes", []))
 	)
+	var domestic_center_state := _make_regional_domestic_route_state()
+	var domestic_center_result := TradeNetwork.build(domestic_center_state)
+	var domestic_center_ids: Array = (
+		TradeNetwork.regional_trade_centers(domestic_center_state).values()
+	)
+	var all_endpoints_are_centers := true
+	var obsolete_capital_route_found := false
+	for route_value in domestic_center_result.get("routes", []):
+		var route: Dictionary = route_value
+		all_endpoints_are_centers = all_endpoints_are_centers and (
+			domestic_center_ids.has(int(route.get("source_city", -1)))
+			and domestic_center_ids.has(int(route.get("destination_city", -1)))
+		)
+		obsolete_capital_route_found = obsolete_capital_route_found or (
+			int(route.get("source_city", -1)) == 0
+			and int(route.get("destination_city", -1)) == 1
+		)
+	_check(
+		all_endpoints_are_centers and not obsolete_capital_route_found,
+		"trade/routes_only_connect_regional_centers",
+		str(domestic_center_result.get("routes", []))
+	)
+	var center_publication_sim := Simulation.new()
+	root.add_child(center_publication_sim)
+	center_publication_sim.setup(domestic_center_state)
+	_check(
+		domestic_center_state.cities[0].trade_route_count == 0
+			and domestic_center_state.cities[1].trade_route_count > 0
+			and domestic_center_state.cities[2].trade_route_count > 0,
+		"trade/transit_city_is_not_published_as_trade_node"
+	)
+	center_publication_sim.free()
 	_check(
 		is_equal_approx(
 			TradeNetwork.region_premium_multiplier(0), 1.0
@@ -613,7 +624,7 @@ func _test_trade_network() -> void:
 	)
 	_check(
 		int(neutral_route.get("region_crossings", -1)) == 1,
-		"trade/international_route_records_region_crossings",
+		"trade/regional_route_records_region_crossings",
 		str(neutral_route)
 	)
 	pair_state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
@@ -802,6 +813,21 @@ func _make_regional_trade_center_state() -> GameState:
 	return state
 
 
+func _make_regional_domestic_route_state() -> GameState:
+	var state := _make_empty_state(2)
+	_add_city(state, 0, Vector2(0.1, 0.5), 10, 600)
+	_add_city(state, 0, Vector2(0.4, 0.5), 30, 600)
+	_add_city(state, 1, Vector2(0.8, 0.5), 40, 600)
+	_add_edge(state, 1, 0, 20000, 1)
+	_add_edge(state, 0, 2, 20000, 1)
+	state.region_ids = PackedInt32Array([0, 0, 1])
+	state.region_count = 2
+	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
+	_configure_capitals_and_warehouses(state, 20)
+	state.refresh_derived()
+	return state
+
+
 func _make_trade_pair_state() -> GameState:
 	var state := _make_empty_state(2)
 	_add_city(state, 0, Vector2(0.2, 0.5), 20, 600)
@@ -922,9 +948,10 @@ func _international_route(result: Dictionary, nation_a: int, nation_b: int) -> D
 	for route_value in result.get("routes", []):
 		var route: Dictionary = route_value
 		if (
-			bool(route.get("international", false))
-			and int(route.get("nation_a", -1)) == mini(nation_a, nation_b)
-			and int(route.get("nation_b", -1)) == maxi(nation_a, nation_b)
+			int(route.get("nation_a", -1)) in [nation_a, nation_b]
+			and int(route.get("nation_b", -1)) in [nation_a, nation_b]
+			and int(route.get("nation_a", -1))
+				!= int(route.get("nation_b", -1))
 		):
 			return route
 	return {}

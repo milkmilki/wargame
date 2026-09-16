@@ -54,30 +54,6 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-trade-structure-cache-equivalence.log"
 echo
 
-echo "==> [6/29] 贸易联通预筛等价门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/trade_connectivity_prefilter_equivalence.gd \
-  --log-file "$LOG_DIR/world-war-trade-connectivity-prefilter-equivalence.log"
-echo
-
-echo "==> [7/29] 贸易联通 gate-context 等价门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/trade_connectivity_gate_context_equivalence.gd \
-  --log-file "$LOG_DIR/world-war-trade-connectivity-gate-context-equivalence.log"
-echo
-
-echo "==> [8/29] 国内共享 field 等价门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/trade_domestic_shared_field_equivalence.gd \
-  --log-file "$LOG_DIR/world-war-trade-domestic-shared-field-equivalence.log"
-echo
-
-echo "==> [9/29] 国内 ideal field cache 等价门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/trade_domestic_ideal_field_cache_equivalence.gd \
-  --log-file "$LOG_DIR/world-war-trade-domestic-ideal-field-cache-equivalence.log"
-echo
-
 echo "==> [10/29] 贸易预测缓存等价门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/trade_forecast_cache_equivalence.gd \

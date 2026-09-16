@@ -1984,16 +1984,16 @@ func _prepare_trade_publication(trade: Dictionary) -> Dictionary:
 			and nation_b != nation_a
 		):
 			nation_route_counts[nation_b] += 1
-		var seen_cities := {}
-		for city_value in route.get("city_path", []):
-			var city_id := int(city_value)
-			if (
-				city_id < 0 or city_id >= state.cities.size()
-				or seen_cities.has(city_id)
-			):
-				continue
-			seen_cities[city_id] = true
-			city_route_counts[city_id] += 1
+		var source_city := int(route.get("source_city", -1))
+		var destination_city := int(route.get("destination_city", -1))
+		if source_city >= 0 and source_city < city_route_counts.size():
+			city_route_counts[source_city] += 1
+		if (
+			destination_city >= 0
+			and destination_city < city_route_counts.size()
+			and destination_city != source_city
+		):
+			city_route_counts[destination_city] += 1
 		var food_amount := int(route.get("food_transfer", 0))
 		var source_id := int(route.get("food_source_city", -1))
 		var destination_id := int(route.get("food_destination_city", -1))

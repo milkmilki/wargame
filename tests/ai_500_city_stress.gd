@@ -69,46 +69,41 @@ func _init() -> void:
 	var trade_ms := float(
 		Time.get_ticks_usec() - trade_started
 	) / 1000.0
-	var international_routes := 0
-	var international_trade_gold := 0
-	var maximum_international_route_gold := 0
-	var minimum_international_region_crossings := 2147483647
-	var international_counts := PackedInt32Array()
-	international_counts.resize(state.nations.size())
-	international_counts.fill(0)
-	var initial_route_limits := PackedInt32Array()
-	initial_route_limits.resize(state.nations.size())
-	for nation_id in range(state.nations.size()):
-		initial_route_limits[nation_id] = (
-			TradeNetwork.international_route_limit(state, nation_id)
-		)
+	var regional_routes := 0
+	var regional_trade_gold := 0
+	var maximum_regional_route_gold := 0
+	var minimum_region_crossings := 2147483647
+	var center_ids: Array = TradeNetwork.regional_trade_centers(state).values()
+	var endpoints_are_centers := true
 	for route_value in trade_structure.get("routes", []):
 		var route: Dictionary = route_value
-		if not bool(route.get("international", false)):
-			continue
-		international_routes += 1
+		regional_routes += 1
 		var route_gold := int(route.get("gold_tax", 0))
-		international_trade_gold += route_gold
-		maximum_international_route_gold = maxi(
-			maximum_international_route_gold, route_gold
+		regional_trade_gold += route_gold
+		maximum_regional_route_gold = maxi(
+			maximum_regional_route_gold, route_gold
 		)
-		international_counts[int(route["nation_a"])] += 1
-		international_counts[int(route["nation_b"])] += 1
-		minimum_international_region_crossings = mini(
-			minimum_international_region_crossings,
+		endpoints_are_centers = endpoints_are_centers and (
+			center_ids.has(int(route.get("source_city", -1)))
+			and center_ids.has(int(route.get("destination_city", -1)))
+			and str(route.get("kind", "")) == "regional"
+			and not bool(route.get("international", true))
+		)
+		minimum_region_crossings = mini(
+			minimum_region_crossings,
 			int(route.get("region_crossings", 0))
 		)
-	print("贸易结构=%.1fms 路线=%d 国际=%d 国际最少跨区=%s" % [
+	print("贸易结构=%.1fms 节点=%d 路线=%d 最少跨区=%s" % [
 		trade_ms,
-		(trade_structure.get("routes", []) as Array).size(),
-		international_routes,
+		center_ids.size(),
+		regional_routes,
 		(
-			str(minimum_international_region_crossings)
-			if minimum_international_region_crossings < 2147483647 else "无"
+			str(minimum_region_crossings)
+			if minimum_region_crossings < 2147483647 else "无"
 		),
 	])
-	print("国际贸易金=%d 单线最高=%d" % [
-		international_trade_gold, maximum_international_route_gold,
+	print("区域贸易金=%d 单线最高=%d" % [
+		regional_trade_gold, maximum_regional_route_gold,
 	])
 	print("外交两跳候选=%d/%d (%.1f%%)" % [
 		diplomatic_pairs, all_diplomatic_pairs,
@@ -124,9 +119,6 @@ func _init() -> void:
 			)
 	print("外交两跳最少对象数=%d" % minimum_diplomatic_degree)
 	_print_trade_profile(trade_profile)
-	var initial_trade_counters := (
-		TradeNetwork.connectivity_prefilter_counters()
-	)
 
 	var ai_times: Array[int] = []
 	var all_times: Array[int] = []
@@ -182,24 +174,13 @@ func _init() -> void:
 		sim.trade_forecast_cache_hit_total,
 	])
 	_print_runtime_hotspots(phase_totals, maxi(state.day, 1))
-	var route_limits_valid := true
-	for nation_id in range(international_counts.size()):
-		var count := international_counts[nation_id]
-		route_limits_valid = (
-			route_limits_valid
-			and count <= initial_route_limits[nation_id]
-		)
-	var candidate_bound := (
-		nations * TradeNetwork.MAX_INTERNATIONAL_PARTNERS_PER_NATION
-	)
+	var route_pair_bound := center_ids.size() * (center_ids.size() - 1) / 2
 	var ok := (
 		state.land_cities().size() == cities
-		and minimum_international_region_crossings >= 1
-		and route_limits_valid
-		and international_routes > 0
-		and int(initial_trade_counters.get(
-			"candidate_connectivity_queries", 0
-		)) <= candidate_bound
+		and minimum_region_crossings >= 1
+		and endpoints_are_centers
+		and regional_routes > 0
+		and regional_routes <= route_pair_bound
 		and diplomatic_range_symmetric
 		and diplomatic_pairs > 0
 		and diplomatic_pairs < all_diplomatic_pairs
@@ -207,8 +188,8 @@ func _init() -> void:
 		and invariant_failure_day < 0
 		and sim.ai_command_commit_failure_total == 0
 	)
-	print("健康检查 territory_invalid_day=%d commit_failures=%d candidate_bound=%d" % [
-		invariant_failure_day, sim.ai_command_commit_failure_total, candidate_bound,
+	print("健康检查 territory_invalid_day=%d commit_failures=%d route_pair_bound=%d" % [
+		invariant_failure_day, sim.ai_command_commit_failure_total, route_pair_bound,
 	])
 	print("verdict=%s" % ("STRESS_PASS" if ok else "STRESS_FAIL"))
 	sim.free()
