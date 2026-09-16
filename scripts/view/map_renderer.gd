@@ -216,6 +216,8 @@ var _army_icon_slider: HSlider
 var _city_name_button: Button
 var _nation_name_button: Button
 var _ruler_profile_menu: PopupMenu
+var _fallback_family_tree_panel: Node
+var _fallback_family_tree_previous_pause: bool = false
 static var _nation_detail_section_build_count: int = 0
 
 # tick 间插值：军队逻辑位置每天跳变一次，渲染在两次 tick 之间平滑过渡。
@@ -1049,7 +1051,7 @@ func _handle_selection_detail_mouse_button(
 			rect, _display_scale
 		).has_point(event.position)
 	):
-		family_tree_requested.emit(_selected_nation_id)
+		_open_selected_nation_family_tree()
 		get_viewport().set_input_as_handled()
 		return true
 	if (
@@ -1076,6 +1078,48 @@ func _handle_selection_detail_mouse_button(
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true
+
+
+func _open_selected_nation_family_tree() -> bool:
+	if (
+		state == null
+		or _selected_nation_id < 0
+		or _selected_nation_id >= state.nations.size()
+	):
+		return false
+	if not family_tree_requested.get_connections().is_empty():
+		family_tree_requested.emit(_selected_nation_id)
+		return true
+	var host := get_parent()
+	if host == null:
+		return false
+	var panel := host.get_node_or_null("FamilyTreePanel")
+	if panel == null:
+		var panel_script := load("res://scripts/view/family_tree_panel.gd")
+		if panel_script == null:
+			return false
+		panel = panel_script.new()
+		panel.name = "FamilyTreePanel"
+		host.add_child(panel)
+	_fallback_family_tree_panel = panel
+	panel.call("bind", state)
+	var close_callback := Callable(
+		self, "_on_fallback_family_tree_closed"
+	)
+	if not panel.is_connected("panel_closed", close_callback):
+		panel.connect("panel_closed", close_callback)
+	_fallback_family_tree_previous_pause = sim != null and sim.paused
+	var opened := bool(panel.call(
+		"open_for_nation", _selected_nation_id
+	))
+	if opened and sim != null:
+		sim.paused = true
+	return opened
+
+
+func _on_fallback_family_tree_closed() -> void:
+	if sim != null:
+		sim.paused = _fallback_family_tree_previous_pause
 
 
 func _handle_nation_stats_wheel(

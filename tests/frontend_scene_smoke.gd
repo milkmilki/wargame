@@ -98,6 +98,20 @@ func _run() -> void:
 		and renderer.selected_city_id() == -1
 		and renderer.selected_nation_id() == 0
 	)
+	var nation_detail_rect := renderer._selection_detail_rect(
+		renderer._selection_detail_line_count()
+	)
+	var family_tree_click := InputEventMouseButton.new()
+	family_tree_click.button_index = MOUSE_BUTTON_LEFT
+	family_tree_click.pressed = true
+	family_tree_click.position = MapRenderer.family_tree_trigger_rect(
+		nation_detail_rect, renderer._display_scale
+	).get_center()
+	family_tree_click.global_position = family_tree_click.position
+	Input.parse_input_event(family_tree_click)
+	await process_frame
+	var family_tree_button_opens := family_panel.is_open()
+	family_panel.close_panel()
 	var expected_mode_ids := PackedStringArray([
 		RoadTuningPanel.MAP_MODE_TERRAIN,
 		RoadTuningPanel.MAP_MODE_MIXED,
@@ -171,6 +185,7 @@ func _run() -> void:
 		),
 		"family_tree_pause": family_pause_applied and family_pause_restored,
 		"city_nation_jump": city_nation_jump,
+		"family_tree_button": family_tree_button_opens,
 		"capital_rings": map_3d._capital_rings.multimesh.instance_count == main.state.nations.size(),
 	}
 	var valid: bool = true
