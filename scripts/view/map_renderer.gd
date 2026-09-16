@@ -69,6 +69,7 @@ const TRADE_ACTIVE_GOLD := Color(0.96, 0.72, 0.20, 0.96)
 const TRADE_ACTIVE_CYAN := Color(0.10, 0.76, 0.72, 0.98)
 const TRADE_REROUTED_ORANGE := Color(0.94, 0.39, 0.075, 0.98)
 const TRADE_BLOCKED_RED := Color(0.82, 0.075, 0.055, 0.98)
+const TRADE_NODE_COLOR := Color(0.88, 0.055, 0.035, 0.82)
 const TRADE_FLOW_SPACING_PX: float = 52.0
 const TRADE_FLOW_SPEED_PX: float = 34.0
 const LOYALTY_LOW_COLOR := Color(0.72, 0.10, 0.075, 1.0)
@@ -2303,6 +2304,26 @@ static func region_score_radius(
 		return 0.0
 	var normalized := sqrt(clampf(score / max_score, 0.0, 1.0))
 	return lerpf(minimum_radius, maximum_radius, normalized)
+
+
+static func city_importance_score(
+	mode: int, game_state: GameState, city: City
+) -> float:
+	if game_state == null or city == null:
+		return 0.0
+	if mode == MapMode.TRADE:
+		return float(maxi(city.trade_route_count, 0))
+	if (
+		mode == MapMode.REGION
+		and city.id >= 0
+		and city.id < game_state.node_betweenness.size()
+	):
+		return maxf(float(game_state.node_betweenness[city.id]), 0.0)
+	return 0.0
+
+
+static func city_importance_color(mode: int) -> Color:
+	return TRADE_NODE_COLOR if mode == MapMode.TRADE else REGION_SCORE_COLOR
 
 
 static func loyalty_color(value: float) -> Color:
@@ -4683,26 +4704,27 @@ func _draw_cities() -> void:
 	if _city_label_cache_naming_revision != state.naming_revision:
 		_city_label_cache.clear()
 		_city_label_cache_naming_revision = state.naming_revision
-	var max_betweenness := 0.0
-	if _map_mode == MapMode.REGION:
-		for score in state.node_betweenness:
-			max_betweenness = maxf(max_betweenness, float(score))
+	var max_importance := 0.0
+	if _map_mode in [MapMode.REGION, MapMode.TRADE]:
+		for scored_city in state.cities:
+			max_importance = maxf(
+				max_importance,
+				city_importance_score(_map_mode, state, scored_city)
+			)
 	for city in state.cities:
 		var center := _city_center(city)
 		var rect := Rect2(center - Vector2(half, half), Vector2(half * 2, half * 2))
-		if (
-			_map_mode == MapMode.REGION
-			and city.id >= 0
-			and city.id < state.node_betweenness.size()
-		):
+		if _map_mode in [MapMode.REGION, MapMode.TRADE]:
 			var score_radius := region_score_radius(
-				state.node_betweenness[city.id],
-				max_betweenness,
+				city_importance_score(_map_mode, state, city),
+				max_importance,
 				REGION_SCORE_MIN_RADIUS_PX * _display_scale,
 				REGION_SCORE_MAX_RADIUS_PX * _display_scale
 			)
 			if score_radius > 0.0:
-				draw_circle(center, score_radius, REGION_SCORE_COLOR)
+				draw_circle(
+					center, score_radius, city_importance_color(_map_mode)
+				)
 		var region_id := (
 			state.region_ids[city.id]
 			if city.id >= 0 and city.id < state.region_ids.size()

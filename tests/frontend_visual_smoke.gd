@@ -355,6 +355,20 @@ func _run() -> void:
 		and MapRenderer.trade_route_color(blocked_route, true)
 			.is_equal_approx(MapRenderer.TRADE_BLOCKED_RED)
 	)
+	state.cities[frontier.city_a].trade_route_count = 2
+	state.cities[frontier.city_b].trade_route_count = 1
+	var trade_node_score_contract := (
+		is_equal_approx(
+			MapRenderer.city_importance_score(
+				MapRenderer.MAP_MODE_TRADE,
+				state,
+				state.cities[frontier.city_a]
+			),
+			2.0
+		)
+		and MapRenderer.city_importance_color(MapRenderer.MAP_MODE_TRADE)
+			.is_equal_approx(MapRenderer.TRADE_NODE_COLOR)
+	)
 	var visual_trade_route: Dictionary = {
 		"status": TradeNetwork.ACTIVE,
 		"food_transfer": 0,
@@ -393,6 +407,14 @@ func _run() -> void:
 	state.trade_revision += 1
 	await process_frame
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_TRADE)
+	map_3d._update_city_instances()
+	await process_frame
+	var trade_node_marker_contract := (
+		map_3d._region_score_markers.visible
+		and MapRenderer.region_score_radius(2.0, 2.0, 0.28, 1.20) > 1.0
+		and MapRenderer.city_importance_color(MapRenderer.MAP_MODE_TRADE)
+			.is_equal_approx(MapRenderer.TRADE_NODE_COLOR)
+	)
 	var marker_material := (
 		map_3d._trade_flow_markers.material_override as StandardMaterial3D
 	)
@@ -436,6 +458,7 @@ func _run() -> void:
 		and overlay.map_mode() == MapRenderer.MAP_MODE_TRADE
 		and map_3d._trade_routes.visible
 		and map_3d._trade_flow_markers.visible
+		and map_3d._region_score_markers.visible
 		and is_equal_approx(map_3d._trade_routes.transparency, 0.0)
 		and map_3d._roads.transparency > 0.0
 		and map_3d._minor_roads.transparency > 0.0
@@ -702,6 +725,8 @@ func _run() -> void:
 				> low_loyalty_color.g / low_loyalty_color.r
 		),
 		"trade_route_styles": trade_style_contract,
+		"trade_node_score_contract": trade_node_score_contract,
+		"trade_node_marker_contract": trade_node_marker_contract,
 		"trade_route_geometry_styles": (
 			active_trade_vertices > 0
 			and rerouted_trade_vertices == active_trade_vertices

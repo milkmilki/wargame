@@ -469,6 +469,8 @@ func _process(delta: float) -> void:
 		and _terrain.land_cell_count() > 0
 	):
 		_build_trade_route_mesh()
+		if _map_mode == MapRenderer.MapMode.TRADE:
+			_update_city_instances()
 		_last_trade_revision = state.trade_revision
 	if (
 		_army_instances_initialized
@@ -1858,7 +1860,10 @@ func _apply_map_mode_visibility() -> void:
 		_trade_flow_markers.visible = trade_mode
 	if _region_score_markers != null:
 		_region_score_markers.visible = (
-			_map_mode == MapRenderer.MapMode.REGION
+			_map_mode in [
+				MapRenderer.MapMode.REGION,
+				MapRenderer.MapMode.TRADE,
+			]
 		)
 
 
@@ -2076,10 +2081,18 @@ func _update_city_instances() -> void:
 	if _cities.multimesh == null or _city_bases.multimesh == null:
 		return
 	_update_capital_rings()
-	var max_betweenness := 0.0
-	if _map_mode == MapRenderer.MapMode.REGION:
-		for score in state.node_betweenness:
-			max_betweenness = maxf(max_betweenness, float(score))
+	var max_importance := 0.0
+	if _map_mode in [
+		MapRenderer.MapMode.REGION,
+		MapRenderer.MapMode.TRADE,
+	]:
+		for scored_city in state.cities:
+			max_importance = maxf(
+				max_importance,
+				MapRenderer.city_importance_score(
+					_map_mode, state, scored_city
+				)
+			)
 	for city in state.cities:
 		var world := _terrain.map_to_world(city.map_position)
 		var scale := (
@@ -2131,13 +2144,13 @@ func _update_city_instances() -> void:
 		_cities.multimesh.set_instance_color(city.id, color)
 
 		var score_marker_scale := 0.001
-		if (
-			_map_mode == MapRenderer.MapMode.REGION
-			and city.id >= 0
-			and city.id < state.node_betweenness.size()
-		):
+		if _map_mode in [
+			MapRenderer.MapMode.REGION,
+			MapRenderer.MapMode.TRADE,
+		]:
 			score_marker_scale = MapRenderer.region_score_radius(
-				state.node_betweenness[city.id], max_betweenness,
+				MapRenderer.city_importance_score(_map_mode, state, city),
+				max_importance,
 				0.28, 1.20
 			)
 		_region_score_markers.multimesh.set_instance_transform(
@@ -2148,7 +2161,7 @@ func _update_city_instances() -> void:
 			)
 		)
 		_region_score_markers.multimesh.set_instance_color(
-			city.id, MapRenderer.REGION_SCORE_COLOR
+			city.id, MapRenderer.city_importance_color(_map_mode)
 		)
 
 		var resource_scale := 0.001
