@@ -5828,7 +5828,7 @@ static func _overlord_under_war_pressure(
 ##   非藩王、分封后留足核心，且满足以下任一长期收益：
 ##   1. 转移 LINE 军费 + 预计贡赋 - 失去直辖收入 > 0；
 ##   2. 候选边疆的应然驻军粮耗 / 本地产粮超过负担阈值。
-## 普通君主仍要求和平；傀儡君主的极端效果优先，无视战争与欠饷压力持续分封。
+## 所有君主都只在和平且军饷正常时分封；傀儡君主仅在通过该门控后持续缩减直辖。
 static func _collect_enfeoff_actions(
 	state: GameState,
 	actions: Array[Dictionary],
@@ -5845,11 +5845,8 @@ static func _collect_enfeoff_actions(
 			continue
 		# 只有和平时期才分封：战时把前线连同弱藩王一起甩出去反而会导致边疆崩溃，
 		# 且与削藩「宗主须和平」对称——分封与削藩都是和平期的政治重组，逻辑自洽。
-		if (
-			not puppet_rule
-			and _overlord_under_war_pressure(
-				state, overlord_id, evaluation_cache
-			)
+		if _overlord_under_war_pressure(
+			state, overlord_id, evaluation_cache
 		):
 			continue
 		var owned_city_count := state.land_cities_of(overlord_id).size()
@@ -5973,10 +5970,7 @@ static func _collect_enfeoff_actions(
 				) * 100.0
 				+ governance_pressure_score * ENFEOFF_GOVERNANCE_SCORE_WEIGHT
 			),
-			"reason": "%s偏远边疆%s，分封以转移地方防务" % [
-				"" if puppet_rule else "和平期",
-				motive,
-			],
+			"reason": "和平期偏远边疆%s，分封以转移地方防务" % motive,
 		}
 		if puppet_rule:
 			enfeoff_action[ENFEOFF_TARGET_DIRECT_CITIES_FIELD] = minimum_core

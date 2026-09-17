@@ -274,8 +274,8 @@ func _test_puppet_enfeoffment() -> void:
 		)
 	_check(
 		DiplomacyAI._overlord_under_war_pressure(state, 0, {})
-			and wartime_enfeoff,
-		"puppet ruler must continue enfeoffment during war pressure"
+			and not wartime_enfeoff,
+		"puppet ruler must not enfeoff during war pressure"
 	)
 	state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.NEUTRAL
