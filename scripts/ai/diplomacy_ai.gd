@@ -5458,17 +5458,11 @@ static func _bump_frontier(
 
 
 # ------------------------------------------------------------------ 分封（藩王系统 B3）
-# 判据源自设计文档第 4、6 节：分封的本质是「把养不起自己驻军的偏远边疆，
-# 连同防务责任一起交给地方政权」。因此核心信号是区域负担比，
-# 而非「国家太大」这类虚构的行政容量。执行仍由 GameState.enfeoff 完成，
-# 本层只负责「统一规划」：评估并产出候选动作。
+# 分封只评估财政与治理收益。可移动填线军已移除，地方防务不再作为
+# 独立军费或粮耗转移给藩王。
 
-## 纯派生评估：一片区域对宗主的负担与分封财政反事实。无副作用。
-## burden_ratio = 区域边疆线「所需」LINE 军的月粮耗 / 区域城市的等效月粮产。
-## 关键：分子是「地理应然的防务需求」（接敌边满编所需驻军），而非「当前实际驻军」——
-## 因为中央打仗时会把兵抽到主战场，偏远边疆的实际驻军往往极少，用实然驻军会让
-## 负担比恒低、分封永不触发。文档第 4 节原文即「地块所需 line 军队的粮食损耗」。
-## >阈值表示：这片边疆连守住自己所需的驻军都养不起，中央在长期倒贴其防务。
+## 纯派生评估：一片区域的产出与分封财政反事实。旧填线军字段保留为零值，
+## 只用于兼容结构化诊断消费者，不再参与决策。
 static func evaluate_region_burden(
 	state: GameState,
 	nation_id: int,
@@ -5500,15 +5494,6 @@ static func evaluate_region_burden(
 				.VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
 		))
 		manpower_output += city.manpower_per_month
-		# 该城通往「非本国可通行」邻城的每条正容量边，都是一段需长期驻守的边疆线；
-		# 其 max_manpower 即守住这段边所需的满编 LINE 兵力（应然防务需求）。
-		for neighbor in state.neighbors(city_id):
-			var edge := state.edge_of(city_id, neighbor)
-			if edge == null or edge.max_manpower <= 0:
-				continue
-			var neighbor_owner := state.cities[neighbor].owner_nation
-			if neighbor_owner >= 0 and not state.has_military_access(nation_id, neighbor_owner):
-				required_defense_troops += edge.max_manpower
 	# 实然驻军仅供解释展示，不作判据。
 	for army in state.armies:
 		if army.owner_nation != nation_id or army.size <= 0:
@@ -5516,29 +5501,16 @@ static func evaluate_region_burden(
 		var node := army.current_city_node()
 		if node >= 0 and region.has(node):
 			garrison_troops += army.size
-	var monthly_food_demand := float(required_defense_troops) * Simulation.FOOD_PER_CAPITA
-	var burden_ratio := (
-		monthly_food_demand / monthly_food_output
-		if monthly_food_output > 0.0
-		else INF
-	)
+	var monthly_food_demand := 0.0
+	var burden_ratio := 0.0
 	var transferable_line_upkeep := 0
 	var transferable_line_count := 0
-	for army in state.transferable_vassal_line_armies(
-		nation_id,
-		city_ids
-	):
-		transferable_line_count += 1
-		transferable_line_upkeep += (
-			GameState.army_monthly_upkeep(army.size)
-		)
 	var projected_tribute_income := int(floor(
 		float(projected_vassal_gold_income)
 		* GameState.DEFAULT_TRIBUTE_RATE
 	))
 	var monthly_fiscal_benefit := (
-		transferable_line_upkeep
-		+ projected_tribute_income
+		projected_tribute_income
 		- direct_gold_income
 	)
 	return {
@@ -5884,11 +5856,6 @@ static func _collect_enfeoff_actions(
 			region,
 			hops
 		)
-		var food_burden_justifies := (
-			float(burden["burden_ratio"])
-				* RulerProfile.enfeoff_multiplier(nation)
-			>= ENFEOFF_BURDEN_RATIO_THRESHOLD
-		)
 		var fiscal_benefit := int(
 			burden["monthly_fiscal_benefit"]
 		)
@@ -5903,8 +5870,7 @@ static func _collect_enfeoff_actions(
 			and governance_city_count >= 1
 		)
 		if (
-			not food_burden_justifies
-			and fiscal_benefit <= 0
+			fiscal_benefit <= 0
 			and not governance_justifies
 			and not puppet_rule
 		):
@@ -5926,33 +5892,25 @@ static func _collect_enfeoff_actions(
 			)
 		if fiscal_benefit > 0:
 			motive_parts.append(
-				"财政月增益%+d（转军费%d+贡赋%d-直辖%d）"
+				"财政月增益%+d（贡赋%d-直辖%d）"
 				% [
 					fiscal_benefit,
-					int(burden["transferable_line_upkeep"]),
 					int(burden["projected_tribute_income"]),
 					int(burden["direct_gold_income"]),
 				]
-			)
-		if food_burden_justifies:
-			motive_parts.append(
-				"边疆粮食负担比%.2f超阈"
-				% float(burden["burden_ratio"])
 			)
 		var motive := (
 			"、".join(motive_parts)
 			if not motive_parts.is_empty()
 			else (
-			"财政月增益%+d（转军费%d+贡赋%d-直辖%d）"
+			"财政月增益%+d（贡赋%d-直辖%d）"
 			% [
 				fiscal_benefit,
-				int(burden["transferable_line_upkeep"]),
 				int(burden["projected_tribute_income"]),
 				int(burden["direct_gold_income"]),
 			]
 			if fiscal_benefit > 0
-			else "边疆粮食负担比%.2f超阈"
-				% float(burden["burden_ratio"])
+			else "治理压力触发"
 			)
 		)
 		var enfeoff_action := {
@@ -5963,14 +5921,9 @@ static func _collect_enfeoff_actions(
 			"governance_pressure": governance,
 			"score": (
 				maxf(float(fiscal_benefit), 0.0)
-				+ maxf(
-					float(burden["burden_ratio"])
-						- ENFEOFF_BURDEN_RATIO_THRESHOLD,
-					0.0
-				) * 100.0
 				+ governance_pressure_score * ENFEOFF_GOVERNANCE_SCORE_WEIGHT
 			),
-			"reason": "和平期偏远边疆%s，分封以转移地方防务" % motive,
+			"reason": "和平期偏远地区%s，分封以缓解治理压力" % motive,
 		}
 		if puppet_rule:
 			enfeoff_action[ENFEOFF_TARGET_DIRECT_CITIES_FIELD] = minimum_core

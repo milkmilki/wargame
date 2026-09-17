@@ -35,6 +35,7 @@ func _test_reign_range_and_succession() -> void:
 	simulation.setup(state)
 	var nation := state.nations[0]
 	var previous_name := nation.ruler_name
+	var dynasty_surname := WorldNaming.ruler_surname(previous_name)
 	var previous_archetype := nation.ruler_archetype
 	var previous_traits := nation.ruler_traits.duplicate()
 	var previous_revision := nation.ruler_revision
@@ -47,6 +48,10 @@ func _test_reign_range_and_succession() -> void:
 	_check(nation.ruler_revision == previous_revision + 1, "ruler did not change on due day")
 	_check(nation.ruler_started_day == due_day, "successor start day was not recorded")
 	_check(nation.ruler_name != previous_name, "successor reused the previous ruler name")
+	_check(
+		WorldNaming.ruler_surname(nation.ruler_name) == dynasty_surname,
+		"independent succession changed the dynasty surname"
+	)
 	_check(
 		nation.ruler_archetype != previous_archetype
 		or nation.ruler_traits != previous_traits,

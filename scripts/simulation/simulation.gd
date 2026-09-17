@@ -129,6 +129,9 @@ const PREPARATION_MAX_ORDERS_PER_CYCLE: int = 64
 const CAMPAIGN_ATTACK_ENTER_RATIO: float = 1.25
 const CAMPAIGN_TARGET_COMMIT_RATIO: float = 3.00
 const CAMPAIGN_STAGED_TROOP_RATIO: float = 1.00
+const LOCAL_BATTLE_REINFORCE_RATIO: float = 1.25
+const LOCAL_BATTLE_MIN_MORALE_RATIO: float = 0.50
+const LOCAL_BATTLE_MIN_SUPPLY_RATIO: float = 0.50
 const CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO: float = 0.33
 const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 18.0
 ## 同一攻势只经营一个主目标和最多两个次目标，避免宽正面重复规划。
@@ -564,15 +567,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	if spread_runtime_work and not line_edge_frame_slicing_disabled:
-		_set_runtime_profile_stage(&"line_emergencies")
-		await _resolve_line_edge_assignment_emergencies_over_frames()
-	else:
-		_resolve_line_edge_assignment_emergencies()
-	_record_tick_profile_stage("line_emergencies", profile_stage_started)
-	profile_stage_started = (
-		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-	)
 	# 日供应量与路径、兵力、共享库存竞争同日更新；月耗通过 Army.supply_food_debt
 	# 按 1/30 累积到整粮后扣除，不放大整数库存。
 	if spread_runtime_work and not supply_frame_slicing_disabled:
@@ -655,6 +649,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		await _advance_priority_city_defense_echelons(true)
 	else:
 		_advance_priority_city_defense_echelons()
+	_resolve_nearby_main_battle_reinforcements()
 	_record_tick_profile_stage("campaign", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -2104,6 +2099,8 @@ func _resolve_ruler_successions() -> void:
 		var preferred_surname := WorldNaming.suzerainty_ruler_surname(
 			state, nation.id
 		)
+		if preferred_surname.is_empty():
+			preferred_surname = WorldNaming.ruler_surname(previous_name)
 		RulerProfile.appoint_successor(nation, state.world_seed, state.day)
 		WorldNaming.register_successor_name(
 			state,
@@ -3401,6 +3398,193 @@ func _drain_siege_food() -> void:
 					continue
 				defender.starving = not has_food
 				defender.supply_ratio = 1.0 if has_food else 0.0
+
+
+## 空闲主战指挥单位每日响应道路一跳内的劣势战场。它只填补实际战力缺口，
+## 不接管攻势编组，也不抽调撤退、恢复、缺粮或已锁定战役的单位。
+func _resolve_nearby_main_battle_reinforcements() -> void:
+	var opportunities: Array[Dictionary] = []
+	for battle in state.battles:
+		if battle.finished or battle.side_a.is_empty() or battle.side_b.is_empty():
+			continue
+		var side_power := [
+			_battle_side_effective_power(battle.side_a),
+			_battle_side_effective_power(battle.side_b),
+		]
+		for side_index in range(2):
+			var friendly_side: Array[Army] = (
+				battle.side_a if side_index == 0 else battle.side_b
+			)
+			var main_nations := {}
+			for participant in friendly_side:
+				if (
+					participant.size > 0
+					and participant.battle_group_id >= 0
+					and participant.is_main_battle_role()
+				):
+					main_nations[participant.owner_nation] = true
+			var friendly_power := float(side_power[side_index])
+			var enemy_power := float(side_power[1 - side_index])
+			if (
+				main_nations.is_empty()
+				or friendly_power
+					>= enemy_power * LOCAL_BATTLE_REINFORCE_RATIO
+			):
+				continue
+			for nation_value in main_nations:
+				opportunities.append({
+					"battle": battle,
+					"nation_id": int(nation_value),
+					"side": side_index + 1,
+					"friendly_power": friendly_power,
+					"enemy_power": enemy_power,
+					"deficit": enemy_power * LOCAL_BATTLE_REINFORCE_RATIO
+						- friendly_power,
+				})
+	opportunities.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var deficit_a := float(a["deficit"])
+		var deficit_b := float(b["deficit"])
+		if not is_equal_approx(deficit_a, deficit_b):
+			return deficit_a > deficit_b
+		var battle_a: Battle = a["battle"]
+		var battle_b: Battle = b["battle"]
+		if battle_a.id != battle_b.id:
+			return battle_a.id < battle_b.id
+		return int(a["nation_id"]) < int(b["nation_id"])
+	)
+	var committed_armies := {}
+	var projected_side_power := {}
+	for opportunity in opportunities:
+		var battle: Battle = opportunity["battle"]
+		var nation_id := int(opportunity["nation_id"])
+		var side := int(opportunity["side"])
+		var side_key := "%d:%d" % [battle.id, side]
+		var projected_power := float(projected_side_power.get(
+			side_key,
+			opportunity["friendly_power"]
+		))
+		var required_power := (
+			float(opportunity["enemy_power"])
+			* LOCAL_BATTLE_REINFORCE_RATIO
+		)
+		for army in _nearby_main_reinforcement_candidates(
+			battle, nation_id, committed_armies
+		):
+			if projected_power >= required_power:
+				break
+			var target_city := _local_battle_reinforcement_target(
+				battle, nation_id, int(opportunity["side"])
+			)
+			if target_city < 0:
+				break
+			var kind := (
+				ActionCandidate.Kind.ATTACK
+				if state.is_enemy(
+					army.owner_nation,
+					state.cities[target_city].owner_nation
+				)
+				else ActionCandidate.Kind.REINFORCE
+			)
+			var order := ActionCandidate.make(
+				kind,
+				2500.0,
+				"邻近战场：指挥单位%d增援战斗%d"
+					% [army.battle_group_id + 1, battle.id],
+				target_city
+			)
+			order.minimum_commit_days = AI_DECISION_INTERVAL_DAYS
+			if _execute_ai_candidate(army, order):
+				committed_armies[army.id] = true
+				projected_power += ArmyPower.effective(army)
+				projected_side_power[side_key] = projected_power
+
+
+func _battle_side_effective_power(side: Array[Army]) -> float:
+	var result := 0.0
+	for army in side:
+		if army.size > 0:
+			result += ArmyPower.effective(army)
+	return result
+
+
+func _nearby_main_reinforcement_candidates(
+	battle: Battle,
+	nation_id: int,
+	committed_armies: Dictionary
+) -> Array[Army]:
+	var anchors := _battle_anchor_cities(battle)
+	var nearby_cities := {}
+	for anchor in anchors:
+		nearby_cities[anchor] = true
+		for neighbor in state.neighbors(anchor):
+			nearby_cities[neighbor] = true
+	var nation := state.nations[nation_id]
+	var result: Array[Army] = []
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or army.battle_group_id < 0
+			or not army.is_main_battle_role()
+			or army.state != Army.State.IDLE
+			or army.starving
+			or army.supply_ratio < LOCAL_BATTLE_MIN_SUPPLY_RATIO
+			or army.morale_ratio() < LOCAL_BATTLE_MIN_MORALE_RATIO
+			or not nearby_cities.has(army.location_city)
+			or committed_armies.has(army.id)
+			or nation.campaign_preparation_assignments.has(army.id)
+			or nation.campaign_attack_assignments.has(army.id)
+			or nation.campaign_launched_armies.has(army.id)
+		):
+			continue
+		result.append(army)
+	result.sort_custom(func(a: Army, b: Army) -> bool:
+		var distance_a := _minimum_city_hops_to_anchors(a.location_city, anchors)
+		var distance_b := _minimum_city_hops_to_anchors(b.location_city, anchors)
+		if distance_a != distance_b:
+			return distance_a < distance_b
+		return EquivariantOrder.army_less(state, nation_id, a, b)
+	)
+	return result
+
+
+func _battle_anchor_cities(battle: Battle) -> Array[int]:
+	if battle.kind == Battle.Kind.SIEGE and battle.city != null:
+		return [battle.city.id] as Array[int]
+	if battle.edge != null:
+		return [battle.edge.city_a, battle.edge.city_b] as Array[int]
+	return [] as Array[int]
+
+
+func _minimum_city_hops_to_anchors(
+	city_id: int,
+	anchors: Array[int]
+) -> int:
+	if anchors.has(city_id):
+		return 0
+	for anchor in anchors:
+		if state.neighbors(anchor).has(city_id):
+			return 1
+	return 2
+
+
+func _local_battle_reinforcement_target(
+	battle: Battle,
+	nation_id: int,
+	side: int
+) -> int:
+	if battle.kind == Battle.Kind.SIEGE and battle.city != null:
+		return battle.city.id
+	var friendly_side: Array[Army] = battle.side_a if side == 1 else battle.side_b
+	for participant in friendly_side:
+		if participant.owner_nation == nation_id and participant.move_to >= 0:
+			return participant.move_to
+	if battle.edge == null:
+		return -1
+	for endpoint in [battle.edge.city_a, battle.edge.city_b]:
+		if state.is_enemy(nation_id, state.cities[endpoint].owner_nation):
+			return endpoint
+	return battle.edge.city_b
 
 
 func _siege_garrison_battle_of(army: Army) -> Battle:
@@ -7710,13 +7894,7 @@ func _ai_manage_force_structure(
 		state.nations[view.nation_id].manpower_pool - protected_reserve
 	)
 	var recruitment := {}
-	if assessment.line_armies < assessment.critical_city_line_target:
-		recruitment = {
-			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-			"group_id": -1,
-			"reason": "补充核心城市填线槽",
-		}
-	elif assessment.small_nation_survival:
+	if assessment.small_nation_survival:
 		recruitment = _small_nation_force_recruitment(
 			view.nation_id,
 			nation,
@@ -7729,9 +7907,7 @@ func _ai_manage_force_structure(
 			threat,
 			defense_plan,
 			decision_context,
-			assessment.wars,
-			assessment.total_line_target,
-			assessment.line_armies
+			assessment.wars
 		)
 	return _try_recruit_force_structure(
 		view,
@@ -7857,9 +8033,7 @@ func _build_force_structure_assessment(
 	var current_troops := 0
 	for army in view.friendly_armies:
 		current_troops += army.size
-		if army.is_line_role():
-			assessment.line_armies += 1
-		elif army.is_main_battle_role():
+		if army.is_main_battle_role():
 			assessment.main_armies += 1
 	assessment.wars = (
 		decision_context["wars"]
@@ -7880,18 +8054,6 @@ func _build_force_structure_assessment(
 		and state.day <= nation.war_mobilization_until_day
 		and nation.war_mobilization_target_troops > current_troops
 	)
-	var city_line_target := defense_plan.line_city_slots
-	assessment.critical_city_line_target = (
-		defense_plan.line_critical_city_slots
-	)
-	assessment.total_line_target = (
-		city_line_target + defense_plan.line_edge_slots
-	)
-	if assessment.small_nation_survival:
-		# Small nations keep one LINE per city and one mobile MAIN reserve.
-		city_line_target = state.land_cities_of(view.nation_id).size()
-		assessment.critical_city_line_target = city_line_target
-		assessment.total_line_target = city_line_target
 	assessment.emergency_recruitment = (
 		assessment.small_nation_survival
 		or assessment.active_war_mobilization
@@ -7945,12 +8107,7 @@ func _build_force_structure_assessment(
 		else maxi(nation.battle_groups.size(), 1)
 	)
 	assessment.force_structure_target = (
-		assessment.total_line_target
-		+ assessment.baseline_group_count
-			* (
-				BattleGroup.MAX_LIGHT_ARMIES
-				+ BattleGroup.MAX_HEAVY_ARMIES
-			)
+		assessment.baseline_group_count
 	)
 	return assessment
 
@@ -8078,11 +8235,8 @@ func _regular_force_recruitment(
 	threat: ThreatField,
 	defense_plan: CityDefensePlan,
 	decision_context: Dictionary,
-	wars: Array,
-	total_line_target: int,
-	line_armies: int
+	wars: Array
 ) -> Dictionary:
-	var nation := state.nations[view.nation_id]
 	var demand := _campaign_force_recruitment_demand(
 		view,
 		snapshot,
@@ -8103,29 +8257,8 @@ func _regular_force_recruitment(
 		)),
 		0
 	)
-	var line_deficit := maxi(total_line_target - line_armies, 0)
-	var main_deficit_ratio := (
-		float(maxi(target_main_capacity - current_main_capacity, 0))
-			/ float(maxi(target_main_capacity, 1))
-	)
-	var line_deficit_ratio := (
-		float(line_deficit) / float(maxi(total_line_target, 1))
-	)
-	var recruit_main := (
-		main_deficit > 0
-		and (
-			line_deficit <= 0
-			or main_deficit_ratio >= line_deficit_ratio
-		)
-	)
-	if recruit_main:
+	if main_deficit > 0:
 		return _next_battle_group_recruitment(view.nation_id)
-	if line_deficit > 0:
-		return {
-			"size": GameState.INITIAL_LIGHT_ARMY_SIZE,
-			"group_id": -1,
-			"reason": "补充常规填线槽",
-		}
 	return {}
 
 

@@ -7,12 +7,13 @@ var _failures: Array[String] = []
 
 func _init() -> void:
 	_test_single_heavy_battle_group()
+	_test_generated_world_has_only_command_units()
 	_test_campaign_bounds()
 	_test_friendly_progress_signature()
 	_test_stable_campaign_plan_reuse()
 	for failure in _failures:
 		push_error("MILITARY_AI_SIMPLIFICATION_FAIL: " + failure)
-	print("MILITARY_AI_SIMPLIFICATION_%s checks=4" % [
+	print("MILITARY_AI_SIMPLIFICATION_%s checks=5" % [
 		"OK" if _failures.is_empty() else "FAILED",
 	])
 	quit(0 if _failures.is_empty() else 1)
@@ -55,6 +56,29 @@ func _test_single_heavy_battle_group() -> void:
 			and nonstandard_rejected,
 		"每个指挥单位必须且只能包含一个聚合主战实体，轻军不得加入"
 	)
+
+
+func _test_generated_world_has_only_command_units() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(91004)
+	var valid := true
+	for nation in state.nations:
+		var living_armies := 0
+		for army in state.armies:
+			if army.owner_nation != nation.id or army.size <= 0:
+				continue
+			living_armies += 1
+			valid = (
+				valid
+				and army.is_main_battle_role()
+				and army.battle_group_id >= 0
+			)
+		valid = (
+			valid
+			and living_armies <= BattleGroup.MAX_COMMAND_UNITS
+			and nation.battle_groups.size() <= BattleGroup.MAX_COMMAND_UNITS
+		)
+	_check(valid, "生成世界只能包含每国至多六个聚合主战指挥单位")
 
 
 func _test_campaign_bounds() -> void:

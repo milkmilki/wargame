@@ -5065,6 +5065,8 @@ func _draw_armies() -> void:
 			icon_scale
 		)
 		var role_code := str(profile["role_code"])
+		if is_main_role:
+			role_code += "×%d" % army_formation_count(army)
 		draw_string(
 			_font,
 			rect.position + Vector2(2.5, 4.5) * icon_scale,
@@ -5169,6 +5171,14 @@ static func army_counter_profile(
 		"main_role": false,
 		"role_code": "线",
 	}
+
+
+static func army_formation_count(army: Army) -> int:
+	if army == null or army.size <= 0:
+		return 0
+	if army.is_main_battle_role():
+		return army.main_legion_count(GameState.INITIAL_HEAVY_ARMY_SIZE)
+	return 1
 
 
 func _draw_army_counter_body(
@@ -5582,10 +5592,12 @@ static func nation_list_rows(
 ) -> Array[Dictionary]:
 	var city_count_by_nation: Array[int] = []
 	var army_count_by_nation: Array[int] = []
+	var command_count_by_nation: Array[int] = []
 	var troops_by_nation: Array[int] = []
 	for values in [
 		city_count_by_nation,
 		army_count_by_nation,
+		command_count_by_nation,
 		troops_by_nation,
 	]:
 		values.resize(game_state.nations.size())
@@ -5603,7 +5615,8 @@ static func nation_list_rows(
 			or army.size <= 0
 		):
 			continue
-		army_count_by_nation[army.owner_nation] += 1
+		army_count_by_nation[army.owner_nation] += army_formation_count(army)
+		command_count_by_nation[army.owner_nation] += 1
 		troops_by_nation[army.owner_nation] += army.size
 	var row_by_nation := {}
 	var visible_nation_ids: Array[int] = []
@@ -5645,15 +5658,17 @@ static func nation_list_rows(
 			"nation_id": nation.id,
 			"city_count": city_count_by_nation[nation.id],
 			"army_count": army_count_by_nation[nation.id],
+			"command_count": command_count_by_nation[nation.id],
 			"troop_count": troops_by_nation[nation.id],
 			"treasury_gold": nation.treasury_gold,
 			"color": nation.color,
 			"at_war": not wars.is_empty(),
 			"identity_primary": nation_debug_name(game_state, nation.id),
 			"identity_secondary": relation_text + war_tag,
-			"power_primary": "城市 %d   军队 %d   兵力 %s" % [
+			"power_primary": "城市 %d   军团 %d   指挥 %d   兵力 %s" % [
 				city_count_by_nation[nation.id],
 				army_count_by_nation[nation.id],
+				command_count_by_nation[nation.id],
 				_compact_quantity(troops_by_nation[nation.id]),
 			],
 			"power_secondary": "人力 %s / %s   忠诚 %.0f" % [
@@ -5681,8 +5696,9 @@ static func nation_list_rows(
 			],
 			# 兼容旧调用与脚本检查；实际窗口读取上面的结构化双行字段。
 			"identity": "%s  %s" % [nation_debug_name(game_state, nation.id), relation_text],
-			"military": "城%d 军%d/%d 人%d/%d 忠%.0f" % [
+			"military": "城%d 军团%d 指挥%d 兵%d 人力%d/%d 忠%.0f" % [
 				city_count_by_nation[nation.id], army_count_by_nation[nation.id],
+				command_count_by_nation[nation.id],
 				troops_by_nation[nation.id], nation.manpower_pool, manpower_capacity,
 				nation.average_loyalty,
 			],
@@ -7078,10 +7094,12 @@ static func nation_detail_sections(
 	var n := game_state.nations[nation_id]
 	var troops := 0
 	var army_count := 0
+	var command_count := 0
 	for army in game_state.armies:
 		if army.owner_nation == nation_id and army.size > 0:
 			troops += army.size
-			army_count += 1
+			army_count += army_formation_count(army)
+			command_count += 1
 	var finance := _nation_detail_finance_snapshot(
 		game_state,
 		nation_id
@@ -7122,8 +7140,9 @@ static func nation_detail_sections(
 			"君主 %s  ▼" % ruler_summary(n, game_state),
 		]},
 		{"title": "国力与民心", "lines": [
-			"城市 %d    军队 %d 支    总兵力 %d" % [
-				game_state.cities_of(nation_id).size(), army_count, troops,
+			"城市 %d    主战军团 %d    指挥单位 %d    总兵力 %d" % [
+				game_state.cities_of(nation_id).size(), army_count,
+				command_count, troops,
 			],
 			"人力 %d / %d    平均忠诚 %.1f" % [
 				n.manpower_pool, manpower_capacity, n.average_loyalty,

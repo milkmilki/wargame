@@ -351,9 +351,8 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
 	assert(edges.size() == 2 * GRID * (GRID - 1), "网格夹具边数应为 112")
 	assert(
-		armies.size()
-			== CITY_COUNT + NATION_COUNT,
-		"网格状态机夹具必须保留每城填线军和每国一个满编战团"
+		armies.size() == NATION_COUNT,
+		"网格状态机夹具必须只保留每国一个初始指挥单位"
 	)
 	assert(_battle_group_structure_valid(), "网格战团结构必须合法")
 
@@ -2426,89 +2425,20 @@ func _union_find_root(parent: Array[int], node: int) -> int:
 
 func _generate_armies() -> void:
 	for nation in nations:
-		var owned := cities_of(nation.id)
-		owned.sort_custom(func(a: City, b: City) -> bool:
-			return EquivariantOrder.city_less(
-				self,
-				nation.id,
-				a,
-				b
-			)
-		)
 		var owned_land := land_cities_of(nation.id)
-		owned_land.sort_custom(func(a: City, b: City) -> bool:
-			return EquivariantOrder.city_less(
-				self,
-				nation.id,
-				a,
-				b
-			)
-		)
-		# 小型新开局直接采用生存军制：每座陆城一支轻型 LINE，另有
-		# 一支单成员重型 MAIN 作为机动预备队。
-		if (
-			not owned_land.is_empty()
-			and owned_land.size() <= SMALL_NATION_SURVIVAL_MAX_CITIES
-		):
-			for city in owned_land:
-				var line := create_army(
-					nation.id, city.id,
-					INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
-				)
-				if line != null:
-					_initialize_army_attributes(line)
-			for _reserve_index in range(SMALL_NATION_MOBILE_RESERVE_ARMIES):
-				if active_army_count(nation.id) >= max_army_count(nation.id):
-					break
-				var reserve_group := create_battle_group(nation.id)
-				var reserve := create_army(
-					nation.id, nation.capital_city_id,
-					INITIAL_HEAVY_ARMY_SIZE, INITIAL_HEAVY_ARMY_SIZE
-				)
-				if reserve == null:
-					nation.battle_groups.erase(reserve_group)
-					break
-				_initialize_army_attributes(reserve)
-				assign_army_to_battle_group(reserve, reserve_group.id)
-			continue
-		var line_cities: Array[City] = []
-		for city in owned:
-			for neighbor in neighbors(city.id):
-				if cities[neighbor].owner_nation == nation.id:
-					continue
-				line_cities.append(city)
-				break
-		# 网格世界是镜像测试夹具，保留每城一支填线军；正式地图按实际国界城市起步。
-		if not uses_heightmap:
-			line_cities = owned
-		# 每个有城国家随后还要生成一支重军组成的初始战团。小型自定义
-		# 地图必须先为这支军队预留上限，避免一城国在加载时越界。
-		var battle_group_slots := (
-			BattleGroup.MAX_LIGHT_ARMIES + BattleGroup.MAX_HEAVY_ARMIES
-		)
-		var maximum_line_armies := maxi(
-			max_army_count(nation.id) - battle_group_slots,
-			0
-		)
-		if line_cities.size() > maximum_line_armies:
-			line_cities.resize(maximum_line_armies)
-		for city in line_cities:
-			_initialize_army_attributes(create_army(
-				nation.id,
-				city.id,
-				INITIAL_LIGHT_ARMY_SIZE,
-				INITIAL_LIGHT_ARMY_SIZE
-			))
-		if owned.is_empty():
+		if owned_land.is_empty():
 			continue
 		var group := create_battle_group(nation.id)
-		var group_city := nation.capital_city_id
 		var heavy := create_army(
 			nation.id,
-			group_city,
+			nation.capital_city_id,
 			INITIAL_HEAVY_ARMY_SIZE,
 			INITIAL_HEAVY_ARMY_SIZE
 		)
+		if group == null or heavy == null:
+			if group != null:
+				nation.battle_groups.erase(group)
+			continue
 		_initialize_army_attributes(heavy)
 		assign_army_to_battle_group(heavy, group.id)
 
@@ -2760,11 +2690,7 @@ func active_army_count(nation_id: int) -> int:
 
 
 func max_army_count(nation_id: int) -> int:
-	return maxi(
-		land_cities_of(nation_id).size()
-			* ARMY_COUNT_LIMIT_PER_CITY,
-		ARMY_COUNT_LIMIT_PER_CITY
-	)
+	return BattleGroup.MAX_COMMAND_UNITS if nation_id >= 0 else 0
 
 
 func effective_ai_aggression(nation_id: int) -> float:
@@ -3583,8 +3509,8 @@ func start_regional_rebellion(
 	_initialize_rebel_diplomacy(parent_id, rebel.id)
 	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
 
-	# Local stationed forces defect; if none do, mobilize only from transferred
-	# manpower and never conjure a full army without paying the pool.
+	# Local stationed forces defect; if none do, mobilize one regular command
+	# unit from transferred manpower instead of recreating the removed LINE role.
 	var defected_armies: Array[Army] = []
 	for army in armies:
 		if (
@@ -3601,13 +3527,16 @@ func start_regional_rebellion(
 			assign_or_merge_main_army(defected_army)
 		else:
 			defected_army.strategic_role = Army.StrategicRole.LINE
-	if defected_armies.is_empty() and rebel.manpower_pool >= INITIAL_LIGHT_ARMY_SIZE:
+	if defected_armies.is_empty() and rebel.manpower_pool >= INITIAL_HEAVY_ARMY_SIZE:
 		var uprising := create_army(
-			rebel.id, capital_id, INITIAL_LIGHT_ARMY_SIZE, INITIAL_LIGHT_ARMY_SIZE
+			rebel.id, capital_id, INITIAL_HEAVY_ARMY_SIZE, INITIAL_HEAVY_ARMY_SIZE
 		)
 		if uprising != null:
-			rebel.manpower_pool -= INITIAL_LIGHT_ARMY_SIZE
+			rebel.manpower_pool -= INITIAL_HEAVY_ARMY_SIZE
 			_initialize_army_attributes(uprising)
+			if assign_or_merge_main_army(uprising) == null:
+				armies.erase(uprising)
+				rebel.manpower_pool += INITIAL_HEAVY_ARMY_SIZE
 	# 与削藩内战共用同一火星军口径：ceil(0.1 × 叛军陆城数) 个满编
 	# MAIN 战团。它是叛乱政治事件的额外动员，不替代当地驻军倒戈。
 	_spawn_rebellion_uprising_armies(rebel.id)
@@ -3983,7 +3912,7 @@ func _spawn_uprising_army(nation_id: int, city_id: int) -> Army:
 
 
 ## 凭空动员一支指定编制/角色的满编军队（不扣人力/金钱、不受军队数上限约束）。
-## 用于分封赐军（LINE）与叛乱起兵火星兵（MAIN）等离散政治动员事件的单一真源。
+## 仅用于叛乱等离散政治动员；常规生成与招募仍受六个指挥单位上限约束。
 func _spawn_conjured_army(
 	nation_id: int,
 	city_id: int,
@@ -4801,9 +4730,6 @@ func enfeoff(
 		nations.pop_back()
 		return -1
 
-	# 3.5 军队归属在第 5.5 步统一处理：封地内稳定驻防的 LINE 地方化并补齐，
-	#     MAIN 战团与在途 LINE 继续归中央。
-
 	# 4. 划转人力与金钱（守恒：从宗主池扣除、注入藩王池）。
 	overlord.manpower_pool -= granted_manpower
 	add_manpower(subject.id, granted_manpower)
@@ -4814,9 +4740,8 @@ func enfeoff(
 	WorldNaming.assign_vassal_name(self, subject.id, city_ids)
 	FamilyTree.record_enfeoffment(self, overlord_id, subject.id)
 
-	# 5.5 地方化驻军并补齐：先转移封地内稳定驻防的宗主 LINE，再把缺口凭空补到
-	#     「陆城数」；MAIN 不转移、不凭空赐予，由藩王后续按经济能力自行组建。
-	_grant_vassal_line_armies(subject.id, overlord_id)
+	# 5.5 分封不再创造或转移正规军。城市工事负责拖延，藩王须用自身资源
+	#     建立第一个主战指挥单位；宗主的既有指挥单位保持完整。
 
 	# 6. 外交：藩王继承宗主对每个第三方的关系，并与宗主结盟。
 	#    这样 alliance_bloc 天然把宗藩聚为一体，对外 is_enemy 自动正确，

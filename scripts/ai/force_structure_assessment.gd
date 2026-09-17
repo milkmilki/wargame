@@ -1,13 +1,10 @@
 class_name ForceStructureAssessment
 extends RefCounted
 
-var line_armies: int = 0
 var main_armies: int = 0
 var wars: Array = []
 var small_nation_survival: bool = false
 var active_war_mobilization: bool = false
-var critical_city_line_target: int = 0
-var total_line_target: int = 0
 var emergency_recruitment: bool = false
 var food_report: Dictionary = {}
 var food_pressure: bool = false

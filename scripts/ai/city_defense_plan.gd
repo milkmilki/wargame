@@ -934,6 +934,13 @@ func _assign_role_based_defense() -> void:
 			b
 		)
 	)
+	if line_armies.is_empty():
+		line_city_slots = 0
+		line_critical_city_slots = 0
+		line_edge_slots = 0
+		defense_assignment_slots = 0
+		_assign_main_reserves()
+		return
 	var defense_slots := _build_role_defense_slots(
 		line_armies.size() if not line_armies.is_empty() else _role_defense_slot_capacity()
 	)
@@ -947,9 +954,6 @@ func _assign_role_based_defense() -> void:
 			line_city_slots += 1
 			if int(slot.get("priority", 0)) == 0:
 				line_critical_city_slots += 1
-	if line_armies.is_empty():
-		_assign_main_reserves()
-		return
 	if defense_slots.is_empty():
 		for army in line_armies:
 			army.clear_line_assignment()

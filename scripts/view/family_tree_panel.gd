@@ -5,10 +5,10 @@ extends CanvasLayer
 signal panel_opened
 signal panel_closed
 
-const CARD_SIZE := Vector2(180.0, 68.0)
-const CARD_GAP_X: float = 28.0
-const LEVEL_GAP_Y: float = 58.0
-const CANVAS_PADDING := Vector2(36.0, 30.0)
+const CARD_SIZE := Vector2(180.0, 72.0)
+const CARD_GAP_X: float = 32.0
+const LEVEL_GAP_Y: float = 64.0
+const CANVAS_PADDING := Vector2(56.0, 32.0)
 
 var _state: GameState
 var _nation_id: int = -1
@@ -156,6 +156,8 @@ class FamilyTreeCanvas extends Control:
 	var current_person_id: int = -1
 	var font: Font
 	var _rect_by_person: Dictionary = {}
+	var _children_by_person: Dictionary = {}
+	var _maximum_depth: int = 0
 
 
 	func _ready() -> void:
@@ -164,53 +166,64 @@ class FamilyTreeCanvas extends Control:
 
 	func rebuild_layout() -> void:
 		_rect_by_person.clear()
+		_children_by_person.clear()
+		_maximum_depth = 0
 		var members: Dictionary = tree.get("members", {})
 		if members.is_empty():
 			custom_minimum_size = Vector2(520.0, 260.0)
 			queue_redraw()
 			return
 		var root_id := int(tree.get("root_person_id", -1))
-		var levels: Dictionary = {}
-		var maximum_depth := 0
+		var ordered_ids: Array[int] = []
 		for person_value in members.keys():
-			var person_id := int(person_value)
-			var depth := _depth_of(person_id, root_id, members)
-			maximum_depth = maxi(maximum_depth, depth)
-			if not levels.has(depth):
-				levels[depth] = [] as Array[int]
-			(levels[depth] as Array[int]).append(person_id)
-		var maximum_count := 1
-		for depth_value in levels:
-			var ids: Array[int] = levels[depth_value]
-			ids.sort()
-			maximum_count = maxi(maximum_count, ids.size())
+			ordered_ids.append(int(person_value))
+		ordered_ids.sort()
+		for person_id in ordered_ids:
+			_children_by_person[person_id] = [] as Array[int]
+		for person_id in ordered_ids:
+			if person_id == root_id:
+				continue
+			var member: Dictionary = members[person_id]
+			var parent_id := int(member.get("parent_id", root_id))
+			if _children_by_person.has(parent_id):
+				(_children_by_person[parent_id] as Array[int]).append(person_id)
+		for child_ids_value in _children_by_person.values():
+			(child_ids_value as Array[int]).sort()
+
+		var roots: Array[int] = []
+		if members.has(root_id):
+			roots.append(root_id)
+		for person_id in ordered_ids:
+			if person_id == root_id:
+				continue
+			var parent_id := int(
+				(members[person_id] as Dictionary).get("parent_id", root_id)
+			)
+			if not members.has(parent_id):
+				roots.append(person_id)
+
+		var subtree_widths := {}
+		var natural_width := 0.0
+		for root_person_id in roots:
+			natural_width += _measure_subtree_width(
+				root_person_id, subtree_widths, {}
+			)
+		if roots.size() > 1:
+			natural_width += (roots.size() - 1) * CARD_GAP_X * 2.0
 		var content_width := maxf(
 			maxf(520.0, size.x),
-			CANVAS_PADDING.x * 2.0
-				+ maximum_count * CARD_SIZE.x
-				+ maxi(maximum_count - 1, 0) * CARD_GAP_X
+			CANVAS_PADDING.x * 2.0 + natural_width
 		)
+		var cursor_x := (content_width - natural_width) * 0.5
+		for root_person_id in roots:
+			_place_subtree(root_person_id, 0, cursor_x, subtree_widths, {})
+			cursor_x += float(subtree_widths[root_person_id]) + CARD_GAP_X * 2.0
 		var content_height := (
 			CANVAS_PADDING.y * 2.0
-			+ (maximum_depth + 1) * CARD_SIZE.y
-			+ maximum_depth * LEVEL_GAP_Y
+			+ (_maximum_depth + 1) * CARD_SIZE.y
+			+ _maximum_depth * LEVEL_GAP_Y
 		)
 		custom_minimum_size = Vector2(content_width, maxf(content_height, 260.0))
-		for depth in range(maximum_depth + 1):
-			var ids: Array[int] = levels.get(depth, [] as Array[int])
-			var row_width := (
-				ids.size() * CARD_SIZE.x
-				+ maxi(ids.size() - 1, 0) * CARD_GAP_X
-			)
-			var start_x := (content_width - row_width) * 0.5
-			for index in range(ids.size()):
-				_rect_by_person[ids[index]] = Rect2(
-					Vector2(
-						start_x + index * (CARD_SIZE.x + CARD_GAP_X),
-						CANVAS_PADDING.y + depth * (CARD_SIZE.y + LEVEL_GAP_Y)
-					),
-					CARD_SIZE
-				)
 		queue_redraw()
 
 
@@ -222,46 +235,83 @@ class FamilyTreeCanvas extends Control:
 				HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, MapRenderer.INK_COLOR
 			)
 			return
-		for person_value in _rect_by_person:
-			var person_id := int(person_value)
-			var member: Dictionary = members[person_id]
-			var parent_id := int(member.get("parent_id", -1))
+		_draw_generation_bands()
+		for parent_value in _children_by_person:
+			var parent_id := int(parent_value)
 			if not _rect_by_person.has(parent_id):
 				continue
 			var parent_rect: Rect2 = _rect_by_person[parent_id]
-			var child_rect: Rect2 = _rect_by_person[person_id]
+			var visible_children: Array[int] = []
+			for child_id in _children_by_person[parent_id] as Array[int]:
+				if _rect_by_person.has(child_id):
+					visible_children.append(child_id)
+			if visible_children.is_empty():
+				continue
 			var start := Vector2(parent_rect.get_center().x, parent_rect.end.y)
-			var finish := Vector2(child_rect.get_center().x, child_rect.position.y)
-			var middle_y := (start.y + finish.y) * 0.5
-			draw_polyline(
-				PackedVector2Array([
-					start, Vector2(start.x, middle_y),
-					Vector2(finish.x, middle_y), finish,
-				]),
-				Color(MapRenderer.INK_COLOR, 0.62), 2.0
+			var junction_y := start.y + LEVEL_GAP_Y * 0.5
+			var first_child: Rect2 = _rect_by_person[visible_children.front()]
+			var last_child: Rect2 = _rect_by_person[visible_children.back()]
+			var line_color := Color(MapRenderer.INK_COLOR, 0.58)
+			draw_line(start, Vector2(start.x, junction_y), line_color, 2.0)
+			draw_line(
+				Vector2(first_child.get_center().x, junction_y),
+				Vector2(last_child.get_center().x, junction_y),
+				line_color, 2.0
 			)
+			for child_id in visible_children:
+				var child_rect: Rect2 = _rect_by_person[child_id]
+				draw_line(
+					Vector2(child_rect.get_center().x, junction_y),
+					Vector2(child_rect.get_center().x, child_rect.position.y),
+					line_color, 2.0
+				)
 		for person_value in _rect_by_person:
 			_draw_person(int(person_value), members[int(person_value)])
 
 
 	func _draw_person(person_id: int, member: Dictionary) -> void:
 		var rect: Rect2 = _rect_by_person[person_id]
-		var fill := Color(0.96, 0.90, 0.76, 1.0)
-		var border := MapRenderer.ACCENT_RED if person_id == current_person_id else MapRenderer.INK_COLOR
-		draw_style_box(_card_style(fill, border), rect)
-		var name := str(member.get("name", "？"))
 		var titles: Array = member.get("titles", [])
+		var is_sovereign := false
+		for title_value in titles:
+			if str(title_value).ends_with("帝"):
+				is_sovereign = true
+				break
+		var is_current := person_id == current_person_id
+		var fill := (
+			Color(0.97, 0.91, 0.76, 1.0)
+			if is_sovereign
+			else Color(0.95, 0.89, 0.77, 1.0)
+		)
+		var border := MapRenderer.ACCENT_RED if is_current else MapRenderer.INK_COLOR
+		draw_style_box(
+			_card_style(Color(0.08, 0.06, 0.04, 0.16), Color.TRANSPARENT),
+			Rect2(rect.position + Vector2(2.0, 3.0), rect.size)
+		)
+		draw_style_box(_card_style(fill, border), rect)
+		if is_current:
+			draw_rect(
+				Rect2(rect.position + Vector2(2.0, 2.0), Vector2(rect.size.x - 4.0, 4.0)),
+				MapRenderer.ACCENT_RED
+			)
+		var name := str(member.get("name", "？"))
 		var title_text := "先祖" if titles.is_empty() else " · ".join(titles)
 		draw_string(
-			font, rect.position + Vector2(10.0, 27.0), name,
+			font, rect.position + Vector2(10.0, 29.0), name,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20.0, 16,
 			MapRenderer.INK_COLOR
 		)
 		draw_string(
-			font, rect.position + Vector2(10.0, 51.0), title_text,
+			font, rect.position + Vector2(10.0, 55.0), title_text,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20.0, 12,
 			Color(MapRenderer.INK_COLOR, 0.78)
 		)
+		if is_current:
+			draw_string(
+				font, rect.position + Vector2(rect.size.x - 42.0, 17.0), "在位",
+				HORIZONTAL_ALIGNMENT_CENTER, 34.0, 10,
+				MapRenderer.ACCENT_RED
+			)
 
 
 	func _card_style(fill: Color, border: Color) -> StyleBoxFlat:
@@ -273,12 +323,76 @@ class FamilyTreeCanvas extends Control:
 		return style
 
 
-	func _depth_of(person_id: int, root_id: int, members: Dictionary) -> int:
-		var depth := 0
-		var cursor := person_id
-		var visited := {}
-		while cursor != root_id and members.has(cursor) and not visited.has(cursor):
-			visited[cursor] = true
-			cursor = int((members[cursor] as Dictionary).get("parent_id", root_id))
-			depth += 1
-		return depth
+	func _measure_subtree_width(
+		person_id: int,
+		widths: Dictionary,
+		visiting: Dictionary
+	) -> float:
+		if widths.has(person_id):
+			return float(widths[person_id])
+		if visiting.has(person_id):
+			return CARD_SIZE.x
+		visiting[person_id] = true
+		var children: Array[int] = _children_by_person.get(
+			person_id, [] as Array[int]
+		)
+		var children_width := 0.0
+		for child_id in children:
+			children_width += _measure_subtree_width(child_id, widths, visiting)
+		if children.size() > 1:
+			children_width += (children.size() - 1) * CARD_GAP_X
+		var result := maxf(CARD_SIZE.x, children_width)
+		widths[person_id] = result
+		visiting.erase(person_id)
+		return result
+
+
+	func _place_subtree(
+		person_id: int,
+		depth: int,
+		left: float,
+		widths: Dictionary,
+		visiting: Dictionary
+	) -> void:
+		if _rect_by_person.has(person_id) or visiting.has(person_id):
+			return
+		visiting[person_id] = true
+		var span := float(widths.get(person_id, CARD_SIZE.x))
+		_rect_by_person[person_id] = Rect2(
+			Vector2(
+				left + (span - CARD_SIZE.x) * 0.5,
+				CANVAS_PADDING.y + depth * (CARD_SIZE.y + LEVEL_GAP_Y)
+			),
+			CARD_SIZE
+		)
+		_maximum_depth = maxi(_maximum_depth, depth)
+		var children: Array[int] = _children_by_person.get(
+			person_id, [] as Array[int]
+		)
+		var children_width := 0.0
+		for child_id in children:
+			children_width += float(widths.get(child_id, CARD_SIZE.x))
+		if children.size() > 1:
+			children_width += (children.size() - 1) * CARD_GAP_X
+		var child_left := left + (span - children_width) * 0.5
+		for child_id in children:
+			_place_subtree(child_id, depth + 1, child_left, widths, visiting)
+			child_left += float(widths.get(child_id, CARD_SIZE.x)) + CARD_GAP_X
+		visiting.erase(person_id)
+
+
+	func _draw_generation_bands() -> void:
+		var canvas_width := maxf(size.x, custom_minimum_size.x)
+		for depth in range(_maximum_depth + 1):
+			var row_y := CANVAS_PADDING.y + depth * (CARD_SIZE.y + LEVEL_GAP_Y)
+			if depth % 2 == 1:
+				draw_rect(
+					Rect2(0.0, row_y - 14.0, canvas_width, CARD_SIZE.y + 28.0),
+					Color(MapRenderer.INK_COLOR, 0.035)
+				)
+			var generation_label := "始祖" if depth == 0 else "第%d代" % depth
+			draw_string(
+				font, Vector2(10.0, row_y + CARD_SIZE.y * 0.5 + 4.0),
+				generation_label, HORIZONTAL_ALIGNMENT_CENTER, 38.0, 11,
+				Color(MapRenderer.INK_COLOR, 0.46)
+			)

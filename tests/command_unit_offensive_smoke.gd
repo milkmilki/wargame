@@ -149,6 +149,7 @@ func _run() -> void:
 		"overflow_main_army_merges_into_existing_command"
 	)
 	_test_revoke_vassal_merges_command_units()
+	_test_adjacent_main_command_reinforces_battle()
 
 	if not _failures.is_empty():
 		for failure in _failures:
@@ -241,6 +242,53 @@ func _test_revoke_vassal_merges_command_units() -> void:
 		and state._battle_group_structure_valid(),
 		"revocation_merges_twelve_commands_into_six_pools"
 	)
+
+
+func _test_adjacent_main_command_reinforces_battle() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(86422)
+	state.armies.clear()
+	for nation in state.nations:
+		nation.battle_groups.clear()
+		nation.next_battle_group_id = 0
+	var target_city := 9
+	var reserve_city := 8
+	var attacker_city := 10
+	state.cities[target_city].owner_nation = 0
+	state.cities[reserve_city].owner_nation = 0
+	state.cities[attacker_city].owner_nation = 1
+	state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.WAR
+	)
+	var defender_group := state.create_battle_group(0)
+	var reserve_group := state.create_battle_group(0)
+	var attacker_group := state.create_battle_group(1)
+	var defender := state.create_army(0, target_city, 5000, 15000)
+	var reserve := state.create_army(0, reserve_city, 15000, 15000)
+	var attacker := state.create_army(1, attacker_city, 15000, 15000)
+	state.assign_army_to_battle_group(defender, defender_group.id)
+	state.assign_army_to_battle_group(reserve, reserve_group.id)
+	state.assign_army_to_battle_group(attacker, attacker_group.id)
+	var battle := state.new_battle(Battle.Kind.SIEGE)
+	battle.city = state.cities[target_city]
+	battle.edge = state.edge_of(target_city, attacker_city)
+	battle.has_garrison = true
+	battle.side_a.append(attacker)
+	battle.side_b.append(defender)
+	for participant in [attacker, defender]:
+		participant.state = Army.State.FIGHTING
+		participant.battle_id = battle.id
+	var simulation := Simulation.new()
+	root.add_child(simulation)
+	simulation.setup(state)
+	simulation._resolve_nearby_main_battle_reinforcements()
+	_check(
+		reserve.state == Army.State.MOVING
+			and reserve.ai_target_city == target_city
+			and reserve.ai_order_reason.contains("邻近战场"),
+		"adjacent_idle_main_command_reinforces_outmatched_siege"
+	)
+	simulation.free()
 
 
 func _check(condition: bool, label: String) -> void:
