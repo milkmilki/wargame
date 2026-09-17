@@ -10957,7 +10957,7 @@ func _test_ai_encirclement_breakout_and_relief() -> void:
 			and formal_map_hold.reason.contains(
 				"不进行独立战术进攻"
 			),
-		"正式地图驻边军必须等待国家级两步攻势，不得独立攻击"
+		"正式地图驻边军必须等待国家级连续攻势，不得独立攻击"
 	)
 	gs.uses_heightmap = false
 	var sim := Simulation.new()
@@ -11719,13 +11719,6 @@ func _test_manpower_pool_and_force_commands() -> void:
 			comprehensive_snapshot
 		)
 	)
-	var comprehensive_target_capacity := (
-		priority_force_sim._campaign_required_group_count(
-			force_nation_id,
-			comprehensive_demand_targets,
-			ThreatField.build(next_group_view)
-		)
-	)
 	for _comprehensive_growth in range(6):
 		var comprehensive_view := AiWorldView.build(
 			force_state,
@@ -11741,11 +11734,10 @@ func _test_manpower_pool_and_force_commands() -> void:
 	_check(
 		forced_comprehensive_targets == 3
 			and comprehensive_demand_targets.size() == 3
-			and comprehensive_target_capacity >= 3
 			and force_state.nations[
 				force_nation_id
 			].battle_groups.size() >= 3,
-		"备战期战团数量必须只由三个实际准备目标的统一需求决定"
+		"备战期主战军团必须按固定轮转逐步建立多个指挥单位"
 	)
 	var decisive_state := GameState.new()
 	decisive_state.generate_grid_world(7106)
@@ -11762,7 +11754,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 		0, decisive_target, null
 	)
 	var decisive_recruitment := (
-		decisive_sim._next_battle_group_recruitment(0, true, true)
+		decisive_sim._next_battle_group_recruitment(0)
 	)
 	decisive_state.nations[0].battle_groups.clear()
 	decisive_state.nations[0].next_battle_group_id = 0
@@ -11822,7 +11814,7 @@ func _test_manpower_pool_and_force_commands() -> void:
 			and locked_decisive_allocation.groups_for_target(
 				decisive_target
 			).size() == 1,
-		"纯规划器必须为每个目标只配置一个可用指挥单位：%s"
+		"单一目标只能接收一个可用指挥单位：%s"
 			% str(decisive_allocation.group_to_target)
 	)
 	var decisive_assigned := (
@@ -11837,12 +11829,12 @@ func _test_manpower_pool_and_force_commands() -> void:
 		)) == decisive_target:
 			decisive_assigned_groups[decisive_army.battle_group_id] = true
 	_check(
-		int(decisive_demand.get("command_units", 0)) == 1
+			not decisive_demand.has("command_units")
 			and not decisive_demand.has("groups")
 			and bool(decisive_recruitment.get("create_group", false))
 			and decisive_assigned
 			and decisive_assigned_groups.size() == 1,
-		"最后一城与普通目标相同，只使用一个满足兵力与战力门槛的指挥单位"
+		"最后一城与普通目标相同，只使用一个满足门槛的指挥单位"
 	)
 	decisive_sim.free()
 	var ungrouped_heavy := (
@@ -13914,8 +13906,8 @@ func _test_diplomacy_state_and_ai() -> void:
 		)
 	interval_nation.ai_aggression = original_aggression
 	_check(
-		personality_intervals == [40, 20, 13],
-		"低/中/高激进国家的攻势基础波次应分别为40/20/13天，当前=%s"
+		personality_intervals == [20, 10, 7],
+		"低/中/高激进国家的攻势基础波次应分别为20/10/7天，当前=%s"
 			% str(personality_intervals)
 	)
 	_check(
@@ -14467,7 +14459,7 @@ func _test_diplomacy_state_and_ai() -> void:
 			)
 			and _approx(
 				Simulation.CAMPAIGN_ATTACK_ENTER_RATIO,
-				1.00
+				1.25
 			)
 			and preparation_nation
 				.campaign_preparation_targets.size() == 3
@@ -14498,9 +14490,10 @@ func _test_diplomacy_state_and_ai() -> void:
 			prepared_launched_targets[army.ai_target_city] = true
 	_check(
 		prepared_batch_launched
-			and prepared_launched_targets.size() == 3
+			and prepared_launched_targets.size()
+				<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
 			and prepared_launched_targets.has(plan_primary),
-		"同批攻势必须只为三个计划目标生成攻击命令"
+		"同批攻势必须在三目标上限内按实际需求生成攻击命令"
 	)
 	_check(
 		preparation_nation.campaign_theater_anchor_city
@@ -14529,20 +14522,15 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		plan_built
 		and plan_stable
-		and plan_nation.campaign_plan_targets.size() == 3
+		and plan_nation.campaign_plan_targets.size()
+			<= Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
 		and plan_nation.campaign_plan_targets.has(
 			plan_primary
-		)
-		and plan_nation.campaign_plan_targets.has(
-			plan_secondary
-		)
-		and plan_nation.campaign_plan_targets.has(
-			plan_third
 		)
 		and not plan_nation.campaign_plan_targets.has(plan_fourth)
 		and plan_nation.campaign_attack_assignments
 			== frozen_assignments,
-		"兵力足够时应生成并冻结三个方向的具体军队分工"
+		"攻势必须冻结三目标上限内按实际需求形成的军队分工"
 	)
 	var multi_target_launched := (
 		plan_sim._launch_campaign_offensive(
@@ -14568,16 +14556,14 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		multi_target_launched
 		and launched_plan_targets.has(plan_primary)
-		and launched_plan_targets.has(plan_secondary)
-		and launched_plan_targets.has(plan_third)
 		and not launched_plan_targets.has(plan_fourth)
 		and assignments_match_orders,
-		"攻势执行必须逐军遵守三个计划目标"
+		"攻势执行必须逐军遵守需求规划产生的目标"
 	)
 	plan_sim.free()
 
-	# 正式地图宽正面：每个合法方向只获得一个独立指挥单位，剩余单位
-	# 不再为了填平单个目标的兵力需求而重复分配。
+	# 正式地图宽正面：每个合法方向先获得一个指挥单位，剩余单位再补
+	# 主目标的实际兵力与战力缺口。
 	var broad_state := GameState.new()
 	broad_state.generate_grid_world(32066)
 	broad_state.uses_heightmap = true
@@ -14590,7 +14576,7 @@ func _test_diplomacy_state_and_ai() -> void:
 		broad_state.cities[broad_target].owner_nation = 1
 		broad_state.recognized_city_owners[broad_target] = 1
 		broad_state.edge_of(broad_origin, broad_target).max_manpower = 30000
-	# 主目标需要约60000兵力，但分配器仍只给它一个聚合指挥单位。
+	# 主目标需要约60000兵力，但每个目标仍只取得一个聚合指挥单位。
 	broad_state.cities[broad_targets[0]].fort_strength = 300
 	broad_state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.WAR
@@ -14811,6 +14797,21 @@ func _test_diplomacy_state_and_ai() -> void:
 		if candidate_target != invalid_original_target:
 			invalid_second_target = candidate_target
 			break
+	if invalid_second_target < 0:
+		for candidate_target in invalid_broad_plan.candidate_target_ids:
+			if candidate_target == invalid_original_target:
+				continue
+			invalid_second_target = candidate_target
+			invalid_broad_plan.assigned_target_ids.append(
+				invalid_second_target
+			)
+			invalid_broad_plan.target_to_groups[
+				invalid_second_target
+			] = [] as Array[int]
+			invalid_broad_plan.target_group_budget[
+				invalid_second_target
+			] = 1
+			break
 	if invalid_second_target >= 0:
 		(
 			invalid_broad_plan.target_to_groups[invalid_second_target]
@@ -14861,11 +14862,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		broad_built
 			and broad_nation.campaign_preparation_targets.size() == 3
-			and int(broad_counts.get(broad_targets[0], 0)) == 1
+			and int(broad_counts.get(broad_targets[0], 0)) == 2
 			and int(broad_counts.get(broad_targets[1], 0)) == 1
 			and int(broad_counts.get(broad_targets[2], 0)) == 1
-			and int(broad_counts.get(-1, 0)) == 1,
-		"正式地图攻势必须为三个方向各分配一个指挥单位，剩余单位保持空闲：%s"
+			and int(broad_counts.get(-1, 0)) == 0,
+		"正式地图攻势必须先覆盖三方向，再按主目标需求投入余量：%s"
 			% broad_counts
 	)
 	broad_nation.treasury_gold = 100000
@@ -15037,7 +15038,7 @@ func _test_diplomacy_state_and_ai() -> void:
 	_check(
 		broad_recollected
 			and broad_sim.ai_last_command_commit_failures == 0
-			and broad_attackers == 3
+			and broad_attackers == broad_armies.size()
 			and broad_launched_targets.size() == 3
 			and broad_nation.treasury_gold
 				== transaction_treasury_before - transaction_cost
@@ -15051,7 +15052,7 @@ func _test_diplomacy_state_and_ai() -> void:
 			and broad_nation
 				.campaign_preparation_group_assignments.is_empty(),
 		(
-			"事务恢复后应只扣一次费用，并在三个方向各投入一个指挥单位："
+			"事务恢复后应只扣一次费用，并投入全部需求规划参与者："
 			+ "armies=%d targets=%s"
 		) % [broad_attackers, broad_launched_targets]
 	)
@@ -15350,11 +15351,9 @@ func _test_diplomacy_state_and_ai() -> void:
 	)
 	_check(
 		role_preparation_built
-			and role_assignments.size() == 1
-			and (
-				role_assignments.has(role_heavy.id)
-				or role_assignments.has(other_group_light.id)
-			)
+			and role_assignments.size() == 2
+			and role_assignments.has(role_heavy.id)
+			and role_assignments.has(other_group_light.id)
 			and not role_assignments.has(role_city_guard.id)
 			and not role_assignments.has(role_edge_support.id)
 			and role_attack_sim
@@ -15363,7 +15362,7 @@ func _test_diplomacy_state_and_ai() -> void:
 					other_group_light,
 					role_attack_target
 				),
-		"高防目标也只分配一个聚合指挥单位，独立填线军不得混入"
+		"高防目标应按需求投入可用指挥单位，独立填线军不得混入"
 	)
 	var late_group_light := _make_army(1987, 0, 5000, 10, 10)
 	late_group_light.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
@@ -15469,10 +15468,10 @@ func _test_diplomacy_state_and_ai() -> void:
 				== 15000
 			and int(unified_demand["required_manpower"])
 				== 22000
-			and int(unified_demand["command_units"]) == 1
+			and not unified_demand.has("command_units")
 			and not unified_demand.has("assault_groups")
 			and not unified_demand.has("groups"),
-		"统一需求模型必须为目标配置一个聚合指挥单位，并保留兵力门槛"
+		"统一需求模型只保留兵力和战力门槛，不再计算指挥单位数量"
 	)
 	unified_demand_sim.free()
 
@@ -16112,7 +16111,7 @@ func _test_diplomacy_state_and_ai() -> void:
 			and lead_army.ai_target_city
 				== post_capture_target
 			and lead_army.ai_order_reason.contains(
-				"两步攻势第二步"
+				"连续攻势推进"
 			)
 			and lead_army.offensive_bonus_until_day
 				== lead_bonus_deadline
@@ -16152,9 +16151,11 @@ func _test_diplomacy_state_and_ai() -> void:
 	var consolidate_origin := 9
 	var consolidate_target := 10
 	var consolidate_next := 11
+	var consolidate_third := 12
 	for enemy_city in [
 		consolidate_target,
 		consolidate_next,
+		consolidate_third,
 	]:
 		consolidate_state.cities[enemy_city].owner_nation = 1
 		consolidate_state.recognized_city_owners[enemy_city] = 1
@@ -16165,6 +16166,10 @@ func _test_diplomacy_state_and_ai() -> void:
 	consolidate_state.edge_of(
 		consolidate_target,
 		consolidate_next
+	).max_manpower = 30000
+	consolidate_state.edge_of(
+		consolidate_next,
+		consolidate_third
 	).max_manpower = 30000
 	var consolidate_army := _make_army(
 		9960,
@@ -16204,13 +16209,13 @@ func _test_diplomacy_state_and_ai() -> void:
 			and consolidate_army.ai_action
 				== ActionCandidate.Kind.ATTACK
 			and consolidate_army.ai_order_reason.contains(
-				"两步攻势第二步"
+				"连续攻势推进"
 			)
-			and not consolidate_state.nations[0]
+			and consolidate_state.nations[0]
 				.campaign_post_capture_plans.has(
-					consolidate_target
+					consolidate_next
 				),
-		"新占城市后，执行重军必须按预定路线继续第二步"
+		"新占城市后，执行重军必须继续预定目标并为弱城续接推进计划"
 	)
 	consolidate_sim._settle_idle(
 		consolidate_army,
@@ -16260,7 +16265,7 @@ func _test_diplomacy_state_and_ai() -> void:
 			and consolidate_army.ai_target_city
 				== consolidate_next
 			and consolidate_army.ai_order_reason.contains(
-				"两步攻势第二步"
+				"连续攻势推进"
 			),
 		"第二步不得因满准备加成到期或守军评分退化为驻边"
 	)
@@ -16295,7 +16300,7 @@ func _test_diplomacy_state_and_ai() -> void:
 				.campaign_post_capture_plans.has(
 					consolidate_target
 				),
-		"执行重军士气归零后必须终止两步攻势并就地驻扎"
+		"执行重军士气归零后必须终止连续攻势并就地驻扎"
 	)
 	consolidate_sim.free()
 

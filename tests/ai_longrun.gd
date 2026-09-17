@@ -209,11 +209,11 @@ func _init() -> void:
 						role_deployment_orders += 1
 				if army.ai_order_created_day == state.day:
 					if army.ai_order_reason.contains(
-						"两步攻势第二步"
+						"连续攻势推进"
 					):
 						post_capture_attacks += 1
 					elif army.ai_order_reason.contains(
-						"两步攻势终止"
+						"连续攻势终止"
 					):
 						post_capture_city_holds += 1
 				if (
@@ -738,7 +738,8 @@ func _init() -> void:
 		or total_war_declarations == 0
 		or total_offensives <= total_war_declarations
 		or total_multi_target_preparations == 0
-		or global_max_parallel_targets < 4
+		or global_max_parallel_targets
+			< Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
 	):
 		failed = true
 	print(

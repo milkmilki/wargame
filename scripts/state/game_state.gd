@@ -2687,6 +2687,7 @@ func assign_or_merge_main_army(army: Army) -> Army:
 	target.supply_food_debt += army.supply_food_debt
 	for campaign_nation in nations:
 		_clear_army_campaign_references(campaign_nation, army.id)
+	_detach_merged_army_from_battles(army)
 	armies.erase(army)
 	return target
 
@@ -2696,6 +2697,22 @@ func _clear_army_campaign_references(nation: Nation, army_id: int) -> void:
 	nation.campaign_attack_assignments.erase(army_id)
 	nation.campaign_attack_echelons.erase(army_id)
 	nation.campaign_launched_armies.erase(army_id)
+
+
+func _detach_merged_army_from_battles(army: Army) -> void:
+	for battle in battles:
+		battle.side_a.erase(army)
+		battle.side_b.erase(army)
+		battle.reinforce_fresh_a.erase(army)
+		battle.reinforce_fresh_b.erase(army)
+		battle.routed_a.erase(army)
+		battle.routed_b.erase(army)
+		battle.frontline_priority_a.erase(army)
+		battle.frontline_priority_b.erase(army)
+		if not battle.finished and not _battle_has_hostile_sides(battle):
+			battle.finished = true
+			battle.winner_side = 0
+	army.battle_id = -1
 
 
 func create_army(
@@ -5006,16 +5023,26 @@ func finalize_annexation_after_territory_commit(
 		or absorber == absorbed
 	):
 		return
+	var overflow_main_armies: Array[Army] = []
 	for group in nations[absorbed].battle_groups:
 		var members := battle_group_members(absorbed, group.id)
-		var new_group_id := nations[absorber].next_battle_group_id
-		nations[absorber].next_battle_group_id += 1
-		group.id = new_group_id
-		group.owner_nation = absorber
-		nations[absorber].battle_groups.append(group)
-		for member in members:
-			member.owner_nation = absorber
-			member.battle_group_id = new_group_id
+		if (
+			nations[absorber].battle_groups.size()
+				< BattleGroup.MAX_COMMAND_UNITS
+		):
+			var new_group_id := nations[absorber].next_battle_group_id
+			nations[absorber].next_battle_group_id += 1
+			group.id = new_group_id
+			group.owner_nation = absorber
+			nations[absorber].battle_groups.append(group)
+			for member in members:
+				member.owner_nation = absorber
+				member.battle_group_id = new_group_id
+		else:
+			for member in members:
+				member.owner_nation = absorber
+				member.battle_group_id = -1
+				overflow_main_armies.append(member)
 	nations[absorbed].battle_groups.clear()
 	for army in armies:
 		if army.owner_nation == absorbed and army.size > 0:
@@ -5032,6 +5059,11 @@ func finalize_annexation_after_territory_commit(
 				RulerProfile.morale_multiplier(nations[absorber])
 			)
 	_reconcile_battles_after_annexation()
+	for overflow_army in overflow_main_armies:
+		assert(
+			assign_or_merge_main_army(overflow_army) != null,
+			"兼并超额主战军必须并入现有指挥单位"
+		)
 	add_manpower(absorber, nations[absorbed].manpower_pool)
 	nations[absorbed].manpower_pool = 0
 	nations[absorber].treasury_gold += nations[absorbed].treasury_gold

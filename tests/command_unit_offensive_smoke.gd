@@ -52,13 +52,14 @@ func _run() -> void:
 			nation_id, target_city
 		)
 		_check(
-			int(demand.get("command_units", 0)) == 1
+			not demand.has("command_units")
 			and not demand.has("groups")
 			and not demand.has("is_decisive"),
-			"target_uses_one_command_without_group_rules"
+			"target_demand_contains_only_force_thresholds"
 		)
 		var expected_staged := int(ceil(
 			float(demand.get("required_manpower", 0))
+				* Simulation.CAMPAIGN_TARGET_COMMIT_RATIO
 				* Simulation.CAMPAIGN_STAGED_TROOP_RATIO
 		))
 		var plan := CampaignAllocationPlan.new()
@@ -77,13 +78,16 @@ func _run() -> void:
 	if main_army != null:
 		nation.manpower_pool = maxi(nation.manpower_pool, 100000)
 		nation.treasury_gold = maxi(nation.treasury_gold, 100000)
-		var recruitment := simulation._next_battle_group_recruitment(
-			nation_id, true, true
+		var ordered_groups: Array[BattleGroup] = nation.battle_groups.duplicate()
+		ordered_groups.sort_custom(func(a: BattleGroup, b: BattleGroup) -> bool:
+			return a.id < b.id
 		)
+		var recruitment := simulation._next_battle_group_recruitment(nation_id)
 		_check(
 			int(recruitment.get("expand_army_id", -1)) >= 0
+			and int(recruitment.get("group_id", -1)) == ordered_groups[0].id
 			and not bool(recruitment.get("create_group", false)),
-			"full_command_roster_expands_existing_pool"
+			"seventh_legion_cycles_to_command_one"
 		)
 		var expanded_army := _army_by_id(
 			state, int(recruitment.get("expand_army_id", -1))
@@ -118,6 +122,14 @@ func _run() -> void:
 				and nation.treasury_gold == gold_before - expansion_cost,
 				"expansion_reuses_entity_and_pays_resources"
 			)
+			var next_recruitment := simulation._next_battle_group_recruitment(
+				nation_id
+			)
+			_check(
+				int(next_recruitment.get("group_id", -1))
+					== ordered_groups[1].id,
+				"eighth_legion_cycles_to_command_two"
+			)
 
 	var army_count_before_merge := state.armies.size()
 	var capacity_before_merge := _main_capacity(state, nation_id)
@@ -136,6 +148,7 @@ func _run() -> void:
 			== capacity_before_merge + GameState.INITIAL_HEAVY_ARMY_SIZE,
 		"overflow_main_army_merges_into_existing_command"
 	)
+	_test_revoke_vassal_merges_command_units()
 
 	if not _failures.is_empty():
 		for failure in _failures:
@@ -181,6 +194,53 @@ func _main_capacity(state: GameState, nation_id: int) -> int:
 		if army.owner_nation == nation_id and army.is_main_battle_role():
 			total += army.max_size
 	return total
+
+
+func _test_revoke_vassal_merges_command_units() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(86421)
+	state.armies.clear()
+	for nation in state.nations:
+		nation.battle_groups.clear()
+		nation.next_battle_group_id = 0
+	var overlord_id := 0
+	var subject_id := 1
+	state.suzerainty[subject_id] = {
+		"overlord_id": overlord_id,
+		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
+		"created_day": state.day,
+		"last_centralization_day": -1,
+		"civil_war": false,
+	}
+	for nation_id in [overlord_id, subject_id]:
+		for command_index in range(BattleGroup.MAX_COMMAND_UNITS):
+			var group := state.create_battle_group(nation_id)
+			var army := state._spawn_conjured_army(
+				nation_id,
+				state.nations[nation_id].capital_city_id,
+				GameState.INITIAL_HEAVY_ARMY_SIZE,
+				Army.StrategicRole.MAIN
+			)
+			_check(
+				group != null
+				and state.assign_army_to_battle_group(army, group.id),
+				"revocation_fixture_command_created_%d_%d"
+					% [nation_id, command_index]
+			)
+	var expected_capacity := (
+		BattleGroup.MAX_COMMAND_UNITS
+		* 2
+		* GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	var revoked := state.revoke_vassal(subject_id)
+	_check(
+		revoked
+		and state.nations[overlord_id].battle_groups.size()
+			== BattleGroup.MAX_COMMAND_UNITS
+		and _main_capacity(state, overlord_id) == expected_capacity
+		and state._battle_group_structure_valid(),
+		"revocation_merges_twelve_commands_into_six_pools"
+	)
 
 
 func _check(condition: bool, label: String) -> void:
