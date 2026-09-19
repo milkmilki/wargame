@@ -42,8 +42,6 @@ func _verify_same_day_frontline_refresh() -> void:
 	var target_group: BattleGroup = fixture["main_group"]
 	var old_sector_city: int = fixture["old_sector_city"]
 
-	var before_preparation := state.nations[new_owner].campaign_preparation_assignments.duplicate(true)
-	var before_attack := state.nations[old_owner].campaign_attack_assignments.duplicate(true)
 	var before_group_count := state.nations[new_owner].battle_groups.size()
 	var before_group_members := state.battle_group_members(new_owner, target_group.id, false).size()
 	var before_main_group_id := main_army.battle_group_id
@@ -147,13 +145,11 @@ func _verify_same_day_frontline_refresh() -> void:
 		]
 	)
 	_assert(
-		state.nations[new_owner].campaign_preparation_assignments == before_preparation
-			and state.nations[old_owner].campaign_attack_assignments == before_attack
-			and main_army.battle_group_id == before_main_group_id
+		main_army.battle_group_id == before_main_group_id
 			and main_army.location_city == before_main_location
 			and state.nations[new_owner].battle_groups.size() == before_group_count
 			and state.battle_group_members(new_owner, target_group.id, false).size() == before_group_members,
-		"same-day flush must not alter campaign preparation/attack assignments or battle groups"
+		"same-day flush must not alter battle groups"
 	)
 	_assert(
 		sim.ai_last_command_commit_failures == 0,
@@ -233,9 +229,6 @@ func _make_refresh_fixture() -> Dictionary:
 		if candidate_city != first_capture_city:
 			second_capture_city = candidate_city
 			break
-	state.nations[old_owner].campaign_attack_assignments[
-		old_locked.id
-	] = second_capture_city
 	old_locked.ai_action = ActionCandidate.Kind.HOLD
 	old_locked.ai_target_city = second_capture_city
 	_assert(

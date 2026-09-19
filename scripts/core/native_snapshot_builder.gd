@@ -44,8 +44,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var last_military_upkeep := PackedInt32Array()
 	var unpaid_military_upkeep := PackedInt32Array()
 	var payment_ratio := PackedFloat64Array()
-	var last_offensive_gold_cost := PackedInt32Array()
-	var last_offensive_gold_day := PackedInt32Array()
 	var granary_food := PackedInt32Array()
 	var last_food_demand := PackedInt32Array()
 	var food_demand_ema := PackedFloat64Array()
@@ -64,15 +62,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var war_preparation_target := PackedInt32Array()
 	var war_preparation_objective := PackedInt32Array()
 	var war_preparation_started_day := PackedInt32Array()
-	var war_preparation_scope := PackedByteArray()
-	var campaign_last_offensive_day := PackedInt32Array()
-	var campaign_next_offensive_day := PackedInt32Array()
-	var campaign_offensive_count := PackedInt32Array()
-	var campaign_preparation_started_day := PackedInt32Array()
-	var campaign_plan_wave := PackedInt32Array()
-	var campaign_plan_primary_city := PackedInt32Array()
-	var campaign_theater_anchor_city := PackedInt32Array()
-	var campaign_theater_started_day := PackedInt32Array()
 	var alive := PackedByteArray()
 	for nation in state.nations:
 		ids.append(nation.id)
@@ -84,10 +73,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 			nation.unpaid_military_upkeep
 		)
 		payment_ratio.append(nation.military_payment_ratio)
-		last_offensive_gold_cost.append(
-			nation.last_offensive_gold_cost
-		)
-		last_offensive_gold_day.append(nation.last_offensive_gold_day)
 		granary_food.append(nation.granary_food)
 		last_food_demand.append(nation.last_food_demand)
 		food_demand_ema.append(nation.food_demand_ema)
@@ -132,30 +117,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 		war_preparation_started_day.append(
 			nation.war_preparation_started_day
 		)
-		# 原生快照 ABI 保留该数组键；唯一战争作用域固定为 0。
-		war_preparation_scope.append(0)
-		campaign_last_offensive_day.append(
-			nation.campaign_last_offensive_day
-		)
-		campaign_next_offensive_day.append(
-			nation.campaign_next_offensive_day
-		)
-		campaign_offensive_count.append(
-			nation.campaign_offensive_count
-		)
-		campaign_preparation_started_day.append(
-			nation.campaign_preparation_started_day
-		)
-		campaign_plan_wave.append(nation.campaign_plan_wave)
-		campaign_plan_primary_city.append(
-			nation.campaign_plan_primary_city
-		)
-		campaign_theater_anchor_city.append(
-			nation.campaign_theater_anchor_city
-		)
-		campaign_theater_started_day.append(
-			nation.campaign_theater_started_day
-		)
 		alive.append(int(nation.alive))
 
 	var diplomacy := PackedByteArray()
@@ -163,7 +124,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var truce_until_day := PackedInt32Array()
 	var war_objective_city := PackedInt32Array()
 	var war_objective_started_day := PackedInt32Array()
-	var war_objective_scope := PackedByteArray()
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(state.nations.size()):
 			diplomacy.append(
@@ -194,8 +154,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 				if directed
 				else -1
 			)
-			# 原生快照 ABI 保留该数组键；所有战争均为联盟战争。
-			war_objective_scope.append(0)
 	return {
 		"count": state.nations.size(),
 		"ids": ids,
@@ -205,8 +163,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"last_military_upkeep": last_military_upkeep,
 		"unpaid_military_upkeep": unpaid_military_upkeep,
 		"payment_ratio": payment_ratio,
-		"last_offensive_gold_cost": last_offensive_gold_cost,
-		"last_offensive_gold_day": last_offensive_gold_day,
 		"granary_food": granary_food,
 		"last_food_demand": last_food_demand,
 		"food_demand_ema": food_demand_ema,
@@ -227,22 +183,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"war_preparation_objective": war_preparation_objective,
 		"war_preparation_started_day":
 			war_preparation_started_day,
-		"war_preparation_scope": war_preparation_scope,
-		"campaign_last_offensive_day":
-			campaign_last_offensive_day,
-		"campaign_next_offensive_day":
-			campaign_next_offensive_day,
-		"campaign_offensive_count":
-			campaign_offensive_count,
-		"campaign_preparation_started_day":
-			campaign_preparation_started_day,
-		"campaign_plan_wave": campaign_plan_wave,
-		"campaign_plan_primary_city":
-			campaign_plan_primary_city,
-		"campaign_theater_anchor_city":
-			campaign_theater_anchor_city,
-		"campaign_theater_started_day":
-			campaign_theater_started_day,
 		"alive": alive,
 		"diplomacy": diplomacy,
 		"diplomacy_since_day": diplomacy_since_day,
@@ -250,7 +190,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"war_objective_city": war_objective_city,
 		"war_objective_started_day":
 			war_objective_started_day,
-		"war_objective_scope": war_objective_scope,
 	}
 
 
@@ -404,16 +343,12 @@ static func _build_armies(state: GameState) -> Dictionary:
 	var ai_order_created_day := PackedInt32Array()
 	var ai_order_until_day := PackedInt32Array()
 	var ai_order_score := PackedFloat64Array()
-	var campaign_preparation_target := PackedInt32Array()
-	var campaign_attack_target := PackedInt32Array()
-	var campaign_echelon := PackedInt32Array()
 	var on_edge := PackedByteArray()
 	var encounter_blocked := PackedByteArray()
 	var starving := PackedByteArray()
 	var resume_holding_after_battle := PackedByteArray()
 	var forced_retreat := PackedByteArray()
 	var diplomatic_repatriation := PackedByteArray()
-	var campaign_launched := PackedByteArray()
 	var indices := {}
 	for index in range(state.armies.size()):
 		var army: Army = state.armies[index]
@@ -463,18 +398,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 		ai_order_created_day.append(army.ai_order_created_day)
 		ai_order_until_day.append(army.ai_order_until_day)
 		ai_order_score.append(army.ai_order_score)
-		campaign_preparation_target.append(int(
-			state.nations[army.owner_nation]
-				.campaign_preparation_assignments.get(army.id, -1)
-		))
-		campaign_attack_target.append(int(
-			state.nations[army.owner_nation]
-				.campaign_attack_assignments.get(army.id, -1)
-		))
-		campaign_echelon.append(int(
-			state.nations[army.owner_nation]
-				.campaign_attack_echelons.get(army.id, -1)
-		))
 		on_edge.append(int(army.on_edge))
 		encounter_blocked.append(int(army.encounter_blocked))
 		starving.append(int(army.starving))
@@ -485,10 +408,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 		diplomatic_repatriation.append(
 			int(army.diplomatic_repatriation)
 		)
-		campaign_launched.append(int(
-			state.nations[army.owner_nation]
-				.campaign_launched_armies.has(army.id)
-		))
 	return {
 		"indices": indices,
 		"snapshot": {
@@ -533,10 +452,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"ai_order_created_day": ai_order_created_day,
 			"ai_order_until_day": ai_order_until_day,
 			"ai_order_score": ai_order_score,
-			"campaign_preparation_target":
-				campaign_preparation_target,
-			"campaign_attack_target": campaign_attack_target,
-			"campaign_echelon": campaign_echelon,
 			"on_edge": on_edge,
 			"encounter_blocked": encounter_blocked,
 			"starving": starving,
@@ -545,7 +460,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"forced_retreat": forced_retreat,
 			"diplomatic_repatriation":
 				diplomatic_repatriation,
-			"campaign_launched": campaign_launched,
 		},
 	}
 

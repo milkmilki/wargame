@@ -24,7 +24,6 @@ const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = 1
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 1400
 const FORMATION_CREATION_UPKEEP_MONTHS: int = 10
-const OFFENSIVE_COMMAND_GOLD_PER_ARMY: int = 2
 const CITY_FOOD_PER_HALF_YEAR_MIN: int = 400
 const CITY_FOOD_PER_HALF_YEAR_MAX: int = 600
 const TERRAIN_CITY_GOLD_PER_MONTH_MIN: int = 1
@@ -135,15 +134,6 @@ static func formation_creation_gold_cost(formation_size: int) -> int:
 	)
 
 
-static func offensive_army_gold_cost(troops: int) -> int:
-	if troops <= 0:
-		return 0
-	return (
-		army_monthly_upkeep(troops)
-		+ OFFENSIVE_COMMAND_GOLD_PER_ARMY
-	)
-
-
 func nation_monthly_military_upkeep(nation_id: int) -> int:
 	var total := 0
 	for army in armies:
@@ -241,8 +231,6 @@ var river_features: Array[Dictionary] = []
 var river_paths: Array[PackedVector2Array] = []
 ## 法理归属用于区分“本国底色”和“占领国斜线”；和平协议会确认实际控制区。
 var recognized_city_owners: PackedInt32Array = PackedInt32Array()
-## 短时战略箭头事件：{start_day,end_day,nation_id,target_city,origin_cities,wave}。
-var campaign_visual_events: Array[Dictionary] = []
 ## 地方叛乱真源：rebel_nation_id -> {parent_id,started_day,core_city_ids,
 ## recognized,active,reason}。削藩内战继续使用 suzerainty.civil_war。
 var rebellions: Dictionary = {}
@@ -766,7 +754,6 @@ func _reset_world(world_seed: int) -> void:
 	river_features.clear()
 	river_paths.clear()
 	recognized_city_owners = PackedInt32Array()
-	campaign_visual_events.clear()
 	rebellions.clear()
 	trade_routes.clear()
 	trade_revision = 0
@@ -2078,18 +2065,6 @@ func rebuild_administrative_regions() -> Dictionary:
 		nation.administrative_campaign_plan = null
 		nation.war_preparation_objective_center_city = -1
 		nation.campaign_objective_center_city = -1
-		nation.campaign_theater_anchor_city = -1
-		nation.campaign_theater_started_day = -1
-		nation.campaign_preparation_targets.clear()
-		nation.campaign_preparation_assignments.clear()
-		nation.campaign_preparation_group_assignments.clear()
-		nation.campaign_preparation_plan = null
-		nation.campaign_post_capture_plans.clear()
-		nation.campaign_plan_targets.clear()
-		nation.campaign_plan_primary_city = -1
-		nation.campaign_attack_assignments.clear()
-		nation.campaign_attack_echelons.clear()
-		nation.campaign_active_echelons.clear()
 	return {
 		"region_count": administrative_region_count,
 		"center_count": administrative_center_city_ids.size(),
@@ -4744,12 +4719,8 @@ func _grant_vassal_line_armies(
 		army.defensive_blocked_edge_b = -1
 		army.occupation_claimant_nation = -1
 		army.diplomatic_repatriation = false
-		overlord.campaign_preparation_assignments.erase(
-			army.id
-		)
-		overlord.campaign_attack_assignments.erase(army.id)
-		overlord.campaign_attack_echelons.erase(army.id)
-		overlord.campaign_launched_armies.erase(army.id)
+		if overlord.administrative_campaign_plan != null:
+			overlord.administrative_campaign_plan.army_assignments.erase(army.id)
 	var target := owned.size()
 	# 只按 LINE 计数；藩王未来已有 MAIN 时也不得挤占地方防务配额。
 	var existing := 0
@@ -7211,30 +7182,6 @@ func recognize_coalition_occupied_territory(
 	if bool(result.get("changed", false)):
 		prune_dead_suzerainty()
 	return result.get("changed_city_ids", []) as Array[int]
-
-
-func add_campaign_visual_event(
-	nation_id: int,
-	target_city: int,
-	origin_cities: Array[int],
-	wave: int,
-	duration_days: int
-) -> void:
-	campaign_visual_events.append({
-		"start_day": day,
-		"end_day": day + maxi(duration_days, 1),
-		"nation_id": nation_id,
-		"target_city": target_city,
-		"origin_cities": origin_cities.duplicate(),
-		"wave": wave,
-	})
-
-
-func prune_campaign_visual_events() -> void:
-	campaign_visual_events = campaign_visual_events.filter(
-		func(event: Dictionary) -> bool:
-			return day <= int(event["end_day"])
-	)
 
 
 func cities_of(nation_id: int) -> Array[City]:

@@ -142,7 +142,6 @@ func _create_view_state(live_state: GameState) -> GameState:
 	# 历史政治视图明确不携带任何实时军事或经济动画集合。
 	view.armies = [] as Array[Army]
 	view.battles = [] as Array[Battle]
-	view.campaign_visual_events = [] as Array[Dictionary]
 	view.trade_routes = [] as Array[Dictionary]
 	return view
 

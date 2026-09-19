@@ -100,11 +100,6 @@ const COUNTRY_FILL_FADE_COEFFICIENT: float = 0.035
 const COUNTRY_FILL_MIN_OPACITY: float = 0.0
 const BOUNDARY_ANTIALIAS_PX: float = 0.0
 const VASSAL_BRIGHTNESS_STEP: float = 0.05
-const CAMPAIGN_ARROW_TEXTURE := preload(
-	"res://assets/ui/strategic/offensive_arc_arrow.png"
-)
-const CAMPAIGN_ARROW_SOURCE_TAIL := Vector2(20.0, 616.0)
-const CAMPAIGN_ARROW_SOURCE_TIP := Vector2(1490.0, 15.0)
 
 enum FormationIcon {
 	INFANTRY,
@@ -1990,7 +1985,6 @@ func _draw() -> void:
 		_draw_province_boundaries()
 		if not _history_preview_active:
 			_draw_national_boundaries()
-		_draw_campaign_arrows()
 		_draw_cities()
 		_draw_battles()
 		_draw_armies()
@@ -4404,71 +4398,6 @@ func _draw_owned_boundary_sides_2d(
 		)
 
 
-func _draw_campaign_arrows() -> void:
-	for event in state.campaign_visual_events:
-		var target_city := int(event.get("target_city", -1))
-		var nation_id := int(event.get("nation_id", -1))
-		if (
-			target_city < 0
-			or target_city >= state.cities.size()
-			or nation_id < 0
-			or nation_id >= state.nations.size()
-		):
-			continue
-		var alpha := campaign_arrow_alpha(state.day, event)
-		if alpha <= 0.0:
-			continue
-		var origins: Array = event.get("origin_cities", [])
-		for index in range(origins.size()):
-			var origin_city := int(origins[index])
-			if origin_city < 0 or origin_city >= state.cities.size():
-				continue
-			_draw_campaign_arrow(
-				_city_center(state.cities[origin_city]),
-				_city_center(state.cities[target_city]),
-				alpha,
-				index
-			)
-
-
-static func campaign_arrow_alpha(
-	game_day: int,
-	event: Dictionary
-) -> float:
-	var start_day := int(event.get("start_day", game_day))
-	var end_day := int(event.get("end_day", game_day))
-	if game_day < start_day or game_day > end_day:
-		return 0.0
-	var remaining_days := end_day - game_day
-	return clampf(
-		(float(remaining_days) + 1.0) / 4.0,
-		0.35,
-		1.0
-	)
-
-
-func _draw_campaign_arrow(
-	start: Vector2,
-	finish: Vector2,
-	alpha: float,
-	curve_index: int
-) -> void:
-	var delta := finish - start
-	if delta.length_squared() < 1.0:
-		return
-	var source_delta := (
-		CAMPAIGN_ARROW_SOURCE_TIP - CAMPAIGN_ARROW_SOURCE_TAIL
-	)
-	var scale := delta.length() / source_delta.length()
-	var rotation := delta.angle() - source_delta.angle()
-	draw_set_transform(start, rotation, Vector2.ONE * scale)
-	draw_texture(
-		CAMPAIGN_ARROW_TEXTURE, -CAMPAIGN_ARROW_SOURCE_TAIL,
-		Color(1.0, 1.0, 1.0, 0.94 * alpha)
-	)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-
 func _draw_edges() -> void:
 	var route_alpha := 0.28 if _map_mode == MapMode.TRADE else 1.0
 	for e in state.edges:
@@ -5936,15 +5865,12 @@ static func nation_action_summary(
 				),
 			]
 		)
-	elif not nation.campaign_attack_assignments.is_empty():
-		var targets := {}
-		for target_value in nation.campaign_attack_assignments.values():
-			targets[int(target_value)] = true
+	elif nation.administrative_campaign_plan != null:
 		actions.append(
-			"攻势W%d·%d路" % [
-				nation.campaign_plan_wave,
-				targets.size(),
-			]
+			"州战→%s" % WorldNaming.city_display_name(
+				game_state,
+				nation.administrative_campaign_plan.center_city_id
+			)
 		)
 	if nation.ai_last_force_day >= 0:
 		actions.append(
@@ -5963,13 +5889,6 @@ static func nation_action_summary(
 				WorldNaming.nation_display_name(
 					game_state, nation.ai_last_diplomatic_target
 				),
-			]
-		)
-	if actions.is_empty() and nation.last_offensive_gold_day >= 0:
-		actions.append(
-			"攻势D%d·费%d" % [
-				nation.last_offensive_gold_day,
-				nation.last_offensive_gold_cost,
 			]
 		)
 	return "；".join(actions) if not actions.is_empty() else "无近期动作"
@@ -6718,10 +6637,7 @@ static func _nation_detail_line_count(
 	var count := 1 + _section_layout_line_count(
 		PackedInt32Array([2, 2, 3, 1, diplomacy_lines])
 	)
-	if (
-		not nation.campaign_attack_assignments.is_empty()
-		or nation.last_offensive_gold_day >= 0
-	):
+	if nation.administrative_campaign_plan != null:
 		count += 1
 	return count
 
@@ -7229,41 +7145,16 @@ static func nation_detail_sections(
 		]},
 		{"title": "外交与行动", "lines": diplomacy_lines},
 	]
-	if not n.campaign_attack_assignments.is_empty():
-		var target_set := {}
-		for target_value in n.campaign_attack_assignments.values():
-			target_set[int(target_value)] = true
-		var target_ids := target_set.keys()
-		target_ids.sort()
-		var target_labels: Array[String] = []
-		for target_value in target_ids:
-			if target_labels.size() >= 4:
-				break
-			target_labels.append(WorldNaming.city_display_name(
-				game_state, int(target_value)
-			))
-		var omitted_targets := maxi(
-			target_ids.size() - target_labels.size(),
-			0
-		)
-		var target_summary := " ".join(target_labels)
-		if omitted_targets > 0:
-			target_summary += " +%d" % omitted_targets
+	if n.administrative_campaign_plan != null:
+		var campaign := n.administrative_campaign_plan
 		(sections[-1]["lines"] as Array).append(
-			"计划W%d %d路 费%d  %s" % [
-				n.campaign_plan_wave,
-				target_ids.size(),
-				n.last_offensive_gold_cost,
-				target_summary,
+			"州战 %s  阶段%d  兵力%d" % [
+				WorldNaming.city_display_name(
+					game_state, campaign.center_city_id
+				),
+				campaign.phase,
+				campaign.army_assignments.size(),
 			]
-		)
-	elif n.last_offensive_gold_day >= 0:
-		(sections[-1]["lines"] as Array).append(
-			"上次攻势 Day%d 组织费%d"
-				% [
-					n.last_offensive_gold_day,
-					n.last_offensive_gold_cost,
-				]
 		)
 	return sections
 

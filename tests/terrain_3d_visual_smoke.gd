@@ -133,21 +133,6 @@ func _prepare_frontend_showcase(state: GameState) -> void:
 	if frontier_edges.is_empty():
 		return
 	var first := frontier_edges[0]
-	var target := first.city_b
-	var origins: Array[int] = [first.city_a]
-	if frontier_edges.size() > 1:
-		origins.append(frontier_edges[1].city_a)
-	state.add_campaign_visual_event(
-		state.cities[first.city_a].owner_nation,
-		target, origins, 1, Simulation.CAMPAIGN_ARROW_DURATION_DAYS
-	)
-	if frontier_edges.size() > 2:
-		var second := frontier_edges[2]
-		state.add_campaign_visual_event(
-			state.cities[second.city_a].owner_nation,
-			second.city_b, [second.city_a], 2,
-			Simulation.CAMPAIGN_ARROW_DURATION_DAYS
-		)
 	var field := state.new_battle(Battle.Kind.FIELD)
 	field.edge = first
 	field.contact_dist_a = float(first.distance) * 0.52

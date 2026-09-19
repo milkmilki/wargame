@@ -914,7 +914,7 @@ static func _choose_holding(
 		return ActionCandidate.make(
 			ActionCandidate.Kind.HOLD,
 			hold_score,
-			"等待国家级两步攻势计划，不进行独立战术进攻",
+			"等待州级战役计划，不进行独立战术进攻",
 			enemy_endpoint
 		)
 	if (

@@ -34,8 +34,8 @@ func _run() -> void:
 	for _day in range(_target_days):
 		_baseline_sim._advance_day(false)
 		_sliced_sim._advance_day(false)
-	_baseline_sim._advance_priority_city_defense_echelons()
-	await _sliced_sim._advance_priority_city_defense_echelons(true)
+	_baseline_sim._advance_priority_city_defense_reinforcements()
+	await _sliced_sim._advance_priority_city_defense_reinforcements(true)
 	_finish()
 
 

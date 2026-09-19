@@ -8,9 +8,8 @@
 > `eliminated_wars/terminal_alliance_lock/invalid/commit_failures` 均为 0；strict-mirror 3650 天逐日无破裂（优势分 0.0）。实现与风险闭环见
 > [COMBAT_REFACTOR_CHANGES.md](COMBAT_REFACTOR_CHANGES.md)。
 >
-> **国家级攻势扩展**：单轮使用统一准备时钟，最多并行准备 3 个目标；
-> `campaign_preparation_assignments` 保证一军一方向。30 天窗口达到人数和战力门槛的方向同批发动，
-> 未达到的方向可继续进入 180 天满准备，避免单一目标阻塞全国攻势。
+> **州级战役扩展**：每国只保存一个州治战略目标；`administrative_campaign_plan.army_assignments`
+> 保证一军只参与一个州战役。进攻方以 `C >= R+V` 决定攻州治，否则夺府、封锁或等待增援。
 >
 > **河运扩展**：黄河/长江分别使用独立控制点和纬向走廊；黄河控制点位于 `y=0.50～0.59`，
 > 实际均值门禁为 `0.50～0.60`，同时维持西向东、南北分离且无明显折返。

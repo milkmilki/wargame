@@ -44,15 +44,6 @@ const TRADE_FLOW_MAX_MARKERS_PER_ROUTE: int = 24
 const RIVER_BASE_HALF_WIDTH: float = 0.075
 const RIVER_ELEVATION: float = 0.11
 const RIVER_RENDER_SUBDIVISIONS: int = 4
-const CAMPAIGN_ARROW_TEXTURE := MapRenderer.CAMPAIGN_ARROW_TEXTURE
-const CAMPAIGN_ARROW_GRID := Vector2i(12, 8)
-## 攻势箭头仍是原始红色贴图；这些参数只控制承载贴图的无光照拱形曲面。
-const CAMPAIGN_ARROW_ENDPOINT_CLEARANCE: float = 0.72
-const CAMPAIGN_ARROW_SURFACE_CLEARANCE: float = 0.52
-const CAMPAIGN_ARROW_MIN_ARCH_HEIGHT: float = 1.60
-const CAMPAIGN_ARROW_MAX_ARCH_HEIGHT: float = 4.20
-const CAMPAIGN_ARROW_ARCH_LENGTH_RATIO: float = 0.070
-const CAMPAIGN_ARROW_TERRAIN_SAMPLES: int = 16
 const NATION_LABEL_FONT_SIZE: int = 84
 const NATION_LABEL_OUTLINE_SIZE: int = 3
 const NATION_LABEL_SAFETY: float = 0.86
@@ -84,7 +75,6 @@ var _rivers: MeshInstance3D
 var _trade_routes: MeshInstance3D
 var _trade_flow_markers: MultiMeshInstance3D
 var _boundaries: MeshInstance3D
-var _campaigns: MeshInstance3D
 var _cities: MultiMeshInstance3D
 var _city_bases: MultiMeshInstance3D
 var _city_resource_markers: MultiMeshInstance3D
@@ -331,7 +321,6 @@ func set_display_state(
 	else:
 		_update_army_instances()
 		_update_battle_instances()
-		_update_campaign_mesh()
 		for label in _nation_labels:
 			label.visible = false
 		_nation_label_rebuild_pending_frames = 2
@@ -357,8 +346,6 @@ func _clear_military_visuals() -> void:
 	for label in _battle_labels:
 		label.set_meta("active", false)
 		label.visible = false
-	if _campaigns != null:
-		_campaigns.mesh = null
 
 
 func _process(delta: float) -> void:
@@ -427,7 +414,6 @@ func _process(delta: float) -> void:
 		)
 		if _map_mode == MapRenderer.MapMode.LOYALTY:
 			_update_province_visuals()
-		_update_campaign_mesh()
 		_update_battle_instances()
 		if sim != null and sim.runtime_stage_profiling_enabled:
 			sim._record_runtime_span(
@@ -733,10 +719,6 @@ func _ensure_feature_nodes() -> void:
 		_boundaries = MeshInstance3D.new()
 		_boundaries.name = "Boundaries"
 		_content.add_child(_boundaries)
-	if _campaigns == null:
-		_campaigns = MeshInstance3D.new()
-		_campaigns.name = "Campaigns"
-		_content.add_child(_campaigns)
 	if _cities == null:
 		_cities = MultiMeshInstance3D.new()
 		_cities.name = "Cities"
@@ -1038,7 +1020,6 @@ func _on_terrain_ready() -> void:
 	_update_city_instances()
 	_update_army_instances()
 	_update_battle_instances()
-	_update_campaign_mesh()
 	_rebuild_nation_labels()
 	_last_ownership_revision = state.ownership_revision
 	_last_diplomacy_revision = state.diplomacy_revision
@@ -3108,179 +3089,6 @@ func _clear_battle_labels() -> void:
 	_battle_labels.clear()
 
 
-func _update_campaign_mesh() -> void:
-	if _terrain == null or _terrain.land_cell_count() <= 0:
-		return
-	var surface_tool := SurfaceTool.new()
-	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for event in state.campaign_visual_events:
-		var alpha := MapRenderer.campaign_arrow_alpha(state.day, event)
-		if alpha <= 0.0:
-			continue
-		var target_id := int(event.get("target_city", -1))
-		if target_id < 0 or target_id >= state.cities.size():
-			continue
-		var target := state.cities[target_id].map_position
-		for origin_id in event.get("origin_cities", []):
-			if origin_id < 0 or origin_id >= state.cities.size():
-				continue
-			_append_campaign_arrow(
-				surface_tool,
-				state.cities[origin_id].map_position,
-				target,
-				alpha,
-				int(event.get("wave", 0))
-			)
-	_campaigns.mesh = surface_tool.commit()
-	_campaigns.material_override = _campaign_arrow_material()
-
-
-func _append_campaign_arrow(
-	surface_tool: SurfaceTool,
-	from_uv: Vector2,
-	to_uv: Vector2,
-	alpha: float,
-	_wave: int
-) -> void:
-	var from_metric := Vector2(
-		from_uv.x * _world_size.x, from_uv.y * _world_size.y
-	)
-	var to_metric := Vector2(
-		to_uv.x * _world_size.x, to_uv.y * _world_size.y
-	)
-	var target_delta := to_metric - from_metric
-	var source_delta := (
-		MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
-		- MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL
-	)
-	if target_delta.length_squared() <= 0.000001:
-		return
-	var source_size := Vector2(CAMPAIGN_ARROW_TEXTURE.get_size())
-	var scale := target_delta.length() / source_delta.length()
-	var rotation := target_delta.angle() - source_delta.angle()
-	var from_height := _terrain.height_at_map_position(from_uv)
-	var to_height := _terrain.height_at_map_position(to_uv)
-	var arch_height := _campaign_arrow_arch_height(
-		from_uv, to_uv, target_delta.length(), from_height, to_height
-	)
-	for grid_y in range(CAMPAIGN_ARROW_GRID.y):
-		var v0 := float(grid_y) / float(CAMPAIGN_ARROW_GRID.y)
-		var v1 := float(grid_y + 1) / float(CAMPAIGN_ARROW_GRID.y)
-		for grid_x in range(CAMPAIGN_ARROW_GRID.x):
-			var u0 := float(grid_x) / float(CAMPAIGN_ARROW_GRID.x)
-			var u1 := float(grid_x + 1) / float(CAMPAIGN_ARROW_GRID.x)
-			var uv00 := Vector2(u0, v0)
-			var uv10 := Vector2(u1, v0)
-			var uv01 := Vector2(u0, v1)
-			var uv11 := Vector2(u1, v1)
-			_append_campaign_texture_triangle(
-				surface_tool, uv00, uv10, uv01, source_size,
-				from_metric, scale, rotation, from_height, to_height,
-				arch_height, alpha
-			)
-			_append_campaign_texture_triangle(
-				surface_tool, uv10, uv11, uv01, source_size,
-				from_metric, scale, rotation, from_height, to_height,
-				arch_height, alpha
-			)
-
-
-func _append_campaign_texture_triangle(
-	surface_tool: SurfaceTool,
-	uv_a: Vector2, uv_b: Vector2, uv_c: Vector2,
-	source_size: Vector2, from_metric: Vector2,
-	scale: float, rotation: float,
-	from_height: float, to_height: float,
-	arch_height: float, alpha: float
-) -> void:
-	for uv in [uv_a, uv_b, uv_c]:
-		var typed_uv: Vector2 = uv
-		var source_point: Vector2 = typed_uv * source_size
-		var world := _campaign_arrow_surface_point(
-			source_point, from_metric, scale, rotation,
-			from_height, to_height, arch_height
-		)
-		surface_tool.set_uv(typed_uv)
-		surface_tool.set_color(Color(1.0, 1.0, 1.0, 0.94 * alpha))
-		surface_tool.add_vertex(world)
-
-
-func _campaign_arrow_arch_height(
-	from_uv: Vector2,
-	to_uv: Vector2,
-	metric_length: float,
-	from_height: float,
-	to_height: float
-) -> float:
-	var arch_height := clampf(
-		metric_length * CAMPAIGN_ARROW_ARCH_LENGTH_RATIO,
-		CAMPAIGN_ARROW_MIN_ARCH_HEIGHT,
-		CAMPAIGN_ARROW_MAX_ARCH_HEIGHT
-	)
-	# 长箭头跨越高地时提高控制点，但不逐点复制地形起伏。最终曲面
-	# 仍是单一平滑拱面；这里只用沿线最高地形决定整体弧高。
-	for sample_index in range(1, CAMPAIGN_ARROW_TERRAIN_SAMPLES):
-		var progress := (
-			float(sample_index)
-			/ float(CAMPAIGN_ARROW_TERRAIN_SAMPLES)
-		)
-		var profile := sin(progress * PI)
-		if profile < 0.35:
-			continue
-		var map_point := from_uv.lerp(to_uv, progress)
-		var terrain_height := _terrain.height_at_map_position(
-			map_point
-		)
-		var baseline := lerpf(
-			from_height, to_height, progress
-		) + CAMPAIGN_ARROW_ENDPOINT_CLEARANCE
-		arch_height = maxf(
-			arch_height,
-			(terrain_height + CAMPAIGN_ARROW_SURFACE_CLEARANCE
-				- baseline) / profile
-		)
-	return minf(arch_height, CAMPAIGN_ARROW_MAX_ARCH_HEIGHT)
-
-
-func _campaign_arrow_surface_point(
-	source_point: Vector2,
-	from_metric: Vector2,
-	scale: float,
-	rotation: float,
-	from_height: float,
-	to_height: float,
-	arch_height: float
-) -> Vector3:
-	var source_delta := (
-		MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
-		- MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL
-	)
-	var source_offset := (
-		source_point - MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL
-	)
-	var progress := clampf(
-		source_offset.dot(source_delta)
-			/ maxf(source_delta.length_squared(), 0.000001),
-		0.0,
-		1.0
-	)
-	var metric_offset := source_offset.rotated(rotation) * scale
-	var metric_point := from_metric + metric_offset
-	var map_point := Vector2(
-		metric_point.x / _world_size.x,
-		metric_point.y / _world_size.y
-	)
-	var curve_height := lerpf(
-		from_height, to_height, progress
-	) + CAMPAIGN_ARROW_ENDPOINT_CLEARANCE + (
-		sin(progress * PI) * arch_height
-	)
-	var world := _terrain.map_to_world(map_point)
-	# 高度只来自一条连续拱线，不逐顶点追随下面的山脊和沟谷。
-	world.y = curve_height
-	return world
-
-
 func _append_tapered_draped_path(
 	surface_tool: SurfaceTool,
 	points: PackedVector2Array,
@@ -3655,20 +3463,6 @@ func _line_material(emissive: bool) -> StandardMaterial3D:
 		material.emission_enabled = true
 		material.emission = Color(0.32, 0.22, 0.06)
 		material.emission_energy_multiplier = 0.8
-	return material
-
-
-func _campaign_arrow_material() -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	# 箭头是 UI 贴图承载在 3D 曲面上，不参与场景光照。
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_texture = CAMPAIGN_ARROW_TEXTURE
-	material.vertex_color_use_as_albedo = true
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	material.alpha_scissor_threshold = 0.025
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.no_depth_test = false
-	material.render_priority = 7
 	return material
 
 

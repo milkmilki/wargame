@@ -13,23 +13,12 @@ func _init() -> void:
 	var total_net_captures := 0
 	var total_turnovers := 0
 	var total_war_declarations := 0
-	var total_offensives := 0
-	var total_full_preparation_offensives := 0
-	var total_multi_target_preparations := 0
-	var global_max_parallel_targets := 0
-	var total_post_capture_attacks := 0
-	var total_post_capture_edge_holds := 0
-	var total_post_capture_city_holds := 0
 	var total_ai_orders := 0
 	var total_redeployment_orders := 0
 	var total_role_deployment_orders := 0
 	var global_max_idle_city_stack := 0
 	var global_max_frontier_idle_stack := 0
 	var global_max_interior_idle_stack := 0
-	var legacy_capture_fort := (
-		OS.get_environment("AI_LONGRUN_LEGACY_CAPTURE_FORT")
-			== "1"
-	)
 	var selected_seeds := SEEDS.duplicate()
 	var selected_days := DAYS
 	var days_override := OS.get_environment(
@@ -56,13 +45,6 @@ func _init() -> void:
 		for nation in state.nations:
 			force_structure_last_change_day[nation.id] = 0
 		var turnovers := 0
-		var offensive_events := {}
-		var full_preparation_events := {}
-		var multi_target_preparations := {}
-		var max_parallel_targets := 0
-		var post_capture_attacks := 0
-		var post_capture_edge_holds := 0
-		var post_capture_city_holds := 0
 		var ai_orders := 0
 		var redeployment_orders := 0
 		var role_deployment_orders := 0
@@ -95,32 +77,6 @@ func _init() -> void:
 				force_structure_last_change_day[city.owner_nation] = (
 					state.day
 				)
-			for nation in state.nations:
-				var parallel_targets := (
-					nation.campaign_preparation_targets.size()
-				)
-				max_parallel_targets = maxi(
-					max_parallel_targets,
-					parallel_targets
-				)
-				if (
-					parallel_targets > 1
-					and nation.campaign_preparation_started_day >= 0
-				):
-					multi_target_preparations[
-						"%d:%d" % [
-							nation.id,
-							nation.campaign_preparation_started_day,
-						]
-					] = true
-			for event in state.campaign_visual_events:
-				var event_key := "%d:%d:%d:%d" % [
-					int(event["start_day"]),
-					int(event["nation_id"]),
-					int(event["target_city"]),
-					int(event["wave"]),
-				]
-				offensive_events[event_key] = true
 			var idle_city_stacks := {}
 			for army in state.armies:
 				var node_city_id := army.current_city_node()
@@ -200,15 +156,6 @@ func _init() -> void:
 						"填线部署"
 					):
 						role_deployment_orders += 1
-				if army.ai_order_created_day == state.day:
-					if army.ai_order_reason.contains(
-						"连续攻势推进"
-					):
-						post_capture_attacks += 1
-					elif army.ai_order_reason.contains(
-						"连续攻势终止"
-					):
-						post_capture_city_holds += 1
 			for stack_key_value in idle_city_stacks:
 				var stack_key := int(stack_key_value)
 				var stack_size := int(
@@ -493,60 +440,6 @@ func _init() -> void:
 					invalid_group_reasons.append(
 						"group%d_over_capacity" % group.id
 					)
-			var campaign_groups := {}
-			for target_city in nation.campaign_preparation_targets:
-				if not nation.campaign_preparation_group_assignments.has(
-					target_city
-				):
-					invalid_group_reasons.append(
-						"target%d_missing_group" % target_city
-					)
-					continue
-				var campaign_group_id := int(
-					nation.campaign_preparation_group_assignments[
-						target_city
-					]
-				)
-				if campaign_groups.has(campaign_group_id):
-					invalid_group_reasons.append(
-						"group%d_multiple_targets"
-							% campaign_group_id
-					)
-				campaign_groups[campaign_group_id] = target_city
-			var assigned_target_by_group := {}
-			for army_id in nation.campaign_preparation_assignments:
-				var assigned_target := int(
-					nation.campaign_preparation_assignments[
-						army_id
-					]
-				)
-				if not army_group_by_id.has(army_id):
-					continue
-				var assigned_group := int(
-					army_group_by_id[army_id]
-				)
-				if not nation.campaign_preparation_targets.has(
-					assigned_target
-				):
-					invalid_group_reasons.append(
-						"army%d_unknown_campaign_target"
-							% army_id
-					)
-					continue
-				if (
-					assigned_target_by_group.has(assigned_group)
-					and int(
-						assigned_target_by_group[assigned_group]
-					) != assigned_target
-				):
-					invalid_group_reasons.append(
-						"group%d_multiple_assignment_targets"
-							% assigned_group
-					)
-				else:
-					assigned_target_by_group[
-						assigned_group
-					] = assigned_target
 			if not invalid_group_reasons.is_empty():
 				var mismatch := {
 					"nation": nation.id,
@@ -576,20 +469,6 @@ func _init() -> void:
 		total_war_declarations += int(
 			diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR]
 		)
-		total_offensives += offensive_events.size()
-		total_full_preparation_offensives += (
-			full_preparation_events.size()
-		)
-		total_multi_target_preparations += (
-			multi_target_preparations.size()
-		)
-		global_max_parallel_targets = maxi(
-			global_max_parallel_targets,
-			max_parallel_targets
-		)
-		total_post_capture_attacks += post_capture_attacks
-		total_post_capture_edge_holds += post_capture_edge_holds
-		total_post_capture_city_holds += post_capture_city_holds
 		total_ai_orders += ai_orders
 		total_redeployment_orders += redeployment_orders
 		total_role_deployment_orders += role_deployment_orders
@@ -611,8 +490,6 @@ func _init() -> void:
 				+ "armies=%d troops=%d manpower=%d food=%d finance_invalid=%d "
 				+ "starving=%d net_captures=%d turnovers=%d ordered=%d invalid=%d "
 				+ "peace=%d prepare=%d cancel_prepare=%d war=%d objectives=%d "
-				+ "offensives=%d full_prep=%d multi_prep=%d max_parallel=%d "
-				+ "phase2=%d/%d/%d "
 				+ "mobilized=%d resource_peace=%d "
 				+ "ally=%d leave=%d "
 				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d "
@@ -643,13 +520,6 @@ func _init() -> void:
 				diplomatic_counts[DiplomacyAI.Action.CANCEL_WAR_PREPARATION],
 				diplomatic_counts[DiplomacyAI.Action.DECLARE_WAR],
 				objective_declarations,
-				offensive_events.size(),
-				full_preparation_events.size(),
-				multi_target_preparations.size(),
-				max_parallel_targets,
-				post_capture_attacks,
-				post_capture_edge_holds,
-				post_capture_city_holds,
 				mobilization_armies,
 				resource_peaces,
 				diplomatic_counts[DiplomacyAI.Action.FORM_ALLIANCE],
@@ -713,36 +583,19 @@ func _init() -> void:
 					% str(force_structure_mismatches)
 			)
 		simulation.free()
-	if (
-		total_turnovers == 0
-		or total_war_declarations == 0
-		or total_offensives <= total_war_declarations
-		or total_multi_target_preparations == 0
-		or global_max_parallel_targets
-			< Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS
-	):
+	if total_turnovers == 0 or total_war_declarations == 0:
 		failed = true
 	print(
 		(
-			"mode=%s total_net_captures=%d total_turnovers=%d "
-			+ "total_wars=%d total_offensives=%d total_full_prep=%d "
-			+ "total_multi_prep=%d max_parallel=%d "
-			+ "total_phase2=%d/%d/%d total_mobilized=%d "
+			"total_net_captures=%d total_turnovers=%d "
+			+ "total_wars=%d total_mobilized=%d "
 			+ "total_orders=%d total_redeploy=%d "
 			+ "total_role_deploy=%d max_idle_stack=%d/%d/%d"
 		)
 		% [
-			"legacy_fort" if legacy_capture_fort else "recovery_fort",
 			total_net_captures,
 			total_turnovers,
 			total_war_declarations,
-			total_offensives,
-			total_full_preparation_offensives,
-			total_multi_target_preparations,
-			global_max_parallel_targets,
-			total_post_capture_attacks,
-			total_post_capture_edge_holds,
-			total_post_capture_city_holds,
 			total_mobilization_armies,
 			total_ai_orders,
 			total_redeployment_orders,

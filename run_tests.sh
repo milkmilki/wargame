@@ -72,6 +72,11 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/administrative_ai_objective.gd \
   --log-file "$LOG_DIR/world-war-administrative-ai.log"
 echo
+echo "==> [2e1/29] 外交目标批次缓存门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/diplomacy_objective_batch_cache.gd \
+  --log-file "$LOG_DIR/world-war-diplomacy-objective-cache.log"
+echo
 
 echo "==> [2f/29] 飞地仅按本国领土连通门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \

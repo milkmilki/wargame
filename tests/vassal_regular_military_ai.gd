@@ -100,11 +100,7 @@ func _run() -> void:
 	)
 	var nation := state.nations[subject]
 	_check(
-		nation.administrative_campaign_plan != null
-			or nation.campaign_preparation_started_day >= 0
-			or nation.campaign_preparation_plan != null
-			or not nation.campaign_preparation_assignments.is_empty()
-			or not nation.campaign_attack_assignments.is_empty(),
+		nation.administrative_campaign_plan != null,
 		"参战藩王必须进入与普通国家相同的战役规划阶段"
 	)
 	simulation.free()

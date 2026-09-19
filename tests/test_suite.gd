@@ -35,7 +35,6 @@ func _init() -> void:
 	_test_three_way_siege()
 	_test_multi_army_aggregation()
 	_test_three_way_serial()
-	_test_campaign_active_wave_reconciliation()
 	_test_crosspass_field_priority()
 	_test_capacity_no_block_enemy()
 	_test_directional_friendly_capacity()
@@ -950,15 +949,6 @@ func _test_world_generation() -> void:
 		and north_multiplier < south_multiplier
 		and south_multiplier < peak_multiplier,
 		"纬度城市密度必须服从地图源配置，且峰值>南缘>北缘"
-	)
-	_check(
-		MapRenderer.CAMPAIGN_ARROW_TEXTURE != null
-		and MapRenderer.CAMPAIGN_ARROW_TEXTURE.get_width() == 1536
-		and MapRenderer.CAMPAIGN_ARROW_TEXTURE.get_height() == 1024
-		and MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL.distance_to(
-			MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
-		) > 1000.0,
-		"攻势箭头必须使用正式红色渐变贴图，并以尾部和尖端锚点等比对齐"
 	)
 	_check(
 		gs.map_source_region_normalized
@@ -3310,17 +3300,6 @@ func _test_responsive_map_layout() -> void:
 		not MapRenderer.city_label_text(city_to_pick).is_empty(),
 		"开启城名时必须能生成稳定城市名称文本"
 	)
-	var arrow_event := {
-		"start_day": 10,
-		"end_day": 30,
-	}
-	_check(
-		MapRenderer.campaign_arrow_alpha(10, arrow_event) > 0.0
-			and MapRenderer.campaign_arrow_alpha(25, arrow_event) > 0.0
-			and MapRenderer.campaign_arrow_alpha(30, arrow_event) > 0.0
-			and MapRenderer.campaign_arrow_alpha(31, arrow_event) == 0.0,
-		"攻势箭头必须持续显示到事件结束日，而不是按现实时间3秒消失"
-	)
 
 # ------------------------------------------------------------------ 2. 地形惩罚
 
@@ -4412,79 +4391,6 @@ func _test_three_way_serial() -> void:
 	)
 	sim3.free()
 
-
-func _test_campaign_active_wave_reconciliation() -> void:
-	print("[14b] 战役波次回收：战术改派不得让旧波永久阻塞后续攻势")
-	var gs := GameState.new(); gs.generate_grid_world(12345)
-	var sim := Simulation.new(); sim.setup(gs)
-	gs.armies.clear(); gs.battles.clear()
-	var target_city := -1
-	for city in gs.cities:
-		if city.owner_nation != 0:
-			target_city = city.id
-			break
-	var army := _place_army_on_edge(gs, 9000, 0, 0, 1, 0.50)
-	var reassigned := _place_army_on_edge(
-		gs, 9001, 0, 0, 1, 0.45
-	)
-	var nation := gs.nations[0]
-	nation.campaign_plan_targets.append(target_city)
-	nation.campaign_attack_assignments[army.id] = target_city
-	nation.campaign_attack_assignments[reassigned.id] = target_city
-	nation.campaign_attack_echelons[army.id] = 0
-	nation.campaign_attack_echelons[reassigned.id] = 0
-	nation.campaign_active_echelons[target_city] = 0
-	nation.campaign_launched_armies[army.id] = true
-	nation.campaign_launched_armies[reassigned.id] = true
-	nation.campaign_plan_wave = 1
-	army.ai_action = ActionCandidate.Kind.ATTACK
-	army.ai_target_city = target_city
-	reassigned.ai_action = ActionCandidate.Kind.RETREAT
-	reassigned.ai_target_city = nation.capital_city_id
-	sim._reconcile_campaign_active_wave(0)
-	_check(
-		nation.campaign_plan_targets == [target_city]
-			and nation.campaign_attack_assignments.has(army.id)
-			and nation.campaign_launched_armies.has(army.id)
-			and not nation.campaign_attack_assignments.has(reassigned.id)
-			and not nation.campaign_launched_armies.has(reassigned.id),
-		"混合波次必须保留真实攻击者并立即剔除已改派成员"
-	)
-
-	# 最后一支执行者也被改派后，整个 active wave 必须释放。
-	army.ai_action = ActionCandidate.Kind.RETREAT
-	army.ai_target_city = nation.capital_city_id
-	sim._reconcile_campaign_active_wave(0)
-	_check(
-		nation.campaign_plan_targets.is_empty()
-			and nation.campaign_attack_assignments.is_empty()
-			and nation.campaign_launched_armies.is_empty(),
-		"最后一支攻击者改派后必须释放 active wave"
-	)
-
-	# 当前梯队的先发成员消失后，已经抵达集结位的同梯队成员必须
-	# 接替发射；不能直接跳到下一梯队并让本梯队永远留在计划中。
-	var staging := DiplomacyAI.staging_cities_for_objective(
-		gs, 0, target_city
-	)
-	_check(not staging.is_empty(), "active-wave 回归夹具必须有合法集结城")
-	if not staging.is_empty():
-		sim._settle_idle(army, staging[0])
-		army.ai_action = ActionCandidate.Kind.HOLD
-		army.ai_target_city = target_city
-		nation.campaign_plan_targets.append(target_city)
-		nation.campaign_attack_assignments[army.id] = target_city
-		nation.campaign_attack_echelons[army.id] = 0
-		nation.campaign_active_echelons[target_city] = 0
-		nation.campaign_plan_wave = 1
-		sim._advance_campaign_echelons()
-		_check(
-			nation.campaign_launched_armies.has(army.id)
-				and army.ai_action == ActionCandidate.Kind.ATTACK
-				and army.ai_target_city == target_city,
-			"当前梯队的就绪遗留成员必须补发，不能被下一梯队跳过"
-		)
-	sim.free()
 
 # ------------------------------------------------------------------ 15. 到达被围城必触发（修复：城主回援/援军入城不旁观）
 
@@ -10420,199 +10326,6 @@ func _test_manpower_pool_and_force_commands() -> void:
 	for force_city in force_state.cities_of(force_nation_id):
 		force_city.food_per_half_year = 100000
 	force_state.cities[force_capital].food_storage = 1000000
-	var forced_comprehensive_targets := 0
-	var forced_comprehensive_target_ids: Array[int] = []
-	var protected_force_sources := {}
-	for force_source in force_state.cities_of(force_nation_id):
-		if (
-			force_source.id == force_capital
-			or forced_comprehensive_target_ids.has(force_source.id)
-		):
-			continue
-		for force_neighbor in force_state.neighbors(force_source.id):
-			var force_edge := force_state.edge_of(
-				force_source.id,
-				force_neighbor
-			)
-			if (
-				force_edge != null
-				and force_edge.max_manpower
-					>= Edge.STANDARD_MANPOWER
-				and not forced_comprehensive_target_ids.has(
-					force_neighbor
-				)
-				and force_neighbor != force_capital
-				and not protected_force_sources.has(force_neighbor)
-			):
-				forced_comprehensive_targets += 1
-				forced_comprehensive_target_ids.append(force_neighbor)
-				protected_force_sources[force_source.id] = true
-				if forced_comprehensive_targets >= 3:
-					break
-		if forced_comprehensive_targets >= 3:
-			break
-	for force_target in forced_comprehensive_target_ids:
-		force_state.cities[force_target].owner_nation = 1
-	force_state.ownership_revision += 1
-	force_state.nations[
-		force_nation_id
-	].war_preparation_target_nation = 1
-	force_state.nations[
-		force_nation_id
-	].campaign_preparation_targets = (
-		forced_comprehensive_target_ids.duplicate()
-	)
-	var next_group_view := AiWorldView.build(
-		force_state,
-		force_nation_id
-	)
-	no_line_slots.view = next_group_view
-	var next_group_started := (
-		priority_force_sim._ai_manage_force_structure(
-			next_group_view,
-			StrategicMapSnapshot.build(next_group_view),
-			ThreatField.build(next_group_view),
-			no_line_slots
-		)
-	)
-	_check(
-		next_group_started
-			and force_state.nations[
-				force_nation_id
-			].battle_groups.size() == 2
-			and force_state.battle_group_members(
-				force_nation_id,
-				1
-			).size() == 1,
-		"满编战团后继续扩军必须创建下一支单重军战团"
-	)
-	var comprehensive_snapshot := StrategicMapSnapshot.build(
-		next_group_view
-	)
-	var comprehensive_demand_targets := (
-		priority_force_sim._campaign_force_demand_targets(
-			force_nation_id,
-			comprehensive_snapshot
-		)
-	)
-	for _comprehensive_growth in range(6):
-		var comprehensive_view := AiWorldView.build(
-			force_state,
-			force_nation_id
-		)
-		no_line_slots.view = comprehensive_view
-		priority_force_sim._ai_manage_force_structure(
-			comprehensive_view,
-			StrategicMapSnapshot.build(comprehensive_view),
-			ThreatField.build(comprehensive_view),
-			no_line_slots
-		)
-	_check(
-		forced_comprehensive_targets == 3
-			and comprehensive_demand_targets.size() == 3
-			and force_state.nations[
-				force_nation_id
-			].battle_groups.size() >= 3,
-		"备战期主战军团必须按固定轮转逐步建立多个指挥单位"
-	)
-	var decisive_state := GameState.new()
-	decisive_state.generate_grid_world(7106)
-	for decisive_city in decisive_state.cities:
-		decisive_city.owner_nation = 0
-	var decisive_target := 1
-	decisive_state.cities[decisive_target].owner_nation = 1
-	decisive_state.set_diplomatic_relation(
-		0, 1, GameState.DiplomaticRelation.WAR
-	)
-	var decisive_sim := Simulation.new()
-	decisive_sim.setup(decisive_state)
-	var decisive_demand := decisive_sim._campaign_target_group_demand(
-		0, decisive_target, null
-	)
-	var decisive_recruitment := (
-		decisive_sim._next_battle_group_recruitment(0)
-	)
-	decisive_state.nations[0].battle_groups.clear()
-	decisive_state.nations[0].next_battle_group_id = 0
-	var decisive_groups: Array[int] = []
-	for decisive_index in range(4):
-		var decisive_group := decisive_state.create_battle_group(0)
-		var decisive_army := _make_army(9700 + decisive_index, 0, 15000, 10, 10)
-		decisive_army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
-		decisive_army.location_city = 0
-		decisive_army.move_from = 0
-		decisive_state.armies.append(decisive_army)
-		decisive_state.assign_army_to_battle_group(
-			decisive_army, decisive_group.id
-		)
-		decisive_groups.append(decisive_group.id)
-	var decisive_view := AiWorldView.build(decisive_state, 0)
-	var decisive_plan := CityDefensePlan.new()
-	decisive_plan.view = decisive_view
-	decisive_plan.threat = ThreatField.build(decisive_view)
-	var decisive_allocation := (
-		decisive_sim._plan_campaign_allocation(
-			0,
-			decisive_target,
-			[decisive_target] as Array[int],
-			decisive_plan,
-			ArmyCoordinator.new(),
-			decisive_view,
-			false
-		)
-	)
-	var decisive_locked_member := decisive_state.battle_group_members(
-		0, decisive_groups[0]
-	)[0]
-	decisive_locked_member.defensive_deployment_until_day = (
-		decisive_state.day + Simulation.DEFENSIVE_DEPLOYMENT_LOCK_DAYS
-	)
-	var locked_decisive_allocation := (
-		decisive_sim._plan_campaign_allocation(
-			0, decisive_target, [decisive_target] as Array[int],
-			decisive_plan, ArmyCoordinator.new(), decisive_view, false
-		)
-	)
-	var decisive_planned_groups := (
-		decisive_allocation.groups_for_target(decisive_target)
-	)
-	var decisive_unique_planned_groups := {}
-	for decisive_group_id in decisive_planned_groups:
-		decisive_unique_planned_groups[decisive_group_id] = true
-	_check(
-		decisive_allocation.assigned_target_ids
-			== [decisive_target]
-			and decisive_planned_groups.size() == 1
-			and decisive_unique_planned_groups.size()
-				== decisive_planned_groups.size()
-			and decisive_allocation.assigned_group_count
-				== decisive_planned_groups.size()
-			and locked_decisive_allocation.groups_for_target(
-				decisive_target
-			).size() == 1,
-		"单一目标只能接收一个可用指挥单位：%s"
-			% str(decisive_allocation.group_to_target)
-	)
-	var decisive_assigned := (
-		decisive_sim._apply_campaign_plan_atomic(
-			0, decisive_allocation
-		)
-	)
-	var decisive_assigned_groups := {}
-	for decisive_army in decisive_state.armies:
-		if int(decisive_state.nations[0].campaign_preparation_assignments.get(
-			decisive_army.id, -1
-		)) == decisive_target:
-			decisive_assigned_groups[decisive_army.battle_group_id] = true
-	_check(
-			not decisive_demand.has("command_units")
-			and not decisive_demand.has("groups")
-			and bool(decisive_recruitment.get("create_group", false))
-			and decisive_assigned
-			and decisive_assigned_groups.size() == 1,
-		"最后一城与普通目标相同，只使用一个满足门槛的指挥单位"
-	)
-	decisive_sim.free()
 	var ungrouped_heavy := (
 		priority_force_sim._create_army_for_nation(
 			force_nation_id,
@@ -11002,11 +10715,11 @@ func _test_alliance_war_coalitions() -> void:
 			).size() == 2,
 		"联盟和平意愿必须聚合双方全部成员，不能只读取议和代表国"
 	)
-	gs.nations[0].campaign_preparation_targets = [
-		objective_city
-	] as Array[int]
+	var coalition_plan := AdministrativeCampaignPlan.new()
+	coalition_plan.center_city_id = objective_center
+	gs.nations[0].administrative_campaign_plan = coalition_plan
 	_check(
-		gs.nations[3].campaign_preparation_targets.is_empty(),
+		gs.nations[3].administrative_campaign_plan == null,
 		"联盟共享战争目标，但各国战团与军队Assignment必须保持独立"
 	)
 	var coalition_peace := sim._execute_diplomatic_action({
@@ -11644,11 +11357,6 @@ func _test_suzerainty_invariants() -> void:
 	local_line.ai_target_city = transfer_region[0]
 	local_line.ai_order_until_day = 999
 	local_line.defensive_deployment_until_day = 999
-	transfer_state.nations[
-		transfer_overlord
-	].campaign_attack_assignments[local_line.id] = (
-		transfer_region[0]
-	)
 	var border_line := transfer_state._spawn_conjured_army(
 		transfer_overlord,
 		border_from,
@@ -13625,9 +13333,7 @@ func _test_civil_war_annexation() -> void:
 		overlord_captor.battle_id = -1
 		overlord_captor.path.clear()
 		overlord_captor.occupation_claimant_nation = 0
-		sim._capture_city(
-			overlord_captor, subject_capital, -1, false
-		)
+		sim._capture_city(overlord_captor, subject_capital, -1)
 	_check(
 		not gs.is_vassal(subject)
 			and not gs.nations[subject].alive
@@ -13796,9 +13502,7 @@ func _test_civil_war_annexation() -> void:
 		vassal_captor.battle_id = -1
 		vassal_captor.path.clear()
 		vassal_captor.occupation_claimant_nation = winner
-		vs_sim._capture_city(
-			vassal_captor, overlord_capital, -1, false
-		)
+		vs_sim._capture_city(vassal_captor, overlord_capital, -1)
 	_check(
 		not vs.nations[0].alive
 			and vs.cities_of(0).is_empty()
@@ -17190,47 +16894,9 @@ func _coalition_peace_fingerprint(
 			"war_preparation_target_nation": (
 				nation.war_preparation_target_nation
 			),
-			"campaign_preparation_targets": (
-				nation.campaign_preparation_targets.duplicate()
+			"campaign_objective_center_city": (
+				nation.campaign_objective_center_city
 			),
-			"campaign_last_offensive_day": nation.campaign_last_offensive_day,
-			"campaign_next_offensive_day": nation.campaign_next_offensive_day,
-			"campaign_offensive_count": nation.campaign_offensive_count,
-			"campaign_theater_anchor_city": nation.campaign_theater_anchor_city,
-			"campaign_theater_started_day": nation.campaign_theater_started_day,
-			"campaign_preparation_started_day": (
-				nation.campaign_preparation_started_day
-			),
-			"campaign_preparation_assignments": (
-				nation.campaign_preparation_assignments.duplicate(true)
-			),
-			"campaign_preparation_group_assignments": (
-				nation.campaign_preparation_group_assignments.duplicate(true)
-			),
-			"campaign_full_preparation_targets": (
-				nation.campaign_full_preparation_targets.duplicate()
-			),
-			"campaign_post_capture_plans": (
-				nation.campaign_post_capture_plans.duplicate(true)
-			),
-			"campaign_attack_assignments": (
-				nation.campaign_attack_assignments.duplicate(true)
-			),
-			"campaign_attack_echelons": (
-				nation.campaign_attack_echelons.duplicate(true)
-			),
-			"campaign_active_echelons": (
-				nation.campaign_active_echelons.duplicate(true)
-			),
-			"campaign_launched_armies": (
-				nation.campaign_launched_armies.duplicate(true)
-			),
-			"campaign_echelon_started_days": (
-				nation.campaign_echelon_started_days.duplicate(true)
-			),
-			"campaign_plan_targets": nation.campaign_plan_targets.duplicate(),
-			"campaign_plan_wave": nation.campaign_plan_wave,
-			"campaign_plan_primary_city": nation.campaign_plan_primary_city,
 		})
 	result["mobilization"] = mobilization_rows
 	var army_runtime_rows: Array[Dictionary] = []

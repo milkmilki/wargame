@@ -16,9 +16,6 @@ func _init() -> void:
 	sim.setup(state)
 	sim.diplomacy_enabled = false
 	sim.enfeoff_enabled = false
-	var initial_demand := sim._campaign_target_group_demand(
-		DOMINANT_ID, LAST_CITY_ID
-	)
 	var launched := false
 	var captured := false
 	var first_attack := {}
@@ -37,8 +34,6 @@ func _init() -> void:
 						"army": army.id,
 						"size": army.size,
 						"max": army.max_size,
-						"prep": nation.campaign_preparation_assignments
-							.duplicate(true),
 						"reason": army.ai_order_reason,
 					}
 		launched = not first_attack.is_empty()
@@ -46,7 +41,7 @@ func _init() -> void:
 		if launched or captured or not state.is_enemy(DOMINANT_ID, REMNANT_ID):
 			break
 	print(
-		"verdict=%s day=%d launched=%s owner=%d groups=%d main=%s force=%s prep=%s first=%s initial=%s administrative=%s"
+		"verdict=%s day=%d launched=%s owner=%d groups=%d main=%s force=%s first=%s administrative=%s"
 		% [
 			"LAST_CAPITAL_ATTACK_LAUNCHED" if launched else "LAST_CAPITAL_STALLED",
 			state.day,
@@ -55,22 +50,23 @@ func _init() -> void:
 			state.nations[DOMINANT_ID].battle_groups.size(),
 			str(_main_army_snapshot(state)),
 			state.nations[DOMINANT_ID].ai_last_force_reason,
-			str({
-				"targets": state.nations[DOMINANT_ID]
-					.campaign_preparation_targets,
-				"started": state.nations[DOMINANT_ID]
-					.campaign_preparation_started_day,
-				"demand": sim._campaign_target_group_demand(
-					DOMINANT_ID, LAST_CITY_ID
-				),
-			}),
 			str(first_attack),
-			str(initial_demand),
 			str(_administrative_snapshot(state)),
 		]
 	)
+	var required_groups := int(ceil(
+		float(
+			state.campaign_siege_requirement(DOMINANT_ID, LAST_CITY_ID)
+			+ state.campaign_reinforcement_threat(
+				DOMINANT_ID, LAST_CITY_ID, 60
+			)
+		) / float(GameState.INITIAL_HEAVY_ARMY_SIZE)
+	))
+	var force_bounded := (
+		state.nations[DOMINANT_ID].battle_groups.size() <= required_groups
+	)
 	sim.free()
-	quit(0 if launched else 1)
+	quit(0 if launched and force_bounded else 1)
 
 
 func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
@@ -143,7 +139,6 @@ func _build_fixture() -> GameState:
 		nation.capital_city_id = -1
 		nation.war_preparation_target_nation = -1
 		nation.war_preparation_objective_city = -1
-		nation.campaign_next_offensive_day = -1
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(nation_a + 1, state.nations.size()):
 			state.set_diplomatic_relation(

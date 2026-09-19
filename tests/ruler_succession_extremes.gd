@@ -272,22 +272,6 @@ func _test_conqueror_war_benefits() -> void:
 		),
 		"conqueror did not double only positive war benefits"
 	)
-	var state := GameState.new()
-	state.generate_world(15873, 2, 20)
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	var conqueror := state.nations[0]
-	conqueror.ruler_archetype = RulerProfile.CONQUEROR
-	conqueror.ruler_traits.clear()
-	_check(
-		simulation._campaign_offensive_interval(0)
-			== int(round(
-				float(Simulation.CAMPAIGN_OFFENSIVE_INTERVAL_DAYS)
-					* 0.5 / 1.85
-			)),
-		"conqueror offensive interval was not halved"
-	)
-	simulation.free()
 
 
 func _test_puppet_enfeoffment() -> void:

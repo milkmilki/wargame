@@ -20,22 +20,3 @@ func _init() -> void:
 	var occupied_city := state.cities[0]
 	occupied_city.owner_nation = (occupied_city.owner_nation + 1) % state.nations.size()
 	state.ownership_revision += 1
-
-	var target_city := -1
-	var origin_cities: Array[int] = []
-	for edge in state.edges:
-		if (
-			state.cities[edge.city_a].owner_nation
-			!= state.cities[edge.city_b].owner_nation
-		):
-			origin_cities = [edge.city_a]
-			target_city = edge.city_b
-			break
-	if target_city >= 0:
-		state.add_campaign_visual_event(
-			state.cities[origin_cities[0]].owner_nation,
-			target_city,
-			origin_cities,
-			1,
-			Simulation.CAMPAIGN_ARROW_DURATION_DAYS
-		)

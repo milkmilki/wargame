@@ -49,8 +49,7 @@ func _init() -> void:
 	)
 	_check(
 		view.armies.is_empty()
-		and view.battles.is_empty()
-		and view.campaign_visual_events.is_empty(),
+		and view.battles.is_empty(),
 		"history view must omit military visuals"
 	)
 	var first_view_instance := view.get_instance_id()

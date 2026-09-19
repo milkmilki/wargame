@@ -45,10 +45,6 @@ func _run() -> void:
 		push_error("FRONTEND_VISUAL_NO_FRONTIER")
 		quit(1)
 		return
-	state.add_campaign_visual_event(
-		state.cities[frontier.city_a].owner_nation,
-		frontier.city_b, [frontier.city_a], 1, 30
-	)
 	# 固定四类外交关系，验证选中国家后 2D/3D 共用红绿灰黑视角。
 	for relation_a in range(state.nations.size()):
 		for relation_b in range(relation_a + 1, state.nations.size()):
@@ -118,65 +114,6 @@ func _run() -> void:
 		StrategicMap3D.VERTICAL_TERRAIN_LIGHT_DEFAULT_STRENGTH
 	)
 
-	var campaign_mesh := map_3d._campaigns.mesh as ArrayMesh
-	var campaign_material := map_3d._campaigns.material_override as StandardMaterial3D
-	var campaign_vertices := 0
-	if campaign_mesh != null and campaign_mesh.get_surface_count() > 0:
-		campaign_vertices = (
-			campaign_mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-			as PackedVector3Array
-		).size()
-	var campaign_arch_valid := false
-	var arrow_from := state.cities[frontier.city_a].map_position
-	var arrow_to := state.cities[frontier.city_b].map_position
-	var from_metric := Vector2(
-		arrow_from.x * map_3d._world_size.x,
-		arrow_from.y * map_3d._world_size.y
-	)
-	var to_metric := Vector2(
-		arrow_to.x * map_3d._world_size.x,
-		arrow_to.y * map_3d._world_size.y
-	)
-	var target_delta := to_metric - from_metric
-	var source_delta := (
-		MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP
-		- MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL
-	)
-	if target_delta.length_squared() > 0.000001:
-		var arrow_scale := target_delta.length() / source_delta.length()
-		var arrow_rotation := target_delta.angle() - source_delta.angle()
-		var from_height := map_3d._terrain.height_at_map_position(arrow_from)
-		var to_height := map_3d._terrain.height_at_map_position(arrow_to)
-		var arch_height := map_3d._campaign_arrow_arch_height(
-			arrow_from, arrow_to, target_delta.length(),
-			from_height, to_height
-		)
-		var tail_world := map_3d._campaign_arrow_surface_point(
-			MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL, from_metric,
-			arrow_scale, arrow_rotation, from_height, to_height, arch_height
-		)
-		var middle_world := map_3d._campaign_arrow_surface_point(
-			MapRenderer.CAMPAIGN_ARROW_SOURCE_TAIL + source_delta * 0.5,
-			from_metric, arrow_scale, arrow_rotation,
-			from_height, to_height, arch_height
-		)
-		var tip_world := map_3d._campaign_arrow_surface_point(
-			MapRenderer.CAMPAIGN_ARROW_SOURCE_TIP, from_metric,
-			arrow_scale, arrow_rotation, from_height, to_height, arch_height
-		)
-		campaign_arch_valid = (
-			absf(
-				tail_world.y - from_height
-					- StrategicMap3D.CAMPAIGN_ARROW_ENDPOINT_CLEARANCE
-			) < 0.001
-			and absf(
-				tip_world.y - to_height
-					- StrategicMap3D.CAMPAIGN_ARROW_ENDPOINT_CLEARANCE
-			) < 0.001
-			and middle_world.y
-				> lerpf(tail_world.y, tip_world.y, 0.5)
-					+ StrategicMap3D.CAMPAIGN_ARROW_MIN_ARCH_HEIGHT * 0.95
-		)
 	var major_mesh := map_3d._roads.mesh as ArrayMesh
 	var minor_mesh := map_3d._minor_roads.mesh as ArrayMesh
 	var visible_layouts: Array[Dictionary] = []
@@ -683,20 +620,7 @@ func _run() -> void:
 		"battle_ring": map_3d._battle_rings.multimesh.instance_count == 1,
 		"battle_cross": map_3d._battle_cross_a.multimesh.instance_count == 1,
 		"battle_label": map_3d._battle_labels.size() == 1,
-		"campaign_geometry": campaign_vertices >= 150,
-		"campaign_texture": (
-			campaign_material != null
-			and campaign_material.albedo_texture
-				== MapRenderer.CAMPAIGN_ARROW_TEXTURE
-		),
 			"map_label_font_contract": map_label_font_contract,
-		"campaign_unlit_surface": (
-			campaign_material != null
-			and campaign_material.shading_mode
-				== BaseMaterial3D.SHADING_MODE_UNSHADED
-			and not campaign_material.no_depth_test
-		),
-		"campaign_arch": campaign_arch_valid,
 		"major_roads": major_mesh != null and major_mesh.get_surface_count() > 0,
 		"minor_roads": minor_mesh != null and minor_mesh.get_surface_count() > 0,
 		"road_hierarchy": map_3d._road_width_for_capacity(Edge.TERRAIN_STANDARD_MANPOWER) > map_3d._road_width_for_capacity(Edge.TERRAIN_LOW_MANPOWER) * 2.0,
@@ -893,8 +817,7 @@ func _run() -> void:
 		valid = valid and bool(check_value)
 	if not valid:
 		print(
-			"FRONTEND_VISUAL_DIAGNOSTIC checks=", checks,
-			" campaign_vertices=", campaign_vertices
+			"FRONTEND_VISUAL_DIAGNOSTIC checks=", checks
 		)
 		push_error("FRONTEND_VISUAL_INVALID")
 		quit(1)
@@ -902,8 +825,7 @@ func _run() -> void:
 	print(
 		"FRONTEND_VISUAL_OK counters=",
 		map_3d._armies.multimesh.instance_count,
-		" cities=", map_3d._cities.multimesh.instance_count,
-		" campaign_vertices=", campaign_vertices
+		" cities=", map_3d._cities.multimesh.instance_count
 	)
 	map_3d.free()
 	overlay.free()

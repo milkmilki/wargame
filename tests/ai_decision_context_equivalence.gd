@@ -104,11 +104,7 @@ func _nation_fp(nation: Nation) -> String:
 		nation.food_demand_ema,
 		nation.war_preparation_target_nation,
 		nation.war_preparation_objective_city,
-		nation.campaign_preparation_targets,
-		nation.campaign_preparation_assignments,
-		nation.campaign_attack_assignments,
-		nation.campaign_active_echelons,
-		nation.campaign_launched_armies,
+		nation.campaign_objective_center_city,
 	])
 
 
