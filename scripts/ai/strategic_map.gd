@@ -9,6 +9,9 @@ const EDGE_TERRAIN_HOLD_GAIN: float = 4.0
 ## 全图 Node Betweenness 已归一化到 0..1。作为城市的一般战略价值加分，
 ## 同时进入守备与战时攻势排序，但不改变可达性或硬守备规则。
 const NODE_BETWEENNESS_CITY_VALUE_WEIGHT: float = 10.0
+## 已写入战争状态的州目标必须压过普通前线价值；战术节点仍可随
+## 州内实控与可达性动态变化。
+const DIPLOMATIC_OBJECTIVE_PRIORITY_BONUS: float = 1000.0
 
 ## AB 实验开关（默认 true=生产行为）：敌对前线边地形加成是否用 terrain_hold_bias 凸曲线。
 ## 关闭时退回历史线性 danger*2.0，仅供地形收益 A/B 长跑对照，不影响生产与确定性回归。
@@ -177,10 +180,15 @@ static func build_base_city_values(state: GameState) -> Dictionary:
 		var value := (
 			float(city.gold_per_month) / float(max_gold)
 			+ float(city.food_per_half_year) / float(max_food)
-			+ float(city.fort_strength) / 30.0 * 0.25
+			+ (
+				float(city.garrison_manpower) / 15000.0 * 0.25
+				if state.is_zhou_city(city.id) else 0.0
+			)
 		)
 		if city.is_capital:
 			value += 5.0
+		if state.is_zhou_city(city.id):
+			value += 4.0
 		if city.has_warehouse:
 			value += 3.0 + minf(float(city.food_storage) / 1000.0, 2.0)
 		if city.is_food_hub:
@@ -740,12 +748,24 @@ func _select_priority_targets(view: AiWorldView) -> void:
 			not objective.is_empty()
 			and int(objective.get("attacker", -1)) == nation_id
 		):
-			diplomatic_targets[int(objective["city_id"])] = true
+			var center_id := int(objective.get(
+				"administrative_center_city_id",
+				objective.get("city_id", -1)
+			))
+			var tactical_id := DiplomacyAI.administrative_tactical_target(
+				_state, nation_id, enemy_id, center_id
+			)
+			if tactical_id >= 0:
+				diplomatic_targets[tactical_id] = true
 	for city_id in frontier_enemy_cities:
 		scored.append([
 			value_of_offense(city_id)
 				+ 2.0
-				+ (4.0 if diplomatic_targets.has(city_id) else 0.0),
+				+ (
+					DIPLOMATIC_OBJECTIVE_PRIORITY_BONUS
+					if diplomatic_targets.has(city_id)
+					else 0.0
+				),
 			city_id,
 		])
 	scored.sort_custom(func(a: Array, b: Array) -> bool:

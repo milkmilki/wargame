@@ -378,7 +378,7 @@ func _process(delta: float) -> void:
 		)
 		or (
 			_map_mode == MapRenderer.MapMode.REGION
-			and state.region_analysis_revision
+			and state.administrative_region_revision
 				!= _last_region_analysis_revision
 		)
 	):
@@ -409,7 +409,7 @@ func _process(delta: float) -> void:
 		_last_diplomatic_view_nation_id = (
 			overlay.diplomatic_view_nation_id() if overlay != null else -1
 		)
-		_last_region_analysis_revision = state.region_analysis_revision
+		_last_region_analysis_revision = state.administrative_region_revision
 	var country_visual_committed := _poll_country_visual_task()
 	if state.naming_revision != _last_naming_revision:
 		_rebuild_city_labels()
@@ -1046,7 +1046,7 @@ func _on_terrain_ready() -> void:
 		overlay.diplomatic_view_nation_id() if overlay != null else -1
 	)
 	_last_road_network_revision = state.road_network_revision
-	_last_region_analysis_revision = state.region_analysis_revision
+	_last_region_analysis_revision = state.administrative_region_revision
 	_last_trade_revision = state.trade_revision
 	_last_naming_revision = state.naming_revision
 
@@ -1106,7 +1106,8 @@ func _update_province_visuals() -> void:
 	var region_mode := _map_mode == MapRenderer.MapMode.REGION
 	var region_changed := (
 		region_mode
-		and state.region_analysis_revision != _last_region_analysis_revision
+		and state.administrative_region_revision
+			!= _last_region_analysis_revision
 	)
 	var topology_changed := (
 		_boundary_topology.is_empty()
@@ -1127,7 +1128,7 @@ func _update_province_visuals() -> void:
 		or region_changed
 	):
 		city_owners = (
-			state.region_ids.duplicate()
+			state.administrative_region_ids.duplicate()
 			if region_mode
 			else _city_owner_snapshot()
 		)
@@ -1198,7 +1199,8 @@ func _update_province_visuals() -> void:
 			MapRenderer.build_country_fill_opacity_image_from_owners(
 				state.province_map_size,
 				state.province_ids,
-				state.region_ids if region_mode else _city_owner_snapshot()
+				state.administrative_region_ids
+				if region_mode else _city_owner_snapshot()
 			)
 		)
 	var output_size := (
@@ -1223,7 +1225,7 @@ func _update_province_visuals() -> void:
 		if _country_boundary_texture == null:
 			if city_owners.is_empty():
 				city_owners = (
-					state.region_ids.duplicate()
+					state.administrative_region_ids.duplicate()
 					if region_mode
 					else _city_owner_snapshot()
 				)
@@ -1267,7 +1269,7 @@ func _update_province_visuals() -> void:
 		else:
 			if city_owners.is_empty():
 				city_owners = (
-					state.region_ids.duplicate()
+					state.administrative_region_ids.duplicate()
 					if region_mode
 					else _city_owner_snapshot()
 				)
@@ -2121,16 +2123,17 @@ func _update_city_instances() -> void:
 			)
 		)
 		var region_id := (
-			state.region_ids[city.id]
-			if city.id >= 0 and city.id < state.region_ids.size()
+			state.administrative_region_ids[city.id]
+			if city.id >= 0 and city.id < state.administrative_region_ids.size()
 			else -1
 		)
 		var color := (
 			MapRenderer.loyalty_color(city.loyalty)
 			if _map_mode == MapRenderer.MapMode.LOYALTY
-			else state.region_colors[region_id]
+			else state.administrative_region_colors[region_id]
 			if _map_mode == MapRenderer.MapMode.REGION
-				and region_id >= 0 and region_id < state.region_colors.size()
+				and region_id >= 0
+				and region_id < state.administrative_region_colors.size()
 			else (
 				MapRenderer.final_faction_visual_color(
 					state, city.owner_nation,
@@ -3066,12 +3069,13 @@ func _update_battle_label(
 	_ensure_battle_label(index)
 	var label := _battle_labels[index]
 	if battle.kind == Battle.Kind.SIEGE:
-		label.text = "围城 %d%%" % int(round(
-			clampf(
-				battle.siege_progress
-					/ maxf(Combat.SIEGE_PROGRESS_REQUIRED, 1.0),
-				0.0, 1.0
-			) * 100.0
+		var capacity := state.city_garrison_capacity(battle.city.id)
+		var remaining := (
+			float(battle.city.garrison_manpower) / float(capacity)
+			if capacity > 0 else 0.0
+		)
+		label.text = "守军 %d%%" % int(round(
+			clampf(remaining, 0.0, 1.0) * 100.0
 		))
 	else:
 		label.text = "会战 · %d回合" % battle.round_no

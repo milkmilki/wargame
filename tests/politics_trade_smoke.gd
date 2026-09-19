@@ -829,6 +829,7 @@ func _make_trade_limit_state() -> GameState:
 			_add_edge(state, a, b, 20000, 1 + abs(a - b))
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	_configure_capitals_and_warehouses(state, 50)
+	state.rebuild_administrative_regions()
 	state.refresh_derived()
 	return state
 
@@ -873,6 +874,7 @@ func _make_capital_trade_center_state() -> GameState:
 	_add_city(state, 0, Vector2(0.1, 0.5), 20, 600)
 	_add_city(state, 1, Vector2(0.4, 0.5), 30, 600)
 	_add_city(state, 0, Vector2(0.8, 0.5), 100, 600)
+	_add_edge(state, 0, 1, 20000, 1)
 	state.region_ids = PackedInt32Array([0, 0, 1])
 	state.region_count = 2
 	_configure_capitals_and_warehouses(state, 20)
@@ -880,7 +882,16 @@ func _make_capital_trade_center_state() -> GameState:
 	state.nations[1].capital_city_id = 1
 	for city in state.cities:
 		city.is_capital = city.id in [0, 1]
+	state.rebuild_administrative_regions()
 	state.refresh_derived()
+	# 行政州域生成后，测试中的首都必须仍是有效州治；否则属府的
+	# 行政门槛会有意关闭其非贸易产出。
+	state.nations[0].capital_city_id = state.administrative_center_of(0)
+	for city in state.cities:
+		city.is_capital = (
+			city.id == state.nations[0].capital_city_id
+			or city.id == state.nations[1].capital_city_id
+		)
 	return state
 
 

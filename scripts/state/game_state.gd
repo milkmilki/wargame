@@ -7,7 +7,7 @@ const TerritoryTransaction = preload("res://scripts/state/territory_transaction.
 
 const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64 城兼容网格夹具
-const TERRAIN_CITY_COUNT: int = 200         ## 正式高度图基础陆城；动态码头另计
+const TERRAIN_CITY_COUNT: int = 300         ## 正式高度图基础陆城；动态码头另计
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 500
 const CITY_MANPOWER_PER_MONTH_MAX: int = 1000
@@ -17,6 +17,8 @@ const INITIAL_MANPOWER_RESERVE_MONTHS: int = (RESOURCE_CAPACITY_YEARS+2) * 12
 const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
+const ZHOU_GARRISON_CAPACITY: int = 15000
+const ZHOU_GARRISON_MONTHLY_REINFORCEMENT: int = 1500
 const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
 const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = 1
 const DEFAULT_TRUCE_DAYS: int = 180
@@ -180,7 +182,7 @@ var _next_army_id: int = 0
 var _next_battle_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
 var diplomacy_revision: int = 0             ## 外交关系版本号，供 AI 战略缓存失效
-var fortification_revision: int = 0         ## 当前城防变化版本号，供 AI 战略缓存失效
+var garrison_revision: int = 0              ## 州治守军变化版本号，供战役缓存失效
 var road_network_revision: int = 0          ## 运行时道路通行性/容量重算版本号
 ## 规范化国家对 key -> DiplomaticRelation / 关系生效日 / 停战截止日。
 var diplomatic_relations: Dictionary = {}
@@ -218,6 +220,17 @@ var region_colors: PackedColorArray = PackedColorArray()
 var node_betweenness: PackedFloat32Array = PackedFloat32Array()
 var region_key_city_ids: PackedInt32Array = PackedInt32Array()
 var region_analysis_revision: int = 0
+## Land-only administrative regions. Docks and inactive cities remain -1 and
+## never bridge two land components. These values are derived from roads.
+var administrative_region_ids: PackedInt32Array = PackedInt32Array()
+var administrative_center_by_city: PackedInt32Array = PackedInt32Array()
+var administrative_hop_distances: PackedInt32Array = PackedInt32Array()
+var administrative_center_city_ids: PackedInt32Array = PackedInt32Array()
+var administrative_region_count: int = 0
+var administrative_region_colors: PackedColorArray = PackedColorArray()
+var administrative_region_revision: int = 0
+var _garrisons_initialized: bool = false
+var _campaign_travel_days_cache: Dictionary = {}
 ## 省份栅格的静态拓扑缓存。领土变化只重新聚合宗藩根，不重复扫描贴图。
 var _province_neighbor_pairs: Array[Vector2i] = []
 var _province_neighbor_pairs_ready: bool = false
@@ -266,10 +279,6 @@ func generate_world(
 			density_settings
 		)
 	)
-	_generate_nations(
-		DiplomaticRelation.NEUTRAL,
-		nation_count
-	)
 	var terrain := TerrainMapGenerator.build(
 		terrain_map_path(),
 		terrain_city_count,
@@ -279,10 +288,13 @@ func generate_world(
 		nation_count,
 		political_mask_path
 	)
-	assert(
-		int(terrain.get("politically_active_count", terrain_city_count))
-			>= nation_count,
-		"政治蒙版内实际城市不足以保证每国至少一城"
+	var politically_active_count := int(terrain.get(
+		"politically_active_count", terrain_city_count
+	))
+	assert(politically_active_count > 0, "政治蒙版内至少需要一座实际城市")
+	_generate_nations(
+		DiplomaticRelation.NEUTRAL,
+		mini(nation_count, politically_active_count)
 	)
 	_generate_terrain_cities(terrain)
 	_generate_terrain_docks(terrain)
@@ -302,10 +314,12 @@ func generate_world(
 	)
 	assert(bool(initial_road_result.get("ok", false)))
 	road_network_revision = 0
+	_finalize_initial_nations_by_administrative_centers()
 	_initialize_recognized_city_owners()
 	_initialize_resource_hubs()
 	_initialize_terrain_development()
 	_initialize_manpower_pools()
+	_initialize_city_garrisons_free()
 	_initialize_capitals_and_warehouses()
 	WorldNaming.assign_initial_names(self, world_seed)
 	_initialize_city_loyalty()
@@ -339,12 +353,14 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_generate_grid_provinces()
 	_initialize_recognized_city_owners()
 	_initialize_manpower_pools()
-	_initialize_capitals_and_warehouses()
-	WorldNaming.assign_initial_names(self, world_seed)
-	_initialize_city_loyalty()
 	_generate_grid_edges()
 	_classify_road_capacity()
 	rebuild_region_analysis()
+	rebuild_administrative_regions()
+	_initialize_city_garrisons_free()
+	_initialize_capitals_and_warehouses()
+	WorldNaming.assign_initial_names(self, world_seed)
+	_initialize_city_loyalty()
 	_generate_armies()
 	reconcile_adjacent_sovereign_colors()
 
@@ -411,8 +427,10 @@ func generate_from_map_definition(
 			"politically_active", true
 		))
 		city.owner_nation = int(record["owner_nation"])
-		city.fort_strength = int(record.get("fort_strength", 10))
-		city.fort_strength_max = int(record.get("fort_strength_max", 10))
+		city.garrison_defense_base = clampi(int(record.get(
+			"garrison_defense_base",
+			_garrison_defense_base_for_position(city.map_position)
+		)), 3, 5)
 		city.manpower_per_month = int(record.get(
 			"manpower_per_month", CITY_MANPOWER_PER_MONTH_MIN
 		))
@@ -492,10 +510,12 @@ func generate_from_map_definition(
 		)
 	_initialize_recognized_city_owners()
 	_initialize_manpower_pools()
+	rebuild_region_analysis()
+	rebuild_administrative_regions()
+	_initialize_city_garrisons_free()
 	_initialize_capitals_and_warehouses()
 	WorldNaming.assign_from_definition(self, definition, world_seed)
 	_initialize_city_loyalty(false)
-	rebuild_region_analysis()
 	_generate_armies()
 	refresh_derived()
 	reconcile_adjacent_sovereign_colors()
@@ -531,12 +551,9 @@ func apply_city_editor_changes(
 	):
 		return {"ok": false, "error": "不能转移一个国家的最后一座陆地城市。"}
 	# 先解析全部字段，避免任一无效值在领土或坐标已提交后才触发转换错误。
-	var fort_strength_max := maxi(int(changes.get(
-		"fort_strength_max", city.fort_strength_max
-	)), 0)
-	var fort_strength := clampi(int(changes.get(
-		"fort_strength", city.fort_strength
-	)), 0, fort_strength_max)
+	var garrison_defense_base := clampi(int(changes.get(
+		"garrison_defense_base", city.garrison_defense_base
+	)), 3, 5)
 	var manpower_per_month := maxi(int(changes.get(
 		"manpower_per_month", city.manpower_per_month
 	)), 0)
@@ -577,8 +594,8 @@ func apply_city_editor_changes(
 				)),
 			}
 	city.map_position = new_position
-	city.fort_strength_max = fort_strength_max
-	city.fort_strength = fort_strength
+	city.garrison_defense_base = garrison_defense_base
+	garrison_revision += 1
 	city.manpower_per_month = manpower_per_month
 	city.gold_per_month = gold_per_month
 	city.food_per_half_year = food_per_half_year
@@ -608,6 +625,7 @@ func apply_city_editor_changes(
 		ownership_revision += 1
 		road_network_revision += 1
 		rebuild_region_analysis()
+		rebuild_administrative_regions()
 	refresh_derived()
 	if position_changed:
 		reconcile_adjacent_sovereign_colors()
@@ -692,6 +710,7 @@ func apply_edge_editor_changes(
 	road_network_revision += 1
 	if was_region_link != _edge_participates_in_region_graph(edge):
 		rebuild_region_analysis()
+	rebuild_administrative_regions()
 	return {"ok": true, "city_a": edge.city_a, "city_b": edge.city_b}
 
 
@@ -711,7 +730,7 @@ func _reset_world(world_seed: int) -> void:
 	_next_army_id = 0
 	ownership_revision = 0
 	diplomacy_revision = 0
-	fortification_revision = 0
+	garrison_revision = 0
 	road_network_revision = 0
 	diplomatic_relations.clear()
 	diplomatic_since_day.clear()
@@ -733,6 +752,15 @@ func _reset_world(world_seed: int) -> void:
 	node_betweenness = PackedFloat32Array()
 	region_key_city_ids = PackedInt32Array()
 	region_analysis_revision = 0
+	administrative_region_ids = PackedInt32Array()
+	administrative_center_by_city = PackedInt32Array()
+	administrative_hop_distances = PackedInt32Array()
+	administrative_center_city_ids = PackedInt32Array()
+	administrative_region_count = 0
+	administrative_region_colors = PackedColorArray()
+	administrative_region_revision = 0
+	_garrisons_initialized = false
+	_campaign_travel_days_cache.clear()
 	_province_neighbor_pairs.clear()
 	_province_neighbor_pairs_ready = false
 	river_features.clear()
@@ -800,8 +828,12 @@ func _generate_grid_cities() -> void:
 				(float(r) + 0.5) / float(GRID)
 			)
 			city.owner_nation = _quadrant_of(c, r)
-			city.fort_strength = rng.randi_range(10, 30)
-			city.fort_strength_max = city.fort_strength
+			# v6 删除工事字段，但保留旧世界种子的后续 RNG 序列。
+			# 守军效率仍由独立物理哈希生成，不读取此占位值。
+			var _legacy_world_stream_roll := rng.randi_range(10, 30)
+			city.garrison_defense_base = _garrison_defense_base_for_position(
+				city.map_position
+			)
 			city.manpower_per_month = rng.randi_range(
 				CITY_MANPOWER_PER_MONTH_MIN,
 				CITY_MANPOWER_PER_MONTH_MAX
@@ -842,8 +874,11 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.politically_active = (
 			political_active.is_empty() or political_active[id] != 0
 		)
-		city.fort_strength = rng.randi_range(10, 30)
-		city.fort_strength_max = city.fort_strength
+		# 与网格世界一致，只保持 v5 及以前种子的后续随机流兼容。
+		var _legacy_world_stream_roll := rng.randi_range(10, 30)
+		city.garrison_defense_base = _garrison_defense_base_for_position(
+			city.map_position
+		)
 		city.manpower_per_month = rng.randi_range(
 			CITY_MANPOWER_PER_MONTH_MIN,
 			CITY_MANPOWER_PER_MONTH_MAX
@@ -892,6 +927,7 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 		city.terrain_height = float(dock_data["height"])
 		city.terrain_relief = float(dock_data["relief"])
 		city.is_dock = true
+		city.garrison_defense_base = 3
 		var road_t := float(dock_data["road_t"])
 		var owner_city := int(dock_data.get(
 			"owner_city",
@@ -902,8 +938,6 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 		city.politically_active = cities[owner_city].politically_active
 		city.owner_nation = -1
 		city.set_meta("initial_owner_city", owner_city)
-		city.fort_strength = 10
-		city.fort_strength_max = 10
 		# 码头是完整可占领城市，但不凭空扩大开局四国经济盘子。
 		city.manpower_per_month = 0
 		city.gold_per_month = 0
@@ -1138,6 +1172,281 @@ func _assign_spatial_nation_partition(
 		first_nation + left_nations,
 		right_nations
 	)
+
+
+## 道路确定后州域才稳定。国家数以实际州治数为上限，初始领土一律以整州
+## 为最小单位划分，避免开局就出现州治和属府分属不同国家。
+func _finalize_initial_nations_by_administrative_centers() -> void:
+	assert(administrative_region_count > 0, "开局至少需要一个行政州")
+	var effective_count := mini(
+		nations.size(), administrative_region_count
+	)
+	if effective_count != nations.size():
+		_reset_initial_nations(effective_count)
+	_assign_initial_nations_from_administrative_centers()
+	for nation in nations:
+		assert(
+			_initial_nation_owns_administrative_center(nation.id),
+			"初始国%d必须至少实控一个州治" % nation.id
+		)
+
+
+func _initial_nation_owns_administrative_center(nation_id: int) -> bool:
+	for center_id in administrative_center_city_ids:
+		if cities[center_id].owner_nation == nation_id:
+			return true
+	return false
+
+
+func _reset_initial_nations(nation_count: int) -> void:
+	nations.clear()
+	diplomatic_relations.clear()
+	diplomatic_since_day.clear()
+	truce_until_day.clear()
+	diplomatic_history.clear()
+	war_objectives.clear()
+	suzerainty.clear()
+	suzerainty_low_cohesion_since_day.clear()
+	_suzerainty_cohesion_revision = -1
+	_suzerainty_cohesion_by_root.clear()
+	_generate_nations(DiplomaticRelation.NEUTRAL, nation_count)
+
+
+func _assign_initial_nations_from_administrative_centers() -> void:
+	var center_cities: Array[City] = []
+	for center_id in administrative_center_city_ids:
+		center_cities.append(cities[center_id])
+	assert(
+		center_cities.size() >= nations.size(),
+		"州治数量必须足以为每个初始国家提供种子"
+	)
+	# 州压成行政节点，码头保留独立节点；只消费最终可通行交通边。
+	var graph_size := administrative_region_count + cities.size()
+	var graph: Array[Array] = []
+	graph.resize(graph_size)
+	for node_id in range(graph_size):
+		graph[node_id] = [] as Array[int]
+	var active_nodes := {}
+	for region_id in range(administrative_region_count):
+		active_nodes[region_id] = true
+	for city in cities:
+		if city.politically_active and city.is_dock:
+			active_nodes[administrative_region_count + city.id] = true
+	for edge in edges:
+		if edge == null or edge.max_manpower <= 0:
+			continue
+		var node_a := _initial_administrative_node(edge.city_a)
+		var node_b := _initial_administrative_node(edge.city_b)
+		if node_a < 0 or node_b < 0 or node_a == node_b:
+			continue
+		if not graph[node_a].has(node_b):
+			graph[node_a].append(node_b)
+			graph[node_b].append(node_a)
+	for node_id in active_nodes:
+		graph[int(node_id)].sort()
+	# 每个独立交通分区至少投放一国，其余名额按可用州数比例分配。
+	var components: Array[Array] = []
+	var unseen := active_nodes.duplicate()
+	while not unseen.is_empty():
+		var starts := unseen.keys()
+		starts.sort()
+		var queue: Array[int] = [int(starts[0])]
+		var component: Array[int] = []
+		unseen.erase(queue[0])
+		var cursor := 0
+		while cursor < queue.size():
+			var node_id := queue[cursor]
+			cursor += 1
+			component.append(node_id)
+			for neighbor_value in graph[node_id]:
+				var neighbor := int(neighbor_value)
+				if unseen.has(neighbor):
+					unseen.erase(neighbor)
+					queue.append(neighbor)
+		components.append(component)
+	assert(components.size() <= nations.size(), "每个交通分区至少需要一个国家")
+	var allocations: Array[int] = []
+	allocations.resize(components.size())
+	allocations.fill(1)
+	var remaining := nations.size() - components.size()
+	while remaining > 0:
+		var best := -1
+		var best_ratio := -INF
+		for index in range(components.size()):
+			var region_count_in_component := 0
+			for node_value in components[index]:
+				region_count_in_component += (
+					1 if int(node_value) < administrative_region_count else 0
+				)
+			if allocations[index] >= region_count_in_component:
+				continue
+			var ratio := (
+				float(region_count_in_component) / float(allocations[index])
+			)
+			if ratio > best_ratio:
+				best_ratio = ratio
+				best = index
+		assert(best >= 0, "州治数量不足以分配全部初始国家")
+		allocations[best] += 1
+		remaining -= 1
+	var owner_by_node: Array[int] = []
+	owner_by_node.resize(graph_size)
+	owner_by_node.fill(-1)
+	var assigned_land_counts: Array[int] = []
+	assigned_land_counts.resize(nations.size())
+	assigned_land_counts.fill(0)
+	var first_nation := 0
+	# 图上最远点种子避免几何相近但道路遥远的州被误判为相邻。
+	for index in range(components.size()):
+		var seeds := _initial_administrative_seeds(
+			components[index], allocations[index], graph
+		)
+		for seed_index in range(seeds.size()):
+			var nation_id := first_nation + seed_index
+			var region_id := seeds[seed_index]
+			owner_by_node[region_id] = nation_id
+			assigned_land_counts[nation_id] += (
+				administrative_members(
+					administrative_center_city_ids[region_id]
+				).size()
+			)
+		first_nation += allocations[index]
+	# 逐个扩张连通前沿，但每次优先当前陆城权重最少的国家。州节点权重为
+	# 其成员数，码头为 0；这样仍保持整州与连通性，同时避免 FIFO 种子吞图。
+	var unowned_count := active_nodes.size() - nations.size()
+	var expansion_guard := active_nodes.size() * active_nodes.size()
+	while unowned_count > 0 and expansion_guard > 0:
+		expansion_guard -= 1
+		var best_owner := -1
+		var best_neighbor := -1
+		var best_weight := 0
+		for node_value in active_nodes:
+			var node_id := int(node_value)
+			var owner_id := owner_by_node[node_id]
+			if owner_id < 0:
+				continue
+			for neighbor_value in graph[node_id]:
+				var neighbor := int(neighbor_value)
+				if owner_by_node[neighbor] >= 0:
+					continue
+				var weight := (
+					administrative_members(
+						administrative_center_city_ids[neighbor]
+					).size()
+					if neighbor < administrative_region_count
+					else 0
+				)
+				if (
+					best_owner < 0
+					or assigned_land_counts[owner_id]
+						< assigned_land_counts[best_owner]
+					or (
+						assigned_land_counts[owner_id]
+							== assigned_land_counts[best_owner]
+						and weight < best_weight
+					)
+					or (
+						assigned_land_counts[owner_id]
+							== assigned_land_counts[best_owner]
+						and weight == best_weight
+						and neighbor < best_neighbor
+					)
+				):
+					best_owner = owner_id
+					best_neighbor = neighbor
+					best_weight = weight
+		if best_owner < 0:
+			break
+		owner_by_node[best_neighbor] = best_owner
+		assigned_land_counts[best_owner] += best_weight
+		unowned_count -= 1
+	assert(unowned_count == 0, "初始行政州图必须完成连通分配")
+	for city in cities:
+		if not city.politically_active:
+			city.owner_nation = -1
+			continue
+		var node_id := _initial_administrative_node(city.id)
+		assert(node_id >= 0 and owner_by_node[node_id] >= 0)
+		city.owner_nation = owner_by_node[node_id]
+	for city in cities:
+		assert(
+			not city.politically_active or city.owner_nation >= 0,
+			"所有政治激活城市必须获得初始归属"
+		)
+
+
+func _initial_administrative_node(city_id: int) -> int:
+	if city_id < 0 or city_id >= cities.size():
+		return -1
+	var city := cities[city_id]
+	if not city.politically_active:
+		return -1
+	if city.is_dock:
+		return administrative_region_count + city_id
+	if city_id >= administrative_region_ids.size():
+		return -1
+	return administrative_region_ids[city_id]
+
+
+func _initial_administrative_seeds(
+	component: Array,
+	seed_count: int,
+	graph: Array[Array]
+) -> Array[int]:
+	var region_nodes: Array[int] = []
+	var component_set := {}
+	var centroid := Vector2.ZERO
+	for node_value in component:
+		var node_id := int(node_value)
+		component_set[node_id] = true
+		if node_id >= administrative_region_count:
+			continue
+		region_nodes.append(node_id)
+		centroid += cities[
+			administrative_center_city_ids[node_id]
+		].map_position
+	assert(region_nodes.size() >= seed_count)
+	centroid /= float(region_nodes.size())
+	var first := region_nodes[0]
+	var first_distance := cities[
+		administrative_center_city_ids[first]
+	].map_position.distance_squared_to(centroid)
+	for region_id in region_nodes:
+		var distance := cities[
+			administrative_center_city_ids[region_id]
+		].map_position.distance_squared_to(centroid)
+		if distance < first_distance or (
+			is_equal_approx(distance, first_distance) and region_id < first
+		):
+			first = region_id
+			first_distance = distance
+	var result: Array[int] = [first]
+	while result.size() < seed_count:
+		var distances := {}
+		var queue: Array[int] = result.duplicate()
+		for seed in result:
+			distances[seed] = 0
+		var cursor := 0
+		while cursor < queue.size():
+			var node_id := queue[cursor]
+			cursor += 1
+			for neighbor_value in graph[node_id]:
+				var neighbor := int(neighbor_value)
+				if component_set.has(neighbor) and not distances.has(neighbor):
+					distances[neighbor] = int(distances[node_id]) + 1
+					queue.append(neighbor)
+		var best := -1
+		var best_hops := -1
+		for region_id in region_nodes:
+			if result.has(region_id):
+				continue
+			var hops := int(distances.get(region_id, -1))
+			if hops > best_hops or (hops == best_hops and region_id < best):
+				best = region_id
+				best_hops = hops
+		assert(best >= 0)
+		result.append(best)
+	return result
 
 
 func _initialize_manpower_pools() -> void:
@@ -1537,13 +1846,18 @@ func _initialize_capitals_and_warehouses() -> void:
 		city.has_warehouse = false
 	for nation in nations:
 		var owned := land_cities_of(nation.id)
+		var owned_zhou: Array[City] = []
+		for city in owned:
+			if is_zhou_city(city.id):
+				owned_zhou.append(city)
+		var candidates := owned_zhou if not owned_zhou.is_empty() else owned
 		var centroid := Vector2.ZERO
 		for city in owned:
 			centroid += city.map_position
 		centroid /= float(maxi(owned.size(), 1))
-		var capital_id := owned[0].id
+		var capital_id := candidates[0].id
 		var best_distance := INF
-		for city in owned:
+		for city in candidates:
 			var distance := city.map_position.distance_squared_to(centroid)
 			if distance < best_distance or (
 					is_equal_approx(distance, best_distance)
@@ -1713,6 +2027,385 @@ func rebuild_region_analysis(
 		"elapsed_usec": Time.get_ticks_usec() - started,
 		"revision": region_analysis_revision,
 	}
+
+
+func rebuild_administrative_regions() -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var previous_centers := {}
+	if _garrisons_initialized:
+		for center_value in administrative_center_city_ids:
+			previous_centers[int(center_value)] = true
+	var active := PackedInt32Array()
+	var positions := PackedVector2Array()
+	positions.resize(cities.size())
+	for city in cities:
+		positions[city.id] = city.map_position
+		if city.politically_active and not city.is_dock:
+			active.append(city.id)
+	var links: Array[Vector2i] = []
+	for edge in edges:
+		if (
+			edge == null
+			or edge.kind != Edge.Kind.LAND
+			or edge.max_manpower <= 0
+			or edge.city_a < 0
+			or edge.city_b < 0
+			or edge.city_a >= cities.size()
+			or edge.city_b >= cities.size()
+			or cities[edge.city_a].is_dock
+			or cities[edge.city_b].is_dock
+			or not cities[edge.city_a].politically_active
+			or not cities[edge.city_b].politically_active
+		):
+			continue
+		links.append(Vector2i(edge.city_a, edge.city_b))
+	var analysis := AdministrativeRegionAnalysis.analyze(
+		cities.size(), active, links, positions
+	)
+	administrative_region_ids = analysis["region_ids"]
+	administrative_region_count = int(analysis["region_count"])
+	administrative_center_city_ids = analysis["center_city_ids"]
+	administrative_center_by_city = analysis["center_by_city"]
+	administrative_hop_distances = analysis["hop_distances"]
+	administrative_region_colors.resize(administrative_region_count)
+	for region_id in range(administrative_region_count):
+		administrative_region_colors[region_id] = region_color(region_id)
+	administrative_region_revision += 1
+	if _garrisons_initialized:
+		_reconcile_garrisons_after_administrative_rebuild(previous_centers)
+	war_objectives.clear()
+	for nation in nations:
+		nation.administrative_campaign_plan = null
+		nation.war_preparation_objective_center_city = -1
+		nation.campaign_objective_center_city = -1
+		nation.campaign_theater_anchor_city = -1
+		nation.campaign_theater_started_day = -1
+		nation.campaign_preparation_targets.clear()
+		nation.campaign_preparation_assignments.clear()
+		nation.campaign_preparation_group_assignments.clear()
+		nation.campaign_preparation_plan = null
+		nation.campaign_post_capture_plans.clear()
+		nation.campaign_plan_targets.clear()
+		nation.campaign_plan_primary_city = -1
+		nation.campaign_attack_assignments.clear()
+		nation.campaign_attack_echelons.clear()
+		nation.campaign_active_echelons.clear()
+	return {
+		"region_count": administrative_region_count,
+		"center_count": administrative_center_city_ids.size(),
+		"node_count": active.size(),
+		"edge_count": links.size(),
+		"elapsed_usec": Time.get_ticks_usec() - started,
+		"revision": administrative_region_revision,
+	}
+
+
+func administrative_center_of(city_id: int) -> int:
+	if city_id < 0 or city_id >= administrative_center_by_city.size():
+		return -1
+	return administrative_center_by_city[city_id]
+
+
+func is_zhou_city(city_id: int) -> bool:
+	return city_id >= 0 and administrative_center_of(city_id) == city_id
+
+
+func is_fu_city(city_id: int) -> bool:
+	var center := administrative_center_of(city_id)
+	return center >= 0 and center != city_id
+
+
+func administrative_members(center_city_id: int) -> Array[int]:
+	var result: Array[int] = []
+	if not is_zhou_city(center_city_id):
+		return result
+	for city_id in range(administrative_center_by_city.size()):
+		if administrative_center_by_city[city_id] == center_city_id:
+			result.append(city_id)
+	return result
+
+
+func administrative_controller(center_city_id: int) -> int:
+	if not is_zhou_city(center_city_id):
+		return -1
+	return cities[center_city_id].owner_nation
+
+
+func city_garrison_capacity(city_id: int) -> int:
+	if (
+		city_id < 0
+		or city_id >= cities.size()
+		or cities[city_id].is_dock
+		or not cities[city_id].politically_active
+	):
+		return 0
+	return ZHOU_GARRISON_CAPACITY if is_zhou_city(city_id) else 0
+
+
+func administrative_campaign_control_share(
+	attacker_id: int,
+	center_city_id: int
+) -> float:
+	if not is_zhou_city(center_city_id):
+		return 0.0
+	var fu_count := 0
+	var controlled_fu_count := 0
+	var attacker_bloc := alliance_bloc(attacker_id)
+	if attacker_bloc.is_empty() and attacker_id >= 0:
+		attacker_bloc.append(attacker_id)
+	for city_id in administrative_members(center_city_id):
+		if city_id == center_city_id:
+			continue
+		fu_count += 1
+		if attacker_bloc.has(cities[city_id].owner_nation):
+			controlled_fu_count += 1
+	if fu_count <= 0:
+		return 0.0
+	return float(controlled_fu_count) / float(fu_count)
+
+
+func city_garrison_efficiency(
+	attacker_id: int,
+	center_city_id: int
+) -> float:
+	if not is_zhou_city(center_city_id):
+		return 1.0
+	var base := float(clampi(
+		cities[center_city_id].garrison_defense_base, 3, 5
+	))
+	var control_share := administrative_campaign_control_share(
+		attacker_id, center_city_id
+	)
+	return 1.0 + (base - 1.0) * (1.0 - control_share)
+
+
+func campaign_siege_requirement(
+	attacker_id: int,
+	center_city_id: int
+) -> int:
+	if not is_zhou_city(center_city_id):
+		return 0
+	var garrison := maxi(cities[center_city_id].garrison_manpower, 0)
+	return maxi(
+		2 * garrison,
+		ceili(float(garrison) * city_garrison_efficiency(
+			attacker_id, center_city_id
+		))
+	)
+
+
+func campaign_reinforcement_threat(
+	attacker_id: int,
+	center_city_id: int,
+	horizon_days: int = 60
+) -> int:
+	if not is_zhou_city(center_city_id):
+		return 0
+	var defender_id := cities[center_city_id].owner_nation
+	if defender_id < 0 or defender_id >= nations.size():
+		return 0
+	var defender_bloc := alliance_bloc(defender_id)
+	if defender_bloc.is_empty():
+		defender_bloc.append(defender_id)
+	var reachable_manpower := 0
+	var travel_days := _campaign_travel_days_field(
+		center_city_id, float(maxi(horizon_days, 0))
+	)
+	for army in armies:
+		if (
+			army == null
+			or army.size <= 0
+			or not defender_bloc.has(army.owner_nation)
+			or not is_enemy(attacker_id, army.owner_nation)
+		):
+			continue
+		if _army_arrival_days(army, travel_days) <= float(horizon_days):
+			reachable_manpower += army.size
+	return ceili(float(reachable_manpower) * 1.25)
+
+
+func campaign_committed_manpower(
+	attacker_id: int,
+	center_city_id: int
+) -> int:
+	var attacker_bloc := alliance_bloc(attacker_id)
+	if attacker_bloc.is_empty() and attacker_id >= 0:
+		attacker_bloc.append(attacker_id)
+	var result := 0
+	for army in armies:
+		if army == null or army.size <= 0 or not attacker_bloc.has(army.owner_nation):
+			continue
+		var target := army.ai_target_city
+		if target >= 0 and administrative_center_of(target) == center_city_id:
+			result += army.size
+	return result
+
+
+func reinforce_city_garrisons_monthly() -> int:
+	var total := 0
+	for center_value in administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := cities[center_id]
+		var owner_id := city.owner_nation
+		if owner_id < 0 or owner_id >= nations.size():
+			continue
+		var missing := city_garrison_capacity(center_id) - city.garrison_manpower
+		var added := mini(
+			maxi(missing, 0),
+			mini(
+				ZHOU_GARRISON_MONTHLY_REINFORCEMENT,
+				maxi(nations[owner_id].manpower_pool, 0)
+			)
+		)
+		if added <= 0:
+			continue
+		city.garrison_manpower += added
+		nations[owner_id].manpower_pool -= added
+		total += added
+	if total > 0:
+		garrison_revision += 1
+	return total
+
+
+func fill_city_garrison_from_owner_pool(city_id: int) -> int:
+	if city_garrison_capacity(city_id) <= 0:
+		return 0
+	var city := cities[city_id]
+	var owner_id := city.owner_nation
+	if owner_id < 0 or owner_id >= nations.size():
+		return 0
+	var added := mini(
+		city_garrison_capacity(city_id) - city.garrison_manpower,
+		maxi(nations[owner_id].manpower_pool, 0)
+	)
+	if added <= 0:
+		return 0
+	city.garrison_manpower += added
+	nations[owner_id].manpower_pool -= added
+	garrison_revision += 1
+	return added
+
+
+func _initialize_city_garrisons_free() -> void:
+	var changed := false
+	for city in cities:
+		var desired := city_garrison_capacity(city.id)
+		if city.garrison_manpower != desired:
+			city.garrison_manpower = desired
+			changed = true
+	_garrisons_initialized = true
+	if changed:
+		garrison_revision += 1
+
+
+func _reconcile_garrisons_after_administrative_rebuild(
+	previous_centers: Dictionary
+) -> void:
+	var changed := false
+	var current_centers := {}
+	for center_value in administrative_center_city_ids:
+		current_centers[int(center_value)] = true
+	for old_center_value in previous_centers.keys():
+		var old_center := int(old_center_value)
+		if current_centers.has(old_center) or old_center < 0 or old_center >= cities.size():
+			continue
+		var old_city := cities[old_center]
+		var owner_id := old_city.owner_nation
+		if owner_id >= 0 and owner_id < nations.size():
+			nations[owner_id].manpower_pool += maxi(old_city.garrison_manpower, 0)
+		if old_city.garrison_manpower != 0:
+			old_city.garrison_manpower = 0
+			changed = true
+	for new_center_value in current_centers.keys():
+		var new_center := int(new_center_value)
+		if previous_centers.has(new_center):
+			continue
+		var before := cities[new_center].garrison_manpower
+		fill_city_garrison_from_owner_pool(new_center)
+		changed = changed or cities[new_center].garrison_manpower != before
+	if changed:
+		garrison_revision += 1
+
+
+func _garrison_defense_base_for_position(position: Vector2) -> int:
+	var x_key := int(round(absf(position.x - 0.5) * 1000000.0))
+	var y_key := int(round(position.y * 1000000.0))
+	var salt := int((x_key * 73856093) ^ (y_key * 19349663))
+	return 3 + RulerProfile.stable_index(
+		world_seed, 0, "city/garrison_defense", 3, salt
+	)
+
+
+func _army_arrival_days(army: Army, travel_days: Dictionary) -> float:
+	if army == null:
+		return INF
+	if army.on_edge and army.move_to >= 0:
+		var edge := edge_of(army.move_from, army.move_to)
+		if edge == null:
+			return INF
+		var edge_days := Simulation.edge_travel_days(edge, army.max_size)
+		return minf(
+			clampf(army.move_progress, 0.0, 1.0) * edge_days
+				+ float(travel_days.get(army.move_from, INF)),
+			(1.0 - clampf(army.move_progress, 0.0, 1.0)) * edge_days
+				+ float(travel_days.get(army.move_to, INF))
+		)
+	return float(travel_days.get(army.location_city, INF))
+
+
+func _campaign_travel_days_field(
+	target_city_id: int,
+	horizon_days: float
+) -> Dictionary:
+	var key := "%d:%d:%d" % [
+		target_city_id, int(round(horizon_days * 1000.0)), road_network_revision,
+	]
+	if _campaign_travel_days_cache.has(key):
+		return _campaign_travel_days_cache[key]
+	var dist := {target_city_id: 0.0}
+	var visited := {}
+	while true:
+		var current := -1
+		var current_dist := INF
+		for city_value in dist.keys():
+			var city_id := int(city_value)
+			var candidate := float(dist[city_id])
+			if not visited.has(city_id) and candidate < current_dist:
+				current = city_id
+				current_dist = candidate
+		if current < 0 or current_dist > horizon_days:
+			break
+		visited[current] = true
+		for neighbor in neighbors(current):
+			var edge := edge_of(current, neighbor)
+			if edge == null or edge.max_manpower <= 0:
+				continue
+			var next_dist := current_dist + Simulation.edge_travel_days(
+				edge, 0
+			)
+			if next_dist < float(dist.get(neighbor, INF)):
+				dist[neighbor] = next_dist
+	if _campaign_travel_days_cache.size() > 512:
+		_campaign_travel_days_cache.clear()
+	_campaign_travel_days_cache[key] = dist
+	return dist
+
+
+func city_administrative_output_enabled(city_id: int) -> bool:
+	if city_id < 0 or city_id >= cities.size():
+		return false
+	var city := cities[city_id]
+	if not city.politically_active:
+		return false
+	if city.is_dock or is_zhou_city(city_id):
+		return city.owner_nation >= 0
+	var center := administrative_center_of(city_id)
+	return (
+		center >= 0
+		and center < cities.size()
+		and city.owner_nation >= 0
+		and cities[center].owner_nation == city.owner_nation
+	)
 
 
 func _edge_participates_in_region_graph(edge: Edge) -> bool:
@@ -1904,6 +2597,11 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 			)
 		open_count += 1
 		total_capacity += edge.max_manpower
+	if bool(settings.get("preserve_initial_owner_connectivity", false)):
+		var reopened := _ensure_passable_transport_connectivity()
+		open_count += reopened
+		blocked_count = maxi(blocked_count - reopened, 0)
+		total_capacity += reopened * Edge.TERRAIN_LOW_MANPOWER
 	for army in armies:
 		army.clear_line_assignment()
 	for nation in nations:
@@ -1911,6 +2609,7 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 		nation.frontier_defense_topology = null
 	road_network_revision += 1
 	var region_analysis := rebuild_region_analysis()
+	var administrative_analysis := rebuild_administrative_regions()
 	return {
 		"ok": true,
 		"open_count": open_count,
@@ -1922,7 +2621,48 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 		"revision": road_network_revision,
 		"region_count": int(region_analysis["region_count"]),
 		"key_city_count": int(region_analysis["key_city_count"]),
+		"administrative_region_count": int(
+			administrative_analysis["region_count"]
+		),
 	}
+
+
+func _ensure_passable_transport_connectivity() -> int:
+	var parent: Array[int] = []
+	parent.resize(cities.size())
+	for city_id in range(cities.size()):
+		parent[city_id] = city_id
+	for edge in edges:
+		if edge.max_manpower <= 0:
+			continue
+		var root_a := _union_find_root(parent, edge.city_a)
+		var root_b := _union_find_root(parent, edge.city_b)
+		if root_a != root_b:
+			parent[root_b] = root_a
+	var candidates: Array[Edge] = []
+	for edge in edges:
+		if edge.max_manpower <= 0:
+			candidates.append(edge)
+	candidates.sort_custom(func(a: Edge, b: Edge) -> bool:
+		var cost_a := float(a.distance) + a.danger * 2.0
+		var cost_b := float(b.distance) + b.danger * 2.0
+		if not is_equal_approx(cost_a, cost_b):
+			return cost_a < cost_b
+		return _edge_key(a.city_a, a.city_b) < _edge_key(
+			b.city_a, b.city_b
+		)
+	)
+	var reopened := 0
+	for edge in candidates:
+		var root_a := _union_find_root(parent, edge.city_a)
+		var root_b := _union_find_root(parent, edge.city_b)
+		if root_a == root_b:
+			continue
+		edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+		edge.is_backbone = true
+		parent[root_b] = root_a
+		reopened += 1
+	return reopened
 
 func _initial_owner_components(
 	nation_id: int
@@ -2132,7 +2872,6 @@ func _rebalance_initial_nation_land_quotas() -> void:
 		return
 	var average := float(active_land_count) / float(nations.size())
 	var target_count := int(round(average))
-	var minimum_count := maxi(int(floor(average)) - 1, 1)
 	var maximum_count := int(ceil(average)) + 1
 	var guard := cities.size() * nations.size()
 	while guard > 0:
@@ -2183,12 +2922,8 @@ func _rebalance_initial_nation_land_quotas() -> void:
 				break
 		if not changed:
 			break
-	for nation in nations:
-		var count := land_cities_of(nation.id).size()
-		assert(
-			count >= minimum_count and count <= maximum_count,
-			"初始国%d陆城数必须在均值±1内，实为%d" % [nation.id, count]
-		)
+	# 这里只做尽力平衡。随后会按不可拆分的行政州重新划分初始归属，
+	# 逐城均值不再是合法不变量，不能在中间态用断言阻断世界生成。
 
 
 func _initial_city_transfer_preserves_connectivity(
@@ -2445,12 +3180,10 @@ func _generate_armies() -> void:
 
 func _battle_group_structure_valid() -> bool:
 	for nation in nations:
-		if nation.battle_groups.size() > BattleGroup.MAX_COMMAND_UNITS:
-			return false
 		for group in nation.battle_groups:
 			var heavy_count := 0
 			for army in battle_group_members(nation.id, group.id):
-				if army.max_size < INITIAL_HEAVY_ARMY_SIZE:
+				if army.max_size != INITIAL_HEAVY_ARMY_SIZE:
 					return false
 				heavy_count += 1
 			if heavy_count > BattleGroup.MAX_HEAVY_ARMIES:
@@ -2479,8 +3212,6 @@ func create_battle_group(nation_id: int) -> BattleGroup:
 	if nation_id < 0 or nation_id >= nations.size():
 		return null
 	var nation := nations[nation_id]
-	if nation.battle_groups.size() >= BattleGroup.MAX_COMMAND_UNITS:
-		return null
 	var group := BattleGroup.new()
 	group.id = nation.next_battle_group_id
 	nation.next_battle_group_id += 1
@@ -2527,7 +3258,7 @@ func assign_army_to_battle_group(
 	if (
 		army == null
 		or army.size <= 0
-		or army.max_size < INITIAL_HEAVY_ARMY_SIZE
+		or army.max_size != INITIAL_HEAVY_ARMY_SIZE
 		or battle_group_by_id(
 			army.owner_nation,
 			group_id
@@ -2548,13 +3279,12 @@ func assign_army_to_battle_group(
 	return true
 
 
-## 把一支主战军放入空闲指挥槽；六槽已满时并入兵力池最小的现有单位。
-## 返回最终承载兵力的聚合实体。被并入的 army 会从 armies 中移除。
-func assign_or_merge_main_army(army: Army) -> Army:
+## 把一支 15000 人主战军放入独立指挥单位，不合并实体或共享兵力池。
+func assign_main_army_to_independent_command(army: Army) -> Army:
 	if (
 		army == null
 		or army.size <= 0
-		or army.max_size < INITIAL_HEAVY_ARMY_SIZE
+		or army.max_size != INITIAL_HEAVY_ARMY_SIZE
 		or army.owner_nation < 0
 		or army.owner_nation >= nations.size()
 	):
@@ -2563,86 +3293,13 @@ func assign_or_merge_main_army(army: Army) -> Army:
 	for group in nation.battle_groups:
 		if battle_group_members(nation.id, group.id).is_empty():
 			return army if assign_army_to_battle_group(army, group.id) else null
-	if nation.battle_groups.size() < BattleGroup.MAX_COMMAND_UNITS:
-		var created_group := create_battle_group(nation.id)
-		if created_group != null and assign_army_to_battle_group(
-			army, created_group.id
-		):
-			return army
-	var targets: Array[Army] = []
-	for candidate in armies:
-		if (
-			candidate != army
-			and candidate.owner_nation == nation.id
-			and candidate.size > 0
-			and candidate.battle_group_id >= 0
-			and candidate.is_main_battle_role()
-		):
-			targets.append(candidate)
-	if targets.is_empty():
+	var created_group := create_battle_group(nation.id)
+	if created_group == null:
 		return null
-	targets.sort_custom(func(a: Army, b: Army) -> bool:
-		if a.max_size != b.max_size:
-			return a.max_size < b.max_size
-		return a.id < b.id
-	)
-	var target := targets[0]
-	var target_weight := maxi(target.max_size, 1)
-	var source_weight := maxi(army.max_size, 1)
-	var total_weight := target_weight + source_weight
-	target.speed_factor = (
-		target.speed_factor * target_weight + army.speed_factor * source_weight
-	) / float(total_weight)
-	target.attack = int(round(
-		float(target.attack * target_weight + army.attack * source_weight)
-			/ float(total_weight)
-	))
-	target.defense = int(round(
-		float(target.defense * target_weight + army.defense * source_weight)
-			/ float(total_weight)
-	))
-	var combined_size := target.size + army.size
-	target.supply_ratio = (
-		target.supply_ratio * target.size + army.supply_ratio * army.size
-	) / float(maxi(combined_size, 1))
-	target.morale = (
-		target.morale_ratio() * target.size
-			+ army.morale_ratio() * army.size
-	) / float(maxi(combined_size, 1)) * Army.HEAVY_MAX_MORALE
-	target.max_size += army.max_size
-	target.size = mini(combined_size, target.max_size)
-	target.max_morale = Army.HEAVY_MAX_MORALE
-	target.morale = minf(target.morale, target.max_morale)
-	target.supply_debt += army.supply_debt
-	target.supply_food_debt += army.supply_food_debt
-	for campaign_nation in nations:
-		_clear_army_campaign_references(campaign_nation, army.id)
-	_detach_merged_army_from_battles(army)
-	armies.erase(army)
-	return target
-
-
-func _clear_army_campaign_references(nation: Nation, army_id: int) -> void:
-	nation.campaign_preparation_assignments.erase(army_id)
-	nation.campaign_attack_assignments.erase(army_id)
-	nation.campaign_attack_echelons.erase(army_id)
-	nation.campaign_launched_armies.erase(army_id)
-
-
-func _detach_merged_army_from_battles(army: Army) -> void:
-	for battle in battles:
-		battle.side_a.erase(army)
-		battle.side_b.erase(army)
-		battle.reinforce_fresh_a.erase(army)
-		battle.reinforce_fresh_b.erase(army)
-		battle.routed_a.erase(army)
-		battle.routed_b.erase(army)
-		battle.frontline_priority_a.erase(army)
-		battle.frontline_priority_b.erase(army)
-		if not battle.finished and not _battle_has_hostile_sides(battle):
-			battle.finished = true
-			battle.winner_side = 0
-	army.battle_id = -1
+	if assign_army_to_battle_group(army, created_group.id):
+		return army
+	nation.battle_groups.erase(created_group)
+	return null
 
 
 func create_army(
@@ -2690,7 +3347,12 @@ func active_army_count(nation_id: int) -> int:
 
 
 func max_army_count(nation_id: int) -> int:
-	return BattleGroup.MAX_COMMAND_UNITS if nation_id >= 0 else 0
+	if nation_id < 0 or nation_id >= nations.size():
+		return 0
+	return maxi(
+		land_cities_of(nation_id).size() * ARMY_COUNT_LIMIT_PER_CITY,
+		ARMY_COUNT_LIMIT_PER_CITY
+	)
 
 
 func effective_ai_aggression(nation_id: int) -> float:
@@ -2708,20 +3370,6 @@ func effective_army_defense(army: Army) -> float:
 	if army == null:
 		return 0.0
 	return float(army.defense) * maxf(army.ruler_defense_multiplier, 0.1)
-
-
-func effective_city_defense(city: City) -> int:
-	if city == null:
-		return 0
-	var owner_id := city.owner_nation
-	var multiplier := (
-		RulerProfile.city_defense_multiplier(nations[owner_id])
-		if owner_id >= 0 and owner_id < nations.size()
-		else 1.0
-	)
-	return maxi(int(round(
-		float(Combat.city_defense_modifier(city)) * multiplier
-	)), 0)
 
 
 func nation_display_name(nation_id: int) -> String:
@@ -2873,12 +3521,6 @@ func split_army(
 		child.location_city = army.location_city
 		child.move_from = army.location_city
 		child.state = Army.State.IDLE
-		child.offensive_attack_multiplier = (
-			army.offensive_attack_multiplier
-		)
-		child.offensive_bonus_until_day = (
-			army.offensive_bonus_until_day
-		)
 		child.defensive_deployment_until_day = (
 			army.defensive_deployment_until_day
 		)
@@ -2973,10 +3615,14 @@ func set_war_objective(
 	city_id: int,
 	reason: String
 ) -> void:
+	var center_id := administrative_center_of(city_id)
+	if center_id >= 0:
+		city_id = center_id
 	war_objectives[_diplomacy_key(attacker, defender)] = {
 		"attacker": attacker,
 		"defender": defender,
 		"city_id": city_id,
+		"administrative_center_city_id": city_id,
 		"reason": reason,
 		"started_day": day,
 	}
@@ -3524,7 +4170,7 @@ func start_regional_rebellion(
 			defected_armies.append(army)
 	for defected_army in defected_armies:
 		if defected_army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-			assign_or_merge_main_army(defected_army)
+			assign_main_army_to_independent_command(defected_army)
 		else:
 			defected_army.strategic_role = Army.StrategicRole.LINE
 	if defected_armies.is_empty() and rebel.manpower_pool >= INITIAL_HEAVY_ARMY_SIZE:
@@ -3534,7 +4180,7 @@ func start_regional_rebellion(
 		if uprising != null:
 			rebel.manpower_pool -= INITIAL_HEAVY_ARMY_SIZE
 			_initialize_army_attributes(uprising)
-			if assign_or_merge_main_army(uprising) == null:
+			if assign_main_army_to_independent_command(uprising) == null:
 				armies.erase(uprising)
 				rebel.manpower_pool += INITIAL_HEAVY_ARMY_SIZE
 	# 与削藩内战共用同一火星军口径：ceil(0.1 × 叛军陆城数) 个满编
@@ -3693,7 +4339,7 @@ func restore_regional_loyalty_target(
 			restored_armies.append(army)
 	for restored_army in restored_armies:
 		if restored_army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-			assign_or_merge_main_army(restored_army)
+			assign_main_army_to_independent_command(restored_army)
 		else:
 			restored_army.strategic_role = Army.StrategicRole.LINE
 	parent.last_rebellion_day = day
@@ -3874,8 +4520,8 @@ func _food_pool_stock(holder_id: int) -> int:
 ## 守恒：先从原持有者粮仓（按占比）扣，再存入反叛方首都，粮食总量不变。
 ## 叛乱起兵：反叛方首都凭空动员
 ## multiplier × ceil(0.1 × 反叛方陆城数) 个满编主战军团（火星兵）。
-## 六个指挥槽用尽后，新军团直接并入现有聚合单位的共享兵力池。起兵是离散
-## 政治事件，属性沿用 _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
+## 每支起兵军团都建立独立指挥单位。起兵是离散政治事件，属性沿用
+## _initialize_army_attributes 的世界生成随机口径（确定性由 rng 序保证）。
 func _spawn_rebellion_uprising_armies(
 	rebel_id: int,
 	multiplier: int = 1
@@ -3895,7 +4541,7 @@ func _spawn_rebellion_uprising_armies(
 		var heavy := _spawn_uprising_army(rebel_id, capital_id)
 		if heavy == null:
 			return
-		if assign_or_merge_main_army(heavy) == null:
+		if assign_main_army_to_independent_command(heavy) == null:
 			armies.erase(heavy)
 			return
 
@@ -3912,7 +4558,7 @@ func _spawn_uprising_army(nation_id: int, city_id: int) -> Army:
 
 
 ## 凭空动员一支指定编制/角色的满编军队（不扣人力/金钱、不受军队数上限约束）。
-## 仅用于叛乱等离散政治动员；常规生成与招募仍受六个指挥单位上限约束。
+## 仅用于叛乱等离散政治动员；常规生成与招募仍受按陆城数计算的实体上限约束。
 func _spawn_conjured_army(
 	nation_id: int,
 	city_id: int,
@@ -4020,8 +4666,6 @@ func _grant_vassal_line_armies(
 		army.defensive_deployment_until_day = -1
 		army.defensive_blocked_edge_a = -1
 		army.defensive_blocked_edge_b = -1
-		army.offensive_attack_multiplier = 1.0
-		army.offensive_bonus_until_day = -1
 		army.occupation_claimant_nation = -1
 		army.diplomatic_repatriation = false
 		overlord.campaign_preparation_assignments.erase(
@@ -4948,26 +5592,16 @@ func finalize_annexation_after_territory_commit(
 		or absorber == absorbed
 	):
 		return
-	var overflow_main_armies: Array[Army] = []
 	for group in nations[absorbed].battle_groups:
 		var members := battle_group_members(absorbed, group.id)
-		if (
-			nations[absorber].battle_groups.size()
-				< BattleGroup.MAX_COMMAND_UNITS
-		):
-			var new_group_id := nations[absorber].next_battle_group_id
-			nations[absorber].next_battle_group_id += 1
-			group.id = new_group_id
-			group.owner_nation = absorber
-			nations[absorber].battle_groups.append(group)
-			for member in members:
-				member.owner_nation = absorber
-				member.battle_group_id = new_group_id
-		else:
-			for member in members:
-				member.owner_nation = absorber
-				member.battle_group_id = -1
-				overflow_main_armies.append(member)
+		var new_group_id := nations[absorber].next_battle_group_id
+		nations[absorber].next_battle_group_id += 1
+		group.id = new_group_id
+		group.owner_nation = absorber
+		nations[absorber].battle_groups.append(group)
+		for member in members:
+			member.owner_nation = absorber
+			member.battle_group_id = new_group_id
 	nations[absorbed].battle_groups.clear()
 	for army in armies:
 		if army.owner_nation == absorbed and army.size > 0:
@@ -4984,11 +5618,6 @@ func finalize_annexation_after_territory_commit(
 				RulerProfile.morale_multiplier(nations[absorber])
 			)
 	_reconcile_battles_after_annexation()
-	for overflow_army in overflow_main_armies:
-		assert(
-			assign_or_merge_main_army(overflow_army) != null,
-			"兼并超额主战军必须并入现有指挥单位"
-		)
 	add_manpower(absorber, nations[absorbed].manpower_pool)
 	nations[absorbed].manpower_pool = 0
 	nations[absorber].treasury_gold += nations[absorbed].treasury_gold
@@ -5064,7 +5693,7 @@ func _reconcile_battles_after_annexation() -> void:
 				battle.routed_b.erase(army)
 				battle.frontline_priority_b.erase(army)
 			if battle.side_b.is_empty():
-				battle.has_garrison = false
+				battle.side_b_defends_city = false
 				battle.reinforce_fresh_b.clear()
 				battle.routed_b.clear()
 				battle.frontline_priority_b.clear()
@@ -5821,14 +6450,8 @@ func _planned_territory_capital(
 			best_rep = representative
 	var best := best_component[0]
 	for city_id in best_component:
-		if (
-			cities[city_id].fort_strength > cities[best].fort_strength
-			or (
-				cities[city_id].fort_strength == cities[best].fort_strength
-				and EquivariantOrder.city_id_less(
-					self, nation_id, city_id, best
-				)
-			)
+		if EquivariantOrder.city_id_less(
+			self, nation_id, city_id, best
 		):
 			best = city_id
 	return best
@@ -6599,9 +7222,13 @@ func relocate_capital(nation_id: int) -> int:
 		nation.warehouse_city_ids.clear()
 		return -1
 	var best_component := _largest_owned_component(nation_id, candidates)
+	var zhou_candidates: Array[City] = []
+	for city in best_component:
+		if is_zhou_city(city.id):
+			zhou_candidates.append(city)
+	if not zhou_candidates.is_empty():
+		best_component = zhou_candidates
 	best_component.sort_custom(func(a: City, b: City) -> bool:
-		if a.fort_strength != b.fort_strength:
-			return a.fort_strength > b.fort_strength
 		return EquivariantOrder.city_less(
 			self,
 			nation_id,

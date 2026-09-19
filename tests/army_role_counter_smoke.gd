@@ -15,18 +15,16 @@ func _run() -> void:
 	)
 	var state := GameState.new()
 	state.generate_world(12345)
-	var line_army: Army = null
-	var main_army: Army = null
-	for army in state.armies:
-		if line_army == null and army.is_line_role():
-			line_army = army
-		elif main_army == null and army.is_main_battle_role():
-			main_army = army
-		if line_army != null and main_army != null:
-			break
-	if line_army == null or main_army == null:
-		_fail("fixture must contain both MAIN and LINE armies")
-		return
+	# 开局军队简化后只生成主战军；视觉门禁直接构造两个角色，避免把
+	# UI 样式测试绑定到世界生成编制。
+	var line_army := Army.new()
+	line_army.size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	line_army.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	line_army.strategic_role = Army.StrategicRole.LINE
+	var main_army := Army.new()
+	main_army.size = GameState.INITIAL_LIGHT_ARMY_SIZE
+	main_army.max_size = Army.DEFAULT_MAX_SIZE
+	main_army.strategic_role = Army.StrategicRole.MAIN
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)

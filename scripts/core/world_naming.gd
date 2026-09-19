@@ -702,12 +702,14 @@ static func city_display_name(
 	include_kind: bool = false
 ) -> String:
 	var city = null
+	var game_state = null
 	var fallback_id := -1
 	if city_id == null:
 		city = game_state_or_city
 		if city != null:
 			fallback_id = int(city.id)
 	elif game_state_or_city != null:
+		game_state = game_state_or_city
 		fallback_id = int(city_id)
 		if _valid_city_id(game_state_or_city, fallback_id):
 			city = game_state_or_city.cities[fallback_id]
@@ -715,9 +717,19 @@ static func city_display_name(
 		return "城%d" % fallback_id if fallback_id >= 0 else "无名城"
 	var assigned := str(city.name).strip_edges()
 	if not assigned.is_empty():
+		if game_state != null and not city.is_dock:
+			if game_state.is_zhou_city(int(city.id)):
+				return assigned + "·州"
+			if game_state.is_fu_city(int(city.id)):
+				return assigned + "·府"
 		if include_kind and not city.is_dock and not assigned.ends_with("城"):
 			return assigned + "城"
 		return assigned
+	if game_state != null and not city.is_dock:
+		if game_state.is_zhou_city(int(city.id)):
+			return "城%d·州" % int(city.id)
+		if game_state.is_fu_city(int(city.id)):
+			return "城%d·府" % int(city.id)
 	return ("港%d" if city.is_dock else "城%d") % int(city.id)
 
 

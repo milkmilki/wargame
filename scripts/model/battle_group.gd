@@ -1,10 +1,10 @@
 class_name BattleGroup
 extends RefCounted
 ## 持久指挥单位。成员关系的真源是 Army.battle_group_id。
-## 每国最多六个指挥单位；每个单位只保留一个聚合主战实体，内部军团仅由
-## max_size / INITIAL_HEAVY_ARMY_SIZE 派生展示，不再独立移动、补给或参战。
+## 每个指挥单位严格对应一支独立的 15000 人主战军。国家可以拥有任意数量
+## 的指挥单位；单次攻势仍由 Simulation 自己限制投入数量。
 
-const MAX_COMMAND_UNITS: int = 6
+const MAX_CAMPAIGN_COMMAND_UNITS: int = 6
 const MAX_LIGHT_ARMIES: int = 0
 const MAX_HEAVY_ARMIES: int = 1
 

@@ -1,5 +1,5 @@
 extends SceneTree
-## 六指挥单位与兵力制攻势门槛的集中回归。
+## 独立 15000 人主战军与兵力制攻势门槛的集中回归。
 
 var _failures: Array[String] = []
 
@@ -16,28 +16,6 @@ func _run() -> void:
 	simulation.setup(state)
 	var nation_id := 0
 	var nation := state.nations[nation_id]
-	while nation.battle_groups.size() < BattleGroup.MAX_COMMAND_UNITS:
-		var group := state.create_battle_group(nation_id)
-		_check(group != null, "six_command_slots_available")
-		if group == null:
-			break
-	for group in nation.battle_groups:
-		if state.battle_group_members(nation_id, group.id).is_empty():
-			var command_army := state._spawn_conjured_army(
-				nation_id,
-				nation.capital_city_id,
-				GameState.INITIAL_HEAVY_ARMY_SIZE,
-				Army.StrategicRole.MAIN
-			)
-			_check(
-				state.assign_army_to_battle_group(command_army, group.id),
-				"command_slot_has_aggregate_army"
-			)
-	_check(
-		nation.battle_groups.size() == 6
-		and state.create_battle_group(nation_id) == null,
-		"seventh_command_rejected"
-	)
 
 	var target_city := _first_enemy_border_city(state, nation_id)
 	if target_city >= 0:
@@ -73,82 +51,49 @@ func _run() -> void:
 			"launch_requires_real_staged_manpower"
 		)
 
-	var main_army := _first_main_army(state, nation_id)
-	_check(main_army != null, "main_command_army_exists")
-	if main_army != null:
-		nation.manpower_pool = maxi(nation.manpower_pool, 100000)
-		nation.treasury_gold = maxi(nation.treasury_gold, 100000)
-		var ordered_groups: Array[BattleGroup] = nation.battle_groups.duplicate()
-		ordered_groups.sort_custom(func(a: BattleGroup, b: BattleGroup) -> bool:
-			return a.id < b.id
-		)
+	nation.manpower_pool = maxi(nation.manpower_pool, 200000)
+	nation.treasury_gold = maxi(nation.treasury_gold, 200000)
+	var army_count_before := state.active_army_count(nation_id)
+	var group_count_before := nation.battle_groups.size()
+	var manpower_before := nation.manpower_pool
+	var gold_before := nation.treasury_gold
+	var creation_cost := GameState.formation_creation_gold_cost(
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	var recruited := true
+	for _index in range(7):
 		var recruitment := simulation._next_battle_group_recruitment(nation_id)
-		_check(
-			int(recruitment.get("expand_army_id", -1)) >= 0
-			and int(recruitment.get("group_id", -1)) == ordered_groups[0].id
-			and not bool(recruitment.get("create_group", false)),
-			"seventh_legion_cycles_to_command_one"
+		recruited = recruited and bool(recruitment.get("create_group", false))
+		recruited = recruited and simulation._try_create_force_recruitment(
+			nation_id,
+			nation,
+			recruitment,
+			GameState.INITIAL_HEAVY_ARMY_SIZE,
+			false,
+			false
 		)
-		var expanded_army := _army_by_id(
-			state, int(recruitment.get("expand_army_id", -1))
+	var all_discrete := true
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		all_discrete = all_discrete and (
+			army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and army.battle_group_id >= 0
+			and state.battle_group_members(
+				nation_id, army.battle_group_id
+			).size() == 1
 		)
-		_check(expanded_army != null, "expand_target_exists")
-		if expanded_army != null:
-			var army_count_before := state.armies.size()
-			var size_before := expanded_army.size
-			var capacity_before := expanded_army.max_size
-			var manpower_before := nation.manpower_pool
-			var gold_before := nation.treasury_gold
-			var expansion_cost := GameState.formation_creation_gold_cost(
-				GameState.INITIAL_HEAVY_ARMY_SIZE
-			)
-			var expanded := simulation._try_create_force_recruitment(
-				nation_id,
-				nation,
-				recruitment,
-				GameState.INITIAL_HEAVY_ARMY_SIZE,
-				false,
-				false
-			)
-			_check(
-				expanded
-				and state.armies.size() == army_count_before
-				and expanded_army.size
-					== size_before + GameState.INITIAL_HEAVY_ARMY_SIZE
-				and expanded_army.max_size
-					== capacity_before + GameState.INITIAL_HEAVY_ARMY_SIZE
-				and nation.manpower_pool
-					== manpower_before - GameState.INITIAL_HEAVY_ARMY_SIZE
-				and nation.treasury_gold == gold_before - expansion_cost,
-				"expansion_reuses_entity_and_pays_resources"
-			)
-			var next_recruitment := simulation._next_battle_group_recruitment(
-				nation_id
-			)
-			_check(
-				int(next_recruitment.get("group_id", -1))
-					== ordered_groups[1].id,
-				"eighth_legion_cycles_to_command_two"
-			)
-
-	var army_count_before_merge := state.armies.size()
-	var capacity_before_merge := _main_capacity(state, nation_id)
-	var overflow := state._spawn_conjured_army(
-		nation_id,
-		nation.capital_city_id,
-		GameState.INITIAL_HEAVY_ARMY_SIZE,
-		Army.StrategicRole.MAIN
-	)
-	var merged_command := state.assign_or_merge_main_army(overflow)
 	_check(
-		merged_command != null
-		and not state.armies.has(overflow)
-		and state.armies.size() == army_count_before_merge
-		and _main_capacity(state, nation_id)
-			== capacity_before_merge + GameState.INITIAL_HEAVY_ARMY_SIZE,
-		"overflow_main_army_merges_into_existing_command"
+		recruited
+		and all_discrete
+		and state.active_army_count(nation_id) == army_count_before + 7
+		and nation.battle_groups.size() == group_count_before + 7
+		and nation.manpower_pool
+			== manpower_before - 7 * GameState.INITIAL_HEAVY_ARMY_SIZE
+		and nation.treasury_gold == gold_before - 7 * creation_cost,
+		"recruitment_creates_independent_15000_commands"
 	)
-	_test_revoke_vassal_merges_command_units()
+	_test_revoke_vassal_preserves_discrete_commands()
 	_test_adjacent_main_command_reinforces_battle()
 
 	if not _failures.is_empty():
@@ -175,29 +120,7 @@ func _first_enemy_border_city(state: GameState, nation_id: int) -> int:
 	return -1
 
 
-func _first_main_army(state: GameState, nation_id: int) -> Army:
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.is_main_battle_role():
-			return army
-	return null
-
-
-func _army_by_id(state: GameState, army_id: int) -> Army:
-	for army in state.armies:
-		if army.id == army_id:
-			return army
-	return null
-
-
-func _main_capacity(state: GameState, nation_id: int) -> int:
-	var total := 0
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.is_main_battle_role():
-			total += army.max_size
-	return total
-
-
-func _test_revoke_vassal_merges_command_units() -> void:
+func _test_revoke_vassal_preserves_discrete_commands() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(86421)
 	state.armies.clear()
@@ -214,7 +137,7 @@ func _test_revoke_vassal_merges_command_units() -> void:
 		"civil_war": false,
 	}
 	for nation_id in [overlord_id, subject_id]:
-		for command_index in range(BattleGroup.MAX_COMMAND_UNITS):
+		for command_index in range(6):
 			var group := state.create_battle_group(nation_id)
 			var army := state._spawn_conjured_army(
 				nation_id,
@@ -228,19 +151,25 @@ func _test_revoke_vassal_merges_command_units() -> void:
 				"revocation_fixture_command_created_%d_%d"
 					% [nation_id, command_index]
 			)
-	var expected_capacity := (
-		BattleGroup.MAX_COMMAND_UNITS
-		* 2
-		* GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
+	var expected_armies := 12
 	var revoked := state.revoke_vassal(subject_id)
+	var discrete := true
+	for army in state.armies:
+		if army.owner_nation != overlord_id or army.size <= 0:
+			continue
+		discrete = discrete and (
+			army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+			and state.battle_group_members(
+				overlord_id, army.battle_group_id
+			).size() == 1
+		)
 	_check(
 		revoked
-		and state.nations[overlord_id].battle_groups.size()
-			== BattleGroup.MAX_COMMAND_UNITS
-		and _main_capacity(state, overlord_id) == expected_capacity
+		and state.nations[overlord_id].battle_groups.size() == expected_armies
+		and state.active_army_count(overlord_id) == expected_armies
+		and discrete
 		and state._battle_group_structure_valid(),
-		"revocation_merges_twelve_commands_into_six_pools"
+		"revocation_preserves_twelve_discrete_commands"
 	)
 
 
@@ -272,7 +201,7 @@ func _test_adjacent_main_command_reinforces_battle() -> void:
 	var battle := state.new_battle(Battle.Kind.SIEGE)
 	battle.city = state.cities[target_city]
 	battle.edge = state.edge_of(target_city, attacker_city)
-	battle.has_garrison = true
+	battle.side_b_defends_city = true
 	battle.side_a.append(attacker)
 	battle.side_b.append(defender)
 	for participant in [attacker, defender]:

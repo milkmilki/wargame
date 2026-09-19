@@ -103,7 +103,7 @@ func _finish(exit_code: int) -> void:
 func _world_fingerprint(state: GameState) -> String:
 	var cities := []
 	for city in state.cities:
-		cities.append([city.id, city.owner_nation, city.fort_strength, city.food_storage])
+		cities.append([city.id, city.owner_nation, city.garrison_manpower, city.food_storage])
 	var nations := []
 	for nation in state.nations:
 		nations.append([

@@ -36,6 +36,63 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/test_suite.gd \
   --log-file "$LOG_DIR/world-war-tests.log"
 echo
+
+echo "==> [2a/29] 行政州域划分门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/administrative_region_analysis.gd \
+  --log-file "$LOG_DIR/world-war-administrative-region.log"
+echo
+
+echo "==> [2b/29] 行政产出门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/administrative_economy.gd \
+  --log-file "$LOG_DIR/world-war-administrative-economy.log"
+echo
+
+echo "==> [2c/29] 州治守军效率门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/administrative_combat.gd \
+  --log-file "$LOG_DIR/world-war-administrative-combat.log"
+echo
+
+echo "==> [2d/29] 整州和平结算门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/administrative_peace_settlement.gd \
+  --log-file "$LOG_DIR/world-war-administrative-peace.log"
+echo
+
+echo "==> [2e/29] 行政州战争目标门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/administrative_ai_objective.gd \
+  --log-file "$LOG_DIR/world-war-administrative-ai.log"
+echo
+
+echo "==> [2f/29] 飞地仅按本国领土连通门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/enclave_own_territory.gd \
+  --log-file "$LOG_DIR/world-war-enclave-own-territory.log"
+echo
+
+echo "==> [2g/29] 初始国家至少拥有一州门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/initial_nation_administrative_center.gd \
+  --log-file "$LOG_DIR/world-war-initial-nation-admin-center.log"
+echo
+echo "==> [2h/29] 州治持久守军与战役需求门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/garrison_system.gd \
+  --log-file "$LOG_DIR/world-war-garrison-system.log"
+echo
+echo "==> [2i/29] 州级战役状态机门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/garrison_campaign_ai.gd \
+  --log-file "$LOG_DIR/world-war-garrison-campaign-ai.log"
+echo
+echo "==> [2j/29] 州治守军战损比门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/garrison_combat_ratio.gd \
+  --log-file "$LOG_DIR/world-war-garrison-combat-ratio.log"
+echo
 echo "==> [3/29] 主战军/填线军兵棋角色 smoke"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/army_role_counter_smoke.gd \

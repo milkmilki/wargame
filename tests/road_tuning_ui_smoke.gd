@@ -90,6 +90,12 @@ func _run() -> void:
 		push_error("ROAD_TUNING_UI_MODE_CONTRACT_FAILED")
 		quit(1)
 		return
+	if str((panel._map_mode_buttons[
+		RoadTuningPanel.MAP_MODE_REGION
+	] as Button).text) != "州域":
+		push_error("ROAD_TUNING_UI_REGION_LABEL_FAILED")
+		quit(1)
+		return
 	for mode_id in expected_modes:
 		var mode_button := panel._map_mode_buttons[mode_id] as Button
 		if (
@@ -169,11 +175,16 @@ func _run() -> void:
 			return
 	(panel._sliders["blocked_branch_share"] as HSlider).value = 0.20
 	(panel._sliders["capacity_multiplier"] as HSlider).value = 1.25
+	var administrative_revision_before: int = (
+		main.state.administrative_region_revision
+	)
 	main._on_road_regenerate_requested(panel.road_settings())
 	await process_frame
 	await process_frame
 	if (
 		main.state.road_network_revision != 1
+		or main.state.administrative_region_revision
+			!= administrative_revision_before + 1
 		or not panel._status.text.begins_with("已生成")
 		or main.map_3d._last_road_network_revision != 1
 	):

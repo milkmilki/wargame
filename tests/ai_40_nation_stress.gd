@@ -247,9 +247,6 @@ func _invariant_error(
 			or nation.military_payment_ratio > 1.0
 		):
 			return "国家%d财政状态无效" % nation.id
-	var active_armies_by_nation: Array[int] = []
-	active_armies_by_nation.resize(state.nations.size())
-	active_armies_by_nation.fill(0)
 	for army in state.armies:
 		if (
 			army.size <= 0
@@ -257,17 +254,15 @@ func _invariant_error(
 			or army.owner_nation >= state.nations.size()
 		):
 			return "军队%d状态无效" % army.id
-		active_armies_by_nation[army.owner_nation] += 1
 		if (
 			not army.is_main_battle_role()
 			or army.battle_group_id < 0
+			or army.max_size != GameState.INITIAL_HEAVY_ARMY_SIZE
+			or state.battle_group_members(
+				army.owner_nation, army.battle_group_id
+			).size() != 1
 		):
-			return "军队%d未归入主战指挥单位" % army.id
-		if (
-			active_armies_by_nation[army.owner_nation]
-				> BattleGroup.MAX_COMMAND_UNITS
-		):
-			return "国家%d军队实体超过六个指挥单位" % army.owner_nation
+			return "军队%d不是独立15000人主战指挥单位" % army.id
 		var node_city := army.current_city_node()
 		if (
 			node_city < 0

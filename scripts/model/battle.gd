@@ -13,14 +13,16 @@ var kind: int = Kind.FIELD
 
 # 参战双方（军队引用数组）。SIEGE 时：
 # - side_a 为单一 nation 的围城方；
-# - side_b 在 has_garrison=true 时为城市防卫共同体（城主及其盟军，可多 nation）；
-# - side_b 在 has_garrison=false 时为单一 nation 的敌对挑战者。
+# - side_b 在 side_b_defends_city=true 时为城市防卫共同体（城主及其盟军，可多 nation）；
+# - side_b 在 side_b_defends_city=false 时为单一 nation 的敌对挑战者。
 var side_a: Array[Army] = []
 var side_b: Array[Army] = []
 
 # 战场上下文
 var edge: Edge = null            ## FIELD/SIEGE 均记录攻击方经由的边（用于地形惩罚）
 var city: City = null            ## SIEGE 时的目标城（守军驻城加成 + 占领目标）
+var siege_attacker_nation: int = -1
+var siege_claimant_nation: int = -1
 var contact_dist_a: float = 0.0  ## side_a 在边上的绝对距离（地形惩罚用）
 var contact_dist_b: float = 0.0  ## side_b 在边上的绝对距离
 
@@ -60,20 +62,9 @@ var frontline_priority_b: Dictionary = {}
 var tactical_key_a: int = 0
 var tactical_key_b: int = 0
 
-## 攻城进度累积（仅 SIEGE 有效）：守军被清空后进入纯围城阶段，每天确定性累加；
-## 守城/解围战持续期间每天回退，达 Combat.SIEGE_PROGRESS_REQUIRED 才能破城。
-var siege_progress: float = 0.0
-
 ## SIEGE 专用：side_b 当前是否为「城市防卫共同体」（享城防加成）。
 ## 防卫方溃散后转纯围城置 false；敌对挑战者占 side_b 时亦为 false（无城防加成）。
-var has_garrison: bool = false
-
-## SIEGE 专用：破城所需兵力（siege_required_manpower，item 6/7：恒为兵力量纲）。
-## 由 Combat.siege_required_manpower(city.fort_strength) 推导：= 工事强度换算封锁兵力（不含守军人数）。
-## 围城比值分母 = 攻方有效兵力 / 本值。守军是城下决斗阶段的对手、被歼后本值不变
-## （item 6 验收：驻军被击败后城防仍来自 fort_strength），使纯围城曲线始终以工事需求为准。
-var siege_required: int = 0
-
+var side_b_defends_city: bool = false
 # 结束态（由 Combat 解算后置位，Simulation 读取处理善后）
 var finished: bool = false
 var winner_side: int = 0         ## 1=side_a 胜，2=side_b 胜，0=未决

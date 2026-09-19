@@ -13,7 +13,7 @@ enum State {
 
 enum StrategicRole {
 	LINE,       ## 独立填线军：只执行统一防区规划；正式地图国家级攻势不会临时抽调
-	MAIN,       ## 聚合主战指挥单位：内部军团共享位置、补给、士气与命令
+	MAIN,       ## 独立主战军：每支15000编制分别拥有位置、补给、士气与命令
 }
 
 enum LinePosture {
@@ -39,7 +39,7 @@ var defense: int = 10                      ## 防御力
 var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
 var strategic_role: int = StrategicRole.LINE
-## 所属持久指挥单位；-1 表示独立填线军。指挥单位只允许一个聚合主战实体。
+## 所属持久指挥单位；-1 表示未编组。每个指挥单位只允许一支主战军。
 var battle_group_id: int = -1
 ## 填线军的持久防区 Assignment。前线未变化时跨 AI 周期保留，避免每次从零匹配换防。
 var line_assignment_city: int = -1
@@ -109,11 +109,6 @@ var ai_order_until_day: int = -1
 var ai_order_score: float = 0.0
 var ai_order_reason: String = ""
 
-## 预定攻势的限时攻击/有效士气加成。Simulation 负责授予和到期清理；
-## 持久 morale 不直接改写，战斗层通过 combat_morale() 读取同一倍率。
-var offensive_attack_multiplier: float = 1.0
-var offensive_bonus_until_day: int = -1
-
 ## 防御换防锁。非紧急 CityDefensePlan 在截止日前不得再次调离该军。
 var defensive_deployment_until_day: int = -1
 var defensive_blocked_edge_a: int = -1
@@ -121,6 +116,10 @@ var defensive_blocked_edge_b: int = -1
 
 ## 跨入敌境时冻结的占领归属国；可为军队所属国或提供出发领土的盟国。
 var occupation_claimant_nation: int = -1
+
+## 攻城回合内临时创建的城市守军；不进入 GameState.armies，也不会撤退。
+var is_city_garrison: bool = false
+var city_garrison_combat_multiplier: float = 1.0
 
 
 static func max_morale_for_formation(formation_size: int) -> float:
@@ -139,16 +138,16 @@ func morale_ratio() -> float:
 	)
 
 
-func offensive_multiplier() -> float:
-	return maxf(offensive_attack_multiplier, 1.0)
-
-
 func combat_morale() -> float:
-	return morale * offensive_multiplier() * maxf(ruler_morale_multiplier, 0.1)
+	if is_city_garrison:
+		return max_morale
+	return morale * maxf(ruler_morale_multiplier, 0.1)
 
 
 func combat_max_morale() -> float:
-	return max_morale * offensive_multiplier() * maxf(ruler_morale_multiplier, 0.1)
+	if is_city_garrison:
+		return max_morale
+	return max_morale * maxf(ruler_morale_multiplier, 0.1)
 
 
 func combat_morale_ratio() -> float:

@@ -613,6 +613,7 @@ func _make_single_nation_state() -> GameState:
 	state.nations[0].capital_city_id = 0
 	state.nations[0].warehouse_city_ids = [0] as Array[int]
 	state.recognized_city_owners = PackedInt32Array([0])
+	state.rebuild_administrative_regions()
 	state.refresh_derived()
 	return state
 
@@ -729,7 +730,13 @@ func _make_rounding_fixture_state() -> GameState:
 	state.edge_lookup[GameState.edge_key(0, 1)] = edge
 	(state.adjacency[0] as Array[int]).append(1)
 	(state.adjacency[1] as Array[int]).append(0)
+	state.rebuild_administrative_regions()
 	state.refresh_derived()
+	# 两城必须同属同一州且同主，属府产出才按新行政规则启用。
+	var center_id := state.administrative_center_of(0)
+	state.nations[0].capital_city_id = center_id
+	for city in state.cities:
+		city.is_capital = city.id == center_id
 	return state
 
 

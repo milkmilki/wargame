@@ -7,14 +7,10 @@ static func effective(army: Army) -> float:
 	if army == null or army.size <= 0:
 		return 0.0
 	var quality := (
-		sqrt(maxf(
+			sqrt(maxf(
 			float(army.attack)
 				* float(army.defense)
-				* maxf(army.ruler_defense_multiplier, 0.1)
-				* maxf(
-					army.offensive_attack_multiplier,
-					1.0
-				),
+				* maxf(army.ruler_defense_multiplier, 0.1),
 			1.0
 		))
 		/ 10.0
@@ -24,15 +20,20 @@ static func effective(army: Army) -> float:
 	return float(army.size) * quality * morale_factor * supply_factor
 
 
-## 城市固有防御的等效战力（战力量纲，用于 AI 威胁/攻防规划，与军队 effective power 可比）。
-## 语义 = 城墙工事结构强度的战力投影，与「破城所需兵力」(Combat.siege_required_manpower)
-## 是不同量纲的两个量：前者进威胁评估，后者进围城比值分母（item 6：禁止量纲混用）。
-## 基数经 Combat.city_defense_modifier 统一换算（含首都翻倍），与实战守军加成同源。
-static func city_defense(city: City) -> float:
+static func city_garrison_defense(
+	state: GameState,
+	attacker_id: int,
+	center_city_id: int
+) -> float:
+	if state == null or not state.is_zhou_city(center_city_id):
+		return 0.0
 	return (
-		float(Combat.city_defense_modifier(city))
-		* maxf(city.ruler_city_defense_multiplier, 0.1)
-		* 10.0
+		float(state.cities[center_city_id].garrison_manpower)
+		* state.city_garrison_efficiency(attacker_id, center_city_id)
+		* maxf(
+			state.cities[center_city_id].ruler_city_defense_multiplier,
+			0.1
+		)
 	)
 
 

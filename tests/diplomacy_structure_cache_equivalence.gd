@@ -19,6 +19,9 @@ func _init() -> void:
 	var action_mismatches := (
 		0 if str(legacy_actions) == str(optimized_actions) else 1
 	)
+	if action_mismatches > 0:
+		print("legacy_actions=%s" % str(legacy_actions))
+		print("optimized_actions=%s" % str(optimized_actions))
 	print(
 		"=== 外交结构缓存等价校验 (%d国/%d城/%d天) ==="
 		% [nations, cities, days]
@@ -71,7 +74,8 @@ func _compare_states(legacy: GameState, optimized: GameState) -> int:
 			city.owner_nation != other.owner_nation
 			or legacy.recognized_owner_of(city.id)
 				!= optimized.recognized_owner_of(city.id)
-			or city.fort_strength != other.fort_strength
+			or city.garrison_manpower != other.garrison_manpower
+			or city.garrison_defense_base != other.garrison_defense_base
 			or city.food_storage != other.food_storage
 		):
 			mismatches += 1
@@ -84,8 +88,13 @@ func _compare_states(legacy: GameState, optimized: GameState) -> int:
 		var other: Army = optimized_armies.get(army.id)
 		if other == null or _army_fp(army) != _army_fp(other):
 			mismatches += 1
+	if legacy.nations.size() != optimized.nations.size():
+		mismatches += 1
 	for nation in legacy.nations:
-		if _nation_fp(nation) != _nation_fp(optimized.nations[nation.id]):
+		if (
+			nation.id >= optimized.nations.size()
+			or _nation_fp(nation) != _nation_fp(optimized.nations[nation.id])
+		):
 			mismatches += 1
 	return mismatches
 

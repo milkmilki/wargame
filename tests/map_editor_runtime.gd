@@ -122,8 +122,7 @@ func _run() -> void:
 		"map_x": moved_position.x,
 		"map_y": moved_position.y,
 		"gold_per_month": 77,
-		"fort_strength_max": 42,
-		"fort_strength": 31,
+		"garrison_defense_base": 5,
 		"food_storage": 9876,
 		"terrain_output_multiplier": 1.25,
 		"development_gold_multiplier": 2.5,
@@ -341,7 +340,9 @@ func _run() -> void:
 		"city_count": restored.land_cities().size() == 96,
 		"gold": restored.cities[original_city_id].gold_per_month == 77,
 		"position": restored.cities[original_city_id].map_position.distance_to(moved_position) <= 0.00001,
-		"fort": restored.cities[original_city_id].fort_strength_max == 42,
+		"garrison_defense": (
+			restored.cities[original_city_id].garrison_defense_base == 5
+		),
 		"food_total": restored.nations[restored.cities[original_city_id].owner_nation].granary_food >= 9876,
 		"development": is_equal_approx(restored.cities[original_city_id].development_gold_multiplier, 2.5),
 		"crossroads": restored.cities[original_city_id].is_crossroads,
@@ -412,15 +413,13 @@ func _run() -> void:
 
 func _verify_rejected_city_edit_is_atomic(moved_position: Vector2) -> bool:
 	var state := GameState.new()
-	state.generate_world(24683, 4, 4)
-	var target: City = null
-	for candidate in state.land_cities():
-		if state.land_cities_of(candidate.owner_nation).size() == 1:
-			target = candidate
-			break
-	if target == null:
-		_fail("could not construct a nation with one last land city")
-		return false
+	state.generate_world(24683, 4, 16)
+	var target: City = state.land_cities()[0]
+	var owner_before_setup := target.owner_nation
+	var setup_recipient := (owner_before_setup + 1) % state.nations.size()
+	for candidate in state.land_cities_of(owner_before_setup):
+		if candidate != target:
+			candidate.owner_nation = setup_recipient
 	var owner_before := target.owner_nation
 	var recipient := (owner_before + 1) % state.nations.size()
 	var position_before := target.map_position
@@ -627,10 +626,10 @@ func _verify_vassal_export_as_sovereign() -> bool:
 		restored.is_vassal(subject_id)
 		or restored.nation_display_name(subject_id).contains("王")
 		or restored.nations[subject_id].name != founding_symbol
-		or restored_line_armies != 1
-		or restored_main_light_armies
+		or restored_line_armies != 0
+		or restored_main_light_armies != 0
+		or restored_main_heavy_armies
 			!= GameState.SMALL_NATION_MOBILE_RESERVE_ARMIES
-		or restored_main_heavy_armies != 0
 	):
 		_fail(
 			"loaded map retained orphan vassal identity or invalid small-nation force: "

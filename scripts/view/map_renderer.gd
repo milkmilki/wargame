@@ -2104,7 +2104,7 @@ func _ensure_province_visual_cache() -> void:
 	var region_changed := (
 		region_mode
 		and _province_region_analysis_revision
-			!= state.region_analysis_revision
+			!= state.administrative_region_revision
 	)
 	var loyalty_signature := (
 		loyalty_fill_signature(state)
@@ -2144,7 +2144,7 @@ func _ensure_province_visual_cache() -> void:
 	var geometry := classify_province_boundary_topology(
 		state,
 		_boundary_topology,
-		state.region_ids if region_mode else PackedInt32Array()
+		state.administrative_region_ids if region_mode else PackedInt32Array()
 	)
 	_classified_boundary_geometry = geometry
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
@@ -2173,7 +2173,7 @@ func _ensure_province_visual_cache() -> void:
 				build_country_fill_opacity_image_from_owners(
 					state.province_map_size,
 					state.province_ids,
-					state.region_ids
+					state.administrative_region_ids
 				)
 				if region_mode
 				else build_country_fill_opacity_image(state)
@@ -2217,7 +2217,7 @@ func _ensure_province_visual_cache() -> void:
 		_loyalty_fill_signature = loyalty_signature
 	_province_ownership_revision = state.ownership_revision
 	_province_diplomacy_revision = state.diplomacy_revision
-	_province_region_analysis_revision = state.region_analysis_revision
+	_province_region_analysis_revision = state.administrative_region_revision
 	_province_visual_mode = _map_mode
 	_province_visual_view_nation_id = _diplomatic_view_nation_id
 	_province_loyalty_day = state.day
@@ -2336,31 +2336,39 @@ static func build_region_overlay_image(game_state: GameState) -> Image:
 		maxi(size.x, 1), maxi(size.y, 1), false, Image.FORMAT_RGBA8
 	)
 	image.fill(Color.TRANSPARENT)
-	if game_state.region_ids.size() != game_state.cities.size():
+	if game_state.administrative_region_ids.size() != game_state.cities.size():
 		return image
 	for y in range(size.y):
 		for x in range(size.x):
 			var province_id := game_state.province_ids[y * size.x + x]
-			if province_id < 0 or province_id >= game_state.region_ids.size():
+			if (
+				province_id < 0
+				or province_id >= game_state.administrative_region_ids.size()
+			):
 				continue
-			var region_id := game_state.region_ids[province_id]
-			if region_id < 0 or region_id >= game_state.region_colors.size():
+			var region_id := game_state.administrative_region_ids[province_id]
+			if (
+				region_id < 0
+				or region_id >= game_state.administrative_region_colors.size()
+			):
 				continue
-			image.set_pixel(x, y, game_state.region_colors[region_id])
+			image.set_pixel(
+				x, y, game_state.administrative_region_colors[region_id]
+			)
 	return image
 
 
 static func region_fill_signature(game_state: GameState) -> PackedInt64Array:
 	var signature := PackedInt64Array()
-	signature.resize(game_state.region_ids.size() + 1)
-	signature[0] = game_state.region_analysis_revision
-	for city_id in range(game_state.region_ids.size()):
-		signature[city_id + 1] = game_state.region_ids[city_id]
+	signature.resize(game_state.administrative_region_ids.size() + 1)
+	signature[0] = game_state.administrative_region_revision
+	for city_id in range(game_state.administrative_region_ids.size()):
+		signature[city_id + 1] = game_state.administrative_region_ids[city_id]
 	return signature
 
 
 static func region_boundary_colors(game_state: GameState) -> PackedColorArray:
-	var colors := game_state.region_colors.duplicate()
+	var colors := game_state.administrative_region_colors.duplicate()
 	for region_id in range(colors.size()):
 		colors[region_id] = colors[region_id].darkened(0.24)
 		colors[region_id].a = 1.0
@@ -4384,9 +4392,9 @@ func _draw_owned_boundary_sides_2d(
 		)
 		if _map_mode == MapMode.REGION:
 			color = (
-				state.region_colors[owners[index]].darkened(0.24)
+				state.administrative_region_colors[owners[index]].darkened(0.24)
 				if owners[index] >= 0
-					and owners[index] < state.region_colors.size()
+					and owners[index] < state.administrative_region_colors.size()
 				else Color.TRANSPARENT
 			)
 		draw_line(
@@ -4799,16 +4807,17 @@ func _draw_cities() -> void:
 					center, score_radius, city_importance_color(_map_mode)
 				)
 		var region_id := (
-			state.region_ids[city.id]
-			if city.id >= 0 and city.id < state.region_ids.size()
+			state.administrative_region_ids[city.id]
+			if city.id >= 0 and city.id < state.administrative_region_ids.size()
 			else -1
 		)
 		var base := (
 			loyalty_color(city.loyalty)
 			if _map_mode == MapMode.LOYALTY
-			else state.region_colors[region_id]
+			else state.administrative_region_colors[region_id]
 			if _map_mode == MapMode.REGION
-				and region_id >= 0 and region_id < state.region_colors.size()
+				and region_id >= 0
+				and region_id < state.administrative_region_colors.size()
 			else final_faction_visual_color(
 				state, city.owner_nation,
 				0.30 if contested_cities.has(city.id) else 0.0,
@@ -4853,7 +4862,7 @@ func _draw_cities() -> void:
 		if not _city_names_visible:
 			continue
 		if not _city_label_cache.has(city.id):
-			_city_label_cache[city.id] = city_label_text(city)
+			_city_label_cache[city.id] = city_label_text(city, state)
 		var label := str(_city_label_cache[city.id])
 		var label_position := center + Vector2(
 			half + 4.0 * _display_scale,
@@ -4879,10 +4888,14 @@ func _draw_cities() -> void:
 		)
 
 
-static func city_label_text(city: City) -> String:
+static func city_label_text(city: City, game_state: GameState = null) -> String:
 	if city == null:
 		return ""
-	var label := WorldNaming.city_display_name(city)
+	var label := (
+		WorldNaming.city_display_name(game_state, city.id)
+		if game_state != null
+		else WorldNaming.city_display_name(city)
+	)
 	if city.is_food_hub:
 		label += " 粮"
 	if city.is_manpower_hub:
@@ -5100,26 +5113,6 @@ func _draw_armies() -> void:
 			_army_font_size(7),
 			INK_COLOR
 		)
-		if (
-			army.offensive_attack_multiplier > 1.0
-			and state.day < army.offensive_bonus_until_day
-		):
-			var pennant := PackedVector2Array([
-				rect.position + Vector2(rect.size.x * 0.55, 0.0),
-				rect.position + Vector2(rect.size.x * 0.82, 0.0),
-				rect.position + Vector2(rect.size.x * 0.68, -7.0 * icon_scale),
-			])
-			draw_colored_polygon(pennant, ACCENT_GOLD)
-			draw_polyline(
-				PackedVector2Array([
-					pennant[0],
-					pennant[1],
-					pennant[2],
-					pennant[0],
-				]),
-				INK_COLOR,
-				1.0 * icon_scale
-			)
 		if army.state == Army.State.FIGHTING:
 			draw_rect(
 				rect.grow((2.0 + pulse * 2.0) * icon_scale),
@@ -5431,9 +5424,13 @@ func _draw_battles() -> void:
 			_font_size(11),
 				PAPER_LIGHT
 		)
-		# 攻城进度弧（纯围城阶段：siege_progress / REQUIRED）
-		if b.kind == Battle.Kind.SIEGE and b.siege_progress > 0.0:
-			var frac := clampf(b.siege_progress / Combat.SIEGE_PROGRESS_REQUIRED, 0.0, 1.0)
+		# 攻城弧显示城市守军剩余比例。
+		if b.kind == Battle.Kind.SIEGE and b.city != null:
+			var capacity := state.city_garrison_capacity(b.city.id)
+			var frac := (
+				clampf(float(b.city.garrison_manpower) / float(capacity), 0.0, 1.0)
+				if capacity > 0 else 0.0
+			)
 			draw_arc(
 				p,
 				ring + 4.0 * _display_scale,
@@ -6850,23 +6847,40 @@ static func city_detail_sections(
 		game_state, city, garrison_troops
 	)
 	var region_id := (
-		int(game_state.region_ids[city_id])
-		if city_id < game_state.region_ids.size()
+		int(game_state.administrative_region_ids[city_id])
+		if city_id < game_state.administrative_region_ids.size()
 		else -1
+	)
+	var administrative_center := game_state.administrative_center_of(city_id)
+	var administrative_center_name := (
+		WorldNaming.city_display_name(game_state, administrative_center)
+		if administrative_center >= 0
+		else "未划分"
+	)
+	var administrative_controller := (
+		game_state.administrative_controller(administrative_center)
+		if administrative_center >= 0
+		else -1
+	)
+	var administrative_controller_name := (
+		WorldNaming.nation_display_name(game_state, administrative_controller)
+		if administrative_controller >= 0
+		else "无"
 	)
 	var betweenness := (
 		float(game_state.node_betweenness[city_id])
 		if city_id < game_state.node_betweenness.size()
 		else 0.0
 	)
-	var recovery_days := 0
-	if city.fort_last_capture_day >= 0:
-		recovery_days = maxi(
-			Simulation.CITY_WAR_DISRUPTION_DAYS
-				- (game_state.day - city.fort_last_capture_day),
-			0
-		)
-	var type_name := "河运码头" if city.is_dock else "陆地城市"
+	var type_name := (
+		"河运码头"
+		if city.is_dock
+		else "州治"
+		if game_state.is_zhou_city(city_id)
+		else "属府"
+		if game_state.is_fu_city(city_id)
+		else "陆地城市"
+	)
 	var special: Array[String] = []
 	if city.is_capital:
 		var capital_addition := Simulation.capital_national_gold_addition(
@@ -6906,11 +6920,41 @@ static func city_detail_sections(
 		if legal_owner >= 0 and legal_owner < game_state.nations.size()
 		else "无"
 	)
-	var fort_line := "工事 %d / %d" % [
-		city.fort_strength, city.fort_strength_max,
+	var garrison_line := "城市守军 %d / %d · 基础效率 %d" % [
+		city.garrison_manpower,
+		game_state.city_garrison_capacity(city_id),
+		city.garrison_defense_base,
 	]
-	if recovery_days > 0:
-		fort_line += " · 恢复 %d 日" % recovery_days
+	var campaign_line := "F/D/R/V/C：当前无攻城战役"
+	for battle in game_state.battles:
+		if (
+			battle.kind != Battle.Kind.SIEGE
+			or battle.finished
+			or battle.city != city
+		):
+			continue
+		var attacker_id := battle.siege_attacker_nation
+		if attacker_id < 0 and not battle.side_a.is_empty():
+			attacker_id = battle.side_a[0].owner_nation
+		var share := game_state.administrative_campaign_control_share(
+			attacker_id, administrative_center
+		)
+		var efficiency := game_state.city_garrison_efficiency(
+			attacker_id, administrative_center
+		)
+		var requirement := game_state.campaign_siege_requirement(
+			attacker_id, administrative_center
+		)
+		var threat := game_state.campaign_reinforcement_threat(
+			attacker_id, administrative_center, 60
+		)
+		var committed := game_state.campaign_committed_manpower(
+			attacker_id, administrative_center
+		)
+		campaign_line = "属府控制 F %.0f%% · D %.2f · R %d · V %d · C %d" % [
+			share * 100.0, efficiency, requirement, threat, committed,
+		]
+		break
 	var governance_lines: Array[String] = [
 		"忠诚 %.1f    趋势 %+0.2f/月    动乱 %.1f" % [
 			city.loyalty, city.loyalty_trend, city.unrest,
@@ -6934,18 +6978,28 @@ static func city_detail_sections(
 			"控制：%s    法理：%s" % [
 				controller_name, legal_owner_name,
 			],
-			"区域：%s    交通中心分 %.3f" % [
+			"州域：%s    州治：%s    州控：%s" % [
 				str(region_id) if region_id >= 0 else "未划分",
+				administrative_center_name,
+				administrative_controller_name,
+			],
+			"交通中心分 %.3f" % [
 				betweenness,
 			],
 		]},
 		{"title": "军事", "lines": [
-			fort_line,
-			"驻军：%d 支，共 %d 人" % [
+			garrison_line,
+			campaign_line,
+			"野战驻军：%d 支，共 %d 人" % [
 				garrison_count, garrison_troops,
 			],
 		]},
 		{"title": "经济", "lines": [
+			"行政产出：%s" % (
+				"启用"
+				if bool(output["administrative_output_enabled"])
+				else "阻断（属府与州治控制方不同）"
+			),
 			"实际：金 %+d/月    人 %+d/月    粮 %+d/半年" % [
 				int(output["gold_output"]),
 				int(output["manpower_output"]),

@@ -27,8 +27,7 @@ static func build(state: GameState) -> Dictionary:
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,
 		"diplomacy_revision": state.diplomacy_revision,
-		"fortification_revision":
-			state.fortification_revision,
+		"garrison_revision": state.garrison_revision,
 		"nations": nations,
 		"cities": cities,
 		"edges": edges_and_indices["snapshot"],
@@ -70,8 +69,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var campaign_next_offensive_day := PackedInt32Array()
 	var campaign_offensive_count := PackedInt32Array()
 	var campaign_preparation_started_day := PackedInt32Array()
-	var campaign_launched_attack_multiplier := PackedFloat64Array()
-	var campaign_launched_bonus_days := PackedInt32Array()
 	var campaign_plan_wave := PackedInt32Array()
 	var campaign_plan_primary_city := PackedInt32Array()
 	var campaign_theater_anchor_city := PackedInt32Array()
@@ -148,12 +145,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 		)
 		campaign_preparation_started_day.append(
 			nation.campaign_preparation_started_day
-		)
-		campaign_launched_attack_multiplier.append(
-			nation.campaign_launched_attack_multiplier
-		)
-		campaign_launched_bonus_days.append(
-			nation.campaign_launched_bonus_days
 		)
 		campaign_plan_wave.append(nation.campaign_plan_wave)
 		campaign_plan_primary_city.append(
@@ -245,10 +236,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 			campaign_offensive_count,
 		"campaign_preparation_started_day":
 			campaign_preparation_started_day,
-		"campaign_launched_attack_multiplier":
-			campaign_launched_attack_multiplier,
-		"campaign_launched_bonus_days":
-			campaign_launched_bonus_days,
 		"campaign_plan_wave": campaign_plan_wave,
 		"campaign_plan_primary_city":
 			campaign_plan_primary_city,
@@ -276,9 +263,8 @@ static func _build_cities(state: GameState) -> Dictionary:
 	var owner := PackedInt32Array()
 	var recognized_owner := PackedInt32Array()
 	var occupation_sponsor := PackedInt32Array()
-	var fort := PackedInt32Array()
-	var fort_max := PackedInt32Array()
-	var fort_last_capture_day := PackedInt32Array()
+	var garrison_manpower := PackedInt32Array()
+	var garrison_defense_base := PackedInt32Array()
 	var manpower_output := PackedInt32Array()
 	var food := PackedInt32Array()
 	var gold_output := PackedInt32Array()
@@ -297,9 +283,8 @@ static func _build_cities(state: GameState) -> Dictionary:
 		owner.append(city.owner_nation)
 		recognized_owner.append(state.recognized_owner_of(city.id))
 		occupation_sponsor.append(city.occupation_sponsor_nation)
-		fort.append(city.fort_strength)
-		fort_max.append(city.fort_strength_max)
-		fort_last_capture_day.append(city.fort_last_capture_day)
+		garrison_manpower.append(city.garrison_manpower)
+		garrison_defense_base.append(city.garrison_defense_base)
 		manpower_output.append(city.manpower_per_month)
 		food.append(city.food_storage)
 		gold_output.append(city.gold_per_month)
@@ -321,9 +306,8 @@ static func _build_cities(state: GameState) -> Dictionary:
 		"owner": owner,
 		"recognized_owner": recognized_owner,
 		"occupation_sponsor": occupation_sponsor,
-		"fort": fort,
-		"fort_max": fort_max,
-		"fort_last_capture_day": fort_last_capture_day,
+		"garrison_manpower": garrison_manpower,
+		"garrison_defense_base": garrison_defense_base,
 		"manpower_output": manpower_output,
 		"food": food,
 		"gold_output": gold_output,
@@ -411,8 +395,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 	var supply_food_debt := PackedFloat64Array()
 	var holding_days := PackedInt32Array()
 	var hold_target_progress := PackedFloat64Array()
-	var offensive_multiplier := PackedFloat64Array()
-	var offensive_until_day := PackedInt32Array()
 	var defensive_deployment_until_day := PackedInt32Array()
 	var defensive_blocked_edge_a := PackedInt32Array()
 	var defensive_blocked_edge_b := PackedInt32Array()
@@ -464,10 +446,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 		supply_food_debt.append(army.supply_food_debt)
 		holding_days.append(army.holding_days)
 		hold_target_progress.append(army.hold_target_progress)
-		offensive_multiplier.append(
-			army.offensive_attack_multiplier
-		)
-		offensive_until_day.append(army.offensive_bonus_until_day)
 		defensive_deployment_until_day.append(
 			army.defensive_deployment_until_day
 		)
@@ -543,8 +521,6 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"supply_food_debt": supply_food_debt,
 			"holding_days": holding_days,
 			"hold_target_progress": hold_target_progress,
-			"offensive_multiplier": offensive_multiplier,
-			"offensive_until_day": offensive_until_day,
 			"defensive_deployment_until_day":
 				defensive_deployment_until_day,
 			"defensive_blocked_edge_a":
@@ -592,9 +568,7 @@ static func _build_battles(
 	var reinforcement_morale_b := PackedFloat64Array()
 	var tactical_key_a := PackedInt32Array()
 	var tactical_key_b := PackedInt32Array()
-	var siege_progress := PackedFloat64Array()
-	var siege_required := PackedInt32Array()
-	var has_garrison := PackedByteArray()
+	var side_b_defends_city := PackedByteArray()
 	var finished := PackedByteArray()
 	var winner_side := PackedInt32Array()
 	var side_a_offsets := PackedInt32Array([0])
@@ -633,9 +607,7 @@ static func _build_battles(
 		)
 		tactical_key_a.append(battle.tactical_key_a)
 		tactical_key_b.append(battle.tactical_key_b)
-		siege_progress.append(battle.siege_progress)
-		siege_required.append(battle.siege_required)
-		has_garrison.append(int(battle.has_garrison))
+		side_b_defends_city.append(int(battle.side_b_defends_city))
 		finished.append(int(battle.finished))
 		winner_side.append(battle.winner_side)
 		for army in battle.side_a:
@@ -695,9 +667,7 @@ static func _build_battles(
 		"reinforcement_morale_b": reinforcement_morale_b,
 		"tactical_key_a": tactical_key_a,
 		"tactical_key_b": tactical_key_b,
-		"siege_progress": siege_progress,
-		"siege_required": siege_required,
-		"has_garrison": has_garrison,
+		"side_b_defends_city": side_b_defends_city,
 		"finished": finished,
 		"winner_side": winner_side,
 		"side_a_offsets": side_a_offsets,

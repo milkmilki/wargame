@@ -122,7 +122,6 @@ func _seed_sieges(simulation: Simulation, count: int) -> void:
 		if attacker == null or attacker.state == Army.State.FIGHTING:
 			continue
 		var target := state.cities[edge.city_b]
-		target.fort_strength = maxi(target.fort_strength, 100)
 		attacker.state = Army.State.IDLE
 		attacker.on_edge = false
 		attacker.location_city = target.id

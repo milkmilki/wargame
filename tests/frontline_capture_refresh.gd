@@ -281,11 +281,9 @@ func _make_base_state() -> GameState:
 		city.is_food_hub = false
 		city.is_manpower_hub = false
 		city.is_dock = false
-		city.fort_strength_max = 0
 	for city_id in [9, 10, 17, 18, 25]:
 		state.cities[city_id].owner_nation = 0
 	state.cities[25].owner_nation = 1
-	state.cities[25].fort_strength_max = 30
 	state.nations[0].capital_city_id = 18
 	state.nations[1].capital_city_id = 25
 	state.nations[0].battle_groups.clear()

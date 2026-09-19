@@ -83,7 +83,6 @@ func _init() -> void:
 				territory_invariant_failures += 1
 				if first_territory_invariant_failure_day < 0:
 					first_territory_invariant_failure_day = state.day
-			var reverted_legacy_fort := false
 			for city in state.cities:
 				if city.owner_nation == current_owners[city.id]:
 					continue
@@ -96,12 +95,6 @@ func _init() -> void:
 				force_structure_last_change_day[city.owner_nation] = (
 					state.day
 				)
-				if legacy_capture_fort:
-					city.fort_strength = 10
-					city.fort_last_capture_day = -1
-					reverted_legacy_fort = true
-			if reverted_legacy_fort:
-				state.fortification_revision += 1
 			for nation in state.nations:
 				var parallel_targets := (
 					nation.campaign_preparation_targets.size()
@@ -216,21 +209,6 @@ func _init() -> void:
 						"连续攻势终止"
 					):
 						post_capture_city_holds += 1
-				if (
-					army.ai_order_created_day == state.day
-					and army.ai_action
-						== ActionCandidate.Kind.ATTACK
-					and is_equal_approx(
-						army.offensive_attack_multiplier,
-						Simulation.OFFENSIVE_BONUS_MAX_MULTIPLIER
-					)
-				):
-					full_preparation_events[
-						"%d:%d" % [
-							state.day,
-							army.owner_nation,
-						]
-					] = true
 			for stack_key_value in idle_city_stacks:
 				var stack_key := int(stack_key_value)
 				var stack_size := int(
@@ -372,6 +350,8 @@ func _init() -> void:
 		var resource_peaces := 0
 		var mobilization_armies := 0
 		for event in state.diplomatic_history:
+			if not event.has("action"):
+				continue
 			var action := int(event["action"])
 			diplomatic_counts[action] = int(diplomatic_counts.get(action, 0)) + 1
 			if action == DiplomacyAI.Action.DECLARE_WAR and event.has("objective_city"):

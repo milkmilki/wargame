@@ -6,11 +6,7 @@ const ATTACK_ENTER_RATIO: float = 1.35
 const RETREAT_ENTER_RATIO: float = 0.40
 const HOLD_DEPLOY_ENTER_RATIO: float = 0.60
 const EMERGENCY_RETREAT_RATIO: float = 0.25
-## 撤退决策计入所在本国城池城防加成的折扣权重。守城时 fort_strength 实际放大防御力
-## （见 Combat.gd 守方 def_b += garrison_b），但撤退比原本只比裸战力，导致 AI 低估守城
-## 能力、刚占的有城墙的城不放一枪就弃守。打折计入以修正该信息缺失，避免过度死守孤城。
 const CITY_DEFENSE_RETREAT_WEIGHT: float = 0.5
-const SIEGE_COMMIT_MARGIN: float = 2.00
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
 const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
@@ -19,16 +15,6 @@ const STRATEGIC_VALUE_DELTA_LIMIT: float = 1.0
 const CAMPAIGN_TARGET_BONUS: float = 1.0
 const NORMAL_COMMIT_DAYS: int = 10
 const STRATEGIC_COMMIT_DAYS: int = 30
-
-
-## 发起并维持对某城攻势应集结的兵力门槛（唯一真源，item 6/7）。
-## = 歼灭守军的野战预算(garrison_size) + 维持封锁的兵力(siege_required × SIEGE_COMMIT_MARGIN)。
-## 二者量纲统一（皆兵力）：野战阶段消耗约等于守军规模，之后剩余兵力仍保证围城比 ≈ margin（高效推进），
-## 避免「刚够破城需求即添油、野战后兵力不足、围城停滞」的空转。
-static func assault_commit_threshold(garrison_size: int, fort_strength: int) -> int:
-	return maxi(garrison_size, 0) + int(ceil(
-		float(Combat.siege_required_manpower(fort_strength)) * SIEGE_COMMIT_MARGIN
-	))
 
 
 static func choose(
@@ -153,9 +139,7 @@ static func choose(
 	return candidates[0]
 
 
-## 守军所在本国城池的城防加成折算为守城战力（战力量纲，打折 + 断粮衰减）。
-## 复用 ArmyPower.city_defense（fort_strength×10，注释即声明与军队战力可比）与
-## Combat.SIEGE_STARVE_DEF_MULT（断粮同源衰减），不新增换算逻辑。
+## 州治守军折算为守城战力，并复用断粮效率衰减。
 static func _city_defense_support(
 	view: AiWorldView,
 	army: Army,
@@ -166,7 +150,9 @@ static func _city_defense_support(
 	var city: City = view.state.cities[city_id]
 	if city.owner_nation != army.owner_nation:
 		return 0.0
-	var support := ArmyPower.city_defense(city) * CITY_DEFENSE_RETREAT_WEIGHT
+	var support := ArmyPower.city_garrison_defense(
+		view.state, -1, city.id
+	) * CITY_DEFENSE_RETREAT_WEIGHT
 	if city.food_storage <= 0:
 		support *= Combat.SIEGE_STARVE_DEF_MULT
 	return support
@@ -314,32 +300,18 @@ static func _attack_candidate(
 		if target_distance == INF:
 			continue
 		var city := view.state.cities[city_id]
-		if _waiting_for_full_campaign_preparation(
-			view,
-			city_id
-		):
-			continue
-		var preparation_multiplier := (
-			_campaign_target_preparation_multiplier(
-				view,
-				city_id
-			)
-		)
 		var legal_reclamation := (
 			view.state.recognized_owner_of(city_id)
 				== view.nation_id
 		)
 		if legal_reclamation_only and not legal_reclamation:
 			continue
-		var garrison_size := 0
-		for defender in view.armies_at_city(city_id):
-			garrison_size += defender.size
 		var committed_size := coordinator.size_reserved(city_id)
-		# 攻城派兵门槛（item 6/7 唯一真源）：歼灭守军 + 维持封锁×余量，确保野战后仍能高效围城。
+		var center_id := view.state.administrative_center_of(city_id)
 		var required_siege_size := (
-			assault_commit_threshold(
-				garrison_size,
-				city.fort_strength
+			view.state.campaign_siege_requirement(view.nation_id, center_id)
+			+ view.state.campaign_reinforcement_threat(
+				view.nation_id, center_id, 60
 			)
 		)
 		var pool := _adjacent_assault_pool(
@@ -355,7 +327,9 @@ static func _attack_candidate(
 		if available_size < required_siege_size:
 			continue
 		var enemy_power := threat.threat_at(city_id)
-		enemy_power += ArmyPower.city_defense(city)
+		enemy_power += ArmyPower.city_garrison_defense(
+			view.state, view.nation_id, center_id
+		)
 		var committed := coordinator.power_reserved(city_id)
 		var relief_value := _blockade_relief_value(view, city_id)
 		var participant_power := power
@@ -382,8 +356,6 @@ static func _attack_candidate(
 		)
 		if is_adjacent_participant:
 			attack_power = maxf(attack_power, float(pool["power"]))
-		participant_power *= preparation_multiplier
-		attack_power *= preparation_multiplier
 		var ratio := attack_power / maxf(enemy_power, 1.0)
 		var participant_ratio := participant_power / maxf(
 			enemy_power,
@@ -440,24 +412,6 @@ static func _attack_candidate(
 		),
 		best_city
 	)
-	var best_preparation_multiplier := (
-		_campaign_target_preparation_multiplier(
-			view,
-			best_city
-		)
-	)
-	if best_preparation_multiplier > 1.0:
-		candidate.offensive_attack_multiplier = (
-			best_preparation_multiplier
-		)
-		candidate.offensive_bonus_days = (
-			Simulation.offensive_bonus_duration_days(
-				_campaign_target_preparation_days(
-					view,
-					best_city
-				)
-			)
-		)
 	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 	return candidate
 
@@ -636,7 +590,10 @@ static func _is_encircled_low_supply(view: AiWorldView, army: Army) -> bool:
 
 
 static func _breakout_target_power(view: AiWorldView, city_id: int) -> float:
-	var power := ArmyPower.city_defense(view.state.cities[city_id])
+	var power := ArmyPower.city_garrison_defense(
+		view.state, view.nation_id,
+		view.state.administrative_center_of(city_id)
+	)
 	for defender in view.state.armies_at_city(city_id):
 		if view.state.is_enemy(view.nation_id, defender.owner_nation):
 			power += ArmyPower.effective(defender)
@@ -666,15 +623,18 @@ static func _friendly_relief_need(view: AiWorldView, city_id: int) -> float:
 			or battle.city.id != city_id
 		):
 			continue
-		var defender_size := 0
-		for defender in battle.side_b:
-			if defender.owner_nation == view.nation_id and defender.size > 0:
-				defender_size += defender.size
-		# 解围所需兵力：保住被围守军(defender_size) + 打破封锁级兵力(siege_required)，留 25% 余量。
-		# 量纲统一（皆兵力，item 6）：守军与工事换算封锁需求相加，再乘余量。
+		var attacker_id := battle.siege_attacker_nation
+		if attacker_id < 0 and not battle.side_a.is_empty():
+			attacker_id = battle.side_a[0].owner_nation
+		var attack_size := 0
+		for attacker in battle.side_a:
+			attack_size += maxi(attacker.size, 0)
+		var garrison_power := ArmyPower.city_garrison_defense(
+			view.state, attacker_id, battle.city.id
+		)
 		need = maxf(
 			need,
-			float(defender_size + Combat.siege_required_manpower(battle.city.fort_strength)) * 1.25
+			maxf(ceil(float(attack_size) * 1.25) - garrison_power, 0.0)
 		)
 	return need
 
@@ -882,22 +842,6 @@ static func _choose_holding(
 			enemy_endpoint
 		)
 	var hold_score := snapshot.value_of_edge(army.move_from, army.move_to) + 2.0
-	if (
-		view.state.is_enemy(
-			view.nation_id,
-			target_city.owner_nation
-		)
-		and _waiting_for_full_campaign_preparation(
-			view,
-			enemy_endpoint
-		)
-	):
-		return ActionCandidate.make(
-			ActionCandidate.Kind.HOLD,
-			hold_score + 12.0,
-			"等待国家级180天满攻势准备完成",
-			enemy_endpoint
-		)
 	if view.state.uses_heightmap:
 		return ActionCandidate.make(
 			ActionCandidate.Kind.HOLD,
@@ -910,11 +854,13 @@ static func _choose_holding(
 			and army.combat_morale() >= 0.70
 		and army.supply_ratio >= 0.75
 	):
-		var garrison_size := 0
-		for defender in view.armies_at_city(enemy_endpoint):
-			garrison_size += defender.size
-		# 攻城派兵门槛（item 6/7 唯一真源）：歼灭守军 + 维持封锁×余量。
-		var required_size := assault_commit_threshold(garrison_size, target_city.fort_strength)
+		var center_id := view.state.administrative_center_of(target_city.id)
+		var required_size := (
+			view.state.campaign_siege_requirement(view.nation_id, center_id)
+			+ view.state.campaign_reinforcement_threat(
+				view.nation_id, center_id, 60
+			)
+		)
 		var pool := _adjacent_assault_pool(
 			view, snapshot, threat, coordinator, enemy_endpoint
 		)
@@ -942,23 +888,20 @@ static func _choose_holding(
 			own_attack_power *= Combat.attack_multiplier(
 				held_edge.danger
 			)
-		var preparation_multiplier := (
-			_campaign_target_preparation_multiplier(
-				view,
-				enemy_endpoint
-			)
-		)
 		var local_ratio := (
 			maxf(own_attack_power, float(pool["power"]))
-			* preparation_multiplier
 		) / maxf(
-			projected_enemy + ArmyPower.city_defense(target_city),
+			projected_enemy + ArmyPower.city_garrison_defense(
+				view.state, view.nation_id, center_id
+			),
 			1.0
 		)
 		var participant_ratio := (
-			own_attack_power * preparation_multiplier
+			own_attack_power
 		) / maxf(
-			projected_enemy + ArmyPower.city_defense(target_city),
+			projected_enemy + ArmyPower.city_garrison_defense(
+				view.state, view.nation_id, center_id
+			),
 			1.0
 		)
 		var directions := int(pool["directions"])
@@ -982,18 +925,6 @@ static func _choose_holding(
 				enemy_endpoint
 			)
 			attack.minimum_commit_days = STRATEGIC_COMMIT_DAYS
-			if preparation_multiplier > 1.0:
-				attack.offensive_attack_multiplier = (
-					preparation_multiplier
-				)
-				attack.offensive_bonus_days = (
-						Simulation.offensive_bonus_duration_days(
-							_campaign_target_preparation_days(
-								view,
-								enemy_endpoint
-						)
-						)
-				)
 			return attack
 	return ActionCandidate.make(
 		ActionCandidate.Kind.HOLD,
@@ -1059,44 +990,6 @@ static func _enemy_power_on_edge(
 		):
 			total += ArmyPower.effective(enemy)
 	return total
-
-
-static func _campaign_target_preparation_multiplier(
-	view: AiWorldView,
-	city_id: int
-) -> float:
-	return Simulation.offensive_preparation_multiplier(
-		_campaign_target_preparation_days(view, city_id)
-	)
-
-
-static func _campaign_target_preparation_days(
-	view: AiWorldView,
-	city_id: int
-) -> int:
-	var nation := view.state.nations[view.nation_id]
-	if (
-		not nation.campaign_preparation_targets.has(city_id)
-		or nation.campaign_preparation_started_day < 0
-	):
-		return 0
-	return maxi(
-		view.day - nation.campaign_preparation_started_day,
-		0
-	)
-
-
-static func _waiting_for_full_campaign_preparation(
-	view: AiWorldView,
-	city_id: int
-) -> bool:
-	var nation := view.state.nations[view.nation_id]
-	return (
-		nation.campaign_full_preparation_targets.has(city_id)
-		and nation.campaign_preparation_started_day >= 0
-		and view.day - nation.campaign_preparation_started_day
-			< Simulation.OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
-	)
 
 
 static func _aggression(view: AiWorldView) -> float:

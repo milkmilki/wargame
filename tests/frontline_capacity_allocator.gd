@@ -202,10 +202,8 @@ func _make_frontline_pocket_state() -> GameState:
 		city.is_food_hub = false
 		city.is_manpower_hub = false
 		city.is_dock = false
-		city.fort_strength_max = 0
 	for city_id in [9, 10, 17, 18, 25]:
 		state.cities[city_id].owner_nation = 0
-	state.cities[25].fort_strength_max = 30
 	state.nations[0].capital_city_id = 25
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(nation_a + 1, state.nations.size()):

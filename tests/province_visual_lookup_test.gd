@@ -104,10 +104,13 @@ func _init() -> void:
 		)
 	var region := LOOKUP.build_visual_lut(state, -1, false, true)
 	for city_id in range(state.cities.size()):
-		var region_id := state.region_ids[city_id]
+		var region_id := state.administrative_region_ids[city_id]
 		var expected_region_color := Color.TRANSPARENT
-		if region_id >= 0 and region_id < state.region_colors.size():
-			expected_region_color = state.region_colors[region_id]
+		if (
+			region_id >= 0
+			and region_id < state.administrative_region_colors.size()
+		):
+			expected_region_color = state.administrative_region_colors[region_id]
 		_assert_color(
 			region.get_pixel(city_id, LOOKUP.BASE_ROW),
 			expected_region_color,

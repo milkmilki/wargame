@@ -18,6 +18,14 @@ enum SiegeRole {
 const DAYS_PER_MONTH: int = 30
 const DAYS_PER_HALF_YEAR: int = 180        ## 半年 = 180 天（粮食注入周期）
 const DAYS_PER_YEAR: int = 360
+const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = 0
+const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 1.0
+
+static func offensive_preparation_multiplier(_preparation_days: int) -> float:
+	return 1.0
+
+static func offensive_bonus_duration_days(_preparation_days: int) -> int:
+	return 0
 const MONTHS_PER_YEAR: int = 12
 # ---- 行军时长（平衡规格 R1：纯距离线性）----
 const MARCH_DAYS_MIN: float = 10.0         ## 任意边最短行军 10 天（distance=1）
@@ -61,8 +69,6 @@ const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
 ## 规格 R3：被围粮仓城市每日消耗本地库存；普通城市无粮仓，被围即失去外部补给。
 const SIEGE_CITY_FOOD_PER_DAY: int = 1     ## 被围城每日粮草消耗系数
 # ---- 占领 ----
-const CITY_FORT_CAPTURE_MULTIPLIER: float = 0.50
-const CITY_FORT_RECOVERY_DAYS: int = 365
 ## 分封战争加成：宗藩体系处于对外战争时，「不接壤敌国」的后方藩王把贡赋率临时提到此值，
 ## 用后方财税支撑中央战争机器；接壤敌国的前线藩王不加税，以自有军团参与共同战争。
 const VASSAL_WARTIME_REAR_TRIBUTE_RATE: float = 0.60
@@ -135,12 +141,10 @@ const LOCAL_BATTLE_MIN_SUPPLY_RATIO: float = 0.50
 const CAMPAIGN_PARALLEL_SURPLUS_STEP_RATIO: float = 0.33
 const CAMPAIGN_THEATER_MAX_TRANSFER_COST: float = 18.0
 ## 同一攻势只经营一个主目标和最多两个次目标，避免宽正面重复规划。
-const CAMPAIGN_MAX_PARALLEL_TARGETS: int = 3
-## 每国最多六个聚合指挥单位。新主战军团按1至6循环填充；攻势按目标
-## 的实际兵力与战力需求依次投入单位，不使用目标轮转或固定单位数。
-const CAMPAIGN_MAX_COMMAND_UNITS: int = BattleGroup.MAX_COMMAND_UNITS
-const OFFENSIVE_BONUS_MAX_PREPARATION_DAYS: int = 120
-const OFFENSIVE_BONUS_MAX_MULTIPLIER: float = 2.0
+const CAMPAIGN_MAX_PARALLEL_TARGETS: int = 2
+## 每支15000人主战军都是独立指挥单位。单次国家级攻势仍最多调动六支，
+## 其余部队留作防御和后续波次，不改写既有攻势规划逻辑。
+const CAMPAIGN_MAX_COMMAND_UNITS: int = BattleGroup.MAX_CAMPAIGN_COMMAND_UNITS
 const CAMPAIGN_REQUIRED_ATTACK_STEPS: int = 2
 const DEFENSIVE_DEPLOYMENT_LOCK_DAYS: int = 90
 const LIGHT_ONLY_OFFENSIVE_MAX_ARMIES: int = 2
@@ -372,7 +376,6 @@ func setup(game_state: GameState) -> void:
 			"TRADE_DISABLE_DOMESTIC_IDEAL_CACHE"
 		) == "1"
 	)
-	_normalize_city_fortifications()
 	state.refresh_derived()
 	FamilyTree.ensure_all(state)
 	_reset_trade_forecast_cache()
@@ -497,8 +500,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	):
 		_synchronize_war_gold_income_snapshots()
 	state.prune_campaign_visual_events()
-	_expire_offensive_bonuses()
-	_recover_city_fortifications()
 	_record_tick_profile_stage("maintenance", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -523,6 +524,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			_resolve_annual_resource_balance(
 				_latest_monthly_gold_flows
 			)
+		state.reinforce_city_garrisons_monthly()
 		if spread_runtime_work:
 			await get_tree().process_frame
 		monthly_profile_started = (
@@ -592,7 +594,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		if state.uses_heightmap
 		else GRID_AI_DECISION_INTERVAL_DAYS
 	)
-	_force_mature_campaign_evaluations()
 	# 错峰下几乎每天都有一批国家到期；力求「有到期国家或需强制重算」即进入决策。
 	# 关闭错峰（A/B 对照）时退回旧门控：仅在 day%interval==0 全体决策。
 	var force_recompute := (
@@ -625,7 +626,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	var ai_finalize_started := (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
-	_launch_mature_campaign_offensives()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"ai_finalize", ai_finalize_started)
 	if spread_runtime_work:
@@ -837,28 +837,6 @@ func _record_runtime_span(stage: StringName, started_usec: int) -> void:
 	)
 
 
-static func offensive_preparation_multiplier(
-	preparation_days: int
-) -> float:
-	var ratio := clampf(
-		float(maxi(preparation_days, 0))
-			/ float(OFFENSIVE_BONUS_MAX_PREPARATION_DAYS),
-		0.0,
-		1.0
-	)
-	return lerpf(1.0, OFFENSIVE_BONUS_MAX_MULTIPLIER, ratio)
-
-
-static func offensive_bonus_duration_days(
-	preparation_days: int
-) -> int:
-	return clampi(
-		preparation_days,
-		0,
-		OFFENSIVE_BONUS_MAX_PREPARATION_DAYS
-	)
-
-
 func _campaign_preparation_days(nation_id: int) -> int:
 	var nation := state.nations[nation_id]
 	if nation.campaign_preparation_started_day < 0:
@@ -879,9 +857,7 @@ func _clear_campaign_preparation_plan(nation_id: int) -> void:
 	nation.campaign_preparation_targets.clear()
 	nation.campaign_preparation_assignments.clear()
 	nation.campaign_preparation_group_assignments.clear()
-	nation.campaign_full_preparation_targets.clear()
 	nation.campaign_preparation_started_day = -1
-	nation.campaign_preparation_multiplier = 1.0
 
 
 func _remove_campaign_preparation_target(
@@ -894,7 +870,6 @@ func _remove_campaign_preparation_target(
 	if state.uses_heightmap:
 		return
 	nation.campaign_preparation_targets.erase(target_city)
-	nation.campaign_full_preparation_targets.erase(target_city)
 	nation.campaign_preparation_group_assignments.erase(
 		target_city
 	)
@@ -913,7 +888,6 @@ func _remove_campaign_preparation_target(
 			)
 	if nation.campaign_preparation_targets.is_empty():
 		nation.campaign_preparation_started_day = -1
-		nation.campaign_preparation_multiplier = 1.0
 
 
 func _campaign_projected_assault_ratio(
@@ -948,9 +922,6 @@ func _campaign_projected_assault_ratio(
 		):
 			continue
 		attack_power += ArmyPower.effective(army)
-	attack_power *= offensive_preparation_multiplier(
-		preparation_days
-	)
 	var defense_power := _campaign_objective_defense_power(
 		nation_id,
 		objective_city,
@@ -975,8 +946,9 @@ func _campaign_objective_defense_power(
 			threat.threat_at(objective_city)
 		)
 	if state.recognized_owner_of(objective_city) != nation_id:
-		defense_power += ArmyPower.city_defense(
-			state.cities[objective_city]
+		defense_power += ArmyPower.city_garrison_defense(
+			state, nation_id,
+			state.administrative_center_of(objective_city)
 		)
 	return defense_power
 
@@ -1047,110 +1019,6 @@ func _campaign_offensive_interval(nation_id: int) -> int:
 			/ aggression
 	))
 
-
-static func city_fort_strength_after_capture(
-	full_strength: int,
-	elapsed_days: int
-) -> int:
-	var maximum := maxi(full_strength, 0)
-	if maximum <= 0:
-		return 0
-	var damaged := clampi(
-		int(round(
-			float(maximum) * CITY_FORT_CAPTURE_MULTIPLIER
-		)),
-		0,
-		maximum
-	)
-	if damaged >= maximum or elapsed_days <= 0:
-		return damaged
-	if elapsed_days >= CITY_FORT_RECOVERY_DAYS:
-		return maximum
-	var progress := clampf(
-		float(elapsed_days)
-			/ float(CITY_FORT_RECOVERY_DAYS),
-		0.0,
-		1.0
-	)
-	# 整数城防在一年到期前不得因四舍五入提前回满。
-	return clampi(
-		int(floor(lerpf(
-			float(damaged),
-			float(maximum),
-			progress
-		))),
-		damaged,
-		maximum - 1
-	)
-
-
-static func city_fort_vulnerability(
-	city: City,
-	current_day: int
-) -> float:
-	if city == null or city.fort_last_capture_day < 0:
-		return 0.0
-	return 1.0 - clampf(
-		float(maxi(
-			current_day - city.fort_last_capture_day,
-			0
-		)) / float(CITY_FORT_RECOVERY_DAYS),
-		0.0,
-		1.0
-	)
-
-
-func _normalize_city_fortifications() -> void:
-	for city in state.cities:
-		city.fort_strength_max = maxi(
-			city.fort_strength_max,
-			city.fort_strength
-		)
-
-
-func _recover_city_fortifications() -> void:
-	var fortification_changed := false
-	for city in state.cities:
-		city.fort_strength_max = maxi(
-			city.fort_strength_max,
-			city.fort_strength
-		)
-		if city.fort_last_capture_day < 0:
-			continue
-		var recovered := city_fort_strength_after_capture(
-			city.fort_strength_max,
-			maxi(
-				state.day - city.fort_last_capture_day,
-				0
-			)
-		)
-		if recovered != city.fort_strength:
-			city.fort_strength = recovered
-			fortification_changed = true
-	if fortification_changed:
-		state.fortification_revision += 1
-	# 已建立的围城也必须读取恢复后的当前工事，不能永久冻结在开战日。
-	for battle in state.battles:
-		if (
-			battle.finished
-			or battle.kind != Battle.Kind.SIEGE
-			or battle.city == null
-			or battle.city.fort_last_capture_day < 0
-		):
-			continue
-		battle.siege_required = Combat.siege_required_manpower(
-			battle.city.fort_strength
-		)
-
-
-func _expire_offensive_bonuses() -> void:
-	for army in state.armies:
-		if (
-			army.offensive_bonus_until_day >= 0
-			and state.day >= army.offensive_bonus_until_day
-		):
-			army.offensive_attack_multiplier = 1.0
-			army.offensive_bonus_until_day = -1
 
 # ------------------------------------------------------------------ 1. 经济
 
@@ -2224,6 +2092,8 @@ static func city_food_output(
 	garrison_by_city: Dictionary = {},
 	ruler_modifiers: Dictionary = {}
 ) -> int:
+	if not game_state.city_administrative_output_enabled(city.id):
+		return 0
 	var garrison_output := city_food_output_for_garrison(
 		city,
 		city_garrison_troops(game_state, city, garrison_by_city)
@@ -2258,6 +2128,8 @@ static func city_manpower_output(
 	city: City,
 	ruler_modifiers: Dictionary = {}
 ) -> int:
+	if not game_state.city_administrative_output_enabled(city.id):
+		return 0
 	return _apply_ruler_output_multiplier(
 		game_state, city, maxi(city.manpower_per_month, 0),
 		RulerProfile.KEY_MANPOWER_OUTPUT, ruler_modifiers
@@ -2304,6 +2176,9 @@ static func city_output_breakdown(
 		"development_gold_multiplier": city.development_gold_multiplier,
 		"development_food_multiplier": city.development_food_multiplier,
 		"capital_gold_addition": capital_addition,
+		"administrative_output_enabled": (
+			game_state.city_administrative_output_enabled(city.id)
+		),
 		"governance_multiplier": city_governance_output_multiplier(
 			game_state, city
 		),
@@ -3391,7 +3266,7 @@ func _drain_siege_food() -> void:
 			continue
 		var city := battle.city
 		state.change_city_food_storage(city.id, -SIEGE_CITY_FOOD_PER_DAY)
-		if battle.has_garrison:
+		if battle.side_b_defends_city:
 			var has_food := city.food_storage > 0
 			for defender in battle.side_b:
 				if defender.size <= 0:
@@ -3596,7 +3471,7 @@ func _siege_garrison_battle_of(army: Army) -> Battle:
 		battle = state.battle_by_id(army.battle_id)
 	if battle == null or battle.finished or battle.kind != Battle.Kind.SIEGE:
 		return null
-	if not battle.has_garrison or not battle.side_b.has(army):
+	if not battle.side_b_defends_city or not battle.side_b.has(army):
 		return null
 	return battle
 
@@ -4067,13 +3942,8 @@ func _campaign_army_index(nation_id: int) -> Dictionary:
 	return army_by_id
 
 
-const CAPITAL_CAPTURE_TRANSFER_HOPS: int = 2
-
-
-## 首都失陷后，以首都为中心沿可通行道路两跳内、仍由战败国实控的城市，
-## 加上胜方此前已经实际占领的战败方法理城市，一并确认给胜方，然后立即
-## 结束战争。范围转移使用单笔领土事务，避免死亡藩王在和平确认占领之前
-## 被宗主继承，也避免逐城迁都、粮仓与存亡状态经过半成品。
+## 首都失陷复用整州结算：胜方实控的州治决定该州归属，已占码头
+## 仍逐节点确认。全部转移使用单笔领土事务，随后立即结束战争。
 func _resolve_capital_capture_capitulation(
 	surrendering: int,
 	victor: int,
@@ -4094,19 +3964,8 @@ func _resolve_capital_capture_capitulation(
 	):
 		return [] as Array[int]
 	var transfer_ids := _capital_capture_transfer_city_ids(
-		surrendering, captured_capital_id
+		surrendering, captured_capital_id, victor
 	)
-	var transfer_set := {}
-	for city_id in transfer_ids:
-		transfer_set[city_id] = true
-	for occupied_city in state.cities:
-		if (
-			occupied_city.owner_nation == victor
-			and state.recognized_owner_of(occupied_city.id) == surrendering
-			and not transfer_set.has(occupied_city.id)
-		):
-			transfer_set[occupied_city.id] = true
-			transfer_ids.append(occupied_city.id)
 	transfer_ids.sort()
 	var operations: Array[Dictionary] = []
 	for city_id in transfer_ids:
@@ -4123,12 +3982,13 @@ func _resolve_capital_capture_capitulation(
 				else GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
 			),
 		})
-	var confirmation := state.apply_territory_transaction(operations)
-	if not bool(confirmation.get("ok", false)):
-		return [] as Array[int]
 	var confirmed: Array[int] = []
-	for city_value in confirmation.get("changed_city_ids", []):
-		confirmed.append(int(city_value))
+	if not operations.is_empty():
+		var confirmation := state.apply_territory_transaction(operations)
+		if not bool(confirmation.get("ok", false)):
+			return [] as Array[int]
+		for city_value in confirmation.get("changed_city_ids", []):
+			confirmed.append(int(city_value))
 	var opponents := _war_opponents_including_eliminated(
 		surrendering
 	)
@@ -4148,12 +4008,16 @@ func _resolve_capital_capture_capitulation(
 				% [surrendering, opponent]
 			),
 		})
-	return confirmed
+	if not confirmed.is_empty():
+		return confirmed
+	var forced_peace_marker: Array[int] = [captured_capital_id]
+	return forced_peace_marker
 
 
 func _capital_capture_transfer_city_ids(
 	surrendering: int,
-	captured_capital_id: int
+	captured_capital_id: int,
+	victor: int = -1
 ) -> Array[int]:
 	var result: Array[int] = []
 	if (
@@ -4161,30 +4025,27 @@ func _capital_capture_transfer_city_ids(
 		or captured_capital_id >= state.cities.size()
 	):
 		return result
-	var distances := {captured_capital_id: 0}
-	var queue: Array[int] = [captured_capital_id]
-	var cursor := 0
-	while cursor < queue.size():
-		var current := queue[cursor]
-		cursor += 1
-		var distance := int(distances[current])
-		if state.cities[current].owner_nation == surrendering:
-			result.append(current)
-		if distance >= CAPITAL_CAPTURE_TRANSFER_HOPS:
+	if victor < 0:
+		var opponents := state.wars_of(surrendering)
+		if not opponents.is_empty():
+			victor = int(opponents[0])
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if (
+			center_id != captured_capital_id
+			and state.cities[center_id].owner_nation != victor
+		):
 			continue
-		var neighbors: Array[int] = state.neighbors(current).duplicate()
-		neighbors.sort()
-		for neighbor in neighbors:
-			if distances.has(neighbor):
-				continue
-			var edge := state.edge_of(current, neighbor)
-			if (
-				edge == null
-				or edge.max_manpower <= 0
-			):
-				continue
-			distances[neighbor] = distance + 1
-			queue.append(neighbor)
+		for city_id in state.administrative_members(center_id):
+			if state.recognized_owner_of(city_id) == surrendering:
+				result.append(city_id)
+	for city in state.cities:
+		if (
+			city.is_dock
+			and city.owner_nation == victor
+			and state.recognized_owner_of(city.id) == surrendering
+		):
+			result.append(city.id)
 	result.sort()
 	return result
 
@@ -4309,12 +4170,15 @@ func _execute_diplomatic_action(
 					if tick_phase_profiling_enabled else 0
 				)
 				var objective_city := int(action.get("objective_city", -1))
-				if changed and objective_city >= 0:
+				var objective_center := int(action.get(
+					"objective_center_city", objective_city
+				))
+				if changed and objective_center >= 0:
 					_set_coalition_war_objective(
 						attackers,
 						defenders,
 						nation_a,
-						objective_city,
+						objective_center,
 						str(action.get("objective_reason", ""))
 					)
 				_record_tick_profile_stage(
@@ -4447,6 +4311,9 @@ func _execute_diplomatic_action(
 				).is_empty()
 			):
 				nation.war_preparation_objective_city = objective_city
+				nation.war_preparation_objective_center_city = int(
+					action.get("objective_center_city", objective_city)
+				)
 				nation.war_preparation_reason = str(
 					action.get("objective_reason", "")
 				)
@@ -4682,13 +4549,17 @@ func _set_coalition_war_objective(
 	objective_city: int,
 	reason: String
 ) -> void:
-	if (
-		objective_city < 0
-		or objective_city >= state.cities.size()
-		or not defenders.has(
-			state.cities[objective_city].owner_nation
-		)
-	):
+	if objective_city < 0 or objective_city >= state.cities.size():
+		return
+	var objective_center := state.administrative_center_of(objective_city)
+	if objective_center >= 0:
+		objective_city = objective_center
+	var has_defender_member := false
+	for member_id in state.administrative_members(objective_city):
+		if defenders.has(state.cities[member_id].owner_nation):
+			has_defender_member = true
+			break
+	if not has_defender_member:
 		return
 	for attacker in attackers:
 		for defender in defenders:
@@ -4892,9 +4763,6 @@ func _plan_coalition_peace(
 		"operation_by_city": {},
 		"proposed_suzerainty": state.suzerainty.duplicate(true),
 	}
-	_plan_disconnected_coalition_occupation_restoration(
-		draft, bloc_a, bloc_b, settled_war_pairs
-	)
 	_plan_coalition_occupation_recognition(
 		draft, bloc_a, bloc_b, settled_war_pairs
 	)
@@ -5178,7 +5046,60 @@ func _plan_coalition_occupation_recognition(
 	var owners: Array = draft["owners"]
 	var legal: Array = draft["legal"]
 	var sponsors: Array = draft["sponsors"]
+	var operation_by_city: Dictionary = draft["operation_by_city"]
+	# Land territory follows the current controller of each administrative seat.
+	# Only legal owners in the opposing settled bloc are affected; neutral third
+	# parties and allies inside the same geographic region remain untouched.
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if center_id < 0 or center_id >= state.cities.size():
+			continue
+		var center_controller := int(owners[center_id])
+		var center_sponsor := int(sponsors[center_id])
+		var settlement_actor := (
+			center_sponsor if center_sponsor >= 0 else center_controller
+		)
+		var controlling_side := (
+			0 if side_a.has(settlement_actor)
+			else 1 if side_b.has(settlement_actor)
+			else -1
+		)
+		if controlling_side < 0:
+			continue
+		var recipient := (
+			center_controller
+			if _coalition_plan_nation_has_city(draft, center_controller)
+			else _planned_external_territory_recipient(
+				center_controller, draft
+			)
+		)
+		if recipient < 0:
+			continue
+		for city_id in state.administrative_members(center_id):
+			var recognized_owner := int(legal[city_id])
+			var recognized_side := (
+				0 if side_a.has(recognized_owner)
+				else 1 if side_b.has(recognized_owner)
+				else -1
+			)
+			if recognized_side < 0 or recognized_side == controlling_side:
+				continue
+			if not settled_war_pairs.has(
+				GameState.edge_key(settlement_actor, recognized_owner)
+			):
+				continue
+			_append_coalition_territory_operation(
+				draft, city_id, recipient, recipient, -1,
+				"coalition_territory_recognized",
+				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			)
+			transferred.append(city_id)
+	# Docks retain node-by-node recognition. Occupied land cities not covered by
+	# a captured seat are restored, so taking a subordinate prefecture alone
+	# cannot produce a peace-time territorial transfer.
 	for city_id in range(state.cities.size()):
+		if operation_by_city.has(city_id):
+			continue
 		var controller := int(owners[city_id])
 		var recognized_owner := int(legal[city_id])
 		if controller == recognized_owner:
@@ -5212,21 +5133,26 @@ func _plan_coalition_occupation_recognition(
 			or occupying_side == recognized_side
 		):
 			continue
-		# 占领控制权已经在军队跨入敌境时按实际出发领土冻结。和平
-		# 只确认当前 controller 的法理，不再把藩王成果二次上收到宗主。
-		var recipient := (
-			controller
-			if _coalition_plan_nation_has_city(draft, controller)
-			else _planned_external_territory_recipient(controller, draft)
-		)
-		if recipient < 0:
-			continue
-		_append_coalition_territory_operation(
-			draft, city_id, recipient, recipient, -1,
-			"coalition_territory_recognized",
-			GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
-		)
-		transferred.append(city_id)
+		if state.cities[city_id].is_dock:
+			var recipient := (
+				controller
+				if _coalition_plan_nation_has_city(draft, controller)
+				else _planned_external_territory_recipient(controller, draft)
+			)
+			if recipient < 0:
+				continue
+			_append_coalition_territory_operation(
+				draft, city_id, recipient, recipient, -1,
+				"coalition_territory_recognized",
+				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			)
+			transferred.append(city_id)
+		else:
+			_append_coalition_territory_operation(
+				draft, city_id, recognized_owner, recognized_owner, -1,
+				"peace_occupation_restored",
+				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			)
 	return transferred
 
 
@@ -5465,8 +5391,6 @@ func _planned_capital_connected_territory(
 		or int(owners[capital_id]) != nation_id
 	):
 		return {}
-	var proposed_suzerainty: Dictionary = draft["proposed_suzerainty"]
-	var root := _planned_suzerainty_root(nation_id, proposed_suzerainty)
 	var connected := {capital_id: true}
 	var queue: Array[int] = [capital_id]
 	var cursor := 0
@@ -5480,12 +5404,7 @@ func _planned_capital_connected_territory(
 				connected.has(neighbor)
 				or edge == null
 				or edge.max_manpower <= 0
-				or _planned_suzerainty_root(
-					neighbor_owner, proposed_suzerainty
-				) != root
-				or _planned_coalition_relation(
-					nation_id, neighbor_owner, draft, {}
-				) != GameState.DiplomaticRelation.ALLIED
+				or neighbor_owner != nation_id
 			):
 				continue
 			connected[neighbor] = true
@@ -5572,8 +5491,8 @@ func _restore_disconnected_coalition_occupations(
 	_repatriate_after_territory_settlement(restored)
 	return restored
 
-## 返回 nation_id 所属和平宗藩体系内，从该国首都沿正容量道路可达的实控区。
-## 仅用于集团议和识别断联临时占领；普通盟国不提供领土连续性。
+## 返回从 nation_id 首都出发，仅沿本国实控城市与正容量道路可达的区域。
+## 军事通行权不等于领土连续；盟国、宗主和藩王都不能作为飞地连接桥梁。
 func _capital_connected_territory(nation_id: int) -> Dictionary:
 	var capital_id := state.nations[nation_id].capital_city_id
 	if (
@@ -5582,7 +5501,6 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 		or state.cities[capital_id].owner_nation != nation_id
 	):
 		return {}
-	var suzerainty_root := state.suzerainty_root(nation_id)
 	var connected := {capital_id: true}
 	var queue: Array[int] = [capital_id]
 	var cursor := 0
@@ -5594,20 +5512,11 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 			var neighbor_owner := state.cities[
 				neighbor
 			].owner_nation
-			var same_peaceful_suzerainty := (
-				neighbor_owner >= 0
-				and state.suzerainty_root(neighbor_owner)
-					== suzerainty_root
-				and state.has_military_access(
-					nation_id,
-					neighbor_owner
-				)
-			)
 			if (
 				connected.has(neighbor)
 				or edge == null
 				or edge.max_manpower <= 0
-				or not same_peaceful_suzerainty
+				or neighbor_owner != nation_id
 			):
 				continue
 			connected[neighbor] = true
@@ -5669,6 +5578,11 @@ func _start_war_preparation(
 	action: Dictionary
 ) -> bool:
 	var objective_city := int(action.get("objective_city", -1))
+	var objective_center := int(action.get(
+		"objective_center_city", objective_city
+	))
+	if objective_center < 0:
+		objective_center = state.administrative_center_of(objective_city)
 	if (
 		objective_city < 0
 		or objective_city >= state.cities.size()
@@ -5678,6 +5592,7 @@ func _start_war_preparation(
 	var nation := state.nations[nation_id]
 	nation.war_preparation_target_nation = target_id
 	nation.war_preparation_objective_city = objective_city
+	nation.war_preparation_objective_center_city = objective_center
 	nation.war_preparation_started_day = state.day
 	nation.war_preparation_reason = str(action.get("objective_reason", ""))
 	nation.war_preparation_unready_since_day = -1
@@ -5706,6 +5621,7 @@ func _clear_war_preparation(
 	var nation := state.nations[nation_id]
 	nation.war_preparation_target_nation = -1
 	nation.war_preparation_objective_city = -1
+	nation.war_preparation_objective_center_city = -1
 	nation.war_preparation_started_day = -1
 	nation.war_preparation_reason = ""
 	nation.war_preparation_unready_since_day = -1
@@ -5846,6 +5762,7 @@ func _clear_finished_war_mobilization(nation_id: int) -> void:
 	nation.campaign_next_offensive_day = -1
 	nation.campaign_offensive_count = 0
 	nation.campaign_theater_anchor_city = -1
+	nation.campaign_objective_center_city = -1
 	nation.campaign_theater_started_day = -1
 	_clear_campaign_preparation_plan(nation_id)
 	nation.campaign_post_capture_plans.clear()
@@ -5970,7 +5887,7 @@ func _reconcile_siege_after_coalition_peace(
 	for army in battle.frontline_priority_b.keys():
 		if not retained.has(army):
 			battle.frontline_priority_b.erase(army)
-	battle.has_garrison = _siege_side_defends_city(
+	battle.side_b_defends_city = _siege_side_defends_city(
 		battle,
 		retained
 	)
@@ -7195,7 +7112,7 @@ func _reconcile_strategic_roles(
 		if destination < 0:
 			var group := state.create_battle_group(nation_id)
 			if group == null:
-				state.assign_or_merge_main_army(army)
+				state.assign_main_army_to_independent_command(army)
 				continue
 			destination = group.id
 			valid_groups[destination] = true
@@ -7404,7 +7321,7 @@ func _strategy_snapshot_for(
 	var revision := [
 		state.ownership_revision,
 		state.diplomacy_revision,
-		state.fortification_revision,
+		state.garrison_revision,
 		ai_visibility_hops,
 	]
 	if (
@@ -7414,7 +7331,7 @@ func _strategy_snapshot_for(
 		var city_values_revision: Array[int] = [
 			state.day,
 			state.ownership_revision,
-			state.fortification_revision,
+			state.garrison_revision,
 		]
 		if _ai_base_city_values_revision != city_values_revision:
 			_ai_base_city_values = (
@@ -8142,14 +8059,6 @@ func _try_create_force_recruitment(
 	var recruitment_reason := str(
 		recruitment.get("reason", "资源结余扩军")
 	)
-	var expand_army_id := int(recruitment.get("expand_army_id", -1))
-	if expand_army_id >= 0:
-		return _expand_main_command(
-			nation_id,
-			expand_army_id,
-			formation_size,
-			recruitment_reason
-		)
 	if emergency_recruitment:
 		recruitment_reason = "战争生存动员%d编制" % formation_size
 	var battle_group_id := int(recruitment.get("group_id", -1))
@@ -8176,58 +8085,6 @@ func _try_create_force_recruitment(
 	if created_army == null and created_group != null:
 		nation.battle_groups.erase(created_group)
 	return created_army != null
-
-
-func _expand_main_command(
-	nation_id: int,
-	army_id: int,
-	added_capacity: int,
-	reason: String
-) -> bool:
-	if added_capacity != GameState.INITIAL_HEAVY_ARMY_SIZE:
-		return false
-	var army: Army = null
-	for candidate in state.armies:
-		if candidate.id == army_id:
-			army = candidate
-			break
-	if (
-		army == null
-		or army.owner_nation != nation_id
-		or not army.is_main_battle_role()
-		or army.battle_group_id < 0
-	):
-		return false
-	var nation := state.nations[nation_id]
-	var gold_cost := GameState.formation_creation_gold_cost(added_capacity)
-	if (
-		nation.manpower_pool < added_capacity
-		or nation.treasury_gold < gold_cost
-	):
-		return false
-	nation.manpower_pool -= added_capacity
-	nation.treasury_gold -= gold_cost
-	var existing_size := army.size
-	var combined_size := existing_size + added_capacity
-	var combined_morale_ratio := (
-		army.morale_ratio() * existing_size + added_capacity
-	) / float(maxi(combined_size, 1))
-	army.supply_ratio = (
-		army.supply_ratio * existing_size + added_capacity
-	) / float(maxi(combined_size, 1))
-	army.max_size += added_capacity
-	army.size = mini(combined_size, army.max_size)
-	army.max_morale = Army.max_morale_for_formation(army.max_size)
-	army.morale = combined_morale_ratio * army.max_morale
-	army.ai_action = ActionCandidate.Kind.CREATE_ARMY
-	army.ai_order_created_day = state.day
-	army.ai_order_reason = "%s；支付扩编费%d金" % [reason, gold_cost]
-	nation.ai_last_force_action = ActionCandidate.Kind.CREATE_ARMY
-	nation.ai_last_force_day = state.day
-	nation.ai_last_force_reason = army.ai_order_reason
-	_ai_forced_nations[nation_id] = true
-	return true
-
 
 func _regular_force_recruitment(
 	view: AiWorldView,
@@ -8303,10 +8160,8 @@ func _campaign_force_recruitment_demand(
 	var target_main_capacity := (
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 		if active_offense
-		else mini(
-			defense_plan.main_reserve_target_group_count(),
-			CAMPAIGN_MAX_COMMAND_UNITS
-		) * GameState.INITIAL_HEAVY_ARMY_SIZE
+		else defense_plan.main_reserve_target_group_count()
+			* GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
 	if active_offense:
 		target_main_capacity = 0
@@ -8445,44 +8300,11 @@ func _demobilize_excess_peacetime_battle_group(
 func _next_battle_group_recruitment(
 	nation_id: int
 ) -> Dictionary:
-	var nation := state.nations[nation_id]
-	var ordered_groups: Array[BattleGroup] = nation.battle_groups.duplicate()
-	ordered_groups.sort_custom(func(a: BattleGroup, b: BattleGroup) -> bool:
-		return a.id < b.id
-	)
-	var total_legions := 0
-	for army in state.armies:
-		if (
-			army.owner_nation == nation_id
-			and army.size > 0
-			and army.battle_group_id >= 0
-			and army.is_main_battle_role()
-		):
-			total_legions += army.main_legion_count(
-				GameState.INITIAL_HEAVY_ARMY_SIZE
-			)
-	var slot_index := total_legions % CAMPAIGN_MAX_COMMAND_UNITS
-	if slot_index >= ordered_groups.size():
-		return {
-			"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
-			"group_id": -1,
-			"create_group": true,
-			"reason": "轮转建立指挥单位%d" % (slot_index + 1),
-		}
-	var selected_group := ordered_groups[slot_index]
-	var members := state.battle_group_members(nation_id, selected_group.id)
-	if members.is_empty():
-		return {
-			"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
-			"group_id": selected_group.id,
-			"reason": "轮转填充指挥单位%d" % (slot_index + 1),
-		}
-	var selected_army: Army = members[0]
 	return {
 		"size": GameState.INITIAL_HEAVY_ARMY_SIZE,
-		"expand_army_id": selected_army.id,
-		"group_id": selected_group.id,
-		"reason": "轮转扩充指挥单位%d共享兵力池" % (slot_index + 1),
+		"group_id": -1,
+		"create_group": true,
+		"reason": "建立独立主战军",
 	}
 
 
@@ -8506,8 +8328,6 @@ func _clear_campaign_attack_plan(nation_id: int) -> void:
 	nation.campaign_launched_armies.clear()
 	nation.campaign_echelon_started_days.clear()
 	nation.campaign_post_capture_plans.clear()
-	nation.campaign_launched_attack_multiplier = 1.0
-	nation.campaign_launched_bonus_days = 0
 	nation.campaign_plan_targets.clear()
 	nation.campaign_plan_wave = -1
 	nation.campaign_plan_primary_city = -1
@@ -9747,18 +9567,13 @@ func _assign_grid_campaign_target(
 		threat.threat_at(target_city)
 	)
 	if state.recognized_owner_of(target_city) != nation_id:
-		grid_target_defense += ArmyPower.city_defense(
-			state.cities[target_city]
+		grid_target_defense += ArmyPower.city_garrison_defense(
+			state, nation_id,
+			state.administrative_center_of(target_city)
 		)
-	var grid_preparation_days := (
-		_campaign_offensive_interval(nation_id)
-		if nation.campaign_last_offensive_day >= 0
-		else 0
-	)
 	var grid_target_power := (
 		grid_target_defense
 		* _campaign_attack_ratio_threshold(nation_id)
-		/ offensive_preparation_multiplier(grid_preparation_days)
 	)
 	var selected: Array[Army] = []
 	var selected_troops := 0
@@ -11368,13 +11183,6 @@ func _launch_campaign_offensive(
 		preparation_days = _campaign_preparation_days(
 			nation_id
 		)
-	var offensive_multiplier := offensive_preparation_multiplier(
-		preparation_days
-	)
-	var offensive_bonus_days := offensive_bonus_duration_days(
-		preparation_days
-	)
-	nation.campaign_preparation_multiplier = offensive_multiplier
 	var launched := false
 	var launched_origins := {}
 	var route_threat := route_threat_override
@@ -11469,25 +11277,17 @@ func _launch_campaign_offensive(
 				ActionCandidate.Kind.ATTACK,
 				2000.0,
 				(
-					"国家战役第%d波：军%d按计划准备%d天，"
-					+ "以%.2f倍攻击城市%d"
+					"国家战役第%d波：军%d按计划准备%d天攻击城市%d"
 				) % [
 					nation.campaign_offensive_count + 1,
 					army.id,
 					preparation_days,
-					offensive_multiplier,
 					target_city,
 				],
 				target_city
 			)
 			attack.minimum_commit_days = (
 				CAMPAIGN_OFFENSIVE_COMMIT_DAYS
-			)
-			attack.offensive_attack_multiplier = (
-				offensive_multiplier
-			)
-			attack.offensive_bonus_days = (
-				offensive_bonus_days
 			)
 			if _execute_ai_candidate(army, attack):
 				target_committed += army.size
@@ -11520,12 +11320,6 @@ func _launch_campaign_offensive(
 		nation.treasury_gold -= organization_cost
 		nation.last_offensive_gold_cost = organization_cost
 		nation.last_offensive_gold_day = state.day
-		nation.campaign_launched_attack_multiplier = (
-			offensive_multiplier
-		)
-		nation.campaign_launched_bonus_days = (
-			offensive_bonus_days
-		)
 		nation.campaign_last_offensive_day = state.day
 		nation.campaign_theater_anchor_city = objective_city
 		nation.campaign_theater_started_day = state.day
@@ -11640,8 +11434,6 @@ func _launch_group_campaign_offensive(
 		return false
 	if preparation_days < 0:
 		preparation_days = _campaign_preparation_days(nation_id)
-	var multiplier := offensive_preparation_multiplier(preparation_days)
-	var bonus_days := offensive_bonus_duration_days(preparation_days)
 	var route_threat := route_threat_override
 	if route_threat == null:
 		route_threat = ThreatField.build(
@@ -11672,8 +11464,6 @@ func _launch_group_campaign_offensive(
 				nation.campaign_offensive_count + 1,
 				army.id,
 				preparation_days,
-				multiplier,
-				bonus_days,
 				target_city
 			)
 			if _collect_ai_commands:
@@ -11719,9 +11509,7 @@ func _launch_group_campaign_offensive(
 		wave_targets,
 		launched_origins,
 		route_plans,
-		organization_cost,
-		multiplier,
-		bonus_days
+		organization_cost
 	)
 	var participant_fingerprints: Dictionary = (
 		_build_campaign_participant_fingerprints(wave_assignments, army_by_id)
@@ -11753,9 +11541,7 @@ func _build_campaign_launch_payload(
 	wave_targets: Array[int],
 	launched_origins: Dictionary,
 	route_plans: Dictionary,
-	organization_cost: int,
-	multiplier: float,
-	bonus_days: int
+	organization_cost: int
 ) -> Dictionary:
 	return {
 		"created_day": state.day,
@@ -11776,8 +11562,6 @@ func _build_campaign_launch_payload(
 		"launched_origins": launched_origins.duplicate(true),
 		"route_plans": route_plans.duplicate(true),
 		"organization_cost": organization_cost,
-		"multiplier": multiplier,
-		"bonus_days": bonus_days,
 	}
 
 
@@ -11800,20 +11584,16 @@ func _make_campaign_attack_order(
 	wave_number: int,
 	army_id: int,
 	preparation_days: int,
-	multiplier: float,
-	bonus_days: int,
 	target_city: int
 ) -> ActionCandidate:
 	var attack := ActionCandidate.make(
 		ActionCandidate.Kind.ATTACK,
 		2000.0,
-		"国家战役第%d波：军%d按统一计划准备%d天，以%.2f倍攻击城市%d"
-			% [wave_number, army_id, preparation_days, multiplier, target_city],
+		"国家战役第%d波：军%d按统一计划准备%d天攻击城市%d"
+			% [wave_number, army_id, preparation_days, target_city],
 		target_city
 	)
 	attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
-	attack.offensive_attack_multiplier = multiplier
-	attack.offensive_bonus_days = bonus_days
 	return attack
 
 
@@ -11843,7 +11623,7 @@ func _build_campaign_target_wave(
 	members_by_group: Dictionary,
 	planned_group_ids: Array[int]
 ) -> Dictionary:
-	# 同一目标可接收多个共享指挥单位；各单位成员统一作为首轮投入。
+	# 同一目标可接收多支独立指挥军；各军仍按同一攻势波次首轮投入。
 	var ordered_groups: Array[int] = []
 	for ready_pass in [true, false]:
 		for group_id in planned_group_ids:
@@ -12204,8 +11984,6 @@ func _apply_campaign_launch_payload_unchecked(payload: Dictionary) -> void:
 	nation.treasury_gold -= organization_cost
 	nation.last_offensive_gold_cost = organization_cost
 	nation.last_offensive_gold_day = state.day
-	nation.campaign_launched_attack_multiplier = float(payload["multiplier"])
-	nation.campaign_launched_bonus_days = int(payload["bonus_days"])
 	nation.campaign_last_offensive_day = state.day
 	nation.campaign_theater_anchor_city = int(payload["objective_city"])
 	nation.campaign_theater_started_day = state.day
@@ -12662,12 +12440,6 @@ func _launch_campaign_echelon_members(
 			target_city
 		)
 		attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
-		attack.offensive_attack_multiplier = (
-			nation.campaign_launched_attack_multiplier
-		)
-		attack.offensive_bonus_days = (
-			nation.campaign_launched_bonus_days
-		)
 		if not _execute_ai_candidate(army, attack):
 			continue
 		nation.campaign_launched_armies[army.id] = true
@@ -12742,7 +12514,7 @@ func _advance_priority_city_defense_echelons(
 			var revision := [
 				state.ownership_revision,
 				state.diplomacy_revision,
-				state.fortification_revision,
+				state.garrison_revision,
 			]
 			var cached_snapshot: StrategicMapSnapshot = null
 			if (
@@ -12783,7 +12555,12 @@ func _advance_priority_city_defense_echelons(
 		for army in siege.side_a:
 			if army.size > 0:
 				attack_power += ArmyPower.effective(army)
-		var committed_power := ArmyPower.city_defense(siege.city)
+		var attacker_id := siege.siege_attacker_nation
+		if attacker_id < 0 and not siege.side_a.is_empty():
+			attacker_id = siege.side_a[0].owner_nation
+		var committed_power := ArmyPower.city_garrison_defense(
+			state, attacker_id, siege.city.id
+		)
 		for army in siege.side_b:
 			if army.size > 0 and army.owner_nation == nation_id:
 				committed_power += ArmyPower.effective(army)
@@ -12834,24 +12611,16 @@ func _siege_local_defense_gap(siege: Battle) -> float:
 	var attack_power := 0.0
 	for army in siege.side_a:
 		if army.size > 0:
-			attack_power += ArmyPower.effective(army)
-	var committed_power := ArmyPower.city_defense(siege.city)
-	for army in siege.side_b:
-		if army.size > 0 and army.owner_nation == nation_id:
-			committed_power += ArmyPower.effective(army)
-	for army in state.armies:
-		if (
-			army.owner_nation == nation_id
-			and army.size > 0
-			and army.state == Army.State.MOVING
-			and army.ai_target_city == siege.city.id
-			and army.ai_action in [
-				ActionCandidate.Kind.REINFORCE,
-				ActionCandidate.Kind.RETREAT,
-			]
-		):
-			committed_power += ArmyPower.effective(army)
-	return maxf(attack_power - committed_power, 0.0)
+			attack_power += float(army.size)
+	var attacker_id := (
+		siege.siege_attacker_nation
+		if siege.siege_attacker_nation >= 0
+		else (siege.side_a[0].owner_nation if not siege.side_a.is_empty() else -1)
+	)
+	var garrison_power := ArmyPower.city_garrison_defense(
+		state, attacker_id, siege.city.id
+	)
+	return maxf(ceil(attack_power * 1.25) - garrison_power, 0.0)
 
 
 func _is_priority_defense_city(
@@ -12861,7 +12630,8 @@ func _is_priority_defense_city(
 ) -> bool:
 	var city := state.cities[city_id]
 	return (
-		city_id == state.nations[nation_id].capital_city_id
+		state.is_zhou_city(city_id)
+		or city_id == state.nations[nation_id].capital_city_id
 		or city.has_warehouse
 		or city.is_food_hub
 		or city.is_manpower_hub
@@ -12883,8 +12653,15 @@ func _advance_priority_city_defense(
 	var attack_power := 0.0
 	for army in siege.side_a:
 		if army.size > 0:
-			attack_power += ArmyPower.effective(army)
-	var committed_power := ArmyPower.city_defense(siege.city)
+			attack_power += float(army.size)
+	var attacker_id := (
+		siege.siege_attacker_nation
+		if siege.siege_attacker_nation >= 0
+		else (siege.side_a[0].owner_nation if not siege.side_a.is_empty() else -1)
+	)
+	var committed_power := ArmyPower.city_garrison_defense(
+		state, attacker_id, siege.city.id
+	)
 	for army in siege.side_b:
 		if army.size > 0 and army.owner_nation == nation_id:
 			committed_power += ArmyPower.effective(army)
@@ -12903,7 +12680,18 @@ func _advance_priority_city_defense(
 		attack_power,
 		defense_plan.requirement_at(city_id)
 	)
-	if committed_power >= required_power:
+	var recapture_target := -1
+	if committed_power >= attack_power:
+		for member_id in state.administrative_members(city_id):
+			if (
+				member_id != city_id
+				and state.is_enemy(
+					nation_id, state.cities[member_id].owner_nation
+				)
+			):
+				recapture_target = member_id
+				break
+	if committed_power >= required_power and recapture_target < 0:
 		return
 	# 城市已处于本地均势而其他前线仍未形成最低屏障时，不再为其叠加
 	# 纵深预备队。若本城仍实际劣势，则保留紧急解围权。
@@ -12915,13 +12703,16 @@ func _advance_priority_city_defense(
 		)
 	):
 		return
+	var redeploy_target := (
+		recapture_target if recapture_target >= 0 else city_id
+	)
 	var candidates: Array[Dictionary] = []
 	for army in state.armies:
 		if (
 			army.owner_nation != nation_id
 			or army.size <= 0
 			or army.state != Army.State.IDLE
-			or army.location_city == city_id
+			or army.location_city == redeploy_target
 			or not defense_plan.can_redeploy(army, coordinator)
 		):
 			continue
@@ -12930,10 +12721,10 @@ func _advance_priority_city_defense(
 			nation_id,
 			false,
 			true,
-			-1,
+			redeploy_target if recapture_target >= 0 else -1,
 			army.max_size
 		)
-		var distance := float(field["dist"].get(city_id, INF))
+		var distance := float(field["dist"].get(redeploy_target, INF))
 		if distance == INF:
 			continue
 		candidates.append({
@@ -12950,19 +12741,32 @@ func _advance_priority_city_defense(
 			nation_id,
 			a["army"] as Army,
 			b["army"] as Army,
-			city_id
+			redeploy_target
 		)
 	)
+	var dispatched := 0
 	for entry in candidates:
-		if committed_power >= required_power:
+		if (
+			(recapture_target < 0 and committed_power >= required_power)
+			or (recapture_target >= 0 and dispatched >= 2)
+		):
 			break
 		var army: Army = entry["army"]
 		var reinforce := ActionCandidate.make(
-			ActionCandidate.Kind.REINFORCE,
+			(
+				ActionCandidate.Kind.ATTACK
+				if recapture_target >= 0
+				else ActionCandidate.Kind.REINFORCE
+			),
 			2000.0,
-			"重点城市%d大会战：纵深预备队军%d流水增援"
-				% [city_id, army.id],
-			city_id
+			(
+				"州治%d守军尚可支撑：军%d优先夺回属府%d"
+				% [city_id, army.id, redeploy_target]
+				if recapture_target >= 0
+				else "重点州治%d大会战：纵深预备队军%d增援"
+					% [city_id, army.id]
+			),
+			redeploy_target
 		)
 		reinforce.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
 		reinforce.defensive_deployment = true
@@ -12974,6 +12778,7 @@ func _advance_priority_city_defense(
 		nation.campaign_launched_armies.erase(army.id)
 		coordinator.reserve(city_id, army)
 		committed_power += ArmyPower.effective(army)
+		dispatched += 1
 
 
 func _remove_campaign_target(
@@ -13030,21 +12835,6 @@ func _army_ready_for_campaign_target(
 	)
 
 
-func _grant_offensive_bonus(
-	army: Army,
-	multiplier: float,
-	duration_days: int
-) -> void:
-	army.offensive_attack_multiplier = clampf(
-		multiplier,
-		1.0,
-		OFFENSIVE_BONUS_MAX_MULTIPLIER
-	)
-	army.offensive_bonus_until_day = (
-		state.day + maxi(duration_days, 0)
-	)
-
-
 func _cached_campaign_objective(
 	nation_id: int,
 	target_id: int,
@@ -13064,13 +12854,7 @@ func _enemy_holds_recent_legal_reclamation(
 	enemy_id: int
 ) -> bool:
 	for city in state.cities_of(enemy_id):
-		if (
-			state.recognized_owner_of(city.id) == nation_id
-			and Simulation.city_fort_vulnerability(
-				city,
-				state.day
-			) > 0.0
-		):
+		if state.recognized_owner_of(city.id) == nation_id:
 			return true
 	return false
 
@@ -13163,7 +12947,13 @@ func _manage_campaign_offensive(
 	)
 	if objective.is_empty():
 		return false
-	var objective_city := int(objective["city_id"])
+	var objective_center := int(objective.get(
+		"administrative_center_city_id", objective.get("city_id", -1)
+	))
+	var objective_city := _administrative_tactical_objective(
+		nation_id, defender_id, objective_center, objective
+	)
+	nation.campaign_objective_center_city = objective_center
 	if (
 		objective_city < 0
 		or objective_city >= state.cities.size()
@@ -13178,15 +12968,25 @@ func _manage_campaign_offensive(
 		)
 		if next.is_empty():
 			return false
-		objective_city = int(next["city_id"])
+		objective_center = int(next.get(
+			"administrative_center_city_id", next.get("city_id", -1)
+		))
+		objective_city = _administrative_tactical_objective(
+			nation_id, defender_id, objective_center, next
+		)
+		nation.campaign_objective_center_city = objective_center
 		if owns_diplomatic_objective:
 				_set_coalition_war_objective(
 					state.alliance_bloc(nation_id),
 					state.alliance_bloc(defender_id),
 				nation_id,
-				objective_city,
+				objective_center,
 				str(next["reason"])
 			)
+	if state.is_zhou_city(objective_center):
+		return _manage_administrative_campaign(
+			nation_id, objective_center, defense_plan, coordinator
+		)
 	var theater_objective := (
 		_campaign_objective_in_current_theater(
 			nation_id,
@@ -13265,9 +13065,6 @@ func _manage_campaign_offensive(
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	var preparation_days := _campaign_preparation_days(nation_id)
-	nation.campaign_preparation_multiplier = (
-		offensive_preparation_multiplier(preparation_days)
-	)
 	var preparation_targets := (
 		nation.campaign_preparation_targets.duplicate()
 	)
@@ -13285,14 +13082,10 @@ func _manage_campaign_offensive(
 				_threat_travel_cache
 			)
 	for target_city in preparation_targets:
-		var recent_legal_reclamation := (
+		var legal_reclamation := (
 			state.recognized_owner_of(target_city) == nation_id
-			and Simulation.city_fort_vulnerability(
-				state.cities[target_city],
-				state.day
-			) > 0.0
 		)
-		if not can_launch and not recent_legal_reclamation:
+		if not can_launch and not legal_reclamation:
 			continue
 		var required := _campaign_minimum_staged_troops(
 			nation_id, target_city
@@ -13408,6 +13201,195 @@ func _manage_campaign_offensive(
 	return changed
 
 
+func _manage_administrative_campaign(
+	nation_id: int,
+	center_city_id: int,
+	defense_plan: CityDefensePlan,
+	coordinator: ArmyCoordinator
+) -> bool:
+	var nation := state.nations[nation_id]
+	var plan := nation.administrative_campaign_plan
+	if plan == null or plan.center_city_id != center_city_id:
+		plan = AdministrativeCampaignPlan.new()
+		plan.center_city_id = center_city_id
+		nation.administrative_campaign_plan = plan
+	if state.day < plan.failed_until_day:
+		return false
+	var previous_assignments := plan.army_assignments.duplicate()
+	var alive_by_id := {}
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			alive_by_id[army.id] = army
+	for army_id_value in plan.army_assignments.keys().duplicate():
+		if not alive_by_id.has(int(army_id_value)):
+			plan.army_assignments.erase(army_id_value)
+	if (
+		plan.had_forces
+		and not previous_assignments.is_empty()
+		and plan.army_assignments.is_empty()
+	):
+		plan.failed_until_day = state.day + 60
+		plan.had_forces = false
+		return false
+	var attacker_bloc := state.alliance_bloc(nation_id)
+	if attacker_bloc.is_empty():
+		attacker_bloc.append(nation_id)
+	var center_controlled := attacker_bloc.has(
+		state.cities[center_city_id].owner_nation
+	)
+	var requirement := (
+		state.campaign_siege_requirement(nation_id, center_city_id)
+		+ state.campaign_reinforcement_threat(nation_id, center_city_id, 60)
+	)
+	var committed := 0
+	for army_id_value in plan.army_assignments:
+		var assigned: Army = alive_by_id.get(int(army_id_value))
+		if assigned != null:
+			committed += assigned.size
+	var targets: Array[int] = []
+	if center_controlled:
+		plan.phase = AdministrativeCampaignPlan.Phase.CLEANUP
+		targets = _zhou_enemy_fu_targets(
+			nation_id, center_city_id, attacker_bloc, false
+		)
+	elif committed >= requirement:
+		plan.phase = AdministrativeCampaignPlan.Phase.ASSAULT_CENTER
+		targets.append(center_city_id)
+	else:
+		targets = _zhou_enemy_fu_targets(
+			nation_id, center_city_id, attacker_bloc, true
+		)
+		plan.phase = (
+			AdministrativeCampaignPlan.Phase.CAPTURE_FU
+			if not targets.is_empty()
+			else AdministrativeCampaignPlan.Phase.ENCIRCLE_CENTER
+		)
+	plan.tactical_target_city_ids = targets.slice(
+		0, mini(targets.size(), CAMPAIGN_MAX_PARALLEL_TARGETS)
+	)
+	var candidates: Array[Army] = []
+	for army in state.armies:
+		if (
+			army.owner_nation != nation_id
+			or army.size <= 0
+			or not army.is_main_battle_role()
+			or plan.army_assignments.has(army.id)
+			or army.state in [Army.State.FIGHTING, Army.State.RETREATING]
+			or army.defensive_deployment_until_day > state.day
+			or (
+				defense_plan != null
+				and coordinator != null
+				and not defense_plan.can_redeploy(army, coordinator)
+			)
+		):
+			continue
+		candidates.append(army)
+	candidates.sort_custom(func(a: Army, b: Army) -> bool:
+		return EquivariantOrder.army_less(
+			state, nation_id, a, b, center_city_id
+		)
+	)
+	var added := 0
+	for army in candidates:
+		if committed >= requirement or added >= 3:
+			break
+		var target := (
+			plan.tactical_target_city_ids[
+				plan.army_assignments.size()
+					% plan.tactical_target_city_ids.size()
+			]
+			if not plan.tactical_target_city_ids.is_empty()
+			else center_city_id
+		)
+		plan.army_assignments[army.id] = target
+		committed += army.size
+		added += 1
+	plan.had_forces = plan.had_forces or not plan.army_assignments.is_empty()
+	var changed := added > 0
+	if plan.phase != AdministrativeCampaignPlan.Phase.ENCIRCLE_CENTER:
+		var assignment_index := 0
+		for army_id_value in plan.army_assignments.keys():
+			var army: Army = alive_by_id.get(int(army_id_value))
+			if army == null or plan.tactical_target_city_ids.is_empty():
+				continue
+			var target := plan.tactical_target_city_ids[
+				assignment_index % plan.tactical_target_city_ids.size()
+			]
+			assignment_index += 1
+			plan.army_assignments[army.id] = target
+			if army.ai_target_city == target and army.state != Army.State.IDLE:
+				continue
+			var attack := ActionCandidate.make(
+				ActionCandidate.Kind.ATTACK,
+				2000.0,
+				"州战役：州治%d，阶段%d，军%d进攻%d"
+					% [center_city_id, plan.phase, army.id, target],
+				target
+			)
+			attack.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
+			changed = _execute_ai_candidate(army, attack) or changed
+	plan.refresh_fingerprint(state)
+	return changed
+
+
+func _zhou_enemy_fu_targets(
+	nation_id: int,
+	center_city_id: int,
+	attacker_bloc: Array[int],
+	frontier_only: bool
+) -> Array[int]:
+	var result: Array[int] = []
+	for member_id in state.administrative_members(center_city_id):
+		if (
+			member_id == center_city_id
+			or attacker_bloc.has(state.cities[member_id].owner_nation)
+			or not state.is_enemy(
+				nation_id, state.cities[member_id].owner_nation
+			)
+		):
+			continue
+		if frontier_only:
+			var touches_control := false
+			for neighbor in state.neighbors(member_id):
+				var edge := state.edge_of(member_id, neighbor)
+				if (
+					edge != null
+					and edge.kind == Edge.Kind.LAND
+					and edge.max_manpower > 0
+					and attacker_bloc.has(
+						state.cities[neighbor].owner_nation
+					)
+				):
+					touches_control = true
+					break
+			if not touches_control:
+				continue
+		result.append(member_id)
+	EquivariantOrder.sort_city_ids(
+		result, state, nation_id, center_city_id
+	)
+	return result
+
+
+func _administrative_tactical_objective(
+	nation_id: int,
+	defender_id: int,
+	center_city_id: int,
+	objective: Dictionary = {}
+) -> int:
+	var cached := int(objective.get("tactical_city_id", -1))
+	if (
+		cached >= 0
+		and cached < state.cities.size()
+		and state.administrative_center_of(cached) == center_city_id
+		and state.cities[cached].owner_nation == defender_id
+	):
+		return cached
+	return DiplomacyAI.administrative_tactical_target(
+		state, nation_id, defender_id, center_city_id
+	)
+
+
 func _select_campaign_objective(
 	nation_id: int,
 	enemy_ids: Array,
@@ -13426,12 +13408,7 @@ func _select_campaign_objective(
 		if reclamation.is_empty():
 			continue
 		var reclamation_city := int(reclamation["city_id"])
-		if (
-			state.recognized_owner_of(reclamation_city) == nation_id
-			and Simulation.city_fort_vulnerability(
-				state.cities[reclamation_city], state.day
-			) > 0.0
-		):
+		if state.recognized_owner_of(reclamation_city) == nation_id:
 			objective = reclamation
 			defender_id = enemy_id
 			break
@@ -14287,6 +14264,8 @@ func _execute_ai_candidate(
 	prepared_path: Array[int] = [],
 	path_prevalidated: bool = false
 ) -> bool:
+	if army == null or candidate == null:
+		return false
 	if _collect_ai_commands:
 		return _queue_ai_candidate(army, candidate)
 	if candidate.kind == ActionCandidate.Kind.HOLD:
@@ -14443,12 +14422,6 @@ func _record_ai_order(army: Army, candidate: ActionCandidate) -> void:
 		]:
 			army.defensive_blocked_edge_a = -1
 			army.defensive_blocked_edge_b = -1
-	if candidate.offensive_bonus_days > 0:
-		_grant_offensive_bonus(
-			army,
-			candidate.offensive_attack_multiplier,
-			candidate.offensive_bonus_days
-		)
 
 
 func _edge_has_friendly_holder_or_order(nation_id: int, from_city: int, to_city: int) -> bool:
@@ -15053,11 +15026,18 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		return
 	if siege == null:
 		var defenders := _siege_city_defenders(city)
+		if defenders.is_empty() and city.garrison_manpower <= 0:
+			_capture_city(attacker, city)
+			return
 		# item 7：不再设机制层「弱攻自动撤离」硬门槛——兵力不足时围城进度会按连续曲线
 		# 停滞/倒退（见 _advance_siege），是否撤离交 AI 战略层裁量，避免攻/撤无限循环。
 		siege = state.new_battle(Battle.Kind.SIEGE)
 		siege.edge = edge
 		siege.city = city
+		siege.siege_attacker_nation = attacker.owner_nation
+		siege.siege_claimant_nation = _occupation_claimant_for_army(
+			attacker, city
+		)
 		_mark_city_war_disruption(city)
 		var length := float(maxi(edge.distance, 1))
 		siege.contact_dist_a = length   # 围城方在城墙 dist=L（端点，无地形惩罚）
@@ -15065,10 +15045,9 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		if not defenders.is_empty():
 			for defender in defenders:
 					_enter_battle(siege, defender, 2)
-			siege.has_garrison = true
-		# 破城所需兵力仅由工事强度换算（item 6：不含守军人数，守军是城下决斗阶段的对手）。
-		# 有无守军该值一致，消除数量级跳变；守军被歼后此值不变（城防来自 fort_strength）。
-		siege.siege_required = Combat.siege_required_manpower(city.fort_strength)
+			siege.side_b_defends_city = true
+		if city.garrison_manpower > 0:
+			siege.side_b_defends_city = true
 		_enter_battle(siege, attacker, 1)
 		return
 
@@ -15087,10 +15066,10 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 				_retreat_to_friendly(attacker)
 				return
 			_enter_battle(siege, attacker, 2)
-			siege.has_garrison = true
+			siege.side_b_defends_city = true
 		SiegeRole.CHALLENGER:
 			if (
-				siege.has_garrison
+				siege.side_b_defends_city
 				or (
 					not siege.side_b.is_empty()
 					and siege.side_b[0].owner_nation
@@ -15280,7 +15259,7 @@ func _resolve_combat_round(
 			army.battle_id = -1
 		elif (
 			battle.kind == Battle.Kind.SIEGE
-			and battle.has_garrison
+			and battle.side_b_defends_city
 			and battle.city != null
 			and _nation_defends_city(
 				army.owner_nation,
@@ -15295,19 +15274,13 @@ func _resolve_combat_round(
 func _sync_battle_ruler_modifiers(battle: Battle) -> void:
 	if battle == null:
 		return
-	if battle.city != null:
-		var base_city_defense := Combat.city_defense_modifier(
-			battle.city
-		)
-		battle.city.ruler_city_defense_multiplier = (
-			float(state.effective_city_defense(battle.city))
-				/ float(base_city_defense)
-			if base_city_defense > 0
-			else 1.0
-		)
 	for side in [battle.side_a, battle.side_b]:
 		for army_value in side:
 			var army: Army = army_value
+			if army.is_city_garrison:
+				army.ruler_defense_multiplier = 1.0
+				army.ruler_morale_multiplier = 1.0
+				continue
 			if (
 				army.owner_nation < 0
 				or army.owner_nation >= state.nations.size()
@@ -15387,10 +15360,8 @@ func _mark_city_war_disruption(city: City) -> void:
 	)
 
 
-## SIEGE 状态机（每天一 tick）。三阶段：
-##  1) 守军抵抗：resolve_round 削守军。守军歼灭≠破城——转纯围城；攻方溃则围城失败。
-##  2) 城下决斗：side_b 为敌对挑战者（无城防加成），分胜负后胜方独占围城。
-##  3) 纯围城：无对抗，掷骰累积 siege_progress，达阈值破城易主。
+## SIEGE 状态机（每天一 tick）。城市持久守军以临时 Army 参加普通战斗；
+## 守军与普通防守军清空后立即破城。第三方挑战和联盟解围仍沿用围城外壳。
 func _advance_siege(
 	battle: Battle,
 	shared_roll: int = -1,
@@ -15407,22 +15378,32 @@ func _advance_siege(
 	_refresh_battle_frontline_priorities(battle)
 	var atk_alive := battle.side_size(battle.side_a) > 0
 
-	# 阶段 1：守军抵抗
-	if battle.has_garrison and battle.side_size(battle.side_b) > 0:
+	# 阶段 1：城市防卫共同体。持久守军只在本回合临时进入 side_b。
+	if (
+		battle.side_b_defends_city
+		or (
+			battle.side_b.is_empty()
+			and battle.city != null
+			and battle.city.garrison_manpower > 0
+		)
+	):
 		if not atk_alive:
-			# 围城方尽墨（多因断粮）→ 防卫共同体统一结算解围。
 			_resolve_siege_side_b_victory(battle)
 			return
-		_decay_interrupted_siege_progress(battle)
+		var city_garrison := _attach_city_garrison(battle)
 		_resolve_combat_round(
 			battle,
 			shared_roll,
 			tactical_entropy
 		)
+		_detach_city_garrison(battle, city_garrison)
 		if not battle.finished:
 			return
-		if battle.winner_side != 1:
-			# 攻方被守军击退，或双方同时崩溃判平局：进攻方未攻下→守方保城，攻方撤退。
+		var city_garrison_destroyed := (
+			battle.city == null
+			or battle.city.garrison_manpower <= 0
+		)
+		if battle.winner_side != 1 and not city_garrison_destroyed:
 			for a in battle.side_a:
 				if a.size > 0:
 					_retreat(a)
@@ -15433,21 +15414,16 @@ func _advance_siege(
 				if d.size > 0:
 					_settle_or_recover_after_battle(d, battle.city.id)
 			return
-		# 守军溃散（winner_side==1）：不占领，清走守军，转纯围城
+		# 持久守军不会溃退；归零后普通防守军撤退并立即破城。
 		for d in battle.side_b:
 			if d.size > 0:
 				_retreat_defender(d, battle.city)
 			else:
 				d.battle_id = -1
 		battle.side_b.clear()
-		battle.has_garrison = false
+		battle.side_b_defends_city = false
 		battle.side_a = _withdraw_broken_armies(battle.side_a)
-		if battle.side_a.is_empty():
-			battle.finished = true
-			battle.winner_side = 0
-			return
-		battle.finished = false
-		battle.winner_side = 0
+		_complete_siege_capture(battle)
 		return
 
 	# 阶段 2：城下决斗（side_b 为敌对挑战者，无城防加成）
@@ -15456,7 +15432,6 @@ func _advance_siege(
 			# 围城方尽墨：城主/盟军解围则解除围城，敌对第三国才接管围城。
 			_resolve_siege_side_b_victory(battle)
 			return
-		_decay_interrupted_siege_progress(battle)
 		_resolve_combat_round(
 			battle,
 			shared_roll,
@@ -15506,54 +15481,88 @@ func _advance_siege(
 			_resolve_siege_side_b_victory(battle)
 		return
 
-	# 阶段 3：纯围城，连续曲线累积破城（item 7：无 5× 硬门槛、无跳变）。
+	# 阶段 3：没有城市守军、普通防守军或挑战者，立即破城。
 	if not atk_alive:
 		battle.finished = true
-		battle.winner_side = 0   # 围城方尽墨，无人占领
+		battle.winner_side = 0
 		return
-	# 连续曲线：ratio≥1 正常推进、0.5~1 极慢（部分封锁）、<0.5 缓慢倒退。
-	# 不再机制性强制撤离——兵力不足时保持围城/等待援军，去留由 AI 战略层按补给与威胁决策，
-	# 避免「机制撤离 ↔ AI 再派」的攻/撤无限循环（item 7 验收）。进度夹在 [0, REQUIRED]。
-	var daily_progress := Combat.siege_daily_progress(
-		Combat.effective_siege_strength(
-			battle.side_a,
-			battle.frontline_priority_a
-		),
-		battle.siege_required
+	_complete_siege_capture(battle)
+
+
+func _attach_city_garrison(battle: Battle) -> Army:
+	if (
+		battle == null
+		or battle.city == null
+		or battle.city.garrison_manpower <= 0
+	):
+		return null
+	var attacker_id := battle.siege_attacker_nation
+	if attacker_id < 0 and not battle.side_a.is_empty():
+		attacker_id = battle.side_a[0].owner_nation
+	var garrison := Army.new()
+	garrison.id = -(battle.city.id + 1)
+	garrison.owner_nation = battle.city.owner_nation
+	garrison.size = battle.city.garrison_manpower
+	garrison.max_size = state.city_garrison_capacity(battle.city.id)
+	garrison.attack = 10
+	garrison.defense = 10
+	garrison.morale = 1.0
+	garrison.max_morale = 1.0
+	garrison.starving = battle.city.food_storage <= 0
+	garrison.is_city_garrison = true
+	garrison.city_garrison_combat_multiplier = (
+		state.city_garrison_efficiency(attacker_id, battle.city.id)
+		* maxf(battle.city.ruler_city_defense_multiplier, 0.1)
+		* (Combat.SIEGE_STARVE_DEF_MULT if garrison.starving else 1.0)
 	)
-	battle.siege_progress = clampf(
-		battle.siege_progress + daily_progress,
-		0.0,
-		Combat.SIEGE_PROGRESS_REQUIRED
-	)
-	if battle.siege_progress >= Combat.SIEGE_PROGRESS_REQUIRED:
-		var captor := _strongest_alive(battle.side_a)
-		if captor != null:
-			_capture_city(captor, battle.city, -1, false)
-		for a in battle.side_a:
-			a.battle_id = -1
-			if (
-				a != captor
-				and a.size > 0
-				and state.has_military_access(
-					a.owner_nation,
-					battle.city.owner_nation
-				)
-			):
-				_settle_idle(a, battle.city.id)
-			if (
-				captor != null
-				and state.has_military_access(
-					captor.owner_nation,
-					battle.city.owner_nation
-				)
-			):
-				_execute_campaign_post_capture_plan(
-					captor,
-					battle.city
-				)
-		battle.finished = true
-		battle.winner_side = 1
+	garrison.state = Army.State.FIGHTING
+	garrison.battle_id = battle.id
+	garrison.location_city = battle.city.id
+	battle.side_b.append(garrison)
+	battle.side_b_defends_city = true
+	return garrison
+
+
+func _detach_city_garrison(battle: Battle, garrison: Army) -> void:
+	if garrison == null or battle == null or battle.city == null:
+		return
+	var remaining := maxi(garrison.size, 0)
+	if battle.city.garrison_manpower != remaining:
+		battle.city.garrison_manpower = remaining
+		state.garrison_revision += 1
+	battle.side_b.erase(garrison)
+	battle.routed_b.erase(garrison)
+	battle.reinforce_fresh_b.erase(garrison)
+	battle.frontline_priority_b.erase(garrison)
+
+
+func _complete_siege_capture(battle: Battle) -> void:
+	var captor := _strongest_alive(battle.side_a)
+	var claimant := battle.siege_claimant_nation
+	if claimant < 0:
+		claimant = (
+			_occupation_claimant_for_army(captor, battle.city)
+			if captor != null
+			else battle.siege_attacker_nation
+		)
+	_capture_city(captor, battle.city, claimant, false)
+	for army in battle.side_a:
+		if army.size <= 0:
+			army.battle_id = -1
+			continue
+		if state.has_military_access(
+			army.owner_nation, battle.city.owner_nation
+		):
+			if army.state == Army.State.FIGHTING:
+				_settle_idle(army, battle.city.id)
+		else:
+			_start_diplomatic_repatriation(army, battle.city.id)
+	if captor != null and captor.size > 0 and state.has_military_access(
+		captor.owner_nation, battle.city.owner_nation
+	):
+		_execute_campaign_post_capture_plan(captor, battle.city)
+	battle.finished = true
+	battle.winner_side = 1
 
 
 ## 围城建立后仍可能有撤退军抵达、恢复军落位等状态转换。每个围城日都重新收集
@@ -15586,15 +15595,7 @@ func _reconcile_siege_city_defenders(
 			continue
 		_enter_battle(battle, defender, 2)
 	if _siege_side_defends_city(battle, battle.side_b):
-		# 后到防卫共同体入城帮守：加入城下决斗消耗攻方，但封锁需求仅由工事决定
-		# （item 6：守军不抬高破城门槛），此处无需改动 battle.siege_required。
-		battle.has_garrison = true
-
-
-func _decay_interrupted_siege_progress(battle: Battle) -> void:
-	battle.siege_progress = Combat.siege_progress_after_interruption(
-		battle.siege_progress
-	)
+		battle.side_b_defends_city = true
 
 
 ## side_b 获胜后的唯一结算：城市防卫共同体解围并驻城；
@@ -15617,7 +15618,7 @@ func _resolve_siege_side_b_victory(
 				battle.city.id
 			)
 	_reset_empty_battle_side_b(battle)
-	battle.has_garrison = false
+	battle.side_b_defends_city = false
 	battle.finished = true
 	battle.winner_side = 2
 
@@ -15646,13 +15647,7 @@ func _promote_challengers(battle: Battle) -> void:
 	)
 	_reset_empty_battle_side_b(battle)
 	battle.contact_dist_a = float(maxi(battle.edge.distance, 1)) if battle.edge != null else 0.0
-	# 挑战者接管的是纯围城；封锁需求仅由工事决定（item 6，与守军无关），显式重申以自证。
-	battle.siege_required = (
-		Combat.siege_required_manpower(battle.city.fort_strength)
-		if battle.city != null
-		else battle.siege_required
-	)
-	battle.has_garrison = false
+	battle.side_b_defends_city = false
 	battle.finished = new_besiegers.is_empty()
 	battle.winner_side = 0
 
@@ -15847,9 +15842,15 @@ func _capture_city(
 	):
 		return
 	var old_owner := city.owner_nation
-	var claimant := _occupation_claimant_for_army(army, city)
+	var claimant := (
+		_occupation_claimant_for_army(army, city)
+		if army != null
+		else owner_override
+	)
 	if owner_override >= 0:
 		claimant = owner_override
+	if claimant < 0 or claimant >= state.nations.size():
+		return
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
 	var civil_war_capital_capture := (
@@ -15865,7 +15866,7 @@ func _capture_city(
 	var occupation_sponsor := (
 		-1
 		if state.recognized_owner_of(city.id) == claimant
-		else army.owner_nation
+		else (army.owner_nation if army != null else claimant)
 	)
 	# 首都身份和 revision 都冻结在攻城前快照。削藩内战的首都通吃必须把
 	# 正在失守的首都与败方其余领土放进同一笔兼并事务；一旦兼并被拒绝，
@@ -15919,23 +15920,20 @@ func _capture_city(
 			_force_ai_replan_for_capture(
 				old_owner, claimant, captured_city_id
 			)
-	if territory_changed and claimant != old_owner:
-		city.fort_strength_max = maxi(
-			city.fort_strength_max,
-			city.fort_strength
-		)
-		city.fort_last_capture_day = state.day
-		city.fort_strength = city_fort_strength_after_capture(
-			city.fort_strength_max,
-			0
-		)
+	if (
+		territory_changed
+		and claimant != old_owner
+		and city.owner_nation == claimant
+	):
+		city.garrison_manpower = 0
+		state.fill_city_garrison_from_owner_pool(city.id)
 	# 城市易主后，所有不再拥有通行权且尚未离开城市节点的军队都必须撤退。
 	# 覆盖 IDLE/RECOVERING、容量阻塞的 MOVING/RETREATING 以及残留 FIGHTING 状态。
 	var captured_city_set := {}
 	for captured_city_id in captured_city_ids:
 		captured_city_set[captured_city_id] = true
 	for displaced in state.armies:
-		if displaced == army or displaced.size <= 0:
+		if (army != null and displaced == army) or displaced.size <= 0:
 			continue
 		var displaced_city_id := displaced.current_city_node()
 		if not captured_city_set.has(displaced_city_id):
@@ -15950,12 +15948,16 @@ func _capture_city(
 			displaced_city_id,
 			displaced_city_id
 		)
-	var captor_can_remain := state.has_military_access(
-		army.owner_nation,
-		claimant
+	var captor_can_remain := (
+		army != null
+		and state.has_military_access(
+			army.owner_nation,
+			claimant
+		)
 	)
-	army.occupation_claimant_nation = -1
-	if captor_can_remain:
+	if army != null:
+		army.occupation_claimant_nation = -1
+	if army != null and captor_can_remain:
 		army.state = Army.State.IDLE
 		army.forced_retreat = false
 		army.battle_id = -1
@@ -15964,7 +15966,7 @@ func _capture_city(
 		army.move_to = -1
 		army.move_progress = 0.0
 		army.path.clear()
-	else:
+	elif army != null:
 		_start_diplomatic_repatriation(
 			army,
 			city.id
@@ -15977,7 +15979,7 @@ func _capture_city(
 		# 普通战争的两跳领土转移、投降已在上面的原子分支完成。
 		# 和平藩王不整国投降；原子领土事务已同步处理迁都、共享粮仓
 		# 与派生状态。若已经失去最后一城，日末再清理其宗藩记录。
-	if execute_post_capture_plan and captor_can_remain:
+	if execute_post_capture_plan and army != null and captor_can_remain:
 		_execute_campaign_post_capture_plan(army, city)
 
 
@@ -16067,16 +16069,6 @@ func _execute_campaign_post_capture_plan(
 		attack.minimum_commit_days = (
 			CAMPAIGN_OFFENSIVE_COMMIT_DAYS
 		)
-		var remaining_bonus_days := maxi(
-			execution_army.offensive_bonus_until_day
-				- state.day,
-			0
-		)
-		if remaining_bonus_days > 0:
-			attack.offensive_attack_multiplier = (
-				execution_army.offensive_attack_multiplier
-			)
-			attack.offensive_bonus_days = remaining_bonus_days
 		if _execute_ai_candidate(execution_army, attack):
 			_extend_campaign_post_capture_plan(
 				execution_army,
@@ -16206,7 +16198,10 @@ func _campaign_post_capture_target(
 				):
 					mobile_defense += ArmyPower.effective(defender)
 		var defense_power := (
-			mobile_defense + ArmyPower.city_defense(target)
+			mobile_defense + ArmyPower.city_garrison_defense(
+				state, army.owner_nation,
+				state.administrative_center_of(target.id)
+			)
 		)
 		var attack_ratio := (
 			ArmyPower.effective(army)

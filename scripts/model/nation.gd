@@ -57,6 +57,7 @@ var war_mobilization_reason: String = ""
 ## 主动战争必须先集结再宣战；这些字段是准备阶段的国家级 SSoT。
 var war_preparation_target_nation: int = -1
 var war_preparation_objective_city: int = -1
+var war_preparation_objective_center_city: int = -1
 var war_preparation_started_day: int = -1
 var war_preparation_reason: String = ""
 ## 0=普通联盟战争，1=低凝聚力宗藩私人战争。使用整数以保持模型不反向依赖 GameState。
@@ -70,6 +71,7 @@ var campaign_next_offensive_day: int = -1
 var campaign_offensive_count: int = 0
 ## 当前国家级攻势准备起点；普通波次可提前发动，僵局波次最多准备 180 天。
 var campaign_preparation_started_day: int = -1
+var campaign_full_preparation_targets: Array[int] = []
 ## 当前波次并行准备的目标城，以及冻结的一军一目标分配。
 ## 多个目标共享国家级准备时钟，不能让同一军在多个方向重复计入已集结兵力。
 var campaign_preparation_targets: Array[int] = []
@@ -79,11 +81,9 @@ var campaign_preparation_assignments: Dictionary = {}
 ## target_city_id -> representative battle_group_id 的兼容投影。真实归属只保存在
 ## campaign_preparation_plan.target_to_groups，不能从此字段反推预算。
 var campaign_preparation_group_assignments: Dictionary = {}
-## 正在等待 120 天满准备的目标城集合。
-var campaign_full_preparation_targets: Array[int] = []
 ## 当前波次的具体战役计划：army_id -> target_city_id。
 var campaign_attack_assignments: Dictionary = {}
-## 兼容字段：army_id -> echelon_index；聚合指挥单位统一使用第 0 批投入。
+## 兼容字段：army_id -> echelon_index；独立主战军统一使用第 0 批投入。
 var campaign_attack_echelons: Dictionary = {}
 ## target_city_id -> 当前已激活梯队；-1 表示计划已生成但尚未发动。
 var campaign_active_echelons: Dictionary = {}
@@ -91,11 +91,6 @@ var campaign_active_echelons: Dictionary = {}
 var campaign_launched_armies: Dictionary = {}
 ## target_city_id -> 当前梯队开始日，供持续攻势状态与调试展示使用。
 var campaign_echelon_started_days: Dictionary = {}
-## 当前准备时钟对应倍率，仅用于评估下一轮是否发动。
-var campaign_preparation_multiplier: float = 1.0
-## 已发动轮次的倍率和持续天数；后续梯队继承，且从各自实际投入日开始计时。
-var campaign_launched_attack_multiplier: float = 1.0
-var campaign_launched_bonus_days: int = 0
 ## 首攻目标城 -> 预先冻结的两步路线。
 ## {next_city, group_id, heavy_army_id, execution_army_id,
 ## enemy_nation, created_day, steps}；破城当天消费并立即执行第二步。
@@ -106,7 +101,11 @@ var campaign_plan_primary_city: int = -1
 ## 最近一次实际发动攻势的主战区锚点。只要附近仍有合法敌城，后续波次继续
 ## 在该战区组织，避免重军因全局评分微调在远距离方向间反复转场。
 var campaign_theater_anchor_city: int = -1
+## Strategic administrative center. Concrete preparation/attack targets remain
+## city ids so an offensive can clear subordinate prefectures on its route.
+var campaign_objective_center_city: int = -1
 var campaign_theater_started_day: int = -1
+var administrative_campaign_plan: AdministrativeCampaignPlan = null
 ## 持久战团容器。空战团也保留，后续按“轻、轻、重”顺序补充成员。
 var battle_groups: Array[BattleGroup] = []
 var next_battle_group_id: int = 0

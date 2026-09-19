@@ -48,13 +48,11 @@ const OBSERVED_WAR_PREPARATION_THREAT_BONUS: float = 0.75
 const PEACE_ESCALATION_START_DAYS: int = 180
 const PEACE_ESCALATION_FULL_DAYS: int = 540
 const PEACE_ESCALATION_MAX_BONUS: float = 0.75
-const RECENT_CAPTURE_OBJECTIVE_BONUS: float = 4.0
-const RECENT_RECLAMATION_OBJECTIVE_BONUS: float = 20.0
 ## 守军薄弱补偿：常规价值（金/粮/人/战略/包围/争夺）拉不开差距时，主动倾向敌方
 ## 守军最少的接壤城，填补“攻势找不到目标”的空档。值域约 [0, 此上限]，故意小于
 ## 资源/战略权重，只在其他信号平手时决胜，不喧宾夺主推翻高价值目标。
 const WEAK_GARRISON_OBJECTIVE_BONUS: float = 0.90
-## 区域统一偏好：已有立足点的区域才加分，且随已控制比例平方增长。
+## 行政州统一偏好：已有立足点的州才加分，且随已控制比例平方增长。
 ## 最高值与首都、资源核心等战略项同阶，形成强倾向但不作为硬门槛。
 const REGION_UNIFICATION_OBJECTIVE_BONUS: float = 6.0
 const LEAVE_ALLIANCE_SCORE: float = 0.90
@@ -999,20 +997,31 @@ static func war_situation_score(
 		return float(evaluation_cache[cache_key])
 	var score := 0.0
 	var bilateral_value := 0.0
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var controller := state.cities[center_id].owner_nation
+		for city_id in state.administrative_members(center_id):
+			var legal_owner := state.recognized_owner_of(city_id)
+			if legal_owner not in [nation_id, enemy_id]:
+				continue
+			var city_value := _military_city_value(state.cities[city_id])
+			bilateral_value += city_value
+			if controller == nation_id and legal_owner == enemy_id:
+				score += city_value
+			elif controller == enemy_id and legal_owner == nation_id:
+				score -= city_value
+	# Docks have no administrative seat and retain node-level war value.
 	for city in state.cities:
+		if not city.is_dock:
+			continue
 		var legal_owner := state.recognized_owner_of(city.id)
 		if legal_owner not in [nation_id, enemy_id]:
 			continue
 		var city_value := _military_city_value(city)
 		bilateral_value += city_value
 		var occupying_side := _occupation_side(
-			state,
-			city,
-			nation_id,
-			enemy_id
+			state, city, nation_id, enemy_id
 		)
-		if occupying_side < 0 or occupying_side == legal_owner:
-			continue
 		if occupying_side == nation_id and legal_owner == enemy_id:
 			score += city_value
 		elif occupying_side == enemy_id and legal_owner == nation_id:
@@ -1423,11 +1432,7 @@ static func _military_city_value(city: City) -> float:
 		+ (0.75 if city.is_food_hub else 0.0)
 		+ (0.75 if city.is_manpower_hub else 0.0)
 		+ (0.50 if city.is_dock else 0.0)
-		+ 0.50 * clampf(
-			float(city.fort_strength_max) / 30.0,
-			0.0,
-			1.0
-		)
+		+ 0.50 * float(clampi(city.garrison_defense_base, 3, 5) - 3) / 2.0
 	)
 
 
@@ -2098,9 +2103,8 @@ static func _alliance_frontier_release_value(
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
-	if not bool(evaluation_cache.get("__disable_structure_cache", false)):
-		_build_frontier_release_values(state, evaluation_cache)
-		return float(evaluation_cache.get(cache_key, 0.0))
+	# 批量缓存会看见封闭道路和纯地理邻接；释放守军只对当前存在
+	# 可通行军事前线的国家对成立，必须与逐对路径共用同一门槛。
 	if _frontier_edges(
 		state,
 		nation_id,
@@ -2144,77 +2148,6 @@ static func _alliance_frontier_release_value(
 	)
 	evaluation_cache[cache_key] = result
 	return result
-
-
-## 一轮外交内边境和军队位置冻结。旧路径为每个候选国家对各扫一遍 E+A；
-## 这里一次构建所有有实际接壤的方向，并按 state.armies 原序累计，保持结果一致。
-static func _build_frontier_release_values(
-	state: GameState,
-	evaluation_cache: Dictionary
-) -> void:
-	if evaluation_cache.has("frontier_release_values_built"):
-		return
-	evaluation_cache["frontier_release_values_built"] = true
-	var cities_by_pair := {}
-	var targets_by_nation := {}
-	for edge in state.edges:
-		var owner_a := state.cities[edge.city_a].owner_nation
-		var owner_b := state.cities[edge.city_b].owner_nation
-		if owner_a == owner_b or owner_a < 0 or owner_b < 0:
-			continue
-		var key_a := Vector2i(owner_a, owner_b)
-		var key_b := Vector2i(owner_b, owner_a)
-		if not cities_by_pair.has(key_a):
-			cities_by_pair[key_a] = {}
-		if not cities_by_pair.has(key_b):
-			cities_by_pair[key_b] = {}
-		(cities_by_pair[key_a] as Dictionary)[edge.city_a] = true
-		(cities_by_pair[key_b] as Dictionary)[edge.city_b] = true
-		if not targets_by_nation.has(owner_a):
-			targets_by_nation[owner_a] = [] as Array[int]
-		if not targets_by_nation.has(owner_b):
-			targets_by_nation[owner_b] = [] as Array[int]
-		var targets_a: Array[int] = targets_by_nation[owner_a]
-		var targets_b: Array[int] = targets_by_nation[owner_b]
-		if not targets_a.has(owner_b):
-			targets_a.append(owner_b)
-		if not targets_b.has(owner_a):
-			targets_b.append(owner_a)
-	var committed_by_pair := {}
-	for army in state.armies:
-		if army.size <= 0 or not targets_by_nation.has(army.owner_nation):
-			continue
-		for target_id in targets_by_nation[army.owner_nation] as Array[int]:
-			var pair := Vector2i(army.owner_nation, target_id)
-			var frontier_cities: Dictionary = cities_by_pair[pair]
-			var committed := (
-				army.state == Army.State.IDLE
-				and frontier_cities.has(army.location_city)
-			) or (
-				army.state == Army.State.HOLDING
-				and army.move_to != -1
-				and (
-					frontier_cities.has(army.move_from)
-					or frontier_cities.has(army.move_to)
-				)
-			)
-			if committed:
-				committed_by_pair[pair] = (
-					float(committed_by_pair.get(pair, 0.0))
-					+ ArmyPower.effective(army)
-				)
-	for pair_value in cities_by_pair:
-		var pair: Vector2i = pair_value
-		var national_power := _national_power(
-			state, pair.x, evaluation_cache
-		)
-		evaluation_cache[
-			"frontier_release:%d:%d" % [pair.x, pair.y]
-		] = minf(
-			float(committed_by_pair.get(pair, 0.0))
-				/ maxf(national_power, 1.0),
-			0.75
-		)
 
 
 ## 只统计当前敌国之外的中立第三国在本国边境实际部署的战力。
@@ -3105,6 +3038,7 @@ static func _ensure_diplomatic_range_cache(
 	var revision: Array[int] = [
 		state.get_instance_id(),
 		state.ownership_revision,
+		state.diplomacy_revision,
 		state.road_network_revision,
 		state.cities.size(),
 		state.nations.size(),
@@ -3500,100 +3434,137 @@ static func select_war_objective(
 	)
 	if target_cities.is_empty():
 		return {}
+	var center_ids: Array[int] = []
+	for target_city in target_cities:
+		if (
+			legal_reclamation_only
+			and state.recognized_owner_of(target_city.id) != nation_id
+		):
+			continue
+		var center_id := state.administrative_center_of(target_city.id)
+		if center_id >= 0 and not center_ids.has(center_id):
+			center_ids.append(center_id)
+	EquivariantOrder.sort_city_ids(center_ids, state, nation_id)
+	if center_ids.is_empty():
+		return {}
+	var bordering_centers: Array[int] = []
+	for center_id in center_ids:
+		if _administrative_center_borders_owned_land(
+			state, nation_id, center_id
+		):
+			bordering_centers.append(center_id)
+	# 陆地宣战只能选择本国实控领土直接接壤的州。全国无此类目标时，
+	# 保留后续码头可达性筛选作为登陆战争兜底。
+	if not bordering_centers.is_empty():
+		center_ids = bordering_centers
 	var max_gold := 1
 	var max_food := 1
 	var max_manpower := 1
-	# 先收集真正具备集结入口的候选。守军归一化只能消费这批候选，
-	# 不得让不可达内陆城的大守军稀释薄弱目标之间的差异。
 	var defender_index := _city_defender_troop_index(
 		state, nation_id, evaluation_cache
 	)
-	var candidate_links := {}
+	var candidates: Array[Dictionary] = []
 	var max_reachable_garrison := 1
-	for city in target_cities:
-		if (
+	for center_id in center_ids:
+		var tactical_city := administrative_tactical_target(
+			state,
+			nation_id,
+			target_id,
+			center_id,
+			excluded_city,
 			legal_reclamation_only
-			and state.recognized_owner_of(city.id) != nation_id
-		):
+		)
+		if tactical_city < 0:
 			continue
-		max_gold = maxi(max_gold, city.gold_per_month)
-		max_food = maxi(max_food, city.food_per_half_year)
-		max_manpower = maxi(max_manpower, city.manpower_per_month)
-		if city.id == excluded_city:
-			continue
-		var own_links := 0
-		for neighbor in state.neighbors(city.id):
-			var edge := state.edge_of(city.id, neighbor)
-			if (
-				edge != null
-				and edge.max_manpower > 0
-				and state.has_military_access(
-					nation_id, state.cities[neighbor].owner_nation
-				)
-			):
-				own_links += 1
+		var own_links := staging_cities_for_objective(
+			state, nation_id, tactical_city
+		).size()
 		if own_links <= 0:
 			continue
-		candidate_links[city.id] = own_links
+		var totals := Vector3i.ZERO
+		var controlled := 0
+		var member_count := 0
+		var has_food_hub := false
+		var has_manpower_hub := false
+		var administrative_betweenness := 0.0
+		for member_id in state.administrative_members(center_id):
+			var member := state.cities[member_id]
+			totals.x += maxi(member.gold_per_month, 0)
+			totals.y += maxi(member.food_per_half_year, 0)
+			totals.z += maxi(member.manpower_per_month, 0)
+			member_count += 1
+			has_food_hub = has_food_hub or member.is_food_hub
+			has_manpower_hub = has_manpower_hub or member.is_manpower_hub
+			if member.owner_nation == nation_id:
+				controlled += 1
+			administrative_betweenness += (
+				StrategicMapSnapshot.node_betweenness_city_value(
+					state, member_id
+				)
+			)
+		max_gold = maxi(max_gold, totals.x)
+		max_food = maxi(max_food, totals.y)
+		max_manpower = maxi(max_manpower, totals.z)
 		max_reachable_garrison = maxi(
 			max_reachable_garrison,
-			int(defender_index.get(city.id, 0))
+			int(defender_index.get(tactical_city, 0))
 		)
+		candidates.append({
+			"center_id": center_id,
+			"tactical_city_id": tactical_city,
+			"links": own_links,
+			"totals": totals,
+			"controlled": controlled,
+			"member_count": member_count,
+			"has_food_hub": has_food_hub,
+			"has_manpower_hub": has_manpower_hub,
+			"betweenness": administrative_betweenness,
+		})
 	var best: Dictionary = {}
-	for city in target_cities:
-		if not candidate_links.has(city.id):
-			continue
-		var own_links := int(candidate_links[city.id])
-		var gold_value := 1.5 * float(city.gold_per_month) / float(max_gold)
-		var food_value := 1.2 * float(city.food_per_half_year) / float(max_food)
-		var manpower_value := 1.3 * float(city.manpower_per_month) / float(max_manpower)
+	for candidate in candidates:
+		var center_id := int(candidate["center_id"])
+		var tactical_city := int(candidate["tactical_city_id"])
+		var city := state.cities[center_id]
+		var totals: Vector3i = candidate["totals"]
+		var own_links := int(candidate["links"])
+		var gold_value := 1.5 * float(totals.x) / float(max_gold)
+		var food_value := 1.2 * float(totals.y) / float(max_food)
+		var manpower_value := 1.3 * float(totals.z) / float(max_manpower)
 		var strategic_value := (
 			float(own_links) * 1.25
 			+ (3.0 if city.is_capital else 0.0)
 			+ (2.0 if city.has_warehouse else 0.0)
-			+ (4.0 if city.is_food_hub else 0.0)
-			+ (4.0 if city.is_manpower_hub else 0.0)
+			+ (10.0 if bool(candidate["has_food_hub"]) else 0.0)
+			+ (10.0 if bool(candidate["has_manpower_hub"]) else 0.0)
 		)
 		var encirclement_score := encirclement_value(
 			state,
-			city.id,
+			tactical_city,
 			target_id,
 			evaluation_cache
 		)
 		strategic_value += encirclement_score
-		var fort_vulnerability := Simulation.city_fort_vulnerability(
-			city,
-			state.day
-		)
-		var legal_reclamation := (
-			state.recognized_owner_of(city.id) == nation_id
-		)
-		var contest_value := fort_vulnerability * (
-			RECENT_RECLAMATION_OBJECTIVE_BONUS
-			if legal_reclamation
-			else RECENT_CAPTURE_OBJECTIVE_BONUS
-		)
 		# 守军空虚补偿：守军越少（相对本国接壤敌城的最强守军）加分越高。这让攻势在
 		# 常规价值拉不开差距时主动倒向最好打的敌城，避免“找不到目标就空转”。
-		var defender_troops := int(defender_index.get(city.id, 0))
+		var defender_troops := int(defender_index.get(tactical_city, 0))
 		var weak_garrison_value := (
 			1.0 - float(defender_troops)
 				/ float(max_reachable_garrison)
 		) * WEAK_GARRISON_OBJECTIVE_BONUS
-		var region_unification_value := region_unification_objective_bonus(
-			state, nation_id, city.id, evaluation_cache
+		var controlled_share := (
+			float(int(candidate["controlled"]))
+			/ float(maxi(int(candidate["member_count"]), 1))
 		)
-		var node_betweenness_value := (
-			StrategicMapSnapshot.node_betweenness_city_value(
-				state, city.id
-			)
+		var region_unification_value := (
+			REGION_UNIFICATION_OBJECTIVE_BONUS
+			* controlled_share * controlled_share
 		)
+		var node_betweenness_value := float(candidate["betweenness"])
 		var value := (
 			gold_value
 			+ food_value
 			+ manpower_value
 			+ strategic_value
-			+ contest_value
 			+ weak_garrison_value
 			+ region_unification_value
 			+ node_betweenness_value
@@ -3606,38 +3577,32 @@ static func select_war_objective(
 					and EquivariantOrder.city_id_less(
 						state,
 						nation_id,
-						city.id,
+						center_id,
 						int(best["city_id"])
 					)
 			)
 		):
 			best = {
-				"city_id": city.id,
+				"city_id": center_id,
+				"administrative_center_city_id": center_id,
+				"tactical_city_id": tactical_city,
 				"value": value,
 				"reason": (
-					"城市%d%s（金%d/月、粮%d/半年、人%d/月、战略值%.2f、包围值%.2f、争夺值%.2f、守军%d空虚值%.2f、区域统一值%.2f、交通中心值%.2f）"
+					"州治%d%s（州金%d/月、州粮%d/半年、州人%d/月、战略值%.2f、包围值%.2f、目标守军%d空虚值%.2f、州统一值%.2f、交通中心值%.2f）"
 					% [
 						city.id,
 						(
-							"【粮食核心】" if city.is_food_hub else ""
+							"【粮食核心】"
+							if bool(candidate["has_food_hub"]) else ""
 						) + (
-							"【人口核心】" if city.is_manpower_hub else ""
-						) + (
-							"【近期失地】"
-							if legal_reclamation
-								and fort_vulnerability > 0.0
-							else (
-								"【城防受损】"
-								if fort_vulnerability > 0.0
-								else ""
-							)
+							"【人口核心】"
+							if bool(candidate["has_manpower_hub"]) else ""
 						),
-						city.gold_per_month,
-						city.food_per_half_year,
-						city.manpower_per_month,
+						totals.x,
+						totals.y,
+						totals.z,
 						strategic_value,
 						encirclement_score,
-						contest_value,
 						defender_troops,
 						weak_garrison_value,
 						region_unification_value,
@@ -3646,6 +3611,90 @@ static func select_war_objective(
 				),
 			}
 	return best
+
+
+static func administrative_tactical_target(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	center_city_id: int,
+	excluded_city: int = -1,
+	legal_reclamation_only: bool = false
+) -> int:
+	if not state.is_zhou_city(center_city_id):
+		return -1
+	var attacker_bloc := state.alliance_bloc(nation_id)
+	if attacker_bloc.is_empty():
+		attacker_bloc.append(nation_id)
+	var center_controlled := attacker_bloc.has(
+		state.cities[center_city_id].owner_nation
+	)
+	var candidates: Array[int] = []
+	for city_id in state.administrative_members(center_city_id):
+		if city_id == excluded_city or state.cities[city_id].owner_nation != target_id:
+			continue
+		if legal_reclamation_only and state.recognized_owner_of(city_id) != nation_id:
+			continue
+		if not staging_cities_for_objective(state, nation_id, city_id).is_empty():
+			candidates.append(city_id)
+	if candidates.is_empty():
+		return -1
+	var required := (
+		state.campaign_siege_requirement(nation_id, center_city_id)
+		+ state.campaign_reinforcement_threat(
+			nation_id, center_city_id, 60
+		)
+	)
+	var committed := state.campaign_committed_manpower(
+		nation_id, center_city_id
+	)
+	if (
+		not center_controlled
+		and candidates.has(center_city_id)
+		and committed >= required
+	):
+		return center_city_id
+	# 州治已控时清理敌府；兵力不足时只夺与己方战争集团接壤的府。
+	var frontier_fu: Array[int] = []
+	for candidate in candidates:
+		if candidate == center_city_id:
+			continue
+		for neighbor in state.neighbors(candidate):
+			var edge := state.edge_of(candidate, neighbor)
+			if (
+				edge != null
+				and edge.kind == Edge.Kind.LAND
+				and edge.max_manpower > 0
+				and attacker_bloc.has(state.cities[neighbor].owner_nation)
+			):
+				frontier_fu.append(candidate)
+				break
+	if not frontier_fu.is_empty():
+		candidates = frontier_fu
+	else:
+		candidates.erase(center_city_id)
+	if candidates.is_empty():
+		return center_city_id if not center_controlled and committed >= required else -1
+	EquivariantOrder.sort_city_ids(candidates, state, nation_id, center_city_id)
+	return candidates[0]
+
+
+static func _administrative_center_borders_owned_land(
+	state: GameState,
+	nation_id: int,
+	center_city_id: int
+) -> bool:
+	for member_id in state.administrative_members(center_city_id):
+		for neighbor in state.neighbors(member_id):
+			var edge := state.edge_of(member_id, neighbor)
+			if (
+				edge != null
+				and edge.kind == Edge.Kind.LAND
+				and edge.max_manpower > 0
+				and state.cities[neighbor].owner_nation == nation_id
+			):
+				return true
+	return false
 
 
 static func region_unification_objective_bonus(
@@ -3660,35 +3709,29 @@ static func region_unification_objective_bonus(
 		or nation_id >= state.nations.size()
 		or city_id < 0
 		or city_id >= state.cities.size()
-		or state.region_ids.size() != state.cities.size()
 	):
 		return 0.0
-	var target_region := state.region_ids[city_id]
-	if target_region < 0:
+	var center_id := state.administrative_center_of(city_id)
+	if center_id < 0:
 		return 0.0
-	var cache_key := "region_control:%d:%d:%d" % [
+	var cache_key := "administrative_control:%d:%d:%d" % [
 		nation_id,
 		state.ownership_revision,
-		state.region_analysis_revision,
+		state.administrative_region_revision,
 	]
-	var counts_by_region: Dictionary = evaluation_cache.get(cache_key, {})
-	if counts_by_region.is_empty():
-		for city in state.cities:
-			if not city.politically_active:
-				continue
-			var region_id := state.region_ids[city.id]
-			if region_id < 0:
-				continue
-			var counts := Vector2i(
-				counts_by_region.get(region_id, Vector2i.ZERO)
-			)
-			counts.y += 1
-			if city.owner_nation == nation_id:
-				counts.x += 1
-			counts_by_region[region_id] = counts
-		evaluation_cache[cache_key] = counts_by_region
+	var counts_by_center: Dictionary = evaluation_cache.get(cache_key, {})
+	if counts_by_center.is_empty():
+		for member_center_value in state.administrative_center_city_ids:
+			var member_center := int(member_center_value)
+			var counts := Vector2i.ZERO
+			for member_id in state.administrative_members(member_center):
+				counts.y += 1
+				if state.cities[member_id].owner_nation == nation_id:
+					counts.x += 1
+			counts_by_center[member_center] = counts
+		evaluation_cache[cache_key] = counts_by_center
 	var target_counts := Vector2i(
-		counts_by_region.get(target_region, Vector2i.ZERO)
+		counts_by_center.get(center_id, Vector2i.ZERO)
 	)
 	if target_counts.x <= 0 or target_counts.y <= 0:
 		return 0.0
@@ -3708,55 +3751,27 @@ static func replacement_war_preparation_objective(
 	evaluation_cache: Dictionary = {},
 	legal_reclamation_only: bool = false
 ) -> Dictionary:
+	var objective := select_war_objective(
+		state,
+		nation_id,
+		target_id,
+		evaluation_cache,
+		current_city,
+		legal_reclamation_only
+	)
+	if objective.is_empty():
+		return objective
+	var tactical_city := int(objective.get("tactical_city_id", -1))
 	var defender_index := _city_defender_troop_index(
 		state, nation_id, evaluation_cache
 	)
-	var best_city := -1
-	var best_defenders := 2147483647
-	var best_links := -1
-	for city in state.cities_of(target_id):
-		if city.id == current_city:
-			continue
-		if (
-			legal_reclamation_only
-			and state.recognized_owner_of(city.id) != nation_id
-		):
-			continue
-		var staging := staging_cities_for_objective(
-			state, nation_id, city.id
-		)
-		if staging.is_empty():
-			continue
-		var defenders := int(defender_index.get(city.id, 0))
-		if (
-			defenders < best_defenders
-			or (defenders == best_defenders and staging.size() > best_links)
-			or (
-				defenders == best_defenders
-				and staging.size() == best_links
-				and (
-					best_city < 0
-					or EquivariantOrder.city_id_less(
-						state, nation_id, city.id, best_city
-					)
-				)
-			)
-		):
-			best_city = city.id
-			best_defenders = defenders
-			best_links = staging.size()
-	if best_city < 0:
-		return {}
-	return {
-		"city_id": best_city,
-		"value": WEAK_GARRISON_OBJECTIVE_BONUS,
-		"defender_troops": best_defenders,
-		"staging_links": best_links,
-		"reason": (
-			"薄弱守军兜底：城市%d当前守军%d、可用集结入口%d"
-			% [best_city, best_defenders, best_links]
-		),
-	}
+	objective["defender_troops"] = int(
+		defender_index.get(tactical_city, 0)
+	)
+	objective["staging_links"] = staging_cities_for_objective(
+		state, nation_id, tactical_city
+	).size()
+	return objective
 
 
 ## 目标城当前实际驻守敌军兵力索引（IDLE/RECOVERING）。一次外交评估只扫描
@@ -4393,7 +4408,8 @@ static func _collect_war_actions(
 			"a": nation.id,
 			"b": best_target,
 			"score": best_score,
-			"objective_city": int(objective["city_id"]),
+			"objective_city": int(objective["tactical_city_id"]),
+			"objective_center_city": int(objective["city_id"]),
 			"objective_reason": str(objective["reason"]),
 			"mobilization_armies": mobilization_armies,
 			"reason": (
@@ -4447,6 +4463,9 @@ static func _collect_existing_war_preparation(
 	var nation := state.nations[nation_id]
 	var target_id := nation.war_preparation_target_nation
 	var objective_city := nation.war_preparation_objective_city
+	var objective_center := nation.war_preparation_objective_center_city
+	if objective_center < 0:
+		objective_center = state.administrative_center_of(objective_city)
 	# 备战是战略状态，不依赖瞬时道路容量或边境屯兵。目标国仍是合法敌手时，
 	# 先在同国改选一个可达的薄弱城市；如果整个边境暂时封闭则保持备战等待，
 	# 绝不因道路状态发出取消，从根上消除“封路→取消→恢复→重开”的横跳。
@@ -4490,7 +4509,8 @@ static func _collect_existing_war_preparation(
 				"kind": Action.RETARGET_WAR_PREPARATION,
 				"a": nation_id,
 				"b": target_id,
-				"objective_city": int(replacement["city_id"]),
+				"objective_city": int(replacement["tactical_city_id"]),
+				"objective_center_city": int(replacement["city_id"]),
 				"objective_reason": str(replacement["reason"]),
 				"reason": (
 					"原备战目标城市%d不可用，保持对国%d备战并改向%s"
@@ -4590,6 +4610,7 @@ static func _collect_existing_war_preparation(
 		"a": nation_id,
 		"b": target_id,
 		"objective_city": objective_city,
+		"objective_center_city": objective_center,
 		"objective_reason": nation.war_preparation_reason,
 		"mobilization_armies": mobilization_armies,
 		"reason": (
@@ -4834,19 +4855,7 @@ static func required_assault_troops(
 	)
 	if objective_requirement <= 0:
 		return objective_requirement
-	var recent_legal_reclamation := (
-		state.recognized_owner_of(objective_city) == nation_id
-		and Simulation.city_fort_vulnerability(
-			state.cities[objective_city],
-			state.day
-		) > 0.0
-	)
-	if recent_legal_reclamation:
-		return objective_requirement
-	return maxi(
-		objective_requirement,
-		int(ceil(float(_troop_count(state, nation_id)) * WAR_PREPARATION_FORCE_SHARE))
-	)
+	return objective_requirement
 
 
 static func objective_assault_troops(
@@ -4856,25 +4865,13 @@ static func objective_assault_troops(
 ) -> int:
 	if objective_city < 0 or objective_city >= state.cities.size():
 		return 0
-	var defenders := 0
-	for army in state.armies:
-		if (
-			army.size > 0
-			and army.owner_nation != nation_id
-			and army.location_city == objective_city
-			and army.state in [Army.State.IDLE, Army.State.RECOVERING]
-		):
-			defenders += army.size
-	# 攻城派兵门槛（item 6/7 唯一真源，与 UtilityAI 同源）：歼灭守军 + 维持封锁×余量。
-	# 形成可接受的局部优势即发起，持久围城的连续推进曲线由战斗状态机承担（item 7：无 5× 硬门槛）。
-	var fort_strength := state.cities[
-		objective_city
-	].fort_strength
-	var siege_requirement := UtilityAI.assault_commit_threshold(
-		defenders,
-		fort_strength
+	var center_id := state.administrative_center_of(objective_city)
+	if center_id < 0:
+		return 0
+	return (
+		state.campaign_siege_requirement(nation_id, center_id)
+		+ state.campaign_reinforcement_threat(nation_id, center_id, 60)
 	)
-	return siege_requirement
 
 
 static func _national_power(

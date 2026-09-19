@@ -303,24 +303,6 @@ static func army_less(
 	)
 	if comparison != 0:
 		return comparison < 0
-	comparison = _compare_int(
-		_quantize(
-			a.offensive_attack_multiplier,
-			VALUE_SCALE
-		),
-		_quantize(
-			b.offensive_attack_multiplier,
-			VALUE_SCALE
-		)
-	)
-	if comparison != 0:
-		return comparison < 0
-	comparison = _compare_int(
-		a.offensive_bonus_until_day,
-		b.offensive_bonus_until_day
-	)
-	if comparison != 0:
-		return comparison < 0
 	return false
 
 
@@ -371,11 +353,6 @@ static func sort_armies(
 			army.ai_action,
 			army.ai_order_until_day,
 			army.defensive_deployment_until_day,
-			_quantize(
-				army.offensive_attack_multiplier,
-				VALUE_SCALE
-			),
-			army.offensive_bonus_until_day,
 		]
 	values.sort_custom(func(a: Army, b: Army) -> bool:
 		return _key_less(keys[a], keys[b])
@@ -420,8 +397,6 @@ static func army_key(
 		army.ai_action,
 		army.ai_order_until_day,
 		army.defensive_deployment_until_day,
-		_quantize(army.offensive_attack_multiplier, VALUE_SCALE),
-		army.offensive_bonus_until_day,
 	]
 
 

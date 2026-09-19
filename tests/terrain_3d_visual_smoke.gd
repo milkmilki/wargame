@@ -158,7 +158,9 @@ func _prepare_frontend_showcase(state: GameState) -> void:
 	var siege := state.new_battle(Battle.Kind.SIEGE)
 	siege.city = state.cities[siege_edge.city_b]
 	siege.edge = siege_edge
-	siege.siege_progress = Combat.SIEGE_PROGRESS_REQUIRED * 0.63
+	state.cities[siege_city].garrison_manpower = int(
+		state.city_garrison_capacity(siege_city) * 0.63
+	)
 	for index in range(mini(state.armies.size(), 5)):
 		var army := state.armies[index]
 		if index == 0:

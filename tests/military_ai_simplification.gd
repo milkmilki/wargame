@@ -1,5 +1,5 @@
 extends SceneTree
-## 军事 AI 简化门禁：指挥单位只含一个聚合主战实体，攻势规模有界，
+## 军事 AI 简化门禁：每个指挥单位只含一支独立主战军，攻势规模有界，
 ## 友军沿既定道路移动时不使整份动态驻防计划失效。
 
 var _failures: Array[String] = []
@@ -48,13 +48,12 @@ func _test_single_heavy_battle_group() -> void:
 	_check(
 		BattleGroup.MAX_LIGHT_ARMIES == 0
 			and BattleGroup.MAX_HEAVY_ARMIES == 1
-			and BattleGroup.MAX_COMMAND_UNITS == 6
 			and members.size() == 1
 			and heavy_count == 1
 			and light_count == 0
 			and light_rejected
 			and nonstandard_rejected,
-		"每个指挥单位必须且只能包含一个聚合主战实体，轻军不得加入"
+		"每个指挥单位必须且只能包含一支独立主战军，轻军不得加入"
 	)
 
 
@@ -72,20 +71,19 @@ func _test_generated_world_has_only_command_units() -> void:
 				valid
 				and army.is_main_battle_role()
 				and army.battle_group_id >= 0
+				and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
+				and state.battle_group_members(
+					nation.id, army.battle_group_id
+				).size() == 1
 			)
-		valid = (
-			valid
-			and living_armies <= BattleGroup.MAX_COMMAND_UNITS
-			and nation.battle_groups.size() <= BattleGroup.MAX_COMMAND_UNITS
-		)
-	_check(valid, "生成世界只能包含每国至多六个聚合主战指挥单位")
+		valid = valid and living_armies == nation.battle_groups.size()
+	_check(valid, "生成世界的每支主战军必须拥有独立指挥单位")
 
 
 func _test_campaign_bounds() -> void:
 	_check(
-		Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS == 3
-			and Simulation.CAMPAIGN_MAX_COMMAND_UNITS == 6,
-		"攻势必须限制为最多三目标、六个指挥单位"
+		Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS == 2,
+		"州战役必须限制为最多两个战术目标"
 	)
 
 
@@ -133,40 +131,16 @@ func _test_friendly_progress_signature() -> void:
 func _test_stable_campaign_plan_reuse() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(91003)
-	var sim := Simulation.new()
-	sim.setup(state)
-	var nation := state.nations[0]
-	var group := nation.battle_groups[0]
-	var members := state.battle_group_members(0, group.id)
-	var target_city := -1
-	for city in state.cities:
-		if state.is_enemy(0, city.owner_nation):
-			target_city = city.id
-			break
-	var plan := CampaignAllocationPlan.new()
-	plan.nation_id = 0
-	plan.candidate_target_ids = [target_city]
-	plan.assigned_target_ids = [target_city]
-	plan.group_to_target[group.id] = target_city
-	plan.target_to_groups[target_city] = [group.id] as Array[int]
-	var member_ids: Array[int] = []
-	for army in members:
-		member_ids.append(army.id)
-		nation.campaign_preparation_assignments[army.id] = target_city
-	plan.all_member_ids[group.id] = member_ids.duplicate()
-	plan.eligible_member_ids[group.id] = member_ids.duplicate()
-	var reusable := sim._campaign_preparation_plan_reusable(
-		0, plan, [target_city], false, null
-	)
-	state.cities[target_city].owner_nation = 0
-	var invalidated := not sim._campaign_preparation_plan_reusable(
-		0, plan, [target_city], false, null
-	)
+	var plan := AdministrativeCampaignPlan.new()
+	plan.center_city_id = int(state.administrative_center_city_ids[0])
+	plan.refresh_fingerprint(state)
+	var reusable := plan.fingerprint_matches(state)
+	state.ownership_revision += 1
+	var invalidated := not plan.fingerprint_matches(state)
 	_check(
 		reusable and invalidated,
-		"稳定战役计划应直接复用，目标易主后必须立即失效"
+		"州战役计划应在版本不变时复用，领土变化后立即失效"
 	)
-	sim.free()
 
 
 func _check(condition: bool, message: String) -> void:

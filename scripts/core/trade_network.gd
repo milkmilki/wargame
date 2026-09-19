@@ -567,7 +567,7 @@ static func structure_fingerprint(state: GameState) -> PackedByteArray:
 		["counts", state.cities.size(), state.nations.size()],
 		["map_aspect_ratio", state.map_aspect_ratio],
 	]
-	var non_trade_gold_outputs := CityOutputRules.city_gold_outputs(state)
+	var non_trade_gold_outputs := CityOutputRules.city_potential_gold_outputs(state)
 	for city in state.cities:
 		var region_id := (
 			int(state.region_ids[city.id])
@@ -577,7 +577,7 @@ static func structure_fingerprint(state: GameState) -> PackedByteArray:
 		var non_trade_gold_output := (
 			int(non_trade_gold_outputs[city.id])
 			if city.id >= 0 and city.id < non_trade_gold_outputs.size()
-			else CityOutputRules.city_gold_output(state, city)
+			else CityOutputRules.city_potential_gold_output(state, city)
 		)
 		fields.append([
 			"city", city.id, city.owner_nation, city.is_dock,
@@ -2391,7 +2391,7 @@ static func regional_trade_centers(
 	var result := {}
 	if state == null:
 		return result
-	var output_by_city := CityOutputRules.city_gold_outputs(state)
+	var output_by_city := CityOutputRules.city_potential_gold_outputs(state)
 	var regions := trade_region_ids(state)
 	for city in state.cities:
 		if city.is_dock or city.id < 0 or city.id >= regions.size():

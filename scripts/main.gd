@@ -417,13 +417,8 @@ func _on_map_regenerate_requested(
 	var active_city_count := int(preview.get(
 		"politically_active_count", requested_count
 	))
-	if active_city_count < nation_count:
-		map_editor_panel.set_status(
-			"政治蒙版仅覆盖%d座实际城市，至少需要%d座。" % [
-				active_city_count, nation_count,
-			],
-			true
-		)
+	if active_city_count <= 0:
+		map_editor_panel.set_status("政治蒙版内至少需要一座实际城市。", true)
 		return
 	terrain_city_count = requested_count
 	_city_generation_mask_path = requested_mask
@@ -533,6 +528,7 @@ func _start_new_game(world_seed: int) -> void:
 		initial_ruler.trade_policy = RulerProfile.trade_policy_for(
 			initial_ruler
 		)
+	nation_count = next_state.nations.size()
 	_activate_state(next_state)
 
 

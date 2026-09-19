@@ -60,42 +60,7 @@ const HOLDING_TAU_DAYS: float = 30.0       ## 驻防适应时间常数
 const CHOKEPOINT_DANGER_ONSET: float = 0.85  ## 隘口带起点：danger≥此值攻击惩罚加速下探（连续，非跳变）
 const CHOKEPOINT_ATTACK_FLOOR: float = 0.25  ## danger=1.0 时的攻击倍率地板（隘口最极端处）
 
-# ---- 攻城累积（item 6/7：连续围城曲线 + 量纲统一的封锁需求）----
-const SIEGE_PROGRESS_REQUIRED: float = 100.0 ## 破城所需累积进度（满 100 破城）
-## 破城所需兵力（siege_required_manpower）= 执行有效封锁所需的最低兵力，item 6：仅由工事强度推导，
-## 与守军人数无关——守军的作用在城下决斗阶段消耗攻方，而非抬高封锁门槛。这样「驻军被击败后，
-## 城防仍存在但来自 fort_strength」（item 6 验收），有无守军封锁需求不出现数量级跳变。
-const FORT_MANPOWER_PER_POINT: int = 100     ## 每点工事强度等效的封锁兵力（量纲桥：城防点→兵力）
-const SIEGE_REQUIRED_FLOOR: int = 1          ## 破城所需兵力下界，避免除零
-# ---- item 7 连续围城曲线：manpower_ratio = attacker_effective / siege_required_manpower ----
-## 去掉「5× 硬门槛」，改为随兵力比连续变化、无跳变、极大兵力收益递减的曲线：
-##   ratio < STALL(0.5)         → 每日进度为负（缓慢倒退：无法完全封锁，工事修复）
-##   STALL ≤ ratio < 1.0        → 极慢正推进（部分封锁）
-##   ratio = 1.0                → 正常围城下限（SIEGE_DAYS_BASE 天）
-##   1.0 ~ 2.0 正常、2.0 ~ 4.0 高效、>4.0 收益递减 → days 单调降向 SIEGE_DAYS_MIN
-const SIEGE_RATIO_STALL: float = 0.5         ## 倒退/推进分界比（<0.5 进度倒退）
-const SIEGE_DAYS_MIN: float = 3.0            ## 饱和进攻(ratio→∞)最短围城天数
-const SIEGE_DAYS_BASE: float = 30.0          ## 正常围城下限天数（ratio=1 时）
-## days = MIN + (BASE-MIN)/ratio 的饱和形式在 ratio=1 时取 BASE、ratio→∞ 时取 MIN、单调递减。
-## ratio=1→30、ratio=2→16.5、ratio=4→9.75、ratio→∞→3：契合「1~2 正常、2~4 高效、>4 递减」。
-const SIEGE_DAYS_DECAY: float = 27.0         ## = SIEGE_DAYS_BASE - SIEGE_DAYS_MIN
-const SIEGE_REGRESS_PER_DAY: float = 0.5     ## ratio<STALL 时每日进度倒退量（最深，ratio=0 时）
 const SIEGE_STARVE_DEF_MULT: float = 0.3     ## 粮尽守军城防加成衰减系数（战力大幅下降）
-const SIEGE_INTERRUPTION_DECAY_PER_DAY: float = 0.25 ## 守城/解围战每持续一天，攻城成果回退 0.25 点
-const CAPITAL_DEFENSE_MULT: int = 2          ## 首都固有防御倍率：城市作为首都时城防加成翻倍
-
-
-## 城市固有防御的等效城防点数（唯一真源）：以 fort_strength 为基，首都翻倍。
-## 战斗守军加成（Combat.garrison_b）与 AI 战力估值（ArmyPower.city_defense）都经此换算，
-## 保证「首都更难守下」在实战与规划两侧一致。不含守军人数（item 6：城防来自工事结构）。
-## 注意：这是「防御力」量纲，不改变 siege_required_manpower（破城所需兵力，另一量纲）。
-static func city_defense_modifier(city: City) -> int:
-	if city == null:
-		return 0
-	var base := maxi(city.fort_strength, 0)
-	return base * CAPITAL_DEFENSE_MULT if city.is_capital else base
-
-
 # ---- 结构化战斗日志（item 15：调试与回放）----
 ## 默认关闭（零开销，满足"日志可关闭"）；启用后每个 resolve_round 末尾向 battle_log 追加
 ## 一条纯数据记录（无自然语言逻辑判断，满足"测试环境可读取"+"能定位战斗结果为何产生"）。
@@ -167,7 +132,6 @@ static func _side_combat_signature(
 	var defense_mass := 0
 	var morale_mass := 0
 	var starving_size := 0
-	var offensive_mass := 0
 	for army in side:
 		if army.size <= 0:
 			continue
@@ -178,9 +142,6 @@ static func _side_combat_signature(
 				* maxf(army.ruler_defense_multiplier, 0.1)
 		))
 		morale_mass += army.size * int(round(army.morale * 1000000.0))
-		offensive_mass += army.size * int(round(
-			army.offensive_attack_multiplier * 1000000.0
-		))
 		if army.starving:
 			starving_size += army.size
 	var signature := 17
@@ -190,7 +151,6 @@ static func _side_combat_signature(
 		defense_mass,
 		morale_mass,
 		starving_size,
-		offensive_mass,
 		int(round(attack_modifier * 1000000.0)),
 		int(round(defense_modifier_value * 1000000.0)),
 		garrison_defense,
@@ -219,38 +179,6 @@ static func _hash_step(seed_value: int, input_value: int) -> int:
 	mixed = mixed ^ (mixed >> 13)
 	mixed = posmod(mixed * 19349663, RANDOM_HASH_MOD)
 	return mixed ^ (mixed >> 16)
-
-
-## 破城所需兵力（siege_required_manpower，item 6：恒为兵力量纲，仅由工事强度推导）。
-## = 执行有效封锁所需的最低兵力，供围城比值分母与 AI 派兵门槛统一使用（唯一真源）。
-##  - fort_strength：城墙/工事结构强度（城防点数量纲），经 FORT_MANPOWER_PER_POINT 换算成兵力。
-## 不含守军人数：守军是城下决斗阶段的对手，被歼后本值不变（item 6 验收：城防来自 fort_strength）。
-static func siege_required_manpower(fort_strength: int) -> int:
-	var f := maxi(fort_strength, 0)
-	return maxi(f * FORT_MANPOWER_PER_POINT, SIEGE_REQUIRED_FLOOR)
-
-
-## 纯围城阶段单日进度增量（确定性，无掷骰）。item 7：连续曲线，无 5× 硬门槛、无跳变。
-##  ratio = attacker_effective / siege_required_manpower（后者由 siege_required_manpower() 给出）。
-##  - ratio < SIEGE_RATIO_STALL(0.5)：返回负值（缓慢倒退，无法完全封锁，越弱退得越快）。
-##  - ratio ≥ 0.5：days = MIN + DECAY/ratio，进度 = REQUIRED/days；ratio=1→30 天、ratio→∞→3 天。
-## 极大兵力收益递减（days 饱和到 MIN），不产生无限线性加速。
-static func siege_daily_progress(attacker_effective: int, siege_required: int) -> float:
-	var base := float(maxi(siege_required, SIEGE_REQUIRED_FLOOR))
-	var ratio := float(maxi(attacker_effective, 0)) / base
-	if ratio < SIEGE_RATIO_STALL:
-		# 兵力严重不足：进度线性倒退，ratio→0 时退速最大 SIEGE_REGRESS_PER_DAY，ratio→0.5 时归零。
-		return -SIEGE_REGRESS_PER_DAY * (SIEGE_RATIO_STALL - ratio) / SIEGE_RATIO_STALL
-	var days := SIEGE_DAYS_MIN + SIEGE_DAYS_DECAY / ratio
-	return SIEGE_PROGRESS_REQUIRED / days
-
-
-## 守军或解围军打断攻城时，既有工事和破城成果按中断天数线性损失。
-static func siege_progress_after_interruption(progress: float, days: int = 1) -> float:
-	return maxf(
-		progress - SIEGE_INTERRUPTION_DECAY_PER_DAY * float(maxi(days, 0)),
-		0.0
-	)
 
 
 ## danger 对攻击力的固定惩罚，不随驻防时间变化。item 9：全程连续、单调、无阈值跳变。
@@ -428,17 +356,8 @@ static func resolve_round(
 		defense_pen_a = defense_multiplier(danger, battle.holding_days if battle.holding_side == 1 else 0.0)
 		defense_pen_b = defense_multiplier(danger, battle.holding_days if battle.holding_side == 2 else 0.0)
 
-	# 攻城：驻城守军（side_b）获得城防加成（仅当 side_b 确为守军时）。
-	# 加成来自工事结构强度 fort_strength（city_defense_modifier 语义，非驻军人数，item 6）。
-	# 粮尽（城 food_storage<=0）时城防加成大幅衰减（规格 R3：战力大幅下降）。
+	# 城市守军通过临时 Army 自身的倍率参与攻防；普通驻城野战军不再获得工事加成。
 	var garrison_b := 0
-	if battle.kind == Battle.Kind.SIEGE and battle.has_garrison and battle.city != null:
-		garrison_b = int(round(
-			float(city_defense_modifier(battle.city))
-				* maxf(battle.city.ruler_city_defense_multiplier, 0.1)
-		))
-		if battle.city.food_storage <= 0:
-			garrison_b = int(round(garrison_b * SIEGE_STARVE_DEF_MULT))
 
 	# 正面宽度（item 5）：每轮按规范物理序明确投入各军的前线兵力。
 	# 完全未入选的军队是预备队：不出力、不受战斗伤亡、不承受战斗士气侵蚀；
@@ -673,8 +592,9 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
-			"offensive_attack_multiplier":
-				army.offensive_attack_multiplier,
+			"is_city_garrison": army.is_city_garrison,
+			"city_garrison_combat_multiplier":
+				army.city_garrison_combat_multiplier,
 		})
 	return result
 
@@ -701,7 +621,7 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 	var context := {
 		"holding_side": battle.holding_side,
 		"holding_days": battle.holding_days,
-		"has_garrison": battle.has_garrison,
+		"side_b_defends_city": battle.side_b_defends_city,
 		"contact_dist_a": battle.contact_dist_a,
 		"contact_dist_b": battle.contact_dist_b,
 		"tactical_key_a": battle.tactical_key_a,
@@ -733,8 +653,9 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 		}
 	if battle.city != null:
 		context["city"] = {
-			"fort_strength": battle.city.fort_strength,
 			"food_storage": battle.city.food_storage,
+			"garrison_manpower": battle.city.garrison_manpower,
+			"garrison_defense_base": battle.city.garrison_defense_base,
 		}
 	return context
 
@@ -848,10 +769,11 @@ static func _frontline_attack(
 	var total := 0.0
 	for entry in frontline:
 		var army: Army = entry["army"]
+		var garrison_stat_multiplier := _city_garrison_stat_multiplier(army)
 		total += (
 			float(entry["committed"])
 			* float(army.attack)
-			* maxf(army.offensive_attack_multiplier, 1.0)
+			* garrison_stat_multiplier
 			* side_efficiency
 		)
 	return total
@@ -866,7 +788,7 @@ static func _side_combat_efficiency(side: Array[Army]) -> float:
 		var army_nominal := (
 			float(army.size)
 			* float(army.attack)
-			* maxf(army.offensive_attack_multiplier, 1.0)
+			* _city_garrison_stat_multiplier(army)
 		)
 		nominal_attack += army_nominal
 		effective_attack += (
@@ -892,8 +814,18 @@ static func _frontline_avg_defense(
 		weighted += (
 			float(entry["committed"]) * float(army.defense)
 				* maxf(army.ruler_defense_multiplier, 0.1)
+				* _city_garrison_stat_multiplier(army)
 		)
 	return weighted / float(total)
+
+
+## Combat 的防御减伤会与攻击倍率复合。反解 m(m+1)/2=D，令攻防都乘 m，
+## 从而同属性、同正面兵种每回合的伤亡交换比约为界面与 AI 共用的效率 D。
+static func _city_garrison_stat_multiplier(army: Army) -> float:
+	if army == null or not army.is_city_garrison:
+		return 1.0
+	var target := maxf(army.city_garrison_combat_multiplier, 0.0)
+	return maxf((sqrt(1.0 + 8.0 * target) - 1.0) * 0.5, 0.0)
 
 
 static func _apply_frontline_losses(
@@ -921,6 +853,28 @@ static func _erode_frontline_morale(
 	actual_casualties: int,
 	morale_before: float
 ) -> void:
+	var normal_side: Array[Army] = []
+	var normal_frontline: Array[Dictionary] = []
+	var normal_casualties := 0
+	for army in side:
+		if not army.is_city_garrison:
+			normal_side.append(army)
+	for entry in frontline:
+		var entry_army: Army = entry["army"]
+		if entry_army.is_city_garrison:
+			continue
+		normal_frontline.append(entry)
+		normal_casualties += int(entry.get("casualties", 0))
+	if normal_side.size() != side.size():
+		if normal_frontline.is_empty():
+			return
+		_erode_frontline_morale(
+			normal_side,
+			normal_frontline,
+			normal_casualties,
+			Battle.new().side_morale(normal_side)
+		)
+		return
 	var committed_total := _frontline_size(frontline)
 	if committed_total <= 0:
 		return
@@ -1012,9 +966,8 @@ static func _adjust_frontline_morale_mass(
 			var old_morale := army.morale
 			# requested_mass 与 _side_morale_mass 都以 combat_morale 为量纲；
 			# 回写持久 morale 及统计 applied_mass 时必须使用完全相同的倍率。
-			var morale_multiplier := (
-				army.offensive_multiplier()
-				* maxf(army.ruler_morale_multiplier, 0.1)
+			var morale_multiplier := maxf(
+				army.ruler_morale_multiplier, 0.1
 			)
 			army.morale = clampf(
 				army.morale
@@ -1070,6 +1023,7 @@ static func _extract_routed_armies(
 		var army := side[index]
 		if (
 			army.size > 0
+			and not army.is_city_garrison
 			and army.combat_morale() <= ARMY_ROUT_THRESHOLD
 		):
 			routed.push_front(army)
@@ -1092,6 +1046,7 @@ static func _side_residual(side: Array[Army]) -> float:
 			total += (
 				float(a.size)
 				* combat_efficiency(a.combat_morale())
+				* maxf(a.city_garrison_combat_multiplier, 0.0)
 			)
 	return total
 
@@ -1129,8 +1084,7 @@ static func _side_attack(side: Array[Army]) -> float:
 			total += (
 				float(a.size)
 				* float(a.attack)
-				* maxf(a.offensive_attack_multiplier, 1.0)
-					* combat_efficiency(a.combat_morale())
+				* combat_efficiency(a.combat_morale())
 			)
 	return total
 
@@ -1205,11 +1159,7 @@ static func _erode_side_morale(side: Array[Army], base_erode: float) -> void:
 		var e := base_erode
 		if a.starving:
 			e += MORALE_STARVE_DECAY
-		a.morale = clampf(
-			a.morale - e / a.offensive_multiplier(),
-			MORALE_FLOOR,
-			a.max_morale
-		)
+		a.morale = clampf(a.morale - e, MORALE_FLOOR, a.max_morale)
 
 
 ## 将本回合总伤亡守恒地摊分到本侧各军并就地扣减 size（item 3）。返回实际扣减的总伤亡（整数）。

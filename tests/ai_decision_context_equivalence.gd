@@ -67,7 +67,8 @@ func _compare_states(legacy: GameState, optimized: GameState) -> int:
 		var other := optimized.cities[city.id]
 		if (
 			city.owner_nation != other.owner_nation
-			or not is_equal_approx(city.fort_strength, other.fort_strength)
+			or city.garrison_manpower != other.garrison_manpower
+			or city.garrison_defense_base != other.garrison_defense_base
 			or city.food_storage != other.food_storage
 		):
 			mismatches += 1

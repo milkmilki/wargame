@@ -488,7 +488,7 @@ func _input_signature() -> Array:
 		view.nation_id,
 		view.state.ownership_revision,
 		view.state.diplomacy_revision,
-		view.state.fortification_revision,
+		view.state.garrison_revision,
 		view.capital_city_id,
 	]
 	_append_army_signature(result, view.friendly_armies, false)
@@ -2271,7 +2271,8 @@ func _line_city_structural_priority(city_id: int) -> float:
 		+ (250.0 if city.is_food_hub else 0.0)
 		+ (250.0 if city.is_manpower_hub else 0.0)
 		+ (180.0 if city.is_dock else 0.0)
-		+ float(maxi(city.fort_strength_max, 0)) * 2.0
+		+ (420.0 if view.state.is_zhou_city(city_id) else 0.0)
+		+ float(maxi(city.garrison_manpower, 0)) / 30.0
 	)
 	var structural := (
 		base_importance * _strategic_proximity_factor(city_id)
@@ -2429,7 +2430,7 @@ func _is_line_strategic_city(city_id: int) -> bool:
 		or city.has_warehouse
 		or city.is_food_hub
 		or city.is_manpower_hub
-		or city.fort_strength_max >= 24
+		or view.state.is_zhou_city(city.id)
 	)
 
 
@@ -2624,6 +2625,7 @@ func _is_strategic_must_hold_city(city_id: int) -> bool:
 	var city := view.state.cities[city_id]
 	return (
 		city_id == view.capital_city_id
+		or view.state.is_zhou_city(city_id)
 		or city.has_warehouse
 		or city.is_food_hub
 		or city.is_manpower_hub
@@ -3088,8 +3090,8 @@ func _city_coverage(
 			city_id,
 			excluded
 		)
-		+ ArmyPower.city_defense(
-			view.state.cities[city_id]
+		+ ArmyPower.city_garrison_defense(
+			view.state, -1, city_id
 		)
 	)
 

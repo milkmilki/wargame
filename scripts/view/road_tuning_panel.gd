@@ -210,7 +210,7 @@ func _build_map_mode_control(font: Font) -> void:
 		[MAP_MODE_POLITICAL, "政治"],
 		[MAP_MODE_LOYALTY, "忠诚"],
 		[MAP_MODE_TRADE, "贸易"],
-		[MAP_MODE_REGION, "区域"],
+		[MAP_MODE_REGION, "州域"],
 	]:
 		var button := Button.new()
 		var mode_id := str(mode[0])

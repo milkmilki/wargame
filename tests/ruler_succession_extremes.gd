@@ -75,12 +75,35 @@ func _test_capital_income_and_succession_relocation() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(71239)
 	state._random_ruler_profiles_enabled = true
-	var nation := state.nations[0]
-	var old_capital := state.cities[nation.capital_city_id]
+	var nation: Nation = null
+	var capital_candidates: Array[City] = []
+	for candidate_nation in state.nations:
+		var component := state._largest_owned_component(
+			candidate_nation.id, state.land_cities_of(candidate_nation.id)
+		)
+		var centers: Array[City] = []
+		for city in component:
+			if state.is_zhou_city(city.id):
+				centers.append(city)
+		if centers.size() >= 2:
+			nation = candidate_nation
+			capital_candidates = centers
+			break
+	_check(nation != null, "capital relocation fixture has fewer than two owned zhou")
+	if nation == null:
+		return
+	EquivariantOrder.sort_cities(capital_candidates, state, nation.id)
+	var old_capital := capital_candidates[0]
+	for city in state.cities:
+		if city.owner_nation == nation.id:
+			city.is_capital = false
+	nation.capital_city_id = old_capital.id
+	old_capital.is_capital = true
 	var base_gold := old_capital.gold_per_month
 	var expected_capital_addition := 0
 	for city in state.land_cities_of(nation.id):
-		expected_capital_addition += city.gold_per_month
+		if state.city_administrative_output_enabled(city.id):
+			expected_capital_addition += city.gold_per_month
 	expected_capital_addition = int(floor(
 		float(expected_capital_addition) * 0.20
 	))
@@ -98,20 +121,7 @@ func _test_capital_income_and_succession_relocation() -> void:
 		"capital gold addition still changed with capital tenure"
 	)
 
-	var component := state._largest_owned_component(
-		nation.id, state.land_cities_of(nation.id)
-	)
-	var successor_capital: City = null
-	for city in component:
-		city.fort_strength = 0
-		if city.id != old_capital.id and successor_capital == null:
-			successor_capital = city
-	_check(successor_capital != null, "capital relocation fixture has no alternative city")
-	if successor_capital == null:
-		return
-	# 继位只重新评估首都价值；旧都仍然最优时继续作为首都，并保留任期起点。
-	old_capital.fort_strength = 999
-	successor_capital.fort_strength = 100
+	# 州治优先且以稳定物理序裁决；当前首都就是首选州治时应保留。
 	var due_day := RulerProfile.succession_due_day(nation, state.world_seed)
 	state.day = due_day
 	var simulation := Simulation.new()
@@ -126,9 +136,24 @@ func _test_capital_income_and_succession_relocation() -> void:
 		"retained capital lost its tenure start day"
 	)
 
-	# 下一任继位时出现价值更高的候选，才按同一套既有规则迁都。
-	old_capital.fort_strength = 0
-	successor_capital.fort_strength = 1000
+	# 旧都失去本国控制后，下一任继位迁往最大实控连通区中的首选州治。
+	var other_nation_id := (nation.id + 1) % state.nations.size()
+	old_capital.owner_nation = other_nation_id
+	old_capital.is_capital = false
+	state.recognized_city_owners[old_capital.id] = other_nation_id
+	state.ownership_revision += 1
+	var remaining_component := state._largest_owned_component(
+		nation.id, state.land_cities_of(nation.id)
+	)
+	var remaining_centers: Array[City] = []
+	for city in remaining_component:
+		if state.is_zhou_city(city.id):
+			remaining_centers.append(city)
+	_check(not remaining_centers.is_empty(), "capital relocation fixture lost every owned zhou")
+	if remaining_centers.is_empty():
+		return
+	EquivariantOrder.sort_cities(remaining_centers, state, nation.id)
+	var successor_capital := remaining_centers[0]
 	var next_due_day := RulerProfile.succession_due_day(
 		nation, state.world_seed
 	)
@@ -147,6 +172,13 @@ func _test_capital_income_and_succession_relocation() -> void:
 		"new capital did not start its tenure on the succession day"
 	)
 	state.day += 5 * RulerProfile.DAYS_PER_YEAR
+	expected_capital_addition = 0
+	for city in state.land_cities_of(nation.id):
+		if state.city_administrative_output_enabled(city.id):
+			expected_capital_addition += city.gold_per_month
+	expected_capital_addition = int(floor(
+		float(expected_capital_addition) * 0.20
+	))
 	_check(
 		Simulation.city_gold_output_before_governance(
 			state, successor_capital

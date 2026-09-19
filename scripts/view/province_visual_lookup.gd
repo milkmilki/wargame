@@ -74,13 +74,18 @@ static func build_visual_lut(
 			continue
 		if region_mode:
 			var region_id := (
-				game_state.region_ids[city_id]
-				if city_id < game_state.region_ids.size()
+				game_state.administrative_region_ids[city_id]
+				if city_id < game_state.administrative_region_ids.size()
 				else -1
 			)
-			if region_id >= 0 and region_id < game_state.region_colors.size():
+			if (
+				region_id >= 0
+				and region_id < game_state.administrative_region_colors.size()
+			):
 				image.set_pixel(
-					city_id, BASE_ROW, game_state.region_colors[region_id]
+					city_id,
+					BASE_ROW,
+					game_state.administrative_region_colors[region_id]
 				)
 			continue
 		var current_owner := city.owner_nation

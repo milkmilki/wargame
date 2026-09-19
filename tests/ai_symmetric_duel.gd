@@ -196,9 +196,7 @@ func _build_symmetric_world() -> GameState:
 		var mirror_col := mini(col, GameState.GRID - 1 - col)
 		city.owner_nation = LEFT_NATION if col < GameState.GRID / 2 else RIGHT_NATION
 		state.recognized_city_owners[city.id] = city.owner_nation
-		city.fort_strength = 12 + (row * 3 + mirror_col * 5) % 17
-		city.fort_strength_max = city.fort_strength
-		city.fort_last_capture_day = -1
+		city.garrison_defense_base = 3 + (row + mirror_col) % 3
 		city.manpower_per_month = 7 + (row * 7 + mirror_col * 11) % 8
 		city.gold_per_month = 6 + (row * 2 + mirror_col * 3) % 10
 		city.food_per_half_year = 600 + (row * 17 + mirror_col * 29) % 201
@@ -321,10 +319,8 @@ func _validate_symmetry(state: GameState) -> bool:
 			if (
 				left.owner_nation != LEFT_NATION
 				or right.owner_nation != RIGHT_NATION
-				or left.fort_strength != right.fort_strength
-				or left.fort_strength_max != right.fort_strength_max
-				or left.fort_last_capture_day
-					!= right.fort_last_capture_day
+				or left.garrison_manpower != right.garrison_manpower
+				or left.garrison_defense_base != right.garrison_defense_base
 				or left.manpower_per_month != right.manpower_per_month
 				or left.gold_per_month != right.gold_per_month
 				or left.food_per_half_year != right.food_per_half_year
@@ -406,7 +402,6 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 		"granary_food",
 		"last_food_demand",
 		"campaign_preparation_started_day",
-		"campaign_launched_bonus_days",
 	]:
 		if left_nation.get(field) != right_nation.get(field):
 			return "nation.%s left=%s right=%s" % [
@@ -417,8 +412,6 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 	for field in [
 		"food_demand_ema",
 		"ai_aggression",
-		"campaign_preparation_multiplier",
-		"campaign_launched_attack_multiplier",
 	]:
 		if not is_equal_approx(
 			float(left_nation.get(field)),
@@ -519,9 +512,8 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 					mirrored_owner,
 				]
 			for field in [
-				"fort_strength",
-				"fort_strength_max",
-				"fort_last_capture_day",
+				"garrison_manpower",
+				"garrison_defense_base",
 				"manpower_per_month",
 				"gold_per_month",
 				"food_per_half_year",
@@ -704,8 +696,6 @@ func _canonical_army_multiset(
 				army.ai_action,
 				target,
 				army.ai_order_until_day,
-				army.offensive_attack_multiplier,
-				army.offensive_bonus_until_day,
 				army.defensive_deployment_until_day,
 				_reason_shape(army.ai_order_reason),
 			]

@@ -137,7 +137,7 @@ func _state_fp(world: GameState) -> String:
 			city.id,
 			city.owner_nation,
 			world.recognized_owner_of(city.id),
-			city.fort_strength,
+			city.garrison_manpower,
 			city.food_storage,
 		])
 	var nations_fp: Array = []

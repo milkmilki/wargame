@@ -218,7 +218,9 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 	var context: Dictionary = record["battle_context"]
 	battle.holding_side = int(context.get("holding_side", 0))
 	battle.holding_days = float(context.get("holding_days", 0.0))
-	battle.has_garrison = bool(context.get("has_garrison", false))
+	battle.side_b_defends_city = bool(context.get(
+		"side_b_defends_city", false
+	))
 	battle.contact_dist_a = float(context.get("contact_dist_a", 0.0))
 	battle.contact_dist_b = float(context.get("contact_dist_b", 0.0))
 	battle.tactical_key_a = int(context.get("tactical_key_a", 0))
@@ -254,8 +256,11 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 	var city_data: Dictionary = context.get("city", {})
 	if not city_data.is_empty():
 		var city := City.new()
-		city.fort_strength = int(city_data.get("fort_strength", 0))
 		city.food_storage = int(city_data.get("food_storage", 0))
+		city.garrison_manpower = int(city_data.get("garrison_manpower", 0))
+		city.garrison_defense_base = int(city_data.get(
+			"garrison_defense_base", 3
+		))
 		battle.city = city
 	for army_data in record["participants_a"]:
 		battle.side_a.append(_army_from_snapshot(army_data))
@@ -299,9 +304,9 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	army.defense = int(data.get("defense", 10))
 	army.morale = float(data.get("morale", 1.0))
 	army.starving = bool(data.get("starving", false))
-	army.offensive_attack_multiplier = float(data.get(
-		"offensive_attack_multiplier",
-		1.0
+	army.is_city_garrison = bool(data.get("is_city_garrison", false))
+	army.city_garrison_combat_multiplier = float(data.get(
+		"city_garrison_combat_multiplier", 1.0
 	))
 	return army
 
@@ -319,8 +324,9 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
-			"offensive_attack_multiplier":
-				army.offensive_attack_multiplier,
+			"is_city_garrison": army.is_city_garrison,
+			"city_garrison_combat_multiplier":
+				army.city_garrison_combat_multiplier,
 		})
 	return result
 
@@ -342,12 +348,13 @@ static func _snapshots_equal(
 			"attack",
 			"defense",
 			"starving",
+			"is_city_garrison",
 		]:
 			if a.get(key) != e.get(key):
 				return false
 		for key in [
 			"morale",
-			"offensive_attack_multiplier",
+			"city_garrison_combat_multiplier",
 		]:
 			if not is_equal_approx(
 				float(a.get(key, 0.0)),

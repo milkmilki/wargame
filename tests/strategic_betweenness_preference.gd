@@ -13,8 +13,6 @@ func _init() -> void:
 	for city in [low_city, high_city]:
 		city.gold_per_month = 10
 		city.food_per_half_year = 100
-		city.fort_strength = 0
-		city.fort_strength_max = 0
 		city.is_capital = false
 		city.has_warehouse = false
 		city.is_food_hub = false
