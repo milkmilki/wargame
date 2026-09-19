@@ -190,16 +190,21 @@ func _test_capital_income_and_succession_relocation() -> void:
 
 func _test_suzerainty_rulers_share_surname() -> void:
 	var state := GameState.new()
-	state.generate_grid_world(71241)
+	state.generate_world(71241, 2, 20)
 	state._random_ruler_profiles_enabled = true
 	var region: Array[int] = []
-	for city in state.land_cities_of(0):
-		if not city.is_capital:
-			region.append(city.id)
-		if region.size() >= 3:
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if state.cities[center_id].is_capital:
+			continue
+		var candidate := state.expand_enfeoff_to_administrative_states(
+			0, [center_id] as Array[int]
+		)
+		if not candidate.is_empty():
+			region = candidate
 			break
 	var subject_id := state.enfeoff(0, region)
-	_check(subject_id >= 0, "surname fixture failed to create a vassal")
+	_check(subject_id >= 0, "surname fixture failed to create a complete-state vassal")
 	if subject_id < 0:
 		return
 	var root := state.nations[0]
@@ -292,8 +297,10 @@ func _test_puppet_enfeoffment() -> void:
 	ruler.ruler_archetype = RulerProfile.PUPPET
 	ruler.ruler_traits.clear()
 	var initial_cities := state.land_cities_of(0).size()
+	var capital_center := state.administrative_center_of(ruler.capital_city_id)
+	var capital_state_members := state.administrative_members(capital_center)
 	_check(
-		initial_cities > DiplomacyAI.PUPPET_DIRECT_CORE_CITIES,
+		initial_cities > capital_state_members.size(),
 		"puppet fixture does not have enough direct cities"
 	)
 	state.set_diplomatic_relation(
@@ -320,7 +327,7 @@ func _test_puppet_enfeoffment() -> void:
 	var grants := 0
 	while (
 		state.land_cities_of(0).size()
-			> DiplomacyAI.PUPPET_DIRECT_CORE_CITIES
+			> capital_state_members.size()
 		and grants < 32
 	):
 		var actions: Array[Dictionary] = []
@@ -347,10 +354,15 @@ func _test_puppet_enfeoffment() -> void:
 		grants >= 2,
 		"puppet ruler could not enfeoff repeatedly without advancing world time"
 	)
+	var direct_city_ids: Array[int] = []
+	for city in state.land_cities_of(0):
+		direct_city_ids.append(city.id)
+	direct_city_ids.sort()
+	capital_state_members.sort()
 	_check(
-		state.land_cities_of(0).size() == DiplomacyAI.PUPPET_DIRECT_CORE_CITIES,
-		"puppet ruler did not reduce direct rule to the capital core without a cooldown: initial=%d current=%d grants=%d"
-		% [initial_cities, state.land_cities_of(0).size(), grants]
+		direct_city_ids == capital_state_members,
+		"puppet ruler did not retain exactly the capital state: initial=%d direct=%s capital_state=%s grants=%d"
+		% [initial_cities, str(direct_city_ids), str(capital_state_members), grants]
 	)
 	var capital_hops := RebellionSystem.capital_hops(state, 0)
 	var reachable_land := 0

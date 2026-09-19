@@ -23,6 +23,7 @@ enum FoodPosture {
 }
 
 const MIN_WAR_DAYS: int = 180
+const PEACE_STALEMATE_DAYS: int = 720
 const WAR_FATIGUE_REFERENCE_DAYS: int = 360
 const MIN_NEUTRAL_DAYS: int = 90
 const MIN_ALLIANCE_DAYS: int = 360
@@ -120,7 +121,6 @@ const ENFEOFF_FAR_HOP_FRACTION: float = 0.5
 const ENFEOFF_MIN_OVERLORD_CITIES_AFTER: int = 6    ## 分封后宗主至少保留的陆城数
 const ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD: float = 3.5
 const ENFEOFF_GOVERNANCE_SCORE_WEIGHT: float = 0.75
-const PUPPET_DIRECT_CORE_CITIES: int = 3
 const ENFEOFF_TARGET_DIRECT_CITIES_FIELD: String = "enfeoff_target_direct_cities"
 const ENFEOFF_MAX_REGION_CITIES_FIELD: String = "enfeoff_max_region_cities"
 const ENFEOFF_FOREIGN_FRONTIER_FIELD: String = "enfeoff_require_foreign_frontier"
@@ -761,8 +761,13 @@ static func peace_assessment(
 					state.relation_since(member_a, member_b)
 				)
 	var war_days := state.day - war_started_day
-	var consent_a := score_a >= PEACE_ACCEPT_SCORE
-	var consent_b := score_b >= PEACE_ACCEPT_SCORE
+	var stalemate := (
+		war_days >= PEACE_STALEMATE_DAYS
+		and absf(float(breakdown_a.get("situation_score", 0.0))) <= 0.75
+		and absf(float(breakdown_b.get("situation_score", 0.0))) <= 0.75
+	)
+	var consent_a := score_a >= PEACE_ACCEPT_SCORE or stalemate
+	var consent_b := score_b >= PEACE_ACCEPT_SCORE or stalemate
 	return {
 		"acceptable": (
 			war_days >= MIN_WAR_DAYS
@@ -772,6 +777,7 @@ static func peace_assessment(
 		),
 		"consent_a": consent_a,
 		"consent_b": consent_b,
+		"stalemate": stalemate,
 		"score_a": score_a,
 		"score_b": score_b,
 		"willingness_a": score_a,
@@ -5706,10 +5712,15 @@ static func _grow_enfeoff_region(
 			region.append(neighbor)
 			frontier_queue.append(neighbor)
 	region.sort()
-	return state.enfeoff_region_closure(
+	# Convert the city-growth candidate to complete administrative states.  A
+	# partial state is never emitted as a vassal action.
+	var complete_states := state.expand_enfeoff_to_administrative_states(
 		nation_id,
 		region
 	)
+	if complete_states.is_empty() or complete_states.size() > max_region_cities:
+		return [] as Array[int]
+	return state.normalize_enfeoff_region(nation_id, complete_states)
 
 
 ## 统一的下一封区规划入口。普通分封与复合分封动作均从当前真实领土状态
@@ -5743,6 +5754,27 @@ static func next_enfeoff_region(
 		mini(max_region_cities, max_grant),
 		require_foreign_frontier
 	)
+	if region.is_empty():
+		# After a peace settlement the frontier seed may be split across states.
+		# Fall back to a complete non-capital state so enfeoffment does not become
+		# permanently disabled just because no city-growth seed is eligible.
+		var centers: Array[int] = []
+		for center_value in state.administrative_center_city_ids:
+			centers.append(int(center_value))
+		EquivariantOrder.sort_city_ids(centers, state, nation_id)
+		for center_id in centers:
+			if state.cities[center_id].is_capital:
+				continue
+			var candidate := state.normalize_enfeoff_region(
+				nation_id,
+				[center_id]
+			)
+			if (
+				not candidate.is_empty()
+				and candidate.size() <= mini(max_region_cities, max_grant)
+			):
+				region = candidate
+				break
 	if enfeoff_land_city_count(state, region) > max_grant:
 		return [] as Array[int]
 	return region
@@ -5761,6 +5793,23 @@ static func enfeoff_land_city_count(
 		):
 			count += 1
 	return count
+
+
+static func puppet_capital_state_city_ids(
+	state: GameState,
+	nation_id: int
+) -> Array[int]:
+	if (
+		state == null
+		or nation_id < 0
+		or nation_id >= state.nations.size()
+	):
+		return [] as Array[int]
+	var capital_id := state.nations[nation_id].capital_city_id
+	var center_id := state.administrative_center_of(capital_id)
+	if center_id < 0:
+		return [] as Array[int]
+	return state.administrative_members(center_id)
 
 ## 该城是否为本国边疆城：至少有一条正容量边通往非本国可通行的城。
 static func _city_is_frontier(
@@ -5819,21 +5868,42 @@ static func _collect_enfeoff_actions(
 		):
 			continue
 		var owned_city_count := state.land_cities_of(overlord_id).size()
+		var puppet_core: Array[int] = []
+		if puppet_rule:
+			puppet_core = puppet_capital_state_city_ids(
+				state, overlord_id
+			)
+		var puppet_core_complete := not puppet_core.is_empty()
+		for city_id in puppet_core:
+			if (
+				state.cities[city_id].owner_nation != overlord_id
+				or state.recognized_owner_of(city_id) != overlord_id
+			):
+				puppet_core_complete = false
+				break
+		if puppet_rule and not puppet_core_complete:
+			continue
 		var minimum_core := (
-			PUPPET_DIRECT_CORE_CITIES
+			puppet_core.size()
 			if puppet_rule else ENFEOFF_MIN_OVERLORD_CITIES_AFTER
 		)
 		var max_grant := owned_city_count - minimum_core
+		var max_region_cities := (
+			owned_city_count
+			if puppet_rule else ENFEOFF_MAX_REGION_CITIES
+		)
 		var region := next_enfeoff_region(
 			state,
 			overlord_id,
 			minimum_core,
-			ENFEOFF_MAX_REGION_CITIES,
+			max_region_cities,
 			not puppet_rule,
 			evaluation_cache
 		)
 		var region_land_cities := enfeoff_land_city_count(state, region)
-		var minimum_region := 1 if puppet_rule else ENFEOFF_MIN_REGION_CITIES
+		# Administrative states are already the minimum political unit; a
+		# one-city state is valid and must not be rejected as a府-only fief.
+		var minimum_region := 1
 		if region_land_cities < minimum_region or region_land_cities > max_grant:
 			continue
 		# 分封后宗主必须保留足够核心领土。
@@ -5862,10 +5932,7 @@ static func _collect_enfeoff_actions(
 		var governance_pressure_score := float(
 			governance["pressure_score"]
 		)
-		var governance_justifies := (
-			governance_pressure_score >= ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
-			and governance_city_count >= 1
-		)
+		var governance_justifies := governance_city_count >= 1
 		if (
 			fiscal_benefit <= 0
 			and not governance_justifies
@@ -5875,12 +5942,12 @@ static func _collect_enfeoff_actions(
 		var motive_parts: Array[String] = []
 		if puppet_rule:
 			motive_parts.append(
-				"傀儡君主主动缩减直辖，目标保留首都核心%d城"
-				% PUPPET_DIRECT_CORE_CITIES
+				"傀儡君主主动缩减直辖，仅保留首都所在州%d城"
+				% minimum_core
 			)
 		if governance_justifies:
 			motive_parts.append(
-				"治理压力%d城超行政半径（半径%.1f，压力%.2f）"
+				"偏远州%d城超行政半径（半径%.1f，压力%.2f）"
 				% [
 					governance_city_count,
 					float(governance["administrative_radius"]),
@@ -5925,7 +5992,7 @@ static func _collect_enfeoff_actions(
 		if puppet_rule:
 			enfeoff_action[ENFEOFF_TARGET_DIRECT_CITIES_FIELD] = minimum_core
 			enfeoff_action[ENFEOFF_MAX_REGION_CITIES_FIELD] = (
-				ENFEOFF_MAX_REGION_CITIES
+				max_region_cities
 			)
 			enfeoff_action[ENFEOFF_FOREIGN_FRONTIER_FIELD] = false
 		actions.append(enfeoff_action)

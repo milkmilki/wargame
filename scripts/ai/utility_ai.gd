@@ -66,6 +66,9 @@ static func choose(
 	)
 	if retreat != null:
 		return retreat
+	var sortie := _state_sortie_candidate(view, army)
+	if sortie != null:
+		return sortie
 	var candidates: Array[ActionCandidate] = []
 	candidates.append(ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "保持当前驻地"))
 	var defense := active_defense_plan.candidate_for(
@@ -137,6 +140,71 @@ static func choose(
 		)
 	)
 	return candidates[0]
+
+
+## A threatened state fights the committed enemy field force before attempting
+##府 reclamation.  The same GameState requirement is used by campaign planning,
+##so a sortie is only launched once the local defensive C is sufficient.
+static func _state_sortie_candidate(
+	view: AiWorldView,
+	army: Army
+) -> ActionCandidate:
+	var center_id := view.state.administrative_center_of(army.location_city)
+	if center_id < 0 or view.state.cities[center_id].owner_nation != view.nation_id:
+		return null
+	var required := view.state.campaign_field_requirement(
+		view.nation_id, center_id
+	)
+	if required <= 0:
+		return null
+	var committed := 0
+	for friendly in view.friendly_armies:
+		if (
+			friendly.size > 0
+			and friendly.state != Army.State.RECOVERING
+			and view.state.administrative_center_of(friendly.location_city) == center_id
+		):
+			committed += friendly.size
+	if committed < required:
+		return null
+	var target := -1
+	var strongest := -1
+	for enemy in view.enemy_armies:
+		if enemy.size <= 0:
+			continue
+		var enemy_city := enemy.location_city
+		if enemy.on_edge:
+			if (
+				enemy.move_to >= 0
+				and view.state.administrative_center_of(enemy.move_to) == center_id
+			):
+				enemy_city = enemy.move_to
+			elif (
+				enemy.move_from >= 0
+				and view.state.administrative_center_of(enemy.move_from) == center_id
+			):
+				enemy_city = enemy.move_from
+		if enemy_city < 0:
+			continue
+		if view.state.administrative_center_of(enemy_city) != center_id:
+			continue
+		if enemy.size > strongest or (
+			enemy.size == strongest
+			and EquivariantOrder.city_id_less(
+				view.state, view.nation_id, enemy_city, target
+			)
+		):
+			strongest = enemy.size
+			target = enemy_city
+	if target < 0:
+		return null
+	return ActionCandidate.make(
+		ActionCandidate.Kind.ATTACK,
+		2500.0,
+		"州防守：C=%d达到出城野战需求%d，优先攻击敌军%d"
+			% [committed, required, target],
+		target
+	)
 
 
 ## 州治守军折算为守城战力，并复用断粮效率衰减。

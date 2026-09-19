@@ -1,11 +1,11 @@
 extends SceneTree
-## 终局回归：国家0仅剩城9和四支5000守军；国家1控制其他全部城市，
-## 从零重建主战军。测试主动把城9入口正面设为10000；15000重军可完整通行，
-## 但攻势规划仍只按该入口战斗正面计算首轮可展开兵力。
+## 终局回归：国家0仅剩州治首都和四支5000守军；国家1控制其他全部城市，
+## 从零重建主战军。即使 C 起初不足，州战役也必须先进入集结流程，不能在
+## “州治尚不可攻击”和“尚未分配军队增加 C”之间形成循环等待。
 
 const REMNANT_ID: int = 0
 const DOMINANT_ID: int = 1
-const LAST_CITY_ID: int = 9
+const LAST_CITY_ID: int = 3
 const RUN_DAYS: int = 720
 
 
@@ -15,6 +15,7 @@ func _init() -> void:
 	root.add_child(sim)
 	sim.setup(state)
 	sim.diplomacy_enabled = false
+	sim.enfeoff_enabled = false
 	var initial_demand := sim._campaign_target_group_demand(
 		DOMINANT_ID, LAST_CITY_ID
 	)
@@ -40,14 +41,14 @@ func _init() -> void:
 							.duplicate(true),
 						"reason": army.ai_order_reason,
 					}
-		launched = launched or nation.campaign_offensive_count > 0
+		launched = not first_attack.is_empty()
 		captured = state.cities[LAST_CITY_ID].owner_nation == DOMINANT_ID
-		if captured or not state.is_enemy(DOMINANT_ID, REMNANT_ID):
+		if launched or captured or not state.is_enemy(DOMINANT_ID, REMNANT_ID):
 			break
 	print(
-		"verdict=%s day=%d launched=%s owner9=%d groups=%d main=%s force=%s prep=%s first=%s initial=%s"
+		"verdict=%s day=%d launched=%s owner=%d groups=%d main=%s force=%s prep=%s first=%s initial=%s administrative=%s"
 		% [
-			"LAST_CITY_CAPTURED" if captured else "LAST_CITY_STALLED",
+			"LAST_CAPITAL_ATTACK_LAUNCHED" if launched else "LAST_CAPITAL_STALLED",
 			state.day,
 			str(launched),
 			state.cities[LAST_CITY_ID].owner_nation,
@@ -65,10 +66,11 @@ func _init() -> void:
 			}),
 			str(first_attack),
 			str(initial_demand),
+			str(_administrative_snapshot(state)),
 		]
 	)
 	sim.free()
-	quit(0 if captured else 1)
+	quit(0 if launched else 1)
 
 
 func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
@@ -87,9 +89,49 @@ func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
 	return result
 
 
+func _administrative_snapshot(state: GameState) -> Dictionary:
+	var center_id := state.administrative_center_of(LAST_CITY_ID)
+	var plan := state.nations[DOMINANT_ID].administrative_campaign_plan
+	var defender_armies: Array[Dictionary] = []
+	for army in state.armies:
+		if army.owner_nation == REMNANT_ID:
+			defender_armies.append({
+				"id": army.id,
+				"size": army.size,
+				"state": army.state,
+				"city": army.current_city_node(),
+			})
+	return {
+		"center": center_id,
+		"is_zhou": state.is_zhou_city(LAST_CITY_ID),
+		"center_owner": (
+			state.cities[center_id].owner_nation if center_id >= 0 else -1
+		),
+		"objective_center": state.nations[
+			DOMINANT_ID
+		].campaign_objective_center_city,
+		"plan_center": plan.center_city_id if plan != null else -1,
+		"plan_phase": plan.phase if plan != null else -1,
+		"assignments": (
+			plan.army_assignments.duplicate() if plan != null else {}
+		),
+		"C": state.campaign_committed_manpower(DOMINANT_ID, center_id),
+		"R": state.campaign_siege_requirement(DOMINANT_ID, center_id),
+		"V": state.campaign_reinforcement_threat(
+			DOMINANT_ID, center_id, 60
+		),
+		"garrison": state.cities[center_id].garrison_manpower if center_id >= 0 else -1,
+		"defender_armies": defender_armies,
+	}
+
+
 func _build_fixture() -> GameState:
 	var state := GameState.new()
 	state.generate_world(12345, 4)
+	assert(
+		state.is_zhou_city(LAST_CITY_ID),
+		"末城夹具必须选择行政州治"
+	)
 	state.day = 60 * 365
 	state.armies.clear()
 	state.battles.clear()
@@ -128,19 +170,19 @@ func _build_fixture() -> GameState:
 		DOMINANT_ID,
 		REMNANT_ID,
 		LAST_CITY_ID,
-		"last-city route-capacity regression"
+		"last-capital administrative campaign regression"
 	)
 	var staging := DiplomacyAI.staging_cities_for_objective(
 		state,
 		DOMINANT_ID,
 		LAST_CITY_ID
 	)
-	assert(not staging.is_empty(), "城9必须存在合法集结城市")
+	assert(not staging.is_empty(), "末州首都必须存在合法集结城市")
 	var entry_edge := state.edge_of(staging[0], LAST_CITY_ID)
 	assert(
 		entry_edge != null
 			and entry_edge.max_manpower > 0,
-		"城9必须存在正容量入口"
+		"末州首都必须存在正容量入口"
 	)
 	entry_edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
 	entry_edge.base_max_manpower = Edge.TERRAIN_LOW_MANPOWER

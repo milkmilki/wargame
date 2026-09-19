@@ -571,6 +571,7 @@ static func _build_battles(
 	var side_b_defends_city := PackedByteArray()
 	var finished := PackedByteArray()
 	var winner_side := PackedInt32Array()
+	var field_rout_attrition_multiplier := PackedFloat64Array()
 	var side_a_offsets := PackedInt32Array([0])
 	var side_a_armies := PackedInt32Array()
 	var side_b_offsets := PackedInt32Array([0])
@@ -610,6 +611,9 @@ static func _build_battles(
 		side_b_defends_city.append(int(battle.side_b_defends_city))
 		finished.append(int(battle.finished))
 		winner_side.append(battle.winner_side)
+		field_rout_attrition_multiplier.append(
+			battle.field_rout_attrition_multiplier
+		)
 		for army in battle.side_a:
 			side_a_armies.append(
 				int(army_indices.get(army, -1))
@@ -670,6 +674,7 @@ static func _build_battles(
 		"side_b_defends_city": side_b_defends_city,
 		"finished": finished,
 		"winner_side": winner_side,
+		"field_rout_attrition_multiplier": field_rout_attrition_multiplier,
 		"side_a_offsets": side_a_offsets,
 		"side_a_armies": side_a_armies,
 		"side_b_offsets": side_b_offsets,

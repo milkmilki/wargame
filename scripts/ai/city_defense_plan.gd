@@ -2617,7 +2617,10 @@ func _friendly_local_power(city_id: int) -> float:
 			)
 		):
 			continue
-		total += ArmyPower.effective(army)
+		total += (
+			ArmyPower.effective(army)
+			* Combat.holding_defense_multiplier(true)
+		)
 	return total
 
 

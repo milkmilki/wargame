@@ -19,13 +19,18 @@ func _run() -> void:
 				GameState.DiplomaticRelation.NEUTRAL
 			)
 	var region: Array[int] = []
-	for city in state.land_cities_of(0):
-		if not city.is_capital:
-			region.append(city.id)
-		if region.size() >= 3:
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if state.cities[center_id].is_capital:
+			continue
+		var candidate := state.expand_enfeoff_to_administrative_states(
+			0, [center_id] as Array[int]
+		)
+		if not candidate.is_empty():
+			region = candidate
 			break
 	var subject := state.enfeoff(0, region)
-	_check(subject > 0, "三城藩王测试夹具必须分封成功")
+	_check(subject > 0, "完整州藩王测试夹具必须分封成功")
 	if subject <= 0:
 		_finish()
 		return
@@ -95,7 +100,8 @@ func _run() -> void:
 	)
 	var nation := state.nations[subject]
 	_check(
-		nation.campaign_preparation_started_day >= 0
+		nation.administrative_campaign_plan != null
+			or nation.campaign_preparation_started_day >= 0
 			or nation.campaign_preparation_plan != null
 			or not nation.campaign_preparation_assignments.is_empty()
 			or not nation.campaign_attack_assignments.is_empty(),

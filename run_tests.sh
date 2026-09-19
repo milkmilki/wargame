@@ -61,6 +61,12 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-administrative-peace.log"
 echo
 
+echo "==> [2d1/29] 和平飞地转移门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/peace_enclave.gd \
+  --log-file "$LOG_DIR/world-war-peace-enclave.log"
+echo
+
 echo "==> [2e/29] 行政州战争目标门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/administrative_ai_objective.gd \
@@ -88,10 +94,21 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/garrison_campaign_ai.gd \
   --log-file "$LOG_DIR/world-war-garrison-campaign-ai.log"
 echo
+echo "==> [2i1/29] 敌方末州首都进攻门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/last_city_offensive_stall.gd \
+  --log-file "$LOG_DIR/world-war-last-capital-offensive.log"
+echo
 echo "==> [2j/29] 州治守军战损比门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/garrison_combat_ratio.gd \
   --log-file "$LOG_DIR/world-war-garrison-combat-ratio.log"
+echo
+
+echo "==> [2k/29] 州级藩王、野战姿态与慢速补员门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/state_war_posture.gd \
+  --log-file "$LOG_DIR/world-war-state-war-posture.log"
 echo
 echo "==> [3/29] 主战军/填线军兵棋角色 smoke"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
@@ -201,6 +218,12 @@ echo "==> [22b/29] 君主继位与夸张特质门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/ruler_succession_extremes.gd \
   --log-file "$LOG_DIR/world-war-ruler-succession-extremes.log"
+echo
+
+echo "==> [22c/29] 完整州藩王常规军事 AI 门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/vassal_regular_military_ai.gd \
+  --log-file "$LOG_DIR/world-war-vassal-regular-military-ai.log"
 echo
 
 echo "==> [23/29] 高程图打包与海岸无插值门禁"

@@ -68,6 +68,10 @@ var side_b_defends_city: bool = false
 # 结束态（由 Combat 解算后置位，Simulation 读取处理善后）
 var finished: bool = false
 var winner_side: int = 0         ## 1=side_a 胜，2=side_b 胜，0=未决
+## Set by Simulation when a FIELD battle resolves through a rout.  Kept on the
+## battle object so logs/replays can distinguish pursuit attrition from normal
+## round casualties.
+var field_rout_attrition_multiplier: float = 1.0
 
 
 ## 一侧的兵力加权平均有效士气；攻势准备期间读取与攻击加成同源的临时倍率。

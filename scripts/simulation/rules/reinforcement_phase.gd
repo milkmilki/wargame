@@ -104,7 +104,7 @@ static func _build_plans(
 			continue
 		var deficit := mini(
 			maxi(_target_size(army, at_war) - army.size, 0),
-			ReinforcementRules.REINFORCE_PER_ARMY_PER_MONTH
+			ReinforcementRules.monthly_reinforcement_cap(army)
 		)
 		if deficit <= 0:
 			continue
@@ -197,8 +197,6 @@ static func _apply_grants(plans: Array) -> int:
 
 
 static func _target_size(army: Army, at_war: bool) -> int:
-	if at_war:
-		return army.max_size
-	return int(ceil(
-		float(army.max_size) * ReinforcementRules.PEACETIME_STRENGTH_RATIO
-	))
+	# A damaged formation eventually returns to its establishment in both war
+	# and peace; the ten-percent monthly cap controls the pace.
+	return army.max_size

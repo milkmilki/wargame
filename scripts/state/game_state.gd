@@ -2233,12 +2233,88 @@ func campaign_committed_manpower(
 		attacker_bloc.append(attacker_id)
 	var result := 0
 	for army in armies:
-		if army == null or army.size <= 0 or not attacker_bloc.has(army.owner_nation):
+		if (
+			army == null
+			or not attacker_bloc.has(army.owner_nation)
+			or not army_committed_to_administrative_campaign(
+				army, center_city_id
+			)
+		):
+			continue
+		result += army.size
+	return result
+
+
+func army_committed_to_administrative_campaign(
+	army: Army,
+	center_city_id: int
+) -> bool:
+	if (
+		army == null
+		or army.size <= 0
+		or army.owner_nation < 0
+		or army.owner_nation >= nations.size()
+		or army.state in [Army.State.RETREATING, Army.State.RECOVERING]
+		or army.defensive_deployment_until_day > day
+	):
+		return false
+	var plan := nations[army.owner_nation].administrative_campaign_plan
+	if (
+		plan == null
+		or plan.center_city_id != center_city_id
+		or not plan.army_assignments.has(army.id)
+	):
+		return false
+	var assigned_target := int(plan.army_assignments[army.id])
+	var target := army.ai_target_city
+	return (
+		(
+			target >= 0
+			and target < cities.size()
+			and administrative_center_of(target) == center_city_id
+		)
+		or (
+			army.state == Army.State.IDLE
+			and army.location_city == assigned_target
+		)
+	)
+
+
+## Field force required for a defender to sortie against the committed enemy
+## force in a state.  Garrison manpower is deliberately kept separate: it
+## anchors the center but does not count as a mobile field army.
+func campaign_field_requirement(
+	defender_id: int,
+	center_city_id: int
+) -> int:
+	if not is_zhou_city(center_city_id):
+		return 0
+	var enemy_committed := 0
+	for army in armies:
+		if army == null or army.size <= 0 or army.state == Army.State.RECOVERING:
 			continue
 		var target := army.ai_target_city
-		if target >= 0 and administrative_center_of(target) == center_city_id:
-			result += army.size
-	return result
+		var targets_state := (
+			target >= 0
+			and administrative_center_of(target) == center_city_id
+		)
+		var occupies_state := (
+			army.location_city >= 0
+			and administrative_center_of(army.location_city) == center_city_id
+		)
+		if army.on_edge:
+			occupies_state = occupies_state or (
+				army.move_from >= 0
+				and administrative_center_of(army.move_from) == center_city_id
+			) or (
+				army.move_to >= 0
+				and administrative_center_of(army.move_to) == center_city_id
+			)
+		if not targets_state and not occupies_state:
+			continue
+		if is_enemy(defender_id, army.owner_nation):
+			enemy_committed += army.size
+	return ceili(float(enemy_committed) * 1.25)
 
 
 func reinforce_city_garrisons_monthly() -> int:
@@ -5164,6 +5240,15 @@ func suzerainty_structure_valid() -> bool:
 		)
 		if relation_between(subject_id, overlord_id) != expected:
 			return false
+		# A vassal is a state-level polity, never a府-only fragment.
+		var subject_has_center := false
+		for center_value in administrative_center_city_ids:
+			var center_id := int(center_value)
+			if recognized_owner_of(center_id) == subject_id:
+				subject_has_center = true
+				break
+		if not subject_has_center:
+			return false
 		# 3. 沿宗主链上溯必须在有限步内终止（无环、单一宗主）。
 		var walker := overlord_id
 		var guard := 0
@@ -5278,10 +5363,11 @@ func enfeoff(
 	city_ids: Array[int],
 	tribute_rate: float = DEFAULT_TRIBUTE_RATE
 ) -> int:
-	city_ids = enfeoff_region_closure(
-		overlord_id,
-		city_ids
-	)
+	# Vassal fiefs are administrative units: normalize any府-level request to
+	# complete states before the closure/transaction code runs.
+	city_ids = normalize_enfeoff_region(overlord_id, city_ids)
+	if city_ids.is_empty():
+		return -1
 	if not _can_enfeoff(overlord_id, city_ids):
 		return -1
 	var overlord := nations[overlord_id]
@@ -5335,26 +5421,18 @@ func enfeoff(
 		"last_centralization_day": -1,
 		"civil_war": false,
 	}
-	var region_centroid := Vector2.ZERO
+	var capital_candidates: Array[int] = []
 	for city_id in city_ids:
-		region_centroid += cities[city_id].map_position
-	region_centroid /= float(city_ids.size())
-	var capital_id := city_ids[0]
-	var capital_distance := INF
-	for city_id in city_ids:
-		if cities[city_id].is_dock:
-			continue
-		var distance := cities[city_id].map_position.distance_squared_to(
-			region_centroid
-		)
-		if distance < capital_distance or (
-			is_equal_approx(distance, capital_distance)
-			and EquivariantOrder.city_id_less(
-				self, subject.id, city_id, capital_id
-			)
+		if (
+			not cities[city_id].is_dock
+			and is_zhou_city(city_id)
 		):
-			capital_distance = distance
-			capital_id = city_id
+			capital_candidates.append(city_id)
+	if capital_candidates.is_empty():
+		nations.pop_back()
+		return -1
+	EquivariantOrder.sort_city_ids(capital_candidates, self, subject.id)
+	var capital_id := capital_candidates[0]
 	var territory_operations: Array[Dictionary] = []
 	for city_id in city_ids:
 		territory_operations.append({
@@ -5410,6 +5488,76 @@ func enfeoff(
 		"分封迁移军队后战团结构不变量必须成立"
 	)
 	return subject.id
+
+
+## Expand a proposed fief to complete administrative states.  A state is valid
+## only when its center and every land member are still controlled and legally
+## owned by the overlord; docks remain independent nodes and cannot silently
+## become a府-only vassal.
+func expand_enfeoff_to_administrative_states(
+	overlord_id: int,
+	proposed_city_ids: Array[int]
+) -> Array[int]:
+	if (
+		overlord_id < 0
+		or overlord_id >= nations.size()
+		or proposed_city_ids.is_empty()
+	):
+		return [] as Array[int]
+	var requested_centers := {}
+	for city_id in proposed_city_ids:
+		if (
+			city_id < 0
+			or city_id >= cities.size()
+			or cities[city_id].is_dock
+		):
+			return [] as Array[int]
+		var center_id := administrative_center_of(city_id)
+		if center_id < 0:
+			return [] as Array[int]
+		requested_centers[center_id] = true
+	var result := {}
+	for center_value in requested_centers:
+		var center_id := int(center_value)
+		for member_id in administrative_members(center_id):
+			if (
+				cities[member_id].is_dock
+				or cities[member_id].owner_nation != overlord_id
+				or recognized_owner_of(member_id) != overlord_id
+			):
+				return [] as Array[int]
+			result[member_id] = true
+	var expanded: Array[int] = []
+	for city_id_value in result:
+		expanded.append(int(city_id_value))
+	expanded.sort()
+	return expanded
+
+
+func normalize_enfeoff_region(
+	overlord_id: int,
+	proposed_city_ids: Array[int]
+) -> Array[int]:
+	var normalized := expand_enfeoff_to_administrative_states(
+		overlord_id, proposed_city_ids
+	)
+	if normalized.is_empty():
+		return normalized
+	# A closure may add disconnected holdings from other states. Expand those
+	# additions to complete states, then recompute the closure until stable.
+	var guard := maxi(administrative_region_count, 1) + 1
+	while guard > 0:
+		guard -= 1
+		var closure := enfeoff_region_closure(overlord_id, normalized)
+		var next := expand_enfeoff_to_administrative_states(
+			overlord_id, closure
+		)
+		if next.is_empty():
+			return next
+		if next == normalized:
+			return normalized
+		normalized = next
+	return [] as Array[int]
 
 
 ## 把一次兼并追加到现有虚拟领土计划。draft 的五个字段均是完整快照：
@@ -5816,6 +5964,7 @@ func enfeoff_region_closure(
 	for city in cities:
 		if (
 			city.owner_nation == overlord_id
+			and not city.is_dock
 			and not reachable.has(city.id)
 		):
 			region[city.id] = true
@@ -5844,6 +5993,7 @@ func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 			city_id < 0
 			or city_id >= cities.size()
 			or seen.has(city_id)
+			or cities[city_id].is_dock
 			or cities[city_id].owner_nation != overlord_id
 			or recognized_owner_of(city_id) != overlord_id
 			or cities[city_id].is_capital
@@ -5866,6 +6016,18 @@ func _can_enfeoff(overlord_id: int, city_ids: Array[int]) -> bool:
 	)
 	if closure.size() != seen.size():
 		return false
+	var closure_set := {}
+	for city_id in closure:
+		closure_set[city_id] = true
+	for city_id in closure:
+		if cities[city_id].is_dock:
+			return false
+		var center_id := administrative_center_of(city_id)
+		if center_id < 0 or not closure_set.has(center_id):
+			return false
+		for member_id in administrative_members(center_id):
+			if not closure_set.has(member_id):
+				return false
 	return true
 
 

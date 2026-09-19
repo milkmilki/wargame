@@ -2,10 +2,16 @@ class_name ReinforcementRules
 extends RefCounted
 ## Pure reinforcement policy shared by synchronous and frame-sliced simulation.
 
-const REINFORCE_PER_ARMY_PER_MONTH: int = 750
+## Replenishment is deliberately slow: a full 15000-person army can recover
+## at most ten percent of its establishment each month.
+const REINFORCE_PER_ARMY_PER_MONTH: int = 1500
 const PEACETIME_MANPOWER_RESERVE: int = 5000
 const PEACETIME_STRENGTH_RATIO: float = 0.30
 const WARTIME_MANPOWER_RESERVE: int = 3000
+
+
+static func monthly_reinforcement_cap(army: Army) -> int:
+	return maxi(int(ceil(float(army.max_size) * 0.10)), 1)
 
 
 static func bucket_armies_by_nation(state: GameState) -> Dictionary:
@@ -43,7 +49,7 @@ static func wartime_manpower_reserve(armies: Array[Army]) -> int:
 			continue
 		monthly_refill_need += mini(
 			army.max_size - army.size,
-			REINFORCE_PER_ARMY_PER_MONTH
+			monthly_reinforcement_cap(army)
 		)
 	return maxi(WARTIME_MANPOWER_RESERVE, monthly_refill_need)
 
@@ -58,17 +64,18 @@ static func can_reinforce_army(
 		return false
 	if army.state in [Army.State.FIGHTING, Army.State.RETREATING]:
 		return false
-	if army.state not in [
-		Army.State.IDLE,
-		Army.State.MOVING,
-		Army.State.RECOVERING,
-		Army.State.HOLDING,
-	]:
+	if army.state not in [Army.State.IDLE, Army.State.RECOVERING]:
 		return false
-	if network_cache_disabled or manpower_hub_network.is_empty():
-		return Pathfinding.can_reach_manpower_hub(state, army)
-	return Pathfinding.can_reach_manpower_hub_from_network(
-		state,
-		army,
-		manpower_hub_network
-	)
+	# Recovery is only meaningful while the formation is safely settled in a
+	# city.  A marching army must first reach a friendly garrison.
+	if army.on_edge:
+		return false
+	var city_id := army.location_city
+	if city_id < 0 or city_id >= state.cities.size():
+		return false
+	var city := state.cities[city_id]
+	if city.is_dock and not state.has_military_access(army.owner_nation, city.owner_nation):
+		return false
+	if not state.has_military_access(army.owner_nation, city.owner_nation):
+		return false
+	return true

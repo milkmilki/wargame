@@ -54,6 +54,8 @@ const REINFORCE_MORALE_MAX: float = 0.20
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
 const DEFENSE_DANGER_K: float = 0.40       ## 初始防御惩罚系数
 const HOLDING_TAU_DAYS: float = 30.0       ## 驻防适应时间常数
+const HOLDING_ATTACK_MULTIPLIER: float = 0.60
+const HOLDING_DEFENSE_MULTIPLIER: float = 1.50
 ## 关隘（chokepoint）连续曲线（item 9：去数值断崖）。danger≥ONSET 进入"隘口带"：攻击倍率
 ## 从 ONSET 处的常规线性值连续、单调地降到 danger=1.0 时的地板 FLOOR，不再在阈值处硬跳变。
 ## 由此「地形参数小幅变化只产生小幅结果变化」（无 0.001 跨阈战力减半），同时极端地形仍强力压制进攻。
@@ -67,6 +69,14 @@ const SIEGE_STARVE_DEF_MULT: float = 0.3     ## 粮尽守军城防加成衰减�
 ## 全静态：调用方（Simulation/测试）负责开关与清空。镜像安全——只读快照、不改任何战斗数值。
 static var battle_log_enabled: bool = false
 static var battle_log: Array[Dictionary] = []
+
+
+static func holding_attack_multiplier(is_holding: bool) -> float:
+	return HOLDING_ATTACK_MULTIPLIER if is_holding else 1.0
+
+
+static func holding_defense_multiplier(is_holding: bool) -> float:
+	return HOLDING_DEFENSE_MULTIPLIER if is_holding else 1.0
 
 
 static func clear_battle_log() -> void:
@@ -347,9 +357,11 @@ static func resolve_round(
 	if battle.kind == Battle.Kind.FIELD:
 		var terrain_attack_penalty := attack_multiplier(danger)
 		if battle.holding_side == 1:
-			attack_pen_b = terrain_attack_penalty
+			attack_pen_b = terrain_attack_penalty * holding_attack_multiplier(true)
+			defense_pen_b *= holding_defense_multiplier(true)
 		elif battle.holding_side == 2:
-			attack_pen_a = terrain_attack_penalty
+			attack_pen_a = terrain_attack_penalty * holding_attack_multiplier(true)
+			defense_pen_a *= holding_defense_multiplier(true)
 		else:
 			attack_pen_a = terrain_attack_penalty
 			attack_pen_b = terrain_attack_penalty

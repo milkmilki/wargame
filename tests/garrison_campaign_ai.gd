@@ -40,12 +40,48 @@ func _init() -> void:
 	var sim := Simulation.new()
 	sim.setup(state)
 	if valid:
+		# A formation is committed only after a campaign order is accepted.  Busy
+		# formations must not create paper strength that blocks later reinforcement.
+		for army in state.armies:
+			army.state = Army.State.MOVING
+		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		var busy_plan := state.nations[attacker_id].administrative_campaign_plan
+		valid = valid and busy_plan.army_assignments.is_empty()
+		valid = valid and state.campaign_committed_manpower(
+			attacker_id, center_id
+		) == 0
+		for army in state.armies:
+			army.state = Army.State.IDLE
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
 		var plan := state.nations[attacker_id].administrative_campaign_plan
 		valid = valid and plan != null
 		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.CAPTURE_FU
 		valid = valid and plan.tactical_target_city_ids.size() <= 2
 		valid = valid and plan.army_assignments.size() == 3
+		var failed_army_id := int(plan.army_assignments.keys()[0])
+		var failed_army: Army = state.armies.filter(
+			func(army: Army) -> bool: return army.id == failed_army_id
+		)[0]
+		var failed_target := int(plan.army_assignments[failed_army_id])
+		var failed_order := ActionCandidate.make(
+			ActionCandidate.Kind.ATTACK,
+			2000.0,
+			"test rejected campaign command",
+			failed_target
+		)
+		failed_army.state = Army.State.MOVING
+		sim._commit_ordinary_ai_intent(AiCommandIntent.make(
+			failed_army, failed_order, 0, [] as Array[int], false
+		))
+		valid = valid and not plan.army_assignments.has(failed_army_id)
+		failed_army.state = Army.State.IDLE
+		var expected_committed := 0
+		for army in state.armies:
+			if plan.army_assignments.has(army.id):
+				expected_committed += army.size
+		valid = valid and state.campaign_committed_manpower(
+			attacker_id, center_id
+		) == expected_committed
 		for member_id in state.administrative_members(center_id):
 			if member_id != center_id:
 				state.cities[member_id].owner_nation = attacker_id
