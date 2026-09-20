@@ -92,7 +92,7 @@ func _run() -> void:
 
 	var output := OS.get_environment("WW_VISUAL_OUTPUT")
 	if output.is_empty():
-		output = "/tmp/world-war-terrain-3d.png"
+		output = OS.get_temp_dir().path_join("world-war-terrain-3d.png")
 	var image := root.get_texture().get_image()
 	if image == null or image.is_empty():
 		push_error("TERRAIN_3D_VISUAL_EMPTY")
@@ -118,8 +118,7 @@ func _run() -> void:
 
 
 func _prepare_frontend_showcase(state: GameState) -> void:
-	# Cover every high-priority battle-map artifact in one deterministic frame:
-	# campaign arrows, field battle, siege, weak morale and starvation.
+	# Cover field battle, siege, weak morale and starvation in one frame.
 	var frontier_edges: Array[Edge] = []
 	for edge in state.edges:
 		if (
@@ -140,8 +139,9 @@ func _prepare_frontend_showcase(state: GameState) -> void:
 	var siege_edge := (
 		frontier_edges[-1] if frontier_edges.size() > 1 else first
 	)
+	var siege_city := siege_edge.city_b
 	var siege := state.new_battle(Battle.Kind.SIEGE)
-	siege.city = state.cities[siege_edge.city_b]
+	siege.city = state.cities[siege_city]
 	siege.edge = siege_edge
 	state.cities[siege_city].garrison_manpower = int(
 		state.city_garrison_capacity(siege_city) * 0.63
