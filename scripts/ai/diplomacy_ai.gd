@@ -78,8 +78,8 @@ const UNIFICATION_RIVAL_SCARCITY_WEIGHT: float = 0.45
 # 统一时代时钟：40 国均势被“互保联盟 + 盟友参战 + 战争疲劳议和”三重负反馈焊成
 # 稳态，实验证明零星调数值无法收敛到统一。引入随游戏年份单调爬升的全局压力，
 # 前 ONSET 年保持 0（保留自然外交演化），到 FULL 年满值，作为打破均势的总闸。
-const UNIFICATION_ERA_ONSET_YEARS: int = 10
-const UNIFICATION_ERA_FULL_YEARS: int = 40
+const UNIFICATION_ERA_ONSET_YEARS: int = 2
+const UNIFICATION_ERA_FULL_YEARS: int = 20
 const UNIFICATION_ERA_WEIGHT: float = 1.5
 const TOTAL_WAR_MIN_PAYMENT_RATIO: float = 0.50
 const TOTAL_WAR_GOLD_RUNWAY_MONTHS: float = 0.0

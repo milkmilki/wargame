@@ -2190,6 +2190,9 @@ func campaign_reinforcement_threat(
 		if (
 			army == null
 			or army.size <= 0
+			or not army.is_main_battle_role()
+			or army.state in [Army.State.RETREATING, Army.State.RECOVERING]
+			or army.starving
 			or not defender_bloc.has(army.owner_nation)
 			or not is_enemy(attacker_id, army.owner_nation)
 		):
