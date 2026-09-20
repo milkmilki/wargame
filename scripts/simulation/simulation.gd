@@ -7761,6 +7761,13 @@ func _manage_campaign_offensive(
 	)
 	var objective: Dictionary = selected["objective"]
 	if objective.is_empty():
+		var defensive_center := int(selected.get(
+			"defensive_center_city_id", -1
+		))
+		if defensive_center >= 0:
+			_suspend_counteroffensive_for_state_defense(
+				nation_id, defensive_center
+			)
 		return false
 	var center_id := int(objective.get(
 		"administrative_center_city_id",
@@ -7772,6 +7779,36 @@ func _manage_campaign_offensive(
 	return _manage_administrative_campaign(
 		nation_id, center_id, defense_plan, coordinator
 	)
+
+
+func _suspend_counteroffensive_for_state_defense(
+	nation_id: int,
+	defensive_center_city_id: int
+) -> void:
+	var nation := state.nations[nation_id]
+	var plan := nation.administrative_campaign_plan
+	if plan != null:
+		for army in state.armies:
+			if (
+				army.owner_nation != nation_id
+				or not plan.army_assignments.has(army.id)
+				or army.state in [
+					Army.State.FIGHTING,
+					Army.State.RETREATING,
+					Army.State.RECOVERING,
+				]
+			):
+				continue
+			# 边上军队走完当前路段即停止，不能沿旧反攻路径继续深入。
+			army.path.clear()
+			army.ai_target_city = -1
+			army.ai_order_until_day = state.day
+			army.ai_order_reason = (
+				"州防守：目标州%d仍有敌军，暂停跨州反攻"
+				% defensive_center_city_id
+			)
+	nation.administrative_campaign_plan = null
+	nation.campaign_objective_center_city = -1
 
 
 func _manage_administrative_campaign(
@@ -8099,6 +8136,16 @@ func _select_campaign_objective(
 	var objective: Dictionary = {}
 	var defender_id := -1
 	var owns_diplomatic_objective := false
+	var defensive_center_city_id := _invaded_objective_center(
+		nation_id, enemy_ids
+	)
+	if defensive_center_city_id >= 0:
+		return {
+			"objective": objective,
+			"defender_id": defender_id,
+			"owns_diplomatic_objective": false,
+			"defensive_center_city_id": defensive_center_city_id,
+		}
 	# 州级进攻保持宣战时选定的战略州。法理失府由防守计划通过野战
 	# 处理，不能抢占唯一战役槽，否则一支袭扰军就能永久中断首都攻势。
 	for enemy_id in enemy_ids:
@@ -8126,7 +8173,31 @@ func _select_campaign_objective(
 		"objective": objective,
 		"defender_id": defender_id,
 		"owns_diplomatic_objective": owns_diplomatic_objective,
+		"defensive_center_city_id": defensive_center_city_id,
 	}
+
+
+func _invaded_objective_center(
+	nation_id: int,
+	enemy_ids: Array
+) -> int:
+	for enemy_value in enemy_ids:
+		var enemy_id := int(enemy_value)
+		var incoming := state.war_objective(nation_id, enemy_id)
+		if (
+			incoming.is_empty()
+			or int(incoming.get("attacker", -1)) != enemy_id
+		):
+			continue
+		var center_id := int(incoming.get(
+			"administrative_center_city_id",
+			incoming.get("city_id", -1)
+		))
+		if state.enemy_army_present_in_administrative_region(
+			nation_id, center_id
+		):
+			return center_id
+	return -1
 
 
 func _sorted_campaign_enemy_ids(

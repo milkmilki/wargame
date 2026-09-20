@@ -2349,6 +2349,43 @@ func campaign_field_requirement(
 	return ceili(float(enemy_committed) * 1.25)
 
 
+func enemy_army_present_in_administrative_region(
+	defender_id: int,
+	center_city_id: int
+) -> bool:
+	if not is_zhou_city(center_city_id):
+		return false
+	for army in armies:
+		if (
+			army == null
+			or army.size <= 0
+			or not is_enemy(defender_id, army.owner_nation)
+		):
+			continue
+		if (
+			army.location_city >= 0
+			and administrative_center_of(army.location_city) == center_city_id
+		):
+			return true
+		if (
+			army.on_edge
+			and (
+				(
+					army.move_from >= 0
+					and administrative_center_of(army.move_from)
+						== center_city_id
+				)
+				or (
+					army.move_to >= 0
+					and administrative_center_of(army.move_to)
+						== center_city_id
+				)
+			)
+		):
+			return true
+	return false
+
+
 func reinforce_city_garrisons_monthly() -> int:
 	var total := 0
 	for center_value in administrative_center_city_ids:
