@@ -1465,6 +1465,11 @@ func _test_rebellion_system() -> void:
 	vassal_restore_state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.ALLIED
 	)
+	# 目标国城市必须先形成自己的完整州；否则五城链会被划成同一州，
+	# 后续整州事务会因试图一并转走宗主首都而原子拒绝。
+	var vassal_border_edge := vassal_restore_state.edge_of(3, 4)
+	vassal_border_edge.max_manpower = 0
+	vassal_border_edge.base_max_manpower = 0
 	vassal_restore_state.rebuild_administrative_regions()
 	var vassal_capital_center := vassal_restore_state.administrative_center_of(
 		vassal_restore_state.nations[1].capital_city_id

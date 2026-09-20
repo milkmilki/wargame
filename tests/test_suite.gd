@@ -56,6 +56,7 @@ func _init() -> void:
 	_test_retreat_contact_and_position_continuity()
 	_test_stable_force_resource_cache_filter()
 	_test_resource_cache_refreshes_after_new_nation()
+	_test_invalid_loyalty_snapshot_does_not_corrupt_city()
 	_test_gold_reserve_budget_and_war_snapshot()
 	_test_ruler_economy_integration()
 	_test_war_preparation_cancel_cooldown()
@@ -77,6 +78,7 @@ func _init() -> void:
 	_test_stranded_hostile_army_eviction()
 	_test_vassal_wartime_support_and_capital()
 	_test_resource_hubs_and_food_mobilization()
+	_test_sustainable_force_capacity()
 	_test_small_nation_survival_and_emergency_recruitment()
 	_test_combat_fairness_and_conservation()
 	_test_structured_battle_log()
@@ -11428,6 +11430,153 @@ func _test_vassal_wartime_support_and_capital() -> void:
 
 # ------------------------------------------------------------------ 34. 资源核心与粮食战争动员
 
+func _test_sustainable_force_capacity() -> void:
+	print("[34a] 可持续军力：和平按国家资源容量扩军，且不读取州战役需求")
+	var gs := GameState.new()
+	gs.generate_grid_world(34000)
+	gs.uses_heightmap = true
+	for nation in gs.nations:
+		nation.trade_policy = RulerProfile.POLICY_ISOLATION
+	for army in gs.armies.duplicate():
+		if army.owner_nation == 0:
+			gs.armies.erase(army)
+	for city in gs.cities_of(0):
+		city.gold_per_month = 1000
+		city.food_per_half_year = 10000
+	gs.nations[0].treasury_gold = 1000000
+	gs.nations[0].manpower_pool = 1000000
+	gs.deposit_food(0, 1000000)
+	var base_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	var original_preparation_center := (
+		gs.nations[0].war_preparation_objective_center_city
+	)
+	gs.nations[0].war_preparation_objective_center_city = (
+		gs.administrative_center_city_ids[0]
+	)
+	gs.nations[0].campaign_objective_center_city = (
+		gs.administrative_center_city_ids[-1]
+	)
+	var targeted_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	gs.nations[0].war_preparation_objective_center_city = (
+		original_preparation_center
+	)
+	gs.nations[0].campaign_objective_center_city = -1
+	_check(
+		int(base_report["additional_armies"]) >= 3
+		and int(base_report["additional_armies"])
+			== int(targeted_report["additional_armies"]),
+		"和平容量必须允许富国扩军，且不随目标州R/V或战役目标变化"
+	)
+	var sim := Simulation.new()
+	sim.setup(gs)
+	var before_count := gs.active_army_count(0)
+	var expected_recruits := int(base_report["additional_armies"])
+	var view := AiWorldView.build(gs, 0)
+	var recruited := sim._ai_manage_force_structure(
+		view,
+		StrategicMapSnapshot.build(view),
+		ThreatField.build(view)
+	)
+	_check(
+		recruited
+		and gs.active_army_count(0) - before_count
+			== expected_recruits
+			and gs.nations[0].ai_last_force_reason.contains(
+				"可持续军力容量扩军"
+			),
+		"富裕和平国家每次军制评估应一次补到可持续容量：delta=%d expected=%d reason=%s report=%s"
+			% [
+				gs.active_army_count(0) - before_count,
+				expected_recruits,
+				gs.nations[0].ai_last_force_reason,
+				str(base_report),
+			]
+	)
+	for army in gs.armies.duplicate():
+		if army.owner_nation == 0:
+			gs.armies.erase(army)
+	gs.nations[0].manpower_pool = (
+		ReinforcementRules.PEACETIME_MANPOWER_RESERVE
+		+ GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	var manpower_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	_check(
+		int(manpower_report["additional_armies"]) == 1
+		and int(manpower_report["manpower_limit"]) == 1,
+		"和平容量必须在保留人力储备后只征得起的完整军团"
+	)
+	gs.nations[0].manpower_pool = 1000000
+	var finance_report := DiplomacyAI.resource_report(gs, 0, {})
+	gs.nations[0].treasury_gold = (
+		int(finance_report["gold_reserve_target"])
+		+ GameState.formation_creation_gold_cost(
+			GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
+	)
+	var creation_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	_check(
+		int(creation_report["additional_armies"]) == 1
+		and int(creation_report["gold_creation_limit"]) == 1,
+		"和平容量必须在三年财政储备之外累计支付完整建制费"
+	)
+	gs.nations[0].treasury_gold = 1000000
+	for city in gs.cities_of(0):
+		city.food_per_half_year = 0
+		city.food_storage = 0
+	var food_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	_check(
+		int(food_report["additional_armies"]) == 0
+		and int(food_report["food_limit"]) == 0,
+		"和平国家不得依赖持续消耗粮仓维持新增常备军"
+	)
+	for city in gs.cities_of(0):
+		city.food_per_half_year = 9000
+	var recovery_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	var recovery_target := int(
+		recovery_report["sustainable_armies"]
+	) * GameState.INITIAL_HEAVY_ARMY_SIZE
+	var recovery_food_plan := DiplomacyAI.war_food_report(
+		gs,
+		0,
+		recovery_target,
+		DiplomacyAI.FoodPosture.PEACE,
+		{}
+	)
+	_check(
+		int(recovery_report["additional_armies"]) > 0
+		and bool(recovery_food_plan["target_sustainable"]),
+		"和平容量的最终军数必须同时承担提高后的三年粮仓恢复目标：report=%s food=%s"
+			% [str(recovery_report), str(recovery_food_plan)]
+	)
+	sim.free()
+
+
+func _test_invalid_loyalty_snapshot_does_not_corrupt_city() -> void:
+	print("[34b] 忠诚月结：灭亡国家残留节点不写入无效政治目标")
+	var gs := GameState.new()
+	gs.generate_grid_world(34001)
+	var city := gs.cities_of(0)[0]
+	var target_before := city.loyalty_target_nation
+	gs.nations[0].alive = false
+	RebellionSystem.resolve_month(gs)
+	_check(
+		city.loyalty_target_nation == target_before
+		and city.loyalty_target_nation >= 0,
+		"无效月度忠诚快照不得把残留城市或码头的政治目标改为-1"
+	)
+
 func _test_resource_hubs_and_food_mobilization() -> void:
 	print("[34] 资源核心：AI价值识别；富粮国家宣战时有限爆兵")
 	_check(
@@ -11635,6 +11784,12 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	)
 	var army_count_before := gs.armies.size()
 	gs.uses_heightmap = true
+	var wartime_capacity_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.OFFENSIVE_WAR, {}
+	)
+	var expected_wartime_recruits := int(
+		wartime_capacity_report["additional_armies"]
+	)
 	var mobilized := sim._ai_manage_force_structure(
 		AiWorldView.build(gs, 0),
 		StrategicMapSnapshot.build(AiWorldView.build(gs, 0)),
@@ -11644,11 +11799,16 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		mobilized
 			and gs.armies.size()
 				== army_count_before
-					+ Simulation.FORCE_STRUCTURE_MAX_RECRUITS_PER_REVIEW
+					+ expected_wartime_recruits
 			and gs.nations[0].ai_last_force_reason.contains(
-				"战争生存动员"
+				"可持续军力容量扩军"
 			),
-		"半年军制评估必须在库存门禁内一次最多建立三支主战军"
+		"半年军制评估必须在库存门禁内一次补到战时容量：delta=%d expected=%d reason=%s"
+			% [
+				gs.armies.size() - army_count_before,
+				expected_wartime_recruits,
+				gs.nations[0].ai_last_force_reason,
+			]
 	)
 	sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.MAKE_PEACE,
@@ -11760,21 +11920,28 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 			and guard.battle_id == siege.id,
 		"已有主战守军必须继续留在围城守军侧"
 	)
-	# 资源充足也不得继续扩大小国的单主战军机动预备队。
-	# 连续多轮调用锁住稳定目标，而不是只验证第一次应急征兵。
+	# 小国只保留“无军时补一军”的生存下限；已有军队后按同一资源容量扩军。
+	siege.finished = true
+	gs.battles.erase(siege)
+	guard.state = Army.State.IDLE
+	guard.battle_id = -1
+	besieger.state = Army.State.IDLE
+	besieger.battle_id = -1
+	gs.cities[last_city_id].food_per_half_year = 100000
+	gs.cities[last_city_id].gold_per_month = 1000
+	gs.cities[last_city_id].food_storage = 100000
 	gs.nations[0].manpower_pool = 100000
 	gs.nations[0].treasury_gold = 100000
-	var small_nation_grew_again := false
-	for _force_tick in range(5):
-		var stable_view := AiWorldView.build(gs, 0)
-		small_nation_grew_again = (
-			sim._ai_manage_force_structure(
-				stable_view,
-				StrategicMapSnapshot.build(stable_view),
-				ThreatField.build(stable_view)
-			)
-			or small_nation_grew_again
-		)
+	gs.nations[0].war_gold_income_snapshot = 1000
+	var small_capacity_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.DEFENSIVE_WAR, {}
+	)
+	var stable_view := AiWorldView.build(gs, 0)
+	var small_nation_grew_again := sim._ai_manage_force_structure(
+		stable_view,
+		StrategicMapSnapshot.build(stable_view),
+		ThreatField.build(stable_view)
+	)
 	var standard_army_count := 0
 	for small_army in gs.armies:
 		if small_army.owner_nation != 0 or small_army.size <= 0:
@@ -11782,20 +11949,30 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 		if small_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
 			standard_army_count += 1
 	_check(
-		not small_nation_grew_again
-			and gs.active_army_count(0) == 1
-			and standard_army_count == 1
+		small_nation_grew_again
+			and gs.active_army_count(0) == 3
+			and standard_army_count == 3
 			and guard.battle_group_id >= 0
 			and gs.battle_group_members(0, guard.battle_group_id).size() == 1,
-		"一城小国已有主战军时应稳定保持单一军团，不额外生成占位军"
+		"一城小国已有生存军后应按资源容量扩至军队槽位上限：count=%d standard=%d reason=%s report=%s"
+			% [
+				gs.active_army_count(0), standard_army_count,
+				gs.nations[0].ai_last_force_reason,
+				str(small_capacity_report),
+			]
 	)
+	for army in gs.armies.duplicate():
+		if army.owner_nation == 0 and army != guard:
+			gs.armies.erase(army)
+	gs.cities[last_city_id].food_per_half_year = 0
 	gs.cities[last_city_id].food_storage = 0
 	gs.nations[0].manpower_pool = (
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
 	gs.nations[0].treasury_gold = creation_cost
+	var empty_stock_manpower_before := gs.nations[0].manpower_pool
 	var empty_stock_view := AiWorldView.build(gs, 0)
-	var blocked_by_empty_stock := (
+	var _empty_stock_changed := (
 		sim._ai_manage_force_structure(
 			empty_stock_view,
 			StrategicMapSnapshot.build(empty_stock_view),
@@ -11803,11 +11980,10 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 		)
 	)
 	_check(
-		not blocked_by_empty_stock
-			and gs.active_army_count(0) == 1
+		gs.active_army_count(0) == 1
 			and gs.nations[0].treasury_gold == creation_cost
 			and gs.nations[0].manpower_pool
-				== GameState.INITIAL_HEAVY_ARMY_SIZE,
+				>= empty_stock_manpower_before,
 		"负收益征兵不等于透支：粮库为0时必须拒绝建军且不得预扣金钱或人力"
 	)
 	sim.free()

@@ -115,7 +115,6 @@ const FOOD_RESERVE_RECOVERY_MONTHS: int = 6
 const DEMOBILIZATION_STEP_MIN: int = 500
 const WAR_MOBILIZATION_DAYS: int = 180
 const FORCE_STRUCTURE_REVIEW_INTERVAL_DAYS: int = DAYS_PER_HALF_YEAR
-const FORCE_STRUCTURE_MAX_RECRUITS_PER_REVIEW: int = 3
 const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 30
 const LOCAL_BATTLE_REINFORCE_RATIO: float = 1.25
 const LOCAL_BATTLE_MIN_MORALE_RATIO: float = 0.50
@@ -5432,26 +5431,6 @@ func _start_war_mobilization(
 	var posture := DiplomacyAI.food_posture(
 		state, nation_id, resource_cache
 	)
-	# 战时动员的金币上限最终只读取冻结的战前收入；完整 resource_report
-	# 其余字段不会参与 capacity。预聚合这两个实际输入，避免仅为随后被覆盖
-	# 的当前贸易收入重建全图。异常旧档没有快照时仍走原始完整计算。
-	if (
-		not diplomacy_mobilization_cache_disabled
-		and posture in [
-			DiplomacyAI.FoodPosture.OFFENSIVE_WAR,
-			DiplomacyAI.FoodPosture.DEFENSIVE_WAR,
-		]
-		and nation.war_gold_income_snapshot >= 0
-	):
-		resource_cache["resource:%d" % nation_id] = {
-			"gold_reserve_target": (
-				nation.war_gold_income_snapshot
-				* WAR_GOLD_RESERVE_MONTHS
-			),
-			"gold_reserve_baseline_income": (
-				nation.war_gold_income_snapshot
-			),
-		}
 	_record_tick_profile_stage(
 		"diplomacy_mobilization_posture",
 		mobilization_part_started
@@ -7044,20 +7023,21 @@ func _ai_manage_force_structure(
 		assessment
 	):
 		return true
-	# 应急动员（小国最后城市保卫战 / 战争动员窗口）是生死存亡的最后一搏，
-	# 允许把人力抽到底，不设战时预留；否则仅在常规战时扩军时预留补员燃料，
-	# 使现役军队每月补满编，避免爆兵抽干 manpower_pool 后军团长期缺编。
-	var protected_reserve := (
+	# 只有无军且正常容量为零的小国生存动员可以抽空人力；其余扩军统一
+	# 使用容量报告给出的和平/战时补员储备。
+	var protected_reserve := int(assessment.capacity_report.get(
+		"manpower_reserve",
 		PEACETIME_MANPOWER_RESERVE
-		if assessment.wars.is_empty()
-		else (
-			0
-			if assessment.emergency_recruitment
-			else _wartime_manpower_reserve(view.friendly_armies)
-		)
-	)
+	))
+	if assessment.emergency_recruitment:
+		protected_reserve = 0
 	var recruited_any := false
-	for _recruit_index in range(FORCE_STRUCTURE_MAX_RECRUITS_PER_REVIEW):
+	var recruit_limit := (
+		1
+		if assessment.small_nation_survival
+		else int(assessment.capacity_report.get("additional_armies", 0))
+	)
+	for _recruit_index in range(recruit_limit):
 		var recruitment := {}
 		if assessment.small_nation_survival:
 			recruitment = _small_nation_force_recruitment(
@@ -7067,11 +7047,8 @@ func _ai_manage_force_structure(
 			)
 		else:
 			recruitment = _regular_force_recruitment(
-				view,
-				snapshot,
-				threat,
-				decision_context,
-				assessment.wars
+				view.nation_id,
+				assessment.capacity_report
 			)
 		var formation_size := int(recruitment.get("size", 0))
 		if formation_size <= 0:
@@ -7087,11 +7064,6 @@ func _ai_manage_force_structure(
 			break
 		recruited_any = true
 		assessment.main_armies += 1
-		if not assessment.emergency_recruitment:
-			assessment.food_growth_budget = maxi(
-				assessment.food_growth_budget - formation_size,
-				0
-			)
 		# 小国生存目标只有一支机动预备队。
 		if assessment.small_nation_survival:
 			break
@@ -7135,19 +7107,10 @@ func _try_recruit_force_structure(
 		GameState.formation_creation_gold_cost(missing_formation_size)
 		if missing_formation_size > 0 else 0
 	)
-	var reserve_target := int(assessment.gold_reserve.get("reserve_target", 0))
-	var gold_growth_allowed := (
-		assessment.emergency_recruitment
-		or (
-			not assessment.gold_pressure
-			and nation.treasury_gold - creation_cost >= reserve_target
-		)
-	)
-	var food_recruitment_allowed := (
-		not assessment.food_pressure
-		and assessment.food_growth_budget >= missing_formation_size
-	)
+	var gold_growth_allowed := true
+	var food_recruitment_allowed := true
 	if assessment.emergency_recruitment:
+		gold_growth_allowed = nation.treasury_gold >= creation_cost
 		food_recruitment_allowed = (
 			int(assessment.food_report["stock"]) > 0
 			and (
@@ -7180,9 +7143,7 @@ func _build_force_structure_assessment(
 ) -> ForceStructureAssessment:
 	var assessment := ForceStructureAssessment.new()
 	var nation := state.nations[view.nation_id]
-	var current_troops := 0
 	for army in view.friendly_armies:
-		current_troops += army.size
 		if army.is_main_battle_role():
 			assessment.main_armies += 1
 	assessment.wars = (
@@ -7190,7 +7151,7 @@ func _build_force_structure_assessment(
 		if decision_context.has("wars")
 		else state.wars_of(view.nation_id)
 	)
-	assessment.small_nation_survival = (
+	var small_nation_survival_candidate := (
 		not assessment.wars.is_empty()
 		and not (
 			state.is_vassal(view.nation_id)
@@ -7198,15 +7159,7 @@ func _build_force_structure_assessment(
 		)
 		and state.land_cities_of(view.nation_id).size()
 			<= SMALL_NATION_SURVIVAL_MAX_CITIES
-	)
-	assessment.active_war_mobilization = (
-		not assessment.wars.is_empty()
-		and state.day <= nation.war_mobilization_until_day
-		and nation.war_mobilization_target_troops > current_troops
-	)
-	assessment.emergency_recruitment = (
-		assessment.small_nation_survival
-		or assessment.active_war_mobilization
+		and assessment.main_armies <= 0
 	)
 	assessment.food_report = (
 		decision_context["food_report"]
@@ -7247,12 +7200,23 @@ func _build_force_structure_assessment(
 		assessment.required_gold_savings > 0
 		and nation.last_gold_demobilization_month < current_financial_month
 	)
-	assessment.food_growth_budget = _food_growth_manpower_budget(
-		assessment.food_report
+	assessment.capacity_report = DiplomacyAI.force_capacity_report(
+		state,
+		view.nation_id,
+		int(assessment.food_report["posture"]),
+		resource_evaluation_cache
 	)
-	assessment.baseline_group_count = 0
-	assessment.force_structure_target = (
-		assessment.baseline_group_count
+	assessment.small_nation_survival = (
+		small_nation_survival_candidate
+		and int(assessment.capacity_report.get(
+			"additional_armies", 0
+		)) <= 0
+	)
+	assessment.emergency_recruitment = assessment.small_nation_survival
+	assessment.force_structure_target = int(
+		assessment.capacity_report.get(
+			"supportable_armies", assessment.main_armies
+		)
 	)
 	return assessment
 
@@ -7296,12 +7260,10 @@ func _try_create_force_recruitment(
 		if created_group == null:
 			return false
 		battle_group_id = created_group.id
-		recruitment_reason = (
-			"战争生存动员%d编制：创建指挥单位%d"
-			% [formation_size, battle_group_id]
-			if emergency_recruitment
-			else "创建指挥单位%d" % battle_group_id
-		)
+		recruitment_reason = "%s：创建指挥单位%d" % [
+			recruitment_reason,
+			battle_group_id,
+		]
 	var created_army := _create_army_for_nation(
 		nation_id,
 		creation_site,
@@ -7315,65 +7277,19 @@ func _try_create_force_recruitment(
 	return created_army != null
 
 func _regular_force_recruitment(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	decision_context: Dictionary,
-	wars: Array
+	nation_id: int,
+	capacity_report: Dictionary
 ) -> Dictionary:
-	var demand := _campaign_force_recruitment_demand(
-		view,
-		snapshot,
-		threat,
-		decision_context,
-		wars
+	var recruitment := _next_battle_group_recruitment(nation_id)
+	recruitment["reason"] = (
+		"可持续军力容量扩军：%d/%d军，限制=%s"
+		% [
+			int(capacity_report.get("current_armies", 0)),
+			int(capacity_report.get("sustainable_armies", 0)),
+			str(capacity_report.get("limiting_resource", "none")),
+		]
 	)
-	var target_main_capacity := maxi(
-		int(demand.get("target_main_capacity", 0)),
-		GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
-	var current_main_capacity := _main_command_capacity(view.nation_id)
-	var main_deficit := maxi(
-		int(ceil(
-			float(maxi(target_main_capacity - current_main_capacity, 0))
-				/ float(GameState.INITIAL_HEAVY_ARMY_SIZE)
-		)),
-		0
-	)
-	if main_deficit > 0:
-		return _next_battle_group_recruitment(view.nation_id)
-	return {}
-
-
-func _campaign_force_recruitment_demand(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	decision_context: Dictionary,
-	wars: Array
-) -> Dictionary:
-	var nation := state.nations[view.nation_id]
-	var active_offense := (
-		nation.war_preparation_target_nation >= 0
-		or not wars.is_empty()
-	)
-	var target_main_capacity := 0
-	if active_offense:
-		var centers := _campaign_force_demand_targets(view.nation_id)
-		target_main_capacity = GameState.INITIAL_HEAVY_ARMY_SIZE
-		if not centers.is_empty():
-			var center_id := centers[0]
-			target_main_capacity = maxi(
-				state.campaign_siege_requirement(view.nation_id, center_id)
-					+ state.campaign_reinforcement_budget(
-						view.nation_id, center_id
-					),
-				GameState.INITIAL_HEAVY_ARMY_SIZE
-			)
-	return {
-		"active_offense": active_offense,
-		"target_main_capacity": target_main_capacity,
-	}
+	return recruitment
 
 
 func _small_nation_force_recruitment(
@@ -7406,48 +7322,6 @@ func _next_battle_group_recruitment(
 		"create_group": true,
 		"reason": "建立独立主战军",
 	}
-
-
-func _main_command_capacity(nation_id: int) -> int:
-	var total := 0
-	for army in state.armies:
-		if (
-			army.owner_nation == nation_id
-			and army.size > 0
-			and army.is_main_battle_role()
-		):
-			total += army.max_size
-	return total
-
-
-func _campaign_force_demand_targets(
-	nation_id: int
-) -> Array[int]:
-	var nation := state.nations[nation_id]
-	var center_id := nation.war_preparation_objective_center_city
-	if center_id < 0 and nation.war_preparation_objective_city >= 0:
-		center_id = state.administrative_center_of(
-			nation.war_preparation_objective_city
-		)
-	if state.is_zhou_city(center_id):
-		return [center_id] as Array[int]
-	if state.is_zhou_city(nation.campaign_objective_center_city):
-		return [nation.campaign_objective_center_city] as Array[int]
-	for enemy_id in state.wars_of(nation_id):
-		var objective := state.war_objective(nation_id, enemy_id)
-		center_id = int(objective.get(
-			"administrative_center_city_id",
-			objective.get("city_id", -1)
-		))
-		if state.is_zhou_city(center_id):
-			return [center_id] as Array[int]
-		var counteroffensive := DiplomacyAI.select_war_objective(
-			state, nation_id, enemy_id
-		)
-		center_id = int(counteroffensive.get("city_id", -1))
-		if state.is_zhou_city(center_id):
-			return [center_id] as Array[int]
-	return [] as Array[int]
 
 
 func _advance_priority_city_defense_reinforcements(
@@ -7666,16 +7540,6 @@ func _advance_priority_city_defense(
 		defense_plan.requirement_at(city_id)
 	)
 	if committed_power >= required_power:
-		return
-	# 城市已处于本地均势而其他前线仍未形成最低屏障时，不再为其叠加
-	# 纵深预备队。若本城仍实际劣势，则保留紧急解围权。
-	if (
-		committed_power >= attack_power
-		and defense_plan.has_uncovered_frontline_minimum(
-			coordinator,
-			city_id
-		)
-	):
 		return
 	var redeploy_target := city_id
 	var candidates: Array[Dictionary] = []

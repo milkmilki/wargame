@@ -693,7 +693,10 @@ static func resolve_month(state: GameState) -> Array[Dictionary]:
 
 	for snapshot in snapshots:
 		var city_id: int = int(snapshot["city_id"])
-		if not _valid_city(state, city_id):
+		if (
+			not _valid_city(state, city_id)
+			or int(snapshot["owner_nation"]) < 0
+		):
 			continue
 		var city: City = state.cities[city_id]
 		city.loyalty = float(snapshot["loyalty"])

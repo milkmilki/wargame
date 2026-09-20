@@ -1,6 +1,6 @@
 extends SceneTree
 ## 终局回归：国家0仅剩州治首都和四支标准主战军；国家1控制其他全部城市，
-## 从零重建主战军。即使 C 起初不足，州战役也必须先进入集结流程，不能在
+## 从零按国家可持续容量重建主战军。州战役必须从已有军队中完成集结，不能在
 ## “州治尚不可攻击”和“尚未分配军队增加 C”之间形成循环等待。
 
 const REMNANT_ID: int = 0
@@ -54,16 +54,12 @@ func _init() -> void:
 			str(_administrative_snapshot(state)),
 		]
 	)
-	var required_groups := int(ceil(
-		float(
-			state.campaign_siege_requirement(DOMINANT_ID, LAST_CITY_ID)
-			+ state.campaign_reinforcement_threat(
-				DOMINANT_ID, LAST_CITY_ID, 60
-			)
-		) / float(GameState.INITIAL_HEAVY_ARMY_SIZE)
-	))
+	var force_capacity := DiplomacyAI.force_capacity_report(
+		state, DOMINANT_ID, DiplomacyAI.FoodPosture.OFFENSIVE_WAR, {}
+	)
 	var force_bounded := (
-		state.nations[DOMINANT_ID].battle_groups.size() <= required_groups
+		state.nations[DOMINANT_ID].battle_groups.size()
+			<= int(force_capacity["supportable_armies"])
 	)
 	sim.free()
 	quit(0 if launched and force_bounded else 1)
