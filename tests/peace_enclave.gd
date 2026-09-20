@@ -30,9 +30,22 @@ func _init() -> void:
 	}
 	var sim := Simulation.new()
 	sim.setup(state)
-	var moved := sim._plan_coalition_enclave_transfers(draft)
+	var excluded_draft := {
+		"owners": owners.duplicate(),
+		"legal": legal.duplicate(),
+		"sponsors": sponsors.duplicate(),
+		"operation_by_city": {},
+	}
+	var excluded_moved := sim._plan_coalition_enclave_transfers(
+		excluded_draft, [1] as Array[int]
+	)
+	var moved := sim._plan_coalition_enclave_transfers(
+		draft, [0, 1] as Array[int]
+	)
 	var valid := (
-		moved == 1
+		excluded_moved == 0
+		and int((excluded_draft["owners"] as Array)[63]) == 0
+		and moved == 1
 		and int((draft["owners"] as Array)[63]) == 1
 		and int((draft["legal"] as Array)[63]) == 1
 	)
@@ -41,5 +54,8 @@ func _init() -> void:
 		print("PEACE_ENCLAVE_OK moved=%d" % moved)
 		quit(0)
 		return
-	push_error("PEACE_ENCLAVE_FAILED moved=%d" % moved)
+	push_error(
+		"PEACE_ENCLAVE_FAILED excluded=%d moved=%d"
+		% [excluded_moved, moved]
+	)
 	quit(1)

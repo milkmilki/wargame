@@ -4400,7 +4400,17 @@ func _plan_coalition_peace(
 	_plan_peaceful_occupation_normalization(
 		draft, settled_war_pairs
 	)
-	var enclaves_transferred := _plan_coalition_enclave_transfers(draft)
+	var settled_nations := {}
+	for pair in settled_pairs:
+		settled_nations[pair.x] = true
+		settled_nations[pair.y] = true
+	var enclave_candidates: Array[int] = []
+	for nation_value in settled_nations:
+		enclave_candidates.append(int(nation_value))
+	enclave_candidates.sort()
+	var enclaves_transferred := _plan_coalition_enclave_transfers(
+		draft, enclave_candidates
+	)
 	var territories_transferred := _coalition_plan_operation_count(
 		draft, "coalition_territory_recognized"
 	)
@@ -4928,30 +4938,26 @@ func _plan_peaceful_occupation_normalization(
 	return normalized
 
 
-## Peace settlements must not leave a country with isolated land pockets.  The
-## largest connected component remains the national core; each smaller legal
-## component is transferred atomically to the adjacent country sharing the most
-## passable land borders.  Recompute after every transfer because the border
-## graph changes as soon as an enclave is removed.
-func _plan_coalition_enclave_transfers(draft: Dictionary) -> int:
+## Peace settlements must not leave a participating country with isolated land
+## pockets.  Unrelated countries are outside this settlement.  The largest
+## connected component remains the national core; each smaller legal component
+## is transferred atomically to the adjacent country sharing the most passable
+## land borders.  Recompute after every transfer because the border graph changes
+## as soon as an enclave is removed.
+func _plan_coalition_enclave_transfers(
+	draft: Dictionary,
+	candidate_nation_ids: Array[int]
+) -> int:
 	var transferred_total := 0
 	var guard := maxi(state.cities.size(), 1)
 	while guard > 0:
 		guard -= 1
 		var owners: Array = draft["owners"]
 		var legal: Array = draft["legal"]
-		var nations_with_land := {}
-		for city in state.cities:
-			if city.is_dock:
-				continue
-			var owner := int(owners[city.id])
-			if owner >= 0 and owner < state.nations.size():
-				nations_with_land[owner] = true
 		var moved := false
-		var nation_ids: Array = nations_with_land.keys()
-		nation_ids.sort()
-		for nation_value in nation_ids:
-			var nation_id := int(nation_value)
+		for nation_id in candidate_nation_ids:
+			if nation_id < 0 or nation_id >= state.nations.size():
+				continue
 			var components := _planned_land_components_for_owner(
 				draft, nation_id
 			)
