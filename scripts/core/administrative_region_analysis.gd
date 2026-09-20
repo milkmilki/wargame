@@ -1,8 +1,8 @@
 class_name AdministrativeRegionAnalysis
 extends RefCounted
-## Deterministic land-only administrative regions. Center selection continues
-## until every normal city is covered in one hop. Two-hop assignment remains a
-## defensive fallback for malformed or otherwise unassignable fringe input.
+## Deterministic land-only administrative regions. Centers first claim their
+## one-hop neighborhoods. Fringe cities that cannot form a multi-city state are
+## then attached to the nearest center, normally at distance two.
 
 
 static func analyze(
@@ -40,33 +40,29 @@ static func analyze(
 			break
 		centers.append(best)
 		min_hops = _minimum_hops(city_count, active, adjacency, centers)
-	var region_ids := PackedInt32Array()
+	var assignment := _nearest_center_assignment(
+		city_count, adjacency, centers
+	)
+	var region_ids: PackedInt32Array = assignment["region_ids"]
+	var hop_distances: PackedInt32Array = assignment["hop_distances"]
 	var center_by_city := PackedInt32Array()
-	var hop_distances := PackedInt32Array()
-	region_ids.resize(maxi(city_count, 0))
 	center_by_city.resize(maxi(city_count, 0))
-	hop_distances.resize(maxi(city_count, 0))
-	region_ids.fill(-1)
 	center_by_city.fill(-1)
-	hop_distances.fill(-1)
 	for city_id in active:
-		var best_region := -1
-		var best_distance := 3
-		for region_id in range(centers.size()):
-			var distance := _distance_within_two(
-				centers[region_id], city_id, adjacency
-			)
-			if distance >= 0 and distance < best_distance:
-				best_distance = distance
-				best_region = region_id
-		if best_region < 0:
-			# Defensive fallback for malformed disconnected input.
-			best_region = centers.size()
+		if region_ids[city_id] < 0:
+			# A connected component without a selected center can only be a true
+			# isolated singleton under the normal selection rule. Keep the flood
+			# defensive so malformed disconnected fixtures remain total.
+			var fallback_region := centers.size()
 			centers.append(city_id)
-			best_distance = 0
-		region_ids[city_id] = best_region
-		center_by_city[city_id] = centers[best_region]
-		hop_distances[city_id] = best_distance
+			_assign_unclaimed_component(
+				city_id,
+				fallback_region,
+				adjacency,
+				region_ids,
+				hop_distances
+			)
+		center_by_city[city_id] = centers[region_ids[city_id]]
 	return {
 		"region_ids": region_ids,
 		"region_count": centers.size(),
@@ -125,7 +121,9 @@ static func _select_center(
 		for city_id in within_two:
 			if min_hops[city_id] < 0 or min_hops[city_id] > 1:
 				uncovered_two += 1
-		if uncovered_one <= 0:
+		# The candidate itself counts as one. Requiring a second uncovered city
+		# prevents a leftover corner from becoming a one-city administrative state.
+		if uncovered_one <= 1:
 			continue
 		var score: Array = [
 			uncovered_one,
@@ -197,6 +195,63 @@ static func _minimum_hops(
 			if distance >= 0 and (result[city_id] < 0 or distance < result[city_id]):
 				result[city_id] = distance
 	return result
+
+
+static func _nearest_center_assignment(
+	city_count: int,
+	adjacency: Array[Array],
+	centers: Array[int]
+) -> Dictionary:
+	var region_ids := PackedInt32Array()
+	var hop_distances := PackedInt32Array()
+	region_ids.resize(maxi(city_count, 0))
+	hop_distances.resize(maxi(city_count, 0))
+	region_ids.fill(-1)
+	hop_distances.fill(-1)
+	var queue: Array[int] = []
+	for region_id in range(centers.size()):
+		var center := centers[region_id]
+		region_ids[center] = region_id
+		hop_distances[center] = 0
+		queue.append(center)
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		for neighbor_value in adjacency[current]:
+			var neighbor := int(neighbor_value)
+			if hop_distances[neighbor] >= 0:
+				continue
+			region_ids[neighbor] = region_ids[current]
+			hop_distances[neighbor] = hop_distances[current] + 1
+			queue.append(neighbor)
+	return {
+		"region_ids": region_ids,
+		"hop_distances": hop_distances,
+	}
+
+
+static func _assign_unclaimed_component(
+	start: int,
+	region_id: int,
+	adjacency: Array[Array],
+	region_ids: PackedInt32Array,
+	hop_distances: PackedInt32Array
+) -> void:
+	region_ids[start] = region_id
+	hop_distances[start] = 0
+	var queue: Array[int] = [start]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		for neighbor_value in adjacency[current]:
+			var neighbor := int(neighbor_value)
+			if region_ids[neighbor] >= 0:
+				continue
+			region_ids[neighbor] = region_id
+			hop_distances[neighbor] = hop_distances[current] + 1
+			queue.append(neighbor)
 
 
 static func _distance_within_two(

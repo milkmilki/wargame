@@ -12042,7 +12042,7 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 	)
 
 	# --- 子场景 B：被敌方体系包围也不能自动易手；实际攻占才产生临时占领。---
-	# 链 0-1-2-3-4，体系 0→1 的藩王领城3/4；城2 属敌体系 2→3 的藩王3。
+	# 链 0-1-2-3-4，体系 0→1 的藩王领城4所在完整州；城2/3属敌体系。
 	var sb := GameState.new()
 	sb.generate_grid_world(51002)
 	sb.armies.clear()
@@ -12056,7 +12056,7 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 	for c in [0, 1]:
 		sb.cities[c].owner_nation = 0
 		sb.recognized_city_owners[c] = 0
-	for c in [3, 4]:
+	for c in [4, 5, 6, 13]:
 		sb.cities[c].owner_nation = 1
 		sb.recognized_city_owners[c] = 1
 	sb.cities[63].owner_nation = 2
@@ -12068,11 +12068,11 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 	sb.nations[0].capital_city_id = 0
 	sb.cities[0].is_capital = true
 	sb.cities[0].has_warehouse = true
-	sb.nations[1].capital_city_id = 3
-	sb.cities[3].is_capital = true
+	sb.nations[1].capital_city_id = 5
+	sb.cities[5].is_capital = true
 	_set_single_warehouse(sb, 0, 0, 0)
-	_set_warehouses(sb, 1, [] as Array[int], [] as Array[int], 3)
-	sb.cities[3].is_capital = true
+	_set_warehouses(sb, 1, [] as Array[int], [] as Array[int], 5)
+	sb.cities[5].is_capital = true
 	_set_single_warehouse(sb, 2, 63, 0)
 	# 国3在本夹具中没有实控城市，必须显式清掉生成期留下的首都/粮仓索引。
 	# 国3仍持有大多数背景城市，作为国2的和平藩属保留首都但不设独立粮仓。
@@ -12098,20 +12098,20 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 			)
 	var sb_garrison := _make_army(12990, 1, 5000, 10, 10)
 	sb_garrison.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
-	sb_garrison.location_city = 3
-	sb_garrison.move_from = 3
+	sb_garrison.location_city = 4
+	sb_garrison.move_from = 4
 	sb_garrison.state = Army.State.IDLE
 	sb.armies.append(sb_garrison)
 	sb.refresh_derived()
 	_check(
-		sb.cities[3].owner_nation == 1
+		sb.cities[5].owner_nation == 1
 			and sb.cities[4].owner_nation == 1
 			and sb_garrison.size == 5000,
 		(
 			"战争飞地内仍有本体系守军时不得因道路断联直接吞并或删除驻军"
-			+ "（3=%d 4=%d 守军=%d）"
+			+ "（5=%d 4=%d 守军=%d）"
 		) % [
-			sb.cities[3].owner_nation,
+			sb.cities[5].owner_nation,
 			sb.cities[4].owner_nation,
 			sb_garrison.size,
 		]
@@ -12124,9 +12124,9 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 			)
 	sb_garrison.size = 0
 	_check(
-		sb.cities[3].owner_nation == 1
+		sb.cities[5].owner_nation == 1
 			and sb.cities[4].owner_nation == 1
-			and sb.recognized_owner_of(3) == 1
+			and sb.recognized_owner_of(5) == 1
 			and sb.recognized_owner_of(4) == 1,
 		"和平时断联藩王飞地不得无协议自动割给相邻国家"
 	)
@@ -12137,26 +12137,26 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 				attacker, defender, GameState.DiplomaticRelation.WAR
 			)
 	_check(
-		sb.cities[3].owner_nation == 1
+		sb.cities[5].owner_nation == 1
 			and sb.cities[4].owner_nation == 1
-			and sb.recognized_owner_of(3) == 1
+			and sb.recognized_owner_of(5) == 1
 			and sb.recognized_owner_of(4) == 1
-			and sb.cities[3].occupation_sponsor_nation == -1
+			and sb.cities[5].occupation_sponsor_nation == -1
 			and sb.cities[4].occupation_sponsor_nation == -1
 			and sb.suzerainty_structure_valid(),
 		(
-			"战争与道路断联不能替代真实攻城，飞地 {3,4} 必须继续由原国实控"
-			+ "（3=%d 4=%d）"
+			"战争与道路断联不能替代真实攻城，飞地州必须继续由原国实控"
+			+ "（5=%d 4=%d）"
 		)
-			% [sb.cities[3].owner_nation, sb.cities[4].owner_nation]
+			% [sb.cities[5].owner_nation, sb.cities[4].owner_nation]
 	)
 	# 显式模拟城4被敌方宗主实际攻下；只有这一步才能形成临时占领。
 	var sb_capture_result: Dictionary = sb.transfer_city_control(4, 2, 2)
 	_check(
 		bool(sb_capture_result.get("changed", false))
-			and sb.cities[3].owner_nation == 1
-			and sb.recognized_owner_of(3) == 1
-			and sb.cities[3].occupation_sponsor_nation == -1
+			and sb.cities[5].owner_nation == 1
+			and sb.recognized_owner_of(5) == 1
+			and sb.cities[5].occupation_sponsor_nation == -1
 			and sb.cities[4].owner_nation == 2
 			and sb.recognized_owner_of(4) == 1
 			and sb.cities[4].occupation_sponsor_nation == 2
@@ -12169,9 +12169,9 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 	)
 	_check(
 		sb_recognized == ([4] as Array[int])
-			and sb.cities[3].owner_nation == 1
-			and sb.recognized_owner_of(3) == 1
-			and sb.cities[3].occupation_sponsor_nation == -1
+			and sb.cities[5].owner_nation == 1
+			and sb.recognized_owner_of(5) == 1
+			and sb.cities[5].occupation_sponsor_nation == -1
 			and sb.cities[4].owner_nation == 2
 			and sb.recognized_owner_of(4) == 2
 			and sb.cities[4].occupation_sponsor_nation == -1

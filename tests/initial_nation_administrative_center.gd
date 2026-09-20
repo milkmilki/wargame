@@ -72,7 +72,9 @@ func _init() -> void:
 			and _nation_owns_center(ordinary, nation_id)
 			and _nation_is_connected(ordinary, nation_id)
 			and float(owned_count) >= average_count * 0.5
-			and float(owned_count) <= average_count * 1.6
+			# Larger fringe-absorbing states reduce the available granularity;
+			# whole-state ownership and connectivity take precedence here.
+			and float(owned_count) <= average_count * 1.8
 		)
 	if valid:
 		print(

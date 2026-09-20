@@ -24,6 +24,10 @@ func _init() -> void:
 	var centers: PackedInt32Array = result["center_city_ids"]
 	var center_by_city: PackedInt32Array = result["center_by_city"]
 	var hops: PackedInt32Array = result["hop_distances"]
+	var region_sizes := {}
+	for city_id in active:
+		var region_id := region_ids[city_id]
+		region_sizes[region_id] = int(region_sizes.get(region_id, 0)) + 1
 	var valid: bool = (
 		region_ids == repeated["region_ids"]
 		and centers == repeated["center_city_ids"]
@@ -32,6 +36,8 @@ func _init() -> void:
 		and centers.has(6)
 		and center_by_city[6] == 6
 		and hops[6] == 0
+		and hops[0] == 2
+		and int(region_sizes[region_ids[6]]) == 1
 	)
 	for city_id in active:
 		valid = (
@@ -39,7 +45,11 @@ func _init() -> void:
 			and region_ids[city_id] >= 0
 			and center_by_city[city_id] >= 0
 			and hops[city_id] >= 0
-			and hops[city_id] <= 1
+			and hops[city_id] <= 2
+			and (
+				city_id == 6
+				or int(region_sizes[region_ids[city_id]]) >= 2
+			)
 		)
 	for link in links:
 		valid = valid and not (
@@ -69,14 +79,30 @@ func _init() -> void:
 	var generated_state := GameState.new()
 	generated_state.generate_world(94001)
 	var generated_max_hops := 0
+	var generated_region_sizes := {}
 	for city in generated_state.cities:
 		if not city.politically_active or city.is_dock:
 			continue
+		var generated_region_id := (
+			generated_state.administrative_region_ids[city.id]
+		)
+		generated_region_sizes[generated_region_id] = int(
+			generated_region_sizes.get(generated_region_id, 0)
+		) + 1
 		generated_max_hops = maxi(
 			generated_max_hops,
 			generated_state.administrative_hop_distances[city.id]
 		)
-	valid = valid and generated_max_hops <= 1
+	valid = valid and generated_max_hops <= 2
+	for city in generated_state.cities:
+		if not city.politically_active or city.is_dock:
+			continue
+		var generated_region_id := (
+			generated_state.administrative_region_ids[city.id]
+		)
+		if int(generated_region_sizes[generated_region_id]) > 1:
+			continue
+		valid = valid and _is_isolated_land_city(generated_state, city.id)
 	if valid:
 		print(
 			"ADMINISTRATIVE_REGION_ANALYSIS_OK regions=%s centers=%s hops=%s generated_regions=%d generated_max_hops=%d"
@@ -93,3 +119,18 @@ func _init() -> void:
 		% [str(result), str(boundary)]
 	)
 	quit(1)
+
+
+func _is_isolated_land_city(state: GameState, city_id: int) -> bool:
+	for neighbor_id in state.neighbors(city_id):
+		var neighbor := state.cities[neighbor_id]
+		var edge := state.edge_of(city_id, neighbor_id)
+		if (
+			edge != null
+			and edge.kind == Edge.Kind.LAND
+			and edge.max_manpower > 0
+			and neighbor.politically_active
+			and not neighbor.is_dock
+		):
+			return false
+	return true
