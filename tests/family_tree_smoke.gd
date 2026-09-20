@@ -123,10 +123,16 @@ func _test_real_enfeoffment_hook() -> void:
 	state.generate_grid_world(13579)
 	FamilyTree.ensure_all(state)
 	var subject_id := -1
-	for city in state.land_cities_of(0):
-		if city.id == state.nations[0].capital_city_id:
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if state.cities[center_id].owner_nation != 0:
 			continue
-		subject_id = state.enfeoff(0, [city.id] as Array[int])
+		var region := state.normalize_enfeoff_region(
+			0, [center_id] as Array[int]
+		)
+		if region.is_empty():
+			continue
+		subject_id = state.enfeoff(0, region)
 		if subject_id >= 0:
 			break
 	_check(subject_id >= 0, "real_enfeoffment_succeeds")

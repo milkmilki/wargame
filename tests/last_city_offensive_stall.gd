@@ -1,5 +1,5 @@
 extends SceneTree
-## 终局回归：国家0仅剩州治首都和四支5000守军；国家1控制其他全部城市，
+## 终局回归：国家0仅剩州治首都和四支标准主战军；国家1控制其他全部城市，
 ## 从零重建主战军。即使 C 起初不足，州战役也必须先进入集结流程，不能在
 ## “州治尚不可攻击”和“尚未分配军队增加 C”之间形成循环等待。
 
@@ -234,15 +234,15 @@ func _build_fixture() -> GameState:
 	for _group_index in range(initial_groups):
 		var group := state.create_battle_group(DOMINANT_ID)
 		for _army_index in range(BattleGroup.MAX_ARMIES):
-			var heavy := state.create_army(
+			var main_army := state.create_army(
 				DOMINANT_ID,
 				dominant_capital,
 				GameState.INITIAL_HEAVY_ARMY_SIZE,
 				GameState.INITIAL_HEAVY_ARMY_SIZE
 			)
-			heavy.attack = 15
-			heavy.defense = 15
-			assert(state.assign_army_to_battle_group(heavy, group.id))
+			main_army.attack = 15
+			main_army.defense = 15
+			assert(state.assign_army_to_battle_group(main_army, group.id))
 	state.refresh_derived()
 	return state
 

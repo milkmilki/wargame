@@ -577,11 +577,16 @@ func _verify_vassal_export_as_sovereign() -> bool:
 	var vassal_state := GameState.new()
 	vassal_state.generate_grid_world(24682)
 	var granted_region: Array[int] = []
-	for candidate in vassal_state.land_cities_of(0):
-		if not candidate.is_capital:
-			granted_region.append(candidate.id)
+	for center_value in vassal_state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if vassal_state.cities[center_id].owner_nation != 0:
+			continue
+		granted_region = vassal_state.normalize_enfeoff_region(
+			0, [center_id] as Array[int]
+		)
+		if not granted_region.is_empty():
 			break
-	if granted_region.size() != 1:
+	if granted_region.is_empty():
 		_fail("could not construct vassal export fixture")
 		return false
 	var subject_id := vassal_state.enfeoff(0, granted_region)

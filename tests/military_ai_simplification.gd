@@ -5,7 +5,7 @@ var _failures: Array[String] = []
 
 
 func _init() -> void:
-	_test_single_heavy_battle_group()
+	_test_single_standard_battle_group()
 	_test_generated_world_has_only_command_units()
 	_test_campaign_bounds()
 	_test_stable_campaign_plan_reuse()
@@ -17,19 +17,19 @@ func _init() -> void:
 	quit(0 if _failures.is_empty() else 1)
 
 
-func _test_single_heavy_battle_group() -> void:
+func _test_single_standard_battle_group() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(91001)
 	var nation := state.nations[0]
 	var group := nation.battle_groups[0]
 	var members := state.battle_group_members(0, group.id)
-	var heavy_count := 0
-	var light_count := 0
+	var standard_count := 0
+	var nonstandard_count := 0
 	for army in members:
-		if army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
-			heavy_count += 1
+		if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+			standard_count += 1
 		else:
-			light_count += 1
+			nonstandard_count += 1
 	var extra_main := state.create_army(
 		0,
 		nation.capital_city_id,
@@ -55,8 +55,8 @@ func _test_single_heavy_battle_group() -> void:
 	_check(
 		BattleGroup.MAX_ARMIES == 1
 			and members.size() == 1
-			and heavy_count == 1
-			and light_count == 0
+			and standard_count == 1
+			and nonstandard_count == 0
 			and occupied_group_rejected
 			and nonstandard_rejected
 			and understrength_main != null

@@ -61,7 +61,7 @@ func _test_positive_capacity_is_binary_for_movement() -> void:
 		)
 	_check(
 		all_armies_entered,
-		"正容量道路必须允许多支同向重军同时进入"
+		"正容量道路必须允许多支同向主战军同时进入"
 	)
 	var narrow_days := Simulation.edge_travel_days(
 		edge, GameState.INITIAL_HEAVY_ARMY_SIZE

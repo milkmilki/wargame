@@ -45,7 +45,7 @@ func _run() -> void:
 		GameState.INITIAL_HEAVY_ARMY_SIZE,
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
-	_check(main != null, "藩王必须能建立单重军 MAIN 战团")
+	_check(main != null, "藩王必须能建立单主战军 MAIN 战团")
 	if main == null:
 		_finish()
 		return
