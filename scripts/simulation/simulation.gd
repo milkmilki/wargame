@@ -114,6 +114,8 @@ const FOOD_SECURITY_RESERVE_MONTHS: int = 6
 const FOOD_RESERVE_RECOVERY_MONTHS: int = 6
 const DEMOBILIZATION_STEP_MIN: int = 500
 const WAR_MOBILIZATION_DAYS: int = 180
+const FORCE_STRUCTURE_REVIEW_INTERVAL_DAYS: int = DAYS_PER_HALF_YEAR
+const FORCE_STRUCTURE_MAX_RECRUITS_PER_REVIEW: int = 3
 const CAMPAIGN_OFFENSIVE_COMMIT_DAYS: int = 30
 const LOCAL_BATTLE_REINFORCE_RATIO: float = 1.25
 const LOCAL_BATTLE_MIN_MORALE_RATIO: float = 0.50
@@ -6491,6 +6493,8 @@ func _run_ai_force_structure_phase(
 			decision_context = context
 		_record_tick_profile_stage("ai_force_context", context_started)
 		decision_contexts[nation_id] = decision_context
+		if not _force_structure_review_due(nation_id, state.day):
+			continue
 		if (
 			spread_runtime_work
 			and Time.get_ticks_usec() - runtime_slice_started
@@ -6523,6 +6527,16 @@ func _run_ai_force_structure_phase(
 		"decision_contexts": decision_contexts,
 		"slice_started": runtime_slice_started,
 	}
+
+
+static func _force_structure_review_due(nation_id: int, day: int) -> bool:
+	if nation_id < 0 or day < 0:
+		return false
+	# 与十日军事决策的 nation_id 相位一致，确保错峰国家能命中半年周期。
+	return posmod(
+		day - nation_id,
+		FORCE_STRUCTURE_REVIEW_INTERVAL_DAYS
+	) == 0
 
 
 func _run_ai_campaign_planning_phase(
@@ -7041,31 +7055,46 @@ func _ai_manage_force_structure(
 			else _wartime_manpower_reserve(view.friendly_armies)
 		)
 	)
-	var available_manpower := (
-		state.nations[view.nation_id].manpower_pool - protected_reserve
-	)
-	var recruitment := {}
-	if assessment.small_nation_survival:
-		recruitment = _small_nation_force_recruitment(
-			view.nation_id,
-			nation,
-			assessment.main_armies
-		)
-	else:
-		recruitment = _regular_force_recruitment(
+	var recruited_any := false
+	for _recruit_index in range(FORCE_STRUCTURE_MAX_RECRUITS_PER_REVIEW):
+		var recruitment := {}
+		if assessment.small_nation_survival:
+			recruitment = _small_nation_force_recruitment(
+				view.nation_id,
+				nation,
+				assessment.main_armies
+			)
+		else:
+			recruitment = _regular_force_recruitment(
+				view,
+				snapshot,
+				threat,
+				decision_context,
+				assessment.wars
+			)
+		var formation_size := int(recruitment.get("size", 0))
+		if formation_size <= 0:
+			break
+		var available_manpower := nation.manpower_pool - protected_reserve
+		if not _try_recruit_force_structure(
 			view,
-			snapshot,
-			threat,
-			decision_context,
-			assessment.wars
-		)
-	return _try_recruit_force_structure(
-		view,
-		nation,
-		assessment,
-		recruitment,
-		available_manpower
-	)
+			nation,
+			assessment,
+			recruitment,
+			available_manpower
+		):
+			break
+		recruited_any = true
+		assessment.main_armies += 1
+		if not assessment.emergency_recruitment:
+			assessment.food_growth_budget = maxi(
+				assessment.food_growth_budget - formation_size,
+				0
+			)
+		# 小国生存目标只有一支机动预备队。
+		if assessment.small_nation_survival:
+			break
+	return recruited_any
 
 
 func _try_force_structure_demobilization(

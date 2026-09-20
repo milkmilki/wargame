@@ -11397,6 +11397,15 @@ func _test_vassal_wartime_support_and_capital() -> void:
 
 func _test_resource_hubs_and_food_mobilization() -> void:
 	print("[34] 资源核心：AI价值识别；富粮国家宣战时有限爆兵")
+	_check(
+		Simulation._force_structure_review_due(0, 0)
+			and Simulation._force_structure_review_due(0, 180)
+			and Simulation._force_structure_review_due(7, 7)
+			and Simulation._force_structure_review_due(7, 187)
+			and not Simulation._force_structure_review_due(0, 179)
+			and not Simulation._force_structure_review_due(7, 8),
+		"军制评估必须按国家错峰，每180天触发一次"
+	)
 	var gs := GameState.new()
 	gs.generate_grid_world(34001)
 	# 本用例直接对比本国产粮动员能力；贸易不再自动购买粮食或人力。
@@ -11555,12 +11564,17 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		resource_target.is_manpower_hub = false
 		resource_target.food_per_half_year = 0
 		resource_target.manpower_per_month = 10
+		var mobilization_center := gs.administrative_center_of(
+			resource_target.id
+		)
+		gs.cities[mobilization_center].garrison_manpower = (
+			GameState.ZHOU_GARRISON_CAPACITY
+		)
+		gs.cities[mobilization_center].garrison_defense_base = 5
 
-	var capital_id := gs.nations[0].capital_city_id
-	for army in gs.armies:
-		if army.owner_nation == 0 and army.location_city == capital_id:
-			army.size = 5000
-			break
+	for army in gs.armies.duplicate():
+		if army.owner_nation == 0:
+			gs.armies.erase(army)
 	var troops_before := 0
 	for army in gs.armies:
 		if army.owner_nation == 0:
@@ -11595,11 +11609,13 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	)
 	_check(
 		mobilized
-			and gs.armies.size() == army_count_before + 1
+			and gs.armies.size()
+				== army_count_before
+					+ Simulation.FORCE_STRUCTURE_MAX_RECRUITS_PER_REVIEW
 			and gs.nations[0].ai_last_force_reason.contains(
 				"战争生存动员"
 			),
-		"有效战争动员目标必须允许在库存门禁内继续扩军"
+		"半年军制评估必须在库存门禁内一次最多建立三支主战军"
 	)
 	sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.MAKE_PEACE,
