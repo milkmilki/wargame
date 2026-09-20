@@ -70,10 +70,11 @@ func matches(
 	view: AiWorldView,
 	snapshot: StrategicMapSnapshot
 ) -> bool:
-	# LINE 防区只在控制权或外交关系发生结构变化时重建。
+	# LINE 防区只在控制权、本国实际边界关系或道路发生结构变化时重建。
 	# potential_frontier_* 会随敌军集结、国力和威胁阈值波动；把它放进
 	# matches 会导致同一场长期战争里不断删建防区，清空持久 assignment。
-	# 首次构建时仍可吸收当时的潜在边境，之后动态风险由 MAIN 响应。
+	# 边界关系指纹独立记录接壤国的敌/中立/盟友状态，使结盟能清除旧中立
+	# 防区，同时避免远方国家的外交变化触发本国防区重建。
 	var current_owned_city_ids: Array[int] = []
 	for city in view.friendly_cities:
 		current_owned_city_ids.append(city.id)
@@ -109,4 +110,6 @@ static func _signature(
 		result.append(int(city_id))
 	result.append(actual_edges.size())
 	result.append_array(actual_edges)
+	result.append(snapshot.border_relation_signature.size())
+	result.append_array(snapshot.border_relation_signature)
 	return result

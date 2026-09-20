@@ -32,6 +32,7 @@ var frontier_cities: Array[int] = []
 var frontier_enemy_cities: Array[int] = []
 var potential_frontier_edges: Array[Edge] = []
 var potential_frontier_cities: Array[int] = []
+var border_relation_signature: Array[int] = []
 var potential_border_threat: Dictionary = {} ## friendly city_id -> float
 var potential_edge_threat: Dictionary = {}   ## edge key -> dimensionless threat
 var priority_enemy_cities: Array[int] = []
@@ -260,6 +261,7 @@ func _find_frontier(
 	var enemy_seen := {}
 	var neutral_cities_by_nation := {}
 	var neutral_edges_by_nation := {}
+	var border_relation_rows: Array[Array] = []
 	for friendly_city in _view.friendly_cities:
 		var friendly_id := friendly_city.id
 		for other_id in _state.neighbors(friendly_id):
@@ -269,6 +271,11 @@ func _find_frontier(
 			var edge := _state.edge_of(friendly_id, other_id)
 			if edge == null or edge.max_manpower <= 0:
 				continue
+			border_relation_rows.append([
+				GameState.edge_key(friendly_id, other_id),
+				other_nation,
+				_state.relation_between(nation_id, other_nation),
+			])
 			if _state.is_enemy(nation_id, other_nation):
 				frontier_edges.append(edge)
 				if not frontier_seen.has(friendly_id):
@@ -292,6 +299,17 @@ func _find_frontier(
 				neutral_edges_by_nation[other_nation].append(
 					edge
 				)
+	border_relation_rows.sort_custom(func(a: Array, b: Array) -> bool:
+		if int(a[0]) != int(b[0]):
+			return int(a[0]) < int(b[0])
+		if int(a[1]) != int(b[1]):
+			return int(a[1]) < int(b[1])
+		return int(a[2]) < int(b[2])
+	)
+	for relation_row in border_relation_rows:
+		border_relation_signature.append(int(relation_row[0]))
+		border_relation_signature.append(int(relation_row[1]))
+		border_relation_signature.append(int(relation_row[2]))
 	if profile_enabled:
 		_accumulate_build_profile(
 			build_profile, "ai_snapshot_frontier_scan",
