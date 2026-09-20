@@ -610,38 +610,33 @@ func _verify_vassal_export_as_sovereign() -> bool:
 		return false
 	var restored := GameState.new()
 	restored.generate_from_map_definition(definition, 24682)
-	var restored_line_armies := 0
-	var restored_main_light_armies := 0
-	var restored_main_heavy_armies := 0
+	var restored_main_armies := 0
+	var restored_nonstandard_armies := 0
 	for army in restored.armies:
 		if army.owner_nation != subject_id or army.size <= 0:
 			continue
-		if army.is_line_role():
-			restored_line_armies += 1
-		elif army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
-			restored_main_heavy_armies += 1
+		if army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE:
+			restored_main_armies += 1
 		else:
-			restored_main_light_armies += 1
+			restored_nonstandard_armies += 1
 	if (
 		restored.is_vassal(subject_id)
 		or restored.nation_display_name(subject_id).contains("王")
 		or restored.nations[subject_id].name != founding_symbol
-		or restored_line_armies != 0
-		or restored_main_light_armies != 0
-		or restored_main_heavy_armies
+		or restored_nonstandard_armies != 0
+		or restored_main_armies
 			!= GameState.SMALL_NATION_MOBILE_RESERVE_ARMIES
 	):
 		_fail(
 			"loaded map retained orphan vassal identity or invalid small-nation force: "
-			+ "vassal=%s display=%s name=%s symbol=%s line=%d main_light=%d main_heavy=%d"
+			+ "vassal=%s display=%s name=%s symbol=%s nonstandard=%d main=%d"
 			% [
 				str(restored.is_vassal(subject_id)),
 				restored.nation_display_name(subject_id),
 				restored.nations[subject_id].name,
 				founding_symbol,
-				restored_line_armies,
-				restored_main_light_armies,
-				restored_main_heavy_armies,
+				restored_nonstandard_armies,
+				restored_main_armies,
 			]
 		)
 		return false

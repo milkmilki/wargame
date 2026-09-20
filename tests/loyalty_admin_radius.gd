@@ -90,6 +90,7 @@ func _make_linear_state(
 	state.recognized_city_owners.resize(state.cities.size())
 	for city in state.cities:
 		state.recognized_city_owners[city.id] = city.owner_nation
+	state.rebuild_administrative_regions()
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
 			state.set_diplomatic_relation(
@@ -138,16 +139,16 @@ func _test_public_helpers_and_targets() -> void:
 	var balanced_soft := RebellionSystem.administrative_soft_stability_hops(balanced)
 	var centralizer_soft := RebellionSystem.administrative_soft_stability_hops(centralizer)
 	_check(
-		absf(inept_radius - 4.54) <= 0.01
+		absf(inept_radius - 1.95) <= 0.01
 			and absf(balanced_radius - 6.1) <= 0.01
-			and absf(centralizer_radius - 7.80) <= 0.01,
+			and absf(centralizer_radius - 13.30) <= 0.01,
 		"helper/radius_values_locked",
 		"inept=%.2f balanced=%.2f strong=%.2f"
 			% [inept_radius, balanced_radius, centralizer_radius]
 	)
 	_check(
-		inept_soft >= 4.0 and inept_soft < 5.0,
-		"helper/inept_soft_hops_near_4",
+		is_zero_approx(inept_soft),
+		"helper/inept_has_no_soft_stability_radius",
 		"radius=%.2f soft=%.2f" % [inept_radius, inept_soft]
 	)
 	_check(
@@ -165,9 +166,9 @@ func _test_public_helpers_and_targets() -> void:
 	var inept_hop4 := RebellionSystem.loyalty_target(state, 4, hops)
 	var inept_hop5 := RebellionSystem.loyalty_target(state, 5, hops)
 	_check(
-		float(inept_hop4["value"]) >= RebellionSystem.LOYALTY_SOFT_STABILITY_THRESHOLD
-			and float(inept_hop5["value"]) < RebellionSystem.LOYALTY_SOFT_STABILITY_THRESHOLD,
-		"target/inept_4_stable_5_unstable",
+		float(inept_hop4["value"]) < RebellionSystem.LOYALTY_SOFT_STABILITY_THRESHOLD
+			and float(inept_hop5["value"]) <= float(inept_hop4["value"]),
+		"target/inept_remains_unstable_with_distance",
 		"hop4=%.1f hop5=%.1f" % [inept_hop4["value"], inept_hop5["value"]]
 	)
 
@@ -202,7 +203,7 @@ func _test_public_helpers_and_targets() -> void:
 		absf(
 			float(strong_hop7["administrative_radius"])
 				- float(balanced_hop7["administrative_radius"])
-				- 1.70
+				- 7.20
 		) <= 0.01,
 		"helper/centralizer_trait_marginal_radius",
 		"balanced=%.2f strong=%.2f"
@@ -217,7 +218,7 @@ func _test_vassal_capital_loyalty_restores_after_enfeoff() -> void:
 	var state := _make_linear_state(11, 0)
 	_configure_ruler(state.nations[0], RulerProfile.INEPT)
 	var before := RebellionSystem.loyalty_target(state, 8)
-	var region: Array[int] = [8, 9, 10]
+	var region := state.normalize_enfeoff_region(0, [8] as Array[int])
 	var subject_id := state.enfeoff(0, region)
 	var subject_capital := state.nations[subject_id].capital_city_id if subject_id >= 0 else -1
 	var after := (

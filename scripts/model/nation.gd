@@ -66,14 +66,9 @@ var war_preparation_cancelled_day: int = -1
 ## 当前州级战争目标。
 var campaign_objective_center_city: int = -1
 var administrative_campaign_plan: AdministrativeCampaignPlan = null
-## 持久战团容器。空战团也保留，后续按“轻、轻、重”顺序补充成员。
+## 持久战团容器。空战团也保留，每个战团至多编入一支标准主战军。
 var battle_groups: Array[BattleGroup] = []
 var next_battle_group_id: int = 0
-## 当前控制区派生的持久边境防区。city_id -> FrontierDefenseSector。
-var frontier_defense_sectors: Dictionary = {}
-## 控制区、外交关系与实际/潜在边境共同派生的防区拓扑缓存。
-## 威胁、兵力和 Assignment 不存入此对象，每个 AI tick 仍动态刷新。
-var frontier_defense_topology: FrontierDefenseTopology = null
 ## 首都与粮仓登记。当前每国只有首都一个粮仓；数组结构为未来多粮仓保留扩展位。
 var capital_city_id: int = -1
 var warehouse_city_ids: Array[int] = []

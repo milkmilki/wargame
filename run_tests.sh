@@ -77,12 +77,6 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/diplomacy_objective_batch_cache.gd \
   --log-file "$LOG_DIR/world-war-diplomacy-objective-cache.log"
 echo
-echo "==> [2e2/29] 结盟释放旧中立边境防区门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/allied_frontier_release.gd \
-  --log-file "$LOG_DIR/world-war-allied-frontier-release.log"
-echo
-
 echo "==> [2f/29] 飞地仅按本国领土连通门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/enclave_own_territory.gd \
@@ -120,12 +114,6 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/state_war_posture.gd \
   --log-file "$LOG_DIR/world-war-state-war-posture.log"
 echo
-echo "==> [3/29] 主战军/填线军兵棋角色 smoke"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/army_role_counter_smoke.gd \
-  --log-file "$LOG_DIR/world-war-army-role-counter.log"
-echo
-
 echo "==> [4/29] 500 城双倍物理跨度场景 smoke"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/five_hundred_city_scene_smoke.gd \
@@ -198,18 +186,6 @@ echo "==> [19/29] 国家详情单次建造门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/nation_detail_single_build.gd \
   --log-file "$LOG_DIR/world-war-nation-detail-single-build.log"
-echo
-
-echo "==> [20/29] 前线容量分配器门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/frontline_capacity_allocator.gd \
-  --log-file "$LOG_DIR/world-war-frontline-capacity-allocator.log"
-echo
-
-echo "==> [21/29] 同日占领刷新门禁"
-HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
-  --script res://tests/frontline_capture_refresh.gd \
-  --log-file "$LOG_DIR/world-war-frontline-capture-refresh.log"
 echo
 
 echo "==> [22/29] 政治、命名与贸易 smoke"

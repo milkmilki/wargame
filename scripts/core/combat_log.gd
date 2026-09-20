@@ -298,7 +298,7 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	army.max_size = int(data.get("max_size", Army.DEFAULT_MAX_SIZE))
 	army.max_morale = float(data.get(
 		"max_morale",
-		Army.max_morale_for_formation(army.max_size)
+		Army.DEFAULT_MAX_MORALE
 	))
 	army.attack = int(data.get("attack", 10))
 	army.defense = int(data.get("defense", 10))

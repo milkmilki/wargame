@@ -111,7 +111,7 @@ const WAR_PREPARATION_CANCEL_COOLDOWN_DAYS: int = 360
 const WAR_PREPARATION_BEST_EFFORT_RATIO: float = 0.5
 
 ## 分封（藩王系统增量 B3）调参。第一版尽量少参数，判据来自设计文档第 4、6 节：
-## 核心是「区域所需 LINE 军粮耗 / 区域粮产」的负担比，只在和平期分封。
+## 核心是区域财政、粮产与治理压力，只在和平期分封。
 const ENFEOFF_MIN_REGION_CITIES: int = 3       ## 候选封地最少城市数，避免碎封
 const ENFEOFF_MAX_REGION_CITIES: int = 8       ## 主动生长上限；被切断飞地闭包可超过
 const ENFEOFF_BURDEN_RATIO_THRESHOLD: float = 0.60  ## 区域驻军粮耗/粮产超此值算「养不起」
@@ -5423,11 +5423,9 @@ static func _bump_frontier(
 
 
 # ------------------------------------------------------------------ 分封（藩王系统 B3）
-# 分封只评估财政与治理收益。可移动填线军已移除，地方防务不再作为
-# 独立军费或粮耗转移给藩王。
+# 分封只评估财政与治理收益，地方野战军不随封地转移。
 
-## 纯派生评估：一片区域的产出与分封财政反事实。旧填线军字段保留为零值，
-## 只用于兼容结构化诊断消费者，不再参与决策。
+## 纯派生评估：一片区域的产出与分封财政反事实。
 static func evaluate_region_burden(
 	state: GameState,
 	nation_id: int,
@@ -5468,8 +5466,6 @@ static func evaluate_region_burden(
 			garrison_troops += army.size
 	var monthly_food_demand := 0.0
 	var burden_ratio := 0.0
-	var transferable_line_upkeep := 0
-	var transferable_line_count := 0
 	var projected_tribute_income := int(floor(
 		float(projected_vassal_gold_income)
 		* GameState.DEFAULT_TRIBUTE_RATE
@@ -5492,10 +5488,6 @@ static func evaluate_region_burden(
 			projected_vassal_gold_income,
 		"projected_tribute_income":
 			projected_tribute_income,
-		"transferable_line_count":
-			transferable_line_count,
-		"transferable_line_upkeep":
-			transferable_line_upkeep,
 		"monthly_fiscal_benefit":
 			monthly_fiscal_benefit,
 	}
@@ -5806,7 +5798,7 @@ static func _overlord_under_war_pressure(
 
 ## 生成分封候选动作：
 ##   非藩王、分封后留足核心，且满足以下任一长期收益：
-##   1. 转移 LINE 军费 + 预计贡赋 - 失去直辖收入 > 0；
+##   1. 预计贡赋 - 失去直辖收入 > 0；
 ##   2. 候选边疆的应然驻军粮耗 / 本地产粮超过负担阈值。
 ## 所有君主都只在和平且军饷正常时分封；傀儡君主仅在通过该门控后持续缩减直辖。
 static func _collect_enfeoff_actions(
@@ -5894,7 +5886,11 @@ static func _collect_enfeoff_actions(
 		var governance_pressure_score := float(
 			governance["pressure_score"]
 		)
-		var governance_justifies := governance_city_count >= 1
+		var governance_justifies := (
+			governance_city_count >= 1
+			and governance_pressure_score
+				>= ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
+		)
 		if (
 			fiscal_benefit <= 0
 			and not governance_justifies

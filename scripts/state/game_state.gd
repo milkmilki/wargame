@@ -14,7 +14,6 @@ const CITY_MANPOWER_PER_MONTH_MAX: int = 1000
 const RESOURCE_CAPACITY_YEARS: int = 3
 const FOOD_CAPACITY_HALF_YEARS: int = RESOURCE_CAPACITY_YEARS * 2
 const INITIAL_MANPOWER_RESERVE_MONTHS: int = (RESOURCE_CAPACITY_YEARS+2) * 12
-const INITIAL_LIGHT_ARMY_SIZE: int = 5000
 const INITIAL_HEAVY_ARMY_SIZE: int = 15000
 const ARMY_COUNT_LIMIT_PER_CITY: int = 3
 const ZHOU_GARRISON_CAPACITY: int = 15000
@@ -324,7 +323,7 @@ func generate_world(
 	)
 	assert(
 		_battle_group_structure_valid(),
-		"正式地图初始重军必须属于合法的持久战团"
+		"正式地图初始主战军必须属于合法的持久战团"
 	)
 
 
@@ -2711,11 +2710,6 @@ func recalculate_road_network(settings: Dictionary) -> Dictionary:
 		open_count += reopened
 		blocked_count = maxi(blocked_count - reopened, 0)
 		total_capacity += reopened * Edge.TERRAIN_LOW_MANPOWER
-	for army in armies:
-		army.clear_line_assignment()
-	for nation in nations:
-		nation.frontier_defense_sectors.clear()
-		nation.frontier_defense_topology = null
 	road_network_revision += 1
 	var region_analysis := rebuild_region_analysis()
 	var administrative_analysis := rebuild_administrative_regions()
@@ -3273,38 +3267,40 @@ func _generate_armies() -> void:
 		if owned_land.is_empty():
 			continue
 		var group := create_battle_group(nation.id)
-		var heavy := create_army(
+		var army := create_army(
 			nation.id,
 			nation.capital_city_id,
 			INITIAL_HEAVY_ARMY_SIZE,
 			INITIAL_HEAVY_ARMY_SIZE
 		)
-		if group == null or heavy == null:
+		if group == null or army == null:
 			if group != null:
 				nation.battle_groups.erase(group)
 			continue
-		_initialize_army_attributes(heavy)
-		assign_army_to_battle_group(heavy, group.id)
+		_initialize_army_attributes(army)
+		assign_army_to_battle_group(army, group.id)
 
 
 func _battle_group_structure_valid() -> bool:
 	for nation in nations:
 		for group in nation.battle_groups:
-			var heavy_count := 0
+			var army_count := 0
 			for army in battle_group_members(nation.id, group.id):
 				if army.max_size != INITIAL_HEAVY_ARMY_SIZE:
 					return false
-				heavy_count += 1
-			if heavy_count > BattleGroup.MAX_HEAVY_ARMIES:
+				army_count += 1
+			if army_count > BattleGroup.MAX_ARMIES:
 				return false
 	for army in armies:
 		if (
 			army.size > 0
-			and army.max_size >= INITIAL_HEAVY_ARMY_SIZE
-			and battle_group_by_id(
-				army.owner_nation,
-				army.battle_group_id
-			) == null
+			and (
+				army.max_size != INITIAL_HEAVY_ARMY_SIZE
+				or battle_group_by_id(
+					army.owner_nation,
+					army.battle_group_id
+				) == null
+			)
 		):
 			return false
 	return true
@@ -3374,17 +3370,14 @@ func assign_army_to_battle_group(
 		) == null
 	):
 		return false
-	var heavy_count := 0
+	var army_count := 0
 	for member in battle_group_members(army.owner_nation, group_id):
 		if member == army:
 			continue
-		if member.max_size >= INITIAL_HEAVY_ARMY_SIZE:
-			heavy_count += 1
-	if heavy_count >= BattleGroup.MAX_HEAVY_ARMIES:
+		army_count += 1
+	if army_count >= BattleGroup.MAX_ARMIES:
 		return false
 	army.battle_group_id = group_id
-	army.strategic_role = Army.StrategicRole.MAIN
-	army.clear_line_assignment()
 	return true
 
 
@@ -3422,7 +3415,7 @@ func create_army(
 		or city_id < 0 or city_id >= cities.size()
 		or cities[city_id].owner_nation != nation_id
 		or size <= 0
-		or max_size <= 0
+		or max_size != INITIAL_HEAVY_ARMY_SIZE
 		or active_army_count(nation_id)
 			>= max_army_count(nation_id)
 	):
@@ -3433,13 +3426,8 @@ func create_army(
 	army.owner_nation = nation_id
 	army.max_size = max_size
 	army.size = mini(size, max_size)
-	army.max_morale = Army.max_morale_for_formation(max_size)
+	army.max_morale = Army.DEFAULT_MAX_MORALE
 	army.morale = army.max_morale
-	army.strategic_role = (
-		Army.StrategicRole.MAIN
-		if max_size >= INITIAL_HEAVY_ARMY_SIZE
-		else Army.StrategicRole.LINE
-	)
 	army.location_city = city_id
 	army.move_from = city_id
 	army.state = Army.State.IDLE
@@ -3488,162 +3476,6 @@ func nation_display_name(nation_id: int) -> String:
 func city_display_name(city_id: int, include_kind: bool = false) -> String:
 	return WorldNaming.city_display_name(self, city_id, include_kind)
 
-
-## 将一支静止军队按满编容量等分，兵力和满编总额严格守恒。
-func split_army(
-	army: Army,
-	part_max_size: int
-) -> Array[Army]:
-	var result: Array[Army] = []
-	if (
-		army == null
-		or not armies.has(army)
-		or army.size <= 0
-		or army.state != Army.State.IDLE
-		or army.on_edge
-		or part_max_size < Edge.MIN_MANPOWER
-		or part_max_size >= army.max_size
-		or army.max_size % part_max_size != 0
-		or army.location_city < 0
-		or army.location_city >= cities.size()
-		or not has_military_access(
-			army.owner_nation,
-			cities[army.location_city].owner_nation
-		)
-	):
-		return result
-	var part_count := army.max_size / part_max_size
-	if (
-		army.size < part_count
-		or active_army_count(army.owner_nation)
-			+ part_count - 1
-			> max_army_count(army.owner_nation)
-	):
-		return result
-	var original_size := army.size
-	var original_battle_group_id := army.battle_group_id
-	var original_line_assignment_city := (
-		army.line_assignment_city
-	)
-	var original_line_assignment_posture := (
-		army.line_assignment_posture
-	)
-	var original_line_assignment_edge := (
-		army.line_assignment_edge
-	)
-	var original_supply_debt := army.supply_debt
-	var original_food_debt := army.supply_food_debt
-	var original_morale_ratio := army.morale_ratio()
-	var part_max_morale := Army.max_morale_for_formation(
-		part_max_size
-	)
-	var base_size := original_size / part_count
-	var remainder := original_size % part_count
-	var available_group_light_slots := 0
-	if original_battle_group_id >= 0:
-		var existing_group_lights := 0
-		for member in battle_group_members(
-			army.owner_nation,
-			original_battle_group_id
-		):
-			if (
-				member != army
-				and member.max_size == INITIAL_LIGHT_ARMY_SIZE
-			):
-				existing_group_lights += 1
-		available_group_light_slots = maxi(
-			BattleGroup.MAX_LIGHT_ARMIES
-				- existing_group_lights,
-			0
-		)
-	army.max_size = part_max_size
-	army.max_morale = part_max_morale
-	army.morale = original_morale_ratio * part_max_morale
-	army.battle_group_id = (
-		original_battle_group_id
-		if available_group_light_slots > 0
-		else -1
-	)
-	army.strategic_role = (
-		Army.StrategicRole.MAIN
-		if army.battle_group_id >= 0
-		else Army.StrategicRole.LINE
-	)
-	army.size = base_size + (1 if remainder > 0 else 0)
-	army.supply_debt = (
-		original_supply_debt
-		* float(army.size)
-		/ float(original_size)
-	)
-	army.supply_food_debt = (
-		original_food_debt
-		* float(army.size)
-		/ float(original_size)
-	)
-	result.append(army)
-	for part_index in range(1, part_count):
-		var child := Army.new()
-		child.id = _next_army_id
-		_next_army_id += 1
-		child.owner_nation = army.owner_nation
-		child.max_size = part_max_size
-		child.max_morale = part_max_morale
-		child.battle_group_id = (
-			original_battle_group_id
-			if part_index < available_group_light_slots
-			else -1
-		)
-		child.strategic_role = (
-			Army.StrategicRole.MAIN
-			if child.battle_group_id >= 0
-			else Army.StrategicRole.LINE
-		)
-		child.line_assignment_city = (
-			original_line_assignment_city
-		)
-		child.line_assignment_posture = (
-			original_line_assignment_posture
-		)
-		child.line_assignment_edge = (
-			original_line_assignment_edge
-		)
-		child.size = (
-			base_size
-			+ (1 if part_index < remainder else 0)
-		)
-		child.speed_factor = army.speed_factor
-		child.attack = army.attack
-		child.defense = army.defense
-		child.morale = original_morale_ratio * part_max_morale
-		child.supply_ratio = army.supply_ratio
-		child.starving = army.starving
-		child.supply_debt = (
-			original_supply_debt
-			* float(child.size)
-			/ float(original_size)
-		)
-		child.supply_food_debt = (
-			original_food_debt
-			* float(child.size)
-			/ float(original_size)
-		)
-		child.location_city = army.location_city
-		child.move_from = army.location_city
-		child.state = Army.State.IDLE
-		child.defensive_deployment_until_day = (
-			army.defensive_deployment_until_day
-		)
-		child.defensive_blocked_edge_a = (
-			army.defensive_blocked_edge_a
-		)
-		child.defensive_blocked_edge_b = (
-			army.defensive_blocked_edge_b
-		)
-		armies.append(child)
-		result.append(child)
-	return result
-
-# ------------------------------------------------------------------ 查询辅助
 
 static func edge_key(a: int, b: int) -> int:
 	var lo := mini(a, b)
@@ -4265,7 +4097,7 @@ func start_regional_rebellion(
 	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
 
 	# Local stationed forces defect; if none do, mobilize one regular command
-	# unit from transferred manpower instead of recreating the removed LINE role.
+	# unit from transferred manpower.
 	var defected_armies: Array[Army] = []
 	for army in armies:
 		if (
@@ -4275,13 +4107,10 @@ func start_regional_rebellion(
 		):
 			army.owner_nation = rebel.id
 			army.battle_group_id = -1
-			army.clear_line_assignment()
 			defected_armies.append(army)
 	for defected_army in defected_armies:
 		if defected_army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
 			assign_main_army_to_independent_command(defected_army)
-		else:
-			defected_army.strategic_role = Army.StrategicRole.LINE
 	if defected_armies.is_empty() and rebel.manpower_pool >= INITIAL_HEAVY_ARMY_SIZE:
 		var uprising := create_army(
 			rebel.id, capital_id, INITIAL_HEAVY_ARMY_SIZE, INITIAL_HEAVY_ARMY_SIZE
@@ -4444,13 +4273,10 @@ func restore_regional_loyalty_target(
 		):
 			army.owner_nation = target_id
 			army.battle_group_id = -1
-			army.clear_line_assignment()
 			restored_armies.append(army)
 	for restored_army in restored_armies:
 		if restored_army.max_size >= INITIAL_HEAVY_ARMY_SIZE:
 			assign_main_army_to_independent_command(restored_army)
-		else:
-			restored_army.strategic_role = Army.StrategicRole.LINE
 	parent.last_rebellion_day = day
 	target.last_rebellion_day = day
 	return true
@@ -4647,42 +4473,34 @@ func _spawn_rebellion_uprising_armies(
 		maxi(multiplier, 1) * int(ceil(0.1 * float(land_count)))
 	)
 	for _index in range(uprising_count):
-		var heavy := _spawn_uprising_army(rebel_id, capital_id)
-		if heavy == null:
+		var army := _spawn_uprising_army(rebel_id, capital_id)
+		if army == null:
 			return
-		if assign_main_army_to_independent_command(heavy) == null:
-			armies.erase(heavy)
+		if assign_main_army_to_independent_command(army) == null:
+			armies.erase(army)
 			return
 
 
-## 凭空动员一支满编重军（绕过 create_army 的城市归属校验：火星兵可在被围/新夺首都起兵）。
+## 凭空动员一支满编主战军（绕过 create_army 的城市归属校验：火星兵可在被围/新夺首都起兵）。
 ## 突破 create_army 的国家军队数上限硬约束——起兵是剧情动员，不受常备军配额限制。
 func _spawn_uprising_army(nation_id: int, city_id: int) -> Army:
-	return _spawn_conjured_army(
-		nation_id,
-		city_id,
-		INITIAL_HEAVY_ARMY_SIZE,
-		Army.StrategicRole.MAIN
-	)
+	return _spawn_conjured_army(nation_id, city_id)
 
 
-## 凭空动员一支指定编制/角色的满编军队（不扣人力/金钱、不受军队数上限约束）。
+## 凭空动员一支满编主战军（不扣人力/金钱、不受军队数上限约束）。
 ## 仅用于叛乱等离散政治动员；常规生成与招募仍受按陆城数计算的实体上限约束。
 func _spawn_conjured_army(
 	nation_id: int,
-	city_id: int,
-	formation_size: int,
-	role: int
+	city_id: int
 ) -> Army:
 	var army := Army.new()
 	army.id = _next_army_id
 	_next_army_id += 1
 	army.owner_nation = nation_id
-	army.max_size = formation_size
-	army.size = formation_size
-	army.max_morale = Army.max_morale_for_formation(formation_size)
+	army.max_size = INITIAL_HEAVY_ARMY_SIZE
+	army.size = INITIAL_HEAVY_ARMY_SIZE
+	army.max_morale = Army.DEFAULT_MAX_MORALE
 	army.morale = army.max_morale
-	army.strategic_role = role
 	army.location_city = city_id
 	army.move_from = city_id
 	army.state = Army.State.IDLE
@@ -4691,140 +4509,6 @@ func _spawn_conjured_army(
 	army.defense = rng.randi_range(8, 15)
 	armies.append(army)
 	return army
-
-
-## 查询一次分封会地方化的宗主 LINE。只认封地城市内的稳定驻军，以及从封地端
-## 驻守外部边界的 HOLDING；供 AI 反事实财政评估与实际转移共用，避免预测漂移。
-func transferable_vassal_line_armies(
-	overlord_id: int,
-	fief_city_ids: Array[int]
-) -> Array[Army]:
-	var result: Array[Army] = []
-	if (
-		overlord_id < 0
-		or overlord_id >= nations.size()
-		or fief_city_ids.is_empty()
-	):
-		return result
-	var fief := {}
-	for city_id in fief_city_ids:
-		if city_id >= 0 and city_id < cities.size():
-			fief[city_id] = true
-	for army in armies:
-		if (
-			army.owner_nation != overlord_id
-			or army.size <= 0
-			or not army.is_line_role()
-			or army.battle_group_id >= 0
-		):
-			continue
-		var stationed_in_fief := (
-			not army.on_edge
-			and army.state in [
-				Army.State.IDLE,
-				Army.State.RECOVERING,
-			]
-			and fief.has(army.current_city_node())
-		)
-		var holding_fief_border := (
-			army.on_edge
-			and army.state == Army.State.HOLDING
-			and fief.has(army.move_from)
-		)
-		if stationed_in_fief or holding_fief_border:
-			result.append(army)
-	result.sort_custom(func(a: Army, b: Army) -> bool:
-		return a.id < b.id
-	)
-	return result
-
-
-## 分封驻军地方化：先把稳定驻扎在封地城市、或从封地端驻守外部边界的宗主 LINE
-## 转给藩王，再凭空补足到「封地陆城数」。正在行军/交战/撤退的 LINE 与全部 MAIN
-## 仍归宗主，避免政治重组改写进行中的状态机或拆散持久战团。
-func _grant_vassal_line_armies(
-	subject_id: int,
-	overlord_id: int
-) -> void:
-	if (
-		subject_id < 0
-		or subject_id >= nations.size()
-		or overlord_id < 0
-		or overlord_id >= nations.size()
-	):
-		return
-	var owned := land_cities_of(subject_id)
-	if owned.is_empty():
-		return
-	var fief_city_ids: Array[int] = []
-	for city in owned:
-		fief_city_ids.append(city.id)
-	var overlord := nations[overlord_id]
-	for army in transferable_vassal_line_armies(
-		overlord_id,
-		fief_city_ids
-	):
-		army.owner_nation = subject_id
-		army.clear_line_assignment()
-		army.ai_action = ActionCandidate.Kind.NONE
-		army.ai_target_city = -1
-		army.ai_order_created_day = -1
-		army.ai_order_until_day = -1
-		army.ai_order_score = 0.0
-		army.ai_order_reason = ""
-		army.defensive_deployment_until_day = -1
-		army.defensive_blocked_edge_a = -1
-		army.defensive_blocked_edge_b = -1
-		army.occupation_claimant_nation = -1
-		army.diplomatic_repatriation = false
-		if overlord.administrative_campaign_plan != null:
-			overlord.administrative_campaign_plan.army_assignments.erase(army.id)
-	var target := owned.size()
-	# 只按 LINE 计数；藩王未来已有 MAIN 时也不得挤占地方防务配额。
-	var existing := 0
-	for army in armies:
-		if (
-			army.owner_nation == subject_id
-			and army.size > 0
-			and army.is_line_role()
-		):
-			existing += 1
-	var deficit := target - existing
-	if deficit <= 0:
-		return
-	# 缺口按城序补：优先补到当前无本国驻军的城，让填线军铺开而非堆在首都（确定性城序）。
-	var garrisoned := {}
-	for army in armies:
-		if (
-			army.owner_nation == subject_id
-			and army.size > 0
-			and not army.on_edge
-			and army.location_city >= 0
-		):
-			garrisoned[army.location_city] = true
-	var granted := 0
-	for city in owned:
-		if granted >= deficit:
-			break
-		if garrisoned.has(city.id):
-			continue
-		_spawn_conjured_army(
-			subject_id,
-			city.id,
-			INITIAL_LIGHT_ARMY_SIZE,
-			Army.StrategicRole.LINE
-		)
-		granted += 1
-	# 若无驻军空城已补完仍有缺口（城少军多的极端情形），余量补在首都。
-	var capital_id := nations[subject_id].capital_city_id
-	while granted < deficit and capital_id >= 0 and capital_id < cities.size():
-		_spawn_conjured_army(
-			subject_id,
-			capital_id,
-			INITIAL_LIGHT_ARMY_SIZE,
-			Army.StrategicRole.LINE
-		)
-		granted += 1
 
 
 ## 结束削藩内战（不改变领土归属，仅复位关系）：宗主↔藩王恢复 ALLIED，清内战标记。
@@ -5783,8 +5467,6 @@ func finalize_annexation_after_territory_commit(
 	for army in armies:
 		if army.owner_nation == absorbed and army.size > 0:
 			army.owner_nation = absorber
-			if army.battle_group_id < 0:
-				army.clear_line_assignment()
 		if army.occupation_claimant_nation == absorbed:
 			army.occupation_claimant_nation = absorber
 		if army.owner_nation == absorber:

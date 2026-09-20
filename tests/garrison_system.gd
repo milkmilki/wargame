@@ -70,7 +70,6 @@ func _init() -> void:
 		relief.owner_nation = defender
 		relief.size = 1000
 		relief.max_size = 15000
-		relief.strategic_role = Army.StrategicRole.MAIN
 		relief.location_city = center_id
 		relief.move_from = center_id
 		relief.state = Army.State.IDLE
@@ -83,11 +82,6 @@ func _init() -> void:
 			attacker, center_id, 60
 		) == 0
 		relief.state = Army.State.IDLE
-		relief.strategic_role = Army.StrategicRole.LINE
-		relief.max_size = 14999
-		valid = valid and state.campaign_reinforcement_threat(
-			attacker, center_id, 60
-		) == 0
 	var same_seed := GameState.new()
 	same_seed.generate_grid_world(94101)
 	for city_id in range(state.cities.size()):

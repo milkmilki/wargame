@@ -5,8 +5,7 @@ extends RefCounted
 ## 的指挥单位；单次攻势仍由 Simulation 自己限制投入数量。
 
 const MAX_CAMPAIGN_COMMAND_UNITS: int = 6
-const MAX_LIGHT_ARMIES: int = 0
-const MAX_HEAVY_ARMIES: int = 1
+const MAX_ARMIES: int = 1
 
 var id: int = -1
 var owner_nation: int = -1

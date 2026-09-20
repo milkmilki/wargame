@@ -49,8 +49,6 @@ func _run() -> void:
 	if main == null:
 		_finish()
 		return
-	main.clear_line_assignment()
-	main.strategic_role = Army.StrategicRole.MAIN
 	var group := state.create_battle_group(subject)
 	state.assign_army_to_battle_group(main, group.id)
 	var view := AiWorldView.build(state, subject)
@@ -61,7 +59,6 @@ func _run() -> void:
 	simulation.setup(state)
 	var assessment := simulation._build_force_structure_assessment(
 		view,
-		defense_plan,
 		{},
 		{}
 	)

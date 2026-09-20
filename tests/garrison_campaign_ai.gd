@@ -31,7 +31,6 @@ func _init() -> void:
 	defender_army.owner_nation = state.cities[center_id].owner_nation
 	defender_army.size = 12000
 	defender_army.max_size = 15000
-	defender_army.strategic_role = Army.StrategicRole.MAIN
 	defender_army.location_city = center_id
 	defender_army.move_from = center_id
 	defender_army.state = Army.State.IDLE
@@ -42,7 +41,6 @@ func _init() -> void:
 		army.owner_nation = attacker_id
 		army.size = 15000
 		army.max_size = 15000
-		army.strategic_role = Army.StrategicRole.MAIN
 		army.location_city = origin
 		army.move_from = origin
 		army.state = Army.State.IDLE

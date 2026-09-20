@@ -15,7 +15,6 @@ func _init() -> void:
 	var total_war_declarations := 0
 	var total_ai_orders := 0
 	var total_redeployment_orders := 0
-	var total_role_deployment_orders := 0
 	var global_max_idle_city_stack := 0
 	var global_max_frontier_idle_stack := 0
 	var global_max_interior_idle_stack := 0
@@ -47,7 +46,6 @@ func _init() -> void:
 		var turnovers := 0
 		var ai_orders := 0
 		var redeployment_orders := 0
-		var role_deployment_orders := 0
 		var max_idle_city_stack := 0
 		var max_frontier_idle_stack := 0
 		var max_interior_idle_stack := 0
@@ -152,10 +150,6 @@ func _init() -> void:
 						ActionCandidate.Kind.RETREAT,
 					]:
 						redeployment_orders += 1
-					if army.ai_order_reason.begins_with(
-						"填线部署"
-					):
-						role_deployment_orders += 1
 			for stack_key_value in idle_city_stacks:
 				var stack_key := int(stack_key_value)
 				var stack_size := int(
@@ -191,16 +185,12 @@ func _init() -> void:
 						):
 							continue
 						stack_armies.append(
-							"%d:S%d:A%d:R%d:G%d:L%d/%d/%d:T%d:%s"
+							"%d:S%d:A%d:G%d:T%d:%s"
 							% [
 								stacked_army.max_size,
 								stacked_army.state,
 								stacked_army.ai_action,
-								stacked_army.strategic_role,
 								stacked_army.battle_group_id,
-								stacked_army.line_assignment_city,
-								stacked_army.line_assignment_posture,
-								stacked_army.line_assignment_edge,
 								stacked_army.ai_target_city,
 								stacked_army.ai_order_reason,
 							]
@@ -379,8 +369,7 @@ func _init() -> void:
 				if committed_to_border:
 					border_armies += 1
 			var invalid_group_reasons: Array[String] = []
-			var light_by_group := {}
-			var heavy_by_group := {}
+			var armies_by_group := {}
 			var army_group_by_id := {}
 			for army in state.armies:
 				if army.owner_nation != nation.id or army.size <= 0:
@@ -403,39 +392,21 @@ func _init() -> void:
 							"army%d_group_not_main"
 							% army.id
 						)
-					if (
-						army.max_size
-							== GameState.INITIAL_LIGHT_ARMY_SIZE
-					):
-						light_by_group[army.battle_group_id] = (
-							int(light_by_group.get(
-								army.battle_group_id,
-								0
-							)) + 1
+					if army.max_size != GameState.INITIAL_HEAVY_ARMY_SIZE:
+						invalid_group_reasons.append(
+							"army%d_nonstandard_capacity" % army.id
 						)
-					elif (
-						army.max_size
-							>= GameState.INITIAL_HEAVY_ARMY_SIZE
-					):
-						heavy_by_group[army.battle_group_id] = (
-							int(heavy_by_group.get(
-								army.battle_group_id,
-								0
-							)) + 1
-						)
-				elif (
-					army.max_size
-						>= GameState.INITIAL_HEAVY_ARMY_SIZE
-				):
+					armies_by_group[army.battle_group_id] = (
+						int(armies_by_group.get(army.battle_group_id, 0)) + 1
+					)
+				else:
 					invalid_group_reasons.append(
-						"heavy%d_ungrouped" % army.id
+						"army%d_ungrouped" % army.id
 					)
 			for group in nation.battle_groups:
 				if (
-					int(light_by_group.get(group.id, 0))
-						> BattleGroup.MAX_LIGHT_ARMIES
-					or int(heavy_by_group.get(group.id, 0))
-						> BattleGroup.MAX_HEAVY_ARMIES
+					int(armies_by_group.get(group.id, 0))
+						> BattleGroup.MAX_ARMIES
 				):
 					invalid_group_reasons.append(
 						"group%d_over_capacity" % group.id
@@ -471,7 +442,6 @@ func _init() -> void:
 		)
 		total_ai_orders += ai_orders
 		total_redeployment_orders += redeployment_orders
-		total_role_deployment_orders += role_deployment_orders
 		global_max_idle_city_stack = maxi(
 			global_max_idle_city_stack,
 			max_idle_city_stack
@@ -494,7 +464,7 @@ func _init() -> void:
 				+ "ally=%d leave=%d "
 				+ "war_pairs=%d alliance_pairs=%d capital_armies=%d border_armies=%d "
 				+ "defended_cities=%d force_mismatches=%d/%d "
-				+ "orders=%d redeploy=%d role_deploy=%d "
+				+ "orders=%d redeploy=%d "
 				+ "max_idle_stack=%d/%d/%d stack_at=%s "
 				+ "hostile_stationed=%d territory_invalid=%d@%d "
 				+ "commit_failures=%d ms=%d"
@@ -533,7 +503,6 @@ func _init() -> void:
 				persistent_force_structure_mismatches.size(),
 				ai_orders,
 				redeployment_orders,
-				role_deployment_orders,
 				max_idle_city_stack,
 				max_frontier_idle_stack,
 				max_interior_idle_stack,
@@ -590,7 +559,7 @@ func _init() -> void:
 			"total_net_captures=%d total_turnovers=%d "
 			+ "total_wars=%d total_mobilized=%d "
 			+ "total_orders=%d total_redeploy=%d "
-			+ "total_role_deploy=%d max_idle_stack=%d/%d/%d"
+			+ "max_idle_stack=%d/%d/%d"
 		)
 		% [
 			total_net_captures,
@@ -599,7 +568,6 @@ func _init() -> void:
 			total_mobilization_armies,
 			total_ai_orders,
 			total_redeployment_orders,
-			total_role_deployment_orders,
 			global_max_idle_city_stack,
 			global_max_frontier_idle_stack,
 			global_max_interior_idle_stack,

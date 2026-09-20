@@ -355,7 +355,7 @@ func _test_deposit_food_immediate_aggregate() -> void:
 
 func _test_setup_snapshot_production_estimate() -> void:
 	var state := _make_single_nation_state()
-	var army := state.create_army(0, 0, 5000)
+	var army := state.create_army(0, 0, 5000, Army.DEFAULT_MAX_SIZE)
 	_check(
 		army != null,
 		"setup_snapshot/army_created",

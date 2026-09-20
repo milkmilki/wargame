@@ -53,9 +53,6 @@ func _init() -> void:
 	_sim.ai_parallel_threat_disabled = (
 		OS.get_environment("AI_STUT_SERIAL_AI_THREAT") == "1"
 	)
-	_sim.ai_parallel_defense_disabled = (
-		OS.get_environment("AI_STUT_SERIAL_AI_DEFENSE") == "1"
-	)
 	_sim.reinforcement_network_cache_disabled = (
 		OS.get_environment(
 			"AI_STUT_LEGACY_REINFORCEMENT_NETWORKS"
@@ -66,7 +63,7 @@ func _init() -> void:
 	print(
 		(
 			"=== 真实运行路径卡顿探针 国=%d 城=%d "
-			+ "目标天=%d 倍率=%dx 补给网络=%s AI威胁=%s 防区=%s ==="
+			+ "目标天=%d 倍率=%dx 补给网络=%s AI威胁=%s ==="
 		) % [
 			nations,
 			cities,
@@ -82,11 +79,6 @@ func _init() -> void:
 				"串行worker"
 				if _sim.ai_parallel_threat_disabled
 				else "最多%d路多核" % Simulation.AI_THREAT_MAX_WORKERS
-			),
-			(
-				"串行worker"
-				if _sim.ai_parallel_defense_disabled
-				else "最多%d路多核" % Simulation.AI_DEFENSE_MAX_WORKERS
 			),
 		]
 	)
@@ -202,13 +194,6 @@ func _finish() -> void:
 		float(_sim.ai_threat_worker_total_usec)
 			/ 1000.0 / maxf(float(_sim.ai_threat_worker_runs), 1.0),
 		_sim.ai_threat_worker_count_last,
-	])
-	print("Defense worker: 轮次=%d 累计=%.1fms 均值=%.1fms 最近worker=%d" % [
-		_sim.ai_defense_worker_runs,
-		float(_sim.ai_defense_worker_total_usec) / 1000.0,
-		float(_sim.ai_defense_worker_total_usec)
-			/ 1000.0 / maxf(float(_sim.ai_defense_worker_runs), 1.0),
-		_sim.ai_defense_worker_count_last,
 	])
 	print("掉帧统计: 16-33ms=%d  33-100ms=%d  >100ms=%d (总%d帧)" % [
 		over_16, over_33, over_100, _frame_times.size(),

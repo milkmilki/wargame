@@ -113,7 +113,7 @@ func _army_fp(army: Army) -> String:
 		army.owner_nation, army.size, army.state, army.location_city,
 		army.move_from, army.move_to, army.move_progress, army.path,
 		army.morale, army.supply_ratio, army.ai_action,
-		army.ai_target_city, army.line_assignment_city,
+		army.ai_target_city,
 	])
 
 

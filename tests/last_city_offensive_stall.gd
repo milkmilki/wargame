@@ -213,17 +213,17 @@ func _build_fixture() -> GameState:
 		var garrison := state.create_army(
 			REMNANT_ID,
 			LAST_CITY_ID,
-			GameState.INITIAL_LIGHT_ARMY_SIZE,
-			GameState.INITIAL_LIGHT_ARMY_SIZE
+			GameState.INITIAL_HEAVY_ARMY_SIZE,
+			GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
 		if garrison == null:
 			garrison = Army.new()
 			garrison.id = 100000 + garrison_index
 			garrison.owner_nation = REMNANT_ID
-			garrison.size = GameState.INITIAL_LIGHT_ARMY_SIZE
-			garrison.max_size = GameState.INITIAL_LIGHT_ARMY_SIZE
-			garrison.max_morale = Army.LIGHT_MAX_MORALE
-			garrison.morale = Army.LIGHT_MAX_MORALE
+			garrison.size = GameState.INITIAL_HEAVY_ARMY_SIZE
+			garrison.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+			garrison.max_morale = Army.DEFAULT_MAX_MORALE
+			garrison.morale = Army.DEFAULT_MAX_MORALE
 			garrison.location_city = LAST_CITY_ID
 			garrison.move_from = LAST_CITY_ID
 			garrison.state = Army.State.IDLE
@@ -233,17 +233,7 @@ func _build_fixture() -> GameState:
 	var initial_groups := _env_int("LAST_CITY_MAIN_GROUPS", 0)
 	for _group_index in range(initial_groups):
 		var group := state.create_battle_group(DOMINANT_ID)
-		for _light_index in range(BattleGroup.MAX_LIGHT_ARMIES):
-			var light := state.create_army(
-				DOMINANT_ID,
-				dominant_capital,
-				GameState.INITIAL_LIGHT_ARMY_SIZE,
-				GameState.INITIAL_LIGHT_ARMY_SIZE
-			)
-			light.attack = 15
-			light.defense = 15
-			assert(state.assign_army_to_battle_group(light, group.id))
-		for _heavy_index in range(BattleGroup.MAX_HEAVY_ARMIES):
+		for _army_index in range(BattleGroup.MAX_ARMIES):
 			var heavy := state.create_army(
 				DOMINANT_ID,
 				dominant_capital,

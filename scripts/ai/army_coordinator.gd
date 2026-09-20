@@ -299,13 +299,7 @@ static func merge_colocated(state: GameState) -> int:
 
 
 static func _merge_key(army: Army) -> String:
-	var role_key := "R:%d:G:%d:L:%d:%d:%d" % [
-		army.strategic_role,
-		army.battle_group_id,
-		army.line_assignment_city,
-		army.line_assignment_posture,
-		army.line_assignment_edge,
-	]
+	var role_key := "G:%d" % army.battle_group_id
 	if army.state in [Army.State.IDLE, Army.State.RECOVERING]:
 		return "%d:C:%d:S:%d:%s" % [
 			army.owner_nation,

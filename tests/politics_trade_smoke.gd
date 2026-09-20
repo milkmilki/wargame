@@ -1260,7 +1260,6 @@ func _test_rebellion_system() -> void:
 			army.owner_nation == rebel_id
 			and army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
 			and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
-			and army.strategic_role == Army.StrategicRole.MAIN
 			and army.location_city == start_state.nations[rebel_id].capital_city_id
 		):
 			uprising_main_armies += 1
@@ -1460,6 +1459,27 @@ func _test_rebellion_system() -> void:
 	vassal_restore_state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.ALLIED
 	)
+	vassal_restore_state.rebuild_administrative_regions()
+	var vassal_capital_center := vassal_restore_state.administrative_center_of(
+		vassal_restore_state.nations[1].capital_city_id
+	)
+	var vassal_state_operations: Array[Dictionary] = []
+	for city_id in vassal_restore_state.administrative_members(
+		vassal_capital_center
+	):
+		vassal_state_operations.append({
+			"city_id": city_id,
+			"controller_id": 1,
+			"legal_owner_id": 1,
+			"sponsor_id": -1,
+			"reset_political_target": true,
+			"stock_policy": GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL,
+			"reason": "peaceful_suzerainty_restore_fixture",
+		})
+	if not vassal_state_operations.is_empty():
+		vassal_restore_state.apply_territory_transaction(
+			vassal_state_operations
+		)
 	vassal_restore_state.suzerainty[1] = {
 		"overlord_id": 0,
 		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
@@ -1492,7 +1512,22 @@ func _test_rebellion_system() -> void:
 				== vassal_totals_before
 			and vassal_restore_state.suzerainty_structure_valid()
 			and vassal_restore_state.territory_structure_valid(),
-		"rebellion/peaceful_suzerainty_restore_rejected_atomically"
+		"rebellion/peaceful_suzerainty_restore_rejected_atomically",
+		"rejected=%s allied=%s enemy=%s owner=%d/%d legal=%d/%d resources=%s/%s suzerainty=%s territory=%s center=%d members=%s" % [
+			str(vassal_restore_rejected),
+			str(vassal_restore_state.is_allied(0, 1)),
+			str(vassal_restore_state.is_enemy(0, 1)),
+			vassal_owner_before,
+			vassal_restore_state.cities[2].owner_nation,
+			vassal_legal_before,
+			vassal_restore_state.recognized_owner_of(2),
+			str(vassal_totals_before),
+			str(_nation_resource_totals(vassal_restore_state)),
+			str(vassal_restore_state.suzerainty_structure_valid()),
+			str(vassal_restore_state.territory_structure_valid()),
+			vassal_capital_center,
+			str(vassal_restore_state.administrative_members(vassal_capital_center)),
+		]
 	)
 
 	var dead_target_state := _make_dead_loyalty_target_state()

@@ -82,7 +82,6 @@ const SUPPLY_RUNTIME_SLICE_BUDGET_USEC: int = 3000
 const RUNTIME_POST_DAY_IDLE_SECONDS: float = 0.1
 ## ThreatField 按国家并行；4 路通常能覆盖性能核且避免图搜索争抢内存带宽。
 const AI_THREAT_MAX_WORKERS: int = 4
-const AI_DEFENSE_MAX_WORKERS: int = 4
 ## 大地图开局没有既有战争或占领事件，不需要第1天让所有国家同时构建完整
 ## 战略快照。超过一个决策周期的国家从首日即按相位铺开；后续外交/领土突变
 ## 仍使用 force_all，保证真正需要同步响应时不延迟。
@@ -146,9 +145,8 @@ var _ai_city_partition_cache: Dictionary = {}
 ## 外交拓扑缓存：军事接壤矩阵依赖外交关系，两跳距离只依赖领土与边类型。
 ## 两者均按各自 revision 跨外交动作、月度外交与 AI 决策复用。
 var _diplomacy_topology_cache: Dictionary = {}
-var _ai_defense_plan_cache: Dictionary = {}
 ## nation_id -> 最后一次完成州级战役管理的日期。战役期间每日复核 C/R/V，
-## 不得在同一日常规 AI 已评估后再无上下文重复构建快照/威胁/防区。
+## 不得在同一日常规 AI 已评估后再无上下文重复构建快照或威胁场。
 var _campaign_evaluated_day_by_nation: Dictionary = {}
 ## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
 var _daily_supply_source_cache: Dictionary = {}
@@ -184,8 +182,6 @@ var _ai_last_decision_day: int = -1
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
 var _ai_forced_nations: Dictionary = {}
-## 同日城市实控变化后的窄域前线刷新集合；仅重建受影响国家的 LINE 防区。
-var _frontline_dirty_nations: Dictionary = {}
 var _collect_ai_commands: bool = false
 var _ai_command_buffer: Array[AiCommandIntent] = []
 var _ai_planned_armies: Dictionary = {}
@@ -202,12 +198,6 @@ var runtime_catchup_during_day_enabled: bool = false
 var ai_last_command_commit_failures: int = 0
 var ai_command_commit_failure_total: int = 0
 var ai_command_commit_failure_log: Array[String] = []
-var ai_defense_topology_rebuild_total: int = 0
-var ai_defense_topology_reuse_total: int = 0
-var ai_defense_dynamic_reuse_total: int = 0
-var frontline_refresh_batch_total: int = 0
-var frontline_refresh_nation_total: int = 0
-var frontline_refresh_build_total: int = 0
 ## 贸易预测缓存诊断计数。build 表示实际执行 build_structure/settle，
 ## cache_hit 表示复用了对应层；setup() 会统一清零。
 var trade_structure_build_total: int = 0
@@ -225,10 +215,6 @@ var ai_threat_worker_count_last: int = 0
 var ai_threat_worker_last_usec: int = 0
 var ai_threat_worker_total_usec: int = 0
 var ai_threat_worker_runs: int = 0
-var ai_defense_worker_count_last: int = 0
-var ai_defense_worker_last_usec: int = 0
-var ai_defense_worker_total_usec: int = 0
-var ai_defense_worker_runs: int = 0
 ## 测试/基准注入点：nation_id -> Callable(state, nation_id, simulation)。
 ## 正式游戏保持为空，所有国家均使用 Utility AI。
 var ai_policy_overrides: Dictionary = {}
@@ -264,9 +250,7 @@ var ai_command_commit_slicing_disabled: bool = false
 var ai_snapshot_resource_cache_reuse_disabled: bool = false
 ## A/B 与等价性测试开关；正式运行 false，按国家多核构建威胁场。
 var ai_parallel_threat_disabled: bool = false
-var ai_parallel_defense_disabled: bool = false
 ## A/B 等价守卫：true 时占城后的同日前线刷新保留主线程同步构建。
-var frontline_refresh_worker_disabled: bool = false
 ## 分封开关：true 时执行 AI 产出的 ENFEOFF 动作；false 时忽略（评估仍算，无副作用）。
 ## 正式游戏保持 true；仅供分封收益 A/B 对照关闭。
 var enfeoff_enabled: bool = true
@@ -327,9 +311,6 @@ var movement_frame_slicing_disabled: bool = false
 var siege_defender_index_disabled: bool = false
 var _war_flags_ownership_revision: int = -1
 var _war_flags_diplomacy_revision: int = -1
-## 等价性守卫用：置 true 时运行时路径也用同步 _resolve_line_edge_assignment_emergencies
-## （不分帧），以隔离「填线防区分帧」在同一运行时路径下的等价性。正式游戏 false。
-var line_edge_frame_slicing_disabled: bool = false
 ## 等价性守卫用：置 true 时重点城市防御梯队保持同步推进；正式游戏 false。
 var priority_defense_frame_slicing_disabled: bool = false
 
@@ -362,7 +343,6 @@ func setup(game_state: GameState) -> void:
 	_war_flags_ownership_revision = -1
 	_war_flags_diplomacy_revision = -1
 	_diplomacy_topology_cache.clear()
-	_ai_defense_plan_cache.clear()
 	_campaign_evaluated_day_by_nation.clear()
 	_daily_supply_source_cache.clear()
 	_stable_supply_city_source_cache.clear()
@@ -372,21 +352,14 @@ func setup(game_state: GameState) -> void:
 	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
 	_ai_forced_nations.clear()
-	_frontline_dirty_nations.clear()
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
 	_defer_declaration_launches = false
 	ai_last_command_commit_failures = 0
 	ai_command_commit_failure_total = 0
 	ai_command_commit_failure_log.clear()
-	ai_defense_topology_rebuild_total = 0
-	ai_defense_topology_reuse_total = 0
-	ai_defense_dynamic_reuse_total = 0
 	runtime_span_total_usec.clear()
 	runtime_span_peak_usec.clear()
-	frontline_refresh_batch_total = 0
-	frontline_refresh_nation_total = 0
-	frontline_refresh_build_total = 0
 	diplomacy_mobilization_evaluation_cache_total = 0
 	_clear_ai_command_collection()
 	_parallel_ai_context_jobs.clear()
@@ -394,7 +367,7 @@ func setup(game_state: GameState) -> void:
 
 
 func on_road_network_rebuilt() -> void:
-	## 路网参数变化会使路径、补给、防区和威胁场缓存全部失效。
+	## 路网参数变化会使路径、补给和威胁场缓存全部失效。
 	## 复用 setup 的集中失效逻辑，避免遗漏某个跨日缓存。
 	var was_paused := paused
 	setup(state)
@@ -717,8 +690,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		_record_runtime_span(&"cleanup_suzerainty", cleanup_part_started)
 	# 道路断联只影响通行、补给和防守，不再凭空改变城市实控。
 	# 领土易手必须来自真实攻城、叛乱、分封、兼并或明确和平事务。
-	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留），
-	# 避免 LINE 军在敌城 IDLE 卡死（hostile_stationed 死锁）。
+	# 兜底：驱离「定居在无通行权敌城节点」的己方军队（占领驱逐漏网 / 锚点城易主后滞留）。
 	_set_runtime_profile_stage(&"cleanup_evict")
 	cleanup_part_started = (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
@@ -726,19 +698,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_evict_stranded_hostile_armies()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"cleanup_evict", cleanup_part_started)
-	# 同日窄域前线刷新必须读取 cleanup 后的最终控制/存亡/驱离结果，避免按
-	# 中间态重建防区。它只重算 LINE 防御部署；_ai_forced_nations 刻意保留到次日，
-	# 继续触发完整 AI pass（campaign/force/diplomacy）。
-	_set_runtime_profile_stage(&"frontline_refresh")
-	cleanup_part_started = (
-		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
-	)
-	if spread_runtime_work and not frontline_refresh_worker_disabled:
-		await _flush_same_day_frontline_refresh(true)
-	else:
-		_flush_same_day_frontline_refresh(false)
-	if runtime_stage_profiling_enabled:
-		_record_runtime_span(&"cleanup_frontline", cleanup_part_started)
 	_set_runtime_profile_stage(&"cleanup_refresh")
 	cleanup_part_started = (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
@@ -3248,101 +3207,7 @@ func _siege_garrison_battle_of(army: Army) -> Battle:
 	return battle
 
 
-## 每日推进持久边境防区状态，不等待十日一次的正式地图 AI 决策。
-## 同步驱动：一次性处理全国防区（测试与快进路径用）。运行时改走分帧版。
-func _resolve_line_edge_assignment_emergencies() -> void:
-	var army_by_id := _living_army_index()
-	for nation in state.nations:
-		_resolve_nation_line_edge_sectors(nation, army_by_id)
-
-
-## 运行时分帧驱动：与同步版逐国等价，但在国与国之间按墙钟预算 yield。各国只处理
-## 本国防区、只改本国军队状态，彼此独立；army_by_id 与 besieged 为只读快照，切帧
-## 不改变任何结果（由等价守卫覆盖）。
-func _resolve_line_edge_assignment_emergencies_over_frames() -> void:
-	var army_by_id := _living_army_index()
-	var slice_started := Time.get_ticks_usec()
-	for nation in state.nations:
-		_resolve_nation_line_edge_sectors(nation, army_by_id)
-		if Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
-			await get_tree().process_frame
-			slice_started = Time.get_ticks_usec()
-
-
-func _living_army_index() -> Dictionary:
-	var army_by_id := {}
-	for army in state.armies:
-		if army.size > 0:
-			army_by_id[army.id] = army
-	return army_by_id
-
-
-## 单国防区每日状态推进。LINE 防区不读取围城、敌军位置或临时压力；
-## 唯一会改变既有防区的运行时事件是锚点控制权丢失。
-func _resolve_nation_line_edge_sectors(
-	nation: Nation,
-	army_by_id: Dictionary
-) -> void:
-	var sectors: Dictionary = nation.frontier_defense_sectors
-	for city_id_value in sectors.keys().duplicate():
-		var city_id := int(city_id_value)
-		var sector: FrontierDefenseSector = sectors[city_id]
-		if (
-			city_id < 0
-			or city_id >= state.cities.size()
-			or state.cities[city_id].owner_nation
-				!= nation.id
-		):
-			sector.state = FrontierDefenseSector.State.RETREATING
-			_retreat_lost_frontier_sector(
-				sector,
-				army_by_id
-			)
-			sectors.erase(city_id)
-			continue
-		sector.state = FrontierDefenseSector.State.NORMAL
-	nation.frontier_defense_sectors = sectors
-
-
-func _retreat_lost_frontier_sector(
-	sector: FrontierDefenseSector,
-	army_by_id: Dictionary
-) -> void:
-	for army_id in sector.assigned_army_ids:
-		var army: Army = army_by_id.get(int(army_id))
-		if army == null:
-			continue
-		army.clear_line_assignment()
-		if (
-			army.on_edge
-			and sector.city_id in [army.move_from, army.move_to]
-		):
-			_retreat(army)
-			if army.size > 0:
-				var retreat_target := (
-					army.path[-1]
-					if not army.path.is_empty()
-					else army.move_to
-				)
-				var retreat_order := ActionCandidate.make(
-					ActionCandidate.Kind.RETREAT,
-					2000.0,
-					"填线防区：锚点城市%d失守，军%d协同撤退"
-						% [sector.city_id, army.id],
-					retreat_target
-				)
-				retreat_order.minimum_commit_days = (
-					AI_DECISION_INTERVAL_DAYS
-				)
-				_record_ai_order(army, retreat_order)
-		elif army.is_at_city_node(sector.city_id):
-			_start_morale_retreat_from_city(
-				army,
-				sector.city_id,
-				sector.city_id
-			)
-
-
+## 每日推进战役中 HOLDING 军队的地形适应。
 func _advance_holding_adaptation() -> void:
 	for army in state.armies:
 		if army.size <= 0 or army.state != Army.State.HOLDING:
@@ -4012,8 +3877,7 @@ func _execute_diplomatic_action(
 						"diplomacy_declare_launch",
 						declaration_part_started
 					)
-					# 宣战瞬间出现新前线：强制所有参战国（尤其被动防守方）
-					# 下一天重算国境与防区，立即沿新边界铺开填线军。
+					# 宣战后强制所有参战国（尤其被动防守方）下一天重算州战役。
 					_ai_last_decision_day = -1
 		DiplomacyAI.Action.FORM_ALLIANCE:
 			if (
@@ -4099,7 +3963,7 @@ func _execute_diplomatic_action(
 					)
 				if new_subjects.size() > 1:
 					action["subject_nations"] = new_subjects
-				# 新藩王出现，边境与防区拓扑改变：强制下一天全体重算。
+				# 新藩王出现，政治与州战役拓扑改变：强制下一天全体重算。
 				_ai_last_decision_day = -1
 		DiplomacyAI.Action.CENTRALIZE:
 			# 削藩：藩王反抗则开内战（占首都通吃留待领土结算），否则和平撤藩直辖。
@@ -5897,34 +5761,6 @@ func _build_parallel_ai_threat(job_index: int) -> void:
 	)
 
 
-func _build_parallel_ai_defense(job_index: int) -> void:
-	var job: Dictionary = _parallel_ai_context_jobs[
-		job_index
-	]
-	var defense_plan: CityDefensePlan = job["defense_plan"]
-	defense_plan.evaluate_readonly(job["previous_defense_plan"])
-
-
-func _build_ai_defense_partition(
-	worker_index: int, worker_count: int, job_count: int
-) -> void:
-	var job_index := worker_index
-	while job_index < job_count:
-		_build_parallel_ai_defense(job_index)
-		job_index += worker_count
-
-
-func _record_defense_plan_cache_result(
-	plan: CityDefensePlan
-) -> void:
-	if plan.topology_rebuilt:
-		ai_defense_topology_rebuild_total += 1
-	elif plan.topology_reused:
-		ai_defense_topology_reuse_total += 1
-	if plan.dynamic_plan_reused:
-		ai_defense_dynamic_reuse_total += 1
-
-
 func _build_ai_snapshot_context(
 	job: Dictionary,
 	diplomacy_cache: Dictionary = {}
@@ -5945,7 +5781,7 @@ func _build_ai_snapshot_context(
 ## ~67% 的重活移出主线程，主线程在等待期间继续渲染插值，消除十日一次的卡顿。
 ## 只读冻结的 GameState，写入各自 job 私有字段与本任务独占的行军/外交缓存；
 ## 期间主线程只做渲染（不触碰 EquivariantOrder/威胁缓存），故无需加锁。
-## 防区规划因会改写 GameState，仍留在主线程串行提交。
+## 州防守计划的提交仍留在主线程串行执行。
 func _build_ai_snapshots_serial(payload: Dictionary) -> void:
 	var jobs: Array = payload["jobs"]
 	var diplomacy_cache: Dictionary = payload["diplomacy_cache"]
@@ -6241,12 +6077,12 @@ func _prepare_ai_view_phase(
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
-		_reconcile_strategic_roles(
+		_reconcile_main_commands(
 			nation_id,
 			shared_army_index
 		)
 		_record_tick_profile_stage(
-			"ai_reconcile_roles",
+			"ai_reconcile_commands",
 			ai_view_detail_started
 		)
 		if ai_policy_overrides.has(nation.id):
@@ -6271,8 +6107,6 @@ func _prepare_ai_view_phase(
 			"view": view,
 			"snapshot": null,
 			"threat_cache": _threat_travel_cache,
-			"previous_defense_plan":
-				_ai_defense_plan_cache.get(nation_id),
 			"threat": null,
 			"defense_plan": null,
 		})
@@ -6423,67 +6257,22 @@ func _build_ai_snapshot_threat_phase(
 func _build_ai_defense_phase(
 	context_jobs: Array[Dictionary],
 	force_contexts: Dictionary,
-	spread_runtime_work: bool,
+	_spread_runtime_work: bool,
 	runtime_slice_started: int,
 	ai_profile_stage_started: int,
-	worker_high_priority: bool = true
+	_worker_high_priority: bool = true
 ) -> Dictionary:
 	_set_runtime_profile_stage(&"ai_defense")
-	if spread_runtime_work and not context_jobs.is_empty():
-		for job in context_jobs:
-			job["defense_plan"] = CityDefensePlan.prepare_evaluation(
-				job["view"], job["snapshot"], job["threat"]
-			)
-		var defense_worker_count := (
-			1 if ai_parallel_defense_disabled else mini(
-				context_jobs.size(),
-				mini(maxi(OS.get_processor_count() - 1, 1), AI_DEFENSE_MAX_WORKERS)
-			)
+	for job in context_jobs:
+		job["defense_plan"] = CityDefensePlan.build(
+			job["view"], job["snapshot"], job["threat"]
 		)
-		var defense_task_ids: Array[int] = []
-		var defense_started_usec := Time.get_ticks_usec()
-		ai_defense_worker_count_last = defense_worker_count
-		for worker_index in range(defense_worker_count):
-			defense_task_ids.append(WorkerThreadPool.add_task(
-				_build_ai_defense_partition.bind(
-					worker_index, defense_worker_count, context_jobs.size()
-				),
-				worker_high_priority, "WorldWar AI defense evaluation"
-			))
-		_set_runtime_profile_stage(&"ai_defense_workers")
-		await _run_worker_tasks_over_frames(defense_task_ids)
-		ai_defense_worker_last_usec = Time.get_ticks_usec() - defense_started_usec
-		ai_defense_worker_total_usec += ai_defense_worker_last_usec
-		ai_defense_worker_runs += 1
-		_set_runtime_profile_stage(&"ai_defense_commit")
-		# Commit in deterministic nation order while keeping frames responsive.
-		runtime_slice_started = Time.get_ticks_usec()
-		for job in context_jobs:
-			var defense_plan: CityDefensePlan = job["defense_plan"]
-			defense_plan.commit_assignments()
-			_record_defense_plan_cache_result(defense_plan)
-			if (
-				spread_runtime_work
-				and Time.get_ticks_usec() - runtime_slice_started
-					>= AI_RUNTIME_SLICE_BUDGET_USEC
-			):
-				await get_tree().process_frame
-				runtime_slice_started = Time.get_ticks_usec()
-	else:
-		for job in context_jobs:
-			var defense_plan := CityDefensePlan.build(
-				job["view"], job["snapshot"], job["threat"],
-				job["previous_defense_plan"]
-			)
-			job["defense_plan"] = defense_plan
-			_record_defense_plan_cache_result(defense_plan)
 	_record_tick_profile_stage("ai_defense", ai_profile_stage_started)
 	ai_profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	for job in context_jobs:
 		var nation_id := int(job["nation_id"])
-		_ai_defense_plan_cache[nation_id] = job["defense_plan"]
 		force_contexts[nation_id] = {
 			"view": job["view"],
 			"snapshot": job["snapshot"],
@@ -6586,35 +6375,6 @@ func _decide_ai_army(
 		and army.ai_action == ActionCandidate.Kind.CREATE_ARMY
 		and army.ai_order_created_day == state.day
 	):
-		return
-	if army.is_line_role():
-		_set_runtime_profile_stage(&"ai_army_line")
-		var line_started := (
-			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
-		)
-		var line_candidate := defense_plan.candidate_for(army, coordinator)
-		_record_runtime_span(&"ai_army_line_candidate", line_started)
-		_set_runtime_profile_stage(&"ai_army_line_execute")
-		var line_execute_started := (
-			Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
-		)
-		var line_executed := (
-			line_candidate != null
-			and line_candidate.kind != ActionCandidate.Kind.NONE
-			and _execute_ai_candidate(army, line_candidate)
-		)
-		_record_runtime_span(&"ai_army_line_execute", line_execute_started)
-		if (
-			line_executed
-		):
-			if line_candidate.kind == ActionCandidate.Kind.HOLD:
-				coordinator.reserve_edge(
-					line_candidate.target_edge_a,
-					line_candidate.target_edge_b,
-					army
-				)
-			elif line_candidate.target_city != -1:
-				coordinator.reserve(line_candidate.target_city, army)
 		return
 	_set_runtime_profile_stage(&"ai_army_choose")
 	var choose_started := (
@@ -6837,7 +6597,7 @@ func _stable_force_resource_cache_from_snapshot(
 	return result
 
 
-func _reconcile_strategic_roles(
+func _reconcile_main_commands(
 	nation_id: int,
 	shared_army_index: Dictionary = {}
 ) -> void:
@@ -6860,17 +6620,14 @@ func _reconcile_strategic_roles(
 			if army.owner_nation == nation_id and army.size > 0:
 				armies.append(army)
 	armies.sort_custom(func(a: Army, b: Army) -> bool:
-		if a.max_size != b.max_size:
-			return a.max_size > b.max_size
-		return EquivariantOrder.army_less(
-			state,
-			nation_id,
-			a,
-			b
-		)
+		return EquivariantOrder.army_less(state, nation_id, a, b)
 	)
-	var heavy_by_group := {}
+	var armies_by_group := {}
 	for army in armies:
+		army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		army.size = mini(army.size, army.max_size)
+		army.max_morale = Army.DEFAULT_MAX_MORALE
+		army.morale = minf(army.morale, army.max_morale)
 		if (
 			army.battle_group_id < 0
 			or not valid_groups.has(army.battle_group_id)
@@ -6878,23 +6635,19 @@ func _reconcile_strategic_roles(
 			army.battle_group_id = -1
 			continue
 		var group_id := army.battle_group_id
-		if army.max_size >= GameState.INITIAL_HEAVY_ARMY_SIZE:
-			var heavy_count := int(heavy_by_group.get(group_id, 0))
-			if heavy_count >= BattleGroup.MAX_HEAVY_ARMIES:
-				army.battle_group_id = -1
-				continue
-			heavy_by_group[group_id] = heavy_count + 1
-		else:
+		var army_count := int(armies_by_group.get(group_id, 0))
+		if army_count >= BattleGroup.MAX_ARMIES:
 			army.battle_group_id = -1
+			continue
+		armies_by_group[group_id] = army_count + 1
 	for army in armies:
 		if (
-			army.max_size < GameState.INITIAL_HEAVY_ARMY_SIZE
-			or army.battle_group_id >= 0
+			army.battle_group_id >= 0
 		):
 			continue
 		var destination := -1
 		for group in nation.battle_groups:
-			if int(heavy_by_group.get(group.id, 0)) == 0:
+			if int(armies_by_group.get(group.id, 0)) == 0:
 				destination = group.id
 				break
 		if destination < 0:
@@ -6905,13 +6658,7 @@ func _reconcile_strategic_roles(
 			destination = group.id
 			valid_groups[destination] = true
 		if state.assign_army_to_battle_group(army, destination):
-			heavy_by_group[destination] = 1
-	for army in armies:
-		if army.battle_group_id >= 0:
-			army.strategic_role = Army.StrategicRole.MAIN
-			army.clear_line_assignment()
-		else:
-			army.strategic_role = Army.StrategicRole.LINE
+			armies_by_group[destination] = 1
 
 
 func _build_ai_view(
@@ -7188,7 +6935,6 @@ func _mark_capture_affected_nations(
 	)
 	for nation_id in affected:
 		_ai_forced_nations[nation_id] = true
-		_frontline_dirty_nations[nation_id] = true
 	return affected
 
 
@@ -7202,151 +6948,6 @@ func _force_ai_replan_for_capture(
 		claimant,
 		city_id
 	)
-
-
-func _flush_same_day_frontline_refresh(
-	use_runtime_workers: bool = false
-) -> void:
-	if _frontline_dirty_nations.is_empty():
-		return
-	var dirty_ids: Array[int] = []
-	for nation_value in _frontline_dirty_nations.keys():
-		var nation_id := int(nation_value)
-		if (
-			nation_id >= 0
-			and nation_id < state.nations.size()
-			and state.nations[nation_id].alive
-		):
-			dirty_ids.append(nation_id)
-	_frontline_dirty_nations.clear()
-	if dirty_ids.is_empty():
-		return
-	dirty_ids.sort()
-	frontline_refresh_batch_total += 1
-	var shared_army_index := (
-		AiWorldView.build_army_index(state)
-		if ai_policy_overrides.is_empty()
-		else {}
-	)
-	var diplomacy_cache := _seed_trade_forecast({})
-	var context_jobs: Array[Dictionary] = []
-	var snapshot_army_ids := {}
-	for nation_id in dirty_ids:
-		if ai_policy_overrides.has(nation_id):
-			continue
-		var nation := state.nations[nation_id]
-		if not nation.alive:
-			continue
-		var view := _build_ai_view(
-			nation_id,
-			shared_army_index
-		)
-		var job := {
-			"nation_id": nation_id,
-			"view": view,
-			"snapshot": null,
-			"threat_cache": _threat_travel_cache,
-			"previous_defense_plan":
-				_ai_defense_plan_cache.get(nation_id),
-			"threat": null,
-			"defense_plan": null,
-		}
-		if not use_runtime_workers:
-			_build_ai_snapshot_context(job, diplomacy_cache)
-			job["threat"] = ThreatField.build(
-				view,
-				_threat_travel_cache
-			)
-			var defense_plan := CityDefensePlan.build(
-				view,
-				job["snapshot"],
-				job["threat"],
-				job["previous_defense_plan"]
-			)
-			_record_defense_plan_cache_result(defense_plan)
-			_ai_defense_plan_cache[nation_id] = defense_plan
-			job["defense_plan"] = defense_plan
-		context_jobs.append(job)
-		for army in view.friendly_armies:
-			snapshot_army_ids[army.id] = true
-		frontline_refresh_nation_total += 1
-		frontline_refresh_build_total += 1
-	if context_jobs.is_empty():
-		return
-	if use_runtime_workers:
-		var runtime_slice_started := Time.get_ticks_usec()
-		var profile_started := (
-			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-		)
-		var snapshot_phase := await _build_ai_snapshot_threat_phase(
-			context_jobs,
-			diplomacy_cache,
-			true,
-			runtime_slice_started,
-			profile_started,
-			false
-		)
-		var unused_force_contexts := {}
-		await _build_ai_defense_phase(
-			context_jobs,
-			unused_force_contexts,
-			true,
-			int(snapshot_phase["slice_started"]),
-			int(snapshot_phase["profile_stage_started"]),
-			false
-		)
-	_begin_ai_command_collection(snapshot_army_ids)
-	for job in context_jobs:
-		var view: AiWorldView = job["view"]
-		var snapshot: StrategicMapSnapshot = job["snapshot"]
-		var coordinator := ArmyCoordinator.from_view(view)
-		var defense_plan: CityDefensePlan = job["defense_plan"]
-		var nation_id := int(job["nation_id"])
-		var nation := state.nations[nation_id]
-		for army in _sort_ai_decision_order(
-			state,
-			view.friendly_armies,
-			snapshot,
-			true
-		):
-			if (
-				army.size <= 0
-				or _ai_planned_armies.has(army.id)
-				or not army.is_line_role()
-			):
-				continue
-			var line_candidate: ActionCandidate = defense_plan.candidate_for(
-				army,
-				coordinator
-			)
-			if (
-				line_candidate == null
-				or line_candidate.kind not in [
-					ActionCandidate.Kind.HOLD,
-					ActionCandidate.Kind.REINFORCE,
-					ActionCandidate.Kind.RETREAT,
-				]
-				or not _execute_ai_candidate(
-					army,
-					line_candidate
-				)
-			):
-				continue
-			if (
-				line_candidate.kind
-					== ActionCandidate.Kind.HOLD
-			):
-				coordinator.reserve_edge(
-					line_candidate.target_edge_a,
-					line_candidate.target_edge_b,
-					army
-				)
-			elif line_candidate.target_city != -1:
-				coordinator.reserve(
-					line_candidate.target_city,
-					army
-				)
-	_commit_ai_command_collection(dirty_ids)
 
 
 static func _sort_ai_decision_order(
@@ -7394,12 +6995,12 @@ func _ai_manage_force_structure(
 	decision_context: Dictionary = {}
 ) -> bool:
 	if not state.uses_heightmap:
-		# Road clearance is transport-footprint based in every map mode. A heavy
+		# Road clearance is transport-footprint based in every map mode. A main
 		# formation traverses a narrow route in batches and must not be split into
 		# separate Army entities merely to satisfy road capacity.
 		return false
 	if not roles_reconciled:
-		_reconcile_strategic_roles(view.nation_id)
+		_reconcile_main_commands(view.nation_id)
 	if defense_plan == null:
 		defense_plan = CityDefensePlan.build(
 			view,
@@ -7409,7 +7010,6 @@ func _ai_manage_force_structure(
 	var nation := state.nations[view.nation_id]
 	var assessment: ForceStructureAssessment = _build_force_structure_assessment(
 		view,
-		defense_plan,
 		resource_evaluation_cache,
 		decision_context
 	)
@@ -7447,13 +7047,11 @@ func _ai_manage_force_structure(
 			view,
 			snapshot,
 			threat,
-			defense_plan,
 			decision_context,
 			assessment.wars
 		)
 	return _try_recruit_force_structure(
 		view,
-		defense_plan,
 		nation,
 		assessment,
 		recruitment,
@@ -7467,16 +7065,6 @@ func _try_force_structure_demobilization(
 	nation: Nation,
 	assessment: ForceStructureAssessment
 ) -> bool:
-	if (
-		assessment.wars.is_empty()
-		and nation.war_preparation_target_nation < 0
-		and _demobilize_excess_peacetime_battle_group(
-			view,
-			threat,
-			assessment.baseline_group_count
-		)
-	):
-		return true
 	if assessment.emergency_recruitment:
 		return false
 	if assessment.food_pressure and _demobilize_for_food_security(
@@ -7498,30 +7086,12 @@ func _try_force_structure_demobilization(
 
 func _try_recruit_force_structure(
 	view: AiWorldView,
-	defense_plan: CityDefensePlan,
 	nation: Nation,
 	assessment: ForceStructureAssessment,
 	recruitment: Dictionary,
 	available_manpower: int
 ) -> bool:
 	var missing_formation_size := int(recruitment.get("size", 0))
-	# Defense orders and recruitment share deployment throughput. Do not keep
-	# producing at a hub while an earlier assignment is blocked on the first edge.
-	if (
-		missing_formation_size > 0
-		and (
-			(
-				bool(recruitment.get("create_group", false))
-				and defense_plan.pending_deployment_army_count(1) > 0
-			)
-			or (
-				int(recruitment.get("group_id", -1)) < 0
-				and not bool(recruitment.get("create_group", false))
-				and defense_plan.pending_deployment_army_count(0) > 0
-			)
-		)
-	):
-		return false
 	var creation_cost := (
 		GameState.formation_creation_gold_cost(missing_formation_size)
 		if missing_formation_size > 0 else 0
@@ -7566,7 +7136,6 @@ func _try_recruit_force_structure(
 
 func _build_force_structure_assessment(
 	view: AiWorldView,
-	defense_plan: CityDefensePlan,
 	resource_evaluation_cache: Dictionary,
 	decision_context: Dictionary
 ) -> ForceStructureAssessment:
@@ -7642,12 +7211,7 @@ func _build_force_structure_assessment(
 	assessment.food_growth_budget = _food_growth_manpower_budget(
 		assessment.food_report
 	)
-	# Historical wartime groups must not permanently raise the peacetime floor.
-	assessment.baseline_group_count = (
-		defense_plan.main_reserve_target_group_count()
-		if assessment.wars.is_empty()
-		else maxi(nation.battle_groups.size(), 1)
-	)
+	assessment.baseline_group_count = 0
 	assessment.force_structure_target = (
 		assessment.baseline_group_count
 	)
@@ -7715,7 +7279,6 @@ func _regular_force_recruitment(
 	view: AiWorldView,
 	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
-	defense_plan: CityDefensePlan,
 	decision_context: Dictionary,
 	wars: Array
 ) -> Dictionary:
@@ -7723,7 +7286,6 @@ func _regular_force_recruitment(
 		view,
 		snapshot,
 		threat,
-		defense_plan,
 		decision_context,
 		wars
 	)
@@ -7748,7 +7310,6 @@ func _campaign_force_recruitment_demand(
 	view: AiWorldView,
 	snapshot: StrategicMapSnapshot,
 	threat: ThreatField,
-	defense_plan: CityDefensePlan,
 	decision_context: Dictionary,
 	wars: Array
 ) -> Dictionary:
@@ -7757,10 +7318,7 @@ func _campaign_force_recruitment_demand(
 		nation.war_preparation_target_nation >= 0
 		or not wars.is_empty()
 	)
-	var target_main_capacity := (
-		defense_plan.main_reserve_target_group_count()
-		* GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
+	var target_main_capacity := 0
 	if active_offense:
 		var centers := _campaign_force_demand_targets(view.nation_id)
 		target_main_capacity = GameState.INITIAL_HEAVY_ARMY_SIZE
@@ -7784,7 +7342,7 @@ func _small_nation_force_recruitment(
 	nation: Nation,
 	main_armies: int
 ) -> Dictionary:
-	# One heavy MAIN is the mobile reserve; existing wartime groups stay intact.
+	# One MAIN is the mobile reserve; existing wartime groups stay intact.
 	if main_armies >= SMALL_NATION_MOBILE_RESERVE_ARMIES:
 		return {}
 	var reserve_group_id := -1
@@ -7798,75 +7356,6 @@ func _small_nation_force_recruitment(
 		"create_group": reserve_group_id < 0,
 		"reason": "小国补充机动预备队",
 	}
-
-
-## 和平时期战团数量由当前防区规模决定，而不是由历次战争动员的历史峰值决定。
-## 一次撤销一个完整的、已回到安全本土的多余战团，并让该国下一日继续重算；
-## 保持战团原子性，避免只裁重军后留下多个残缺战团继续挤在重点城市。
-func _demobilize_excess_peacetime_battle_group(
-	view: AiWorldView,
-	threat: ThreatField,
-	target_group_count: int
-) -> bool:
-	var nation := state.nations[view.nation_id]
-	if nation.battle_groups.size() <= target_group_count:
-		return false
-	var groups: Array[BattleGroup] = (
-		nation.battle_groups.duplicate()
-	)
-	# 后组建的战争动员战团优先复员；同日建立时组号仍是国家内部的
-	# 持久编制序，不读取军队数组顺序。
-	groups.sort_custom(func(a: BattleGroup, b: BattleGroup) -> bool:
-		if a.created_day != b.created_day:
-			return a.created_day > b.created_day
-		return a.id > b.id
-	)
-	for group in groups:
-		var members := state.battle_group_members(
-			view.nation_id,
-			group.id
-		)
-		if members.is_empty():
-			nation.battle_groups.erase(group)
-			_ai_forced_nations[view.nation_id] = true
-			return true
-		var safe_to_demobilize := true
-		for army in members:
-			if (
-				army.state not in [
-					Army.State.IDLE,
-					Army.State.RECOVERING,
-				]
-				or army.location_city < 0
-				or state.cities[army.location_city].owner_nation
-					!= view.nation_id
-				or state.city_under_siege(army.location_city)
-				or threat.threat_at(army.location_city)
-					>= ArmyPower.effective(army)
-			):
-				safe_to_demobilize = false
-				break
-		if not safe_to_demobilize:
-			continue
-		var returned := 0
-		for army in members.duplicate():
-			returned += army.size
-			_disband_army(
-				army,
-				"和平防区复员：撤销多余战团%d" % group.id
-			)
-		nation.battle_groups.erase(group)
-		nation.ai_last_force_action = (
-			ActionCandidate.Kind.DISBAND_ARMY
-		)
-		nation.ai_last_force_day = state.day
-		nation.ai_last_force_reason = (
-			"和平防区复员：战团%d返还%d人，当前防区保留%d个战团"
-			% [group.id, returned, target_group_count]
-		)
-		_ai_forced_nations[view.nation_id] = true
-		return true
-	return false
 
 
 func _next_battle_group_recruitment(
@@ -8036,7 +7525,7 @@ func _advance_priority_city_defense_reinforcements(
 				and army.ai_target_city == city_id
 			):
 				committed_power += ArmyPower.effective(army)
-		# 已在途的梯队足以填平当前战斗缺口时，无需重建完整国家防区。
+		# 已在途的梯队足以填平当前战斗缺口时，无需额外调兵。
 		if committed_power >= attack_power:
 			continue
 		var view: AiWorldView = context["view"]
@@ -8053,11 +7542,8 @@ func _advance_priority_city_defense_reinforcements(
 		var defense_plan := CityDefensePlan.build(
 			view,
 			snapshot,
-			threat,
-			_ai_defense_plan_cache.get(nation_id)
+			threat
 		)
-		_record_defense_plan_cache_result(defense_plan)
-		_ai_defense_plan_cache[nation_id] = defense_plan
 		_advance_priority_city_defense(
 			siege,
 			defense_plan
@@ -9026,17 +8512,14 @@ func _is_available_recruitment_hub(
 func _create_army_for_nation(
 	nation_id: int,
 	city_id: int,
-	formation_size: int = GameState.INITIAL_LIGHT_ARMY_SIZE,
+	formation_size: int = GameState.INITIAL_HEAVY_ARMY_SIZE,
 	reason: String = "",
 	allow_besieged_hub: bool = false,
 	battle_group_id: int = -1
 ) -> Army:
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return null
-	if formation_size not in [
-		GameState.INITIAL_LIGHT_ARMY_SIZE,
-		GameState.INITIAL_HEAVY_ARMY_SIZE,
-	]:
+	if formation_size != GameState.INITIAL_HEAVY_ARMY_SIZE:
 		return null
 	var nation := state.nations[nation_id]
 	if (
@@ -9095,13 +8578,12 @@ func _create_army_for_nation(
 			creation_cost,
 		]
 	)
-	# 当前国家计划基于建军前的冻结军队快照；让该国下一日立即重建防区，
-	# 新编制就会先获得展开命令，而不是在枢纽等待完整 AI 周期。
+	# 当前国家计划基于建军前的冻结军队快照；让该国下一日立即重算州战役。
 	_ai_forced_nations[nation_id] = true
 	nation.ai_last_force_action = ActionCandidate.Kind.CREATE_ARMY
 	nation.ai_last_force_day = state.day
 	nation.ai_last_force_reason = army.ai_order_reason
-	_reconcile_strategic_roles(nation_id)
+	_reconcile_main_commands(nation_id)
 	return army
 
 
@@ -11282,8 +10764,8 @@ func _retreat(army: Army) -> void:
 
 
 ## 每日兜底清理：驱离「已定居（非在途、非交战）在无军事通行权敌城节点」的己方军队。
-## 覆盖占领驱逐漏网（如占领瞬间军队在途、抵达后城已易主）与填线锚点易主后滞留等所有入口，
-## 使这类军队立即向首都纵深撤离，杜绝 LINE 军在敌城 IDLE 永久卡死。
+## 覆盖占领驱逐漏网（如占领瞬间军队在途、抵达后城已易主）与驻地易主后滞留等所有入口，
+## 使这类军队立即向首都纵深撤离，杜绝军队在敌城 IDLE 永久卡死。
 ## 只处理静止态（IDLE/RECOVERING/HOLDING 且不在边上、不在战斗），不打断行军/撤退/战斗。
 func _evict_stranded_hostile_armies() -> void:
 	for army in state.armies:

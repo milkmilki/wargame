@@ -11,20 +11,9 @@ enum State {
 	HOLDING,    ## 固定部署在边上；不移动，持续补给并累计地形适应
 }
 
-enum StrategicRole {
-	LINE,       ## 独立填线军：只执行统一防区规划；正式地图国家级攻势不会临时抽调
-	MAIN,       ## 独立主战军：每支15000编制分别拥有位置、补给、士气与命令
-}
-
-enum LinePosture {
-	NONE,
-	CITY,
-	EDGE,
-}
-
 const DEFAULT_MAX_SIZE: int = 15000
-const LIGHT_MAX_MORALE: float = 1.0
-const HEAVY_MAX_MORALE: float = 2.0
+const DEFAULT_MAX_MORALE: float = 2.0
+const MIN_MORALE_DENOMINATOR: float = 1.0
 
 var id: int = 0
 var owner_nation: int = -1
@@ -38,13 +27,8 @@ var defense: int = 10                      ## 防御力
 ## 基础 attack/defense/morale 永不被永久改写。
 var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
-var strategic_role: int = StrategicRole.LINE
 ## 所属持久指挥单位；-1 表示未编组。每个指挥单位只允许一支主战军。
 var battle_group_id: int = -1
-## 填线军的持久防区 Assignment。前线未变化时跨 AI 周期保留，避免每次从零匹配换防。
-var line_assignment_city: int = -1
-var line_assignment_posture: int = LinePosture.NONE
-var line_assignment_edge: int = -1
 
 var location_city: int = -1                ## 静止时所在城市；行军时为出发城
 var state: int = State.IDLE
@@ -70,8 +54,8 @@ var starving: bool = false
 ## 持久士气 ∈ [0,max_morale]。战斗中被侵蚀（伤亡/断粮），战斗外每日恢复。
 ## 真源在此（Battle 层士气为本值的兵力加权派生），使"老兵带疲劳进场"效果自然涌现。
 var morale: float = 1.0
-## 轻军为 1，重军为 2；高于 1 的部分只增加持续作战储备，不继续放大战斗效率。
-var max_morale: float = LIGHT_MAX_MORALE
+## 士气上限只增加持续作战储备，不继续放大战斗效率。
+var max_morale: float = DEFAULT_MAX_MORALE
 
 ## 当日补给满足率 ∈[0,1]。驻防适应与每日补给惩罚均读取本值。
 var supply_ratio: float = 1.0
@@ -122,17 +106,9 @@ var is_city_garrison: bool = false
 var city_garrison_combat_multiplier: float = 1.0
 
 
-static func max_morale_for_formation(formation_size: int) -> float:
-	return (
-		HEAVY_MAX_MORALE
-		if formation_size >= DEFAULT_MAX_SIZE
-		else LIGHT_MAX_MORALE
-	)
-
-
 func morale_ratio() -> float:
 	return clampf(
-		morale / maxf(max_morale, LIGHT_MAX_MORALE),
+		morale / maxf(max_morale, MIN_MORALE_DENOMINATOR),
 		0.0,
 		1.0
 	)
@@ -152,39 +128,18 @@ func combat_max_morale() -> float:
 
 func combat_morale_ratio() -> float:
 	return clampf(
-		combat_morale() / maxf(max_morale, LIGHT_MAX_MORALE),
+		combat_morale() / maxf(max_morale, MIN_MORALE_DENOMINATOR),
 		0.0,
 		1.0
 	)
 
 
 func is_main_battle_role() -> bool:
-	return (
-		max_size >= DEFAULT_MAX_SIZE
-		or strategic_role == StrategicRole.MAIN
-	)
+	return size > 0
 
 
-func main_legion_count(legion_size: int = DEFAULT_MAX_SIZE) -> int:
-	if not is_main_battle_role():
-		return 0
-	return maxi(
-		int(ceil(float(max_size) / float(maxi(legion_size, 1)))),
-		1
-	)
-
-
-func is_line_role() -> bool:
-	return (
-		max_size < DEFAULT_MAX_SIZE
-		and strategic_role == StrategicRole.LINE
-	)
-
-
-func clear_line_assignment() -> void:
-	line_assignment_city = -1
-	line_assignment_posture = LinePosture.NONE
-	line_assignment_edge = -1
+func main_legion_count() -> int:
+	return 1 if is_main_battle_role() else 0
 
 
 ## 是否已经物理停留在城市节点。

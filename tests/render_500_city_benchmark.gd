@@ -69,7 +69,6 @@ func _init() -> void:
 		simulation.paused = false
 		simulation.runtime_stage_profiling_enabled = true
 		simulation.ai_parallel_threat_disabled = serial_workers
-		simulation.ai_parallel_defense_disabled = serial_workers
 		simulation.supply_network_parallel_prebuild_disabled = serial_workers
 		simulation.runtime_catchup_during_day_enabled = runtime_catchup
 		simulation.diplomacy_frame_slicing_disabled = diplomacy_worker

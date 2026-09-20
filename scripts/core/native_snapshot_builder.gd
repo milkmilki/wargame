@@ -313,11 +313,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 	var speed_factor := PackedFloat64Array()
 	var attack := PackedInt32Array()
 	var defense := PackedInt32Array()
-	var strategic_role := PackedInt32Array()
 	var battle_group_id := PackedInt32Array()
-	var line_assignment_city := PackedInt32Array()
-	var line_assignment_posture := PackedInt32Array()
-	var line_assignment_edge := PackedInt32Array()
 	var states := PackedInt32Array()
 	var location := PackedInt32Array()
 	var move_from := PackedInt32Array()
@@ -360,11 +356,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 		speed_factor.append(army.speed_factor)
 		attack.append(army.attack)
 		defense.append(army.defense)
-		strategic_role.append(army.strategic_role)
 		battle_group_id.append(army.battle_group_id)
-		line_assignment_city.append(army.line_assignment_city)
-		line_assignment_posture.append(army.line_assignment_posture)
-		line_assignment_edge.append(army.line_assignment_edge)
 		states.append(army.state)
 		location.append(army.location_city)
 		move_from.append(army.move_from)
@@ -419,11 +411,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"speed_factor": speed_factor,
 			"attack": attack,
 			"defense": defense,
-			"strategic_role": strategic_role,
 			"battle_group_id": battle_group_id,
-			"line_assignment_city": line_assignment_city,
-			"line_assignment_posture": line_assignment_posture,
-			"line_assignment_edge": line_assignment_edge,
 			"state": states,
 			"location": location,
 			"move_from": move_from,

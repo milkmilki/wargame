@@ -167,7 +167,6 @@ func _state_fp(world: GameState) -> String:
 			army.supply_ratio,
 			army.ai_action,
 			army.ai_target_city,
-			army.line_assignment_city,
 		])
 	return str([
 		world.day,

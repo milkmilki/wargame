@@ -1,6 +1,5 @@
 extends SceneTree
-## 军事 AI 简化门禁：每个指挥单位只含一支独立主战军，攻势规模有界，
-## 友军沿既定道路移动时不使整份动态驻防计划失效。
+## 军事 AI 简化门禁：每个指挥单位只含一支独立主战军，攻势规模有界。
 
 var _failures: Array[String] = []
 
@@ -9,11 +8,10 @@ func _init() -> void:
 	_test_single_heavy_battle_group()
 	_test_generated_world_has_only_command_units()
 	_test_campaign_bounds()
-	_test_friendly_progress_signature()
 	_test_stable_campaign_plan_reuse()
 	for failure in _failures:
 		push_error("MILITARY_AI_SIMPLIFICATION_FAIL: " + failure)
-	print("MILITARY_AI_SIMPLIFICATION_%s checks=5" % [
+	print("MILITARY_AI_SIMPLIFICATION_%s checks=4" % [
 		"OK" if _failures.is_empty() else "FAILED",
 	])
 	quit(0 if _failures.is_empty() else 1)
@@ -32,28 +30,38 @@ func _test_single_heavy_battle_group() -> void:
 			heavy_count += 1
 		else:
 			light_count += 1
-	var light := state.create_army(
+	var extra_main := state.create_army(
 		0,
 		nation.capital_city_id,
-		GameState.INITIAL_LIGHT_ARMY_SIZE,
-		GameState.INITIAL_LIGHT_ARMY_SIZE
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
-	var light_rejected := not state.assign_army_to_battle_group(
-		light, group.id
+	var occupied_group_rejected := not state.assign_army_to_battle_group(
+		extra_main, group.id
 	)
-	light.max_size = 10000
-	var nonstandard_rejected := not state.assign_army_to_battle_group(
-		light, group.id
+	var nonstandard_rejected := state.create_army(
+		0,
+		nation.capital_city_id,
+		5000,
+		5000
+	) == null
+	state.armies.erase(extra_main)
+	var understrength_main := state.create_army(
+		0,
+		nation.capital_city_id,
+		5000,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
 	_check(
-		BattleGroup.MAX_LIGHT_ARMIES == 0
-			and BattleGroup.MAX_HEAVY_ARMIES == 1
+		BattleGroup.MAX_ARMIES == 1
 			and members.size() == 1
 			and heavy_count == 1
 			and light_count == 0
-			and light_rejected
-			and nonstandard_rejected,
-		"每个指挥单位必须且只能包含一支独立主战军，轻军不得加入"
+			and occupied_group_rejected
+			and nonstandard_rejected
+			and understrength_main != null
+			and understrength_main.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE,
+		"每个指挥单位只能包含一支15000编制主战军，非标准编制必须拒绝"
 	)
 
 
@@ -84,47 +92,6 @@ func _test_campaign_bounds() -> void:
 	_check(
 		Simulation.CAMPAIGN_MAX_PARALLEL_TARGETS == 2,
 		"州战役必须限制为最多两个战术目标"
-	)
-
-
-func _test_friendly_progress_signature() -> void:
-	var state := GameState.new()
-	state.generate_grid_world(91002)
-	state.uses_heightmap = true
-	state.set_diplomatic_relation(
-		0, 1, GameState.DiplomaticRelation.WAR
-	)
-	var friendly: Army = null
-	for army in state.armies:
-		if army.owner_nation == 0:
-			friendly = army
-			break
-	if friendly == null:
-		_check(false, "驻防签名测试需要一支友军")
-		return
-	var neighbor := state.neighbors(friendly.location_city)[0]
-	friendly.state = Army.State.MOVING
-	friendly.on_edge = true
-	friendly.move_from = friendly.location_city
-	friendly.move_to = neighbor
-	friendly.location_city = -1
-	friendly.move_progress = 0.10
-	var before_view := AiWorldView.build(state, 0)
-	var before_plan := CityDefensePlan.prepare_evaluation(
-		before_view,
-		StrategicMapSnapshot.build(before_view),
-		ThreatField.build(before_view)
-	)
-	friendly.move_progress = 0.20
-	var after_view := AiWorldView.build(state, 0)
-	var after_plan := CityDefensePlan.prepare_evaluation(
-		after_view,
-		StrategicMapSnapshot.build(after_view),
-		ThreatField.build(after_view)
-	)
-	_check(
-		before_plan.input_signature == after_plan.input_signature,
-		"友军沿同一道路移动时不应使整份驻防动态计划缓存失效"
 	)
 
 

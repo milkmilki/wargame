@@ -2679,13 +2679,11 @@ func _update_army_instances() -> void:
 			rebuild_all
 			or _army_render_positions.get(army.id) != map_position
 		)
-		var is_main_role := army.is_main_battle_role()
 		var morale_ratio := army.morale_ratio()
 		var render_signature: Array = []
 		var appearance_changed := rebuild_all
 		if refresh_appearance:
 			render_signature = [
-				is_main_role,
 				army.max_size,
 				morale_ratio,
 				army.starving,
@@ -2704,7 +2702,7 @@ func _update_army_instances() -> void:
 		var world := _terrain.map_to_world(map_position)
 		var angle := float(army.id % 11) / 11.0 * TAU
 		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.34
-		var scale := overlay.army_icon_scale() * army_role_scale(army)
+		var scale := overlay.army_icon_scale() * army_counter_scale()
 		# Ground the counter on the terrain surface like city bases and roads
 		# instead of hovering above it. The base box is 0.16 tall, so a 0.10
 		# lift keeps its underside flush with the map while the stacked face,
@@ -2713,17 +2711,14 @@ func _update_army_instances() -> void:
 		_set_counter_transform(
 			_army_bases, index, origin, scale,
 			Vector3(1.30, 1.0, 1.12)
-				if is_main_role else Vector3(0.88, 1.0, 0.82)
 		)
 		_set_counter_transform(
 			_armies, index, origin + Vector3(0.0, 0.10, 0.0),
 			scale,
 			Vector3(1.16, 1.0, 1.0)
-				if is_main_role else Vector3(0.90, 1.0, 0.82)
 		)
-		# 主战军使用醒目的“+”号与金色厚底；填线军使用“×”号与
-		# 紧凑黑底。单重军战团按 MAIN 外观显示。
-		var first_angle := 0.0 if is_main_role else PI * 0.25
+		# 所有野战军统一使用主战军“+”号与金色厚底。
+		var first_angle := 0.0
 		var symbol_basis := Basis(Vector3.UP, first_angle).scaled(
 			Vector3(scale, scale, scale)
 		)
@@ -2731,9 +2726,7 @@ func _update_army_instances() -> void:
 		_army_symbol_a.multimesh.set_instance_transform(
 			index, Transform3D(symbol_basis, symbol_origin)
 		)
-		var second_angle := (
-			PI * 0.5 if is_main_role else -PI * 0.25
-		)
+		var second_angle := PI * 0.5
 		_army_symbol_b.multimesh.set_instance_transform(
 			index,
 			Transform3D(
@@ -2756,14 +2749,14 @@ func _update_army_instances() -> void:
 				0.06 if army.state == Army.State.FIGHTING else 0.0
 			)
 			_army_bases.multimesh.set_instance_color(
-				index, army_role_base_color(army)
+				index, army_counter_base_color()
 			)
 			_armies.multimesh.set_instance_color(index, color)
 			_army_symbol_a.multimesh.set_instance_color(
-				index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
+				index, MAP_GOLD
 			)
 			_army_symbol_b.multimesh.set_instance_color(
-				index, MAP_GOLD if is_main_role else MAP_COUNTER_MARK
+				index, MAP_GOLD
 			)
 			_army_morale_backs.multimesh.set_instance_color(index, MAP_INK)
 			_army_morale_bars.multimesh.set_instance_color(
@@ -2874,14 +2867,12 @@ func _should_update_army_instances() -> bool:
 	return false
 
 
-static func army_role_scale(army: Army) -> float:
-	if army == null or not army.is_main_battle_role():
-		return 0.68
-	return 1.18 if army.max_size >= Army.DEFAULT_MAX_SIZE else 1.02
+static func army_counter_scale() -> float:
+	return 1.18
 
 
-static func army_role_base_color(army: Army) -> Color:
-	return MAP_GOLD if army != null and army.is_main_battle_role() else MAP_INK
+static func army_counter_base_color() -> Color:
+	return MAP_GOLD
 
 
 func _build_army_counter_meshes() -> void:

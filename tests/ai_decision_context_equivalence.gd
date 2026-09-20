@@ -122,12 +122,10 @@ func _army_fp(army: Army) -> String:
 		army.supply_ratio,
 		army.supply_food_debt,
 		army.starving,
-		army.strategic_role,
 		army.battle_group_id,
 		army.ai_action,
 		army.ai_target_city,
 		army.ai_order_until_day,
-		army.line_assignment_city,
 	])
 
 

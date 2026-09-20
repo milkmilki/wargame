@@ -244,8 +244,8 @@ func _build_symmetric_world() -> GameState:
 		var army := state.create_army(
 			city.owner_nation,
 			city_id,
-			GameState.INITIAL_LIGHT_ARMY_SIZE,
-			GameState.INITIAL_LIGHT_ARMY_SIZE
+			GameState.INITIAL_HEAVY_ARMY_SIZE,
+			GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
 		army.attack = 9 + (row * 5 + mirror_col * 3) % 7
 		army.defense = 9 + (row * 3 + mirror_col * 5) % 7

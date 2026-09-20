@@ -1,7 +1,7 @@
 extends SceneTree
 ## 运行时 AI 优化等价性：两个同 seed 世界都走 _advance_day(true)。基线关闭
-## Threat/Defense 多核及快照资源缓存复用；优化世界全部开启。
-## 最终战略、军制、防区和命令状态必须完全一致。
+## Threat 多核及快照资源缓存复用；优化世界全部开启。
+## 最终战略、军制和命令状态必须完全一致。
 
 var _phase := 0
 var _target_days := 30
@@ -11,8 +11,6 @@ var _baseline_fingerprint := ""
 var _baseline_elapsed_usec := 0
 var _baseline_threat_usec := 0
 var _baseline_threat_runs := 0
-var _baseline_defense_usec := 0
-var _baseline_defense_runs := 0
 var _active_started_usec := 0
 var _nation_count := 40
 var _city_count := 160
@@ -33,7 +31,6 @@ func _start_world(serial_threat: bool) -> void:
 	_active_sim.setup(_active_state)
 	_active_sim.ai_staggered_decisions = false
 	_active_sim.ai_parallel_threat_disabled = serial_threat
-	_active_sim.ai_parallel_defense_disabled = serial_threat
 	_active_sim.ai_snapshot_resource_cache_reuse_disabled = serial_threat
 	_active_sim.runtime_day_committed.connect(_on_day_committed)
 	_active_sim.set_speed_multiplier(32.0)
@@ -60,8 +57,6 @@ func _process(_delta: float) -> bool:
 		_baseline_elapsed_usec = elapsed
 		_baseline_threat_usec = _active_sim.ai_threat_worker_total_usec
 		_baseline_threat_runs = _active_sim.ai_threat_worker_runs
-		_baseline_defense_usec = _active_sim.ai_defense_worker_total_usec
-		_baseline_defense_runs = _active_sim.ai_defense_worker_runs
 		_active_sim.queue_free()
 		_phase = 1
 		_start_world(false)
@@ -80,12 +75,6 @@ func _process(_delta: float) -> bool:
 		float(_active_sim.ai_threat_worker_total_usec) / 1000.0,
 		_active_sim.ai_threat_worker_runs, _active_sim.ai_threat_worker_count_last,
 		float(_baseline_threat_usec) / maxf(float(_active_sim.ai_threat_worker_total_usec), 1.0),
-	])
-	print("Defense worker: 串行=%.1fms(%d轮) 多核=%.1fms(%d轮,%d worker) 加速=%.2fx" % [
-		float(_baseline_defense_usec) / 1000.0, _baseline_defense_runs,
-		float(_active_sim.ai_defense_worker_total_usec) / 1000.0,
-		_active_sim.ai_defense_worker_runs, _active_sim.ai_defense_worker_count_last,
-		float(_baseline_defense_usec) / maxf(float(_active_sim.ai_defense_worker_total_usec), 1.0),
 	])
 	print("verdict=", "AI_RUNTIME_EQUIVALENT" if equivalent else "AI_RUNTIME_DIVERGED")
 	_active_sim.queue_free()
@@ -113,7 +102,6 @@ func _world_fingerprint(state: GameState) -> String:
 			nation.war_preparation_objective_city,
 			nation.campaign_objective_center_city,
 			_battle_groups_fingerprint(nation),
-			_frontier_sectors_fingerprint(nation),
 			nation.ai_last_force_action, nation.ai_last_force_day,
 		])
 	var armies := []
@@ -123,9 +111,7 @@ func _world_fingerprint(state: GameState) -> String:
 			army.move_from, army.move_to, int(round(army.move_progress * 1000000.0)),
 			army.path, int(round(army.morale * 1000000.0)),
 			int(round(army.supply_ratio * 1000000.0)), army.starving,
-			army.strategic_role, army.battle_group_id,
-			army.line_assignment_city, army.line_assignment_posture,
-			army.line_assignment_edge, army.ai_action, army.ai_target_city,
+			army.battle_group_id, army.ai_action, army.ai_target_city,
 			army.ai_order_created_day, army.ai_order_until_day,
 		])
 	return str([state.day, state.winner, cities, nations, armies])
@@ -136,22 +122,6 @@ func _battle_groups_fingerprint(nation: Nation) -> Array:
 	for group in nation.battle_groups:
 		result.append([
 			group.id, group.owner_nation, group.created_day,
-		])
-	return result
-
-
-func _frontier_sectors_fingerprint(nation: Nation) -> Array:
-	var result := []
-	var city_ids := nation.frontier_defense_sectors.keys()
-	city_ids.sort()
-	for city_id_value in city_ids:
-		var sector: FrontierDefenseSector = (
-			nation.frontier_defense_sectors[city_id_value]
-		)
-		result.append([
-			sector.city_id, sector.owner_nation,
-			sector.topology_revision, sector.state,
-			sector.edge_neighbors, sector.assigned_army_ids,
 		])
 	return result
 

@@ -71,24 +71,6 @@ static func choose(
 		return sortie
 	var candidates: Array[ActionCandidate] = []
 	candidates.append(ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "保持当前驻地"))
-	var defense := active_defense_plan.candidate_for(
-		army,
-		coordinator
-	)
-	if active_defense_plan.must_keep_at_city(
-		army,
-		coordinator
-	):
-		if defense != null:
-			return defense
-		return ActionCandidate.make(
-			ActionCandidate.Kind.NONE,
-			100.0,
-			"要害城市最低防线：等待其他方向调兵增援",
-			current
-		)
-	if defense != null:
-		candidates.append(defense)
 	if not view.state.uses_heightmap:
 		var attack := _attack_candidate(
 			view,
@@ -833,7 +815,7 @@ static func stationed_power_at(
 	return view.stationed_power_at(city_id, excluded)
 
 
-## 驻防边地形对守方的净利好系数：真源为 Combat.terrain_hold_bias（据守判定与防区边
+## 驻防边地形对守方的净利好系数：真源为 Combat.terrain_hold_bias（据守判定与战役边
 ## 选取共用同一派生函数，保证 AI 认知与实战解算同源）。此处仅作本模块调用别名。
 static func terrain_hold_bias(danger: float, holding_days: float) -> float:
 	return Combat.terrain_hold_bias(danger, holding_days)
@@ -896,12 +878,6 @@ static func _choose_holding(
 		retreat.target_edge_a = army.move_from
 		retreat.target_edge_b = army.move_to
 		return retreat
-	var defense := defense_plan.candidate_for(
-		army,
-		coordinator
-	)
-	if defense != null:
-		return defense
 	if defense_plan.must_hold_city(endpoint):
 		return ActionCandidate.make(
 			ActionCandidate.Kind.HOLD,
