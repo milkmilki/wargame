@@ -89,7 +89,6 @@ const CAMPAIGN_RESERVE_MONTHS: int = 6
 const FOOD_PER_CAPITA_MONTH: float = 0.0025
 const MIN_MANPOWER_RESERVE: int = 5000
 const MAX_MOBILIZATION_ARMIES: int = 4
-const MOBILIZATION_ARMY_SIZE: int = 5000
 const MONTHS_PER_YEAR: int = 12
 const PEACE_STOCK_TARGET_YEARS: float = 1.5
 const PEACE_STOCK_RECOVERY_YEARS: float = 3.0
@@ -2846,11 +2845,11 @@ static func mobilization_capacity(
 		float(maxi(
 			state.nations[nation_id].manpower_pool - MIN_MANPOWER_RESERVE,
 			0
-		)) / float(MOBILIZATION_ARMY_SIZE)
+		)) / float(GameState.INITIAL_HEAVY_ARMY_SIZE)
 	))
 	var formation_gold_cost := (
 		GameState.formation_creation_gold_cost(
-			MOBILIZATION_ARMY_SIZE
+			GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
 	)
 	var finance_report := resource_report(
@@ -2888,7 +2887,10 @@ static func mobilization_capacity(
 	)
 	var affordable_units := 0
 	for units in range(1, max_units + 1):
-		var target_troops := current_troops + units * MOBILIZATION_ARMY_SIZE
+		var target_troops := (
+			current_troops
+			+ units * GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
 		var plan := war_food_report(
 			state,
 			nation_id,
@@ -3389,7 +3391,12 @@ static func _campaign_troop_target(
 	)
 	var result := mini(
 		desired,
-		mini(available, current + MAX_MOBILIZATION_ARMIES * MOBILIZATION_ARMY_SIZE)
+		mini(
+			available,
+			current
+				+ MAX_MOBILIZATION_ARMIES
+					* GameState.INITIAL_HEAVY_ARMY_SIZE
+		)
 	)
 	evaluation_cache[cache_key] = result
 	return result
@@ -4390,7 +4397,7 @@ static func _collect_war_actions(
 		)
 		var campaign_troops := (
 			int(report["troops"])
-			+ mobilization_armies * MOBILIZATION_ARMY_SIZE
+			+ mobilization_armies * GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
 		var food_plan := war_food_report(
 			state,
@@ -4618,7 +4625,7 @@ static func _collect_existing_war_preparation(
 			float(
 				nation.war_mobilization_target_troops
 				- _troop_count(state, nation_id, evaluation_cache)
-			) / float(MOBILIZATION_ARMY_SIZE)
+			) / float(GameState.INITIAL_HEAVY_ARMY_SIZE)
 		)),
 		0
 	)

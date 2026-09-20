@@ -90,7 +90,6 @@ const AI_INITIAL_STAGGER_NATION_THRESHOLD: int = AI_DECISION_INTERVAL_DAYS
 ## 过多短生命周期任务。保留一个逻辑核给主线程，再以此上限约束实际并发。
 const SUPPLY_NETWORK_MAX_WORKERS: int = 4
 const DIPLOMACY_DECISION_INTERVAL_DAYS: int = DAYS_PER_MONTH
-const NEW_ARMY_SIZE: int = 5000
 const DISBAND_SIZE_MAX: int = 499
 const REINFORCE_PER_ARMY_PER_MONTH: int = (
 	ReinforcementRules.REINFORCE_PER_ARMY_PER_MONTH
@@ -5365,7 +5364,8 @@ func _start_war_preparation(
 	var current_troops := DiplomacyAI._troop_count(state, nation_id)
 	nation.war_mobilization_target_troops = maxi(
 		nation.war_mobilization_target_troops,
-		current_troops + requested_armies * NEW_ARMY_SIZE
+		current_troops
+			+ requested_armies * GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
 	nation.war_mobilization_until_day = maxi(
 		nation.war_mobilization_until_day,
@@ -5482,7 +5482,10 @@ func _start_war_mobilization(
 	mobilization_part_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	var target := current_troops + capacity * NEW_ARMY_SIZE
+	var target := (
+		current_troops
+		+ capacity * GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
 	var food_plan := DiplomacyAI.war_food_report(
 		state,
 		nation_id,

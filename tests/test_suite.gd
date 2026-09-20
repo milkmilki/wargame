@@ -11419,7 +11419,11 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 			army.size = 333
 		elif army.owner_nation == 1:
 			army.size = 1333
-	gs.nations[0].manpower_pool = 30000
+	gs.nations[0].manpower_pool = (
+		DiplomacyAI.MIN_MANPOWER_RESERVE
+		+ DiplomacyAI.MAX_MOBILIZATION_ARMIES
+			* GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
 	gs.nations[1].manpower_pool = 30000
 	for warehouse in gs.warehouse_cities_of(0):
 		warehouse.food_storage = 5000
@@ -11432,7 +11436,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		DiplomacyAI.FoodPosture.DEFENSIVE_WAR
 	)
 	var poor_capacity := DiplomacyAI.mobilization_capacity(gs, 1)
-	var light_creation_cost := (
+	var formation_creation_cost := (
 		GameState.formation_creation_gold_cost(
 			GameState.INITIAL_HEAVY_ARMY_SIZE
 		)
@@ -11445,7 +11449,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		int(exact_cost_report["gold_reserve_baseline_income"])
 		* Simulation.WAR_GOLD_RESERVE_MONTHS
 	)
-	gs.nations[0].treasury_gold = light_creation_cost
+	gs.nations[0].treasury_gold = formation_creation_cost
 	var below_reserve_war_capacity := (
 		DiplomacyAI.mobilization_capacity(
 			gs,
@@ -11454,7 +11458,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		)
 	)
 	gs.nations[0].treasury_gold = (
-		half_year_reserve + light_creation_cost
+		half_year_reserve + formation_creation_cost
 	)
 	var exact_reserve_war_capacity := (
 		DiplomacyAI.mobilization_capacity(
@@ -11463,7 +11467,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 			DiplomacyAI.FoodPosture.OFFENSIVE_WAR
 		)
 	)
-	gs.nations[0].treasury_gold = light_creation_cost
+	gs.nations[0].treasury_gold = formation_creation_cost
 	var exact_cost_guarded_capacity := (
 		DiplomacyAI.mobilization_capacity(
 			gs,
@@ -11473,7 +11477,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	)
 	gs.nations[0].treasury_gold = rich_gold_before_exact_cost
 	var rich_target_troops := DiplomacyAI._troop_count(gs, 0) \
-		+ rich_capacity * DiplomacyAI.MOBILIZATION_ARMY_SIZE
+		+ rich_capacity * GameState.INITIAL_HEAVY_ARMY_SIZE
 	var rich_food_plan := DiplomacyAI.war_food_report(
 		gs,
 		0,
@@ -11575,7 +11579,8 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	_check(
 		declared
 		and gs.nations[0].war_mobilization_target_troops
-			== troops_before + rich_capacity * Simulation.NEW_ARMY_SIZE
+			== troops_before
+				+ rich_capacity * GameState.INITIAL_HEAVY_ARMY_SIZE
 		and gs.nations[1].war_mobilization_target_troops > 0
 		and gs.nations[1].war_mobilization_target_troops
 			< gs.nations[0].war_mobilization_target_troops,
