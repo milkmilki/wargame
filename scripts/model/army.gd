@@ -25,6 +25,7 @@ var attack: int = 10                       ## 攻击力
 var defense: int = 10                      ## 防御力
 ## 当前所属君主的派生军事修正。GameState.refresh_derived() 按 owner 重放；
 ## 基础 attack/defense/morale 永不被永久改写。
+var ruler_attack_multiplier: float = 1.0
 var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
 ## 所属持久指挥单位；-1 表示未编组。每个指挥单位只允许一支主战军。
@@ -112,6 +113,12 @@ func morale_ratio() -> float:
 		0.0,
 		1.0
 	)
+
+
+func combat_attack() -> float:
+	if is_city_garrison:
+		return float(attack)
+	return float(attack) * maxf(ruler_attack_multiplier, 0.1)
 
 
 func combat_morale() -> float:

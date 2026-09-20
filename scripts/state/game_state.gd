@@ -5470,6 +5470,9 @@ func finalize_annexation_after_territory_commit(
 		if army.occupation_claimant_nation == absorbed:
 			army.occupation_claimant_nation = absorber
 		if army.owner_nation == absorber:
+			army.ruler_attack_multiplier = (
+				RulerProfile.attack_multiplier(nations[absorber])
+			)
 			army.ruler_defense_multiplier = (
 				RulerProfile.defense_multiplier(nations[absorber])
 			)
@@ -7266,9 +7269,11 @@ func _largest_owned_component(
 ## 码头只是交通节点；即使仍被某国控制，也不能单独维持国家存续。
 func refresh_derived() -> void:
 	var city_defense_by_nation := PackedFloat64Array()
+	var army_attack_by_nation := PackedFloat64Array()
 	var army_defense_by_nation := PackedFloat64Array()
 	var army_morale_by_nation := PackedFloat64Array()
 	city_defense_by_nation.resize(nations.size())
+	army_attack_by_nation.resize(nations.size())
 	army_defense_by_nation.resize(nations.size())
 	army_morale_by_nation.resize(nations.size())
 	for n in nations:
@@ -7277,6 +7282,9 @@ func refresh_derived() -> void:
 		var modifiers := RulerProfile.modifiers(n)
 		city_defense_by_nation[n.id] = float(
 			modifiers[RulerProfile.KEY_CITY_DEFENSE]
+		)
+		army_attack_by_nation[n.id] = float(
+			modifiers[RulerProfile.KEY_ATTACK]
 		)
 		army_defense_by_nation[n.id] = float(
 			modifiers[RulerProfile.KEY_DEFENSE]
@@ -7295,6 +7303,9 @@ func refresh_derived() -> void:
 	for army in armies:
 		if army.owner_nation < 0 or army.owner_nation >= nations.size():
 			continue
+		army.ruler_attack_multiplier = army_attack_by_nation[
+			army.owner_nation
+		]
 		army.ruler_defense_multiplier = army_defense_by_nation[
 			army.owner_nation
 		]

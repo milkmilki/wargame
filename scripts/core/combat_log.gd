@@ -301,6 +301,9 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 		Army.DEFAULT_MAX_MORALE
 	))
 	army.attack = int(data.get("attack", 10))
+	army.ruler_attack_multiplier = float(data.get(
+		"ruler_attack_multiplier", 1.0
+	))
 	army.defense = int(data.get("defense", 10))
 	army.morale = float(data.get("morale", 1.0))
 	army.starving = bool(data.get("starving", false))
@@ -321,6 +324,7 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"max_size": army.max_size,
 			"max_morale": army.max_morale,
 			"attack": army.attack,
+			"ruler_attack_multiplier": army.ruler_attack_multiplier,
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
@@ -354,6 +358,7 @@ static func _snapshots_equal(
 				return false
 		for key in [
 			"morale",
+			"ruler_attack_multiplier",
 			"city_garrison_combat_multiplier",
 		]:
 			if not is_equal_approx(

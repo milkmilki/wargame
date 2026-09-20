@@ -249,7 +249,8 @@ func _test_extreme_modifiers() -> void:
 	var conqueror := RulerProfile.modifiers(RulerProfile.CONQUEROR)
 	var guardian := RulerProfile.modifiers(RulerProfile.GUARDIAN)
 	_check(
-		is_equal_approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.0)
+		is_equal_approx(float(conqueror[RulerProfile.KEY_ATTACK]), 2.0)
+		and is_equal_approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.0)
 		and is_equal_approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 2.0)
 		and is_equal_approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 0.5)
 		and is_equal_approx(float(conqueror[RulerProfile.KEY_WAR_BENEFIT]), 2.0)
@@ -257,6 +258,24 @@ func _test_extreme_modifiers() -> void:
 			float(conqueror[RulerProfile.KEY_OFFENSIVE_INTERVAL]), 0.5
 		),
 		"conqueror military multipliers do not match the extreme profile"
+	)
+	var conqueror_army := Army.new()
+	conqueror_army.size = 100
+	conqueror_army.attack = 10
+	conqueror_army.ruler_attack_multiplier = float(
+		conqueror[RulerProfile.KEY_ATTACK]
+	)
+	_check(
+		is_equal_approx(conqueror_army.combat_attack(), 20.0)
+			and is_equal_approx(
+				Combat._frontline_attack([{
+					"army": conqueror_army,
+					"committed": 100,
+					"size_before": 100,
+				}], 1.0),
+				2000.0
+			),
+		"conqueror attack multiplier did not reach frontline firepower"
 	)
 	_check(
 		is_equal_approx(float(guardian[RulerProfile.KEY_TRADE]), 2.0),

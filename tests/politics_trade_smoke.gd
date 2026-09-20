@@ -464,12 +464,18 @@ func _test_ruler_profiles() -> void:
 	var tyrant := RulerProfile.modifiers(RulerProfile.TYRANT)
 	_check(
 		_approx(float(conqueror[RulerProfile.KEY_AGGRESSION]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_GOLD_OUTPUT]), 1.00)
+			and _approx(float(conqueror[RulerProfile.KEY_FOOD_OUTPUT]), 1.00)
 			and _approx(float(conqueror[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.50)
 			and _approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 0.50)
 			and _approx(float(conqueror[RulerProfile.KEY_WAR_BENEFIT]), 2.00)
 			and _approx(float(conqueror[RulerProfile.KEY_OFFENSIVE_INTERVAL]), 0.50)
+			and _approx(float(conqueror[RulerProfile.KEY_FOOD_CONSUMPTION]), 1.00)
+			and _approx(float(conqueror[RulerProfile.KEY_ATTACK]), 2.00)
 			and _approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.00)
 			and _approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_CITY_DEFENSE]), 1.00)
+			and _approx(float(conqueror[RulerProfile.KEY_TRADE]), 1.00)
 			and bool(conqueror[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
 		"ruler/conqueror_key_multipliers"
 	)

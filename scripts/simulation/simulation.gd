@@ -9909,6 +9909,7 @@ func _sync_battle_ruler_modifiers(battle: Battle) -> void:
 		for army_value in side:
 			var army: Army = army_value
 			if army.is_city_garrison:
+				army.ruler_attack_multiplier = 1.0
 				army.ruler_defense_multiplier = 1.0
 				army.ruler_morale_multiplier = 1.0
 				continue
@@ -9916,10 +9917,14 @@ func _sync_battle_ruler_modifiers(battle: Battle) -> void:
 				army.owner_nation < 0
 				or army.owner_nation >= state.nations.size()
 			):
+				army.ruler_attack_multiplier = 1.0
 				army.ruler_defense_multiplier = 1.0
 				army.ruler_morale_multiplier = 1.0
 				continue
 			var ruler := state.nations[army.owner_nation]
+			army.ruler_attack_multiplier = maxf(
+				RulerProfile.attack_multiplier(ruler), 0.1
+			)
 			army.ruler_defense_multiplier = maxf(
 				RulerProfile.defense_multiplier(ruler), 0.1
 			)

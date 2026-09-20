@@ -162,6 +162,7 @@ const KEY_UPKEEP: String = "upkeep_multiplier"
 const KEY_WAR_BENEFIT: String = "war_benefit_multiplier"
 const KEY_OFFENSIVE_INTERVAL: String = "offensive_interval_multiplier"
 const KEY_FOOD_CONSUMPTION: String = "food_consumption_multiplier"
+const KEY_ATTACK: String = "attack_multiplier"
 const KEY_MORALE: String = "morale_multiplier"
 const KEY_DEFENSE: String = "defense_multiplier"
 const KEY_CITY_DEFENSE: String = "city_defense_multiplier"
@@ -486,6 +487,12 @@ static func food_consumption_multiplier(
 	return float(modifiers(profile_or_archetype, traits)[KEY_FOOD_CONSUMPTION])
 
 
+static func attack_multiplier(
+	profile_or_archetype: Variant, traits: Array = []
+) -> float:
+	return float(modifiers(profile_or_archetype, traits)[KEY_ATTACK])
+
+
 static func morale_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
@@ -568,6 +575,7 @@ static func _base_modifiers(archetype: int) -> Dictionary:
 		KEY_WAR_BENEFIT: 1.0,
 		KEY_OFFENSIVE_INTERVAL: 1.0,
 		KEY_FOOD_CONSUMPTION: 1.0,
+		KEY_ATTACK: 1.0,
 		KEY_MORALE: 1.0,
 		KEY_DEFENSE: 1.0,
 		KEY_CITY_DEFENSE: 1.0,
@@ -582,12 +590,10 @@ static func _base_modifiers(archetype: int) -> Dictionary:
 		Archetype.CONQUEROR:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 2.00, KEY_PEACE: 0.45, KEY_ALLIANCE: 0.80,
-				KEY_GOLD_OUTPUT: 0.90, KEY_FOOD_OUTPUT: 0.90,
 				KEY_MANPOWER_OUTPUT: 1.50, KEY_UPKEEP: 0.50,
 				KEY_WAR_BENEFIT: 2.00, KEY_OFFENSIVE_INTERVAL: 0.50,
-				KEY_FOOD_CONSUMPTION: 1.35, KEY_MORALE: 2.00,
-				KEY_DEFENSE: 2.00, KEY_CITY_DEFENSE: 0.80,
-				KEY_ENFEOFF: 0.55, KEY_CENTRALIZE: 1.50, KEY_TRADE: 0.75,
+				KEY_ATTACK: 2.00, KEY_MORALE: 2.00, KEY_DEFENSE: 2.00,
+				KEY_ENFEOFF: 0.55, KEY_CENTRALIZE: 1.50,
 			})
 			result[KEY_RESERVE_MONTHS] = -3
 		Archetype.GUARDIAN:

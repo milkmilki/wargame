@@ -52,6 +52,10 @@ func _run() -> void:
 	_check(
 		nation_army != null
 			and is_equal_approx(
+				nation_army.ruler_attack_multiplier,
+				RulerProfile.attack_multiplier(nation)
+			)
+			and is_equal_approx(
 				nation_army.ruler_defense_multiplier,
 				RulerProfile.defense_multiplier(nation)
 			),

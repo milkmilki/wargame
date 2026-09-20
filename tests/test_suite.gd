@@ -136,6 +136,10 @@ func _test_world_generation() -> void:
 		ruler_modifiers_match = (
 			ruler_modifiers_match
 			and _approx(
+				army.ruler_attack_multiplier,
+				RulerProfile.attack_multiplier(ruler)
+			)
+			and _approx(
 				army.ruler_defense_multiplier,
 				RulerProfile.defense_multiplier(ruler)
 			)

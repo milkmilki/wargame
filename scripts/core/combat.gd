@@ -146,7 +146,7 @@ static func _side_combat_signature(
 		if army.size <= 0:
 			continue
 		total_size += army.size
-		attack_mass += army.size * army.attack
+		attack_mass += int(round(float(army.size) * army.combat_attack()))
 		defense_mass += int(round(
 			float(army.size * army.defense)
 				* maxf(army.ruler_defense_multiplier, 0.1)
@@ -601,6 +601,7 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"size": army.size,
 			"max_size": army.max_size,
 			"attack": army.attack,
+			"ruler_attack_multiplier": army.ruler_attack_multiplier,
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
@@ -723,8 +724,8 @@ static func _canonicalize_side(
 	side.sort_custom(func(a: Army, b: Army) -> bool:
 		if a.size != b.size:
 			return a.size > b.size
-		if a.attack != b.attack:
-			return a.attack > b.attack
+		if not is_equal_approx(a.combat_attack(), b.combat_attack()):
+			return a.combat_attack() > b.combat_attack()
 		if a.defense != b.defense:
 			return a.defense > b.defense
 		if not is_equal_approx(a.morale, b.morale):
@@ -784,7 +785,7 @@ static func _frontline_attack(
 		var garrison_stat_multiplier := _city_garrison_stat_multiplier(army)
 		total += (
 			float(entry["committed"])
-			* float(army.attack)
+			* army.combat_attack()
 			* garrison_stat_multiplier
 			* side_efficiency
 		)
@@ -799,7 +800,7 @@ static func _side_combat_efficiency(side: Array[Army]) -> float:
 			continue
 		var army_nominal := (
 			float(army.size)
-			* float(army.attack)
+			* army.combat_attack()
 			* _city_garrison_stat_multiplier(army)
 		)
 		nominal_attack += army_nominal
@@ -1095,7 +1096,7 @@ static func _side_attack(side: Array[Army]) -> float:
 		if a.size > 0:
 			total += (
 				float(a.size)
-				* float(a.attack)
+				* a.combat_attack()
 				* combat_efficiency(a.combat_morale())
 			)
 	return total

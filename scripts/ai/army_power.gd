@@ -8,7 +8,7 @@ static func effective(army: Army) -> float:
 		return 0.0
 	var quality := (
 			sqrt(maxf(
-			float(army.attack)
+			army.combat_attack()
 				* float(army.defense)
 				* maxf(army.ruler_defense_multiplier, 0.1),
 			1.0

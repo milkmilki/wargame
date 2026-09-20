@@ -19,17 +19,20 @@ func _init() -> void:
 			mismatches += 1
 	for army in state.armies:
 		var ruler := state.nations[army.owner_nation]
+		var expected_attack := RulerProfile.attack_multiplier(ruler)
 		var expected_defense := RulerProfile.defense_multiplier(ruler)
 		var expected_morale := RulerProfile.morale_multiplier(ruler)
 		if (
-			not is_equal_approx(army.ruler_defense_multiplier, expected_defense)
+			not is_equal_approx(army.ruler_attack_multiplier, expected_attack)
+			or not is_equal_approx(army.ruler_defense_multiplier, expected_defense)
 			or not is_equal_approx(army.ruler_morale_multiplier, expected_morale)
 		):
 			if mismatches < 5:
 				print(
-					"ARMY id=%d owner=%d defense=%.9f/%.9f morale=%.9f/%.9f"
+					"ARMY id=%d owner=%d attack=%.9f/%.9f defense=%.9f/%.9f morale=%.9f/%.9f"
 					% [
 						army.id, army.owner_nation,
+						army.ruler_attack_multiplier, expected_attack,
 						army.ruler_defense_multiplier, expected_defense,
 						army.ruler_morale_multiplier, expected_morale,
 					]
