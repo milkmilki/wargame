@@ -26,6 +26,16 @@ func _init() -> void:
 	state.armies.clear()
 	state.battles.clear()
 	var origin := state.nations[attacker_id].capital_city_id if valid else 0
+	var defender_army := Army.new()
+	defender_army.id = 9099
+	defender_army.owner_nation = state.cities[center_id].owner_nation
+	defender_army.size = 12000
+	defender_army.max_size = 15000
+	defender_army.strategic_role = Army.StrategicRole.MAIN
+	defender_army.location_city = center_id
+	defender_army.move_from = center_id
+	defender_army.state = Army.State.IDLE
+	state.armies.append(defender_army)
 	for index in range(4):
 		var army := Army.new()
 		army.id = 9100 + index
@@ -55,9 +65,38 @@ func _init() -> void:
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
 		var plan := state.nations[attacker_id].administrative_campaign_plan
 		valid = valid and plan != null
+		var fixed_threat: int = plan.reinforcement_threat
+		valid = valid and fixed_threat > 0
+		valid = valid and plan.army_assignments.size() == 3
+		defender_army.size = 1000
+		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		valid = valid and plan.reinforcement_threat == fixed_threat
+		valid = valid and state.campaign_reinforcement_budget(
+			attacker_id, center_id
+		) == fixed_threat
+		state.road_network_revision += 1
+		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		valid = valid and plan.reinforcement_threat == 1250
+		defender_army.size = 4000
+		state.administrative_region_revision += 1
+		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		valid = valid and plan.reinforcement_threat == 5000
+		state.set_diplomatic_relation(
+			attacker_id,
+			defender_army.owner_nation,
+			GameState.DiplomaticRelation.NEUTRAL
+		)
+		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		valid = valid and plan.reinforcement_threat == 0
+		state.set_diplomatic_relation(
+			attacker_id,
+			defender_army.owner_nation,
+			GameState.DiplomaticRelation.WAR
+		)
+		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		valid = valid and plan.reinforcement_threat == 5000
 		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.CAPTURE_FU
 		valid = valid and plan.tactical_target_city_ids.size() <= 2
-		valid = valid and plan.army_assignments.size() == 3
 		var failed_army_id := int(plan.army_assignments.keys()[0])
 		var failed_army: Army = state.armies.filter(
 			func(army: Army) -> bool: return army.id == failed_army_id
@@ -82,6 +121,8 @@ func _init() -> void:
 		valid = valid and state.campaign_committed_manpower(
 			attacker_id, center_id
 		) == expected_committed
+		defender_army.size = 0
+		state.road_network_revision += 1
 		for member_id in state.administrative_members(center_id):
 			if member_id != center_id:
 				state.cities[member_id].owner_nation = attacker_id
@@ -95,6 +136,23 @@ func _init() -> void:
 		state.day = 10
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
 		valid = valid and plan.failed_until_day == 70
+		var alternate_center := -1
+		for center_value in state.administrative_center_city_ids:
+			var candidate_center := int(center_value)
+			if candidate_center != center_id:
+				alternate_center = candidate_center
+				break
+		valid = valid and alternate_center >= 0
+		if alternate_center >= 0:
+			sim._manage_administrative_campaign(
+				attacker_id, alternate_center, null, null
+			)
+			var replacement_plan := state.nations[
+				attacker_id
+			].administrative_campaign_plan
+			valid = valid and replacement_plan != plan
+			valid = valid and replacement_plan.center_city_id == alternate_center
+			valid = valid and replacement_plan.reinforcement_threat >= 0
 	sim.free()
 	if valid:
 		print("GARRISON_CAMPAIGN_AI_OK center=%d attacker=%d" % [

@@ -6861,8 +6861,8 @@ static func city_detail_sections(
 		var requirement := game_state.campaign_siege_requirement(
 			attacker_id, administrative_center
 		)
-		var threat := game_state.campaign_reinforcement_threat(
-			attacker_id, administrative_center, 60
+		var threat := game_state.campaign_reinforcement_budget(
+			attacker_id, administrative_center
 		)
 		var committed := game_state.campaign_committed_manpower(
 			attacker_id, administrative_center

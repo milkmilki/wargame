@@ -3656,9 +3656,7 @@ static func administrative_tactical_target(
 		return -1
 	var required := (
 		state.campaign_siege_requirement(nation_id, center_city_id)
-		+ state.campaign_reinforcement_threat(
-			nation_id, center_city_id, 60
-		)
+		+ state.campaign_reinforcement_budget(nation_id, center_city_id)
 	)
 	var committed := state.campaign_committed_manpower(
 		nation_id, center_city_id
@@ -4840,7 +4838,7 @@ static func objective_assault_troops(
 		return 0
 	return (
 		state.campaign_siege_requirement(nation_id, center_id)
-		+ state.campaign_reinforcement_threat(nation_id, center_id, 60)
+		+ state.campaign_reinforcement_budget(nation_id, center_id)
 	)
 
 

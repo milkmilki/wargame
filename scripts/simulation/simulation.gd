@@ -7768,9 +7768,9 @@ func _campaign_force_recruitment_demand(
 			var center_id := centers[0]
 			target_main_capacity = maxi(
 				state.campaign_siege_requirement(view.nation_id, center_id)
-				+ state.campaign_reinforcement_threat(
-					view.nation_id, center_id, 60
-				),
+					+ state.campaign_reinforcement_budget(
+						view.nation_id, center_id
+					),
 				GameState.INITIAL_HEAVY_ARMY_SIZE
 			)
 	return {
@@ -8262,6 +8262,7 @@ func _manage_administrative_campaign(
 		plan = AdministrativeCampaignPlan.new()
 		plan.center_city_id = center_city_id
 		nation.administrative_campaign_plan = plan
+	_refresh_campaign_reinforcement_budget(nation_id, center_city_id, plan)
 	if state.day < plan.failed_until_day:
 		return false
 	var previous_assignments := plan.army_assignments.duplicate()
@@ -8339,7 +8340,7 @@ func _manage_administrative_campaign(
 		return changed
 	var requirement := (
 		state.campaign_siege_requirement(nation_id, center_city_id)
-		+ state.campaign_reinforcement_threat(nation_id, center_city_id, 60)
+		+ state.campaign_reinforcement_budget(nation_id, center_city_id)
 	)
 	var committed := 0
 	var candidates: Array[Army] = []
@@ -8460,6 +8461,33 @@ func _manage_administrative_campaign(
 	plan.had_forces = plan.had_forces or not plan.army_assignments.is_empty()
 	plan.refresh_fingerprint(state)
 	return changed
+
+
+func _refresh_campaign_reinforcement_budget(
+	nation_id: int,
+	center_city_id: int,
+	plan: AdministrativeCampaignPlan
+) -> void:
+	var context_signature := state.campaign_reinforcement_context_signature(
+		nation_id, center_city_id
+	)
+	if (
+		plan.reinforcement_threat >= 0
+		and plan.reinforcement_context_signature == context_signature
+		and plan.reinforcement_administrative_region_revision
+			== state.administrative_region_revision
+		and plan.reinforcement_road_network_revision
+			== state.road_network_revision
+	):
+		return
+	plan.reinforcement_threat = state.campaign_reinforcement_threat(
+		nation_id, center_city_id, 60
+	)
+	plan.reinforcement_context_signature = context_signature
+	plan.reinforcement_administrative_region_revision = (
+		state.administrative_region_revision
+	)
+	plan.reinforcement_road_network_revision = state.road_network_revision
 
 
 func _administrative_campaign_staging_city(

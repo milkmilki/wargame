@@ -2199,6 +2199,61 @@ func campaign_reinforcement_threat(
 	return ceili(float(reachable_manpower) * 1.25)
 
 
+func campaign_reinforcement_context_signature(
+	attacker_id: int,
+	center_city_id: int
+) -> String:
+	if (
+		attacker_id < 0
+		or attacker_id >= nations.size()
+		or center_city_id < 0
+		or center_city_id >= cities.size()
+	):
+		return ""
+	var attacker_bloc := alliance_bloc(attacker_id)
+	if attacker_bloc.is_empty():
+		attacker_bloc.append(attacker_id)
+	var defender_id := cities[center_city_id].owner_nation
+	var defender_bloc: Array[int] = []
+	if defender_id >= 0 and defender_id < nations.size():
+		defender_bloc = alliance_bloc(defender_id)
+		if defender_bloc.is_empty():
+			defender_bloc.append(defender_id)
+	var attackers: Array[String] = []
+	for member_id in attacker_bloc:
+		attackers.append(str(member_id))
+	var defenders: Array[String] = []
+	for member_id in defender_bloc:
+		if is_enemy(attacker_id, member_id):
+			defenders.append(str(member_id))
+	return "%s>%d:%s" % [
+		",".join(attackers), defender_id, ",".join(defenders),
+	]
+
+
+func campaign_reinforcement_budget(
+	attacker_id: int,
+	center_city_id: int
+) -> int:
+	if attacker_id >= 0 and attacker_id < nations.size():
+		var plan := nations[attacker_id].administrative_campaign_plan
+		if (
+			plan != null
+			and plan.center_city_id == center_city_id
+			and plan.reinforcement_threat >= 0
+			and plan.reinforcement_context_signature
+				== campaign_reinforcement_context_signature(
+					attacker_id, center_city_id
+				)
+			and plan.reinforcement_administrative_region_revision
+				== administrative_region_revision
+			and plan.reinforcement_road_network_revision
+				== road_network_revision
+		):
+			return plan.reinforcement_threat
+	return campaign_reinforcement_threat(attacker_id, center_city_id, 60)
+
+
 func campaign_committed_manpower(
 	attacker_id: int,
 	center_city_id: int

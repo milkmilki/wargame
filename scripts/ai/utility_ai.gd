@@ -378,8 +378,8 @@ static func _attack_candidate(
 		var center_id := view.state.administrative_center_of(city_id)
 		var required_siege_size := (
 			view.state.campaign_siege_requirement(view.nation_id, center_id)
-			+ view.state.campaign_reinforcement_threat(
-				view.nation_id, center_id, 60
+			+ view.state.campaign_reinforcement_budget(
+				view.nation_id, center_id
 			)
 		)
 		var pool := _adjacent_assault_pool(
@@ -925,8 +925,8 @@ static func _choose_holding(
 		var center_id := view.state.administrative_center_of(target_city.id)
 		var required_size := (
 			view.state.campaign_siege_requirement(view.nation_id, center_id)
-			+ view.state.campaign_reinforcement_threat(
-				view.nation_id, center_id, 60
+			+ view.state.campaign_reinforcement_budget(
+				view.nation_id, center_id
 			)
 		)
 		var pool := _adjacent_assault_pool(
