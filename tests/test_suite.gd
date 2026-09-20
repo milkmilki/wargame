@@ -55,6 +55,7 @@ func _init() -> void:
 	_test_holding_combat_adaptation()
 	_test_retreat_contact_and_position_continuity()
 	_test_stable_force_resource_cache_filter()
+	_test_resource_cache_refreshes_after_new_nation()
 	_test_gold_reserve_budget_and_war_snapshot()
 	_test_ruler_economy_integration()
 	_test_war_preparation_cancel_cooldown()
@@ -8058,6 +8059,34 @@ func _test_alliance_war_coalitions() -> void:
 
 
 # ------------------------------------------------------------------ 32c. 宗藩数据模型不变量（增量 A）
+
+func _test_resource_cache_refreshes_after_new_nation() -> void:
+	var state := GameState.new()
+	state.generate_world(260920, 12)
+	var stale_cache := {
+		"monthly_gold_flows": Simulation.monthly_gold_flows(state),
+	}
+	var subject_id := -1
+	for overlord_id in range(state.nations.size()):
+		var region := _enfeoffable_region(state, overlord_id, 3)
+		if region.is_empty():
+			continue
+		subject_id = state.enfeoff(overlord_id, region)
+		if subject_id >= 0:
+			break
+	_check(subject_id >= 0, "资源缓存回归夹具必须成功新增藩王")
+	if subject_id < 0:
+		return
+	var report := DiplomacyAI.resource_report(
+		state, subject_id, stale_cache
+	)
+	_check(
+		not report.is_empty()
+		and (stale_cache["monthly_gold_flows"] as Array).size()
+			== state.nations.size(),
+		"新增国家后必须整体刷新按国家索引的财政评估缓存"
+	)
+
 
 func _test_suzerainty_invariants() -> void:
 	print("[32c] 宗藩：分封守恒、对外关系继承、共同体一体化与结构不变量")

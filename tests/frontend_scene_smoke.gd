@@ -81,7 +81,13 @@ func _run() -> void:
 		)
 	var jump_capital_id := int(main.state.nations[0].capital_city_id)
 	renderer.select_city(jump_capital_id)
-	var city_detail_rect := renderer._selection_detail_rect(
+	await process_frame
+	var city_payload := renderer._selection_detail_payload()
+	var city_detail_geometry_matches := (
+		int(city_payload["line_count"])
+		== renderer._selection_detail_line_count()
+	)
+	var city_detail_rect := renderer._selection_detail_input_rect(
 		renderer._selection_detail_line_count()
 	)
 	var city_nation_click := InputEventMouseButton.new()
@@ -90,15 +96,26 @@ func _run() -> void:
 	city_nation_click.position = MapRenderer.city_nation_trigger_rect(
 		city_detail_rect, renderer._display_scale
 	).get_center()
-	var city_nation_handled := renderer._handle_selection_detail_mouse_button(
-		city_nation_click
+	city_nation_click.global_position = city_nation_click.position
+	Input.parse_input_event(city_nation_click)
+	await process_frame
+	var city_nation_pressed_jump := (
+		renderer.selected_city_id() == -1
+		and renderer.selected_nation_id() == 0
 	)
+	var city_nation_release := InputEventMouseButton.new()
+	city_nation_release.button_index = MOUSE_BUTTON_LEFT
+	city_nation_release.pressed = false
+	city_nation_release.position = city_nation_click.position
+	city_nation_release.global_position = city_nation_release.position
+	Input.parse_input_event(city_nation_release)
+	await process_frame
 	var city_nation_jump := (
-		city_nation_handled
+		city_nation_pressed_jump
 		and renderer.selected_city_id() == -1
 		and renderer.selected_nation_id() == 0
 	)
-	var nation_detail_rect := renderer._selection_detail_rect(
+	var nation_detail_rect := renderer._selection_detail_input_rect(
 		renderer._selection_detail_line_count()
 	)
 	var nation_payload := renderer._selection_detail_payload()
@@ -189,6 +206,7 @@ func _run() -> void:
 			) != null
 		),
 		"family_tree_pause": family_pause_applied and family_pause_restored,
+		"city_detail_geometry": city_detail_geometry_matches,
 		"city_nation_jump": city_nation_jump,
 		"family_tree_button": family_tree_button_opens,
 		"nation_detail_geometry": nation_detail_geometry_matches,

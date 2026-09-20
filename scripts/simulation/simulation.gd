@@ -1126,6 +1126,7 @@ func _seed_trade_forecast(
 		)
 	evaluation_cache["trade_network_result"] = forecast["trade"]
 	evaluation_cache["monthly_gold_flows"] = forecast["gold_flows"]
+	DiplomacyAI._ensure_evaluation_cache_current(state, evaluation_cache)
 	return evaluation_cache
 
 

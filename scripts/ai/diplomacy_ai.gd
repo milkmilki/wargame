@@ -2363,6 +2363,7 @@ static func resource_report(
 	nation_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var cache_key := "resource:%d" % nation_id
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
@@ -2564,6 +2565,47 @@ static func resource_report(
 	}
 	evaluation_cache[cache_key] = result
 	return result
+
+
+## 外交评估缓存中的财政、贸易和国家聚合均按 nation_id 索引。分帧计算
+## 让出主循环后若分封或叛乱新增国家，整批派生值必须一起失效，不能混用
+## 变化前后的数组与逐国报告。
+static func _ensure_evaluation_cache_current(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> void:
+	const REVISION_KEY := "__evaluation_state_revision"
+	var revision: Array[int] = [
+		state.get_instance_id(),
+		state.nations.size(),
+		state.ownership_revision,
+		state.diplomacy_revision,
+		state.trade_revision,
+	]
+	var cached_revision: Variant = evaluation_cache.get(
+		REVISION_KEY, null
+	)
+	var stale: bool = (
+		cached_revision != null and cached_revision != revision
+	)
+	if cached_revision == null and evaluation_cache.has(
+		"monthly_gold_flows"
+	):
+		var flows_value: Variant = evaluation_cache["monthly_gold_flows"]
+		stale = (
+			flows_value is Array
+			and (flows_value as Array).size() != state.nations.size()
+		)
+	if stale:
+		var control_entries := {}
+		for key_value in evaluation_cache.keys():
+			var key := str(key_value)
+			if key.begins_with("__") and key != REVISION_KEY:
+				control_entries[key_value] = evaluation_cache[key_value]
+		evaluation_cache.clear()
+		for key_value in control_entries:
+			evaluation_cache[key_value] = control_entries[key_value]
+	evaluation_cache[REVISION_KEY] = revision
 
 
 ## 外交报告优先复用已结算的 Nation 月度快照；世界尚未做过贸易月结时，
@@ -6008,6 +6050,7 @@ static func evaluate_centralization_fiscal_benefit(
 	subject_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var overlord_id := state.overlord_of(subject_id)
 	if (
 		overlord_id < 0

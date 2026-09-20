@@ -184,6 +184,8 @@ var _nation_stats_drag_offset := Vector2.ZERO
 var _selection_detail_window_position := Vector2(-1.0, -1.0)
 var _selection_detail_drag_active: bool = false
 var _selection_detail_drag_offset := Vector2.ZERO
+var _selection_detail_drawn_rect := Rect2()
+var _selection_detail_drawn_signature := PackedInt32Array()
 var _nation_stats_scroll: int = 0
 var _nation_stats_collapsed_nations: Dictionary = {}
 var _nation_stats_sort_key: int = NationSort.CITY_COUNT
@@ -290,6 +292,8 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_nation_stats_drag_active = false
 	_selection_detail_window_position = Vector2(-1.0, -1.0)
 	_selection_detail_drag_active = false
+	_selection_detail_drawn_rect = Rect2()
+	_selection_detail_drawn_signature = PackedInt32Array()
 	_nation_stats_scroll = 0
 	_nation_stats_collapsed_nations.clear()
 	_nation_stats_sort_key = NationSort.CITY_COUNT
@@ -857,7 +861,7 @@ func world_input_blocked(point: Vector2) -> bool:
 	var detail_line_count := _selection_detail_line_count()
 	if (
 		detail_line_count > 0
-		and _selection_detail_rect(
+		and _selection_detail_input_rect(
 			detail_line_count
 		).has_point(point)
 	):
@@ -1017,7 +1021,7 @@ func _handle_selection_detail_mouse_button(
 	var line_count := _selection_detail_line_count()
 	if line_count <= 0:
 		return false
-	var rect := _selection_detail_rect(line_count)
+	var rect := _selection_detail_input_rect(line_count)
 	if not rect.has_point(event.position):
 		if event.pressed:
 			_close_ruler_profile_menu()
@@ -6353,8 +6357,11 @@ func _draw_nation_window_cells(
 func _draw_selection_detail(detail_payload: Dictionary) -> void:
 	var sections := detail_payload.get("sections", []) as Array[Dictionary]
 	if sections.is_empty():
+		_selection_detail_drawn_signature = PackedInt32Array()
 		return
 	var rect := _selection_detail_rect(int(detail_payload.get("line_count", 0)))
+	_selection_detail_drawn_rect = rect
+	_selection_detail_drawn_signature = _selection_detail_signature()
 	var title := str(detail_payload.get("title", ""))
 	var stripe_color := detail_payload.get(
 		"stripe_color",
@@ -6590,7 +6597,7 @@ static func _city_detail_line_count(
 		3 if game_state.cities[city_id].rebellion_progress > 0 else 2
 	)
 	var count := _section_layout_line_count(PackedInt32Array([
-		3, 2, 7, governance_lines,
+		4, 3, 8, governance_lines,
 	]))
 	var owner_id := game_state.cities[city_id].owner_nation
 	if owner_id >= 0 and owner_id < game_state.nations.size():
@@ -6649,6 +6656,22 @@ func _selection_detail_rect(line_count: int) -> Rect2:
 	)
 	_selection_detail_window_position = position
 	return Rect2(position, size)
+
+
+func _selection_detail_input_rect(line_count: int) -> Rect2:
+	if _selection_detail_drawn_signature == _selection_detail_signature():
+		return _selection_detail_drawn_rect
+	return _selection_detail_rect(line_count)
+
+
+func _selection_detail_signature() -> PackedInt32Array:
+	return PackedInt32Array([
+		_selected_city_id,
+		_selected_edge_a,
+		_selected_edge_b,
+		_selected_nation_id,
+		1 if _history_mode else 0,
+	])
 
 
 func _clamp_selection_detail_window_position() -> void:
