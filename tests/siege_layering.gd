@@ -59,6 +59,18 @@ func _arriving_attacker(data: Dictionary, id: int, size: int) -> Army:
 
 func _init() -> void:
 	var valid := true
+	valid = valid and MapRenderer.campaign_phase_text(
+		AdministrativeCampaignPlan.Mode.OFFENSE,
+		AdministrativeCampaignPlan.Phase.CAPTURE_FU
+	) == "进攻·夺取属府"
+	valid = valid and MapRenderer.campaign_phase_text(
+		AdministrativeCampaignPlan.Mode.DEFENSE,
+		AdministrativeCampaignPlan.Phase.HOLD_AND_REINFORCE
+	) == "防守·驻守并等待增援"
+	valid = valid and MapRenderer.campaign_phase_text(
+		AdministrativeCampaignPlan.Mode.DEFENSE,
+		AdministrativeCampaignPlan.Phase.SORTIE
+	) == "防守·出城迎击敌军"
 
 	# 驻城野战军先单独交战，虚拟守军本轮不得出现或受损。
 	var screened := _fixture(95201)
@@ -83,6 +95,20 @@ func _init() -> void:
 	if screened_siege != null:
 		valid = valid and screened_siege.uses_field_combat_rules()
 		valid = valid and screened_siege.holding_side == 2
+		var detail_sections := MapRenderer.city_detail_sections(
+			screened_state, int(screened["center_id"])
+		)
+		var military_text := ""
+		for section in detail_sections:
+			if str(section.get("title", "")) != "军事":
+				continue
+			for line in section.get("lines", []):
+				military_text += "%s\n" % str(line)
+		valid = valid and military_text.contains("当前行动：州治野战")
+		valid = valid and military_text.contains("城下可战兵力")
+		valid = valid and military_text.contains("本州已调兵力")
+		valid = valid and not military_text.contains("阶段")
+		valid = valid and not military_text.contains("到场C")
 		var snapshot := NativeSnapshotBuilder.build(screened_state)
 		valid = valid and int(
 			(snapshot["battles"] as Dictionary)[
