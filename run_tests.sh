@@ -4,6 +4,7 @@
 set -euo pipefail
 
 GODOT="${GODOT:-/Users/bytedance/Godot.app/Contents/MacOS/Godot}"
+PYTHON="${PYTHON:-python3}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${TMPDIR:-/tmp}"
 GODOT_HOME="$LOG_DIR/world-war-godot-home"
@@ -103,10 +104,21 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/last_city_offensive_stall.gd \
   --log-file "$LOG_DIR/world-war-last-capital-offensive.log"
 echo
+echo "==> [2i2/29] 多州防守与国家预备队门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/multi_campaign_defense_ai.gd \
+  --log-file "$LOG_DIR/world-war-multi-campaign-defense.log"
+echo
 echo "==> [2j/29] 州治守军战损比门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/garrison_combat_ratio.gd \
   --log-file "$LOG_DIR/world-war-garrison-combat-ratio.log"
+echo
+
+echo "==> [2j1/29] 州治野战、封锁与守军攻城分层门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/siege_layering.gd \
+  --log-file "$LOG_DIR/world-war-siege-layering.log"
 echo
 
 echo "==> [2k/29] 州级藩王、野战姿态与慢速补员门禁"
@@ -213,7 +225,7 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
 echo
 
 echo "==> [23/29] 高程图打包与海岸无插值门禁"
-python3 "$PROJECT_DIR/tests/low_poly_map_source_tool.py" 2>&1 \
+"$PYTHON" "$PROJECT_DIR/tests/low_poly_map_source_tool.py" 2>&1 \
   | tee "$LOG_DIR/world-war-low-poly-map-source.log"
 echo
 

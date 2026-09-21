@@ -29,11 +29,11 @@ static func city_garrison_defense(
 		return 0.0
 	return (
 		float(state.cities[center_city_id].garrison_manpower)
-		* state.city_garrison_efficiency(attacker_id, center_city_id)
 		* maxf(
 			state.cities[center_city_id].ruler_city_defense_multiplier,
 			0.1
 		)
+		* state.city_garrison_defense_bonus(attacker_id, center_city_id)
 	)
 
 

@@ -66,9 +66,6 @@ static func choose(
 	)
 	if retreat != null:
 		return retreat
-	var sortie := _state_sortie_candidate(view, army)
-	if sortie != null:
-		return sortie
 	var candidates: Array[ActionCandidate] = []
 	candidates.append(ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "保持当前驻地"))
 	if not view.state.uses_heightmap:
@@ -82,16 +79,6 @@ static func choose(
 		)
 		if attack != null:
 			candidates.append(attack)
-	if view.day >= army.defensive_deployment_until_day:
-		var merge := _merge_candidate(
-			view,
-			snapshot,
-			threat,
-			coordinator,
-			army
-		)
-		if merge != null:
-			candidates.append(merge)
 	candidates.sort_custom(func(a: ActionCandidate, b: ActionCandidate) -> bool:
 		if not is_equal_approx(a.score, b.score):
 			return a.score > b.score
@@ -122,71 +109,6 @@ static func choose(
 		)
 	)
 	return candidates[0]
-
-
-## A threatened state fights the committed enemy field force before attempting
-##府 reclamation.  The same GameState requirement is used by campaign planning,
-##so a sortie is only launched once the local defensive C is sufficient.
-static func _state_sortie_candidate(
-	view: AiWorldView,
-	army: Army
-) -> ActionCandidate:
-	var center_id := view.state.administrative_center_of(army.location_city)
-	if center_id < 0 or view.state.cities[center_id].owner_nation != view.nation_id:
-		return null
-	var required := view.state.campaign_field_requirement(
-		view.nation_id, center_id
-	)
-	if required <= 0:
-		return null
-	var committed := 0
-	for friendly in view.friendly_armies:
-		if (
-			friendly.size > 0
-			and friendly.state != Army.State.RECOVERING
-			and view.state.administrative_center_of(friendly.location_city) == center_id
-		):
-			committed += friendly.size
-	if committed < required:
-		return null
-	var target := -1
-	var strongest := -1
-	for enemy in view.enemy_armies:
-		if enemy.size <= 0:
-			continue
-		var enemy_city := enemy.location_city
-		if enemy.on_edge:
-			if (
-				enemy.move_to >= 0
-				and view.state.administrative_center_of(enemy.move_to) == center_id
-			):
-				enemy_city = enemy.move_to
-			elif (
-				enemy.move_from >= 0
-				and view.state.administrative_center_of(enemy.move_from) == center_id
-			):
-				enemy_city = enemy.move_from
-		if enemy_city < 0:
-			continue
-		if view.state.administrative_center_of(enemy_city) != center_id:
-			continue
-		if enemy.size > strongest or (
-			enemy.size == strongest
-			and EquivariantOrder.city_id_less(
-				view.state, view.nation_id, enemy_city, target
-			)
-		):
-			strongest = enemy.size
-			target = enemy_city
-	if target < 0:
-		return null
-	return ActionCandidate.make(
-		ActionCandidate.Kind.ATTACK,
-		2500.0,
-		"州防守：C=%d达到出城野战需求%d，优先攻击敌军%d"
-			% [committed, required, target],
-		target
-	)
 
 
 ## 州治守军折算为守城战力，并复用断粮效率衰减。
@@ -488,97 +410,6 @@ static func _attack_approach_distance(
 				+ edge.danger * Pathfinding.DANGER_WEIGHT
 		)
 	return best
-
-
-static func _merge_candidate(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	coordinator: ArmyCoordinator,
-	army: Army
-) -> ActionCandidate:
-	var start := army.location_city
-	if snapshot.frontier_cities.has(start):
-		return null
-	var field := view.path_field(
-		start,
-		view.nation_id,
-		false,
-		true,
-		-1,
-		army.max_size
-	)
-	var dist: Dictionary = field["dist"]
-	var best_city := -1
-	var best_score := -INF
-	var best_ambiguous := false
-	var own_power := ArmyPower.effective(army)
-	for other in view.friendly_armies:
-		if other == army or other.state != Army.State.IDLE or other.location_city == start:
-			continue
-		if snapshot.frontier_cities.has(other.location_city):
-			continue
-		if dist[other.location_city] == INF:
-			continue
-		var other_power := ArmyPower.effective(other)
-		if other_power < own_power:
-			continue
-		# 跨城合并必须形成严格单向偏序，否则两个等战力军会互相追逐。
-		# 接收端由势力局部物理顺序决定，镜像等变且目标链严格无环。
-		if not EquivariantOrder.army_less(
-			view.state,
-			view.nation_id,
-			other,
-			army
-		):
-			continue
-		if other.max_size - other.size < army.size:
-			continue
-		var local_enemy := threat.threat_at(other.location_city)
-		var threshold_gain := 1.0 if (
-			other_power < local_enemy * ATTACK_ENTER_RATIO
-			and other_power + own_power >= local_enemy * ATTACK_ENTER_RATIO
-		) else 0.0
-		var score := (
-			1.0 + threshold_gain * 3.0
-			- 0.08 * float(dist[other.location_city])
-			- 0.5 * coordinator.power_reserved(other.location_city) / maxf(other_power, 1.0)
-		)
-		var better := score > best_score
-		if is_equal_approx(score, best_score):
-			better = EquivariantOrder.city_id_less(
-				view.state,
-				view.nation_id,
-				other.location_city,
-				best_city,
-				start
-			)
-			if (
-				not better
-				and other.location_city != best_city
-				and not EquivariantOrder.city_id_less(
-					view.state,
-					view.nation_id,
-					best_city,
-					other.location_city,
-					start
-				)
-			):
-				best_ambiguous = true
-		if better:
-			best_score = score
-			best_city = other.location_city
-			best_ambiguous = false
-	if best_city == -1 or best_ambiguous:
-		return null
-	var candidate := ActionCandidate.make(
-		ActionCandidate.Kind.MERGE,
-		best_score,
-		"向城市 %d 集结以形成更大军团" % best_city,
-		best_city
-	)
-	candidate.minimum_commit_days = NORMAL_COMMIT_DAYS
-	return candidate
 
 
 static func _breakout_candidate(

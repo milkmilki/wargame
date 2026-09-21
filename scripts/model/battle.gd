@@ -62,8 +62,8 @@ var frontline_priority_b: Dictionary = {}
 var tactical_key_a: int = 0
 var tactical_key_b: int = 0
 
-## SIEGE 专用：side_b 当前是否为「城市防卫共同体」（享城防加成）。
-## 防卫方溃散后转纯围城置 false；敌对挑战者占 side_b 时亦为 false（无城防加成）。
+## SIEGE 专用：side_b 当前是否为城市防卫共同体。该字段只决定野战
+## 胜负后的解围/接管归属；真实军队不会因此获得虚拟守军的防御倍率。
 var side_b_defends_city: bool = false
 # 结束态（由 Combat 解算后置位，Simulation 读取处理善后）
 var finished: bool = false
@@ -100,3 +100,16 @@ func prune_dead() -> void:
 
 func has_army(army: Army) -> bool:
 	return side_a.has(army) or side_b.has(army)
+
+
+## 围城外壳中只要 side_b 存在真实军队，本轮就是州治野战。虚拟守军
+## 仅在 side_b 没有真实军队时临时挂载，因此不会与野战军同轮参战。
+func uses_field_combat_rules() -> bool:
+	if kind == Kind.FIELD:
+		return true
+	if kind != Kind.SIEGE:
+		return false
+	for army in side_b:
+		if army.size > 0 and not army.is_city_garrison:
+			return true
+	return false

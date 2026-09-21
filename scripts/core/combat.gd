@@ -35,7 +35,7 @@ const MORALE_FLOOR: float = 0.0            ## 士气跌破此值该军崩溃（A
 const MORALE_CASUALTY_K: float = 1.2       ## 伤亡比例对士气的侵蚀系数
 const MORALE_BASE_DECAY: float = 0.01      ## 每回合基础士气衰减（保证战斗必然收敛结束）
 const MORALE_STARVE_DECAY: float = 0.10    ## 断粮方每回合额外士气衰减——粮草特色
-const MORALE_RECOVERY_DAYS: int = 10       ## 满军费、满补给时从零士气恢复至上限的天数
+const MORALE_RECOVERY_DAYS: int = 60       ## 满军费、满补给时从零士气恢复至上限的天数
 const MORALE_REINFORCE: float = 0.20       ## 增援集结上限系数：新友军对本侧既有成员的士气提振
 
 # ---- 士气→战斗效率（item 2：士气是组织度而非第二血条）----
@@ -54,7 +54,7 @@ const REINFORCE_MORALE_MAX: float = 0.20
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
 const DEFENSE_DANGER_K: float = 0.40       ## 初始防御惩罚系数
 const HOLDING_TAU_DAYS: float = 30.0       ## 驻防适应时间常数
-const HOLDING_ATTACK_MULTIPLIER: float = 0.60
+const HOLDING_ATTACK_MULTIPLIER: float = 0.50
 const HOLDING_DEFENSE_MULTIPLIER: float = 1.50
 ## 关隘（chokepoint）连续曲线（item 9：去数值断崖）。danger≥ONSET 进入"隘口带"：攻击倍率
 ## 从 ONSET 处的常规线性值连续、单调地降到 danger=1.0 时的地板 FLOOR，不再在阈值处硬跳变。
@@ -248,6 +248,8 @@ static func siege_attack_direction_count(
 static func siege_attack_damage_multiplier(
 	battle: Battle
 ) -> float:
+	if battle != null and battle.uses_field_combat_rules():
+		return 1.0
 	var directions := siege_attack_direction_count(battle)
 	if directions >= 3:
 		return SIEGE_THREE_DIRECTION_ATTACK_MULT
@@ -354,19 +356,24 @@ static func resolve_round(
 	var attack_pen_b := 1.0
 	var defense_pen_a := 1.0
 	var defense_pen_b := 1.0
-	if battle.kind == Battle.Kind.FIELD:
+	if battle.uses_field_combat_rules():
 		var terrain_attack_penalty := attack_multiplier(danger)
+		attack_pen_a = terrain_attack_penalty
+		attack_pen_b = terrain_attack_penalty
+		defense_pen_a = defense_multiplier(
+			danger,
+			battle.holding_days if battle.holding_side == 1 else 0.0
+		)
+		defense_pen_b = defense_multiplier(
+			danger,
+			battle.holding_days if battle.holding_side == 2 else 0.0
+		)
 		if battle.holding_side == 1:
-			attack_pen_b = terrain_attack_penalty * holding_attack_multiplier(true)
-			defense_pen_b *= holding_defense_multiplier(true)
-		elif battle.holding_side == 2:
-			attack_pen_a = terrain_attack_penalty * holding_attack_multiplier(true)
+			attack_pen_a *= holding_attack_multiplier(true)
 			defense_pen_a *= holding_defense_multiplier(true)
-		else:
-			attack_pen_a = terrain_attack_penalty
-			attack_pen_b = terrain_attack_penalty
-		defense_pen_a = defense_multiplier(danger, battle.holding_days if battle.holding_side == 1 else 0.0)
-		defense_pen_b = defense_multiplier(danger, battle.holding_days if battle.holding_side == 2 else 0.0)
+		elif battle.holding_side == 2:
+			attack_pen_b *= holding_attack_multiplier(true)
+			defense_pen_b *= holding_defense_multiplier(true)
 
 	# 城市守军通过临时 Army 自身的倍率参与攻防；普通驻城野战军不再获得工事加成。
 	var garrison_b := 0
@@ -608,6 +615,8 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"is_city_garrison": army.is_city_garrison,
 			"city_garrison_combat_multiplier":
 				army.city_garrison_combat_multiplier,
+			"city_garrison_defense_bonus":
+				army.city_garrison_defense_bonus,
 		})
 	return result
 
@@ -632,6 +641,7 @@ static func _frontline_log_snapshot(
 
 static func _battle_log_context(battle: Battle) -> Dictionary:
 	var context := {
+		"uses_field_combat_rules": battle.uses_field_combat_rules(),
 		"holding_side": battle.holding_side,
 		"holding_days": battle.holding_days,
 		"side_b_defends_city": battle.side_b_defends_city,
@@ -668,7 +678,6 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 		context["city"] = {
 			"food_storage": battle.city.food_storage,
 			"garrison_manpower": battle.city.garrison_manpower,
-			"garrison_defense_base": battle.city.garrison_defense_base,
 		}
 	return context
 
@@ -782,11 +791,10 @@ static func _frontline_attack(
 	var total := 0.0
 	for entry in frontline:
 		var army: Army = entry["army"]
-		var garrison_stat_multiplier := _city_garrison_stat_multiplier(army)
 		total += (
 			float(entry["committed"])
 			* army.combat_attack()
-			* garrison_stat_multiplier
+			* _city_garrison_attack_multiplier(army)
 			* side_efficiency
 		)
 	return total
@@ -801,7 +809,7 @@ static func _side_combat_efficiency(side: Array[Army]) -> float:
 		var army_nominal := (
 			float(army.size)
 			* army.combat_attack()
-			* _city_garrison_stat_multiplier(army)
+			* _city_garrison_attack_multiplier(army)
 		)
 		nominal_attack += army_nominal
 		effective_attack += (
@@ -827,18 +835,33 @@ static func _frontline_avg_defense(
 		weighted += (
 			float(entry["committed"]) * float(army.defense)
 				* maxf(army.ruler_defense_multiplier, 0.1)
-				* _city_garrison_stat_multiplier(army)
+				* _city_garrison_defense_multiplier(army)
 		)
 	return weighted / float(total)
 
 
-## Combat 的防御减伤会与攻击倍率复合。反解 m(m+1)/2=D，令攻防都乘 m，
-## 从而同属性、同正面兵种每回合的伤亡交换比约为界面与 AI 共用的效率 D。
-static func _city_garrison_stat_multiplier(army: Army) -> float:
+static func _city_garrison_base_stat_multiplier(army: Army) -> float:
 	if army == null or not army.is_city_garrison:
 		return 1.0
-	var target := maxf(army.city_garrison_combat_multiplier, 0.0)
-	return maxf((sqrt(1.0 + 8.0 * target) - 1.0) * 0.5, 0.0)
+	return maxf(army.city_garrison_combat_multiplier, 0.0)
+
+
+static func _city_garrison_attack_multiplier(army: Army) -> float:
+	return (
+		_city_garrison_base_stat_multiplier(army)
+		* holding_attack_multiplier(army != null and army.is_city_garrison)
+	)
+
+
+static func _city_garrison_defense_multiplier(army: Army) -> float:
+	return (
+		_city_garrison_base_stat_multiplier(army)
+		* (
+			maxf(army.city_garrison_defense_bonus, 0.0)
+			if army != null and army.is_city_garrison
+			else 1.0
+		)
+	)
 
 
 static func _apply_frontline_losses(
@@ -1059,7 +1082,10 @@ static func _side_residual(side: Array[Army]) -> float:
 			total += (
 				float(a.size)
 				* combat_efficiency(a.combat_morale())
-				* maxf(a.city_garrison_combat_multiplier, 0.0)
+				* sqrt(
+					_city_garrison_attack_multiplier(a)
+					* _city_garrison_defense_multiplier(a)
+				)
 			)
 	return total
 
@@ -1128,7 +1154,10 @@ static func effective_siege_strength(
 ## 本场战斗单侧「正面宽度」容量（item 5，纯函数）。野战取道路容量、攻城取城墙容量。
 ## 双方共享同一正面（同一条战线/同一段城墙）。返回值 <=0 时视为无限制（回退 FRONTAGE_FALLBACK）。
 static func combat_frontage(battle: Battle) -> int:
-	if battle.kind == Battle.Kind.SIEGE:
+	if (
+		battle.kind == Battle.Kind.SIEGE
+		and not battle.uses_field_combat_rules()
+	):
 		return SIEGE_FRONTAGE
 	if battle.edge != null and battle.edge.max_manpower > 0:
 		return battle.edge.max_manpower

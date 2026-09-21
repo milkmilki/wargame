@@ -145,12 +145,20 @@ func _test_defender_counteroffensive_transition() -> void:
 		GameState.INITIAL_HEAVY_ARMY_SIZE,
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
+	var defender_reserve := state.create_army(
+		defender_id,
+		state.nations[defender_id].capital_city_id,
+		GameState.INITIAL_HEAVY_ARMY_SIZE,
+		GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
 	var stale_plan := AdministrativeCampaignPlan.new()
 	stale_plan.center_city_id = state.administrative_center_of(
 		state.nations[attacker_id].capital_city_id
 	)
 	stale_plan.army_assignments[defender_army.id] = stale_plan.center_city_id
-	state.nations[defender_id].administrative_campaign_plan = stale_plan
+	state.nations[defender_id].administrative_campaign_plans[
+		stale_plan.center_city_id
+	] = stale_plan
 	state.nations[defender_id].campaign_objective_center_city = (
 		stale_plan.center_city_id
 	)
@@ -158,40 +166,32 @@ func _test_defender_counteroffensive_transition() -> void:
 	defender_army.ai_target_city = stale_plan.center_city_id
 	var sim := Simulation.new()
 	sim.setup(state)
-	var blocked := sim._select_campaign_objective(
-		defender_id, [attacker_id], {}
-	)
-	var blocked_center := int(blocked.get(
-		"defensive_center_city_id", -1
-	))
 	sim._manage_campaign_offensive(defender_id)
+	var defense_campaign := state.campaign_plan(defender_id, target_center)
 	var stale_plan_suspended := (
-		state.nations[defender_id].administrative_campaign_plan == null
-		and state.nations[defender_id].campaign_objective_center_city == -1
-		and defender_army.path.is_empty()
-		and defender_army.ai_target_city == -1
-	)
-	invader.size = 10000
-	var defense_view := AiWorldView.build(state, defender_id)
-	var sortie := UtilityAI.choose(
-		defense_view,
-		StrategicMapSnapshot.build(defense_view),
-		ThreatField.build(defense_view),
-		ArmyCoordinator.from_view(defense_view),
-		defender_army
+		state.campaign_plan(defender_id, stale_plan.center_city_id) == null
+		and defense_campaign != null
+		and defense_campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+		and defense_campaign.phase == AdministrativeCampaignPlan.Phase.SORTIE
+		and defense_campaign.army_assignments.has(defender_army.id)
+		and defense_campaign.army_assignments.has(defender_reserve.id)
 	)
 	invader.location_city = state.nations[attacker_id].capital_city_id
 	invader.move_from = invader.location_city
-	var released := sim._select_campaign_objective(
-		defender_id, [attacker_id], {}
-	)
+	sim._manage_campaign_offensive(defender_id)
+	var counteroffensive_created := false
+	for center_value in state.nations[
+		defender_id
+	].administrative_campaign_plans:
+		var campaign := state.campaign_plan(defender_id, int(center_value))
+		if (
+			campaign != null
+			and campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE
+		):
+			counteroffensive_created = true
+			break
 	_check(
-		(blocked["objective"] as Dictionary).is_empty()
-			and blocked_center == target_center
-			and stale_plan_suspended
-			and sortie.kind == ActionCandidate.Kind.ATTACK
-			and sortie.target_city == target_center
-			and not released["objective"].is_empty(),
+		stale_plan_suspended and counteroffensive_created,
 		"目标州内仍有敌军时防守方不得反攻；敌军清空后才可转攻敌州"
 	)
 	sim.free()

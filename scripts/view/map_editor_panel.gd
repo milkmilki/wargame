@@ -313,9 +313,6 @@ func _build_city_form() -> void:
 	_city_fields["map_x"] = _spin_field(_city_form, "地图 X", 0, 1, 0.001)
 	_city_fields["map_y"] = _spin_field(_city_form, "地图 Y", 0, 1, 0.001)
 	_city_fields["owner_nation"] = _spin_field(_city_form, "所属国家", -1, 999, 1)
-	_city_fields["garrison_defense_base"] = _spin_field(
-		_city_form, "潜在守城效率", 3, 5, 1
-	)
 	_city_fields["manpower_per_month"] = _spin_field(_city_form, "每月人力", 0, 10000, 1)
 	_city_fields["gold_per_month"] = _spin_field(_city_form, "每月金钱", 0, 10000, 1)
 	_city_fields["food_per_half_year"] = _spin_field(_city_form, "半年粮食", 0, 1000000, 1)
@@ -471,10 +468,6 @@ func _refresh_selection_form() -> void:
 		_set_spin(_city_fields, "map_x", city.map_position.x)
 		_set_spin(_city_fields, "map_y", city.map_position.y)
 		_set_spin(_city_fields, "owner_nation", city.owner_nation)
-		_set_spin(
-			_city_fields, "garrison_defense_base",
-			city.garrison_defense_base
-		)
 		_set_spin(_city_fields, "manpower_per_month", city.manpower_per_month)
 		_set_spin(_city_fields, "gold_per_month", city.gold_per_month)
 		_set_spin(_city_fields, "food_per_half_year", city.food_per_half_year)
@@ -522,7 +515,7 @@ func _emit_city_changes() -> void:
 	if _last_city_id < 0:
 		return
 	var changes := {}
-	for key in ["owner_nation", "garrison_defense_base", "manpower_per_month", "gold_per_month", "food_per_half_year", "food_storage"]:
+	for key in ["owner_nation", "manpower_per_month", "gold_per_month", "food_per_half_year", "food_storage"]:
 		changes[key] = int((_city_fields[key] as SpinBox).value)
 	for key in ["map_x", "map_y", "terrain_height", "terrain_relief", "terrain_output_multiplier", "development_gold_multiplier", "development_food_multiplier"]:
 		changes[key] = (_city_fields[key] as SpinBox).value

@@ -53,7 +53,7 @@ func _init() -> void:
 		for army in state.armies:
 			army.state = Army.State.MOVING
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		var busy_plan := state.nations[attacker_id].administrative_campaign_plan
+		var busy_plan := state.campaign_plan(attacker_id, center_id)
 		valid = valid and busy_plan.army_assignments.is_empty()
 		valid = valid and state.campaign_committed_manpower(
 			attacker_id, center_id
@@ -61,7 +61,7 @@ func _init() -> void:
 		for army in state.armies:
 			army.state = Army.State.IDLE
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		var plan := state.nations[attacker_id].administrative_campaign_plan
+		var plan := state.campaign_plan(attacker_id, center_id)
 		valid = valid and plan != null
 		var fixed_threat: int = plan.reinforcement_threat
 		valid = valid and fixed_threat > 0
@@ -93,7 +93,7 @@ func _init() -> void:
 		)
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
 		valid = valid and plan.reinforcement_threat == 5000
-		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.CAPTURE_FU
+		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER
 		valid = valid and plan.tactical_target_city_ids.size() <= 2
 		var failed_army_id := int(plan.army_assignments.keys()[0])
 		var failed_army: Army = state.armies.filter(
@@ -145,9 +145,9 @@ func _init() -> void:
 			sim._manage_administrative_campaign(
 				attacker_id, alternate_center, null, null
 			)
-			var replacement_plan := state.nations[
-				attacker_id
-			].administrative_campaign_plan
+			var replacement_plan := state.campaign_plan(
+				attacker_id, alternate_center
+			)
 			valid = valid and replacement_plan != plan
 			valid = valid and replacement_plan.center_city_id == alternate_center
 			valid = valid and replacement_plan.reinforcement_threat >= 0

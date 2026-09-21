@@ -3467,7 +3467,7 @@ func _test_persistent_morale() -> void:
 	_run_battle(battle, rng1)
 	_check(battle.winner_side == 1, "满士气一方应战胜疲劳(0.3)一方")
 
-	# (b) 战后恢复：满军费、满补给时，主战军在 10 天从零恢复至士气上限。
+	# (b) 战后恢复：满军费、满补给时按统一恢复天数线性回满。
 	var gs := GameState.new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
@@ -3478,16 +3478,20 @@ func _test_persistent_morale() -> void:
 	probe.starving = false
 	for _day in range(Combat.MORALE_RECOVERY_DAYS - 1):
 		sim._recover_morale()
+	var pre_full_recovery_ratio := (
+		float(Combat.MORALE_RECOVERY_DAYS - 1)
+		/ float(Combat.MORALE_RECOVERY_DAYS)
+	)
 	_check(
-		_approx(probe.morale, probe.max_morale * 0.9)
+		_approx(probe.morale, probe.max_morale * pre_full_recovery_ratio)
 			and probe.morale < probe.max_morale,
-		"主战军第9天士气应为上限的90%%，实为 %.2f/%.2f"
+		"主战军回满前一日士气比例错误，实为 %.2f/%.2f"
 			% [probe.morale, probe.max_morale]
 	)
 	sim._recover_morale()
 	_check(
 		_approx(probe.morale, probe.max_morale),
-		"主战军满补给时必须在第10天回满士气"
+		"主战军满补给时必须在配置的恢复天数后回满士气"
 	)
 	# 军费支付率只缩放恢复速度，不像缺粮那样直接扣减士气。
 	probe.max_morale = Army.DEFAULT_MAX_MORALE
@@ -4288,12 +4292,10 @@ func _test_crosspass_field_priority() -> void:
 			and endpoint_siege.has_army(
 				endpoint_attacker
 			)
-			and endpoint_siege.has_army(
-				endpoint_retreater
-			)
+			and not endpoint_siege.has_army(endpoint_retreater)
 			and endpoint_siege.has_army(endpoint_guard)
 			and not endpoint_field_exists,
-		"道路野战胜方越过终点后应进城触发攻城，已到终点的溃退军不得重复拉起野战"
+		"道路野战胜方越过终点后应进城触发州治野战，溃退军不得重新参战"
 	)
 	endpoint_sim.free()
 
@@ -4947,12 +4949,17 @@ func _test_morale_retreat_recovery() -> void:
 	for _day in range(Combat.MORALE_RECOVERY_DAYS - 1):
 		sim._recover_morale()
 	_check(
-		_approx(broken.morale, broken.max_morale * 0.9)
+		_approx(
+			broken.morale,
+			broken.max_morale
+				* float(Combat.MORALE_RECOVERY_DAYS - 1)
+				/ float(Combat.MORALE_RECOVERY_DAYS)
+		)
 			and broken.state == Army.State.RECOVERING,
-		"恢复驻军第9天必须保持RECOVERING且士气为上限的90%%"
+		"恢复驻军回满前一日必须保持RECOVERING且未满士气"
 	)
 	sim._recover_morale()
-	var ten_day_recovery_demand := int(floor(
+	var full_recovery_food_demand := int(floor(
 		float(ceil(
 			1000.0 * Simulation.RECOVERY_FOOD_PER_CAPITA
 		))
@@ -4964,10 +4971,10 @@ func _test_morale_retreat_recovery() -> void:
 		broken.state == Army.State.IDLE
 			and _approx(broken.morale, broken.max_morale)
 			and gs.cities[recovery_city].food_storage
-				== 100 - ten_day_recovery_demand,
-		"恢复驻军必须第10天回满并解除驻守；十天应耗%d粮，实为morale=%.2f food=%d"
+				== 100 - full_recovery_food_demand,
+		"恢复驻军必须按配置天数回满并解除驻守；应耗%d粮，实为morale=%.2f food=%d"
 			% [
-				ten_day_recovery_demand,
+				full_recovery_food_demand,
 				broken.morale,
 				gs.cities[recovery_city].food_storage,
 			]
@@ -5263,12 +5270,18 @@ func _test_morale_retreat_recovery() -> void:
 	sim._start_or_join_siege(
 		invader, gs.cities[siege_to], siege_edge
 	)
-	var recovery_siege: Battle = gs.battles[0]
-	_check(recovery_siege.side_b.size() == 2, "两支 RECOVERING 驻军应全部加入守城")
 	_check(
-		recovery_siege.side_b_defends_city,
-		"恢复中的普通野战军应加入城市防卫共同体"
+		g1.state == Army.State.RETREATING
+			and g2.state == Army.State.RETREATING,
+		"恢复中的普通野战军不得重新参战，应在围城建立时继续撤往其他友城"
 	)
+	if not gs.battles.is_empty():
+		var recovery_siege: Battle = gs.battles[0]
+		_check(
+			not recovery_siege.has_army(g1)
+				and not recovery_siege.has_army(g2),
+			"恢复军不得阻塞虚拟守军攻城阶段"
+		)
 	sim.free()
 
 
@@ -7662,9 +7675,9 @@ func _test_alliance_war_coalitions() -> void:
 	)
 	var coalition_plan := AdministrativeCampaignPlan.new()
 	coalition_plan.center_city_id = objective_center
-	gs.nations[0].administrative_campaign_plan = coalition_plan
+	gs.nations[0].administrative_campaign_plans[objective_center] = coalition_plan
 	_check(
-		gs.nations[3].administrative_campaign_plan == null,
+		gs.nations[3].administrative_campaign_plans.is_empty(),
 		"联盟共享战争目标，但各国战团与军队Assignment必须保持独立"
 	)
 	var coalition_peace := sim._execute_diplomatic_action({
@@ -11449,6 +11462,59 @@ func _test_sustainable_force_capacity() -> void:
 	var base_report := DiplomacyAI.force_capacity_report(
 		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
 	)
+	var base_target_troops := (
+		int(base_report["supportable_armies"])
+		* GameState.INITIAL_HEAVY_ARMY_SIZE
+	)
+	var base_target_food := DiplomacyAI.war_food_report(
+		gs,
+		0,
+		base_target_troops,
+		DiplomacyAI.FoodPosture.OFFENSIVE_WAR,
+		{}
+	)
+	_check(
+		int(base_target_food["emergency_food_reserve"])
+			== int(ceil(
+				float(base_target_food["target_monthly_demand"])
+					* float(DiplomacyAI.EMERGENCY_FOOD_MONTHS)
+			)),
+		"目标军力粮食报告必须按目标需求预留六个月口粮：food=%s"
+			% [str(base_target_food)]
+	)
+	var shared := GameState.new()
+	shared.generate_grid_world(34002)
+	var shared_region := _enfeoffable_region(shared, 0, 3)
+	var shared_subject := shared.enfeoff(0, shared_region)
+	if shared_subject >= 0:
+		var subject_army := Army.new()
+		subject_army.id = 340020
+		subject_army.owner_nation = shared_subject
+		subject_army.size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		subject_army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		subject_army.location_city = shared.nations[shared_subject].capital_city_id
+		shared.armies.append(subject_army)
+		var shared_food := DiplomacyAI.war_food_report(
+			shared,
+			0,
+			GameState.INITIAL_HEAVY_ARMY_SIZE,
+			DiplomacyAI.FoodPosture.OFFENSIVE_WAR,
+			{}
+		)
+		_check(
+			float(shared_food["target_monthly_demand"])
+				> float(shared_food["food_per_troop_month"])
+					* GameState.INITIAL_HEAVY_ARMY_SIZE
+			and int(shared_food["emergency_food_reserve"])
+				== int(ceil(
+					float(shared_food["target_monthly_demand"])
+						* DiplomacyAI.EMERGENCY_FOOD_MONTHS
+				)),
+			"共享粮池容量必须把藩王既有军粮计入目标需求与六个月储备：%s"
+				% [str(shared_food)]
+		)
+	else:
+		_check(false, "共享粮池容量夹具必须成功分封完整州")
 	var original_preparation_center := (
 		gs.nations[0].war_preparation_objective_center_city
 	)
@@ -11495,6 +11561,37 @@ func _test_sustainable_force_capacity() -> void:
 				gs.nations[0].ai_last_force_reason,
 				str(base_report),
 			]
+	)
+	var post_recruit_report := DiplomacyAI.force_capacity_report(
+		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
+	)
+	var post_recruit_food := sim._food_security_report(0, [], {})
+	_check(
+		int(post_recruit_report["current_armies"])
+			== int(base_report["sustainable_armies"])
+		and int(post_recruit_report["supportable_armies"])
+			>= int(post_recruit_report["current_armies"])
+		and int(post_recruit_report["additional_armies"]) == 0
+		and not bool(post_recruit_food["needs_demobilization"]),
+		"一次征满后容量不得反转或立即触发缩编：before=%s after=%s food=%s"
+			% [
+				str(base_report),
+				str(post_recruit_report),
+				str(post_recruit_food),
+			]
+	)
+	var stable_count := gs.active_army_count(0)
+	gs.day += Simulation.FORCE_STRUCTURE_REVIEW_INTERVAL_DAYS
+	var next_view := AiWorldView.build(gs, 0)
+	sim._ai_manage_force_structure(
+		next_view,
+		StrategicMapSnapshot.build(next_view),
+		ThreatField.build(next_view)
+	)
+	_check(
+		gs.active_army_count(0) == stable_count,
+		"下一次半年军制评估不得因同一容量口径扩军或裁军：%d -> %d"
+			% [stable_count, gs.active_army_count(0)]
 	)
 	for army in gs.armies.duplicate():
 		if army.owner_nation == 0:
@@ -11685,10 +11782,12 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 	)
 	gs.warehouse_cities_of(0)[0].food_storage = stock_before_runway_test
 	_check(
-		rich_capacity == DiplomacyAI.MAX_MOBILIZATION_ARMIES
+		rich_capacity > 0
+		and rich_capacity <= DiplomacyAI.MAX_MOBILIZATION_ARMIES
 		and defensive_capacity >= rich_capacity
 		and poor_capacity == 0,
-		"富粮国应可额外动员4军，防御动员不少于进攻，贫粮大国不得爆兵"
+		"富粮国应可在闭合容量内动员，防御动员不少于进攻，贫粮大国不得爆兵：rich=%d defensive=%d poor=%d"
+			% [rich_capacity, defensive_capacity, poor_capacity]
 	)
 	_check(
 		below_reserve_war_capacity == 0
@@ -11752,7 +11851,6 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		gs.cities[mobilization_center].garrison_manpower = (
 			GameState.ZHOU_GARRISON_CAPACITY
 		)
-		gs.cities[mobilization_center].garrison_defense_base = 5
 
 	for army in gs.armies.duplicate():
 		if army.owner_nation == 0:

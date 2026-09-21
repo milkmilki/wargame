@@ -258,9 +258,6 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 		var city := City.new()
 		city.food_storage = int(city_data.get("food_storage", 0))
 		city.garrison_manpower = int(city_data.get("garrison_manpower", 0))
-		city.garrison_defense_base = int(city_data.get(
-			"garrison_defense_base", 3
-		))
 		battle.city = city
 	for army_data in record["participants_a"]:
 		battle.side_a.append(_army_from_snapshot(army_data))
@@ -311,6 +308,9 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	army.city_garrison_combat_multiplier = float(data.get(
 		"city_garrison_combat_multiplier", 1.0
 	))
+	army.city_garrison_defense_bonus = float(data.get(
+		"city_garrison_defense_bonus", 3.0
+	))
 	return army
 
 
@@ -331,6 +331,8 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"is_city_garrison": army.is_city_garrison,
 			"city_garrison_combat_multiplier":
 				army.city_garrison_combat_multiplier,
+			"city_garrison_defense_bonus":
+				army.city_garrison_defense_bonus,
 		})
 	return result
 
@@ -360,6 +362,7 @@ static func _snapshots_equal(
 			"morale",
 			"ruler_attack_multiplier",
 			"city_garrison_combat_multiplier",
+			"city_garrison_defense_bonus",
 		]:
 			if not is_equal_approx(
 				float(a.get(key, 0.0)),

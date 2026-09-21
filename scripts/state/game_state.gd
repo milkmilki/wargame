@@ -7,7 +7,7 @@ const TerritoryTransaction = preload("res://scripts/state/territory_transaction.
 
 const GRID: int = 8                         ## 8x8 网格
 const CITY_COUNT: int = GRID * GRID         ## 64 城兼容网格夹具
-const TERRAIN_CITY_COUNT: int = 300         ## 正式高度图基础陆城；动态码头另计
+const TERRAIN_CITY_COUNT: int = 200         ## 正式高度图基础陆城；动态码头另计
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 500
 const CITY_MANPOWER_PER_MONTH_MAX: int = 1000
@@ -414,10 +414,6 @@ func generate_from_map_definition(
 			"politically_active", true
 		))
 		city.owner_nation = int(record["owner_nation"])
-		city.garrison_defense_base = clampi(int(record.get(
-			"garrison_defense_base",
-			_garrison_defense_base_for_position(city.map_position)
-		)), 3, 5)
 		city.manpower_per_month = int(record.get(
 			"manpower_per_month", CITY_MANPOWER_PER_MONTH_MIN
 		))
@@ -538,9 +534,6 @@ func apply_city_editor_changes(
 	):
 		return {"ok": false, "error": "不能转移一个国家的最后一座陆地城市。"}
 	# 先解析全部字段，避免任一无效值在领土或坐标已提交后才触发转换错误。
-	var garrison_defense_base := clampi(int(changes.get(
-		"garrison_defense_base", city.garrison_defense_base
-	)), 3, 5)
 	var manpower_per_month := maxi(int(changes.get(
 		"manpower_per_month", city.manpower_per_month
 	)), 0)
@@ -581,8 +574,6 @@ func apply_city_editor_changes(
 				)),
 			}
 	city.map_position = new_position
-	city.garrison_defense_base = garrison_defense_base
-	garrison_revision += 1
 	city.manpower_per_month = manpower_per_month
 	city.gold_per_month = gold_per_month
 	city.food_per_half_year = food_per_half_year
@@ -814,12 +805,8 @@ func _generate_grid_cities() -> void:
 				(float(r) + 0.5) / float(GRID)
 			)
 			city.owner_nation = _quadrant_of(c, r)
-			# v6 删除工事字段，但保留旧世界种子的后续 RNG 序列。
-			# 守军效率仍由独立物理哈希生成，不读取此占位值。
+			# 保留旧世界种子的后续 RNG 序列。
 			var _legacy_world_stream_roll := rng.randi_range(10, 30)
-			city.garrison_defense_base = _garrison_defense_base_for_position(
-				city.map_position
-			)
 			city.manpower_per_month = rng.randi_range(
 				CITY_MANPOWER_PER_MONTH_MIN,
 				CITY_MANPOWER_PER_MONTH_MAX
@@ -860,11 +847,8 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 		city.politically_active = (
 			political_active.is_empty() or political_active[id] != 0
 		)
-		# 与网格世界一致，只保持 v5 及以前种子的后续随机流兼容。
+		# 与网格世界一致，保持既有世界种子的后续随机流。
 		var _legacy_world_stream_roll := rng.randi_range(10, 30)
-		city.garrison_defense_base = _garrison_defense_base_for_position(
-			city.map_position
-		)
 		city.manpower_per_month = rng.randi_range(
 			CITY_MANPOWER_PER_MONTH_MIN,
 			CITY_MANPOWER_PER_MONTH_MAX
@@ -913,7 +897,6 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 		city.terrain_height = float(dock_data["height"])
 		city.terrain_relief = float(dock_data["relief"])
 		city.is_dock = true
-		city.garrison_defense_base = 3
 		var road_t := float(dock_data["road_t"])
 		var owner_city := int(dock_data.get(
 			"owner_city",
@@ -2061,7 +2044,7 @@ func rebuild_administrative_regions() -> Dictionary:
 		_reconcile_garrisons_after_administrative_rebuild(previous_centers)
 	war_objectives.clear()
 	for nation in nations:
-		nation.administrative_campaign_plan = null
+		nation.administrative_campaign_plans.clear()
 		nation.war_preparation_objective_center_city = -1
 		nation.campaign_objective_center_city = -1
 	return {
@@ -2138,19 +2121,16 @@ func administrative_campaign_control_share(
 	return float(controlled_fu_count) / float(fu_count)
 
 
-func city_garrison_efficiency(
+func city_garrison_defense_bonus(
 	attacker_id: int,
 	center_city_id: int
 ) -> float:
 	if not is_zhou_city(center_city_id):
 		return 1.0
-	var base := float(clampi(
-		cities[center_city_id].garrison_defense_base, 3, 5
-	))
 	var control_share := administrative_campaign_control_share(
 		attacker_id, center_city_id
 	)
-	return 1.0 + (base - 1.0) * (1.0 - control_share)
+	return 3.0 - 2.0 * clampf(control_share, 0.0, 1.0)
 
 
 func campaign_siege_requirement(
@@ -2160,11 +2140,9 @@ func campaign_siege_requirement(
 	if not is_zhou_city(center_city_id):
 		return 0
 	var garrison := maxi(cities[center_city_id].garrison_manpower, 0)
-	return maxi(
-		2 * garrison,
-		ceili(float(garrison) * city_garrison_efficiency(
-			attacker_id, center_city_id
-		))
+	return ceili(
+		float(garrison)
+			* city_garrison_defense_bonus(attacker_id, center_city_id)
 	)
 
 
@@ -2238,7 +2216,7 @@ func campaign_reinforcement_budget(
 	center_city_id: int
 ) -> int:
 	if attacker_id >= 0 and attacker_id < nations.size():
-		var plan := nations[attacker_id].administrative_campaign_plan
+		var plan := campaign_plan(attacker_id, center_city_id)
 		if (
 			plan != null
 			and plan.center_city_id == center_city_id
@@ -2256,6 +2234,45 @@ func campaign_reinforcement_budget(
 	return campaign_reinforcement_threat(attacker_id, center_city_id, 60)
 
 
+func campaign_plan(
+	nation_id: int,
+	center_city_id: int
+) -> AdministrativeCampaignPlan:
+	if nation_id < 0 or nation_id >= nations.size():
+		return null
+	var value: Variant = nations[nation_id].administrative_campaign_plans.get(
+		center_city_id
+	)
+	return value as AdministrativeCampaignPlan
+
+
+func campaign_assignment_center(army_id: int) -> int:
+	var owner_id := -1
+	for army in armies:
+		if army.id == army_id:
+			owner_id = army.owner_nation
+			break
+	if owner_id < 0 or owner_id >= nations.size():
+		return -1
+	for center_value in nations[owner_id].administrative_campaign_plans:
+		var center_id := int(center_value)
+		var plan := campaign_plan(owner_id, center_id)
+		if plan != null and plan.army_assignments.has(army_id):
+			return center_id
+	return -1
+
+
+func army_effective_for_field_campaign(army: Army) -> bool:
+	return (
+		army != null
+		and army.size > 0
+		and army.is_main_battle_role()
+		and army.state not in [Army.State.RETREATING, Army.State.RECOVERING]
+		and not army.starving
+		and army.supply_ratio > 0.0
+	)
+
+
 func campaign_committed_manpower(
 	attacker_id: int,
 	center_city_id: int
@@ -2268,6 +2285,7 @@ func campaign_committed_manpower(
 		if (
 			army == null
 			or not attacker_bloc.has(army.owner_nation)
+			or not army_effective_for_field_campaign(army)
 			or not army_committed_to_administrative_campaign(
 				army, center_city_id
 			)
@@ -2290,7 +2308,7 @@ func army_committed_to_administrative_campaign(
 		or army.defensive_deployment_until_day > day
 	):
 		return false
-	var plan := nations[army.owner_nation].administrative_campaign_plan
+	var plan := campaign_plan(army.owner_nation, center_city_id)
 	if (
 		plan == null
 		or plan.center_city_id != center_city_id
@@ -2312,6 +2330,67 @@ func army_committed_to_administrative_campaign(
 	)
 
 
+func campaign_defensive_committed_manpower(
+	defender_id: int,
+	center_city_id: int
+) -> int:
+	if not is_zhou_city(center_city_id):
+		return 0
+	var defender_bloc := alliance_bloc(defender_id)
+	if defender_bloc.is_empty():
+		defender_bloc.append(defender_id)
+	var regional_enemies := {}
+	for enemy in armies:
+		if (
+			enemy.size > 0
+			and is_enemy(defender_id, enemy.owner_nation)
+			and (
+				(
+					enemy.location_city >= 0
+					and administrative_center_of(enemy.location_city)
+						== center_city_id
+				)
+				or (
+					enemy.ai_target_city >= 0
+					and administrative_center_of(enemy.ai_target_city)
+						== center_city_id
+				)
+			)
+		):
+			regional_enemies[enemy.owner_nation] = true
+	var result := 0
+	for army in armies:
+		if (
+			not defender_bloc.has(army.owner_nation)
+			or not army_effective_for_field_campaign(army)
+		):
+			continue
+		var local := false
+		if army.location_city >= 0:
+			local = administrative_center_of(army.location_city) == center_city_id
+		if army.on_edge:
+			local = local or (
+				army.move_from >= 0
+				and administrative_center_of(army.move_from) == center_city_id
+			) or (
+				army.move_to >= 0
+				and administrative_center_of(army.move_to) == center_city_id
+			)
+		var assigned := campaign_assignment_center(army.id) == center_city_id
+		if not local and not assigned:
+			continue
+		if army.owner_nation != defender_id:
+			var explicitly_participates := false
+			for enemy_value in regional_enemies:
+				if is_enemy(army.owner_nation, int(enemy_value)):
+					explicitly_participates = true
+					break
+			if not explicitly_participates:
+				continue
+		result += army.size
+	return result
+
+
 ## Field force required for a defender to sortie against the committed enemy
 ## force in a state.  Garrison manpower is deliberately kept separate: it
 ## anchors the center but does not count as a mobile field army.
@@ -2323,7 +2402,7 @@ func campaign_field_requirement(
 		return 0
 	var enemy_committed := 0
 	for army in armies:
-		if army == null or army.size <= 0 or army.state == Army.State.RECOVERING:
+		if not army_effective_for_field_campaign(army):
 			continue
 		var target := army.ai_target_city
 		var targets_state := (
@@ -2470,15 +2549,6 @@ func _reconcile_garrisons_after_administrative_rebuild(
 		changed = changed or cities[new_center].garrison_manpower != before
 	if changed:
 		garrison_revision += 1
-
-
-func _garrison_defense_base_for_position(position: Vector2) -> int:
-	var x_key := int(round(absf(position.x - 0.5) * 1000000.0))
-	var y_key := int(round(position.y * 1000000.0))
-	var salt := int((x_key * 73856093) ^ (y_key * 19349663))
-	return 3 + RulerProfile.stable_index(
-		world_seed, 0, "city/garrison_defense", 3, salt
-	)
 
 
 func _army_arrival_days(army: Army, travel_days: Dictionary) -> float:

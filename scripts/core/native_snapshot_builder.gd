@@ -62,6 +62,18 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var war_preparation_target := PackedInt32Array()
 	var war_preparation_objective := PackedInt32Array()
 	var war_preparation_started_day := PackedInt32Array()
+	var campaign_objective_center := PackedInt32Array()
+	var campaign_offsets := PackedInt32Array([0])
+	var campaign_centers := PackedInt32Array()
+	var campaign_modes := PackedInt32Array()
+	var campaign_opponents := PackedInt32Array()
+	var campaign_phases := PackedInt32Array()
+	var campaign_failed_until_day := PackedInt32Array()
+	var campaign_tactical_offsets := PackedInt32Array([0])
+	var campaign_tactical_city_ids := PackedInt32Array()
+	var campaign_assignment_offsets := PackedInt32Array([0])
+	var campaign_assignment_army_ids := PackedInt32Array()
+	var campaign_assignment_targets := PackedInt32Array()
 	var alive := PackedByteArray()
 	for nation in state.nations:
 		ids.append(nation.id)
@@ -117,6 +129,38 @@ static func _build_nations(state: GameState) -> Dictionary:
 		war_preparation_started_day.append(
 			nation.war_preparation_started_day
 		)
+		campaign_objective_center.append(
+			nation.campaign_objective_center_city
+		)
+		var center_values := nation.administrative_campaign_plans.keys()
+		center_values.sort()
+		for center_value in center_values:
+			var center_id := int(center_value)
+			var plan := state.campaign_plan(nation.id, center_id)
+			if plan == null:
+				continue
+			campaign_centers.append(center_id)
+			campaign_modes.append(plan.mode)
+			campaign_opponents.append(plan.opponent_nation_id)
+			campaign_phases.append(plan.phase)
+			campaign_failed_until_day.append(plan.failed_until_day)
+			for tactical_city_id in plan.tactical_target_city_ids:
+				campaign_tactical_city_ids.append(tactical_city_id)
+			campaign_tactical_offsets.append(
+				campaign_tactical_city_ids.size()
+			)
+			var army_ids := plan.army_assignments.keys()
+			army_ids.sort()
+			for army_id_value in army_ids:
+				var army_id := int(army_id_value)
+				campaign_assignment_army_ids.append(army_id)
+				campaign_assignment_targets.append(int(
+					plan.army_assignments[army_id]
+				))
+			campaign_assignment_offsets.append(
+				campaign_assignment_army_ids.size()
+			)
+		campaign_offsets.append(campaign_centers.size())
 		alive.append(int(nation.alive))
 
 	var diplomacy := PackedByteArray()
@@ -183,6 +227,18 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"war_preparation_objective": war_preparation_objective,
 		"war_preparation_started_day":
 			war_preparation_started_day,
+		"campaign_objective_center": campaign_objective_center,
+		"campaign_offsets": campaign_offsets,
+		"campaign_centers": campaign_centers,
+		"campaign_modes": campaign_modes,
+		"campaign_opponents": campaign_opponents,
+		"campaign_phases": campaign_phases,
+		"campaign_failed_until_day": campaign_failed_until_day,
+		"campaign_tactical_offsets": campaign_tactical_offsets,
+		"campaign_tactical_city_ids": campaign_tactical_city_ids,
+		"campaign_assignment_offsets": campaign_assignment_offsets,
+		"campaign_assignment_army_ids": campaign_assignment_army_ids,
+		"campaign_assignment_targets": campaign_assignment_targets,
 		"alive": alive,
 		"diplomacy": diplomacy,
 		"diplomacy_since_day": diplomacy_since_day,
@@ -203,7 +259,6 @@ static func _build_cities(state: GameState) -> Dictionary:
 	var recognized_owner := PackedInt32Array()
 	var occupation_sponsor := PackedInt32Array()
 	var garrison_manpower := PackedInt32Array()
-	var garrison_defense_base := PackedInt32Array()
 	var manpower_output := PackedInt32Array()
 	var food := PackedInt32Array()
 	var gold_output := PackedInt32Array()
@@ -223,7 +278,6 @@ static func _build_cities(state: GameState) -> Dictionary:
 		recognized_owner.append(state.recognized_owner_of(city.id))
 		occupation_sponsor.append(city.occupation_sponsor_nation)
 		garrison_manpower.append(city.garrison_manpower)
-		garrison_defense_base.append(city.garrison_defense_base)
 		manpower_output.append(city.manpower_per_month)
 		food.append(city.food_storage)
 		gold_output.append(city.gold_per_month)
@@ -246,7 +300,6 @@ static func _build_cities(state: GameState) -> Dictionary:
 		"recognized_owner": recognized_owner,
 		"occupation_sponsor": occupation_sponsor,
 		"garrison_manpower": garrison_manpower,
-		"garrison_defense_base": garrison_defense_base,
 		"manpower_output": manpower_output,
 		"food": food,
 		"gold_output": gold_output,
@@ -471,6 +524,7 @@ static func _build_battles(
 	var tactical_key_a := PackedInt32Array()
 	var tactical_key_b := PackedInt32Array()
 	var side_b_defends_city := PackedByteArray()
+	var uses_field_combat_rules := PackedByteArray()
 	var finished := PackedByteArray()
 	var winner_side := PackedInt32Array()
 	var field_rout_attrition_multiplier := PackedFloat64Array()
@@ -511,6 +565,9 @@ static func _build_battles(
 		tactical_key_a.append(battle.tactical_key_a)
 		tactical_key_b.append(battle.tactical_key_b)
 		side_b_defends_city.append(int(battle.side_b_defends_city))
+		uses_field_combat_rules.append(int(
+			battle.uses_field_combat_rules()
+		))
 		finished.append(int(battle.finished))
 		winner_side.append(battle.winner_side)
 		field_rout_attrition_multiplier.append(
@@ -574,6 +631,7 @@ static func _build_battles(
 		"tactical_key_a": tactical_key_a,
 		"tactical_key_b": tactical_key_b,
 		"side_b_defends_city": side_b_defends_city,
+		"uses_field_combat_rules": uses_field_combat_rules,
 		"finished": finished,
 		"winner_side": winner_side,
 		"field_rout_attrition_multiplier": field_rout_attrition_multiplier,

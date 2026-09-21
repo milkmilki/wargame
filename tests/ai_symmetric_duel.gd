@@ -196,7 +196,6 @@ func _build_symmetric_world() -> GameState:
 		var mirror_col := mini(col, GameState.GRID - 1 - col)
 		city.owner_nation = LEFT_NATION if col < GameState.GRID / 2 else RIGHT_NATION
 		state.recognized_city_owners[city.id] = city.owner_nation
-		city.garrison_defense_base = 3 + (row + mirror_col) % 3
 		city.manpower_per_month = 7 + (row * 7 + mirror_col * 11) % 8
 		city.gold_per_month = 6 + (row * 2 + mirror_col * 3) % 10
 		city.food_per_half_year = 600 + (row * 17 + mirror_col * 29) % 201
@@ -320,7 +319,6 @@ func _validate_symmetry(state: GameState) -> bool:
 				left.owner_nation != LEFT_NATION
 				or right.owner_nation != RIGHT_NATION
 				or left.garrison_manpower != right.garrison_manpower
-				or left.garrison_defense_base != right.garrison_defense_base
 				or left.manpower_per_month != right.manpower_per_month
 				or left.gold_per_month != right.gold_per_month
 				or left.food_per_half_year != right.food_per_half_year
@@ -447,7 +445,6 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 				]
 			for field in [
 				"garrison_manpower",
-				"garrison_defense_base",
 				"manpower_per_month",
 				"gold_per_month",
 				"food_per_half_year",

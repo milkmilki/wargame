@@ -122,7 +122,6 @@ func _run() -> void:
 		"map_x": moved_position.x,
 		"map_y": moved_position.y,
 		"gold_per_month": 77,
-		"garrison_defense_base": 5,
 		"food_storage": 9876,
 		"terrain_output_multiplier": 1.25,
 		"development_gold_multiplier": 2.5,
@@ -340,9 +339,6 @@ func _run() -> void:
 		"city_count": restored.land_cities().size() == 96,
 		"gold": restored.cities[original_city_id].gold_per_month == 77,
 		"position": restored.cities[original_city_id].map_position.distance_to(moved_position) <= 0.00001,
-		"garrison_defense": (
-			restored.cities[original_city_id].garrison_defense_base == 5
-		),
 		"food_total": restored.nations[restored.cities[original_city_id].owner_nation].granary_food >= 9876,
 		"development": is_equal_approx(restored.cities[original_city_id].development_gold_multiplier, 2.5),
 		"crossroads": restored.cities[original_city_id].is_crossroads,

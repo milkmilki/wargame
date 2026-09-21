@@ -65,7 +65,8 @@ var war_preparation_unready_since_day: int = -1
 var war_preparation_cancelled_day: int = -1
 ## 当前州级战争目标。
 var campaign_objective_center_city: int = -1
-var administrative_campaign_plan: AdministrativeCampaignPlan = null
+## center_city_id -> AdministrativeCampaignPlan。运行期派生，不进入地图模板。
+var administrative_campaign_plans: Dictionary = {}
 ## 持久战团容器。空战团也保留，每个战团至多编入一支标准主战军。
 var battle_groups: Array[BattleGroup] = []
 var next_battle_group_id: int = 0

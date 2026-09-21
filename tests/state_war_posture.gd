@@ -1,6 +1,32 @@
 extends SceneTree
 
 
+func _field_army(owner: int) -> Army:
+	var army := Army.new()
+	army.owner_nation = owner
+	army.size = 15000
+	army.max_size = 15000
+	army.attack = 10
+	army.defense = 10
+	army.morale = 1.0
+	army.max_morale = 1.0
+	return army
+
+
+func _holding_side_one_sizes() -> Vector2i:
+	var holder := _field_army(0)
+	var attacker := _field_army(1)
+	var battle := Battle.new()
+	battle.kind = Battle.Kind.FIELD
+	battle.holding_side = 1
+	battle.side_a.append(holder)
+	battle.side_b.append(attacker)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 77102
+	Combat.resolve_round(battle, rng, 0, 77102, 0, Vector2.ONE)
+	return Vector2i(holder.size, attacker.size)
+
+
 func _init() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(77101)
@@ -56,8 +82,10 @@ func _init() -> void:
 		state, owner, [army], true, true, {}
 	)
 	valid = valid and int(refill_plan["total_deficit"]) == 1500
-	valid = valid and Combat.holding_attack_multiplier(true) == 0.6
+	valid = valid and Combat.holding_attack_multiplier(true) == 0.5
 	valid = valid and Combat.holding_defense_multiplier(true) == 1.5
+	var holding_sizes := _holding_side_one_sizes()
+	valid = valid and holding_sizes.x < holding_sizes.y
 	var invader := Army.new()
 	invader.owner_nation = enemy
 	invader.size = 10000

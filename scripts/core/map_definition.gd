@@ -79,7 +79,6 @@ static func from_state(state: GameState) -> Dictionary:
 			"is_dock": city.is_dock,
 			"politically_active": city.politically_active,
 			"owner_nation": owner_nation,
-			"garrison_defense_base": city.garrison_defense_base,
 			"manpower_per_month": city.manpower_per_month,
 			"gold_per_month": city.gold_per_month,
 			"food_per_half_year": city.food_per_half_year,
@@ -256,14 +255,6 @@ static func validate(data: Dictionary) -> String:
 		if not record_value is Dictionary:
 			return "城市 %d 的资料格式无效。" % index
 		var record := record_value as Dictionary
-		if version >= 6:
-			var defense_value: Variant = record.get("garrison_defense_base")
-			if (
-				not _is_integer_value(defense_value)
-				or int(defense_value) < 3
-				or int(defense_value) > 5
-			):
-				return "城市 %d 的潜在守城效率必须为 3～5。" % index
 		if record.has("garrison_manpower"):
 			return "地图模板不能包含运行期城市守军。"
 		if record.has("region_symbol"):

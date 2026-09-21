@@ -5846,12 +5846,15 @@ static func nation_action_summary(
 				),
 			]
 		)
-	elif nation.administrative_campaign_plan != null:
+	elif not nation.administrative_campaign_plans.is_empty():
 		actions.append(
-			"州战→%s" % WorldNaming.city_display_name(
-				game_state,
-				nation.administrative_campaign_plan.center_city_id
-			)
+			"州战%d→%s" % [
+				nation.administrative_campaign_plans.size(),
+				WorldNaming.city_display_name(
+					game_state,
+					nation.campaign_objective_center_city
+				),
+			]
 		)
 	if nation.ai_last_force_day >= 0:
 		actions.append(
@@ -6621,8 +6624,7 @@ static func _nation_detail_line_count(
 	var count := 1 + _section_layout_line_count(
 		PackedInt32Array([2, 2, 3, 1, diplomacy_lines])
 	)
-	if nation.administrative_campaign_plan != null:
-		count += 1
+	count += nation.administrative_campaign_plans.size()
 	return count
 
 
@@ -6836,12 +6838,11 @@ static func city_detail_sections(
 		if legal_owner >= 0 and legal_owner < game_state.nations.size()
 		else "无"
 	)
-	var garrison_line := "城市守军 %d / %d · 基础效率 %d" % [
+	var garrison_line := "城市守军 %d / %d · 攻击 ×0.50 · 防御 ×1.00～3.00" % [
 		city.garrison_manpower,
 		game_state.city_garrison_capacity(city_id),
-		city.garrison_defense_base,
 	]
-	var campaign_line := "F/D/R/V/C：当前无攻城战役"
+	var campaign_line := "F/R/V/C：当前无攻城战役"
 	for battle in game_state.battles:
 		if (
 			battle.kind != Battle.Kind.SIEGE
@@ -6855,7 +6856,7 @@ static func city_detail_sections(
 		var share := game_state.administrative_campaign_control_share(
 			attacker_id, administrative_center
 		)
-		var efficiency := game_state.city_garrison_efficiency(
+		var defense_bonus := game_state.city_garrison_defense_bonus(
 			attacker_id, administrative_center
 		)
 		var requirement := game_state.campaign_siege_requirement(
@@ -6867,10 +6868,65 @@ static func city_detail_sections(
 		var committed := game_state.campaign_committed_manpower(
 			attacker_id, administrative_center
 		)
-		campaign_line = "属府控制 F %.0f%% · D %.2f · R %d · V %d · C %d" % [
-			share * 100.0, efficiency, requirement, threat, committed,
+		var arrived := 0
+		for army in battle.side_a:
+			if (
+				army.size > 0
+				and army.combat_morale() > Combat.ARMY_ROUT_THRESHOLD
+				and not army.starving
+				and army.supply_ratio > 0.0
+			):
+				arrived += army.size
+		var siege_stage := "州治野战" if battle.uses_field_combat_rules() else (
+			"封锁等待" if arrived < requirement else "攻击守军"
+		)
+		campaign_line = "%s · F %.0f%% · 防御 ×%.2f · R %d · 入场V %d · 到场C %d / 战区C %d" % [
+			siege_stage,
+			share * 100.0,
+			defense_bonus,
+			requirement,
+			threat,
+			arrived,
+			committed,
 		]
 		break
+	if campaign_line == "F/R/V/C：当前无攻城战役":
+		for nation in game_state.nations:
+			var plan := game_state.campaign_plan(
+				nation.id, administrative_center
+			)
+			if plan == null:
+				continue
+			var defensive := (
+				plan.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+			)
+			var committed := (
+				game_state.campaign_defensive_committed_manpower(
+					nation.id, administrative_center
+				)
+				if defensive
+				else game_state.campaign_committed_manpower(
+					nation.id, administrative_center
+				)
+			)
+			var requirement := (
+				game_state.campaign_field_requirement(
+					nation.id, administrative_center
+				)
+				if defensive
+				else game_state.campaign_siege_requirement(
+					nation.id, administrative_center
+				) + game_state.campaign_reinforcement_budget(
+					nation.id, administrative_center
+				)
+			)
+			campaign_line = "%s战役 · 阶段%d · C %d / 需求 %d" % [
+				"防守" if defensive else "进攻",
+				plan.phase,
+				committed,
+				requirement,
+			]
+			break
 	var governance_lines: Array[String] = [
 		"忠诚 %.1f    趋势 %+0.2f/月    动乱 %.1f" % [
 			city.loyalty, city.loyalty_trend, city.unrest,
@@ -7145,15 +7201,63 @@ static func nation_detail_sections(
 		]},
 		{"title": "外交与行动", "lines": diplomacy_lines},
 	]
-	if n.administrative_campaign_plan != null:
-		var campaign := n.administrative_campaign_plan
+	var campaign_centers := n.administrative_campaign_plans.keys()
+	campaign_centers.sort()
+	for center_value in campaign_centers:
+		var campaign := game_state.campaign_plan(
+			nation_id, int(center_value)
+		)
+		if campaign == null:
+			continue
+		var committed := (
+			game_state.campaign_defensive_committed_manpower(
+				nation_id, campaign.center_city_id
+			)
+			if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+			else game_state.campaign_committed_manpower(
+				nation_id, campaign.center_city_id
+			)
+		)
+		var active_offensive_siege := false
+		if campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE:
+			for battle in game_state.battles:
+				if (
+					not battle.finished
+					and battle.kind == Battle.Kind.SIEGE
+					and battle.city != null
+					and battle.city.id == campaign.center_city_id
+					and battle.siege_attacker_nation == nation_id
+				):
+					active_offensive_siege = true
+					break
+		var requirement := (
+			game_state.campaign_field_requirement(
+				nation_id, campaign.center_city_id
+			)
+			if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+			else game_state.campaign_siege_requirement(
+				nation_id, campaign.center_city_id
+			) + (
+				0
+				if active_offensive_siege
+				else game_state.campaign_reinforcement_budget(
+					nation_id, campaign.center_city_id
+				)
+			)
+		)
 		(sections[-1]["lines"] as Array).append(
-			"州战 %s  阶段%d  兵力%d" % [
+			"%s %s  阶段%d  C%d/%d" % [
+				(
+					"防守"
+					if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+					else "进攻"
+				),
 				WorldNaming.city_display_name(
 					game_state, campaign.center_city_id
 				),
 				campaign.phase,
-				campaign.army_assignments.size(),
+				committed,
+				requirement,
 			]
 		)
 	return sections

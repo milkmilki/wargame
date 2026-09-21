@@ -5,7 +5,7 @@ extends SceneTree
 
 const REMNANT_ID: int = 0
 const DOMINANT_ID: int = 1
-const LAST_CITY_ID: int = 3
+const LAST_CITY_ID: int = 41
 const RUN_DAYS: int = 720
 
 
@@ -19,8 +19,23 @@ func _init() -> void:
 	var launched := false
 	var captured := false
 	var first_attack := {}
+	var previous_army_count := state.active_army_count(DOMINANT_ID)
+	var recruitment_capacity_stable := true
 	for _day in range(RUN_DAYS):
 		sim._advance_day()
+		var current_army_count := state.active_army_count(DOMINANT_ID)
+		if current_army_count > previous_army_count:
+			var immediate_capacity := DiplomacyAI.force_capacity_report(
+				state,
+				DOMINANT_ID,
+				DiplomacyAI.FoodPosture.OFFENSIVE_WAR,
+				{}
+			)
+			recruitment_capacity_stable = (
+				current_army_count
+					<= int(immediate_capacity["supportable_armies"])
+			)
+		previous_army_count = current_army_count
 		var nation := state.nations[DOMINANT_ID]
 		if first_attack.is_empty():
 			for army in state.armies:
@@ -54,15 +69,8 @@ func _init() -> void:
 			str(_administrative_snapshot(state)),
 		]
 	)
-	var force_capacity := DiplomacyAI.force_capacity_report(
-		state, DOMINANT_ID, DiplomacyAI.FoodPosture.OFFENSIVE_WAR, {}
-	)
-	var force_bounded := (
-		state.nations[DOMINANT_ID].battle_groups.size()
-			<= int(force_capacity["supportable_armies"])
-	)
 	sim.free()
-	quit(0 if launched and force_bounded else 1)
+	quit(0 if launched and recruitment_capacity_stable else 1)
 
 
 func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
@@ -83,7 +91,7 @@ func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
 
 func _administrative_snapshot(state: GameState) -> Dictionary:
 	var center_id := state.administrative_center_of(LAST_CITY_ID)
-	var plan := state.nations[DOMINANT_ID].administrative_campaign_plan
+	var plan := state.campaign_plan(DOMINANT_ID, center_id)
 	var defender_armies: Array[Dictionary] = []
 	for army in state.armies:
 		if army.owner_nation == REMNANT_ID:

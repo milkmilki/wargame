@@ -105,6 +105,7 @@ var occupation_claimant_nation: int = -1
 ## 攻城回合内临时创建的城市守军；不进入 GameState.armies，也不会撤退。
 var is_city_garrison: bool = false
 var city_garrison_combat_multiplier: float = 1.0
+var city_garrison_defense_bonus: float = 3.0
 
 
 func morale_ratio() -> float:

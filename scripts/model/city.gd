@@ -21,9 +21,7 @@ var owner_nation: int = -1                ## 所属国家 id
 var occupation_sponsor_nation: int = -1
 
 ## 州治的持久城市守军。容量由行政身份派生，府与码头始终为 0。
-## 基础效率对所有陆城确定性生成，以便道路重算后新州治直接启用。
 var garrison_manpower: int = 0
-var garrison_defense_base: int = 3
 
 var manpower_per_month: int = 0           ## 每月人口产出，立即汇入所属国人口库
 var gold_per_month: int = 0               ## 每月金钱产出

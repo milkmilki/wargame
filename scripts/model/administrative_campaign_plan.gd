@@ -1,15 +1,25 @@
 class_name AdministrativeCampaignPlan
 extends RefCounted
-## 州级战役的最小持久状态。战术目标最多两个，兵力需求每轮从州状态重算。
+## 单个行政州战区的持久状态。一个国家可同时维护多个州计划，但一支军队只能
+## 出现在其中一个计划的 army_assignments 中。
+
+enum Mode {
+	OFFENSE,
+	DEFENSE,
+}
 
 enum Phase {
 	CAPTURE_FU,
 	ENCIRCLE_CENTER,
 	ASSAULT_CENTER,
 	CLEANUP,
+	HOLD_AND_REINFORCE,
+	SORTIE,
 }
 
 var center_city_id: int = -1
+var mode: int = Mode.OFFENSE
+var opponent_nation_id: int = -1
 var phase: int = Phase.CAPTURE_FU
 var tactical_target_city_ids: Array[int] = []
 var army_assignments: Dictionary = {} # army_id -> tactical city_id

@@ -16,7 +16,6 @@ func _init() -> void:
 		if city.is_dock:
 			valid = valid and state.city_garrison_capacity(city.id) == 0
 			continue
-		valid = valid and city.garrison_defense_base in [3, 4, 5]
 		if state.is_zhou_city(city.id):
 			valid = valid and city.garrison_manpower == 15000
 			valid = valid and state.city_garrison_capacity(city.id) == 15000
@@ -33,37 +32,26 @@ func _init() -> void:
 			if member_id != center_id:
 				fu_ids.append(member_id)
 				state.cities[member_id].owner_nation = defender
-		var d0 := float(center.garrison_defense_base)
 		valid = valid and is_equal_approx(
 			state.administrative_campaign_control_share(attacker, center_id),
 			0.0
 		)
-		valid = valid and is_equal_approx(
-			state.city_garrison_efficiency(attacker, center_id), d0
-		)
 		valid = valid and state.campaign_siege_requirement(
 			attacker, center_id
-		) == maxi(30000, ceili(15000.0 * d0))
+		) == 45000
 		var captured := ceili(float(fu_ids.size()) * 0.5)
 		for index in range(captured):
 			state.cities[fu_ids[index]].owner_nation = attacker
 		var expected_share := float(captured) / float(fu_ids.size())
-		var expected_d := 1.0 + (d0 - 1.0) * (1.0 - expected_share)
 		valid = valid and is_equal_approx(
 			state.administrative_campaign_control_share(attacker, center_id),
 			expected_share
 		)
-		valid = valid and is_equal_approx(
-			state.city_garrison_efficiency(attacker, center_id), expected_d
-		)
 		for fu_id in fu_ids:
 			state.cities[fu_id].owner_nation = attacker
-		valid = valid and is_equal_approx(
-			state.city_garrison_efficiency(attacker, center_id), 1.0
-		)
 		valid = valid and state.campaign_siege_requirement(
 			attacker, center_id
-		) == 30000
+		) == 15000
 		state.armies.clear()
 		var relief := Army.new()
 		relief.id = 9901
@@ -82,13 +70,6 @@ func _init() -> void:
 			attacker, center_id, 60
 		) == 0
 		relief.state = Army.State.IDLE
-	var same_seed := GameState.new()
-	same_seed.generate_grid_world(94101)
-	for city_id in range(state.cities.size()):
-		valid = valid and (
-			state.cities[city_id].garrison_defense_base
-			== same_seed.cities[city_id].garrison_defense_base
-		)
 	if center_id >= 0:
 		var monthly_center := state.cities[center_id]
 		var monthly_owner := state.nations[monthly_center.owner_nation]
@@ -106,18 +87,8 @@ func _init() -> void:
 	valid = valid and MapDefinition.validate(template).is_empty()
 	for record_value in template.get("cities", []):
 		var record: Dictionary = record_value
-		valid = valid and record.has("garrison_defense_base")
+		valid = valid and not record.has("garrison_defense_base")
 		valid = valid and not record.has("garrison_manpower")
-	var legacy_template := template.duplicate(true)
-	legacy_template["version"] = 5
-	for record_value in legacy_template["cities"]:
-		(record_value as Dictionary).erase("garrison_defense_base")
-	valid = valid and MapDefinition.validate(legacy_template).is_empty()
-	var legacy_state := GameState.new()
-	legacy_state.generate_from_map_definition(legacy_template, 94101)
-	for city in legacy_state.cities:
-		if not city.is_dock:
-			valid = valid and city.garrison_defense_base in [3, 4, 5]
 	var native_snapshot := NativeSnapshotBuilder.build(state)
 	valid = valid and int(native_snapshot.get("garrison_revision", -1)) >= 0
 	var expected_garrisons := PackedInt32Array()
@@ -156,7 +127,9 @@ func _init() -> void:
 		var before := target.garrison_manpower
 		sim._start_or_join_siege(attacker, target, edge)
 		var siege := sim._siege_battle_of(target)
-		valid = valid and siege != null and siege.side_b_defends_city
+		valid = valid and siege != null
+		valid = valid and not siege.side_b_defends_city
+		valid = valid and not siege.uses_field_combat_rules()
 		if siege != null:
 			sim._advance_siege(siege, 9, 123456)
 			valid = valid and target.garrison_manpower < before

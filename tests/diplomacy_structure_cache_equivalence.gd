@@ -75,7 +75,6 @@ func _compare_states(legacy: GameState, optimized: GameState) -> int:
 			or legacy.recognized_owner_of(city.id)
 				!= optimized.recognized_owner_of(city.id)
 			or city.garrison_manpower != other.garrison_manpower
-			or city.garrison_defense_base != other.garrison_defense_base
 			or city.food_storage != other.food_storage
 		):
 			mismatches += 1

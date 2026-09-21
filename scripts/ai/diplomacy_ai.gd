@@ -1437,7 +1437,6 @@ static func _military_city_value(city: City) -> float:
 		+ (0.75 if city.is_food_hub else 0.0)
 		+ (0.75 if city.is_manpower_hub else 0.0)
 		+ (0.50 if city.is_dock else 0.0)
-		+ 0.50 * float(clampi(city.garrison_defense_base, 3, 5) - 3) / 2.0
 	)
 
 
@@ -2911,12 +2910,10 @@ static func force_capacity_report(
 		formation_size
 	)
 	var nation_armies: Array[Army] = []
-	var full_strength_troops := 0
 	for army in state.armies:
 		if army.owner_nation != nation_id or army.size <= 0:
 			continue
 		nation_armies.append(army)
-		full_strength_troops += army.max_size
 	var current_armies := nation_armies.size()
 	var manpower_reserve := (
 		ReinforcementRules.PEACETIME_MANPOWER_RESERVE
@@ -2957,18 +2954,6 @@ static func force_capacity_report(
 		float(maxi(nation.treasury_gold - protected_gold, 0))
 		/ float(maxi(formation_cost, 1))
 	))
-	var food_plan := war_food_report(
-		state,
-		nation_id,
-		full_strength_troops,
-		posture,
-		evaluation_cache
-	)
-	var food_total_capacity := int(floor(
-		float(maxi(int(food_plan["affordable_troops"]), 0))
-		/ float(formation_size)
-	))
-	var food_limit := maxi(food_total_capacity - current_armies, 0)
 	var army_total_capacity := state.max_army_count(nation_id)
 	var army_slot_limit := maxi(army_total_capacity - current_armies, 0)
 	var current_effective_upkeep := int(finance_report.get(
@@ -2998,32 +2983,29 @@ static func force_capacity_report(
 	var gold_upkeep_limit := maxi(
 		gold_total_capacity - current_armies, 0
 	)
+	var non_food_total_capacity := mini(
+		mini(gold_total_capacity, army_total_capacity),
+		mini(
+			current_armies + manpower_limit,
+			current_armies + gold_creation_limit
+		)
+	)
+	var food_plan := war_food_report(
+		state,
+		nation_id,
+		non_food_total_capacity * formation_size,
+		posture,
+		evaluation_cache
+	)
+	var food_total_capacity := int(floor(
+		float(maxi(int(food_plan["affordable_troops"]), 0))
+		/ float(formation_size)
+	))
+	var food_limit := maxi(food_total_capacity - current_armies, 0)
 	var supportable_armies := mini(
 		mini(gold_total_capacity, food_total_capacity),
 		army_total_capacity
 	)
-	# 和平粮仓恢复预算会随目标编制提高。先用聚合余量得到候选容量，再以
-	# 候选满编人数校验一次；war_food_report 会复用同一评估缓存，不重扫城市。
-	if supportable_armies > 0:
-		var candidate_food_plan := war_food_report(
-			state,
-			nation_id,
-			supportable_armies * formation_size,
-			posture,
-			evaluation_cache
-		)
-		if not bool(candidate_food_plan["target_sustainable"]):
-			food_total_capacity = mini(
-				food_total_capacity,
-				int(floor(
-					float(maxi(int(candidate_food_plan["affordable_troops"]), 0))
-					/ float(formation_size)
-				))
-			)
-			supportable_armies = mini(
-				mini(gold_total_capacity, food_total_capacity),
-				army_total_capacity
-			)
 	food_limit = maxi(food_total_capacity - current_armies, 0)
 	var sustainable_growth_limit := maxi(
 		supportable_armies - current_armies,
@@ -3328,6 +3310,13 @@ static func war_food_report(
 	if not evaluation_cache.has("garrison_by_city"):
 		evaluation_cache["garrison_by_city"] = Simulation.build_garrison_index(state)
 	var garrison_by_city: Dictionary = evaluation_cache["garrison_by_city"]
+	if target_troops != current_troops:
+		garrison_by_city = _projected_force_garrison_index(
+			state,
+			nation_id,
+			target_troops,
+			garrison_by_city
+		)
 	var pool_current_troops := 0
 	var current_monthly_demand := 0.0
 	var nation_current_monthly_demand := 0.0
@@ -3392,6 +3381,22 @@ static func war_food_report(
 			)
 		)
 	)
+	if target_troops > current_troops:
+		var formation_size := GameState.INITIAL_HEAVY_ARMY_SIZE
+		var formation_food: float = ceil(
+			float(ceil(
+				float(formation_size) * FOOD_PER_CAPITA_MONTH
+			))
+				* Simulation.MAX_SUPPLY_MULT
+				* maxf(
+					RulerProfile.food_consumption_multiplier(nation),
+					0.1
+				)
+		)
+		food_per_troop = maxf(
+			food_per_troop,
+			formation_food / float(formation_size)
+		)
 	var other_members_monthly_demand := maxf(
 		current_monthly_demand - nation_current_monthly_demand,
 		0.0
@@ -3434,7 +3439,7 @@ static func war_food_report(
 		full_strength_annual_balance
 	)
 	var required_years := _required_campaign_years(posture)
-	var emergency_reserve := current_monthly_demand * float(
+	var emergency_reserve := target_monthly_demand * float(
 		EMERGENCY_FOOD_MONTHS
 	)
 	var monthly_budget := 0.0
@@ -3453,12 +3458,14 @@ static func war_food_report(
 			+ expendable_stock
 				/ (required_years * float(MONTHS_PER_YEAR))
 		)
-	var affordable_troops := int(floor(
-		maxf(
-			monthly_budget - other_members_monthly_demand,
-			0.0
-		) / maxf(food_per_troop, 0.0001)
-	))
+	var affordable_troops := _affordable_food_troops(
+		monthly_production,
+		stock,
+		other_members_monthly_demand,
+		food_per_troop,
+		posture,
+		required_years
+	)
 	var result := {
 		"posture": posture,
 		"current_troops": current_troops,
@@ -3501,6 +3508,92 @@ static func war_food_report(
 	}
 	evaluation_cache[cache_key] = result
 	return result
+
+
+static func _projected_force_garrison_index(
+	state: GameState,
+	nation_id: int,
+	target_troops: int,
+	current_index: Dictionary
+) -> Dictionary:
+	var projected := current_index.duplicate()
+	for city_id_value in projected.keys().duplicate():
+		var city_id := int(city_id_value)
+		if (
+			city_id >= 0
+			and city_id < state.cities.size()
+			and state.cities[city_id].owner_nation == nation_id
+		):
+			projected.erase(city_id_value)
+	if target_troops <= 0:
+		return projected
+	# 战役与预备队调度会把军团分散到多个州治；驻军减产对部署位置
+	# 非线性。容量采用每座本国陆城的现有减产下界（最高 30%），保证
+	# 任何后续分散都不会把实际粮产压到容量预测以下。
+	for city in state.land_cities_of(nation_id):
+		projected[city.id] = int(ceil(
+			float(city.manpower_per_month)
+				* Simulation.CITY_GARRISON_CAPACITY_PER_MANPOWER
+				* Simulation.CITY_GARRISON_FOOD_PENALTY_MAX
+				/ Simulation.CITY_GARRISON_FOOD_PENALTY_RATE
+		))
+	return projected
+
+
+## 求解目标军力自身的粮食约束，而不是先按当前军力算预算再扩军。
+## 目标需求 d = 其他成员需求 + x * 单兵耗；和平还要恢复 1.5 年粮仓，
+## 战时要保留六个月应急粮并按战役窗口摊销库存。这个方程是单调的，
+## 因而扩军前后的容量相同，不会出现一次征满后容量反转。
+static func _affordable_food_troops(
+	monthly_production: float,
+	stock: float,
+	other_members_monthly_demand: float,
+	food_per_troop: float,
+	posture: int,
+	required_years: float
+) -> int:
+	var unit := maxf(food_per_troop, 0.0001)
+	var other := maxf(other_members_monthly_demand, 0.0)
+	var production := maxf(monthly_production, 0.0)
+	var available_stock := maxf(stock, 0.0)
+	var target_months := 0.0
+	var budget_factor := 1.0
+	if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
+		# stock_target = demand * 18，恢复期为 36 个月，故恢复预算
+		# 在需要补库时等价于每月额外承担 demand / 2。
+		target_months = PEACE_STOCK_TARGET_YEARS * float(MONTHS_PER_YEAR)
+		budget_factor += target_months / (
+			PEACE_STOCK_RECOVERY_YEARS * float(MONTHS_PER_YEAR)
+		)
+	else:
+		# emergency_reserve = demand * 6，库存按战役窗口摊销。
+		target_months = float(EMERGENCY_FOOD_MONTHS)
+		budget_factor += target_months / (
+			maxf(required_years, 0.01) * float(MONTHS_PER_YEAR)
+		)
+	var recovery_years := (
+		PEACE_STOCK_RECOVERY_YEARS
+		if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]
+		else required_years
+	)
+	var reserve_adjusted_capacity := (
+		production
+		+ available_stock / (
+			maxf(recovery_years, 0.01) * float(MONTHS_PER_YEAR)
+		)
+		- other * budget_factor
+	) / (unit * budget_factor)
+	var flow_only_capacity := (production - other) / unit
+	var capacity := reserve_adjusted_capacity
+	if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
+		# 流量上限对应总需求=月产量；只有库存已经覆盖这一目标的
+		# 18 个月储备时，才确实无需恢复预算。
+		if available_stock >= target_months * production:
+			capacity = flow_only_capacity
+	else:
+		# 战时库存不足以形成可支配余额时仍可按当月产量维持军队。
+		capacity = maxf(reserve_adjusted_capacity, flow_only_capacity)
+	return maxi(int(floor(capacity)), 0)
 
 
 static func _required_campaign_years(posture: int) -> float:
