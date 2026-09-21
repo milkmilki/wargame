@@ -3105,7 +3105,9 @@ func _test_responsive_map_layout() -> void:
 				str(city_sections[3]["title"]),
 			] == ["概况", "军事", "经济", "治理"]
 			and "城市守军" in str((city_sections[1]["lines"] as Array)[0])
-			and "R" in str((city_sections[1]["lines"] as Array)[1])
+			and "当前没有州级军事行动" in str(
+				(city_sections[1]["lines"] as Array)[1]
+			)
 			and "野战驻军" in str((city_sections[1]["lines"] as Array)[2])
 			and "行政产出" in str((city_sections[2]["lines"] as Array)[0])
 			and "实际" in str((city_sections[2]["lines"] as Array)[1])
@@ -9132,7 +9134,13 @@ func _test_enfeoff_ai() -> void:
 	shallow_state.recognized_city_owners.resize(shallow_state.cities.size())
 	for city in shallow_state.cities:
 		shallow_state.recognized_city_owners[city.id] = city.owner_nation
+	# Keep singleton administrative states for this enfeoffment fixture, then
+	# restore the formal edge list used by territorial-border analysis.
 	shallow_state.rebuild_administrative_regions()
+	for city_id in range(shallow_state.cities.size() - 1):
+		shallow_state.edges.append(
+			shallow_state.edge_of(city_id, city_id + 1)
+		)
 	for a in range(shallow_state.nations.size()):
 		for b in range(a + 1, shallow_state.nations.size()):
 			shallow_state.set_diplomatic_relation(

@@ -1789,7 +1789,7 @@ static func war_desire(
 		else 0
 	)
 	if (
-		not within_diplomatic_range(
+		not can_initiate_war_at_range(
 			state, nation_id, target_id, evaluation_cache
 		)
 		or not _cached_can_alliance_declare_war(
@@ -1800,9 +1800,6 @@ static func war_desire(
 			nation_id,
 			evaluation_cache
 		).size() >= MAX_CONCURRENT_WARS
-		or _frontier_edges(
-			state, nation_id, target_id, evaluation_cache
-		) <= 0
 		or _has_shared_ally(
 			state,
 			nation_id,
@@ -2118,13 +2115,13 @@ static func _alliance_frontier_release_value(
 		evaluation_cache[cache_key] = 0.0
 		return 0.0
 	var frontier_cities := {}
-	for edge in state.edges:
-		var owner_a := state.cities[edge.city_a].owner_nation
-		var owner_b := state.cities[edge.city_b].owner_nation
+	for contact in state.territorial_border_pairs():
+		var owner_a := state.cities[contact.x].owner_nation
+		var owner_b := state.cities[contact.y].owner_nation
 		if owner_a == nation_id and owner_b == target_id:
-			frontier_cities[edge.city_a] = true
+			frontier_cities[contact.x] = true
 		elif owner_b == nation_id and owner_a == target_id:
-			frontier_cities[edge.city_b] = true
+			frontier_cities[contact.y] = true
 	var committed_power := 0.0
 	for army in state.armies:
 		if army.owner_nation != nation_id or army.size <= 0:
@@ -2223,16 +2220,14 @@ static func _build_border_massing_matrix(
 	evaluation_cache["border_massing_matrix_built"] = true
 	var frontier_cities_by_pair := {}
 	var observers_by_other := {}
-	for edge in state.edges:
-		if edge.max_manpower <= 0:
-			continue
-		var owner_a := state.cities[edge.city_a].owner_nation
-		var owner_b := state.cities[edge.city_b].owner_nation
+	for contact in state.territorial_border_pairs():
+		var owner_a := state.cities[contact.x].owner_nation
+		var owner_b := state.cities[contact.y].owner_nation
 		if owner_a < 0 or owner_b < 0 or owner_a == owner_b:
 			continue
 		for entry in [
-			[owner_a, owner_b, edge.city_b],
-			[owner_b, owner_a, edge.city_a],
+			[owner_a, owner_b, contact.y],
+			[owner_b, owner_a, contact.x],
 		]:
 			var observer_id := int(entry[0])
 			var other_id := int(entry[1])
@@ -3122,6 +3117,75 @@ static func _bordering_nation_ids(
 	return result
 
 
+## No-land-border fallback. Accessible own/allied docks may lead to the first
+## foreign dock owner, but the water route itself never becomes a border.
+static func _expedition_target_nation_ids(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var cache_key := "expedition_targets:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return (evaluation_cache[cache_key] as Array[int]).duplicate()
+	var targets := {}
+	var visited := {}
+	var queue: Array[int] = []
+	for city in state.cities:
+		if city.is_dock and city.owner_nation == nation_id:
+			visited[city.id] = true
+			queue.append(city.id)
+	var cursor := 0
+	while cursor < queue.size():
+		var dock_id := queue[cursor]
+		cursor += 1
+		for neighbor in state.neighbors(dock_id):
+			if not state.cities[neighbor].is_dock:
+				continue
+			var water_edge := state.edge_of(dock_id, neighbor)
+			if (
+				water_edge == null
+				or water_edge.max_manpower <= 0
+				or water_edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
+			):
+				continue
+			var owner := state.cities[neighbor].owner_nation
+			if state.has_military_access(nation_id, owner):
+				if not visited.has(neighbor):
+					visited[neighbor] = true
+					queue.append(neighbor)
+			elif (
+				owner >= 0
+				and owner < state.nations.size()
+				and state.nations[owner].alive
+			):
+				targets[owner] = true
+	var result: Array[int] = []
+	for target_value in targets:
+		result.append(int(target_value))
+	result.sort_custom(func(a: int, b: int) -> bool:
+		return EquivariantOrder.nation_less(state, nation_id, a, b)
+	)
+	evaluation_cache[cache_key] = result
+	return result.duplicate()
+
+
+static func can_initiate_war_at_range(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary = {}
+) -> bool:
+	if _frontier_edges(state, nation_id, target_id, evaluation_cache) > 0:
+		return true
+	# Expedition targets are a fallback, never an addition to available land
+	# borders. This prevents river powers from opening every front at once.
+	if not _bordering_nation_ids(state, nation_id, evaluation_cache).is_empty():
+		return false
+	return _expedition_target_nation_ids(
+		state, nation_id, evaluation_cache
+	).has(target_id)
+
+
 ## 国家外交距离使用领土接触图，而不是会随地图缩放变化的屏幕/坐标距离。
 ## 直接接壤为 1 跳，经一个存活国家中转为 2 跳；关系建立后不会因疆域变化
 ## 自动拆除，防御盟约拉入战争也不重新套此主动外交门禁。
@@ -3218,13 +3282,9 @@ static func _build_diplomatic_range_masks(
 		territory_neighbor_sets.resize(nation_count)
 		for nation_id in range(nation_count):
 			territory_neighbor_sets[nation_id] = {}
-		for edge in state.edges:
-			# 外交接壤只认陆路和短程登陆连接；河运与海运都是
-			# 远程运输网络，不能把地图两端的国家变成外交近邻。
-			if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-				continue
-			var owner_a := state.cities[edge.city_a].owner_nation
-			var owner_b := state.cities[edge.city_b].owner_nation
+		for contact in state.territorial_border_pairs():
+			var owner_a := state.cities[contact.x].owner_nation
+			var owner_b := state.cities[contact.y].owner_nation
 			if (
 				owner_a < 0 or owner_a >= nation_count
 				or owner_b < 0 or owner_b >= nation_count
@@ -3728,7 +3788,8 @@ static func select_war_objective(
 			bordering_centers.append(center_id)
 	# 陆地宣战只能选择本国实控领土直接接壤的州。全国无此类目标时，
 	# 保留后续码头可达性筛选作为登陆战争兜底。
-	if not bordering_centers.is_empty():
+	var allow_expedition := bordering_centers.is_empty()
+	if not allow_expedition:
 		center_ids = bordering_centers
 	var max_gold := 1
 	var max_food := 1
@@ -3746,11 +3807,12 @@ static func select_war_objective(
 			center_id,
 			excluded_city,
 			legal_reclamation_only,
-			evaluation_cache
+			evaluation_cache,
+			allow_expedition
 		)
 		if tactical_city < 0:
 			continue
-		var own_links := staging_cities_for_objective(
+		var own_links := war_staging_cities_for_objective(
 			state, nation_id, tactical_city, evaluation_cache
 		).size()
 		if own_links <= 0:
@@ -3894,7 +3956,8 @@ static func administrative_tactical_target(
 	center_city_id: int,
 	excluded_city: int = -1,
 	legal_reclamation_only: bool = false,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	allow_expedition: bool = false
 ) -> int:
 	if not state.is_zhou_city(center_city_id):
 		return -1
@@ -3912,7 +3975,12 @@ static func administrative_tactical_target(
 			continue
 		if not staging_cities_for_objective(
 			state, nation_id, city_id, evaluation_cache
-		).is_empty():
+		).is_empty() or (
+			allow_expedition
+			and _has_dock_expedition_route_to_objective(
+				state, nation_id, city_id, evaluation_cache
+			)
+		):
 			candidates.append(city_id)
 	if candidates.is_empty():
 		return -1
@@ -3934,14 +4002,8 @@ static func administrative_tactical_target(
 	for candidate in candidates:
 		if candidate == center_city_id:
 			continue
-		for neighbor in state.neighbors(candidate):
-			var edge := state.edge_of(candidate, neighbor)
-			if (
-				edge != null
-				and edge.kind == Edge.Kind.LAND
-				and edge.max_manpower > 0
-				and attacker_bloc.has(state.cities[neighbor].owner_nation)
-			):
+		for neighbor in state.territorial_border_neighbors(candidate):
+			if attacker_bloc.has(state.cities[neighbor].owner_nation):
 				frontier_fu.append(candidate)
 				break
 	if not frontier_fu.is_empty():
@@ -3960,14 +4022,8 @@ static func _administrative_center_borders_owned_land(
 	center_city_id: int
 ) -> bool:
 	for member_id in state.administrative_members(center_city_id):
-		for neighbor in state.neighbors(member_id):
-			var edge := state.edge_of(member_id, neighbor)
-			if (
-				edge != null
-				and edge.kind == Edge.Kind.LAND
-				and edge.max_manpower > 0
-				and state.cities[neighbor].owner_nation == nation_id
-			):
+		for neighbor in state.territorial_border_neighbors(member_id):
+			if state.cities[neighbor].owner_nation == nation_id:
 				return true
 	return false
 
@@ -4043,7 +4099,7 @@ static func replacement_war_preparation_objective(
 	objective["defender_troops"] = int(
 		defender_index.get(tactical_city, 0)
 	)
-	objective["staging_links"] = staging_cities_for_objective(
+	objective["staging_links"] = war_staging_cities_for_objective(
 		state, nation_id, tactical_city, evaluation_cache
 	).size()
 	return objective
@@ -4584,6 +4640,10 @@ static func _collect_war_actions(
 		var bordering_nations := _bordering_nation_ids(
 			state, nation.id, evaluation_cache
 		)
+		if bordering_nations.is_empty():
+			bordering_nations = _expedition_target_nation_ids(
+				state, nation.id, evaluation_cache
+			)
 		for target_id in bordering_nations:
 			var target := state.nations[target_id]
 			if committed.has(target.id) or not target.alive:
@@ -4748,7 +4808,7 @@ static func _collect_existing_war_preparation(
 		target_id >= 0
 		and target_id < state.nations.size()
 		and state.nations[target_id].alive
-		and within_diplomatic_range(
+		and can_initiate_war_at_range(
 			state, nation_id, target_id, evaluation_cache
 		)
 		and state.can_alliance_declare_war(nation_id, target_id)
@@ -4764,7 +4824,7 @@ static func _collect_existing_war_preparation(
 	)
 	var has_route := (
 		objective_valid
-		and not staging_cities_for_objective(
+		and not war_staging_cities_for_objective(
 			state,
 			nation_id,
 			objective_city,
@@ -5044,13 +5104,115 @@ static func staging_cities_for_objective(
 	return result
 
 
+static func _has_dock_expedition_route_to_objective(
+	state: GameState,
+	nation_id: int,
+	objective_city: int,
+	evaluation_cache: Dictionary = {}
+) -> bool:
+	return not _dock_expedition_staging_cities(
+		state, nation_id, objective_city, evaluation_cache
+	).is_empty()
+
+
+static func _dock_expedition_staging_cities(
+	state: GameState,
+	nation_id: int,
+	objective_city: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var result: Array[int] = []
+	var cache_key := "expedition_staging:%d:%d:%d:%d:%d" % [
+		nation_id,
+		objective_city,
+		state.ownership_revision,
+		state.diplomacy_revision,
+		state.road_network_revision,
+	]
+	if evaluation_cache.has(cache_key):
+		return (evaluation_cache[cache_key] as Array[int]).duplicate()
+	if (
+		objective_city < 0 or objective_city >= state.cities.size()
+		or state.cities[objective_city].is_dock
+	):
+		evaluation_cache[cache_key] = result
+		return result
+	var target_nation := state.cities[objective_city].owner_nation
+	if target_nation < 0 or target_nation == nation_id:
+		evaluation_cache[cache_key] = result
+		return result
+	var target_docks := {}
+	for neighbor in state.neighbors(objective_city):
+		var landing := state.edge_of(objective_city, neighbor)
+		if (
+			landing != null
+			and landing.kind == Edge.Kind.LANDING
+			and landing.max_manpower > 0
+			and state.cities[neighbor].is_dock
+			and state.cities[neighbor].owner_nation == target_nation
+		):
+			target_docks[neighbor] = true
+	if target_docks.is_empty():
+		evaluation_cache[cache_key] = result
+		return result
+	var visited: Dictionary = target_docks.duplicate()
+	var queue: Array[int] = []
+	for dock_value in target_docks:
+		queue.append(int(dock_value))
+	var cursor := 0
+	while cursor < queue.size():
+		var dock_id := queue[cursor]
+		cursor += 1
+		for neighbor in state.neighbors(dock_id):
+			if visited.has(neighbor) or not state.cities[neighbor].is_dock:
+				continue
+			var water_edge := state.edge_of(dock_id, neighbor)
+			if (
+				water_edge == null
+				or water_edge.max_manpower <= 0
+				or water_edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
+			):
+				continue
+			var owner := state.cities[neighbor].owner_nation
+			if (
+				owner != target_nation
+				and not state.has_military_access(nation_id, owner)
+			):
+				continue
+			visited[neighbor] = true
+			queue.append(neighbor)
+	for dock_value in visited:
+		var dock_id := int(dock_value)
+		if state.cities[dock_id].owner_nation == nation_id:
+			result.append(dock_id)
+	EquivariantOrder.sort_city_ids(result, state, nation_id, objective_city)
+	evaluation_cache[cache_key] = result
+	return result.duplicate()
+
+
+static func war_staging_cities_for_objective(
+	state: GameState,
+	nation_id: int,
+	objective_city: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var direct := staging_cities_for_objective(
+		state, nation_id, objective_city, evaluation_cache
+	)
+	if not direct.is_empty():
+		return direct
+	return _dock_expedition_staging_cities(
+		state, nation_id, objective_city, evaluation_cache
+	)
+
+
 static func staged_troops_for_objective(
 	state: GameState,
 	nation_id: int,
 	objective_city: int,
 	evaluation_cache: Dictionary = {}
 ) -> int:
-	var staging := staging_cities_for_objective(
+	var staging := war_staging_cities_for_objective(
 		state, nation_id, objective_city, evaluation_cache
 	)
 	var total := 0
@@ -5618,27 +5780,18 @@ static func _build_frontier_matrix(
 				continue
 			accessors_of[nation_a].append(nation_b)
 			accessors_of[nation_b].append(nation_a)
-	for edge in state.edges:
-		var owner_a := state.cities[edge.city_a].owner_nation
-		var owner_b := state.cities[edge.city_b].owner_nation
+	for contact in state.territorial_border_pairs():
+		var owner_a := state.cities[contact.x].owner_nation
+		var owner_b := state.cities[contact.y].owner_nation
 		if (
 			owner_a < 0 or owner_a >= nation_count
 			or owner_b < 0 or owner_b >= nation_count
 		):
 			continue
-		if (
-			owner_a != owner_b
-			and edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
-		):
+		if owner_a != owner_b:
 			territory_neighbor_sets[owner_a][owner_b] = true
 			territory_neighbor_sets[owner_b][owner_a] = true
-		# 外交接触读取省份/节点邻接；军事前线仍只读取当前可通行边。
-		# 因此道路封闭、容量调整和敌军屯兵不会让既有备战越界失效。
-		if edge.max_manpower <= 0:
-			continue
 		if owner_a == owner_b:
-			# 旧逻辑对同主边亦计入：pair(a, owner) 命中当 a 可通行 owner。
-			# 保留该行为以维持字节等价（观察者含 owner 本身及其盟友）。
 			for x in accessors_of[owner_a]:
 				_bump_frontier(matrix, nation_count, int(x), owner_a)
 			continue
@@ -6033,10 +6186,7 @@ static func _city_is_frontier(
 	nation_id: int,
 	city_id: int
 ) -> bool:
-	for neighbor in state.neighbors(city_id):
-		var edge := state.edge_of(city_id, neighbor)
-		if edge == null or edge.max_manpower <= 0:
-			continue
+	for neighbor in state.territorial_border_neighbors(city_id):
 		var neighbor_owner := state.cities[neighbor].owner_nation
 		if neighbor_owner >= 0 and not state.has_military_access(nation_id, neighbor_owner):
 			return true

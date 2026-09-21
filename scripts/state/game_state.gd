@@ -220,6 +220,12 @@ var administrative_region_colors: PackedColorArray = PackedColorArray()
 var administrative_region_revision: int = 0
 var _garrisons_initialized: bool = false
 var _campaign_travel_days_cache: Dictionary = {}
+## Political borders are land-city contacts, not arbitrary transport edges.
+## A river dock creates one local crossing between its banks; river/sea links
+## between docks remain transport-only and never extend this topology.
+var _territorial_border_cache_revision: Array[int] = []
+var _territorial_border_pairs: Array[Vector2i] = []
+var _territorial_border_adjacency: Array[Array] = []
 ## 省份栅格的静态拓扑缓存。领土变化只重新聚合宗藩根，不重复扫描贴图。
 var _province_neighbor_pairs: Array[Vector2i] = []
 var _province_neighbor_pairs_ready: bool = false
@@ -739,6 +745,9 @@ func _reset_world(world_seed: int) -> void:
 	administrative_region_revision = 0
 	_garrisons_initialized = false
 	_campaign_travel_days_cache.clear()
+	_territorial_border_cache_revision.clear()
+	_territorial_border_pairs.clear()
+	_territorial_border_adjacency.clear()
 	_province_neighbor_pairs.clear()
 	_province_neighbor_pairs_ready = false
 	river_features.clear()
@@ -1189,7 +1198,8 @@ func _assign_initial_nations_from_administrative_centers() -> void:
 		center_cities.size() >= nations.size(),
 		"州治数量必须足以为每个初始国家提供种子"
 	)
-	# 州压成行政节点，码头保留独立节点；只消费最终可通行交通边。
+	# 州压成行政节点，码头保留独立交通节点。这里划分的是初始国家的
+	# 内部交通连续性；对外政治接壤另由 territorial_border_pairs() 定义。
 	var graph_size := administrative_region_count + cities.size()
 	var graph: Array[Array] = []
 	graph.resize(graph_size)
@@ -1281,7 +1291,7 @@ func _assign_initial_nations_from_administrative_centers() -> void:
 			)
 		first_nation += allocations[index]
 	# 逐个扩张连通前沿，但每次优先当前陆城权重最少的国家。州节点权重为
-	# 其成员数，码头为 0；这样仍保持整州与连通性，同时避免 FIFO 种子吞图。
+	# 其成员数，码头为 0；这样仍保持整州与交通连续性，同时避免 FIFO 吞图。
 	var unowned_count := active_nodes.size() - nations.size()
 	var expansion_guard := active_nodes.size() * active_nodes.size()
 	while unowned_count > 0 and expansion_guard > 0:
@@ -3603,6 +3613,140 @@ func neighbors(city_id: int) -> Array[int]:
 	return adjacency.get(city_id, [] as Array[int])
 
 
+## Stable pairs of politically adjacent land cities. Direct LAND roads count;
+## a dock contributes pairwise contacts between its immediate LANDING banks.
+## RIVER/SEA edges and dock ownership are deliberately absent from the result.
+func territorial_border_pairs() -> Array[Vector2i]:
+	_ensure_territorial_border_cache()
+	return _territorial_border_pairs.duplicate()
+
+
+func territorial_border_neighbors(city_id: int) -> Array[int]:
+	_ensure_territorial_border_cache()
+	if city_id < 0 or city_id >= _territorial_border_adjacency.size():
+		return [] as Array[int]
+	return (_territorial_border_adjacency[city_id] as Array[int]).duplicate()
+
+
+func cities_share_territorial_border(city_a: int, city_b: int) -> bool:
+	if city_a == city_b:
+		return false
+	_ensure_territorial_border_cache()
+	if city_a < 0 or city_a >= _territorial_border_adjacency.size():
+		return false
+	return (_territorial_border_adjacency[city_a] as Array[int]).has(city_b)
+
+
+## Physical edges supporting one political border contact. A direct land
+## border has one edge; a local dock crossing has the two bank landing edges.
+func territorial_border_support_edges(
+	city_a: int, city_b: int
+) -> Array[Edge]:
+	var result: Array[Edge] = []
+	if not cities_share_territorial_border(city_a, city_b):
+		return result
+	var direct := edge_of(city_a, city_b)
+	if direct != null and direct.kind == Edge.Kind.LAND:
+		result.append(direct)
+		return result
+	var shared_docks: Array[int] = []
+	for neighbor in neighbors(city_a):
+		if neighbor < 0 or neighbor >= cities.size() or not cities[neighbor].is_dock:
+			continue
+		var first := edge_of(city_a, neighbor)
+		var second := edge_of(city_b, neighbor)
+		if (
+			first != null and second != null
+			and first.kind == Edge.Kind.LANDING
+			and second.kind == Edge.Kind.LANDING
+			and first.max_manpower > 0
+			and second.max_manpower > 0
+		):
+			shared_docks.append(neighbor)
+	shared_docks.sort()
+	if shared_docks.is_empty():
+		return result
+	result.append(edge_of(city_a, shared_docks[0]))
+	result.append(edge_of(city_b, shared_docks[0]))
+	return result
+
+
+func _ensure_territorial_border_cache() -> void:
+	var revision: Array[int] = [
+		road_network_revision,
+		cities.size(),
+		edges.size(),
+	]
+	if _territorial_border_cache_revision == revision:
+		return
+	var pair_by_key := {}
+	for edge in edges:
+		if (
+			edge == null
+			or edge.kind != Edge.Kind.LAND
+			or edge.max_manpower <= 0
+			or not _valid_territorial_border_land_city(edge.city_a)
+			or not _valid_territorial_border_land_city(edge.city_b)
+		):
+			continue
+		_add_territorial_border_pair(pair_by_key, edge.city_a, edge.city_b)
+	for dock in cities:
+		if not dock.is_dock or not dock.politically_active:
+			continue
+		var banks: Array[int] = []
+		for neighbor in neighbors(dock.id):
+			var landing := edge_of(dock.id, neighbor)
+			if (
+				landing == null
+				or landing.kind != Edge.Kind.LANDING
+				or landing.max_manpower <= 0
+				or not _valid_territorial_border_land_city(neighbor)
+			):
+				continue
+			banks.append(neighbor)
+		banks.sort()
+		for left_index in range(banks.size()):
+			for right_index in range(left_index + 1, banks.size()):
+				_add_territorial_border_pair(
+					pair_by_key, banks[left_index], banks[right_index]
+				)
+	_territorial_border_pairs.clear()
+	for pair_value in pair_by_key.values():
+		_territorial_border_pairs.append(pair_value as Vector2i)
+	_territorial_border_pairs.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.x < b.x or (a.x == b.x and a.y < b.y)
+	)
+	_territorial_border_adjacency.clear()
+	_territorial_border_adjacency.resize(cities.size())
+	for city_id in range(cities.size()):
+		_territorial_border_adjacency[city_id] = [] as Array[int]
+	for pair in _territorial_border_pairs:
+		(_territorial_border_adjacency[pair.x] as Array[int]).append(pair.y)
+		(_territorial_border_adjacency[pair.y] as Array[int]).append(pair.x)
+	for city_neighbors in _territorial_border_adjacency:
+		(city_neighbors as Array[int]).sort()
+	_territorial_border_cache_revision = revision
+
+
+func _valid_territorial_border_land_city(city_id: int) -> bool:
+	return (
+		city_id >= 0
+		and city_id < cities.size()
+		and cities[city_id].politically_active
+		and not cities[city_id].is_dock
+	)
+
+
+func _add_territorial_border_pair(
+	pair_by_key: Dictionary, city_a: int, city_b: int
+) -> void:
+	if city_a == city_b:
+		return
+	var lo := mini(city_a, city_b)
+	var hi := maxi(city_a, city_b)
+	pair_by_key[edge_key(lo, hi)] = Vector2i(lo, hi)
+
+
 func is_enemy(nation_a: int, nation_b: int) -> bool:
 	return relation_between(nation_a, nation_b) == DiplomaticRelation.WAR
 
@@ -3966,19 +4110,16 @@ func is_same_suzerainty_system(nation_a: int, nation_b: int) -> bool:
 	)
 
 
-## 藩王领土是否与本宗藩体系的任一敌国接壤（存在一条正容量边通往体系敌国的城）。
+## 藩王领土是否与本宗藩体系的任一敌国存在真实领土边界。
 ## 用于分封战争加成：接壤敌国的藩王须以自有军团参与共同战争，
-## 非接壤藩王只提高贡赋、不承担前线。判据只看实控归属与道路容量，确定性。
+## 非接壤藩王只提高贡赋、不承担前线。河运链仅供通行，不构成边界。
 func vassal_borders_system_enemy(subject_id: int) -> bool:
 	if not is_vassal(subject_id):
 		return false
 	for city in cities:
-		if city.owner_nation != subject_id:
+		if city.is_dock or city.owner_nation != subject_id:
 			continue
-		for neighbor in neighbors(city.id):
-			var edge := edge_of(city.id, neighbor)
-			if edge == null or edge.max_manpower <= 0:
-				continue
+		for neighbor in territorial_border_neighbors(city.id):
 			var neighbor_owner := cities[neighbor].owner_nation
 			if neighbor_owner >= 0 and is_enemy(subject_id, neighbor_owner):
 				return true

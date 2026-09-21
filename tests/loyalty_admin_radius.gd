@@ -91,6 +91,10 @@ func _make_linear_state(
 	for city in state.cities:
 		state.recognized_city_owners[city.id] = city.owner_nation
 	state.rebuild_administrative_regions()
+	# Preserve singleton administrative states in this focused fixture, then
+	# expose its roads through the formal edge list used by border analysis.
+	for city_id in range(state.cities.size() - 1):
+		state.edges.append(state.edge_of(city_id, city_id + 1))
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
 			state.set_diplomatic_relation(

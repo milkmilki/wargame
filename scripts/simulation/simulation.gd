@@ -3771,7 +3771,7 @@ func _execute_diplomatic_action(
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
 			if (
-				DiplomacyAI.within_diplomatic_range(
+				DiplomacyAI.can_initiate_war_at_range(
 					state, nation_a, nation_b, evaluation_cache
 				)
 				and state.can_alliance_declare_war(nation_a, nation_b)
@@ -3905,7 +3905,7 @@ func _execute_diplomatic_action(
 					_repatriate_after_access_revoked(nation_a, nation_b)
 		DiplomacyAI.Action.PREPARE_WAR:
 			if (
-				DiplomacyAI.within_diplomatic_range(
+				DiplomacyAI.can_initiate_war_at_range(
 					state, nation_a, nation_b, evaluation_cache
 				)
 				and state.can_alliance_declare_war(nation_a, nation_b)
@@ -3926,7 +3926,7 @@ func _execute_diplomatic_action(
 				and objective_city >= 0
 				and objective_city < state.cities.size()
 				and state.cities[objective_city].owner_nation == nation_b
-				and not DiplomacyAI.staging_cities_for_objective(
+				and not DiplomacyAI.war_staging_cities_for_objective(
 					state, nation_a, objective_city
 				).is_empty()
 			):
@@ -4636,6 +4636,8 @@ func _plan_disconnected_coalition_occupation_restoration(
 		var opposing_side: Dictionary = side_b if side_a.has(controller) else side_a
 		var connected: Dictionary = connected_by_nation[controller]
 		for city_id in range(state.cities.size()):
+			if state.cities[city_id].is_dock:
+				continue
 			var recognized_owner := int(legal[city_id])
 			if (
 				int(owners[city_id]) != controller
@@ -4976,14 +4978,7 @@ func _plan_coalition_enclave_transfers(
 					continue
 				var border_counts := {}
 				for city_id in component:
-					for neighbor in state.neighbors(city_id):
-						var edge := state.edge_of(city_id, neighbor)
-						if (
-							edge == null
-							or edge.kind != Edge.Kind.LAND
-							or edge.max_manpower <= 0
-						):
-							continue
+					for neighbor in state.territorial_border_neighbors(city_id):
 						var neighbor_owner := int(owners[neighbor])
 						if (
 							neighbor_owner >= 0
@@ -5048,15 +5043,8 @@ func _planned_land_components_for_owner(
 			var city_id := queue[cursor]
 			cursor += 1
 			component.append(city_id)
-			for neighbor in state.neighbors(city_id):
+			for neighbor in state.territorial_border_neighbors(city_id):
 				if not unseen.has(neighbor):
-					continue
-				var edge := state.edge_of(city_id, neighbor)
-				if (
-					edge == null
-					or edge.kind != Edge.Kind.LAND
-					or edge.max_manpower <= 0
-				):
 					continue
 				unseen.erase(neighbor)
 				queue.append(neighbor)
@@ -5159,13 +5147,10 @@ func _planned_capital_connected_territory(
 	while cursor < queue.size():
 		var city_id := queue[cursor]
 		cursor += 1
-		for neighbor in state.neighbors(city_id):
-			var edge := state.edge_of(city_id, neighbor)
+		for neighbor in state.territorial_border_neighbors(city_id):
 			var neighbor_owner := int(owners[neighbor])
 			if (
 				connected.has(neighbor)
-				or edge == null
-				or edge.max_manpower <= 0
 				or neighbor_owner != nation_id
 			):
 				continue
@@ -5201,6 +5186,8 @@ func _restore_disconnected_coalition_occupations(
 		var opposing_side: Dictionary = side_b if side_a.has(controller) else side_a
 		var connected: Dictionary = connected_by_nation[controller]
 		for city in state.cities:
+			if city.is_dock:
+				continue
 			var recognized_owner := state.recognized_owner_of(city.id)
 			if (
 				city.owner_nation != controller
@@ -5253,7 +5240,7 @@ func _restore_disconnected_coalition_occupations(
 	_repatriate_after_territory_settlement(restored)
 	return restored
 
-## 返回从 nation_id 首都出发，仅沿本国实控城市与正容量道路可达的区域。
+## 返回从 nation_id 首都出发，仅沿本国真实领土边界可达的陆地区域。
 ## 军事通行权不等于领土连续；盟国、宗主和藩王都不能作为飞地连接桥梁。
 func _capital_connected_territory(nation_id: int) -> Dictionary:
 	var capital_id := state.nations[nation_id].capital_city_id
@@ -5269,15 +5256,12 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 	while cursor < queue.size():
 		var city_id := queue[cursor]
 		cursor += 1
-		for neighbor in state.neighbors(city_id):
-			var edge := state.edge_of(city_id, neighbor)
+		for neighbor in state.territorial_border_neighbors(city_id):
 			var neighbor_owner := state.cities[
 				neighbor
 			].owner_nation
 			if (
 				connected.has(neighbor)
-				or edge == null
-				or edge.max_manpower <= 0
 				or neighbor_owner != nation_id
 			):
 				continue
@@ -8433,14 +8417,8 @@ func _administrative_campaign_staging_city(
 	for member_id in state.administrative_members(center_city_id):
 		if attacker_bloc.has(state.cities[member_id].owner_nation):
 			return member_id
-	for neighbor in state.neighbors(center_city_id):
-		var edge := state.edge_of(center_city_id, neighbor)
-		if (
-			edge != null
-			and edge.kind == Edge.Kind.LAND
-			and edge.max_manpower > 0
-			and attacker_bloc.has(state.cities[neighbor].owner_nation)
-		):
+	for neighbor in state.territorial_border_neighbors(center_city_id):
+		if attacker_bloc.has(state.cities[neighbor].owner_nation):
 			return neighbor
 	return -1
 
@@ -8463,16 +8441,8 @@ func _zhou_enemy_fu_targets(
 			continue
 		if frontier_only:
 			var touches_control := false
-			for neighbor in state.neighbors(member_id):
-				var edge := state.edge_of(member_id, neighbor)
-				if (
-					edge != null
-					and edge.kind == Edge.Kind.LAND
-					and edge.max_manpower > 0
-					and attacker_bloc.has(
-						state.cities[neighbor].owner_nation
-					)
-				):
+			for neighbor in state.territorial_border_neighbors(member_id):
+				if attacker_bloc.has(state.cities[neighbor].owner_nation):
 					touches_control = true
 					break
 			if not touches_control:
@@ -11101,6 +11071,20 @@ func _refresh_war_flags() -> void:
 	# 边 occupied 由 passing_count 决定
 	for e in state.edges:
 		e.occupied = e.passing_count > 0
+	# 码头不属于领土边界；只在实际被占领或发生战斗时标为战区。
+	# 战斗每天变化，因此这部分不能放进领土/外交版本缓存。
+	for city in state.cities:
+		if city.is_dock:
+			city.at_war = city.occupation_sponsor_nation >= 0
+	for battle in state.battles:
+		if battle.finished:
+			continue
+		if battle.city != null and battle.city.is_dock:
+			battle.city.at_war = true
+		if battle.edge != null:
+			for endpoint in [battle.edge.city_a, battle.edge.city_b]:
+				if state.cities[endpoint].is_dock:
+					state.cities[endpoint].at_war = true
 	# 城 at_war：与任一相邻敌国城市接壤。只在领土/外交版本变化时重算；
 	# 边 occupied 仍需每天读取 passing_count。
 	if (
@@ -11109,15 +11093,14 @@ func _refresh_war_flags() -> void:
 	):
 		return
 	for city in state.cities:
-		var war := false
-		for nb in state.neighbors(city.id):
-			if state.is_enemy(
-				city.owner_nation,
-				state.cities[nb].owner_nation
-			):
-				war = true
-				break
-		city.at_war = war
+		if not city.is_dock:
+			city.at_war = false
+	for contact in state.territorial_border_pairs():
+		var city_a := state.cities[contact.x]
+		var city_b := state.cities[contact.y]
+		if state.is_enemy(city_a.owner_nation, city_b.owner_nation):
+			city_a.at_war = true
+			city_b.at_war = true
 	_war_flags_ownership_revision = state.ownership_revision
 	_war_flags_diplomacy_revision = state.diplomacy_revision
 

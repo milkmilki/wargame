@@ -262,43 +262,56 @@ func _find_frontier(
 	var neutral_cities_by_nation := {}
 	var neutral_edges_by_nation := {}
 	var border_relation_rows: Array[Array] = []
+	var friendly_ids := {}
 	for friendly_city in _view.friendly_cities:
-		var friendly_id := friendly_city.id
-		for other_id in _state.neighbors(friendly_id):
-			var other_nation := _state.cities[other_id].owner_nation
-			if other_nation == nation_id:
-				continue
-			var edge := _state.edge_of(friendly_id, other_id)
-			if edge == null or edge.max_manpower <= 0:
-				continue
-			border_relation_rows.append([
-				GameState.edge_key(friendly_id, other_id),
-				other_nation,
-				_state.relation_between(nation_id, other_nation),
-			])
-			if _state.is_enemy(nation_id, other_nation):
-				frontier_edges.append(edge)
-				if not frontier_seen.has(friendly_id):
-					frontier_seen[friendly_id] = true
-					frontier_cities.append(friendly_id)
-				if not enemy_seen.has(other_id):
-					enemy_seen[other_id] = true
-					frontier_enemy_cities.append(other_id)
-			elif (
-				_state.relation_between(
-					nation_id,
-					other_nation
-				) == GameState.DiplomaticRelation.NEUTRAL
-			):
-				if not neutral_cities_by_nation.has(other_nation):
-					neutral_cities_by_nation[other_nation] = {}
-					neutral_edges_by_nation[other_nation] = []
-				neutral_cities_by_nation[other_nation][
-					friendly_id
-				] = true
-				neutral_edges_by_nation[other_nation].append(
-					edge
-				)
+		friendly_ids[friendly_city.id] = true
+	for contact in _state.territorial_border_pairs():
+		var friendly_id := -1
+		var other_id := -1
+		if friendly_ids.has(contact.x):
+			friendly_id = contact.x
+			other_id = contact.y
+		elif friendly_ids.has(contact.y):
+			friendly_id = contact.y
+			other_id = contact.x
+		if friendly_id < 0:
+			continue
+		var other_nation := _state.cities[other_id].owner_nation
+		if other_nation == nation_id:
+			continue
+		var support_edges := _state.territorial_border_support_edges(
+			friendly_id, other_id
+		)
+		if support_edges.is_empty():
+			continue
+		border_relation_rows.append([
+			GameState.edge_key(friendly_id, other_id),
+			other_nation,
+			_state.relation_between(nation_id, other_nation),
+		])
+		if _state.is_enemy(nation_id, other_nation):
+			for edge in support_edges:
+				if not frontier_edges.has(edge):
+					frontier_edges.append(edge)
+			if not frontier_seen.has(friendly_id):
+				frontier_seen[friendly_id] = true
+				frontier_cities.append(friendly_id)
+			if not enemy_seen.has(other_id):
+				enemy_seen[other_id] = true
+				frontier_enemy_cities.append(other_id)
+		elif (
+			_state.relation_between(
+				nation_id,
+				other_nation
+			) == GameState.DiplomaticRelation.NEUTRAL
+		):
+			if not neutral_cities_by_nation.has(other_nation):
+				neutral_cities_by_nation[other_nation] = {}
+				neutral_edges_by_nation[other_nation] = []
+			neutral_cities_by_nation[other_nation][friendly_id] = true
+			for edge in support_edges:
+				if not (neutral_edges_by_nation[other_nation] as Array).has(edge):
+					(neutral_edges_by_nation[other_nation] as Array).append(edge)
 	border_relation_rows.sort_custom(func(a: Array, b: Array) -> bool:
 		if int(a[0]) != int(b[0]):
 			return int(a[0]) < int(b[0])
@@ -456,14 +469,12 @@ func _neutral_border_concentration(
 	friendly_city: int
 ) -> float:
 	var total := 0.0
-	for neighbor in _state.neighbors(friendly_city):
-		var edge := _state.edge_of(friendly_city, neighbor)
-		if (
-			edge == null
-			or edge.max_manpower <= 0
-			or _state.cities[neighbor].owner_nation != other_nation
-		):
+	for neighbor in _state.territorial_border_neighbors(friendly_city):
+		if _state.cities[neighbor].owner_nation != other_nation:
 			continue
+		var support_edges := _state.territorial_border_support_edges(
+			friendly_city, neighbor
+		)
 		for army in _view.armies_at_or_on_city(neighbor):
 			if army.owner_nation != other_nation:
 				continue
@@ -475,16 +486,20 @@ func _neutral_border_concentration(
 				and army.location_city == neighbor
 			) or (
 				army.state == Army.State.HOLDING
-				and (
-					(army.move_from == neighbor and army.move_to == friendly_city)
-					or (
-						army.move_to == neighbor
-						and army.move_from == friendly_city
-					)
-				)
+				and _army_uses_any_edge(army, support_edges)
 			):
 				total += ArmyPower.effective(army)
 	return total
+
+
+func _army_uses_any_edge(army: Army, edges_to_check: Array[Edge]) -> bool:
+	for edge in edges_to_check:
+		if (
+			(army.move_from == edge.city_a and army.move_to == edge.city_b)
+			or (army.move_from == edge.city_b and army.move_to == edge.city_a)
+		):
+			return true
+	return false
 
 
 func _compute_connectivity() -> void:
@@ -726,10 +741,7 @@ func _compute_offensive_values(
 		var friendly_links := 0
 		var hostile_links := 0
 		var gateway_value := 0.0
-		for neighbor in _state.neighbors(city_id):
-			var edge := _state.edge_of(city_id, neighbor)
-			if edge == null or edge.max_manpower <= 0:
-				continue
+		for neighbor in _state.territorial_border_neighbors(city_id):
 			var neighbor_owner := _state.cities[neighbor].owner_nation
 			if neighbor_owner == nation_id:
 				friendly_links += 1

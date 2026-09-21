@@ -1,6 +1,6 @@
 extends SceneTree
-## 一次性等价校验：证明 _frontier_edges 矩阵化改写与「逐对全表扫描」旧逻辑
-## 对所有国家对返回完全相同的接壤边数。矩阵改写属纯性能优化，语义必须零偏差。
+## 等价校验：证明 _frontier_edges 矩阵与逐对领土边界参照实现
+## 对所有国家对返回完全相同的接壤数。
 ## 推进若干天制造真实的战争/结盟/占领态势后，逐对比对。
 
 func _init() -> void:
@@ -26,11 +26,14 @@ func _init() -> void:
 				continue
 			checked += 1
 			var new_val := DiplomacyAI._frontier_edges(state, a, b, new_cache)
-			var old_val := _old_frontier_edges(state, a, b)
-			if new_val != old_val:
+			var reference_val := _reference_frontier_edges(state, a, b)
+			if new_val != reference_val:
 				mismatches += 1
 				if mismatches <= 10:
-					print("不一致 pair(%d,%d): 新=%d 旧=%d" % [a, b, new_val, old_val])
+					print(
+						"不一致 pair(%d,%d): 矩阵=%d 参照=%d"
+						% [a, b, new_val, reference_val]
+					)
 
 	print("=== frontier_edges 等价校验 (40国/160城/推进%d天) ===" % state.day)
 	print("检查国家对=%d 不一致=%d" % [checked, mismatches])
@@ -39,14 +42,14 @@ func _init() -> void:
 	quit(0 if mismatches == 0 else 1)
 
 
-## 旧实现的逐对全表扫描逻辑（从改写前的 _frontier_edges 复制，作为对照基准）。
-func _old_frontier_edges(state: GameState, nation_a: int, nation_b: int) -> int:
+## 不经外交矩阵缓存的逐对参照实现。
+func _reference_frontier_edges(
+	state: GameState, nation_a: int, nation_b: int
+) -> int:
 	var count := 0
-	for edge in state.edges:
-		if edge.max_manpower <= 0:
-			continue
-		var owner_a := state.cities[edge.city_a].owner_nation
-		var owner_b := state.cities[edge.city_b].owner_nation
+	for contact in state.territorial_border_pairs():
+		var owner_a := state.cities[contact.x].owner_nation
+		var owner_b := state.cities[contact.y].owner_nation
 		if (
 			(
 				state.has_military_access(nation_a, owner_a)

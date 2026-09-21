@@ -84,6 +84,12 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-enclave-own-territory.log"
 echo
 
+echo "==> [2f1/29] 河流码头领土边界门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/territorial_border_topology.gd \
+  --log-file "$LOG_DIR/world-war-territorial-border.log"
+echo
+
 echo "==> [2g/29] 初始国家至少拥有一州门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/initial_nation_administrative_center.gd \
