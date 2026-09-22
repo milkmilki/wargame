@@ -63,36 +63,38 @@ func _init() -> void:
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
 		var plan := state.campaign_plan(attacker_id, center_id)
 		valid = valid and plan != null
-		var fixed_threat: int = plan.reinforcement_threat
-		valid = valid and fixed_threat > 0
+		valid = valid and state.campaign_reinforcement_threat(
+			attacker_id, center_id
+		) == 12000
 		valid = valid and plan.army_assignments.size() == 3
 		defender_army.size = 1000
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		valid = valid and plan.reinforcement_threat == fixed_threat
-		valid = valid and state.campaign_reinforcement_budget(
+		valid = valid and state.campaign_reinforcement_threat(
 			attacker_id, center_id
-		) == fixed_threat
-		state.road_network_revision += 1
-		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		valid = valid and plan.reinforcement_threat == 1250
+		) == 1000
 		defender_army.size = 4000
-		state.administrative_region_revision += 1
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		valid = valid and plan.reinforcement_threat == 5000
+		valid = valid and state.campaign_reinforcement_threat(
+			attacker_id, center_id
+		) == 4000
 		state.set_diplomatic_relation(
 			attacker_id,
 			defender_army.owner_nation,
 			GameState.DiplomaticRelation.NEUTRAL
 		)
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		valid = valid and plan.reinforcement_threat == 0
+		valid = valid and state.campaign_reinforcement_threat(
+			attacker_id, center_id
+		) == 0
 		state.set_diplomatic_relation(
 			attacker_id,
 			defender_army.owner_nation,
 			GameState.DiplomaticRelation.WAR
 		)
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
-		valid = valid and plan.reinforcement_threat == 5000
+		valid = valid and state.campaign_reinforcement_threat(
+			attacker_id, center_id
+		) == 4000
 		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER
 		valid = valid and plan.tactical_target_city_ids.size() <= 2
 		var failed_army_id := int(plan.army_assignments.keys()[0])
@@ -150,7 +152,6 @@ func _init() -> void:
 			)
 			valid = valid and replacement_plan != plan
 			valid = valid and replacement_plan.center_city_id == alternate_center
-			valid = valid and replacement_plan.reinforcement_threat >= 0
 	sim.free()
 	if valid:
 		print("GARRISON_CAMPAIGN_AI_OK center=%d attacker=%d" % [

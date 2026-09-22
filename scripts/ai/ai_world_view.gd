@@ -28,6 +28,7 @@ var army_power_by_nation: Dictionary = {}
 var friendly_stationed_power_by_city: Dictionary = {}
 var enemy_armies_by_city: Dictionary = {}
 var enemy_armies_by_edge: Dictionary = {}
+var _campaign_reinforcement_threat_cache: Dictionary = {}
 var _path_field_cache: Dictionary = {}
 var _supply_city_cache: Dictionary = {}
 var _supply_network_cache: Dictionary = {}
@@ -304,6 +305,14 @@ static func build(
 		owner_nation
 	)
 	return view
+
+
+func campaign_reinforcement_threat(center_city_id: int) -> int:
+	if not _campaign_reinforcement_threat_cache.has(center_city_id):
+		_campaign_reinforcement_threat_cache[center_city_id] = (
+			state.campaign_reinforcement_threat(nation_id, center_city_id)
+		)
+	return int(_campaign_reinforcement_threat_cache[center_city_id])
 
 
 static func _visible_city_ids(

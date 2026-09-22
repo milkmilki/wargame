@@ -50,6 +50,28 @@ func _init() -> void:
 		and int((enclave_draft["owners"] as Array)[3]) == 2
 	)
 
+	# A local crossing stages from the attacker's own bank even when the dock
+	# node belongs to the defender. Dock ownership must not make the political
+	# border directional.
+	state.cities[2].owner_nation = 1
+	state.ownership_revision += 1
+	var defender_dock_cache := {}
+	valid = valid and DiplomacyAI.staging_cities_for_objective(
+		state, 0, 1, defender_dock_cache
+	).has(0)
+	valid = valid and DiplomacyAI.can_initiate_war_at_range(
+		state, 0, 1, defender_dock_cache
+	)
+	state.cities[2].owner_nation = 0
+	state.ownership_revision += 1
+	var attacker_dock_cache := {}
+	valid = valid and DiplomacyAI.staging_cities_for_objective(
+		state, 1, 0, attacker_dock_cache
+	).has(1)
+	valid = valid and DiplomacyAI.can_initiate_war_at_range(
+		state, 1, 0, attacker_dock_cache
+	)
+
 	# Closing either bank connection removes the local crossing immediately.
 	state.edge_of(1, 2).max_manpower = 0
 	state.road_network_revision += 1

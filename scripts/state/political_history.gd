@@ -77,6 +77,10 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 	_view_state.war_objectives = (
 		(snapshot["war_objectives"] as Dictionary).duplicate(true)
 	)
+	_view_state.war_relation_ids = (
+		(snapshot["war_relation_ids"] as Dictionary).duplicate(true)
+	)
+	_view_state.next_war_id = int(snapshot["next_war_id"])
 	_view_state.suzerainty = (
 		(snapshot["suzerainty"] as Dictionary).duplicate(true)
 	)
@@ -167,6 +171,8 @@ func _capture(game_state: GameState) -> void:
 		"diplomatic_since_day": game_state.diplomatic_since_day.duplicate(true),
 		"truce_until_day": game_state.truce_until_day.duplicate(true),
 		"war_objectives": game_state.war_objectives.duplicate(true),
+		"war_relation_ids": game_state.war_relation_ids.duplicate(true),
+		"next_war_id": game_state.next_war_id,
 		"suzerainty": game_state.suzerainty.duplicate(true),
 		"suzerainty_low_cohesion_since_day": (
 			game_state.suzerainty_low_cohesion_since_day.duplicate(true)

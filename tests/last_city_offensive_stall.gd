@@ -118,7 +118,7 @@ func _administrative_snapshot(state: GameState) -> Dictionary:
 		"C": state.campaign_committed_manpower(DOMINANT_ID, center_id),
 		"R": state.campaign_siege_requirement(DOMINANT_ID, center_id),
 		"V": state.campaign_reinforcement_threat(
-			DOMINANT_ID, center_id, 60
+			DOMINANT_ID, center_id
 		),
 		"garrison": state.cities[center_id].garrison_manpower if center_id >= 0 else -1,
 		"defender_armies": defender_armies,

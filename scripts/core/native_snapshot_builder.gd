@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 12
+const SCHEMA_VERSION: int = 13
 
 
 static func build(state: GameState) -> Dictionary:
@@ -23,6 +23,7 @@ static func build(state: GameState) -> Dictionary:
 		"rng_state": state.rng.state,
 		"next_army_id": state._next_army_id,
 		"next_battle_id": state._next_battle_id,
+		"next_war_id": state.next_war_id,
 		"winner": state.winner,
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,
@@ -66,6 +67,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var campaign_offsets := PackedInt32Array([0])
 	var campaign_centers := PackedInt32Array()
 	var campaign_modes := PackedInt32Array()
+	var campaign_war_ids := PackedInt32Array()
 	var campaign_opponents := PackedInt32Array()
 	var campaign_phases := PackedInt32Array()
 	var campaign_failed_until_day := PackedInt32Array()
@@ -141,6 +143,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 				continue
 			campaign_centers.append(center_id)
 			campaign_modes.append(plan.mode)
+			campaign_war_ids.append(plan.war_id)
 			campaign_opponents.append(plan.opponent_nation_id)
 			campaign_phases.append(plan.phase)
 			campaign_failed_until_day.append(plan.failed_until_day)
@@ -168,6 +171,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var truce_until_day := PackedInt32Array()
 	var war_objective_city := PackedInt32Array()
 	var war_objective_started_day := PackedInt32Array()
+	var war_relation_id := PackedInt32Array()
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(state.nations.size()):
 			diplomacy.append(
@@ -179,6 +183,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 			truce_until_day.append(
 				state.truce_until(nation_a, nation_b)
 			)
+			war_relation_id.append(state.war_id_between(nation_a, nation_b))
 			var objective := state.war_objective(
 				nation_a,
 				nation_b
@@ -231,6 +236,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"campaign_offsets": campaign_offsets,
 		"campaign_centers": campaign_centers,
 		"campaign_modes": campaign_modes,
+		"campaign_war_ids": campaign_war_ids,
 		"campaign_opponents": campaign_opponents,
 		"campaign_phases": campaign_phases,
 		"campaign_failed_until_day": campaign_failed_until_day,
@@ -246,6 +252,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"war_objective_city": war_objective_city,
 		"war_objective_started_day":
 			war_objective_started_day,
+		"war_relation_id": war_relation_id,
 	}
 
 
@@ -372,6 +379,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 	var move_from := PackedInt32Array()
 	var move_to := PackedInt32Array()
 	var battle_id := PackedInt32Array()
+	var campaign_war_id := PackedInt32Array()
 	var path_offsets := PackedInt32Array([0])
 	var path_cities := PackedInt32Array()
 	var path_cursor := PackedInt32Array()
@@ -415,6 +423,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 		move_from.append(army.move_from)
 		move_to.append(army.move_to)
 		battle_id.append(army.battle_id)
+		campaign_war_id.append(army.campaign_war_id)
 		path_cities.append_array(PackedInt32Array(army.path))
 		path_offsets.append(path_cities.size())
 		path_cursor.append(0)
@@ -470,6 +479,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"move_from": move_from,
 			"move_to": move_to,
 			"battle_id": battle_id,
+			"campaign_war_id": campaign_war_id,
 			"path_offsets": path_offsets,
 			"path_cities": path_cities,
 			"path_cursor": path_cursor,

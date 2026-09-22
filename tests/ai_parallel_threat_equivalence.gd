@@ -112,6 +112,7 @@ func _world_fingerprint(state: GameState) -> String:
 			army.path, int(round(army.morale * 1000000.0)),
 			int(round(army.supply_ratio * 1000000.0)), army.starving,
 			army.battle_group_id, army.ai_action, army.ai_target_city,
+			army.campaign_war_id,
 			army.ai_order_created_day, army.ai_order_until_day,
 		])
 	return str([state.day, state.winner, cities, nations, armies])

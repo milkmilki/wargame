@@ -291,6 +291,7 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	var army := Army.new()
 	army.id = int(data.get("id", 0))
 	army.owner_nation = int(data.get("owner_nation", -1))
+	army.campaign_war_id = int(data.get("campaign_war_id", -1))
 	army.size = int(data.get("size", 0))
 	army.max_size = int(data.get("max_size", Army.DEFAULT_MAX_SIZE))
 	army.max_morale = float(data.get(
@@ -320,6 +321,7 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 		result.append({
 			"id": army.id,
 			"owner_nation": army.owner_nation,
+			"campaign_war_id": army.campaign_war_id,
 			"size": army.size,
 			"max_size": army.max_size,
 			"max_morale": army.max_morale,

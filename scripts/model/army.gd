@@ -30,6 +30,8 @@ var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
 ## 所属持久指挥单位；-1 表示未编组。每个指挥单位只允许一支主战军。
 var battle_group_id: int = -1
+## 所属战争军队池；-1 表示国家预备队。州目标变化不清除此绑定。
+var campaign_war_id: int = -1
 
 var location_city: int = -1                ## 静止时所在城市；行军时为出发城
 var state: int = State.IDLE

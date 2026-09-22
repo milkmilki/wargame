@@ -169,6 +169,7 @@ func random_ruler_profiles_enabled() -> bool:
 	return _random_ruler_profiles_enabled
 var _next_army_id: int = 0
 var _next_battle_id: int = 0
+var next_war_id: int = 0
 var ownership_revision: int = 0             ## 城市易主版本号，供战略地图缓存失效
 var diplomacy_revision: int = 0             ## 外交关系版本号，供 AI 战略缓存失效
 var garrison_revision: int = 0              ## 州治守军变化版本号，供战役缓存失效
@@ -178,6 +179,8 @@ var diplomatic_relations: Dictionary = {}
 var diplomatic_since_day: Dictionary = {}
 var truce_until_day: Dictionary = {}
 var diplomatic_history: Array[Dictionary] = []
+## 规范化交战国家对 -> 稳定战争 ID。外交目标只是开战目标，不承担战争身份。
+var war_relation_ids: Dictionary = {}
 ## 规范化国家对 key -> {attacker, defender, city_id, reason, started_day, scope}。
 var war_objectives: Dictionary = {}
 ## 宗藩关系有向真源（SSoT）：subject_id -> {
@@ -219,7 +222,6 @@ var administrative_region_count: int = 0
 var administrative_region_colors: PackedColorArray = PackedColorArray()
 var administrative_region_revision: int = 0
 var _garrisons_initialized: bool = false
-var _campaign_travel_days_cache: Dictionary = {}
 ## Political borders are land-city contacts, not arbitrary transport edges.
 ## A river dock creates one local crossing between its banks; river/sea links
 ## between docks remain transport-only and never extend this topology.
@@ -712,6 +714,7 @@ func _reset_world(world_seed: int) -> void:
 	month = 0
 	winner = -1
 	_next_army_id = 0
+	next_war_id = 0
 	ownership_revision = 0
 	diplomacy_revision = 0
 	garrison_revision = 0
@@ -720,6 +723,7 @@ func _reset_world(world_seed: int) -> void:
 	diplomatic_since_day.clear()
 	truce_until_day.clear()
 	diplomatic_history.clear()
+	war_relation_ids.clear()
 	war_objectives.clear()
 	suzerainty.clear()
 	suzerainty_low_cohesion_since_day.clear()
@@ -744,7 +748,6 @@ func _reset_world(world_seed: int) -> void:
 	administrative_region_colors = PackedColorArray()
 	administrative_region_revision = 0
 	_garrisons_initialized = false
-	_campaign_travel_days_cache.clear()
 	_territorial_border_cache_revision.clear()
 	_territorial_border_pairs.clear()
 	_territorial_border_adjacency.clear()
@@ -801,6 +804,9 @@ func _generate_nations(
 			var key := _diplomacy_key(nation_a, nation_b)
 			diplomatic_relations[key] = initial_relation
 			diplomatic_since_day[key] = day
+			if initial_relation == DiplomaticRelation.WAR:
+				war_relation_ids[key] = next_war_id
+				next_war_id += 1
 
 
 func _generate_grid_cities() -> void:
@@ -2156,92 +2162,36 @@ func campaign_siege_requirement(
 	)
 
 
+## Dynamic V for a state campaign. Only effective real enemy field armies
+## physically in the state or on an edge touching it are counted. The virtual
+## center garrison belongs to R and is deliberately excluded here.
 func campaign_reinforcement_threat(
 	attacker_id: int,
-	center_city_id: int,
-	horizon_days: int = 60
+	center_city_id: int
 ) -> int:
 	if not is_zhou_city(center_city_id):
 		return 0
-	var defender_id := cities[center_city_id].owner_nation
-	if defender_id < 0 or defender_id >= nations.size():
-		return 0
-	var defender_bloc := alliance_bloc(defender_id)
-	if defender_bloc.is_empty():
-		defender_bloc.append(defender_id)
-	var reachable_manpower := 0
-	var travel_days := _campaign_travel_days_field(
-		center_city_id, float(maxi(horizon_days, 0))
-	)
+	var regional_manpower := 0
 	for army in armies:
 		if (
-			army == null
-			or army.size <= 0
-			or not army.is_main_battle_role()
-			or army.state in [Army.State.RETREATING, Army.State.RECOVERING]
-			or army.starving
-			or not defender_bloc.has(army.owner_nation)
+			not army_effective_for_field_campaign(army)
+			or army.is_city_garrison
 			or not is_enemy(attacker_id, army.owner_nation)
 		):
 			continue
-		if _army_arrival_days(army, travel_days) <= float(horizon_days):
-			reachable_manpower += army.size
-	return ceili(float(reachable_manpower) * 1.25)
-
-
-func campaign_reinforcement_context_signature(
-	attacker_id: int,
-	center_city_id: int
-) -> String:
-	if (
-		attacker_id < 0
-		or attacker_id >= nations.size()
-		or center_city_id < 0
-		or center_city_id >= cities.size()
-	):
-		return ""
-	var attacker_bloc := alliance_bloc(attacker_id)
-	if attacker_bloc.is_empty():
-		attacker_bloc.append(attacker_id)
-	var defender_id := cities[center_city_id].owner_nation
-	var defender_bloc: Array[int] = []
-	if defender_id >= 0 and defender_id < nations.size():
-		defender_bloc = alliance_bloc(defender_id)
-		if defender_bloc.is_empty():
-			defender_bloc.append(defender_id)
-	var attackers: Array[String] = []
-	for member_id in attacker_bloc:
-		attackers.append(str(member_id))
-	var defenders: Array[String] = []
-	for member_id in defender_bloc:
-		if is_enemy(attacker_id, member_id):
-			defenders.append(str(member_id))
-	return "%s>%d:%s" % [
-		",".join(attackers), defender_id, ",".join(defenders),
-	]
-
-
-func campaign_reinforcement_budget(
-	attacker_id: int,
-	center_city_id: int
-) -> int:
-	if attacker_id >= 0 and attacker_id < nations.size():
-		var plan := campaign_plan(attacker_id, center_city_id)
-		if (
-			plan != null
-			and plan.center_city_id == center_city_id
-			and plan.reinforcement_threat >= 0
-			and plan.reinforcement_context_signature
-				== campaign_reinforcement_context_signature(
-					attacker_id, center_city_id
-				)
-			and plan.reinforcement_administrative_region_revision
-				== administrative_region_revision
-			and plan.reinforcement_road_network_revision
-				== road_network_revision
-		):
-			return plan.reinforcement_threat
-	return campaign_reinforcement_threat(attacker_id, center_city_id, 60)
+		var in_region := false
+		if army.on_edge:
+			in_region = (
+				administrative_center_of(army.move_from) == center_city_id
+				or administrative_center_of(army.move_to) == center_city_id
+			)
+		elif army.location_city >= 0:
+			in_region = (
+				administrative_center_of(army.location_city) == center_city_id
+			)
+		if in_region:
+			regional_manpower += army.size
+	return regional_manpower
 
 
 func campaign_plan(
@@ -2272,6 +2222,50 @@ func campaign_assignment_center(army_id: int) -> int:
 	return -1
 
 
+func campaign_assignment_war(army_id: int) -> int:
+	for army in armies:
+		if army.id == army_id:
+			return army.campaign_war_id
+	return -1
+
+
+func campaign_enemy_ids(nation_id: int, war_id: int) -> Array[int]:
+	var flags := {}
+	for other in nations:
+		if other.id == nation_id or not other.alive:
+			continue
+		if (
+			war_id_between(nation_id, other.id) == war_id
+			and is_enemy(nation_id, other.id)
+		):
+			flags[other.id] = true
+	var result: Array[int] = []
+	for enemy_value in flags:
+		result.append(int(enemy_value))
+	result.sort()
+	return result
+
+
+func offensive_campaign_for_war(
+	nation_id: int,
+	war_id: int
+) -> AdministrativeCampaignPlan:
+	if nation_id < 0 or nation_id >= nations.size():
+		return null
+	var center_values := nations[nation_id].administrative_campaign_plans.keys()
+	center_values.sort()
+	for center_value in center_values:
+		var plan := nations[nation_id].administrative_campaign_plans[center_value] \
+			as AdministrativeCampaignPlan
+		if (
+			plan != null
+			and plan.mode == AdministrativeCampaignPlan.Mode.OFFENSE
+			and plan.war_id == war_id
+		):
+			return plan
+	return null
+
+
 func army_effective_for_field_campaign(army: Army) -> bool:
 	return (
 		army != null
@@ -2290,12 +2284,15 @@ func campaign_committed_manpower(
 	var attacker_bloc := alliance_bloc(attacker_id)
 	if attacker_bloc.is_empty() and attacker_id >= 0:
 		attacker_bloc.append(attacker_id)
+	var attacker_plan := campaign_plan(attacker_id, center_city_id)
+	var war_id := attacker_plan.war_id if attacker_plan != null else -1
 	var result := 0
 	for army in armies:
 		if (
 			army == null
 			or not attacker_bloc.has(army.owner_nation)
 			or not army_effective_for_field_campaign(army)
+			or (war_id >= 0 and army.campaign_war_id != war_id)
 			or not army_committed_to_administrative_campaign(
 				army, center_city_id
 			)
@@ -2559,61 +2556,6 @@ func _reconcile_garrisons_after_administrative_rebuild(
 		changed = changed or cities[new_center].garrison_manpower != before
 	if changed:
 		garrison_revision += 1
-
-
-func _army_arrival_days(army: Army, travel_days: Dictionary) -> float:
-	if army == null:
-		return INF
-	if army.on_edge and army.move_to >= 0:
-		var edge := edge_of(army.move_from, army.move_to)
-		if edge == null:
-			return INF
-		var edge_days := Simulation.edge_travel_days(edge, army.max_size)
-		return minf(
-			clampf(army.move_progress, 0.0, 1.0) * edge_days
-				+ float(travel_days.get(army.move_from, INF)),
-			(1.0 - clampf(army.move_progress, 0.0, 1.0)) * edge_days
-				+ float(travel_days.get(army.move_to, INF))
-		)
-	return float(travel_days.get(army.location_city, INF))
-
-
-func _campaign_travel_days_field(
-	target_city_id: int,
-	horizon_days: float
-) -> Dictionary:
-	var key := "%d:%d:%d" % [
-		target_city_id, int(round(horizon_days * 1000.0)), road_network_revision,
-	]
-	if _campaign_travel_days_cache.has(key):
-		return _campaign_travel_days_cache[key]
-	var dist := {target_city_id: 0.0}
-	var visited := {}
-	while true:
-		var current := -1
-		var current_dist := INF
-		for city_value in dist.keys():
-			var city_id := int(city_value)
-			var candidate := float(dist[city_id])
-			if not visited.has(city_id) and candidate < current_dist:
-				current = city_id
-				current_dist = candidate
-		if current < 0 or current_dist > horizon_days:
-			break
-		visited[current] = true
-		for neighbor in neighbors(current):
-			var edge := edge_of(current, neighbor)
-			if edge == null or edge.max_manpower <= 0:
-				continue
-			var next_dist := current_dist + Simulation.edge_travel_days(
-				edge, 0
-			)
-			if next_dist < float(dist.get(neighbor, INF)):
-				dist[neighbor] = next_dist
-	if _campaign_travel_days_cache.size() > 512:
-		_campaign_travel_days_cache.clear()
-	_campaign_travel_days_cache[key] = dist
-	return dist
 
 
 func city_administrative_output_enabled(city_id: int) -> bool:
@@ -3805,23 +3747,102 @@ func set_war_objective(
 	attacker: int,
 	defender: int,
 	city_id: int,
-	reason: String
-) -> void:
+	reason: String,
+	war_id: int = -1
+) -> int:
 	var center_id := administrative_center_of(city_id)
 	if center_id >= 0:
 		city_id = center_id
-	war_objectives[_diplomacy_key(attacker, defender)] = {
+	var key := _diplomacy_key(attacker, defender)
+	if war_id < 0:
+		war_id = int((war_objectives.get(key, {}) as Dictionary).get(
+			"war_id", -1
+		))
+	if war_id < 0:
+		war_id = int(war_relation_ids.get(key, -1))
+	if war_id < 0:
+		war_id = next_war_id
+		next_war_id += 1
+	else:
+		next_war_id = maxi(next_war_id, war_id + 1)
+	war_relation_ids[key] = war_id
+	war_objectives[key] = {
 		"attacker": attacker,
 		"defender": defender,
+		"war_id": war_id,
 		"city_id": city_id,
 		"administrative_center_city_id": city_id,
 		"reason": reason,
 		"started_day": day,
 	}
+	return war_id
 
 
 func clear_war_objective(nation_a: int, nation_b: int) -> void:
 	war_objectives.erase(_diplomacy_key(nation_a, nation_b))
+
+
+func war_id_between(nation_a: int, nation_b: int) -> int:
+	return int(war_relation_ids.get(_diplomacy_key(nation_a, nation_b), -1))
+
+
+func merge_war_ids(keep_war_id: int, merged_war_id: int) -> void:
+	if keep_war_id < 0 or merged_war_id < 0 or keep_war_id == merged_war_id:
+		return
+	for objective_key in war_objectives:
+		var objective: Dictionary = war_objectives[objective_key]
+		if int(objective.get("war_id", -1)) == merged_war_id:
+			objective["war_id"] = keep_war_id
+			war_objectives[objective_key] = objective
+	for relation_key in war_relation_ids:
+		if int(war_relation_ids[relation_key]) == merged_war_id:
+			war_relation_ids[relation_key] = keep_war_id
+	for army in armies:
+		if army.campaign_war_id == merged_war_id:
+			army.campaign_war_id = keep_war_id
+	for nation in nations:
+		for plan_value in nation.administrative_campaign_plans.values():
+			var plan := plan_value as AdministrativeCampaignPlan
+			if plan != null and plan.war_id == merged_war_id:
+				plan.war_id = keep_war_id
+
+
+func release_war_pool(war_id: int) -> void:
+	if war_id < 0:
+		return
+	for nation in nations:
+		release_nation_war_pool(nation.id, war_id)
+
+
+func release_nation_war_pool(nation_id: int, war_id: int) -> void:
+	if nation_id < 0 or nation_id >= nations.size() or war_id < 0:
+		return
+	for army in armies:
+		if army.owner_nation == nation_id and army.campaign_war_id == war_id:
+			army.campaign_war_id = -1
+			if army.state not in [Army.State.FIGHTING, Army.State.RETREATING]:
+				army.path.clear()
+				army.ai_target_city = -1
+				army.ai_order_until_day = day
+	var nation := nations[nation_id]
+	for center_value in nation.administrative_campaign_plans.keys().duplicate():
+		var plan := nation.administrative_campaign_plans[center_value] \
+			as AdministrativeCampaignPlan
+		if plan != null and plan.war_id == war_id:
+			nation.administrative_campaign_plans.erase(center_value)
+
+
+func nation_participates_in_war_id(nation_id: int, war_id: int) -> bool:
+	if nation_id < 0 or nation_id >= nations.size() or war_id < 0:
+		return false
+	for other in nations:
+		if (
+			other.id != nation_id
+			and war_id_between(nation_id, other.id) == war_id
+			and is_enemy(nation_id, other.id)
+		):
+			return true
+	return false
 
 
 func can_declare_war(nation_a: int, nation_b: int) -> bool:
@@ -3915,11 +3936,22 @@ func set_diplomatic_relation(
 		return false
 	diplomatic_relations[key] = relation
 	diplomatic_since_day[key] = day
+	if relation == DiplomaticRelation.WAR and previous != DiplomaticRelation.WAR:
+		if not war_relation_ids.has(key):
+			war_relation_ids[key] = next_war_id
+			next_war_id += 1
 	if previous == DiplomaticRelation.WAR and relation != DiplomaticRelation.WAR:
+		var finished_war_id := int(war_relation_ids.get(key, -1))
+		war_relation_ids.erase(key)
 		truce_until_day[key] = maxi(
 			int(truce_until_day.get(key, 0)),
 			day + maxi(truce_days, 0)
 		)
+		for participant in [nation_a, nation_b]:
+			if not nation_participates_in_war_id(participant, finished_war_id):
+				release_nation_war_pool(participant, finished_war_id)
+		if finished_war_id >= 0 and not war_relation_ids.values().has(finished_war_id):
+			release_war_pool(finished_war_id)
 	diplomacy_revision += 1
 	return true
 

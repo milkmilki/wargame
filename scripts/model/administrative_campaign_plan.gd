@@ -18,16 +18,13 @@ enum Phase {
 }
 
 var center_city_id: int = -1
+var war_id: int = -1
 var mode: int = Mode.OFFENSE
 var opponent_nation_id: int = -1
 var phase: int = Phase.CAPTURE_FU
 var tactical_target_city_ids: Array[int] = []
 var army_assignments: Dictionary = {} # army_id -> tactical city_id
 var failed_until_day: int = -1
-var reinforcement_threat: int = -1
-var reinforcement_context_signature: String = ""
-var reinforcement_administrative_region_revision: int = -1
-var reinforcement_road_network_revision: int = -1
 var ownership_revision: int = -1
 var administrative_region_revision: int = -1
 var garrison_revision: int = -1

@@ -26,6 +26,9 @@ func _init() -> void:
 		var center := state.cities[center_id]
 		var defender := center.owner_nation
 		var attacker := (defender + 1) % state.nations.size()
+		state.set_diplomatic_relation(
+			attacker, defender, GameState.DiplomaticRelation.WAR
+		)
 		var members := state.administrative_members(center_id)
 		var fu_ids: Array[int] = []
 		for member_id in members:
@@ -56,20 +59,70 @@ func _init() -> void:
 		var relief := Army.new()
 		relief.id = 9901
 		relief.owner_nation = defender
-		relief.size = 1000
+		relief.size = 12000
 		relief.max_size = 15000
 		relief.location_city = center_id
 		relief.move_from = center_id
 		relief.state = Army.State.IDLE
 		state.armies.append(relief)
 		valid = valid and state.campaign_reinforcement_threat(
-			attacker, center_id, 60
-		) == 1250
+			attacker, center_id
+		) == 12000
 		relief.state = Army.State.RECOVERING
 		valid = valid and state.campaign_reinforcement_threat(
-			attacker, center_id, 60
+			attacker, center_id
 		) == 0
 		relief.state = Army.State.IDLE
+		var outside_city := -1
+		for city in state.cities:
+			if (
+				not city.is_dock
+				and state.administrative_center_of(city.id) != center_id
+			):
+				outside_city = city.id
+				break
+		valid = valid and outside_city >= 0
+		if outside_city >= 0:
+			relief.location_city = outside_city
+			relief.move_from = outside_city
+			relief.move_to = -1
+			relief.on_edge = false
+			valid = valid and state.campaign_reinforcement_threat(
+				attacker, center_id
+			) == 0
+			relief.move_to = fu_ids[0]
+			relief.move_progress = 0.25
+			relief.on_edge = true
+			valid = valid and state.campaign_reinforcement_threat(
+				attacker, center_id
+			) == 12000
+			relief.move_from = center_id
+			relief.move_to = fu_ids[0]
+			valid = valid and state.campaign_reinforcement_threat(
+				attacker, center_id
+			) == 12000
+			relief.state = Army.State.RETREATING
+			valid = valid and state.campaign_reinforcement_threat(
+				attacker, center_id
+			) == 0
+			relief.state = Army.State.IDLE
+		var neutral_id := (defender + 2) % state.nations.size()
+		if neutral_id not in [attacker, defender]:
+			state.set_diplomatic_relation(
+				attacker, neutral_id, GameState.DiplomaticRelation.NEUTRAL
+			)
+			var neutral := Army.new()
+			neutral.id = 9902
+			neutral.owner_nation = neutral_id
+			neutral.size = 15000
+			neutral.max_size = 15000
+			neutral.location_city = center_id
+			neutral.move_from = center_id
+			neutral.state = Army.State.IDLE
+			state.armies.append(neutral)
+			valid = valid and state.campaign_reinforcement_threat(
+				attacker, center_id
+			) == 12000
 	if center_id >= 0:
 		var monthly_center := state.cities[center_id]
 		var monthly_owner := state.nations[monthly_center.owner_nation]

@@ -3986,7 +3986,9 @@ static func administrative_tactical_target(
 		return -1
 	var required := (
 		state.campaign_siege_requirement(nation_id, center_city_id)
-		+ state.campaign_reinforcement_budget(nation_id, center_city_id)
+		+ _cached_campaign_reinforcement_threat(
+			state, nation_id, center_city_id, evaluation_cache
+		)
 	)
 	var committed := state.campaign_committed_manpower(
 		nation_id, center_city_id
@@ -4890,7 +4892,9 @@ static func _collect_existing_war_preparation(
 			state, nation_id, objective_city, evaluation_cache
 		)
 			>= int(ceil(
-				float(required_assault_troops(state, nation_id, objective_city))
+				float(required_assault_troops(
+					state, nation_id, objective_city, evaluation_cache
+				))
 				* WAR_PREPARATION_BEST_EFFORT_RATIO
 			))
 	)
@@ -5094,6 +5098,26 @@ static func staging_cities_for_objective(
 			)
 		):
 			result.append(neighbor)
+	# A local dock crossing is a political border between its two land banks.
+	# Stage on the accessible bank instead of requiring access to the dock node,
+	# whose owner is chosen from either side. Territorial neighbors never walk a
+	# RIVER/SEA chain, so this does not turn downstream docks into land borders.
+	for neighbor in state.territorial_border_neighbors(objective_city):
+		var support_edges := state.territorial_border_support_edges(
+			neighbor, objective_city
+		)
+		if (
+			support_edges.size() == 2
+			and support_edges[0].kind == Edge.Kind.LANDING
+			and support_edges[1].kind == Edge.Kind.LANDING
+			and support_edges[0].max_manpower > 0
+			and support_edges[1].max_manpower > 0
+			and not result.has(neighbor)
+			and state.has_military_access(
+				nation_id, state.cities[neighbor].owner_nation
+			)
+		):
+			result.append(neighbor)
 	EquivariantOrder.sort_city_subset(
 		result,
 		state,
@@ -5238,12 +5262,14 @@ static func staged_troops_for_objective(
 static func required_assault_troops(
 	state: GameState,
 	nation_id: int,
-	objective_city: int
+	objective_city: int,
+	evaluation_cache: Dictionary = {}
 ) -> int:
 	var objective_requirement := objective_assault_troops(
 		state,
 		nation_id,
-		objective_city
+		objective_city,
+		evaluation_cache
 	)
 	if objective_requirement <= 0:
 		return objective_requirement
@@ -5253,7 +5279,8 @@ static func required_assault_troops(
 static func objective_assault_troops(
 	state: GameState,
 	nation_id: int,
-	objective_city: int
+	objective_city: int,
+	evaluation_cache: Dictionary = {}
 ) -> int:
 	if objective_city < 0 or objective_city >= state.cities.size():
 		return 0
@@ -5262,8 +5289,24 @@ static func objective_assault_troops(
 		return 0
 	return (
 		state.campaign_siege_requirement(nation_id, center_id)
-		+ state.campaign_reinforcement_budget(nation_id, center_id)
+		+ _cached_campaign_reinforcement_threat(
+			state, nation_id, center_id, evaluation_cache
+		)
 	)
+
+
+static func _cached_campaign_reinforcement_threat(
+	state: GameState,
+	attacker_id: int,
+	center_city_id: int,
+	evaluation_cache: Dictionary
+) -> int:
+	var cache_key := "campaign_v:%d:%d" % [attacker_id, center_city_id]
+	if not evaluation_cache.has(cache_key):
+		evaluation_cache[cache_key] = state.campaign_reinforcement_threat(
+			attacker_id, center_city_id
+		)
+	return int(evaluation_cache[cache_key])
 
 
 static func _national_power(

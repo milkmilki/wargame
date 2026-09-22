@@ -115,6 +115,11 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/multi_campaign_defense_ai.gd \
   --log-file "$LOG_DIR/world-war-multi-campaign-defense.log"
 echo
+echo "==> [2i3/29] 战争军队池与连续州战役门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/war_campaign_pool.gd \
+  --log-file "$LOG_DIR/world-war-campaign-pool.log"
+echo
 echo "==> [2j/29] 州治守军战损比门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/garrison_combat_ratio.gd \

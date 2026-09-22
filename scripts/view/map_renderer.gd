@@ -5847,8 +5847,14 @@ static func nation_action_summary(
 			]
 		)
 	elif not nation.administrative_campaign_plans.is_empty():
+		var war_ids := {}
+		for plan_value in nation.administrative_campaign_plans.values():
+			var plan := plan_value as AdministrativeCampaignPlan
+			if plan != null and plan.war_id >= 0:
+				war_ids[plan.war_id] = true
 		actions.append(
-			"%d个州级战役，当前重点%s" % [
+			"%d场战争、%d个州级战役，当前重点%s" % [
+				war_ids.size(),
 				nation.administrative_campaign_plans.size(),
 				WorldNaming.city_display_name(
 					game_state,
@@ -6884,11 +6890,19 @@ static func city_detail_sections(
 		var requirement := game_state.campaign_siege_requirement(
 			attacker_id, administrative_center
 		)
-		var threat := game_state.campaign_reinforcement_budget(
+		var threat := game_state.campaign_reinforcement_threat(
 			attacker_id, administrative_center
 		)
 		var committed := game_state.campaign_committed_manpower(
 			attacker_id, administrative_center
+		)
+		var active_plan := game_state.campaign_plan(
+			attacker_id, administrative_center
+		)
+		var war_text := (
+			"战争%d" % (active_plan.war_id + 1)
+			if active_plan != null and active_plan.war_id >= 0
+			else "未绑定战争"
 		)
 		var arrived := 0
 		for army in battle.side_a:
@@ -6909,14 +6923,14 @@ static func city_detail_sections(
 			)
 		)
 		campaign_lines = [
-			"当前行动：%s" % siege_stage,
+			"当前行动：%s · %s" % [siege_stage, war_text],
 			"进攻方已控制属府：%.0f%% · 守军当前防御效率：%.0f%%" % [
 				share * 100.0, defense_bonus * 100.0,
 			],
 			"城下可战兵力：%d · 本州已调兵力：%d" % [
 				arrived, committed,
 			],
-			"攻城最低兵力：%d · 进军前预计敌援：%d" % [
+			"攻城最低兵力：%d · 州内有效敌军：%d" % [
 				requirement, threat,
 			],
 		]
@@ -6948,7 +6962,7 @@ static func city_detail_sections(
 				if defensive
 				else game_state.campaign_siege_requirement(
 					nation.id, administrative_center
-				) + game_state.campaign_reinforcement_budget(
+				) + game_state.campaign_reinforcement_threat(
 					nation.id, administrative_center
 				)
 			)
@@ -7281,13 +7295,33 @@ static func nation_detail_sections(
 			) + (
 				0
 				if active_offensive_siege != null
-				else game_state.campaign_reinforcement_budget(
+				else game_state.campaign_reinforcement_threat(
 					nation_id, campaign.center_city_id
 				)
 			)
 		)
 		var action_text := campaign_phase_text(campaign.mode, campaign.phase)
-		var force_text := "本州已调兵力：%d" % committed
+		var war_label := (
+			"战争%d" % (campaign.war_id + 1)
+			if campaign.war_id >= 0
+			else "临时战役"
+		)
+		var war_pool_total := 0
+		var war_pool_effective := 0
+		for army in game_state.armies:
+			if (
+				army.owner_nation != nation_id
+				or army.campaign_war_id != campaign.war_id
+				or army.size <= 0
+			):
+				continue
+			war_pool_total += army.size
+			if game_state.army_effective_for_field_campaign(army):
+				war_pool_effective += army.size
+		var force_text := (
+			"%s兵力：%d（可战%d） · 本州已调：%d"
+			% [war_label, war_pool_total, war_pool_effective, committed]
+		)
 		if active_offensive_siege != null:
 			var arrived := 0
 			for army in active_offensive_siege.side_a:
@@ -7307,8 +7341,8 @@ static func nation_detail_sections(
 					else "进攻·攻击州治守军"
 				)
 			)
-			force_text = "城下可战兵力：%d · 攻城最低兵力：%d · 本州已调：%d" % [
-				arrived, requirement, committed,
+			force_text = "%s · 城下可战：%d · 攻城最低：%d · 本州已调：%d" % [
+				war_label, arrived, requirement, committed,
 			]
 		else:
 			force_text += (

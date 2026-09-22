@@ -13174,6 +13174,7 @@ func _coalition_peace_fingerprint(
 ) -> Dictionary:
 	var result := _territory_fingerprint(gs)
 	result["war_objectives"] = gs.war_objectives.duplicate(true)
+	result["war_relation_ids"] = gs.war_relation_ids.duplicate(true)
 	result["rebellions"] = gs.rebellions.duplicate(true)
 	result["diplomatic_history"] = gs.diplomatic_history.duplicate(true)
 	result["war_gold_snapshot_diplomacy_revision"] = (
@@ -13219,6 +13220,7 @@ func _coalition_peace_fingerprint(
 			"ai_target_city": army.ai_target_city,
 			"ai_order_until_day": army.ai_order_until_day,
 			"ai_order_reason": army.ai_order_reason,
+			"campaign_war_id": army.campaign_war_id,
 		})
 	result["army_runtime"] = army_runtime_rows
 	var battle_rows: Array[Dictionary] = []
@@ -13306,6 +13308,7 @@ func _territory_fingerprint(gs: GameState) -> Dictionary:
 			"owner": army.owner_nation,
 			"size": army.size,
 			"battle_group_id": army.battle_group_id,
+			"campaign_war_id": army.campaign_war_id,
 			"occupation_claimant": army.occupation_claimant_nation,
 			"state": army.state,
 			"battle_id": army.battle_id,
@@ -13318,6 +13321,8 @@ func _territory_fingerprint(gs: GameState) -> Dictionary:
 		"diplomatic_relations": gs.diplomatic_relations.duplicate(true),
 		"diplomatic_since_day": gs.diplomatic_since_day.duplicate(true),
 		"truce_until_day": gs.truce_until_day.duplicate(true),
+		"war_relation_ids": gs.war_relation_ids.duplicate(true),
+		"next_war_id": gs.next_war_id,
 		"ownership_revision": gs.ownership_revision,
 		"diplomacy_revision": gs.diplomacy_revision,
 	}
