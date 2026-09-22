@@ -5631,6 +5631,9 @@ func _prepare_diplomacy_mobilization_cache(
 		return
 	evaluation_cache.clear()
 	evaluation_cache["__diplomacy_mobilization_cache_ready"] = true
+	# 宣战后按当前战争关系重做结算，但复用 Simulation 已维护的结构缓存。
+	# 否则第一个动员国会退回静态 monthly_gold_flows，重建整张贸易网。
+	_seed_trade_forecast(evaluation_cache)
 	diplomacy_mobilization_evaluation_cache_total += 1
 
 
@@ -7357,14 +7360,14 @@ func _try_recruit_force_structure(
 
 func _build_force_structure_assessment(
 	view: AiWorldView,
-	_resource_evaluation_cache: Dictionary,
+	resource_evaluation_cache: Dictionary,
 	decision_context: Dictionary
 ) -> ForceStructureAssessment:
 	var assessment := ForceStructureAssessment.new()
 	var nation := state.nations[view.nation_id]
-	# 军制评估半年才运行一次，必须读取当日资源状态。外交分帧缓存可能
-	# 来自更早的日期，不能让旧粮产/库存决定本轮一次性扩军容量。
-	var force_resource_cache := {}
+	# 该缓存由当日军制阶段创建，且 decision_context 刚用它生成了
+	# 本国粮食与财政报告。容量评估继续复用，避免重建整张贸易与财政流。
+	var force_resource_cache := resource_evaluation_cache
 	for army in view.friendly_armies:
 		if army.is_main_battle_role():
 			assessment.main_armies += 1

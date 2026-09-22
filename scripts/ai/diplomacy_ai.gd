@@ -2963,14 +2963,20 @@ static func force_capacity_report(
 	var formation_base_upkeep := GameState.army_monthly_upkeep(
 		formation_size
 	)
+	# 守军是与候选野战军编制无关的固定开支。提前汇总一次，避免容量扫描的
+	# 每个 units 候选都重新构建首都跳数并遍历全部州治。
+	var fixed_garrison_upkeep := Simulation.nation_monthly_garrison_upkeep(
+		state, nation_id
+	)
 	var gold_total_capacity := 0
 	for units in range(1, army_total_capacity + 1):
 		var projected_upkeep := (
-			Simulation.effective_monthly_military_upkeep(
+			Simulation.effective_monthly_field_army_upkeep(
 				state,
 				nation_id,
 				units * formation_base_upkeep
 			)
+			+ fixed_garrison_upkeep
 		)
 		if projected_upkeep > allowed_effective_upkeep:
 			break
