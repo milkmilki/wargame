@@ -1005,7 +1005,9 @@ static func war_situation_score(
 	for center_value in state.administrative_center_city_ids:
 		var center_id := int(center_value)
 		var controller := state.cities[center_id].owner_nation
-		for city_id in state.administrative_members(center_id):
+		for city_id in _cached_administrative_members(
+			state, center_id, evaluation_cache
+		):
 			var legal_owner := state.recognized_owner_of(city_id)
 			if legal_owner not in [nation_id, enemy_id]:
 				continue
@@ -3773,7 +3775,7 @@ static func select_war_objective(
 	)
 	if target_cities.is_empty():
 		return {}
-	var center_ids: Array[int] = []
+	var center_set := {}
 	for target_city in target_cities:
 		if (
 			legal_reclamation_only
@@ -3781,15 +3783,17 @@ static func select_war_objective(
 		):
 			continue
 		var center_id := state.administrative_center_of(target_city.id)
-		if center_id >= 0 and not center_ids.has(center_id):
-			center_ids.append(center_id)
+		if center_id >= 0:
+			center_set[center_id] = true
+	var center_ids: Array[int] = []
+	center_ids.assign(center_set.keys())
 	EquivariantOrder.sort_city_ids(center_ids, state, nation_id)
 	if center_ids.is_empty():
 		return {}
 	var bordering_centers: Array[int] = []
 	for center_id in center_ids:
 		if _administrative_center_borders_owned_land(
-			state, nation_id, center_id
+			state, nation_id, center_id, evaluation_cache
 		):
 			bordering_centers.append(center_id)
 	# 陆地宣战只能选择本国实控领土直接接壤的州。全国无此类目标时，
@@ -3829,7 +3833,9 @@ static func select_war_objective(
 		var has_food_hub := false
 		var has_manpower_hub := false
 		var administrative_betweenness := 0.0
-		for member_id in state.administrative_members(center_id):
+		for member_id in _cached_administrative_members(
+			state, center_id, evaluation_cache
+		):
 			var member := state.cities[member_id]
 			totals.x += maxi(member.gold_per_month, 0)
 			totals.y += maxi(member.food_per_half_year, 0)
@@ -3967,14 +3973,18 @@ static func administrative_tactical_target(
 ) -> int:
 	if not state.is_zhou_city(center_city_id):
 		return -1
-	var attacker_bloc := state.alliance_bloc(nation_id)
+	var attacker_bloc := _cached_alliance_bloc(
+		state, nation_id, evaluation_cache
+	).duplicate()
 	if attacker_bloc.is_empty():
 		attacker_bloc.append(nation_id)
 	var center_controlled := attacker_bloc.has(
 		state.cities[center_city_id].owner_nation
 	)
 	var candidates: Array[int] = []
-	for city_id in state.administrative_members(center_city_id):
+	for city_id in _cached_administrative_members(
+		state, center_city_id, evaluation_cache
+	):
 		if city_id == excluded_city or state.cities[city_id].owner_nation != target_id:
 			continue
 		if legal_reclamation_only and state.recognized_owner_of(city_id) != nation_id:
@@ -4027,12 +4037,22 @@ static func administrative_tactical_target(
 static func _administrative_center_borders_owned_land(
 	state: GameState,
 	nation_id: int,
-	center_city_id: int
+	center_city_id: int,
+	evaluation_cache: Dictionary = {}
 ) -> bool:
-	for member_id in state.administrative_members(center_city_id):
+	var cache_key := "administrative_border:%d:%d" % [
+		nation_id, center_city_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return bool(evaluation_cache[cache_key])
+	for member_id in _cached_administrative_members(
+		state, center_city_id, evaluation_cache
+	):
 		for neighbor in state.territorial_border_neighbors(member_id):
 			if state.cities[neighbor].owner_nation == nation_id:
+				evaluation_cache[cache_key] = true
 				return true
+	evaluation_cache[cache_key] = false
 	return false
 
 
@@ -4063,7 +4083,9 @@ static func region_unification_objective_bonus(
 		for member_center_value in state.administrative_center_city_ids:
 			var member_center := int(member_center_value)
 			var counts := Vector2i.ZERO
-			for member_id in state.administrative_members(member_center):
+			for member_id in _cached_administrative_members(
+				state, member_center, evaluation_cache
+			):
 				counts.y += 1
 				if state.cities[member_id].owner_nation == nation_id:
 					counts.x += 1
@@ -5415,6 +5437,22 @@ static func _cached_cities_of(
 			[] as Array[City]
 		) as Array[City]
 	)
+
+
+static func _cached_administrative_members(
+	state: GameState,
+	center_city_id: int,
+	evaluation_cache: Dictionary
+) -> Array[int]:
+	var cache_key := "administrative_members:%d:%d" % [
+		state.administrative_region_revision,
+		center_city_id,
+	]
+	if not evaluation_cache.has(cache_key):
+		evaluation_cache[cache_key] = state.administrative_members(
+			center_city_id
+		)
+	return evaluation_cache[cache_key] as Array[int]
 
 
 static func _cached_wars_of(
