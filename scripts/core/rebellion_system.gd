@@ -69,9 +69,7 @@ static func capital_hops(state: GameState, nation_id: int) -> Dictionary:
 	while cursor < queue.size():
 		var current: int = queue[cursor]
 		cursor += 1
-		var neighbors: Array[int] = state.neighbors(current).duplicate()
-		neighbors.sort()
-		for neighbor in neighbors:
+		for neighbor in state.neighbors(current):
 			if result.has(neighbor):
 				continue
 			if state.cities[neighbor].owner_nation != nation_id:

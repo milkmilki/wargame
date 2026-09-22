@@ -10,13 +10,18 @@ static func monthly_gold_flows_from_trade(
 	effective_upkeep: Callable,
 	garrison_upkeep: Callable,
 	city_output: Callable,
-	tribute_rate: Callable
+	tribute_rate: Callable,
+	city_outputs: PackedInt32Array = PackedInt32Array(),
+	garrison_upkeep_values: Array[int] = []
 ) -> Array[Dictionary]:
 	var upkeep_by_nation := _upkeep_by_nation(
-		state, effective_upkeep, garrison_upkeep
+		state,
+		effective_upkeep,
+		garrison_upkeep,
+		garrison_upkeep_values
 	)
 	var result := _empty_reports(state, trade, upkeep_by_nation)
-	_add_city_income(state, result, city_output)
+	_add_city_income(state, result, city_output, city_outputs)
 	_add_tribute_flows(state, result, tribute_rate)
 	_finalize_balances(result)
 	return result
@@ -25,7 +30,8 @@ static func monthly_gold_flows_from_trade(
 static func _upkeep_by_nation(
 	state: GameState,
 	effective_upkeep: Callable,
-	garrison_upkeep: Callable
+	garrison_upkeep: Callable,
+	garrison_upkeep_values: Array[int] = []
 ) -> Dictionary:
 	var field: Array[int] = []
 	var garrison: Array[int] = []
@@ -45,7 +51,11 @@ static func _upkeep_by_nation(
 		field[nation.id] = int(effective_upkeep.call(
 			state, nation.id, field[nation.id]
 		))
-		garrison[nation.id] = int(garrison_upkeep.call(state, nation.id))
+		garrison[nation.id] = (
+			garrison_upkeep_values[nation.id]
+			if nation.id >= 0 and nation.id < garrison_upkeep_values.size()
+			else int(garrison_upkeep.call(state, nation.id))
+		)
 	return {"field": field, "garrison": garrison}
 
 
@@ -106,14 +116,19 @@ static func _empty_reports(
 static func _add_city_income(
 	state: GameState,
 	result: Array[Dictionary],
-	city_output: Callable
+	city_output: Callable,
+	city_outputs: PackedInt32Array = PackedInt32Array()
 ) -> void:
 	for city in state.cities:
 		if city.owner_nation < 0 or city.owner_nation >= result.size():
 			continue
 		result[city.owner_nation]["city_income"] = (
 			int(result[city.owner_nation]["city_income"])
-			+ int(city_output.call(state, city))
+			+ (
+				city_outputs[city.id]
+				if city.id >= 0 and city.id < city_outputs.size()
+				else int(city_output.call(state, city))
+			)
 		)
 
 

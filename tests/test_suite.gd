@@ -433,11 +433,29 @@ func _test_world_generation() -> void:
 	var terrain_base_half_year_food := 0
 	var terrain_gold_min := 999999
 	var terrain_gold_max := 0
+	var batch_gold_outputs := CityOutputRules.city_gold_outputs(gs)
+	var batch_gold_matches := batch_gold_outputs.size() == gs.cities.size()
+	var batch_potential_gold_outputs := (
+		CityOutputRules.city_potential_gold_outputs(gs)
+	)
+	var batch_potential_gold_matches := (
+		batch_potential_gold_outputs.size() == gs.cities.size()
+	)
 	var neutral_ruler_modifiers := RulerProfile.modifiers(
 		RulerProfile.BALANCED
 	)
 	for city in gs.cities:
-		terrain_monthly_gold += Simulation.city_gold_output(gs, city)
+		var city_gold := Simulation.city_gold_output(gs, city)
+		terrain_monthly_gold += city_gold
+		batch_gold_matches = (
+			batch_gold_matches
+			and batch_gold_outputs[city.id] == city_gold
+		)
+		batch_potential_gold_matches = (
+			batch_potential_gold_matches
+			and batch_potential_gold_outputs[city.id]
+				== CityOutputRules.city_potential_gold_output(gs, city)
+		)
 		terrain_base_monthly_gold += city.gold_per_month
 		terrain_half_year_food += Simulation.city_food_output(gs, city)
 		terrain_base_half_year_food += Simulation.city_food_output(
@@ -495,6 +513,14 @@ func _test_world_generation() -> void:
 		terrain_monthly_gold == expected_effective_gold,
 		"正式地图有效金产出必须逐城应用当前君主倍率：预期%d，实为%d"
 			% [expected_effective_gold, terrain_monthly_gold]
+	)
+	_check(
+		batch_gold_matches,
+		"批量城市金产出必须与逐城真源完全等价"
+	)
+	_check(
+		batch_potential_gold_matches,
+		"批量城市潜在金产出必须与逐城真源完全等价"
 	)
 	_check(
 		terrain_base_half_year_food

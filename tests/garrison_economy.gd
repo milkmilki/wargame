@@ -73,6 +73,20 @@ func _init() -> void:
 	)
 	nation.ruler_traits.clear()
 	var flows := Simulation.monthly_gold_flows(state)
+	var batch_garrison_upkeep := (
+		Simulation.monthly_garrison_upkeep_by_nation(state)
+	)
+	var batch_garrison_matches := (
+		batch_garrison_upkeep.size() == state.nations.size()
+	)
+	for compared_nation in state.nations:
+		batch_garrison_matches = (
+			batch_garrison_matches
+			and batch_garrison_upkeep[compared_nation.id]
+				== Simulation.nation_monthly_garrison_upkeep(
+					state, compared_nation.id
+				)
+		)
 	var field_upkeep := state.nation_monthly_military_upkeep(0)
 	var expected_garrison_upkeep := 0
 	for center_value in state.administrative_center_city_ids:
@@ -164,6 +178,7 @@ func _init() -> void:
 		and int(flows[0]["garrison_upkeep"]) == expected_garrison_upkeep
 		and int(flows[0]["military_upkeep"])
 			== field_upkeep + expected_garrison_upkeep
+		and batch_garrison_matches
 		and burden_ok
 		and food_supply_ok
 		and reinforcement_ok

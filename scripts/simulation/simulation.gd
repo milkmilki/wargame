@@ -1156,7 +1156,9 @@ static func _monthly_gold_flows_from_trade(
 		effective_monthly_field_army_upkeep,
 		nation_monthly_garrison_upkeep,
 		city_gold_output,
-		effective_tribute_rate
+		effective_tribute_rate,
+		CityOutputRules.city_gold_outputs(game_state),
+		monthly_garrison_upkeep_by_nation(game_state)
 	)
 
 
@@ -1209,7 +1211,8 @@ static func city_garrison_cost_report(
 	nation_id: int,
 	city_id: int,
 	troops: int,
-	capital_hops: Dictionary = {}
+	capital_hops: Dictionary = {},
+	cost_context: Dictionary = {}
 ) -> Dictionary:
 	var empty := {
 		"troops": 0,
@@ -1234,10 +1237,15 @@ static func city_garrison_cost_report(
 	if hops.is_empty():
 		hops = game_state.capital_hop_distances(nation_id)
 	var hop_count := int(hops.get(city_id, -1))
+	var admin_radius := (
+		float(cost_context["administrative_radius"])
+		if cost_context.has("administrative_radius")
+		else RebellionSystem.administrative_radius(nation)
+	)
 	var distance_excess := minf(
 		RebellionSystem.administrative_distance_excess(
 			hop_count,
-			RebellionSystem.administrative_radius(nation)
+			admin_radius
 		),
 		GARRISON_DISTANCE_COST_MAX_EXCESS_HOPS
 	)
@@ -1245,10 +1253,20 @@ static func city_garrison_cost_report(
 		1.0 + distance_excess * GARRISON_DISTANCE_COST_PER_EXCESS_HOP
 	)
 	var upkeep_multiplier := maxf(
-		RulerProfile.upkeep_multiplier(nation), 0.0
+		(
+			float(cost_context["upkeep_multiplier"])
+			if cost_context.has("upkeep_multiplier")
+			else RulerProfile.upkeep_multiplier(nation)
+		),
+		0.0
 	)
 	var food_multiplier := maxf(
-		RulerProfile.food_consumption_multiplier(nation), 0.1
+		(
+			float(cost_context["food_multiplier"])
+			if cost_context.has("food_multiplier")
+			else RulerProfile.food_consumption_multiplier(nation)
+		),
+		0.1
 	)
 	var base_food := float(troops) * FOOD_PER_CAPITA
 	var local_food_demand := int(ceil(
@@ -1288,15 +1306,72 @@ static func nation_monthly_garrison_upkeep(
 		return 0
 	var total := 0
 	var hops := game_state.capital_hop_distances(nation_id)
+	var nation := game_state.nations[nation_id]
+	var cost_context := {
+		"administrative_radius":
+			RebellionSystem.administrative_radius(nation),
+		"upkeep_multiplier": RulerProfile.upkeep_multiplier(nation),
+		"food_multiplier": RulerProfile.food_consumption_multiplier(nation),
+	}
 	for center_value in game_state.administrative_center_city_ids:
 		var center_id := int(center_value)
 		var city := game_state.cities[center_id]
 		if city.owner_nation != nation_id or city.garrison_manpower <= 0:
 			continue
 		total += int(city_garrison_cost_report(
-			game_state, nation_id, center_id, city.garrison_manpower, hops
+			game_state,
+			nation_id,
+			center_id,
+			city.garrison_manpower,
+			hops,
+			cost_context
 		)["gold_upkeep"])
 	return total
+
+
+static func monthly_garrison_upkeep_by_nation(
+	game_state: GameState
+) -> Array[int]:
+	var result: Array[int] = []
+	result.resize(game_state.nations.size())
+	result.fill(0)
+	var centers_by_nation: Array = []
+	centers_by_nation.resize(game_state.nations.size())
+	for nation_id in range(centers_by_nation.size()):
+		centers_by_nation[nation_id] = [] as Array[int]
+	for center_value in game_state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := game_state.cities[center_id]
+		if (
+			city.owner_nation < 0
+			or city.owner_nation >= result.size()
+			or city.garrison_manpower <= 0
+		):
+			continue
+		(centers_by_nation[city.owner_nation] as Array[int]).append(center_id)
+	for nation_id in range(result.size()):
+		var centers: Array[int] = centers_by_nation[nation_id]
+		if centers.is_empty():
+			continue
+		var nation := game_state.nations[nation_id]
+		var hops := game_state.capital_hop_distances(nation_id)
+		var cost_context := {
+			"administrative_radius":
+				RebellionSystem.administrative_radius(nation),
+			"upkeep_multiplier": RulerProfile.upkeep_multiplier(nation),
+			"food_multiplier": RulerProfile.food_consumption_multiplier(nation),
+		}
+		for center_id in centers:
+			var city := game_state.cities[center_id]
+			result[nation_id] += int(city_garrison_cost_report(
+				game_state,
+				nation_id,
+				center_id,
+				city.garrison_manpower,
+				hops,
+				cost_context
+			)["gold_upkeep"])
+	return result
 
 
 static func nation_monthly_garrison_food_demand(

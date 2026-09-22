@@ -16,6 +16,7 @@ static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
 	var modifiers_by_nation: Array[Dictionary] = []
 	for nation in game_state.nations:
 		modifiers_by_nation.append(RulerProfile.modifiers(nation))
+	var national_base_gold := _national_base_gold(game_state, true)
 	for city in game_state.cities:
 		if city.id < 0 or city.id >= result.size():
 			continue
@@ -27,7 +28,15 @@ static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
 			)
 			else {}
 		)
-		result[city.id] = city_gold_output(game_state, city, modifiers)
+		var owner_base := (
+			national_base_gold[city.owner_nation]
+			if city.owner_nation >= 0
+				and city.owner_nation < national_base_gold.size()
+			else 0
+		)
+		result[city.id] = city_gold_output(
+			game_state, city, modifiers, owner_base
+		)
 	return result
 
 
@@ -39,6 +48,7 @@ static func city_potential_gold_outputs(game_state: GameState) -> PackedInt32Arr
 	var modifiers_by_nation: Array[Dictionary] = []
 	for nation in game_state.nations:
 		modifiers_by_nation.append(RulerProfile.modifiers(nation))
+	var national_base_gold := _national_base_gold(game_state, false)
 	for city in game_state.cities:
 		if city.id < 0 or city.id >= result.size():
 			continue
@@ -51,21 +61,54 @@ static func city_potential_gold_outputs(game_state: GameState) -> PackedInt32Arr
 			else {}
 		)
 		result[city.id] = city_potential_gold_output(
-			game_state, city, modifiers
+			game_state,
+			city,
+			modifiers,
+			(
+				national_base_gold[city.owner_nation]
+				if city.owner_nation >= 0
+					and city.owner_nation < national_base_gold.size()
+				else 0
+			)
 		)
+	return result
+
+
+static func _national_base_gold(
+	game_state: GameState,
+	respect_administration: bool
+) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	result.resize(game_state.nations.size())
+	result.fill(0)
+	for city in game_state.cities:
+		if (
+			city.is_dock
+			or city.owner_nation < 0
+			or city.owner_nation >= result.size()
+			or (
+				respect_administration
+				and not game_state.city_administrative_output_enabled(city.id)
+			)
+		):
+			continue
+		result[city.owner_nation] += maxi(city.gold_per_month, 0)
 	return result
 
 
 static func city_gold_output(
 	game_state: GameState,
 	city: City,
-	ruler_modifiers: Dictionary = {}
+	ruler_modifiers: Dictionary = {},
+	national_base_gold: int = -1
 ) -> int:
 	if game_state == null or city == null:
 		return 0
 	if not game_state.city_administrative_output_enabled(city.id):
 		return 0
-	var output := city_gold_output_before_governance(game_state, city)
+	var output := city_gold_output_before_governance(
+		game_state, city, true, national_base_gold
+	)
 	output = maxi(int(floor(
 		float(output) * city_governance_output_multiplier(game_state, city)
 	)), 0)
@@ -88,12 +131,13 @@ static func city_gold_output(
 static func city_potential_gold_output(
 	game_state: GameState,
 	city: City,
-	ruler_modifiers: Dictionary = {}
+	ruler_modifiers: Dictionary = {},
+	national_base_gold: int = -1
 ) -> int:
 	if game_state == null or city == null:
 		return 0
 	var output := city_gold_output_before_governance(
-		game_state, city, false
+		game_state, city, false, national_base_gold
 	)
 	output = maxi(int(floor(
 		float(output) * city_governance_output_multiplier(game_state, city)
@@ -114,7 +158,8 @@ static func city_potential_gold_output(
 static func city_gold_output_before_governance(
 	game_state: GameState,
 	city: City,
-	respect_administration: bool = true
+	respect_administration: bool = true,
+	national_base_gold: int = -1
 ) -> int:
 	if (
 		respect_administration
@@ -123,7 +168,7 @@ static func city_gold_output_before_governance(
 		return 0
 	var output := city.gold_per_month
 	output += capital_national_gold_addition(
-		game_state, city, respect_administration
+		game_state, city, respect_administration, national_base_gold
 	)
 	if city_war_disrupted(game_state, city):
 		output = int(floor(float(output) * CITY_WAR_OUTPUT_MULTIPLIER))
@@ -133,7 +178,8 @@ static func city_gold_output_before_governance(
 static func capital_national_gold_addition(
 	game_state: GameState,
 	city: City,
-	respect_administration: bool = true
+	respect_administration: bool = true,
+	national_base_gold: int = -1
 ) -> int:
 	if (
 		game_state == null
@@ -144,14 +190,15 @@ static func capital_national_gold_addition(
 		or game_state.nations[city.owner_nation].capital_city_id != city.id
 	):
 		return 0
-	var national_base_gold := 0
-	for owned_city in game_state.land_cities_of(city.owner_nation):
-		if (
-			respect_administration
-			and not game_state.city_administrative_output_enabled(owned_city.id)
-		):
-			continue
-		national_base_gold += maxi(owned_city.gold_per_month, 0)
+	if national_base_gold < 0:
+		national_base_gold = 0
+		for owned_city in game_state.land_cities_of(city.owner_nation):
+			if (
+				respect_administration
+				and not game_state.city_administrative_output_enabled(owned_city.id)
+			):
+				continue
+			national_base_gold += maxi(owned_city.gold_per_month, 0)
 	return int(floor(
 		float(national_base_gold) * CAPITAL_NATIONAL_GOLD_SHARE
 	))
