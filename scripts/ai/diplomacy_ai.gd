@@ -113,7 +113,7 @@ const WAR_PREPARATION_BEST_EFFORT_RATIO: float = 0.5
 ## 核心是区域财政、粮产与治理压力，只在和平期分封。
 const ENFEOFF_MIN_REGION_CITIES: int = 3       ## 候选封地最少城市数，避免碎封
 const ENFEOFF_MAX_REGION_CITIES: int = 8       ## 主动生长上限；被切断飞地闭包可超过
-const ENFEOFF_BURDEN_RATIO_THRESHOLD: float = 0.60  ## 区域驻军粮耗/粮产超此值算「养不起」
+const ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD: float = 0.10
 ## 「远」是相对该国疆域半径的，而非绝对跳数：距首都跳数 ≥ 本国最大跳数 × 此比例
 ## 才算外围（避免把绝对阈值套到小疆域国家上、导致永远找不到边疆种子）。
 const ENFEOFF_FAR_HOP_FRACTION: float = 0.5
@@ -297,6 +297,19 @@ static func choose_actions(
 		profile_enabled
 	)
 	profile_started = Time.get_ticks_usec() if profile_enabled else 0
+	_collect_enfeoff_actions(
+		state,
+		actions,
+		committed,
+		evaluation_cache
+	)
+	_record_profile_stage(
+		profile,
+		"diplomacy_enfeoff",
+		profile_started,
+		profile_enabled
+	)
+	profile_started = Time.get_ticks_usec() if profile_enabled else 0
 	_collect_war_actions(
 		state,
 		actions,
@@ -322,19 +335,6 @@ static func choose_actions(
 	_record_profile_stage(
 		profile,
 		"diplomacy_alliance",
-		profile_started,
-		profile_enabled
-	)
-	profile_started = Time.get_ticks_usec() if profile_enabled else 0
-	_collect_enfeoff_actions(
-		state,
-		actions,
-		committed,
-		evaluation_cache
-	)
-	_record_profile_stage(
-		profile,
-		"diplomacy_enfeoff",
 		profile_started,
 		profile_enabled
 	)
@@ -391,6 +391,10 @@ static func choose_actions_over_frames(
 	slice_started = await _yield_diplomacy_slice(
 		slice_started, slice_budget_usec
 	)
+	_collect_enfeoff_actions(state, actions, committed, evaluation_cache)
+	slice_started = await _yield_diplomacy_slice(
+		slice_started, slice_budget_usec
+	)
 	for nation_index in range(state.nations.size()):
 		_collect_war_actions(
 			state,
@@ -416,10 +420,6 @@ static func choose_actions_over_frames(
 		slice_started = await _yield_diplomacy_slice(
 			slice_started, slice_budget_usec
 		)
-	_collect_enfeoff_actions(state, actions, committed, evaluation_cache)
-	slice_started = await _yield_diplomacy_slice(
-		slice_started, slice_budget_usec
-	)
 	_collect_centralization_actions(
 		state, actions, committed, evaluation_cache
 	)
@@ -5887,7 +5887,8 @@ static func _bump_frontier(
 static func evaluate_region_burden(
 	state: GameState,
 	nation_id: int,
-	city_ids: Array[int]
+	city_ids: Array[int],
+	capital_hops: Dictionary = {}
 ) -> Dictionary:
 	var region := {}
 	for city_id in city_ids:
@@ -5895,6 +5896,9 @@ static func evaluate_region_burden(
 	var monthly_food_output := 0.0
 	var required_defense_troops := 0
 	var garrison_troops := 0
+	var garrison_gold_upkeep := 0
+	var monthly_food_demand := 0
+	var distance_food_demand := 0
 	var direct_gold_income := 0
 	var projected_vassal_gold_income := 0
 	var manpower_output := 0
@@ -5915,21 +5919,27 @@ static func evaluate_region_burden(
 				.VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
 		))
 		manpower_output += city.manpower_per_month
-	# 实然驻军仅供解释展示，不作判据。
-	for army in state.armies:
-		if army.owner_nation != nation_id or army.size <= 0:
-			continue
-		var node := army.current_city_node()
-		if node >= 0 and region.has(node):
-			garrison_troops += army.size
-	var monthly_food_demand := 0.0
-	var burden_ratio := 0.0
+		if state.is_zhou_city(city_id):
+			var required := state.city_garrison_capacity(city_id)
+			var cost := Simulation.city_garrison_cost_report(
+				state, nation_id, city_id, required, capital_hops
+			)
+			required_defense_troops += required
+			garrison_troops += maxi(city.garrison_manpower, 0)
+			garrison_gold_upkeep += int(cost["gold_upkeep"])
+			monthly_food_demand += int(cost["food_demand"])
+			distance_food_demand += int(cost["distance_food_demand"])
+	var burden_ratio := (
+		float(distance_food_demand) / monthly_food_output
+		if monthly_food_output > 0.0
+		else (INF if distance_food_demand > 0 else 0.0)
+	)
 	var projected_tribute_income := int(floor(
 		float(projected_vassal_gold_income)
 		* GameState.DEFAULT_TRIBUTE_RATE
 	))
 	var monthly_fiscal_benefit := (
-		projected_tribute_income
+		garrison_gold_upkeep + projected_tribute_income
 		- direct_gold_income
 	)
 	return {
@@ -5938,9 +5948,11 @@ static func evaluate_region_burden(
 		"monthly_food_demand": monthly_food_demand,
 		"required_defense_troops": required_defense_troops,
 		"garrison_troops": garrison_troops,
+		"garrison_gold_upkeep": garrison_gold_upkeep,
 		"gold_output": direct_gold_income,
 		"manpower_output": manpower_output,
 		"burden_ratio": burden_ratio,
+		"distance_food_demand": distance_food_demand,
 		"direct_gold_income": direct_gold_income,
 		"projected_vassal_gold_income":
 			projected_vassal_gold_income,
@@ -6236,15 +6248,13 @@ static func _city_is_frontier(
 	return false
 
 
-## 中央是否正在承受严重外战压力：有实际前线的对外战争，或军费已在拖欠。
+## 中央是否正在承受严重外战压力。欠饷不在此否决：分封可能正是卸下
+## 偏远守军成本、恢复财政的政治手段。
 static func _overlord_under_war_pressure(
 	state: GameState,
 	nation_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> bool:
-	var nation := state.nations[nation_id]
-	if nation.military_payment_ratio < 1.0:
-		return true
 	for enemy_id in state.wars_of(nation_id):
 		if _frontier_edges(state, nation_id, enemy_id, evaluation_cache) > 0:
 			return true
@@ -6253,9 +6263,10 @@ static func _overlord_under_war_pressure(
 
 ## 生成分封候选动作：
 ##   非藩王、分封后留足核心，且满足以下任一长期收益：
-##   1. 预计贡赋 - 失去直辖收入 > 0；
-##   2. 候选边疆的应然驻军粮耗 / 本地产粮超过负担阈值。
-## 所有君主都只在和平且军饷正常时分封；傀儡君主仅在通过该门控后持续缩减直辖。
+##   1. 倾向加权的守军军费减负 + 预计贡赋 - 失去直辖收入 > 0；
+##   2. 超行政半径的守军附加粮耗 / 本地产粮超过负担阈值；
+##   3. 远地治理压力超过阈值。
+## 有真实外战前线或既有备战承诺时不分封；欠饷本身不否决减负重组。
 static func _collect_enfeoff_actions(
 	state: GameState,
 	actions: Array[Dictionary],
@@ -6268,7 +6279,11 @@ static func _collect_enfeoff_actions(
 		var overlord_id := nation.id
 		var puppet_rule := nation.ruler_archetype == RulerProfile.PUPPET
 		# 藩王不得再分封（第一版不做多级自动分封）；已在本 tick 有动作的国家跳过。
-		if state.is_vassal(overlord_id) or committed.has(overlord_id):
+		if (
+			state.is_vassal(overlord_id)
+			or committed.has(overlord_id)
+			or nation.war_preparation_target_nation >= 0
+		):
 			continue
 		# 只有和平时期才分封：战时把前线连同弱藩王一起甩出去反而会导致边疆崩溃，
 		# 且与削藩「宗主须和平」对称——分封与削藩都是和平期的政治重组，逻辑自洽。
@@ -6325,29 +6340,47 @@ static func _collect_enfeoff_actions(
 			overlord_id,
 			evaluation_cache
 		)
-		var burden := evaluate_region_burden(state, overlord_id, region)
+		var burden := evaluate_region_burden(
+			state, overlord_id, region, hops
+		)
 		var governance := evaluate_region_governance_pressure(
 			state,
 			overlord_id,
 			region,
 			hops
 		)
-		var fiscal_benefit := int(
-			burden["monthly_fiscal_benefit"]
+		var enfeoff_tendency := maxf(
+			RulerProfile.enfeoff_multiplier(nation), 0.0
+		)
+		var perceived_garrison_relief := int(round(
+			float(burden["garrison_gold_upkeep"]) * enfeoff_tendency
+		))
+		var fiscal_benefit := (
+			perceived_garrison_relief
+			+ int(burden["projected_tribute_income"])
+			- int(burden["direct_gold_income"])
+		)
+		var effective_food_burden := (
+			float(burden["burden_ratio"]) * enfeoff_tendency
 		)
 		var governance_city_count := int(
 			governance["pressured_city_count"]
 		)
-		var governance_pressure_score := float(
-			governance["pressure_score"]
+		var governance_pressure_score := float(governance["pressure_score"])
+		var effective_governance_pressure := (
+			governance_pressure_score * enfeoff_tendency
+		)
+		var food_burden_justifies := (
+			effective_food_burden >= ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD
 		)
 		var governance_justifies := (
 			governance_city_count >= 1
-			and governance_pressure_score
+			and effective_governance_pressure
 				>= ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
 		)
 		if (
 			fiscal_benefit <= 0
+			and not food_burden_justifies
 			and not governance_justifies
 			and not puppet_rule
 		):
@@ -6360,18 +6393,28 @@ static func _collect_enfeoff_actions(
 			)
 		if governance_justifies:
 			motive_parts.append(
-				"偏远州%d城超行政半径（半径%.1f，压力%.2f）"
+				"治理压力：偏远州%d城超行政半径（半径%.1f，倾向后压力%.2f）"
 				% [
 					governance_city_count,
 					float(governance["administrative_radius"]),
-					governance_pressure_score,
+					effective_governance_pressure,
+				]
+			)
+		if food_burden_justifies:
+			motive_parts.append(
+				"远地守军附加粮耗%d/月（负担比%.2f，倾向后%.2f）"
+				% [
+					int(burden["distance_food_demand"]),
+					float(burden["burden_ratio"]),
+					effective_food_burden,
 				]
 			)
 		if fiscal_benefit > 0:
 			motive_parts.append(
-				"财政月增益%+d（贡赋%d-直辖%d）"
+				"财政月增益%+d（倾向后守军减负%d+贡赋%d-直辖%d）"
 				% [
 					fiscal_benefit,
+					perceived_garrison_relief,
 					int(burden["projected_tribute_income"]),
 					int(burden["direct_gold_income"]),
 				]
@@ -6380,9 +6423,10 @@ static func _collect_enfeoff_actions(
 			"、".join(motive_parts)
 			if not motive_parts.is_empty()
 			else (
-			"财政月增益%+d（贡赋%d-直辖%d）"
+			"财政月增益%+d（倾向后守军减负%d+贡赋%d-直辖%d）"
 			% [
 				fiscal_benefit,
+				perceived_garrison_relief,
 				int(burden["projected_tribute_income"]),
 				int(burden["direct_gold_income"]),
 			]
@@ -6396,11 +6440,20 @@ static func _collect_enfeoff_actions(
 			"b": overlord_id,
 			"region_cities": region,
 			"governance_pressure": governance,
+			"enfeoff_tendency": enfeoff_tendency,
+			"effective_food_burden": effective_food_burden,
+			"perceived_fiscal_benefit": fiscal_benefit,
 			"score": (
 				maxf(float(fiscal_benefit), 0.0)
-				+ governance_pressure_score * ENFEOFF_GOVERNANCE_SCORE_WEIGHT
+				+ maxf(
+					effective_food_burden
+						- ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD,
+					0.0
+				) * 100.0
+				+ effective_governance_pressure
+					* ENFEOFF_GOVERNANCE_SCORE_WEIGHT
 			),
-			"reason": "和平期偏远地区%s，分封以缓解治理压力" % motive,
+			"reason": "和平期偏远地区%s，分封以转移守军与治理负担" % motive,
 		}
 		if puppet_rule:
 			enfeoff_action[ENFEOFF_TARGET_DIRECT_CITIES_FIELD] = minimum_core

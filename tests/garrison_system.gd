@@ -145,11 +145,17 @@ func _init() -> void:
 	var native_snapshot := NativeSnapshotBuilder.build(state)
 	valid = valid and int(native_snapshot.get("garrison_revision", -1)) >= 0
 	var expected_garrisons := PackedInt32Array()
+	var expected_garrison_supply := PackedFloat64Array()
 	for city in state.cities:
 		expected_garrisons.append(city.garrison_manpower)
+		expected_garrison_supply.append(city.garrison_supply_ratio)
 	valid = valid and (
 		(native_snapshot["cities"] as Dictionary)["garrison_manpower"]
 			== expected_garrisons
+	)
+	valid = valid and (
+		(native_snapshot["cities"] as Dictionary)["garrison_supply_ratio"]
+			== expected_garrison_supply
 	)
 	if center_id >= 0:
 		var combat_state := GameState.new()

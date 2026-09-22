@@ -2481,10 +2481,17 @@ func reinforce_city_garrisons_monthly() -> int:
 		if owner_id < 0 or owner_id >= nations.size():
 			continue
 		var missing := city_garrison_capacity(center_id) - city.garrison_manpower
+		var support_ratio := minf(
+			clampf(city.garrison_supply_ratio, 0.0, 1.0),
+			clampf(nations[owner_id].military_payment_ratio, 0.0, 1.0)
+		)
+		var reinforcement_limit := int(floor(
+			float(ZHOU_GARRISON_MONTHLY_REINFORCEMENT) * support_ratio
+		))
 		var added := mini(
 			maxi(missing, 0),
 			mini(
-				ZHOU_GARRISON_MONTHLY_REINFORCEMENT,
+				reinforcement_limit,
 				maxi(nations[owner_id].manpower_pool, 0)
 			)
 		)
@@ -2512,6 +2519,7 @@ func fill_city_garrison_from_owner_pool(city_id: int) -> int:
 	if added <= 0:
 		return 0
 	city.garrison_manpower += added
+	city.garrison_supply_ratio = 1.0
 	nations[owner_id].manpower_pool -= added
 	garrison_revision += 1
 	return added

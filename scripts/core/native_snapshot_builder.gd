@@ -43,10 +43,13 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var gold := PackedInt32Array()
 	var manpower := PackedInt32Array()
 	var last_military_upkeep := PackedInt32Array()
+	var last_field_army_upkeep := PackedInt32Array()
+	var last_garrison_upkeep := PackedInt32Array()
 	var unpaid_military_upkeep := PackedInt32Array()
 	var payment_ratio := PackedFloat64Array()
 	var granary_food := PackedInt32Array()
 	var last_food_demand := PackedInt32Array()
+	var last_garrison_food_demand := PackedInt32Array()
 	var food_demand_ema := PackedFloat64Array()
 	var overlord := PackedInt32Array()
 	var effective_tribute_rate := PackedFloat64Array()
@@ -83,12 +86,15 @@ static func _build_nations(state: GameState) -> Dictionary:
 		gold.append(nation.treasury_gold)
 		manpower.append(nation.manpower_pool)
 		last_military_upkeep.append(nation.last_military_upkeep)
+		last_field_army_upkeep.append(nation.last_field_army_upkeep)
+		last_garrison_upkeep.append(nation.last_garrison_upkeep)
 		unpaid_military_upkeep.append(
 			nation.unpaid_military_upkeep
 		)
 		payment_ratio.append(nation.military_payment_ratio)
 		granary_food.append(nation.granary_food)
 		last_food_demand.append(nation.last_food_demand)
+		last_garrison_food_demand.append(nation.last_garrison_food_demand)
 		food_demand_ema.append(nation.food_demand_ema)
 		overlord.append(state.overlord_of(nation.id))
 		effective_tribute_rate.append(
@@ -210,10 +216,13 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"gold": gold,
 		"manpower": manpower,
 		"last_military_upkeep": last_military_upkeep,
+		"last_field_army_upkeep": last_field_army_upkeep,
+		"last_garrison_upkeep": last_garrison_upkeep,
 		"unpaid_military_upkeep": unpaid_military_upkeep,
 		"payment_ratio": payment_ratio,
 		"granary_food": granary_food,
 		"last_food_demand": last_food_demand,
+		"last_garrison_food_demand": last_garrison_food_demand,
 		"food_demand_ema": food_demand_ema,
 		"overlord": overlord,
 		"effective_tribute_rate": effective_tribute_rate,
@@ -266,6 +275,7 @@ static func _build_cities(state: GameState) -> Dictionary:
 	var recognized_owner := PackedInt32Array()
 	var occupation_sponsor := PackedInt32Array()
 	var garrison_manpower := PackedInt32Array()
+	var garrison_supply_ratio := PackedFloat64Array()
 	var manpower_output := PackedInt32Array()
 	var food := PackedInt32Array()
 	var gold_output := PackedInt32Array()
@@ -285,6 +295,7 @@ static func _build_cities(state: GameState) -> Dictionary:
 		recognized_owner.append(state.recognized_owner_of(city.id))
 		occupation_sponsor.append(city.occupation_sponsor_nation)
 		garrison_manpower.append(city.garrison_manpower)
+		garrison_supply_ratio.append(city.garrison_supply_ratio)
 		manpower_output.append(city.manpower_per_month)
 		food.append(city.food_storage)
 		gold_output.append(city.gold_per_month)
@@ -307,6 +318,7 @@ static func _build_cities(state: GameState) -> Dictionary:
 		"recognized_owner": recognized_owner,
 		"occupation_sponsor": occupation_sponsor,
 		"garrison_manpower": garrison_manpower,
+		"garrison_supply_ratio": garrison_supply_ratio,
 		"manpower_output": manpower_output,
 		"food": food,
 		"gold_output": gold_output,

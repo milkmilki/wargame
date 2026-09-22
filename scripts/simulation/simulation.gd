@@ -33,6 +33,10 @@ const SPEED_MAX: float = 32.0
 
 # ---- 粮食 / 饥饿 调参常量（§6.7）----
 const FOOD_PER_CAPITA: float = 0.0025      ## 每人月耗（400 人耗 1 粮）
+const GARRISON_GOLD_UPKEEP_MULTIPLIER: float = 0.35
+const GARRISON_FOOD_CONSUMPTION_MULTIPLIER: float = 0.50
+const GARRISON_DISTANCE_COST_PER_EXCESS_HOP: float = 0.15
+const GARRISON_DISTANCE_COST_MAX_EXCESS_HOPS: float = 5.0
 const MAX_SUPPLY_MULT: float = 3.0         ## 消耗倍率上限（最大 3 倍）
 const STARVE_RATE: float = 0.5             ## 完全断粮时每月减员比例
 const SUPPLY_MORALE_LOSS_MAX: float = 0.20 ## 完全断粮时每月士气损失；部分缺粮按缺口比例缩放
@@ -849,6 +853,7 @@ func _trade_settlement_token(
 	for city in state.cities:
 		fields.append([
 			"city", city.id, city.food_storage,
+			city.garrison_manpower, city.garrison_supply_ratio,
 			city_war_disrupted(state, city),
 		])
 	var suzerainty_subjects := state.suzerainty.keys()
@@ -1148,7 +1153,8 @@ static func _monthly_gold_flows_from_trade(
 	return EconomyRules.monthly_gold_flows_from_trade(
 		game_state,
 		trade,
-		effective_monthly_military_upkeep,
+		effective_monthly_field_army_upkeep,
+		nation_monthly_garrison_upkeep,
 		city_gold_output,
 		effective_tribute_rate
 	)
@@ -1167,19 +1173,158 @@ static func effective_monthly_military_upkeep(
 	nation_id: int,
 	base_upkeep: int = -1
 ) -> int:
+	return (
+		effective_monthly_field_army_upkeep(
+			game_state, nation_id, base_upkeep
+		)
+		+ nation_monthly_garrison_upkeep(game_state, nation_id)
+	)
+
+
+static func effective_monthly_field_army_upkeep(
+	game_state: GameState,
+	nation_id: int,
+	base_upkeep: int = -1
+) -> int:
 	if (
 		game_state == null
 		or nation_id < 0
 		or nation_id >= game_state.nations.size()
 	):
 		return 0
-	var base := base_upkeep
-	if base < 0:
-		base = game_state.nation_monthly_military_upkeep(nation_id)
+	if base_upkeep >= 0:
+		return _ruler_adjusted_upkeep(
+			base_upkeep,
+			RulerProfile.upkeep_multiplier(game_state.nations[nation_id])
+		)
 	return _ruler_adjusted_upkeep(
-		base,
+		game_state.nation_monthly_military_upkeep(nation_id),
 		RulerProfile.upkeep_multiplier(game_state.nations[nation_id])
 	)
+
+
+## 州治虚拟守军的月度维护成本。距离只惩罚超出行政半径的部分；断联按上限计。
+static func city_garrison_cost_report(
+	game_state: GameState,
+	nation_id: int,
+	city_id: int,
+	troops: int,
+	capital_hops: Dictionary = {}
+) -> Dictionary:
+	var empty := {
+		"troops": 0,
+		"hop_count": -1,
+		"distance_excess": 0.0,
+		"logistics_multiplier": 1.0,
+		"gold_upkeep": 0,
+		"food_demand": 0,
+		"distance_food_demand": 0,
+	}
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+		or city_id < 0
+		or city_id >= game_state.cities.size()
+		or troops <= 0
+	):
+		return empty
+	var nation := game_state.nations[nation_id]
+	var hops := capital_hops
+	if hops.is_empty():
+		hops = game_state.capital_hop_distances(nation_id)
+	var hop_count := int(hops.get(city_id, -1))
+	var distance_excess := minf(
+		RebellionSystem.administrative_distance_excess(
+			hop_count,
+			RebellionSystem.administrative_radius(nation)
+		),
+		GARRISON_DISTANCE_COST_MAX_EXCESS_HOPS
+	)
+	var logistics_multiplier := (
+		1.0 + distance_excess * GARRISON_DISTANCE_COST_PER_EXCESS_HOP
+	)
+	var upkeep_multiplier := maxf(
+		RulerProfile.upkeep_multiplier(nation), 0.0
+	)
+	var food_multiplier := maxf(
+		RulerProfile.food_consumption_multiplier(nation), 0.1
+	)
+	var base_food := float(troops) * FOOD_PER_CAPITA
+	var local_food_demand := int(ceil(
+		base_food * GARRISON_FOOD_CONSUMPTION_MULTIPLIER * food_multiplier
+	))
+	var food_demand := int(ceil(
+		base_food
+			* GARRISON_FOOD_CONSUMPTION_MULTIPLIER
+			* logistics_multiplier
+			* food_multiplier
+	))
+	return {
+		"troops": troops,
+		"hop_count": hop_count,
+		"distance_excess": distance_excess,
+		"logistics_multiplier": logistics_multiplier,
+		"gold_upkeep": int(ceil(
+			float(GameState.army_monthly_upkeep(troops))
+				* GARRISON_GOLD_UPKEEP_MULTIPLIER
+				* logistics_multiplier
+				* upkeep_multiplier
+		)),
+		"food_demand": food_demand,
+		"distance_food_demand": maxi(food_demand - local_food_demand, 0),
+	}
+
+
+static func nation_monthly_garrison_upkeep(
+	game_state: GameState,
+	nation_id: int
+) -> int:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return 0
+	var total := 0
+	var hops := game_state.capital_hop_distances(nation_id)
+	for center_value in game_state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := game_state.cities[center_id]
+		if city.owner_nation != nation_id or city.garrison_manpower <= 0:
+			continue
+		total += int(city_garrison_cost_report(
+			game_state, nation_id, center_id, city.garrison_manpower, hops
+		)["gold_upkeep"])
+	return total
+
+
+static func nation_monthly_garrison_food_demand(
+	game_state: GameState,
+	nation_id: int,
+	use_capacity: bool = false
+) -> int:
+	if (
+		game_state == null
+		or nation_id < 0
+		or nation_id >= game_state.nations.size()
+	):
+		return 0
+	var total := 0
+	var hops := game_state.capital_hop_distances(nation_id)
+	for center_value in game_state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := game_state.cities[center_id]
+		if city.owner_nation != nation_id:
+			continue
+		var troops := (
+			game_state.city_garrison_capacity(center_id)
+			if use_capacity else city.garrison_manpower
+		)
+		total += int(city_garrison_cost_report(
+			game_state, nation_id, center_id, troops, hops
+		)["food_demand"])
+	return total
 
 
 static func _ruler_adjusted_upkeep(
@@ -1255,6 +1400,12 @@ static func gold_reserve_policy(
 		required_upkeep_savings = maxi(
 			required_upkeep_savings, nation.unpaid_military_upkeep
 		)
+	# 该返回值驱动野战军缩编，只能要求节省可裁撤的野战军费；州治守军
+	# 是固定行政开支，不能让 AI 在野战军已清空后继续反复尝试裁军。
+	required_upkeep_savings = mini(
+		required_upkeep_savings,
+		maxi(int(flow.get("field_army_upkeep", 0)), 0)
+	)
 	return {
 		"at_war": at_war,
 		"current_monthly_income": current_income,
@@ -1406,6 +1557,7 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
 	_resolve_military_finance(gold_flows)
+	_resolve_garrison_supply()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"monthly_finance", economy_part_started)
 	economy_part_started = (
@@ -1505,7 +1657,12 @@ func _publish_initial_food_snapshot() -> void:
 				state, nation.id
 			)
 		)
-		nation.last_food_demand = projected_demand
+		nation.last_garrison_food_demand = (
+			nation_monthly_garrison_food_demand(state, nation.id)
+		)
+		nation.last_food_demand = (
+			projected_demand + nation.last_garrison_food_demand
+		)
 	var forecast: Dictionary = _forecast_trade_and_gold_flows()
 	var trade: Dictionary = forecast.get("trade", {})
 	_publish_trade_snapshot(trade)
@@ -2113,6 +2270,12 @@ func _resolve_military_finance(
 		)
 		var paid := mini(nation.treasury_gold, upkeep)
 		nation.treasury_gold -= paid
+		nation.last_field_army_upkeep = int(
+			gold_flows[nation.id].get("field_army_upkeep", 0)
+		) if nation.id >= 0 and nation.id < gold_flows.size() else 0
+		nation.last_garrison_upkeep = int(
+			gold_flows[nation.id].get("garrison_upkeep", 0)
+		) if nation.id >= 0 and nation.id < gold_flows.size() else 0
 		nation.last_military_upkeep = upkeep
 		nation.unpaid_military_upkeep = upkeep - paid
 		nation.military_payment_ratio = (
@@ -2123,7 +2286,59 @@ func _resolve_military_finance(
 				0.0,
 				1.0
 			)
+			)
+
+
+## 州治守军按月从宗藩共享粮池统一取粮。同一粮池短缺时所有州治同比降供，
+## 避免国家或城市遍历顺序改变战斗力。
+func _resolve_garrison_supply() -> void:
+	var pools := {}
+	for nation in state.nations:
+		nation.last_garrison_food_demand = 0
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := state.cities[center_id]
+		city.garrison_supply_ratio = 1.0
+		var owner_id := city.owner_nation
+		if (
+			owner_id < 0
+			or owner_id >= state.nations.size()
+			or city.garrison_manpower <= 0
+		):
+			continue
+		var demand := int(city_garrison_cost_report(
+			state, owner_id, center_id, city.garrison_manpower
+		)["food_demand"])
+		if demand <= 0:
+			continue
+		state.nations[owner_id].last_garrison_food_demand += demand
+		var holder_id := state.food_pool_holder(owner_id)
+		if not pools.has(holder_id):
+			pools[holder_id] = {
+				"demand": 0,
+				"cities": [] as Array[City],
+			}
+		var pool: Dictionary = pools[holder_id]
+		pool["demand"] = int(pool["demand"]) + demand
+		(pool["cities"] as Array[City]).append(city)
+	var holder_ids: Array[int] = []
+	for holder_value in pools:
+		holder_ids.append(int(holder_value))
+	holder_ids.sort()
+	for holder_id in holder_ids:
+		var pool: Dictionary = pools[holder_id]
+		var requested := int(pool["demand"])
+		var withdrawn := state._withdraw_food_from_warehouses(
+			state.nations[holder_id], requested
 		)
+		var ratio := (
+			1.0
+			if requested <= 0
+			else clampf(float(withdrawn) / float(requested), 0.0, 1.0)
+		)
+		for city in pool["cities"] as Array[City]:
+			city.garrison_supply_ratio = ratio
+	state.refresh_derived()
 
 
 # ------------------------------------------------------------------ 1b. 全国人口补员
@@ -2641,7 +2856,10 @@ func _build_supply_plan_for_army(
 ## 落定各国当日粮食需求，并在月初把需求滚入 EMA（供裁军/宣战粮草评估）。
 func _finalize_food_demand(demand_by_nation: Array[int]) -> void:
 	for nation in state.nations:
-		nation.last_food_demand = demand_by_nation[nation.id]
+		nation.last_food_demand = (
+			demand_by_nation[nation.id]
+			+ nation.last_garrison_food_demand
+		)
 		if state.day % DAYS_PER_MONTH == 0:
 			nation.food_demand_ema = (
 				float(nation.last_food_demand)
@@ -3999,6 +4217,12 @@ func _execute_diplomatic_action(
 		event["subject_nation"] = int(action["subject_nation"])
 	if action.has("subject_nations"):
 		event["subject_nations"] = action["subject_nations"]
+	if kind == DiplomacyAI.Action.ENFEOFF:
+		event["ruler_archetype"] = state.nations[nation_a].ruler_archetype
+		event["enfeoff_tendency"] = float(action.get(
+			"enfeoff_tendency",
+			RulerProfile.enfeoff_multiplier(state.nations[nation_a])
+		))
 	if action.has("surrendering_nation"):
 		event["surrendering_nation"] = int(action["surrendering_nation"])
 	if kind == DiplomacyAI.Action.MAKE_PEACE:
@@ -10697,6 +10921,11 @@ func _attach_city_garrison(battle: Battle) -> Army:
 	garrison.city_garrison_combat_multiplier = (
 		maxf(battle.city.ruler_city_defense_multiplier, 0.1)
 		* (Combat.SIEGE_STARVE_DEF_MULT if garrison.starving else 1.0)
+		* lerpf(
+			Combat.SIEGE_STARVE_DEF_MULT,
+			1.0,
+			clampf(battle.city.garrison_supply_ratio, 0.0, 1.0)
+		)
 	)
 	garrison.state = Army.State.FIGHTING
 	garrison.battle_id = battle.id

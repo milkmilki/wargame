@@ -22,6 +22,8 @@ var occupation_sponsor_nation: int = -1
 
 ## 州治的持久城市守军。容量由行政身份派生，府与码头始终为 0。
 var garrison_manpower: int = 0
+## 最近一次月度共享粮池结算后的供给率；旧状态与新建城市默认满供。
+var garrison_supply_ratio: float = 1.0
 
 var manpower_per_month: int = 0           ## 每月人口产出，立即汇入所属国人口库
 var gold_per_month: int = 0               ## 每月金钱产出

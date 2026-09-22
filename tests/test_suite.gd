@@ -3682,6 +3682,9 @@ func _test_time_layering() -> void:
 		Simulation.CITY_WAR_DISRUPTION_DAYS
 	)
 	var f0 := capital.food_storage
+	var nation0_garrison_demand := (
+		Simulation.nation_monthly_garrison_food_demand(gs2, 0)
+	)
 	var nation0_production := 0
 	for city in gs2.cities_of(0):
 		nation0_production += Simulation.city_food_output(
@@ -3690,12 +3693,19 @@ func _test_time_layering() -> void:
 		)
 	gs2.day = 30
 	sim2._resolve_economy()
-	_check(capital.food_storage == f0, "day30（非180倍数）不应注粮：%d" % capital.food_storage)
+	_check(
+		capital.food_storage == f0 - nation0_garrison_demand,
+		"day30 不注粮但应支付守军粮耗：应 %d，实为 %d"
+			% [f0 - nation0_garrison_demand, capital.food_storage]
+	)
 	gs2.day = 180
 	sim2._resolve_economy()
-	_check(capital.food_storage == f0 + nation0_production,
-		"day180 全国粮食产出应汇入首都：应 %d，实为 %d"
-			% [f0 + nation0_production, capital.food_storage])
+	var expected_food_after_half_year := (
+		f0 + nation0_production - nation0_garrison_demand * 2
+	)
+	_check(capital.food_storage == expected_food_after_half_year,
+		"day180 全国粮食产出汇入首都并支付两次月度守军粮耗：应 %d，实为 %d"
+			% [expected_food_after_half_year, capital.food_storage])
 	sim2.free()
 
 	var garrison_state := GameState.new()
@@ -5634,7 +5644,7 @@ func _test_ruler_economy_integration() -> void:
 	))
 	var expected_upkeep := int(ceil(
 		float(base_upkeep) * RulerProfile.upkeep_multiplier(nation)
-	))
+	)) + Simulation.nation_monthly_garrison_upkeep(gs, 0)
 	var flows := Simulation.monthly_gold_flows(gs)
 	var flow: Dictionary = flows[0]
 	_check(
@@ -8734,7 +8744,8 @@ func _test_vassal_tribute() -> void:
 			)
 	_check(
 		int(initial_flows[overlord_id]["balance"])
-				== 0
+				== -int(initial_flows[overlord_id]["garrison_upkeep"])
+			and int(initial_flows[overlord_id]["field_army_upkeep"]) == 0
 			and expected_subject_deficit > 0
 			and subject_demobilized[0]
 			and overlord_never_demobilizes
@@ -8812,6 +8823,10 @@ func _test_enfeoff_ai() -> void:
 		* GameState.DEFAULT_TRIBUTE_RATE
 	))
 	var burden := DiplomacyAI.evaluate_region_burden(gs, 0, region)
+	var expected_required_garrison := 0
+	for city_id in region:
+		if gs.is_zhou_city(city_id):
+			expected_required_garrison += gs.city_garrison_capacity(city_id)
 	_check(
 		_approx(float(burden["monthly_food_output"]), expected_food_output)
 			and float(burden["burden_ratio"]) >= 0.0
@@ -8823,18 +8838,19 @@ func _test_enfeoff_ai() -> void:
 				== expected_tribute
 			and int(burden["monthly_fiscal_benefit"])
 				== (
-					expected_tribute
+					int(burden["garrison_gold_upkeep"]) + expected_tribute
 					- expected_direct_gold
 				),
 		"区域负担画像必须同源计算粮食负担与分封财政反事实"
 	)
 	_check(
-		int(burden["required_defense_troops"]) == 0
-			and _approx(float(burden["burden_ratio"]), 0.0),
-		"移除静态边境军后接敌区域不再产生独立驻军负担（troops=%d ratio=%.3f）"
+		int(burden["required_defense_troops"])
+			== expected_required_garrison
+			and int(burden["monthly_food_demand"]) >= 0,
+		"候选区域必须按州治容量评估长期守军负担（troops=%d ratio=%.3f）"
 			% [int(burden["required_defense_troops"]), float(burden["burden_ratio"])]
 	)
-	# 内陆无接敌区：构造一个全被本国包围的单城区域，防务需求应为 0。
+	# 内陆州治仍有基础守军成本，但行政半径内不产生距离附加粮耗。
 	var inland_gs := GameState.new()
 	inland_gs.generate_grid_world(32051)
 	# 全国和平且同属一主的语境下，任取一座四邻皆本国的内陆城，防务需求必为 0。
@@ -8850,10 +8866,14 @@ func _test_enfeoff_ai() -> void:
 			break
 	if not inland_region.is_empty():
 		var inland_burden := DiplomacyAI.evaluate_region_burden(inland_gs, 0, inland_region)
+		var inland_required := (
+			inland_gs.city_garrison_capacity(inland_region[0])
+			if inland_gs.is_zhou_city(inland_region[0]) else 0
+		)
 		_check(
-			int(inland_burden["required_defense_troops"]) == 0
-				and _approx(float(inland_burden["burden_ratio"]), 0.0),
-			"完全内陆区域的应然防务需求与负担比必须为 0"
+			int(inland_burden["required_defense_troops"])
+				== inland_required,
+			"内陆区域仍须按其州治身份承担基础守军"
 		)
 
 	# 2. _grow_enfeoff_region 道路连续性：返回区域必须道路连通且全属本国非首都。
@@ -8920,7 +8940,7 @@ func _test_enfeoff_ai() -> void:
 				(
 					float(gate_burden["burden_ratio"])
 						< DiplomacyAI
-							.ENFEOFF_BURDEN_RATIO_THRESHOLD
+						.ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD
 					and int(
 						gate_burden[
 							"monthly_fiscal_benefit"
@@ -9057,7 +9077,7 @@ func _test_enfeoff_ai() -> void:
 				< 0
 			and float(loss_report["burden_ratio"])
 				< DiplomacyAI
-					.ENFEOFF_BURDEN_RATIO_THRESHOLD
+					.ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD
 			and int(loss_governance["pressured_city_count"]) >= 1
 			and float(loss_governance["pressure_score"])
 				>= DiplomacyAI.ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
@@ -9195,7 +9215,7 @@ func _test_enfeoff_ai() -> void:
 				< 0
 			and float(shallow_report["burden_ratio"])
 				< DiplomacyAI
-					.ENFEOFF_BURDEN_RATIO_THRESHOLD
+					.ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD
 			and int(shallow_governance["pressured_city_count"]) >= 1
 			and float(shallow_governance["pressure_score"])
 				< DiplomacyAI.ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD

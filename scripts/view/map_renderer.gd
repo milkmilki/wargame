@@ -6865,9 +6865,21 @@ static func city_detail_sections(
 		if legal_owner >= 0 and legal_owner < game_state.nations.size()
 		else "无"
 	)
-	var garrison_line := "城市守军：%d / %d · 攻击效率50%% · 防御效率100%%～300%%" % [
+	var garrison_cost := (
+		Simulation.city_garrison_cost_report(
+			game_state,
+			city.owner_nation,
+			city_id,
+			city.garrison_manpower
+		)
+		if city.owner_nation >= 0 else {}
+	)
+	var garrison_line := "城市守军：%d / %d · 供给%.0f%% · 军费%d/月 · 粮耗%d/月" % [
 		city.garrison_manpower,
 		game_state.city_garrison_capacity(city_id),
+		city.garrison_supply_ratio * 100.0,
+		int(garrison_cost.get("gold_upkeep", 0)),
+		int(garrison_cost.get("food_demand", 0)),
 	]
 	var campaign_lines: Array[String] = ["当前没有州级军事行动"]
 	var active_campaign_found := false
@@ -7243,6 +7255,9 @@ static func nation_detail_sections(
 			"军费 %d    欠饷 %d    支付率 %.0f%%" % [
 				n.last_military_upkeep, n.unpaid_military_upkeep,
 				n.military_payment_ratio * 100.0,
+			],
+			"军费构成：野战军 %d    州治守军 %d" % [
+				n.last_field_army_upkeep, n.last_garrison_upkeep,
 			],
 		]},
 		{"title": "粮食储备", "lines": [

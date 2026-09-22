@@ -3,8 +3,8 @@ extends SceneTree
 ## 的通过率，定位「分封在自然演化中几乎不发生」的真正瓶颈条件。
 ##
 ## 门控链：
-##   非藩王 → 中央处于和平 → 候选封地≥MIN城 → 分封后仍留足核心
-##   →（负担比≥阈 OR 财政月增益>0）
+##   非藩王 → 中央无实际外战前线 → 存在完整候选州 → 分封后仍留足核心
+##   →（倾向后守军财政收益、距离粮耗或治理压力至少一项过阈）
 ## 输出各阶段的幸存国家数，最后一段掉得最多的即瓶颈。
 
 func _init() -> void:
@@ -30,6 +30,16 @@ func _init() -> void:
 	var burden_samples: Array[float] = []
 	var fiscal_samples: Array[int] = []
 	var region_sizes: Array[int] = []
+	var ordinary_enfeoffments := 0
+	var puppet_enfeoffments := 0
+	for event_value in state.diplomatic_history:
+		var event: Dictionary = event_value
+		if int(event.get("action", -1)) != DiplomacyAI.Action.ENFEOFF:
+			continue
+		if int(event.get("ruler_archetype", RulerProfile.BALANCED)) == RulerProfile.PUPPET:
+			puppet_enfeoffments += 1
+		else:
+			ordinary_enfeoffments += 1
 
 	for n in state.nations:
 		if not n.alive:
@@ -42,9 +52,16 @@ func _init() -> void:
 		if DiplomacyAI._overlord_under_war_pressure(state, oid, cache):
 			continue
 		peace_ok += 1
-		var region := DiplomacyAI._grow_enfeoff_region(state, oid, cache)
+		var region := DiplomacyAI.next_enfeoff_region(
+			state,
+			oid,
+			DiplomacyAI.ENFEOFF_MIN_OVERLORD_CITIES_AFTER,
+			DiplomacyAI.ENFEOFF_MAX_REGION_CITIES,
+			true,
+			cache
+		)
 		region_sizes.append(region.size())
-		if region.size() < DiplomacyAI.ENFEOFF_MIN_REGION_CITIES:
+		if DiplomacyAI.enfeoff_land_city_count(state, region) < 1:
 			continue
 		region_ok += 1
 		if (
@@ -58,12 +75,24 @@ func _init() -> void:
 		var fiscal := int(
 			burden["monthly_fiscal_benefit"]
 		)
+		var tendency := maxf(RulerProfile.enfeoff_multiplier(n), 0.0)
+		var perceived_fiscal := (
+			int(round(float(burden["garrison_gold_upkeep"]) * tendency))
+			+ int(burden["projected_tribute_income"])
+			- int(burden["direct_gold_income"])
+		)
+		var governance := DiplomacyAI.evaluate_region_governance_pressure(
+			state, oid, region, state.capital_hop_distances(oid)
+		)
 		burden_samples.append(ratio)
 		fiscal_samples.append(fiscal)
 		if (
-			ratio
-				>= DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD
-			or fiscal > 0
+			perceived_fiscal > 0
+			or ratio * tendency
+				>= DiplomacyAI.ENFEOFF_FOOD_BURDEN_RATIO_THRESHOLD
+			or float(governance["pressure_score"]) * tendency
+				>= DiplomacyAI.ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
+			or n.ruler_archetype == RulerProfile.PUPPET
 		):
 			benefit_pass += 1
 
@@ -71,14 +100,15 @@ func _init() -> void:
 		world_seed, nations, cities, probe_year,
 	])
 	print("存活国=%d" % alive)
-	print("① 非藩王           : %d" % non_vassal)
-	print("② 且中央处于和平   : %d   <- 和平前置" % peace_ok)
-	print("③ 且候选封地≥%d城   : %d   <- 区域生成" % [
-		DiplomacyAI.ENFEOFF_MIN_REGION_CITIES, region_ok,
+	print("历史分封：普通君主=%d 傀儡君主=%d" % [
+		ordinary_enfeoffments, puppet_enfeoffments,
 	])
+	print("① 非藩王           : %d" % non_vassal)
+	print("② 且无真实外战前线 : %d   <- 外战前置" % peace_ok)
+	print("③ 且存在完整候选州 : %d   <- 区域生成" % region_ok)
 	print("④ 且分封后留足核心 : %d" % core_retained)
-	print("⑤ 且负担比≥%.2f或财政>0: %d   <- 最终触发" % [
-		DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD, benefit_pass,
+	print("⑤ 且财政/粮耗/治理至少一项过阈: %d   <- 最终触发" % [
+		benefit_pass,
 	])
 	if not region_sizes.is_empty():
 		var rmin := region_sizes[0]

@@ -39,6 +39,8 @@ var last_rebellion_day: int = -1
 var treasury_gold: int = 0                 ## 国家钱仓
 var manpower_pool: int = 0                 ## 全国统一可用人口库（人口 SSoT）
 var last_military_upkeep: int = 0          ## 最近一月全军维护费
+var last_field_army_upkeep: int = 0        ## 最近一月野战军维护费
+var last_garrison_upkeep: int = 0          ## 最近一月州治虚拟守军维护费
 var unpaid_military_upkeep: int = 0        ## 最近一月未支付的军队维护费
 var military_payment_ratio: float = 1.0    ## 最近一月军费实际支付率 [0,1]
 ## 首次进入当前连续战争时冻结的战前月收入（城市+贡赋净收入，不扣军费）。
@@ -78,6 +80,7 @@ var warehouse_city_ids: Array[int] = []
 ## 库存真源仍在粮仓城市的 City.food_storage，本字段仅供 HUD 展示。
 var granary_food: int = 0
 var last_food_demand: int = 0              ## 最近月度全部军队计划粮食需求
+var last_garrison_food_demand: int = 0     ## 最近月度州治虚拟守军粮食需求
 var food_demand_ema: float = 0.0           ## 历史真实需求平滑值，供裁军规划
 ## 最近一次月结发布给 UI 的粮食快照。为避免把每日真实扣粮伪称为月累计实际，
 ## 这里显式记录“预计月产/月需/月结余”；旧档缺失时默认 0，保持向后兼容。

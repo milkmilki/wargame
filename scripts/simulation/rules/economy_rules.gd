@@ -8,10 +8,13 @@ static func monthly_gold_flows_from_trade(
 	state: GameState,
 	trade: Dictionary,
 	effective_upkeep: Callable,
+	garrison_upkeep: Callable,
 	city_output: Callable,
 	tribute_rate: Callable
 ) -> Array[Dictionary]:
-	var upkeep_by_nation := _upkeep_by_nation(state, effective_upkeep)
+	var upkeep_by_nation := _upkeep_by_nation(
+		state, effective_upkeep, garrison_upkeep
+	)
 	var result := _empty_reports(state, trade, upkeep_by_nation)
 	_add_city_income(state, result, city_output)
 	_add_tribute_flows(state, result, tribute_rate)
@@ -21,30 +24,35 @@ static func monthly_gold_flows_from_trade(
 
 static func _upkeep_by_nation(
 	state: GameState,
-	effective_upkeep: Callable
-) -> Array[int]:
-	var result: Array[int] = []
-	result.resize(state.nations.size())
-	result.fill(0)
+	effective_upkeep: Callable,
+	garrison_upkeep: Callable
+) -> Dictionary:
+	var field: Array[int] = []
+	var garrison: Array[int] = []
+	field.resize(state.nations.size())
+	garrison.resize(state.nations.size())
+	field.fill(0)
+	garrison.fill(0)
 	for army in state.armies:
 		if (
 			army.size <= 0
 			or army.owner_nation < 0
-			or army.owner_nation >= result.size()
+			or army.owner_nation >= field.size()
 		):
 			continue
-		result[army.owner_nation] += GameState.army_monthly_upkeep(army.size)
+		field[army.owner_nation] += GameState.army_monthly_upkeep(army.size)
 	for nation in state.nations:
-		result[nation.id] = int(effective_upkeep.call(
-			state, nation.id, result[nation.id]
+		field[nation.id] = int(effective_upkeep.call(
+			state, nation.id, field[nation.id]
 		))
-	return result
+		garrison[nation.id] = int(garrison_upkeep.call(state, nation.id))
+	return {"field": field, "garrison": garrison}
 
 
 static func _empty_reports(
 	state: GameState,
 	trade: Dictionary,
-	upkeep_by_nation: Array[int]
+	upkeep_by_nation: Dictionary
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for nation in state.nations:
@@ -70,6 +78,12 @@ static func _empty_reports(
 			- food_trade_expense
 			- manpower_trade_expense
 		)
+		var field_upkeep := int(
+			(upkeep_by_nation["field"] as Array)[nation.id]
+		)
+		var garrison_upkeep := int(
+			(upkeep_by_nation["garrison"] as Array)[nation.id]
+		)
 		result.append({
 			"nation_id": nation.id,
 			"city_income": 0,
@@ -81,7 +95,9 @@ static func _empty_reports(
 			"tribute_received": 0,
 			"tribute_paid": 0,
 			"net_income": 0,
-			"military_upkeep": upkeep_by_nation[nation.id],
+			"field_army_upkeep": field_upkeep,
+			"garrison_upkeep": garrison_upkeep,
+			"military_upkeep": field_upkeep + garrison_upkeep,
 			"balance": 0,
 		})
 	return result

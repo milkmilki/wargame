@@ -274,9 +274,8 @@ func _test_ai_enfeoff_governance_trigger() -> void:
 			and grown_region.size() >= DiplomacyAI.ENFEOFF_MIN_REGION_CITIES
 			and float(governance["pressure_score"])
 				>= DiplomacyAI.ENFEOFF_GOVERNANCE_PRESSURE_THRESHOLD
-			and int(burden["monthly_fiscal_benefit"]) <= 0
-			and float(burden["burden_ratio"])
-				< DiplomacyAI.ENFEOFF_BURDEN_RATIO_THRESHOLD
+			and int(burden["required_defense_troops"]) > 0
+			and int(burden["garrison_gold_upkeep"]) > 0
 			and not enfeoff.is_empty()
 			and (enfeoff.get("region_cities", []) as Array).has(13)
 			and str(enfeoff.get("reason", "")).contains("治理压力"),
@@ -301,6 +300,57 @@ func _test_ai_enfeoff_governance_trigger() -> void:
 			str(cache_counters),
 		]
 	)
+	_configure_ruler(state.nations[0], RulerProfile.BALANCED)
+	state.nations[0].ruler_traits = [RulerProfile.TRAIT_CENTRALIZER]
+	var centralizer_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(
+		state, centralizer_actions, {}, {}
+	)
+	var centralizer_enfeoff := _find_action(
+		centralizer_actions, DiplomacyAI.Action.ENFEOFF, 0
+	)
+	state.nations[0].ruler_traits = [RulerProfile.TRAIT_FEUDALIST]
+	var feudal_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(state, feudal_actions, {}, {})
+	var feudal_enfeoff := _find_action(
+		feudal_actions, DiplomacyAI.Action.ENFEOFF, 0
+	)
+	_check(
+		not centralizer_enfeoff.is_empty()
+			and not feudal_enfeoff.is_empty()
+			and float(centralizer_enfeoff["enfeoff_tendency"])
+				< float(feudal_enfeoff["enfeoff_tendency"])
+			and float(centralizer_enfeoff["score"])
+				< float(feudal_enfeoff["score"]),
+		"ai/enfeoff_tendency_scales_perceived_benefit",
+		"centralizer=%s feudal=%s"
+			% [str(centralizer_enfeoff), str(feudal_enfeoff)]
+	)
+	state.nations[0].ruler_traits.clear()
+	var ordered_actions := DiplomacyAI.choose_actions(state)
+	var nation_zero_actions: Array[Dictionary] = []
+	for action in ordered_actions:
+		if int(action.get("a", -1)) == 0:
+			nation_zero_actions.append(action)
+	_check(
+		nation_zero_actions.size() == 1
+			and int(nation_zero_actions[0].get("kind", -1))
+				== DiplomacyAI.Action.ENFEOFF,
+		"ai/enfeoff_commits_before_new_war_or_alliance",
+		str(nation_zero_actions)
+	)
+	state.nations[0].war_preparation_target_nation = 1
+	var committed_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(
+		state, committed_actions, {}, {}
+	)
+	_check(
+		_find_action(
+			committed_actions, DiplomacyAI.Action.ENFEOFF, 0
+		).is_empty(),
+		"ai/existing_war_preparation_preempts_enfeoff"
+	)
+	state.nations[0].war_preparation_target_nation = -1
 
 	var enclave_state := _make_linear_state(8, 0)
 	_configure_ruler(enclave_state.nations[0], RulerProfile.BALANCED)
