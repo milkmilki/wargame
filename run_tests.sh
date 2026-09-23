@@ -126,6 +126,16 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/war_campaign_pool.gd \
   --log-file "$LOG_DIR/world-war-campaign-pool.log"
 echo
+echo "==> [2i4/29] 州战役集结、大营与连续占府门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_camp_ai.gd \
+  --log-file "$LOG_DIR/world-war-campaign-camp.log"
+echo
+echo "==> [2i5/29] 战前集结与宣战先手门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/prewar_assembly.gd \
+  --log-file "$LOG_DIR/world-war-prewar-assembly.log"
+echo
 echo "==> [2j/29] 州治守军战损比门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/garrison_combat_ratio.gd \

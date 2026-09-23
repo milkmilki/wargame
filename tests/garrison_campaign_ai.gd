@@ -120,7 +120,7 @@ func _init() -> void:
 		valid = valid and state.campaign_reinforcement_threat(
 			attacker_id, center_id
 		) == 4000
-		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER
+		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.RAID_FU
 		valid = valid and plan.tactical_target_city_ids.size() <= 2
 		var failed_army_id := int(plan.army_assignments.keys()[0])
 		var failed_army: Army = state.armies.filter(
@@ -152,8 +152,34 @@ func _init() -> void:
 			if member_id != center_id:
 				state.cities[member_id].owner_nation = attacker_id
 		state.ownership_revision += 1
+		var occupied_fu: Array[int] = []
+		for member_id in state.administrative_members(center_id):
+			if member_id != center_id:
+				occupied_fu.append(member_id)
+		var occupied_index := 0
+		for army in state.armies:
+			if not plan.army_assignments.has(army.id):
+				continue
+			var occupied_city := occupied_fu[
+				occupied_index % occupied_fu.size()
+			]
+			occupied_index += 1
+			army.location_city = occupied_city
+			army.move_from = occupied_city
+			army.move_to = -1
+			army.on_edge = false
+			army.state = Army.State.IDLE
+			army.path.clear()
+			army.ai_target_city = -1
 		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
 		valid = valid and plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER
+		valid = valid and plan.camp_city_id >= 0
+		for army in state.armies:
+			if not plan.army_assignments.has(army.id):
+				continue
+			valid = valid and int(
+				plan.army_assignments[army.id]
+			) == center_id
 		valid = valid and plan.tactical_target_city_ids == [center_id]
 		for army in state.armies:
 			if plan.army_assignments.has(army.id):

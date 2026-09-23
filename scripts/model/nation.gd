@@ -58,6 +58,8 @@ var war_mobilization_reason: String = ""
 var war_preparation_target_nation: int = -1
 var war_preparation_objective_city: int = -1
 var war_preparation_objective_center_city: int = -1
+var war_preparation_staging_city_id: int = -1
+var war_preparation_army_ids: Array[int] = []
 var war_preparation_started_day: int = -1
 var war_preparation_reason: String = ""
 ## 0=普通联盟战争，1=低凝聚力宗藩私人战争。使用整数以保持模型不反向依赖 GameState。

@@ -9,8 +9,11 @@ enum Mode {
 }
 
 enum Phase {
-	CAPTURE_FU,
-	ENCIRCLE_CENTER,
+	ASSEMBLE,
+	BREAK_IN,
+	RAID_FU,
+	RECALL_CAMP,
+	HOLD_CAMP,
 	ASSAULT_CENTER,
 	CLEANUP,
 	HOLD_AND_REINFORCE,
@@ -21,7 +24,9 @@ var center_city_id: int = -1
 var war_id: int = -1
 var mode: int = Mode.OFFENSE
 var opponent_nation_id: int = -1
-var phase: int = Phase.CAPTURE_FU
+var phase: int = Phase.ASSEMBLE
+var staging_city_id: int = -1
+var camp_city_id: int = -1
 var tactical_target_city_ids: Array[int] = []
 var army_assignments: Dictionary = {} # army_id -> tactical city_id
 var failed_until_day: int = -1

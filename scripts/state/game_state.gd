@@ -2162,6 +2162,83 @@ func campaign_siege_requirement(
 	)
 
 
+## Minimum force that may leave staging for a state with Fu. Capturing every
+## enemy Fu reduces the virtual garrison multiplier to one, so only the
+## current garrison G and the real field threat V belong in this threshold.
+func campaign_minimum_launch_requirement(
+	attacker_id: int,
+	center_city_id: int
+) -> int:
+	if not is_zhou_city(center_city_id):
+		return 0
+	return (
+		maxi(cities[center_city_id].garrison_manpower, 0)
+		+ campaign_reinforcement_threat(attacker_id, center_city_id)
+	)
+
+
+## Preview V before relations become hostile. Only effective real armies of the
+## target's defensive alliance bloc physically touching the objective state
+## count; neutral third parties and the attacker's own bloc are excluded.
+func campaign_prewar_reinforcement_threat(
+	attacker_id: int,
+	target_nation_id: int,
+	center_city_id: int
+) -> int:
+	if (
+		not is_zhou_city(center_city_id)
+		or target_nation_id < 0
+		or target_nation_id >= nations.size()
+	):
+		return 0
+	var defender_bloc := alliance_bloc(target_nation_id)
+	var attacker_bloc := alliance_bloc(attacker_id)
+	var result := 0
+	for army in armies:
+		if (
+			not army_effective_for_field_campaign(army)
+			or army.is_city_garrison
+			or not defender_bloc.has(army.owner_nation)
+			or attacker_bloc.has(army.owner_nation)
+		):
+			continue
+		var touches_region := false
+		if army.on_edge:
+			touches_region = (
+				administrative_center_of(army.move_from) == center_city_id
+				or administrative_center_of(army.move_to) == center_city_id
+			)
+		elif army.location_city >= 0:
+			touches_region = (
+				administrative_center_of(army.location_city) == center_city_id
+			)
+		if touches_region:
+			result += army.size
+	return result
+
+
+func campaign_prewar_launch_requirement(
+	attacker_id: int,
+	target_nation_id: int,
+	center_city_id: int
+) -> int:
+	if not is_zhou_city(center_city_id):
+		return 0
+	var has_fu := false
+	for member_id in administrative_members(center_city_id):
+		if member_id != center_city_id:
+			has_fu = true
+			break
+	var base_requirement := (
+		maxi(cities[center_city_id].garrison_manpower, 0)
+		if has_fu
+		else campaign_siege_requirement(attacker_id, center_city_id)
+	)
+	return base_requirement + campaign_prewar_reinforcement_threat(
+		attacker_id, target_nation_id, center_city_id
+	)
+
+
 ## Dynamic V for a state campaign. Only effective real enemy field armies
 ## physically in the state or on an edge touching it are counted. The virtual
 ## center garrison belongs to R and is deliberately excluded here.
@@ -5050,6 +5127,9 @@ func _dissolve_suzerainty_system(root_id: int) -> bool:
 		if member_set.has(nation.war_preparation_target_nation):
 			nation.war_preparation_target_nation = -1
 			nation.war_preparation_objective_city = -1
+			nation.war_preparation_objective_center_city = -1
+			nation.war_preparation_staging_city_id = -1
+			nation.war_preparation_army_ids.clear()
 			nation.war_preparation_started_day = -1
 			nation.war_preparation_reason = ""
 			nation.war_preparation_unready_since_day = -1

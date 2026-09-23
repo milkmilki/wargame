@@ -5836,14 +5836,45 @@ static func nation_action_summary(
 	var nation := game_state.nations[nation_id]
 	var actions: Array[String] = []
 	if nation.war_preparation_target_nation >= 0:
+		var pool_ids := {}
+		for army_id in nation.war_preparation_army_ids:
+			pool_ids[army_id] = true
+		var pool_manpower := 0
+		for army in game_state.armies:
+			if (
+				army.owner_nation == nation_id
+				and pool_ids.has(army.id)
+				and game_state.army_effective_for_field_campaign(army)
+				and army.state != Army.State.FIGHTING
+			):
+				pool_manpower += army.size
+		var arrived_c := DiplomacyAI.war_preparation_arrived_troops(
+			game_state, nation_id
+		)
+		var center_id := nation.war_preparation_objective_center_city
+		if center_id < 0:
+			center_id = game_state.administrative_center_of(
+				nation.war_preparation_objective_city
+			)
+		var requirement := game_state.campaign_prewar_launch_requirement(
+			nation_id,
+			nation.war_preparation_target_nation,
+			center_id,
+		)
 		actions.append(
-			"准备对%s开战，目标%s" % [
+			"准备对%s开战，目标%s，集结于%s，备战池%d，到场C %d/%d" % [
 				WorldNaming.nation_display_name(
 					game_state, nation.war_preparation_target_nation
 				),
 				WorldNaming.city_display_name(
 					game_state, nation.war_preparation_objective_city
 				),
+				WorldNaming.city_display_name(
+					game_state, nation.war_preparation_staging_city_id
+				),
+				pool_manpower,
+				arrived_c,
+				requirement,
 			]
 		)
 	elif not nation.administrative_campaign_plans.is_empty():
@@ -5886,14 +5917,20 @@ static func nation_action_summary(
 
 static func campaign_phase_text(mode: int, phase: int) -> String:
 	match phase:
-		AdministrativeCampaignPlan.Phase.CAPTURE_FU:
-			return "进攻·夺取属府"
-		AdministrativeCampaignPlan.Phase.ENCIRCLE_CENTER:
-			return "进攻·向州治集结"
+		AdministrativeCampaignPlan.Phase.ASSEMBLE:
+			return "进攻·在州外集结"
+		AdministrativeCampaignPlan.Phase.BREAK_IN:
+			return "进攻·全军攻取入口府"
+		AdministrativeCampaignPlan.Phase.RAID_FU:
+			return "进攻·大营分遣占府"
+		AdministrativeCampaignPlan.Phase.RECALL_CAMP:
+			return "进攻·全军回援大营"
+		AdministrativeCampaignPlan.Phase.HOLD_CAMP:
+			return "进攻·驻营等待增援"
 		AdministrativeCampaignPlan.Phase.ASSAULT_CENTER:
 			return "进攻·攻击州治"
 		AdministrativeCampaignPlan.Phase.CLEANUP:
-			return "进攻·清理州内敌军"
+			return "进攻·以州治为营肃清属府"
 		AdministrativeCampaignPlan.Phase.HOLD_AND_REINFORCE:
 			return "防守·驻守并等待增援"
 		AdministrativeCampaignPlan.Phase.SORTIE:
@@ -6978,6 +7015,46 @@ static func city_detail_sections(
 					nation.id, administrative_center
 				)
 			)
+			var offensive_lines: Array[String] = []
+			if not defensive:
+				var staging_c := _campaign_effective_force_at_city(
+					game_state, nation.id, plan, plan.staging_city_id
+				)
+				var camp_c := _campaign_effective_force_at_city(
+					game_state, nation.id, plan, plan.camp_city_id
+				)
+				if plan.staging_city_id >= 0:
+					offensive_lines.append(
+						"集结点：%s · 实际到场：%d · 最低出发：%d（守军G+州内敌军V）"
+						% [
+							WorldNaming.city_display_name(
+								game_state, plan.staging_city_id
+							),
+							staging_c,
+							game_state.campaign_minimum_launch_requirement(
+								nation.id, administrative_center
+							),
+						]
+					)
+				if plan.camp_city_id >= 0:
+					offensive_lines.append(
+						"大营：%s · 营内可战兵力：%d"
+						% [
+							WorldNaming.city_display_name(
+								game_state, plan.camp_city_id
+							),
+							camp_c,
+						]
+					)
+				if not plan.tactical_target_city_ids.is_empty():
+					var target_names: Array[String] = []
+					for target_city_id in plan.tactical_target_city_ids:
+						target_names.append(WorldNaming.city_display_name(
+							game_state, target_city_id
+						))
+					offensive_lines.append(
+						"当前目标：%s" % "、".join(target_names)
+					)
 			var requirement_name := (
 				"出城迎击所需兵力"
 				if defensive
@@ -6991,6 +7068,7 @@ static func city_detail_sections(
 					committed, requirement_name, requirement,
 				],
 			]
+			campaign_lines.append_array(offensive_lines)
 			active_campaign_found = true
 			break
 	var governance_lines: Array[String] = [
@@ -7374,7 +7452,65 @@ static func nation_detail_sections(
 			]
 		)
 		(sections[-1]["lines"] as Array).append(force_text)
+		if campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE:
+			if campaign.staging_city_id >= 0:
+				(sections[-1]["lines"] as Array).append(
+					"集结点：%s · 到场%d · 最低出发%d（G+V）" % [
+						WorldNaming.city_display_name(
+							game_state, campaign.staging_city_id
+						),
+						_campaign_effective_force_at_city(
+							game_state, nation_id, campaign,
+							campaign.staging_city_id
+						),
+						game_state.campaign_minimum_launch_requirement(
+							nation_id, campaign.center_city_id
+						),
+					]
+				)
+			if campaign.camp_city_id >= 0:
+				(sections[-1]["lines"] as Array).append(
+					"大营：%s · 营内可战%d" % [
+						WorldNaming.city_display_name(
+							game_state, campaign.camp_city_id
+						),
+						_campaign_effective_force_at_city(
+							game_state, nation_id, campaign,
+							campaign.camp_city_id
+						),
+					]
+				)
+			if not campaign.tactical_target_city_ids.is_empty():
+				var target_names: Array[String] = []
+				for target_city_id in campaign.tactical_target_city_ids:
+					target_names.append(WorldNaming.city_display_name(
+						game_state, target_city_id
+					))
+				(sections[-1]["lines"] as Array).append(
+					"分遣目标：%s" % "、".join(target_names)
+				)
 	return sections
+
+
+static func _campaign_effective_force_at_city(
+	game_state: GameState,
+	nation_id: int,
+	plan: AdministrativeCampaignPlan,
+	city_id: int
+) -> int:
+	if city_id < 0:
+		return 0
+	var result := 0
+	for army in game_state.armies:
+		if (
+			army.owner_nation == nation_id
+			and plan.army_assignments.has(army.id)
+			and not army.on_edge
+			and army.location_city == city_id
+			and game_state.army_effective_for_field_campaign(army)
+		):
+			result += army.size
+	return result
 
 
 static func reset_nation_detail_section_build_count() -> void:

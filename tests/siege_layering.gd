@@ -61,8 +61,8 @@ func _init() -> void:
 	var valid := true
 	valid = valid and MapRenderer.campaign_phase_text(
 		AdministrativeCampaignPlan.Mode.OFFENSE,
-		AdministrativeCampaignPlan.Phase.CAPTURE_FU
-	) == "进攻·夺取属府"
+		AdministrativeCampaignPlan.Phase.RAID_FU
+	) == "进攻·大营分遣占府"
 	valid = valid and MapRenderer.campaign_phase_text(
 		AdministrativeCampaignPlan.Mode.DEFENSE,
 		AdministrativeCampaignPlan.Phase.HOLD_AND_REINFORCE

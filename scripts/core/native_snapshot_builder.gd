@@ -65,7 +65,10 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var ai_aggression := PackedFloat64Array()
 	var war_preparation_target := PackedInt32Array()
 	var war_preparation_objective := PackedInt32Array()
+	var war_preparation_staging_city := PackedInt32Array()
 	var war_preparation_started_day := PackedInt32Array()
+	var war_preparation_army_offsets := PackedInt32Array([0])
+	var war_preparation_army_ids := PackedInt32Array()
 	var campaign_objective_center := PackedInt32Array()
 	var campaign_offsets := PackedInt32Array([0])
 	var campaign_centers := PackedInt32Array()
@@ -73,6 +76,8 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var campaign_war_ids := PackedInt32Array()
 	var campaign_opponents := PackedInt32Array()
 	var campaign_phases := PackedInt32Array()
+	var campaign_staging_city_ids := PackedInt32Array()
+	var campaign_camp_city_ids := PackedInt32Array()
 	var campaign_failed_until_day := PackedInt32Array()
 	var campaign_tactical_offsets := PackedInt32Array([0])
 	var campaign_tactical_city_ids := PackedInt32Array()
@@ -134,8 +139,18 @@ static func _build_nations(state: GameState) -> Dictionary:
 		war_preparation_objective.append(
 			nation.war_preparation_objective_city
 		)
+		war_preparation_staging_city.append(
+			nation.war_preparation_staging_city_id
+		)
 		war_preparation_started_day.append(
 			nation.war_preparation_started_day
+		)
+		var preparation_army_ids := nation.war_preparation_army_ids.duplicate()
+		preparation_army_ids.sort()
+		for army_id in preparation_army_ids:
+			war_preparation_army_ids.append(army_id)
+		war_preparation_army_offsets.append(
+			war_preparation_army_ids.size()
 		)
 		campaign_objective_center.append(
 			nation.campaign_objective_center_city
@@ -152,6 +167,8 @@ static func _build_nations(state: GameState) -> Dictionary:
 			campaign_war_ids.append(plan.war_id)
 			campaign_opponents.append(plan.opponent_nation_id)
 			campaign_phases.append(plan.phase)
+			campaign_staging_city_ids.append(plan.staging_city_id)
+			campaign_camp_city_ids.append(plan.camp_city_id)
 			campaign_failed_until_day.append(plan.failed_until_day)
 			for tactical_city_id in plan.tactical_target_city_ids:
 				campaign_tactical_city_ids.append(tactical_city_id)
@@ -239,8 +256,11 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"ai_aggression": ai_aggression,
 		"war_preparation_target": war_preparation_target,
 		"war_preparation_objective": war_preparation_objective,
+		"war_preparation_staging_city": war_preparation_staging_city,
 		"war_preparation_started_day":
 			war_preparation_started_day,
+		"war_preparation_army_offsets": war_preparation_army_offsets,
+		"war_preparation_army_ids": war_preparation_army_ids,
 		"campaign_objective_center": campaign_objective_center,
 		"campaign_offsets": campaign_offsets,
 		"campaign_centers": campaign_centers,
@@ -248,6 +268,8 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"campaign_war_ids": campaign_war_ids,
 		"campaign_opponents": campaign_opponents,
 		"campaign_phases": campaign_phases,
+		"campaign_staging_city_ids": campaign_staging_city_ids,
+		"campaign_camp_city_ids": campaign_camp_city_ids,
 		"campaign_failed_until_day": campaign_failed_until_day,
 		"campaign_tactical_offsets": campaign_tactical_offsets,
 		"campaign_tactical_city_ids": campaign_tactical_city_ids,

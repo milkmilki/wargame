@@ -98,7 +98,6 @@ const DEFENSIVE_CAMPAIGN_YEARS: float = 1.0
 const EMERGENCY_FOOD_MONTHS: int = 6
 const DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER: float = 1.5
 const MAX_REPORTED_RUNWAY_YEARS: float = 99.0
-const WAR_PREPARATION_MIN_DAYS: int = 30
 const WAR_PREPARATION_MAX_DAYS: int = 360
 const WAR_PREPARATION_RESOURCE_GRACE_DAYS: int = 90
 const WAR_PREPARATION_FORCE_SHARE: float = 0.25
@@ -4862,6 +4861,30 @@ static func _collect_existing_war_preparation(
 			evaluation_cache
 		).is_empty()
 	)
+	if objective_valid and has_route:
+		var current_staging := war_staging_cities_for_objective(
+			state,
+			nation_id,
+			objective_city,
+			evaluation_cache,
+		)
+		if (
+			nation.war_preparation_objective_center_city != objective_center
+			or not current_staging.has(
+				nation.war_preparation_staging_city_id
+			)
+		):
+			actions.append({
+				"kind": Action.RETARGET_WAR_PREPARATION,
+				"a": nation_id,
+				"b": target_id,
+				"objective_city": objective_city,
+				"objective_center_city": objective_center,
+				"objective_reason": nation.war_preparation_reason,
+				"reason": "州域或道路变化，重新冻结战前集结点",
+			})
+			committed[nation_id] = true
+			return
 	if target_nation_valid and (not objective_valid or not has_route):
 		var replacement := replacement_war_preparation_objective(
 			state,
@@ -4917,8 +4940,8 @@ static func _collect_existing_war_preparation(
 		and has_route
 		and not resource_grace_expired
 		and assembly_deadline_expired
-		and staged_troops_for_objective(
-			state, nation_id, objective_city, evaluation_cache
+		and war_preparation_arrived_troops(
+			state, nation_id, evaluation_cache
 		)
 			>= int(ceil(
 				float(required_assault_troops(
@@ -4990,8 +5013,8 @@ static func _collect_existing_war_preparation(
 			% [
 				elapsed,
 				objective_city,
-				staged_troops_for_objective(
-					state, nation_id, objective_city, evaluation_cache
+				war_preparation_arrived_troops(
+					state, nation_id, evaluation_cache
 				),
 			]
 		),
@@ -5089,8 +5112,6 @@ static func war_preparation_ready(
 	if (
 		nation.war_preparation_target_nation < 0
 		or nation.war_preparation_objective_city < 0
-		or state.day - nation.war_preparation_started_day
-			< WAR_PREPARATION_MIN_DAYS
 	):
 		return false
 	var objective_center := nation.war_preparation_objective_center_city
@@ -5098,7 +5119,59 @@ static func war_preparation_ready(
 		objective_center = state.administrative_center_of(
 			nation.war_preparation_objective_city
 		)
-	return state.is_zhou_city(objective_center)
+	if not state.is_zhou_city(objective_center):
+		return false
+	var staging := war_staging_cities_for_objective(
+		state,
+		nation_id,
+		nation.war_preparation_objective_city,
+		evaluation_cache,
+	)
+	if (
+		nation.war_preparation_staging_city_id < 0
+		or not staging.has(nation.war_preparation_staging_city_id)
+	):
+		return false
+	return war_preparation_arrived_troops(
+		state, nation_id, evaluation_cache
+	) >= (
+		state.campaign_prewar_launch_requirement(
+			nation_id,
+			nation.war_preparation_target_nation,
+			objective_center,
+		)
+	)
+
+
+static func war_preparation_arrived_troops(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> int:
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return 0
+	var cache_key := "war_preparation_arrived:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return int(evaluation_cache[cache_key])
+	var nation := state.nations[nation_id]
+	var staging_city_id := nation.war_preparation_staging_city_id
+	if staging_city_id < 0:
+		return 0
+	var army_ids := {}
+	for army_id in nation.war_preparation_army_ids:
+		army_ids[army_id] = true
+	var result := 0
+	for army in state.armies:
+		if (
+			army.owner_nation == nation_id
+			and army_ids.has(army.id)
+			and state.army_effective_for_field_campaign(army)
+			and army.state == Army.State.IDLE
+			and army.is_at_city_node(staging_city_id)
+		):
+			result += army.size
+	evaluation_cache[cache_key] = result
+	return result
 
 
 static func staging_cities_for_objective(
@@ -5259,41 +5332,24 @@ static func war_staging_cities_for_objective(
 	)
 
 
-static func staged_troops_for_objective(
-	state: GameState,
-	nation_id: int,
-	objective_city: int,
-	evaluation_cache: Dictionary = {}
-) -> int:
-	var staging := war_staging_cities_for_objective(
-		state, nation_id, objective_city, evaluation_cache
-	)
-	var total := 0
-	for army in state.armies:
-		if army.owner_nation != nation_id or army.size <= 0:
-			continue
-		if (
-			army.state in [Army.State.IDLE, Army.State.RECOVERING]
-			and staging.has(army.location_city)
-		):
-			total += army.size
-		elif (
-			army.state == Army.State.HOLDING
-			and (
-				(army.move_from == objective_city and staging.has(army.move_to))
-				or (army.move_to == objective_city and staging.has(army.move_from))
-			)
-		):
-			total += army.size
-	return total
-
-
 static func required_assault_troops(
 	state: GameState,
 	nation_id: int,
 	objective_city: int,
 	evaluation_cache: Dictionary = {}
 ) -> int:
+	if nation_id >= 0 and nation_id < state.nations.size():
+		var nation := state.nations[nation_id]
+		var center_id := state.administrative_center_of(objective_city)
+		if (
+			nation.war_preparation_target_nation >= 0
+			and center_id >= 0
+		):
+			return state.campaign_prewar_launch_requirement(
+				nation_id,
+				nation.war_preparation_target_nation,
+				center_id,
+			)
 	var objective_requirement := objective_assault_troops(
 		state,
 		nation_id,
