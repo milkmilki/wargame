@@ -1574,6 +1574,7 @@ func _test_rebellion_system() -> void:
 			and vassal_food_state.cities[3].food_storage == 200
 			and vassal_food_state.cities[3].has_warehouse
 			and vassal_food_state.nations[1].warehouse_city_ids.is_empty()
+			and vassal_food_state.suzerainty_structure_valid()
 			and vassal_food_state.territory_structure_valid(),
 		"rebellion/vassal_region_splits_shared_food_pool_conservatively",
 		"before=%s after=%s root=%d rebel=%d" % [
@@ -1685,6 +1686,7 @@ func _make_vassal_regional_rebellion_state() -> GameState:
 		)
 	for city_id in range(3):
 		_add_edge(state, city_id, city_id + 1, 20000, 1)
+	state.rebuild_administrative_regions()
 	_set_all_relations(state, GameState.DiplomaticRelation.NEUTRAL)
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	_configure_capitals_and_warehouses(state, 0)

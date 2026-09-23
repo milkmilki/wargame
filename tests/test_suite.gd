@@ -8298,6 +8298,55 @@ func _test_suzerainty_invariants() -> void:
 			% [overlord_groups_before, group_state.nations[group_overlord].battle_groups.size()]
 	)
 
+	# 和平割地可能只确认州治，使旧藩仍实控并法理持有属府、却失去最后一座
+	# 法理州治。领土事务必须在同一提交中解除该宗藩边，不能把坏状态留到
+	# 下一次分封才由结构断言发现。
+	var centerless_state := GameState.new()
+	centerless_state.generate_grid_world(32034)
+	var centerless_region := _enfeoffable_region(centerless_state, 0, 2)
+	var centerless_subject := centerless_state.enfeoff(0, centerless_region)
+	var centerless_record := centerless_state.suzerainty_record(
+		centerless_subject
+	).duplicate(true)
+	var subject_center := -1
+	for city_id in centerless_region:
+		if centerless_state.is_zhou_city(city_id):
+			subject_center = city_id
+			break
+	var center_transfer := centerless_state.apply_territory_transaction([{
+		"city_id": subject_center,
+		"controller_id": 0,
+		"legal_owner_id": 0,
+		"sponsor_id": -1,
+		"reset_political_target": true,
+		"stock_policy": GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL,
+		"reason": "centerless_vassal_regression",
+	}] as Array[Dictionary])
+	_check(
+		centerless_subject > 0
+			and subject_center >= 0
+			and bool(center_transfer.get("ok", false))
+			and not centerless_state.land_cities_of(centerless_subject).is_empty()
+			and not centerless_state.suzerainty.has(centerless_subject)
+			and centerless_state.food_pool_holder(centerless_subject)
+				== centerless_subject
+			and centerless_state.suzerainty_structure_valid()
+			and centerless_state.territory_structure_valid(),
+		"藩王失去最后法理州治但仍有属府时，领土事务必须同步解除宗藩边"
+	)
+	centerless_state.suzerainty[centerless_subject] = centerless_record
+	centerless_state.set_diplomatic_relation(
+		0, centerless_subject, GameState.DiplomaticRelation.ALLIED
+	)
+	var stale_edge_repaired := centerless_state.prune_dead_suzerainty()
+	_check(
+		stale_edge_repaired
+			and not centerless_state.suzerainty.has(centerless_subject)
+			and centerless_state.suzerainty_structure_valid()
+			and centerless_state.territory_structure_valid(),
+		"每日宗藩清理必须修复旧档或旧事务遗留的无法理州治藩属边"
+	)
+
 	# 宗主所有既有主战军保持原归属，藩王从零建军。
 	var transfer_state := GameState.new()
 	transfer_state.generate_grid_world(32033)

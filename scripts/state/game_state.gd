@@ -5219,6 +5219,10 @@ func food_pool_relay_capitals(holder_id: int) -> Array[int]:
 
 ## 宗藩结构不变量校验。任一破坏都表明分封/削藩逻辑有 bug，应在测试中断言。
 func suzerainty_structure_valid() -> bool:
+	return suzerainty_structure_error().is_empty()
+
+
+func suzerainty_structure_error() -> String:
 	for subject_value in suzerainty:
 		var subject_id := int(subject_value)
 		var record: Dictionary = suzerainty[subject_id]
@@ -5231,7 +5235,9 @@ func suzerainty_structure_valid() -> bool:
 			or overlord_id >= nations.size()
 			or subject_id == overlord_id
 		):
-			return false
+			return "无效宗藩边 subject=%d overlord=%d nations=%d" % [
+				subject_id, overlord_id, nations.size(),
+			]
 		# 2. 关系随内战态：内战中宗主↔藩王须为 WAR（共同体解散、攘外必先安内），
 		#    非内战的宗藩对须恒为 ALLIED（对外共同体化的前提）。
 		var expected := (
@@ -5240,7 +5246,13 @@ func suzerainty_structure_valid() -> bool:
 			else DiplomaticRelation.ALLIED
 		)
 		if relation_between(subject_id, overlord_id) != expected:
-			return false
+			return "宗藩外交不一致 subject=%d overlord=%d expected=%d actual=%d civil_war=%s" % [
+				subject_id,
+				overlord_id,
+				expected,
+				relation_between(subject_id, overlord_id),
+				str(bool(record.get("civil_war", false))),
+			]
 		# A vassal is a state-level polity, never a府-only fragment.
 		var subject_has_center := false
 		for center_value in administrative_center_city_ids:
@@ -5249,20 +5261,36 @@ func suzerainty_structure_valid() -> bool:
 				subject_has_center = true
 				break
 		if not subject_has_center:
-			return false
+			var legal_land_count := 0
+			for city in cities:
+				if (
+					not city.is_dock
+					and recognized_owner_of(city.id) == subject_id
+				):
+					legal_land_count += 1
+			return "藩王无法理州治 subject=%d overlord=%d land=%d legal_land=%d" % [
+				subject_id,
+				overlord_id,
+				land_cities_of(subject_id).size(),
+				legal_land_count,
+			]
 		# 3. 沿宗主链上溯必须在有限步内终止（无环、单一宗主）。
 		var walker := overlord_id
 		var guard := 0
 		while suzerainty.has(walker):
 			if walker == subject_id or guard > nations.size():
-				return false
+				return "宗藩链成环 subject=%d walker=%d guard=%d" % [
+					subject_id, walker, guard,
+				]
 			walker = int(suzerainty[walker]["overlord_id"])
 			guard += 1
-	return true
+	return ""
 
 
-## 清理死亡国家（无城）造成的悬空宗藩记录，保持不变量。每 tick 领土结算后调用。
+## 清理死亡国家（无城）或无法理州治藩国造成的悬空宗藩记录，保持不变量。
+## 每 tick 领土结算后调用。
 ## - 死亡藩王：直接移除其记录（它已不存在）。
+## - 无法理州治藩王：解除上级边，剩余属府成为独立主权领土。
 ## - 死亡宗主：其直接藩王上移一级（挂到宗主自己的宗主，无则升为独立主权），
 ##   宗藩链因此保持连续、无悬空、无环。
 ## 返回是否发生了任何清理（供调用方决定是否刷新缓存）。
@@ -5282,8 +5310,15 @@ func prune_dead_suzerainty() -> bool:
 			and not city.is_dock
 		):
 			final_city_counts[city.owner_nation] += 1
-	var proposed := _normalized_suzerainty_for_city_counts(
-		suzerainty, final_city_counts
+	var final_legal_center_counts: Array[int] = []
+	final_legal_center_counts.resize(nations.size())
+	final_legal_center_counts.fill(0)
+	for center_value in administrative_center_city_ids:
+		var center_owner := recognized_owner_of(int(center_value))
+		if center_owner >= 0 and center_owner < nations.size():
+			final_legal_center_counts[center_owner] += 1
+	var proposed := _normalized_suzerainty_for_territory(
+		suzerainty, final_city_counts, final_legal_center_counts
 	)
 	if proposed == suzerainty:
 		return _promote_independent_vassal_names()
@@ -5480,9 +5515,10 @@ func enfeoff(
 		granted_city.unrest = 100.0 - granted_city.loyalty
 		granted_city.rebellion_progress = 0
 
+	var suzerainty_error := suzerainty_structure_error()
 	assert(
-		suzerainty_structure_valid(),
-		"分封后宗藩结构不变量必须成立"
+		suzerainty_error.is_empty(),
+		"分封后宗藩结构不变量必须成立：" + suzerainty_error
 	)
 	assert(
 		_battle_group_structure_valid(),
@@ -6675,16 +6711,20 @@ func _validated_suzerainty_snapshot(
 	return {"ok": true, "error": "", "snapshot": normalized}
 
 
-## 根据最终有城国家集合一次性跳过死亡宗主、删除死亡藩属。跨过死亡节点的
-## 新边不继承旧内战；它是死亡清理后与存活祖先建立的新和平宗藩边。
-func _normalized_suzerainty_for_city_counts(
+## 根据最终领土一次性跳过死亡宗主，并删除死亡或无法理州治的藩属边。
+## 跨过死亡节点的新边不继承旧内战；它是死亡清理后与存活祖先建立的新和平宗藩边。
+func _normalized_suzerainty_for_territory(
 	snapshot: Dictionary,
-	final_city_counts: Array[int]
+	final_city_counts: Array[int],
+	final_legal_center_counts: Array[int]
 ) -> Dictionary:
 	var result := {}
 	for subject_value in snapshot:
 		var subject_id := int(subject_value)
-		if final_city_counts[subject_id] <= 0:
+		if (
+			final_city_counts[subject_id] <= 0
+			or final_legal_center_counts[subject_id] <= 0
+		):
 			continue
 		var record: Dictionary = snapshot[subject_id]
 		var overlord_id := int(record["overlord_id"])
@@ -6846,6 +6886,7 @@ func apply_territory_transaction(
 	var suzerainty_plan := TerritoryTransaction.plan_suzerainty(
 		cities,
 		nations.size(),
+		administrative_center_city_ids,
 		planned_owners,
 		planned_legal_owners,
 		planned_sponsors,
@@ -6853,7 +6894,7 @@ func apply_territory_transaction(
 		proposed_suzerainty,
 		suzerainty,
 		_validated_suzerainty_snapshot,
-		_normalized_suzerainty_for_city_counts
+		_normalized_suzerainty_for_territory
 	)
 	if not bool(suzerainty_plan.get("ok", false)):
 		return suzerainty_plan

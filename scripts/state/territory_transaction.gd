@@ -53,6 +53,7 @@ static func plan_operations(
 static func plan_suzerainty(
 	cities: Array,
 	nation_count: int,
+	administrative_center_city_ids: PackedInt32Array,
 	planned_owners: Array[int],
 	planned_legal_owners: Array[int],
 	planned_sponsors: Array[int],
@@ -64,6 +65,9 @@ static func plan_suzerainty(
 ) -> Dictionary:
 	var final_city_counts := _count_land_cities(
 		cities, nation_count, planned_owners
+	)
+	var final_legal_center_counts := _count_legal_administrative_centers(
+		nation_count, administrative_center_city_ids, planned_legal_owners
 	)
 	var requested_suzerainty := (
 		(proposed_suzerainty as Dictionary).duplicate(true)
@@ -84,7 +88,7 @@ static func plan_suzerainty(
 		nation_count
 	)
 	var planned_suzerainty: Dictionary = normalize_suzerainty.call(
-		validated_requested, final_city_counts
+		validated_requested, final_city_counts, final_legal_center_counts
 	)
 	var final_validation: Dictionary = validate_suzerainty.call(
 		planned_suzerainty
@@ -100,6 +104,23 @@ static func plan_suzerainty(
 		"planned_suzerainty": planned_suzerainty,
 		"changed": planned_suzerainty != current_suzerainty,
 	}
+
+
+static func _count_legal_administrative_centers(
+	nation_count: int,
+	administrative_center_city_ids: PackedInt32Array,
+	planned_legal_owners: Array[int]
+) -> Array[int]:
+	var counts: Array[int] = []
+	counts.resize(nation_count)
+	counts.fill(0)
+	for center_id in administrative_center_city_ids:
+		if center_id < 0 or center_id >= planned_legal_owners.size():
+			continue
+		var legal_owner := planned_legal_owners[center_id]
+		if legal_owner >= 0 and legal_owner < nation_count:
+			counts[legal_owner] += 1
+	return counts
 
 
 static func _count_land_cities(
