@@ -11478,17 +11478,31 @@ func _capture_city(
 			claimant
 		)
 	)
+	var continue_local_crossing := (
+		army != null
+		and city.is_dock
+		and captor_can_remain
+		and not army.path.is_empty()
+		and state.cities_share_territorial_border(
+			army.move_from, int(army.path[0])
+		)
+	)
 	if army != null:
 		army.occupation_claimant_nation = -1
 	if army != null and captor_can_remain:
-		army.state = Army.State.IDLE
+		army.state = (
+			Army.State.MOVING if continue_local_crossing else Army.State.IDLE
+		)
 		army.forced_retreat = false
 		army.battle_id = -1
 		army.location_city = city.id
 		army.move_from = city.id
 		army.move_to = -1
 		army.move_progress = 0.0
-		army.path.clear()
+		if continue_local_crossing:
+			_begin_next_leg(army)
+		else:
+			army.path.clear()
 	elif army != null:
 		_start_diplomatic_repatriation(
 			army,

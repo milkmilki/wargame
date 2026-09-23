@@ -90,6 +90,12 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-territorial-border.log"
 echo
 
+echo "==> [2f2/29] 本地渡河战争端到端门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/river_crossing_war_e2e.gd \
+  --log-file "$LOG_DIR/world-war-river-crossing-war.log"
+echo
+
 echo "==> [2g/29] 初始国家至少拥有一州门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/initial_nation_administrative_center.gd \

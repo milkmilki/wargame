@@ -42,6 +42,13 @@ static func dijkstra_field(
 		if block_contested_edges
 		else {}
 	)
+	var local_crossing_attack_transits := (
+		_local_crossing_attack_transit_docks(
+			state, allowed_nation, allowed_goal
+		)
+		if allowed_nation >= 0
+		else {}
+	)
 	var queue: Array[Dictionary] = [{
 		"city": start,
 		"distance": 0.0,
@@ -59,15 +66,39 @@ static func dijkstra_field(
 		for v in state.neighbors(u):
 			if visited.has(v):
 				continue
+			var e := state.edge_of(u, v)
+			if e == null or e.max_manpower <= 0:
+				continue
 			if (
 				(blocked_city_ids.has(v) and v != allowed_goal)
 				or (blocked_city_ids.has(u) and u != start)
 			):
 				continue
 			if allowed_nation != -1:
+				var v_is_local_crossing_transit := (
+					local_crossing_attack_transits.has(v)
+				)
+				var u_is_local_crossing_transit := (
+					local_crossing_attack_transits.has(u)
+				)
+				if u_is_local_crossing_transit or v_is_local_crossing_transit:
+					var bank_id := v if u_is_local_crossing_transit else u
+					if (
+						e.kind != Edge.Kind.LANDING
+						or state.cities[bank_id].is_dock
+						or (
+							bank_id != allowed_goal
+							and not state.has_military_access(
+								allowed_nation,
+								state.cities[bank_id].owner_nation
+							)
+						)
+					):
+						continue
 				# 起点可为刚失守的敌城；之后只经过本国/盟国，攻击时允许最终敌城。
 				if (
 					v != allowed_goal
+					and not v_is_local_crossing_transit
 					and not state.has_military_access(
 						allowed_nation, state.cities[v].owner_nation
 					)
@@ -75,14 +106,12 @@ static func dijkstra_field(
 					continue
 				if (
 					u != start
+					and not u_is_local_crossing_transit
 					and not state.has_military_access(
 						allowed_nation, state.cities[u].owner_nation
 					)
 				):
 					continue
-			var e := state.edge_of(u, v)
-			if e == null or e.max_manpower <= 0:
-				continue
 			if (
 				block_contested_edges
 				and blocked_enemy_edges.has(
@@ -112,6 +141,47 @@ static func dijkstra_field(
 					"rank": int(order_rank[v]),
 				})
 	return { "dist": dist, "prev": prev }
+
+
+## 同一码头两岸属于政治接壤。攻击对岸陆城时，允许该共享码头作为唯一的
+## 敌方中继节点；不沿 RIVER/SEA 扩展，也不允许穿过其他敌城。
+static func _local_crossing_attack_transit_docks(
+	state: GameState,
+	attacker_id: int,
+	allowed_goal: int
+) -> Dictionary:
+	var result := {}
+	if (
+		allowed_goal < 0
+		or allowed_goal >= state.cities.size()
+		or state.cities[allowed_goal].is_dock
+	):
+		return result
+	for dock_id in state.neighbors(allowed_goal):
+		if not state.cities[dock_id].is_dock:
+			continue
+		var goal_landing := state.edge_of(dock_id, allowed_goal)
+		if (
+			goal_landing == null
+			or goal_landing.kind != Edge.Kind.LANDING
+			or goal_landing.max_manpower <= 0
+		):
+			continue
+		for neighbor in state.neighbors(dock_id):
+			if neighbor == allowed_goal or state.cities[neighbor].is_dock:
+				continue
+			var landing := state.edge_of(dock_id, neighbor)
+			if (
+				landing != null
+				and landing.kind == Edge.Kind.LANDING
+				and landing.max_manpower > 0
+				and state.has_military_access(
+					attacker_id, state.cities[neighbor].owner_nation
+				)
+			):
+				result[dock_id] = true
+				break
+	return result
 
 
 ## 寻路使用的军事距离。正容量道路对所有编制拥有相同通行时间；danger
