@@ -23,12 +23,17 @@ func _init() -> void:
 		if center_id >= 0:
 			break
 	var valid := attacker_id >= 0 and center_id >= 0
+	var defender_id := state.cities[center_id].owner_nation if valid else -1
+	if valid:
+		state.set_war_objective(
+			attacker_id, defender_id, center_id, "州战役统一分兵门禁"
+		)
 	state.armies.clear()
 	state.battles.clear()
 	var origin := state.nations[attacker_id].capital_city_id if valid else 0
 	var defender_army := Army.new()
 	defender_army.id = 9099
-	defender_army.owner_nation = state.cities[center_id].owner_nation
+	defender_army.owner_nation = defender_id
 	defender_army.size = 12000
 	defender_army.max_size = 15000
 	defender_army.location_city = center_id
@@ -52,7 +57,9 @@ func _init() -> void:
 		# formations must not create paper strength that blocks later reinforcement.
 		for army in state.armies:
 			army.state = Army.State.MOVING
-		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		sim._manage_campaign_offensive(
+			attacker_id, null, null, {"wars": [defender_id]}
+		)
 		var busy_plan := state.campaign_plan(attacker_id, center_id)
 		valid = valid and busy_plan.army_assignments.is_empty()
 		valid = valid and state.campaign_committed_manpower(
@@ -60,7 +67,9 @@ func _init() -> void:
 		) == 0
 		for army in state.armies:
 			army.state = Army.State.IDLE
-		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		sim._manage_campaign_offensive(
+			attacker_id, null, null, {"wars": [defender_id]}
+		)
 		var plan := state.campaign_plan(attacker_id, center_id)
 		valid = valid and plan != null
 		valid = valid and state.campaign_reinforcement_threat(
@@ -91,7 +100,23 @@ func _init() -> void:
 			defender_army.owner_nation,
 			GameState.DiplomaticRelation.WAR
 		)
-		sim._manage_administrative_campaign(attacker_id, center_id, null, null)
+		for army in state.armies:
+			if army.owner_nation == attacker_id:
+				army.state = Army.State.IDLE
+				army.path.clear()
+				army.move_from = army.location_city
+				army.move_to = -1
+				army.ai_target_city = -1
+		sim._manage_campaign_offensive(
+			attacker_id, null, null, {"wars": [defender_id]}
+		)
+		plan = state.campaign_plan(attacker_id, center_id)
+		sim._manage_campaign_offensive(
+			attacker_id, null, null, {"wars": [defender_id]}
+		)
+		sim._manage_campaign_offensive(
+			attacker_id, null, null, {"wars": [defender_id]}
+		)
 		valid = valid and state.campaign_reinforcement_threat(
 			attacker_id, center_id
 		) == 4000

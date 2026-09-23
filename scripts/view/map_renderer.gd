@@ -6649,7 +6649,7 @@ static func _nation_detail_line_count(
 	):
 		diplomacy_lines += 1
 	var count := 1 + _section_layout_line_count(
-		PackedInt32Array([2, 2, 3, 1, diplomacy_lines])
+		PackedInt32Array([2, 2, 4, 1, diplomacy_lines])
 	)
 	count += nation.administrative_campaign_plans.size() * 2
 	return count

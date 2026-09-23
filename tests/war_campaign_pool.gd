@@ -38,7 +38,7 @@ func _init() -> void:
 	state.armies.append(army)
 	plan.army_assignments[army.id] = center_one
 	valid = valid and state.campaign_assignment_war(army.id) == war_one
-	valid = valid and state.offensive_campaign_for_war(0, war_one) == plan
+	valid = valid and state.offensive_campaigns_for_war(0, war_one) == [plan]
 	var combat_army_data: Dictionary = CombatLog._side_snapshot(
 		[army] as Array[Army]
 	)[0]
@@ -69,17 +69,22 @@ func _init() -> void:
 			pair.x, pair.y, GameState.DiplomaticRelation.NEUTRAL
 		)
 	valid = valid and army.campaign_war_id == -1
-	valid = valid and state.offensive_campaign_for_war(0, merged_war) == null
+	valid = valid and state.offensive_campaigns_for_war(0, merged_war).is_empty()
 	valid = valid and state.is_enemy(3, 1)
 	state.set_diplomatic_relation(3, 1, GameState.DiplomaticRelation.NEUTRAL)
 	simulation.free()
-	valid = _test_continuous_state_campaign() and valid
-	valid = _test_capital_emergency_transfer() and valid
+	var continuous_valid := _test_continuous_state_campaign()
+	var capital_valid := _test_capital_emergency_transfer()
+	var two_front_valid := _test_two_front_war_allocation()
+	valid = continuous_valid and capital_valid and two_front_valid and valid
 	if valid:
 		print("WAR_CAMPAIGN_POOL_OK wars=%d/%d" % [war_one, war_two])
 		quit(0)
 		return
-	push_error("WAR_CAMPAIGN_POOL_FAILED wars=%d/%d" % [war_one, war_two])
+	push_error(
+		"WAR_CAMPAIGN_POOL_FAILED wars=%d/%d continuous=%s capital=%s two_front=%s"
+		% [war_one, war_two, continuous_valid, capital_valid, two_front_valid]
+	)
 	quit(1)
 
 
@@ -142,7 +147,10 @@ func _test_continuous_state_campaign() -> bool:
 	simulation._manage_campaign_offensive(
 		attacker_id, null, null, {"wars": [defender_id]}
 	)
-	var first_plan := state.offensive_campaign_for_war(attacker_id, war_id)
+	var first_plans := state.offensive_campaigns_for_war(attacker_id, war_id)
+	var first_plan: AdministrativeCampaignPlan = (
+		first_plans[0] if not first_plans.is_empty() else null
+	)
 	var valid := first_plan != null and first_plan.center_city_id == chain[1]
 	state.cities[chain[1]].owner_nation = attacker_id
 	state.ownership_revision += 1
@@ -156,13 +164,145 @@ func _test_continuous_state_campaign() -> bool:
 	simulation._manage_campaign_offensive(
 		attacker_id, null, null, {"wars": [defender_id]}
 	)
-	var second_plan := state.offensive_campaign_for_war(attacker_id, war_id)
+	var second_plans := state.offensive_campaigns_for_war(attacker_id, war_id)
+	var second_plan: AdministrativeCampaignPlan = (
+		second_plans[0] if not second_plans.is_empty() else null
+	)
 	valid = (
 		valid
-		and second_plan == first_plan
+		and second_plan != null
 		and second_plan.center_city_id == chain[2]
 		and army.campaign_war_id == war_id
 	)
+	simulation.free()
+	return valid
+
+
+func _test_two_front_war_allocation() -> bool:
+	var state := GameState.new()
+	state.generate_grid_world(94144)
+	var chain := _administrative_center_chain(state)
+	if chain.size() < 3:
+		return false
+	var attacker_id := 0
+	var defender_id := 1
+	var neutral_id := 2
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	for city in state.cities:
+		if not city.is_dock:
+			city.owner_nation = neutral_id
+			state.recognized_city_owners[city.id] = neutral_id
+	for member_id in state.administrative_members(chain[1]):
+		state.cities[member_id].owner_nation = attacker_id
+		state.recognized_city_owners[member_id] = attacker_id
+	for center_id in [chain[0], chain[2]]:
+		for member_id in state.administrative_members(center_id):
+			state.cities[member_id].owner_nation = defender_id
+			state.recognized_city_owners[member_id] = defender_id
+	state.nations[attacker_id].capital_city_id = chain[1]
+	state.nations[defender_id].capital_city_id = chain[2]
+	state.armies.clear()
+	state.battles.clear()
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, chain[0], "双州战线门禁"
+	)
+	for index in range(5):
+		var army := Army.new()
+		army.id = 941440 + index
+		army.owner_nation = attacker_id
+		army.size = 15000
+		army.max_size = 15000
+		army.location_city = chain[1]
+		army.move_from = chain[1]
+		army.state = Army.State.IDLE
+		state.armies.append(army)
+	state.ownership_revision += 1
+	state.refresh_derived()
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	var context := {"wars": [defender_id]}
+	simulation._manage_campaign_offensive(attacker_id, null, null, context)
+	var first_cycle := state.offensive_campaigns_for_war(attacker_id, war_id)
+	var assigned_first_cycle := 0
+	for plan in first_cycle:
+		assigned_first_cycle += plan.army_assignments.size()
+	var valid := first_cycle.size() == 1 and assigned_first_cycle == 3
+	var sixth_army := Army.new()
+	sixth_army.id = 941445
+	sixth_army.owner_nation = attacker_id
+	sixth_army.size = 15000
+	sixth_army.max_size = 15000
+	sixth_army.location_city = chain[1]
+	sixth_army.move_from = chain[1]
+	sixth_army.state = Army.State.IDLE
+	state.armies.append(sixth_army)
+	simulation._manage_campaign_offensive(attacker_id, null, null, context)
+	var second_cycle := state.offensive_campaigns_for_war(attacker_id, war_id)
+	var assigned_ids := {}
+	var assigned_second_cycle := 0
+	for plan in second_cycle:
+		assigned_second_cycle += plan.army_assignments.size()
+		for army_id_value in plan.army_assignments:
+			assigned_ids[int(army_id_value)] = true
+	valid = (
+		valid
+		and second_cycle.size() == 2
+		and assigned_second_cycle == 6
+		and assigned_ids.size() == 6
+	)
+	for army in state.armies:
+		if army.owner_nation == attacker_id:
+			valid = valid and army.campaign_war_id == war_id
+	sixth_army.state = Army.State.RECOVERING
+	simulation._manage_campaign_offensive(attacker_id, null, null, context)
+	valid = valid and state.offensive_campaigns_for_war(
+		attacker_id, war_id
+	).size() == 2
+	var cooling_plan := state.offensive_campaigns_for_war(
+		attacker_id, war_id
+	)[0]
+	cooling_plan.had_forces = true
+	for army in state.armies:
+		if cooling_plan.army_assignments.has(army.id):
+			army.size = 0
+	var replacement := Army.new()
+	replacement.id = 941446
+	replacement.owner_nation = attacker_id
+	replacement.size = 15000
+	replacement.max_size = 15000
+	replacement.location_city = chain[1]
+	replacement.move_from = chain[1]
+	replacement.state = Army.State.IDLE
+	state.armies.append(replacement)
+	simulation._manage_campaign_offensive(attacker_id, null, null, context)
+	valid = (
+		valid
+		and cooling_plan.failed_until_day == state.day + 60
+		and not cooling_plan.army_assignments.has(replacement.id)
+	)
+	var extra_center := -1
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if not state.nations[attacker_id].administrative_campaign_plans.has(center_id):
+			extra_center = center_id
+			break
+	if extra_center >= 0:
+		var extra_plan := AdministrativeCampaignPlan.new()
+		extra_plan.center_city_id = extra_center
+		extra_plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+		extra_plan.war_id = war_id
+		state.nations[attacker_id].administrative_campaign_plans[extra_center] = extra_plan
+		simulation._sanitize_offensive_campaigns(attacker_id)
+		valid = valid and state.offensive_campaigns_for_war(
+			attacker_id, war_id
+		).size() == 2
 	simulation.free()
 	return valid
 

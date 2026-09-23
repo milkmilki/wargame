@@ -2246,14 +2246,18 @@ func campaign_enemy_ids(nation_id: int, war_id: int) -> Array[int]:
 	return result
 
 
-func offensive_campaign_for_war(
+func offensive_campaigns_for_war(
 	nation_id: int,
 	war_id: int
-) -> AdministrativeCampaignPlan:
+) -> Array[AdministrativeCampaignPlan]:
+	var result: Array[AdministrativeCampaignPlan] = []
 	if nation_id < 0 or nation_id >= nations.size():
-		return null
-	var center_values := nations[nation_id].administrative_campaign_plans.keys()
-	center_values.sort()
+		return result
+	var center_values: Array[int] = []
+	center_values.assign(
+		nations[nation_id].administrative_campaign_plans.keys()
+	)
+	EquivariantOrder.sort_city_ids(center_values, self, nation_id)
 	for center_value in center_values:
 		var plan := nations[nation_id].administrative_campaign_plans[center_value] \
 			as AdministrativeCampaignPlan
@@ -2262,8 +2266,8 @@ func offensive_campaign_for_war(
 			and plan.mode == AdministrativeCampaignPlan.Mode.OFFENSE
 			and plan.war_id == war_id
 		):
-			return plan
-	return null
+			result.append(plan)
+	return result
 
 
 func army_effective_for_field_campaign(army: Army) -> bool:

@@ -3762,7 +3762,8 @@ static func select_war_objective(
 	target_id: int,
 	evaluation_cache: Dictionary = {},
 	excluded_city: int = -1,
-	legal_reclamation_only: bool = false
+	legal_reclamation_only: bool = false,
+	excluded_centers: Dictionary = {}
 ) -> Dictionary:
 	var target_cities := (
 		_cached_cities_of(
@@ -3783,7 +3784,7 @@ static func select_war_objective(
 		):
 			continue
 		var center_id := state.administrative_center_of(target_city.id)
-		if center_id >= 0:
+		if center_id >= 0 and not excluded_centers.has(center_id):
 			center_set[center_id] = true
 	var center_ids: Array[int] = []
 	center_ids.assign(center_set.keys())
