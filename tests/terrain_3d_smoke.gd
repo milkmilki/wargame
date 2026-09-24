@@ -240,7 +240,7 @@ func _run() -> void:
 		if (
 			shader_line.contains("boundary_texture")
 			and shader_line.contains("uniform sampler2D")
-			and shader_line.contains("filter_nearest")
+			and shader_line.contains("filter_linear")
 			and shader_line.contains("repeat_disable")
 		):
 			boundary_sampler_lines += 1
@@ -536,8 +536,9 @@ func _run() -> void:
 				"uniform float country_fill_fade_enabled"
 			)
 			and terrain_shader_code.contains(
-				"coast_country.a, country_fill_fade_enabled"
+				"coast_country.a * country_fill_fade_enabled"
 			)
+			and terrain_shader_code.contains("country_gradient_weight")
 			and terrain_shader_code.contains("faded_country_color")
 		),
 		"white_base_political_modes": (
@@ -568,7 +569,7 @@ func _run() -> void:
 				== map_3d._province_id_texture.get_size()
 			and terrain_shader_code.contains("country_boundary_texture")
 			and terrain_shader_code.contains(
-				"uniform sampler2D country_boundary_texture : source_color, filter_nearest"
+				"uniform sampler2D country_boundary_texture : source_color, filter_linear"
 			)
 			and terrain_shader_code.contains("country_color_texture")
 			and terrain_shader_code.contains("province_boundary_texture")
@@ -598,14 +599,14 @@ func _run() -> void:
 				Color(0.0, 0.0, 0.0, 1.0)
 			)
 			and is_equal_approx(MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, 1.0)
-			and is_equal_approx(MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 3.0)
+			and is_equal_approx(MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 2.0)
 			and is_equal_approx(
 				MapRenderer.COUNTRY_BOUNDARY_VALUE_OFFSET, -0.15
 			)
 			and is_equal_approx(
-				MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET, 0.10
+				MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET, 0.05
 			)
-			and is_equal_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX, 0.0)
+			and is_equal_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX, 1.0)
 			and nation_color_contract
 			and province_boundary_max_alpha > 0.98
 			and country_boundary_max_alpha > 0.98
@@ -726,13 +727,15 @@ func _run() -> void:
 			)), MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"local_boundary_outer_radius_px"
-			)), MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5)
+			)), MapRenderer.LOCAL_BOUNDARY_WIDTH_PX * 0.5
+				+ MapRenderer.BOUNDARY_ANTIALIAS_PX)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"country_boundary_core_width_px"
 			)), MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"country_boundary_outer_width_px"
-			)), MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX)
+			)), MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
+				+ MapRenderer.BOUNDARY_ANTIALIAS_PX)
 		),
 		"mesh_country_boundary_excludes_raster_coast": (
 			mesh_country_boundaries.get_data()

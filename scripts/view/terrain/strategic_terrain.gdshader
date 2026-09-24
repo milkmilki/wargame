@@ -3,9 +3,9 @@ render_mode cull_back, diffuse_burley, specular_disabled;
 
 uniform sampler2D province_id_texture : filter_nearest, repeat_disable;
 uniform sampler2D province_visual_lut : source_color, filter_nearest, repeat_disable;
-uniform sampler2D province_boundary_texture : source_color, filter_nearest, repeat_disable;
-uniform sampler2D country_boundary_texture : source_color, filter_nearest, repeat_disable;
-uniform sampler2D country_color_texture : source_color, filter_nearest, repeat_disable;
+uniform sampler2D province_boundary_texture : source_color, filter_linear, repeat_disable;
+uniform sampler2D country_boundary_texture : source_color, filter_linear, repeat_disable;
+uniform sampler2D country_color_texture : source_color, filter_linear, repeat_disable;
 uniform float province_strength : hint_range(0.0, 1.0) = 0.93;
 uniform float province_boundary_strength : hint_range(0.0, 1.0) = 1.0;
 uniform float coast_boundary_strength : hint_range(0.0, 1.0) = 1.0;
@@ -76,11 +76,17 @@ void fragment() {
 		// Geometry is the sole geography truth: strictly below the 0m contour is
 		// unowned ocean; the 0m contour and everything above it are land.
 		float province_alpha = step(0.5, province.a) * hard_land;
-		float country_fill_opacity = mix(
-			1.0, coast_country.a, country_fill_fade_enabled
+		float country_gradient_weight = (
+			coast_country.a * country_fill_fade_enabled
 		);
+		// Country colour is an ink layer: start from the selected political
+		// land base and fade the country's boundary colour toward that base as
+		// the sample moves into the interior. The final land surface stays opaque.
+		// province.rgb is the owning nation's base colour. The country texture
+		// carries the enhanced boundary colour and only its alpha is used as the
+		// inward gradient weight, so every nation fades to its own colour.
 		vec3 faded_country_color = mix(
-			white_low_poly_base, province.rgb, country_fill_opacity
+			province.rgb, coast_country.rgb, country_gradient_weight
 		);
 		vec3 political_land = mix(
 			white_low_poly_base, faded_country_color, province_alpha

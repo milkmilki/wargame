@@ -1217,12 +1217,19 @@ func _update_province_visuals() -> void:
 					state, view_nation_id
 				)
 			)
+			var gradient_colors := (
+				boundary_colors
+				if region_mode
+				else MapRenderer.country_gradient_colors(
+					state, view_nation_id
+				)
+			)
 			var country_color_source := (
 				MapRenderer.build_country_color_source_image_from_owners(
 					state.province_map_size,
 					state.province_ids,
 					city_owners,
-					boundary_colors
+					gradient_colors
 				)
 			)
 			var country_color_image := (
@@ -1265,10 +1272,8 @@ func _update_province_visuals() -> void:
 		_country_color_texture
 	)
 	_terrain.set_country_fill_fade_enabled(
-		not (
-			_map_mode == MapRenderer.MapMode.LOYALTY
-			and view_nation_id < 0
-		)
+		view_nation_id < 0
+		and _map_mode != MapRenderer.MapMode.LOYALTY
 	)
 	_update_boundary_lod()
 	_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
@@ -1335,10 +1340,17 @@ func _queue_country_visual_rebuild(
 		"serial": _country_visual_request_serial,
 		"ownership_revision": state.ownership_revision,
 		"source_size": state.province_map_size,
-		"colors": (
+		"boundary_colors": (
 			MapRenderer.region_boundary_colors(state)
 			if region_mode
 			else MapRenderer.country_boundary_colors(
+				state, view_nation_id
+			).duplicate()
+		),
+		"gradient_colors": (
+			MapRenderer.region_boundary_colors(state)
+			if region_mode
+			else MapRenderer.country_gradient_colors(
 				state, view_nation_id
 			).duplicate()
 		),
@@ -1397,7 +1409,8 @@ func _start_country_visual_task(request: Dictionary) -> void:
 		_build_country_visual_snapshot_job.bind(
 			_country_visual_task_job,
 			request["source_size"],
-			request["colors"],
+			request["boundary_colors"],
+			request["gradient_colors"],
 			request["geometry"],
 			request["province_ids"],
 			request["city_owners"]
@@ -1488,6 +1501,7 @@ func _build_country_visual_snapshot_job(
 	job: Dictionary,
 	source_size: Vector2i,
 	boundary_colors: PackedColorArray,
+	gradient_colors: PackedColorArray,
 	geometry: Dictionary,
 	province_ids: PackedInt32Array,
 	city_owners: PackedInt32Array
@@ -1499,7 +1513,7 @@ func _build_country_visual_snapshot_job(
 	)
 	var country_color_source := (
 		MapRenderer.build_country_color_source_image_from_owners(
-			source_size, province_ids, city_owners, boundary_colors
+			source_size, province_ids, city_owners, gradient_colors
 		)
 	)
 	job["country_opacity"] = country_opacity
@@ -1829,11 +1843,23 @@ func _trade_route_material() -> StandardMaterial3D:
 
 func _apply_map_mode_visibility() -> void:
 	var trade_mode := _map_mode == MapRenderer.MapMode.TRADE
+	var city_road_visible := (
+		overlay == null or overlay.city_road_visuals_visible()
+	)
 	if _roads != null:
+		_roads.visible = city_road_visible
 		_roads.transparency = 0.70 if trade_mode else 0.0
 	if _minor_roads != null:
 		_minor_roads.transparency = 0.78 if trade_mode else 0.0
-		_minor_roads.visible = _camera_distance <= 62.0
+		_minor_roads.visible = city_road_visible and _camera_distance <= 62.0
+	for city_node in [
+		_cities, _city_bases, _city_resource_markers, _dock_rings,
+		_capital_rings, _region_score_markers
+	]:
+		if city_node != null:
+			city_node.visible = city_road_visible
+	if _edge_selection != null:
+		_edge_selection.visible = city_road_visible
 	if _rivers != null:
 		_rivers.transparency = 0.46 if trade_mode else 0.0
 	if _trade_routes != null:
@@ -3139,7 +3165,7 @@ func _update_selection_marker() -> void:
 		)
 		var pulse := 1.0 + sin(_visual_time * 3.2) * 0.08
 		_selection.scale = Vector3.ONE * pulse
-		_selection.visible = true
+		_selection.visible = overlay.city_road_visuals_visible()
 		return
 	_selection.visible = false
 
@@ -3181,15 +3207,17 @@ func _update_map_detail_visibility() -> void:
 	if overlay == null:
 		return
 	var visible := overlay.city_names_visible()
+	var city_road_visible := overlay.city_road_visuals_visible()
 	var nation_visible := (
 		overlay.nation_names_visible() and not _history_preview_active
 	)
 	var signature: Array = [
-		visible and _camera_distance <= 40.0,
+		city_road_visible and visible and _camera_distance <= 40.0,
 		nation_visible,
 		_camera_distance <= 50.0,
 		_camera_distance <= 62.0,
 		_map_mode,
+		city_road_visible,
 	]
 	if signature == _last_detail_visibility_signature:
 		return
@@ -3203,7 +3231,7 @@ func _update_map_detail_visibility() -> void:
 			bool(signature[2]) and bool(label.get_meta("active", false))
 		)
 	if _minor_roads != null:
-		_minor_roads.visible = bool(signature[3])
+		_minor_roads.visible = bool(signature[3]) and bool(signature[5])
 	_apply_map_mode_visibility()
 
 

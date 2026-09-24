@@ -466,18 +466,24 @@ func _run() -> void:
 		MapRenderer.LOCAL_BOUNDARY_WIDTH_PX, 1.0
 	)
 	var boundary_country_width: bool = is_equal_approx(
-		MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 3.0
+		MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX, 2.0
 	)
 	var boundary_value_offset: bool = is_equal_approx(
 		MapRenderer.COUNTRY_BOUNDARY_VALUE_OFFSET, -0.15
 	)
 	var boundary_saturation_offset: bool = is_equal_approx(
-		MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET, 0.10
+		MapRenderer.COUNTRY_BOUNDARY_SATURATION_OFFSET, 0.05
 	)
 	overlay.select_nation(0)
 	map_3d._process(0.0)
 	var diplomatic_fill := MapRenderer.build_province_overlay_image(state, 0)
 	var diplomatic_colors_valid := true
+	var diplomatic_gradient_colors := MapRenderer.country_gradient_colors(
+		state, 0
+	)
+	var diplomatic_gradient_colors_valid := (
+		diplomatic_gradient_colors.size() == state.nations.size()
+	)
 	for nation_id in range(4):
 		var sample_city := state.cities_of(nation_id)[0]
 		var sample_pixel := Vector2i(
@@ -496,10 +502,22 @@ func _run() -> void:
 				)
 			)
 		)
+		diplomatic_gradient_colors_valid = (
+			diplomatic_gradient_colors_valid
+			and _color_near(
+				diplomatic_gradient_colors[nation_id],
+				MapRenderer.country_boundary_display_color(
+					MapRenderer.political_map_color_for_view(
+						state, nation_id, 0
+					)
+				)
+			)
+		)
 	var diplomatic_view_contract := (
 		overlay.diplomatic_view_nation_id() == 0
 		and map_3d._last_diplomatic_view_nation_id == 0
 		and diplomatic_colors_valid
+		and diplomatic_gradient_colors_valid
 		and MapRenderer.political_map_color_for_view(state, 1, 0)
 			.is_equal_approx(MapRenderer.DIPLOMACY_ENEMY_COLOR)
 		and MapRenderer.political_map_color_for_view(state, 2, 0)
@@ -509,7 +527,9 @@ func _run() -> void:
 	)
 	overlay.clear_map_selection()
 	map_3d._process(0.0)
-	var boundary_aa: bool = is_zero_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX)
+	var boundary_aa: bool = is_equal_approx(
+		MapRenderer.BOUNDARY_ANTIALIAS_PX, 1.0
+	)
 	var boundary_texture_bound: bool = (
 		terrain_material.get_shader_parameter(
 			"country_boundary_texture"
@@ -549,19 +569,20 @@ func _run() -> void:
 			float(terrain_material.get_shader_parameter(
 				"local_boundary_outer_radius_px"
 			)),
-			0.5
+			0.5 + MapRenderer.BOUNDARY_ANTIALIAS_PX
 		)
 		and is_equal_approx(
 			float(terrain_material.get_shader_parameter(
 				"country_boundary_core_width_px"
 			)),
-			3.0
+			MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
 		)
 		and is_equal_approx(
 			float(terrain_material.get_shader_parameter(
 				"country_boundary_outer_width_px"
 			)),
-			3.0
+			MapRenderer.COUNTRY_BOUNDARY_WIDTH_PX
+				+ MapRenderer.BOUNDARY_ANTIALIAS_PX
 		)
 	)
 	var boundary_shader_source_contract: bool = (
@@ -607,8 +628,31 @@ func _run() -> void:
 		and map_3d._country_boundary_texture.get_size()
 			== map_3d._province_id_texture.get_size()
 	)
+	overlay.set_city_road_visuals_visible(false)
+	map_3d._update_map_detail_visibility()
+	var city_road_hidden := (
+		not overlay.city_road_visuals_visible()
+		and not map_3d._roads.visible
+		and not map_3d._minor_roads.visible
+		and not map_3d._cities.visible
+		and not map_3d._city_bases.visible
+		and not map_3d._city_resource_markers.visible
+		and not map_3d._dock_rings.visible
+		and not map_3d._capital_rings.visible
+		and map_3d._city_labels.all(
+			func(label: Label3D) -> bool: return not label.visible
+		)
+	)
+	overlay.set_city_road_visuals_visible(true)
+	map_3d._update_map_detail_visibility()
+	var city_road_restored := (
+		overlay.city_road_visuals_visible()
+		and map_3d._roads.visible
+		and map_3d._cities.visible
+	)
 
 	var checks := {
+		"city_road_toggle": city_road_hidden and city_road_restored,
 		"city_bases": map_3d._city_bases.multimesh.instance_count == state.cities.size(),
 		"city_resources": map_3d._city_resource_markers.multimesh.instance_count == state.cities.size(),
 		"dock_rings": map_3d._dock_rings.multimesh.instance_count == state.cities.size(),

@@ -41,6 +41,7 @@ extends Node
 )
 @export var initial_city_names_visible: bool = true
 @export var initial_nation_names_visible: bool = true
+@export var initial_city_road_visuals_visible: bool = true
 @export_file("*.png", "*.jpg", "*.jpeg", "*.webp") var initial_political_mask_path: String = ""
 @export_range(1, 365, 1) var history_interval_days: int = (
 	PoliticalHistory.DEFAULT_INTERVAL_DAYS
@@ -556,6 +557,7 @@ func _activate_state(next_state: GameState) -> void:
 	renderer.set_army_icon_scale(initial_army_icon_scale)
 	renderer.set_city_names_visible(initial_city_names_visible)
 	renderer.set_nation_names_visible(initial_nation_names_visible)
+	renderer.set_city_road_visuals_visible(initial_city_road_visuals_visible)
 	renderer.setup(state, simulation)
 	if road_tuning_panel != null:
 		renderer.set_province_strength(

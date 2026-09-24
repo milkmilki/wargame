@@ -21,6 +21,7 @@ const NATION_STATS_BUTTON_WIDTH := MapLayout.NATION_STATS_BUTTON_WIDTH
 const ARMY_ICON_CONTROL_WIDTH := MapLayout.ARMY_ICON_CONTROL_WIDTH
 const CITY_NAME_BUTTON_WIDTH := 82.0
 const NATION_NAME_BUTTON_WIDTH := 82.0
+const CITY_ROAD_BUTTON_WIDTH := 82.0
 const ARMY_ICON_SCALE_MIN: float = 0.10
 const ARMY_ICON_SCALE_MAX: float = 1.80
 const ARMY_ICON_SCALE_STEP: float = 0.10
@@ -89,16 +90,23 @@ const DIPLOMACY_NEUTRAL_COLOR := Color(0.0, 0.0, 0.0, 1.0)
 const LOCAL_BOUNDARY_INK := Color(0.0, 0.0, 0.0, 1.0)
 const POLITICAL_MAP_DEFAULT_STRENGTH: float = 0.93
 const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
-const PROVINCE_VISUAL_SUPERSAMPLE: int = 4
+## Visual political layers are intentionally denser than the logical province
+## raster. With the formal 256x256 ownership map this produces 2048x2048
+## boundary/fill textures without changing gameplay topology.
+const PROVINCE_VISUAL_SUPERSAMPLE: int = 8
 const LOCAL_BOUNDARY_WIDTH_PX: float = 1.0
-const COUNTRY_BOUNDARY_WIDTH_PX: float = 3.0
+const COUNTRY_BOUNDARY_WIDTH_PX: float = 2.0
 const COUNTRY_BOUNDARY_VALUE_OFFSET: float = -0.15
-const COUNTRY_BOUNDARY_SATURATION_OFFSET: float = 0.10
-## 以省份归属源贴图像素为单位。增大后，国家色向腹地消退得更快。
-const COUNTRY_FILL_FADE_COEFFICIENT: float = 0.035
-## 国家腹地保留的最低不透明度。设为 0.0 时大国中心可完全露出白模。
+const COUNTRY_BOUNDARY_SATURATION_OFFSET: float = 0.05
+## 以省份归属源贴图像素为单位的渐变半径。边界墨层在该距离内自然
+## 淡出到基础色；调大它会让国家边界色向腹地延伸得更深。
+const COUNTRY_FILL_FADE_RADIUS_PX: float = 10.0
+## 保留旧名称作为兼容性契约；实际衰减由半径控制。
+const COUNTRY_FILL_FADE_COEFFICIENT: float = 1.0 / COUNTRY_FILL_FADE_RADIUS_PX
+## 国家腹地保留的最低不透明度。设为 0.0 时大国中心显示基础色。
 const COUNTRY_FILL_MIN_OPACITY: float = 0.0
-const BOUNDARY_ANTIALIAS_PX: float = 0.0
+## Feather only the rendered boundary ink; province IDs remain nearest-neighbor.
+const BOUNDARY_ANTIALIAS_PX: float = 1.0
 const VASSAL_BRIGHTNESS_STEP: float = 0.05
 
 enum FormationIcon {
@@ -192,6 +200,7 @@ var _nation_stats_sort_key: int = NationSort.CITY_COUNT
 var _nation_stats_sort_descending: bool = true
 var _city_names_visible: bool = true
 var _nation_names_visible: bool = true
+var _city_road_visuals_visible: bool = true
 var _army_icon_scale: float = ARMY_ICON_SCALE_DEFAULT
 var _nation_list_cache_day: int = -1
 var _nation_list_cache_ownership_revision: int = -1
@@ -212,6 +221,7 @@ var _army_icon_label: Label
 var _army_icon_slider: HSlider
 var _city_name_button: Button
 var _nation_name_button: Button
+var _city_road_button: Button
 var _ruler_profile_menu: PopupMenu
 var _fallback_family_tree_panel: Node
 var _fallback_family_tree_previous_pause: bool = false
@@ -544,6 +554,33 @@ func _create_army_icon_scale_control() -> void:
 	)
 	city_button_pressed.bg_color = ACCENT_GOLD.darkened(0.45)
 	city_button_pressed.border_color = PAPER_LIGHT
+	_city_road_button = Button.new()
+	_city_road_button.name = "CityRoadToggle"
+	_city_road_button.toggle_mode = true
+	_city_road_button.button_pressed = _city_road_visuals_visible
+	_city_road_button.custom_minimum_size = Vector2(
+		CITY_ROAD_BUTTON_WIDTH,
+		0.0
+	)
+	_city_road_button.add_theme_font_override("font", _font)
+	_city_road_button.add_theme_font_size_override("font_size", 10)
+	_city_road_button.add_theme_color_override("font_color", PAPER_LIGHT)
+	_city_road_button.add_theme_color_override("font_hover_color", Color.WHITE)
+	_city_road_button.add_theme_color_override(
+		"font_pressed_color", PAPER_LIGHT
+	)
+	_city_road_button.add_theme_stylebox_override(
+		"normal", city_button_normal.duplicate()
+	)
+	_city_road_button.add_theme_stylebox_override(
+		"hover", city_button_hover.duplicate()
+	)
+	_city_road_button.add_theme_stylebox_override(
+		"pressed", city_button_pressed.duplicate()
+	)
+	_city_road_button.tooltip_text = "开启或关闭城市标记与道路"
+	_city_road_button.toggled.connect(_on_city_road_visuals_toggled)
+	row.add_child(_city_road_button)
 	_city_name_button.add_theme_stylebox_override(
 		"normal",
 		city_button_normal
@@ -603,6 +640,7 @@ func _create_army_icon_scale_control() -> void:
 	row.add_child(_nation_name_button)
 
 	set_army_icon_scale(_army_icon_scale)
+	set_city_road_visuals_visible(_city_road_visuals_visible)
 	set_city_names_visible(_city_names_visible)
 	set_nation_names_visible(_nation_names_visible)
 
@@ -653,6 +691,22 @@ func set_city_names_visible(visible: bool) -> void:
 
 func city_names_visible() -> bool:
 	return _city_names_visible
+
+
+func _on_city_road_visuals_toggled(visible: bool) -> void:
+	set_city_road_visuals_visible(visible)
+
+
+func set_city_road_visuals_visible(visible: bool) -> void:
+	_city_road_visuals_visible = visible
+	if _city_road_button != null:
+		_city_road_button.set_pressed_no_signal(visible)
+		_city_road_button.text = "城路 开" if visible else "城路 关"
+	queue_redraw()
+
+
+func city_road_visuals_visible() -> bool:
+	return _city_road_visuals_visible
 
 
 func _on_nation_names_toggled(visible: bool) -> void:
@@ -1981,7 +2035,8 @@ func _draw() -> void:
 		_ensure_province_visual_cache()
 		_draw_province_fills()
 		_draw_rivers()
-		_draw_edges()
+		if _city_road_visuals_visible:
+			_draw_edges()
 		_draw_trade_routes()
 		_draw_selection_highlight()
 		# Political divisions form one solid-color line layer above the map,
@@ -1989,7 +2044,8 @@ func _draw() -> void:
 		_draw_province_boundaries()
 		if not _history_preview_active:
 			_draw_national_boundaries()
-		_draw_cities()
+		if _city_road_visuals_visible:
+			_draw_cities()
 		_draw_battles()
 		_draw_armies()
 	_draw_selection_detail(detail_payload)
@@ -2178,13 +2234,11 @@ func _ensure_province_visual_cache() -> void:
 			)
 			_country_fill_opacity_ownership_revision = state.ownership_revision
 			_country_fill_opacity_mode = _map_mode
-		var fill_source := (
-			build_region_overlay_image(state)
-			if region_mode
-			else build_province_overlay_image(
-				state, _diplomatic_view_nation_id
-			)
+		var fill_source := build_province_overlay_image(
+			state, _diplomatic_view_nation_id
 		)
+		if region_mode:
+			fill_source = build_region_overlay_image(state)
 		var canvas := build_political_canvas_images(
 			state, geometry, false, fill_source, true,
 			_country_fill_opacity_image
@@ -2481,6 +2535,9 @@ static func political_fill_signature(
 
 ## Build the categorical political fill and, when requested, the three soft
 ## boundary layers derived from the same authoritative province topology.
+## Political mode keeps each province's owning-country colour as the gradient
+## base and derives a stronger boundary tint from that same colour. Region
+## mode supplies its own categorical source and is kept separate.
 static func build_political_canvas_images(
 	game_state: GameState,
 	boundary_geometry: Dictionary = {},
@@ -2509,7 +2566,7 @@ static func build_political_canvas_images(
 	fill.resize(
 		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
 		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
-		Image.INTERPOLATE_NEAREST
+		Image.INTERPOLATE_BILINEAR
 	)
 	# The shader masks political color with authoritative terrain geometry, so
 	# this texture only needs to supply a nearby province RGB where the coarse
@@ -2542,14 +2599,15 @@ static func build_political_canvas_images(
 
 
 static func country_fill_opacity_for_distance(distance: float) -> float:
-	return maxf(
-		COUNTRY_FILL_MIN_OPACITY,
-		1.0 - maxf(distance, 0.0) * COUNTRY_FILL_FADE_COEFFICIENT
-	)
+	var radius := maxf(COUNTRY_FILL_FADE_RADIUS_PX, 0.001)
+	var normalized_distance := clampf(maxf(distance, 0.0) / radius, 0.0, 1.0)
+	# Smoothstep avoids a visible slope break where the country ink ends.
+	var fade := 1.0 - smoothstep(0.0, 1.0, normalized_distance)
+	return maxf(COUNTRY_FILL_MIN_OPACITY, fade)
 
 
 ## 多源洪泛只在 256x256 所有权源图上运行。边界与海岸像素为 1，向同一
-## 国家腹地按像素距离线性衰减；国家之间不会互相传播距离。
+## 国家腹地生成渐变权重；该权重用于混合边界色和基础色，不表示最终透明度。
 static func build_country_fill_opacity_image(game_state: GameState) -> Image:
 	var city_owners := PackedInt32Array()
 	city_owners.resize(game_state.cities.size())
@@ -2665,7 +2723,14 @@ static func _apply_country_fill_opacity(
 			var color := fill.get_pixel(x, y)
 			if color.a <= 0.001:
 				continue
-			color.a = country_opacity.get_pixel(x, y).r
+			# Opacity is a gradient weight, not the final pixel alpha. Keep the
+			# whole political fill opaque and transition from boundary ink to the
+			# selected land base colour toward the country interior.
+			var boundary_weight := country_opacity.get_pixel(x, y).r
+			var country_base := color
+			var boundary_color := country_boundary_display_color(country_base)
+			color = country_base.lerp(boundary_color, boundary_weight)
+			color.a = 1.0
 			fill.set_pixel(x, y, color)
 
 
@@ -2751,14 +2816,14 @@ static func build_country_color_source_image(
 	city_owners.resize(game_state.cities.size())
 	for city_id in range(game_state.cities.size()):
 		city_owners[city_id] = game_state.cities[city_id].owner_nation
-	var boundary_colors := country_boundary_colors(
+	var gradient_colors := country_gradient_colors(
 		game_state, view_nation_id
 	)
 	return build_country_color_source_image_from_owners(
 		game_state.province_map_size,
 		game_state.province_ids,
 		city_owners,
-		boundary_colors
+		gradient_colors
 	)
 
 
@@ -2816,7 +2881,7 @@ static func build_country_color_image_from_source(
 	result.resize(
 		maxi(source_size.x * PROVINCE_VISUAL_SUPERSAMPLE, 1),
 		maxi(source_size.y * PROVINCE_VISUAL_SUPERSAMPLE, 1),
-		Image.INTERPOLATE_NEAREST
+		Image.INTERPOLATE_BILINEAR
 	)
 	return result
 
@@ -3150,11 +3215,28 @@ static func country_boundary_colors(
 	return colors
 
 
-## 国界始终使用所属国家本色，不随外交观察模式切换成关系分类色。
+## Fill gradients follow the active political/diplomatic classification. The
+## solid country-border texture intentionally remains on sovereign nation hues.
+static func country_gradient_colors(
+	game_state: GameState, view_nation_id: int = -1
+) -> PackedColorArray:
+	var colors := PackedColorArray()
+	colors.resize(game_state.nations.size())
+	for nation_id in range(game_state.nations.size()):
+		colors[nation_id] = country_boundary_display_color(
+			political_map_color_for_view(
+				game_state, nation_id, view_nation_id
+			)
+		)
+	return colors
+
+
+## 普通政治视角使用所属国家本色；外交观察视角下边界线与填充统一
+## 使用关系分类色，避免国家本色残留成一圈边框。
 static func nation_boundary_color(
 	game_state: GameState,
 	nation_id: int,
-	_view_nation_id: int = -1
+	view_nation_id: int = -1
 ) -> Color:
 	if (
 		game_state == null
@@ -3162,9 +3244,12 @@ static func nation_boundary_color(
 		or nation_id >= game_state.nations.size()
 	):
 		return Color.TRANSPARENT
-	return country_boundary_display_color(
-		paper_nation_color(game_state.nations[nation_id].color)
+	var base := (
+		political_map_color_for_view(game_state, nation_id, view_nation_id)
+		if view_nation_id >= 0
+		else paper_nation_color(game_state.nations[nation_id].color)
 	)
+	return country_boundary_display_color(base)
 
 
 ## Political-map color is intentionally shared by 2D and 3D renderers. A
@@ -4658,6 +4743,8 @@ func _draw_edge_danger_ticks(
 
 
 func _draw_selection_highlight() -> void:
+	if not _city_road_visuals_visible:
+		return
 	if _selected_edge_a >= 0 and _selected_edge_b >= 0:
 		var edge := state.edge_of(_selected_edge_a, _selected_edge_b)
 		if edge != null:
