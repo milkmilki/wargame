@@ -227,7 +227,9 @@ var _garrisons_initialized: bool = false
 ## between docks remain transport-only and never extend this topology.
 var _territorial_border_cache_revision: Array[int] = []
 var _territorial_border_pairs: Array[Vector2i] = []
-var _territorial_border_adjacency: Array[Array] = []
+var _territorial_border_adjacency: Array = []
+var _local_crossing_banks_by_dock: Dictionary = {}
+var _territorial_border_cache_mutex := Mutex.new()
 ## 省份栅格的静态拓扑缓存。领土变化只重新聚合宗藩根，不重复扫描贴图。
 var _province_neighbor_pairs: Array[Vector2i] = []
 var _province_neighbor_pairs_ready: bool = false
@@ -751,6 +753,7 @@ func _reset_world(world_seed: int) -> void:
 	_territorial_border_cache_revision.clear()
 	_territorial_border_pairs.clear()
 	_territorial_border_adjacency.clear()
+	_local_crossing_banks_by_dock.clear()
 	_province_neighbor_pairs.clear()
 	_province_neighbor_pairs_ready = false
 	river_features.clear()
@@ -2306,6 +2309,94 @@ func campaign_assignment_war(army_id: int) -> int:
 	return -1
 
 
+## Returns one stable view of a nation's war pool and its state-front bindings.
+## A plan assignment is strategic ownership; issuing or executing the current
+## tactical movement order does not affect these totals.
+func campaign_war_force_report(nation_id: int, war_id: int) -> Dictionary:
+	var result := {
+		"war_pool_total": 0,
+		"war_pool_effective": 0,
+		"reserve_effective": 0,
+		"allocatable_effective": 0,
+		"duplicate_assignments": 0,
+		"fronts": {},
+	}
+	if nation_id < 0 or nation_id >= nations.size() or war_id < 0:
+		return result
+	var front_reports: Dictionary = result["fronts"]
+	var assignment_plans := {}
+	var center_values: Array[int] = []
+	center_values.assign(nations[nation_id].administrative_campaign_plans.keys())
+	EquivariantOrder.sort_city_ids(center_values, self, nation_id)
+	for center_id in center_values:
+		var plan := campaign_plan(nation_id, center_id)
+		if plan == null:
+			continue
+		if plan.war_id == war_id:
+			front_reports[center_id] = {
+				"mode": plan.mode,
+				"assigned_total": 0,
+				"assigned_effective": 0,
+			}
+		for army_id_value in plan.army_assignments:
+			var army_id := int(army_id_value)
+			if assignment_plans.has(army_id):
+				result["duplicate_assignments"] = (
+					int(result["duplicate_assignments"]) + 1
+				)
+				continue
+			assignment_plans[army_id] = plan
+	for army in armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		var effective := army_effective_for_field_campaign(army)
+		var assigned_plan: AdministrativeCampaignPlan = assignment_plans.get(
+			army.id
+		)
+		if army.campaign_war_id == war_id:
+			result["war_pool_total"] = int(result["war_pool_total"]) + army.size
+			if effective:
+				result["war_pool_effective"] = (
+					int(result["war_pool_effective"]) + army.size
+				)
+				if (
+					army.defensive_deployment_until_day <= day
+					and (
+					assigned_plan == null
+					or assigned_plan.mode
+						== AdministrativeCampaignPlan.Mode.OFFENSE
+					)
+				):
+					result["allocatable_effective"] = (
+						int(result["allocatable_effective"]) + army.size
+					)
+		if (
+			assigned_plan != null
+			and assigned_plan.war_id == war_id
+			and army.campaign_war_id == war_id
+		):
+			var front: Dictionary = front_reports[assigned_plan.center_city_id]
+			front["assigned_total"] = int(front["assigned_total"]) + army.size
+			if effective:
+				front["assigned_effective"] = (
+					int(front["assigned_effective"]) + army.size
+				)
+		elif (
+			army.campaign_war_id == -1
+			and assigned_plan == null
+			and effective
+			and army.state == Army.State.IDLE
+			and army.defensive_deployment_until_day <= day
+		):
+			result["reserve_effective"] = (
+				int(result["reserve_effective"]) + army.size
+			)
+			result["allocatable_effective"] = (
+				int(result["allocatable_effective"]) + army.size
+			)
+	return result
+
+
 func campaign_enemy_ids(nation_id: int, war_id: int) -> Array[int]:
 	var flags := {}
 	for other in nations:
@@ -2368,18 +2459,16 @@ func campaign_committed_manpower(
 	var attacker_plan := campaign_plan(attacker_id, center_city_id)
 	var war_id := attacker_plan.war_id if attacker_plan != null else -1
 	var result := 0
-	for army in armies:
-		if (
-			army == null
-			or not attacker_bloc.has(army.owner_nation)
-			or not army_effective_for_field_campaign(army)
-			or (war_id >= 0 and army.campaign_war_id != war_id)
-			or not army_committed_to_administrative_campaign(
-				army, center_city_id
-			)
-		):
+	for bloc_nation_value in attacker_bloc:
+		var bloc_nation_id := int(bloc_nation_value)
+		var plan := campaign_plan(bloc_nation_id, center_city_id)
+		if plan == null or (war_id >= 0 and plan.war_id != war_id):
 			continue
-		result += army.size
+		var report := campaign_war_force_report(bloc_nation_id, plan.war_id)
+		var front: Dictionary = (report["fronts"] as Dictionary).get(
+			center_city_id, {}
+		)
+		result += int(front.get("assigned_effective", 0))
 	return result
 
 
@@ -2389,11 +2478,8 @@ func army_committed_to_administrative_campaign(
 ) -> bool:
 	if (
 		army == null
-		or army.size <= 0
 		or army.owner_nation < 0
 		or army.owner_nation >= nations.size()
-		or army.state in [Army.State.RETREATING, Army.State.RECOVERING]
-		or army.defensive_deployment_until_day > day
 	):
 		return false
 	var plan := campaign_plan(army.owner_nation, center_city_id)
@@ -2403,19 +2489,7 @@ func army_committed_to_administrative_campaign(
 		or not plan.army_assignments.has(army.id)
 	):
 		return false
-	var assigned_target := int(plan.army_assignments[army.id])
-	var target := army.ai_target_city
-	return (
-		(
-			target >= 0
-			and target < cities.size()
-			and administrative_center_of(target) == center_city_id
-		)
-		or (
-			army.state == Army.State.IDLE
-			and army.location_city == assigned_target
-		)
-	)
+	return army.campaign_war_id == plan.war_id
 
 
 func campaign_defensive_committed_manpower(
@@ -3668,6 +3742,41 @@ func cities_share_territorial_border(city_a: int, city_b: int) -> bool:
 	return (_territorial_border_adjacency[city_a] as Array[int]).has(city_b)
 
 
+## 正容量 LANDING 直接连接到同一码头的陆岸。码头间 RIVER/SEA 边不会
+## 进入该集合，因此它同时是政治接壤、行军和补给使用的本地渡口真源。
+func local_crossing_banks(dock_id: int) -> Array[int]:
+	_ensure_territorial_border_cache()
+	return (
+		(_local_crossing_banks_by_dock[dock_id] as Array[int]).duplicate()
+		if _local_crossing_banks_by_dock.has(dock_id)
+		else [] as Array[int]
+	)
+
+
+func local_crossing_dock_ids() -> Array[int]:
+	_ensure_territorial_border_cache()
+	var result: Array[int] = []
+	for dock_value in _local_crossing_banks_by_dock:
+		if (
+			(_local_crossing_banks_by_dock[dock_value] as Array[int]).size()
+			>= 2
+		):
+			result.append(int(dock_value))
+	result.sort()
+	return result
+
+
+func is_local_crossing_transit(
+	dock_id: int,
+	bank_a: int,
+	bank_b: int
+) -> bool:
+	if bank_a == bank_b:
+		return false
+	var banks := local_crossing_banks(dock_id)
+	return banks.has(bank_a) and banks.has(bank_b)
+
+
 ## Physical edges supporting one political border contact. A direct land
 ## border has one edge; a local dock crossing has the two bank landing edges.
 func territorial_border_support_edges(
@@ -3677,24 +3786,17 @@ func territorial_border_support_edges(
 	if not cities_share_territorial_border(city_a, city_b):
 		return result
 	var direct := edge_of(city_a, city_b)
-	if direct != null and direct.kind == Edge.Kind.LAND:
+	if (
+		direct != null
+		and direct.kind == Edge.Kind.LAND
+		and direct.max_manpower > 0
+	):
 		result.append(direct)
 		return result
 	var shared_docks: Array[int] = []
-	for neighbor in neighbors(city_a):
-		if neighbor < 0 or neighbor >= cities.size() or not cities[neighbor].is_dock:
-			continue
-		var first := edge_of(city_a, neighbor)
-		var second := edge_of(city_b, neighbor)
-		if (
-			first != null and second != null
-			and first.kind == Edge.Kind.LANDING
-			and second.kind == Edge.Kind.LANDING
-			and first.max_manpower > 0
-			and second.max_manpower > 0
-		):
-			shared_docks.append(neighbor)
-	shared_docks.sort()
+	for dock_id in local_crossing_dock_ids():
+		if is_local_crossing_transit(dock_id, city_a, city_b):
+			shared_docks.append(dock_id)
 	if shared_docks.is_empty():
 		return result
 	result.append(edge_of(city_a, shared_docks[0]))
@@ -3710,7 +3812,14 @@ func _ensure_territorial_border_cache() -> void:
 	]
 	if _territorial_border_cache_revision == revision:
 		return
+	# 补给网络会在 WorkerThreadPool 中按国家并行构建。第一次读取拓扑时
+	# 多个线程可能同时到达这里，必须保证懒缓存只由一个线程写入。
+	_territorial_border_cache_mutex.lock()
+	if _territorial_border_cache_revision == revision:
+		_territorial_border_cache_mutex.unlock()
+		return
 	var pair_by_key := {}
+	_local_crossing_banks_by_dock.clear()
 	for edge in edges:
 		if (
 			edge == null
@@ -3736,17 +3845,19 @@ func _ensure_territorial_border_cache() -> void:
 				continue
 			banks.append(neighbor)
 		banks.sort()
+		_local_crossing_banks_by_dock[dock.id] = banks
 		for left_index in range(banks.size()):
 			for right_index in range(left_index + 1, banks.size()):
 				_add_territorial_border_pair(
 					pair_by_key, banks[left_index], banks[right_index]
 				)
 	_territorial_border_pairs.clear()
-	for pair_value in pair_by_key.values():
-		_territorial_border_pairs.append(pair_value as Vector2i)
-	_territorial_border_pairs.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		return a.x < b.x or (a.x == b.x and a.y < b.y)
-	)
+	var pair_keys: Array = pair_by_key.keys()
+	pair_keys.sort()
+	for pair_key in pair_keys:
+		_territorial_border_pairs.append(
+			pair_by_key[pair_key] as Vector2i
+		)
 	_territorial_border_adjacency.clear()
 	_territorial_border_adjacency.resize(cities.size())
 	for city_id in range(cities.size()):
@@ -3757,6 +3868,7 @@ func _ensure_territorial_border_cache() -> void:
 	for city_neighbors in _territorial_border_adjacency:
 		(city_neighbors as Array[int]).sort()
 	_territorial_border_cache_revision = revision
+	_territorial_border_cache_mutex.unlock()
 
 
 func _valid_territorial_border_land_city(city_id: int) -> bool:
@@ -6662,8 +6774,8 @@ func recognized_owner_of(city_id: int) -> int:
 	return recognized_city_owners[city_id]
 
 
-## 按事务最终实控图选择确定性首都。已有首都仍合法时保持不动；需要修复时，
-## 复用迁都规则：优先最大陆地连通分量，再取工事最强城市。
+## 按事务最终实控图选择确定性首都。只要仍拥有州治，首都就必须从州治中
+## 选择；多个领土分量之间优先选择包含州治的最大分量。
 func _planned_territory_capital(
 	nation_id: int,
 	planned_owners: Array[int],
@@ -6675,11 +6787,21 @@ func _planned_territory_capital(
 		or planned_owners.size() != cities.size()
 	):
 		return -1
+	var candidates: Array[City] = []
+	var has_owned_zhou := false
+	for city in cities:
+		if planned_owners[city.id] != nation_id or city.is_dock:
+			continue
+		candidates.append(city)
+		has_owned_zhou = has_owned_zhou or is_zhou_city(city.id)
+	if candidates.is_empty():
+		return -1
 	if (
 		preferred_city_id >= 0
 		and preferred_city_id < cities.size()
 		and planned_owners[preferred_city_id] == nation_id
 		and not cities[preferred_city_id].is_dock
+		and (not has_owned_zhou or is_zhou_city(preferred_city_id))
 	):
 		return preferred_city_id
 	var current := nations[nation_id].capital_city_id
@@ -6688,57 +6810,18 @@ func _planned_territory_capital(
 		and current < cities.size()
 		and planned_owners[current] == nation_id
 		and not cities[current].is_dock
+		and (not has_owned_zhou or is_zhou_city(current))
 	):
 		return current
-	var candidates: Array[int] = []
-	for city in cities:
-		if planned_owners[city.id] == nation_id and not city.is_dock:
-			candidates.append(city.id)
-	if candidates.is_empty():
-		return -1
-	var candidate_set := {}
-	for city_id in candidates:
-		candidate_set[city_id] = true
-	var visited := {}
-	var best_component: Array[int] = []
-	var best_rep := -1
-	for city_id in candidates:
-		if visited.has(city_id):
-			continue
-		var component: Array[int] = []
-		var queue: Array[int] = [city_id]
-		var cursor := 0
-		var representative := city_id
-		visited[city_id] = true
-		while cursor < queue.size():
-			var current_id := queue[cursor]
-			cursor += 1
-			component.append(current_id)
-			representative = mini(representative, current_id)
-			for neighbor in neighbors(current_id):
-				if visited.has(neighbor) or not candidate_set.has(neighbor):
-					continue
-				var edge := edge_of(current_id, neighbor)
-				if edge == null or edge.max_manpower <= 0:
-					continue
-				visited[neighbor] = true
-				queue.append(neighbor)
-		if (
-			component.size() > best_component.size()
-			or (
-				component.size() == best_component.size()
-				and (best_rep < 0 or representative < best_rep)
-			)
-		):
-			best_component = component
-			best_rep = representative
-	var best := best_component[0]
-	for city_id in best_component:
-		if EquivariantOrder.city_id_less(
-			self, nation_id, city_id, best
-		):
-			best = city_id
-	return best
+	var best_component := _largest_owned_component(
+		nation_id, candidates, has_owned_zhou
+	)
+	var capital_candidates: Array[City] = []
+	for city in best_component:
+		if not has_owned_zhou or is_zhou_city(city.id):
+			capital_candidates.append(city)
+	EquivariantOrder.sort_cities(capital_candidates, self, nation_id)
+	return capital_candidates[0].id
 
 
 ## 规范化一份任意宗藩快照。事务只能接收完整最终图，不能让调用方通过提前
@@ -7141,6 +7224,7 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 				capital.capital_since_day = day
 	var planned_suzerainty: Dictionary = plan["planned_suzerainty"]
 	suzerainty = planned_suzerainty.duplicate(true)
+	var previous_diplomatic_relations := diplomatic_relations
 	diplomatic_relations = plan["planned_diplomatic_relations"]
 	diplomatic_since_day = plan["planned_diplomatic_since"]
 	truce_until_day = plan["planned_truce_until"]
@@ -7150,6 +7234,7 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 	if territory_changed or political_changed:
 		ownership_revision += 1
 	if diplomacy_changed:
+		_reconcile_atomic_war_relations(previous_diplomatic_relations)
 		diplomacy_revision += 1
 	refresh_derived()
 	_promote_independent_vassal_names()
@@ -7164,6 +7249,53 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 		"diplomacy_changed": diplomacy_changed, "error": "",
 		"changed_city_ids": changed_city_ids,
 	}
+
+
+## 原子领土事务会整张替换外交关系，不能经过 set_diplomatic_relation 的
+## 单边生命周期钩子。这里在最终外交图已经落定后统一同步战争 ID，并释放
+## 已经不再参战国家的战争池，避免和平军队永久残留 campaign_war_id。
+func _reconcile_atomic_war_relations(
+	previous_relations: Dictionary
+) -> void:
+	var ended_participants_by_war := {}
+	for nation_a in range(nations.size()):
+		for nation_b in range(nation_a + 1, nations.size()):
+			var key := _diplomacy_key(nation_a, nation_b)
+			var previous := int(previous_relations.get(
+				key, DiplomaticRelation.NEUTRAL
+			))
+			var current := relation_between(nation_a, nation_b)
+			if (
+				current == DiplomaticRelation.WAR
+				and previous != DiplomaticRelation.WAR
+			):
+				if not war_relation_ids.has(key):
+					war_relation_ids[key] = next_war_id
+					next_war_id += 1
+			elif (
+				previous == DiplomaticRelation.WAR
+				and current != DiplomaticRelation.WAR
+			):
+				var finished_war_id := int(war_relation_ids.get(key, -1))
+				war_relation_ids.erase(key)
+				if finished_war_id < 0:
+					continue
+				if not ended_participants_by_war.has(finished_war_id):
+					ended_participants_by_war[finished_war_id] = {}
+				var participants: Dictionary = ended_participants_by_war[
+					finished_war_id
+				]
+				participants[nation_a] = true
+				participants[nation_b] = true
+	for war_value in ended_participants_by_war:
+		var war_id := int(war_value)
+		var participants: Dictionary = ended_participants_by_war[war_value]
+		for participant_value in participants:
+			var participant := int(participant_value)
+			if not nation_participates_in_war_id(participant, war_id):
+				release_nation_war_pool(participant, war_id)
+		if not war_relation_ids.values().has(war_id):
+			release_war_pool(war_id)
 
 
 ## 只转移城市实控及其战争结算责任方。
@@ -7456,9 +7588,8 @@ func remove_warehouse(nation_id: int, city_id: int) -> void:
 		cities[city_id].has_warehouse = false
 
 
-## 首都失守后迁都：优先落在本国「最大连通领土分量」内，分量内再取工事最强者
-## （同工事按势力局部物理序）。选最大分量而非全局最强单城，可避免把主体国土误
-## 判为飞地——投降割地后国土可能碎成多块，迁都到最大块才能让其余飞地被正确放弃。
+## 首都失守后迁都：只要仍拥有州治，就优先选择包含州治的最大连通领土分量，
+## 并且只从该分量的州治中选首都。完全没有州治时才回退到普通陆城。
 ## 只有当前粮池持有者建立粮仓；和平藩王的新首都仍是零库存补给中继，不能因迁都
 ## 意外获得独立粮仓。削藩内战反叛方是自己的粮池持有者，仍会正常建立粮仓。
 func relocate_capital(nation_id: int) -> int:
@@ -7486,7 +7617,12 @@ func relocate_capital(nation_id: int) -> int:
 		nation.capital_city_id = -1
 		nation.warehouse_city_ids.clear()
 		return -1
-	var best_component := _largest_owned_component(nation_id, candidates)
+	var has_owned_zhou := false
+	for city in candidates:
+		has_owned_zhou = has_owned_zhou or is_zhou_city(city.id)
+	var best_component := _largest_owned_component(
+		nation_id, candidates, has_owned_zhou
+	)
 	var zhou_candidates: Array[City] = []
 	for city in best_component:
 		if is_zhou_city(city.id):
@@ -7534,6 +7670,12 @@ func ensure_valid_capital(nation_id: int) -> int:
 		and cities[capital_id].owner_nation == nation_id
 		and not cities[capital_id].is_dock
 		and cities[capital_id].is_capital
+		and (
+			is_zhou_city(capital_id)
+			or not land_cities_of(nation_id).any(
+				func(city: City) -> bool: return is_zhou_city(city.id)
+			)
+		)
 	):
 		return capital_id
 	return relocate_capital(nation_id)
@@ -7640,7 +7782,8 @@ func territory_structure_valid() -> bool:
 ## 的势力局部物理序取更小者，保证确定性。仅用本国实控城 + 可通行边构成子图。
 func _largest_owned_component(
 	nation_id: int,
-	owned_cities: Array[City]
+	owned_cities: Array[City],
+	prefer_zhou_component: bool = false
 ) -> Array[City]:
 	var owned := {}
 	for city in owned_cities:
@@ -7648,6 +7791,7 @@ func _largest_owned_component(
 	var visited := {}
 	var best: Array[City] = []
 	var best_rep := -1
+	var best_has_zhou := false
 	for city in owned_cities:
 		if visited.has(city.id):
 			continue
@@ -7669,12 +7813,31 @@ func _largest_owned_component(
 					continue
 				visited[neighbor] = true
 				queue.append(neighbor)
+		var component_has_zhou := false
+		for member in component:
+			if is_zhou_city(member.id):
+				component_has_zhou = true
+				break
 		if (
-			component.size() > best.size()
-			or (component.size() == best.size() and (best_rep < 0 or rep < best_rep))
+			(
+				prefer_zhou_component
+				and component_has_zhou != best_has_zhou
+				and component_has_zhou
+			)
+			or (
+				(not prefer_zhou_component or component_has_zhou == best_has_zhou)
+				and (
+					component.size() > best.size()
+					or (
+						component.size() == best.size()
+						and (best_rep < 0 or rep < best_rep)
+					)
+				)
+			)
 		):
 			best = component
 			best_rep = rep
+			best_has_zhou = component_has_zhou
 	return best
 
 

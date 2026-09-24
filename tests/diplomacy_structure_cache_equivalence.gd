@@ -19,6 +19,58 @@ func _init() -> void:
 	var action_mismatches := (
 		0 if str(legacy_actions) == str(optimized_actions) else 1
 	)
+	var prefilter_state := GameState.new()
+	prefilter_state.generate_world(12345, nations, cities)
+	prefilter_state.day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	DiplomacyAI.alliance_acceptance_prefilter_disabled = true
+	var unfiltered_alliance_actions := DiplomacyAI.choose_actions(
+		prefilter_state, {}, true
+	)
+	DiplomacyAI.alliance_acceptance_prefilter_disabled = false
+	DiplomacyAI.reset_alliance_acceptance_prefilter_counters()
+	var filtered_alliance_actions := DiplomacyAI.choose_actions(
+		prefilter_state, {}, true
+	)
+	var prefilter_counters := (
+		DiplomacyAI.alliance_acceptance_prefilter_counters()
+	)
+	var prefilter_mismatches := (
+		0
+		if str(unfiltered_alliance_actions) == str(filtered_alliance_actions)
+		else 1
+	)
+	if int(prefilter_counters.get("prunes", 0)) <= 0:
+		prefilter_mismatches += 1
+	if prefilter_state.nations.size() >= 2:
+		prefilter_state.set_diplomatic_relation(
+			0, 1, GameState.DiplomaticRelation.WAR
+		)
+	DiplomacyAI.reset_campaign_v_index_counters()
+	var campaign_v_cache := {}
+	var campaign_v_mismatches := 0
+	var nonzero_campaign_v := 0
+	for attacker_id in range(prefilter_state.nations.size()):
+		for center_value in prefilter_state.administrative_center_city_ids:
+			var center_id := int(center_value)
+			var indexed_v := DiplomacyAI._cached_campaign_reinforcement_threat(
+				prefilter_state, attacker_id, center_id, campaign_v_cache
+			)
+			var direct_v := prefilter_state.campaign_reinforcement_threat(
+				attacker_id, center_id
+			)
+			if direct_v > 0:
+				nonzero_campaign_v += 1
+			if indexed_v != direct_v:
+				campaign_v_mismatches += 1
+	var campaign_v_counters := DiplomacyAI.campaign_v_index_counters()
+	if (
+		int(campaign_v_counters.get("builds", 0))
+			> prefilter_state.nations.size()
+		or nonzero_campaign_v <= 0
+		or int(campaign_v_counters.get("hits", 0)) <= 0
+		or int(campaign_v_counters.get("legacy_scans", 0)) != 0
+	):
+		campaign_v_mismatches += 1
 	if action_mismatches > 0:
 		print("legacy_actions=%s" % str(legacy_actions))
 		print("optimized_actions=%s" % str(optimized_actions))
@@ -26,10 +78,15 @@ func _init() -> void:
 		"=== 外交结构缓存等价校验 (%d国/%d城/%d天) ==="
 		% [nations, cities, days]
 	)
-	print("长期状态不一致=%d 动作列表不一致=%d" % [
-		state_mismatches, action_mismatches,
+	print("长期状态不一致=%d 动作列表不一致=%d 结盟预筛不一致=%d V索引不一致=%d 预筛=%s V索引=%s" % [
+		state_mismatches, action_mismatches, prefilter_mismatches,
+		campaign_v_mismatches, str(prefilter_counters),
+		str(campaign_v_counters),
 	])
-	var mismatches := state_mismatches + action_mismatches
+	var mismatches := (
+		state_mismatches + action_mismatches + prefilter_mismatches
+		+ campaign_v_mismatches
+	)
 	print("verdict=%s" % (
 		"DIPLOMACY_STRUCTURE_CACHE_EQUIVALENT"
 		if mismatches == 0

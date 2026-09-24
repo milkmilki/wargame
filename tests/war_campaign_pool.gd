@@ -76,16 +76,156 @@ func _init() -> void:
 	var continuous_valid := _test_continuous_state_campaign()
 	var capital_valid := _test_capital_emergency_transfer()
 	var two_front_valid := _test_two_front_war_allocation()
-	valid = continuous_valid and capital_valid and two_front_valid and valid
+	var stable_assignment_valid := _test_campaign_assignment_survives_order_failure()
+	var atomic_peace_valid := _test_atomic_peace_releases_war_pool()
+	valid = (
+		continuous_valid
+		and capital_valid
+		and two_front_valid
+		and stable_assignment_valid
+		and atomic_peace_valid
+		and valid
+	)
 	if valid:
 		print("WAR_CAMPAIGN_POOL_OK wars=%d/%d" % [war_one, war_two])
 		quit(0)
 		return
 	push_error(
-		"WAR_CAMPAIGN_POOL_FAILED wars=%d/%d continuous=%s capital=%s two_front=%s"
-		% [war_one, war_two, continuous_valid, capital_valid, two_front_valid]
+		(
+			"WAR_CAMPAIGN_POOL_FAILED wars=%d/%d continuous=%s capital=%s "
+			+ "two_front=%s stable_assignment=%s atomic_peace=%s"
+		)
+		% [
+			war_one, war_two, continuous_valid, capital_valid,
+			two_front_valid, stable_assignment_valid, atomic_peace_valid,
+		]
 	)
 	quit(1)
+
+
+func _test_campaign_assignment_survives_order_failure() -> bool:
+	var state := GameState.new()
+	state.generate_grid_world(94145)
+	var attacker_id := 0
+	var defender_id := 1
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var center_id := _owned_center(state, defender_id)
+	if center_id < 0:
+		return false
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "稳定州绑定门禁"
+	)
+	state.armies.clear()
+	var plan := AdministrativeCampaignPlan.new()
+	plan.center_city_id = center_id
+	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+	plan.war_id = war_id
+	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
+	var army := Army.new()
+	army.id = 941450
+	army.owner_nation = attacker_id
+	army.size = 4500
+	army.max_size = 15000
+	army.location_city = state.nations[attacker_id].capital_city_id
+	army.move_from = army.location_city
+	army.state = Army.State.IDLE
+	army.ai_target_city = -1
+	army.campaign_war_id = war_id
+	state.armies.append(army)
+	plan.army_assignments[army.id] = center_id
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	var failed_order := ActionCandidate.make(
+		ActionCandidate.Kind.REINFORCE,
+		2000.0,
+		"模拟异步提交失败",
+		center_id,
+	)
+	var intent := AiCommandIntent.make(
+		army, failed_order, 0, [] as Array[int], true
+	)
+	var committed_before := state.campaign_committed_manpower(
+		attacker_id, center_id
+	)
+	simulation._commit_ordinary_ai_intent(intent)
+	var committed_after := state.campaign_committed_manpower(
+		attacker_id, center_id
+	)
+	var allocation := simulation.war_offensive_allocation(
+		attacker_id, war_id
+	)
+	var fronts: Array = allocation["fronts"]
+	var valid := (
+		committed_before == army.size
+		and committed_after == army.size
+		and plan.army_assignments.has(army.id)
+		and state.campaign_assignment_center(army.id) == center_id
+		and fronts.size() == 1
+		and int((fronts[0] as Dictionary)["committed_C"]) == army.size
+		and int(allocation["war_pool_total"]) == army.size
+		and int(allocation["war_pool_effective"]) == army.size
+		and int(allocation["duplicate_assignments"]) == 0
+	)
+	simulation.free()
+	return valid
+
+
+func _test_atomic_peace_releases_war_pool() -> bool:
+	var state := GameState.new()
+	state.generate_grid_world(94144)
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	var center_id := _owned_center(state, 1)
+	if center_id < 0:
+		return false
+	var war_id := state.set_war_objective(0, 1, center_id, "原子议和战争池门禁")
+	var plan := AdministrativeCampaignPlan.new()
+	plan.center_city_id = center_id
+	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+	plan.war_id = war_id
+	state.nations[0].administrative_campaign_plans[center_id] = plan
+	var army := Army.new()
+	army.id = 941440
+	army.owner_nation = 0
+	army.size = 15000
+	army.max_size = 15000
+	army.location_city = state.nations[0].capital_city_id
+	army.move_from = army.location_city
+	army.campaign_war_id = war_id
+	state.armies.append(army)
+	plan.army_assignments[army.id] = center_id
+	var result := state.apply_territory_transaction(
+		[] as Array[Dictionary],
+		{},
+		state.ownership_revision,
+		null,
+		[{
+			"nation_a": 0,
+			"nation_b": 1,
+			"relation": GameState.DiplomaticRelation.NEUTRAL,
+			"truce_days": GameState.DEFAULT_TRUCE_DAYS,
+		}] as Array[Dictionary],
+		state.diplomacy_revision,
+	)
+	return (
+		bool(result.get("ok", false))
+		and bool(result.get("diplomacy_changed", false))
+		and not state.is_enemy(0, 1)
+		and state.war_id_between(0, 1) == -1
+		and army.campaign_war_id == -1
+		and state.offensive_campaigns_for_war(0, war_id).is_empty()
+	)
 
 
 func _owned_center(state: GameState, owner_id: int) -> int:

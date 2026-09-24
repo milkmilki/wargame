@@ -136,6 +136,12 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/prewar_assembly.gd \
   --log-file "$LOG_DIR/world-war-prewar-assembly.log"
 echo
+# 战斗、移动或州战役逻辑变更的必跑端到端门禁；单次同时覆盖陆路与共享码头跨河。
+echo "==> [2i6/29] 陆路与跨河备战、宣战及连续两州攻防链条门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_chain_e2e.gd \
+  --log-file "$LOG_DIR/world-war-campaign-chain-e2e.log"
+echo
 echo "==> [2j/29] 州治守军战损比门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/garrison_combat_ratio.gd \
@@ -290,6 +296,19 @@ echo "==> [26/29] 默认前端场景 smoke"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/frontend_scene_smoke.gd \
   --log-file "$LOG_DIR/world-war-frontend-scene.log"
+echo
+
+echo "==> [26a/29] 四十国正式场景并行启动门禁"
+FORTY_NATION_STARTUP_LOG="$LOG_DIR/world-war-forty-nation-startup.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --quit-after 180 res://forty_nations.tscn \
+  --log-file "$FORTY_NATION_STARTUP_LOG"
+if grep -qiE "SCRIPT ERROR|ERROR:" "$FORTY_NATION_STARTUP_LOG"; then
+  cat "$FORTY_NATION_STARTUP_LOG"
+  echo "四十国正式场景启动失败：发现运行期错误" >&2
+  exit 1
+fi
+echo "    四十国正式场景启动通过（180帧，无运行期错误）"
 echo
 
 echo "==> [27/29] 道路调节与地图模式 UI smoke"

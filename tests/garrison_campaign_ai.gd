@@ -137,7 +137,9 @@ func _init() -> void:
 		sim._commit_ordinary_ai_intent(AiCommandIntent.make(
 			failed_army, failed_order, 0, [] as Array[int], false
 		))
-		valid = valid and not plan.army_assignments.has(failed_army_id)
+		# A rejected tactical command is retried later; it must not release the
+		# army's strategic state-front binding in the meantime.
+		valid = valid and plan.army_assignments.has(failed_army_id)
 		failed_army.state = Army.State.IDLE
 		var expected_committed := 0
 		for army in state.armies:

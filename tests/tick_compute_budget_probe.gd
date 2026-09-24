@@ -11,6 +11,7 @@ func _init() -> void:
 
 	var state := GameState.new()
 	state.generate_world(12345, nations, cities)
+	DiplomacyAI.reset_alliance_acceptance_prefilter_counters()
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
@@ -65,6 +66,10 @@ func _init() -> void:
 			stage, float(peak_profile[stage]) / 1000.0,
 		])
 	print("verdict=COMPUTE_MEASURE_DONE")
+	print(
+		"alliance_prefilter=%s"
+		% str(DiplomacyAI.alliance_acceptance_prefilter_counters())
+	)
 	sim.free()
 	quit(0)
 

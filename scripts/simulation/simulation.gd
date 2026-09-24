@@ -181,6 +181,11 @@ var _trade_gold_flows_cache: Array[Dictionary] = []
 var _trade_summary_settlement_fingerprint: PackedByteArray = PackedByteArray()
 var _trade_summary_result_cache: Dictionary = {}
 var _trade_summary_gold_flows_cache: Array[Dictionary] = []
+var _trade_city_outputs_structure_fingerprint: PackedByteArray = PackedByteArray()
+var _trade_city_outputs_cache: PackedInt32Array = PackedInt32Array()
+var _trade_garrison_structure_fingerprint: PackedByteArray = PackedByteArray()
+var _trade_garrison_input_token: PackedByteArray = PackedByteArray()
+var _trade_garrison_upkeep_cache: Array[int] = []
 var _trade_wartime_mask_diplomacy_revision: int = -1
 var _trade_wartime_mask := PackedByteArray()
 ## 战争财政快照只依赖外交关系转换。普通日以 O(1) 版本比较跳过，
@@ -823,6 +828,11 @@ func _reset_trade_forecast_cache() -> void:
 	_trade_summary_settlement_fingerprint = PackedByteArray()
 	_trade_summary_result_cache.clear()
 	_trade_summary_gold_flows_cache.clear()
+	_trade_city_outputs_structure_fingerprint = PackedByteArray()
+	_trade_city_outputs_cache = PackedInt32Array()
+	_trade_garrison_structure_fingerprint = PackedByteArray()
+	_trade_garrison_input_token = PackedByteArray()
+	_trade_garrison_upkeep_cache.clear()
 	_trade_wartime_mask_diplomacy_revision = -1
 	_trade_wartime_mask = PackedByteArray()
 	trade_structure_build_total = 0
@@ -892,6 +902,65 @@ func _trade_settlement_token(
 		fields.append([
 			"army", army.owner_nation, army.size,
 		])
+	return var_to_bytes(fields)
+
+
+## 外交和 AI 只读取国家级贸易金与财政报告，不参与粮食、人口和库存结算。
+## 使用独立 token，避免这些无关资源的日常变化使摘要缓存失效。
+func _trade_summary_settlement_token(
+	structure_fingerprint: PackedByteArray,
+	wartime_mask: PackedByteArray = PackedByteArray()
+) -> PackedByteArray:
+	var effective_wartime_mask := (
+		wartime_mask
+		if wartime_mask.size() == state.nations.size()
+		else TradeNetwork.wartime_nation_mask(state)
+	)
+	var fields: Array = [
+		"trade_summary_settlement_v1",
+		structure_fingerprint,
+		["wartime_nations", effective_wartime_mask],
+		["diplomacy_revision", state.diplomacy_revision],
+	]
+	for city in state.cities:
+		fields.append([
+			"city", city.id, city.garrison_manpower,
+			city_war_disrupted(state, city),
+		])
+	var suzerainty_subjects := state.suzerainty.keys()
+	suzerainty_subjects.sort()
+	for subject_value in suzerainty_subjects:
+		var subject_id := int(subject_value)
+		var record: Dictionary = state.suzerainty[subject_value]
+		fields.append([
+			"suzerainty", subject_id,
+			int(record.get("overlord_id", -1)),
+			float(record.get("tribute_rate", 0.0)),
+			bool(record.get("civil_war", false)),
+		])
+	for nation in state.nations:
+		var modifiers := RulerProfile.modifiers(nation)
+		fields.append([
+			"nation", nation.id, nation.alive,
+			nation.ruler_revision, nation.ruler_archetype,
+			nation.ruler_traits,
+			float(modifiers[RulerProfile.KEY_GOLD_OUTPUT]),
+			float(modifiers[RulerProfile.KEY_UPKEEP]),
+		])
+	var field_upkeep_units: Array[int] = []
+	field_upkeep_units.resize(state.nations.size())
+	field_upkeep_units.fill(0)
+	for army in state.armies:
+		if (
+			army.size <= 0
+			or army.owner_nation < 0
+			or army.owner_nation >= field_upkeep_units.size()
+		):
+			continue
+		field_upkeep_units[army.owner_nation] += (
+			GameState.army_monthly_upkeep(army.size)
+		)
+	fields.append(["field_upkeep_units", field_upkeep_units])
 	return var_to_bytes(fields)
 
 
@@ -973,9 +1042,10 @@ func _forecast_trade_and_gold_flows(
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
 	var wartime_mask := _cached_trade_wartime_mask()
-	var settlement_fingerprint := _trade_settlement_token(
-		structure_fingerprint,
-		wartime_mask
+	var settlement_fingerprint := (
+		_trade_summary_settlement_token(structure_fingerprint, wartime_mask)
+		if summary_only
+		else _trade_settlement_token(structure_fingerprint, wartime_mask)
 	)
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
@@ -1042,7 +1112,12 @@ func _forecast_trade_and_gold_flows(
 	part_started = (
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
-	var gold_flows := _monthly_gold_flows_from_trade(state, trade)
+	var gold_flows := _monthly_gold_flows_from_trade(
+		state,
+		trade,
+		_cached_trade_city_gold_outputs(structure_fingerprint),
+		_cached_trade_garrison_upkeep(structure_fingerprint)
+	)
 	if forecast_substage_enabled:
 		_record_tick_profile_stage(
 			"ai_snapshot_forecast_gold_flows",
@@ -1062,6 +1137,49 @@ func _forecast_trade_and_gold_flows(
 		"trade": trade,
 		"gold_flows": gold_flows,
 	}
+
+
+func _cached_trade_city_gold_outputs(
+	structure_fingerprint: PackedByteArray
+) -> PackedInt32Array:
+	if (
+		trade_forecast_cache_disabled
+		or _trade_city_outputs_cache.is_empty()
+		or _trade_city_outputs_structure_fingerprint != structure_fingerprint
+	):
+		_trade_city_outputs_cache = CityOutputRules.city_gold_outputs(state)
+		_trade_city_outputs_structure_fingerprint = structure_fingerprint
+	return _trade_city_outputs_cache
+
+
+func _trade_garrison_inputs_token() -> PackedByteArray:
+	var fields: Array = ["trade_garrison_upkeep_v1"]
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := state.cities[center_id]
+		fields.append([center_id, city.garrison_manpower])
+	for nation in state.nations:
+		fields.append([
+			nation.id, nation.ruler_revision,
+			nation.ruler_archetype, nation.ruler_traits,
+		])
+	return var_to_bytes(fields)
+
+
+func _cached_trade_garrison_upkeep(
+	structure_fingerprint: PackedByteArray
+) -> Array[int]:
+	var input_token := _trade_garrison_inputs_token()
+	if (
+		trade_forecast_cache_disabled
+		or _trade_garrison_upkeep_cache.is_empty()
+		or _trade_garrison_structure_fingerprint != structure_fingerprint
+		or _trade_garrison_input_token != input_token
+	):
+		_trade_garrison_upkeep_cache = monthly_garrison_upkeep_by_nation(state)
+		_trade_garrison_structure_fingerprint = structure_fingerprint
+		_trade_garrison_input_token = input_token
+	return _trade_garrison_upkeep_cache
 
 
 func _cached_trade_wartime_mask() -> PackedByteArray:
@@ -1152,8 +1270,16 @@ static func monthly_gold_flows(
 
 static func _monthly_gold_flows_from_trade(
 	game_state: GameState,
-	trade: Dictionary
+	trade: Dictionary,
+	city_outputs: PackedInt32Array = PackedInt32Array(),
+	garrison_upkeep_values: Array[int] = []
 ) -> Array[Dictionary]:
+	var effective_city_outputs := city_outputs
+	if effective_city_outputs.size() != game_state.cities.size():
+		effective_city_outputs = CityOutputRules.city_gold_outputs(game_state)
+	var effective_garrison_upkeep := garrison_upkeep_values
+	if effective_garrison_upkeep.size() != game_state.nations.size():
+		effective_garrison_upkeep = monthly_garrison_upkeep_by_nation(game_state)
 	return EconomyRules.monthly_gold_flows_from_trade(
 		game_state,
 		trade,
@@ -1161,8 +1287,8 @@ static func _monthly_gold_flows_from_trade(
 		nation_monthly_garrison_upkeep,
 		city_gold_output,
 		effective_tribute_rate,
-		CityOutputRules.city_gold_outputs(game_state),
-		monthly_garrison_upkeep_by_nation(game_state)
+		effective_city_outputs,
+		effective_garrison_upkeep
 	)
 
 
@@ -8191,7 +8317,6 @@ func _manage_campaign_offensive(
 	var objective_cache := {}
 	var offensive_centers: Array[int] = []
 	var assignment_index := _campaign_assignment_plan_index(nation_id)
-	var offensive_gaps_filled := true
 	if defense_gaps_filled:
 		var war_groups := _campaign_war_groups(nation_id, enemy_ids)
 		var war_ids: Array = war_groups.keys()
@@ -8209,10 +8334,6 @@ func _manage_campaign_offensive(
 				coordinator,
 			)
 			changed = bool(result.get("changed", false)) or changed
-			offensive_gaps_filled = (
-				bool(result.get("gaps_filled", true))
-				and offensive_gaps_filled
-			)
 			for center_value in result.get("centers", []):
 				var center_id := int(center_value)
 				desired_centers[center_id] = true
@@ -8239,9 +8360,10 @@ func _manage_campaign_offensive(
 	nation.campaign_objective_center_city = (
 		int(prioritized[0]) if not prioritized.is_empty() else -1
 	)
-	changed = _manage_war_preparation_assembly(
-		nation_id, defense_gaps_filled and offensive_gaps_filled
-	) or changed
+	# 防守和现有战争已经在上方先行分配。备战只会读取本轮剩余的
+	# 未绑定、未规划军队，因此无需再要求所有既有战线先达到满额；
+	# 这个全局门禁会让动态 R/V 缺口永久饿死新的备战池。
+	changed = _manage_war_preparation_assembly(nation_id) or changed
 	changed = _balance_national_reserves(
 		nation_id, defense_plan
 	) or changed
@@ -8249,8 +8371,7 @@ func _manage_campaign_offensive(
 
 
 func _manage_war_preparation_assembly(
-	nation_id: int,
-	allow_reinforcements: bool
+	nation_id: int
 ) -> bool:
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return false
@@ -8303,8 +8424,6 @@ func _manage_war_preparation_assembly(
 		reinforce.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
 		if _execute_ai_candidate(army, reinforce):
 			changed = true
-	if not allow_reinforcements:
-		return changed
 	var center_id := nation.war_preparation_objective_center_city
 	if center_id < 0:
 		center_id = state.administrative_center_of(
@@ -8428,37 +8547,18 @@ func _offensive_campaign_requirement(
 func war_offensive_allocation(
 	nation_id: int,
 	war_id: int,
-	assignment_index: Dictionary = {}
+	_assignment_index: Dictionary = {}
 ) -> Dictionary:
-	var assignments := assignment_index
-	if assignments.is_empty():
-		assignments = _campaign_assignment_plan_index(nation_id)
-	var effective_c := 0
-	for army in state.armies:
-		if (
-			army.owner_nation != nation_id
-			or not state.army_effective_for_field_campaign(army)
-			or army.defensive_deployment_until_day > state.day
-		):
-			continue
-		var assigned_plan: AdministrativeCampaignPlan = assignments.get(army.id)
-		if (
-			assigned_plan != null
-			and assigned_plan.mode == AdministrativeCampaignPlan.Mode.DEFENSE
-		):
-			continue
-		if army.campaign_war_id == war_id or (
-			army.campaign_war_id == -1
-			and assigned_plan == null
-			and army.state == Army.State.IDLE
-		):
-			effective_c += army.size
+	var force_report := state.campaign_war_force_report(nation_id, war_id)
+	var effective_c := int(force_report["allocatable_effective"])
+	var force_fronts: Dictionary = force_report["fronts"]
 	var fronts: Array[Dictionary] = []
 	for plan in state.offensive_campaigns_for_war(nation_id, war_id):
 		var requirement := _offensive_campaign_requirement(
 			nation_id, plan.center_city_id
 		)
-		var committed := _campaign_plan_manpower(nation_id, plan)
+		var force_front: Dictionary = force_fronts.get(plan.center_city_id, {})
+		var committed := int(force_front.get("assigned_effective", 0))
 		var target_c := maxi(CAMPAIGN_MIN_FRONT_MANPOWER, requirement)
 		fronts.append({
 			"center_id": plan.center_city_id,
@@ -8478,6 +8578,10 @@ func war_offensive_allocation(
 	)
 	return {
 		"effective_C": effective_c,
+		"war_pool_total": int(force_report["war_pool_total"]),
+		"war_pool_effective": int(force_report["war_pool_effective"]),
+		"reserve_effective": int(force_report["reserve_effective"]),
+		"duplicate_assignments": int(force_report["duplicate_assignments"]),
 		"desired_front_count": (
 			CAMPAIGN_MAX_OFFENSIVE_FRONTS
 			if fronts.size() >= CAMPAIGN_MAX_OFFENSIVE_FRONTS
@@ -9599,9 +9703,75 @@ func _manage_campaign_fu_raids(
 	var frontier_targets := _zhou_enemy_fu_targets(
 		nation_id, plan.center_city_id, attacker_bloc, true
 	)
+	frontier_targets = _reachable_campaign_fu_targets(
+		nation_id, plan, frontier_targets
+	)
+	if frontier_targets.is_empty():
+		return _manage_blocked_campaign_fu(
+			nation_id, plan, alive_by_id, cleanup
+		)
 	return _assign_campaign_detachments(
 		nation_id, plan, all_enemy_targets, frontier_targets, alive_by_id
 	)
+
+
+func _manage_blocked_campaign_fu(
+	nation_id: int,
+	plan: AdministrativeCampaignPlan,
+	alive_by_id: Dictionary,
+	cleanup: bool
+) -> bool:
+	plan.tactical_target_city_ids.clear()
+	if cleanup:
+		plan.phase = AdministrativeCampaignPlan.Phase.CLEANUP
+		plan.refresh_fingerprint(state)
+		return false
+	var requirement := (
+		state.campaign_siege_requirement(nation_id, plan.center_city_id)
+		+ state.campaign_reinforcement_threat(
+			nation_id, plan.center_city_id
+		)
+	)
+	if _campaign_plan_manpower(nation_id, plan) >= requirement:
+		plan.phase = AdministrativeCampaignPlan.Phase.ASSAULT_CENTER
+		plan.tactical_target_city_ids = [plan.center_city_id] as Array[int]
+		return _order_campaign_force(
+			nation_id, plan, alive_by_id, plan.center_city_id,
+			ActionCandidate.Kind.ATTACK
+		)
+	plan.phase = AdministrativeCampaignPlan.Phase.HOLD_CAMP
+	return _order_campaign_force(
+		nation_id, plan, alive_by_id, plan.camp_city_id,
+		ActionCandidate.Kind.REINFORCE
+	)
+
+
+func _reachable_campaign_fu_targets(
+	nation_id: int,
+	plan: AdministrativeCampaignPlan,
+	targets: Array[int]
+) -> Array[int]:
+	var result: Array[int] = []
+	var armies := _campaign_plan_armies(nation_id, plan)
+	for target in targets:
+		for army in armies:
+			if _campaign_fu_target_reachable(
+				nation_id, plan, army, target
+			):
+				result.append(target)
+				break
+	return result
+
+
+func _campaign_fu_target_reachable(
+	nation_id: int,
+	plan: AdministrativeCampaignPlan,
+	army: Army,
+	target: int
+) -> bool:
+	return _next_campaign_fu_target(
+		nation_id, plan, army, [target] as Array[int], {}
+	) == target
 
 
 func _hold_campaign_fu_positions(
@@ -9646,7 +9816,16 @@ func _assign_campaign_detachments(
 				armies.append(army)
 		if armies.is_empty():
 			continue
-		var target := old_target if all_enemy_targets.has(old_target) else -1
+		var target := (
+			old_target
+			if (
+				all_enemy_targets.has(old_target)
+				and _campaign_fu_target_reachable(
+					nation_id, plan, armies[0], old_target
+				)
+			)
+			else -1
+		)
 		if target < 0:
 			target = _next_campaign_fu_target(
 				nation_id, plan, armies[0], frontier_targets, used
@@ -9683,9 +9862,18 @@ func _assign_campaign_detachments(
 				reserved += army.size
 			else:
 				available.append(army)
-		var initial_targets := frontier_targets.slice(
-			0, mini(frontier_targets.size(), CAMPAIGN_MAX_PARALLEL_TARGETS)
-		)
+		var initial_targets: Array[int] = []
+		var initial_used := {}
+		if not available.is_empty():
+			while initial_targets.size() < CAMPAIGN_MAX_PARALLEL_TARGETS:
+				var next_target := _next_campaign_fu_target(
+					nation_id, plan, available[0],
+					frontier_targets, initial_used
+				)
+				if next_target < 0:
+					break
+				initial_targets.append(next_target)
+				initial_used[next_target] = true
 		for index in range(available.size()):
 			if initial_targets.is_empty():
 				break
@@ -9736,6 +9924,8 @@ func _next_campaign_fu_target(
 	var anchor := (
 		anchor_army.move_to if anchor_army.on_edge else anchor_army.location_city
 	)
+	if anchor < 0 or anchor >= state.cities.size():
+		return -1
 	var field := _cached_ai_path_field(
 		nation_id,
 		anchor,
@@ -9745,6 +9935,8 @@ func _next_campaign_fu_target(
 		-1,
 		anchor_army.max_size,
 	)
+	if not field.has("dist"):
+		return -1
 	var distances := {}
 	for candidate in candidates:
 		var best := INF
@@ -9804,9 +9996,18 @@ func _order_campaign_army(
 	target_city: int,
 	kind: int
 ) -> bool:
+	if not army.on_edge and army.location_city == target_city:
+		plan.army_assignments[army.id] = target_city
+		return false
+	# 撤退、遣返或道路失效会清空实际路径，但旧的 AI 目标仍可能保留。
+	# 只有军队确实还在执行命令时才能据此跳过，IDLE 且路径为空必须重发。
 	if (
 		army.ai_target_city == target_city
-		or (not army.on_edge and army.location_city == target_city)
+		and (
+			army.on_edge
+			or not army.path.is_empty()
+			or army.state != Army.State.IDLE
+		)
 	):
 		plan.army_assignments[army.id] = target_city
 		return false
@@ -9823,7 +10024,6 @@ func _order_campaign_army(
 	if _execute_ai_candidate(army, order):
 		plan.army_assignments[army.id] = target_city
 		return true
-	plan.army_assignments.erase(army.id)
 	return false
 
 
@@ -10593,30 +10793,7 @@ func _commit_ordinary_ai_intent(intent: AiCommandIntent) -> void:
 		intent.army, intent.candidate, intent.prepared_path,
 		intent.path_prevalidated
 	):
-		_release_failed_administrative_campaign_assignment(intent)
 		_record_ai_command_commit_failure(intent, "ordinary_intent")
-
-
-func _release_failed_administrative_campaign_assignment(
-	intent: AiCommandIntent
-) -> void:
-	if (
-		intent == null
-		or intent.army == null
-		or intent.army.owner_nation < 0
-		or intent.army.owner_nation >= state.nations.size()
-	):
-		return
-	var center_id := state.campaign_assignment_center(intent.army.id)
-	var plan := state.campaign_plan(
-		intent.army.owner_nation, center_id
-	)
-	if (
-		plan != null
-		and int(plan.army_assignments.get(intent.army.id, -1))
-			== intent.candidate.target_city
-	):
-		plan.army_assignments.erase(intent.army.id)
 
 
 func _record_ai_command_commit_failure(
@@ -11066,6 +11243,16 @@ func _arrive_at_node(army: Army) -> void:
 	if state.is_enemy(army.owner_nation, city.owner_nation):
 		_start_or_join_siege(army, city, edge)
 		return
+	# 本地渡口的码头只是两岸间的运输节点。政治接壤和攻击寻路均不读取
+	# 码头所有权，因此到达处理也必须允许军队连续通过中立第三方码头；
+	# 仅放行“原岸—当前码头—敌方对岸”这一段，不扩展到河运链。
+	if _can_continue_local_crossing_transit(army, arrived):
+		army.move_from = arrived
+		army.move_to = -1
+		army.move_progress = 0.0
+		army.location_city = arrived
+		_begin_next_leg(army)
+		return
 
 	# 中立国不提供通行权；盟国允许穿越和临时驻留。
 	if not state.has_military_access(army.owner_nation, city.owner_nation):
@@ -11084,6 +11271,46 @@ func _arrive_at_node(army: Army) -> void:
 		_settle_idle(army, arrived)
 	else:
 		_begin_next_leg(army)
+
+
+func _can_continue_local_crossing_transit(
+	army: Army,
+	dock_id: int
+) -> bool:
+	if (
+		army == null
+		or dock_id < 0
+		or dock_id >= state.cities.size()
+		or not state.cities[dock_id].is_dock
+		or army.path.is_empty()
+		or army.move_from < 0
+		or army.move_from >= state.cities.size()
+	):
+		return false
+	var opposite_bank := int(army.path[0])
+	if (
+		opposite_bank < 0
+		or opposite_bank >= state.cities.size()
+		or state.cities[opposite_bank].is_dock
+	):
+		return false
+	var may_enter_opposite_bank := state.has_military_access(
+		army.owner_nation,
+		state.cities[opposite_bank].owner_nation
+	) or (
+		army.path.size() == 1
+		and state.is_enemy(
+			army.owner_nation,
+			state.cities[opposite_bank].owner_nation
+		)
+	)
+	if not may_enter_opposite_bank:
+		return false
+	return state.is_local_crossing_transit(
+		dock_id,
+		army.move_from,
+		opposite_bank
+	)
 
 
 func _is_travelling(army: Army) -> bool:

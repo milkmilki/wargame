@@ -147,7 +147,7 @@ func _init() -> void:
 		}),
 		"开始备战时必须固定同一合法集结点"
 	)
-	sim._manage_war_preparation_assembly(0, true)
+	sim._manage_war_preparation_assembly(0)
 	_check(
 		nation.war_preparation_staging_city_id == staging_id,
 		"备战调兵必须沿用开始备战时冻结的集结点"
@@ -200,7 +200,7 @@ func _init() -> void:
 		"objective_reason": "宣战移交门禁",
 		"mobilization_armies": 0,
 	})
-	sim._manage_war_preparation_assembly(0, true)
+	sim._manage_war_preparation_assembly(0)
 	var best_effort_excluded_id := int(nation.war_preparation_army_ids[-1])
 	for army in state.armies:
 		if army.id == best_effort_excluded_id:
@@ -260,6 +260,7 @@ func _init() -> void:
 		"宣战移交后必须清空备战状态"
 	)
 	sim.free()
+	_test_preparation_uses_remaining_unplanned_army()
 	_finish()
 
 
@@ -269,6 +270,53 @@ func _neutralize_diplomacy(state: GameState) -> void:
 			state.set_diplomatic_relation(
 				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
 			)
+
+
+func _test_preparation_uses_remaining_unplanned_army() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(94149)
+	_neutralize_diplomacy(state)
+	var context := _prewar_context(state)
+	_check(not context.is_empty(), "剩余预备军夹具必须存在合法集结方向")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var entry_id := int(context["entry"])
+	var staging_id := int(context["staging"])
+	for member_id in state.administrative_members(center_id):
+		state.cities[member_id].owner_nation = 1
+	state.armies.clear()
+	state.battles.clear()
+	var existing_war_reserve := _army(941490, 0, staging_id, 15000)
+	var preparation_reserve := _army(941491, 0, staging_id, 15000)
+	state.armies.append(existing_war_reserve)
+	state.armies.append(preparation_reserve)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	_check(
+		sim._start_war_preparation(0, 1, {
+			"objective_city": entry_id,
+			"objective_center_city": center_id,
+			"objective_reason": "剩余预备军门禁",
+			"mobilization_armies": 0,
+		}),
+		"剩余预备军夹具必须成功开始备战"
+	)
+	# 模拟同一规划周期中，现有战争分配器已经优先预留了一军。
+	sim._ai_planned_armies[existing_war_reserve.id] = true
+	sim._manage_war_preparation_assembly(0)
+	_check(
+		state.nations[0].war_preparation_army_ids
+			== [preparation_reserve.id],
+		"现有战争优先规划后，备战必须继续抽调本轮剩余的空闲预备军"
+	)
+	_check(
+		DiplomacyAI.war_preparation_arrived_troops(state, 0)
+			== preparation_reserve.size,
+		"剩余预备军已经位于集结点时必须立即计入到场C"
+	)
+	sim.free()
 
 
 func _prewar_context(state: GameState) -> Dictionary:

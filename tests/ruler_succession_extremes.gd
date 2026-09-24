@@ -8,6 +8,7 @@ var _valid := true
 func _init() -> void:
 	_test_reign_range_and_succession()
 	_test_capital_income_and_succession_relocation()
+	_test_capital_relocation_always_prefers_zhou()
 	_test_suzerainty_rulers_share_surname()
 	_test_extreme_modifiers()
 	_test_conqueror_war_benefits()
@@ -17,6 +18,71 @@ func _init() -> void:
 		return
 	print("RULER_SUCCESSION_EXTREMES_OK")
 	quit(0)
+
+
+func _test_capital_relocation_always_prefers_zhou() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(71240)
+	var fu_pair := Vector2i(-1, -1)
+	for city in state.cities:
+		if city.is_dock or state.is_zhou_city(city.id):
+			continue
+		for neighbor_id in state.neighbors(city.id):
+			var neighbor := state.cities[neighbor_id]
+			var edge := state.edge_of(city.id, neighbor_id)
+			if (
+				neighbor.is_dock
+				or state.is_zhou_city(neighbor_id)
+				or edge == null
+				or edge.max_manpower <= 0
+			):
+				continue
+			fu_pair = Vector2i(city.id, neighbor_id)
+			break
+		if fu_pair.x >= 0:
+			break
+	var isolated_zhou := -1
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		if (
+			center_id != fu_pair.x
+			and center_id != fu_pair.y
+			and not state.neighbors(fu_pair.x).has(center_id)
+			and not state.neighbors(fu_pair.y).has(center_id)
+		):
+			isolated_zhou = center_id
+			break
+	_check(
+		fu_pair.x >= 0 and isolated_zhou >= 0,
+		"capital relocation fixture lacks disconnected zhou/fu components"
+	)
+	if fu_pair.x < 0 or isolated_zhou < 0:
+		return
+	var nation_id := 0
+	var other_id := 1
+	var planned_owners: Array[int] = []
+	planned_owners.resize(state.cities.size())
+	planned_owners.fill(other_id)
+	planned_owners[fu_pair.x] = nation_id
+	planned_owners[fu_pair.y] = nation_id
+	planned_owners[isolated_zhou] = nation_id
+	state.nations[nation_id].capital_city_id = -1
+	var planned_capital := state._planned_territory_capital(
+		nation_id, planned_owners
+	)
+	_check(
+		planned_capital == isolated_zhou,
+		"territory transaction preferred a larger fu component over an owned zhou"
+	)
+	for city in state.cities:
+		city.owner_nation = planned_owners[city.id]
+		city.is_capital = false
+	state.nations[nation_id].capital_city_id = -1
+	var relocated_capital := state.relocate_capital(nation_id)
+	_check(
+		relocated_capital == isolated_zhou,
+		"direct capital relocation preferred a larger fu component over an owned zhou"
+	)
 
 
 func _test_reign_range_and_succession() -> void:

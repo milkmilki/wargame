@@ -185,6 +185,16 @@ static func _capital_hops_cached(
 ## legacy 的逐 attacker O(A) 全军扫描；默认启用共享 tick-scope 索引。
 static var city_defender_index_disabled: bool = false
 
+## 结盟完整评分会计算方向性战争目标，40 国月结中这是主要尖峰。预筛仅使用
+## 完整评分的严格上界；关闭开关用于动作等价门禁。
+static var alliance_acceptance_prefilter_disabled: bool = false
+static var _alliance_acceptance_prefilter_checks: int = 0
+static var _alliance_acceptance_prefilter_prunes: int = 0
+static var campaign_v_index_disabled: bool = false
+static var _campaign_v_index_builds: int = 0
+static var _campaign_v_index_hits: int = 0
+static var _campaign_v_legacy_scans: int = 0
+
 static var _city_defender_index_builds: int = 0
 static var _city_defender_index_hits: int = 0
 static var _city_defender_index_legacy_scans: int = 0
@@ -210,6 +220,32 @@ static func reset_defender_index_counters() -> void:
 
 static func defender_index_counters() -> Dictionary:
 	return city_defender_index_counters()
+
+
+static func reset_alliance_acceptance_prefilter_counters() -> void:
+	_alliance_acceptance_prefilter_checks = 0
+	_alliance_acceptance_prefilter_prunes = 0
+
+
+static func alliance_acceptance_prefilter_counters() -> Dictionary:
+	return {
+		"checks": _alliance_acceptance_prefilter_checks,
+		"prunes": _alliance_acceptance_prefilter_prunes,
+	}
+
+
+static func reset_campaign_v_index_counters() -> void:
+	_campaign_v_index_builds = 0
+	_campaign_v_index_hits = 0
+	_campaign_v_legacy_scans = 0
+
+
+static func campaign_v_index_counters() -> Dictionary:
+	return {
+		"builds": _campaign_v_index_builds,
+		"hits": _campaign_v_index_hits,
+		"legacy_scans": _campaign_v_legacy_scans,
+	}
 
 
 static func _build_city_defender_owner_index(
@@ -1709,6 +1745,84 @@ static func alliance_willingness(
 	return result
 
 
+## 保守的结盟接受门槛。历史复仇、边境/目标敌意、敌盟惩罚、母国叛军敌意与
+## 统一竞争只会降低最终分数；省略这些负项得到的是严格上界，不会误删可接受结盟。
+static func _alliance_can_reach_acceptance(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary = {}
+) -> bool:
+	if alliance_acceptance_prefilter_disabled:
+		return true
+	var cache_key := "alliance_acceptance_possible:%d:%d" % [
+		nation_id, target_id,
+	]
+	if evaluation_cache.has(cache_key):
+		return bool(evaluation_cache[cache_key])
+	_alliance_acceptance_prefilter_checks += 1
+	if (
+		state.relation_between(nation_id, target_id)
+			!= GameState.DiplomaticRelation.NEUTRAL
+		or not within_diplomatic_range(
+			state, nation_id, target_id, evaluation_cache
+		)
+		or _cached_allies_of(
+			state, nation_id, evaluation_cache
+		).size() >= MAX_DEFENSIVE_ALLIES
+		or _cached_allies_of(
+			state, target_id, evaluation_cache
+		).size() >= MAX_DEFENSIVE_ALLIES
+		or state.day - state.relation_since(nation_id, target_id)
+			< MIN_NEUTRAL_DAYS
+		or _alliance_has_active_conflict(
+			state, nation_id, target_id, evaluation_cache
+		)
+	):
+		evaluation_cache[cache_key] = false
+		_alliance_acceptance_prefilter_prunes += 1
+		return false
+	var common_enemies := _common_enemy_count(
+		state, nation_id, target_id, evaluation_cache
+	)
+	var own_power := _national_power(state, nation_id, evaluation_cache)
+	var target_power := _national_power(state, target_id, evaluation_cache)
+	var imbalance := absf(log(
+		maxf(own_power, 1.0) / maxf(target_power, 1.0)
+	))
+	var border_bonus := (
+		0.25
+		if _frontier_edges(
+			state, nation_id, target_id, evaluation_cache
+		) > 0
+		else 0.0
+	)
+	var shared_threat := _shared_threat(
+		state, nation_id, target_id, evaluation_cache
+	)
+	var frontier_release := _alliance_frontier_release_value(
+		state, nation_id, target_id, evaluation_cache
+	)
+	var maximum_attitude := (
+		float(common_enemies) * COMMON_ENEMY_ATTITUDE
+		+ frontier_release
+	)
+	var upper_bound := (
+		0.35
+		+ float(common_enemies) * 1.5
+		+ minf(shared_threat * 0.35, 0.80)
+		+ border_bonus
+		+ maxf(1.0 - imbalance, 0.0) * 0.55
+		+ frontier_release
+		+ maximum_attitude * ATTITUDE_ALLIANCE_WEIGHT
+	) * RulerProfile.alliance_multiplier(state.nations[nation_id])
+	var possible := upper_bound >= ALLIANCE_ACCEPT_SCORE
+	evaluation_cache[cache_key] = possible
+	if not possible:
+		_alliance_acceptance_prefilter_prunes += 1
+	return possible
+
+
 static func _shared_threat(
 	state: GameState,
 	nation_a: int,
@@ -3124,6 +3238,29 @@ static func _bordering_nation_ids(
 	return result
 
 
+## 主动宣战只认发起国自己的领土边界。联盟领土仍进入 _frontier_edges，
+## 供威胁、通行和共同防御使用，但不能替盟国创造新的主动宣战对象。
+static func _direct_bordering_nation_ids(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary = {}
+) -> Array[int]:
+	var cache_key := "direct_borders:%d" % nation_id
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
+	var topology_cache := _ensure_frontier_matrix_cache(
+		state, evaluation_cache
+	)
+	var by_owner: Array = topology_cache.get(
+		"territorial_neighbors_by_owner", []
+	)
+	var result: Array[int] = []
+	if nation_id >= 0 and nation_id < by_owner.size():
+		result = (by_owner[nation_id] as Array[int]).duplicate()
+	evaluation_cache[cache_key] = result
+	return result
+
+
 ## No-land-border fallback. Accessible own/allied docks may lead to the first
 ## foreign dock owner, but the water route itself never becomes a border.
 static func _expedition_target_nation_ids(
@@ -3182,11 +3319,14 @@ static func can_initiate_war_at_range(
 	target_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> bool:
-	if _frontier_edges(state, nation_id, target_id, evaluation_cache) > 0:
+	var direct_neighbors := _direct_bordering_nation_ids(
+		state, nation_id, evaluation_cache
+	)
+	if direct_neighbors.has(target_id):
 		return true
 	# Expedition targets are a fallback, never an addition to available land
 	# borders. This prevents river powers from opening every front at once.
-	if not _bordering_nation_ids(state, nation_id, evaluation_cache).is_empty():
+	if not direct_neighbors.is_empty():
 		return false
 	return _expedition_target_nation_ids(
 		state, nation_id, evaluation_cache
@@ -3731,6 +3871,9 @@ static func _cached_war_objective(
 	evaluation_cache: Dictionary,
 	legal_reclamation_only: bool = false
 ) -> Dictionary:
+	var profile_started := (
+		Time.get_ticks_usec() if evaluation_cache.has("__profile") else 0
+	)
 	var cache_key := "objective:%d:%d:%d:%d:%d:%d:%d:%d" % [
 		nation_id,
 		target_id,
@@ -3742,6 +3885,9 @@ static func _cached_war_objective(
 		state.garrison_revision,
 	]
 	if evaluation_cache.has(cache_key):
+		_record_evaluation_profile(
+			evaluation_cache, "objective_cache_hit", profile_started
+		)
 		return evaluation_cache[cache_key]
 	var objective := select_war_objective(
 		state,
@@ -3752,6 +3898,9 @@ static func _cached_war_objective(
 		legal_reclamation_only
 	)
 	evaluation_cache[cache_key] = objective
+	_record_evaluation_profile(
+		evaluation_cache, "objective_cache_build", profile_started
+	)
 	return objective
 
 
@@ -4006,8 +4155,11 @@ static func administrative_tactical_target(
 			state, nation_id, center_city_id, evaluation_cache
 		)
 	)
-	var committed := state.campaign_committed_manpower(
-		nation_id, center_city_id
+	var existing_plan := state.campaign_plan(nation_id, center_city_id)
+	var committed := (
+		0
+		if existing_plan == null
+		else state.campaign_committed_manpower(nation_id, center_city_id)
 	)
 	if (
 		not center_controlled
@@ -4030,7 +4182,9 @@ static func administrative_tactical_target(
 		candidates.erase(center_city_id)
 	if candidates.is_empty():
 		return center_city_id if not center_controlled and committed >= required else -1
-	EquivariantOrder.sort_city_ids(candidates, state, nation_id, center_city_id)
+	EquivariantOrder.sort_city_subset(
+		candidates, state, nation_id, center_city_id
+	)
 	return candidates[0]
 
 
@@ -4513,19 +4667,30 @@ static func _collect_alliance_actions(
 				or state.nations[b].war_preparation_target_nation >= 0
 			):
 				continue
+			if (
+				not _alliance_can_reach_acceptance(
+					state, a, b, evaluation_cache
+				)
+				or not _alliance_can_reach_acceptance(
+					state, b, a, evaluation_cache
+				)
+			):
+				continue
 			var score_a := alliance_willingness(
 				state,
 				a,
 				b,
 				evaluation_cache
 			)
+			if score_a < ALLIANCE_ACCEPT_SCORE:
+				continue
 			var score_b := alliance_willingness(
 				state,
 				b,
 				a,
 				evaluation_cache
 			)
-			if score_a < ALLIANCE_ACCEPT_SCORE or score_b < ALLIANCE_ACCEPT_SCORE:
+			if score_b < ALLIANCE_ACCEPT_SCORE:
 				continue
 			var attitude_a := diplomatic_attitude(
 				state,
@@ -4667,7 +4832,7 @@ static func _collect_war_actions(
 		)
 		var best_target := -1
 		var best_score := -INF
-		var bordering_nations := _bordering_nation_ids(
+		var bordering_nations := _direct_bordering_nation_ids(
 			state, nation.id, evaluation_cache
 		)
 		if bordering_nations.is_empty():
@@ -5051,12 +5216,23 @@ static func _collect_preparation_alliance(
 			)
 		):
 			continue
+		if (
+			not _alliance_can_reach_acceptance(
+				state, nation_id, candidate.id, evaluation_cache
+			)
+			or not _alliance_can_reach_acceptance(
+				state, candidate.id, nation_id, evaluation_cache
+			)
+		):
+			continue
 		var score_a := alliance_willingness(
 			state,
 			nation_id,
 			candidate.id,
 			evaluation_cache
 		)
+		if score_a < ALLIANCE_ACCEPT_SCORE:
+			continue
 		var score_b := alliance_willingness(
 			state,
 			candidate.id,
@@ -5064,10 +5240,7 @@ static func _collect_preparation_alliance(
 			evaluation_cache
 		)
 		var score := minf(score_a, score_b)
-		if (
-			score_a < ALLIANCE_ACCEPT_SCORE
-			or score_b < ALLIANCE_ACCEPT_SCORE
-		):
+		if score_b < ALLIANCE_ACCEPT_SCORE:
 			continue
 		if (
 			score > best_score
@@ -5386,12 +5559,48 @@ static func _cached_campaign_reinforcement_threat(
 	center_city_id: int,
 	evaluation_cache: Dictionary
 ) -> int:
-	var cache_key := "campaign_v:%d:%d" % [attacker_id, center_city_id]
-	if not evaluation_cache.has(cache_key):
-		evaluation_cache[cache_key] = state.campaign_reinforcement_threat(
+	if (
+		campaign_v_index_disabled
+		or bool(evaluation_cache.get("__disable_structure_cache", false))
+	):
+		_campaign_v_legacy_scans += 1
+		return state.campaign_reinforcement_threat(
 			attacker_id, center_city_id
 		)
-	return int(evaluation_cache[cache_key])
+	var cache_key := "campaign_v_index:%d" % attacker_id
+	if evaluation_cache.has(cache_key):
+		_campaign_v_index_hits += 1
+		return int((evaluation_cache[cache_key] as Dictionary).get(
+			center_city_id, 0
+		))
+	var threat_by_center := {}
+	for army in state.armies:
+		if (
+			not state.army_effective_for_field_campaign(army)
+			or army.is_city_garrison
+			or not state.is_enemy(attacker_id, army.owner_nation)
+		):
+			continue
+		var centers := {}
+		if army.on_edge:
+			for city_id in [army.move_from, army.move_to]:
+				var center_id := state.administrative_center_of(city_id)
+				if center_id >= 0:
+					centers[center_id] = true
+		elif army.location_city >= 0:
+			var center_id := state.administrative_center_of(
+				army.location_city
+			)
+			if center_id >= 0:
+				centers[center_id] = true
+		for center_value in centers:
+			var center_id := int(center_value)
+			threat_by_center[center_id] = (
+				int(threat_by_center.get(center_id, 0)) + army.size
+			)
+	evaluation_cache[cache_key] = threat_by_center
+	_campaign_v_index_builds += 1
+	return int(threat_by_center.get(center_city_id, 0))
 
 
 static func _national_power(
@@ -5946,6 +6155,8 @@ static func _build_frontier_matrix(
 			_bump_frontier(matrix, nation_count, int(x), owner_a)
 	var neighbors_by_observer: Array[Array] = []
 	neighbors_by_observer.resize(nation_count)
+	var neighbors_by_owner: Array[Array] = []
+	neighbors_by_owner.resize(nation_count)
 	for observer in range(nation_count):
 		var filtered: Array[int] = []
 		for target in range(nation_count):
@@ -5956,6 +6167,15 @@ static func _build_frontier_matrix(
 			):
 				filtered.append(target)
 		neighbors_by_observer[observer] = filtered
+		var direct: Array[int] = []
+		for target_value in territory_neighbor_sets[observer]:
+			var target := int(target_value)
+			if not state.has_military_access(observer, target):
+				direct.append(target)
+		direct.sort_custom(func(a: int, b: int) -> bool:
+			return EquivariantOrder.nation_less(state, observer, a, b)
+		)
+		neighbors_by_owner[observer] = direct
 	_ensure_diplomatic_range_cache(
 		state, _diplomacy_topology_cache_store(evaluation_cache),
 		territory_neighbor_sets
@@ -5964,6 +6184,7 @@ static func _build_frontier_matrix(
 	evaluation_cache["frontier_neighbors_by_observer"] = (
 		neighbors_by_observer
 	)
+	evaluation_cache["territorial_neighbors_by_owner"] = neighbors_by_owner
 
 
 static func _bump_frontier(

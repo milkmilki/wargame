@@ -86,6 +86,7 @@ func _run() -> void:
 	_test_single_dependency_miss()
 	_test_war_preparation_shared_forecast()
 	_test_nation_summary_equivalence()
+	_test_summary_token_scope()
 	_test_runtime_probe_ignores_war_state()
 	_test_summary_runtime_equivalence()
 
@@ -217,13 +218,12 @@ func _test_war_preparation_shared_forecast() -> void:
 		"war_preparation/shared_forecast_no_extra_builds",
 		_counter_detail(sim)
 	)
-	# setup() already built one structure + one forecast via the initial
-	# food snapshot. _seed_trade_forecast is a pure cache hit, so the seed
-	# count matches setup counts.
+	# setup() warms the full economy forecast. The first AI seed builds the
+	# narrower summary entry once; all preparation checks then share it.
 	_check(
 		structure_builds_at_setup >= 1 and forecast_builds_at_setup >= 1
 			and structure_builds_before == structure_builds_at_setup
-			and forecast_builds_before == forecast_builds_at_setup,
+			and forecast_builds_before == forecast_builds_at_setup + 1,
 		"war_preparation/one_seed_for_multiple_nations",
 		_counter_detail(sim)
 	)
@@ -259,6 +259,83 @@ func _test_nation_summary_equivalence() -> void:
 			and summary.get("routes", []) == structure.get("routes", []),
 		"nation_summary/full_result_contract_preserved"
 	)
+	sim.free()
+
+
+func _test_summary_token_scope() -> void:
+	var sim := _make_simulation(4, 20, false)
+	var state := sim.state
+	var first := sim._forecast_trade_and_gold_flows(true)
+	var builds_before := sim.trade_forecast_build_total
+	var hits_before := sim.trade_forecast_cache_hit_total
+	for city in state.cities:
+		city.food_storage += 37
+	for nation in state.nations:
+		nation.granary_food += 41
+		nation.last_food_demand += 3
+		nation.food_demand_ema += 0.25
+		nation.treasury_gold += 43
+		nation.manpower_pool += 47
+	var resource_changed := sim._forecast_trade_and_gold_flows(true)
+	_check(
+		resource_changed == first
+			and sim.trade_forecast_build_total == builds_before
+			and sim.trade_forecast_cache_hit_total == hits_before + 1,
+		"summary_token/ignores_non_fiscal_resources",
+		_counter_detail(sim)
+	)
+
+	var army: Army = state.armies[0]
+	army.size -= 1
+	var same_upkeep := sim._forecast_trade_and_gold_flows(true)
+	_check(
+		same_upkeep == first
+			and sim.trade_forecast_build_total == builds_before
+			and sim.trade_forecast_cache_hit_total == hits_before + 2,
+		"summary_token/ignores_troop_change_with_same_upkeep",
+		_counter_detail(sim)
+	)
+	army.size = maxi(army.size / 2, 1)
+	var army_changed := sim._forecast_trade_and_gold_flows(true)
+	var direct_structure := TradeNetwork.build_structure(state)
+	var direct_summary := TradeNetwork.settle_nation_summary(
+		state, direct_structure
+	)
+	_check(
+		army_changed["trade"] == direct_summary
+			and army_changed["gold_flows"]
+				== Simulation._monthly_gold_flows_from_trade(
+					state, direct_summary
+				)
+			and sim.trade_forecast_build_total == builds_before + 1,
+		"summary_token/army_upkeep_invalidates",
+		_counter_detail(sim)
+	)
+	var garrison_city: City = null
+	for center_value in state.administrative_center_city_ids:
+		var center := state.cities[int(center_value)]
+		if center.garrison_manpower > 1:
+			garrison_city = center
+			break
+	_check(garrison_city != null, "summary_token/garrison_fixture")
+	if garrison_city != null:
+		garrison_city.garrison_manpower = maxi(
+			garrison_city.garrison_manpower / 2, 1
+		)
+		var garrison_changed := sim._forecast_trade_and_gold_flows(true)
+		direct_structure = TradeNetwork.build_structure(state)
+		direct_summary = TradeNetwork.settle_nation_summary(
+			state, direct_structure
+		)
+		_check(
+			garrison_changed["gold_flows"]
+				== Simulation._monthly_gold_flows_from_trade(
+					state, direct_summary
+				)
+				and sim.trade_forecast_build_total == builds_before + 2,
+			"summary_token/garrison_upkeep_invalidates",
+			_counter_detail(sim)
+		)
 	sim.free()
 
 

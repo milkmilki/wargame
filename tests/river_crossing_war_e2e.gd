@@ -64,6 +64,7 @@ func _init() -> void:
 
 	var crossed_dock := false
 	var bank_captured := false
+	var crossing_supplied := false
 	var center_captured := false
 	for _day in range(360):
 		for army in state.armies:
@@ -77,6 +78,17 @@ func _init() -> void:
 			)
 		simulation._advance_day()
 		bank_captured = bank_captured or state.cities[1].owner_nation == 0
+		if state.cities[1].owner_nation == 0:
+			for army in state.armies:
+				if (
+					army.owner_nation == 0
+					and army.size > 0
+					and not army.on_edge
+					and army.location_city == 1
+					and not Pathfinding.supply_sources(state, army).is_empty()
+				):
+					crossing_supplied = true
+					break
 		center_captured = state.cities[objective_center].owner_nation == 0
 		if center_captured:
 			break
@@ -84,8 +96,9 @@ func _init() -> void:
 	valid = (
 		valid
 		and crossed_dock
-		and state.cities[2].owner_nation == 0
+		and state.cities[2].owner_nation == 2
 		and bank_captured
+		and crossing_supplied
 		and center_captured
 		and state.recognized_owner_of(objective_center) == 1
 		and state.territory_structure_valid()
@@ -101,23 +114,67 @@ func _init() -> void:
 	push_error(
 		(
 			"RIVER_CROSSING_WAR_E2E_FAILED day=%d objective=%s "
-			+ "crossed=%s bank_owner=%d center_owner=%d relation=%d"
+			+ "crossed=%s supplied=%s bank_owner=%d center_owner=%d relation=%d "
+			+ "plan=%s armies=%s"
 		) % [
 			state.day,
 			str(objective),
 			str(crossed_dock),
+			str(crossing_supplied),
 			state.cities[1].owner_nation,
 			state.cities[3].owner_nation,
 			state.relation_between(0, 1),
+			_campaign_debug(state, 0, objective_center),
+			_army_debug(state, 0),
 		]
 	)
 	quit(1)
 
 
+func _campaign_debug(
+	state: GameState,
+	nation_id: int,
+	center_id: int
+) -> String:
+	var plan := state.campaign_plan(nation_id, center_id)
+	if plan == null:
+		return "null"
+	return str({
+		"phase": plan.phase,
+		"staging": plan.staging_city_id,
+		"camp": plan.camp_city_id,
+		"targets": plan.tactical_target_city_ids,
+		"assignments": plan.army_assignments,
+	})
+
+
+func _army_debug(
+	state: GameState,
+	nation_id: int
+) -> String:
+	var result: Array[Dictionary] = []
+	for army in state.armies:
+		if army.owner_nation != nation_id or army.size <= 0:
+			continue
+		result.append({
+			"id": army.id,
+			"size": army.size,
+			"state": army.state,
+			"starving": army.starving,
+			"city": army.location_city,
+			"from": army.move_from,
+			"to": army.move_to,
+			"path": army.path,
+			"target": army.ai_target_city,
+			"reason": army.ai_order_reason,
+		})
+	return str(result)
+
+
 func _make_state() -> GameState:
 	var state := GameState.new()
 	state.world_seed = 94201
-	for nation_id in range(2):
+	for nation_id in range(3):
 		var nation := Nation.new()
 		nation.id = nation_id
 		nation.alive = true
@@ -128,7 +185,7 @@ func _make_state() -> GameState:
 
 	_add_city(state, 0, false, Vector2(0.30, 0.50)) # 0 攻方河岸
 	_add_city(state, 1, false, Vector2(0.70, 0.50)) # 1 守方河岸府
-	_add_city(state, 1, true, Vector2(0.50, 0.50))  # 2 共享码头
+	_add_city(state, 2, true, Vector2(0.50, 0.50))  # 2 中立共享码头
 	_add_city(state, 1, false, Vector2(0.82, 0.50)) # 3 目标州治
 	_add_city(state, 0, false, Vector2(0.12, 0.50)) # 4 攻方首都
 	_add_city(state, 1, false, Vector2(0.94, 0.50)) # 5 守方首都
@@ -153,7 +210,11 @@ func _make_state() -> GameState:
 		state.recognized_city_owners[city.id] = city.owner_nation
 		city.loyalty_target_nation = city.owner_nation
 		city.garrison_manpower = 0
-	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
 	for army_index in range(4):
 		var army := Army.new()
 		army.id = 94210 + army_index

@@ -185,6 +185,9 @@ func _init() -> void:
 			"原生快照必须记录大营"
 		)
 	sim.free()
+	_test_blocked_fu_fallback(false, 4)
+	_test_blocked_fu_fallback(true, 4)
+	_test_blocked_fu_fallback(false, 1)
 	_finish()
 
 
@@ -223,6 +226,113 @@ func _neutralize_diplomacy(state: GameState) -> void:
 			state.set_diplomatic_relation(
 				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
 			)
+
+
+func _test_blocked_fu_fallback(
+	unreachable_frontier: bool,
+	army_count: int
+) -> void:
+	var state := GameState.new()
+	state.generate_grid_world(95200 + (1 if unreachable_frontier else 0))
+	var context := _attack_context(state)
+	_check(not context.is_empty(), "阻断府夹具必须找到大州")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var camp_id := int(context["entry"])
+	var attacker_id := int(context["attacker"])
+	var defender_id := int(context["defender"])
+	var other_fu: Array[int] = []
+	for member_id in state.administrative_members(center_id):
+		if member_id not in [center_id, camp_id]:
+			other_fu.append(member_id)
+	_check(other_fu.size() >= 2, "阻断府夹具至少需要三个府")
+	if other_fu.size() < 2:
+		return
+	var target_id := other_fu[0]
+	var isolated_staging_id := other_fu[1]
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "州治阻断府回归"
+	)
+	for city in state.cities:
+		city.owner_nation = attacker_id
+	for member_id in state.administrative_members(center_id):
+		state.cities[member_id].owner_nation = attacker_id
+	state.cities[center_id].owner_nation = defender_id
+	state.cities[target_id].owner_nation = defender_id
+	state.cities[center_id].garrison_manpower = 15000
+	state.armies.clear()
+	state.battles.clear()
+	var attackers: Array[Army] = []
+	for index in range(army_count):
+		var army := _army(95210 + index, attacker_id, camp_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+		attackers.append(army)
+	state.ownership_revision += 1
+	state.refresh_derived()
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	for edge in state.edges:
+		if (
+			edge.city_a in [target_id, isolated_staging_id]
+			or edge.city_b in [target_id, isolated_staging_id]
+		):
+			edge.max_manpower = 0
+	_enable_edge(state, camp_id, center_id)
+	_enable_edge(state, center_id, target_id)
+	if unreachable_frontier:
+		_enable_edge(state, center_id, isolated_staging_id)
+		_enable_edge(state, target_id, isolated_staging_id)
+	state.road_network_revision += 1
+	var plan := AdministrativeCampaignPlan.new()
+	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+	plan.phase = AdministrativeCampaignPlan.Phase.RAID_FU
+	plan.war_id = war_id
+	plan.opponent_nation_id = defender_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = camp_id
+	for army in attackers:
+		plan.army_assignments[army.id] = camp_id
+	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
+	sim._manage_administrative_campaign(
+		attacker_id, center_id, null, null, defender_id, war_id
+	)
+	var label := "不可达前沿府" if unreachable_frontier else "无前沿府"
+	if army_count >= 4:
+		_check(
+			plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER,
+			"%s且C满足R+V时必须改攻州治，不能卡在占府阶段" % label
+		)
+		_check(
+			_all_assigned_to(plan, attackers, center_id),
+			"%s降级攻州治时全部战区军必须直接向州治进军" % label
+		)
+	else:
+		_check(
+			plan.phase == AdministrativeCampaignPlan.Phase.HOLD_CAMP,
+			"%s且C不足R+V时必须驻营等待" % label
+		)
+		_check(
+			_all_assigned_to(plan, attackers, camp_id),
+			"%s驻营等待时不得误派军队强攻州治" % label
+		)
+	sim.free()
+
+
+func _enable_edge(state: GameState, city_a: int, city_b: int) -> void:
+	var edge := state.edge_of(city_a, city_b)
+	if edge == null:
+		state._add_edge(city_a, city_b)
+		edge = state.edge_of(city_a, city_b)
+	edge.kind = Edge.Kind.LAND
+	edge.max_manpower = 45000
+	edge.base_max_manpower = 45000
 
 
 func _army(id: int, owner_id: int, city_id: int, size: int) -> Army:

@@ -7351,21 +7351,35 @@ static func nation_detail_sections(
 	]
 	var campaign_centers := n.administrative_campaign_plans.keys()
 	campaign_centers.sort()
+	var war_force_reports := {}
 	for center_value in campaign_centers:
 		var campaign := game_state.campaign_plan(
 			nation_id, int(center_value)
 		)
 		if campaign == null:
 			continue
+		var war_force_report: Dictionary = {}
+		if campaign.war_id >= 0:
+			if not war_force_reports.has(campaign.war_id):
+				war_force_reports[campaign.war_id] = (
+					game_state.campaign_war_force_report(
+						nation_id, campaign.war_id
+					)
+				)
+			war_force_report = war_force_reports[campaign.war_id]
+		var front_force: Dictionary = (
+			(war_force_report.get("fronts", {}) as Dictionary).get(
+				campaign.center_city_id, {}
+			)
+		)
 		var committed := (
 			game_state.campaign_defensive_committed_manpower(
 				nation_id, campaign.center_city_id
 			)
 			if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
-			else game_state.campaign_committed_manpower(
-				nation_id, campaign.center_city_id
-			)
+			else int(front_force.get("assigned_effective", 0))
 		)
+		var assigned_total := int(front_force.get("assigned_total", committed))
 		var active_offensive_siege: Battle = null
 		if campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE:
 			for battle in game_state.battles:
@@ -7399,21 +7413,19 @@ static func nation_detail_sections(
 			if campaign.war_id >= 0
 			else "临时战役"
 		)
-		var war_pool_total := 0
-		var war_pool_effective := 0
-		for army in game_state.armies:
-			if (
-				army.owner_nation != nation_id
-				or army.campaign_war_id != campaign.war_id
-				or army.size <= 0
-			):
-				continue
-			war_pool_total += army.size
-			if game_state.army_effective_for_field_campaign(army):
-				war_pool_effective += army.size
+		var war_pool_total := int(war_force_report.get("war_pool_total", 0))
+		var war_pool_effective := int(
+			war_force_report.get("war_pool_effective", 0)
+		)
+		var reserve_effective := int(
+			war_force_report.get("reserve_effective", 0)
+		)
 		var force_text := (
-			"%s兵力：%d（可战%d） · 本州已调：%d"
-			% [war_label, war_pool_total, war_pool_effective, committed]
+			"%s军队池：总兵力%d · 当前可战%d · 可调预备%d · 本战线已绑定%d（可战%d）"
+			% [
+				war_label, war_pool_total, war_pool_effective,
+				reserve_effective, assigned_total, committed,
+			]
 		)
 		if active_offensive_siege != null:
 			var arrived := 0
@@ -7434,9 +7446,10 @@ static func nation_detail_sections(
 					else "进攻·攻击州治守军"
 				)
 			)
-			force_text = "%s · 城下可战：%d · 攻城最低：%d · 本州已调：%d" % [
-				war_label, arrived, requirement, committed,
-			]
+			force_text = (
+				"%s · 城下可战%d · 攻城最低%d · 本战线已绑定%d（可战%d）"
+				% [war_label, arrived, requirement, assigned_total, committed]
+			)
 		else:
 			force_text += (
 				" · 出城迎击所需：%d" % requirement

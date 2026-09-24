@@ -30,6 +30,11 @@ func _init() -> void:
 		and neighbors_0 == [1]
 		and neighbors_1 == [0]
 		and state.cities_share_territorial_border(0, 1)
+		and state.local_crossing_banks(2) == [0, 1]
+		and state.local_crossing_dock_ids() == [2, 4]
+		and state.is_local_crossing_transit(2, 0, 1)
+		and not state.is_local_crossing_transit(2, 0, 3)
+		and not state.is_local_crossing_transit(4, 0, 3)
 		and not state.cities_share_territorial_border(0, 3)
 		and not state.cities_share_territorial_border(1, 3)
 		and DiplomacyAI._frontier_edges(state, 0, 1, cache) == 1
@@ -48,6 +53,7 @@ func _init() -> void:
 		and int((enclave_draft["owners"] as Array)[0]) == 0
 		and int((enclave_draft["owners"] as Array)[1]) == 0
 		and int((enclave_draft["owners"] as Array)[3]) == 2
+		and _allied_border_does_not_enable_declaration()
 	)
 
 	# A local crossing stages from the attacker's own bank even when the dock
@@ -77,6 +83,8 @@ func _init() -> void:
 	state.road_network_revision += 1
 	valid = valid and state.territorial_border_pairs() == [Vector2i(3, 5)]
 	valid = valid and not state.cities_share_territorial_border(0, 1)
+	valid = valid and state.local_crossing_banks(2) == [0]
+	valid = valid and not state.is_local_crossing_transit(2, 0, 1)
 	state.cities[2].owner_nation = 0
 	state.ownership_revision += 1
 	var expedition_cache := {}
@@ -129,6 +137,36 @@ func _make_state() -> GameState:
 	for city in state.cities:
 		state.recognized_city_owners[city.id] = city.owner_nation
 	return state
+
+
+func _allied_border_does_not_enable_declaration() -> bool:
+	var state := GameState.new()
+	for nation_id in range(3):
+		var nation := Nation.new()
+		nation.id = nation_id
+		nation.alive = true
+		state.nations.append(nation)
+	_add_city(state, 0, false)
+	_add_city(state, 1, false)
+	_add_city(state, 2, false)
+	_add_edge(state, 0, 1, Edge.Kind.LAND)
+	_add_edge(state, 1, 2, Edge.Kind.LAND)
+	state.recognized_city_owners.resize(state.cities.size())
+	for city in state.cities:
+		state.recognized_city_owners[city.id] = city.owner_nation
+	state.set_diplomatic_relation(
+		0, 1, GameState.DiplomaticRelation.ALLIED
+	)
+	var cache := {}
+	return (
+		DiplomacyAI._frontier_edges(state, 0, 2, cache) > 0
+		and not DiplomacyAI._direct_bordering_nation_ids(
+			state, 0, cache
+		).has(2)
+		and not DiplomacyAI.can_initiate_war_at_range(
+			state, 0, 2, cache
+		)
+	)
 
 
 func _enclave_draft(state: GameState) -> Dictionary:

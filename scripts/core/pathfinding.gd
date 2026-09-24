@@ -42,8 +42,8 @@ static func dijkstra_field(
 		if block_contested_edges
 		else {}
 	)
-	var local_crossing_attack_transits := (
-		_local_crossing_attack_transit_docks(
+	var local_crossing_transit_docks := (
+		_local_crossing_transit_docks(
 			state, allowed_nation, allowed_goal
 		)
 		if allowed_nation >= 0
@@ -76,10 +76,10 @@ static func dijkstra_field(
 				continue
 			if allowed_nation != -1:
 				var v_is_local_crossing_transit := (
-					local_crossing_attack_transits.has(v)
+					local_crossing_transit_docks.has(v)
 				)
 				var u_is_local_crossing_transit := (
-					local_crossing_attack_transits.has(u)
+					local_crossing_transit_docks.has(u)
 				)
 				if u_is_local_crossing_transit or v_is_local_crossing_transit:
 					var bank_id := v if u_is_local_crossing_transit else u
@@ -143,44 +143,35 @@ static func dijkstra_field(
 	return { "dist": dist, "prev": prev }
 
 
-## 同一码头两岸属于政治接壤。攻击对岸陆城时，允许该共享码头作为唯一的
-## 敌方中继节点；不沿 RIVER/SEA 扩展，也不允许穿过其他敌城。
-static func _local_crossing_attack_transit_docks(
+## 同一码头两岸属于政治接壤。共享码头可在两个有通行权的陆岸之间作为
+## 本地中继；攻击时还可连接一个作为最终目标的敌岸。遍历码头时只接受
+## LANDING 边，因此不会沿 RIVER/SEA 扩展成远程政治通道。
+static func _local_crossing_transit_docks(
 	state: GameState,
 	attacker_id: int,
 	allowed_goal: int
 ) -> Dictionary:
 	var result := {}
-	if (
-		allowed_goal < 0
-		or allowed_goal >= state.cities.size()
-		or state.cities[allowed_goal].is_dock
-	):
-		return result
-	for dock_id in state.neighbors(allowed_goal):
-		if not state.cities[dock_id].is_dock:
-			continue
-		var goal_landing := state.edge_of(dock_id, allowed_goal)
-		if (
-			goal_landing == null
-			or goal_landing.kind != Edge.Kind.LANDING
-			or goal_landing.max_manpower <= 0
-		):
-			continue
-		for neighbor in state.neighbors(dock_id):
-			if neighbor == allowed_goal or state.cities[neighbor].is_dock:
-				continue
-			var landing := state.edge_of(dock_id, neighbor)
-			if (
-				landing != null
-				and landing.kind == Edge.Kind.LANDING
-				and landing.max_manpower > 0
-				and state.has_military_access(
+	for dock_id in state.local_crossing_dock_ids():
+		var accessible_banks := 0
+		var reaches_attack_goal := false
+		for neighbor in state.local_crossing_banks(dock_id):
+			if state.has_military_access(
+				attacker_id, state.cities[neighbor].owner_nation
+			):
+				accessible_banks += 1
+			elif (
+				neighbor == allowed_goal
+				and state.is_enemy(
 					attacker_id, state.cities[neighbor].owner_nation
 				)
 			):
-				result[dock_id] = true
-				break
+				reaches_attack_goal = true
+		if (
+			accessible_banks >= 2
+			or (accessible_banks >= 1 and reaches_attack_goal)
+		):
+			result[dock_id] = true
 	return result
 
 
@@ -1029,6 +1020,9 @@ static func build_manpower_hub_network(
 		state,
 		nation_id
 	)
+	var local_crossing_transit_docks := _local_crossing_transit_docks(
+		state, nation_id, -1
+	)
 	var queue: Array[int] = []
 	for warehouse in state.warehouse_cities_of(nation_id):
 		if state.city_under_siege(warehouse.id):
@@ -1044,17 +1038,6 @@ static func build_manpower_hub_network(
 		for neighbor in state.neighbors(city_id):
 			if reachable[neighbor] != 0:
 				continue
-			if (
-				not state.has_military_access(
-					nation_id,
-					state.cities[city_id].owner_nation
-				)
-				or not state.has_military_access(
-					nation_id,
-					state.cities[neighbor].owner_nation
-				)
-			):
-				continue
 			var edge := state.edge_of(city_id, neighbor)
 			if (
 				edge == null
@@ -1062,6 +1045,15 @@ static func build_manpower_hub_network(
 				or blocked_enemy_edges.has(
 					GameState.edge_key(edge.city_a, edge.city_b)
 				)
+			):
+				continue
+			if not _local_crossing_or_accessible_step(
+				state,
+				nation_id,
+				city_id,
+				neighbor,
+				edge,
+				local_crossing_transit_docks
 			):
 				continue
 			reachable[neighbor] = 1
@@ -1229,6 +1221,9 @@ static func _supply_loss_field(
 			state,
 			nation_id
 		)
+	var local_crossing_transit_docks := _local_crossing_transit_docks(
+		state, nation_id, -1
+	)
 	var queue: Array[Dictionary] = [{
 		"city": start,
 		"distance": 0.0,
@@ -1262,17 +1257,17 @@ static func _supply_loss_field(
 		for v in state.neighbors(u):
 			if visited[v] != 0:
 				continue
-			if (
-				not state.has_military_access(
-					nation_id, state.cities[u].owner_nation
-				)
-				or not state.has_military_access(
-					nation_id, state.cities[v].owner_nation
-				)
-			):
-				continue
 			var edge := state.edge_of(u, v)
 			if edge == null or edge.max_manpower <= 0:
+				continue
+			if not _local_crossing_or_accessible_step(
+				state,
+				nation_id,
+				u,
+				v,
+				edge,
+				local_crossing_transit_docks
+			):
 				continue
 			if blocked_enemy_edges.has(
 				GameState.edge_key(edge.city_a, edge.city_b)
@@ -1295,6 +1290,41 @@ static func _supply_loss_field(
 					"rank": int(order_rank[v]),
 				})
 	return {"dist": dist, "prev": prev}
+
+
+static func _local_crossing_or_accessible_step(
+	state: GameState,
+	nation_id: int,
+	city_a: int,
+	city_b: int,
+	edge: Edge,
+	transit_docks: Dictionary
+) -> bool:
+	var a_is_transit := transit_docks.has(city_a)
+	var b_is_transit := transit_docks.has(city_b)
+	if a_is_transit or b_is_transit:
+		var dock_id := city_a if a_is_transit else city_b
+		if state.is_enemy(
+			nation_id, state.cities[dock_id].owner_nation
+		):
+			return false
+		var bank_id := city_b if a_is_transit else city_a
+		return (
+			edge != null
+			and edge.kind == Edge.Kind.LANDING
+			and not state.cities[bank_id].is_dock
+			and state.has_military_access(
+				nation_id, state.cities[bank_id].owner_nation
+			)
+		)
+	return (
+		state.has_military_access(
+			nation_id, state.cities[city_a].owner_nation
+		)
+		and state.has_military_access(
+			nation_id, state.cities[city_b].owner_nation
+		)
+	)
 
 
 static func _supply_edge_loss(edge: Edge) -> float:
