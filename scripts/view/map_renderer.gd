@@ -3701,10 +3701,18 @@ static func build_region_fill_image_from_masks(
 			game_state, nation_id, view_nation_id
 		)
 	var city_colors := PackedColorArray()
+	var occupation_colors := PackedColorArray()
+	var occupied := PackedByteArray()
 	city_colors.resize(game_state.cities.size())
+	occupation_colors.resize(game_state.cities.size())
+	occupied.resize(game_state.cities.size())
 	for city_id in range(game_state.cities.size()):
 		var owner_id := game_state.cities[city_id].owner_nation
 		city_colors[city_id] = nation_colors[owner_id] if owner_id >= 0 and owner_id < nation_colors.size() else Color(0.45, 0.45, 0.43)
+		var recognized_owner := game_state.recognized_owner_of(city_id)
+		if view_nation_id < 0 and owner_id != recognized_owner:
+			occupation_colors[city_id] = city_colors[city_id].darkened(0.08)
+			occupied[city_id] = 1
 	for y in range(POLITICAL_VISUAL_SIZE.y):
 		for x in range(POLITICAL_VISUAL_SIZE.x):
 			if land.get_pixel(x, y).r < 0.5:
@@ -3717,6 +3725,8 @@ static func build_region_fill_image_from_masks(
 			# neighbouring country colors can never be interpolated together.
 			if edge_mask.get_pixel(x, y).r > 0.5:
 				color = color.lerp(country_boundary_display_color(color), COUNTRY_GRADIENT_STRENGTH)
+			if occupied[city_id] > 0 and (x + y) % 9 < 3:
+				color = occupation_colors[city_id]
 			color.a = 1.0
 			image.set_pixel(x, y, color)
 	return image
