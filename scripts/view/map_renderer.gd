@@ -2563,6 +2563,10 @@ static func build_political_canvas_images(
 	var fill := source.duplicate()
 	if apply_country_fade:
 		_apply_country_fill_opacity(fill, country_opacity)
+	# Reapply occupation hatching after the country gradient so it remains the
+	# topmost political fill layer instead of being dimmed underneath it.
+	if game_state != null:
+		_apply_occupation_stripes(fill, game_state)
 	fill.resize(
 		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
 		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
@@ -2730,6 +2734,28 @@ static func _apply_country_fill_opacity(
 			var country_base := color
 			var boundary_color := country_boundary_display_color(country_base)
 			color = country_base.lerp(boundary_color, boundary_weight)
+			color.a = 1.0
+			fill.set_pixel(x, y, color)
+
+
+static func _apply_occupation_stripes(fill: Image, game_state: GameState) -> void:
+	if fill == null or fill.is_empty() or game_state == null:
+		return
+	var size := game_state.province_map_size
+	if size.x <= 0 or size.y <= 0:
+		return
+	for y in range(mini(fill.get_height(), size.y)):
+		for x in range(mini(fill.get_width(), size.x)):
+			var city_id := game_state.province_ids[y * size.x + x]
+			if city_id < 0 or city_id >= game_state.cities.size():
+				continue
+			var city := game_state.cities[city_id]
+			var recognized_owner := game_state.recognized_owner_of(city_id)
+			if city.owner_nation == recognized_owner or (x + y) % 9 >= 3:
+				continue
+			var color := political_map_color_for_view(
+				game_state, city.owner_nation, -1
+			).darkened(0.08)
 			color.a = 1.0
 			fill.set_pixel(x, y, color)
 
