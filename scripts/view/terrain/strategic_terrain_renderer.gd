@@ -275,6 +275,10 @@ func _ensure_render_nodes() -> void:
 			"political_land_base_color",
 			MapRenderer.POLITICAL_LAND_BASE_COLOR
 		)
+		_material.set_shader_parameter(
+			"country_gradient_strength",
+			MapRenderer.COUNTRY_GRADIENT_STRENGTH
+		)
 		_material.set_shader_parameter("shallow_sea_color", SHALLOW_SEA_COLOR)
 		_material.set_shader_parameter("deep_sea_color", DEEP_SEA_COLOR)
 		_material.set_shader_parameter(

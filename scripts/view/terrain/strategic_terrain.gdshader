@@ -17,6 +17,7 @@ uniform float local_boundary_outer_radius_px = 0.5;
 uniform float country_boundary_core_width_px = 3.0;
 uniform float country_boundary_outer_width_px = 3.0;
 uniform float country_fill_fade_enabled : hint_range(0.0, 1.0) = 1.0;
+uniform float country_gradient_strength : hint_range(0.0, 1.0) = 0.45;
 uniform float ocean_height_threshold = 0.0;
 uniform float sea_floor_height = -2.2;
 uniform vec3 political_land_base_color : source_color = vec3(0.82, 0.82, 0.80);
@@ -85,8 +86,11 @@ void fragment() {
 		// province.rgb is the owning nation's base colour. The country texture
 		// carries the enhanced boundary colour and only its alpha is used as the
 		// inward gradient weight, so every nation fades to its own colour.
-		vec3 faded_country_color = mix(
+		vec3 gradient_country_color = mix(
 			province.rgb, coast_country.rgb, country_gradient_weight
+		);
+		vec3 faded_country_color = mix(
+			province.rgb, gradient_country_color, country_gradient_strength
 		);
 		vec3 political_land = mix(
 			white_low_poly_base, faded_country_color, province_alpha

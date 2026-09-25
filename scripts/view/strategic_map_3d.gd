@@ -45,7 +45,7 @@ const RIVER_BASE_HALF_WIDTH: float = 0.075
 const RIVER_ELEVATION: float = 0.11
 const RIVER_RENDER_SUBDIVISIONS: int = 4
 const NATION_LABEL_FONT_SIZE: int = 84
-const NATION_LABEL_OUTLINE_SIZE: int = 3
+const NATION_LABEL_OUTLINE_SIZE: int = 4
 const NATION_LABEL_SAFETY: float = 0.86
 const NATION_LABEL_FIT_EPSILON: float = 0.0001
 const NATION_LABEL_BASE_PIXEL_SIZE: float = 0.026
@@ -893,7 +893,7 @@ func _update_boundary_lod() -> void:
 	# Keep every layer fully visible at every supported camera distance.
 	var lod := boundary_lod_strengths(_camera_distance)
 	var province_alpha := float(lod["province"])
-	var country_alpha := float(lod["country"])
+	var country_alpha := 0.0
 	if _history_preview_active:
 		_terrain.set_boundary_lod(province_alpha, 0.0, 0.0)
 	else:
@@ -907,7 +907,7 @@ static func boundary_lod_strengths(camera_distance: float) -> Dictionary:
 	return {
 		"province": 1.0,
 		"coast": 1.0,
-		"country": 1.0,
+		"country": 0.0,
 	}
 
 
@@ -1489,10 +1489,8 @@ func _finish_country_visual_task(commit_result: bool) -> bool:
 			_country_color_texture
 		)
 		_terrain.set_country_fill_fade_enabled(
-			not (
-				_map_mode == MapRenderer.MapMode.LOYALTY
-				and current_view_nation_id < 0
-			)
+			current_view_nation_id < 0
+			and _map_mode != MapRenderer.MapMode.LOYALTY
 		)
 		_update_boundary_lod()
 		_last_detail_visibility_signature = []
@@ -2265,8 +2263,8 @@ func _rebuild_nation_labels() -> void:
 		label.font_size = NATION_LABEL_FONT_SIZE
 		label.outline_size = NATION_LABEL_OUTLINE_SIZE
 		label.pixel_size = float(layout["pixel_size"])
-		label.modulate = Color(0.075, 0.078, 0.082, 0.86)
-		label.outline_modulate = Color(0.62, 0.60, 0.54, 0.18)
+		label.modulate = Color(0.075, 0.078, 0.082, 1.00)
+		label.outline_modulate = Color(0.075, 0.078, 0.082, 1.00)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 		label.no_depth_test = true

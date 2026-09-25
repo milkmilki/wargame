@@ -34,6 +34,25 @@ func _init() -> void:
 		(topology.get("province", PackedVector2Array()) as PackedVector2Array).size() > 0,
 		"province boundary geometry is empty"
 	) and valid
+	var regions: Array[Dictionary] = [{
+		"city_id": 0,
+		"province_id": 0,
+		"polygon": PackedVector2Array([
+			Vector2(0.1, 0.1), Vector2(0.9, 0.1),
+			Vector2(0.9, 0.9), Vector2(0.1, 0.9),
+		]),
+		"closed": true,
+		"coastline": false,
+	}]
+	var masks := MapRenderer.rasterize_boundary_regions(regions, Vector2i(32, 32))
+	valid = _check(
+		(masks["land_mask"] as Image).get_size() == Vector2i(32, 32),
+		"region raster size mismatch"
+	) and valid
+	valid = _check(
+		(masks["land_mask"] as Image).get_pixel(16, 16).r > 0.5,
+		"region raster failed to fill polygon interior"
+	) and valid
 	if not valid:
 		quit(1)
 		return

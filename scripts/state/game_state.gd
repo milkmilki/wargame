@@ -83,20 +83,21 @@ const VASSAL_COLOR_SUBJECT_HUE_VARIANCE_DEGREES: float = 4.0
 const ADJACENT_SOVEREIGN_MIN_HUE_DEGREES: float = 15.0
 const NATION_COLOR_HUE_MIN: float = 0.0
 const NATION_COLOR_HUE_MAX: float = 1.0
-const NATION_COLOR_SATURATION_MIN: float = 0.55
-const NATION_COLOR_SATURATION_MAX: float = 0.85
-const NATION_COLOR_VALUE_MIN: float = 0.55
+## Macaron palette contract: low saturation and high value keep national fills
+## soft and readable on the parchment/terrain base without becoming neon.
+const NATION_COLOR_SATURATION_MIN: float = 0.28
+const NATION_COLOR_SATURATION_MAX: float = 0.42
+const NATION_COLOR_VALUE_MIN: float = 0.70
 const NATION_COLOR_VALUE_MAX: float = 0.80
-## Hard-coded HSV palette. All procedural colors reuse the same bounded HSV
-## band; hue spans the full ring while saturation stays map-friendly.
+## Fixed HSV palette: coral, powder blue, mint and cream orange.
 const NATION_PALETTE_HUES := [
 	0.000,
 	0.610,
 	0.350,
 	0.140,
 ]
-const NATION_PALETTE_SATURATIONS := [0.52, 0.46, 0.40, 0.50]
-const NATION_PALETTE_VALUES := [0.48, 0.43, 0.38, 0.50]
+const NATION_PALETTE_SATURATIONS := [0.38, 0.32, 0.30, 0.36]
+const NATION_PALETTE_VALUES := [0.84, 0.86, 0.82, 0.90]
 
 
 static func army_monthly_upkeep(troops: int) -> int:
@@ -788,8 +789,8 @@ func _generate_nations(
 					NATION_COLOR_HUE_MAX,
 					fposmod(float(i) * 0.61803398875, 1.0)
 				),
-				0.36 + float(i % 4) * 0.05,
-				0.36 + float(i % 5) * 0.03
+				0.30 + float(i % 4) * 0.025,
+				0.78 + float(i % 5) * 0.025
 			)
 		)
 		n.treasury_gold = 10000
@@ -6365,8 +6366,8 @@ func _derive_independent_nation_color(nation_id: int) -> Color:
 			best_hue = candidate_hue
 	return normalize_nation_color(Color.from_hsv(
 		best_hue,
-		0.42 + float(nation_id % 3) * 0.05,
-		0.40 + float(nation_id % 4) * 0.03
+		0.30 + float(nation_id % 3) * 0.04,
+		0.78 + float(nation_id % 4) * 0.035
 	))
 
 

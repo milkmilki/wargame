@@ -2,7 +2,7 @@ extends Node
 ## 入口：装配 GameState / Simulation / 3D 战略地图 / HUD。
 
 @export var use_grid_world: bool = false
-@export var use_3d_map: bool = true
+@export var use_3d_map: bool = false
 @export_range(1, GameState.TERRAIN_CITY_COUNT, 1) var nation_count: int = (
 	GameState.NATION_COUNT
 )

@@ -289,7 +289,7 @@ func _run() -> void:
 			and not strengths.has("diplomatic")
 			and is_equal_approx(float(strengths["province"]), 1.0)
 			and is_equal_approx(float(strengths["coast"]), 1.0)
-			and is_equal_approx(float(strengths["country"]), 1.0)
+			and is_zero_approx(float(strengths["country"]))
 		)
 	var base_country_color := MapRenderer.paper_nation_color(
 		state.nations[0].color
@@ -750,10 +750,10 @@ func _run() -> void:
 			and lod_always_visible
 			and is_equal_approx(material_mid_province, 1.0)
 			and is_equal_approx(material_mid_coast, 1.0)
-			and is_equal_approx(material_mid_country, 1.0)
+			and is_zero_approx(material_mid_country)
 			and is_equal_approx(material_far_province, 1.0)
 			and is_equal_approx(material_far_coast, 1.0)
-			and is_equal_approx(material_far_country, 1.0)
+			and is_zero_approx(material_far_country)
 		),
 		"selection": (
 			map_3d._selection.visible and diplomatic_view_from_city

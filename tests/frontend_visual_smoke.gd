@@ -403,10 +403,8 @@ func _run() -> void:
 		and trade_visible_far
 	)
 	var map_label_font_contract := (
-		map_label_font_source.contains(
-			"return create_ui_font()"
-		)
-		and not map_label_font_source.contains("\"serif\"")
+		map_label_font_source.contains("simfang.ttf")
+		and map_label_font_source.contains("STFANGSO.TTF")
 	)
 	var road_type_style_contract := (
 		MapRenderer.edge_uses_land_road_style(Edge.Kind.LAND)
@@ -539,7 +537,7 @@ func _run() -> void:
 		float(terrain_material.get_shader_parameter(
 			"country_boundary_strength"
 		)),
-		1.0
+		0.0
 	)
 	var boundary_shader_color: bool = (
 		local_boundary_color.is_equal_approx(

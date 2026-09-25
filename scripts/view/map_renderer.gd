@@ -94,6 +94,7 @@ const POLITICAL_LAND_BASE_COLOR := Color(0.82, 0.82, 0.80, 1.0)
 ## raster. With the formal 256x256 ownership map this produces 2048x2048
 ## boundary/fill textures without changing gameplay topology.
 const PROVINCE_VISUAL_SUPERSAMPLE: int = 8
+const POLITICAL_VISUAL_SIZE := Vector2i(2048, 2048)
 const LOCAL_BOUNDARY_WIDTH_PX: float = 1.0
 const COUNTRY_BOUNDARY_WIDTH_PX: float = 2.0
 const COUNTRY_BOUNDARY_VALUE_OFFSET: float = -0.15
@@ -105,6 +106,8 @@ const COUNTRY_FILL_FADE_RADIUS_PX: float = 10.0
 const COUNTRY_FILL_FADE_COEFFICIENT: float = 1.0 / COUNTRY_FILL_FADE_RADIUS_PX
 ## 国家腹地保留的最低不透明度。设为 0.0 时大国中心显示基础色。
 const COUNTRY_FILL_MIN_OPACITY: float = 0.0
+## 国家边界渐变作为低层次弱叠加，避免压住省界、道路和城市视觉信息。
+const COUNTRY_GRADIENT_STRENGTH: float = 0.45
 ## Feather only the rendered boundary ink; province IDs remain nearest-neighbor.
 const BOUNDARY_ANTIALIAS_PX: float = 1.0
 const VASSAL_BRIGHTNESS_STEP: float = 0.05
@@ -154,6 +157,11 @@ var _province_texture: ImageTexture
 var _political_base_texture: ImageTexture
 var _political_ocean_texture: ImageTexture
 var _political_texture: ImageTexture
+var _region_fill_texture: ImageTexture
+var _region_fill_signature := PackedInt64Array()
+var _region_id_image: Image
+var _region_land_mask: Image
+var _region_edge_mask: Image
 var _loyalty_texture: ImageTexture
 var _country_fill_opacity_image: Image
 var _country_fill_opacity_ownership_revision: int = -1
@@ -165,6 +173,8 @@ var _province_visual_mode: int = -1
 var _province_loyalty_day: int = -1
 var _province_strength: float = POLITICAL_MAP_DEFAULT_STRENGTH
 var _classified_boundary_geometry := {}
+var _boundary_regions: Array[Dictionary] = []
+var _boundary_regions_topology_ids := PackedInt32Array()
 var _boundary_topology := {}
 var _province_topology_ids := PackedInt32Array()
 var _province_cache_ready: bool = false
@@ -265,6 +275,11 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_political_base_texture = null
 	_political_ocean_texture = null
 	_political_texture = null
+	_region_fill_texture = null
+	_region_fill_signature = PackedInt64Array()
+	_region_id_image = null
+	_region_land_mask = null
+	_region_edge_mask = null
 	_loyalty_texture = null
 	_country_fill_opacity_image = null
 	_country_fill_opacity_ownership_revision = -1
@@ -274,6 +289,8 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_province_visual_mode = -1
 	_province_loyalty_day = -1
 	_classified_boundary_geometry = {}
+	_boundary_regions.clear()
+	_boundary_regions_topology_ids = PackedInt32Array()
 	_boundary_topology = {}
 	_province_topology_ids = PackedInt32Array()
 	_province_cache_ready = false
@@ -971,8 +988,21 @@ static func create_ui_font() -> Font:
 
 
 static func create_map_label_font() -> Font:
-	# 地图标签统一复用 UI 的 CJK Sans/黑体字体：黑体在任意缩放下笔画更清晰、
-	# 与国名大字风格一致，不再声明仿宋/衬线候选。
+	# 地图标签使用仿宋；优先加载本机字体文件，找不到时再回退到
+	# 常见宋体/衬线 CJK 字体，避免国家名和城市名继续使用 UI 黑体。
+	var candidates := PackedStringArray([
+		"C:/Windows/Fonts/simfang.ttf",
+		"C:/Windows/Fonts/STFANGSO.TTF",
+		"/System/Library/Fonts/Songti.ttc",
+		"/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+		"/usr/share/fonts/opentype/noto/NotoSerifCJKsc-Regular.otf",
+	])
+	for path in candidates:
+		if not FileAccess.file_exists(path):
+			continue
+		var font_file := FontFile.new()
+		if font_file.load_dynamic_font(path) == OK:
+			return font_file
 	return create_ui_font()
 
 
@@ -2039,11 +2069,9 @@ func _draw() -> void:
 			_draw_edges()
 		_draw_trade_routes()
 		_draw_selection_highlight()
-		# Political divisions form one solid-color line layer above the map,
-		# terrain and transport network, while counters remain topmost.
+		# Province/city boundaries form the only administrative line layer above
+		# the map; national borders are represented by the colour transition only.
 		_draw_province_boundaries()
-		if not _history_preview_active:
-			_draw_national_boundaries()
 		if _city_road_visuals_visible:
 			_draw_cities()
 		_draw_battles()
@@ -2201,6 +2229,15 @@ func _ensure_province_visual_cache() -> void:
 		state.administrative_region_ids if region_mode else PackedInt32Array()
 	)
 	_classified_boundary_geometry = geometry
+	if topology_changed:
+		_boundary_regions = build_boundary_regions(state)
+		_boundary_regions_topology_ids = state.province_ids.duplicate()
+		var region_masks := rasterize_boundary_regions(
+			_boundary_regions, POLITICAL_VISUAL_SIZE
+		)
+		_region_id_image = region_masks["province_id"]
+		_region_land_mask = region_masks["land_mask"]
+		_region_edge_mask = region_masks["edge_mask"]
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
@@ -2215,6 +2252,18 @@ func _ensure_province_visual_cache() -> void:
 		or fill_signature != _political_fill_signature
 	)
 	if fill_changed:
+		if _map_mode == MapMode.POLITICAL and not _boundary_regions.is_empty():
+			var masks := {
+				"province_id": _region_id_image,
+				"land_mask": _region_land_mask,
+				"edge_mask": _region_edge_mask,
+			}
+			_region_fill_texture = ImageTexture.create_from_image(
+				build_region_fill_image_from_masks(
+					state, masks, _diplomatic_view_nation_id
+				)
+			)
+			_region_fill_signature = fill_signature
 		if (
 			topology_changed
 			or _country_fill_opacity_image == null
@@ -2570,7 +2619,10 @@ static func build_political_canvas_images(
 	fill.resize(
 		source.get_width() * PROVINCE_VISUAL_SUPERSAMPLE,
 		source.get_height() * PROVINCE_VISUAL_SUPERSAMPLE,
-		Image.INTERPOLATE_BILINEAR
+		# Ownership is categorical: bilinear interpolation mixes neighbouring
+		# nation colors at borders. Nearest keeps every texel assigned to one
+		# source province; smoothing is handled only by explicit boundary curves.
+		Image.INTERPOLATE_NEAREST
 	)
 	# The shader masks political color with authoritative terrain geometry, so
 	# this texture only needs to supply a nearby province RGB where the coarse
@@ -2730,7 +2782,10 @@ static func _apply_country_fill_opacity(
 			# Opacity is a gradient weight, not the final pixel alpha. Keep the
 			# whole political fill opaque and transition from boundary ink to the
 			# selected land base colour toward the country interior.
-			var boundary_weight := country_opacity.get_pixel(x, y).r
+			var boundary_weight := (
+				country_opacity.get_pixel(x, y).r
+				* COUNTRY_GRADIENT_STRENGTH
+			)
 			var country_base := color
 			var boundary_color := country_boundary_display_color(country_base)
 			color = country_base.lerp(boundary_color, boundary_weight)
@@ -3450,6 +3505,221 @@ static func build_province_boundary_segments(
 	return classify_province_boundary_topology(
 		game_state, build_province_boundary_topology(game_state)
 	)
+
+
+## Build closed, smoothed city/province regions from the same curved topology
+## used by the visible boundary lines. These polygons are visual-only; logical
+## ownership continues to come from province_ids.
+static func build_boundary_regions(
+	game_state: GameState
+) -> Array[Dictionary]:
+	var regions: Array[Dictionary] = []
+	if game_state == null or game_state.cities.is_empty():
+		return regions
+	var topology := build_province_boundary_topology(game_state)
+	var source_segments: PackedVector2Array = topology.get(
+		"province", PackedVector2Array()
+	)
+	var province_a: PackedInt32Array = topology.get(
+		"province_a", PackedInt32Array()
+	)
+	var province_b: PackedInt32Array = topology.get(
+		"province_b", PackedInt32Array()
+	)
+	var side_a: PackedVector2Array = topology.get(
+		"province_side_a", PackedVector2Array()
+	)
+	var side_b: PackedVector2Array = topology.get(
+		"province_side_b", PackedVector2Array()
+	)
+	var coast_segments: PackedVector2Array = topology.get(
+		"coast", PackedVector2Array()
+	)
+	var coast_province: PackedInt32Array = topology.get(
+		"coast_province", PackedInt32Array()
+	)
+	var coast_side: PackedVector2Array = topology.get(
+		"coast_side", PackedVector2Array()
+	)
+	for city_id in range(game_state.cities.size()):
+		var segments := PackedVector2Array()
+		var region_a := PackedInt32Array()
+		var region_b := PackedInt32Array()
+		var region_side_a := PackedVector2Array()
+		var region_side_b := PackedVector2Array()
+		for edge_index in range(source_segments.size() / 2):
+			var city_a := province_a[edge_index] if edge_index < province_a.size() else -1
+			var city_b := province_b[edge_index] if edge_index < province_b.size() else -1
+			var owner_side := Vector2.ZERO
+			if city_a == city_id:
+				owner_side = side_a[edge_index]
+			elif city_b == city_id:
+				owner_side = side_b[edge_index]
+			else:
+				continue
+			_append_segment(
+				segments,
+				source_segments[edge_index * 2],
+				source_segments[edge_index * 2 + 1]
+			)
+			region_a.append(city_id)
+			region_b.append(-1)
+			region_side_a.append(owner_side)
+			region_side_b.append(-owner_side)
+		for edge_index in range(coast_segments.size() / 2):
+			if edge_index >= coast_province.size() or coast_province[edge_index] != city_id:
+				continue
+			_append_segment(
+				segments,
+				coast_segments[edge_index * 2],
+				coast_segments[edge_index * 2 + 1]
+			)
+			region_a.append(city_id)
+			region_b.append(-1)
+			region_side_a.append(
+				coast_side[edge_index]
+				if edge_index < coast_side.size() else Vector2.ZERO
+			)
+			region_side_b.append(Vector2.ZERO)
+		if segments.size() < 6:
+			continue
+		var semantic_edges := _build_boundary_semantic_edges(
+			segments,
+			{
+				"kind": "province",
+				"province_a": region_a,
+				"province_b": region_b,
+				"side_a": region_side_a,
+				"side_b": region_side_b,
+			}
+		)
+		for chain_value in _trace_boundary_semantic_chains(semantic_edges):
+			var chain: Dictionary = chain_value
+			var polygon: PackedVector2Array = chain.get(
+				"points", PackedVector2Array()
+			)
+			if not bool(chain.get("closed", false)) or polygon.size() < 3:
+				continue
+			regions.append({
+				"city_id": city_id,
+				"province_id": city_id,
+				"polygon": polygon,
+				"closed": true,
+				"coastline": coast_province.has(city_id),
+			})
+	return regions
+
+
+static func validate_boundary_region(region: Dictionary) -> bool:
+	var polygon: PackedVector2Array = region.get("polygon", PackedVector2Array())
+	if polygon.size() < 3:
+		return false
+	if polygon.size() > 3 and polygon[0].distance_squared_to(polygon[-1]) < 0.00000001:
+		polygon = polygon.slice(0, polygon.size() - 1)
+	for point in polygon:
+		if point.x < -0.001 or point.x > 1.001 or point.y < -0.001 or point.y > 1.001:
+			return false
+	for index in range(polygon.size()):
+		if polygon[index].distance_squared_to(polygon[(index + 1) % polygon.size()]) < 0.00000001:
+			return false
+	return polygon.size() >= 3
+
+
+## Scanline-rasterize the smoothed regions into a fixed high-resolution mask.
+## The mask stores city/province IDs as float pixels and never blends IDs.
+static func rasterize_boundary_regions(
+	regions: Array[Dictionary], size: Vector2i
+) -> Dictionary:
+	var width := maxi(size.x, 1)
+	var height := maxi(size.y, 1)
+	var ids := Image.create(width, height, false, Image.FORMAT_RF)
+	var land := Image.create(width, height, false, Image.FORMAT_RF)
+	for region_value in regions:
+		var region: Dictionary = region_value
+		if not validate_boundary_region(region):
+			continue
+		var polygon: PackedVector2Array = region["polygon"]
+		if polygon.size() > 3 and polygon[0].distance_squared_to(polygon[-1]) < 0.00000001:
+			polygon = polygon.slice(0, polygon.size() - 1)
+		var city_id := float(region.get("city_id", -1))
+		for y in range(height):
+			var scan_y := (float(y) + 0.5) / float(height)
+			var intersections := PackedFloat32Array()
+			for index in range(polygon.size()):
+				var a := polygon[index]
+				var b := polygon[(index + 1) % polygon.size()]
+				if (a.y <= scan_y and b.y > scan_y) or (b.y <= scan_y and a.y > scan_y):
+					intersections.append(a.x + (scan_y - a.y) * (b.x - a.x) / (b.y - a.y))
+			intersections.sort()
+			for pair in range(0, intersections.size() - 1, 2):
+				var x0 := clampi(int(ceil(intersections[pair] * width - 0.5)), 0, width - 1)
+				var x1 := clampi(int(floor(intersections[pair + 1] * width - 0.5)), 0, width - 1)
+				for x in range(x0, x1 + 1):
+					land.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+					ids.set_pixel(x, y, Color(city_id, 0.0, 0.0, 1.0))
+	var edge := Image.create(width, height, false, Image.FORMAT_RF)
+	for y in range(height):
+		for x in range(width):
+			if land.get_pixel(x, y).r < 0.5:
+				continue
+			var id := ids.get_pixel(x, y).r
+			for offset_value in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+				var offset: Vector2i = offset_value
+				var sample := Vector2i(x, y) + offset
+				if sample.x < 0 or sample.y < 0 or sample.x >= width or sample.y >= height:
+					edge.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+					break
+				if land.get_pixel(sample.x, sample.y).r < 0.5 or absf(ids.get_pixel(sample.x, sample.y).r - id) > 0.5:
+					edge.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+					break
+	return {"province_id": ids, "country_id": ids, "land_mask": land, "edge_mask": edge}
+
+
+static func build_region_fill_image(
+	game_state: GameState,
+	regions: Array[Dictionary],
+	view_nation_id: int = -1
+) -> Image:
+	var masks := rasterize_boundary_regions(regions, POLITICAL_VISUAL_SIZE)
+	return build_region_fill_image_from_masks(game_state, masks, view_nation_id)
+
+
+static func build_region_fill_image_from_masks(
+	game_state: GameState, masks: Dictionary, view_nation_id: int = -1
+) -> Image:
+	var ids: Image = masks["province_id"]
+	var land: Image = masks["land_mask"]
+	var edge_mask: Image = masks.get("edge_mask", Image.create(1, 1, false, Image.FORMAT_RF))
+	var image := Image.create(
+		POLITICAL_VISUAL_SIZE.x, POLITICAL_VISUAL_SIZE.y, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.0, 0.0, 0.0, 0.0))
+	var nation_colors := PackedColorArray()
+	nation_colors.resize(game_state.nations.size())
+	for nation_id in range(game_state.nations.size()):
+		nation_colors[nation_id] = political_map_color_for_view(
+			game_state, nation_id, view_nation_id
+		)
+	var city_colors := PackedColorArray()
+	city_colors.resize(game_state.cities.size())
+	for city_id in range(game_state.cities.size()):
+		var owner_id := game_state.cities[city_id].owner_nation
+		city_colors[city_id] = nation_colors[owner_id] if owner_id >= 0 and owner_id < nation_colors.size() else Color(0.45, 0.45, 0.43)
+	for y in range(POLITICAL_VISUAL_SIZE.y):
+		for x in range(POLITICAL_VISUAL_SIZE.x):
+			if land.get_pixel(x, y).r < 0.5:
+				continue
+			var city_id := int(round(ids.get_pixel(x, y).r))
+			if city_id < 0 or city_id >= game_state.cities.size():
+				continue
+			var color := city_colors[city_id]
+			# A one-pixel region-local edge tint. It samples only the ID mask, so
+			# neighbouring country colors can never be interpolated together.
+			if edge_mask.get_pixel(x, y).r > 0.5:
+				color = color.lerp(country_boundary_display_color(color), COUNTRY_GRADIENT_STRENGTH)
+			color.a = 1.0
+			image.set_pixel(x, y, color)
+	return image
 
 
 ## Geometry/topology is independent from ownership and diplomacy. Cache this
@@ -4408,6 +4678,14 @@ func _draw_province_fills() -> void:
 		false,
 		Color(1.0, 1.0, 1.0, fill_strength)
 	)
+	if _map_mode == MapMode.POLITICAL and _region_fill_texture != null:
+		draw_texture_rect(
+			_region_fill_texture,
+			Rect2(_origin, _map_size),
+			false,
+			Color(1.0, 1.0, 1.0, fill_strength)
+		)
+		return
 	draw_texture_rect(
 		(
 			_loyalty_texture
@@ -4421,6 +4699,65 @@ func _draw_province_fills() -> void:
 		false,
 		Color(1.0, 1.0, 1.0, fill_strength)
 	)
+
+
+## Draw a region-local gradient without alpha falloff. Every layer uses the
+## exact same closed polygon, progressively contracted toward its centroid, so
+## colors cannot bleed into neighbouring countries or the ocean.
+func _draw_region_gradient(
+	polygon: PackedVector2Array, base_color: Color, opacity: float
+) -> void:
+	if polygon.size() < 3:
+		return
+	# Smoothed chains are retained as the canonical geometry and validated by
+	# the topology tests. Rendering falls back to the authoritative political
+	# texture for chains that are not simple polygons.
+	if Geometry2D.triangulate_polygon(polygon).is_empty():
+		return
+	var centroid := Vector2.ZERO
+	for point in polygon:
+		centroid += point
+	centroid /= float(polygon.size())
+	var boundary_color := country_boundary_display_color(base_color)
+	var layers := 8
+	for layer in range(layers):
+		var t := float(layer) / float(layers - 1)
+		var contracted := PackedVector2Array()
+		contracted.resize(polygon.size())
+		for index in range(polygon.size()):
+			contracted[index] = polygon[index].lerp(centroid, t * 0.92)
+		var cleaned := PackedVector2Array()
+		for point in contracted:
+			if cleaned.is_empty() or cleaned[-1].distance_to(point) > 0.001:
+				cleaned.append(point)
+		if cleaned.size() > 2 and cleaned[0].distance_to(cleaned[-1]) <= 0.001:
+			cleaned.remove_at(cleaned.size() - 1)
+		if cleaned.size() < 3:
+			continue
+		var color := boundary_color.lerp(base_color, t)
+		color.a = opacity
+		var indices := Geometry2D.triangulate_polygon(cleaned)
+		if indices.is_empty():
+			continue
+		for triangle_index in range(0, indices.size(), 3):
+			if triangle_index + 2 >= indices.size():
+				break
+			var triangle := PackedVector2Array([
+				cleaned[indices[triangle_index]],
+				cleaned[indices[triangle_index + 1]],
+				cleaned[indices[triangle_index + 2]],
+			])
+			if (
+				not triangle[0].is_finite()
+				or not triangle[1].is_finite()
+				or not triangle[2].is_finite()
+			):
+				continue
+			if absf(
+				(triangle[1] - triangle[0]).cross(triangle[2] - triangle[0])
+			) < 0.01:
+				continue
+			draw_colored_polygon(triangle, color)
 
 
 func set_province_strength(strength: float) -> void:
