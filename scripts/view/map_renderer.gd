@@ -5,6 +5,8 @@ extends Node2D
 
 signal family_tree_requested(nation_id: int)
 
+const MAP_VISUAL_ATLAS := preload("res://scripts/view/map_visual_atlas.gd")
+
 var state: GameState
 var sim: Simulation
 ## false 时仅保留 HUD、详情与控件；地图世界由 StrategicMap3D 绘制和拾取。
@@ -162,6 +164,8 @@ var _region_fill_signature := PackedInt64Array()
 var _region_id_image: Image
 var _region_land_mask: Image
 var _region_edge_mask: Image
+var _region_coast_mask: Image
+var _visual_atlas := {}
 var _loyalty_texture: ImageTexture
 var _country_fill_opacity_image: Image
 var _country_fill_opacity_ownership_revision: int = -1
@@ -280,6 +284,8 @@ func setup(game_state: GameState, simulation: Simulation) -> void:
 	_region_id_image = null
 	_region_land_mask = null
 	_region_edge_mask = null
+	_region_coast_mask = null
+	_visual_atlas = {}
 	_loyalty_texture = null
 	_country_fill_opacity_image = null
 	_country_fill_opacity_ownership_revision = -1
@@ -724,6 +730,11 @@ func set_city_road_visuals_visible(visible: bool) -> void:
 
 func city_road_visuals_visible() -> bool:
 	return _city_road_visuals_visible
+
+
+func visual_atlas() -> Dictionary:
+	_ensure_province_visual_cache()
+	return _visual_atlas
 
 
 func _on_nation_names_toggled(visible: bool) -> void:
@@ -2146,8 +2157,8 @@ func _draw_rivers() -> void:
 		features = MapFeatureContract.from_legacy_river_paths(state.river_paths)
 	for feature_value in features:
 		var feature := feature_value as Dictionary
-		var river := MapFeatureContract.build_high_precision_river_path(
-			feature, POLITICAL_VISUAL_SIZE
+		var river := MAP_VISUAL_ATLAS.visual_river_path(
+			state, int(feature.get("id", -1))
 		)
 		if river.size() < 2:
 			continue
@@ -2238,6 +2249,22 @@ func _ensure_province_visual_cache() -> void:
 		_region_id_image = region_masks["province_id"]
 		_region_land_mask = region_masks["land_mask"]
 		_region_edge_mask = region_masks["edge_mask"]
+		_region_coast_mask = region_masks["coast_mask"]
+		var height_texture := load(GameState.terrain_map_path()) as Texture2D
+		var height_image := (
+			height_texture.get_image() if height_texture != null else null
+		)
+		_visual_atlas = MAP_VISUAL_ATLAS.build_visual_atlas(
+			state,
+			height_image,
+			MAP_VISUAL_ATLAS.SIZE,
+			_region_id_image,
+			{
+				"land_mask": _region_land_mask,
+				"edge_mask": _region_edge_mask,
+				"coast_mask": _region_coast_mask,
+			}
+		)
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
@@ -3658,6 +3685,7 @@ static func rasterize_boundary_regions(
 					land.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
 					ids.set_pixel(x, y, Color(city_id, 0.0, 0.0, 1.0))
 	var edge := Image.create(width, height, false, Image.FORMAT_RF)
+	var coast := Image.create(width, height, false, Image.FORMAT_RF)
 	for y in range(height):
 		for x in range(width):
 			if land.get_pixel(x, y).r < 0.5:
@@ -3667,12 +3695,21 @@ static func rasterize_boundary_regions(
 				var offset: Vector2i = offset_value
 				var sample := Vector2i(x, y) + offset
 				if sample.x < 0 or sample.y < 0 or sample.x >= width or sample.y >= height:
+					coast.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+					break
+				if land.get_pixel(sample.x, sample.y).r < 0.5:
+					coast.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+					break
+				if absf(ids.get_pixel(sample.x, sample.y).r - id) > 0.5:
 					edge.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
 					break
-				if land.get_pixel(sample.x, sample.y).r < 0.5 or absf(ids.get_pixel(sample.x, sample.y).r - id) > 0.5:
-					edge.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
-					break
-	return {"province_id": ids, "country_id": ids, "land_mask": land, "edge_mask": edge}
+	return {
+		"province_id": ids,
+		"country_id": ids,
+		"land_mask": land,
+		"edge_mask": edge,
+		"coast_mask": coast,
+	}
 
 
 static func build_region_fill_image(
@@ -4862,12 +4899,10 @@ func _draw_owned_boundary_sides_2d(
 
 func _draw_edges() -> void:
 	var route_alpha := 0.28 if _map_mode == MapMode.TRADE else 1.0
-	for e in state.edges:
+	for edge_index in range(state.edges.size()):
+		var e: Edge = state.edges[edge_index]
 		var pixel_points := PackedVector2Array()
-		for point in e.map_points(
-			state.cities[e.city_a].map_position,
-			state.cities[e.city_b].map_position
-		):
+		for point in MAP_VISUAL_ATLAS.visual_road_path(state, edge_index):
 			pixel_points.append(_grid_to_pixel(point))
 		var danger := clampf(e.danger, 0.0, 1.0)
 		if not is_edge_visible(e):

@@ -59,6 +59,7 @@ const WATER_SHADER := preload(
 const PROVINCE_VISUAL_LOOKUP := preload(
 	"res://scripts/view/province_visual_lookup.gd"
 )
+const MAP_VISUAL_ATLAS := preload("res://scripts/view/map_visual_atlas.gd")
 var state: GameState
 var sim: Simulation
 var overlay: MapRenderer
@@ -117,7 +118,7 @@ var _classified_boundary_ownership_revision: int = -1
 var _classified_boundary_mode: int = -1
 var _province_topology_ids := PackedInt32Array()
 var _province_lookup_topology_ids := PackedInt32Array()
-var _visual_boundary_regions: Array[Dictionary] = []
+var _visual_atlas := {}
 var _visual_region_masks := {}
 var _map_font: Font
 ## 国家标签的领土几何按 ownership_revision 批量构建一次。名称或外交变化只
@@ -218,7 +219,7 @@ func setup(
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
 	_province_lookup_topology_ids = PackedInt32Array()
-	_visual_boundary_regions.clear()
+	_visual_atlas = {}
 	_visual_region_masks = {}
 	_country_fill_opacity_image = null
 	_pending_country_visual_request.clear()
@@ -1101,10 +1102,13 @@ func _update_province_visuals() -> void:
 	if topology_changed:
 		_boundary_topology = MapRenderer.build_province_boundary_topology(state)
 		_province_topology_ids = state.province_ids.duplicate()
-		_visual_boundary_regions = MapRenderer.build_boundary_regions(state)
-		_visual_region_masks = MapRenderer.rasterize_boundary_regions(
-			_visual_boundary_regions, MapRenderer.POLITICAL_VISUAL_SIZE
-		)
+		_visual_atlas = overlay.visual_atlas() if overlay != null else {}
+		if not _visual_atlas.is_empty():
+			_visual_region_masks = {
+				"province_id": _visual_atlas["city_id"],
+				"land_mask": _visual_atlas["land_mask"],
+				"edge_mask": _visual_atlas["region_edge"],
+			}
 		# 省份栅格几何变化会改变标签连通域，即使所有权 revision 未变。
 		_nation_label_cache_ownership_revision = -1
 	var city_owners := PackedInt32Array()
@@ -1583,13 +1587,11 @@ func _build_road_mesh() -> void:
 	major_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var minor_tool := SurfaceTool.new()
 	minor_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for edge in state.edges:
+	for edge_index in range(state.edges.size()):
+		var edge: Edge = state.edges[edge_index]
 		if not MapRenderer.is_edge_visible(edge):
 			continue
-		var path := edge.map_points(
-			state.cities[edge.city_a].map_position,
-			state.cities[edge.city_b].map_position
-		)
+		var path := MAP_VISUAL_ATLAS.visual_road_path(state, edge_index)
 		if MapRenderer.edge_uses_water_ant_line(edge.kind):
 			_append_dashed_draped_path(
 				major_tool,
@@ -1945,8 +1947,8 @@ func _build_river_mesh() -> void:
 		features = MapFeatureContract.from_legacy_river_paths(state.river_paths)
 	for feature_value in features:
 		var feature := feature_value as Dictionary
-		var render_path := MapFeatureContract.build_high_precision_river_path(
-			feature, MapRenderer.POLITICAL_VISUAL_SIZE
+		var render_path := MAP_VISUAL_ATLAS.visual_river_path(
+			state, int(feature.get("id", -1))
 		)
 		_append_variable_width_river(
 			surface_tool, render_path, feature,
