@@ -76,12 +76,24 @@ static func build_revision(game_state: GameState) -> Dictionary:
 		"topology": hash([
 			game_state.province_map_size,
 			game_state.province_ids,
+			_city_seed_signature(game_state),
 		]),
 		"ownership": game_state.ownership_revision,
 		"diplomacy": game_state.diplomacy_revision,
 		"roads": game_state.road_network_revision,
 		"rivers": hash(river_source),
 	}
+
+
+static func _city_seed_signature(game_state: GameState) -> int:
+	var signature: Array = []
+	for city in game_state.cities:
+		signature.append([
+			city.id,
+			snappedf(city.map_position.x, 0.000001),
+			snappedf(city.map_position.y, 0.000001),
+		])
+	return hash(signature)
 
 
 static func sample_height_uv(atlas: Dictionary, uv: Vector2) -> float:

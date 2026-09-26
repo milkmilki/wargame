@@ -1745,8 +1745,8 @@ static func alliance_willingness(
 	return result
 
 
-## 保守的结盟接受门槛。历史复仇、边境/目标敌意、敌盟惩罚、母国叛军敌意与
-## 统一竞争只会降低最终分数；省略这些负项得到的是严格上界，不会误删可接受结盟。
+## 保守的结盟接受门槛。先计算不依赖战争目标评分的完整态度，再省略始终非正的
+## 目标敌意。所得仍是严格上界，却能在构建昂贵目标评分前淘汰更多不可能的结盟。
 static func _alliance_can_reach_acceptance(
 	state: GameState,
 	nation_id: int,
@@ -1756,6 +1756,9 @@ static func _alliance_can_reach_acceptance(
 	if alliance_acceptance_prefilter_disabled:
 		return true
 	var cache_key := "alliance_acceptance_possible:%d:%d" % [
+		nation_id, target_id,
+	]
+	var upper_bound_key := "alliance_acceptance_upper_bound:%d:%d" % [
 		nation_id, target_id,
 	]
 	if evaluation_cache.has(cache_key):
@@ -1780,6 +1783,7 @@ static func _alliance_can_reach_acceptance(
 		)
 	):
 		evaluation_cache[cache_key] = false
+		evaluation_cache[upper_bound_key] = -INF
 		_alliance_acceptance_prefilter_prunes += 1
 		return false
 	var common_enemies := _common_enemy_count(
@@ -1790,11 +1794,12 @@ static func _alliance_can_reach_acceptance(
 	var imbalance := absf(log(
 		maxf(own_power, 1.0) / maxf(target_power, 1.0)
 	))
+	var frontier_count := _frontier_edges(
+		state, nation_id, target_id, evaluation_cache
+	)
 	var border_bonus := (
 		0.25
-		if _frontier_edges(
-			state, nation_id, target_id, evaluation_cache
-		) > 0
+		if frontier_count > 0
 		else 0.0
 	)
 	var shared_threat := _shared_threat(
@@ -1803,9 +1808,31 @@ static func _alliance_can_reach_acceptance(
 	var frontier_release := _alliance_frontier_release_value(
 		state, nation_id, target_id, evaluation_cache
 	)
+	var unification_pressure := unification_rivalry(
+		state, nation_id, target_id, evaluation_cache
+	)
+	var historical := _historical_attitude(
+		state, nation_id, target_id, evaluation_cache
+	)
+	var border_component := maxf(
+		-float(frontier_count) * BORDER_ATTITUDE_PER_EDGE,
+		BORDER_ATTITUDE_FLOOR
+	)
+	var enemy_allies := _enemy_alliance_count(
+		state, nation_id, target_id, evaluation_cache
+	)
+	var parent_rebel_component := (
+		PARENT_REBEL_ATTITUDE
+		if state.regional_rebellion_parent(target_id) == nation_id
+		else 0.0
+	)
 	var maximum_attitude := (
-		float(common_enemies) * COMMON_ENEMY_ATTITUDE
+		historical
+		+ border_component
+		+ float(common_enemies) * COMMON_ENEMY_ATTITUDE
 		+ frontier_release
+		+ float(enemy_allies) * ENEMY_ALLY_ATTITUDE
+		+ parent_rebel_component
 	)
 	var upper_bound := (
 		0.35
@@ -1815,7 +1842,9 @@ static func _alliance_can_reach_acceptance(
 		+ maxf(1.0 - imbalance, 0.0) * 0.55
 		+ frontier_release
 		+ maximum_attitude * ATTITUDE_ALLIANCE_WEIGHT
+		- unification_pressure
 	) * RulerProfile.alliance_multiplier(state.nations[nation_id])
+	evaluation_cache[upper_bound_key] = upper_bound
 	var possible := upper_bound >= ALLIANCE_ACCEPT_SCORE
 	evaluation_cache[cache_key] = possible
 	if not possible:
@@ -3956,6 +3985,11 @@ static func select_war_objective(
 	var defender_index := _city_defender_troop_index(
 		state, nation_id, evaluation_cache
 	)
+	var administrative_aggregates := (
+		_administrative_objective_aggregate_index(
+			state, evaluation_cache
+		)
+	)
 	var candidates: Array[Dictionary] = []
 	var max_reachable_garrison := 1
 	for center_id in center_ids:
@@ -3976,29 +4010,22 @@ static func select_war_objective(
 		).size()
 		if own_links <= 0:
 			continue
-		var totals := Vector3i.ZERO
-		var controlled := 0
-		var member_count := 0
-		var has_food_hub := false
-		var has_manpower_hub := false
-		var administrative_betweenness := 0.0
-		for member_id in _cached_administrative_members(
-			state, center_id, evaluation_cache
-		):
-			var member := state.cities[member_id]
-			totals.x += maxi(member.gold_per_month, 0)
-			totals.y += maxi(member.food_per_half_year, 0)
-			totals.z += maxi(member.manpower_per_month, 0)
-			member_count += 1
-			has_food_hub = has_food_hub or member.is_food_hub
-			has_manpower_hub = has_manpower_hub or member.is_manpower_hub
-			if member.owner_nation == nation_id:
-				controlled += 1
-			administrative_betweenness += (
-				StrategicMapSnapshot.node_betweenness_city_value(
-					state, member_id
-				)
-			)
+		var aggregate: Dictionary = administrative_aggregates.get(
+			center_id, {}
+		)
+		var totals := Vector3i(
+			aggregate.get("totals", Vector3i.ZERO)
+		)
+		var owner_counts: Dictionary = aggregate.get("owner_counts", {})
+		var controlled := int(owner_counts.get(nation_id, 0))
+		var member_count := int(aggregate.get("member_count", 0))
+		var has_food_hub := bool(aggregate.get("has_food_hub", false))
+		var has_manpower_hub := bool(
+			aggregate.get("has_manpower_hub", false)
+		)
+		var administrative_betweenness := float(
+			aggregate.get("betweenness", 0.0)
+		)
 		max_gold = maxi(max_gold, totals.x)
 		max_food = maxi(max_food, totals.y)
 		max_manpower = maxi(max_manpower, totals.z)
@@ -4108,6 +4135,58 @@ static func select_war_objective(
 				),
 			}
 	return best
+
+
+## A diplomacy batch freezes ownership, outputs and region topology. Build the
+## state-level parts of objective scoring once instead of re-summing every
+## administrative member for every directed nation pair.
+static func _administrative_objective_aggregate_index(
+	state: GameState,
+	evaluation_cache: Dictionary
+) -> Dictionary:
+	const CACHE_KEY := "administrative_objective_aggregates"
+	if evaluation_cache.has(CACHE_KEY):
+		return evaluation_cache[CACHE_KEY]
+	var result := {}
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		result[center_id] = {
+			"totals": Vector3i.ZERO,
+			"member_count": 0,
+			"has_food_hub": false,
+			"has_manpower_hub": false,
+			"betweenness": 0.0,
+			"owner_counts": {},
+		}
+	for city in state.cities:
+		var center_id := state.administrative_center_of(city.id)
+		if not result.has(center_id):
+			continue
+		var aggregate: Dictionary = result[center_id]
+		var totals: Vector3i = aggregate["totals"]
+		totals.x += maxi(city.gold_per_month, 0)
+		totals.y += maxi(city.food_per_half_year, 0)
+		totals.z += maxi(city.manpower_per_month, 0)
+		aggregate["totals"] = totals
+		aggregate["member_count"] = int(aggregate["member_count"]) + 1
+		aggregate["has_food_hub"] = (
+			bool(aggregate["has_food_hub"]) or city.is_food_hub
+		)
+		aggregate["has_manpower_hub"] = (
+			bool(aggregate["has_manpower_hub"]) or city.is_manpower_hub
+		)
+		aggregate["betweenness"] = (
+			float(aggregate["betweenness"])
+			+ StrategicMapSnapshot.node_betweenness_city_value(
+				state, city.id
+			)
+		)
+		var owner_counts: Dictionary = aggregate["owner_counts"]
+		owner_counts[city.owner_nation] = (
+			int(owner_counts.get(city.owner_nation, 0)) + 1
+		)
+	evaluation_cache[CACHE_KEY] = result
+	return result
 
 
 static func administrative_tactical_target(
@@ -5202,6 +5281,7 @@ static func _collect_preparation_alliance(
 ) -> bool:
 	var best_target := -1
 	var best_score := -INF
+	var bounded_candidates: Array[Dictionary] = []
 	for candidate_id in _diplomatic_range_nation_ids(
 		state, nation_id, evaluation_cache
 	):
@@ -5225,17 +5305,54 @@ static func _collect_preparation_alliance(
 			)
 		):
 			continue
+		var mutual_upper_bound := minf(
+			float(evaluation_cache.get(
+				"alliance_acceptance_upper_bound:%d:%d"
+				% [nation_id, candidate.id],
+				INF
+			)),
+			float(evaluation_cache.get(
+				"alliance_acceptance_upper_bound:%d:%d"
+				% [candidate.id, nation_id],
+				INF
+			))
+		)
+		bounded_candidates.append({
+			"nation_id": candidate.id,
+			"upper_bound": mutual_upper_bound,
+		})
+	bounded_candidates.sort_custom(func(
+		left: Dictionary, right: Dictionary
+	) -> bool:
+		var left_bound := float(left["upper_bound"])
+		var right_bound := float(right["upper_bound"])
+		if left_bound != right_bound:
+			return left_bound > right_bound
+		return EquivariantOrder.nation_less(
+			state,
+			nation_id,
+			int(left["nation_id"]),
+			int(right["nation_id"])
+		)
+	)
+	for bounded_candidate in bounded_candidates:
+		var candidate_id := int(bounded_candidate["nation_id"])
+		var upper_bound := float(bounded_candidate["upper_bound"])
+		if upper_bound < best_score and not is_equal_approx(
+			upper_bound, best_score
+		):
+			break
 		var score_a := alliance_willingness(
 			state,
 			nation_id,
-			candidate.id,
+			candidate_id,
 			evaluation_cache
 		)
 		if score_a < ALLIANCE_ACCEPT_SCORE:
 			continue
 		var score_b := alliance_willingness(
 			state,
-			candidate.id,
+			candidate_id,
 			nation_id,
 			evaluation_cache
 		)
@@ -5251,14 +5368,14 @@ static func _collect_preparation_alliance(
 						or EquivariantOrder.nation_less(
 							state,
 							nation_id,
-							candidate.id,
+							candidate_id,
 							best_target
 						)
 				)
 			)
 		):
 			best_score = score
-			best_target = candidate.id
+			best_target = candidate_id
 	if best_target < 0:
 		return false
 	actions.append({

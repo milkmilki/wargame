@@ -76,12 +76,14 @@ func _init() -> void:
 	var continuous_valid := _test_continuous_state_campaign()
 	var capital_valid := _test_capital_emergency_transfer()
 	var two_front_valid := _test_two_front_war_allocation()
+	var million_force_valid := _test_million_manpower_multi_war_stability()
 	var stable_assignment_valid := _test_campaign_assignment_survives_order_failure()
 	var atomic_peace_valid := _test_atomic_peace_releases_war_pool()
 	valid = (
 		continuous_valid
 		and capital_valid
 		and two_front_valid
+		and million_force_valid
 		and stable_assignment_valid
 		and atomic_peace_valid
 		and valid
@@ -93,11 +95,12 @@ func _init() -> void:
 	push_error(
 		(
 			"WAR_CAMPAIGN_POOL_FAILED wars=%d/%d continuous=%s capital=%s "
-			+ "two_front=%s stable_assignment=%s atomic_peace=%s"
+			+ "two_front=%s million_force=%s stable_assignment=%s atomic_peace=%s"
 		)
 		% [
 			war_one, war_two, continuous_valid, capital_valid,
-			two_front_valid, stable_assignment_valid, atomic_peace_valid,
+			two_front_valid, million_force_valid, stable_assignment_valid,
+			atomic_peace_valid,
 		]
 	)
 	quit(1)
@@ -175,6 +178,177 @@ func _test_campaign_assignment_survives_order_failure() -> bool:
 	)
 	simulation.free()
 	return valid
+
+
+func _test_million_manpower_multi_war_stability() -> bool:
+	var state := GameState.new()
+	state.generate_grid_world(94146)
+	var attacker_id := 0
+	var defender_ids: Array[int] = [1, 2, 3]
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	var centers_by_defender := {}
+	for defender_id in defender_ids:
+		var centers: Array[int] = []
+		for center_value in state.administrative_center_city_ids:
+			var center_id := int(center_value)
+			if state.cities[center_id].owner_nation == defender_id:
+				centers.append(center_id)
+		EquivariantOrder.sort_city_ids(centers, state, attacker_id)
+		if centers.size() < 2:
+			return false
+		centers_by_defender[defender_id] = centers
+	state.armies.clear()
+	state.battles.clear()
+	var war_ids: Array[int] = []
+	for defender_id in defender_ids:
+		state.set_diplomatic_relation(
+			attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+		)
+		var centers: Array[int] = centers_by_defender[defender_id]
+		var war_id := state.set_war_objective(
+			attacker_id, defender_id, centers[0], "百万兵力多战争门禁"
+		)
+		war_ids.append(war_id)
+		for center_id in centers.slice(0, 2):
+			var plan := AdministrativeCampaignPlan.new()
+			plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+			plan.war_id = war_id
+			plan.opponent_nation_id = defender_id
+			plan.center_city_id = center_id
+			state.nations[attacker_id].administrative_campaign_plans[
+				center_id
+			] = plan
+	var army_count := 67
+	var army_size := 15000
+	var expected_total := army_count * army_size
+	var origin_id := state.nations[attacker_id].capital_city_id
+	for index in range(army_count):
+		var army := Army.new()
+		army.id = 95400 + index
+		army.owner_nation = attacker_id
+		army.size = army_size
+		army.max_size = army_size
+		army.location_city = origin_id
+		army.move_from = origin_id
+		army.state = Army.State.IDLE
+		army.morale = army.max_morale
+		army.supply_ratio = 1.0
+		state.armies.append(army)
+	state.refresh_derived()
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	var context := {"wars": defender_ids}
+	for _cycle in range(3):
+		simulation._manage_campaign_offensive(
+			attacker_id, null, null, context
+		)
+	var baseline := _multi_war_force_profile(
+		state, attacker_id, war_ids
+	)
+	var valid := int(baseline["total_manpower"]) == expected_total
+	valid = valid and int(baseline["assigned_armies"]) == war_ids.size() * 6
+	valid = valid and int(baseline["duplicate_assignments"]) == 0
+	valid = valid and int(baseline["wrong_war_assignments"]) == 0
+	for war_id in war_ids:
+		var war_profile: Dictionary = baseline["wars"][war_id]
+		valid = valid and int(war_profile["pool_total"]) == 90000
+		valid = valid and int(war_profile["pool_effective"]) == 90000
+		valid = valid and int(war_profile["reserve_effective"]) == (
+			expected_total - war_ids.size() * 90000
+		)
+		valid = valid and (war_profile["fronts"] as Array).size() == 2
+		for front_value in war_profile["fronts"]:
+			var front: Dictionary = front_value
+			valid = valid and int(front["assigned_total"]) == 45000
+			valid = valid and int(front["assigned_effective"]) == 45000
+	var probes_per_war := 500
+	var probe_started := Time.get_ticks_usec()
+	for _probe in range(probes_per_war):
+		for war_id in war_ids:
+			state.campaign_war_force_report(attacker_id, war_id)
+	var probe_usec := Time.get_ticks_usec() - probe_started
+	# Simulate a command-boundary reset: strategic bindings must survive even
+	# when every assigned formation temporarily loses its tactical path/target.
+	for army in state.armies:
+		if state.campaign_assignment_center(army.id) < 0:
+			continue
+		army.state = Army.State.IDLE
+		army.location_city = origin_id
+		army.move_from = origin_id
+		army.move_to = -1
+		army.on_edge = false
+		army.path.clear()
+		army.ai_target_city = -1
+	for _stable_cycle in range(12):
+		simulation._manage_campaign_offensive(
+			attacker_id, null, null, context
+		)
+		valid = valid and _multi_war_force_profile(
+			state, attacker_id, war_ids
+		) == baseline
+	print(
+		"WAR_FORCE_STRESS total=%d wars=%d assigned=%d reports=%d time_ms=%.2f stable=%s"
+		% [
+			expected_total, war_ids.size(), int(baseline["assigned_armies"]),
+			probes_per_war * war_ids.size(), float(probe_usec) / 1000.0,
+			str(valid),
+		]
+	)
+	simulation.free()
+	return valid
+
+
+func _multi_war_force_profile(
+	state: GameState,
+	nation_id: int,
+	war_ids: Array[int]
+) -> Dictionary:
+	var wars := {}
+	var assigned_ids := {}
+	var duplicate_assignments := 0
+	var wrong_war_assignments := 0
+	for war_id in war_ids:
+		var report := state.campaign_war_force_report(nation_id, war_id)
+		var fronts: Array[Dictionary] = []
+		for plan in state.offensive_campaigns_for_war(nation_id, war_id):
+			var front: Dictionary = (report["fronts"] as Dictionary).get(
+				plan.center_city_id, {}
+			)
+			fronts.append({
+				"center_id": plan.center_city_id,
+				"assigned_total": int(front.get("assigned_total", 0)),
+				"assigned_effective": int(
+					front.get("assigned_effective", 0)
+				),
+			})
+			for army_id_value in plan.army_assignments:
+				var army_id := int(army_id_value)
+				if assigned_ids.has(army_id):
+					duplicate_assignments += 1
+				assigned_ids[army_id] = war_id
+				if state.campaign_assignment_war(army_id) != war_id:
+					wrong_war_assignments += 1
+		wars[war_id] = {
+			"pool_total": int(report["war_pool_total"]),
+			"pool_effective": int(report["war_pool_effective"]),
+			"reserve_effective": int(report["reserve_effective"]),
+			"fronts": fronts,
+		}
+	var total_manpower := 0
+	for army in state.armies:
+		if army.owner_nation == nation_id and army.size > 0:
+			total_manpower += army.size
+	return {
+		"total_manpower": total_manpower,
+		"assigned_armies": assigned_ids.size(),
+		"duplicate_assignments": duplicate_assignments,
+		"wrong_war_assignments": wrong_war_assignments,
+		"wars": wars,
+	}
 
 
 func _test_atomic_peace_releases_war_pool() -> bool:

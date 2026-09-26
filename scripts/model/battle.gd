@@ -102,7 +102,7 @@ func has_army(army: Army) -> bool:
 	return side_a.has(army) or side_b.has(army)
 
 
-## 围城外壳中只要 side_b 存在真实军队，本轮就是州治野战。虚拟守军
+## 围城外壳中只要 side_b 存在真实军队，本轮就是城下野战。虚拟守军
 ## 仅在 side_b 没有真实军队时临时挂载，因此不会与野战军同轮参战。
 func uses_field_combat_rules() -> bool:
 	if kind == Kind.FIELD:

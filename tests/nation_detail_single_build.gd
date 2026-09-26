@@ -28,6 +28,7 @@ func _run() -> void:
 	await process_frame
 
 	await _test_nation_redraw_builds_once(renderer, state)
+	_test_war_sections_group_campaigns()
 	await _test_city_and_edge_paths_do_not_regress(renderer, state)
 	await _test_city_detail_window_drag(renderer, state)
 
@@ -128,6 +129,102 @@ func _test_nation_redraw_builds_once(
 		MapRenderer.nation_detail_section_build_count() == 0,
 		"nation/world_input_blocked_does_not_build_sections",
 		"count=%d" % MapRenderer.nation_detail_section_build_count()
+	)
+
+
+func _test_war_sections_group_campaigns() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(96510)
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	var attacker_id := 0
+	var defenders: Array[int] = [1, 2]
+	var expected_campaigns := 0
+	for defender_id in defenders:
+		var centers: Array[int] = []
+		for center_value in state.administrative_center_city_ids:
+			var center_id := int(center_value)
+			if state.cities[center_id].owner_nation == defender_id:
+				centers.append(center_id)
+		if centers.is_empty():
+			continue
+		state.set_diplomatic_relation(
+			attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+		)
+		var war_id := state.set_war_objective(
+			attacker_id, defender_id, centers[0], "国家详情战争分组门禁"
+		)
+		var plan_count := mini(centers.size(), 2 if defender_id == 1 else 1)
+		for center_id in centers.slice(0, plan_count):
+			var plan := AdministrativeCampaignPlan.new()
+			plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+			plan.war_id = war_id
+			plan.opponent_nation_id = defender_id
+			plan.center_city_id = center_id
+			state.nations[attacker_id].administrative_campaign_plans[
+				center_id
+			] = plan
+			expected_campaigns += 1
+	var sections := MapRenderer.nation_detail_sections(state, attacker_id)
+	var diplomacy_campaign_lines := 0
+	var war_sections := 0
+	var pool_lines := 0
+	var campaign_lines := 0
+	for section in sections:
+		var title := str(section.get("title", ""))
+		var lines: Array = section.get("lines", [])
+		if title == "外交与行动":
+			for line_value in lines:
+				var line := str(line_value)
+				if (
+					line.contains("军队池")
+					or line.contains("场战争")
+					or line.contains("州级战役")
+					or line.begins_with("州战役：")
+				):
+					diplomacy_campaign_lines += 1
+		if title.begins_with("战争"):
+			war_sections += 1
+			var section_pool_lines := 0
+			for line_value in lines:
+				var line := str(line_value)
+				if line.begins_with("军队池："):
+					section_pool_lines += 1
+				if line.begins_with("州战役："):
+					campaign_lines += 1
+			pool_lines += section_pool_lines
+			_check(
+				section_pool_lines == 1,
+				"nation/each_war_section_has_one_force_pool",
+				"title=%s lines=%s" % [title, str(lines)]
+			)
+	_check(
+		diplomacy_campaign_lines == 0,
+		"nation/diplomacy_section_excludes_campaigns"
+	)
+	_check(war_sections == 2, "nation/war_is_top_level_section")
+	_check(pool_lines == 2, "nation/war_pool_rendered_once_per_war")
+	_check(
+		campaign_lines == expected_campaigns,
+		"nation/state_campaigns_nested_under_wars",
+		"expected=%d actual=%d" % [expected_campaigns, campaign_lines]
+	)
+	var war_detail_lines := 0
+	for section in sections:
+		if str(section.get("title", "")).begins_with("战争"):
+			war_detail_lines += 1 + (section.get("lines", []) as Array).size()
+	_check(
+		MapRenderer._nation_war_detail_line_count(
+			state, attacker_id
+		) == war_detail_lines,
+		"nation/war_detail_height_matches_rendered_sections",
+		"expected=%d actual=%d" % [
+			war_detail_lines,
+			MapRenderer._nation_war_detail_line_count(state, attacker_id),
+		]
 	)
 
 

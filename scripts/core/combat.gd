@@ -21,10 +21,12 @@ const RANDOM_HASH_MULT: int = 48271
 # ---- 正面宽度 / 预备队（item 5：道路/地形/战斗类型决定同时参战兵力上限）----
 ## 一侧「正面宽度」= 同一时刻能投入前线交战的最大兵力。超出部分进入预备队：
 ## 预备队不贡献攻击、不受伤亡、不占用正面；前线部队损失后由预备队按序补入（下一回合自动重选）。
-## 野战：正面 = 道路容量 edge.max_manpower（虎牢关式窄路 → 大军也只能少量展开，一夫当关）。
-## 攻城：正面 = 城墙可展开兵力 SIEGE_FRONTAGE（城墙周长有限，无法全军压城）。
+## 道路野战：正面 = 道路容量 edge.max_manpower（窄路限制大军展开）。
+## 城下野战：真实守军出战时使用 SIEGE_FIELD_FRONTAGE，不再受进城道路限制。
+## 纯攻城：正面 = 城墙可展开兵力 SIEGE_FRONTAGE（城墙周长有限，无法全军压城）。
 ## 无边信息兜底用 FRONTAGE_FALLBACK。拆分不增加总正面（基于总兵力的前 N 名，与军队数量无关，item 12）。
 const FRONTAGE_FALLBACK: int = 15000
+const SIEGE_FIELD_FRONTAGE: int = 50000
 const SIEGE_FRONTAGE: int = 15000
 const SIEGE_TWO_DIRECTION_ATTACK_MULT: float = 1.20
 const SIEGE_THREE_DIRECTION_ATTACK_MULT: float = 1.30
@@ -1152,14 +1154,16 @@ static func effective_siege_strength(
 	return maxi(int(round(total)), 0)
 
 
-## 本场战斗单侧「正面宽度」容量（item 5，纯函数）。野战取道路容量、攻城取城墙容量。
+## 本场战斗单侧「正面宽度」容量（item 5，纯函数）。道路野战取道路容量，
+## 城下真实军队野战固定 50000，纯攻城取城墙容量。
 ## 双方共享同一正面（同一条战线/同一段城墙）。返回值 <=0 时视为无限制（回退 FRONTAGE_FALLBACK）。
 static func combat_frontage(battle: Battle) -> int:
-	if (
-		battle.kind == Battle.Kind.SIEGE
-		and not battle.uses_field_combat_rules()
-	):
-		return SIEGE_FRONTAGE
+	if battle.kind == Battle.Kind.SIEGE:
+		return (
+			SIEGE_FIELD_FRONTAGE
+			if battle.uses_field_combat_rules()
+			else SIEGE_FRONTAGE
+		)
 	if battle.edge != null and battle.edge.max_manpower > 0:
 		return battle.edge.max_manpower
 	return FRONTAGE_FALLBACK

@@ -94,6 +94,10 @@ func _init() -> void:
 	valid = valid and screened_siege != null
 	if screened_siege != null:
 		valid = valid and screened_siege.uses_field_combat_rules()
+		valid = valid and (
+			Combat.combat_frontage(screened_siege)
+				== Combat.SIEGE_FIELD_FRONTAGE
+		)
 		valid = valid and screened_siege.holding_side == 2
 		var detail_sections := MapRenderer.city_detail_sections(
 			screened_state, int(screened["center_id"])
@@ -129,6 +133,34 @@ func _init() -> void:
 			valid = valid and not member.is_city_garrison
 	screened_sim.free()
 
+	# 府城同样使用统一的 50000 城下野战宽度，不读取入口道路容量。
+	var fu_id := -1
+	for member_id in screened_state.administrative_members(
+		int(screened["center_id"])
+	):
+		if member_id != int(screened["center_id"]):
+			fu_id = member_id
+			break
+	if fu_id >= 0:
+		var fu_battle := Battle.new()
+		fu_battle.kind = Battle.Kind.SIEGE
+		fu_battle.city = screened_state.cities[fu_id]
+		fu_battle.edge = Edge.new()
+		fu_battle.edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
+		fu_battle.side_a.append(_army(
+			9503, int(screened["attacker_id"]), 15000, fu_id
+		))
+		fu_battle.side_b.append(_army(
+			9504, int(screened["defender_id"]), 15000, fu_id
+		))
+		valid = valid and fu_battle.uses_field_combat_rules()
+		valid = valid and (
+			Combat.combat_frontage(fu_battle)
+				== Combat.SIEGE_FIELD_FRONTAGE
+		)
+	else:
+		valid = false
+
 	# 到场兵力低于 R 时只封锁，不能消耗虚拟守军。
 	var blocked := _fixture(95202)
 	var blocked_state: GameState = blocked["state"]
@@ -153,6 +185,11 @@ func _init() -> void:
 	if blocked_siege != null:
 		valid = valid and recovering.state == Army.State.RETREATING
 		valid = valid and not blocked_siege.has_army(recovering)
+		valid = valid and not blocked_siege.uses_field_combat_rules()
+		valid = valid and (
+			Combat.combat_frontage(blocked_siege)
+				== Combat.SIEGE_FRONTAGE
+		)
 		blocked_sim._advance_siege(blocked_siege, 0, 95202)
 		valid = valid and not blocked_siege.finished
 		valid = valid and blocked_center.garrison_manpower == blocked_garrison_before

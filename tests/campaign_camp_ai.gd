@@ -188,6 +188,7 @@ func _init() -> void:
 	_test_blocked_fu_fallback(false, 4)
 	_test_blocked_fu_fallback(true, 4)
 	_test_blocked_fu_fallback(false, 1)
+	_test_two_hop_camp_assault()
 	_finish()
 
 
@@ -322,6 +323,124 @@ func _test_blocked_fu_fallback(
 			_all_assigned_to(plan, attackers, camp_id),
 			"%s驻营等待时不得误派军队强攻州治" % label
 		)
+	sim.free()
+
+
+func _test_two_hop_camp_assault() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(95202)
+	var center_id := -1
+	var camp_id := -1
+	var middle_id := -1
+	for center_value in state.administrative_center_city_ids:
+		var candidate_center := int(center_value)
+		var members := state.administrative_members(candidate_center)
+		for candidate_camp in members:
+			if candidate_camp == candidate_center:
+				continue
+			for candidate_middle in members:
+				if candidate_middle in [candidate_center, candidate_camp]:
+					continue
+				if (
+					state.edge_of(candidate_camp, candidate_middle) != null
+					and state.edge_of(candidate_middle, candidate_center) != null
+					and state.edge_of(candidate_camp, candidate_center) == null
+				):
+					center_id = candidate_center
+					camp_id = candidate_camp
+					middle_id = candidate_middle
+					break
+			if center_id >= 0:
+				break
+		if center_id >= 0:
+			break
+	_check(center_id >= 0, "两跳大营夹具必须找到府—府—州治链")
+	if center_id < 0:
+		return
+	var attacker_id := 0
+	var defender_id := 1
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "两跳大营攻州治门禁"
+	)
+	for city in state.cities:
+		if not city.is_dock:
+			city.owner_nation = attacker_id
+	for member_id in state.administrative_members(center_id):
+		state.cities[member_id].owner_nation = attacker_id
+	state.cities[center_id].owner_nation = defender_id
+	state.cities[center_id].garrison_manpower = 15000
+	for edge in state.edges:
+		if (
+			edge.city_a in [camp_id, center_id]
+			or edge.city_b in [camp_id, center_id]
+		):
+			edge.max_manpower = 0
+	_enable_edge(state, camp_id, middle_id)
+	_enable_edge(state, middle_id, center_id)
+	state.road_network_revision += 1
+	state.armies.clear()
+	state.battles.clear()
+	var attackers: Array[Army] = []
+	for index in range(4):
+		var army := _army(95300 + index, attacker_id, camp_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+		attackers.append(army)
+	var plan := AdministrativeCampaignPlan.new()
+	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+	plan.phase = AdministrativeCampaignPlan.Phase.RAID_FU
+	plan.war_id = war_id
+	plan.opponent_nation_id = defender_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = camp_id
+	for army in attackers:
+		plan.army_assignments[army.id] = camp_id
+	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
+	state.ownership_revision += 1
+	state.refresh_derived()
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	sim._manage_administrative_campaign(
+		attacker_id, center_id, null, null, defender_id, war_id
+	)
+	_check(
+		plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER,
+		"清府后大营距州治两跳时必须进入攻州治阶段"
+	)
+	for army in attackers:
+		_check(
+			army.ai_target_city == center_id
+			and army.move_from == camp_id
+			and army.move_to == middle_id
+			and army.path == [center_id],
+			"两跳攻州治必须先走中间府并保留州治为最终路径"
+		)
+	var crossed_middle := false
+	var reached_center := false
+	for _day in range(120):
+		sim._advance_day()
+		for army in state.armies:
+			if army.owner_nation != attacker_id or army.size <= 0:
+				continue
+			crossed_middle = crossed_middle or (
+				army.location_city == middle_id
+				or army.move_from == middle_id
+			)
+		for battle in state.battles:
+			if battle.city != null and battle.city.id == center_id:
+				reached_center = true
+		reached_center = reached_center or (
+			state.cities[center_id].owner_nation == attacker_id
+		)
+		if reached_center:
+			break
+	_check(crossed_middle, "两跳攻州治军队必须实际经过中间府")
+	_check(reached_center, "两跳攻州治必须实际抵达州治并进入战斗或占领")
 	sim.free()
 
 

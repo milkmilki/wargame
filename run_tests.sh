@@ -126,6 +126,11 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/war_campaign_pool.gd \
   --log-file "$LOG_DIR/world-war-campaign-pool.log"
 echo
+echo "==> [2i3a/29] 双百万军队三年实战与战争池稳定门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/million_army_three_year_war.gd \
+  --log-file "$LOG_DIR/world-war-million-army-three-year.log"
+echo
 echo "==> [2i4/29] 州战役集结、大营与连续占府门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_camp_ai.gd \
