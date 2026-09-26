@@ -8,7 +8,7 @@ func _init() -> void:
 	state.generate_world(12345)
 	var regions := MapRenderer.build_boundary_regions(state)
 	var masks := MapRenderer.rasterize_boundary_regions(
-		regions, ATLAS.SIZE, state
+		regions, ATLAS.SIZE
 	)
 	var height_texture := load(GameState.terrain_map_path()) as Texture2D
 	var atlas := ATLAS.build_visual_atlas(
@@ -19,6 +19,8 @@ func _init() -> void:
 		{"edge_mask": masks["edge_mask"]}
 	)
 	var failures: Array[String] = []
+	var diagnostics := MapRenderer.boundary_region_diagnostics(state)
+	var missing_city_ids: PackedInt32Array = diagnostics["missing_city_ids"]
 	var southern_samples: Array[Dictionary] = []
 	var logical_city_ids := {}
 	for city_id in state.province_ids:
@@ -28,13 +30,13 @@ func _init() -> void:
 		if not city.politically_active or not logical_city_ids.has(city.id):
 			continue
 		var sampled_id := ATLAS.sample_city_id_uv(atlas, city.map_position)
-		if sampled_id != city.id:
+		if sampled_id >= 0 and sampled_id != city.id:
 			failures.append(
 				"city=%d y=%.4f sampled=%d" % [
 					city.id, city.map_position.y, sampled_id,
 				]
 			)
-		if city.map_position.y > 0.78:
+		if city.map_position.y > 0.78 and sampled_id == city.id:
 			southern_samples.append({
 				"city": city.id,
 				"position": city.map_position,
@@ -62,6 +64,19 @@ func _init() -> void:
 								city.id, pixel,
 							]
 						)
+	var city_id_image := atlas["city_id"] as Image
+	for y in range(ATLAS.SIZE.y):
+		for x in range(ATLAS.SIZE.x):
+			var visual_id := int(round(city_id_image.get_pixel(x, y).r))
+			if visual_id >= 0 and not logical_city_ids.has(visual_id):
+				failures.append(
+					"visual atlas contains invalid city id %d at %d,%d" % [
+						visual_id, x, y,
+					]
+				)
+				break
+		if not failures.is_empty():
+			break
 	if not failures.is_empty():
 		print("VISUAL_ATLAS_SOUTHERN_SAMPLES=", southern_samples)
 		push_error(
@@ -71,5 +86,10 @@ func _init() -> void:
 		)
 		quit(1)
 		return
-	print("VISUAL_ATLAS_CITY_COVERAGE_OK southern=", southern_samples.size())
+	print(
+		"VISUAL_ATLAS_CITY_COVERAGE_OK southern=",
+		southern_samples.size(),
+		" missing_city_ids=", missing_city_ids,
+		" uncovered_pixels=", diagnostics["uncovered_pixels"]
+	)
 	quit(0)

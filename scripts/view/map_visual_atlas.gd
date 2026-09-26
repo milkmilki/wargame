@@ -41,8 +41,6 @@ static func build_visual_atlas(
 		coast = _coast_channel(land, safe_size)
 	var rivers := Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_RF)
 	var roads := Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_RF)
-	if shared_city == null:
-		_fill_city_ids(game_state, city_id, land, safe_size)
 	if shared_masks.get("edge_mask") == null:
 		_fill_edges(city_id, land, region_edge, coast, safe_size)
 	_fill_rivers(game_state, rivers, safe_size)
@@ -182,45 +180,6 @@ static func _land_channel(height_image: Image, size: Vector2i) -> Image:
 	return Image.create_from_data(
 		size.x, size.y, false, Image.FORMAT_L8, land_bytes
 	)
-
-
-static func _fill_city_ids(
-	game_state: GameState,
-	city_id: Image,
-	land: Image,
-	size: Vector2i,
-	visual_city_ids: Image = null
-) -> void:
-	if visual_city_ids != null and not visual_city_ids.is_empty():
-		for y in range(size.y):
-			var visual_y := clampi(
-				y * visual_city_ids.get_height() / size.y,
-				0, visual_city_ids.get_height() - 1
-			)
-			for x in range(size.x):
-				if land.get_pixel(x, y).r < 0.5:
-					continue
-				var visual_x := clampi(
-					x * visual_city_ids.get_width() / size.x,
-					0, visual_city_ids.get_width() - 1
-				)
-				city_id.set_pixel(
-					x, y, visual_city_ids.get_pixel(visual_x, visual_y)
-				)
-		return
-	var source_size := game_state.province_map_size
-	if source_size.x <= 0 or source_size.y <= 0:
-		return
-	for y in range(size.y):
-		var source_y := clampi(y * source_size.y / size.y, 0, source_size.y - 1)
-		for x in range(size.x):
-			if land.get_pixel(x, y).r < 0.5:
-				continue
-			var source_x := clampi(x * source_size.x / size.x, 0, source_size.x - 1)
-			var owner := game_state.province_ids[
-				source_y * source_size.x + source_x
-			]
-			city_id.set_pixel(x, y, Color(float(owner), 0.0, 0.0, 1.0))
 
 
 static func _fill_edges(

@@ -44,6 +44,19 @@ func _init() -> void:
 		(atlas["city_id"] as Image).get_pixel(0, 0).r < 0.0,
 		"sea pixel received city ownership"
 	) and valid
+	var land_city_ids := atlas["city_id"] as Image
+	var unassigned_land_pixels := 0
+	for y in range(land_city_ids.get_height()):
+		for x in range(land_city_ids.get_width()):
+			if (
+				(atlas["land_mask"] as Image).get_pixel(x, y).r > 0.5
+				and land_city_ids.get_pixel(x, y).r < 0.0
+			):
+				unassigned_land_pixels += 1
+	valid = _check(
+		unassigned_land_pixels > 0,
+		"atlas without a visual city mask must not infer province ownership"
+	) and valid
 	var second := ATLAS.build_visual_atlas(state, height, Vector2i(64, 64))
 	valid = _check(
 		(atlas["city_id"] as Image).get_data()

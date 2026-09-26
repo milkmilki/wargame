@@ -2244,7 +2244,7 @@ func _ensure_province_visual_cache() -> void:
 		_boundary_regions = build_boundary_regions(state)
 		_boundary_regions_topology_ids = state.province_ids.duplicate()
 		var region_masks := rasterize_boundary_regions(
-			_boundary_regions, POLITICAL_VISUAL_SIZE, state
+			_boundary_regions, POLITICAL_VISUAL_SIZE
 		)
 		_region_id_image = region_masks["province_id"]
 		_region_land_mask = region_masks["land_mask"]
@@ -3654,6 +3654,33 @@ static func build_boundary_regions(
 	return regions
 
 
+static func boundary_region_diagnostics(game_state: GameState) -> Dictionary:
+	var regions := build_boundary_regions(game_state)
+	var represented := {}
+	for region in regions:
+		represented[int(region.get("city_id", -1))] = true
+	var missing := PackedInt32Array()
+	var seen := {}
+	for city_id in game_state.province_ids:
+		if city_id < 0 or seen.has(city_id):
+			continue
+		seen[city_id] = true
+		if not represented.has(city_id):
+			missing.append(city_id)
+	var masks := rasterize_boundary_regions(regions, POLITICAL_VISUAL_SIZE)
+	var ids: Image = masks["province_id"]
+	var uncovered := 0
+	for y in range(ids.get_height()):
+		for x in range(ids.get_width()):
+			if ids.get_pixel(x, y).r < 0.0:
+				uncovered += 1
+	return {
+		"regions": regions,
+		"missing_city_ids": missing,
+		"uncovered_pixels": uncovered,
+	}
+
+
 static func validate_boundary_region(region: Dictionary) -> bool:
 	var polygon := _normalized_boundary_polygon(
 		region.get("polygon", PackedVector2Array())
@@ -3696,8 +3723,7 @@ static func _normalized_boundary_polygon(
 ## The mask stores city/province IDs as float pixels and never blends IDs.
 static func rasterize_boundary_regions(
 	regions: Array[Dictionary],
-	size: Vector2i,
-	fallback_state: GameState = null
+	size: Vector2i
 ) -> Dictionary:
 	var width := maxi(size.x, 1)
 	var height := maxi(size.y, 1)
@@ -3725,7 +3751,6 @@ static func rasterize_boundary_regions(
 				for x in range(x0, x1 + 1):
 					land.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
 					ids.set_pixel(x, y, Color(city_id, 0.0, 0.0, 1.0))
-	_fill_visual_region_gaps(ids, land, fallback_state, Vector2i(width, height))
 	var edge := Image.create(width, height, false, Image.FORMAT_RF)
 	var coast := Image.create(width, height, false, Image.FORMAT_RF)
 	for y in range(height):
@@ -3752,104 +3777,6 @@ static func rasterize_boundary_regions(
 		"edge_mask": edge,
 		"coast_mask": coast,
 	}
-
-
-static func _fill_visual_region_gaps(
-	ids: Image,
-	land: Image,
-	game_state: GameState,
-	visual_size: Vector2i
-) -> void:
-	if (
-		game_state == null
-		or game_state.province_map_size.x <= 0
-		or game_state.province_map_size.y <= 0
-		or game_state.province_ids.is_empty()
-	):
-		return
-	var source_size := game_state.province_map_size
-	var fallback_city_ids := {}
-	var checked_city_ids := {}
-	for city_id in game_state.province_ids:
-		if city_id < 0 or checked_city_ids.has(city_id):
-			continue
-		checked_city_ids[city_id] = true
-		var city_position: Vector2 = game_state.cities[city_id].map_position
-		var city_pixel := Vector2i(
-			clampi(
-				int(floor(city_position.x * visual_size.x)),
-				0, visual_size.x - 1
-			),
-			clampi(
-				int(floor(city_position.y * visual_size.y)),
-				0, visual_size.y - 1
-			)
-		)
-		if int(round(ids.get_pixelv(city_pixel).r)) != city_id:
-			fallback_city_ids[city_id] = true
-	for source_y in range(source_size.y):
-		var visual_y0 := ceili(
-			float(source_y * visual_size.y) / float(source_size.y)
-		)
-		var visual_y1 := ceili(
-			float((source_y + 1) * visual_size.y) / float(source_size.y)
-		)
-		for source_x in range(source_size.x):
-			var source_city := game_state.province_ids[
-				source_y * source_size.x + source_x
-			]
-			var fill_missing_region := fallback_city_ids.has(source_city)
-			if source_city < 0:
-				source_city = _nearest_visual_source_city(
-					game_state,
-					Vector2i(source_x, source_y),
-					2
-				)
-				fill_missing_region = source_city >= 0
-			if not fill_missing_region:
-				continue
-			var visual_x0 := ceili(
-				float(source_x * visual_size.x) / float(source_size.x)
-			)
-			var visual_x1 := ceili(
-				float((source_x + 1) * visual_size.x) / float(source_size.x)
-			)
-			for y in range(visual_y0, visual_y1):
-				for x in range(visual_x0, visual_x1):
-					if land.get_pixel(x, y).r >= 0.5:
-						continue
-					land.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
-					ids.set_pixel(
-						x, y, Color(float(source_city), 0.0, 0.0, 1.0)
-					)
-
-
-static func _nearest_visual_source_city(
-	game_state: GameState,
-	source_pixel: Vector2i,
-	radius: int
-) -> int:
-	var source_size := game_state.province_map_size
-	var best_city := -1
-	var best_distance := 1 << 30
-	for y in range(
-		maxi(source_pixel.y - radius, 0),
-		mini(source_pixel.y + radius + 1, source_size.y)
-	):
-		for x in range(
-			maxi(source_pixel.x - radius, 0),
-			mini(source_pixel.x + radius + 1, source_size.x)
-		):
-			var city_id := game_state.province_ids[y * source_size.x + x]
-			if city_id < 0:
-				continue
-			var distance := (
-				Vector2i(x, y) - source_pixel
-			).length_squared()
-			if distance < best_distance:
-				best_distance = distance
-				best_city = city_id
-	return best_city
 
 
 static func build_region_fill_image(
