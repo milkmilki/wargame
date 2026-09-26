@@ -238,6 +238,47 @@ static func build_river_render_path(
 	return result
 
 
+## Visual-only river curve sampled in the same fixed pixel space as political
+## regions. Logical river paths remain unchanged for crossings and routing.
+static func build_high_precision_river_path(
+	river: Dictionary,
+	visual_size: Vector2i = Vector2i(2048, 2048),
+	max_spacing_px: float = 6.0
+) -> PackedVector2Array:
+	var source := _coerce_points(river.get("points", []))
+	if source.size() < 3:
+		return source.duplicate()
+	var result := PackedVector2Array()
+	var safe_size := Vector2(maxi(visual_size.x, 1), maxi(visual_size.y, 1))
+	var safe_spacing := maxf(max_spacing_px, 1.0)
+	for segment in range(source.size() - 1):
+		var p0 := source[maxi(segment - 1, 0)]
+		var p1 := source[segment]
+		var p2 := source[segment + 1]
+		var p3 := source[mini(segment + 2, source.size() - 1)]
+		var segment_length_px := ((p2 - p1) * safe_size).length()
+		var steps := clampi(
+			maxi(12, int(ceil(segment_length_px / safe_spacing))), 12, 256
+		)
+		for step in range(steps):
+			var t := float(step) / float(steps)
+			var candidate := _catmull_rom(p0, p1, p2, p3, t)
+			var nearest := Geometry2D.get_closest_point_to_segment(
+				candidate * safe_size, p1 * safe_size, p2 * safe_size
+			)
+			var candidate_px := candidate * safe_size
+			var delta := candidate_px - nearest
+			if delta.length() > MAX_RENDER_DEVIATION_PX:
+				candidate_px = (
+					nearest + delta.normalized() * MAX_RENDER_DEVIATION_PX
+				)
+			candidate = candidate_px / safe_size
+			if result.is_empty() or not result[-1].is_equal_approx(candidate):
+				result.append(candidate)
+	result.append(source[-1])
+	return result
+
+
 static func _catmull_rom(
 	p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float
 ) -> Vector2:

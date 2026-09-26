@@ -37,6 +37,20 @@ func _init() -> void:
 	_assert(rendered[0].is_equal_approx(source[0]), "source endpoint moved")
 	_assert(rendered[-1].is_equal_approx(source[-1]), "mouth endpoint moved")
 	_assert(source == source_copy, "render derivation mutated authoritative path")
+	var high_precision := MapFeatureContract.build_high_precision_river_path(
+		river, Vector2i(2048, 2048)
+	)
+	_assert(
+		high_precision.size() > rendered.size(),
+		"high precision river path did not increase sampling density"
+	)
+	for index in range(1, high_precision.size()):
+		var spacing_px := (
+			(high_precision[index] - high_precision[index - 1])
+			* Vector2(2048.0, 2048.0)
+		).length()
+		_assert(spacing_px <= 8.0, "high precision river spacing exceeds 8px")
+	_assert(source == source_copy, "high precision derivation mutated source")
 
 	var previous_width := -INF
 	for index in range(rendered.size()):
