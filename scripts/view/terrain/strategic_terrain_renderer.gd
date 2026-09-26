@@ -61,6 +61,27 @@ func set_province_lookup_textures(
 	_material.set_shader_parameter("province_visual_lut", province_visual_lut)
 
 
+func set_visual_atlas_textures(
+	city_id_texture: Texture2D,
+	land_mask_texture: Texture2D,
+	region_edge_texture: Texture2D,
+	coast_mask_texture: Texture2D
+) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter(
+		"visual_city_id_texture", city_id_texture
+	)
+	_material.set_shader_parameter(
+		"visual_land_mask_texture", land_mask_texture
+	)
+	_material.set_shader_parameter(
+		"visual_region_edge_texture", region_edge_texture
+	)
+	_material.set_shader_parameter(
+		"visual_coast_mask_texture", coast_mask_texture
+	)
+
+
 func set_boundary_textures(
 	province_texture: Texture2D,
 	country_texture: Texture2D,
@@ -285,6 +306,10 @@ func _ensure_render_nodes() -> void:
 		_material.set_shader_parameter(
 			"country_gradient_strength",
 			MapRenderer.COUNTRY_GRADIENT_STRENGTH
+		)
+		_material.set_shader_parameter(
+			"country_gradient_radius_px",
+			MapRenderer.COUNTRY_FILL_FADE_RADIUS_PX
 		)
 		_material.set_shader_parameter("shallow_sea_color", SHALLOW_SEA_COLOR)
 		_material.set_shader_parameter("deep_sea_color", DEEP_SEA_COLOR)

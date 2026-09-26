@@ -10,7 +10,6 @@ func _run() -> void:
 	var packed := load("res://main.tscn") as PackedScene
 	var main := packed.instantiate()
 	main.use_grid_world = true
-	main.use_3d_map = false
 	main.nation_count = GameState.NATION_COUNT
 	root.add_child(main)
 	await process_frame

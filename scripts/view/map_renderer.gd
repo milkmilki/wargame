@@ -2260,9 +2260,7 @@ func _ensure_province_visual_cache() -> void:
 			MAP_VISUAL_ATLAS.SIZE,
 			_region_id_image,
 			{
-				"land_mask": _region_land_mask,
 				"edge_mask": _region_edge_mask,
-				"coast_mask": _region_coast_mask,
 			}
 		)
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
@@ -2349,8 +2347,6 @@ func _ensure_province_visual_cache() -> void:
 	_province_visual_mode = _map_mode
 	_province_visual_view_nation_id = _diplomatic_view_nation_id
 	_province_loyalty_day = state.day
-
-
 func _rebuild_political_base_texture(political_image: Image) -> void:
 	var packed_height := (
 		load(GameState.terrain_map_path()) as Texture2D

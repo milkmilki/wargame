@@ -609,8 +609,9 @@ func _run() -> void:
 			"uniform float country_boundary_outer_width_px = 3.0"
 		)
 		and terrain_shader_code.contains(
-			"final_color = mix(final_color, coast_country.rgb, coast_ink)"
+			"final_color = mix(final_color, coast_color, coast_ink)"
 		)
+		and terrain_shader_code.contains("visual_coast_mask_texture")
 		and terrain_shader_code.contains("coast_distance_px")
 		and terrain_shader_code.contains(
 			"float coast_mesh_band = step(0.05, UV2.x)"
@@ -622,9 +623,11 @@ func _run() -> void:
 	)
 	var boundary_texture_size: bool = (
 		map_3d._country_boundary_texture != null
-		and map_3d._province_id_texture != null
-		and map_3d._country_boundary_texture.get_size()
-			== map_3d._province_id_texture.get_size()
+		and Vector2i(map_3d._country_boundary_texture.get_size())
+			== Vector2i.ONE
+		and map_3d._visual_city_id_texture != null
+		and Vector2i(map_3d._visual_city_id_texture.get_size())
+			== MapVisualAtlas.SIZE
 	)
 	overlay.set_city_road_visuals_visible(false)
 	map_3d._update_map_detail_visibility()

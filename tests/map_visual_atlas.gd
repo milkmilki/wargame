@@ -15,6 +15,14 @@ func _init() -> void:
 		height.set_pixel(63, index, Color(1.0, 1.0, 1.0, 0.25))
 	var atlas := ATLAS.build_visual_atlas(state, height, Vector2i(64, 64))
 	var valid := true
+	var revision: Dictionary = atlas.get("revision", {})
+	for revision_key in [
+		"topology", "ownership", "diplomacy", "roads", "rivers",
+	]:
+		valid = _check(
+			revision.has(revision_key),
+			"missing atlas revision: " + revision_key
+		) and valid
 	for key in [
 		"elevation", "land_mask", "city_id", "region_edge",
 		"coast_mask", "river_mask", "road_mask",

@@ -120,6 +120,10 @@ var _province_topology_ids := PackedInt32Array()
 var _province_lookup_topology_ids := PackedInt32Array()
 var _visual_atlas := {}
 var _visual_region_masks := {}
+var _visual_city_id_texture: ImageTexture
+var _visual_land_mask_texture: ImageTexture
+var _visual_region_edge_texture: ImageTexture
+var _visual_coast_mask_texture: ImageTexture
 var _map_font: Font
 ## 国家标签的领土几何按 ownership_revision 批量构建一次。名称或外交变化只
 ## 重算文字尺寸，不再让每个国家各自扫描整张 province map。
@@ -221,6 +225,10 @@ func setup(
 	_province_lookup_topology_ids = PackedInt32Array()
 	_visual_atlas = {}
 	_visual_region_masks = {}
+	_visual_city_id_texture = null
+	_visual_land_mask_texture = null
+	_visual_region_edge_texture = null
+	_visual_coast_mask_texture = null
 	_country_fill_opacity_image = null
 	_pending_country_visual_request.clear()
 	_country_visual_request_serial = 0
@@ -1109,6 +1117,7 @@ func _update_province_visuals() -> void:
 				"land_mask": _visual_atlas["land_mask"],
 				"edge_mask": _visual_atlas["region_edge"],
 			}
+			_update_visual_atlas_textures()
 		# 省份栅格几何变化会改变标签连通域，即使所有权 revision 未变。
 		_nation_label_cache_ownership_revision = -1
 	var city_owners := PackedInt32Array()
@@ -1185,32 +1194,15 @@ func _update_province_visuals() -> void:
 		_map_mode == MapRenderer.MapMode.POLITICAL
 		and not _visual_region_masks.is_empty()
 	)
-	if unified_region_fill and rebuild_fill:
-		var unified_image := MapRenderer.build_region_fill_image_from_masks(
-			state, _visual_region_masks, view_nation_id
-		)
-		if (
-			_country_color_texture == null
-			or Vector2i(_country_color_texture.get_size())
-				!= unified_image.get_size()
-		):
-			_country_color_texture = ImageTexture.create_from_image(unified_image)
-		else:
-			_country_color_texture.update(unified_image)
 	if unified_region_fill and (
 		topology_changed
-		or diplomatic_view_changed
 		or _country_boundary_texture == null
+		or _country_color_texture == null
 	):
-		var unified_boundary := MapRenderer.build_country_boundary_image_from_visuals(
-			state.province_map_size,
-			MapRenderer.country_boundary_colors(state, view_nation_id),
-			geometry,
-			false
-		)
-		_country_boundary_texture = ImageTexture.create_from_image(
-			unified_boundary
-		)
+		var transparent := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+		transparent.fill(Color.TRANSPARENT)
+		_country_boundary_texture = ImageTexture.create_from_image(transparent)
+		_country_color_texture = ImageTexture.create_from_image(transparent)
 	if unified_region_fill:
 		_country_fill_opacity_image = _visual_region_masks["land_mask"]
 	var country_visuals_changed := not unified_region_fill and (
@@ -1248,7 +1240,7 @@ func _update_province_visuals() -> void:
 		_province_boundary_texture = ImageTexture.create_from_image(
 			province_boundary_image
 		)
-	if (
+	if not unified_region_fill and (
 		country_visuals_changed
 		or _country_boundary_texture == null
 		or _country_color_texture == null
@@ -1335,6 +1327,27 @@ func _update_province_visuals() -> void:
 	# from drifting away from the painted regions.
 	_boundaries.mesh = null
 	_boundaries.material_override = null
+
+
+func _update_visual_atlas_textures() -> void:
+	_visual_city_id_texture = ImageTexture.create_from_image(
+		_visual_atlas["city_id"]
+	)
+	_visual_land_mask_texture = ImageTexture.create_from_image(
+		_visual_atlas["land_mask"]
+	)
+	_visual_region_edge_texture = ImageTexture.create_from_image(
+		_visual_atlas["region_edge"]
+	)
+	_visual_coast_mask_texture = ImageTexture.create_from_image(
+		_visual_atlas["coast_mask"]
+	)
+	_terrain.set_visual_atlas_textures(
+		_visual_city_id_texture,
+		_visual_land_mask_texture,
+		_visual_region_edge_texture,
+		_visual_coast_mask_texture
+	)
 
 
 func _ensure_province_id_texture() -> void:

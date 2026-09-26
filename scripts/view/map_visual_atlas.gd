@@ -17,10 +17,11 @@ static func build_visual_atlas(
 ) -> Dictionary:
 	var safe_size := Vector2i(maxi(size.x, 1), maxi(size.y, 1))
 	var elevation := _height_channel(height_image, safe_size)
-	var land := _mask_channel(shared_masks.get("land_mask"), safe_size)
+	var land := _land_channel(height_image, safe_size)
 	if land == null:
-		land = Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_RF)
-		_fill_land(height_image, land, safe_size)
+		land = _mask_channel(shared_masks.get("land_mask"), safe_size)
+	if land == null:
+		land = Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_L8)
 	var shared_city := _mask_channel(visual_city_ids, safe_size)
 	var city_id := shared_city
 	if city_id == null:
@@ -37,21 +38,18 @@ static func build_visual_atlas(
 		)
 	var coast := _mask_channel(shared_masks.get("coast_mask"), safe_size)
 	if coast == null:
-		coast = Image.create(
-			safe_size.x, safe_size.y, false, Image.FORMAT_RF
-		)
+		coast = _coast_channel(land, safe_size)
 	var rivers := Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_RF)
 	var roads := Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_RF)
 	if shared_city == null:
 		_fill_city_ids(game_state, city_id, land, safe_size)
 	if shared_masks.get("edge_mask") == null:
 		_fill_edges(city_id, land, region_edge, coast, safe_size)
-	elif shared_masks.get("coast_mask") == null:
-		_fill_coast(land, coast, safe_size)
 	_fill_rivers(game_state, rivers, safe_size)
 	_fill_roads(game_state, roads, safe_size)
 	return {
 		"size": safe_size,
+		"revision": build_revision(game_state),
 		"elevation": elevation,
 		"land_mask": land,
 		"city_id": city_id,
@@ -59,6 +57,32 @@ static func build_visual_atlas(
 		"coast_mask": coast,
 		"river_mask": rivers,
 		"road_mask": roads,
+	}
+
+
+static func build_revision(game_state: GameState) -> Dictionary:
+	if game_state == null:
+		return {
+			"topology": 0,
+			"ownership": 0,
+			"diplomacy": 0,
+			"roads": 0,
+			"rivers": 0,
+		}
+	var river_source: Variant = (
+		game_state.river_features
+		if not game_state.river_features.is_empty()
+		else game_state.river_paths
+	)
+	return {
+		"topology": hash([
+			game_state.province_map_size,
+			game_state.province_ids,
+		]),
+		"ownership": game_state.ownership_revision,
+		"diplomacy": game_state.diplomacy_revision,
+		"roads": game_state.road_network_revision,
+		"rivers": hash(river_source),
 	}
 
 
@@ -75,6 +99,8 @@ static func sample_height_uv(atlas: Dictionary, uv: Vector2) -> float:
 
 
 static func sample_city_id_uv(atlas: Dictionary, uv: Vector2) -> int:
+	if _sample_channel(atlas.get("land_mask"), uv, 0.0) < 0.5:
+		return -1
 	return int(round(_sample_channel(atlas.get("city_id"), uv, -1.0)))
 
 
@@ -133,6 +159,29 @@ static func _fill_land(
 			var color := height_image.get_pixel(source_x, source_y)
 			if TerrainMapGenerator.packed_is_land(color):
 				land.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+
+
+static func _land_channel(height_image: Image, size: Vector2i) -> Image:
+	if height_image == null or height_image.is_empty():
+		return null
+	var source := height_image
+	if source.get_size() != size:
+		source = source.duplicate()
+		source.resize(size.x, size.y, Image.INTERPOLATE_NEAREST)
+	if source.get_format() != Image.FORMAT_RGBA8:
+		var fallback := Image.create(size.x, size.y, false, Image.FORMAT_L8)
+		_fill_land(source, fallback, size)
+		return fallback
+	var source_bytes := source.get_data()
+	var land_bytes := PackedByteArray()
+	land_bytes.resize(size.x * size.y)
+	for pixel_index in range(land_bytes.size()):
+		land_bytes[pixel_index] = (
+			255 if source_bytes[pixel_index * 4 + 3] > 128 else 0
+		)
+	return Image.create_from_data(
+		size.x, size.y, false, Image.FORMAT_L8, land_bytes
+	)
 
 
 static func _fill_city_ids(
@@ -211,6 +260,32 @@ static func _fill_coast(land: Image, coast: Image, size: Vector2i) -> void:
 				or land.get_pixel(x, y + 1).r < 0.5
 			):
 				coast.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+
+
+static func _coast_channel(land: Image, size: Vector2i) -> Image:
+	var source := land
+	if source.get_format() != Image.FORMAT_L8:
+		source = source.duplicate()
+		source.convert(Image.FORMAT_L8)
+	var land_bytes := source.get_data()
+	var coast_bytes := PackedByteArray()
+	coast_bytes.resize(size.x * size.y)
+	for y in range(size.y):
+		for x in range(size.x):
+			var index := y * size.x + x
+			if land_bytes[index] < 128:
+				continue
+			if (
+				x == 0 or y == 0 or x + 1 == size.x or y + 1 == size.y
+				or land_bytes[index - 1] < 128
+				or land_bytes[index + 1] < 128
+				or land_bytes[index - size.x] < 128
+				or land_bytes[index + size.x] < 128
+			):
+				coast_bytes[index] = 255
+	return Image.create_from_data(
+		size.x, size.y, false, Image.FORMAT_L8, coast_bytes
+	)
 
 
 static func _fill_rivers(

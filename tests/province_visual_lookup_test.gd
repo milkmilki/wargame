@@ -36,7 +36,10 @@ func _init() -> void:
 	)
 
 	var political := LOOKUP.build_visual_lut(state)
-	_assert(political.get_height() == 2, "visual LUT must contain base and occupation rows")
+	_assert(
+		political.get_height() == 3,
+		"visual LUT must contain base, occupation, and gradient rows"
+	)
 	for city_id in range(state.cities.size()):
 		var expected := _expected_political_color(state, city_id, -1)
 		_assert_color(
@@ -49,6 +52,15 @@ func _init() -> void:
 			expected[1],
 			"political occupation LUT mismatch for city %d" % city_id
 		)
+		var expected_gradient := (
+			MapRenderer.country_boundary_display_color(expected[0])
+			if expected[0].a > 0.5 else Color.TRANSPARENT
+		)
+		_assert_color(
+			political.get_pixel(city_id, LOOKUP.GRADIENT_ROW),
+			expected_gradient,
+			"political gradient LUT mismatch for city %d" % city_id
+		)
 	var diplomatic := LOOKUP.build_visual_lut(state, 0)
 	for city_id in range(state.cities.size()):
 		var expected_diplomatic := _expected_political_color(state, city_id, 0)
@@ -60,6 +72,11 @@ func _init() -> void:
 		_assert(
 			diplomatic.get_pixel(city_id, LOOKUP.OCCUPATION_ROW).a < 0.001,
 			"diplomatic LUT must classify current control without stripes"
+		)
+		_assert_color(
+			diplomatic.get_pixel(city_id, LOOKUP.GRADIENT_ROW),
+			expected_diplomatic[0],
+			"diplomatic gradient row must preserve the classified color"
 		)
 	var legacy_fill := MapRenderer._dilate_political_fill(
 		MapRenderer.build_province_overlay_image(state), 3

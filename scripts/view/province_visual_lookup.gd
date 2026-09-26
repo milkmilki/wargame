@@ -5,7 +5,8 @@ extends RefCounted
 
 const BASE_ROW: int = 0
 const OCCUPATION_ROW: int = 1
-const LUT_ROWS: int = 2
+const GRADIENT_ROW: int = 2
+const LUT_ROWS: int = 3
 const INVALID_PROVINCE_CODE: int = 0
 const MAX_PROVINCE_ID: int = 65534
 
@@ -68,9 +69,9 @@ static func build_visual_lut(
 		if not city.politically_active:
 			continue
 		if loyalty_mode:
-			image.set_pixel(
-				city_id, BASE_ROW, MapRenderer.loyalty_color(city.loyalty)
-			)
+			var loyalty := MapRenderer.loyalty_color(city.loyalty)
+			image.set_pixel(city_id, BASE_ROW, loyalty)
+			image.set_pixel(city_id, GRADIENT_ROW, loyalty)
 			continue
 		if region_mode:
 			var region_id := (
@@ -87,6 +88,11 @@ static func build_visual_lut(
 					BASE_ROW,
 					game_state.administrative_region_colors[region_id]
 				)
+				image.set_pixel(
+					city_id,
+					GRADIENT_ROW,
+					game_state.administrative_region_colors[region_id]
+				)
 			continue
 		var current_owner := city.owner_nation
 		var recognized_owner := game_state.recognized_owner_of(city_id)
@@ -100,6 +106,12 @@ static func build_visual_lut(
 		)
 		base.a = 1.0
 		image.set_pixel(city_id, BASE_ROW, base)
+		var gradient := (
+			MapRenderer.country_boundary_display_color(base)
+			if view_nation_id < 0 else base
+		)
+		gradient.a = 1.0
+		image.set_pixel(city_id, GRADIENT_ROW, gradient)
 		if view_nation_id < 0 and current_owner != recognized_owner:
 			var occupation := MapRenderer.political_map_color_for_view(
 				game_state, current_owner, view_nation_id

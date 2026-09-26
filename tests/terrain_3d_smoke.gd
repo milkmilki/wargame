@@ -317,14 +317,29 @@ func _run() -> void:
 	)
 	var fill_before_diplomacy_refresh := map_3d._province_visual_lut_texture
 	var province_boundary_before_refresh := map_3d._province_boundary_texture
+	var country_fill_before_diplomacy_refresh := map_3d._country_color_texture
+	var visual_city_before_diplomacy_refresh := map_3d._visual_city_id_texture
+	overlay.select_nation(0)
+	var diplomacy_refresh_started := Time.get_ticks_msec()
 	map_3d._update_province_visuals()
+	var diplomacy_refresh_msec := (
+		Time.get_ticks_msec() - diplomacy_refresh_started
+	)
 	var diplomacy_refresh_kept_fill := (
 		map_3d._province_visual_lut_texture == fill_before_diplomacy_refresh
+		and map_3d._country_color_texture
+			== country_fill_before_diplomacy_refresh
+		and map_3d._visual_city_id_texture
+			== visual_city_before_diplomacy_refresh
+		and diplomacy_refresh_msec < 1000
 	)
 	var dynamic_refresh_kept_static_boundaries := (
 		map_3d._province_boundary_texture == province_boundary_before_refresh
 	)
+	overlay.clear_map_selection()
+	map_3d._update_province_visuals()
 	var topology_refresh_rebuilds_id_lookup := false
+	var topology_refresh_rebuilds_visual_city_ids := false
 	var topology_refresh_rebuilds_static_boundaries := false
 	var topology_refresh_committed_country_boundaries := false
 	if map_3d._province_topology_ids.size() > 0:
@@ -333,6 +348,9 @@ func _run() -> void:
 		if map_3d._province_lookup_topology_ids.size() > 0:
 			map_3d._province_lookup_topology_ids[0] = saved_topology_id - 1
 		var id_lookup_before_topology_refresh := map_3d._province_id_texture
+		var visual_city_before_topology_refresh := (
+			map_3d._visual_city_id_texture
+		)
 		var province_before_topology_refresh := map_3d._province_boundary_texture
 		var country_before_topology_refresh := map_3d._country_boundary_texture
 		map_3d._update_province_visuals()
@@ -349,6 +367,10 @@ func _run() -> void:
 			map_3d._poll_country_visual_task()
 		topology_refresh_rebuilds_id_lookup = (
 			map_3d._province_id_texture != id_lookup_before_topology_refresh
+		)
+		topology_refresh_rebuilds_visual_city_ids = (
+			map_3d._visual_city_id_texture
+				!= visual_city_before_topology_refresh
 		)
 		topology_refresh_committed_country_boundaries = (
 			async_started
@@ -535,9 +557,7 @@ func _run() -> void:
 			and terrain_shader_code.contains(
 				"uniform float country_fill_fade_enabled"
 			)
-			and terrain_shader_code.contains(
-				"coast_country.a * country_fill_fade_enabled"
-			)
+			and terrain_shader_code.contains("visual_region_edge_texture")
 			and terrain_shader_code.contains("country_gradient_weight")
 			and terrain_shader_code.contains("faded_country_color")
 		),
@@ -561,12 +581,21 @@ func _run() -> void:
 			and map_3d._country_boundary_texture != null
 			and map_3d._country_color_texture != null
 			and map_3d._province_boundary_texture != null
-			and map_3d._country_boundary_texture.get_size()
-				== map_3d._province_id_texture.get_size()
-			and map_3d._country_color_texture.get_size()
-				== map_3d._province_id_texture.get_size()
+			and Vector2i(map_3d._country_boundary_texture.get_size())
+				== Vector2i.ONE
+			and Vector2i(map_3d._country_color_texture.get_size())
+				== Vector2i.ONE
 			and map_3d._province_boundary_texture.get_size()
 				== map_3d._province_id_texture.get_size()
+			and map_3d._visual_city_id_texture != null
+			and Vector2i(map_3d._visual_city_id_texture.get_size())
+				== MapVisualAtlas.SIZE
+			and Vector2i(map_3d._visual_land_mask_texture.get_size())
+				== MapVisualAtlas.SIZE
+			and Vector2i(map_3d._visual_region_edge_texture.get_size())
+				== MapVisualAtlas.SIZE
+			and Vector2i(map_3d._visual_coast_mask_texture.get_size())
+				== MapVisualAtlas.SIZE
 			and terrain_shader_code.contains("country_boundary_texture")
 			and terrain_shader_code.contains(
 				"uniform sampler2D country_boundary_texture : source_color, filter_linear"
@@ -609,14 +638,12 @@ func _run() -> void:
 			and is_equal_approx(MapRenderer.BOUNDARY_ANTIALIAS_PX, 1.0)
 			and nation_color_contract
 			and province_boundary_max_alpha > 0.98
-			and country_boundary_max_alpha > 0.98
 			and province_boundary_pixels > 0
-			and country_boundary_pixels > 0
 			and diplomacy_refresh_kept_fill
 			and dynamic_refresh_kept_static_boundaries
 			and topology_refresh_rebuilds_id_lookup
+			and topology_refresh_rebuilds_visual_city_ids
 			and topology_refresh_rebuilds_static_boundaries
-			and topology_refresh_committed_country_boundaries
 			and overlay_diplomacy_refresh_kept_fill
 		),
 		"vertical_plane_light": (
@@ -691,11 +718,19 @@ func _run() -> void:
 		"province_visual_lut": (
 			map_3d._province_visual_lut_texture != null
 			and Vector2i(map_3d._province_visual_lut_texture.get_size())
-				== Vector2i(state.cities.size(), 2)
+				== Vector2i(state.cities.size(), 3)
 			and terrain_material.get_shader_parameter("province_id_texture")
 				== map_3d._province_id_texture
 			and terrain_material.get_shader_parameter("province_visual_lut")
 				== map_3d._province_visual_lut_texture
+			and terrain_material.get_shader_parameter("visual_city_id_texture")
+				== map_3d._visual_city_id_texture
+			and terrain_material.get_shader_parameter("visual_land_mask_texture")
+				== map_3d._visual_land_mask_texture
+			and terrain_material.get_shader_parameter("visual_region_edge_texture")
+				== map_3d._visual_region_edge_texture
+			and terrain_material.get_shader_parameter("visual_coast_mask_texture")
+				== map_3d._visual_coast_mask_texture
 		),
 		"province_visual_supersample": (
 			map_3d._province_id_texture != null
@@ -716,8 +751,9 @@ func _run() -> void:
 			and terrain_shader_code.contains(
 				"coast_coverage * coast_boundary_strength"
 			)
+			and terrain_shader_code.contains("visual_coast_mask_texture")
 			and terrain_shader_code.contains(
-				"final_color = mix(final_color, coast_country.rgb, coast_ink)"
+				"final_color = mix(final_color, coast_color, coast_ink)"
 			)
 			and is_equal_approx(float(terrain_material.get_shader_parameter(
 				"local_boundary_alpha"
@@ -738,10 +774,9 @@ func _run() -> void:
 				+ MapRenderer.BOUNDARY_ANTIALIAS_PX)
 		),
 		"mesh_country_boundary_excludes_raster_coast": (
-			mesh_country_boundaries.get_data()
-				== country_boundaries_without_coast.get_data()
-			and mesh_country_boundaries.get_data()
-				!= direct_country_boundaries.get_data()
+			terrain_shader_code.contains("atlas_coast")
+			and Vector2i(map_3d._country_boundary_texture.get_size())
+				== Vector2i.ONE
 		),
 		"boundary_lod": (
 			terrain_shader_code.contains("province_boundary_strength")
