@@ -1128,6 +1128,9 @@ func _update_province_visuals() -> void:
 	var view_nation_id := (
 		overlay.diplomatic_view_nation_id() if overlay != null else -1
 	)
+	var diplomatic_view_changed := (
+		view_nation_id != _last_diplomatic_view_nation_id
+	)
 	var political_signature := (
 		MapRenderer.region_fill_signature(state)
 		if region_mode
@@ -1170,10 +1173,13 @@ func _update_province_visuals() -> void:
 		topology_changed
 		or _country_fill_opacity_image == null
 		or state.ownership_revision != _last_ownership_revision
+		or diplomatic_view_changed
 		or region_changed
 	)
 	var async_country_refresh := (
-		country_visuals_changed and _country_boundary_texture != null
+		country_visuals_changed
+		and not diplomatic_view_changed
+		and _country_boundary_texture != null
 	)
 	if country_visuals_changed and not async_country_refresh:
 		_country_fill_opacity_image = (
@@ -1203,7 +1209,7 @@ func _update_province_visuals() -> void:
 		or _country_boundary_texture == null
 		or _country_color_texture == null
 	):
-		if _country_boundary_texture == null:
+		if _country_boundary_texture == null or diplomatic_view_changed:
 			if city_owners.is_empty():
 				city_owners = (
 					state.administrative_region_ids.duplicate()
