@@ -51,6 +51,37 @@ func _init() -> void:
 		).length()
 		_assert(spacing_px <= 8.0, "high precision river spacing exceeds 8px")
 	_assert(source == source_copy, "high precision derivation mutated source")
+	var staircase := PackedVector2Array([
+		Vector2(0.100, 0.200), Vector2(0.104, 0.200),
+		Vector2(0.104, 0.204), Vector2(0.108, 0.204),
+		Vector2(0.108, 0.208), Vector2(0.112, 0.208),
+	])
+	var staircase_river := MapFeatureContract.from_legacy_river_paths(
+		[staircase]
+	)[0]
+	var smoothed_staircase := MapFeatureContract.build_high_precision_river_path(
+		staircase_river, Vector2i(2048, 2048)
+	)
+	var max_original_deviation_px := 0.0
+	for point in smoothed_staircase:
+		var nearest_distance := INF
+		for segment in range(staircase.size() - 1):
+			var nearest := Geometry2D.get_closest_point_to_segment(
+				point * Vector2(2048.0, 2048.0),
+				staircase[segment] * Vector2(2048.0, 2048.0),
+				staircase[segment + 1] * Vector2(2048.0, 2048.0)
+			)
+			nearest_distance = minf(
+				nearest_distance,
+				nearest.distance_to(point * Vector2(2048.0, 2048.0))
+			)
+		max_original_deviation_px = maxf(
+			max_original_deviation_px, nearest_distance
+		)
+	_assert(
+		max_original_deviation_px > 0.75,
+		"high precision path only resampled the original staircase"
+	)
 
 	var previous_width := -INF
 	for index in range(rendered.size()):

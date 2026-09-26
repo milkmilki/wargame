@@ -18,6 +18,8 @@ const VALID_SOURCE_KINDS := [
 const DEFAULT_SOURCE_WIDTH: float = 0.72
 const DEFAULT_MOUTH_WIDTH: float = 1.18
 const MAX_RENDER_DEVIATION_PX: float = 0.45
+const HIGH_PRECISION_SIMPLIFY_TOLERANCE_PX: float = 6.0
+const HIGH_PRECISION_MAX_DEVIATION_PX: float = 4.0
 
 
 static func make_river(
@@ -250,6 +252,9 @@ static func build_high_precision_river_path(
 		return source.duplicate()
 	var result := PackedVector2Array()
 	var safe_size := Vector2(maxi(visual_size.x, 1), maxi(visual_size.y, 1))
+	source = _simplify_river_path(
+		source, safe_size, HIGH_PRECISION_SIMPLIFY_TOLERANCE_PX
+	)
 	var safe_spacing := maxf(max_spacing_px, 1.0)
 	for segment in range(source.size() - 1):
 		var p0 := source[maxi(segment - 1, 0)]
@@ -268,14 +273,47 @@ static func build_high_precision_river_path(
 			)
 			var candidate_px := candidate * safe_size
 			var delta := candidate_px - nearest
-			if delta.length() > MAX_RENDER_DEVIATION_PX:
+			if delta.length() > HIGH_PRECISION_MAX_DEVIATION_PX:
 				candidate_px = (
-					nearest + delta.normalized() * MAX_RENDER_DEVIATION_PX
+					nearest
+					+ delta.normalized() * HIGH_PRECISION_MAX_DEVIATION_PX
 				)
 			candidate = candidate_px / safe_size
 			if result.is_empty() or not result[-1].is_equal_approx(candidate):
 				result.append(candidate)
 	result.append(source[-1])
+	return result
+
+
+static func _simplify_river_path(
+	points: PackedVector2Array, pixel_size: Vector2, tolerance_px: float
+) -> PackedVector2Array:
+	if points.size() <= 2:
+		return points.duplicate()
+	var start_px := points[0] * pixel_size
+	var end_px := points[-1] * pixel_size
+	var maximum_distance := -1.0
+	var split_index := -1
+	for index in range(1, points.size() - 1):
+		var point_px := points[index] * pixel_size
+		var nearest := Geometry2D.get_closest_point_to_segment(
+			point_px, start_px, end_px
+		)
+		var distance := point_px.distance_to(nearest)
+		if distance > maximum_distance:
+			maximum_distance = distance
+			split_index = index
+	if maximum_distance <= tolerance_px or split_index < 0:
+		return PackedVector2Array([points[0], points[-1]])
+	var left := _simplify_river_path(
+		points.slice(0, split_index + 1), pixel_size, tolerance_px
+	)
+	var right := _simplify_river_path(
+		points.slice(split_index, points.size()), pixel_size, tolerance_px
+	)
+	var result := left
+	for index in range(1, right.size()):
+		result.append(right[index])
 	return result
 
 
