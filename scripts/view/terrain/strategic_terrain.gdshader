@@ -18,6 +18,7 @@ uniform float country_boundary_core_width_px = 3.0;
 uniform float country_boundary_outer_width_px = 3.0;
 uniform float country_fill_fade_enabled : hint_range(0.0, 1.0) = 1.0;
 uniform float country_gradient_strength : hint_range(0.0, 1.0) = 0.45;
+uniform float unified_region_fill_enabled : hint_range(0.0, 1.0) = 0.0;
 uniform float ocean_height_threshold = 0.0;
 uniform float sea_floor_height = -2.2;
 uniform vec3 political_land_base_color : source_color = vec3(0.82, 0.82, 0.80);
@@ -91,6 +92,18 @@ void fragment() {
 		);
 		vec3 faded_country_color = mix(
 			province.rgb, gradient_country_color, country_gradient_strength
+		);
+		float unified_alpha = step(0.5, coast_country.a) * hard_land;
+		vec3 unified_country_color = mix(
+			province.rgb, coast_country.rgb, unified_alpha
+		);
+		faded_country_color = mix(
+			faded_country_color,
+			unified_country_color,
+			unified_region_fill_enabled
+		);
+		province_alpha = mix(
+			province_alpha, unified_alpha, unified_region_fill_enabled
 		);
 		vec3 political_land = mix(
 			white_low_poly_base, faded_country_color, province_alpha
