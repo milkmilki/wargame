@@ -67,6 +67,10 @@ func _run() -> void:
 		await process_frame
 	if OS.get_environment("WW_VISUAL_TERRAIN_ONLY") == "1":
 		map_3d._content.visible = false
+	var visual_map_mode := OS.get_environment("WW_VISUAL_MAP_MODE")
+	if not visual_map_mode.is_empty():
+		map_3d.set_map_mode(int(visual_map_mode))
+		await process_frame
 	var zoom_factor := float(OS.get_environment("WW_VISUAL_ZOOM"))
 	if zoom_factor > 0.0:
 		var center_x := float(OS.get_environment("WW_VISUAL_CENTER_X"))

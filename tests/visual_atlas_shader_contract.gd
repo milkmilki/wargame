@@ -36,6 +36,10 @@ func _init() -> void:
 		"terrain renderer has no shared visual-atlas texture interface"
 	) and valid
 	valid = _check(
+		renderer_source.contains("func set_local_boundaries_enabled("),
+		"terrain renderer cannot hide city ink in grouped region views"
+	) and valid
+	valid = _check(
 		map_source.contains("_visual_city_id_texture"),
 		"3D map does not retain the shared city ID texture"
 	) and valid
@@ -49,6 +53,13 @@ func _init() -> void:
 				"province_boundary.a, atlas_region_edge"
 			),
 		"3D province ink does not use the shared 2048 region edge"
+	) and valid
+	valid = _check(
+		shader_source.contains("local_boundaries_enabled")
+			and map_source.contains(
+				"_terrain.set_local_boundaries_enabled(not group_mode)"
+			),
+		"group views do not suppress per-city boundary ink"
 	) and valid
 	if not valid:
 		quit(1)

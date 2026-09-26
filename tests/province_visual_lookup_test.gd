@@ -137,6 +137,42 @@ func _init() -> void:
 			region.get_pixel(city_id, LOOKUP.OCCUPATION_ROW).a < 0.001,
 			"region LUT must not contain occupation stripes"
 		)
+	var trade_regions := LOOKUP.build_group_visual_lut(
+		state, state.region_ids, state.region_colors
+	)
+	var administrative_regions := LOOKUP.build_group_visual_lut(
+		state,
+		state.administrative_region_ids,
+		state.administrative_region_colors
+	)
+	for city_id in range(state.cities.size()):
+		_assert_group_lut_color(
+			trade_regions, city_id, state.region_ids, state.region_colors,
+			"trade region"
+		)
+		_assert_group_lut_color(
+			administrative_regions,
+			city_id,
+			state.administrative_region_ids,
+			state.administrative_region_colors,
+			"administrative region"
+		)
+	_assert(
+		MapRenderer.trade_region_fill_signature(state)[0]
+			== state.region_analysis_revision,
+		"trade region signature must use region_analysis_revision"
+	)
+	var trade_boundary_colors := MapRenderer.trade_region_boundary_colors(state)
+	_assert(
+		trade_boundary_colors.size() == state.region_colors.size(),
+		"trade region boundary palette must preserve region count"
+	)
+	for region_id in range(trade_boundary_colors.size()):
+		_assert_color(
+			trade_boundary_colors[region_id],
+			state.region_colors[region_id].darkened(0.24),
+			"trade region boundary color mismatch for region %d" % region_id
+		)
 	var topology := MapRenderer.build_province_boundary_topology(state)
 	var complete_geometry := MapRenderer.classify_province_boundary_topology(
 		state, topology
@@ -210,6 +246,38 @@ func _expected_political_color(
 		).darkened(0.08)
 		occupation.a = 1.0
 	return [base, occupation]
+
+
+func _assert_group_lut_color(
+	lut: Image,
+	city_id: int,
+	group_ids: PackedInt32Array,
+	group_colors: PackedColorArray,
+	label: String
+) -> void:
+	var expected_base := Color.TRANSPARENT
+	var expected_gradient := Color.TRANSPARENT
+	if city_id < group_ids.size():
+		var group_id := group_ids[city_id]
+		if group_id >= 0 and group_id < group_colors.size():
+			expected_base = group_colors[group_id]
+			expected_base.a = 1.0
+			expected_gradient = expected_base.darkened(0.24)
+			expected_gradient.a = 1.0
+	_assert_color(
+		lut.get_pixel(city_id, LOOKUP.BASE_ROW),
+		expected_base,
+		"%s base LUT mismatch for city %d" % [label, city_id]
+	)
+	_assert_color(
+		lut.get_pixel(city_id, LOOKUP.GRADIENT_ROW),
+		expected_gradient,
+		"%s gradient LUT mismatch for city %d" % [label, city_id]
+	)
+	_assert(
+		lut.get_pixel(city_id, LOOKUP.OCCUPATION_ROW).a < 0.001,
+		"%s LUT must not contain occupation stripes" % label
+	)
 
 
 func _assert_color(actual: Color, expected: Color, message: String) -> void:

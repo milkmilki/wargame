@@ -1,5 +1,9 @@
 extends SceneTree
 
+const PROVINCE_VISUAL_LOOKUP := preload(
+	"res://scripts/view/province_visual_lookup.gd"
+)
+
 
 func _init() -> void:
 	var links: Array[Vector2i] = [
@@ -52,31 +56,31 @@ func _init() -> void:
 			and state.region_ids[city.id] >= 0
 			and state.region_ids[city.id] < state.region_count
 		)
-	var region_overlay := MapRenderer.build_region_overlay_image(state)
-	var region_overlay_valid := (
-		region_overlay != null
-		and not region_overlay.is_empty()
-		and region_overlay.get_size() == state.province_map_size
+	var region_lut := PROVINCE_VISUAL_LOOKUP.build_group_visual_lut(
+		state, state.region_ids, state.region_colors
 	)
-	if region_overlay_valid:
-		for y in range(state.province_map_size.y):
-			for x in range(state.province_map_size.x):
-				var pixel_index := y * state.province_map_size.x + x
-				var city_id := state.province_ids[pixel_index]
-				if city_id < 0:
-					continue
-				var region_id := state.region_ids[city_id]
-				var expected_color := (
-					state.region_colors[region_id]
-					if region_id >= 0
-						and region_id < state.region_colors.size()
-					else Color.TRANSPARENT
-				)
-				var actual_color := region_overlay.get_pixel(x, y)
-				region_overlay_valid = (
-					region_overlay_valid
-					and _colors_match_rgba8(actual_color, expected_color)
-				)
+	var region_overlay_valid := (
+		region_lut != null
+		and not region_lut.is_empty()
+		and region_lut.get_size()
+			== Vector2i(state.cities.size(), PROVINCE_VISUAL_LOOKUP.LUT_ROWS)
+	)
+	for city_id in range(state.cities.size()):
+		var region_id := state.region_ids[city_id]
+		var expected_color := (
+			state.region_colors[region_id]
+			if region_id >= 0 and region_id < state.region_colors.size()
+			else Color.TRANSPARENT
+		)
+		region_overlay_valid = (
+			region_overlay_valid
+			and _colors_match_rgba8(
+				region_lut.get_pixel(
+					city_id, PROVINCE_VISUAL_LOOKUP.BASE_ROW
+				),
+				expected_color
+			)
+		)
 	if (
 		int(result.get("region_count", 0)) == 2
 		and same_partition

@@ -139,6 +139,13 @@ func set_unified_region_fill_enabled(enabled: bool) -> void:
 	)
 
 
+func set_local_boundaries_enabled(enabled: bool) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter(
+		"local_boundaries_enabled", 1.0 if enabled else 0.0
+	)
+
+
 func generate_from_height_texture(
 	texture: Texture2D,
 	source_region: Rect2,

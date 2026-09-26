@@ -18,6 +18,7 @@ uniform vec3 local_boundary_color : source_color = vec3(0.0, 0.0, 0.0);
 uniform float local_boundary_alpha : hint_range(0.0, 1.0) = 1.0;
 uniform float local_boundary_core_radius_px = 0.5;
 uniform float local_boundary_outer_radius_px = 0.5;
+uniform float local_boundaries_enabled : hint_range(0.0, 1.0) = 1.0;
 uniform float country_boundary_core_width_px = 3.0;
 uniform float country_boundary_outer_width_px = 3.0;
 uniform float country_fill_fade_enabled : hint_range(0.0, 1.0) = 1.0;
@@ -204,7 +205,7 @@ void fragment() {
 		province_boundary.a, atlas_region_edge, unified_region_fill_enabled
 	);
 	float province_alpha = visual_province_alpha * province_boundary_strength
-		* hard_land * local_boundary_alpha;
+		* hard_land * local_boundary_alpha * local_boundaries_enabled;
 	float country_alpha = country_boundary.a
 		* country_boundary_strength
 		* hard_land;

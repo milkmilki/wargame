@@ -2499,6 +2499,27 @@ static func region_boundary_colors(game_state: GameState) -> PackedColorArray:
 	return colors
 
 
+static func trade_region_fill_signature(
+	game_state: GameState
+) -> PackedInt64Array:
+	var signature := PackedInt64Array()
+	signature.resize(game_state.region_ids.size() + 1)
+	signature[0] = game_state.region_analysis_revision
+	for city_id in range(game_state.region_ids.size()):
+		signature[city_id + 1] = game_state.region_ids[city_id]
+	return signature
+
+
+static func trade_region_boundary_colors(
+	game_state: GameState
+) -> PackedColorArray:
+	var colors := game_state.region_colors.duplicate()
+	for region_id in range(colors.size()):
+		colors[region_id] = colors[region_id].darkened(0.24)
+		colors[region_id].a = 1.0
+	return colors
+
+
 static func region_score_radius(
 	score: float,
 	max_score: float,
@@ -4938,7 +4959,7 @@ static func effective_map_mode_strength(
 	if mode == MapMode.LOYALTY:
 		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
 	if mode == MapMode.TRADE:
-		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH) * 0.58
+		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
 	if mode == MapMode.REGION:
 		return maxf(configured, POLITICAL_MAP_DEFAULT_STRENGTH)
 	return configured

@@ -32,6 +32,8 @@ const MAP_SUPPLY := Color(0.20, 0.62, 0.48)
 const MAP_COUNTER_MARK := Color(0.32, 0.25, 0.12)
 const TRADE_ROUTE_ELEVATION: float = 0.185
 const TRADE_ROUTE_WIDTH: float = 0.055
+const TRADE_ROUTE_CASING_COLOR := Color(0.055, 0.045, 0.035, 0.82)
+const TRADE_ROUTE_CASING_WIDTH_SCALE: float = 1.85
 const TRADE_ROUTE_DASH_WORLD_LENGTH: float = 0.42
 const WATER_ROUTE_WIDTH: float = 0.025
 const WATER_ROUTE_DASH_WORLD_LENGTH: float = 0.32
@@ -73,6 +75,7 @@ var _water: MeshInstance3D
 var _roads: MeshInstance3D
 var _minor_roads: MeshInstance3D
 var _rivers: MeshInstance3D
+var _trade_route_casing: MeshInstance3D
 var _trade_routes: MeshInstance3D
 var _trade_flow_markers: MultiMeshInstance3D
 var _boundaries: MeshInstance3D
@@ -100,6 +103,7 @@ var _nation_labels: Array[Label3D] = []
 var _battle_labels: Array[Label3D] = []
 var _province_id_texture: ImageTexture
 var _province_visual_lut_texture: ImageTexture
+var _province_visual_lut_image: Image
 var _loyalty_texture: ImageTexture
 var _country_boundary_texture: ImageTexture
 var _country_color_texture: ImageTexture
@@ -156,6 +160,7 @@ var _last_diplomacy_revision: int = -1
 var _last_diplomatic_view_nation_id: int = -2
 var _last_road_network_revision: int = -1
 var _last_region_analysis_revision: int = -1
+var _last_administrative_region_revision: int = -1
 var _last_trade_revision: int = -1
 var _last_army_instances_day: int = -1
 var _army_instances_initialized: bool = false
@@ -250,6 +255,7 @@ func setup(
 	_nation_label_rebuild_pending_frames = 0
 	_last_road_network_revision = -1
 	_last_region_analysis_revision = -1
+	_last_administrative_region_revision = -1
 	_last_trade_revision = -1
 	_last_naming_revision = -1
 	_trade_flow_time = 0.0
@@ -291,6 +297,7 @@ func set_display_state(
 	_last_ownership_revision = -1
 	_last_diplomacy_revision = -1
 	_last_region_analysis_revision = -1
+	_last_administrative_region_revision = -1
 	_last_diplomatic_view_nation_id = -2
 	_political_fill_signature = PackedInt64Array()
 	_loyalty_fill_signature = PackedInt64Array()
@@ -377,9 +384,14 @@ func _process(delta: float) -> void:
 				!= _last_diplomatic_view_nation_id
 		)
 		or (
+			_map_mode == MapRenderer.MapMode.TRADE
+			and state.region_analysis_revision
+				!= _last_region_analysis_revision
+		)
+		or (
 			_map_mode == MapRenderer.MapMode.REGION
 			and state.administrative_region_revision
-				!= _last_region_analysis_revision
+				!= _last_administrative_region_revision
 		)
 	):
 		var revision_update_started := (
@@ -409,7 +421,10 @@ func _process(delta: float) -> void:
 		_last_diplomatic_view_nation_id = (
 			overlay.diplomatic_view_nation_id() if overlay != null else -1
 		)
-		_last_region_analysis_revision = state.administrative_region_revision
+		_last_region_analysis_revision = state.region_analysis_revision
+		_last_administrative_region_revision = (
+			state.administrative_region_revision
+		)
 	var country_visual_committed := _poll_country_visual_task()
 	if state.naming_revision != _last_naming_revision:
 		_rebuild_city_labels()
@@ -720,6 +735,10 @@ func _ensure_feature_nodes() -> void:
 		_rivers = MeshInstance3D.new()
 		_rivers.name = "Rivers"
 		_content.add_child(_rivers)
+	if _trade_route_casing == null:
+		_trade_route_casing = MeshInstance3D.new()
+		_trade_route_casing.name = "TradeRouteCasing"
+		_content.add_child(_trade_route_casing)
 	if _trade_routes == null:
 		_trade_routes = MeshInstance3D.new()
 		_trade_routes.name = "TradeRoutes"
@@ -1040,7 +1059,8 @@ func _on_terrain_ready() -> void:
 		overlay.diplomatic_view_nation_id() if overlay != null else -1
 	)
 	_last_road_network_revision = state.road_network_revision
-	_last_region_analysis_revision = state.administrative_region_revision
+	_last_region_analysis_revision = state.region_analysis_revision
+	_last_administrative_region_revision = state.administrative_region_revision
 	_last_trade_revision = state.trade_revision
 	_last_naming_revision = state.naming_revision
 
@@ -1097,11 +1117,23 @@ func set_vertical_terrain_light_strength(strength: float) -> void:
 func _update_province_visuals() -> void:
 	if _terrain == null or _terrain.land_cell_count() <= 0:
 		return
-	var region_mode := _map_mode == MapRenderer.MapMode.REGION
-	var region_changed := (
-		region_mode
+	var trade_region_mode := _map_mode == MapRenderer.MapMode.TRADE
+	var administrative_region_mode := _map_mode == MapRenderer.MapMode.REGION
+	var group_mode := trade_region_mode or administrative_region_mode
+	var group_ids := (
+		state.region_ids
+		if trade_region_mode
+		else state.administrative_region_ids
+		if administrative_region_mode
+		else PackedInt32Array()
+	)
+	var group_changed := (
+		trade_region_mode
+		and state.region_analysis_revision != _last_region_analysis_revision
+	) or (
+		administrative_region_mode
 		and state.administrative_region_revision
-			!= _last_region_analysis_revision
+			!= _last_administrative_region_revision
 	)
 	var topology_changed := (
 		_boundary_topology.is_empty()
@@ -1127,11 +1159,11 @@ func _update_province_visuals() -> void:
 		or _classified_boundary_mode != _map_mode
 		or _classified_boundary_ownership_revision
 			!= state.ownership_revision
-		or region_changed
+		or group_changed
 	):
 		city_owners = (
-			state.administrative_region_ids.duplicate()
-			if region_mode
+			group_ids.duplicate()
+			if group_mode
 			else _city_owner_snapshot()
 		)
 		_classified_boundary_geometry = (
@@ -1153,8 +1185,10 @@ func _update_province_visuals() -> void:
 		view_nation_id != _last_diplomatic_view_nation_id
 	)
 	var political_signature := (
-		MapRenderer.region_fill_signature(state)
-		if region_mode
+		MapRenderer.trade_region_fill_signature(state)
+		if trade_region_mode
+		else MapRenderer.region_fill_signature(state)
+		if administrative_region_mode
 		else MapRenderer.political_fill_signature(state, view_nation_id)
 	)
 	var loyalty_signature := (
@@ -1185,13 +1219,15 @@ func _update_province_visuals() -> void:
 	if topology_changed or _province_id_texture == null:
 		_ensure_province_id_texture()
 	if rebuild_fill:
-		_update_province_visual_lut(
-			view_nation_id, loyalty_mode, region_mode
-		)
+		_update_province_visual_lut(view_nation_id, loyalty_mode)
 		_political_fill_signature = fill_signature
 		_loyalty_fill_signature = loyalty_signature
 	var unified_region_fill := (
-		_map_mode == MapRenderer.MapMode.POLITICAL
+		_map_mode in [
+			MapRenderer.MapMode.POLITICAL,
+			MapRenderer.MapMode.TRADE,
+			MapRenderer.MapMode.REGION,
+		]
 		and not _visual_region_masks.is_empty()
 	)
 	if unified_region_fill and (
@@ -1210,7 +1246,7 @@ func _update_province_visuals() -> void:
 		or _country_fill_opacity_image == null
 		or state.ownership_revision != _last_ownership_revision
 		or diplomatic_view_changed
-		or region_changed
+		or group_changed
 	)
 	var async_country_refresh := (
 		country_visuals_changed
@@ -1222,8 +1258,7 @@ func _update_province_visuals() -> void:
 			MapRenderer.build_country_fill_opacity_image_from_owners(
 				state.province_map_size,
 				state.province_ids,
-				state.administrative_region_ids
-				if region_mode else _city_owner_snapshot()
+				group_ids if group_mode else _city_owner_snapshot()
 			)
 		)
 	var output_size := (
@@ -1248,20 +1283,22 @@ func _update_province_visuals() -> void:
 		if _country_boundary_texture == null or diplomatic_view_changed:
 			if city_owners.is_empty():
 				city_owners = (
-					state.administrative_region_ids.duplicate()
-					if region_mode
+					group_ids.duplicate()
+					if group_mode
 					else _city_owner_snapshot()
 				)
 			var boundary_colors := (
-				MapRenderer.region_boundary_colors(state)
-				if region_mode
+				MapRenderer.trade_region_boundary_colors(state)
+				if trade_region_mode
+				else MapRenderer.region_boundary_colors(state)
+				if administrative_region_mode
 				else MapRenderer.country_boundary_colors(
 					state, view_nation_id
 				)
 			)
 			var gradient_colors := (
 				boundary_colors
-				if region_mode
+				if group_mode
 				else MapRenderer.country_gradient_colors(
 					state, view_nation_id
 				)
@@ -1299,21 +1336,22 @@ func _update_province_visuals() -> void:
 		else:
 			if city_owners.is_empty():
 				city_owners = (
-					state.administrative_region_ids.duplicate()
-					if region_mode
+					group_ids.duplicate()
+					if group_mode
 					else _city_owner_snapshot()
 				)
 			_queue_country_visual_rebuild(
 				geometry,
 				view_nation_id,
 				city_owners,
-				region_mode
+				group_mode
 			)
 	_terrain.set_boundary_textures(
 		_province_boundary_texture, _country_boundary_texture,
 		_country_color_texture
 	)
 	_terrain.set_unified_region_fill_enabled(unified_region_fill)
+	_terrain.set_local_boundaries_enabled(not group_mode)
 	_terrain.set_country_fill_fade_enabled(
 		view_nation_id < 0
 		and _map_mode != MapRenderer.MapMode.LOYALTY
@@ -1322,6 +1360,12 @@ func _update_province_visuals() -> void:
 	_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
 		_map_mode, _province_strength
 	))
+	if trade_region_mode:
+		_last_region_analysis_revision = state.region_analysis_revision
+	elif administrative_region_mode:
+		_last_administrative_region_revision = (
+			state.administrative_region_revision
+		)
 	# Political fill and political boundaries now share one terrain material
 	# canvas. Keep the legacy MeshInstance empty to prevent a second geometry
 	# from drifting away from the painted regions.
@@ -1372,12 +1416,24 @@ func _ensure_province_id_texture() -> void:
 
 func _update_province_visual_lut(
 	view_nation_id: int,
-	loyalty_mode: bool,
-	region_mode: bool = false
+	loyalty_mode: bool
 ) -> void:
-	var image := PROVINCE_VISUAL_LOOKUP.build_visual_lut(
-		state, view_nation_id, loyalty_mode, region_mode
+	var image := (
+		PROVINCE_VISUAL_LOOKUP.build_group_visual_lut(
+			state, state.region_ids, state.region_colors
+		)
+		if _map_mode == MapRenderer.MapMode.TRADE
+		else PROVINCE_VISUAL_LOOKUP.build_group_visual_lut(
+			state,
+			state.administrative_region_ids,
+			state.administrative_region_colors
+		)
+		if _map_mode == MapRenderer.MapMode.REGION
+		else PROVINCE_VISUAL_LOOKUP.build_visual_lut(
+			state, view_nation_id, loyalty_mode
+		)
 	)
+	_province_visual_lut_image = image
 	if (
 		_province_visual_lut_texture == null
 		or Vector2i(_province_visual_lut_texture.get_size()) != image.get_size()
@@ -1656,10 +1712,16 @@ func _build_road_mesh() -> void:
 
 
 func _build_trade_route_mesh() -> void:
-	if _trade_routes == null or _terrain == null:
+	if (
+		_trade_routes == null
+		or _trade_route_casing == null
+		or _terrain == null
+	):
 		return
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var casing_tool := SurfaceTool.new()
+	casing_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var emphasized := _map_mode == MapRenderer.MapMode.TRADE
 	for route in state.trade_routes:
 		var status := int(route.get("status", TradeNetwork.ACTIVE))
@@ -1668,16 +1730,32 @@ func _build_trade_route_mesh() -> void:
 		for map_path in MapRenderer.trade_route_map_paths(state, route):
 			if status == TradeNetwork.BLOCKED:
 				_append_dashed_draped_path(
+					casing_tool,
+					map_path,
+					width * TRADE_ROUTE_CASING_WIDTH_SCALE,
+					TRADE_ROUTE_CASING_COLOR,
+					TRADE_ROUTE_ELEVATION - 0.012
+				)
+				_append_dashed_draped_path(
 					surface_tool, map_path, width, color,
 					TRADE_ROUTE_ELEVATION
 				)
 			else:
+				_append_draped_path_ribbon(
+					casing_tool,
+					map_path,
+					width * TRADE_ROUTE_CASING_WIDTH_SCALE,
+					TRADE_ROUTE_CASING_COLOR,
+					TRADE_ROUTE_ELEVATION - 0.012
+				)
 				_append_draped_path_ribbon(
 					surface_tool, map_path, width, color,
 					TRADE_ROUTE_ELEVATION
 				)
 	_trade_routes.mesh = surface_tool.commit()
 	_trade_routes.material_override = _trade_route_material()
+	_trade_route_casing.mesh = casing_tool.commit()
+	_trade_route_casing.material_override = _trade_route_casing_material()
 	_rebuild_trade_flow_markers()
 	_apply_map_mode_visibility()
 
@@ -1901,6 +1979,13 @@ func _trade_route_material() -> StandardMaterial3D:
 	return material
 
 
+func _trade_route_casing_material() -> StandardMaterial3D:
+	var material := _line_material(false)
+	material.no_depth_test = false
+	material.render_priority = 4
+	return material
+
+
 func _apply_map_mode_visibility() -> void:
 	var trade_mode := _map_mode == MapRenderer.MapMode.TRADE
 	var city_road_visible := (
@@ -1925,6 +2010,9 @@ func _apply_map_mode_visibility() -> void:
 	if _trade_routes != null:
 		_trade_routes.visible = trade_mode
 		_trade_routes.transparency = 0.0
+	if _trade_route_casing != null:
+		_trade_route_casing.visible = trade_mode
+		_trade_route_casing.transparency = 0.0
 	if _trade_flow_markers != null:
 		_trade_flow_markers.visible = trade_mode
 	if _region_score_markers != null:
@@ -2295,7 +2383,10 @@ func _rebuild_nation_labels() -> void:
 		if is_instance_valid(label):
 			label.queue_free()
 	_nation_labels.clear()
-	if _map_mode == MapRenderer.MapMode.REGION:
+	if _map_mode in [
+		MapRenderer.MapMode.TRADE,
+		MapRenderer.MapMode.REGION,
+	]:
 		return
 	_ensure_nation_label_layout_cache()
 	for nation in state.nations:

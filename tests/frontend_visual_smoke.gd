@@ -343,9 +343,80 @@ func _run() -> void:
 	state.trade_routes[0]["status"] = TradeNetwork.ACTIVE
 	state.trade_revision += 1
 	await process_frame
+	var visual_city_atlas_before_trade := map_3d._visual_city_id_texture
 	map_3d.set_map_mode(MapRenderer.MAP_MODE_TRADE)
 	map_3d._update_city_instances()
 	await process_frame
+	var trade_lut_image := map_3d._province_visual_lut_image
+	var trade_region_id := state.region_ids[frontier.city_a]
+	var expected_trade_region_color := state.region_colors[trade_region_id]
+	expected_trade_region_color.a = 1.0
+	var trade_region_fill_contract := (
+		map_3d._visual_city_id_texture == visual_city_atlas_before_trade
+		and _color_near(
+			trade_lut_image.get_pixel(
+				frontier.city_a, ProvinceVisualLookup.BASE_ROW
+			),
+			expected_trade_region_color
+		)
+		and map_3d._nation_labels.is_empty()
+	)
+	state.region_colors[trade_region_id] = Color(0.18, 0.74, 0.66, 1.0)
+	state.region_analysis_revision += 1
+	await process_frame
+	var trade_region_revision_contract := (
+		map_3d._visual_city_id_texture == visual_city_atlas_before_trade
+		and map_3d._last_region_analysis_revision
+			== state.region_analysis_revision
+		and _color_near(
+			map_3d._province_visual_lut_image.get_pixel(
+				frontier.city_a, ProvinceVisualLookup.BASE_ROW
+			),
+			state.region_colors[trade_region_id]
+		)
+	)
+	map_3d.set_map_mode(MapRenderer.MAP_MODE_REGION)
+	var administrative_lut_image := map_3d._province_visual_lut_image
+	var administrative_region_id := (
+		state.administrative_region_ids[frontier.city_a]
+	)
+	var expected_administrative_color := (
+		state.administrative_region_colors[administrative_region_id]
+	)
+	expected_administrative_color.a = 1.0
+	var administrative_region_fill_contract := (
+		_color_near(
+			administrative_lut_image.get_pixel(
+				frontier.city_a, ProvinceVisualLookup.BASE_ROW
+			),
+			expected_administrative_color
+		)
+		and map_3d._visual_city_id_texture == visual_city_atlas_before_trade
+	)
+	state.administrative_region_colors[administrative_region_id] = Color(
+		0.72, 0.44, 0.24, 1.0
+	)
+	state.administrative_region_revision += 1
+	await process_frame
+	var administrative_region_revision_contract := (
+		map_3d._visual_city_id_texture == visual_city_atlas_before_trade
+		and map_3d._last_administrative_region_revision
+			== state.administrative_region_revision
+		and _color_near(
+			map_3d._province_visual_lut_image.get_pixel(
+				frontier.city_a, ProvinceVisualLookup.BASE_ROW
+			),
+			state.administrative_region_colors[administrative_region_id]
+		)
+	)
+	map_3d.set_map_mode(MapRenderer.MAP_MODE_TRADE)
+	var trade_route_casing_contract := (
+		map_3d._trade_route_casing != null
+		and map_3d._trade_route_casing.visible
+		and _mesh_vertex_count(
+			map_3d._trade_route_casing.mesh as ArrayMesh
+		) >= active_trade_vertices
+	)
 	var trade_node_marker_contract := (
 		map_3d._region_score_markers.visible
 		and MapRenderer.region_score_radius(2.0, 2.0, 0.28, 1.20) > 1.0
@@ -710,6 +781,7 @@ func _run() -> void:
 			and not (map_3d._trade_routes.material_override as StandardMaterial3D)
 				.no_depth_test
 		),
+		"trade_route_casing": trade_route_casing_contract,
 		"trade_flow_marker_node": (
 			map_3d._trade_flow_markers != null
 			and map_3d._trade_flow_markers.name == "TradeFlowMarkers"
@@ -729,6 +801,12 @@ func _run() -> void:
 		"trade_2d_marker_motion": trade_2d_marker_motion,
 		"political_trade_hidden": political_trade_hidden,
 		"trade_mode_visibility": trade_mode_visibility,
+		"trade_region_fill": trade_region_fill_contract,
+		"trade_region_revision": trade_region_revision_contract,
+		"administrative_region_fill": administrative_region_fill_contract,
+		"administrative_region_revision": (
+			administrative_region_revision_contract
+		),
 		"loyalty_mode_contract": loyalty_mode_contract,
 		"boundary_local_ink": boundary_local_ink,
 		"boundary_local_width": boundary_local_width,

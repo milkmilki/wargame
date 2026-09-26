@@ -59,6 +59,12 @@ static func build_visual_lut(
 	loyalty_mode: bool = false,
 	region_mode: bool = false
 ) -> Image:
+	if region_mode and game_state != null:
+		return build_group_visual_lut(
+			game_state,
+			game_state.administrative_region_ids,
+			game_state.administrative_region_colors
+		)
 	var city_count := game_state.cities.size() if game_state != null else 0
 	var image := Image.create(maxi(city_count, 1), LUT_ROWS, false, Image.FORMAT_RGBA8)
 	image.fill(Color.TRANSPARENT)
@@ -72,27 +78,6 @@ static func build_visual_lut(
 			var loyalty := MapRenderer.loyalty_color(city.loyalty)
 			image.set_pixel(city_id, BASE_ROW, loyalty)
 			image.set_pixel(city_id, GRADIENT_ROW, loyalty)
-			continue
-		if region_mode:
-			var region_id := (
-				game_state.administrative_region_ids[city_id]
-				if city_id < game_state.administrative_region_ids.size()
-				else -1
-			)
-			if (
-				region_id >= 0
-				and region_id < game_state.administrative_region_colors.size()
-			):
-				image.set_pixel(
-					city_id,
-					BASE_ROW,
-					game_state.administrative_region_colors[region_id]
-				)
-				image.set_pixel(
-					city_id,
-					GRADIENT_ROW,
-					game_state.administrative_region_colors[region_id]
-				)
 			continue
 		var current_owner := city.owner_nation
 		var recognized_owner := game_state.recognized_owner_of(city_id)
@@ -118,6 +103,31 @@ static func build_visual_lut(
 			).darkened(0.08)
 			occupation.a = 1.0
 			image.set_pixel(city_id, OCCUPATION_ROW, occupation)
+	return image
+
+
+static func build_group_visual_lut(
+	game_state: GameState,
+	group_ids: PackedInt32Array,
+	group_colors: PackedColorArray
+) -> Image:
+	var city_count := game_state.cities.size() if game_state != null else 0
+	var image := Image.create(
+		maxi(city_count, 1), LUT_ROWS, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color.TRANSPARENT)
+	if game_state == null:
+		return image
+	for city_id in range(city_count):
+		var group_id := group_ids[city_id] if city_id < group_ids.size() else -1
+		if group_id < 0 or group_id >= group_colors.size():
+			continue
+		var base := group_colors[group_id]
+		base.a = 1.0
+		var boundary := base.darkened(0.24)
+		boundary.a = 1.0
+		image.set_pixel(city_id, BASE_ROW, base)
+		image.set_pixel(city_id, GRADIENT_ROW, boundary)
 	return image
 
 
