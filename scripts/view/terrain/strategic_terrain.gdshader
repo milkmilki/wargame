@@ -199,7 +199,11 @@ void fragment() {
 	}
 	// Boundary textures are authored as hard solid strokes. Country borders and
 	// the mesh-derived 0m coast have independent LOD controls.
-	float province_alpha = province_boundary.a * province_boundary_strength
+	float atlas_region_edge = texture(visual_region_edge_texture, UV).r;
+	float visual_province_alpha = mix(
+		province_boundary.a, atlas_region_edge, unified_region_fill_enabled
+	);
+	float province_alpha = visual_province_alpha * province_boundary_strength
 		* hard_land * local_boundary_alpha;
 	float country_alpha = country_boundary.a
 		* country_boundary_strength

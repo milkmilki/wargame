@@ -43,6 +43,13 @@ func _init() -> void:
 		not map_source.contains("var unified_image := MapRenderer.build_region_fill_image_from_masks"),
 		"3D diplomacy still rebuilds the 2048 political color image"
 	) and valid
+	valid = _check(
+		shader_source.contains("visual_province_alpha = mix(")
+			and shader_source.contains(
+				"province_boundary.a, atlas_region_edge"
+			),
+		"3D province ink does not use the shared 2048 region edge"
+	) and valid
 	if not valid:
 		quit(1)
 		return
