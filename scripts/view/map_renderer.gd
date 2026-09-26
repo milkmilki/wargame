@@ -2146,8 +2146,8 @@ func _draw_rivers() -> void:
 		features = MapFeatureContract.from_legacy_river_paths(state.river_paths)
 	for feature_value in features:
 		var feature := feature_value as Dictionary
-		var river := MapFeatureContract.build_river_render_path(
-			feature, state.province_map_size, 4
+		var river := MapFeatureContract.build_high_precision_river_path(
+			feature, POLITICAL_VISUAL_SIZE
 		)
 		if river.size() < 2:
 			continue

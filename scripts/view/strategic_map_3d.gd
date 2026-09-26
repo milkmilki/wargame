@@ -1945,8 +1945,8 @@ func _build_river_mesh() -> void:
 		features = MapFeatureContract.from_legacy_river_paths(state.river_paths)
 	for feature_value in features:
 		var feature := feature_value as Dictionary
-		var render_path := MapFeatureContract.build_river_render_path(
-			feature, state.province_map_size, RIVER_RENDER_SUBDIVISIONS
+		var render_path := MapFeatureContract.build_high_precision_river_path(
+			feature, MapRenderer.POLITICAL_VISUAL_SIZE
 		)
 		_append_variable_width_river(
 			surface_tool, render_path, feature,
