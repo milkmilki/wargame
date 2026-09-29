@@ -96,6 +96,12 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-river-crossing-war.log"
 echo
 
+echo "==> [2f3/29] 渡口不生成城市区域门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/dock_city_region.gd \
+  --log-file "$LOG_DIR/world-war-dock-city-region.log"
+echo
+
 echo "==> [2g/29] 初始国家至少拥有一州门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/initial_nation_administrative_center.gd \
@@ -131,10 +137,20 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/million_army_three_year_war.gd \
   --log-file "$LOG_DIR/world-war-million-army-three-year.log"
 echo
+echo "==> [2i3b/29] 野战战报锁定与战后补兵门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_battle_report_lock.gd \
+  --log-file "$LOG_DIR/world-war-campaign-battle-report.log"
+echo
 echo "==> [2i4/29] 州战役集结、大营与连续占府门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_camp_ai.gd \
   --log-file "$LOG_DIR/world-war-campaign-camp.log"
+echo
+echo "==> [2i4a/29] 州治野战失败撤营重整门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_center_defeat_regroup.gd \
+  --log-file "$LOG_DIR/world-war-campaign-center-defeat-regroup.log"
 echo
 echo "==> [2i5/29] 战前集结与宣战先手门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \

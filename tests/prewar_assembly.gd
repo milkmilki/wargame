@@ -227,12 +227,12 @@ func _init() -> void:
 		"mobilization_armies": 0,
 		"reason": "集结完成后宣战",
 	})
-	var plan := state.campaign_plan(0, center_id)
+	var plan := state.campaign_front_for(0, center_id)
 	var war_id := state.war_id_between(0, 1)
 	_check(declared and war_id >= 0 and plan != null, "集结完成后必须成功创建正式战争与州计划")
 	_check(
 		plan != null
-		and plan.phase == AdministrativeCampaignPlan.Phase.BREAK_IN
+		and plan.phase == CoalitionCampaignFront.Phase.BREAK_IN
 		and plan.staging_city_id == staging_id
 		and plan.tactical_target_city_ids == [entry_id],
 		"宣战当日（包括360天尽力宣战）必须继承入口与集结点并直接进入BREAK_IN（phase=%s staging=%s targets=%s entry=%d C=%d need=%d assignments=%s）" % [

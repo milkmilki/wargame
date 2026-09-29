@@ -60,16 +60,16 @@ func _arriving_attacker(data: Dictionary, id: int, size: int) -> Army:
 func _init() -> void:
 	var valid := true
 	valid = valid and MapRenderer.campaign_phase_text(
-		AdministrativeCampaignPlan.Mode.OFFENSE,
-		AdministrativeCampaignPlan.Phase.RAID_FU
+		CoalitionCampaignFront.Mode.OFFENSE,
+		CoalitionCampaignFront.Phase.RAID_FU
 	) == "进攻·大营分遣占府"
 	valid = valid and MapRenderer.campaign_phase_text(
-		AdministrativeCampaignPlan.Mode.DEFENSE,
-		AdministrativeCampaignPlan.Phase.HOLD_AND_REINFORCE
+		CoalitionCampaignFront.Mode.DEFENSE,
+		CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE
 	) == "防守·驻守并等待增援"
 	valid = valid and MapRenderer.campaign_phase_text(
-		AdministrativeCampaignPlan.Mode.DEFENSE,
-		AdministrativeCampaignPlan.Phase.SORTIE
+		CoalitionCampaignFront.Mode.DEFENSE,
+		CoalitionCampaignFront.Phase.SORTIE
 	) == "防守·出城迎击敌军"
 
 	# 驻城野战军先单独交战，虚拟守军本轮不得出现或受损。

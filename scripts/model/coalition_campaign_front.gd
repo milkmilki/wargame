@@ -1,7 +1,7 @@
-class_name AdministrativeCampaignPlan
+class_name CoalitionCampaignFront
 extends RefCounted
-## 单个行政州战区的持久状态。一个国家可同时维护多个州计划，但一支军队只能
-## 出现在其中一个计划的 army_assignments 中。
+## 一个战争连通分量共享的州级战线。军队保留国家所有权，但同一支军队只能
+## 通过 campaign_front_id 绑定到一条战线。
 
 enum Mode {
 	OFFENSE,
@@ -20,10 +20,12 @@ enum Phase {
 	SORTIE,
 }
 
+var front_id: int = -1
 var center_city_id: int = -1
 var war_id: int = -1
+var participant_nation_ids: Array[int] = []
+var anchor_nation_id: int = -1
 var mode: int = Mode.OFFENSE
-var opponent_nation_id: int = -1
 var phase: int = Phase.ASSEMBLE
 var staging_city_id: int = -1
 var camp_city_id: int = -1
@@ -35,6 +37,12 @@ var administrative_region_revision: int = -1
 var garrison_revision: int = -1
 var road_network_revision: int = -1
 var had_forces: bool = false
+## 野战期间的调兵认知快照。真实伤亡始终写入 Army.size，
+## 只有战争级分配器在 locked=true 时读取这两个值。
+var reported_effective_manpower: int = 0
+var reported_requirement: int = 0
+var combat_report_locked: bool = false
+var combat_report_day: int = -1
 
 
 func fingerprint_matches(state: GameState) -> bool:
@@ -52,3 +60,10 @@ func refresh_fingerprint(state: GameState) -> void:
 	administrative_region_revision = state.administrative_region_revision
 	garrison_revision = state.garrison_revision
 	road_network_revision = state.road_network_revision
+
+
+func reset_combat_report() -> void:
+	reported_effective_manpower = 0
+	reported_requirement = 0
+	combat_report_locked = false
+	combat_report_day = -1

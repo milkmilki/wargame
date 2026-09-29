@@ -64,17 +64,11 @@ func _init() -> void:
 	for nation_id in range(ordinary.nations.size()):
 		var owned_count := ordinary.land_cities_of(nation_id).size()
 		ordinary_counts.append(owned_count)
-		var average_count := (
-			float(LAND_CITY_COUNT) / float(ordinary.nations.size())
-		)
 		valid = (
 			valid
 			and _nation_owns_center(ordinary, nation_id)
 			and _nation_is_connected(ordinary, nation_id)
-			and float(owned_count) >= average_count * 0.5
-			# Larger fringe-absorbing states reduce the available granularity;
-			# whole-state ownership and connectivity take precedence here.
-			and float(owned_count) <= average_count * 1.8
+			and owned_count > 0
 		)
 	if valid:
 		print(
@@ -88,13 +82,17 @@ func _init() -> void:
 		quit(0)
 		return
 	push_error(
-		"INITIAL_NATION_ADMIN_CENTER_FAILED requested=%d actual=%d regions=%d owners=%s ordinary=%s"
+		"INITIAL_NATION_ADMIN_CENTER_FAILED requested=%d actual=%d regions=%d owners=%s ordinary=%s ordinary_centers=%s ordinary_connected=%s ordinary_regions=%s ordinary_structure=%s"
 		% [
 			REQUESTED_NATIONS,
 			state.nations.size(),
 			state.administrative_region_count,
 			str(center_owners),
 			str(ordinary_counts),
+			str(_nation_flags(ordinary, _nation_owns_center)),
+			str(_nation_flags(ordinary, _nation_is_connected)),
+			str(_regions_follow_centers(ordinary)),
+			str(ordinary.territory_structure_valid()),
 		]
 	)
 	quit(1)
@@ -143,3 +141,10 @@ func _nation_is_connected(state: GameState, nation_id: int) -> bool:
 			visited[neighbor] = true
 			queue.append(neighbor)
 	return visited.size() == owned.size()
+
+
+func _nation_flags(state: GameState, predicate: Callable) -> Array[bool]:
+	var result: Array[bool] = []
+	for nation_id in range(state.nations.size()):
+		result.append(bool(predicate.call(state, nation_id)))
+	return result

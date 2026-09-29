@@ -31,7 +31,8 @@ var allows_holding: bool = true            ## 水路禁止驻边，军队只能�
 var max_height_difference: float = 0.0     ## 两城连线上最高点与最低点之差 [0,1]
 var land_ratio: float = 1.0                ## 连线采样中位于陆地的比例 [0,1]
 var map_path: PackedVector2Array = PackedVector2Array() ## 归一化地图折线；空=端点直线
-var is_backbone: bool = false              ## 最小连通骨架边不可被运行时调参封闭
+var is_backbone: bool = false              ## 生成时的最小连通骨架；普通骨架仍服从运行时地形上限
+var is_terrain_connector: bool = false     ## 严格高差筛选后连接孤立陆地区域的最小兜底边
 var base_max_manpower: int = STANDARD_MANPOWER ## 运行时容量倍率的稳定基准
 var occupied: bool = false                 ## 是否被占用（passing_count>0 时为真）
 

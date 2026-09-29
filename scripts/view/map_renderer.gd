@@ -2234,7 +2234,8 @@ func _ensure_province_visual_cache() -> void:
 		not _province_cache_ready
 		or _boundary_topology.is_empty()
 		or _province_topology_ids != state.province_ids
-		or _visual_city_seed_signature != _city_seed_signature(state)
+		or _visual_city_seed_signature
+			!= MAP_VISUAL_ATLAS.visual_city_seed_signature(state)
 	)
 	if topology_changed:
 		_boundary_topology = build_province_boundary_topology(state)
@@ -2255,12 +2256,7 @@ func _ensure_province_visual_cache() -> void:
 		var height_image := (
 			height_texture.get_image() if height_texture != null else null
 		)
-		var visual_seeds: Array[Dictionary] = []
-		for city in state.cities:
-			visual_seeds.append({
-				"city_id": city.id,
-				"position": city.map_position,
-			})
+		var visual_seeds := MAP_VISUAL_ATLAS.visual_city_seeds(state)
 		var visual_regions := VISUAL_WEIGHTED_VORONOI.build_visual_city_ids(
 			height_image, visual_seeds, MAP_VISUAL_ATLAS.SIZE
 		)
@@ -2282,7 +2278,9 @@ func _ensure_province_visual_cache() -> void:
 				"coast_mask": _region_coast_mask,
 			}
 		)
-		_visual_city_seed_signature = _city_seed_signature(state)
+		_visual_city_seed_signature = (
+			MAP_VISUAL_ATLAS.visual_city_seed_signature(state)
+		)
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
@@ -3569,19 +3567,6 @@ static func build_province_boundary_segments(
 	return classify_province_boundary_topology(
 		game_state, build_province_boundary_topology(game_state)
 	)
-
-
-func _city_seed_signature(game_state: GameState) -> int:
-	if game_state == null:
-		return 0
-	var signature: Array = []
-	for city in game_state.cities:
-		signature.append([
-			city.id,
-			snappedf(city.map_position.x, 0.000001),
-			snappedf(city.map_position.y, 0.000001),
-		])
-	return hash(signature)
 
 
 static func _build_visual_edge_masks(
@@ -6499,25 +6484,25 @@ static func nation_action_summary(
 				requirement,
 			]
 		)
-	elif (
-		include_campaign_summary
-		and not nation.administrative_campaign_plans.is_empty()
-	):
+	elif include_campaign_summary:
+		var campaign_fronts := game_state.campaign_fronts_for_nation(nation_id)
+		if campaign_fronts.is_empty():
+			campaign_fronts = [] as Array[CoalitionCampaignFront]
 		var war_ids := {}
-		for plan_value in nation.administrative_campaign_plans.values():
-			var plan := plan_value as AdministrativeCampaignPlan
+		for plan in campaign_fronts:
 			if plan != null and plan.war_id >= 0:
 				war_ids[plan.war_id] = true
-		actions.append(
+		if not campaign_fronts.is_empty():
+			actions.append(
 			"%d场战争、%d个州级战役，当前重点%s" % [
 				war_ids.size(),
-				nation.administrative_campaign_plans.size(),
+				campaign_fronts.size(),
 				WorldNaming.city_display_name(
 					game_state,
-					nation.campaign_objective_center_city
+					game_state.campaign_objective_center(nation_id)
 				),
 			]
-		)
+			)
 	if nation.ai_last_force_day >= 0:
 		actions.append(
 			"第%d日军务：%s" % [
@@ -6542,27 +6527,27 @@ static func nation_action_summary(
 
 static func campaign_phase_text(mode: int, phase: int) -> String:
 	match phase:
-		AdministrativeCampaignPlan.Phase.ASSEMBLE:
+		CoalitionCampaignFront.Phase.ASSEMBLE:
 			return "进攻·在州外集结"
-		AdministrativeCampaignPlan.Phase.BREAK_IN:
+		CoalitionCampaignFront.Phase.BREAK_IN:
 			return "进攻·全军攻取入口府"
-		AdministrativeCampaignPlan.Phase.RAID_FU:
+		CoalitionCampaignFront.Phase.RAID_FU:
 			return "进攻·大营分遣占府"
-		AdministrativeCampaignPlan.Phase.RECALL_CAMP:
+		CoalitionCampaignFront.Phase.RECALL_CAMP:
 			return "进攻·全军回援大营"
-		AdministrativeCampaignPlan.Phase.HOLD_CAMP:
+		CoalitionCampaignFront.Phase.HOLD_CAMP:
 			return "进攻·驻营等待增援"
-		AdministrativeCampaignPlan.Phase.ASSAULT_CENTER:
+		CoalitionCampaignFront.Phase.ASSAULT_CENTER:
 			return "进攻·攻击州治"
-		AdministrativeCampaignPlan.Phase.CLEANUP:
+		CoalitionCampaignFront.Phase.CLEANUP:
 			return "进攻·以州治为营肃清属府"
-		AdministrativeCampaignPlan.Phase.HOLD_AND_REINFORCE:
+		CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE:
 			return "防守·驻守并等待增援"
-		AdministrativeCampaignPlan.Phase.SORTIE:
+		CoalitionCampaignFront.Phase.SORTIE:
 			return "防守·出城迎击敌军"
 	return (
 		"防守·重新规划"
-		if mode == AdministrativeCampaignPlan.Mode.DEFENSE
+		if mode == CoalitionCampaignFront.Mode.DEFENSE
 		else "进攻·重新规划"
 	)
 
@@ -7330,10 +7315,7 @@ static func _nation_war_detail_line_count(
 		var war_id := game_state.war_id_between(nation_id, int(enemy_value))
 		if war_id >= 0:
 			war_flags[war_id] = true
-	for plan_value in game_state.nations[
-		nation_id
-	].administrative_campaign_plans.values():
-		var plan := plan_value as AdministrativeCampaignPlan
+	for plan in game_state.campaign_fronts_for_nation(nation_id):
 		if plan == null:
 			continue
 		var plan_lines := _nation_campaign_detail_line_count(plan)
@@ -7355,10 +7337,10 @@ static func _nation_war_detail_line_count(
 
 
 static func _nation_campaign_detail_line_count(
-	campaign: AdministrativeCampaignPlan
+	campaign: CoalitionCampaignFront
 ) -> int:
 	var count := 2
-	if campaign.mode != AdministrativeCampaignPlan.Mode.OFFENSE:
+	if campaign.mode != CoalitionCampaignFront.Mode.OFFENSE:
 		return count
 	if campaign.staging_city_id >= 0:
 		count += 1
@@ -7622,8 +7604,9 @@ static func city_detail_sections(
 		var committed := game_state.campaign_committed_manpower(
 			attacker_id, administrative_center
 		)
-		var active_plan := game_state.campaign_plan(
-			attacker_id, administrative_center
+		var active_plan: CoalitionCampaignFront = game_state.campaign_front_for(
+			attacker_id, administrative_center,
+			CoalitionCampaignFront.Mode.OFFENSE
 		)
 		var war_text := (
 			"战争%d" % (active_plan.war_id + 1)
@@ -7663,42 +7646,43 @@ static func city_detail_sections(
 		active_campaign_found = true
 		break
 	if not active_campaign_found:
-		for nation in game_state.nations:
-			var plan := game_state.campaign_plan(
-				nation.id, administrative_center
-			)
+		for plan_value in game_state.campaign_fronts.values():
+			var plan := plan_value as CoalitionCampaignFront
 			if plan == null:
 				continue
+			if plan.center_city_id != administrative_center:
+				continue
+			var nation_id := plan.anchor_nation_id
 			var defensive := (
-				plan.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+				plan.mode == CoalitionCampaignFront.Mode.DEFENSE
 			)
 			var committed := (
 				game_state.campaign_defensive_committed_manpower(
-					nation.id, administrative_center
+					nation_id, administrative_center
 				)
 				if defensive
 				else game_state.campaign_committed_manpower(
-					nation.id, administrative_center
+					nation_id, administrative_center
 				)
 			)
 			var requirement := (
 				game_state.campaign_field_requirement(
-					nation.id, administrative_center
+					nation_id, administrative_center
 				)
 				if defensive
 				else game_state.campaign_siege_requirement(
-					nation.id, administrative_center
+					nation_id, administrative_center
 				) + game_state.campaign_reinforcement_threat(
-					nation.id, administrative_center
+					nation_id, administrative_center
 				)
 			)
 			var offensive_lines: Array[String] = []
 			if not defensive:
 				var staging_c := _campaign_effective_force_at_city(
-					game_state, nation.id, plan, plan.staging_city_id
+					game_state, nation_id, plan, plan.staging_city_id
 				)
 				var camp_c := _campaign_effective_force_at_city(
-					game_state, nation.id, plan, plan.camp_city_id
+					game_state, nation_id, plan, plan.camp_city_id
 				)
 				if plan.staging_city_id >= 0:
 					offensive_lines.append(
@@ -7709,7 +7693,7 @@ static func city_detail_sections(
 							),
 							staging_c,
 							game_state.campaign_minimum_launch_requirement(
-								nation.id, administrative_center
+								nation_id, administrative_center
 							),
 						]
 					)
@@ -7894,10 +7878,11 @@ static func edge_detail_lines(
 			edge.distance,
 			Simulation.edge_travel_days(edge),
 		],
-		"容量 %d   危险 %.0f%%   高差 %.2f" % [
+		"容量 %d   危险 %.0f%%   高差 %.2f%s" % [
 			edge.max_manpower,
 			edge.danger * 100.0,
 			edge.max_height_difference,
+			"   地形连通线" if edge.is_terrain_connector else "",
 		],
 		"粮损倍率 %.2f   通行军队 %d   %s" % [
 			edge.supply_loss_multiplier,
@@ -8035,27 +8020,19 @@ static func _nation_war_detail_sections(
 	if nation_id < 0 or nation_id >= game_state.nations.size():
 		return result
 	var plans_by_war := {}
-	var temporary_plans: Array[AdministrativeCampaignPlan] = []
+	var temporary_plans: Array[CoalitionCampaignFront] = []
 	var war_flags := {}
 	for enemy_value in game_state.wars_of(nation_id):
 		var war_id := game_state.war_id_between(nation_id, int(enemy_value))
 		if war_id >= 0:
 			war_flags[war_id] = true
-	var centers: Array[int] = []
-	centers.assign(
-		game_state.nations[nation_id].administrative_campaign_plans.keys()
-	)
-	EquivariantOrder.sort_city_ids(centers, game_state, nation_id)
-	for center_id in centers:
-		var plan := game_state.campaign_plan(nation_id, center_id)
-		if plan == null:
-			continue
+	for plan in game_state.campaign_fronts_for_nation(nation_id):
 		if plan.war_id < 0:
 			temporary_plans.append(plan)
 			continue
 		war_flags[plan.war_id] = true
 		if not plans_by_war.has(plan.war_id):
-			plans_by_war[plan.war_id] = [] as Array[AdministrativeCampaignPlan]
+			plans_by_war[plan.war_id] = [] as Array[CoalitionCampaignFront]
 		(plans_by_war[plan.war_id] as Array).append(plan)
 	var war_ids: Array[int] = []
 	for war_value in war_flags:
@@ -8067,8 +8044,8 @@ static func _nation_war_detail_sections(
 			war_id + 1,
 			_nation_id_list_text(game_state, enemy_ids),
 		]
-		var report := game_state.campaign_war_force_report(
-			nation_id, war_id
+		var report: Dictionary = game_state.coalition_campaign_allocation(
+			war_id, nation_id
 		)
 		var lines: Array[String] = [
 			"军队池：总兵力%d · 当前可战%d · 可调预备%d" % [
@@ -8084,7 +8061,7 @@ static func _nation_war_detail_sections(
 			for plan_value in plans:
 				lines.append_array(_nation_campaign_detail_lines(
 					game_state, nation_id,
-					plan_value as AdministrativeCampaignPlan, report
+					plan_value as CoalitionCampaignFront, report
 				))
 		result.append({"title": title, "lines": lines})
 	if not temporary_plans.is_empty():
@@ -8100,32 +8077,34 @@ static func _nation_war_detail_sections(
 static func _nation_campaign_detail_lines(
 	game_state: GameState,
 	nation_id: int,
-	campaign: AdministrativeCampaignPlan,
+	campaign: CoalitionCampaignFront,
 	war_force_report: Dictionary
 ) -> Array[String]:
 	var lines: Array[String] = []
 	var front_force: Dictionary = (
 		(war_force_report.get("fronts", {}) as Dictionary).get(
-			campaign.center_city_id, {}
+			campaign.front_id, {}
 		)
 	)
 	var committed := (
 		game_state.campaign_defensive_committed_manpower(
 			nation_id, campaign.center_city_id
 		)
-		if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+		if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
 		else int(front_force.get("assigned_effective", 0))
 	)
 	var assigned_total := int(front_force.get("assigned_total", committed))
 	var active_offensive_siege: Battle = null
-	if campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE:
+	if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE:
 		for battle in game_state.battles:
 			if (
 				not battle.finished
 				and battle.kind == Battle.Kind.SIEGE
 				and battle.city != null
 				and battle.city.id == campaign.center_city_id
-				and battle.siege_attacker_nation == nation_id
+				and campaign.participant_nation_ids.has(
+					battle.siege_attacker_nation
+				)
 			):
 				active_offensive_siege = battle
 				break
@@ -8133,7 +8112,7 @@ static func _nation_campaign_detail_lines(
 		game_state.campaign_field_requirement(
 			nation_id, campaign.center_city_id
 		)
-		if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+		if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
 		else game_state.campaign_siege_requirement(
 			nation_id, campaign.center_city_id
 		) + (
@@ -8152,7 +8131,7 @@ static func _nation_campaign_detail_lines(
 			committed,
 			(
 				"出城迎击需要"
-				if campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+				if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
 				else "向州治推进需要"
 			),
 			requirement,
@@ -8186,7 +8165,15 @@ static func _nation_campaign_detail_lines(
 		action_text,
 	])
 	lines.append(force_text)
-	if campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE:
+	if campaign.combat_report_locked:
+		lines.append(
+			"战报：野战中，尚未更新 · 调度战报兵力%d · 调兵需求%d"
+			% [
+				campaign.reported_effective_manpower,
+				campaign.reported_requirement,
+			]
+		)
+	if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE:
 		if campaign.staging_city_id >= 0:
 			lines.append("集结：%s · 到场%d · 最低出发%d（G+V）" % [
 				WorldNaming.city_display_name(
@@ -8223,7 +8210,7 @@ static func _nation_campaign_detail_lines(
 static func _campaign_effective_force_at_city(
 	game_state: GameState,
 	nation_id: int,
-	plan: AdministrativeCampaignPlan,
+	plan: CoalitionCampaignFront,
 	city_id: int
 ) -> int:
 	if city_id < 0:

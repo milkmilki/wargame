@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 13
+const SCHEMA_VERSION: int = 14
 
 
 static func build(state: GameState) -> Dictionary:
@@ -24,6 +24,7 @@ static func build(state: GameState) -> Dictionary:
 		"next_army_id": state._next_army_id,
 		"next_battle_id": state._next_battle_id,
 		"next_war_id": state.next_war_id,
+		"next_campaign_front_id": state.next_campaign_front_id,
 		"winner": state.winner,
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,
@@ -34,6 +35,7 @@ static func build(state: GameState) -> Dictionary:
 		"edges": edges_and_indices["snapshot"],
 		"armies": armies_and_indices["snapshot"],
 		"battles": battles,
+		"campaign_fronts": _build_campaign_fronts(state),
 	}
 
 
@@ -69,21 +71,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var war_preparation_started_day := PackedInt32Array()
 	var war_preparation_army_offsets := PackedInt32Array([0])
 	var war_preparation_army_ids := PackedInt32Array()
-	var campaign_objective_center := PackedInt32Array()
-	var campaign_offsets := PackedInt32Array([0])
-	var campaign_centers := PackedInt32Array()
-	var campaign_modes := PackedInt32Array()
-	var campaign_war_ids := PackedInt32Array()
-	var campaign_opponents := PackedInt32Array()
-	var campaign_phases := PackedInt32Array()
-	var campaign_staging_city_ids := PackedInt32Array()
-	var campaign_camp_city_ids := PackedInt32Array()
-	var campaign_failed_until_day := PackedInt32Array()
-	var campaign_tactical_offsets := PackedInt32Array([0])
-	var campaign_tactical_city_ids := PackedInt32Array()
-	var campaign_assignment_offsets := PackedInt32Array([0])
-	var campaign_assignment_army_ids := PackedInt32Array()
-	var campaign_assignment_targets := PackedInt32Array()
 	var alive := PackedByteArray()
 	for nation in state.nations:
 		ids.append(nation.id)
@@ -152,41 +139,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 		war_preparation_army_offsets.append(
 			war_preparation_army_ids.size()
 		)
-		campaign_objective_center.append(
-			nation.campaign_objective_center_city
-		)
-		var center_values := nation.administrative_campaign_plans.keys()
-		center_values.sort()
-		for center_value in center_values:
-			var center_id := int(center_value)
-			var plan := state.campaign_plan(nation.id, center_id)
-			if plan == null:
-				continue
-			campaign_centers.append(center_id)
-			campaign_modes.append(plan.mode)
-			campaign_war_ids.append(plan.war_id)
-			campaign_opponents.append(plan.opponent_nation_id)
-			campaign_phases.append(plan.phase)
-			campaign_staging_city_ids.append(plan.staging_city_id)
-			campaign_camp_city_ids.append(plan.camp_city_id)
-			campaign_failed_until_day.append(plan.failed_until_day)
-			for tactical_city_id in plan.tactical_target_city_ids:
-				campaign_tactical_city_ids.append(tactical_city_id)
-			campaign_tactical_offsets.append(
-				campaign_tactical_city_ids.size()
-			)
-			var army_ids := plan.army_assignments.keys()
-			army_ids.sort()
-			for army_id_value in army_ids:
-				var army_id := int(army_id_value)
-				campaign_assignment_army_ids.append(army_id)
-				campaign_assignment_targets.append(int(
-					plan.army_assignments[army_id]
-				))
-			campaign_assignment_offsets.append(
-				campaign_assignment_army_ids.size()
-			)
-		campaign_offsets.append(campaign_centers.size())
 		alive.append(int(nation.alive))
 
 	var diplomacy := PackedByteArray()
@@ -261,21 +213,6 @@ static func _build_nations(state: GameState) -> Dictionary:
 			war_preparation_started_day,
 		"war_preparation_army_offsets": war_preparation_army_offsets,
 		"war_preparation_army_ids": war_preparation_army_ids,
-		"campaign_objective_center": campaign_objective_center,
-		"campaign_offsets": campaign_offsets,
-		"campaign_centers": campaign_centers,
-		"campaign_modes": campaign_modes,
-		"campaign_war_ids": campaign_war_ids,
-		"campaign_opponents": campaign_opponents,
-		"campaign_phases": campaign_phases,
-		"campaign_staging_city_ids": campaign_staging_city_ids,
-		"campaign_camp_city_ids": campaign_camp_city_ids,
-		"campaign_failed_until_day": campaign_failed_until_day,
-		"campaign_tactical_offsets": campaign_tactical_offsets,
-		"campaign_tactical_city_ids": campaign_tactical_city_ids,
-		"campaign_assignment_offsets": campaign_assignment_offsets,
-		"campaign_assignment_army_ids": campaign_assignment_army_ids,
-		"campaign_assignment_targets": campaign_assignment_targets,
 		"alive": alive,
 		"diplomacy": diplomacy,
 		"diplomacy_since_day": diplomacy_since_day,
@@ -363,6 +300,7 @@ static func _build_edges(state: GameState) -> Dictionary:
 	var travel_multiplier := PackedFloat64Array()
 	var supply_multiplier := PackedFloat64Array()
 	var allows_holding := PackedByteArray()
+	var terrain_connector := PackedByteArray()
 	var occupied := PackedByteArray()
 	var passing_count := PackedInt32Array()
 	var indices := {}
@@ -378,6 +316,7 @@ static func _build_edges(state: GameState) -> Dictionary:
 		travel_multiplier.append(edge.travel_time_multiplier)
 		supply_multiplier.append(edge.supply_loss_multiplier)
 		allows_holding.append(int(edge.allows_holding))
+		terrain_connector.append(int(edge.is_terrain_connector))
 		occupied.append(int(edge.occupied))
 		passing_count.append(edge.passing_count)
 	return {
@@ -393,9 +332,92 @@ static func _build_edges(state: GameState) -> Dictionary:
 			"travel_multiplier": travel_multiplier,
 			"supply_multiplier": supply_multiplier,
 			"allows_holding": allows_holding,
+			"terrain_connector": terrain_connector,
 			"occupied": occupied,
 			"passing_count": passing_count,
 		},
+	}
+
+
+static func _build_campaign_fronts(state: GameState) -> Dictionary:
+	var front_ids := PackedInt32Array()
+	var war_ids := PackedInt32Array()
+	var modes := PackedInt32Array()
+	var centers := PackedInt32Array()
+	var anchors := PackedInt32Array()
+	var phases := PackedInt32Array()
+	var staging_cities := PackedInt32Array()
+	var camp_cities := PackedInt32Array()
+	var failed_until_days := PackedInt32Array()
+	var reported_effective_manpower := PackedInt32Array()
+	var reported_requirements := PackedInt32Array()
+	var combat_report_locked := PackedByteArray()
+	var combat_report_days := PackedInt32Array()
+	var participant_offsets := PackedInt32Array([0])
+	var participant_ids := PackedInt32Array()
+	var tactical_offsets := PackedInt32Array([0])
+	var tactical_city_ids := PackedInt32Array()
+	var assignment_offsets := PackedInt32Array([0])
+	var assignment_army_ids := PackedInt32Array()
+	var assignment_targets := PackedInt32Array()
+	var ids: Array = state.campaign_fronts.keys()
+	ids.sort()
+	for front_id_value in ids:
+		var front := state.campaign_front(int(front_id_value))
+		if front == null:
+			continue
+		front_ids.append(front.front_id)
+		war_ids.append(front.war_id)
+		modes.append(front.mode)
+		centers.append(front.center_city_id)
+		anchors.append(front.anchor_nation_id)
+		phases.append(front.phase)
+		staging_cities.append(front.staging_city_id)
+		camp_cities.append(front.camp_city_id)
+		failed_until_days.append(front.failed_until_day)
+		reported_effective_manpower.append(
+			front.reported_effective_manpower
+		)
+		reported_requirements.append(front.reported_requirement)
+		combat_report_locked.append(1 if front.combat_report_locked else 0)
+		combat_report_days.append(front.combat_report_day)
+		participant_ids.append_array(PackedInt32Array(
+			front.participant_nation_ids
+		))
+		participant_offsets.append(participant_ids.size())
+		tactical_city_ids.append_array(PackedInt32Array(
+			front.tactical_target_city_ids
+		))
+		tactical_offsets.append(tactical_city_ids.size())
+		var army_ids: Array = front.army_assignments.keys()
+		army_ids.sort()
+		for army_id_value in army_ids:
+			var army_id := int(army_id_value)
+			assignment_army_ids.append(army_id)
+			assignment_targets.append(int(front.army_assignments[army_id]))
+		assignment_offsets.append(assignment_army_ids.size())
+	return {
+		"count": front_ids.size(),
+		"front_ids": front_ids,
+		"war_ids": war_ids,
+		"modes": modes,
+		"centers": centers,
+		"anchors": anchors,
+		"phases": phases,
+		"staging_cities": staging_cities,
+		"camp_cities": camp_cities,
+		"failed_until_days": failed_until_days,
+		"reported_effective_manpower": reported_effective_manpower,
+		"reported_requirements": reported_requirements,
+		"combat_report_locked": combat_report_locked,
+		"combat_report_days": combat_report_days,
+		"participant_offsets": participant_offsets,
+		"participant_ids": participant_ids,
+		"tactical_offsets": tactical_offsets,
+		"tactical_city_ids": tactical_city_ids,
+		"assignment_offsets": assignment_offsets,
+		"assignment_army_ids": assignment_army_ids,
+		"assignment_targets": assignment_targets,
 	}
 
 
@@ -414,6 +436,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 	var move_to := PackedInt32Array()
 	var battle_id := PackedInt32Array()
 	var campaign_war_id := PackedInt32Array()
+	var campaign_front_id := PackedInt32Array()
 	var path_offsets := PackedInt32Array([0])
 	var path_cities := PackedInt32Array()
 	var path_cursor := PackedInt32Array()
@@ -458,6 +481,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 		move_to.append(army.move_to)
 		battle_id.append(army.battle_id)
 		campaign_war_id.append(army.campaign_war_id)
+		campaign_front_id.append(army.campaign_front_id)
 		path_cities.append_array(PackedInt32Array(army.path))
 		path_offsets.append(path_cities.size())
 		path_cursor.append(0)
@@ -514,6 +538,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"move_to": move_to,
 			"battle_id": battle_id,
 			"campaign_war_id": campaign_war_id,
+			"campaign_front_id": campaign_front_id,
 			"path_offsets": path_offsets,
 			"path_cities": path_cities,
 			"path_cursor": path_cursor,

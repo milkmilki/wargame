@@ -113,6 +113,7 @@ static func from_state(state: GameState) -> Dictionary:
 			"land_ratio": edge.land_ratio,
 			"map_path": edge_map_path,
 			"is_backbone": edge.is_backbone,
+			"is_terrain_connector": edge.is_terrain_connector,
 		})
 	var exported_river_features: Array = (
 		state.river_features

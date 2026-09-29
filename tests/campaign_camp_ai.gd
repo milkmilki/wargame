@@ -47,14 +47,13 @@ func _init() -> void:
 		attackers.append(army)
 	state.ownership_revision += 1
 	state.refresh_derived()
-	var plan := AdministrativeCampaignPlan.new()
-	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
 	plan.war_id = war_id
-	plan.opponent_nation_id = defender_id
 	plan.center_city_id = center_id
 	for army in attackers:
 		plan.army_assignments[army.id] = center_id
-	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
 	var sim := Simulation.new()
 	sim.setup(state)
 
@@ -62,37 +61,29 @@ func _init() -> void:
 		state.campaign_minimum_launch_requirement(attacker_id, center_id) == 27000,
 		"最低出发兵力必须等于虚拟守军G加州内有效敌军V"
 	)
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
+	sim._manage_administrative_campaign(plan)
 	entry_id = int(plan.tactical_target_city_ids[0])
 	staging_id = plan.staging_city_id
-	_check(plan.phase == AdministrativeCampaignPlan.Phase.ASSEMBLE, "未到齐时必须继续集结")
+	_check(plan.phase == CoalitionCampaignFront.Phase.ASSEMBLE, "未到齐时必须继续集结")
 	_check(staging_id >= 0, "计划必须记录真实入口集结点")
 	_check(_all_assigned_to(plan, attackers, staging_id), "集结阶段所有战区军必须前往同一集结点")
 
 	for army in attackers:
 		_place_idle(army, staging_id)
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
-	_check(plan.phase == AdministrativeCampaignPlan.Phase.BREAK_IN, "到场C达到G+V后必须进入破口")
+	sim._manage_administrative_campaign(plan)
+	_check(plan.phase == CoalitionCampaignFront.Phase.BREAK_IN, "到场C达到G+V后必须进入破口")
 	_check(_all_assigned_to(plan, attackers, entry_id), "破口时全军必须攻击同一入口府")
 	defender.size = 30000
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
-	_check(plan.phase == AdministrativeCampaignPlan.Phase.BREAK_IN, "发动后V上升不得退回集结")
+	sim._manage_administrative_campaign(plan)
+	_check(plan.phase == CoalitionCampaignFront.Phase.BREAK_IN, "发动后V上升不得退回集结")
 
 	defender.size = 12000
 	state.cities[entry_id].owner_nation = attacker_id
 	state.ownership_revision += 1
 	for army in attackers:
 		_place_idle(army, entry_id)
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
-	_check(plan.phase == AdministrativeCampaignPlan.Phase.RAID_FU, "入口府易手后必须建立大营并分遣占府")
+	sim._manage_administrative_campaign(plan)
+	_check(plan.phase == CoalitionCampaignFront.Phase.RAID_FU, "入口府易手后必须建立大营并分遣占府")
 	_check(plan.camp_city_id == entry_id, "入口府必须成为大营")
 	_check(plan.tactical_target_city_ids.size() <= 2, "同时最多只能有两个属府目标")
 	_check(
@@ -108,9 +99,7 @@ func _init() -> void:
 	reinforcement.campaign_war_id = war_id
 	state.armies.append(reinforcement)
 	plan.army_assignments[reinforcement.id] = center_id
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
+	sim._manage_administrative_campaign(plan)
 	_check(int(plan.army_assignments.get(reinforcement.id, -1)) == entry_id, "新增援军必须默认前往大营")
 
 	if not plan.tactical_target_city_ids.is_empty():
@@ -122,9 +111,7 @@ func _init() -> void:
 				_place_idle(army, captured_target)
 		state.cities[captured_target].owner_nation = attacker_id
 		state.ownership_revision += 1
-		sim._manage_administrative_campaign(
-			attacker_id, center_id, null, null, defender_id, war_id
-		)
+		sim._manage_administrative_campaign(plan)
 		if not group_ids.is_empty():
 			var next_target := int(plan.army_assignments.get(group_ids[0], -1))
 			for army_id in group_ids:
@@ -144,8 +131,10 @@ func _init() -> void:
 	_place_idle(defender, sortie_origin)
 	for index in range(8):
 		state.armies.append(_army(941460 + index, defender_id, sortie_origin, 15000))
-	sim._manage_administrative_defense(defender_id, center_id, null, null)
-	var defense_plan := state.campaign_plan(defender_id, center_id)
+	for _cycle in range(3):
+		sim._manage_coalition_campaigns()
+		state.day += Simulation.AI_DECISION_INTERVAL_DAYS
+	var defense_plan := state.campaign_front_for(defender_id, center_id)
 	_check(
 		sim._ai_forced_nations.has(attacker_id),
 		"防守军攻击大营后必须强制进攻方在下一日重算（阶段%s，目标%s）" % [
@@ -155,32 +144,28 @@ func _init() -> void:
 	)
 	for army in attackers + [reinforcement]:
 		_place_idle(army, int(plan.army_assignments.get(army.id, entry_id)))
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
-	_check(plan.phase == AdministrativeCampaignPlan.Phase.RECALL_CAMP, "大营受威胁时必须进入全军回援")
+	sim._manage_administrative_campaign(plan)
+	_check(plan.phase == CoalitionCampaignFront.Phase.RECALL_CAMP, "大营受威胁时必须进入全军回援")
 	for army in attackers + [reinforcement]:
 		_check(int(plan.army_assignments.get(army.id, -1)) == entry_id, "回援阶段所有空闲分遣军必须转向大营")
 
 	state.cities[entry_id].owner_nation = defender_id
 	state.ownership_revision += 1
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
+	sim._manage_administrative_campaign(plan)
 	_check(plan.camp_city_id == -1, "大营失守后必须清除大营状态")
 	_check(plan.failed_until_day == state.day + 60, "大营失守后必须进入60天失败冷却")
 
-	var nations: Dictionary = NativeSnapshotBuilder.build(state)["nations"]
-	var plan_index := (nations["campaign_centers"] as PackedInt32Array).find(center_id)
+	var fronts: Dictionary = NativeSnapshotBuilder.build(state)["campaign_fronts"]
+	var plan_index := (fronts["front_ids"] as PackedInt32Array).find(plan.front_id)
 	_check(plan_index >= 0, "原生快照必须包含州计划")
 	if plan_index >= 0:
 		_check(
-			int((nations["campaign_staging_city_ids"] as PackedInt32Array)[plan_index])
+			int((fronts["staging_cities"] as PackedInt32Array)[plan_index])
 				== plan.staging_city_id,
 			"原生快照必须记录集结点"
 		)
 		_check(
-			int((nations["campaign_camp_city_ids"] as PackedInt32Array)[plan_index])
+			int((fronts["camp_cities"] as PackedInt32Array)[plan_index])
 				== plan.camp_city_id,
 			"原生快照必须记录大营"
 		)
@@ -291,23 +276,20 @@ func _test_blocked_fu_fallback(
 		_enable_edge(state, center_id, isolated_staging_id)
 		_enable_edge(state, target_id, isolated_staging_id)
 	state.road_network_revision += 1
-	var plan := AdministrativeCampaignPlan.new()
-	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-	plan.phase = AdministrativeCampaignPlan.Phase.RAID_FU
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.phase = CoalitionCampaignFront.Phase.RAID_FU
 	plan.war_id = war_id
-	plan.opponent_nation_id = defender_id
 	plan.center_city_id = center_id
 	plan.camp_city_id = camp_id
 	for army in attackers:
 		plan.army_assignments[army.id] = camp_id
-	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
+	sim._manage_administrative_campaign(plan)
 	var label := "不可达前沿府" if unreachable_frontier else "无前沿府"
 	if army_count >= 4:
 		_check(
-			plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER,
+			plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
 			"%s且C满足R+V时必须改攻州治，不能卡在占府阶段" % label
 		)
 		_check(
@@ -316,7 +298,7 @@ func _test_blocked_fu_fallback(
 		)
 	else:
 		_check(
-			plan.phase == AdministrativeCampaignPlan.Phase.HOLD_CAMP,
+			plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP,
 			"%s且C不足R+V时必须驻营等待" % label
 		)
 		_check(
@@ -390,26 +372,23 @@ func _test_two_hop_camp_assault() -> void:
 		army.campaign_war_id = war_id
 		state.armies.append(army)
 		attackers.append(army)
-	var plan := AdministrativeCampaignPlan.new()
-	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-	plan.phase = AdministrativeCampaignPlan.Phase.RAID_FU
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.phase = CoalitionCampaignFront.Phase.RAID_FU
 	plan.war_id = war_id
-	plan.opponent_nation_id = defender_id
 	plan.center_city_id = center_id
 	plan.camp_city_id = camp_id
 	for army in attackers:
 		plan.army_assignments[army.id] = camp_id
-	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
 	state.ownership_revision += 1
 	state.refresh_derived()
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
-	sim._manage_administrative_campaign(
-		attacker_id, center_id, null, null, defender_id, war_id
-	)
+	sim._manage_administrative_campaign(plan)
 	_check(
-		plan.phase == AdministrativeCampaignPlan.Phase.ASSAULT_CENTER,
+		plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
 		"清府后大营距州治两跳时必须进入攻州治阶段"
 	)
 	for army in attackers:
@@ -479,7 +458,7 @@ func _place_idle(army: Army, city_id: int) -> void:
 
 
 func _all_assigned_to(
-	plan: AdministrativeCampaignPlan,
+	plan: CoalitionCampaignFront,
 	armies: Array[Army],
 	city_id: int
 ) -> bool:
@@ -490,7 +469,7 @@ func _all_assigned_to(
 
 
 func _assigned_manpower(
-	plan: AdministrativeCampaignPlan,
+	plan: CoalitionCampaignFront,
 	armies: Array[Army],
 	city_id: int
 ) -> int:

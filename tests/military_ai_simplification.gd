@@ -99,7 +99,7 @@ func _test_campaign_bounds() -> void:
 func _test_stable_campaign_plan_reuse() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(91003)
-	var plan := AdministrativeCampaignPlan.new()
+	var plan := CoalitionCampaignFront.new()
 	plan.center_city_id = int(state.administrative_center_city_ids[0])
 	plan.refresh_fingerprint(state)
 	var reusable := plan.fingerprint_matches(state)
@@ -151,42 +151,37 @@ func _test_defender_counteroffensive_transition() -> void:
 		GameState.INITIAL_HEAVY_ARMY_SIZE,
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
-	var stale_plan := AdministrativeCampaignPlan.new()
+	var stale_plan := CoalitionCampaignFront.new()
 	stale_plan.center_city_id = state.administrative_center_of(
 		state.nations[attacker_id].capital_city_id
 	)
 	stale_plan.army_assignments[defender_army.id] = stale_plan.center_city_id
-	state.nations[defender_id].administrative_campaign_plans[
-		stale_plan.center_city_id
-	] = stale_plan
-	state.nations[defender_id].campaign_objective_center_city = (
-		stale_plan.center_city_id
+	state.register_campaign_front(
+		stale_plan, [defender_id] as Array[int], defender_id
 	)
 	defender_army.path = [stale_plan.center_city_id] as Array[int]
 	defender_army.ai_target_city = stale_plan.center_city_id
 	var sim := Simulation.new()
 	sim.setup(state)
-	sim._manage_campaign_offensive(defender_id)
-	var defense_campaign := state.campaign_plan(defender_id, target_center)
+	sim._manage_coalition_campaigns()
+	var defense_campaign := state.campaign_front_for(defender_id, target_center)
 	var stale_plan_suspended := (
-		state.campaign_plan(defender_id, stale_plan.center_city_id) == null
+		state.campaign_front_for(defender_id, stale_plan.center_city_id) == null
 		and defense_campaign != null
-		and defense_campaign.mode == AdministrativeCampaignPlan.Mode.DEFENSE
-		and defense_campaign.phase == AdministrativeCampaignPlan.Phase.SORTIE
+		and defense_campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
+		and defense_campaign.phase == CoalitionCampaignFront.Phase.SORTIE
 		and defense_campaign.army_assignments.has(defender_army.id)
 		and defense_campaign.army_assignments.has(defender_reserve.id)
 	)
 	invader.location_city = state.nations[attacker_id].capital_city_id
 	invader.move_from = invader.location_city
-	sim._manage_campaign_offensive(defender_id)
+	state.day += Simulation.AI_DECISION_INTERVAL_DAYS
+	sim._manage_coalition_campaigns()
 	var counteroffensive_created := false
-	for center_value in state.nations[
-		defender_id
-	].administrative_campaign_plans:
-		var campaign := state.campaign_plan(defender_id, int(center_value))
+	for campaign in state.campaign_fronts_for_nation(defender_id):
 		if (
 			campaign != null
-			and campaign.mode == AdministrativeCampaignPlan.Mode.OFFENSE
+			and campaign.mode == CoalitionCampaignFront.Mode.OFFENSE
 		):
 			counteroffensive_created = true
 			break

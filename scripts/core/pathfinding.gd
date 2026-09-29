@@ -344,6 +344,35 @@ static func strategic_retreat_city(
 	return reconstruct(field["prev"], start, goal)
 
 
+## 战役重整专用：从敌方交战点精确撤回指定的友方大营。沿途仍只允许经过
+## 有军事通行权且未被围的节点；目标失效或不可达时由调用方退回通用撤退。
+static func retreat_route_to_city(
+	state: GameState,
+	army: Army,
+	goal_city_id: int,
+	excluded_city_id: int = -1
+) -> Array[int]:
+	var start := _origin_of(army)
+	if (
+		start < 0 or start >= state.cities.size()
+		or goal_city_id < 0 or goal_city_id >= state.cities.size()
+		or goal_city_id == excluded_city_id
+		or state.city_under_siege(goal_city_id)
+		or not state.has_military_access(
+			army.owner_nation,
+			state.cities[goal_city_id].owner_nation
+		)
+	):
+		return [] as Array[int]
+	var blocked := state.besieged_city_ids()
+	blocked.erase(start)
+	var field := dijkstra_field(
+		state, start, army.owner_nation, false, true, goal_city_id,
+		army.max_size, blocked
+	)
+	return reconstruct(field["prev"], start, goal_city_id)
+
+
 ## 外交遣返专用：可穿越任意国家的正容量道路，但终点只能是本国城市。
 static func nearest_home_city_for_repatriation(
 	state: GameState,

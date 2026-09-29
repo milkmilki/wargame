@@ -76,7 +76,7 @@ static func build_revision(game_state: GameState) -> Dictionary:
 		"topology": hash([
 			game_state.province_map_size,
 			game_state.province_ids,
-			_city_seed_signature(game_state),
+			visual_city_seed_signature(game_state),
 		]),
 		"ownership": game_state.ownership_revision,
 		"diplomacy": game_state.diplomacy_revision,
@@ -85,9 +85,29 @@ static func build_revision(game_state: GameState) -> Dictionary:
 	}
 
 
-static func _city_seed_signature(game_state: GameState) -> int:
-	var signature: Array = []
+## Docks are transport nodes, not territorial city regions. Their icons and
+## hit targets remain independent from the land-area atlas.
+static func visual_city_seeds(game_state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if game_state == null:
+		return result
 	for city in game_state.cities:
+		if city.is_dock:
+			continue
+		result.append({
+			"city_id": city.id,
+			"position": city.map_position,
+		})
+	return result
+
+
+static func visual_city_seed_signature(game_state: GameState) -> int:
+	var signature: Array = []
+	if game_state == null:
+		return hash(signature)
+	for city in game_state.cities:
+		if city.is_dock:
+			continue
 		signature.append([
 			city.id,
 			snappedf(city.map_position.x, 0.000001),

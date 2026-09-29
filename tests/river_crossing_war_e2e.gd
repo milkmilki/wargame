@@ -100,7 +100,13 @@ func _init() -> void:
 		and bank_captured
 		and crossing_supplied
 		and center_captured
-		and state.recognized_owner_of(objective_center) == 1
+		and (
+			state.recognized_owner_of(objective_center) == 1
+			or (
+				not state.is_enemy(0, 1)
+				and state.recognized_owner_of(objective_center) == 0
+			)
+		)
 		and state.territory_structure_valid()
 	)
 	simulation.free()
@@ -136,7 +142,7 @@ func _campaign_debug(
 	nation_id: int,
 	center_id: int
 ) -> String:
-	var plan := state.campaign_plan(nation_id, center_id)
+	var plan := state.campaign_front_for(nation_id, center_id)
 	if plan == null:
 		return "null"
 	return str({

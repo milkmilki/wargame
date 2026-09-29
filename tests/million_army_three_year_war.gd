@@ -51,13 +51,11 @@ func _init() -> void:
 			if not report_error.is_empty():
 				_fail(simulation, "day=%d %s" % [state.day, report_error])
 				return
-			var report := state.campaign_war_force_report(
-				nation_id, war_id
-			)
+			var report := state.coalition_campaign_allocation(war_id, nation_id)
 			if int(report["war_pool_total"]) > 0:
 				positive_pool_days[nation_id] += 1
 			observed_campaign = observed_campaign or not (
-				state.nations[nation_id].administrative_campaign_plans.is_empty()
+				state.campaign_fronts_for_nation(nation_id).is_empty()
 			)
 		for army in state.armies:
 			if army.owner_nation not in NATIONS or army.size <= 0:
@@ -118,8 +116,8 @@ func _build_fixture() -> GameState:
 			state.set_diplomatic_relation(
 				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
 			)
+	state.clear_campaign_fronts()
 	for nation in state.nations:
-		nation.administrative_campaign_plans.clear()
 		nation.battle_groups.clear()
 		nation.capital_city_id = -1
 		nation.warehouse_city_ids.clear()
@@ -144,6 +142,11 @@ func _build_fixture() -> GameState:
 		city.food_storage = 0
 		if state.administrative_center_city_ids.has(city.id):
 			city.garrison_manpower = 15000
+	# 本夹具验证百万级战争池和共享战线，不把普通道路吞吐量当作测试变量。
+	# 提高容量后仍保留真实寻路、行军、补给、战斗和占领结算。
+	for edge in state.edges:
+		edge.max_manpower = 2000000
+		edge.base_max_manpower = 2000000
 	var centers := [
 		_extreme_center(state, 0, false),
 		_extreme_center(state, 1, true),
@@ -190,125 +193,97 @@ func _war_report_error(
 	nation_id: int,
 	war_id: int
 ) -> String:
-	var first := state.campaign_war_force_report(nation_id, war_id)
-	var second := state.campaign_war_force_report(nation_id, war_id)
+	var first := state.coalition_campaign_allocation(war_id, nation_id)
+	var second := state.coalition_campaign_allocation(war_id, nation_id)
 	if first != second:
 		return "nation=%d same-day report changed" % nation_id
-	var assigned_plans := {}
-	var expected_fronts := {}
-	var duplicate_assignments := 0
-	for plan_value in state.nations[
-		nation_id
-	].administrative_campaign_plans.values():
-		var plan := plan_value as AdministrativeCampaignPlan
-		if plan == null:
-			continue
-		if plan.war_id == war_id:
-			expected_fronts[plan.center_city_id] = {
-				"assigned_total": 0,
-				"assigned_effective": 0,
-			}
-		for army_id_value in plan.army_assignments:
-			var army_id := int(army_id_value)
-			if assigned_plans.has(army_id):
-				duplicate_assignments += 1
-				continue
-			assigned_plans[army_id] = plan
-	var expected_pool_total := 0
-	var expected_pool_effective := 0
-	var national_total := 0
+	if int(first.get("duplicate_assignments", 0)) != 0:
+		return "nation=%d duplicate assignments" % nation_id
+	var members: Array[int] = first.get("component_members", [])
+	var expected_total := 0
+	var expected_effective := 0
 	for army in state.armies:
-		if army.owner_nation != nation_id or army.size <= 0:
+		if army.size <= 0 or not members.has(army.owner_nation):
 			continue
-		national_total += army.size
-		var effective := state.army_effective_for_field_campaign(army)
+		if army.campaign_front_id >= 0:
+			var front := state.campaign_front(army.campaign_front_id)
+			if front == null or not front.army_assignments.has(army.id):
+				return "army=%d stale front binding" % army.id
+			if army.campaign_war_id != front.war_id:
+				return "army=%d front/war binding mismatch" % army.id
 		if army.campaign_war_id == war_id:
-			expected_pool_total += army.size
-			if effective:
-				expected_pool_effective += army.size
-		var assigned_plan := assigned_plans.get(
-			army.id
-		) as AdministrativeCampaignPlan
-		if assigned_plan == null or assigned_plan.war_id != war_id:
-			continue
-		if army.campaign_war_id != war_id:
-			return (
-				"nation=%d army=%d front/war binding mismatch"
-				% [nation_id, army.id]
-			)
-		var front: Dictionary = expected_fronts[assigned_plan.center_city_id]
-		front["assigned_total"] = int(front["assigned_total"]) + army.size
-		if effective:
-			front["assigned_effective"] = (
-				int(front["assigned_effective"]) + army.size
-			)
-	if duplicate_assignments != 0:
-		return "nation=%d duplicate assignments=%d" % [
-			nation_id, duplicate_assignments,
-		]
-	if (
-		int(first["duplicate_assignments"]) != 0
-		or int(first["war_pool_total"]) != expected_pool_total
-		or int(first["war_pool_effective"]) != expected_pool_effective
-		or expected_pool_effective > expected_pool_total
-		or expected_pool_total > national_total
-	):
-		return (
-			"nation=%d pool mismatch report=%d/%d expected=%d/%d national=%d"
-			% [
-				nation_id,
-				int(first["war_pool_total"]),
-				int(first["war_pool_effective"]),
-				expected_pool_total,
-				expected_pool_effective,
-				national_total,
-			]
-		)
-	var reported_fronts: Dictionary = first["fronts"]
-	if reported_fronts.size() != expected_fronts.size():
-		return "nation=%d front count changed report=%d expected=%d" % [
-			nation_id, reported_fronts.size(), expected_fronts.size(),
-		]
-	for center_value in expected_fronts:
-		var center_id := int(center_value)
-		var expected: Dictionary = expected_fronts[center_id]
-		var actual: Dictionary = reported_fronts.get(center_id, {})
-		if (
-			int(actual.get("assigned_total", -1))
-				!= int(expected["assigned_total"])
-			or int(actual.get("assigned_effective", -1))
-				!= int(expected["assigned_effective"])
-		):
-			return "nation=%d center=%d front mismatch actual=%s expected=%s" % [
-				nation_id, center_id, str(actual), str(expected),
-			]
+			expected_total += army.size
+			if state.army_effective_for_field_campaign(army):
+				expected_effective += army.size
+	if int(first["war_pool_total"]) != expected_total:
+		return "nation=%d pool total mismatch" % nation_id
+	if int(first["war_pool_effective"]) != expected_effective:
+		return "nation=%d effective pool mismatch" % nation_id
 	return ""
 
 
 func _active_battle_count(state: GameState) -> int:
-	var count := 0
+	var result := 0
 	for battle in state.battles:
 		if not battle.finished:
-			count += 1
-	return count
+			result += 1
+	return result
 
 
 func _print_year(state: GameState, war_id: int) -> void:
-	var chunks: Array[String] = []
+	var reports: Array[Dictionary] = []
 	for nation_id in NATIONS:
-		var report := state.campaign_war_force_report(nation_id, war_id)
-		chunks.append("N%d total=%d pool=%d effective=%d fronts=%d" % [
-			nation_id,
-			_nation_manpower(state, nation_id),
-			int(report["war_pool_total"]),
-			int(report["war_pool_effective"]),
-			(report["fronts"] as Dictionary).size(),
-		])
-	print("MILLION_WAR_YEAR year=%d %s" % [
-		state.day / Simulation.DAYS_PER_YEAR,
-		" | ".join(chunks),
-	])
-
+		var allocation := state.coalition_campaign_allocation(
+			war_id, nation_id
+		)
+		var front_rows: Array[Dictionary] = []
+		for front_id_value in (allocation["fronts"] as Dictionary):
+			var front_id := int(front_id_value)
+			var front_report: Dictionary = allocation["fronts"][front_id]
+			var front := state.campaign_front(front_id)
+			var at_target := 0
+			if front != null:
+				for army in state.armies:
+					if (
+						army.campaign_front_id == front_id
+						and not army.on_edge
+						and army.location_city == int(
+							front.army_assignments.get(army.id, -1)
+						)
+					):
+						at_target += army.size
+			front_rows.append({
+				"center": int(front_report["center_id"]),
+				"mode": int(front_report["mode"]),
+				"phase": front.phase if front != null else -1,
+				"staging": front.staging_city_id if front != null else -1,
+				"requirement": (
+					maxi(
+						Simulation.CAMPAIGN_MIN_FRONT_MANPOWER,
+						state.campaign_siege_requirement(
+							front.anchor_nation_id, front.center_city_id
+						) + state.campaign_reinforcement_threat(
+							front.anchor_nation_id, front.center_city_id
+						)
+					)
+					if front != null
+					and front.mode == CoalitionCampaignFront.Mode.OFFENSE
+					else 0
+				),
+				"assigned": int(front_report["assigned_effective"]),
+				"arrived": int(front_report["arrived_effective"]),
+				"at_target": at_target,
+			})
+		reports.append({
+			"nation": nation_id,
+			"total": int(allocation["war_pool_total"]),
+			"effective": int(allocation["war_pool_effective"]),
+			"fronts": front_rows,
+		})
+	print(
+		"MILLION_WAR_YEAR day=%d battles=%d reports=%s"
+		% [state.day, _active_battle_count(state), str(reports)]
+	)
 
 func _nation_manpower(state: GameState, nation_id: int) -> int:
 	var total := 0

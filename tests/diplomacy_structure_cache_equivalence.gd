@@ -160,7 +160,6 @@ func _nation_fp(nation: Nation) -> String:
 		nation.alive, nation.treasury_gold, nation.manpower_pool,
 		nation.granary_food, nation.war_preparation_target_nation,
 		nation.war_preparation_objective_city,
-		nation.campaign_objective_center_city,
 	])
 
 

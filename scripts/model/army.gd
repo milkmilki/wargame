@@ -32,6 +32,8 @@ var ruler_morale_multiplier: float = 1.0
 var battle_group_id: int = -1
 ## 所属战争军队池；-1 表示国家预备队。州目标变化不清除此绑定。
 var campaign_war_id: int = -1
+## 所属集团州战线；-1 表示只在战争池或国家预备队中。直接保存以避免反查计划。
+var campaign_front_id: int = -1
 
 var location_city: int = -1                ## 静止时所在城市；行军时为出发城
 var state: int = State.IDLE

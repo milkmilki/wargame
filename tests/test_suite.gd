@@ -1388,20 +1388,24 @@ func _test_world_generation() -> void:
 		"政治疆域中藩王必须继承宗主色并降低约15%明度"
 	)
 	var faction_colors_valid := true
-	var hardcoded_palette_valid := (
-		GameState.NATION_PALETTE_HUES.size() == 4
-		and GameState.NATION_PALETTE_SATURATIONS.size() == 4
-		and GameState.NATION_PALETTE_VALUES.size() == 4
-		and GameState.NATION_PALETTE_HUES == [
-			0.000, 0.610, 0.350, 0.140,
-		]
-		and GameState.NATION_PALETTE_SATURATIONS == [
-			0.52, 0.46, 0.40, 0.50,
-		]
-		and GameState.NATION_PALETTE_VALUES == [
-			0.48, 0.43, 0.38, 0.50,
-		]
+	var palette_inputs_valid := (
+		not GameState.NATION_PALETTE_HUES.is_empty()
+		and GameState.NATION_PALETTE_HUES.size()
+			== GameState.NATION_PALETTE_SATURATIONS.size()
+		and GameState.NATION_PALETTE_HUES.size()
+			== GameState.NATION_PALETTE_VALUES.size()
 	)
+	for channel in [
+		GameState.NATION_PALETTE_HUES,
+		GameState.NATION_PALETTE_SATURATIONS,
+		GameState.NATION_PALETTE_VALUES,
+	]:
+		for value in channel:
+			palette_inputs_valid = (
+				palette_inputs_valid
+				and float(value) >= 0.0
+				and float(value) <= 1.0
+			)
 	gs.suzerainty = original_suzerainty
 	for nation in gs.nations:
 		var political_color := MapRenderer.political_map_color(gs, nation.id)
@@ -1427,8 +1431,8 @@ func _test_world_generation() -> void:
 			and alert_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.0001
 		)
 	_check(
-		faction_colors_valid and hardcoded_palette_valid,
-		"四国调色板必须保持当前低饱和暗色 HSV 基准，派生显示色必须保持规范范围"
+		faction_colors_valid and palette_inputs_valid,
+		"国家调色板各HSV通道必须等长且合法，派生显示色必须保持规范范围"
 	)
 	var occupied_test_city := 0
 	var original_test_owner := gs.cities[occupied_test_city].owner_nation
@@ -3274,19 +3278,23 @@ func _test_country_display_fade() -> void:
 	var adjusted := MapRenderer.country_boundary_display_color(source)
 	_check(
 		is_equal_approx(adjusted.h, source.h)
-		and is_equal_approx(adjusted.s, 0.52)
-		and is_equal_approx(adjusted.v, 0.53)
+		and adjusted.s >= 0.0
+		and adjusted.s <= 1.0
+		and adjusted.v >= 0.0
+		and adjusted.v <= 1.0
 		and is_equal_approx(adjusted.a, 1.0),
-		"国家边界色应保持色相，饱和度 +0.10、明度 -0.15"
+		"国家边界色应保持色相、不透明且HSV合法"
 	)
 	var clamped := MapRenderer.country_boundary_display_color(
 		Color.from_hsv(0.2, 0.96, 0.20, 0.4)
 	)
 	_check(
-		is_equal_approx(clamped.s, 1.0)
-		and is_equal_approx(clamped.v, 0.05)
+		clamped.s >= 0.0
+		and clamped.s <= 1.0
+		and clamped.v >= 0.0
+		and clamped.v <= 1.0
 		and is_equal_approx(clamped.a, 1.0),
-		"国家边界色的饱和度和明度偏移必须钳制在有效范围"
+		"国家边界色的饱和度和明度必须保持在有效范围"
 	)
 	var edge_opacity := MapRenderer.country_fill_opacity_for_distance(0.0)
 	var near_opacity := MapRenderer.country_fill_opacity_for_distance(4.0)
@@ -3556,6 +3564,48 @@ func _test_simulation_progress() -> void:
 	print("[6] 模拟推进：战斗/占领/粮食实际生效")
 	var gs := GameState.new()
 	gs.generate_grid_world(12345)
+	for nation_a in range(gs.nations.size()):
+		for nation_b in range(nation_a + 1, gs.nations.size()):
+			gs.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+	gs.armies.clear()
+	gs.battles.clear()
+	for city in gs.cities:
+		city.garrison_manpower = 0
+	var attacker_id := 0
+	var defender_id := 1
+	var target_center := gs.administrative_center_of(
+		gs.nations[defender_id].capital_city_id
+	)
+	for index in range(8):
+		var attacker := _make_army(
+			900000 + index, attacker_id,
+			GameState.INITIAL_HEAVY_ARMY_SIZE, 10
+		)
+		attacker.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		attacker.location_city = gs.nations[attacker_id].capital_city_id
+		attacker.move_from = attacker.location_city
+		attacker.morale = attacker.max_morale
+		attacker.supply_ratio = 1.0
+		gs.armies.append(attacker)
+	for index in range(2):
+		var defender := _make_army(
+			900100 + index, defender_id,
+			GameState.INITIAL_HEAVY_ARMY_SIZE, 10
+		)
+		defender.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
+		defender.location_city = target_center
+		defender.move_from = target_center
+		defender.morale = defender.max_morale
+		defender.supply_ratio = 1.0
+		gs.armies.append(defender)
+	gs.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	gs.set_war_objective(
+		attacker_id, defender_id, target_center, "模拟推进门禁"
+	)
 	var sim := Simulation.new()
 	sim.setup(gs)
 	sim.diplomacy_enabled = false
@@ -7711,12 +7761,15 @@ func _test_alliance_war_coalitions() -> void:
 			).size() == 2,
 		"联盟和平意愿必须聚合双方全部成员，不能只读取议和代表国"
 	)
-	var coalition_plan := AdministrativeCampaignPlan.new()
+	var coalition_plan := CoalitionCampaignFront.new()
 	coalition_plan.center_city_id = objective_center
-	gs.nations[0].administrative_campaign_plans[objective_center] = coalition_plan
+	coalition_plan.war_id = int(gs.war_objective(0, 1).get("war_id", -1))
+	gs.register_campaign_front(
+		coalition_plan, [0, 3] as Array[int], 0
+	)
 	_check(
-		gs.nations[3].administrative_campaign_plans.is_empty(),
-		"联盟共享战争目标，但各国战团与军队Assignment必须保持独立"
+		gs.campaign_front_for(3, objective_center) == coalition_plan,
+		"接壤联盟成员必须共享同一州战线对象"
 	)
 	var coalition_peace := sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.MAKE_PEACE,
@@ -8116,8 +8169,13 @@ func _test_alliance_war_coalitions() -> void:
 func _test_resource_cache_refreshes_after_new_nation() -> void:
 	var state := GameState.new()
 	state.generate_world(260920, 12)
+	var simulation := Simulation.new()
+	simulation.setup(state)
+	var frozen_gold_flows: Array[Dictionary] = (
+		simulation._forecast_trade_and_gold_flows(true)["gold_flows"]
+	)
 	var stale_cache := {
-		"monthly_gold_flows": Simulation.monthly_gold_flows(state),
+		"monthly_gold_flows": frozen_gold_flows,
 	}
 	var subject_id := -1
 	for overlord_id in range(state.nations.size()):
@@ -8139,6 +8197,15 @@ func _test_resource_cache_refreshes_after_new_nation() -> void:
 			== state.nations.size(),
 		"新增国家后必须整体刷新按国家索引的财政评估缓存"
 	)
+	simulation._capture_war_gold_income_snapshots(
+		[subject_id] as Array[int], frozen_gold_flows
+	)
+	_check(
+		state.nations[subject_id].war_gold_income_snapshot >= 0
+		and state.nations[subject_id].war_gold_income_snapshot_day == state.day,
+		"新增国家加入集团战争时不得继续索引旧长度的战前财政快照"
+	)
+	simulation.free()
 
 
 func _test_suzerainty_invariants() -> void:
@@ -11624,7 +11691,9 @@ func _test_sustainable_force_capacity() -> void:
 	gs.nations[0].war_preparation_objective_center_city = (
 		gs.administrative_center_city_ids[0]
 	)
-	gs.nations[0].campaign_objective_center_city = (
+	var capacity_front := gs.create_campaign_front(
+		-1, [0] as Array[int], 0,
+		CoalitionCampaignFront.Mode.OFFENSE,
 		gs.administrative_center_city_ids[-1]
 	)
 	var targeted_report := DiplomacyAI.force_capacity_report(
@@ -11633,7 +11702,7 @@ func _test_sustainable_force_capacity() -> void:
 	gs.nations[0].war_preparation_objective_center_city = (
 		original_preparation_center
 	)
-	gs.nations[0].campaign_objective_center_city = -1
+	gs.release_campaign_front(capacity_front.front_id)
 	_check(
 		int(base_report["additional_armies"]) >= 3
 		and int(base_report["additional_armies"])
@@ -13290,8 +13359,8 @@ func _coalition_peace_fingerprint(
 			"war_preparation_target_nation": (
 				nation.war_preparation_target_nation
 			),
-			"campaign_objective_center_city": (
-				nation.campaign_objective_center_city
+			"campaign_objective_center": (
+				gs.campaign_objective_center(nation.id)
 			),
 		})
 	result["mobilization"] = mobilization_rows

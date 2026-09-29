@@ -27,6 +27,8 @@ const RIVER_BANK_IDEAL_DISTANCE: float = 0.020
 const RIVER_BANK_MAX_DISTANCE: float = 0.060
 const MAX_LOCAL_EDGE_LENGTH: float = 0.30
 const ROAD_SAMPLE_COUNT: int = 48
+const ROAD_MINIMUM_LAND_RATIO: float = 0.90
+const ROAD_MAXIMUM_HEIGHT_DIFFERENCE: float = 0.20
 const RIVER_COUNT: int = 2
 const RIVER_DOCK_LOWLAND_ALTITUDE: float = 0.18
 const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
@@ -1512,6 +1514,18 @@ static func _build_roads(
 			return cost_a < cost_b
 		return _pair_key(int(a["a"]), int(a["b"])) < _pair_key(int(b["a"]), int(b["b"]))
 	)
+	var legal_candidates: Array[Dictionary] = []
+	var connector_candidates: Array[Dictionary] = []
+	for candidate in candidates:
+		if float(candidate["land_ratio"]) < ROAD_MINIMUM_LAND_RATIO:
+			continue
+		if (
+			float(candidate["height_difference"])
+				<= ROAD_MAXIMUM_HEIGHT_DIFFERENCE
+		):
+			legal_candidates.append(candidate)
+		else:
+			connector_candidates.append(candidate)
 	var selected: Array[Dictionary] = []
 	var selected_keys := {}
 	var parent: Array[int] = []
@@ -1520,26 +1534,51 @@ static func _build_roads(
 		parent[city_id] = city_id
 	# 省份对偶图可能因海岛分成多个陆地区域；每个区域各自生成一棵
 	# 最小骨架树，区域之间交给海运/登陆系统，不制造假陆路。
-	for candidate in candidates:
+	for candidate in legal_candidates:
 		var root_a := _root(parent, int(candidate["a"]))
 		var root_b := _root(parent, int(candidate["b"]))
 		if root_a == root_b:
 			continue
 		parent[root_b] = root_a
 		candidate["backbone"] = true
+		candidate["terrain_connector"] = false
 		selected.append(candidate)
 		selected_keys[_pair_key(int(candidate["a"]), int(candidate["b"]))] = true
 
-	for candidate in candidates:
+	# Strict terrain filtering can leave a mountain city or a small highland
+	# component outside the ordinary road forest. Connect those components with
+	# the shortest available land candidates only after every legal edge has
+	# been considered, so relief exceptions remain explicit and minimal.
+	connector_candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var length_a := float(a["length"])
+		var length_b := float(b["length"])
+		if not is_equal_approx(length_a, length_b):
+			return length_a < length_b
+		var relief_a := float(a["height_difference"])
+		var relief_b := float(b["height_difference"])
+		if not is_equal_approx(relief_a, relief_b):
+			return relief_a < relief_b
+		return _pair_key(int(a["a"]), int(a["b"])) < _pair_key(int(b["a"]), int(b["b"]))
+	)
+	for candidate in connector_candidates:
+		var root_a := _root(parent, int(candidate["a"]))
+		var root_b := _root(parent, int(candidate["b"]))
+		if root_a == root_b:
+			continue
+		parent[root_b] = root_a
+		candidate["backbone"] = true
+		candidate["terrain_connector"] = true
+		selected.append(candidate)
+		selected_keys[_pair_key(int(candidate["a"]), int(candidate["b"]))] = true
+
+	for candidate in legal_candidates:
 		var key := _pair_key(int(candidate["a"]), int(candidate["b"]))
 		if selected_keys.has(key):
 			continue
-		if (
-			float(candidate["land_ratio"]) < 0.90
-			or float(candidate["length"]) > MAX_LOCAL_EDGE_LENGTH
-		):
+		if float(candidate["length"]) > MAX_LOCAL_EDGE_LENGTH:
 			continue
 		candidate["backbone"] = false
+		candidate["terrain_connector"] = false
 		selected.append(candidate)
 		selected_keys[key] = true
 	selected.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -1562,6 +1601,8 @@ static func _build_roads(
 			else Edge.TERRAIN_LOW_MANPOWER
 		)
 		road["max_manpower"] = max_manpower
+		if bool(road.get("terrain_connector", false)):
+			road["max_manpower"] = Edge.TERRAIN_LOW_MANPOWER
 		if bool(road.get("backbone", false)):
 			road["max_manpower"] = maxi(
 				int(road["max_manpower"]),
@@ -2442,6 +2483,7 @@ static func _build_boundary_river_transport(
 	var river_groups := {}
 	var lowland_dock_regions: Array[Dictionary] = []
 	var dock_bank_regions: Array[Dictionary] = []
+	var all_dock_candidates: Array[Dictionary] = []
 	var initial_owners := _initial_nation_owner_by_position(
 		positions, initial_nation_count
 	)
@@ -2452,6 +2494,10 @@ static func _build_boundary_river_transport(
 			city_count + docks.size(), map_aspect_ratio, initial_owners
 		)
 		var river_docks: Array = selection["docks"]
+		for candidate_value in selection["candidates"]:
+			all_dock_candidates.append(
+				(candidate_value as Dictionary).duplicate(true)
+			)
 		for candidate_value in selection["lowland_regions"]:
 			lowland_dock_regions.append(
 				(candidate_value as Dictionary).duplicate(true)
@@ -2465,9 +2511,15 @@ static func _build_boundary_river_transport(
 			docks.append(dock)
 		river_groups[river_id] = river_docks
 
-	var roads: Array[Dictionary] = []
 	var river_pair_keys: Dictionary = boundary_rivers["river_pair_keys"]
 	var normalized_river_paths: Array[PackedVector2Array] = boundary_rivers["paths"]
+	_append_isolated_city_docks(
+		image, base_roads, positions, normalized_river_paths,
+		river_pair_keys, all_dock_candidates, river_groups, docks,
+		occupied_positions, city_count, map_aspect_ratio,
+		dock_bank_regions, lowland_dock_regions
+	)
+	var roads: Array[Dictionary] = []
 	for road in base_roads:
 		var kind := int(road.get("kind", Edge.Kind.LAND))
 		var pair_key := _pair_key(int(road["a"]), int(road["b"]))
@@ -2565,6 +2617,93 @@ static func _build_boundary_river_transport(
 		"lowland_dock_regions": lowland_dock_regions,
 		"dock_bank_regions": dock_bank_regions,
 	}
+
+
+## 河流会删除所有未经码头的跨岸 LAND。若某座陆城因此失去全部交通边，
+## 在最近的对应河界候选点补一个渡口；不能为了连通性恢复跨河陆路。
+static func _append_isolated_city_docks(
+	image: Image,
+	base_roads: Array[Dictionary],
+	land_positions: Array[Vector2],
+	river_paths: Array[PackedVector2Array],
+	river_pair_keys: Dictionary,
+	all_candidates: Array[Dictionary],
+	river_groups: Dictionary,
+	docks: Array[Dictionary],
+	occupied_positions: Array[Vector2],
+	city_count: int,
+	map_aspect_ratio: float,
+	bank_regions: Array[Dictionary],
+	lowland_regions: Array[Dictionary]
+) -> void:
+	var degree := PackedInt32Array()
+	degree.resize(city_count)
+	for road in base_roads:
+		var a := int(road["a"])
+		var b := int(road["b"])
+		if a < 0 or b < 0 or a >= city_count or b >= city_count:
+			continue
+		var kind := int(road.get("kind", Edge.Kind.LAND))
+		var removed_by_river := (
+			kind == Edge.Kind.LAND
+			and (
+				river_pair_keys.has(_pair_key(a, b))
+				or _road_dictionary_crosses_rivers(
+					road, land_positions, river_paths
+				)
+			)
+		)
+		if not removed_by_river:
+			degree[a] += 1
+			degree[b] += 1
+	for dock in docks:
+		for bank_key in ["bank_a", "bank_b"]:
+			var bank_id := int(dock[bank_key])
+			if bank_id >= 0 and bank_id < city_count:
+				degree[bank_id] += 1
+	for city_id in range(city_count):
+		if degree[city_id] > 0:
+			continue
+		var best: Dictionary = {}
+		var best_distance := INF
+		for candidate in all_candidates:
+			if city_id not in [
+				int(candidate["bank_a"]), int(candidate["bank_b"]),
+			]:
+				continue
+			var distance := metric_length_between(
+				land_positions[city_id],
+				candidate["position"],
+				map_aspect_ratio
+			)
+			if (
+				distance < best_distance - 0.000001
+				or (
+					is_equal_approx(distance, best_distance)
+					and float(candidate["river_progress"])
+						< float(best.get("river_progress", INF))
+				)
+			):
+				best = candidate
+				best_distance = distance
+		if best.is_empty():
+			continue
+		var river_id := int(best["river_id"])
+		var dock := _boundary_dock_record(
+			image, river_id, best, city_count + docks.size()
+		)
+		docks.append(dock)
+		if not river_groups.has(river_id):
+			river_groups[river_id] = [] as Array[Dictionary]
+		(river_groups[river_id] as Array).append(dock)
+		occupied_positions.append(dock["position"] as Vector2)
+		bank_regions.append(best.duplicate(true))
+		if bool(best.get("lowland", false)):
+			lowland_regions.append(best.duplicate(true))
+		for bank_key in ["bank_a", "bank_b"]:
+			var bank_id := int(dock[bank_key])
+			if bank_id >= 0 and bank_id < city_count:
+				degree[bank_id] += 1
 
 
 static func _road_dictionary_crosses_rivers(

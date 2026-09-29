@@ -24,12 +24,37 @@ func _run() -> void:
 	if state.road_network_revision != 0:
 		_fail("initial default rebuild must not consume runtime revision")
 		return
+	var terrain_connector_count := 0
 	for initial_edge in state.edges:
 		if not Edge.production_capacity_valid(
 			initial_edge.kind, initial_edge.max_manpower
 		):
 			_fail("initial capacity outside production bands")
 			return
+		if (
+			initial_edge.kind == Edge.Kind.LAND
+			and initial_edge.max_manpower > 0
+			and initial_edge.max_height_difference
+				> TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE
+			and not initial_edge.is_terrain_connector
+		):
+			_fail("ordinary initial road exceeded the strict relief limit")
+			return
+		if (
+			initial_edge.is_terrain_connector
+			and (
+				initial_edge.kind != Edge.Kind.LAND
+				or not initial_edge.is_backbone
+				or initial_edge.max_manpower != Edge.TERRAIN_LOW_MANPOWER
+			)
+		):
+			_fail("terrain connector must be a low-capacity land backbone")
+			return
+		if initial_edge.is_terrain_connector:
+			terrain_connector_count += 1
+	if terrain_connector_count <= 0:
+		_fail("fixture must exercise at least one isolated terrain connector")
+		return
 	var preserved_transport := {}
 	for edge in state.edges:
 		if edge.kind != Edge.Kind.LAND:
@@ -58,8 +83,20 @@ func _run() -> void:
 		if not Edge.production_capacity_valid(edge.kind, edge.max_manpower):
 			_fail("rebuild capacity outside production bands")
 			return
-		if edge.is_backbone and edge.max_manpower <= 0:
-			_fail("backbone edge became impassable")
+		if (
+			edge.is_backbone
+			and edge.max_manpower <= 0
+			and (
+				edge.kind != Edge.Kind.LAND
+				or edge.is_terrain_connector
+				or (
+					edge.land_ratio >= float(settings["minimum_land_ratio"])
+					and edge.max_height_difference
+						<= float(settings["maximum_relief"])
+				)
+			)
+		):
+			_fail("eligible backbone edge became impassable")
 			return
 		if edge.kind == Edge.Kind.LAND:
 			continue
@@ -123,6 +160,17 @@ func _run() -> void:
 	if protected_edge.max_manpower != protected_capacity:
 		_fail("active road capacity changed during rebuild")
 		return
+	for edge in state.edges:
+		if (
+			edge.kind != Edge.Kind.LAND
+			or edge.max_manpower <= 0
+			or edge.is_terrain_connector
+			or edge == protected_edge
+		):
+			continue
+		if edge.land_ratio < 1.0 or edge.max_height_difference > 0.05:
+			_fail("strict runtime tuning left an ordinary invalid road open")
+			return
 	print(
 		"ROAD_NETWORK_RUNTIME_OK open=",
 		first["open_count"],
@@ -130,6 +178,8 @@ func _run() -> void:
 		first["blocked_count"],
 		" avg_capacity=",
 		first["average_capacity"],
+		" terrain_connectors=",
+		terrain_connector_count,
 		" transport_edges=",
 		preserved_transport.size()
 	)

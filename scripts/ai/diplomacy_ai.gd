@@ -4234,7 +4234,9 @@ static func administrative_tactical_target(
 			state, nation_id, center_city_id, evaluation_cache
 		)
 	)
-	var existing_plan := state.campaign_plan(nation_id, center_city_id)
+	var existing_plan: CoalitionCampaignFront = state.campaign_front_for(
+		nation_id, center_city_id, CoalitionCampaignFront.Mode.OFFENSE
+	)
 	var committed := (
 		0
 		if existing_plan == null

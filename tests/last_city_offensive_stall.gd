@@ -91,7 +91,7 @@ func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
 
 func _administrative_snapshot(state: GameState) -> Dictionary:
 	var center_id := state.administrative_center_of(LAST_CITY_ID)
-	var plan := state.campaign_plan(DOMINANT_ID, center_id)
+	var plan := state.campaign_front_for(DOMINANT_ID, center_id)
 	var defender_armies: Array[Dictionary] = []
 	for army in state.armies:
 		if army.owner_nation == REMNANT_ID:
@@ -107,9 +107,7 @@ func _administrative_snapshot(state: GameState) -> Dictionary:
 		"center_owner": (
 			state.cities[center_id].owner_nation if center_id >= 0 else -1
 		),
-		"objective_center": state.nations[
-			DOMINANT_ID
-		].campaign_objective_center_city,
+		"objective_center": state.campaign_objective_center(DOMINANT_ID),
 		"plan_center": plan.center_city_id if plan != null else -1,
 		"plan_phase": plan.phase if plan != null else -1,
 		"assignments": (

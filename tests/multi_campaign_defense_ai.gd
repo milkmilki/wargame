@@ -20,6 +20,11 @@ func _test_two_state_defense_and_sortie() -> void:
 	var defender_id := 0
 	var enemy_id := 1
 	_configure_single_owner(state, defender_id)
+	state.nations[enemy_id].alive = true
+	var enemy_home := int(state.administrative_center_city_ids[-1])
+	state.cities[enemy_home].owner_nation = enemy_id
+	state.ownership_revision += 1
+	state.nations[enemy_id].capital_city_id = enemy_home
 	state.armies.clear()
 	state.battles.clear()
 	_neutralize_diplomacy(state)
@@ -35,7 +40,10 @@ func _test_two_state_defense_and_sortie() -> void:
 	)
 	var threatened: Array[int] = []
 	for center_id in centers:
-		if center_id != reserve_center:
+		if (
+			center_id != reserve_center
+			and state.cities[center_id].owner_nation == defender_id
+		):
 			threatened.append(center_id)
 		if threatened.size() == 2:
 			break
@@ -57,24 +65,21 @@ func _test_two_state_defense_and_sortie() -> void:
 	var threat := ThreatField.build(view)
 	var defense_plan := CityDefensePlan.build(view, snapshot, threat)
 	var coordinator := ArmyCoordinator.from_view(view)
-	simulation._manage_campaign_offensive(
-		defender_id,
-		defense_plan,
-		coordinator,
-		{"wars": [enemy_id]},
-	)
+	simulation._manage_coalition_campaigns()
+	state.day += Simulation.AI_DECISION_INTERVAL_DAYS
+	simulation._manage_coalition_campaigns()
 	var assigned := {}
 	for center_id in threatened:
-		var plan := state.campaign_plan(defender_id, center_id)
+		var plan := state.campaign_front_for(defender_id, center_id)
 		_check(
 			plan != null
-			and plan.mode == AdministrativeCampaignPlan.Mode.DEFENSE,
+			and plan.mode == CoalitionCampaignFront.Mode.DEFENSE,
 			"每个实际受侵州都必须建立独立防守计划"
 		)
 		if plan == null:
 			continue
 		_check(
-			plan.phase == AdministrativeCampaignPlan.Phase.HOLD_AND_REINFORCE,
+			plan.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE,
 			"增援尚未进入州域时不得提前出城野战"
 		)
 		_check(
@@ -88,13 +93,18 @@ func _test_two_state_defense_and_sortie() -> void:
 			_check(not assigned.has(army_id), "同一支军队不得重复绑定多个州")
 			assigned[army_id] = center_id
 	_check(assigned.size() == 4, "两个防区应各获得足以填平缺口的两军")
-	var native_nations: Dictionary = NativeSnapshotBuilder.build(state)["nations"]
+	var native_fronts: Dictionary = NativeSnapshotBuilder.build(state)["campaign_fronts"]
+	var snapshot_centers: PackedInt32Array = native_fronts["centers"]
+	var snapshot_armies: PackedInt32Array = native_fronts["assignment_army_ids"]
+	var snapshot_complete := true
+	for center_id in threatened:
+		snapshot_complete = snapshot_complete and snapshot_centers.has(center_id)
+	for army_id_value in assigned:
+		snapshot_complete = snapshot_complete and snapshot_armies.has(
+			int(army_id_value)
+		)
 	_check(
-		(native_nations["campaign_centers"] as PackedInt32Array).size() >= 2
-		and (
-			native_nations["campaign_assignment_army_ids"]
-			as PackedInt32Array
-		).size() == assigned.size(),
+		snapshot_complete,
 		"原生快照必须确定性记录全部州计划及军队绑定"
 	)
 	for army in state.armies:
@@ -111,17 +121,13 @@ func _test_two_state_defense_and_sortie() -> void:
 	defense_plan = CityDefensePlan.build(
 		view, StrategicMapSnapshot.build(view), ThreatField.build(view)
 	)
-	simulation._manage_campaign_offensive(
-		defender_id,
-		defense_plan,
-		ArmyCoordinator.from_view(view),
-		{"wars": [enemy_id]},
-	)
+	state.day += Simulation.AI_DECISION_INTERVAL_DAYS
+	simulation._manage_coalition_campaigns()
 	for center_id in threatened:
-		var plan := state.campaign_plan(defender_id, center_id)
+		var plan := state.campaign_front_for(defender_id, center_id)
 		_check(
 			plan != null
-			and plan.phase == AdministrativeCampaignPlan.Phase.SORTIE,
+			and plan.phase == CoalitionCampaignFront.Phase.SORTIE,
 			"实际到达的防守C满足需求后必须进入SORTIE"
 		)
 	simulation.free()

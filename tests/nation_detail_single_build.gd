@@ -159,14 +159,13 @@ func _test_war_sections_group_campaigns() -> void:
 		)
 		var plan_count := mini(centers.size(), 2 if defender_id == 1 else 1)
 		for center_id in centers.slice(0, plan_count):
-			var plan := AdministrativeCampaignPlan.new()
-			plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
+			var plan := CoalitionCampaignFront.new()
+			plan.mode = CoalitionCampaignFront.Mode.OFFENSE
 			plan.war_id = war_id
-			plan.opponent_nation_id = defender_id
 			plan.center_city_id = center_id
-			state.nations[attacker_id].administrative_campaign_plans[
-				center_id
-			] = plan
+			state.register_campaign_front(
+				plan, [attacker_id] as Array[int], attacker_id
+			)
 			expected_campaigns += 1
 	var sections := MapRenderer.nation_detail_sections(state, attacker_id)
 	var diplomacy_campaign_lines := 0

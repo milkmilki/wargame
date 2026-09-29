@@ -100,8 +100,7 @@ func _world_fingerprint(state: GameState) -> String:
 			nation.granary_food, nation.last_food_demand, nation.food_demand_ema,
 			nation.war_preparation_target_nation,
 			nation.war_preparation_objective_city,
-			nation.campaign_objective_center_city,
-			_battle_groups_fingerprint(nation),
+				_battle_groups_fingerprint(nation),
 			nation.ai_last_force_action, nation.ai_last_force_day,
 		])
 	var armies := []

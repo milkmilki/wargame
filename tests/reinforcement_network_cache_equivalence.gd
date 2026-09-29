@@ -149,8 +149,7 @@ func _state_fp(world: GameState) -> String:
 			nation.treasury_gold,
 			nation.granary_food,
 			nation.war_preparation_target_nation,
-			nation.campaign_objective_center_city,
-		])
+			])
 	var armies_fp: Array = []
 	for army in world.armies:
 		armies_fp.append([

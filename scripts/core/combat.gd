@@ -608,6 +608,7 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"id": army.id,
 			"owner_nation": army.owner_nation,
 			"campaign_war_id": army.campaign_war_id,
+			"campaign_front_id": army.campaign_front_id,
 			"size": army.size,
 			"max_size": army.max_size,
 			"attack": army.attack,

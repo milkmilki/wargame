@@ -1,719 +1,744 @@
 extends SceneTree
+## 集团战争池门禁：共享战线是唯一真源，军队所有权与每国调兵上限仍独立。
+
+var _failures: Array[String] = []
 
 
 func _init() -> void:
-	var state := GameState.new()
-	state.generate_grid_world(94140)
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
-	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.WAR)
-	state.set_diplomatic_relation(3, 1, GameState.DiplomaticRelation.WAR)
-	var center_one := _owned_center(state, 1)
-	var center_two := _owned_center(state, 2)
-	var valid := center_one >= 0 and center_two >= 0
-	var war_one := state.set_war_objective(0, 1, center_one, "战争池门禁一")
-	var war_two := state.set_war_objective(0, 2, center_two, "战争池门禁二")
-	state.set_war_objective(3, 1, center_one, "盟军加入", war_one)
-	valid = valid and war_one >= 0 and war_two > war_one
-	valid = valid and int(state.war_objective(0, 1).get("war_id", -1)) == war_one
-	valid = valid and int(state.war_objective(3, 1).get("war_id", -1)) == war_one
-	valid = valid and state.campaign_enemy_ids(0, war_one) == [1]
-	valid = valid and state.campaign_enemy_ids(0, war_two) == [2]
-	var plan := AdministrativeCampaignPlan.new()
-	plan.center_city_id = center_one
-	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-	plan.war_id = war_one
-	state.nations[0].administrative_campaign_plans[center_one] = plan
-	var army := Army.new()
-	army.id = 94140
-	army.owner_nation = 0
-	army.size = 15000
-	army.max_size = 15000
-	army.location_city = state.nations[0].capital_city_id
-	army.campaign_war_id = war_one
-	state.armies.append(army)
-	plan.army_assignments[army.id] = center_one
-	valid = valid and state.campaign_assignment_war(army.id) == war_one
-	valid = valid and state.offensive_campaigns_for_war(0, war_one) == [plan]
-	var combat_army_data: Dictionary = CombatLog._side_snapshot(
-		[army] as Array[Army]
-	)[0]
-	var replay_army: Army = CombatLog._army_from_snapshot(combat_army_data)
-	valid = valid and replay_army.campaign_war_id == war_one
-	var snapshot := NativeSnapshotBuilder.build(state)
-	var armies: Dictionary = snapshot["armies"]
-	var nations: Dictionary = snapshot["nations"]
-	valid = valid and (armies["campaign_war_id"] as PackedInt32Array)[-1] == war_one
-	valid = valid and (nations["campaign_war_ids"] as PackedInt32Array)[-1] == war_one
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	simulation._set_coalition_war_objective(
-		[0, 3] as Array[int],
-		[1, 2] as Array[int],
-		0,
-		center_one,
-		"合并集团战争",
-	)
-	var merged_war := int(state.war_objective(0, 1).get("war_id", -1))
-	valid = valid and merged_war == mini(war_one, war_two)
-	valid = valid and int(state.war_objective(0, 2).get("war_id", -1)) == merged_war
-	valid = valid and int(state.war_objective(3, 1).get("war_id", -1)) == merged_war
-	valid = valid and army.campaign_war_id == merged_war
-	valid = valid and plan.war_id == merged_war
-	for pair in [Vector2i(0, 1), Vector2i(0, 2)]:
-		state.set_diplomatic_relation(
-			pair.x, pair.y, GameState.DiplomaticRelation.NEUTRAL
-		)
-	valid = valid and army.campaign_war_id == -1
-	valid = valid and state.offensive_campaigns_for_war(0, merged_war).is_empty()
-	valid = valid and state.is_enemy(3, 1)
-	state.set_diplomatic_relation(3, 1, GameState.DiplomaticRelation.NEUTRAL)
-	simulation.free()
-	var continuous_valid := _test_continuous_state_campaign()
-	var capital_valid := _test_capital_emergency_transfer()
-	var two_front_valid := _test_two_front_war_allocation()
-	var million_force_valid := _test_million_manpower_multi_war_stability()
-	var stable_assignment_valid := _test_campaign_assignment_survives_order_failure()
-	var atomic_peace_valid := _test_atomic_peace_releases_war_pool()
-	valid = (
-		continuous_valid
-		and capital_valid
-		and two_front_valid
-		and million_force_valid
-		and stable_assignment_valid
-		and atomic_peace_valid
-		and valid
-	)
-	if valid:
-		print("WAR_CAMPAIGN_POOL_OK wars=%d/%d" % [war_one, war_two])
+	_test_shared_front_binding_and_snapshot()
+	_test_connected_allies_form_one_component()
+	_test_shared_allocation_and_per_nation_limit()
+	_test_dynamic_component_split()
+	_test_allocation_without_front_uses_full_component()
+	_test_merged_component_trims_extra_offensive_fronts()
+	_test_chain_connected_allies_share_component()
+	_test_nonborder_allies_keep_separate_components()
+	_test_objective_owner_becomes_front_anchor()
+	_test_completed_objective_is_not_recreated()
+	_test_empty_front_stays_with_its_war_side()
+	_test_annexed_army_leaves_old_war_pool()
+	_test_restored_army_leaves_parent_war_pool()
+	_test_eliminated_rebel_cannot_keep_zombie_war()
+	_test_atomic_diplomacy_resynchronizes_war_index()
+	if _failures.is_empty():
+		print("WAR_CAMPAIGN_POOL_OK")
 		quit(0)
 		return
-	push_error(
-		(
-			"WAR_CAMPAIGN_POOL_FAILED wars=%d/%d continuous=%s capital=%s "
-			+ "two_front=%s million_force=%s stable_assignment=%s atomic_peace=%s"
-		)
-		% [
-			war_one, war_two, continuous_valid, capital_valid,
-			two_front_valid, million_force_valid, stable_assignment_valid,
-			atomic_peace_valid,
-		]
-	)
+	for failure in _failures:
+		push_error(failure)
+	print("WAR_CAMPAIGN_POOL_FAILED count=%d" % _failures.size())
 	quit(1)
 
 
-func _test_campaign_assignment_survives_order_failure() -> bool:
-	var state := GameState.new()
-	state.generate_grid_world(94145)
-	var attacker_id := 0
-	var defender_id := 1
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	state.set_diplomatic_relation(
-		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+func _test_shared_front_binding_and_snapshot() -> void:
+	var fixture := _connected_war_fixture(94140)
+	if fixture.is_empty():
+		_fail("无法构造接壤盟军战争夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var war_id := int(fixture["war_id"])
+	var center_id := int(fixture["center_id"])
+	var front := state.create_campaign_front(
+		war_id, members, members[0],
+		CoalitionCampaignFront.Mode.OFFENSE, center_id
 	)
-	var center_id := _owned_center(state, defender_id)
-	if center_id < 0:
-		return false
-	var war_id := state.set_war_objective(
-		attacker_id, defender_id, center_id, "稳定州绑定门禁"
-	)
-	state.armies.clear()
-	var plan := AdministrativeCampaignPlan.new()
-	plan.center_city_id = center_id
-	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-	plan.war_id = war_id
-	state.nations[attacker_id].administrative_campaign_plans[center_id] = plan
-	var army := Army.new()
-	army.id = 941450
-	army.owner_nation = attacker_id
-	army.size = 4500
-	army.max_size = 15000
-	army.location_city = state.nations[attacker_id].capital_city_id
-	army.move_from = army.location_city
-	army.state = Army.State.IDLE
-	army.ai_target_city = -1
-	army.campaign_war_id = war_id
+	var army := _army(941400, members[0], state.nations[members[0]].capital_city_id)
 	state.armies.append(army)
-	plan.army_assignments[army.id] = center_id
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	var failed_order := ActionCandidate.make(
-		ActionCandidate.Kind.REINFORCE,
-		2000.0,
-		"模拟异步提交失败",
-		center_id,
-	)
-	var intent := AiCommandIntent.make(
-		army, failed_order, 0, [] as Array[int], true
-	)
-	var committed_before := state.campaign_committed_manpower(
-		attacker_id, center_id
-	)
-	simulation._commit_ordinary_ai_intent(intent)
-	var committed_after := state.campaign_committed_manpower(
-		attacker_id, center_id
-	)
-	var allocation := simulation.war_offensive_allocation(
-		attacker_id, war_id
-	)
-	var fronts: Array = allocation["fronts"]
-	var valid := (
-		committed_before == army.size
-		and committed_after == army.size
-		and plan.army_assignments.has(army.id)
-		and state.campaign_assignment_center(army.id) == center_id
-		and fronts.size() == 1
-		and int((fronts[0] as Dictionary)["committed_C"]) == army.size
-		and int(allocation["war_pool_total"]) == army.size
-		and int(allocation["war_pool_effective"]) == army.size
-		and int(allocation["duplicate_assignments"]) == 0
-	)
-	simulation.free()
-	return valid
+	front.army_assignments[army.id] = center_id
+	army.campaign_war_id = war_id
+	army.campaign_front_id = front.front_id
+	var snapshot := NativeSnapshotBuilder.build(state)
+	var army_snapshot: Dictionary = snapshot["armies"]
+	var front_snapshot: Dictionary = snapshot["campaign_fronts"]
+	_check(state.campaign_assignment_center(army.id) == center_id,
+		"军队必须通过 campaign_front_id 解析州绑定")
+	_check((army_snapshot["campaign_front_id"] as PackedInt32Array)[-1] == front.front_id,
+		"原生军队快照必须记录共享战线 ID")
+	_check(int(front_snapshot["count"]) == 1,
+		"原生快照必须全局记录共享战线且不按参与国复制")
+	_check((front_snapshot["participant_ids"] as PackedInt32Array).size() == members.size(),
+		"共享战线快照必须记录全部参与国")
 
 
-func _test_million_manpower_multi_war_stability() -> bool:
-	var state := GameState.new()
-	state.generate_grid_world(94146)
-	var attacker_id := 0
-	var defender_ids: Array[int] = [1, 2, 3]
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+func _test_connected_allies_form_one_component() -> void:
+	var fixture := _connected_war_fixture(94141)
+	if fixture.is_empty():
+		_fail("无法构造连通分量夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var war_id := int(fixture["war_id"])
+	var matching: Array[Dictionary] = []
+	for component in state.coalition_campaign_components(war_id):
+		if (component["members"] as Array[int]).has(members[0]):
+			matching.append(component)
+	_check(matching.size() == 1, "同一战争中的接壤盟友必须只出现于一个连通分量")
+	if matching.size() == 1:
+		_check(matching[0]["members"] == members,
+			"接壤盟友必须共享同一连通分量，不能各自生成战争目标")
+
+
+func _test_shared_allocation_and_per_nation_limit() -> void:
+	var fixture := _connected_war_fixture(94142)
+	if fixture.is_empty():
+		_fail("无法构造集团分兵夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var enemy_id := int(fixture["enemy_id"])
+	var war_id := int(fixture["war_id"])
+	var defense_center := state.administrative_center_of(
+		state.nations[members[0]].capital_city_id
+	)
+	var front := state.create_campaign_front(
+		war_id, members, members[0],
+		CoalitionCampaignFront.Mode.DEFENSE, defense_center
+	)
+	for index in range(8):
+		state.armies.append(_army(941500 + index, enemy_id, defense_center))
+	for member_id in members:
+		for index in range(6):
+			state.armies.append(_army(
+				942000 + member_id * 20 + index, member_id, defense_center
+			))
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var component: Dictionary = {}
+	for value in state.coalition_campaign_components(war_id):
+		if (value["members"] as Array[int]).has(members[0]):
+			component = value
+			break
+	_check(not component.is_empty(), "集团分兵前必须找到战争连通分量")
+	if not component.is_empty():
+		sim._allocate_coalition_fronts(component)
+	var assigned_by_owner := {}
+	for army in state.armies:
+		if army.campaign_front_id == front.front_id:
+			assigned_by_owner[army.owner_nation] = int(
+				assigned_by_owner.get(army.owner_nation, 0)
+			) + 1
+	var assigned_total := 0
+	for count_value in assigned_by_owner.values():
+		assigned_total += int(count_value)
+	_check(assigned_total > 0, "共享防守战线必须从集团战争池获得军队")
+	for member_id in members:
+		_check(int(assigned_by_owner.get(member_id, 0)) <= 3,
+			"每个参与国每轮最多只能改派三支军队")
+		_check(int(assigned_by_owner.get(member_id, 0)) > 0,
+			"共享防守缺口必须允许接壤盟军共同补足")
+	var report_a := state.coalition_campaign_allocation(war_id, members[0])
+	var report_b := state.coalition_campaign_allocation(war_id, members[1])
+	_check(int(report_a["war_pool_total"]) == int(report_b["war_pool_total"]),
+		"同一连通分量成员必须读取同一集团战争池总量")
+	_check((report_a["fronts"] as Dictionary).size() == 1,
+		"共享州只允许存在一份集团战线需求")
+	sim.free()
+
+
+func _test_dynamic_component_split() -> void:
+	var fixture := _connected_war_fixture(94143)
+	if fixture.is_empty():
+		_fail("无法构造动态拆分夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var war_id := int(fixture["war_id"])
+	var center_id := int(fixture["center_id"])
+	var front := state.create_campaign_front(
+		war_id, members, members[0],
+		CoalitionCampaignFront.Mode.OFFENSE, center_id
+	)
+	for index in range(2):
+		var army := _army(
+			943000 + index, members[1], state.nations[members[1]].capital_city_id
+		)
+		state.armies.append(army)
+		front.army_assignments[army.id] = center_id
+		army.campaign_war_id = war_id
+		army.campaign_front_id = front.front_id
+	state.set_diplomatic_relation(
+		members[0], members[1], GameState.DiplomaticRelation.NEUTRAL
+	)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	sim._reconcile_coalition_fronts(state.coalition_campaign_components(war_id))
+	_check(front.participant_nation_ids == [members[1]],
+		"联盟拆分后进攻战线必须由已绑定兵力最多的分量继承")
+	for army in state.armies:
+		if army.owner_nation == members[1]:
+			_check(army.campaign_front_id == front.front_id,
+				"继承分量的军队绑定不得丢失")
+	sim.free()
+
+
+func _test_allocation_without_front_uses_full_component() -> void:
+	var fixture := _connected_war_fixture(94144)
+	if fixture.is_empty():
+		_fail("无法构造无战线集团报告夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var report := state.coalition_campaign_allocation(
+		int(fixture["war_id"]), members[0]
+	)
+	_check(report["component_members"] == members,
+		"尚未建立战线时，集团报告仍必须返回完整连通分量")
+
+
+func _test_merged_component_trims_extra_offensive_fronts() -> void:
+	var fixture := _connected_war_fixture(94145)
+	if fixture.is_empty():
+		_fail("无法构造集团战线裁剪夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var war_id := int(fixture["war_id"])
+	var enemy_id := int(fixture["enemy_id"])
+	var centers: Array[int] = []
+	for city in state.cities:
+		if (
+			state.is_zhou_city(city.id)
+			and city.owner_nation not in members
+		):
+			state.transfer_city_sovereignty(
+				city.id, enemy_id, "集团战线裁剪夹具"
 			)
-	var centers_by_defender := {}
-	for defender_id in defender_ids:
-		var centers: Array[int] = []
-		for center_value in state.administrative_center_city_ids:
-			var center_id := int(center_value)
-			if state.cities[center_id].owner_nation == defender_id:
-				centers.append(center_id)
-		EquivariantOrder.sort_city_ids(centers, state, attacker_id)
-		if centers.size() < 2:
-			return false
-		centers_by_defender[defender_id] = centers
+			centers.append(city.id)
+			if centers.size() == 3:
+				break
+	if centers.size() < 3:
+		return
+	var armies: Array[Army] = []
+	for index in range(3):
+		var front := state.create_campaign_front(
+			war_id, members, members[0],
+			CoalitionCampaignFront.Mode.OFFENSE, centers[index]
+		)
+		var owner_id := members[index % members.size()]
+		var army := _army(
+			944000 + index, owner_id,
+			state.nations[owner_id].capital_city_id
+		)
+		state.armies.append(army)
+		front.army_assignments[army.id] = centers[index]
+		army.campaign_war_id = war_id
+		army.campaign_front_id = front.front_id
+		armies.append(army)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	sim._reconcile_coalition_fronts(
+		state.coalition_campaign_components(war_id)
+	)
+	var remaining := state.campaign_fronts_for_nation(
+		members[0], war_id, CoalitionCampaignFront.Mode.OFFENSE
+	)
+	_check(remaining.size() == 2,
+		"分量合并后最多只能保留两条共享进攻战线")
+	var released := 0
+	for army in armies:
+		if army.campaign_front_id < 0:
+			released += 1
+			_check(army.campaign_war_id == war_id,
+				"裁剪多余战线时必须保留军队的战争池绑定")
+	_check(released == 1, "第三条进攻线的军队必须回到集团战争池")
+	sim.free()
+
+
+func _test_chain_connected_allies_share_component() -> void:
+	var state := GameState.new()
+	state.generate_world(94146, 12, 96)
+	_neutralize(state)
+	var neighbors := _nation_border_neighbors(state)
+	var chain: Array[int] = []
+	for middle_value in neighbors:
+		var middle := int(middle_value)
+		var adjacent: Array = (neighbors[middle] as Dictionary).keys()
+		adjacent.sort()
+		if adjacent.size() >= 2:
+			chain = [int(adjacent[0]), middle, int(adjacent[1])] as Array[int]
+			break
+	if chain.is_empty():
+		_fail("无法构造A-B-C链式接壤夹具")
+		return
+	var enemy_id := _nation_outside(state, chain)
+	if enemy_id < 0:
+		_fail("链式接壤夹具缺少共同敌国")
+		return
+	state.set_diplomatic_relation(
+		chain[0], chain[1], GameState.DiplomaticRelation.ALLIED
+	)
+	state.set_diplomatic_relation(
+		chain[1], chain[2], GameState.DiplomaticRelation.ALLIED
+	)
+	var war_id := -1
+	for member_id in chain:
+		state.set_diplomatic_relation(
+			member_id, enemy_id, GameState.DiplomaticRelation.WAR
+		)
+		var member_war_id := state.war_id_between(member_id, enemy_id)
+		if war_id < 0:
+			war_id = member_war_id
+		else:
+			state.merge_war_ids(war_id, member_war_id)
+	chain.sort()
+	var matched := false
+	for component in state.coalition_campaign_components(war_id):
+		if (component["members"] as Array[int]) == chain:
+			matched = true
+			break
+	_check(matched, "A-B-C链式接壤盟国必须形成一个共享战线分量")
+
+
+func _test_nonborder_allies_keep_separate_components() -> void:
+	var state := GameState.new()
+	state.generate_world(94147, 12, 96)
+	_neutralize(state)
+	var neighbors := _nation_border_neighbors(state)
+	var pair := Vector2i(-1, -1)
+	for nation_a in range(state.nations.size()):
+		if not state.nations[nation_a].alive:
+			continue
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			if (
+				state.nations[nation_b].alive
+				and not (neighbors.get(nation_a, {}) as Dictionary).has(nation_b)
+			):
+				pair = Vector2i(nation_a, nation_b)
+				break
+		if pair.x >= 0:
+			break
+	if pair.x < 0:
+		_fail("无法构造不接壤盟国夹具")
+		return
+	var members: Array[int] = [pair.x, pair.y]
+	var enemy_id := _nation_outside(state, members)
+	if enemy_id < 0:
+		_fail("不接壤盟国夹具缺少共同敌国")
+		return
+	state.set_diplomatic_relation(
+		pair.x, pair.y, GameState.DiplomaticRelation.ALLIED
+	)
+	var war_id := -1
+	for member_id in members:
+		state.set_diplomatic_relation(
+			member_id, enemy_id, GameState.DiplomaticRelation.WAR
+		)
+		var member_war_id := state.war_id_between(member_id, enemy_id)
+		if war_id < 0:
+			war_id = member_war_id
+		else:
+			state.merge_war_ids(war_id, member_war_id)
+	var member_components := 0
+	for component in state.coalition_campaign_components(war_id):
+		var component_members: Array[int] = component["members"]
+		if component_members.has(pair.x) or component_members.has(pair.y):
+			member_components += 1
+			_check(component_members.size() == 1,
+				"不接壤盟国不得共享州战线和战争兵力池")
+	_check(member_components == 2, "不接壤盟国必须各自维护独立连通分量")
+
+
+func _test_objective_owner_becomes_front_anchor() -> void:
+	var fixture := _connected_war_fixture(94148)
+	if fixture.is_empty():
+		_fail("无法构造集团目标锚点夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var enemy_id := int(fixture["enemy_id"])
+	var war_id := int(fixture["war_id"])
+	state.clear_war_objective(members[0], enemy_id)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var component: Dictionary = {}
+	for candidate in state.coalition_campaign_components(war_id):
+		if (candidate["members"] as Array[int]) == members:
+			component = candidate
+			break
+	var objective := sim._select_component_objective(
+		component, {}, {}
+	)
+	_check(int(objective.get("anchor_nation_id", -1)) == members[1],
+		"共享目标必须保留实际提出目标的成员国作为路线锚点")
+	sim._plan_coalition_component(component, [] as Array[int], {})
+	var fronts := state.campaign_fronts_for_nation(
+		members[0], war_id, CoalitionCampaignFront.Mode.OFFENSE
+	)
+	_check(not fronts.is_empty() and fronts[0].anchor_nation_id == members[1],
+		"共享战线入口和集结点必须使用目标提出国，而非成员排序第一国")
+	sim.free()
+
+
+func _test_completed_objective_is_not_recreated() -> void:
+	var fixture := _connected_war_fixture(94149)
+	if fixture.is_empty():
+		_fail("无法构造已完成州战线生命周期夹具")
+		return
+	var state: GameState = fixture["state"]
+	var members: Array[int] = fixture["members"]
+	var enemy_id := int(fixture["enemy_id"])
+	var war_id := int(fixture["war_id"])
+	var center_id := int(fixture["center_id"])
+	for city_id in state.administrative_members(center_id):
+		state.cities[city_id].owner_nation = members[0]
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var component: Dictionary = {}
+	for candidate in state.coalition_campaign_components(war_id):
+		if (candidate["members"] as Array[int]) == members:
+			component = candidate
+			break
+	_check(not component.is_empty(), "已完成州测试必须找到战争连通分量")
+	if component.is_empty():
+		sim.free()
+		return
+	var cache_key := "%d:[]" % enemy_id
+	var objective_cache := {
+		cache_key: {
+			"city_id": center_id,
+			"administrative_center_city_id": center_id,
+			"value": 1000.0,
+		},
+	}
+	var selected := sim._select_component_objective(
+		component, objective_cache, {}
+	)
+	_check(
+		int(selected.get("administrative_center_city_id", -1)) != center_id,
+		"普通目标评分不得重新选择已经肃清的州",
+	)
+	var obsolete := state.create_campaign_front(
+		war_id, members, members[0],
+		CoalitionCampaignFront.Mode.OFFENSE, center_id
+	)
+	sim._plan_coalition_component(component, [] as Array[int], objective_cache)
+	var first_replacement := state.campaign_front_for(
+		members[0], center_id, CoalitionCampaignFront.Mode.OFFENSE, war_id
+	)
+	sim._plan_coalition_component(component, [] as Array[int], objective_cache)
+	var second_replacement := state.campaign_front_for(
+		members[0], center_id, CoalitionCampaignFront.Mode.OFFENSE, war_id
+	)
+	_check(state.campaign_front(obsolete.front_id) == null,
+		"已完成州的旧战线必须被释放")
+	_check(first_replacement == null and second_replacement == null,
+		"已完成州不得在后续规划中反复重建战线")
+	sim.free()
+
+
+func _test_empty_front_stays_with_its_war_side() -> void:
+	var fixture := _connected_war_fixture(94150)
+	if fixture.is_empty():
+		_fail("无法构造空战线阵营归属夹具")
+		return
+	var state: GameState = fixture["state"]
+	var war_id := int(fixture["war_id"])
+	var components := state.coalition_campaign_components(war_id)
+	_check(components.size() >= 2, "阵营归属测试必须包含交战双方分量")
+	if components.size() < 2:
+		return
+	var owner_component: Dictionary = components[-1]
+	var members: Array[int] = owner_component["members"]
+	var enemy_ids: Array[int] = owner_component["enemy_ids"]
+	var center_id := -1
+	for city in state.cities:
+		if state.is_zhou_city(city.id) and enemy_ids.has(city.owner_nation):
+			center_id = city.id
+			break
+	_check(center_id >= 0, "空战线阵营归属夹具必须找到敌方目标州")
+	if center_id < 0:
+		return
+	var front := state.create_campaign_front(
+		war_id, members, members[0],
+		CoalitionCampaignFront.Mode.OFFENSE, center_id
+	)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	sim._reconcile_coalition_fronts(components)
+	_check(state.campaign_front(front.front_id) != null,
+		"尚未分到军队的合法进攻线不得在阵营调和时被删除")
+	_check(front.participant_nation_ids == members,
+		"尚未分到军队的进攻线不得被迁移到敌对阵营")
+	sim.free()
+
+
+func _test_annexed_army_leaves_old_war_pool() -> void:
+	var state := GameState.new()
+	state.generate_world(94151, 8, 48)
 	state.armies.clear()
 	state.battles.clear()
-	var war_ids: Array[int] = []
-	for defender_id in defender_ids:
-		state.set_diplomatic_relation(
-			attacker_id, defender_id, GameState.DiplomaticRelation.WAR
-		)
-		var centers: Array[int] = centers_by_defender[defender_id]
-		var war_id := state.set_war_objective(
-			attacker_id, defender_id, centers[0], "百万兵力多战争门禁"
-		)
-		war_ids.append(war_id)
-		for center_id in centers.slice(0, 2):
-			var plan := AdministrativeCampaignPlan.new()
-			plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-			plan.war_id = war_id
-			plan.opponent_nation_id = defender_id
-			plan.center_city_id = center_id
-			state.nations[attacker_id].administrative_campaign_plans[
-				center_id
-			] = plan
-	var army_count := 67
-	var army_size := 15000
-	var expected_total := army_count * army_size
-	var origin_id := state.nations[attacker_id].capital_city_id
-	for index in range(army_count):
-		var army := Army.new()
-		army.id = 95400 + index
-		army.owner_nation = attacker_id
-		army.size = army_size
-		army.max_size = army_size
-		army.location_city = origin_id
-		army.move_from = origin_id
-		army.state = Army.State.IDLE
-		army.morale = army.max_morale
-		army.supply_ratio = 1.0
-		state.armies.append(army)
-	state.refresh_derived()
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	var context := {"wars": defender_ids}
-	for _cycle in range(3):
-		simulation._manage_campaign_offensive(
-			attacker_id, null, null, context
-		)
-	var baseline := _multi_war_force_profile(
-		state, attacker_id, war_ids
+	state.clear_campaign_fronts()
+	_neutralize(state)
+	var old_owner := 1
+	var absorber := 2
+	var enemy_id := 0
+	state.set_diplomatic_relation(
+		old_owner, enemy_id, GameState.DiplomaticRelation.WAR
 	)
-	var valid := int(baseline["total_manpower"]) == expected_total
-	valid = valid and int(baseline["assigned_armies"]) == war_ids.size() * 6
-	valid = valid and int(baseline["duplicate_assignments"]) == 0
-	valid = valid and int(baseline["wrong_war_assignments"]) == 0
-	for war_id in war_ids:
-		var war_profile: Dictionary = baseline["wars"][war_id]
-		valid = valid and int(war_profile["pool_total"]) == 90000
-		valid = valid and int(war_profile["pool_effective"]) == 90000
-		valid = valid and int(war_profile["reserve_effective"]) == (
-			expected_total - war_ids.size() * 90000
-		)
-		valid = valid and (war_profile["fronts"] as Array).size() == 2
-		for front_value in war_profile["fronts"]:
-			var front: Dictionary = front_value
-			valid = valid and int(front["assigned_total"]) == 45000
-			valid = valid and int(front["assigned_effective"]) == 45000
-	var probes_per_war := 500
-	var probe_started := Time.get_ticks_usec()
-	for _probe in range(probes_per_war):
-		for war_id in war_ids:
-			state.campaign_war_force_report(attacker_id, war_id)
-	var probe_usec := Time.get_ticks_usec() - probe_started
-	# Simulate a command-boundary reset: strategic bindings must survive even
-	# when every assigned formation temporarily loses its tactical path/target.
-	for army in state.armies:
-		if state.campaign_assignment_center(army.id) < 0:
-			continue
-		army.state = Army.State.IDLE
-		army.location_city = origin_id
-		army.move_from = origin_id
-		army.move_to = -1
-		army.on_edge = false
-		army.path.clear()
-		army.ai_target_city = -1
-	for _stable_cycle in range(12):
-		simulation._manage_campaign_offensive(
-			attacker_id, null, null, context
-		)
-		valid = valid and _multi_war_force_profile(
-			state, attacker_id, war_ids
-		) == baseline
-	print(
-		"WAR_FORCE_STRESS total=%d wars=%d assigned=%d reports=%d time_ms=%.2f stable=%s"
-		% [
-			expected_total, war_ids.size(), int(baseline["assigned_armies"]),
-			probes_per_war * war_ids.size(), float(probe_usec) / 1000.0,
-			str(valid),
-		]
+	var war_id := state.war_id_between(old_owner, enemy_id)
+	var center_id := state.administrative_center_of(
+		state.nations[enemy_id].capital_city_id
 	)
-	simulation.free()
-	return valid
+	var front := state.create_campaign_front(
+		war_id, [old_owner] as Array[int], old_owner,
+		CoalitionCampaignFront.Mode.OFFENSE, center_id
+	)
+	var army := _army(
+		941510, old_owner, state.nations[old_owner].capital_city_id
+	)
+	army.campaign_war_id = war_id
+	army.campaign_front_id = front.front_id
+	front.army_assignments[army.id] = center_id
+	state.armies.append(army)
+	state.finalize_annexation_after_territory_commit(absorber, old_owner)
+	_check(army.owner_nation == absorber,
+		"兼并后被兼并国军队必须转归兼并国")
+	_check(army.campaign_war_id == -1 and army.campaign_front_id == -1,
+		"兼并军队不得继承被兼并国的旧战争池或州战线绑定")
+	_check(not front.army_assignments.has(army.id),
+		"兼并军队必须从旧共享战线的军队索引中移除")
 
 
-func _multi_war_force_profile(
-	state: GameState,
-	nation_id: int,
-	war_ids: Array[int]
-) -> Dictionary:
-	var wars := {}
-	var assigned_ids := {}
-	var duplicate_assignments := 0
-	var wrong_war_assignments := 0
-	for war_id in war_ids:
-		var report := state.campaign_war_force_report(nation_id, war_id)
-		var fronts: Array[Dictionary] = []
-		for plan in state.offensive_campaigns_for_war(nation_id, war_id):
-			var front: Dictionary = (report["fronts"] as Dictionary).get(
-				plan.center_city_id, {}
-			)
-			fronts.append({
-				"center_id": plan.center_city_id,
-				"assigned_total": int(front.get("assigned_total", 0)),
-				"assigned_effective": int(
-					front.get("assigned_effective", 0)
+func _test_restored_army_leaves_parent_war_pool() -> void:
+	var state := GameState.new()
+	state.generate_world(94152, 8, 48)
+	state.armies.clear()
+	state.battles.clear()
+	state.clear_campaign_fronts()
+	_neutralize(state)
+	var parent_id := -1
+	var restore_city: City = null
+	for nation in state.nations:
+		for city in state.land_cities_of(nation.id):
+			if not city.is_capital:
+				parent_id = nation.id
+				restore_city = city
+				break
+		if restore_city != null:
+			break
+	_check(restore_city != null, "忠诚恢复战争池夹具必须找到非首都陆城")
+	if restore_city == null:
+		return
+	var target_id := _nation_outside(state, [parent_id] as Array[int])
+	var enemy_id := _nation_outside(
+		state, [parent_id, target_id] as Array[int]
+	)
+	_check(target_id >= 0 and enemy_id >= 0,
+		"忠诚恢复战争池夹具必须找到目标国和原敌国")
+	if target_id < 0 or enemy_id < 0:
+		return
+	state.set_diplomatic_relation(
+		parent_id, enemy_id, GameState.DiplomaticRelation.WAR
+	)
+	var old_war_id := state.war_id_between(parent_id, enemy_id)
+	var enemy_center := state.administrative_center_of(
+		state.nations[enemy_id].capital_city_id
+	)
+	var front := state.create_campaign_front(
+		old_war_id, [parent_id] as Array[int], parent_id,
+		CoalitionCampaignFront.Mode.OFFENSE, enemy_center
+	)
+	var army := _army(941520, parent_id, restore_city.id)
+	army.campaign_war_id = old_war_id
+	army.campaign_front_id = front.front_id
+	front.army_assignments[army.id] = enemy_center
+	state.armies.append(army)
+	restore_city.loyalty_target_nation = target_id
+	var restored := state.restore_regional_loyalty_target(
+		parent_id, target_id, [restore_city.id] as Array[int]
+	)
+	_check(restored and army.owner_nation == target_id,
+		"忠诚恢复必须让当地驻军随城市转归目标国")
+	_check(army.campaign_war_id == -1 and army.campaign_front_id == -1,
+		"归附军队不得把母国的旧战争池和州战线带给目标国")
+	_check(not front.army_assignments.has(army.id),
+		"归附军队必须从母国旧战线索引中移除")
+
+
+func _test_eliminated_rebel_cannot_keep_zombie_war() -> void:
+	var state := GameState.new()
+	state.generate_world(94153, 8, 48)
+	state.armies.clear()
+	state.battles.clear()
+	state.clear_campaign_fronts()
+	_neutralize(state)
+	var parent_id := 0
+	var rebel_id := 1
+	state.rebellions[rebel_id] = {
+		"parent_id": parent_id,
+		"started_day": -1000,
+		"core_city_ids": [] as Array[int],
+		"recognized": false,
+		"active": true,
+		"reason": "僵尸战争回归夹具",
+	}
+	state.set_diplomatic_relation(
+		parent_id, rebel_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.war_id_between(parent_id, rebel_id)
+	var operations: Array[Dictionary] = []
+	for city in state.cities:
+		if city.owner_nation == rebel_id:
+			operations.append({
+				"city_id": city.id,
+				"controller_id": parent_id,
+				"legal_owner_id": parent_id,
+				"sponsor_id": -1,
+				"reset_political_target": true,
+				"reason": "eliminated_rebel_war_cleanup_fixture",
+				"stock_policy": (
+					GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
 				),
 			})
-			for army_id_value in plan.army_assignments:
-				var army_id := int(army_id_value)
-				if assigned_ids.has(army_id):
-					duplicate_assignments += 1
-				assigned_ids[army_id] = war_id
-				if state.campaign_assignment_war(army_id) != war_id:
-					wrong_war_assignments += 1
-		wars[war_id] = {
-			"pool_total": int(report["war_pool_total"]),
-			"pool_effective": int(report["war_pool_effective"]),
-			"reserve_effective": int(report["reserve_effective"]),
-			"fronts": fronts,
-		}
-	var total_manpower := 0
-	for army in state.armies:
-		if army.owner_nation == nation_id and army.size > 0:
-			total_manpower += army.size
-	return {
-		"total_manpower": total_manpower,
-		"assigned_armies": assigned_ids.size(),
-		"duplicate_assignments": duplicate_assignments,
-		"wrong_war_assignments": wrong_war_assignments,
-		"wars": wars,
-	}
-
-
-func _test_atomic_peace_releases_war_pool() -> bool:
-	var state := GameState.new()
-	state.generate_grid_world(94144)
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
-	var center_id := _owned_center(state, 1)
-	if center_id < 0:
-		return false
-	var war_id := state.set_war_objective(0, 1, center_id, "原子议和战争池门禁")
-	var plan := AdministrativeCampaignPlan.new()
-	plan.center_city_id = center_id
-	plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-	plan.war_id = war_id
-	state.nations[0].administrative_campaign_plans[center_id] = plan
-	var army := Army.new()
-	army.id = 941440
-	army.owner_nation = 0
-	army.size = 15000
-	army.max_size = 15000
-	army.location_city = state.nations[0].capital_city_id
-	army.move_from = army.location_city
-	army.campaign_war_id = war_id
-	state.armies.append(army)
-	plan.army_assignments[army.id] = center_id
-	var result := state.apply_territory_transaction(
-		[] as Array[Dictionary],
-		{},
-		state.ownership_revision,
-		null,
+	var transaction := state.apply_territory_transaction(
+		operations, {}, state.ownership_revision, null,
 		[{
-			"nation_a": 0,
-			"nation_b": 1,
+			"nation_a": parent_id,
+			"nation_b": rebel_id,
 			"relation": GameState.DiplomaticRelation.NEUTRAL,
 			"truce_days": GameState.DEFAULT_TRUCE_DAYS,
 		}] as Array[Dictionary],
 		state.diplomacy_revision,
 	)
-	return (
-		bool(result.get("ok", false))
-		and bool(result.get("diplomacy_changed", false))
-		and not state.is_enemy(0, 1)
-		and state.war_id_between(0, 1) == -1
-		and army.campaign_war_id == -1
-		and state.offensive_campaigns_for_war(0, war_id).is_empty()
+	_check(bool(transaction.get("ok", false)),
+		"灭国领土事务必须成功同步战争关系索引：%s"
+			% str(transaction.get("error", "")))
+	_check(not state.nations[rebel_id].alive,
+		"灭国领土事务提交后地方叛军必须完全失去陆城")
+	_check(not state.is_enemy(parent_id, rebel_id),
+		"地方叛军灭亡后必须当天结束与母国的战争关系")
+	_check(state.war_id_between(parent_id, rebel_id) == -1,
+		"灭亡叛军的战争边不得继续保留 war_id")
+	_check(not state.war_relation_ids.values().has(war_id),
+		"没有其他参战边时必须释放灭亡叛军的整个战争池")
+
+
+func _test_atomic_diplomacy_resynchronizes_war_index() -> void:
+	var state := GameState.new()
+	state.generate_world(94154, 8, 48)
+	_neutralize(state)
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+	var stale_war_id := state.war_id_between(0, 1)
+	state.diplomatic_relations["0:1"] = GameState.DiplomaticRelation.NEUTRAL
+	var transaction := state.apply_territory_transaction(
+		[] as Array[Dictionary], {}, state.ownership_revision, null,
+		[{
+			"nation_a": 2,
+			"nation_b": 3,
+			"relation": GameState.DiplomaticRelation.ALLIED,
+		}] as Array[Dictionary],
+		state.diplomacy_revision,
 	)
+	_check(bool(transaction.get("ok", false)),
+		"原子外交同步战争索引夹具必须成功提交")
+	_check(state.war_id_between(0, 1) == -1,
+		"原子外交提交必须以当前关系图清除中立边上的陈旧 war_id")
+	_check(not state.war_relation_ids.values().has(stale_war_id),
+		"没有其他战争边引用时必须释放陈旧战争池")
 
 
-func _owned_center(state: GameState, owner_id: int) -> int:
-	for center_value in state.administrative_center_city_ids:
-		var center_id := int(center_value)
-		if state.cities[center_id].owner_nation == owner_id:
-			return center_id
+func _neutralize(state: GameState) -> void:
+	for nation_a in range(state.nations.size()):
+		for nation_b in range(nation_a + 1, state.nations.size()):
+			state.set_diplomatic_relation(
+				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
+			)
+
+
+func _nation_border_neighbors(state: GameState) -> Dictionary:
+	var result := {}
+	for pair in state.territorial_border_pairs():
+		var owner_a := state.cities[pair.x].owner_nation
+		var owner_b := state.cities[pair.y].owner_nation
+		if owner_a < 0 or owner_b < 0 or owner_a == owner_b:
+			continue
+		if not result.has(owner_a):
+			result[owner_a] = {}
+		if not result.has(owner_b):
+			result[owner_b] = {}
+		(result[owner_a] as Dictionary)[owner_b] = true
+		(result[owner_b] as Dictionary)[owner_a] = true
+	return result
+
+
+func _nation_outside(state: GameState, excluded: Array[int]) -> int:
+	for nation in state.nations:
+		if nation.alive and nation.id not in excluded:
+			return nation.id
 	return -1
 
 
-func _test_continuous_state_campaign() -> bool:
+func _connected_war_fixture(seed: int) -> Dictionary:
 	var state := GameState.new()
-	state.generate_grid_world(94141)
-	var chain := _administrative_center_chain(state)
-	if chain.size() < 3:
-		return false
-	var attacker_id := 0
-	var defender_id := 1
-	var neutral_id := 2
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	for city in state.cities:
-		if not city.is_dock:
-			city.owner_nation = neutral_id
-			state.recognized_city_owners[city.id] = neutral_id
-	for member_id in state.administrative_members(chain[0]):
-		state.cities[member_id].owner_nation = attacker_id
-		state.recognized_city_owners[member_id] = attacker_id
-	for center_id in [chain[1], chain[2]]:
-		for member_id in state.administrative_members(center_id):
-			state.cities[member_id].owner_nation = defender_id
-			state.recognized_city_owners[member_id] = defender_id
-	state.nations[attacker_id].capital_city_id = chain[0]
-	state.nations[defender_id].capital_city_id = chain[2]
+	state.generate_world(seed, 8, 48)
 	state.armies.clear()
 	state.battles.clear()
-	state.set_diplomatic_relation(
-		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	state.clear_campaign_fronts()
+	for a in range(state.nations.size()):
+		for b in range(a + 1, state.nations.size()):
+			state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	var pair := Vector2i(-1, -1)
+	for contact in state.territorial_border_pairs():
+		var owner_a := state.cities[contact.x].owner_nation
+		var owner_b := state.cities[contact.y].owner_nation
+		if owner_a >= 0 and owner_b >= 0 and owner_a != owner_b:
+			pair = Vector2i(owner_a, owner_b)
+			break
+	if pair.x < 0:
+			return {}
+	var enemy_id := -1
+	for nation in state.nations:
+		if nation.id not in [pair.x, pair.y] and nation.alive:
+			enemy_id = nation.id
+			break
+	if enemy_id < 0:
+			return {}
+	state.set_diplomatic_relation(pair.x, pair.y, GameState.DiplomaticRelation.ALLIED)
+	state.set_diplomatic_relation(pair.x, enemy_id, GameState.DiplomaticRelation.WAR)
+	var war_id := state.war_id_between(pair.x, enemy_id)
+	state.set_diplomatic_relation(pair.y, enemy_id, GameState.DiplomaticRelation.WAR)
+	state.merge_war_ids(war_id, state.war_id_between(pair.y, enemy_id))
+	var center_id := state.administrative_center_of(
+		state.nations[enemy_id].capital_city_id
 	)
-	var war_id := state.set_war_objective(
-		attacker_id, defender_id, chain[1], "连续州战役门禁"
-	)
+	state.set_war_objective(pair.x, enemy_id, center_id, "集团战线门禁", war_id)
+	state.set_war_objective(pair.y, enemy_id, center_id, "集团战线门禁", war_id)
+	var members: Array[int] = [pair.x, pair.y]
+	members.sort()
+	return {
+		"state": state,
+		"members": members,
+		"enemy_id": enemy_id,
+		"war_id": war_id,
+		"center_id": center_id,
+	}
+
+
+func _army(id: int, owner_id: int, city_id: int) -> Army:
 	var army := Army.new()
-	army.id = 94141
-	army.owner_nation = attacker_id
+	army.id = id
+	army.owner_nation = owner_id
 	army.size = 15000
 	army.max_size = 15000
-	army.location_city = chain[0]
-	army.move_from = chain[0]
+	army.location_city = city_id
+	army.move_from = city_id
 	army.state = Army.State.IDLE
-	state.armies.append(army)
-	state.ownership_revision += 1
-	state.refresh_derived()
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	simulation._manage_campaign_offensive(
-		attacker_id, null, null, {"wars": [defender_id]}
-	)
-	var first_plans := state.offensive_campaigns_for_war(attacker_id, war_id)
-	var first_plan: AdministrativeCampaignPlan = (
-		first_plans[0] if not first_plans.is_empty() else null
-	)
-	var valid := first_plan != null and first_plan.center_city_id == chain[1]
-	state.cities[chain[1]].owner_nation = attacker_id
-	state.ownership_revision += 1
-	simulation._manage_campaign_offensive(
-		attacker_id, null, null, {"wars": [defender_id]}
-	)
-	valid = valid and first_plan.center_city_id == chain[1]
-	for member_id in state.administrative_members(chain[1]):
-		state.cities[member_id].owner_nation = attacker_id
-	state.ownership_revision += 1
-	simulation._manage_campaign_offensive(
-		attacker_id, null, null, {"wars": [defender_id]}
-	)
-	var second_plans := state.offensive_campaigns_for_war(attacker_id, war_id)
-	var second_plan: AdministrativeCampaignPlan = (
-		second_plans[0] if not second_plans.is_empty() else null
-	)
-	valid = (
-		valid
-		and second_plan != null
-		and second_plan.center_city_id == chain[2]
-		and army.campaign_war_id == war_id
-	)
-	simulation.free()
-	return valid
+	army.morale = army.max_morale
+	army.supply_ratio = 1.0
+	return army
 
 
-func _test_two_front_war_allocation() -> bool:
-	var state := GameState.new()
-	state.generate_grid_world(94144)
-	var chain := _administrative_center_chain(state)
-	if chain.size() < 3:
-		return false
-	var attacker_id := 0
-	var defender_id := 1
-	var neutral_id := 2
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	for city in state.cities:
-		if not city.is_dock:
-			city.owner_nation = neutral_id
-			state.recognized_city_owners[city.id] = neutral_id
-	for member_id in state.administrative_members(chain[1]):
-		state.cities[member_id].owner_nation = attacker_id
-		state.recognized_city_owners[member_id] = attacker_id
-	for center_id in [chain[0], chain[2]]:
-		for member_id in state.administrative_members(center_id):
-			state.cities[member_id].owner_nation = defender_id
-			state.recognized_city_owners[member_id] = defender_id
-	state.nations[attacker_id].capital_city_id = chain[1]
-	state.nations[defender_id].capital_city_id = chain[2]
-	state.armies.clear()
-	state.battles.clear()
-	state.set_diplomatic_relation(
-		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
-	)
-	var war_id := state.set_war_objective(
-		attacker_id, defender_id, chain[0], "双州战线门禁"
-	)
-	for index in range(5):
-		var army := Army.new()
-		army.id = 941440 + index
-		army.owner_nation = attacker_id
-		army.size = 15000
-		army.max_size = 15000
-		army.location_city = chain[1]
-		army.move_from = chain[1]
-		army.state = Army.State.IDLE
-		state.armies.append(army)
-	state.ownership_revision += 1
-	state.refresh_derived()
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	var context := {"wars": [defender_id]}
-	simulation._manage_campaign_offensive(attacker_id, null, null, context)
-	var first_cycle := state.offensive_campaigns_for_war(attacker_id, war_id)
-	var assigned_first_cycle := 0
-	for plan in first_cycle:
-		assigned_first_cycle += plan.army_assignments.size()
-	var valid := first_cycle.size() == 1 and assigned_first_cycle == 3
-	var sixth_army := Army.new()
-	sixth_army.id = 941445
-	sixth_army.owner_nation = attacker_id
-	sixth_army.size = 15000
-	sixth_army.max_size = 15000
-	sixth_army.location_city = chain[1]
-	sixth_army.move_from = chain[1]
-	sixth_army.state = Army.State.IDLE
-	state.armies.append(sixth_army)
-	simulation._manage_campaign_offensive(attacker_id, null, null, context)
-	var second_cycle := state.offensive_campaigns_for_war(attacker_id, war_id)
-	var assigned_ids := {}
-	var assigned_second_cycle := 0
-	for plan in second_cycle:
-		assigned_second_cycle += plan.army_assignments.size()
-		for army_id_value in plan.army_assignments:
-			assigned_ids[int(army_id_value)] = true
-	valid = (
-		valid
-		and second_cycle.size() == 2
-		and assigned_second_cycle == 6
-		and assigned_ids.size() == 6
-	)
-	for army in state.armies:
-		if army.owner_nation == attacker_id:
-			valid = valid and army.campaign_war_id == war_id
-	sixth_army.state = Army.State.RECOVERING
-	simulation._manage_campaign_offensive(attacker_id, null, null, context)
-	valid = valid and state.offensive_campaigns_for_war(
-		attacker_id, war_id
-	).size() == 2
-	var cooling_plan := state.offensive_campaigns_for_war(
-		attacker_id, war_id
-	)[0]
-	cooling_plan.had_forces = true
-	for army in state.armies:
-		if cooling_plan.army_assignments.has(army.id):
-			army.size = 0
-	var replacement := Army.new()
-	replacement.id = 941446
-	replacement.owner_nation = attacker_id
-	replacement.size = 15000
-	replacement.max_size = 15000
-	replacement.location_city = chain[1]
-	replacement.move_from = chain[1]
-	replacement.state = Army.State.IDLE
-	state.armies.append(replacement)
-	simulation._manage_campaign_offensive(attacker_id, null, null, context)
-	valid = (
-		valid
-		and cooling_plan.failed_until_day == state.day + 60
-		and not cooling_plan.army_assignments.has(replacement.id)
-	)
-	var extra_center := -1
-	for center_value in state.administrative_center_city_ids:
-		var center_id := int(center_value)
-		if not state.nations[attacker_id].administrative_campaign_plans.has(center_id):
-			extra_center = center_id
-			break
-	if extra_center >= 0:
-		var extra_plan := AdministrativeCampaignPlan.new()
-		extra_plan.center_city_id = extra_center
-		extra_plan.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-		extra_plan.war_id = war_id
-		state.nations[attacker_id].administrative_campaign_plans[extra_center] = extra_plan
-		simulation._sanitize_offensive_campaigns(attacker_id)
-		valid = valid and state.offensive_campaigns_for_war(
-			attacker_id, war_id
-		).size() == 2
-	simulation.free()
-	return valid
+func _check(condition: bool, message: String) -> void:
+	if not condition:
+		_fail(message)
 
 
-func _administrative_center_chain(state: GameState) -> Array[int]:
-	var adjacency := {}
-	for center_value in state.administrative_center_city_ids:
-		adjacency[int(center_value)] = {}
-	for pair in state.territorial_border_pairs():
-		var center_a := state.administrative_center_of(pair.x)
-		var center_b := state.administrative_center_of(pair.y)
-		if center_a < 0 or center_b < 0 or center_a == center_b:
-			continue
-		(adjacency[center_a] as Dictionary)[center_b] = true
-		(adjacency[center_b] as Dictionary)[center_a] = true
-	var centers: Array[int] = []
-	for center_value in adjacency:
-		centers.append(int(center_value))
-	EquivariantOrder.sort_city_ids(centers, state, 0)
-	for middle in centers:
-		var neighbors: Array[int] = []
-		for neighbor_value in (adjacency[middle] as Dictionary):
-			neighbors.append(int(neighbor_value))
-		EquivariantOrder.sort_city_ids(neighbors, state, 0, middle)
-		if neighbors.size() >= 2:
-			return [neighbors[0], middle, neighbors[1]] as Array[int]
-	return [] as Array[int]
-
-
-func _test_capital_emergency_transfer() -> bool:
-	var state := GameState.new()
-	state.generate_grid_world(94142)
-	for nation_a in range(state.nations.size()):
-		for nation_b in range(nation_a + 1, state.nations.size()):
-			state.set_diplomatic_relation(
-				nation_a, nation_b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	var defender_id := 0
-	var first_enemy := 1
-	var second_enemy := 2
-	var capital_center := state.administrative_center_of(
-		state.nations[defender_id].capital_city_id
-	)
-	var first_target := _owned_center(state, first_enemy)
-	state.set_diplomatic_relation(
-		defender_id, first_enemy, GameState.DiplomaticRelation.WAR
-	)
-	var first_war := state.set_war_objective(
-		defender_id, first_enemy, first_target, "首都调兵原战争"
-	)
-	state.set_diplomatic_relation(
-		second_enemy, defender_id, GameState.DiplomaticRelation.WAR
-	)
-	var defense_war := state.set_war_objective(
-		second_enemy, defender_id, capital_center, "首都调兵防御战争"
-	)
-	state.armies.clear()
-	state.battles.clear()
-	var reserve := Army.new()
-	reserve.id = 94142
-	reserve.owner_nation = defender_id
-	reserve.size = 15000
-	reserve.max_size = 15000
-	reserve.location_city = capital_center
-	reserve.move_from = capital_center
-	reserve.campaign_war_id = first_war
-	state.armies.append(reserve)
-	var offensive := AdministrativeCampaignPlan.new()
-	offensive.center_city_id = first_target
-	offensive.mode = AdministrativeCampaignPlan.Mode.OFFENSE
-	offensive.war_id = first_war
-	offensive.army_assignments[reserve.id] = first_target
-	state.nations[defender_id].administrative_campaign_plans[first_target] = offensive
-	var invader := Army.new()
-	invader.id = 94143
-	invader.owner_nation = second_enemy
-	invader.size = 15000
-	invader.max_size = 15000
-	invader.location_city = capital_center
-	invader.move_from = capital_center
-	state.armies.append(invader)
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	simulation._manage_campaign_offensive(
-		defender_id,
-		null,
-		null,
-		{"wars": [first_enemy, second_enemy]},
-	)
-	var defense_plan := state.campaign_plan(defender_id, capital_center)
-	var valid := (
-		defense_plan != null
-		and defense_plan.mode == AdministrativeCampaignPlan.Mode.DEFENSE
-		and defense_plan.war_id == defense_war
-		and reserve.campaign_war_id == defense_war
-		and reserve.defensive_deployment_until_day >= state.day + 60
-		and not offensive.army_assignments.has(reserve.id)
-	)
-	simulation.free()
-	return valid
+func _fail(message: String) -> void:
+	_failures.append(message)

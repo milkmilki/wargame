@@ -109,10 +109,10 @@ func _run_campaign_chain(
 	})
 	var war_id := state.war_id_between(ATTACKER, DEFENDER)
 	_check(declared and war_id >= 0, "集结完成后必须成功宣战")
-	var launch_plan := state.campaign_plan(ATTACKER, chain[1])
+	var launch_plan := state.campaign_front_for(ATTACKER, chain[1])
 	_check(
 		launch_plan != null
-		and launch_plan.phase == AdministrativeCampaignPlan.Phase.BREAK_IN
+		and launch_plan.phase == CoalitionCampaignFront.Phase.BREAK_IN
 		and launch_plan.army_assignments.size() == prepared_count,
 		"备战军必须原地移交第一州BREAK_IN计划"
 	)
@@ -175,7 +175,7 @@ func _record_milestones(
 		milestones["first_defense"] = state.day
 	if int(milestones["first_entry"]) < 0 and state.cities[entry_id].owner_nation == ATTACKER:
 		milestones["first_entry"] = state.day
-	var first_plan := state.campaign_plan(ATTACKER, chain[1])
+	var first_plan := state.campaign_front_for(ATTACKER, chain[1])
 	if first_plan != null and first_plan.camp_city_id == entry_id:
 		if int(milestones["first_camp"]) < 0:
 			milestones["first_camp"] = state.day
@@ -198,12 +198,12 @@ func _record_milestones(
 		milestones["first_center"] = state.day
 	if int(milestones["first_complete"]) < 0 and _state_controlled(state, chain[1], ATTACKER):
 		milestones["first_complete"] = state.day
-	var second_plan := state.campaign_plan(ATTACKER, chain[2])
+	var second_plan := state.campaign_front_for(ATTACKER, chain[2])
 	if (
 		int(milestones["first_complete"]) >= 0
 		and int(milestones["second_target"]) < 0
 		and second_plan != null
-		and second_plan.mode == AdministrativeCampaignPlan.Mode.OFFENSE
+		and second_plan.mode == CoalitionCampaignFront.Mode.OFFENSE
 		and second_plan.war_id == war_id
 	):
 		milestones["second_target"] = state.day
@@ -211,18 +211,18 @@ func _record_milestones(
 		int(milestones["second_target"]) >= 0
 		and int(milestones["old_plan_released"]) < 0
 	):
-		var old_center_plan := state.campaign_plan(ATTACKER, chain[1])
+		var old_center_plan := state.campaign_front_for(ATTACKER, chain[1])
 		if (
 			old_center_plan == null
-			or old_center_plan.mode != AdministrativeCampaignPlan.Mode.OFFENSE
+			or old_center_plan.mode != CoalitionCampaignFront.Mode.OFFENSE
 		):
 			milestones["old_plan_released"] = state.day
 	if second_plan != null:
 		if (
 			int(milestones["second_entry_id"]) < 0
 			and second_plan.phase in [
-				AdministrativeCampaignPlan.Phase.ASSEMBLE,
-				AdministrativeCampaignPlan.Phase.BREAK_IN,
+				CoalitionCampaignFront.Phase.ASSEMBLE,
+				CoalitionCampaignFront.Phase.BREAK_IN,
 			]
 			and not second_plan.tactical_target_city_ids.is_empty()
 		):
@@ -364,7 +364,7 @@ func _check_chain(
 
 func _plan_army_at_city(
 	state: GameState,
-	plan: AdministrativeCampaignPlan,
+	plan: CoalitionCampaignFront,
 	city_id: int
 ) -> bool:
 	for army in state.armies:
@@ -381,20 +381,20 @@ func _plan_army_at_city(
 	return false
 
 
-func _plan_has_forward_order(plan: AdministrativeCampaignPlan) -> bool:
+func _plan_has_forward_order(plan: CoalitionCampaignFront) -> bool:
 	return (
 		not plan.tactical_target_city_ids.is_empty()
 		and plan.phase in [
-			AdministrativeCampaignPlan.Phase.RAID_FU,
-			AdministrativeCampaignPlan.Phase.ASSAULT_CENTER,
-			AdministrativeCampaignPlan.Phase.CLEANUP,
+			CoalitionCampaignFront.Phase.RAID_FU,
+			CoalitionCampaignFront.Phase.ASSAULT_CENTER,
+			CoalitionCampaignFront.Phase.CLEANUP,
 		]
 	)
 
 
 func _plan_uses_camp_as_anchor(
 	state: GameState,
-	plan: AdministrativeCampaignPlan,
+	plan: CoalitionCampaignFront,
 	camp_id: int
 ) -> bool:
 	if plan.army_assignments.values().has(camp_id):
@@ -415,10 +415,10 @@ func _plan_uses_camp_as_anchor(
 
 
 func _has_defense_plan(state: GameState, center_id: int, war_id: int) -> bool:
-	var plan := state.campaign_plan(DEFENDER, center_id)
+	var plan := state.campaign_front_for(DEFENDER, center_id)
 	return (
 		plan != null
-		and plan.mode == AdministrativeCampaignPlan.Mode.DEFENSE
+		and plan.mode == CoalitionCampaignFront.Mode.DEFENSE
 		and plan.war_id == war_id
 	)
 

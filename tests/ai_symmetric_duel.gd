@@ -420,10 +420,10 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 				float(right_nation.get(field)),
 			]
 	var left_objective := _canonical_city_for_nation(
-		state, LEFT_NATION, left_nation.campaign_objective_center_city
+		state, LEFT_NATION, state.campaign_objective_center(LEFT_NATION)
 	)
 	var right_objective := _canonical_city_for_nation(
-		state, RIGHT_NATION, right_nation.campaign_objective_center_city
+		state, RIGHT_NATION, state.campaign_objective_center(RIGHT_NATION)
 	)
 	if left_objective != right_objective:
 		return "nation.campaign_objective left=%d right=%d" % [
