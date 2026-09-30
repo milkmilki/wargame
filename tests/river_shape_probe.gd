@@ -1,5 +1,5 @@
 extends SceneTree
-## 省界河流专项门禁：河道贴公共省界、码头连接两岸、相邻码头河运连通。
+## 省界河流专项门禁：河道贴公共省界、码头连接两岸、低高差河段可通航。
 
 
 func _init() -> void:
@@ -82,6 +82,9 @@ func _init() -> void:
 			invalid_docks += 1
 
 	var missing_river_links := 0
+	var invalid_river_links := 0
+	var excessive_relief_links := 0
+	var relief_policy_mismatches := 0
 	for river_id in range(TerrainMapGenerator.RIVER_COUNT):
 		var group: Array = groups.get(river_id, [])
 		group.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -89,18 +92,49 @@ func _init() -> void:
 		)
 		valid = valid and group.size() >= 2
 		for dock_index in range(group.size() - 1):
-			var edge := state.edge_of(
-				int(group[dock_index]["city_id"]),
-				int(group[dock_index + 1]["city_id"])
+			var from_dock: Dictionary = group[dock_index]
+			var to_dock: Dictionary = group[dock_index + 1]
+			var height_difference := absf(
+				float(from_dock["height"]) - float(to_dock["height"])
 			)
-			if (
-				edge == null or edge.kind != Edge.Kind.RIVER
+			var should_connect := TerrainMapGenerator.river_link_is_navigable(
+				height_difference
+			)
+			var edge := state.edge_of(
+				int(from_dock["city_id"]), int(to_dock["city_id"])
+			)
+			if edge == null:
+				missing_river_links += 1
+				if should_connect:
+					relief_policy_mismatches += 1
+			elif (
+				edge.kind != Edge.Kind.RIVER
 				or edge.max_manpower != Edge.WATER_MANPOWER
 				or edge.allows_holding
 				or edge.map_path.size() < 2
 			):
-				missing_river_links += 1
-	valid = valid and invalid_docks == 0 and missing_river_links == 0
+				invalid_river_links += 1
+			else:
+				if not should_connect:
+					relief_policy_mismatches += 1
+				if (
+					edge.max_height_difference
+						> TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE
+				):
+					excessive_relief_links += 1
+	valid = (
+		valid
+		and invalid_docks == 0
+		and invalid_river_links == 0
+		and excessive_relief_links == 0
+		and relief_policy_mismatches == 0
+		and TerrainMapGenerator.river_link_is_navigable(
+			TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE
+		)
+		and not TerrainMapGenerator.river_link_is_navigable(
+			TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE + 0.0001
+		)
+	)
 
 	var interior_crossings := 0
 	for edge in state.edges:
@@ -137,6 +171,9 @@ func _init() -> void:
 		" docks=", generated.get("docks", []).size(),
 		" invalid_docks=", invalid_docks,
 		" missing_links=", missing_river_links,
+		" invalid_links=", invalid_river_links,
+		" excessive_relief_links=", excessive_relief_links,
+		" relief_policy_mismatches=", relief_policy_mismatches,
 		" interior_crossings=", interior_crossings
 	)
 	print("verdict=", "RIVER_SHAPE_OK" if valid else "RIVER_SHAPE_INVALID")

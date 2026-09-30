@@ -9624,13 +9624,8 @@ func _manage_administrative_campaign(
 		return _manage_campaign_fu_raids(
 			nation_id, plan, attacker_bloc, alive_by_id, true
 		)
-	if owns_active_siege:
-		plan.phase = CoalitionCampaignFront.Phase.ASSAULT_CENTER
-		plan.tactical_target_city_ids = [center_city_id] as Array[int]
-		return _order_campaign_force(
-			nation_id, plan, alive_by_id, center_city_id,
-			ActionCandidate.Kind.ATTACK
-		)
+	if owns_active_siege or plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER:
+		return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 	var fu_members := _campaign_fu_members(center_city_id)
 	if fu_members.is_empty():
 		return _manage_campaign_without_fu(
@@ -9792,9 +9787,20 @@ func _manage_campaign_without_fu(
 				nation_id, plan, alive_by_id, plan.staging_city_id,
 				ActionCandidate.Kind.REINFORCE
 			)
+	return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
+
+
+func _launch_campaign_center_assault(
+	nation_id: int,
+	plan: CoalitionCampaignFront,
+	alive_by_id: Dictionary
+) -> bool:
 	plan.phase = CoalitionCampaignFront.Phase.ASSAULT_CENTER
+	plan.tactical_target_city_ids = [plan.center_city_id] as Array[int]
+	for army_id_value in plan.army_assignments.keys():
+		plan.army_assignments[army_id_value] = plan.center_city_id
 	return _order_campaign_force(
-		nation_id, plan, alive_by_id, center_id,
+		nation_id, plan, alive_by_id, plan.center_city_id,
 		ActionCandidate.Kind.ATTACK
 	)
 
@@ -9825,6 +9831,15 @@ func _manage_campaign_fu_raids(
 			nation_id, plan, alive_by_id, camp_id,
 			ActionCandidate.Kind.REINFORCE
 		)
+	if not cleanup:
+		var assault_requirement := (
+			state.campaign_siege_requirement(nation_id, plan.center_city_id)
+			+ state.campaign_reinforcement_threat(
+				nation_id, plan.center_city_id
+			)
+		)
+		if _campaign_force_at_city(plan, camp_id) >= assault_requirement:
+			return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 	var all_enemy_targets := _zhou_enemy_fu_targets(
 		nation_id, plan.center_city_id, attacker_bloc, false
 	)
@@ -9845,12 +9860,7 @@ func _manage_campaign_fu_raids(
 			not cleanup
 			and ready_manpower >= requirement
 		):
-			plan.phase = CoalitionCampaignFront.Phase.ASSAULT_CENTER
-			plan.tactical_target_city_ids = [plan.center_city_id] as Array[int]
-			return _order_campaign_force(
-				nation_id, plan, alive_by_id, plan.center_city_id,
-				ActionCandidate.Kind.ATTACK
-			)
+			return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 		plan.phase = (
 			CoalitionCampaignFront.Phase.CLEANUP
 			if cleanup
@@ -9900,12 +9910,7 @@ func _manage_blocked_campaign_fu(
 		)
 	)
 	if _campaign_plan_manpower(plan) >= requirement:
-		plan.phase = CoalitionCampaignFront.Phase.ASSAULT_CENTER
-		plan.tactical_target_city_ids = [plan.center_city_id] as Array[int]
-		return _order_campaign_force(
-			nation_id, plan, alive_by_id, plan.center_city_id,
-			ActionCandidate.Kind.ATTACK
-		)
+		return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 	plan.phase = CoalitionCampaignFront.Phase.HOLD_CAMP
 	return _order_campaign_force(
 		nation_id, plan, alive_by_id, plan.camp_city_id,

@@ -2588,22 +2588,25 @@ static func _build_boundary_river_transport(
 			var metric_length := metric_polyline_length(
 				map_path, map_aspect_ratio
 			)
+			var height_difference := absf(
+				float(from_dock["height"]) - float(to_dock["height"])
+			)
+			if not river_link_is_navigable(height_difference):
+				continue
 			roads.append({
 				"a": int(from_dock["city_id"]),
 				"b": int(to_dock["city_id"]),
 				"map_path": map_path,
 				"length": metric_length,
 				"distance": distance_units_for_metric_length(metric_length),
-				"height_difference": absf(
-					float(from_dock["height"]) - float(to_dock["height"])
-				),
+				"height_difference": height_difference,
 				"land_ratio": 1.0,
 				"cost": metric_length,
 				"backbone": true,
 				"max_manpower": Edge.WATER_MANPOWER,
 				"base_max_manpower": Edge.WATER_MANPOWER,
 				"danger": _boundary_river_link_danger(
-					image, map_path, river_id, dock_index
+					map_path, height_difference, river_id, dock_index
 				),
 				"kind": Edge.Kind.RIVER,
 				"travel_time_multiplier": RIVER_TRAVEL_TIME_MULTIPLIER,
@@ -3086,30 +3089,24 @@ static func _boundary_random_unit(a: int, b: int, c: int) -> float:
 	return float(value) / 2147483647.0
 
 
+static func river_link_is_navigable(height_difference: float) -> bool:
+	return height_difference <= ROAD_MAXIMUM_HEIGHT_DIFFERENCE
+
+
 static func _boundary_river_link_danger(
-	image: Image,
 	path: PackedVector2Array,
+	height_difference: float,
 	river_id: int,
 	link_index: int
 ) -> float:
-	var minimum := 1.0
-	var maximum := 0.0
 	var turn_total := 0.0
 	for point_index in range(path.size()):
-		var point := path[point_index]
-		var pixel := Vector2i(
-			clampi(int(floor(point.x * image.get_width())), 0, image.get_width() - 1),
-			clampi(int(floor(point.y * image.get_height())), 0, image.get_height() - 1)
-		)
-		var altitude := packed_altitude(image.get_pixelv(pixel))
-		minimum = minf(minimum, altitude)
-		maximum = maxf(maximum, altitude)
 		if point_index > 0 and point_index + 1 < path.size():
 			var incoming := (path[point_index] - path[point_index - 1]).normalized()
 			var outgoing := (path[point_index + 1] - path[point_index]).normalized()
 			turn_total += 1.0 - clampf(incoming.dot(outgoing), -1.0, 1.0)
 	return clampf(
-		0.12 + (maximum - minimum) * 2.5
+		0.12 + height_difference * 2.5
 			+ turn_total / float(maxi(path.size() - 2, 1)) * 0.10
 			+ _boundary_random_unit(river_id, link_index, 3571) * 0.08,
 		0.12, 0.60

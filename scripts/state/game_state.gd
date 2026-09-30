@@ -491,6 +491,14 @@ func generate_from_map_definition(
 			edge.kind == Edge.Kind.LAND
 			and bool(record.get("is_terrain_connector", false))
 		)
+		if (
+			edge.kind == Edge.Kind.RIVER
+			and not TerrainMapGenerator.river_link_is_navigable(
+				edge.max_height_difference
+			)
+		):
+			edge.max_manpower = 0
+			edge.base_max_manpower = 0
 		edges.append(edge)
 		edge_lookup[_edge_key(edge.city_a, edge.city_b)] = edge
 		(adjacency[edge.city_a] as Array[int]).append(edge.city_b)
@@ -687,12 +695,6 @@ func apply_edge_editor_changes(
 	var was_region_link := _edge_participates_in_region_graph(edge)
 	edge.kind = clampi(int(changes.get("kind", edge.kind)), Edge.Kind.LAND, Edge.Kind.SEA)
 	var requested_capacity := int(changes.get("max_manpower", edge.max_manpower))
-	edge.max_manpower = (
-		Edge.WATER_MANPOWER
-		if edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
-		else Edge.quantize_land_capacity(requested_capacity)
-	)
-	edge.base_max_manpower = edge.max_manpower
 	edge.distance = maxi(int(changes.get("distance", edge.distance)), 1)
 	edge.danger = clampf(float(changes.get("danger", edge.danger)), 0.0, 1.0)
 	edge.travel_time_multiplier = maxf(float(changes.get("travel_time_multiplier", edge.travel_time_multiplier)), 0.01)
@@ -700,6 +702,19 @@ func apply_edge_editor_changes(
 	edge.allows_holding = bool(changes.get("allows_holding", edge.allows_holding))
 	edge.max_height_difference = clampf(float(changes.get("max_height_difference", edge.max_height_difference)), 0.0, 1.0)
 	edge.land_ratio = clampf(float(changes.get("land_ratio", edge.land_ratio)), 0.0, 1.0)
+	if edge.kind == Edge.Kind.RIVER:
+		edge.max_manpower = (
+			Edge.WATER_MANPOWER
+			if TerrainMapGenerator.river_link_is_navigable(
+				edge.max_height_difference
+			)
+			else 0
+		)
+	elif edge.kind == Edge.Kind.SEA:
+		edge.max_manpower = Edge.WATER_MANPOWER
+	else:
+		edge.max_manpower = Edge.quantize_land_capacity(requested_capacity)
+	edge.base_max_manpower = edge.max_manpower
 	edge.is_backbone = bool(changes.get("is_backbone", edge.is_backbone))
 	edge.is_terrain_connector = (
 		edge.kind == Edge.Kind.LAND
@@ -3170,6 +3185,13 @@ func _ensure_passable_transport_connectivity(
 		if edge.max_manpower > 0:
 			continue
 		if (
+			edge.kind == Edge.Kind.RIVER
+			and not TerrainMapGenerator.river_link_is_navigable(
+				edge.max_height_difference
+			)
+		):
+			continue
+		if (
 			edge.kind == Edge.Kind.LAND
 			and not edge.is_terrain_connector
 			and (
@@ -3334,6 +3356,12 @@ func _reopen_initial_component_connector(
 				edge == null
 				or component_set.has(neighbor)
 				or cities[neighbor].owner_nation != owner_nation
+				or (
+					edge.kind == Edge.Kind.RIVER
+					and not TerrainMapGenerator.river_link_is_navigable(
+						edge.max_height_difference
+					)
+				)
 			):
 				continue
 			if best == null or edge.distance < best.distance:
@@ -3358,7 +3386,17 @@ func _transfer_initial_component_to_neighbor(
 		for neighbor in neighbors(int(city_value)):
 			var edge := edge_of(int(city_value), neighbor)
 			var neighbor_owner := cities[neighbor].owner_nation
-			if edge == null or neighbor_owner < 0 or neighbor_owner == owner_nation:
+			if (
+				edge == null
+				or neighbor_owner < 0
+				or neighbor_owner == owner_nation
+				or (
+					edge.kind == Edge.Kind.RIVER
+					and not TerrainMapGenerator.river_link_is_navigable(
+						edge.max_height_difference
+					)
+				)
+			):
 				continue
 			counts[neighbor_owner] = int(counts.get(neighbor_owner, 0)) + 1
 			var previous: Edge = edge_by_owner.get(neighbor_owner)

@@ -1964,6 +1964,8 @@ func _test_river_transport() -> void:
 			and gs.cities[edge.city_a].is_dock
 			and gs.cities[edge.city_b].is_dock
 			and edge.max_manpower == Edge.WATER_MANPOWER
+			and edge.max_height_difference
+				<= TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE
 			and edge.travel_time_multiplier < 1.0
 			and edge.supply_loss_multiplier < 1.0
 			and not edge.allows_holding
@@ -2092,6 +2094,24 @@ func _test_river_transport() -> void:
 	var water_edge := guard_state.edge_of(0, 1)
 	water_edge.kind = Edge.Kind.RIVER
 	water_edge.allows_holding = false
+	guard_state.apply_edge_editor_changes(0, 1, {
+		"kind": Edge.Kind.RIVER,
+		"max_height_difference": (
+			TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE + 0.01
+		),
+	})
+	_check(
+		water_edge.max_manpower == 0 and water_edge.base_max_manpower == 0,
+		"地图编辑器不得把超过高差门槛的码头河运边重新开放"
+	)
+	guard_state.apply_edge_editor_changes(0, 1, {
+		"kind": Edge.Kind.RIVER,
+		"max_height_difference": TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE,
+	})
+	_check(
+		water_edge.max_manpower == Edge.WATER_MANPOWER,
+		"码头河运边回到高差门槛内后应恢复标准水运容量"
+	)
 	var guard := _make_army(
 		9900,
 		guard_state.cities[0].owner_nation,

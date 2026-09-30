@@ -365,9 +365,37 @@ func _test_puppet_enfeoffment() -> void:
 	var ruler := state.nations[0]
 	ruler.ruler_archetype = RulerProfile.PUPPET
 	ruler.ruler_traits.clear()
-	var initial_cities := state.land_cities_of(0).size()
 	var capital_center := state.administrative_center_of(ruler.capital_city_id)
 	var capital_state_members := state.administrative_members(capital_center)
+	var initial_cities := state.land_cities_of(0).size()
+	var has_foreign_frontier := false
+	var forced_frontier_city := -1
+	var forced_frontier_owner := -1
+	for pair in state.territorial_border_pairs():
+		var owner_a := state.cities[pair.x].owner_nation
+		var owner_b := state.cities[pair.y].owner_nation
+		if [owner_a, owner_b].has(0) and [owner_a, owner_b].has(1):
+			has_foreign_frontier = true
+			break
+	if not has_foreign_frontier:
+		for pair in state.territorial_border_pairs():
+			var foreign_city := (
+				pair.y if state.cities[pair.x].owner_nation == 0 else pair.x
+			)
+			var home_city := pair.x if foreign_city == pair.y else pair.y
+			if (
+				state.cities[home_city].owner_nation != 0
+				or foreign_city in capital_state_members
+			):
+				continue
+			forced_frontier_city = foreign_city
+			forced_frontier_owner = state.cities[foreign_city].owner_nation
+			state.cities[foreign_city].owner_nation = 1
+			has_foreign_frontier = true
+			state.ownership_revision += 1
+			state.refresh_derived()
+			break
+	_check(has_foreign_frontier, "puppet fixture could not establish a foreign frontier")
 	_check(
 		initial_cities > capital_state_members.size(),
 		"puppet fixture does not have enough direct cities"
@@ -390,6 +418,10 @@ func _test_puppet_enfeoffment() -> void:
 			and not wartime_enfeoff,
 		"puppet ruler must not enfeoff during war pressure"
 	)
+	if forced_frontier_city >= 0:
+		state.cities[forced_frontier_city].owner_nation = forced_frontier_owner
+		state.ownership_revision += 1
+		state.refresh_derived()
 	state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.NEUTRAL
 	)

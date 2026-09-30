@@ -79,6 +79,9 @@ func _init() -> void:
 
 	defender.size = 12000
 	state.cities[entry_id].owner_nation = attacker_id
+	# Keep this fixture below the current center-assault requirement so it
+	# continues to exercise detachment creation rather than the ready-camp path.
+	state.cities[center_id].garrison_manpower = 60000
 	state.ownership_revision += 1
 	for army in attackers:
 		_place_idle(army, entry_id)
@@ -173,6 +176,7 @@ func _init() -> void:
 	_test_blocked_fu_fallback(false, 4)
 	_test_blocked_fu_fallback(true, 4)
 	_test_blocked_fu_fallback(false, 1)
+	_test_ready_camp_bypasses_remaining_fu()
 	_test_two_hop_camp_assault()
 	_finish()
 
@@ -305,6 +309,101 @@ func _test_blocked_fu_fallback(
 			_all_assigned_to(plan, attackers, camp_id),
 			"%s驻营等待时不得误派军队强攻州治" % label
 		)
+	sim.free()
+
+
+func _test_ready_camp_bypasses_remaining_fu() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(95209)
+	var context := _attack_context(state)
+	_check(not context.is_empty(), "营内主力攻州治夹具必须找到大州")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var camp_id := int(context["entry"])
+	var staging_id := int(context["staging"])
+	var attacker_id := int(context["attacker"])
+	var defender_id := int(context["defender"])
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "营内主力转攻州治"
+	)
+	for city in state.cities:
+		if not city.is_dock:
+			city.owner_nation = attacker_id
+	for member_id in state.administrative_members(center_id):
+		state.cities[member_id].owner_nation = defender_id
+	state.cities[camp_id].owner_nation = attacker_id
+	state.cities[center_id].garrison_manpower = 15000
+	state.armies.clear()
+	state.battles.clear()
+	var attackers: Array[Army] = []
+	for index in range(4):
+		var army := _army(952090 + index, attacker_id, camp_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+		attackers.append(army)
+	var defeated_detachment := _army(952094, attacker_id, camp_id, 3000)
+	defeated_detachment.campaign_war_id = war_id
+	defeated_detachment.state = Army.State.RECOVERING
+	defeated_detachment.morale = 0.0
+	state.armies.append(defeated_detachment)
+	state.ownership_revision += 1
+	state.refresh_derived()
+	var attacker_bloc := state.alliance_bloc(attacker_id)
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.phase = CoalitionCampaignFront.Phase.RAID_FU
+	plan.war_id = war_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = camp_id
+	for army in attackers:
+		plan.army_assignments[army.id] = camp_id
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var frontier_targets := sim._zhou_enemy_fu_targets(
+		attacker_id, center_id, attacker_bloc, true
+	)
+	_check(not frontier_targets.is_empty(), "夹具必须保留可达的敌方前沿府")
+	if frontier_targets.is_empty():
+		sim.free()
+		return
+	plan.tactical_target_city_ids = [frontier_targets[0]] as Array[int]
+	plan.army_assignments[defeated_detachment.id] = frontier_targets[0]
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
+	var requirement := (
+		state.campaign_siege_requirement(attacker_id, center_id)
+		+ state.campaign_reinforcement_threat(attacker_id, center_id)
+	)
+	_check(requirement <= 60000, "夹具中营内实际C必须满足当前R+V")
+	sim._manage_administrative_campaign(plan)
+	_check(
+		plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
+		"营内实际C满足R+V时必须跳过剩余属府并转攻州治"
+	)
+	_check(
+		plan.tactical_target_city_ids == [center_id],
+		"转攻州治后不得保留属府分遣目标"
+	)
+	_check(
+		int(plan.army_assignments.get(defeated_detachment.id, -1)) == center_id,
+		"恢复中的败退分遣队也必须清除旧属府绑定并改为追随州治主力"
+	)
+	for army in attackers:
+		_place_idle(army, staging_id)
+	sim._manage_administrative_campaign(plan)
+	_check(
+		plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
+		"州治进攻发动后不得因大营到场C下降而退回分遣占府"
+	)
+	_check(
+		plan.tactical_target_city_ids == [center_id],
+		"已发动的州治进攻必须继续以州治为唯一目标"
+	)
 	sim.free()
 
 
