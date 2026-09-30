@@ -152,6 +152,16 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_center_defeat_regroup.gd \
   --log-file "$LOG_DIR/world-war-campaign-center-defeat-regroup.log"
 echo
+echo "==> [2i4b/29] 举州易帜门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/zhou_defection.gd \
+  --log-file "$LOG_DIR/world-war-zhou-defection.log"
+echo
+echo "==> [2i4c/29] 强攻受挫回退门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_assault_fallback.gd \
+  --log-file "$LOG_DIR/world-war-campaign-assault-fallback.log"
+echo
 echo "==> [2i5/29] 战前集结与宣战先手门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/prewar_assembly.gd \

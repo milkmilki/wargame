@@ -4081,6 +4081,45 @@ func _resolve_capital_capture_capitulation(
 	return forced_peace_marker
 
 
+## 州治易帜：州治陷落后，本州所有敌方持有的属府向占领方易主（望风归附）。
+## 只转实控、法理留待和平结算；库存随城移交而非掠夺。第三方、盟友持有
+## 的属府与首都不动，由肃清收尾机制继续处理。
+func _zhou_defection_operations(
+	claimant: int,
+	sponsor: int,
+	center_id: int
+) -> Array[Dictionary]:
+	var operations: Array[Dictionary] = []
+	if (
+		claimant < 0
+		or claimant >= state.nations.size()
+		or not state.is_zhou_city(center_id)
+	):
+		return operations
+	var normalized_sponsor := sponsor
+	if normalized_sponsor == -1:
+		normalized_sponsor = claimant
+	for member_id in state.administrative_members(center_id):
+		if (
+			member_id == center_id
+			or state.cities[member_id].is_capital
+			or not state.is_enemy(
+				claimant, state.cities[member_id].owner_nation
+			)
+		):
+			continue
+		operations.append({
+			"city_id": member_id,
+			"controller_id": claimant,
+			"sponsor_id": normalized_sponsor,
+			"stock_policy": (
+				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
+			),
+			"reason": "zhou_defection",
+		})
+	return operations
+
+
 func _capital_capture_transfer_city_ids(
 	surrendering: int,
 	captured_capital_id: int,
@@ -12942,6 +12981,32 @@ func _capture_city(
 		if not bool(capture_result.get("ok", false)):
 			return
 		territory_changed = bool(capture_result.get("changed", false))
+		# 举州易帜：州治陷落，本州敌方属府随之易主。首都与削藩内战首都
+		# 走各自的通吃/兼并路径，不在此处处理。易帜是独立事务——失败
+		# 只退化为旧行为（残敌属府继续由肃清收尾），绝不阻断州治占领。
+		if (
+			state.is_zhou_city(city.id)
+			and not captured_capital
+			and not civil_war_capital_capture
+		):
+			var defection_operations := _zhou_defection_operations(
+				claimant, occupation_sponsor, city.id
+			)
+			if not defection_operations.is_empty():
+				var defection_result := state.apply_territory_transaction(
+					defection_operations
+				)
+				if bool(defection_result.get("ok", false)):
+					territory_changed = (
+						territory_changed
+						or bool(defection_result.get("changed", false))
+					)
+					for changed_city_value in defection_result.get(
+						"changed_city_ids", []
+					):
+						var changed_city_id := int(changed_city_value)
+						if not captured_city_ids.has(changed_city_id):
+							captured_city_ids.append(changed_city_id)
 	# 占领只重塑局部边境：旧主、占领者和每座易主城的相邻势力下一日
 	# 提前重算。首都两跳批量转移必须逐城标脏，不能只刷新首都邻域。
 	# 全局外交/宗藩重构仍使用 _ai_last_decision_day=-1。
