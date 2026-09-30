@@ -2066,24 +2066,34 @@ func rebuild_administrative_regions() -> Dictionary:
 		if city.politically_active and not city.is_dock:
 			active.append(city.id)
 	var links: Array[Vector2i] = []
+	var attachment_links: Array[Vector2i] = []
 	for edge in edges:
 		if (
 			edge == null
-			or edge.kind != Edge.Kind.LAND
 			or edge.max_manpower <= 0
 			or edge.city_a < 0
 			or edge.city_b < 0
 			or edge.city_a >= cities.size()
 			or edge.city_b >= cities.size()
-			or cities[edge.city_a].is_dock
-			or cities[edge.city_b].is_dock
 			or not cities[edge.city_a].politically_active
 			or not cities[edge.city_b].politically_active
 		):
 			continue
-		links.append(Vector2i(edge.city_a, edge.city_b))
+		if edge.kind == Edge.Kind.LAND:
+			# 州界只按陆路划分，码头保持独立交通节点，不进州域。
+			if cities[edge.city_a].is_dock or cities[edge.city_b].is_dock:
+				continue
+			links.append(Vector2i(edge.city_a, edge.city_b))
+		else:
+			# 抢滩、水路与海路只用于把没有陆路连接的孤城并入邻州，不参与
+			# 州界划分本身。两端都必须是州域城市：码头在初始国家分配里是
+			# 独立节点，穿过码头的归属路径不保证同属一国，会让并入的孤城
+			# 变成只能穿过外国码头的飞地。
+			if cities[edge.city_a].is_dock or cities[edge.city_b].is_dock:
+				continue
+			attachment_links.append(Vector2i(edge.city_a, edge.city_b))
 	var analysis := AdministrativeRegionAnalysis.analyze(
-		cities.size(), active, links, positions
+		cities.size(), active, links, positions, attachment_links
 	)
 	administrative_region_ids = analysis["region_ids"]
 	administrative_region_count = int(analysis["region_count"])

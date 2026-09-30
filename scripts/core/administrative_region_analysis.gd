@@ -1,15 +1,34 @@
 class_name AdministrativeRegionAnalysis
 extends RefCounted
-## Deterministic land-only administrative regions. Centers first claim their
-## one-hop neighborhoods. Fringe cities that cannot form a multi-city state are
-## then attached to the nearest center, normally at distance two.
+## Deterministic administrative regions. The partition graph is land-only:
+## centers first claim their one-hop neighborhoods, and the selector refuses
+## to open a state that would cover only itself, so every land-reachable
+## center keeps at least one land neighbor at hop one.
+##
+## A politically active city with no land link at all cannot be covered that
+## way. Promoting it to a one-city state would recreate exactly the shape the
+## selector refuses to create, so instead it joins a neighboring state as a
+## Fu over the attachment graph (landing, river and sea links), which makes
+## the adopted Fu a real neighbor of its state.
+##
+## Adoption only follows links between two administrable cities. A dock is an
+## independently assigned node in the initial nation partition, so a state
+## that reaches its Fu through a dock can be split from that dock and turn the
+## Fu into an enclave reachable only through foreign ports. A city whose only
+## link is a dock therefore keeps its own state; that is the one remaining
+## shape where a state can hold no Fu.
+
+## Fringe cities attach at most this far from their state in the graph used
+## for adoption, mirroring the land fringe cap.
+const MAX_FRINGE_HOPS: int = 2
 
 
 static func analyze(
 	city_count: int,
 	active_city_ids: PackedInt32Array,
 	links: Array[Vector2i],
-	positions: PackedVector2Array = PackedVector2Array()
+	positions: PackedVector2Array = PackedVector2Array(),
+	attachment_links: Array[Vector2i] = []
 ) -> Dictionary:
 	var active: Array[int] = []
 	var active_set := {}
@@ -45,23 +64,17 @@ static func analyze(
 	)
 	var region_ids: PackedInt32Array = assignment["region_ids"]
 	var hop_distances: PackedInt32Array = assignment["hop_distances"]
+	_adopt_land_isolated_cities(
+		active,
+		_build_adjacency(city_count, active_set, attachment_links),
+		centers,
+		region_ids,
+		hop_distances
+	)
 	var center_by_city := PackedInt32Array()
 	center_by_city.resize(maxi(city_count, 0))
 	center_by_city.fill(-1)
 	for city_id in active:
-		if region_ids[city_id] < 0:
-			# A connected component without a selected center can only be a true
-			# isolated singleton under the normal selection rule. Keep the flood
-			# defensive so malformed disconnected fixtures remain total.
-			var fallback_region := centers.size()
-			centers.append(city_id)
-			_assign_unclaimed_component(
-				city_id,
-				fallback_region,
-				adjacency,
-				region_ids,
-				hop_distances
-			)
 		center_by_city[city_id] = centers[region_ids[city_id]]
 	return {
 		"region_ids": region_ids,
@@ -70,6 +83,69 @@ static func analyze(
 		"center_by_city": center_by_city,
 		"hop_distances": hop_distances,
 	}
+
+
+## Land-isolated active cities join a neighboring state instead of becoming
+## one-city states. Cities are visited in ascending id order and every
+## adoption is written immediately, so a chain of isolated cities resolves
+## through the first city of the chain that already belongs to a state.
+##
+## Adoption only follows real links. Merging a city that has no passable link
+## to its state would leave that state internally unreachable, and the initial
+## nation partition collapses every state into a single graph node, so such a
+## city has to open its own state instead.
+static func _adopt_land_isolated_cities(
+	active: Array[int],
+	attachment: Array[Array],
+	centers: Array[int],
+	region_ids: PackedInt32Array,
+	hop_distances: PackedInt32Array
+) -> void:
+	for city_id in active:
+		if region_ids[city_id] >= 0:
+			continue
+		var reached := _attachment_region(city_id, attachment, region_ids)
+		var reached_region := int(reached["region"])
+		if reached_region >= 0:
+			region_ids[city_id] = reached_region
+			hop_distances[city_id] = mini(
+				int(reached["hops"]), MAX_FRINGE_HOPS
+			)
+			continue
+		region_ids[city_id] = centers.size()
+		hop_distances[city_id] = 0
+		centers.append(city_id)
+
+
+## Closest state already owning a city, reached over the attachment graph.
+## The search is bounded only by the city's own attachment component, so a
+## chain of isolated cities resolves as soon as it meets an assigned one.
+## Returns region -1 when that component holds no state at all.
+static func _attachment_region(
+	start: int,
+	attachment: Array[Array],
+	region_ids: PackedInt32Array
+) -> Dictionary:
+	var visited := {start: true}
+	var frontier: Array[int] = [start]
+	var hops := 0
+	while not frontier.is_empty():
+		hops += 1
+		var next: Array[int] = []
+		for current in frontier:
+			for neighbor_value in attachment[current]:
+				var neighbor := int(neighbor_value)
+				if visited.has(neighbor):
+					continue
+				visited[neighbor] = true
+				if region_ids[neighbor] >= 0:
+					return {
+						"region": region_ids[neighbor],
+						"hops": hops,
+					}
+				next.append(neighbor)
+		frontier = next
+	return {"region": -1, "hops": 0}
 
 
 static func _build_adjacency(
@@ -229,29 +305,6 @@ static func _nearest_center_assignment(
 		"region_ids": region_ids,
 		"hop_distances": hop_distances,
 	}
-
-
-static func _assign_unclaimed_component(
-	start: int,
-	region_id: int,
-	adjacency: Array[Array],
-	region_ids: PackedInt32Array,
-	hop_distances: PackedInt32Array
-) -> void:
-	region_ids[start] = region_id
-	hop_distances[start] = 0
-	var queue: Array[int] = [start]
-	var cursor := 0
-	while cursor < queue.size():
-		var current := queue[cursor]
-		cursor += 1
-		for neighbor_value in adjacency[current]:
-			var neighbor := int(neighbor_value)
-			if region_ids[neighbor] >= 0:
-				continue
-			region_ids[neighbor] = region_id
-			hop_distances[neighbor] = hop_distances[current] + 1
-			queue.append(neighbor)
 
 
 static func _distance_within_two(
