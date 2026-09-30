@@ -179,6 +179,8 @@ func _init() -> void:
 	_test_ready_camp_bypasses_remaining_fu()
 	_test_two_hop_camp_assault()
 	_test_camp_threat_requires_battle()
+	_test_hold_camp_reinforcement_advance()
+	_test_cleanup_releases_when_fu_unreachable()
 	_finish()
 
 
@@ -258,6 +260,217 @@ func _test_camp_threat_requires_battle() -> void:
 		plan.phase == CoalitionCampaignFront.Phase.RECALL_CAMP,
 		"大营真正开战后战线必须进入全军回援（阶段%s）" % str(plan.phase)
 	)
+	sim.free()
+
+
+func _test_hold_camp_reinforcement_advance() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(94145)
+	var context := _attack_context(state)
+	_check(not context.is_empty(), "驻营援军夹具必须找到大州")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var entry_id := int(context["entry"])
+	var attacker_id := int(context["attacker"])
+	var defender_id := int(context["defender"])
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "驻营援军门禁"
+	)
+	for city in state.cities:
+		if (
+			city.politically_active
+			and state.administrative_center_of(city.id) != center_id
+		):
+			city.owner_nation = attacker_id
+	for member_id in state.administrative_members(center_id):
+		state.cities[member_id].owner_nation = attacker_id
+	state.cities[center_id].owner_nation = defender_id
+	state.cities[center_id].garrison_manpower = 60000
+	state.armies.clear()
+	state.battles.clear()
+	state.ownership_revision += 1
+	state.refresh_derived()
+	var camp_force: Array[Army] = []
+	for index in range(3):
+		var army := _army(962001 + index, attacker_id, entry_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+		camp_force.append(army)
+	var reinforcement := _army(
+		962004, attacker_id, state.nations[attacker_id].capital_city_id, 15000
+	)
+	reinforcement.campaign_war_id = war_id
+	state.armies.append(reinforcement)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.war_id = war_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = entry_id
+	plan.phase = CoalitionCampaignFront.Phase.HOLD_CAMP
+	plan.staging_city_id = int(
+		DiplomacyAI.war_staging_cities_for_objective(
+			state, attacker_id, entry_id
+		)[0]
+	)
+	for army in camp_force:
+		plan.army_assignments[army.id] = entry_id
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
+	var component: Dictionary = {}
+	for candidate in state.coalition_campaign_components(war_id):
+		if (candidate["members"] as Array[int]).has(attacker_id):
+			component = candidate
+			break
+	_check(not component.is_empty(), "驻营援军夹具必须找到战争连通分量")
+	if component.is_empty():
+		sim.free()
+		return
+	sim._plan_coalition_component(component, [] as Array[int], {})
+	_check(
+		reinforcement.campaign_front_id == plan.front_id,
+		"分配器必须把空闲援军编入战线"
+	)
+	_check(
+		reinforcement.ai_target_city == entry_id,
+		"驻营阶段新援军必须被派往大营（实际 ai_target=%d）"
+			% reinforcement.ai_target_city
+	)
+	_place_idle(reinforcement, entry_id)
+	sim._manage_administrative_campaign(plan)
+	_check(
+		plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
+		"援军抵达大营后必须发动第二波（阶段%d）" % plan.phase
+	)
+	sim.free()
+
+
+func _test_cleanup_releases_when_fu_unreachable() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(94145)
+	var context := _attack_context(state)
+	_check(not context.is_empty(), "肃清收尾夹具必须找到大州")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var entry_id := int(context["entry"])
+	var attacker_id := int(context["attacker"])
+	var defender_id := int(context["defender"])
+	var neutral_id := -1
+	for nation in state.nations:
+		if nation.id not in [attacker_id, defender_id]:
+			neutral_id = nation.id
+			break
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "肃清收尾门禁"
+	)
+	for city in state.cities:
+		if (
+			city.politically_active
+			and state.administrative_center_of(city.id) != center_id
+		):
+			city.owner_nation = attacker_id
+	var members: Array[int] = state.administrative_members(center_id)
+	for member_id in members:
+		state.cities[member_id].owner_nation = attacker_id
+	# 一个被中立领土包围的不可达属府，一个留有己方边境邻居的可达属府。
+	var locked_fu := -1
+	for member_id in members:
+		if member_id in [center_id, entry_id]:
+			continue
+		var adjacent_center := false
+		var adjacent_entry := false
+		for neighbor_id in state.neighbors(member_id):
+			if neighbor_id == center_id:
+				adjacent_center = true
+			if neighbor_id == entry_id:
+				adjacent_entry = true
+		if not adjacent_center and not adjacent_entry:
+			locked_fu = member_id
+			break
+	state.cities[locked_fu].owner_nation = defender_id
+	for neighbor_id in state.neighbors(locked_fu):
+		if neighbor_id != center_id and neighbor_id != entry_id:
+			state.cities[neighbor_id].owner_nation = neutral_id
+	var reachable_fu := -1
+	for member_id in members:
+		if member_id in [center_id, entry_id, locked_fu]:
+			continue
+		for neighbor_id in state.neighbors(member_id):
+			if state.administrative_center_of(neighbor_id) != center_id:
+				reachable_fu = member_id
+				break
+		if reachable_fu >= 0:
+			break
+	state.cities[reachable_fu].owner_nation = defender_id
+	state.armies.clear()
+	state.battles.clear()
+	state.ownership_revision += 1
+	state.refresh_derived()
+	for index in range(3):
+		var army := _army(962101 + index, attacker_id, center_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.war_id = war_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = entry_id
+	plan.phase = CoalitionCampaignFront.Phase.CLEANUP
+	plan.tactical_target_city_ids = [center_id] as Array[int]
+	for army in state.armies:
+		plan.army_assignments[army.id] = center_id
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
+	sim._manage_administrative_campaign(plan)
+	_check(
+		state.campaign_front(plan.front_id) != null,
+		"尚有可达敌方属府时肃清战线必须继续存在"
+	)
+	_check(
+		plan.tactical_target_city_ids.has(reachable_fu),
+		"可达敌方属府必须被列为肃清目标（目标=%s）"
+			% str(plan.tactical_target_city_ids)
+	)
+	state.cities[reachable_fu].owner_nation = attacker_id
+	state.ownership_revision += 1
+	sim._manage_administrative_campaign(plan)
+	_check(
+		state.campaign_front(plan.front_id) == null,
+		"剩余敌方属府全部不可达时必须当场释放战线"
+	)
+	for army in state.armies:
+		_check(
+			army.campaign_front_id == -1,
+			"战线释放后全部军队必须解绑"
+		)
+	var component: Dictionary = {}
+	for candidate in state.coalition_campaign_components(war_id):
+		if (candidate["members"] as Array[int]).has(attacker_id):
+			component = candidate
+			break
+	if not component.is_empty():
+		_check(
+			not sim._component_objective_is_valid(
+				center_id,
+				component["enemy_ids"] as Array[int],
+				component["members"] as Array[int],
+				{}
+			),
+			"已夺取州治不得再成为合法战线目标"
+		)
 	sim.free()
 
 

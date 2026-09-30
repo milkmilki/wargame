@@ -32,6 +32,9 @@ var camp_city_id: int = -1
 var tactical_target_city_ids: Array[int] = []
 var army_assignments: Dictionary = {} # army_id -> tactical city_id
 var failed_until_day: int = -1
+## 强攻阶段连续无法对州治下达任何进攻令的决策日计数；达到阈值即回驻营
+## 重整。瞬态字段，不参与快照序列化。
+var assault_stalled_days: int = 0
 var ownership_revision: int = -1
 var administrative_region_revision: int = -1
 var garrison_revision: int = -1

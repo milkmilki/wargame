@@ -124,6 +124,8 @@ const CAMPAIGN_MAX_OFFENSIVE_FRONTS: int = 2
 const CAMPAIGN_TWO_FRONT_MANPOWER: int = 90000
 const CAMPAIGN_MIN_FRONT_MANPOWER: int = 45000
 const CAMPAIGN_MAX_WAR_REALLOCATIONS: int = 3
+## 强攻阶段连续多少个决策日无法对州治下达任何进攻令后回驻营重整。
+const ASSAULT_STALLED_FALLBACK_DAYS: int = 2
 const LOCAL_BATTLE_REINFORCE_RATIO: float = 1.25
 const LOCAL_BATTLE_MIN_MORALE_RATIO: float = 0.50
 const LOCAL_BATTLE_MIN_SUPPLY_RATIO: float = 0.50
@@ -8579,7 +8581,9 @@ func _plan_coalition_component(
 		var center_id := int(objective.get(
 			"administrative_center_city_id", objective.get("city_id", -1)
 		))
-		if not _component_objective_is_valid(center_id, enemy_ids, excluded):
+		if not _component_objective_is_valid(
+			center_id, enemy_ids, members, excluded
+		):
 			break
 		var front := state.create_campaign_front(
 			war_id, members,
@@ -8632,7 +8636,8 @@ func _select_component_objective(
 				"administrative_center_city_id", declared.get("city_id", -1)
 			))
 			if not _component_objective_is_valid(
-				center_id, enemy_ids, excluded_centers
+				center_id, enemy_ids, component["members"] as Array[int],
+				excluded_centers
 			):
 				continue
 			if (
@@ -8669,7 +8674,8 @@ func _select_component_objective(
 				"administrative_center_city_id", objective.get("city_id", -1)
 			))
 			if not _component_objective_is_valid(
-				center_id, enemy_ids, excluded_centers
+				center_id, enemy_ids, component["members"] as Array[int],
+				excluded_centers
 			):
 				continue
 			if (
@@ -8690,11 +8696,17 @@ func _select_component_objective(
 func _component_objective_is_valid(
 	center_id: int,
 	enemy_ids: Array[int],
+	member_ids: Array[int],
 	excluded_centers: Dictionary
 ) -> bool:
 	return (
 		state.is_zhou_city(center_id)
 		and not excluded_centers.has(center_id)
+		# 州治已被本方阵营夺取的不再是目标：否则肃清收尾释放的战线会被
+		# 下一轮规划重新拉起。敌方或第三方持有的州治仍然合法——例如
+		# 宗主国州治被敌占属府拖住时，藩王战线要能进入 CLEANUP 帮宗主
+		# 收复分裂州。
+		and not member_ids.has(state.cities[center_id].owner_nation)
 		and not _administrative_campaign_complete(center_id, enemy_ids)
 	)
 
@@ -8935,7 +8947,10 @@ func _allocate_coalition_fronts(component: Dictionary) -> bool:
 					front.anchor_nation_id,
 					entry_city if entry_city >= 0 else front.center_city_id
 				)
-			if front.staging_city_id >= 0:
+			# 大营建立前（集结/破口期）援军去集结点；大营建立后标到州治，
+			# 由驻营逻辑派往大营（_hold_campaign_fu_positions 的契约），
+			# 否则 HOLD_CAMP 尾声的新援军会冻结在后方、大营兵力永不达标。
+			if front.staging_city_id >= 0 and front.camp_city_id < 0:
 				redeployment_target = front.staging_city_id
 		var requirement := int(requirement_by_front[front.front_id])
 		var committed := int(effective_by_front.get(front.front_id, 0))
@@ -9627,7 +9642,32 @@ func _manage_administrative_campaign(
 		)
 	)
 	if owns_active_siege or plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER:
-		return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
+		var launched := _launch_campaign_center_assault(
+			nation_id, plan, alive_by_id
+		)
+		# 强攻已发动就保持发动，但走廊断裂时不能无限空转：连续两个决策日
+		# 没有任何军队在向州治推进（已抵达/行进中/本轮新获令），就退回
+		# 驻营重整，让属府逻辑去夺回走廊。
+		var progressing := owns_active_siege or launched
+		if not progressing:
+			for army in _campaign_plan_armies(plan):
+				if (
+					army.ai_target_city == plan.center_city_id
+					or (
+						not army.on_edge
+						and army.location_city == plan.center_city_id
+					)
+				):
+					progressing = true
+					break
+		plan.assault_stalled_days = (
+			0 if progressing else plan.assault_stalled_days + 1
+		)
+		if plan.assault_stalled_days >= ASSAULT_STALLED_FALLBACK_DAYS:
+			plan.assault_stalled_days = 0
+			plan.phase = CoalitionCampaignFront.Phase.HOLD_CAMP
+			plan.tactical_target_city_ids.clear()
+		return launched
 	var fu_members := _campaign_fu_members(center_city_id)
 	if fu_members.is_empty():
 		return _manage_campaign_without_fu(
@@ -9902,8 +9942,10 @@ func _manage_blocked_campaign_fu(
 ) -> bool:
 	plan.tactical_target_city_ids.clear()
 	if cleanup:
-		plan.phase = CoalitionCampaignFront.Phase.CLEANUP
-		plan.refresh_fingerprint(state)
+		# 州治已在我方手中，剩余敌方属府全部不可达：肃清到此收尾，当场
+		# 释放战线。继续保留只会让战役无限期挂着（实测 30 天零命令）。
+		# 管理循环在调用前已物化战线数组，就地擦除安全。
+		state.release_campaign_front(plan.front_id)
 		return false
 	var requirement := (
 		state.campaign_siege_requirement(nation_id, plan.center_city_id)
@@ -12392,24 +12434,45 @@ func _finish_siege_field_engagement(battle: Battle) -> void:
 func _prepare_campaign_regroup_after_center_defeat(battle: Battle) -> void:
 	if battle == null or battle.city == null:
 		return
-	var front: CoalitionCampaignFront = null
 	for army in battle.side_a + battle.routed_a:
-		var candidate := state.campaign_front(army.campaign_front_id)
+		var front := state.campaign_front(army.campaign_front_id)
 		if (
-			candidate != null
-			and candidate.mode == CoalitionCampaignFront.Mode.OFFENSE
-			and candidate.center_city_id == battle.city.id
-			and candidate.camp_city_id >= 0
+			front != null
+			and front.mode == CoalitionCampaignFront.Mode.OFFENSE
+			and front.center_city_id == battle.city.id
 		):
-			front = candidate
-			break
-	if front == null:
+			_regroup_campaign_front_at_camp(front)
+			return
+
+
+## 进攻受挫后的统一重整：撤出强攻、全军改绑大营、等待下一次 R+V 发动。
+## 必须在本轮撤退结算之前调用，否则败军的撤退路径不会以大营为终点。
+func _regroup_campaign_front_at_camp(front: CoalitionCampaignFront) -> void:
+	if front == null or front.camp_city_id < 0:
 		return
 	front.phase = CoalitionCampaignFront.Phase.HOLD_CAMP
 	front.tactical_target_city_ids.clear()
+	front.assault_stalled_days = 0
 	for army_id_value in front.army_assignments.keys():
 		front.army_assignments[army_id_value] = front.camp_city_id
 	front.refresh_fingerprint(state)
+
+
+## 强攻途中的野战败北同样触发撤营重整：否则 phase 停留在 ASSAULT_CENTER，
+## 粘滞分支会用残兵无限"添油"。仅限正在强攻的战线，普通袭扰野战不触发。
+func _regroup_assault_fronts_after_field_rout(losers: Array[Army]) -> void:
+	var regrouped := {}
+	for army in losers:
+		var front := state.campaign_front(army.campaign_front_id)
+		if (
+			front == null
+			or regrouped.has(front.front_id)
+			or front.mode != CoalitionCampaignFront.Mode.OFFENSE
+			or front.phase != CoalitionCampaignFront.Phase.ASSAULT_CENTER
+		):
+			continue
+		regrouped[front.front_id] = true
+		_regroup_campaign_front_at_camp(front)
 
 
 func _attach_city_garrison(battle: Battle) -> Army:
@@ -12627,11 +12690,15 @@ func _finish_field_battle(battle: Battle) -> void:
 	# 平局（winner_side==0，双方同时失败且续战能力相等）：双方都脱离战斗撤退，无人占领/追击。
 	if battle.winner_side == 0:
 		_apply_field_rout_attrition(battle, battle.side_a + battle.side_b)
+		_regroup_assault_fronts_after_field_rout(battle.side_a + battle.side_b)
 		_finish_field([], battle.side_a + battle.side_b)
 		return
 	var winners: Array[Army] = battle.side_a if battle.winner_side == 1 else battle.side_b
 	var losers: Array[Army] = battle.side_b if battle.winner_side == 1 else battle.side_a
 	_apply_field_rout_attrition(battle, losers)
+	# 重整必须先于撤退结算：_retreat 会读取战线的 HOLD_CAMP 状态来决定
+	# 败军是否以大营为撤退终点。
+	_regroup_assault_fronts_after_field_rout(losers)
 	_finish_field(winners, losers)
 
 
