@@ -178,7 +178,87 @@ func _init() -> void:
 	_test_blocked_fu_fallback(false, 1)
 	_test_ready_camp_bypasses_remaining_fu()
 	_test_two_hop_camp_assault()
+	_test_camp_threat_requires_battle()
 	_finish()
+
+
+func _test_camp_threat_requires_battle() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(95213)
+	var context := _attack_context(state)
+	_check(not context.is_empty(), "威胁判定夹具必须找到大州")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var entry_id := int(context["entry"])
+	var staging_id := int(context["staging"])
+	var attacker_id := int(context["attacker"])
+	var defender_id := int(context["defender"])
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(
+		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
+	)
+	var war_id := state.set_war_objective(
+		attacker_id, defender_id, center_id, "大营威胁判定门禁"
+	)
+	for city in state.cities:
+		if (
+			city.politically_active
+			and state.administrative_center_of(city.id) != center_id
+		):
+			city.owner_nation = attacker_id
+	for member_id in state.administrative_members(center_id):
+		state.cities[member_id].owner_nation = defender_id
+	state.cities[entry_id].owner_nation = attacker_id
+	state.cities[center_id].garrison_manpower = 60000
+	state.armies.clear()
+	state.battles.clear()
+	state.ownership_revision += 1
+	state.refresh_derived()
+	var attackers: Array[Army] = []
+	for index in range(4):
+		var army := _army(952120 + index, attacker_id, entry_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+		attackers.append(army)
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.war_id = war_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = entry_id
+	plan.phase = CoalitionCampaignFront.Phase.RAID_FU
+	plan.tactical_target_city_ids = [center_id] as Array[int]
+	for army in attackers:
+		plan.army_assignments[army.id] = entry_id
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
+	# 敌军只是把大营设为行军目标（意图），人还在邻城，没有开战：不得回防。
+	var intending := _army(952124, defender_id, staging_id, 15000)
+	intending.ai_target_city = entry_id
+	state.armies.append(intending)
+	_check(
+		not sim._campaign_camp_threatened(attacker_id, entry_id),
+		"敌军仅把大营设为行军目标时不得判定为威胁"
+	)
+	sim._manage_administrative_campaign(plan)
+	_check(
+		plan.phase != CoalitionCampaignFront.Phase.RECALL_CAMP,
+		"敌军仅有攻营意图时战线不得进入全军回援（阶段%s）" % str(plan.phase)
+	)
+	# 敌军真的进入大营城内时才触发全军回援。
+	_place_idle(intending, entry_id)
+	_check(
+		sim._campaign_camp_threatened(attacker_id, entry_id),
+		"敌军进入大营城内后必须判定为威胁"
+	)
+	sim._manage_administrative_campaign(plan)
+	_check(
+		plan.phase == CoalitionCampaignFront.Phase.RECALL_CAMP,
+		"大营真正开战后战线必须进入全军回援（阶段%s）" % str(plan.phase)
+	)
+	sim.free()
 
 
 func _attack_context(state: GameState) -> Dictionary:

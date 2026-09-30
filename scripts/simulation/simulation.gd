@@ -10130,17 +10130,41 @@ func _next_campaign_fu_target(
 
 
 func _campaign_camp_threatened(nation_id: int, camp_id: int) -> bool:
+	# 只有大营本地真正开战才算威胁：城下围城、大营边上的野战，或敌军已经
+	# 站在大营城内。敌人的行军意图（ai_target_city == camp_id）不再触发
+	# 回防——否则敌方反复下达攻营命令就能把整条战线永远钉在 RECALL_CAMP，
+	# 联盟预备队也会被持续抽进大营。
+	var siege := _siege_battle_of(state.cities[camp_id])
+	if (
+		siege != null
+		and state.is_enemy(nation_id, siege.siege_attacker_nation)
+	):
+		return true
 	for army in state.armies:
 		if (
 			state.army_effective_for_field_campaign(army)
 			and state.is_enemy(nation_id, army.owner_nation)
-			and (
-				army.location_city == camp_id
-				or army.ai_target_city == camp_id
-				or (army.on_edge and army.move_to == camp_id)
-			)
+			and army.location_city == camp_id
 		):
 			return true
+	for battle in state.battles:
+		if (
+			battle.finished
+			or battle.kind != Battle.Kind.FIELD
+			or battle.edge == null
+			or (
+				battle.edge.city_a != camp_id
+				and battle.edge.city_b != camp_id
+			)
+		):
+			continue
+		for army in battle.side_a + battle.side_b:
+			if (
+				army.size > 0
+				and not army.is_city_garrison
+				and state.is_enemy(nation_id, army.owner_nation)
+			):
+				return true
 	return false
 
 
@@ -10214,6 +10238,25 @@ func _fail_lost_campaign_camp(
 	plan.camp_city_id = -1
 	plan.tactical_target_city_ids.clear()
 	plan.failed_until_day = state.day + 60
+	# 集结点可能已经易主或过期。重整前重算：REINFORCE 的寻路只允许走本国
+	# 境内，指向敌方城市的过期集结点会让整队军队静默失令 60 天。
+	var attacker_bloc := state.alliance_bloc(nation_id)
+	if attacker_bloc.is_empty():
+		attacker_bloc.append(nation_id)
+	if (
+		plan.staging_city_id < 0
+		or plan.staging_city_id >= state.cities.size()
+		or not attacker_bloc.has(
+			state.cities[plan.staging_city_id].owner_nation
+		)
+	):
+		var entry_city := _campaign_entry_fu(
+			nation_id, plan.center_city_id, attacker_bloc
+		)
+		plan.staging_city_id = _campaign_staging_city(
+			nation_id,
+			entry_city if entry_city >= 0 else plan.center_city_id
+		)
 	var changed := false
 	if plan.staging_city_id >= 0:
 		changed = _order_campaign_force(
