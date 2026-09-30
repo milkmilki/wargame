@@ -9604,6 +9604,14 @@ func _manage_administrative_campaign(
 	var center_controlled := attacker_bloc.has(
 		state.cities[center_city_id].owner_nation
 	)
+	# 州治已归我方阵营时战役目标已经达成：即使同一轮里上一轮的属府大营刚失守，
+	# 也必须转入清扫残余属府，而不能反过来判为战役失败并停摆 60 天。
+	if center_controlled:
+		plan.camp_city_id = center_city_id
+		plan.phase = CoalitionCampaignFront.Phase.CLEANUP
+		return _manage_campaign_fu_raids(
+			nation_id, plan, attacker_bloc, alive_by_id, true
+		)
 	if (
 		plan.camp_city_id >= 0
 		and not attacker_bloc.has(
@@ -9618,12 +9626,6 @@ func _manage_administrative_campaign(
 			active_siege.siege_attacker_nation
 		)
 	)
-	if center_controlled:
-		plan.camp_city_id = center_city_id
-		plan.phase = CoalitionCampaignFront.Phase.CLEANUP
-		return _manage_campaign_fu_raids(
-			nation_id, plan, attacker_bloc, alive_by_id, true
-		)
 	if owns_active_siege or plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER:
 		return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 	var fu_members := _campaign_fu_members(center_city_id)
