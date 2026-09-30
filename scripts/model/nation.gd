@@ -21,6 +21,7 @@ var ruler_archetype: int = 0
 var ruler_traits: Array[String] = []
 var ruler_started_day: int = 0
 var ruler_revision: int = 0
+var strategic_region_anchor_city_id: int = -1
 var trade_policy: int = 0
 ## 王族谱由 GameState 统一持有；多个独立国家可继续引用同一棵谱。
 var family_tree_id: int = -1

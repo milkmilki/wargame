@@ -7243,6 +7243,7 @@ static func historical_nation_detail_sections(
 			"控制城市 %d" % game_state.cities_of(nation_id).size(),
 		]},
 		{"title": "历史外交", "lines": relation_lines},
+		{"title": "历史经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
 	]
 
 
@@ -7296,7 +7297,7 @@ static func _nation_detail_line_count(
 	):
 		diplomacy_lines += 1
 	var count := 1 + _section_layout_line_count(
-		PackedInt32Array([2, 2, 4, 1, diplomacy_lines])
+		PackedInt32Array([2, regional_strategy_lines(game_state, nation_id).size(), 2, 4, 1, diplomacy_lines])
 	)
 	count += _nation_war_detail_line_count(game_state, nation_id)
 	return count
@@ -7788,8 +7789,9 @@ static func city_detail_sections(
 				int(output["base_manpower"]),
 				int(output["base_food"]),
 			],
-			"地形与发展：海拔×%.2f    金×%.2f    粮×%.2f（已计入基础）" % [
+			"地形与发展：海拔×%.2f 纬度×%.2f    金×%.2f 粮×%.2f（已计入基础）" % [
 				float(output["terrain_multiplier"]),
+				float(output["latitude_multiplier"]),
 				float(output["development_gold_multiplier"]),
 				float(output["development_food_multiplier"]),
 			],
@@ -7969,6 +7971,7 @@ static func nation_detail_sections(
 			_nation_relation_text(game_state, nation_id),
 			"君主 %s  ▼" % ruler_summary(n, game_state),
 		]},
+		{"title": "经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
 		{"title": "国力与民心", "lines": [
 			"城市 %d    主战军团 %d    指挥单位 %d    总兵力 %d" % [
 				game_state.cities_of(nation_id).size(), army_count,
@@ -8010,6 +8013,19 @@ static func nation_detail_sections(
 	]
 	sections.append_array(_nation_war_detail_sections(game_state, nation_id))
 	return sections
+
+
+static func regional_strategy_lines(game_state: GameState, nation_id: int) -> Array[String]:
+	var report := RegionalStrategy.integration_report(game_state, nation_id)
+	var region_id := int(report["region_id"])
+	var anchor := int(RegionalStrategy.geometry(game_state)["anchors"].get(region_id, -1))
+	if anchor < 0:
+		return ["暂无经营区域"]
+	var status := "整合中"
+	if bool(report["complete"]):
+		status = "待选择下一区域" if RegionalStrategy.can_expand(game_state.nations[nation_id]) else "经营守成"
+	return ["目标：%s区域" % game_state.cities[anchor].name,
+		"已整合陆城 %d / %d    %s" % [report["integrated"], report["total"], status]]
 
 
 static func _nation_war_detail_sections(

@@ -42,6 +42,8 @@ func _init() -> void:
 	)
 	var integration_state := GameState.new()
 	integration_state.generate_grid_world(91022)
+	integration_state.region_ids.fill(0)
+	integration_state.region_analysis_revision += 1
 	var reachable_targets: Array[int] = []
 	for target_city in integration_state.cities_of(1):
 		if not DiplomacyAI.staging_cities_for_objective(

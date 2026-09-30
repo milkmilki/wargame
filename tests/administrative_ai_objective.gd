@@ -30,6 +30,7 @@ func _init() -> void:
 	state.recognized_city_owners[attacker_city] = 0
 	state.ownership_revision += 1
 	state.refresh_derived()
+	state.nations[0].strategic_region_anchor_city_id = chosen_center
 	var objective := DiplomacyAI.select_war_objective(state, 0, 1)
 	var tactical := int(objective.get("tactical_city_id", -1))
 	var valid := (

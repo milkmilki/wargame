@@ -73,14 +73,9 @@ const OBJECTIVE_ATTITUDE_PER_VALUE: float = 0.035
 const OBJECTIVE_ATTITUDE_FLOOR: float = -0.55
 const COMMON_ENEMY_ATTITUDE: float = 0.60
 const ENEMY_ALLY_ATTITUDE: float = -0.90
-const UNIFICATION_COMPLETION_WEIGHT: float = 1.35
-const UNIFICATION_RIVAL_SCARCITY_WEIGHT: float = 0.45
-# 统一时代时钟：40 国均势被“互保联盟 + 盟友参战 + 战争疲劳议和”三重负反馈焊成
-# 稳态，实验证明零星调数值无法收敛到统一。引入随游戏年份单调爬升的全局压力，
-# 前 ONSET 年保持 0（保留自然外交演化），到 FULL 年满值，作为打破均势的总闸。
+# Existing economic and peace pacing; regional competition is independent.
 const UNIFICATION_ERA_ONSET_YEARS: int = 2
 const UNIFICATION_ERA_FULL_YEARS: int = 20
-const UNIFICATION_ERA_WEIGHT: float = 1.5
 const TOTAL_WAR_MIN_PAYMENT_RATIO: float = 0.50
 const TOTAL_WAR_GOLD_RUNWAY_MONTHS: float = 0.0
 const TOTAL_WAR_FOOD_RUNWAY_YEARS: float = 0.25
@@ -1358,91 +1353,28 @@ static func _enemy_alliance_count(
 	return count
 
 
-## 所有国家都以统一全图为终局目标。两国控制的地图份额越高、存活对手越少，
-## 彼此作为最终竞争者的压力越大；该连续值同时抑制结盟并推动退盟和宣战。
+## 统一竞争只来自经营区域的领土利益，不随全图时间或存活国数量增强。
 static func unification_rivalry(
 	state: GameState,
 	nation_id: int,
 	other_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> float:
-	if (
-		nation_id == other_id
-		or nation_id < 0
-		or other_id < 0
-		or nation_id >= state.nations.size()
-		or other_id >= state.nations.size()
-		or not state.nations[nation_id].alive
-		or not state.nations[other_id].alive
-	):
-		return 0.0
-	var cache_key := "unification:%d:%d" % [
-		mini(nation_id, other_id),
-		maxi(nation_id, other_id),
+	var cache_key := "unification:%d:%d:%d:%d:%d" % [
+		mini(nation_id, other_id), maxi(nation_id, other_id),
+		state.regional_strategy_revision, state.ownership_revision, state.diplomacy_revision,
 	]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
-	var controlled := 0
-	var alive_count := 0
-	if bool(evaluation_cache.get(
-		"__disable_structure_cache", false
-	)):
-		for city in state.cities:
-			if city.owner_nation in [nation_id, other_id]:
-				controlled += 1
-		for nation in state.nations:
-			if nation.alive:
-				alive_count += 1
-	else:
-		controlled = (
-			_cached_cities_of(
-				state, nation_id, evaluation_cache
-			).size()
-			+ _cached_cities_of(
-				state, other_id, evaluation_cache
-			).size()
-		)
-		if not evaluation_cache.has("alive_nation_count"):
-			var cached_alive_count := 0
-			for nation in state.nations:
-				if nation.alive:
-					cached_alive_count += 1
-			evaluation_cache["alive_nation_count"] = cached_alive_count
-		alive_count = int(evaluation_cache["alive_nation_count"])
-	var pair_share := (
-		float(controlled) / float(maxi(state.cities.size(), 1))
-	)
-	var completion := clampf(
-		(pair_share - 0.50) / 0.50,
-		0.0,
-		1.0
-	)
-	var rival_scarcity := (
-		1.0 / float(maxi(alive_count - 1, 1))
-	)
-	var result := (
-		completion * UNIFICATION_COMPLETION_WEIGHT
-		+ rival_scarcity * UNIFICATION_RIVAL_SCARCITY_WEIGHT
-		+ unification_era_factor(state) * UNIFICATION_ERA_WEIGHT
-	)
+	var result := RegionalStrategy.rivalry(state, nation_id, other_id)
 	evaluation_cache[cache_key] = result
 	return result
 
 
-## 统一时代时钟：只依赖 state.day，对所有国家一致。前 ONSET 年为 0（保留自然
-## 外交演化期），随后线性爬升到 FULL 年的 1.0。作为 unification_rivalry 的时代分量，
-## 同时推高宣战、抑制结盟、推动退盟——一个时钟拆掉“互保联盟”这把僵局主锁。
+## Existing resource and peace pacing; not used to create regional rivalry.
 static func unification_era_factor(state: GameState) -> float:
-	var years := float(state.day) / 365.0
-	return clampf(
-		(years - float(UNIFICATION_ERA_ONSET_YEARS))
-		/ float(maxi(
-			UNIFICATION_ERA_FULL_YEARS - UNIFICATION_ERA_ONSET_YEARS,
-			1
-		)),
-		0.0,
-		1.0
-	)
+	return clampf((float(state.day) / 365.0 - UNIFICATION_ERA_ONSET_YEARS)
+		/ float(UNIFICATION_ERA_FULL_YEARS - UNIFICATION_ERA_ONSET_YEARS), 0.0, 1.0)
 
 
 static func _occupation_side(
@@ -2216,11 +2148,7 @@ static func _ai_aggression(
 	return state.effective_ai_aggression(nation_id)
 
 
-## 目标合法性只看城市本身是否可作为攻势目标（有效城市索引即可）。君主的
-## 好战/温和差异不再表现为“能不能选目标”的硬门控——那会让温和君主永远算出
-## 空目标、被 war_desire 一票否决，是终局全局僵持的根因。改由 war_desire 里的
-## 侵略性乘子（KEY_AGGRESSION）连续地降低温和君主的开战欲望即可，从而“所有 AI
-## 始终想要边境最高价值的非己方城市”，只是好战程度不同。
+## Active conquest follows the ruler's business region; legal recovery remains valid.
 static func _ruler_allows_war_objective(
 	state: GameState,
 	nation_id: int,
@@ -2228,9 +2156,9 @@ static func _ruler_allows_war_objective(
 ) -> bool:
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return false
-	return (
-		objective_city >= 0
-		and objective_city < state.cities.size()
+	return RegionalStrategy.allows_objective(state, nation_id, objective_city) and (
+		RulerProfile.offensive_allowed(state.nations[nation_id])
+		or RegionalStrategy.allows_objective(state, nation_id, objective_city, true)
 	)
 
 
@@ -3903,9 +3831,10 @@ static func _cached_war_objective(
 	var profile_started := (
 		Time.get_ticks_usec() if evaluation_cache.has("__profile") else 0
 	)
-	var cache_key := "objective:%d:%d:%d:%d:%d:%d:%d:%d" % [
+	var cache_key := "objective:%d:%d:%d:%d:%d:%d:%d:%d:%d" % [
 		nation_id,
 		target_id,
+		state.regional_strategy_revision,
 		1 if legal_reclamation_only else 0,
 		state.ownership_revision,
 		state.diplomacy_revision,
@@ -3961,7 +3890,9 @@ static func select_war_objective(
 		):
 			continue
 		var center_id := state.administrative_center_of(target_city.id)
-		if center_id >= 0 and not excluded_centers.has(center_id):
+		if center_id >= 0 and not center_set.has(center_id) and not excluded_centers.has(center_id) and RegionalStrategy.allows_objective(
+			state, nation_id, center_id, legal_reclamation_only
+		):
 			center_set[center_id] = true
 	var center_ids: Array[int] = []
 	center_ids.assign(center_set.keys())
@@ -4229,7 +4160,7 @@ static func administrative_tactical_target(
 	if candidates.is_empty():
 		return -1
 	var required := (
-		state.campaign_siege_requirement(nation_id, center_city_id)
+		_cached_campaign_siege_requirement(state, nation_id, center_city_id, evaluation_cache)
 		+ _cached_campaign_reinforcement_threat(
 			state, nation_id, center_city_id, evaluation_cache
 		)
@@ -5098,6 +5029,7 @@ static func _collect_existing_war_preparation(
 			state, nation_id, objective_city
 		)
 	)
+	var region_valid := RegionalStrategy.allows_objective(state, nation_id, objective_center)
 	var has_route := (
 		objective_valid
 		and not war_staging_cities_for_objective(
@@ -5201,6 +5133,7 @@ static func _collect_existing_war_preparation(
 		and (
 			not target_nation_valid
 			or resource_grace_expired
+			or not region_valid
 		)
 	):
 		actions.append({
@@ -5665,11 +5598,27 @@ static func objective_assault_troops(
 	if center_id < 0:
 		return 0
 	return (
-		state.campaign_siege_requirement(nation_id, center_id)
+		_cached_campaign_siege_requirement(state, nation_id, center_id, evaluation_cache)
 		+ _cached_campaign_reinforcement_threat(
 			state, nation_id, center_id, evaluation_cache
 		)
 	)
+
+
+static func _cached_campaign_siege_requirement(
+	state: GameState, attacker_id: int, center_id: int, evaluation_cache: Dictionary
+) -> int:
+	if bool(evaluation_cache.get("__disable_structure_cache", false)):
+		return state.campaign_siege_requirement(attacker_id, center_id)
+	var bloc := _cached_alliance_bloc(state, attacker_id, evaluation_cache)
+	var representative := bloc[0] if not bloc.is_empty() else attacker_id
+	var garrison := state.cities[center_id].garrison_manpower if center_id >= 0 and center_id < state.cities.size() else 0
+	var key := "campaign_r:%d:%d:%d:%d:%d:%d:%d" % [representative, center_id,
+		state.ownership_revision, state.diplomacy_revision, state.garrison_revision,
+		state.administrative_region_revision, garrison]
+	if not evaluation_cache.has(key):
+		evaluation_cache[key] = state.campaign_siege_requirement(attacker_id, center_id)
+	return int(evaluation_cache[key])
 
 
 static func _cached_campaign_reinforcement_threat(
@@ -5860,7 +5809,7 @@ static func _cached_alliance_bloc(
 		"__disable_structure_cache", false
 	)):
 		return state.alliance_bloc(nation_id)
-	var cache_key := "alliance_bloc:%d" % nation_id
+	var cache_key := "alliance_bloc:%d:%d:%d" % [nation_id, state.ownership_revision, state.diplomacy_revision]
 	if not evaluation_cache.has(cache_key):
 		# 单国集团无需构造全局冲突感知并查集。大规模和平开局中这是
 		# 绝大多数情况；allies 列表本轮已缓存，结果与 alliance_bloc 一致。
@@ -5872,7 +5821,7 @@ static func _cached_alliance_bloc(
 		var bloc := state.alliance_bloc(nation_id)
 		for member_id in bloc:
 			evaluation_cache[
-				"alliance_bloc:%d" % member_id
+				"alliance_bloc:%d:%d:%d" % [member_id, state.ownership_revision, state.diplomacy_revision]
 			] = bloc
 	return evaluation_cache.get(
 		cache_key,
@@ -5885,7 +5834,7 @@ static func _cached_allies_of(
 	nation_id: int,
 	evaluation_cache: Dictionary
 ) -> Array[int]:
-	var cache_key := "allies:%d" % nation_id
+	var cache_key := "allies:%d:%d:%d" % [nation_id, state.ownership_revision, state.diplomacy_revision]
 	if not evaluation_cache.has(cache_key):
 		evaluation_cache[cache_key] = state.allies_of(nation_id)
 	return evaluation_cache[cache_key] as Array[int]

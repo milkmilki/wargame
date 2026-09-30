@@ -70,6 +70,12 @@ echo
 
 echo "==> [2e/29] 行政州战争目标门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/regional_strategy.gd \
+  --log-file "$LOG_DIR/world-war-regional-strategy.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/latitude_output.gd \
+  --log-file "$LOG_DIR/world-war-latitude-output.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/administrative_ai_objective.gd \
   --log-file "$LOG_DIR/world-war-administrative-ai.log"
 echo
@@ -152,7 +158,7 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_center_defeat_regroup.gd \
   --log-file "$LOG_DIR/world-war-campaign-center-defeat-regroup.log"
 echo
-echo "==> [2i4b/29] 举州易帜门禁"
+echo "==> [2i4b/29] 举州易帜与城市易主战斗生命周期门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/zhou_defection.gd \
   --log-file "$LOG_DIR/world-war-zhou-defection.log"

@@ -12,6 +12,7 @@ var map_position: Vector2 = Vector2.ZERO  ## 地图包围盒内归一化坐标 [
 var terrain_height: float = 0.0           ## 高度图采样值 [0,1]
 var terrain_relief: float = 0.0           ## 城市周边局部最大高度差 [0,1]
 var terrain_output_multiplier: float = 1.0 ## 正式地图海拔产出倍率，Logistic 曲线从低地1降至最高地0.2
+var latitude_output_multiplier: float = 1.0
 var is_dock: bool = false                 ## 河运码头交通节点；复用占领/补给数据，但不计作行政城市
 ## false 表示仅作为自然地理/交通节点存在，不参与初始政治与模拟。
 var politically_active: bool = true

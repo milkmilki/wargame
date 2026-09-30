@@ -76,6 +76,7 @@ static func from_state(state: GameState) -> Dictionary:
 			"terrain_height": city.terrain_height,
 			"terrain_relief": city.terrain_relief,
 			"terrain_output_multiplier": city.terrain_output_multiplier,
+			"latitude_output_multiplier": city.latitude_output_multiplier,
 			"is_dock": city.is_dock,
 			"politically_active": city.politically_active,
 			"owner_nation": owner_nation,

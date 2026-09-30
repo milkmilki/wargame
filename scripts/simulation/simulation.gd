@@ -160,6 +160,7 @@ var _diplomacy_topology_cache: Dictionary = {}
 var _campaign_evaluated_day_by_nation: Dictionary = {}
 ## 战争集团连通分量独立错峰；同一分量在十日周期内只做一次目标与分兵规划。
 var _coalition_campaign_last_day: Dictionary = {}
+var _coalition_campaign_query_cache: Dictionary = {}
 ## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
 var _daily_supply_source_cache: Dictionary = {}
 var _stable_supply_city_source_cache: Dictionary = {}
@@ -335,6 +336,7 @@ var priority_defense_frame_slicing_disabled: bool = false
 
 func setup(game_state: GameState) -> void:
 	state = game_state
+	RegionalStrategy.initialize_targets(state)
 	trade_domestic_ideal_field_cache_disabled = (
 		trade_domestic_ideal_field_cache_disabled
 		or OS.get_environment(
@@ -362,6 +364,7 @@ func setup(game_state: GameState) -> void:
 	_diplomacy_topology_cache.clear()
 	_campaign_evaluated_day_by_nation.clear()
 	_coalition_campaign_last_day.clear()
+	_coalition_campaign_query_cache.clear()
 	_daily_supply_source_cache.clear()
 	_stable_supply_city_source_cache.clear()
 	_supply_source_besieged_cities.clear()
@@ -2079,6 +2082,7 @@ func _resolve_ruler_successions() -> void:
 			state, nation.id, previous_person_id
 		)
 		state.relocate_capital(nation.id)
+		RegionalStrategy.update_target(state, nation.id, true)
 		changed = true
 	if not changed:
 		return
@@ -2271,6 +2275,7 @@ static func city_output_breakdown(
 		"base_food": maxi(city.food_per_half_year, 0),
 		"base_manpower": maxi(city.manpower_per_month, 0),
 		"terrain_multiplier": city.terrain_output_multiplier,
+		"latitude_multiplier": city.latitude_output_multiplier,
 		"development_gold_multiplier": city.development_gold_multiplier,
 		"development_food_multiplier": city.development_food_multiplier,
 		"capital_gold_addition": capital_addition,
@@ -3660,6 +3665,7 @@ func _advance_holding_adaptation() -> void:
 func _resolve_diplomacy() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
+	RegionalStrategy.update_targets(state)
 	var diplomacy_profile_started := (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
@@ -3724,6 +3730,7 @@ func _resolve_diplomacy() -> void:
 func _resolve_diplomacy_over_frames() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
+	RegionalStrategy.update_targets(state)
 	_normalize_alliance_wars()
 	_set_runtime_profile_stage(&"trade_forecast_worker")
 	var evaluation_cache := await _seed_trade_forecast_over_frames()
@@ -4243,6 +4250,10 @@ func _execute_diplomatic_action(
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
 			if (
+				(int(action.get("objective_city", -1)) < 0 or DiplomacyAI._ruler_allows_war_objective(
+					state, nation_a, int(action["objective_city"])
+				))
+				and
 				DiplomacyAI.can_initiate_war_at_range(
 					state, nation_a, nation_b, evaluation_cache
 				)
@@ -4416,6 +4427,7 @@ func _execute_diplomatic_action(
 				and objective_city >= 0
 				and objective_city < state.cities.size()
 				and state.cities[objective_city].owner_nation == nation_b
+				and RegionalStrategy.allows_objective(state, nation_a, objective_city)
 				and not staging_cities.is_empty()
 			):
 				nation.war_preparation_objective_city = objective_city
@@ -4483,6 +4495,10 @@ func _execute_diplomatic_action(
 	if action.has("objective_city"):
 		event["objective_city"] = int(action["objective_city"])
 		event["objective_reason"] = str(action.get("objective_reason", ""))
+		event["strategic_region_id"] = RegionalStrategy.target_region(state, nation_a)
+		event["regional_objective_allowed"] = RegionalStrategy.allows_objective(
+			state, nation_a, int(action["objective_city"])
+		)
 	if action.has("mobilization_armies"):
 		event["mobilization_armies"] = int(action["mobilization_armies"])
 	if action.has("subject_nation"):
@@ -5848,6 +5864,7 @@ func _start_war_preparation(
 		objective_city < 0
 		or objective_city >= state.cities.size()
 		or state.cities[objective_city].owner_nation != target_id
+		or not RegionalStrategy.allows_objective(state, nation_id, objective_center)
 	):
 		return false
 	var staging_cities := DiplomacyAI.war_staging_cities_for_objective(
@@ -7421,6 +7438,7 @@ func _strategy_snapshot_for(
 		state.diplomacy_revision,
 		state.garrison_revision,
 		ai_visibility_hops,
+		state.regional_strategy_revision,
 	]
 	if (
 		not _ai_strategy_cache.has(view.nation_id)
@@ -8247,7 +8265,9 @@ func _cached_campaign_objective(
 ) -> Dictionary:
 	var excluded_ids: Array = excluded_centers.keys()
 	excluded_ids.sort()
-	var cache_key := "%d:%s" % [target_id, str(excluded_ids)]
+	var cache_key := "campaign_objective:%d:%d:%d:%s" % [
+		nation_id, target_id, state.regional_strategy_revision, str(excluded_ids)
+	]
 	if not cache.has(cache_key):
 		cache[cache_key] = DiplomacyAI.select_war_objective(
 			state,
@@ -8358,9 +8378,10 @@ func _manage_national_campaign_support(
 
 
 func _manage_coalition_campaigns() -> bool:
+	_coalition_campaign_query_cache.clear()
 	var components := state.coalition_campaign_components()
 	_reconcile_coalition_fronts(components)
-	var objective_cache := {}
+	var objective_cache := _coalition_campaign_query_cache
 	var changed := false
 	for component in components:
 		var key := str(component["key"])
@@ -8615,6 +8636,8 @@ func _plan_coalition_component(
 	var members: Array[int] = component["members"]
 	var enemy_ids: Array[int] = component["enemy_ids"]
 	var changed := false
+	for member_id in members:
+		RegionalStrategy.update_target(state, member_id)
 	var desired_defense := {}
 	for center_id in defense_centers:
 		desired_defense[center_id] = true
@@ -8694,7 +8717,8 @@ func _component_allocatable_effective(members: Array[int], war_id: int) -> int:
 func _select_component_objective(
 	component: Dictionary,
 	objective_cache: Dictionary,
-	excluded_centers: Dictionary
+	excluded_centers: Dictionary,
+	expedition_only: bool = false
 ) -> Dictionary:
 	var enemy_ids: Array[int] = component["enemy_ids"]
 	var initial: Dictionary = {}
@@ -8709,6 +8733,8 @@ func _select_component_objective(
 			var center_id := int(declared.get(
 				"administrative_center_city_id", declared.get("city_id", -1)
 			))
+			if not RegionalStrategy.allows_objective(state, member_id, center_id):
+				continue
 			if not _component_objective_is_valid(
 				center_id, enemy_ids, component["members"] as Array[int],
 				excluded_centers
@@ -8735,7 +8761,11 @@ func _select_component_objective(
 		return initial
 	var best: Dictionary = {}
 	for member_id in component["members"] as Array[int]:
+		var bordering := DiplomacyAI._direct_bordering_nation_ids(state, member_id, objective_cache)
 		for enemy_id in enemy_ids:
+			# Score real frontiers first; river expeditions are only the fallback.
+			if bordering.has(enemy_id) == expedition_only:
+				continue
 			var objective := _cached_campaign_objective(
 				member_id, enemy_id, objective_cache, excluded_centers
 			)
@@ -8764,6 +8794,8 @@ func _select_component_objective(
 				)
 			):
 				best = objective
+	if best.is_empty() and not expedition_only:
+		return _select_component_objective(component, objective_cache, excluded_centers, true)
 	return best
 
 
@@ -8807,8 +8839,8 @@ func _front_requirement(front: CoalitionCampaignFront) -> int:
 	)
 	return maxi(
 		CAMPAIGN_MIN_FRONT_MANPOWER,
-		state.campaign_siege_requirement(
-			front.anchor_nation_id, front.center_city_id
+		DiplomacyAI._cached_campaign_siege_requirement(
+			state, front.anchor_nation_id, front.center_city_id, _coalition_campaign_query_cache
 		) + (
 			0
 			if owns_active_siege
@@ -9013,7 +9045,9 @@ func _allocate_coalition_fronts(component: Dictionary) -> bool:
 		var redeployment_target := front.center_city_id
 		if front.mode == CoalitionCampaignFront.Mode.OFFENSE:
 			if front.staging_city_id < 0:
-				var attacker_bloc := state.alliance_bloc(front.anchor_nation_id)
+				var attacker_bloc := DiplomacyAI._cached_alliance_bloc(
+					state, front.anchor_nation_id, _coalition_campaign_query_cache
+				)
 				var entry_city := _campaign_entry_fu(
 					front.anchor_nation_id, front.center_city_id, attacker_bloc
 				)
@@ -9199,6 +9233,9 @@ func _manage_war_preparation_assembly(
 	):
 		return false
 	var staging_city_id := nation.war_preparation_staging_city_id
+	if not RegionalStrategy.allows_objective(state, nation_id, nation.war_preparation_objective_city):
+		_clear_war_preparation(nation_id)
+		return true
 	var armies_by_id := {}
 	for army in state.armies:
 		armies_by_id[army.id] = army
@@ -9687,7 +9724,7 @@ func _manage_administrative_campaign(
 		plan.failed_until_day = state.day + 60
 		plan.had_forces = false
 		return false
-	var attacker_bloc := state.alliance_bloc(nation_id)
+	var attacker_bloc := DiplomacyAI._cached_alliance_bloc(state, nation_id, _coalition_campaign_query_cache)
 	if attacker_bloc.is_empty():
 		attacker_bloc.append(nation_id)
 	var center_controlled := attacker_bloc.has(

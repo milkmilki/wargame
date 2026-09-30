@@ -2808,9 +2808,10 @@ func _test_responsive_map_layout() -> void:
 		var formation_sections := MapRenderer.nation_detail_sections(
 			formation_state, 0
 		)
-		var strength_line := str(
-			(formation_sections[1]["lines"] as Array)[0]
-		)
+		var strength_line := ""
+		for section in formation_sections:
+			if str(section["title"]) == "国力与民心":
+				strength_line = str((section["lines"] as Array)[0])
 		_check(
 			int(nation_zero_row.get("army_count", 0)) == 3
 				and int(nation_zero_row.get("command_count", 0)) == 3
@@ -7633,6 +7634,9 @@ func _test_war_preparation_route_block_grace() -> void:
 	print("[32a3] 备战稳定性：断路自动换薄弱目标；全线封闭与边境屯兵均不得取消")
 	var gs := GameState.new()
 	gs.generate_grid_world(32041)
+	# All fallback states belong to one business region; this fixture tests roads.
+	gs.region_ids.fill(0)
+	gs.region_analysis_revision += 1
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(
@@ -7667,6 +7671,7 @@ func _test_war_preparation_route_block_grace() -> void:
 		if edge != null:
 			edge.max_manpower = 0
 			closed_edges.append(edge)
+	gs.road_network_revision += 1
 	var retarget_actions: Array[Dictionary] = []
 	DiplomacyAI._collect_existing_war_preparation(
 		gs, 0, retarget_actions, {}

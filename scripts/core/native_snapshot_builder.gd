@@ -30,6 +30,7 @@ static func build(state: GameState) -> Dictionary:
 		"ownership_revision": state.ownership_revision,
 		"diplomacy_revision": state.diplomacy_revision,
 		"garrison_revision": state.garrison_revision,
+		"regional_strategy_revision": state.regional_strategy_revision,
 		"nations": nations,
 		"cities": cities,
 		"edges": edges_and_indices["snapshot"],
@@ -42,6 +43,7 @@ static func build(state: GameState) -> Dictionary:
 static func _build_nations(state: GameState) -> Dictionary:
 	var ids := PackedInt32Array()
 	var capitals := PackedInt32Array()
+	var strategic_region_anchors := PackedInt32Array()
 	var gold := PackedInt32Array()
 	var manpower := PackedInt32Array()
 	var last_military_upkeep := PackedInt32Array()
@@ -75,6 +77,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 	for nation in state.nations:
 		ids.append(nation.id)
 		capitals.append(nation.capital_city_id)
+		strategic_region_anchors.append(nation.strategic_region_anchor_city_id)
 		gold.append(nation.treasury_gold)
 		manpower.append(nation.manpower_pool)
 		last_military_upkeep.append(nation.last_military_upkeep)
@@ -182,6 +185,7 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"count": state.nations.size(),
 		"ids": ids,
 		"capitals": capitals,
+		"strategic_region_anchors": strategic_region_anchors,
 		"gold": gold,
 		"manpower": manpower,
 		"last_military_upkeep": last_military_upkeep,

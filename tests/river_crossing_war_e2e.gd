@@ -20,6 +20,7 @@ func _init() -> void:
 	root.add_child(simulation)
 	simulation.setup(state)
 	simulation.diplomacy_enabled = false
+	state.nations[0].strategic_region_anchor_city_id = 3
 	state.cities[3].garrison_manpower = 1000
 
 	var objective := DiplomacyAI.select_war_objective(state, 0, 1)

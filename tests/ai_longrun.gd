@@ -239,6 +239,7 @@ func _init() -> void:
 			var finalist_b := alive_nations[1]
 			terminal_alliance_lock = (
 				state.is_allied(finalist_a, finalist_b)
+				and RegionalStrategy.rivalry(state, finalist_a, finalist_b) > 0.0
 				and state.day
 					- state.relation_since(
 						finalist_a,
@@ -284,15 +285,21 @@ func _init() -> void:
 			DiplomacyAI.Action.RETARGET_WAR_PREPARATION: 0,
 		}
 		var objective_declarations := 0
+		var illegal_regional_declarations := 0
+		var region_changes := 0
 		var resource_peaces := 0
 		var mobilization_armies := 0
 		for event in state.diplomatic_history:
+			if str(event.get("kind", "")) == "regional_strategy_goal_changed":
+				region_changes += 1
 			if not event.has("action"):
 				continue
 			var action := int(event["action"])
 			diplomatic_counts[action] = int(diplomatic_counts.get(action, 0)) + 1
 			if action == DiplomacyAI.Action.DECLARE_WAR and event.has("objective_city"):
 				objective_declarations += 1
+				if not bool(event.get("regional_objective_allowed", false)):
+					illegal_regional_declarations += 1
 				mobilization_armies += int(event.get("mobilization_armies", 0))
 			if action == DiplomacyAI.Action.MAKE_PEACE:
 				var reason := str(event["reason"])
@@ -524,8 +531,11 @@ func _init() -> void:
 				"  commit_failure_log=%s"
 				% str(simulation.ai_command_commit_failure_log)
 			)
+		print("  region_changes=%d illegal_regional_declarations=%d regional_queries=%d" % [
+			region_changes, illegal_regional_declarations, RegionalStrategy.query_count])
 		if (
 			ordered == 0
+			or illegal_regional_declarations > 0
 			or invalid > 0
 			or invalid_finance > 0
 			or eliminated_war_relations > 0

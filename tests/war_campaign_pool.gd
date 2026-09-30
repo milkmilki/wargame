@@ -352,6 +352,7 @@ func _test_objective_owner_becomes_front_anchor() -> void:
 	var enemy_id := int(fixture["enemy_id"])
 	var war_id := int(fixture["war_id"])
 	state.clear_war_objective(members[0], enemy_id)
+	state.nations[members[1]].strategic_region_anchor_city_id = int(fixture["center_id"])
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)

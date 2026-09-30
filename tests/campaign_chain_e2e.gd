@@ -33,6 +33,9 @@ func _run_campaign_chain(
 ) -> Dictionary:
 	var state := GameState.new()
 	state.generate_grid_world(world_seed)
+	# The chain audits sequential combat, with all three states in one goal region.
+	state.region_ids.fill(0)
+	state.region_analysis_revision += 1
 	var chain := _administrative_center_chain(state)
 	_check(chain.size() == 3, "夹具必须找到连续三州")
 	if chain.size() != 3:

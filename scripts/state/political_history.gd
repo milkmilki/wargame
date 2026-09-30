@@ -65,6 +65,8 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 	_view_state.month = int(snapshot["month"])
 	_view_state.ownership_revision = int(snapshot["ownership_revision"])
 	_view_state.diplomacy_revision = int(snapshot["diplomacy_revision"])
+	RegionalStrategy.invalidate_geometry(_view_state)
+	_view_state.regional_strategy_revision = int(snapshot["regional_strategy_revision"])
 	_view_state.diplomatic_relations = (
 		(snapshot["diplomatic_relations"] as Dictionary).duplicate(true)
 	)
@@ -106,6 +108,9 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		_view_state.nations[nation_id].alive = (
 			nation_id < alive.size() and alive[nation_id] != 0
 		)
+		_view_state.nations[nation_id].strategic_region_anchor_city_id = int(
+			(snapshot["strategic_region_anchors"] as PackedInt32Array)[nation_id]
+		)
 	return _view_state
 
 
@@ -135,6 +140,13 @@ func _create_view_state(live_state: GameState) -> GameState:
 	view.edge_lookup = live_state.edge_lookup
 	view.road_network_revision = live_state.road_network_revision
 	view.naming_revision = live_state.naming_revision
+	view.region_ids = live_state.region_ids.duplicate()
+	view.region_analysis_revision = live_state.region_analysis_revision
+	view.administrative_center_by_city = live_state.administrative_center_by_city.duplicate()
+	view.administrative_center_city_ids = live_state.administrative_center_city_ids.duplicate()
+	view.administrative_region_ids = live_state.administrative_region_ids.duplicate()
+	view.administrative_region_revision = live_state.administrative_region_revision
+	view.node_betweenness = live_state.node_betweenness.duplicate()
 	var view_cities: Array[City] = []
 	for source_city in live_state.cities:
 		view_cities.append(_copy_script_object(source_city) as City)
@@ -156,14 +168,18 @@ func _capture(game_state: GameState) -> void:
 	for city_id in range(game_state.cities.size()):
 		owners[city_id] = game_state.cities[city_id].owner_nation
 	var alive := PackedByteArray()
+	var strategic_region_anchors := PackedInt32Array()
 	alive.resize(game_state.nations.size())
 	for nation_id in range(game_state.nations.size()):
 		alive[nation_id] = 1 if game_state.nations[nation_id].alive else 0
+		strategic_region_anchors.append(game_state.nations[nation_id].strategic_region_anchor_city_id)
 	_snapshots.append({
 		"day": game_state.day,
 		"month": game_state.month,
 		"ownership_revision": game_state.ownership_revision,
 		"diplomacy_revision": game_state.diplomacy_revision,
+		"regional_strategy_revision": game_state.regional_strategy_revision,
+		"strategic_region_anchors": strategic_region_anchors,
 		"city_owners": owners,
 		"recognized_city_owners": game_state.recognized_city_owners.duplicate(),
 		"nation_alive": alive,

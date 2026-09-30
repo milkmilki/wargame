@@ -216,6 +216,9 @@ var region_colors: PackedColorArray = PackedColorArray()
 var node_betweenness: PackedFloat32Array = PackedFloat32Array()
 var region_key_city_ids: PackedInt32Array = PackedInt32Array()
 var region_analysis_revision: int = 0
+var regional_strategy_revision: int = 0
+var _regional_strategy_geometry: Dictionary = {}
+var _regional_strategy_control: Dictionary = {}
 ## Land-only administrative regions. Docks and inactive cities remain -1 and
 ## never bridge two land components. These values are derived from roads.
 var administrative_region_ids: PackedInt32Array = PackedInt32Array()
@@ -325,6 +328,7 @@ func generate_world(
 	WorldNaming.assign_initial_names(self, world_seed)
 	_initialize_city_loyalty()
 	_generate_armies()
+	RegionalStrategy.initialize_targets(self)
 	reconcile_adjacent_sovereign_colors()
 
 	assert(
@@ -363,6 +367,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	WorldNaming.assign_initial_names(self, world_seed)
 	_initialize_city_loyalty()
 	_generate_armies()
+	RegionalStrategy.initialize_targets(self)
 	reconcile_adjacent_sovereign_colors()
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
@@ -423,6 +428,7 @@ func generate_from_map_definition(
 		city.terrain_output_multiplier = float(record.get(
 			"terrain_output_multiplier", 1.0
 		))
+		city.latitude_output_multiplier = float(record.get("latitude_output_multiplier", 1.0))
 		city.is_dock = bool(record.get("is_dock", false))
 		city.politically_active = bool(record.get(
 			"politically_active", true
@@ -526,6 +532,7 @@ func generate_from_map_definition(
 	WorldNaming.assign_from_definition(self, definition, world_seed)
 	_initialize_city_loyalty(false)
 	_generate_armies()
+	RegionalStrategy.initialize_targets(self)
 	refresh_derived()
 	reconcile_adjacent_sovereign_colors()
 
@@ -605,6 +612,7 @@ func apply_city_editor_changes(
 	city.food_per_half_year = food_per_half_year
 	city.food_storage = food_storage
 	city.terrain_height = terrain_height
+	RegionalStrategy.invalidate_geometry(self)
 	city.terrain_relief = terrain_relief
 	city.terrain_output_multiplier = terrain_output_multiplier
 	city.development_gold_multiplier = development_gold_multiplier
@@ -773,6 +781,9 @@ func _reset_world(world_seed: int) -> void:
 	node_betweenness = PackedFloat32Array()
 	region_key_city_ids = PackedInt32Array()
 	region_analysis_revision = 0
+	regional_strategy_revision = 0
+	_regional_strategy_geometry.clear()
+	_regional_strategy_control.clear()
 	administrative_region_ids = PackedInt32Array()
 	administrative_center_by_city = PackedInt32Array()
 	administrative_hop_distances = PackedInt32Array()
@@ -1607,6 +1618,9 @@ func _initialize_terrain_development() -> void:
 				normalized_height
 			)
 		)
+		city.latitude_output_multiplier = RegionalStrategy.latitude_output_multiplier(
+			RegionalStrategy.city_latitude(self, city)
+		)
 	var relief_order := land.duplicate()
 	relief_order.sort_custom(func(a: City, b: City) -> bool:
 		if not is_equal_approx(
@@ -1721,11 +1735,13 @@ func _initialize_terrain_development() -> void:
 			float(city.gold_per_month)
 			* city.development_gold_multiplier
 			* city.terrain_output_multiplier
+			* city.latitude_output_multiplier
 		)
 		food_weights[city.id] = (
 			float(city.food_per_half_year)
 			* city.development_food_multiplier
 			* city.terrain_output_multiplier
+			* city.latitude_output_multiplier
 		)
 	_apportion_city_output(
 		land,
@@ -2042,6 +2058,7 @@ func rebuild_region_analysis(
 	for region_id in range(region_count):
 		region_colors[region_id] = region_color(region_id)
 	region_analysis_revision += 1
+	RegionalStrategy.invalidate_geometry(self)
 	return {
 		"region_count": region_count,
 		"key_city_count": region_key_city_ids.size(),
@@ -2104,6 +2121,7 @@ func rebuild_administrative_regions() -> Dictionary:
 	for region_id in range(administrative_region_count):
 		administrative_region_colors[region_id] = region_color(region_id)
 	administrative_region_revision += 1
+	RegionalStrategy.invalidate_geometry(self)
 	if _garrisons_initialized:
 		_reconcile_garrisons_after_administrative_rebuild(previous_centers)
 	war_objectives.clear()
@@ -4921,6 +4939,7 @@ func start_regional_rebellion(
 	}
 	parent.last_rebellion_day = day
 	rebel.last_rebellion_day = day
+	RegionalStrategy.update_target(self, rebel.id)
 	return rebel.id
 
 
@@ -6025,6 +6044,7 @@ func enfeoff(
 		_battle_group_structure_valid(),
 		"分封迁移军队后战团结构不变量必须成立"
 	)
+	RegionalStrategy.update_target(self, subject.id)
 	return subject.id
 
 
@@ -8196,3 +8216,6 @@ func refresh_derived() -> void:
 	for n in nations:
 		for warehouse in warehouse_cities_of(n.id):
 			n.granary_food += warehouse.food_storage
+		if not n.alive and n.strategic_region_anchor_city_id >= 0:
+			n.strategic_region_anchor_city_id = -1
+			regional_strategy_revision += 1

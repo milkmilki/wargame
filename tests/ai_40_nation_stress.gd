@@ -71,6 +71,9 @@ func _run_case(
 	world_seed: int
 ) -> Dictionary:
 	var generation_started := Time.get_ticks_usec()
+	var regional_queries_before := RegionalStrategy.query_count
+	var regional_geometry_before := RegionalStrategy.geometry_build_count
+	var regional_control_before := RegionalStrategy.control_build_count
 	var state := GameState.new()
 	state.generate_world(world_seed, nation_count)
 	var generation_usec := (
@@ -173,6 +176,9 @@ func _run_case(
 		"warm_ai": _timing_stats(warm_ai_ticks),
 		"cold_ai_ms": float(cold_ai_usec) / 1000.0,
 		"monthly": _timing_stats(monthly_ticks),
+		"regional_queries": RegionalStrategy.query_count - regional_queries_before,
+		"regional_geometry_builds": RegionalStrategy.geometry_build_count - regional_geometry_before,
+		"regional_control_builds": RegionalStrategy.control_build_count - regional_control_before,
 	}
 	simulation.free()
 	return result
@@ -375,6 +381,8 @@ func _timing_stats(values: Array[int]) -> Dictionary:
 
 
 func _print_case(result: Dictionary) -> void:
+	print("regional_index queries=%d geometry_builds=%d control_builds=%d" % [
+		result["regional_queries"], result["regional_geometry_builds"], result["regional_control_builds"]])
 	var all: Dictionary = result["all"]
 	var ordinary: Dictionary = result["ordinary"]
 	var warm_ai: Dictionary = result["warm_ai"]

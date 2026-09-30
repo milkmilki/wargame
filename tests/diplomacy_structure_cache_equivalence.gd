@@ -31,20 +31,26 @@ func _init() -> void:
 	var filtered_alliance_actions := DiplomacyAI.choose_actions(
 		prefilter_state, {}, true
 	)
-	var prefilter_counters := (
-		DiplomacyAI.alliance_acceptance_prefilter_counters()
-	)
 	var prefilter_mismatches := (
 		0
 		if str(unfiltered_alliance_actions) == str(filtered_alliance_actions)
 		else 1
 	)
-	if int(prefilter_counters.get("prunes", 0)) <= 0:
-		prefilter_mismatches += 1
 	if prefilter_state.nations.size() >= 2:
 		prefilter_state.set_diplomatic_relation(
 			0, 1, GameState.DiplomaticRelation.WAR
 		)
+		# Exercise a known rejection rather than requiring this random map to
+		# naturally produce a pruned alliance candidate.
+		if (
+			DiplomacyAI._alliance_can_reach_acceptance(prefilter_state, 0, 1)
+			or DiplomacyAI.alliance_willingness(prefilter_state, 0, 1)
+				>= DiplomacyAI.ALLIANCE_ACCEPT_SCORE
+		):
+			prefilter_mismatches += 1
+	var prefilter_counters := DiplomacyAI.alliance_acceptance_prefilter_counters()
+	if int(prefilter_counters.get("prunes", 0)) <= 0:
+		prefilter_mismatches += 1
 	DiplomacyAI.reset_campaign_v_index_counters()
 	var campaign_v_cache := {}
 	var campaign_v_mismatches := 0
