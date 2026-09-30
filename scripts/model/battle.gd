@@ -102,6 +102,18 @@ func has_army(army: Army) -> bool:
 	return side_a.has(army) or side_b.has(army)
 
 
+## Administrative exit only; combat routs retain their normal attrition ledger.
+func remove_army(army: Army) -> void:
+	side_a.erase(army)
+	side_b.erase(army)
+	reinforce_fresh_a.erase(army)
+	reinforce_fresh_b.erase(army)
+	routed_a.erase(army)
+	routed_b.erase(army)
+	frontline_priority_a.erase(army)
+	frontline_priority_b.erase(army)
+
+
 ## 围城外壳中只要 side_b 存在真实军队，本轮就是城下野战。虚拟守军
 ## 仅在 side_b 没有真实军队时临时挂载，因此不会与野战军同轮参战。
 func uses_field_combat_rules() -> bool:

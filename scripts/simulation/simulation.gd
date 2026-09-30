@@ -6058,10 +6058,10 @@ func _reconcile_battles_after_coalition_peace(
 		if battle.finished:
 			continue
 		if battle.kind == Battle.Kind.SIEGE:
-			_reconcile_siege_after_coalition_peace(battle)
+			_reconcile_siege_participants(battle)
 			continue
 		if not _battle_sides_still_hostile(battle):
-			_finish_battle_for_peace(battle)
+			_finish_battle_administratively(battle)
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
 	var affected := {}
 	for nation_id in bloc_a + bloc_b:
@@ -6092,13 +6092,22 @@ func _reconcile_battles_after_coalition_peace(
 				army.path.clear()
 				army.ai_target_city = -1
 				army.ai_order_until_day = state.day
+	_finish_campaign_reports_for_battle(null)
 
 
-func _reconcile_siege_after_coalition_peace(
-	battle: Battle
+func _reconcile_siege_participants(
+	battle: Battle,
+	control_changed: bool = false
 ) -> void:
+	# Former city defenders must not become challengers just because their city
+	# defected. Existing third-party challengers keep their distinct identity.
+	if control_changed and battle.side_b_defends_city:
+		for army in battle.side_b.duplicate():
+			if not _nation_defends_city(army.owner_nation, battle.city):
+				battle.remove_army(army)
+				_release_army_from_administrative_battle(army, battle)
 	if battle.city == null or battle.side_a.is_empty():
-		_finish_battle_for_peace(battle)
+		_finish_battle_administratively(battle)
 		return
 	var besieger_nation := battle.side_a[0].owner_nation
 	if not state.is_enemy(
@@ -6115,46 +6124,33 @@ func _reconcile_siege_after_coalition_peace(
 				battle.city
 			)
 		):
-			for army in battle.side_a:
-				_release_army_from_peace_battle(
+			for army in battle.side_a.duplicate():
+				battle.remove_army(army)
+				_release_army_from_administrative_battle(
 					army,
 					battle
 				)
-			battle.side_a.clear()
 			_promote_challengers(battle)
 			return
-		_finish_battle_for_peace(battle)
+		_finish_battle_administratively(battle)
 		return
-	var retained: Array[Army] = []
-	for army in battle.side_b:
-		if (
-			army.size > 0
+	for army in battle.side_b + battle.reinforce_fresh_b + battle.routed_b:
+		if not (
+			battle.side_b.has(army)
+			and army.size > 0
 			and state.is_enemy(
 				army.owner_nation,
 				besieger_nation
 			)
 		):
-			retained.append(army)
-		else:
-			_release_army_from_peace_battle(
+			battle.remove_army(army)
+			_release_army_from_administrative_battle(
 				army,
 				battle
 			)
-	battle.side_b = retained
-	battle.reinforce_fresh_b = battle.reinforce_fresh_b.filter(
-		func(army: Army) -> bool:
-			return retained.has(army)
-	)
-	battle.routed_b = battle.routed_b.filter(
-		func(army: Army) -> bool:
-			return retained.has(army)
-	)
-	for army in battle.frontline_priority_b.keys():
-		if not retained.has(army):
-			battle.frontline_priority_b.erase(army)
 	battle.side_b_defends_city = _siege_side_defends_city(
 		battle,
-		retained
+		battle.side_b
 	)
 
 
@@ -6192,35 +6188,46 @@ func _battle_sides_still_hostile(
 	return false
 
 
-func _finish_battle_for_peace(battle: Battle) -> void:
-	for army in battle.side_a + battle.side_b:
-		_release_army_from_peace_battle(
+func _finish_battle_administratively(battle: Battle) -> void:
+	battle.finished = true
+	battle.winner_side = 0
+	for army in (
+		battle.side_a + battle.side_b
+		+ battle.reinforce_fresh_a + battle.reinforce_fresh_b
+		+ battle.routed_a + battle.routed_b
+	):
+		battle.remove_army(army)
+		_release_army_from_administrative_battle(
 			army,
 			battle
 		)
-	battle.finished = true
-	battle.winner_side = 0
-	_finish_campaign_reports_for_battle(battle)
 
 
-func _release_army_from_peace_battle(
+func _release_army_from_administrative_battle(
 	army: Army,
 	battle: Battle
 ) -> void:
+	if army.battle_id != battle.id:
+		return
+	if army.state != Army.State.FIGHTING:
+		army.battle_id = -1
+		return
 	if army.size <= 0:
 		army.battle_id = -1
 		return
+	var current_city := army.current_city_node()
 	if (
-		army.location_city >= 0
-		and army.location_city < state.cities.size()
+		current_city >= 0
+		and current_city < state.cities.size()
 		and state.has_military_access(
 			army.owner_nation,
-			state.cities[army.location_city].owner_nation
+			state.cities[current_city].owner_nation
 		)
 	):
-		_settle_idle(army, army.location_city)
+		_settle_idle(army, current_city)
 	elif (
 		battle.city != null
+		and not army.on_edge
 		and state.has_military_access(
 			army.owner_nation,
 			battle.city.owner_nation
@@ -6232,7 +6239,35 @@ func _release_army_from_peace_battle(
 		army.battle_id = -1
 		army.path.clear()
 	else:
-		_retreat_to_friendly(army)
+		_start_morale_retreat_from_city(
+			army, current_city, current_city
+		)
+
+
+## Return retained participants so the city displacement pass cannot withdraw
+## valid besiegers/challengers a second time. Do not replace battles mid-round.
+func _reconcile_battles_after_control_transfer(
+	changed_city_ids: Array[int],
+	resolving_battle: Battle
+) -> Dictionary:
+	var changed_cities := {}
+	for city_id in changed_city_ids:
+		changed_cities[city_id] = true
+	var retained_armies := {}
+	for battle in state.battles:
+		if (
+			battle.finished
+			or battle == resolving_battle
+			or battle.kind != Battle.Kind.SIEGE
+			or battle.city == null
+			or not changed_cities.has(battle.city.id)
+		):
+			continue
+		_reconcile_siege_participants(battle, true)
+		if not battle.finished:
+			for army in battle.side_a + battle.side_b:
+				retained_armies[army.id] = true
+	return retained_armies
 
 
 func _repatriate_after_access_revoked(
@@ -12576,7 +12611,10 @@ func _complete_siege_capture(battle: Battle) -> void:
 			if captor != null
 			else battle.siege_attacker_nation
 		)
-	_capture_city(captor, battle.city, claimant)
+	# The combat result is final before capital capture can trigger peace cleanup.
+	battle.finished = true
+	battle.winner_side = 1
+	_capture_city(captor, battle.city, claimant, battle)
 	for army in battle.side_a:
 		if army.size <= 0:
 			army.battle_id = -1
@@ -12588,8 +12626,6 @@ func _complete_siege_capture(battle: Battle) -> void:
 				_settle_idle(army, battle.city.id)
 		else:
 			_start_diplomatic_repatriation(army, battle.city.id)
-	battle.finished = true
-	battle.winner_side = 1
 
 
 ## 围城建立后仍可能有撤退军抵达、恢复军落位等状态转换。每个围城日都重新收集
@@ -12899,7 +12935,8 @@ func _retreat_defender(defender: Army, city: City) -> void:
 func _capture_city(
 	army: Army,
 	city: City,
-	owner_override: int = -1
+	owner_override: int = -1,
+	resolving_battle: Battle = null
 ) -> void:
 	# 领土只能通过 GameState 中的权威 City 实体变更；拒绝脱离状态树的
 	# 值对象，防止画面对象已变而领土真源未变。
@@ -13007,6 +13044,11 @@ func _capture_city(
 						var changed_city_id := int(changed_city_value)
 						if not captured_city_ids.has(changed_city_id):
 							captured_city_ids.append(changed_city_id)
+	var retained_battle_armies := (
+		_reconcile_battles_after_control_transfer(captured_city_ids, resolving_battle)
+		if territory_changed and claimant != old_owner
+		else {}
+	)
 	# 占领只重塑局部边境：旧主、占领者和每座易主城的相邻势力下一日
 	# 提前重算。首都两跳批量转移必须逐城标脏，不能只刷新首都邻域。
 	# 全局外交/宗藩重构仍使用 _ai_last_decision_day=-1。
@@ -13028,7 +13070,11 @@ func _capture_city(
 	for captured_city_id in captured_city_ids:
 		captured_city_set[captured_city_id] = true
 	for displaced in state.armies:
-		if (army != null and displaced == army) or displaced.size <= 0:
+		if (
+			(army != null and displaced == army)
+			or displaced.size <= 0
+			or retained_battle_armies.has(displaced.id)
+		):
 			continue
 		var displaced_city_id := displaced.current_city_node()
 		if not captured_city_set.has(displaced_city_id):
@@ -13080,6 +13126,8 @@ func _capture_city(
 			army,
 			city.id
 		)
+	if territory_changed:
+		_finish_campaign_reports_for_battle(null)
 	if captured_capital and claimant != old_owner:
 		# 削藩内战：占领对方首都即通吃。宗主占藩王首都→吞并藩王全境；
 		# 藩王占宗主首都→藩王继承宗主全部领土与其余藩王（继承宗藩体系）。

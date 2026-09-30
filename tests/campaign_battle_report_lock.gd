@@ -7,6 +7,7 @@ var _failures: Array[String] = []
 func _init() -> void:
 	_test_campaign_battle_locks_allocation_report()
 	_test_parallel_battles_hold_report_until_last_finish()
+	_test_administrative_end_preserves_other_engagement()
 	_test_campaign_battle_blocks_ad_hoc_local_reinforcement()
 	if _failures.is_empty():
 		print("CAMPAIGN_BATTLE_REPORT_LOCK_OK")
@@ -235,6 +236,54 @@ func _test_parallel_battles_hold_report_until_last_finish() -> void:
 	sim._finish_campaign_reports_for_battle(second)
 	_check(not front.combat_report_locked,
 		"同一战线最后一场野战结束后必须解锁战报")
+	sim.free()
+
+
+func _test_administrative_end_preserves_other_engagement() -> void:
+	var fixture := _fixture(96123)
+	if fixture.is_empty():
+		_fail("无法构造行政结束战报夹具")
+		return
+	var state: GameState = fixture["state"]
+	var sim: Simulation = fixture["sim"]
+	var attacker := int(fixture["attacker"])
+	var defender := int(fixture["defender"])
+	var center_id := int(fixture["center_id"])
+	var home_id := state.nations[attacker].capital_city_id
+	var front := state.create_campaign_front(
+		int(fixture["war_id"]), [attacker] as Array[int], attacker,
+		CoalitionCampaignFront.Mode.OFFENSE, center_id
+	)
+	var reserve := _army(961520, attacker, home_id)
+	state.armies.append(reserve)
+	var battles: Array[Battle] = []
+	for index in range(2):
+		var army := _army(961500 + index, attacker, home_id)
+		var enemy := _army(961510 + index, defender, center_id)
+		_bind(army, front, front.war_id, center_id)
+		state.armies.append_array([army, enemy])
+		var battle := state.new_battle(Battle.Kind.FIELD)
+		sim._enter_battle(battle, army, 1)
+		sim._enter_battle(battle, enemy, 2)
+		sim._lock_campaign_reports_for_battle(battle)
+		battles.append(battle)
+	sim._finish_battle_administratively(battles[0])
+	sim._finish_campaign_reports_for_battle(null)
+	_check(front.combat_report_locked and not battles[1].finished,
+		"行政结束一场战斗不得结束另一场野战或提前解锁")
+	_check(battles[0].winner_side == 0 and battles[0].side_a.is_empty()
+		and battles[0].side_b.is_empty(), "行政结束不产生胜负且必须解除参战引用")
+	sim._finish_battle_administratively(battles[1])
+	sim._finish_campaign_reports_for_battle(null)
+	_check(not front.combat_report_locked and front.reported_effective_manpower == 30000
+		and front.combat_report_day == state.day,
+		"最后一场行政结束后应以未被额外扣兵的实际兵力更新战报")
+	_check(sim._ai_forced_nations.has(attacker), "战报更新必须请求次日规划")
+	sim._allocate_coalition_fronts(_component_for(state, front.war_id, attacker))
+	_check(front.army_assignments.size() == 2, "行政结束当日不得立即补充战线绑定")
+	state.day += 1
+	sim._allocate_coalition_fronts(_component_for(state, front.war_id, attacker))
+	_check(reserve.campaign_front_id == front.front_id, "行政结束次日应恢复按实际缺口补兵")
 	sim.free()
 
 

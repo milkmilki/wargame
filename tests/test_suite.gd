@@ -22,6 +22,7 @@ func _init() -> void:
 	_test_country_display_fade()
 	_test_terrain_multiplier()
 	_test_battle_basics()
+	_test_administrative_battle_removal()
 	_test_retreat_mechanic()
 	_test_multi_vs_one()
 	_test_starvation_morale()
@@ -3406,6 +3407,37 @@ func _test_terrain_multiplier() -> void:
 		"UtilityAI.terrain_hold_bias 必须委托 Combat 真源，取值一致")
 
 # ------------------------------------------------------------------ 3. 战斗基础
+
+func _test_administrative_battle_removal() -> void:
+	var battle := Battle.new()
+	var army := Army.new()
+	army.size = 8000
+	army.location_city = 3
+	army.state = Army.State.RECOVERING
+	army.morale = 0.7
+	army.battle_id = 12
+	var remaining := Army.new()
+	remaining.size = 15000
+	battle.side_a.append_array([army, remaining])
+	battle.side_b.append(army)
+	battle.reinforce_fresh_a.append(army)
+	battle.reinforce_fresh_b.append(army)
+	battle.routed_a.append(army)
+	battle.routed_b.append(army)
+	battle.frontline_priority_a[army] = 0
+	battle.frontline_priority_b[army] = 0
+	battle.remove_army(army)
+	battle.remove_army(army)
+	_check(not battle.has_army(army) and battle.side_a.has(remaining),
+		"行政移除参战关系必须幂等且不影响其他军队")
+	_check(battle.reinforce_fresh_a.is_empty() and battle.reinforce_fresh_b.is_empty()
+		and battle.routed_a.is_empty() and battle.routed_b.is_empty()
+		and battle.frontline_priority_a.is_empty() and battle.frontline_priority_b.is_empty(),
+		"行政移除必须清理所有待处理战斗引用")
+	_check(army.size == 8000 and army.location_city == 3 and army.battle_id == 12
+		and army.state == Army.State.RECOVERING and _approx(army.morale, 0.7),
+		"Battle 清理引用不得改变军队兵力、士气、位置或状态")
+
 
 func _test_battle_basics() -> void:
 	print("[3] 战斗基础：多回合、强者胜、size 扣减、必然收敛")

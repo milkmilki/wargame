@@ -14,6 +14,12 @@ func _run() -> void:
 	_test_zhou_defection_and_army_retreat()
 	_test_third_party_and_ally_fu_untouched()
 	_test_reverse_defection()
+	_test_defection_during_field_engagement(false)
+	_test_defection_during_field_engagement(true)
+	_test_third_party_siege_after_defection(false)
+	_test_third_party_siege_after_defection(true)
+	_test_center_capture_keeps_victory(false)
+	_test_center_capture_keeps_victory(true)
 	_finish()
 
 
@@ -245,4 +251,146 @@ func _test_reverse_defection() -> void:
 			"州治被夺回后属府必须对称易帜回守方（城%d 主%d）"
 				% [member_id, state.cities[member_id].owner_nation]
 		)
+	sim.free()
+
+
+func _battle_fixture() -> Dictionary:
+	var fixture := _build_state()
+	var state: GameState = fixture["state"]
+	var center_id := int(fixture["center"])
+	var defender_id := int(fixture["defender"])
+	var fu_id := -1
+	for member_id in state.administrative_members(center_id):
+		if member_id != center_id:
+			fu_id = member_id
+			break
+	var home := state.nations[defender_id].capital_city_id
+	if state.edge_of(fu_id, home) == null:
+		state._add_edge(fu_id, home)
+	state.edge_of(fu_id, home).max_manpower = 50000
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	fixture["sim"] = sim
+	fixture["fu"] = fu_id
+	fixture["home"] = home
+	return fixture
+
+
+func _siege(state: GameState, sim: Simulation, city_id: int, attacker: Army, defender: Army) -> Battle:
+	var battle := state.new_battle(Battle.Kind.SIEGE)
+	battle.city = state.cities[city_id]
+	battle.siege_attacker_nation = attacker.owner_nation
+	battle.siege_claimant_nation = attacker.owner_nation
+	battle.side_b_defends_city = true
+	sim._enter_battle(battle, attacker, 1)
+	sim._enter_battle(battle, defender, 2)
+	battle.reinforce_fresh_b.append(defender)
+	battle.frontline_priority_b[defender] = 0
+	return battle
+
+
+func _test_defection_during_field_engagement(parallel: bool) -> void:
+	var fixture := _battle_fixture()
+	var state: GameState = fixture["state"]
+	var sim: Simulation = fixture["sim"]
+	var attacker_id := int(fixture["attacker"])
+	var defender_id := int(fixture["defender"])
+	var center_id := int(fixture["center"])
+	var fu_id := int(fixture["fu"])
+	var defender := _army(972001, defender_id, fu_id, 8000)
+	var attacker := _army(972002, attacker_id, state.nations[attacker_id].capital_city_id, 15000)
+	attacker.move_to = fu_id
+	attacker.move_progress = 1.0
+	var captor := _army(972003, attacker_id, center_id, 15000)
+	state.armies.append_array([defender, attacker, captor])
+	var front := state.create_campaign_front(
+		state.war_id_between(attacker_id, defender_id),
+		[defender_id] as Array[int], defender_id,
+		CoalitionCampaignFront.Mode.DEFENSE, center_id
+	)
+	defender.campaign_front_id = front.front_id
+	defender.campaign_war_id = front.war_id
+	front.army_assignments[defender.id] = fu_id
+	var battle := _siege(state, sim, fu_id, attacker, defender)
+	if parallel:
+		var other_defender := _army(972004, defender_id, int(fixture["home"]), 15000)
+		var other_attacker := _army(972005, attacker_id, int(fixture["home"]), 15000)
+		other_defender.campaign_front_id = front.front_id
+		other_defender.campaign_war_id = front.war_id
+		front.army_assignments[other_defender.id] = int(fixture["home"])
+		state.armies.append_array([other_defender, other_attacker])
+		var other_battle := state.new_battle(Battle.Kind.FIELD)
+		other_battle.edge = state.edge_of(fu_id, int(fixture["home"]))
+		sim._enter_battle(other_battle, other_attacker, 1)
+		sim._enter_battle(other_battle, other_defender, 2)
+	sim._lock_campaign_reports_for_battle(battle)
+	sim._capture_city(captor, state.cities[center_id], attacker_id)
+	_check(battle.finished and not state.city_under_siege(fu_id), "易帜应解除友方围城和封锁")
+	_check(attacker.state == Army.State.IDLE and attacker.location_city == fu_id,
+		"已到城下的友军应驻留实际城市，不能传送回行军出发城")
+	_check(not battle.has_army(defender) and not battle.reinforce_fresh_b.has(defender)
+		and not battle.frontline_priority_b.has(defender), "撤离守军不得残留活跃战斗引用")
+	_check(defender.state == Army.State.RETREATING and defender.battle_id == -1,
+		"易帜守军应脱离战斗后正常撤退")
+	_check(defender.size == 8000 and defender.morale == defender.max_morale,
+		"行政撤离不能附加溃败减员或清零士气")
+	_check(front.combat_report_locked == parallel, "并行野战未结束时不得提前解锁战报")
+	if not parallel:
+		_check(front.reported_effective_manpower == 0 and front.combat_report_day == state.day,
+			"最后一场行政结束后应上报真实可战兵力")
+	sim._resolve_battles()
+	_check(defender.size == 8000, "撤离守军下一轮不得被原战斗再次扣兵")
+	sim.free()
+
+
+func _test_third_party_siege_after_defection(challenger: bool) -> void:
+	var fixture := _battle_fixture()
+	var state: GameState = fixture["state"]
+	var sim: Simulation = fixture["sim"]
+	var attacker_id := int(fixture["attacker"])
+	var defender_id := int(fixture["defender"])
+	var center_id := int(fixture["center"])
+	var fu_id := int(fixture["fu"])
+	var third_id := (attacker_id + 1) % state.nations.size()
+	while third_id in [attacker_id, defender_id]:
+		third_id = (third_id + 1) % state.nations.size()
+	state.set_diplomatic_relation(third_id, attacker_id, GameState.DiplomaticRelation.WAR)
+	state.set_diplomatic_relation(third_id, defender_id, GameState.DiplomaticRelation.WAR)
+	var third := _army(973001, third_id, fu_id, 15000)
+	var opponent := _army(973002, attacker_id if challenger else defender_id, fu_id, 8000)
+	var captor := _army(973003, attacker_id, center_id, 15000)
+	state.armies.append_array([third, opponent, captor])
+	var battle := _siege(state, sim, fu_id, opponent if challenger else third,
+		third if challenger else opponent)
+	if challenger:
+		battle.side_b_defends_city = false
+	sim._capture_city(captor, state.cities[center_id], attacker_id)
+	_check(not battle.finished and state.city_under_siege(fu_id), "第三方有效围城不得被易帜取消")
+	_check(battle.side_a.has(third) and third.state == Army.State.FIGHTING
+		and third.battle_id == battle.id, "第三方围城方或接管者不得被驻军迁移再次撤走")
+	_check(battle.siege_attacker_nation == third_id and battle.side_b.is_empty(),
+		"易帜后应保留唯一第三方围城侧且清除旧侧")
+	_check(third.size == 15000, "行政换边不能伪造第三方战损")
+	sim.free()
+
+
+func _test_center_capture_keeps_victory(capital: bool) -> void:
+	var fixture := _battle_fixture()
+	var state: GameState = fixture["state"]
+	var sim: Simulation = fixture["sim"]
+	var attacker_id := int(fixture["attacker"])
+	var center_id := int(fixture["home"] if capital else fixture["center"])
+	var captor := _army(974001, attacker_id, center_id, 15000)
+	state.armies.append(captor)
+	var battle := state.new_battle(Battle.Kind.SIEGE)
+	battle.city = state.cities[center_id]
+	battle.siege_attacker_nation = attacker_id
+	battle.siege_claimant_nation = attacker_id
+	sim._enter_battle(battle, captor, 1)
+	sim._complete_siege_capture(battle)
+	_check(battle.finished and battle.winner_side == 1, "真实破城不能被行政结束覆盖胜利")
+	_check(battle.side_a.has(captor), "破城及首都投降必须保留真实胜方用于日志回放")
+	_check(captor.state == Army.State.IDLE and captor.size == 15000
+		and captor.battle_id == -1, "破城军应正常落位且不重复结算")
 	sim.free()
