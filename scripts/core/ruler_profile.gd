@@ -181,8 +181,8 @@ const HASH_MODULUS: int = 2147483647
 const HASH_MULTIPLIER: int = 48271
 const HASH_INITIAL: int = 216613626
 const DAYS_PER_YEAR: int = 360
-const MIN_REIGN_YEARS: int = 10
-const MAX_REIGN_YEARS: int = 30
+const MIN_REIGN_YEARS: int = 1
+const MAX_REIGN_YEARS: int = 50
 
 const RULER_SURNAMES: Array[String] = [
 	"赵", "钱", "孙", "李", "周", "吴", "郑", "王",
@@ -216,7 +216,7 @@ static func initialize_nation(
 	nation.trade_policy = trade_policy_for(archetype, assigned_traits)
 
 
-## 每任君主寿命只由世界种子、国家和君主版本决定，范围含首尾 10..30 年。
+## 每任君主任期只由世界种子、国家和君主版本决定，范围含首尾 1..50 年。
 static func reign_years(
 	world_seed: int,
 	nation_id: int,

@@ -109,14 +109,22 @@ func _test_capital_relocation_always_prefers_zhou() -> void:
 
 
 func _test_reign_range_and_succession() -> void:
+	_check(RulerProfile.MIN_REIGN_YEARS == 1 and RulerProfile.MAX_REIGN_YEARS == 50,
+		"configured reign must span the inclusive 1..50-year range")
+	var observed_years := {}
 	for nation_id in range(64):
 		for revision in range(8):
 			var years := RulerProfile.reign_years(71237, nation_id, revision)
+			observed_years[years] = true
 			_check(
 				years >= RulerProfile.MIN_REIGN_YEARS
 				and years <= RulerProfile.MAX_REIGN_YEARS,
-				"reign duration escaped 10..30 years"
+				"reign duration escaped 1..50 years"
 			)
+			_check(years == RulerProfile.reign_years(71237, nation_id, revision),
+				"the same ruler must retain a deterministic reign length")
+	_check(observed_years.has(1) and observed_years.has(50),
+		"both reign endpoints must be attainable")
 
 	var state := GameState.new()
 	state.generate_world(71237, 4, 40)

@@ -1,7 +1,7 @@
 # Ruler Succession And Extreme Archetypes
 
 Ruler succession is a deterministic calendar event rather than an AI action.
-Each reign lasts an inclusive random range of 10 through 30 years, with one
+Each reign lasts an inclusive random range of 1 through 50 years, with one
 year equal to 360 simulation days. The world seed, nation id, and ruler
 revision determine the duration, name, archetype, and traits, so replay and
 save loading remain deterministic across platforms.
