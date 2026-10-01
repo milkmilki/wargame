@@ -278,7 +278,8 @@ func _test_administrative_end_preserves_other_engagement() -> void:
 	_check(not front.combat_report_locked and front.reported_effective_manpower == 30000
 		and front.combat_report_day == state.day,
 		"最后一场行政结束后应以未被额外扣兵的实际兵力更新战报")
-	_check(sim._ai_forced_nations.has(attacker), "战报更新必须请求次日规划")
+	_check(sim._coalition_campaign_wake_day == state.day + 1,
+		"战报更新必须请求集团次日规划，而不是当天国家规划")
 	sim._allocate_coalition_fronts(_component_for(state, front.war_id, attacker))
 	_check(front.army_assignments.size() == 2, "行政结束当日不得立即补充战线绑定")
 	state.day += 1

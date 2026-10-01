@@ -51,7 +51,8 @@ func _init() -> void:
 		valid = valid and city.gold_per_month <= GameState.TERRAIN_CITY_GOLD_OUTPUT_MAX
 	valid = valid and apportioned_food == original_food
 	valid = valid and apportioned_gold == fixture.cities.size() * GameState.TERRAIN_CITY_GOLD_TARGET_AVERAGE
-	valid = valid and fixture.cities[2].food_per_half_year > fixture.cities[5].food_per_half_year
+	# City 3 is at 36 degrees; city 2 is at 54, outside the suitable belt.
+	valid = valid and fixture.cities[3].food_per_half_year > fixture.cities[5].food_per_half_year
 	var grid := GameState.new()
 	grid.generate_grid_world(12345)
 	for city in grid.cities:

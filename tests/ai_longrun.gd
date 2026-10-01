@@ -54,11 +54,50 @@ func _init() -> void:
 		var hostile_stationed_log: Array[String] = []
 		var territory_invariant_failures := 0
 		var first_territory_invariant_failure_day := -1
+		var known_fronts := {}
+		var cooldown_violations := 0
+		var duplicate_bindings := 0
+		var pair_violations := 0
+		var duplicate_defenses := 0
+		var remnant_preparations := 0
+		var last_history_size := 0
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(selected_days):
 			if state.winner != -1:
 				break
 			simulation._advance_day()
+			var assignments := {}
+			var defenses := {}
+			for pair_value in state.campaign_pairs.values():
+				var pair := pair_value as CoalitionCampaignPair
+				if pair.battlefields.size() > CoalitionCampaignPair.MAX_BATTLEFIELDS:
+					pair_violations += 1
+			for front_value in state.campaign_fronts.values():
+				var front := front_value as CoalitionCampaignFront
+				if not front.retiring and front.mode == CoalitionCampaignFront.Mode.DEFENSE:
+					var key := "%d:%s:%d" % [front.war_id, str(front.participant_nation_ids), front.center_city_id]
+					if defenses.has(key):
+						duplicate_defenses += 1
+					defenses[key] = true
+				if not known_fronts.has(front.front_id) and front.mode == CoalitionCampaignFront.Mode.OFFENSE:
+					var pair := state.campaign_pairs.get(front.campaign_pair_id) as CoalitionCampaignPair
+					var until_day := pair.cooldown_until(front.participant_nation_ids) if pair != null else -1
+					if until_day > state.day and until_day - 60 < state.day:
+						cooldown_violations += 1
+				known_fronts[front.front_id] = true
+				for army_id in front.army_assignments:
+					if assignments.has(army_id):
+						duplicate_bindings += 1
+					assignments[army_id] = front.front_id
+			for history_index in range(last_history_size, state.diplomatic_history.size()):
+				var event: Dictionary = state.diplomatic_history[history_index]
+				if int(event.get("action", -1)) == DiplomacyAI.Action.PREPARE_WAR:
+					var nation_id := int(event.get("nation_a", -1))
+					if nation_id >= 0:
+						var integration := RegionalStrategy.integration_report(state, nation_id)
+						if int(integration["integrated"]) >= 0.75 * int(integration["total"]) and not integration["complete"]:
+							remnant_preparations += 1
+			last_history_size = state.diplomatic_history.size()
 			if not state.territory_structure_valid():
 				territory_invariant_failures += 1
 				if first_territory_invariant_failure_day < 0:
@@ -333,6 +372,12 @@ func _init() -> void:
 				defended[city_id] = true
 			for city_id in snapshot.potential_frontier_cities:
 				defended[city_id] = true
+			# Shared defense and national reserves rally at state centers, not each
+			# border fu. Count the owned receiving center for the same defended state.
+			for city_id in defended.keys():
+				var center_id := state.administrative_center_of(int(city_id))
+				if center_id >= 0 and state.cities[center_id].owner_nation == nation.id:
+					defended[center_id] = true
 			defended_cities_total += defended.size()
 			for army in state.armies:
 				if army.owner_nation != nation.id or army.size <= 0:
@@ -533,8 +578,12 @@ func _init() -> void:
 			)
 		print("  region_changes=%d illegal_regional_declarations=%d regional_queries=%d" % [
 			region_changes, illegal_regional_declarations, RegionalStrategy.query_count])
+		print("  INTEGRATION_CAMPAIGN_AUDIT remnant_preparations=%d cooldown_violations=%d duplicate_bindings=%d" % [
+			remnant_preparations, cooldown_violations, duplicate_bindings])
+		print("  PAIR_CAMPAIGN_AUDIT overfull_pairs=%d duplicate_defenses=%d" % [pair_violations, duplicate_defenses])
 		if (
 			ordered == 0
+			or cooldown_violations > 0 or duplicate_bindings > 0 or pair_violations > 0 or duplicate_defenses > 0
 			or illegal_regional_declarations > 0
 			or invalid > 0
 			or invalid_finance > 0

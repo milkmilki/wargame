@@ -125,6 +125,20 @@ func _test_defender_counteroffensive_transition() -> void:
 	var defender_id := 1
 	var target_center := state.nations[defender_id].capital_city_id
 	target_center = state.administrative_center_of(target_center)
+	# Keep this lifecycle fixture free of unrelated split-state recapture tasks.
+	for city in state.cities:
+		city.owner_nation = (
+			defender_id if state.administrative_center_of(city.id) == target_center
+			else attacker_id
+		)
+		state.recognized_city_owners[city.id] = city.owner_nation
+	for center_id in state.administrative_center_city_ids:
+		if center_id != target_center:
+			state.nations[attacker_id].capital_city_id = center_id
+			break
+	state.region_ids.fill(0)
+	state.ownership_revision += 1
+	state.region_analysis_revision += 1
 	state.set_diplomatic_relation(
 		attacker_id, defender_id, GameState.DiplomaticRelation.WAR
 	)
@@ -173,22 +187,24 @@ func _test_defender_counteroffensive_transition() -> void:
 		and defense_campaign.army_assignments.has(defender_army.id)
 		and defense_campaign.army_assignments.has(defender_reserve.id)
 	)
-	invader.location_city = state.nations[attacker_id].capital_city_id
-	invader.move_from = invader.location_city
+	_check(stale_plan_suspended, "实际入侵时旧攻势绑定应转为本州防守并获得出击命令")
+	var defense_front_id := defense_campaign.front_id if defense_campaign != null else -1
+	var war_id := state.war_id_between(attacker_id, defender_id)
+	# The invading army has been defeated, not teleported with a live attack route.
+	state.armies.erase(invader)
 	state.day += Simulation.AI_DECISION_INTERVAL_DAYS
 	sim._manage_coalition_campaigns()
-	var counteroffensive_created := false
-	for campaign in state.campaign_fronts_for_nation(defender_id):
-		if (
-			campaign != null
-			and campaign.mode == CoalitionCampaignFront.Mode.OFFENSE
-		):
-			counteroffensive_created = true
-			break
-	_check(
-		stale_plan_suspended and counteroffensive_created,
-		"目标州内仍有敌军时防守方不得反攻；敌军清空后才可转攻敌州"
-	)
+	_check(state.campaign_front(defense_front_id) == null,
+		"入侵结束时实际释放防守战线，不被初始外交目标永久锁住")
+	for army in [defender_army, defender_reserve]:
+		var front := state.campaign_front(army.campaign_front_id)
+		_check(front != null and front.mode == CoalitionCampaignFront.Mode.OFFENSE,
+			"防守释放军必须实际转入反攻，而非只创建空进攻计划")
+		_check(army.campaign_war_id == war_id,
+			"防守转反攻必须保持同一战争池")
+		_check(army.state == Army.State.MOVING and army.ai_target_city >= 0
+			and army.ai_target_city != target_center,
+			"反攻军必须得到可执行的集结或进攻命令")
 	sim.free()
 
 

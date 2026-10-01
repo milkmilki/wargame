@@ -1,8 +1,8 @@
 class_name RegionalStrategy
 extends RefCounted
 
-const LATITUDE_KNOTS := [0.0, 25.0, 40.0, 65.0, 90.0]
-const OUTPUT_KNOTS := [0.60, 1.00, 1.00, 0.55, 0.35]
+const LATITUDE_KNOTS := [0.0, 18.0, 25.0, 35.0, 45.0, 65.0, 90.0]
+const OUTPUT_KNOTS := [0.30, 0.55, 1.00, 1.00, 0.45, 0.10, 0.05]
 const LATITUDE_DISTANCE_SCALE: float = 30.0
 const HEIGHT_DISTANCE_SCALE: float = 0.5
 const LATITUDE_SIMILARITY_WEIGHT: float = 0.6
@@ -10,6 +10,8 @@ const ENVIRONMENT_WEIGHT: float = 0.7
 const CONQUEROR_ENVIRONMENT_WEIGHT: float = 0.35
 const CONFLICT_WEIGHT: float = 1.35
 const SHARED_GOAL_WEIGHT: float = 0.45
+const INTEGRATION_BASE_BENEFIT: float = 0.8
+const INTEGRATION_COMPLETION_BENEFIT: float = 2.2
 static var geometry_build_count: int = 0
 static var control_build_count: int = 0
 static var query_count: int = 0
@@ -296,6 +298,28 @@ static func allows_objective(state: GameState, nation_id: int, center_id: int, r
 	return legal or city_region(state, center) == target_region(state, nation_id) \
 		or (state.is_enemy(nation_id, state.cities[center].owner_nation)
 			and state.is_same_suzerainty_system(nation_id, state.cities[center].owner_nation))
+
+
+static func integration_war_bonus(state: GameState, nation_id: int, target_id: int) -> float:
+	var region := target_region(state, nation_id)
+	if region < 0 or target_id < 0 or target_id >= state.nations.size() or not state.nations[target_id].alive:
+		return 0.0
+	var data := control(state)
+	var root := int(data["roots"].get(nation_id, nation_id))
+	var target_root := int(data["roots"].get(target_id, target_id))
+	if root == target_root:
+		return 0.0
+	var report := integration_report(state, nation_id, region)
+	var total := int(report["total"])
+	var integrated := int(report["integrated"])
+	var remaining := total - integrated
+	var target_owned := int(data["root_owned"].get(Vector2i(target_root, region), 0))
+	if total <= 0 or remaining <= 0 or target_owned <= 0:
+		return 0.0
+	var progress := clampf(float(integrated) / float(total), 0.0, 1.0)
+	var outstanding_share := clampf(float(target_owned) / float(remaining), 0.0, 1.0)
+	return (INTEGRATION_BASE_BENEFIT + INTEGRATION_COMPLETION_BENEFIT * progress * progress) \
+		* (0.5 + 0.5 * outstanding_share)
 
 
 static func rivalry(state: GameState, nation_id: int, other_id: int) -> float:

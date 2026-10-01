@@ -21,12 +21,20 @@ var _index_builds: int = 0
 var _cache_hits: int = 0
 var _cache_misses: int = 0
 
+class CountingGameState extends GameState:
+	var access_queries: int = 0
+
+	func has_military_access(traveler_nation: int, territory_owner: int) -> bool:
+		access_queries += 1
+		return super.has_military_access(traveler_nation, territory_owner)
+
 
 func _init() -> void:
 	var original_index_enabled := (
 		DiplomacyAI.encirclement_index_enabled
 	)
 	_test_invalid_inputs()
+	_test_distinct_targets_share_eligible_roads()
 	for world_seed in WORLD_SEEDS:
 		var state := _make_world(world_seed)
 		_test_all_values(state, world_seed)
@@ -52,6 +60,39 @@ func _init() -> void:
 			_checks, _failures.size(),
 		])
 	quit(0 if _failures.is_empty() else 1)
+
+
+func _test_distinct_targets_share_eligible_roads() -> void:
+	var state := CountingGameState.new()
+	for owner in range(2):
+		var nation := Nation.new()
+		nation.id = owner
+		nation.capital_city_id = 0 if owner == 0 else 20
+		state.nations.append(nation)
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+	for city_id in range(21):
+		var city := City.new()
+		city.id = city_id
+		city.owner_nation = 0 if city_id < 20 else 1
+		state.cities.append(city)
+		state.adjacency[city_id] = [] as Array[int]
+		if city_id > 0:
+			state._add_edge(city_id - 1, city_id)
+	var index := EncirclementIndex.new(state, 0)
+	var first := index.value_for(19)
+	var queries_after_first := state.access_queries
+	var second := index.value_for(18)
+	_check(queries_after_first > 0, "eligible roads must actually validate military access")
+	_check(state.access_queries == queries_after_first, "a second target reuses already validated roads rather than repeating access checks")
+	_check_close(_legacy_encirclement_value(state, 19, 0), first, "shared_roads/first_target")
+	_check_close(_legacy_encirclement_value(state, 18, 0), second, "shared_roads/second_target")
+	state.edge_of(8, 9).max_manpower = 0
+	state.road_network_revision += 1
+	var rebuilt := EncirclementIndex.new(state, 0)
+	_check_close(_legacy_encirclement_value(state, 17, 0), rebuilt.value_for(17), "shared_roads/new_batch_respects_closed_road")
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
+	var diplomatic_batch := EncirclementIndex.new(state, 0)
+	_check_close(_legacy_encirclement_value(state, 10, 0), diplomatic_batch.value_for(10), "shared_roads/new_batch_respects_diplomacy")
 
 
 func _test_invalid_inputs() -> void:

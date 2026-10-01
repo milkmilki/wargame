@@ -22,12 +22,39 @@ indices; capture invalidates control, not geography. Regional rivalry replaces
 global unification pressure. The existing resource and peace era schedule is
 unchanged and no longer contributes to rivalry.
 
+New defensive alliances favor weak systems. Peaceful suzerainty members share
+one strength total using the existing national-power estimate. A system at least
+1.5 times the independent-system average or 20% of world power caps either side's
+alliance score at 0.75, below the acceptance threshold of 1.0, after ruler modifiers.
+Weak pairs retain the previous scoring. Ordinary proposals and prewar alliance
+recruitment share the cap and acceptance prefilter; existing alliances, vassal
+relationships and departure rules are unchanged. Strength caps are built once
+per diplomatic evaluation batch, with civil-war branches counted separately.
+
+Concurrent-war limits and war-desire overextension/distraction count distinct
+active `war_id` values, not hostile alliance members. The enemy-country list
+still drives combat and diplomatic contacts. Unidentified hostile pairs remain
+separate; war-ID reassignment and merging invalidate diplomatic evaluation caches.
+
+Conqueror rulers give their own real armies a base attack/defense multiplier of
+5.0, retaining existing trait modifiers and morale. Offensive manpower demand
+is `ceil(0.5 * (R + V))`; other rulers use 1.0. Staging and prewar previews apply
+the same policy to `G + V` for states with Fu. Active sieges apply it only to R.
+R and V remain unmodified raw values. Shared fronts use the anchor ruler's
+policy, but allied armies retain their own ruler's combat modifiers. The
+allocator's 45000 minimum per front and defensive demand are unchanged.
+
 Generated finance and food weights include latitude before integer apportionment.
+The symmetric smooth curve has knots at absolute latitude
+`0:0.30, 18:0.55, 25:1.00, 35:1.00, 45:0.45, 65:0.10, 90:0.05`.
+These are abstract production weights, not historical city-output ratios;
+city density, manpower and trade do not receive another multiplier.
 Global output targets and existing bounds are preserved. Saved maps contain final
 outputs and an optional latitude multiplier; loading never reapplies penalties.
 Legacy maps and nongeographic fixtures default to a multiplier of one.
 
-Regression gates: `tests/regional_strategy.gd`, `tests/latitude_output.gd`,
+Regression gates: `tests/war_count_and_conqueror.gd`,
+`tests/regional_strategy.gd`, `tests/latitude_output.gd`,
 `tests/campaign_chain_e2e.gd`, and `run_tests.sh`. The regional tests also cover
 the coalition objective cache's proposer identity and snapshot/history anchors.
 

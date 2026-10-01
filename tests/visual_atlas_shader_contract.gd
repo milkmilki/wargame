@@ -25,6 +25,8 @@ func _init() -> void:
 		"visual_city_id_texture",
 		"visual_land_mask_texture",
 		"visual_region_edge_texture",
+		"visual_region_coverage_texture",
+		"visual_region_distance_texture",
 		"visual_coast_mask_texture",
 	]:
 		valid = _check(

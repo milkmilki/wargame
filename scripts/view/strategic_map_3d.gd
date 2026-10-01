@@ -127,6 +127,8 @@ var _visual_region_masks := {}
 var _visual_city_id_texture: ImageTexture
 var _visual_land_mask_texture: ImageTexture
 var _visual_region_edge_texture: ImageTexture
+var _visual_region_coverage_texture: ImageTexture
+var _visual_region_distance_texture: ImageTexture
 var _visual_coast_mask_texture: ImageTexture
 var _map_font: Font
 ## 国家标签的领土几何按 ownership_revision 批量构建一次。名称或外交变化只
@@ -233,6 +235,8 @@ func setup(
 	_visual_city_id_texture = null
 	_visual_land_mask_texture = null
 	_visual_region_edge_texture = null
+	_visual_region_coverage_texture = null
+	_visual_region_distance_texture = null
 	_visual_coast_mask_texture = null
 	_country_fill_opacity_image = null
 	_pending_country_visual_request.clear()
@@ -1383,6 +1387,12 @@ func _update_visual_atlas_textures() -> void:
 	_visual_region_edge_texture = ImageTexture.create_from_image(
 		_visual_atlas["region_edge"]
 	)
+	_visual_region_coverage_texture = ImageTexture.create_from_image(
+		_visual_atlas["region_coverage"]
+	)
+	_visual_region_distance_texture = ImageTexture.create_from_image(
+		_visual_atlas["region_distance"]
+	)
 	_visual_coast_mask_texture = ImageTexture.create_from_image(
 		_visual_atlas["coast_mask"]
 	)
@@ -1390,7 +1400,9 @@ func _update_visual_atlas_textures() -> void:
 		_visual_city_id_texture,
 		_visual_land_mask_texture,
 		_visual_region_edge_texture,
-		_visual_coast_mask_texture
+		_visual_coast_mask_texture,
+		_visual_region_coverage_texture,
+		_visual_region_distance_texture
 	)
 
 

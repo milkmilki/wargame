@@ -6,6 +6,8 @@ uniform sampler2D province_visual_lut : source_color, filter_nearest, repeat_dis
 uniform sampler2D visual_city_id_texture : filter_nearest, repeat_disable;
 uniform sampler2D visual_land_mask_texture : filter_nearest, repeat_disable;
 uniform sampler2D visual_region_edge_texture : filter_linear, repeat_disable;
+uniform sampler2D visual_region_coverage_texture : filter_linear, repeat_disable;
+uniform sampler2D visual_region_distance_texture : filter_linear, repeat_disable;
 uniform sampler2D visual_coast_mask_texture : filter_linear, repeat_disable;
 uniform sampler2D province_boundary_texture : source_color, filter_linear, repeat_disable;
 uniform sampler2D country_boundary_texture : source_color, filter_linear, repeat_disable;
@@ -148,14 +150,29 @@ void fragment() {
 		// Geometry is the sole geography truth: strictly below the 0m contour is
 		// unowned ocean; the 0m contour and everything above it are land.
 		float province_alpha = step(0.5, province.a) * hard_land;
+		float region_distance = texture(
+			visual_region_distance_texture, UV
+		).r;
+		float region_coverage = texture(
+			visual_region_coverage_texture, UV
+		).r;
+		float region_distance_aa = max(fwidth(region_distance), 0.00001);
+		float region_fill_coverage = smoothstep(
+			-region_distance_aa,
+			region_distance_aa,
+			region_distance
+		);
+		if (unified_region_fill_enabled > 0.5) {
+			province_alpha *= region_fill_coverage * region_coverage;
+		}
 		float visual_country_edge = 0.0;
 		if (
 			unified_region_fill_enabled > 0.5
 			&& country_fill_fade_enabled > 0.5
 		) {
-			float visual_edge_hint = texture(
-				visual_region_edge_texture, UV
-			).r;
+				float visual_edge_hint = 1.0 - smoothstep(
+					0.0, 1.0, region_distance
+				);
 			visual_country_edge = visual_country_gradient(
 				province, visual_pixel, visual_size, lut_size
 			);
@@ -201,6 +218,18 @@ void fragment() {
 	// Boundary textures are authored as hard solid strokes. Country borders and
 	// the mesh-derived 0m coast have independent LOD controls.
 	float atlas_region_edge = texture(visual_region_edge_texture, UV).r;
+	float region_distance = texture(
+		visual_region_distance_texture, UV
+	).r;
+	float region_distance_aa = max(fwidth(region_distance), 0.00001);
+	float distance_boundary = 1.0 - smoothstep(
+		0.0,
+		region_distance_aa * 2.0,
+		abs(region_distance)
+	);
+	if (unified_region_fill_enabled > 0.5) {
+		atlas_region_edge = distance_boundary;
+	}
 	float visual_province_alpha = mix(
 		province_boundary.a, atlas_region_edge, unified_region_fill_enabled
 	);

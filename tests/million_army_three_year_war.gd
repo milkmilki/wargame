@@ -74,6 +74,7 @@ func _init() -> void:
 			_print_year(state, war_id)
 	var valid := (
 		observed_battle
+		and simulation.ai_command_commit_failure_total == 0
 		and observed_movement
 		and observed_campaign
 		and observed_occupation
@@ -96,10 +97,11 @@ func _init() -> void:
 	print(
 		(
 			"MILLION_ARMY_THREE_YEAR_WAR_OK days=%d initial_per_nation=%d "
-			+ "peak_battles=%d pool_days=%s elapsed_ms=%d"
+			+ "peak_battles=%d pool_days=%s elapsed_ms=%d commit_failures=%d duplicate_bindings=0"
 		) % [
 			state.day, ARMY_COUNT_PER_NATION * ARMY_SIZE,
 			peak_battles, str(positive_pool_days), elapsed,
+			simulation.ai_command_commit_failure_total,
 		]
 	)
 	simulation.free()
@@ -199,6 +201,21 @@ func _war_report_error(
 		return "nation=%d same-day report changed" % nation_id
 	if int(first.get("duplicate_assignments", 0)) != 0:
 		return "nation=%d duplicate assignments" % nation_id
+	for pair in state.campaign_pairs_for_nation(nation_id, war_id):
+		if pair.battlefields.size() > CoalitionCampaignPair.MAX_BATTLEFIELDS:
+			return "pair=%d more than two state battlefields" % pair.pair_id
+		var centers := {}
+		for slot in pair.battlefields:
+			if centers.has(slot["center_city_id"]):
+				return "pair=%d repeated state battlefield" % pair.pair_id
+			centers[slot["center_city_id"]] = true
+	var defenses := {}
+	for front in state.campaign_fronts_for_nation(nation_id, war_id):
+		if front.retiring or front.mode != CoalitionCampaignFront.Mode.DEFENSE:
+			continue
+		if defenses.has(front.center_city_id):
+			return "nation=%d duplicated defense requirement" % nation_id
+		defenses[front.center_city_id] = true
 	var members: Array[int] = first.get("component_members", [])
 	var expected_total := 0
 	var expected_effective := 0

@@ -44,6 +44,10 @@ const PEACE_EXTERNAL_THREAT_WEIGHT: float = 1.50
 const PEACE_RESOURCE_REFERENCE_MONTHS: float = 24.0
 const PEACE_MAX_BORDER_MASSING_RATIO: float = 1.50
 const ALLIANCE_ACCEPT_SCORE: float = 1.00
+## Strong peaceful suzerainty systems cannot form new defensive alliances.
+const ALLIANCE_STRONG_AVERAGE_RATIO: float = 1.50
+const ALLIANCE_STRONG_WORLD_SHARE: float = 0.20
+const ALLIANCE_STRONG_SCORE_CAP: float = 0.75
 const WAR_DECLARE_SCORE: float = 0.85
 const OBSERVED_WAR_PREPARATION_THREAT_BONUS: float = 0.75
 const PEACE_ESCALATION_START_DAYS: int = 180
@@ -1533,6 +1537,7 @@ static func alliance_willingness(
 	target_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> float:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var cache_key := "alliance:%d:%d" % [
 		nation_id,
 		target_id,
@@ -1673,8 +1678,45 @@ static func alliance_willingness(
 	var result := base_result * RulerProfile.alliance_multiplier(
 		state.nations[nation_id]
 	)
+	result = minf(result, _alliance_strength_score_cap(state, nation_id, target_id, evaluation_cache))
 	evaluation_cache[cache_key] = result
 	return result
+
+
+static func _alliance_strength_score_cap(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary
+) -> float:
+	const CACHE_KEY := "alliance_strength_caps"
+	if not evaluation_cache.has(CACHE_KEY):
+		_build_nation_aggregates(state, evaluation_cache)
+		var roots: Dictionary = RegionalStrategy.control(state)["roots"]
+		var powers := {}
+		var total := 0.0
+		for nation in state.nations:
+			if not nation.alive:
+				continue
+			var root_id := int(roots.get(nation.id, nation.id))
+			var power := _national_power(state, nation.id, evaluation_cache)
+			powers[root_id] = float(powers.get(root_id, 0.0)) + power
+			total += power
+		var strong_threshold := minf(
+			total / float(maxi(powers.size(), 1)) * ALLIANCE_STRONG_AVERAGE_RATIO,
+			total * ALLIANCE_STRONG_WORLD_SHARE
+		)
+		var caps := {}
+		for nation in state.nations:
+			var root_id := int(roots.get(nation.id, nation.id))
+			caps[nation.id] = (
+				ALLIANCE_STRONG_SCORE_CAP
+				if total > 0.0 and float(powers.get(root_id, 0.0)) >= strong_threshold
+				else INF
+			)
+		evaluation_cache[CACHE_KEY] = caps
+	var caps: Dictionary = evaluation_cache[CACHE_KEY]
+	return minf(float(caps.get(nation_id, INF)), float(caps.get(target_id, INF)))
 
 
 ## 保守的结盟接受门槛。先计算不依赖战争目标评分的完整态度，再省略始终非正的
@@ -1687,6 +1729,7 @@ static func _alliance_can_reach_acceptance(
 ) -> bool:
 	if alliance_acceptance_prefilter_disabled:
 		return true
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var cache_key := "alliance_acceptance_possible:%d:%d" % [
 		nation_id, target_id,
 	]
@@ -1716,6 +1759,12 @@ static func _alliance_can_reach_acceptance(
 	):
 		evaluation_cache[cache_key] = false
 		evaluation_cache[upper_bound_key] = -INF
+		_alliance_acceptance_prefilter_prunes += 1
+		return false
+	var strength_cap := _alliance_strength_score_cap(state, nation_id, target_id, evaluation_cache)
+	if strength_cap < ALLIANCE_ACCEPT_SCORE:
+		evaluation_cache[cache_key] = false
+		evaluation_cache[upper_bound_key] = strength_cap
 		_alliance_acceptance_prefilter_prunes += 1
 		return false
 	var common_enemies := _common_enemy_count(
@@ -1856,6 +1905,7 @@ static func war_desire(
 	target_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> float:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var cache_key := "war_desire:%d:%d" % [nation_id, target_id]
 	if evaluation_cache.has(cache_key):
 		return float(evaluation_cache[cache_key])
@@ -1871,11 +1921,11 @@ static func war_desire(
 		or not _cached_can_alliance_declare_war(
 			state, nation_id, target_id, evaluation_cache
 		)
-		or _cached_wars_of(
+		or _cached_war_count(
 			state,
 			nation_id,
 			evaluation_cache
-		).size() >= MAX_CONCURRENT_WARS
+		) >= MAX_CONCURRENT_WARS
 		or _has_shared_ally(
 			state,
 			nation_id,
@@ -1956,16 +2006,16 @@ static func war_desire(
 		state, target_id, evaluation_cache
 	)
 	var ratio := own_power / maxf(target_power, 1.0)
-	var target_distraction := float(_cached_wars_of(
+	var target_distraction := float(_cached_war_count(
 		state,
 		target_id,
 		evaluation_cache
-	).size()) * 0.25
-	var own_overextension := float(_cached_wars_of(
+	)) * 0.25
+	var own_overextension := float(_cached_war_count(
 		state,
 		nation_id,
 		evaluation_cache
-	).size()) * 0.75
+	)) * 0.75
 	var border_value := minf(
 		float(_frontier_edges(
 			state, nation_id, target_id, evaluation_cache
@@ -2026,6 +2076,7 @@ static func war_desire(
 		+ objective_value
 		+ mobilization_value
 		+ unification_pressure
+		+ _cached_integration_war_bonus(state, nation_id, target_id, evaluation_cache)
 		+ peace_escalation
 	)
 	var result := _war_desire_score(
@@ -2037,6 +2088,16 @@ static func war_desire(
 	)
 	evaluation_cache[cache_key] = result
 	return result
+
+
+static func _cached_integration_war_bonus(
+	state: GameState, nation_id: int, target_id: int, evaluation_cache: Dictionary
+) -> float:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
+	var key := "integration_war_bonus:%d:%d" % [nation_id, target_id]
+	if not evaluation_cache.has(key):
+		evaluation_cache[key] = RegionalStrategy.integration_war_bonus(state, nation_id, target_id)
+	return float(evaluation_cache[key])
 
 
 static func _war_desire_score(
@@ -2653,6 +2714,9 @@ static func _ensure_evaluation_cache_current(
 		state.ownership_revision,
 		state.diplomacy_revision,
 		state.trade_revision,
+		state.regional_strategy_revision,
+		state.region_analysis_revision,
+		state.administrative_region_revision,
 	]
 	var cached_revision: Variant = evaluation_cache.get(
 		REVISION_KEY, null
@@ -3869,7 +3933,8 @@ static func select_war_objective(
 	evaluation_cache: Dictionary = {},
 	excluded_city: int = -1,
 	legal_reclamation_only: bool = false,
-	excluded_centers: Dictionary = {}
+	excluded_centers: Dictionary = {},
+	camp_counterattack: bool = false
 ) -> Dictionary:
 	var target_cities := (
 		_cached_cities_of(
@@ -3890,8 +3955,9 @@ static func select_war_objective(
 		):
 			continue
 		var center_id := state.administrative_center_of(target_city.id)
-		if center_id >= 0 and not center_set.has(center_id) and not excluded_centers.has(center_id) and RegionalStrategy.allows_objective(
-			state, nation_id, center_id, legal_reclamation_only
+		if center_id >= 0 and not center_set.has(center_id) and not excluded_centers.has(center_id) and (
+			(camp_counterattack and RulerProfile.offensive_allowed(state.nations[nation_id]) and state.is_enemy(nation_id, target_id))
+			or RegionalStrategy.allows_objective(state, nation_id, center_id, legal_reclamation_only)
 		):
 			center_set[center_id] = true
 	var center_ids: Array[int] = []
@@ -4159,7 +4225,7 @@ static func administrative_tactical_target(
 			candidates.append(city_id)
 	if candidates.is_empty():
 		return -1
-	var required := (
+	var required := state.campaign_required_manpower(nation_id,
 		_cached_campaign_siege_requirement(state, nation_id, center_city_id, evaluation_cache)
 		+ _cached_campaign_reinforcement_threat(
 			state, nation_id, center_city_id, evaluation_cache
@@ -4816,11 +4882,11 @@ static func _collect_war_actions(
 			else 0
 		)
 		var precheck_failed := (
-			_cached_wars_of(
+			_cached_war_count(
 				state,
 				nation.id,
 				evaluation_cache
-			).size()
+			)
 				>= MAX_CONCURRENT_WARS
 			or not offensive_resources_ready(
 				state,
@@ -5597,7 +5663,7 @@ static func objective_assault_troops(
 	var center_id := state.administrative_center_of(objective_city)
 	if center_id < 0:
 		return 0
-	return (
+	return state.campaign_required_manpower(nation_id,
 		_cached_campaign_siege_requirement(state, nation_id, center_id, evaluation_cache)
 		+ _cached_campaign_reinforcement_threat(
 			state, nation_id, center_id, evaluation_cache
@@ -5617,7 +5683,7 @@ static func _cached_campaign_siege_requirement(
 		state.ownership_revision, state.diplomacy_revision, state.garrison_revision,
 		state.administrative_region_revision, garrison]
 	if not evaluation_cache.has(key):
-		evaluation_cache[key] = state.campaign_siege_requirement(attacker_id, center_id)
+		evaluation_cache[key] = state.campaign_siege_requirement(attacker_id, center_id, bloc)
 	return int(evaluation_cache[key])
 
 
@@ -5798,6 +5864,18 @@ static func _cached_wars_of(
 	if not evaluation_cache.has(cache_key):
 		evaluation_cache[cache_key] = state.wars_of(nation_id)
 	return evaluation_cache[cache_key] as Array[int]
+
+
+static func _cached_war_count(
+	state: GameState,
+	nation_id: int,
+	evaluation_cache: Dictionary
+) -> int:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
+	var cache_key := "active_war_count:%d" % nation_id
+	if not evaluation_cache.has(cache_key):
+		evaluation_cache[cache_key] = state.active_war_count(nation_id)
+	return int(evaluation_cache[cache_key])
 
 
 static func _cached_alliance_bloc(

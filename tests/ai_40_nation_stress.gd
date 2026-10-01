@@ -201,6 +201,28 @@ func _invariant_error(
 ) -> String:
 	if state.nations.is_empty():
 		return "没有生成国家"
+	for pair_value in state.campaign_pairs.values():
+		var pair := pair_value as CoalitionCampaignPair
+		if pair.battlefields.size() > CoalitionCampaignPair.MAX_BATTLEFIELDS:
+			return "集合对%d超过两个州战场" % pair.pair_id
+		var centers := {}
+		for slot in pair.battlefields:
+			if centers.has(slot["center_city_id"]):
+				return "集合对%d同州重复占用名额" % pair.pair_id
+			centers[slot["center_city_id"]] = true
+	var assignments := {}
+	var defenses := {}
+	for front_value in state.campaign_fronts.values():
+		var front := front_value as CoalitionCampaignFront
+		for army_id in front.army_assignments:
+			if assignments.has(army_id):
+				return "军队%d重复绑定任务" % army_id
+			assignments[army_id] = front.front_id
+		if not front.retiring and front.mode == CoalitionCampaignFront.Mode.DEFENSE:
+			var key := "%d:%s:%d" % [front.war_id, str(front.participant_nation_ids), front.center_city_id]
+			if defenses.has(key):
+				return "防守州%d重复计算需求" % front.center_city_id
+			defenses[key] = true
 	var owned_counts: Array[int] = []
 	owned_counts.resize(state.nations.size())
 	owned_counts.fill(0)

@@ -36,6 +36,16 @@ static func build_visual_atlas(
 		region_edge = Image.create(
 			safe_size.x, safe_size.y, false, Image.FORMAT_RF
 		)
+	var region_coverage := _mask_channel(
+		shared_masks.get("region_coverage"), safe_size
+	)
+	if region_coverage == null:
+		region_coverage = region_edge.duplicate()
+	var region_distance := _mask_channel(
+		shared_masks.get("region_distance"), safe_size
+	)
+	if region_distance == null:
+		region_distance = _distance_from_edge(region_edge, land, safe_size)
 	var coast := _mask_channel(shared_masks.get("coast_mask"), safe_size)
 	if coast == null:
 		coast = _coast_channel(land, safe_size)
@@ -52,6 +62,8 @@ static func build_visual_atlas(
 		"land_mask": land,
 		"city_id": city_id,
 		"region_edge": region_edge,
+		"region_coverage": region_coverage,
+		"region_distance": region_distance,
 		"coast_mask": coast,
 		"river_mask": rivers,
 		"road_mask": roads,
@@ -277,6 +289,21 @@ static func _coast_channel(land: Image, size: Vector2i) -> Image:
 	return Image.create_from_data(
 		size.x, size.y, false, Image.FORMAT_L8, coast_bytes
 	)
+
+
+static func _distance_from_edge(
+	edge: Image, land: Image, size: Vector2i
+) -> Image:
+	var distance := Image.create(size.x, size.y, false, Image.FORMAT_RF)
+	for y in range(size.y):
+		for x in range(size.x):
+			if land.get_pixel(x, y).r < 0.5:
+				distance.set_pixel(x, y, Color(-1.0, 0.0, 0.0, 1.0))
+			elif edge.get_pixel(x, y).r > 0.5:
+				distance.set_pixel(x, y, Color(0.0, 0.0, 0.0, 1.0))
+			else:
+				distance.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+	return distance
 
 
 static func _fill_rivers(

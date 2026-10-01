@@ -25,7 +25,8 @@ func _init() -> void:
 		) and valid
 	for key in [
 		"elevation", "land_mask", "city_id", "region_edge",
-		"coast_mask", "river_mask", "road_mask",
+		"region_coverage", "region_distance", "coast_mask",
+		"river_mask", "road_mask",
 	]:
 		valid = _check(atlas.has(key), "missing atlas channel: " + key) and valid
 		valid = _check(

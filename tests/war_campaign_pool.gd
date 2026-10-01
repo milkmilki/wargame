@@ -122,12 +122,19 @@ func _test_shared_allocation_and_per_nation_limit() -> void:
 	var assigned_total := 0
 	for count_value in assigned_by_owner.values():
 		assigned_total += int(count_value)
-	_check(assigned_total > 0, "共享防守战线必须从集团战争池获得军队")
+	var required := sim._front_requirement(front)
+	_check(assigned_total == ceili(float(required) / GameState.INITIAL_HEAVY_ARMY_SIZE),
+		"首次动员必须同轮补足一次共享需求，不逐国重复补满")
+	var exceeds_transfer_quota := false
 	for member_id in members:
-		_check(int(assigned_by_owner.get(member_id, 0)) <= 3,
-			"每个参与国每轮最多只能改派三支军队")
+		if int(assigned_by_owner.get(member_id, 0)) > 3:
+			exceeds_transfer_quota = true
+		_check(int(assigned_by_owner.get(member_id, 0)) <= 6,
+			"首次动员只能使用本国实际拥有的六军")
 		_check(int(assigned_by_owner.get(member_id, 0)) > 0,
 			"共享防守缺口必须允许接壤盟军共同补足")
+	_check(exceeds_transfer_quota,
+		"无绑定预备军首次动员不受活跃战线三军改派限制")
 	var report_a := state.coalition_campaign_allocation(war_id, members[0])
 	var report_b := state.coalition_campaign_allocation(war_id, members[1])
 	_check(int(report_a["war_pool_total"]) == int(report_b["war_pool_total"]),
@@ -233,11 +240,13 @@ func _test_merged_component_trims_extra_offensive_fronts() -> void:
 	sim._reconcile_coalition_fronts(
 		state.coalition_campaign_components(war_id)
 	)
+	state.sync_campaign_pairs(state.coalition_campaign_components(war_id))
+	sim._reconcile_campaign_battlefields()
 	var remaining := state.campaign_fronts_for_nation(
 		members[0], war_id, CoalitionCampaignFront.Mode.OFFENSE
 	)
 	_check(remaining.size() == 2,
-		"分量合并后最多只能保留两条共享进攻战线")
+		"同一敌对集合对合并后最多只能保留两个共享州战场")
 	var released := 0
 	for army in armies:
 		if army.campaign_front_id < 0:
@@ -352,7 +361,18 @@ func _test_objective_owner_becomes_front_anchor() -> void:
 	var enemy_id := int(fixture["enemy_id"])
 	var war_id := int(fixture["war_id"])
 	state.clear_war_objective(members[0], enemy_id)
+	# This fixture tests route ownership, not a randomly generated ruler's war veto.
+	state.nations[members[1]].ruler_archetype = RulerProfile.BALANCED
+	state.nations[members[1]].ruler_traits.clear()
 	state.nations[members[1]].strategic_region_anchor_city_id = int(fixture["center_id"])
+	var entry_id := int(fixture["center_id"])
+	for city_id in state.administrative_members(entry_id):
+		if city_id != entry_id and not state.cities[city_id].is_dock and state.cities[city_id].owner_nation == enemy_id:
+			entry_id = city_id
+			break
+	# Anchor selection needs a real frontier, not only a diplomatic label.
+	state._add_edge(state.nations[members[1]].capital_city_id, entry_id)
+	state.road_network_revision += 1
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
@@ -366,6 +386,8 @@ func _test_objective_owner_becomes_front_anchor() -> void:
 	)
 	_check(int(objective.get("anchor_nation_id", -1)) == members[1],
 		"共享目标必须保留实际提出目标的成员国作为路线锚点")
+	var staged_army := _army(945800, members[1], state.nations[members[1]].capital_city_id)
+	state.armies.append(staged_army)
 	sim._plan_coalition_component(component, [] as Array[int], {})
 	var fronts := state.campaign_fronts_for_nation(
 		members[0], war_id, CoalitionCampaignFront.Mode.OFFENSE

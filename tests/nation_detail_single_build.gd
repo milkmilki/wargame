@@ -163,15 +163,24 @@ func _test_war_sections_group_campaigns() -> void:
 			plan.mode = CoalitionCampaignFront.Mode.OFFENSE
 			plan.war_id = war_id
 			plan.center_city_id = center_id
+			plan.combat_report_locked = expected_campaigns == 0
 			state.register_campaign_front(
 				plan, [attacker_id] as Array[int], attacker_id
 			)
 			expected_campaigns += 1
+	state.sync_campaign_pairs(state.coalition_campaign_components())
+	var sim := Simulation.new()
+	sim.state = state
+	sim._reconcile_campaign_battlefields()
+	sim.free()
 	var sections := MapRenderer.nation_detail_sections(state, attacker_id)
 	var diplomacy_campaign_lines := 0
 	var war_sections := 0
 	var pool_lines := 0
 	var campaign_lines := 0
+	var receiving_lines := 0
+	var pair_headers := 0
+	var direction_lines := 0
 	for section in sections:
 		var title := str(section.get("title", ""))
 		var lines: Array = section.get("lines", [])
@@ -192,8 +201,14 @@ func _test_war_sections_group_campaigns() -> void:
 				var line := str(line_value)
 				if line.begins_with("军队池："):
 					section_pool_lines += 1
+				if line.begins_with("对方集合："):
+					pair_headers += 1
+				if line.begins_with("战场方向：") and line.contains("进攻") and line.contains("防守"):
+					direction_lines += 1
 				if line.begins_with("州战役："):
 					campaign_lines += 1
+				if line.begins_with("接收点：") and line.contains("空闲到场"):
+					receiving_lines += 1
 			pool_lines += section_pool_lines
 			_check(
 				section_pool_lines == 1,
@@ -206,6 +221,9 @@ func _test_war_sections_group_campaigns() -> void:
 	)
 	_check(war_sections == 2, "nation/war_is_top_level_section")
 	_check(pool_lines == 2, "nation/war_pool_rendered_once_per_war")
+	_check(pair_headers == 2, "nation/enemy_components_nested_under_wars")
+	_check(direction_lines == expected_campaigns, "nation/each_battlefield_displays_both_sides_direction")
+	_check(receiving_lines == expected_campaigns, "nation/each_front_displays_idle_arrival_at_receiving_point")
 	_check(
 		campaign_lines == expected_campaigns,
 		"nation/state_campaigns_nested_under_wars",

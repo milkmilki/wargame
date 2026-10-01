@@ -280,7 +280,7 @@ static func _attack_candidate(
 			continue
 		var committed_size := coordinator.size_reserved(city_id)
 		var center_id := view.state.administrative_center_of(city_id)
-		var required_siege_size := (
+		var required_siege_size := view.state.campaign_required_manpower(view.nation_id,
 			view.state.campaign_siege_requirement(view.nation_id, center_id)
 			+ view.campaign_reinforcement_threat(center_id)
 		)
@@ -728,7 +728,7 @@ static func _choose_holding(
 		and army.supply_ratio >= 0.75
 	):
 		var center_id := view.state.administrative_center_of(target_city.id)
-		var required_size := (
+		var required_size := view.state.campaign_required_manpower(view.nation_id,
 			view.state.campaign_siege_requirement(view.nation_id, center_id)
 			+ view.campaign_reinforcement_threat(center_id)
 		)

@@ -22,8 +22,9 @@ remain deterministic and campaign-unique.
 
 ## Extreme Examples
 
-- Conqueror: 2.0 morale, field-defense, and positive war-benefit multipliers,
-  0.5 upkeep and offensive-interval multipliers, plus stronger aggression and
+- Conqueror: 5.0 attack and field-defense multipliers, 2.0 morale and positive
+  war-benefit multipliers, and 0.5 campaign-requirement, upkeep, and
+  offensive-interval multipliers, plus stronger aggression and
   manpower. A conqueror vassal always resists centralization and receives twice
   the normal civil-war uprising armies. The shorter interval composes with the
   existing aggression-based campaign cadence.

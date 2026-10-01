@@ -37,6 +37,10 @@ func _run() -> void:
 	var enemy := 1 if subject != 1 else 2
 	state.set_diplomatic_relation(0, enemy, GameState.DiplomaticRelation.WAR)
 	state.set_diplomatic_relation(subject, enemy, GameState.DiplomaticRelation.WAR)
+	state.merge_war_ids(state.war_id_between(0, enemy), state.war_id_between(subject, enemy))
+	# This fixture tests military participation, not regional expansion eligibility.
+	state.region_ids.fill(0)
+	state.region_analysis_revision += 1
 	state.uses_heightmap = true
 	state.refresh_derived()
 	var main := state.create_army(
@@ -95,11 +99,11 @@ func _run() -> void:
 		false,
 		Time.get_ticks_usec()
 	)
-	var nation := state.nations[subject]
 	_check(
 		not state.campaign_fronts_for_nation(subject).is_empty(),
 		"参战藩王必须进入与普通国家相同的战役规划阶段"
 	)
+	_check(main.campaign_front_id >= 0, "藩王主战军必须实际绑定共享战线，而非仅创建空任务")
 	simulation.free()
 	_finish()
 

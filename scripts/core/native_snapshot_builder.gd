@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 14
+const SCHEMA_VERSION: int = 16
 
 
 static func build(state: GameState) -> Dictionary:
@@ -25,6 +25,7 @@ static func build(state: GameState) -> Dictionary:
 		"next_battle_id": state._next_battle_id,
 		"next_war_id": state.next_war_id,
 		"next_campaign_front_id": state.next_campaign_front_id,
+		"next_campaign_pair_id": state.next_campaign_pair_id,
 		"winner": state.winner,
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,
@@ -37,7 +38,25 @@ static func build(state: GameState) -> Dictionary:
 		"armies": armies_and_indices["snapshot"],
 		"battles": battles,
 		"campaign_fronts": _build_campaign_fronts(state),
+		"campaign_pairs": _build_campaign_pairs(state),
 	}
+
+
+static func _build_campaign_pairs(state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var ids: Array = state.campaign_pairs.keys()
+	ids.sort()
+	for pair_id in ids:
+		var pair := state.campaign_pairs[pair_id] as CoalitionCampaignPair
+		var cooldowns: Array[Vector2i] = []
+		var members: Array = pair.cooldown_until_by_nation.keys()
+		members.sort()
+		for nation_id in members:
+			cooldowns.append(Vector2i(int(nation_id), int(pair.cooldown_until_by_nation[nation_id])))
+		result.append({"pair_id": pair.pair_id, "war_id": pair.war_id,
+			"side_a": PackedInt32Array(pair.side_a_nation_ids), "side_b": PackedInt32Array(pair.side_b_nation_ids),
+			"battlefields": pair.battlefields.duplicate(true), "cooldowns": cooldowns})
+	return result
 
 
 static func _build_nations(state: GameState) -> Dictionary:
@@ -348,6 +367,10 @@ static func _build_edges(state: GameState) -> Dictionary:
 
 static func _build_campaign_fronts(state: GameState) -> Dictionary:
 	var front_ids := PackedInt32Array()
+	var pair_ids := PackedInt32Array()
+	var battlefield_slots := PackedInt32Array()
+	var selection_reasons := PackedInt32Array()
+	var retiring := PackedByteArray()
 	var war_ids := PackedInt32Array()
 	var modes := PackedInt32Array()
 	var centers := PackedInt32Array()
@@ -374,6 +397,10 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 		if front == null:
 			continue
 		front_ids.append(front.front_id)
+		pair_ids.append(front.campaign_pair_id)
+		battlefield_slots.append(front.battlefield_slot)
+		selection_reasons.append(front.selection_reason)
+		retiring.append(int(front.retiring))
 		war_ids.append(front.war_id)
 		modes.append(front.mode)
 		centers.append(front.center_city_id)
@@ -406,6 +433,10 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 	return {
 		"count": front_ids.size(),
 		"front_ids": front_ids,
+		"pair_ids": pair_ids,
+		"battlefield_slots": battlefield_slots,
+		"selection_reasons": selection_reasons,
+		"retiring": retiring,
 		"war_ids": war_ids,
 		"modes": modes,
 		"centers": centers,

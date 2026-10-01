@@ -471,9 +471,9 @@ func _test_ruler_profiles() -> void:
 			and _approx(float(conqueror[RulerProfile.KEY_WAR_BENEFIT]), 2.00)
 			and _approx(float(conqueror[RulerProfile.KEY_OFFENSIVE_INTERVAL]), 0.50)
 			and _approx(float(conqueror[RulerProfile.KEY_FOOD_CONSUMPTION]), 1.00)
-			and _approx(float(conqueror[RulerProfile.KEY_ATTACK]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_ATTACK]), 5.00)
 			and _approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.00)
-			and _approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 2.00)
+			and _approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 5.00)
 			and _approx(float(conqueror[RulerProfile.KEY_CITY_DEFENSE]), 1.00)
 			and _approx(float(conqueror[RulerProfile.KEY_TRADE]), 1.00)
 			and bool(conqueror[RulerProfile.KEY_OFFENSIVE_ALLOWED]),

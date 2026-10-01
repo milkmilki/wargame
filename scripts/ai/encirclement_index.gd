@@ -13,6 +13,7 @@ var _army_powers: Array[float] = []
 var _army_required_manpower: Array[int] = []
 var _total_power: float = 0.0
 var _value_by_target_city: Dictionary = {}
+var _accessible_neighbors: Dictionary = {}
 
 
 func _init(state: GameState, target_nation: int) -> void:
@@ -67,7 +68,7 @@ func value_for(target_city: int) -> float:
 
 
 func _target_encirclement_effect(target_city: int) -> Dictionary:
-	# 与 DiplomacyAI._target_encirclement_effect 保持同一删除节点 BFS 顺序。
+	# All candidate removals share the batch's road and access rules.
 	if _capital < 0 or _capital == target_city:
 		return {
 			"cut_city_ratio": 0.0,
@@ -76,20 +77,12 @@ func _target_encirclement_effect(target_city: int) -> Dictionary:
 
 	var reachable := {_capital: true}
 	var queue: Array[int] = [_capital]
-	while not queue.is_empty():
-		var current: int = queue.pop_front()
-		for neighbor in _state.neighbors(current):
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		for neighbor in _eligible_neighbors(current):
 			if neighbor == target_city or reachable.has(neighbor):
-				continue
-			var edge := _state.edge_of(current, neighbor)
-			if (
-				edge == null
-				or edge.max_manpower <= 0
-				or not _state.has_military_access(
-					_target_nation,
-					_state.cities[neighbor].owner_nation
-				)
-			):
 				continue
 			reachable[neighbor] = true
 			queue.append(neighbor)
@@ -120,6 +113,17 @@ func _target_encirclement_effect(target_city: int) -> Dictionary:
 			cut_power / maxf(_total_power, 1.0)
 		),
 	}
+
+
+func _eligible_neighbors(city_id: int) -> Array[int]:
+	if not _accessible_neighbors.has(city_id):
+		var eligible: Array[int] = []
+		for neighbor in _state.neighbors(city_id):
+			var edge := _state.edge_of(city_id, neighbor)
+			if edge != null and edge.max_manpower > 0 and _state.has_military_access(_target_nation, _state.cities[neighbor].owner_nation):
+				eligible.append(neighbor)
+		_accessible_neighbors[city_id] = eligible
+	return _accessible_neighbors[city_id]
 
 
 func _isolated_garrison_power_ratio(city_id: int) -> float:

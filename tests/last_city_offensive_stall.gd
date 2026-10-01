@@ -2,6 +2,7 @@ extends SceneTree
 ## 终局回归：国家0仅剩州治首都和四支标准主战军；国家1控制其他全部城市，
 ## 从零按国家可持续容量重建主战军。州战役必须从已有军队中完成集结，不能在
 ## “州治尚不可攻击”和“尚未分配军队增加 C”之间形成循环等待。
+## 末州为无属府州；拔营及残府收复由 campaign_camp_counteroffensive 单独覆盖。
 
 const REMNANT_ID: int = 0
 const DOMINANT_ID: int = 1
@@ -14,6 +15,10 @@ func _init() -> void:
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
+	state.nations[DOMINANT_ID].ruler_archetype = RulerProfile.BALANCED
+	state.nations[DOMINANT_ID].ruler_traits.clear()
+	state.nations[DOMINANT_ID].strategic_region_anchor_city_id = LAST_CITY_ID
+	state.regional_strategy_revision += 1
 	sim.diplomacy_enabled = false
 	sim.enfeoff_enabled = false
 	var launched := false
@@ -21,8 +26,11 @@ func _init() -> void:
 	var first_attack := {}
 	var previous_army_count := state.active_army_count(DOMINANT_ID)
 	var recruitment_capacity_stable := true
-	for _day in range(RUN_DAYS):
+	var diagnostic := OS.get_environment("LAST_CITY_DIAG") == "1"
+	for _day in range(_env_int("LAST_CITY_RUN_DAYS", RUN_DAYS)):
 		sim._advance_day()
+		if diagnostic and (_day < 5 or _day in range(58, 73) or _day % 10 == 0):
+			_print_dispatch_diagnostic(state, sim, _day + 1)
 		var current_army_count := state.active_army_count(DOMINANT_ID)
 		if current_army_count > previous_army_count:
 			var immediate_capacity := DiplomacyAI.force_capacity_report(
@@ -43,6 +51,10 @@ func _init() -> void:
 					army.owner_nation == DOMINANT_ID
 					and army.is_main_battle_role()
 					and army.ai_action == ActionCandidate.Kind.ATTACK
+					and army.campaign_front_id >= 0
+					and state.campaign_front(army.campaign_front_id) != null
+					and state.campaign_front(army.campaign_front_id).mode == CoalitionCampaignFront.Mode.OFFENSE
+					and army.ai_target_city == LAST_CITY_ID
 				):
 					first_attack = {
 						"day": state.day,
@@ -89,6 +101,52 @@ func _main_army_snapshot(state: GameState) -> Array[Dictionary]:
 	return result
 
 
+func _print_dispatch_diagnostic(state: GameState, sim: Simulation, elapsed: int) -> void:
+	var fronts: Array[Dictionary] = []
+	for front_value in state.campaign_fronts.values():
+		var front := front_value as CoalitionCampaignFront
+		fronts.append({"id": front.front_id, "members": front.participant_nation_ids,
+			"center": front.center_city_id, "mode": front.mode, "phase": front.phase,
+			"C": sim._front_effective_manpower(front), "assignments": front.army_assignments,
+			"receiver": state.campaign_receiving_city(front), "locked": front.combat_report_locked,
+			"camp": front.camp_city_id, "camp_food": state.cities[front.camp_city_id].food_storage if front.camp_city_id >= 0 else -1})
+	var pairs: Array[Dictionary] = []
+	for pair_value in state.campaign_pairs.values():
+		var pair := pair_value as CoalitionCampaignPair
+		pairs.append({"id": pair.pair_id, "a": pair.side_a_nation_ids, "b": pair.side_b_nation_ids,
+			"slots": pair.battlefields, "cooldown": pair.cooldown_until_by_nation,
+			"dominant_proposal_C": sim._pair_proposal_force(pair, [DOMINANT_ID] as Array[int])})
+	var troops: Array[Dictionary] = []
+	var army_totals := {"count": 0, "bound": 0, "idle_unlocked": 0, "moving": 0, "deployment_locked": 0}
+	for army in state.armies:
+		if army.owner_nation != DOMINANT_ID:
+			continue
+		army_totals["count"] += 1
+		army_totals["bound"] += int(army.campaign_front_id >= 0)
+		army_totals["moving"] += int(army.state == Army.State.MOVING)
+		army_totals["deployment_locked"] += int(army.defensive_deployment_until_day > state.day)
+		army_totals["idle_unlocked"] += int(army.state == Army.State.IDLE and army.defensive_deployment_until_day <= state.day)
+		if troops.size() >= 10 and army.campaign_front_id < 0:
+			continue
+		troops.append({"id": army.id, "size": army.size, "state": army.state,
+			"city": army.current_city_node(), "war": army.campaign_war_id, "front": army.campaign_front_id,
+			"effective": state.army_effective_for_field_campaign(army), "deployment_until": army.defensive_deployment_until_day,
+			"order_until": army.ai_order_until_day, "action": army.ai_action,
+			"target": army.ai_target_city, "morale": army.morale, "supply": army.supply_ratio})
+	var proposal := {}
+	for component in state.coalition_campaign_components():
+		if (component["members"] as Array[int]).has(DOMINANT_ID):
+			proposal = sim._select_component_objective(component, {}, {})
+			break
+	var nation := state.nations[DOMINANT_ID]
+	print("LAST_CITY_DIAG elapsed=%d fronts=%s pairs=%s army_totals=%s troops=%s legal=%s objective=%s ruler=%s military=%s" % [
+		elapsed, str(fronts), str(pairs), str(army_totals), str(troops),
+		DiplomacyAI._ruler_allows_war_objective(state, DOMINANT_ID, LAST_CITY_ID), str(proposal),
+		str({"archetype": nation.ruler_archetype, "traits": nation.ruler_traits,
+			"started": nation.ruler_started_day, "anchor": nation.strategic_region_anchor_city_id}),
+		state.nations[DOMINANT_ID].ai_last_force_reason])
+
+
 func _administrative_snapshot(state: GameState) -> Dictionary:
 	var center_id := state.administrative_center_of(LAST_CITY_ID)
 	var plan := state.campaign_front_for(DOMINANT_ID, center_id)
@@ -131,9 +189,30 @@ func _build_fixture() -> GameState:
 		"末城夹具必须选择行政州治"
 	)
 	state.day = 60 * 365
+	# Keep the terminal mobilization scenario independent of camp succession:
+	# an enemy-held fu would otherwise be a real unfinished recapture task.
+	for member_id in state.administrative_members(LAST_CITY_ID):
+		if member_id == LAST_CITY_ID:
+			continue
+		var nearest_center := -1
+		var nearest_distance := INF
+		for center_id in state.administrative_center_city_ids:
+			if center_id == LAST_CITY_ID:
+				continue
+			var distance := state.cities[member_id].map_position.distance_squared_to(state.cities[center_id].map_position)
+			if distance < nearest_distance:
+				nearest_distance = distance
+				nearest_center = center_id
+		state.administrative_center_by_city[member_id] = nearest_center
+	state.administrative_region_revision += 1
+	assert(state.administrative_members(LAST_CITY_ID) == [LAST_CITY_ID])
 	state.armies.clear()
 	state.battles.clear()
 	for nation in state.nations:
+		# This is a mobilization/capacity fixture, not a sixty-year succession replay.
+		nation.ruler_archetype = RulerProfile.BALANCED
+		nation.ruler_traits.clear()
+		nation.ruler_started_day = state.day
 		nation.battle_groups.clear()
 		nation.next_battle_group_id = 0
 		nation.alive = nation.id in [REMNANT_ID, DOMINANT_ID]

@@ -11,6 +11,7 @@ func _init() -> void:
 	_test_capital_relocation_always_prefers_zhou()
 	_test_suzerainty_rulers_share_surname()
 	_test_extreme_modifiers()
+	_test_modifier_query_isolation()
 	_test_conqueror_war_benefits()
 	_test_puppet_enfeoffment()
 	if not _valid:
@@ -18,6 +19,28 @@ func _init() -> void:
 		return
 	print("RULER_SUCCESSION_EXTREMES_OK")
 	quit(0)
+
+
+func _test_modifier_query_isolation() -> void:
+	var nation := Nation.new()
+	for archetype in RulerProfile.all_archetypes():
+		nation.ruler_archetype = archetype
+		for trait_id in RulerProfile.all_traits():
+			nation.ruler_traits = [trait_id] as Array[String]
+			var expected := RulerProfile.modifiers(nation)
+			var edited := RulerProfile.modifiers(nation)
+			edited[RulerProfile.KEY_OFFENSIVE_ALLOWED] = not bool(expected[RulerProfile.KEY_OFFENSIVE_ALLOWED])
+			edited[RulerProfile.KEY_DEFENSE] = -100.0
+			_check(RulerProfile.modifiers(nation) == expected, "mutable query results must not contaminate later profiles")
+			_check(RulerProfile.offensive_allowed(nation) == bool(expected[RulerProfile.KEY_OFFENSIVE_ALLOWED]), "offensive eligibility agrees with full modifiers for every archetype and trait")
+			_check(RulerProfile.offensive_allowed({"ruler_archetype": archetype, "ruler_traits": [trait_id]}) == bool(expected[RulerProfile.KEY_OFFENSIVE_ALLOWED]), "dictionary and nation eligibility remain equivalent")
+			_check(RulerProfile.defense_multiplier(nation) == float(expected[RulerProfile.KEY_DEFENSE]), "single modifier query remains equivalent after another result was mutated")
+	nation.ruler_traits.clear()
+	nation.ruler_archetype = RulerProfile.GUARDIAN
+	_check(not RulerProfile.offensive_allowed(nation), "profile edits immediately invalidate eligibility without a nation cache")
+	nation.ruler_archetype = RulerProfile.CONQUEROR
+	_check(RulerProfile.offensive_allowed(nation), "edited conqueror immediately regains offensive eligibility")
+	_check(RulerProfile.offensive_allowed(-999) == RulerProfile.offensive_allowed(RulerProfile.BALANCED), "unknown archetype uses neutral policy")
 
 
 func _test_capital_relocation_always_prefers_zhou() -> void:
@@ -315,9 +338,9 @@ func _test_extreme_modifiers() -> void:
 	var conqueror := RulerProfile.modifiers(RulerProfile.CONQUEROR)
 	var guardian := RulerProfile.modifiers(RulerProfile.GUARDIAN)
 	_check(
-		is_equal_approx(float(conqueror[RulerProfile.KEY_ATTACK]), 2.0)
+		is_equal_approx(float(conqueror[RulerProfile.KEY_ATTACK]), 5.0)
 		and is_equal_approx(float(conqueror[RulerProfile.KEY_MORALE]), 2.0)
-		and is_equal_approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 2.0)
+		and is_equal_approx(float(conqueror[RulerProfile.KEY_DEFENSE]), 5.0)
 		and is_equal_approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 0.5)
 		and is_equal_approx(float(conqueror[RulerProfile.KEY_WAR_BENEFIT]), 2.0)
 		and is_equal_approx(
@@ -332,14 +355,14 @@ func _test_extreme_modifiers() -> void:
 		conqueror[RulerProfile.KEY_ATTACK]
 	)
 	_check(
-		is_equal_approx(conqueror_army.combat_attack(), 20.0)
+		is_equal_approx(conqueror_army.combat_attack(), 50.0)
 			and is_equal_approx(
 				Combat._frontline_attack([{
 					"army": conqueror_army,
 					"committed": 100,
 					"size_before": 100,
 				}], 1.0),
-				2000.0
+				5000.0
 			),
 		"conqueror attack multiplier did not reach frontline firepower"
 	)

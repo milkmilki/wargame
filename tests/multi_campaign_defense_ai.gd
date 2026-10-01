@@ -56,6 +56,11 @@ func _test_two_state_defense_and_sortie() -> void:
 	for index in range(2):
 		var invader := _army(100 + index, enemy_id, threatened[index])
 		state.armies.append(invader)
+		var front := state.create_campaign_front(state.war_id_between(defender_id, enemy_id),
+			[enemy_id] as Array[int], enemy_id, CoalitionCampaignFront.Mode.OFFENSE, threatened[index])
+		invader.campaign_war_id = front.war_id
+		invader.campaign_front_id = front.front_id
+		front.army_assignments[invader.id] = threatened[index]
 	for index in range(4):
 		state.armies.append(_army(200 + index, defender_id, reserve_center))
 	var simulation := Simulation.new()

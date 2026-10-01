@@ -73,6 +73,9 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/regional_strategy.gd \
   --log-file "$LOG_DIR/world-war-regional-strategy.log"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/regional_integration_desire.gd \
+  --log-file "$LOG_DIR/world-war-regional-integration-desire.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/latitude_output.gd \
   --log-file "$LOG_DIR/world-war-latitude-output.log"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
@@ -140,6 +143,9 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
 echo
 echo "==> [2i3a/29] 双百万军队三年实战与战争池稳定门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/coalition_campaign_pairs.gd \
+  --log-file "$LOG_DIR/world-war-coalition-campaign-pairs.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/million_army_three_year_war.gd \
   --log-file "$LOG_DIR/world-war-million-army-three-year.log"
 echo
@@ -152,6 +158,12 @@ echo "==> [2i4/29] 州战役集结、大营与连续占府门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_camp_ai.gd \
   --log-file "$LOG_DIR/world-war-campaign-camp.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_offensive_cooldown.gd \
+  --log-file "$LOG_DIR/world-war-campaign-offensive-cooldown.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_camp_counteroffensive.gd \
+  --log-file "$LOG_DIR/world-war-campaign-camp-counteroffensive.log"
 echo
 echo "==> [2i4a/29] 州治野战失败撤营重整门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
@@ -167,6 +179,17 @@ echo "==> [2i4c/29] 强攻受挫回退门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_assault_fallback.gd \
   --log-file "$LOG_DIR/world-war-campaign-assault-fallback.log"
+echo
+
+echo "==> [2i4d/29] 集结、行动兵力与真实出击门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/campaign_action_readiness.gd \
+  --log-file "$LOG_DIR/world-war-campaign-action-readiness.log"
+echo
+echo "==> [2i4e/29] 集团命令批次、动员与攻防转换门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/coalition_dispatch_lifecycle.gd \
+  --log-file "$LOG_DIR/world-war-coalition-dispatch-lifecycle.log"
 echo
 echo "==> [2i5/29] 战前集结与宣战先手门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
@@ -221,6 +244,12 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
 echo
 
 echo "==> [12/29] 外交结构缓存等价门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/war_count_and_conqueror.gd \
+  --log-file "$LOG_DIR/world-war-war-count-conqueror.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/weak_bloc_alliance.gd \
+  --log-file "$LOG_DIR/world-war-weak-bloc-alliance.log"
 DIPLOMACY_CACHE_EQUIV_DAYS=90 \
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/diplomacy_structure_cache_equivalence.gd \

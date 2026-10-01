@@ -6,8 +6,8 @@ extends Node2D
 signal family_tree_requested(nation_id: int)
 
 const MAP_VISUAL_ATLAS := preload("res://scripts/view/map_visual_atlas.gd")
-const VISUAL_WEIGHTED_VORONOI := preload(
-	"res://scripts/view/visual_weighted_voronoi.gd"
+const VISUAL_REGION_GEOMETRY := preload(
+	"res://scripts/view/visual_region_geometry.gd"
 )
 
 var state: GameState
@@ -2257,17 +2257,15 @@ func _ensure_province_visual_cache() -> void:
 			height_texture.get_image() if height_texture != null else null
 		)
 		var visual_seeds := MAP_VISUAL_ATLAS.visual_city_seeds(state)
-		var visual_regions := VISUAL_WEIGHTED_VORONOI.build_visual_city_ids(
+		var visual_regions := VISUAL_REGION_GEOMETRY.build_visual_region_geometry(
 			height_image, visual_seeds, MAP_VISUAL_ATLAS.SIZE
 		)
-		_region_id_image = visual_regions["city_ids"]
+		_region_id_image = visual_regions["city_id"]
 		_region_land_mask = visual_regions["land_mask"]
-		var visual_masks := _build_visual_edge_masks(
+		_region_edge_mask = visual_regions["region_edge"]
+		_region_coast_mask = _coast_mask_from_visual_regions(
 			_region_id_image, _region_land_mask, MAP_VISUAL_ATLAS.SIZE
 		)
-		_region_edge_mask = visual_masks["edge_mask"]
-		var region_coast_mask: Image = visual_masks["coast_mask"]
-		_region_coast_mask = region_coast_mask
 		_visual_atlas = MAP_VISUAL_ATLAS.build_visual_atlas(
 			state,
 			height_image,
@@ -2276,6 +2274,8 @@ func _ensure_province_visual_cache() -> void:
 			{
 				"edge_mask": _region_edge_mask,
 				"coast_mask": _region_coast_mask,
+				"region_coverage": visual_regions["region_coverage"],
+				"region_distance": visual_regions["region_distance"],
 			}
 		)
 		_visual_city_seed_signature = (
@@ -3593,6 +3593,27 @@ static func _build_visual_edge_masks(
 				elif int(round(city_ids.get_pixel(sample.x, sample.y).r)) != owner:
 					edge.set_pixel(x, y, Color.WHITE)
 	return {"edge_mask": edge, "coast_mask": coast}
+
+
+static func _coast_mask_from_visual_regions(
+	city_ids: Image, land: Image, size: Vector2i
+) -> Image:
+	var coast := Image.create(size.x, size.y, false, Image.FORMAT_RF)
+	for y in range(size.y):
+		for x in range(size.x):
+			if land.get_pixel(x, y).r < 0.5:
+				continue
+			for offset_value in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+				var offset: Vector2i = offset_value
+				var sample := Vector2i(x, y) + offset
+				if (
+					sample.x < 0 or sample.y < 0
+					or sample.x >= size.x or sample.y >= size.y
+					or land.get_pixel(sample.x, sample.y).r < 0.5
+				):
+					coast.set_pixel(x, y, Color.WHITE)
+					break
+	return coast
 
 
 ## Build closed, smoothed city/province regions from the same curved topology
@@ -7302,52 +7323,10 @@ static func _nation_detail_line_count(
 	return count
 
 
-static func _nation_war_detail_line_count(
-	game_state: GameState,
-	nation_id: int
-) -> int:
-	if nation_id < 0 or nation_id >= game_state.nations.size():
-		return 0
-	var war_plan_counts := {}
-	var war_flags := {}
-	var temporary_plan_lines := 0
-	for enemy_value in game_state.wars_of(nation_id):
-		var war_id := game_state.war_id_between(nation_id, int(enemy_value))
-		if war_id >= 0:
-			war_flags[war_id] = true
-	for plan in game_state.campaign_fronts_for_nation(nation_id):
-		if plan == null:
-			continue
-		var plan_lines := _nation_campaign_detail_line_count(plan)
-		if plan.war_id < 0:
-			temporary_plan_lines += plan_lines
-			continue
-		war_flags[plan.war_id] = true
-		war_plan_counts[plan.war_id] = int(
-			war_plan_counts.get(plan.war_id, 0)
-		) + plan_lines
+static func _nation_war_detail_line_count(game_state: GameState, nation_id: int) -> int:
 	var count := 0
-	for war_value in war_flags:
-		var plan_lines := int(war_plan_counts.get(int(war_value), 0))
-		# Section title + one force-pool line + campaigns or the empty state.
-		count += 2 + maxi(1, plan_lines)
-	if temporary_plan_lines > 0:
-		count += 1 + temporary_plan_lines
-	return count
-
-
-static func _nation_campaign_detail_line_count(
-	campaign: CoalitionCampaignFront
-) -> int:
-	var count := 2
-	if campaign.mode != CoalitionCampaignFront.Mode.OFFENSE:
-		return count
-	if campaign.staging_city_id >= 0:
-		count += 1
-	if campaign.camp_city_id >= 0:
-		count += 1
-	if not campaign.tactical_target_city_ids.is_empty():
-		count += 1
+	for section in _nation_war_detail_sections(game_state, nation_id):
+		count += 1 + (section["lines"] as Array).size()
 	return count
 
 
@@ -7595,9 +7574,6 @@ static func city_detail_sections(
 		var defense_bonus := game_state.city_garrison_defense_bonus(
 			attacker_id, administrative_center
 		)
-		var requirement := game_state.campaign_siege_requirement(
-			attacker_id, administrative_center
-		)
 		var threat := game_state.campaign_reinforcement_threat(
 			attacker_id, administrative_center
 		)
@@ -7607,6 +7583,10 @@ static func city_detail_sections(
 		var active_plan: CoalitionCampaignFront = game_state.campaign_front_for(
 			attacker_id, administrative_center,
 			CoalitionCampaignFront.Mode.OFFENSE
+		)
+		var requirement := game_state.campaign_attack_requirement(
+			active_plan.anchor_nation_id if active_plan != null else attacker_id,
+			administrative_center, false
 		)
 		var war_text := (
 			"战争%d" % (active_plan.war_id + 1)
@@ -7666,13 +7646,11 @@ static func city_detail_sections(
 				)
 			)
 			var requirement := (
-				game_state.campaign_field_requirement(
-					nation_id, administrative_center
-				)
+				int(game_state.campaign_defense_context(
+					nation_id, administrative_center, plan.war_id
+				)["requirement"])
 				if defensive
-				else game_state.campaign_siege_requirement(
-					nation_id, administrative_center
-				) + game_state.campaign_reinforcement_threat(
+				else game_state.campaign_attack_requirement(
 					nation_id, administrative_center
 				)
 			)
@@ -7730,6 +7708,15 @@ static func city_detail_sections(
 				],
 			]
 			campaign_lines.append_array(offensive_lines)
+			var front_report: Dictionary = (game_state.coalition_campaign_allocation(
+				plan.war_id, nation_id
+			)["fronts"] as Dictionary).get(plan.front_id, {})
+			var receiving_city := game_state.campaign_receiving_city(plan)
+			if receiving_city >= 0:
+				campaign_lines.append("接收点：%s · 空闲到场%d" % [
+					WorldNaming.city_display_name(game_state, receiving_city),
+					int(front_report.get("rally_idle_arrived", 0)),
+				])
 			active_campaign_found = true
 			break
 	var governance_lines: Array[String] = [
@@ -8075,7 +8062,44 @@ static func _nation_war_detail_sections(
 			],
 		]
 		var plans: Array = plans_by_war.get(war_id, [])
-		if plans.is_empty():
+		var pairs: Array = report.get("pairs", [])
+		if not pairs.is_empty():
+			var displayed := {}
+			for pair_report: Dictionary in pairs:
+				var slots: Array = pair_report["battlefields"]
+				lines.append("对方集合：%s · 州战场%d/2" % [_nation_id_list_text(game_state, pair_report["opponent_members"]), slots.size()])
+				var cooldown_until := int(pair_report["offensive_cooldown_until_day"])
+				if cooldown_until > game_state.day:
+					lines.append("拔营战败，暂停新建进攻线，剩余%d天（本集合对）" % (cooldown_until - game_state.day))
+				for slot: Dictionary in slots:
+					var attacker := game_state.campaign_front(int(slot["offense_front_id"]))
+					if attacker != null:
+						var own_side: Array[int] = report["component_members"]
+						var enemy_side: Array[int] = pair_report["opponent_members"]
+						var attacking_own_side := own_side.has(attacker.anchor_nation_id)
+						lines.append("战场方向：%s进攻 -> %s防守" % [
+							_nation_id_list_text(game_state, own_side if attacking_own_side else enemy_side),
+							_nation_id_list_text(game_state, enemy_side if attacking_own_side else own_side)])
+					var matched := false
+					for plan_value in plans:
+						var plan := plan_value as CoalitionCampaignFront
+						if plan.center_city_id != int(slot["center_city_id"]) or (plan.mode == CoalitionCampaignFront.Mode.OFFENSE and plan.campaign_pair_id != int(pair_report["pair_id"])):
+							continue
+						matched = true
+						if displayed.has(plan.front_id):
+							lines.append("%s：关联同一共享防守任务" % WorldNaming.city_display_name(game_state, plan.center_city_id))
+						else:
+							lines.append_array(_nation_campaign_detail_lines(game_state, nation_id, plan, report))
+							displayed[plan.front_id] = true
+					if not matched and attacker != null:
+						lines.append("%s：敌方%s" % [WorldNaming.city_display_name(game_state, int(slot["center_city_id"])), campaign_phase_text(attacker.mode, attacker.phase)])
+					elif not matched:
+						var preferred := int(slot["preferred_nation_id"])
+						lines.append("%s：%s" % [WorldNaming.city_display_name(game_state, int(slot["center_city_id"])),
+							"等待动员" if bool(slot.get("awaiting_mobilization", false)) else ("收复后优先选州反攻" if bool(slot["counterattack"]) and (report["component_members"] as Array).has(preferred) else "等待战场接续")])
+				if slots.is_empty():
+					lines.append("州战役：暂无，战争池原地待命")
+		elif plans.is_empty():
 			lines.append("州战役：暂无，战争池原地待命")
 		else:
 			for plan_value in plans:
@@ -8113,6 +8137,8 @@ static func _nation_campaign_detail_lines(
 		if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
 		else int(front_force.get("assigned_effective", 0))
 	)
+	if not front_force.is_empty():
+		committed = int(front_force.get("actual_effective", committed))
 	var assigned_total := int(front_force.get("assigned_total", committed))
 	var active_offensive_siege: Battle = null
 	if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE:
@@ -8129,18 +8155,13 @@ static func _nation_campaign_detail_lines(
 				active_offensive_siege = battle
 				break
 	var requirement := (
-		game_state.campaign_field_requirement(
-			nation_id, campaign.center_city_id
-		)
+		int(game_state.campaign_defense_context(
+			campaign.anchor_nation_id, campaign.center_city_id, campaign.war_id
+		)["requirement"])
 		if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
-		else game_state.campaign_siege_requirement(
-			nation_id, campaign.center_city_id
-		) + (
-			0
-			if active_offensive_siege != null
-			else game_state.campaign_reinforcement_threat(
-				nation_id, campaign.center_city_id
-			)
+		else game_state.campaign_attack_requirement(
+			campaign.anchor_nation_id, campaign.center_city_id,
+			active_offensive_siege == null
 		)
 	)
 	var action_text := campaign_phase_text(campaign.mode, campaign.phase)
@@ -8185,6 +8206,12 @@ static func _nation_campaign_detail_lines(
 		action_text,
 	])
 	lines.append(force_text)
+	var receiving_city := game_state.campaign_receiving_city(campaign)
+	if receiving_city >= 0:
+		lines.append("接收点：%s · 空闲到场%d" % [
+			WorldNaming.city_display_name(game_state, receiving_city),
+			int(front_force.get("rally_idle_arrived", 0)),
+		])
 	if campaign.combat_report_locked:
 		lines.append(
 			"战报：野战中，尚未更新 · 调度战报兵力%d · 调兵需求%d"

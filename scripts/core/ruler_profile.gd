@@ -29,6 +29,10 @@ enum TradePolicy {
 }
 
 const MAX_TRAITS: int = 2
+const CONQUEROR_COMBAT_MULTIPLIER: float = 5.0
+const CONQUEROR_CAMPAIGN_REQUIREMENT_MULTIPLIER: float = 0.5
+
+static var _archetype_base_modifiers: Dictionary = _build_archetype_base_modifiers()
 
 ## 常用裸常量别名，调用方既可写 RulerProfile.CONQUEROR，也可使用
 ## RulerProfile.Archetype.CONQUEROR。
@@ -104,7 +108,7 @@ const ARCHETYPE_NAMES: Dictionary = {
 
 const ARCHETYPE_DESCRIPTIONS: Dictionary = {
 	Archetype.BALANCED: "行事稳健，各项国政均衡，没有明显长处或短板。",
-	Archetype.CONQUEROR: "崇尚武功，战争收益更高、攻势更频繁，并能以更低成本维持强军。",
+	Archetype.CONQUEROR: "崇尚武功，军队基础攻防提高至五倍，以半数州战役需求发动攻势，并能以更低成本维持强军。",
 	Archetype.GUARDIAN: "专注守土与积储，城防坚固，不会主动发动攻势。",
 	Archetype.INEPT: "才具平庸，生产、军备与外交皆受拖累，也无力组织主动攻势。",
 	Archetype.TYRANT: "以高压榨取财富和兵员，热衷集权，却损害民心、外交与长期稳定。",
@@ -421,7 +425,7 @@ static func modifiers(
 	traits: Array = []
 ) -> Dictionary:
 	var archetype := _resolved_archetype(profile_or_archetype)
-	var result := _base_modifiers(archetype)
+	var result := _base_modifiers(archetype).duplicate()
 	for trait_id in _resolved_traits(profile_or_archetype, traits):
 		_apply_trait(result, trait_id)
 	return result
@@ -493,6 +497,14 @@ static func attack_multiplier(
 	return float(modifiers(profile_or_archetype, traits)[KEY_ATTACK])
 
 
+static func campaign_requirement_multiplier(profile_or_archetype: Variant) -> float:
+	return (
+		CONQUEROR_CAMPAIGN_REQUIREMENT_MULTIPLIER
+		if _resolved_archetype(profile_or_archetype) == Archetype.CONQUEROR
+		else 1.0
+	)
+
+
 static func morale_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
@@ -536,9 +548,10 @@ static func trade_multiplier(
 
 
 static func offensive_allowed(
-	profile_or_archetype: Variant, traits: Array = []
+	profile_or_archetype: Variant, _traits: Array = []
 ) -> bool:
-	return bool(modifiers(profile_or_archetype, traits)[KEY_OFFENSIVE_ALLOWED])
+	# Traits modify strength and desire, never the archetype's offensive ban.
+	return bool(_base_modifiers(_resolved_archetype(profile_or_archetype))[KEY_OFFENSIVE_ALLOWED])
 
 
 static func loyalty_multiplier(
@@ -564,6 +577,20 @@ static func is_valid_trait(trait_id: String) -> bool:
 
 
 static func _base_modifiers(archetype: int) -> Dictionary:
+	return _archetype_base_modifiers.get(archetype, _archetype_base_modifiers[Archetype.BALANCED])
+
+
+static func _build_archetype_base_modifiers() -> Dictionary:
+	var profiles := {}
+	for archetype in ARCHETYPE_IDS:
+		var base := _build_base_modifiers(archetype)
+		base.make_read_only()
+		profiles[archetype] = base
+	profiles.make_read_only()
+	return profiles
+
+
+static func _build_base_modifiers(archetype: int) -> Dictionary:
 	var result := {
 		KEY_AGGRESSION: 1.0,
 		KEY_PEACE: 1.0,
@@ -592,7 +619,8 @@ static func _base_modifiers(archetype: int) -> Dictionary:
 				KEY_AGGRESSION: 2.00, KEY_PEACE: 0.45, KEY_ALLIANCE: 0.80,
 				KEY_MANPOWER_OUTPUT: 1.50, KEY_UPKEEP: 0.50,
 				KEY_WAR_BENEFIT: 2.00, KEY_OFFENSIVE_INTERVAL: 0.50,
-				KEY_ATTACK: 2.00, KEY_MORALE: 2.00, KEY_DEFENSE: 2.00,
+				KEY_ATTACK: CONQUEROR_COMBAT_MULTIPLIER, KEY_MORALE: 2.00,
+				KEY_DEFENSE: CONQUEROR_COMBAT_MULTIPLIER,
 				KEY_ENFEOFF: 0.55, KEY_CENTRALIZE: 1.50,
 			})
 			result[KEY_RESERVE_MONTHS] = -3

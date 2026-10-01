@@ -26,6 +26,12 @@ func _start_world(disable_optimized_scheduling: bool) -> void:
 	_active_state = GameState.new()
 	_active_state.generate_world(12345, _nation_count, _city_count)
 	_force_adjacent_wars(_active_state, _forced_war_pairs)
+	var components := _active_state.coalition_campaign_components()
+	if not components.is_empty():
+		var component: Dictionary = components[0]
+		_active_state.record_campaign_offensive_failure(
+			int(component["war_id"]), component["members"], _target_days + 20
+		)
 	_active_sim = Simulation.new()
 	root.add_child(_active_sim)
 	_active_sim.setup(_active_state)

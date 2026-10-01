@@ -21,6 +21,10 @@ enum Phase {
 }
 
 var front_id: int = -1
+var campaign_pair_id: int = -1
+var battlefield_slot: int = -1
+var selection_reason: int = 0 # 0: regional objective; 1: one-state camp counterattack
+var retiring: bool = false
 var center_city_id: int = -1
 var war_id: int = -1
 var participant_nation_ids: Array[int] = []

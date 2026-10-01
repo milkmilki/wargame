@@ -35,8 +35,12 @@ func _init() -> void:
 	valid = valid and state.campaign_reinforcement_threat(
 		attacker_id, center_id
 	) == 12000
-	valid = valid and plan.army_assignments.size() <= 3
+	valid = valid and plan.army_assignments.size() <= 4
 	valid = valid and plan.army_assignments.size() > 0
+	if plan != null:
+		valid = valid and state.campaign_committed_manpower(attacker_id, center_id) >= mini(
+			sim._front_requirement(plan), 60000
+		)
 	if valid:
 		var army_id := int(plan.army_assignments.keys()[0])
 		var army := _army_by_id(state, army_id)

@@ -65,7 +65,9 @@ func set_visual_atlas_textures(
 	city_id_texture: Texture2D,
 	land_mask_texture: Texture2D,
 	region_edge_texture: Texture2D,
-	coast_mask_texture: Texture2D
+	coast_mask_texture: Texture2D,
+	region_coverage_texture: Texture2D = null,
+	region_distance_texture: Texture2D = null
 ) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
@@ -76,6 +78,14 @@ func set_visual_atlas_textures(
 	)
 	_material.set_shader_parameter(
 		"visual_region_edge_texture", region_edge_texture
+	)
+	_material.set_shader_parameter(
+		"visual_region_coverage_texture",
+		region_coverage_texture if region_coverage_texture != null else region_edge_texture
+	)
+	_material.set_shader_parameter(
+		"visual_region_distance_texture",
+		region_distance_texture if region_distance_texture != null else region_edge_texture
 	)
 	_material.set_shader_parameter(
 		"visual_coast_mask_texture", coast_mask_texture

@@ -13547,6 +13547,7 @@ func _territory_fingerprint(gs: GameState) -> Dictionary:
 		"diplomatic_since_day": gs.diplomatic_since_day.duplicate(true),
 		"truce_until_day": gs.truce_until_day.duplicate(true),
 		"war_relation_ids": gs.war_relation_ids.duplicate(true),
+		"campaign_pairs": NativeSnapshotBuilder.build(gs)["campaign_pairs"],
 		"next_war_id": gs.next_war_id,
 		"ownership_revision": gs.ownership_revision,
 		"diplomacy_revision": gs.diplomacy_revision,

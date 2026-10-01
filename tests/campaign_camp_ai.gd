@@ -101,7 +101,7 @@ func _init() -> void:
 	)
 	reinforcement.campaign_war_id = war_id
 	state.armies.append(reinforcement)
-	plan.army_assignments[reinforcement.id] = center_id
+	plan.army_assignments[reinforcement.id] = entry_id
 	sim._manage_administrative_campaign(plan)
 	_check(int(plan.army_assignments.get(reinforcement.id, -1)) == entry_id, "新增援军必须默认前往大营")
 
@@ -127,10 +127,10 @@ func _init() -> void:
 		sim._defense_sortie_target_city(defender_id, center_id) == entry_id,
 		"已有大营时防守出击必须瞄准大营而非属府分遣队"
 	)
-	# Put the relief force at the camp boundary as if movement resolution had
-	# just delivered it; the defense planner must target the camp and wake the
-	# attacker immediately, independent of the next ten-day turn.
-	var sortie_origin := entry_id
+	# Defense must assemble at its real receiving point before launching.
+	# Keep a direct legal sortie corridor for this camp-recall fixture.
+	state._add_edge(center_id, entry_id)
+	var sortie_origin := center_id
 	_place_idle(defender, sortie_origin)
 	for index in range(8):
 		state.armies.append(_army(941460 + index, defender_id, sortie_origin, 15000))
@@ -139,7 +139,7 @@ func _init() -> void:
 		state.day += Simulation.AI_DECISION_INTERVAL_DAYS
 	var defense_plan := state.campaign_front_for(defender_id, center_id)
 	_check(
-		sim._ai_forced_nations.has(attacker_id),
+		sim._coalition_campaign_wake_day <= state.day,
 		"防守军攻击大营后必须强制进攻方在下一日重算（阶段%s，目标%s）" % [
 			str(defense_plan.phase if defense_plan != null else -1),
 			str(defense_plan.army_assignments if defense_plan != null else {}),
@@ -147,6 +147,9 @@ func _init() -> void:
 	)
 	for army in attackers + [reinforcement]:
 		_place_idle(army, int(plan.army_assignments.get(army.id, entry_id)))
+	# Arrival at the camp, rather than an attack intention alone, is the
+	# existing trigger for recalling detachments.
+	_place_idle(defender, entry_id)
 	sim._manage_administrative_campaign(plan)
 	_check(plan.phase == CoalitionCampaignFront.Phase.RECALL_CAMP, "大营受威胁时必须进入全军回援")
 	for army in attackers + [reinforcement]:
@@ -156,22 +159,13 @@ func _init() -> void:
 	state.ownership_revision += 1
 	sim._manage_administrative_campaign(plan)
 	_check(plan.camp_city_id == -1, "大营失守后必须清除大营状态")
-	_check(plan.failed_until_day == state.day + 60, "大营失守后必须进入60天失败冷却")
+	_check(state.campaign_front(plan.front_id) == null, "大营失守后必须释放旧战线")
+	_check(state.campaign_offensive_cooldown_until(plan.war_id, plan.participant_nation_ids) == state.day + 60,
+		"大营失守后集团新进攻线必须进入60天失败冷却")
 
 	var fronts: Dictionary = NativeSnapshotBuilder.build(state)["campaign_fronts"]
 	var plan_index := (fronts["front_ids"] as PackedInt32Array).find(plan.front_id)
-	_check(plan_index >= 0, "原生快照必须包含州计划")
-	if plan_index >= 0:
-		_check(
-			int((fronts["staging_cities"] as PackedInt32Array)[plan_index])
-				== plan.staging_city_id,
-			"原生快照必须记录集结点"
-		)
-		_check(
-			int((fronts["camp_cities"] as PackedInt32Array)[plan_index])
-				== plan.camp_city_id,
-			"原生快照必须记录大营"
-		)
+	_check(plan_index < 0, "原生快照不得保留已释放的失败州计划")
 	sim.free()
 	_test_blocked_fu_fallback(false, 4)
 	_test_blocked_fu_fallback(true, 4)
