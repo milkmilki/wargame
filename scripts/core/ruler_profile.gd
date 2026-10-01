@@ -132,7 +132,7 @@ const TRAIT_NAMES: Dictionary = {
 
 const TRAIT_DESCRIPTIONS: Dictionary = {
 	TRAIT_AMBITIOUS: "更愿开战、较难议和，并积极推动集权。",
-	TRAIT_CAUTIOUS: "降低进攻意愿，偏好议和、守备和额外储备。",
+	TRAIT_CAUTIOUS: "降低进攻意愿，偏好议和、守备和额外储备，完成经营区域后不再转向新区。",
 	TRAIT_CHARISMATIC: "更易缔结联盟，也更能维持军队士气。",
 	TRAIT_FRUGAL: "改善财政、降低军费，并多留一个月的储备。",
 	TRAIT_DILIGENT: "小幅提升黄金、粮食和人力产出。",

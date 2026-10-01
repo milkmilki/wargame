@@ -21,7 +21,7 @@ func _init() -> void:
 	state.ownership_revision += 1
 	check(is_zero_approx(script.rivalry(state, 0, 1)), "separate interests have no rivalry")
 	script.update_target(state, 0)
-	check(script.target_region(state, 0) == 0, "ordinary monarch stays")
+	check(script.target_region(state, 0) == 1, "ordinary monarch selects next region without waiting for succession")
 	state.nations[0].ruler_traits = [RulerProfile.TRAIT_MARTIAL]
 	script.update_target(state, 0)
 	check(script.target_region(state, 0) == 1, "martial monarch selects similar neighbor")
@@ -50,6 +50,7 @@ func _init() -> void:
 	check(script.latitude_output_multiplier(90.0) > 0.0, "polar nonzero floor")
 	_test_policy_and_snapshots()
 	_test_succession_and_traits()
+	_test_expansion_exclusions()
 	_test_cache_identity()
 	_test_partition_rebuild_cache()
 	_test_environment_and_blocked_neighbors()
@@ -141,6 +142,46 @@ func _test_succession_and_traits() -> void:
 	state.road_network_revision += 1
 	RegionalStrategy.update_target(state, 0)
 	check(RegionalStrategy.target_region(state, 0) == 2, "unfinished goal not abandoned on closure")
+
+
+func _test_expansion_exclusions() -> void:
+	for archetype in RulerProfile.ARCHETYPE_IDS:
+		for trait_id in [""] + RulerProfile.TRAIT_IDS:
+			var state := fixture()
+			var nation := state.nations[0]
+			nation.ruler_archetype = archetype
+			if trait_id != "":
+				nation.ruler_traits = [trait_id]
+			RegionalStrategy.initialize_targets(state)
+			var expected: bool = RulerProfile.offensive_allowed(nation) and trait_id != RulerProfile.TRAIT_CAUTIOUS
+			var label := "%d/%s" % [archetype, trait_id]
+			check(RegionalStrategy.can_expand(nation) == expected, "expansion exclusion policy " + label)
+			RegionalStrategy.update_target(state, 0)
+			check(RegionalStrategy.target_region(state, 0) == (1 if expected else 0), "completion switches only eligible ruler " + label)
+			RegionalStrategy.update_target(state, 0, true)
+			check(RegionalStrategy.target_region(state, 0) == (1 if expected else 0), "succession obeys new ruler exclusions " + label)
+	var state := fixture()
+	var nation := state.nations[0]
+	nation.ruler_archetype = RulerProfile.CONQUEROR
+	nation.ruler_traits = [RulerProfile.TRAIT_CAUTIOUS, RulerProfile.TRAIT_AMBITIOUS]
+	RegionalStrategy.initialize_targets(state)
+	RegionalStrategy.update_target(state, 0)
+	check(RegionalStrategy.target_region(state, 0) == 0, "cautious wins over conqueror and ambitious")
+	check(RegionalStrategy.allows_objective(state, 0, 0), "cautious still permits goals in its existing region")
+	check(MapRenderer.regional_strategy_lines(state, 0)[1].contains("经营守成"), "cautious UI shows completed-region holding")
+	nation.ruler_archetype = RulerProfile.BALANCED
+	nation.ruler_traits.clear()
+	RegionalStrategy.update_target(state, 0)
+	var anchor := nation.strategic_region_anchor_city_id
+	var revision := state.regional_strategy_revision
+	RegionalStrategy.update_target(state, 0)
+	check(nation.strategic_region_anchor_city_id == anchor and state.regional_strategy_revision == revision,
+		"unfinished new region does not switch or invalidate repeatedly")
+	for id in [2, 3]:
+		state.cities[id].owner_nation = 0
+	state.ownership_revision += 1
+	RegionalStrategy.update_target(state, 0)
+	check(RegionalStrategy.target_region(state, 0) == 2, "ordinary ruler continues after completing its second region")
 
 
 func _test_cache_identity() -> void:

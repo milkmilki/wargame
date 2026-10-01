@@ -193,9 +193,8 @@ static func integration_report(state: GameState, nation_id: int, region: int = -
 
 
 static func can_expand(nation: Nation) -> bool:
-	return RulerProfile.offensive_allowed(nation) and (nation.ruler_archetype == RulerProfile.CONQUEROR
-		or nation.ruler_traits.has(RulerProfile.TRAIT_MARTIAL)
-		or nation.ruler_traits.has(RulerProfile.TRAIT_AMBITIOUS))
+	return RulerProfile.offensive_allowed(nation) \
+		and not nation.ruler_traits.has(RulerProfile.TRAIT_CAUTIOUS)
 
 
 static func similarity(state: GameState, a: int, b: int) -> float:
@@ -257,7 +256,7 @@ static func update_target(state: GameState, nation_id: int, succession: bool = f
 	if nation.alive and region < 0:
 		region = initial_region(state, nation_id)
 	elif nation.alive and bool(integration_report(state, nation_id, region)["complete"]) \
-		and RulerProfile.offensive_allowed(nation) and (succession or can_expand(nation)):
+		and can_expand(nation):
 		var next := choose_next_region(state, nation_id)
 		if next >= 0:
 			region = next

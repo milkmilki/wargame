@@ -5,9 +5,11 @@ rather than a partition number. Administrative states follow their center's
 trade region; docks and politically inactive land do not count toward completion.
 Completion includes the nation's peaceful suzerainty system, not ordinary allies.
 
-Ordinary rulers retain completed goals until succession. Conquerors and rulers
-with martial or ambitious traits may select another reachable territorial
-neighbor after integration. Existing offensive prohibitions take precedence.
+Rulers may select another reachable territorial neighbor after integration by
+default, without waiting for succession. The cautious trait retains a completed
+goal instead; it takes precedence over conqueror, martial and ambitious profiles.
+Existing offensive prohibitions also prevent retargeting. Succession applies the
+same eligibility rule to the new ruler, while unfinished goals remain inherited.
 The next region is compared with the current capital's region; moving the
 capital does not retarget an active goal. Existing fronts may finish their state,
 while newly selected fronts and prewar targets must satisfy the shared policy.
