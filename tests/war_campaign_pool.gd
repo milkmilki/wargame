@@ -527,6 +527,7 @@ func _test_restored_army_leaves_parent_war_pool() -> void:
 	_check(restore_city != null, "忠诚恢复战争池夹具必须找到非首都陆城")
 	if restore_city == null:
 		return
+	preload("res://tests/state_rebellion_fixture.gd").isolate_city_as_state(state, restore_city.id)
 	var target_id := _nation_outside(state, [parent_id] as Array[int])
 	var enemy_id := _nation_outside(
 		state, [parent_id, target_id] as Array[int]

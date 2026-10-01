@@ -6627,6 +6627,7 @@ func _test_atomic_territory_transactions() -> void:
 		"忠诚恢复附加粮仓回归必须找到一座非首都迁移城市"
 	)
 	if restore_city != null:
+		preload("res://tests/state_rebellion_fixture.gd").isolate_city_as_state(restore_state, restore_city.id)
 		var restore_parent_capital := restore_state.cities[
 			restore_state.nations[restore_parent].capital_city_id
 		]
@@ -6833,6 +6834,7 @@ func _test_atomic_territory_transactions() -> void:
 			[1, 1, 1] as Array[int], tiny_warehouse_ids[0]
 		)
 		tiny_restore_city.food_per_half_year = 2
+		preload("res://tests/state_rebellion_fixture.gd").isolate_city_as_state(tiny_restore_state, tiny_restore_city.id)
 		tiny_restore_city.loyalty_target_nation = tiny_target
 		tiny_retained_city.food_per_half_year = 1
 		tiny_restore_state.refresh_derived()
@@ -7947,6 +7949,7 @@ func _test_alliance_war_coalitions() -> void:
 		if not candidate.is_capital and not candidate.has_warehouse:
 			statistics_city_id = candidate.id
 			break
+	preload("res://tests/state_rebellion_fixture.gd").isolate_city_as_state(statistics_state, statistics_city_id)
 	var statistics_rebel := statistics_state.start_regional_rebellion(
 		0, [statistics_city_id] as Array[int]
 	)
@@ -8129,6 +8132,7 @@ func _test_alliance_war_coalitions() -> void:
 		if not rebellion_city.is_capital and not rebellion_city.has_warehouse:
 			rebellion_core = rebellion_city.id
 			break
+	preload("res://tests/state_rebellion_fixture.gd").isolate_city_as_state(rebellion_peace_state, rebellion_core)
 	var coalition_rebel := rebellion_peace_state.start_regional_rebellion(
 		0, [rebellion_core] as Array[int]
 	)

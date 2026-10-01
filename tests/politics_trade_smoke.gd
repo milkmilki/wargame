@@ -1124,6 +1124,7 @@ func _test_rebellion_system() -> void:
 		region_state.cities[city_id].loyalty = 20.0
 		region_state.cities[city_id].loyalty_target_nation = 1
 		region_state.cities[city_id].rebellion_progress = 3
+		region_state.cities[city_id].administrative_rebellion_progress = 3
 	var connected := RebellionSystem.collect_rebellion_regions(
 		region_state, 0, [3, 1, 2]
 	)
@@ -1137,10 +1138,10 @@ func _test_rebellion_system() -> void:
 		region_state, 0, [3, 1, 2]
 	)
 	_check(
-		connected == [[1, 2, 3]]
-			and split == [[1, 2], [3]]
-			and target_split == [[1, 2], [3]],
-		"rebellion/regions_connected_and_target_partitioned",
+		connected == [[1, 2], [3]]
+			and split == connected
+			and target_split == connected,
+		"rebellion/regions_follow_administrative_states",
 		"connected=%s split=%s target=%s" % [connected, split, target_split]
 	)
 
@@ -1200,8 +1201,8 @@ func _test_rebellion_system() -> void:
 		]
 	)
 	var sibling_state := _make_rebellion_transaction_state()
-	var first_rebel := sibling_state.start_regional_rebellion(0, [1])
-	var second_rebel := sibling_state.start_regional_rebellion(0, [2])
+	var first_rebel := sibling_state.start_regional_rebellion(0, [1, 2])
+	var second_rebel := sibling_state.start_regional_rebellion(0, [3])
 	_check(
 		first_rebel == 1
 			and second_rebel == 2
@@ -1428,6 +1429,7 @@ func _test_rebellion_system() -> void:
 	# 同一恢复事务从和平开始时，必须先原子进入战争再形成 owner/legal
 	# 不一致；任何完整事务都不能留下和平占领。
 	var peaceful_restore_state := _make_loyalty_restoration_state()
+	_set_rebellion_partition(peaceful_restore_state, [0, 1, 1, 3, 4])
 	peaceful_restore_state.set_diplomatic_relation(
 		0, 1, GameState.DiplomaticRelation.NEUTRAL
 	)
@@ -1618,6 +1620,7 @@ func _make_rebellion_transaction_state() -> GameState:
 	state.nations[0].treasury_gold = 1000
 	state.nations[0].manpower_pool = 3000
 	state.day = 90
+	_set_rebellion_partition(state, [0, 1, 1, 3])
 	state.refresh_derived()
 	return state
 
@@ -1640,6 +1643,7 @@ func _make_rebellion_diplomacy_state() -> GameState:
 	state.nations[0].treasury_gold = 1000
 	state.nations[0].manpower_pool = 3000
 	state.day = 90
+	_set_rebellion_partition(state, [0, 1, 1, 3, 4, 5])
 	state.refresh_derived()
 	return state
 
@@ -1667,11 +1671,13 @@ func _make_loyalty_restoration_state() -> GameState:
 		city.loyalty = 20.0
 		city.loyalty_target_nation = 1
 		city.rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS - 1
+		city.administrative_rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS - 1
 		city.rebellion_cooldown_until_day = -1
 	state.nations[0].treasury_gold = 1000
 	state.nations[0].manpower_pool = 3000
 	state.nations[0].ruler_archetype = RulerProfile.TYRANT
 	state.day = 90
+	_set_rebellion_partition(state, [0, 1, 2, 3, 4])
 	state.refresh_derived()
 	return state
 
@@ -1706,6 +1712,7 @@ func _make_vassal_regional_rebellion_state() -> GameState:
 	state.nations[1].treasury_gold = 900
 	state.nations[1].manpower_pool = 3000
 	state.day = 90
+	_set_rebellion_partition(state, [0, 1, 1, 3])
 	state.refresh_derived()
 	return state
 
@@ -1725,14 +1732,31 @@ func _make_dead_loyalty_target_state() -> GameState:
 	state.nations[0].manpower_pool = 3000
 	state.nations[0].military_payment_ratio = 0.0
 	state.day = 90
+	_set_rebellion_partition(state, [0, 1, 1, 3])
 	state.refresh_derived()
 	for city_id in [1, 2]:
 		var city := state.cities[city_id]
 		city.loyalty = 20.0
 		city.loyalty_target_nation = 1
 		city.rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS - 1
+		city.administrative_rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS - 1
 		city.rebellion_cooldown_until_day = -1
 	return state
+
+
+func _set_rebellion_partition(state: GameState, by_city: Array[int]) -> void:
+	state.administrative_center_by_city = PackedInt32Array(by_city)
+	var centers: Array[int] = []
+	for center_id in by_city:
+		if center_id >= 0 and not centers.has(center_id):
+			centers.append(center_id)
+	centers.sort()
+	state.administrative_center_city_ids = PackedInt32Array(centers)
+	state.administrative_region_count = centers.size()
+	state.administrative_region_ids.resize(by_city.size())
+	for city_id in range(by_city.size()):
+		state.administrative_region_ids[city_id] = centers.find(by_city[city_id])
+	state.administrative_region_revision += 1
 
 
 func _nation_resource_totals(state: GameState) -> Array[int]:

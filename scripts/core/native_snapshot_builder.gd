@@ -247,6 +247,7 @@ static func _build_cities(state: GameState) -> Dictionary:
 	var food_hub := PackedByteArray()
 	var manpower_hub := PackedByteArray()
 	var at_war := PackedByteArray()
+	var administrative_rebellion_progress := PackedInt32Array()
 	var war_disruption_until_day := PackedInt32Array()
 	for city in state.cities:
 		ids.append(city.id)
@@ -267,6 +268,7 @@ static func _build_cities(state: GameState) -> Dictionary:
 		food_hub.append(int(city.is_food_hub))
 		manpower_hub.append(int(city.is_manpower_hub))
 		at_war.append(int(city.at_war))
+		administrative_rebellion_progress.append(city.administrative_rebellion_progress)
 		war_disruption_until_day.append(
 			city.war_disruption_until_day
 		)
@@ -290,6 +292,7 @@ static func _build_cities(state: GameState) -> Dictionary:
 		"food_hub": food_hub,
 		"manpower_hub": manpower_hub,
 		"at_war": at_war,
+		"administrative_rebellion_progress": administrative_rebellion_progress,
 		"war_disruption_until_day": war_disruption_until_day,
 	}
 

@@ -272,6 +272,9 @@ echo
 
 echo "==> [22/29] 政治、命名与贸易 smoke"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/state_rebellion.gd \
+  --log-file "$LOG_DIR/world-war-state-rebellion.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/politics_trade_smoke.gd \
   --log-file "$LOG_DIR/world-war-politics-trade.log"
 echo

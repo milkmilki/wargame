@@ -46,6 +46,7 @@ var loyalty_target_nation: int = -1
 var loyalty_trend: float = 0.0
 var unrest: float = 0.0
 var rebellion_progress: int = 0            ## 连续低忠诚月数
+var administrative_rebellion_progress: int = 0  ## 州治保存的全州连续低忠诚月数
 var rebellion_cooldown_until_day: int = -1
 var last_loyalty_reason: String = ""
 ## 最近一月贸易派生，只用于地图/详情展示，不改变基础产出。

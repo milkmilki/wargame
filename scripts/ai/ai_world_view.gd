@@ -458,7 +458,7 @@ static func cached_path_field(
 		]
 	)
 	var key := "%s:%d:%d:%d:%d:%d:%d" % [
-		revision_key,
+		"%s:N:%d" % [revision_key, game_state.road_network_revision],
 		start,
 		allowed_nation,
 		int(block_contested_edges),

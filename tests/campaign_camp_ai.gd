@@ -631,6 +631,10 @@ func _test_ready_camp_bypasses_remaining_fu() -> void:
 		state.cities[member_id].owner_nation = defender_id
 	state.cities[camp_id].owner_nation = attacker_id
 	state.cities[center_id].garrison_manpower = 15000
+	# This case exercises a ready camp bypassing remaining Fu, not an attack
+	# through hostile intermediate cities. Give it a legal center approach.
+	_enable_edge(state, camp_id, center_id)
+	state.road_network_revision += 1
 	state.armies.clear()
 	state.battles.clear()
 	var attackers: Array[Army] = []

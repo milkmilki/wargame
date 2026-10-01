@@ -14,6 +14,8 @@ func _init() -> void:
 func _run() -> void:
 	_test_field_rout_regroups_assault()
 	_test_stalled_assault_falls_back()
+	_test_blocked_fu_does_not_restart_unready_assault(false)
+	_test_blocked_fu_does_not_restart_unready_assault(true)
 	_finish()
 
 
@@ -171,6 +173,98 @@ func _test_field_rout_regroups_assault() -> void:
 		plan.assault_stalled_days == 0,
 		"重整必须清零强攻停滞计数"
 	)
+	sim.free()
+
+
+func _test_blocked_fu_does_not_restart_unready_assault(route_open: bool) -> void:
+	var state := GameState.new()
+	state.generate_grid_world(94145)
+	var context := _attack_context(state)
+	_check(not context.is_empty(), "驻营循环夹具必须找到大州")
+	if context.is_empty():
+		return
+	var center_id := int(context["center"])
+	var camp_id := int(context["entry"])
+	var rear_id := int(context["staging"])
+	var attacker_id := int(context["attacker"])
+	var defender_id := int(context["defender"])
+	_neutralize_diplomacy(state)
+	state.set_diplomatic_relation(attacker_id, defender_id, GameState.DiplomaticRelation.WAR)
+	var war_id := state.set_war_objective(attacker_id, defender_id, center_id, "驻营循环门禁")
+	for city in state.cities:
+		city.owner_nation = attacker_id
+	var blocked_fu := -1
+	for member_id in state.administrative_members(center_id):
+		if member_id not in [center_id, camp_id]:
+			blocked_fu = member_id
+			break
+	state.cities[center_id].owner_nation = defender_id
+	state.cities[center_id].garrison_manpower = 60000
+	state.cities[blocked_fu].owner_nation = defender_id
+	# The remaining Fu has no legal approach. The center route is separately
+	# opened in the regroup case, so waiting cannot be attributed to that route.
+	for edge in state.edges:
+		if edge.city_a in [blocked_fu, center_id] or edge.city_b in [blocked_fu, center_id]:
+			edge.max_manpower = 0
+	if route_open:
+		state._add_edge(camp_id, center_id)
+		var center_edge := state.edge_of(camp_id, center_id)
+		center_edge.kind = Edge.Kind.LAND
+		center_edge.max_manpower = 50000
+		center_edge.base_max_manpower = 50000
+	state.road_network_revision += 1
+	state.ownership_revision += 1
+	state.armies.clear()
+	state.battles.clear()
+	var armies: Array[Army] = []
+	for index in range(6):
+		var army := _army(964000 + index, attacker_id, camp_id if index < 2 else rear_id, 15000)
+		army.campaign_war_id = war_id
+		state.armies.append(army)
+		armies.append(army)
+	var plan := CoalitionCampaignFront.new()
+	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
+	plan.war_id = war_id
+	plan.center_city_id = center_id
+	plan.camp_city_id = camp_id
+	plan.phase = CoalitionCampaignFront.Phase.HOLD_CAMP if route_open else CoalitionCampaignFront.Phase.RAID_FU
+	for army in armies:
+		plan.army_assignments[army.id] = camp_id
+	state.register_campaign_front(plan, [attacker_id] as Array[int], attacker_id)
+	state.refresh_derived()
+	var sim := Simulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	var requirement := state.campaign_siege_requirement(attacker_id, center_id)
+	_check(requirement > 30000 and requirement <= 90000, "夹具要求营内3万不足而全州9万足够：%d" % requirement)
+	for cycle in range(9):
+		sim._manage_administrative_campaign(plan)
+		_check(plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP,
+			"%s第%d轮不得虚假发动州治进攻（阶段%d）" % ["援军未到营" if route_open else "州治断路", cycle, plan.phase])
+		state.day += Simulation.AI_DECISION_INTERVAL_DAYS
+	if route_open:
+		for army in armies:
+			_place_idle(army, camp_id)
+		sim._manage_administrative_campaign(plan)
+		_check(plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER, "集结完成且道路畅通后必须正常发动下一波")
+	else:
+		for army in armies:
+			_place_idle(army, camp_id)
+		sim._manage_administrative_campaign(plan)
+		_check(plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP, "全部到营也不能对断路州治虚假发动")
+		state._add_edge(camp_id, center_id)
+		var reopened_edge := state.edge_of(camp_id, center_id)
+		reopened_edge.kind = Edge.Kind.LAND
+		reopened_edge.max_manpower = 50000
+		reopened_edge.base_max_manpower = 50000
+		state.road_network_revision += 1
+		sim._manage_administrative_campaign(plan)
+		_check(plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER, "道路恢复后必须重新发动而非永久驻营")
+	for army in armies:
+		_check(army.ai_target_city == center_id and army.on_edge, "真正发动后军队必须执行州治进攻命令")
+	for _cycle in range(3):
+		sim._manage_administrative_campaign(plan)
+		_check(plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER, "已离营向州治行军时不得因营内兵力下降回退")
 	sim.free()
 
 

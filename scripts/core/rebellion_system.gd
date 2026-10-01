@@ -475,83 +475,69 @@ static func monthly_city_loyalty(
 	}
 
 
-## 将满足条件的城市按“正容量道路相连且政治目标相同”划为确定性连通分量。
-## candidate_ids 为空时扫描 parent 全境；传入时只在该集合内筛选。
+## One pass over land cities; monthly callers reuse this index for every parent.
+static func administrative_rebellion_reports(state: GameState) -> Dictionary:
+	var blocked := {}
+	for record in state.rebellions.values():
+		if not record is Dictionary or not bool(record.get("active", false)):
+			continue
+		for city_id in record.get("core_city_ids", []):
+			blocked[Vector2i(int(record.get("parent_id", -1)), state.administrative_center_of(city_id))] = true
+	var reports := {}
+	for city in state.cities:
+		if city.is_dock or not city.politically_active:
+			continue
+		var center_id := state.administrative_center_of(city.id)
+		if not state.is_zhou_city(center_id) or state.cities[center_id].is_dock or not state.cities[center_id].politically_active:
+			continue
+		var parent_id := state.cities[center_id].owner_nation
+		if city.owner_nation != parent_id or not _valid_living_nation(state, parent_id):
+			continue
+		if not reports.has(center_id):
+			reports[center_id] = {
+				"parent_id": parent_id, "city_ids": [] as Array[int], "loyalty_total": 0.0,
+				"eligible": not state.is_in_civil_war(parent_id)
+					and not bool(state.rebellions.get(parent_id, {}).get("active", false))
+					and not blocked.has(Vector2i(parent_id, center_id))
+					and state.administrative_center_of(state.nations[parent_id].capital_city_id) != center_id,
+			}
+		var report: Dictionary = reports[center_id]
+		(report["city_ids"] as Array[int]).append(city.id)
+		report["loyalty_total"] += clampf(city.loyalty, LOYALTY_MIN, LOYALTY_MAX)
+		if city.is_capital or state.day < city.rebellion_cooldown_until_day or _wartime_occupation_locked(state, city.id):
+			report["eligible"] = false
+	for center_id in reports:
+		var report: Dictionary = reports[center_id]
+		report["average_loyalty"] = float(report["loyalty_total"]) / float((report["city_ids"] as Array).size())
+		report["eligible"] = bool(report["eligible"]) and float(report["average_loyalty"]) <= LOYALTY_REBEL
+	return reports
+
+
+## Candidates identify administrative states, never partial city subsets.
 static func collect_rebellion_regions(
 	state: GameState,
 	parent_id: int,
-	candidate_ids: Array = []
+	candidate_ids: Array = [],
+	reports: Dictionary = {}
 ) -> Array:
 	var regions: Array = []
 	if not _valid_living_nation(state, parent_id):
 		return regions
-	if state.is_in_civil_war(parent_id):
-		return regions
-
-	var requested: Dictionary = {}
-	if candidate_ids.is_empty():
-		for city in state.cities:
-			if city.owner_nation == parent_id:
-				requested[city.id] = true
-	else:
-		for city_value in candidate_ids:
-			var requested_id: int = int(city_value)
-			if _valid_city(state, requested_id):
-				requested[requested_id] = true
-
-	var active_city_ids: Dictionary = _active_rebellion_city_ids(
-		state, parent_id
-	)
-	var eligible: Dictionary = {}
-	var ordered_ids: Array[int] = []
-	for city_value in requested.keys():
-		var city_id: int = int(city_value)
-		var city: City = state.cities[city_id]
-		if (
-			city.owner_nation != parent_id
-			or city.is_dock
-			or city.is_capital
-			or city.loyalty > LOYALTY_REBEL
-			or city.rebellion_progress < REBELLION_PROGRESS_MONTHS
-			or state.day < city.rebellion_cooldown_until_day
-			or active_city_ids.has(city_id)
-			or _wartime_occupation_locked(state, city_id)
-		):
-			continue
-		eligible[city_id] = true
-		ordered_ids.append(city_id)
-	ordered_ids.sort()
-
-	var visited: Dictionary = {}
-	for seed in ordered_ids:
-		if visited.has(seed):
-			continue
-		var target_nation: int = state.cities[seed].loyalty_target_nation
-		var region: Array[int] = []
-		var queue: Array[int] = [seed]
-		visited[seed] = true
-		var cursor: int = 0
-		while cursor < queue.size():
-			var current: int = queue[cursor]
-			cursor += 1
-			region.append(current)
-			var neighbors: Array[int] = state.neighbors(current).duplicate()
-			neighbors.sort()
-			for neighbor in neighbors:
-				if not eligible.has(neighbor) or visited.has(neighbor):
-					continue
-				if (
-					state.cities[neighbor].loyalty_target_nation
-						!= target_nation
-				):
-					continue
-				var edge: Edge = state.edge_of(current, neighbor)
-				if edge == null or edge.max_manpower <= 0:
-					continue
-				visited[neighbor] = true
-				queue.append(neighbor)
-		region.sort()
-		regions.append(region)
+	if reports.is_empty():
+		reports = administrative_rebellion_reports(state)
+	var requested := {}
+	for city_id in candidate_ids:
+		requested[state.administrative_center_of(city_id)] = true
+	var centers: Array[int] = []
+	for center_id in reports:
+		var report: Dictionary = reports[center_id]
+		if int(report["parent_id"]) == parent_id and bool(report["eligible"]) \
+			and state.cities[center_id].administrative_rebellion_progress >= REBELLION_PROGRESS_MONTHS \
+			and (candidate_ids.is_empty() or requested.has(center_id)):
+			centers.append(center_id)
+	EquivariantOrder.sort_city_ids(centers, state, parent_id)
+	for center_id in centers:
+		regions.append((reports[center_id]["city_ids"] as Array[int]).duplicate())
 	return regions
 
 
@@ -748,14 +734,27 @@ static func resolve_month(state: GameState) -> Array[Dictionary]:
 				% [loyalty, LOYALTY_REBEL],
 		})
 
+	var state_reports := administrative_rebellion_reports(state)
+	var reports_by_parent := {}
+	for center_id in state_reports:
+		var center := state.cities[center_id]
+		center.administrative_rebellion_progress = (
+			mini(center.administrative_rebellion_progress + 1, REBELLION_PROGRESS_MONTHS)
+			if bool(state_reports[center_id]["eligible"]) else 0
+		)
+		var parent_id := int(state_reports[center_id]["parent_id"])
+		if not reports_by_parent.has(parent_id):
+			reports_by_parent[parent_id] = {}
+		reports_by_parent[parent_id][center_id] = state_reports[center_id]
 	for parent_id in range(initial_nation_count):
 		if (
 			consumed_nations.has(parent_id)
 			or not _valid_living_nation(state, parent_id)
+			or not reports_by_parent.has(parent_id)
 		):
 			continue
 		var regions: Array = collect_rebellion_regions(
-			state, parent_id
+			state, parent_id, [], reports_by_parent[parent_id]
 		)
 		for region_value in regions:
 			var city_ids: Array[int] = []
@@ -763,7 +762,8 @@ static func resolve_month(state: GameState) -> Array[Dictionary]:
 				city_ids.append(int(city_value))
 			if city_ids.is_empty():
 				continue
-			var target_id: int = state.cities[city_ids[0]].loyalty_target_nation
+			var center_id := state.administrative_center_of(city_ids[0])
+			var target_id: int = state.cities[center_id].loyalty_target_nation
 			if (
 				target_id != parent_id
 				and _valid_living_nation(state, target_id)
@@ -816,7 +816,7 @@ static func resolve_month(state: GameState) -> Array[Dictionary]:
 				"rebel_id": rebel_id,
 				"city_ids": city_ids.duplicate(),
 				"day": state.day,
-				"reason": "loyalty <= %.1f for %d months"
+				"reason": "state average loyalty <= %.1f for %d months"
 					% [LOYALTY_REBEL, REBELLION_PROGRESS_MONTHS],
 			})
 	_sync_nation_average_loyalty(state)
@@ -881,29 +881,6 @@ static func _garrison_manpower(
 		):
 			total += army.size
 	return total
-
-
-static func _active_rebellion_city_ids(
-	state: GameState,
-	parent_id: int
-) -> Dictionary:
-	var result: Dictionary = {}
-	for rebel_value in state.rebellions.values():
-		if not rebel_value is Dictionary:
-			continue
-		var record: Dictionary = rebel_value as Dictionary
-		if (
-			int(record.get("parent_id", -1)) != parent_id
-			or not bool(record.get("active", true))
-		):
-			continue
-		var core_value: Variant = record.get("core_city_ids", [])
-		if not core_value is Array:
-			continue
-		var core_ids: Array = core_value as Array
-		for city_value in core_ids:
-			result[int(city_value)] = true
-	return result
 
 
 static func _land_city_ids_of(

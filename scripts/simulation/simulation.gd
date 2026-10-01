@@ -507,7 +507,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 			if tick_phase_profiling_enabled else 0
 		)
 		_set_runtime_profile_stage(&"monthly_rebellions")
-		RebellionSystem.resolve_month(state)
+		_resolve_monthly_rebellions()
 		_record_tick_profile_stage(
 			"monthly_rebellions",
 			monthly_profile_started
@@ -2051,6 +2051,17 @@ func _resolve_annual_resource_balance(
 
 ## 君主寿命与继位是确定性的日历事件，不进入 AI 决策。每日成本仅为一次
 ## 国家数组扫描；实际继位时才刷新军事派生和贸易预测缓存。
+func _resolve_monthly_rebellions() -> void:
+	var events := RebellionSystem.resolve_month(state)
+	var changed_cities: Array[int] = []
+	for event in events:
+		for city_id in event.get("city_ids", []):
+			changed_cities.append(int(city_id))
+	if not changed_cities.is_empty():
+		_reconcile_battles_after_control_transfer(changed_cities, null)
+		_finish_campaign_reports_for_battle(null)
+
+
 func _resolve_ruler_successions() -> void:
 	if state == null or not state.random_ruler_profiles_enabled():
 		return
@@ -9958,6 +9969,30 @@ func _launch_campaign_center_assault(
 	)
 
 
+func _campaign_center_ready_manpower(
+	plan: CoalitionCampaignFront,
+	at_camp_only: bool = false
+) -> int:
+	var result := 0
+	var regrouping := at_camp_only or plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP
+	for army in _campaign_plan_armies(plan):
+		if regrouping and (army.on_edge or army.location_city != plan.camp_city_id):
+			continue
+		var origin := army.move_to if army.on_edge else army.location_city
+		if origin == plan.center_city_id:
+			result += army.size
+			continue
+		# Match the attack command's access rules; binding alone does not mean
+		# this force can advance through an enemy or neutral corridor.
+		var field := _cached_ai_path_field(
+			army.owner_nation, origin, army.owner_nation, false, false,
+			plan.center_city_id, army.max_size
+		)
+		if float(field["dist"].get(plan.center_city_id, INF)) < INF:
+			result += army.size
+	return result
+
+
 func _manage_campaign_fu_raids(
 	nation_id: int,
 	plan: CoalitionCampaignFront,
@@ -9991,7 +10026,10 @@ func _manage_campaign_fu_raids(
 				nation_id, plan.center_city_id
 			)
 		)
-		if _campaign_force_at_city(plan, camp_id) >= assault_requirement:
+		if (
+			_campaign_force_at_city(plan, camp_id) >= assault_requirement
+			and _campaign_center_ready_manpower(plan, true) >= assault_requirement
+		):
 			return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 	var all_enemy_targets := _zhou_enemy_fu_targets(
 		nation_id, plan.center_city_id, attacker_bloc, false
@@ -10004,14 +10042,10 @@ func _manage_campaign_fu_raids(
 				nation_id, plan.center_city_id
 			)
 		)
-		var ready_manpower := (
-			_campaign_force_at_city(plan, camp_id)
-			if plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP
-			else _campaign_plan_manpower(plan)
-		)
 		if (
 			not cleanup
-			and ready_manpower >= requirement
+			and _campaign_plan_manpower(plan) >= requirement
+			and _campaign_center_ready_manpower(plan) >= requirement
 		):
 			return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 		plan.phase = (
@@ -10025,11 +10059,6 @@ func _manage_campaign_fu_raids(
 		return _hold_campaign_fu_positions(
 			nation_id, plan, alive_by_id
 		)
-	plan.phase = (
-		CoalitionCampaignFront.Phase.CLEANUP
-		if cleanup
-		else CoalitionCampaignFront.Phase.RAID_FU
-	)
 	var frontier_targets := _zhou_enemy_fu_targets(
 		nation_id, plan.center_city_id, attacker_bloc, true
 	)
@@ -10040,6 +10069,11 @@ func _manage_campaign_fu_raids(
 		return _manage_blocked_campaign_fu(
 			nation_id, plan, alive_by_id, cleanup
 		)
+	plan.phase = (
+		CoalitionCampaignFront.Phase.CLEANUP
+		if cleanup
+		else CoalitionCampaignFront.Phase.RAID_FU
+	)
 	return _assign_campaign_detachments(
 		nation_id, plan, all_enemy_targets, frontier_targets, alive_by_id
 	)
@@ -10064,7 +10098,10 @@ func _manage_blocked_campaign_fu(
 			nation_id, plan.center_city_id
 		)
 	)
-	if _campaign_plan_manpower(plan) >= requirement:
+	if (
+		_campaign_plan_manpower(plan) >= requirement
+		and _campaign_center_ready_manpower(plan) >= requirement
+	):
 		return _launch_campaign_center_assault(nation_id, plan, alive_by_id)
 	plan.phase = CoalitionCampaignFront.Phase.HOLD_CAMP
 	return _order_campaign_force(

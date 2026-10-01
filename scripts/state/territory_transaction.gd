@@ -301,6 +301,7 @@ static func _normalize_operations(
 					or not is_zero_approx(city.loyalty_trend)
 					or city.unrest != 100.0 - city.loyalty
 					or city.rebellion_progress != 0
+					or city.administrative_rebellion_progress != 0
 					or city.rebellion_cooldown_until_day != cooldown_until
 					or city.last_loyalty_reason != reason
 				)

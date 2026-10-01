@@ -2080,6 +2080,7 @@ func rebuild_administrative_regions() -> Dictionary:
 	positions.resize(cities.size())
 	for city in cities:
 		positions[city.id] = city.map_position
+		city.administrative_rebellion_progress = 0
 		if city.politically_active and not city.is_dock:
 			active.append(city.id)
 	var links: Array[Vector2i] = []
@@ -4752,7 +4753,28 @@ func start_civil_war(
 	return true
 
 
-## 地方叛乱事务：把同一亲叛政治目标的连续低忠诚城市转成新的反叛国。
+## Validate one complete parent-controlled administrative state for political transfer.
+func _regional_rebellion_members(parent_id: int, city_ids: Array[int]) -> Array[int]:
+	var empty: Array[int] = []
+	if city_ids.is_empty() or parent_id < 0 or parent_id >= nations.size():
+		return empty
+	var center_id := administrative_center_of(city_ids[0])
+	if not is_zhou_city(center_id) or cities[center_id].is_dock or not cities[center_id].politically_active \
+		or cities[center_id].owner_nation != parent_id \
+		or administrative_center_of(nations[parent_id].capital_city_id) == center_id:
+		return empty
+	var expected: Array[int] = []
+	for city_id in administrative_members(center_id):
+		if cities[city_id].owner_nation == parent_id and cities[city_id].politically_active and not cities[city_id].is_dock:
+			if cities[city_id].is_capital:
+				return empty
+			expected.append(city_id)
+	var provided := city_ids.duplicate()
+	provided.sort()
+	return expected if provided == expected and expected.size() < land_cities_of(parent_id).size() else empty
+
+
+## 地方叛乱事务：把完整行政州内的本国实控陆城转成新的反叛国。
 ## 实控先转给叛军，法理仍留在母国；只有未来和平承认才改变 recognized owner。
 ## 资源、人力和驻军从当地/母国守恒划转，并额外按削藩内战同一公式在首都
 ## 动员满编“火星兵”，让新生叛军具备实际作战能力。
@@ -4772,42 +4794,12 @@ func start_regional_rebellion(
 		or city_ids.is_empty()
 	):
 		return -1
-	var unique_ids: Array[int] = []
-	for city_value in city_ids:
-		var city_id := int(city_value)
-		if (
-			city_id < 0 or city_id >= cities.size()
-			or cities[city_id].is_dock
-			or cities[city_id].is_capital
-			or cities[city_id].owner_nation != parent_id
-			or unique_ids.has(city_id)
-		):
-			return -1
-		unique_ids.append(city_id)
-	unique_ids.sort()
-	if unique_ids.size() >= land_cities_of(parent_id).size():
+	var unique_ids := _regional_rebellion_members(parent_id, city_ids)
+	if unique_ids.is_empty():
 		return -1
-	# Region must be connected through usable roads.
 	var allowed := {}
 	for city_id in unique_ids:
 		allowed[city_id] = true
-	var seen := {unique_ids[0]: true}
-	var queue: Array[int] = [unique_ids[0]]
-	var cursor := 0
-	while cursor < queue.size():
-		var current := queue[cursor]
-		cursor += 1
-		for neighbor in neighbors(current):
-			var edge := edge_of(current, neighbor)
-			if (
-				not allowed.has(neighbor) or seen.has(neighbor)
-				or edge == null or edge.max_manpower <= 0
-			):
-				continue
-			seen[neighbor] = true
-			queue.append(neighbor)
-	if seen.size() != unique_ids.size():
-		return -1
 
 	var parent := nations[parent_id]
 	# 地方叛乱可能发生在和平藩王领内；它的库存真源是宗藩根粮池，
@@ -4854,21 +4846,7 @@ func start_regional_rebellion(
 	var transferred_gold := _proportional_share(
 		parent.treasury_gold, rebel_gold_output, parent_gold_output
 	)
-	var region_centroid := Vector2.ZERO
-	for city_id in unique_ids:
-		region_centroid += cities[city_id].map_position
-	region_centroid /= float(unique_ids.size())
-	var capital_id := unique_ids[0]
-	var capital_distance := INF
-	for city_id in unique_ids:
-		var distance := cities[city_id].map_position.distance_squared_to(
-			region_centroid
-		)
-		if distance < capital_distance or (
-			is_equal_approx(distance, capital_distance) and city_id < capital_id
-		):
-			capital_distance = distance
-			capital_id = city_id
+	var capital_id := administrative_center_of(unique_ids[0])
 	var territory_operations: Array[Dictionary] = []
 	for city_id in unique_ids:
 		territory_operations.append({
@@ -4935,7 +4913,7 @@ func start_regional_rebellion(
 		"core_city_ids": unique_ids.duplicate(),
 		"recognized": false,
 		"active": true,
-		"reason": "连续低忠诚地区起义",
+		"reason": "全州连续低忠诚起义",
 	}
 	parent.last_rebellion_day = day
 	rebel.last_rebellion_day = day
@@ -4960,43 +4938,13 @@ func restore_regional_loyalty_target(
 		or city_ids.is_empty()
 	):
 		return false
-	var unique_ids: Array[int] = []
-	for city_value in city_ids:
-		var city_id := int(city_value)
-		if (
-			city_id < 0 or city_id >= cities.size()
-			or cities[city_id].is_dock
-			or cities[city_id].is_capital
-			or cities[city_id].owner_nation != parent_id
-			or cities[city_id].loyalty_target_nation != target_id
-			or unique_ids.has(city_id)
-		):
-			return false
-		unique_ids.append(city_id)
-	unique_ids.sort()
-	if unique_ids.size() >= land_cities_of(parent_id).size():
+	var unique_ids := _regional_rebellion_members(parent_id, city_ids)
+	if unique_ids.is_empty() or cities[administrative_center_of(unique_ids[0])].loyalty_target_nation != target_id:
 		return false
 
 	var allowed := {}
 	for city_id in unique_ids:
 		allowed[city_id] = true
-	var seen := {unique_ids[0]: true}
-	var queue: Array[int] = [unique_ids[0]]
-	var cursor := 0
-	while cursor < queue.size():
-		var current := queue[cursor]
-		cursor += 1
-		for neighbor in neighbors(current):
-			var edge := edge_of(current, neighbor)
-			if (
-				not allowed.has(neighbor) or seen.has(neighbor)
-				or edge == null or edge.max_manpower <= 0
-			):
-				continue
-			seen[neighbor] = true
-			queue.append(neighbor)
-	if seen.size() != unique_ids.size():
-		return false
 	if is_suzerainty_pair(parent_id, target_id):
 		var subject_id := (
 			parent_id if overlord_of(parent_id) == target_id else target_id
@@ -7529,6 +7477,8 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 			and planned_capitals[previous_owner] == city_id
 		)
 		city.owner_nation = planned_owners[city_id]
+		if city.owner_nation != previous_owner:
+			city.administrative_rebellion_progress = 0
 		recognized_city_owners[city_id] = planned_legal_owners[city_id]
 		city.occupation_sponsor_nation = planned_sponsors[city_id]
 		city.is_capital = false
@@ -7545,6 +7495,7 @@ func _commit_territory_transaction(plan: Dictionary) -> Dictionary:
 		city.loyalty_trend = 0.0
 		city.unrest = 100.0 - city.loyalty
 		city.rebellion_progress = 0
+		city.administrative_rebellion_progress = 0
 		city.rebellion_cooldown_until_day = int(normalized["cooldown_until"])
 		city.last_loyalty_reason = str(normalized["reason"])
 	var planned_warehouse_ids: Array = plan["planned_warehouse_ids"]

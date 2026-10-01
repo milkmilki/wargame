@@ -7271,9 +7271,8 @@ static func _city_detail_line_count(
 ) -> int:
 	if city_id < 0 or city_id >= game_state.cities.size():
 		return 0
-	var governance_lines := (
-		3 if game_state.cities[city_id].rebellion_progress > 0 else 2
-	)
+	var center_id := game_state.administrative_center_of(city_id)
+	var governance_lines := 3 if center_id >= 0 else 2
 	var count := _section_layout_line_count(PackedInt32Array([
 		4, 3, 8, governance_lines,
 	]))
@@ -7739,13 +7738,18 @@ static func city_detail_sections(
 		],
 		"认同：%s    原因：%s" % [target_name, reason],
 	]
-	if city.rebellion_progress > 0:
-		governance_lines.append(
-			"叛乱进度：%d / %d 月" % [
-				city.rebellion_progress,
+	var rebellion_center := game_state.administrative_center_of(city.id)
+	var rebellion_owner := city.owner_nation
+	if rebellion_center >= 0:
+		if game_state.cities[rebellion_center].owner_nation != rebellion_owner:
+			governance_lines.append("本州叛乱：州治由他国实控")
+		elif rebellion_owner >= 0 and game_state.administrative_center_of(game_state.nations[rebellion_owner].capital_city_id) == rebellion_center:
+			governance_lines.append("本州叛乱：首都州不参与地方独立")
+		else:
+			governance_lines.append("本州低忠诚：%d / %d 月" % [
+				game_state.cities[rebellion_center].administrative_rebellion_progress,
 				RebellionSystem.REBELLION_PROGRESS_MONTHS,
-			]
-		)
+			])
 	var military_lines: Array[String] = [garrison_line]
 	military_lines.append_array(campaign_lines)
 	military_lines.append(
