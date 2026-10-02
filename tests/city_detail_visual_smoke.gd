@@ -22,9 +22,7 @@ func _run() -> void:
 	renderer.select_city(state.nations[0].capital_city_id)
 	await process_frame
 	await process_frame
-	var panel := renderer._selection_detail_rect(
-		renderer._selection_detail_line_count()
-	)
+	var panel := renderer.detail_panel().get_global_rect()
 	var viewport := Rect2(Vector2.ZERO, Vector2(root.size))
 	if not viewport.encloses(panel):
 		push_error("CITY_DETAIL_VISUAL_FAILED panel=%s viewport=%s" % [

@@ -120,6 +120,7 @@ func _ready() -> void:
 
 func _setup_political_history() -> void:
 	if history_timeline != null:
+		renderer.register_input_surface(history_timeline._panel)
 		history_timeline.preview_requested.connect(
 			_on_history_preview_requested
 		)
@@ -259,6 +260,7 @@ func _apply_display_settings() -> void:
 
 
 func _setup_road_tuning() -> void:
+	renderer.register_input_surface(road_tuning_panel._map_mode_option)
 	road_tuning_panel.panel_opened.connect(_on_road_panel_opened)
 	road_tuning_panel.panel_closed.connect(_on_road_panel_closed)
 	road_tuning_panel.regenerate_requested.connect(
@@ -547,6 +549,8 @@ func _activate_state(next_state: GameState) -> void:
 	if _history_active:
 		simulation.paused = _history_previous_pause
 	_history_active = false
+	if road_tuning_panel != null:
+		road_tuning_panel.set_history_mode(false)
 	state = next_state
 	simulation.setup(state)
 	if family_tree_panel != null:
@@ -583,6 +587,8 @@ func _activate_state(next_state: GameState) -> void:
 			)
 	elif map_3d != null:
 		map_3d.visible = false
+	if road_tuning_panel != null:
+		_on_map_mode_changed(road_tuning_panel.renderer_map_mode())
 	if map_editor_panel != null:
 		map_editor_panel.bind(state, renderer)
 	_political_history.reset(state, history_interval_days)
@@ -620,6 +626,8 @@ func _on_history_position_requested(index: int, finalize: bool = true) -> void:
 		_history_previous_pause = simulation.paused
 		_history_previous_map_mode = renderer.map_mode()
 	_history_active = true
+	if road_tuning_panel != null:
+		road_tuning_panel.set_history_mode(true)
 	simulation.paused = true
 	renderer.set_display_state(
 		history_state, true, MapRenderer.MapMode.POLITICAL,
@@ -636,6 +644,8 @@ func _leave_history_view() -> void:
 	if not _history_active:
 		return
 	_history_active = false
+	if road_tuning_panel != null:
+		road_tuning_panel.set_history_mode(false)
 	renderer.set_display_state(
 		state, false, _history_previous_map_mode
 	)
@@ -646,6 +656,9 @@ func _leave_history_view() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	# Native buttons finish ui_accept on release; its press must not pause the world.
+	if event.keycode == KEY_SPACE and get_viewport().gui_get_focus_owner() != null:
 		return
 	if event.keycode == KEY_ESCAPE and settings_overlay.visible:
 		_close_settings()

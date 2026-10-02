@@ -55,7 +55,8 @@ func _run() -> void:
 		state, MapRenderer.MapMode.POLITICAL, true
 	)
 	var preview_usec := Time.get_ticks_usec() - preview_started
-	if first_task_id < 0 or map_3d._country_visual_task_id != first_task_id:
+	# The LUT-only path has no image worker; preview must preserve either task state.
+	if map_3d._country_visual_task_id != first_task_id:
 		push_error("history preview must not wait for the active country task")
 		quit(1)
 		return

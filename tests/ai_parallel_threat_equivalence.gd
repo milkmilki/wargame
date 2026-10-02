@@ -102,6 +102,7 @@ func _world_fingerprint(state: GameState) -> String:
 			nation.war_preparation_objective_city,
 				_battle_groups_fingerprint(nation),
 			nation.ai_last_force_action, nation.ai_last_force_day,
+			nation.family_tree_id, nation.ruler_person_id, nation.vassal_title_base,
 		])
 	var armies := []
 	for army in state.armies:
@@ -114,7 +115,8 @@ func _world_fingerprint(state: GameState) -> String:
 			army.campaign_war_id,
 			army.ai_order_created_day, army.ai_order_until_day,
 		])
-	return str([state.day, state.winner, cities, nations, armies])
+	return str([state.day, state.winner, cities, nations, armies,
+		NativeSnapshotBuilder.build(state)["family_trees"], state.next_family_person_id])
 
 
 func _battle_groups_fingerprint(nation: Nation) -> Array:

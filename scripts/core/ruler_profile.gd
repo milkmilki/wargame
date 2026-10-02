@@ -182,7 +182,13 @@ const HASH_MULTIPLIER: int = 48271
 const HASH_INITIAL: int = 216613626
 const DAYS_PER_YEAR: int = 360
 const MIN_REIGN_YEARS: int = 1
-const MAX_REIGN_YEARS: int = 50
+const MAX_REIGN_YEARS: int = 60
+## Inclusive minimum, maximum and percentage weight for each reign bucket.
+const REIGN_YEAR_BUCKETS: Array[Vector3i] = [
+	Vector3i(1, 4, 20), Vector3i(5, 9, 20), Vector3i(10, 19, 30),
+	Vector3i(20, 29, 15), Vector3i(30, 39, 8), Vector3i(40, 49, 4),
+	Vector3i(50, 60, 3),
+]
 
 const RULER_SURNAMES: Array[String] = [
 	"赵", "钱", "孙", "李", "周", "吴", "郑", "王",
@@ -216,19 +222,23 @@ static func initialize_nation(
 	nation.trade_policy = trade_policy_for(archetype, assigned_traits)
 
 
-## 每任君主任期只由世界种子、国家和君主版本决定，范围含首尾 1..50 年。
+## 每任君主任期由稳定哈希按权重选区间，再在区间内均匀抽取，范围含首尾 1..60 年。
 static func reign_years(
 	world_seed: int,
 	nation_id: int,
 	ruler_revision: int
 ) -> int:
-	return MIN_REIGN_YEARS + stable_index(
-		world_seed,
-		nation_id,
-		"ruler/reign_years",
-		MAX_REIGN_YEARS - MIN_REIGN_YEARS + 1,
-		ruler_revision
+	var ticket := stable_index(
+		world_seed, nation_id, "ruler/reign_bucket", 100, ruler_revision
 	)
+	for bucket in REIGN_YEAR_BUCKETS:
+		if ticket < bucket.z:
+			return bucket.x + stable_index(
+				world_seed, nation_id, "ruler/reign_years/%d" % bucket.x,
+				bucket.y - bucket.x + 1, ruler_revision
+			)
+		ticket -= bucket.z
+	return MAX_REIGN_YEARS
 
 
 static func succession_due_day(nation, world_seed: int) -> int:

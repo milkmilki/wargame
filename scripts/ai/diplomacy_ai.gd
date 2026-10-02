@@ -13,6 +13,7 @@ enum Action {
 	ENFEOFF,
 	CENTRALIZE,
 	RETARGET_WAR_PREPARATION,
+	ISSUE_ULTIMATUM,
 }
 
 enum FoodPosture {
@@ -20,6 +21,11 @@ enum FoodPosture {
 	GUARDED,
 	OFFENSIVE_WAR,
 	DEFENSIVE_WAR,
+}
+
+enum ObjectiveContext {
+	PREWAR,
+	CAMPAIGN,
 }
 
 const MIN_WAR_DAYS: int = 180
@@ -2717,6 +2723,7 @@ static func _ensure_evaluation_cache_current(
 		state.regional_strategy_revision,
 		state.region_analysis_revision,
 		state.administrative_region_revision,
+		state.road_network_revision,
 	]
 	var cached_revision: Variant = evaluation_cache.get(
 		REVISION_KEY, null
@@ -3266,7 +3273,10 @@ static func _direct_bordering_nation_ids(
 	nation_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> Array[int]:
-	var cache_key := "direct_borders:%d" % nation_id
+	var cache_key := "direct_borders:%d:%d:%d:%d:%d" % [
+		state.get_instance_id(), nation_id, state.ownership_revision,
+		state.diplomacy_revision, state.road_network_revision,
+	]
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key]
 	var topology_cache := _ensure_frontier_matrix_cache(
@@ -3282,21 +3292,111 @@ static func _direct_bordering_nation_ids(
 	return result
 
 
+static func _expansion_members(
+	state: GameState, nation_id: int, cache: Dictionary
+) -> Array[int]:
+	_ensure_evaluation_cache_current(state, cache)
+	var key := "expansion_members:%d" % nation_id
+	if not cache.has(key):
+		var control := RegionalStrategy.control(state)
+		var root := int(control["roots"].get(nation_id, nation_id))
+		var members: Array[int] = []
+		for member_id in control["root_members"].get(root, []):
+			if state.nations[member_id].alive:
+				members.append(member_id)
+		cache[key] = members
+	return cache[key] as Array[int]
+
+
+static func _expansion_bordering_nation_ids(
+	state: GameState, nation_id: int, cache: Dictionary = {}
+) -> Array[int]:
+	var members := _expansion_members(state, nation_id, cache)
+	var key := "expansion_borders:%d" % nation_id
+	if not cache.has(key):
+		var neighbors: Array = _ensure_frontier_matrix_cache(state, cache)["territorial_neighbor_sets"]
+		var flags := {}
+		for member_id in members:
+			for target_id in neighbors[member_id]:
+				if not members.has(target_id) and not state.has_military_access(nation_id, target_id):
+					flags[target_id] = true
+		var result: Array[int] = []
+		result.assign(flags.keys())
+		result.sort_custom(func(a: int, b: int) -> bool:
+			return EquivariantOrder.nation_less(state, nation_id, a, b)
+		)
+		cache[key] = result
+	return cache[key] as Array[int]
+
+
+static func _prewar_reachable_cities(
+	state: GameState, nation_id: int, cache: Dictionary
+) -> Dictionary:
+	var key := "prewar_reachable:%d:%d" % [nation_id, state.day]
+	if cache.has(key):
+		return cache[key]
+	# Sources describe possible deployment, not committed or battle-ready C.
+	var sources_key := "prewar_source_nodes:%d" % state.day
+	if not cache.has(sources_key):
+		var by_owner := {}
+		for city in state.cities:
+			if city.owner_nation >= 0 and city.politically_active and not city.is_dock:
+				if not by_owner.has(city.owner_nation):
+					by_owner[city.owner_nation] = {}
+				by_owner[city.owner_nation][city.id] = true
+		for army in state.armies:
+			var node := army.move_to if army.on_edge else army.location_city
+			if army.size <= 0 or node < 0 or node >= state.cities.size() or not state.has_military_access(army.owner_nation, state.cities[node].owner_nation):
+				continue
+			if not by_owner.has(army.owner_nation):
+				by_owner[army.owner_nation] = {}
+			by_owner[army.owner_nation][node] = true
+		cache[sources_key] = by_owner
+	var reachable := {}
+	var fields: Dictionary = cache.get("prewar_path_fields", {})
+	var sources: Dictionary = cache[sources_key].get(nation_id, {})
+	for source_id in sources:
+		if reachable.has(source_id):
+			continue
+		var field := AiWorldView.cached_path_field(state, state.day, fields, source_id, nation_id, false, false)
+		for city_id in field["dist"]:
+			if float(field["dist"][city_id]) < INF:
+				reachable[city_id] = true
+	cache["prewar_path_fields"] = fields
+	cache[key] = reachable
+	return reachable
+
+
+static func _prewar_source_reaches(
+	state: GameState, nation_id: int, city_id: int, cache: Dictionary
+) -> bool:
+	if state.cities[city_id].owner_nation == nation_id and state.cities[city_id].politically_active and not state.cities[city_id].is_dock:
+		return true
+	return _prewar_reachable_cities(state, nation_id, cache).has(city_id)
+
+
 ## No-land-border fallback. Accessible own/allied docks may lead to the first
 ## foreign dock owner, but the water route itself never becomes a border.
 static func _expedition_target_nation_ids(
 	state: GameState,
 	nation_id: int,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	context: ObjectiveContext = ObjectiveContext.CAMPAIGN
 ) -> Array[int]:
-	var cache_key := "expedition_targets:%d" % nation_id
+	_ensure_evaluation_cache_current(state, evaluation_cache)
+	var cache_key := "expedition_targets:%d:%d" % [nation_id, context]
 	if evaluation_cache.has(cache_key):
 		return (evaluation_cache[cache_key] as Array[int]).duplicate()
 	var targets := {}
 	var visited := {}
 	var queue: Array[int] = []
+	var sources: Array[int] = [nation_id]
+	if context == ObjectiveContext.PREWAR:
+		sources = _expansion_members(state, nation_id, evaluation_cache)
 	for city in state.cities:
-		if city.is_dock and city.owner_nation == nation_id:
+		if city.is_dock and sources.has(city.owner_nation) and state.has_military_access(nation_id, city.owner_nation) and (
+			context != ObjectiveContext.PREWAR or _prewar_source_reaches(state, nation_id, city.id, evaluation_cache)
+		):
 			visited[city.id] = true
 			queue.append(city.id)
 	var cursor := 0
@@ -3340,7 +3440,7 @@ static func can_initiate_war_at_range(
 	target_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> bool:
-	var direct_neighbors := _direct_bordering_nation_ids(
+	var direct_neighbors := _expansion_bordering_nation_ids(
 		state, nation_id, evaluation_cache
 	)
 	if direct_neighbors.has(target_id):
@@ -3350,7 +3450,7 @@ static func can_initiate_war_at_range(
 	if not direct_neighbors.is_empty():
 		return false
 	return _expedition_target_nation_ids(
-		state, nation_id, evaluation_cache
+		state, nation_id, evaluation_cache, ObjectiveContext.PREWAR
 	).has(target_id)
 
 
@@ -3892,6 +3992,7 @@ static func _cached_war_objective(
 	evaluation_cache: Dictionary,
 	legal_reclamation_only: bool = false
 ) -> Dictionary:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var profile_started := (
 		Time.get_ticks_usec() if evaluation_cache.has("__profile") else 0
 	)
@@ -3934,8 +4035,10 @@ static func select_war_objective(
 	excluded_city: int = -1,
 	legal_reclamation_only: bool = false,
 	excluded_centers: Dictionary = {},
-	camp_counterattack: bool = false
+	camp_counterattack: bool = false,
+	context: ObjectiveContext = ObjectiveContext.PREWAR
 ) -> Dictionary:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var target_cities := (
 		_cached_cities_of(
 			state,
@@ -3968,11 +4071,11 @@ static func select_war_objective(
 	var bordering_centers: Array[int] = []
 	for center_id in center_ids:
 		if _administrative_center_borders_owned_land(
-			state, nation_id, center_id, evaluation_cache
+			state, nation_id, center_id, evaluation_cache, context
 		):
 			bordering_centers.append(center_id)
-	# 陆地宣战只能选择本国实控领土直接接壤的州。全国无此类目标时，
-	# 保留后续码头可达性筛选作为登陆战争兜底。
+	# Proposals use their explicit territorial scope; water expeditions remain
+	# a fallback when that scope has no land entry into the target states.
 	var allow_expedition := bordering_centers.is_empty()
 	if not allow_expedition:
 		center_ids = bordering_centers
@@ -3990,7 +4093,7 @@ static func select_war_objective(
 	var candidates: Array[Dictionary] = []
 	var max_reachable_garrison := 1
 	for center_id in center_ids:
-		var tactical_city := administrative_tactical_target(
+		var tactical_city := _administrative_proposal_target(
 			state,
 			nation_id,
 			target_id,
@@ -3998,12 +4101,13 @@ static func select_war_objective(
 			excluded_city,
 			legal_reclamation_only,
 			evaluation_cache,
-			allow_expedition
+			allow_expedition,
+			context
 		)
 		if tactical_city < 0:
 			continue
-		var own_links := war_staging_cities_for_objective(
-			state, nation_id, tactical_city, evaluation_cache
+		var own_links := _objective_staging_cities(
+			state, nation_id, tactical_city, evaluation_cache, context
 		).size()
 		if own_links <= 0:
 			continue
@@ -4141,9 +4245,12 @@ static func _administrative_objective_aggregate_index(
 	state: GameState,
 	evaluation_cache: Dictionary
 ) -> Dictionary:
-	const CACHE_KEY := "administrative_objective_aggregates"
-	if evaluation_cache.has(CACHE_KEY):
-		return evaluation_cache[CACHE_KEY]
+	var cache_key := "administrative_objective_aggregates:%d:%d:%d:%d" % [
+		state.get_instance_id(), state.ownership_revision,
+		state.administrative_region_revision, state.trade_revision,
+	]
+	if evaluation_cache.has(cache_key):
+		return evaluation_cache[cache_key]
 	var result := {}
 	for center_value in state.administrative_center_city_ids:
 		var center_id := int(center_value)
@@ -4182,8 +4289,97 @@ static func _administrative_objective_aggregate_index(
 		owner_counts[city.owner_nation] = (
 			int(owner_counts.get(city.owner_nation, 0)) + 1
 		)
-	evaluation_cache[CACHE_KEY] = result
+	evaluation_cache[cache_key] = result
 	return result
+
+
+static func _objective_staging_cities(
+	state: GameState,
+	nation_id: int,
+	city_id: int,
+	cache: Dictionary,
+	context: ObjectiveContext,
+	allow_expedition: bool = true
+) -> Array[int]:
+	if context == ObjectiveContext.PREWAR:
+		return war_preparation_staging_cities(state, nation_id, city_id, cache, allow_expedition)
+	if not allow_expedition:
+		return staging_cities_for_objective(state, nation_id, city_id, cache)
+	return war_staging_cities_for_objective(state, nation_id, city_id, cache)
+
+
+static func _administrative_entry_candidates(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	center_city_id: int,
+	excluded_city: int,
+	legal_reclamation_only: bool,
+	evaluation_cache: Dictionary,
+	allow_expedition: bool,
+	context: ObjectiveContext
+) -> Array[int]:
+	var candidates: Array[int] = []
+	if not state.is_zhou_city(center_city_id):
+		return candidates
+	for city_id in _cached_administrative_members(
+		state, center_city_id, evaluation_cache
+	):
+		if city_id == excluded_city or state.cities[city_id].owner_nation != target_id:
+			continue
+		if legal_reclamation_only and state.recognized_owner_of(city_id) != nation_id:
+			continue
+		if not _objective_staging_cities(
+			state, nation_id, city_id, evaluation_cache, context, allow_expedition
+		).is_empty():
+			candidates.append(city_id)
+	return candidates
+
+
+static func _administrative_frontier_fu(
+	state: GameState,
+	candidates: Array[int],
+	center_city_id: int,
+	attacker_bloc: Array[int]
+) -> Array[int]:
+	var result: Array[int] = []
+	for candidate in candidates:
+		if candidate == center_city_id:
+			continue
+		for neighbor in state.territorial_border_neighbors(candidate):
+			if attacker_bloc.has(state.cities[neighbor].owner_nation):
+				result.append(candidate)
+				break
+	return result
+
+
+static func _administrative_proposal_target(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	center_city_id: int,
+	excluded_city: int,
+	legal_reclamation_only: bool,
+	evaluation_cache: Dictionary,
+	allow_expedition: bool,
+	context: ObjectiveContext
+) -> int:
+	var candidates := _administrative_entry_candidates(
+		state, nation_id, target_id, center_city_id, excluded_city,
+		legal_reclamation_only, evaluation_cache, allow_expedition, context
+	)
+	if candidates.is_empty():
+		return -1
+	var frontier := _administrative_frontier_fu(
+		state, candidates, center_city_id,
+		_expansion_members(state, nation_id, evaluation_cache) if context == ObjectiveContext.PREWAR else _cached_alliance_bloc(state, nation_id, evaluation_cache)
+	)
+	if not frontier.is_empty():
+		candidates = frontier
+	elif candidates.has(center_city_id):
+		return center_city_id
+	EquivariantOrder.sort_city_subset(candidates, state, nation_id, center_city_id)
+	return candidates[0]
 
 
 static func administrative_tactical_target(
@@ -4196,35 +4392,15 @@ static func administrative_tactical_target(
 	evaluation_cache: Dictionary = {},
 	allow_expedition: bool = false
 ) -> int:
-	if not state.is_zhou_city(center_city_id):
-		return -1
-	var attacker_bloc := _cached_alliance_bloc(
-		state, nation_id, evaluation_cache
-	).duplicate()
-	if attacker_bloc.is_empty():
-		attacker_bloc.append(nation_id)
-	var center_controlled := attacker_bloc.has(
-		state.cities[center_city_id].owner_nation
+	var candidates := _administrative_entry_candidates(
+		state, nation_id, target_id, center_city_id, excluded_city,
+		legal_reclamation_only, evaluation_cache, allow_expedition,
+		ObjectiveContext.CAMPAIGN
 	)
-	var candidates: Array[int] = []
-	for city_id in _cached_administrative_members(
-		state, center_city_id, evaluation_cache
-	):
-		if city_id == excluded_city or state.cities[city_id].owner_nation != target_id:
-			continue
-		if legal_reclamation_only and state.recognized_owner_of(city_id) != nation_id:
-			continue
-		if not staging_cities_for_objective(
-			state, nation_id, city_id, evaluation_cache
-		).is_empty() or (
-			allow_expedition
-			and _has_dock_expedition_route_to_objective(
-				state, nation_id, city_id, evaluation_cache
-			)
-		):
-			candidates.append(city_id)
 	if candidates.is_empty():
 		return -1
+	var attacker_bloc := _cached_alliance_bloc(state, nation_id, evaluation_cache)
+	var center_controlled := attacker_bloc.has(state.cities[center_city_id].owner_nation)
 	var required := state.campaign_required_manpower(nation_id,
 		_cached_campaign_siege_requirement(state, nation_id, center_city_id, evaluation_cache)
 		+ _cached_campaign_reinforcement_threat(
@@ -4246,14 +4422,7 @@ static func administrative_tactical_target(
 	):
 		return center_city_id
 	# 州治已控时清理敌府；兵力不足时只夺与己方战争集团接壤的府。
-	var frontier_fu: Array[int] = []
-	for candidate in candidates:
-		if candidate == center_city_id:
-			continue
-		for neighbor in state.territorial_border_neighbors(candidate):
-			if attacker_bloc.has(state.cities[neighbor].owner_nation):
-				frontier_fu.append(candidate)
-				break
+	var frontier_fu := _administrative_frontier_fu(state, candidates, center_city_id, attacker_bloc)
 	if not frontier_fu.is_empty():
 		candidates = frontier_fu
 	else:
@@ -4270,18 +4439,22 @@ static func _administrative_center_borders_owned_land(
 	state: GameState,
 	nation_id: int,
 	center_city_id: int,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	context: ObjectiveContext = ObjectiveContext.CAMPAIGN
 ) -> bool:
-	var cache_key := "administrative_border:%d:%d" % [
-		nation_id, center_city_id,
+	var cache_key := "administrative_border:%d:%d:%d" % [
+		nation_id, center_city_id, context,
 	]
 	if evaluation_cache.has(cache_key):
 		return bool(evaluation_cache[cache_key])
+	var owners: Array[int] = [nation_id]
+	if context == ObjectiveContext.PREWAR:
+		owners = _expansion_members(state, nation_id, evaluation_cache)
 	for member_id in _cached_administrative_members(
 		state, center_city_id, evaluation_cache
 	):
 		for neighbor in state.territorial_border_neighbors(member_id):
-			if state.cities[neighbor].owner_nation == nation_id:
+			if owners.has(state.cities[neighbor].owner_nation):
 				evaluation_cache[cache_key] = true
 				return true
 	evaluation_cache[cache_key] = false
@@ -4361,7 +4534,7 @@ static func replacement_war_preparation_objective(
 	objective["defender_troops"] = int(
 		defender_index.get(tactical_city, 0)
 	)
-	objective["staging_links"] = war_staging_cities_for_objective(
+	objective["staging_links"] = war_preparation_staging_cities(
 		state, nation_id, tactical_city, evaluation_cache
 	).size()
 	return objective
@@ -4420,6 +4593,7 @@ static func leave_alliance_desire(
 	ally_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> float:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var cache_key := "leave_alliance:%d:%d" % [
 		nation_id,
 		ally_id,
@@ -4485,6 +4659,7 @@ static func leave_alliance_desire(
 		+ float(conflicting_commitments) * 1.5
 		+ float(unilateral_wars) * 0.20
 		+ unification_pressure
+		+ _cached_integration_war_bonus(state, nation_id, ally_id, evaluation_cache)
 		- attitude * ATTITUDE_LEAVE_WEIGHT
 		- float(common_enemies) * 0.75
 		- established_trust
@@ -4910,12 +5085,12 @@ static func _collect_war_actions(
 		)
 		var best_target := -1
 		var best_score := -INF
-		var bordering_nations := _direct_bordering_nation_ids(
+		var bordering_nations := _expansion_bordering_nation_ids(
 			state, nation.id, evaluation_cache
 		)
 		if bordering_nations.is_empty():
 			bordering_nations = _expedition_target_nation_ids(
-				state, nation.id, evaluation_cache
+				state, nation.id, evaluation_cache, ObjectiveContext.PREWAR
 			)
 		for target_id in bordering_nations:
 			var target := state.nations[target_id]
@@ -5098,7 +5273,7 @@ static func _collect_existing_war_preparation(
 	var region_valid := RegionalStrategy.allows_objective(state, nation_id, objective_center)
 	var has_route := (
 		objective_valid
-		and not war_staging_cities_for_objective(
+		and not war_preparation_staging_cities(
 			state,
 			nation_id,
 			objective_city,
@@ -5106,7 +5281,7 @@ static func _collect_existing_war_preparation(
 		).is_empty()
 	)
 	if objective_valid and has_route:
-		var current_staging := war_staging_cities_for_objective(
+		var current_staging := war_preparation_staging_cities(
 			state,
 			nation_id,
 			objective_city,
@@ -5246,7 +5421,7 @@ static func _collect_existing_war_preparation(
 		0
 	)
 	actions.append({
-		"kind": Action.DECLARE_WAR,
+		"kind": Action.ISSUE_ULTIMATUM,
 		"a": nation_id,
 		"b": target_id,
 		"objective_city": objective_city,
@@ -5254,7 +5429,7 @@ static func _collect_existing_war_preparation(
 		"objective_reason": nation.war_preparation_reason,
 		"mobilization_armies": mobilization_armies,
 		"reason": (
-			"完成%d天战争准备，目标城市%d方向已集结%d人，立即宣战并发动攻势"
+			"完成%d天战争准备，目标城市%d方向已集结%d人，发出通牒，拒绝后宣战"
 			% [
 				elapsed,
 				objective_city,
@@ -5394,6 +5569,27 @@ static func _collect_preparation_alliance(
 	return true
 
 
+static func war_preparation_launch_allowed(state: GameState, nation_id: int, cache: Dictionary = {}) -> bool:
+	var nation := state.nations[nation_id]
+	var target := nation.war_preparation_target_nation
+	var objective := nation.war_preparation_objective_city
+	if target < 0 or target >= state.nations.size() or objective < 0 or objective >= state.cities.size() or nation.war_preparation_started_day < 0:
+		return false
+	if not state.nations[target].alive or state.cities[objective].owner_nation != target or not _ruler_allows_war_objective(state, nation_id, objective):
+		return false
+	if nation.war_preparation_objective_center_city != state.administrative_center_of(objective):
+		return false
+	if not can_initiate_war_at_range(state, nation_id, target, cache) or not war_preparation_staging_cities(state, nation_id, objective, cache).has(nation.war_preparation_staging_city_id):
+		return false
+	if war_preparation_ready(state, nation_id, cache) and war_preparation_resources_ready(state, nation_id, cache):
+		return true
+	var unready := nation.war_preparation_unready_since_day
+	return state.day - nation.war_preparation_started_day >= WAR_PREPARATION_MAX_DAYS \
+		and (unready < 0 or state.day - unready < WAR_PREPARATION_RESOURCE_GRACE_DAYS) \
+		and war_preparation_arrived_troops(state, nation_id, cache) > 0 \
+		and war_preparation_arrived_troops(state, nation_id, cache) >= ceili(float(required_assault_troops(state, nation_id, objective, cache)) * WAR_PREPARATION_BEST_EFFORT_RATIO)
+
+
 static func war_preparation_ready(
 	state: GameState,
 	nation_id: int,
@@ -5412,7 +5608,7 @@ static func war_preparation_ready(
 		)
 	if not state.is_zhou_city(objective_center):
 		return false
-	var staging := war_staging_cities_for_objective(
+	var staging := war_preparation_staging_cities(
 		state,
 		nation_id,
 		nation.war_preparation_objective_city,
@@ -5456,6 +5652,7 @@ static func war_preparation_arrived_troops(
 		if (
 			army.owner_nation == nation_id
 			and army_ids.has(army.id)
+			and army.campaign_war_id < 0 and army.campaign_front_id < 0
 			and state.army_effective_for_field_campaign(army)
 			and army.state == Army.State.IDLE
 			and army.is_at_city_node(staging_city_id)
@@ -5521,30 +5718,21 @@ static func staging_cities_for_objective(
 	return result
 
 
-static func _has_dock_expedition_route_to_objective(
-	state: GameState,
-	nation_id: int,
-	objective_city: int,
-	evaluation_cache: Dictionary = {}
-) -> bool:
-	return not _dock_expedition_staging_cities(
-		state, nation_id, objective_city, evaluation_cache
-	).is_empty()
-
-
 static func _dock_expedition_staging_cities(
 	state: GameState,
 	nation_id: int,
 	objective_city: int,
-	evaluation_cache: Dictionary = {}
+	evaluation_cache: Dictionary = {},
+	context: ObjectiveContext = ObjectiveContext.CAMPAIGN
 ) -> Array[int]:
 	var result: Array[int] = []
-	var cache_key := "expedition_staging:%d:%d:%d:%d:%d" % [
+	var cache_key := "expedition_staging:%d:%d:%d:%d:%d:%d" % [
 		nation_id,
 		objective_city,
 		state.ownership_revision,
 		state.diplomacy_revision,
 		state.road_network_revision,
+		context,
 	]
 	if evaluation_cache.has(cache_key):
 		return (evaluation_cache[cache_key] as Array[int]).duplicate()
@@ -5598,9 +5786,12 @@ static func _dock_expedition_staging_cities(
 				continue
 			visited[neighbor] = true
 			queue.append(neighbor)
+	var sources: Array[int] = [nation_id]
+	if context == ObjectiveContext.PREWAR:
+		sources = _expansion_members(state, nation_id, evaluation_cache)
 	for dock_value in visited:
 		var dock_id := int(dock_value)
-		if state.cities[dock_id].owner_nation == nation_id:
+		if sources.has(state.cities[dock_id].owner_nation) and state.has_military_access(nation_id, state.cities[dock_id].owner_nation):
 			result.append(dock_id)
 	EquivariantOrder.sort_city_ids(result, state, nation_id, objective_city)
 	evaluation_cache[cache_key] = result
@@ -5621,6 +5812,33 @@ static func war_staging_cities_for_objective(
 	return _dock_expedition_staging_cities(
 		state, nation_id, objective_city, evaluation_cache
 	)
+
+
+static func war_preparation_staging_cities(
+	state: GameState,
+	nation_id: int,
+	objective_city: int,
+	evaluation_cache: Dictionary = {},
+	allow_expedition: bool = true
+) -> Array[int]:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
+	var result: Array[int] = []
+	if objective_city < 0 or objective_city >= state.cities.size():
+		return result
+	var key := "prewar_staging:%d:%d:%d:%d" % [nation_id, objective_city, int(allow_expedition), state.day]
+	if evaluation_cache.has(key):
+		return evaluation_cache[key] as Array[int]
+	var members := _expansion_members(state, nation_id, evaluation_cache)
+	var candidates := staging_cities_for_objective(state, nation_id, objective_city, evaluation_cache)
+	for city_id in candidates:
+		if members.has(state.cities[city_id].owner_nation) and _prewar_source_reaches(state, nation_id, city_id, evaluation_cache):
+			result.append(city_id)
+	if result.is_empty() and allow_expedition:
+		for city_id in _dock_expedition_staging_cities(state, nation_id, objective_city, evaluation_cache, ObjectiveContext.PREWAR):
+			if _prewar_source_reaches(state, nation_id, city_id, evaluation_cache):
+				result.append(city_id)
+	evaluation_cache[key] = result
+	return result
 
 
 static func required_assault_troops(
@@ -6331,6 +6549,7 @@ static func _build_frontier_matrix(
 		neighbors_by_observer
 	)
 	evaluation_cache["territorial_neighbors_by_owner"] = neighbors_by_owner
+	evaluation_cache["territorial_neighbor_sets"] = territory_neighbor_sets
 
 
 static func _bump_frontier(

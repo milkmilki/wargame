@@ -79,31 +79,18 @@ func _run() -> void:
 		RoadTuningPanel.MAP_MODE_TRADE: MapRenderer.MAP_MODE_TRADE,
 		RoadTuningPanel.MAP_MODE_REGION: MapRenderer.MAP_MODE_REGION,
 	}
-	if (
-		panel._map_mode_buttons.size() != expected_modes.size()
-		or panel.map_mode() != RoadTuningPanel.MAP_MODE_POLITICAL
-		or panel.renderer_map_mode() != MapRenderer.MAP_MODE_POLITICAL
-		or not (panel._map_mode_buttons[
-			RoadTuningPanel.MAP_MODE_POLITICAL
-		] as Button).button_pressed
-	):
+	var option := panel._map_mode_option
+	if option.item_count != expected_modes.size() or panel.map_mode() != RoadTuningPanel.MAP_MODE_POLITICAL or option.selected != 2:
 		push_error("ROAD_TUNING_UI_MODE_CONTRACT_FAILED")
 		quit(1)
 		return
-	if str((panel._map_mode_buttons[
-		RoadTuningPanel.MAP_MODE_REGION
-	] as Button).text) != "州域":
+	if option.get_item_text(5) != "州域":
 		push_error("ROAD_TUNING_UI_REGION_LABEL_FAILED")
 		quit(1)
 		return
-	for mode_id in expected_modes:
-		var mode_button := panel._map_mode_buttons[mode_id] as Button
-		if (
-			mode_button == null
-			or str(mode_button.get_meta(&"map_mode", "")) != mode_id
-			or int(mode_button.get_meta(&"renderer_map_mode", -1))
-				!= int(expected_modes[mode_id])
-		):
+	for index in range(option.item_count):
+		var mode_id := str(option.get_item_metadata(index))
+		if not expected_modes.has(mode_id) or RoadTuningPanel._renderer_map_mode(mode_id) != int(expected_modes[mode_id]):
 			push_error("ROAD_TUNING_UI_MODE_METADATA_FAILED")
 			quit(1)
 			return
@@ -151,14 +138,8 @@ func _run() -> void:
 		var mode_id := str(mode_case[0])
 		var expected_strength := float(mode_case[1])
 		var expected_renderer_mode := int(mode_case[2])
-		(panel._map_mode_buttons[mode_id] as Button).pressed.emit()
-		var unique_highlight := true
-		for other_mode_id in expected_modes:
-			unique_highlight = (
-				unique_highlight
-				and (panel._map_mode_buttons[other_mode_id] as Button).button_pressed
-					== (str(other_mode_id) == mode_id)
-			)
+		option.item_selected.emit(RoadTuningPanel.MAP_MODES.find(mode_id))
+		var unique_highlight := option.selected == RoadTuningPanel.MAP_MODES.find(mode_id)
 		if (
 			panel.map_mode() != mode_id
 			or panel.renderer_map_mode() != expected_renderer_mode

@@ -57,6 +57,43 @@ func _run() -> void:
 	if timeline == null or timeline.selected_index() < 0:
 		_fail("history timeline must be present in the main scene")
 
+	var subject_id := -1
+	for center_id in main.state.administrative_center_city_ids:
+		var owner := int(main.state.cities[center_id].owner_nation)
+		if owner >= 0 and center_id != main.state.nations[owner].capital_city_id:
+			var city_ids: Array[int] = [int(center_id)]
+			subject_id = main.state.enfeoff(owner, city_ids)
+			if subject_id >= 0:
+				break
+	if subject_id < 0:
+		_fail("history fixture must create a real vassal after the first snapshot")
+		return
+	main.state.day = Simulation.DAYS_PER_MONTH
+	main.state.month = 1
+	main._on_history_day_committed(main.state.day)
+	for index in [0, 1, 0]:
+		timeline._selected_index = index
+		timeline._emit_preview_position()
+		timeline._emit_final_position()
+		var display := renderer.state
+		if display == main.state or not renderer.history_mode():
+			_fail("timeline signals must select the detached history view")
+			return
+		if index == 0 and (display.nations[subject_id].alive or display.nations[subject_id].strategic_region_anchor_city_id != -1 or not display.suzerainty.is_empty()):
+			_fail("older history must exclude the future vassal and its objective")
+			return
+		if index == 1 and (not display.nations[subject_id].alive or not display.is_vassal(subject_id)):
+			_fail("later history must restore the actual vassal")
+			return
+		if not main.state.nations[subject_id].alive or not main.state.is_vassal(subject_id):
+			_fail("scrubbing must not modify live vassal status")
+			return
+	timeline._selected_index = main._political_history.snapshot_count()
+	timeline._emit_final_position()
+	if sim.paused or renderer.state != main.state:
+		_fail("leaving history after nation creation must restore live state and pause")
+		return
+
 	main._on_history_position_requested(0, true)
 	main._start_new_game(54321)
 	if renderer.history_mode() or renderer.state != main.state:

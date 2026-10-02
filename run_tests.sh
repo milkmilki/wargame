@@ -38,6 +38,25 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-tests.log"
 echo
 
+echo "==> [2-history/29] 历史快照、建国后拖动与 3D 预览门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/ui_disclosure.gd \
+  --log-file "$LOG_DIR/world-war-ui-disclosure.log"
+if grep -qiE "SCRIPT ERROR|Parse Error" "$LOG_DIR/world-war-ui-disclosure.log"; then
+  echo "信息栏折叠测试存在脚本错误" >&2
+  exit 1
+fi
+for TEST in political_history_test political_history_scene_test political_history_3d_test; do
+  HISTORY_LOG="$LOG_DIR/world-war-$TEST.log"
+  HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+    --script "res://tests/$TEST.gd" --log-file "$HISTORY_LOG"
+  if grep -qiE "SCRIPT ERROR|Parse Error" "$HISTORY_LOG"; then
+    echo "历史进度条测试失败：$TEST 存在脚本错误" >&2
+    exit 1
+  fi
+done
+echo
+
 echo "==> [2a/29] 行政州域划分门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/administrative_region_analysis.gd \
@@ -75,6 +94,15 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/regional_integration_desire.gd \
   --log-file "$LOG_DIR/world-war-regional-integration-desire.log"
+for TEST in regional_expansion_gates regional_expansion_e2e regional_expansion_determinism; do
+  EXPANSION_LOG="$LOG_DIR/world-war-$TEST.log"
+  HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+    --script "res://tests/$TEST.gd" --log-file "$EXPANSION_LOG"
+  if grep -qiE "SCRIPT ERROR|Parse Error" "$EXPANSION_LOG"; then
+    echo "区域扩张测试失败：$TEST 存在脚本错误" >&2
+    exit 1
+  fi
+done
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/latitude_output.gd \
   --log-file "$LOG_DIR/world-war-latitude-output.log"
@@ -83,6 +111,11 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-administrative-ai.log"
 echo
 echo "==> [2e1/29] 外交目标批次缓存门禁"
+for TEST in ultimatum_rules peaceful_integration foreign_vassal_family ultimatum_e2e; do
+  HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+    --script "res://tests/$TEST.gd" \
+    --log-file "$LOG_DIR/world-war-$TEST.log"
+done
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/diplomacy_objective_batch_cache.gd \
   --log-file "$LOG_DIR/world-war-diplomacy-objective-cache.log"
@@ -151,6 +184,20 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
 echo
 echo "==> [2i3b/29] 野战战报锁定与战后补兵门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/field_shared_morale.gd \
+  --log-file "$LOG_DIR/world-war-field-shared-morale.log"
+if grep -qiE "SCRIPT ERROR|Parse Error" "$LOG_DIR/world-war-field-shared-morale.log"; then
+  echo "野战共享士气测试失败：发现脚本错误" >&2
+  exit 1
+fi
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/field_victory_rewards.gd \
+  --log-file "$LOG_DIR/world-war-field-victory-rewards.log"
+if grep -qiE "SCRIPT ERROR|Parse Error" "$LOG_DIR/world-war-field-victory-rewards.log"; then
+  echo "野战胜利奖励测试失败：发现脚本错误" >&2
+  exit 1
+fi
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/campaign_battle_report_lock.gd \
   --log-file "$LOG_DIR/world-war-campaign-battle-report.log"
 echo
@@ -196,6 +243,15 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/prewar_assembly.gd \
   --log-file "$LOG_DIR/world-war-prewar-assembly.log"
 echo
+echo "==> [2i5a/29] 无入口府直攻州治的大营、重整及拔营接续门禁"
+DIRECT_CAMP_LOG="$LOG_DIR/world-war-direct-center-camp.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/direct_center_camp.gd --log-file "$DIRECT_CAMP_LOG"
+if grep -qiE "SCRIPT ERROR|Parse Error" "$DIRECT_CAMP_LOG"; then
+  echo "直攻州治大营测试存在脚本错误" >&2
+  exit 1
+fi
+echo
 # 战斗、移动或州战役逻辑变更的必跑端到端门禁；单次同时覆盖陆路与共享码头跨河。
 echo "==> [2i6/29] 陆路与跨河备战、宣战及连续两州攻防链条门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
@@ -212,6 +268,12 @@ echo "==> [2j1/29] 州治野战、封锁与守军攻城分层门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/siege_layering.gd \
   --log-file "$LOG_DIR/world-war-siege-layering.log"
+echo
+
+echo "==> [2j2/29] 集团围城盟军入场、持续围城与部分议和门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/coalition_siege_participation.gd \
+  --log-file "$LOG_DIR/world-war-coalition-siege-participation.log"
 echo
 
 echo "==> [2k/29] 州级藩王、野战姿态与慢速补员门禁"
@@ -362,6 +424,13 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
 echo
 
 echo "==> [26/29] 默认前端场景 smoke"
+HOME="$GODOT_HOME" "$GODOT" --path "$PROJECT_DIR" \
+  --script res://tests/ui_disclosure_scene.gd \
+  --log-file "$LOG_DIR/world-war-ui-disclosure-scene.log"
+if grep -qiE "SCRIPT ERROR|Parse Error" "$LOG_DIR/world-war-ui-disclosure-scene.log"; then
+  echo "原生界面交互测试存在脚本错误" >&2
+  exit 1
+fi
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/frontend_scene_smoke.gd \
   --log-file "$LOG_DIR/world-war-frontend-scene.log"

@@ -15,6 +15,9 @@ var _nation_id: int = -1
 var _overlay: Control
 var _title: Label
 var _tree_canvas: Control
+var _relations: VBoxContainer
+var _back: Button
+var _navigation: Array[int] = []
 
 
 func _ready() -> void:
@@ -32,6 +35,8 @@ func bind(state: GameState) -> void:
 func open_for_nation(nation_id: int) -> bool:
 	if _state == null or nation_id < 0 or nation_id >= _state.nations.size():
 		return false
+	if not is_open():
+		_navigation.clear()
 	FamilyTree.ensure_nation_lineage(_state, nation_id)
 	_nation_id = nation_id
 	_title.text = "%s家族树" % WorldNaming.nation_display_name(
@@ -40,6 +45,7 @@ func open_for_nation(nation_id: int) -> bool:
 	_tree_canvas.set("tree", FamilyTree.tree_for_nation(_state, nation_id))
 	_tree_canvas.set("current_person_id", _state.nations[nation_id].ruler_person_id)
 	_tree_canvas.call("rebuild_layout")
+	_rebuild_relations()
 	var was_open := _overlay.visible
 	_overlay.visible = true
 	if not was_open:
@@ -48,8 +54,59 @@ func open_for_nation(nation_id: int) -> bool:
 	return true
 
 
+func navigate_to(nation_id: int) -> void:
+	if _state == null or not is_open() or nation_id == _nation_id or nation_id < 0 or nation_id >= _state.nations.size():
+		return
+	_navigation.append(_nation_id)
+	open_for_nation(nation_id)
+
+
+func navigate_back() -> void:
+	if not _navigation.is_empty():
+		open_for_nation(_navigation.pop_back())
+
+
+func _rebuild_relations() -> void:
+	_back.disabled = _navigation.is_empty()
+	for child in _relations.get_children():
+		_relations.remove_child(child)
+		child.queue_free()
+	var overlord := _state.overlord_of(_nation_id)
+	if overlord >= 0:
+		_add_relation("宗主", overlord)
+	for subject_id in _state.subjects_of(_nation_id):
+		var same_tree := _state.nations[subject_id].family_tree_id == _state.nations[_nation_id].family_tree_id
+		_add_relation("同宗藩属" if same_tree else "异姓藩属", subject_id)
+	var archived := {}
+	for event in _state.diplomatic_history:
+		if int(event.get("nation_a", -1)) != _nation_id or not event.has("ultimatum"):
+			continue
+		var report: Dictionary = event.ultimatum
+		if int(report.outcome) == UltimatumRules.Outcome.ANNEX:
+			for member_id in report.target_members:
+				archived[member_id] = true
+	var archived_ids := archived.keys()
+	archived_ids.sort()
+	for member_id in archived_ids:
+		_add_relation("已纳土政权", member_id)
+
+
+func _add_relation(role: String, nation_id: int) -> void:
+	var button := Button.new()
+	button.text = "%s · %s" % [role, WorldNaming.nation_display_name(_state, nation_id)]
+	button.tooltip_text = button.text
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.custom_minimum_size.y = 40.0
+	button.add_theme_font_override("font", MapRenderer.create_ui_font())
+	button.pressed.connect(navigate_to.bind(nation_id))
+	_relations.add_child(button)
+
+
 func close_panel() -> void:
 	_nation_id = -1
+	_navigation.clear()
 	if _overlay != null:
 		var was_open := _overlay.visible
 		_overlay.visible = false
@@ -125,6 +182,13 @@ func _build_ui() -> void:
 	title_style.content_margin_left = 18.0
 	_title.add_theme_stylebox_override("normal", title_style)
 	header.add_child(_title)
+	_back = Button.new()
+	_back.name = "Back"
+	_back.text = "←"
+	_back.tooltip_text = "返回上一家族"
+	_back.custom_minimum_size = Vector2(48.0, 48.0)
+	_back.pressed.connect(navigate_back)
+	header.add_child(_back)
 
 	var close := Button.new()
 	close.name = "Close"
@@ -136,12 +200,25 @@ func _build_ui() -> void:
 	close.pressed.connect(close_panel)
 	header.add_child(close)
 
+	var body := HBoxContainer.new()
+	body.name = "Body"
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.add_child(body)
+	var relation_scroll := ScrollContainer.new()
+	relation_scroll.name = "Relations"
+	relation_scroll.custom_minimum_size.x = 220.0
+	relation_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body.add_child(relation_scroll)
+	_relations = VBoxContainer.new()
+	_relations.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	relation_scroll.add_child(_relations)
 	var scroll := ScrollContainer.new()
 	scroll.name = "TreeScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	content.add_child(scroll)
+	body.add_child(scroll)
 
 	_tree_canvas = FamilyTreeCanvas.new()
 	_tree_canvas.name = "TreeCanvas"
@@ -211,7 +288,7 @@ class FamilyTreeCanvas extends Control:
 		if roots.size() > 1:
 			natural_width += (roots.size() - 1) * CARD_GAP_X * 2.0
 		var content_width := maxf(
-			maxf(520.0, size.x),
+			maxf(520.0, get_parent().size.x - 16.0 if get_parent() is ScrollContainer else size.x),
 			CANVAS_PADDING.x * 2.0 + natural_width
 		)
 		var cursor_x := (content_width - natural_width) * 0.5

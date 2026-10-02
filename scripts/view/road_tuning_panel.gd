@@ -30,7 +30,13 @@ var _overlay: Control
 var _status: Label
 var _sliders: Dictionary = {}
 var _value_labels: Dictionary = {}
-var _map_mode_buttons: Dictionary = {}
+const MAP_MODES: Array[String] = [
+	MAP_MODE_TERRAIN, MAP_MODE_MIXED, MAP_MODE_POLITICAL,
+	MAP_MODE_LOYALTY, MAP_MODE_TRADE, MAP_MODE_REGION,
+]
+const MAP_MODE_LABELS: Array[String] = ["地形", "混合", "政治", "忠诚", "贸易", "州域"]
+var _map_mode_option: OptionButton
+var _history_display := false
 var _map_mode: String = MAP_MODE_POLITICAL
 
 
@@ -196,51 +202,37 @@ func _build_ui() -> void:
 
 
 func _build_map_mode_control(font: Font) -> void:
-	var modes := HBoxContainer.new()
-	modes.name = "MapModes"
-	modes.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	modes.position = Vector2(-480.0, -38.0)
-	modes.size = Vector2(468.0, 30.0)
-	modes.add_theme_constant_override("separation", 4)
-	add_child(modes)
-	var group := ButtonGroup.new()
-	for mode in [
-		[MAP_MODE_TERRAIN, "地形"],
-		[MAP_MODE_MIXED, "混合"],
-		[MAP_MODE_POLITICAL, "政治"],
-		[MAP_MODE_LOYALTY, "忠诚"],
-		[MAP_MODE_TRADE, "贸易"],
-		[MAP_MODE_REGION, "州域"],
-	]:
-		var button := Button.new()
-		var mode_id := str(mode[0])
-		button.text = str(mode[1])
-		button.tooltip_text = "切换%s地图模式" % mode[1]
-		button.toggle_mode = true
-		button.button_group = group
-		button.custom_minimum_size = Vector2(74.0, 30.0)
-		button.set_meta(&"map_mode", mode_id)
-		button.set_meta(&"renderer_map_mode", _renderer_map_mode(mode_id))
-		button.pressed.connect(_on_map_mode_pressed.bind(mode_id))
-		_apply_command_button_style(button, true)
-		modes.add_child(button)
-		_map_mode_buttons[mode_id] = button
-	_apply_font(modes, font)
-	_sync_map_mode_buttons()
+	_map_mode_option = OptionButton.new()
+	_map_mode_option.name = "MapModes"
+	_map_mode_option.tooltip_text = "地图视图"
+	_map_mode_option.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_map_mode_option.position = Vector2(-140.0, -38.0)
+	_map_mode_option.size = Vector2(128.0, 30.0)
+	for index in range(MAP_MODES.size()):
+		_map_mode_option.add_item(MAP_MODE_LABELS[index], index)
+		_map_mode_option.set_item_metadata(index, MAP_MODES[index])
+	_map_mode_option.item_selected.connect(func(index: int) -> void: set_map_mode(MAP_MODES[index]))
+	_apply_font(_map_mode_option, font)
+	_map_mode_option.get_popup().add_theme_font_override("font", font)
+	_apply_command_button_style(_map_mode_option, true)
+	add_child(_map_mode_option)
+	_sync_map_mode_option()
 
 
-func _on_map_mode_pressed(mode: String) -> void:
-	set_map_mode(mode)
+func set_history_mode(value: bool) -> void:
+	_history_display = value
+	_map_mode_option.disabled = value
+	_sync_map_mode_option()
 
 
 func set_map_mode(mode: String) -> void:
-	if not _map_mode_buttons.has(mode):
+	if not MAP_MODES.has(mode) or _history_display:
 		return
 	_map_mode = mode
 	(_sliders[PROVINCE_STRENGTH_KEY] as HSlider).value = (
 		_map_mode_strength(mode)
 	)
-	_sync_map_mode_buttons()
+	_sync_map_mode_option()
 	map_mode_changed.emit(_renderer_map_mode(mode))
 
 
@@ -308,7 +300,7 @@ func _add_slider(
 				MAP_MODE_TERRAIN, MAP_MODE_MIXED, MAP_MODE_POLITICAL,
 			]:
 				_map_mode = _base_map_mode_for_strength(value)
-				_sync_map_mode_buttons()
+				_sync_map_mode_option()
 			province_strength_changed.emit(value)
 		elif key == ELEVATION_SHADOW_STRENGTH_KEY:
 			elevation_shadow_strength_changed.emit(value)
@@ -331,13 +323,10 @@ func _update_value_label(
 		label.text = ("%." + str(decimals) + "f") % value
 
 
-func _sync_map_mode_buttons() -> void:
-	if _map_mode_buttons.is_empty():
+func _sync_map_mode_option() -> void:
+	if _map_mode_option == null:
 		return
-	for key in _map_mode_buttons:
-		(_map_mode_buttons[key] as Button).set_pressed_no_signal(
-			str(key) == _map_mode
-		)
+	_map_mode_option.select(MAP_MODES.find(MAP_MODE_POLITICAL if _history_display else _map_mode))
 
 
 static func _base_map_mode_for_strength(strength: float) -> String:

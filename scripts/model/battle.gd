@@ -12,9 +12,9 @@ var id: int = -1
 var kind: int = Kind.FIELD
 
 # 参战双方（军队引用数组）。SIEGE 时：
-# - side_a 为单一 nation 的围城方；
+# - side_a 为同一战争阵营的围城共同体；
 # - side_b 在 side_b_defends_city=true 时为城市防卫共同体（城主及其盟军，可多 nation）；
-# - side_b 在 side_b_defends_city=false 时为单一 nation 的敌对挑战者。
+# - side_b 在 side_b_defends_city=false 时为同一战争阵营的敌对挑战者共同体。
 var side_a: Array[Army] = []
 var side_b: Array[Army] = []
 
@@ -34,17 +34,9 @@ var holding_days: float = 0.0
 # 回合计数。士气不在此存储——真源是各 Army.morale，本层士气按兵力加权派生（见 side_morale）。
 var round_no: int = 0
 
-## 本 tick 新加入各侧的援军引用（每回合结算增援士气后清空）。
-## 语义：把「本 tick 新增的全部有效兵力」作为一个整体统一结算一次士气提振，
-## 而非「每支军队 join 一次」。这样把一支援军拆成多支依次加入不会重复获得士气奖励（item 12 拆分套利）。
+## Pending arrivals for logs; morale merges with the whole side next round.
 var reinforce_fresh_a: Array[Army] = []
 var reinforce_fresh_b: Array[Army] = []
-
-## 两侧在本场战斗中已经获得的累计援军士气提振。上限由
-## Combat.REINFORCE_MORALE_MAX 约束，跨回合分批抵达不能重复刷新额度。
-## 必须按侧分别累计；共享单一标量会让先结算的一侧消耗另一侧额度，制造 A/B 偏置。
-var reinforcement_morale_gained_a: float = 0.0
-var reinforcement_morale_gained_b: float = 0.0
 
 ## 本回合因单军士气阈值退出战斗的军队。Combat 负责从 side 中移出，
 ## Simulation 随后根据真实战场位置启动撤退；下一回合开始前必须已消费并清空。
@@ -91,6 +83,28 @@ func side_size(side: Array[Army]) -> int:
 		if a.size > 0:
 			t += a.size
 	return t
+
+
+## Shared field morale is derived, never a second persistent source of truth.
+func shared_morale_summary(side: Array[Army]) -> Dictionary:
+	var size := 0
+	var capacity := 0.0
+	var mass := 0.0
+	for army in side:
+		if army.size <= 0 or army.is_city_garrison:
+			continue
+		size += army.size
+		capacity += float(army.size) * army.combat_max_morale()
+		mass += float(army.size) * army.combat_morale()
+	var ratio := clampf(mass / capacity, 0.0, 1.0) if capacity > 0.0 else 0.0
+	return {"size": size, "capacity": capacity, "ratio": ratio,
+		"effective": ratio * capacity / float(size) if size > 0 else 0.0}
+
+
+func write_shared_morale(side: Array[Army], ratio: float) -> void:
+	for army in side:
+		if army.size > 0 and not army.is_city_garrison:
+			army.morale = clampf(ratio, 0.0, 1.0) * army.max_morale
 
 
 func prune_dead() -> void:

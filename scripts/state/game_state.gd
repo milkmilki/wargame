@@ -329,6 +329,7 @@ func generate_world(
 	_initialize_city_garrisons_free()
 	_initialize_capitals_and_warehouses()
 	WorldNaming.assign_initial_names(self, world_seed)
+	FamilyTree.ensure_all(self)
 	_initialize_city_loyalty()
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
@@ -368,6 +369,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_initialize_city_garrisons_free()
 	_initialize_capitals_and_warehouses()
 	WorldNaming.assign_initial_names(self, world_seed)
+	FamilyTree.ensure_all(self)
 	_initialize_city_loyalty()
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
@@ -533,6 +535,7 @@ func generate_from_map_definition(
 	_initialize_city_garrisons_free()
 	_initialize_capitals_and_warehouses()
 	WorldNaming.assign_from_definition(self, definition, world_seed)
+	FamilyTree.ensure_all(self)
 	_initialize_city_loyalty(false)
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
@@ -748,6 +751,10 @@ func _reset_world(world_seed: int) -> void:
 	cities.clear()
 	edges.clear()
 	nations.clear()
+	family_trees.clear()
+	next_family_tree_id = 0
+	next_family_person_id = 0
+	family_revision = 0
 	armies.clear()
 	battles.clear()
 	campaign_fronts.clear()
@@ -3000,8 +3007,32 @@ func campaign_defensive_committed_manpower(
 ## anchors the center but does not count as a mobile field army.
 func campaign_defense_activity_index() -> Dictionary:
 	var forces := {}
+	var camps := {}
+	var rear_fronts := {}
+	for front_value in campaign_fronts.values():
+		var front := front_value as CoalitionCampaignFront
+		if campaign_has_rear_camp(front):
+			rear_fronts[front.front_id] = front
 	for army in armies:
-		if not army_effective_for_field_campaign(army):
+		if army.size <= 0:
+			continue
+		var effective := army_effective_for_field_campaign(army)
+		var front := rear_fronts.get(army.campaign_front_id) as CoalitionCampaignFront
+		if front != null and front.army_assignments.has(army.id):
+			var at_camp := army.is_at_city_node(front.camp_city_id)
+			var returning := (
+				int(front.army_assignments[army.id]) == front.camp_city_id
+				and _campaign_has_live_route(army, front.camp_city_id)
+			)
+			if at_camp or returning:
+				if not camps.has(front.center_city_id):
+					camps[front.center_city_id] = []
+				(camps[front.center_city_id] as Array).append({
+					"army_id": army.id, "owner": army.owner_nation,
+					"war_id": front.war_id, "city_id": front.camp_city_id,
+					"size": army.size if effective else 0,
+				})
+		if not effective:
 			continue
 		var centers := {}
 		if army.location_city >= 0:
@@ -3021,7 +3052,7 @@ func campaign_defense_activity_index() -> Dictionary:
 			if not forces.has(center_id):
 				forces[center_id] = []
 			(forces[center_id] as Array).append({
-				"owner": army.owner_nation, "size": army.size,
+				"army_id": army.id, "owner": army.owner_nation, "size": army.size,
 				"present": bool(centers[center_id]),
 			})
 	var sieges := {}
@@ -3040,7 +3071,7 @@ func campaign_defense_activity_index() -> Dictionary:
 		if not fu_by_center.has(center_id):
 			fu_by_center[center_id] = [] as Array[int]
 		(fu_by_center[center_id] as Array[int]).append(city.id)
-	return {"forces": forces, "sieges": sieges, "fu_by_center": fu_by_center}
+	return {"forces": forces, "camps": camps, "sieges": sieges, "fu_by_center": fu_by_center}
 
 
 ## Inspect an issued route, not a stale target or a new UI-time path search.
@@ -3049,23 +3080,29 @@ func _campaign_has_live_attack_route(army: Army) -> bool:
 		return false
 	if army.state not in [Army.State.MOVING, Army.State.FIGHTING]:
 		return false
+	return _campaign_has_live_route(army, army.ai_target_city)
+
+
+func _campaign_has_live_route(army: Army, target_city: int) -> bool:
+	if army.state not in [Army.State.MOVING, Army.State.FIGHTING, Army.State.RETREATING]:
+		return false
 	var route: Array[int] = []
 	if army.on_edge:
 		route.append(army.move_to)
 	route.append_array(army.path)
-	if route.is_empty() or route[-1] != army.ai_target_city:
+	if route.is_empty() or route[-1] != target_city:
 		return false
 	var previous := army.move_from if army.on_edge else army.location_city
 	for city_id in route:
 		var edge := edge_of(previous, city_id)
 		if edge == null or edge.max_manpower <= 0:
 			return false
-		if city_id != army.ai_target_city and not has_military_access(
+		if city_id != target_city and not has_military_access(
 			army.owner_nation, cities[city_id].owner_nation
 		):
 			if not cities[city_id].is_dock:
 				return false
-			var docks := Pathfinding._local_crossing_transit_docks(self, army.owner_nation, army.ai_target_city)
+			var docks := Pathfinding._local_crossing_transit_docks(self, army.owner_nation, target_city)
 			if not docks.has(city_id):
 				return false
 		previous = city_id
@@ -3077,17 +3114,28 @@ func campaign_defense_context(
 	activity_index: Dictionary = {}
 ) -> Dictionary:
 	var result := {"active": false, "invaded": false, "incoming": false,
-		"besieged": false, "enemy_fu_ids": [] as Array[int],
+		"besieged": false, "enemy_fu_ids": [] as Array[int], "enemy_camp_ids": [] as Array[int],
 		"enemy_manpower": 0, "requirement": 0}
 	if not is_zhou_city(center_id):
 		return result
 	var index := campaign_defense_activity_index() if activity_index.is_empty() else activity_index
+	var counted_armies := {}
 	for force in (index["forces"] as Dictionary).get(center_id, []):
 		var owner := int(force["owner"])
 		if not is_enemy(nation_id, owner) or (war_id >= 0 and war_id_between(nation_id, owner) != war_id):
 			continue
 		result["enemy_manpower"] = int(result["enemy_manpower"]) + int(force["size"])
+		counted_armies[int(force.get("army_id", -1))] = true
 		result["invaded" if bool(force["present"]) else "incoming"] = true
+	for camp in (index.get("camps", {}) as Dictionary).get(center_id, []):
+		var owner := int(camp["owner"])
+		if not is_enemy(nation_id, owner) or (war_id >= 0 and int(camp["war_id"]) != war_id) or war_id_between(nation_id, owner) != int(camp["war_id"]):
+			continue
+		if not (result["enemy_camp_ids"] as Array[int]).has(int(camp["city_id"])):
+			(result["enemy_camp_ids"] as Array[int]).append(int(camp["city_id"]))
+		if not counted_armies.has(int(camp["army_id"])):
+			result["enemy_manpower"] = int(result["enemy_manpower"]) + int(camp["size"])
+			counted_armies[int(camp["army_id"])] = true
 	for owner in (index["sieges"] as Dictionary).get(center_id, []):
 		if is_enemy(nation_id, int(owner)) and (war_id < 0 or war_id_between(nation_id, int(owner)) == war_id):
 			result["besieged"] = true
@@ -3095,7 +3143,7 @@ func campaign_defense_context(
 		var owner := cities[city_id].owner_nation
 		if is_fu_city(city_id) and is_enemy(nation_id, owner) and (war_id < 0 or war_id_between(nation_id, owner) == war_id):
 			(result["enemy_fu_ids"] as Array[int]).append(city_id)
-	result["active"] = bool(result["invaded"]) or bool(result["incoming"]) or bool(result["besieged"]) or not (result["enemy_fu_ids"] as Array).is_empty()
+	result["active"] = bool(result["invaded"]) or bool(result["incoming"]) or bool(result["besieged"]) or not (result["enemy_fu_ids"] as Array).is_empty() or not (result["enemy_camp_ids"] as Array).is_empty()
 	result["requirement"] = ceili(float(result["enemy_manpower"]) * 1.25)
 	if bool(result["active"]) and int(result["requirement"]) == 0:
 		result["requirement"] = INITIAL_HEAVY_ARMY_SIZE
@@ -3104,6 +3152,28 @@ func campaign_defense_context(
 
 func campaign_field_requirement(defender_id: int, center_city_id: int) -> int:
 	return int(campaign_defense_context(defender_id, center_city_id, -1)["requirement"])
+
+
+func campaign_has_forward_camp(front: CoalitionCampaignFront) -> bool:
+	return (
+		front != null and front.mode == CoalitionCampaignFront.Mode.OFFENSE
+		and front.camp_city_id >= 0 and front.camp_city_id < cities.size()
+		and administrative_center_of(front.camp_city_id) == front.center_city_id
+		and has_military_access(front.anchor_nation_id, cities[front.camp_city_id].owner_nation)
+	)
+
+
+func campaign_has_rear_camp(front: CoalitionCampaignFront) -> bool:
+	return (
+		front != null and not front.retiring
+		and front.mode == CoalitionCampaignFront.Mode.OFFENSE
+		and front.camp_city_id >= 0 and front.camp_city_id < cities.size()
+		and front.camp_city_id == front.staging_city_id
+		and front.center_city_id >= 0 and front.center_city_id < cities.size()
+		and not has_military_access(front.anchor_nation_id, cities[front.center_city_id].owner_nation)
+		and administrative_center_of(front.camp_city_id) != front.center_city_id
+		and has_military_access(front.anchor_nation_id, cities[front.camp_city_id].owner_nation)
+	)
 
 
 func campaign_receiving_city(front: CoalitionCampaignFront) -> int:
@@ -5201,6 +5271,7 @@ func start_regional_rebellion(
 		nations[food_holder_before].granary_food -= withdrawn_food
 		rebel.granary_food += withdrawn_food
 	WorldNaming.assign_rebel_name(self, rebel.id, parent_id, unique_ids)
+	FamilyTree.ensure_nation_lineage(self, rebel.id)
 	_initialize_rebel_diplomacy(parent_id, rebel.id)
 	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
 
@@ -6564,54 +6635,47 @@ func finalize_annexation_after_territory_commit(
 	absorber: int,
 	absorbed: int
 ) -> void:
-	if (
-		absorber < 0 or absorber >= nations.size()
-		or absorbed < 0 or absorbed >= nations.size()
-		or absorber == absorbed
-	):
-		return
-	# 必须在改属前释放旧战争池；改属后按旧 owner 扫描将再也找不到这些军队。
-	var absorbed_war_ids := {}
+	if absorber >= 0 and absorbed >= 0 and absorber < nations.size() and absorbed < nations.size() and absorber != absorbed:
+		_finalize_annexations(absorber, {absorbed: true})
+
+
+func _finalize_annexations(absorber: int, absorbed_ids: Dictionary) -> void:
+	var old_bindings := {}
 	for army in armies:
-		if army.owner_nation == absorbed and army.campaign_war_id >= 0:
-			absorbed_war_ids[army.campaign_war_id] = true
-	for front_value in campaign_fronts.values():
-		var front := front_value as CoalitionCampaignFront
-		if front != null and front.participant_nation_ids.has(absorbed):
-			absorbed_war_ids[front.war_id] = true
-	for war_value in absorbed_war_ids:
-		release_nation_war_pool(absorbed, int(war_value))
-	for group in nations[absorbed].battle_groups:
-		var members := battle_group_members(absorbed, group.id)
-		var new_group_id := nations[absorber].next_battle_group_id
-		nations[absorber].next_battle_group_id += 1
-		group.id = new_group_id
-		group.owner_nation = absorber
-		nations[absorber].battle_groups.append(group)
-		for member in members:
-			transfer_army_ownership(member, absorber)
-			member.battle_group_id = new_group_id
-	nations[absorbed].battle_groups.clear()
+		if absorbed_ids.has(army.owner_nation) and army.campaign_war_id >= 0:
+			old_bindings[Vector2i(army.owner_nation, army.campaign_war_id)] = true
+	for front in campaign_fronts.values():
+		for member_id in front.participant_nation_ids:
+			if absorbed_ids.has(member_id):
+				old_bindings[Vector2i(member_id, front.war_id)] = true
+	for binding: Vector2i in old_bindings:
+		release_nation_war_pool(binding.x, binding.y)
+	var group_mapping := {}
+	for absorbed in absorbed_ids:
+		for group in nations[absorbed].battle_groups:
+			var old_key := Vector2i(absorbed, group.id)
+			group.id = nations[absorber].next_battle_group_id
+			nations[absorber].next_battle_group_id += 1
+			group.owner_nation = absorber
+			group_mapping[old_key] = group.id
+			nations[absorber].battle_groups.append(group)
+		nations[absorbed].battle_groups.clear()
+		add_manpower(absorber, nations[absorbed].manpower_pool)
+		nations[absorbed].manpower_pool = 0
+		nations[absorber].treasury_gold += nations[absorbed].treasury_gold
+		nations[absorbed].treasury_gold = 0
 	for army in armies:
-		if army.owner_nation == absorbed and army.size > 0:
+		if absorbed_ids.has(army.owner_nation) and army.size > 0:
+			var old_group := Vector2i(army.owner_nation, army.battle_group_id)
 			transfer_army_ownership(army, absorber)
-		if army.occupation_claimant_nation == absorbed:
+			army.battle_group_id = int(group_mapping.get(old_group, -1))
+		if absorbed_ids.has(army.occupation_claimant_nation):
 			army.occupation_claimant_nation = absorber
 		if army.owner_nation == absorber:
-			army.ruler_attack_multiplier = (
-				RulerProfile.attack_multiplier(nations[absorber])
-			)
-			army.ruler_defense_multiplier = (
-				RulerProfile.defense_multiplier(nations[absorber])
-			)
-			army.ruler_morale_multiplier = (
-				RulerProfile.morale_multiplier(nations[absorber])
-			)
+			army.ruler_attack_multiplier = RulerProfile.attack_multiplier(nations[absorber])
+			army.ruler_defense_multiplier = RulerProfile.defense_multiplier(nations[absorber])
+			army.ruler_morale_multiplier = RulerProfile.morale_multiplier(nations[absorber])
 	_reconcile_battles_after_annexation()
-	add_manpower(absorber, nations[absorbed].manpower_pool)
-	nations[absorbed].manpower_pool = 0
-	nations[absorber].treasury_gold += nations[absorbed].treasury_gold
-	nations[absorbed].treasury_gold = 0
 
 
 ## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。普通兼并与
@@ -6622,43 +6686,80 @@ func annex_nation(
 	expected_ownership_revision: int = -1,
 	stock_policy_overrides: Dictionary = {}
 ) -> bool:
-	var owners: Array[int] = []
-	var legal: Array[int] = []
-	var sponsors: Array[int] = []
-	owners.resize(cities.size())
-	legal.resize(cities.size())
-	sponsors.resize(cities.size())
-	for city in cities:
-		owners[city.id] = city.owner_nation
-		legal[city.id] = recognized_owner_of(city.id)
-		sponsors[city.id] = city.occupation_sponsor_nation
-	var draft := {
-		"owners": owners,
-		"legal": legal,
-		"sponsors": sponsors,
-		"operation_by_city": {},
-		"proposed_suzerainty": suzerainty.duplicate(true),
-	}
-	if not append_annexation_to_territory_plan(
-		draft, absorber, absorbed, stock_policy_overrides
-	):
+	return annex_nations(absorber, [absorbed], expected_ownership_revision, stock_policy_overrides)
+
+
+func annex_nations(absorber: int, absorbed_nations: Array, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}) -> bool:
+	if absorber < 0 or absorber >= nations.size() or absorbed_nations.is_empty():
 		return false
-	var operation_ids: Array[int] = []
-	for city_value in (draft["operation_by_city"] as Dictionary):
-		operation_ids.append(int(city_value))
-	operation_ids.sort()
+	var absorbed_ids := {}
+	for nation_id in absorbed_nations:
+		if typeof(nation_id) != TYPE_INT or nation_id < 0 or nation_id >= nations.size() or nation_id == absorber or absorbed_ids.has(nation_id):
+			return false
+		absorbed_ids[nation_id] = true
+	for city_id in stock_policy_overrides:
+		if typeof(city_id) != TYPE_INT or city_id < 0 or city_id >= cities.size() or not absorbed_ids.has(cities[city_id].owner_nation):
+			return false
+		if typeof(stock_policy_overrides[city_id]) != TYPE_INT or int(stock_policy_overrides[city_id]) not in [TerritoryStockDisposition.RETURN_TO_OLD_POOL, TerritoryStockDisposition.MOVE_TO_NEW_POOL, TerritoryStockDisposition.CAPTURE_SPOILS, TerritoryStockDisposition.DESTROY]:
+			return false
+	var graph := suzerainty.duplicate(true)
+	if graph.has(absorber) and absorbed_ids.has(int(graph[absorber].overlord_id)):
+		graph.erase(absorber)
+	for subject in graph.keys():
+		if absorbed_ids.has(subject):
+			graph.erase(subject)
+		elif absorbed_ids.has(int(graph[subject].overlord_id)):
+			graph[subject].overlord_id = absorber
+			graph[subject].civil_war = false
 	var operations: Array[Dictionary] = []
-	for city_id in operation_ids:
-		operations.append(
-			(draft["operation_by_city"] as Dictionary)[city_id]
-		)
-	var territory_result := apply_territory_transaction(
-		operations, {}, expected_ownership_revision,
-		draft["proposed_suzerainty"]
-	)
-	if not bool(territory_result.get("ok", false)):
+	for city in cities:
+		var controlled := absorbed_ids.has(city.owner_nation)
+		var legally_absorbed := absorbed_ids.has(recognized_owner_of(city.id))
+		var sponsored := absorbed_ids.has(city.occupation_sponsor_nation)
+		if not controlled and not legally_absorbed and not sponsored:
+			continue
+		var controller := absorber if controlled else city.owner_nation
+		var legal := absorber if legally_absorbed else recognized_owner_of(city.id)
+		operations.append({"city_id": city.id, "controller_id": controller, "legal_owner_id": legal,
+			"sponsor_id": -1 if controller == legal else (absorber if sponsored else city.occupation_sponsor_nation),
+			"reset_political_target": legally_absorbed, "reason": "annexation",
+			"stock_policy": int(stock_policy_overrides.get(city.id, TerritoryStockDisposition.MOVE_TO_NEW_POOL))})
+	var result := apply_territory_transaction(operations, {}, expected_ownership_revision, graph)
+	if not result.ok:
 		return false
-	finalize_annexation_after_territory_commit(absorber, absorbed)
+	for nation_id in absorbed_ids:
+		FamilyTree.ensure_nation_lineage(self, nation_id)
+	_finalize_annexations(absorber, absorbed_ids)
+	return true
+
+
+func accept_submission(overlord_id: int, subject_id: int) -> bool:
+	if overlord_id < 0 or subject_id < 0 or overlord_id >= nations.size() or subject_id >= nations.size():
+		return false
+	if not nations[overlord_id].alive or not nations[subject_id].alive or is_vassal(subject_id) or suzerainty_root(overlord_id) == subject_id:
+		return false
+	var members := suzerainty_members(subject_id)
+	for member_id in members:
+		if not wars_of(member_id).is_empty() or is_in_civil_war(member_id) or rebellions.has(member_id) or nations[member_id].name_kind == WorldNaming.KIND_REBEL:
+			return false
+	var graph := suzerainty.duplicate(true)
+	graph[subject_id] = {"overlord_id": overlord_id, "tribute_rate": DEFAULT_TRIBUTE_RATE,
+		"created_day": day, "last_centralization_day": -1, "civil_war": false}
+	var diplomacy: Array[Dictionary] = []
+	var bloc := alliance_bloc(overlord_id)
+	for member_id in members:
+		for third in nations:
+			if members.has(third.id) or not third.alive:
+				continue
+			diplomacy.append({"nation_a": member_id, "nation_b": third.id,
+				"relation": DiplomaticRelation.ALLIED if bloc.has(third.id) else relation_between(overlord_id, third.id)})
+	var result := apply_territory_transaction([], {}, -1, graph, diplomacy)
+	if not result.ok:
+		return false
+	FamilyTree.ensure_nation_lineage(self, overlord_id)
+	FamilyTree.ensure_nation_lineage(self, subject_id)
+	WorldNaming.assign_submitted_vassal_name(self, subject_id)
+	FamilyTree.record_current_title(self, subject_id)
 	return true
 
 
@@ -6687,7 +6788,6 @@ func _reconcile_battles_after_annexation() -> void:
 				battle.reinforce_fresh_b.clear()
 				battle.routed_b.clear()
 				battle.frontline_priority_b.clear()
-				battle.reinforcement_morale_gained_b = 0.0
 				battle.tactical_key_b = 0
 		if _battle_has_hostile_sides(battle):
 			continue

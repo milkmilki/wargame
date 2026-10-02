@@ -7,6 +7,7 @@ var _failures: Array[String] = []
 func _init() -> void:
 	_test_campaign_battle_locks_allocation_report()
 	_test_parallel_battles_hold_report_until_last_finish()
+	_test_rear_camp_loss_waits_for_parallel_engagements()
 	_test_administrative_end_preserves_other_engagement()
 	_test_campaign_battle_blocks_ad_hoc_local_reinforcement()
 	if _failures.is_empty():
@@ -236,6 +237,43 @@ func _test_parallel_battles_hold_report_until_last_finish() -> void:
 	sim._finish_campaign_reports_for_battle(second)
 	_check(not front.combat_report_locked,
 		"同一战线最后一场野战结束后必须解锁战报")
+	sim.free()
+
+
+func _test_rear_camp_loss_waits_for_parallel_engagements() -> void:
+	var fixtures = preload("res://tests/direct_center_camp.gd")
+	var state := fixtures.fixture()
+	var first := fixtures.army(state, 0, 2)
+	var second := fixtures.army(state, 0, 2)
+	var front := fixtures.front(state, [first, second])
+	front.camp_city_id = 2
+	var sim := Simulation.new()
+	sim.setup(state)
+	var battles: Array[Battle] = []
+	for own in [first, second]:
+		var enemy := fixtures.army(state, 1, 2)
+		own.state = Army.State.FIGHTING
+		enemy.state = Army.State.FIGHTING
+		var battle := state.new_battle(Battle.Kind.FIELD)
+		battle.side_a.append(own)
+		battle.side_b.append(enemy)
+		own.battle_id = battle.id
+		enemy.battle_id = battle.id
+		sim._lock_campaign_reports_for_battle(battle)
+		battles.append(battle)
+	state.cities[2].owner_nation = 1
+	state.ownership_revision += 1
+	sim._manage_administrative_campaign(front)
+	_check(front.combat_report_locked and state.campaign_front(front.front_id) != null, "后方大营失守不得解除仍有并行野战的绑定")
+	battles[0].finished = true
+	sim._finish_campaign_reports_for_battle(battles[0])
+	sim._manage_administrative_campaign(front)
+	_check(front.combat_report_locked and state.campaign_front(front.front_id) != null, "第一场结束不能提前释放后方大营战线")
+	battles[1].finished = true
+	sim._finish_campaign_reports_for_battle(battles[1])
+	sim._manage_administrative_campaign(front)
+	_check(not front.combat_report_locked and state.campaign_front(front.front_id) == null, "最后一场结束才统一上报并释放拔营失败战线")
+	_check(first.campaign_war_id == front.war_id and second.campaign_war_id == front.war_id, "后方大营失败仍保留双方败军的战争池")
 	sim.free()
 
 

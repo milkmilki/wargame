@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 16
+const SCHEMA_VERSION: int = 18
 
 
 static func build(state: GameState) -> Dictionary:
@@ -26,6 +26,10 @@ static func build(state: GameState) -> Dictionary:
 		"next_war_id": state.next_war_id,
 		"next_campaign_front_id": state.next_campaign_front_id,
 		"next_campaign_pair_id": state.next_campaign_pair_id,
+		"next_family_tree_id": state.next_family_tree_id,
+		"next_family_person_id": state.next_family_person_id,
+		"family_revision": state.family_revision,
+		"family_trees": _build_family_trees(state),
 		"winner": state.winner,
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,
@@ -40,6 +44,21 @@ static func build(state: GameState) -> Dictionary:
 		"campaign_fronts": _build_campaign_fronts(state),
 		"campaign_pairs": _build_campaign_pairs(state),
 	}
+
+
+static func _build_family_trees(state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var tree_ids := state.family_trees.keys()
+	tree_ids.sort()
+	for tree_id in tree_ids:
+		var tree: Dictionary = state.family_trees[tree_id]
+		var member_ids: Array = tree.members.keys()
+		member_ids.sort()
+		var members: Array[Dictionary] = []
+		for person_id in member_ids:
+			members.append(tree.members[person_id].duplicate(true))
+		result.append({"id": tree_id, "root_person_id": tree.root_person_id, "members": members})
+	return result
 
 
 static func _build_campaign_pairs(state: GameState) -> Array[Dictionary]:
@@ -63,6 +82,9 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var ids := PackedInt32Array()
 	var capitals := PackedInt32Array()
 	var strategic_region_anchors := PackedInt32Array()
+	var family_tree_ids := PackedInt32Array()
+	var ruler_person_ids := PackedInt32Array()
+	var vassal_title_bases := PackedStringArray()
 	var gold := PackedInt32Array()
 	var manpower := PackedInt32Array()
 	var last_military_upkeep := PackedInt32Array()
@@ -97,6 +119,9 @@ static func _build_nations(state: GameState) -> Dictionary:
 		ids.append(nation.id)
 		capitals.append(nation.capital_city_id)
 		strategic_region_anchors.append(nation.strategic_region_anchor_city_id)
+		family_tree_ids.append(nation.family_tree_id)
+		ruler_person_ids.append(nation.ruler_person_id)
+		vassal_title_bases.append(nation.vassal_title_base)
 		gold.append(nation.treasury_gold)
 		manpower.append(nation.manpower_pool)
 		last_military_upkeep.append(nation.last_military_upkeep)
@@ -205,6 +230,9 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"ids": ids,
 		"capitals": capitals,
 		"strategic_region_anchors": strategic_region_anchors,
+		"family_tree_ids": family_tree_ids,
+		"ruler_person_ids": ruler_person_ids,
+		"vassal_title_bases": vassal_title_bases,
 		"gold": gold,
 		"manpower": manpower,
 		"last_military_upkeep": last_military_upkeep,
@@ -626,8 +654,6 @@ static func _build_battles(
 	var holding_side := PackedInt32Array()
 	var holding_days := PackedFloat64Array()
 	var round_no := PackedInt32Array()
-	var reinforcement_morale_a := PackedFloat64Array()
-	var reinforcement_morale_b := PackedFloat64Array()
 	var tactical_key_a := PackedInt32Array()
 	var tactical_key_b := PackedInt32Array()
 	var side_b_defends_city := PackedByteArray()
@@ -663,12 +689,6 @@ static func _build_battles(
 		holding_side.append(battle.holding_side)
 		holding_days.append(battle.holding_days)
 		round_no.append(battle.round_no)
-		reinforcement_morale_a.append(
-			battle.reinforcement_morale_gained_a
-		)
-		reinforcement_morale_b.append(
-			battle.reinforcement_morale_gained_b
-		)
 		tactical_key_a.append(battle.tactical_key_a)
 		tactical_key_b.append(battle.tactical_key_b)
 		side_b_defends_city.append(int(battle.side_b_defends_city))
@@ -733,8 +753,6 @@ static func _build_battles(
 		"holding_side": holding_side,
 		"holding_days": holding_days,
 		"round_no": round_no,
-		"reinforcement_morale_a": reinforcement_morale_a,
-		"reinforcement_morale_b": reinforcement_morale_b,
 		"tactical_key_a": tactical_key_a,
 		"tactical_key_b": tactical_key_b,
 		"side_b_defends_city": side_b_defends_city,

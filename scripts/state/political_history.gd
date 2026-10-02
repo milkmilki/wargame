@@ -104,12 +104,15 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		_view_state.cities[city_id].owner_nation = owners[city_id]
 
 	var alive: PackedByteArray = snapshot["nation_alive"]
+	var strategic_region_anchors: PackedInt32Array = snapshot["strategic_region_anchors"]
 	for nation_id in range(_view_state.nations.size()):
 		_view_state.nations[nation_id].alive = (
 			nation_id < alive.size() and alive[nation_id] != 0
 		)
-		_view_state.nations[nation_id].strategic_region_anchor_city_id = int(
-			(snapshot["strategic_region_anchors"] as PackedInt32Array)[nation_id]
+		# Later-founded nations retain stable ID slots but have no historical objective.
+		_view_state.nations[nation_id].strategic_region_anchor_city_id = (
+			strategic_region_anchors[nation_id]
+			if nation_id < strategic_region_anchors.size() else -1
 		)
 	return _view_state
 

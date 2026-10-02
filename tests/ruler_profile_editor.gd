@@ -92,17 +92,8 @@ func _run() -> void:
 	)
 
 	renderer.select_nation(nation_id)
-	var detail_rect := renderer._selection_detail_rect(
-		renderer._selection_detail_line_count()
-	)
-	var trigger_rect := renderer.ruler_profile_trigger_rect(
-		detail_rect, renderer.get("_display_scale")
-	)
-	var press := InputEventMouseButton.new()
-	press.button_index = MOUSE_BUTTON_LEFT
-	press.pressed = true
-	press.position = trigger_rect.get_center()
-	renderer._handle_mouse_button(press)
+	await process_frame
+	renderer.detail_panel().action_button("ruler").pressed.emit()
 	var menu := renderer.get("_ruler_profile_menu") as PopupMenu
 	_check(menu != null and menu.visible, "点击君主特质行必须打开下拉框")
 	renderer._on_ruler_profile_menu_id_pressed(

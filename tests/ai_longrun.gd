@@ -328,12 +328,23 @@ func _init() -> void:
 		var region_changes := 0
 		var resource_peaces := 0
 		var mobilization_armies := 0
+		var ultimatums := {"annex": 0, "submit": 0, "refuse": 0, "invalid": 0, "similarity_sum": 0.0}
 		for event in state.diplomatic_history:
 			if str(event.get("kind", "")) == "regional_strategy_goal_changed":
 				region_changes += 1
 			if not event.has("action"):
 				continue
 			var action := int(event["action"])
+			if action == DiplomacyAI.Action.ISSUE_ULTIMATUM:
+				var report: Dictionary = event["ultimatum"]
+				var outcome := int(report["outcome"])
+				var label: String = ["refuse", "submit", "annex"][outcome]
+				ultimatums[label] += 1
+				ultimatums.similarity_sum += float(report.similarity)
+				if outcome != UltimatumRules.Outcome.REFUSE and (not report.eligible or float(report.attacker_power) <= 0.0 or not event.get("regional_objective_allowed", false)):
+					ultimatums.invalid += 1
+				if outcome == UltimatumRules.Outcome.ANNEX and not report.annexation_allowed:
+					ultimatums.invalid += 1
 			diplomatic_counts[action] = int(diplomatic_counts.get(action, 0)) + 1
 			if action == DiplomacyAI.Action.DECLARE_WAR and event.has("objective_city"):
 				objective_declarations += 1
@@ -486,6 +497,9 @@ func _init() -> void:
 						mismatch
 					)
 		var elapsed := Time.get_ticks_msec() - seed_start
+		print("ULTIMATUM_LONGRUN seed=%d days=%d metrics=%s" % [world_seed, state.day, str(ultimatums)])
+		if int(ultimatums.invalid) > 0:
+			failed = true
 		total_mobilization_armies += mobilization_armies
 		total_net_captures += captures
 		total_turnovers += turnovers

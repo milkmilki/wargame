@@ -66,6 +66,7 @@ func _init() -> void:
 	staging_id = plan.staging_city_id
 	_check(plan.phase == CoalitionCampaignFront.Phase.ASSEMBLE, "未到齐时必须继续集结")
 	_check(staging_id >= 0, "计划必须记录真实入口集结点")
+	_check(plan.camp_city_id == -1, "普通入口府战役不得提前建立后方大营")
 	_check(_all_assigned_to(plan, attackers, staging_id), "集结阶段所有战区军必须前往同一集结点")
 
 	for army in attackers:

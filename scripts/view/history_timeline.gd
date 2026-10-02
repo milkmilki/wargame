@@ -15,11 +15,14 @@ var _slider: HSlider
 var _live_label: Label
 var _debounce: Timer
 var _settle: Timer
+var _toggle: Button
+var expanded := true
 
 
 func _ready() -> void:
 	layer = 18
 	_build_controls()
+	get_viewport().size_changed.connect(_layout_panel)
 
 
 func set_history_points(days: PackedInt32Array, live_day: int) -> void:
@@ -72,6 +75,12 @@ func _build_controls() -> void:
 	row.add_theme_constant_override("separation", 10)
 	_panel.add_child(row)
 	var font := MapRenderer.create_ui_font()
+	_toggle = Button.new()
+	_toggle.text = "▼"
+	_toggle.tooltip_text = "收起历史时间轴"
+	_toggle.add_theme_font_override("font", font)
+	_toggle.pressed.connect(func() -> void: set_expanded(not expanded))
+	row.add_child(_toggle)
 
 	_date_label = Label.new()
 	_date_label.custom_minimum_size = Vector2(122.0, 0.0)
@@ -86,7 +95,7 @@ func _build_controls() -> void:
 	_slider.max_value = 0.0
 	_slider.step = 1.0
 	_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_slider.custom_minimum_size = Vector2(430.0, 0.0)
+	_slider.custom_minimum_size = Vector2(80.0, 0.0)
 	_slider.tooltip_text = "查看历史政治版图；最右端返回当前时间"
 	_slider.value_changed.connect(_on_value_changed)
 	_slider.drag_ended.connect(_on_drag_ended)
@@ -111,6 +120,28 @@ func _build_controls() -> void:
 	_settle.timeout.connect(_emit_final_position)
 	add_child(_settle)
 	_update_labels()
+	_layout_panel()
+
+
+func set_expanded(value: bool) -> void:
+	if expanded == value:
+		return
+	if not value and (_debounce.time_left > 0.0 or _settle.time_left > 0.0):
+		_emit_final_position()
+	expanded = value
+	_slider.visible = value
+	_toggle.text = "▼" if value else "▶"
+	_toggle.tooltip_text = "收起历史时间轴" if value else "展开历史时间轴"
+	_layout_panel()
+
+
+func _layout_panel() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var available := maxf(260.0, viewport_size.x - 352.0 - 152.0)
+	var width := minf(720.0 if expanded else 280.0, available)
+	_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_panel.position = Vector2(352.0 + (available - width) * 0.5, viewport_size.y - 48.0)
+	_panel.size = Vector2(width, 38.0)
 
 
 func _on_value_changed(value: float) -> void:

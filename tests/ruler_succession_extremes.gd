@@ -6,6 +6,7 @@ var _valid := true
 
 
 func _init() -> void:
+	_test_reign_distribution()
 	_test_reign_range_and_succession()
 	_test_capital_income_and_succession_relocation()
 	_test_capital_relocation_always_prefers_zhou()
@@ -108,9 +109,42 @@ func _test_capital_relocation_always_prefers_zhou() -> void:
 	)
 
 
+func _test_reign_distribution() -> void:
+	var buckets: Array[Vector3i] = [
+		Vector3i(1, 4, 20), Vector3i(5, 9, 20), Vector3i(10, 19, 30),
+		Vector3i(20, 29, 15), Vector3i(30, 39, 8), Vector3i(40, 49, 4),
+		Vector3i(50, 60, 3),
+	]
+	var counts: Array[int] = []
+	counts.resize(61)
+	counts.fill(0)
+	var sample_count := 0
+	for seed_value in [71237, 12345, 0, -71]:
+		for nation_id in range(100):
+			for revision in range(100):
+				var years := RulerProfile.reign_years(seed_value, nation_id, revision)
+				_check(years >= 1 and years <= 60, "weighted reign escaped 1..60 years")
+				if years >= 1 and years <= 60:
+					counts[years] += 1
+				sample_count += 1
+	for bucket in buckets:
+		var bucket_count := 0
+		for years in range(bucket.x, bucket.y + 1):
+			bucket_count += counts[years]
+		var observed := float(bucket_count) / sample_count
+		_check(absf(observed - float(bucket.z) / 100.0) < 0.01,
+			"reign bucket %d..%d expected %d%%, observed %.2f%%" % [
+				bucket.x, bucket.y, bucket.z, observed * 100.0])
+		var expected_per_year := float(bucket_count) / (bucket.y - bucket.x + 1)
+		for years in range(bucket.x, bucket.y + 1):
+			_check(counts[years] > 0, "every reign year must be attainable: %d" % years)
+			_check(absf(counts[years] - expected_per_year) <= expected_per_year * 0.35,
+				"reign years must be uniform within each bucket: %d" % years)
+
+
 func _test_reign_range_and_succession() -> void:
-	_check(RulerProfile.MIN_REIGN_YEARS == 1 and RulerProfile.MAX_REIGN_YEARS == 50,
-		"configured reign must span the inclusive 1..50-year range")
+	_check(RulerProfile.MIN_REIGN_YEARS == 1 and RulerProfile.MAX_REIGN_YEARS == 60,
+		"configured reign must span the inclusive 1..60-year range")
 	var observed_years := {}
 	for nation_id in range(64):
 		for revision in range(8):
@@ -119,12 +153,11 @@ func _test_reign_range_and_succession() -> void:
 			_check(
 				years >= RulerProfile.MIN_REIGN_YEARS
 				and years <= RulerProfile.MAX_REIGN_YEARS,
-				"reign duration escaped 1..50 years"
+				"reign duration escaped 1..60 years"
 			)
 			_check(years == RulerProfile.reign_years(71237, nation_id, revision),
 				"the same ruler must retain a deterministic reign length")
-	_check(observed_years.has(1) and observed_years.has(50),
-		"both reign endpoints must be attainable")
+	_check(observed_years.size() > 20, "reign sampling must retain varied durations")
 
 	var state := GameState.new()
 	state.generate_world(71237, 4, 40)

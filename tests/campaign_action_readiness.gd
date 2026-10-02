@@ -248,6 +248,20 @@ func _test_unreachable_sortie_waits_for_route() -> void:
 	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [army])
 	var sim := Simulation.new()
 	sim.setup(state)
+	sim._execute_coalition_defense(front)
+	check(army.state == Army.State.MOVING and army.ai_target_city == 1,
+		"an unreachable enemy behind Fu must not block actual recovery of that reachable Fu")
+	sim.free()
+	# With no reachable recovery target, the force must truly remain at home.
+	state = _state()
+	state.cities[1].owner_nation = 1
+	state.edge_of(0, 1).max_manpower = 0
+	state.edge_of(0, 3).max_manpower = 0
+	army = _army(state, 70, 0, 0)
+	_army(state, 71, 1, 2, 10000)
+	front = _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [army])
+	sim = Simulation.new()
+	sim.setup(state)
 	for cycle in range(3):
 		sim._execute_coalition_defense(front)
 		check(front.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE,

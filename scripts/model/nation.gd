@@ -10,6 +10,8 @@ var name_kind: String = "state"          ## dynasty/state/vassal/rebel
 ## 藩王封号单向棘轮：一旦陆城数达到过 5 座即永久升为「单字王」。之后即使
 ## 失地也只保持单字王，绝不降回双字王。仅对 name_kind==vassal 有意义。
 var vassal_single_char: bool = false
+## 外来归附保留原国号，不采用同宗分封的地域封号棘轮。
+var vassal_title_base: String = ""
 ## 建国/受封时的地域锚点。首次命名后不随迁都、失地或兼并改变；旧档缺失时
 ## WorldNaming 仅以当时有效首都（再回退到首座直属陆城）确定性补一次。
 var founding_city_id: int = -1

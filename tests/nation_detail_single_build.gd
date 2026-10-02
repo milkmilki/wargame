@@ -64,7 +64,7 @@ func _test_nation_redraw_builds_once(
 	var expected_sections := MapRenderer.nation_detail_sections(state, nation_id)
 	var expected_signature := _section_signature(expected_sections)
 	var expected_line_count := (
-		_section_visual_line_count(expected_sections) + 1
+		_section_visual_line_count(expected_sections)
 	)
 
 	MapRenderer.reset_nation_detail_section_build_count()
@@ -97,14 +97,6 @@ func _test_nation_redraw_builds_once(
 		]
 	)
 	_check(
-		renderer._selection_detail_line_count() == expected_line_count,
-		"nation/input_geometry_matches_drawn_geometry",
-		"expected=%d actual=%d" % [
-			expected_line_count,
-			renderer._selection_detail_line_count(),
-		]
-	)
-	_check(
 		str(payload.get("title", "")).begins_with("国家信息  "),
 		"nation/payload_title_present",
 		str(payload)
@@ -115,9 +107,7 @@ func _test_nation_redraw_builds_once(
 		"count=%d" % MapRenderer.nation_detail_section_build_count()
 	)
 	MapRenderer.reset_nation_detail_section_build_count()
-	var detail_rect := renderer._selection_detail_rect(
-		renderer._selection_detail_line_count()
-	)
+	var detail_rect := renderer.detail_panel().get_global_rect()
 	MapRenderer.reset_nation_detail_section_build_count()
 	var blocked := renderer.world_input_blocked(detail_rect.get_center())
 	_check(
@@ -257,9 +247,9 @@ func _test_city_and_edge_paths_do_not_regress(
 	await process_frame
 	await process_frame
 	_check(
-		renderer._selection_detail_line_count() > 0,
+		int(renderer._selection_detail_payload()["line_count"]) > 0,
 		"city/detail_line_count_positive",
-		"city=%d count=%d" % [city_id, renderer._selection_detail_line_count()]
+		"city=%d count=%d" % [city_id, int(renderer._selection_detail_payload()["line_count"])]
 	)
 	_check(
 		MapRenderer.nation_detail_section_build_count() == 0,
@@ -272,10 +262,10 @@ func _test_city_and_edge_paths_do_not_regress(
 	await process_frame
 	await process_frame
 	_check(
-		renderer._selection_detail_line_count() > 0,
+		int(renderer._selection_detail_payload()["line_count"]) > 0,
 		"edge/detail_line_count_positive",
 		"edge=%d-%d count=%d" % [
-			edge.city_a, edge.city_b, renderer._selection_detail_line_count(),
+			edge.city_a, edge.city_b, int(renderer._selection_detail_payload()["line_count"]),
 		]
 	)
 	_check(
@@ -292,25 +282,23 @@ func _test_city_detail_window_drag(
 	var city_id := _pick_city_with_edge(state)
 	renderer.select_city(city_id)
 	await process_frame
-	var initial_rect := renderer._selection_detail_rect(
-		renderer._selection_detail_line_count()
-	)
+	var panel := renderer.detail_panel()
+	var initial_rect := panel.get_global_rect()
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
 	press.position = initial_rect.position + Vector2(20.0, 12.0)
-	renderer._handle_mouse_button(press)
+	press.global_position = press.position
+	panel._on_title_input(press)
 	_check(
-		renderer.get("_selection_detail_drag_active") == true,
+		panel.dragging == true,
 		"city/detail_title_starts_drag"
 	)
 	var motion := InputEventMouseMotion.new()
 	motion.button_mask = MOUSE_BUTTON_MASK_LEFT
 	motion.position = press.position + Vector2(-140.0, -90.0)
-	renderer._handle_mouse_motion(motion)
-	var moved_rect := renderer._selection_detail_rect(
-		renderer._selection_detail_line_count()
-	)
+	panel._input(motion)
+	var moved_rect := panel.get_global_rect()
 	_check(
 		moved_rect.position.distance_to(initial_rect.position) > 20.0,
 		"city/detail_drag_moves_window",
@@ -320,9 +308,9 @@ func _test_city_detail_window_drag(
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
 	release.position = motion.position
-	renderer._handle_mouse_button(release)
+	panel._input(release)
 	_check(
-		renderer.get("_selection_detail_drag_active") != true,
+		not panel.dragging,
 		"city/detail_release_stops_drag"
 	)
 

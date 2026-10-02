@@ -50,7 +50,7 @@ func _run() -> void:
 	var road_button := road_layer.get_node_or_null(
 		"RoadTuningButton"
 	) as Button
-	var map_modes := road_layer.get_node_or_null("MapModes") as HBoxContainer
+	var map_modes := road_layer.get_node_or_null("MapModes") as OptionButton
 	var renderer := main.get_node("MapRenderer") as MapRenderer
 	var editor_layer := main.get_node("MapEditorLayer") as MapEditorPanel
 	var editor_button := editor_layer.get_node_or_null(
@@ -83,54 +83,15 @@ func _run() -> void:
 	renderer.select_city(jump_capital_id)
 	await process_frame
 	var city_payload := renderer._selection_detail_payload()
-	var city_detail_geometry_matches := (
-		int(city_payload["line_count"])
-		== renderer._selection_detail_line_count()
-	)
-	var city_detail_rect := renderer._selection_detail_input_rect(
-		renderer._selection_detail_line_count()
-	)
-	var city_nation_click := InputEventMouseButton.new()
-	city_nation_click.button_index = MOUSE_BUTTON_LEFT
-	city_nation_click.pressed = true
-	city_nation_click.position = MapRenderer.city_nation_trigger_rect(
-		city_detail_rect, renderer._display_scale
-	).get_center()
-	city_nation_click.global_position = city_nation_click.position
-	Input.parse_input_event(city_nation_click)
+	var city_detail_geometry_matches: bool = not city_payload.sections.is_empty()
+	renderer.detail_panel().action_button("nation").pressed.emit()
 	await process_frame
-	var city_nation_pressed_jump := (
-		renderer.selected_city_id() == -1
-		and renderer.selected_nation_id() == 0
-	)
-	var city_nation_release := InputEventMouseButton.new()
-	city_nation_release.button_index = MOUSE_BUTTON_LEFT
-	city_nation_release.pressed = false
-	city_nation_release.position = city_nation_click.position
-	city_nation_release.global_position = city_nation_release.position
-	Input.parse_input_event(city_nation_release)
 	await process_frame
-	var city_nation_jump := (
-		city_nation_pressed_jump
-		and renderer.selected_city_id() == -1
-		and renderer.selected_nation_id() == 0
-	)
-	var nation_detail_rect := renderer._selection_detail_input_rect(
-		renderer._selection_detail_line_count()
-	)
+	await process_frame
+	var city_nation_jump := renderer.selected_city_id() == -1 and renderer.selected_nation_id() == 0
 	var nation_payload := renderer._selection_detail_payload()
-	var nation_detail_geometry_matches := (
-		int(nation_payload["line_count"])
-		== renderer._selection_detail_line_count()
-	)
-	var family_tree_click := InputEventMouseButton.new()
-	family_tree_click.button_index = MOUSE_BUTTON_LEFT
-	family_tree_click.pressed = true
-	family_tree_click.position = MapRenderer.family_tree_trigger_rect(
-		nation_detail_rect, renderer._display_scale
-	).get_center()
-	family_tree_click.global_position = family_tree_click.position
-	Input.parse_input_event(family_tree_click)
+	var nation_detail_geometry_matches: bool = not nation_payload.sections.is_empty()
+	renderer.detail_panel().action_button("family_tree").pressed.emit()
 	await process_frame
 	var family_tree_button_opens := family_panel.is_open()
 	family_panel.close_panel()
@@ -152,18 +113,14 @@ func _run() -> void:
 	])
 	var mode_contract_valid := (
 		map_modes != null
-		and map_modes.get_child_count() == expected_mode_ids.size()
+		and map_modes.item_count == expected_mode_ids.size()
 	)
 	if mode_contract_valid:
 		for index in range(expected_mode_ids.size()):
-			var mode_button := map_modes.get_child(index) as Button
 			mode_contract_valid = (
 				mode_contract_valid
-				and mode_button != null
-				and str(mode_button.get_meta(&"map_mode", ""))
-					== expected_mode_ids[index]
-				and int(mode_button.get_meta(&"renderer_map_mode", -1))
-					== expected_renderer_modes[index]
+				and str(map_modes.get_item_metadata(index)) == expected_mode_ids[index]
+				and RoadTuningPanel._renderer_map_mode(expected_mode_ids[index]) == expected_renderer_modes[index]
 			)
 	var checks := {
 		"nation_count": main.state.nations.size() == expected_nation_count,
@@ -184,18 +141,16 @@ func _run() -> void:
 		"map_modes": map_modes != null,
 		"map_mode_count": (
 			map_modes != null
-			and map_modes.get_child_count() == expected_mode_ids.size()
+			and map_modes.item_count == expected_mode_ids.size()
 		),
 		"map_mode_contract": mode_contract_valid,
 		"map_mode_default": (
 			road_layer.map_mode() == RoadTuningPanel.MAP_MODE_POLITICAL
 			and road_layer.renderer_map_mode()
 				== MapRenderer.MAP_MODE_POLITICAL
-			and (road_layer._map_mode_buttons[
-				RoadTuningPanel.MAP_MODE_POLITICAL
-			] as Button).button_pressed
+			and map_modes.selected == RoadTuningPanel.MAP_MODES.find(RoadTuningPanel.MAP_MODE_POLITICAL)
 		),
-		"map_mode_style": map_modes != null and (map_modes.get_child(0) as Button).get_theme_stylebox("pressed") != null,
+		"map_mode_style": map_modes != null and map_modes.get_theme_stylebox("pressed") != null,
 		"map_editor": editor_button != null and editor_button.get_theme_stylebox("normal") != null,
 		"family_tree": family_opened,
 		"family_tree_content": (
@@ -239,7 +194,7 @@ func _run() -> void:
 			return
 	print(
 		"FRONTEND_SCENE_OK settings=1 road=1 modes=",
-		map_modes.get_child_count(),
+		map_modes.item_count,
 		" nations=", main.state.nations.size(),
 		" cities=", main.state.cities.size(),
 		" seed=", main.state.world_seed,

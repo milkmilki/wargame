@@ -90,6 +90,8 @@ static func replay_records(
 
 
 static func _replay_record(record: Dictionary) -> Dictionary:
+	if int(record.get("combat_rules_version", -1)) != Combat.COMBAT_RULES_VERSION:
+		return {"error": "incompatible_combat_rules"}
 	var required := [
 		"battle_id",
 		"day",
@@ -225,14 +227,6 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 	battle.contact_dist_b = float(context.get("contact_dist_b", 0.0))
 	battle.tactical_key_a = int(context.get("tactical_key_a", 0))
 	battle.tactical_key_b = int(context.get("tactical_key_b", 0))
-	battle.reinforcement_morale_gained_a = float(context.get(
-		"reinforcement_morale_gained_a",
-		0.0
-	))
-	battle.reinforcement_morale_gained_b = float(context.get(
-		"reinforcement_morale_gained_b",
-		0.0
-	))
 	var edge_data: Dictionary = context.get("edge", {})
 	if not edge_data.is_empty():
 		var edge := Edge.new()
@@ -303,6 +297,8 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	army.ruler_attack_multiplier = float(data.get(
 		"ruler_attack_multiplier", 1.0
 	))
+	army.ruler_defense_multiplier = float(data.get("ruler_defense_multiplier", 1.0))
+	army.ruler_morale_multiplier = float(data.get("ruler_morale_multiplier", 1.0))
 	army.defense = int(data.get("defense", 10))
 	army.morale = float(data.get("morale", 1.0))
 	army.starving = bool(data.get("starving", false))
@@ -329,6 +325,8 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"max_morale": army.max_morale,
 			"attack": army.attack,
 			"ruler_attack_multiplier": army.ruler_attack_multiplier,
+			"ruler_defense_multiplier": army.ruler_defense_multiplier,
+			"ruler_morale_multiplier": army.ruler_morale_multiplier,
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
@@ -365,6 +363,9 @@ static func _snapshots_equal(
 		for key in [
 			"morale",
 			"ruler_attack_multiplier",
+			"ruler_defense_multiplier",
+			"ruler_morale_multiplier",
+			"max_morale",
 			"city_garrison_combat_multiplier",
 			"city_garrison_defense_bonus",
 		]:

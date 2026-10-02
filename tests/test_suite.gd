@@ -4108,9 +4108,7 @@ func _test_multi_army_aggregation() -> void:
 	var loss_def_split := _one_round_side_b_loss([_make_army(0, 0, 2000, 10)], [_make_army(2, 1, 500, 10, 12), _make_army(3, 1, 500, 10, 12)], 91)
 	_check(absi(loss_def_single - loss_def_split) <= 2, "防御反拆分：单支(%d) 与拆分(%d) 总伤应近似（差≤2）" % [loss_def_single, loss_def_split])
 
-	# (d) 增援回气（新语义 item2/12）：援军加入先登记为「本 tick 新增」，不立即结算；
-	#     resolve_round 开头按「本 tick 新增有效兵力占比」统一结算一次并封顶 REINFORCE_MORALE_MAX。
-	#     疲劳(0.30)友军 + 满员援军(1000,morale1.0)：boost=min(0.20×1000/2000,0.20)=0.10 → 回升至 0.40。
+	# 援军到场先保留自身士气，下次野战回合按全侧容量合并。
 	var gs2 := GameState.new(); gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new(); sim2.setup(gs2)
 	var tired := _make_army(0, 0, 1000, 10); tired.morale = 0.30
@@ -4122,9 +4120,9 @@ func _test_multi_army_aggregation() -> void:
 	_check(battle.side_a.size() == 2, "增援后 side_a 应为 2 支")
 	_check(battle.reinforce_fresh_a.has(fresh), "援军应登记为本 tick 新增，待统一结算")
 	_check(_approx(tired.morale, 0.30, 0.001), "结算前疲劳友军士气不应立即变化，实为 %.3f" % tired.morale)
-	Combat.settle_reinforcement_morale(battle.side_a, battle.reinforce_fresh_a)
-	_check(_approx(tired.morale, 0.40, 0.001), "疲劳友军应因增援回气至约 0.40，实为 %.3f" % tired.morale)
-	_check(_approx(fresh.morale, 1.0), "援军自身士气不应被自己提振")
+	_check(_approx(float(battle.shared_morale_summary(battle.side_a).effective), 0.65), "援军合并后的有效士气应为0.65")
+	Combat.resolve_round(battle, RandomNumberGenerator.new(), 0, 713)
+	_check(tired.morale < 0.65 and _approx(tired.morale, fresh.morale), "增援后应共享士气且没有额外提振")
 	# (d2) 防拆分套利：把 1000 援军拆成 2×500 依次加入，回气总量应与单支 1000 完全一致。
 	var tired2 := _make_army(10, 0, 1000, 10); tired2.morale = 0.30
 	var battle2 := _make_field_battle([tired2], [_make_army(11, 1, 1000, 10)], 0.0, 4)
@@ -4134,8 +4132,8 @@ func _test_multi_army_aggregation() -> void:
 	f2.move_from = 0; f2.move_to = 1; f2.move_progress = 0.5
 	sim2._join_field_battle(battle2, f1, battle2.edge)
 	sim2._join_field_battle(battle2, f2, battle2.edge)
-	Combat.settle_reinforcement_morale(battle2.side_a, battle2.reinforce_fresh_a)
-	_check(_approx(tired2.morale, 0.40, 0.001), "拆分援军回气应与单支一致(0.40)，实为 %.3f" % tired2.morale)
+	Combat.resolve_round(battle2, RandomNumberGenerator.new(), 0, 713)
+	_check(_approx(tired2.morale, tired.morale, 0.000000001), "拆分援军的共享士气应与单支一致")
 	sim2.free()
 
 	# (e) 不同数量组合：3v2 与 2v3 均应各形成 1 场并正确聚合
@@ -12997,7 +12995,7 @@ func _test_equivariant_ordering() -> void:
 func _test_remaining_combat_risk_closures() -> void:
 	print("[38] 残余机制闭环：跨日援军 + 显式预备队 + 单军溃退 + 有效围城 + 日补给")
 
-	# (a) 两批援军跨两个回合抵达，整场累计提振仍不得超过 0.20。
+	# 两批援军跨两个回合抵达，每批仅按当时兵力与士气合并。
 	var tired := _make_army(10000, 0, 1000, 0, 10)
 	tired.morale = 0.30
 	var enemy := _make_army(10001, 1, 20000, 0, 10)
@@ -13009,6 +13007,8 @@ func _test_remaining_combat_risk_closures() -> void:
 	)
 	reinforcement_battle.edge.max_manpower = 30000
 	for batch in range(2):
+		var old_size := reinforcement_battle.side_size(reinforcement_battle.side_a)
+		var old_morale := tired.morale
 		var fresh := _make_army(
 			10002 + batch,
 			0,
@@ -13018,23 +13018,14 @@ func _test_remaining_combat_risk_closures() -> void:
 		)
 		reinforcement_battle.side_a.append(fresh)
 		reinforcement_battle.reinforce_fresh_a.append(fresh)
+		var merged := (old_morale * float(old_size) + fresh.morale * float(fresh.size)) / float(old_size + fresh.size)
 		Combat.resolve_round(
 			reinforcement_battle,
 			RandomNumberGenerator.new(),
 			0,
 			1234 + batch
 		)
-	_check(
-		_approx(
-			reinforcement_battle.reinforcement_morale_gained_a,
-			Combat.REINFORCE_MORALE_MAX
-		),
-		"跨回合分批援军的整场累计提振应封顶 %.2f，实为 %.4f"
-			% [
-				Combat.REINFORCE_MORALE_MAX,
-				reinforcement_battle.reinforcement_morale_gained_a,
-			]
-	)
+		_check(tired.morale < merged and _approx(tired.morale, fresh.morale), "跨回合援军只共享加权士气，不额外提振")
 
 	# (b) 5000 正面只能投入第一军；完整预备队首轮不伤亡、不掉战斗士气。
 	var frontline := _make_army(10010, 0, 5000, 10, 10)
@@ -13054,13 +13045,13 @@ func _test_remaining_combat_risk_closures() -> void:
 		99
 	)
 	_check(
-		reserve.size == 4000 and _approx(reserve.morale, 1.0),
-		"完整预备队首轮应保持兵力和组织度，实为 size=%d morale=%.4f"
+		reserve.size == 4000 and reserve.morale < 1.0 and _approx(reserve.morale, frontline.morale),
+		"完整预备队保持兵力但共享组织度损耗，实为 size=%d morale=%.4f"
 			% [reserve.size, reserve.morale]
 	)
 	_check(
 		frontline.size < 5000 and frontline.morale < 1.0,
-		"前线军应独自承担首轮伤亡与士气侵蚀"
+		"前线軍承担伤亡，全军承担士气侵蚀"
 	)
 	frontline.size = 0
 	var reserve_before := reserve.size
@@ -13094,11 +13085,12 @@ func _test_remaining_combat_risk_closures() -> void:
 		77
 	)
 	_check(
-		rout_battle.routed_a.has(near_rout)
-			and not rout_battle.side_a.has(near_rout)
+		rout_battle.routed_a.is_empty()
+			and rout_battle.side_a.has(near_rout)
 			and rout_battle.side_a.has(healthy)
+			and _approx(near_rout.morale, healthy.morale)
 			and not rout_battle.finished,
-		"单军跌破阈值应立即退出，健康预备队应保持战斗"
+		"低士气军应与健康军共享组织度，不得独立溃退"
 	)
 	var promotion_state := GameState.new()
 	promotion_state.generate_grid_world(38042)
@@ -13147,7 +13139,6 @@ func _test_remaining_combat_risk_closures() -> void:
 	takeover_battle.frontline_priority_b[
 		healthy_challenger
 	] = 2
-	takeover_battle.reinforcement_morale_gained_b = 0.12
 	takeover_battle.tactical_key_b = 123456
 	promotion_sim._promote_challengers(takeover_battle)
 	_check(
@@ -13155,18 +13146,10 @@ func _test_remaining_combat_risk_closures() -> void:
 			and takeover_battle.reinforce_fresh_a.has(
 				healthy_challenger
 			)
-			and _approx(
-				takeover_battle.reinforcement_morale_gained_a,
-				0.12
-			)
 			and takeover_battle.tactical_key_a == 123456
 			and takeover_battle.side_b.is_empty()
-			and takeover_battle.reinforce_fresh_b.is_empty()
-			and _approx(
-				takeover_battle.reinforcement_morale_gained_b,
-				0.0
-			),
-		"挑战者接管围城时应迁移自身累计/新援状态并清空旧 side_b 身份"
+			and takeover_battle.reinforce_fresh_b.is_empty(),
+		"挑战者接管围城时应迁移新援状态并清空旧 side_b 身份"
 	)
 	promotion_sim.free()
 

@@ -413,7 +413,8 @@ static func assign_vassal_name(
 		subject_id,
 		rulers,
 		"",
-		suzerainty_ruler_surname(game_state, subject_id)
+		ruler_surname(str(game_state.nations[game_state.overlord_of(subject_id)].ruler_name))
+			if game_state.overlord_of(subject_id) >= 0 else suzerainty_ruler_surname(game_state, subject_id)
 	)
 	var new_signature := "%s|%s|%s|%s|%d" % [
 		nation.name, nation.short_name, nation.name_kind, nation.ruler_name,
@@ -424,8 +425,30 @@ static func assign_vassal_name(
 	return nation.name
 
 
-## 为地方叛军分配二至四字地域基础名。获承认成为主权国后，统一通过
-## promote_special_nation_to_sovereign() 改用建国城的单字国号。
+## 归附仅授予称号，不重新抽取君主姓名或改变其血缘。
+static func assign_submitted_vassal_name(game_state, subject_id: int) -> String:
+	if not _valid_nation_id(game_state, subject_id):
+		return ""
+	var nation = game_state.nations[subject_id]
+	var base := str(nation.short_name).trim_suffix("王")
+	if base.is_empty():
+		base = str(nation.name).trim_suffix("王")
+	var registry := _registry(game_state, _NATION_REGISTRY_META)
+	_backfill_nation_registry(game_state, registry, subject_id)
+	var formal := base + "王"
+	var collision := 0
+	while not _reserve(registry, formal, subject_id):
+		collision += 1
+		formal = base + _chinese_digits(subject_id + 1) + (_chinese_digits(collision) if collision > 1 else "") + "王"
+	nation.vassal_title_base = formal.trim_suffix("王")
+	nation.name_kind = KIND_VASSAL
+	nation.short_name = formal
+	nation.name = formal
+	_bump_revision(game_state)
+	return formal
+
+
+## 为地方叛军分配地域名；获承认后使用建国城的主权国号。
 static func assign_rebel_name(
 	game_state,
 	rebel_id: int,
@@ -493,22 +516,18 @@ static func register_successor_name(
 	return str(nation.ruler_name)
 
 
-## 宗藩体系采用根宗主的当前姓氏。根宗主继位时，只要仍有藩王，就以
-## 自己上一任的姓作为本宗姓；完全独立且无藩属的国家不施加姓氏约束。
+## 姓氏来自血缘而不是政治宗属；新分封的亲族使用直接分封者的姓氏。
 static func suzerainty_ruler_surname(
 	game_state,
 	nation_id: int
 ) -> String:
 	if not _valid_nation_id(game_state, nation_id):
 		return ""
-	var root_id := int(game_state.suzerainty_root(nation_id))
-	if not _valid_nation_id(game_state, root_id):
-		return ""
-	if root_id != nation_id:
-		return ruler_surname(str(game_state.nations[root_id].ruler_name))
-	if not game_state.subjects_of(nation_id).is_empty():
-		return ruler_surname(str(game_state.nations[nation_id].ruler_name))
-	return ""
+	var own := ruler_surname(str(game_state.nations[nation_id].ruler_name))
+	if not own.is_empty():
+		return own
+	var overlord_id := int(game_state.overlord_of(nation_id))
+	return ruler_surname(str(game_state.nations[overlord_id].ruler_name)) if _valid_nation_id(game_state, overlord_id) else ""
 
 
 static func ruler_surname(ruler_name: String) -> String:
@@ -771,6 +790,8 @@ static func _vassal_display_name(game_state, nation_id: int) -> String:
 	if not _valid_nation_id(game_state, nation_id):
 		return ""
 	var nation = game_state.nations[nation_id]
+	if not str(nation.vassal_title_base).is_empty():
+		return str(nation.vassal_title_base) + "王"
 	var owned := _owned_land_city_ids(game_state, nation_id)
 	var title_city_id := ensure_founding_city_id(game_state, nation_id)
 	if title_city_id < 0:

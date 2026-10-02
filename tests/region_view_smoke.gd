@@ -26,16 +26,12 @@ func _run() -> void:
 			quit(1)
 			return
 		await process_frame
-	var region_button := (
-		main.road_tuning_panel._map_mode_buttons.get(
-			RoadTuningPanel.MAP_MODE_REGION
-		) as Button
-	)
-	if region_button == null:
-		push_error("REGION_VIEW_BUTTON_MISSING")
+	var option := main.road_tuning_panel._map_mode_option as OptionButton
+	if option == null or option.item_count != 6:
+		push_error("REGION_VIEW_DROPDOWN_MISSING")
 		quit(1)
 		return
-	region_button.pressed.emit()
+	option.item_selected.emit(RoadTuningPanel.MAP_MODES.find(RoadTuningPanel.MAP_MODE_REGION))
 	for _frame in range(4):
 		await process_frame
 	var highest_city_id := -1
@@ -99,17 +95,11 @@ func _run() -> void:
 		valid = image != null and not image.is_empty()
 		if valid:
 			valid = image.save_png(output) == OK
-	var political_button := (
-		main.road_tuning_panel._map_mode_buttons.get(
-			RoadTuningPanel.MAP_MODE_POLITICAL
-		) as Button
-	)
-	if political_button != null:
-		political_button.pressed.emit()
-		await process_frame
+	option.item_selected.emit(RoadTuningPanel.MAP_MODES.find(RoadTuningPanel.MAP_MODE_POLITICAL))
+	await process_frame
 	valid = (
 		valid
-		and political_button != null
+		and option.selected == 2
 		and map_3d.map_mode() == MapRenderer.MAP_MODE_POLITICAL
 		and not map_3d._region_score_markers.visible
 	)

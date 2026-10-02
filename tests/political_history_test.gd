@@ -62,6 +62,7 @@ func _init() -> void:
 		earlier_view.day == 0,
 		"reused display state should apply the selected snapshot"
 	)
+	_test_nations_created_after_snapshot()
 
 	if _failed.is_empty():
 		print("POLITICAL_HISTORY_TEST PASS")
@@ -75,3 +76,47 @@ func _init() -> void:
 func _check(condition: bool, message: String) -> void:
 	if not condition:
 		_failed.append(message)
+
+
+func _test_nations_created_after_snapshot() -> void:
+	var state := GameState.new()
+	state.generate_grid_world(54321)
+	# Match the reported index: the first snapshot contains only IDs 0..44.
+	while state.nations.size() < 45:
+		var placeholder := Nation.new()
+		placeholder.id = state.nations.size()
+		placeholder.alive = false
+		state.nations.append(placeholder)
+	var original_anchor := state.nations[0].capital_city_id
+	state.nations[0].strategic_region_anchor_city_id = original_anchor
+	var history := PoliticalHistory.new()
+	history.reset(state)
+	history.build_view_state(state, 0)
+	var new_nation := Nation.new()
+	new_nation.id = state.nations.size()
+	new_nation.strategic_region_anchor_city_id = state.nations[1].capital_city_id
+	state.nations.append(new_nation)
+	state.nations[0].strategic_region_anchor_city_id = state.nations[1].capital_city_id
+	state.day = Simulation.DAYS_PER_MONTH
+	state.month = 1
+	history.maybe_capture(state)
+	var latest := history.build_view_state(state, 1)
+	_check(latest != null, "new-nation snapshot must produce a view")
+	if latest == null:
+		return
+	_check(latest.nations[45].alive and latest.nations[45].strategic_region_anchor_city_id == new_nation.strategic_region_anchor_city_id,
+		"later snapshot must show the newly created nation and its actual objective")
+	var view_id := latest.get_instance_id()
+	for index in [0, 1, 0]:
+		var view := history.build_view_state(state, index)
+		_check(view != null, "old snapshot must remain readable after nation creation")
+		if view == null:
+			return
+		_check(view.get_instance_id() == view_id, "scrubbing after nation creation must reuse the detached view")
+		if index == 0:
+			_check(not view.nations[45].alive and view.nations[45].strategic_region_anchor_city_id == -1,
+				"nation absent from old snapshot must be unborn with no future objective")
+			_check(view.nations[0].strategic_region_anchor_city_id == original_anchor,
+				"existing nation must restore the historical objective")
+	_check(new_nation.alive and new_nation.strategic_region_anchor_city_id == state.nations[1].capital_city_id,
+		"historical scrubbing must not mutate the live nation")
