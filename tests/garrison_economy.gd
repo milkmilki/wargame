@@ -147,7 +147,7 @@ func _init() -> void:
 			state.cities[other_center].garrison_manpower = (
 				state.city_garrison_capacity(other_center)
 			)
-	state.nations[0].military_payment_ratio = 0.8
+	state.nations[0].military_payment_ratio = 0.0
 	state.nations[0].manpower_pool = 2000
 	state.reinforce_city_garrisons_monthly()
 	var reinforcement_ok := (

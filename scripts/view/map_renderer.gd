@@ -7153,6 +7153,7 @@ static func historical_nation_detail_sections(
 		{"id": "history.diplomacy", "default_expanded": false, "title": "历史外交", "lines": relation_lines},
 		{"id": "history.region", "default_expanded": true, "title": "历史经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
 		{"id": "history.finance", "default_expanded": false, "title": "历史月结", "lines": [
+			"军费支付率 %.0f%%    攻防系数 %.2f" % [game_state.nations[nation_id].military_payment_ratio * 100.0, Army.funding_from_payment(game_state.nations[nation_id].military_payment_ratio)],
 			"宫廷耗费 %.0f%%    应付 %d    实付 %d" % [game_state.nations[nation_id].last_court_expense_rate * 100.0, game_state.nations[nation_id].last_court_expense_due, game_state.nations[nation_id].last_court_expense_paid],
 		]},
 	]
@@ -7722,18 +7723,19 @@ static func nation_detail_sections(
 				n.last_trade_route_count,
 				_signed_value_text(n.last_trade_gold),
 			],
-			"军费 %d    欠饷 %d    支付率 %.0f%%" % [
-				n.last_military_upkeep, n.unpaid_military_upkeep,
+			"军费应付 %d    实付 %d    支付率 %.0f%%" % [
+				n.last_military_upkeep, n.last_military_upkeep - n.unpaid_military_upkeep,
 				n.military_payment_ratio * 100.0,
 			],
 			"军费构成：野战军 %d    州治守军 %d" % [
 				n.last_field_army_upkeep, n.last_garrison_upkeep,
 			],
+			"攻防系数 %.2f    预测现金缺口 %d" % [Army.funding_from_payment(n.military_payment_ratio), int(finance.forecast.gold_deficit)],
 			"耗费后月收入 %d    上月应耗费 %d（%.0f%%）" % [int(finance.monthly_gold_income) - int(finance.court_expense_due), n.last_court_expense_due, n.last_court_expense_rate * 100.0],
 		]},
 		{"id": "nation.food", "default_expanded": false, "title": "粮食储备", "lines": [
 			"12月预测最低粮食 %d（第%d日）    储备目标 %d" % [int(finance.forecast.food_min), int(finance.forecast.food_min_day), int(finance.forecast.food_target)],
-			"资源预测：%s" % ("可维持" if bool(finance.forecast.feasible) else "预计钱粮断供"),
+			"粮食预测：%s" % ("可维持" if bool(finance.forecast.food_feasible) else "预计粮食断供"),
 			"粮仓 %d / %d    月产(预计) %d    月需(预计) %d    月净(预计) %s" % [
 				n.granary_food,
 				food_capacity,
@@ -7741,7 +7743,8 @@ static func nation_detail_sections(
 				n.last_food_estimated_consumption,
 				monthly_food_balance_text,
 			],
-			"限制原因：%s" % ("无预测断供" if bool(finance.forecast.feasible) else "、".join(([] if int(finance.forecast.gold_deficit) <= 0 else ["国库不足"]) + ([] if int(finance.forecast.food_deficit) <= 0 else ["粮食不足"]))),
+			"粮食支持规模 %d人    实际人数 %d人" % [int(finance.food_plan.affordable_troops), troops],
+			"扩军粮食预算：%s" % ("允许增长" if bool(finance.forecast.food_growth_allowed) else ("储备预算不足" if bool(finance.forecast.food_feasible) else "预计断供")),
 		]},
 		{"id": "nation.diplomacy", "default_expanded": false, "title": "外交与行动", "lines": diplomacy_lines},
 	]
@@ -8028,7 +8031,9 @@ static func nation_detail_section_build_count() -> int:
 
 
 static func _nation_detail_finance_snapshot(game_state: GameState, nation_id: int) -> Dictionary:
-	var report := DiplomacyAI.resource_report(game_state, nation_id)
+	var cache := {}
+	var report := DiplomacyAI.resource_report(game_state, nation_id, cache)
+	report.food_plan = DiplomacyAI.war_food_report(game_state, nation_id, -1, -1, cache, true)
 	report.monthly_tribute_balance = int(report.monthly_tribute_income) - int(report.monthly_tribute_expense)
 	return report
 

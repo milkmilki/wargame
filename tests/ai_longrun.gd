@@ -67,7 +67,9 @@ func _init() -> void:
 		var last_history_size := 0
 		var shortage_army_days := 0
 		var arrears_nation_months := 0
-		var conversion_value := 0
+		var payment_total := 0.0
+		var payment_samples := 0
+		var payment_min := 1.0
 		var court_due := 0
 		var court_paid := 0
 		var seed_start := Time.get_ticks_msec()
@@ -95,10 +97,12 @@ func _init() -> void:
 			if state.day % Simulation.DAYS_PER_MONTH == 0:
 				for nation in state.nations:
 					arrears_nation_months += int(nation.unpaid_military_upkeep > 0)
+					if nation.alive:
+						payment_total += nation.military_payment_ratio
+						payment_samples += 1
+						payment_min = minf(payment_min, nation.military_payment_ratio)
 					court_due += nation.last_court_expense_due
 					court_paid += nation.last_court_expense_paid
-					if state.day % Simulation.DAYS_PER_YEAR == 0:
-						conversion_value += int(nation.get_meta(&"last_automatic_resource_balance", {}).get("transferred_value", 0))
 			var assignments := {}
 			var defenses := {}
 			for pair_value in state.campaign_pairs.values():
@@ -632,7 +636,7 @@ func _init() -> void:
 		print("  INTEGRATION_CAMPAIGN_AUDIT remnant_preparations=%d cooldown_violations=%d duplicate_bindings=%d" % [
 			remnant_preparations, cooldown_violations, duplicate_bindings])
 		print("  PAIR_CAMPAIGN_AUDIT overfull_pairs=%d duplicate_defenses=%d" % [pair_violations, duplicate_defenses])
-		print("  RESOURCE_AUDIT shortage_army_days=%d arrears_nation_months=%d court_due=%d court_paid=%d conversion_gold_value=%d forecast=%s" % [shortage_army_days, arrears_nation_months, court_due, court_paid, conversion_value, str(ResourceForecastRules.profile())])
+		print("  RESOURCE_AUDIT shortage_army_days=%d arrears_nation_months=%d court_due=%d court_paid=%d payment_mean=%.4f payment_min=%.4f forecast=%s" % [shortage_army_days, arrears_nation_months, court_due, court_paid, payment_total / maxi(payment_samples, 1), payment_min, str(ResourceForecastRules.profile())])
 		print("  BATTLE_BINDING_AUDIT errors=%d first=%s" % [battle_binding_errors, first_battle_binding_error])
 		if (
 			ordered == 0

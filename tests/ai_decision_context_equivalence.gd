@@ -97,6 +97,7 @@ func _nation_fp(nation: Nation) -> String:
 	return str([
 		nation.alive,
 		nation.treasury_gold,
+		nation.military_payment_ratio,
 		nation.manpower_pool,
 		nation.granary_food,
 		nation.last_food_demand,
@@ -117,6 +118,9 @@ func _army_fp(army: Army) -> String:
 		army.move_progress,
 		army.path,
 		army.morale,
+		army.funding_multiplier,
+		army.combat_attack(),
+		army.combat_defense(),
 		army.supply_ratio,
 		army.supply_food_debt,
 		army.starving,

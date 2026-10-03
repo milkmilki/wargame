@@ -1,6 +1,6 @@
 extends SceneTree
-## 真实地图和平财政长测：所有国家从零国库出发，验证军制 AI 会形成
-## 正现金流并持续接近三年月收入储备，而非停在零现金收支平衡点。
+## 真实地图和平财政长测：储备只是报告，不保证现金流为正或攒满目标。
+## 验证零国库扩军后支付率、财政缺口和派生战力仍保持一致。
 
 const DAYS: int = 1080
 
@@ -43,12 +43,15 @@ func _init() -> void:
 			" ratio=", ratio
 		)
 		valid = valid and (
-			target > 0
-			and nation.treasury_gold > 0
-			and nation.unpaid_military_upkeep == 0
-			and (balance > 0 or nation.treasury_gold >= target)
-			and ratio >= 0.45
+			target >= 0
+			and nation.treasury_gold >= 0
+			and nation.military_payment_ratio >= 0
+			and nation.military_payment_ratio <= 1
+			and not policy.has("required_upkeep_savings")
+			and policy.gold_shortage == (int(policy.forecast.gold_deficit) > 0)
 		)
+	for army in state.armies:
+		valid = valid and is_equal_approx(army.funding_multiplier, Army.funding_from_payment(state.nations[army.owner_nation].military_payment_ratio))
 	print("verdict=", "GOLD_RESERVE_OK" if valid else "GOLD_RESERVE_INVALID")
 	simulation.free()
 	quit(0 if valid else 1)

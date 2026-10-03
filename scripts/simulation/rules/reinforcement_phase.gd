@@ -9,31 +9,18 @@ static func reinforce_nation(
 	nation: Nation,
 	nation_armies: Array[Army],
 	food_cache: Dictionary,
-	food_report_builder: Callable,
-	food_budget_builder: Callable,
 	network_cache_disabled: bool
 ) -> void:
 	var at_war := not state.wars_of(nation.id).is_empty()
 	var refill_candidates := _collect_refill_candidates(nation_armies, at_war)
 	if refill_candidates.is_empty():
 		return
-	var food_report: Dictionary = food_report_builder.call(
-		nation.id,
-		nation_armies,
-		food_cache
-	)
-	var food_manpower_budget := int(food_budget_builder.call(food_report))
-	if food_manpower_budget <= 0:
-		return
 	var protected_reserve := (
 		ReinforcementRules.PEACETIME_MANPOWER_RESERVE
 		if not at_war
 		else 0
 	)
-	var available_manpower := mini(
-		maxi(nation.manpower_pool - protected_reserve, 0),
-		food_manpower_budget
-	)
+	var available_manpower := maxi(nation.manpower_pool - protected_reserve, 0)
 	if available_manpower <= 0:
 		return
 	var manpower_hub_network := (
@@ -81,8 +68,8 @@ static func _forecast_refill_limit(state: GameState, nation_id: int, plans: Arra
 			var projected := army.size + int(plan.grant)
 			upkeep += GameState.army_monthly_upkeep(projected) - GameState.army_monthly_upkeep(army.size)
 			food += _grant_food_delta(army.size, projected, float(baseline.input.food_multiplier))
-		var report := DiplomacyAI.resource_forecast(state, nation_id, current + amount, -1, cache, 0, {"base_upkeep_delta": upkeep, "field_food_delta": food})
-		if bool(report.feasible):
+		var report := DiplomacyAI.resource_forecast(state, nation_id, current + amount, -1, cache, {"base_upkeep_delta": upkeep, "field_food_delta": food})
+		if bool(report.food_feasible):
 			low = amount
 		else:
 			high = amount - 1

@@ -14,6 +14,8 @@ relations without rewinding the simulation.
 - Store the last settled court expense rate, amount due, and amount paid at
   each history point. Historical details display those records without
   recomputing them from the current ruler or running a resource forecast.
+- Store the military payment ratio at the same history point; historical
+  attack/defense funding is derived from that recorded ratio, not live finance.
 - The rightmost timeline position is always the live state.
 - Selecting an older position pauses simulation and renders a detached
   historical `GameState` view.

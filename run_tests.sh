@@ -33,7 +33,7 @@ echo "    编译通过（class_name 全部注册，无脚本错误）"
 echo
 
 echo "==> [2/29] 逻辑测试套件"
-for TEST in court_expense resource_forecast resource_forecast_integration resource_conversion_forecast diplomatic_battle_lifecycle; do
+for TEST in military_funding military_food_eligibility court_expense resource_forecast resource_forecast_integration diplomatic_battle_lifecycle; do
   RESOURCE_LOG="$LOG_DIR/world-war-$TEST.log"
   HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
     --script "res://tests/$TEST.gd" --log-file "$RESOURCE_LOG"
@@ -42,6 +42,9 @@ for TEST in court_expense resource_forecast resource_forecast_integration resour
     exit 1
   fi
 done
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/ai_40_nation_stress.gd \
+  --log-file "$LOG_DIR/world-war-stress-territory-report.log" -- --test-territory-report
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/test_suite.gd \
   --log-file "$LOG_DIR/world-war-tests.log"
@@ -379,7 +382,7 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-politics-trade.log"
 echo
 
-echo "==> [22a/29] 年度人钱粮自动平衡门禁"
+echo "==> [22a/29] 年度无自动资源兑换门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/automatic_resource_balance.gd \
   --log-file "$LOG_DIR/world-war-automatic-resource-balance.log"

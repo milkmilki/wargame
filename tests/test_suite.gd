@@ -416,11 +416,8 @@ func _test_world_generation() -> void:
 	_check(
 		GameState.army_monthly_upkeep(
 			GameState.INITIAL_HEAVY_ARMY_SIZE
-		) == 11
-			and GameState.formation_creation_gold_cost(
-				GameState.INITIAL_HEAVY_ARMY_SIZE
-			) == 110,
-		"统一主战军维护费必须为11，建制费必须为110"
+		) == 11,
+		"统一主战军维护费必须为11，建军不收现金"
 	)
 	var target_half_year_food := int(ceil(
 		float(target_troops)
@@ -3580,7 +3577,7 @@ func _test_persistent_morale() -> void:
 		_approx(probe.morale, probe.max_morale),
 		"主战军满补给时必须在配置的恢复天数后回满士气"
 	)
-	# 军费支付率只缩放恢复速度，不像缺粮那样直接扣减士气。
+	# 欠饷不再缩放恢复速度，断粮仍阻止恢复。
 	probe.max_morale = Army.DEFAULT_MAX_MORALE
 	probe.morale = 0.2
 	probe.starving = false
@@ -3593,15 +3590,8 @@ func _test_persistent_morale() -> void:
 			0.2
 				+ probe.max_morale
 					/ float(Combat.MORALE_RECOVERY_DAYS)
-					* 0.5
-		)
-			and _approx(
-				Simulation.morale_recovery_payment_multiplier(
-					0.4
-				),
-				0.7
-			),
-		"军费未支付时士气仍应按50%%速度恢复，支付40%%时恢复倍率应为0.70"
+		),
+		"军费未支付时士气仍应按正常速度恢复"
 	)
 	# 断粮时不恢复
 	probe.morale = 0.2; probe.starving = true
@@ -5641,13 +5631,13 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 	_check(int(after.budget_monthly_balance) == int(Simulation.monthly_gold_flows(gs)[0].balance), "loss uses actual revenue, not frozen income")
 	gs.nations[0].treasury_gold = 1000000
 	var funded := Simulation.gold_reserve_policy(gs, 0)
-	_check(int(funded.required_upkeep_savings) == 0, "funded war does not demobilize for soft preference")
+	_check(not funded.has("required_upkeep_savings"), "funded war does not demobilize for soft preference")
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	_check(int(Simulation.gold_reserve_policy(gs, 0).reserve_months) == 36, "peace restores preference")
 
 
 func _test_ruler_economy_integration() -> void:
-	print("[31c] 君主经济：产出、军费、储备与财政缩编使用同一有效口径")
+	print("[31c] 君主经济：产出、军费与财政报告使用同一有效口径")
 	var gs := GameState.new()
 	gs.generate_grid_world(7106)
 	gs.armies.clear()
@@ -5732,28 +5722,7 @@ func _test_ruler_economy_integration() -> void:
 			== int(flow["balance"]),
 		"非中性君主的实际月结必须与产出和有效军费预测同源"
 	)
-	var upkeep_before_demobilization := (
-		Simulation.effective_monthly_military_upkeep(gs, 0)
-	)
-	var view := AiWorldView.build(gs, 0)
-	var demobilized := sim._demobilize_for_gold_security(
-		view, ThreatField.build(view), 1, 0
-	)
-	var upkeep_after_demobilization := (
-		Simulation.effective_monthly_military_upkeep(gs, 0)
-	)
-	_check(
-		demobilized
-		and upkeep_before_demobilization
-			- upkeep_after_demobilization >= 1
-		and nation.ai_last_force_reason.contains(
-			"月省%d金" % (
-				upkeep_before_demobilization
-					- upkeep_after_demobilization
-			)
-		),
-		"财政缩编必须按君主修正后的国家总军费记录并兑现节流"
-	)
+	_check(not sim.has_method("_demobilize_for_gold_security"), "财政缩编入口已删除")
 	sim.free()
 
 # ------------------------------------------------------------------ 23. 自由/溃逃状态：断粮降士气 + 被动接战
@@ -8666,8 +8635,7 @@ func _test_vassal_tribute() -> void:
 	)
 
 	# 长期财政压力：藩王月亏、宗主靠贡赋恰好覆盖军费且国库始终为 0。
-	# 藩王 AI 应在首月缩编到收支平衡，后续月份不得因旧 unpaid 记录重复缩编；
-	# 宗主没有城市基础收益，储备目标为 0，月净为 0 时不得误判为财政危机。
+	# 关闭新增人力，隔离粮食充足且现金不足时不发生财政裁军的规则。
 	var crisis := GameState.new()
 	crisis.generate_grid_world(32043)
 	crisis.armies.clear()
@@ -8690,6 +8658,7 @@ func _test_vassal_tribute() -> void:
 		city.owner_nation = 0
 		crisis.recognized_city_owners[city.id] = 0
 		city.gold_per_month = 0
+		city.manpower_per_month = 0
 		city.is_capital = false
 		city.has_warehouse = false
 		city.food_storage = 0
@@ -8873,18 +8842,18 @@ func _test_vassal_tribute() -> void:
 				== -int(initial_flows[overlord_id]["garrison_upkeep"])
 			and int(initial_flows[overlord_id]["field_army_upkeep"]) == 0
 			and expected_subject_deficit > 0
-			and subject_demobilized[0]
+			and not subject_demobilized[0] and no_repeat_demobilization
 			and overlord_never_demobilizes
-			and subject_upkeep_after_ai[0] < initial_subject_upkeep
+			and subject_upkeep_after_ai[0] == initial_subject_upkeep
 			and subject_unpaid[0]
 				== expected_subject_deficit
-			and subject_unpaid[1] == subject_upkeep_after_ai[0]
+			and subject_unpaid[1] == expected_subject_deficit
 			and overlord_treasuries == [0, 0, 0, 0, 0, 0]
 			and (
 				subject_treasury_grows
 				or subject_city_income == 0
 			),
-		"长期贡赋财政：行政产出被阻断的藩属须裁军，零收入宗主不误裁"
+		"长期贡赋财政：现金不足不裁军，军费缺口保持真实且国库不为负"
 	)
 	print(
 		"  [32d-finance] 城收=%d 贡赋=%d 藩王军费=%d→%d 月亏=%d "
@@ -11774,20 +11743,14 @@ func _test_sustainable_force_capacity() -> void:
 		"和平容量必须在保留人力储备后只征得起的完整军团"
 	)
 	gs.nations[0].manpower_pool = 1000000
-	var finance_report := DiplomacyAI.resource_report(gs, 0, {})
-	gs.nations[0].treasury_gold = (
-		int(finance_report["gold_reserve_target"])
-		+ GameState.formation_creation_gold_cost(
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-	)
+	gs.nations[0].treasury_gold = 0
 	var creation_report := DiplomacyAI.force_capacity_report(
 		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
 	)
 	_check(
 		int(creation_report["additional_armies"]) >= 1
-		and int(creation_report["gold_creation_limit"]) == gs.nations[0].treasury_gold / GameState.formation_creation_gold_cost(GameState.INITIAL_HEAVY_ARMY_SIZE),
-		"和平扩军支付创建费用且通过预测，不要求预先攒满储备"
+		and not creation_report.has("gold_creation_limit"),
+		"零现金和平扩军仍受粮食和人力资格约束"
 	)
 	gs.nations[0].treasury_gold = 1000000
 	for city in gs.cities_of(0):
@@ -11891,20 +11854,15 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		DiplomacyAI.FoodPosture.DEFENSIVE_WAR
 	)
 	var poor_capacity := DiplomacyAI.mobilization_capacity(gs, 1)
-	var formation_creation_cost := (
-		GameState.formation_creation_gold_cost(
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-	)
-	var rich_gold_before_exact_cost := (
+	var rich_gold_before_cash_test := (
 		gs.nations[0].treasury_gold
 	)
-	var exact_cost_report := DiplomacyAI.resource_report(gs, 0)
+	var cash_report := DiplomacyAI.resource_report(gs, 0)
 	var half_year_reserve := (
-		int(exact_cost_report["gold_reserve_baseline_income"])
+		int(cash_report["gold_reserve_baseline_income"])
 		* Simulation.WAR_GOLD_RESERVE_MONTHS
 	)
-	gs.nations[0].treasury_gold = formation_creation_cost
+	gs.nations[0].treasury_gold = 0
 	var below_reserve_war_capacity := (
 		DiplomacyAI.mobilization_capacity(
 			gs,
@@ -11913,7 +11871,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 		)
 	)
 	gs.nations[0].treasury_gold = (
-		half_year_reserve + formation_creation_cost
+		half_year_reserve
 	)
 	var exact_reserve_war_capacity := (
 		DiplomacyAI.mobilization_capacity(
@@ -11922,15 +11880,15 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 			DiplomacyAI.FoodPosture.OFFENSIVE_WAR
 		)
 	)
-	gs.nations[0].treasury_gold = formation_creation_cost
-	var exact_cost_guarded_capacity := (
+	gs.nations[0].treasury_gold = 0
+	var zero_cash_guarded_capacity := (
 		DiplomacyAI.mobilization_capacity(
 			gs,
 			0,
 			DiplomacyAI.FoodPosture.GUARDED
 		)
 	)
-	gs.nations[0].treasury_gold = rich_gold_before_exact_cost
+	gs.nations[0].treasury_gold = rich_gold_before_cash_test
 	var rich_target_troops := DiplomacyAI._troop_count(gs, 0) \
 		+ rich_capacity * GameState.INITIAL_HEAVY_ARMY_SIZE
 	var rich_food_plan := DiplomacyAI.war_food_report(
@@ -11957,9 +11915,9 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 			% [rich_capacity, defensive_capacity, poor_capacity]
 	)
 	_check(
-		exact_reserve_war_capacity >= below_reserve_war_capacity
-			and exact_cost_guarded_capacity <= exact_reserve_war_capacity,
-		"增加真实国库不得降低预测容量，储备不再是额外宣战门槛"
+		exact_reserve_war_capacity == below_reserve_war_capacity
+			and zero_cash_guarded_capacity <= exact_reserve_war_capacity,
+		"国库变化不得改变粮食支持容量，粮食储备偏好仍生效"
 	)
 	_check(
 		bool(rich_food_plan["target_sustainable"])
@@ -12143,11 +12101,7 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 	guard.state = Army.State.FIGHTING
 	guard.battle_id = siege.id
 	var siege_view := AiWorldView.build(gs, 0)
-	var creation_cost := (
-		GameState.formation_creation_gold_cost(
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-	)
+	var creation_cost := 0
 	gs.nations[0].manpower_pool = (
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)

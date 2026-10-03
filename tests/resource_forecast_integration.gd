@@ -33,7 +33,6 @@ func _run() -> void:
 	var guardian := DiplomacyAI.resource_forecast(state, 0, -1, DiplomacyAI.FoodPosture.PEACE, cache)
 	_check(guardian.input.gold_months == 44 and guardian.input.food_months == 26, "one preference affects money and food")
 	_check(ordinary.input.gold_months != guardian.input.gold_months, "preference visible")
-	sim._resolve_annual_resource_balance(Simulation.monthly_gold_flows(state))
 	var snapshot := NativeSnapshotBuilder.build(state)
 	_check(snapshot.schema_version == 19 and snapshot.nations.last_court_expense_paid[0] == state.nations[0].last_court_expense_paid, "snapshot includes settled expenses")
 	sim.free()
@@ -96,7 +95,7 @@ func _test_shared_commitments() -> void:
 	var before := DiplomacyAI.resource_forecast(state, 0, -1, DiplomacyAI.FoodPosture.PEACE, cache)
 	var own_before := DiplomacyAI.resource_report(state, 1, cache)
 	var offensive := DiplomacyAI.resource_forecast(state, 1, -1, DiplomacyAI.FoodPosture.OFFENSIVE_WAR, cache)
-	var offensive_growth := DiplomacyAI.resource_forecast(state, 1, army.size + 202, DiplomacyAI.FoodPosture.OFFENSIVE_WAR, cache, 0, {"base_upkeep_delta": 1, "field_food_delta": 50.0})
+	var offensive_growth := DiplomacyAI.resource_forecast(state, 1, army.size + 202, DiplomacyAI.FoodPosture.OFFENSIVE_WAR, cache, {"base_upkeep_delta": 1, "field_food_delta": 50.0})
 	_check(is_equal_approx(float(offensive_growth.change.field_food_delta), float(offensive.change.get("field_food_delta", 0)) + 50.0), "exact candidate increment preserves offensive deployment allowance")
 	var monthly_flows: Array[Dictionary] = cache.monthly_gold_flows
 	var old_upkeep := int(monthly_flows[1].field_army_upkeep)
@@ -111,11 +110,10 @@ func _test_shared_commitments() -> void:
 	_check(monthly_flows[1].field_army_upkeep == old_upkeep, "commit does not mutate external monthly settlement snapshot")
 	var current_count := int(own_after.forecast.input.army_count)
 	var new_army := state.create_army(1, state.nations[1].capital_city_id, 15000, 15000)
-	state.nations[1].treasury_gold -= GameState.formation_creation_gold_cost(15000)
 	DiplomacyAI.commit_force_change(state, 1, 15000, cache, [{"army": new_army, "old_size": 0}])
 	var next := DiplomacyAI.resource_forecast(state, 1, -1, DiplomacyAI.FoodPosture.PEACE, cache)
 	_check(next.input.army_count == current_count + 1 and next.input.troops == 16601, "accepted creation updates troop and formation totals")
-	_check(next.input.gold == state.nations[1].treasury_gold, "creation cost deducted once")
+	_check(next.input.gold == state.nations[1].treasury_gold, "creation does not deduct cash")
 	_check(next.input.field_food == DiplomacyAI.resource_forecast(state, 0, -1, DiplomacyAI.FoodPosture.PEACE, cache).input.field_food, "pool members see identical committed consumption")
 	state.day += 1
 	_check(DiplomacyAI.resource_forecast(state, 1, -1, DiplomacyAI.FoodPosture.PEACE, cache).input.day == state.day, "batch reports cannot leak across dates")
@@ -172,10 +170,10 @@ func _test_wartime_soft_reserve() -> void:
 	flows[0].field_army_upkeep = 10
 	var policy := Simulation.gold_reserve_policy(state, 0, flows)
 	_check(policy.forecast.input.field_food == 0, "historical food demand cannot create phantom armies after elimination")
-	_check(policy.forecast.gold_gap > 0 and policy.forecast.feasible, "war fixture misses preference but survives the horizon")
-	_check(policy.required_upkeep_savings == 0, "wartime soft reserve cannot trigger demobilization")
+	_check(policy.forecast.gold_gap > 0 and not policy.gold_shortage, "war fixture misses preference but survives the horizon")
+	_check(not policy.has("required_upkeep_savings"), "fiscal demobilization path removed")
 	state.nations[0].unpaid_military_upkeep = 5
-	_check(Simulation.gold_reserve_policy(state, 0, flows).required_upkeep_savings == 5, "real unpaid military expense still triggers wartime saving")
+	_check(not Simulation.gold_reserve_policy(state, 0, flows).has("required_upkeep_savings"), "arrears do not reintroduce fiscal demobilization")
 
 func _test_shared_pool_frame_equivalence() -> void:
 	var baseline: PackedByteArray
@@ -188,24 +186,29 @@ func _test_shared_pool_frame_equivalence() -> void:
 		for nation in state.nations:
 			nation.ruler_archetype = RulerProfile.BALANCED
 			nation.ruler_traits.clear()
-			nation.treasury_gold = 1000000
+			nation.treasury_gold = 0
 		for city in state.cities:
+			city.gold_per_month = 0
 			city.garrison_manpower = 0
 			if city.has_warehouse:
 				city.food_storage = 100000
 		state.refresh_derived()
 		for nation_id in [0, 1]:
-			state.create_army(nation_id, state.nations[nation_id].capital_city_id, 1399, 15000).supply_food_debt = 0.8
+			state.create_army(nation_id, state.nations[nation_id].capital_city_id, 13999, 15000).supply_food_debt = 0.8
 		var sim := Simulation.new()
 		root.add_child(sim)
 		sim.setup(state)
 		sim.paused = true
 		state.day = 30
-		sim._resolve_economy()
+		sim._resolve_economy({"trade": {}, "gold_flows": Simulation._monthly_gold_flows_from_trade(state, {})})
+		for nation_id in [0, 1]:
+			_check(state.nations[nation_id].military_payment_ratio < 1, "sync/frame fixture exercises actual underfunding")
 		if sliced:
 			await sim._resolve_reinforcements_over_frames()
 		else:
 			sim._resolve_reinforcements()
+		for army in state.armies:
+			_check(army.funding_multiplier == Army.funding_from_payment(state.nations[army.owner_nation].military_payment_ratio), "derived funding matches settled owner payment in sync/frame execution")
 		var snapshot := var_to_bytes(NativeSnapshotBuilder.build(state))
 		if sliced:
 			_check(snapshot == baseline, "shared-pool monthly expense and refill match full native snapshot across sync/frame execution")

@@ -42,8 +42,10 @@ next day. Later defenders trigger a new field engagement using actual current
 army values. Each battlefield has its own morale; front combat-report locking
 still lasts until all related real field engagements finish.
 
-Native snapshot schema is 18, without obsolete reinforcement allowance arrays.
-Combat logs carry rules version 2, formation maxima and ruler modifiers.
+Native snapshot schema is 19, without obsolete reinforcement allowance arrays.
+Combat logs carry rules version 3, formation maxima, ruler modifiers and
+the actual funding multiplier. Funding affects attack/defense, not shared
+morale or morale recovery. See [military_funding_and_food.md](military_funding_and_food.md).
 Earlier rule-version logs are rejected rather than replayed under new rules.
 Maps are unchanged.
 

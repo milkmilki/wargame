@@ -4,8 +4,6 @@ extends RefCounted
 ## this module owns fingerprints, weighting, and warehouse withdrawals.
 
 
-static func morale_recovery_payment_multiplier(payment_ratio: float) -> float:
-	return 0.5 + 0.5 * clampf(payment_ratio, 0.0, 1.0)
 
 
 static func sources_have_food(

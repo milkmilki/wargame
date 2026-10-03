@@ -7,6 +7,9 @@ const DEFAULT_SEED: int = 12345
 
 
 func _init() -> void:
+	if OS.get_cmdline_user_args().has("--test-territory-report"):
+		quit(0 if _test_territory_report() else 1)
+		return
 	var days := _environment_int(
 		"AI_STRESS_DAYS",
 		DEFAULT_DAYS
@@ -156,6 +159,7 @@ func _run_case(
 		"generation_ms": float(generation_usec) / 1000.0,
 		"cities": state.cities.size(),
 		"land_cities": state.land_cities().size(),
+		"largest_territory": _largest_territory_report(state),
 		"initial_land_min": initial_land_counts.min(),
 		"initial_land_max": initial_land_counts.max(),
 		"initial_armies": initial_armies,
@@ -193,6 +197,79 @@ func _land_city_counts(
 	for city in state.land_cities():
 		counts[city.owner_nation] += 1
 	return counts
+
+
+func _largest_territory_report(state: GameState) -> Dictionary:
+	var land := state.land_cities()
+	var roots := PackedInt32Array()
+	roots.resize(state.nations.size())
+	for nation in state.nations:
+		roots[nation.id] = state.food_pool_holder(nation.id)
+	var controlled := {}
+	var direct := {}
+	for city in land:
+		var owner := city.owner_nation
+		if owner < 0 or owner >= roots.size():
+			continue
+		var root_id := roots[owner]
+		controlled[root_id] = int(controlled.get(root_id, 0)) + 1
+		direct[owner] = int(direct.get(owner, 0)) + 1
+	var largest_id := -1
+	var largest_count := 0
+	for root_value in controlled:
+		var root_id := int(root_value)
+		var count := int(controlled[root_id])
+		if count > largest_count or (count == largest_count and root_id < largest_id):
+			largest_id = root_id
+			largest_count = count
+	return {
+		"root_nation_id": largest_id,
+		"name": state.nation_display_name(largest_id) if largest_id >= 0 else "none",
+		"land_cities": largest_count,
+		"direct_land_cities": int(direct.get(largest_id, 0)),
+		"total_land_cities": land.size(),
+		"share": float(largest_count) / float(land.size()) if not land.is_empty() else 0.0,
+	}
+
+
+func _test_territory_report() -> bool:
+	var state := GameState.new()
+	for id in range(4):
+		var nation := Nation.new()
+		nation.id = id
+		nation.alive = true
+		state.nations.append(nation)
+	for owner in [0, 1, 1, 2, 3, -1]:
+		var city := City.new()
+		city.id = state.cities.size()
+		city.owner_nation = owner
+		state.cities.append(city)
+	var dock := City.new()
+	dock.id = state.cities.size()
+	dock.owner_nation = 3
+	dock.is_dock = true
+	state.cities.append(dock)
+	state.suzerainty = {1: {"overlord_id": 0, "civil_war": false}, 2: {"overlord_id": 1, "civil_war": false}}
+	state.set_diplomatic_relation(0, 3, GameState.DiplomaticRelation.ALLIED)
+	var report := _largest_territory_report(state)
+	var valid: bool = report.root_nation_id == 0 and report.land_cities == 4 and report.direct_land_cities == 1 and report.total_land_cities == 6 and is_equal_approx(report.share, 4.0 / 6.0)
+	state.suzerainty[1].civil_war = true
+	report = _largest_territory_report(state)
+	valid = valid and report.root_nation_id == 1 and report.land_cities == 3 and report.direct_land_cities == 2
+	state.suzerainty.clear()
+	state.cities[2].owner_nation = 2
+	report = _largest_territory_report(state)
+	valid = valid and report.root_nation_id == 2 and report.land_cities == 2
+	state.cities[3].owner_nation = 0
+	state.cities[5].owner_nation = 2
+	report = _largest_territory_report(state)
+	valid = valid and report.root_nation_id == 0 and report.land_cities == 2
+	report = _largest_territory_report(GameState.new())
+	valid = valid and report.root_nation_id == -1 and report.total_land_cities == 0 and report.share == 0.0
+	if not valid:
+		push_error("territory report must count peaceful suzerainty, exclude docks/allies and use stable ties")
+	print("STRESS_TERRITORY_REPORT_OK=%s" % valid)
+	return valid
 
 
 func _invariant_error(
@@ -438,6 +515,11 @@ func _print_case(result: Dictionary) -> void:
 			result["commit_failures"],
 		]
 	)
+	var territory: Dictionary = result["largest_territory"]
+	print("  largest_power root=%d name=%s land=%d/%d territory_share=%.2f%% direct=%d vassal=%d basis=peaceful_suzerainty_land_cities" % [
+		territory.root_nation_id, territory.name, territory.land_cities,
+		territory.total_land_cities, float(territory.share) * 100.0,
+		territory.direct_land_cities, int(territory.land_cities) - int(territory.direct_land_cities)])
 	print(
 		(
 			"  timing total=%.2fms peak_day=%d "

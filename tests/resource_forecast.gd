@@ -5,11 +5,11 @@ func _init() -> void:
 	var report := ResourceForecastRules.evaluate(input)
 	_check(report.gold_min == 4 and report.gold_end == 4, "12 real monthly payments")
 	_check(report.food_min < 0 and report.food_min_day < 180, "pre-harvest deficit despite annual surplus")
-	_check(not report.feasible and report.food_deficit > 0, "deficit prevents new commitments")
+	_check(not report.food_feasible and report.food_deficit > 0, "food deficit prevents new commitments")
 	input.food = 300
 	report = ResourceForecastRules.evaluate(input)
-	_check(report.feasible, "stock can fund a deficit year")
-	_check(not ResourceForecastRules.evaluate(input, {"gold_cost": 5}).feasible, "creation cost included")
+	_check(report.food_feasible, "stock can feed a deficit year")
+	_check(not report.has("feasible") and not report.has("growth_allowed"), "no mixed military resource gate")
 	input.food_capacity = 200
 	report = ResourceForecastRules.evaluate(input)
 	_check(report.food_end <= 200 and report.food_target <= 200, "capacity clips harvest and target")
@@ -33,8 +33,9 @@ func _init() -> void:
 	fractional.consumers = []
 	report = ResourceForecastRules.evaluate(fractional)
 	_check(report.food_min_day >= 180, "harvest on same day precedes daily field supply")
-	_check(ResourceForecastRules.evaluate({"gold": 100, "income": 5, "upkeep": 10}).feasible, "cash deficit with sufficient inventory remains legal")
-	_check(not ResourceForecastRules.evaluate({"gold": 10, "income": 5, "upkeep": 10}).feasible, "future arrears blocks new commitments")
+	_check(not ResourceForecastRules.evaluate({"gold": 100, "income": 5, "upkeep": 10}).gold_shortage, "cash forecast keeps full upkeep needs")
+	var unfunded := ResourceForecastRules.evaluate({"gold": 0, "income": 5, "upkeep": 10})
+	_check(unfunded.gold_shortage and unfunded.food_feasible and unfunded.food_growth_allowed, "cash shortage does not block military food eligibility")
 	_check(ResourceForecastRules.evaluate({"food": 100, "food_capacity": 1000, "trade_food": 20, "export_food": 5, "food_months": 6}).food_target == 30, "imports do not cancel the export reserve preference")
 	print("resource_forecast: %s" % ("PASS" if valid else "FAIL"))
 	quit(0 if valid else 1)

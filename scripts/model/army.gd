@@ -28,6 +28,8 @@ var defense: int = 10                      ## 防御力
 var ruler_attack_multiplier: float = 1.0
 var ruler_defense_multiplier: float = 1.0
 var ruler_morale_multiplier: float = 1.0
+## 最近月结支付率的派生攻防倍率；不写入原生快照或基础属性。
+var funding_multiplier: float = 1.0
 ## 所属持久指挥单位；-1 表示未编组。每个指挥单位只允许一支主战军。
 var battle_group_id: int = -1
 ## 所属战争军队池；-1 表示国家预备队。州目标变化不清除此绑定。
@@ -121,9 +123,19 @@ func morale_ratio() -> float:
 
 
 func combat_attack() -> float:
-	if is_city_garrison:
-		return float(attack)
-	return float(attack) * maxf(ruler_attack_multiplier, 0.1)
+	return float(attack) * funding_multiplier * (
+		1.0 if is_city_garrison else maxf(ruler_attack_multiplier, 0.1)
+	)
+
+
+func combat_defense() -> float:
+	return float(defense) * funding_multiplier * (
+		1.0 if is_city_garrison else maxf(ruler_defense_multiplier, 0.1)
+	)
+
+
+static func funding_from_payment(payment_ratio: float) -> float:
+	return 0.5 + 0.5 * clampf(payment_ratio, 0.0, 1.0)
 
 
 func combat_morale() -> float:

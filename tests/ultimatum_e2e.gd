@@ -11,9 +11,11 @@ func _run() -> void:
 		var fixture := _fixture(outcome)
 		var state: GameState = fixture.state
 		var sim: Simulation = fixture.sim
+		state.nations[0].treasury_gold = 0
+		state.nations[0].unpaid_military_upkeep = 100
 		var actions: Array[Dictionary] = []
 		DiplomacyAI._collect_existing_war_preparation(state, 0, actions, {})
-		_check(actions.size() == 1 and int(actions[0].kind) == DiplomacyAI.Action.ISSUE_ULTIMATUM, "ready preparation emits ultimatum")
+		_check(actions.size() == 1 and int(actions[0].kind) == DiplomacyAI.Action.ISSUE_ULTIMATUM, "zero-cash ready preparation emits ultimatum")
 		if not actions.is_empty():
 			var actor_tree := state.nations[1].family_tree_id
 			_check(sim._execute_diplomatic_action(actions[0]), "ultimatum commits")
@@ -70,6 +72,8 @@ func _run() -> void:
 	fixture = _fixture(UltimatumRules.Outcome.SUBMIT)
 	state = fixture.state
 	sim = fixture.sim
+	state.nations[0].treasury_gold = 0
+	state.nations[0].unpaid_military_upkeep = 100
 	actions.clear()
 	DiplomacyAI._collect_existing_war_preparation(state, 0, actions, {})
 	await sim._commit_diplomacy_actions_over_frames(actions)

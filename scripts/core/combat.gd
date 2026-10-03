@@ -48,7 +48,7 @@ const MIN_COMBAT_EFFICIENCY: float = 0.2
 const SIDE_ROUT_THRESHOLD: float = 0.15
 ## 单支军队溃退阈值：士气 <= 此值的军队视为已失去组织、退出前线（不再计入有效战力）。
 const ARMY_ROUT_THRESHOLD: float = 0.05
-const COMBAT_RULES_VERSION: int = 2
+const COMBAT_RULES_VERSION: int = 3
 
 # ---- 边地形：danger 是唯一真源 ----
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
@@ -148,8 +148,7 @@ static func _side_combat_signature(
 		total_size += army.size
 		attack_mass += int(round(float(army.size) * army.combat_attack()))
 		defense_mass += int(round(
-			float(army.size * army.defense)
-				* maxf(army.ruler_defense_multiplier, 0.1)
+			float(army.size) * army.combat_defense()
 		))
 		morale_mass += army.size * int(round(army.morale * 1000000.0))
 		if army.starving:
@@ -599,6 +598,7 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"ruler_attack_multiplier": army.ruler_attack_multiplier,
 			"ruler_defense_multiplier": army.ruler_defense_multiplier,
 			"ruler_morale_multiplier": army.ruler_morale_multiplier,
+			"funding_multiplier": army.funding_multiplier,
 			"max_morale": army.max_morale,
 			"defense": army.defense,
 			"morale": army.morale,
@@ -734,19 +734,27 @@ static func _canonicalize_side(
 	side: Array[Army],
 	priority: Dictionary = {}
 ) -> void:
-	side.sort_custom(func(a: Army, b: Army) -> bool:
+	var physical_less := func(a: Army, b: Army) -> bool:
 		if a.size != b.size:
 			return a.size > b.size
-		if not is_equal_approx(a.combat_attack(), b.combat_attack()):
-			return a.combat_attack() > b.combat_attack()
-		if a.defense != b.defense:
-			return a.defense > b.defense
+		var attack_a := a.combat_attack()
+		var attack_b := b.combat_attack()
+		if not is_equal_approx(attack_a, attack_b):
+			return attack_a > attack_b
+		var defense_a := a.combat_defense()
+		var defense_b := b.combat_defense()
+		if not is_equal_approx(defense_a, defense_b):
+			return defense_a > defense_b
 		if not is_equal_approx(a.morale, b.morale):
 			return a.morale > b.morale
 		return int(priority.get(a, 1 << 30)) < int(
 			priority.get(b, 1 << 30)
 		)
-	)
+	# Most rounds keep the previous physical order; avoid sorting it again.
+	for index in range(1, side.size()):
+		if physical_less.call(side[index], side[index - 1]):
+			side.sort_custom(physical_less)
+			return
 
 
 ## 为本轮明确选择前线兵力。返回项为 {army, committed, size_before}；
@@ -838,8 +846,7 @@ static func _frontline_avg_defense(
 	for entry in frontline:
 		var army: Army = entry["army"]
 		weighted += (
-			float(entry["committed"]) * float(army.defense)
-				* maxf(army.ruler_defense_multiplier, 0.1)
+			float(entry["committed"]) * army.combat_defense()
 				* _city_garrison_defense_multiplier(army)
 		)
 	return weighted / float(total)

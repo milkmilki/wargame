@@ -19,7 +19,7 @@ static func profile() -> Dictionary:
 static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 	var started := Time.get_ticks_usec() if profiling_enabled else 0
 	var day := int(input.get("day", 0))
-	var gold := float(input.get("gold", 0)) - float(change.get("gold_cost", 0))
+	var gold := float(input.get("gold", 0))
 	var food := float(input.get("food", 0))
 	var gold_min := gold
 	var food_min := food
@@ -87,8 +87,8 @@ static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 		"gold_gap": int(ceil(gold_gap)), "food_gap": int(ceil(food_gap)),
 		"gold_savings": int(ceil(gold_gap / RECOVERY_MONTHS)), "food_savings": food_gap / RECOVERY_MONTHS,
 		"monthly_gold_balance": int(floor(monthly_balance)),
-		"feasible": reasons.is_empty(), "reasons": reasons,
-		"growth_allowed": reasons.is_empty() and gold >= minf(float(input.get("gold", 0)), gold_target) + gold_gap / 3.0 and food >= minf(float(input.get("food", 0)), food_target) + food_gap / 3.0,
+		"food_feasible": food_min >= -0.00001, "gold_shortage": gold_min < -0.00001, "reasons": reasons,
+		"food_growth_allowed": food_min >= -0.00001 and food >= minf(float(input.get("food", 0)), food_target) + food_gap / 3.0,
 	}
 	if profiling_enabled:
 		if _profile.is_empty():
@@ -99,7 +99,7 @@ static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 		_profile.peak_usec = maxi(int(_profile.peak_usec), elapsed)
 		_profile.gold_shortage += int(gold_min < -0.00001)
 		_profile.food_shortage += int(food_min < -0.00001)
-		_profile.reserve_growth_denied += int(reasons.is_empty() and not result.growth_allowed)
+		_profile.reserve_growth_denied += int(result.food_feasible and not result.food_growth_allowed)
 	return result
 
 static func _field_consumption(input: Dictionary, change: Dictionary, monthly: float, days: int) -> float:

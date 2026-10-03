@@ -108,6 +108,7 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 	var court_rates: PackedFloat32Array = snapshot["court_expense_rates"]
 	var court_due: PackedInt32Array = snapshot["court_expense_due"]
 	var court_paid: PackedInt32Array = snapshot["court_expense_paid"]
+	var payment_ratios: PackedFloat32Array = snapshot["military_payment_ratios"]
 	for nation_id in range(_view_state.nations.size()):
 		_view_state.nations[nation_id].alive = (
 			nation_id < alive.size() and alive[nation_id] != 0
@@ -118,6 +119,7 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 			if nation_id < strategic_region_anchors.size() else -1
 		)
 		var nation := _view_state.nations[nation_id]
+		nation.military_payment_ratio = payment_ratios[nation_id] if nation_id < payment_ratios.size() else 1.0
 		nation.last_court_expense_rate = court_rates[nation_id] if nation_id < court_rates.size() else 0.0
 		nation.last_court_expense_due = court_due[nation_id] if nation_id < court_due.size() else 0
 		nation.last_court_expense_paid = court_paid[nation_id] if nation_id < court_paid.size() else 0
@@ -182,6 +184,7 @@ func _capture(game_state: GameState) -> void:
 	var court_rates := PackedFloat32Array()
 	var court_due := PackedInt32Array()
 	var court_paid := PackedInt32Array()
+	var payment_ratios := PackedFloat32Array()
 	alive.resize(game_state.nations.size())
 	for nation_id in range(game_state.nations.size()):
 		alive[nation_id] = 1 if game_state.nations[nation_id].alive else 0
@@ -189,6 +192,7 @@ func _capture(game_state: GameState) -> void:
 		court_rates.append(game_state.nations[nation_id].last_court_expense_rate)
 		court_due.append(game_state.nations[nation_id].last_court_expense_due)
 		court_paid.append(game_state.nations[nation_id].last_court_expense_paid)
+		payment_ratios.append(game_state.nations[nation_id].military_payment_ratio)
 	_snapshots.append({
 		"day": game_state.day,
 		"month": game_state.month,
@@ -199,6 +203,7 @@ func _capture(game_state: GameState) -> void:
 		"court_expense_rates": court_rates,
 		"court_expense_due": court_due,
 		"court_expense_paid": court_paid,
+		"military_payment_ratios": payment_ratios,
 		"city_owners": owners,
 		"recognized_city_owners": game_state.recognized_city_owners.duplicate(),
 		"nation_alive": alive,

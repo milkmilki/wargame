@@ -2611,6 +2611,7 @@ static func resource_report(
 	var result := {
 		"troops": troops,
 		"forecast": food_plan["forecast"],
+		"food_plan": food_plan,
 		"court_expense_rate": gold_flow.get("court_expense_rate", 0.0),
 		"court_expense_due": gold_flow.get("court_expense_due", 0),
 		"monthly_city_gold_income": monthly_city_income,
@@ -2662,7 +2663,7 @@ static func resource_report(
 		"full_strength_annual_demand": food_plan["full_strength_annual_demand"],
 		"full_strength_annual_balance": food_plan["full_strength_annual_balance"],
 		"full_strength_runway_years": food_plan["full_strength_runway_years"],
-		"ready": nation.unpaid_military_upkeep <= 0 and manpower_ratio >= 1.0 and bool(food_plan["forecast"]["feasible"]),
+		"ready": manpower_ratio >= 1.0 and bool(food_plan["forecast"]["food_feasible"]),
 	}
 	evaluation_cache[cache_key] = result
 	return result
@@ -2847,11 +2848,11 @@ static func offensive_resources_ready(state: GameState, nation_id: int, report: 
 	var era := unification_era_factor(state)
 	var required := maxi(int(round(lerpf(float(MIN_MANPOWER_RESERVE), float(MIN_MANPOWER_RESERVE) / 5.0, era))), int(ceil(float(report.troops) * lerpf(0.15, TOTAL_WAR_MANPOWER_SHARE, era))))
 	required = mini(required, state.manpower_pool_capacity(nation_id))
-	return nation.unpaid_military_upkeep <= 0 and nation.manpower_pool >= required and bool(report.forecast.feasible)
+	return nation.manpower_pool >= required and bool(report.forecast.food_feasible)
 
 
 static func offensive_food_sustainable(_state: GameState, food_plan: Dictionary) -> bool:
-	return bool(food_plan.forecast.feasible)
+	return bool(food_plan.forecast.food_feasible)
 
 
 static func war_preparation_resources_ready(state: GameState, nation_id: int, evaluation_cache: Dictionary = {}) -> bool:
@@ -2859,7 +2860,7 @@ static func war_preparation_resources_ready(state: GameState, nation_id: int, ev
 	var nation := state.nations[nation_id]
 	var required := maxi(MIN_MANPOWER_RESERVE / 5, int(ceil(float(report.troops) * TOTAL_WAR_MANPOWER_SHARE)))
 	var forecast := resource_forecast(state, nation_id, -1, FoodPosture.OFFENSIVE_WAR, evaluation_cache)
-	return nation.unpaid_military_upkeep <= 0 and nation.manpower_pool >= required and bool(forecast.feasible)
+	return nation.manpower_pool >= required and bool(forecast.food_feasible)
 
 
 static func mobilization_capacity(
@@ -2889,20 +2890,18 @@ static func force_capacity_report(
 	var nation := state.nations[nation_id]
 	var size := GameState.INITIAL_HEAVY_ARMY_SIZE
 	var count := int(input.army_count)
-	var cost := GameState.formation_creation_gold_cost(size)
 	var reserve := int(input.manpower_target)
 	var manpower_limit := maxi(nation.manpower_pool - reserve, 0) / size
-	var creation_limit := nation.treasury_gold / maxi(cost, 1)
 	var slot_limit := maxi(state.max_army_count(nation_id) - count, 0)
-	var max_growth := mini(slot_limit, mini(manpower_limit, creation_limit))
+	var max_growth := mini(slot_limit, manpower_limit)
 	var additional := 0
-	var reason := "army_slots"
+	var reason := "manpower" if manpower_limit < slot_limit else "army_slots"
 	var upper := max_growth
 	while additional < upper:
 		var growth := 1 if additional == 0 else (additional + upper + 1) / 2
-		var check := resource_forecast(state, nation_id, int(input.troops) + growth * size, posture, evaluation_cache, growth * cost, {"base_upkeep_delta": growth * GameState.army_monthly_upkeep(size), "field_food_delta": growth * ReinforcementPhase._grant_food_delta(0, size, float(input.food_multiplier))})
-		if not bool(check.growth_allowed):
-			reason = "gold_upkeep" if int(check.gold_deficit) > 0 or int(check.gold_end) < int(check.gold_target) else "food"
+		var check := resource_forecast(state, nation_id, int(input.troops) + growth * size, posture, evaluation_cache, {"base_upkeep_delta": growth * GameState.army_monthly_upkeep(size), "field_food_delta": growth * ReinforcementPhase._grant_food_delta(0, size, float(input.food_multiplier))})
+		if not bool(check.food_growth_allowed):
+			reason = "food"
 			upper = growth - 1
 		else:
 			additional = growth
@@ -2912,9 +2911,9 @@ static func force_capacity_report(
 	var result := {
 		"current_armies": count, "sustainable_armies": count + additional,
 		"supportable_armies": count + additional, "additional_armies": additional,
-		"manpower_limit": manpower_limit, "gold_creation_limit": creation_limit,
-		"gold_upkeep_limit": additional, "food_limit": maxi(food_total - count, 0),
-		"army_slot_limit": slot_limit, "gold_total_capacity": count + additional,
+		"manpower_limit": manpower_limit,
+		"food_limit": maxi(food_total - count, 0),
+		"army_slot_limit": slot_limit,
 		"food_total_capacity": food_total, "limiting_resource": reason,
 		"manpower_reserve": reserve, "posture": posture,
 	}
@@ -3333,7 +3332,7 @@ static func _build_diplomatic_range_masks(
 ## A batch owns these aggregates and its accepted resource commitments.
 static func resource_forecast(
 	state: GameState, nation_id: int, target_troops: int = -1,
-	posture: int = -1, evaluation_cache: Dictionary = {}, gold_cost: int = 0, override: Dictionary = {}
+	posture: int = -1, evaluation_cache: Dictionary = {}, override: Dictionary = {}
 ) -> Dictionary:
 	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var inputs := _resource_forecast_inputs(state, evaluation_cache)
@@ -3345,14 +3344,14 @@ static func resource_forecast(
 	var current := int(input.troops)
 	if target_troops < 0:
 		target_troops = current
-	var forecast_key := "forecast:%d:%d:%d:%d" % [nation_id, target_troops, posture, gold_cost]
+	var forecast_key := "forecast:%d:%d:%d" % [nation_id, target_troops, posture]
 	if override.is_empty() and evaluation_cache.has(forecast_key):
 		return evaluation_cache[forecast_key]
 	input = input.duplicate()
 	var bonus := int(input.reserve_months_bonus)
 	input.gold_months = maxi((36 if peace else 6) + bonus, 0)
 	input.food_months = maxi((18 if peace else 6) + bonus, 0)
-	var change := {"gold_cost": gold_cost}
+	var change := {}
 	var deployment_food_delta := 0.0
 	# A proposed offensive deployment cannot assume every army will retain
 	# its peacetime local supply loss. Existing wars keep observed deployment.
@@ -5069,7 +5068,7 @@ static func _collect_existing_war_preparation(
 			"a": nation_id,
 			"b": target_id,
 			"reason": (
-				"目标国失效或己方资源连续不足%d天，取消对国%d的战争准备；道路、敌军屯兵和集结进度不触发取消"
+				"目标国失效或己方人力／粮食连续不足%d天，取消对国%d的战争准备；道路、敌军屯兵和集结进度不触发取消"
 				% [
 					WAR_PREPARATION_RESOURCE_GRACE_DAYS,
 					target_id,

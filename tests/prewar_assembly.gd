@@ -227,9 +227,9 @@ func _init() -> void:
 	nation.treasury_gold = 0
 	var no_income_cache := {"monthly_gold_flows": Simulation._monthly_gold_flows_from_trade(state, {})}
 	_check(
-		not DiplomacyAI.war_preparation_resources_ready(state, 0, no_income_cache)
-		and not DiplomacyAI.war_preparation_launch_allowed(state, 0, no_income_cache),
-		"360天人数兜底不得绕过未来军费欠付的硬条件"
+		DiplomacyAI.war_preparation_resources_ready(state, 0, no_income_cache)
+		and DiplomacyAI.war_preparation_launch_allowed(state, 0, no_income_cache),
+		"360天人数兜底保留粮食资格，现金不足不再否决宣战"
 	)
 	state.day = old_day
 	nation.treasury_gold = old_gold

@@ -9,8 +9,7 @@ static func effective(army: Army) -> float:
 	var quality := (
 			sqrt(maxf(
 			army.combat_attack()
-				* float(army.defense)
-				* maxf(army.ruler_defense_multiplier, 0.1),
+				* army.combat_defense(),
 			1.0
 		))
 		/ 10.0
@@ -27,6 +26,11 @@ static func city_garrison_defense(
 ) -> float:
 	if state == null or not state.is_zhou_city(center_city_id):
 		return 0.0
+	var owner_id := state.cities[center_city_id].owner_nation
+	var funding := (
+		Army.funding_from_payment(state.nations[owner_id].military_payment_ratio)
+		if owner_id >= 0 and owner_id < state.nations.size() else 1.0
+	)
 	return (
 		float(state.cities[center_city_id].garrison_manpower)
 		* maxf(
@@ -34,6 +38,7 @@ static func city_garrison_defense(
 			0.1
 		)
 		* state.city_garrison_defense_bonus(attacker_id, center_city_id)
+		* funding
 	)
 
 

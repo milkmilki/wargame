@@ -117,6 +117,10 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 				"error": "missing_field",
 				"field": key,
 			}
+	for side_key in ["participants_a", "participants_b"]:
+		for data in record[side_key]:
+			if not data.has("funding_multiplier"):
+				return {"error": "missing_field", "field": "funding_multiplier"}
 	var battle := _battle_from_record(record)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1
@@ -299,6 +303,7 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	))
 	army.ruler_defense_multiplier = float(data.get("ruler_defense_multiplier", 1.0))
 	army.ruler_morale_multiplier = float(data.get("ruler_morale_multiplier", 1.0))
+	army.funding_multiplier = float(data["funding_multiplier"])
 	army.defense = int(data.get("defense", 10))
 	army.morale = float(data.get("morale", 1.0))
 	army.starving = bool(data.get("starving", false))
@@ -327,6 +332,7 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"ruler_attack_multiplier": army.ruler_attack_multiplier,
 			"ruler_defense_multiplier": army.ruler_defense_multiplier,
 			"ruler_morale_multiplier": army.ruler_morale_multiplier,
+			"funding_multiplier": army.funding_multiplier,
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
@@ -365,6 +371,7 @@ static func _snapshots_equal(
 			"ruler_attack_multiplier",
 			"ruler_defense_multiplier",
 			"ruler_morale_multiplier",
+			"funding_multiplier",
 			"max_morale",
 			"city_garrison_combat_multiplier",
 			"city_garrison_defense_bonus",

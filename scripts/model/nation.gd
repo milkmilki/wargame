@@ -49,9 +49,6 @@ var last_field_army_upkeep: int = 0        ## 最近一月野战军维护费
 var last_garrison_upkeep: int = 0          ## 最近一月州治虚拟守军维护费
 var unpaid_military_upkeep: int = 0        ## 最近一月未支付的军队维护费
 var military_payment_ratio: float = 1.0    ## 最近一月军费实际支付率 [0,1]
-## 实际欠饷触发的财政缩编每月最多一次，防止 10 日 AI 周期读取同一月
-## unpaid 记录而连续缩编；值为世界月份（day / 30）。
-var last_gold_demobilization_month: int = -1
 var war_mobilization_target_troops: int = 0 ## 宣战粮食预算对应的目标总兵力
 var war_mobilization_until_day: int = -1
 var war_mobilization_reason: String = ""

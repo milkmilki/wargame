@@ -22,7 +22,6 @@ const SMALL_NATION_SURVIVAL_MAX_CITIES: int = 4
 const SMALL_NATION_MOBILE_RESERVE_ARMIES: int = 1
 const DEFAULT_TRUCE_DAYS: int = 180
 const WAR_GOLD_TROOPS_PER_UNIT: int = 1400
-const FORMATION_CREATION_UPKEEP_MONTHS: int = 10
 const CITY_FOOD_PER_HALF_YEAR_MIN: int = 400
 const CITY_FOOD_PER_HALF_YEAR_MAX: int = 600
 const TERRAIN_CITY_GOLD_PER_MONTH_MIN: int = 1
@@ -124,13 +123,6 @@ static func normalize_nation_color(color: Color) -> Color:
 			NATION_COLOR_VALUE_MAX
 		),
 		color.a
-	)
-
-
-static func formation_creation_gold_cost(formation_size: int) -> int:
-	return (
-		army_monthly_upkeep(formation_size)
-		* FORMATION_CREATION_UPKEEP_MONTHS
 	)
 
 
@@ -3232,10 +3224,7 @@ func reinforce_city_garrisons_monthly() -> int:
 		if owner_id < 0 or owner_id >= nations.size():
 			continue
 		var missing := city_garrison_capacity(center_id) - city.garrison_manpower
-		var support_ratio := minf(
-			clampf(city.garrison_supply_ratio, 0.0, 1.0),
-			clampf(nations[owner_id].military_payment_ratio, 0.0, 1.0)
-		)
+		var support_ratio := clampf(city.garrison_supply_ratio, 0.0, 1.0)
 		var reinforcement_limit := int(floor(
 			float(ZHOU_GARRISON_MONTHLY_REINFORCEMENT) * support_ratio
 		))
@@ -4289,6 +4278,10 @@ func create_army(
 	army.id = _next_army_id
 	_next_army_id += 1
 	army.owner_nation = nation_id
+	army.funding_multiplier = Army.funding_from_payment(nations[nation_id].military_payment_ratio)
+	army.ruler_attack_multiplier = RulerProfile.attack_multiplier(nations[nation_id])
+	army.ruler_defense_multiplier = RulerProfile.defense_multiplier(nations[nation_id])
+	army.ruler_morale_multiplier = RulerProfile.morale_multiplier(nations[nation_id])
 	army.max_size = max_size
 	army.size = mini(size, max_size)
 	army.max_morale = Army.DEFAULT_MAX_MORALE
@@ -4331,7 +4324,7 @@ func effective_ai_aggression(nation_id: int) -> float:
 func effective_army_defense(army: Army) -> float:
 	if army == null:
 		return 0.0
-	return float(army.defense) * maxf(army.ruler_defense_multiplier, 0.1)
+	return army.combat_defense()
 
 
 func nation_display_name(nation_id: int) -> String:
@@ -4730,6 +4723,7 @@ func transfer_army_ownership(army: Army, new_owner_id: int) -> bool:
 		army.ai_target_city = -1
 		army.ai_order_until_day = day
 	army.owner_nation = new_owner_id
+	army.funding_multiplier = Army.funding_from_payment(nations[new_owner_id].military_payment_ratio)
 	army.battle_group_id = -1
 	army.ruler_attack_multiplier = (
 		RulerProfile.attack_multiplier(nations[new_owner_id])
@@ -6675,6 +6669,7 @@ func _finalize_annexations(absorber: int, absorbed_ids: Dictionary) -> void:
 			army.ruler_attack_multiplier = RulerProfile.attack_multiplier(nations[absorber])
 			army.ruler_defense_multiplier = RulerProfile.defense_multiplier(nations[absorber])
 			army.ruler_morale_multiplier = RulerProfile.morale_multiplier(nations[absorber])
+			army.funding_multiplier = Army.funding_from_payment(nations[absorber].military_payment_ratio)
 	_reconcile_battles_after_annexation()
 
 
@@ -8585,13 +8580,16 @@ func refresh_derived() -> void:
 	var army_attack_by_nation := PackedFloat64Array()
 	var army_defense_by_nation := PackedFloat64Array()
 	var army_morale_by_nation := PackedFloat64Array()
+	var funding_by_nation := PackedFloat64Array()
 	city_defense_by_nation.resize(nations.size())
 	army_attack_by_nation.resize(nations.size())
 	army_defense_by_nation.resize(nations.size())
 	army_morale_by_nation.resize(nations.size())
+	funding_by_nation.resize(nations.size())
 	for n in nations:
 		n.granary_food = 0
 		n.alive = false
+		funding_by_nation[n.id] = Army.funding_from_payment(n.military_payment_ratio)
 		var modifiers := RulerProfile.modifiers(n)
 		city_defense_by_nation[n.id] = float(
 			modifiers[RulerProfile.KEY_CITY_DEFENSE]
@@ -8615,7 +8613,9 @@ func refresh_derived() -> void:
 		city.ruler_city_defense_multiplier = city_defense_by_nation[owner.id]
 	for army in armies:
 		if army.owner_nation < 0 or army.owner_nation >= nations.size():
+			army.funding_multiplier = 1.0
 			continue
+		army.funding_multiplier = funding_by_nation[army.owner_nation]
 		army.ruler_attack_multiplier = army_attack_by_nation[
 			army.owner_nation
 		]

@@ -17,7 +17,7 @@ food, manpower, trade efficiency and army upkeep modifiers remain independent.
 Monthly expense is floor(max(city income + net trade income + tribute received
 - tribute paid, 0) * rate). Income and tribute settle first, court expense
 second, military finance third. Payment stops at zero treasury and creates
-no court arrears. Conversion and annexation transfers are not income.
+no court arrears. Annexation and other one-time transfers are not income.
 Nation stores the last settled rate, amount due and actual payment.
 The forecast always budgets the amount due, even when payment was capped.
 
@@ -46,7 +46,10 @@ performed to predict a future supply route.
 ## Hard Conditions And Soft Reserves
 
 Candidate creation, refill and ordinary offensive preparation must avoid
-cash and food shortages throughout the horizon. Human resources, actual
+food shortages throughout the horizon. Cash shortages are report-only;
+actual military payment controls combat quality instead. The explicit
+contract returns food_feasible, food_growth_allowed and gold_shortage, with
+no mixed feasible/growth_allowed result. Human resources, actual
 assembly, passage rights and diplomatic restrictions still apply. The
 360-day preparation fallback relaxes its original troop threshold, not
 resource qualification. Existing war and defensive tasks are not terminated
@@ -59,31 +62,33 @@ and garrison consumption plus exports, capped by warehouse capacity; peace
 uses 18 months, war 6. The same ruler reserve-month modifier applies to both
 and is clamped at zero. Recovery is spread over 36 months.
 
-Soft recovery limits peaceful army growth and saving budgets, but is not a
-second declaration gate. Wartime resource demobilization requires projected
-shortage or actual unpaid military expense, not simply a missed reserve
-preference. Existing demobilization cadence and lifecycle protections remain.
+Food recovery preferences limit army growth but are not a second declaration
+gate. Refill uses candidate food feasibility instead of the growth preference.
+Cash reserve targets remain fiscal information only. Fiscal demobilization is
+removed; food demobilization retains its existing lifecycle protections.
 
 ## Candidate Commitments
 
 Each batch summarizes armies, garrisons and food pools once. A proposed
-formation includes its creation payment, per-army upkeep rounding and supply
-increment. Refill first distributes deterministic grants and then evaluates
+formation includes per-army upkeep rounding and supply increment, but no
+creation payment. Refill first distributes deterministic grants and then evaluates
 the actual changed formations. Accepted changes immediately update the batch
-cash and pooled demand and invalidate derived reports. Stable commit order is
+national troop/upkeep totals and pooled demand and invalidate derived reports. Stable commit order is
 shared by synchronous and frame-sliced execution. Demobilization invalidates
 the input after the real mutation rather than reusing pre-change totals.
 
-Annual conversion uses these hard and soft targets, donor protection and
-capacity limits rather than equal resource shares. See
-[automatic_resource_balance.md](automatic_resource_balance.md).
+Annual automatic conversion has been removed, including its rule module,
+allowances and records. See [military_funding_and_food.md](military_funding_and_food.md)
+for the replacement decision and [automatic_resource_balance.md](automatic_resource_balance.md)
+for the retained trade boundary.
 
 ## Display And Compatibility
 
 Live financial details show court expense, after-court income, forecast lows
 and dates, reserve targets and restriction reasons. Repeated redraws reuse
 the generated detail payload until its state/selection token changes.
-Historical views display recorded court settlement only.
+Historical views display recorded court settlement and military payment only,
+without running new forecasts.
 
 Native runtime snapshot schema is 19. It adds the last court settlement and
 removes frozen pre-war income. Deterministic fingerprints cover the new
@@ -93,17 +98,17 @@ is unchanged; old native runtime snapshots retain strict version rejection.
 ## Verification And Limits
 
 The run_tests.sh suite includes court_expense, resource_forecast,
-resource_forecast_integration and resource_conversion_forecast. Fixed
+resource_forecast_integration, military_funding and military_food_eligibility. Fixed
 fixtures compare 360 forecast days with real monthly settlement and field
 supply, including fractional debt and harvest order. Other guards cover
-shared commitments, no double creation payment, tribute, capped court
-payment, conversion conservation and historical values.
+shared commitments, no cash creation payment, tribute, capped court
+payment, no annual conversion and historical values.
 
 resource_planning_benchmark is a manual fixed-load comparison of 40 nations
 and 500 cities, 12 measured batches after one warmup. Monthly fiscal flow
 construction is outside that timing in both revisions. ai_longrun reports
 resource starvation army-days, unpaid nation-months, expense due/paid,
-conversion value and optional forecast timings. Denial counters count
+mean/minimum payment ratio and optional forecast timings. Denial counters count
 candidate probes, not distinct refused actions.
 
 The estimate is deliberately frozen. Future losses, ruler changes, newly
@@ -112,7 +117,11 @@ rolls forward and commits revalidate. A passed forecast is not a promise of no
 starvation or debt in an uncontrolled multi-year simulation. Fixed expense
 also does not imply every treasury must stop growing.
 
-## Verification Results (2026-10-03)
+## Historical Verification Before Money/Food Separation (2026-10-03)
+
+The following measurements and conversion observations describe the earlier
+court-expense implementation, not the current money/food separation. Current
+results are recorded in [military_funding_and_food.md](military_funding_and_food.md).
 
 Godot 4.7.1 on the development Windows host:
 
