@@ -360,21 +360,8 @@ func _test_multi_action_frozen_gold_flows(
 		actions, evaluation_cache, frozen_flows
 	)
 	for nation_id in range(4):
-		var expected := maxi(
-			int(frozen_flows[nation_id]["net_income"]), 0
-		)
-		var nation := sim.state.nations[nation_id]
-		if (
-			nation.war_gold_income_snapshot != expected
-			or nation.war_gold_income_snapshot_day != sim.state.day
-		):
-			failures.append(
-				"国%d冻结收入错误 expected=%d actual=%d day=%d" % [
-					nation_id, expected,
-					nation.war_gold_income_snapshot,
-					nation.war_gold_income_snapshot_day,
-				]
-			)
+		if sim.state.wars_of(nation_id).is_empty():
+			failures.append("multi-action war commit missing")
 	if (
 		sim.trade_structure_build_total != structure_builds_before
 		or sim.trade_forecast_build_total != forecast_builds_before

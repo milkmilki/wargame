@@ -217,6 +217,24 @@ func _init() -> void:
 		and not DiplomacyAI.war_preparation_ready(state, 0),
 		"360天兜底夹具必须处于半数以上但未达到完整需求的状态"
 	)
+	var old_day := state.day
+	var old_gold := nation.treasury_gold
+	var old_incomes: Array[int] = []
+	for city in state.cities:
+		old_incomes.append(city.gold_per_month)
+		city.gold_per_month = 0
+	state.day += DiplomacyAI.WAR_PREPARATION_MAX_DAYS
+	nation.treasury_gold = 0
+	var no_income_cache := {"monthly_gold_flows": Simulation._monthly_gold_flows_from_trade(state, {})}
+	_check(
+		not DiplomacyAI.war_preparation_resources_ready(state, 0, no_income_cache)
+		and not DiplomacyAI.war_preparation_launch_allowed(state, 0, no_income_cache),
+		"360天人数兜底不得绕过未来军费欠付的硬条件"
+	)
+	state.day = old_day
+	nation.treasury_gold = old_gold
+	for city in state.cities:
+		city.gold_per_month = old_incomes[city.id]
 	var declared := sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.DECLARE_WAR,
 		"a": 0,

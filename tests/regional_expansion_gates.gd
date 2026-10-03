@@ -249,6 +249,9 @@ static func fixture(capital_only: bool = false) -> GameState:
 		city.food_per_half_year = 100000
 		city.manpower_per_month = 1000
 		city.food_storage = 1000000
+		if id == state.nations[owner].capital_city_id:
+			city.has_warehouse = true
+			state.nations[owner].warehouse_city_ids.append(id)
 		city.garrison_manpower = 1000 if id == center else 0
 		state.cities.append(city)
 		state.adjacency[id] = [] as Array[int]

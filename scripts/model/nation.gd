@@ -42,15 +42,13 @@ var last_rebellion_day: int = -1
 var treasury_gold: int = 0                 ## 国家钱仓
 var manpower_pool: int = 0                 ## 全国统一可用人口库（人口 SSoT）
 var last_military_upkeep: int = 0          ## 最近一月全军维护费
+var last_court_expense_rate: float = 0.0
+var last_court_expense_due: int = 0
+var last_court_expense_paid: int = 0
 var last_field_army_upkeep: int = 0        ## 最近一月野战军维护费
 var last_garrison_upkeep: int = 0          ## 最近一月州治虚拟守军维护费
 var unpaid_military_upkeep: int = 0        ## 最近一月未支付的军队维护费
 var military_payment_ratio: float = 1.0    ## 最近一月军费实际支付率 [0,1]
-## 首次进入当前连续战争时冻结的战前月收入（城市+贡赋净收入，不扣军费）。
-## 战争期国库目标始终基于此值，领土易手和贡赋变化不得触发军队快速裁撤。
-## -1 表示当前和平；初始战争/外部脚本改关系由 Simulation.setup/日同步补快照。
-var war_gold_income_snapshot: int = -1
-var war_gold_income_snapshot_day: int = -1
 ## 实际欠饷触发的财政缩编每月最多一次，防止 10 日 AI 周期读取同一月
 ## unpaid 记录而连续缩编；值为世界月份（day / 30）。
 var last_gold_demobilization_month: int = -1

@@ -53,12 +53,46 @@ static func reinforce_nation(
 	if plans.is_empty():
 		return
 	_sort_plans(state, nation.id, plans)
+	var forecast_limit := _forecast_refill_limit(state, nation.id, plans, mini(available_manpower, int(plan_result["total_deficit"])), int(plan_result["total_deficit"]), food_cache)
+	available_manpower = mini(available_manpower, forecast_limit)
 	_assign_grants(
 		plans,
 		mini(available_manpower, int(plan_result["total_deficit"])),
 		int(plan_result["total_deficit"])
 	)
-	nation.manpower_pool -= _apply_grants(plans)
+	var spent := _apply_grants(plans)
+	nation.manpower_pool -= spent
+	if spent > 0:
+		DiplomacyAI.commit_force_change(state, nation.id, spent, food_cache, plans)
+
+
+static func _forecast_refill_limit(state: GameState, nation_id: int, plans: Array, desired: int, total_deficit: int, cache: Dictionary) -> int:
+	var baseline := DiplomacyAI.resource_forecast(state, nation_id, -1, -1, cache)
+	var current := int(baseline.input.troops)
+	var low := 0
+	var high := desired
+	while low < high:
+		var amount := (low + high + 1) / 2
+		_assign_grants(plans, amount, total_deficit)
+		var upkeep := 0
+		var food := 0.0
+		for plan in plans:
+			var army: Army = plan.army
+			var projected := army.size + int(plan.grant)
+			upkeep += GameState.army_monthly_upkeep(projected) - GameState.army_monthly_upkeep(army.size)
+			food += _grant_food_delta(army.size, projected, float(baseline.input.food_multiplier))
+		var report := DiplomacyAI.resource_forecast(state, nation_id, current + amount, -1, cache, 0, {"base_upkeep_delta": upkeep, "field_food_delta": food})
+		if bool(report.feasible):
+			low = amount
+		else:
+			high = amount - 1
+	return low
+
+
+static func _grant_food_delta(old_size: int, new_size: int, multiplier: float) -> float:
+	var before := ceilf(ceilf(old_size * Simulation.FOOD_PER_CAPITA) * Simulation.MAX_SUPPLY_MULT * multiplier)
+	var after := ceilf(ceilf(new_size * Simulation.FOOD_PER_CAPITA) * Simulation.MAX_SUPPLY_MULT * multiplier)
+	return maxf(after - before, 0)
 
 
 static func _collect_refill_candidates(
@@ -148,6 +182,8 @@ static func _assign_grants(
 	budget: int,
 	total_deficit: int
 ) -> void:
+	for plan in plans:
+		plan.grant = 0
 	if budget >= total_deficit:
 		for plan in plans:
 			plan["grant"] = plan["deficit"]
@@ -191,6 +227,7 @@ static func _apply_grants(plans: Array) -> int:
 	for plan in plans:
 		var grant := int(plan["grant"])
 		var army: Army = plan["army"]
+		plan.old_size = army.size
 		army.size += grant
 		spent += grant
 	return spent

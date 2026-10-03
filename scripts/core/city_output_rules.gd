@@ -13,21 +13,10 @@ static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
 	if game_state == null:
 		return result
 	result.resize(game_state.cities.size())
-	var modifiers_by_nation: Array[Dictionary] = []
-	for nation in game_state.nations:
-		modifiers_by_nation.append(RulerProfile.modifiers(nation))
 	var national_base_gold := _national_base_gold(game_state, true)
 	for city in game_state.cities:
 		if city.id < 0 or city.id >= result.size():
 			continue
-		var modifiers: Dictionary = (
-			modifiers_by_nation[city.owner_nation]
-			if (
-				city.owner_nation >= 0
-				and city.owner_nation < modifiers_by_nation.size()
-			)
-			else {}
-		)
 		var owner_base := (
 			national_base_gold[city.owner_nation]
 			if city.owner_nation >= 0
@@ -35,7 +24,7 @@ static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
 			else 0
 		)
 		result[city.id] = city_gold_output(
-			game_state, city, modifiers, owner_base
+			game_state, city, {}, owner_base
 		)
 	return result
 
@@ -45,25 +34,14 @@ static func city_potential_gold_outputs(game_state: GameState) -> PackedInt32Arr
 	if game_state == null:
 		return result
 	result.resize(game_state.cities.size())
-	var modifiers_by_nation: Array[Dictionary] = []
-	for nation in game_state.nations:
-		modifiers_by_nation.append(RulerProfile.modifiers(nation))
 	var national_base_gold := _national_base_gold(game_state, false)
 	for city in game_state.cities:
 		if city.id < 0 or city.id >= result.size():
 			continue
-		var modifiers: Dictionary = (
-			modifiers_by_nation[city.owner_nation]
-			if (
-				city.owner_nation >= 0
-				and city.owner_nation < modifiers_by_nation.size()
-			)
-			else {}
-		)
 		result[city.id] = city_potential_gold_output(
 			game_state,
 			city,
-			modifiers,
+			{},
 			(
 				national_base_gold[city.owner_nation]
 				if city.owner_nation >= 0
@@ -99,7 +77,7 @@ static func _national_base_gold(
 static func city_gold_output(
 	game_state: GameState,
 	city: City,
-	ruler_modifiers: Dictionary = {},
+	_ruler_modifiers: Dictionary = {},
 	national_base_gold: int = -1
 ) -> int:
 	if game_state == null or city == null:
@@ -112,26 +90,13 @@ static func city_gold_output(
 	output = maxi(int(floor(
 		float(output) * city_governance_output_multiplier(game_state, city)
 	)), 0)
-	if (
-		city.owner_nation < 0
-		or city.owner_nation >= game_state.nations.size()
-	):
-		return output
-	var modifiers := (
-		ruler_modifiers
-		if not ruler_modifiers.is_empty()
-		else RulerProfile.modifiers(game_state.nations[city.owner_nation])
-	)
-	return maxi(int(floor(
-		float(output)
-			* float(modifiers.get(RulerProfile.KEY_GOLD_OUTPUT, 1.0))
-	)), 0)
+	return output
 
 
 static func city_potential_gold_output(
 	game_state: GameState,
 	city: City,
-	ruler_modifiers: Dictionary = {},
+	_ruler_modifiers: Dictionary = {},
 	national_base_gold: int = -1
 ) -> int:
 	if game_state == null or city == null:
@@ -144,15 +109,7 @@ static func city_potential_gold_output(
 	)), 0)
 	if city.owner_nation < 0 or city.owner_nation >= game_state.nations.size():
 		return output
-	var modifiers := (
-		ruler_modifiers
-		if not ruler_modifiers.is_empty()
-		else RulerProfile.modifiers(game_state.nations[city.owner_nation])
-	)
-	return maxi(int(floor(
-		float(output)
-			* float(modifiers.get(RulerProfile.KEY_GOLD_OUTPUT, 1.0))
-	)), 0)
+	return output
 
 
 static func city_gold_output_before_governance(

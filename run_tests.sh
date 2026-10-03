@@ -33,6 +33,15 @@ echo "    编译通过（class_name 全部注册，无脚本错误）"
 echo
 
 echo "==> [2/29] 逻辑测试套件"
+for TEST in court_expense resource_forecast resource_forecast_integration resource_conversion_forecast diplomatic_battle_lifecycle; do
+  RESOURCE_LOG="$LOG_DIR/world-war-$TEST.log"
+  HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+    --script "res://tests/$TEST.gd" --log-file "$RESOURCE_LOG"
+  if grep -qiE "SCRIPT ERROR|Parse Error|ERROR:" "$RESOURCE_LOG"; then
+    echo "资源预测专项失败：$TEST" >&2
+    exit 1
+  fi
+done
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/test_suite.gd \
   --log-file "$LOG_DIR/world-war-tests.log"
@@ -380,6 +389,9 @@ echo "==> [22b/29] 君主继位与夸张特质门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/ruler_succession_extremes.gd \
   --log-file "$LOG_DIR/world-war-ruler-succession-extremes.log"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/capital_region_relocation.gd \
+  --log-file "$LOG_DIR/world-war-capital-region-relocation.log"
 echo
 
 echo "==> [22c/29] 完整州藩王常规军事 AI 门禁"

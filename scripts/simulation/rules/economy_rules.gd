@@ -23,7 +23,7 @@ static func monthly_gold_flows_from_trade(
 	var result := _empty_reports(state, trade, upkeep_by_nation)
 	_add_city_income(state, result, city_output, city_outputs)
 	_add_tribute_flows(state, result, tribute_rate)
-	_finalize_balances(result)
+	_finalize_balances(state, result)
 	return result
 
 
@@ -159,7 +159,7 @@ static func _add_tribute_flows(
 		)
 
 
-static func _finalize_balances(result: Array[Dictionary]) -> void:
+static func _finalize_balances(state: GameState, result: Array[Dictionary]) -> void:
 	for nation_id in range(result.size()):
 		var report: Dictionary = result[nation_id]
 		var net_income := (
@@ -169,7 +169,13 @@ static func _finalize_balances(result: Array[Dictionary]) -> void:
 			- int(report["tribute_paid"])
 		)
 		report["net_income"] = net_income
-		report["balance"] = net_income - int(report["military_upkeep"])
+		var rate := RulerProfile.court_expense_rate(state.nations[nation_id])
+		var due := int(floor(float(maxi(net_income, 0)) * rate))
+		report["court_expense_rate"] = rate
+		report["court_expense_due"] = due
+		report["court_expense_paid"] = mini(due, maxi(state.nations[nation_id].treasury_gold + net_income, 0))
+		report["income_after_court"] = net_income - due
+		report["balance"] = net_income - due - int(report["military_upkeep"])
 
 
 static func trade_array_value(

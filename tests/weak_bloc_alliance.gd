@@ -8,6 +8,7 @@ func _init() -> void:
 	for nation_id in [0, 1, 2, 3]:
 		state.set_diplomatic_relation(nation_id, 9, GameState.DiplomaticRelation.WAR)
 	state.day = DiplomacyAI.MIN_NEUTRAL_DAYS + 360
+	_test_alliance_score_without_direct_war_or_border_bonus(state)
 	_check_pair(state, 0, 1, true, "weak nations may unite against common enemy")
 	_check_pair(state, 2, 3, false, "great powers cannot ally merely because of a common enemy")
 	_check_pair(state, 0, 2, false, "great power does not accept a small ally")
@@ -39,6 +40,30 @@ func check(condition: bool, label: String) -> void:
 	if not condition:
 		failures += 1
 		push_error(label)
+
+
+func _test_alliance_score_without_direct_war_or_border_bonus(state: GameState) -> void:
+	var cache := {}
+	var a := 0
+	var b := 1
+	check(DiplomacyAI._common_enemy_count(state, a, b, cache) == 1,
+		"fixture includes a common wartime enemy")
+	check(DiplomacyAI._frontier_edges(state, a, b, cache) > 0,
+		"fixture includes a shared border")
+	var own_power := DiplomacyAI._national_power(state, a, cache)
+	var target_power := DiplomacyAI._national_power(state, b, cache)
+	var imbalance := absf(log(maxf(own_power, 1.0) / maxf(target_power, 1.0)))
+	var expected := (
+		0.35
+		+ minf(DiplomacyAI._shared_threat(state, a, b, cache) * 0.35, 0.80)
+		+ maxf(1.0 - imbalance, 0.0) * 0.55
+		+ DiplomacyAI._alliance_frontier_release_value(state, a, b, cache)
+		+ DiplomacyAI.diplomatic_attitude(state, a, b, cache)
+			* DiplomacyAI.ATTITUDE_ALLIANCE_WEIGHT
+		- DiplomacyAI.unification_rivalry(state, a, b, cache)
+	) * RulerProfile.alliance_multiplier(state.nations[a])
+	check(is_equal_approx(DiplomacyAI.alliance_willingness(state, a, b, cache), expected),
+		"common enemy and shared border carry no direct alliance bonus")
 
 
 func _check_pair(state: GameState, a: int, b: int, accepted: bool, label: String) -> void:

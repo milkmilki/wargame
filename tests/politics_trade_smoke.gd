@@ -464,7 +464,7 @@ func _test_ruler_profiles() -> void:
 	var tyrant := RulerProfile.modifiers(RulerProfile.TYRANT)
 	_check(
 		_approx(float(conqueror[RulerProfile.KEY_AGGRESSION]), 2.00)
-			and _approx(float(conqueror[RulerProfile.KEY_GOLD_OUTPUT]), 1.00)
+			and _approx(RulerProfile.court_expense_rate(RulerProfile.CONQUEROR), 0.10)
 			and _approx(float(conqueror[RulerProfile.KEY_FOOD_OUTPUT]), 1.00)
 			and _approx(float(conqueror[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.50)
 			and _approx(float(conqueror[RulerProfile.KEY_UPKEEP]), 0.50)
@@ -488,14 +488,14 @@ func _test_ruler_profiles() -> void:
 		"ruler/guardian_key_multipliers_and_gate"
 	)
 	_check(
-		_approx(float(inept[RulerProfile.KEY_GOLD_OUTPUT]), 0.50)
+		_approx(RulerProfile.court_expense_rate(RulerProfile.INEPT), 0.50)
 			and _approx(float(inept[RulerProfile.KEY_UPKEEP]), 1.80)
 			and _approx(float(inept[RulerProfile.KEY_LOYALTY]), 0.45)
 			and not bool(inept[RulerProfile.KEY_OFFENSIVE_ALLOWED]),
 		"ruler/inept_key_multipliers_and_gate"
 	)
 	_check(
-		_approx(float(tyrant[RulerProfile.KEY_GOLD_OUTPUT]), 1.60)
+		_approx(RulerProfile.court_expense_rate(RulerProfile.TYRANT), 0.50)
 			and _approx(float(tyrant[RulerProfile.KEY_MANPOWER_OUTPUT]), 1.70)
 			and _approx(float(tyrant[RulerProfile.KEY_CENTRALIZE]), 3.00)
 			and _approx(float(tyrant[RulerProfile.KEY_LOYALTY]), 0.35)

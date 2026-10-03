@@ -53,7 +53,7 @@ func _test_legacy_defaults_and_zero_trade_ui() -> void:
 
 	var state := _make_single_nation_state()
 	var sections := MapRenderer.nation_detail_sections(state, 0)
-	var trade_line := _section_line(sections, "财政与军费", 1)
+	var trade_line := _section_line(sections, "财政与军费", 3)
 	_check(
 		sections.size() > 0,
 		"legacy/nation_detail_sections_no_error"
@@ -163,8 +163,8 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 
 	var sections_0 := MapRenderer.nation_detail_sections(state, 0)
 
-	var food_line_0 := _section_line(sections_0, "粮食储备", 0)
-	var trade_line_0 := _section_line(sections_0, "财政与军费", 1)
+	var food_line_0 := _section_line(sections_0, "粮食储备", 2)
+	var trade_line_0 := _section_line(sections_0, "财政与军费", 3)
 	_check(
 		food_line_0.find("粮仓 %d / %d" % [
 			nation_0.granary_food, state.food_storage_capacity(0),
@@ -576,7 +576,7 @@ func _test_monthly_production_rounds_after_nation_sum() -> void:
 		"half_year_total=9 actual=%d" % nation.last_food_estimated_production
 	)
 	var sections := MapRenderer.nation_detail_sections(state, 0)
-	var food_line := _section_line(sections, "粮食储备", 0)
+	var food_line := _section_line(sections, "粮食储备", 2)
 	_check(
 		food_line.find("月产(预计) 2") >= 0
 			and food_line.find("月需(预计) 0") >= 0,

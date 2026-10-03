@@ -1592,12 +1592,6 @@ static func alliance_willingness(
 		if evaluation_cache.has("__profile")
 		else 0
 	)
-	var common_enemies := _common_enemy_count(
-		state,
-		nation_id,
-		target_id,
-		evaluation_cache
-	)
 	var own_power := _national_power(
 		state,
 		nation_id,
@@ -1609,16 +1603,6 @@ static func alliance_willingness(
 		evaluation_cache
 	)
 	var imbalance := absf(log(maxf(own_power, 1.0) / maxf(target_power, 1.0)))
-	var border_bonus := (
-		0.25
-		if _frontier_edges(
-			state,
-			nation_id,
-			target_id,
-			evaluation_cache
-		) > 0
-		else 0.0
-	)
 	_record_evaluation_profile(
 		evaluation_cache, "alliance_common_power", part_started
 	)
@@ -1673,9 +1657,7 @@ static func alliance_willingness(
 	)
 	var base_result := (
 		0.35
-		+ float(common_enemies) * 1.5
 		+ minf(shared_threat * 0.35, 0.80)
-		+ border_bonus
 		+ balance_affinity
 		+ frontier_release
 		+ attitude * ATTITUDE_ALLIANCE_WEIGHT
@@ -1784,11 +1766,6 @@ static func _alliance_can_reach_acceptance(
 	var frontier_count := _frontier_edges(
 		state, nation_id, target_id, evaluation_cache
 	)
-	var border_bonus := (
-		0.25
-		if frontier_count > 0
-		else 0.0
-	)
 	var shared_threat := _shared_threat(
 		state, nation_id, target_id, evaluation_cache
 	)
@@ -1823,9 +1800,7 @@ static func _alliance_can_reach_acceptance(
 	)
 	var upper_bound := (
 		0.35
-		+ float(common_enemies) * 1.5
 		+ minf(shared_threat * 0.35, 0.80)
-		+ border_bonus
 		+ maxf(1.0 - imbalance, 0.0) * 0.55
 		+ frontier_release
 		+ maximum_attitude * ATTITUDE_ALLIANCE_WEIGHT
@@ -1991,7 +1966,7 @@ static func war_desire(
 		target_id,
 		evaluation_cache
 	)
-	if objective.is_empty():
+	if objective.is_empty() or not _ruler_allows_war_objective(state, nation_id, int(objective.get("city_id", -1))):
 		evaluation_cache[cache_key] = -INF
 		return -INF
 	_record_evaluation_profile(
@@ -2596,7 +2571,7 @@ static func resource_report(
 	policy_gold_flows[nation_id] = policy_gold_flow
 	var monthly_gold_deficit := maxi(-monthly_gold_balance, 0)
 	var gold_reserve := Simulation.gold_reserve_policy(
-		state, nation_id, policy_gold_flows
+		state, nation_id, policy_gold_flows, evaluation_cache
 	)
 	var monthly_food_demand := int(ceil(
 		float(food_plan["current_monthly_demand"])
@@ -2604,10 +2579,7 @@ static func resource_report(
 	var gold_required := int(gold_reserve.get(
 		"reserve_target", 0
 	))
-	var food_required := maxi(
-		monthly_food_demand * CAMPAIGN_RESERVE_MONTHS,
-		1
-	)
+	var food_required := maxi(int(food_plan.forecast.food_target), 1)
 	var manpower_required := maxi(
 		MIN_MANPOWER_RESERVE,
 		int(ceil(float(troops) * 0.15))
@@ -2638,6 +2610,9 @@ static func resource_report(
 	)
 	var result := {
 		"troops": troops,
+		"forecast": food_plan["forecast"],
+		"court_expense_rate": gold_flow.get("court_expense_rate", 0.0),
+		"court_expense_due": gold_flow.get("court_expense_due", 0),
 		"monthly_city_gold_income": monthly_city_income,
 		"monthly_tribute_income": monthly_tribute_income,
 		"monthly_tribute_expense": monthly_tribute_expense,
@@ -2687,20 +2662,7 @@ static func resource_report(
 		"full_strength_annual_demand": food_plan["full_strength_annual_demand"],
 		"full_strength_annual_balance": food_plan["full_strength_annual_balance"],
 		"full_strength_runway_years": food_plan["full_strength_runway_years"],
-		"ready": (
-			nation.unpaid_military_upkeep <= 0
-			and bool(gold_reserve.get("ready", false))
-			and (
-				monthly_gold_balance >= 0
-				or gold_runway_months >= CAMPAIGN_RESERVE_MONTHS
-			)
-			and manpower_ratio >= 1.0
-			and (
-				float(food_plan["current_annual_balance"]) >= 0.0
-				or float(food_plan["current_runway_years"])
-					>= DEFENSIVE_CAMPAIGN_YEARS
-			)
-		),
+		"ready": nation.unpaid_military_upkeep <= 0 and manpower_ratio >= 1.0 and bool(food_plan["forecast"]["feasible"]),
 	}
 	evaluation_cache[cache_key] = result
 	return result
@@ -2716,6 +2678,7 @@ static func _ensure_evaluation_cache_current(
 	const REVISION_KEY := "__evaluation_state_revision"
 	var revision: Array[int] = [
 		state.get_instance_id(),
+		state.day,
 		state.nations.size(),
 		state.ownership_revision,
 		state.diplomacy_revision,
@@ -2879,139 +2842,24 @@ static func _cached_trade_route_count(
 
 ## 宣战资源门槛随统一时代连续退火。era=0 时严格等价于 resource_report.ready；
 ## era=1 时保留总体战生存底线，避免大战后的所有国家因和平期储备规则永久停战。
-static func offensive_resources_ready(
-	state: GameState,
-	nation_id: int,
-	report: Dictionary
-) -> bool:
+static func offensive_resources_ready(state: GameState, nation_id: int, report: Dictionary) -> bool:
 	var nation := state.nations[nation_id]
 	var era := unification_era_factor(state)
-	var required_payment := lerpf(
-		1.0,
-		TOTAL_WAR_MIN_PAYMENT_RATIO,
-		era
-	)
-	var gold_runway := lerpf(
-		float(CAMPAIGN_RESERVE_MONTHS),
-		TOTAL_WAR_GOLD_RUNWAY_MONTHS,
-		era
-	)
-	var manpower_share := lerpf(
-		0.15,
-		TOTAL_WAR_MANPOWER_SHARE,
-		era
-	)
-	var manpower_floor := int(round(lerpf(
-		float(MIN_MANPOWER_RESERVE),
-		float(MIN_MANPOWER_RESERVE) / 5.0,
-		era
-	)))
-	var required_manpower := maxi(
-		manpower_floor,
-		int(ceil(float(report["troops"]) * manpower_share))
-	)
-	var manpower_capacity := state.manpower_pool_capacity(nation_id)
-	if manpower_capacity > 0:
-		required_manpower = mini(required_manpower, manpower_capacity)
-	var food_runway := lerpf(
-		DEFENSIVE_CAMPAIGN_YEARS,
-		TOTAL_WAR_FOOD_RUNWAY_YEARS,
-		era
-	)
-	var required_gold_reserve := int(round(
-		float(report.get("gold_reserve_target", 0))
-		* (1.0 - era)
-	))
-	return (
-		nation.military_payment_ratio >= required_payment
-		and nation.treasury_gold >= required_gold_reserve
-		and (
-			int(report["monthly_gold_balance"]) >= 0
-			or float(report["gold_runway_months"]) >= gold_runway
-		)
-		and nation.manpower_pool >= required_manpower
-		and (
-			float(report["annual_food_balance"]) >= 0.0
-			or float(report["food_runway_years"]) >= food_runway
-		)
-	)
+	var required := maxi(int(round(lerpf(float(MIN_MANPOWER_RESERVE), float(MIN_MANPOWER_RESERVE) / 5.0, era))), int(ceil(float(report.troops) * lerpf(0.15, TOTAL_WAR_MANPOWER_SHARE, era))))
+	required = mini(required, state.manpower_pool_capacity(nation_id))
+	return nation.unpaid_military_upkeep <= 0 and nation.manpower_pool >= required and bool(report.forecast.feasible)
 
 
-## 目标军力的粮食门槛使用与统一时代一致的动态战役窗口。原 report 中的
-## monthly_food_budget 固定按 2 年摊销库存，因此在此按动态窗口重算可支配月预算。
-static func offensive_food_sustainable(
-	state: GameState,
-	food_plan: Dictionary
-) -> bool:
-	var required_years := lerpf(
-		OFFENSIVE_CAMPAIGN_YEARS,
-		TOTAL_WAR_FOOD_RUNWAY_YEARS,
-		unification_era_factor(state)
-	)
-	var expendable_stock := maxf(
-		float(food_plan["food_stock"])
-			- float(food_plan["emergency_food_reserve"]),
-		0.0
-	)
-	var monthly_budget := (
-		float(food_plan["monthly_food_production"])
-		+ expendable_stock
-			/ maxf(required_years * float(MONTHS_PER_YEAR), 1.0)
-	)
-	return (
-		float(food_plan["target_monthly_demand"]) <= monthly_budget + 0.01
-		and (
-			float(food_plan["target_annual_balance"]) >= 0.0
-			or float(food_plan["target_runway_years"]) >= required_years
-		)
-	)
+static func offensive_food_sustainable(_state: GameState, food_plan: Dictionary) -> bool:
+	return bool(food_plan.forecast.feasible)
 
 
-## 开始备战要求完整战略储备；备战中的动员本身会消耗这部分人力，因此继续
-## 可行性改用生存线，避免“按计划动员 -> 储备下降 -> 自动取消”的自相矛盾。
-static func war_preparation_resources_ready(
-	state: GameState,
-	nation_id: int,
-	evaluation_cache: Dictionary = {}
-) -> bool:
-	var nation := state.nations[nation_id]
+static func war_preparation_resources_ready(state: GameState, nation_id: int, evaluation_cache: Dictionary = {}) -> bool:
 	var report := resource_report(state, nation_id, evaluation_cache)
-	var emergency_manpower := maxi(
-		MIN_MANPOWER_RESERVE / 5,
-		int(ceil(float(report["troops"]) * TOTAL_WAR_MANPOWER_SHARE))
-	)
-	var era := unification_era_factor(state)
-	var required_gold_reserve := int(round(
-		float(report.get("gold_reserve_target", 0))
-		* (1.0 - era)
-	))
-	return (
-		nation.military_payment_ratio >= lerpf(
-			1.0,
-			TOTAL_WAR_MIN_PAYMENT_RATIO,
-			era
-		)
-		and nation.treasury_gold >= required_gold_reserve
-		and (
-			int(report["monthly_gold_balance"]) >= 0
-			or float(report["gold_runway_months"])
-				>= lerpf(
-					float(CAMPAIGN_RESERVE_MONTHS),
-					TOTAL_WAR_GOLD_RUNWAY_MONTHS,
-					era
-				)
-		)
-		and nation.manpower_pool >= emergency_manpower
-		and (
-			float(report["annual_food_balance"]) >= 0.0
-			or float(report["food_runway_years"])
-				>= lerpf(
-					DEFENSIVE_CAMPAIGN_YEARS,
-					TOTAL_WAR_FOOD_RUNWAY_YEARS,
-					era
-				)
-		)
-	)
+	var nation := state.nations[nation_id]
+	var required := maxi(MIN_MANPOWER_RESERVE / 5, int(ceil(float(report.troops) * TOTAL_WAR_MANPOWER_SHARE)))
+	var forecast := resource_forecast(state, nation_id, -1, FoodPosture.OFFENSIVE_WAR, evaluation_cache)
+	return nation.unpaid_military_upkeep <= 0 and nation.manpower_pool >= required and bool(forecast.feasible)
 
 
 static func mobilization_capacity(
@@ -3029,167 +2877,48 @@ static func mobilization_capacity(
 
 
 static func force_capacity_report(
-	state: GameState,
-	nation_id: int,
-	posture: int = -1,
-	evaluation_cache: Dictionary = {}
+	state: GameState, nation_id: int, posture: int = -1, evaluation_cache: Dictionary = {}
 ) -> Dictionary:
-	if nation_id < 0 or nation_id >= state.nations.size():
-		return {}
 	_ensure_evaluation_cache_current(state, evaluation_cache)
 	if posture < 0:
 		posture = food_posture(state, nation_id, evaluation_cache)
-	var cache_key := "force_capacity:%d:%d" % [nation_id, posture]
-	if evaluation_cache.has(cache_key):
-		return evaluation_cache[cache_key]
+	var key := "force_capacity:%d:%d" % [nation_id, posture]
+	if evaluation_cache.has(key):
+		return evaluation_cache[key]
+	var input: Dictionary = _resource_forecast_inputs(state, evaluation_cache)[nation_id]
 	var nation := state.nations[nation_id]
-	var formation_size := GameState.INITIAL_HEAVY_ARMY_SIZE
-	var formation_cost := GameState.formation_creation_gold_cost(
-		formation_size
-	)
-	var nation_armies: Array[Army] = []
-	for army in state.armies:
-		if army.owner_nation != nation_id or army.size <= 0:
-			continue
-		nation_armies.append(army)
-	var current_armies := nation_armies.size()
-	var manpower_reserve := (
-		ReinforcementRules.PEACETIME_MANPOWER_RESERVE
-		if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]
-		else ReinforcementRules.wartime_manpower_reserve(nation_armies)
-	)
-	var manpower_limit := int(floor(
-		float(maxi(nation.manpower_pool - manpower_reserve, 0))
-		/ float(formation_size)
-	))
-	var finance_report := resource_report(
-		state, nation_id, evaluation_cache
-	)
-	var protected_gold := int(finance_report.get(
-		"gold_reserve_target", 0
-	))
-	var budget_monthly_balance := int(finance_report.get(
-		"gold_budget_monthly_balance", 0
-	))
-	var target_monthly_savings := int(finance_report.get(
-		"gold_target_monthly_savings", 0
-	))
-	if posture in [FoodPosture.OFFENSIVE_WAR, FoodPosture.DEFENSIVE_WAR]:
-		var baseline_income := int(finance_report.get(
-			"gold_reserve_baseline_income", 0
-		))
-		protected_gold = baseline_income * Simulation.WAR_GOLD_RESERVE_MONTHS
-		var reserve_gap := maxi(protected_gold - nation.treasury_gold, 0)
-		target_monthly_savings = int(ceil(
-			float(reserve_gap)
-			/ float(Simulation.GOLD_RESERVE_RECOVERY_MONTHS)
-		))
-		budget_monthly_balance = (
-			baseline_income
-			- int(finance_report.get("monthly_war_cost", 0))
-		)
-	var gold_creation_limit := int(floor(
-		float(maxi(nation.treasury_gold - protected_gold, 0))
-		/ float(maxi(formation_cost, 1))
-	))
-	var army_total_capacity := state.max_army_count(nation_id)
-	var army_slot_limit := maxi(army_total_capacity - current_armies, 0)
-	var current_effective_upkeep := int(finance_report.get(
-		"monthly_war_cost", 0
-	))
-	var allowed_effective_upkeep := maxi(
-		current_effective_upkeep
-			+ budget_monthly_balance
-			- target_monthly_savings,
-		0
-	)
-	var formation_base_upkeep := GameState.army_monthly_upkeep(
-		formation_size
-	)
-	# 守军是与候选野战军编制无关的固定开支。提前汇总一次，避免容量扫描的
-	# 每个 units 候选都重新构建首都跳数并遍历全部州治。
-	var fixed_garrison_upkeep := Simulation.nation_monthly_garrison_upkeep(
-		state, nation_id
-	)
-	var gold_total_capacity := 0
-	for units in range(1, army_total_capacity + 1):
-		var projected_upkeep := (
-			Simulation.effective_monthly_field_army_upkeep(
-				state,
-				nation_id,
-				units * formation_base_upkeep
-			)
-			+ fixed_garrison_upkeep
-		)
-		if projected_upkeep > allowed_effective_upkeep:
-			break
-		gold_total_capacity = units
-	var gold_upkeep_limit := maxi(
-		gold_total_capacity - current_armies, 0
-	)
-	var non_food_total_capacity := mini(
-		mini(gold_total_capacity, army_total_capacity),
-		mini(
-			current_armies + manpower_limit,
-			current_armies + gold_creation_limit
-		)
-	)
-	var food_plan := war_food_report(
-		state,
-		nation_id,
-		non_food_total_capacity * formation_size,
-		posture,
-		evaluation_cache
-	)
-	var food_total_capacity := int(floor(
-		float(maxi(int(food_plan["affordable_troops"]), 0))
-		/ float(formation_size)
-	))
-	var food_limit := maxi(food_total_capacity - current_armies, 0)
-	var supportable_armies := mini(
-		mini(gold_total_capacity, food_total_capacity),
-		army_total_capacity
-	)
-	food_limit = maxi(food_total_capacity - current_armies, 0)
-	var sustainable_growth_limit := maxi(
-		supportable_armies - current_armies,
-		0
-	)
-	var additional_armies := mini(
-		mini(sustainable_growth_limit, manpower_limit),
-		gold_creation_limit
-	)
-	var limits := {
-		"manpower": manpower_limit,
-		"gold_creation": gold_creation_limit,
-		"gold_upkeep": gold_upkeep_limit,
-		"food": food_limit,
-		"army_slots": army_slot_limit,
-	}
-	var limiting_resource := "none"
-	for resource_name in [
-		"manpower", "gold_creation", "gold_upkeep", "food", "army_slots"
-	]:
-		if int(limits[resource_name]) == additional_armies:
-			limiting_resource = resource_name
-			break
+	var size := GameState.INITIAL_HEAVY_ARMY_SIZE
+	var count := int(input.army_count)
+	var cost := GameState.formation_creation_gold_cost(size)
+	var reserve := int(input.manpower_target)
+	var manpower_limit := maxi(nation.manpower_pool - reserve, 0) / size
+	var creation_limit := nation.treasury_gold / maxi(cost, 1)
+	var slot_limit := maxi(state.max_army_count(nation_id) - count, 0)
+	var max_growth := mini(slot_limit, mini(manpower_limit, creation_limit))
+	var additional := 0
+	var reason := "army_slots"
+	var upper := max_growth
+	while additional < upper:
+		var growth := 1 if additional == 0 else (additional + upper + 1) / 2
+		var check := resource_forecast(state, nation_id, int(input.troops) + growth * size, posture, evaluation_cache, growth * cost, {"base_upkeep_delta": growth * GameState.army_monthly_upkeep(size), "field_food_delta": growth * ReinforcementPhase._grant_food_delta(0, size, float(input.food_multiplier))})
+		if not bool(check.growth_allowed):
+			reason = "gold_upkeep" if int(check.gold_deficit) > 0 or int(check.gold_end) < int(check.gold_target) else "food"
+			upper = growth - 1
+		else:
+			additional = growth
+	# Compatibility capacity fields now describe the joint forecast budget,
+	# not a second independent multi-year food gate.
+	var food_total := count + additional
 	var result := {
-		"current_armies": current_armies,
-		"sustainable_armies": current_armies + additional_armies,
-		"supportable_armies": supportable_armies,
-		"additional_armies": additional_armies,
-		"manpower_limit": manpower_limit,
-		"gold_creation_limit": gold_creation_limit,
-		"gold_upkeep_limit": gold_upkeep_limit,
-		"food_limit": food_limit,
-		"army_slot_limit": army_slot_limit,
-		"gold_total_capacity": gold_total_capacity,
-		"food_total_capacity": food_total_capacity,
-		"limiting_resource": limiting_resource,
-		"manpower_reserve": manpower_reserve,
-		"posture": posture,
+		"current_armies": count, "sustainable_armies": count + additional,
+		"supportable_armies": count + additional, "additional_armies": additional,
+		"manpower_limit": manpower_limit, "gold_creation_limit": creation_limit,
+		"gold_upkeep_limit": additional, "food_limit": maxi(food_total - count, 0),
+		"army_slot_limit": slot_limit, "gold_total_capacity": count + additional,
+		"food_total_capacity": food_total, "limiting_resource": reason,
+		"manpower_reserve": reserve, "posture": posture,
 	}
-	evaluation_cache[cache_key] = result
+	evaluation_cache[key] = result
 	return result
 
 
@@ -3601,339 +3330,296 @@ static func _build_diplomatic_range_masks(
 	]
 
 
-static func war_food_report(
-	state: GameState,
-	nation_id: int,
-	target_troops: int = -1,
-	posture: int = -1,
-	evaluation_cache: Dictionary = {}
+## A batch owns these aggregates and its accepted resource commitments.
+static func resource_forecast(
+	state: GameState, nation_id: int, target_troops: int = -1,
+	posture: int = -1, evaluation_cache: Dictionary = {}, gold_cost: int = 0, override: Dictionary = {}
 ) -> Dictionary:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
+	var inputs := _resource_forecast_inputs(state, evaluation_cache)
+	var input: Dictionary = inputs[nation_id]
 	var nation := state.nations[nation_id]
-	var current_troops := _troop_count(
-		state,
-		nation_id,
-		evaluation_cache
-	)
-	if target_troops < 0:
-		target_troops = current_troops
 	if posture < 0:
-		posture = food_posture(
-			state,
-			nation_id,
-			evaluation_cache
-		)
-	var pool_holder := state.food_pool_holder(nation_id)
-	var pool_members := state.food_pool_members(pool_holder)
-	var cache_key := "food:%d:%d:%d:%d" % [
-		nation_id,
-		pool_holder,
-		target_troops,
-		posture,
-	]
-	if evaluation_cache.has(cache_key):
-		return evaluation_cache[cache_key]
-	var monthly_production := 0.0
-	var monthly_trade_food_import := 0
-	var monthly_trade_food_export := 0
-	if not evaluation_cache.has("garrison_by_city"):
-		evaluation_cache["garrison_by_city"] = Simulation.build_garrison_index(state)
-	var garrison_by_city: Dictionary = evaluation_cache["garrison_by_city"]
-	if target_troops != current_troops:
-		garrison_by_city = _projected_force_garrison_index(
-			state,
-			nation_id,
-			target_troops,
-			garrison_by_city
-		)
-	var pool_current_troops := 0
-	var current_monthly_demand := 0.0
-	var nation_current_monthly_demand := 0.0
-	for member_id in pool_members:
-		for city in _cached_cities_of(
-			state,
-			member_id,
-			evaluation_cache
-		):
-			monthly_production += (
-				float(Simulation.city_food_output(
-					state,
-					city,
-					garrison_by_city
-				)) / 6.0
-			)
-		var member_troops := _troop_count(
-			state,
-			member_id,
-			evaluation_cache
-		)
-		var member_demand := maxf(
-			state.nations[member_id].food_demand_ema,
-			float(member_troops)
-				* FOOD_PER_CAPITA_MONTH
-				* DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
-				* maxf(
-					RulerProfile.food_consumption_multiplier(
-						state.nations[member_id]
-					),
-					0.1
-				)
-		)
-		pool_current_troops += member_troops
-		current_monthly_demand += member_demand
-		if member_id == nation_id:
-			nation_current_monthly_demand = member_demand
-		var member_trade := _trade_report(
-			state, member_id, evaluation_cache
-		)
-		monthly_trade_food_import += int(
-			member_trade["monthly_food_import"]
-		)
-		monthly_trade_food_export += int(
-			member_trade["monthly_food_export"]
-		)
-	# TradeNetwork 的粮食量就是本月真实转移量；净进口与自产共同构成
-	# 当前粮池可用流量，净出口则相应降低战役续航。
-	var monthly_trade_food_balance := (
-		monthly_trade_food_import - monthly_trade_food_export
-	)
-	monthly_production += float(monthly_trade_food_balance)
-	var food_per_troop := (
-		nation_current_monthly_demand / float(current_troops)
-		if current_troops > 0
-		else (
-			FOOD_PER_CAPITA_MONTH
-			* DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
-			* maxf(
-				RulerProfile.food_consumption_multiplier(nation),
-				0.1
-			)
-		)
-	)
-	if target_troops > current_troops:
-		var formation_size := GameState.INITIAL_HEAVY_ARMY_SIZE
-		var formation_food: float = ceil(
-			float(ceil(
-				float(formation_size) * FOOD_PER_CAPITA_MONTH
-			))
-				* Simulation.MAX_SUPPLY_MULT
-				* maxf(
-					RulerProfile.food_consumption_multiplier(nation),
-					0.1
-				)
-		)
-		food_per_troop = maxf(
-			food_per_troop,
-			formation_food / float(formation_size)
-		)
-	var other_members_monthly_demand := maxf(
-		current_monthly_demand - nation_current_monthly_demand,
-		0.0
-	)
-	var target_monthly_demand := (
-		other_members_monthly_demand
-		+ float(target_troops) * food_per_troop
-	)
-	var full_strength_troops := _full_strength_troop_count(
-		state,
-		nation_id,
-		evaluation_cache
-	)
-	var full_strength_monthly_demand := (
-		other_members_monthly_demand
-		+ float(full_strength_troops) * food_per_troop
-	)
-	var annual_production := monthly_production * float(MONTHS_PER_YEAR)
-	var current_annual_demand := current_monthly_demand * float(MONTHS_PER_YEAR)
-	var target_annual_demand := target_monthly_demand * float(MONTHS_PER_YEAR)
-	var full_strength_annual_demand := (
-		full_strength_monthly_demand * float(MONTHS_PER_YEAR)
-	)
-	var stock := float(
-		_food_stock(
-			state,
-			nation_id,
-			evaluation_cache
-		)
-	)
-	var current_annual_balance := annual_production - current_annual_demand
-	var target_annual_balance := annual_production - target_annual_demand
-	var full_strength_annual_balance := (
-		annual_production - full_strength_annual_demand
-	)
-	var current_runway := _food_runway_years(stock, current_annual_balance)
-	var target_runway := _food_runway_years(stock, target_annual_balance)
-	var full_strength_runway := _food_runway_years(
-		stock,
-		full_strength_annual_balance
-	)
-	var required_years := _required_campaign_years(posture)
-	var emergency_reserve := target_monthly_demand * float(
-		EMERGENCY_FOOD_MONTHS
-	)
-	var monthly_budget := 0.0
-	var stock_target := emergency_reserve
-	if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
-		stock_target = target_annual_demand * PEACE_STOCK_TARGET_YEARS
-		var monthly_recovery := maxf(
-			stock_target - stock,
-			0.0
-		) / (PEACE_STOCK_RECOVERY_YEARS * float(MONTHS_PER_YEAR))
-		monthly_budget = maxf(monthly_production - monthly_recovery, 0.0)
-	else:
-		var expendable_stock := maxf(stock - emergency_reserve, 0.0)
-		monthly_budget = (
-			monthly_production
-			+ expendable_stock
-				/ (required_years * float(MONTHS_PER_YEAR))
-		)
-	var affordable_troops := _affordable_food_troops(
-		monthly_production,
-		stock,
-		other_members_monthly_demand,
-		food_per_troop,
-		posture,
-		required_years
-	)
+		posture = food_posture(state, nation_id, evaluation_cache)
+	var peace := posture in [FoodPosture.PEACE, FoodPosture.GUARDED]
+	var current := int(input.troops)
+	if target_troops < 0:
+		target_troops = current
+	var forecast_key := "forecast:%d:%d:%d:%d" % [nation_id, target_troops, posture, gold_cost]
+	if override.is_empty() and evaluation_cache.has(forecast_key):
+		return evaluation_cache[forecast_key]
+	input = input.duplicate()
+	var bonus := int(input.reserve_months_bonus)
+	input.gold_months = maxi((36 if peace else 6) + bonus, 0)
+	input.food_months = maxi((18 if peace else 6) + bonus, 0)
+	var change := {"gold_cost": gold_cost}
+	var deployment_food_delta := 0.0
+	# A proposed offensive deployment cannot assume every army will retain
+	# its peacetime local supply loss. Existing wars keep observed deployment.
+	if posture == FoodPosture.OFFENSIVE_WAR and _cached_wars_of(state, nation_id, evaluation_cache).is_empty():
+		deployment_food_delta = maxf(current * FOOD_PER_CAPITA_MONTH * DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER * float(input.food_multiplier) - float(input.nation_field_food), 0)
+	if target_troops != current:
+		var unit_food := float(input.nation_field_food) / maxi(current, 1)
+		if target_troops > current:
+			unit_food = maxf(unit_food, FOOD_PER_CAPITA_MONTH * Simulation.MAX_SUPPLY_MULT * float(input.food_multiplier))
+			input.harvest = maxf(float(input.harvest) - float(input.harvest_loss), 0)
+		change.field_food_delta = (target_troops - current) * unit_food
+		if target_troops < current:
+			change.replace_consumers = true
+		var delta := target_troops - current
+		var base_delta := int(ceil(float(delta) / GameState.WAR_GOLD_TROOPS_PER_UNIT))
+		if delta > 0:
+			var formations := delta / GameState.INITIAL_HEAVY_ARMY_SIZE
+			base_delta = formations * GameState.army_monthly_upkeep(GameState.INITIAL_HEAVY_ARMY_SIZE) + GameState.army_monthly_upkeep(delta % GameState.INITIAL_HEAVY_ARMY_SIZE)
+		var projected_base := maxi(int(input.base_upkeep) + base_delta, 0)
+		change.upkeep_delta = Simulation._ruler_adjusted_upkeep(projected_base, float(input.upkeep_multiplier)) - int(input.field_upkeep)
+	change.merge(override, true)
+	if deployment_food_delta > 0:
+		change.field_food_delta = float(change.get("field_food_delta", 0)) + deployment_food_delta
+	if override.has("base_upkeep_delta"):
+		change.upkeep_delta = Simulation._ruler_adjusted_upkeep(maxi(int(input.base_upkeep) + int(override.base_upkeep_delta), 0), float(input.upkeep_multiplier)) - int(input.field_upkeep)
+	var report := ResourceForecastRules.evaluate(input, change)
+	report.input = input
+	report.change = change
+	if override.is_empty():
+		evaluation_cache[forecast_key] = report
+	return report
+
+static func _resource_forecast_inputs(state: GameState, cache: Dictionary) -> Array[Dictionary]:
+	if cache.has("resource_forecast_inputs"):
+		return cache.resource_forecast_inputs
+	if not cache.has("monthly_gold_flows"):
+		cache.monthly_gold_flows = Simulation.monthly_gold_flows(state)
+	var flows: Array[Dictionary] = cache.monthly_gold_flows
+	var armies := ReinforcementRules.bucket_armies_by_nation(state)
+	var garrison_index := Simulation.build_garrison_index(state)
+	var conservative_index := garrison_index.duplicate()
+	var garrison_food := {}
+	for city in state.cities:
+		if city.owner_nation < 0 or city.is_dock:
+			continue
+		conservative_index[city.id] = int(ceil(float(city.manpower_per_month) * Simulation.CITY_GARRISON_CAPACITY_PER_MANPOWER * Simulation.CITY_GARRISON_FOOD_PENALTY_MAX / Simulation.CITY_GARRISON_FOOD_PENALTY_RATE))
+	for center_value in state.administrative_center_city_ids:
+		var center_id := int(center_value)
+		var city := state.cities[center_id]
+		if city.owner_nation >= 0:
+			garrison_food[city.owner_nation] = int(garrison_food.get(city.owner_nation, 0)) + int(Simulation.city_garrison_cost_report(state, city.owner_nation, center_id, city.garrison_manpower, state.capital_hop_distances(city.owner_nation)).food_demand)
+	var inputs: Array[Dictionary] = []
+	var pools := {}
+	for nation in state.nations:
+		var ruler_modifiers := RulerProfile.modifiers(nation)
+		var field := 0.0
+		var troops := 0
+		var base_upkeep := 0
+		var consumers: Array = []
+		var owned: Array = armies.get(nation.id, [])
+		var refill := 0
+		var consumption_multiplier := float(ruler_modifiers[RulerProfile.KEY_FOOD_CONSUMPTION])
+		for army in owned:
+			if army.size <= 0:
+				continue
+			troops += army.size
+			base_upkeep += GameState.army_monthly_upkeep(army.size)
+			var rate := float(TradeNetwork._projected_army_monthly_food_demand(army, nation, consumption_multiplier))
+			field += rate
+			consumers.append({"rate": rate, "debt": army.supply_food_debt})
+			refill += mini(maxi(army.max_size - army.size, 0), ReinforcementRules.monthly_reinforcement_cap(army))
+		var garrison := int(garrison_food.get(nation.id, 0))
+		var settled := maxf(float(nation.last_food_demand), nation.food_demand_ema) - garrison
+		var factor := maxf(settled, field) / maxf(field, 1)
+		for consumer in consumers:
+			consumer.rate = float(consumer.rate) * factor
+		field *= factor
+		var harvest := 0
+		var conservative := 0
+		for city in _cached_cities_of(state, nation.id, cache):
+			harvest += Simulation.city_food_output(state, city, garrison_index, ruler_modifiers)
+			conservative += Simulation.city_food_output(state, city, conservative_index, ruler_modifiers)
+		var trade := _trade_report(state, nation.id, cache)
+		var flow: Dictionary = flows[nation.id]
+		var pool_id := state.food_pool_holder(nation.id)
+		if not pools.has(pool_id):
+			pools[pool_id] = {"field": 0.0, "garrison": 0, "harvest": 0, "trade": 0, "exports": 0, "consumers": []}
+		var pool: Dictionary = pools[pool_id]
+		pool.field += field
+		pool.garrison += garrison
+		pool.harvest += harvest
+		pool.trade += int(trade.monthly_food_import) - int(trade.monthly_food_export)
+		pool.exports += int(trade.monthly_food_export)
+		pool.consumers.append_array(consumers)
+		inputs.append({
+			"day": state.day, "gold": nation.treasury_gold,
+			"pending_supply_days": int(cache.get("__forecast_pending_supply", false)),
+			"income": int(flow.net_income), "court": int(flow.court_expense_due),
+			"upkeep": int(flow.military_upkeep), "field_upkeep": int(flow.field_army_upkeep),
+			"necessary_gold": int(flow.court_expense_due) + int(flow.military_upkeep) + int(flow.tribute_paid) + int(flow.food_trade_expense) + int(flow.manpower_trade_expense),
+			"troops": troops, "base_upkeep": base_upkeep, "army_count": owned.size(), "nation_field_food": field, "harvest_loss": maxi(harvest - conservative, 0),
+			"manpower_target": mini(state.manpower_pool_capacity(nation.id), maxi(MIN_MANPOWER_RESERVE, maxi(int(ceil(troops * 0.15)), refill))),
+			"food_multiplier": consumption_multiplier, "upkeep_multiplier": float(ruler_modifiers[RulerProfile.KEY_UPKEEP]),
+			"reserve_months_bonus": int(ruler_modifiers[RulerProfile.KEY_RESERVE_MONTHS]),
+		})
+	for nation in state.nations:
+		var pool_id := state.food_pool_holder(nation.id)
+		var pool: Dictionary = pools[pool_id]
+		var input: Dictionary = inputs[nation.id]
+		input.field_food = pool.field
+		input.garrison_food = pool.garrison
+		input.harvest = pool.harvest
+		input.trade_food = pool.trade
+		input.export_food = pool.exports
+		input.consumers = pool.consumers
+		if not pool.has("consumption"):
+			var consumption := {}
+			var first_event := (state.day / 30 + 1) * 30
+			var pending_days := int(input.pending_supply_days)
+			var elapsed_days: Array[int] = [pending_days, 359 + pending_days, 360 + pending_days]
+			for event in range(first_event, state.day + 361, 30):
+				elapsed_days.append(maxi(event - state.day - 1, 0) + pending_days)
+				elapsed_days.append(event - state.day + pending_days)
+			for elapsed in elapsed_days:
+				if not consumption.has(elapsed):
+					var amount := 0.0
+					for consumer in pool.consumers:
+						amount += floor(float(consumer.rate) * elapsed / 30.0 + float(consumer.debt) + 0.000001)
+					if pool.consumers.is_empty():
+						amount = floor(float(pool.field) * elapsed / 30.0 + 0.000001)
+					consumption[elapsed] = amount
+			pool.consumption = consumption
+		input.consumption = pool.consumption
+		input.food = _food_stock(state, pool_id, cache)
+		input.food_capacity = state.food_storage_capacity(pool_id)
+	cache.resource_forecast_inputs = inputs
+	return inputs
+
+static func commit_force_change(state: GameState, nation_id: int, added_troops: int, cache: Dictionary, changes: Array = []) -> void:
+	if not cache.has("resource_forecast_inputs"):
+		return
+	var inputs: Array[Dictionary] = cache.resource_forecast_inputs
+	var input: Dictionary = inputs[nation_id]
+	var rate := maxi(added_troops, 0) * FOOD_PER_CAPITA_MONTH * Simulation.MAX_SUPPLY_MULT * float(input.food_multiplier)
+	var upkeep_delta := GameState.army_monthly_upkeep(added_troops)
+	var new_count := 0
+	var full_delta := 0
+	var power_delta := 0.0
+	if not changes.is_empty():
+		upkeep_delta = 0
+		rate = 0
+		for change in changes:
+			var army: Army = change.army
+			var old_size := int(change.old_size)
+			rate += ReinforcementPhase._grant_food_delta(old_size, army.size, float(input.food_multiplier))
+			upkeep_delta += GameState.army_monthly_upkeep(army.size) - GameState.army_monthly_upkeep(old_size)
+			power_delta += ArmyPower.effective(army) * float(army.size - old_size) / maxi(army.size, 1)
+			if old_size == 0:
+				new_count += 1
+				full_delta += army.max_size
+	var holder := state.food_pool_holder(nation_id)
+	for member in state.food_pool_members(holder):
+		inputs[member].field_food += rate
+		# Keep pre-existing per-army fractional debts when accepting a candidate.
+		inputs[member].consumers = (inputs[member].consumers as Array).duplicate()
+		inputs[member].consumers.append({"rate": rate, "debt": 0.0, "increment": true})
+		inputs[member].erase("consumption")
+		inputs[member].harvest = maxf(float(inputs[member].harvest) - float(input.harvest_loss), 0)
+	input.harvest_loss = 0
+	input.nation_field_food += rate
+	input.troops += added_troops
+	input.base_upkeep += upkeep_delta
+	input.army_count += new_count
+	input.gold = state.nations[nation_id].treasury_gold
+	var field := Simulation._ruler_adjusted_upkeep(int(input.base_upkeep), float(input.upkeep_multiplier))
+	input.necessary_gold += field - int(input.field_upkeep)
+	input.upkeep += field - int(input.field_upkeep)
+	input.field_upkeep = field
+	cache["troops:%d" % nation_id] = int(input.troops)
+	if cache.has("full_troops:%d" % nation_id):
+		cache["full_troops:%d" % nation_id] += full_delta
+	if cache.has("power:%d" % nation_id):
+		cache["power:%d" % nation_id] += power_delta
+	cache.monthly_gold_flows = (cache.monthly_gold_flows as Array[Dictionary]).duplicate()
+	var flow: Dictionary = cache.monthly_gold_flows[nation_id].duplicate()
+	cache.monthly_gold_flows[nation_id] = flow
+	flow.balance -= field - int(flow.field_army_upkeep)
+	flow.military_upkeep += field - int(flow.field_army_upkeep)
+	flow.field_army_upkeep = field
+	for key in cache.keys():
+		if str(key).begins_with("forecast:") or str(key).begins_with("food:") or str(key).begins_with("food_capacity:") or str(key).begins_with("force_capacity:") or str(key).begins_with("resource:") or str(key).begins_with("coalition_power:") or str(key).begins_with("food_posture:"):
+			cache.erase(key)
+
+static func war_food_report(
+	state: GameState, nation_id: int, target_troops: int = -1,
+	posture: int = -1, evaluation_cache: Dictionary = {}, compute_capacity: bool = false
+) -> Dictionary:
+	var current := _troop_count(state, nation_id, evaluation_cache)
+	if target_troops < 0:
+		target_troops = current
+	if posture < 0:
+		posture = food_posture(state, nation_id, evaluation_cache)
+	var key := "food:%d:%d:%d:%d" % [nation_id, target_troops, posture, int(compute_capacity)]
+	if evaluation_cache.has(key):
+		return evaluation_cache[key]
+	var forecast := resource_forecast(state, nation_id, target_troops, posture, evaluation_cache)
+	var input: Dictionary = forecast.input
+	var demand := float(input.field_food) + float(input.garrison_food) + float(forecast.change.get("field_food_delta", 0))
+	var production := float(input.harvest) / 6.0 + float(input.trade_food)
+	var low := 0
+	var high := state.max_army_count(nation_id) * GameState.INITIAL_HEAVY_ARMY_SIZE
+	if not compute_capacity:
+		low = current
+		high = current
+	var capacity_key := "food_capacity:%d:%d" % [nation_id, posture]
+	if evaluation_cache.has(capacity_key):
+		low = int(evaluation_cache[capacity_key])
+		high = low
+	while low < high:
+		var candidate := (low + high + 1) / 2
+		var check := resource_forecast(state, nation_id, candidate, posture, evaluation_cache)
+		var viable := int(check.food_deficit) == 0
+		if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
+			viable = viable and float(check.food_end) >= minf(float(check.input.food), float(check.food_target)) + float(check.food_gap) / 3.0
+		if viable:
+			low = candidate
+		else:
+			high = candidate - 1
+	if compute_capacity:
+		evaluation_cache[capacity_key] = low
+	var full := _full_strength_troop_count(state, nation_id, evaluation_cache)
+	var full_forecast := resource_forecast(state, nation_id, full, posture, evaluation_cache)
+	var annual_balance := (production - demand) * 12.0
+	var current_balance := (production - float(input.field_food) - float(input.garrison_food)) * 12.0
+	var full_demand := float(input.field_food) + float(input.garrison_food) + float(full_forecast.change.get("field_food_delta", 0))
+	var full_balance := (float(full_forecast.input.harvest) / 6.0 + float(input.trade_food) - full_demand) * 12.0
+	var pool_troops := 0
+	for member in state.food_pool_members(state.food_pool_holder(nation_id)):
+		pool_troops += int(_resource_forecast_inputs(state, evaluation_cache)[member].troops)
 	var result := {
-		"posture": posture,
-		"current_troops": current_troops,
-		"pool_holder": pool_holder,
-		"pool_members": pool_members,
-		"pool_current_troops": pool_current_troops,
-		"target_troops": target_troops,
-		"full_strength_troops": full_strength_troops,
-		"monthly_food_production": monthly_production,
-		"monthly_trade_food_import": monthly_trade_food_import,
-		"monthly_trade_food_export": monthly_trade_food_export,
-		"monthly_trade_food_balance": monthly_trade_food_balance,
-		"annual_food_production": annual_production,
-		"food_stock": int(stock),
-		"food_per_troop_month": food_per_troop,
-		"current_monthly_demand": current_monthly_demand,
-		"target_monthly_demand": target_monthly_demand,
-		"full_strength_monthly_demand": full_strength_monthly_demand,
-		"current_annual_demand": current_annual_demand,
-		"target_annual_demand": target_annual_demand,
-		"full_strength_annual_demand": full_strength_annual_demand,
-		"current_annual_balance": current_annual_balance,
-		"target_annual_balance": target_annual_balance,
-		"full_strength_annual_balance": full_strength_annual_balance,
-		"current_runway_years": current_runway,
-		"target_runway_years": target_runway,
-		"full_strength_runway_years": full_strength_runway,
-		"required_campaign_years": required_years,
-		"emergency_food_reserve": int(ceil(emergency_reserve)),
-		"stock_target": int(ceil(stock_target)),
-		"monthly_food_budget": monthly_budget,
-		"affordable_troops": affordable_troops,
-		"target_sustainable": (
-			target_monthly_demand <= monthly_budget + 0.01
-			and (
-				target_annual_balance >= 0.0
-				or target_runway >= required_years
-			)
-		),
+		"posture": posture, "current_troops": current, "target_troops": target_troops,
+		"pool_holder": state.food_pool_holder(nation_id),
+		"pool_members": state.food_pool_members(state.food_pool_holder(nation_id)),
+		"pool_current_troops": pool_troops, "full_strength_troops": full,
+		"monthly_food_production": production, "annual_food_production": production * 12.0,
+		"monthly_trade_food_import": maxi(int(input.trade_food), 0),
+		"monthly_trade_food_export": maxi(-int(input.trade_food), 0),
+		"monthly_trade_food_balance": int(input.trade_food),
+		"food_stock": int(input.food), "food_per_troop_month": maxf(float(input.nation_field_food) / maxi(current, 1), FOOD_PER_CAPITA_MONTH * Simulation.MAX_SUPPLY_MULT * RulerProfile.food_consumption_multiplier(state.nations[nation_id])),
+		"current_monthly_demand": float(input.field_food) + float(input.garrison_food),
+		"target_monthly_demand": demand, "full_strength_monthly_demand": full_demand,
+		"current_annual_demand": (float(input.field_food) + float(input.garrison_food)) * 12.0,
+		"target_annual_demand": demand * 12.0, "full_strength_annual_demand": full_demand * 12.0,
+		"current_annual_balance": current_balance,
+		"target_annual_balance": annual_balance, "full_strength_annual_balance": full_balance,
+		"current_runway_years": _food_runway_years(float(input.food), current_balance),
+		"target_runway_years": _food_runway_years(float(input.food), annual_balance),
+		"full_strength_runway_years": _food_runway_years(float(input.food), full_balance),
+		"required_campaign_years": 1.0, "emergency_food_reserve": int(forecast.food_target),
+		"stock_target": int(forecast.food_target), "monthly_food_budget": production - float(forecast.food_savings),
+		"affordable_troops": low, "target_sustainable": int(forecast.food_deficit) == 0,
+		"forecast": forecast,
 	}
-	evaluation_cache[cache_key] = result
+	evaluation_cache[key] = result
 	return result
 
 
-static func _projected_force_garrison_index(
-	state: GameState,
-	nation_id: int,
-	target_troops: int,
-	current_index: Dictionary
-) -> Dictionary:
-	var projected := current_index.duplicate()
-	for city_id_value in projected.keys().duplicate():
-		var city_id := int(city_id_value)
-		if (
-			city_id >= 0
-			and city_id < state.cities.size()
-			and state.cities[city_id].owner_nation == nation_id
-		):
-			projected.erase(city_id_value)
-	if target_troops <= 0:
-		return projected
-	# 战役与预备队调度会把军团分散到多个州治；驻军减产对部署位置
-	# 非线性。容量采用每座本国陆城的现有减产下界（最高 30%），保证
-	# 任何后续分散都不会把实际粮产压到容量预测以下。
-	for city in state.land_cities_of(nation_id):
-		projected[city.id] = int(ceil(
-			float(city.manpower_per_month)
-				* Simulation.CITY_GARRISON_CAPACITY_PER_MANPOWER
-				* Simulation.CITY_GARRISON_FOOD_PENALTY_MAX
-				/ Simulation.CITY_GARRISON_FOOD_PENALTY_RATE
-		))
-	return projected
-
-
-## 求解目标军力自身的粮食约束，而不是先按当前军力算预算再扩军。
-## 目标需求 d = 其他成员需求 + x * 单兵耗；和平还要恢复 1.5 年粮仓，
-## 战时要保留六个月应急粮并按战役窗口摊销库存。这个方程是单调的，
-## 因而扩军前后的容量相同，不会出现一次征满后容量反转。
-static func _affordable_food_troops(
-	monthly_production: float,
-	stock: float,
-	other_members_monthly_demand: float,
-	food_per_troop: float,
-	posture: int,
-	required_years: float
-) -> int:
-	var unit := maxf(food_per_troop, 0.0001)
-	var other := maxf(other_members_monthly_demand, 0.0)
-	var production := maxf(monthly_production, 0.0)
-	var available_stock := maxf(stock, 0.0)
-	var target_months := 0.0
-	var budget_factor := 1.0
-	if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
-		# stock_target = demand * 18，恢复期为 36 个月，故恢复预算
-		# 在需要补库时等价于每月额外承担 demand / 2。
-		target_months = PEACE_STOCK_TARGET_YEARS * float(MONTHS_PER_YEAR)
-		budget_factor += target_months / (
-			PEACE_STOCK_RECOVERY_YEARS * float(MONTHS_PER_YEAR)
-		)
-	else:
-		# emergency_reserve = demand * 6，库存按战役窗口摊销。
-		target_months = float(EMERGENCY_FOOD_MONTHS)
-		budget_factor += target_months / (
-			maxf(required_years, 0.01) * float(MONTHS_PER_YEAR)
-		)
-	var recovery_years := (
-		PEACE_STOCK_RECOVERY_YEARS
-		if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]
-		else required_years
-	)
-	var reserve_adjusted_capacity := (
-		production
-		+ available_stock / (
-			maxf(recovery_years, 0.01) * float(MONTHS_PER_YEAR)
-		)
-		- other * budget_factor
-	) / (unit * budget_factor)
-	var flow_only_capacity := (production - other) / unit
-	var capacity := reserve_adjusted_capacity
-	if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
-		# 流量上限对应总需求=月产量；只有库存已经覆盖这一目标的
-		# 18 个月储备时，才确实无需恢复预算。
-		if available_stock >= target_months * production:
-			capacity = flow_only_capacity
-	else:
-		# 战时库存不足以形成可支配余额时仍可按当月产量维持军队。
-		capacity = maxf(reserve_adjusted_capacity, flow_only_capacity)
-	return maxi(int(floor(capacity)), 0)
-
-
-static func _required_campaign_years(posture: int) -> float:
-	match posture:
-		FoodPosture.OFFENSIVE_WAR:
-			return OFFENSIVE_CAMPAIGN_YEARS
-		FoodPosture.DEFENSIVE_WAR:
-			return DEFENSIVE_CAMPAIGN_YEARS
-		FoodPosture.GUARDED:
-			return GUARDED_CAMPAIGN_YEARS
-		_:
-			return PEACE_STOCK_RECOVERY_YEARS
 
 
 static func _food_runway_years(stock: float, annual_balance: float) -> float:
@@ -5357,6 +5043,7 @@ static func _collect_existing_war_preparation(
 		target_nation_valid
 		and objective_valid
 		and has_route
+		and resources_ready
 		and not resource_grace_expired
 		and assembly_deadline_expired
 		and war_preparation_arrived_troops(
@@ -5394,7 +5081,7 @@ static func _collect_existing_war_preparation(
 	# 没有任何可达目标时保持战略备战；道路恢复或边境易手后会自动重选。
 	if not objective_valid or not has_route:
 		return
-	if not resources_ready and not best_effort_launch:
+	if not resources_ready:
 		return
 	if not preparation_ready and not best_effort_launch:
 		if _collect_preparation_alliance(
@@ -5581,7 +5268,9 @@ static func war_preparation_launch_allowed(state: GameState, nation_id: int, cac
 		return false
 	if not can_initiate_war_at_range(state, nation_id, target, cache) or not war_preparation_staging_cities(state, nation_id, objective, cache).has(nation.war_preparation_staging_city_id):
 		return false
-	if war_preparation_ready(state, nation_id, cache) and war_preparation_resources_ready(state, nation_id, cache):
+	if not war_preparation_resources_ready(state, nation_id, cache):
+		return false
+	if war_preparation_ready(state, nation_id, cache):
 		return true
 	var unready := nation.war_preparation_unready_since_day
 	return state.day - nation.war_preparation_started_day >= WAR_PREPARATION_MAX_DAYS \

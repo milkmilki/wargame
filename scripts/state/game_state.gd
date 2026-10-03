@@ -7521,6 +7521,9 @@ func _planned_territory_capital(
 		and (not has_owned_zhou or is_zhou_city(current))
 	):
 		return current
+	var nearby := _nearby_capital(nation_id, candidates, current)
+	if nearby >= 0:
+		return nearby
 	var best_component := _largest_owned_component(
 		nation_id, candidates, has_owned_zhou
 	)
@@ -7530,6 +7533,27 @@ func _planned_territory_capital(
 			capital_candidates.append(city)
 	EquivariantOrder.sort_cities(capital_candidates, self, nation_id)
 	return capital_candidates[0].id
+
+
+func _nearby_capital(nation_id: int, owned_cities: Array[City], old_capital_id: int) -> int:
+	var old_region := RegionalStrategy.city_region(self, old_capital_id)
+	if old_region < 0:
+		return -1
+	var eligible := {}
+	for city in owned_cities:
+		if is_zhou_city(city.id) and RegionalStrategy.regions_are_adjacent(
+			self, old_region, RegionalStrategy.city_region(self, city.id)
+		):
+			eligible[city.id] = true
+	if eligible.is_empty():
+		return -1
+	var component := _largest_owned_component(nation_id, owned_cities, true, eligible)
+	var options: Array[City] = []
+	for city in component:
+		if eligible.has(city.id):
+			options.append(city)
+	EquivariantOrder.sort_cities(options, self, nation_id)
+	return options[0].id
 
 
 ## 规范化一份任意宗藩快照。事务只能接收完整最终图，不能让调用方通过提前
@@ -8317,27 +8341,30 @@ func relocate_capital(nation_id: int) -> int:
 		nation.capital_city_id = -1
 		nation.warehouse_city_ids.clear()
 		return -1
+	var nearby := _nearby_capital(nation_id, candidates, previous_capital_id)
 	var has_owned_zhou := false
 	for city in candidates:
 		has_owned_zhou = has_owned_zhou or is_zhou_city(city.id)
-	var best_component := _largest_owned_component(
-		nation_id, candidates, has_owned_zhou
-	)
-	var zhou_candidates: Array[City] = []
-	for city in best_component:
-		if is_zhou_city(city.id):
-			zhou_candidates.append(city)
-	if not zhou_candidates.is_empty():
-		best_component = zhou_candidates
-	best_component.sort_custom(func(a: City, b: City) -> bool:
-		return EquivariantOrder.city_less(
-			self,
-			nation_id,
-			a,
-			b
+	if nearby < 0 and not has_owned_zhou and previous_capital_id >= 0 \
+		and previous_capital_id < cities.size() \
+		and cities[previous_capital_id].owner_nation == nation_id \
+		and not cities[previous_capital_id].is_dock:
+		nearby = previous_capital_id
+	var capital: City
+	if nearby >= 0:
+		capital = cities[nearby]
+	else:
+		var best_component := _largest_owned_component(
+			nation_id, candidates, has_owned_zhou
 		)
-	)
-	var capital := best_component[0]
+		var zhou_candidates: Array[City] = []
+		for city in best_component:
+			if is_zhou_city(city.id):
+				zhou_candidates.append(city)
+		if not zhou_candidates.is_empty():
+			best_component = zhou_candidates
+		EquivariantOrder.sort_cities(best_component, self, nation_id)
+		capital = best_component[0]
 	nation.capital_city_id = capital.id
 	capital.is_capital = true
 	capital.capital_since_day = (
@@ -8483,7 +8510,8 @@ func territory_structure_valid() -> bool:
 func _largest_owned_component(
 	nation_id: int,
 	owned_cities: Array[City],
-	prefer_zhou_component: bool = false
+	prefer_zhou_component: bool = false,
+	required_city_ids: Dictionary = {}
 ) -> Array[City]:
 	var owned := {}
 	for city in owned_cities:
@@ -8492,6 +8520,7 @@ func _largest_owned_component(
 	var best: Array[City] = []
 	var best_rep := -1
 	var best_has_zhou := false
+	var best_has_required := false
 	for city in owned_cities:
 		if visited.has(city.id):
 			continue
@@ -8514,18 +8543,25 @@ func _largest_owned_component(
 				visited[neighbor] = true
 				queue.append(neighbor)
 		var component_has_zhou := false
+		var component_has_required := false
 		for member in component:
-			if is_zhou_city(member.id):
-				component_has_zhou = true
-				break
+			component_has_zhou = component_has_zhou or is_zhou_city(member.id)
+			component_has_required = component_has_required or required_city_ids.has(member.id)
 		if (
 			(
-				prefer_zhou_component
+				not required_city_ids.is_empty()
+				and component_has_required != best_has_required
+				and component_has_required
+			)
+			or (
+				(required_city_ids.is_empty() or component_has_required == best_has_required)
+				and prefer_zhou_component
 				and component_has_zhou != best_has_zhou
 				and component_has_zhou
 			)
 			or (
-				(not prefer_zhou_component or component_has_zhou == best_has_zhou)
+				(required_city_ids.is_empty() or component_has_required == best_has_required)
+				and (not prefer_zhou_component or component_has_zhou == best_has_zhou)
 				and (
 					component.size() > best.size()
 					or (
@@ -8538,6 +8574,7 @@ func _largest_owned_component(
 			best = component
 			best_rep = rep
 			best_has_zhou = component_has_zhou
+			best_has_required = component_has_required
 	return best
 
 

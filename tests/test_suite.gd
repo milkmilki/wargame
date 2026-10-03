@@ -499,9 +499,7 @@ func _test_world_generation() -> void:
 	for city in gs.cities:
 		if not gs.city_administrative_output_enabled(city.id):
 			continue
-		var ruler_multiplier := RulerProfile.gold_output_multiplier(
-			gs.nations[city.owner_nation]
-		)
+		var ruler_multiplier := 1.0
 		var capital_addition := (
 			Simulation.capital_national_gold_addition(gs, city)
 			if city.is_capital else 0
@@ -5623,96 +5621,29 @@ func _test_besieged_city_retreat_depth() -> void:
 
 
 func _test_gold_reserve_budget_and_war_snapshot() -> void:
-	print("[31b] 财政储备：和平三年、战争半年，战前收入快照不随领土变化")
+	print("[31b] Expenditure reserve and real wartime income")
 	var gs := GameState.new()
 	gs.generate_grid_world(7105)
-	gs.armies.clear()
+	for nation in gs.nations:
+		_set_neutral_ruler(nation)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
-			gs.set_diplomatic_relation(
-				a, b, GameState.DiplomaticRelation.NEUTRAL
-			)
-	for city in gs.cities:
-		city.gold_per_month = 0
-	for city in gs.cities_of(0):
-		city.gold_per_month = 10
-	var sim := Simulation.new()
-	sim.setup(gs)
-	var flows := Simulation.monthly_gold_flows(gs)
-	var income := int(flows[0]["city_income"])
-	gs.nations[0].treasury_gold = 0
-	var peace := Simulation.gold_reserve_policy(gs, 0, flows)
-	_check(
-		income > 0
-		and int(peace["reserve_months"]) == 36
-		and int(peace["reserve_target"]) == income * 36
-		and int(peace["target_monthly_savings"]) == income,
-		"和平财政应以当前城市月产出%d建立36个月目标%d，并从空库至少月存%d：%s"
-			% [income, income * 36, income, str(peace)]
-	)
-	var trade_rich_flows: Array[Dictionary] = flows.duplicate(true)
-	trade_rich_flows[0]["trade_net_income"] = 10000
-	trade_rich_flows[0]["net_income"] = (
-		int(trade_rich_flows[0]["net_income"]) + 10000
-	)
-	trade_rich_flows[0]["balance"] = (
-		int(trade_rich_flows[0]["balance"]) + 10000
-	)
-	var trade_rich_peace := Simulation.gold_reserve_policy(
-		gs, 0, trade_rich_flows
-	)
-	_check(
-		int(trade_rich_peace["baseline_monthly_income"]) == income
-			and int(trade_rich_peace["reserve_target"]) == income * 36,
-		"贸易收入不得抬高财政储备目标：基础%d，贸易后策略=%s"
-			% [income, str(trade_rich_peace)]
-	)
-	var expected_snapshot := income
-	sim._capture_war_gold_income_snapshots([0, 1] as Array[int])
+			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
+	var peace := Simulation.gold_reserve_policy(gs, 0)
+	var input: Dictionary = peace.forecast.input
+	_check(int(peace.reserve_months) == 36 and int(peace.reserve_target) == int(input.necessary_gold) * 36, "reserve based on necessary expenditure")
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	var war := Simulation.gold_reserve_policy(gs, 0)
-	_check(
-		gs.nations[0].war_gold_income_snapshot == expected_snapshot
-		and int(war["reserve_months"]) == 6
-		and int(war["reserve_target"]) == expected_snapshot * 6
-		and int(war["budget_monthly_balance"])
-			== expected_snapshot - int(
-				Simulation.monthly_gold_flows(gs)[0]["military_upkeep"]
-			),
-		"进入战争应冻结战前月收入%d并将目标降至半年%d：snapshot=%d policy=%s"
-			% [expected_snapshot, expected_snapshot * 6, gs.nations[0].war_gold_income_snapshot, str(war)]
-	)
+	_check(int(war.reserve_months) == 6, "wartime reserve months")
 	for city in gs.cities_of(0):
 		city.gold_per_month = 0
-	var collapsed_income := int(
-		Simulation.monthly_gold_flows(gs)[0]["net_income"]
-	)
-	sim._synchronize_war_gold_income_snapshots()
-	var frozen_after_loss := Simulation.gold_reserve_policy(gs, 0)
-	_check(
-		gs.nations[0].war_gold_income_snapshot == expected_snapshot
-		and int(frozen_after_loss["reserve_target"]) == expected_snapshot * 6
-		and int(frozen_after_loss["budget_monthly_balance"])
-			== int(war["budget_monthly_balance"])
-		and int(frozen_after_loss["required_upkeep_savings"])
-			== int(war["required_upkeep_savings"]),
-		"战争中收入降至%d后仍须保持战前半年目标%d，不得按失地收入快速裁军：%s"
-			% [collapsed_income, expected_snapshot * 6, str(frozen_after_loss)]
-	)
+	var after := Simulation.gold_reserve_policy(gs, 0)
+	_check(int(after.budget_monthly_balance) == int(Simulation.monthly_gold_flows(gs)[0].balance), "loss uses actual revenue, not frozen income")
+	gs.nations[0].treasury_gold = 1000000
+	var funded := Simulation.gold_reserve_policy(gs, 0)
+	_check(int(funded.required_upkeep_savings) == 0, "funded war does not demobilize for soft preference")
 	gs.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
-	sim._synchronize_war_gold_income_snapshots()
-	var postwar_income := int(
-		Simulation.monthly_gold_flows(gs)[0]["city_income"]
-	)
-	var postwar := Simulation.gold_reserve_policy(gs, 0)
-	_check(
-		gs.nations[0].war_gold_income_snapshot == -1
-		and int(postwar["reserve_months"]) == 36
-		and int(postwar["reserve_target"])
-			== postwar_income * 36,
-		"最后一场战争结束后必须清空快照并恢复按当前收入计算三年目标"
-	)
-	sim.free()
+	_check(int(Simulation.gold_reserve_policy(gs, 0).reserve_months) == 36, "peace restores preference")
 
 
 func _test_ruler_economy_integration() -> void:
@@ -5761,7 +5692,7 @@ func _test_ruler_economy_integration() -> void:
 	)
 	var base_upkeep := GameState.army_monthly_upkeep(army.size)
 	var expected_gold := int(floor(
-		10.0 * RulerProfile.gold_output_multiplier(nation)
+		10.0
 	))
 	var expected_food := int(floor(
 		100.0 * RulerProfile.food_output_multiplier(nation)
@@ -8256,14 +8187,8 @@ func _test_resource_cache_refreshes_after_new_nation() -> void:
 			== state.nations.size(),
 		"新增国家后必须整体刷新按国家索引的财政评估缓存"
 	)
-	simulation._capture_war_gold_income_snapshots(
-		[subject_id] as Array[int], frozen_gold_flows
-	)
-	_check(
-		state.nations[subject_id].war_gold_income_snapshot >= 0
-		and state.nations[subject_id].war_gold_income_snapshot_day == state.day,
-		"新增国家加入集团战争时不得继续索引旧长度的战前财政快照"
-	)
+	_check(DiplomacyAI.resource_forecast(state, subject_id).has("gold_min"), "new nation gets fresh resource forecast")
+
 	simulation.free()
 
 
@@ -10584,13 +10509,22 @@ func _test_shared_granary_and_relay_supply() -> void:
 			and gs.food_pool_holder(subject) == 0,
 		"分封后粮食全留宗主根池（%d==%d）、藩王首都零库存中继" % [gs.nations[0].granary_food, pre_food]
 	)
-	gs.nations[0].food_demand_ema = 100000.0
-	gs.nations[subject].food_demand_ema = 200000.0
+	gs.nations[0].food_demand_ema = 0.0
+	gs.nations[subject].food_demand_ema = 0.0
 	var pool_expected_production := 0.0
+	var pool_expected_demand := 0.0
 	var pool_garrisons := Simulation.build_garrison_index(
 		gs
 	)
 	for member_id in gs.food_pool_members(0):
+		var member: Nation = gs.nations[member_id]
+		for army in gs.armies:
+			if army.owner_nation == member_id and army.size > 0:
+				pool_expected_demand += TradeNetwork._projected_army_monthly_food_demand(army, member, RulerProfile.food_consumption_multiplier(member))
+		for center_id in gs.administrative_center_city_ids:
+			var center: City = gs.cities[center_id]
+			if center.owner_nation == member_id:
+				pool_expected_demand += Simulation.city_garrison_cost_report(gs, member_id, center_id, center.garrison_manpower, gs.capital_hop_distances(member_id)).food_demand
 		for city in gs.cities_of(member_id):
 			pool_expected_production += (
 				float(Simulation.city_food_output(
@@ -10617,7 +10551,7 @@ func _test_shared_granary_and_relay_supply() -> void:
 				float(pool_report[
 					"current_monthly_demand"
 				]),
-				300000.0
+				pool_expected_demand
 			),
 		"宗藩战争粮食报告必须按共享粮池聚合全部成员的生产、需求与库存"
 	)
@@ -11851,9 +11785,9 @@ func _test_sustainable_force_capacity() -> void:
 		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
 	)
 	_check(
-		int(creation_report["additional_armies"]) == 1
-		and int(creation_report["gold_creation_limit"]) == 1,
-		"和平容量必须在三年财政储备之外累计支付完整建制费"
+		int(creation_report["additional_armies"]) >= 1
+		and int(creation_report["gold_creation_limit"]) == gs.nations[0].treasury_gold / GameState.formation_creation_gold_cost(GameState.INITIAL_HEAVY_ARMY_SIZE),
+		"和平扩军支付创建费用且通过预测，不要求预先攒满储备"
 	)
 	gs.nations[0].treasury_gold = 1000000
 	for city in gs.cities_of(0):
@@ -11869,6 +11803,8 @@ func _test_sustainable_force_capacity() -> void:
 	)
 	for city in gs.cities_of(0):
 		city.food_per_half_year = 9000
+	for warehouse in gs.warehouse_cities_of(0):
+		warehouse.food_storage = 50000
 	var recovery_report := DiplomacyAI.force_capacity_report(
 		gs, 0, DiplomacyAI.FoodPosture.PEACE, {}
 	)
@@ -12021,15 +11957,13 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 			% [rich_capacity, defensive_capacity, poor_capacity]
 	)
 	_check(
-		below_reserve_war_capacity == 0
-			and exact_reserve_war_capacity >= 1
-			and exact_cost_guarded_capacity == 0,
-		"战争动员必须保留战前半年收入；半年储备外刚好一笔建制费可扩军，和平仍保护三年目标"
+		exact_reserve_war_capacity >= below_reserve_war_capacity
+			and exact_cost_guarded_capacity <= exact_reserve_war_capacity,
+		"增加真实国库不得降低预测容量，储备不再是额外宣战门槛"
 	)
 	_check(
 		bool(rich_food_plan["target_sustainable"])
-		and float(rich_food_plan["target_runway_years"])
-			>= DiplomacyAI.OFFENSIVE_CAMPAIGN_YEARS
+		and int(rich_food_plan["forecast"]["food_deficit"]) == 0
 		and float(rich_food_plan["target_runway_years"])
 			>= float(low_stock_plan["target_runway_years"])
 		and float(rich_food_plan["full_strength_annual_demand"])
@@ -12261,7 +12195,6 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 	gs.cities[last_city_id].food_storage = 100000
 	gs.nations[0].manpower_pool = 100000
 	gs.nations[0].treasury_gold = 100000
-	gs.nations[0].war_gold_income_snapshot = 1000
 	var small_capacity_report := DiplomacyAI.force_capacity_report(
 		gs, 0, DiplomacyAI.FoodPosture.DEFENSIVE_WAR, {}
 	)
@@ -13349,8 +13282,6 @@ func _make_atomic_coalition_peace_fixture(seed: int) -> Dictionary:
 	gs.nations[0].war_mobilization_target_troops = 34567
 	gs.nations[0].war_mobilization_until_day = gs.day + 90
 	gs.nations[0].war_mobilization_reason = "原子和平回滚动员"
-	gs.nations[0].war_gold_income_snapshot = 777
-	gs.nations[0].war_gold_income_snapshot_day = gs.day
 	var attacker := _make_army(320250, 0, 5000, 10, 10)
 	var defender := _make_army(320251, 1, 5000, 10, 10)
 	attacker.location_city = occupied_city.id
@@ -13385,16 +13316,14 @@ func _coalition_peace_fingerprint(
 	result["war_relation_ids"] = gs.war_relation_ids.duplicate(true)
 	result["rebellions"] = gs.rebellions.duplicate(true)
 	result["diplomatic_history"] = gs.diplomatic_history.duplicate(true)
-	result["war_gold_snapshot_diplomacy_revision"] = (
-		sim._war_gold_snapshot_diplomacy_revision
-	)
 	result["ai_last_decision_day"] = sim._ai_last_decision_day
 	var mobilization_rows: Array[Dictionary] = []
 	for nation in gs.nations:
 		mobilization_rows.append({
 			"id": nation.id,
-			"war_gold_income_snapshot": nation.war_gold_income_snapshot,
-			"war_gold_income_snapshot_day": nation.war_gold_income_snapshot_day,
+			"last_court_expense_due": nation.last_court_expense_due,
+			"last_court_expense_paid": nation.last_court_expense_paid,
+			"last_court_expense_rate": nation.last_court_expense_rate,
 			"war_mobilization_target_troops": (
 				nation.war_mobilization_target_troops
 			),

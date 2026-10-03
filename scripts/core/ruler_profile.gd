@@ -4,7 +4,7 @@ extends RefCounted
 ##
 ## 本类不持有状态，也不读取 GameState.rng。君主原型、特质和姓名只由
 ## (world_seed, nation.id, domain, salt) 的稳定哈希决定。除储备月数为加法修正、
-## offensive_allowed 为布尔门控外，其余公开修正均为以 1.0 为中性的倍率。
+## offensive_allowed 为布尔门控、宫廷耗费为固定比例外，公开修正均为以1.0为中性的倍率。
 
 enum Archetype {
 	BALANCED,
@@ -111,7 +111,7 @@ const ARCHETYPE_DESCRIPTIONS: Dictionary = {
 	Archetype.CONQUEROR: "崇尚武功，军队基础攻防提高至五倍，以半数州战役需求发动攻势，并能以更低成本维持强军。",
 	Archetype.GUARDIAN: "专注守土与积储，城防坚固，不会主动发动攻势。",
 	Archetype.INEPT: "才具平庸，生产、军备与外交皆受拖累，也无力组织主动攻势。",
-	Archetype.TYRANT: "以高压榨取财富和兵员，热衷集权，却损害民心、外交与长期稳定。",
+	Archetype.TYRANT: "以高压征集兵员，热衷集权，宫廷与腐败耗费较高，并损害民心、外交与长期稳定。",
 	Archetype.MERCHANT: "重视通商和财政，擅长以较低成本维持国家，但军事动员较弱。",
 	Archetype.REFORMER: "整饬制度、提升生产和征募效率，并倾向收拢中央权力。",
 	Archetype.DIPLOMAT: "长于议和、结盟与贸易，不会主动发动攻势，但正面作战稍弱。",
@@ -138,15 +138,15 @@ const TRAIT_DESCRIPTIONS: Dictionary = {
 	TRAIT_AMBITIOUS: "更愿开战、较难议和，并积极推动集权。",
 	TRAIT_CAUTIOUS: "降低进攻意愿，偏好议和、守备和额外储备，完成经营区域后不再转向新区。",
 	TRAIT_CHARISMATIC: "更易缔结联盟，也更能维持军队士气。",
-	TRAIT_FRUGAL: "改善财政、降低军费，并多留一个月的储备。",
-	TRAIT_DILIGENT: "小幅提升黄金、粮食和人力产出。",
+	TRAIT_FRUGAL: "降低军费，并多留一个月的钱粮储备；不改变固定宫廷耗费比例。",
+	TRAIT_DILIGENT: "小幅提升粮食和人力产出。",
 	TRAIT_LOGISTICIAN: "提高粮产、降低军粮消耗，并增加两个月储备。",
 	TRAIT_MARTIAL: "提高进攻意愿、士气和野战防御。",
 	TRAIT_FORTIFIER: "偏重守势，强化野战防御、城防和储备。",
-	TRAIT_MERCANTILE: "提高黄金与贸易收益，也略有助于结盟。",
+	TRAIT_MERCANTILE: "提高贸易收益，也略有助于结盟。",
 	TRAIT_CENTRALIZER: "偏好削藩，排斥分封，并略微改善人力征集。",
 	TRAIT_FEUDALIST: "偏好分封、排斥削藩，并略微改善地方防御。",
-	TRAIT_HARSH: "以强硬手段增加黄金和人力，但不利议和、结盟与士气。",
+	TRAIT_HARSH: "以强硬手段增加人力，但不利议和、结盟与士气。",
 }
 
 const TRADE_POLICY_NAMES: Dictionary = {
@@ -159,7 +159,6 @@ const TRADE_POLICY_NAMES: Dictionary = {
 const KEY_AGGRESSION: String = "aggression_multiplier"
 const KEY_PEACE: String = "peace_multiplier"
 const KEY_ALLIANCE: String = "alliance_multiplier"
-const KEY_GOLD_OUTPUT: String = "gold_output_multiplier"
 const KEY_FOOD_OUTPUT: String = "food_output_multiplier"
 const KEY_MANPOWER_OUTPUT: String = "manpower_output_multiplier"
 const KEY_UPKEEP: String = "upkeep_multiplier"
@@ -459,10 +458,17 @@ static func alliance_multiplier(
 	return float(modifiers(profile_or_archetype, traits)[KEY_ALLIANCE])
 
 
-static func gold_output_multiplier(
-	profile_or_archetype: Variant, traits: Array = []
-) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_GOLD_OUTPUT])
+const COURT_EXPENSE_LOW: float = 0.1
+const COURT_EXPENSE_NORMAL: float = 0.3
+const COURT_EXPENSE_HIGH: float = 0.5
+
+static func court_expense_rate(profile_or_archetype: Variant) -> float:
+	match _resolved_archetype(profile_or_archetype):
+		Archetype.CONQUEROR, Archetype.REFORMER:
+			return COURT_EXPENSE_LOW
+		Archetype.INEPT, Archetype.TYRANT:
+			return COURT_EXPENSE_HIGH
+	return COURT_EXPENSE_NORMAL
 
 
 static func food_output_multiplier(
@@ -605,7 +611,6 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		KEY_AGGRESSION: 1.0,
 		KEY_PEACE: 1.0,
 		KEY_ALLIANCE: 1.0,
-		KEY_GOLD_OUTPUT: 1.0,
 		KEY_FOOD_OUTPUT: 1.0,
 		KEY_MANPOWER_OUTPUT: 1.0,
 		KEY_UPKEEP: 1.0,
@@ -637,7 +642,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.GUARDIAN:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.35, KEY_PEACE: 1.80, KEY_ALLIANCE: 1.20,
-				KEY_GOLD_OUTPUT: 1.15, KEY_FOOD_OUTPUT: 1.35,
+				KEY_FOOD_OUTPUT: 1.35,
 				KEY_MANPOWER_OUTPUT: 0.85, KEY_UPKEEP: 0.75,
 				KEY_FOOD_CONSUMPTION: 0.70, KEY_MORALE: 1.25,
 				KEY_DEFENSE: 1.60, KEY_CITY_DEFENSE: 2.00,
@@ -648,7 +653,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.INEPT:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.30, KEY_PEACE: 1.40, KEY_ALLIANCE: 0.50,
-				KEY_GOLD_OUTPUT: 0.50, KEY_FOOD_OUTPUT: 0.55,
+				KEY_FOOD_OUTPUT: 0.55,
 				KEY_MANPOWER_OUTPUT: 0.50, KEY_UPKEEP: 1.80,
 				KEY_FOOD_CONSUMPTION: 1.50, KEY_MORALE: 0.50,
 				KEY_DEFENSE: 0.50, KEY_CITY_DEFENSE: 0.55,
@@ -660,7 +665,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.TYRANT:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 1.80, KEY_PEACE: 0.45, KEY_ALLIANCE: 0.35,
-				KEY_GOLD_OUTPUT: 1.60, KEY_FOOD_OUTPUT: 0.75,
+				KEY_FOOD_OUTPUT: 0.75,
 				KEY_MANPOWER_OUTPUT: 1.70, KEY_UPKEEP: 1.25,
 				KEY_FOOD_CONSUMPTION: 1.20, KEY_MORALE: 0.80,
 				KEY_DEFENSE: 1.15, KEY_CITY_DEFENSE: 1.25,
@@ -670,7 +675,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.MERCHANT:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.50, KEY_PEACE: 1.60, KEY_ALLIANCE: 1.40,
-				KEY_GOLD_OUTPUT: 1.60, KEY_FOOD_OUTPUT: 1.10,
+				KEY_FOOD_OUTPUT: 1.10,
 				KEY_MANPOWER_OUTPUT: 0.60, KEY_UPKEEP: 0.65,
 				KEY_FOOD_CONSUMPTION: 0.90, KEY_MORALE: 0.75,
 				KEY_DEFENSE: 0.70, KEY_CITY_DEFENSE: 0.90,
@@ -680,7 +685,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.REFORMER:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.90, KEY_PEACE: 1.15, KEY_ALLIANCE: 1.15,
-				KEY_GOLD_OUTPUT: 1.40, KEY_FOOD_OUTPUT: 1.30,
+				KEY_FOOD_OUTPUT: 1.30,
 				KEY_MANPOWER_OUTPUT: 1.60, KEY_UPKEEP: 0.75,
 				KEY_FOOD_CONSUMPTION: 0.75, KEY_MORALE: 1.25,
 				KEY_DEFENSE: 1.25, KEY_CITY_DEFENSE: 1.25,
@@ -691,7 +696,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.DIPLOMAT:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.20, KEY_PEACE: 2.50, KEY_ALLIANCE: 2.50,
-				KEY_GOLD_OUTPUT: 1.10, KEY_FOOD_OUTPUT: 1.00,
+				KEY_FOOD_OUTPUT: 1.00,
 				KEY_MANPOWER_OUTPUT: 0.75, KEY_UPKEEP: 0.85,
 				KEY_FOOD_CONSUMPTION: 0.95, KEY_MORALE: 0.85,
 				KEY_DEFENSE: 0.75, KEY_CITY_DEFENSE: 0.85,
@@ -702,7 +707,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.BUILDER:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.40, KEY_PEACE: 1.60, KEY_ALLIANCE: 1.05,
-				KEY_GOLD_OUTPUT: 1.25, KEY_FOOD_OUTPUT: 1.80,
+				KEY_FOOD_OUTPUT: 1.80,
 				KEY_MANPOWER_OUTPUT: 1.15, KEY_UPKEEP: 0.70,
 				KEY_FOOD_CONSUMPTION: 0.65, KEY_MORALE: 1.10,
 				KEY_DEFENSE: 1.50, KEY_CITY_DEFENSE: 2.25,
@@ -712,7 +717,7 @@ static func _build_base_modifiers(archetype: int) -> Dictionary:
 		Archetype.PUPPET:
 			_set_multipliers(result, {
 				KEY_AGGRESSION: 0.25, KEY_PEACE: 1.80, KEY_ALLIANCE: 1.35,
-				KEY_GOLD_OUTPUT: 0.75, KEY_FOOD_OUTPUT: 0.80,
+				KEY_FOOD_OUTPUT: 0.80,
 				KEY_MANPOWER_OUTPUT: 0.70, KEY_UPKEEP: 1.15,
 				KEY_FOOD_CONSUMPTION: 1.10, KEY_MORALE: 0.70,
 				KEY_DEFENSE: 0.70, KEY_CITY_DEFENSE: 0.85,
@@ -741,11 +746,9 @@ static func _apply_trait(result: Dictionary, trait_id: String) -> void:
 			_multiply(result, KEY_MORALE, 1.35)
 			_multiply(result, KEY_LOYALTY, 1.35)
 		TRAIT_FRUGAL:
-			_multiply(result, KEY_GOLD_OUTPUT, 1.30)
 			_multiply(result, KEY_UPKEEP, 0.65)
 			_add_reserve_months(result, 4)
 		TRAIT_DILIGENT:
-			_multiply(result, KEY_GOLD_OUTPUT, 1.25)
 			_multiply(result, KEY_FOOD_OUTPUT, 1.25)
 			_multiply(result, KEY_MANPOWER_OUTPUT, 1.25)
 			_multiply(result, KEY_LOYALTY, 1.20)
@@ -763,7 +766,6 @@ static func _apply_trait(result: Dictionary, trait_id: String) -> void:
 			_multiply(result, KEY_CITY_DEFENSE, 1.60)
 			_add_reserve_months(result, 3)
 		TRAIT_MERCANTILE:
-			_multiply(result, KEY_GOLD_OUTPUT, 1.35)
 			_multiply(result, KEY_TRADE, 1.60)
 			_multiply(result, KEY_ALLIANCE, 1.20)
 		TRAIT_CENTRALIZER:
@@ -777,7 +779,6 @@ static func _apply_trait(result: Dictionary, trait_id: String) -> void:
 		TRAIT_HARSH:
 			_multiply(result, KEY_PEACE, 0.70)
 			_multiply(result, KEY_ALLIANCE, 0.70)
-			_multiply(result, KEY_GOLD_OUTPUT, 1.25)
 			_multiply(result, KEY_MANPOWER_OUTPUT, 1.40)
 			_multiply(result, KEY_MORALE, 0.80)
 			_multiply(result, KEY_LOYALTY, 0.65)

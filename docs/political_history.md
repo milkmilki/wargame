@@ -11,6 +11,9 @@ relations without rewinding the simulation.
 - Capture day 0 and then one snapshot every 30 committed simulation days.
 - Store city controller, recognized owner, nation alive state, bilateral
   relations, truces, war objectives, suzerainty, and rebellion metadata.
+- Store the last settled court expense rate, amount due, and amount paid at
+  each history point. Historical details display those records without
+  recomputing them from the current ruler or running a resource forecast.
 - The rightmost timeline position is always the live state.
 - Selecting an older position pauses simulation and renders a detached
   historical `GameState` view.

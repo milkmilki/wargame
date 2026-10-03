@@ -31,6 +31,8 @@ func _init() -> void:
 	if not seed_override.is_empty():
 		selected_seeds = [int(seed_override)]
 	for world_seed in selected_seeds:
+		ResourceForecastRules.profiling_enabled = true
+		ResourceForecastRules.reset_profile()
 		var state := GameState.new()
 		state.generate_world(world_seed)
 		var simulation := Simulation.new()
@@ -52,6 +54,8 @@ func _init() -> void:
 		var max_idle_stack_context := ""
 		var hostile_stationed_events := 0
 		var hostile_stationed_log: Array[String] = []
+		var battle_binding_errors := 0
+		var first_battle_binding_error := ""
 		var territory_invariant_failures := 0
 		var first_territory_invariant_failure_day := -1
 		var known_fronts := {}
@@ -61,11 +65,40 @@ func _init() -> void:
 		var duplicate_defenses := 0
 		var remnant_preparations := 0
 		var last_history_size := 0
+		var shortage_army_days := 0
+		var arrears_nation_months := 0
+		var conversion_value := 0
+		var court_due := 0
+		var court_paid := 0
 		var seed_start := Time.get_ticks_msec()
 		for _day in range(selected_days):
 			if state.winner != -1:
 				break
 			simulation._advance_day()
+			var participants := {}
+			for battle in state.battles:
+				if battle.finished:
+					continue
+				for army in battle.side_a + battle.side_b:
+					if army.size <= 0 or army.is_city_garrison:
+						continue
+					if participants.has(army.id) or army.state != Army.State.FIGHTING or army.battle_id != battle.id:
+						battle_binding_errors += 1
+						if first_battle_binding_error.is_empty():
+							first_battle_binding_error = "day=%d army=%d state=%d ref=%d listed=%d" % [state.day, army.id, army.state, army.battle_id, battle.id]
+					participants[army.id] = battle.id
+			for army in state.armies:
+				if army.size > 0 and army.state == Army.State.FIGHTING and (not participants.has(army.id) or participants[army.id] != army.battle_id):
+					battle_binding_errors += 1
+					if first_battle_binding_error.is_empty():
+						first_battle_binding_error = "day=%d army=%d missing active battle ref=%d" % [state.day, army.id, army.battle_id]
+			if state.day % Simulation.DAYS_PER_MONTH == 0:
+				for nation in state.nations:
+					arrears_nation_months += int(nation.unpaid_military_upkeep > 0)
+					court_due += nation.last_court_expense_due
+					court_paid += nation.last_court_expense_paid
+					if state.day % Simulation.DAYS_PER_YEAR == 0:
+						conversion_value += int(nation.get_meta(&"last_automatic_resource_balance", {}).get("transferred_value", 0))
 			var assignments := {}
 			var defenses := {}
 			for pair_value in state.campaign_pairs.values():
@@ -116,6 +149,7 @@ func _init() -> void:
 				)
 			var idle_city_stacks := {}
 			for army in state.armies:
+				shortage_army_days += int(army.starving)
 				var node_city_id := army.current_city_node()
 				if (
 					army.size > 0
@@ -143,6 +177,9 @@ func _init() -> void:
 					if not valid_hostile_siege:
 						hostile_stationed_events += 1
 						if hostile_stationed_log.size() < 20:
+							if OS.get_environment("AI_LONGRUN_DIAGNOSE") == "1":
+								var siege: Battle = simulation._siege_battle_of(state.cities[node_city_id])
+								print("HOSTILE_DIAGNOSTIC day=%d army=%d on_edge=%s location=%d path=%s action=%d target=%d siege=%d role=%d besiegers=%s defenders=%s" % [state.day, army.id, army.on_edge, army.location_city, str(army.path), army.ai_action, army.ai_target_city, siege.id if siege != null else -1, simulation._siege_role_for_nation(siege, army.owner_nation), str(siege.side_a.map(func(unit: Army): return unit.id)) if siege != null else "[]", str(siege.side_b.map(func(unit: Army): return unit.id)) if siege != null else "[]"])
 							hostile_stationed_log.append(
 								(
 									"day=%d army=%d owner=%d state=%d "
@@ -595,6 +632,8 @@ func _init() -> void:
 		print("  INTEGRATION_CAMPAIGN_AUDIT remnant_preparations=%d cooldown_violations=%d duplicate_bindings=%d" % [
 			remnant_preparations, cooldown_violations, duplicate_bindings])
 		print("  PAIR_CAMPAIGN_AUDIT overfull_pairs=%d duplicate_defenses=%d" % [pair_violations, duplicate_defenses])
+		print("  RESOURCE_AUDIT shortage_army_days=%d arrears_nation_months=%d court_due=%d court_paid=%d conversion_gold_value=%d forecast=%s" % [shortage_army_days, arrears_nation_months, court_due, court_paid, conversion_value, str(ResourceForecastRules.profile())])
+		print("  BATTLE_BINDING_AUDIT errors=%d first=%s" % [battle_binding_errors, first_battle_binding_error])
 		if (
 			ordered == 0
 			or cooldown_violations > 0 or duplicate_bindings > 0 or pair_violations > 0 or duplicate_defenses > 0
@@ -604,6 +643,7 @@ func _init() -> void:
 			or eliminated_war_relations > 0
 			or terminal_alliance_lock
 			or hostile_stationed_events > 0
+			or battle_binding_errors > 0
 			or territory_invariant_failures > 0
 			or simulation.ai_command_commit_failure_total > 0
 			or food <= 0

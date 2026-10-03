@@ -110,7 +110,7 @@ const WARTIME_MANPOWER_RESERVE: int = (
 	ReinforcementRules.WARTIME_MANPOWER_RESERVE
 )
 ## 财政储备不是“现金不得为负”的补丁，而是军队规模预算的目标状态：
-## 和平积累约三年月收入；进入连续战争时冻结战前月收入并只保留半年。
+## 和平积累三年月必要支出，战争保留半年；钱粮均使用真实收入滚动预测。
 const PEACE_GOLD_RESERVE_MONTHS: int = 36
 const WAR_GOLD_RESERVE_MONTHS: int = 6
 const GOLD_RESERVE_RECOVERY_MONTHS: int = 36
@@ -201,9 +201,6 @@ var _trade_garrison_input_token: PackedByteArray = PackedByteArray()
 var _trade_garrison_upkeep_cache: Array[int] = []
 var _trade_wartime_mask_diplomacy_revision: int = -1
 var _trade_wartime_mask := PackedByteArray()
-## 战争财政快照只依赖外交关系转换。普通日以 O(1) 版本比较跳过，
-## 外部脚本直接调用 set_diplomatic_relation 也会因 revision 变化被补同步。
-var _war_gold_snapshot_diplomacy_revision: int = -1
 var _ai_last_decision_day: int = -1
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
@@ -356,7 +353,6 @@ func setup(game_state: GameState) -> void:
 	_reset_trade_forecast_cache()
 	_latest_monthly_gold_flows.clear()
 	_publish_initial_food_snapshot()
-	_synchronize_war_gold_income_snapshots()
 	_ai_strategy_cache.clear()
 	_ai_strategy_revision.clear()
 	_ai_base_city_values_revision.clear()
@@ -469,11 +465,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	state.day += 1
 	state.month = state.day / DAYS_PER_MONTH
 	_resolve_ruler_successions()
-	if (
-		state.diplomacy_revision
-		!= _war_gold_snapshot_diplomacy_revision
-	):
-		_synchronize_war_gold_income_snapshots()
 	_record_tick_profile_stage("maintenance", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -719,7 +710,6 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 					_clear_war_preparation(member_id)
 				_clear_finished_war_mobilization(member_id)
 		_ai_last_decision_day = -1
-		_synchronize_war_gold_income_snapshots()
 	state.prune_rebellions()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"cleanup_suzerainty", cleanup_part_started)
@@ -913,7 +903,7 @@ func _trade_settlement_token(
 			nation.manpower_pool,
 			nation.ruler_revision, nation.ruler_archetype,
 			nation.ruler_traits,
-			float(modifiers[RulerProfile.KEY_GOLD_OUTPUT]),
+			RulerProfile.court_expense_rate(nation),
 			float(modifiers[RulerProfile.KEY_FOOD_CONSUMPTION]),
 			int(modifiers[RulerProfile.KEY_RESERVE_MONTHS]),
 			float(modifiers[RulerProfile.KEY_UPKEEP]),
@@ -966,7 +956,7 @@ func _trade_summary_settlement_token(
 			"nation", nation.id, nation.alive,
 			nation.ruler_revision, nation.ruler_archetype,
 			nation.ruler_traits,
-			float(modifiers[RulerProfile.KEY_GOLD_OUTPUT]),
+			RulerProfile.court_expense_rate(nation),
 			float(modifiers[RulerProfile.KEY_UPKEEP]),
 		])
 	var field_upkeep_units: Array[int] = []
@@ -1563,157 +1553,28 @@ static func _ruler_adjusted_upkeep(
 	)), 0)
 
 
-## 国家财政储备策略的唯一真源。储备基线只使用城市金钱产出，不含贸易、
-## 贡赋且不扣军费：
-## - 和平目标 = 当前城市月产出 × 36；
-## - 战争目标 = 首次进入当前连续战争前冻结的城市月产出 × 6。
-## 低于目标时把缺口按 36 个月摊为月度储蓄预算；和平从空库恢复时会尽量
-## 留存完整月收入，战争从空库恢复只留存约六分之一，体现半年目标的宽松。
-## 若已有月赤字，所需节流额还会覆盖赤字。
+## 财政策略委托同一滚动预测。储备偏好只在和平期约束补库；战时只有
+## 预测现金断供或真实欠饷要求缩编，不以尚未攒满软储备为裁军理由。
 static func gold_reserve_policy(
-	game_state: GameState,
-	nation_id: int,
-	gold_flows: Array[Dictionary] = []
+	game_state: GameState, nation_id: int, gold_flows: Array[Dictionary] = [], cache: Dictionary = {}
 ) -> Dictionary:
-	if (
-		nation_id < 0
-		or nation_id >= game_state.nations.size()
-	):
-		return {}
-	var flows := (
-		gold_flows
-		if not gold_flows.is_empty()
-		else monthly_gold_flows(game_state)
-	)
-	var flow: Dictionary = flows[nation_id]
-	var nation := game_state.nations[nation_id]
+	if not gold_flows.is_empty():
+		cache.monthly_gold_flows = gold_flows
+	var forecast := DiplomacyAI.resource_forecast(game_state, nation_id, -1, -1, cache)
+	var input: Dictionary = forecast.input
 	var at_war := not game_state.wars_of(nation_id).is_empty()
-	var current_income := maxi(int(flow["city_income"]), 0)
-	var baseline_income := current_income
-	if at_war and nation.war_gold_income_snapshot >= 0:
-		baseline_income = nation.war_gold_income_snapshot
-	var reserve_months := (
-		WAR_GOLD_RESERVE_MONTHS
-		if at_war else PEACE_GOLD_RESERVE_MONTHS
-	)
-	reserve_months = maxi(
-		reserve_months + RulerProfile.reserve_months_bonus(nation),
-		0
-	)
-	var target := baseline_income * reserve_months
-	var gap := maxi(target - nation.treasury_gold, 0)
-	var monthly_balance := int(flow["balance"])
-	# 战争军制承载能力使用战前冻结收入；真实国库仍按 current income 结算。
-	# 因此失地不会在同一 AI 周期把月收入骤降直接放大成等额裁军，
-	# 但储备逐月消耗和实际欠饷仍会温和/强制地推动后续缩编。
-	var budget_monthly_balance := (
-		baseline_income - int(flow["military_upkeep"])
-		if at_war and nation.war_gold_income_snapshot >= 0
-		else monthly_balance
-	)
-	var target_savings := 0
-	if gap > 0:
-		target_savings = int(ceil(
-			float(gap)
-			/ float(GOLD_RESERVE_RECOVERY_MONTHS)
-		))
-	var required_upkeep_savings := maxi(
-		target_savings - budget_monthly_balance,
-		0
-	)
-	# 战前收入快照只负责防止失地后的即时连环裁军；当半年储备真正
-	# 耗尽并产生实际欠饷时仍须收缩。缩编入口另按世界月份限频。
-	if nation.unpaid_military_upkeep > 0:
-		required_upkeep_savings = maxi(
-			required_upkeep_savings, nation.unpaid_military_upkeep
-		)
-	# 该返回值驱动野战军缩编，只能要求节省可裁撤的野战军费；州治守军
-	# 是固定行政开支，不能让 AI 在野战军已清空后继续反复尝试裁军。
-	required_upkeep_savings = mini(
-		required_upkeep_savings,
-		maxi(int(flow.get("field_army_upkeep", 0)), 0)
-	)
+	var savings := int(forecast.gold_savings)
+	var required := maxi(savings - int(forecast.monthly_gold_balance), 0) if not at_war else int(ceil(float(forecast.gold_deficit) / 12.0))
+	required = maxi(required, game_state.nations[nation_id].unpaid_military_upkeep)
 	return {
-		"at_war": at_war,
-		"current_monthly_income": current_income,
-		"baseline_monthly_income": baseline_income,
-		"reserve_months": reserve_months,
-		"reserve_target": target,
-		"reserve_gap": gap,
-		"monthly_balance": monthly_balance,
-		"budget_monthly_balance": budget_monthly_balance,
-		"target_monthly_savings": target_savings,
-		"required_upkeep_savings": required_upkeep_savings,
-		"ready": nation.treasury_gold >= target,
+		"at_war": at_war, "current_monthly_income": int(input.income),
+		"baseline_monthly_income": int(input.income), "reserve_months": int(input.gold_months),
+		"reserve_target": int(forecast.gold_target), "reserve_gap": int(forecast.gold_gap),
+		"monthly_balance": int(forecast.monthly_gold_balance), "budget_monthly_balance": int(forecast.monthly_gold_balance),
+		"target_monthly_savings": savings,
+		"required_upkeep_savings": mini(required, int(input.field_upkeep)),
+		"ready": int(forecast.gold_deficit) == 0, "forecast": forecast,
 	}
-
-
-## 补齐外部脚本/旧地图直接改外交后的财政快照，并在最后一场战争结束时清空。
-## 正常 AI 宣战会在关系改为 WAR 前调用 _capture_war_gold_income_snapshots，
-## 因而这里不会用战后领土/贡赋覆盖战前基准。
-func _synchronize_war_gold_income_snapshots() -> void:
-	if state == null or state.nations.is_empty():
-		return
-	_war_gold_snapshot_diplomacy_revision = (
-		state.diplomacy_revision
-	)
-	var needs_snapshot: Array[int] = []
-	for nation in state.nations:
-		var at_war := not state.wars_of(nation.id).is_empty()
-		if at_war and nation.war_gold_income_snapshot < 0:
-			needs_snapshot.append(nation.id)
-		elif not at_war and nation.war_gold_income_snapshot >= 0:
-			nation.war_gold_income_snapshot = -1
-			nation.war_gold_income_snapshot_day = -1
-	if needs_snapshot.is_empty():
-		return
-	# 正常路径在宣战前已主动冻结，不会走到这里。只有旧存档、测试或
-	# 外部脚本直接改关系时才惰性汇总一次，避免每个普通日扫描全军/全城。
-	var flows: Array[Dictionary] = (
-		_forecast_trade_and_gold_flows(true)["gold_flows"]
-	)
-	for nation_id in needs_snapshot:
-		var nation := state.nations[nation_id]
-		nation.war_gold_income_snapshot = maxi(
-			int(flows[nation_id]["city_income"]), 0
-		)
-		nation.war_gold_income_snapshot_day = state.day
-
-
-func _capture_war_gold_income_snapshots(
-	nation_ids: Array[int],
-	frozen_gold_flows: Array[Dictionary] = []
-) -> void:
-	if state == null or nation_ids.is_empty():
-		return
-	var eligible: Array[int] = []
-	for nation_id in nation_ids:
-		if (
-			nation_id < 0
-			or nation_id >= state.nations.size()
-			or not state.wars_of(nation_id).is_empty()
-		):
-			continue
-		if (
-			not eligible.has(nation_id)
-		):
-			eligible.append(nation_id)
-	if eligible.is_empty():
-		return
-	var flows: Array[Dictionary] = (
-		frozen_gold_flows
-		if frozen_gold_flows.size() == state.nations.size()
-		else _forecast_trade_and_gold_flows(true)["gold_flows"]
-	)
-	for nation_id in eligible:
-		var nation := state.nations[nation_id]
-		nation.war_gold_income_snapshot = maxi(
-			int(flows[nation_id]["city_income"]), 0
-		)
-		nation.war_gold_income_snapshot_day = state.day
-	_war_gold_snapshot_diplomacy_revision = (
-		state.diplomacy_revision
-	)
 
 
 func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
@@ -1783,6 +1644,7 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 		)
 	# 贡赋在军费之前结算：藩王先向宗主上缴，再用余款支付本国军费。
 	_resolve_tribute(gold_income)
+	_resolve_court_expenses(gold_flows)
 	_resolve_military_finance(gold_flows)
 	_resolve_garrison_supply()
 	if runtime_stage_profiling_enabled:
@@ -2000,6 +1862,8 @@ func _resolve_annual_resource_balance(
 	gold_flows: Array[Dictionary]
 ) -> void:
 	state.refresh_derived()
+	var resource_cache := {"__forecast_pending_supply": true}
+	resource_cache.monthly_gold_flows = gold_flows if not gold_flows.is_empty() and gold_flows[0].has("court_expense_due") else _monthly_gold_flows_from_trade(state, {})
 	for nation in state.nations:
 		if not nation.alive:
 			continue
@@ -2012,16 +1876,30 @@ func _resolve_annual_resource_balance(
 			if nation.id >= 0 and nation.id < gold_flows.size()
 			else 0
 		)
+		var forecast := DiplomacyAI.resource_forecast(state, nation.id, -1, 0 if state.wars_of(nation.id).is_empty() else 3, resource_cache)
+		var input: Dictionary = forecast.input
+		var hard_gold := nation.treasury_gold + int(forecast.gold_deficit) - maxi(int(forecast.gold_min), 0)
+		var hard_food := nation.granary_food + int(forecast.food_deficit) - maxi(int(forecast.food_min), 0)
+		var manpower_target := int(input.manpower_target)
+		var policy := {
+			"hard_targets": [maxi(hard_gold, 0), manpower_target, maxi(hard_food, 0)],
+			"targets": [int(forecast.gold_target), manpower_target, int(forecast.food_target)],
+			"capacities": [2147483647, state.manpower_pool_capacity(nation.id), state.food_storage_capacity(nation.id)],
+		}
 		var plan := ResourceBalanceRules.plan(
 			nation.treasury_gold,
 			nation.manpower_pool,
 			nation.granary_food if include_food else 0,
 			monthly_income * MONTHS_PER_YEAR,
-			include_food
+			include_food, policy
 		)
 		var gold_delta := int(plan["gold_delta"])
 		var manpower_delta := int(plan["manpower_delta"])
 		var food_delta := int(plan["food_delta"])
+		var candidate_input := input.duplicate()
+		candidate_input.gold = nation.treasury_gold + gold_delta
+		candidate_input.food = int(input.food) + food_delta
+		var candidate := ResourceForecastRules.evaluate(candidate_input)
 		# 容量不足时整笔跳过年度转换，避免只截断接收端而凭空销毁供给端价值。
 		if (
 			manpower_delta > maxi(
@@ -2030,6 +1908,9 @@ func _resolve_annual_resource_balance(
 			or food_delta > maxi(
 				state.food_storage_capacity(nation.id) - nation.granary_food, 0
 			)
+			or (gold_delta < 0 and int(candidate.gold_deficit) > int(forecast.gold_deficit))
+			or (food_delta < 0 and int(candidate.food_deficit) > int(forecast.food_deficit))
+			or gold_delta + manpower_delta / ResourceBalanceRules.MANPOWER_PER_GOLD + food_delta / ResourceBalanceRules.FOOD_PER_GOLD != 0
 		):
 			gold_delta = 0
 			manpower_delta = 0
@@ -2058,8 +1939,17 @@ func _resolve_annual_resource_balance(
 			"gold": gold_delta,
 			"manpower": manpower_delta,
 			"food": food_delta,
-			"transferred_value": int(plan["transferred_value"]),
+			"transferred_value": int(plan["transferred_value"]) if gold_delta != 0 or manpower_delta != 0 or food_delta != 0 else 0,
 		})
+		if gold_delta != 0 or manpower_delta != 0 or food_delta != 0:
+			var inputs: Array[Dictionary] = resource_cache.resource_forecast_inputs
+			inputs[nation.id].gold = nation.treasury_gold
+			if food_delta != 0:
+				for member in state.food_pool_members(nation.id):
+					inputs[member].food += food_delta
+			for key in resource_cache.keys():
+				if str(key).begins_with("forecast:"):
+					resource_cache.erase(key)
 	state.refresh_derived()
 
 
@@ -2310,9 +2200,6 @@ static func city_output_breakdown(
 		"governance_multiplier": city_governance_output_multiplier(
 			game_state, city
 		),
-		"ruler_gold_multiplier": float(modifiers.get(
-			RulerProfile.KEY_GOLD_OUTPUT, 1.0
-		)),
 		"ruler_food_multiplier": float(modifiers.get(
 			RulerProfile.KEY_FOOD_OUTPUT, 1.0
 		)),
@@ -2499,6 +2386,18 @@ static func city_garrison_food_loss(
 	)
 
 
+func _resolve_court_expenses(gold_flows: Array[Dictionary]) -> void:
+	for nation in state.nations:
+		var flow: Dictionary = gold_flows[nation.id]
+		var due := int(flow["court_expense_due"])
+		var paid := mini(maxi(nation.treasury_gold, 0), due)
+		nation.treasury_gold -= paid
+		nation.last_court_expense_rate = float(flow["court_expense_rate"])
+		nation.last_court_expense_due = due
+		nation.last_court_expense_paid = paid
+		flow["court_expense_paid"] = paid
+
+
 func _resolve_military_finance(
 	gold_flows: Array[Dictionary] = []
 ) -> void:
@@ -2587,7 +2486,7 @@ func _resolve_reinforcements() -> void:
 	# 同步驱动：一次性完成全国补员（测试与快进路径用）。运行时改走
 	# _resolve_reinforcements_over_frames 把 40 国循环分摊到多帧。
 	var armies_by_nation := _bucket_armies_by_nation()
-	var food_cache := {}
+	var food_cache := {"__forecast_pending_supply": true}
 	for nation in state.nations:
 		_reinforce_nation(
 			nation,
@@ -2597,11 +2496,11 @@ func _resolve_reinforcements() -> void:
 
 
 ## 运行时分帧驱动：与 _resolve_reinforcements 逐国等价，但在国与国之间按墙钟预算
-## yield。各国只写自身 manpower_pool 与自身军队 size，彼此独立；食物评估共享的
-## food_cache 只读且与结算顺序无关，故切帧不改变任何结果（由等价守卫覆盖）。
+## yield。接受的补员立即写入共享粮池预算；同步与分帧保持同一国家提交顺序，
+## 因此切帧不会让其他成员重复承诺余粮（由等价守卫覆盖）。
 func _resolve_reinforcements_over_frames() -> void:
 	var armies_by_nation := _bucket_armies_by_nation()
-	var food_cache := {}
+	var food_cache := {"__forecast_pending_supply": true}
 	var slice_started := Time.get_ticks_usec()
 	for nation in state.nations:
 		_reinforce_nation(
@@ -2623,9 +2522,8 @@ func _bucket_armies_by_nation() -> Dictionary:
 	return ReinforcementRules.bucket_armies_by_nation(state)
 
 
-## 单国当月补员（逐国独立：只读食物评估共享 food_cache，只写本国 manpower_pool
-## 与本国军队 size）。food_cache 携带 war_food_report 链路的边表矩阵/tick 级评估，
-## 40 国共享后从每国 O(N×A) 冷调降为一次构建。
+## 单国当月补员：写本国军队与人力，并提交共享粮池的增量需求。food_cache
+## 在本批次复用基础汇总；候选接受后失效派生报告，不逐国重复扫描全军。
 func _reinforce_nation(
 	nation: Nation,
 	nation_armies: Array[Army],
@@ -3701,7 +3599,7 @@ func _resolve_diplomacy() -> void:
 	diplomacy_profile_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	var evaluation_cache := _seed_trade_forecast({})
+	var evaluation_cache := _seed_trade_forecast({"__forecast_pending_supply": true})
 	var frozen_gold_flows: Array[Dictionary] = (
 		evaluation_cache["monthly_gold_flows"]
 	)
@@ -3759,6 +3657,7 @@ func _resolve_diplomacy_over_frames() -> void:
 	_normalize_alliance_wars()
 	_set_runtime_profile_stage(&"trade_forecast_worker")
 	var evaluation_cache := await _seed_trade_forecast_over_frames()
+	evaluation_cache["__forecast_pending_supply"] = true
 	await get_tree().process_frame
 	var frozen_gold_flows: Array[Dictionary] = (
 		evaluation_cache["monthly_gold_flows"]
@@ -3871,7 +3770,7 @@ func _commit_diplomacy_actions_over_frames(
 				await get_tree().process_frame
 				runtime_slice_started = Time.get_ticks_usec()
 		_pending_war_mobilizations.clear()
-		action_cache = _new_diplomacy_action_cache()
+		action_cache = _new_diplomacy_action_cache(bool(evaluation_cache.get("__forecast_pending_supply", false)))
 		if (
 			Time.get_ticks_usec() - runtime_slice_started
 				>= AI_RUNTIME_SLICE_BUDGET_USEC
@@ -3905,11 +3804,12 @@ func _runtime_diplomacy_action_stage(kind: int) -> StringName:
 			return &"diplomacy_commit_other"
 
 
-func _new_diplomacy_action_cache() -> Dictionary:
+func _new_diplomacy_action_cache(pending_supply: bool = false) -> Dictionary:
 	if diplomacy_structure_cache_disabled:
-		return {}
+		return {"__forecast_pending_supply": pending_supply}
 	return {
 		"__diplomacy_topology_cache": _diplomacy_topology_cache,
+		"__forecast_pending_supply": pending_supply,
 	}
 
 
@@ -3935,7 +3835,7 @@ func _commit_diplomacy_actions(
 			else "diplomacy_commit_other"
 		)
 		_record_tick_profile_stage(stage, action_started)
-		action_cache = _new_diplomacy_action_cache()
+		action_cache = _new_diplomacy_action_cache(bool(evaluation_cache.get("__forecast_pending_supply", false)))
 
 
 func _commit_diplomacy_action(
@@ -4032,7 +3932,6 @@ func _finalize_civil_war_capital_annexation(
 ) -> void:
 	if claimant_was_rebel_vassal:
 		WorldNaming.promote_vassal_to_sovereign(state, claimant)
-	_synchronize_war_gold_income_snapshots()
 	_ai_last_decision_day = -1
 
 
@@ -4573,9 +4472,6 @@ func _execute_diplomatic_action(
 					RebellionSystem.must_resist_centralization(state, nation_b)
 				)
 				if bool(action.get("resist", false)) or forced_resistance:
-					_capture_war_gold_income_snapshots([
-						nation_a, nation_b
-					] as Array[int], frozen_gold_flows)
 					changed = state.start_civil_war(
 						nation_b, 2 if forced_resistance else 1
 					)
@@ -4735,18 +4631,9 @@ func _queue_or_start_war_mobilization(
 func _set_coalition_war(
 	attackers: Array[int],
 	defenders: Array[int],
-	frozen_gold_flows: Array[Dictionary] = []
+	_batch_gold_flows: Array[Dictionary] = []
 ) -> bool:
 	var coalition_war_part_started := (
-		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-	)
-	_capture_war_gold_income_snapshots(
-		attackers + defenders, frozen_gold_flows
-	)
-	_record_tick_profile_stage(
-		"diplomacy_set_war_snapshot", coalition_war_part_started
-	)
-	coalition_war_part_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	var changed := false
@@ -5179,8 +5066,6 @@ func _commit_coalition_peace_plan(plan: Dictionary) -> Dictionary:
 			and not state.suzerainty.has(subject_id)
 		):
 			WorldNaming.promote_vassal_to_sovereign(state, subject_id)
-
-	_synchronize_war_gold_income_snapshots()
 	var bloc_a: Array[int] = []
 	bloc_a.assign(plan.get("bloc_a", []))
 	var bloc_b: Array[int] = []
@@ -5924,6 +5809,8 @@ func _capital_connected_territory(nation_id: int) -> Dictionary:
 func _repatriate_after_territory_settlement(
 	settled_cities: Array[int]
 ) -> void:
+	_reconcile_battles_after_control_transfer(settled_cities, null)
+	var retained := _active_battle_participant_ids()
 	var settled_set := {}
 	for city_id in settled_cities:
 		settled_set[city_id] = true
@@ -5949,6 +5836,8 @@ func _repatriate_after_territory_settlement(
 		if not affected:
 			continue
 		army.path.clear()
+		if retained.has(army.id):
+			continue
 		army.ai_target_city = -1
 		army.ai_order_until_day = state.day
 		var repatriated_manpower := army.size
@@ -6067,7 +5956,9 @@ func _prepare_diplomacy_mobilization_cache(
 ) -> void:
 	if diplomacy_mobilization_cache_disabled:
 		return
+	var pending_supply := bool(evaluation_cache.get("__forecast_pending_supply", false))
 	evaluation_cache.clear()
+	evaluation_cache["__forecast_pending_supply"] = pending_supply
 	evaluation_cache["__diplomacy_mobilization_cache_ready"] = true
 	# 宣战后按当前战争关系重做结算，但复用 Simulation 已维护的结构缓存。
 	# 否则第一个动员国会退回静态 monthly_gold_flows，重建整张贸易网。
@@ -6083,7 +5974,7 @@ func _start_war_mobilization(
 	var nation := state.nations[nation_id]
 	var resource_cache := evaluation_cache
 	if diplomacy_mobilization_cache_disabled:
-		resource_cache = {}
+		resource_cache = {"__forecast_pending_supply": bool(evaluation_cache.get("__forecast_pending_supply", false))}
 		diplomacy_mobilization_evaluation_cache_total += 1
 	elif not resource_cache.has(
 		"__diplomacy_mobilization_cache_ready"
@@ -6200,11 +6091,12 @@ func _reconcile_battles_after_coalition_peace(
 		if not _battle_sides_still_hostile(battle):
 			_finish_battle_administratively(battle)
 	state.battles = state.battles.filter(func(b: Battle) -> bool: return not b.finished)
+	var retained := _active_battle_participant_ids()
 	var affected := {}
 	for nation_id in bloc_a + bloc_b:
 		affected[nation_id] = true
 	for army in state.armies:
-		if army.size <= 0 or not affected.has(army.owner_nation):
+		if army.size <= 0 or not affected.has(army.owner_nation) or retained.has(army.id):
 			continue
 		var node_city := army.current_city_node()
 		if (
@@ -6232,6 +6124,19 @@ func _reconcile_battles_after_coalition_peace(
 	_finish_campaign_reports_for_battle(null)
 
 
+## Diplomacy may revoke access without ending a third-party battle. Build once
+## per administrative event, not by searching all battles for every army.
+func _active_battle_participant_ids() -> Dictionary:
+	var retained := {}
+	for battle in state.battles:
+		if battle.finished:
+			continue
+		for army in battle.side_a + battle.side_b:
+			if army.size > 0 and army.state == Army.State.FIGHTING and army.battle_id == battle.id:
+				retained[army.id] = true
+	return retained
+
+
 func _reconcile_siege_participants(
 	battle: Battle,
 	control_changed: bool = false
@@ -6241,7 +6146,6 @@ func _reconcile_siege_participants(
 	if control_changed and battle.side_b_defends_city:
 		for army in battle.side_b.duplicate():
 			if not _nation_defends_city(army.owner_nation, battle.city):
-				battle.remove_army(army)
 				_release_army_from_administrative_battle(army, battle)
 	if battle.city == null:
 		_finish_battle_administratively(battle)
@@ -6250,7 +6154,6 @@ func _reconcile_siege_participants(
 	# remain hostile. Remove only departing participants, not the entire side.
 	for army in battle.side_a + battle.reinforce_fresh_a + battle.routed_a:
 		if not state.is_enemy(army.owner_nation, battle.city.owner_nation):
-			battle.remove_army(army)
 			_release_army_from_administrative_battle(army, battle)
 	if battle.side_a.is_empty():
 		if (
@@ -6285,7 +6188,6 @@ func _reconcile_siege_participants(
 				besieger_nation
 			)
 		):
-			battle.remove_army(army)
 			_release_army_from_administrative_battle(
 				army,
 				battle
@@ -6338,7 +6240,6 @@ func _finish_battle_administratively(battle: Battle) -> void:
 		+ battle.reinforce_fresh_a + battle.reinforce_fresh_b
 		+ battle.routed_a + battle.routed_b
 	):
-		battle.remove_army(army)
 		_release_army_from_administrative_battle(
 			army,
 			battle
@@ -6349,6 +6250,7 @@ func _release_army_from_administrative_battle(
 	army: Army,
 	battle: Battle
 ) -> void:
+	battle.remove_army(army)
 	if army.battle_id != battle.id:
 		return
 	if army.state != Army.State.FIGHTING:
@@ -6416,6 +6318,7 @@ func _repatriate_after_access_revoked(
 	nation_a: int,
 	nation_b: int
 ) -> void:
+	var retained := _active_battle_participant_ids()
 	for army in state.armies:
 		if army.size <= 0 or army.owner_nation not in [nation_a, nation_b]:
 			continue
@@ -6433,6 +6336,8 @@ func _repatriate_after_access_revoked(
 		if not in_former_ally_territory and not route_uses_former_ally:
 			continue
 		army.path.clear()
+		if retained.has(army.id):
+			continue
 		army.ai_target_city = -1
 		army.ai_order_until_day = state.day
 		if army.on_edge and army.move_to != -1:
@@ -7860,6 +7765,9 @@ func _ai_manage_force_structure(
 		nation,
 		assessment
 	):
+		# Reductions changed the frozen demand/upkeep aggregates. Rebuild only
+		# after a real mutation, before the next shared-pool member is evaluated.
+		resource_evaluation_cache.clear()
 		return true
 	# 只有无军且正常容量为零的小国生存动员可以抽空人力；其余扩军统一
 	# 使用容量报告给出的和平/战时补员储备。
@@ -7892,6 +7800,11 @@ func _ai_manage_force_structure(
 		if formation_size <= 0:
 			break
 		var available_manpower := nation.manpower_pool - protected_reserve
+		if not assessment.emergency_recruitment:
+			var candidate := DiplomacyAI.resource_forecast(state, nation.id, -1, -1, resource_evaluation_cache)
+			candidate = DiplomacyAI.resource_forecast(state, nation.id, int(candidate.input.troops) + formation_size, -1, resource_evaluation_cache, GameState.formation_creation_gold_cost(formation_size), {"base_upkeep_delta": GameState.army_monthly_upkeep(formation_size), "field_food_delta": ReinforcementPhase._grant_food_delta(0, formation_size, float(candidate.input.food_multiplier))})
+			if not bool(candidate.growth_allowed):
+				break
 		if not _try_recruit_force_structure(
 			view,
 			nation,
@@ -7901,6 +7814,7 @@ func _ai_manage_force_structure(
 		):
 			break
 		recruited_any = true
+		DiplomacyAI.commit_force_change(state, nation.id, formation_size, resource_evaluation_cache, [{"army": state.armies.back(), "old_size": 0}])
 		assessment.main_armies += 1
 		# 小国生存目标只有一支机动预备队。
 		if assessment.small_nation_survival:
@@ -8027,7 +7941,7 @@ func _build_force_structure_assessment(
 	if force_resource_cache.has("monthly_gold_flows"):
 		gold_flows = force_resource_cache["monthly_gold_flows"]
 	assessment.gold_reserve = gold_reserve_policy(
-		state, view.nation_id, gold_flows
+		state, view.nation_id, gold_flows, force_resource_cache
 	)
 	assessment.required_gold_savings = int(
 		assessment.gold_reserve.get("required_upkeep_savings", 0)
@@ -11153,7 +11067,7 @@ func _sorted_campaign_enemy_ids(
 
 func _food_security_report(
 	nation_id: int,
-	nation_armies: Array[Army] = [],
+	_nation_armies: Array[Army] = [],
 	evaluation_cache: Dictionary = {}
 ) -> Dictionary:
 	var food_part_started := (
@@ -11164,7 +11078,7 @@ func _food_security_report(
 		nation_id,
 		-1,
 		-1,
-		evaluation_cache
+		evaluation_cache, true
 	)
 	_record_tick_profile_stage(
 		"ai_force_food_plan", food_part_started
@@ -11173,27 +11087,16 @@ func _food_security_report(
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
 	var monthly_production := float(war_food["monthly_food_production"])
-	var monthly_demand := 0.0
-	var nation := state.nations[nation_id]
-	var armies_to_scan: Array[Army] = (
-		nation_armies
-		if not nation_armies.is_empty()
-		else state.armies
-	)
-	for army in armies_to_scan:
-		if army.owner_nation != nation_id or army.size <= 0:
-			continue
-		monthly_demand += _projected_army_food_demand(army)
+	var monthly_demand := float(war_food["current_monthly_demand"])
 	_record_tick_profile_stage(
 		"ai_force_food_armies", food_part_started
 	)
-	monthly_demand = maxf(
-		monthly_demand,
-		nation.food_demand_ema
-	)
 	var stock := int(war_food["food_stock"])
 	var reserve_target := int(war_food["stock_target"])
-	var sustainable_demand := float(war_food["monthly_food_budget"])
+	var unit_food := float(war_food["food_per_troop_month"])
+	var sustainable_demand := monthly_demand + (int(war_food["affordable_troops"]) - int(war_food["current_troops"])) * unit_food
+	var forecast: Dictionary = war_food["forecast"]
+	var at_war := not state.wars_of(nation_id).is_empty()
 	return {
 		"posture": war_food["posture"],
 		"monthly_production": monthly_production,
@@ -11215,7 +11118,8 @@ func _food_security_report(
 		"reserve_target": reserve_target,
 		"sustainable_demand": sustainable_demand,
 		"required_savings": maxf(monthly_demand - sustainable_demand, 0.0),
-		"needs_demobilization": monthly_demand > sustainable_demand + 0.01,
+		"needs_demobilization": int(forecast["food_deficit"]) > 0 if at_war else monthly_demand > sustainable_demand + 0.01,
+		"forecast": forecast,
 	}
 
 

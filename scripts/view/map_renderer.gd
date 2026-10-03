@@ -206,6 +206,8 @@ var _nation_stats_window_position := Vector2(-1.0, -1.0)
 var _nation_stats_drag_active: bool = false
 var _nation_stats_drag_offset := Vector2.ZERO
 var _detail_panel: SelectionDetailPanel
+var _detail_payload_key: Array = []
+var _detail_payload_cache: Dictionary = {}
 var _input_surfaces: Array[Control] = []
 var _nation_stats_scroll: int = 0
 var _nation_stats_collapsed_nations: Dictionary = {}
@@ -1996,6 +1998,7 @@ static func point_to_segment_distance(
 
 
 func _on_runtime_day_committed(_day: int) -> void:
+	_detail_payload_key.clear()
 	_sync_snapshots()
 
 
@@ -2063,7 +2066,7 @@ func _draw() -> void:
 	if state == null:
 		return
 	_compute_layout()
-	var detail_payload := _selection_detail_payload()
+	var detail_payload := _cached_selection_detail_payload()
 	if world_layer_visible:
 		_draw_paper_canvas()
 		_draw_terrain_background()
@@ -7013,6 +7016,20 @@ func _draw_nation_window_cells(
 			)
 
 
+func _cached_selection_detail_payload() -> Dictionary:
+	var key: Array = [state.get_instance_id(), state.day, state.ownership_revision, state.diplomacy_revision, state.trade_revision, state.road_network_revision, state.administrative_region_revision, state.region_analysis_revision, state.regional_strategy_revision, state.family_revision, state.garrison_revision, state.armies.size(), _selected_city_id, _selected_edge_a, _selected_edge_b, _selected_nation_id, _history_mode]
+	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
+		var nation := state.nations[_selected_nation_id]
+		key.append_array([nation.ruler_archetype, nation.ruler_traits, nation.treasury_gold, nation.manpower_pool, nation.granary_food, nation.ruler_revision])
+	if _selected_city_id >= 0 and _selected_city_id < state.cities.size():
+		var city := state.cities[_selected_city_id]
+		key.append_array([city.food_storage, city.garrison_manpower, city.gold_per_month, city.food_per_half_year, city.manpower_per_month, city.development_gold_multiplier, city.development_food_multiplier, city.terrain_output_multiplier, city.latitude_output_multiplier])
+	if key != _detail_payload_key:
+		_detail_payload_key = key.duplicate(true)
+		_detail_payload_cache = _selection_detail_payload()
+	return _detail_payload_cache
+
+
 func _selection_detail_payload() -> Dictionary:
 	var payload := {
 		"title": "",
@@ -7135,6 +7152,9 @@ static func historical_nation_detail_sections(
 		]},
 		{"id": "history.diplomacy", "default_expanded": false, "title": "历史外交", "lines": relation_lines},
 		{"id": "history.region", "default_expanded": true, "title": "历史经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
+		{"id": "history.finance", "default_expanded": false, "title": "历史月结", "lines": [
+			"宫廷耗费 %.0f%%    应付 %d    实付 %d" % [game_state.nations[nation_id].last_court_expense_rate * 100.0, game_state.nations[nation_id].last_court_expense_due, game_state.nations[nation_id].last_court_expense_paid],
+		]},
 	]
 
 
@@ -7507,9 +7527,8 @@ static func city_detail_sections(
 			"首都加成：本国城市基础金20%%    金 %+d/月" % [
 				int(output["capital_gold_addition"]),
 			],
-			"治理与君主：治理×%.2f    金×%.2f 粮×%.2f 人×%.2f" % [
+			"治理与君主：治理×%.2f    粮×%.2f 人×%.2f" % [
 				float(output["governance_multiplier"]),
-				float(output["ruler_gold_multiplier"]),
 				float(output["ruler_food_multiplier"]),
 				float(output["ruler_manpower_multiplier"]),
 			],
@@ -7691,6 +7710,8 @@ static func nation_detail_sections(
 			],
 		]},
 		{"id": "nation.finance", "default_expanded": false, "title": "财政与军费", "lines": [
+			"宫廷与腐败耗费 %.0f%%    预计 %d/月    上月实付 %d" % [float(finance.court_expense_rate) * 100.0, int(finance.court_expense_due), n.last_court_expense_paid],
+			"12月预测最低国库 %d（第%d日）    储备目标 %d" % [int(finance.forecast.gold_min), int(finance.forecast.gold_min_day), int(finance.forecast.gold_target)],
 			"国库 %d    月净 %+d    城市收入 %d    贡赋 %+d" % [
 				n.treasury_gold,
 				int(finance["monthly_gold_balance"]),
@@ -7708,8 +7729,11 @@ static func nation_detail_sections(
 			"军费构成：野战军 %d    州治守军 %d" % [
 				n.last_field_army_upkeep, n.last_garrison_upkeep,
 			],
+			"耗费后月收入 %d    上月应耗费 %d（%.0f%%）" % [int(finance.monthly_gold_income) - int(finance.court_expense_due), n.last_court_expense_due, n.last_court_expense_rate * 100.0],
 		]},
 		{"id": "nation.food", "default_expanded": false, "title": "粮食储备", "lines": [
+			"12月预测最低粮食 %d（第%d日）    储备目标 %d" % [int(finance.forecast.food_min), int(finance.forecast.food_min_day), int(finance.forecast.food_target)],
+			"资源预测：%s" % ("可维持" if bool(finance.forecast.feasible) else "预计钱粮断供"),
 			"粮仓 %d / %d    月产(预计) %d    月需(预计) %d    月净(预计) %s" % [
 				n.granary_food,
 				food_capacity,
@@ -7717,6 +7741,7 @@ static func nation_detail_sections(
 				n.last_food_estimated_consumption,
 				monthly_food_balance_text,
 			],
+			"限制原因：%s" % ("无预测断供" if bool(finance.forecast.feasible) else "、".join(([] if int(finance.forecast.gold_deficit) <= 0 else ["国库不足"]) + ([] if int(finance.forecast.food_deficit) <= 0 else ["粮食不足"]))),
 		]},
 		{"id": "nation.diplomacy", "default_expanded": false, "title": "外交与行动", "lines": diplomacy_lines},
 	]
@@ -8002,58 +8027,10 @@ static func nation_detail_section_build_count() -> int:
 	return _nation_detail_section_build_count
 
 
-static func _nation_detail_finance_snapshot(
-	game_state: GameState,
-	nation_id: int
-) -> Dictionary:
-	var city_income := 0
-	for city in game_state.cities:
-		if city.owner_nation != nation_id:
-			continue
-		city_income += Simulation.city_gold_output(game_state, city)
-	var tribute_received := 0
-	var tribute_paid := 0
-	for subject_value in game_state.suzerainty:
-		var subject_id := int(subject_value)
-		var overlord_id := game_state.overlord_of(subject_id)
-		if (
-			subject_id < 0
-			or subject_id >= game_state.nations.size()
-			or overlord_id < 0
-			or overlord_id >= game_state.nations.size()
-		):
-			continue
-		var subject_city_income := 0
-		for city in game_state.cities:
-			if city.owner_nation != subject_id:
-				continue
-			subject_city_income += Simulation.city_gold_output(
-				game_state,
-				city
-			)
-		var tribute := int(floor(
-			float(subject_city_income)
-			* Simulation.effective_tribute_rate(
-				game_state,
-				subject_id
-			)
-		))
-		if subject_id == nation_id:
-			tribute_paid += tribute
-		if overlord_id == nation_id:
-			tribute_received += tribute
-	var tribute_balance := tribute_received - tribute_paid
-	var nation := game_state.nations[nation_id]
-	return {
-		"monthly_city_gold_income": city_income,
-		"monthly_tribute_balance": tribute_balance,
-		"monthly_gold_balance": (
-			city_income
-			+ nation.last_trade_gold
-			+ tribute_balance
-			- nation.last_military_upkeep
-		),
-	}
+static func _nation_detail_finance_snapshot(game_state: GameState, nation_id: int) -> Dictionary:
+	var report := DiplomacyAI.resource_report(game_state, nation_id)
+	report.monthly_tribute_balance = int(report.monthly_tribute_income) - int(report.monthly_tribute_expense)
+	return report
 
 
 static func _signed_value_text(value: int) -> String:

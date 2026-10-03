@@ -105,6 +105,9 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 
 	var alive: PackedByteArray = snapshot["nation_alive"]
 	var strategic_region_anchors: PackedInt32Array = snapshot["strategic_region_anchors"]
+	var court_rates: PackedFloat32Array = snapshot["court_expense_rates"]
+	var court_due: PackedInt32Array = snapshot["court_expense_due"]
+	var court_paid: PackedInt32Array = snapshot["court_expense_paid"]
 	for nation_id in range(_view_state.nations.size()):
 		_view_state.nations[nation_id].alive = (
 			nation_id < alive.size() and alive[nation_id] != 0
@@ -114,6 +117,10 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 			strategic_region_anchors[nation_id]
 			if nation_id < strategic_region_anchors.size() else -1
 		)
+		var nation := _view_state.nations[nation_id]
+		nation.last_court_expense_rate = court_rates[nation_id] if nation_id < court_rates.size() else 0.0
+		nation.last_court_expense_due = court_due[nation_id] if nation_id < court_due.size() else 0
+		nation.last_court_expense_paid = court_paid[nation_id] if nation_id < court_paid.size() else 0
 	return _view_state
 
 
@@ -172,10 +179,16 @@ func _capture(game_state: GameState) -> void:
 		owners[city_id] = game_state.cities[city_id].owner_nation
 	var alive := PackedByteArray()
 	var strategic_region_anchors := PackedInt32Array()
+	var court_rates := PackedFloat32Array()
+	var court_due := PackedInt32Array()
+	var court_paid := PackedInt32Array()
 	alive.resize(game_state.nations.size())
 	for nation_id in range(game_state.nations.size()):
 		alive[nation_id] = 1 if game_state.nations[nation_id].alive else 0
 		strategic_region_anchors.append(game_state.nations[nation_id].strategic_region_anchor_city_id)
+		court_rates.append(game_state.nations[nation_id].last_court_expense_rate)
+		court_due.append(game_state.nations[nation_id].last_court_expense_due)
+		court_paid.append(game_state.nations[nation_id].last_court_expense_paid)
 	_snapshots.append({
 		"day": game_state.day,
 		"month": game_state.month,
@@ -183,6 +196,9 @@ func _capture(game_state: GameState) -> void:
 		"diplomacy_revision": game_state.diplomacy_revision,
 		"regional_strategy_revision": game_state.regional_strategy_revision,
 		"strategic_region_anchors": strategic_region_anchors,
+		"court_expense_rates": court_rates,
+		"court_expense_due": court_due,
+		"court_expense_paid": court_paid,
 		"city_owners": owners,
 		"recognized_city_owners": game_state.recognized_city_owners.duplicate(),
 		"nation_alive": alive,

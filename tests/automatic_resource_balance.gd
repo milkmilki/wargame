@@ -7,7 +7,7 @@ var _valid := true
 
 func _init() -> void:
 	var manpower_zero := ResourceBalanceRules.plan(
-		100, 0, 2500, 40, true
+		100, 0, 2500, 40, true, {"targets": [20, 1000, 500]}
 	)
 	_check(int(manpower_zero["manpower_delta"]) > 0, "zero manpower was not replenished")
 	_check(
@@ -17,7 +17,7 @@ func _init() -> void:
 	_check(_value_delta(manpower_zero) == 0, "manpower conversion minted value")
 
 	var treasury_zero := ResourceBalanceRules.plan(
-		0, 5000, 2500, 40, true
+		0, 5000, 2500, 40, true, {"targets": [20, 1000, 500]}
 	)
 	_check(int(treasury_zero["gold_delta"]) > 0, "zero treasury was not replenished")
 	_check(_value_delta(treasury_zero) == 0, "treasury conversion minted value")
@@ -29,11 +29,12 @@ func _init() -> void:
 
 	var state := GameState.new()
 	state.generate_grid_world(61001)
+	state.armies.clear()
 	for nation in state.nations:
 		nation.treasury_gold = 0
 		nation.manpower_pool = 0
 	for warehouse in state.warehouse_cities_of(0):
-		warehouse.food_storage = 2500
+		warehouse.food_storage = 100000
 	state.refresh_derived()
 	var simulation := Simulation.new()
 	simulation.setup(state)

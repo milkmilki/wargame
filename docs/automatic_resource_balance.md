@@ -18,10 +18,18 @@ the annual operation, so monthly forecasts retain their existing contract.
 Only complete gold-equivalent bundles move. Remainders remain in their original
 pool. Total gold-equivalent reserve value is conserved.
 
-The three normalized reserves move toward equal values. The maximum value moved
-in one year is 25 percent of the current annualized net fiscal income, equivalent
-to three months of income. A country with no income may still move one bundle so
-a zero treasury can recover from food or manpower reserves.
+Conversion follows forecast deficits, not equal shares. First fund the next
+360 days of cash or food shortages and the protected manpower floor, then fund
+soft reserves. Receivers at the same priority share available value in
+proportion to their missing gold-equivalent bundles, using deterministic
+integer allocation. No missing target means no exchange.
+
+Donors retain both their forecast survival balance and soft reserve target.
+The maximum value moved in one year remains 25 percent of current annualized
+net fiscal income. A country with no income may still move one bundle.
+Receiving food and manpower are limited by their actual capacities before
+allocation. The whole proposal is revalidated before committing; a rejected
+proposal deducts nothing.
 
 ## Shared Granaries
 
@@ -33,10 +41,12 @@ being lost when no storage destination exists.
 
 ## Strategic AI
 
-The AI does not choose conversion direction, amount, or priority. Existing
-recruitment and demobilization gates continue to read the post-settlement
-resources, because deciding army size under military danger is a strategic
-decision rather than a currency conversion.
+ResourceForecastRules supplies the survival and reserve targets. No military
+target or threat search is performed during conversion. Shared pool inputs
+are updated and derived forecasts invalidated after an accepted conversion;
+subsequent countries cannot reuse the earlier inventory. Recruitment and
+demobilization then use the post-settlement resources. See
+[resource_forecast.md](resource_forecast.md) for the common decision contract.
 
 ## Trade Boundary
 

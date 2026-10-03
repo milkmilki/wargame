@@ -231,8 +231,9 @@ func _test_partial_peace() -> void:
 	var survivor_size := ally.size
 	var survivor_morale := ally.morale
 	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.NEUTRAL)
-	sim._reconcile_siege_participants(siege)
+	sim._reconcile_battles_after_coalition_peace([0, 1] as Array[int], [2] as Array[int])
 	_check(not siege.finished and siege.side_a.has(ally), "first nation's peace must not terminate its partner's ongoing siege")
+	_check(ally.state == Army.State.FIGHTING and ally.battle_id == siege.id, "retained partner must not be repatriated by the full peace coordinator")
 	_check(not siege.has_army(first) and first.battle_id != siege.id, "departing besieger loses every battle reference")
 	_check(siege.siege_attacker_nation == 1 and siege.siege_claimant_nation == 1, "siege and occupation identity transfer to the remaining valid besieger")
 	_check(ally.size == survivor_size and ally.morale == survivor_morale, "administrative coalition change has no extra casualty or morale penalty")

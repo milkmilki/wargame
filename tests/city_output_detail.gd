@@ -21,7 +21,6 @@ func _init() -> void:
 	expected_capital_bonus = int(floor(float(expected_capital_bonus) * 0.20))
 	var expected_gold_output := int(floor(
 		float(city.gold_per_month + expected_capital_bonus)
-			* RulerProfile.gold_output_multiplier(state.nations[0])
 	))
 	var detail := Simulation.city_output_breakdown(state, city)
 	var lines := "|".join(MapRenderer.city_detail_lines(state, city.id))

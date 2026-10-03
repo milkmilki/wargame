@@ -118,6 +118,11 @@ func _run() -> void:
 	state.cities[fixture.center].garrison_manpower = 100000
 	actions.clear()
 	DiplomacyAI._collect_existing_war_preparation(state, 0, actions, {})
+	_check(actions.is_empty() and not DiplomacyAI.war_preparation_launch_allowed(state, 0), "deadline cannot bypass manpower resource qualification")
+	state.nations[0].manpower_pool = 100000
+	state.nations[0].war_preparation_unready_since_day = -1
+	actions.clear()
+	DiplomacyAI._collect_existing_war_preparation(state, 0, actions, {})
 	_check(not actions.is_empty(), "best effort ultimatum emitted at deadline")
 	if not actions.is_empty():
 		_check(sim._execute_diplomatic_action(actions[0]), "deadline uses same ultimatum path")

@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 18
+const SCHEMA_VERSION: int = 19
 
 
 static func build(state: GameState) -> Dictionary:
@@ -88,6 +88,9 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var gold := PackedInt32Array()
 	var manpower := PackedInt32Array()
 	var last_military_upkeep := PackedInt32Array()
+	var court_expense_rate := PackedFloat64Array()
+	var court_expense_due := PackedInt32Array()
+	var court_expense_paid := PackedInt32Array()
 	var last_field_army_upkeep := PackedInt32Array()
 	var last_garrison_upkeep := PackedInt32Array()
 	var unpaid_military_upkeep := PackedInt32Array()
@@ -125,6 +128,9 @@ static func _build_nations(state: GameState) -> Dictionary:
 		gold.append(nation.treasury_gold)
 		manpower.append(nation.manpower_pool)
 		last_military_upkeep.append(nation.last_military_upkeep)
+		court_expense_rate.append(nation.last_court_expense_rate)
+		court_expense_due.append(nation.last_court_expense_due)
+		court_expense_paid.append(nation.last_court_expense_paid)
 		last_field_army_upkeep.append(nation.last_field_army_upkeep)
 		last_garrison_upkeep.append(nation.last_garrison_upkeep)
 		unpaid_military_upkeep.append(
@@ -236,6 +242,9 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"gold": gold,
 		"manpower": manpower,
 		"last_military_upkeep": last_military_upkeep,
+		"last_court_expense_rate": court_expense_rate,
+		"last_court_expense_due": court_expense_due,
+		"last_court_expense_paid": court_expense_paid,
 		"last_field_army_upkeep": last_field_army_upkeep,
 		"last_garrison_upkeep": last_garrison_upkeep,
 		"unpaid_military_upkeep": unpaid_military_upkeep,

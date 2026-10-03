@@ -54,7 +54,7 @@ func _run() -> void:
 	panel.close_panel()
 	_check(opened == 1 and closed == 1, "one pause lifecycle")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 18 and snapshot.has("family_trees") and snapshot.nations.has("family_tree_ids"), "lineage persisted in schema18")
+	_check(snapshot.schema_version == 19 and snapshot.has("family_trees") and snapshot.nations.has("family_tree_ids"), "lineage persisted in schema19")
 	panel.queue_free()
 	sim.queue_free()
 	await process_frame

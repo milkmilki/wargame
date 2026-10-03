@@ -74,8 +74,21 @@ static func geometry(state: GameState) -> Dictionary:
 	for region in environments:
 		var totals: Vector3 = environments[region]
 		environments[region] = Vector2(totals.x, totals.y) / maxf(totals.z, 1.0)
+	var adjacent_regions := {}
+	for border in state.territorial_border_pairs():
+		var a := regions[border.x]
+		var b := regions[border.y]
+		if a < 0 or b < 0 or a == b:
+			continue
+		if not adjacent_regions.has(a):
+			adjacent_regions[a] = {}
+		if not adjacent_regions.has(b):
+			adjacent_regions[b] = {}
+		adjacent_regions[a][b] = true
+		adjacent_regions[b][a] = true
 	state._regional_strategy_geometry = {"revision": revision, "regions": regions,
-		"members": members, "anchors": anchors, "environments": environments}
+		"members": members, "anchors": anchors, "environments": environments,
+		"adjacent_regions": adjacent_regions}
 	state._regional_strategy_control.clear()
 	return state._regional_strategy_geometry
 
@@ -155,6 +168,13 @@ static func city_region(state: GameState, city_id: int) -> int:
 	if city_id < 0 or city_id >= state.cities.size():
 		return -1
 	return int((geometry(state)["regions"] as PackedInt32Array)[city_id])
+
+
+static func regions_are_adjacent(state: GameState, a: int, b: int) -> bool:
+	var geo := geometry(state)
+	if not (geo["members"] as Dictionary).has(a) or not (geo["members"] as Dictionary).has(b):
+		return false
+	return a == b or (geo["adjacent_regions"].get(a, {}) as Dictionary).has(b)
 
 
 static func initial_region(state: GameState, nation_id: int) -> int:
