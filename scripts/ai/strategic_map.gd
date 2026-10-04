@@ -289,7 +289,7 @@ func _find_frontier(
 			other_nation,
 			_state.relation_between(nation_id, other_nation),
 		])
-		if _state.is_enemy(nation_id, other_nation):
+		if _state.is_external_enemy(nation_id, other_nation):
 			for edge in support_edges:
 				if not frontier_edges.has(edge):
 					frontier_edges.append(edge)
@@ -678,7 +678,7 @@ func _finalize_edge_values(shared_edge_values: Dictionary = {}) -> void:
 		value += 3.0 * float(bridge_impact.get(key, 0.0)) / maxf(_total_friendly_value, 0.001)
 		value += 2.0 * float(corridor_flow.get(key, 0.0)) / max_flow
 		if (
-			_state.is_enemy(owner_a, owner_b)
+			_state.is_external_enemy(owner_a, owner_b)
 			and (owner_a == nation_id or owner_b == nation_id)
 		):
 			# 敌对前线边据守价值：基线 1.0（是条敌对前线边）+ 地形据守加成。

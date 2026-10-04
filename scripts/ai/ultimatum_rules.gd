@@ -33,6 +33,8 @@ static func evaluate(state: GameState, attacker_id: int, target_id: int, cache: 
 		"target_land_cities": 0, "attacker_land_cities": 0}
 	if attacker_id < 0 or target_id < 0 or attacker_id >= state.nations.size() or target_id >= state.nations.size():
 		return result
+	if state.is_succession_identity(attacker_id) or state.is_succession_identity(target_id):
+		return result
 	if not state.nations[attacker_id].alive or not state.nations[target_id].alive or state.is_vassal(target_id):
 		return result
 	var index := _index(state, cache)

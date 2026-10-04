@@ -391,7 +391,8 @@ static func assign_from_definition(
 static func assign_vassal_name(
 	game_state,
 	subject_id: int,
-	granted_city_ids: Array[int]
+	granted_city_ids: Array[int],
+	reuse_ruler: bool = false
 ) -> String:
 	if not _valid_nation_id(game_state, subject_id):
 		return ""
@@ -407,7 +408,8 @@ static func assign_vassal_name(
 	nation.name = formal
 	var rulers := _registry(game_state, _RULER_REGISTRY_META)
 	_backfill_ruler_registry(game_state, rulers, subject_id)
-	_assign_unique_ruler(
+	if not reuse_ruler:
+		_assign_unique_ruler(
 		nation,
 		int(game_state.world_seed),
 		subject_id,
@@ -415,7 +417,7 @@ static func assign_vassal_name(
 		"",
 		ruler_surname(str(game_state.nations[game_state.overlord_of(subject_id)].ruler_name))
 			if game_state.overlord_of(subject_id) >= 0 else suzerainty_ruler_surname(game_state, subject_id)
-	)
+		)
 	var new_signature := "%s|%s|%s|%s|%d" % [
 		nation.name, nation.short_name, nation.name_kind, nation.ruler_name,
 		nation.founding_city_id,

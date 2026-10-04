@@ -47,7 +47,7 @@ static func build_army_index(game_state: GameState) -> Dictionary:
 		army_power_by_nation[nation.id] = 0.0
 		stationed_power_by_nation[nation.id] = {}
 	for army in game_state.armies:
-		if army.size <= 0:
+		if army.size <= 0 or game_state.army_reserved_for_succession(army):
 			continue
 		(
 			armies_by_nation[army.owner_nation]
@@ -176,7 +176,7 @@ static func build(
 				view.friendly_cities.append(city)
 			elif visibility_hops >= 0 and not visible_city_ids.has(city.id):
 				continue
-			elif game_state.is_enemy(
+			elif game_state.is_external_enemy(
 				owner_nation,
 				city.owner_nation
 			):
@@ -255,7 +255,7 @@ static func build(
 				if _army_is_visible(army, visible_city_ids):
 					visible_armies.append(army)
 			other_armies = visible_armies
-		if game_state.is_enemy(owner_nation, other.id):
+		if game_state.is_external_enemy(owner_nation, other.id):
 			view.enemy_armies.append_array(other_armies)
 		elif game_state.is_allied(owner_nation, other.id):
 			view.allied_armies.append_array(other_armies)

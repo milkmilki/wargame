@@ -64,6 +64,9 @@ const CAPITAL_NATIONAL_GOLD_SHARE: float = (
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
 ## 规格 R3：被围粮仓城市每日消耗本地库存；普通城市无粮仓，被围即失去外部补给。
 const SIEGE_CITY_FOOD_PER_DAY: int = 1     ## 被围城每日粮草消耗系数
+## 纯封锁期间的守军自然损耗。封锁只削弱当前守军，下一轮会用新的守军
+## 数量重新计算既有 R 门槛；达到 R 后自然进入正常虚拟攻城。
+const BLOCKADE_GARRISON_ATTRITION_RATE: float = 0.002
 # ---- 占领 ----
 ## 分封战争加成：宗藩体系处于对外战争时，「不接壤敌国」的后方藩王把贡赋率临时提到此值，
 ## 用后方财税支撑中央战争机器；接壤敌国的前线藩王不加税，以自有军团参与共同战争。
@@ -464,6 +467,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	state.day += 1
 	state.month = state.day / DAYS_PER_MONTH
 	_resolve_ruler_successions()
+	_update_succession_conflicts()
 	_record_tick_profile_stage("maintenance", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -507,6 +511,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		)
 		_set_runtime_profile_stage(&"monthly_rebellions")
 		_resolve_monthly_rebellions()
+		_propose_succession_conflicts()
 		_record_tick_profile_stage(
 			"monthly_rebellions",
 			monthly_profile_started
@@ -963,7 +968,7 @@ func _trade_summary_settlement_token(
 			or army.owner_nation >= field_upkeep_units.size()
 		):
 			continue
-		field_upkeep_units[army.owner_nation] += (
+		field_upkeep_units[state.financial_nation_of(army.owner_nation)] += (
 			GameState.army_monthly_upkeep(army.size)
 		)
 	fields.append(["field_upkeep_units", field_upkeep_units])
@@ -1605,15 +1610,16 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 	for city in state.cities:
 		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
 			continue
-		var nation := state.nations[city.owner_nation]
-		var modifiers: Dictionary = ruler_output_modifiers[city.owner_nation]
+		var owner_id := state.financial_nation_of(city.owner_nation)
+		var nation := state.nations[owner_id]
+		var modifiers: Dictionary = ruler_output_modifiers[owner_id]
 		var gold := city_gold_output(state, city, modifiers)
 		nation.treasury_gold += gold
-		gold_income[city.owner_nation] += gold
-		monthly_manpower_produced[city.owner_nation] += city_manpower_output(
+		gold_income[owner_id] += gold
+		monthly_manpower_produced[state.financial_nation_of(city.owner_nation)] += city_manpower_output(
 			state, city, modifiers
 		)
-		half_year_food_produced[city.owner_nation] += city_food_output(
+		half_year_food_produced[owner_id] += city_food_output(
 			state,
 			city,
 			garrison_by_city,
@@ -1868,24 +1874,14 @@ func _resolve_ruler_successions() -> void:
 			)
 		):
 			continue
-		var previous_name := nation.ruler_name
-		var previous_person_id := nation.ruler_person_id
-		var preferred_surname := WorldNaming.suzerainty_ruler_surname(
-			state, nation.id
-		)
-		if preferred_surname.is_empty():
-			preferred_surname = WorldNaming.ruler_surname(previous_name)
-		RulerProfile.appoint_successor(nation, state.world_seed, state.day)
-		WorldNaming.register_successor_name(
-			state,
-			nation.id,
-			nation.id + nation.ruler_revision * 1009,
-			previous_name,
-			preferred_surname
-		)
-		FamilyTree.record_succession(
-			state, nation.id, previous_person_id
-		)
+		var conflict: SuccessionConflict = state.succession_conflicts.get(nation.id)
+		if conflict != null:
+			if conflict.launched():
+				conflict.succession_delayed = true
+				continue
+			_cancel_succession_preparation(conflict, "succession_due")
+		if nation.succession_identity or not PrincePolitics.accede(state, nation.id):
+			continue
 		state.relocate_capital(nation.id)
 		RegionalStrategy.update_target(state, nation.id, true)
 		changed = true
@@ -1894,6 +1890,191 @@ func _resolve_ruler_successions() -> void:
 	state.refresh_derived()
 	_reset_trade_forecast_cache()
 	_ai_strategy_cache.clear()
+
+
+func _cancel_succession_preparation(conflict: SuccessionConflict, reason: String) -> void:
+	for army in state.armies:
+		if conflict.army_ids.has(army.id):
+			army.path.clear()
+			army.ai_target_city = -1
+			army.ai_action = ActionCandidate.Kind.HOLD
+	SuccessionRules.record(state, conflict, "cancel", {"reason": reason})
+	state.succession_conflicts.erase(conflict.nation_id)
+
+
+func _update_succession_conflicts() -> void:
+	# Only existing records are coordinated here; proposals and routes belong to AI batches.
+	for value in state.succession_conflicts.values().duplicate():
+		var conflict := value as SuccessionConflict
+		var nation := state.nations[conflict.nation_id]
+		if not conflict.launched():
+			if state.day - conflict.started_day >= SuccessionRules.PREPARATION_LIMIT or nation.capital_city_id != conflict.capital_city_id or not state.wars_of(nation.id).is_empty():
+				_cancel_succession_preparation(conflict, "expired_or_invalid")
+			continue
+		if conflict.pending_outcome == SuccessionConflict.Outcome.NONE:
+			if not nation.alive or state.cities[conflict.capital_city_id].owner_nation != nation.id or state.cities[conflict.camp_city_id].owner_nation not in [nation.id, conflict.rebel_nation_id]:
+				conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
+			elif state.cities[conflict.camp_city_id].owner_nation == nation.id:
+				conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED
+		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
+			_stop_succession_orders(conflict)
+			for battle in state.battles:
+				if not battle.finished and conflict.contains_battle(battle):
+					var real_field := battle.city == null
+					for defender in battle.side_b:
+						real_field = real_field or (defender.size > 0 and not defender.is_city_garrison)
+					if conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE or not real_field:
+						_finish_battle_administratively(battle)
+			if SuccessionRules.finish(state, conflict):
+				if conflict.succession_delayed and nation.alive:
+					PrincePolitics.accede(state, nation.id)
+					state.relocate_capital(nation.id)
+					state.refresh_derived()
+				_ai_last_decision_day = -1
+
+
+func _stop_succession_orders(conflict: SuccessionConflict) -> void:
+	for front_id in [conflict.offense_front_id, conflict.defense_front_id]:
+		var front := state.campaign_front(front_id)
+		if front != null:
+			front.retiring = true
+	for army in state.armies:
+		if conflict.side_for(army.id) != 0 and army.state != Army.State.FIGHTING:
+			if army.state != Army.State.RETREATING:
+				army.path.clear()
+			army.ai_target_city = -1
+			army.ai_action = ActionCandidate.Kind.HOLD
+
+
+func _succession_battle_context(battle: Battle) -> SuccessionConflict:
+	if battle == null:
+		return null
+	for conflict_value in state.succession_conflicts.values():
+		var conflict := conflict_value as SuccessionConflict
+		if conflict.contains_battle(battle):
+			return conflict
+	return null
+
+
+func _succession_city_context(city_id: int) -> SuccessionConflict:
+	for value in state.succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if conflict.launched() and city_id in [conflict.capital_city_id, conflict.camp_city_id]:
+			return conflict
+	return null
+
+
+func _succession_front_context(front: CoalitionCampaignFront) -> SuccessionConflict:
+	for value in state.succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if front.front_id in [conflict.offense_front_id, conflict.defense_front_id]:
+			return conflict
+	return null
+
+
+func _propose_succession_conflicts() -> void:
+	var context := SuccessionRules.batch_context(state)
+	for nation in state.nations:
+		if nation.succession_identity or state.succession_conflicts.has(nation.id) or nation.succession_competition_closed or not nation.alive:
+			continue
+		for person_id in nation.prince_person_ids:
+			if person_id == nation.crown_prince_person_id:
+				continue
+			var member := PrincePolitics.person(state, nation.id, person_id)
+			var weight := PrincePolitics.command_weight(int(member.get("archetype", RulerProfile.INEPT)))
+			var chance := 3 if weight == 3 else (1 if weight == 2 else 0)
+			if chance == 0 or RulerProfile.stable_index(state.world_seed, nation.id, "succession/attempt/%d" % person_id, 100, state.month) >= chance:
+				continue
+			var info := SuccessionRules.proposal(state, nation.id, person_id, [], context)
+			if not info.is_empty() and SuccessionRules.begin_preparation(state, nation.id, person_id, info):
+				break
+
+
+func _plan_succession_conflicts() -> void:
+	if state.succession_conflicts.is_empty():
+		return
+	var armies_by_id := {}
+	var context := SuccessionRules.batch_context(state)
+	for army in state.armies:
+		armies_by_id[army.id] = army
+	for value in state.succession_conflicts.values().duplicate():
+		var conflict := value as SuccessionConflict
+		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
+			continue
+		if not conflict.launched():
+			var info := SuccessionRules.proposal(state, conflict.nation_id, conflict.challenger_person_id, conflict.army_ids, context, conflict.camp_city_id)
+			if info.is_empty() or int(info.capital) != conflict.capital_city_id or not SuccessionRules.camp_valid(state, conflict):
+				_cancel_succession_preparation(conflict, "qualification_changed")
+				continue
+			conflict.qualification = info.duplicate(true)
+			for id in conflict.army_ids:
+				var army: Army = armies_by_id.get(id)
+				if army != null and army.state == Army.State.IDLE and not army.is_at_city_node(conflict.camp_city_id):
+					_execute_ai_candidate(army, ActionCandidate.make(ActionCandidate.Kind.REINFORCE, 2000, "继承权准备", conflict.camp_city_id))
+			if SuccessionRules.launch(state, conflict):
+				_reset_trade_forecast_cache()
+			else:
+				continue
+		var living := 0
+		for id in conflict.army_ids:
+			var army: Army = armies_by_id.get(id)
+			if army != null:
+				living += army.size
+		if living == 0:
+			conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED
+			continue
+		var outside := false
+		for army in state.armies:
+			if army.size <= 0 or conflict.side_for(army.id) > 0 or not state.is_enemy(conflict.nation_id, army.owner_nation):
+				continue
+			var node := army.current_city_node()
+			if node >= 0 and state.administrative_center_of(node) == conflict.capital_city_id:
+				outside = true
+		if outside:
+			conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
+			continue
+		_plan_succession_fronts(conflict)
+
+
+func _plan_succession_fronts(conflict: SuccessionConflict) -> void:
+	var offense := state.campaign_front(conflict.offense_front_id)
+	var defense := state.campaign_front(conflict.defense_front_id)
+	if offense == null or defense == null:
+		return
+	var V := 0
+	for army in _campaign_plan_armies(defense):
+		if SuccessionRules.effective(army):
+			V += army.size
+	var R := state.campaign_siege_requirement(conflict.rebel_nation_id, conflict.capital_city_id)
+	var requirement := ceili((R + V) * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.challenger_person_id)))
+	var attack_force := _campaign_action_force(offense, conflict.capital_city_id, ActionCandidate.Kind.ATTACK, conflict.camp_city_id)
+	if offense.phase == CoalitionCampaignFront.Phase.HOLD_CAMP:
+		var ready: Array[Army] = []
+		var troops := 0
+		for army: Army in attack_force.armies:
+			if army.state == Army.State.IDLE and army.is_at_city_node(conflict.camp_city_id) and SuccessionRules.effective(army):
+				ready.append(army)
+				troops += army.size
+		attack_force = {"armies": ready, "manpower": troops}
+	if offense.phase != CoalitionCampaignFront.Phase.HOLD_CAMP or int(attack_force.manpower) >= requirement:
+		_dispatch_campaign_action(offense, attack_force, conflict.capital_city_id, ActionCandidate.Kind.ATTACK, CoalitionCampaignFront.Phase.ASSAULT_CENTER)
+	else:
+		for army in _campaign_plan_armies(offense):
+			_order_campaign_army(army, offense, conflict.camp_city_id, ActionCandidate.Kind.REINFORCE)
+	var threat := _siege_battle_of(state.cities[conflict.capital_city_id]) != null
+	for army in _campaign_plan_armies(offense):
+		if _campaign_army_at_or_advancing(army, conflict.capital_city_id):
+			threat = true
+	var target := conflict.capital_city_id if threat else conflict.camp_city_id
+	var kind := ActionCandidate.Kind.REINFORCE if threat else ActionCandidate.Kind.ATTACK
+	var force := _campaign_action_force(defense, target, kind)
+	var enemy := 0
+	for army in _campaign_plan_armies(offense):
+		if army.is_at_city_node(conflict.camp_city_id) and SuccessionRules.effective(army):
+			enemy += army.size
+	var needed := ceili(enemy * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.crown_person_id)))
+	if threat or int(force.manpower) >= needed:
+		_dispatch_campaign_action(defense, force, target, kind, CoalitionCampaignFront.Phase.SORTIE)
 
 
 ## 即时调校当前君主，不触发继位：姓名、任期起点和继位序号保持不变。
@@ -2062,7 +2243,7 @@ static func city_output_breakdown(
 		ruler_modifiers
 		if not ruler_modifiers.is_empty()
 		else (
-			RulerProfile.modifiers(game_state.nations[city.owner_nation])
+			RulerProfile.modifiers(game_state.nations[game_state.financial_nation_of(city.owner_nation)])
 			if (
 				city.owner_nation >= 0
 				and city.owner_nation < game_state.nations.size()
@@ -2137,7 +2318,7 @@ static func _apply_ruler_output_multiplier(
 	var modifiers := (
 		ruler_modifiers
 		if not ruler_modifiers.is_empty()
-		else RulerProfile.modifiers(game_state.nations[city.owner_nation])
+		else RulerProfile.modifiers(game_state.nations[game_state.financial_nation_of(city.owner_nation)])
 	)
 	return maxi(int(floor(
 		float(maxi(output, 0))
@@ -2573,7 +2754,7 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		if army.size <= 0 or army.state == Army.State.RECOVERING:
 			continue
 		var siege_garrison := _siege_garrison_battle_of(army)
-		if siege_garrison != null and siege_garrison.city.food_storage > 0:
+		if siege_garrison != null and siege_garrison.city.food_storage > 0 and _succession_battle_context(siege_garrison) == null:
 			continue
 		chunk.append(army)
 		if chunk.size() >= CHUNK_SIZE:
@@ -2670,7 +2851,7 @@ func _prepare_supply_network_caches() -> Array[int]:
 		var enemy_edges := {}
 		for owner_id_value in occupied_edges_by_owner:
 			var owner_id := int(owner_id_value)
-			if not state.is_enemy(nation_id, owner_id):
+			if not state.is_enemy(nation_id, owner_id) or state.succession_identity_pair(nation_id, owner_id):
 				continue
 			for edge_key_value in (
 				occupied_edges_by_owner[owner_id]
@@ -2842,7 +3023,7 @@ func _build_supply_plan_for_army(
 	if army.size <= 0 or army.state == Army.State.RECOVERING:
 		return {}
 	var siege_garrison := _siege_garrison_battle_of(army)
-	if siege_garrison != null and siege_garrison.city.food_storage > 0:
+	if siege_garrison != null and siege_garrison.city.food_storage > 0 and _succession_battle_context(siege_garrison) == null:
 		# 被围守军的粮食消耗真源是每日围城时钟。
 		army.starving = false
 		army.supply_ratio = 1.0
@@ -2869,7 +3050,7 @@ func _build_supply_plan_for_army(
 			army.owner_nation
 		)
 	))
-	demand_by_nation[army.owner_nation] += monthly_demand
+	demand_by_nation[state.financial_nation_of(army.owner_nation)] += monthly_demand
 	army.supply_food_debt += (
 		float(monthly_demand) / float(DAYS_PER_MONTH)
 	)
@@ -2945,7 +3126,7 @@ func _apply_supply_pressure() -> void:
 		if army.size <= 0 or army.state == Army.State.RECOVERING:
 			continue
 		var siege_garrison := _siege_garrison_battle_of(army)
-		if siege_garrison != null and siege_garrison.city.food_storage > 0:
+		if siege_garrison != null and siege_garrison.city.food_storage > 0 and _succession_battle_context(siege_garrison) == null:
 			# 被围守军的粮食时钟是 _drain_siege_food；此处不重复施压（补给孤岛）。
 			army.starving = false
 			continue
@@ -2997,9 +3178,7 @@ func _recover_morale() -> void:
 			continue
 		if army.starving:
 			continue
-		var recovery_multiplier := _ruler_morale_multiplier(
-			state, army.owner_nation
-		)
+		var recovery_multiplier := maxf(RulerProfile.morale_multiplier(state.military_profile_for_army(army)), 0.1)
 		army.morale = minf(
 			army.morale
 				+ army.max_morale
@@ -3046,6 +3225,7 @@ static func _ruler_morale_multiplier(
 
 
 func _daily_food_consumption_multiplier(nation_id: int) -> float:
+	nation_id = state.financial_nation_of(nation_id)
 	if not _daily_food_multiplier_cache.has(nation_id):
 		_daily_food_multiplier_cache[nation_id] = (
 			_ruler_food_consumption_multiplier(state, nation_id)
@@ -3072,9 +3252,7 @@ func _recover_garrisoned_army(army: Army) -> void:
 	)
 	var route_loss := _weighted_supply_loss(sources)
 	var full_month_demand := maxi(int(ceil(float(army.size) * RECOVERY_FOOD_PER_CAPITA)), 1)
-	var recovery_multiplier := _ruler_morale_multiplier(
-		state, army.owner_nation
-	)
+	var recovery_multiplier := maxf(RulerProfile.morale_multiplier(state.military_profile_for_army(army)), 0.1)
 	var target_gain := minf(
 		army.max_morale
 			/ float(Combat.MORALE_RECOVERY_DAYS)
@@ -3226,6 +3404,8 @@ func _drain_siege_food() -> void:
 		if battle.finished or battle.kind != Battle.Kind.SIEGE or battle.city == null:
 			continue
 		var city := battle.city
+		if _succession_battle_context(battle) != null:
+			continue
 		state.change_city_food_storage(city.id, -SIEGE_CITY_FOOD_PER_DAY)
 		if battle.side_b_defends_city:
 			var has_food := city.food_storage > 0
@@ -3742,6 +3922,8 @@ func _diplomacy_batch_identities() -> Dictionary:
 ## 不经过和平意愿评分、不等待月度外交 tick，也不保留多国战争残余关系。
 func _resolve_eliminated_nation_capitulations() -> void:
 	for surrendering in range(state.nations.size()):
+		if state.nations[surrendering].succession_identity:
+			continue
 		# 所有领土事务都会 refresh_derived；直接读取唯一存续真源，避免
 		# 每日为每个国家重新扫描全部城市。
 		if state.nations[surrendering].alive:
@@ -6363,6 +6545,7 @@ func _merge_parallel_threat_cache_deltas(
 
 
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
+	_plan_succession_conflicts()
 	var frozen_army_ids := {}
 	for army in state.armies:
 		if army.size > 0:
@@ -6551,7 +6734,7 @@ func _prepare_ai_view_phase(
 	)
 	for nation_id in nation_order:
 		var nation := state.nations[nation_id]
-		if not nation.alive:
+		if not nation.alive or nation.succession_identity:
 			continue
 		ai_view_detail_started = (
 			Time.get_ticks_usec()
@@ -8527,6 +8710,8 @@ func _reconcile_coalition_fronts(components: Array[Dictionary]) -> void:
 		)
 	for front_value in state.campaign_fronts.values().duplicate():
 		var front := front_value as CoalitionCampaignFront
+		if front != null and _succession_front_context(front) != null:
+			continue
 		if front == null or not components_by_war.has(front.war_id):
 			state.release_campaign_front(front.front_id if front != null else -1)
 			continue
@@ -8589,6 +8774,8 @@ func _reconcile_coalition_fronts(components: Array[Dictionary]) -> void:
 	for front_value in state.campaign_fronts.values().duplicate():
 		var front := front_value as CoalitionCampaignFront
 		if front == null:
+			continue
+		if _succession_front_context(front) != null:
 			continue
 		var key := "%d:%d:%d:%s" % [
 			front.war_id, front.mode, front.center_city_id,
@@ -8699,7 +8886,11 @@ func _reconcile_campaign_battlefields() -> void:
 	for front_value in state.campaign_fronts.values().duplicate():
 		var front := front_value as CoalitionCampaignFront
 		if front.retiring:
+			if _succession_front_context(front) != null:
+				continue
 			_retire_campaign_front(front)
+			continue
+		if _succession_front_context(front) != null:
 			continue
 		if front.mode != CoalitionCampaignFront.Mode.OFFENSE or registered.has(front.front_id):
 			continue
@@ -9226,7 +9417,7 @@ func _campaign_receiving_city(front: CoalitionCampaignFront) -> int:
 
 
 func _coordinate_campaign_base(front: CoalitionCampaignFront) -> void:
-	if front.mode != CoalitionCampaignFront.Mode.OFFENSE or _campaign_camp_lost_to_enemy(front):
+	if _succession_front_context(front) != null or front.mode != CoalitionCampaignFront.Mode.OFFENSE or _campaign_camp_lost_to_enemy(front):
 		return
 	if state.campaign_has_forward_camp(front):
 		return
@@ -9422,6 +9613,8 @@ func _coalition_allocation_candidates(
 		and bool(state.campaign_defense_context(front.anchor_nation_id, front.center_city_id, front.war_id, _coalition_defense_activity)["invaded"])
 	)
 	for army in armies:
+		if state.army_reserved_for_succession(army):
+			continue
 		if (front.front_id >= 0 and army.campaign_front_id == front.front_id) or ai_policy_overrides.has(army.owner_nation):
 			continue
 		if _collect_ai_commands and not _ai_snapshot_armies.has(army.id):
@@ -10754,6 +10947,8 @@ func _order_campaign_army(
 
 
 func _campaign_camp_lost_to_enemy(plan: CoalitionCampaignFront) -> bool:
+	if _succession_front_context(plan) != null:
+		return false
 	return (
 		plan.mode == CoalitionCampaignFront.Mode.OFFENSE
 		and plan.camp_city_id >= 0 and plan.camp_city_id < state.cities.size()
@@ -11403,6 +11598,10 @@ func _execute_ai_candidate(
 ) -> bool:
 	if army == null or candidate == null:
 		return false
+	if candidate.kind == ActionCandidate.Kind.ATTACK and candidate.target_city >= 0:
+		var owner := state.cities[candidate.target_city].owner_nation
+		if state.succession_identity_pair(army.owner_nation, owner) and not state.army_reserved_for_succession(army):
+			return false
 	if _collect_ai_commands:
 		return _queue_ai_candidate(army, candidate)
 	if candidate.kind == ActionCandidate.Kind.HOLD:
@@ -11645,6 +11844,7 @@ func _advance_travelling_armies() -> Array[Army]:
 	#    导致相向而行的两军错身穿过、永不野战交火。故推进与到达必须分离。
 	var holding_arrivals: Array[Army] = []
 	for army in state.armies:
+		_note_external_succession_intrusion(army)
 		if not _is_travelling(army) or army.size <= 0:
 			continue   # FIGHTING 军队冻结在原地，不推进
 		var was_encounter_blocked := army.encounter_blocked
@@ -11664,6 +11864,18 @@ func _advance_travelling_armies() -> Array[Army]:
 				army.move_progress = army.hold_target_progress
 				holding_arrivals.append(army)
 	return holding_arrivals
+
+
+func _note_external_succession_intrusion(army: Army) -> void:
+	if army.size <= 0 or state.succession_conflicts.is_empty():
+		return
+	for value in state.succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if not conflict.launched() or conflict.pending_outcome != SuccessionConflict.Outcome.NONE or conflict.side_for(army.id) > 0 or not state.is_enemy(conflict.nation_id, army.owner_nation):
+			continue
+		var node := army.current_city_node()
+		if node >= 0 and state.administrative_center_of(node) == conflict.capital_city_id:
+			conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
 
 
 func _arrive_retreating_armies() -> void:
@@ -11815,6 +12027,11 @@ func _arrive_at_node(army: Army) -> void:
 		return
 
 	var city := state.cities[arrived]
+	for value in state.succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if conflict.launched() and conflict.side_for(army.id) == 0 and state.is_enemy(conflict.nation_id, army.owner_nation) and state.administrative_center_of(arrived) == conflict.capital_city_id:
+			conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
+	_update_succession_conflicts()
 	if army.ai_action == ActionCandidate.Kind.RETREAT and army.campaign_front_id < 0:
 		army.location_city = arrived
 		army.move_from = arrived
@@ -12033,7 +12250,7 @@ func _detect_encounters() -> void:
 				var y: Army = group[j]
 				if x.state == Army.State.RETREATING and y.state == Army.State.RETREATING:
 					continue   # 仅两支溃逃军都无主动交战意图；驻防军可截击溃逃军
-				if not state.is_enemy(x.owner_nation, y.owner_nation):
+				if not state.armies_hostile(x, y):
 					continue
 				var px := group_positions[i]
 				var py := group_positions[j]
@@ -12158,6 +12375,9 @@ func _detect_encounters() -> void:
 ## 归侧战线：与本军同 nation 的一侧的 contact_dist（同国增援从己方后方接近己方战线）。
 ## 若无法判定同侧（第三国/两侧皆异族），取两战线中较近者兜底（一般由 _block_passthrough 拦截）。
 func _can_join_field_contact(army: Army, battle: Battle, edge: Edge) -> bool:
+	var conflict := _succession_battle_context(battle)
+	if conflict != null and conflict.side_for(army.id) == 0:
+		return false
 	var length := float(maxi(edge.distance, 1))
 	var my_norm := _norm_pos(army, edge)
 	var line_a := clampf(battle.contact_dist_a / length, 0.0, 1.0)
@@ -12241,6 +12461,13 @@ func _block_passthrough() -> void:
 ## - side_b 否则是同一战争阵营的敌对挑战者共同体；
 ## - 与当前围城无敌对关系的无关方撤回。
 func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
+	var internal := _succession_city_context(city.id)
+	if internal != null and internal.side_for(attacker.id) == 0:
+		if state.financial_nation_of(attacker.owner_nation) == internal.nation_id:
+			_settle_idle(attacker, city.id)
+			return
+		internal.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
+		_update_succession_conflicts()
 	var siege := _siege_battle_of(city)
 	if siege == null and not state.is_enemy(attacker.owner_nation, city.owner_nation):
 		_retreat_to_friendly(attacker)
@@ -12251,8 +12478,8 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 		if defenders.is_empty() and city.garrison_manpower <= 0:
 			_capture_city(attacker, city)
 			return
-		# 弱攻不会自动撤离：真实守军清空后仍可维持封锁，等待增援或
-		# 断粮使 R 下降；只有到场有效兵力达到 R 才攻击虚拟守军。
+		# 弱攻不会自动撤离：兵力不足时维持封锁，当前守军会缓慢下降，
+		# 直到下一轮按新的守军数量计算出的既有 R 可以被满足。
 		siege = state.new_battle(Battle.Kind.SIEGE)
 		siege.edge = edge
 		siege.city = city
@@ -12401,10 +12628,7 @@ func _siege_city_defenders(
 				Army.State.RECOVERING,
 			]
 			or army.combat_morale() <= Combat.ARMY_ROUT_THRESHOLD
-			or not _nation_defends_city(
-				army.owner_nation,
-				city
-			)
+			or not state.army_defends_city(army, city.id)
 			or not army.is_at_city_node(city.id)
 		):
 			continue
@@ -12516,7 +12740,7 @@ func _sync_battle_ruler_modifiers(battle: Battle) -> void:
 		for army_value in side:
 			var army: Army = army_value
 			army.funding_multiplier = (
-				Army.funding_from_payment(state.nations[army.owner_nation].military_payment_ratio)
+				Army.funding_from_payment(state.nations[state.financial_nation_of(army.owner_nation)].military_payment_ratio)
 				if army.owner_nation >= 0 and army.owner_nation < state.nations.size()
 				else 1.0
 			)
@@ -12533,7 +12757,7 @@ func _sync_battle_ruler_modifiers(battle: Battle) -> void:
 				army.ruler_defense_multiplier = 1.0
 				army.ruler_morale_multiplier = 1.0
 				continue
-			var ruler := state.nations[army.owner_nation]
+			var ruler: Variant = state.military_profile_for_army(army)
 			army.ruler_attack_multiplier = maxf(
 				RulerProfile.attack_multiplier(ruler), 0.1
 			)
@@ -12650,8 +12874,8 @@ func _advance_siege(
 		_finish_campaign_reports_for_battle(battle)
 		return
 
-	# 阶段 2：封锁。到场有效兵力不足 R 时不攻击守军，但围城对象保持
-	# 活跃，因此城市继续断粮，增援也仍可加入。
+	# 阶段 2：封锁。只要当前围城军尚未达到既有 R 门槛，就削弱城市
+	# 的当前守军；下一轮重新读取守军并计算 R，不另设封锁门槛。
 	var attacker_id := battle.siege_attacker_nation
 	if attacker_id < 0 and not battle.side_a.is_empty():
 		attacker_id = battle.side_a[0].owner_nation
@@ -12664,6 +12888,10 @@ func _advance_siege(
 		false
 	)
 	if _siege_assault_manpower(battle) < requirement:
+		_apply_blockade_garrison_attrition(battle)
+		if battle.finished:
+			_finish_campaign_reports_for_battle(battle)
+			return
 		battle.finished = false
 		battle.winner_side = 0
 		battle.side_b_defends_city = false
@@ -12719,7 +12947,7 @@ func _evacuate_unfit_city_defenders(city: City, field_battle: Battle = null) -> 
 		if (
 			army.size <= 0
 			or not army.is_at_city_node(city.id)
-			or not _nation_defends_city(army.owner_nation, city)
+			or not state.army_defends_city(army, city.id)
 			or army.state == Army.State.RETREATING or participants.has(army)
 			or (
 				army.state != Army.State.RECOVERING
@@ -12874,6 +13102,10 @@ func _attach_city_garrison(battle: Battle) -> Army:
 			clampf(battle.city.garrison_supply_ratio, 0.0, 1.0)
 		)
 	)
+	var conflict := _succession_city_context(battle.city.id)
+	if conflict != null and battle.city.id == conflict.capital_city_id:
+		garrison.city_garrison_combat_multiplier /= maxf(battle.city.ruler_city_defense_multiplier, 0.1)
+		garrison.city_garrison_combat_multiplier *= RulerProfile.city_defense_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.crown_person_id))
 	garrison.state = Army.State.FIGHTING
 	garrison.battle_id = battle.id
 	garrison.location_city = battle.city.id
@@ -13149,6 +13381,9 @@ func _resume_after_battle(army: Army) -> void:
 func _join_field_battle(battle: Battle, army: Army, edge: Edge) -> void:
 	if battle.finished or battle.has_army(army) or battle.side_a.is_empty() or battle.side_b.is_empty():
 		return
+	var conflict := _succession_battle_context(battle)
+	if conflict != null and conflict.side_for(army.id) == 0:
+		return
 	var na := battle.side_a[0].owner_nation
 	var nb := battle.side_b[0].owner_nation
 	var target := 0
@@ -13199,6 +13434,9 @@ func _join_field_battle(battle: Battle, army: Army, edge: Edge) -> void:
 
 
 func _enter_battle(battle: Battle, army: Army, side: int) -> void:
+	var conflict := _succession_battle_context(battle)
+	if conflict != null and conflict.side_for(army.id) == 0 and not army.is_city_garrison:
+		return
 	if battle.finished or battle.has_army(army):
 		return
 	if army.state == Army.State.FIGHTING and army.battle_id >= 0 and army.battle_id != battle.id:
@@ -13271,6 +13509,15 @@ func _capture_city(
 	if owner_override >= 0:
 		claimant = owner_override
 	if claimant < 0 or claimant >= state.nations.size():
+		return
+	var conflict := _succession_city_context(city.id)
+	if conflict != null and ((city.id == conflict.capital_city_id and claimant == conflict.rebel_nation_id) or (city.id == conflict.camp_city_id and claimant == conflict.nation_id)):
+		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
+			return
+		conflict.pending_outcome = SuccessionConflict.Outcome.CROWN_CHANGED if city.id == conflict.capital_city_id else SuccessionConflict.Outcome.SUPPRESSED
+		if city.id == conflict.camp_city_id:
+			state.transfer_city_control(city.id, conflict.nation_id, -1, GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL, "succession_camp_taken")
+		_stop_succession_orders(conflict)
 		return
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
@@ -13353,6 +13600,8 @@ func _capture_city(
 						territory_changed
 						or bool(defection_result.get("changed", false))
 					)
+
+
 					for changed_city_value in defection_result.get(
 						"changed_city_ids", []
 					):
@@ -13461,6 +13710,27 @@ func _capture_city(
 		# 普通战争的两跳领土转移、投降已在上面的原子分支完成。
 		# 和平藩王不整国投降；原子领土事务已同步处理迁都、共享粮仓
 		# 与派生状态。若已经失去最后一城，日末再清理其宗藩记录。
+
+
+func _apply_blockade_garrison_attrition(battle: Battle) -> void:
+	if (
+		battle == null
+		or battle.finished
+		or battle.kind != Battle.Kind.SIEGE
+		or battle.city == null
+		or battle.city.garrison_manpower <= 0
+		or battle.uses_field_combat_rules()
+	):
+		return
+	var current := maxi(battle.city.garrison_manpower, 0)
+	var loss := maxi(1, int(ceil(float(current) * BLOCKADE_GARRISON_ATTRITION_RATE)))
+	var remaining := maxi(current - loss, 0)
+	if remaining == current:
+		return
+	battle.city.garrison_manpower = remaining
+	state.garrison_revision += 1
+	if remaining <= 0:
+		_complete_siege_capture(battle)
 func _occupation_claimant_for_army(
 	army: Army,
 	target_city: City = null
@@ -13567,7 +13837,7 @@ func _check_victory() -> void:
 	for n in state.nations:
 		var has_city := has_land_city[n.id] != 0
 		n.alive = has_city
-		if has_city:
+		if has_city and not n.succession_identity:
 			alive_nations.append(n.id)
 	if alive_nations.size() == 1:
 		state.winner = alive_nations[0]
@@ -13580,10 +13850,7 @@ func _settle_idle(army: Army, city_id: int) -> void:
 	if (
 		city_id >= 0
 		and city_id < state.cities.size()
-		and not state.has_military_access(
-			army.owner_nation,
-			state.cities[city_id].owner_nation
-		)
+		and not state.army_may_station(army, city_id)
 	):
 		_start_morale_retreat_from_city(
 			army,
@@ -13670,10 +13937,7 @@ func _evict_stranded_hostile_armies() -> void:
 		var node := army.current_city_node()
 		if node < 0 or node >= state.cities.size():
 			continue
-		if state.has_military_access(
-			army.owner_nation,
-			state.cities[node].owner_nation
-		):
+		if state.army_may_station(army, node):
 			continue
 		_start_morale_retreat_from_city(army, node, node)
 
@@ -13912,9 +14176,16 @@ func _edge_key_of(a: int, b: int) -> int:
 ## 移除 size<=0 的军队，并释放它们占用的边。
 func _purge_dead_armies() -> void:
 	var survivors: Array[Army] = []
+	var living_challengers := {}
 	for army in state.armies:
 		if army.size > 0:
 			survivors.append(army)
+			if state.is_succession_identity(army.owner_nation):
+				living_challengers[army.owner_nation] = true
 		else:
 			_release_edge(army)   # 幂等释放
 	state.armies = survivors
+	for value in state.succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if conflict.launched() and conflict.pending_outcome == SuccessionConflict.Outcome.NONE and not living_challengers.has(conflict.rebel_nation_id):
+			conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED

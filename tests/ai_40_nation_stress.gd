@@ -4,6 +4,7 @@ extends SceneTree
 const STRESS_NATION_COUNT: int = 40
 const DEFAULT_DAYS: int = 365
 const DEFAULT_SEED: int = 12345
+const SuccessionAudit = preload("res://tests/succession_audit.gd")
 
 
 func _init() -> void:
@@ -147,7 +148,7 @@ func _run_case(
 				alliance_pairs += 1
 	var alive := 0
 	for nation in state.nations:
-		if nation.alive:
+		if nation.alive and not nation.succession_identity:
 			alive += 1
 	var result := {
 		"ok": invariant_error.is_empty(),
@@ -160,6 +161,7 @@ func _run_case(
 		"cities": state.cities.size(),
 		"land_cities": state.land_cities().size(),
 		"largest_territory": _largest_territory_report(state),
+		"succession": SuccessionAudit.inspect(state),
 		"initial_land_min": initial_land_counts.min(),
 		"initial_land_max": initial_land_counts.max(),
 		"initial_armies": initial_armies,
@@ -278,6 +280,9 @@ func _invariant_error(
 ) -> String:
 	if state.nations.is_empty():
 		return "没有生成国家"
+	var succession := SuccessionAudit.inspect(state)
+	if not succession.errors.is_empty():
+		return str(succession.errors[0])
 	for pair_value in state.campaign_pairs.values():
 		var pair := pair_value as CoalitionCampaignPair
 		if pair.battlefields.size() > CoalitionCampaignPair.MAX_BATTLEFIELDS:
@@ -516,6 +521,7 @@ func _print_case(result: Dictionary) -> void:
 		]
 	)
 	var territory: Dictionary = result["largest_territory"]
+	print("  SUCCESSION_AUDIT %s" % str(result.succession))
 	print("  largest_power root=%d name=%s land=%d/%d territory_share=%.2f%% direct=%d vassal=%d basis=peaceful_suzerainty_land_cities" % [
 		territory.root_nation_id, territory.name, territory.land_cities,
 		territory.total_land_cities, float(territory.share) * 100.0,

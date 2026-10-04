@@ -17,6 +17,7 @@ const MIN_MORALE_DENOMINATOR: float = 1.0
 
 var id: int = 0
 var owner_nation: int = -1
+var political_person_id: int = -1
 
 var size: int = 0                          ## 人数
 var max_size: int = DEFAULT_MAX_SIZE       ## 满编人数上限

@@ -4,6 +4,7 @@ extends SceneTree
 const SEEDS: Array[int] = [12345, 23456, 34567, 45678]
 const DAYS: int = 1095
 const FORCE_STRUCTURE_RECONCILE_DAYS: int = 30
+const SuccessionAudit = preload("res://tests/succession_audit.gd")
 
 
 func _init() -> void:
@@ -159,10 +160,7 @@ func _init() -> void:
 					army.size > 0
 					and node_city_id >= 0
 					and node_city_id < state.cities.size()
-					and not state.has_military_access(
-						army.owner_nation,
-						state.cities[node_city_id].owner_nation
-					)
+					and not state.army_may_station(army, node_city_id)
 				):
 					var hostile_battle := state.battle_by_id(
 						army.battle_id
@@ -638,8 +636,11 @@ func _init() -> void:
 		print("  PAIR_CAMPAIGN_AUDIT overfull_pairs=%d duplicate_defenses=%d" % [pair_violations, duplicate_defenses])
 		print("  RESOURCE_AUDIT shortage_army_days=%d arrears_nation_months=%d court_due=%d court_paid=%d payment_mean=%.4f payment_min=%.4f forecast=%s" % [shortage_army_days, arrears_nation_months, court_due, court_paid, payment_total / maxi(payment_samples, 1), payment_min, str(ResourceForecastRules.profile())])
 		print("  BATTLE_BINDING_AUDIT errors=%d first=%s" % [battle_binding_errors, first_battle_binding_error])
+		var succession := SuccessionAudit.inspect(state)
+		print("  SUCCESSION_AUDIT %s" % str(succession))
 		if (
 			ordered == 0
+			or not succession.errors.is_empty()
 			or cooldown_violations > 0 or duplicate_bindings > 0 or pair_violations > 0 or duplicate_defenses > 0
 			or illegal_regional_declarations > 0
 			or invalid > 0

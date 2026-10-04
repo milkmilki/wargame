@@ -33,7 +33,7 @@ static func network_fingerprint(
 		state.diplomacy_revision,
 	]
 	for owner in state.nations:
-		if not state.has_military_access(nation_id, owner.id):
+		if not state.has_logistics_access(nation_id, owner.id):
 			continue
 		result.append(-1)
 		result.append(owner.id)
@@ -44,7 +44,7 @@ static func network_fingerprint(
 			result.append(-3)
 			for capital_id in state.food_pool_relay_capitals(owner.id):
 				result.append(capital_id)
-				result.append(1 if besieged.has(capital_id) else 0)
+				result.append(1 if besieged.has(capital_id) and not state.succession_supply_city(capital_id) else 0)
 	result.append(-2)
 	var enemy_keys := enemy_edges.keys()
 	enemy_keys.sort()
@@ -61,7 +61,7 @@ static func warehouse_availability(
 	for owner in state.nations:
 		var usable: Array[int] = []
 		for warehouse in state.warehouse_cities_of(owner.id):
-			if warehouse.food_storage > 0 and not besieged.has(warehouse.id):
+			if warehouse.food_storage > 0 and (not besieged.has(warehouse.id) or state.succession_supply_city(warehouse.id)):
 				usable.append(warehouse.id)
 		usable.sort()
 		result[owner.id] = usable

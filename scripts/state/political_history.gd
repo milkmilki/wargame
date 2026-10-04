@@ -98,6 +98,8 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		(snapshot["recognized_city_owners"] as PackedInt32Array).duplicate()
 	)
 	_view_state.winner = int(snapshot["winner"])
+	_view_state.family_trees = (snapshot["family_trees"] as Dictionary).duplicate(true)
+	_view_state.set_meta("historical_prince_reports", (snapshot["prince_reports"] as Dictionary).duplicate(true))
 
 	var owners: PackedInt32Array = snapshot["city_owners"]
 	for city_id in range(_view_state.cities.size()):
@@ -119,6 +121,16 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 			if nation_id < strategic_region_anchors.size() else -1
 		)
 		var nation := _view_state.nations[nation_id]
+		var political: Dictionary = (snapshot["nation_politics"] as Dictionary).get(nation_id, {})
+		if political.is_empty():
+			nation.prince_person_ids.clear()
+			nation.crown_prince_person_id = -1
+			nation.ruler_person_id = -1
+			nation.family_tree_id = -1
+			nation.capital_city_id = -1
+		for key in political:
+			var value = political[key]
+			nation.set(key, value.duplicate(true) if value is Array or value is Dictionary else value)
 		nation.military_payment_ratio = payment_ratios[nation_id] if nation_id < payment_ratios.size() else 1.0
 		nation.last_court_expense_rate = court_rates[nation_id] if nation_id < court_rates.size() else 0.0
 		nation.last_court_expense_due = court_due[nation_id] if nation_id < court_due.size() else 0
@@ -185,6 +197,9 @@ func _capture(game_state: GameState) -> void:
 	var court_due := PackedInt32Array()
 	var court_paid := PackedInt32Array()
 	var payment_ratios := PackedFloat32Array()
+	var nation_politics := {}
+	var prince_reports := {}
+	var military := PrincePolitics.military_index(game_state)
 	alive.resize(game_state.nations.size())
 	for nation_id in range(game_state.nations.size()):
 		alive[nation_id] = 1 if game_state.nations[nation_id].alive else 0
@@ -193,8 +208,18 @@ func _capture(game_state: GameState) -> void:
 		court_due.append(game_state.nations[nation_id].last_court_expense_due)
 		court_paid.append(game_state.nations[nation_id].last_court_expense_paid)
 		payment_ratios.append(game_state.nations[nation_id].military_payment_ratio)
+		var nation := game_state.nations[nation_id]
+		var political := {}
+		for key in ["ruler_name", "ruler_archetype", "ruler_traits", "ruler_person_id", "ruler_revision", "ruler_started_day", "family_tree_id", "prince_person_ids", "crown_prince_person_id", "succession_competition_closed", "succession_identity", "capital_city_id"]:
+			var value = nation.get(key)
+			political[key] = value.duplicate(true) if value is Array or value is Dictionary else value
+		nation_politics[nation_id] = political
+		prince_reports[nation_id] = PrincePolitics.report(game_state, nation_id, military.get(nation_id, {}))
 	_snapshots.append({
 		"day": game_state.day,
+		"family_trees": game_state.family_trees.duplicate(true),
+		"nation_politics": nation_politics,
+		"prince_reports": prince_reports,
 		"month": game_state.month,
 		"ownership_revision": game_state.ownership_revision,
 		"diplomacy_revision": game_state.diplomacy_revision,
@@ -228,5 +253,6 @@ static func _copy_script_object(source: Object) -> Object:
 		if (int(property["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0:
 			continue
 		var name := StringName(property["name"])
-		copy.set(name, source.get(name))
+		var value = source.get(name)
+		copy.set(name, value.duplicate(true) if value is Array or value is Dictionary else value)
 	return copy

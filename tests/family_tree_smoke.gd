@@ -21,6 +21,15 @@ func _run() -> void:
 		and int(members[sovereign.ruler_person_id]["parent_id"]) == root_id,
 		"initial_ruler_below_root"
 	)
+	for prince_id in sovereign.prince_person_ids:
+		_check(
+			FamilyTree.display_title(members[prince_id], prince_id, root_id) == "皇子",
+			"initial_prince_is_not_ancestor"
+		)
+	_check(
+		FamilyTree.display_title(members[root_id], root_id, root_id) == "先祖",
+		"placeholder_root_is_ancestor"
+	)
 
 	var subject := Nation.new()
 	subject.id = state.nations.size()
@@ -145,6 +154,6 @@ func _test_real_enfeoffment_hook() -> void:
 	_check(subject.family_tree_id == overlord.family_tree_id, "real_enfeoffment_shared_tree")
 	_check(
 		int(members[subject.ruler_person_id]["parent_id"])
-		== int(members[overlord.ruler_person_id]["parent_id"]),
-		"real_enfeoffment_sibling"
+		== overlord.ruler_person_id,
+		"first_generation_enfeoffment_reuses_son"
 	)

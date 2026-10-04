@@ -7151,6 +7151,7 @@ static func historical_nation_detail_sections(
 			"控制城市 %d" % game_state.cities_of(nation_id).size(),
 		]},
 		{"id": "history.diplomacy", "default_expanded": false, "title": "历史外交", "lines": relation_lines},
+		{"id": "history.princes", "default_expanded": false, "title": "历史皇子与军权", "lines": PrincePolitics.display_lines(game_state.get_meta("historical_prince_reports", {}).get(nation_id, PrincePolitics.report(game_state, nation_id)))},
 		{"id": "history.region", "default_expanded": true, "title": "历史经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
 		{"id": "history.finance", "default_expanded": false, "title": "历史月结", "lines": [
 			"军费支付率 %.0f%%    攻防系数 %.2f" % [game_state.nations[nation_id].military_payment_ratio * 100.0, Army.funding_from_payment(game_state.nations[nation_id].military_payment_ratio)],
@@ -7659,7 +7660,10 @@ static func nation_detail_sections(
 	var troops := 0
 	var army_count := 0
 	var command_count := 0
+	var political_troops := {}
 	for army in game_state.armies:
+		if game_state.financial_nation_of(army.owner_nation) == nation_id and army.size > 0:
+			political_troops[army.political_person_id] = int(political_troops.get(army.political_person_id, 0)) + army.size
 		if army.owner_nation == nation_id and army.size > 0:
 			troops += army.size
 			army_count += army_formation_count(army)
@@ -7749,6 +7753,7 @@ static func nation_detail_sections(
 		{"id": "nation.diplomacy", "default_expanded": false, "title": "外交与行动", "lines": diplomacy_lines},
 	]
 	sections.append_array(_nation_war_detail_sections(game_state, nation_id))
+	sections.append({"id": "nation.princes", "default_expanded": false, "title": "皇子与军权", "lines": PrincePolitics.display_lines(PrincePolitics.report(game_state, nation_id, political_troops))})
 	return sections
 
 

@@ -927,12 +927,12 @@ static func _build_regional_routes(
 	var result: Array[Dictionary] = []
 	for source_index in range(active_centers.size()):
 		var source := active_centers[source_index]
-		var nation_a := state.cities[source].owner_nation
+		var nation_a := state.financial_nation_of(state.cities[source].owner_nation)
 		for destination_index in range(
 			source_index + 1, active_centers.size()
 		):
 			var destination := active_centers[destination_index]
-			var nation_b := state.cities[destination].owner_nation
+			var nation_b := state.financial_nation_of(state.cities[destination].owner_nation)
 			var route := _derive_route(
 				state, graph, [source] as Array[int],
 				[destination] as Array[int], nation_a, nation_b,
@@ -3886,7 +3886,7 @@ static func _apply_trade_taxes(
 		for city_id in eligible:
 			var bonus := int(allocation.get(city_id, 0))
 			city_gold_bonus[city_id] += bonus
-			var owner := state.cities[city_id].owner_nation
+			var owner := state.financial_nation_of(state.cities[city_id].owner_nation)
 			if owner >= 0 and owner < nation_trade_gold.size():
 				nation_trade_gold[owner] += bonus
 				nation_trade_tax[owner] += bonus
@@ -3947,7 +3947,7 @@ static func _apply_wartime_trade_gold(
 			var city_id := int(city_value)
 			if city_id < 0 or city_id >= state.cities.size():
 				continue
-			var owner := state.cities[city_id].owner_nation
+			var owner := state.financial_nation_of(state.cities[city_id].owner_nation)
 			if owner < 0 or owner >= wartime.size() or wartime[owner] == 0:
 				continue
 			wartime_floor_sum[owner] += int(floor(
@@ -3981,7 +3981,7 @@ static func _apply_wartime_trade_gold(
 			var city_id := int(city_value)
 			if city_id < 0 or city_id >= state.cities.size():
 				continue
-			var owner := state.cities[city_id].owner_nation
+			var owner := state.financial_nation_of(state.cities[city_id].owner_nation)
 			var base_bonus := maxi(int(base_allocation[city_value]), 0)
 			var bonus := base_bonus
 			if owner >= 0 and owner < wartime.size() and wartime[owner] != 0:
@@ -4223,7 +4223,7 @@ static func projected_nation_monthly_food_demand(
 	for army in state.armies:
 		if (
 			army.size > 0
-			and army.owner_nation == nation_id
+			and state.financial_nation_of(army.owner_nation) == nation_id
 		):
 			projected += _projected_army_monthly_food_demand(army, nation)
 	return _nation_monthly_food_demand(nation, projected)

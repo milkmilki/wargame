@@ -3390,7 +3390,7 @@ static func _resource_forecast_inputs(state: GameState, cache: Dictionary) -> Ar
 	if not cache.has("monthly_gold_flows"):
 		cache.monthly_gold_flows = Simulation.monthly_gold_flows(state)
 	var flows: Array[Dictionary] = cache.monthly_gold_flows
-	var armies := ReinforcementRules.bucket_armies_by_nation(state)
+	var armies := ReinforcementRules.bucket_armies_by_nation(state, true)
 	var garrison_index := Simulation.build_garrison_index(state)
 	var conservative_index := garrison_index.duplicate()
 	var garrison_food := {}
@@ -4364,6 +4364,8 @@ static func _collect_peace_actions(
 		for b in range(a + 1, state.nations.size()):
 			if committed.has(a) or committed.has(b) or not state.is_enemy(a, b):
 				continue
+			if state.is_succession_identity(a) or state.is_succession_identity(b):
+				continue
 			if state.regional_rebellion_peace_locked(a, b):
 				continue
 			# 削藩内战不走普通议和：宗藩内战只能由明确政治结果（占首都通吃）终结。
@@ -4599,6 +4601,8 @@ static func _collect_alliance_actions(
 				or committed.has(b)
 				or not state.nations[a].alive
 				or not state.nations[b].alive
+				or state.nations[a].succession_identity
+				or state.nations[b].succession_identity
 				or state.relation_between(a, b)
 					!= GameState.DiplomaticRelation.NEUTRAL
 				or state.nations[a].war_preparation_target_nation >= 0
@@ -4714,7 +4718,7 @@ static func _collect_war_actions(
 	)
 	for nation_index in range(maxi(start_nation_index, 0), end_index):
 		var nation := state.nations[nation_index]
-		if committed.has(nation.id) or not nation.alive:
+		if committed.has(nation.id) or not nation.alive or nation.succession_identity:
 			continue
 		if nation.war_preparation_target_nation >= 0:
 			if collect_existing_preparations:
@@ -4779,7 +4783,7 @@ static func _collect_war_actions(
 			)
 		for target_id in bordering_nations:
 			var target := state.nations[target_id]
-			if committed.has(target.id) or not target.alive:
+			if committed.has(target.id) or not target.alive or target.succession_identity:
 				continue
 			var score := war_desire(
 				state,
@@ -5701,7 +5705,7 @@ static func _build_nation_aggregates(
 	for city in state.cities:
 		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
 			continue
-		(cities_by_nation[city.owner_nation] as Array[City]).append(
+		(cities_by_nation[state.financial_nation_of(city.owner_nation)] as Array[City]).append(
 			city
 		)
 	for army in state.armies:

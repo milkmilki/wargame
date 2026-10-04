@@ -70,7 +70,7 @@ static func _national_base_gold(
 			)
 		):
 			continue
-		result[city.owner_nation] += maxi(city.gold_per_month, 0)
+		result[game_state.financial_nation_of(city.owner_nation)] += maxi(city.gold_per_month, 0)
 	return result
 
 
@@ -149,7 +149,9 @@ static func capital_national_gold_addition(
 		return 0
 	if national_base_gold < 0:
 		national_base_gold = 0
-		for owned_city in game_state.land_cities_of(city.owner_nation):
+		for owned_city in game_state.land_cities():
+			if game_state.financial_nation_of(owned_city.owner_nation) != city.owner_nation:
+				continue
 			if (
 				respect_administration
 				and not game_state.city_administrative_output_enabled(owned_city.id)
@@ -170,7 +172,7 @@ static func city_governance_output_multiplier(
 		or city == null
 		or city.owner_nation < 0
 		or city.owner_nation >= game_state.nations.size()
-		or not game_state.is_vassal(city.owner_nation)
+		or not game_state.is_vassal(game_state.financial_nation_of(city.owner_nation))
 	):
 		return 1.0
 	return VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER

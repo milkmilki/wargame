@@ -14,12 +14,13 @@ static func monthly_reinforcement_cap(army: Army) -> int:
 	return maxi(int(ceil(float(army.max_size) * 0.10)), 1)
 
 
-static func bucket_armies_by_nation(state: GameState) -> Dictionary:
+static func bucket_armies_by_nation(state: GameState, financial: bool = false) -> Dictionary:
 	var armies_by_nation := {}
 	for army in state.armies:
-		if not armies_by_nation.has(army.owner_nation):
-			armies_by_nation[army.owner_nation] = [] as Array[Army]
-		(armies_by_nation[army.owner_nation] as Array[Army]).append(army)
+		var owner := state.financial_nation_of(army.owner_nation) if financial else army.owner_nation
+		if not armies_by_nation.has(owner):
+			armies_by_nation[owner] = [] as Array[Army]
+		(armies_by_nation[owner] as Array[Army]).append(army)
 	return armies_by_nation
 
 

@@ -864,7 +864,7 @@ static func build_supply_network(
 	)
 	var owner_ids: Array = []
 	for owner in state.nations:
-		if state.has_military_access(nation_id, owner.id):
+		if state.has_logistics_access(nation_id, owner.id):
 			owner_ids.append(owner.id)
 	owner_ids.sort_custom(func(a, b) -> bool:
 		return EquivariantOrder.nation_less(
@@ -892,7 +892,7 @@ static func build_supply_network(
 		for warehouse in warehouses:
 			if (
 				warehouse.food_storage <= 0
-				or state.city_under_siege(warehouse.id)
+				or (state.city_under_siege(warehouse.id) and not state.succession_supply_city(warehouse.id))
 			):
 				continue
 			result.append({
@@ -904,7 +904,7 @@ static func build_supply_network(
 					nation_id,
 					blocked_enemy_edges,
 					true,
-					relay_origins
+					relay_origins, true
 				)["dist"],
 			})
 	return result
@@ -921,8 +921,8 @@ static func supply_sources_from_network(
 	var start_city := state.cities[start]
 	if (
 		not army.on_edge
-		and state.city_under_siege(start)
-		and state.has_military_access(
+		and state.city_under_siege(start) and not state.succession_supply_city(start)
+		and state.has_logistics_access(
 			army.owner_nation,
 			start_city.owner_nation
 		)
@@ -956,7 +956,7 @@ static func supply_sources_from_network(
 		if edge == null:
 			loss = dist[start]
 		else:
-			if state.has_military_access(
+			if state.has_logistics_access(
 				army.owner_nation,
 				state.cities[army.move_from].owner_nation
 			):
@@ -965,7 +965,7 @@ static func supply_sources_from_network(
 					progress * edge_loss
 						+ dist[army.move_from]
 				)
-			if state.has_military_access(
+			if state.has_logistics_access(
 				army.owner_nation,
 				state.cities[army.move_to].owner_nation
 			):
@@ -1227,7 +1227,8 @@ static func _supply_loss_field(
 	nation_id: int,
 	blocked_enemy_edges: Dictionary = {},
 	blocked_edges_ready: bool = false,
-	extra_zero_origins: Array[int] = [] as Array[int]
+	extra_zero_origins: Array[int] = [] as Array[int],
+	logistics: bool = false
 ) -> Dictionary:
 	var city_count := state.cities.size()
 	var dist := PackedFloat64Array()
@@ -1295,7 +1296,7 @@ static func _supply_loss_field(
 				u,
 				v,
 				edge,
-				local_crossing_transit_docks
+				local_crossing_transit_docks, logistics
 			):
 				continue
 			if blocked_enemy_edges.has(
@@ -1327,14 +1328,18 @@ static func _local_crossing_or_accessible_step(
 	city_a: int,
 	city_b: int,
 	edge: Edge,
-	transit_docks: Dictionary
+	transit_docks: Dictionary,
+	logistics: bool = false
 ) -> bool:
 	var a_is_transit := transit_docks.has(city_a)
 	var b_is_transit := transit_docks.has(city_b)
+	if logistics and not a_is_transit and not b_is_transit:
+		return state.has_logistics_access(nation_id, state.cities[city_a].owner_nation) and state.has_logistics_access(nation_id, state.cities[city_b].owner_nation)
 	if a_is_transit or b_is_transit:
 		var dock_id := city_a if a_is_transit else city_b
 		if state.is_enemy(
-			nation_id, state.cities[dock_id].owner_nation
+			state.financial_nation_of(nation_id) if logistics else nation_id,
+			state.financial_nation_of(state.cities[dock_id].owner_nation) if logistics else state.cities[dock_id].owner_nation
 		):
 			return false
 		var bank_id := city_b if a_is_transit else city_a
@@ -1342,9 +1347,8 @@ static func _local_crossing_or_accessible_step(
 			edge != null
 			and edge.kind == Edge.Kind.LANDING
 			and not state.cities[bank_id].is_dock
-			and state.has_military_access(
-				nation_id, state.cities[bank_id].owner_nation
-			)
+			and (state.has_logistics_access(nation_id, state.cities[bank_id].owner_nation)
+				if logistics else state.has_military_access(nation_id, state.cities[bank_id].owner_nation))
 		)
 	return (
 		state.has_military_access(
@@ -1385,7 +1389,8 @@ static func _enemy_occupied_edge_keys(
 		return result
 	for army in state.armies:
 		if (
-			army.size <= 0
+			state.succession_identity_pair(army.owner_nation, nation_id)
+			or army.size <= 0
 			or not army.on_edge
 			or army.move_to == -1
 			or not state.is_enemy(

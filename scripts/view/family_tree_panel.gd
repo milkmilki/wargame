@@ -71,6 +71,18 @@ func _rebuild_relations() -> void:
 	for child in _relations.get_children():
 		_relations.remove_child(child)
 		child.queue_free()
+	var reports: Dictionary = _state.get_meta("historical_prince_reports", {})
+	var politics: Dictionary = reports.get(_nation_id, {})
+	if politics.is_empty():
+		politics = PrincePolitics.report(_state, _nation_id, PrincePolitics.military_index(_state).get(_nation_id, {}))
+	for line in PrincePolitics.display_lines(politics):
+		var label := Label.new()
+		label.text = line
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size.x = 210
+		label.add_theme_font_override("font", MapRenderer.create_ui_font())
+		label.add_theme_font_size_override("font_size", 14)
+		_relations.add_child(label)
 	var overlord := _state.overlord_of(_nation_id)
 	if overlord >= 0:
 		_add_relation("宗主", overlord)
@@ -372,7 +384,9 @@ class FamilyTreeCanvas extends Control:
 				MapRenderer.ACCENT_RED
 			)
 		var name := str(member.get("name", "？"))
-		var title_text := "先祖" if titles.is_empty() else " · ".join(titles)
+		var title_text := FamilyTree.display_title(
+			member, person_id, int(tree.get("root_person_id", -1))
+		)
 		draw_string(
 			font, rect.position + Vector2(10.0, 29.0), name,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20.0, 16,

@@ -3,7 +3,101 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 19
+const SCHEMA_VERSION: int = 20
+
+
+static func succession_validation_error(snapshot: Dictionary) -> String:
+	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
+		return "Incompatible native snapshot schema"
+	var nations: Dictionary = snapshot.get("nations", {})
+	var count := int(nations.get("count", -1))
+	for key in ["family_tree_ids", "ruler_person_ids", "crown_prince_ids", "competition_closed", "succession_identity", "ruler_archetypes", "ruler_revisions", "ruler_started_days", "ruler_traits"]:
+		if not nations.has(key) or nations[key].size() != count:
+			return "Invalid nation politics column: " + key
+	var offsets: PackedInt32Array = nations.get("prince_offsets", PackedInt32Array())
+	var ids: PackedInt32Array = nations.get("prince_ids", PackedInt32Array())
+	if offsets.size() != count + 1 or offsets[0] != 0 or offsets[count] != ids.size():
+		return "Invalid prince offsets"
+	var trees := {}
+	for tree in snapshot.get("family_trees", []):
+		var members := {}
+		for member in tree.members:
+			if members.has(member.id):
+				return "Duplicate family person"
+			members[member.id] = member
+		trees[tree.id] = members
+	for index in range(count):
+		if offsets[index] < 0 or offsets[index] > offsets[index + 1] or offsets[index + 1] > ids.size():
+			return "Invalid prince offset range"
+		var members: Dictionary = trees.get(nations.family_tree_ids[index], {})
+		var ruler := int(nations.ruler_person_ids[index])
+		if ruler >= 0 and not members.has(ruler):
+			return "Missing ruler person"
+		var crown := int(nations.crown_prince_ids[index])
+		var seen := {}
+		for position in range(offsets[index], offsets[index + 1]):
+			var person_id := ids[position]
+			if seen.has(person_id) or not members.has(person_id) or int(members[person_id].parent_id) != ruler:
+				return "Invalid prince person reference"
+			seen[person_id] = true
+		if crown >= 0 and not seen.has(crown):
+			return "Invalid crown prince reference"
+	var armies: Dictionary = snapshot.get("armies", {})
+	if not armies.has("political_person_id") or armies.political_person_id.size() != int(armies.get("count", -1)):
+		return "Invalid army political column"
+	var army_count := int(armies.get("count", -1))
+	for key in ["id", "owner"]:
+		if not armies.has(key) or armies[key].size() != army_count:
+			return "Invalid army reference column: " + key
+	var army_ids := {}
+	for position in range(army_count):
+		var army_id := int(armies.id[position])
+		if army_ids.has(army_id):
+			return "Duplicate army id"
+		army_ids[army_id] = true
+		var owner_id := int(armies.owner[position])
+		if owner_id < 0 or owner_id >= count:
+			return "Invalid army owner reference"
+		var patron_id := int(armies.political_person_id[position])
+		if patron_id < 0:
+			continue
+		var owner_members: Dictionary = trees.get(nations.family_tree_ids[owner_id], {})
+		if not owner_members.has(patron_id):
+			return "Invalid army political person reference"
+	var conflicts: Array = snapshot.get("succession_conflicts", [])
+	var conflict_nations := {}
+	var conflict_armies := {}
+	var cities: Dictionary = snapshot.get("cities", {})
+	var city_count := int(cities.get("count", -1))
+	for raw_conflict in conflicts:
+		if not raw_conflict is Dictionary:
+			return "Invalid succession conflict record"
+		var conflict: Dictionary = raw_conflict
+		var conflict_nation := int(conflict.get("nation_id", -1))
+		if conflict_nation < 0 or conflict_nation >= count or conflict_nations.has(conflict_nation):
+			return "Invalid succession conflict nation"
+		conflict_nations[conflict_nation] = true
+		for city_key in ["capital_city_id", "camp_city_id"]:
+			var city_id := int(conflict.get(city_key, -1))
+			if city_id < 0 or city_id >= city_count:
+				return "Invalid succession conflict city reference"
+		var rebel_id := int(conflict.get("rebel_nation_id", -1))
+		if rebel_id >= count or rebel_id == conflict_nation:
+			return "Invalid succession rebel identity reference"
+		if rebel_id >= 0 and not bool(nations.succession_identity[rebel_id]):
+			return "Succession rebel is not a temporary identity"
+		var conflict_members: Dictionary = trees.get(nations.family_tree_ids[conflict_nation], {})
+		for person_key in ["challenger_person_id", "crown_person_id"]:
+			var person_id := int(conflict.get(person_key, -1))
+			if person_id < 0 or not conflict_members.has(person_id):
+				return "Invalid succession conflict person reference"
+		for army_key in ["army_ids", "crown_army_ids"]:
+			for raw_army_id in conflict.get(army_key, []):
+				var conflict_army_id := int(raw_army_id)
+				if not army_ids.has(conflict_army_id) or conflict_armies.has(conflict_army_id):
+					return "Invalid succession conflict army reference"
+				conflict_armies[conflict_army_id] = true
+	return ""
 
 
 static func build(state: GameState) -> Dictionary:
@@ -30,6 +124,8 @@ static func build(state: GameState) -> Dictionary:
 		"next_family_person_id": state.next_family_person_id,
 		"family_revision": state.family_revision,
 		"family_trees": _build_family_trees(state),
+		"succession_conflicts": _build_succession_conflicts(state),
+		"succession_events": state.succession_events.duplicate(true),
 		"winner": state.winner,
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,
@@ -44,6 +140,21 @@ static func build(state: GameState) -> Dictionary:
 		"campaign_fronts": _build_campaign_fronts(state),
 		"campaign_pairs": _build_campaign_pairs(state),
 	}
+
+
+static func _build_succession_conflicts(state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var ids := state.succession_conflicts.keys()
+	ids.sort()
+	for nation_id in ids:
+		var conflict := state.succession_conflicts[nation_id] as SuccessionConflict
+		var record := {}
+		for property in conflict.get_property_list():
+			if (int(property.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE) != 0:
+				var value = conflict.get(property.name)
+				record[property.name] = value.duplicate(true) if value is Array or value is Dictionary else value
+		result.append(record)
+	return result
 
 
 static func _build_family_trees(state: GameState) -> Array[Dictionary]:
@@ -84,6 +195,15 @@ static func _build_nations(state: GameState) -> Dictionary:
 	var strategic_region_anchors := PackedInt32Array()
 	var family_tree_ids := PackedInt32Array()
 	var ruler_person_ids := PackedInt32Array()
+	var ruler_archetypes := PackedInt32Array()
+	var ruler_revisions := PackedInt32Array()
+	var ruler_started_days := PackedInt32Array()
+	var ruler_traits: Array[Array] = []
+	var crown_prince_ids := PackedInt32Array()
+	var prince_offsets := PackedInt32Array([0])
+	var prince_ids := PackedInt32Array()
+	var competition_closed := PackedByteArray()
+	var succession_identity := PackedByteArray()
 	var vassal_title_bases := PackedStringArray()
 	var gold := PackedInt32Array()
 	var manpower := PackedInt32Array()
@@ -124,6 +244,15 @@ static func _build_nations(state: GameState) -> Dictionary:
 		strategic_region_anchors.append(nation.strategic_region_anchor_city_id)
 		family_tree_ids.append(nation.family_tree_id)
 		ruler_person_ids.append(nation.ruler_person_id)
+		ruler_archetypes.append(nation.ruler_archetype)
+		ruler_revisions.append(nation.ruler_revision)
+		ruler_started_days.append(nation.ruler_started_day)
+		ruler_traits.append(nation.ruler_traits.duplicate())
+		crown_prince_ids.append(nation.crown_prince_person_id)
+		prince_ids.append_array(PackedInt32Array(nation.prince_person_ids))
+		prince_offsets.append(prince_ids.size())
+		competition_closed.append(int(nation.succession_competition_closed))
+		succession_identity.append(int(nation.succession_identity))
 		vassal_title_bases.append(nation.vassal_title_base)
 		gold.append(nation.treasury_gold)
 		manpower.append(nation.manpower_pool)
@@ -238,6 +367,15 @@ static func _build_nations(state: GameState) -> Dictionary:
 		"strategic_region_anchors": strategic_region_anchors,
 		"family_tree_ids": family_tree_ids,
 		"ruler_person_ids": ruler_person_ids,
+		"ruler_archetypes": ruler_archetypes,
+		"ruler_revisions": ruler_revisions,
+		"ruler_started_days": ruler_started_days,
+		"ruler_traits": ruler_traits,
+		"crown_prince_ids": crown_prince_ids,
+		"prince_offsets": prince_offsets,
+		"prince_ids": prince_ids,
+		"competition_closed": competition_closed,
+		"succession_identity": succession_identity,
 		"vassal_title_bases": vassal_title_bases,
 		"gold": gold,
 		"manpower": manpower,
@@ -512,6 +650,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 	var battle_id := PackedInt32Array()
 	var campaign_war_id := PackedInt32Array()
 	var campaign_front_id := PackedInt32Array()
+	var political_person_id := PackedInt32Array()
 	var path_offsets := PackedInt32Array([0])
 	var path_cities := PackedInt32Array()
 	var path_cursor := PackedInt32Array()
@@ -557,6 +696,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 		battle_id.append(army.battle_id)
 		campaign_war_id.append(army.campaign_war_id)
 		campaign_front_id.append(army.campaign_front_id)
+		political_person_id.append(army.political_person_id)
 		path_cities.append_array(PackedInt32Array(army.path))
 		path_offsets.append(path_cities.size())
 		path_cursor.append(0)
@@ -601,6 +741,7 @@ static func _build_armies(state: GameState) -> Dictionary:
 			"count": state.armies.size(),
 			"id": ids,
 			"owner": owner,
+			"political_person_id": political_person_id,
 			"size": size,
 			"max_size": max_size,
 			"speed_factor": speed_factor,

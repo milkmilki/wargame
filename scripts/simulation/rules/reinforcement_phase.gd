@@ -13,6 +13,7 @@ static func reinforce_nation(
 ) -> void:
 	var at_war := not state.wars_of(nation.id).is_empty()
 	var refill_candidates := _collect_refill_candidates(nation_armies, at_war)
+	refill_candidates = refill_candidates.filter(func(army: Army) -> bool: return not state.army_reserved_for_succession(army))
 	if refill_candidates.is_empty():
 		return
 	var protected_reserve := (

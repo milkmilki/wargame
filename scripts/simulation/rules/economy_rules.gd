@@ -46,7 +46,7 @@ static func _upkeep_by_nation(
 			or army.owner_nation >= field.size()
 		):
 			continue
-		field[army.owner_nation] += GameState.army_monthly_upkeep(army.size)
+		field[state.financial_nation_of(army.owner_nation)] += GameState.army_monthly_upkeep(army.size)
 	for nation in state.nations:
 		field[nation.id] = int(effective_upkeep.call(
 			state, nation.id, field[nation.id]
@@ -122,8 +122,9 @@ static func _add_city_income(
 	for city in state.cities:
 		if city.owner_nation < 0 or city.owner_nation >= result.size():
 			continue
-		result[city.owner_nation]["city_income"] = (
-			int(result[city.owner_nation]["city_income"])
+		var owner := state.financial_nation_of(city.owner_nation)
+		result[owner]["city_income"] = (
+			int(result[owner]["city_income"])
 			+ (
 				city_outputs[city.id]
 				if city.id >= 0 and city.id < city_outputs.size()

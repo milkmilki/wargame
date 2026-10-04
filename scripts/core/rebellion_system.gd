@@ -389,6 +389,8 @@ static func monthly_city_loyalty(
 		return _invalid_monthly_snapshot(city_id)
 	var city: City = state.cities[city_id]
 	var owner_id: int = city.owner_nation
+	if state.is_succession_identity(owner_id):
+		return _invalid_monthly_snapshot(city_id)
 	if not _valid_living_nation(state, owner_id):
 		return _invalid_monthly_snapshot(city_id)
 

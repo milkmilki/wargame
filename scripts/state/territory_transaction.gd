@@ -728,7 +728,7 @@ static func _plan_capitals(
 	planned_capitals.resize(nations.size())
 	planned_capitals.fill(-1)
 	for nation in nations:
-		if final_city_counts[nation.id] <= 0:
+		if final_city_counts[nation.id] <= 0 or nation.succession_identity:
 			continue
 		planned_capitals[nation.id] = int(select_capital.call(
 			nation.id,

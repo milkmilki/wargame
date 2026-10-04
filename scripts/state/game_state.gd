@@ -129,7 +129,7 @@ static func normalize_nation_color(color: Color) -> Color:
 func nation_monthly_military_upkeep(nation_id: int) -> int:
 	var total := 0
 	for army in armies:
-		if army.owner_nation == nation_id and army.size > 0:
+		if financial_nation_of(army.owner_nation) == nation_id and army.size > 0:
 			total += army_monthly_upkeep(army.size)
 	return total
 
@@ -146,6 +146,8 @@ var next_campaign_pair_id: int = 0
 var _campaign_pair_revision: Array[int] = []
 ## 王族谱共享真源；Nation 仅保存 tree/person id，避免独立后复制谱系。
 var family_trees: Dictionary = {}
+var succession_conflicts: Dictionary = {} # original nation -> SuccessionConflict
+var succession_events: Array[Dictionary] = []
 var next_family_tree_id: int = 0
 var next_family_person_id: int = 0
 var family_revision: int = 0
@@ -744,6 +746,8 @@ func _reset_world(world_seed: int) -> void:
 	edges.clear()
 	nations.clear()
 	family_trees.clear()
+	succession_conflicts.clear()
+	succession_events.clear()
 	next_family_tree_id = 0
 	next_family_person_id = 0
 	family_revision = 0
@@ -2823,6 +2827,12 @@ func coalition_campaign_components(
 ) -> Array[Dictionary]:
 	var participants_by_war := {}
 	for relation_key_value in war_relation_ids:
+		var internal := false
+		for conflict_value in succession_conflicts.values():
+			if int(war_relation_ids[relation_key_value]) == (conflict_value as SuccessionConflict).war_id:
+				internal = true
+		if internal:
+			continue
 		var war_id := int(war_relation_ids[relation_key_value])
 		if requested_war_id >= 0 and war_id != requested_war_id:
 			continue
@@ -3220,6 +3230,8 @@ func reinforce_city_garrisons_monthly() -> int:
 	for center_value in administrative_center_city_ids:
 		var center_id := int(center_value)
 		var city := cities[center_id]
+		if city_under_siege(center_id):
+			continue
 		var owner_id := city.owner_nation
 		if owner_id < 0 or owner_id >= nations.size():
 			continue
@@ -3319,7 +3331,7 @@ func city_administrative_output_enabled(city_id: int) -> bool:
 		center >= 0
 		and center < cities.size()
 		and city.owner_nation >= 0
-		and cities[center].owner_nation == city.owner_nation
+		and financial_nation_of(cities[center].owner_nation) == financial_nation_of(city.owner_nation)
 	)
 
 
@@ -4266,6 +4278,7 @@ func create_army(
 ) -> Army:
 	if (
 		nation_id < 0 or nation_id >= nations.size()
+		or is_succession_identity(nation_id)
 		or city_id < 0 or city_id >= cities.size()
 		or cities[city_id].owner_nation != nation_id
 		or size <= 0
@@ -4290,6 +4303,7 @@ func create_army(
 	army.move_from = city_id
 	army.state = Army.State.IDLE
 	armies.append(army)
+	PrincePolitics.assign_new_army(self, army)
 	return army
 
 
@@ -4527,7 +4541,94 @@ func _add_territorial_border_pair(
 
 
 func is_enemy(nation_a: int, nation_b: int) -> bool:
+	if succession_identity_pair(nation_a, nation_b):
+		return true
+	if is_succession_identity(nation_a) or is_succession_identity(nation_b):
+		return false
 	return relation_between(nation_a, nation_b) == DiplomaticRelation.WAR
+
+
+func is_succession_identity(nation_id: int) -> bool:
+	return nation_id >= 0 and nation_id < nations.size() and nations[nation_id].succession_identity
+
+
+func is_external_enemy(a: int, b: int) -> bool:
+	return not is_succession_identity(a) and not is_succession_identity(b) and is_enemy(a, b)
+
+
+func succession_conflict_for_identity(nation_id: int) -> SuccessionConflict:
+	if succession_conflicts.has(nation_id):
+		return succession_conflicts[nation_id]
+	for value in succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if conflict.rebel_nation_id == nation_id:
+			return conflict
+	return null
+
+
+func succession_identity_pair(a: int, b: int) -> bool:
+	var conflict := succession_conflict_for_identity(a)
+	return conflict != null and conflict.launched() and ((a == conflict.nation_id and b == conflict.rebel_nation_id) or (b == conflict.nation_id and a == conflict.rebel_nation_id))
+
+
+func financial_nation_of(nation_id: int) -> int:
+	if not is_succession_identity(nation_id):
+		return nation_id
+	var conflict := succession_conflict_for_identity(nation_id)
+	return conflict.nation_id if conflict != null else nation_id
+
+
+func army_reserved_for_succession(army: Army) -> bool:
+	var conflict := succession_conflict_for_identity(army.owner_nation)
+	return conflict != null and conflict.side_for(army.id) != 0
+
+
+func armies_hostile(a: Army, b: Army) -> bool:
+	if succession_identity_pair(a.owner_nation, b.owner_nation):
+		var conflict := succession_conflict_for_identity(a.owner_nation)
+		var side_a := conflict.side_for(a.id)
+		var side_b := conflict.side_for(b.id)
+		return side_a > 0 and side_b > 0 and side_a != side_b
+	return is_enemy(a.owner_nation, b.owner_nation)
+
+
+func army_defends_city(army: Army, city_id: int) -> bool:
+	for value in succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if not conflict.launched() or city_id not in [conflict.capital_city_id, conflict.camp_city_id]:
+			continue
+		return conflict.side_for(army.id) == (2 if city_id == conflict.capital_city_id else 1)
+	return has_military_access(army.owner_nation, cities[city_id].owner_nation)
+
+
+func army_may_station(army: Army, city_id: int) -> bool:
+	if city_id < 0 or city_id >= cities.size():
+		return false
+	var conflict := succession_conflict_for_identity(cities[city_id].owner_nation)
+	if conflict != null and conflict.launched() and conflict.side_for(army.id) == 0 and army.owner_nation == conflict.nation_id:
+		return true
+	return has_military_access(army.owner_nation, cities[city_id].owner_nation)
+
+
+func military_profile_for_army(army: Army) -> Variant:
+	var conflict := succession_conflict_for_identity(army.owner_nation)
+	if conflict != null and conflict.launched():
+		var side := conflict.side_for(army.id)
+		if side != 0:
+			return PrincePolitics.profile(self, conflict.nation_id, conflict.challenger_person_id if side == 1 else conflict.crown_person_id)
+	return nations[army.owner_nation]
+
+
+func has_logistics_access(traveler: int, owner: int) -> bool:
+	return has_military_access(financial_nation_of(traveler), financial_nation_of(owner))
+
+
+func succession_supply_city(city_id: int) -> bool:
+	for value in succession_conflicts.values():
+		var conflict := value as SuccessionConflict
+		if conflict.launched() and city_id in [conflict.capital_city_id, conflict.camp_city_id]:
+			return true
+	return false
 
 
 func is_allied(nation_a: int, nation_b: int) -> bool:
@@ -4554,6 +4655,8 @@ func has_military_access(traveler_nation: int, territory_owner: int) -> bool:
 func relation_between(nation_a: int, nation_b: int) -> int:
 	if nation_a == nation_b:
 		return DiplomaticRelation.ALLIED
+	if is_succession_identity(nation_a) or is_succession_identity(nation_b):
+		return DiplomaticRelation.WAR if succession_identity_pair(nation_a, nation_b) else DiplomaticRelation.NEUTRAL
 	if (
 		nation_a < 0
 		or nation_b < 0
@@ -4723,6 +4826,8 @@ func transfer_army_ownership(army: Army, new_owner_id: int) -> bool:
 		army.ai_target_city = -1
 		army.ai_order_until_day = day
 	army.owner_nation = new_owner_id
+	if not succession_identity_pair(new_owner_id, financial_nation_of(new_owner_id)) and not army_reserved_for_succession(army):
+		army.political_person_id = -1
 	army.funding_multiplier = Army.funding_from_payment(nations[new_owner_id].military_payment_ratio)
 	army.battle_group_id = -1
 	army.ruler_attack_multiplier = (
@@ -4752,7 +4857,8 @@ func nation_participates_in_war_id(nation_id: int, war_id: int) -> bool:
 
 func can_declare_war(nation_a: int, nation_b: int) -> bool:
 	return (
-		nation_a != nation_b
+		not is_succession_identity(nation_a) and not is_succession_identity(nation_b)
+		and nation_a != nation_b
 		and nation_a >= 0
 		and nation_b >= 0
 		and nation_a < nations.size()
@@ -4864,7 +4970,7 @@ func set_diplomatic_relation(
 func wars_of(nation_id: int) -> Array[int]:
 	var result: Array[int] = []
 	for other in nations:
-		if other.id != nation_id and other.alive and is_enemy(nation_id, other.id):
+		if other.id != nation_id and other.alive and not other.succession_identity and is_enemy(nation_id, other.id):
 			result.append(other.id)
 	return result
 
@@ -5964,6 +6070,7 @@ func suzerainty_members(nation_id: int) -> Array[int]:
 ## 只是零库存补给中继节点；削藩内战的反叛者与其宗主断开、自成一池（见 start_civil_war）。
 ## 独立国返回自身。含环保护。这是「共享粮仓」库存归属的单一真源。
 func food_pool_holder(nation_id: int) -> int:
+	nation_id = financial_nation_of(nation_id)
 	var current := nation_id
 	var guard := 0
 	while (
@@ -6259,6 +6366,8 @@ func enfeoff(
 	# Vassal fiefs are administrative units: normalize any府-level request to
 	# complete states before the closure/transaction code runs.
 	city_ids = normalize_enfeoff_region(overlord_id, city_ids)
+	if is_succession_identity(overlord_id):
+		return -1
 	if city_ids.is_empty():
 		return -1
 	if not _can_enfeoff(overlord_id, city_ids):
@@ -6293,15 +6402,6 @@ func enfeoff(
 	subject.alive = true
 	subject.political_system = overlord.political_system
 	subject.ai_aggression = 1.0
-	if _random_ruler_profiles_enabled:
-		RulerProfile.initialize_nation(
-			subject, world_seed, subject.id + day * 31
-		)
-	else:
-		# 网格世界是旧状态机/镜像夹具；未显式指定时新藩王同样保持中性。
-		subject.ruler_archetype = RulerProfile.BALANCED
-		subject.ruler_traits.clear()
-		subject.trade_policy = RulerProfile.POLICY_BALANCED
 	subject.ruler_started_day = day
 	nations.append(subject)
 
@@ -6352,8 +6452,8 @@ func enfeoff(
 	subject.treasury_gold = granted_gold
 
 	# 5. 首都、零库存中继与封地存粮回流已由领土事务统一完成。
-	WorldNaming.assign_vassal_name(self, subject.id, city_ids)
-	FamilyTree.record_enfeoffment(self, overlord_id, subject.id)
+	WorldNaming.assign_vassal_name(self, subject.id, city_ids, true)
+	FamilyTree.record_enfeoffment(self, overlord_id, subject.id, PrincePolitics.enfeoff_candidate(self, overlord_id))
 
 	# 5.5 分封不再创造或转移正规军。城市工事负责拖延，藩王须用自身资源
 	#     建立第一个主战指挥单位；宗主的既有指挥单位保持完整。
@@ -6685,11 +6785,11 @@ func annex_nation(
 
 
 func annex_nations(absorber: int, absorbed_nations: Array, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}) -> bool:
-	if absorber < 0 or absorber >= nations.size() or absorbed_nations.is_empty():
+	if absorber < 0 or absorber >= nations.size() or absorbed_nations.is_empty() or is_succession_identity(absorber):
 		return false
 	var absorbed_ids := {}
 	for nation_id in absorbed_nations:
-		if typeof(nation_id) != TYPE_INT or nation_id < 0 or nation_id >= nations.size() or nation_id == absorber or absorbed_ids.has(nation_id):
+		if typeof(nation_id) != TYPE_INT or nation_id < 0 or nation_id >= nations.size() or nation_id == absorber or absorbed_ids.has(nation_id) or is_succession_identity(nation_id):
 			return false
 		absorbed_ids[nation_id] = true
 	for city_id in stock_policy_overrides:
@@ -6730,6 +6830,8 @@ func annex_nations(absorber: int, absorbed_nations: Array, expected_ownership_re
 
 func accept_submission(overlord_id: int, subject_id: int) -> bool:
 	if overlord_id < 0 or subject_id < 0 or overlord_id >= nations.size() or subject_id >= nations.size():
+		return false
+	if is_succession_identity(overlord_id) or is_succession_identity(subject_id):
 		return false
 	if not nations[overlord_id].alive or not nations[subject_id].alive or is_vassal(subject_id) or suzerainty_root(overlord_id) == subject_id:
 		return false
@@ -7659,6 +7761,7 @@ func _planned_territory_food_pool_holder(
 	final_city_counts: Array[int],
 	suzerainty_snapshot: Dictionary
 ) -> int:
+	nation_id = financial_nation_of(nation_id)
 	if (
 		nation_id < 0
 		or nation_id >= nations.size()
@@ -8385,6 +8488,8 @@ func ensure_valid_capital(nation_id: int) -> int:
 	if nation_id < 0 or nation_id >= nations.size():
 		return -1
 	var nation := nations[nation_id]
+	if nation.succession_identity:
+		return -1
 	var capital_id := nation.capital_city_id
 	if (
 		capital_id >= 0
@@ -8456,6 +8561,10 @@ func territory_structure_valid() -> bool:
 		var has_city := not land_cities_of(nation.id).is_empty()
 		if nation.alive != has_city:
 			return false
+		if nation.succession_identity:
+			if nation.capital_city_id != -1 or not nation.warehouse_city_ids.is_empty() or nation.treasury_gold != 0 or nation.manpower_pool != 0:
+				return false
+			continue
 		if not has_city:
 			if (
 				nation.capital_city_id != -1
@@ -8615,7 +8724,7 @@ func refresh_derived() -> void:
 		if army.owner_nation < 0 or army.owner_nation >= nations.size():
 			army.funding_multiplier = 1.0
 			continue
-		army.funding_multiplier = funding_by_nation[army.owner_nation]
+		army.funding_multiplier = funding_by_nation[financial_nation_of(army.owner_nation)]
 		army.ruler_attack_multiplier = army_attack_by_nation[
 			army.owner_nation
 		]
@@ -8625,6 +8734,11 @@ func refresh_derived() -> void:
 		army.ruler_morale_multiplier = army_morale_by_nation[
 			army.owner_nation
 		]
+		if army_reserved_for_succession(army):
+			var profile: Variant = military_profile_for_army(army)
+			army.ruler_attack_multiplier = RulerProfile.attack_multiplier(profile)
+			army.ruler_defense_multiplier = RulerProfile.defense_multiplier(profile)
+			army.ruler_morale_multiplier = RulerProfile.morale_multiplier(profile)
 	for n in nations:
 		for warehouse in warehouse_cities_of(n.id):
 			n.granary_food += warehouse.food_storage

@@ -192,9 +192,35 @@ func _init() -> void:
 		)
 		blocked_sim._advance_siege(blocked_siege, 0, 95202)
 		valid = valid and not blocked_siege.finished
-		valid = valid and blocked_center.garrison_manpower == blocked_garrison_before
+		valid = valid and blocked_center.garrison_manpower < blocked_garrison_before
 		valid = valid and blocked_siege.side_b.is_empty()
+		var blocked_after_first_day := blocked_center.garrison_manpower
+		blocked_sim._advance_siege(blocked_siege, 0, 95202)
+		valid = valid and blocked_center.garrison_manpower < blocked_after_first_day
 	blocked_sim.free()
+
+	# 封锁只降低当前守军；R 随之下降后，即使守军尚未归零也应进入正常攻城。
+	var threshold := _fixture(95205)
+	var threshold_state: GameState = threshold["state"]
+	var threshold_center: City = threshold["center"]
+	threshold_center.garrison_manpower = 11
+	threshold_state.garrison_revision += 1
+	var threshold_attacker := _arriving_attacker(threshold, 9541, 30)
+	threshold_state.armies.append(threshold_attacker)
+	var threshold_sim := Simulation.new()
+	threshold_sim.setup(threshold_state)
+	threshold_sim._start_or_join_siege(
+		threshold_attacker, threshold_center, threshold["edge"]
+	)
+	var threshold_siege := threshold_sim._siege_battle_of(threshold_center)
+	if threshold_siege != null:
+		threshold_sim._advance_siege(threshold_siege, 0, 95205)
+		valid = valid and threshold_center.garrison_manpower > 0
+		threshold_sim._advance_siege(threshold_siege, 0, 95205)
+		valid = valid and threshold_siege.round_no > 0
+	else:
+		valid = false
+	threshold_sim.free()
 
 	# 围城中途进入的援军先触发解围野战，不能与虚拟守军同轮参战。
 	var relieved := _fixture(95203)

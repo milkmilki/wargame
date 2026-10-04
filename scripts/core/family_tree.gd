@@ -8,6 +8,7 @@ static func ensure_all(state: GameState) -> void:
 		return
 	for nation in state.nations:
 		ensure_nation_lineage(state, nation.id)
+		PrincePolitics.ensure_generation(state, nation.id)
 
 
 static func ensure_nation_lineage(state: GameState, nation_id: int) -> void:
@@ -44,7 +45,8 @@ static func ensure_nation_lineage(state: GameState, nation_id: int) -> void:
 static func record_enfeoffment(
 	state: GameState,
 	overlord_id: int,
-	subject_id: int
+	subject_id: int,
+	reused_person_id: int = -1
 ) -> void:
 	if not _valid_nation(state, overlord_id) or not _valid_nation(state, subject_id):
 		return
@@ -56,13 +58,22 @@ static func record_enfeoffment(
 	var parent_id := int(tree["root_person_id"])
 	if members.has(overlord.ruler_person_id):
 		parent_id = int(members[overlord.ruler_person_id].get("parent_id", parent_id))
-	var person_id := _next_person_id(state)
-	members[person_id] = _member(
-		person_id, _person_name(subject.ruler_name), parent_id, subject_id
-	)
+	var person_id := reused_person_id
+	if person_id < 0:
+		person_id = _next_person_id(state)
+		members[person_id] = _member(person_id, _person_name(subject.ruler_name), parent_id, subject_id)
+	else:
+		var member: Dictionary = members[person_id]
+		subject.ruler_name = str(member.name)
+		subject.ruler_archetype = int(member.archetype)
+		subject.ruler_traits.assign(member.traits)
+		subject.trade_policy = RulerProfile.trade_policy_for(subject)
+		member["enfeoffed_nation_id"] = subject_id
+		PrincePolitics.centralize(state, overlord_id, [person_id] as Array[int])
 	subject.family_tree_id = overlord.family_tree_id
 	subject.ruler_person_id = person_id
 	record_current_title(state, subject_id)
+	PrincePolitics.ensure_generation(state, subject_id)
 	state.family_revision += 1
 
 
@@ -129,6 +140,17 @@ static func title_for_nation(state: GameState, nation_id: int) -> String:
 	if display_name.ends_with("帝"):
 		return display_name
 	return display_name + "帝"
+
+
+static func display_title(member: Dictionary, person_id: int, root_person_id: int) -> String:
+	var titles: Array = member.get("titles", [])
+	if not titles.is_empty():
+		return " · ".join(titles)
+	if person_id == root_person_id or int(member.get("parent_id", -1)) < 0:
+		return "先祖"
+	if member.has("birth_order") or member.has("archetype"):
+		return "皇子"
+	return "宗室成员"
 
 
 static func _member(

@@ -15,6 +15,10 @@ func _run() -> void:
 			state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	state.nations[0].ruler_name = "张一"
 	state.nations[1].ruler_name = "李一"
+	# The fixture changes dynasty names after generation; update its pre-generated sons too.
+	for id in state.nations[1].prince_person_ids:
+		var member := PrincePolitics.person(state, 1, id)
+		member.name = "李" + str(id)
 	FamilyTree.ensure_all(state)
 	var foreign_tree := state.nations[1].family_tree_id
 	var foreign_person := state.nations[1].ruler_person_id
@@ -54,7 +58,7 @@ func _run() -> void:
 	panel.close_panel()
 	_check(opened == 1 and closed == 1, "one pause lifecycle")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 19 and snapshot.has("family_trees") and snapshot.nations.has("family_tree_ids"), "lineage persisted in schema19")
+	_check(snapshot.schema_version == 20 and snapshot.has("family_trees") and snapshot.nations.has("family_tree_ids"), "lineage persisted in schema20")
 	panel.queue_free()
 	sim.queue_free()
 	await process_frame
