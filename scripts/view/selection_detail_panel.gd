@@ -178,6 +178,11 @@ func section(id: String) -> DisclosureSection:
 	return _sections.get(id)
 
 
+func section_expanded(id: String) -> bool:
+	var group := section(id)
+	return group.expanded if group != null else bool(_preferences.get(id, false))
+
+
 func action_button(id: String) -> Button:
 	return _actions.get(id)
 

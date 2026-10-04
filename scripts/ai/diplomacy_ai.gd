@@ -1895,27 +1895,21 @@ static func war_desire(
 		if evaluation_cache.has("__profile")
 		else 0
 	)
-	if (
-		not can_initiate_war_at_range(
-			state, nation_id, target_id, evaluation_cache
-		)
-		or not _cached_can_alliance_declare_war(
-			state, nation_id, target_id, evaluation_cache
-		)
-		or _cached_war_count(
-			state,
-			nation_id,
-			evaluation_cache
-		) >= MAX_CONCURRENT_WARS
-		or _has_shared_ally(
-			state,
-			nation_id,
-			target_id,
-			evaluation_cache
-		)
-	):
-		evaluation_cache[cache_key] = -INF
-		return -INF
+	if not can_initiate_war_at_range(state, nation_id, target_id, evaluation_cache):
+		return _reject_war_desire(evaluation_cache, cache_key, "非宗藩接壤目标，或码头远征兜底未满足")
+	if not _cached_can_alliance_declare_war(state, nation_id, target_id, evaluation_cache):
+		var reason := "集团外交关系或停战限制"
+		if state.is_enemy(nation_id, target_id):
+			reason = "已经交战，不重复备战"
+		elif state.is_allied(nation_id, target_id):
+			reason = "当前为盟国"
+		elif state.day < state.truce_until(nation_id, target_id):
+			reason = "停战至第%d日" % state.truce_until(nation_id, target_id)
+		return _reject_war_desire(evaluation_cache, cache_key, reason)
+	if _cached_war_count(state, nation_id, evaluation_cache) >= MAX_CONCURRENT_WARS:
+		return _reject_war_desire(evaluation_cache, cache_key, "达到%d场战争上限" % MAX_CONCURRENT_WARS)
+	if _has_shared_ally(state, nation_id, target_id, evaluation_cache):
+		return _reject_war_desire(evaluation_cache, cache_key, "双方存在共同盟友")
 	_record_evaluation_profile(
 		evaluation_cache, "war_gate", part_started
 	)
@@ -1934,8 +1928,7 @@ static func war_desire(
 		nation_id,
 		report
 	):
-		evaluation_cache[cache_key] = -INF
-		return -INF
+		return _reject_war_desire(evaluation_cache, cache_key, "当前军制粮食预测不可行" if not bool(report.forecast.food_feasible) else "人力储备不足")
 	var campaign_troops := _campaign_troop_target(
 		state,
 		nation_id,
@@ -1950,8 +1943,7 @@ static func war_desire(
 		evaluation_cache
 	)
 	if not offensive_food_sustainable(state, food_plan):
-		evaluation_cache[cache_key] = -INF
-		return -INF
+		return _reject_war_desire(evaluation_cache, cache_key, "候选进攻军制的360天粮食预测不可行")
 	_record_evaluation_profile(
 		evaluation_cache, "war_resources_food", part_started
 	)
@@ -1966,9 +1958,10 @@ static func war_desire(
 		target_id,
 		evaluation_cache
 	)
-	if objective.is_empty() or not _ruler_allows_war_objective(state, nation_id, int(objective.get("city_id", -1))):
-		evaluation_cache[cache_key] = -INF
-		return -INF
+	if objective.is_empty():
+		return _reject_war_desire(evaluation_cache, cache_key, "无经营区域允许且有合法可达集结入口的州治目标")
+	if not _ruler_allows_war_objective(state, nation_id, int(objective.get("city_id", -1))):
+		return _reject_war_desire(evaluation_cache, cache_key, "君主禁攻或经营区域不允许该目标")
 	_record_evaluation_profile(
 		evaluation_cache, "war_objective", part_started
 	)
@@ -2067,8 +2060,99 @@ static func war_desire(
 		own_overextension,
 		_cached_war_benefit_multiplier(state, nation_id, evaluation_cache)
 	)
+	if bool(evaluation_cache.get("__war_desire_debug", false)):
+		evaluation_cache["breakdown:" + cache_key] = {
+			"score": result, "blocked_reason": "", "objective": objective.duplicate(true),
+			"own_power": own_power, "target_power": target_power,
+			"positive_terms": {
+				"军力比": ratio, "敌方分心": target_distraction,
+				"边疆接触": border_value, "粮食续航": reserve_quality,
+				"州治价值折算": objective_value, "可动员能力": mobilization_value,
+				"区域竞争": unification_pressure,
+				"区域整合": _cached_integration_war_bonus(state, nation_id, target_id, evaluation_cache),
+				"长期中立升级": peace_escalation,
+			},
+			"positive_total": positive_benefit,
+			"benefit_multiplier": _cached_war_benefit_multiplier(state, nation_id, evaluation_cache),
+			"aggression_bonus": aggression_bonus, "attitude": attitude,
+			"attitude_penalty": attitude * ATTITUDE_WAR_WEIGHT,
+			"attitude_breakdown": diplomatic_attitude_breakdown(state, nation_id, target_id, evaluation_cache).duplicate(true),
+			"overextension_penalty": own_overextension,
+		}
 	evaluation_cache[cache_key] = result
 	return result
+
+
+static func _reject_war_desire(cache: Dictionary, key: String, reason: String) -> float:
+	cache[key] = -INF
+	if bool(cache.get("__war_desire_debug", false)):
+		cache["breakdown:" + key] = {"score": -INF, "blocked_reason": reason}
+	return -INF
+
+
+## Same short-circuit evaluation as the AI; no counterfactual score after a veto.
+static func war_desire_breakdown(state: GameState, nation_id: int, target_id: int, cache: Dictionary = {}) -> Dictionary:
+	if state == null or nation_id < 0 or target_id < 0 or nation_id >= state.nations.size() or target_id >= state.nations.size() or nation_id == target_id:
+		return {"score": -INF, "blocked_reason": "无效国家或自身目标"}
+	_ensure_evaluation_cache_current(state, cache)
+	cache["__war_desire_debug"] = true
+	var key := "war_desire:%d:%d" % [nation_id, target_id]
+	if not cache.has("breakdown:" + key):
+		cache.erase(key)
+	war_desire(state, nation_id, target_id, cache)
+	return (cache["breakdown:" + key] as Dictionary).duplicate(true)
+
+
+static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[String]:
+	var lines: Array[String] = []
+	if nation_id < 0 or nation_id >= state.nations.size():
+		return lines
+	var nation := state.nations[nation_id]
+	lines.append("第%d日当前状态重算 · 阈值 %.2f · 非上次外交批次回放" % [state.day, WAR_DECLARE_SCORE])
+	lines.append("意愿 = 收益合计 × 君主倍率 + 侵略性修正 − 态度×0.35 − 战争数×0.75")
+	if not nation.alive or nation.succession_identity:
+		return ["该国家已灭亡或为继承权临时身份，不评估普通备战"]
+	if state.is_vassal(nation_id):
+		lines.append("国家行动门禁：藩国不自主发起普通备战，以下仅为双边意愿")
+	if nation.war_preparation_target_nation >= 0 and nation.war_preparation_target_nation < state.nations.size():
+		lines.append("当前已对%s备战：第%d日开始；既有备战按实际集结资格推进，不重新要求意愿过线" % [state.nations[nation.war_preparation_target_nation].name, nation.war_preparation_started_day])
+	if nation.war_preparation_cancelled_day >= 0 and state.day - nation.war_preparation_cancelled_day < WAR_PREPARATION_CANCEL_COOLDOWN_DAYS:
+		lines.append("国家行动门禁：取消备战冷却至第%d日" % (nation.war_preparation_cancelled_day + WAR_PREPARATION_CANCEL_COOLDOWN_DAYS))
+	var cache := {}
+	var candidates := _expansion_bordering_nation_ids(state, nation_id, cache).duplicate()
+	if candidates.is_empty():
+		candidates = _expedition_target_nation_ids(state, nation_id, cache, ObjectiveContext.PREWAR)
+	var best_target := -1
+	var best_score := -INF
+	for target in state.nations:
+		if target.id == nation_id or not target.alive or target.succession_identity:
+			continue
+		var report := war_desire_breakdown(state, nation_id, target.id, cache)
+		lines.append("【%s（国%d）】%s" % [target.name, target.id, "地理候选" if candidates.has(target.id) else "非地理候选"])
+		if not str(report.blocked_reason).is_empty():
+			lines.append("意愿 -INF · 否决：%s；评分项未执行" % report.blocked_reason)
+			continue
+		if float(report.score) > best_score or (is_equal_approx(float(report.score), best_score) and (best_target < 0 or EquivariantOrder.nation_less(state, nation_id, target.id, best_target))):
+			best_target = target.id
+			best_score = float(report.score)
+		lines.append("意愿 %.3f · %s" % [report.score, "达到备战阈值" if float(report.score) >= WAR_DECLARE_SCORE else "低于备战阈值"])
+		lines.append("目标：%s · 原始价值 %.3f" % [state.cities[int(report.objective.city_id)].name, report.objective.value])
+		lines.append(str(report.objective.reason))
+		for label in report.objective.get("debug_terms", {}):
+			lines.append("州治价值 %s：%+.3f" % [label, report.objective.debug_terms[label]])
+		lines.append("军力：本国 %.1f / 守方含盟友 %.1f" % [report.own_power, report.target_power])
+		for label in report.positive_terms:
+			lines.append("收益 %s：%+.3f" % [label, report.positive_terms[label]])
+		lines.append("收益小计 %.3f × 君主倍率 %.2f；侵略性修正 %+.3f" % [report.positive_total, report.benefit_multiplier, report.aggression_bonus])
+		var attitude: Dictionary = report.attitude_breakdown
+		lines.append("态度 %.3f（历史 %+.3f、军事 %+.3f、政治 %+.3f）×0.35：扣分 %+.3f" % [report.attitude, attitude.historical, attitude.military, attitude.political, report.attitude_penalty])
+		lines.append("态度条目：边疆 %+.3f、目标利益 %+.3f、共同敌国%d、敌国盟友%d、边防释放 %+.3f、叛乱母国 %+.3f" % [attitude.border_component, attitude.objective_component, attitude.common_enemies, attitude.enemy_allies, attitude.frontier_relief, attitude.parent_rebel_component])
+		lines.append("多线作战扣分 %.3f；最终 %.3f" % [report.overextension_penalty, report.score])
+	if best_target >= 0:
+		lines.append("当前最高双边意愿：%s %.3f（%s）；仍受上述国家行动门禁和外交批次占用限制" % [state.nations[best_target].name, best_score, "过线" if best_score >= WAR_DECLARE_SCORE else "未过线"])
+	else:
+		lines.append("当前无可评分的普通备战目标")
+	return lines
 
 
 static func _cached_integration_war_bonus(
@@ -3692,6 +3776,8 @@ static func _cached_war_objective(
 		state.administrative_region_revision,
 		state.garrison_revision,
 	]
+	if bool(evaluation_cache.get("__war_desire_debug", false)):
+		cache_key += ":debug"
 	if evaluation_cache.has(cache_key):
 		_record_evaluation_profile(
 			evaluation_cache, "objective_cache_hit", profile_started
@@ -3920,6 +4006,19 @@ static func select_war_objective(
 					]
 				),
 			}
+			if bool(evaluation_cache.get("__war_desire_debug", false)):
+				best["debug_terms"] = {
+					"金产归一化": gold_value, "粮产归一化": food_value,
+					"人产归一化": manpower_value,
+					"集结入口": float(own_links) * 1.25,
+					"首都": 3.0 if city.is_capital else 0.0,
+					"粮仓": 2.0 if city.has_warehouse else 0.0,
+					"粮食核心": 10.0 if bool(candidate["has_food_hub"]) else 0.0,
+					"人口核心": 10.0 if bool(candidate["has_manpower_hub"]) else 0.0,
+					"包围": encirclement_score, "守军薄弱": weak_garrison_value,
+					"本州整合": region_unification_value,
+					"交通中心": node_betweenness_value,
+				}
 	return best
 
 

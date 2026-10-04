@@ -206,6 +206,7 @@ var _nation_stats_window_position := Vector2(-1.0, -1.0)
 var _nation_stats_drag_active: bool = false
 var _nation_stats_drag_offset := Vector2.ZERO
 var _detail_panel: SelectionDetailPanel
+var _detail_debug_open: bool = false
 var _detail_payload_key: Array = []
 var _detail_payload_cache: Dictionary = {}
 var _input_surfaces: Array[Control] = []
@@ -356,6 +357,10 @@ func _ready() -> void:
 	add_child(_detail_panel)
 	_detail_panel.action_requested.connect(_on_detail_action)
 	_detail_panel.visibility_changed_by_fold.connect(func() -> void:
+		var debug_open := _detail_panel.section_expanded("nation.debug_war")
+		if debug_open != _detail_debug_open:
+			_detail_debug_open = debug_open
+			queue_redraw()
 		var ruler_button := _detail_panel.action_button("ruler")
 		if ruler_button == null or not ruler_button.is_visible_in_tree():
 			_close_ruler_profile_menu()
@@ -7018,6 +7023,7 @@ func _draw_nation_window_cells(
 
 func _cached_selection_detail_payload() -> Dictionary:
 	var key: Array = [state.get_instance_id(), state.day, state.ownership_revision, state.diplomacy_revision, state.trade_revision, state.road_network_revision, state.administrative_region_revision, state.region_analysis_revision, state.regional_strategy_revision, state.family_revision, state.garrison_revision, state.armies.size(), _selected_city_id, _selected_edge_a, _selected_edge_b, _selected_nation_id, _history_mode]
+	key.append(_detail_panel != null and _detail_panel.section_expanded("nation.debug_war"))
 	if _selected_nation_id >= 0 and _selected_nation_id < state.nations.size():
 		var nation := state.nations[_selected_nation_id]
 		key.append_array([nation.ruler_archetype, nation.ruler_traits, nation.treasury_gold, nation.manpower_pool, nation.granary_food, nation.ruler_revision])
@@ -7118,7 +7124,14 @@ func _on_detail_action(action: String) -> void:
 
 func _display_nation_detail_sections(nation_id: int) -> Array[Dictionary]:
 	if not _history_mode:
-		return nation_detail_sections(state, nation_id)
+		var sections := nation_detail_sections(state, nation_id)
+		var debug_open := _detail_panel != null and _detail_panel.section_expanded("nation.debug_war")
+		sections.append({
+			"id": "nation.debug_war", "default_expanded": false,
+			"title": "Debug · 备战意愿",
+			"lines": DiplomacyAI.war_desire_debug_lines(state, nation_id) if debug_open else [],
+		})
+		return sections
 	return historical_nation_detail_sections(state, nation_id)
 
 
