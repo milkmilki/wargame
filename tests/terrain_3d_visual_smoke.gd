@@ -16,9 +16,11 @@ func _run() -> void:
 		height if height > 0 else 720
 	)
 	var state := GameState.new()
+	var nation_count := int(OS.get_environment("WW_VISUAL_NATIONS"))
+	var map_seed := int(OS.get_environment("WW_VISUAL_MAP_SEED"))
 	state.generate_world(
-		12345, GameState.NATION_COUNT, GameState.TERRAIN_CITY_COUNT,
-		GameState.DEFAULT_CITY_MASK_PATH, {}, 0,
+		12345, nation_count if nation_count > 0 else GameState.NATION_COUNT, GameState.TERRAIN_CITY_COUNT,
+		GameState.DEFAULT_CITY_MASK_PATH, {}, map_seed,
 		OS.get_environment("WW_VISUAL_POLITICAL_MASK")
 	)
 	_prepare_frontend_showcase(state)
@@ -102,6 +104,26 @@ func _run() -> void:
 		push_error("TERRAIN_3D_VISUAL_EMPTY")
 		quit(1)
 		return
+	if OS.get_environment("WW_VISUAL_CHECK_NAVIGATION") == "1":
+		if not map_3d._visual_atlas.get("missing_river_ids", []).is_empty():
+			push_error("NAVIGATION_VISUAL_MISSING_RIVERS")
+			quit(1)
+			return
+		await create_timer(0.8).timeout
+		await RenderingServer.frame_post_draw
+		var next_image := root.get_texture().get_image()
+		var moving_dash_pixels := 0
+		for y in range(image.get_height()):
+			for x in range(image.get_width()):
+				var a := image.get_pixel(x, y)
+				var b := next_image.get_pixel(x, y)
+				if (_river_blue(a) and _ink_black(b)) or (_ink_black(a) and _river_blue(b)):
+					moving_dash_pixels += 1
+		if moving_dash_pixels < 10:
+			push_error("NAVIGATION_VISUAL_DASH_NOT_MOVING pixels=%d" % moving_dash_pixels)
+			quit(1)
+			return
+		print("NAVIGATION_VISUAL_OK moving_dash_pixels=", moving_dash_pixels)
 	var error := image.save_png(output)
 	if error != OK:
 		push_error("TERRAIN_3D_VISUAL_SAVE_FAILED:%d" % error)
@@ -119,6 +141,14 @@ func _run() -> void:
 	overlay.free()
 	simulation.free()
 	quit(0)
+
+
+func _river_blue(color: Color) -> bool:
+	return color.r < 0.15 and color.b > 0.3 and color.b > color.g * 1.3
+
+
+func _ink_black(color: Color) -> bool:
+	return maxf(color.r, maxf(color.g, color.b)) < 0.12
 
 
 func _prepare_frontend_showcase(state: GameState) -> void:

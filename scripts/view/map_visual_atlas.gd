@@ -3,6 +3,7 @@ extends RefCounted
 ## Shared heightmap-UV visual data for both 2D and 3D map renderers.
 
 const SIZE := Vector2i(2048, 2048)
+const BOUNDARY_RIVERS := preload("res://scripts/view/visual_boundary_rivers.gd")
 const PROVINCE_VISUAL_LOOKUP := preload(
 	"res://scripts/view/province_visual_lookup.gd"
 )
@@ -53,8 +54,15 @@ static func build_visual_atlas(
 	var roads := Image.create(safe_size.x, safe_size.y, false, Image.FORMAT_RF)
 	if shared_masks.get("edge_mask") == null:
 		_fill_edges(city_id, land, region_edge, coast, safe_size)
-	_fill_rivers(game_state, rivers, safe_size)
-	_fill_roads(game_state, roads, safe_size)
+	var river_result := BOUNDARY_RIVERS.build_paths(
+		shared_masks.get("regions", []), _river_features(game_state), safe_size, land
+	)
+	_fill_rivers(river_result["paths"], rivers, safe_size)
+	var river_atlas := {"river_paths": river_result["paths"]}
+	var road_paths := {}
+	for edge_index in range(game_state.edges.size()):
+		road_paths[edge_index] = visual_road_path(game_state, edge_index, river_atlas)
+	_fill_roads(road_paths, roads, safe_size)
 	return {
 		"size": safe_size,
 		"revision": build_revision(game_state),
@@ -67,6 +75,10 @@ static func build_visual_atlas(
 		"coast_mask": coast,
 		"river_mask": rivers,
 		"road_mask": roads,
+		"river_paths": river_result["paths"],
+		"road_paths": road_paths,
+		"road_paths_revision": game_state.road_network_revision,
+		"missing_river_ids": river_result["missing_river_ids"],
 	}
 
 
@@ -155,8 +167,11 @@ static func build_political_lut(
 
 
 static func visual_river_path(
-	game_state: GameState, river_id: int
+	game_state: GameState, river_id: int, atlas: Dictionary = {}
 ) -> PackedVector2Array:
+	if atlas.has("river_paths"):
+		return atlas["river_paths"].get(river_id, PackedVector2Array()).duplicate()
+	# Legacy callers without a visual atlas retain their existing path contract.
 	var features: Array = game_state.river_features
 	if features.is_empty():
 		features = MapFeatureContract.from_legacy_river_paths(
@@ -172,15 +187,85 @@ static func visual_river_path(
 
 
 static func visual_road_path(
-	game_state: GameState, edge_index: int
+	game_state: GameState, edge_index: int, atlas: Dictionary = {}
 ) -> PackedVector2Array:
+	if atlas.has("road_paths") and int(atlas.get("road_paths_revision", -1)) == game_state.road_network_revision:
+		return atlas["road_paths"].get(edge_index, PackedVector2Array()).duplicate()
 	if edge_index < 0 or edge_index >= game_state.edges.size():
 		return PackedVector2Array()
 	var edge: Edge = game_state.edges[edge_index]
-	return edge.map_points(
+	var source := edge.map_points(
 		game_state.cities[edge.city_a].map_position,
 		game_state.cities[edge.city_b].map_position
 	).duplicate()
+	if edge.kind != Edge.Kind.RIVER or not atlas.has("river_paths"):
+		return source
+	var best_id := -1
+	var best_error := INF
+	for feature in _river_features(game_state):
+		var points: PackedVector2Array = feature["points"]
+		var error := 0.0
+		for point in source:
+			error += _project_on_path(points, point).get("distance_squared", INF)
+		if error < best_error:
+			best_error = error
+			best_id = int(feature["id"])
+	var river := visual_river_path(game_state, best_id, atlas)
+	return _river_section(river, source[0], source[-1])
+
+
+static func refresh_road_paths(game_state: GameState, atlas: Dictionary) -> void:
+	if atlas.is_empty() or int(atlas.get("road_paths_revision", -1)) == game_state.road_network_revision:
+		return
+	var paths := {}
+	for index in range(game_state.edges.size()):
+		paths[index] = visual_road_path(game_state, index, atlas)
+	var size: Vector2i = atlas["size"]
+	var mask := Image.create(size.x, size.y, false, Image.FORMAT_RF)
+	_fill_roads(paths, mask, size)
+	atlas["road_paths"] = paths
+	atlas["road_mask"] = mask
+	atlas["road_paths_revision"] = game_state.road_network_revision
+	atlas["revision"]["roads"] = game_state.road_network_revision
+
+
+static func _project_on_path(path: PackedVector2Array, point: Vector2) -> Dictionary:
+	var result := {}
+	var nearest := INF
+	for index in range(path.size() - 1):
+		var projection := Geometry2D.get_closest_point_to_segment(point, path[index], path[index + 1])
+		var error := point.distance_squared_to(projection)
+		if error < nearest:
+			nearest = error
+			result = {
+				"segment": index, "point": projection, "distance_squared": error,
+				"progress": float(index) + path[index].distance_to(projection)
+					/ maxf(path[index].distance_to(path[index + 1]), 0.000001),
+			}
+	return result
+
+
+static func _river_section(
+	path: PackedVector2Array, from: Vector2, to: Vector2
+) -> PackedVector2Array:
+	if path.size() < 2:
+		return PackedVector2Array()
+	var a := _project_on_path(path, from)
+	var b := _project_on_path(path, to)
+	var reverse := float(a["progress"]) > float(b["progress"])
+	if reverse:
+		var swap := a
+		a = b
+		b = swap
+	var result := PackedVector2Array([a["point"]])
+	for index in range(int(a["segment"]) + 1, int(b["segment"]) + 1):
+		if not result[-1].is_equal_approx(path[index]):
+			result.append(path[index])
+	if not result[-1].is_equal_approx(b["point"]):
+		result.append(b["point"])
+	if reverse:
+		result.reverse()
+	return result
 
 
 static func _fill_land(
@@ -306,28 +391,20 @@ static func _distance_from_edge(
 	return distance
 
 
-static func _fill_rivers(
-	game_state: GameState, mask: Image, size: Vector2i
-) -> void:
+static func _river_features(game_state: GameState) -> Array:
 	var features: Array = game_state.river_features
 	if features.is_empty():
 		features = MapFeatureContract.from_legacy_river_paths(game_state.river_paths)
-	for feature_value in features:
-		var feature := feature_value as Dictionary
-		var path := MapFeatureContract.build_high_precision_river_path(
-			feature, size
-		)
+	return features
+
+
+static func _fill_rivers(paths: Dictionary, mask: Image, size: Vector2i) -> void:
+	for path in paths.values():
 		_rasterize_path(mask, path, size, 1)
 
 
-static func _fill_roads(
-	game_state: GameState, mask: Image, size: Vector2i
-) -> void:
-	for edge in game_state.edges:
-		var path := edge.map_points(
-			game_state.cities[edge.city_a].map_position,
-			game_state.cities[edge.city_b].map_position
-		)
+static func _fill_roads(paths: Dictionary, mask: Image, size: Vector2i) -> void:
+	for path in paths.values():
 		_rasterize_path(mask, path, size, 1)
 
 

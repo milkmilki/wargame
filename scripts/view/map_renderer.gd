@@ -2160,7 +2160,7 @@ func _draw_rivers() -> void:
 	for feature_value in features:
 		var feature := feature_value as Dictionary
 		var river := MAP_VISUAL_ATLAS.visual_river_path(
-			state, int(feature.get("id", -1))
+			state, int(feature.get("id", -1)), _visual_atlas
 		)
 		if river.size() < 2:
 			continue
@@ -2269,6 +2269,7 @@ func _ensure_province_visual_cache() -> void:
 			MAP_VISUAL_ATLAS.SIZE,
 			_region_id_image,
 			{
+				"regions": visual_regions["regions"],
 				"edge_mask": _region_edge_mask,
 				"coast_mask": _region_coast_mask,
 				"region_coverage": visual_regions["region_coverage"],
@@ -2278,6 +2279,10 @@ func _ensure_province_visual_cache() -> void:
 		_visual_city_seed_signature = (
 			MAP_VISUAL_ATLAS.visual_city_seed_signature(state)
 		)
+		if not _visual_atlas["missing_river_ids"].is_empty():
+			push_warning("Visual boundary rivers have no connected land route: %s" % [
+				_visual_atlas["missing_river_ids"],
+			])
 	# Most diplomacy revisions only recolor diplomatic edges. A compact semantic
 	# signature still catches suzerainty/civil-war color changes without first
 	# rebuilding the full categorical image.
@@ -5187,7 +5192,7 @@ static func trade_route_color(
 
 
 static func trade_route_map_paths(
-	game_state: GameState, route: Dictionary
+	game_state: GameState, route: Dictionary, atlas: Dictionary = {}
 ) -> Array[PackedVector2Array]:
 	var result: Array[PackedVector2Array] = []
 	var city_path: Variant = route.get("city_path", [])
@@ -5205,9 +5210,8 @@ static func trade_route_map_paths(
 		var edge := game_state.edge_of(from_id, to_id)
 		if edge == null:
 			continue
-		var points := edge.map_points(
-			game_state.cities[edge.city_a].map_position,
-			game_state.cities[edge.city_b].map_position
+		var points := MAP_VISUAL_ATLAS.visual_road_path(
+			game_state, game_state.edges.find(edge), atlas
 		)
 		if from_id == edge.city_a:
 			result.append(points)
@@ -5220,10 +5224,10 @@ static func trade_route_map_paths(
 
 
 static func trade_route_flow_path(
-	game_state: GameState, route: Dictionary
+	game_state: GameState, route: Dictionary, atlas: Dictionary = {}
 ) -> PackedVector2Array:
 	var result := PackedVector2Array()
-	for edge_path in trade_route_map_paths(game_state, route):
+	for edge_path in trade_route_map_paths(game_state, route, atlas):
 		for point in edge_path:
 			if result.is_empty() or not result[-1].is_equal_approx(point):
 				result.append(point)

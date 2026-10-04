@@ -35,7 +35,8 @@ const TRADE_ROUTE_WIDTH: float = 0.055
 const TRADE_ROUTE_CASING_COLOR := Color(0.055, 0.045, 0.035, 0.82)
 const TRADE_ROUTE_CASING_WIDTH_SCALE: float = 1.85
 const TRADE_ROUTE_DASH_WORLD_LENGTH: float = 0.42
-const WATER_ROUTE_WIDTH: float = 0.025
+const ORIGINAL_RIVER_HALF_WIDTH: float = 0.075
+const WATER_ROUTE_WIDTH: float = ORIGINAL_RIVER_HALF_WIDTH * 0.5
 const WATER_ROUTE_DASH_WORLD_LENGTH: float = 0.32
 const TRADE_FLOW_ELEVATION: float = 0.265
 const TRADE_FLOW_SPEED: float = 0.95
@@ -43,7 +44,8 @@ const TRADE_FLOW_MARKER_SPACING: float = 2.40
 const TRADE_FLOW_MARKER_WIDTH: float = 0.26
 const TRADE_FLOW_MARKER_LENGTH: float = 0.50
 const TRADE_FLOW_MAX_MARKERS_PER_ROUTE: int = 24
-const RIVER_BASE_HALF_WIDTH: float = 0.075
+const RIVER_BASE_HALF_WIDTH: float = ORIGINAL_RIVER_HALF_WIDTH * 3.0
+const RIVER_COLOR := Color(0.04, 0.34, 0.68, 1.0)
 const RIVER_ELEVATION: float = 0.11
 const RIVER_RENDER_SUBDIVISIONS: int = 4
 const NATION_LABEL_FONT_SIZE: int = 84
@@ -62,6 +64,7 @@ const PROVINCE_VISUAL_LOOKUP := preload(
 	"res://scripts/view/province_visual_lookup.gd"
 )
 const MAP_VISUAL_ATLAS := preload("res://scripts/view/map_visual_atlas.gd")
+const NAVIGATION_SHADER := preload("res://scripts/view/terrain/navigation_ants.gdshader")
 var state: GameState
 var sim: Simulation
 var overlay: MapRenderer
@@ -75,6 +78,7 @@ var _water: MeshInstance3D
 var _roads: MeshInstance3D
 var _minor_roads: MeshInstance3D
 var _rivers: MeshInstance3D
+var _water_routes: MeshInstance3D
 var _trade_route_casing: MeshInstance3D
 var _trade_routes: MeshInstance3D
 var _trade_flow_markers: MultiMeshInstance3D
@@ -739,6 +743,10 @@ func _ensure_feature_nodes() -> void:
 		_rivers = MeshInstance3D.new()
 		_rivers.name = "Rivers"
 		_content.add_child(_rivers)
+	if _water_routes == null:
+		_water_routes = MeshInstance3D.new()
+		_water_routes.name = "NavigationChannels"
+		_content.add_child(_water_routes)
 	if _trade_route_casing == null:
 		_trade_route_casing = MeshInstance3D.new()
 		_trade_route_casing.name = "TradeRouteCasing"
@@ -1664,24 +1672,20 @@ func _exit_tree() -> void:
 
 
 func _build_road_mesh() -> void:
+	MAP_VISUAL_ATLAS.refresh_road_paths(state, _visual_atlas)
 	var major_tool := SurfaceTool.new()
 	major_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var minor_tool := SurfaceTool.new()
 	minor_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var water_tool := SurfaceTool.new()
+	water_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for edge_index in range(state.edges.size()):
 		var edge: Edge = state.edges[edge_index]
 		if not MapRenderer.is_edge_visible(edge):
 			continue
-		var path := MAP_VISUAL_ATLAS.visual_road_path(state, edge_index)
+		var path := MAP_VISUAL_ATLAS.visual_road_path(state, edge_index, _visual_atlas)
 		if MapRenderer.edge_uses_water_ant_line(edge.kind):
-			_append_dashed_draped_path(
-				major_tool,
-				path,
-				WATER_ROUTE_WIDTH,
-				MapRenderer.WATER_ROUTE_COLOR,
-				0.125,
-				WATER_ROUTE_DASH_WORLD_LENGTH
-			)
+			_append_navigation_path(water_tool, path)
 			continue
 		if not MapRenderer.edge_uses_land_road_style(edge.kind):
 			continue
@@ -1720,6 +1724,11 @@ func _build_road_mesh() -> void:
 	_roads.material_override = _line_material(false)
 	_minor_roads.mesh = minor_tool.commit()
 	_minor_roads.material_override = _line_material(false)
+	_water_routes.mesh = water_tool.commit()
+	var water_material := ShaderMaterial.new()
+	water_material.shader = NAVIGATION_SHADER
+	water_material.set_shader_parameter("dash_length", WATER_ROUTE_DASH_WORLD_LENGTH)
+	_water_routes.material_override = water_material
 	_update_map_detail_visibility()
 
 
@@ -1739,7 +1748,7 @@ func _build_trade_route_mesh() -> void:
 		var status := int(route.get("status", TradeNetwork.ACTIVE))
 		var color := MapRenderer.trade_route_color(route, emphasized)
 		var width := TRADE_ROUTE_WIDTH * (1.28 if emphasized else 1.0)
-		for map_path in MapRenderer.trade_route_map_paths(state, route):
+		for map_path in MapRenderer.trade_route_map_paths(state, route, _visual_atlas):
 			if status == TradeNetwork.BLOCKED:
 				_append_dashed_draped_path(
 					casing_tool,
@@ -1782,7 +1791,7 @@ func _rebuild_trade_flow_markers() -> void:
 		if int(route.get("status", TradeNetwork.ACTIVE)) == TradeNetwork.BLOCKED:
 			continue
 		var route_points := PackedVector3Array()
-		var flow_path := MapRenderer.trade_route_flow_path(state, route)
+		var flow_path := MapRenderer.trade_route_flow_path(state, route, _visual_atlas)
 		for segment_index in range(flow_path.size() - 1):
 			var samples := _draped_world_samples(
 				flow_path[segment_index],
@@ -2006,6 +2015,8 @@ func _apply_map_mode_visibility() -> void:
 	if _roads != null:
 		_roads.visible = city_road_visible
 		_roads.transparency = 0.70 if trade_mode else 0.0
+	if _water_routes != null:
+		_water_routes.visible = city_road_visible
 	if _minor_roads != null:
 		_minor_roads.transparency = 0.78 if trade_mode else 0.0
 		_minor_roads.visible = city_road_visible and _camera_distance <= 62.0
@@ -2061,14 +2072,44 @@ func _build_river_mesh() -> void:
 	for feature_value in features:
 		var feature := feature_value as Dictionary
 		var render_path := MAP_VISUAL_ATLAS.visual_river_path(
-			state, int(feature.get("id", -1))
+			state, int(feature.get("id", -1)), _visual_atlas
 		)
 		_append_variable_width_river(
 			surface_tool, render_path, feature,
-			Color(0.008, 0.095, 0.165, 0.96)
+			RIVER_COLOR
 		)
 	_rivers.mesh = surface_tool.commit()
 	_rivers.material_override = _line_material(false)
+	_rivers.material_override.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+
+
+func _append_navigation_path(tool: SurfaceTool, path: PackedVector2Array) -> void:
+	if path.size() < 2:
+		return
+	var centers := PackedVector3Array()
+	for index in range(path.size() - 1):
+		var samples := _draped_world_samples(path[index], path[index + 1], RIVER_ELEVATION + 0.035)
+		for sample in samples:
+			if centers.is_empty() or centers[-1].distance_squared_to(sample) > 0.00000001:
+				centers.append(sample)
+	var offsets := PackedVector3Array()
+	var cumulative := PackedFloat32Array()
+	offsets.resize(centers.size())
+	cumulative.resize(centers.size())
+	for index in range(centers.size()):
+		var previous := centers[maxi(index - 1, 0)]
+		var next := centers[mini(index + 1, centers.size() - 1)]
+		var perpendicular := Vector2(next.x - previous.x, next.z - previous.z).normalized().orthogonal()
+		offsets[index] = Vector3(perpendicular.x, 0.0, perpendicular.y) * WATER_ROUTE_WIDTH
+		if index > 0:
+			cumulative[index] = cumulative[index - 1] + Vector2(
+				centers[index].x - centers[index - 1].x, centers[index].z - centers[index - 1].z
+			).length()
+	for index in range(centers.size() - 1):
+		_append_river_quad(tool,
+			centers[index] - offsets[index], centers[index] + offsets[index],
+			centers[index + 1] - offsets[index + 1], centers[index + 1] + offsets[index + 1],
+			cumulative[index], cumulative[index + 1], Color.BLACK)
 
 
 func _append_variable_width_river(
@@ -3351,10 +3392,7 @@ func _update_edge_selection() -> void:
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	_append_draped_path_ribbon(
 		surface_tool,
-		edge.map_points(
-			state.cities[edge.city_a].map_position,
-			state.cities[edge.city_b].map_position
-		),
+		MAP_VISUAL_ATLAS.visual_road_path(state, state.edges.find(edge), _visual_atlas),
 		_road_width_for_capacity(edge.max_manpower) * 2.4,
 		Color(1.0, 0.72, 0.12, 0.96),
 		0.18
@@ -3420,10 +3458,7 @@ func _pick_map_feature(screen_position: Vector2) -> void:
 		if not MapRenderer.is_edge_visible(edge):
 			continue
 		var samples := PackedVector3Array()
-		var path := edge.map_points(
-			state.cities[edge.city_a].map_position,
-			state.cities[edge.city_b].map_position
-		)
+		var path := MAP_VISUAL_ATLAS.visual_road_path(state, state.edges.find(edge), _visual_atlas)
 		for path_index in range(path.size() - 1):
 			var segment_samples := _draped_world_samples(
 				path[path_index], path[path_index + 1], 0.125

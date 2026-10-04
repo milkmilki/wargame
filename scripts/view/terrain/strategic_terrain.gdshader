@@ -153,18 +153,8 @@ void fragment() {
 		float region_distance = texture(
 			visual_region_distance_texture, UV
 		).r;
-		float region_coverage = texture(
-			visual_region_coverage_texture, UV
-		).r;
-		float region_distance_aa = max(fwidth(region_distance), 0.00001);
-		float region_fill_coverage = smoothstep(
-			-region_distance_aa,
-			region_distance_aa,
-			region_distance
-		);
-		if (unified_region_fill_enabled > 0.5) {
-			province_alpha *= region_fill_coverage * region_coverage;
-		}
+		// The categorical city ID already selects the filled side. Internal
+		// boundary distance controls ink/gradient only, never fill opacity.
 		float visual_country_edge = 0.0;
 		if (
 			unified_region_fill_enabled > 0.5

@@ -18,6 +18,10 @@ func _init() -> void:
 	)
 	var valid := true
 	valid = _check(
+		not shader_source.contains("province_alpha *= region_fill_coverage"),
+		"internal region distance must not fade political fill to terrain"
+	) and valid
+	valid = _check(
 		lut.get_size() == Vector2i(state.cities.size(), 3),
 		"political LUT must contain base, occupation, and gradient rows"
 	) and valid

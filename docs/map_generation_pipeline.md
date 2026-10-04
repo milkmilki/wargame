@@ -71,8 +71,27 @@ New version 5 map files persist both and validation rejects disagreement.
   ownership or diplomacy changes.
 - Country borders reclassify the cached shared edges; they do not rescan or
   filter province ownership.
-- River smoothing is derived from authoritative points and is clamped to a
-  0.45 province-raster-pixel corridor around each source segment.
+- Generated boundary rivers are routed once on the shared visual Polygon edge
+  graph. Adjacent polygons share smoothed vertices, with junctions and coast
+  pinned. Only edges belonging to two cities and lying on heightmap land are
+  eligible. Existing river points guide the route; they are not overwritten.
+- River source and mouth candidates are selected together within a connected
+  visual-edge component. Independent nearest-node snapping can select an
+  isolated coastal fragment and silently lose a river on randomized layouts.
+- The atlas caches these `river_paths` for both the river mask and 3D ribbon.
+  No independent spline is applied after routing. Missing routes produce a
+  river-ID diagnostic and remain empty, not an off-boundary fallback.
+- Imported and hydrological rivers retain their source-derived visual curves;
+  they are not administrative-boundary rivers.
+- Internal-river navigation edges cache subsections of that same visual river
+  path. Their endpoints project onto the river; no straight dock connector is
+  appended. Road picking, selection and trade routes consume those sections.
+- Rivers are opaque blue ribbons at three times the original half-width.
+  Navigation uses a separate black animated dash shader at half the original
+  river half-width, above the blue ribbon. Sea routes keep their ocean paths.
+- Docks, transport rules, crossings and save data still use logical river
+  features. Dock markers can therefore sit slightly away from the new river
+  bed; visual paths are never written back into transport edges.
 - River mesh UV.x stores source-to-mouth progress and UV.y stores bank side.
 - Coast ink comes from interpolated terrain elevation at zero metres, not the
   province raster coastline.

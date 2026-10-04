@@ -60,6 +60,7 @@ static func build_visual_region_geometry(
 					Vector2(b.x / WORK_SIZE.x, b.y / WORK_SIZE.y),
 					neighbor < 0,
 				])
+	var shared_vertices := _shared_boundary_vertices(by_city)
 	var regions: Array[Dictionary] = []
 	for city_id_value in by_city.keys():
 		var city_id := int(city_id_value)
@@ -70,6 +71,7 @@ static func build_visual_region_geometry(
 				continue
 			var smoothed := smooth_visual_boundary(polygon, {
 				"max_offset": 2.0 / float(WORK_SIZE.x),
+				"shared_vertices": shared_vertices,
 			})
 			var region := {
 				"city_id": city_id,
@@ -87,6 +89,31 @@ static func build_visual_region_geometry(
 			safe_size, regions, coarse["revision"],
 	])
 	return raster
+
+
+static func _shared_boundary_vertices(by_city: Dictionary) -> Dictionary:
+	var vertices := {}
+	for segments in by_city.values():
+		for segment in segments:
+			for endpoint in range(2):
+				var point: Vector2 = segment[endpoint]
+				var neighbor: Vector2 = segment[1 - endpoint]
+				var key := _point_key(point)
+				if not vertices.has(key):
+					vertices[key] = {"point": point, "neighbors": {}, "coast": false}
+				vertices[key]["neighbors"][_point_key(neighbor)] = neighbor
+				vertices[key]["coast"] = vertices[key]["coast"] or bool(segment[2])
+	var result := {}
+	for key in vertices:
+		var vertex: Dictionary = vertices[key]
+		var point: Vector2 = vertex["point"]
+		var neighbors: Array = vertex["neighbors"].values()
+		# Pin junctions and coastline. Shared degree-two edges move once, so
+		# both polygons and the river graph consume exactly the same vertices.
+		if neighbors.size() == 2 and not vertex["coast"]:
+			point = (neighbors[0] + point * 2.0 + neighbors[1]) * 0.25
+		result[key] = point
+	return result
 
 
 static func validate_visual_region(
@@ -113,11 +140,14 @@ static func smooth_visual_boundary(
 		return polygon.duplicate()
 	var max_offset := float(constraints.get("max_offset", 0.0))
 	var result := PackedVector2Array()
+	var shared: Dictionary = constraints.get("shared_vertices", {})
 	for index in range(polygon.size()):
 		var previous := polygon[(index - 1 + polygon.size()) % polygon.size()]
 		var current := polygon[index]
 		var next := polygon[(index + 1) % polygon.size()]
 		var target := (previous + current * 2.0 + next) * 0.25
+		if shared.has(_point_key(current)):
+			target = shared[_point_key(current)]
 		if max_offset > 0.0:
 			var delta := target - current
 			if delta.length() > max_offset:
@@ -156,8 +186,7 @@ static func rasterize_regions(
 						continue
 					ids.set_pixel(x, y, Color(city_id, 0.0, 0.0, 1.0))
 					coverage.set_pixel(x, y, Color.WHITE)
-					if x == x0 or x == x1:
-						edge.set_pixel(x, y, Color.WHITE)
+	_fill_region_edges(ids, edge)
 	var distance := _build_distance_channel(ids, land, edge)
 	return {
 		"city_id": ids,
@@ -166,6 +195,28 @@ static func rasterize_regions(
 		"region_distance": distance,
 		"region_edge": edge,
 	}
+
+
+static func _fill_region_edges(ids: Image, edge: Image) -> void:
+	var width := ids.get_width()
+	var height := ids.get_height()
+	var labels := ids.get_data().to_float32_array()
+	var values := PackedFloat32Array()
+	values.resize(width * height)
+	for y in range(height):
+		for x in range(width):
+			var index := y * width + x
+			var city_id := labels[index]
+			if city_id < 0.0:
+				continue
+			if (
+				(x > 0 and labels[index - 1] != city_id)
+				or (x + 1 < width and labels[index + 1] != city_id)
+				or (y > 0 and labels[index - width] != city_id)
+				or (y + 1 < height and labels[index + width] != city_id)
+			):
+				values[index] = 1.0
+	edge.set_data(width, height, false, Image.FORMAT_RF, values.to_byte_array())
 
 
 static func _build_distance_channel(
@@ -185,8 +236,7 @@ static func _build_distance_channel(
 				distances[index] = 0
 			else:
 				distances[index] = INF
-	# Two chamfer passes produce a stable 2D distance field without using
-	# per-pixel dictionaries or a second polygon scan.
+	# Two passes approximate boundary distance on the four-neighbor grid.
 	for y in range(height):
 		for x in range(width):
 			var index := y * width + x
