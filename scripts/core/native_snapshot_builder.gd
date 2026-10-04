@@ -3,12 +3,21 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 20
+const SCHEMA_VERSION: int = 21
 
 
 static func succession_validation_error(snapshot: Dictionary) -> String:
 	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
 		return "Incompatible native snapshot schema"
+	var chronicle_events = snapshot.get("chronicle_events", [])
+	if not chronicle_events is Array:
+		return "Invalid chronicle event list"
+	for event_value in chronicle_events:
+		if not event_value is Dictionary or not event_value.has("text") or not event_value.has("day"):
+			return "Invalid chronicle event"
+	var pending_wars = snapshot.get("chronicle_pending_war_ids", [])
+	if not pending_wars is Array:
+		return "Invalid chronicle pending list"
 	var nations: Dictionary = snapshot.get("nations", {})
 	var count := int(nations.get("count", -1))
 	for key in ["family_tree_ids", "ruler_person_ids", "crown_prince_ids", "competition_closed", "succession_identity", "ruler_archetypes", "ruler_revisions", "ruler_started_days", "ruler_traits"]:
@@ -126,6 +135,9 @@ static func build(state: GameState) -> Dictionary:
 		"family_trees": _build_family_trees(state),
 		"succession_conflicts": _build_succession_conflicts(state),
 		"succession_events": state.succession_events.duplicate(true),
+		"chronicle_events": state.chronicle_events.duplicate(true),
+		"war_chronicle_contexts": state.war_chronicle_contexts.duplicate(true),
+		"chronicle_pending_war_ids": state.chronicle_pending_war_ids.duplicate(),
 		"winner": state.winner,
 		"uses_heightmap": int(state.uses_heightmap),
 		"ownership_revision": state.ownership_revision,

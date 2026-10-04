@@ -727,6 +727,8 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
 	state.refresh_derived()
+	# 战争账本只在外交、领土和军队清理均完成后的日边界生成最终摘要。
+	ChronicleRules.finalize_pending(state)
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"cleanup_refresh", cleanup_part_started)
 	if runtime_stage_profiling_enabled:
@@ -4165,6 +4167,7 @@ func _execute_ultimatum(action: Dictionary, cache: Dictionary, frozen_gold_flows
 	var attacker_id := int(action["a"])
 	var target_id := int(action["b"])
 	var nation := state.nations[attacker_id]
+	var target_name_snapshot := str(state.nations[target_id].name)
 	if nation.war_preparation_target_nation != target_id or nation.war_preparation_objective_city != int(action.get("objective_city", -1)):
 		return false
 	if not DiplomacyAI.war_preparation_launch_allowed(state, attacker_id, cache) or not DiplomacyAI.can_initiate_war_at_range(state, attacker_id, target_id, cache) or not state.can_alliance_declare_war(attacker_id, target_id):
@@ -4194,10 +4197,21 @@ func _execute_ultimatum(action: Dictionary, cache: Dictionary, frozen_gold_flows
 			_clear_war_preparation(member_id)
 		_clear_war_preparation(attacker_id)
 		if outcome == UltimatumRules.Outcome.SUBMIT:
+			ChronicleRules.record_ultimatum(
+				state,
+				attacker_id,
+				target_id,
+				outcome,
+				str(state.nations[target_id].name),
+				[],
+				target_name_snapshot
+			)
 			_synchronize_alliance_wars(attacker_id, target_id, cache, frozen_gold_flows)
 			for pair: Vector2i in former_alliances.values():
 				if not state.has_military_access(pair.x, pair.y):
 					_repatriate_after_access_revoked(pair.x, pair.y)
+		elif outcome == UltimatumRules.Outcome.ANNEX:
+			ChronicleRules.record_ultimatum(state, attacker_id, target_id, outcome, "", members, target_name_snapshot)
 		for other in state.nations:
 			if members.has(other.war_preparation_target_nation):
 				_clear_war_preparation(other.id)
@@ -4341,6 +4355,9 @@ func _execute_diplomatic_action(
 				changed = _set_coalition_war(
 					attackers, defenders, frozen_gold_flows
 				)
+				if changed:
+					var declared_war_id := state.war_id_between(nation_a, nation_b)
+					ChronicleRules.add_war_members(state, declared_war_id, attackers, defenders)
 				_record_tick_profile_stage(
 					"diplomacy_declare_set_war",
 					declaration_part_started
@@ -5099,14 +5116,19 @@ func _commit_coalition_peace_plan(plan: Dictionary) -> Dictionary:
 		if rebel_id < 0 or not state.rebellions.has(rebel_id):
 			continue
 		var record: Dictionary = state.rebellions[rebel_id]
+		var parent_id := int(record.get("parent_id", -1))
+		var ruler_name := str(state.nations[rebel_id].ruler_name) if rebel_id >= 0 and rebel_id < state.nations.size() else "未知"
+		var center_names := state._rebellion_center_names(record)
 		record["active"] = false
 		record["recognized"] = bool(update.get("recognized", false))
 		state.rebellions[rebel_id] = record
 		if bool(update.get("recognized", false)):
 			WorldNaming.promote_special_nation_to_sovereign(state, rebel_id)
+			ChronicleRules.record_rebellion(state, rebel_id, parent_id, ruler_name, center_names, true, str(state.nations[rebel_id].name))
+		elif bool(update.get("suppressed", false)):
+			ChronicleRules.record_rebellion(state, rebel_id, parent_id, ruler_name, center_names, false, "")
 		if not bool(update.get("suppressed", false)):
 			continue
-		var parent_id := int(update.get("parent_id", -1))
 		for city_value in update.get("core_city_ids", []):
 			var city_id := int(city_value)
 			if city_id < 0 or city_id >= state.cities.size():
@@ -12708,6 +12730,13 @@ func _resolve_combat_round(
 	shared_roll: int,
 	tactical_entropy: int
 ) -> void:
+	var sizes_before := {}
+	var war_by_army := {}
+	for side in [battle.side_a, battle.side_b]:
+		for army_value in side:
+			var army: Army = army_value
+			sizes_before[army.id] = army.size
+			war_by_army[army.id] = army.campaign_war_id
 	_lock_campaign_reports_for_battle(battle)
 	_sync_battle_ruler_modifiers(battle)
 	_refresh_battle_frontline_priorities(battle)
@@ -12718,6 +12747,18 @@ func _resolve_combat_round(
 		tactical_entropy,
 		state.day
 	)
+	var counted := {}
+	for side in [battle.side_a, battle.side_b, battle.routed_a, battle.routed_b]:
+		for army_value in side:
+			var army: Army = army_value
+			if counted.has(army.id):
+				continue
+			counted[army.id] = true
+			var before := int(sizes_before.get(army.id, army.size))
+			var loss := maxi(before - army.size, 0)
+			var war_id := int(war_by_army.get(army.id, army.campaign_war_id))
+			if loss > 0 and war_id >= 0:
+				ChronicleRules.record_casualties(state, war_id, army.owner_nation, loss)
 	# Combat 只负责判定单军溃退并从战斗侧移出；Simulation 拥有路径与边占用，
 	# 因此在同一回合立即从真实战场位置启动撤退。
 	for army in battle.routed_a:

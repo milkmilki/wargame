@@ -179,6 +179,25 @@ func _test_world_naming() -> void:
 		small_display
 	)
 	var title_anchor := vassal.nations[1].founding_city_id
+	var administrative_vassal := _make_vassal_naming_state(1)
+	WorldNaming.assign_initial_names(administrative_vassal, SEED)
+	_set_rebellion_partition(administrative_vassal, [0, 1])
+	WorldNaming.assign_vassal_name(administrative_vassal, 1, [1])
+	var expected_title := administrative_vassal.cities[1].name + "王"
+	_check(
+		WorldNaming.city_display_name(administrative_vassal, 1).ends_with("·州")
+			and administrative_vassal.nations[1].name == expected_title
+			and WorldNaming.nation_display_name(administrative_vassal, 1) == expected_title,
+		"naming/vassal_title_excludes_administrative_city_suffix"
+	)
+	administrative_vassal.nations[1].name = administrative_vassal.cities[1].name + "·州王"
+	administrative_vassal.nations[1].short_name = administrative_vassal.nations[1].name
+	WorldNaming.assign_initial_names(administrative_vassal, SEED)
+	_check(
+		administrative_vassal.nations[1].name == expected_title
+			and administrative_vassal.nations[1].short_name == expected_title,
+		"naming/old_administrative_vassal_title_repaired_on_initialization"
+	)
 	vassal.nations[1].capital_city_id = 2
 	var renamed_capital_display := WorldNaming.nation_display_name(vassal, 1)
 	vassal.cities[title_anchor].owner_nation = 0

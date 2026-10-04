@@ -206,6 +206,8 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 			if conflict.side_for(army.id) != 0:
 				return false
 	var nation := state.nations[conflict.nation_id]
+	var challenger_name := str(PrincePolitics.person(state, nation.id, conflict.challenger_person_id).get("name", "皇子"))
+	var crown_name := str(PrincePolitics.person(state, nation.id, conflict.crown_person_id).get("name", "太子"))
 	var receiver := nation.id
 	if not nation.alive:
 		receiver = state.cities[conflict.capital_city_id].owner_nation
@@ -248,6 +250,10 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 	state.release_campaign_front(conflict.offense_front_id)
 	state.release_campaign_front(conflict.defense_front_id)
 	record(state, conflict, "finish", {"outcome": conflict.pending_outcome, "delayed": conflict.succession_delayed})
+	var result_text := "%d年 皇子%s兵变，%s平之" % [int(state.day / 360) + 1, challenger_name, crown_name]
+	if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED:
+		result_text = "%d年 皇子%s兵变，改立%s为太子" % [int(state.day / 360) + 1, challenger_name, challenger_name]
+	state.chronicle_events.append({"day": state.day, "year": int(state.day / 360) + 1, "kind": "succession", "actor_ids": [conflict.nation_id], "person_ids": [conflict.challenger_person_id, conflict.crown_person_id], "result": "success" if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED else "failure", "text": result_text})
 	state.succession_conflicts.erase(nation.id)
 	state.family_revision += 1
 	state.diplomacy_revision += 1

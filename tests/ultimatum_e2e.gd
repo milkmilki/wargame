@@ -27,6 +27,7 @@ func _run() -> void:
 				_check(state.family_trees.has(actor_tree), "former family archived")
 			elif outcome == UltimatumRules.Outcome.SUBMIT:
 				_check(state.overlord_of(1) == 0 and state.nations[1].family_tree_id == actor_tree, "submission retains dynasty")
+				_check(not state.chronicle_events.is_empty() and str(state.chronicle_events[-1].text).ends_with("，封" + state.nations[1].name) and state.nations[1].name.ends_with("王"), "submission chronicle preserves full royal title")
 				synchronous_submission = var_to_bytes(NativeSnapshotBuilder.build(state))
 			else:
 				_check(state.is_enemy(0, 1), "refusal declares war")

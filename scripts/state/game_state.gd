@@ -180,6 +180,11 @@ var diplomatic_relations: Dictionary = {}
 var diplomatic_since_day: Dictionary = {}
 var truce_until_day: Dictionary = {}
 var diplomatic_history: Array[Dictionary] = []
+## 只在战争或政治事务最终结束时追加的冻结历史记录。
+var chronicle_events: Array[Dictionary] = []
+## war_id -> 结算期间的参与者、名称快照与实际战斗损失。
+var war_chronicle_contexts: Dictionary = {}
+var chronicle_pending_war_ids: Array[int] = []
 ## 规范化交战国家对 -> 稳定战争 ID。外交目标只是开战目标，不承担战争身份。
 var war_relation_ids: Dictionary = {}
 ## 规范化国家对 key -> {attacker, defender, city_id, reason, started_day, scope}。
@@ -773,6 +778,9 @@ func _reset_world(world_seed: int) -> void:
 	diplomatic_since_day.clear()
 	truce_until_day.clear()
 	diplomatic_history.clear()
+	chronicle_events.clear()
+	war_chronicle_contexts.clear()
+	chronicle_pending_war_ids.clear()
 	war_relation_ids.clear()
 	war_objectives.clear()
 	suzerainty.clear()
@@ -4717,6 +4725,8 @@ func set_war_objective(
 	if int(war_relation_ids.get(key, -1)) != war_id:
 		diplomacy_revision += 1
 	war_relation_ids[key] = war_id
+	if not war_chronicle_contexts.has(war_id) and not rebellions.has(attacker) and not rebellions.has(defender) and not is_succession_identity(attacker) and not is_succession_identity(defender):
+		ChronicleRules.begin_war(self, war_id, [attacker], [defender])
 	war_objectives[key] = {
 		"attacker": attacker,
 		"defender": defender,
@@ -4740,6 +4750,7 @@ func war_id_between(nation_a: int, nation_b: int) -> int:
 func merge_war_ids(keep_war_id: int, merged_war_id: int) -> void:
 	if keep_war_id < 0 or merged_war_id < 0 or keep_war_id == merged_war_id:
 		return
+	ChronicleRules.merge_war(self, keep_war_id, merged_war_id)
 	for pair_value in campaign_pairs.values():
 		var pair := pair_value as CoalitionCampaignPair
 		if pair.war_id == merged_war_id:
@@ -4767,6 +4778,7 @@ func release_war_pool(war_id: int) -> void:
 		return
 	for nation in nations:
 		release_nation_war_pool(nation.id, war_id)
+	ChronicleRules.mark_pending(self, war_id)
 
 
 func release_nation_war_pool(nation_id: int, war_id: int) -> void:
@@ -4967,6 +4979,8 @@ func set_diplomatic_relation(
 	if relation == DiplomaticRelation.WAR and previous != DiplomaticRelation.WAR:
 		if not war_relation_ids.has(key):
 			war_relation_ids[key] = next_war_id
+			if not rebellions.has(nation_a) and not rebellions.has(nation_b) and nations[nation_a].name_kind != WorldNaming.KIND_REBEL and nations[nation_b].name_kind != WorldNaming.KIND_REBEL and not is_succession_identity(nation_a) and not is_succession_identity(nation_b):
+				ChronicleRules.begin_war(self, next_war_id, [nation_a], [nation_b])
 			next_war_id += 1
 	if previous == DiplomaticRelation.WAR and relation != DiplomaticRelation.WAR:
 		var finished_war_id := int(war_relation_ids.get(key, -1))
@@ -5579,8 +5593,11 @@ func recognize_regional_rebellion(rebel_id: int) -> bool:
 	record["active"] = false
 	rebellions[rebel_id] = record
 	var old_name := str(nations[rebel_id].name)
+	var rebel_ruler_name := str(nations[rebel_id].ruler_name)
+	var uprising_centers := _rebellion_center_names(record)
 	WorldNaming.promote_special_nation_to_sovereign(self, rebel_id)
 	changed = changed or str(nations[rebel_id].name) != old_name
+	ChronicleRules.record_rebellion(self, rebel_id, parent_id, rebel_ruler_name, uprising_centers, true, str(nations[rebel_id].name))
 	return changed
 
 
@@ -5593,6 +5610,8 @@ func suppress_regional_rebellion(rebel_id: int) -> bool:
 	var parent_id := int(record.get("parent_id", -1))
 	if parent_id < 0 or parent_id >= nations.size():
 		return false
+	var rebel_ruler_name := str(nations[rebel_id].ruler_name)
+	var uprising_centers := _rebellion_center_names(record)
 	if not annex_nation(parent_id, rebel_id):
 		return false
 	set_diplomatic_relation(
@@ -5610,7 +5629,19 @@ func suppress_regional_rebellion(rebel_id: int) -> bool:
 			cities[city_id].rebellion_cooldown_until_day = (
 				day + RebellionSystem.REBELLION_COOLDOWN_DAYS
 			)
+	ChronicleRules.record_rebellion(self, rebel_id, parent_id, rebel_ruler_name, uprising_centers, false, "")
 	return true
+
+
+func _rebellion_center_names(record: Dictionary) -> Array[String]:
+	var result: Array[String] = []
+	for value in record.get("core_city_ids", []):
+		var city_id := int(value)
+		var center := administrative_center_of(city_id)
+		if center >= 0 and center < cities.size() and not result.has(str(cities[center].name)):
+			result.append(str(cities[center].name))
+	result.sort()
+	return result
 
 
 func prune_rebellions() -> bool:
@@ -5630,6 +5661,13 @@ func prune_rebellions() -> bool:
 			and nations[parent_id].alive
 		)
 		if not rebel_alive:
+			ChronicleRules.record_rebellion_external_end(
+				self,
+				rebel_id,
+				parent_id,
+				str(nations[rebel_id].ruler_name) if rebel_id >= 0 and rebel_id < nations.size() else "未知",
+				_rebellion_center_names(record)
+			)
 			record["active"] = false
 			rebellions[rebel_id] = record
 			changed = true

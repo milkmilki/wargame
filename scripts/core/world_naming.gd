@@ -821,7 +821,7 @@ static func _vassal_display_name(game_state, nation_id: int) -> String:
 	var base := (
 		city_short_name(game_state, title_city_id)
 		if bool(nation.vassal_single_char)
-		else city_display_name(game_state, title_city_id)
+		else city_display_name(game_state.cities[title_city_id])
 	)
 	return base + "王"
 

@@ -18,6 +18,11 @@ var _tree_canvas: Control
 var _relations: VBoxContainer
 var _back: Button
 var _navigation: Array[int] = []
+var _mode: int = 0
+var _mode_select: OptionButton
+var _history_scroll: ScrollContainer
+var _history: VBoxContainer
+var _history_font: Font
 
 
 func _ready() -> void:
@@ -46,6 +51,8 @@ func open_for_nation(nation_id: int) -> bool:
 	_tree_canvas.set("current_person_id", _state.nations[nation_id].ruler_person_id)
 	_tree_canvas.call("rebuild_layout")
 	_rebuild_relations()
+	_rebuild_history()
+	_set_mode(_mode)
 	var was_open := _overlay.visible
 	_overlay.visible = true
 	if not was_open:
@@ -103,6 +110,49 @@ func _rebuild_relations() -> void:
 		_add_relation("已纳土政权", member_id)
 
 
+func _rebuild_history() -> void:
+	if _history == null or _state == null:
+		return
+	for child in _history.get_children():
+		_history.remove_child(child)
+		child.queue_free()
+	var events: Array = _state.chronicle_events.duplicate()
+	events.reverse()
+	for event_value in events:
+		var event: Dictionary = event_value
+		var ids: Array = []
+		ids.assign(event.get("actor_ids", []))
+		for id in event.get("target_ids", []):
+			if not ids.has(int(id)): ids.append(int(id))
+		if _nation_id not in ids:
+			continue
+		var label := Label.new()
+		var views: Dictionary = event.get("views", {})
+		label.text = str(views.get(_nation_id, event.get("text", "")))
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size = Vector2(300.0, 32.0)
+		label.add_theme_font_override("font", _history_font)
+		label.add_theme_font_size_override("font_size", 14)
+		label.add_theme_color_override("font_color", Color.BLACK)
+		_history.add_child(label)
+
+
+func _set_mode(mode: int) -> void:
+	_mode = clampi(mode, 0, 1)
+	if _mode_select != null and _mode_select.selected != _mode:
+		_mode_select.select(_mode)
+	if _tree_canvas != null:
+		_tree_canvas.visible = _mode == 0
+	if _history_scroll != null:
+		_history_scroll.visible = _mode == 1
+
+
+func _on_mode_selected(index: int) -> void:
+	_set_mode(index)
+	if _mode == 1:
+		_rebuild_history()
+
+
 func _add_relation(role: String, nation_id: int) -> void:
 	var button := Button.new()
 	button.text = "%s · %s" % [role, WorldNaming.nation_display_name(_state, nation_id)]
@@ -144,6 +194,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _build_ui() -> void:
 	var font := MapRenderer.create_ui_font()
+	_history_font = MapRenderer.create_map_label_font()
 	_overlay = Control.new()
 	_overlay.name = "FamilyTreeOverlay"
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -194,6 +245,13 @@ func _build_ui() -> void:
 	title_style.content_margin_left = 18.0
 	_title.add_theme_stylebox_override("normal", title_style)
 	header.add_child(_title)
+	_mode_select = OptionButton.new()
+	_mode_select.name = "Mode"
+	_mode_select.add_item("家族树")
+	_mode_select.add_item("历史记录")
+	_mode_select.custom_minimum_size = Vector2(120.0, 42.0)
+	_mode_select.item_selected.connect(_on_mode_selected)
+	header.add_child(_mode_select)
 	_back = Button.new()
 	_back.name = "Back"
 	_back.text = "←"
@@ -231,6 +289,17 @@ func _build_ui() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	body.add_child(scroll)
+	_history_scroll = ScrollContainer.new()
+	_history_scroll.name = "HistoryScroll"
+	_history_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_history_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_history_scroll.visible = false
+	body.add_child(_history_scroll)
+	_history = VBoxContainer.new()
+	_history.name = "History"
+	_history.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_history.add_theme_constant_override("separation", 8)
+	_history_scroll.add_child(_history)
 
 	_tree_canvas = FamilyTreeCanvas.new()
 	_tree_canvas.name = "TreeCanvas"

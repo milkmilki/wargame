@@ -244,7 +244,7 @@ func _test_real_unified_retreat() -> void:
 	_check(state.armies[0].battle_id == -1 and state.armies[1].battle_id == -1 and state.battles.is_empty(), "unified settlement leaves no old active participant references")
 	_check(state.armies[2].size > 10000 - 1000, "winning survivor receives the existing establishment reward")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 20 and not snapshot.battles.has("reinforcement_morale_a"), "snapshot drops obsolete reinforcement counters")
+	_check(snapshot.schema_version == 21 and not snapshot.battles.has("reinforcement_morale_a"), "snapshot drops obsolete reinforcement counters")
 	sim.free()
 
 

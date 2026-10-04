@@ -94,6 +94,11 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 	_view_state.rebellions = (
 		(snapshot["rebellions"] as Dictionary).duplicate(true)
 	)
+	var chronicle_count := int(snapshot.get("chronicle_event_count", 0))
+	var chronicle_source: Array = live_state.chronicle_events
+	_view_state.chronicle_events = chronicle_source.slice(0, mini(chronicle_count, chronicle_source.size())).duplicate(true)
+	_view_state.war_chronicle_contexts = (snapshot.get("war_chronicle_contexts", {}) as Dictionary).duplicate(true)
+	_view_state.chronicle_pending_war_ids = (snapshot.get("chronicle_pending_war_ids", []) as Array).duplicate()
 	_view_state.recognized_city_owners = (
 		(snapshot["recognized_city_owners"] as PackedInt32Array).duplicate()
 	)
@@ -243,6 +248,10 @@ func _capture(game_state: GameState) -> void:
 			game_state.suzerainty_low_cohesion_since_day.duplicate(true)
 		),
 		"rebellions": game_state.rebellions.duplicate(true),
+		# 编年史是只追加事实；快照只保存前缀长度，避免每月复制完整历史。
+		"chronicle_event_count": game_state.chronicle_events.size(),
+		"war_chronicle_contexts": game_state.war_chronicle_contexts.duplicate(true),
+		"chronicle_pending_war_ids": game_state.chronicle_pending_war_ids.duplicate(),
 		"winner": game_state.winner,
 	})
 
