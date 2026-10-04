@@ -1324,6 +1324,28 @@ func _test_rebellion_system() -> void:
 		"rebellion/parent_war_locked_for_one_year"
 	)
 	var rebel_name_before := start_state.nations[rebel_id].name
+	var rebel_leader_before := start_state.nations[rebel_id].ruler_name
+	var rebel_name_ok := (
+		rebel_name_before == rebel_leader_before + "军"
+		and start_state.nations[rebel_id].short_name == rebel_name_before
+	)
+	# 兼容旧档：旧地域名叛军在命名初始化时迁移为领导人名。
+	start_state.nations[rebel_id].name = "河间军"
+	start_state.nations[rebel_id].short_name = "河间"
+	WorldNaming.assign_initial_names(start_state, int(start_state.world_seed))
+	var migrated_rebel_name := start_state.nations[rebel_id].name
+	var migrated_rebel_ok := (
+		start_state.nations[rebel_id].name_kind == WorldNaming.KIND_REBEL
+		and migrated_rebel_name == start_state.nations[rebel_id].ruler_name + "军"
+		and start_state.nations[rebel_id].short_name == migrated_rebel_name
+	)
+	_check(migrated_rebel_ok, "rebellion/legacy_regional_name_migrates")
+	rebel_name_before = migrated_rebel_name
+	rebel_leader_before = start_state.nations[rebel_id].ruler_name
+	rebel_name_ok = (
+		rebel_name_before == rebel_leader_before + "军"
+		and start_state.nations[rebel_id].short_name == rebel_name_before
+	)
 	var naming_revision_before := start_state.naming_revision
 	var recognized := start_state.recognize_regional_rebellion(rebel_id)
 	var recognize_ok := recognized
@@ -1335,7 +1357,7 @@ func _test_rebellion_system() -> void:
 	recognize_ok = recognize_ok and (
 		not bool(start_state.rebellions[rebel_id]["active"])
 		and bool(start_state.rebellions[rebel_id]["recognized"])
-		and rebel_name_before.ends_with("军")
+		and rebel_name_ok
 		and start_state.nations[rebel_id].name.length() == 1
 		and start_state.nations[rebel_id].short_name
 			== start_state.nations[rebel_id].name

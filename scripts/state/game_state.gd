@@ -3227,10 +3227,13 @@ func enemy_army_present_in_administrative_region(
 
 func reinforce_city_garrisons_monthly() -> int:
 	var total := 0
+	# 每个州治只需判断一次。逐中心调用 city_under_siege 会在多战线时
+	# 退化成 O(州治×战斗)，先按战斗建立集合再做 O(1) 查询。
+	var besieged := besieged_city_ids()
 	for center_value in administrative_center_city_ids:
 		var center_id := int(center_value)
 		var city := cities[center_id]
-		if city_under_siege(center_id):
+		if besieged.has(center_id):
 			continue
 		var owner_id := city.owner_nation
 		if owner_id < 0 or owner_id >= nations.size():
@@ -4878,6 +4881,20 @@ func can_alliance_declare_war(
 		return false
 	var attackers := alliance_bloc(nation_a)
 	var defenders := alliance_bloc(nation_b)
+	return can_alliance_blocs_declare_war(
+		nation_a, nation_b, attackers, defenders
+	)
+
+## 使用本轮已构建的攻守集团完成宣战资格校验。
+## 调用方必须先以当前外交版本构建 attackers/defenders；这里不再次运行并查集。
+func can_alliance_blocs_declare_war(
+	nation_a: int,
+	nation_b: int,
+	attackers: Array[int],
+	defenders: Array[int]
+) -> bool:
+	if not can_declare_war(nation_a, nation_b):
+		return false
 	if attackers.is_empty() or defenders.is_empty():
 		return false
 	for attacker in attackers:

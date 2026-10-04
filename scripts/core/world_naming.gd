@@ -51,8 +51,7 @@ const SEPARATIST_STATE_NAMES: Array[String] = [
 	"钟", "舒", "弦", "葛", "萧", "郕", "巢", "赖",
 ]
 
-## 藩王和地方叛军共用的多字地域词典。它们永远不会从上面的单字主权
-## 国号池取名，即使叛军后来取得独立，仍保留地域政权身份。
+## 藩王使用的多字地域词典。地方叛军正式名改用领导人姓名，不再从此处取名。
 const REGIONAL_TITLES: Array[String] = [
 	"河间", "淮南", "琅琊", "颍川", "汝南", "南阳",
 	"弘农", "河内", "河南", "上党", "太原", "雁门",
@@ -298,18 +297,17 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 				nation.short_name = formal
 				changed = true
 		elif kind == KIND_REBEL:
-			var base := _nation_base(nation)
-			formal = base + "军" if _is_regional_base(base) else ""
-			if formal.is_empty() or not _reserve(nation_registry, formal, nation_id):
-				formal = _allocate_regional_formal(
-					game_state, world_seed, nation_id,
-					_owned_land_city_ids(game_state, nation_id), nation_registry,
-					"nation/rebel", -1, "军"
-				)
-			var rebel_base := formal.substr(0, formal.length() - 1)
-			if nation.name != formal or nation.short_name != rebel_base:
+			# 活跃叛军的正式名跟随当权领导人；旧存档中的地域名在此
+			# 规范化，已被承认的势力不会再走 KIND_REBEL 分支。
+			_assign_unique_ruler(
+				nation, world_seed, nation_id, ruler_registry
+			)
+			formal = _rebel_leader_formal_name(
+				game_state, nation_id, nation.ruler_name, nation_registry
+			)
+			if nation.name != formal or nation.short_name != formal:
 				nation.name = formal
-				nation.short_name = rebel_base
+				nation.short_name = formal
 				changed = true
 		else:
 			var replacement: Dictionary = _founding_sovereign_identity(
@@ -450,7 +448,7 @@ static func assign_submitted_vassal_name(game_state, subject_id: int) -> String:
 	return formal
 
 
-## 为地方叛军分配地域名；获承认后使用建国城的主权国号。
+## 为地方叛军分配“领导人＋军”名称；获承认后使用建国城的主权国号。
 static func assign_rebel_name(
 	game_state,
 	rebel_id: int,
@@ -467,22 +465,17 @@ static func assign_rebel_name(
 	ensure_founding_city_id(game_state, rebel_id)
 	var registry := _registry(game_state, _NATION_REGISTRY_META)
 	_backfill_nation_registry(game_state, registry, rebel_id)
-	var base := _nation_base(nation)
-	var formal := base + "军" if _is_regional_base(base) else ""
-	if formal.is_empty() or not _reserve(registry, formal, rebel_id):
-		formal = _allocate_regional_formal(
-			game_state, int(game_state.world_seed), rebel_id, city_ids, registry,
-			"nation/rebel", parent_id, "军"
-		)
-		base = formal.substr(0, formal.length() - 1)
-	nation.short_name = base
-	nation.name = formal
-	nation.name_kind = KIND_REBEL
 	var rulers := _registry(game_state, _RULER_REGISTRY_META)
 	_backfill_ruler_registry(game_state, rulers, rebel_id)
 	_assign_unique_ruler(
 		nation, int(game_state.world_seed), rebel_id + parent_id * 4099, rulers
 	)
+	var formal := _rebel_leader_formal_name(
+		game_state, rebel_id, nation.ruler_name, registry
+	)
+	nation.short_name = formal
+	nation.name = formal
+	nation.name_kind = KIND_REBEL
 	var new_signature := "%s|%s|%s|%s|%d" % [
 		nation.name, nation.short_name, nation.name_kind, nation.ruler_name,
 		nation.founding_city_id,
@@ -490,6 +483,29 @@ static func assign_rebel_name(
 	if new_signature != old_signature:
 		_bump_revision(game_state)
 	return nation.name
+
+
+## 领导人姓名由独立注册表保证唯一；这里再占用国家正式名，兼容旧档中
+## 已存在同名国家的情况。正常情况下结果严格为“姓名＋军”。
+static func _rebel_leader_formal_name(
+	game_state,
+	nation_id: int,
+	leader_name: String,
+	registry: Dictionary
+) -> String:
+	var base := leader_name.strip_edges()
+	if base.is_empty():
+		base = "无名"
+	var formal := base + "军"
+	if _reserve(registry, formal, nation_id):
+		return formal
+	var serial := 2
+	while true:
+		formal = base + _chinese_digits(serial) + "军"
+		if _reserve(registry, formal, nation_id):
+			return formal
+		serial += 1
+	return formal
 
 
 ## 继位后确认新君主姓名未被其他国家占用。RulerProfile 负责抽取身份，

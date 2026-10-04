@@ -4303,22 +4303,31 @@ func _execute_diplomatic_action(
 						% occupations_restored
 					)
 		DiplomacyAI.Action.DECLARE_WAR:
-			if (
+			var attackers: Array[int] = []
+			var defenders: Array[int] = []
+			var declaration_allowed := (
 				(int(action.get("objective_city", -1)) < 0 or DiplomacyAI._ruler_allows_war_objective(
 					state, nation_a, int(action["objective_city"])
 				))
-				and
-				DiplomacyAI.can_initiate_war_at_range(
+				and DiplomacyAI.can_initiate_war_at_range(
 					state, nation_a, nation_b, evaluation_cache
 				)
-				and state.can_alliance_declare_war(nation_a, nation_b)
-			):
+			)
+			if declaration_allowed:
+				attackers = DiplomacyAI._cached_alliance_bloc(
+					state, nation_a, evaluation_cache
+				)
+				defenders = DiplomacyAI._cached_alliance_bloc(
+					state, nation_b, evaluation_cache
+				)
+				declaration_allowed = state.can_alliance_blocs_declare_war(
+					nation_a, nation_b, attackers, defenders
+				)
+			if declaration_allowed:
 				var declaration_part_started := (
 					Time.get_ticks_usec()
 					if tick_phase_profiling_enabled else 0
 				)
-				var attackers := state.alliance_bloc(nation_a)
-				var defenders := state.alliance_bloc(nation_b)
 				action_bloc_a = attackers
 				action_bloc_b = defenders
 				_record_tick_profile_stage(

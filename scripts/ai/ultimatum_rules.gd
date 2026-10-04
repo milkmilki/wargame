@@ -46,7 +46,7 @@ static func evaluate(state: GameState, attacker_id: int, target_id: int, cache: 
 	var members: Array = index.members[target_root]
 	result.target_members = members.duplicate()
 	for member_id in members:
-		if state.is_in_civil_war(member_id) or state.rebellions.has(member_id) or state.nations[member_id].name_kind == WorldNaming.KIND_REBEL or not state.wars_of(member_id).is_empty():
+		if state.is_in_civil_war(member_id) or state.rebellions.has(member_id) or state.nations[member_id].name_kind == WorldNaming.KIND_REBEL or not _cached_wars_of(state, member_id, cache).is_empty():
 			return result
 	# A political root can have a civil-war branch outside the peaceful food pool.
 	for subject_id in state.suzerainty:
@@ -74,11 +74,11 @@ static func evaluate(state: GameState, attacker_id: int, target_id: int, cache: 
 	var capital_center := state.administrative_center_of(state.nations[target_id].capital_city_id)
 	defending_power += ArmyPower.city_garrison_defense(state, attacker_id, capital_center)
 	var support := 0.0
-	var bloc := state.alliance_bloc(target_id)
+	var bloc := _cached_alliance_bloc(state, target_id, cache)
+	var reserved: Dictionary = index.reserved
 	for ally_id in index.neighbors.get(target_root, {}):
 		if not bloc.has(ally_id) or roots[ally_id] == target_root or roots[ally_id] == attacker_root:
 			continue
-		var reserved: Dictionary = index.reserved
 		for army in index.armies.get(ally_id, []):
 			if army.state == Army.State.IDLE and army.campaign_war_id < 0 and army.campaign_front_id < 0 and not reserved.has(army.id):
 				support += ArmyPower.effective(army)
@@ -97,6 +97,20 @@ static func evaluate(state: GameState, attacker_id: int, target_id: int, cache: 
 	result.outcome = outcome_for_score(result.score, result.annexation_allowed)
 	result.eligible = true
 	return result
+
+## 通牒批次内复用战争关系。外交提交可能在批次中改变关系，版本键会让旧结果自然失效。
+static func _cached_wars_of(state: GameState, nation_id: int, cache: Dictionary) -> Array[int]:
+	var key := "ultimatum_wars:%d:%d:%d" % [nation_id, state.ownership_revision, state.diplomacy_revision]
+	if not cache.has(key):
+		cache[key] = state.wars_of(nation_id)
+	return cache[key] as Array[int]
+
+## alliance_bloc 是冲突感知并查集，单次评估中常被多个目标重复请求；按版本缓存只读结果。
+static func _cached_alliance_bloc(state: GameState, nation_id: int, cache: Dictionary) -> Array[int]:
+	var key := "ultimatum_bloc:%d:%d:%d" % [nation_id, state.ownership_revision, state.diplomacy_revision]
+	if not cache.has(key):
+		cache[key] = state.alliance_bloc(nation_id)
+	return cache[key] as Array[int]
 
 static func intimidation(nation: Nation) -> float:
 	var value := float({RulerProfile.CONQUEROR: 10, RulerProfile.REFORMER: 4, RulerProfile.TYRANT: 5}.get(nation.ruler_archetype, 0))
