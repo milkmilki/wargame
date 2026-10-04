@@ -58,7 +58,7 @@ func _init() -> void:
 							" kind=", edge.kind, " river=", river_id, " t=", t,
 							" pos=", road_start, " -> ", road_end, " hit=", hit
 						)
-	if minimum < TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING:
+	if minimum < TerrainMapGenerator.minimum_dock_city_spacing_for_count(land.size()):
 		push_error("DOCK_CITY_SPACING_FAILED min=%f pair=%s" % [minimum, str(closest_pair)])
 		quit(1)
 		return

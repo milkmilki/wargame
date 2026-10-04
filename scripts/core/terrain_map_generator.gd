@@ -33,6 +33,7 @@ const RIVER_COUNT: int = 2
 const RIVER_DOCK_LOWLAND_ALTITUDE: float = 0.18
 const RIVER_CROSSING_ENDPOINT_EPS: float = 0.0001
 const RIVER_DOCK_MIN_SPACING: float = 0.012
+const RIVER_DOCK_SPACING_REFERENCE_CITY_COUNT: int = 200
 const RIVER_DOCK_CITY_MIN_SPACING: float = 0.022
 ## 省界河流按同一参考岸的沿河省份归组，每省最多选择一个渡口。
 ## 低海拔、普通城市避让与渡口间距决定具体落点，不按河长、经度或
@@ -82,7 +83,7 @@ static func build(
 	var density_settings := normalize_city_density_settings(
 		city_density_settings
 	)
-	var cache_key := "settlement-v19-political-mask:%s:%d:%s:%s:%s:%d:%d" % [
+	var cache_key := "settlement-v20-density-dock-spacing:%s:%d:%s:%s:%s:%d:%d" % [
 		source_path, city_count, mask_signature,
 		political_mask_signature,
 		city_density_signature(density_settings),
@@ -1293,6 +1294,13 @@ static func minimum_city_spacing_for_count(city_count: int) -> float:
 			float(REFERENCE_CITY_COUNT)
 			/ float(maxi(city_count, 1))
 		)
+	)
+
+
+## Keep the default map clearance; denser maps shrink it with settlement spacing.
+static func minimum_dock_city_spacing_for_count(city_count: int) -> float:
+	return RIVER_DOCK_CITY_MIN_SPACING * minf(
+		1.0, sqrt(float(RIVER_DOCK_SPACING_REFERENCE_CITY_COUNT) / float(maxi(city_count, 1)))
 	)
 
 
@@ -2759,6 +2767,7 @@ static func _select_boundary_river_docks(
 	var path: PackedVector2Array = river["path"]
 	var edge_indices: Array = river["edge_indices"]
 	var candidates: Array[Dictionary] = []
+	var minimum_city_clearance := minimum_dock_city_spacing_for_count(land_positions.size())
 	for path_index in range(path.size() - 1):
 		var position := path[path_index].lerp(path[path_index + 1], 0.5)
 		var pixel := Vector2i(
@@ -2775,7 +2784,7 @@ static func _select_boundary_river_docks(
 		var city_clearance := _minimum_metric_position_distance(
 			position, land_positions, map_aspect_ratio
 		)
-		if city_clearance < RIVER_DOCK_CITY_MIN_SPACING:
+		if city_clearance < minimum_city_clearance:
 			continue
 		var graph_segment: Dictionary = graph_segments[
 			int(edge_indices[path_index])

@@ -33,7 +33,7 @@ echo "    编译通过（class_name 全部注册，无脚本错误）"
 echo
 
 echo "==> [2/29] 逻辑测试套件"
-for TEST in prince_politics succession_conflict succession_chain succession_counterattack succession_lifecycle succession_history succession_preparation military_funding military_food_eligibility court_expense resource_forecast resource_forecast_integration diplomatic_battle_lifecycle; do
+for TEST in war_desire_debug chronicle_smoke prince_politics succession_conflict succession_chain succession_counterattack succession_lifecycle succession_history succession_preparation military_funding military_food_eligibility court_expense resource_forecast resource_forecast_integration diplomatic_battle_lifecycle; do
   RESOURCE_LOG="$LOG_DIR/world-war-$TEST.log"
   HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
     --script "res://tests/$TEST.gd" --log-file "$RESOURCE_LOG"
@@ -154,6 +154,12 @@ echo "==> [2f3/29] 渡口不生成城市区域门禁"
 HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --script res://tests/dock_city_region.gd \
   --log-file "$LOG_DIR/world-war-dock-city-region.log"
+echo
+
+echo "==> [2f4/29] 五百城随机布局码头门禁"
+HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
+  --script res://tests/large_map_docks.gd \
+  --log-file "$LOG_DIR/world-war-large-map-docks.log"
 echo
 
 echo "==> [2g/29] 初始国家至少拥有一州门禁"
