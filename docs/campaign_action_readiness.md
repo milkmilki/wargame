@@ -25,6 +25,6 @@ The action phase changes only after an existing action or accepted command
 establishes execution. Recovering offensive troops keep their front and follow
 the collective center objective once available, without contributing readiness.
 
-No combat, C/R/V, war-pool, military-access, or daily scheduling rule changes.
+Current action eligibility uses strict C > 0.9V (conqueror C > 0.45V), with at least one real available army even at V=0. R applies after arrival to determine siege versus blockade. A second wave in HOLD_CAMP requires idle armies physically back at camp; an issued outbound route cannot bypass regrouping. See [manpower requirements](field_manpower_requirements.md) for preparation and allocation rules.
 Regression gate: `tests/campaign_action_readiness.gd` in `run_tests.sh`, plus
 camp, sortie, battle-report, defeat-regroup, and land/river campaign-chain tests.

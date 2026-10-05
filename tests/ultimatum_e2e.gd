@@ -128,6 +128,12 @@ func _run() -> void:
 	state.nations[0].war_preparation_unready_since_day = -1
 	actions.clear()
 	DiplomacyAI._collect_existing_war_preparation(state, 0, actions, {})
+	_check(actions.is_empty() and not DiplomacyAI.war_preparation_launch_allowed(state, 0), "deadline cannot bypass half the full assembly target")
+	var half_target := ceili(float(state.campaign_prewar_launch_requirement(0, 1, fixture.center)) * 0.5)
+	state.armies[0].size += maxi(half_target - DiplomacyAI.war_preparation_arrived_troops(state, 0), 0)
+	state.armies[0].max_size = state.armies[0].size
+	actions.clear()
+	DiplomacyAI._collect_existing_war_preparation(state, 0, actions, {})
 	_check(not actions.is_empty(), "best effort ultimatum emitted at deadline")
 	if not actions.is_empty():
 		_check(sim._execute_diplomatic_action(actions[0]), "deadline uses same ultimatum path")

@@ -185,10 +185,10 @@ func _test_campaign_battle_blocks_ad_hoc_local_reinforcement() -> void:
 	participant.campaign_war_id = -1
 	front.army_assignments.erase(participant.id)
 	_check(
-		not sim._nearby_main_reinforcement_candidates(
+		sim._nearby_main_reinforcement_candidates(
 			battle, attacker, {}
 		).is_empty(),
-		"没有州战役绑定的普通遭遇战应保留邻近增援"
+		"没有州战役绑定的普通遭遇战也不得绕过统一分配"
 	)
 	sim.free()
 

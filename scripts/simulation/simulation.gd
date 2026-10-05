@@ -3418,12 +3418,12 @@ func _drain_siege_food() -> void:
 				defender.supply_ratio = 1.0 if has_food else 0.0
 
 
-## 空闲主战指挥单位每日响应道路一跳内的劣势战场。它只填补实际战力缺口，
+## 皇子战争保留道路一跳内的近邻主战增援；普通战争统一由战线分配。
 ## 不接管攻势编组，也不抽调撤退、恢复、缺粮或已锁定战役的单位。
 func _resolve_nearby_main_battle_reinforcements() -> void:
 	var opportunities: Array[Dictionary] = []
 	for battle in state.battles:
-		if battle.finished or battle.side_a.is_empty() or battle.side_b.is_empty():
+		if battle.finished or battle.side_a.is_empty() or battle.side_b.is_empty() or _succession_battle_context(battle) == null:
 			continue
 		var side_power := [
 			_battle_side_effective_power(battle.side_a),
@@ -3532,7 +3532,7 @@ func _nearby_main_reinforcement_candidates(
 ) -> Array[Army]:
 	# 州战役野战以开战时的已承诺兵力为上限；未绑定的
 	# 邻近军不得绕过战报锁定每日加入。已绑定在途军由移动系统入场。
-	if _battle_has_campaign_front(battle):
+	if _succession_battle_context(battle) == null or _battle_has_campaign_front(battle):
 		return [] as Array[Army]
 	var anchors := _battle_anchor_cities(battle)
 	var nearby_cities := {}
@@ -4319,6 +4319,10 @@ func _execute_diplomatic_action(
 		DiplomacyAI.Action.DECLARE_WAR:
 			var attackers: Array[int] = []
 			var defenders: Array[int] = []
+			# Re-read actual arrival, routes, threat and resources at submission.
+			if state.nations[nation_a].war_preparation_target_nation >= 0:
+				if state.nations[nation_a].war_preparation_target_nation != nation_b or not DiplomacyAI.war_preparation_launch_allowed(state, nation_a, {}):
+					return false
 			var declaration_allowed := (
 				(int(action.get("objective_city", -1)) < 0 or DiplomacyAI._ruler_allows_war_objective(
 					state, nation_a, int(action["objective_city"])
@@ -7273,9 +7277,12 @@ func _launch_prepared_campaign(
 		return false
 	var arrived: Array[Army] = []
 	for army in state.armies:
-		if army.owner_nation == nation_id and prepared_army_ids.has(army.id) and state.army_effective_for_field_campaign(army) and army.state == Army.State.IDLE and army.is_at_city_node(staging_city_id):
+		if army.owner_nation == nation_id and prepared_army_ids.has(army.id) and army.campaign_war_id < 0 and army.campaign_front_id < 0 and state.army_effective_for_field_campaign(army) and army.state == Army.State.IDLE and army.is_at_city_node(staging_city_id):
 			arrived.append(army)
-	if arrived.is_empty():
+	var arrived_manpower := 0
+	for army in arrived:
+		arrived_manpower += army.size
+	if arrived.is_empty() or arrived_manpower < state.campaign_minimum_launch_requirement(nation_id, center_city_id):
 		return false
 	state.sync_campaign_pairs(state.coalition_campaign_components())
 	_reconcile_campaign_battlefields()
@@ -8125,6 +8132,7 @@ func _advance_priority_city_defense_reinforcements(
 			and battle.kind == Battle.Kind.SIEGE
 			and battle.city != null
 			and not battle.side_a.is_empty()
+			and _succession_battle_context(battle) != null
 		):
 			sieges.append(battle)
 	var defense_gap_by_city := {}
@@ -8292,6 +8300,8 @@ func _advance_priority_city_defense(
 	siege: Battle,
 	defense_plan: CityDefensePlan
 ) -> void:
+	if _succession_battle_context(siege) == null:
+		return
 	var city_id := siege.city.id
 	var nation_id := siege.city.owner_nation
 	var coordinator := ArmyCoordinator.from_view(
@@ -8665,15 +8675,23 @@ func _component_defense_centers(
 	war_id: int
 ) -> Array[int]:
 	var flags := {}
+	var activity := _coalition_defense_activity
+	if activity.is_empty():
+		activity = state.campaign_defense_activity_index()
+	var candidates := {}
+	for nation_id in members:
+		candidates.merge((activity["defense_candidates"] as Dictionary).get("%d:%d" % [war_id, nation_id], {}))
 	if not members.is_empty():
 		for pair in state.campaign_pairs_for_nation(members[0], war_id):
 			for slot in pair.battlefields:
-				var center_id := int(slot["center_city_id"])
-				if not state.is_zhou_city(center_id):
-					continue
-				var owner := state.cities[center_id].owner_nation
-				if members.has(owner) and bool(state.campaign_defense_context(owner, center_id, war_id, _coalition_defense_activity)["active"]):
-					flags[center_id] = true
+				candidates[int(slot["center_city_id"])] = true
+	for center_value in candidates:
+		var center_id := int(center_value)
+		if not state.is_zhou_city(center_id):
+			continue
+		var owner := state.cities[center_id].owner_nation
+		if members.has(owner) and bool(state.campaign_defense_context(owner, center_id, war_id, activity)["active"]):
+			flags[center_id] = true
 	var result: Array[int] = []
 	for center_value in flags:
 		result.append(int(center_value))
@@ -8869,17 +8887,85 @@ func _plan_coalition_component(
 
 
 func _refresh_component_defense_tasks(component: Dictionary) -> void:
+	var owns_activity := _coalition_defense_activity.is_empty()
+	if owns_activity:
+		_coalition_defense_activity = state.campaign_defense_activity_index()
 	var war_id := int(component["war_id"])
 	var members: Array[int] = component["members"]
 	var desired := {}
 	for center_id in _component_defense_centers(members, war_id):
 		desired[center_id] = true
 		var owner := state.cities[center_id].owner_nation
-		if state.campaign_front_for(owner, center_id, CoalitionCampaignFront.Mode.DEFENSE, war_id) == null:
-			state.create_campaign_front(war_id, members, owner, CoalitionCampaignFront.Mode.DEFENSE, center_id)
+		var front := state.campaign_front_for(owner, center_id, CoalitionCampaignFront.Mode.DEFENSE, war_id)
+		if front == null:
+			front = state.create_campaign_front(war_id, members, owner, CoalitionCampaignFront.Mode.DEFENSE, center_id)
+		_adopt_existing_defense_force(front)
 	for front in _component_fronts(component, CoalitionCampaignFront.Mode.DEFENSE):
-		if not desired.has(front.center_city_id) and not front.combat_report_locked:
+		if not desired.has(front.center_city_id) and not front.combat_report_locked and not _front_has_active_field_engagement(front):
 			state.release_campaign_front(front.front_id)
+	if owns_activity:
+		_coalition_defense_activity.clear()
+
+
+## Transfer only taskless existing arrivals/promises, never steal another front.
+func _adopt_existing_defense_force(front: CoalitionCampaignFront) -> void:
+	if front.combat_report_locked:
+		return
+	var activity := _coalition_defense_activity
+	if activity.is_empty():
+		activity = state.campaign_defense_activity_index()
+	var battles := _defense_field_battles(front, activity)
+	var participants := {}
+	var targets := {front.center_city_id: true}
+	for battle in (activity["battles_by_center"] as Dictionary).get(front.center_city_id, []):
+		if _succession_battle_context(battle) != null:
+			continue
+		if battle.city != null and state.has_military_access(front.anchor_nation_id, battle.city.owner_nation):
+			targets[battle.city.id] = true
+		for army in battle.side_a + battle.side_b:
+			if front.participant_nation_ids.has(army.owner_nation) and _defense_battle_matches(front, battle):
+				participants[army.id] = true
+	var counted := {}
+	for army in (activity["defense_armies"] as Dictionary).get(front.center_city_id, []):
+		if counted.has(army.id) or not front.participant_nation_ids.has(army.owner_nation):
+			continue
+		counted[army.id] = true
+		if ai_policy_overrides.has(army.owner_nation) or state.army_reserved_for_succession(army) or not state.army_effective_for_field_campaign(army):
+			continue
+		if state.campaign_front(army.campaign_front_id) != null or army.campaign_war_id not in [-1, front.war_id]:
+			continue
+		if front.combat_report_locked:
+			continue
+		var arrived: bool = army.state == Army.State.IDLE and army.is_at_city_node(front.center_city_id)
+		var incoming: bool = (army.state == Army.State.MOVING and army.ai_action in [ActionCandidate.Kind.REINFORCE, ActionCandidate.Kind.ATTACK]
+			and targets.has(army.ai_target_city) and state._campaign_has_live_route(army, army.ai_target_city))
+		if not participants.has(army.id) and not arrived and not incoming:
+			continue
+		army.campaign_front_id = front.front_id
+		army.campaign_war_id = front.war_id
+		front.army_assignments[army.id] = army.ai_target_city if incoming else army.location_city
+	if not battles.is_empty() and not front.combat_report_locked:
+		_refresh_front_combat_report(front)
+		front.combat_report_locked = true
+
+
+func _defense_battle_matches(front: CoalitionCampaignFront, battle: Battle) -> bool:
+	var friendly := false
+	var enemy := false
+	for army in battle.side_a + battle.side_b:
+		if front.participant_nation_ids.has(army.owner_nation) and not army.is_city_garrison:
+			friendly = true
+		if not army.is_city_garrison and state.is_enemy(front.anchor_nation_id, army.owner_nation) and state.war_id_between(front.anchor_nation_id, army.owner_nation) == front.war_id:
+			enemy = true
+	return friendly and enemy
+
+
+func _defense_field_battles(front: CoalitionCampaignFront, activity: Dictionary) -> Array:
+	var result := []
+	for battle in (activity.get("battles_by_center", {}) as Dictionary).get(front.center_city_id, []):
+		if battle.uses_field_combat_rules() and _succession_battle_context(battle) == null and _defense_battle_matches(front, battle):
+			result.append(battle)
+	return result
 
 
 func _campaign_front_priority_less(a: Dictionary, b: Dictionary) -> bool:
@@ -9320,27 +9406,11 @@ func _front_requirement(front: CoalitionCampaignFront) -> int:
 			front.anchor_nation_id, front.center_city_id, front.war_id,
 			_coalition_defense_activity
 		)["requirement"])
-	var active_siege := _siege_battle_of(state.cities[front.center_city_id])
-	var owns_active_siege := (
-		active_siege != null
-		and front.participant_nation_ids.has(
-			active_siege.siege_attacker_nation
-		)
-	)
-	return maxi(
-		CAMPAIGN_MIN_FRONT_MANPOWER,
-		state.campaign_required_manpower(front.anchor_nation_id,
-			DiplomacyAI._cached_campaign_siege_requirement(
-				state, front.anchor_nation_id, front.center_city_id, _coalition_campaign_query_cache
-			) + (
-				0
-				if owns_active_siege
-				else state.campaign_reinforcement_threat(
-					front.anchor_nation_id, front.center_city_id
-				)
-			)
-		),
-	)
+	return state.campaign_offense_manpower(front.anchor_nation_id,
+		DiplomacyAI._cached_campaign_siege_requirement(
+			state, front.anchor_nation_id, front.center_city_id, _coalition_campaign_query_cache),
+		DiplomacyAI._cached_campaign_reinforcement_threat(
+			state, front.anchor_nation_id, front.center_city_id, _coalition_campaign_query_cache))
 
 
 func _front_effective_manpower(front: CoalitionCampaignFront) -> int:
@@ -9409,6 +9479,13 @@ func _front_has_active_field_engagement(
 ) -> bool:
 	if front == null:
 		return false
+	if front.mode == CoalitionCampaignFront.Mode.DEFENSE and _succession_front_context(front) == null:
+		for battle in state.battles:
+			if battle.finished or not battle.uses_field_combat_rules() or _succession_battle_context(battle) != null:
+				continue
+			for city_id in _battle_anchor_cities(battle):
+				if state.administrative_center_of(city_id) == front.center_city_id and _defense_battle_matches(front, battle):
+					return true
 	for battle in state.battles:
 		if battle.finished or not battle.uses_field_combat_rules():
 			continue
@@ -9533,6 +9610,8 @@ func _allocate_coalition_fronts(component: Dictionary) -> bool:
 		]:
 			target = int(front.army_assignments.get(army.id, target))
 		var deployable := front.combat_report_locked or army.state == Army.State.FIGHTING or _campaign_deployment_distance(army, target) < INF
+		if front.mode == CoalitionCampaignFront.Mode.DEFENSE and army.state == Army.State.MOVING and not front.combat_report_locked:
+			deployable = state._campaign_has_live_route(army, army.ai_target_city)
 		if not deployable and army.state == Army.State.IDLE and not army.on_edge and not ai_policy_overrides.has(army.owner_nation):
 			_unbind_army_from_campaign(army)
 			army.path.clear()
@@ -9724,6 +9803,8 @@ func _execute_coalition_defense(front: CoalitionCampaignFront) -> bool:
 	# Rallying is independent of the sortie: later reinforcements still go to
 	# the center, while dispatched troops continue their existing action.
 	for army in _campaign_plan_armies(front):
+		if army.state == Army.State.MOVING and army.ai_target_city == int(front.army_assignments.get(army.id, -1)) and state._campaign_has_live_route(army, army.ai_target_city):
+			continue
 		if front.phase == CoalitionCampaignFront.Phase.SORTIE and (
 			_ai_planned_armies.has(army.id)
 			or _campaign_army_at_or_advancing(army, sortie_city)
@@ -9773,6 +9854,7 @@ func _manage_war_preparation_assembly(
 		var army: Army = armies_by_id.get(army_id)
 		if (
 			army == null
+			or retained_flags.has(army_id)
 			or army.owner_nation != nation_id
 			or army.size <= 0
 			or army.campaign_war_id >= 0
@@ -10442,16 +10524,7 @@ func _manage_campaign_direct_center(
 		var force := _campaign_action_force(
 			plan, center_id, ActionCandidate.Kind.ATTACK, rally
 		)
-		# Fighting/marching survivors do not form the next wave at the base.
-		if plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP:
-			var ready: Array[Army] = []
-			var manpower := 0
-			for army in force["armies"]:
-				if army.state == Army.State.IDLE and army.is_at_city_node(rally):
-					ready.append(army)
-					manpower += army.size
-			force = {"armies": ready, "manpower": manpower}
-		var requirement := state.campaign_attack_requirement(
+		var requirement := state.campaign_minimum_launch_requirement(
 			nation_id, center_id
 		)
 		if rally < 0 or int(force["manpower"]) < requirement:
@@ -10525,7 +10598,7 @@ func _manage_campaign_fu_raids(
 			ActionCandidate.Kind.REINFORCE
 		)
 	if not cleanup:
-		var assault_requirement := state.campaign_attack_requirement(
+		var assault_requirement := state.campaign_minimum_launch_requirement(
 			nation_id, plan.center_city_id
 		)
 		if (
@@ -10538,7 +10611,7 @@ func _manage_campaign_fu_raids(
 	)
 	if all_enemy_targets.is_empty():
 		plan.tactical_target_city_ids.clear()
-		var requirement := state.campaign_attack_requirement(
+		var requirement := state.campaign_minimum_launch_requirement(
 			nation_id, plan.center_city_id
 		)
 		if (
@@ -10591,7 +10664,7 @@ func _manage_blocked_campaign_fu(
 		# 管理循环在调用前已物化战线数组，就地擦除安全。
 		state.release_campaign_front(plan.front_id)
 		return false
-	var requirement := state.campaign_attack_requirement(
+	var requirement := state.campaign_minimum_launch_requirement(
 		nation_id, plan.center_city_id
 	)
 	if (
@@ -10866,6 +10939,9 @@ func _campaign_action_force(
 	for army in _campaign_plan_armies(plan):
 		if ai_policy_overrides.has(army.owner_nation) or (_collect_ai_commands and not _ai_snapshot_armies.has(army.id)):
 			continue
+		if kind == ActionCandidate.Kind.ATTACK and plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP and rally_city >= 0:
+			if army.state != Army.State.IDLE or not army.is_at_city_node(rally_city):
+				continue
 		if not _campaign_army_at_or_advancing(army, target_city, kind):
 			if (
 				army.state != Army.State.IDLE or army.on_edge
@@ -11773,6 +11849,8 @@ func _record_ai_order(army: Army, candidate: ActionCandidate) -> void:
 	army.ai_order_until_day = state.day + candidate.minimum_commit_days
 	army.ai_order_score = candidate.score
 	army.ai_order_reason = candidate.reason
+	if candidate.kind == ActionCandidate.Kind.ATTACK:
+		_wake_defense_for_army(army, candidate.target_city)
 	if candidate.defensive_deployment:
 		army.defensive_deployment_until_day = (
 			state.day + DEFENSIVE_DEPLOYMENT_LOCK_DAYS
@@ -11959,6 +12037,7 @@ func _begin_next_leg(army: Army) -> void:
 			_settle_idle(army, from_city)
 		return
 	var next_city: int = army.path[0]
+	_wake_defense_for_army(army, next_city)
 	var edge := state.edge_of(from_city, next_city)
 	if edge == null or edge.max_manpower <= 0:
 		# 路径失效或道路关闭：普通军等待 AI 重规划，撤退军立即改走合法路线。
@@ -13065,7 +13144,7 @@ func _prepare_campaign_regroup_after_center_defeat(battle: Battle) -> void:
 			return
 
 
-## 进攻受挫后的统一重整：撤出强攻、全军改绑大营、等待下一次 R+V 发动。
+## 进攻受挫后的统一重整：撤出强攻、全军改绑大营、回营恢复后按野战人数门槛发动。
 ## 必须在本轮撤退结算之前调用，否则败军的撤退路径不会以大营为终点。
 func _regroup_campaign_front_at_camp(front: CoalitionCampaignFront) -> void:
 	if front == null or front.camp_city_id < 0:
@@ -13487,6 +13566,22 @@ func _enter_battle(battle: Battle, army: Army, side: int) -> void:
 	else:
 		battle.side_b.append(army)
 		battle.reinforce_fresh_b.append(army)
+	for city_id in _battle_anchor_cities(battle):
+		_wake_defense_for_army(army, city_id)
+
+
+## Wake affected countries only; actual allocation remains in the AI batch.
+func _wake_defense_for_army(army: Army, city_id: int) -> void:
+	var center := state.administrative_center_of(city_id)
+	if not state.is_zhou_city(center) or state.army_reserved_for_succession(army):
+		return
+	var owner := state.cities[center].owner_nation
+	if not state.is_enemy(army.owner_nation, owner):
+		return
+	var defenders := (DiplomacyAI._cached_alliance_bloc(state, owner, _coalition_campaign_query_cache)
+		if not _coalition_defense_activity.is_empty() else state.alliance_bloc(owner))
+	for nation_id in defenders:
+		_ai_forced_nations[nation_id] = true
 
 
 func _strongest_alive(arr: Array[Army]) -> Army:

@@ -2250,8 +2250,7 @@ func campaign_siege_requirement(
 	)
 
 
-## R and V stay raw manpower. Apply ruler policy once to their sum, including
-## staging previews; an active siege deliberately excludes field threat V.
+## R stays raw manpower. Apply ruler policy only to the siege demand.
 func campaign_required_manpower(attacker_id: int, raw_requirement: int) -> int:
 	var multiplier := (
 		RulerProfile.campaign_requirement_multiplier(nations[attacker_id])
@@ -2265,27 +2264,36 @@ func campaign_attack_requirement(
 	center_city_id: int,
 	include_field_threat: bool = true
 ) -> int:
-	return campaign_required_manpower(attacker_id,
-		campaign_siege_requirement(attacker_id, center_city_id) + (
-			campaign_reinforcement_threat(attacker_id, center_city_id)
-			if include_field_threat else 0
-		)
-	)
+	var siege := campaign_required_manpower(attacker_id,
+		campaign_siege_requirement(attacker_id, center_city_id))
+	return maxi(siege, campaign_minimum_launch_requirement(attacker_id, center_city_id)) if include_field_threat else siege
 
 
-## Minimum force that may leave staging for a state with Fu. Capturing every
-## enemy Fu reduces the virtual garrison multiplier to one, so only the
-## current garrison G and the real field threat V belong in this threshold.
+## Strict integer threshold: C > 0.9V, or C > 0.45V for a conqueror.
+## Empty fields still require a real, available army.
+func campaign_field_minimum_manpower(nation_id: int, enemy_manpower: int) -> int:
+	var conqueror := (nation_id >= 0 and nation_id < nations.size()
+		and nations[nation_id].ruler_archetype == RulerProfile.CONQUEROR)
+	return maxi(enemy_manpower, 0) * (9 if conqueror else 18) / 20 + 1
+
+
+func campaign_offense_manpower(nation_id: int, raw_siege: int, enemy_manpower: int) -> int:
+	return maxi(45000, maxi(campaign_required_manpower(nation_id, raw_siege),
+		campaign_field_minimum_manpower(nation_id, enemy_manpower)))
+
+
+func campaign_prewar_target_manpower(nation_id: int, raw_siege: int, enemy_manpower: int) -> int:
+	return maxi(45000, maxi(campaign_required_manpower(nation_id, raw_siege),
+		2 * maxi(enemy_manpower, 0)))
+
+
+## Action eligibility excludes virtual garrison R and allocation floors.
 func campaign_minimum_launch_requirement(
 	attacker_id: int,
 	center_city_id: int
 ) -> int:
-	if not is_zhou_city(center_city_id):
-		return 0
-	return campaign_required_manpower(attacker_id,
-		maxi(cities[center_city_id].garrison_manpower, 0)
-		+ campaign_reinforcement_threat(attacker_id, center_city_id)
-	)
+	return campaign_field_minimum_manpower(attacker_id,
+		campaign_reinforcement_threat(attacker_id, center_city_id))
 
 
 ## Preview V before relations become hostile. Only effective real armies of the
@@ -2335,21 +2343,9 @@ func campaign_prewar_launch_requirement(
 ) -> int:
 	if not is_zhou_city(center_city_id):
 		return 0
-	var has_fu := false
-	for member_id in administrative_members(center_city_id):
-		if member_id != center_city_id:
-			has_fu = true
-			break
-	var base_requirement := (
-		maxi(cities[center_city_id].garrison_manpower, 0)
-		if has_fu
-		else campaign_siege_requirement(attacker_id, center_city_id)
-	)
-	return campaign_required_manpower(attacker_id,
-		base_requirement + campaign_prewar_reinforcement_threat(
-			attacker_id, target_nation_id, center_city_id
-		)
-	)
+	return campaign_prewar_target_manpower(attacker_id,
+		campaign_siege_requirement(attacker_id, center_city_id),
+		campaign_prewar_reinforcement_threat(attacker_id, target_nation_id, center_city_id))
 
 
 ## Dynamic V for a state campaign. Only effective real enemy field armies
@@ -3018,15 +3014,29 @@ func campaign_defensive_committed_manpower(
 func campaign_defense_activity_index() -> Dictionary:
 	var forces := {}
 	var camps := {}
+	var defense_armies := {}
+	var battles_by_center := {}
 	var rear_fronts := {}
 	for front_value in campaign_fronts.values():
 		var front := front_value as CoalitionCampaignFront
 		if campaign_has_rear_camp(front):
 			rear_fronts[front.front_id] = front
 	for army in armies:
+		var defense_centers := {}
+		if army.location_city >= 0:
+			defense_centers[administrative_center_of(army.location_city)] = true
+		if army.on_edge:
+			defense_centers[administrative_center_of(army.move_from)] = true
+			defense_centers[administrative_center_of(army.move_to)] = true
+		if army.ai_target_city >= 0:
+			defense_centers[administrative_center_of(army.ai_target_city)] = true
+		for center_id in defense_centers:
+			if not defense_armies.has(center_id):
+				defense_armies[center_id] = []
+			(defense_armies[center_id] as Array).append(army)
 		if army.size <= 0:
 			continue
-		var effective := army_effective_for_field_campaign(army)
+		var effective := not army.is_city_garrison and army_effective_for_field_campaign(army)
 		var front := rear_fronts.get(army.campaign_front_id) as CoalitionCampaignFront
 		if front != null and front.army_assignments.has(army.id):
 			var at_camp := army.is_at_city_node(front.camp_city_id)
@@ -3067,7 +3077,19 @@ func campaign_defense_activity_index() -> Dictionary:
 			})
 	var sieges := {}
 	for battle in battles:
-		if battle.finished or battle.kind != Battle.Kind.SIEGE or battle.city == null:
+		if battle.finished:
+			continue
+		var battle_centers := {}
+		if battle.city != null:
+			battle_centers[administrative_center_of(battle.city.id)] = true
+		elif battle.edge != null:
+			battle_centers[administrative_center_of(battle.edge.city_a)] = true
+			battle_centers[administrative_center_of(battle.edge.city_b)] = true
+		for center_id in battle_centers:
+			if not battles_by_center.has(center_id):
+				battles_by_center[center_id] = []
+			(battles_by_center[center_id] as Array).append(battle)
+		if battle.kind != Battle.Kind.SIEGE or battle.city == null:
 			continue
 		var center_id := administrative_center_of(battle.city.id)
 		if not sieges.has(center_id):
@@ -3081,7 +3103,34 @@ func campaign_defense_activity_index() -> Dictionary:
 		if not fu_by_center.has(center_id):
 			fu_by_center[center_id] = [] as Array[int]
 		(fu_by_center[center_id] as Array[int]).append(city.id)
-	return {"forces": forces, "camps": camps, "sieges": sieges, "fu_by_center": fu_by_center}
+	# Index only genuine hostile activity once, rather than filtering every
+	# owned state again for each war component.
+	var defense_candidates := {}
+	for buckets in [forces, camps]:
+		for center_id in buckets:
+			for force in buckets[center_id]:
+				_index_defense_candidate(defense_candidates, int(center_id), int(force["owner"]))
+	for center_id in sieges:
+		for owner in sieges[center_id]:
+			_index_defense_candidate(defense_candidates, int(center_id), int(owner))
+	for center_id in fu_by_center:
+		for city_id in fu_by_center[center_id]:
+			_index_defense_candidate(defense_candidates, int(center_id), cities[city_id].owner_nation)
+	return {"forces": forces, "camps": camps, "sieges": sieges, "fu_by_center": fu_by_center,
+		"defense_armies": defense_armies,
+		"battles_by_center": battles_by_center, "defense_candidates": defense_candidates}
+
+
+func _index_defense_candidate(result: Dictionary, center_id: int, enemy_owner: int) -> void:
+	if not is_zhou_city(center_id):
+		return
+	var owner := cities[center_id].owner_nation
+	if not is_enemy(owner, enemy_owner):
+		return
+	var key := "%d:%d" % [war_id_between(owner, enemy_owner), owner]
+	if not result.has(key):
+		result[key] = {}
+	(result[key] as Dictionary)[center_id] = true
 
 
 ## Inspect an issued route, not a stale target or a new UI-time path search.
@@ -3134,8 +3183,9 @@ func campaign_defense_context(
 		var owner := int(force["owner"])
 		if not is_enemy(nation_id, owner) or (war_id >= 0 and war_id_between(nation_id, owner) != war_id):
 			continue
-		result["enemy_manpower"] = int(result["enemy_manpower"]) + int(force["size"])
-		counted_armies[int(force.get("army_id", -1))] = true
+		if bool(force["present"]) and not counted_armies.has(int(force.get("army_id", -1))):
+			result["enemy_manpower"] = int(result["enemy_manpower"]) + int(force["size"])
+			counted_armies[int(force.get("army_id", -1))] = true
 		result["invaded" if bool(force["present"]) else "incoming"] = true
 	for camp in (index.get("camps", {}) as Dictionary).get(center_id, []):
 		var owner := int(camp["owner"])
@@ -3154,7 +3204,7 @@ func campaign_defense_context(
 		if is_fu_city(city_id) and is_enemy(nation_id, owner) and (war_id < 0 or war_id_between(nation_id, owner) == war_id):
 			(result["enemy_fu_ids"] as Array[int]).append(city_id)
 	result["active"] = bool(result["invaded"]) or bool(result["incoming"]) or bool(result["besieged"]) or not (result["enemy_fu_ids"] as Array).is_empty() or not (result["enemy_camp_ids"] as Array).is_empty()
-	result["requirement"] = ceili(float(result["enemy_manpower"]) * 1.25)
+	result["requirement"] = campaign_field_minimum_manpower(nation_id, int(result["enemy_manpower"])) if int(result["enemy_manpower"]) > 0 else 0
 	if bool(result["active"]) and int(result["requirement"]) == 0:
 		result["requirement"] = INITIAL_HEAVY_ARMY_SIZE
 	return result

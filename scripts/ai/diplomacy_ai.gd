@@ -2118,6 +2118,14 @@ static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[St
 		lines.append("当前已对%s备战：第%d日开始；既有备战按实际集结资格推进，不重新要求意愿过线" % [state.nations[nation.war_preparation_target_nation].name, nation.war_preparation_started_day])
 	if nation.war_preparation_cancelled_day >= 0 and state.day - nation.war_preparation_cancelled_day < WAR_PREPARATION_CANCEL_COOLDOWN_DAYS:
 		lines.append("国家行动门禁：取消备战冷却至第%d日" % (nation.war_preparation_cancelled_day + WAR_PREPARATION_CANCEL_COOLDOWN_DAYS))
+	if nation.war_preparation_target_nation >= 0:
+		var center := nation.war_preparation_objective_center_city
+		var v := state.campaign_prewar_reinforcement_threat(nation_id, nation.war_preparation_target_nation, center)
+		lines.append("人数：野战最低%d · 围城需求%d · 备战目标%d · 实际到场%d" % [
+			state.campaign_field_minimum_manpower(nation_id, v),
+			state.campaign_attack_requirement(nation_id, center, false),
+			state.campaign_prewar_launch_requirement(nation_id, nation.war_preparation_target_nation, center),
+			war_preparation_arrived_troops(state, nation_id)])
 	var cache := {}
 	var candidates := _expansion_bordering_nation_ids(state, nation_id, cache).duplicate()
 	if candidates.is_empty():
@@ -4185,12 +4193,8 @@ static func administrative_tactical_target(
 		return -1
 	var attacker_bloc := _cached_alliance_bloc(state, nation_id, evaluation_cache)
 	var center_controlled := attacker_bloc.has(state.cities[center_city_id].owner_nation)
-	var required := state.campaign_required_manpower(nation_id,
-		_cached_campaign_siege_requirement(state, nation_id, center_city_id, evaluation_cache)
-		+ _cached_campaign_reinforcement_threat(
-			state, nation_id, center_city_id, evaluation_cache
-		)
-	)
+	var required := state.campaign_field_minimum_manpower(nation_id,
+		_cached_campaign_reinforcement_threat(state, nation_id, center_city_id, evaluation_cache))
 	var existing_plan: CoalitionCampaignFront = state.campaign_front_for(
 		nation_id, center_city_id, CoalitionCampaignFront.Mode.OFFENSE
 	)
@@ -5133,30 +5137,10 @@ static func _collect_existing_war_preparation(
 		nation_id,
 		evaluation_cache
 	)
-	var assembly_deadline_expired := (
-		elapsed >= WAR_PREPARATION_MAX_DAYS
-		and has_route
-		and not preparation_ready
-	)
-	# 治本：集结超时但仍是合法目标、且已集结到「足够发起」的最低兵力时，改为尽力而战——
-	# 用现有可用主战军团立即宣战，而不是无限空转/取消再重开。避免终局残编战团凑不齐
-	# required_assault_troops 的完美门槛而永远打不出去（军队因此零移动）。
+	# 超时兜底与宣战提交共用资格：半额备战目标、当前野战门槛及资源／路线／外交。
 	var best_effort_launch := (
-		target_nation_valid
-		and objective_valid
-		and has_route
-		and resources_ready
-		and not resource_grace_expired
-		and assembly_deadline_expired
-		and war_preparation_arrived_troops(
-			state, nation_id, evaluation_cache
-		)
-			>= int(ceil(
-				float(required_assault_troops(
-					state, nation_id, objective_city, evaluation_cache
-				))
-				* WAR_PREPARATION_BEST_EFFORT_RATIO
-			))
+		not preparation_ready
+		and war_preparation_launch_allowed(state, nation_id, evaluation_cache)
 	)
 	if (
 		not best_effort_launch
@@ -5366,11 +5350,16 @@ static func war_preparation_launch_allowed(state: GameState, nation_id: int, cac
 		return false
 	if not state.nations[target].alive or state.cities[objective].owner_nation != target or not _ruler_allows_war_objective(state, nation_id, objective):
 		return false
+	if not state.can_alliance_declare_war(nation_id, target) or not RegionalStrategy.allows_objective(state, nation_id, nation.war_preparation_objective_center_city):
+		return false
 	if nation.war_preparation_objective_center_city != state.administrative_center_of(objective):
 		return false
 	if not can_initiate_war_at_range(state, nation_id, target, cache) or not war_preparation_staging_cities(state, nation_id, objective, cache).has(nation.war_preparation_staging_city_id):
 		return false
 	if not war_preparation_resources_ready(state, nation_id, cache):
+		return false
+	if war_preparation_arrived_troops(state, nation_id, cache) < state.campaign_field_minimum_manpower(nation_id,
+		state.campaign_prewar_reinforcement_threat(nation_id, target, nation.war_preparation_objective_center_city)):
 		return false
 	if war_preparation_ready(state, nation_id, cache):
 		return true
@@ -5672,9 +5661,9 @@ static func objective_assault_troops(
 	var center_id := state.administrative_center_of(objective_city)
 	if center_id < 0:
 		return 0
-	return state.campaign_required_manpower(nation_id,
-		_cached_campaign_siege_requirement(state, nation_id, center_id, evaluation_cache)
-		+ _cached_campaign_reinforcement_threat(
+	return state.campaign_offense_manpower(nation_id,
+		_cached_campaign_siege_requirement(state, nation_id, center_id, evaluation_cache),
+		_cached_campaign_reinforcement_threat(
 			state, nation_id, center_id, evaluation_cache
 		)
 	)

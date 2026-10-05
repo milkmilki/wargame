@@ -5,6 +5,13 @@ extends SceneTree
 func _init() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(94103)
+	# This test starts a new offensive campaign. Remove the generated map's
+	# pre-existing occupied Fu, which now correctly require separate defense.
+	for city in state.cities:
+		var center := state.administrative_center_of(city.id)
+		if center >= 0:
+			city.owner_nation = state.cities[center].owner_nation
+	state.ownership_revision += 1
 	var target := _find_border_target(state)
 	if target.is_empty():
 		_finish(false)

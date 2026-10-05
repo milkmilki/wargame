@@ -51,6 +51,10 @@ func _init() -> void:
 		and simulation._execute_diplomatic_action(prepare_action)
 		and state.nations[0].war_preparation_target_nation == 1
 	)
+	# Preparation records its pool through the real assembly controller before
+	# declaration submission revalidates the physically arrived cohort.
+	simulation._manage_war_preparation_assembly(0)
+	valid = valid and DiplomacyAI.war_preparation_launch_allowed(state, 0)
 	var declare_action := prepare_action.duplicate(true)
 	declare_action["kind"] = DiplomacyAI.Action.DECLARE_WAR
 	declare_action["reason"] = "渡河战争宣战测试"

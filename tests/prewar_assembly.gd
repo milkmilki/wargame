@@ -58,12 +58,12 @@ func _init() -> void:
 	)
 	state.armies[0].state = Army.State.IDLE
 	_check(
-		state.campaign_prewar_launch_requirement(0, 1, center_id) == 42000,
-		"有属府州的战前门槛必须等于G加战前V"
+		state.campaign_prewar_launch_requirement(0, 1, center_id) == 54000,
+		"有属府州的战前门槛必须等于max(45000，R，2V)"
 	)
 	_check(
-		DiplomacyAI.required_assault_troops(state, 0, entry_id) == 42000,
-		"360天尽力宣战门槛必须沿用战前G/V预览，不得退回敌对关系查询"
+		DiplomacyAI.required_assault_troops(state, 0, entry_id) == 54000,
+		"360天尽力宣战门槛必须沿用完整备战目标预览，不得退回敌对关系查询"
 	)
 	_check(
 		DiplomacyAI.war_preparation_arrived_troops(state, 0) == 45000,
@@ -78,17 +78,42 @@ func _init() -> void:
 	var singleton_r := state.campaign_siege_requirement(0, center_id)
 	_check(
 		state.campaign_prewar_launch_requirement(0, 1, center_id)
-			== singleton_r + 27000,
-		"无属府州的战前门槛必须使用当前R加战前V"
+			== maxi(45000, maxi(singleton_r, 54000)),
+		"无属府州的战前门槛必须使用max(45000，R，2V)"
 	)
 	for member_id in original_members:
 		state.administrative_center_by_city[member_id] = int(
 			original_centers[member_id]
 		)
 	_check(
-		DiplomacyAI.war_preparation_ready(state, 0),
-		"到场C达到G+V时不得再等待固定30天"
+		not DiplomacyAI.war_preparation_ready(state, 0),
+		"到场45000不足完整2V=54000，不得宣战"
 	)
+	state.day = DiplomacyAI.MIN_NEUTRAL_DAYS + DiplomacyAI.WAR_PREPARATION_MAX_DAYS - 1
+	nation.war_preparation_started_day = DiplomacyAI.MIN_NEUTRAL_DAYS
+	_check(not DiplomacyAI.war_preparation_launch_allowed(state, 0), "359天不得提前启用半额兜底")
+	state.day += 1
+	for army in attacker_armies:
+		army.size = 9000
+	_check(DiplomacyAI.war_preparation_launch_allowed(state, 0), "360天实际到场恰好半额且超过0.9V允许出兵")
+	attacker_armies[0].size -= 1
+	_check(not DiplomacyAI.war_preparation_launch_allowed(state, 0), "半额少一人不得宣战")
+	for army in attacker_armies:
+		army.size = 15000
+	state.nations[0].ruler_archetype = RulerProfile.CONQUEROR
+	_check(state.campaign_prewar_launch_requirement(0, 1, center_id) == 54000, "征服者不得折扣2V备战冗余")
+	state.nations[0].ruler_archetype = RulerProfile.BALANCED
+	# An increased current threat invalidates a previously sufficient half-target
+	# cohort. Submission must re-read both assembly and field requirements.
+	state.cities[center_id].garrison_manpower = 40000
+	state.armies[0].size = 60000
+	state.armies[1].size = 0
+	_check(not DiplomacyAI.war_preparation_launch_allowed(state, 0), "敌军增长后重新验证当前备战目标与野战门槛，不得使用旧半额出兵")
+	state.cities[center_id].garrison_manpower = 15000
+	state.armies[0].size = 12000
+	state.armies[1].size = 15000
+	state.day = 0
+	nation.war_preparation_started_day = 0
 	var refresh_actions: Array[Dictionary] = []
 	var refresh_committed := {}
 	nation.war_preparation_objective_center_city = -1
@@ -153,14 +178,26 @@ func _init() -> void:
 		"备战调兵必须沿用开始备战时冻结的集结点"
 	)
 	_check(
-		nation.war_preparation_army_ids.size() == 3,
-		"备战池只应抽到已承诺兵力满足G+V，不得集结全国军队"
+		nation.war_preparation_army_ids.size() == 4,
+		"备战池只应抽到已承诺兵力满足完整备战目标，不得集结全国军队"
 	)
 	_check(
 		not nation.war_preparation_army_ids.has(recovering.id)
 		and not nation.war_preparation_army_ids.has(war_bound.id),
 		"恢复军和其他战争池军不得被备战集结征用"
 	)
+	var promised_count := nation.war_preparation_army_ids.size()
+	nation.war_preparation_army_ids.append(nation.war_preparation_army_ids[0])
+	sim._manage_war_preparation_assembly(0)
+	_check(nation.war_preparation_army_ids.size() == promised_count,
+		"重复备战军ID不得重复绑定或填充已承诺人数")
+	for troop in attacker_armies + [spare]:
+		troop.state = Army.State.RECOVERING
+	_check(not sim._execute_diplomatic_action({"kind": DiplomacyAI.Action.DECLARE_WAR,
+		"a": 0, "b": 1, "objective_city": entry_id, "objective_center_city": center_id})
+		and not state.is_enemy(0, 1), "宣战提交重新验证到场资格，恢复軍不得开战")
+	for troop in attacker_armies + [spare]:
+		troop.state = Army.State.IDLE
 	var released_moving: Army = attacker_armies[0]
 	released_moving.state = Army.State.MOVING
 	released_moving.on_edge = true
@@ -208,7 +245,7 @@ func _init() -> void:
 			break
 	var prepared_ids := sim._war_preparation_arrived_army_ids(0)
 	_check(
-		prepared_ids.size() == 2
+		prepared_ids.size() == 3
 		and DiplomacyAI.war_preparation_arrived_troops(state, 0)
 			>= ceili(
 				float(state.campaign_prewar_launch_requirement(0, 1, center_id))
@@ -231,7 +268,7 @@ func _init() -> void:
 		and DiplomacyAI.war_preparation_launch_allowed(state, 0, no_income_cache),
 		"360天人数兜底保留粮食资格，现金不足不再否决宣战"
 	)
-	state.day = old_day
+	state.day = old_day + DiplomacyAI.WAR_PREPARATION_MAX_DAYS
 	nation.treasury_gold = old_gold
 	for city in state.cities:
 		city.gold_per_month = old_incomes[city.id]

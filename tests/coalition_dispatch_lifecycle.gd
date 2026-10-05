@@ -55,11 +55,11 @@ func _test_due_component_includes_absent_member() -> void:
 	)
 	sim._commit_ai_command_collection([1] as Array[int])
 	check(defender.state == Army.State.MOVING and defender.ai_target_city == 2,
-		"30000 assembled against 12500 demand must sortie even outside national rotation")
+		"30000 assembled against 9001 demand must sortie even outside national rotation")
 	check(front.phase == CoalitionCampaignFront.Phase.SORTIE,
 		"a due coalition must receive a complete command batch")
 	check(sim.ai_last_command_commit_failures == 0, "expanded coalition command batch must commit")
-	print("COALITION_BATCH_METRIC assembled=30000 requirement=12500 outside_rotation_dispatched=%d commit_failures=%d" % [
+	print("COALITION_BATCH_METRIC assembled=30000 requirement=9001 outside_rotation_dispatched=%d commit_failures=%d" % [
 		1 if defender.state == Army.State.MOVING else 0, sim.ai_last_command_commit_failures])
 	sim.free()
 
@@ -79,7 +79,7 @@ func _test_empty_snapshot_rejects_all_orders() -> void:
 
 func _test_first_mobilization_fills_six_armies() -> void:
 	var state := _state()
-	_army(state, 30, 1, 2, 72000)
+	_army(state, 30, 1, 2, 99000)
 	var reserves: Array[Army] = []
 	for index in range(6):
 		reserves.append(_army(state, 31 + index, 0, 0))
@@ -88,11 +88,11 @@ func _test_first_mobilization_fills_six_armies() -> void:
 	sim.setup(state)
 	sim._allocate_coalition_fronts(_component(state, 0))
 	check(front.army_assignments.size() == 6,
-		"six unbound reserves must fill 90000 initial defense demand in one cycle")
+		"six unbound reserves must fill strict 89101 initial defense demand in one cycle")
 	for army in reserves:
 		check(army.campaign_front_id == front.front_id,
 			"first mobilization does not spend the active-front transfer quota")
-	print("COALITION_MOBILIZATION_METRIC required=90000 assigned=%d planning_cycles=1" % sim._front_effective_manpower(front))
+	print("COALITION_MOBILIZATION_METRIC required=89101 assigned=%d planning_cycles=1" % sim._front_effective_manpower(front))
 	sim.free()
 
 
@@ -401,7 +401,7 @@ func _test_active_defense_donates_only_surplus() -> void:
 	check(offense.army_assignments.size() == 3,
 		"active defense may donate idle surplus to counterattack within transfer quota")
 	check(defense.army_assignments.size() == 3,
-		"counterattack must leave defense force above the actual 12500 requirement")
+		"counterattack must leave defense force above the actual 9001 requirement")
 	sim.free()
 
 
@@ -478,8 +478,8 @@ func _test_live_incoming_and_invalid_route_context() -> void:
 	var context := state.campaign_defense_context(0, 0, war_id)
 	check(bool(context["active"]) and bool(context["incoming"]) and not bool(context["invaded"]),
 		"valid live incoming route is a defense task before enemy crosses the state boundary")
-	check(int(context["requirement"]) == 12500,
-		"live incoming field manpower is counted once with the existing defense multiplier")
+	check(int(context["enemy_manpower"]) == 0 and int(context["requirement"]) == GameState.INITIAL_HEAVY_ARMY_SIZE,
+		"distant live incoming keeps the task with one-army fallback without pretending physical V")
 	enemy.state = Army.State.IDLE
 	enemy.path.clear()
 	context = state.campaign_defense_context(0, 0, war_id)
@@ -518,7 +518,7 @@ func _test_defense_context_does_not_mix_wars() -> void:
 	check(bool(second_context["invaded"]) and bool(second_context["besieged"])
 		and (second_context["enemy_fu_ids"] as Array[int]) == [1],
 		"actual war receives its own invasion, siege and occupied-Fu context")
-	check(int(second_context["requirement"]) == 37500,
+	check(int(second_context["requirement"]) == 27001,
 		"other-war siege must not double count real invading manpower")
 	var sim := Simulation.new()
 	sim.setup(state)

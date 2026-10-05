@@ -162,9 +162,9 @@ func _test_direct_center_deployment() -> void:
 		var departing := false
 		for army in state.armies:
 			departing = departing or (army.owner_nation == 0 and army.ai_target_city == 28 and army.ai_action == ActionCandidate.Kind.ATTACK and (army.on_edge or not army.path.is_empty()))
-		_check(departing == (scenario == 0),
+		_check(departing == (scenario != 2),
 			"regular direct-center deployment still requires ready troops and an actual route (scenario %d)" % scenario)
-		_check(front.phase == (CoalitionCampaignFront.Phase.ASSAULT_CENTER if scenario == 0 else CoalitionCampaignFront.Phase.ASSEMBLE),
+		_check(front.phase == (CoalitionCampaignFront.Phase.ASSAULT_CENTER if scenario != 2 else CoalitionCampaignFront.Phase.ASSEMBLE),
 			"direct-center phase follows actual deployment, not existence of a rear fu")
 		sim.free()
 

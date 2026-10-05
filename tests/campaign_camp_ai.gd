@@ -58,8 +58,8 @@ func _init() -> void:
 	sim.setup(state)
 
 	_check(
-		state.campaign_minimum_launch_requirement(attacker_id, center_id) == 27000,
-		"最低出发兵力必须等于虚拟守军G加州内有效敌军V"
+		state.campaign_minimum_launch_requirement(attacker_id, center_id) == 10801,
+		"最低出发兵力必须等于严格0.9V，不含虚拟守军"
 	)
 	sim._manage_administrative_campaign(plan)
 	entry_id = int(plan.tactical_target_city_ids[0])
@@ -72,13 +72,13 @@ func _init() -> void:
 	for army in attackers:
 		_place_idle(army, staging_id)
 	sim._manage_administrative_campaign(plan)
-	_check(plan.phase == CoalitionCampaignFront.Phase.BREAK_IN, "到场C达到G+V后必须进入破口")
+	_check(plan.phase == CoalitionCampaignFront.Phase.BREAK_IN, "到场C超过0.9V后必须进入破口")
 	_check(_all_assigned_to(plan, attackers, entry_id), "破口时全军必须攻击同一入口府")
 	defender.size = 30000
 	sim._manage_administrative_campaign(plan)
 	_check(plan.phase == CoalitionCampaignFront.Phase.BREAK_IN, "发动后V上升不得退回集结")
 
-	defender.size = 12000
+	defender.size = 120000
 	state.cities[entry_id].owner_nation = attacker_id
 	# Keep this fixture below the current center-assault requirement so it
 	# continues to exercise detachment creation rather than the ready-camp path.
@@ -124,6 +124,7 @@ func _init() -> void:
 					"同一分遣队完成目标后必须整组转向下一府"
 				)
 
+	defender.size = 12000
 	_check(
 		sim._defense_sortie_target_city(defender_id, center_id) == entry_id,
 		"已有大营时防守出击必须瞄准大营而非属府分遣队"
@@ -218,6 +219,7 @@ func _test_camp_threat_requires_battle() -> void:
 		army.campaign_war_id = war_id
 		state.armies.append(army)
 		attackers.append(army)
+	state.armies.append(_army(952129, defender_id, center_id, 70000))
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
@@ -301,6 +303,7 @@ func _test_hold_camp_reinforcement_advance() -> void:
 	)
 	reinforcement.campaign_war_id = war_id
 	state.armies.append(reinforcement)
+	state.armies.append(_army(962005, defender_id, center_id, 60000))
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
@@ -551,6 +554,7 @@ func _test_blocked_fu_fallback(
 		army.campaign_war_id = war_id
 		state.armies.append(army)
 		attackers.append(army)
+	state.armies.append(_army(95219, defender_id, center_id, 20000))
 	state.ownership_revision += 1
 	state.refresh_derived()
 	var sim := Simulation.new()
@@ -582,7 +586,7 @@ func _test_blocked_fu_fallback(
 	if army_count >= 4:
 		_check(
 			plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
-			"%s且C满足R+V时必须改攻州治，不能卡在占府阶段" % label
+			"%s且C满足野战门槛时必须改攻州治，不能卡在占府阶段" % label
 		)
 		_check(
 			_all_assigned_to(plan, attackers, center_id),
@@ -591,7 +595,7 @@ func _test_blocked_fu_fallback(
 	else:
 		_check(
 			plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP,
-			"%s且C不足R+V时必须驻营等待" % label
+			"%s且C不足野战门槛时必须驻营等待" % label
 		)
 		_check(
 			_all_assigned_to(plan, attackers, camp_id),
@@ -675,7 +679,7 @@ func _test_ready_camp_bypasses_remaining_fu() -> void:
 	sim._manage_administrative_campaign(plan)
 	_check(
 		plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
-		"营内实际C满足R+V时必须跳过剩余属府并转攻州治"
+		"营内实际C满足野战门槛时必须跳过剩余属府并转攻州治"
 	)
 	_check(
 		plan.tactical_target_city_ids == [center_id],

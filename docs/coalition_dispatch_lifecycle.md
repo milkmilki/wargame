@@ -8,8 +8,10 @@ tick snapshot are not automatically commanded.
 
 Component scheduling stores the next due day. Normal planning schedules ten
 days ahead; field-report completion and a newly issued camp sortie schedule
-the affected component for the following day. Ordinary arrivals do not wake
-the scheduler. A same-day batch cannot consume a post-combat next-day wake.
+the affected component for the following day. Hostile attack orders, road
+entry, and battle entry wake the threatened country's bloc. Ordinary friendly
+arrivals do not wake the scheduler. A same-day batch cannot consume a
+post-combat next-day wake.
 
 ## Allocation Contract
 
@@ -43,13 +45,26 @@ meanings. Allocation also checks deployment feasibility; it does not rename
 or inflate actual C. Reports and details expose `rally_idle_arrived` at the
 receiving point, without claiming those troops are guaranteed to launch.
 
+## Ordinary Reinforcement Ownership (2026-10-05)
+
+Ordinary wars use campaign allocation for reinforcements. Nearby main-battle
+and priority-city dispatch entries now serve succession conflicts only.
+Defense discovery includes threatened states outside the two active slots;
+these additional tasks grant no offensive or cross-region permission.
+Existing taskless participants and valid incoming orders may join the defense
+front without changing their movement or combat. A live field engagement
+locks the report immediately, including when participants belong to another
+valid front, and prevents an extra first-takeover reinforcement wave.
+After the final engagement ends, the original allocation lifecycle resumes.
+See [ownership and validation](campaign_reinforcement_ownership.md).
+
 ## Measured Regression Results
 
 Deterministic fixtures in `tests/coalition_dispatch_lifecycle.gd`:
 
 | Metric | Previous behavior | Current result |
 | --- | --- | --- |
-| 30000 assembled vs. demand 12500, member outside rotation | No order | Actual sortie; zero commit failures |
+| 30000 assembled vs. demand 9001, member outside rotation | No order | Actual sortie; zero commit failures |
 | Six unbound armies, demand 90000 | Three-army first-cycle cap | 90000 assigned in one cycle |
 | Unreachable idle troop filling a defense gap | Retained phantom commitment | Zero phantom occupants; reachable reserve assigned |
 | Active-front transfer budget | Three, also spent on initial mobilization | Three; initial mobilization separate |

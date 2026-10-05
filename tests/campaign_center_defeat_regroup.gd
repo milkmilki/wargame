@@ -129,6 +129,7 @@ func _init() -> void:
 	late_reinforcement.morale = late_reinforcement.max_morale
 	sim._recover_morale()
 
+	defender.size = 60000
 	var reinforcements: Array[Army] = []
 	for index in range(2):
 		var army := _army(95340 + index, attacker_id, middle_id, 15000)
@@ -147,7 +148,7 @@ func _init() -> void:
 	sim._manage_administrative_campaign(plan)
 	_check(
 		plan.phase == CoalitionCampaignFront.Phase.ASSAULT_CENTER,
-		"大营实际到场兵力满足R+V后必须重新进攻州治"
+		"大营实际到场兵力超过0.9V后必须重新进攻州治"
 	)
 	for army in attackers + [late_reinforcement] + reinforcements:
 		_check(

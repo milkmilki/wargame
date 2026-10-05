@@ -33,6 +33,14 @@ func run() -> void:
 	check(score != -INF and is_equal_approx(report.score, score), "diagnostic matches actual finite score")
 	check(state.rng.state == rng_before, "diagnostic does not consume simulation randomness")
 	check(var_to_bytes(NativeSnapshotBuilder.build(state)) == snapshot_before, "diagnostic does not modify persisted simulation state")
+	state.nations[0].war_preparation_target_nation = 5
+	state.nations[0].war_preparation_objective_city = 5
+	state.nations[0].war_preparation_objective_center_city = 5
+	var demand_lines := "\n".join(DiplomacyAI.war_desire_debug_lines(state, 0))
+	check(demand_lines.contains("野战最低1 · 围城需求") and demand_lines.contains("备战目标45000 · 实际到场0"), "preparation debug distinguishes field, siege, assembly and actual arrival")
+	state.nations[0].war_preparation_target_nation = -1
+	state.nations[0].war_preparation_objective_city = -1
+	state.nations[0].war_preparation_objective_center_city = -1
 	var objective_sum := 0.0
 	for term in report.objective.debug_terms.values():
 		objective_sum += float(term)

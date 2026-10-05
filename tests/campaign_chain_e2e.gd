@@ -94,12 +94,14 @@ func _run_campaign_chain(
 	)
 	_check(
 		prepared_c >= preparation_requirement,
-		"备战实际到场C必须满足G+V"
+		"备战实际到场C必须满足完整备战目标"
 	)
 	_check(
 		DiplomacyAI.war_preparation_ready(state, ATTACKER),
-		"到场C满足G+V后必须允许宣战"
+		"到场C满足完整备战目标后必须允许宣战"
 	)
+	# Declaration submission also verifies food and manpower reserves.
+	state.nations[ATTACKER].manpower_pool = 5000
 	var declared := sim._execute_diplomatic_action({
 		"kind": DiplomacyAI.Action.DECLARE_WAR,
 		"a": ATTACKER,

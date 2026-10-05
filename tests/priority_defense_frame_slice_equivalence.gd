@@ -9,6 +9,8 @@ var _baseline_sim: Simulation
 var _baseline_state: GameState
 var _sliced_sim: Simulation
 var _sliced_state: GameState
+var _succession_mismatches := 0
+const Direct = preload("res://tests/direct_center_camp.gd")
 
 
 func _init() -> void:
@@ -19,6 +21,7 @@ func _init() -> void:
 
 
 func _run() -> void:
+	await _verify_real_succession_dispatch()
 	_baseline_state = GameState.new()
 	_baseline_state.generate_world(12345, _nations, _cities)
 	_baseline_sim = Simulation.new()
@@ -40,7 +43,7 @@ func _run() -> void:
 
 
 func _finish() -> void:
-	var mismatches := 0
+	var mismatches := _succession_mismatches
 	var checked := 0
 	if _baseline_state.armies.size() != _sliced_state.armies.size():
 		mismatches += 1
@@ -77,6 +80,44 @@ func _finish() -> void:
 	_baseline_sim.queue_free()
 	_sliced_sim.queue_free()
 	quit(0 if mismatches == 0 else 1)
+
+
+func _verify_real_succession_dispatch() -> void:
+	var fingerprints: Array[String] = []
+	for sliced in [false, true]:
+		var state: GameState = Direct.fixture()
+		var attacker: Army = Direct.army(state, 0, 3, 30000)
+		var guard: Army = Direct.army(state, 1, 3, 1000)
+		var reserve: Army = Direct.army(state, 1, 4, 30000)
+		var conflict := SuccessionConflict.new()
+		conflict.nation_id = 1
+		conflict.rebel_nation_id = 0
+		conflict.capital_city_id = 3
+		conflict.camp_city_id = 2
+		conflict.war_id = state.war_id_between(0, 1)
+		conflict.army_ids = [attacker.id]
+		conflict.crown_army_ids = [guard.id, reserve.id]
+		state.succession_conflicts[1] = conflict
+		var battle := state.new_battle(Battle.Kind.SIEGE)
+		battle.city = state.cities[3]
+		battle.siege_attacker_nation = 0
+		battle.side_a = [attacker]
+		battle.side_b = [guard]
+		var sim := Simulation.new()
+		root.add_child(sim)
+		sim.setup(state)
+		sim.set_process(false)
+		if sliced:
+			await sim._advance_priority_city_defense_reinforcements(true)
+		else:
+			sim._advance_priority_city_defense_reinforcements()
+		if reserve.state != Army.State.MOVING:
+			_succession_mismatches += 1
+		fingerprints.append(_army_fp(reserve))
+		sim.free()
+	if fingerprints[0] != fingerprints[1]:
+		_succession_mismatches += 1
+	print("SUCCESSION_PRIORITY_REAL_DISPATCH mismatches=%d" % _succession_mismatches)
 
 
 func _army_fp(army: Army) -> String:

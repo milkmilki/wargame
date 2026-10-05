@@ -97,7 +97,7 @@ func _test_two_state_defense_and_sortie() -> void:
 			var army_id := int(army_id_value)
 			_check(not assigned.has(army_id), "同一支军队不得重复绑定多个州")
 			assigned[army_id] = center_id
-	_check(assigned.size() == 4, "两个防区应各获得足以填平缺口的两军")
+	_check(assigned.size() == 2, "两个防区应各获得足以满足0.9V的一军")
 	var native_fronts: Dictionary = NativeSnapshotBuilder.build(state)["campaign_fronts"]
 	var snapshot_centers: PackedInt32Array = native_fronts["centers"]
 	var snapshot_armies: PackedInt32Array = native_fronts["assignment_army_ids"]

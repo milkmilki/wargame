@@ -222,6 +222,9 @@ func _test_blocked_fu_does_not_restart_unready_assault(route_open: bool) -> void
 		army.campaign_war_id = war_id
 		state.armies.append(army)
 		armies.append(army)
+	# Exercise actual arrival with 30000 below today's field threshold, rather
+	# than using virtual guards to prevent an otherwise legal second wave.
+	state.armies.append(_army(964010, defender_id, center_id, 70000))
 	var plan := CoalitionCampaignFront.new()
 	plan.mode = CoalitionCampaignFront.Mode.OFFENSE
 	plan.war_id = war_id
@@ -235,7 +238,7 @@ func _test_blocked_fu_does_not_restart_unready_assault(route_open: bool) -> void
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
-	var requirement := state.campaign_siege_requirement(attacker_id, center_id)
+	var requirement := state.campaign_minimum_launch_requirement(attacker_id, center_id)
 	_check(requirement > 30000 and requirement <= 90000, "夹具要求营内3万不足而全州9万足够：%d" % requirement)
 	for cycle in range(9):
 		sim._manage_administrative_campaign(plan)

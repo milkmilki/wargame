@@ -93,7 +93,7 @@ func _init() -> void:
 	invader.location_city = fu
 	invader.ai_target_city = fu
 	state.armies.append(invader)
-	valid = valid and state.campaign_field_requirement(owner, center_id) == 12500
+	valid = valid and state.campaign_field_requirement(owner, center_id) == state.campaign_field_minimum_manpower(owner, 10000)
 	var loser := Army.new()
 	loser.owner_nation = owner
 	loser.size = 10000

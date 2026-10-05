@@ -102,6 +102,7 @@ func _test_initial_base() -> void:
 			state.road_network_revision += 1
 		state.cities[3].garrison_manpower = 100000
 		var troop := army(state, 0, 2)
+		army(state, 1, 3, 20000)
 		var plan := front(state, [troop])
 		var sim := Simulation.new()
 		sim.setup(state)

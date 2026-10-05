@@ -6491,7 +6491,7 @@ static func nation_action_summary(
 			center_id,
 		)
 		actions.append(
-			"准备对%s开战，目标%s，集结于%s，备战池%d，到场C %d/%d" % [
+			"准备对%s开战，目标%s，集结于%s，备战池%d，实际到场C %d · 备战目标%d" % [
 				WorldNaming.nation_display_name(
 					game_state, nation.war_preparation_target_nation
 				),
@@ -7420,7 +7420,7 @@ static func city_detail_sections(
 				)
 				if plan.staging_city_id >= 0:
 					offensive_lines.append(
-						"%s：%s · 实际到场：%d · 最低出发：%d（守军G+州内敌军V）"
+						"%s：%s · 实际到场：%d · 最低出发：%d（野战人数门槛）"
 						% [
 							"集结点／大营" if plan.staging_city_id == plan.camp_city_id else "集结点",
 							WorldNaming.city_display_name(
@@ -7867,6 +7867,13 @@ static func _nation_war_detail_sections(
 							"等待动员" if bool(slot.get("awaiting_mobilization", false)) else ("收复后优先选州反攻" if bool(slot["counterattack"]) and (report["component_members"] as Array).has(preferred) else "等待战场接续")])
 				if slots.is_empty():
 					lines.append("州战役：暂无，战争池原地待命")
+			for plan_value in plans:
+				var plan := plan_value as CoalitionCampaignFront
+				if plan.mode != CoalitionCampaignFront.Mode.DEFENSE or displayed.has(plan.front_id):
+					continue
+				lines.append("额外防守：%s（不占主动战场名额）" % WorldNaming.city_display_name(game_state, plan.center_city_id))
+				lines.append_array(_nation_campaign_detail_lines(game_state, nation_id, plan, report))
+				displayed[plan.front_id] = true
 		elif plans.is_empty():
 			lines.append("州战役：暂无，战争池原地待命")
 		else:
@@ -7929,9 +7936,15 @@ static func _nation_campaign_detail_lines(
 		if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
 		else game_state.campaign_attack_requirement(
 			campaign.anchor_nation_id, campaign.center_city_id,
-			active_offensive_siege == null
+			false
 		)
 	)
+	var field_minimum := (requirement if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE else
+		game_state.campaign_minimum_launch_requirement(campaign.anchor_nation_id, campaign.center_city_id))
+	var allocation_requirement := (requirement if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
+		else maxi(45000, maxi(field_minimum, requirement)))
+	if campaign.combat_report_day >= 0:
+		allocation_requirement = int(front_force.get("allocation_requirement", allocation_requirement))
 	var action_text := campaign_phase_text(campaign.mode, campaign.phase)
 	var force_text := (
 		"兵力：已绑定%d · 当前可战%d · %s%d"
@@ -7943,7 +7956,7 @@ static func _nation_campaign_detail_lines(
 				if campaign.mode == CoalitionCampaignFront.Mode.DEFENSE
 				else "向州治推进需要"
 			),
-			requirement,
+			field_minimum,
 		]
 	)
 	if active_offensive_siege != null:
@@ -7974,6 +7987,9 @@ static func _nation_campaign_detail_lines(
 		action_text,
 	])
 	lines.append(force_text)
+	lines.append("需求：野战最低%d · 围城%d · 分兵目标%d" % [field_minimum,
+		game_state.campaign_attack_requirement(campaign.anchor_nation_id, campaign.center_city_id, false),
+		allocation_requirement])
 	var receiving_city := game_state.campaign_receiving_city(campaign)
 	if receiving_city >= 0:
 		lines.append("接收点：%s · 空闲到场%d" % [
@@ -7990,7 +8006,7 @@ static func _nation_campaign_detail_lines(
 		)
 	if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE:
 		if campaign.staging_city_id >= 0:
-			lines.append("%s：%s · 到场%d · 最低出发%d（G+V）" % [
+			lines.append("%s：%s · 到场%d · 最低出发%d（野战人数门槛）" % [
 				"集结点／大营" if campaign.staging_city_id == campaign.camp_city_id else "集结",
 				WorldNaming.city_display_name(
 					game_state, campaign.staging_city_id

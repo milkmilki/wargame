@@ -85,7 +85,6 @@ func _test_conqueror_requirements() -> void:
 	enemy.max_size = 15000
 	state.armies.append(enemy)
 	var ordinary_r := state.campaign_siege_requirement(0, 1)
-	var ordinary_launch := state.campaign_minimum_launch_requirement(0, 1)
 	var ordinary_prewar := state.campaign_prewar_launch_requirement(0, 1, 1)
 	var ordinary_assault := DiplomacyAI.objective_assault_troops(state, 0, 1)
 	state.nations[0].ruler_archetype = RulerProfile.CONQUEROR
@@ -93,8 +92,8 @@ func _test_conqueror_requirements() -> void:
 	check(is_equal_approx(RulerProfile.defense_multiplier(state.nations[0]), 5.0), "conqueror defense is fivefold")
 	check(state.campaign_siege_requirement(0, 1) == ordinary_r, "raw R remains a garrison value")
 	check(state.campaign_reinforcement_threat(0, 1) == 12000, "raw V remains real enemy manpower")
-	check(state.campaign_minimum_launch_requirement(0, 1) == ceili(float(ordinary_launch) * 0.5), "staging launch requires half rounded up")
-	check(state.campaign_prewar_launch_requirement(0, 1, 1) == ceili(float(ordinary_prewar) * 0.5), "prewar threshold uses same half demand")
+	check(state.campaign_minimum_launch_requirement(0, 1) == 5401, "staging strict 0.45V boundary")
+	check(state.campaign_prewar_launch_requirement(0, 1, 1) == ceili(float(ordinary_prewar) * 0.5), "prewar halves R while preserving 2V")
 	check(DiplomacyAI.objective_assault_troops(state, 0, 1) == ceili(float(ordinary_assault) * 0.5), "diplomacy assault demand matches action threshold")
 	check(state.campaign_attack_requirement(0, 1, false) == ceili(float(ordinary_r) * 0.5), "active siege halves R without adding V")
 	var simulation := Simulation.new()
@@ -104,7 +103,7 @@ func _test_conqueror_requirements() -> void:
 	front.center_city_id = 1
 	front.participant_nation_ids = [0]
 	front.mode = CoalitionCampaignFront.Mode.OFFENSE
-	check(simulation._front_requirement(front) == ceili(float(ordinary_assault) * 0.5), "war allocator scales R plus V once")
+	check(simulation._front_requirement(front) == ceili(float(ordinary_assault) * 0.5), "war allocator takes maximum of modified R and field minimum")
 	state.cities[1].garrison_manpower = 1000
 	check(simulation._front_requirement(front) == Simulation.CAMPAIGN_MIN_FRONT_MANPOWER, "allocation retains minimum front manpower")
 	var army := Army.new()
@@ -118,7 +117,7 @@ func _test_conqueror_requirements() -> void:
 	state.nations[0].ruler_archetype = RulerProfile.BALANCED
 	simulation._sync_battle_ruler_modifiers(battle)
 	check(is_equal_approx(army.ruler_attack_multiplier, 1.0) and is_equal_approx(army.ruler_defense_multiplier, 1.0), "succession removes conqueror combat bonuses")
-	check(state.campaign_attack_requirement(0, 1) == state.campaign_siege_requirement(0, 1) + 12000, "ordinary successor restores full manpower demand")
+	check(state.campaign_attack_requirement(0, 1) == 10801, "ordinary successor restores strict 0.9V demand")
 	state.nations[0].ruler_archetype = RulerProfile.CONQUEROR
 	state.set_diplomatic_relation(0, 4, GameState.DiplomaticRelation.ALLIED)
 	state.set_diplomatic_relation(4, 1, GameState.DiplomaticRelation.WAR)
