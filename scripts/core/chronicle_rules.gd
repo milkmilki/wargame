@@ -116,7 +116,9 @@ static func finalize_war(state: GameState, war_id: int) -> bool:
 			lost.append(str(city.name))
 	taken.sort(); lost.sort()
 	var actor_name := _first_name(ctx.get("actor_names", {}), actor_ids)
-	var target_name := _first_name(ctx.get("target_names", {}), target_ids)
+	var actor_group := "、".join(_names_for_ids(ctx.get("actor_names", {}), actor_ids))
+	var target_names := _names_for_ids(ctx.get("target_names", {}), target_ids)
+	var target_group := "、".join(target_names)
 	var enemy_losses := 0
 	for id in target_ids: enemy_losses += int(ctx.get("casualties_by_nation", {}).get(int(id), 0))
 	var actor_losses := 0
@@ -132,30 +134,30 @@ static func finalize_war(state: GameState, war_id: int) -> bool:
 	var actor_destroyed_names := _dead_names(state, ctx.get("actor_names", {}), actor_ids)
 	var target_destroyed_names := _dead_names(state, ctx.get("target_names", {}), target_ids)
 	var actor_text := _compose_war_view(
-		year, true, target_name, actor_won, enemy_losses, taken, lost,
+		year, true, target_group, actor_won, enemy_losses, taken, lost,
 		target_destroyed_names, false
 	)
 	var defender_text := _compose_war_view(
-		year, false, actor_name, defender_won, actor_losses, lost, taken,
+		year, false, actor_group, defender_won, actor_losses, lost, taken,
 		actor_destroyed_names, false
 	)
 	var event := {"day": day, "year": year, "kind": "external_war", "war_id": war_id,
 		"actor_ids": actor_ids.duplicate(), "target_ids": target_ids.duplicate(),
-		"actor_name": actor_name, "target_names": _names_for_ids(ctx.get("target_names", {}), target_ids),
+		"actor_name": actor_name, "target_names": target_names,
 		"result": "victory" if actor_won else "defeat", "casualties": actor_losses + enemy_losses,
 		"attacker_casualties": actor_losses, "defender_casualties": enemy_losses,
 		"captured_centers": taken.duplicate(), "lost_centers": lost.duplicate(),
 		"views": views}
 	for id in actor_ids:
 		var actor_view := _compose_war_view(
-			year, true, target_name, actor_won, enemy_losses, taken, lost,
+			year, true, target_group, actor_won, enemy_losses, taken, lost,
 			target_destroyed_names,
 			int(id) >= 0 and int(id) < state.nations.size() and not state.nations[int(id)].alive
 		)
 		views[int(id)] = actor_view
 	for id in target_ids:
 		var defender_view := _compose_war_view(
-			year, false, actor_name, defender_won, actor_losses, lost, taken,
+			year, false, actor_group, defender_won, actor_losses, lost, taken,
 			actor_destroyed_names,
 			int(id) >= 0 and int(id) < state.nations.size() and not state.nations[int(id)].alive
 		)
@@ -246,7 +248,7 @@ static func _compose_war_view(
 	enemy_destroyed_names: Array[String],
 	own_destroyed: bool
 ) -> String:
-	var prefix := "%d年 征%s" % [year, opponent_name] if is_attacker else "%d年 %s伐我" % [year, opponent_name]
+	var prefix := "%d年 伐%s" % [year, opponent_name] if is_attacker else "%d年 %s伐我" % [year, opponent_name]
 	var text := "%s，%s" % [prefix, "破之" if won else "败绩"]
 	if enemy_losses > 0:
 		text += "，斩敌%d" % enemy_losses
