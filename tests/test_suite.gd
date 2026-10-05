@@ -3466,7 +3466,7 @@ func _test_battle_basics() -> void:
 		4
 	)
 	rng.seed = 8
-	Combat.resolve_round(mirror_battle, rng)
+	CombatFixture.resolve_round(mirror_battle)
 	_check(
 		mirror_a.size == mirror_b.size
 		and is_equal_approx(
@@ -4109,7 +4109,7 @@ func _test_multi_army_aggregation() -> void:
 	_check(battle.reinforce_fresh_a.has(fresh), "援军应登记为本 tick 新增，待统一结算")
 	_check(_approx(tired.morale, 0.30, 0.001), "结算前疲劳友军士气不应立即变化，实为 %.3f" % tired.morale)
 	_check(_approx(float(battle.shared_morale_summary(battle.side_a).effective), 0.65), "援军合并后的有效士气应为0.65")
-	Combat.resolve_round(battle, RandomNumberGenerator.new(), 0, 713)
+	CombatFixture.resolve_round(battle)
 	_check(tired.morale < 0.65 and _approx(tired.morale, fresh.morale), "增援后应共享士气且没有额外提振")
 	# (d2) 防拆分套利：把 1000 援军拆成 2×500 依次加入，回气总量应与单支 1000 完全一致。
 	var tired2 := _make_army(10, 0, 1000, 10); tired2.morale = 0.30
@@ -4120,7 +4120,7 @@ func _test_multi_army_aggregation() -> void:
 	f2.move_from = 0; f2.move_to = 1; f2.move_progress = 0.5
 	sim2._join_field_battle(battle2, f1, battle2.edge)
 	sim2._join_field_battle(battle2, f2, battle2.edge)
-	Combat.resolve_round(battle2, RandomNumberGenerator.new(), 0, 713)
+	CombatFixture.resolve_round(battle2)
 	_check(_approx(tired2.morale, tired.morale, 0.000000001), "拆分援军的共享士气应与单支一致")
 	sim2.free()
 
@@ -4144,7 +4144,7 @@ func _one_round_side_b_loss(side_a: Array, side_b: Array, seed_val: int) -> int:
 	var rng := RandomNumberGenerator.new(); rng.seed = seed_val
 	var b := _make_field_battle(side_a, side_b, 0.0, 4)
 	var before := b.side_size(b.side_b)
-	Combat.resolve_round(b, rng)
+	CombatFixture.resolve_round(b)
 	return before - b.side_size(b.side_b)
 
 
@@ -7149,7 +7149,7 @@ func _test_holding_combat_adaptation() -> void:
 	b0.holding_days = 0.0
 	var rng0 := RandomNumberGenerator.new()
 	rng0.seed = 88
-	Combat.resolve_round(b0, rng0)
+	CombatFixture.resolve_round(b0)
 
 	var atk90 := _make_army(822, 0, 1000, 10)
 	var def90 := _make_army(823, 1, 1000, 10)
@@ -7158,7 +7158,7 @@ func _test_holding_combat_adaptation() -> void:
 	b90.holding_days = 90.0
 	var rng90 := RandomNumberGenerator.new()
 	rng90.seed = 88
-	Combat.resolve_round(b90, rng90)
+	CombatFixture.resolve_round(b90)
 	_check(def90.size > def0.size,
 		"长期驻防应减少守方伤亡：0天=%d，90天=%d" % [1000 - def0.size, 1000 - def90.size])
 	_check(atk90.size == atk0.size,
@@ -12403,8 +12403,8 @@ func _test_combat_fairness_and_conservation() -> void:
 	var rng_s2 := RandomNumberGenerator.new(); rng_s2.seed = 3
 	var sb1 := single_army.side_size(single_army.side_b)
 	var sb2 := split_army.side_size(split_army.side_b)
-	Combat.resolve_round(single_army, rng_s1)
-	Combat.resolve_round(split_army, rng_s2)
+	CombatFixture.resolve_round(single_army)
+	CombatFixture.resolve_round(split_army)
 	var single_dmg := sb1 - single_army.side_size(single_army.side_b)
 	var split_dmg := sb2 - split_army.side_size(split_army.side_b)
 	_check(absi(single_dmg - split_dmg) <= 2, "窄路拆分总杀伤应一致：单支%d vs 拆分%d" % [single_dmg, split_dmg])
@@ -12446,18 +12446,12 @@ func _test_combat_fairness_and_conservation() -> void:
 		and constrained_rounds < 1000
 	):
 		Combat.clear_battle_log()
-		Combat.resolve_round(
-			constrained_whole,
-			constrained_rng_whole
-		)
+		CombatFixture.resolve_round(constrained_whole)
 		var whole_record: Dictionary = (
 			Combat.battle_log[-1].duplicate(true)
 		)
 		Combat.clear_battle_log()
-		Combat.resolve_round(
-			constrained_split,
-			constrained_rng_split
-		)
+		CombatFixture.resolve_round(constrained_split)
 		var split_record: Dictionary = (
 			Combat.battle_log[-1].duplicate(true)
 		)
@@ -12566,8 +12560,8 @@ func _test_combat_fairness_and_conservation() -> void:
 	var rng_n := RandomNumberGenerator.new(); rng_n.seed = 7
 	var wide_before := wide.side_size(wide.side_b)
 	var narrow_before := narrow.side_size(narrow.side_b)
-	Combat.resolve_round(wide, rng_w)
-	Combat.resolve_round(narrow, rng_n)
+	CombatFixture.resolve_round(wide)
+	CombatFixture.resolve_round(narrow)
 	var wide_loss := wide_before - wide.side_size(wide.side_b)
 	var narrow_loss := narrow_before - narrow.side_size(narrow.side_b)
 	_check(narrow_loss < wide_loss, "窄路杀伤(%d)应显著低于宽路(%d)（预备队不出力）" % [narrow_loss, wide_loss])
@@ -12613,35 +12607,25 @@ func _test_combat_fairness_and_conservation() -> void:
 		"同一多重集不同装入顺序，战斗结果必须逐位一致（浮点求和顺序无关）"
 	)
 
-	# (j) 共享战场骰下的镜像单回合对称（item 8「共享战场随机因素」）：同质双方注入同一 shared_roll，
-	#     无论骰值取 DICE_MIN..DICE_MAX 哪一档，单回合后两侧 size 与 morale 必须严格对称。
-	var shared_roll_symmetric := true
-	for roll in range(Combat.DICE_MIN, Combat.DICE_MAX + 1):
+	# Fixed equal dice preserve deterministic symmetry; independent dice allow reversals.
+	var symmetric := true
+	for roll in range(11):
 		var ma := _make_army(0, 0, 5000, 10, 10)
 		var mb := _make_army(1, 1, 5000, 10, 10)
 		var mbat := _make_field_battle([ma], [mb], 0.3, 4)
-		Combat.resolve_round(mbat, RandomNumberGenerator.new(), roll)
+		mbat.field_dice = PackedInt32Array([roll, roll, roll, roll])
+		Combat.resolve_round(mbat)
 		if ma.size != mb.size or not is_equal_approx(ma.morale, mb.morale):
-			shared_roll_symmetric = false
-	_check(shared_roll_symmetric, "共享战场骰任一档位下，同质双方单回合结果必须严格对称")
-
-	# (k) 共享骰的确定性裁决（镜像公平优先的既定取舍，item 8 独立侧骰已放弃）：
-	#     shared_roll 同乘双方火力，故骰值只改变战斗「烈度/速度」、不改变相对胜负。
-	#     后果：给定兵力比，单场野战胜负是确定的——5% 兵力优势方在所有种子下必胜（无单场逆转）。
-	#     这是「镜像公平 > 单场戏剧性」抉择的直接代价，在此固化为回归门槛，使该取舍显式可见。
-	#     宏观戏剧性/局部逆转仍存在于战略层（骰值改变战斗时序→影响哪些战斗发生→领土交换）。
+			symmetric = false
+	_check(symmetric, "固定同骰双方单回合仍严格对称")
 	var adv_wins := 0
-	var total_battles := 200
-	for s in range(total_battles):
-		var rng := RandomNumberGenerator.new(); rng.seed = 1000 + s
+	for seed in range(200):
 		var adv := _make_field_battle([_make_army(0, 0, 2100, 10, 10)], [_make_army(1, 1, 2000, 10, 10)], 0.1, 4)
-		_run_battle(adv, rng)
+		adv.ensure_opening_dice(1000 + seed, true)
+		_run_battle(adv, RandomNumberGenerator.new())
 		if adv.winner_side == 1:
 			adv_wins += 1
-	_check(
-		adv_wins == total_battles,
-		"共享骰下 5%%兵力优势方应确定性全胜(200/200)，实为 %d——若非全胜说明骰值错误地改变了相对胜负" % adv_wins
-	)
+	_check(adv_wins > 0 and adv_wins < 200, "独立固定四骰允许弱方翻盘且不固定偏向某侧")
 
 
 ## [36] item15 结构化战斗日志：默认关闭零记录、启用后字段完整可读、且不改变战斗结果（镜像安全）。
@@ -12668,7 +12652,7 @@ func _test_structured_battle_log() -> void:
 	var required_keys := [
 		"battle_id", "day", "round_no", "kind", "participants_a", "participants_b",
 		"frontline_strength_a", "reserve_strength_a", "effective_attack_a", "effective_defense_a",
-		"shared_random_modifier", "side_random_modifier", "terrain_modifier_a", "supply_modifier_a",
+		"opening_dice", "performance_modifier_a", "frontage_a", "terrain_modifier_a", "supply_modifier_a",
 		"casualties_a", "morale_before_a", "morale_after_a", "reinforcements_arrived_a",
 		"rout_reason", "winner_or_draw",
 	]
@@ -12738,16 +12722,13 @@ func _test_structured_battle_log() -> void:
 				var entropy_tampered: Array[Dictionary] = (
 					loaded["records"] as Array[Dictionary]
 				).duplicate(true)
-				entropy_tampered[0]["tactical_entropy"] = (
-					int(entropy_tampered[0]["tactical_entropy"])
-					+ 1234567
-				)
+				entropy_tampered[0]["opening_dice"][0] = 11
 				var entropy_rejected := CombatLog.replay_records(
 					entropy_tampered
 				)
 				_check(
 					not bool(entropy_rejected.get("ok", true)),
-					"回放器必须拒绝被篡改的战术熵，不能只信任日志中的派生修正"
+				"回放器必须拒绝越界开场骰"
 				)
 				var key_tampered: Array[Dictionary] = (
 					loaded["records"] as Array[Dictionary]
@@ -12755,16 +12736,13 @@ func _test_structured_battle_log() -> void:
 				var key_context: Dictionary = key_tampered[0][
 					"battle_context"
 				]
-				key_context["tactical_key_a"] = (
-					int(key_context["tactical_key_a"])
-					+ 7654321
-				)
+				key_context["field_dice"][0] = (int(key_context["field_dice"][0]) + 1) % 11
 				var key_rejected := CombatLog.replay_records(
 					key_tampered
 				)
 				_check(
 					not bool(key_rejected.get("ok", true)),
-					"回放器必须拒绝被篡改的 tactical key"
+				"回放器必须拒绝与记录不一致的开场骰"
 				)
 	DirAccess.remove_absolute(
 		ProjectSettings.globalize_path(log_path)
@@ -12906,12 +12884,7 @@ func _test_remaining_combat_risk_closures() -> void:
 		reinforcement_battle.side_a.append(fresh)
 		reinforcement_battle.reinforce_fresh_a.append(fresh)
 		var merged := (old_morale * float(old_size) + fresh.morale * float(fresh.size)) / float(old_size + fresh.size)
-		Combat.resolve_round(
-			reinforcement_battle,
-			RandomNumberGenerator.new(),
-			0,
-			1234 + batch
-		)
+		CombatFixture.resolve_round(reinforcement_battle)
 		_check(tired.morale < merged and _approx(tired.morale, fresh.morale), "跨回合援军只共享加权士气，不额外提振")
 
 	# (b) 5000 正面只能投入第一军；完整预备队首轮不伤亡、不掉战斗士气。
@@ -12925,12 +12898,7 @@ func _test_remaining_combat_risk_closures() -> void:
 		4
 	)
 	frontage_battle.edge.max_manpower = 5000
-	Combat.resolve_round(
-		frontage_battle,
-		RandomNumberGenerator.new(),
-		0,
-		99
-	)
+	CombatFixture.resolve_round(frontage_battle)
 	_check(
 		reserve.size == 4000 and reserve.morale < 1.0 and _approx(reserve.morale, frontline.morale),
 		"完整预备队保持兵力但共享组织度损耗，实为 size=%d morale=%.4f"
@@ -12942,12 +12910,7 @@ func _test_remaining_combat_risk_closures() -> void:
 	)
 	frontline.size = 0
 	var reserve_before := reserve.size
-	Combat.resolve_round(
-		frontage_battle,
-		RandomNumberGenerator.new(),
-		0,
-		100
-	)
+	CombatFixture.resolve_round(frontage_battle)
 	_check(
 		reserve.size < reserve_before and reserve.morale < 1.0,
 		"前线退出后，预备队应在下一轮补入并开始承受战斗损耗"
@@ -12965,12 +12928,7 @@ func _test_remaining_combat_risk_closures() -> void:
 		4
 	)
 	rout_battle.edge.max_manpower = 5000
-	Combat.resolve_round(
-		rout_battle,
-		RandomNumberGenerator.new(),
-		0,
-		77
-	)
+	CombatFixture.resolve_round(rout_battle)
 	_check(
 		rout_battle.routed_a.is_empty()
 			and rout_battle.side_a.has(near_rout)
@@ -13026,14 +12984,14 @@ func _test_remaining_combat_risk_closures() -> void:
 	takeover_battle.frontline_priority_b[
 		healthy_challenger
 	] = 2
-	takeover_battle.tactical_key_b = 123456
 	promotion_sim._promote_challengers(takeover_battle)
 	_check(
 		takeover_battle.side_a.has(healthy_challenger)
 			and takeover_battle.reinforce_fresh_a.has(
 				healthy_challenger
 			)
-			and takeover_battle.tactical_key_a == 123456
+			and takeover_battle.field_dice.is_empty()
+			and takeover_battle.assault_dice.is_empty()
 			and takeover_battle.side_b.is_empty()
 			and takeover_battle.reinforce_fresh_b.is_empty(),
 		"挑战者接管围城时应迁移新援状态并清空旧 side_b 身份"
@@ -13585,8 +13543,6 @@ func _make_field_battle(side_a: Array, side_b: Array, danger: float, distance: i
 	b.contact_dist_a = distance / 2.0
 	b.contact_dist_b = distance / 2.0
 	# 通用机制单测隔离战术运气，专门的 item 8 统计测试负责验证独立随机。
-	b.tactical_key_a = 101
-	b.tactical_key_b = 101
 	for a in side_a:
 		b.side_a.append(a)
 	for a in side_b:
@@ -13598,7 +13554,7 @@ func _make_field_battle(side_a: Array, side_b: Array, danger: float, distance: i
 func _run_battle(battle: Battle, rng: RandomNumberGenerator) -> int:
 	var guard := 0
 	while not battle.finished and guard < 1000:
-		Combat.resolve_round(battle, rng)
+		CombatFixture.resolve_round(battle)
 		guard += 1
 	return guard
 

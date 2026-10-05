@@ -190,7 +190,7 @@ func _init() -> void:
 		valid = valid and not siege.side_b_defends_city
 		valid = valid and not siege.uses_field_combat_rules()
 		if siege != null:
-			sim._advance_siege(siege, 9, 123456)
+			sim._advance_siege(siege)
 			valid = valid and target.garrison_manpower < before
 			for army in combat_state.armies:
 				valid = valid and not army.is_city_garrison

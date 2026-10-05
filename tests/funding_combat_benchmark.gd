@@ -25,7 +25,7 @@ func _init() -> void:
 		var start := Time.get_ticks_usec()
 		for battle in battles:
 			for round_index in range(10):
-				Combat.resolve_round(battle, rng)
+				CombatFixture.resolve_round(battle)
 		var duration := Time.get_ticks_usec() - start
 		if sample > 0:
 			elapsed += duration

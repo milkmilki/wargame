@@ -62,8 +62,6 @@ func _test_logs_and_history(state: GameState, sim: Simulation, army: Army, peer:
 	state.nations[0].military_payment_ratio = 1
 	_check(is_equal_approx(history.build_view_state(state, 0).nations[0].military_payment_ratio, 0.25), "history keeps old payment ratio")
 	var field := Battle.new()
-	field.tactical_key_a = 11
-	field.tactical_key_b = 22
 	field.side_a.append(army)
 	field.side_a.append(peer)
 	var opponent := Army.new()
@@ -76,13 +74,13 @@ func _test_logs_and_history(state: GameState, sim: Simulation, army: Army, peer:
 	_check(army.funding_multiplier == 0.5 and opponent.funding_multiplier == 1, "each participant uses own nation payment")
 	Combat.clear_battle_log()
 	Combat.battle_log_enabled = true
-	Combat.resolve_round(field, RandomNumberGenerator.new(), 4, 713, 1)
+	CombatFixture.resolve_round(field)
 	var records := Combat.battle_log.duplicate(true)
 	state.nations[army.owner_nation].military_payment_ratio = 1
 	sim._sync_battle_ruler_modifiers(field)
 	var replay := CombatLog.replay_records(records)
 	_check(bool(replay.ok), "funding log replays independently of current payment: %s" % str(replay))
-	_check(records[0].combat_rules_version == 3 and records[0].participants_a[0].funding_multiplier == 0.5, "version 3 logs actual funding")
+	_check(records[0].combat_rules_version == 4 and records[0].participants_a[0].funding_multiplier == 0.5, "version 4 logs actual funding")
 	var old := records.duplicate(true)
 	old[0].combat_rules_version = 2
 	_check(CombatLog.replay_records(old).errors[0].error == "incompatible_combat_rules", "version 2 explicitly rejected")
@@ -113,7 +111,7 @@ func _test_monthly_finance(state: GameState, sim: Simulation, army: Army) -> voi
 	state.refresh_derived()
 	_check(owner.military_payment_ratio == 1 and army.funding_multiplier == 1, "no military cost defaults to full funding")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 21 and snapshot.nations.payment_ratio[owner.id] == 1, "schema 21 persists payment ratio")
+	_check(snapshot.schema_version == 22 and snapshot.nations.payment_ratio[owner.id] == 1, "schema 22 persists payment ratio")
 	_check(not snapshot.armies.has("funding_multiplier"), "derived funding is not persisted")
 
 func _test_mirror_and_annexation() -> void:
@@ -130,7 +128,7 @@ func _test_mirror_and_annexation() -> void:
 				side.append(army)
 		var rng := RandomNumberGenerator.new()
 		rng.seed = 62013
-		Combat.resolve_round(battle, rng, 4, 62013, 1)
+		CombatFixture.resolve_round(battle)
 		results.append({"a": battle.side_size(battle.side_a), "b": battle.side_size(battle.side_b), "ma": battle.side_a[0].morale, "mb": battle.side_b[0].morale})
 	_check(results[0].a == results[1].b and results[0].b == results[1].a, "mixed funding casualties mirror exactly")
 	_check(is_equal_approx(results[0].ma, results[1].mb) and is_equal_approx(results[0].mb, results[1].ma), "mixed funding shared morale mirrors")

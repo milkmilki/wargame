@@ -6940,9 +6940,11 @@ func _reconcile_battles_after_annexation() -> void:
 				battle.reinforce_fresh_b.clear()
 				battle.routed_b.clear()
 				battle.frontline_priority_b.clear()
-				battle.tactical_key_b = 0
+				battle.end_field_engagement()
 		if _battle_has_hostile_sides(battle):
 			continue
+		battle.end_field_engagement()
+		battle.invalidate_assault_dice()
 		for army in battle.side_a + battle.side_b:
 			army.battle_id = -1
 			if army.state != Army.State.FIGHTING:

@@ -14,7 +14,7 @@ func run() -> void:
 	var army := state.create_army(0, 0, 5000)
 	army.political_person_id = crown
 	var snapshot := NativeSnapshotBuilder.build(state)
-	check(snapshot.schema_version == 21, "schema21")
+	check(snapshot.schema_version == 22, "schema22")
 	check(NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(), "valid_strict_politics_schema")
 	var incompatible := snapshot.duplicate(true)
 	incompatible.schema_version = 19

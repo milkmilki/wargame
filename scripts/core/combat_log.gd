@@ -104,10 +104,14 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 		"routed_a",
 		"routed_b",
 		"battle_context",
-		"shared_random_roll",
-		"tactical_entropy",
-		"side_random_modifier_a",
-		"side_random_modifier_b",
+		"opening_dice",
+		"performance_modifier_a",
+		"performance_modifier_b",
+		"expansion_modifier_a",
+		"expansion_modifier_b",
+		"base_frontage",
+		"frontage_a",
+		"frontage_b",
 		"winner_or_draw",
 		"finished",
 	]
@@ -117,52 +121,43 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 				"error": "missing_field",
 				"field": key,
 			}
+	if not record["battle_context"] is Dictionary:
+		return {"error": "invalid_battle_context"}
+	var context: Dictionary = record["battle_context"]
+	for key in ["field_dice", "assault_dice", "field_sequence", "assault_sequence"]:
+		if not context.has(key):
+			return {"error": "missing_field", "field": key}
+	for kind in ["field", "assault"]:
+		var sequence = context[kind + "_sequence"]
+		if not (sequence is int or sequence is float) or not is_finite(float(sequence)) or float(sequence) != floorf(float(sequence)) or float(sequence) < 0:
+			return {"error": "invalid_engagement_sequence"}
+		if context[kind + "_dice"] is Array and not context[kind + "_dice"].is_empty() and sequence == 0:
+			return {"error": "invalid_engagement_sequence"}
+	for raw in [record["opening_dice"], context.field_dice, context.assault_dice]:
+		if not raw is Array or (not raw.is_empty() and raw.size() != 4):
+			return {"error": "invalid_opening_dice"}
+		for die in raw:
+			if not (die is int or die is float) or float(die) != floorf(float(die)) or float(die) < 0 or float(die) > 10:
+				return {"error": "invalid_opening_dice"}
 	for side_key in ["participants_a", "participants_b"]:
 		for data in record[side_key]:
 			if not data.has("funding_multiplier"):
 				return {"error": "missing_field", "field": "funding_multiplier"}
 	var battle := _battle_from_record(record)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 1
-	if battle.tactical_key_a <= 0 or battle.tactical_key_b <= 0:
-		return {
-			"error": "missing_stable_tactical_key",
-		}
-	var derived_modifiers := Combat.side_tactical_modifiers(
-		int(record["tactical_entropy"]),
-		Combat._battle_context_signature(battle),
-		battle.tactical_key_a,
-		battle.tactical_key_b
-	)
+	var dice := battle.opening_dice()
+	if not Battle.valid_dice(dice) or dice != PackedInt32Array(record["opening_dice"]):
+		return {"error": "invalid_opening_dice"}
 	if (
-		not is_equal_approx(
-			derived_modifiers.x,
-			float(record["side_random_modifier_a"])
-		)
-		or not is_equal_approx(
-			derived_modifiers.y,
-			float(record["side_random_modifier_b"])
-		)
+		not is_equal_approx(Battle.dice_multiplier(dice[0]), float(record["performance_modifier_a"]))
+		or not is_equal_approx(Battle.dice_multiplier(dice[1]), float(record["performance_modifier_b"]))
+		or not is_equal_approx(Battle.dice_multiplier(dice[2]), float(record["expansion_modifier_a"]))
+		or not is_equal_approx(Battle.dice_multiplier(dice[3]), float(record["expansion_modifier_b"]))
+		or Combat.combat_frontage(battle) != int(record["base_frontage"])
+		or Combat.side_combat_frontage(battle, 1) != int(record["frontage_a"])
+		or Combat.side_combat_frontage(battle, 2) != int(record["frontage_b"])
 	):
-		return {
-			"error": "side_random_modifier_mismatch",
-			"expected": [
-				float(record["side_random_modifier_a"]),
-				float(record["side_random_modifier_b"]),
-			],
-			"actual": [
-				derived_modifiers.x,
-				derived_modifiers.y,
-			],
-		}
-	Combat.resolve_round(
-		battle,
-		rng,
-		int(record["shared_random_roll"]),
-		int(record["tactical_entropy"]),
-		int(record["day"]),
-		derived_modifiers
-	)
+		return {"error": "opening_modifier_mismatch"}
+	Combat.resolve_round(battle, int(record["day"]))
 	if battle.winner_side != int(record["winner_or_draw"]):
 		return {
 			"error": "winner_mismatch",
@@ -229,8 +224,10 @@ static func _battle_from_record(record: Dictionary) -> Battle:
 	))
 	battle.contact_dist_a = float(context.get("contact_dist_a", 0.0))
 	battle.contact_dist_b = float(context.get("contact_dist_b", 0.0))
-	battle.tactical_key_a = int(context.get("tactical_key_a", 0))
-	battle.tactical_key_b = int(context.get("tactical_key_b", 0))
+	battle.field_dice = PackedInt32Array(context.get("field_dice", []))
+	battle.assault_dice = PackedInt32Array(context.get("assault_dice", []))
+	battle.field_sequence = int(context.get("field_sequence", 0))
+	battle.assault_sequence = int(context.get("assault_sequence", 0))
 	var edge_data: Dictionary = context.get("edge", {})
 	if not edge_data.is_empty():
 		var edge := Edge.new()

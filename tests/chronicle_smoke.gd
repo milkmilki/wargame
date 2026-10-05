@@ -19,7 +19,7 @@ func _run() -> void:
 	_check(int(state.chronicle_events[-1].casualties) == 18200, "actual losses retained")
 	_check(str(state.chronicle_events[-1].views[1]).contains("伐我"), "defender perspective retained")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 21 and snapshot.has("chronicle_events"), "chronicle snapshot persisted")
+	_check(snapshot.schema_version == 22 and snapshot.has("chronicle_events"), "chronicle snapshot persisted")
 	ChronicleRules.record_ultimatum(state, 0, 1, UltimatumRules.Outcome.ANNEX)
 	_check(str(state.chronicle_events[-1].text).contains("威服"), "ultimatum event")
 	ChronicleRules.record_rebellion(state, 2, 0, "张角", ["巨鹿"], false, "")

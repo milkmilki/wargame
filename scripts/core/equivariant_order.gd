@@ -599,34 +599,6 @@ static func mirror_orbit_army_key(
 	return result
 
 
-## 战斗侧的稳定随机身份：只使用镜像轨道位置、势力中心和行军方向，不含实体 id 或战力参数。
-static func tactical_side_key(
-	state: GameState,
-	army: Army
-) -> int:
-	var values := mirror_orbit_position_key(
-		army_position(state, army)
-	)
-	values.append_array(mirror_orbit_position_key(
-		_nation_anchor(state, army.owner_nation)
-	))
-	if _valid_city(state, army.move_from):
-		values.append_array(mirror_orbit_position_key(
-			state.cities[army.move_from].map_position
-		))
-	if _valid_city(state, army.move_to):
-		values.append_array(mirror_orbit_position_key(
-			state.cities[army.move_to].map_position
-		))
-	var result := 17
-	for value in values:
-		result = posmod(
-			result * 48271 + int(value) + 1,
-			2147483647
-		)
-	return maxi(result, 1)
-
-
 static func mirror_orbit_edge_less(
 	state: GameState,
 	a: Edge,

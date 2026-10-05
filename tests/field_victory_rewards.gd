@@ -121,7 +121,7 @@ func _test_city_engagements() -> void:
 		_check(winner.size == 13500 and is_equal_approx(winner.morale, 1.0), "city attacker and defender receive the same real-field reward")
 		if winning_side == 1:
 			f.battle.city.garrison_manpower = 100000
-			f.sim._advance_siege(f.battle, 0, 74410)
+			f.sim._advance_siege(f.battle)
 			_check(winner.size == 13500 and is_equal_approx(winner.morale, 1.0), "blockade does not repeat the previous field reward")
 			var relief := _army(f, 1, 10000, 15000, 0.1)
 			f.battle.side_b = [relief] as Array[Army]
@@ -137,7 +137,7 @@ func _test_virtual_garrison_has_no_reward() -> void:
 	var attacker := _army(f, 0, 12000, 15000, 0.6)
 	f.battle.side_a = [attacker] as Array[Army]
 	f.battle.city.garrison_manpower = 1
-	f.sim._advance_siege(f.battle, 9, 74410)
+	f.sim._advance_siege(f.battle)
 	_check(f.battle.finished and f.battle.winner_side == 1, "virtual garrison fixture really captures the city")
 	_check(attacker.size <= 12000 and attacker.morale <= 0.6, "virtual garrison victory gives neither field morale nor manpower rewards")
 	f.sim.free()

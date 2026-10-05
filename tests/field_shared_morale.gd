@@ -55,7 +55,7 @@ func _battle(first: Array[Army], second: Array[Army], city: bool = false) -> Bat
 func _round(battle: Battle) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 713
-	Combat.resolve_round(battle, rng, 4, 713, 1, Vector2.ONE)
+	CombatFixture.resolve_round(battle)
 
 
 func _test_pool(reverse: bool) -> void:
@@ -140,11 +140,9 @@ func _test_garrison_rules() -> void:
 	var garrison := _army(3, 20000, 1.0, 1.0)
 	garrison.is_city_garrison = true
 	var siege := _battle([broken, healthy], [garrison], true)
-	siege.tactical_key_a = 31
-	siege.tactical_key_b = 32
 	Combat.battle_log_enabled = true
 	Combat.clear_battle_log()
-	Combat.resolve_round(siege, RandomNumberGenerator.new(), 4, 713, 1)
+	CombatFixture.resolve_round(siege)
 	_check(siege.routed_a.has(broken) and not siege.side_a.has(broken), "virtual-garrison assault retains individual routing")
 	_check(bool(CombatLog.replay_records(Combat.battle_log).ok), "garrison assault logs preserve initially routed participants for replay")
 	Combat.battle_log_enabled = false
@@ -158,8 +156,6 @@ func _test_join_and_replay() -> void:
 	enemy.owner_nation = 1
 	var battle := _battle([first], [enemy], true)
 	battle.id = 100
-	battle.tactical_key_a = 31
-	battle.tactical_key_b = 32
 	var arrival := _army(3, 10000, 2.0)
 	arrival.owner_nation = 0
 	var sim := Simulation.new()
@@ -182,7 +178,7 @@ func _test_join_and_replay() -> void:
 		"different individual morale maxima cannot make only part of the winning side retreat")
 	Combat.battle_log_enabled = true
 	Combat.clear_battle_log()
-	Combat.resolve_round(battle, RandomNumberGenerator.new(), 4, 713, 1)
+	CombatFixture.resolve_round(battle)
 	var records := Combat.battle_log.duplicate(true)
 	_check(bool(CombatLog.replay_records(records).ok), "shared battle logs replay mixed maxima and ruler modifiers exactly")
 	_check(float(records[0].battle_context.shared_ratio_without_arrivals_a) < float(records[0].battle_context.shared_ratio_before_a), "log distinguishes morale before and after arrivals merge")
@@ -244,7 +240,7 @@ func _test_real_unified_retreat() -> void:
 	_check(state.armies[0].battle_id == -1 and state.armies[1].battle_id == -1 and state.battles.is_empty(), "unified settlement leaves no old active participant references")
 	_check(state.armies[2].size > 10000 - 1000, "winning survivor receives the existing establishment reward")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 21 and not snapshot.battles.has("reinforcement_morale_a"), "snapshot drops obsolete reinforcement counters")
+	_check(snapshot.schema_version == 22 and not snapshot.battles.has("reinforcement_morale_a"), "snapshot drops obsolete reinforcement counters")
 	sim.free()
 
 
@@ -298,8 +294,8 @@ func _benchmark() -> void:
 		first.append(_army(index, 15000, 2.0))
 		second.append(_army(100 + index, 15000, 2.0))
 	var battle := _battle(first, second)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 714
+	battle.field_dice = PackedInt32Array([0, 0, 0, 0])
+	battle.field_sequence = 1
 	var elapsed := 0
 	var peak := 0
 	for iteration in range(3200):
@@ -309,7 +305,7 @@ func _benchmark() -> void:
 		battle.finished = false
 		battle.winner_side = 0
 		var started := Time.get_ticks_usec()
-		Combat.resolve_round(battle, rng, 4, 713, iteration, Vector2.ONE)
+		Combat.resolve_round(battle, iteration)
 		var duration := Time.get_ticks_usec() - started
 		if iteration >= 200:
 			elapsed += duration

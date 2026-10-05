@@ -3,12 +3,17 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 21
+const SCHEMA_VERSION: int = 22
 
 
 static func succession_validation_error(snapshot: Dictionary) -> String:
 	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
 		return "Incompatible native snapshot schema"
+	if not snapshot.get("battles") is Dictionary:
+		return "Invalid battle table"
+	var battle_error := battle_validation_error(snapshot.battles)
+	if not battle_error.is_empty():
+		return battle_error
 	var chronicle_events = snapshot.get("chronicle_events", [])
 	if not chronicle_events is Array:
 		return "Invalid chronicle event list"
@@ -106,6 +111,32 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 				if not army_ids.has(conflict_army_id) or conflict_armies.has(conflict_army_id):
 					return "Invalid succession conflict army reference"
 				conflict_armies[conflict_army_id] = true
+	return ""
+
+
+static func battle_validation_error(battles: Dictionary) -> String:
+	if not battles.get("count") is int:
+		return "Invalid battle count"
+	var count: int = battles.count
+	if count < 0:
+		return "Invalid battle count"
+	for key in ["field_dice", "assault_dice", "field_sequence", "assault_sequence"]:
+		if not battles.has(key):
+			return "Invalid battle dice column: " + key
+		if key.ends_with("_dice") and not battles[key] is Array:
+			return "Invalid battle dice column: " + key
+		if key.ends_with("_sequence") and not battles[key] is PackedInt32Array:
+			return "Invalid battle sequence column: " + key
+		if battles[key].size() != count:
+			return "Invalid battle dice column: " + key
+	for index in range(count):
+		for kind in ["field", "assault"]:
+			var raw = battles[kind + "_dice"][index]
+			if not raw is PackedInt32Array:
+				return "Invalid battle dice type"
+			var sequence := int(battles[kind + "_sequence"][index])
+			if sequence < 0 or (not raw.is_empty() and (not Battle.valid_dice(raw) or sequence == 0)):
+				return "Invalid battle opening dice"
 	return ""
 
 
@@ -816,8 +847,10 @@ static func _build_battles(
 	var holding_side := PackedInt32Array()
 	var holding_days := PackedFloat64Array()
 	var round_no := PackedInt32Array()
-	var tactical_key_a := PackedInt32Array()
-	var tactical_key_b := PackedInt32Array()
+	var field_dice: Array[PackedInt32Array] = []
+	var assault_dice: Array[PackedInt32Array] = []
+	var field_sequence := PackedInt32Array()
+	var assault_sequence := PackedInt32Array()
 	var side_b_defends_city := PackedByteArray()
 	var uses_field_combat_rules := PackedByteArray()
 	var finished := PackedByteArray()
@@ -851,8 +884,10 @@ static func _build_battles(
 		holding_side.append(battle.holding_side)
 		holding_days.append(battle.holding_days)
 		round_no.append(battle.round_no)
-		tactical_key_a.append(battle.tactical_key_a)
-		tactical_key_b.append(battle.tactical_key_b)
+		field_dice.append(battle.field_dice.duplicate())
+		assault_dice.append(battle.assault_dice.duplicate())
+		field_sequence.append(battle.field_sequence)
+		assault_sequence.append(battle.assault_sequence)
 		side_b_defends_city.append(int(battle.side_b_defends_city))
 		uses_field_combat_rules.append(int(
 			battle.uses_field_combat_rules()
@@ -915,8 +950,10 @@ static func _build_battles(
 		"holding_side": holding_side,
 		"holding_days": holding_days,
 		"round_no": round_no,
-		"tactical_key_a": tactical_key_a,
-		"tactical_key_b": tactical_key_b,
+		"field_dice": field_dice,
+		"assault_dice": assault_dice,
+		"field_sequence": field_sequence,
+		"assault_sequence": assault_sequence,
 		"side_b_defends_city": side_b_defends_city,
 		"uses_field_combat_rules": uses_field_combat_rules,
 		"finished": finished,

@@ -28,13 +28,11 @@ func _run_defender(defender: Army) -> Vector2i:
 	var battle := Battle.new()
 	battle.kind = Battle.Kind.SIEGE
 	battle.side_b_defends_city = true
-	battle.tactical_key_a = 301
-	battle.tactical_key_b = 302
 	battle.side_a.append(attacker)
 	battle.side_b.append(defender)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 94105
-	Combat.resolve_round(battle, rng, 0, 94105, 0, Vector2.ONE)
+	CombatFixture.resolve_round(battle)
 	return Vector2i(attacker.size, defender.size)
 
 

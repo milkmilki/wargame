@@ -121,7 +121,7 @@ func _init() -> void:
 		) == 1
 		Combat.clear_battle_log()
 		Combat.battle_log_enabled = true
-		screened_sim._advance_siege(screened_siege, 0, 95201)
+		screened_sim._advance_siege(screened_siege)
 		var replay := CombatLog.replay_records(Combat.battle_log)
 		Combat.battle_log_enabled = false
 		valid = valid and bool(replay.get("ok", false))
@@ -190,12 +190,12 @@ func _init() -> void:
 			Combat.combat_frontage(blocked_siege)
 				== Combat.SIEGE_FRONTAGE
 		)
-		blocked_sim._advance_siege(blocked_siege, 0, 95202)
+		blocked_sim._advance_siege(blocked_siege)
 		valid = valid and not blocked_siege.finished
 		valid = valid and blocked_center.garrison_manpower < blocked_garrison_before
 		valid = valid and blocked_siege.side_b.is_empty()
 		var blocked_after_first_day := blocked_center.garrison_manpower
-		blocked_sim._advance_siege(blocked_siege, 0, 95202)
+		blocked_sim._advance_siege(blocked_siege)
 		valid = valid and blocked_center.garrison_manpower < blocked_after_first_day
 	blocked_sim.free()
 
@@ -214,9 +214,9 @@ func _init() -> void:
 	)
 	var threshold_siege := threshold_sim._siege_battle_of(threshold_center)
 	if threshold_siege != null:
-		threshold_sim._advance_siege(threshold_siege, 0, 95205)
+		threshold_sim._advance_siege(threshold_siege)
 		valid = valid and threshold_center.garrison_manpower > 0
-		threshold_sim._advance_siege(threshold_siege, 0, 95205)
+		threshold_sim._advance_siege(threshold_siege)
 		valid = valid and threshold_siege.round_no > 0
 	else:
 		valid = false
@@ -244,7 +244,7 @@ func _init() -> void:
 	var relieved_garrison_before := relieved_center.garrison_manpower
 	relieved_center.food_storage = 100
 	if relieved_siege != null:
-		relieved_sim._advance_siege(relieved_siege, 0, 95203)
+		relieved_sim._advance_siege(relieved_siege)
 		valid = valid and relieved_siege.uses_field_combat_rules()
 		valid = valid and relieved_center.garrison_manpower == relieved_garrison_before
 		relieved_sim._drain_siege_food()
@@ -292,7 +292,7 @@ func _init() -> void:
 		(routed["center"] as City).garrison_manpower
 			== routed_garrison_before
 	)
-	routed_sim._advance_siege(routed_siege, 0, 95204)
+	routed_sim._advance_siege(routed_siege)
 	valid = valid and (
 		(routed["center"] as City).garrison_manpower
 			< routed_garrison_before

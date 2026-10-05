@@ -1,17 +1,7 @@
 extends SceneTree
 ## item 17：批量统计战斗测试（≥10,000 场）。手动运行，不纳入每次快速回归。
 ##
-## item 8：每 tick 消费一次 shared_roll（共同烈度）和一次 tactical_entropy；后者通过
-## 无 id、无顺序、拆分不变的侧物理指纹分别派生 ±5% 战术修正。交换 A/B 会交换修正；
-## 完全同构侧因等变性要求自动得到相同修正。验证项：
-##   ① A/B 位置对称：交换两侧 → 胜方镜像交换、双方伤亡互换（严格逐位）；
-##   ② 战术随机独立且无侧位偏置，交换指纹严格交换修正；
-##   ③ 优势方胜率：任意随机兵力/攻防阵容，兵力优势方胜率必须极高且稳定；
-##   ④ 随机性不掩盖明显兵力优势：20% 优势方保持稳定统计优势；
-##   ⑤ 拆分不改结果：把一侧拆成多支小军，总伤亡与胜负不变；
-##   ⑥ 受限正面拆分不变：固定 1×10000/2×5000 与随机 2~10 支逐轮一致；
-##   ⑦ 地形优势符合预期：高危地形对进攻方的压制单调且方向正确；
-##   ⑧ 固定种子完全复现：同输入同种子逐位一致。
+## 四骰固定整场；固定骰值随双方交换保持严格对称，随机阵容允许弱方翻盘。
 ## 运行：Godot --headless --script res://tests/combat_statistics.gd
 
 const BATTLE_COUNT: int = 10000
@@ -22,9 +12,9 @@ var _fail_msgs: Array[String] = []
 func _init() -> void:
 	var started := Time.get_ticks_msec()
 	_test_position_symmetry()
-	_test_tactical_randomness()
+	_test_opening_randomness()
 	_test_advantage_winrate()
-	_test_randomness_never_beats_advantage()
+	_report_troop_ratio_outcomes()
 	_test_split_invariance()
 	_test_constrained_frontage_split_invariance()
 	_test_terrain_monotonic()
@@ -65,6 +55,7 @@ func _test_position_symmetry() -> void:
 		var loss_fwd := _run(fwd, battle_seed)
 		# 交换：A=(sb) B=(sa)
 		var rev := _make_battle(sb, atk_b, def_b, sa, atk_a, def_a, danger)
+		rev.field_dice = PackedInt32Array([fwd.field_dice[1], fwd.field_dice[0], fwd.field_dice[3], fwd.field_dice[2]])
 		var loss_rev := _run(rev, battle_seed)
 
 		if fwd.winner_side == 0:
@@ -82,76 +73,21 @@ func _test_position_symmetry() -> void:
 	print("① 位置对称：%d 场全部镜像（其中平局 %d）" % [BATTLE_COUNT, draws])
 
 
-# ② 独立战术随机：不同侧指纹通常得到不同修正，长期无 A/B 偏置，交换输入严格交换输出。
-func _test_tactical_randomness() -> void:
-	var distinct := 0
-	var a_higher := 0
-	var b_higher := 0
-	var exchange_ok := true
-	var in_range := true
-	var equal_signature_ok := true
-	for entropy in range(BATTLE_COUNT):
-		var ab := Combat.side_tactical_modifiers(
-			entropy,
-			77,
-			101,
-			202
-		)
-		var ba := Combat.side_tactical_modifiers(
-			entropy,
-			77,
-			202,
-			101
-		)
-		if not (
-			is_equal_approx(ab.x, ba.y)
-			and is_equal_approx(ab.y, ba.x)
-		):
-			exchange_ok = false
-		if (
-			ab.x < 1.0 - Combat.SIDE_RANDOM_RANGE - 0.000001
-			or ab.x > 1.0 + Combat.SIDE_RANDOM_RANGE + 0.000001
-			or ab.y < 1.0 - Combat.SIDE_RANDOM_RANGE - 0.000001
-			or ab.y > 1.0 + Combat.SIDE_RANDOM_RANGE + 0.000001
-		):
-			in_range = false
-		if not is_equal_approx(ab.x, ab.y):
-			distinct += 1
-			if ab.x > ab.y:
-				a_higher += 1
-			else:
-				b_higher += 1
-		var same := Combat.side_tactical_modifiers(
-			entropy,
-			77,
-			303,
-			303
-		)
-		if not is_equal_approx(same.x, same.y):
-			equal_signature_ok = false
-	var a_share := float(a_higher) / float(maxi(distinct, 1))
-	if (
-		distinct < int(float(BATTLE_COUNT) * 0.95)
-		or a_share < 0.45
-		or a_share > 0.55
-		or not exchange_ok
-		or not in_range
-		or not equal_signature_ok
-	):
-		_fail(
-			"② 战术随机异常：distinct=%d A高占比=%.4f exchange=%s range=%s equal=%s"
-				% [
-					distinct,
-					a_share,
-					str(exchange_ok),
-					str(in_range),
-					str(equal_signature_ok),
-				]
-		)
-	print(
-		"② 独立战术随机：不同修正 %d/%d，A较高占比 %.4f，交换等变"
-			% [distinct, BATTLE_COUNT, a_share]
-	)
+# ② 独立开场四骰：对称阵容允许不同胜果，长期无 A/B 偏置。
+func _test_opening_randomness() -> void:
+	var a_wins := 0
+	var b_wins := 0
+	var draws := 0
+	for seed in range(BATTLE_COUNT):
+		var battle := _make_battle(30000, 10, 10, 30000, 10, 10, 0.1, 15000)
+		_run(battle, seed)
+		if battle.winner_side == 1: a_wins += 1
+		elif battle.winner_side == 2: b_wins += 1
+		else: draws += 1
+	var share := float(a_wins) / float(maxi(a_wins + b_wins, 1))
+	if share < 0.47 or share > 0.53:
+		_fail("独立四骰侧位有偏：A胜率 %.4f" % share)
+	print("② 同实力四骰 A胜=%d B胜=%d 平局=%d A非平局胜率=%.4f" % [a_wins, b_wins, draws, share])
 
 
 # ③ 优势方胜率：随机阵容中兵力优势方（含攻防）应有极高且稳定的胜率。
@@ -171,22 +107,34 @@ func _test_advantage_winrate() -> void:
 		if battle.winner_side == 1:
 			strong_wins += 1
 	var rate := float(strong_wins) / float(counted)
-	if rate < 0.95:
-		_fail("③ 优势方胜率过低：%.4f（%d/%d），应≥0.95" % [rate, strong_wins, counted])
+	if rate <= 0.5:
+		_fail("③ 优势方胜率过低：%.4f（%d/%d），应高于0.5" % [rate, strong_wins, counted])
 	print("③ 优势方胜率=%.4f（%d/%d，1.3~2.0倍兵力+攻防优势）" % [rate, strong_wins, counted])
 
 
-# ④ 随机性不掩盖明显兵力优势：20% 优势方在 ±5% 战术波动下仍应稳定取胜。
-func _test_randomness_never_beats_advantage() -> void:
-	var flips := 0
-	for i in range(BATTLE_COUNT):
-		var battle := _make_battle(2400, 10, 10, 2000, 10, 10, 0.1)
-		_run(battle, 100000 + i)
-		if battle.winner_side != 1:
-			flips += 1
-	if flips != 0:
-		_fail("④ 随机性覆盖明显兵力优势：%d/%d 场 20%%优势方未胜" % [flips, BATTLE_COUNT])
-	print("④ 20%%兵力优势方全胜：%d/%d（±5%%战术随机不覆盖明显优势）" % [BATTLE_COUNT, BATTLE_COUNT])
+# ④ Observe outcomes without preserving the old no-upset requirement.
+func _report_troop_ratio_outcomes() -> void:
+	for ratio in [1.0, 1.2, 1.5, 2.0]:
+		var wins := 0
+		var draws := 0
+		var rounds := 0
+		var casualties_a := 0
+		var casualties_b := 0
+		var routs := 0
+		for seed in range(BATTLE_COUNT):
+			var battle := _make_battle(int(30000 * ratio), 10, 10, 30000, 10, 10, 0.1, 15000)
+			var losses := _run(battle, 100000 + seed)
+			if battle.winner_side == 1: wins += 1
+			if battle.winner_side == 0: draws += 1
+			rounds += battle.round_no
+			casualties_a += int(losses[0])
+			casualties_b += int(losses[1])
+			for side in [battle.side_a, battle.side_b]:
+				if battle.side_size(side) > 0 and battle.side_morale(side) <= Combat.SIDE_ROUT_THRESHOLD:
+					routs += 1
+		if ratio == 1.2 and (wins == 0 or wins == BATTLE_COUNT):
+			_fail("1.2倍兵力应允许双方获胜")
+		print("BATTLE_DICE_OUTCOMES ratio=%.1f seeds=%d wins=%d draws=%d avg_rounds=%.3f avg_losses_a=%.3f avg_losses_b=%.3f routs=%d" % [ratio, BATTLE_COUNT, wins, draws, float(rounds) / BATTLE_COUNT, float(casualties_a) / BATTLE_COUNT, float(casualties_b) / BATTLE_COUNT, routs])
 
 
 # ⑤ 拆分不改结果：把优势侧拆成多支小军，总伤亡与胜负不变（防套利 item12）。
@@ -212,16 +160,6 @@ func _test_split_invariance() -> void:
 		split.edge = _edge(danger)
 		split.contact_dist_a = 2.0
 		split.contact_dist_b = 2.0
-		split.tactical_key_a = _stats_side_key(
-			total,
-			10,
-			10
-		)
-		split.tactical_key_b = _stats_side_key(
-			enemy,
-			10,
-			10
-		)
 		var aid := 0
 		for p in parts:
 			split.side_a.append(_army(aid, 0, p, 10, 10)); aid += 1
@@ -450,8 +388,6 @@ func _make_battle(
 	b.edge = _edge(danger, frontage)
 	b.contact_dist_a = 2.0
 	b.contact_dist_b = 2.0
-	b.tactical_key_a = _stats_side_key(sa, atk_a, def_a)
-	b.tactical_key_b = _stats_side_key(sb, atk_b, def_b)
 	b.side_a.append(_army(0, 0, sa, atk_a, def_a))
 	b.side_b.append(_army(1, 1, sb, atk_b, def_b))
 	return b
@@ -474,16 +410,6 @@ func _make_split_battle(
 	battle.edge = _edge(danger, frontage)
 	battle.contact_dist_a = 2.0
 	battle.contact_dist_b = 2.0
-	battle.tactical_key_a = _stats_side_key(
-		total,
-		attack,
-		defense
-	)
-	battle.tactical_key_b = _stats_side_key(
-		enemy,
-		enemy_attack,
-		enemy_defense
-	)
 	for index in range(parts.size()):
 		battle.side_a.append(
 			_army(index, 0, parts[index], attack, defense)
@@ -494,14 +420,7 @@ func _make_split_battle(
 	return battle
 
 
-func _stats_side_key(size: int, attack: int, defense: int) -> int:
-	# 统计夹具没有 GameState 空间上下文，用阵容键代表稳定侧身份；交换阵容时键随阵容交换。
-	return 1 + posmod(
-		size * 73856093
-			+ attack * 19349663
-			+ defense * 83492791,
-		2147483646
-	)
+
 
 
 ## 跑完一场战斗，返回 [side_a 总伤亡, side_b 总伤亡]。
@@ -510,9 +429,10 @@ func _run(battle: Battle, battle_seed: int) -> Array:
 	var start_b := battle.side_size(battle.side_b)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = battle_seed
+	battle.ensure_opening_dice(battle_seed, true)
 	var guard := 0
 	while not battle.finished and guard < 1000:
-		Combat.resolve_round(battle, rng)
+		Combat.resolve_round(battle)
 		guard += 1
 	return [start_a - battle.side_size(battle.side_a), start_b - battle.side_size(battle.side_b)]
 
@@ -523,11 +443,12 @@ func _run_trace(
 ) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = battle_seed
+	battle.ensure_opening_dice(battle_seed, true)
 	Combat.clear_battle_log()
 	Combat.battle_log_enabled = true
 	var guard := 0
 	while not battle.finished and guard < 1000:
-		Combat.resolve_round(battle, rng)
+		Combat.resolve_round(battle)
 		guard += 1
 	var attack_a: Array[float] = []
 	var attack_b: Array[float] = []

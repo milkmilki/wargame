@@ -1,22 +1,15 @@
 class_name Combat
 extends RefCounted
-## 战斗解算（全静态）。EU4 式多回合：每 tick 打一个回合（掷骰→伤亡→士气侵蚀），
+## 战斗解算（全静态）。EU4 式多回合：每 tick 打一个回合（固定发挥→伤亡→士气侵蚀），
 ## 士气先于兵力崩溃，故败方通常带残兵撤退。支持 N v M（火力按兵力聚合、伤亡按比例摊分）。
 ##
-## 只负责一个回合的掷骰/伤亡/士气计算与 size 扣减，并在一方崩溃时置 battle.finished。
+## 只读取 Battle 开场四骰，计算伤亡/士气与 size 扣减，并在一方崩溃时置 battle.finished。
 ## 不负责 armies 增删 / passing_count / 占领 / 撤退落位——那些由 Simulation 处理。
 
 const DEF_REF: float = 10.0                ## 防御减伤参考：减伤系数 = DEF_REF/(DEF_REF+eff_def)
 const K_ROUND: float = 120.0               ## 单回合伤害除数（越大每回合伤亡越小，战斗越久）
 
-# ---- 战斗随机：共享战场因素 + 镜像等变的独立战术因素（item 8）----
-const DICE_MIN: int = 0
-const DICE_MAX: int = 9
-const DICE_STEP: float = 0.15              ## 每点骰值放大火力比例（满骰 +135%）
-const SIDE_RANDOM_RANGE: float = 0.05      ## 单侧战术发挥范围：±5%，不覆盖明显兵力/属性优势
-const SIDE_RANDOM_BUCKETS: int = 2001      ## 离散桶数（奇数，中心桶精确等于 1.0）
-const RANDOM_HASH_MOD: int = 2147483647
-const RANDOM_HASH_MULT: int = 48271
+# ---- 开场四骰由 Battle 保存，解算不消费随机数 ----
 
 # ---- 正面宽度 / 预备队（item 5：道路/地形/战斗类型决定同时参战兵力上限）----
 ## 一侧「正面宽度」= 同一时刻能投入前线交战的最大兵力。超出部分进入预备队：
@@ -48,7 +41,7 @@ const MIN_COMBAT_EFFICIENCY: float = 0.2
 const SIDE_ROUT_THRESHOLD: float = 0.15
 ## 单支军队溃退阈值：士气 <= 此值的军队视为已失去组织、退出前线（不再计入有效战力）。
 const ARMY_ROUT_THRESHOLD: float = 0.05
-const COMBAT_RULES_VERSION: int = 3
+const COMBAT_RULES_VERSION: int = 4
 
 # ---- 边地形：danger 是唯一真源 ----
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
@@ -81,113 +74,6 @@ static func holding_defense_multiplier(is_holding: bool) -> float:
 
 static func clear_battle_log() -> void:
 	battle_log.clear()
-
-
-## item 8 纯函数：从单个战术熵与双方物理指纹派生两侧独立修正。
-## 输入交换 (signature_a, signature_b) 会严格交换输出；指纹相同则输出相同。
-static func side_tactical_modifiers(
-	entropy: int,
-	battle_signature: int,
-	signature_a: int,
-	signature_b: int
-) -> Vector2:
-	var modifier_a := _side_tactical_modifier(
-		entropy,
-		battle_signature,
-		signature_a,
-		signature_b
-	)
-	if signature_a == signature_b:
-		return Vector2(modifier_a, modifier_a)
-	var modifier_b := _side_tactical_modifier(
-		entropy,
-		battle_signature,
-		signature_b,
-		signature_a
-	)
-	return Vector2(modifier_a, modifier_b)
-
-
-static func _side_tactical_modifier(
-	entropy: int,
-	battle_signature: int,
-	own_signature: int,
-	opponent_signature: int
-) -> float:
-	var value := _hash_step(entropy, battle_signature)
-	value = _hash_step(
-		value,
-		mini(own_signature, opponent_signature)
-	)
-	value = _hash_step(
-		value,
-		maxi(own_signature, opponent_signature)
-	)
-	value = _hash_step(value, own_signature)
-	var bucket := posmod(value, SIDE_RANDOM_BUCKETS)
-	var center := (SIDE_RANDOM_BUCKETS - 1) / 2
-	var normalized := float(bucket - center) / float(maxi(center, 1))
-	return 1.0 + normalized * SIDE_RANDOM_RANGE
-
-
-static func _side_combat_signature(
-	side: Array[Army],
-	attack_modifier: float,
-	defense_modifier_value: float,
-	garrison_defense: int,
-	engaged_ratio: float
-) -> int:
-	var total_size := 0
-	var attack_mass := 0
-	var defense_mass := 0
-	var morale_mass := 0
-	var starving_size := 0
-	for army in side:
-		if army.size <= 0:
-			continue
-		total_size += army.size
-		attack_mass += int(round(float(army.size) * army.combat_attack()))
-		defense_mass += int(round(
-			float(army.size) * army.combat_defense()
-		))
-		morale_mass += army.size * int(round(army.morale * 1000000.0))
-		if army.starving:
-			starving_size += army.size
-	var signature := 17
-	for value in [
-		total_size,
-		attack_mass,
-		defense_mass,
-		morale_mass,
-		starving_size,
-		int(round(attack_modifier * 1000000.0)),
-		int(round(defense_modifier_value * 1000000.0)),
-		garrison_defense,
-		int(round(engaged_ratio * 1000000.0)),
-	]:
-		signature = _hash_step(signature, int(value))
-	return signature
-
-
-static func _battle_context_signature(battle: Battle) -> int:
-	# 仅包含稳定类别；round/danger/frontage/holding 等平衡参数变化不得触发“重抽运气”。
-	return _hash_step(29, battle.kind)
-
-
-static func _hash_step(seed_value: int, input_value: int) -> int:
-	var seed_normalized := posmod(seed_value, RANDOM_HASH_MOD)
-	var input_normalized := posmod(input_value, RANDOM_HASH_MOD)
-	var mixed := posmod(
-		seed_normalized
-			+ input_normalized * 1000003
-			+ RANDOM_HASH_MULT,
-		RANDOM_HASH_MOD
-	)
-	mixed = mixed ^ (mixed >> 16)
-	mixed = posmod(mixed * 73856093, RANDOM_HASH_MOD)
-	mixed = mixed ^ (mixed >> 13)
-	mixed = posmod(mixed * 19349663, RANDOM_HASH_MOD)
-	return mixed ^ (mixed >> 16)
 
 
 ## danger 对攻击力的固定惩罚，不随驻防时间变化。item 9：全程连续、单调、无阈值跳变。
@@ -259,19 +145,7 @@ static func siege_attack_damage_multiplier(
 
 ## 解算一场战斗的一个回合，就地修改 battle 与其中军队的 size / 士气。
 ## 结束（一方崩溃或被歼灭）时置 battle.finished=true 与 winner_side(1/2)。
-## shared_roll：本 tick 全局共享的战场波动骰值（item 8「共享战场随机因素」，天气/能见度/
-## 战斗激烈程度）。>=0 时直接采用该值——同一 tick 内所有战斗共用同一骰，镜像成对的
-## 战斗因此抽到相同波动、结果互为镜像。传 -1（默认）时退化为从 rng 逐场抽取（保留既有单测语义）。
-## tactical_entropy：本 tick 战术随机熵；通过无 id、无顺序、拆分不变的侧物理指纹分别派生
-## side_a/b 修正。交换 A/B 会交换修正；完全同构侧指纹相同时两修正相等（等变性的数学必要条件）。
-static func resolve_round(
-	battle: Battle,
-	rng: RandomNumberGenerator,
-	shared_roll: int = -1,
-	tactical_entropy: int = -1,
-	day: int = -1,
-	forced_side_modifiers: Vector2 = Vector2.ZERO
-) -> void:
+static func resolve_round(battle: Battle, day: int = -1) -> void:
 	var field_rules := battle.uses_field_combat_rules()
 	battle.routed_a.clear()
 	battle.routed_b.clear()
@@ -295,6 +169,9 @@ static func resolve_round(
 		)
 		return
 
+	if not Battle.valid_dice(battle.opening_dice()):
+		push_error("Combat requires initialized opening dice")
+		return
 	battle.round_no += 1
 	var log_reinforced_a := battle.reinforce_fresh_a.size() if battle_log_enabled else 0
 	var log_reinforced_b := battle.reinforce_fresh_b.size() if battle_log_enabled else 0
@@ -368,81 +245,43 @@ static func resolve_round(
 
 	# 正面宽度（item 5）：每轮按规范物理序明确投入各军的前线兵力。
 	# Reserves avoid casualties, but share field morale with the fighting side.
+	var dice := battle.opening_dice()
+	var performance_a := Battle.dice_multiplier(dice[0])
+	var performance_b := Battle.dice_multiplier(dice[1])
 	var frontage := combat_frontage(battle)
+	var frontage_a := int(frontage * (10 + dice[2]) / 10)
+	var frontage_b := int(frontage * (10 + dice[3]) / 10)
 	var frontline_a := frontline_allocation(
 		battle.side_a,
-		frontage,
+		frontage_a,
 		battle.frontline_priority_a,
 		field_rules
 	)
 	var frontline_b := frontline_allocation(
 		battle.side_b,
-		frontage,
+		frontage_b,
 		battle.frontline_priority_b,
 		field_rules
 	)
 	var frontline_size_a := _frontline_size(frontline_a)
 	var frontline_size_b := _frontline_size(frontline_b)
-	var engaged_a := float(frontline_size_a) / float(maxi(size_a, 1))
-	var engaged_b := float(frontline_size_b) / float(maxi(size_b, 1))
 
-	# 同一回合共享战场波动。保留逐回合随机变化，但不让 side_a/side_b 身份决定运气。
-	# shared_roll>=0：采用本 tick 全局共享骰（镜像成对战斗抽到同一波动）；否则逐场抽取。
-	var battle_roll := (
-		clampi(shared_roll, DICE_MIN, DICE_MAX)
-		if shared_roll >= 0
-		else rng.randi_range(DICE_MIN, DICE_MAX)
-	)
-	var roll_multiplier := 1.0 + battle_roll * DICE_STEP
-	var entropy := tactical_entropy if tactical_entropy >= 0 else int(rng.randi())
-	var side_signature_a := (
-		battle.tactical_key_a
-		if battle.tactical_key_a > 0
-		else _side_combat_signature(
-			battle.side_a,
-			attack_pen_a,
-			defense_pen_a,
-			0,
-			engaged_a
-		)
-	)
-	var side_signature_b := (
-		battle.tactical_key_b
-		if battle.tactical_key_b > 0
-		else _side_combat_signature(
-			battle.side_b,
-			attack_pen_b,
-			defense_pen_b,
-			garrison_b,
-			engaged_b
-		)
-	)
-	var side_modifiers := forced_side_modifiers
-	if side_modifiers.x <= 0.0 or side_modifiers.y <= 0.0:
-		side_modifiers = side_tactical_modifiers(
-			entropy,
-				_battle_context_signature(battle),
-			side_signature_a,
-			side_signature_b
-		)
 	# 火力只由本轮明确投入的前线兵力贡献。
 	var fire_a := (
 		_frontline_attack(frontline_a, combat_efficiency_a)
 		* attack_pen_a
-		* roll_multiplier
-		* side_modifiers.x
+		* performance_a
 		* siege_attack_damage_multiplier(battle)
 	)
 	var fire_b := (
 		_frontline_attack(frontline_b, combat_efficiency_b)
 		* attack_pen_b
-		* roll_multiplier
-		* side_modifiers.y
+		* performance_b
 	)
 
 	# 只有前线承受攻击，因此防御也按前线兵力加权；守方再叠加城防。
-	var def_a := _frontline_avg_defense(frontline_a) * defense_pen_a
-	var def_b := _frontline_avg_defense(frontline_b) * defense_pen_b + garrison_b
+	var def_a := _frontline_avg_defense(frontline_a) * defense_pen_a * performance_a
+	var def_b := (_frontline_avg_defense(frontline_b) * defense_pen_b + garrison_b) * performance_b
 
 	# 本回合伤亡：受对方火力，被己方有效防御减伤（守恒与上限交由 distribute_casualties）
 	var loss_a := fire_b / K_ROUND * (DEF_REF / (DEF_REF + def_a))
@@ -547,15 +386,14 @@ static func resolve_round(
 			"effective_attack_b": fire_b,
 			"effective_defense_a": def_a,
 			"effective_defense_b": def_b,
-				"shared_random_roll": battle_roll,
-			"shared_random_modifier": roll_multiplier,
-				"tactical_entropy": entropy,
-				"side_random_modifier": [
-					side_modifiers.x,
-					side_modifiers.y,
-				],
-				"side_random_modifier_a": side_modifiers.x,
-				"side_random_modifier_b": side_modifiers.y,
+			"opening_dice": Array(dice),
+			"performance_modifier_a": performance_a,
+			"performance_modifier_b": performance_b,
+			"expansion_modifier_a": Battle.dice_multiplier(dice[2]),
+			"expansion_modifier_b": Battle.dice_multiplier(dice[3]),
+			"base_frontage": frontage,
+			"frontage_a": frontage_a,
+			"frontage_b": frontage_b,
 			"terrain_modifier_a": attack_pen_a,
 			"terrain_modifier_b": attack_pen_b,
 			"supply_modifier_a": (SIEGE_STARVE_DEF_MULT if _side_any_starving(battle.side_a) else 1.0),
@@ -638,8 +476,10 @@ static func _battle_log_context(battle: Battle) -> Dictionary:
 		"side_b_defends_city": battle.side_b_defends_city,
 		"contact_dist_a": battle.contact_dist_a,
 		"contact_dist_b": battle.contact_dist_b,
-		"tactical_key_a": battle.tactical_key_a,
-		"tactical_key_b": battle.tactical_key_b,
+		"field_dice": Array(battle.field_dice),
+		"assault_dice": Array(battle.assault_dice),
+		"field_sequence": battle.field_sequence,
+		"assault_sequence": battle.assault_sequence,
 		"shared_ratio_before_a": float(battle.shared_morale_summary(battle.side_a).ratio) if battle.uses_field_combat_rules() else 0.0,
 		"shared_ratio_before_b": float(battle.shared_morale_summary(battle.side_b).ratio) if battle.uses_field_combat_rules() else 0.0,
 		"shared_ratio_without_arrivals_a": _morale_ratio_without_arrivals(battle, battle.side_a, battle.reinforce_fresh_a),
@@ -1207,8 +1047,14 @@ static func combat_frontage(battle: Battle) -> int:
 	return FRONTAGE_FALLBACK
 
 
-## 兼容查询：返回聚合参战比例。实际结算使用 frontline_allocation() 的显式前线，
-## 本函数只供 UI/测试读取，不再用于伤亡或士气摊分。
+## 开场展开骰扩大本侧宽度，不改变道路行军容量。
+static func side_combat_frontage(battle: Battle, side: int) -> int:
+	var dice := battle.opening_dice()
+	assert(Battle.valid_dice(dice))
+	return int(combat_frontage(battle) * (10 + dice[2 if side == 1 else 3]) / 10)
+
+
+## 兼容查询：返回聚合参战比例，实际解算使用显式前线。
 static func frontage_engaged_ratio(side_total: int, frontage: int) -> float:
 	if side_total <= 0:
 		return 0.0

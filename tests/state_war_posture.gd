@@ -23,7 +23,7 @@ func _holding_side_one_sizes() -> Vector2i:
 	battle.side_b.append(attacker)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77102
-	Combat.resolve_round(battle, rng, 0, 77102, 0, Vector2.ONE)
+	CombatFixture.resolve_round(battle)
 	return Vector2i(holder.size, attacker.size)
 
 

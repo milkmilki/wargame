@@ -34,7 +34,7 @@ func _run() -> void:
 	_check(guardian.input.gold_months == 44 and guardian.input.food_months == 26, "one preference affects money and food")
 	_check(ordinary.input.gold_months != guardian.input.gold_months, "preference visible")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 21 and snapshot.nations.last_court_expense_paid[0] == state.nations[0].last_court_expense_paid, "snapshot includes settled expenses")
+	_check(snapshot.schema_version == 22 and snapshot.nations.last_court_expense_paid[0] == state.nations[0].last_court_expense_paid, "snapshot includes settled expenses")
 	sim.free()
 	_test_fixed_settlement()
 	_test_shared_commitments()

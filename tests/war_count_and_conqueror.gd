@@ -139,7 +139,7 @@ func _test_conqueror_requirements() -> void:
 	battle.city = state.cities[1]
 	battle.siege_attacker_nation = 4
 	state.battles.append(battle)
-	simulation._advance_siege(battle, 0, 0, {1: [army]})
+	simulation._advance_siege(battle, {1: [army]})
 	check(battle.round_no == 1, "allied first arrival uses shared front policy instead of returning to blockade")
 	check(is_equal_approx(army.ruler_attack_multiplier, 1.0), "allied army does not inherit conqueror combat power")
 	simulation.free()

@@ -6228,6 +6228,9 @@ func _reconcile_siege_participants(
 	battle: Battle,
 	control_changed: bool = false
 ) -> void:
+	if control_changed:
+		battle.end_field_engagement()
+		battle.invalidate_assault_dice()
 	# Former city defenders must not become challengers just because their city
 	# defected. Existing third-party challengers keep their distinct identity.
 	if control_changed and battle.side_b_defends_city:
@@ -6283,6 +6286,8 @@ func _reconcile_siege_participants(
 		battle,
 		battle.side_b
 	)
+	if not battle.uses_field_combat_rules():
+		battle.end_field_engagement()
 
 
 func _siege_side_has_enemy_of_city(
@@ -6320,6 +6325,8 @@ func _battle_sides_still_hostile(
 
 
 func _finish_battle_administratively(battle: Battle) -> void:
+	battle.end_field_engagement()
+	battle.invalidate_assault_dice()
 	battle.finished = true
 	battle.winner_side = 0
 	for army in (
@@ -12683,10 +12690,6 @@ func _siege_city_defenders(
 
 ## 对每场进行中的战斗推进一个 tick：FIELD 打一回合；SIEGE 走专用状态机（守军歼灭≠破城）。
 func _resolve_battles() -> void:
-	# item 8：每 tick 只消费一次共享战场骰与一次战术熵。各战斗/各侧修正由物理指纹纯函数派生，
-	# 不依赖 battle 数组顺序，也不会因军队拆分增加随机消费次数。
-	var shared_roll := state.rng.randi_range(Combat.DICE_MIN, Combat.DICE_MAX)
-	var tactical_entropy := int(state.rng.randi())
 	var armies_by_city := (
 		{}
 		if siege_defender_index_disabled
@@ -12698,16 +12701,10 @@ func _resolve_battles() -> void:
 		if battle.kind == Battle.Kind.SIEGE:
 			_advance_siege(
 				battle,
-				shared_roll,
-				tactical_entropy,
 				armies_by_city
 			)
 		else:
-			_resolve_combat_round(
-				battle,
-				shared_roll,
-				tactical_entropy
-			)
+			_resolve_combat_round(battle)
 			if battle.finished:
 				_finish_field_battle(battle)
 				_finish_campaign_reports_for_battle(battle)
@@ -12726,9 +12723,7 @@ func _bucket_armies_by_location_city() -> Dictionary:
 
 
 func _resolve_combat_round(
-	battle: Battle,
-	shared_roll: int,
-	tactical_entropy: int
+	battle: Battle
 ) -> void:
 	var sizes_before := {}
 	var war_by_army := {}
@@ -12740,13 +12735,9 @@ func _resolve_combat_round(
 	_lock_campaign_reports_for_battle(battle)
 	_sync_battle_ruler_modifiers(battle)
 	_refresh_battle_frontline_priorities(battle)
-	Combat.resolve_round(
-		battle,
-		state.rng,
-		shared_roll,
-		tactical_entropy,
-		state.day
-	)
+	if battle.side_size(battle.side_a) > 0 and battle.side_size(battle.side_b) > 0:
+		battle.ensure_opening_dice(state.world_seed, battle.uses_field_combat_rules())
+	Combat.resolve_round(battle, state.day)
 	var counted := {}
 	for side in [battle.side_a, battle.side_b, battle.routed_a, battle.routed_b]:
 		for army_value in side:
@@ -12886,8 +12877,6 @@ func _mark_city_war_disruption(city: City) -> void:
 ## side_b 有真实军队时绝不挂载虚拟守军；野战结束后的下一天才进入后续阶段。
 func _advance_siege(
 	battle: Battle,
-	shared_roll: int = -1,
-	tactical_entropy: int = -1,
 	armies_by_city: Dictionary = {}
 ) -> void:
 	if battle.city != null:
@@ -12907,11 +12896,7 @@ func _advance_siege(
 			_resolve_siege_side_b_victory(battle)
 			_finish_campaign_reports_for_battle(battle)
 			return
-		_resolve_combat_round(
-			battle,
-			shared_roll,
-			tactical_entropy
-		)
+		_resolve_combat_round(battle)
 		if not battle.finished:
 			return
 		_finish_siege_field_engagement(battle)
@@ -12951,11 +12936,7 @@ func _advance_siege(
 	# 所以真实军队永远不会和它并肩出现在同一轮。
 	if battle.city.garrison_manpower > 0:
 		var city_garrison := _attach_city_garrison(battle)
-		_resolve_combat_round(
-			battle,
-			shared_roll,
-			tactical_entropy
-		)
+		_resolve_combat_round(battle)
 		_detach_city_garrison(battle, city_garrison)
 		if not battle.finished:
 			return
@@ -13285,7 +13266,8 @@ func _promote_challengers(battle: Battle) -> void:
 		battle.siege_claimant_nation = _occupation_claimant_for_army(
 			new_besiegers[0], battle.city
 		)
-	battle.tactical_key_a = battle.tactical_key_b
+	battle.end_field_engagement()
+	battle.invalidate_assault_dice()
 	battle.reinforce_fresh_a = battle.reinforce_fresh_b.duplicate()
 	battle.frontline_priority_a = (
 		battle.frontline_priority_b.duplicate()
@@ -13303,7 +13285,7 @@ func _reset_empty_battle_side_b(battle: Battle) -> void:
 	battle.reinforce_fresh_b.clear()
 	battle.routed_b.clear()
 	battle.frontline_priority_b.clear()
-	battle.tactical_key_b = 0
+	battle.end_field_engagement()
 
 
 func _withdraw_broken_armies(side: Array[Army]) -> Array[Army]:
@@ -13329,6 +13311,7 @@ func _settle_or_recover_after_battle(army: Army, city_id: int) -> void:
 
 
 func _finish_field_battle(battle: Battle) -> void:
+	battle.end_field_engagement()
 	# A field rout is a collapse of the formation, not an orderly retreat.
 	# Apply the one-time pursuit/dispersion loss before changing states so the
 	# surviving remnant is also what recovery and AI commitment queries see.
@@ -13499,17 +13482,9 @@ func _enter_battle(battle: Battle, army: Army, side: int) -> void:
 	army.encounter_blocked = false
 	army.battle_id = battle.id
 	if side == 1:
-		if battle.side_a.is_empty():
-			battle.tactical_key_a = (
-				EquivariantOrder.tactical_side_key(state, army)
-			)
 		battle.side_a.append(army)
 		battle.reinforce_fresh_a.append(army)
 	else:
-		if battle.side_b.is_empty():
-			battle.tactical_key_b = (
-				EquivariantOrder.tactical_side_key(state, army)
-			)
 		battle.side_b.append(army)
 		battle.reinforce_fresh_b.append(army)
 

@@ -1,10 +1,10 @@
 class_name Battle
 extends RefCounted
-## 一场持续多回合（tick）的战斗。EU4 式：每回合掷骰造成伤亡，累积到一方士气崩溃才结束。
+## 一场持续多回合（tick）的战斗。开场四骰固定，累积伤亡与士气损失至结束。
 ## 支持多路对多路（N v M）：side_a / side_b 为军队数组，围城时新到攻击方可 join。
 ##
 ## 数据语义：Battle 是活跃战斗的 SSoT；参战 Army.state=FIGHTING 且 battle_id 指向本战斗。
-## 解算与结束处理在 Combat（掷骰/伤亡）与 Simulation（撤退落位/占领）中进行。
+## 解算与结束处理在 Combat（伤亡）与 Simulation（撤退落位/占领）中进行。
 
 enum Kind { FIELD, SIEGE }   ## 野战（边中相遇）/ 攻城（城下）
 
@@ -48,11 +48,56 @@ var routed_b: Array[Army] = []
 var frontline_priority_a: Dictionary = {}
 var frontline_priority_b: Dictionary = {}
 
-## item 8：两侧稳定战术随机键。由首次入场军队的镜像轨道位置/势力中心生成，
-## 不含实体 id、兵力、士气或攻防参数；战斗期间参数变化不会“重抽运气”。
-## 完全镜像的空间角色可得到相同键，此时独立修正按等变性要求自动退化为同值。
-var tactical_key_a: int = 0
-var tactical_key_b: int = 0
+## [performance_a, performance_b, expansion_a, expansion_b]. Empty means not started.
+var field_dice: PackedInt32Array = PackedInt32Array()
+var assault_dice: PackedInt32Array = PackedInt32Array()
+var field_sequence: int = 0
+var assault_sequence: int = 0
+
+
+func ensure_opening_dice(world_seed: int, field: bool) -> void:
+	if not (field_dice if field else assault_dice).is_empty():
+		return
+	if field:
+		field_sequence += 1
+	else:
+		assault_sequence += 1
+	var sequence := field_sequence if field else assault_sequence
+	var domain := "combat/opening/%s" % ("field" if field else "assault")
+	var rng := RandomNumberGenerator.new()
+	rng.seed = RulerProfile.stable_hash(world_seed, id, domain, sequence)
+	var dice := PackedInt32Array()
+	for index in range(4):
+		dice.append(rng.randi_range(0, 10))
+	if field:
+		field_dice = dice
+	else:
+		assault_dice = dice
+
+
+func end_field_engagement() -> void:
+	field_dice = PackedInt32Array()
+
+
+func invalidate_assault_dice() -> void:
+	assault_dice = PackedInt32Array()
+
+
+func opening_dice() -> PackedInt32Array:
+	return field_dice if uses_field_combat_rules() else assault_dice
+
+
+static func valid_dice(dice: PackedInt32Array) -> bool:
+	if dice.size() != 4:
+		return false
+	for die in dice:
+		if die < 0 or die > 10:
+			return false
+	return true
+
+
+static func dice_multiplier(die: int) -> float:
+	return 1.0 + 0.1 * die
 
 ## SIEGE 专用：side_b 当前是否为城市防卫共同体。该字段只决定野战
 ## 胜负后的解围/接管归属；真实军队不会因此获得虚拟守军的防御倍率。
@@ -110,6 +155,8 @@ func write_shared_morale(side: Array[Army], ratio: float) -> void:
 func prune_dead() -> void:
 	side_a = side_a.filter(func(a: Army) -> bool: return a.size > 0)
 	side_b = side_b.filter(func(a: Army) -> bool: return a.size > 0)
+	if kind == Kind.SIEGE and not uses_field_combat_rules():
+		end_field_engagement()
 
 
 func has_army(army: Army) -> bool:
@@ -126,6 +173,8 @@ func remove_army(army: Army) -> void:
 	routed_b.erase(army)
 	frontline_priority_a.erase(army)
 	frontline_priority_b.erase(army)
+	if not uses_field_combat_rules() or side_a.is_empty() or side_b.is_empty():
+		end_field_engagement()
 
 
 ## 围城外壳中只要 side_b 存在真实军队，本轮就是城下野战。虚拟守军
