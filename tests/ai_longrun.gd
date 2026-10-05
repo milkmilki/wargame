@@ -57,6 +57,8 @@ func _init() -> void:
 		var hostile_stationed_log: Array[String] = []
 		var battle_binding_errors := 0
 		var first_battle_binding_error := ""
+		var succession_error_days := 0
+		var first_succession_error := ""
 		var territory_invariant_failures := 0
 		var first_territory_invariant_failure_day := -1
 		var known_fronts := {}
@@ -78,6 +80,11 @@ func _init() -> void:
 			if state.winner != -1:
 				break
 			simulation._advance_day()
+			var daily_succession := SuccessionAudit.inspect(state)
+			if not daily_succession.errors.is_empty():
+				succession_error_days += 1
+				if first_succession_error.is_empty():
+					first_succession_error = "day=%d errors=%s" % [state.day, str(daily_succession.errors)]
 			var participants := {}
 			for battle in state.battles:
 				if battle.finished:
@@ -638,9 +645,11 @@ func _init() -> void:
 		print("  BATTLE_BINDING_AUDIT errors=%d first=%s" % [battle_binding_errors, first_battle_binding_error])
 		var succession := SuccessionAudit.inspect(state)
 		print("  SUCCESSION_AUDIT %s" % str(succession))
+		print("  SUCCESSION_DAILY_AUDIT error_days=%d first=%s" % [succession_error_days, first_succession_error])
 		if (
 			ordered == 0
 			or not succession.errors.is_empty()
+			or succession_error_days > 0
 			or cooldown_violations > 0 or duplicate_bindings > 0 or pair_violations > 0 or duplicate_defenses > 0
 			or illegal_regional_declarations > 0
 			or invalid > 0

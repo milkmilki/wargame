@@ -130,8 +130,21 @@ static func enfeoff_candidate(state: GameState, nation_id: int) -> int:
 	return _create_person(state, nation_id, parent, members.size())
 
 static func _busy(state: GameState, nation_id: int, person_id: int) -> bool:
-	var conflict: SuccessionConflict = state.succession_conflicts.get(nation_id)
-	return conflict != null and person_id in [conflict.challenger_person_id, conflict.crown_person_id]
+	var tree_id := state.nations[nation_id].family_tree_id
+	for nation in state.nations:
+		if nation.family_tree_id != tree_id:
+			continue
+		# 共享族谱不代表可以分封另一国家的君主或当代皇子。
+		if nation.id != nation_id and nation.alive and (
+			person_id == nation.ruler_person_id
+			or person_id == nation.crown_prince_person_id
+			or nation.prince_person_ids.has(person_id)
+		):
+			return true
+		var conflict: SuccessionConflict = state.succession_conflicts.get(nation.id)
+		if conflict != null and person_id in [conflict.challenger_person_id, conflict.crown_person_id]:
+			return true
+	return false
 
 static func military_index(state: GameState) -> Dictionary:
 	var result := {}

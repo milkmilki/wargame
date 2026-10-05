@@ -33,7 +33,7 @@ echo "    编译通过（class_name 全部注册，无脚本错误）"
 echo
 
 echo "==> [2/29] 逻辑测试套件"
-for TEST in campaign_reinforcement_ownership field_manpower_requirements battle_opening_dice war_desire_debug chronicle_smoke prince_politics succession_conflict succession_chain succession_counterattack succession_lifecycle succession_history succession_preparation military_funding military_food_eligibility court_expense resource_forecast resource_forecast_integration diplomatic_battle_lifecycle; do
+for TEST in campaign_reinforcement_ownership field_manpower_requirements battle_opening_dice war_desire_debug chronicle_smoke prince_politics enfeoff_shared_lineage succession_conflict succession_chain succession_counterattack succession_lifecycle succession_history succession_preparation military_funding military_food_eligibility court_expense resource_forecast resource_forecast_integration diplomatic_battle_lifecycle; do
   RESOURCE_LOG="$LOG_DIR/world-war-$TEST.log"
   HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
     --script "res://tests/$TEST.gd" --log-file "$RESOURCE_LOG"
