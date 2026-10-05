@@ -5,6 +5,7 @@ const SEEDS: Array[int] = [12345, 23456, 34567, 45678]
 const DAYS: int = 1095
 const FORCE_STRUCTURE_RECONCILE_DAYS: int = 30
 const SuccessionAudit = preload("res://tests/succession_audit.gd")
+const RoyalTitleAudit = preload("res://tests/royal_title_audit.gd")
 
 
 func _init() -> void:
@@ -81,6 +82,7 @@ func _init() -> void:
 				break
 			simulation._advance_day()
 			var daily_succession := SuccessionAudit.inspect(state)
+			daily_succession.errors.append_array(RoyalTitleAudit.inspect(state))
 			if not daily_succession.errors.is_empty():
 				succession_error_days += 1
 				if first_succession_error.is_empty():

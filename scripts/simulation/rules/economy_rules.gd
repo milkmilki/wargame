@@ -170,8 +170,14 @@ static func _finalize_balances(state: GameState, result: Array[Dictionary]) -> v
 			- int(report["tribute_paid"])
 		)
 		report["net_income"] = net_income
-		var rate := RulerProfile.court_expense_rate(state.nations[nation_id])
-		var due := int(floor(float(maxi(net_income, 0)) * rate))
+		var base_rate := RulerProfile.court_expense_rate(state.nations[nation_id])
+		var royal := RoyalTitles.report(state, nation_id)
+		var basis_points := int(round(base_rate * 10000.0)) + int(royal.basis_points)
+		var rate := float(basis_points) / 10000.0
+		var due := int(int(maxi(net_income, 0)) * basis_points / 10000)
+		report["court_base_expense_rate"] = base_rate
+		report["royal_expense_basis_points"] = royal.basis_points
+		report["royal_title_counts"] = royal.counts.duplicate()
 		report["court_expense_rate"] = rate
 		report["court_expense_due"] = due
 		report["court_expense_paid"] = mini(due, maxi(state.nations[nation_id].treasury_gold + net_income, 0))

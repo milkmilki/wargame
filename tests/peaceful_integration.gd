@@ -57,7 +57,13 @@ func _init() -> void:
 		_check(army.owner_nation not in [1, 2, 3], "all armies transferred")
 	_check(state.nations[0].treasury_gold == expected_size and _resources(state) == totals, "gold manpower conserved")
 	_check(_food(state) == old_food, "annexation food conserved")
-	_check(state.family_trees == old_trees, "annexation does not merge or erase bloodlines")
+	_check(state.family_trees.keys() == old_trees.keys(), "annexation retains distinct trees")
+	for old_tree_id in old_trees:
+		var old_members: Dictionary = old_trees[old_tree_id].members
+		var new_members: Dictionary = state.family_trees[old_tree_id].members
+		_check(old_members.keys().all(func(id): return new_members.has(id)), "annexation does not erase bloodlines")
+		for id in old_members:
+			_check(new_members[id].name == old_members[id].name and new_members[id].parent_id == old_members[id].parent_id, "annexation preserves person identity and blood edges")
 	_check(state.suzerainty_structure_error().is_empty(), "annexation structural invariants")
 	before = var_to_bytes(NativeSnapshotBuilder.build(state))
 	_check(not state.call("annex_nations", 0, [4, -1]), "invalid batch rejected")

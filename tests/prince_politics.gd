@@ -49,8 +49,12 @@ func run() -> void:
 	check(nation.ruler_started_day == 800, "actual_accession_day")
 	check(nation.prince_person_ids != ids, "new_generation")
 	var brother := PrincePolitics.enfeoff_candidate(state, 0)
-	check(ids.has(brother) and brother != crown, "brothers_first")
-	check(int(members[brother].parent_id) == int(members[crown].parent_id), "brother_parent")
+	if nation.royal_titles_initialized:
+		check(not ids.has(brother), "dead_noble_brothers_excluded")
+		check(int(members[brother].parent_id) == nation.ruler_person_id, "current_generation_candidate")
+	else:
+		check(ids.has(brother) and brother != crown, "brothers_first")
+		check(int(members[brother].parent_id) == int(members[crown].parent_id), "brother_parent")
 	nation.succession_competition_closed = true
 	var new_army := Army.new()
 	new_army.owner_nation = 0

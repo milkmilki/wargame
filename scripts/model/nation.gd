@@ -7,6 +7,13 @@ var color: Color = Color.WHITE             ## 阵营色（渲染用）
 var name: String = ""                    ## 稳定国号；UI 不再直接展示裸 id
 var short_name: String = ""              ## 战略地图大字使用的 1～4 字简称
 var name_kind: String = "state"          ## dynasty/state/vassal/rebel
+## 国号字库与政治等级无关。帝国认可只升不降，宗室供养可由国家级藩国承接。
+var state_level: int = 0                ## 0 国家，1 帝国
+var empire_founder_person_id: int = -1
+var empire_recognized_day: int = -1
+var royal_titles_initialized: bool = false
+var royal_generation: int = 0
+var absorbed_into_nation_id: int = -1
 ## 藩王封号单向棘轮：一旦陆城数达到过 5 座即永久升为「单字王」。之后即使
 ## 失地也只保持单字王，绝不降回双字王。仅对 name_kind==vassal 有意义。
 var vassal_single_char: bool = false
@@ -49,6 +56,8 @@ var last_military_upkeep: int = 0          ## 最近一月全军维护费
 var last_court_expense_rate: float = 0.0
 var last_court_expense_due: int = 0
 var last_court_expense_paid: int = 0
+var last_royal_expense_basis_points: int = 0
+var last_royal_title_counts: Array[int] = [0, 0, 0, 0]
 var last_field_army_upkeep: int = 0        ## 最近一月野战军维护费
 var last_garrison_upkeep: int = 0          ## 最近一月州治虚拟守军维护费
 var unpaid_military_upkeep: int = 0        ## 最近一月未支付的军队维护费

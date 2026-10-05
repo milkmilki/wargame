@@ -352,6 +352,7 @@ func setup(game_state: GameState) -> void:
 	)
 	state.refresh_derived()
 	FamilyTree.ensure_all(state)
+	EmpireStatus.reconcile(state)
 	_reset_trade_forecast_cache()
 	_latest_monthly_gold_flows.clear()
 	_publish_initial_food_snapshot()
@@ -466,6 +467,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	_set_runtime_profile_stage(&"maintenance")
 	state.day += 1
 	state.month = state.day / DAYS_PER_MONTH
+	EmpireStatus.reconcile(state)
 	_resolve_ruler_successions()
 	_update_succession_conflicts()
 	_record_tick_profile_stage("maintenance", profile_stage_started)
@@ -672,6 +674,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 	)
 	state.prune_dead_suzerainty()
+	EmpireStatus.reconcile(state)
 	var dissolution_members_by_root := {}
 	var internal_preparation_members := {}
 	for tracked_value in state.suzerainty_low_cohesion_since_day:
@@ -874,6 +877,7 @@ func _trade_settlement_token(
 	)
 	var fields: Array = [
 		"trade_settlement_v1",
+		["family_revision", state.family_revision],
 		structure_fingerprint,
 		["wartime_nations", effective_wartime_mask],
 	]
@@ -931,6 +935,7 @@ func _trade_summary_settlement_token(
 	)
 	var fields: Array = [
 		"trade_summary_settlement_v1",
+		["family_revision", state.family_revision],
 		structure_fingerprint,
 		["wartime_nations", effective_wartime_mask],
 		["diplomacy_revision", state.diplomacy_revision],
@@ -2468,6 +2473,8 @@ func _resolve_court_expenses(gold_flows: Array[Dictionary]) -> void:
 		nation.last_court_expense_rate = float(flow["court_expense_rate"])
 		nation.last_court_expense_due = due
 		nation.last_court_expense_paid = paid
+		nation.last_royal_expense_basis_points = int(flow.get("royal_expense_basis_points", 0))
+		nation.last_royal_title_counts.assign(flow.get("royal_title_counts", [0, 0, 0, 0]))
 		flow["court_expense_paid"] = paid
 
 

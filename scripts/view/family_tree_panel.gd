@@ -42,23 +42,39 @@ func open_for_nation(nation_id: int) -> bool:
 		return false
 	if not is_open():
 		_navigation.clear()
-	FamilyTree.ensure_nation_lineage(_state, nation_id)
 	_nation_id = nation_id
 	_title.text = "%s家族树" % WorldNaming.nation_display_name(
 		_state, nation_id
 	)
 	_tree_canvas.set("tree", FamilyTree.tree_for_nation(_state, nation_id))
+	_tree_canvas.set("layout_revision", _state.family_revision)
 	_tree_canvas.set("current_person_id", _state.nations[nation_id].ruler_person_id)
+	_tree_canvas.set("current_nation_alive", _state.nations[nation_id].alive)
 	_tree_canvas.call("rebuild_layout")
 	_rebuild_relations()
 	_rebuild_history()
 	_set_mode(_mode)
 	var was_open := _overlay.visible
 	_overlay.visible = true
+	call_deferred("_focus_current_person", nation_id)
 	if not was_open:
 		panel_opened.emit()
 	(_overlay.get_node("Frame/Content/Header/Close") as Button).grab_focus()
 	return true
+
+
+func _focus_current_person(nation_id: int) -> void:
+	if not is_open() or _nation_id != nation_id:
+		return
+	var rects: Dictionary = _tree_canvas.get("_rect_by_person")
+	var id := _state.nations[nation_id].ruler_person_id
+	if not rects.has(id):
+		return
+	var scroll := _tree_canvas.get_parent() as ScrollContainer
+	var rect: Rect2 = rects[id]
+	scroll.scroll_horizontal = maxi(int(rect.get_center().x - scroll.size.x * 0.5), 0)
+	scroll.scroll_vertical = maxi(int(rect.get_center().y - scroll.size.y * 0.5), 0)
+	_tree_canvas.queue_redraw()
 
 
 func navigate_to(nation_id: int) -> void:
@@ -90,6 +106,15 @@ func _rebuild_relations() -> void:
 		label.add_theme_font_override("font", MapRenderer.create_ui_font())
 		label.add_theme_font_size_override("font_size", 14)
 		_relations.add_child(label)
+	var summary := Label.new()
+	summary.text = RoyalTitles.summary(_state, _nation_id)
+	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary.add_theme_font_override("font", MapRenderer.create_ui_font())
+	summary.add_theme_font_size_override("font_size", 14)
+	_relations.add_child(summary)
+	var census := RoyalTitles.report(_state, _nation_id)
+	for rank in [RoyalTitles.PRINCE, RoyalTitles.COMMANDERY, RoyalTitles.DUKE]:
+		_add_title_group(rank, census.people[rank])
 	var overlord := _state.overlord_of(_nation_id)
 	if overlord >= 0:
 		_add_relation("宗主", overlord)
@@ -97,6 +122,9 @@ func _rebuild_relations() -> void:
 		var same_tree := _state.nations[subject_id].family_tree_id == _state.nations[_nation_id].family_tree_id
 		_add_relation("同宗藩属" if same_tree else "异姓藩属", subject_id)
 	var archived := {}
+	for nation in _state.nations:
+		if nation.absorbed_into_nation_id == _nation_id:
+			archived[nation.id] = true
 	for event in _state.diplomatic_history:
 		if int(event.get("nation_a", -1)) != _nation_id or not event.has("ultimatum"):
 			continue
@@ -108,6 +136,40 @@ func _rebuild_relations() -> void:
 	archived_ids.sort()
 	for member_id in archived_ids:
 		_add_relation("已纳土政权", member_id)
+
+
+func _add_title_group(rank: int, ids: Array) -> void:
+	var button := Button.new()
+	button.text = "%s %d人  ▸" % [RoyalTitles.NAMES[rank], ids.size()]
+	button.add_theme_font_override("font", MapRenderer.create_ui_font())
+	_relations.add_child(button)
+	var content := VBoxContainer.new()
+	content.visible = false
+	_relations.add_child(content)
+	button.pressed.connect(func():
+		content.visible = not content.visible
+		if not content.visible or content.get_child_count() > 0:
+			return
+		_append_title_page(content, ids, 0))
+
+
+func _append_title_page(content: VBoxContainer, ids: Array, offset: int) -> void:
+	var members: Dictionary = FamilyTree.tree_for_nation(_state, _nation_id).get("members", {})
+	for index in range(offset, mini(offset + 40, ids.size())):
+		var member: Dictionary = members.get(int(ids[index]), {})
+		var label := Label.new()
+		label.text = "%s · %s%s" % [member.get("name", "？"), RoyalTitles.NAMES[int(member.get("title_rank", 0))], "" if bool(member.get("title_adult", false)) else "（待继承）"]
+		label.add_theme_font_override("font", MapRenderer.create_ui_font())
+		label.add_theme_font_size_override("font_size", 13)
+		content.add_child(label)
+	if offset + 40 < ids.size():
+		var more := Button.new()
+		more.text = "加载更多"
+		content.add_child(more)
+		more.pressed.connect(func():
+			content.remove_child(more)
+			more.queue_free()
+			_append_title_page(content, ids, offset + 40))
 
 
 func _rebuild_history() -> void:
@@ -312,10 +374,13 @@ func _build_ui() -> void:
 class FamilyTreeCanvas extends Control:
 	var tree: Dictionary = {}
 	var current_person_id: int = -1
+	var current_nation_alive: bool = true
 	var font: Font
 	var _rect_by_person: Dictionary = {}
 	var _children_by_person: Dictionary = {}
 	var _maximum_depth: int = 0
+	var layout_revision: int = -1
+	var _layout_key: Array = []
 
 
 	func _ready() -> void:
@@ -323,6 +388,11 @@ class FamilyTreeCanvas extends Control:
 
 
 	func rebuild_layout() -> void:
+		var key := [tree.get("id", -1), layout_revision, tree.get("root_person_id", -1), tree.get("members", {}).size(), get_parent().size.x if get_parent() is Control else size.x]
+		if key == _layout_key:
+			queue_redraw()
+			return
+		_layout_key = key
 		_rect_by_person.clear()
 		_children_by_person.clear()
 		_maximum_depth = 0
@@ -423,18 +493,18 @@ class FamilyTreeCanvas extends Control:
 					Vector2(child_rect.get_center().x, child_rect.position.y),
 					line_color, 2.0
 				)
+		var visible_rect := Rect2(Vector2.ZERO, size)
+		if get_parent() is ScrollContainer:
+			visible_rect = Rect2(get_parent().get_global_rect().position - global_position, get_parent().size).grow(80.0)
 		for person_value in _rect_by_person:
+			if not visible_rect.intersects(_rect_by_person[person_value]):
+				continue
 			_draw_person(int(person_value), members[int(person_value)])
 
 
 	func _draw_person(person_id: int, member: Dictionary) -> void:
 		var rect: Rect2 = _rect_by_person[person_id]
-		var titles: Array = member.get("titles", [])
-		var is_sovereign := false
-		for title_value in titles:
-			if str(title_value).ends_with("帝"):
-				is_sovereign = true
-				break
+		var is_sovereign := str(member.get("current_title", "")).ends_with("帝")
 		var is_current := person_id == current_person_id
 		var fill := (
 			Color(0.97, 0.91, 0.76, 1.0)
@@ -466,10 +536,15 @@ class FamilyTreeCanvas extends Control:
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20.0, 12,
 			Color(MapRenderer.INK_COLOR, 0.78)
 		)
-		if is_current:
+		var badges: Array[String] = []
+		if bool(member.get("taizu", false)): badges.append("太祖")
+		if bool(member.get("crown", false)) and bool(member.get("alive", true)): badges.append("储君")
+		if not bool(member.get("alive", true)): badges.append("已故")
+		elif is_current: badges.append("在位" if current_nation_alive else "末任")
+		if not badges.is_empty():
 			draw_string(
-				font, rect.position + Vector2(rect.size.x - 42.0, 17.0), "在位",
-				HORIZONTAL_ALIGNMENT_CENTER, 34.0, 10,
+				font, rect.position + Vector2(10.0, 15.0), " · ".join(badges),
+				HORIZONTAL_ALIGNMENT_RIGHT, rect.size.x - 20.0, 10,
 				MapRenderer.ACCENT_RED
 			)
 

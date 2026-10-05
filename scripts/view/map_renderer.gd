@@ -7165,14 +7165,15 @@ static func historical_nation_detail_sections(
 				game_state.month,
 				_nation_relation_text(game_state, nation_id),
 			],
-			"控制城市 %d" % game_state.cities_of(nation_id).size(),
+			"控制城市 %d    等级：%s" % [game_state.cities_of(nation_id).size(), "帝国" if game_state.nations[nation_id].state_level == EmpireStatus.EMPIRE else "国家"],
 		]},
 		{"id": "history.diplomacy", "default_expanded": false, "title": "历史外交", "lines": relation_lines},
-		{"id": "history.princes", "default_expanded": false, "title": "历史皇子与军权", "lines": PrincePolitics.display_lines(game_state.get_meta("historical_prince_reports", {}).get(nation_id, PrincePolitics.report(game_state, nation_id)))},
+		{"id": "history.princes", "default_expanded": false, "title": "历史爵位与军权", "lines": PrincePolitics.display_lines(game_state.get_meta("historical_prince_reports", {}).get(nation_id, PrincePolitics.report(game_state, nation_id)))},
 		{"id": "history.region", "default_expanded": true, "title": "历史经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
 		{"id": "history.finance", "default_expanded": false, "title": "历史月结", "lines": [
+			RoyalTitles.summary(game_state, nation_id),
 			"军费支付率 %.0f%%    攻防系数 %.2f" % [game_state.nations[nation_id].military_payment_ratio * 100.0, Army.funding_from_payment(game_state.nations[nation_id].military_payment_ratio)],
-			"宫廷耗费 %.0f%%    应付 %d    实付 %d" % [game_state.nations[nation_id].last_court_expense_rate * 100.0, game_state.nations[nation_id].last_court_expense_due, game_state.nations[nation_id].last_court_expense_paid],
+			"宫廷耗费 %.1f%%    应付 %d    实付 %d" % [game_state.nations[nation_id].last_court_expense_rate * 100.0, game_state.nations[nation_id].last_court_expense_due, game_state.nations[nation_id].last_court_expense_paid],
 		]},
 	]
 
@@ -7720,6 +7721,7 @@ static func nation_detail_sections(
 		{"id": "nation.identity", "default_expanded": true, "title": "身份与君主", "line_actions": {1: "ruler"}, "lines": [
 			_nation_relation_text(game_state, nation_id),
 			"君主 %s  ▼" % ruler_summary(n, game_state),
+			"帝国" if n.state_level == EmpireStatus.EMPIRE else "国家",
 		]},
 		{"id": "nation.region", "default_expanded": true, "title": "经营区域", "lines": regional_strategy_lines(game_state, nation_id)},
 		{"id": "nation.power", "default_expanded": false, "title": "国力与民心", "lines": [
@@ -7732,7 +7734,9 @@ static func nation_detail_sections(
 			],
 		]},
 		{"id": "nation.finance", "default_expanded": false, "title": "财政与军费", "lines": [
-			"宫廷与腐败耗费 %.0f%%    预计 %d/月    上月实付 %d" % [float(finance.court_expense_rate) * 100.0, int(finance.court_expense_due), n.last_court_expense_paid],
+			RoyalTitles.summary(game_state, nation_id),
+			"基础宫廷耗费 %.1f%%" % (RulerProfile.court_expense_rate(n) * 100.0),
+			"宫廷总耗费 %.1f%%    预计 %d/月    上月实付 %d" % [float(finance.court_expense_rate) * 100.0, int(finance.court_expense_due), n.last_court_expense_paid],
 			"12月预测最低国库 %d（第%d日）    储备目标 %d" % [int(finance.forecast.gold_min), int(finance.forecast.gold_min_day), int(finance.forecast.gold_target)],
 			"国库 %d    月净 %+d    城市收入 %d    贡赋 %+d" % [
 				n.treasury_gold,
@@ -7752,7 +7756,7 @@ static func nation_detail_sections(
 				n.last_field_army_upkeep, n.last_garrison_upkeep,
 			],
 			"攻防系数 %.2f    预测现金缺口 %d" % [Army.funding_from_payment(n.military_payment_ratio), int(finance.forecast.gold_deficit)],
-			"耗费后月收入 %d    上月应耗费 %d（%.0f%%）" % [int(finance.monthly_gold_income) - int(finance.court_expense_due), n.last_court_expense_due, n.last_court_expense_rate * 100.0],
+			"耗费后月收入 %d    上月应耗费 %d（%.1f%%）" % [int(finance.monthly_gold_income) - int(finance.court_expense_due), n.last_court_expense_due, n.last_court_expense_rate * 100.0],
 		]},
 		{"id": "nation.food", "default_expanded": false, "title": "粮食储备", "lines": [
 			"12月预测最低粮食 %d（第%d日）    储备目标 %d" % [int(finance.forecast.food_min), int(finance.forecast.food_min_day), int(finance.forecast.food_target)],
@@ -7770,7 +7774,7 @@ static func nation_detail_sections(
 		{"id": "nation.diplomacy", "default_expanded": false, "title": "外交与行动", "lines": diplomacy_lines},
 	]
 	sections.append_array(_nation_war_detail_sections(game_state, nation_id))
-	sections.append({"id": "nation.princes", "default_expanded": false, "title": "皇子与军权", "lines": PrincePolitics.display_lines(PrincePolitics.report(game_state, nation_id, political_troops))})
+	sections.append({"id": "nation.princes", "default_expanded": false, "title": "爵位与军权", "lines": PrincePolitics.display_lines(PrincePolitics.report(game_state, nation_id, political_troops))})
 	return sections
 
 

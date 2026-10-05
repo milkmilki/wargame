@@ -4,15 +4,17 @@ extends RefCounted
 
 
 static func ensure_all(state: GameState) -> void:
-	if state == null:
+	if state == null or state.has_meta("historical_prince_reports"):
 		return
 	for nation in state.nations:
+		if not nation.alive or nation.succession_identity:
+			continue
 		ensure_nation_lineage(state, nation.id)
 		PrincePolitics.ensure_generation(state, nation.id)
 
 
 static func ensure_nation_lineage(state: GameState, nation_id: int) -> void:
-	if not _valid_nation(state, nation_id):
+	if not _valid_nation(state, nation_id) or state.has_meta("historical_prince_reports"):
 		return
 	var nation := state.nations[nation_id]
 	if (
@@ -62,6 +64,11 @@ static func record_enfeoffment(
 	if person_id < 0:
 		person_id = _next_person_id(state)
 		members[person_id] = _member(person_id, _person_name(subject.ruler_name), parent_id, subject_id)
+		if members.has(parent_id):
+			var child_ids := RoyalTitles.children(members, parent_id)
+			if not child_ids.has(person_id):
+				child_ids.append(person_id)
+			members[parent_id]["child_ids"] = child_ids
 	else:
 		var member: Dictionary = members[person_id]
 		subject.ruler_name = str(member.name)
@@ -72,6 +79,7 @@ static func record_enfeoffment(
 		PrincePolitics.centralize(state, overlord_id, [person_id] as Array[int])
 	subject.family_tree_id = overlord.family_tree_id
 	subject.ruler_person_id = person_id
+	RoyalTitles.enfeoff(state, overlord_id, subject_id, person_id)
 	record_current_title(state, subject_id)
 	PrincePolitics.ensure_generation(state, subject_id)
 	state.family_revision += 1
@@ -95,8 +103,20 @@ static func record_succession(
 	members[person_id] = _member(
 		person_id, _person_name(nation.ruler_name), parent_id, nation_id
 	)
+	if members.has(parent_id):
+		var child_ids := RoyalTitles.children(members, parent_id)
+		if not child_ids.has(person_id):
+			child_ids.append(person_id)
+		members[parent_id]["child_ids"] = child_ids
+	RoyalTitles.advance_generation(state, nation_id, person_id)
+	if members.has(previous_person_id):
+		members[previous_person_id]["alive"] = false
+	PrincePolitics.centralize(state, nation_id, nation.prince_person_ids)
 	nation.ruler_person_id = person_id
+	nation.prince_person_ids.clear()
 	record_current_title(state, nation_id)
+	PrincePolitics.ensure_generation(state, nation_id)
+	RoyalTitles.reconcile(state)
 	state.family_revision += 1
 
 
@@ -114,6 +134,8 @@ static func record_current_title(state: GameState, nation_id: int) -> void:
 	if title.is_empty():
 		return
 	var member: Dictionary = members[nation.ruler_person_id]
+	RoyalTitles.set_member(state, member, "current_title", title)
+	RoyalTitles.set_member(state, member, "office_nation_id", nation_id)
 	var titles: Array = member["titles"]
 	if not titles.has(title):
 		titles.append(title)
@@ -139,18 +161,16 @@ static func title_for_nation(state: GameState, nation_id: int) -> String:
 		return display_name
 	if display_name.ends_with("帝"):
 		return display_name
-	return display_name + "帝"
+	return display_name + ("帝" if nation.state_level == EmpireStatus.EMPIRE else "君")
 
 
 static func display_title(member: Dictionary, person_id: int, root_person_id: int) -> String:
-	var titles: Array = member.get("titles", [])
-	if not titles.is_empty():
-		return " · ".join(titles)
 	if person_id == root_person_id or int(member.get("parent_id", -1)) < 0:
 		return "先祖"
-	if member.has("birth_order") or member.has("archetype"):
-		return "皇子"
-	return "宗室成员"
+	if member.has("current_title"):
+		return str(member.current_title)
+	var titles: Array = member.get("titles", [])
+	return str(titles.back()) if not titles.is_empty() else "无爵"
 
 
 static func _member(

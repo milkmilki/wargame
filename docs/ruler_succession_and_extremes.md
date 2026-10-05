@@ -6,8 +6,9 @@ year equal to 360 simulation days. The world seed, nation id, and ruler
 revision determine the duration, name, archetype, and traits, so replay and
 save loading remain deterministic across platforms.
 
-On the due day the ruler name, archetype, and trait set are rerolled. The new
-identity updates the trade policy, cached army and city modifiers, naming
+On the due day the existing crown prince succeeds with the same person ID,
+name, archetype, and traits. An unfinished succession war delays accession.
+The new identity updates the trade policy, cached army and city modifiers, naming
 revision, and trade forecast inputs.
 
 Succession also reruns the existing capital valuation. It does not require a
@@ -15,10 +16,10 @@ move: the old capital remains in the candidate set and keeps its accumulated
 capital-development duration when it wins again. Only a genuinely better
 candidate becomes the new capital and restarts that duration.
 
-Rulers in one suzerainty hierarchy share the root overlord's surname. New
-vassals inherit it, vassal succession keeps it, and an overlord with surviving
-vassals preserves the dynasty surname when appointing a successor. Given names
-remain deterministic and campaign-unique.
+Person names use a random surname and one or two random Han characters;
+duplicates are allowed and never gain numeric suffixes. Blood relationships
+use person IDs rather than surname matching. Empire recognition and hereditary
+royal titles are specified in [empire_royal_titles.md](empire_royal_titles.md).
 
 ## Extreme Examples
 

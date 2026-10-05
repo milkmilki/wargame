@@ -248,7 +248,9 @@ func test_foreign_submission() -> void:
 	# Submission legitimately records a new royal title in the same person.
 	var submitted_ruler := PrincePolitics.person(state, 1, ruler_id).duplicate(true)
 	submitted_ruler.erase("titles")
+	submitted_ruler.erase("current_title")
 	own_ruler.erase("titles")
+	own_ruler.erase("current_title")
 	check(submitted_ruler == own_ruler, "submission/foreign_ruler_retained")
 	var subject := state.enfeoff(1, [6, 7] as Array[int])
 	check(subject >= 0, "submission/foreign_vassal_real_enfeoff")

@@ -9,6 +9,9 @@ relations without rewinding the simulation.
 ## Behavior
 
 - Capture day 0 and then one snapshot every 30 committed simulation days.
+- Freeze empire level, founder, recognition day, royal title/payer/cohort records,
+  family revision and last royal court expense breakdown. Historical tree
+  readers cannot initialize a lineage, grant titles, promote or create children.
 - Store city controller, recognized owner, nation alive state, bilateral
   relations, truces, war objectives, suzerainty, and rebellion metadata.
 - Store the last settled court expense rate, amount due, and amount paid at

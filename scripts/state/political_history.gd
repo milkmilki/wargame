@@ -103,6 +103,10 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		(snapshot["recognized_city_owners"] as PackedInt32Array).duplicate()
 	)
 	_view_state.winner = int(snapshot["winner"])
+	_view_state.family_revision = int(snapshot["family_revision"])
+	_view_state.next_family_person_id = int(snapshot["next_family_person_id"])
+	_view_state.next_family_tree_id = int(snapshot["next_family_tree_id"])
+	_view_state.remove_meta("royal_census")
 	_view_state.family_trees = (snapshot["family_trees"] as Dictionary).duplicate(true)
 	_view_state.set_meta("historical_prince_reports", (snapshot["prince_reports"] as Dictionary).duplicate(true))
 
@@ -128,6 +132,14 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		var nation := _view_state.nations[nation_id]
 		var political: Dictionary = (snapshot["nation_politics"] as Dictionary).get(nation_id, {})
 		if political.is_empty():
+			nation.state_level = 0
+			nation.empire_founder_person_id = -1
+			nation.empire_recognized_day = -1
+			nation.royal_titles_initialized = false
+			nation.royal_generation = 0
+			nation.absorbed_into_nation_id = -1
+			nation.last_royal_expense_basis_points = 0
+			nation.last_royal_title_counts = [0, 0, 0, 0]
 			nation.prince_person_ids.clear()
 			nation.crown_prince_person_id = -1
 			nation.ruler_person_id = -1
@@ -215,7 +227,7 @@ func _capture(game_state: GameState) -> void:
 		payment_ratios.append(game_state.nations[nation_id].military_payment_ratio)
 		var nation := game_state.nations[nation_id]
 		var political := {}
-		for key in ["ruler_name", "ruler_archetype", "ruler_traits", "ruler_person_id", "ruler_revision", "ruler_started_day", "family_tree_id", "prince_person_ids", "crown_prince_person_id", "succession_competition_closed", "succession_identity", "capital_city_id"]:
+		for key in ["name", "short_name", "name_kind", "vassal_single_char", "vassal_title_base", "ruler_name", "ruler_archetype", "ruler_traits", "ruler_person_id", "ruler_revision", "ruler_started_day", "family_tree_id", "prince_person_ids", "crown_prince_person_id", "succession_competition_closed", "succession_identity", "capital_city_id", "state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]:
 			var value = nation.get(key)
 			political[key] = value.duplicate(true) if value is Array or value is Dictionary else value
 		nation_politics[nation_id] = political
@@ -223,6 +235,9 @@ func _capture(game_state: GameState) -> void:
 	_snapshots.append({
 		"day": game_state.day,
 		"family_trees": game_state.family_trees.duplicate(true),
+		"family_revision": game_state.family_revision,
+		"next_family_person_id": game_state.next_family_person_id,
+		"next_family_tree_id": game_state.next_family_tree_id,
 		"nation_politics": nation_politics,
 		"prince_reports": prince_reports,
 		"month": game_state.month,

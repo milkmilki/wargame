@@ -343,7 +343,7 @@ func _test_snapshot() -> void:
 	var rng_before := state.rng.state
 	battle.ensure_opening_dice(state.world_seed, true)
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 22 and NativeSnapshotBuilder.battle_validation_error(snapshot.battles).is_empty(), "snapshot validates fixed dice")
+	_check(snapshot.schema_version == NativeSnapshotBuilder.SCHEMA_VERSION and NativeSnapshotBuilder.battle_validation_error(snapshot.battles).is_empty(), "snapshot validates fixed dice")
 	_check(state.rng.state == rng_before, "opening dice never consume global random stream")
 	var restored := Battle.new()
 	restored.id = battle.id

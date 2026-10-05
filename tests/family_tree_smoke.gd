@@ -23,7 +23,7 @@ func _run() -> void:
 	)
 	for prince_id in sovereign.prince_person_ids:
 		_check(
-			FamilyTree.display_title(members[prince_id], prince_id, root_id) == "皇子",
+			FamilyTree.display_title(members[prince_id], prince_id, root_id) == str(members[prince_id].get("current_title", "无爵")),
 			"initial_prince_is_not_ancestor"
 		)
 	_check(
@@ -62,7 +62,7 @@ func _run() -> void:
 	members = FamilyTree.tree_for_nation(state, subject.id)["members"]
 	var subject_titles := members[subject.ruler_person_id]["titles"] as Array
 	_check(
-		subject_titles == ["河间王", "秦王", "秦帝"],
+		subject_titles == ["河间王", "秦王", "秦君"],
 		"all_titles_are_kept_in_order"
 	)
 
@@ -74,6 +74,15 @@ func _run() -> void:
 		int(members[sovereign.ruler_person_id]["parent_id"])
 		== previous_person_id,
 		"successor_is_child"
+	)
+	var late_subject := Nation.new()
+	late_subject.id = state.nations.size()
+	late_subject.ruler_name = "张八"
+	state.nations.append(late_subject)
+	FamilyTree.record_enfeoffment(state, 0, late_subject.id)
+	_check(
+		RoyalTitles.children(members, previous_person_id).has(late_subject.ruler_person_id),
+		"legacy_enfeoffment_updates_existing_child_cache"
 	)
 	await _test_branch_aware_layout()
 	_test_real_enfeoffment_hook()

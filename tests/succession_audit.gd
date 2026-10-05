@@ -11,7 +11,7 @@ static func inspect(state: GameState) -> Dictionary:
 		var owner := state.financial_nation_of(army.owner_nation)
 		if army.political_person_id < 0:
 			distribution.central += 1
-		elif not PrincePolitics.eligible(PrincePolitics.person(state, owner, army.political_person_id)):
+		elif not PrincePolitics.eligible_for_nation(PrincePolitics.person(state, owner, army.political_person_id), owner):
 			errors.append("invalid political patron army=%d" % army.id)
 		elif army.political_person_id == state.nations[owner].crown_prince_person_id:
 			distribution.crown += 1

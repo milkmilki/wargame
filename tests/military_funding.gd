@@ -111,7 +111,7 @@ func _test_monthly_finance(state: GameState, sim: Simulation, army: Army) -> voi
 	state.refresh_derived()
 	_check(owner.military_payment_ratio == 1 and army.funding_multiplier == 1, "no military cost defaults to full funding")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 22 and snapshot.nations.payment_ratio[owner.id] == 1, "schema 22 persists payment ratio")
+	_check(snapshot.schema_version == NativeSnapshotBuilder.SCHEMA_VERSION and snapshot.nations.payment_ratio[owner.id] == 1, "schema 23 persists payment ratio")
 	_check(not snapshot.armies.has("funding_multiplier"), "derived funding is not persisted")
 
 func _test_mirror_and_annexation() -> void:

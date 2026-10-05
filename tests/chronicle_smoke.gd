@@ -19,7 +19,7 @@ func _run() -> void:
 	_check(int(state.chronicle_events[-1].casualties) == 18200, "actual losses retained")
 	_check(str(state.chronicle_events[-1].views[1]).contains("伐我"), "defender perspective retained")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	_check(snapshot.schema_version == 22 and snapshot.has("chronicle_events"), "chronicle snapshot persisted")
+	_check(snapshot.schema_version == NativeSnapshotBuilder.SCHEMA_VERSION and snapshot.has("chronicle_events"), "chronicle snapshot persisted")
 	ChronicleRules.record_ultimatum(state, 0, 1, UltimatumRules.Outcome.ANNEX)
 	_check(str(state.chronicle_events[-1].text).contains("威服"), "ultimatum event")
 	ChronicleRules.record_rebellion(state, 2, 0, "张角", ["巨鹿"], false, "")
@@ -225,7 +225,8 @@ func _test_defender_annexation(with_ally: bool = false) -> void:
 	if with_ally:
 		_check(state.nations[2].alive and not state.is_enemy(2, 1), "surviving ally participates in normal coalition capitulation peace")
 	_check(not state.war_chronicle_contexts.has(war_id), "released war ledger is finalized and removed")
-	_check(state.chronicle_events.size() == 1, "actual annexation releases and summarizes war")
+	var completed_wars := state.chronicle_events.filter(func(event): return event.get("kind", "") == "external_war")
+	_check(completed_wars.size() == 1, "actual annexation releases and summarizes war once")
 	if not state.chronicle_events.is_empty():
 		var views: Dictionary = state.chronicle_events[-1].views
 		if with_ally:

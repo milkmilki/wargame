@@ -332,6 +332,7 @@ func generate_world(
 	_initialize_city_loyalty()
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
+	EmpireStatus.reconcile(self)
 	reconcile_adjacent_sovereign_colors()
 
 	assert(
@@ -372,6 +373,7 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_initialize_city_loyalty()
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
+	EmpireStatus.reconcile(self)
 	reconcile_adjacent_sovereign_colors()
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")
@@ -538,6 +540,7 @@ func generate_from_map_definition(
 	_initialize_city_loyalty(false)
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
+	EmpireStatus.reconcile(self)
 	refresh_derived()
 	reconcile_adjacent_sovereign_colors()
 
@@ -751,6 +754,8 @@ func _reset_world(world_seed: int) -> void:
 	edges.clear()
 	nations.clear()
 	family_trees.clear()
+	remove_meta("royal_census")
+	remove_meta("royal_reconcile_revision")
 	succession_conflicts.clear()
 	succession_events.clear()
 	next_family_tree_id = 0
@@ -6587,6 +6592,7 @@ func enfeoff(
 		"分封迁移军队后战团结构不变量必须成立"
 	)
 	RegionalStrategy.update_target(self, subject.id)
+	EmpireStatus.reconcile(self)
 	return subject.id
 
 
@@ -6876,6 +6882,8 @@ func _finalize_annexations(absorber: int, absorbed_ids: Dictionary) -> void:
 			army.ruler_morale_multiplier = RulerProfile.morale_multiplier(nations[absorber])
 			army.funding_multiplier = Army.funding_from_payment(nations[absorber].military_payment_ratio)
 	_reconcile_battles_after_annexation()
+	RoyalTitles.annex(self, absorber, absorbed_ids)
+	EmpireStatus.reconcile(self)
 
 
 ## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。普通兼并与
@@ -6962,6 +6970,7 @@ func accept_submission(overlord_id: int, subject_id: int) -> bool:
 	FamilyTree.ensure_nation_lineage(self, subject_id)
 	WorldNaming.assign_submitted_vassal_name(self, subject_id)
 	FamilyTree.record_current_title(self, subject_id)
+	EmpireStatus.reconcile(self)
 	return true
 
 

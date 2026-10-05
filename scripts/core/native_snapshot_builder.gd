@@ -3,7 +3,8 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 22
+const SCHEMA_VERSION: int = 23
+const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
 static func succession_validation_error(snapshot: Dictionary) -> String:
@@ -25,9 +26,12 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 		return "Invalid chronicle pending list"
 	var nations: Dictionary = snapshot.get("nations", {})
 	var count := int(nations.get("count", -1))
-	for key in ["family_tree_ids", "ruler_person_ids", "crown_prince_ids", "competition_closed", "succession_identity", "ruler_archetypes", "ruler_revisions", "ruler_started_days", "ruler_traits"]:
+	for key in ["family_tree_ids", "ruler_person_ids", "crown_prince_ids", "competition_closed", "succession_identity", "ruler_archetypes", "ruler_revisions", "ruler_started_days", "ruler_traits", "alive"]:
 		if not nations.has(key) or nations[key].size() != count:
 			return "Invalid nation politics column: " + key
+	for key in ROYAL_NATION_FIELDS:
+		if not nations.get(key) is Array or nations[key].size() != count:
+			return "Invalid royal nation column: " + key
 	var offsets: PackedInt32Array = nations.get("prince_offsets", PackedInt32Array())
 	var ids: PackedInt32Array = nations.get("prince_ids", PackedInt32Array())
 	if offsets.size() != count + 1 or offsets[0] != 0 or offsets[count] != ids.size():
@@ -56,6 +60,9 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 			seen[person_id] = true
 		if crown >= 0 and not seen.has(crown):
 			return "Invalid crown prince reference"
+	var royal_error := royal_validation_error(nations, trees)
+	if not royal_error.is_empty():
+		return royal_error
 	var armies: Dictionary = snapshot.get("armies", {})
 	if not armies.has("political_person_id") or armies.political_person_id.size() != int(armies.get("count", -1)):
 		return "Invalid army political column"
@@ -114,6 +121,54 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 	return ""
 
 
+static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> String:
+	var count := int(nations.count)
+	for nation_id in range(count):
+		var level := int(nations.state_level[nation_id])
+		var founder := int(nations.empire_founder_person_id[nation_id])
+		var members: Dictionary = trees.get(nations.family_tree_ids[nation_id], {})
+		if level not in [EmpireStatus.COUNTRY, EmpireStatus.EMPIRE]:
+			return "Invalid nation state level"
+		if level == EmpireStatus.EMPIRE and (not members.has(founder) or int(nations.empire_recognized_day[nation_id]) < 0):
+			return "Invalid empire founder reference"
+		if level == EmpireStatus.COUNTRY and founder >= 0:
+			return "Country cannot have an empire founder"
+		var absorber := int(nations.absorbed_into_nation_id[nation_id])
+		if absorber >= count or absorber == nation_id:
+			return "Invalid annex archive reference"
+		if int(nations.royal_generation[nation_id]) < 0 or int(nations.last_royal_expense_basis_points[nation_id]) < 0:
+			return "Invalid royal generation or expense"
+		if not nations.last_royal_title_counts[nation_id] is Array or nations.last_royal_title_counts[nation_id].size() != 4:
+			return "Invalid royal expense counts"
+	for tree_id in trees:
+		var members: Dictionary = trees[tree_id]
+		for member in members.values():
+			var rank := int(member.get("title_rank", 0))
+			var restore := int(member.get("restorable_title_rank", 0))
+			if rank < 0 or rank > 3 or restore < 0 or restore > 3:
+				return "Invalid royal title rank"
+			var payer := int(member.get("title_payer_id", -1))
+			if bool(member.get("title_managed", false)):
+				if payer < 0 or payer >= count or int(nations.family_tree_ids[payer]) != int(tree_id):
+					return "Invalid royal payer reference"
+				if not members.has(int(member.get("title_branch_id", -1))):
+					return "Invalid royal branch reference"
+			var fief := int(member.get("enfeoffed_nation_id", -1))
+			if fief >= count or (fief >= 0 and rank > 0 and bool(member.get("alive", true))):
+				return "Actual fief and virtual title cannot coexist"
+			if bool(member.get("crown", false)) and rank > 0 and bool(member.get("alive", true)):
+				return "Crown cannot receive a virtual stipend"
+			var office := int(member.get("office_nation_id", -1))
+			if office >= count or (office >= 0 and int(nations.family_tree_ids[office]) != int(tree_id)):
+				return "Invalid royal office reference"
+			if office >= 0 and bool(member.get("alive", true)) and bool(nations.alive[office]) and int(nations.ruler_person_ids[office]) != int(member.id):
+				return "Invalid incumbent person reference"
+			for child in member.get("child_ids", []):
+				if not members.has(int(child)) or int(members[int(child)].parent_id) != int(member.id):
+					return "Invalid family child reference"
+	return ""
+
+
 static func battle_validation_error(battles: Dictionary) -> String:
 	if not battles.get("count") is int:
 		return "Invalid battle count"
@@ -142,6 +197,12 @@ static func battle_validation_error(battles: Dictionary) -> String:
 
 static func build(state: GameState) -> Dictionary:
 	var nations := _build_nations(state)
+	for key in ROYAL_NATION_FIELDS:
+		var column: Array = []
+		for nation in state.nations:
+			var value = nation.get(key)
+			column.append(value.duplicate(true) if value is Array else value)
+		nations[key] = column
 	var cities := _build_cities(state)
 	var edges_and_indices := _build_edges(state)
 	var armies_and_indices := _build_armies(state)
