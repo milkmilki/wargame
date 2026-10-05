@@ -31,19 +31,8 @@ static func _create_person(state: GameState, nation_id: int, parent_id: int, ord
 	var id := state.next_family_person_id
 	state.next_family_person_id += 1
 	var salt := nation.ruler_revision * 1009 + order * 31 + 700001
-	var used := {}
 	var members: Dictionary = FamilyTree.tree_for_nation(state, nation_id).members
-	for member in members.values():
-		used[str(member.name)] = true
-	var surname := WorldNaming.ruler_surname(nation.ruler_name)
-	var name := ""
-	for attempt in range(10000):
-		var index := RulerProfile.stable_index(state.world_seed, nation_id, "prince/name", WorldNaming.RULER_GIVEN_NAMES.size(), salt + attempt)
-		name = surname + WorldNaming.RULER_GIVEN_NAMES[index]
-		if attempt >= WorldNaming.RULER_GIVEN_NAMES.size():
-			name += str(attempt)
-		if not used.has(name):
-			break
+	var name := WorldNaming.person_name_for(state.world_seed, nation_id, salt)
 	members[id] = {"id": id, "name": name, "parent_id": parent_id, "titles": [], "nation_ids": [],
 		"archetype": RulerProfile.archetype_for(state.world_seed, nation_id, salt),
 		"traits": RulerProfile.traits_for(state.world_seed, nation_id, salt),

@@ -189,19 +189,6 @@ const REIGN_YEAR_BUCKETS: Array[Vector3i] = [
 	Vector3i(50, 60, 3),
 ]
 
-const RULER_SURNAMES: Array[String] = [
-	"赵", "钱", "孙", "李", "周", "吴", "郑", "王",
-	"冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨",
-	"朱", "秦", "许", "何", "吕", "张", "孔", "曹",
-]
-
-const RULER_GIVEN_NAMES: Array[String] = [
-	"安", "昂", "彬", "昌", "诚", "达", "德", "端",
-	"弘", "济", "靖", "恺", "礼", "明", "宁", "平",
-	"睿", "绍", "泰", "威", "文", "修", "彦", "昭",
-]
-
-
 ## 初始化一国君主。salt 只用于隔离稳定哈希域；初始就任日统一为 0。
 ## 分封、叛军或继位产生的君主由调用方在初始化后覆写实际就任日。
 static func initialize_nation(
@@ -250,30 +237,25 @@ static func succession_due_day(nation, world_seed: int) -> int:
 	) * DAYS_PER_YEAR
 
 
-## 更换整套君主身份。重抽会避开与上一任完全相同的姓名或性格组合，
+## 更换整套君主身份。性格组合重抽，姓名允许与上一任或他人重复，
 ## 但仍保持跨平台、跨存档重放确定性。
 static func appoint_successor(nation, world_seed: int, started_day: int) -> void:
 	if nation == null:
 		return
-	var previous_name := str(nation.ruler_name)
 	var previous_archetype := int(nation.ruler_archetype)
 	var previous_traits: Array[String] = nation.ruler_traits.duplicate()
 	var next_revision := maxi(int(nation.ruler_revision) + 1, 1)
 	var nation_id := int(nation.id)
 	var selected_archetype := previous_archetype
 	var selected_traits := previous_traits
-	var selected_name := previous_name
+	var selected_name := ruler_name_for(world_seed, nation_id, next_revision * 1009)
 	for attempt in range(32):
 		var salt := next_revision * 1009 + attempt
 		selected_archetype = archetype_for(world_seed, nation_id, salt)
 		selected_traits = traits_for(world_seed, nation_id, salt)
-		selected_name = ruler_name_for(world_seed, nation_id, salt)
 		if (
-			selected_name != previous_name
-			and (
-				selected_archetype != previous_archetype
-				or selected_traits != previous_traits
-			)
+			selected_archetype != previous_archetype
+			or selected_traits != previous_traits
 		):
 			break
 	nation.ruler_archetype = selected_archetype
@@ -328,13 +310,7 @@ static func ruler_name_for(
 	nation_id: int,
 	salt: int = 0
 ) -> String:
-	var surname := RULER_SURNAMES[stable_index(
-		world_seed, nation_id, "ruler/name/surname", RULER_SURNAMES.size(), salt
-	)]
-	var given_name := RULER_GIVEN_NAMES[stable_index(
-		world_seed, nation_id, "ruler/name/given", RULER_GIVEN_NAMES.size(), salt
-	)]
-	return surname + given_name
+	return WorldNaming.person_name_for(world_seed, nation_id, salt)
 
 
 ## 跨平台稳定的正整数哈希；domain 为各抽取用途提供隔离。

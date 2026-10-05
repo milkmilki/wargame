@@ -10,7 +10,7 @@ func _init() -> void:
 	_test_reign_range_and_succession()
 	_test_capital_income_and_succession_relocation()
 	_test_capital_relocation_always_prefers_zhou()
-	_test_suzerainty_rulers_share_surname()
+	_test_suzerainty_rulers_reuse_person_names()
 	_test_extreme_modifiers()
 	_test_modifier_query_isolation()
 	_test_conqueror_war_benefits()
@@ -164,8 +164,8 @@ func _test_reign_range_and_succession() -> void:
 	var simulation := Simulation.new()
 	simulation.setup(state)
 	var nation := state.nations[0]
-	var previous_name := nation.ruler_name
-	var dynasty_surname := WorldNaming.ruler_surname(previous_name)
+	var successor_id := nation.crown_prince_person_id
+	var successor_name := str(PrincePolitics.person(state, nation.id, successor_id).name)
 	var previous_archetype := nation.ruler_archetype
 	var previous_traits := nation.ruler_traits.duplicate()
 	var previous_revision := nation.ruler_revision
@@ -177,10 +177,9 @@ func _test_reign_range_and_succession() -> void:
 	simulation._resolve_ruler_successions()
 	_check(nation.ruler_revision == previous_revision + 1, "ruler did not change on due day")
 	_check(nation.ruler_started_day == due_day, "successor start day was not recorded")
-	_check(nation.ruler_name != previous_name, "successor reused the previous ruler name")
 	_check(
-		WorldNaming.ruler_surname(nation.ruler_name) == dynasty_surname,
-		"independent succession changed the dynasty surname"
+		nation.ruler_person_id == successor_id and nation.ruler_name == successor_name,
+		"independent succession did not reuse the existing crown prince identity"
 	)
 	_check(
 		nation.ruler_archetype != previous_archetype
@@ -318,7 +317,7 @@ func _test_capital_income_and_succession_relocation() -> void:
 	simulation.free()
 
 
-func _test_suzerainty_rulers_share_surname() -> void:
+func _test_suzerainty_rulers_reuse_person_names() -> void:
 	var state := GameState.new()
 	state.generate_world(71241, 2, 20)
 	state._random_ruler_profiles_enabled = true
@@ -333,21 +332,24 @@ func _test_suzerainty_rulers_share_surname() -> void:
 		if not candidate.is_empty():
 			region = candidate
 			break
+	var enfeoff_person := PrincePolitics.enfeoff_candidate(state, 0)
+	var enfeoff_name := str(PrincePolitics.person(state, 0, enfeoff_person).name)
 	var subject_id := state.enfeoff(0, region)
-	_check(subject_id >= 0, "surname fixture failed to create a complete-state vassal")
+	_check(subject_id >= 0, "identity fixture failed to create a complete-state vassal")
 	if subject_id < 0:
 		return
 	var root := state.nations[0]
 	var subject := state.nations[subject_id]
-	var dynasty_surname := root.ruler_name.substr(0, 1)
 	_check(
-		subject.ruler_name.substr(0, 1) == dynasty_surname,
-		"new vassal ruler did not inherit the overlord surname"
+		subject.ruler_person_id == enfeoff_person and subject.ruler_name == enfeoff_name
+			and subject.family_tree_id == root.family_tree_id,
+		"new vassal ruler did not reuse the existing relative identity"
 	)
 
 	var simulation := Simulation.new()
 	simulation.setup(state)
-	var subject_name_before := subject.ruler_name
+	var subject_successor := subject.crown_prince_person_id
+	var subject_successor_name := str(PrincePolitics.person(state, subject_id, subject_successor).name)
 	var subject_due := RulerProfile.succession_due_day(
 		subject, state.world_seed
 	)
@@ -355,22 +357,22 @@ func _test_suzerainty_rulers_share_surname() -> void:
 	state.day = subject_due
 	simulation._resolve_ruler_successions()
 	_check(
-		subject.ruler_name != subject_name_before
-			and subject.ruler_name.substr(0, 1) == dynasty_surname,
-		"vassal succession did not preserve the suzerainty surname"
+		subject.ruler_person_id == subject_successor and subject.ruler_name == subject_successor_name,
+		"vassal succession did not reuse the existing crown prince identity"
 	)
 
 	root.ruler_started_day = state.day
 	var root_due := RulerProfile.succession_due_day(root, state.world_seed)
 	subject.ruler_started_day = root_due
-	var root_name_before := root.ruler_name
+	var root_successor := root.crown_prince_person_id
+	var root_successor_name := str(PrincePolitics.person(state, 0, root_successor).name)
 	state.day = root_due
 	simulation._resolve_ruler_successions()
 	_check(
-		root.ruler_name != root_name_before
-			and root.ruler_name.substr(0, 1) == dynasty_surname
-			and subject.ruler_name.substr(0, 1) == dynasty_surname,
-		"overlord succession broke the shared suzerainty surname"
+		root.ruler_person_id == root_successor and root.ruler_name == root_successor_name
+			and subject.ruler_name == subject_successor_name
+			and subject.family_tree_id == root.family_tree_id,
+		"overlord succession changed another ruler or broke the shared lineage"
 	)
 	simulation.free()
 

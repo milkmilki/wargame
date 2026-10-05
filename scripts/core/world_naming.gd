@@ -3,7 +3,7 @@ extends RefCounted
 ## 古代中国风格的确定性世界命名。
 ##
 ## 所有选择只依赖显式 seed、稳定实体 id 和字符串域；本类从不读取或推进
-## GameState.rng。城市全称与君主姓名保持战役唯一；国家称号则严格服从
+## GameState.rng。城市全称保持战役唯一，人名允许重复；国家称号则严格服从
 ## founding_city / 首府的城市简称，不再维护独立的地域字语义。
 
 const HASH_MODULUS: int = 2147483647
@@ -20,7 +20,6 @@ const KIND_REBEL: String = "rebel"
 const _NATION_REGISTRY_META: StringName = &"world_naming_used_nations"
 const _CITY_REGISTRY_META: StringName = &"world_naming_used_cities"
 const _CITY_SHORT_REGISTRY_META: StringName = &"world_naming_used_city_shorts"
-const _RULER_REGISTRY_META: StringName = &"world_naming_used_rulers"
 
 ## 帝国级、初始独立主权国只从单字国号中取名。三个词典有意保留历史
 ## 分类；合并分配时会去重（如“秦”同时属于王朝与战国诸侯）。
@@ -147,14 +146,21 @@ const RULER_SURNAMES: Array[String] = [
 	"苏", "潘", "葛", "奚", "范", "彭", "郎", "鲁",
 ]
 
-const RULER_GIVEN_NAMES: Array[String] = [
-	"安", "昂", "彬", "昌", "诚", "达", "德", "端",
-	"弘", "济", "靖", "恺", "礼", "明", "宁", "平",
-	"睿", "绍", "泰", "威", "文", "修", "彦", "昭",
-	"伯安", "子敬", "公瑾", "元直", "仲达", "奉孝",
-	"士元", "文和", "景略", "玄德", "孟德", "仲谋",
-	"道济", "怀德", "承礼", "守仁", "知远", "思齐",
-]
+const PERSON_NAME_CHARACTERS: String = "安昂彬昌诚达德端弘济靖恺礼明宁平睿绍泰威文修彦昭伯子敬公瑾元直仲奉孝士和景略玄孟谋道怀承守仁知远思齐世杰云山海天星辰春夏秋冬风雨松柏青清飞华光丰成新乐永"
+
+
+## 姓氏和一至两个名字用字独立抽取，允许同名，不推进模拟随机源。
+static func person_name_for(world_seed: int, nation_id: int, salt: int = 0) -> String:
+	var result := RULER_SURNAMES[stable_index(
+		world_seed, nation_id, "person/name/surname", RULER_SURNAMES.size(), salt
+	)]
+	var count := 1 + stable_index(world_seed, nation_id, "person/name/length", 2, salt)
+	for slot in range(count):
+		result += PERSON_NAME_CHARACTERS.substr(stable_index(
+			world_seed, nation_id, "person/name/character/%d" % slot,
+			PERSON_NAME_CHARACTERS.length(), salt
+		), 1)
+	return result
 
 ## 城市全称到首选简称的映射。它只参与 short_name 的唯一分配，不再形成
 ## 第三套“地域字”运行时字段；同一首选字冲突时由分配器继续尝试城市全称
@@ -281,7 +287,6 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 			changed = true
 
 	var nation_registry := _registry(game_state, _NATION_REGISTRY_META)
-	var ruler_registry := _registry(game_state, _RULER_REGISTRY_META)
 	for nation_index in range(game_state.nations.size()):
 		var nation = game_state.nations[nation_index]
 		var nation_id := int(nation.id)
@@ -299,9 +304,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 		elif kind == KIND_REBEL:
 			# 活跃叛军的正式名跟随当权领导人；旧存档中的地域名在此
 			# 规范化，已被承认的势力不会再走 KIND_REBEL 分支。
-			_assign_unique_ruler(
-				nation, world_seed, nation_id, ruler_registry
-			)
+			_ensure_ruler_name(nation, world_seed)
 			formal = _rebel_leader_formal_name(
 				game_state, nation_id, nation.ruler_name, nation_registry
 			)
@@ -324,9 +327,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 				nation.short_name = base
 				nation.name_kind = resolved_kind
 				changed = true
-		changed = _assign_unique_ruler(
-			nation, world_seed, nation_id, ruler_registry
-		) or changed
+		changed = _ensure_ruler_name(nation, world_seed) or changed
 
 	if changed:
 		_bump_revision(game_state)
@@ -404,18 +405,8 @@ static func assign_vassal_name(
 	var formal := _vassal_display_name(game_state, subject_id)
 	nation.short_name = formal
 	nation.name = formal
-	var rulers := _registry(game_state, _RULER_REGISTRY_META)
-	_backfill_ruler_registry(game_state, rulers, subject_id)
 	if not reuse_ruler:
-		_assign_unique_ruler(
-		nation,
-		int(game_state.world_seed),
-		subject_id,
-		rulers,
-		"",
-		ruler_surname(str(game_state.nations[game_state.overlord_of(subject_id)].ruler_name))
-			if game_state.overlord_of(subject_id) >= 0 else suzerainty_ruler_surname(game_state, subject_id)
-		)
+		_ensure_ruler_name(nation, int(game_state.world_seed))
 	var new_signature := "%s|%s|%s|%s|%d" % [
 		nation.name, nation.short_name, nation.name_kind, nation.ruler_name,
 		nation.founding_city_id,
@@ -465,11 +456,7 @@ static func assign_rebel_name(
 	ensure_founding_city_id(game_state, rebel_id)
 	var registry := _registry(game_state, _NATION_REGISTRY_META)
 	_backfill_nation_registry(game_state, registry, rebel_id)
-	var rulers := _registry(game_state, _RULER_REGISTRY_META)
-	_backfill_ruler_registry(game_state, rulers, rebel_id)
-	_assign_unique_ruler(
-		nation, int(game_state.world_seed), rebel_id + parent_id * 4099, rulers
-	)
+	_ensure_ruler_name(nation, int(game_state.world_seed), parent_id)
 	var formal := _rebel_leader_formal_name(
 		game_state, rebel_id, nation.ruler_name, registry
 	)
@@ -485,8 +472,7 @@ static func assign_rebel_name(
 	return nation.name
 
 
-## 领导人姓名由独立注册表保证唯一；这里再占用国家正式名，兼容旧档中
-## 已存在同名国家的情况。正常情况下结果严格为“姓名＋军”。
+## 国家正式名以“姓名＋军”为基础去重，同名领导人的人名保持不变。
 static func _rebel_leader_formal_name(
 	game_state,
 	nation_id: int,
@@ -508,33 +494,21 @@ static func _rebel_leader_formal_name(
 	return formal
 
 
-## 继位后确认新君主姓名未被其他国家占用。RulerProfile 负责抽取身份，
-## 本层只维护战役命名注册表与 UI 使用的 naming_revision。
+## 继位后保留已有人物姓名，只为缺失姓名补随机姓名并更新显示版本。
 static func register_successor_name(
 	game_state,
 	nation_id: int,
-	identity: int,
-	disallowed_name: String = "",
-	preferred_surname: String = ""
+	identity: int
 ) -> String:
 	if not _valid_nation_id(game_state, nation_id):
 		return ""
 	var nation = game_state.nations[nation_id]
-	var rulers := _registry(game_state, _RULER_REGISTRY_META)
-	_backfill_ruler_registry(game_state, rulers, nation_id)
-	_assign_unique_ruler(
-		nation,
-		int(game_state.world_seed),
-		identity,
-		rulers,
-		disallowed_name,
-		preferred_surname
-	)
+	_ensure_ruler_name(nation, int(game_state.world_seed), identity)
 	_bump_revision(game_state)
 	return str(nation.ruler_name)
 
 
-## 姓氏来自血缘而不是政治宗属；新分封的亲族使用直接分封者的姓氏。
+## 查询现有君主姓氏；姓名缺失时才回退到宗主，用于显示。
 static func suzerainty_ruler_surname(
 	game_state,
 	nation_id: int
@@ -1123,67 +1097,18 @@ static func _allocate_regional_base(
 	return "无名"
 
 
-static func _assign_unique_ruler(
+static func _ensure_ruler_name(
 	nation,
 	world_seed: int,
-	identity: int,
-	registry: Dictionary,
-	excluded_name: String = "",
-	preferred_surname: String = ""
+	salt: int = 0
 ) -> bool:
-	var nation_id := int(nation.id)
 	var current := str(nation.ruler_name).strip_edges()
-	var required_surname := ruler_surname(preferred_surname)
-	if (
-		not current.is_empty()
-		and current != excluded_name
-		and (
-			required_surname.is_empty()
-			or ruler_surname(current) == required_surname
-		)
-		and _reserve(registry, current, nation_id)
-	):
-		if nation.ruler_name != current:
-			nation.ruler_name = current
-			return true
+	if current.is_empty():
+		current = person_name_for(world_seed, int(nation.id), salt)
+	if nation.ruler_name == current:
 		return false
-	var surname_count := 1 if not required_surname.is_empty() else RULER_SURNAMES.size()
-	var total := surname_count * RULER_GIVEN_NAMES.size()
-	var start := stable_index(
-		world_seed, identity, "ruler/name", total, nation_id
-	)
-	for offset in range(total):
-		var pair := (start + offset) % total
-		var surname := (
-			required_surname
-			if not required_surname.is_empty()
-			else RULER_SURNAMES[pair / RULER_GIVEN_NAMES.size()]
-		)
-		var candidate := (
-			surname
-			+ RULER_GIVEN_NAMES[pair % RULER_GIVEN_NAMES.size()]
-		)
-		if candidate == excluded_name:
-			continue
-		if _reserve(registry, candidate, nation_id):
-			nation.ruler_name = candidate
-			return true
-	var serial := nation_id + 1
-	while true:
-		var fallback_surname := (
-			required_surname
-			if not required_surname.is_empty()
-			else RULER_SURNAMES[start % RULER_SURNAMES.size()]
-		)
-		var candidate := fallback_surname + _chinese_digits(serial)
-		if candidate == excluded_name:
-			serial += 1
-			continue
-		if _reserve(registry, candidate, nation_id):
-			nation.ruler_name = candidate
-			return true
-		serial += 1
-	return false
+	nation.ruler_name = current
+	return true
 
 
 static func _normalize_existing_nation(nation, base: String, kind: String) -> bool:
@@ -1368,7 +1293,6 @@ static func _reset_registries(game_state) -> void:
 	game_state.set_meta(_NATION_REGISTRY_META, {})
 	game_state.set_meta(_CITY_REGISTRY_META, {})
 	game_state.set_meta(_CITY_SHORT_REGISTRY_META, {})
-	game_state.set_meta(_RULER_REGISTRY_META, {})
 
 
 static func _registry(game_state, key: StringName) -> Dictionary:
@@ -1429,19 +1353,6 @@ static func _backfill_city_short_registry(
 		var assigned := str(city.short_name).strip_edges()
 		if _is_single_character(assigned):
 			_reserve(registry, assigned, int(city.id))
-
-
-static func _backfill_ruler_registry(
-	game_state,
-	registry: Dictionary,
-	excluded_id: int
-) -> void:
-	for nation in game_state.nations:
-		if int(nation.id) == excluded_id:
-			continue
-		var ruler := str(nation.ruler_name).strip_edges()
-		if not ruler.is_empty():
-			_reserve(registry, ruler, int(nation.id))
 
 
 static func _valid_nation_id(game_state, nation_id: int) -> bool:
