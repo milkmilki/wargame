@@ -65,8 +65,9 @@ const INTERNATIONAL_IDEAL_SHARED_CACHE_MAX_ENTRIES: int = 256
 const OPERATIONAL_SHARED_CACHE_MAX_ENTRIES: int = 2048
 
 ## 仅用于性能等价测试/微基准，不写入 build()/build_structure() 返回值。
-## build_structure 当前在主线程串行执行；这些静态计数不做并发同步。
+## 这些静态计数用于串行基准，不做并发同步；工作线程建网时不保证统计精度。
 static var _candidate_dijkstra_field_builds: int = 0
+static var _structure_builds: int = 0
 static var _candidate_connectivity_queries: int = 0
 static var _candidate_connectivity_searches: int = 0
 static var _candidate_connectivity_union_graph_builds: int = 0
@@ -89,6 +90,7 @@ static var _domestic_ideal_shared_cache_evictions: int = 0
 
 
 static func reset_connectivity_prefilter_counters() -> void:
+	_structure_builds = 0
 	_candidate_dijkstra_field_builds = 0
 	_candidate_connectivity_queries = 0
 	_candidate_connectivity_searches = 0
@@ -109,6 +111,7 @@ static func reset_connectivity_prefilter_counters() -> void:
 
 static func connectivity_prefilter_counters() -> Dictionary:
 	return {
+		"structure_builds": _structure_builds,
 		"candidate_dijkstra_field_builds": _candidate_dijkstra_field_builds,
 		"candidate_connectivity_queries": _candidate_connectivity_queries,
 		"candidate_connectivity_searches": _candidate_connectivity_searches,
@@ -243,6 +246,7 @@ static func build_structure(
 ) -> Dictionary:
 	if state == null:
 		return _empty_structure(0, 0, structure_fingerprint(null))
+	_structure_builds += 1
 	var city_count := state.cities.size()
 	var nation_count := state.nations.size()
 	var fingerprint := structure_fingerprint(state)

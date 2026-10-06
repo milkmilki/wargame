@@ -1261,6 +1261,9 @@ func _trade_domestic_ideal_shared_caches(
 func _seed_trade_forecast(
 	evaluation_cache: Dictionary
 ) -> Dictionary:
+	# Invalidate old derived reports before inserting current fiscal data;
+	# otherwise revision invalidation would erase the newly seeded forecast.
+	DiplomacyAI._ensure_evaluation_cache_current(state, evaluation_cache)
 	var forecast := _forecast_trade_and_gold_flows(
 		not trade_summary_forecast_disabled
 	)
@@ -1270,7 +1273,6 @@ func _seed_trade_forecast(
 		)
 	evaluation_cache["trade_network_result"] = forecast["trade"]
 	evaluation_cache["monthly_gold_flows"] = forecast["gold_flows"]
-	DiplomacyAI._ensure_evaluation_cache_current(state, evaluation_cache)
 	return evaluation_cache
 
 
@@ -4192,6 +4194,15 @@ func _execute_ultimatum(action: Dictionary, cache: Dictionary, frozen_gold_flows
 	var target_name_snapshot := str(state.nations[target_id].name)
 	if nation.war_preparation_target_nation != target_id or nation.war_preparation_objective_city != int(action.get("objective_city", -1)):
 		return false
+	# Revalidate dynamic resources at submission even if scoring happened on
+	# the same day. Exact fiscal tokens can still reuse the trade projection.
+	var controls := {"__forecast_pending_supply": bool(cache.get("__forecast_pending_supply", false))}
+	for key in ["__disable_structure_cache", "__profile"]:
+		if cache.has(key):
+			controls[key] = cache[key]
+	cache.clear()
+	cache.merge(controls)
+	_seed_trade_forecast(cache)
 	if not DiplomacyAI.war_preparation_launch_allowed(state, attacker_id, cache) or not DiplomacyAI.can_initiate_war_at_range(state, attacker_id, target_id, cache) or not state.can_alliance_declare_war(attacker_id, target_id):
 		return false
 	var report := UltimatumRules.evaluate(state, attacker_id, target_id, cache)

@@ -123,7 +123,7 @@ HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
   --log-file "$LOG_DIR/world-war-administrative-ai.log"
 echo
 echo "==> [2e1/29] 外交目标批次缓存门禁"
-for TEST in ultimatum_rules peaceful_integration foreign_vassal_family ultimatum_e2e; do
+for TEST in ultimatum_rules peaceful_integration foreign_vassal_family ultimatum_e2e ultimatum_forecast_cache_equivalence; do
   HOME="$GODOT_HOME" "$GODOT" --headless --path "$PROJECT_DIR" \
     --script "res://tests/$TEST.gd" \
     --log-file "$LOG_DIR/world-war-$TEST.log"
