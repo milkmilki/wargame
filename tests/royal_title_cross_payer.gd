@@ -1,4 +1,5 @@
 extends SceneTree
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 ## Real fief transactions must not take another country's restored dynastic family.
 
 var checks := 0
@@ -65,6 +66,7 @@ func fixture() -> GameState:
 	state.region_ids = PackedInt32Array()
 	for id in range(20): state.region_ids.append(10 if id < 10 else 20)
 	FamilyTree.ensure_all(state)
+	FamilyFixture.ensure_candidates(state, 0, 3)
 	state.refresh_derived()
 	EmpireStatus.reconcile(state)
 	return state
@@ -87,12 +89,15 @@ func _test_restored_foreign_brother() -> void:
 	var d := state.enfeoff(0, d_land)
 	check(a >= 0 and d >= 0, "real sibling fiefs A and D created")
 	if a < 0 or d < 0: return
+	FamilyFixture.ensure_candidates(state, a, 3)
 	var b := PrincePolitics.enfeoff_candidate(state, a)
 	var members: Dictionary = FamilyTree.tree_for_nation(state, a).members
 	var c := enfeoff_next(state, a)
 	check(c >= 0 and state.nations[c].ruler_person_id == b, "real A sub-fief C reuses non-crown son B")
 	if c < 0: return
+	FamilyFixture.ensure_candidates(state, c)
 	check(PrincePolitics.accede(state, a), "real A accession preserves B as C's actual ruler")
+	FamilyFixture.ensure_candidates(state, a)
 	check(int(members[b].parent_id) == int(members[state.nations[a].ruler_person_id].parent_id), "B is a real living brother of A's successor R")
 	var children := RoyalTitles.children(members, b)
 	check(children.size() >= 2, "real C has existing succession children")
@@ -119,6 +124,7 @@ func _test_restored_foreign_brother() -> void:
 func _test_disabled_title_display() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(73003)
+	FamilyFixture.ensure_candidates(state, 0)
 	state.region_ids.fill(-1)
 	var land := state.land_cities_of(0)
 	for index in range(land.size()): state.region_ids[land[index].id] = 10 if index < land.size() / 2 else 20

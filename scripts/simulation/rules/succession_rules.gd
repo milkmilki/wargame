@@ -258,6 +258,9 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 	if conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:
 		RoyalTitles.settle_death(state, nation.id, conflict.challenger_person_id)
 	RoyalTitles.grant_generation(state, nation.id)
+	# 授爵先看到原储君旗号，避免历史授爵缓存跳过其爵位恢复。
+	for person_id in nation.prince_person_ids:
+		RoyalTitles.set_member(state, PrincePolitics.person(state, nation.id, person_id), "crown", person_id == nation.crown_prince_person_id)
 	state.family_revision += 1
 	state.diplomacy_revision += 1
 	state.refresh_derived()

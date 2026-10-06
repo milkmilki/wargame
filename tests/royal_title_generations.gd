@@ -7,7 +7,7 @@ var checks := 0
 
 func _init() -> void:
 	_test_direct_and_collateral()
-	_test_twenty_generations()
+	_test_twenty_five_generations()
 	for failure in failures: push_error("ROYAL_TITLE_GENERATIONS_FAIL: " + failure)
 	print("ROYAL_TITLE_GENERATIONS_RESULT checks=%d failures=%d" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
@@ -48,7 +48,7 @@ func _test_direct_and_collateral() -> void:
 	check(not members[candidate].titles.has("郡王"), "one person cannot additionally inherit the lower title")
 	check(Audit.inspect(state).is_empty(), "cohort and collateral allocation preserve title invariants")
 
-func _test_twenty_generations() -> void:
+func _test_twenty_five_generations() -> void:
 	var state := fixture()
 	state._random_ruler_profiles_enabled = true
 	var sim := Simulation.new()
@@ -57,12 +57,12 @@ func _test_twenty_generations() -> void:
 	var founder := state.nations[0].empire_founder_person_id
 	var peak := initial
 	var started := Time.get_ticks_msec()
-	for generation in range(20):
+	for generation in range(25):
 		var previous := state.nations[0].ruler_person_id
 		state.day = RulerProfile.succession_due_day(state.nations[0], state.world_seed)
 		sim._resolve_ruler_successions()
 		check(state.nations[0].ruler_person_id != previous, "real simulation successor each generation")
-		check(state.nations[0].empire_founder_person_id == founder, "founder remains immutable for twenty generations")
+		check(state.nations[0].empire_founder_person_id == founder, "founder remains immutable for twenty-five generations")
 		check(Audit.inspect(state).is_empty(), "title audit each generation")
 		check(Politics.inspect(state).errors.is_empty(), "political audit each generation")
 		var snapshot := NativeSnapshotBuilder.build(state)
@@ -83,7 +83,7 @@ func _test_twenty_generations() -> void:
 	full[0] = flow[0]
 	sim._resolve_court_expenses(full)
 	check(state.nations[0].treasury_gold == 0 and state.nations[0].last_court_expense_paid == 10000 and state.nations[0].last_court_expense_due > 10000, "greater-than-income due is retained without treasury debt")
-	print("ROYAL_20_GENERATIONS people=%d initial_bp=%d peak_bp=%d elapsed_ms=%d" % [state.next_family_person_id, initial, peak, Time.get_ticks_msec() - started])
+	print("ROYAL_25_GENERATIONS people=%d initial_bp=%d peak_bp=%d elapsed_ms=%d" % [state.next_family_person_id, initial, peak, Time.get_ticks_msec() - started])
 	sim.free()
 
 func check(condition: bool, message: String) -> void:

@@ -2,6 +2,7 @@ extends SceneTree
 
 const Audit = preload("res://tests/succession_audit.gd")
 const TitleAudit = preload("res://tests/royal_title_audit.gd")
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 var failures: Array[String] = []
 var checks := 0
 
@@ -20,6 +21,7 @@ func _init() -> void:
 func fixture() -> GameState:
 	var state := GameState.new()
 	state.generate_grid_world(73003)
+	FamilyFixture.ensure_candidates(state, 0, 3)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
 			state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
@@ -50,6 +52,7 @@ func _test_enfeoff_revoke() -> void:
 	check(subject >= 0, "actual enfeoffment succeeds")
 	if subject < 0: return
 	var king := state.nations[subject].ruler_person_id
+	FamilyFixture.ensure_candidates(state, subject, 2)
 	check(ids.has(king), "enfeoffment reuses original person")
 	check(members[king].restorable_title_rank == 3 and RoyalTitles.effective_rank(state, members[king]) == 0, "fief replaces stipend while retaining qualification")
 	var existing := RoyalTitles.children(members, king)
@@ -103,6 +106,7 @@ func _test_late_recognition() -> void:
 	var subject := enfeoff(state, 0)
 	check(subject >= 0, "pre-empire landed son")
 	if subject < 0: return
+	FamilyFixture.ensure_candidates(state, subject, 2)
 	# The fief's territory counts toward its parent's peaceful integration.
 	state.region_ids.fill(-1)
 	for city in state.cities:

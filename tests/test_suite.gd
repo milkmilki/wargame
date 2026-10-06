@@ -8,6 +8,8 @@ extends SceneTree
 ## 退出码 0 = 全部通过，1 = 有失败（可接入 CI）。
 ## 覆盖：世界生成不变量 / 地形惩罚数学 / 战斗与撤退 / 模拟推进 / 确定性复现。
 
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
+
 var _passed: int = 0
 var _failed: int = 0
 var _fail_msgs: Array[String] = []
@@ -6301,6 +6303,7 @@ func _test_atomic_territory_transactions() -> void:
 				GameState.DiplomaticRelation.NEUTRAL
 			)
 	var overlay_region := _enfeoffable_region(rollback_state, recipient, 3)
+	FamilyFixture.ensure_candidates(rollback_state, recipient)
 	var overlay_subject := rollback_state.enfeoff(
 		recipient, overlay_region
 	)
@@ -8141,6 +8144,7 @@ func _test_resource_cache_refreshes_after_new_nation() -> void:
 		var region := _enfeoffable_region(state, overlord_id, 3)
 		if region.is_empty():
 			continue
+		FamilyFixture.ensure_candidates(state, overlord_id)
 		subject_id = state.enfeoff(overlord_id, region)
 		if subject_id >= 0:
 			break
@@ -8183,6 +8187,7 @@ func _test_suzerainty_invariants() -> void:
 	var pre_food := gs.nations[overlord_id].granary_food
 	var pre_land_count := gs.land_cities_of(overlord_id).size()
 
+	FamilyFixture.ensure_candidates(gs, overlord_id)
 	var subject_id := gs.enfeoff(overlord_id, enfeoff_cities)
 	_check(
 		subject_id == gs.nations.size() - 1 and subject_id > 0,
@@ -8307,6 +8312,7 @@ func _test_suzerainty_invariants() -> void:
 	var group_region := _enfeoffable_region(group_state, group_overlord)
 	var group_move_city := group_region[0]
 	var overlord_groups_before := group_state.nations[group_overlord].battle_groups.size()
+	FamilyFixture.ensure_candidates(group_state, group_overlord)
 	var group_subject := group_state.enfeoff(group_overlord, [group_move_city])
 	_check(
 		group_subject > 0
@@ -8324,6 +8330,7 @@ func _test_suzerainty_invariants() -> void:
 	var centerless_state := GameState.new()
 	centerless_state.generate_grid_world(32034)
 	var centerless_region := _enfeoffable_region(centerless_state, 0, 2)
+	FamilyFixture.ensure_candidates(centerless_state, 0)
 	var centerless_subject := centerless_state.enfeoff(0, centerless_region)
 	var centerless_record := centerless_state.suzerainty_record(
 		centerless_subject
@@ -8383,6 +8390,7 @@ func _test_suzerainty_invariants() -> void:
 	var transfer_groups_before := transfer_state.nations[
 		transfer_overlord
 	].battle_groups.size()
+	FamilyFixture.ensure_candidates(transfer_state, transfer_overlord)
 	var transfer_subject := transfer_state.enfeoff(
 		transfer_overlord,
 		transfer_region
@@ -8617,6 +8625,7 @@ func _test_vassal_tribute() -> void:
 		for b in range(a + 1, e2e.nations.size()):
 			e2e.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var e2e_cities := _enfeoffable_region(e2e, 0, 3)
+	FamilyFixture.ensure_candidates(e2e, 0)
 	var e2e_subject := e2e.enfeoff(0, e2e_cities, 0.25)
 	var e2e_sim := Simulation.new()
 	e2e_sim.diplomacy_enabled = false   # 隔离外交/AI 噪声，只观察经济结算
@@ -9365,6 +9374,7 @@ func _test_suzerainty_lifecycle() -> void:
 		for b in range(a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var region := _enfeoffable_region(gs, 0, 3)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0 and gs.is_suzerainty_pair(0, subject), "分封应建立宗主-藩王对")
 	var leave_actions: Array[Dictionary] = []
@@ -9384,6 +9394,7 @@ func _test_suzerainty_lifecycle() -> void:
 		for b in range(a + 1, dv.nations.size()):
 			dv.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var dv_region := _enfeoffable_region(dv, 0, 3)
+	FamilyFixture.ensure_candidates(dv, 0)
 	var dead_vassal := dv.enfeoff(0, dv_region)
 	# 用一笔合法事务把藩王的实控与法理同步交回宗主，模拟藩王被灭。
 	var dv_transfer := _transfer_all_owned_cities_for_fixture(
@@ -9453,6 +9464,7 @@ func _test_suzerainty_lifecycle() -> void:
 				GameState.DiplomaticRelation.NEUTRAL
 			)
 	var independent_region := _enfeoffable_region(independent, 0, 3)
+	FamilyFixture.ensure_candidates(independent, 0)
 	var independent_subject := independent.enfeoff(
 		0,
 		independent_region
@@ -9509,6 +9521,7 @@ func _test_civil_war_relations() -> void:
 		for b in range(a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var region := _enfeoffable_region(gs, 0, 3)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	_check(
 		subject > 0
@@ -9558,6 +9571,7 @@ func _test_civil_war_relations() -> void:
 		for b in range(a + 1, dg.nations.size()):
 			dg.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var dg_region := _enfeoffable_region(dg, 0, 3)
+	FamilyFixture.ensure_candidates(dg, 0)
 	var dg_sub := dg.enfeoff(0, dg_region)
 	dg.start_civil_war(dg_sub)
 	# 宗主 0 全境失守：同一事务同步实控、法理、库存与最终宗藩图。
@@ -9723,6 +9737,7 @@ func _test_centralization_decision() -> void:
 		for b in range(a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var region := _enfeoffable_region(gs, 0, 3)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0, "分封应成功建立藩王")
 
@@ -9851,6 +9866,7 @@ func _test_centralization_decision() -> void:
 				a, b, GameState.DiplomaticRelation.NEUTRAL
 			)
 	var conqueror_region := _enfeoffable_region(conqueror_state, 0, 3)
+	FamilyFixture.ensure_candidates(conqueror_state, 0)
 	var conqueror_subject := conqueror_state.enfeoff(0, conqueror_region)
 	conqueror_state.nations[conqueror_subject].ruler_archetype = (
 		RulerProfile.CONQUEROR
@@ -9920,6 +9936,7 @@ func _test_centralization_decision() -> void:
 				GameState.DiplomaticRelation.NEUTRAL
 			)
 	var loss_region := _enfeoffable_region(loss_state, 0, 3)
+	FamilyFixture.ensure_candidates(loss_state, 0)
 	var loss_subject := loss_state.enfeoff(
 		0,
 		loss_region
@@ -9972,6 +9989,7 @@ func _test_centralization_decision() -> void:
 		for b in range(a + 1, rs.nations.size()):
 			rs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var rs_region := _enfeoffable_region(rs, 0, 3)
+	FamilyFixture.ensure_candidates(rs, 0)
 	var rs_sub := rs.enfeoff(0, rs_region)
 	for city in rs.cities_of(rs_sub):
 		city.gold_per_month = 0
@@ -10060,8 +10078,10 @@ func _test_civil_war_annexation() -> void:
 		for b in range(a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var region := _enfeoffable_region(gs, 0, 8)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	var child_region := _enfeoffable_region(gs, subject)
+	FamilyFixture.ensure_candidates(gs, subject)
 	var child_subject := gs.enfeoff(subject, child_region)
 	_check(
 		child_subject > subject
@@ -10277,8 +10297,10 @@ func _test_civil_war_annexation() -> void:
 			vs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	# 宗主 0 分封两个藩王：winner 与 sibling。
 	var r1 := _enfeoffable_region(vs, 0, 3)
+	FamilyFixture.ensure_candidates(vs, 0, 3)
 	var winner := vs.enfeoff(0, r1)
 	var r2 := _enfeoffable_region(vs, 0, 3)
+	FamilyFixture.ensure_candidates(vs, 0)
 	var sibling := vs.enfeoff(0, r2)
 	_check(winner > 0 and sibling > 0 and winner != sibling, "应成功分封两个藩王")
 	vs.start_civil_war(winner)
@@ -10421,8 +10443,10 @@ func _test_resource_capacity_limits() -> void:
 	)
 
 	var region := _enfeoffable_region(gs, 0, 8)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	var child_region := _enfeoffable_region(gs, subject)
+	FamilyFixture.ensure_candidates(gs, subject)
 	var child := gs.enfeoff(subject, child_region)
 	_check(subject >= 0 and child >= 0, "资源容量测试须建立两级藩属")
 	var root_food_output := 0
@@ -10463,6 +10487,7 @@ func _test_shared_granary_and_relay_supply() -> void:
 	gs.refresh_derived()
 	var pre_food := gs.nations[0].granary_food
 	var region := _enfeoffable_region(gs, 0, 3)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	gs.refresh_derived()
 	# 本段只验证宗藩共享粮池聚合；贸易已不再产生粮食外部流量。
@@ -10533,6 +10558,7 @@ func _test_shared_granary_and_relay_supply() -> void:
 			cw.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	cw.refresh_derived()
 	var cw_region := _enfeoffable_region(cw, 0, 3)
+	FamilyFixture.ensure_candidates(cw, 0)
 	var rebel := cw.enfeoff(0, cw_region)
 	cw.refresh_derived()
 	var pool_food_before := cw.nations[0].granary_food + cw.nations[rebel].granary_food
@@ -10585,6 +10611,7 @@ func _test_vassal_governance_output_bonus() -> void:
 	# 构造宗主 0 与藩王，藩王 id 明确；随后在同一城上翻转 owner，隔离 garrison/war 等混淆项，
 	# 纯粹检验「owner 是否藩王」这一维度对产出真源的 1.5× 影响。
 	var region := _enfeoffable_region(gs, 0, 3)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0 and gs.is_vassal(subject) and not gs.is_vassal(0), "分封应建立藩王且宗主非藩王")
 	# 本用例只隔离宗藩治理倍率；新藩王正常会获得独立随机君主，
@@ -11095,6 +11122,7 @@ func _test_vassal_local_main_command() -> void:
 		for b in range(a + 1, gs.nations.size()):
 			gs.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var region := _enfeoffable_region(gs, 0, 3)
+	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0, "分封应成功建立藩王")
 
@@ -11247,6 +11275,7 @@ func _test_vassal_local_main_command() -> void:
 		for b in range(a + 1, war_state.nations.size()):
 			war_state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var war_region := _enfeoffable_region(war_state, 0, 3)
+	FamilyFixture.ensure_candidates(war_state, 0)
 	var war_vassal := war_state.enfeoff(0, war_region)
 	var war_actions: Array[Dictionary] = []
 	DiplomacyAI._collect_war_actions(war_state, war_actions, {}, {})
@@ -11440,6 +11469,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 		for b in range(a + 1, cap_state.nations.size()):
 			cap_state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	var cap_region := _enfeoffable_region(cap_state, 0, 3)
+	FamilyFixture.ensure_candidates(cap_state, 0)
 	var cap_subject := cap_state.enfeoff(0, cap_region)
 	_check(cap_subject > 0, "分封应成功建立藩王（首都失陷用例）")
 	var cap_sim := Simulation.new()
@@ -11494,6 +11524,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 	var eliminated_region := _enfeoffable_region(
 		eliminated_state, 0, 3
 	)
+	FamilyFixture.ensure_candidates(eliminated_state, 0)
 	var eliminated_subject := eliminated_state.enfeoff(
 		0, eliminated_region
 	)
@@ -11617,6 +11648,7 @@ func _test_sustainable_force_capacity() -> void:
 	var shared := GameState.new()
 	shared.generate_grid_world(34002)
 	var shared_region := _enfeoffable_region(shared, 0, 3)
+	FamilyFixture.ensure_candidates(shared, 0)
 	var shared_subject := shared.enfeoff(0, shared_region)
 	if shared_subject >= 0:
 		var subject_army := Army.new()

@@ -16,7 +16,7 @@ func _run() -> void:
 	EmpireStatus.reconcile(state)
 	var sim := Simulation.new()
 	sim.setup(state)
-	var rounds := 20 if OS.get_environment("ROYAL_UI_LARGE") == "1" else 1
+	var rounds := 25 if OS.get_environment("ROYAL_UI_LARGE") == "1" else 1
 	for generation in range(rounds):
 		state.day = RulerProfile.succession_due_day(state.nations[0], state.world_seed)
 		sim._resolve_ruler_successions()

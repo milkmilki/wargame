@@ -1,6 +1,7 @@
 extends SceneTree
 
 const Chain = preload("res://tests/succession_chain.gd")
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 var failures: Array[String] = []
 func _init() -> void:
 	call_deferred("run")
@@ -14,7 +15,7 @@ func run() -> void:
 	var army := state.create_army(0, 0, 5000)
 	army.political_person_id = crown
 	var snapshot := NativeSnapshotBuilder.build(state)
-	check(snapshot.schema_version == NativeSnapshotBuilder.SCHEMA_VERSION, "schema23")
+	check(snapshot.schema_version == NativeSnapshotBuilder.SCHEMA_VERSION, "schema24")
 	check(NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(), "valid_strict_politics_schema")
 	var incompatible := snapshot.duplicate(true)
 	incompatible.schema_version = 19
@@ -50,6 +51,7 @@ func run() -> void:
 	var profile := nation.ruler_archetype
 	state.day = 30
 	PrincePolitics.accede(state, 0)
+	FamilyFixture.ensure_candidates(state, 0, 2)
 	history.maybe_capture(state)
 	var view := history.build_view_state(state, 0)
 	check(view.nations[0].crown_prince_person_id == crown and view.nations[0].ruler_name == name and view.nations[0].ruler_archetype == profile, "old_persons_frozen")

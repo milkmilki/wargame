@@ -538,6 +538,8 @@ class FamilyTreeCanvas extends Control:
 		)
 		var badges: Array[String] = []
 		if bool(member.get("taizu", false)): badges.append("太祖")
+		if str(member.get("accession_source", "")) == "remote": badges.append("远支入继")
+		elif bool(member.get("synthetic_ancestor", false)): badges.append("补录")
 		if bool(member.get("crown", false)) and bool(member.get("alive", true)): badges.append("储君")
 		if not bool(member.get("alive", true)): badges.append("已故")
 		elif is_current: badges.append("在位" if current_nation_alive else "末任")

@@ -3,6 +3,7 @@ extends SceneTree
 ## must expose their advertised numerical and territorial behavior.
 
 var _valid := true
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 
 
 func _init() -> void:
@@ -15,6 +16,7 @@ func _init() -> void:
 	_test_modifier_query_isolation()
 	_test_conqueror_war_benefits()
 	_test_puppet_enfeoffment()
+	_test_puppet_without_enfeoff_candidate()
 	if not _valid:
 		quit(1)
 		return
@@ -428,11 +430,29 @@ func _test_conqueror_war_benefits() -> void:
 func _test_puppet_enfeoffment() -> void:
 	var state := GameState.new()
 	state.generate_world(84521, 2, 60)
+	# This repeated-grant scenario requires existing relatives, independent
+	# of the separately tested natural possibility of a childless monarch.
+	FamilyFixture.ensure_candidates(state, 0, 5)
 	var ruler := state.nations[0]
 	ruler.ruler_archetype = RulerProfile.PUPPET
 	ruler.ruler_traits.clear()
 	var capital_center := state.administrative_center_of(ruler.capital_city_id)
 	var capital_state_members := state.administrative_members(capital_center)
+	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
+	_check(RoyalTitles.children(members, ruler.ruler_person_id).size() == 5, "puppet repeated-grant fixture has exactly five biological children")
+	# This political test uses a pre-existing collateral family large enough
+	# for every non-capital state. The unknown ancestor is a test placeholder,
+	# not an actual monarch subject to the separate 0/2/3/4/5 birth rule.
+	var non_capital_states := {}
+	for city in state.land_cities_of(0):
+		var center := state.administrative_center_of(city.id)
+		if center != capital_center:
+			non_capital_states[center] = true
+	var sibling_parent := int(members[ruler.ruler_person_id].parent_id)
+	var sibling_offset := RoyalTitles.children(members, sibling_parent).size()
+	for order in range(non_capital_states.size()):
+		var brother := PrincePolitics._create_person(state, 0, sibling_parent, sibling_offset + order)
+		RoyalTitles.set_member(state, members[brother], "children_initialized", true)
 	var initial_cities := state.land_cities_of(0).size()
 	var has_foreign_frontier := false
 	var forced_frontier_city := -1
@@ -546,6 +566,37 @@ func _test_puppet_enfeoffment() -> void:
 		state, centralize_actions, {}, {}
 	)
 	_check(centralize_actions.is_empty(), "puppet ruler attempted to revoke a vassal")
+
+
+func _test_puppet_without_enfeoff_candidate() -> void:
+	var state := GameState.new()
+	state.generate_world(84521, 2, 60)
+	var nation := state.nations[0]
+	nation.ruler_archetype = RulerProfile.PUPPET
+	nation.ruler_traits.clear()
+	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
+	for id in nation.prince_person_ids:
+		RoyalTitles.set_member(state, members[id], "alive", false)
+		RoyalTitles.set_member(state, members[id], "crown", false)
+	nation.prince_person_ids.clear()
+	nation.crown_prince_person_id = -1
+	RoyalTitles.set_member(state, members[nation.ruler_person_id], "children_initialized", true)
+	_check(PrincePolitics.enfeoff_candidate(state, 0) == -1, "childless puppet fixture has no existing fief candidate")
+	var core := DiplomacyAI.puppet_capital_state_city_ids(state, 0)
+	var region := DiplomacyAI.next_enfeoff_region(state, 0, core.size(), state.land_cities_of(0).size(), false, {})
+	_check(not region.is_empty() and not DiplomacyAI._overlord_under_war_pressure(state, 0, {}), "childless puppet is peaceful and still owns grantable territory")
+	var next_person_before := state.next_family_person_id
+	var trees_before := state.family_trees.duplicate(true)
+	var princes_before := nation.prince_person_ids.duplicate()
+	var revision_before := state.family_revision
+	var actions: Array[Dictionary] = []
+	DiplomacyAI._collect_enfeoff_actions(state, actions, {}, {})
+	var enfeoff_proposed := false
+	for action in actions:
+		enfeoff_proposed = enfeoff_proposed or (int(action.get("kind", -1)) == DiplomacyAI.Action.ENFEOFF and int(action.get("a", -1)) == 0)
+	_check(not enfeoff_proposed, "childless puppet must not propose fief creation without an existing candidate")
+	_check(state.next_family_person_id == next_person_before and state.family_trees == trees_before and state.family_revision == revision_before and nation.prince_person_ids == princes_before and nation.crown_prince_person_id == -1, "fief proposal evaluation must not create people or mutate the fixed family")
 
 
 func _check(condition: bool, message: String) -> void:

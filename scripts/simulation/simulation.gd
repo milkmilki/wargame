@@ -1873,7 +1873,12 @@ func _resolve_ruler_successions() -> void:
 	if state == null or not state.random_ruler_profiles_enabled():
 		return
 	var changed := false
-	for nation in state.nations:
+	var succession_order := state.nations.duplicate()
+	succession_order.sort_custom(func(a: Nation, b: Nation) -> bool:
+		var first := _succession_suzerainty_depth(a.id)
+		var second := _succession_suzerainty_depth(b.id)
+		return first < second if first != second else a.id < b.id)
+	for nation in succession_order:
 		if (
 			not nation.alive
 			or state.day < RulerProfile.succession_due_day(
@@ -1897,6 +1902,13 @@ func _resolve_ruler_successions() -> void:
 	state.refresh_derived()
 	_reset_trade_forecast_cache()
 	_ai_strategy_cache.clear()
+
+func _succession_suzerainty_depth(nation_id: int) -> int:
+	var seen := {}
+	while state.suzerainty.has(nation_id) and not seen.has(nation_id):
+		seen[nation_id] = true
+		nation_id = int(state.suzerainty[nation_id].overlord_id)
+	return seen.size()
 
 
 func _cancel_succession_preparation(conflict: SuccessionConflict, reason: String) -> void:
@@ -1934,9 +1946,12 @@ func _update_succession_conflicts() -> void:
 						_finish_battle_administratively(battle)
 			if SuccessionRules.finish(state, conflict):
 				if conflict.succession_delayed and nation.alive:
-					PrincePolitics.accede(state, nation.id)
-					state.relocate_capital(nation.id)
-					state.refresh_derived()
+					if PrincePolitics.accede(state, nation.id):
+						state.relocate_capital(nation.id)
+						RegionalStrategy.update_target(state, nation.id, true)
+						state.refresh_derived()
+						_reset_trade_forecast_cache()
+						_ai_strategy_cache.clear()
 				_ai_last_decision_day = -1
 
 

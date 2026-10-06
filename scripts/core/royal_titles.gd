@@ -56,7 +56,7 @@ static func _grant(state: GameState, member: Dictionary, rank: int, payer: int, 
 				_grant(state, child, rank - 1, payer, branch, false)
 
 static func reconcile(state: GameState) -> void:
-	if state == null or state.has_meta("historical_prince_reports"):
+	if state == null or state.has_meta("historical_prince_reports") or state.has_meta("ruler_accession_in_progress"):
 		return
 	if int(state.get_meta("royal_reconcile_revision", -1)) == state.family_revision:
 		return
@@ -118,15 +118,12 @@ static func grant_generation(state: GameState, nation_id: int) -> void:
 
 static func _generate_children(state: GameState, member: Dictionary) -> void:
 	if bool(member.get("title_children_generated", false)):
+		set_member(state, member, "children_initialized", true)
 		return
-	set_member(state, member, "title_children_generated", true)
 	var payer := int(member.title_payer_id)
 	var members: Dictionary = FamilyTree.tree_for_nation(state, payer).members
-	var existing := children(members, int(member.id))
-	if existing.is_empty():
-		var count := int(CHILD_COUNTS[RulerProfile.stable_index(state.world_seed, payer, "royal/children", CHILD_COUNTS.size(), int(member.id))])
-		for order in range(count):
-			existing.append(PrincePolitics._create_person(state, payer, int(member.id), order, int(member.id) * 7919))
+	var existing := PrincePolitics.initialize_children(state, payer, int(member.id), int(member.id) * 7919)
+	set_member(state, member, "title_children_generated", true)
 	for id in existing:
 		var child: Dictionary = members[id]
 		if not bool(child.get("alive", true)) or int(child.get("enfeoffed_nation_id", -1)) >= 0 or PrincePolitics._busy(state, payer, id):
@@ -234,7 +231,7 @@ static func _inherit(state: GameState, nation_id: int, deaths: Array[Dictionary]
 				_grant(state, members[heir], rank, nation_id, int(deceased.branch), bool(members[heir].get("title_adult", false)))
 
 
-static func advance_generation(state: GameState, nation_id: int, incoming_ruler: int) -> void:
+static func advance_generation(state: GameState, nation_id: int, incoming_ruler: int, protected_people: Array[int] = []) -> void:
 	var nation := state.nations[nation_id]
 	if not nation.royal_titles_initialized:
 		return
@@ -243,7 +240,7 @@ static func advance_generation(state: GameState, nation_id: int, incoming_ruler:
 	var dead_ids: Array[int] = []
 	for id in members:
 		var member: Dictionary = members[id]
-		if int(member.get("title_payer_id", -1)) != nation_id or not bool(member.get("title_managed", false)) or bool(member.get("title_disabled", false)) or not bool(member.get("alive", true)) or int(id) == incoming_ruler:
+		if int(member.get("title_payer_id", -1)) != nation_id or not bool(member.get("title_managed", false)) or bool(member.get("title_disabled", false)) or not bool(member.get("alive", true)) or int(id) == incoming_ruler or protected_people.has(int(id)):
 			continue
 		if int(member.get("enfeoffed_nation_id", -1)) >= 0 or int(member.get("office_nation_id", -1)) >= 0 or PrincePolitics._busy(state, nation_id, int(id)):
 			continue

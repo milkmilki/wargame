@@ -6483,6 +6483,9 @@ func enfeoff(
 	if not _can_enfeoff(overlord_id, city_ids):
 		return -1
 	var overlord := nations[overlord_id]
+	var enfeoffed_person := PrincePolitics.enfeoff_candidate(self, overlord_id)
+	if enfeoffed_person < 0:
+		return -1
 
 	# 1. 按产能占比确定划转份额（迁出区 / 宗主全域），保证资源守恒。
 	#    人力、金钱按各自产能占比划转；粮食不划转（归共享粮仓，见下）。
@@ -6563,7 +6566,7 @@ func enfeoff(
 
 	# 5. 首都、零库存中继与封地存粮回流已由领土事务统一完成。
 	WorldNaming.assign_vassal_name(self, subject.id, city_ids, true)
-	FamilyTree.record_enfeoffment(self, overlord_id, subject.id, PrincePolitics.enfeoff_candidate(self, overlord_id))
+	FamilyTree.record_enfeoffment(self, overlord_id, subject.id, enfeoffed_person)
 
 	# 5.5 分封不再创造或转移正规军。城市工事负责拖延，藩王须用自身资源
 	#     建立第一个主战指挥单位；宗主的既有指挥单位保持完整。

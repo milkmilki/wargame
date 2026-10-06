@@ -6744,6 +6744,8 @@ static func _collect_enfeoff_actions(
 		if not nation.alive:
 			continue
 		var overlord_id := nation.id
+		if PrincePolitics.enfeoff_candidate(state, overlord_id, false) < 0:
+			continue
 		var puppet_rule := nation.ruler_archetype == RulerProfile.PUPPET
 		# 藩王不得再分封（第一版不做多级自动分封）；已在本 tick 有动作的国家跳过。
 		if (

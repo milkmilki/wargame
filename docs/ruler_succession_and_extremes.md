@@ -6,8 +6,11 @@ year equal to 360 simulation days. The world seed, nation id, and ruler
 revision determine the duration, name, archetype, and traits, so replay and
 save loading remain deterministic across platforms.
 
-On the due day the existing crown prince succeeds with the same person ID,
-name, archetype, and traits. An unfinished succession war delays accession.
+On the due day an eligible crown prince succeeds with the same person ID,
+name, archetype, and traits. Rulers can be childless: other eligible descendants,
+then qualified collateral relatives succeed, with a recorded distant branch
+as the final fallback. Children are initialized once, including a zero result.
+An unfinished succession war delays accession.
 The new identity updates the trade policy, cached army and city modifiers, naming
 revision, and trade forecast inputs.
 

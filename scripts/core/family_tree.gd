@@ -186,6 +186,7 @@ static func _member(
 		"id": person_id,
 		"name": person_name,
 		"parent_id": parent_id,
+		"children_initialized": false,
 		"titles": [] as Array[String],
 		"nation_ids": nation_ids,
 	}

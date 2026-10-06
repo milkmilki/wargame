@@ -1,4 +1,5 @@
 extends SceneTree
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 
 var failures: Array[String] = []
 func _init() -> void:
@@ -39,6 +40,7 @@ static func fixture() -> GameState:
 		state._add_edge(0, id)
 		state.edge_of(0, id).distance = 0.1
 	FamilyTree.ensure_all(state)
+	FamilyFixture.ensure_candidates(state, 0)
 	state.refresh_derived()
 	return state
 

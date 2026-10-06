@@ -40,7 +40,7 @@ static func completed_regions(state: GameState) -> Dictionary:
 	return result
 
 static func reconcile(state: GameState) -> void:
-	if state == null or state.has_meta("historical_prince_reports"):
+	if state == null or state.has_meta("historical_prince_reports") or state.has_meta("ruler_accession_in_progress"):
 		return
 	var completed := completed_regions(state)
 	for nation in state.nations:

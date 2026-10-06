@@ -2,6 +2,7 @@ extends SceneTree
 ## Shared dynastic ancestry must not transfer another country's political office.
 
 const Audit = preload("res://tests/succession_audit.gd")
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 var failures: Array[String] = []
 var checks := 0
 
@@ -69,6 +70,8 @@ func fixture(foreign: bool = false) -> GameState:
 	state.administrative_region_count = 8
 	state.administrative_region_revision += 1
 	FamilyTree.ensure_all(state)
+	for member_nation in state.nations:
+		FamilyFixture.ensure_candidates(state, member_nation.id, 3)
 	if foreign:
 		state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	state.refresh_derived()
@@ -101,6 +104,7 @@ func test_shared_princes(dissolved: bool = false) -> void:
 		return
 	var sovereign := state.nations[0]
 	var vassal := state.nations[subject]
+	FamilyFixture.ensure_candidates(state, subject)
 	check(vassal.family_tree_id == sovereign.family_tree_id, "shared/same_tree")
 	if dissolved:
 		check(state._dissolve_suzerainty_system(0), "dissolved/real_dissolution")
@@ -164,6 +168,7 @@ func test_conflict_candidates() -> void:
 	if subject < 0:
 		return
 	var parent := int(PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id).parent_id)
+	FamilyFixture.ensure_candidates(state, subject)
 	# Isolate the conflict exclusion from ordinary current-prince exclusion:
 	# participants belong to the shared dynasty but are outside either current generation.
 	var challenger := PrincePolitics._create_person(state, 0, parent, -2)
@@ -199,17 +204,24 @@ func test_own_son_and_fallback() -> void:
 	check(own_army.political_person_id == -1 and own_army.owner_nation == 0, "own/reused_son_army_centralized")
 	check(crown_army.political_person_id == nation.crown_prince_person_id, "own/crown_army_preserved")
 	check(Audit.inspect(state).errors.is_empty(), "own/audit_after")
-	# No idle brothers or eligible younger sons remain: the real transaction
-	# must create a fresh relative without consuming the crown prince.
+	# No idle brothers or eligible younger sons remain: real fief creation
+	# must refuse without fabricating a brother or consuming the crown prince.
 	for id in nation.prince_person_ids:
-		if id != nation.crown_prince_person_id:
+		if id != nation.crown_prince_person_id and int(PrincePolitics.person(state, 0, id).get("enfeoffed_nation_id", -1)) < 0:
 			PrincePolitics.person(state, 0, id).alive = false
 	var crown_before := PrincePolitics.person(state, 0, nation.crown_prince_person_id).duplicate(true)
 	var next_id := state.next_family_person_id
+	var nation_count := state.nations.size()
+	var owners: Array[int] = []
+	for city in state.cities:
+		owners.append(city.owner_nation)
+	check(PrincePolitics.enfeoff_candidate(state, 0) == -1, "fallback/no_existing_person")
 	var fallback_subject := enfeoff_next(state, 0)
-	check(fallback_subject >= 0, "fallback/real_enfeoff")
-	if fallback_subject >= 0:
-		check(state.nations[fallback_subject].ruler_person_id == next_id, "fallback/fresh_relative_created")
+	check(fallback_subject == -1, "fallback/real_enfeoff_refused")
+	check(state.next_family_person_id == next_id, "fallback/no_fabricated_relative")
+	check(state.nations.size() == nation_count, "fallback/no_fabricated_nation")
+	for city in state.cities:
+		check(city.owner_nation == owners[city.id] and state.recognized_owner_of(city.id) == owners[city.id], "fallback/territory_unchanged_%d" % city.id)
 	check(PrincePolitics.person(state, 0, nation.crown_prince_person_id) == crown_before, "fallback/crown_unchanged")
 	check(Audit.inspect(state).errors.is_empty(), "fallback/audit_after")
 

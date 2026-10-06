@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 23
+const SCHEMA_VERSION: int = 24
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
@@ -44,6 +44,7 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 				return "Duplicate family person"
 			members[member.id] = member
 		trees[tree.id] = members
+	var incumbents := {}
 	for index in range(count):
 		if offsets[index] < 0 or offsets[index] > offsets[index + 1] or offsets[index + 1] > ids.size():
 			return "Invalid prince offset range"
@@ -51,6 +52,9 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 		var ruler := int(nations.ruler_person_ids[index])
 		if ruler >= 0 and not members.has(ruler):
 			return "Missing ruler person"
+		if ruler >= 0 and bool(nations.alive[index]) and not bool(nations.succession_identity[index]):
+			if incumbents.has(ruler): return "Person holds multiple active thrones"
+			incumbents[ruler] = index
 		var crown := int(nations.crown_prince_ids[index])
 		var seen := {}
 		for position in range(offsets[index], offsets[index + 1]):
@@ -142,7 +146,23 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 			return "Invalid royal expense counts"
 	for tree_id in trees:
 		var members: Dictionary = trees[tree_id]
+		var ancestry_checked := {}
+		for person_id in members:
+			var ancestry := {}
+			var current := int(person_id)
+			while members.has(current) and not ancestry_checked.has(current):
+				if ancestry.has(current): return "Cyclic family ancestry"
+				ancestry[current] = true
+				current = int(members[current].get("parent_id", -1))
+			ancestry_checked.merge(ancestry)
 		for member in members.values():
+			for flag in ["children_initialized", "synthetic_ancestor", "remote_branch"]:
+				if member.has(flag) and not member[flag] is bool: return "Invalid family lifecycle flag"
+			if bool(member.get("synthetic_ancestor", false)) and (bool(member.get("alive", true)) or int(member.get("office_nation_id", -1)) >= 0 or int(member.get("title_rank", 0)) > 0):
+				return "Invalid synthetic ancestor"
+			var parent := int(member.get("parent_id", -1))
+			if parent >= 0 and (not members.has(parent) or parent == int(member.id)):
+				return "Invalid family parent reference"
 			var rank := int(member.get("title_rank", 0))
 			var restore := int(member.get("restorable_title_rank", 0))
 			if rank < 0 or rank > 3 or restore < 0 or restore > 3:
@@ -163,6 +183,8 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 				return "Invalid royal office reference"
 			if office >= 0 and bool(member.get("alive", true)) and bool(nations.alive[office]) and int(nations.ruler_person_ids[office]) != int(member.id):
 				return "Invalid incumbent person reference"
+			if office >= 0 and bool(member.get("alive", true)) and bool(nations.alive[office]) and rank > 0:
+				return "Incumbent cannot receive a virtual stipend"
 			for child in member.get("child_ids", []):
 				if not members.has(int(child)) or int(members[int(child)].parent_id) != int(member.id):
 					return "Invalid family child reference"

@@ -1,4 +1,5 @@
 extends SceneTree
+const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 
 var _failures: Array[String] = []
 
@@ -11,6 +12,7 @@ func _run() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(24680)
 	FamilyTree.ensure_all(state)
+	FamilyFixture.ensure_candidates(state, 0)
 	var sovereign := state.nations[0]
 	var tree := FamilyTree.tree_for_nation(state, 0)
 	var root_id := int(tree.get("root_person_id", -1))
@@ -140,6 +142,7 @@ func _test_real_enfeoffment_hook() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(13579)
 	FamilyTree.ensure_all(state)
+	FamilyFixture.ensure_candidates(state, 0)
 	var subject_id := -1
 	for center_value in state.administrative_center_city_ids:
 		var center_id := int(center_value)
