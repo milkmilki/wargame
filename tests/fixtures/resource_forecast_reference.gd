@@ -1,5 +1,6 @@
-class_name ResourceForecastRules
 extends RefCounted
+## Frozen pre-optimization oracle (123e3b8). Keep its event loop and rounding
+## independent of ResourceForecastRules so shared mistakes cannot pass parity.
 
 const HORIZON_DAYS: int = 360
 const MONTH_DAYS: int = 30
@@ -33,17 +34,7 @@ static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 	var monthly_balance := float(input.get("income", 0)) - float(input.get("court", 0)) - upkeep
 	var previous := day
 	var pending_days := int(input.get("pending_supply_days", 0))
-	# Capacity searches evaluate the same frozen consumers many times. Resolve
-	# the rounding mode and inputs once rather than at every horizon event.
-	var replace_consumers := change.has("replace_consumers")
-	var use_table := input.has("consumption") and not replace_consumers
-	var consumption: Dictionary = input.get("consumption", {})
-	var consumers: Array = [] if replace_consumers else input.get("consumers", [])
-	var debt := float(input.get("food_debt", 0))
-	var increment := maxf(float(change.get("field_food_delta", 0)), 0)
-	var consumed := _consumption_at(
-		consumption, consumers, use_table, field_food, debt, increment, pending_days
-	)
+	var consumed := _field_consumption(input, change, field_food, pending_days)
 	food -= consumed
 	if food < food_min:
 		food_min = food
@@ -52,10 +43,7 @@ static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 		var event_day := mini(next_month, day + HORIZON_DAYS)
 		# The day before month settlement is a potential seasonal low point.
 		var before_event := maxi(event_day - 1, previous)
-		var total_consumed := _consumption_at(
-			consumption, consumers, use_table, field_food, debt, increment,
-			before_event - day + pending_days
-		)
+		var total_consumed := _field_consumption(input, change, field_food, before_event - day + pending_days)
 		food -= total_consumed - consumed
 		consumed = total_consumed
 		if food < food_min:
@@ -74,10 +62,7 @@ static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 			if event_day % HARVEST_DAYS == 0:
 				food = minf(food + float(input.get("harvest", 0)), capacity)
 			next_month += MONTH_DAYS
-		total_consumed = _consumption_at(
-			consumption, consumers, use_table, field_food, debt, increment,
-			event_day - day + pending_days
-		)
+		total_consumed = _field_consumption(input, change, field_food, event_day - day + pending_days)
 		food -= total_consumed - consumed
 		consumed = total_consumed
 		if food < food_min:
@@ -119,26 +104,14 @@ static func evaluate(input: Dictionary, change: Dictionary = {}) -> Dictionary:
 	return result
 
 static func _field_consumption(input: Dictionary, change: Dictionary, monthly: float, days: int) -> float:
-	var replace_consumers := change.has("replace_consumers")
-	return _consumption_at(
-		input.get("consumption", {}),
-		[] if replace_consumers else input.get("consumers", []),
-		input.has("consumption") and not replace_consumers,
-		monthly, float(input.get("food_debt", 0)),
-		maxf(float(change.get("field_food_delta", 0)), 0), days
-	)
-
-static func _consumption_at(
-	consumption: Dictionary, consumers: Array, use_table: bool,
-	monthly: float, debt: float, increment: float, days: int
-) -> float:
-	if use_table:
-		return float(consumption.get(days, floor(monthly * days / MONTH_DAYS))) + ceil(increment * days / MONTH_DAYS - 0.000001)
-	if consumers.is_empty():
-		return floor(monthly * days / MONTH_DAYS + debt + 0.000001)
+	if input.has("consumption") and not change.has("replace_consumers"):
+		return float(input.consumption.get(days, floor(monthly * days / MONTH_DAYS))) + ceil(maxf(float(change.get("field_food_delta", 0)), 0) * days / MONTH_DAYS - 0.000001)
+	var consumers: Array = input.get("consumers", [])
+	if consumers.is_empty() or change.has("replace_consumers"):
+		return floor(monthly * days / MONTH_DAYS + float(input.get("food_debt", 0)) + 0.000001)
 	var total := 0.0
 	for consumer in consumers:
 		var demand := float(consumer.rate) * days / MONTH_DAYS + float(consumer.debt)
 		total += ceil(demand - 0.000001) if consumer.get("increment", false) else floor(demand + 0.000001)
 	# Separate increments must not lose a grain carried by the original army's debt.
-	return total + ceil(increment * days / MONTH_DAYS - 0.000001)
+	return total + ceil(maxf(float(change.get("field_food_delta", 0)), 0) * days / MONTH_DAYS - 0.000001)
