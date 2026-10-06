@@ -7,6 +7,31 @@ const COMMANDERY := 2
 const PRINCE := 3
 const CHILD_COUNTS := [0, 2, 3, 4, 5]
 const NAMES := ["无爵", "国公", "郡王", "一字王"]
+const PRINCELY_STATES := ["晋", "秦", "齐", "楚", "吴", "越", "宋"]
+
+## 封号只依赖世界种子、人物和等级，不推进模拟随机源，也不检查重名。
+static func name_for(world_seed: int, person_id: int, rank: int) -> String:
+	if rank == COMMON:
+		return NAMES[COMMON]
+	if rank == PRINCE:
+		return PRINCELY_STATES[WorldNaming.stable_index(world_seed, person_id, "royal/prince", PRINCELY_STATES.size())] + "王"
+	var title := ""
+	for slot in range(2 if rank == COMMANDERY else 1):
+		title += WorldNaming.GEOGRAPHIC_STEMS[WorldNaming.stable_index(world_seed, person_id, "royal/%d/%d" % [rank, slot], WorldNaming.GEOGRAPHIC_STEMS.size())]
+	return title + ("王" if rank == COMMANDERY else "国公")
+
+static func designation(state: GameState, member: Dictionary, rank: int) -> String:
+	if rank == COMMON:
+		return NAMES[COMMON]
+	var title := str(member.get("virtual_title_name", ""))
+	if not matches_rank(title, rank) and int(member.get("title_rank", 0)) == rank:
+		title = str(member.get("current_title", ""))
+	return title if matches_rank(title, rank) else name_for(state.world_seed, int(member.id), rank)
+
+static func matches_rank(title: String, rank: int) -> bool:
+	if rank == PRINCE:
+		return title.length() == 2 and title.ends_with("王") and title.substr(0, 1) in PRINCELY_STATES
+	return title.length() == 3 and title.ends_with("王" if rank == COMMANDERY else "国公")
 
 static func children(members: Dictionary, parent_id: int) -> Array[int]:
 	var result: Array[int] = []
@@ -30,19 +55,23 @@ static func set_member(state: GameState, member: Dictionary, key: String, value:
 		member[key] = value
 		state.family_revision += 1
 
-static func _grant(state: GameState, member: Dictionary, rank: int, payer: int, branch: int, adult: bool) -> void:
+static func _grant(state: GameState, member: Dictionary, rank: int, payer: int, branch: int, adult: bool, inherited_title: String = "") -> void:
 	var previous_rank := int(member.get("title_rank", 0))
+	var title := inherited_title if rank > 0 and not inherited_title.is_empty() else designation(state, member, rank)
 	set_member(state, member, "title_managed", true)
 	set_member(state, member, "title_rank", rank)
 	set_member(state, member, "title_payer_id", payer)
 	set_member(state, member, "title_branch_id", branch)
 	set_member(state, member, "title_adult", adult)
 	set_member(state, member, "title_disabled", false)
-	set_member(state, member, "current_title", NAMES[rank])
+	# 暂任储君时保留原封号，改储后可恢复；登基时由 accede 明确清除。
+	if rank > 0:
+		set_member(state, member, "virtual_title_name", title)
+	set_member(state, member, "current_title", title)
 	if rank > 0:
 		var titles: Array = member.get("titles", [])
-		if not titles.has(NAMES[rank]):
-			titles.append(NAMES[rank])
+		if not titles.has(title):
+			titles.append(title)
 			member["titles"] = titles
 			state.family_revision += 1
 	# 加授/继承升等时，只提升尚未成家的低爵孩子，保留成年家支的独立身份。
@@ -72,6 +101,21 @@ static func reconcile(state: GameState) -> void:
 		var members: Dictionary = tree.members
 		for id in members.keys():
 			var member: Dictionary = members[id]
+			# 旧家谱只有通用等级名；补具体封号，不重掷生育或改变爵位。
+			var rank := int(member.get("title_rank", 0))
+			if rank > 0 and str(member.get("virtual_title_name", "")).is_empty():
+				var title := designation(state, member, rank)
+				set_member(state, member, "virtual_title_name", title)
+				if str(member.get("current_title", "")) == NAMES[rank]:
+					set_member(state, member, "current_title", title)
+				var titles: Array = member.get("titles", [])
+				if not titles.has(title):
+					titles.append(title)
+					member["titles"] = titles
+					state.family_revision += 1
+			var restore := int(member.get("restorable_title_rank", 0))
+			if restore > 0 and str(member.get("restorable_title_name", "")).is_empty():
+				set_member(state, member, "restorable_title_name", name_for(state.world_seed, int(member.id), restore))
 			if effective_rank(state, member) > 0 and bool(member.get("title_adult", false)):
 				_generate_children(state, member)
 	state.set_meta("royal_reconcile_revision", state.family_revision)
@@ -102,6 +146,8 @@ static func grant_generation(state: GameState, nation_id: int) -> void:
 			# 太祖晋帝时补授已有实封儿子的待恢复资格，不支付双份俸禄。
 			if nation.ruler_person_id == nation.empire_founder_person_id and int(member.get("parent_id", -1)) == nation.ruler_person_id and EmpireStatus.peaceful_root(state, int(member.enfeoffed_nation_id)) == EmpireStatus.peaceful_root(state, nation_id):
 				set_member(state, member, "restorable_title_rank", PRINCE)
+				if not matches_rank(str(member.get("restorable_title_name", "")), PRINCE):
+					set_member(state, member, "restorable_title_name", name_for(state.world_seed, id, PRINCE))
 				var subject_id := int(member.enfeoffed_nation_id)
 				if subject_id < state.nations.size() and state.nations[subject_id].alive and not state.nations[subject_id].royal_titles_initialized:
 					state.nations[subject_id].royal_titles_initialized = true
@@ -221,14 +267,14 @@ static func _inherit(state: GameState, nation_id: int, deaths: Array[Dictionary]
 			else:
 				claimed[heir] = true
 				pools[int(deceased.branch)].erase(heir)
-				_grant(state, members[heir], rank, nation_id, int(deceased.branch), bool(members[heir].get("title_adult", false)))
+				_grant(state, members[heir], rank, nation_id, int(deceased.branch), bool(members[heir].get("title_adult", false)), designation(state, members[int(deceased.id)], rank))
 		for deceased in unresolved:
 			var pool: Dictionary = pools.get(int(deceased.branch), {})
 			var heir := _nearest_collateral(members, links, int(deceased.id), pool)
 			if heir >= 0:
 				claimed[heir] = true
 				pool.erase(heir)
-				_grant(state, members[heir], rank, nation_id, int(deceased.branch), bool(members[heir].get("title_adult", false)))
+				_grant(state, members[heir], rank, nation_id, int(deceased.branch), bool(members[heir].get("title_adult", false)), designation(state, members[int(deceased.id)], rank))
 
 
 static func advance_generation(state: GameState, nation_id: int, incoming_ruler: int, protected_people: Array[int] = []) -> void:
@@ -268,6 +314,7 @@ static func enfeoff(state: GameState, old_nation: int, new_nation: int, person_i
 	var restored := int(member.get("title_rank", 0))
 	set_member(state, member, "title_branch_id", int(member.get("title_branch_id", person_id)))
 	set_member(state, member, "restorable_title_rank", restored)
+	set_member(state, member, "restorable_title_name", designation(state, member, restored) if restored > 0 else "")
 	set_member(state, member, "title_rank", COMMON)
 	set_member(state, member, "crown", false)
 	set_member(state, member, "enfeoffed_nation_id", new_nation)
@@ -305,7 +352,7 @@ static func annex(state: GameState, absorber: int, absorbed_ids: Dictionary) -> 
 			set_member(state, member, "crown", false)
 			if same_tree and bool(member.get("alive", true)):
 				if int(member.id) == former.ruler_person_id:
-					_grant(state, member, int(member.get("restorable_title_rank", 0)), absorber, int(member.get("title_branch_id", member.id)), true)
+					_grant(state, member, int(member.get("restorable_title_rank", 0)), absorber, int(member.get("title_branch_id", member.id)), true, str(member.get("restorable_title_name", "")))
 				else:
 					set_member(state, member, "title_payer_id", absorber)
 					if int(member.id) == former.crown_prince_person_id:

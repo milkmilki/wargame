@@ -22,6 +22,7 @@ static func ensure_nation_lineage(state: GameState, nation_id: int) -> void:
 		and state.family_trees.has(nation.family_tree_id)
 		and nation.ruler_person_id >= 0
 	):
+		_ensure_surname(state, nation_id)
 		record_current_title(state, nation_id)
 		return
 	var tree_id := state.next_family_tree_id
@@ -30,6 +31,7 @@ static func ensure_nation_lineage(state: GameState, nation_id: int) -> void:
 	var ruler_id := _next_person_id(state)
 	state.family_trees[tree_id] = {
 		"id": tree_id,
+		"surname": WorldNaming.ruler_surname(_person_name(nation.ruler_name)),
 		"root_person_id": root_id,
 		"members": {
 			root_id: _member(root_id, "？", -1, -1),
@@ -63,7 +65,8 @@ static func record_enfeoffment(
 	var person_id := reused_person_id
 	if person_id < 0:
 		person_id = _next_person_id(state)
-		members[person_id] = _member(person_id, _person_name(subject.ruler_name), parent_id, subject_id)
+		subject.ruler_name = surname_for_nation(state, overlord_id) + _person_name(subject.ruler_name).substr(1)
+		members[person_id] = _member(person_id, subject.ruler_name, parent_id, subject_id)
 		if members.has(parent_id):
 			var child_ids := RoyalTitles.children(members, parent_id)
 			if not child_ids.has(person_id):
@@ -100,6 +103,7 @@ static func record_succession(
 	if not members.has(parent_id):
 		parent_id = int(tree["root_person_id"])
 	var person_id := _next_person_id(state)
+	nation.ruler_name = surname_for_nation(state, nation_id) + _person_name(nation.ruler_name).substr(1)
 	members[person_id] = _member(
 		person_id, _person_name(nation.ruler_name), parent_id, nation_id
 	)
@@ -150,6 +154,38 @@ static func tree_for_nation(state: GameState, nation_id: int) -> Dictionary:
 		return {}
 	var tree_id := state.nations[nation_id].family_tree_id
 	return state.family_trees.get(tree_id, {}) as Dictionary
+
+
+static func surname_for_nation(state: GameState, nation_id: int) -> String:
+	var tree := tree_for_nation(state, nation_id)
+	if not str(tree.get("surname", "")).is_empty():
+		return str(tree.surname)
+	# 旧谱的初代君主最早入谱；未知先祖和补录祖链不作为姓氏来源。
+	var members: Dictionary = tree.get("members", {})
+	var ids := members.keys()
+	ids.sort()
+	for id in ids:
+		var name := str(members[id].get("name", "？"))
+		if name not in ["？", "未载名", ""]:
+			return WorldNaming.ruler_surname(name)
+	return WorldNaming.ruler_surname(state.nations[nation_id].ruler_name)
+
+
+static func _ensure_surname(state: GameState, nation_id: int) -> void:
+	var tree := tree_for_nation(state, nation_id)
+	if tree.has("surname"):
+		return
+	var surname := surname_for_nation(state, nation_id)
+	tree["surname"] = surname
+	for member in tree.members.values():
+		var name := str(member.get("name", "？"))
+		if name not in ["？", "未载名", ""]:
+			member["name"] = surname + name.substr(1)
+	for nation in state.nations:
+		if nation.family_tree_id == int(tree.id) and tree.members.has(nation.ruler_person_id):
+			nation.ruler_name = str(tree.members[nation.ruler_person_id].name)
+	state.family_revision += 1
+	state.naming_revision += 1
 
 
 static func title_for_nation(state: GameState, nation_id: int) -> String:

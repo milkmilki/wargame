@@ -132,9 +132,10 @@ func _test_disabled_title_display() -> void:
 	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
 	var root := int(FamilyTree.tree_for_nation(state, 0).root_person_id)
 	var prince := state.nations[0].prince_person_ids[1]
+	var original_title := str(members[prince].current_title)
 	check(int(members[prince].title_rank) == 3, "foreign annex display fixture has a live virtual prince")
 	state.set_diplomatic_relation(1, 0, GameState.DiplomaticRelation.WAR)
 	check(state.annex_nation(1, 0), "real foreign-tree annex")
 	check(bool(members[prince].title_disabled) and RoyalTitles.effective_rank(state, members[prince]) == 0, "foreign annex disables effective virtual title")
-	check(FamilyTree.display_title(members[prince], prince, root) != RoyalTitles.NAMES[3], "disabled virtual title must not display as an active prince title")
-	check((members[prince].titles as Array).has(RoyalTitles.NAMES[3]), "foreign annex retains original title in historical archive")
+	check(FamilyTree.display_title(members[prince], prince, root) != original_title, "disabled virtual title must not display as an active prince title")
+	check((members[prince].titles as Array).has(original_title), "foreign annex retains original title in historical archive")

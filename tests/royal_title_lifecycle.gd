@@ -48,10 +48,24 @@ func _test_enfeoff_revoke() -> void:
 	promote(state, 0)
 	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
 	var ids := members.keys()
+	var original_titles := {}
+	for id in ids:
+		original_titles[id] = str(members[id].get("current_title", ""))
+	var history := PoliticalHistory.new()
+	history.reset(state)
 	var subject := enfeoff(state, 0)
 	check(subject >= 0, "actual enfeoffment succeeds")
 	if subject < 0: return
 	var king := state.nations[subject].ruler_person_id
+	var original_title: String = original_titles[king]
+	var past := history.build_view_state(state, 0)
+	check(PrincePolitics.person(past, 0, king).current_title == original_title, "history freezes the original virtual designation before real enfeoffment")
+	var snapshot := NativeSnapshotBuilder.build(state)
+	for tree in snapshot.family_trees:
+		if int(tree.id) != state.nations[0].family_tree_id: continue
+		for member in tree.members:
+			if int(member.id) == king:
+				check(member.restorable_title_name == original_title, "native genealogy snapshot retains the suspended designation")
 	FamilyFixture.ensure_candidates(state, subject, 2)
 	check(ids.has(king), "enfeoffment reuses original person")
 	check(members[king].restorable_title_rank == 3 and RoyalTitles.effective_rank(state, members[king]) == 0, "fief replaces stipend while retaining qualification")
@@ -67,7 +81,7 @@ func _test_enfeoff_revoke() -> void:
 	for id in members:
 		blood[id] = int(members[id].parent_id)
 	check(state.revoke_vassal(subject), "real revoke transaction succeeds")
-	check(members[old_crown].title_rank == 3 and members[old_crown].current_title == "一字王", "revocation restores only current virtual title")
+	check(members[old_crown].title_rank == 3 and members[old_crown].current_title == original_title, "revocation restores the exact inherited virtual title")
 	check(state.nations[subject].absorbed_into_nation_id == 0, "annex archive records actual destination")
 	check(TitleAudit.inspect(state).is_empty(), "revoke preserves cohorts of already reproducing families")
 	for id in blood:
@@ -115,6 +129,7 @@ func _test_late_recognition() -> void:
 	EmpireStatus.reconcile(state)
 	var member := PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id)
 	check(member.restorable_title_rank == 3, "Taizu retroactively qualifies already landed son")
+	check(RoyalTitles.matches_rank(str(member.restorable_title_name), 3), "retroactive landed qualification has a saved one-character designation")
 	check(state.nations[subject].royal_titles_initialized, "country fief carries inherited institution")
 	check(state.nations[subject].empire_founder_person_id == -1 and state.nations[subject].state_level == 0, "inherited institution creates no second Taizu")
 	for id in state.nations[subject].prince_person_ids:

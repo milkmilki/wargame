@@ -32,20 +32,26 @@ func _test_direct_and_collateral() -> void:
 	var state := fixture()
 	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
 	var direct := {}
+	var direct_titles := {}
 	for rank in [3, 2, 1]:
 		var head := add_person(state, state.nations[0].ruler_person_id, rank, -1, true)
 		var elder := add_person(state, head, rank - 1, head, false)
 		members[elder].alive = false # Fixture: eldest child died before succession.
 		var heir := add_person(state, head, rank - 1, head, false)
 		direct[heir] = rank
+		direct_titles[heir] = members[head].current_title
 	var childless := add_person(state, state.nations[0].ruler_person_id, 3, -1, true)
 	var collateral := add_person(state, state.nations[0].ruler_person_id, 2, childless, true)
 	var candidate := add_person(state, collateral, 1, childless, false)
+	var childless_title := str(members[childless].current_title)
+	var collateral_title := str(members[collateral].current_title)
 	check(PrincePolitics.accede(state, 0), "real succession advances entire cohort")
 	for heir in direct:
 		check(members[heir].title_rank == direct[heir], "next living eldest inherits each original tier")
+		check(members[heir].current_title == direct_titles[heir], "each tier inherits the exact original designation")
 	check(members[candidate].title_rank == 3, "childless highest tier uses nearest collateral")
-	check(not members[candidate].titles.has("郡王"), "one person cannot additionally inherit the lower title")
+	check(members[candidate].current_title == childless_title, "childless prince's collateral inherits his exact designation")
+	check(not members[candidate].titles.has(collateral_title), "one person cannot additionally inherit the lower title")
 	check(Audit.inspect(state).is_empty(), "cohort and collateral allocation preserve title invariants")
 
 func _test_twenty_five_generations() -> void:

@@ -62,6 +62,7 @@ static func _create_person(state: GameState, nation_id: int, parent_id: int, ord
 		child_ids.append(id)
 		members[parent_id]["child_ids"] = child_ids
 	var name := WorldNaming.person_name_for(state.world_seed, nation_id, salt)
+	name = FamilyTree.surname_for_nation(state, nation_id) + name.substr(1)
 	members[id] = {"id": id, "name": name, "parent_id": parent_id, "child_ids": [], "children_initialized": false, "titles": [], "nation_ids": [],
 		"archetype": RulerProfile.archetype_for(state.world_seed, nation_id, salt),
 		"traits": RulerProfile.traits_for(state.world_seed, nation_id, salt),
@@ -243,6 +244,8 @@ static func accede(state: GameState, nation_id: int) -> bool:
 	member["crown"] = false
 	member["title_rank"] = 0
 	member["restorable_title_rank"] = int(previous.get("restorable_title_rank", 0)) if was_fief else 0
+	member["restorable_title_name"] = str(previous.get("restorable_title_name", "")) if was_fief else ""
+	member["virtual_title_name"] = ""
 	member["enfeoffed_nation_id"] = -1
 	if was_fief:
 		member["enfeoffed_nation_id"] = nation_id

@@ -23,6 +23,7 @@ var _mode_select: OptionButton
 var _history_scroll: ScrollContainer
 var _history: VBoxContainer
 var _history_font: Font
+var _tree_scroll: ScrollContainer
 
 
 func _ready() -> void:
@@ -103,13 +104,13 @@ func _rebuild_relations() -> void:
 		label.text = line
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.custom_minimum_size.x = 210
-		label.add_theme_font_override("font", MapRenderer.create_ui_font())
+		label.add_theme_font_override("font", _history_font)
 		label.add_theme_font_size_override("font_size", 14)
 		_relations.add_child(label)
 	var summary := Label.new()
 	summary.text = RoyalTitles.summary(_state, _nation_id)
 	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	summary.add_theme_font_override("font", MapRenderer.create_ui_font())
+	summary.add_theme_font_override("font", _history_font)
 	summary.add_theme_font_size_override("font_size", 14)
 	_relations.add_child(summary)
 	var census := RoyalTitles.report(_state, _nation_id)
@@ -141,7 +142,7 @@ func _rebuild_relations() -> void:
 func _add_title_group(rank: int, ids: Array) -> void:
 	var button := Button.new()
 	button.text = "%s %d人  ▸" % [RoyalTitles.NAMES[rank], ids.size()]
-	button.add_theme_font_override("font", MapRenderer.create_ui_font())
+	button.add_theme_font_override("font", _history_font)
 	_relations.add_child(button)
 	var content := VBoxContainer.new()
 	content.visible = false
@@ -158,8 +159,10 @@ func _append_title_page(content: VBoxContainer, ids: Array, offset: int) -> void
 	for index in range(offset, mini(offset + 40, ids.size())):
 		var member: Dictionary = members.get(int(ids[index]), {})
 		var label := Label.new()
-		label.text = "%s · %s%s" % [member.get("name", "？"), RoyalTitles.NAMES[int(member.get("title_rank", 0))], "" if bool(member.get("title_adult", false)) else "（待继承）"]
-		label.add_theme_font_override("font", MapRenderer.create_ui_font())
+		label.text = "%s · %s%s" % [member.get("name", "？"), FamilyTree.display_title(member, int(ids[index]), -1), "" if bool(member.get("title_adult", false)) else "（待继承）"]
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size.x = 210
+		label.add_theme_font_override("font", _history_font)
 		label.add_theme_font_size_override("font_size", 13)
 		content.add_child(label)
 	if offset + 40 < ids.size():
@@ -203,8 +206,8 @@ func _set_mode(mode: int) -> void:
 	_mode = clampi(mode, 0, 1)
 	if _mode_select != null and _mode_select.selected != _mode:
 		_mode_select.select(_mode)
-	if _tree_canvas != null:
-		_tree_canvas.visible = _mode == 0
+	if _tree_scroll != null:
+		_tree_scroll.visible = _mode == 0
 	if _history_scroll != null:
 		_history_scroll.visible = _mode == 1
 
@@ -223,7 +226,7 @@ func _add_relation(role: String, nation_id: int) -> void:
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.custom_minimum_size.y = 40.0
-	button.add_theme_font_override("font", MapRenderer.create_ui_font())
+	button.add_theme_font_override("font", _history_font)
 	button.pressed.connect(navigate_to.bind(nation_id))
 	_relations.add_child(button)
 
@@ -255,12 +258,30 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _build_ui() -> void:
-	var font := MapRenderer.create_ui_font()
-	_history_font = MapRenderer.create_map_label_font()
+	var font := FontVariation.new()
+	font.base_font = MapRenderer.create_map_label_font()
+	font.variation_embolden = 1.2
+	_history_font = font
 	_overlay = Control.new()
 	_overlay.name = "FamilyTreeOverlay"
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var page_theme := Theme.new()
+	page_theme.default_font = font
+	for type in ["Label", "Button", "OptionButton", "PopupMenu", "TooltipLabel"]:
+		for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color", "font_hover_pressed_color"]:
+			page_theme.set_color(color_name, type, Color.BLACK)
+	for type in ["Button", "OptionButton"]:
+		for style_name in ["normal", "hover", "pressed", "disabled", "hover_pressed"]:
+			var style := StyleBoxFlat.new()
+			style.bg_color = Color(0.94, 0.87, 0.71) if style_name in ["normal", "disabled"] else Color(0.98, 0.93, 0.82)
+			style.border_color = MapRenderer.INK_COLOR
+			style.set_border_width_all(1)
+			style.set_content_margin_all(8)
+			page_theme.set_stylebox(style_name, type, style)
+	page_theme.set_stylebox("panel", "PopupMenu", page_theme.get_stylebox("normal", "Button"))
+	page_theme.set_stylebox("hover", "PopupMenu", page_theme.get_stylebox("hover", "Button"))
+	_overlay.theme = page_theme
 	add_child(_overlay)
 
 	var dim := ColorRect.new()
@@ -301,9 +322,9 @@ func _build_ui() -> void:
 	_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_title.add_theme_font_override("font", font)
 	_title.add_theme_font_size_override("font_size", 20)
-	_title.add_theme_color_override("font_color", MapRenderer.PAPER_LIGHT)
+	_title.add_theme_color_override("font_color", Color.BLACK)
 	var title_style := StyleBoxFlat.new()
-	title_style.bg_color = MapRenderer.COMMAND_GREEN
+	title_style.bg_color = Color(0.94, 0.87, 0.71)
 	title_style.content_margin_left = 18.0
 	_title.add_theme_stylebox_override("normal", title_style)
 	header.add_child(_title)
@@ -311,6 +332,7 @@ func _build_ui() -> void:
 	_mode_select.name = "Mode"
 	_mode_select.add_item("家族树")
 	_mode_select.add_item("历史记录")
+	_mode_select.get_popup().theme = page_theme
 	_mode_select.custom_minimum_size = Vector2(120.0, 42.0)
 	_mode_select.item_selected.connect(_on_mode_selected)
 	header.add_child(_mode_select)
@@ -345,6 +367,7 @@ func _build_ui() -> void:
 	_relations.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	relation_scroll.add_child(_relations)
 	var scroll := ScrollContainer.new()
+	_tree_scroll = scroll
 	scroll.name = "TreeScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -369,6 +392,9 @@ func _build_ui() -> void:
 	_tree_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tree_canvas.set("font", font)
 	scroll.add_child(_tree_canvas)
+	# 滚动仅改变画布位置，不会自动重画；视口裁剪必须随两轴滚动刷新。
+	scroll.get_h_scroll_bar().value_changed.connect(func(_value: float): _tree_canvas.queue_redraw())
+	scroll.get_v_scroll_bar().value_changed.connect(func(_value: float): _tree_canvas.queue_redraw())
 
 
 class FamilyTreeCanvas extends Control:
@@ -460,7 +486,7 @@ class FamilyTreeCanvas extends Control:
 		if members.is_empty():
 			draw_string(
 				font, Vector2(30.0, 54.0), "暂无谱系记录",
-				HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, MapRenderer.INK_COLOR
+				HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color.BLACK
 			)
 			return
 		_draw_generation_bands()
@@ -529,12 +555,12 @@ class FamilyTreeCanvas extends Control:
 		draw_string(
 			font, rect.position + Vector2(10.0, 29.0), name,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20.0, 16,
-			MapRenderer.INK_COLOR
+			Color.BLACK
 		)
 		draw_string(
 			font, rect.position + Vector2(10.0, 55.0), title_text,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20.0, 12,
-			Color(MapRenderer.INK_COLOR, 0.78)
+			Color.BLACK
 		)
 		var badges: Array[String] = []
 		if bool(member.get("taizu", false)): badges.append("太祖")
@@ -547,7 +573,7 @@ class FamilyTreeCanvas extends Control:
 			draw_string(
 				font, rect.position + Vector2(10.0, 15.0), " · ".join(badges),
 				HORIZONTAL_ALIGNMENT_RIGHT, rect.size.x - 20.0, 10,
-				MapRenderer.ACCENT_RED
+				Color.BLACK
 			)
 
 
@@ -631,5 +657,5 @@ class FamilyTreeCanvas extends Control:
 			draw_string(
 				font, Vector2(10.0, row_y + CARD_SIZE.y * 0.5 + 4.0),
 				generation_label, HORIZONTAL_ALIGNMENT_CENTER, 38.0, 11,
-				Color(MapRenderer.INK_COLOR, 0.46)
+				Color.BLACK
 			)
