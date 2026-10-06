@@ -63,9 +63,6 @@ func _test_nation_redraw_builds_once(
 	var nation_id := _pick_alive_nation_id(state)
 	var expected_sections := MapRenderer.nation_detail_sections(state, nation_id)
 	var expected_signature := _section_signature(expected_sections)
-	var expected_line_count := (
-		_section_visual_line_count(expected_sections)
-	)
 
 	MapRenderer.reset_nation_detail_section_build_count()
 	renderer.select_nation(nation_id)
@@ -83,7 +80,22 @@ func _test_nation_redraw_builds_once(
 	MapRenderer.reset_nation_detail_section_build_count()
 	var payload := renderer._selection_detail_payload()
 	var payload_sections := payload.get("sections", []) as Array[Dictionary]
-	var payload_signature := _section_signature(payload_sections)
+	var base_sections: Array[Dictionary] = []
+	var debug_sections: Array[Dictionary] = []
+	for section in payload_sections:
+		if str(section.get("id", "")) == "nation.debug_war":
+			debug_sections.append(section)
+		else:
+			base_sections.append(section)
+	_check(debug_sections.size() == 1, "nation/one_debug_section")
+	if debug_sections.size() == 1:
+		_check(
+			not bool(debug_sections[0].get("default_expanded", true))
+			and (debug_sections[0].get("lines", []) as Array).is_empty(),
+			"nation/debug_section_collapsed_without_evaluation"
+		)
+	var payload_signature := _section_signature(base_sections)
+	var expected_line_count := _section_visual_line_count(payload_sections)
 	_check(
 		payload_signature == expected_signature,
 		"nation/payload_sections_match_static_sections",

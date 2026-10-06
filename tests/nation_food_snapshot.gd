@@ -53,7 +53,7 @@ func _test_legacy_defaults_and_zero_trade_ui() -> void:
 
 	var state := _make_single_nation_state()
 	var sections := MapRenderer.nation_detail_sections(state, 0)
-	var trade_line := _section_line(sections, "财政与军费", 3)
+	var trade_line := _section_line_matching(sections, "财政与军费", "商路 ")
 	_check(
 		sections.size() > 0,
 		"legacy/nation_detail_sections_no_error"
@@ -164,7 +164,7 @@ func _test_monthly_snapshot_and_ui_math() -> void:
 	var sections_0 := MapRenderer.nation_detail_sections(state, 0)
 
 	var food_line_0 := _section_line(sections_0, "粮食储备", 2)
-	var trade_line_0 := _section_line(sections_0, "财政与军费", 3)
+	var trade_line_0 := _section_line_matching(sections_0, "财政与军费", "商路 ")
 	_check(
 		food_line_0.find("粮仓 %d / %d" % [
 			nation_0.granary_food, state.food_storage_capacity(0),
@@ -738,6 +738,16 @@ func _make_rounding_fixture_state() -> GameState:
 	for city in state.cities:
 		city.is_capital = city.id == center_id
 	return state
+
+
+func _section_line_matching(sections: Array[Dictionary], title: String, marker: String) -> String:
+	for section in sections:
+		if str(section.get("title", "")) != title:
+			continue
+		for line in section.get("lines", []):
+			if marker in str(line):
+				return str(line)
+	return ""
 
 
 func _section_line(

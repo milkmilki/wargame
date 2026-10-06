@@ -6,6 +6,8 @@ extends SceneTree
 var _checks: int = 0
 var _failures: Array[String] = []
 
+const RulerFamilyFixture = preload("res://tests/ruler_family_fixture.gd")
+
 
 func _init() -> void:
 	call_deferred("_run")
@@ -221,6 +223,7 @@ func _test_public_helpers_and_targets() -> void:
 func _test_vassal_capital_loyalty_restores_after_enfeoff() -> void:
 	var state := _make_linear_state(11, 0)
 	_configure_ruler(state.nations[0], RulerProfile.INEPT)
+	RulerFamilyFixture.ensure_candidates(state, 0)
 	var before := RebellionSystem.loyalty_target(state, 8)
 	var region := state.normalize_enfeoff_region(0, [8] as Array[int])
 	var subject_id := state.enfeoff(0, region)
@@ -244,6 +247,10 @@ func _test_vassal_capital_loyalty_restores_after_enfeoff() -> void:
 func _test_ai_enfeoff_governance_trigger() -> void:
 	var state := _make_linear_state(14, 2)
 	_configure_ruler(state.nations[0], RulerProfile.INEPT)
+	# AI evaluation is read-only and cannot invent a prince. This scenario
+	# requires an actual eligible non-heir before testing governance policy.
+	RulerFamilyFixture.ensure_candidates(state, 0)
+	_check(PrincePolitics.enfeoff_candidate(state, 0, false) >= 0, "fixture/eligible_enfeoff_candidate")
 	var region: Array[int] = [11, 12, 13]
 	for city_id in region:
 		state.cities[city_id].gold_per_month = 1
@@ -375,6 +382,8 @@ func _test_ai_enfeoff_governance_trigger() -> void:
 
 	var shallow_state := _make_linear_state(14, 2)
 	_configure_ruler(shallow_state.nations[0], RulerProfile.BALANCED)
+	RulerFamilyFixture.ensure_candidates(shallow_state, 0)
+	_check(PrincePolitics.enfeoff_candidate(shallow_state, 0, false) >= 0, "fixture/shallow_has_eligible_candidate")
 	for city_id in range(7, 13):
 		shallow_state.cities[city_id].owner_nation = 1
 		shallow_state.recognized_city_owners[city_id] = 1

@@ -7420,6 +7420,7 @@ func _test_retreat_contact_and_position_continuity() -> void:
 		arrived.is_equal_approx(renderer._grid_to_pixel(follow_target)),
 		"超过一个 tick 时长后必须精确停在目标位置，永不越过"
 	)
+	strategic_map.free()
 	renderer.free()
 	sim.free()
 
