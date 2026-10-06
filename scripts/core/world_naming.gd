@@ -416,7 +416,7 @@ static func assign_vassal_name(
 	return nation.name
 
 
-## 归附仅授予称号，不重新抽取君主姓名或改变其血缘。
+## 归附保留原国号加「王」，允许重名；国家以 ID 区分，不给封号追加编号。
 static func assign_submitted_vassal_name(game_state, subject_id: int) -> String:
 	if not _valid_nation_id(game_state, subject_id):
 		return ""
@@ -424,13 +424,7 @@ static func assign_submitted_vassal_name(game_state, subject_id: int) -> String:
 	var base := str(nation.short_name).trim_suffix("王")
 	if base.is_empty():
 		base = str(nation.name).trim_suffix("王")
-	var registry := _registry(game_state, _NATION_REGISTRY_META)
-	_backfill_nation_registry(game_state, registry, subject_id)
 	var formal := base + "王"
-	var collision := 0
-	while not _reserve(registry, formal, subject_id):
-		collision += 1
-		formal = base + _chinese_digits(subject_id + 1) + (_chinese_digits(collision) if collision > 1 else "") + "王"
 	nation.vassal_title_base = formal.trim_suffix("王")
 	nation.name_kind = KIND_VASSAL
 	nation.short_name = formal

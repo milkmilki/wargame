@@ -247,6 +247,10 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 	var nation := state.nations[conflict.nation_id]
 	var challenger_name := str(PrincePolitics.person(state, nation.id, conflict.challenger_person_id).get("name", "皇子"))
 	var crown_name := str(PrincePolitics.person(state, nation.id, conflict.crown_person_id).get("name", "太子"))
+	# Freeze the old style before death/title settlement or promotion to crown prince.
+	var challenger_title := str(PrincePolitics.person(state, nation.id, conflict.challenger_person_id).get("current_title", ""))
+	if challenger_title.is_empty() or challenger_title == "无爵": challenger_title = "无爵宗室"
+	var crown_previous_title := str(PrincePolitics.person(state, nation.id, conflict.crown_person_id).get("virtual_title_name", ""))
 	var receiver := nation.id
 	if not nation.alive:
 		receiver = state.cities[conflict.capital_city_id].owner_nation
@@ -288,15 +292,6 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 		state.nations[conflict.rebel_nation_id].battle_groups.clear()
 	state.release_campaign_front(conflict.offense_front_id)
 	state.release_campaign_front(conflict.defense_front_id)
-	record(state, conflict, "finish", {"outcome": conflict.pending_outcome, "delayed": conflict.succession_delayed, "reason": conflict.resolution_reason})
-	var result_text := "%d年 皇子%s兵变，%s平之" % [int(state.day / 360) + 1, challenger_name, crown_name]
-	if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED:
-		result_text = "%d年 皇子%s兵变，改立%s为太子" % [int(state.day / 360) + 1, challenger_name, challenger_name]
-	elif conflict.resolution_reason == "no_progress":
-		result_text = "%d年 皇子%s兵变，久无进展，事败" % [int(state.day / 360) + 1, challenger_name]
-	elif conflict.resolution_reason == "field_defeat":
-		result_text = "%d年 皇子%s兵变，野战败于%s，事败" % [int(state.day / 360) + 1, challenger_name, crown_name]
-	state.chronicle_events.append({"day": state.day, "year": int(state.day / 360) + 1, "kind": "succession", "actor_ids": [conflict.nation_id], "person_ids": [conflict.challenger_person_id, conflict.crown_person_id], "result": "success" if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED else "failure", "text": result_text})
 	state.succession_conflicts.erase(nation.id)
 	if conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:
 		RoyalTitles.settle_death(state, nation.id, conflict.challenger_person_id)
@@ -307,4 +302,41 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 	state.family_revision += 1
 	state.diplomacy_revision += 1
 	state.refresh_derived()
+	_record_result(state, conflict, challenger_title, challenger_name, crown_name, crown_previous_title)
 	return true
+
+static func _record_result(state: GameState, conflict: SuccessionConflict, challenger_title: String, challenger_name: String, crown_name: String, crown_previous_title: String) -> void:
+	var opening := "%d年 %s%s兵变，" % [int(state.day / 360) + 1, challenger_title, challenger_name]
+	var result_text := opening + "皇太子%s平之" % crown_name
+	var former_crown := {}
+	if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED:
+		var member := PrincePolitics.person(state, conflict.nation_id, conflict.crown_person_id)
+		var rank := RoyalTitles.effective_rank(state, member)
+		former_crown = {"person_id": conflict.crown_person_id, "name": crown_name,
+			"status": "untitled", "title": "", "rank": rank}
+		var disposition := "废太子%s未授爵" % crown_name
+		var fief := int(member.get("enfeoffed_nation_id", -1))
+		if not bool(member.get("alive", true)):
+			former_crown.status = "dead"
+			disposition = "废太子%s已故，未再授爵" % crown_name
+		elif fief >= 0 and fief < state.nations.size() and state.nations[fief].alive:
+			former_crown.status = "enfeoffed"
+			former_crown.title = WorldNaming.nation_display_name(state, fief)
+			disposition = "废太子%s仍领实封%s" % [crown_name, former_crown.title]
+		elif rank > 0:
+			former_crown.title = RoyalTitles.designation(state, member, rank)
+			former_crown.status = "restored" if former_crown.title == crown_previous_title else "granted"
+			disposition = "废太子%s%s%s" % [crown_name, "恢复原爵" if former_crown.status == "restored" else "封为", former_crown.title]
+		result_text = opening + "废皇太子%s，改立%s为皇太子；%s" % [crown_name, challenger_name, disposition]
+	elif conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE:
+		result_text = opening + "因外部干扰而止"
+	elif conflict.resolution_reason == "no_progress":
+		result_text = opening + "久无进展，事败"
+	elif conflict.resolution_reason == "field_defeat":
+		result_text = opening + "野战败于皇太子%s，事败" % crown_name
+	record(state, conflict, "finish", {"outcome": conflict.pending_outcome, "delayed": conflict.succession_delayed,
+		"reason": conflict.resolution_reason, "challenger_title": challenger_title, "former_crown": former_crown})
+	state.chronicle_events.append({"day": state.day, "year": int(state.day / 360) + 1, "kind": "succession",
+		"actor_ids": [conflict.nation_id], "person_ids": [conflict.challenger_person_id, conflict.crown_person_id],
+		"result": "success" if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED else "failure",
+		"challenger_title": challenger_title, "former_crown": former_crown, "text": result_text})
