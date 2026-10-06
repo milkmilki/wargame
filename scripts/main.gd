@@ -79,6 +79,7 @@ extends Node
 )
 
 var state: GameState
+var _debug_run_log: DebugRunLog
 var _seed: int = 12345
 var _speed_mult: float = 1.0
 var _settings_previous_pause: bool = false
@@ -97,6 +98,10 @@ var _history_previous_map_mode: int = MapRenderer.MapMode.POLITICAL
 
 
 func _ready() -> void:
+	if OS.is_debug_build():
+		_debug_run_log = DebugRunLog.new()
+		var log_error := _debug_run_log.begin(scene_file_path)
+		if log_error != OK: push_warning("无法创建调试运行日志：" + error_string(log_error))
 	_setup_display_settings()
 	_setup_political_history()
 	if family_tree_panel != null:
@@ -306,6 +311,8 @@ func _on_road_regenerate_requested(settings: Dictionary) -> void:
 		)
 		return
 	simulation.on_road_network_rebuilt()
+	if _debug_run_log != null:
+		_debug_run_log.record("road_network_rebuilt", {"day": state.day, "seed": state.world_seed, "settings": settings.duplicate(true)})
 	renderer.refresh_road_network()
 	var protected_count := int(result.get("protected_count", 0))
 	var protected_text := (
@@ -491,6 +498,10 @@ func _rebuild_scenario_from_edited_map(message: String) -> void:
 
 
 func _start_new_game(world_seed: int) -> void:
+	if _debug_run_log != null:
+		var settings := _debug_generation_settings()
+		settings["city_layout_seed"] = world_seed if randomize_world_seed_on_start else 0
+		_debug_run_log.record("generation_requested", {"seed": world_seed, "settings": settings, "source": "generated"})
 	var next_state := GameState.new()
 	if use_grid_world:
 		next_state.generate_grid_world(world_seed)
@@ -532,6 +543,8 @@ func _start_new_game(world_seed: int) -> void:
 		)
 	nation_count = next_state.nations.size()
 	_activate_state(next_state)
+	if _debug_run_log != null:
+		_debug_run_log.world_started(state, _debug_generation_settings(), "generated")
 
 
 func _start_from_map_definition(definition: Dictionary) -> void:
@@ -543,6 +556,23 @@ func _start_from_map_definition(definition: Dictionary) -> void:
 	_political_mask_path = next_state.political_mask_path
 	_city_density_settings = next_state.city_density_settings.duplicate(true)
 	_activate_state(next_state)
+	if _debug_run_log != null:
+		_debug_run_log.world_started(state, _debug_generation_settings(), "map_definition")
+
+
+func _debug_generation_settings() -> Dictionary:
+	return {"use_grid_world": use_grid_world, "nation_count": nation_count,
+		"terrain_city_count": terrain_city_count, "configured_world_seed": world_seed,
+		"randomize_world_seed_on_start": randomize_world_seed_on_start,
+		"city_layout_seed": state.world_seed if state != null and randomize_world_seed_on_start else 0,
+		"terrain_source": GameState.terrain_map_path(), "city_mask": _city_generation_mask_path,
+		"political_mask": _political_mask_path, "city_density": _city_density_settings.duplicate(true),
+		"single_nation_name": initial_single_nation_name, "single_nation_archetype": initial_single_nation_ruler_archetype,
+		"history_interval_days": history_interval_days, "speed_multiplier": _speed_mult}
+
+
+func _exit_tree() -> void:
+	if _debug_run_log != null: _debug_run_log.close(state)
 
 
 func _activate_state(next_state: GameState) -> void:
@@ -601,6 +631,7 @@ func _activate_state(next_state: GameState) -> void:
 func _on_history_day_committed(_day: int) -> void:
 	if _history_active:
 		return
+	if _debug_run_log != null: _debug_run_log.checkpoint(state)
 	_political_history.maybe_capture(state)
 	if history_timeline != null:
 		history_timeline.set_history_points(
