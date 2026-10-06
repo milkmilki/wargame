@@ -200,6 +200,15 @@ static func title_for_nation(state: GameState, nation_id: int) -> String:
 	return display_name + ("帝" if nation.state_level == EmpireStatus.EMPIRE else "君")
 
 
+static func was_emperor(member: Dictionary) -> bool:
+	if str(member.get("current_title", "")).ends_with("帝"):
+		return true
+	for title in member.get("titles", []):
+		if str(title).ends_with("帝"):
+			return true
+	return false
+
+
 static func display_title(member: Dictionary, person_id: int, root_person_id: int) -> String:
 	if person_id == root_person_id or int(member.get("parent_id", -1)) < 0:
 		return "先祖"

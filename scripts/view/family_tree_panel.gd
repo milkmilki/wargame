@@ -24,6 +24,44 @@ var _history_scroll: ScrollContainer
 var _history: VBoxContainer
 var _history_font: Font
 var _tree_scroll: ScrollContainer
+var _export_dialog: FileDialog
+var _export_result: AcceptDialog
+var _pending_export_html: String = ""
+
+
+func build_export_html() -> String:
+	if _state == null or _nation_id < 0 or _nation_id >= _state.nations.size():
+		return ""
+	# 页面可能在模拟继续后导出；刷新布局，但不得初始化/修复谱系。
+	var tree := FamilyTree.tree_for_nation(_state, _nation_id)
+	var nation := _state.nations[_nation_id]
+	_tree_canvas.set("tree", tree)
+	_tree_canvas.set("layout_revision", _state.family_revision)
+	_tree_canvas.set("current_person_id", nation.ruler_person_id)
+	_tree_canvas.set("current_nation_alive", nation.alive)
+	_tree_canvas.call("rebuild_layout")
+	return FamilyTreeHtml.render(tree, WorldNaming.nation_display_name(_state, _nation_id), nation.ruler_person_id, nation.alive, _state.day, _tree_canvas.get("_rect_by_person"))
+
+
+func export_html(path: String) -> Error:
+	return FamilyTreeHtml.save(path, build_export_html())
+
+
+func _request_html_export() -> void:
+	_pending_export_html = build_export_html()
+	_export_dialog.current_dir = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+	_export_dialog.current_file = (WorldNaming.nation_display_name(_state, _nation_id) + "_家族树_第%d天" % _state.day).validate_filename() + ".html"
+	_export_dialog.popup_centered_ratio(0.75)
+
+
+func _save_pending_html(path: String) -> void:
+	if path.get_extension().to_lower() not in ["html", "htm"]:
+		path += ".html"
+	var error := FamilyTreeHtml.save(path, _pending_export_html)
+	_pending_export_html = ""
+	_export_result.title = "家族树导出" if error == OK else "导出失败"
+	_export_result.dialog_text = ("已保存，可用浏览器离线打开：\n" + path) if error == OK else ("无法保存文件：%s\n%s" % [error_string(error), path])
+	_export_result.popup_centered(Vector2i(620, 180))
 
 
 func _ready() -> void:
@@ -232,6 +270,9 @@ func _add_relation(role: String, nation_id: int) -> void:
 
 
 func close_panel() -> void:
+	_pending_export_html = ""
+	if _export_dialog != null: _export_dialog.hide()
+	if _export_result != null: _export_result.hide()
 	_nation_id = -1
 	_navigation.clear()
 	if _overlay != null:
@@ -281,6 +322,23 @@ func _build_ui() -> void:
 			page_theme.set_stylebox(style_name, type, style)
 	page_theme.set_stylebox("panel", "PopupMenu", page_theme.get_stylebox("normal", "Button"))
 	page_theme.set_stylebox("hover", "PopupMenu", page_theme.get_stylebox("hover", "Button"))
+	var dialog_panel := StyleBoxFlat.new()
+	dialog_panel.bg_color = Color(0.94, 0.87, 0.71)
+	dialog_panel.border_color = MapRenderer.INK_COLOR
+	dialog_panel.set_border_width_all(2)
+	dialog_panel.set_content_margin_all(12)
+	page_theme.set_stylebox("panel", "AcceptDialog", dialog_panel)
+	for type in ["LineEdit", "ItemList"]:
+		for color_name in ["font_color", "font_selected_color", "font_uneditable_color", "caret_color"]:
+			page_theme.set_color(color_name, type, Color.BLACK)
+	page_theme.set_stylebox("normal", "LineEdit", dialog_panel)
+	page_theme.set_stylebox("panel", "ItemList", dialog_panel)
+	var window_border := ThemeDB.get_default_theme().get_stylebox("embedded_border", "Window").duplicate() as StyleBoxFlat
+	window_border.border_color = Color(0.86, 0.76, 0.57)
+	window_border.bg_color = Color(0.86, 0.76, 0.57)
+	page_theme.set_stylebox("embedded_border", "Window", window_border)
+	page_theme.set_stylebox("embedded_unfocused_border", "Window", window_border)
+	page_theme.set_color("title_color", "Window", Color.BLACK)
 	_overlay.theme = page_theme
 	add_child(_overlay)
 
@@ -336,6 +394,12 @@ func _build_ui() -> void:
 	_mode_select.custom_minimum_size = Vector2(120.0, 42.0)
 	_mode_select.item_selected.connect(_on_mode_selected)
 	header.add_child(_mode_select)
+	var export_button := Button.new()
+	export_button.name = "ExportHtml"
+	export_button.text = "导出 HTML"
+	export_button.tooltip_text = "导出当前家族全谱，供浏览器离线查看"
+	export_button.pressed.connect(_request_html_export)
+	header.add_child(export_button)
 	_back = Button.new()
 	_back.name = "Back"
 	_back.text = "←"
@@ -395,6 +459,26 @@ func _build_ui() -> void:
 	# 滚动仅改变画布位置，不会自动重画；视口裁剪必须随两轴滚动刷新。
 	scroll.get_h_scroll_bar().value_changed.connect(func(_value: float): _tree_canvas.queue_redraw())
 	scroll.get_v_scroll_bar().value_changed.connect(func(_value: float): _tree_canvas.queue_redraw())
+	var legend := Label.new()
+	legend.name = "Legend"
+	legend.text = "  双线框：历任皇帝（含已故）    红色顶边：当前君主"
+	legend.add_theme_font_size_override("font_size", 13)
+	content.add_child(legend)
+	_export_dialog = FileDialog.new()
+	_export_dialog.title = "导出家族树 HTML"
+	_export_dialog.theme = page_theme
+	_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_export_dialog.filters = PackedStringArray(["*.html ; HTML 家族树"])
+	_export_dialog.get_ok_button().text = "保存"
+	_export_dialog.get_cancel_button().text = "取消"
+	_export_dialog.file_selected.connect(_save_pending_html)
+	_export_dialog.canceled.connect(func(): _pending_export_html = "")
+	add_child(_export_dialog)
+	_export_result = AcceptDialog.new()
+	_export_result.theme = page_theme
+	_export_result.get_ok_button().text = "确定"
+	add_child(_export_result)
 
 
 class FamilyTreeCanvas extends Control:
@@ -530,7 +614,7 @@ class FamilyTreeCanvas extends Control:
 
 	func _draw_person(person_id: int, member: Dictionary) -> void:
 		var rect: Rect2 = _rect_by_person[person_id]
-		var is_sovereign := str(member.get("current_title", "")).ends_with("帝")
+		var is_sovereign := FamilyTree.was_emperor(member)
 		var is_current := person_id == current_person_id
 		var fill := (
 			Color(0.97, 0.91, 0.76, 1.0)
@@ -543,6 +627,9 @@ class FamilyTreeCanvas extends Control:
 			Rect2(rect.position + Vector2(2.0, 3.0), rect.size)
 		)
 		draw_style_box(_card_style(fill, border), rect)
+		if is_sovereign:
+			# 帝位经历永久保留双框；在位红色顶边仍独立表示当前身份。
+			draw_style_box(_card_style(Color.TRANSPARENT, Color(0.48, 0.34, 0.13)), rect.grow(-5.0))
 		if is_current:
 			draw_rect(
 				Rect2(rect.position + Vector2(2.0, 2.0), Vector2(rect.size.x - 4.0, 4.0)),

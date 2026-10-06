@@ -9,6 +9,14 @@ func _init() -> void:
 
 
 func _run() -> void:
+	var lineage = load("res://scripts/core/family_tree.gd")
+	_check(lineage.has_method("was_emperor"), "emperor_frame_uses_past_reigns")
+	if lineage.has_method("was_emperor"):
+		_check(lineage.call("was_emperor", {"current_title": "汉帝"}), "current_emperor_gets_special_frame")
+		_check(lineage.call("was_emperor", {"current_title": "秦王", "titles": ["汉帝", "秦王"], "alive": false}), "dead_or_enfeoffed_former_emperor_keeps_special_frame")
+		_check(not lineage.call("was_emperor", {"current_title": "皇太子", "titles": ["晋王"]}), "crown_or_virtual_prince_is_not_emperor")
+		_check(not lineage.call("was_emperor", {"current_title": "楚君", "titles": ["楚君"]}), "ordinary_country_ruler_is_not_emperor")
+		_check(not lineage.call("was_emperor", {}), "unknown_ancestor_is_not_emperor")
 	var state := GameState.new()
 	state.generate_grid_world(24680)
 	FamilyTree.ensure_all(state)
