@@ -203,6 +203,8 @@ static func title_for_nation(state: GameState, nation_id: int) -> String:
 static func display_title(member: Dictionary, person_id: int, root_person_id: int) -> String:
 	if person_id == root_person_id or int(member.get("parent_id", -1)) < 0:
 		return "先祖"
+	if bool(member.get("crown", false)):
+		return "皇太子"
 	if member.has("current_title"):
 		return str(member.current_title)
 	var titles: Array = member.get("titles", [])
