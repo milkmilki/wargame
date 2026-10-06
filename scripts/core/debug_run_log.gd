@@ -8,6 +8,7 @@ var path: String = ""
 var _file: FileAccess
 var _world_index: int = 0
 var _last_day: int = 0
+var _last_vassal_result: Dictionary = {}
 
 func begin(scene: String) -> Error:
 	var directory_error := DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(DIRECTORY))
@@ -26,6 +27,7 @@ func world_started(state: GameState, settings: Dictionary, source: String) -> vo
 	if _file == null: return
 	_world_index += 1
 	_last_day = state.day
+	_last_vassal_result.clear()
 	var template_path := path.get_basename() + "-world%d-map.json" % _world_index
 	var template := FileAccess.open(template_path, FileAccess.WRITE)
 	var template_error := FileAccess.get_open_error()
@@ -43,6 +45,9 @@ func world_started(state: GameState, settings: Dictionary, source: String) -> vo
 	print("[DEBUG_RUN] 新局%d seed=%d source=%s" % [_world_index, state.world_seed, source])
 
 func checkpoint(state: GameState) -> void:
+	if state != null and state.last_vassal_conflict_result != _last_vassal_result:
+		_last_vassal_result = state.last_vassal_conflict_result.duplicate(true)
+		record("vassal_conflict_planning_result", {"seed": state.world_seed, "day": state.day, "result": _last_vassal_result})
 	if _file == null or state == null or state.day < _last_day + CHECKPOINT_DAYS: return
 	_last_day = state.day
 	record("checkpoint", _progress(state))
@@ -81,7 +86,7 @@ func _progress(state: GameState) -> Dictionary:
 	return {"world_index": _world_index, "seed": state.world_seed, "day": state.day,
 		"nation_count": state.nations.size(), "army_count": state.armies.size(),
 		"battle_count": state.battles.size(), "war_ids": unique_wars,
-		"succession_conflicts": successions, "rng_state": str(state.rng.state)}
+		"succession_conflicts": successions, "vassal_conflicts": state.vassal_conflicts.duplicate(true), "rng_state": str(state.rng.state)}
 
 func _code_revision() -> Dictionary:
 	var project := ProjectSettings.globalize_path("res://")

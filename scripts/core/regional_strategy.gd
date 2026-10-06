@@ -238,19 +238,11 @@ static func choose_next_region(state: GameState, nation_id: int) -> int:
 	var candidates: Array[int] = []
 	var maximum := Vector4.ONE
 	var evaluation_cache := {}
-	for region_value in data["neighbors"].get(root, {}):
+	for region_value in geo["members"]:
 		var region := int(region_value)
 		if bool(integration_report(state, nation_id, region)["complete"]):
 			continue
-		var reachable := false
-		for city_id in data["border_cities"].get(Vector2i(root, region), []):
-			for member_id in data["root_members"].get(root, []):
-				if not DiplomacyAI.war_staging_cities_for_objective(
-					state, member_id, int(city_id), evaluation_cache).is_empty():
-					reachable = true
-					break
-			if reachable:
-				break
+		var reachable := region_has_entry(state, nation_id, region, evaluation_cache)
 		if reachable:
 			candidates.append(region)
 			var value: Vector4 = data["values"].get(region, Vector4.ZERO)
@@ -270,6 +262,13 @@ static func choose_next_region(state: GameState, nation_id: int) -> int:
 			best_score = score
 	return best
 
+static func region_has_entry(state: GameState, nation_id: int, region: int, cache: Dictionary = {}) -> bool:
+	for city_id in geometry(state)["members"].get(region, []):
+		var owner := state.cities[int(city_id)].owner_nation
+		if owner < 0 or owner == nation_id or state.has_military_access(nation_id, owner): continue
+		if DiplomacyAI.can_initiate_war_at_range(state, nation_id, owner, cache) and not MilitaryReachability.prewar_entries(state, nation_id, int(city_id), cache).is_empty(): return true
+	return false
+
 
 static func update_target(state: GameState, nation_id: int, succession: bool = false) -> bool:
 	var nation := state.nations[nation_id]
@@ -277,6 +276,9 @@ static func update_target(state: GameState, nation_id: int, succession: bool = f
 	var region := city_region(state, anchor) if nation.alive else -1
 	if nation.alive and region < 0:
 		region = initial_region(state, nation_id)
+	elif nation.alive and int(integration_report(state, nation_id, region)["integrated"]) == 0 and not region_has_entry(state, nation_id, region):
+		var next := choose_next_region(state, nation_id) if can_expand(nation) else -1
+		region = next if next >= 0 else initial_region(state, nation_id)
 	elif nation.alive and bool(integration_report(state, nation_id, region)["complete"]) \
 		and can_expand(nation):
 		var next := choose_next_region(state, nation_id)
@@ -313,6 +315,7 @@ static func allows_objective(state: GameState, nation_id: int, center_id: int, r
 	if center < 0:
 		return false
 	var legal := bool(control(state)["claims"].get(Vector2i(nation_id, center), false))
+	if not VassalConflict.for_pair(state, nation_id, state.cities[center].owner_nation).is_empty(): return true
 	if reclamation_only:
 		return legal
 	return legal or city_region(state, center) == target_region(state, nation_id) \

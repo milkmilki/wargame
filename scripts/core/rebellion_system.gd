@@ -700,7 +700,7 @@ static func resolve_month(state: GameState) -> Array[Dictionary]:
 	var vassal_candidates: Array[Dictionary] = []
 	for subject_id in _ordered_vassal_ids(state):
 		var loyalty: float = vassal_loyalty(state, subject_id)
-		if should_vassal_rebel(state, subject_id, loyalty):
+		if VassalConflict.for_nation(state, subject_id).is_empty() and should_vassal_rebel(state, subject_id, loyalty):
 			vassal_candidates.append({
 				"subject_id": subject_id,
 				"overlord_id": state.overlord_of(subject_id),
@@ -727,7 +727,7 @@ static func resolve_month(state: GameState) -> Array[Dictionary]:
 			state, subject_id
 		)
 		events.append({
-			"kind": "vassal_rebellion",
+			"kind": "vassal_independence" if str(state.last_vassal_conflict_result.get("mode", "")) == "independence" else "vassal_rebellion",
 			"parent_id": overlord_id,
 			"rebel_id": subject_id,
 			"city_ids": subject_cities,

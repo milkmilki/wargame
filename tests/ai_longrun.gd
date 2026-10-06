@@ -83,6 +83,8 @@ func _init() -> void:
 			simulation._advance_day()
 			var daily_succession := SuccessionAudit.inspect(state)
 			daily_succession.errors.append_array(RoyalTitleAudit.inspect(state))
+			var faction_error := VassalConflict.validation_error(state)
+			if not faction_error.is_empty(): daily_succession.errors.append(faction_error)
 			if not daily_succession.errors.is_empty():
 				succession_error_days += 1
 				if first_succession_error.is_empty():

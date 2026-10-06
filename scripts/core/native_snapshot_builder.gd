@@ -3,13 +3,15 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 25
+const SCHEMA_VERSION: int = 26
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
 static func succession_validation_error(snapshot: Dictionary) -> String:
 	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
 		return "Incompatible native snapshot schema"
+	var faction_error := vassal_validation_error(snapshot)
+	if not faction_error.is_empty(): return faction_error
 	if not snapshot.get("battles") is Dictionary:
 		return "Invalid battle table"
 	var battle_error := battle_validation_error(snapshot.battles)
@@ -122,6 +124,37 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 				if not army_ids.has(conflict_army_id) or conflict_armies.has(conflict_army_id):
 					return "Invalid succession conflict army reference"
 				conflict_armies[conflict_army_id] = true
+	return ""
+
+static func vassal_validation_error(snapshot: Dictionary) -> String:
+	var nations: Variant = snapshot.get("nations")
+	if not nations is Dictionary: return "Invalid native nation table"
+	for key in ["ids", "overlord", "war_relation_id"]:
+		if not nations.get(key) is PackedInt32Array: return "Invalid native nation column: " + key
+	for key in ["alive", "suzerainty_civil_war", "diplomacy"]:
+		if not nations.get(key) is PackedByteArray: return "Invalid native nation column: " + key
+	var count: int = nations.ids.size()
+	for key in ["alive", "overlord", "suzerainty_civil_war"]:
+		if nations[key].size() != count: return "Invalid native nation column length: " + key
+	for index in range(count):
+		if int(nations.alive[index]) not in [0, 1] or int(nations.suzerainty_civil_war[index]) not in [0, 1] or int(nations.overlord[index]) < -1 or int(nations.overlord[index]) >= count: return "Invalid native suzerainty values"
+	var diplomacy: PackedByteArray = nations.diplomacy
+	var war_ids: PackedInt32Array = nations.war_relation_id
+	if diplomacy.size() != count * count or war_ids.size() != count * count: return "Invalid native diplomacy table"
+	var armies: Variant = snapshot.get("armies")
+	var fronts: Variant = snapshot.get("campaign_fronts")
+	if not armies is Dictionary or not fronts is Dictionary or not armies.get("campaign_war_id") is PackedInt32Array or not fronts.get("war_ids") is PackedInt32Array: return "Invalid native military binding columns"
+	var error := VassalConflict.records_validation_error(snapshot.get("vassal_conflicts"), count,
+		func(id: int): return bool(nations.alive[id]),
+		func(a: int, b: int): return int(diplomacy[a * count + b]),
+		func(a: int, b: int): return int(war_ids[a * count + b]),
+		Array(armies.get("campaign_war_id", [])), Array(fronts.get("war_ids", [])))
+	if not error.is_empty(): return error
+	for record in snapshot.get("vassal_conflicts", {}).values():
+		if not bool(record.get("active", false)): continue
+		for member in record.central + record.rebels:
+			if int(member) == int(record.central_leader) or not bool(nations.alive[int(member)]): continue
+			if int(nations.overlord[int(member)]) != int(record.central_leader) or bool(nations.suzerainty_civil_war[int(member)]) != record.rebels.has(member): return "Native faction and suzerainty disagree"
 	return ""
 
 
@@ -262,6 +295,7 @@ static func build(state: GameState) -> Dictionary:
 		"next_army_id": state._next_army_id,
 		"next_battle_id": state._next_battle_id,
 		"next_war_id": state.next_war_id,
+		"vassal_conflicts": state.vassal_conflicts.duplicate(true),
 		"next_campaign_front_id": state.next_campaign_front_id,
 		"next_campaign_pair_id": state.next_campaign_pair_id,
 		"next_family_tree_id": state.next_family_tree_id,

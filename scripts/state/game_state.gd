@@ -196,6 +196,8 @@ var war_objectives: Dictionary = {}
 ## 不变量：一个藩王至多一个宗主；宗主链无环；非内战宗藩对为 ALLIED，
 ## 削藩内战宗藩对为 WAR。
 var suzerainty: Dictionary = {}
+var vassal_conflicts: Dictionary = {}
+var last_vassal_conflict_result: Dictionary = {}
 ## 宗藩根 id -> 本轮连续低于私人战争阈值的首日。
 var suzerainty_low_cohesion_since_day: Dictionary = {}
 var _suzerainty_cohesion_revision: int = -1
@@ -789,6 +791,8 @@ func _reset_world(world_seed: int) -> void:
 	war_relation_ids.clear()
 	war_objectives.clear()
 	suzerainty.clear()
+	vassal_conflicts.clear()
+	last_vassal_conflict_result.clear()
 	suzerainty_low_cohesion_since_day.clear()
 	_suzerainty_cohesion_revision = -1
 	_suzerainty_cohesion_by_root.clear()
@@ -2883,7 +2887,10 @@ func coalition_campaign_components(
 				var bloc := alliance_bloc(nation_id)
 				for member_id in bloc:
 					alliance_blocs[int(member_id)] = bloc
-			var bloc: Array[int] = alliance_blocs.get(nation_id, [] as Array[int])
+			var bloc: Array[int] = (alliance_blocs.get(nation_id, [] as Array[int]) as Array[int]).duplicate()
+			var faction: Dictionary = vassal_conflicts.get(war_id, {})
+			if bool(faction.get("active", false)):
+				bloc.assign(faction.central if faction.central.has(nation_id) else faction.rebels)
 			var side_key := nation_id
 			for bloc_value in bloc:
 				var bloc_id := int(bloc_value)
@@ -4805,6 +4812,7 @@ func war_id_between(nation_a: int, nation_b: int) -> int:
 func merge_war_ids(keep_war_id: int, merged_war_id: int) -> void:
 	if keep_war_id < 0 or merged_war_id < 0 or keep_war_id == merged_war_id:
 		return
+	if bool(vassal_conflicts.get(keep_war_id, {}).get("active", false)) or bool(vassal_conflicts.get(merged_war_id, {}).get("active", false)): return
 	ChronicleRules.merge_war(self, keep_war_id, merged_war_id)
 	for pair_value in campaign_pairs.values():
 		var pair := pair_value as CoalitionCampaignPair
@@ -5010,6 +5018,10 @@ func set_diplomatic_relation(
 		]
 	):
 		return false
+	var faction := VassalConflict.for_nation(self, nation_a)
+	if not faction.is_empty() and (faction.central.has(nation_b) or faction.rebels.has(nation_b)) and nations[nation_a].alive and nations[nation_b].alive:
+		var required := DiplomaticRelation.ALLIED if faction.central.has(nation_a) == faction.central.has(nation_b) else DiplomaticRelation.WAR
+		if relation != required: return false
 	# 活跃地方叛军的战争严格限定为母国独立战争，不能向第三国宣战，
 	# 第三国也不能把叛军拖入另一场战争。
 	if (
@@ -5278,59 +5290,11 @@ func is_in_civil_war(subject_id: int) -> bool:
 ## 主战军团（普通数量 = ceil(0.1 × 反叛方陆城数)）作为起兵资本。
 ## uprising_multiplier 仅供削藩动作施加君主效果；自发反叛保持默认 1 倍。
 ## 返回是否成功（须是既有宗藩对且当前非内战）。
-func start_civil_war(
-	subject_id: int,
-	uprising_multiplier: int = 1
-) -> bool:
-	if not suzerainty.has(subject_id) or is_in_civil_war(subject_id):
-		return false
-	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
-	if (
-		subject_id < 0
-		or subject_id >= nations.size()
-		or overlord_id < 0
-		or overlord_id >= nations.size()
-		or not nations[subject_id].alive
-		or not nations[overlord_id].alive
-		or land_cities_of(subject_id).is_empty()
-		or land_cities_of(overlord_id).is_empty()
-	):
-		return false
-	# 1. 切分前先量取：反叛方子树（沿非内战边）与整个原粮池的粮食产能，用于按比例分粮。
-	var holder_before := food_pool_holder(subject_id)
-	var rebel_food_output := _food_pool_food_output(subject_id)
-	var pool_food_output := _food_pool_food_output(holder_before)
-	var pool_stock := _food_pool_stock(holder_before)
-	var rebel_share := _proportional_share(
-		pool_stock, rebel_food_output, pool_food_output
-	)
-	# 2. 把内战边作为完整拟议图随行政/粮池一起提交；失败时 live 政治图
-	# 与外交仍保持原状。份额在旧快照上计算，实际切粮只在事务成功后进行。
-	var proposed := suzerainty.duplicate(true)
-	(proposed[subject_id] as Dictionary)["civil_war"] = true
-	(proposed[subject_id] as Dictionary)["last_centralization_day"] = day
-	var capital_id := nations[subject_id].capital_city_id
-	if capital_id < 0 or capital_id >= cities.size():
-		return false
-	var territory_result := apply_territory_transaction(
-		[] as Array[Dictionary],
-		{subject_id: capital_id},
-		-1,
-		proposed
-	)
-	if not bool(territory_result.get("ok", false)):
-		return false
-	if rebel_share > 0:
-		var withdrawn_food := _withdraw_food_from_warehouses(
-			nations[holder_before], rebel_share
-		)
-		cities[capital_id].food_storage += withdrawn_food
-		refresh_derived()
-	# 4. 起兵资本：反叛方首都凭空动员火星兵（满编主战军团）。
-	_spawn_rebellion_uprising_armies(subject_id, uprising_multiplier)
-	nations[subject_id].last_rebellion_day = day
-	nations[overlord_id].last_rebellion_day = day
-	return true
+func plan_vassal_conflict(subject_id: int) -> Dictionary:
+	return VassalConflict.plan(self, subject_id)
+
+func start_civil_war(subject_id: int, uprising_multiplier: int = 1) -> bool:
+	return VassalConflict.start(self, subject_id, uprising_multiplier)
 
 
 ## Validate one complete parent-controlled administrative state for political transfer.
@@ -5872,6 +5836,7 @@ func _spawn_conjured_army(
 ## 结束削藩内战（不改变领土归属，仅复位关系）：宗主↔藩王恢复 ALLIED，清内战标记。
 ## 供藩王战败保留宗藩、或和平收场时调用；通吃吞并另由领土结算处理。
 func end_civil_war(subject_id: int) -> bool:
+	if not VassalConflict.for_nation(self, subject_id).is_empty(): return false
 	if not suzerainty.has(subject_id) or not is_in_civil_war(subject_id):
 		return false
 	var overlord_id := int(suzerainty[subject_id]["overlord_id"])
@@ -5943,6 +5908,7 @@ func _rebuild_suzerainty_cohesion_cache() -> void:
 ## 每日推进宗藩体系的低凝聚力连续计时。恢复到阈值即清零；连续满一年时，
 ## 整个宗藩树同时解体。返回本日解体的原宗主根，按 id 升序。
 func advance_suzerainty_dissolution() -> Array[int]:
+	VassalConflict.reconcile(self)
 	var active_roots := {}
 	for subject_value in suzerainty:
 		var subject_id := int(subject_value)
@@ -5960,6 +5926,9 @@ func advance_suzerainty_dissolution() -> Array[int]:
 	roots.sort()
 	var dissolved: Array[int] = []
 	for root in roots:
+		if not VassalConflict.for_nation(self, root).is_empty():
+			suzerainty_low_cohesion_since_day.erase(root)
+			continue
 		if suzerainty_cohesion(root) >= VASSAL_DISSOLUTION_COHESION_THRESHOLD:
 			suzerainty_low_cohesion_since_day.erase(root)
 			continue
@@ -6887,6 +6856,7 @@ func _finalize_annexations(absorber: int, absorbed_ids: Dictionary) -> void:
 	_reconcile_battles_after_annexation()
 	RoyalTitles.annex(self, absorber, absorbed_ids)
 	EmpireStatus.reconcile(self)
+	VassalConflict.reconcile(self)
 
 
 ## 把 absorbed 国的全部领土、军队、战团、资源并入 absorber 国。普通兼并与

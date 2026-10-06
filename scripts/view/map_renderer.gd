@@ -6439,6 +6439,9 @@ static func _nation_relation_text(
 	game_state: GameState,
 	nation_id: int
 ) -> String:
+	var faction := VassalConflict.for_nation(game_state, nation_id)
+	if not faction.is_empty():
+		return "%s·首领%s" % ["中央方" if faction.central.has(nation_id) else "反叛方", WorldNaming.nation_display_name(game_state, VassalConflict.leader(faction, nation_id))]
 	if game_state.is_vassal(nation_id):
 		var overlord_id := game_state.overlord_of(nation_id)
 		var overlord_name := WorldNaming.nation_display_name(

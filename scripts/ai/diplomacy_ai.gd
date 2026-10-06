@@ -2290,6 +2290,7 @@ static func _ruler_allows_war_objective(
 ) -> bool:
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return false
+	if objective_city >= 0 and objective_city < state.cities.size() and not VassalConflict.for_pair(state, nation_id, state.cities[objective_city].owner_nation).is_empty(): return true
 	return RegionalStrategy.allows_objective(state, nation_id, objective_city) and (
 		RulerProfile.offensive_allowed(state.nations[nation_id])
 		or RegionalStrategy.allows_objective(state, nation_id, objective_city, true)
@@ -4467,6 +4468,7 @@ static func _collect_peace_actions(
 		for b in range(a + 1, state.nations.size()):
 			if committed.has(a) or committed.has(b) or not state.is_enemy(a, b):
 				continue
+			if not VassalConflict.for_pair(state, a, b).is_empty(): continue
 			if state.is_succession_identity(a) or state.is_succession_identity(b):
 				continue
 			if state.regional_rebellion_peace_locked(a, b):
@@ -7049,7 +7051,7 @@ static func _collect_centralization_actions(
 		if not nation.alive:
 			continue
 		var overlord_id := nation.id
-		if state.is_vassal(overlord_id) or committed.has(overlord_id):
+		if state.is_vassal(overlord_id) or committed.has(overlord_id) or not VassalConflict.for_nation(state, overlord_id).is_empty():
 			continue
 		# 傀儡君主的核心效果是持续分封；任内不会反向削藩。
 		if nation.ruler_archetype == RulerProfile.PUPPET:

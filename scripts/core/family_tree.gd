@@ -114,6 +114,7 @@ static func record_succession(
 		members[parent_id]["child_ids"] = child_ids
 	RoyalTitles.advance_generation(state, nation_id, person_id)
 	if members.has(previous_person_id):
+		record_death_title(state, members[previous_person_id])
 		members[previous_person_id]["alive"] = false
 	PrincePolitics.centralize(state, nation_id, nation.prince_person_ids)
 	nation.ruler_person_id = person_id
@@ -213,15 +214,30 @@ static func was_emperor(member: Dictionary) -> bool:
 static func display_title(member: Dictionary, person_id: int, root_person_id: int, state: GameState = null) -> String:
 	if person_id == root_person_id or int(member.get("parent_id", -1)) < 0:
 		return "先祖"
+	if not bool(member.get("alive", true)) and member.has("death_title"):
+		return str(member.death_title)
 	if state != null and bool(member.get("alive", true)):
 		var office := int(member.get("office_nation_id", -1))
 		if office >= 0 and office < state.nations.size() and state.nations[office].alive and state.nations[office].ruler_person_id == person_id:
 			return title_for_nation(state, office)
 		if RoyalTitles.effective_rank(state, member) <= 0:
 			return "无爵"
+	# 死亡结算清除有效爵位和俸禄，卡片仍展示去世时结束的封号。
+	# 只读取最后一条死亡档案，不能恢复生前因迁国或登基结束的旧爵。
+	if not bool(member.get("alive", true)) and str(member.get("current_title", "")) in ["", "无爵"]:
+		var history: Array = member.get("title_history", [])
+		if not history.is_empty():
+			var last: Dictionary = history.back()
+			if str(last.get("end_reason", "")) == "death" and int(last.get("end_day", -1)) >= 0:
+				return str(last.get("title", "无爵"))
 	if member.has("current_title"):
 		return str(member.current_title)
 	return "无爵"
+
+## 去世时冻结最后身份，后续国家迁移和失爵不得覆盖已故人物的卡片称号。
+static func record_death_title(state: GameState, member: Dictionary) -> void:
+	if not member.has("death_title"):
+		RoyalTitles.set_member(state, member, "death_title", display_title(member, int(member.id), -1, state))
 
 static func affiliation_label(state: GameState, member: Dictionary, selected_nation: int) -> String:
 	var owner := int(member.get("title_payer_id", -1))

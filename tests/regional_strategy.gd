@@ -145,7 +145,8 @@ func _test_succession_and_traits() -> void:
 		edge.max_manpower = 0
 	state.road_network_revision += 1
 	RegionalStrategy.update_target(state, 0)
-	check(RegionalStrategy.target_region(state, 0) == 2, "unfinished goal not abandoned on closure")
+	check(RegionalStrategy.target_region(state, 0) == RegionalStrategy.initial_region(state, 0),
+		"fully inaccessible unowned unfinished goal falls back to the current controlled region")
 
 
 func _test_expansion_exclusions() -> void:

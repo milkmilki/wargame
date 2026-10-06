@@ -9552,18 +9552,40 @@ func _test_civil_war_relations() -> void:
 	# 重复发起应失败（幂等保护）。
 	_check(not gs.start_civil_war(subject), "已在内战中不得重复发起")
 
-	# 结束内战（藩王战败保留宗藩）：恢复ALLIED、清内战标记、共同体重聚。
-	var ended := gs.end_civil_war(subject)
+	# 阵营内战不可用普通停战入口结束；必须走真实首都胜负事务。
+	_check(not gs.end_civil_war(subject) and gs.is_enemy(0, subject),
+		"阵营内战不得通过普通停战入口清除敌对关系")
+	var civil_sim := Simulation.new()
+	civil_sim.setup(gs)
+	var capital := gs.cities[gs.nations[subject].capital_city_id]
+	var captor: Army = null
+	for army in gs.armies:
+		if army.owner_nation == 0 and army.size > 0:
+			captor = army
+			break
+	_check(captor != null, "阵营内战结束回归须找到宗主攻城军")
+	if captor != null:
+		captor.location_city = capital.id
+		captor.move_from = capital.id
+		captor.move_to = -1
+		captor.on_edge = false
+		captor.state = Army.State.IDLE
+		captor.battle_id = -1
+		captor.path.clear()
+		captor.occupation_claimant_nation = 0
+		civil_sim._capture_city(captor, capital, -1)
 	_check(
-		ended
+		not gs.nations[subject].alive
 			and not gs.is_in_civil_war(subject)
-			and gs.is_allied(0, subject)
-			and gs.alliance_bloc(0).has(subject)
+			and not gs.is_enemy(0, subject)
+			and capital.owner_nation == 0
+			and VassalConflict.for_nation(gs, 0).is_empty()
 			and gs.suzerainty_structure_valid()
 			and gs.territory_structure_valid()
 			and gs._battle_group_structure_valid(),
-		"内战结束：宗藩恢复ALLIED、共同体重聚、不变量成立"
+		"真实攻破首领首都结束阵营内战：吞并败方、释放战争、不变量成立"
 	)
+	civil_sim.free()
 
 	# 内战中宗主死亡：藩王应脱离（无祖父则独立），内战标记清除。
 	var dg := GameState.new()
@@ -9869,6 +9891,7 @@ func _test_centralization_decision() -> void:
 	var conqueror_region := _enfeoffable_region(conqueror_state, 0, 3)
 	FamilyFixture.ensure_candidates(conqueror_state, 0)
 	var conqueror_subject := conqueror_state.enfeoff(0, conqueror_region)
+	_ensure_civil_war_fixture_contact(conqueror_state, 0, conqueror_subject)
 	conqueror_state.nations[conqueror_subject].ruler_archetype = (
 		RulerProfile.CONQUEROR
 	)
@@ -10081,21 +10104,26 @@ func _test_civil_war_annexation() -> void:
 	var region := _enfeoffable_region(gs, 0, 8)
 	FamilyFixture.ensure_candidates(gs, 0)
 	var subject := gs.enfeoff(0, region)
-	var child_region := _enfeoffable_region(gs, subject)
-	FamilyFixture.ensure_candidates(gs, subject)
-	var child_subject := gs.enfeoff(subject, child_region)
+	# 本制度仅支持单层宗藩；由宗主真实分封另一直属藩王，并以低忠站反叛方。
+	var child_region := _enfeoffable_region(gs, 0)
+	FamilyFixture.ensure_candidates(gs, 0)
+	var child_subject := gs.enfeoff(0, child_region)
+	for city in gs.land_cities_of(child_subject):
+		city.loyalty = 0.0
+	_ensure_civil_war_fixture_contact(gs, 0, subject)
 	_check(
 		child_subject > subject
-			and gs.overlord_of(child_subject) == subject,
-		"削藩兼并测试须通过真实分封建立下级藩王"
+			and gs.overlord_of(child_subject) == 0
+			and RebellionSystem.vassal_loyalty(gs, child_subject) <= RebellionSystem.LOYALTY_REBEL,
+		"削藩兼并测试须通过真实分封建立低忠直属藩王"
 	)
 	gs.start_civil_war(subject)
 	_check(
 		gs.external_territory_recipient(subject) == subject,
 		"削藩内战反叛方已脱离和平主权链，对外领土接收者必须是自己"
 	)
-	# 用合法世界上的 stale revision 在任何提交前拒绝兼并。这里包含下级
-	# 藩王，能精确捕获旧实现先改挂宗藩树/外交、再因领土事务失败而半提交。
+	# 用合法世界上的 stale revision 在任何提交前拒绝兼并。这里包含同阵营
+	# 藩王，能捕获先改宗藩树/外交、再因领土事务失败而半提交。
 	var rejected_annex_before := _territory_fingerprint(gs)
 	var rejected_annex := gs.annex_nation(
 		0, subject, gs.ownership_revision + 1
@@ -10105,7 +10133,8 @@ func _test_civil_war_annexation() -> void:
 			and _territory_fingerprint(gs) == rejected_annex_before
 			and gs.is_in_civil_war(subject)
 			and gs.overlord_of(subject) == 0
-			and gs.overlord_of(child_subject) == subject
+			and gs.overlord_of(child_subject) == 0
+			and VassalConflict.for_nation(gs, subject).get("rebels", []).has(child_subject)
 			and gs.suzerainty_structure_valid()
 			and gs.territory_structure_valid()
 			and gs._battle_group_structure_valid(),
@@ -10172,13 +10201,14 @@ func _test_civil_war_annexation() -> void:
 			and gs.cities_of(subject).size() == 1
 			and subject_capital.owner_nation == subject
 			and subject_capital.has_warehouse
-			and gs.overlord_of(child_subject) == subject
+			and gs.overlord_of(child_subject) == 0
 			and gs.is_in_civil_war(subject),
-		"宗主胜回归夹具须保留内战藩王最后一座首都及其下级藩王"
+		"宗主胜回归夹具须保留内战藩王最后一座首都及其同阵营藩王"
 	)
 	var overlord_cities_before := gs.land_cities_of(0).size()
 	var subject_cities := gs.land_cities_of(subject).size()
 	var overlord_food_before := gs.nations[0].granary_food
+	var allied_rebel_food_before := gs.nations[child_subject].granary_food
 	var capture_revision_before := gs.ownership_revision
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -10210,6 +10240,7 @@ func _test_civil_war_annexation() -> void:
 			and subject_capital.food_storage == 0
 			and gs.nations[0].granary_food == (
 				overlord_food_before
+				+ allied_rebel_food_before
 				+ int(floor(
 					100.0 * GameState.TERRITORY_CAPTURE_SPOILS_RATE
 				))
@@ -10219,8 +10250,8 @@ func _test_civil_war_annexation() -> void:
 			and gs.territory_structure_valid()
 			and gs._battle_group_structure_valid(),
 		(
-			"宗主真实攻破藩王最后首都：单次事务吞并、下级藩王改投，"
-			+ "首都库存仅获30%且不变量成立"
+			"宗主真实攻破藩王最后首都：单次事务吞并、同阵营藩王改投，"
+			+ "首都库存仅获30%、存活藩王粮池完整重聚且不变量成立"
 		)
 	)
 	sim.free()
@@ -13453,6 +13484,23 @@ func _set_single_warehouse(gs: GameState, nation_id: int, city_id: int, stock: i
 		[stock] as Array[int],
 		city_id
 	)
+
+
+func _ensure_civil_war_fixture_contact(gs: GameState, root: int, subject: int) -> void:
+	# These fixtures test mobilization and annexation, while isolated outcomes have
+	# their own tests. Supply an explicit military road if donated fiefs are enclaves.
+	if subject < 0 or root < 0:
+		return
+	if MilitaryReachability.contact(gs, [root], [subject], [root, subject]) \
+		or MilitaryReachability.contact(gs, [subject], [root], [root, subject]):
+		return
+	var origin := gs.nations[root].capital_city_id
+	var destination := gs.nations[subject].capital_city_id
+	gs._add_edge(origin, destination)
+	var route := gs.edge_of(origin, destination)
+	route.kind = Edge.Kind.LAND
+	route.max_manpower = 100000
+	gs.road_network_revision += 1
 
 
 func _enfeoffable_region(

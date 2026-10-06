@@ -790,8 +790,8 @@ static func suzerainty_system_at_war(
 		return false
 	var root := game_state.suzerainty_root(subject_id)
 	for member in game_state.suzerainty_members(root):
-		if not game_state.wars_of(member).is_empty():
-			return true
+		for enemy in game_state.wars_of(member):
+			if VassalConflict.for_pair(game_state, member, enemy).is_empty(): return true
 	return false
 
 
@@ -3994,6 +3994,8 @@ func _resolve_eliminated_nation_capitulations() -> void:
 ##   藩王占宗主首都 → 藩王继承宗主全部领土；宗主的其余藩王转投胜利藩王；
 ##                    胜利藩王自身升为独立主权（继承整个宗藩体系顶点）。
 func _is_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
+	var faction := VassalConflict.for_pair(state, old_owner, claimant)
+	if not faction.is_empty(): return old_owner in [int(faction.central_leader), int(faction.rebel_leader)]
 	return (
 		(
 			state.overlord_of(old_owner) == claimant
@@ -4016,6 +4018,10 @@ func _finalize_civil_war_capital_annexation(
 
 
 func _resolve_civil_war_capital_capture(old_owner: int, claimant: int) -> bool:
+	var faction := VassalConflict.for_pair(state, old_owner, claimant)
+	if not faction.is_empty():
+		if old_owner not in [int(faction.central_leader), int(faction.rebel_leader)]: return false
+		return VassalConflict.finish(state, faction, VassalConflict.leader(faction, claimant), state.ownership_revision)
 	if not _is_civil_war_capital_capture(old_owner, claimant):
 		return false
 	var claimant_was_rebel_vassal := (
@@ -4754,7 +4760,8 @@ func _queue_or_start_war_mobilization(
 func _set_coalition_war(
 	attackers: Array[int],
 	defenders: Array[int],
-	_batch_gold_flows: Array[Dictionary] = []
+	_batch_gold_flows: Array[Dictionary] = [],
+	preserve_faction_scope: bool = false
 ) -> bool:
 	var coalition_war_part_started := (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -4762,6 +4769,9 @@ func _set_coalition_war(
 	var changed := false
 	for attacker in attackers:
 		for defender in defenders:
+			# Preserve pre-existing foreign wars during a faction conflict, without
+			# allowing ordinary alliance closure to recruit new internal/external pairs.
+			if preserve_faction_scope and not state.is_enemy(attacker, defender) and (not VassalConflict.for_nation(state, attacker).is_empty() or not VassalConflict.for_nation(state, defender).is_empty()): continue
 			if (
 				attacker == defender
 				or state.is_allied(attacker, defender)
@@ -4803,6 +4813,7 @@ func _set_coalition_war_objective(
 	var existing_war_ids: Array[int] = []
 	for attacker in attackers:
 		for defender in defenders:
+			if not VassalConflict.for_pair(state, attacker, defender).is_empty(): continue
 			var existing := state.war_objective(attacker, defender)
 			var existing_war_id := state.war_id_between(attacker, defender)
 			if existing_war_id < 0:
@@ -4821,6 +4832,7 @@ func _set_coalition_war_objective(
 		return
 	for attacker in attackers:
 		for defender in defenders:
+			if not VassalConflict.for_pair(state, attacker, defender).is_empty(): continue
 			if not state.is_enemy(attacker, defender):
 				continue
 			state.set_war_objective(
@@ -4846,13 +4858,19 @@ func _synchronize_alliance_wars(
 	if not bloc.has(nation_b):
 		return
 	var enemy_set := {}
+	var excluded_civil_enemies := {}
+	for member in bloc:
+		var faction := VassalConflict.for_nation(state, member)
+		if not faction.is_empty():
+			for opposite in (faction.rebels if faction.central.has(member) else faction.central): excluded_civil_enemies[int(opposite)] = true
 	var shared_objective: Dictionary = {}
 	for member in bloc:
 		for enemy_id in state.wars_of(member):
+			if excluded_civil_enemies.has(enemy_id): continue
 			if bloc.has(enemy_id):
 				continue
 			for enemy_member in state.alliance_bloc(enemy_id):
-				if not bloc.has(enemy_member):
+				if not bloc.has(enemy_member) and not excluded_civil_enemies.has(enemy_member):
 					enemy_set[enemy_member] = true
 			var objective := state.war_objective(member, enemy_id)
 			if shared_objective.is_empty() and not objective.is_empty():
@@ -4863,7 +4881,7 @@ func _synchronize_alliance_wars(
 	if enemies.is_empty():
 		return
 	var joined_war := _set_coalition_war(
-		bloc, enemies, frozen_gold_flows
+		bloc, enemies, frozen_gold_flows, true
 	)
 	# Political transactions may already have installed WAR edges. Their IDs
 	# still need to join the corresponding enemy bloc's existing war.
@@ -4973,6 +4991,7 @@ func _plan_coalition_peace(
 				continue
 			# 地方叛军与母国至少交战一年；集团其他战争仍可各自议和，
 			# 但不得把这条受保护的战争边顺带结算掉。
+			if not VassalConflict.for_pair(state, member_a, member_b).is_empty(): continue
 			if state.regional_rebellion_peace_locked(member_a, member_b):
 				continue
 			# 宗藩对的关系态由宗藩机制独占管理，普通联盟议和不得触碰（与退盟/议和
@@ -8462,7 +8481,7 @@ func _cached_campaign_objective(
 				relevant_excluded[center_id] = true
 	var excluded_ids: Array = relevant_excluded.keys()
 	excluded_ids.sort()
-	var reclamation_only := not RulerProfile.offensive_allowed(state.nations[nation_id])
+	var reclamation_only := not RulerProfile.offensive_allowed(state.nations[nation_id]) and VassalConflict.for_pair(state, nation_id, target_id).is_empty()
 	var cache_key := "campaign_objective:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%s:%d" % [
 		state.get_instance_id(), nation_id, target_id, state.ownership_revision,
 		state.diplomacy_revision, state.road_network_revision,
@@ -13698,6 +13717,7 @@ func _capture_city(
 		return
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
+	var faction := VassalConflict.for_pair(state, old_owner, claimant)
 	var civil_war_capital_capture := (
 		captured_capital
 		and claimant != old_owner
@@ -13720,20 +13740,13 @@ func _capture_city(
 	var territory_changed := false
 	var captured_city_ids: Array[int] = [city.id]
 	if civil_war_capital_capture:
-		if not state.annex_nation(
-			claimant,
-			old_owner,
-			expected_ownership_revision,
-			{
-				city.id: (
-					GameState.TerritoryStockDisposition.CAPTURE_SPOILS
-				),
-			}
-		):
-			return
-		_finalize_civil_war_capital_annexation(
-			claimant, claimant_was_rebel_vassal
-		)
+		if not faction.is_empty():
+			claimant = VassalConflict.leader(faction, claimant)
+			if not VassalConflict.finish(state, faction, claimant, expected_ownership_revision, city.id): return
+			_ai_last_decision_day = -1
+		else:
+			if not state.annex_nation(claimant, old_owner, expected_ownership_revision, {city.id: GameState.TerritoryStockDisposition.CAPTURE_SPOILS}): return
+			_finalize_civil_war_capital_annexation(claimant, claimant_was_rebel_vassal)
 		territory_changed = true
 	elif (
 		captured_capital

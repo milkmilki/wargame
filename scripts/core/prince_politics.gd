@@ -251,6 +251,7 @@ static func accede(state: GameState, nation_id: int) -> bool:
 	centralize_ids.append_array(protected)
 	centralize_ids.append(old_id)
 	centralize(state, nation_id, centralize_ids)
+	FamilyTree.record_death_title(state, previous)
 	previous["alive"] = false
 	previous["office_nation_id"] = -1
 	set_heir(state, nation_id, -1)

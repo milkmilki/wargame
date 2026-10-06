@@ -284,6 +284,7 @@ static func advance_generation(state: GameState, nation_id: int, incoming_ruler:
 			var rank := effective_rank(state, member)
 			if rank > 0:
 				deaths.append({"id": int(id), "rank": rank, "branch": int(member.title_branch_id), "title": designation(state, member, rank)})
+			FamilyTree.record_death_title(state, member)
 			end_title(state, member, "death")
 			set_member(state, member, "alive", false)
 			set_member(state, member, "title_settled", true)
@@ -302,6 +303,7 @@ static func settle_death(state: GameState, nation_id: int, person_id: int) -> vo
 	set_member(state, member, "title_settled", true)
 	var rank := int(member.get("title_rank", 0)) if int(member.get("title_origin_nation_id", -1)) == nation_id and int(member.get("title_payer_id", -1)) == nation_id else 0
 	var title := designation(state, member, rank)
+	FamilyTree.record_death_title(state, member)
 	end_title(state, member, "death")
 	if rank > 0:
 		_inherit(state, nation_id, [{"id": person_id, "rank": rank, "branch": int(member.get("title_branch_id", person_id)), "title": title}])
