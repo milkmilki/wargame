@@ -64,6 +64,7 @@ func _init() -> void:
 		and str(lone_operation.get("reason", ""))
 			== "peace_occupation_restored"
 	)
+	simulation.free()
 	if valid:
 		print(
 			"ADMINISTRATIVE_PEACE_SETTLEMENT_OK center=%d members=%s restored=%d"
