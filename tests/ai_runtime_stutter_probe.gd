@@ -62,9 +62,11 @@ func _init() -> void:
 
 	print(
 		(
-			"=== 真实运行路径卡顿探针 国=%d 城=%d "
+			"=== 真实运行路径卡顿探针 初始国=%d 城市节点=%d (请求国=%d 陆地城=%d) "
 			+ "目标天=%d 倍率=%dx 补给网络=%s AI威胁=%s ==="
 		) % [
+			_state.nations.size(),
+			_state.cities.size(),
 			nations,
 			cities,
 			_target_days,

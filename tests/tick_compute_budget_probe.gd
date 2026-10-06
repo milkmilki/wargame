@@ -16,6 +16,8 @@ func _init() -> void:
 	root.add_child(sim)
 	sim.setup(state)
 	sim.tick_phase_profiling_enabled = true
+	var initial_nation_count := state.nations.size()
+	var initial_city_node_count := state.cities.size()
 	var budget_ms := 1000.0 / float(speed)
 
 	var peak := 0.0
@@ -42,8 +44,8 @@ func _init() -> void:
 			if state.day % 30 == 0:
 				over_month += 1
 
-	print("=== 纯计算量测量 国=%d 城=%d 推进%d天 (8x视觉预算=%.1fms/tick) ===" % [
-		nations, cities, state.day, budget_ms,
+	print("=== 纯计算量测量 初始国=%d 城市节点=%d (请求国=%d 陆地城=%d) 推进%d天 (8x视觉预算=%.1fms/tick) ===" % [
+		initial_nation_count, initial_city_node_count, nations, cities, state.day, budget_ms,
 	])
 	print("每日tick 纯计算: 峰值=%.1fms(第%d天) 均值=%.1fms (n=%d)" % [
 		peak, peak_day, sum / maxf(float(n), 1.0), n,
