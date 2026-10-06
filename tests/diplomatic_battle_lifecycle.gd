@@ -140,7 +140,9 @@ func _test_idle_repatriation() -> void:
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	sim._repatriate_after_access_revoked(0, 1)
 	_check(army.state == Army.State.RETREATING and army.diplomatic_repatriation and army.battle_id == -1, "idle former-ally garrison still repatriates")
-	_check(army.move_to == 0 and army.size == 15000, "repatriation starts real homeward movement without losses")
+	# Random road distances can make a transit city the first leg; the destination must be home.
+	var home_goal: int = army.move_to if army.path.is_empty() else army.path.back()
+	_check(army.on_edge and state.edge_of(2, army.move_to) != null and army.size == 15000 and home_goal >= 0 and state.cities[home_goal].owner_nation == 0, "repatriation starts a real route home without losses")
 	sim.free()
 
 func _test_control_transfer() -> void:

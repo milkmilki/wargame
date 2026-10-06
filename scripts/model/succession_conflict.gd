@@ -17,6 +17,11 @@ var defense_front_id: int = -1
 var pending_outcome: int = Outcome.NONE
 var succession_delayed: bool = false
 var qualification: Dictionary = {}
+var last_progress_day: int = -1
+var progress_positions: Dictionary = {}
+var progress_battles: Dictionary = {}
+var progress_garrison: int = -1
+var resolution_reason: String = ""
 
 func launched() -> bool:
 	return war_id >= 0

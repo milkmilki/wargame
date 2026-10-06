@@ -21,8 +21,12 @@ func run() -> void:
 	reserve.political_person_id = prince
 	var crown := state.create_army(0, 0, 15000)
 	crown.political_person_id = nation.crown_prince_person_id
-	crown.attack = 15
+	crown.attack = 1
 	crown.defense = 10
+	var crown_reserve := state.create_army(0, 0, 15000)
+	crown_reserve.political_person_id = nation.crown_prince_person_id
+	crown_reserve.attack = 1
+	state.edge_of(0, 1).distance = 1.0
 	check(SuccessionRules.begin_preparation(state, 0, prince), "qualifies")
 	var conflict: SuccessionConflict = state.succession_conflicts[0]
 	check(SuccessionRules.launch(state, conflict), "launch")
@@ -42,14 +46,15 @@ func run() -> void:
 			print("day=%d rebel=%d/%d city=%d edge=%s morale=%.3f crown=%d/%d city=%d edge=%s camp_owner=%d pending=%d" % [state.day, rebel.size, rebel.state, rebel.location_city, rebel.on_edge, rebel.morale, crown.size, crown.state, crown.location_city, crown.on_edge, state.cities[1].owner_nation, conflict.pending_outcome])
 		if rebel.size > 0 and rebel.state in [Army.State.RETREATING, Army.State.RECOVERING]:
 			routed = true
-			check(conflict.pending_outcome != SuccessionConflict.Outcome.SUPPRESSED or state.cities[1].owner_nation == 0, "rout_alone_not_failure")
+			check(conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED, "real_side_defeat_ends_revolt")
 		crown_moved = crown_moved or crown.on_edge
 		camp_taken = camp_taken or state.cities[1].owner_nation == 0
 		sim._update_succession_conflicts()
 		if not state.succession_conflicts.has(0):
 			break
-	check(routed, "real_field_rout")
-	check(crown_moved and camp_taken, "real_camp_counterattack")
+	check(routed or rebel.size == 0, "real_field_side_defeat")
+	check(conflict.resolution_reason == "field_defeat", "real_counterattack_locks_failure_at_field_result")
+	check(crown_moved and not camp_taken, "real_defender_counterattack_wins_without_needing_to_capture_camp")
 	check(not state.succession_conflicts.has(0), "cleanup")
 	check(nation.crown_prince_person_id == conflict.crown_person_id and not bool(PrincePolitics.person(state, 0, prince).alive), "suppressed_not_crown_changed")
 	check(state.campaign_pairs.is_empty(), "no_normal_cooldown_or_counterattack_privilege")

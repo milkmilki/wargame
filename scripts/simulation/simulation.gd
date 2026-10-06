@@ -1937,6 +1937,10 @@ func _update_succession_conflicts() -> void:
 				conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
 			elif state.cities[conflict.camp_city_id].owner_nation == nation.id:
 				conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED
+			else:
+				SuccessionRules.observe_progress(state, conflict)
+				if state.day - conflict.last_progress_day >= SuccessionRules.NO_PROGRESS_LIMIT:
+					SuccessionRules.fail(state, conflict, "no_progress")
 		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
 			_stop_succession_orders(conflict)
 			for battle in state.battles:
@@ -2065,12 +2069,7 @@ func _plan_succession_fronts(conflict: SuccessionConflict) -> void:
 	var defense := state.campaign_front(conflict.defense_front_id)
 	if offense == null or defense == null:
 		return
-	var V := 0
-	for army in _campaign_plan_armies(defense):
-		if SuccessionRules.effective(army):
-			V += army.size
-	var R := state.campaign_siege_requirement(conflict.rebel_nation_id, conflict.capital_city_id)
-	var requirement := ceili((R + V) * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.challenger_person_id)))
+	var requirement := SuccessionRules.attack_requirement(state, conflict)
 	var attack_force := _campaign_action_force(offense, conflict.capital_city_id, ActionCandidate.Kind.ATTACK, conflict.camp_city_id)
 	if offense.phase == CoalitionCampaignFront.Phase.HOLD_CAMP:
 		var ready: Array[Army] = []
@@ -2080,7 +2079,10 @@ func _plan_succession_fronts(conflict: SuccessionConflict) -> void:
 				ready.append(army)
 				troops += army.size
 		attack_force = {"armies": ready, "manpower": troops}
-	if offense.phase != CoalitionCampaignFront.Phase.HOLD_CAMP or int(attack_force.manpower) >= requirement:
+	var advancing := false
+	for army in attack_force.armies:
+		advancing = advancing or _campaign_army_at_or_advancing(army, conflict.capital_city_id)
+	if advancing or int(attack_force.manpower) >= requirement:
 		_dispatch_campaign_action(offense, attack_force, conflict.capital_city_id, ActionCandidate.Kind.ATTACK, CoalitionCampaignFront.Phase.ASSAULT_CENTER)
 	else:
 		for army in _campaign_plan_armies(offense):
@@ -2092,11 +2094,7 @@ func _plan_succession_fronts(conflict: SuccessionConflict) -> void:
 	var target := conflict.capital_city_id if threat else conflict.camp_city_id
 	var kind := ActionCandidate.Kind.REINFORCE if threat else ActionCandidate.Kind.ATTACK
 	var force := _campaign_action_force(defense, target, kind)
-	var enemy := 0
-	for army in _campaign_plan_armies(offense):
-		if army.is_at_city_node(conflict.camp_city_id) and SuccessionRules.effective(army):
-			enemy += army.size
-	var needed := ceili(enemy * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.crown_person_id)))
+	var needed := SuccessionRules.defense_requirement(state, conflict)
 	if threat or int(force.manpower) >= needed:
 		_dispatch_campaign_action(defense, force, target, kind, CoalitionCampaignFront.Phase.SORTIE)
 
@@ -11756,6 +11754,10 @@ func _execute_ai_candidate(
 ) -> bool:
 	if army == null or candidate == null:
 		return false
+	if not state.succession_conflicts.is_empty():
+		var succession := state.succession_conflict_for_identity(army.owner_nation)
+		if succession != null and succession.side_for(army.id) != 0 and succession.pending_outcome != SuccessionConflict.Outcome.NONE:
+			return false
 	if candidate.kind == ActionCandidate.Kind.ATTACK and candidate.target_city >= 0:
 		var owner := state.cities[candidate.target_city].owner_nation
 		if state.succession_identity_pair(army.owner_nation, owner) and not state.army_reserved_for_succession(army):
@@ -12848,6 +12850,14 @@ func _bucket_armies_by_location_city() -> Dictionary:
 func _resolve_combat_round(
 	battle: Battle
 ) -> void:
+	# Capture sides before Combat removes routed/dead armies or the siege shell swaps roles.
+	var succession := _succession_battle_context(battle)
+	var field_rules := battle.uses_field_combat_rules()
+	var challenger_side := 0
+	if succession != null:
+		for side_index in range(2):
+			for army in battle.side_a if side_index == 0 else battle.side_b:
+				if succession.side_for(army.id) == 1: challenger_side = side_index + 1
 	var sizes_before := {}
 	var war_by_army := {}
 	for side in [battle.side_a, battle.side_b]:
@@ -12861,6 +12871,9 @@ func _resolve_combat_round(
 	if battle.side_size(battle.side_a) > 0 and battle.side_size(battle.side_b) > 0:
 		battle.ensure_opening_dice(state.world_seed, battle.uses_field_combat_rules())
 	Combat.resolve_round(battle, state.day)
+	if succession != null and field_rules and battle.finished and battle.winner_side in [1, 2] and challenger_side > 0 and battle.winner_side != challenger_side:
+		if SuccessionRules.fail(state, succession, "field_defeat", battle.id):
+			_stop_succession_orders(succession)
 	var counted := {}
 	for side in [battle.side_a, battle.side_b, battle.routed_a, battle.routed_b]:
 		for army_value in side:

@@ -2,6 +2,44 @@ class_name SuccessionRules
 extends RefCounted
 
 const PREPARATION_LIMIT: int = 360
+const NO_PROGRESS_LIMIT: int = 180
+
+static func fail(state: GameState, conflict: SuccessionConflict, reason: String, battle_id: int = -1) -> bool:
+	if conflict.pending_outcome != SuccessionConflict.Outcome.NONE: return false
+	conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED
+	conflict.resolution_reason = reason
+	record(state, conflict, "result_locked", {"reason": reason, "battle_id": battle_id})
+	return true
+
+static func defense_requirement(state: GameState, conflict: SuccessionConflict) -> int:
+	var challengers := 0
+	for army in state.armies:
+		if conflict.army_ids.has(army.id) and effective(army) and army.is_at_city_node(conflict.camp_city_id): challengers += army.size
+	return ceili(challengers * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.crown_person_id)))
+
+static func attack_requirement(state: GameState, conflict: SuccessionConflict) -> int:
+	var defenders := 0
+	for army in state.armies:
+		if conflict.crown_army_ids.has(army.id) and effective(army): defenders += army.size
+	var raw := state.campaign_siege_requirement(conflict.rebel_nation_id, conflict.capital_city_id)
+	return ceili((raw + defenders) * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.challenger_person_id)))
+
+static func observe_progress(state: GameState, conflict: SuccessionConflict) -> void:
+	var positions := {}
+	for army in state.armies:
+		if conflict.side_for(army.id) == 0: continue
+		positions[army.id] = [army.location_city, army.on_edge,
+			army.move_from if army.on_edge else -1, army.move_to if army.on_edge else -1,
+			army.move_progress if army.on_edge else 0.0]
+	var battles := {}
+	for battle in state.battles:
+		if not battle.finished and conflict.contains_battle(battle): battles[battle.id] = battle.round_no
+	var garrison := state.cities[conflict.capital_city_id].garrison_manpower
+	if conflict.last_progress_day < 0 or positions != conflict.progress_positions or battles != conflict.progress_battles or garrison < conflict.progress_garrison:
+		conflict.last_progress_day = state.day
+	conflict.progress_positions = positions
+	conflict.progress_battles = battles
+	conflict.progress_garrison = garrison
 
 static func batch_context(state: GameState) -> Dictionary:
 	var owners := {}
@@ -188,6 +226,7 @@ static func launch(state: GameState, conflict: SuccessionConflict) -> bool:
 		army.campaign_war_id = conflict.war_id
 	state.diplomacy_revision += 1
 	state.refresh_derived()
+	observe_progress(state, conflict)
 	record(state, conflict, "launch", {"troops": troops, "R": info.R, "V": info.V})
 	return true
 
@@ -249,10 +288,14 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 		state.nations[conflict.rebel_nation_id].battle_groups.clear()
 	state.release_campaign_front(conflict.offense_front_id)
 	state.release_campaign_front(conflict.defense_front_id)
-	record(state, conflict, "finish", {"outcome": conflict.pending_outcome, "delayed": conflict.succession_delayed})
+	record(state, conflict, "finish", {"outcome": conflict.pending_outcome, "delayed": conflict.succession_delayed, "reason": conflict.resolution_reason})
 	var result_text := "%d年 皇子%s兵变，%s平之" % [int(state.day / 360) + 1, challenger_name, crown_name]
 	if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED:
 		result_text = "%d年 皇子%s兵变，改立%s为太子" % [int(state.day / 360) + 1, challenger_name, challenger_name]
+	elif conflict.resolution_reason == "no_progress":
+		result_text = "%d年 皇子%s兵变，久无进展，事败" % [int(state.day / 360) + 1, challenger_name]
+	elif conflict.resolution_reason == "field_defeat":
+		result_text = "%d年 皇子%s兵变，野战败于%s，事败" % [int(state.day / 360) + 1, challenger_name, crown_name]
 	state.chronicle_events.append({"day": state.day, "year": int(state.day / 360) + 1, "kind": "succession", "actor_ids": [conflict.nation_id], "person_ids": [conflict.challenger_person_id, conflict.crown_person_id], "result": "success" if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED else "failure", "text": result_text})
 	state.succession_conflicts.erase(nation.id)
 	if conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:

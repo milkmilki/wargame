@@ -6548,6 +6548,8 @@ static func nation_action_summary(
 
 
 static func campaign_phase_text(mode: int, phase: int) -> String:
+	if mode == CoalitionCampaignFront.Mode.DEFENSE and phase == CoalitionCampaignFront.Phase.ASSEMBLE:
+		return "防守·驻守并等待增援"
 	match phase:
 		CoalitionCampaignFront.Phase.ASSEMBLE:
 			return "进攻·在州外集结"
@@ -7818,6 +7820,8 @@ static func _nation_war_detail_sections(
 		war_ids.append(int(war_value))
 	war_ids.sort()
 	for war_id in war_ids:
+		var succession := game_state.succession_conflict_for_identity(nation_id)
+		var internal := succession != null and succession.war_id == war_id
 		var enemy_ids := game_state.campaign_enemy_ids(nation_id, war_id)
 		var title := "战争%d · 对%s" % [
 			war_id + 1,
@@ -7833,6 +7837,9 @@ static func _nation_war_detail_sections(
 				int(report.get("reserve_effective", 0)),
 			],
 		]
+		if internal:
+			title = "争位战%d · 对%s" % [war_id + 1, _nation_id_list_text(game_state, enemy_ids)]
+			lines = ["争位亲军：总兵力%d · 当前可战%d" % [int(report.get("war_pool_total", 0)), int(report.get("war_pool_effective", 0))], "仅争位军与太子亲军参战，中央军保持中立"]
 		var plans: Array = plans_by_war.get(war_id, [])
 		var pairs: Array = report.get("pairs", [])
 		if not pairs.is_empty():
@@ -7950,6 +7957,11 @@ static func _nation_campaign_detail_lines(
 	if campaign.combat_report_day >= 0:
 		allocation_requirement = int(front_force.get("allocation_requirement", allocation_requirement))
 	var action_text := campaign_phase_text(campaign.mode, campaign.phase)
+	var succession := game_state.succession_conflict_for_identity(nation_id)
+	var internal := succession != null and campaign.front_id in [succession.offense_front_id, succession.defense_front_id]
+	if internal:
+		field_minimum = SuccessionRules.attack_requirement(game_state, succession) if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE else SuccessionRules.defense_requirement(game_state, succession)
+		allocation_requirement = field_minimum
 	var force_text := (
 		"兵力：已绑定%d · 当前可战%d · %s%d"
 		% [
@@ -7991,9 +8003,14 @@ static func _nation_campaign_detail_lines(
 		action_text,
 	])
 	lines.append(force_text)
-	lines.append("需求：野战最低%d · 围城%d · 分兵目标%d" % [field_minimum,
-		game_state.campaign_attack_requirement(campaign.anchor_nation_id, campaign.center_city_id, false),
-		allocation_requirement])
+	if internal:
+		lines.append("争位需求：%s%d" % ["出发最低" if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE else "攻营参考", field_minimum])
+		lines.append("攻下首都州治才算夺位成功；争位方整场野战失败即结束")
+		lines.append("连续无进展%d/%d天" % [maxi(game_state.day - succession.last_progress_day, 0), SuccessionRules.NO_PROGRESS_LIMIT])
+	else:
+		lines.append("需求：野战最低%d · 围城%d · 分兵目标%d" % [field_minimum,
+			game_state.campaign_attack_requirement(campaign.anchor_nation_id, campaign.center_city_id, false),
+			allocation_requirement])
 	var receiving_city := game_state.campaign_receiving_city(campaign)
 	if receiving_city >= 0:
 		lines.append("接收点：%s · 空闲到场%d" % [
@@ -8010,7 +8027,7 @@ static func _nation_campaign_detail_lines(
 		)
 	if campaign.mode == CoalitionCampaignFront.Mode.OFFENSE:
 		if campaign.staging_city_id >= 0:
-			lines.append("%s：%s · 到场%d · 最低出发%d（野战人数门槛）" % [
+			lines.append("%s：%s · 到场%d · 最低出发%d（%s）" % [
 				"集结点／大营" if campaign.staging_city_id == campaign.camp_city_id else "集结",
 				WorldNaming.city_display_name(
 					game_state, campaign.staging_city_id
@@ -8021,7 +8038,8 @@ static func _nation_campaign_detail_lines(
 				),
 				game_state.campaign_minimum_launch_requirement(
 					nation_id, campaign.center_city_id
-				),
+				) if not internal else SuccessionRules.attack_requirement(game_state, succession),
+				"争位人数门槛" if internal else "野战人数门槛",
 			])
 		if campaign.camp_city_id >= 0 and campaign.camp_city_id != campaign.staging_city_id:
 			lines.append("大营：%s · 营内可战%d" % [
