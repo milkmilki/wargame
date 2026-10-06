@@ -33,7 +33,7 @@ func _run() -> void:
 	var found := false
 	for person in data.get("people", []):
 		if int(person.id) == crown:
-			found = person.title == "皇太子" and person.name == tree.members[crown].name
+			found = person.title == str(tree.members[crown].get("current_title", "无爵")) and person.badges.has("继承人") and person.name == tree.members[crown].name
 	check(found, "export preserves the crown title and special characters")
 	check(not html.contains("<script>window.injected"), "person data cannot terminate the embedded JSON script")
 	check(panel.call("build_export_html") == html, "same snapshot produces the same HTML")
@@ -106,6 +106,10 @@ func _test_shared_lineage() -> void:
 	var state := GameState.new()
 	state.generate_grid_world(13579)
 	load("res://tests/ruler_family_fixture.gd").ensure_candidates(state, 0)
+	state.region_ids.fill(-1)
+	var land := state.land_cities_of(0)
+	for index in range(land.size()): state.region_ids[land[index].id] = 10 if index < land.size() / 2 else 20
+	EmpireStatus.reconcile(state)
 	var subject := -1
 	for center in state.administrative_center_city_ids:
 		if state.cities[center].owner_nation != 0: continue
@@ -129,7 +133,11 @@ func _test_shared_lineage() -> void:
 	check(archived.people.size() == FamilyTree.tree_for_nation(state, 0).members.size(), "archived fief export retains all branches after revocation")
 	var found := false
 	for person in archived.people:
-		if int(person.id) == king: found = person.badges.has("末任")
+		if int(person.id) == king:
+			found = person.badges.has("末任")
+			check(person.title == "无爵", "archived fief card does not restore its ended foreign virtual designation")
+			check((person.title_history as Array).any(func(record): return str(record).contains("来源") and str(record).contains("分封建国")), "HTML details expose historical title issuer and actual ending reason")
+			check((person.badges as Array).any(func(badge): return str(badge).begins_with("属")), "shared genealogy labels the member's current other-country affiliation")
 	check(found, "archived ruler uses last-ruler status rather than reigning status")
 	panel.queue_free()
 	await process_frame

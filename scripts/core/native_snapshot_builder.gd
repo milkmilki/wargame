@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 24
+const SCHEMA_VERSION: int = 25
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
@@ -164,20 +164,41 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 			if parent >= 0 and (not members.has(parent) or parent == int(member.id)):
 				return "Invalid family parent reference"
 			var rank := int(member.get("title_rank", 0))
-			var restore := int(member.get("restorable_title_rank", 0))
-			if rank < 0 or rank > 3 or restore < 0 or restore > 3:
+			if rank < 0 or rank > 3:
 				return "Invalid royal title rank"
 			var payer := int(member.get("title_payer_id", -1))
+			if payer < -1 or payer >= count:
+				return "Invalid family affiliation"
+			var origin := int(member.get("title_origin_nation_id", -1))
+			if origin < -1 or origin >= count:
+				return "Invalid title origin"
+			if rank > 0 and (origin != payer or payer < 0 or not bool(nations.alive[payer]) or not bool(nations.royal_titles_initialized[payer]) or int(nations.family_tree_ids[payer]) != int(tree_id)):
+				return "Virtual title origin and payer must agree in a living domestic institution"
+			var title_history = member.get("title_history", [])
+			if not title_history is Array: return "Invalid title history"
+			var open_records := 0
+			for record in title_history:
+				if not record is Dictionary: return "Invalid title history record"
+				var source := int(record.get("origin_nation_id", -1))
+				if source < 0 or source >= count or str(record.get("origin_nation_name", "")).is_empty() or str(record.get("title", "")).is_empty() or int(record.get("rank", 0)) not in [1, 2, 3]:
+					return "Invalid title history source"
+				var start := int(record.get("start_day", -1))
+				var end := int(record.get("end_day", -1))
+				if start < 0 or (end >= 0 and (end < start or str(record.get("end_reason", "")).is_empty())):
+					return "Invalid title history lifetime"
+				if end < 0:
+					open_records += 1
+					if source != origin or int(record.rank) != rank or str(record.title) != str(member.get("virtual_title_name", "")):
+						return "Open title history differs from current title"
+			if open_records != (1 if rank > 0 else 0): return "Invalid open title history count"
 			if bool(member.get("title_managed", false)):
-				if payer < 0 or payer >= count or int(nations.family_tree_ids[payer]) != int(tree_id):
+				if payer < 0 or payer >= count:
 					return "Invalid royal payer reference"
 				if not members.has(int(member.get("title_branch_id", -1))):
 					return "Invalid royal branch reference"
 			var fief := int(member.get("enfeoffed_nation_id", -1))
 			if fief >= count or (fief >= 0 and rank > 0 and bool(member.get("alive", true))):
 				return "Actual fief and virtual title cannot coexist"
-			if bool(member.get("crown", false)) and rank > 0 and bool(member.get("alive", true)):
-				return "Crown cannot receive a virtual stipend"
 			var office := int(member.get("office_nation_id", -1))
 			if office >= count or (office >= 0 and int(nations.family_tree_ids[office]) != int(tree_id)):
 				return "Invalid royal office reference"

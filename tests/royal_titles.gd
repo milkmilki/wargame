@@ -23,14 +23,12 @@ func _init() -> void:
 	var count := 0
 	var original_titles := {}
 	for id in nation.prince_person_ids:
-		if id == nation.crown_prince_person_id:
-			check(int(members[id].get("title_rank", 0)) == 0, "crown has no stipend")
-			continue
 		count += 1
-		check(members[id].title_rank == 3, "Taizu's non-crown sons receive highest tier")
+		check(members[id].get("title_rank", 0) == 3, "all Taizu sons including heir receive highest tier")
+		check(int(members[id].get("title_origin_nation_id", -1)) == 0, "title has domestic issuer")
 		check_named_title(members[id])
 		original_titles[id] = members[id].current_title
-		check(members[id].title_children_generated, "adult family initialized even when childless")
+		check(members[id].get("title_children_generated", false), "adult family initialized even when childless")
 		var children: Array = service.children(members, id)
 		check(children.size() in [0, 2, 3, 4, 5], "uniform existing counts plus zero")
 		for child in children:

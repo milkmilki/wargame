@@ -16,7 +16,7 @@ func _init() -> void:
 	_test_country_royal_without_titles()
 	_test_remote_read_and_ancestral_chain()
 	_test_extinct_title_branch_disappears()
-	_test_crown_change_restores_previously_granted_title()
+	_test_crown_change_keeps_previously_granted_title()
 	for failure in failures:
 		push_error("RULER_EXTINCTION_FAIL: " + failure)
 	print("RULER_EXTINCTION_RESULT checks=%d failures=%d" % [checks, failures.size()])
@@ -72,7 +72,7 @@ func add_person(state: GameState, parent: int, rank: int = 1, order: int = 0, al
 	state.next_family_person_id += 1
 	var item := member(id, parent, order, alive)
 	if state.nations[0].royal_titles_initialized:
-		item.merge({"title_managed": true, "title_rank": rank, "title_payer_id": payer,
+		item.merge({"title_managed": true, "title_rank": rank, "title_payer_id": payer, "title_origin_nation_id": payer,
 			"title_branch_id": id, "title_adult": true, "title_disabled": false,
 			"current_title": RoyalTitles.NAMES[rank]})
 	members[id] = item
@@ -170,15 +170,15 @@ func _test_extinct_title_branch_disappears() -> void:
 	check(state.next_family_person_id == next_person, "title extinction/cannot fabricate a title heir for an extinct branch")
 	check(members.has(extinct_head) and members.has(dead_child) and int(members[dead_child].parent_id) == extinct_head, "title extinction/pedigree survives after the title disappears")
 
-func _test_crown_change_restores_previously_granted_title() -> void:
+func _test_crown_change_keeps_previously_granted_title() -> void:
 	var state := fixture()
 	# R already ruled a fief before entering the imperial throne. A former
 	# non-crown son retains the same R/J grant cache when he becomes crown.
 	state.nations[0].empire_founder_person_id = 0
-	var old_crown := add_person(state, 1, 0, 0)
+	var old_crown := add_person(state, 1, 2, 0)
 	var challenger := add_person(state, 1, 2, 1)
 	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
-	members[old_crown].merge({"crown": true, "title_adult": false,
+	members[old_crown].merge({"crown": true, "title_adult": true,
 		"title_grant_ruler_id": 1, "title_grant_rank": 2}, true)
 	state.nations[0].prince_person_ids.assign([old_crown, challenger])
 	state.nations[0].crown_prince_person_id = old_crown
@@ -192,9 +192,9 @@ func _test_crown_change_restores_previously_granted_title() -> void:
 	check(SuccessionRules.finish(state, conflict), "crown restoration/real CROWN_CHANGED conflict settlement")
 	check(state.nations[0].crown_prince_person_id == challenger and bool(members[challenger].get("crown", false)), "crown restoration/challenger becomes actual crown")
 	check(not bool(members[old_crown].get("crown", false)), "crown restoration/previous crown flag cleared")
-	check(int(members[old_crown].title_rank) == 2 and RoyalTitles.effective_rank(state, members[old_crown]) == 2, "crown restoration/history grant cache cannot suppress restored J title")
-	check(bool(members[old_crown].title_adult), "crown restoration/dethroned crown returns to adult virtual family")
-	check(int(members[challenger].title_rank) == 0 and RoyalTitles.effective_rank(state, members[challenger]) == 0, "crown restoration/new crown cannot keep virtual stipend")
+	check(int(members[old_crown].title_rank) == 2 and RoyalTitles.effective_rank(state, members[old_crown]) == 2, "deposed heir keeps original commandery title")
+	check(bool(members[old_crown].title_adult), "deposed heir keeps adult family lifecycle")
+	check(int(members[challenger].title_rank) == 2 and RoyalTitles.effective_rank(state, members[challenger]) == 2, "new heir retains existing virtual stipend")
 
 func _test_crown_and_dead_crown_replacement() -> void:
 	var state := fixture()
@@ -255,7 +255,7 @@ func _test_commoner_and_foreign_exclusion() -> void:
 	add_person(state, 0, 3, 0, true, 1)
 	var disabled := add_person(state, 0, 3, 1)
 	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
-	members[disabled]["title_disabled"] = true
+	members[disabled]["political_disqualified"] = true
 	var allowed := add_person(state, 0, 1, 9)
 	expect_choice(state, allowed, "collateral", "eligibility/titled domestic collateral excludes commoner direct son and foreign virtual prince")
 	members[allowed].alive = false

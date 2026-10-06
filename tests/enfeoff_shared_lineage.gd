@@ -153,7 +153,8 @@ func test_foreign_ruler() -> void:
 	check(PrincePolitics.eligible(ruler_before), "ruler/eligible_unenfeoffed_monarch")
 	var candidate := PrincePolitics.enfeoff_candidate(state, subject)
 	check(candidate != ruler_id, "ruler/foreign_monarch_excluded")
-	check(int(PrincePolitics.person(state, subject, candidate).parent_id) == int(ruler_before.parent_id), "ruler/idle_brothers_still_preferred")
+	check(int(PrincePolitics.person(state, subject, candidate).get("title_payer_id", -1)) == subject, "ruler/only_domestic_relatives_eligible")
+	check(int(PrincePolitics.person(state, subject, candidate).parent_id) == state.nations[subject].ruler_person_id, "ruler/foreign_brothers_excluded_choose_own_son")
 	var new_subject := enfeoff_next(state, subject)
 	check(new_subject >= 0, "ruler/second_real_enfeoff")
 	if new_subject >= 0:

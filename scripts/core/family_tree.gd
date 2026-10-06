@@ -140,6 +140,7 @@ static func record_current_title(state: GameState, nation_id: int) -> void:
 	var member: Dictionary = members[nation.ruler_person_id]
 	RoyalTitles.set_member(state, member, "current_title", title)
 	RoyalTitles.set_member(state, member, "office_nation_id", nation_id)
+	RoyalTitles.set_member(state, member, "title_payer_id", nation_id)
 	var titles: Array = member["titles"]
 	if not titles.has(title):
 		titles.append(title)
@@ -209,15 +210,32 @@ static func was_emperor(member: Dictionary) -> bool:
 	return false
 
 
-static func display_title(member: Dictionary, person_id: int, root_person_id: int) -> String:
+static func display_title(member: Dictionary, person_id: int, root_person_id: int, state: GameState = null) -> String:
 	if person_id == root_person_id or int(member.get("parent_id", -1)) < 0:
 		return "先祖"
-	if bool(member.get("crown", false)):
-		return "皇太子"
+	if state != null and bool(member.get("alive", true)):
+		var office := int(member.get("office_nation_id", -1))
+		if office >= 0 and office < state.nations.size() and state.nations[office].alive and state.nations[office].ruler_person_id == person_id:
+			return title_for_nation(state, office)
+		if RoyalTitles.effective_rank(state, member) <= 0:
+			return "无爵"
 	if member.has("current_title"):
 		return str(member.current_title)
-	var titles: Array = member.get("titles", [])
-	return str(titles.back()) if not titles.is_empty() else "无爵"
+	return "无爵"
+
+static func affiliation_label(state: GameState, member: Dictionary, selected_nation: int) -> String:
+	var owner := int(member.get("title_payer_id", -1))
+	if owner < 0 or owner >= state.nations.size() or owner == selected_nation:
+		return ""
+	return "属" + WorldNaming.nation_display_name(state, owner)
+
+static func title_history_lines(member: Dictionary) -> Array[String]:
+	var result: Array[String] = []
+	var reasons := {"accession": "登基", "enfeoffment": "分封建国", "annexation": "并入他国", "death": "去世", "retitled": "改爵"}
+	for record in member.get("title_history", []):
+		result.append("%s · 来源%s（国%d） · 第%d天授爵 · %s" % [record.title, record.origin_nation_name, int(record.origin_nation_id), int(record.start_day),
+			"现有爵位" if int(record.get("end_day", -1)) < 0 else "第%d天因%s终止" % [int(record.end_day), reasons.get(str(record.end_reason), str(record.end_reason))]])
+	return result
 
 
 static func _member(
@@ -236,6 +254,9 @@ static func _member(
 		"children_initialized": false,
 		"titles": [] as Array[String],
 		"nation_ids": nation_ids,
+		"title_payer_id": nation_id,
+		"title_origin_nation_id": -1,
+		"title_history": [],
 	}
 
 

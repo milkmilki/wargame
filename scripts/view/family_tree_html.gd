@@ -2,7 +2,7 @@ class_name FamilyTreeHtml
 extends RefCounted
 ## 自包含离线文档。仅接受只读谱系与画布布局，不访问模拟入口。
 
-static func render(tree: Dictionary, nation_name: String, current: int, nation_alive: bool, day: int, rects: Dictionary) -> String:
+static func render(tree: Dictionary, nation_name: String, current: int, nation_alive: bool, day: int, rects: Dictionary, state: GameState = null, nation_id: int = -1) -> String:
 	var people: Array = []
 	var members: Dictionary = tree.get("members", {})
 	var ids := members.keys()
@@ -12,6 +12,10 @@ static func render(tree: Dictionary, nation_name: String, current: int, nation_a
 		var rect: Rect2 = rects.get(id, Rect2())
 		var badges: Array[String] = []
 		if bool(member.get("taizu", false)): badges.append("太祖")
+		if bool(member.get("crown", false)) and bool(member.get("alive", true)): badges.append("继承人")
+		if state != null:
+			var affiliation := FamilyTree.affiliation_label(state, member, nation_id)
+			if not affiliation.is_empty(): badges.append(affiliation)
 		if str(member.get("accession_source", "")) == "remote": badges.append("远支入继")
 		elif bool(member.get("synthetic_ancestor", false)): badges.append("补录")
 		if not bool(member.get("alive", true)): badges.append("已故")
@@ -19,7 +23,8 @@ static func render(tree: Dictionary, nation_name: String, current: int, nation_a
 		people.append({
 			"id": int(id), "parent": int(member.get("parent_id", -1)),
 			"name": str(member.get("name", "？")),
-			"title": FamilyTree.display_title(member, int(id), int(tree.get("root_person_id", -1))),
+			"title": FamilyTree.display_title(member, int(id), int(tree.get("root_person_id", -1)), state),
+			"title_history": FamilyTree.title_history_lines(member),
 			"titles": member.get("titles", []), "badges": badges, "emperor": FamilyTree.was_emperor(member),
 			"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y],
 		})
@@ -86,7 +91,7 @@ input { width:100%; }
 <div id="viewport"><canvas id="tree" tabindex="0" aria-label="家族树图谱，可拖动缩放；也可通过右侧姓名搜索浏览人物"></canvas></div>
 <aside>
 <label for="search">搜索姓名或爵位</label>
-<input id="search" type="search" placeholder="输入姓名、皇太子、晋王等">
+<input id="search" type="search" placeholder="输入姓名、继承人、晋王等">
 <p id="matches" role="status"></p>
 <div id="results" class="people"></div>
 <section id="details" aria-live="polite"></section>
@@ -176,6 +181,7 @@ input { width:100%; }
     const h = document.createElement('h2'); h.textContent=p.name; details.append(h);
     const info = document.createElement('p'); info.textContent = [p.title,...p.badges].join(' · '); details.append(info);
     const titles = document.createElement('p'); titles.textContent='历封：'+(p.titles.join('、') || '无'); details.append(titles);
+    for (const record of p.title_history) { const line=document.createElement('p'); line.textContent=record; details.append(line); }
     const parent = byId.get(p.parent), label = document.createElement('p');
     label.textContent = parent ? '父辈' : '父辈未载'; details.append(label);
     if (parent) details.append(personButton(parent));

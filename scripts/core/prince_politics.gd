@@ -12,11 +12,22 @@ static func person(state: GameState, nation_id: int, person_id: int) -> Dictiona
 	return FamilyTree.tree_for_nation(state, nation_id).get("members", {}).get(person_id, {})
 
 static func eligible(member: Dictionary) -> bool:
-	return not member.is_empty() and bool(member.get("alive", true)) and not bool(member.get("title_disabled", false)) and int(member.get("enfeoffed_nation_id", -1)) < 0
+	return not member.is_empty() and bool(member.get("alive", true)) and not bool(member.get("political_disqualified", false)) and int(member.get("enfeoffed_nation_id", -1)) < 0
 
 static func eligible_for_nation(member: Dictionary, nation_id: int) -> bool:
 	var payer := int(member.get("title_payer_id", -1))
 	return eligible(member) and (payer < 0 or payer == nation_id)
+
+## 立储和废储只更新身份，爵位、俸禄、生育结果不参与此入口。
+static func set_heir(state: GameState, nation_id: int, person_id: int) -> void:
+	var nation := state.nations[nation_id]
+	if nation.crown_prince_person_id != person_id:
+		nation.crown_prince_person_id = person_id
+		state.family_revision += 1
+	for id in nation.prince_person_ids:
+		var member := person(state, nation_id, id)
+		if not member.is_empty() and int(member.get("title_payer_id", nation_id)) == nation_id:
+			RoyalTitles.set_member(state, member, "crown", id == person_id)
 
 static func ensure_generation(state: GameState, nation_id: int) -> void:
 	var nation := state.nations[nation_id]
@@ -30,10 +41,8 @@ static func ensure_generation(state: GameState, nation_id: int) -> void:
 	for id in initialize_children(state, nation_id, nation.ruler_person_id):
 		if eligible_for_nation(members[id], nation_id) and not _busy(state, nation_id, id):
 			nation.prince_person_ids.append(id)
-	nation.crown_prince_person_id = nation.prince_person_ids[0] if not nation.prince_person_ids.is_empty() else -1
+	set_heir(state, nation_id, nation.prince_person_ids[0] if not nation.prince_person_ids.is_empty() else -1)
 	nation.succession_competition_closed = false
-	for id in nation.prince_person_ids:
-		members[id]["crown"] = id == nation.crown_prince_person_id
 	RoyalTitles.grant_generation(state, nation_id)
 	state.family_revision += 1
 
@@ -66,7 +75,10 @@ static func _create_person(state: GameState, nation_id: int, parent_id: int, ord
 	members[id] = {"id": id, "name": name, "parent_id": parent_id, "child_ids": [], "children_initialized": false, "titles": [], "nation_ids": [],
 		"archetype": RulerProfile.archetype_for(state.world_seed, nation_id, salt),
 		"traits": RulerProfile.traits_for(state.world_seed, nation_id, salt),
-		"birth_order": order, "alive": true, "enfeoffed_nation_id": -1}
+		"birth_order": order, "alive": true, "enfeoffed_nation_id": -1,
+		"title_payer_id": nation_id, "title_origin_nation_id": -1, "title_history": [],
+		"title_managed": true, "title_adult": false,
+		"title_branch_id": int(members.get(parent_id, {}).get("title_branch_id", id))}
 	state.family_revision += 1
 	return id
 
@@ -120,7 +132,7 @@ static func _peaceful_subject_of(state: GameState, subject: int, overlord: int) 
 	return false
 
 static func _successor_candidate(state: GameState, nation_id: int, member: Dictionary, crown: bool = false) -> bool:
-	if member.is_empty() or not bool(member.get("alive", true)) or bool(member.get("title_disabled", false)) or bool(member.get("synthetic_ancestor", false)) or not member.has("archetype"):
+	if member.is_empty() or not bool(member.get("alive", true)) or bool(member.get("political_disqualified", false)) or bool(member.get("synthetic_ancestor", false)) or not member.has("archetype"):
 		return false
 	var id := int(member.id)
 	var nation := state.nations[nation_id]
@@ -202,8 +214,8 @@ static func select_successor(state: GameState, nation_id: int) -> Dictionary:
 		if not descendants.has(id) and distance.has(id) and _successor_candidate(state, nation_id, members[id]): collateral.append(int(id))
 	collateral.sort_custom(func(a: int, b: int) -> bool:
 		if distance[a] != distance[b]: return distance[a] < distance[b]
-		var first := maxi(int(members[a].get("title_rank", 0)), int(members[a].get("restorable_title_rank", 0)))
-		var second := maxi(int(members[b].get("title_rank", 0)), int(members[b].get("restorable_title_rank", 0)))
+		var first := RoyalTitles.effective_rank(state, members[a])
+		var second := RoyalTitles.effective_rank(state, members[b])
 		if first != second: return first > second
 		return RoyalTitles._birth_less(members, a, b))
 	if collateral.is_empty(): return remote
@@ -241,11 +253,13 @@ static func accede(state: GameState, nation_id: int) -> bool:
 	centralize(state, nation_id, centralize_ids)
 	previous["alive"] = false
 	previous["office_nation_id"] = -1
+	set_heir(state, nation_id, -1)
+	RoyalTitles.end_title(state, member, "accession")
 	member["crown"] = false
-	member["title_rank"] = 0
-	member["restorable_title_rank"] = int(previous.get("restorable_title_rank", 0)) if was_fief else 0
-	member["restorable_title_name"] = str(previous.get("restorable_title_name", "")) if was_fief else ""
-	member["virtual_title_name"] = ""
+	member["title_payer_id"] = nation_id
+	member["title_managed"] = true
+	member["title_adult"] = true
+	member["title_branch_id"] = int(member.get("title_branch_id", incoming))
 	member["enfeoffed_nation_id"] = -1
 	if was_fief:
 		member["enfeoffed_nation_id"] = nation_id
@@ -351,7 +365,7 @@ static func report(state: GameState, nation_id: int, troops: Dictionary = {}) ->
 	for id in nation.prince_person_ids:
 		var member := person(state, nation_id, id)
 		princes.append({"id": id, "name": member.get("name", ""), "archetype": member.get("archetype", RulerProfile.BALANCED),
-			"title": FamilyTree.display_title(member, id, int(FamilyTree.tree_for_nation(state, nation_id).get("root_person_id", -1))),
+			"title": FamilyTree.display_title(member, id, int(FamilyTree.tree_for_nation(state, nation_id).get("root_person_id", -1)), state),
 			"traits": (member.get("traits", []) as Array).duplicate(), "alive": member.get("alive", true), "enfeoffed": int(member.get("enfeoffed_nation_id", -1)) >= 0,
 			"crown": id == nation.crown_prince_person_id, "troops": int(troops.get(id, 0)), "share": float(troops.get(id, 0)) / maxi(total, 1)})
 	var conflict: SuccessionConflict = state.succession_conflicts.get(nation_id)
@@ -372,7 +386,7 @@ static func report(state: GameState, nation_id: int, troops: Dictionary = {}) ->
 
 static func display_lines(report_data: Dictionary) -> Array[String]:
 	var lines: Array[String] = ["%s    中央直属 %d人" % [report_data.status, report_data.central]]
-	if not bool(report_data.get("has_crown", true)): lines.append("无储君 · 到期按宗室继承规则择嗣")
+	if not bool(report_data.get("has_crown", true)): lines.append("无继承人 · 到期按宗室继承规则择嗣")
 	var qualification: Dictionary = report_data.get("qualification", {})
 	if not qualification.is_empty():
 		lines.append("起事门槛 %d人（R=%d，V=%d）    已到场 %d人" % [qualification.requirement, qualification.R, qualification.V, qualification.get("arrived", 0)])
@@ -383,7 +397,7 @@ static func display_lines(report_data: Dictionary) -> Array[String]:
 		for trait_id in prince.traits:
 			traits.append(RulerProfile.trait_name(str(trait_id)))
 		var profile_text := RulerProfile.archetype_name(int(prince.archetype)) + (" / " + "、".join(traits) if not traits.is_empty() else "")
-		var status := "储君" if prince.crown else str(prince.get("title", "无爵"))
+		var status := str(prince.get("title", "无爵")) + (" · 继承人" if prince.crown else "")
 		if not prince.alive:
 			status += "（已故）"
 		lines.append("%s %s · %s    掌军 %d人（%.1f%%）" % [status, prince.name, profile_text, prince.troops, float(prince.share) * 100.0])

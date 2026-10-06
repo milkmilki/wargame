@@ -33,7 +33,7 @@ func _run() -> void:
 	)
 	for prince_id in sovereign.prince_person_ids:
 		_check(
-			FamilyTree.display_title(members[prince_id], prince_id, root_id) == ("皇太子" if prince_id == sovereign.crown_prince_person_id else str(members[prince_id].get("current_title", "无爵"))),
+			FamilyTree.display_title(members[prince_id], prince_id, root_id) == str(members[prince_id].get("current_title", "无爵")),
 			"initial_prince_is_not_ancestor"
 		)
 	_check(

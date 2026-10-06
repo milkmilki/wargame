@@ -257,7 +257,7 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 		if receiver < 0 or receiver >= state.nations.size() or receiver == conflict.rebel_nation_id:
 			receiver = nation.id
 	if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED:
-		nation.crown_prince_person_id = conflict.challenger_person_id
+		PrincePolitics.set_heir(state, nation.id, conflict.challenger_person_id)
 		nation.succession_competition_closed = true
 	elif conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:
 		PrincePolitics.person(state, nation.id, conflict.challenger_person_id)["alive"] = false
@@ -296,9 +296,7 @@ static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
 	if conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:
 		RoyalTitles.settle_death(state, nation.id, conflict.challenger_person_id)
 	RoyalTitles.grant_generation(state, nation.id)
-	# 授爵先看到原储君旗号，避免历史授爵缓存跳过其爵位恢复。
-	for person_id in nation.prince_person_ids:
-		RoyalTitles.set_member(state, PrincePolitics.person(state, nation.id, person_id), "crown", person_id == nation.crown_prince_person_id)
+	PrincePolitics.set_heir(state, nation.id, nation.crown_prince_person_id)
 	state.family_revision += 1
 	state.diplomacy_revision += 1
 	state.refresh_derived()
@@ -325,8 +323,8 @@ static func _record_result(state: GameState, conflict: SuccessionConflict, chall
 			disposition = "废太子%s仍领实封%s" % [crown_name, former_crown.title]
 		elif rank > 0:
 			former_crown.title = RoyalTitles.designation(state, member, rank)
-			former_crown.status = "restored" if former_crown.title == crown_previous_title else "granted"
-			disposition = "废太子%s%s%s" % [crown_name, "恢复原爵" if former_crown.status == "restored" else "封为", former_crown.title]
+			former_crown.status = "retained" if former_crown.title == crown_previous_title else "granted"
+			disposition = "废太子%s%s%s" % [crown_name, "仍为" if former_crown.status == "retained" else "封为", former_crown.title]
 		result_text = opening + "废皇太子%s，改立%s为皇太子；%s" % [crown_name, challenger_name, disposition]
 	elif conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE:
 		result_text = opening + "因外部干扰而止"

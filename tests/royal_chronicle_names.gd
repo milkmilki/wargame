@@ -26,7 +26,9 @@ func rebellion(titles: bool, restored: bool = false) -> Dictionary:
 		RoyalTitles.set_member(state, member, "virtual_title_name", "晋王")
 		RoyalTitles.set_member(state, member, "current_title", "晋王")
 	var crown_member := PrincePolitics.person(state, 0, nation.crown_prince_person_id)
-	if restored: RoyalTitles.set_member(state, crown_member, "virtual_title_name", "秦王")
+	if restored:
+		RoyalTitles.set_member(state, crown_member, "virtual_title_name", "秦王")
+		RoyalTitles.set_member(state, crown_member, "current_title", "秦王")
 	var rebel := state.create_army(0, 1, 15000)
 	rebel.political_person_id = challenger
 	var crown := state.create_army(0, 0, 1000)
@@ -72,8 +74,8 @@ func run() -> void:
 		check(str(event.text).contains("废皇太子" + old_name) and str(event.text).contains("改立" + before_name + "为皇太子"), "success records both deposition and new crown")
 		check(RoyalTitles.effective_rank(x.state, x.old_crown) == RoyalTitles.PRINCE and str(event.text).contains(final_title), "chronicle records the actual post-settlement grant")
 		check(event.get("challenger_title", "") == "晋王" and event.get("former_crown", {}).get("title", "") == final_title, "historical structured title data is frozen")
-		check(event.get("former_crown", {}).get("status", "") == ("restored" if restored else "granted"), "history distinguishes restored and newly granted titles")
-		check(str(event.text).contains("恢复原爵" if restored else "封为"), "grant status is readable in the chronicle")
+		check(event.get("former_crown", {}).get("status", "") == ("retained"), "deposition retains the same title")
+		check(str(event.text).contains("仍为"), "grant status is readable in the chronicle")
 		var text_before: String = event.text
 		x.old_crown.current_title = "其他封号"
 		x.challenger.current_title = "无爵"

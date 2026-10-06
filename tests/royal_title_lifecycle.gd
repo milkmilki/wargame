@@ -65,23 +65,23 @@ func _test_enfeoff_revoke() -> void:
 		if int(tree.id) != state.nations[0].family_tree_id: continue
 		for member in tree.members:
 			if int(member.id) == king:
-				check(member.restorable_title_name == original_title, "native genealogy snapshot retains the suspended designation")
+				check((member.title_history as Array).any(func(record): return record.title == original_title and record.end_reason == "enfeoffment"), "native snapshot retains the terminated designation")
 	FamilyFixture.ensure_candidates(state, subject, 2)
 	check(ids.has(king), "enfeoffment reuses original person")
-	check(members[king].restorable_title_rank == 3 and RoyalTitles.effective_rank(state, members[king]) == 0, "fief replaces stipend while retaining qualification")
+	check(int(members[king].get("title_origin_nation_id", -1)) == -1 and RoyalTitles.effective_rank(state, members[king]) == 0, "new fief terminates old title")
 	var existing := RoyalTitles.children(members, king)
 	for id in state.nations[subject].prince_person_ids:
 		check(existing.has(id) and int(members[id].parent_id) == king, "fief candidates reuse actual children")
 		if id != state.nations[subject].crown_prince_person_id:
-			check(members[id].title_rank == 2, "fief junior lines use original rank minus one")
+			check(int(members[id].get("title_rank", 0)) == 0, "non-empire fief children receive no foreign grants")
 	var old_crown := state.nations[subject].crown_prince_person_id
 	check(PrincePolitics.accede(state, subject), "actual fief succession")
-	check(state.nations[subject].ruler_person_id == old_crown and members[old_crown].restorable_title_rank == 3, "real fief successor inherits restoration qualification")
+	check(state.nations[subject].ruler_person_id == old_crown and int(members[old_crown].get("title_rank", 0)) == 0, "fief successor inherits actual office without old virtual title")
 	var blood := {}
 	for id in members:
 		blood[id] = int(members[id].parent_id)
 	check(state.revoke_vassal(subject), "real revoke transaction succeeds")
-	check(members[old_crown].title_rank == 3 and members[old_crown].current_title == original_title, "revocation restores the exact inherited virtual title")
+	check(int(members[old_crown].get("title_rank", 0)) == 0 and members[old_crown].current_title == "无爵", "revocation never restores terminated title")
 	check(state.nations[subject].absorbed_into_nation_id == 0, "annex archive records actual destination")
 	check(TitleAudit.inspect(state).is_empty(), "revoke preserves cohorts of already reproducing families")
 	for id in blood:
@@ -95,8 +95,10 @@ func _test_enfeoff_revoke() -> void:
 		if members[id].get("title_payer_id", -1) == 0 and members[id].get("title_adult", false) and members[id].get("alive", true) and int(members[id].get("office_nation_id", -1)) < 0:
 			adults.append(int(id))
 	check(PrincePolitics.accede(state, 0), "overlord accession after withdrawal")
+	var protected := [state.nations[0].ruler_person_id] + RoyalTitles.children(members, state.nations[0].ruler_person_id)
 	for id in adults:
-		check(not members[id].alive, "restored adult cohorts die at next paying ruler succession")
+		if not protected.has(id):
+			check(not members[id].alive, "returned adult cohorts die at next paying ruler succession")
 
 func _test_fief_becomes_empire() -> void:
 	var state := fixture()
@@ -128,15 +130,14 @@ func _test_late_recognition() -> void:
 			state.region_ids[city.id] = 10 if city.owner_nation == 0 else 20
 	EmpireStatus.reconcile(state)
 	var member := PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id)
-	check(member.restorable_title_rank == 3, "Taizu retroactively qualifies already landed son")
-	check(RoyalTitles.matches_rank(str(member.restorable_title_name), 3), "retroactive landed qualification has a saved one-character designation")
-	check(state.nations[subject].royal_titles_initialized, "country fief carries inherited institution")
+	check(int(member.get("title_origin_nation_id", -1)) == -1, "Taizu cannot retroactively grant a foreign landed son")
+	check(int(member.get("title_rank", 0)) == 0, "foreign landed son has no virtual grant")
+	check(not state.nations[subject].royal_titles_initialized, "country fief does not carry foreign institution")
 	check(state.nations[subject].empire_founder_person_id == -1 and state.nations[subject].state_level == 0, "inherited institution creates no second Taizu")
 	for id in state.nations[subject].prince_person_ids:
-		check(int(PrincePolitics.person(state, subject, id).title_branch_id) == int(member.id), "retroactive landed qualification joins children to the original title branch")
-	var first_root := int(member.id)
+		check(int(PrincePolitics.person(state, subject, id).get("title_rank", 0)) == 0, "foreign children have no retroactive grant")
 	check(PrincePolitics.accede(state, subject), "late-qualified fief succeeds")
-	check(int(PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id).title_branch_id) == first_root, "fief succession retains original title branch as well as rank")
+	check(int(PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id).get("title_rank", 0)) == 0, "country succession does not reactivate old branch")
 
 func _test_foreign_annex(reverse: bool) -> void:
 	var state := fixture()
@@ -153,8 +154,8 @@ func _test_foreign_annex(reverse: bool) -> void:
 	check(state.nations[loser].family_tree_id == tree_id and state.family_trees[tree_id].members.keys() == ids, "foreign annex retains separate archive without births")
 	check(RoyalTitles.report(state, loser).basis_points == 0, "extinct foreign dynasty stops expense")
 	for member in persons.values():
-		if member.get("title_payer_id", -1) == loser:
-			check(member.get("title_disabled", false), "foreign title reproduction explicitly disabled")
+		if member.get("title_payer_id", -1) == winner:
+			check(int(member.get("title_rank", 0)) == 0 and int(member.get("title_origin_nation_id", -1)) == -1, "absorbed foreign title never reproduces or charges")
 	check(Audit.inspect(state).errors.is_empty(), "both victory directions release political army bindings")
 
 func _test_finance_history() -> void:

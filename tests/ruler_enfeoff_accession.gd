@@ -47,13 +47,14 @@ func _test_landed_accession(reject: bool, scheduled: bool = false) -> void:
 	for member in members.values():
 		if int(member.id) != king and int(member.id) != old_ruler:
 			member["alive"] = false
+			RoyalTitles.end_title(state, member, "death")
 	var child := PrincePolitics._create_person(state, subject, king, 0)
 	members[child]["children_initialized"] = true
-	RoyalTitles._grant(state, members[child], 2, subject, int(members[king].title_branch_id), true)
+	RoyalTitles._grant(state, members[child], 0, subject, int(members[king].title_branch_id), true)
 	state.nations[subject].prince_person_ids.assign([child])
 	state.nations[subject].crown_prince_person_id = child
 	members[child]["crown"] = true
-	members[child]["title_rank"] = 0
+
 	members[king]["children_initialized"] = true
 	members[old_ruler]["children_initialized"] = true
 	nation.crown_prince_person_id = -1

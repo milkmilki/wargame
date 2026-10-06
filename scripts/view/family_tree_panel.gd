@@ -40,7 +40,7 @@ func build_export_html() -> String:
 	_tree_canvas.set("current_person_id", nation.ruler_person_id)
 	_tree_canvas.set("current_nation_alive", nation.alive)
 	_tree_canvas.call("rebuild_layout")
-	return FamilyTreeHtml.render(tree, WorldNaming.nation_display_name(_state, _nation_id), nation.ruler_person_id, nation.alive, _state.day, _tree_canvas.get("_rect_by_person"))
+	return FamilyTreeHtml.render(tree, WorldNaming.nation_display_name(_state, _nation_id), nation.ruler_person_id, nation.alive, _state.day, _tree_canvas.get("_rect_by_person"), _state, _nation_id)
 
 
 func export_html(path: String) -> Error:
@@ -82,6 +82,8 @@ func open_for_nation(nation_id: int) -> bool:
 	if not is_open():
 		_navigation.clear()
 	_nation_id = nation_id
+	_tree_canvas.set("state", _state)
+	_tree_canvas.set("selected_nation_id", nation_id)
 	_title.text = "%s家族树" % WorldNaming.nation_display_name(
 		_state, nation_id
 	)
@@ -197,7 +199,8 @@ func _append_title_page(content: VBoxContainer, ids: Array, offset: int) -> void
 	for index in range(offset, mini(offset + 40, ids.size())):
 		var member: Dictionary = members.get(int(ids[index]), {})
 		var label := Label.new()
-		label.text = "%s · %s%s" % [member.get("name", "？"), FamilyTree.display_title(member, int(ids[index]), -1), "" if bool(member.get("title_adult", false)) else "（待继承）"]
+		label.text = "%s · %s%s%s" % [member.get("name", "？"), FamilyTree.display_title(member, int(ids[index]), -1, _state), " · 继承人" if bool(member.get("crown", false)) else "", "" if bool(member.get("title_adult", false)) else "（待继承）"]
+		label.tooltip_text = "\n".join(FamilyTree.title_history_lines(member))
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.custom_minimum_size.x = 210
 		label.add_theme_font_override("font", _history_font)
@@ -482,6 +485,8 @@ func _build_ui() -> void:
 
 
 class FamilyTreeCanvas extends Control:
+	var state: GameState
+	var selected_nation_id: int = -1
 	var tree: Dictionary = {}
 	var current_person_id: int = -1
 	var current_nation_alive: bool = true
@@ -495,6 +500,18 @@ class FamilyTreeCanvas extends Control:
 
 	func _ready() -> void:
 		resized.connect(rebuild_layout)
+
+	func _get_tooltip(at_position: Vector2) -> String:
+		for id in _rect_by_person:
+			if (_rect_by_person[id] as Rect2).has_point(at_position):
+				var member: Dictionary = tree.members[id]
+				var lines: Array[String] = [str(member.get("name", "？"))]
+				if state != null:
+					var affiliation := FamilyTree.affiliation_label(state, member, -1)
+					if not affiliation.is_empty(): lines.append(affiliation)
+				lines.append_array(FamilyTree.title_history_lines(member))
+				return "\n".join(lines)
+		return ""
 
 
 	func rebuild_layout() -> void:
@@ -637,7 +654,7 @@ class FamilyTreeCanvas extends Control:
 			)
 		var name := str(member.get("name", "？"))
 		var title_text := FamilyTree.display_title(
-			member, person_id, int(tree.get("root_person_id", -1))
+			member, person_id, int(tree.get("root_person_id", -1)), state
 		)
 		draw_string(
 			font, rect.position + Vector2(10.0, 29.0), name,
@@ -653,7 +670,10 @@ class FamilyTreeCanvas extends Control:
 		if bool(member.get("taizu", false)): badges.append("太祖")
 		if str(member.get("accession_source", "")) == "remote": badges.append("远支入继")
 		elif bool(member.get("synthetic_ancestor", false)): badges.append("补录")
-		if bool(member.get("crown", false)) and bool(member.get("alive", true)): badges.append("储君")
+		if bool(member.get("crown", false)) and bool(member.get("alive", true)): badges.append("继承人")
+		if state != null:
+			var affiliation := FamilyTree.affiliation_label(state, member, selected_nation_id)
+			if not affiliation.is_empty(): badges.append(affiliation)
 		if not bool(member.get("alive", true)): badges.append("已故")
 		elif is_current: badges.append("在位" if current_nation_alive else "末任")
 		if not badges.is_empty():

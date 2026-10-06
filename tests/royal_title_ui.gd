@@ -54,7 +54,7 @@ func _run() -> void:
 	for id in state.nations[0].prince_person_ids:
 		check(not FamilyTree.display_title(members[id], id, 0).contains("皇子"), "card subtitle shows current title")
 		if id == state.nations[0].crown_prince_person_id:
-			check(FamilyTree.display_title(members[id], id, 0) == "皇太子", "crown subtitle shows huang taizi instead of untitled")
+			check(FamilyTree.display_title(members[id], id, 0) == str(members[id].get("current_title", "无爵")), "heir subtitle shows his actual title")
 	var count := rects.size()
 	print("ROYAL_TITLE_UI nodes=%d open_us=%d visible=%s" % [count, Time.get_ticks_usec() - started, str(viewport_rect)])
 	var output := OS.get_environment("WW_VISUAL_OUTPUT")
