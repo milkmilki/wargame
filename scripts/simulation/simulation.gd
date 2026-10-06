@@ -4343,7 +4343,13 @@ func _execute_diplomatic_action(
 			var defenders: Array[int] = []
 			# Re-read actual arrival, routes, threat and resources at submission.
 			if state.nations[nation_a].war_preparation_target_nation >= 0:
-				if state.nations[nation_a].war_preparation_target_nation != nation_b or not DiplomacyAI.war_preparation_launch_allowed(state, nation_a, {}):
+				if state.nations[nation_a].war_preparation_target_nation != nation_b:
+					return false
+				# Exact trade/settlement tokens validate the reusable fiscal
+				# projection. A new cache still rebuilds current food, troops,
+				# debt and arrival inputs rather than inheriting scoring reports.
+				var launch_cache := _seed_trade_forecast({})
+				if not DiplomacyAI.war_preparation_launch_allowed(state, nation_a, launch_cache):
 					return false
 			var declaration_allowed := (
 				(int(action.get("objective_city", -1)) < 0 or DiplomacyAI._ruler_allows_war_objective(
@@ -7197,18 +7203,25 @@ func _run_ai_force_structure_phase(
 	spread_runtime_work: bool,
 	runtime_slice_started: int
 ) -> Dictionary:
-	# Only stable diplomatic/topology primitives survive declaration launches;
-	# dynamic resource and food reports are rebuilt against the current state.
-	var resource_cache := (
-		{}
-		if ai_snapshot_resource_cache_reuse_disabled
-		else _stable_force_resource_cache_from_snapshot(
-			snapshot_diplomacy_cache
-		)
-	)
-	_seed_trade_forecast(resource_cache)
+	var resource_cache := {}
+	var resource_cache_seeded := false
 	var decision_contexts := {}
 	for nation_id in managed_nations:
+		# Campaign support does not consume the force-review food report.
+		# Preserve its empty-context fallback without running an unused
+		# capacity search for nations outside the half-year review phase.
+		decision_contexts[nation_id] = {}
+		if not _force_structure_review_due(nation_id, state.day):
+			continue
+		if not resource_cache_seeded:
+			# Only stable topology survives declaration launches. Food and
+			# resource reports are rebuilt against current state on first use.
+			if not ai_snapshot_resource_cache_reuse_disabled:
+				resource_cache = _stable_force_resource_cache_from_snapshot(
+					snapshot_diplomacy_cache
+				)
+			_seed_trade_forecast(resource_cache)
+			resource_cache_seeded = true
 		var context: Dictionary = force_contexts[nation_id]
 		var decision_context := {}
 		var context_started := (
@@ -7220,8 +7233,6 @@ func _run_ai_force_structure_phase(
 			decision_context = context
 		_record_tick_profile_stage("ai_force_context", context_started)
 		decision_contexts[nation_id] = decision_context
-		if not _force_structure_review_due(nation_id, state.day):
-			continue
 		if (
 			spread_runtime_work
 			and Time.get_ticks_usec() - runtime_slice_started
