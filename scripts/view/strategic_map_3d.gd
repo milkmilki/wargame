@@ -212,7 +212,7 @@ func setup(
 	_clear_labels()
 	_configure_dimensions()
 	if mesh_resolution_override > 0:
-		var aspect := clampf(state.map_aspect_ratio, 0.5, 2.5)
+		var aspect := maxf(state.map_aspect_ratio, 0.01)
 		_mesh_resolution = (
 			Vector2i(
 				mesh_resolution_override,
@@ -852,7 +852,7 @@ func _ensure_feature_nodes() -> void:
 
 
 func _configure_dimensions() -> void:
-	var aspect := clampf(state.map_aspect_ratio, 0.5, 2.5)
+	var aspect := maxf(state.map_aspect_ratio, 0.01)
 	var world_span := BASE_WORLD_SPAN * maxf(world_span_scale, 0.5)
 	if aspect >= 1.0:
 		_world_size = Vector2(
@@ -1035,7 +1035,7 @@ func _start_terrain_generation() -> void:
 		HEIGHT_STEPS
 	)
 	var height_texture := load(
-		GameState.terrain_map_path()
+		state.current_terrain_map_path()
 	) as Texture2D
 	# Packed map source keeps white RGB and numeric elevation in Alpha. Rendering
 	# uses the white material directly; Alpha remains the shared geography source.
@@ -1744,11 +1744,12 @@ func _build_trade_route_mesh() -> void:
 	var casing_tool := SurfaceTool.new()
 	casing_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var emphasized := _map_mode == MapRenderer.MapMode.TRADE
-	for route in state.trade_routes:
-		var status := int(route.get("status", TradeNetwork.ACTIVE))
-		var color := MapRenderer.trade_route_color(route, emphasized)
+	for segment in _trade_route_mesh_segments():
+		var status := int(segment["status"])
+		var color: Color = segment["color"]
 		var width := TRADE_ROUTE_WIDTH * (1.28 if emphasized else 1.0)
-		for map_path in MapRenderer.trade_route_map_paths(state, route, _visual_atlas):
+		var map_path := MAP_VISUAL_ATLAS.visual_road_path(state, int(segment["edge_index"]), _visual_atlas)
+		if map_path.size() >= 2:
 			if status == TradeNetwork.BLOCKED:
 				_append_dashed_draped_path(
 					casing_tool,
@@ -1779,6 +1780,37 @@ func _build_trade_route_mesh() -> void:
 	_trade_route_casing.material_override = _trade_route_casing_material()
 	_rebuild_trade_flow_markers()
 	_apply_map_mode_visibility()
+
+
+## A shared corridor can carry many routes. Render each edge/style once so mesh
+## memory follows the road network size rather than all route/path combinations.
+func _trade_route_mesh_segments() -> Array[Dictionary]:
+	var segments: Array[Dictionary] = []
+	var seen := {}
+	var edge_indices := {}
+	for index in range(state.edges.size()):
+		edge_indices[state.edges[index]] = index
+	for route in state.trade_routes:
+		var city_path: Variant = route.get("city_path", [])
+		if not (city_path is Array or city_path is PackedInt32Array):
+			continue
+		var status := int(route.get("status", TradeNetwork.ACTIVE))
+		var color := MapRenderer.trade_route_color(route, _map_mode == MapRenderer.MapMode.TRADE)
+		for index in range(city_path.size() - 1):
+			var from_id := int(city_path[index])
+			var to_id := int(city_path[index + 1])
+			if from_id < 0 or to_id < 0 or from_id >= state.cities.size() or to_id >= state.cities.size():
+				continue
+			var edge := state.edge_of(from_id, to_id)
+			if edge == null:
+				continue
+			var edge_index := int(edge_indices[edge])
+			var key := "%d:%s" % [edge_index, color.to_html()]
+			if seen.has(key):
+				continue
+			seen[key] = true
+			segments.append({"edge_index": edge_index, "status": status, "color": color})
+	return segments
 
 
 func _rebuild_trade_flow_markers() -> void:

@@ -58,6 +58,14 @@ func bind(game_state: GameState, renderer: MapRenderer) -> void:
 		_city_mask_path.text = game_state.city_generation_mask_path
 	if _political_mask_path != null:
 		_political_mask_path.text = game_state.political_mask_path
+	var latitude_limit := MapSource.latitude_limit(game_state.map_source_manifest)
+	for field in [_latitude_min, _latitude_max, _density_peak_latitude]:
+		if field != null:
+			# Fractional Mercator limits must not shift the half-degree snap grid.
+			field.step = 0.0 if latitude_limit < 90.0 else 0.5
+			field.custom_arrow_step = 0.5
+			field.min_value = -latitude_limit
+			field.max_value = latitude_limit
 	_apply_density_settings_to_ui(
 		game_state.city_density_settings
 	)
@@ -234,7 +242,9 @@ func _build_ui() -> void:
 	reset_density.tooltip_text = "从当前地图源 bbox 恢复纬度范围与默认密度曲线"
 	reset_density.pressed.connect(func() -> void:
 		_apply_density_settings_to_ui(
-			TerrainMapGenerator.default_city_density_settings()
+			TerrainMapGenerator.default_city_density_settings(
+				_state.map_source_manifest if _state != null else MapSource.DEFAULT_MANIFEST
+			)
 		)
 		set_status("已恢复当前地图源的真实纬度与默认城市密度曲线。")
 	)
@@ -427,14 +437,16 @@ func city_density_settings() -> Dictionary:
 		"density_peak_latitude": _density_peak_latitude.value,
 		"south_density": _south_density.value,
 		"north_density": _north_density.value,
-	})
+	}, _state.map_source_manifest if _state != null else MapSource.DEFAULT_MANIFEST)
 
 
 func _apply_density_settings_to_ui(settings: Dictionary) -> void:
 	if _latitude_min == null:
 		return
 	var normalized := (
-		TerrainMapGenerator.normalize_city_density_settings(settings)
+		TerrainMapGenerator.normalize_city_density_settings(
+			settings, _state.map_source_manifest if _state != null else MapSource.DEFAULT_MANIFEST
+		)
 	)
 	_latitude_min.value = float(normalized["latitude_min"])
 	_latitude_max.value = float(normalized["latitude_max"])

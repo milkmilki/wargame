@@ -160,6 +160,7 @@ func _create_view_state(live_state: GameState) -> GameState:
 	var view := GameState.new()
 	view.world_seed = live_state.world_seed
 	view.uses_heightmap = live_state.uses_heightmap
+	view.map_source_manifest = live_state.map_source_manifest
 	view.map_aspect_ratio = live_state.map_aspect_ratio
 	view.map_source_region_normalized = live_state.map_source_region_normalized
 	view.city_generation_mask_path = live_state.city_generation_mask_path

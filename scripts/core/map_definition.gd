@@ -132,7 +132,7 @@ static func from_state(state: GameState) -> Dictionary:
 	return {
 		"format": FORMAT,
 		"version": VERSION,
-		"map_source_manifest": GameState.MAP_SOURCE_MANIFEST,
+		"map_source_manifest": state.map_source_manifest,
 		"city_generation_mask_path": state.city_generation_mask_path,
 		"political_mask_path": state.political_mask_path,
 		"city_density_settings": state.city_density_settings.duplicate(true),
@@ -228,6 +228,15 @@ static func validate(data: Dictionary) -> String:
 	var version := int(version_value)
 	if version < MIN_SUPPORTED_VERSION or version > VERSION:
 		return "地图版本不支持：%s" % str(data.get("version", -1))
+	var manifest_value: Variant = data.get("map_source_manifest", MapSource.DEFAULT_MANIFEST)
+	if not manifest_value is String or str(manifest_value).is_empty():
+		return "地图源清单路径无效。"
+	var source_error := MapSource.validate_manifest(str(manifest_value))
+	if not source_error.is_empty():
+		return source_error
+	var aspect_value: Variant = data.get("map_aspect_ratio", MapSource.aspect_ratio(str(manifest_value)))
+	if not (aspect_value is float or aspect_value is int) or not is_finite(float(aspect_value)) or float(aspect_value) <= 0.0:
+		return "地图宽高比无效。"
 	if data.has("rebellions") or data.has("trade_routes"):
 		return "地图模板不能包含活动叛乱或贸易路径。"
 	var cities_value: Variant = data.get("cities")

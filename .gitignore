@@ -3,6 +3,8 @@
 /android/
 *.import
 !assets/terrain/china_elevation_white_2048.png.import
+!assets/terrain/eurasia_elevation_white_4096.png.import
+!assets/terrain/eurasia_mercator_elevation_white_4096.png.import
 
 # Headless test Godot HOME (created by test runs via HOME override)
 .tmp-godot-home/

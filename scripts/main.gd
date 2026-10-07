@@ -2,6 +2,8 @@ extends Node
 ## 入口：装配 GameState / Simulation / 3D 战略地图 / HUD。
 
 @export var use_grid_world: bool = false
+@export_file("*.json") var map_source_manifest: String = MapSource.DEFAULT_MANIFEST
+@export_file("*.png", "*.jpg", "*.jpeg", "*.webp") var initial_city_mask_path: String = GameState.DEFAULT_CITY_MASK_PATH
 @export_range(1, GameState.TERRAIN_CITY_COUNT, 1) var nation_count: int = (
 	GameState.NATION_COUNT
 )
@@ -119,6 +121,8 @@ func _ready() -> void:
 	if map_editor_panel != null:
 		_setup_map_editor()
 	_political_mask_path = initial_political_mask_path.strip_edges()
+	_city_generation_mask_path = initial_city_mask_path.strip_edges()
+	_city_density_settings = TerrainMapGenerator.default_city_density_settings(map_source_manifest)
 	_seed = _random_startup_seed() if randomize_world_seed_on_start else world_seed
 	_start_new_game(_seed)
 
@@ -393,7 +397,7 @@ func _on_map_regenerate_requested(
 	var requested_count := clampi(city_count, nation_count, 500)
 	var requested_mask := city_mask_path.strip_edges()
 	var validation := TerrainMapGenerator.validate_city_mask(
-		GameState.terrain_map_path(), requested_mask, requested_count
+		state.current_terrain_map_path(), requested_mask, requested_count
 	)
 	if not bool(validation.get("ok", false)):
 		map_editor_panel.set_status(
@@ -402,7 +406,7 @@ func _on_map_regenerate_requested(
 		return
 	var requested_political_mask := political_mask_path.strip_edges()
 	var political_validation := TerrainMapGenerator.validate_political_mask(
-		GameState.terrain_map_path(), requested_political_mask
+		state.current_terrain_map_path(), requested_political_mask
 	)
 	if not bool(political_validation.get("ok", false)):
 		map_editor_panel.set_status(
@@ -411,17 +415,18 @@ func _on_map_regenerate_requested(
 		return
 	var normalized_density := (
 		TerrainMapGenerator.normalize_city_density_settings(
-			density_settings
+			density_settings, state.map_source_manifest
 		)
 	)
 	var preview := TerrainMapGenerator.build(
-		GameState.terrain_map_path(),
+		state.current_terrain_map_path(),
 		requested_count,
 		requested_mask,
 		normalized_density,
 		_seed if randomize_world_seed_on_start else 0,
 		nation_count,
-		requested_political_mask
+		requested_political_mask,
+		state.map_source_manifest
 	)
 	var active_city_count := int(preview.get(
 		"politically_active_count", requested_count
@@ -513,7 +518,8 @@ func _start_new_game(world_seed: int) -> void:
 			_city_generation_mask_path,
 			_city_density_settings,
 			world_seed if randomize_world_seed_on_start else 0,
-			_political_mask_path
+			_political_mask_path,
+			map_source_manifest
 		)
 	var single_name := initial_single_nation_name.strip_edges()
 	if next_state.nations.size() == 1 and not single_name.is_empty():
@@ -552,6 +558,7 @@ func _start_from_map_definition(definition: Dictionary) -> void:
 	next_state.generate_from_map_definition(definition, _seed)
 	nation_count = next_state.nations.size()
 	terrain_city_count = next_state.land_cities().size()
+	map_source_manifest = next_state.map_source_manifest
 	_city_generation_mask_path = next_state.city_generation_mask_path
 	_political_mask_path = next_state.political_mask_path
 	_city_density_settings = next_state.city_density_settings.duplicate(true)
@@ -565,7 +572,9 @@ func _debug_generation_settings() -> Dictionary:
 		"terrain_city_count": terrain_city_count, "configured_world_seed": world_seed,
 		"randomize_world_seed_on_start": randomize_world_seed_on_start,
 		"city_layout_seed": state.world_seed if state != null and randomize_world_seed_on_start else 0,
-		"terrain_source": GameState.terrain_map_path(), "city_mask": _city_generation_mask_path,
+		"map_source_manifest": map_source_manifest,
+		"projection": MapSource.projection_type(map_source_manifest),
+		"terrain_source": MapSource.texture_path(map_source_manifest), "city_mask": _city_generation_mask_path,
 		"political_mask": _political_mask_path, "city_density": _city_density_settings.duplicate(true),
 		"single_nation_name": initial_single_nation_name, "single_nation_archetype": initial_single_nation_ruler_archetype,
 		"history_interval_days": history_interval_days, "speed_multiplier": _speed_mult}

@@ -1,5 +1,7 @@
 extends SceneTree
 ## Utility AI 多种子长跑诊断。手动运行，不纳入每次快速回归。
+## AI_LONGRUN_MAP_SOURCE 可替换地图；该模式默认 500 城/40 国，
+## AI_LONGRUN_CITIES / AI_LONGRUN_NATIONS 可覆盖规模。
 
 const SEEDS: Array[int] = [12345, 23456, 34567, 45678]
 const DAYS: int = 1095
@@ -36,7 +38,13 @@ func _init() -> void:
 		ResourceForecastRules.profiling_enabled = true
 		ResourceForecastRules.reset_profile()
 		var state := GameState.new()
-		state.generate_world(world_seed)
+		var source_manifest := OS.get_environment("AI_LONGRUN_MAP_SOURCE")
+		if source_manifest.is_empty():
+			state.generate_world(world_seed)
+		else:
+			var cities := int(OS.get_environment("AI_LONGRUN_CITIES"))
+			var nations := int(OS.get_environment("AI_LONGRUN_NATIONS"))
+			state.generate_world(world_seed, nations if nations > 0 else 40, cities if cities > 0 else 500, "", {}, world_seed, "", source_manifest)
 		var simulation := Simulation.new()
 		root.add_child(simulation)
 		simulation.setup(state)

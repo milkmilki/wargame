@@ -70,7 +70,8 @@ static func build(
 	city_density_settings: Dictionary = {},
 	generation_seed: int = 0,
 	initial_nation_count: int = 4,
-	political_mask_path: String = ""
+	political_mask_path: String = "",
+	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> Dictionary:
 	var profile_enabled := (
 		OS.get_environment("WORLD_GENERATION_PROFILE") == "1"
@@ -81,15 +82,16 @@ static func build(
 	var mask_signature := city_mask_signature(city_mask_path)
 	var political_mask_signature := city_mask_signature(political_mask_path)
 	var density_settings := normalize_city_density_settings(
-		city_density_settings
+		city_density_settings, source_manifest
 	)
-	var cache_key := "settlement-v20-density-dock-spacing:%s:%d:%s:%s:%s:%d:%d" % [
+	var cache_key := "settlement-v21-projected-metric-dock-spacing:%s:%d:%s:%s:%s:%d:%d" % [
 		source_path, city_count, mask_signature,
 		political_mask_signature,
 		city_density_signature(density_settings),
 		generation_seed,
 		initial_nation_count,
 	]
+	cache_key += ":" + source_manifest + ":" + MapSource.projection_type(source_manifest)
 	if _cache.has(cache_key):
 		return (_cache[cache_key] as Dictionary).duplicate(true)
 	var texture := load(source_path) as Texture2D
@@ -127,7 +129,7 @@ static func build(
 		political_mask_result.get("error", "政治蒙版加载失败")
 	))
 	var political_mask: PackedByteArray = political_mask_result["mask"]
-	var map_aspect_ratio := MapSource.aspect_ratio()
+	var map_aspect_ratio := MapSource.aspect_ratio(source_manifest)
 	if profile_enabled:
 		profile["input"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
@@ -142,7 +144,7 @@ static func build(
 		city_count,
 		empty_river_paths,
 		density_settings,
-		generation_seed
+		generation_seed, source_manifest
 	)
 	if profile_enabled:
 		profile["settlements"] = Time.get_ticks_usec() - profile_last
@@ -168,7 +170,8 @@ static func build(
 		mask,
 		bounds,
 		samples["pixels"],
-		empty_river_paths
+		empty_river_paths, projected_pixel_aspect(analysis, source_manifest),
+		MapSource.projection_type(source_manifest) == MapSource.WEB_MERCATOR
 	)
 	if profile_enabled:
 		profile["provinces"] = Time.get_ticks_usec() - profile_last
@@ -194,7 +197,7 @@ static func build(
 		road_result["roads"],
 		provinces,
 		samples["positions"],
-		city_count
+		city_count, map_aspect_ratio
 	)
 	if profile_enabled:
 		profile["road_paths"] = Time.get_ticks_usec() - profile_last
@@ -254,9 +257,9 @@ static func build(
 	return result
 
 
-static func default_city_density_settings() -> Dictionary:
-	var latitude_bounds := MapSource.latitude_bounds()
-	var profile := MapSource.city_density_profile()
+static func default_city_density_settings(source_manifest: String = MapSource.DEFAULT_MANIFEST) -> Dictionary:
+	var latitude_bounds := MapSource.latitude_bounds(source_manifest)
+	var profile := MapSource.city_density_profile(source_manifest)
 	return {
 		"latitude_min": latitude_bounds.x,
 		"latitude_max": latitude_bounds.y,
@@ -277,24 +280,26 @@ static func default_city_density_settings() -> Dictionary:
 
 
 static func normalize_city_density_settings(
-	settings: Dictionary
+	settings: Dictionary,
+	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> Dictionary:
-	var defaults := default_city_density_settings()
+	var defaults := default_city_density_settings(source_manifest)
+	var latitude_limit := MapSource.latitude_limit(source_manifest)
 	var latitude_min := clampf(
 		float(settings.get("latitude_min", defaults["latitude_min"])),
-		-90.0, 90.0
+		-latitude_limit, latitude_limit
 	)
 	var latitude_max := clampf(
 		float(settings.get("latitude_max", defaults["latitude_max"])),
-		-90.0, 90.0
+		-latitude_limit, latitude_limit
 	)
 	if latitude_min > latitude_max:
 		var swap := latitude_min
 		latitude_min = latitude_max
 		latitude_max = swap
 	if is_equal_approx(latitude_min, latitude_max):
-		latitude_max = minf(latitude_min + 0.1, 90.0)
-		latitude_min = maxf(latitude_max - 0.1, -90.0)
+		latitude_max = minf(latitude_min + 0.1, latitude_limit)
+		latitude_min = maxf(latitude_max - 0.1, -latitude_limit)
 	return {
 		"latitude_min": latitude_min,
 		"latitude_max": latitude_max,
@@ -331,12 +336,13 @@ static func city_density_signature(settings: Dictionary) -> String:
 
 
 static func latitude_for_map_y(
-	map_y: float, settings: Dictionary
+	map_y: float, settings: Dictionary,
+	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> float:
-	return lerpf(
-		float(settings["latitude_max"]),
+	return MapSource.latitude_at_y(
+		clampf(map_y, 0.0, 1.0),
 		float(settings["latitude_min"]),
-		clampf(map_y, 0.0, 1.0)
+		float(settings["latitude_max"]), source_manifest
 	)
 
 
@@ -600,7 +606,8 @@ static func rebuild_provinces(
 	source_path: String,
 	city_positions: Array[Vector2],
 	_edges: Array[Edge],
-	normalized_rivers: Array[PackedVector2Array]
+	normalized_rivers: Array[PackedVector2Array],
+	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> Dictionary:
 	var texture := load(source_path) as Texture2D
 	var source := texture.get_image() if texture != null else null
@@ -646,9 +653,24 @@ static func rebuild_provinces(
 				)
 			))
 		river_pixels.append(path)
+	var projected := MapSource.projection_type(source_manifest) == MapSource.WEB_MERCATOR
+	if projected:
+		# Rivers are derived from province borders after generation. Feeding them
+		# back into growth would redefine the entire map when just one city moves.
+		river_pixels.clear()
 	return _build_province_raster(
-		analysis, mask, bounds, city_pixels, river_pixels
+		analysis, mask, bounds, city_pixels, river_pixels,
+		projected_pixel_aspect(analysis, source_manifest),
+		projected
 	)
+
+
+## Legacy maps retain their original raster metric, including existing layouts.
+## Mercator pixels have unequal physical sides because the packed PNG is square.
+static func projected_pixel_aspect(image: Image, source_manifest: String) -> float:
+	if MapSource.projection_type(source_manifest) != MapSource.WEB_MERCATOR:
+		return 1.0
+	return MapSource.aspect_ratio(source_manifest) * float(image.get_height()) / float(image.get_width())
 
 
 static func _build_province_raster(
@@ -656,7 +678,9 @@ static func _build_province_raster(
 	land_mask: PackedByteArray,
 	bounds: Rect2i,
 	city_pixels: Array[Vector2i],
-	river_paths: Array[Array]
+	river_paths: Array[Array],
+	pixel_aspect: float = 1.0,
+	precise_costs: bool = false
 ) -> Dictionary:
 	var width := bounds.size.x * PROVINCE_RASTER_SCALE
 	var height := bounds.size.y * PROVINCE_RASTER_SCALE
@@ -686,6 +710,7 @@ static func _build_province_raster(
 					+ Vector2(0.5, 0.5))
 					/ float(PROVINCE_RASTER_SCALE)
 			)
+			metric_points[index].x *= pixel_aspect
 			var image_x := bounds.position.x + clampi(
 				local_x / PROVINCE_RASTER_SCALE,
 				0,
@@ -706,7 +731,7 @@ static func _build_province_raster(
 	var distances := PackedFloat64Array()
 	distances.resize(width * height)
 	distances.fill(INF)
-	var heap: Array[Vector3] = []
+	var heap: Array = []
 	for city_id in range(city_pixels.size()):
 		var local := (
 			city_pixels[city_id] - bounds.position
@@ -722,7 +747,7 @@ static func _build_province_raster(
 		ids[seed_index] = city_id
 		_province_heap_push(
 			heap,
-			Vector3(0.0, seed_index, city_id)
+			_province_heap_entry(0.0, seed_index, city_id, precise_costs)
 		)
 	var offsets := [
 		Vector2i.LEFT,
@@ -731,10 +756,10 @@ static func _build_province_raster(
 		Vector2i.DOWN,
 	]
 	while not heap.is_empty():
-		var entry: Vector3 = _province_heap_pop(heap)
-		var current_index := int(entry.y)
-		var owner := int(entry.z)
-		var current_cost := entry.x
+		var entry: Variant = _province_heap_pop(heap)
+		var current_index := int(entry[1])
+		var owner := int(entry[2])
+		var current_cost := float(entry[0])
 		if (
 			owner != ids[current_index]
 			or current_cost
@@ -775,10 +800,10 @@ static func _build_province_raster(
 				ids[next_index] = owner
 				_province_heap_push(
 					heap,
-					Vector3(
+					_province_heap_entry(
 						candidate_cost,
 						next_index,
-						owner
+						owner, precise_costs
 					)
 				)
 	# Land components without a settlement remain unassigned. Assigning them to
@@ -882,24 +907,31 @@ static func _mark_province_disk(
 				)
 
 
+## Larger projected costs cannot be rounded into a float32 Vector3: the stale
+## entry check would discard valid frontier nodes and leave holes in land.
+## Keep legacy entries unchanged to preserve existing map generation layouts.
+static func _province_heap_entry(cost: float, index: int, owner: int, precise: bool) -> Variant:
+	return PackedFloat64Array([cost, index, owner]) if precise else Vector3(cost, index, owner)
+
+
 static func _province_heap_entry_less(
-	a: Vector3,
-	b: Vector3
+	a: Variant,
+	b: Variant
 ) -> bool:
-	var cost_a := a.x
-	var cost_b := b.x
+	var cost_a := float(a[0])
+	var cost_b := float(b[0])
 	if not is_equal_approx(cost_a, cost_b):
 		return cost_a < cost_b
-	var owner_a := int(a.z)
-	var owner_b := int(b.z)
+	var owner_a := int(a[2])
+	var owner_b := int(b[2])
 	if owner_a != owner_b:
 		return owner_a < owner_b
-	return int(a.y) < int(b.y)
+	return int(a[1]) < int(b[1])
 
 
 static func _province_heap_push(
-	heap: Array[Vector3],
-	entry: Vector3
+	heap: Array,
+	entry: Variant
 ) -> void:
 	heap.append(entry)
 	var index := heap.size() - 1
@@ -910,17 +942,17 @@ static func _province_heap_push(
 			heap[parent]
 		):
 			break
-		var temporary: Vector3 = heap[index]
+		var temporary: Variant = heap[index]
 		heap[index] = heap[parent]
 		heap[parent] = temporary
 		index = parent
 
 
 static func _province_heap_pop(
-	heap: Array[Vector3]
-) -> Vector3:
-	var result: Vector3 = heap[0]
-	var last: Vector3 = heap.pop_back()
+	heap: Array
+) -> Variant:
+	var result: Variant = heap[0]
+	var last: Variant = heap.pop_back()
 	if heap.is_empty():
 		return result
 	heap[0] = last
@@ -947,7 +979,7 @@ static func _province_heap_pop(
 			smallest = right
 		if smallest == index:
 			break
-		var temporary: Vector3 = heap[index]
+		var temporary: Variant = heap[index]
 		heap[index] = heap[smallest]
 		heap[smallest] = temporary
 		index = smallest
@@ -1076,7 +1108,8 @@ static func _sample_cities(
 	city_count: int,
 	river_paths: Array[Array],
 	city_density_settings: Dictionary,
-	generation_seed: int = 0
+	generation_seed: int = 0,
+	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> Dictionary:
 	var candidates: Array[Dictionary] = []
 	var scale := Vector2(
@@ -1087,6 +1120,7 @@ static func _sample_cities(
 		float(maxi(bounds.size.x, 1))
 		/ float(maxi(bounds.size.y, 1))
 	)
+	map_aspect *= projected_pixel_aspect(image, source_manifest)
 	var base_spacing := minimum_city_spacing_for_count(city_count)
 	for y in range(bounds.position.y, bounds.end.y, CANDIDATE_STRIDE):
 		for x in range(bounds.position.x, bounds.end.x, CANDIDATE_STRIDE):
@@ -1107,7 +1141,7 @@ static func _sample_cities(
 				Vector2(x, y), full_bounds
 			)
 			var latitude := latitude_for_map_y(
-				full_normalized.y, city_density_settings
+				full_normalized.y, city_density_settings, source_manifest
 			)
 			var latitude_density := latitude_density_multiplier(
 				latitude, city_density_settings
@@ -1669,21 +1703,21 @@ static func _append_sea_component_backbone(
 		var best_a := -1
 		var best_b := -1
 		var best_length := INF
-		var best_profile := {}
 		for a in range(pixels.size()):
 			for b in range(a + 1, pixels.size()):
 				if _root(parent, a) == _root(parent, b):
+					continue
+				var length := metric_length_between(
+					positions[a], positions[b], map_aspect_ratio
+				)
+				# Distance is cheap and independent of rivers. Reject candidates
+				# that cannot win before walking every segment of every river.
+				if length > best_length + 0.000001:
 					continue
 				if _segment_crosses_pixel_river(
 					pixels[a], pixels[b], river_paths
 				):
 					continue
-				var length := metric_length_between(
-					positions[a], positions[b], map_aspect_ratio
-				)
-				if length > best_length + 0.000001:
-					continue
-				var profile := _edge_profile(image, mask, pixels[a], pixels[b])
 				if (
 					length < best_length - 0.000001
 					or (
@@ -1694,8 +1728,9 @@ static func _append_sea_component_backbone(
 					best_a = a
 					best_b = b
 					best_length = length
-					best_profile = profile
 		assert(best_a >= 0, "海区骨架必须存在不穿河道的SEA连接")
+		# Terrain describes the chosen edge; it does not participate in selection.
+		var best_profile := _edge_profile(image, mask, pixels[best_a], pixels[best_b])
 		var root_a := _root(parent, best_a)
 		var root_b := _root(parent, best_b)
 		parent[root_b] = root_a
@@ -1766,6 +1801,10 @@ static func province_shared_boundary_counts(
 					int(province_ids[(y + 1) * size.x + x])
 				)
 	return result
+
+
+static func provinces_share_boundary(shared: Dictionary, owner_a: int, owner_b: int) -> bool:
+	return shared.has(_pair_key(owner_a, owner_b))
 
 
 static func _accumulate_province_boundary(
@@ -2322,7 +2361,8 @@ static func _attach_province_land_paths(
 	roads: Array[Dictionary],
 	provinces: Dictionary,
 	positions: Array[Vector2],
-	land_city_count: int
+	land_city_count: int,
+	map_aspect_ratio: float = FULL_MAP_ASPECT_RATIO
 ) -> void:
 	var size: Vector2i = provinces["size"]
 	var ids: PackedInt32Array = provinces["ids"]
@@ -2345,7 +2385,7 @@ static func _attach_province_land_paths(
 		if path.size() >= 2:
 			road["map_path"] = path
 			var metric_length := metric_polyline_length(
-				path, MapSource.aspect_ratio()
+				path, map_aspect_ratio
 			)
 			road["length"] = metric_length
 			road["distance"] = distance_units_for_metric_length(metric_length)
@@ -2400,7 +2440,7 @@ static func province_pair_path(
 		Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN,
 	]
 	while not heap.is_empty():
-		var entry := _province_heap_pop(heap)
+		var entry: Vector3 = _province_heap_pop(heap)
 		var current_index := int(entry.y)
 		var current_cost := float(entry.z)
 		if current_cost > distance[current_index] + 0.000001:

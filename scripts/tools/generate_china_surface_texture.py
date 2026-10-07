@@ -9,9 +9,13 @@ simulation-only city/province constraint; rendering always shows the complete
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
+import time
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +34,7 @@ ELEVATION_ZOOM = 7
 ELEVATION_HIGH_CLIP_M = 6200.0
 ELEVATION_LOW_CLIP_M = -8000.0
 DEFAULT_BBOX = (73.0, 18.0, 135.5, 54.0)
+MERCATOR_LATITUDE_LIMIT = 85.0511287798066
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,10 +42,12 @@ def parse_args() -> argparse.Namespace:
         description="Generate the complete white/elevation China rectangle."
     )
     parser.add_argument("--resolution", type=int, default=2048)
+    parser.add_argument("--projection", choices=("equirectangular", "web_mercator"), default="equirectangular")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--elevation-zoom", type=int, default=ELEVATION_ZOOM)
+    parser.add_argument("--download-workers", type=int, default=1)
     parser.add_argument("--high-clip-m", type=float, default=ELEVATION_HIGH_CLIP_M)
     parser.add_argument("--low-clip-m", type=float, default=ELEVATION_LOW_CLIP_M)
     parser.add_argument(
@@ -54,19 +61,42 @@ def parse_args() -> argparse.Namespace:
 def mercator_position(longitude: float, latitude: float, zoom: int) -> tuple[float, float]:
     scale = float((1 << zoom) * 256)
     x = (longitude + 180.0) / 360.0 * scale
-    latitude = max(-85.05112878, min(85.05112878, latitude))
+    latitude = max(-MERCATOR_LATITUDE_LIMIT, min(MERCATOR_LATITUDE_LIMIT, latitude))
     radians = math.radians(latitude)
     y = (1.0 - math.asinh(math.tan(radians)) / math.pi) * 0.5 * scale
     return x, y
+
+
+def lonlat_to_map(longitude: float, latitude: float, bbox: tuple, projection: str) -> tuple[float, float]:
+    west, south, east, north = bbox
+    y = (north - latitude) / (north - south)
+    if projection == "web_mercator":
+        m = lambda lat: math.asinh(math.tan(math.radians(lat)))
+        y = (m(north) - m(latitude)) / (m(north) - m(south))
+    elif projection != "equirectangular":
+        raise ValueError("unsupported projection")
+    return (longitude - west) / (east - west), y
 
 
 def elevation_tile(cache_dir: Path, zoom: int, x: int, y: int) -> Path:
     path = cache_dir / "terrarium" / str(zoom) / str(x) / f"{y}.png"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(
-            ELEVATION_URL.format(zoom=zoom, x=x, y=y), path
-        )
+        url = ELEVATION_URL.format(zoom=zoom, x=x, y=y)
+        for attempt in range(6):
+            try:
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    payload = response.read()
+                with Image.open(io.BytesIO(payload)) as tile:
+                    tile.verify()
+                temporary = path.with_suffix(".tmp")
+                temporary.write_bytes(payload)
+                temporary.replace(path)
+                break
+            except (urllib.error.URLError, OSError):
+                if attempt == 5:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
     return path
 
 
@@ -75,6 +105,8 @@ def build_elevation(
     bbox: tuple[float, float, float, float],
     resolution: int,
     zoom: int,
+    download_workers: int = 1,
+    projection: str = "equirectangular",
 ) -> tuple[np.ndarray, list[str]]:
     west, south, east, north = bbox
     left, top = mercator_position(west, north, zoom)
@@ -90,6 +122,19 @@ def build_elevation(
     sources: list[str] = []
     total = (tile_x1 - tile_x0 + 1) * (tile_y1 - tile_y0 + 1)
     done = 0
+    coordinates = [
+        (x, y)
+        for y in range(tile_y0, tile_y1 + 1)
+        for x in range(tile_x0, tile_x1 + 1)
+    ]
+    if download_workers > 1:
+        def download(coordinate: tuple[int, int]) -> Path:
+            return elevation_tile(cache_dir, zoom, *coordinate)
+
+        with ThreadPoolExecutor(max_workers=download_workers) as pool:
+            for index, _path in enumerate(pool.map(download, coordinates), 1):
+                if index == 1 or index == total or index % 25 == 0:
+                    print(f"downloaded elevation tile {index}/{total}", flush=True)
     for tile_y in range(tile_y0, tile_y1 + 1):
         for tile_x in range(tile_x0, tile_x1 + 1):
             done += 1
@@ -107,11 +152,15 @@ def build_elevation(
     latitudes -= (north - south) / float(resolution) * 0.5
     world_scale = float((1 << zoom) * 256)
     sample_x = (longitudes + 180.0) / 360.0 * world_scale - tile_x0 * 256
-    latitude_radians = np.radians(np.clip(latitudes, -85.05112878, 85.05112878))
+    latitude_radians = np.radians(np.clip(latitudes, -MERCATOR_LATITUDE_LIMIT, MERCATOR_LATITUDE_LIMIT))
     sample_y = (
         (1.0 - np.arcsinh(np.tan(latitude_radians)) / np.pi)
         * 0.5 * world_scale - tile_y0 * 256
     )
+    if projection == "web_mercator":
+        sample_y = top + (np.arange(resolution) + 0.5) / resolution * (bottom - top) - tile_y0 * 256
+    elif projection != "equirectangular":
+        raise ValueError("unsupported projection")
     xi = np.clip(np.rint(sample_x).astype(np.int32), 0, mosaic.shape[1] - 1)
     yi = np.clip(np.rint(sample_y).astype(np.int32), 0, mosaic.shape[0] - 1)
     sampled = mosaic[yi[:, None], xi[None, :]].astype(np.float32)
@@ -128,11 +177,18 @@ def build_texture(args: argparse.Namespace) -> dict:
     if args.low_clip_m >= 0.0:
         raise ValueError("--low-clip-m must be negative")
     west, south, east, north = map(float, args.bbox)
-    if east <= west or north <= south:
+    projection = getattr(args, "projection", "equirectangular")
+    if not all(math.isfinite(v) for v in (west, south, east, north)) or east <= west or north <= south:
         raise ValueError("invalid --bbox")
+    if projection not in ("equirectangular", "web_mercator"):
+        raise ValueError("unsupported projection")
+    if projection == "web_mercator" and (west < -180 or east > 180 or south < -MERCATOR_LATITUDE_LIMIT or north > MERCATOR_LATITUDE_LIMIT):
+        raise ValueError("--bbox exceeds Web Mercator bounds")
     elevation, elevation_tiles = build_elevation(
         args.cache_dir, (west, south, east, north),
-        args.resolution, args.elevation_zoom
+        args.resolution, args.elevation_zoom,
+        getattr(args, "download_workers", 1),
+        projection,
     )
     land = elevation > 0.0
     sea = ~land
@@ -157,20 +213,22 @@ def build_texture(args: argparse.Namespace) -> dict:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgba, mode="RGBA").save(args.output, optimize=True)
     metadata = {
+        "projection": projection,
         "surface": "solid white RGB terrain base",
         "elevation_source": {
             "dataset": "AWS Open Terrain Tiles (Terrarium)",
             "url_template": ELEVATION_URL,
             "zoom": args.elevation_zoom,
             "encoding": "elevation_m = R*256 + G + B/256 - 32768",
-            "component_sources": "SRTM, GMTED and ETOPO1 as recorded per tile",
+            "component_sources": "Terrain Tiles source mix including SRTM, GMTED, ETOPO1 and EU-DEM; see attribution_url",
+            "attribution_url": "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
             "tiles": elevation_tiles,
         },
         "bbox_wgs84": {
             "west": west, "south": south,
             "east": east, "north": north,
         },
-        "output": str(args.output.relative_to(REPO_ROOT)),
+        "output": args.output.resolve().relative_to(REPO_ROOT).as_posix(),
         "output_size": [args.resolution, args.resolution],
         "processing": {
             "full_rectangle": True,
@@ -205,7 +263,7 @@ def main() -> None:
     print(
         "wrote {output} from {dataset}".format(
             output=metadata["output"],
-            dataset=metadata["source"]["dataset"],
+            dataset=metadata["elevation_source"]["dataset"],
         )
     )
 

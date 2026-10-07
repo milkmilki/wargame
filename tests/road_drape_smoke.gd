@@ -99,6 +99,18 @@ func _run() -> void:
 			tested_samples[-1]
 		)
 	)
+	# Repeated routes on one corridor must not multiply ribbon allocations.
+	var edge: Edge = state.edges[0]
+	var route := {"city_path": [edge.city_a, edge.city_b], "status": TradeNetwork.ACTIVE}
+	state.trade_routes = [route]
+	map_3d._build_trade_route_mesh()
+	var single_route_vertices: int = map_3d._trade_routes.mesh.surface_get_array_len(0)
+	assert(single_route_vertices > 0)
+	for route_index in range(1000):
+		state.trade_routes.append(route.duplicate(true))
+	map_3d._build_trade_route_mesh()
+	assert(map_3d._trade_routes.mesh.surface_get_array_len(0) == single_route_vertices)
+	print("TRADE_CORRIDOR_MESH_OK routes=1001 vertices=%d" % single_route_vertices)
 	map_3d.free()
 	overlay.free()
 	simulation.free()

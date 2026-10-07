@@ -31,8 +31,8 @@ static func city_latitude(state: GameState, city: City) -> float:
 		return 0.0
 	var settings := state.city_density_settings
 	if settings.is_empty():
-		settings = TerrainMapGenerator.default_city_density_settings()
-	return TerrainMapGenerator.latitude_for_map_y(city.map_position.y, settings)
+		settings = TerrainMapGenerator.default_city_density_settings(state.map_source_manifest)
+	return TerrainMapGenerator.latitude_for_map_y(city.map_position.y, settings, state.map_source_manifest)
 
 
 static func invalidate_geometry(state: GameState) -> void:

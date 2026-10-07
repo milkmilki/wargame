@@ -54,6 +54,10 @@ const DEFAULT_CITY_MASK_PATH := (
 static func terrain_map_path() -> String:
 	return MapSource.texture_path(MAP_SOURCE_MANIFEST)
 
+
+func current_terrain_map_path() -> String:
+	return MapSource.texture_path(map_source_manifest)
+
 enum DiplomaticRelation {
 	NEUTRAL,
 	WAR,
@@ -204,6 +208,7 @@ var _suzerainty_cohesion_revision: int = -1
 var _suzerainty_cohesion_by_root: Dictionary = {}
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
+var map_source_manifest: String = MapSource.DEFAULT_MANIFEST
 var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 var city_generation_mask_path: String = ""
 var political_mask_path: String = ""
@@ -271,7 +276,8 @@ func generate_world(
 	city_mask_path: String = DEFAULT_CITY_MASK_PATH,
 	density_settings: Dictionary = {},
 	map_generation_seed: int = 0,
-	initial_political_mask_path: String = ""
+	initial_political_mask_path: String = "",
+	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> void:
 	assert(
 		nation_count > 0
@@ -280,21 +286,23 @@ func generate_world(
 	)
 	_reset_world(world_seed)
 	uses_heightmap = true
+	map_source_manifest = source_manifest
 	city_generation_mask_path = city_mask_path.strip_edges()
 	political_mask_path = initial_political_mask_path.strip_edges()
 	city_density_settings = (
 		TerrainMapGenerator.normalize_city_density_settings(
-			density_settings
+			density_settings, map_source_manifest
 		)
 	)
 	var terrain := TerrainMapGenerator.build(
-		terrain_map_path(),
+		current_terrain_map_path(),
 		terrain_city_count,
 		city_generation_mask_path,
 		city_density_settings,
 		map_generation_seed,
 		nation_count,
-		political_mask_path
+		political_mask_path,
+		map_source_manifest
 	)
 	var politically_active_count := int(terrain.get(
 		"politically_active_count", terrain_city_count
@@ -395,6 +403,7 @@ func generate_from_map_definition(
 	assert(validation_error.is_empty(), validation_error)
 	_reset_world(world_seed)
 	uses_heightmap = true
+	map_source_manifest = str(definition.get("map_source_manifest", MapSource.DEFAULT_MANIFEST))
 	city_generation_mask_path = str(definition.get(
 		"city_generation_mask_path", ""
 	))
@@ -403,11 +412,11 @@ func generate_from_map_definition(
 		TerrainMapGenerator.normalize_city_density_settings(
 			definition.get(
 				"city_density_settings", {}
-			) as Dictionary
+			) as Dictionary, map_source_manifest
 		)
 	)
 	map_aspect_ratio = float(definition.get(
-		"map_aspect_ratio", TerrainMapGenerator.FULL_MAP_ASPECT_RATIO
+		"map_aspect_ratio", MapSource.aspect_ratio(map_source_manifest)
 	))
 	var source_region: Array = definition.get(
 		"source_region", [0.0, 0.0, 1.0, 1.0]
@@ -563,7 +572,7 @@ func apply_city_editor_changes(
 	if (
 		position_changed
 		and (city.is_dock or not TerrainMapGenerator.is_land_map_position(
-			terrain_map_path(), new_position
+			current_terrain_map_path(), new_position
 		))
 	):
 		return {"ok": false, "error": "陆地城市不能移动到海洋，码头位置暂不可手动移动。"}
@@ -637,7 +646,7 @@ func apply_city_editor_changes(
 		for land_city in land_cities():
 			land_positions.append(land_city.map_position)
 		var provinces := TerrainMapGenerator.rebuild_provinces(
-			terrain_map_path(), land_positions, edges, river_paths
+			current_terrain_map_path(), land_positions, edges, river_paths, map_source_manifest
 		)
 		province_map_size = provinces["size"]
 		province_ids = provinces["ids"]
@@ -669,7 +678,7 @@ func _refresh_land_edge_paths_after_province_rebuild() -> void:
 		):
 			continue
 		edge.map_path.clear()
-		if not shared.has(_edge_key(edge.city_a, edge.city_b)):
+		if not TerrainMapGenerator.provinces_share_boundary(shared, edge.city_a, edge.city_b):
 			edge.max_manpower = 0
 			edge.base_max_manpower = Edge.TERRAIN_LOW_MANPOWER
 			edge.is_backbone = false
@@ -797,6 +806,7 @@ func _reset_world(world_seed: int) -> void:
 	_suzerainty_cohesion_revision = -1
 	_suzerainty_cohesion_by_root.clear()
 	city_generation_mask_path = ""
+	map_source_manifest = MapSource.DEFAULT_MANIFEST
 	political_mask_path = ""
 	city_density_settings = {}
 	province_map_size = Vector2i.ZERO
@@ -919,7 +929,7 @@ func _generate_terrain_cities(terrain: Dictionary) -> void:
 	var political_active: PackedByteArray = terrain.get(
 		"politically_active", PackedByteArray()
 	)
-	map_aspect_ratio = clampf(float(terrain["map_aspect_ratio"]), 0.5, 2.5)
+	map_aspect_ratio = float(terrain["map_aspect_ratio"])
 	map_source_region_normalized = terrain["source_region_normalized"]
 	province_map_size = terrain["province_map_size"]
 	province_ids = (terrain["province_ids"] as PackedInt32Array).duplicate()

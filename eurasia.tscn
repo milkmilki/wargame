@@ -1,0 +1,14 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://main.tscn" id="1_main"]
+
+[node name="Eurasia" instance=ExtResource("1_main")]
+map_source_manifest = "res://assets/terrain/eurasia_mercator_map_source.json"
+initial_city_mask_path = ""
+nation_count = 40
+terrain_city_count = 500
+randomize_world_seed_on_start = true
+map_world_scale = 2.0
+initial_army_icon_scale = 0.25
+initial_city_names_visible = false
+initial_nation_names_visible = true

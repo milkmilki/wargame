@@ -1516,10 +1516,9 @@ func _clear_selection() -> void:
 func _compute_layout() -> void:
 	var vp := get_viewport_rect().size
 	var nation_count := state.nations.size() if state != null else GameState.NATION_COUNT
-	var map_aspect_ratio := clampf(
+	var map_aspect_ratio := maxf(
 		state.map_aspect_ratio if state != null else 1.0,
-		0.5,
-		2.5
+		0.01
 	)
 	if (
 		vp == _layout_viewport_size
@@ -2249,7 +2248,7 @@ func _ensure_province_visual_cache() -> void:
 		# Keep the legacy polygon cache empty so it cannot become a second fill source.
 		_boundary_regions.clear()
 		_boundary_regions_topology_ids = state.province_ids.duplicate()
-		var height_texture := load(GameState.terrain_map_path()) as Texture2D
+		var height_texture := load(state.current_terrain_map_path()) as Texture2D
 		var height_image := (
 			height_texture.get_image() if height_texture != null else null
 		)
@@ -2369,7 +2368,7 @@ func _ensure_province_visual_cache() -> void:
 	_province_loyalty_day = state.day
 func _rebuild_political_base_texture(political_image: Image) -> void:
 	var packed_height := (
-		load(GameState.terrain_map_path()) as Texture2D
+		load(state.current_terrain_map_path()) as Texture2D
 	).get_image()
 	var images := build_political_base_images(
 		political_image.get_size(), packed_height

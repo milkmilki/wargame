@@ -1,5 +1,11 @@
 # Terrain assets
 
+The separate `eurasia.tscn` scenario uses `eurasia_mercator_map_source.json` and
+`eurasia_mercator_elevation_white_4096.png` (Web Mercator, aspect 2.879001).
+The legacy `eurasia_map_source.json` and texture remain available for old templates.
+See [eurasia_scenario.md](../../docs/eurasia_scenario.md)
+for bounds, regeneration, attribution and validation. The China default remains unchanged.
+
 Runtime textures:
 
 - `china_elevation_white_2048.png`: the single packed runtime map source. RGB is
@@ -20,6 +26,9 @@ required at runtime.
 maps. `peak_latitude` has multiplier 1.0; the south/north edge multipliers are
 reached smoothly at `bbox_wgs84`. All five values can be overridden in the
 runtime map editor and are saved with editable map definitions.
+Manifest version 1 accepts an optional `projection`: `equirectangular` (default)
+or `web_mercator`. Latitude overrides follow that projection. Square texture
+dimensions do not determine the displayed map aspect.
 
 Regenerate:
 
