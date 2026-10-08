@@ -17,6 +17,10 @@ static func build_visual_region_geometry(
 	var coarse := VORONOI.build_visual_city_ids(
 		height_image, city_seeds, WORK_SIZE, 32.0, WORK_SIZE
 	)
+	return from_labels(height_image, city_seeds, safe_size, coarse, WORK_SIZE)
+
+
+static func from_labels(height_image: Image, city_seeds: Array[Dictionary], safe_size: Vector2i, coarse: Dictionary, work_size: Vector2i) -> Dictionary:
 	var coarse_ids: Image = coarse["city_ids"]
 	var coarse_land: Image = coarse["land_mask"]
 	var by_city := {}
@@ -27,8 +31,8 @@ static func build_visual_region_geometry(
 		if city_id >= 0:
 			by_city[city_id] = []
 			adjacency[city_id] = {}
-	for y in range(WORK_SIZE.y):
-		for x in range(WORK_SIZE.x):
+	for y in range(work_size.y):
+		for x in range(work_size.x):
 			var city_id := _pixel_id(coarse_ids, x, y)
 			if city_id < 0 or not by_city.has(city_id):
 				continue
@@ -36,7 +40,7 @@ static func build_visual_region_geometry(
 				var nx: int = x + direction.x
 				var ny: int = y + direction.y
 				var neighbor := -1
-				if nx >= 0 and ny >= 0 and nx < WORK_SIZE.x and ny < WORK_SIZE.y:
+				if nx >= 0 and ny >= 0 and nx < work_size.x and ny < work_size.y:
 					neighbor = _pixel_id(coarse_ids, nx, ny)
 				if neighbor == city_id:
 					continue
@@ -56,8 +60,8 @@ static func build_visual_region_geometry(
 				# The orientation is only used to connect the edge graph; each
 				# region receives its own copy of a shared administrative edge.
 				(by_city[city_id] as Array).append([
-					Vector2(a.x / WORK_SIZE.x, a.y / WORK_SIZE.y),
-					Vector2(b.x / WORK_SIZE.x, b.y / WORK_SIZE.y),
+					Vector2(a.x / work_size.x, a.y / work_size.y),
+					Vector2(b.x / work_size.x, b.y / work_size.y),
 					neighbor < 0,
 				])
 	var shared_vertices := _shared_boundary_vertices(by_city)
@@ -70,7 +74,7 @@ static func build_visual_region_geometry(
 			if polygon.size() < 3:
 				continue
 			var smoothed := smooth_visual_boundary(polygon, {
-				"max_offset": 2.0 / float(WORK_SIZE.x),
+				"max_offset": 2.0 / float(work_size.x),
 				"shared_vertices": shared_vertices,
 			})
 			var region := {

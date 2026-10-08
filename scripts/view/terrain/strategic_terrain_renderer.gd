@@ -142,6 +142,13 @@ func set_country_fill_fade_enabled(enabled: bool) -> void:
 	)
 
 
+func set_curved_province_borders_enabled(enabled: bool) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter(
+		"curved_province_borders_enabled", 1.0 if enabled else 0.0
+	)
+
+
 func set_unified_region_fill_enabled(enabled: bool) -> void:
 	_ensure_render_nodes()
 	_material.set_shader_parameter(
@@ -513,3 +520,7 @@ func _smooth_height_samples() -> void:
 					total += nearby * sample_weight
 					weight += sample_weight
 				_height_samples[index] = total / weight
+
+func set_atlas_handdrawn_enabled(enabled: bool) -> void:
+	_ensure_render_nodes()
+	_material.set_shader_parameter("atlas_handdrawn_enabled",1.0 if enabled else 0.0)

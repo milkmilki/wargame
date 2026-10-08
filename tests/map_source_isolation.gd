@@ -69,6 +69,24 @@ func _init() -> void:
 		return
 	history.reset(mercator)
 	assert(history.build_view_state(mercator, 0).map_source_manifest == new_source)
+	var environment_source := "res://assets/terrain/eurasia_environment_map_source.json"
+	var environment := GameState.new()
+	assert(environment.generate_world(12345, 4, 48, "", {}, 12345, "", environment_source))
+	var environment_template := MapDefinition.from_state(environment)
+	var environment_restored := GameState.new()
+	environment_restored.generate_from_map_definition(environment_template, 12345)
+	assert(environment_restored.province_ids == environment.province_ids)
+	for i in range(environment.cities.size()):
+		assert(environment_restored.cities[i].map_position == environment.cities[i].map_position)
+	history.reset(environment)
+	assert(history.build_view_state(environment, 0).map_source_manifest == environment_source)
+	var rng_before: int = environment.rng.state
+	assert(not environment.generate_world(12345, 40, 500, "", {"latitude_min": 75, "latitude_max": 85}, 12345, "", environment_source))
+	assert(environment.last_generation_error.contains("减少城市数"))
+	assert(environment.rng.state == rng_before)
+	assert(MapDefinition.from_state(environment) == environment_template)
+	assert(MapSource.settlement_model(new_source) == MapSource.LEGACY_SETTLEMENT)
+	assert(MapSource.settlement_model(environment_source) == MapSource.ENVIRONMENT_SETTLEMENT)
 	var china_last := GameState.new()
 	china_last.generate_world(12345, 4, 48)
 	assert(china_last.province_ids == china.province_ids)

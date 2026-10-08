@@ -9,11 +9,13 @@ var _snapshots: Array[Dictionary] = []
 var _view_state: GameState
 var _view_source_instance_id: int = 0
 var _view_naming_revision: int = -1
+var _atlas_layouts: Dictionary = {}
 
 
 func reset(game_state: GameState, interval_days: int = DEFAULT_INTERVAL_DAYS) -> void:
 	_interval_days = maxi(interval_days, 1)
 	_snapshots.clear()
+	_atlas_layouts.clear()
 	_view_state = null
 	_view_source_instance_id = 0
 	_view_naming_revision = -1
@@ -61,6 +63,19 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		_view_source_instance_id = live_state.get_instance_id()
 		_view_naming_revision = live_state.naming_revision
 	var snapshot: Dictionary = _snapshots[index]
+	var layout: Dictionary=snapshot.get("atlas_layout",{})
+	if not layout.is_empty():
+		_view_state.map_source_manifest=layout.source
+		_view_state.map_models=layout.models.duplicate(true)
+		_view_state.map_aspect_ratio=layout.aspect
+		_view_state.province_map_size=layout.size
+		_view_state.province_ids=layout.ids
+		_view_state.edges=layout.edges
+		_view_state.adjacency=layout.adjacency
+		_view_state.edge_lookup=layout.edge_lookup
+		_view_state.road_network_revision=layout.road_revision
+		for i in range(mini(layout.positions.size(),_view_state.cities.size())):
+			_view_state.cities[i].map_position=layout.positions[i]
 	_view_state.day = int(snapshot["day"])
 	_view_state.month = int(snapshot["month"])
 	_view_state.ownership_revision = int(snapshot["ownership_revision"])
@@ -161,11 +176,13 @@ func _create_view_state(live_state: GameState) -> GameState:
 	view.world_seed = live_state.world_seed
 	view.uses_heightmap = live_state.uses_heightmap
 	view.map_source_manifest = live_state.map_source_manifest
+	view.map_models = live_state.map_models.duplicate(true)
 	view.map_aspect_ratio = live_state.map_aspect_ratio
 	view.map_source_region_normalized = live_state.map_source_region_normalized
 	view.city_generation_mask_path = live_state.city_generation_mask_path
 	view.political_mask_path = live_state.political_mask_path
 	view.city_density_settings = live_state.city_density_settings.duplicate(true)
+	view.generation_metadata = live_state.generation_metadata.duplicate(true)
 	view.province_map_size = live_state.province_map_size
 	view.province_ids = live_state.province_ids
 	view.river_features = (
@@ -235,6 +252,7 @@ func _capture(game_state: GameState) -> void:
 		nation_politics[nation_id] = political
 		prince_reports[nation_id] = PrincePolitics.report(game_state, nation_id, military.get(nation_id, {}))
 	_snapshots.append({
+		"atlas_layout":_capture_atlas_layout(game_state) if MapSource.atlas_style(game_state.map_source_manifest) else {},
 		"day": game_state.day,
 		"family_trees": game_state.family_trees.duplicate(true),
 		"family_revision": game_state.family_revision,
@@ -283,3 +301,17 @@ static func _copy_script_object(source: Object) -> Object:
 		var value = source.get(name)
 		copy.set(name, value.duplicate(true) if value is Array or value is Dictionary else value)
 	return copy
+
+func _capture_atlas_layout(state: GameState) -> Dictionary:
+	var positions:=PackedVector2Array();var paths: Array=[]
+	for city in state.cities: positions.append(city.map_position)
+	for edge in state.edges: paths.append([edge.map_path,edge.road_tier,edge.kind,edge.max_manpower,edge.distance])
+	var signature:=hash([state.map_source_manifest,state.map_models,state.map_aspect_ratio,state.province_ids,state.province_map_size,positions,paths])
+	if _atlas_layouts.has(signature): return _atlas_layouts[signature]
+	var edges: Array[Edge]=[];var lookup: Dictionary={}
+	for edge in state.edges:
+		var copy:=_copy_script_object(edge) as Edge
+		edges.append(copy);lookup[state._edge_key(copy.city_a,copy.city_b)]=copy
+	var layout: Dictionary={"source":state.map_source_manifest,"models":state.map_models.duplicate(true),"aspect":state.map_aspect_ratio,"size":state.province_map_size,"ids":state.province_ids.duplicate(),"positions":positions,"edges":edges,"edge_lookup":lookup,"adjacency":state.adjacency.duplicate(true),"road_revision":state.road_network_revision}
+	_atlas_layouts[signature]=layout
+	return layout

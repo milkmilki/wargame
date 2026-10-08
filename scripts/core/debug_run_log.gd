@@ -40,7 +40,7 @@ func world_started(state: GameState, settings: Dictionary, source: String) -> vo
 		"day": state.day, "settings": settings, "nation_count": state.nations.size(),
 		"city_count": state.cities.size(), "army_count": state.armies.size(),
 		"rng_state": str(state.rng.state), "initial_map_template": template_path if template_error == OK else "",
-		"map_template_error": error_string(template_error)}
+		"map_template_error": error_string(template_error), "generation_metadata": state.generation_metadata.duplicate(true)}
 	record("world_start", summary)
 	print("[DEBUG_RUN] 新局%d seed=%d source=%s" % [_world_index, state.world_seed, source])
 

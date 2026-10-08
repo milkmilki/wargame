@@ -1,0 +1,128 @@
+{
+  "date": "2026-10-08",
+  "source": "res://assets/terrain/eurasia_transport_map_source.json",
+  "all_passed": false,
+  "worlds": [
+    {
+      "seed": 2342006650,
+      "generated": true,
+      "land_cities": 500,
+      "nations": 40,
+      "docks": 113,
+      "seeded_gaps": [],
+      "disconnected_provinces": [],
+      "bank_errors": "",
+      "west_middle": true,
+      "middle_east": true,
+      "template_round_trip": true,
+      "failures": []
+    },
+    {
+      "seed": 12345,
+      "generated": true,
+      "land_cities": 500,
+      "nations": 40,
+      "docks": 114,
+      "seeded_gaps": [],
+      "disconnected_provinces": [],
+      "bank_errors": "",
+      "west_middle": true,
+      "middle_east": true,
+      "template_round_trip": true,
+      "failures": []
+    },
+    {
+      "seed": 23456,
+      "generated": true,
+      "land_cities": 500,
+      "nations": 40,
+      "docks": 114,
+      "seeded_gaps": [],
+      "disconnected_provinces": [],
+      "bank_errors": "",
+      "west_middle": true,
+      "middle_east": true,
+      "template_round_trip": true,
+      "failures": []
+    },
+    {
+      "seed": 34567,
+      "generated": false,
+      "error": "主河交通无法合法连接城市；请调整城市数量或地图范围。",
+      "failures": [
+        "seed=34567 generation returned failure: 主河交通无法合法连接城市；请调整城市数量或地图范围。"
+      ]
+    },
+    {
+      "seed": 45678,
+      "generated": false,
+      "error": "主河交通无法合法连接城市；请调整城市数量或地图范围。",
+      "failures": [
+        "seed=45678 generation returned failure: 主河交通无法合法连接城市；请调整城市数量或地图范围。"
+      ]
+    },
+    {
+      "seed": 1470349411,
+      "generated": false,
+      "error": "主河岸区仍有 1 个可分配格未覆盖；当前世界已保留。",
+      "failures": [
+        "seed=1470349411 generation returned failure: 主河岸区仍有 1 个可分配格未覆盖；当前世界已保留。"
+      ],
+      "remaining_seeded_gaps": [
+        22526
+      ],
+      "reproduced_stage": "provinces"
+    }
+  ],
+  "isolated_city_evidence": [
+    {
+      "seed": 34567,
+      "isolated_city": 234,
+      "positions": [
+        [
+          0.181638076901436,
+          0.39520338177681
+        ]
+      ],
+      "analysis": "Independent original DEM land connectivity within each coarse province pair; rivers and slope deliberately omitted, so a negative result is a strict obstruction.",
+      "pairs": [
+        {
+          "neighbor": 202,
+          "connected_ignoring_rivers_and_slopes": false
+        },
+        {
+          "neighbor": 248,
+          "connected_ignoring_rivers_and_slopes": false
+        }
+      ]
+    },
+    {
+      "seed": 45678,
+      "isolated_city": 198,
+      "positions": [
+        [
+          0.451394706964493,
+          0.353756099939346
+        ]
+      ],
+      "analysis": "Independent original DEM land connectivity within each coarse province pair; rivers and slope deliberately omitted, so a negative result is a strict obstruction.",
+      "pairs": [
+        {
+          "neighbor": 194,
+          "connected_ignoring_rivers_and_slopes": false
+        }
+      ]
+    }
+  ],
+  "simulation_audit": {
+    "seed": 12345,
+    "days": 365,
+    "wars": 13,
+    "city_turnovers": 92,
+    "net_captures": 71,
+    "territory_errors": 0,
+    "battle_binding_errors": 0,
+    "shortage_army_days": 2094,
+    "court_payment_ratio": 1.0
+  }
+}

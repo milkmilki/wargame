@@ -4,7 +4,7 @@ extends RefCounted
 ## armies, battles, diplomacy and the simulation clock are rebuilt on load.
 
 const FORMAT := "world-war-map"
-const VERSION := 6
+const VERSION := 8
 const MIN_SUPPORTED_VERSION := 3
 const USER_MAP_DIRECTORY := "user://maps"
 
@@ -113,7 +113,10 @@ static func from_state(state: GameState) -> Dictionary:
 			"max_height_difference": edge.max_height_difference,
 			"land_ratio": edge.land_ratio,
 			"map_path": edge_map_path,
+			"river_reaches": edge.river_reaches.duplicate(true),
+			"river_navigation": edge.river_navigation.duplicate(true),
 			"is_backbone": edge.is_backbone,
+			"road_tier": edge.road_tier,
 			"is_terrain_connector": edge.is_terrain_connector,
 		})
 	var exported_river_features: Array = (
@@ -133,6 +136,7 @@ static func from_state(state: GameState) -> Dictionary:
 		"format": FORMAT,
 		"version": VERSION,
 		"map_source_manifest": state.map_source_manifest,
+		"map_models":state.map_models.duplicate(true) if not state.map_models.is_empty() else MapSource.model_descriptor(state.map_source_manifest),
 		"city_generation_mask_path": state.city_generation_mask_path,
 		"political_mask_path": state.political_mask_path,
 		"city_density_settings": state.city_density_settings.duplicate(true),
@@ -228,6 +232,11 @@ static func validate(data: Dictionary) -> String:
 	var version := int(version_value)
 	if version < MIN_SUPPORTED_VERSION or version > VERSION:
 		return "地图版本不支持：%s" % str(data.get("version", -1))
+	if data.has("map_models"):
+		if data.map_models is not Dictionary: return "地图模型描述格式无效。"
+		var models: Dictionary=data.map_models
+		for key in ["river_usage","road_network_model","map_visual_style","road_version","visual_version"]:
+			if models.has(key) and models[key] is not String: return "地图模型描述字段无效。"
 	var manifest_value: Variant = data.get("map_source_manifest", MapSource.DEFAULT_MANIFEST)
 	if not manifest_value is String or str(manifest_value).is_empty():
 		return "地图源清单路径无效。"
@@ -331,6 +340,9 @@ static func validate(data: Dictionary) -> String:
 			return "国家 %d 必须至少拥有一座陆地城市。" % nation_id
 	for edge_record in edges:
 		var record: Dictionary = edge_record
+		if record.has("road_tier"):
+			if record.road_tier is not int and record.road_tier is not float: return "道路等级无效。"
+			if not is_finite(float(record.road_tier)) or float(record.road_tier) not in [-1.0,0.0,1.0]: return "道路等级无效。"
 		var a := int(record.get("city_a", -1))
 		var b := int(record.get("city_b", -1))
 		if a < 0 or b < 0 or a >= cities.size() or b >= cities.size() or a == b:
@@ -392,6 +404,36 @@ static func _validate_river_features(data: Dictionary, version: int) -> String:
 	var error := MapFeatureContract.validate_rivers(features)
 	if not error.is_empty():
 		return error
+	var by_id := {}
+	for feature in features: by_id[int(feature.id)] = feature
+	for record in data.get("edges", []):
+		var navigation: Variant = record.get("river_navigation", {})
+		if not navigation is Dictionary: return "河运局部通行评估格式无效。"
+		if not navigation.is_empty():
+			if version < 8 or int(record.get("kind", -1)) != Edge.Kind.RIVER or navigation.get("model", "") != "local_height_v1": return "河运局部评估版本或道路类型无效。"
+			for key in ["max_local_height_difference", "sample_step", "window_length"]:
+				var value: Variant = navigation.get(key)
+				if not (value is float or value is int) or not is_finite(float(value)) or value < 0: return "河运局部评估参数无效。"
+			if not navigation.get("navigable") is bool: return "河运通行判断必须为布尔值。"
+			if navigation.navigable != (navigation.max_local_height_difference <= 0.20): return "河运局部高差与通行判断不一致。"
+		var refs: Variant = record.get("river_reaches", [])
+		if not refs is Array: return "河运河段引用必须为数组。"
+		if not refs.is_empty() and int(record.get("kind", -1)) != Edge.Kind.RIVER:
+			return "只有河运边可以引用河段。"
+		var previous_end := Vector2(INF, INF)
+		for ref in refs:
+			if not ref is Dictionary: return "河运河段引用无效。"
+			if not _is_integer_value(ref.get("river_id")) or not by_id.has(int(ref.river_id)): return "河运引用不存在的河段。"
+			var feature: Dictionary = by_id[int(ref.river_id)]
+			if feature.get("river_class", "major") != "major": return "支流不能参与河运。"
+			for key in ["from", "to"]:
+				var value: Variant = ref.get(key)
+				if not (value is int or value is float): return "河段进度必须是数值。"
+				if not is_finite(float(value)) or value < 0 or value > feature.points.size() - 1: return "河段进度超出范围。"
+			var transport = preload("res://scripts/core/river_transport.gd")
+			var start: Vector2 = transport.point_at(feature.points, float(ref.from))
+			if is_finite(previous_end.x) and not start.is_equal_approx(previous_end): return "河运引用不连续。"
+			previous_end = transport.point_at(feature.points, float(ref.to))
 	if data.has("river_paths"):
 		var legacy := MapFeatureContract.from_legacy_river_paths(
 			data.get("river_paths", [])

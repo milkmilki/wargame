@@ -1,5 +1,17 @@
 class_name TerrainMapGenerator
 extends RefCounted
+const EnvironmentModel = preload("res://scripts/core/settlement_environment.gd")
+const CitySampler = preload("res://scripts/core/settlement_sampler.gd")
+const Hydrology = preload("res://scripts/core/terrain_hydrology.gd")
+const HydroTransport = preload("res://scripts/core/river_transport.gd")
+const VectorModel = preload("res://scripts/core/vector_hydrology.gd")
+const BankConstraints = preload("res://scripts/core/river_province_constraints.gd")
+const DockSampling = preload("res://scripts/core/river_dock_sampling.gd")
+const FerrySpacing = preload("res://scripts/core/river_ferry_spacing.gd")
+const LandComponents = preload("res://scripts/core/terrain_land_components.gd")
+const PixelRoute = preload("res://scripts/core/province_pixel_route.gd")
+const ShoreRepair = preload("res://scripts/core/shore_seed_repair.gd")
+const RIVER_RESERVATION_VERSION := "local_crossings_v1"
 ## 从带 Alpha 的灰度高度图确定性生成城市位置和道路图。
 
 const ANALYSIS_WIDTH: int = 256
@@ -61,6 +73,8 @@ const PROVINCE_RIVER_CROSSING_COST: float = 7.5
 const ROAD_STANDARD_CAPACITY_SHARE: float = 0.25
 
 static var _cache: Dictionary = {}
+static var _crossing_indexes: Dictionary = {}
+static var _reservation_cache: Dictionary = {}
 
 
 static func build(
@@ -73,6 +87,16 @@ static func build(
 	political_mask_path: String = "",
 	source_manifest: String = MapSource.DEFAULT_MANIFEST
 ) -> Dictionary:
+	var source_error := MapSource.validate_manifest(source_manifest)
+	if not source_error.is_empty():
+		return {"ok": false, "error": source_error}
+	var environmental := MapSource.settlement_model(source_manifest) == MapSource.ENVIRONMENT_SETTLEMENT
+	var hydrological := MapSource.hydrology_model(source_manifest) == MapSource.TERRAIN_HYDROLOGY
+	var environment_only := MapSource.environment_only_rivers(source_manifest)
+	var strict_rivers := not environment_only and MapSource.strict_river_transport(source_manifest)
+	var full_network := not environment_only and MapSource.full_river_transport(source_manifest)
+	var river_settlement := MapSource.river_settlement_model(source_manifest)
+	var density_bounds := MapSource.settlement_density_bounds(source_manifest)
 	var profile_enabled := (
 		OS.get_environment("WORLD_GENERATION_PROFILE") == "1"
 	)
@@ -92,11 +116,32 @@ static func build(
 		initial_nation_count,
 	]
 	cache_key += ":" + source_manifest + ":" + MapSource.projection_type(source_manifest)
+	if MapSource.atlas_roads(source_manifest): cache_key += ":"+str(load("res://scripts/core/atlas_road_network.gd").VERSION)+":coastal_domain_v1"
+	cache_key += ":atlas-v1:" + str(environment_only) + ":" + str(MapSource.atlas_roads(source_manifest)) + ":" + str(MapSource.atlas_style(source_manifest))
+	cache_key += ":road-path:" + MapSource.road_path_model(source_manifest)
+	cache_key += ":ferries:" + str(MapSource.ferry_interval(source_manifest)) + ":" + FerrySpacing.VERSION
+	cache_key += ":ferry-cap:" + str(MapSource.ferry_max_per_river(source_manifest))
+	if strict_rivers: cache_key += ":" + BankConstraints.VERSION + ":local_transport_v1"
+	if full_network: cache_key += ":" + DockSampling.VERSION + ":" + ShoreRepair.VERSION + ":full_pixel_roads_v1"
+	cache_key += ":" + river_settlement + ":" + EnvironmentModel.RiverSupport.cache_identity() + ":" + _reservation_identity()
+	cache_key += ":" + JSON.stringify(density_bounds)
+	if river_settlement == MapSource.VALLEY_RIVER_SETTLEMENT: cache_key += ":" + EnvironmentModel.ValleySupport.cache_identity()
+	if hydrological:
+		cache_key += ":" + Hydrology.VERSION + ":" + VectorModel.VERSION
+		var network_path := MapSource.hydrology_network(source_manifest)
+		if not network_path.is_empty(): cache_key += ":" + str(VectorModel.network(network_path).network_id)
+		cache_key += ":" + str(MapSource.estimated_boundary_inflow(source_manifest))
+	if environmental:
+		cache_key += ":" + EnvironmentModel.VERSION + ":" + CitySampler.VERSION + ":" + FileAccess.get_sha256(source_path)
 	if _cache.has(cache_key):
-		return (_cache[cache_key] as Dictionary).duplicate(true)
+		var cached: Dictionary = (_cache[cache_key] as Dictionary).duplicate(true)
+		if environmental:
+			cached["generation_metadata"]["layout_cache_hit"] = true
+		return cached
 	var texture := load(source_path) as Texture2D
 	var source := texture.get_image() if texture != null else null
-	assert(source != null and not source.is_empty(), "无法加载地形高度图：%s" % source_path)
+	if source == null or source.is_empty():
+		return {"ok": false, "error": "无法加载地形高度图：%s" % source_path}
 	var analysis := source.duplicate()
 	var analysis_height := maxi(
 		int(round(float(source.get_height()) * float(ANALYSIS_WIDTH) / float(source.get_width()))),
@@ -106,49 +151,84 @@ static func build(
 	# it across coastlines when building the geography analysis grid.
 	analysis.resize(ANALYSIS_WIDTH, analysis_height, Image.INTERPOLATE_NEAREST)
 	var land_geometry := _all_land_geometry(analysis)
-	assert(land_geometry["count"] >= city_count * 16, "高度图有效陆地区域不足")
+	if land_geometry["count"] < city_count * (1 if environmental else 16):
+		return {"ok": false, "error": "高度图有效陆地不足，请减少城市数。"}
 	var mask: PackedByteArray = land_geometry["mask"]
 	var land_bounds: Rect2i = land_geometry["bounds"]
 	var city_mask_result := build_city_candidate_mask(
 		mask, analysis.get_size(), city_mask_path
 	)
-	assert(bool(city_mask_result.get("ok", false)), str(
-		city_mask_result.get("error", "城市蒙版加载失败")
-	))
+	if not bool(city_mask_result.get("ok", false)):
+		return city_mask_result
 	var city_mask: PackedByteArray = city_mask_result["mask"]
 	var city_geometry := _mask_geometry(city_mask, analysis.get_size())
-	assert(
-		int(city_geometry["count"]) >= city_count,
-		"白色蒙版内真实陆地不足以生成%d座城市" % city_count
-	)
+	if int(city_geometry["count"]) < city_count:
+		return {"ok": false, "error": "白色蒙版内真实陆地不足，请减少城市数。"}
 	var bounds := Rect2i(Vector2i.ZERO, analysis.get_size())
 	var political_mask_result := build_city_candidate_mask(
 		mask, analysis.get_size(), political_mask_path
 	)
-	assert(bool(political_mask_result.get("ok", false)), str(
-		political_mask_result.get("error", "政治蒙版加载失败")
-	))
+	if not bool(political_mask_result.get("ok", false)):
+		return political_mask_result
 	var political_mask: PackedByteArray = political_mask_result["mask"]
 	var map_aspect_ratio := MapSource.aspect_ratio(source_manifest)
 	if profile_enabled:
 		profile["input"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
-	# 城市与省份先独立生成；河流随后从既有公共省界中选择。这样河流
-	# 不再反过来扭曲城市位置或省界，省界也成为河道几何的唯一真源。
+	# Legacy maps choose rivers from province boundaries. Hydrological maps
+	# evaluate the existing river network before settlements and province growth.
 	var empty_river_paths: Array[Array] = []
-	var samples := _sample_cities(
-		analysis,
-		city_mask,
-		city_geometry["bounds"],
-		bounds,
-		city_count,
-		empty_river_paths,
-		density_settings,
-		generation_seed, source_manifest
-	)
+	var samples: Dictionary
+	var environment_metadata := {}
+	var hydro := {}
+	var reserved_docks: Array = []
+	var atlas_major_scores := PackedFloat32Array()
+	if environmental:
+		var latitudes := PackedFloat32Array()
+		for row in range(analysis.get_height()):
+			latitudes.append(latitude_for_map_y((row + 0.5) / analysis.get_height(), density_settings, source_manifest))
+		var environment := EnvironmentModel.build(source, analysis, mask, latitudes, map_aspect_ratio, MapSource.projection_type(source_manifest), hydrological, MapSource.hydrology_network(source_manifest), MapSource.estimated_boundary_inflow(source_manifest), river_settlement)
+		if full_network:
+			environment = environment.duplicate()
+			environment["physical_components"] = LandComponents.build(source)
+			environment["local_crossings"] = true
+		if hydrological: hydro = environment.hydrology
+		var reservation_started := Time.get_ticks_usec()
+		if not environment_only and (full_network or river_settlement in [MapSource.UNIFORM_RIVER_SETTLEMENT,MapSource.VALLEY_RIVER_SETTLEMENT]):
+			reserved_docks = _reserve_hydrology_docks(environment, analysis, map_aspect_ratio, city_count, full_network)
+		var reservation_usec := Time.get_ticks_usec() - reservation_started
+		samples = CitySampler.sample(source, city_mask, environment, city_count, map_aspect_ratio, generation_seed, reserved_docks, density_bounds)
+		for pixel in samples.get("pixels", []):
+			atlas_major_scores.append(float(environment.suitability[pixel.y * analysis.get_width() + pixel.x]))
+		environment_metadata = samples.get("generation_metadata", {}).duplicate(true)
+		environment_metadata.merge({"river_settlement_model": river_settlement, "reservation_version": RIVER_RESERVATION_VERSION, "reservation_usec": reservation_usec, "river_support_usec": environment.get("river_support_usec", 0)})
+		environment_metadata.merge({"layout_cache_hit": false, "settlement_model": MapSource.ENVIRONMENT_SETTLEMENT, "environment_version": EnvironmentModel.VERSION, "environment_id": environment["environment_id"], "environment_cache_hit": environment["cache_hit"], "environment_usec": environment["elapsed_usec"]})
+		if not bool(samples.get("ok", false)):
+			samples["generation_metadata"] = environment_metadata
+			return samples
+		if hydrological:
+			environment_metadata.merge({"hydrology_version": hydro.version, "hydrology_id": hydro.hydrology_id, "hydrology_usec": hydro.elapsed_usec, "basin_count": hydro.basin_count, "external_inflow_count": hydro.get("external_inflow_count", 0), "hydrology_dem_size": hydro.get("dem_size", []), "major_reaches": MapFeatureContract.major_rivers(hydro.features).size(), "minor_reaches": hydro.features.size() - MapFeatureContract.major_rivers(hydro.features).size()})
+	else:
+		samples = _sample_cities(
+			analysis,
+			city_mask,
+			city_geometry["bounds"],
+			bounds,
+			city_count,
+			empty_river_paths,
+			density_settings,
+			generation_seed, source_manifest
+		)
 	if profile_enabled:
 		profile["settlements"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
+	environment_metadata.merge({"river_usage": "environment_only" if environment_only else "full", "road_network_model": str(MapSource.load_manifest(source_manifest).get("road_network_model", "legacy")), "map_visual_style": str(MapSource.load_manifest(source_manifest).get("map_visual_style", "legacy"))})
+	# Water has already informed settlement suitability. It must not leak into
+	# province barriers, docks, movement or the visual feature atlas.
+	if environment_only:
+		hydro = hydro.duplicate()
+		hydro["features"] = []
+		hydro["blocked_edges"] = {}
 	# Settlement density and spacing are solved in the tight land domain, then
 	# projected once into the complete geographic rectangle used by rendering.
 	var full_positions: Array[Vector2] = []
@@ -156,7 +236,7 @@ static func build(
 	political_active.resize(samples["pixels"].size())
 	for city_id in range(samples["pixels"].size()):
 		var pixel: Vector2i = samples["pixels"][city_id]
-		full_positions.append(_normalized_map_point(pixel, bounds))
+		full_positions.append(samples["positions"][city_id] if environmental else _normalized_map_point(pixel, bounds))
 		political_active[city_id] = political_mask[
 			pixel.y * analysis.get_width() + pixel.x
 		]
@@ -165,31 +245,61 @@ static func build(
 	samples["politically_active"] = political_active
 	# 省份是地形/河流上的基础行政分区；道路只能消费省份接壤关系，
 	# 不能反过来塑造省界，否则会形成“道路决定省界、省界又决定道路”的循环。
+	var constraints := BankConstraints.build(hydro.features, analysis.get_size(), map_aspect_ratio) if strict_rivers else {}
+	if full_network: constraints["whole_branch_transfer"] = true
+	var province_mask := _atlas_land_domain(source,analysis.get_size()) if MapSource.atlas_roads(source_manifest) else mask
 	var provinces := _build_province_raster(
 		analysis,
-		mask,
+		province_mask,
 		bounds,
 		samples["pixels"],
 		empty_river_paths, projected_pixel_aspect(analysis, source_manifest),
-		MapSource.projection_type(source_manifest) == MapSource.WEB_MERCATOR
+		MapSource.projection_type(source_manifest) == MapSource.WEB_MERCATOR,
+		hydro.get("blocked_edges", {}),
+		constraints
 	)
+	if provinces.get("ok", true) == false: return provinces
+	if full_network:
+		provinces.ids = BankConstraints.complete_conflicts(provinces.ids, mask, analysis.get_size(), samples.pixels, hydro.blocked_edges, constraints)
+		var repair := ShoreRepair.repair(samples, provinces, analysis, source, mask, hydro.blocked_edges, constraints, projected_pixel_aspect(analysis, source_manifest))
+		provinces = repair.provinces
+		environment_metadata["shore_seed_repair"] = {"version": repair.version, "moves": repair.moves, "remaining_gaps": repair.remaining_gaps, "trials": repair.trials}
+		if not repair.moves.is_empty(): environment_metadata["spacing_scale"] = minf(float(environment_metadata.get("spacing_scale", 1.0)), 0.8)
+		if not repair.remaining_gaps.is_empty():
+			_write_hydrology_failure(generation_seed, source_manifest, "provinces", samples, provinces, hydro, environment_metadata)
+			return {"ok": false, "error": "主河岸区仍有 %d 个可分配格未覆盖；当前世界已保留。" % repair.remaining_gaps.size(), "generation_metadata": environment_metadata}
+		for city_id in range(samples.pixels.size()):
+			political_active[city_id] = political_mask[samples.pixels[city_id].y * analysis.get_width() + samples.pixels[city_id].x]
+		politically_active_count = _count_mask(political_active)
+	provinces["routing_options"] = {"strict": true, "allow_terrain_connector": true, "image": source if full_network else analysis, "aspect": map_aspect_ratio, "river_paths": MapFeatureContract.major_paths(hydro.features)} if strict_rivers else {}
+	if full_network:
+		provinces["physical_components"] = LandComponents.build(source)
+		provinces.routing_options["pixel_fallback"] = true
 	if profile_enabled:
 		profile["provinces"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
-	var boundary_rivers := _build_boundary_river_network(
+	var boundary_rivers := _hydrology_transport_input(provinces, hydro.features, strict_rivers, map_aspect_ratio, full_network) if hydrological else _build_boundary_river_network(
 		provinces, samples["positions"], map_aspect_ratio
 	)
+	boundary_rivers["reserved_docks"] = reserved_docks
+	boundary_rivers["ferry_interval"] = 0.0 if environment_only else MapSource.ferry_interval(source_manifest)
+	boundary_rivers["ferry_max_per_river"] = 0 if environment_only else MapSource.ferry_max_per_river(source_manifest)
+	boundary_rivers["navigation_image"] = source if strict_rivers else analysis
+	boundary_rivers["local_navigation"] = strict_rivers
+	if strict_rivers:
+		for river in boundary_rivers.rivers: river["strict_transport"] = true
+		environment_metadata["river_transport_model"] = MapSource.FULL_RIVER_TRANSPORT if full_network else MapSource.STRICT_RIVER_TRANSPORT
+		environment_metadata["bank_constraint_version"] = BankConstraints.VERSION
 	if profile_enabled:
 		profile["rivers"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
-	var road_result := _build_roads(
-		analysis,
-		mask,
-		samples,
-		map_aspect_ratio,
-		provinces,
-		boundary_rivers["pixel_paths"]
-	)
+	var road_result: Dictionary
+	if MapSource.atlas_roads(source_manifest):
+		road_result = load("res://scripts/core/atlas_road_network.gd").build(source, analysis, samples, provinces, map_aspect_ratio, atlas_major_scores)
+		if not road_result.get("ok", false): return road_result
+		environment_metadata.merge(road_result.get("metadata", {}), true)
+	else:
+		road_result = _build_roads(analysis, mask, samples, map_aspect_ratio, provinces, boundary_rivers["pixel_paths"], hydro.get("blocked_edges", {}))
 	if profile_enabled:
 		profile["roads"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
@@ -197,7 +307,7 @@ static func build(
 		road_result["roads"],
 		provinces,
 		samples["positions"],
-		city_count, map_aspect_ratio
+		city_count, map_aspect_ratio, hydro.get("blocked_edges", {})
 	)
 	if profile_enabled:
 		profile["road_paths"] = Time.get_ticks_usec() - profile_last
@@ -212,6 +322,30 @@ static func build(
 		map_aspect_ratio,
 		initial_nation_count
 	)
+	if not transport.get("ok", true): return transport
+	if not transport.get("ferry_spacing", {}).is_empty(): environment_metadata["ferry_spacing"] = transport.ferry_spacing
+	if hydrological:
+		var land_roads: Array[Dictionary] = []
+		if strict_rivers:
+			environment_metadata["dock_diagnostics"] = transport.get("dock_diagnostics", [])
+			environment_metadata["river_navigation_model"] = HydroTransport.Navigation.MODEL
+			environment_metadata["river_source_exception_radius"] = BankConstraints.SOURCE_RADIUS
+		for road in transport.roads:
+			if int(road.get("kind", Edge.Kind.LAND)) != Edge.Kind.RIVER: land_roads.append(road)
+		land_roads.append_array(HydroTransport.build(hydro.features, transport.docks, source if strict_rivers else analysis, map_aspect_ratio, strict_rivers))
+		transport.roads = land_roads
+		if not MapSource.atlas_roads(source_manifest) and MapSource.road_path_model(source_manifest) == MapSource.VISIBILITY_ROAD_PATH:
+			environment_metadata["road_path_simplification"] = _simplify_generated_land_roads(transport.roads, provinces, source, hydro.features, map_aspect_ratio)
+		var unassigned := 0
+		for i in range(mask.size()):
+			if mask[i] != 0 and provinces.ids[i] < 0: unassigned += 1
+		environment_metadata.unassigned_land_cells = unassigned
+		if not _hydrology_transport_valid(transport, samples.positions, analysis, mask, hydro):
+			_write_hydrology_failure(generation_seed, source_manifest, "transport", samples, provinces, hydro, environment_metadata, road_result.roads, transport.roads)
+			var transport_error := "主河交通无法合法连接城市；请调整城市数量或地图范围。"
+			if MapSource.ferry_max_per_river(source_manifest)>0:
+				transport_error="每条主河最多%d个渡口的限制下无法合法连接城市；当前世界已保留。" % MapSource.ferry_max_per_river(source_manifest)
+			return {"ok": false, "error": transport_error, "generation_metadata": environment_metadata}
 	if profile_enabled:
 		profile["river_transport"] = Time.get_ticks_usec() - profile_last
 		profile_last = Time.get_ticks_usec()
@@ -231,7 +365,7 @@ static func build(
 			"dock_bank_regions", [] as Array[Dictionary]
 		),
 		"river_paths": transport["river_paths"],
-		"river_features": MapFeatureContract.from_legacy_river_paths(
+		"river_features": hydro.features if hydrological else MapFeatureContract.from_legacy_river_paths(
 			transport["river_paths"]
 		),
 		"bounds": bounds,
@@ -247,6 +381,8 @@ static func build(
 		"generation_seed": generation_seed,
 		"political_mask_path": political_mask_path,
 	}
+	if environmental:
+		result["generation_metadata"] = environment_metadata
 	_cache[cache_key] = result.duplicate(true)
 	if profile_enabled:
 		profile["materialize_cache"] = Time.get_ticks_usec() - profile_last
@@ -255,6 +391,49 @@ static func build(
 			str(profile),
 		])
 	return result
+
+static func _write_hydrology_failure(seed_value: int, source_manifest: String, stage: String, samples: Dictionary, provinces: Dictionary, hydro: Dictionary, metadata: Dictionary, roads_before: Array = [], roads_after: Array = []) -> void:
+	if OS.get_environment("HYDROLOGY_DIAGNOSE") != "1": return
+	var report := {"seed": seed_value, "source": source_manifest, "stage": stage, "positions": [], "roads_before": roads_before, "roads_after": roads_after, "provinces": Array(provinces.ids), "rivers": MapFeatureContract.serialize_rivers(hydro.features), "metadata": metadata}
+	for p in samples.positions: report.positions.append([p.x, p.y])
+	var file := FileAccess.open("res://.dbg/hydrology-generation-failure-%d.json" % seed_value, FileAccess.WRITE)
+	if file != null: file.store_string(JSON.stringify(report))
+
+static func _hydrology_transport_valid(transport: Dictionary, positions: Array[Vector2], image: Image, land: PackedByteArray, hydro: Dictionary) -> bool:
+	var major_paths := MapFeatureContract.major_paths(hydro.features)
+	var count: int = positions.size() + transport.docks.size()
+	var parent: Array[int] = []
+	for i in range(count): parent.append(i)
+	for road in transport.roads:
+		if int(road.get("kind", Edge.Kind.LAND)) in [Edge.Kind.LAND, Edge.Kind.LANDING] and _road_dictionary_crosses_rivers(road, positions, major_paths):
+			if OS.get_environment("HYDROLOGY_DIAGNOSE") == "1": print("HYDROLOGY_ILLEGAL_CROSSING ", road)
+			return false
+		parent[_root(parent, int(road.a))] = _root(parent, int(road.b))
+	# Coastal cities may legitimately use the existing sea network. The Eurasia
+	# acceptance separately requires the west/central/east route without sea edges.
+	var components := Hydrology.components(land, image.get_size(), {})
+	var areas := {}
+	var mainland := -1
+	var largest := 0
+	for component in components:
+		if component < 0: continue
+		areas[component] = int(areas.get(component, 0)) + 1
+		if int(areas[component]) > largest:
+			largest = int(areas[component])
+			mainland = component
+	var roots := {}
+	for i in range(positions.size()):
+		var p := Vector2i(positions[i] * Vector2(image.get_size())).clamp(Vector2i.ZERO, image.get_size() - Vector2i.ONE)
+		var component := components[p.y * image.get_width() + p.x]
+		if component != mainland: continue
+		var root := _root(parent, i)
+		if roots.has(component) and roots[component] != root:
+			print("HYDROLOGY_DISCONNECTED city=%d component=%d root=%d expected=%d position=%s" % [i, component, root, roots[component], positions[i]])
+			for road in transport.roads:
+				if int(road.a) == i or int(road.b) == i: print("HYDROLOGY_CITY_LINK ", road)
+			return false
+		roots[component] = root
+	return true
 
 
 static func default_city_density_settings(source_manifest: String = MapSource.DEFAULT_MANIFEST) -> Dictionary:
@@ -680,7 +859,9 @@ static func _build_province_raster(
 	city_pixels: Array[Vector2i],
 	river_paths: Array[Array],
 	pixel_aspect: float = 1.0,
-	precise_costs: bool = false
+	precise_costs: bool = false,
+	blocked_edges: Dictionary = {},
+	bank_constraints: Dictionary = {}
 ) -> Dictionary:
 	var width := bounds.size.x * PROVINCE_RASTER_SCALE
 	var height := bounds.size.y * PROVINCE_RASTER_SCALE
@@ -732,6 +913,11 @@ static func _build_province_raster(
 	distances.resize(width * height)
 	distances.fill(INF)
 	var heap: Array = []
+	var strict := not bank_constraints.is_empty()
+	var settled := PackedByteArray()
+	settled.resize(width * height)
+	var expanded := PackedByteArray()
+	expanded.resize(width * height)
 	for city_id in range(city_pixels.size()):
 		var local := (
 			city_pixels[city_id] - bounds.position
@@ -745,10 +931,14 @@ static func _build_province_raster(
 			continue
 		distances[seed_index] = 0.0
 		ids[seed_index] = city_id
+		if strict: settled[seed_index] = 1
 		_province_heap_push(
 			heap,
 			_province_heap_entry(0.0, seed_index, city_id, precise_costs)
 		)
+	if strict:
+		var error := BankConstraints.validate(ids, bank_constraints)
+		if not error.is_empty(): return {"ok": false, "error": error}
 	var offsets := [
 		Vector2i.LEFT,
 		Vector2i.RIGHT,
@@ -760,12 +950,19 @@ static func _build_province_raster(
 		var current_index := int(entry[1])
 		var owner := int(entry[2])
 		var current_cost := float(entry[0])
+		if strict and expanded[current_index] != 0: continue
+		if strict and ids[current_index] < 0:
+			if not BankConstraints.permits(current_index, owner, ids, bank_constraints): continue
+			ids[current_index] = owner
+			distances[current_index] = current_cost
+			settled[current_index] = 1
 		if (
 			owner != ids[current_index]
 			or current_cost
 				> distances[current_index] + 0.000001
 		):
 			continue
+		if strict: expanded[current_index] = 1
 		var current := Vector2i(
 			current_index % width,
 			current_index / width
@@ -783,6 +980,9 @@ static func _build_province_raster(
 			var next_index: int = next.y * width + next.x
 			if land[next_index] == 0:
 				continue
+			if blocked_edges.has(Hydrology.edge_key(current_index, next_index, width * height)):
+				continue
+			if strict and settled[next_index] != 0: continue
 			var step_cost := province_geographic_step_cost(
 				altitude[current_index],
 				altitude[next_index],
@@ -793,6 +993,12 @@ static func _build_province_raster(
 				)
 			)
 			var candidate_cost := current_cost + step_cost
+			if strict:
+				# Claims are permanent. Every queued claim extends a finalized cell
+				# of its own province, preserving seed connectivity by construction.
+				if BankConstraints.permits(next_index, owner, ids, bank_constraints):
+					_province_heap_push(heap, _province_heap_entry(candidate_cost, next_index, owner, true))
+				continue
 			# 相同成本下堆已按 owner/id 稳定排序，首次到达即为确定胜者。
 			# 禁止后到 owner 覆盖，避免旧 owner 已向外传播后留下断开的标签岛。
 			if candidate_cost < distances[next_index] - 0.000001:
@@ -808,6 +1014,11 @@ static func _build_province_raster(
 				)
 	# Land components without a settlement remain unassigned. Assigning them to
 	# the nearest seed in screen space creates disconnected provinces across sea.
+	if strict:
+		for pass_index in range(4):
+			var before := ids.count(-1)
+			ids = BankConstraints.complete(ids, land, raster_size, city_pixels, blocked_edges, bank_constraints)
+			if ids.count(-1) >= before: break
 	return {
 		"size": raster_size,
 		"ids": ids,
@@ -1485,7 +1696,8 @@ static func _build_roads(
 	samples: Dictionary,
 	map_aspect_ratio: float,
 	provinces: Dictionary,
-	river_paths: Array[Array]
+	river_paths: Array[Array],
+	blocked_edges: Dictionary = {}
 ) -> Dictionary:
 	var pixels: Array[Vector2i] = samples["pixels"]
 	var positions: Array[Vector2] = samples["positions"]
@@ -1515,19 +1727,22 @@ static func _build_roads(
 			or a >= pixels.size() or b >= pixels.size()
 		):
 			continue
+		if provinces.has("physical_components") and LandComponents.at(provinces.physical_components, positions[a]) != LandComponents.at(provinces.physical_components, positions[b]): continue
 		# 共享边界是道路拓扑的唯一真源。省份受地形成本影响可能为凹形，
 		# 同一省 ID 还可能包含无城市的离岸碎片，因此必须确认两个城市种子
 		# 在“两省联合域”内四连通；只在远端小岛接触不构成道路接壤。
 		var map_path := PackedVector2Array()
-		if not province_segment_stays_in_pair(
+		if not blocked_edges.is_empty() or not province_segment_stays_in_pair(
 			province_ids, province_size, positions[a], positions[b], a, b
 		):
 			map_path = province_pair_path(
-				province_ids, province_size, positions[a], positions[b], a, b
+				province_ids, province_size, positions[a], positions[b], a, b, blocked_edges, provinces.get("routing_options", {})
 			)
 			if map_path.size() < 2:
 				continue
 		var profile := _edge_profile(image, mask, pixels[a], pixels[b])
+		if not blocked_edges.is_empty() and map_path.size() >= 2:
+			profile = _polyline_terrain_profile(image, mask, map_path)
 		var length := (
 			metric_polyline_length(map_path, map_aspect_ratio)
 			if map_path.size() >= 2
@@ -1660,6 +1875,8 @@ static func _build_roads(
 			positions[int(road["b"])],
 			map_aspect_ratio
 		)
+		if bool(provinces.get("routing_options", {}).get("strict", false)) and road.has("map_path"):
+			road["length"] = metric_polyline_length(road["map_path"], map_aspect_ratio)
 		road["distance"] = distance_units_for_metric_length(
 			float(road["length"])
 		)
@@ -1673,9 +1890,20 @@ static func _build_roads(
 		blocked_count += 1
 		if blocked_count >= blocked_target:
 			break
+	var sea_parent := parent.duplicate()
+	if not blocked_edges.is_empty():
+		# River-separated banks belong to the same physical landmass. They
+		# must be connected by legal docks, not by extra "sea" shortcuts.
+		var physical := Hydrology.components(mask, image.get_size(), {})
+		var first_by_land := {}
+		for i in range(pixels.size()):
+			var component := physical[pixels[i].y * image.get_width() + pixels[i].x]
+			if provinces.has("physical_components"): component = LandComponents.at(provinces.physical_components, positions[i])
+			if first_by_land.has(component): sea_parent[_root(sea_parent, i)] = _root(sea_parent, int(first_by_land[component]))
+			else: first_by_land[component] = i
 	_append_sea_component_backbone(
-		selected, parent, image, mask, pixels, positions,
-		map_aspect_ratio, river_paths
+		selected, sea_parent, image, mask, pixels, positions,
+		map_aspect_ratio, river_paths, not blocked_edges.is_empty()
 	)
 	return {
 		"roads": selected,
@@ -1692,7 +1920,8 @@ static func _append_sea_component_backbone(
 	pixels: Array[Vector2i],
 	positions: Array[Vector2],
 	map_aspect_ratio: float,
-	river_paths: Array[Array]
+	river_paths: Array[Array],
+	allow_disconnected: bool = false
 ) -> void:
 	while true:
 		var remaining_roots := {}
@@ -1728,6 +1957,7 @@ static func _append_sea_component_backbone(
 					best_a = a
 					best_b = b
 					best_length = length
+		if best_a < 0 and allow_disconnected: return
 		assert(best_a >= 0, "海区骨架必须存在不穿河道的SEA连接")
 		# Terrain describes the chosen edge; it does not participate in selection.
 		var best_profile := _edge_profile(image, mask, pixels[best_a], pixels[best_b])
@@ -2087,6 +2317,186 @@ static func _build_boundary_river_network(
 		"river_pair_keys": river_pair_keys,
 	}
 
+## Adapt immutable hydrological reaches to the existing two-bank dock selector.
+## Reserve isolated crossing sites, never an entire river-bank exclusion corridor.
+static func _reservation_identity() -> String:
+	return "%s:%s:%s:%s:%s" % [RIVER_RESERVATION_VERSION, RIVER_DOCK_CITY_MIN_SPACING, RIVER_DOCK_SPACING_REFERENCE_CITY_COUNT, RIVER_DOCK_MIN_SPACING, RIVER_DOCK_LOWLAND_ALTITUDE]
+
+static func _reserve_hydrology_docks(environment: Dictionary, image: Image, aspect: float, city_count: int, full_network: bool = false) -> Array:
+	var key := str(environment.hydrology.hydrology_id) + _reservation_identity() + str(city_count) + str(full_network) + DockSampling.VERSION
+	if _reservation_cache.has(key): return _reservation_cache[key].duplicate(true)
+	var ids: PackedInt32Array = environment.components.duplicate()
+	var areas := {}
+	for id in ids:
+		if id >= 0: areas[id] = int(areas.get(id, 0)) + 1
+	var minimum_area := PI * pow(minimum_dock_city_spacing_for_count(city_count), 2.0)
+	for i in range(ids.size()):
+		if ids[i] >= 0 and float(areas[ids[i]]) * aspect / ids.size() < minimum_area: ids[i] = -1
+	var input := _hydrology_transport_input({"size": environment.size, "ids": ids}, environment.hydrology.features, full_network, aspect, full_network)
+	var candidates: Array[Dictionary] = []
+	for river in input.rivers:
+		for sample in river.dock_samples:
+			var position: Vector2 = river.path[sample.path_index].lerp(river.path[sample.path_index + 1], sample.ratio)
+			var pixel := Vector2i(position * Vector2(image.get_size())).clamp(Vector2i.ZERO, image.get_size() - Vector2i.ONE)
+			var height := packed_altitude(image.get_pixelv(pixel))
+			if not full_network and height > RIVER_DOCK_LOWLAND_ALTITUDE: continue
+			var banks: Dictionary = input.graph.segments[sample.graph_index]
+			candidates.append({"position": position, "river_id": river.river_id, "river_progress": sample.path_index + sample.ratio, "height": height, "relief": _local_relief(image, pixel.x, pixel.y, RELIEF_RADIUS), "cell_a": banks.cell_a, "cell_b": banks.cell_b, "a": banks.a, "b": banks.b})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		for field in ["height", "relief", "river_id", "river_progress"]:
+			if a[field] != b[field]: return a[field] < b[field]
+		return a.cell_a.y * image.get_width() + a.cell_a.x < b.cell_a.y * image.get_width() + b.cell_a.x
+	)
+	var parent: Array[int] = []
+	var max_id := -1
+	for id in areas: max_id = maxi(max_id, id)
+	for i in range(max_id + 1): parent.append(i)
+	var selected: Array = []
+	var positions: Array[Vector2] = []
+	for candidate in candidates:
+		var a := _root(parent, candidate.a)
+		var b := _root(parent, candidate.b)
+		if a == b or _minimum_metric_position_distance(candidate.position, positions, aspect) < RIVER_DOCK_MIN_SPACING: continue
+		parent[b] = a
+		selected.append(candidate)
+		positions.append(candidate.position)
+	if _reservation_cache.size() >= 8: _reservation_cache.erase(_reservation_cache.keys()[0])
+	_reservation_cache[key] = selected.duplicate(true)
+	return selected
+
+## Missing boundary segments (same province or unowned shore) cannot host docks.
+static func _hydrology_transport_input(provinces: Dictionary, features: Array, strict_transport: bool = false, aspect: float = 1.0, full_network: bool = false) -> Dictionary:
+	if full_network:
+		return _continuous_hydrology_transport_input(provinces, features, aspect)
+	var size: Vector2i = provinces.size
+	var all_major_paths := MapFeatureContract.major_paths(features)
+	var empty_positions: Array[Vector2] = []
+	var segments: Array[Dictionary] = []
+	var rivers: Array[Dictionary] = []
+	var paths: Array[PackedVector2Array] = []
+	var pixel_paths: Array[Array] = []
+	for feature in MapFeatureContract.major_rivers(features):
+		var path: PackedVector2Array = feature.points
+		var pixels: Array = []
+		var dock_samples: Array[Dictionary] = []
+		for p in path: pixels.append(p * Vector2(size) - Vector2(0.5, 0.5))
+		for i in range(path.size() - 1):
+			var p := path[i] * Vector2(size)
+			var q := path[i + 1] * Vector2(size)
+			var first := Vector2i((p.min(q) - Vector2.ONE).floor()).max(Vector2i.ZERO)
+			var last := Vector2i((p.max(q) + Vector2.ONE).ceil()).min(size - Vector2i.ONE)
+			for y in range(first.y, last.y + 1):
+				for x in range(first.x, last.x + 1):
+					var cell := Vector2i(x, y)
+					var a := Vector2(cell) + Vector2.ONE * 0.5
+					for step in [Vector2i.RIGHT, Vector2i.DOWN]:
+						var other: Vector2i = cell + step
+						if not Rect2i(Vector2i.ZERO, size).has_point(other): continue
+						var hit: Variant = Geometry2D.segment_intersects_segment(p, q, a, a + Vector2(step))
+						if hit == null: continue
+						var owner_a := int(provinces.ids[y * size.x + x])
+						var owner_b := int(provinces.ids[other.y * size.x + other.x])
+						if owner_a < 0 or owner_b < 0 or owner_a == owner_b: continue
+						var ratio := clampf(((hit as Vector2) - p).dot(q - p) / (q - p).length_squared(), 0.0, 1.0)
+						var dock_position := path[i].lerp(path[i + 1], ratio)
+						# Several meanders may cross a single coarse province edge.
+						# Both banks must reach this exact dock without another crossing.
+						var approach_a := {"map_path": PackedVector2Array([a / Vector2(size), dock_position])}
+						var approach_b := {"map_path": PackedVector2Array([(a + Vector2(step)) / Vector2(size), dock_position])}
+						if _road_dictionary_crosses_rivers(approach_a, empty_positions, all_major_paths) or _road_dictionary_crosses_rivers(approach_b, empty_positions, all_major_paths): continue
+						dock_samples.append({"path_index": i, "ratio": ratio, "graph_index": segments.size()})
+						segments.append({"a": owner_a, "b": owner_b, "cell_a": cell, "cell_b": other})
+		if strict_transport:
+			var progress := 0.003
+			var traversed := 0.0
+			for i in range(path.size() - 1):
+				var length := metric_length_between(path[i], path[i + 1], aspect)
+				while progress <= traversed + length and length > 0:
+					var ratio := clampf((progress - traversed) / length, 0.0, 1.0)
+					var position := path[i].lerp(path[i + 1], ratio)
+					var banks := _sample_vector_banks(provinces, position, path[i + 1] - path[i], all_major_paths, aspect)
+					if not banks.is_empty():
+						dock_samples.append({"path_index": i, "ratio": ratio, "graph_index": segments.size()})
+						segments.append(banks)
+					progress += 0.006
+				traversed += length
+		dock_samples.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.path_index + a.ratio < b.path_index + b.ratio)
+		rivers.append({"river_id": feature.id, "path": path, "pixel_path": pixels, "edge_indices": [], "dock_samples": dock_samples, "hydrological": true, "strict_transport": strict_transport})
+		paths.append(path)
+		pixel_paths.append(pixels)
+	return {"graph": {"segments": segments}, "rivers": rivers, "paths": paths, "pixel_paths": pixel_paths, "river_pair_keys": {}, "features": features, "hydrological": true}
+
+static func _continuous_hydrology_transport_input(provinces: Dictionary, features: Array, aspect: float) -> Dictionary:
+	var size: Vector2i = provinces.size
+	var paths := MapFeatureContract.major_paths(features)
+	var segments: Array[Dictionary] = []
+	var rivers: Array[Dictionary] = []
+	var pixels: Array[Array] = []
+	var by_id := {}
+	for feature in MapFeatureContract.major_rivers(features):
+		var path: PackedVector2Array = feature.points
+		var pixel_path: Array = []
+		for p in path: pixel_path.append(p * Vector2(size) - Vector2.ONE * 0.5)
+		var river := {"river_id": feature.id, "path": path, "pixel_path": pixel_path, "edge_indices": [], "dock_samples": [], "hydrological": true, "strict_transport": true, "full_network": true, "provinces": provinces, "features": features}
+		by_id[int(feature.id)] = river
+		rivers.append(river)
+		pixels.append(pixel_path)
+	var rejected := []
+	var all_samples := DockSampling.samples(features, aspect)
+	for sample in all_samples:
+		var banks := _raster_river_banks(provinces, sample.position, sample.direction, paths, aspect)
+		if banks.is_empty():
+			rejected.append({"coverage": sample.coverage, "reason": "no_bank_city", "reach_fraction": sample.reach_fraction})
+			continue
+		var value: Dictionary = sample.duplicate()
+		value.merge({"path_index": int(floor(sample.river_progress)), "ratio": fmod(sample.river_progress, 1.0), "graph_index": segments.size()})
+		by_id[int(sample.river_id)].dock_samples.append(value)
+		segments.append(banks)
+	return {"graph": {"segments": segments}, "rivers": rivers, "paths": paths, "pixel_paths": pixels, "river_pair_keys": {}, "features": features, "hydrological": true, "full_network": true, "sample_rejections": rejected, "all_samples": all_samples}
+
+static func _raster_river_banks(provinces: Dictionary, position: Vector2, direction: Vector2, paths: Array[PackedVector2Array], aspect: float) -> Dictionary:
+	var size: Vector2i = provinces.size
+	var normal := (direction * Vector2(aspect, 1)).orthogonal().normalized() / Vector2(aspect, 1)
+	var cell_radius := Vector2(aspect / size.x, 1.0 / size.y).length()
+	var no_positions: Array[Vector2] = []
+	for scale_value in [0.01, 0.1, 0.25, 0.5, 0.75]:
+		var a := position + normal * cell_radius * float(scale_value)
+		var b := position - normal * cell_radius * float(scale_value)
+		if not Rect2(0, 0, 1, 1).has_point(a) or not Rect2(0, 0, 1, 1).has_point(b): continue
+		var ca := Vector2i(a * Vector2(size))
+		var cb := Vector2i(b * Vector2(size))
+		var oa: int = provinces.ids[ca.y * size.x + ca.x]
+		var ob: int = provinces.ids[cb.y * size.x + cb.x]
+		if oa < 0 or ob < 0 or oa == ob: continue
+		var pa := (Vector2(ca) + Vector2.ONE * 0.5) / Vector2(size)
+		var pb := (Vector2(cb) + Vector2.ONE * 0.5) / Vector2(size)
+		if _road_dictionary_crosses_rivers({"map_path": PackedVector2Array([pa, position])}, no_positions, paths): continue
+		if _road_dictionary_crosses_rivers({"map_path": PackedVector2Array([pb, position])}, no_positions, paths): continue
+		return {"a": oa, "b": ob, "cell_a": ca, "cell_b": cb}
+	return {}
+
+static func _sample_vector_banks(provinces: Dictionary, position: Vector2, direction: Vector2, paths: Array[PackedVector2Array], aspect: float) -> Dictionary:
+	var size: Vector2i = provinces.size
+	var center := Vector2i(position * Vector2(size))
+	var candidates: Array[Dictionary] = []
+	for y in range(maxi(0, center.y - 2), mini(size.y, center.y + 3)):
+		for x in range(maxi(0, center.x - 2), mini(size.x, center.x + 3)):
+			var owner := int(provinces.ids[y * size.x + x])
+			if owner < 0: continue
+			var p := (Vector2(x, y) + Vector2.ONE * 0.5) / Vector2(size)
+			candidates.append({"owner": owner, "cell": Vector2i(x,y), "point": p, "side": signf(direction.cross(p-position)), "distance": metric_length_between(p,position,aspect)})
+	candidates.sort_custom(func(a: Dictionary,b: Dictionary)->bool: return a.distance < b.distance)
+	var banks := {}
+	var no_positions: Array[Vector2] = []
+	for candidate in candidates:
+		var side := int(candidate.side)
+		if side == 0 or banks.has(side): continue
+		if _road_dictionary_crosses_rivers({"map_path": PackedVector2Array([candidate.point,position])},no_positions,paths): continue
+		banks[side] = candidate
+		if banks.size() == 2: break
+	if banks.size() < 2 or banks[-1].owner == banks[1].owner: return {}
+	return {"a": banks[-1].owner, "b": banks[1].owner, "cell_a": banks[-1].cell, "cell_b": banks[1].cell}
+
 
 ## 固定端点河流：源头取省界网络西侧最贴近目标纬度的节点，河口必须
 ## 是“两个省份公共边界与海岸线”的交点。固定端点后用省界图最短路
@@ -2362,7 +2772,8 @@ static func _attach_province_land_paths(
 	provinces: Dictionary,
 	positions: Array[Vector2],
 	land_city_count: int,
-	map_aspect_ratio: float = FULL_MAP_ASPECT_RATIO
+	map_aspect_ratio: float = FULL_MAP_ASPECT_RATIO,
+	blocked_edges: Dictionary = {}
 ) -> void:
 	var size: Vector2i = provinces["size"]
 	var ids: PackedInt32Array = provinces["ids"]
@@ -2375,12 +2786,13 @@ static func _attach_province_land_paths(
 			continue
 		var a := int(road["a"])
 		var b := int(road["b"])
-		if road.has("map_path") or province_segment_stays_in_pair(
+		if not blocked_edges.is_empty() and road.has("map_path"): continue
+		if blocked_edges.is_empty() and (road.has("map_path") or province_segment_stays_in_pair(
 			ids, size, positions[a], positions[b], a, b
-		):
+		)):
 			continue
 		var path := province_pair_path(
-			ids, size, positions[a], positions[b], a, b
+			ids, size, positions[a], positions[b], a, b, blocked_edges, provinces.get("routing_options", {})
 		)
 		if path.size() >= 2:
 			road["map_path"] = path
@@ -2389,6 +2801,48 @@ static func _attach_province_land_paths(
 			)
 			road["length"] = metric_length
 			road["distance"] = distance_units_for_metric_length(metric_length)
+
+
+static func simplify_saved_road_path(path: PackedVector2Array, provinces: Dictionary, a: int, b: int, options: Dictionary) -> PackedVector2Array:
+	if path.size() <= 2: return path.duplicate()
+	var result := PackedVector2Array([path[0]])
+	var anchor := 0
+	while anchor < path.size() - 1:
+		# Keep an existing hop if no new shortcut is legal. This stage does not
+		# invent roads, alter their adjacency or re-run the candidate selection.
+		var next := anchor + 1
+		for candidate in range(path.size() - 1, anchor + 1, -1):
+			if not _segment_in_pair_exact(provinces.ids, provinces.size, path[anchor], path[candidate], a, b): continue
+			if not _safe_road_shortcut(path[anchor], path[candidate], options): continue
+			next = candidate
+			break
+		if not result[-1].is_equal_approx(path[next]): result.append(path[next])
+		anchor = next
+	return result
+
+
+static func _simplify_generated_land_roads(roads: Array[Dictionary], provinces: Dictionary, image: Image, features: Array, aspect: float) -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var options := {"image": image, "river_paths": MapFeatureContract.major_paths(features), "aspect": aspect}
+	var changed := 0
+	var before_points := 0
+	var after_points := 0
+	for road in roads:
+		if int(road.get("kind", Edge.Kind.LAND)) != Edge.Kind.LAND: continue
+		var path: PackedVector2Array = road.get("map_path", PackedVector2Array())
+		before_points += path.size()
+		var simplified := simplify_saved_road_path(path, provinces, int(road.a), int(road.b), options)
+		after_points += simplified.size()
+		if simplified == path: continue
+		changed += 1
+		var old_length := float(road.get("length", metric_polyline_length(path, aspect)))
+		road.map_path = simplified
+		road.length = metric_polyline_length(simplified, aspect)
+		road.distance = distance_units_for_metric_length(road.length)
+		if road.has("cost"): road.cost = float(road.cost) - old_length + road.length
+	return {"model": MapSource.VISIBILITY_ROAD_PATH, "changed_roads": changed,
+		"before_points": before_points, "after_points": after_points,
+		"elapsed_usec": Time.get_ticks_usec() - started}
 
 
 static func metric_polyline_length(
@@ -2403,13 +2857,24 @@ static func metric_polyline_length(
 
 
 ## 在两个端点省份的联合栅格内做确定性 A*。返回归一化地图折线，首尾钉死城市中心。
-static func province_pair_path(
+static func province_pair_path(province_ids: PackedInt32Array, size: Vector2i, from: Vector2, to: Vector2, province_a: int, province_b: int, blocked_edges: Dictionary = {}, routing_options: Dictionary = {}) -> PackedVector2Array:
+	var result := _coarse_province_pair_path(province_ids, size, from, to, province_a, province_b, blocked_edges, routing_options)
+	if result.is_empty() and routing_options.get("pixel_fallback", false):
+		# A river-separated pair has no legal coarse corridor. Do not explore
+		# every terrain pixel merely to rediscover this topological rejection.
+		if _coarse_province_pair_path(province_ids, size, from, to, province_a, province_b, blocked_edges, {}).is_empty(): return result
+		return PixelRoute.find(province_ids, size, from, to, province_a, province_b, routing_options)
+	return result
+
+static func _coarse_province_pair_path(
 	province_ids: PackedInt32Array,
 	size: Vector2i,
 	from: Vector2,
 	to: Vector2,
 	province_a: int,
-	province_b: int
+	province_b: int,
+	blocked_edges: Dictionary = {},
+	routing_options: Dictionary = {}
 ) -> PackedVector2Array:
 	var empty := PackedVector2Array()
 	if (
@@ -2417,6 +2882,8 @@ static func province_pair_path(
 		or province_ids.size() != size.x * size.y
 	):
 		return empty
+	if routing_options.get("strict",false) and _safe_road_shortcut(from,to,routing_options) and _segment_in_pair_exact(province_ids,size,from,to,province_a,province_b):
+		return PackedVector2Array([from,to])
 	var start := Vector2i(
 		clampi(int(floor(from.x * size.x)), 0, size.x - 1),
 		clampi(int(floor(from.y * size.y)), 0, size.y - 1)
@@ -2427,6 +2894,34 @@ static func province_pair_path(
 	)
 	var start_index := start.y * size.x + start.x
 	var goal_index := goal.y * size.x + goal.x
+	var route_image: Image = routing_options.get("image")
+	var route_heights: PackedFloat32Array = routing_options.get("heights", PackedFloat32Array())
+	var representatives: PackedVector2Array = routing_options.get("representatives", PackedVector2Array())
+	if route_heights.is_empty() and routing_options.get("strict", false) and route_image != null:
+		route_heights.resize(size.x * size.y)
+		if routing_options.get("pixel_fallback", false): representatives.resize(size.x * size.y)
+		for y in range(size.y):
+			for x in range(size.x):
+				var pixel := Vector2i((Vector2(x, y) + Vector2.ONE * 0.5) / Vector2(size) * Vector2(route_image.get_size())).clamp(Vector2i.ZERO, route_image.get_size() - Vector2i.ONE)
+				# A coastal province cell may contain real land although its
+				# center is sea. Keep a legal representative inside that cell;
+				# every connecting segment is still checked against the source.
+				if not representatives.is_empty() and province_ids[y * size.x + x] >= 0 and not packed_is_land(route_image.get_pixelv(pixel)):
+					var first := Vector2i(Vector2(x, y) / Vector2(size) * Vector2(route_image.get_size()))
+					var last := Vector2i(Vector2(x + 1, y + 1) / Vector2(size) * Vector2(route_image.get_size()))
+					var closest := pixel
+					var best := INF
+					for py in range(first.y, last.y):
+						for px in range(first.x, last.x):
+							var p := Vector2i(px, py)
+							var d := Vector2(p).distance_squared_to(Vector2(pixel))
+							if d < best and packed_is_land(route_image.get_pixelv(p)): closest = p; best = d
+					pixel = closest
+				var color := route_image.get_pixelv(pixel)
+				route_heights[y * size.x + x] = packed_altitude(color) if packed_is_land(color) else -1.0
+				if not representatives.is_empty(): representatives[y * size.x + x] = (Vector2(pixel) + Vector2.ONE * 0.5) / Vector2(route_image.get_size())
+		routing_options["heights"] = route_heights
+		if not representatives.is_empty(): routing_options["representatives"] = representatives
 	var distance := PackedFloat64Array()
 	distance.resize(size.x * size.y)
 	distance.fill(INF)
@@ -2459,7 +2954,13 @@ static func province_pair_path(
 			var owner := int(province_ids[next_index])
 			if owner not in [province_a, province_b]:
 				continue
+			if blocked_edges.has(Hydrology.edge_key(current_index, next_index, size.x * size.y)): continue
+			if not route_heights.is_empty() and (route_heights[next_index] < 0 or absf(route_heights[current_index] - route_heights[next_index]) > float(routing_options.get("maximum_height", ROAD_MAXIMUM_HEIGHT_DIFFERENCE))): continue
 			var candidate := current_cost + 1.0
+			if routing_options.get("pixel_fallback", false):
+				var step_length := float(routing_options.get("aspect", 1.0)) * size.y / size.x if offset.x != 0 else 1.0
+				var relief_cost := 1.0 + 7.0 * absf(route_heights[current_index] - route_heights[next_index])
+				candidate = current_cost + step_length * relief_cost
 			if (
 				candidate < distance[next_index] - 0.000001
 				or (
@@ -2470,10 +2971,16 @@ static func province_pair_path(
 				distance[next_index] = candidate
 				previous[next_index] = current_index
 				var heuristic := Vector2(next).distance_to(Vector2(goal))
+				if routing_options.get("strict",false): heuristic = absf(next.x-goal.x)+absf(next.y-goal.y)
+				if routing_options.get("pixel_fallback", false): heuristic = absf(next.x-goal.x) * float(routing_options.get("aspect", 1.0)) * size.y / size.x + absf(next.y-goal.y)
 				_province_heap_push(
 					heap, Vector3(candidate + heuristic, next_index, candidate)
 				)
 	if start_index != goal_index and previous[goal_index] < 0:
+		if routing_options.get("allow_terrain_connector", false):
+			var fallback := routing_options.duplicate()
+			fallback.merge({"allow_terrain_connector": false, "terrain_connector_fallback": true, "maximum_height": 1.0}, true)
+			return _coarse_province_pair_path(province_ids, size, from, to, province_a, province_b, blocked_edges, fallback)
 		return empty
 	var raster_points: Array[Vector2i] = []
 	var cursor := goal_index
@@ -2487,16 +2994,34 @@ static func province_pair_path(
 	raster_points.reverse()
 	var raw := PackedVector2Array([from])
 	for raster_point in raster_points:
+		if not representatives.is_empty():
+			raw.append(representatives[raster_point.y * size.x + raster_point.x])
+			continue
 		raw.append(
 			(Vector2(raster_point) + Vector2(0.5, 0.5))
 				/ Vector2(size)
 		)
 	raw.append(to)
+	if routing_options.get("terrain_connector_fallback", false):
+		var low := INF
+		var high := -INF
+		for cell in raster_points:
+			var h := route_heights[cell.y * size.x + cell.x]
+			low = minf(low, h)
+			high = maxf(high, h)
+		routing_options = routing_options.duplicate()
+		routing_options["maximum_height"] = maxf(ROAD_MAXIMUM_HEIGHT_DIFFERENCE, high - low + 0.000001)
+	if not blocked_edges.is_empty() and not routing_options.get("strict", false): return raw
 	var result := PackedVector2Array([raw[0]])
 	var anchor := 0
 	while anchor < raw.size() - 1:
-		var next_anchor := anchor + 1
-		for candidate_index in range(raw.size() - 1, anchor, -1):
+		var next_anchor := -1 if routing_options.get("strict", false) else anchor + 1
+		if routing_options.get("pixel_fallback", false):
+			next_anchor = _furthest_checked_shortcut(raw, anchor, province_ids, size, province_a, province_b, routing_options)
+		for candidate_index in [] if routing_options.get("pixel_fallback", false) else range(raw.size() - 1, anchor, -1):
+			if routing_options.get("strict", false) and not _safe_road_shortcut(raw[anchor], raw[candidate_index], routing_options): continue
+			if routing_options.get("strict", false):
+				if not _segment_in_pair_exact(province_ids,size,raw[anchor],raw[candidate_index],province_a,province_b): continue
 			if province_segment_stays_in_pair(
 				province_ids, size, raw[anchor], raw[candidate_index],
 				province_a, province_b
@@ -2504,14 +3029,188 @@ static func province_pair_path(
 				next_anchor = candidate_index
 				break
 		if next_anchor <= anchor:
+			if routing_options.get("pixel_fallback", false):
+				# Repair the obstructed short section, preserving the already
+				# legal coarse corridor instead of searching both provinces anew.
+				for target in range(anchor + 1, mini(raw.size(), anchor + 5)):
+					var repaired := PixelRoute.find(province_ids, size, raw[anchor], raw[target], province_a, province_b, routing_options)
+					if repaired.size() < 2: continue
+					for i in range(1, repaired.size()): result.append(repaired[i])
+					next_anchor = target
+					break
+				if next_anchor > anchor:
+					anchor = next_anchor
+					continue
 			return empty
 		result.append(raw[next_anchor])
 		anchor = next_anchor
 	return result
 
+static func _furthest_checked_shortcut(path: PackedVector2Array, anchor: int, ids: PackedInt32Array, size: Vector2i, a: int, b: int, options: Dictionary) -> int:
+	var last := path.size() - 1
+	if _segment_in_pair_exact(ids, size, path[anchor], path[last], a, b) and _safe_road_shortcut(path[anchor], path[last], options): return last
+	var best := -1
+	var step := 1
+	while anchor + step < last:
+		var next := anchor + step
+		if not _segment_in_pair_exact(ids, size, path[anchor], path[next], a, b) or not _safe_road_shortcut(path[anchor], path[next], options): break
+		best = next
+		step *= 2
+	if best < 0: return best
+	var low := best + 1
+	var high := mini(anchor + step - 1, last - 1)
+	while low <= high:
+		var middle := (low + high) / 2
+		if _segment_in_pair_exact(ids, size, path[anchor], path[middle], a, b) and _safe_road_shortcut(path[anchor], path[middle], options): best = middle; low = middle + 1
+		else: high = middle - 1
+	return best
 
-## 新河运拓扑：码头只从已选省界河段上产生，每座码头恰好连接该点
-## 两岸省份的城市；河道覆盖的省份对删除直接 LAND，杜绝绕过抢滩。
+static func _segment_in_pair_exact(ids: PackedInt32Array, size: Vector2i, from: Vector2, to: Vector2, a: int, b: int) -> bool:
+	for cell in _segment_grid_cells(from,to,size):
+		if ids[cell.y*size.x+cell.x] not in [a,b]: return false
+	return true
+
+static func _safe_road_shortcut(from: Vector2, to: Vector2, options: Dictionary) -> bool:
+	# Routing options are local to one immutable terrain/network build. Fine
+	# coastal searches query thousands of edges; do not copy the entire river
+	# array for every edge.
+	if not options.has("typed_rivers"):
+		var typed: Array[PackedVector2Array] = []
+		typed.assign(options.get("river_paths", []))
+		options["typed_rivers"] = typed
+	var rivers: Array[PackedVector2Array] = options.typed_rivers
+	if not options.has("river_signature"): options["river_signature"] = hash(rivers)
+	var no_positions: Array[Vector2] = []
+	if _road_dictionary_crosses_rivers({"map_path": PackedVector2Array([from, to])}, no_positions, rivers, int(options.river_signature)): return false
+	var image: Image = options.get("image")
+	if image == null: return false
+	var low := INF
+	var high := -INF
+	for p in _segment_grid_cells(from, to, image.get_size()):
+		var color := image.get_pixelv(p)
+		if not packed_is_land(color): return false
+		var h := packed_altitude(color)
+		low = minf(low, h)
+		high = maxf(high, h)
+		if high - low > float(options.get("maximum_height", ROAD_MAXIMUM_HEIGHT_DIFFERENCE)): return false
+	return true
+
+static func _segment_grid_cells(from: Vector2, to: Vector2, size: Vector2i) -> Array[Vector2i]:
+	var a := from * Vector2(size)
+	var b := to * Vector2(size)
+	var p := Vector2i(a.floor()).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+	var end := Vector2i(b.floor()).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+	var result: Array[Vector2i] = [p]
+	var delta := b - a
+	var step := Vector2i(int(signf(delta.x)), int(signf(delta.y)))
+	var tx := ((p.x + (1 if step.x > 0 else 0)) - a.x) / delta.x if step.x != 0 else INF
+	var ty := ((p.y + (1 if step.y > 0 else 0)) - a.y) / delta.y if step.y != 0 else INF
+	var dx := absf(1.0 / delta.x) if step.x != 0 else INF
+	var dy := absf(1.0 / delta.y) if step.y != 0 else INF
+	while p != end and result.size() <= size.x + size.y + 2:
+		if absf(tx-ty) < 1e-9:
+			p += step
+			tx += dx
+			ty += dy
+		elif tx < ty:
+			p.x += step.x
+			tx += dx
+		else:
+			p.y += step.y
+			ty += dy
+		if p.x < 0 or p.y < 0 or p.x >= size.x or p.y >= size.y: break
+		result.append(p)
+	return result
+
+
+## Regular arc targets first; add and prune only connectivity supplements.
+static func _build_spaced_ferries(image: Image, provinces: Dictionary, positions: Array[Vector2], base_roads: Array[Dictionary], river_input: Dictionary, candidates: Array, city_count: int, aspect: float, interval: float) -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var maximum := int(river_input.get("ferry_max_per_river",0))
+	var selection := FerrySpacing.select(candidates, river_input.features, aspect, interval, RIVER_DOCK_MIN_SPACING, maximum)
+	var regular: Array[Dictionary] = []
+	for point in selection.selected:
+		var dock := _boundary_dock_record(image,int(point.river_id),point,city_count+regular.size())
+		dock.merge({"ferry_reason":"interval","ferry_arc":point.ferry_arc,"ferry_slot":point.ferry_slot,"ferry_river":point.ferry_river},true)
+		regular.append(dock)
+	var roads: Array[Dictionary] = []
+	for road in base_roads:
+		if int(road.get("kind",Edge.Kind.LAND)) == Edge.Kind.LAND:
+			if river_input.river_pair_keys.has(_pair_key(int(road.a),int(road.b))) or _road_dictionary_crosses_rivers(road,positions,river_input.paths): continue
+		roads.append(road)
+	var required := _mainland_city_ids(image,positions)
+	var links := _ferry_city_links(roads,regular,river_input,aspect)
+	var eligible: Array[Dictionary] = []
+	for point in selection.candidates:
+		var too_close := false
+		for dock in regular:
+			if metric_length_between(point.position,dock.position,aspect)<RIVER_DOCK_MIN_SPACING: too_close=true; break
+		if not too_close: eligible.append(point)
+	var spacing_check := func(point: Dictionary, chosen: Array) -> bool:
+		for other in chosen:
+			if metric_length_between(point.position,other.position,aspect)<RIVER_DOCK_MIN_SPACING: return false
+		return true
+	var extra_points := FerrySpacing.connect_components(eligible,city_count,links,regular,required,spacing_check,maximum)
+	var extras: Array[Dictionary] = []
+	for point in extra_points:
+		var dock := _boundary_dock_record(image,int(point.river_id),point,city_count+regular.size()+extras.size())
+		dock["ferry_reason"] = "connectivity"
+		dock["ferry_river"] = point.ferry_river
+		extras.append(dock)
+	var docks: Array[Dictionary] = regular.duplicate()
+	docks.append_array(extras)
+	# New ports may add river navigation as well as a crossing. Remove any
+	# supplement that can now be deleted without breaking mainland traffic.
+	var pruned := 0
+	if _ferry_mainland_connected(roads,docks,river_input,aspect,city_count,required):
+		for i in range(docks.size()-1,regular.size()-1,-1):
+			var trial: Array[Dictionary] = docks.duplicate()
+			trial.remove_at(i)
+			if _ferry_mainland_connected(roads,trial,river_input,aspect,city_count,required): docks=trial; pruned+=1
+	for i in range(docks.size()): docks[i]["city_id"] = city_count+i
+	var river_counts := {}
+	for dock in docks: river_counts[dock.ferry_river]=int(river_counts.get(dock.ferry_river,0))+1
+	var diagnostics := {"model":FerrySpacing.VERSION,"interval":interval,"regular":regular.size(),"necessary":docks.size()-regular.size(),"pruned_redundant":pruned,"total":docks.size(),"legal_candidates":candidates.size(),"candidate_intervals":selection.candidate_intervals,"total_intervals":selection.total_intervals,"intervals_without_legal_candidate":selection.intervals_without_legal_candidate,"main_river_length":selection.main_river_length,"spacing_rejections":selection.spacing_rejections,"elapsed_usec":Time.get_ticks_usec()-started}
+	diagnostics.merge({"maximum_per_river":maximum,"river_counts":river_counts},true)
+	print("FERRY_SPACING ",JSON.stringify(diagnostics))
+	return {"docks":docks,"diagnostics":diagnostics}
+
+static func _mainland_city_ids(image: Image, positions: Array[Vector2]) -> Array[int]:
+	var components := Hydrology.components(_all_land_geometry(image).mask,image.get_size(),{})
+	var areas := {}; var largest := 0; var mainland := -1
+	for component in components:
+		if component<0: continue
+		areas[component] = int(areas.get(component,0))+1
+		if areas[component]>largest: largest=areas[component]; mainland=component
+	var result: Array[int] = []
+	for i in range(positions.size()):
+		var p := Vector2i(positions[i]*Vector2(image.get_size())).clamp(Vector2i.ZERO,image.get_size()-Vector2i.ONE)
+		if components[p.y*image.get_width()+p.x]==mainland: result.append(i)
+	return result
+
+static func _ferry_city_links(roads: Array[Dictionary], docks: Array[Dictionary], river_input: Dictionary, aspect: float) -> Array[Vector2i]:
+	var links: Array[Vector2i] = []
+	for road in roads: links.append(Vector2i(int(road.a),int(road.b)))
+	var banks := {}
+	for dock in docks:
+		links.append(Vector2i(int(dock.bank_a),int(dock.bank_b)))
+		banks[int(dock.city_id)] = int(dock.bank_a)
+	for boat in HydroTransport.build(river_input.features,docks,river_input.navigation_image,aspect,bool(river_input.local_navigation)):
+		links.append(Vector2i(banks[int(boat.a)],banks[int(boat.b)]))
+	return links
+
+static func _ferry_mainland_connected(roads: Array[Dictionary], docks: Array[Dictionary], river_input: Dictionary, aspect: float, city_count: int, required: Array[int]) -> bool:
+	var parent: Array[int] = []
+	for i in range(city_count): parent.append(i)
+	for pair in _ferry_city_links(roads,docks,river_input,aspect): parent[_root(parent,pair.x)] = _root(parent,pair.y)
+	var root := -1
+	for id in required:
+		var current := _root(parent,id)
+		if root<0: root=current
+		elif root!=current: return false
+	return true
+
+## 码头连接两岸城市；河界省份对删除直接 LAND，杜绝绕过抢滩。
 static func _build_boundary_river_transport(
 	image: Image,
 	samples: Dictionary,
@@ -2520,28 +3219,56 @@ static func _build_boundary_river_transport(
 	boundary_rivers: Dictionary,
 	city_count: int,
 	map_aspect_ratio: float,
-	initial_nation_count: int
+	initial_nation_count: int,
+	fixed_docks: Array = [],
+	preserve_docks: bool = false
 ) -> Dictionary:
 	var positions: Array[Vector2] = samples["positions"]
 	var rivers: Array[Dictionary] = boundary_rivers["rivers"]
 	var graph: Dictionary = boundary_rivers["graph"]
 	var graph_segments: Array[Dictionary] = graph["segments"]
 	var occupied_positions: Array[Vector2] = positions.duplicate()
+	var ferry_interval := float(boundary_rivers.get("ferry_interval", 0.0))
+	var spaced_ferries := ferry_interval > 0.0 and not preserve_docks
+	var ferry_diagnostics := {}
 	var docks: Array[Dictionary] = []
 	var river_groups := {}
 	var lowland_dock_regions: Array[Dictionary] = []
 	var dock_bank_regions: Array[Dictionary] = []
 	var all_dock_candidates: Array[Dictionary] = []
+	var dock_diagnostics: Array[Dictionary] = []
 	var initial_owners := _initial_nation_owner_by_position(
 		positions, initial_nation_count
 	)
+	if not preserve_docks and not spaced_ferries:
+		for reserved in boundary_rivers.get("reserved_docks", []):
+			var size: Vector2i = provinces.size
+			var a := int(provinces.ids[reserved.cell_a.y * size.x + reserved.cell_a.x])
+			var b := int(provinces.ids[reserved.cell_b.y * size.x + reserved.cell_b.x])
+			if a < 0 or b < 0 or a == b: continue
+			var point: Dictionary = reserved.duplicate(true)
+			point.merge({"bank_a": a, "bank_b": b, "reference_bank": a, "lowland": true}, true)
+			if boundary_rivers.get("full_network", false):
+				point.merge({"coverage": "reserved:%s" % point.position, "reach_fraction": 0.5, "reserved": true, "city_clearance": _minimum_metric_position_distance(point.position, positions, map_aspect_ratio)}, true)
+				all_dock_candidates.append(point)
+				continue
+			var dock := _boundary_dock_record(image, point.river_id, point, city_count + docks.size())
+			docks.append(dock)
+			occupied_positions.append(dock.position)
 	for river in rivers:
 		var river_id := int(river["river_id"])
+		if boundary_rivers.get("full_network", false) or spaced_ferries: river["collect_only"] = true
+		if preserve_docks:
+			river_groups[river_id] = []
+			for dock in fixed_docks:
+				if int(dock.river_id) == river_id: river_groups[river_id].append(dock)
+			continue
 		var selection := _select_boundary_river_docks(
 			image, river, graph_segments, positions, occupied_positions,
 			city_count + docks.size(), map_aspect_ratio, initial_owners
 		)
 		var river_docks: Array = selection["docks"]
+		dock_diagnostics.append({"river_id":river_id,"selected":river_docks.size(),"candidates":selection.candidates.size(),"rejected":selection.get("rejected",{})})
 		for candidate_value in selection["candidates"]:
 			all_dock_candidates.append(
 				(candidate_value as Dictionary).duplicate(true)
@@ -2557,11 +3284,34 @@ static func _build_boundary_river_transport(
 		for dock in river_docks:
 			dock["city_id"] = city_count + docks.size()
 			docks.append(dock)
-		river_groups[river_id] = river_docks
+		river_groups[river_id] = []
+		for dock in docks:
+			if int(dock.river_id) == river_id: river_groups[river_id].append(dock)
 
+	if spaced_ferries:
+		var sparse := _build_spaced_ferries(image, provinces, positions, base_roads, boundary_rivers, all_dock_candidates, city_count, map_aspect_ratio, ferry_interval)
+		docks.assign(sparse.docks)
+		ferry_diagnostics = sparse.diagnostics
+		for dock in docks:
+			river_groups[int(dock.river_id)].append(dock)
+			dock_bank_regions.append(dock)
+			if dock.lowland: lowland_dock_regions.append(dock)
+		for entry in dock_diagnostics:
+			entry.selected = river_groups[int(entry.river_id)].size()
+	elif boundary_rivers.get("full_network", false) and not preserve_docks:
+		var selection := _select_full_river_docks(image, {"provinces": provinces, "features": boundary_rivers.features}, all_dock_candidates, occupied_positions, positions, city_count + docks.size(), map_aspect_ratio, {})
+		var bands := {"upstream": {"candidates": 0, "docks": 0}, "middle": {"candidates": 0, "docks": 0}, "downstream": {"candidates": 0, "docks": 0}}
+		for sample in boundary_rivers.all_samples:
+			bands[_dock_reach_band(sample.reach_fraction)].candidates += 1
+		for dock in selection.docks:
+			docks.append(dock)
+			river_groups[int(dock.river_id)].append(dock)
+			bands[_dock_reach_band(dock.get("reach_fraction", 0.5))].docks += 1
+		dock_diagnostics.append({"model": DockSampling.VERSION, "bands": bands, "coverage": selection.coverage, "rejected": selection.rejected, "sample_rejections": boundary_rivers.get("sample_rejections", [])})
 	var river_pair_keys: Dictionary = boundary_rivers["river_pair_keys"]
 	var normalized_river_paths: Array[PackedVector2Array] = boundary_rivers["paths"]
-	_append_isolated_city_docks(
+	if preserve_docks: docks.assign(fixed_docks)
+	elif not spaced_ferries and not boundary_rivers.get("full_network", false): _append_isolated_city_docks(
 		image, base_roads, positions, normalized_river_paths,
 		river_pair_keys, all_dock_candidates, river_groups, docks,
 		occupied_positions, city_count, map_aspect_ratio,
@@ -2581,16 +3331,19 @@ static func _build_boundary_river_transport(
 		roads.append(road.duplicate(true))
 
 	var city_positions := positions.duplicate()
+	var landing_barriers := Hydrology.barriers(boundary_rivers.features, provinces.size) if boundary_rivers.get("hydrological", false) else {}
 	for dock in docks:
 		city_positions.append(dock["position"])
 		var dock_city := int(dock["city_id"])
 		for bank_suffix in ["a", "b"]:
 			var bank_city := int(dock["bank_" + bank_suffix])
 			var bank_cell: Vector2i = dock["cell_" + bank_suffix]
-			var map_path := _province_to_boundary_dock_path(
+			var map_path: PackedVector2Array = dock["path_" + bank_suffix] if dock.has("path_" + bank_suffix) else _province_to_boundary_dock_path(
 				provinces, positions[bank_city], bank_city,
-				bank_cell, dock["position"]
+				bank_cell, dock["position"], landing_barriers
 			)
+			if map_path.size() < 2:
+				return {"ok":false,"error":"码头 %d 无法在本省内连接岸侧城市 %d；当前世界已保留。" % [dock_city,bank_city]}
 			var metric_length := metric_polyline_length(
 				map_path, map_aspect_ratio
 			)
@@ -2667,7 +3420,98 @@ static func _build_boundary_river_transport(
 		"river_paths": active_paths,
 		"lowland_dock_regions": lowland_dock_regions,
 		"dock_bank_regions": dock_bank_regions,
+		"dock_diagnostics": dock_diagnostics,
+		"ferry_spacing": ferry_diagnostics,
 	}
+
+## Transaction preparation only. Existing dock IDs/positions remain stable;
+## an edit that invalidates their banks is rejected before touching live state.
+static func rebuild_hydrological_map(source_path: String, positions: Array[Vector2], features: Array, old_docks: Array, source_manifest: String, nation_count: int) -> Dictionary:
+	if MapSource.environment_only_rivers(source_manifest):
+		features = []
+		old_docks = []
+	var source := (load(source_path) as Texture2D).get_image()
+	var image: Image = source.duplicate()
+	var strict := not MapSource.environment_only_rivers(source_manifest) and MapSource.strict_river_transport(source_manifest)
+	var full_network := not MapSource.environment_only_rivers(source_manifest) and MapSource.full_river_transport(source_manifest)
+	image.resize(ANALYSIS_WIDTH, ANALYSIS_WIDTH, Image.INTERPOLATE_NEAREST)
+	var size := image.get_size()
+	var mask: PackedByteArray = _all_land_geometry(image).mask
+	var pixels: Array[Vector2i] = []
+	var heights: Array[float] = []
+	var reliefs: Array[float] = []
+	var occupied := {}
+	for position in positions:
+		var pixel := Vector2i(position * Vector2(size)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		if occupied.has(pixel) or mask[pixel.y * size.x + pixel.x] == 0:
+			return {"ok": false, "error": "城市必须位于独立的陆地种子格。"}
+		occupied[pixel] = true
+		pixels.append(pixel)
+		heights.append(packed_altitude(image.get_pixelv(pixel)))
+		reliefs.append(_local_relief(image, pixel.x, pixel.y, RELIEF_RADIUS))
+	var blocked := Hydrology.barriers(features, size)
+	var empty_paths: Array[Array] = []
+	var aspect := MapSource.aspect_ratio(source_manifest)
+	var constraints := BankConstraints.build(features, size, aspect) if strict else {}
+	if full_network: constraints["whole_branch_transfer"] = true
+	var province_mask := _atlas_land_domain(source,size) if MapSource.atlas_roads(source_manifest) else mask
+	var provinces := _build_province_raster(image, province_mask, Rect2i(Vector2i.ZERO, size), pixels, empty_paths, projected_pixel_aspect(image, source_manifest), true, blocked, constraints)
+	if provinces.get("ok", true) == false: return provinces
+	if full_network:
+		provinces.ids = BankConstraints.complete_conflicts(provinces.ids, mask, size, pixels, blocked, constraints)
+		var missing := ShoreRepair.gaps(provinces.ids, mask, Hydrology.components(mask, size, blocked), pixels, size)
+		if not missing.is_empty():
+			# Editing a city must not silently relocate other cities to repair
+			# its shores. The caller replaces the live world only on success.
+			return {"ok": false, "error": "移动后有 %d 个有城市岸区格无法合法分配；当前世界已保留。" % missing.size()}
+	provinces["routing_options"] = {"strict":true,"allow_terrain_connector":true,"image":source if full_network else image,"aspect":aspect,"river_paths":MapFeatureContract.major_paths(features)} if strict else {}
+	if full_network:
+		provinces["physical_components"] = LandComponents.build(source)
+		provinces.routing_options["pixel_fallback"] = true
+	var river_input := _hydrology_transport_input(provinces, features, strict, aspect, full_network)
+	river_input["ferry_interval"] = MapSource.ferry_interval(source_manifest)
+	river_input["ferry_max_per_river"] = MapSource.ferry_max_per_river(source_manifest)
+	var fixed: Array[Dictionary] = []
+	for old in old_docks:
+		if _minimum_metric_position_distance(old.position, positions, aspect) < minimum_dock_city_spacing_for_count(positions.size()):
+			return {"ok": false, "error": "移动位置离既有码头过近。"}
+		var matched := false
+		for river in river_input.rivers:
+			for sample in river.dock_samples:
+				var i := int(sample.path_index)
+				if not (river.path[i] as Vector2).lerp(river.path[i + 1], float(sample.ratio)).is_equal_approx(old.position): continue
+				var index := int(sample.graph_index)
+				if index < 0: return {"ok": false, "error": "移动后既有码头失去合法的双岸省份。"}
+				var segment: Dictionary = river_input.graph.segments[index]
+				fixed.append(_boundary_dock_record(image, int(river.river_id), {"position": old.position, "river_progress": float(i) + float(sample.ratio), "bank_a": segment.a, "bank_b": segment.b, "cell_a": segment.cell_a, "cell_b": segment.cell_b}, int(old.city_id)))
+				matched = true
+				break
+			if matched: break
+		if not matched: return {"ok": false, "error": "既有码头未落在主河段。"}
+	var samples := {"positions": positions, "pixels": pixels, "heights": heights, "reliefs": reliefs}
+	if MapSource.atlas_roads(source_manifest):
+		var latitudes := PackedFloat32Array()
+		for row in range(size.y): latitudes.append(MapSource.latitude_at_y((row + 0.5) / size.y, float(MapSource.load_manifest(source_manifest).bbox_wgs84[1]), float(MapSource.load_manifest(source_manifest).bbox_wgs84[3]), source_manifest))
+		var environment := EnvironmentModel.build(source, image, mask, latitudes, aspect, MapSource.projection_type(source_manifest), true, MapSource.hydrology_network(source_manifest), MapSource.estimated_boundary_inflow(source_manifest), MapSource.river_settlement_model(source_manifest))
+		var scores := PackedFloat32Array()
+		for pixel in pixels: scores.append(environment.suitability[pixel.y * size.x + pixel.x])
+		var atlas_result: Dictionary = load("res://scripts/core/atlas_road_network.gd").build(source, image, samples, provinces, aspect, scores)
+		if not atlas_result.get("ok", false): return atlas_result
+		return {"ok": true, "provinces": provinces, "roads": atlas_result.roads}
+	var road_result := _build_roads(image, mask, samples, aspect, provinces, river_input.pixel_paths, blocked)
+	_attach_province_land_paths(road_result.roads, provinces, positions, positions.size(), aspect, blocked)
+	var transport := _build_boundary_river_transport(image, samples, road_result.roads, provinces, river_input, positions.size(), aspect, nation_count, fixed, true)
+	if not transport.get("ok",true): return transport
+	var roads: Array[Dictionary] = []
+	for road in transport.roads:
+		if int(road.get("kind", Edge.Kind.LAND)) != Edge.Kind.RIVER: roads.append(road)
+	roads.append_array(HydroTransport.build(features, fixed, source if strict else image, aspect, strict))
+	transport.roads = roads
+	if MapSource.road_path_model(source_manifest) == MapSource.VISIBILITY_ROAD_PATH:
+		_simplify_generated_land_roads(roads, provinces, source, features, aspect)
+	if not _hydrology_transport_valid(transport, positions, image, mask, {"features": features}):
+		return {"ok": false, "error": "移动后主河交通无法合法连接；当前世界已保留。"}
+	return {"ok": true, "provinces": provinces, "roads": roads}
 
 
 ## 河流会删除所有未经码头的跨岸 LAND。若某座陆城因此失去全部交通边，
@@ -2760,12 +3604,30 @@ static func _append_isolated_city_docks(
 static func _road_dictionary_crosses_rivers(
 	road: Dictionary,
 	city_positions: Array[Vector2],
-	river_paths: Array[PackedVector2Array]
+	river_paths: Array[PackedVector2Array],
+	known_signature: int = -1
 ) -> bool:
+	var signature := hash(river_paths) if known_signature == -1 else known_signature
+	if not _crossing_indexes.has(signature):
+		var buckets := {}
+		for path in river_paths:
+			for k in range(path.size() - 1):
+				var first := Vector2i((path[k].min(path[k + 1]) * 32.0).floor())
+				var last := Vector2i((path[k].max(path[k + 1]) * 32.0).floor())
+				var segment := PackedVector2Array([path[k], path[k + 1]])
+				for y in range(first.y, last.y + 1):
+					for x in range(first.x, last.x + 1):
+						var key := Vector2i(x, y)
+						if not buckets.has(key): buckets[key] = []
+						buckets[key].append(segment)
+		if _crossing_indexes.size() >= 4: _crossing_indexes.erase(_crossing_indexes.keys()[0])
+		_crossing_indexes[signature] = buckets
+	var buckets: Dictionary = _crossing_indexes[signature]
 	var road_path: PackedVector2Array = road.get(
 		"map_path", PackedVector2Array()
 	)
 	if road_path.size() < 2:
+		if not road.has("a") or not road.has("b") or int(road.a) >= city_positions.size() or int(road.b) >= city_positions.size(): return true
 		road_path = PackedVector2Array([
 			city_positions[int(road["a"])],
 			city_positions[int(road["b"])],
@@ -2777,8 +3639,13 @@ static func _road_dictionary_crosses_rivers(
 		var length_squared := road_delta.length_squared()
 		if length_squared <= 0.000000000001:
 			continue
-		for river_path in river_paths:
-			for river_index in range(river_path.size() - 1):
+		var first := Vector2i((road_from.min(road_to) * 32.0).floor())
+		var last := Vector2i((road_from.max(road_to) * 32.0).floor())
+		var nearby: Array = []
+		for y in range(first.y, last.y + 1):
+			for x in range(first.x, last.x + 1): nearby.append_array(buckets.get(Vector2i(x, y), []))
+		for river_path in nearby:
+			for river_index in range(1):
 				var hit = Geometry2D.segment_intersects_segment(
 					road_from, road_to,
 					river_path[river_index], river_path[river_index + 1]
@@ -2808,8 +3675,16 @@ static func _select_boundary_river_docks(
 	var edge_indices: Array = river["edge_indices"]
 	var candidates: Array[Dictionary] = []
 	var minimum_city_clearance := minimum_dock_city_spacing_for_count(land_positions.size())
-	for path_index in range(path.size() - 1):
-		var position := path[path_index].lerp(path[path_index + 1], 0.5)
+	var rejected := {"altitude":0,"city_clearance":0,"dock_spacing":0}
+	var dock_samples: Array = river.get("dock_samples", [])
+	var cumulative := PackedFloat64Array([0.0])
+	for i in range(path.size() - 1): cumulative.append(cumulative[-1] + metric_length_between(path[i], path[i + 1], map_aspect_ratio))
+	if not river.has("dock_samples"):
+		for i in range(path.size() - 1):
+			if int(edge_indices[i]) >= 0: dock_samples.append({"path_index": i, "ratio": 0.5, "graph_index": int(edge_indices[i])})
+	for sample in dock_samples:
+		var path_index := int(sample.path_index)
+		var position := path[path_index].lerp(path[path_index + 1], float(sample.ratio))
 		var pixel := Vector2i(
 			clampi(
 				int(floor(position.x * image.get_width())),
@@ -2821,13 +3696,17 @@ static func _select_boundary_river_docks(
 			)
 		)
 		var altitude := packed_altitude(image.get_pixelv(pixel))
+		if bool(river.get("hydrological", false)) and not bool(river.get("strict_transport", false)) and altitude > RIVER_DOCK_LOWLAND_ALTITUDE:
+			rejected.altitude += 1
+			continue
 		var city_clearance := _minimum_metric_position_distance(
 			position, land_positions, map_aspect_ratio
 		)
 		if city_clearance < minimum_city_clearance:
+			rejected.city_clearance += 1
 			continue
 		var graph_segment: Dictionary = graph_segments[
-			int(edge_indices[path_index])
+			int(sample.graph_index)
 		]
 		var cell_a_position := Vector2(
 			graph_segment["cell_a"] as Vector2i
@@ -2837,9 +3716,12 @@ static func _select_boundary_river_docks(
 		var bank_a_is_reference := (
 			path_direction.cross(cell_a_position - position) <= 0.0
 		)
+		var arc := cumulative[path_index] + float(sample.ratio) * (cumulative[path_index + 1] - cumulative[path_index])
 		candidates.append({
+			"coverage": sample.get("coverage", "%s:%d" % [path[0], int(floor(arc / DockSampling.COVERAGE))]),
+			"reach_fraction": sample.get("reach_fraction", 0.5),
 			"river_id": int(river["river_id"]),
-			"river_progress": float(path_index) + 0.5,
+			"river_progress": float(path_index) + float(sample.ratio),
 			"position": position,
 			"pixel_position": Vector2(
 				position.x * float(image.get_width()) - 0.5,
@@ -2867,6 +3749,10 @@ static func _select_boundary_river_docks(
 					== initial_owners[int(graph_segment["b"])]
 			),
 		})
+	if river.get("collect_only", false):
+		return {"docks": [], "candidates": candidates, "bank_regions": candidates, "lowland_regions": [], "selected_candidates": [], "rejected": rejected}
+	if river.get("full_network", false):
+		return _select_full_river_docks(image, river, candidates, occupied_positions, land_positions, first_city_id, map_aspect_ratio, rejected)
 	var result: Array[Dictionary] = []
 	# 按沿河一侧的省份覆盖，不按微小河段逐个落点。先把同一参考岸省份
 	# 的全部位置归组，再为每省选择一个与既有渡口保持间距的最低点。
@@ -2925,12 +3811,20 @@ static func _select_boundary_river_docks(
 				preferred = candidate
 		bank_region_candidates.append(preferred)
 	var selected_candidates: Array[Dictionary] = []
+	if bool(river.get("strict_transport", false)):
+		# Cover the complete reach, including repeated shore provinces. The
+		# existing global dock spacing still bounds the number of ferry nodes.
+		bank_region_candidates = candidates.duplicate()
+		bank_region_candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return a.river_progress < b.river_progress
+		)
 	for preferred in bank_region_candidates:
 		if _minimum_metric_position_distance(
 			preferred["position"],
 			occupied_positions.slice(land_positions.size()),
 			map_aspect_ratio
 		) < RIVER_DOCK_MIN_SPACING:
+			rejected.dock_spacing += 1
 			continue
 		var dock := _boundary_dock_record(
 			image, int(river["river_id"]), preferred,
@@ -2952,8 +3846,69 @@ static func _select_boundary_river_docks(
 		"bank_regions": bank_region_candidates,
 		"lowland_regions": selected_lowland,
 		"selected_candidates": selected_candidates,
+		"rejected": rejected,
 	}
 
+
+static func _select_full_river_docks(image: Image, river: Dictionary, candidates: Array[Dictionary], occupied: Array[Vector2], positions: Array[Vector2], first_id: int, aspect: float, rejected: Dictionary) -> Dictionary:
+	var pending := candidates.duplicate()
+	var covered: Dictionary = river.get("covered_windows", {})
+	var selected: Array[Dictionary] = []
+	var docks: Array[Dictionary] = []
+	var windows := {}
+	var blocked := Hydrology.barriers(river.get("features", []), image.get_size())
+	for candidate in pending:
+		if not windows.has(candidate.coverage): windows[candidate.coverage] = {"candidates": 0, "docks": 0, "rejected": {}}
+		windows[candidate.coverage].candidates += 1
+	pending.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a.get("reserved", false) != b.get("reserved", false): return a.get("reserved", false)
+		if a.relief != b.relief: return a.relief < b.relief
+		if a.city_clearance != b.city_clearance: return a.city_clearance > b.city_clearance
+		if a.river_id != b.river_id: return a.river_id < b.river_id
+		return a.river_progress < b.river_progress
+	)
+	var deferred: Array[Dictionary] = []
+	var filling_gaps := true
+	while not pending.is_empty() or not deferred.is_empty():
+		if pending.is_empty():
+			pending = deferred
+			deferred = []
+			filling_gaps = false
+		var candidate: Dictionary = pending.pop_front()
+		if filling_gaps and covered.has(candidate.coverage):
+			deferred.append(candidate)
+			continue
+		var reason := ""
+		if _minimum_metric_position_distance(candidate.position, occupied.slice(positions.size()), aspect) < RIVER_DOCK_MIN_SPACING:
+			reason = "dock_spacing"
+		elif candidate.relief > ROAD_MAXIMUM_HEIGHT_DIFFERENCE:
+			reason = "local_height"
+		elif river.has("provinces"):
+			for side in ["a", "b"]:
+				var city: int = candidate["bank_" + side]
+				var path := _province_to_boundary_dock_path(river.provinces, positions[city], city, candidate["cell_" + side], candidate.position, blocked)
+				if path.size() < 2:
+					reason = "bank_path"
+					break
+				candidate["path_" + side] = path
+		if not reason.is_empty():
+			rejected[reason] = int(rejected.get(reason, 0)) + 1
+			var reasons: Dictionary = windows[candidate.coverage].rejected
+			reasons[reason] = int(reasons.get(reason, 0)) + 1
+			continue
+		var dock := _boundary_dock_record(image, int(candidate.river_id), candidate, first_id + docks.size())
+		dock["reach_fraction"] = candidate.get("reach_fraction", 0.5)
+		for side in ["a", "b"]:
+			if candidate.has("path_" + side): dock["path_" + side] = candidate["path_" + side]
+		docks.append(dock)
+		selected.append(candidate)
+		occupied.append(dock.position)
+		covered[candidate.coverage] = true
+		windows[candidate.coverage].docks += 1
+	return {"docks": docks, "candidates": candidates, "bank_regions": candidates, "lowland_regions": [], "selected_candidates": selected, "rejected": rejected, "coverage": windows}
+
+static func _dock_reach_band(fraction: float) -> String:
+	return "upstream" if fraction < 1.0 / 3.0 else ("downstream" if fraction >= 2.0 / 3.0 else "middle")
 
 static func _boundary_dock_record(
 	image: Image,
@@ -3033,10 +3988,29 @@ static func _province_to_boundary_dock_path(
 	city_position: Vector2,
 	city_id: int,
 	bank_cell: Vector2i,
-	dock_position: Vector2
+	dock_position: Vector2,
+	blocked_edges: Dictionary = {}
 ) -> PackedVector2Array:
 	var size: Vector2i = provinces["size"]
 	var ids: PackedInt32Array = provinces["ids"]
+	if not blocked_edges.is_empty():
+		var bank_center := (Vector2(bank_cell) + Vector2.ONE * 0.5) / Vector2(size)
+		var options: Dictionary = provinces.get("routing_options", {})
+		if options.get("strict", false) and not _safe_road_shortcut(bank_center, dock_position, options): return PackedVector2Array()
+		if provinces.has("physical_components") and LandComponents.at(provinces.physical_components, city_position) != LandComponents.at(provinces.physical_components, bank_center): return PackedVector2Array()
+		var path: PackedVector2Array
+		if options.get("pixel_fallback", false):
+			# Many samples share a shore cell. Its city approach is identical,
+			# including failure, while only the short final dock segment varies.
+			if not provinces.has("dock_approach_cache"): provinces["dock_approach_cache"] = {}
+			var cache: Dictionary = provinces.dock_approach_cache
+			var key := Vector3i(city_id, bank_cell.x, bank_cell.y)
+			if not cache.has(key): cache[key] = province_pair_path(ids, size, city_position, bank_center, city_id, city_id, blocked_edges, options)
+			path = (cache[key] as PackedVector2Array).duplicate()
+		else:
+			path = province_pair_path(ids, size, city_position, bank_center, city_id, city_id, blocked_edges, options)
+		if not path.is_empty(): path.append(dock_position)
+		return path
 	var start := Vector2i(
 		clampi(int(floor(city_position.x * size.x)), 0, size.x - 1),
 		clampi(int(floor(city_position.y * size.y)), 0, size.y - 1)
@@ -3436,6 +4410,25 @@ static func _edge_profile(
 		"land_ratio": float(land_samples) / float(ROAD_SAMPLE_COUNT + 1),
 	}
 
+## Grade the actual routed line, not a straight chord across a bay or mountain.
+static func _polyline_terrain_profile(image: Image, mask: PackedByteArray, path: PackedVector2Array) -> Dictionary:
+	var low := 1.0
+	var high := 0.0
+	var land_samples := 0
+	var count := 0
+	for i in range(path.size() - 1):
+		var a := path[i] * Vector2(image.get_size())
+		var b := path[i + 1] * Vector2(image.get_size())
+		var steps := maxi(1, ceili(a.distance_to(b) * 2.0))
+		for step in range(steps + 1):
+			var p := Vector2i(a.lerp(b, float(step) / steps)).clamp(Vector2i.ZERO, image.get_size() - Vector2i.ONE)
+			var height := packed_altitude(image.get_pixelv(p))
+			low = minf(low, height)
+			high = maxf(high, height)
+			land_samples += int(mask[p.y * image.get_width() + p.x] != 0)
+			count += 1
+	return {"height_difference": high - low, "land_ratio": float(land_samples) / maxi(count, 1)}
+
 
 static func _pair_key(a: int, b: int) -> int:
 	return mini(a, b) * 10000 + maxi(a, b)
@@ -3447,3 +4440,15 @@ static func _root(parent: Array[int], node: int) -> int:
 		parent[current] = parent[parent[current]]
 		current = parent[current]
 	return current
+
+static func _atlas_land_domain(source: Image,grid: Vector2i) -> PackedByteArray:
+	# Assign provinces once on conservative fine-land occupancy. The same
+	# immutable DEM components are reused by road connectivity validation.
+	var physical:=LandComponents.build(source);var size: Vector2i=physical.size
+	var mask:=PackedByteArray();mask.resize(grid.x*grid.y)
+	for y in range(size.y):
+		var row:=mini(grid.y-1,y*grid.y/size.y)*grid.x
+		for run in physical.rows[y]:
+			var low:=int(run.x)*grid.x/size.x;var high:=(int(run.y)-1)*grid.x/size.x
+			for x in range(low,high+1): mask[row+x]=1
+	return mask

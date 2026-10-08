@@ -12,6 +12,7 @@ uniform sampler2D visual_coast_mask_texture : filter_linear, repeat_disable;
 uniform sampler2D province_boundary_texture : source_color, filter_linear, repeat_disable;
 uniform sampler2D country_boundary_texture : source_color, filter_linear, repeat_disable;
 uniform sampler2D country_color_texture : source_color, filter_linear, repeat_disable;
+uniform float atlas_handdrawn_enabled = 0.0;
 uniform float province_strength : hint_range(0.0, 1.0) = 0.93;
 uniform float province_boundary_strength : hint_range(0.0, 1.0) = 1.0;
 uniform float coast_boundary_strength : hint_range(0.0, 1.0) = 1.0;
@@ -27,6 +28,7 @@ uniform float country_fill_fade_enabled : hint_range(0.0, 1.0) = 1.0;
 uniform float country_gradient_strength : hint_range(0.0, 1.0) = 0.45;
 uniform float country_gradient_radius_px = 10.0;
 uniform float unified_region_fill_enabled : hint_range(0.0, 1.0) = 0.0;
+uniform float curved_province_borders_enabled : hint_range(0.0, 1.0) = 0.0;
 uniform float ocean_height_threshold = 0.0;
 uniform float sea_floor_height = -2.2;
 uniform vec3 political_land_base_color : source_color = vec3(0.82, 0.82, 0.80);
@@ -102,6 +104,7 @@ void fragment() {
 	);
 	float deep_sea_mix = smoothstep(0.06, 0.375, sea_depth);
 	vec3 sea_color = mix(shallow_sea_color, deep_sea_color, deep_sea_mix);
+	sea_color = mix(sea_color,mix(vec3(0.35,0.51,0.52),vec3(0.22,0.36,0.41),deep_sea_mix),atlas_handdrawn_enabled);
 	vec3 white_low_poly_base = political_land_base_color;
 	vec3 final_color;
 	if (province_strength <= 0.000001) {
@@ -195,6 +198,15 @@ void fragment() {
 		if (occupation_stripe && occupation.a > 0.5) {
 			faded_country_color = occupation.rgb;
 		}
+		if (atlas_handdrawn_enabled > 0.5) {
+			// Fixed map UVs keep paper fibres and pigment stable while rotating.
+			float grain = fract(sin(dot(floor(UV * 4096.0),vec2(12.9898,78.233))) * 43758.5453);
+			float wash = sin(UV.x * 311.0 + sin(UV.y * 197.0)) * sin(UV.y * 271.0);
+			float fibre_detail = 1.0 - smoothstep(0.5,1.5,length(fwidth(UV * 4096.0)));
+			vec3 paper = vec3(0.80,0.74,0.63) + (grain - 0.5) * 0.035 * fibre_detail;
+			float pigment = 0.48 + 0.035 * wash + 0.075 * exp(-region_distance * 6.0);
+			faded_country_color = mix(paper,faded_country_color,pigment);
+		}
 		vec3 political_land = mix(
 			white_low_poly_base, faded_country_color, province_alpha
 		);
@@ -223,6 +235,11 @@ void fragment() {
 	float visual_province_alpha = mix(
 		province_boundary.a, atlas_region_edge, unified_region_fill_enabled
 	);
+	// Direct-ID maps keep categorical fill/picking, but use the same curved
+	// border ink as the original loyalty view instead of the raster distance.
+	visual_province_alpha = mix(
+		visual_province_alpha, province_boundary.a, curved_province_borders_enabled
+	);
 	float province_alpha = visual_province_alpha * province_boundary_strength
 		* hard_land * local_boundary_alpha * local_boundaries_enabled;
 	float country_alpha = country_boundary.a
@@ -233,9 +250,13 @@ void fragment() {
 	float province_ink = smoothstep(
 		0.5 - province_aa, 0.5 + province_aa, province_alpha
 	);
+	// Curved strokes already contain fractional pixel coverage. Thresholding
+	// that coverage a second time breaks thin diagonal lines at overview zoom.
+	province_ink = mix(province_ink, province_alpha, curved_province_borders_enabled);
 	float country_ink = smoothstep(
 		0.5 - country_aa, 0.5 + country_aa, country_alpha
 	);
+	country_ink = mix(country_ink,country_alpha,atlas_handdrawn_enabled);
 	// Coastline follows the exact interpolated terrain 0m crossing. UV2 confines
 	// the derivative band to cells that really cross land/sea, so flat lowland
 	// cannot be mistaken for coast. Keep it independent from country_strength:
@@ -264,9 +285,9 @@ void fragment() {
 	vec3 coast_color = mix(
 		coast_country.rgb, gradient.rgb, unified_region_fill_enabled
 	);
-	final_color = mix(final_color, local_boundary_color, province_ink);
+	final_color = mix(final_color, mix(local_boundary_color,vec3(0.27,0.23,0.17),atlas_handdrawn_enabled), province_ink * mix(1.0,0.32,atlas_handdrawn_enabled));
 	final_color = mix(final_color, coast_color, coast_ink);
-	final_color = mix(final_color, country_boundary.rgb, country_ink);
+	final_color = mix(final_color, mix(country_boundary.rgb,vec3(0.19,0.16,0.12),atlas_handdrawn_enabled), country_ink);
 	ALBEDO = final_color;
 	ROUGHNESS = 1.0;
 }

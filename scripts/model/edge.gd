@@ -17,6 +17,9 @@ enum Kind {
 	SEA,
 }
 
+enum RoadTier { LEGACY = -1, LOCAL = 0, MAIN = 1 }
+var road_tier: int = RoadTier.LEGACY
+
 var city_a: int = -1                       ## 端点 A（较小 id）
 var city_b: int = -1                       ## 端点 B（较大 id）
 
@@ -31,6 +34,8 @@ var allows_holding: bool = true            ## 水路禁止驻边，军队只能�
 var max_height_difference: float = 0.0     ## 两城连线上最高点与最低点之差 [0,1]
 var land_ratio: float = 1.0                ## 连线采样中位于陆地的比例 [0,1]
 var map_path: PackedVector2Array = PackedVector2Array() ## 归一化地图折线；空=端点直线
+var river_reaches: Array = [] ## Ordered {river_id, from, to} slices, oriented city_a -> city_b.
+var river_navigation: Dictionary = {} ## Empty preserves legacy whole-route height semantics.
 var is_backbone: bool = false              ## 生成时的最小连通骨架；普通骨架仍服从运行时地形上限
 var is_terrain_connector: bool = false     ## 严格高差筛选后连接孤立陆地区域的最小兜底边
 var base_max_manpower: int = STANDARD_MANPOWER ## 运行时容量倍率的稳定基准
@@ -38,6 +43,11 @@ var occupied: bool = false                 ## 是否被占用（passing_count>0 
 
 var passing_count: int = 0                 ## 全方向/全阵营边上军队总数（仅作占用派生）
 
+
+func river_is_navigable() -> bool:
+	if not river_navigation.is_empty():
+		return river_navigation.get("model", "") == "local_height_v1" and bool(river_navigation.get("navigable", false)) and float(river_navigation.get("max_local_height_difference", INF)) <= 0.20
+	return TerrainMapGenerator.river_link_is_navigable(max_height_difference)
 
 func map_points(from_position: Vector2, to_position: Vector2) -> PackedVector2Array:
 	return (

@@ -58,6 +58,10 @@ func _init() -> void:
 			var lonlat := MapSource.map_to_lonlat(uv[0], uv[1], SOURCE)
 			assert(absf(lonlat[0] - longitude) <= 1e-6)
 			assert(absf(lonlat[1] - latitude) <= 1e-6)
+	manifest["settlement_model"] = "unknown"
+	_write(manifest)
+	assert(MapSource.validate_manifest(SOURCE).contains("城市选址模型"))
+	manifest.erase("settlement_model")
 	manifest["projection"] = "unknown"
 	_write(manifest)
 	assert(not MapSource.validate_manifest(SOURCE).is_empty())

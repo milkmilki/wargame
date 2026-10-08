@@ -1,0 +1,137 @@
+{
+  "eurasia_hydrology_map_source": {
+    "runs": [
+      {
+        "input": 265843,
+        "settlements": 1397332,
+        "provinces": 793321,
+        "rivers": 55349,
+        "roads": 1613950,
+        "road_paths": 595,
+        "river_transport": 300072,
+        "materialize_cache": 6786,
+        "total_ms": 4433.25,
+        "traffic_ms": 1969.966
+      },
+      {
+        "input": 264040,
+        "settlements": 1397775,
+        "provinces": 814403,
+        "rivers": 53878,
+        "roads": 1622530,
+        "road_paths": 499,
+        "river_transport": 296846,
+        "materialize_cache": 6098,
+        "total_ms": 4456.07,
+        "traffic_ms": 1973.753
+      },
+      {
+        "input": 264575,
+        "settlements": 1399894,
+        "provinces": 796327,
+        "rivers": 54273,
+        "roads": 1608431,
+        "road_paths": 485,
+        "river_transport": 296853,
+        "materialize_cache": 5889,
+        "total_ms": 4426.73,
+        "traffic_ms": 1960.042
+      },
+      {
+        "input": 264647,
+        "settlements": 1402441,
+        "provinces": 799251,
+        "rivers": 54004,
+        "roads": 1683025,
+        "road_paths": 602,
+        "river_transport": 299584,
+        "materialize_cache": 6303,
+        "total_ms": 4509.86,
+        "traffic_ms": 2037.215
+      },
+      {
+        "input": 264585,
+        "settlements": 1407902,
+        "provinces": 802852,
+        "rivers": 54521,
+        "roads": 1608344,
+        "road_paths": 619,
+        "river_transport": 299333,
+        "materialize_cache": 7277,
+        "total_ms": 4445.44,
+        "traffic_ms": 1962.817
+      }
+    ],
+    "median_total_ms": 4445.44,
+    "median_traffic_ms": 1969.966,
+    "median_provinces_ms": 799.251
+  },
+  "eurasia_strict_river_map_source": {
+    "runs": [
+      {
+        "input": 266186,
+        "settlements": 1408911,
+        "provinces": 2662832,
+        "rivers": 130263,
+        "roads": 1679853,
+        "road_paths": 663,
+        "river_transport": 395185,
+        "materialize_cache": 8735,
+        "total_ms": 6552.63,
+        "traffic_ms": 2205.964
+      },
+      {
+        "input": 265207,
+        "settlements": 1411184,
+        "provinces": 2705185,
+        "rivers": 133263,
+        "roads": 1689327,
+        "road_paths": 607,
+        "river_transport": 402675,
+        "materialize_cache": 8942,
+        "total_ms": 6616.4,
+        "traffic_ms": 2225.872
+      },
+      {
+        "input": 267814,
+        "settlements": 1412456,
+        "provinces": 2661031,
+        "rivers": 131567,
+        "roads": 1698185,
+        "road_paths": 548,
+        "river_transport": 396384,
+        "materialize_cache": 9631,
+        "total_ms": 6577.62,
+        "traffic_ms": 2226.684
+      },
+      {
+        "input": 266298,
+        "settlements": 1402354,
+        "provinces": 2726897,
+        "rivers": 147431,
+        "roads": 1742203,
+        "road_paths": 648,
+        "river_transport": 402175,
+        "materialize_cache": 9239,
+        "total_ms": 6697.25,
+        "traffic_ms": 2292.457
+      },
+      {
+        "input": 269424,
+        "settlements": 1404371,
+        "provinces": 2692725,
+        "rivers": 131174,
+        "roads": 1671305,
+        "road_paths": 567,
+        "river_transport": 402366,
+        "materialize_cache": 8780,
+        "total_ms": 6580.75,
+        "traffic_ms": 2205.412
+      }
+    ],
+    "median_total_ms": 6580.75,
+    "median_traffic_ms": 2225.872,
+    "median_provinces_ms": 2692.725
+  },
+  "traffic_increase_pct": 12.99037648365504
+}

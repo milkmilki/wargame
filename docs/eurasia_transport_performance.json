@@ -1,0 +1,201 @@
+{
+  "date": "2026-10-08",
+  "seed": 12345,
+  "land_cities": 500,
+  "nations": 40,
+  "method": "Five independent headless Godot processes per source, run sequentially, no other test process during measurement. The user editor remained open. Timings include cold environment and geometry; display startup is not included.",
+  "baseline_source": "res://assets/terrain/eurasia_hydrology_map_source.json",
+  "candidate_source": "res://assets/terrain/eurasia_transport_map_source.json",
+  "medians": {
+    "baseline": {
+      "processes": 5,
+      "total_ms_median": 4598.45,
+      "traffic_ms_median": 2041.441,
+      "province_ms_median": 815.517,
+      "settlements_ms_median": 1431.058
+    },
+    "candidate": {
+      "processes": 5,
+      "total_ms_median": 90990.97,
+      "traffic_ms_median": 36586.183,
+      "province_ms_median": 51455.527,
+      "settlements_ms_median": 2446.329
+    }
+  },
+  "traffic_ratio": 17.921744003378006,
+  "traffic_limit_ratio": 1.2,
+  "traffic_pass": false,
+  "scene_promoted": false,
+  "runs": [
+    {
+      "case": "baseline",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 588,
+        "roads": 1726124,
+        "settlements": 1436568,
+        "provinces": 831883,
+        "materialize_cache": 6535,
+        "rivers": 57307,
+        "input": 274687,
+        "river_transport": 314010
+      },
+      "traffic_ms": 2098.029,
+      "run": 1,
+      "total_ms": 4647.71
+    },
+    {
+      "case": "baseline",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 584,
+        "roads": 1677625,
+        "settlements": 1449321,
+        "provinces": 830657,
+        "materialize_cache": 5805,
+        "rivers": 53324,
+        "input": 273449,
+        "river_transport": 309908
+      },
+      "traffic_ms": 2041.441,
+      "run": 2,
+      "total_ms": 4600.68
+    },
+    {
+      "case": "baseline",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 777,
+        "roads": 1713642,
+        "settlements": 1424946,
+        "provinces": 806720,
+        "materialize_cache": 6742,
+        "rivers": 54424,
+        "input": 265085,
+        "river_transport": 326109
+      },
+      "traffic_ms": 2094.952,
+      "run": 3,
+      "total_ms": 4598.45
+    },
+    {
+      "case": "baseline",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 503,
+        "roads": 1663596,
+        "settlements": 1431058,
+        "provinces": 801783,
+        "materialize_cache": 6337,
+        "rivers": 55627,
+        "input": 273447,
+        "river_transport": 306454
+      },
+      "traffic_ms": 2026.18,
+      "run": 4,
+      "total_ms": 4538.81
+    },
+    {
+      "case": "baseline",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 561,
+        "roads": 1658325,
+        "settlements": 1420777,
+        "provinces": 815517,
+        "materialize_cache": 6323,
+        "rivers": 53090,
+        "input": 264203,
+        "river_transport": 308041
+      },
+      "traffic_ms": 2020.017,
+      "run": 5,
+      "total_ms": 4526.84
+    },
+    {
+      "case": "candidate",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 678,
+        "roads": 27340435,
+        "settlements": 2425839,
+        "provinces": 51455527,
+        "materialize_cache": 7779,
+        "rivers": 44150,
+        "input": 272693,
+        "river_transport": 9996690
+      },
+      "traffic_ms": 37381.953,
+      "run": 1,
+      "total_ms": 91543.8
+    },
+    {
+      "case": "candidate",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 645,
+        "roads": 26352521,
+        "settlements": 2490173,
+        "provinces": 52449348,
+        "materialize_cache": 7247,
+        "rivers": 44870,
+        "input": 270148,
+        "river_transport": 9376010
+      },
+      "traffic_ms": 35774.046,
+      "run": 2,
+      "total_ms": 90990.97
+    },
+    {
+      "case": "candidate",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 818,
+        "roads": 26891220,
+        "settlements": 2421490,
+        "provinces": 51430772,
+        "materialize_cache": 6859,
+        "rivers": 44898,
+        "input": 263290,
+        "river_transport": 9649247
+      },
+      "traffic_ms": 36586.183,
+      "run": 3,
+      "total_ms": 90708.6
+    },
+    {
+      "case": "candidate",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 805,
+        "roads": 26973046,
+        "settlements": 2446329,
+        "provinces": 53246893,
+        "materialize_cache": 7335,
+        "rivers": 46068,
+        "input": 268282,
+        "river_transport": 9776264
+      },
+      "traffic_ms": 36796.183,
+      "run": 4,
+      "total_ms": 92765.03
+    },
+    {
+      "case": "candidate",
+      "seed": 12345,
+      "stages_usec": {
+        "road_paths": 641,
+        "roads": 26235709,
+        "settlements": 2512181,
+        "provinces": 50701141,
+        "materialize_cache": 7348,
+        "rivers": 43588,
+        "input": 287928,
+        "river_transport": 9480350
+      },
+      "traffic_ms": 35760.288,
+      "run": 5,
+      "total_ms": 89268.89
+    }
+  ]
+}

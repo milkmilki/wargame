@@ -11,6 +11,7 @@
 
 # Local Python/tooling state
 .venv/
+__pycache__/
 .code-review-graph/
 .dbg/
 

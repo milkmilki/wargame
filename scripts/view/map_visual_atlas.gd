@@ -189,7 +189,8 @@ static func visual_river_path(
 static func visual_road_path(
 	game_state: GameState, edge_index: int, atlas: Dictionary = {}
 ) -> PackedVector2Array:
-	if atlas.has("road_paths") and int(atlas.get("road_paths_revision", -1)) == game_state.road_network_revision:
+	var direct_paths := MapSource.uses_province_ids(game_state.map_source_manifest)
+	if not direct_paths and atlas.has("road_paths") and int(atlas.get("road_paths_revision", -1)) == game_state.road_network_revision:
 		return atlas["road_paths"].get(edge_index, PackedVector2Array()).duplicate()
 	if edge_index < 0 or edge_index >= game_state.edges.size():
 		return PackedVector2Array()
@@ -198,8 +199,21 @@ static func visual_road_path(
 		game_state.cities[edge.city_a].map_position,
 		game_state.cities[edge.city_b].map_position
 	).duplicate()
-	if edge.kind != Edge.Kind.RIVER or not atlas.has("river_paths"):
+	if direct_paths or edge.kind != Edge.Kind.RIVER or not atlas.has("river_paths"):
 		return source
+	if not edge.river_reaches.is_empty():
+		var result := PackedVector2Array()
+		var by_id := {}
+		for feature in _river_features(game_state): by_id[int(feature.id)] = feature
+		var transport = preload("res://scripts/core/river_transport.gd")
+		for reach in edge.river_reaches:
+			var id := int(reach.river_id)
+			if not by_id.has(id): return source
+			var points: PackedVector2Array = by_id[id].points
+			var part := _river_section(visual_river_path(game_state, id, atlas), transport.point_at(points, float(reach.from)), transport.point_at(points, float(reach.to)))
+			if result.is_empty(): result.append_array(part)
+			else: result.append_array(part.slice(1))
+		return result if result.size() >= 2 else source
 	var best_id := -1
 	var best_error := INF
 	for feature in _river_features(game_state):

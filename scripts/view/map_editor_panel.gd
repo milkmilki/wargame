@@ -27,6 +27,7 @@ var _latitude_max: SpinBox
 var _density_peak_latitude: SpinBox
 var _south_density: SpinBox
 var _north_density: SpinBox
+var _latitude_hint: Label
 var _mask_file_dialog: FileDialog
 var _mask_target: LineEdit
 var _file_name: LineEdit
@@ -68,6 +69,14 @@ func bind(game_state: GameState, renderer: MapRenderer) -> void:
 			field.max_value = latitude_limit
 	_apply_density_settings_to_ui(
 		game_state.city_density_settings
+	)
+	var environmental := MapSource.settlement_model(game_state.map_source_manifest) == MapSource.ENVIRONMENT_SETTLEMENT
+	for field in [_density_peak_latitude, _south_density, _north_density]:
+		field.editable = not environmental
+		field.tooltip_text = "密度由地形、海陆和纬度计算" if environmental else ""
+	_latitude_hint.text = (
+		"城市密度由环境计算；上下纬度决定气候范围，旧密度曲线不参与生成。"
+		if environmental else "像素顶部=上限纬度、底部=下限纬度；密度从峰值向南北端平滑衰减。"
 	)
 	_refresh_selection_form()
 
@@ -246,18 +255,18 @@ func _build_ui() -> void:
 				_state.map_source_manifest if _state != null else MapSource.DEFAULT_MANIFEST
 			)
 		)
-		set_status("已恢复当前地图源的真实纬度与默认城市密度曲线。")
+		set_status("已恢复当前地图源的默认纬度设置。")
 	)
 	_style_button(reset_density)
 	latitude_grid.add_child(reset_density)
-	var latitude_hint := Label.new()
-	latitude_hint.text = (
+	_latitude_hint = Label.new()
+	_latitude_hint.text = (
 		"像素顶部=上限纬度、底部=下限纬度；峰值密度固定为1。"
 		+ "默认南端0.5、北端0.2，两侧向峰值平滑衰减。"
 	)
-	latitude_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	latitude_hint.modulate = Color(0.78, 0.73, 0.62)
-	content.add_child(latitude_hint)
+	_latitude_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_latitude_hint.modulate = Color(0.78, 0.73, 0.62)
+	content.add_child(_latitude_hint)
 	content.add_child(HSeparator.new())
 
 	_selection_title = Label.new()

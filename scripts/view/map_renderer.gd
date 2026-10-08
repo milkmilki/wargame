@@ -181,6 +181,7 @@ var _classified_boundary_geometry := {}
 var _boundary_regions: Array[Dictionary] = []
 var _boundary_regions_topology_ids := PackedInt32Array()
 var _boundary_topology := {}
+var _river_topology_signature: int = 0
 var _province_topology_ids := PackedInt32Array()
 var _visual_city_seed_signature: int = 0
 var _province_cache_ready: bool = false
@@ -2191,6 +2192,8 @@ func _ensure_province_visual_cache() -> void:
 		or state.province_ids.is_empty()
 	):
 		return
+	var direct_ids := MapSource.uses_province_ids(state.map_source_manifest)
+	var river_signature := hash([state.map_source_manifest, state.river_features, state.province_map_size]) if direct_ids else 0
 	var ownership_changed := (
 		_province_ownership_revision != state.ownership_revision
 	)
@@ -2200,6 +2203,8 @@ func _ensure_province_visual_cache() -> void:
 		and _province_region_analysis_revision
 			!= state.administrative_region_revision
 	)
+	if direct_ids and _map_mode == MapMode.TRADE:
+		region_changed = trade_region_fill_signature(state) != _region_fill_signature
 	var loyalty_signature := (
 		loyalty_fill_signature(state)
 		if _map_mode == MapMode.LOYALTY
@@ -2214,6 +2219,7 @@ func _ensure_province_visual_cache() -> void:
 	)
 	var visual_revision_changed := (
 		_province_texture == null
+		or _province_topology_ids != state.province_ids
 		or ownership_changed
 		or region_changed
 		or _province_diplomacy_revision != state.diplomacy_revision
@@ -2223,6 +2229,7 @@ func _ensure_province_visual_cache() -> void:
 				!= _diplomatic_view_nation_id
 		)
 		or loyalty_changed
+		or _river_topology_signature != river_signature
 	)
 	if not visual_revision_changed:
 		return
@@ -2232,9 +2239,11 @@ func _ensure_province_visual_cache() -> void:
 		or _province_topology_ids != state.province_ids
 		or _visual_city_seed_signature
 			!= MAP_VISUAL_ATLAS.visual_city_seed_signature(state)
+		or _river_topology_signature != river_signature
 	)
 	if topology_changed:
 		_boundary_topology = build_province_boundary_topology(state)
+		_river_topology_signature = river_signature
 		_province_topology_ids = state.province_ids.duplicate()
 		_province_cache_ready = true
 	var geometry := classify_province_boundary_topology(
@@ -2244,8 +2253,8 @@ func _ensure_province_visual_cache() -> void:
 	)
 	_classified_boundary_geometry = geometry
 	if topology_changed:
-		# Visual regions now come from the heightmap-UV weighted Voronoi atlas.
-		# Keep the legacy polygon cache empty so it cannot become a second fill source.
+		# Hydrological maps display saved province IDs; legacy maps retain their
+		# existing visual atlas. Neither path uses a second polygon fill cache.
 		_boundary_regions.clear()
 		_boundary_regions_topology_ids = state.province_ids.duplicate()
 		var height_texture := load(state.current_terrain_map_path()) as Texture2D
@@ -2253,9 +2262,11 @@ func _ensure_province_visual_cache() -> void:
 			height_texture.get_image() if height_texture != null else null
 		)
 		var visual_seeds := MAP_VISUAL_ATLAS.visual_city_seeds(state)
-		var visual_regions := VISUAL_REGION_GEOMETRY.build_visual_region_geometry(
-			height_image, visual_seeds, MAP_VISUAL_ATLAS.SIZE
-		)
+		var visual_regions: Dictionary
+		if MapSource.uses_province_ids(state.map_source_manifest):
+			visual_regions = _atlas_display_for_state(state) if MapSource.atlas_style(state.map_source_manifest) else preload("res://scripts/view/province_id_view.gd").build(state,height_image,MAP_VISUAL_ATLAS.SIZE)
+		else:
+			visual_regions = VISUAL_REGION_GEOMETRY.build_visual_region_geometry(height_image, visual_seeds, MAP_VISUAL_ATLAS.SIZE)
 		_region_id_image = visual_regions["city_id"]
 		_region_land_mask = visual_regions["land_mask"]
 		_region_edge_mask = visual_regions["region_edge"]
@@ -2290,13 +2301,17 @@ func _ensure_province_visual_cache() -> void:
 		if region_mode
 		else political_fill_signature(state, _diplomatic_view_nation_id)
 	)
+	if direct_ids and _map_mode == MapMode.TRADE:
+		fill_signature = trade_region_fill_signature(state)
 	var fill_changed := (
 		topology_changed
 		or _province_texture == null
 		or fill_signature != _political_fill_signature
 	)
+	if MapSource.uses_province_ids(state.map_source_manifest):
+		fill_changed=fill_changed or loyalty_changed or _province_visual_mode!=_map_mode or region_changed
 	if fill_changed:
-		if _map_mode == MapMode.POLITICAL and _region_id_image != null:
+		if (_map_mode == MapMode.POLITICAL or MapSource.uses_province_ids(state.map_source_manifest)) and _region_id_image != null:
 			var masks := {
 				"province_id": _region_id_image,
 				"land_mask": _region_land_mask,
@@ -2304,7 +2319,7 @@ func _ensure_province_visual_cache() -> void:
 			}
 			_region_fill_texture = ImageTexture.create_from_image(
 				build_region_fill_image_from_masks(
-					state, masks, _diplomatic_view_nation_id
+					state, masks, _diplomatic_view_nation_id, _map_mode if MapSource.uses_province_ids(state.map_source_manifest) else MapMode.POLITICAL
 				)
 			)
 			_region_fill_signature = fill_signature
@@ -3492,6 +3507,9 @@ static func nation_at_map_position(
 	game_state: GameState,
 	map_position: Vector2
 ) -> int:
+	if game_state!=null and MapSource.uses_province_ids(game_state.map_source_manifest):
+		var id := preload("res://scripts/view/atlas_display_geometry.gd").city_at(_atlas_display_for_state(game_state).city_id,map_position) if MapSource.atlas_style(game_state.map_source_manifest) else game_state.province_city_at(map_position)
+		return game_state.cities[id].owner_nation if id>=0 and id<game_state.cities.size() else -1
 	if (
 		game_state == null
 		or game_state.province_map_size.x <= 0
@@ -3855,13 +3873,14 @@ static func build_region_fill_image(
 
 
 static func build_region_fill_image_from_masks(
-	game_state: GameState, masks: Dictionary, view_nation_id: int = -1
+	game_state: GameState, masks: Dictionary, view_nation_id: int = -1, mode: int = MapMode.POLITICAL
 ) -> Image:
 	var ids: Image = masks["province_id"]
 	var land: Image = masks["land_mask"]
 	var edge_mask: Image = masks.get("edge_mask", Image.create(1, 1, false, Image.FORMAT_RF))
+	var size := ids.get_size()
 	var image := Image.create(
-		POLITICAL_VISUAL_SIZE.x, POLITICAL_VISUAL_SIZE.y, false, Image.FORMAT_RGBA8
+		size.x, size.y, false, Image.FORMAT_RGBA8
 	)
 	image.fill(Color(0.0, 0.0, 0.0, 0.0))
 	var nation_colors := PackedColorArray()
@@ -3879,12 +3898,17 @@ static func build_region_fill_image_from_masks(
 	for city_id in range(game_state.cities.size()):
 		var owner_id := game_state.cities[city_id].owner_nation
 		city_colors[city_id] = nation_colors[owner_id] if owner_id >= 0 and owner_id < nation_colors.size() else Color(0.45, 0.45, 0.43)
+		if mode==MapMode.LOYALTY and view_nation_id<0: city_colors[city_id]=loyalty_color(game_state.cities[city_id].loyalty)
+		elif mode in [MapMode.TRADE,MapMode.REGION]:
+			var groups: PackedInt32Array=game_state.region_ids if mode==MapMode.TRADE else game_state.administrative_region_ids
+			var colors: PackedColorArray=game_state.region_colors if mode==MapMode.TRADE else game_state.administrative_region_colors
+			if city_id<groups.size() and groups[city_id]>=0 and groups[city_id]<colors.size(): city_colors[city_id]=colors[groups[city_id]]
 		var recognized_owner := game_state.recognized_owner_of(city_id)
-		if view_nation_id < 0 and owner_id != recognized_owner:
+		if mode==MapMode.POLITICAL and view_nation_id < 0 and owner_id != recognized_owner:
 			occupation_colors[city_id] = city_colors[city_id].darkened(0.08)
 			occupied[city_id] = 1
-	for y in range(POLITICAL_VISUAL_SIZE.y):
-		for x in range(POLITICAL_VISUAL_SIZE.x):
+	for y in range(size.y):
+		for x in range(size.x):
 			if land.get_pixel(x, y).r < 0.5:
 				continue
 			var city_id := int(round(ids.get_pixel(x, y).r))
@@ -3908,6 +3932,10 @@ static func build_region_fill_image_from_masks(
 static func build_province_boundary_topology(
 	game_state: GameState
 ) -> Dictionary:
+	if MapSource.atlas_style(game_state.map_source_manifest):
+		return _atlas_display_for_state(game_state).topology
+	# Keep the old loyalty border treatment for every source: this traces and
+	# smooths saved labels only; it never regenerates or reassigns provinces.
 	var province := PackedVector2Array()
 	var coast := PackedVector2Array()
 	var province_a := PackedInt32Array()
@@ -4858,7 +4886,7 @@ func _draw_province_fills() -> void:
 		false,
 		Color(1.0, 1.0, 1.0, fill_strength)
 	)
-	if _map_mode == MapMode.POLITICAL and _region_fill_texture != null:
+	if (_map_mode == MapMode.POLITICAL or MapSource.uses_province_ids(state.map_source_manifest)) and _region_fill_texture != null:
 		draw_texture_rect(
 			_region_fill_texture,
 			Rect2(_origin, _map_size),
@@ -8140,3 +8168,13 @@ static func _diplomatic_action_name(action: int) -> String:
 		DiplomacyAI.Action.RETARGET_WAR_PREPARATION:
 			return "调整备战目标"
 	return "外交"
+
+static var _atlas_display_cache: Dictionary={}
+static func _atlas_display_for_state(game_state: GameState) -> Dictionary:
+	var key:=hash([load("res://scripts/view/atlas_display_geometry.gd").VERSION,game_state.province_ids,game_state.province_map_size,game_state.map_aspect_ratio,game_state.current_terrain_map_path(),FileAccess.get_modified_time(game_state.current_terrain_map_path()),MapSource.projection_type(game_state.map_source_manifest),MAP_VISUAL_ATLAS.visual_city_seed_signature(game_state)])
+	if _atlas_display_cache.has(key): return _atlas_display_cache[key]
+	var texture:=load(game_state.current_terrain_map_path()) as Texture2D
+	var result: Dictionary=load("res://scripts/view/atlas_display_geometry.gd").build(game_state,texture.get_image() if texture!=null else null,MAP_VISUAL_ATLAS.SIZE)
+	if _atlas_display_cache.size()>=4: _atlas_display_cache.erase(_atlas_display_cache.keys()[0])
+	_atlas_display_cache[key]=result
+	return result

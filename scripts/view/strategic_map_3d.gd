@@ -121,12 +121,15 @@ var _province_boundary_texture: ImageTexture
 var _political_fill_signature := PackedInt64Array()
 var _loyalty_fill_signature := PackedInt64Array()
 var _boundary_topology := {}
+var _river_topology_signature: int = 0
 var _classified_boundary_geometry := {}
 var _classified_boundary_ownership_revision: int = -1
 var _classified_boundary_mode: int = -1
 var _province_topology_ids := PackedInt32Array()
 var _province_lookup_topology_ids := PackedInt32Array()
 var _visual_atlas := {}
+var _atlas_ink_signature: int=0
+var _atlas_seed_signature: int=0
 var _visual_region_masks := {}
 var _visual_city_id_texture: ImageTexture
 var _visual_land_mask_texture: ImageTexture
@@ -209,6 +212,8 @@ func setup(
 	if _map_font == null:
 		_map_font = MapRenderer.create_map_label_font()
 	_ensure_scene_nodes()
+	var environment:=get_node("Environment") as WorldEnvironment
+	environment.environment.background_color=Color(0.78,0.74,0.66) if MapSource.atlas_style(state.map_source_manifest) else Color(0.55,0.49,0.38)
 	_clear_labels()
 	_configure_dimensions()
 	if mesh_resolution_override > 0:
@@ -247,6 +252,8 @@ func setup(
 	_country_visual_request_serial = 0
 	_history_preview_active = false
 	_boundary_topology = {}
+	_atlas_ink_signature=0
+	_atlas_seed_signature=0
 	_classified_boundary_geometry = {}
 	_classified_boundary_ownership_revision = -1
 	_classified_boundary_mode = -1
@@ -646,7 +653,7 @@ func _ensure_scene_nodes() -> void:
 		world_environment.name = "Environment"
 		var environment := Environment.new()
 		environment.background_mode = Environment.BG_COLOR
-		environment.background_color = Color(0.55, 0.49, 0.38)
+		environment.background_color = Color(0.78,0.74,0.66) if state!=null and MapSource.atlas_style(state.map_source_manifest) else Color(0.55, 0.49, 0.38)
 		environment.background_energy_multiplier = 0.82
 		environment.ambient_light_source = (
 			Environment.AMBIENT_SOURCE_COLOR
@@ -931,14 +938,16 @@ func _apply_camera_transform() -> void:
 
 
 func _update_boundary_lod() -> void:
+	_update_atlas_label_scale()
 	if _terrain == null:
 		return
 	# Political borders are cartographic information, not detail decoration.
 	# Keep every layer fully visible at every supported camera distance.
 	var lod := boundary_lod_strengths(_camera_distance)
 	var province_alpha := float(lod["province"])
-	var country_alpha := 0.0
-	if _history_preview_active:
+	if state!=null and MapSource.atlas_style(state.map_source_manifest): province_alpha=clampf(1.0-0.65*_camera_distance/maxf(1,_camera_overview_distance),0.3,1)
+	var country_alpha := 1.0 if state!=null and MapSource.atlas_style(state.map_source_manifest) else 0.0
+	if _history_preview_active and not MapSource.atlas_style(state.map_source_manifest):
 		_terrain.set_boundary_lod(province_alpha, 0.0, 0.0)
 	else:
 		_terrain.set_boundary_lod(province_alpha, 1.0, country_alpha)
@@ -1147,12 +1156,17 @@ func _update_province_visuals() -> void:
 		and state.administrative_region_revision
 			!= _last_administrative_region_revision
 	)
+	var river_signature := hash([state.map_source_manifest,state.river_features]) if MapSource.strict_river_transport(state.map_source_manifest) else 0
 	var topology_changed := (
 		_boundary_topology.is_empty()
 		or _province_topology_ids != state.province_ids
+		or _river_topology_signature != river_signature
+		or (MapSource.atlas_style(state.map_source_manifest) and _atlas_seed_signature!=MAP_VISUAL_ATLAS.visual_city_seed_signature(state))
 	)
 	if topology_changed:
 		_boundary_topology = MapRenderer.build_province_boundary_topology(state)
+		_atlas_seed_signature=MAP_VISUAL_ATLAS.visual_city_seed_signature(state)
+		_river_topology_signature = river_signature
 		_province_topology_ids = state.province_ids.duplicate()
 		_visual_atlas = overlay.visual_atlas() if overlay != null else {}
 		if not _visual_atlas.is_empty():
@@ -1235,11 +1249,11 @@ func _update_province_visuals() -> void:
 		_political_fill_signature = fill_signature
 		_loyalty_fill_signature = loyalty_signature
 	var unified_region_fill := (
-		_map_mode in [
+		(_map_mode in [
 			MapRenderer.MapMode.POLITICAL,
 			MapRenderer.MapMode.TRADE,
 			MapRenderer.MapMode.REGION,
-		]
+		] or (MapSource.uses_province_ids(state.map_source_manifest) and _map_mode==MapRenderer.MapMode.LOYALTY))
 		and not _visual_region_masks.is_empty()
 	)
 	if unified_region_fill and (
@@ -1287,6 +1301,12 @@ func _update_province_visuals() -> void:
 		_province_boundary_texture = ImageTexture.create_from_image(
 			province_boundary_image
 		)
+	if MapSource.atlas_style(state.map_source_manifest):
+		var ink_signature:=hash([_province_topology_ids,hash(_boundary_topology.province),_map_mode,state.ownership_revision,group_ids])
+		if ink_signature!=_atlas_ink_signature:
+			var ink:=MapRenderer._rasterize_soft_boundary_layer(geometry.country,output_size,Color(0.23,0.18,0.12,1),1.8,MapRenderer.BOUNDARY_ANTIALIAS_PX)
+			ink.generate_mipmaps();_country_boundary_texture=ImageTexture.create_from_image(ink)
+			_atlas_ink_signature=ink_signature
 	if not unified_region_fill and (
 		country_visuals_changed
 		or _country_boundary_texture == null
@@ -1362,11 +1382,14 @@ func _update_province_visuals() -> void:
 		_province_boundary_texture, _country_boundary_texture,
 		_country_color_texture
 	)
+	_terrain.set_atlas_handdrawn_enabled(MapSource.atlas_style(state.map_source_manifest))
 	_terrain.set_unified_region_fill_enabled(unified_region_fill)
+	_terrain.set_curved_province_borders_enabled(
+		MapSource.uses_province_ids(state.map_source_manifest)
+	)
 	_terrain.set_local_boundaries_enabled(not group_mode)
 	_terrain.set_country_fill_fade_enabled(
-		view_nation_id < 0
-		and _map_mode != MapRenderer.MapMode.LOYALTY
+		_country_fill_fade_enabled(view_nation_id)
 	)
 	_update_boundary_lod()
 	_terrain.set_province_strength(MapRenderer.effective_map_mode_strength(
@@ -1414,18 +1437,31 @@ func _update_visual_atlas_textures() -> void:
 	)
 
 
+func _country_fill_fade_enabled(view_nation_id: int) -> bool:
+	# Direct province-ID maps share loyalty's edge treatment in every mode.
+	# The political-only integer-pixel gradient otherwise accentuates raster
+	# steps even though the ownership and boundary textures are identical.
+	return (
+		not MapSource.uses_province_ids(state.map_source_manifest)
+		and view_nation_id < 0
+		and _map_mode != MapRenderer.MapMode.LOYALTY
+	)
+
+
 func _ensure_province_id_texture() -> void:
 	if (
 		_province_id_texture != null
 		and _province_lookup_topology_ids == state.province_ids
 	):
 		return
-	var image := PROVINCE_VISUAL_LOOKUP.build_id_image(
-		state.province_map_size,
-		state.province_ids,
-		3,
-		MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
-	)
+	var image: Image
+	if MapSource.uses_province_ids(state.map_source_manifest):
+		image = PROVINCE_VISUAL_LOOKUP.build_id_image(state.province_map_size, state.province_ids, 0, 1)
+	else:
+		image = PROVINCE_VISUAL_LOOKUP.build_id_image(
+			state.province_map_size, state.province_ids,
+			3, MapRenderer.PROVINCE_VISUAL_SUPERSAMPLE
+		)
 	_province_id_texture = ImageTexture.create_from_image(image)
 	_province_lookup_topology_ids = state.province_ids.duplicate()
 	if _province_visual_lut_texture != null:
@@ -1623,8 +1659,7 @@ func _finish_country_visual_task(commit_result: bool) -> bool:
 			_country_color_texture
 		)
 		_terrain.set_country_fill_fade_enabled(
-			current_view_nation_id < 0
-			and _map_mode != MapRenderer.MapMode.LOYALTY
+			_country_fill_fade_enabled(current_view_nation_id)
 		)
 		_update_boundary_lod()
 		_last_detail_visibility_signature = []
@@ -1679,7 +1714,12 @@ func _build_road_mesh() -> void:
 	minor_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var water_tool := SurfaceTool.new()
 	water_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for edge_index in range(state.edges.size()):
+	var atlas_style:=MapSource.atlas_style(state.map_source_manifest)
+	var shared_ink: Dictionary={}
+	var edge_order: Array[int]=[]
+	for i in range(state.edges.size()): edge_order.append(i)
+	if atlas_style: edge_order.sort_custom(func(a: int,b: int)->bool: return state.edges[a].road_tier>state.edges[b].road_tier if state.edges[a].road_tier!=state.edges[b].road_tier else a<b)
+	for edge_index in edge_order:
 		var edge: Edge = state.edges[edge_index]
 		if not MapRenderer.is_edge_visible(edge):
 			continue
@@ -1688,6 +1728,20 @@ func _build_road_mesh() -> void:
 			_append_navigation_path(water_tool, path)
 			continue
 		if not MapRenderer.edge_uses_land_road_style(edge.kind):
+			continue
+		if atlas_style:
+			var main:=edge.road_tier==Edge.RoadTier.MAIN
+			var ink:=Color(0.22,0.17,0.115,0.85) if main else Color(0.38,0.32,0.23,0.48)
+			var chain:=PackedVector2Array()
+			for i in range(path.size()-1):
+				var key:=preload("res://scripts/core/atlas_road_network.gd").segment_key(path[i],path[i+1])
+				if shared_ink.has(key):
+					if chain.size()>1: _append_atlas_dashed_path(major_tool if main else minor_tool,chain,0.020 if main else 0.012,ink,main)
+					chain=PackedVector2Array();continue
+				shared_ink[key]=true
+				if chain.is_empty(): chain.append(path[i])
+				chain.append(path[i+1])
+			if chain.size()>1: _append_atlas_dashed_path(major_tool if main else minor_tool,chain,0.020 if main else 0.012,ink,main)
 			continue
 		var is_landing := edge.kind == Edge.Kind.LANDING
 		var visual_capacity := (
@@ -2226,26 +2280,27 @@ func _append_river_quad(
 
 
 func _build_city_instances() -> void:
+	var atlas_style:=MapSource.atlas_style(state.map_source_manifest)
 	var base_marker := CylinderMesh.new()
-	base_marker.top_radius = 0.34
-	base_marker.bottom_radius = 0.39
-	base_marker.height = 0.14
-	base_marker.radial_segments = 12
+	base_marker.top_radius = 0.26 if atlas_style else 0.34
+	base_marker.bottom_radius = 0.26 if atlas_style else 0.39
+	base_marker.height = 0.025 if atlas_style else 0.14
+	base_marker.radial_segments = 32 if atlas_style else 12
 	_configure_multimesh(
 		_city_bases, base_marker, state.cities.size(),
 		_instance_color_material(false, true)
 	)
 	var city_marker := CylinderMesh.new()
-	city_marker.top_radius = 0.25
-	city_marker.bottom_radius = 0.30
-	city_marker.height = 0.28
-	city_marker.radial_segments = 12
+	city_marker.top_radius = 0.225 if atlas_style else 0.25
+	city_marker.bottom_radius = 0.225 if atlas_style else 0.30
+	city_marker.height = 0.025 if atlas_style else 0.28
+	city_marker.radial_segments = 32 if atlas_style else 12
 	_configure_multimesh(
 		_cities, city_marker, state.cities.size(),
 		_instance_color_material(false, true)
 	)
 	var resource_marker := BoxMesh.new()
-	resource_marker.size = Vector3(0.23, 0.10, 0.23)
+	resource_marker.size = Vector3(0.12,0.025,0.12) if atlas_style else Vector3(0.23, 0.10, 0.23)
 	_configure_multimesh(
 		_city_resource_markers, resource_marker,
 		state.cities.size(), _instance_color_material(true, true)
@@ -2269,8 +2324,8 @@ func _build_city_instances() -> void:
 		_instance_color_material(true, true)
 	)
 	var capital_ring := TorusMesh.new()
-	capital_ring.inner_radius = 0.34
-	capital_ring.outer_radius = 0.48
+	capital_ring.inner_radius = 0.27 if atlas_style else 0.34
+	capital_ring.outer_radius = 0.33 if atlas_style else 0.48
 	capital_ring.rings = 16
 	capital_ring.ring_segments = 8
 	_configure_multimesh(
@@ -2342,6 +2397,7 @@ func _update_city_instances() -> void:
 			if city.is_capital
 			else 0.62 if city.is_dock else 0.78
 		)
+		if MapSource.atlas_style(state.map_source_manifest): scale*=0.72
 		var basis := Basis.IDENTITY.scaled(
 			Vector3(scale, scale, scale)
 		)
@@ -2349,17 +2405,17 @@ func _update_city_instances() -> void:
 			city.id,
 			Transform3D(
 				basis,
-				world + Vector3(0.0, 0.10 * scale, 0.0)
+				world + Vector3(0.0, 0.10+0.19*scale if MapSource.atlas_style(state.map_source_manifest) else 0.10*scale, 0.0)
 			)
 		)
-		_city_bases.multimesh.set_instance_color(city.id, MAP_INK)
+		_city_bases.multimesh.set_instance_color(city.id, Color(0.28,0.22,0.15) if MapSource.atlas_style(state.map_source_manifest) else MAP_INK)
 		_cities.multimesh.set_instance_transform(
 			city.id,
 			Transform3D(
 				Basis.IDENTITY.scaled(
-					Vector3(scale * 0.78, scale, scale * 0.78)
+					Vector3(scale * (0.93 if MapSource.atlas_style(state.map_source_manifest) else 0.78), scale, scale * (0.93 if MapSource.atlas_style(state.map_source_manifest) else 0.78))
 				),
-				world + Vector3(0.0, 0.23 * scale, 0.0)
+				world + Vector3(0.0, 0.10+0.21*scale if MapSource.atlas_style(state.map_source_manifest) else 0.23*scale, 0.0)
 			)
 		)
 		var region_id := (
@@ -2384,7 +2440,7 @@ func _update_city_instances() -> void:
 				else Color(0.45, 0.45, 0.42)
 			)
 		)
-		_cities.multimesh.set_instance_color(city.id, color)
+		_cities.multimesh.set_instance_color(city.id, color.lightened(0.35) if MapSource.atlas_style(state.map_source_manifest) else color)
 
 		var score_marker_scale := 0.001
 		if _map_mode in [
@@ -2424,7 +2480,7 @@ func _update_city_instances() -> void:
 				Basis(Vector3.UP, PI * 0.25).scaled(
 					Vector3.ONE * resource_scale * scale
 				),
-				world + Vector3(0.0, 0.58 * scale, 0.0)
+				world + Vector3(0.0, 0.10+0.28*scale if MapSource.atlas_style(state.map_source_manifest) else 0.58*scale, 0.0)
 			)
 		)
 		_city_resource_markers.multimesh.set_instance_color(
@@ -2459,7 +2515,7 @@ func _update_capital_rings() -> void:
 				world + Vector3(0.0, 0.19, 0.0)
 			)
 		)
-		_capital_rings.multimesh.set_instance_color(index, MAP_GOLD)
+		_capital_rings.multimesh.set_instance_color(index, Color(0.43,0.29,0.12) if MapSource.atlas_style(state.map_source_manifest) else MAP_GOLD)
 
 
 func _rebuild_nation_labels() -> void:
@@ -2495,6 +2551,9 @@ func _rebuild_nation_labels() -> void:
 		label.font_size = NATION_LABEL_FONT_SIZE
 		label.outline_size = NATION_LABEL_OUTLINE_SIZE
 		label.pixel_size = float(layout["pixel_size"])
+		if MapSource.atlas_style(state.map_source_manifest):
+			label.set_meta("atlas_base_pixel_size",label.pixel_size)
+			label.outline_size=0
 		label.modulate = Color(0.075, 0.078, 0.082, 1.00)
 		label.outline_modulate = Color(0.075, 0.078, 0.082, 1.00)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2510,6 +2569,7 @@ func _rebuild_nation_labels() -> void:
 		label.set_meta("layout", layout)
 		_content.add_child(label)
 		_nation_labels.append(label)
+	_update_atlas_label_scale()
 
 
 func _nation_label_layout(nation_id: int) -> Dictionary:
@@ -3764,3 +3824,29 @@ func _clear_labels() -> void:
 		if is_instance_valid(label):
 			label.queue_free()
 	_nation_labels.clear()
+
+func _update_atlas_label_scale() -> void:
+	if state==null or _camera==null or not MapSource.atlas_style(state.map_source_manifest): return
+	var height:=maxf(1,get_viewport().get_visible_rect().size.y)
+	var cap:=70.0*2.0*_camera_distance*tan(deg_to_rad(_camera.fov)*0.5)/height/NATION_LABEL_FONT_SIZE
+	for label in _nation_labels:
+		if is_instance_valid(label) and label.has_meta("atlas_base_pixel_size"):
+			label.pixel_size=minf(float(label.get_meta("atlas_base_pixel_size")),cap)
+
+func _append_atlas_dashed_path(tool: SurfaceTool,path: PackedVector2Array,width: float,color: Color,main: bool) -> void:
+	var dash:=0.32 if main else 0.18;var gap:=0.16 if main else 0.15
+	var period:=dash+gap;var travelled:=0.0
+	for i in range(path.size()-1):
+		var samples:=_draped_world_samples(path[i],path[i+1],0.125)
+		for j in range(samples.size()-1):
+			var a:=samples[j];var b:=samples[j+1];var length:=a.distance_to(b)
+			var cursor:=0.0
+			while cursor<length-0.000001:
+				var phase:=fposmod(travelled+cursor,period)
+				var on:=phase<dash;var remaining:=(dash-phase) if on else (period-phase)
+				var next:=minf(length,cursor+maxf(remaining,0.000001))
+				# Short solid connections keep cities/forks attached to the ink.
+				if on or travelled+cursor<0.03 or (i==path.size()-2 and j==samples.size()-2 and length-next<0.03):
+					_append_world_segment_quad(tool,a.lerp(b,cursor/length),a.lerp(b,next/length),width,color)
+				cursor=next
+			travelled+=length

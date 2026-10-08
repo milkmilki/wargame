@@ -44,10 +44,18 @@ func _init() -> void:
 		else:
 			var cities := int(OS.get_environment("AI_LONGRUN_CITIES"))
 			var nations := int(OS.get_environment("AI_LONGRUN_NATIONS"))
-			state.generate_world(world_seed, nations if nations > 0 else 40, cities if cities > 0 else 500, "", {}, world_seed, "", source_manifest)
+			if not state.generate_world(world_seed, nations if nations > 0 else 40, cities if cities > 0 else 500, "", {}, world_seed, "", source_manifest):
+				push_error(state.last_generation_error)
+				quit(1)
+				return
+		var actual_land_cities := 0
+		for city in state.cities:
+			if not city.is_dock: actual_land_cities += 1
+		print("LONGRUN_WORLD_DIAGNOSTIC ", JSON.stringify({"source": state.map_source_manifest, "seed": state.world_seed, "rng_seed": state.rng.seed, "rng_state_after_generation": state.rng.state, "land_cities": actual_land_cities, "nations": state.nations.size(), "generation_metadata": state.generation_metadata}))
 		var simulation := Simulation.new()
 		root.add_child(simulation)
 		simulation.setup(state)
+		print("LONGRUN_SETUP_DIAGNOSTIC seed=%d rng_state=%d" % [state.world_seed, state.rng.state])
 		var initial_owners: Array[int] = []
 		for city in state.cities:
 			initial_owners.append(city.owner_nation)
@@ -85,7 +93,10 @@ func _init() -> void:
 		var court_due := 0
 		var court_paid := 0
 		var seed_start := Time.get_ticks_msec()
+		var previous_ruler_lifecycle := _ruler_lifecycle_snapshot(state)
 		for _day in range(selected_days):
+			if state.day % 30 == 0:
+				print("LONGRUN_PROGRESS seed=%d day=%d elapsed_ms=%d" % [world_seed, state.day, Time.get_ticks_msec() - seed_start])
 			if state.winner != -1:
 				break
 			simulation._advance_day()
@@ -97,6 +108,17 @@ func _init() -> void:
 				succession_error_days += 1
 				if first_succession_error.is_empty():
 					first_succession_error = "day=%d errors=%s" % [state.day, str(daily_succession.errors)]
+					var current_rulers := _ruler_lifecycle_snapshot(state)
+					for nation in state.nations:
+						if nation.succession_identity or not nation.alive:
+							continue
+						var ruler := PrincePolitics.person(state, nation.id, nation.ruler_person_id)
+						if not bool(ruler.get("alive", true)) or not bool(ruler.get("children_initialized", false)):
+							print("SUCCESSION_RULER_DIAGNOSTIC ", JSON.stringify({"day": state.day, "seed": world_seed, "nation": nation.id, "previous": previous_ruler_lifecycle.get(nation.id, {}), "current": current_rulers.get(nation.id, {})}))
+					for event in state.chronicle_events:
+						if int(event.get("day", -1)) == state.day and str(event.get("kind", "")) in ["ruler_succession", "title_ended"]:
+							print("SUCCESSION_EVENT_DIAGNOSTIC ", JSON.stringify(event))
+			previous_ruler_lifecycle = _ruler_lifecycle_snapshot(state)
 			var participants := {}
 			for battle in state.battles:
 				if battle.finished:
@@ -715,3 +737,21 @@ func _init() -> void:
 	var total_elapsed_ms := Time.get_ticks_msec() - total_start
 	print("total_ms=%d" % total_elapsed_ms)
 	quit(1 if failed else 0)
+
+
+## Test diagnostics only: retain yesterday's member flags before succession mutates them.
+static func _ruler_lifecycle_snapshot(state: GameState) -> Dictionary:
+	var result := {}
+	for nation in state.nations:
+		if nation.succession_identity:
+			continue
+		result[nation.id] = {
+			"alive": nation.alive,
+			"family_tree_id": nation.family_tree_id,
+			"ruler_person_id": nation.ruler_person_id,
+			"ruler_started_day": nation.ruler_started_day,
+			"ruler_revision": nation.ruler_revision,
+			"subject_of": state.suzerainty.get(nation.id, {}).duplicate(true),
+			"member": PrincePolitics.person(state, nation.id, nation.ruler_person_id).duplicate(true),
+		}
+	return result

@@ -7,22 +7,30 @@
 
 - WGS84 矩形：西经 12°至东经 136°，北纬 18°至57°；含伊比利亚、罗马、不列颠、地中海、中亚、中国，以及矩形内的北非和印度北部。
 - 500 座陆地城市、40 个初始国家；码头另计。每次启动随机生成，并在 DebugRunLog 中记录实际种子、地图源和独立 world_index。
-- 城市蒙版和政治蒙版默认留空，完整矩形内的真实陆地可生成聚落。城市密度峰值35°N，南北边缘倍率0.5、0.2。
+- 城市蒙版和政治蒙版默认留空。当前场景使用环境选址：由高程、海陆和纬度推导适居性，干冷内陆稀疏、温暖湿润平缓地区密集。旧地图源保留35°N峰值及南北倍率0.5、0.2。
 - 空间倍率2、军旗倍率0.25，隐藏城名、显示国名。沿用程序化单字命名、战争、资源和交通规则。
 
 ## 地图源和兼容性
 
-`assets/terrain/eurasia_mercator_map_source.json` 引用独立的
+当前场景使用 `assets/terrain/eurasia_hydrology_map_source.json`，与原
+`eurasia_mercator_map_source.json` 共用
 `eurasia_mercator_elevation_white_4096.png`，采用 Web Mercator（EPSG:3857）。
 纹理分辨率为4096×4096，显示宽高比为2.8790009154；同等宽度下，比旧等距地图高约31.8%。
 RGB 固定白色，Alpha 为数值高程；保留 -8000..0m / 0..6200m 编码和0米海陆分界，采用无损导入。
 地形和省份分析仍沿用现有采样与低模流程，不提高省份分析分辨率或改变模拟规则。
 
+新清单通过 `settlement_model: "environment_v1"` 启用环境选址，
+通过 `hydrology_model: "terrain_v1"` 读取高精度DEM预处理的矢量河网；缺省继续使用旧算法。
+主河约束省份、普通道路及码头，支流参与供水和显示。旧环境清单仍可使用。
+旧等距、旧墨卡托清单及纹理全部保留，旧模板不重新撒点。
+算法、失败处理及诊断见 [环境城市生成](settlement_generation.md)；
+当前河网、上游延伸与验收见 [地形水文](terrain_hydrology.md)。
+
 主场景新增 `map_source_manifest`、`initial_city_mask_path` 导出属性。
 `GameState.map_source_manifest` 是当前世界的地图源，`current_terrain_map_path()` 获取对应纹理；
 原静态 `terrain_map_path()` 继续返回中国默认纹理，供旧调用方使用。
 生成器和城市密度入口增加末尾可选清单参数，默认值保持中国地图。
-地图模板版本仍为6，已有 `map_source_manifest` 字段现在实际参与读入和导出；
+地图模板版本为7，继续读取版本3～6；`map_source_manifest` 字段参与读入和导出；
 版本3至6的旧模板缺少该字段时使用中国源，指定的清单或纹理缺失则返回错误。
 编辑重新生成、历史回看、2D和3D渲染均使用世界自身的清单，不修改全局默认源。
 
@@ -82,9 +90,10 @@ python scripts/tools/generate_china_surface_texture.py --bbox -12 18 136 57 --pr
 godot --headless --path . --script res://tests/map_projection.gd
 godot --headless --path . --script res://tests/map_source_isolation.gd
 godot --headless --path . --script res://tests/eurasia_world.gd
+godot --headless --path . --script res://tests/environment_world.gd
 godot --headless --path . --script res://tests/eurasia_scene_smoke.gd
 python tests/terrain_surface_tool.py
-$env:AI_LONGRUN_MAP_SOURCE = 'res://assets/terrain/eurasia_mercator_map_source.json'
+$env:AI_LONGRUN_MAP_SOURCE = 'res://assets/terrain/eurasia_environment_map_source.json'
 $env:AI_LONGRUN_DAYS = '365'
 $env:AI_LONGRUN_SEED = '12345'
 godot --headless --path . --script res://tests/ai_longrun.gd

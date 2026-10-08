@@ -1,0 +1,32 @@
+{
+  "format": "world-war-map-source",
+  "version": 1,
+  "projection": "web_mercator",
+  "texture": "res://assets/terrain/eurasia_mercator_elevation_white_4096.png",
+  "bbox_wgs84": [
+    -12.0,
+    18.0,
+    136.0,
+    57.0
+  ],
+  "city_density": {
+    "peak_latitude": 35.0,
+    "south_edge_multiplier": 0.5,
+    "north_edge_multiplier": 0.2
+  },
+  "channels": {
+    "rgb": "solid white terrain base",
+    "alpha": "1..128=-8000..0m sea, 129..255=positive land..6200m"
+  },
+  "elevation_low_clip_m": -8000.0,
+  "elevation_high_clip_m": 6200.0,
+  "settlement_model": "environment_v1",
+  "hydrology_model": "terrain_v1",
+  "hydrology_network": "res://assets/terrain/eurasia_vector_drainage.json",
+  "boundary_inflow": "estimated",
+  "river_transport_model": "full_network_v1",
+  "settlement_density_bounds": {
+    "minimum": 0.02,
+    "maximum": 1.0
+  }
+}

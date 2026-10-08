@@ -428,17 +428,26 @@ func _on_map_regenerate_requested(
 		requested_political_mask,
 		state.map_source_manifest
 	)
+	if not bool(preview.get("ok", true)):
+		_report_generation_failure(str(preview.get("error", "地图生成失败")), preview.get("generation_metadata", {}))
+		return
 	var active_city_count := int(preview.get(
 		"politically_active_count", requested_count
 	))
 	if active_city_count <= 0:
 		map_editor_panel.set_status("政治蒙版内至少需要一座实际城市。", true)
 		return
+	var previous_settings := [terrain_city_count, _city_generation_mask_path, _political_mask_path, _city_density_settings]
 	terrain_city_count = requested_count
 	_city_generation_mask_path = requested_mask
 	_political_mask_path = requested_political_mask
 	_city_density_settings = normalized_density
-	_start_new_game(_seed)
+	if not _start_new_game(_seed):
+		terrain_city_count = previous_settings[0]
+		_city_generation_mask_path = previous_settings[1]
+		_political_mask_path = previous_settings[2]
+		_city_density_settings = previous_settings[3]
+		return
 	map_editor_panel.set_status(
 		"已按 %d 座城市重新生成；%s；%s。" % [
 			terrain_city_count,
@@ -502,7 +511,7 @@ func _rebuild_scenario_from_edited_map(message: String) -> void:
 	map_editor_panel.set_status(message + "；战局已安全重置。")
 
 
-func _start_new_game(world_seed: int) -> void:
+func _start_new_game(world_seed: int) -> bool:
 	if _debug_run_log != null:
 		var settings := _debug_generation_settings()
 		settings["city_layout_seed"] = world_seed if randomize_world_seed_on_start else 0
@@ -511,7 +520,7 @@ func _start_new_game(world_seed: int) -> void:
 	if use_grid_world:
 		next_state.generate_grid_world(world_seed)
 	else:
-		next_state.generate_world(
+		var generated := next_state.generate_world(
 			world_seed,
 			nation_count,
 			terrain_city_count,
@@ -521,6 +530,9 @@ func _start_new_game(world_seed: int) -> void:
 			_political_mask_path,
 			map_source_manifest
 		)
+		if not generated:
+			_report_generation_failure(next_state.last_generation_error)
+			return false
 	var single_name := initial_single_nation_name.strip_edges()
 	if next_state.nations.size() == 1 and not single_name.is_empty():
 		assert(
@@ -551,6 +563,21 @@ func _start_new_game(world_seed: int) -> void:
 	_activate_state(next_state)
 	if _debug_run_log != null:
 		_debug_run_log.world_started(state, _debug_generation_settings(), "generated")
+	return true
+
+
+func _report_generation_failure(message: String, metadata: Dictionary = {}) -> void:
+	if _debug_run_log != null:
+		_debug_run_log.record("generation_failed", {"error": message, "seed": _seed, "generation_metadata": metadata})
+	if map_editor_panel != null:
+		map_editor_panel.set_status(message, true)
+	if state == null:
+		var dialog := AcceptDialog.new()
+		dialog.title = "地图生成失败"
+		dialog.dialog_text = message
+		add_child(dialog)
+		dialog.popup_centered(Vector2i(560, 180))
+		dialog.confirmed.connect(dialog.queue_free)
 
 
 func _start_from_map_definition(definition: Dictionary) -> void:
@@ -574,6 +601,14 @@ func _debug_generation_settings() -> Dictionary:
 		"city_layout_seed": state.world_seed if state != null and randomize_world_seed_on_start else 0,
 		"map_source_manifest": map_source_manifest,
 		"projection": MapSource.projection_type(map_source_manifest),
+		"settlement_model": MapSource.settlement_model(map_source_manifest),
+		"river_settlement_model": MapSource.river_settlement_model(map_source_manifest),
+		"river_transport_model": MapSource.load_manifest(map_source_manifest).get("river_transport_model", "legacy"),
+		"road_path_model": MapSource.road_path_model(map_source_manifest),
+		"map_models": state.map_models.duplicate(true) if state!=null and not state.map_models.is_empty() else MapSource.model_descriptor(map_source_manifest),
+		"ferry_interval": MapSource.ferry_interval(map_source_manifest),
+		"ferry_max_per_river": MapSource.ferry_max_per_river(map_source_manifest),
+		"settlement_density_bounds": MapSource.settlement_density_bounds(map_source_manifest),
 		"terrain_source": MapSource.texture_path(map_source_manifest), "city_mask": _city_generation_mask_path,
 		"political_mask": _political_mask_path, "city_density": _city_density_settings.duplicate(true),
 		"single_nation_name": initial_single_nation_name, "single_nation_archetype": initial_single_nation_ruler_archetype,
@@ -716,5 +751,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_speed_mult = clampf(_speed_mult * 0.5, Simulation.SPEED_MIN, Simulation.SPEED_MAX)
 			simulation.set_speed_multiplier(_speed_mult)
 		KEY_R:
+			var previous_seed := _seed
 			_seed = randi()
-			_start_new_game(_seed)
+			if not _start_new_game(_seed):
+				_seed = previous_seed

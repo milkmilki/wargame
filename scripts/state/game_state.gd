@@ -213,9 +213,20 @@ var map_source_region_normalized: Rect2 = Rect2(0.0, 0.0, 1.0, 1.0)
 var city_generation_mask_path: String = ""
 var political_mask_path: String = ""
 var city_density_settings: Dictionary = {}
+var generation_metadata: Dictionary = {}
+var map_models: Dictionary = {}
+var last_generation_error: String = ""
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
 var province_ids: PackedInt32Array = PackedInt32Array()
+
+func province_city_at(position: Vector2) -> int:
+	if not position.is_finite() or position.x < 0 or position.y < 0 or position.x >= 1 or position.y >= 1:
+		return -1
+	if province_map_size.x <= 0 or province_map_size.y <= 0 or province_ids.size() != province_map_size.x * province_map_size.y:
+		return -1
+	var cell := Vector2i(position * Vector2(province_map_size))
+	return province_ids[cell.y * province_map_size.x + cell.x]
 ## Static transport-graph analysis. Region IDs are assigned by deterministic
 ## Leiden; node betweenness and key cities use the same passable graph,
 ## including docks and their landing, river and sea connections.
@@ -278,36 +289,37 @@ func generate_world(
 	map_generation_seed: int = 0,
 	initial_political_mask_path: String = "",
 	source_manifest: String = MapSource.DEFAULT_MANIFEST
-) -> void:
+) -> bool:
 	assert(
 		nation_count > 0
 			and nation_count <= terrain_city_count,
 		"国家数必须在 1..%d 之间" % terrain_city_count
 	)
+	last_generation_error = MapSource.validate_manifest(source_manifest)
+	if not last_generation_error.is_empty():
+		return false
+	var normalized_density := TerrainMapGenerator.normalize_city_density_settings(density_settings, source_manifest)
+	var terrain := TerrainMapGenerator.build(
+		MapSource.texture_path(source_manifest), terrain_city_count,
+		city_mask_path.strip_edges(), normalized_density, map_generation_seed,
+		nation_count, initial_political_mask_path.strip_edges(), source_manifest
+	)
+	if not bool(terrain.get("ok", true)):
+		last_generation_error = str(terrain.get("error", "地图生成失败"))
+		return false
+	var politically_active_count := int(terrain.get("politically_active_count", terrain_city_count))
+	if politically_active_count <= 0:
+		last_generation_error = "政治蒙版内至少需要一座实际城市"
+		return false
 	_reset_world(world_seed)
 	uses_heightmap = true
 	map_source_manifest = source_manifest
 	city_generation_mask_path = city_mask_path.strip_edges()
 	political_mask_path = initial_political_mask_path.strip_edges()
-	city_density_settings = (
-		TerrainMapGenerator.normalize_city_density_settings(
-			density_settings, map_source_manifest
-		)
-	)
-	var terrain := TerrainMapGenerator.build(
-		current_terrain_map_path(),
-		terrain_city_count,
-		city_generation_mask_path,
-		city_density_settings,
-		map_generation_seed,
-		nation_count,
-		political_mask_path,
-		map_source_manifest
-	)
-	var politically_active_count := int(terrain.get(
-		"politically_active_count", terrain_city_count
-	))
-	assert(politically_active_count > 0, "政治蒙版内至少需要一座实际城市")
+	city_density_settings = normalized_density
+	generation_metadata = terrain.get("generation_metadata", {}).duplicate(true)
+	map_models = MapSource.model_descriptor(source_manifest)
+
 	_generate_nations(
 		DiplomaticRelation.NEUTRAL,
 		mini(nation_count, politically_active_count)
@@ -357,6 +369,7 @@ func generate_world(
 		_battle_group_structure_valid(),
 		"正式地图初始主战军必须属于合法的持久战团"
 	)
+	return true
 
 
 ## 严格镜像基准和局部状态机测试使用的兼容网格夹具；正式游戏不调用。
@@ -404,6 +417,7 @@ func generate_from_map_definition(
 	_reset_world(world_seed)
 	uses_heightmap = true
 	map_source_manifest = str(definition.get("map_source_manifest", MapSource.DEFAULT_MANIFEST))
+	map_models = (definition.get("map_models",MapSource.model_descriptor(map_source_manifest)) as Dictionary).duplicate(true)
 	city_generation_mask_path = str(definition.get(
 		"city_generation_mask_path", ""
 	))
@@ -495,6 +509,7 @@ func generate_from_map_definition(
 		edge.city_a = mini(raw_a, raw_b)
 		edge.city_b = maxi(raw_a, raw_b)
 		edge.kind = int(record.get("kind", Edge.Kind.LAND))
+		edge.road_tier = int(record.get("road_tier", Edge.RoadTier.LEGACY))
 		edge.max_manpower = int(record.get("max_manpower", 0))
 		edge.base_max_manpower = int(record.get("base_max_manpower", edge.max_manpower))
 		edge.distance = maxi(int(record.get("distance", 1)), 1)
@@ -507,8 +522,11 @@ func generate_from_map_definition(
 		for point_value in record.get("map_path", []):
 			var point: Array = point_value
 			edge.map_path.append(Vector2(float(point[0]), float(point[1])))
+		edge.river_reaches = record.get("river_reaches", []).duplicate(true)
+		edge.river_navigation = record.get("river_navigation", {}).duplicate(true)
 		if raw_a > raw_b:
 			edge.map_path.reverse()
+			_reverse_river_reaches(edge.river_reaches)
 		edge.is_backbone = bool(record.get("is_backbone", false))
 		edge.is_terrain_connector = (
 			edge.kind == Edge.Kind.LAND
@@ -516,9 +534,7 @@ func generate_from_map_definition(
 		)
 		if (
 			edge.kind == Edge.Kind.RIVER
-			and not TerrainMapGenerator.river_link_is_navigable(
-				edge.max_height_difference
-			)
+			and not edge.river_is_navigable()
 		):
 			edge.max_manpower = 0
 			edge.base_max_manpower = 0
@@ -569,6 +585,8 @@ func apply_city_editor_changes(
 		clampf(float(changes.get("map_y", city.map_position.y)), 0.0, 1.0)
 	)
 	var position_changed := new_position != city.map_position
+	var hydrological_edit := position_changed and MapSource.hydrology_model(map_source_manifest) == MapSource.TERRAIN_HYDROLOGY
+	var prepared_geometry := {}
 	if (
 		position_changed
 		and (city.is_dock or not TerrainMapGenerator.is_land_map_position(
@@ -576,6 +594,18 @@ func apply_city_editor_changes(
 		))
 	):
 		return {"ok": false, "error": "陆地城市不能移动到海洋，码头位置暂不可手动移动。"}
+	if hydrological_edit:
+		for army in armies:
+			if army.on_edge or not army.path.is_empty() or army.battle_id >= 0 or army.campaign_front_id >= 0:
+				return {"ok": false, "error": "存在行军、战斗或战线绑定，不能安全重建河流交通。"}
+		if not battles.is_empty(): return {"ok": false, "error": "战斗期间不能重建河流交通。"}
+		var positions: Array[Vector2] = []
+		var docks := []
+		for other in cities:
+			if other.is_dock: docks.append({"city_id": other.id, "position": other.map_position})
+			else: positions.append(new_position if other.id == city_id else other.map_position)
+		prepared_geometry = TerrainMapGenerator.rebuild_hydrological_map(current_terrain_map_path(), positions, river_features, docks, map_source_manifest, nations.size())
+		if not bool(prepared_geometry.get("ok", false)): return prepared_geometry
 	var previous_owner := city.owner_nation
 	var owner := clampi(int(changes.get("owner_nation", previous_owner)), 0, nations.size() - 1)
 	var owner_changed := owner != previous_owner
@@ -626,6 +656,7 @@ func apply_city_editor_changes(
 				)),
 			}
 	city.map_position = new_position
+	if hydrological_edit: map_models=MapSource.model_descriptor(map_source_manifest)
 	city.manpower_per_month = manpower_per_month
 	city.gold_per_month = gold_per_month
 	city.food_per_half_year = food_per_half_year
@@ -645,14 +676,19 @@ func apply_city_editor_changes(
 		var land_positions: Array[Vector2] = []
 		for land_city in land_cities():
 			land_positions.append(land_city.map_position)
-		var provinces := TerrainMapGenerator.rebuild_provinces(
+		var provinces: Dictionary = prepared_geometry.provinces if hydrological_edit else TerrainMapGenerator.rebuild_provinces(
 			current_terrain_map_path(), land_positions, edges, river_paths, map_source_manifest
 		)
 		province_map_size = provinces["size"]
 		province_ids = provinces["ids"]
 		_province_neighbor_pairs_ready = false
 		_province_neighbor_pairs.clear()
-		_refresh_land_edge_paths_after_province_rebuild()
+		if hydrological_edit:
+			edges.clear()
+			edge_lookup.clear()
+			for id in adjacency: adjacency[id] = [] as Array[int]
+			_generate_terrain_edges(prepared_geometry)
+		else: _refresh_land_edge_paths_after_province_rebuild()
 		ownership_revision += 1
 		road_network_revision += 1
 		rebuild_region_analysis()
@@ -720,7 +756,11 @@ func apply_edge_editor_changes(
 	if edge == null:
 		return {"ok": false, "error": "道路不存在。"}
 	var was_region_link := _edge_participates_in_region_graph(edge)
+	var previous_kind := edge.kind
 	edge.kind = clampi(int(changes.get("kind", edge.kind)), Edge.Kind.LAND, Edge.Kind.SEA)
+	if previous_kind == Edge.Kind.RIVER and edge.kind != Edge.Kind.RIVER:
+		edge.river_navigation.clear()
+		edge.river_reaches.clear()
 	var requested_capacity := int(changes.get("max_manpower", edge.max_manpower))
 	edge.distance = maxi(int(changes.get("distance", edge.distance)), 1)
 	edge.danger = clampf(float(changes.get("danger", edge.danger)), 0.0, 1.0)
@@ -732,9 +772,7 @@ func apply_edge_editor_changes(
 	if edge.kind == Edge.Kind.RIVER:
 		edge.max_manpower = (
 			Edge.WATER_MANPOWER
-			if TerrainMapGenerator.river_link_is_navigable(
-				edge.max_height_difference
-			)
+			if edge.river_is_navigable()
 			else 0
 		)
 	elif edge.kind == Edge.Kind.SEA:
@@ -809,6 +847,9 @@ func _reset_world(world_seed: int) -> void:
 	map_source_manifest = MapSource.DEFAULT_MANIFEST
 	political_mask_path = ""
 	city_density_settings = {}
+	generation_metadata = {}
+	map_models = {}
+	last_generation_error = ""
 	province_map_size = Vector2i.ZERO
 	province_ids = PackedInt32Array()
 	region_ids = PackedInt32Array()
@@ -1012,6 +1053,16 @@ func _generate_terrain_docks(terrain: Dictionary) -> void:
 		cities.append(city)
 		adjacency[city.id] = [] as Array[int]
 
+
+static func _reverse_river_reaches(reaches: Array) -> void:
+	reaches.reverse()
+	for reach in reaches:
+		var previous: float = reach.from
+		reach.from = reach.to
+		reach.to = previous
+
+func main_river_paths() -> Array[PackedVector2Array]:
+	return MapFeatureContract.major_paths(river_features)
 
 func _set_river_features(features: Array) -> void:
 	var copied: Array[Dictionary] = []
@@ -2004,6 +2055,7 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 		edge.distance = int(road["distance"])
 		edge.danger = float(road["danger"])
 		edge.kind = int(road.get("kind", Edge.Kind.LAND))
+		edge.road_tier = int(road.get("road_tier", Edge.RoadTier.LEGACY))
 		edge.travel_time_multiplier = float(
 			road.get("travel_time_multiplier", 1.0)
 		)
@@ -2026,8 +2078,11 @@ func _generate_terrain_edges(terrain: Dictionary) -> void:
 			road.get("map_path", PackedVector2Array())
 			as PackedVector2Array
 		).duplicate()
+		edge.river_reaches = road.get("river_reaches", []).duplicate(true)
+		edge.river_navigation = road.get("river_navigation", {}).duplicate(true)
 		if a > b:
 			edge.map_path.reverse()
+			_reverse_river_reaches(edge.river_reaches)
 		edge.distance = TerrainMapGenerator.distance_units_for_metric_length(
 			TerrainMapGenerator.metric_polyline_length(
 				edge.map_points(
@@ -3664,9 +3719,7 @@ func _ensure_passable_transport_connectivity(
 			continue
 		if (
 			edge.kind == Edge.Kind.RIVER
-			and not TerrainMapGenerator.river_link_is_navigable(
-				edge.max_height_difference
-			)
+			and not edge.river_is_navigable()
 		):
 			continue
 		if (
@@ -3836,9 +3889,7 @@ func _reopen_initial_component_connector(
 				or cities[neighbor].owner_nation != owner_nation
 				or (
 					edge.kind == Edge.Kind.RIVER
-					and not TerrainMapGenerator.river_link_is_navigable(
-						edge.max_height_difference
-					)
+					and not edge.river_is_navigable()
 				)
 			):
 				continue
@@ -3870,9 +3921,7 @@ func _transfer_initial_component_to_neighbor(
 				or neighbor_owner == owner_nation
 				or (
 					edge.kind == Edge.Kind.RIVER
-					and not TerrainMapGenerator.river_link_is_navigable(
-						edge.max_height_difference
-					)
+					and not edge.river_is_navigable()
 				)
 			):
 				continue
@@ -5432,6 +5481,9 @@ func start_regional_rebellion(
 		rebel.granary_food += withdrawn_food
 	WorldNaming.assign_rebel_name(self, rebel.id, parent_id, unique_ids)
 	FamilyTree.ensure_nation_lineage(self, rebel.id)
+	# A new ruler needs a complete generation even when no regular army can
+	# be recruited; uprising armies do not initialize political patrons.
+	PrincePolitics.ensure_generation(self, rebel.id)
 	_initialize_rebel_diplomacy(parent_id, rebel.id)
 	set_diplomatic_relation(parent_id, rebel.id, DiplomaticRelation.WAR)
 

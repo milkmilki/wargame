@@ -1,13 +1,17 @@
 extends SceneTree
 
-const SOURCE := "res://assets/terrain/eurasia_mercator_map_source.json"
+var SOURCE: String = OS.get_environment("HYDROLOGY_SOURCE") if not OS.get_environment("HYDROLOGY_SOURCE").is_empty() else "res://assets/terrain/eurasia_hydrology_map_source.json"
 
 func _init() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	var startup_started := Time.get_ticks_msec()
 	root.size = Vector2i(1800, 1000)
 	var main := (load("res://eurasia.tscn") as PackedScene).instantiate()
+	assert(main.map_source_manifest == "res://assets/terrain/eurasia_hydrology_map_source.json")
+	# Explicit test override previews an unpromoted manifest without changing the scene.
+	main.map_source_manifest = SOURCE
 	assert(main.nation_count == 40 and main.terrain_city_count == 500)
 	assert(main.randomize_world_seed_on_start)
 	assert(is_equal_approx(main.map_world_scale, 2.0))
@@ -19,9 +23,19 @@ func _run() -> void:
 	main.simulation.paused = true
 	var map: StrategicMap3D = main.map_3d
 	await _wait_terrain(map)
+	print("EURASIA_STARTUP_MS ", Time.get_ticks_msec() - startup_started)
 	assert(main.state.map_source_manifest == SOURCE)
+	assert(not main.map_editor_panel._density_peak_latitude.editable)
+	assert(not main.map_editor_panel._north_density.editable and not main.map_editor_panel._south_density.editable)
+	assert(main.map_editor_panel._latitude_min.editable and main.map_editor_panel._latitude_max.editable)
+	var previous_state: GameState = main.state
+	var previous_template := MapDefinition.from_state(main.state)
+	main._on_map_regenerate_requested(500, "", "", {"latitude_min": 75.0, "latitude_max": 85.0})
+	assert(main.state == previous_state and MapDefinition.from_state(main.state) == previous_template)
+	assert(main.map_editor_panel._status.text.contains("减少城市数"))
 	print("EURASIA_SCENE_PHASE initial_terrain_ready")
 	var old_position: Vector2 = main.state.cities[0].map_position
+	var original_rivers: Array = main.state.river_features.duplicate(true)
 	var moved_position := old_position
 	for offset in [Vector2(2.0 / 256.0, 0.0), Vector2(-2.0 / 256.0, 0.0), Vector2(0.0, 2.0 / 256.0), Vector2(0.0, -2.0 / 256.0)]:
 		var candidate: Vector2 = old_position + offset
@@ -35,6 +49,7 @@ func _run() -> void:
 	main.simulation.paused = true
 	await _wait_terrain(map)
 	assert(main.state.cities[0].map_position == moved_position)
+	assert(main.state.river_features == original_rivers)
 	assert(main.state.territory_structure_valid())
 	_assert_continental_corridor(main.state)
 	assert(main.state.map_source_manifest == SOURCE)
@@ -69,16 +84,33 @@ func _run() -> void:
 	assert(main.state.map_source_manifest == SOURCE)
 	assert(main._debug_generation_settings().map_source_manifest == SOURCE)
 	assert(main._debug_generation_settings().projection == "web_mercator")
+	assert(main._debug_generation_settings().river_settlement_model == MapSource.river_settlement_model(SOURCE))
 	main._on_history_position_requested(0)
 	await _wait_terrain(map)
 	assert(main._history_active)
 	assert(map.state.map_source_manifest == SOURCE)
 	assert(map.state.province_ids == main.state.province_ids)
+	assert(map.state.river_features == main.state.river_features)
 	main._leave_history_view()
 	main.map_editor_panel.close_panel()
 	main.simulation.paused = true
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(saved.path))
 	var output := OS.get_environment("EURASIA_VISUAL_DIR")
+	var reference_ids: PackedByteArray = main.renderer.visual_atlas().city_id.get_data()
+	for mode in [MapRenderer.MapMode.POLITICAL, MapRenderer.MapMode.LOYALTY, MapRenderer.MapMode.TRADE, MapRenderer.MapMode.REGION]:
+		map.set_map_mode(mode)
+		await process_frame
+		assert(main.renderer.visual_atlas().city_id.get_data() == reference_ids, "切换视图不能重新划分省份")
+		var shown: Image = main.renderer.visual_atlas().city_id
+		for y in range(main.state.province_map_size.y):
+			for x in range(main.state.province_map_size.x):
+				var uv := (Vector2(x, y) + Vector2(0.5, 0.5)) / Vector2(main.state.province_map_size)
+				var pixel := Vector2i(uv * Vector2(shown.get_size()))
+				assert(int(shown.get_pixelv(pixel).r) == main.state.province_city_at(uv))
+		if not output.is_empty():
+			DirAccess.make_dir_recursive_absolute(output)
+			await _screenshot(output.path_join("province-ids-mode-%d.png" % mode))
+	map.set_map_mode(MapRenderer.MapMode.POLITICAL)
 	if not output.is_empty():
 		DirAccess.make_dir_recursive_absolute(output)
 		await _screenshot(output.path_join("eurasia-full.png"))

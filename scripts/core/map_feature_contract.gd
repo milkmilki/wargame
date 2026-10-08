@@ -4,7 +4,7 @@ extends RefCounted
 ## Authoritative points drive topology and transport. Smoothed paths are derived
 ## copies for rendering only and must never be written back into these records.
 
-const SCHEMA_VERSION: int = 1
+const SCHEMA_VERSION: int = 2
 const FEATURE_RIVER := "river"
 const FLOW_POINTS_DOWNSTREAM := "points_downstream"
 const SOURCE_GENERATED_BOUNDARY := "generated_boundary"
@@ -29,7 +29,9 @@ static func make_river(
 	source_width: float = DEFAULT_SOURCE_WIDTH,
 	mouth_width: float = DEFAULT_MOUTH_WIDTH,
 	downstream_id: int = -1,
-	upstream_ids: PackedInt32Array = PackedInt32Array()
+	upstream_ids: PackedInt32Array = PackedInt32Array(),
+	river_class: String = "major",
+	terminal_kind: String = "legacy"
 ) -> Dictionary:
 	return {
 		"schema_version": SCHEMA_VERSION,
@@ -37,6 +39,8 @@ static func make_river(
 		"id": river_id,
 		"source_kind": source_kind,
 		"flow_direction": FLOW_POINTS_DOWNSTREAM,
+		"river_class": river_class,
+		"terminal_kind": terminal_kind,
 		"points": points.duplicate(),
 		"source_width": source_width,
 		"mouth_width": mouth_width,
@@ -61,6 +65,15 @@ static func authoritative_paths(rivers: Array) -> Array[PackedVector2Array]:
 		result.append(_coerce_points((river_value as Dictionary).get("points", [])))
 	return result
 
+static func major_rivers(rivers: Array) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for river in rivers:
+		if str(river.get("river_class", "major")) == "major": result.append(river)
+	return result
+
+static func major_paths(rivers: Array) -> Array[PackedVector2Array]:
+	return authoritative_paths(major_rivers(rivers))
+
 
 static func validate_rivers(rivers: Array) -> String:
 	var ids := {}
@@ -68,8 +81,12 @@ static func validate_rivers(rivers: Array) -> String:
 		if not rivers[index] is Dictionary:
 			return "河流 %d 不是结构化记录。" % index
 		var river := rivers[index] as Dictionary
-		if int(river.get("schema_version", -1)) != SCHEMA_VERSION:
+		if int(river.get("schema_version", -1)) not in [1, SCHEMA_VERSION]:
 			return "河流 %d 的特征版本不受支持。" % index
+		if str(river.get("river_class", "major")) not in ["major", "minor"]:
+			return "河流 %d 的等级无效。" % index
+		if str(river.get("terminal_kind", "legacy")) not in ["legacy", "junction", "sea", "basin", "crop"]:
+			return "河流 %d 的终点类型无效。" % index
 		if str(river.get("feature_kind", "")) != FEATURE_RIVER:
 			return "河流 %d 的特征类型无效。" % index
 		var river_id := int(river.get("id", -1))
@@ -130,6 +147,10 @@ static func validate_serialized_rivers(records: Array) -> String:
 		if not value is Dictionary:
 			return "河流 %d 不是结构化记录。" % index
 		var record := value as Dictionary
+		if int(record.get("schema_version", -1)) not in [1, SCHEMA_VERSION]:
+			return "河流特征版本不受支持。"
+		if int(record.get("schema_version", -1)) >= 2 and (not record.get("river_class") is String or not record.get("terminal_kind") is String):
+			return "新版河流缺少等级或终点类型。"
 		for string_key in ["feature_kind", "source_kind", "flow_direction"]:
 			if not record.get(string_key) is String:
 				return "河流 %d 的 %s 必须是字符串。" % [index, string_key]
@@ -171,6 +192,8 @@ static func serialize_rivers(rivers: Array) -> Array[Dictionary]:
 			"id": int(river.get("id", records.size())),
 			"source_kind": str(river.get("source_kind", SOURCE_IMPORTED)),
 			"flow_direction": str(river.get("flow_direction", FLOW_POINTS_DOWNSTREAM)),
+			"river_class": str(river.get("river_class", "major")),
+			"terminal_kind": str(river.get("terminal_kind", "legacy")),
 			"points": serialized_points,
 			"source_width": float(river.get("source_width", DEFAULT_SOURCE_WIDTH)),
 			"mouth_width": float(river.get("mouth_width", DEFAULT_MOUTH_WIDTH)),
@@ -195,7 +218,9 @@ static func deserialize_rivers(records: Array) -> Array[Dictionary]:
 			float(record.get("source_width", DEFAULT_SOURCE_WIDTH)),
 			float(record.get("mouth_width", DEFAULT_MOUTH_WIDTH)),
 			int(record.get("downstream_id", -1)),
-			PackedInt32Array(record.get("upstream_ids", []))
+			PackedInt32Array(record.get("upstream_ids", [])),
+			str(record.get("river_class", "major")),
+			str(record.get("terminal_kind", "legacy"))
 		))
 	return result
 
@@ -248,7 +273,7 @@ static func build_high_precision_river_path(
 	max_spacing_px: float = 6.0
 ) -> PackedVector2Array:
 	var source := _coerce_points(river.get("points", []))
-	if source.size() < 3:
+	if source.size() < 3 or str(river.get("source_kind", "")) == SOURCE_PROCEDURAL_HYDROLOGY:
 		return source.duplicate()
 	var result := PackedVector2Array()
 	var safe_size := Vector2(maxi(visual_size.x, 1), maxi(visual_size.y, 1))
