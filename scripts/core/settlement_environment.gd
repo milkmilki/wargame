@@ -2,6 +2,7 @@ class_name SettlementEnvironment
 extends RefCounted
 ## Deterministic climate, followed by optional terrain hydrology and water support.
 const VERSION := "environment_v1.7"
+const RainfallTransport = preload("res://scripts/core/rainfall_transport.gd")
 const ELEVATION_KM := 6.2
 const RAIN_BARRIER_START_KM := 2.5
 const RAIN_BARRIER_FULL_KM := 3.5
@@ -252,85 +253,7 @@ static func _sea_distance(land: PackedByteArray, size: Vector2i, aspect: float) 
 	return result
 
 static func _rainfall(heights: PackedFloat32Array, land: PackedByteArray, size: Vector2i, latitudes: PackedFloat32Array, aspect: float) -> PackedFloat32Array:
-	var result := _field(land.size())
-	var seasonal := _field(land.size())
-	var water_mask := PackedByteArray()
-	water_mask.resize(land.size())
-	for i in range(land.size()):
-		water_mask[i] = 1 - land[i]
-	# Offshore distance is a local water-width proxy. A narrow channel cannot
-	# reset a parcel to ocean humidity after a single raster cell.
-	var offshore := _sea_distance(water_mask, size, aspect)
-	var rain_efficiency := _field(size.y)
-	var summer_strength := _field(size.y)
-	for y in range(size.y):
-		var latitude := absf(latitudes[y])
-		# Smooth subtropical subsidence, with no region names or exclusion masks.
-		rain_efficiency[y] = 1.0 - 0.82 * exp(-pow((latitude - 27.0) / 7.0, 2.0))
-		# In low latitudes easterly transport is already the prevailing term.
-		# Do not count it again at full strength as an extra wet season; the
-		# seasonal reversal grows toward the temperate transition, then fades.
-		summer_strength[y] = smoothstep(18.0, 30.0, latitude) * (1.0 - smoothstep(40.0, 50.0, latitude))
-	# Four bounded advection sweeps. Latitude weights vary continuously, so no
-	# artificial horizontal climate seam appears where prevailing winds change.
-	for step in [Vector2i.RIGHT, Vector2i.LEFT, Vector2i.UP, Vector2i.DOWN]:
-		var horizontal: bool = step.x != 0
-		var positive: bool = step.x + step.y > 0
-		var line_count: int = size.y if horizontal else size.x
-		var line_length: int = size.x if horizontal else size.y
-		var step_length: float = aspect / size.x if horizontal else 1.0 / size.y
-		var recharge := 1.0 - exp(-step_length / 0.08)
-		var retention := exp(-step_length)
-		var humidity := _field(line_count)
-		humidity.fill(0.25)
-		for n in range(line_length):
-			var offset: int = n if positive else line_length - 1 - n
-			var next_humidity := _field(line_count)
-			for line in range(line_count):
-				var x: int = offset if horizontal else line
-				var y: int = line if horizontal else offset
-				var i := y * size.x + x
-				# Lateral mixing prevents cardinal wind sweeps from painting hard
-				# stripes behind coastline corners. Edges reflect, never add ocean.
-				var moisture := humidity[line] * 0.6 + humidity[maxi(line - 1, 0)] * 0.2 + humidity[mini(line + 1, line_count - 1)] * 0.2
-				var westerly := smoothstep(25.0, 40.0, absf(latitudes[y]))
-				var weight: float
-				if horizontal:
-					weight = lerpf(0.20, 0.50, westerly) if positive else lerpf(0.50, 0.20, westerly)
-				else:
-					var poleward: bool = (step.y < 0) == (latitudes[y] >= 0.0)
-					weight = 0.25 if poleward else 0.05
-				if land[i] == 0:
-					var breadth := smoothstep(0.0, 0.08, offshore[i])
-					next_humidity[line] = moisture + (1.0 - moisture) * recharge * breadth
-					continue
-				# Low/mid-altitude terrain transports moisture without an orographic
-				# deduction. Only mountains around 3000m become an effective barrier;
-				# a smooth transition avoids a sharp rainfall seam at one elevation.
-				var elevation_km := heights[i] * ELEVATION_KM
-				var barrier := smoothstep(RAIN_BARRIER_START_KM, RAIN_BARRIER_FULL_KM, elevation_km)
-				var capacity := exp(-elevation_km * barrier * 0.8)
-				var condensation := maxf(moisture - capacity, 0.0)
-				result[i] += weight * (moisture * 0.95 * rain_efficiency[y] + condensation * 2.0)
-				# A moist growing season can support settlements even when the
-				# prevailing annual flow is dry. Only actual transported water
-				# activates this support; subtropical latitude alone never does.
-				var warm_onshore: bool = (horizontal and not positive) or (not horizontal and ((step.y < 0) == (latitudes[y] >= 0.0)))
-				if warm_onshore:
-					var available := moisture - condensation
-					# Poleward seasonal transport is weaker than the main moist
-					# easterly flow; it must not overwhelm the dry subtropical belt.
-					var seasonal_flow := 1.0 if horizontal else 0.35
-					var summer_rain := available * smoothstep(0.35, 0.65, available) * 0.95 * summer_strength[y] * seasonal_flow
-					seasonal[i] = maxf(seasonal[i], summer_rain)
-				# Broad weather systems reach inland plains before losing all water.
-				next_humidity[line] = (moisture - condensation) * retention
-			humidity = next_humidity
-
-	for i in range(result.size()):
-		result[i] = maxf(result[i], seasonal[i])
-	return result
-
+	return RainfallTransport.build(heights,land,size,latitudes,aspect)
 
 ## Route flats toward an existing lower outlet, but retain genuinely closed basins.
 ## Every downstream edge decreases (height, flat-rank), so accumulation is acyclic.

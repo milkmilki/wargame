@@ -1,0 +1,516 @@
+{
+  "format": "atlas-monsoon-evidence-v1",
+  "date": "2026-10-09",
+  "seed": 1,
+  "scene": "res://atlas_earth_preview.tscn",
+  "rainfall_model": "legacy_monsoon_global_v1",
+  "observed_climate": false,
+  "viewport": [
+    2048,
+    1024
+  ],
+  "renderer": "OpenGL Compatibility",
+  "gpu": "AMD Radeon RX 7600",
+  "screenshot_postprocessing": false,
+  "frozen_inputs": "real elevation/water, spherical mesh, temperature, seed=1, city threshold > 1, province area=750",
+  "before_events": [
+    {
+      "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+      "city_threshold": 1.0,
+      "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+      "code_version": "atlas-native-port-v1",
+      "elapsed_ms": 20,
+      "event": "start",
+      "godot": {
+        "build": "official",
+        "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+        "hex": 263937,
+        "major": 4,
+        "minor": 7,
+        "patch": 1,
+        "status": "stable",
+        "string": "4.7.1-stable (official)",
+        "timestamp": 0
+      },
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "source_fingerprint": "a8a8f6cfbdf1f78d48ea05f13ac87d0cfdbf68c248daeba8112c4e15b942d42c",
+      "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 49,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "真实地球高程与海岸",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 169,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "球面网格与真实高程取样",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 3709,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地球气候、洋流与海冰（模型计算）",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 7539,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "真实地形排水与环境供水",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 7612,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "宜居度与省份",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 8578,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "陆上道路",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 8876,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "全球栅格与浮冰",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 27410,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地形符号规划",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 28196,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 16244,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地理名称与标注路径",
+      "world_index": 1
+    },
+    {
+      "cells": 33940,
+      "cities": 602,
+      "elapsed_ms": 53721,
+      "event": "ready",
+      "model": "native_earth",
+      "options": {
+        "city_threshold": 1.0,
+        "river_usage": "environment_only",
+        "road_model": "civ-atlas-103afd3-land-v1",
+        "terrain_model": "earth",
+        "visual_model": "atlas-handdrawn-v1"
+      },
+      "params": {
+        "cells": 36000,
+        "rainfall": 1,
+        "seed": 1,
+        "temperature": 0,
+        "terrain_model": "earth",
+        "terrain_source": {
+          "bounds": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+          ],
+          "date": "2026-10-09",
+          "elevation_encoding": "signed-i16-little-endian-gzip",
+          "elevation_scale_m": 0.5,
+          "format": "atlas-earth-surface-v1",
+          "height": 1800.0,
+          "projection": "EPSG:4326 equirectangular",
+          "registration": "pixel-center",
+          "relief_file": "earth_relief_06m.i16.gz",
+          "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+          "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+          "row_order": "north-to-south",
+          "runtime": "native Godot; no Python dependency",
+          "sources": [
+            {
+              "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+              "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+              "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+              "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+            },
+            {
+              "license": "public domain",
+              "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+            },
+            {
+              "license": "public domain",
+              "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+            }
+          ],
+          "water_classes": {
+            "lake": 2.0,
+            "land": 0.0,
+            "ocean": 1.0
+          },
+          "water_file": "earth_water_06m.u8.gz",
+          "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+          "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+          "width": 3600.0
+        }
+      },
+      "pid": 16244,
+      "regions": 661,
+      "roads": 654,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "timing": {
+        "glyphs_ms": 402,
+        "places_ms": 686,
+        "raster_ms": 18519,
+        "regions_ms": 954,
+        "roads_ms": 319,
+        "total_ms": 28830,
+        "world_ms": 7559
+      },
+      "view_ms": 24508,
+      "world_index": 1
+    }
+  ],
+  "after_events": [
+    {
+      "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+      "city_threshold": 1.0,
+      "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+      "code_version": "atlas-native-port-v1",
+      "elapsed_ms": 21,
+      "event": "start",
+      "godot": {
+        "build": "official",
+        "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+        "hex": 263937,
+        "major": 4,
+        "minor": 7,
+        "patch": 1,
+        "status": "stable",
+        "string": "4.7.1-stable (official)",
+        "timestamp": 0
+      },
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "source_fingerprint": "a13fef6700ef488a438d11875de06998d1a76034e2eb6190f34cd802363ed382",
+      "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 80,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "真实地球高程与海岸",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 184,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "球面网格与真实高程取样",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 3751,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地球气候、洋流与海冰（模型计算）",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 5967,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "复用季风模型：海洋水汽输送与高山雨影",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 9447,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "真实地形排水与环境供水",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 9520,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "宜居度与省份",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 10416,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "陆上道路",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 10752,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "全球栅格与浮冰",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 29344,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地形符号规划",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 30153,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 24676,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地理名称与标注路径",
+      "world_index": 1
+    },
+    {
+      "cells": 33940,
+      "cities": 624,
+      "elapsed_ms": 55466,
+      "event": "ready",
+      "model": "native_earth",
+      "options": {
+        "city_threshold": 1.0,
+        "rainfall_model": "legacy_monsoon_global_v1",
+        "river_usage": "environment_only",
+        "road_model": "civ-atlas-103afd3-land-v1",
+        "terrain_model": "earth",
+        "visual_model": "atlas-handdrawn-v1"
+      },
+      "params": {
+        "cells": 36000,
+        "rainfall": 1,
+        "rainfall_model": "legacy_monsoon_global_v1",
+        "rainfall_transport": {
+          "distance_reference_km": 4000.0,
+          "grid": [
+            720,
+            360
+          ],
+          "horizontal_spinup_cycles": 3,
+          "mm_per_effective_unit": 2000.0,
+          "observed_climate": false,
+          "seasonal_combine": "max(annual,seasonal)",
+          "source": "SettlementEnvironment environment_v1.7",
+          "version": "legacy_monsoon_global_v1",
+          "wrap_x": true
+        },
+        "seed": 1,
+        "temperature": 0,
+        "terrain_model": "earth",
+        "terrain_source": {
+          "bounds": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+          ],
+          "date": "2026-10-09",
+          "elevation_encoding": "signed-i16-little-endian-gzip",
+          "elevation_scale_m": 0.5,
+          "format": "atlas-earth-surface-v1",
+          "height": 1800.0,
+          "projection": "EPSG:4326 equirectangular",
+          "registration": "pixel-center",
+          "relief_file": "earth_relief_06m.i16.gz",
+          "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+          "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+          "row_order": "north-to-south",
+          "runtime": "native Godot; no Python dependency",
+          "sources": [
+            {
+              "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+              "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+              "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+              "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+            },
+            {
+              "license": "public domain",
+              "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+            },
+            {
+              "license": "public domain",
+              "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+            }
+          ],
+          "water_classes": {
+            "lake": 2.0,
+            "land": 0.0,
+            "ocean": 1.0
+          },
+          "water_file": "earth_water_06m.u8.gz",
+          "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+          "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+          "width": 3600.0
+        }
+      },
+      "pid": 24676,
+      "regions": 682,
+      "roads": 682,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "timing": {
+        "glyphs_ms": 385,
+        "places_ms": 651,
+        "raster_ms": 18588,
+        "regions_ms": 902,
+        "roads_ms": 336,
+        "total_ms": 30750,
+        "world_ms": 9460
+      },
+      "view_ms": 24336,
+      "world_index": 1
+    }
+  ],
+  "images": [
+    {
+      "sha256": "2693529dc04d925dad7bb3f6472c1f0da6028b19efe3eecb286eda092d60ae2c",
+      "file": "after-china.png",
+      "bytes": 1672935
+    },
+    {
+      "sha256": "182c0c4273f1718498e50c57471ff32246a171e10c357f64f8c38c0e99ca4c86",
+      "file": "after-world.png",
+      "bytes": 3051273
+    },
+    {
+      "sha256": "da9acd195a057197900ca8462d9c34eb3fae3b15affb30e22a3bb89e2ebe6eb5",
+      "file": "before-china.png",
+      "bytes": 1722982
+    },
+    {
+      "sha256": "5d2ca40f382fc96cc35e20620aaeab09e3a2ede8fae8fc4625ef260007e2fddd",
+      "file": "before-world.png",
+      "bytes": 3436984
+    },
+    {
+      "sha256": "e67077cece9ad4f2493fc11a3b007912f5dc014aafc22f8a9d11edaaeb4ce108",
+      "file": "moisture-comparison.png",
+      "bytes": 195173
+    }
+  ],
+  "proof": [
+    {
+      "sha256": "e93a3c2ed119d27c75fca47c6f51ba9ee5a111850089068f465444d06a09251b",
+      "file": "atlas-monsoon-shared.txt"
+    },
+    {
+      "sha256": "7c5520e37fa1e5d35d74129669497a7a7da4af949fefeb6b17f30a0e66af082c",
+      "file": "atlas-earth-monsoon.txt"
+    },
+    {
+      "sha256": "d1620a3afe66d9f909c436377d43b601e652ab9c37c7be278d15cebca6ca5774",
+      "file": "atlas-earth-preview.txt"
+    },
+    {
+      "sha256": "a198d9e2ad1aca2a5078351c7ba90e9c7326d1d6e210a68586a7c8f8fbab7e8e",
+      "file": "atlas-earth_routes-final.txt"
+    },
+    {
+      "sha256": "4154f7715ce07a68bdb6bed9260fe7e9f7de2279c615aa4e2a478a3c047fe06b",
+      "file": "atlas-earth-planet-regression.txt"
+    },
+    {
+      "sha256": "eb68cdf49316e1a169d3d0f484797c9906445937550128479364f802fb85358c",
+      "file": "atlas-monsoon-ui.txt"
+    },
+    {
+      "sha256": "dc77a5c138dcd37b63611249ba0820568a54f775c796b9f8395b89265cb98024",
+      "file": "monsoon-check-0.txt"
+    },
+    {
+      "sha256": "c2378b3a489d1882f94a592556b5976ff113b3f94e6d6deab8c30a3a64c69faf",
+      "file": "monsoon-check-1.txt"
+    },
+    {
+      "sha256": "4e64a2133666b9de80f8b2dc31d22d54b0280b17d2cfff4b7cda34149b23b3e5",
+      "file": "atlas-monsoon-metrics.txt"
+    }
+  ],
+  "metrics_sha256": "dee6783f1be568c1ac65eba0e980eedc2e262313bd08058c82b9a8cb5dac1fab",
+  "known_limitations": [
+    "Effective moisture, not observed annual mm; North China too wet relative to South China; weak India seasonal support",
+    "Existing SubViewport GPU resource warnings at renderer teardown"
+  ]
+}

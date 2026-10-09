@@ -1,0 +1,12 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+BORDERS_COMPARE left errors=0
+BORDERS_COMPARE right errors=0
+BORDERS_COMPARE n0 errors=0
+BORDERS_COMPARE n1 errors=0
+BORDERS_COMPARE start errors=0
+BORDERS_COMPARE nodeDeg errors=0
+BORDERS_COMPARE incStart errors=0
+BORDERS_COMPARE inc errors=0
+BORDERS_COMPARE pts errors=0
+ATLAS_NATIVE_BORDERS failures=0

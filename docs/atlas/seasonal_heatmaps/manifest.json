@@ -1,0 +1,312 @@
+{
+  "source": {
+    "bounds": [
+      -180,
+      -90,
+      180,
+      90
+    ],
+    "export_ms": 11811,
+    "exporter_sha256": "164fcd6578d91a629b6dbc00caaea3479b82a3f12ac804be252ed482bfd26155",
+    "format": "atlas-seasonal-heatmaps-v1",
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "height": 2048,
+    "mesh_cells": 33940,
+    "months": [
+      [
+        12,
+        1,
+        2
+      ],
+      [
+        3,
+        4,
+        5
+      ],
+      [
+        6,
+        7,
+        8
+      ],
+      [
+        9,
+        10,
+        11
+      ]
+    ],
+    "ocean_policy": "masked; no simulated ocean rainfall output",
+    "params": {
+      "cells": 36000,
+      "climate_water_balance": {
+        "evaporation": "FAO-56 Hargreaves; estimated 8-14 C diurnal range",
+        "observed_soils": false,
+        "observed_temperature_range": false,
+        "rain_distribution": "uniform monthly within each quarter",
+        "rainfed_only": true,
+        "seasonal_temperature_amplitude_C": 12.0,
+        "soil_spinup_years": 2,
+        "soil_storage_mm": 150.0,
+        "version": "climate_capacity_v3"
+      },
+      "rainfall": 1,
+      "rainfall_model": "seasonal_circulation_v3",
+      "rainfall_transport": {
+        "annual_combine": "arithmetic mean of four seasonal rates",
+        "cold_layer_height_m": 1800.0,
+        "cold_layer_inland_scale_km": 900.0,
+        "grid": [
+          360,
+          180
+        ],
+        "observed_climate": false,
+        "orographic_gain": 0.16,
+        "rain_scale": 70000.0,
+        "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+        "recycling_fraction": 0.25,
+        "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion",
+        "season_heating": [
+          -0.85,
+          0.4,
+          0.85,
+          -0.4
+        ],
+        "seasons": [
+          "DJF",
+          "MAM",
+          "JJA",
+          "SON"
+        ],
+        "spinup_steps": 100,
+        "transport_step_km": 160.0,
+        "version": "seasonal_circulation_v3",
+        "water_width_km": 120.0,
+        "wind_coordinates": {
+          "seasonal_u": "east",
+          "seasonal_v": "north",
+          "windX": "east",
+          "windY": "south"
+        }
+      },
+      "seed": 1,
+      "settlement_model": "climate_capacity_v3",
+      "temperature": 0,
+      "terrain_model": "earth",
+      "terrain_source": {
+        "bounds": [
+          -180.0,
+          -90.0,
+          180.0,
+          90.0
+        ],
+        "date": "2026-10-09",
+        "elevation_encoding": "signed-i16-little-endian-gzip",
+        "elevation_scale_m": 0.5,
+        "format": "atlas-earth-surface-v1",
+        "height": 1800.0,
+        "projection": "EPSG:4326 equirectangular",
+        "registration": "pixel-center",
+        "relief_file": "earth_relief_06m.i16.gz",
+        "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+        "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+        "row_order": "north-to-south",
+        "runtime": "native Godot; no Python dependency",
+        "sources": [
+          {
+            "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+            "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+            "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+            "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+          },
+          {
+            "license": "public domain",
+            "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+            "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+          },
+          {
+            "license": "public domain",
+            "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+            "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+          }
+        ],
+        "water_classes": {
+          "lake": 2.0,
+          "land": 0.0,
+          "ocean": 1.0
+        },
+        "water_file": "earth_water_06m.u8.gz",
+        "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+        "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+        "width": 3600.0
+      }
+    },
+    "pid": 24460,
+    "projection": "equirectangular",
+    "rain_solver_grid": [
+      360,
+      180
+    ],
+    "rainfall_model": "seasonal_circulation_v3",
+    "rainfall_units": "estimated mm per quarter; source annualized rates divided by four",
+    "row_order": "north_to_south",
+    "seasons": [
+      "DJF",
+      "MAM",
+      "JJA",
+      "SON"
+    ],
+    "seed": 1,
+    "settlement_model": "climate_capacity_v3",
+    "snapshot_sha256": "c59894047d1d7954dfcb061b04eb2d01fd63090b8806ecd9acbd8a0b5e6f1c70",
+    "source_snapshot": "res://.dbg/atlas-native-generated-earth-1.bin",
+    "temperature_formula_sha256": "83c526f2e8d22d24fa854070855c78056164847b2acb7fe8663f5fedce08ff23",
+    "temperature_source": "annual node temperature plus latitude-scaled seasonal amplitude; not an independent seasonal atmosphere solve",
+    "temperature_units": "C",
+    "terrain_model": "earth",
+    "validation": {
+      "max_climate_factor_error": 2.98023223876953e-08,
+      "max_precipitation_sum_error": 0.001220703125,
+      "max_temperature_mean_error": 9.5367431640625e-07,
+      "projection_holes": 0
+    },
+    "width": 4096
+  },
+  "validation": {
+    "land_sample_coverage_fraction": 0.9935328393327583,
+    "max_interpolated_temperature_mean_error_C": 7.62939453125e-06,
+    "max_interpolated_quarter_sum_error_mm": 0.00390625,
+    "all_fields_finite_on_valid_land": true,
+    "all_precipitation_nonnegative": true
+  },
+  "coastline": "current Natural Earth 6 arcminute mask; coastline geometry sampled every 4 display pixels",
+  "projection_interpolation": "native spherical volumetric triangle weights, land-only normalized; no climate rerun",
+  "color_scales": {
+    "temperature_C": [
+      -50,
+      35
+    ],
+    "rainfall_quarter_mm": [
+      0,
+      3200
+    ],
+    "rainfall_norm": "symlog, linear below 20 mm, logarithmic base 2 above"
+  },
+  "temperature_note": "do not interpret as seasonal SST or observed temperature",
+  "plotter_sha256": "decbdc7c9d1a8d799559e439614f30e6a37dcc5362b562c098e2ae4651f47f0a",
+  "files": [
+    {
+      "file": "rainfall-djf.png",
+      "bytes": 2080499,
+      "sha256": "751d97efadf5d452304688c6a8d272b3993857dfb755857d2d721cd7c72b60d3",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "rainfall-four-seasons.pdf",
+      "bytes": 2859555,
+      "sha256": "1ab53c444d078ec003592485e52bb0c11bf5e5421ed7b38793bfd7d4afb526de"
+    },
+    {
+      "file": "rainfall-four-seasons.png",
+      "bytes": 3981552,
+      "sha256": "1d7e3f9ee879bcafd49015c7e7b06129d6d61df8084e588c135aaaf2b290f97d",
+      "pixels": [
+        6144,
+        3584
+      ]
+    },
+    {
+      "file": "rainfall-jja.png",
+      "bytes": 2208963,
+      "sha256": "90996f55322319dbf396525b0404559d503f979ca72649e240de8db96e8abded",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "rainfall-mam.png",
+      "bytes": 2188973,
+      "sha256": "30cbe52d8710a91adf235ca24057fcf18f116dbd6c6777aa82e63688b80f4ced",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "rainfall-son.png",
+      "bytes": 2132509,
+      "sha256": "c6f382ac6a2c90f39018b18489572ab76c0bb1ae1673ace6cab3cd067054c275",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "seasonal_fields.npz",
+      "bytes": 73217997,
+      "sha256": "4bc19f011ae97d32a94821cb674ce403485d16aaeddf46dad83ba98d209f34b4"
+    },
+    {
+      "file": "temperature-djf.png",
+      "bytes": 1676508,
+      "sha256": "434fac044e21f28096c982ef203c19d22b21a70a389ca7019416c8cf147bdf93",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "temperature-four-seasons.pdf",
+      "bytes": 1523699,
+      "sha256": "f9548b95d2b1c6ae7e2ecde8ad244f4a928f2e9e9da6b34b7237bd42b953de74"
+    },
+    {
+      "file": "temperature-four-seasons.png",
+      "bytes": 3241784,
+      "sha256": "2c7ccceec56d7169350f7f66b2dcb3d0a4779a8ae3f6ec7229dbc7e9328731b4",
+      "pixels": [
+        6144,
+        3584
+      ]
+    },
+    {
+      "file": "temperature-jja.png",
+      "bytes": 1664437,
+      "sha256": "bd7e2491ae4c45254a8a797fb784a80c2722b8fc82e3ab4173f1c38a6ab12932",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "temperature-mam.png",
+      "bytes": 1667476,
+      "sha256": "b090c90166ff29f8d4c70beb7ec541d343427155bc66bd887271e15075b69b0a",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "temperature-son.png",
+      "bytes": 1674452,
+      "sha256": "6615cf8390e943e42e0acf96445bc509d233723a919f7933d0389315e7620db0",
+      "pixels": [
+        5120,
+        2880
+      ]
+    }
+  ]
+}

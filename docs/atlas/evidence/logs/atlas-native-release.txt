@@ -1,0 +1,9 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+OpenGL API 3.3.0 Core Profile Context 26.8.1.260810 - Compatibility - Using Device: ATI Technologies Inc. - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS ["--atlas-seed=1", "--atlas-labels", "--atlas-capture=res://.dbg/atlas-native-reference/godot-native-labels-1.png"] capture=res://.dbg/atlas-native-reference/godot-native-labels-1.png
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-11716-1791490059-1.jsonl
+ATLAS_CAPTURE_PREPARE
+ATLAS_CAPTURE_DRAW
+ATLAS_CAPTURE_READ
+ATLAS_NATIVE_CAPTURE res://.dbg/atlas-native-reference/godot-native-labels-1.png

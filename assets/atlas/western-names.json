@@ -1,0 +1,4369 @@
+{
+  "source": "civ-atlas 103afd3, AGPL-3.0-only",
+  "styles": [
+    {
+      "id": "imperial",
+      "label": "帝国(拉丁风)",
+      "desc": "古罗马式的庄重感,多以 -ia、-ona、-entia 收尾,如 阿尔多里亚、塞雷诺纳",
+      "tr": {},
+      "stems": [
+        {
+          "l": "ald"
+        },
+        {
+          "l": "aur"
+        },
+        {
+          "l": "val"
+        },
+        {
+          "l": "cast"
+        },
+        {
+          "l": "cor"
+        },
+        {
+          "l": "ser"
+        },
+        {
+          "l": "ver"
+        },
+        {
+          "l": "mer"
+        },
+        {
+          "l": "tor"
+        },
+        {
+          "l": "lun"
+        },
+        {
+          "l": "sol"
+        },
+        {
+          "l": "ner"
+        },
+        {
+          "l": "ter"
+        },
+        {
+          "l": "vic"
+        },
+        {
+          "l": "cal"
+        },
+        {
+          "l": "ost"
+        },
+        {
+          "l": "ard"
+        },
+        {
+          "l": "arg"
+        },
+        {
+          "l": "luc"
+        },
+        {
+          "l": "fal"
+        },
+        {
+          "l": "tir"
+        },
+        {
+          "l": "ven"
+        },
+        {
+          "l": "sal"
+        },
+        {
+          "l": "bel"
+        },
+        {
+          "l": "lav"
+        },
+        {
+          "l": "cap"
+        },
+        {
+          "l": "vel"
+        },
+        {
+          "l": "sev"
+        },
+        {
+          "l": "tar"
+        },
+        {
+          "l": "fer"
+        },
+        {
+          "l": "pal"
+        },
+        {
+          "l": "cel"
+        },
+        {
+          "l": "clar"
+        },
+        {
+          "l": "sab"
+        },
+        {
+          "l": "vesp"
+        },
+        {
+          "l": "aquil"
+        },
+        {
+          "l": "cir"
+        },
+        {
+          "l": "lum"
+        },
+        {
+          "l": "orv"
+        },
+        {
+          "l": "tib"
+        },
+        {
+          "l": "fab"
+        },
+        {
+          "l": "corv"
+        },
+        {
+          "l": "drus"
+        }
+      ],
+      "mids": [
+        {
+          "l": "en"
+        },
+        {
+          "l": "or"
+        },
+        {
+          "l": "an"
+        },
+        {
+          "l": "er"
+        },
+        {
+          "l": "al"
+        },
+        {
+          "l": "in"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "el"
+        },
+        {
+          "l": "is"
+        },
+        {
+          "l": "ic"
+        },
+        {
+          "l": "it"
+        },
+        {
+          "l": "iv"
+        },
+        {
+          "l": "on"
+        }
+      ],
+      "link": "e",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "oria"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "enia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "avia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "icia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "entia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "aria"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "onia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ania"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "eria"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "elia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "antia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "inia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "uria"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ora"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ea"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.25
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "ona"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "enna"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ano"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ino"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "era"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ica"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ella"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ara"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ola"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "ine"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "or"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ic"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.15
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "ian"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "ine"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "or"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "o"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "on"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "er"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "us"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ina"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ica"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ana"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "aria"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        }
+      },
+      "epithet": {
+        "chance": 0.12,
+        "sea": [
+          "风暴海|Sea of Storms",
+          "迷雾海|Sea of Mists",
+          "寂静海|Silent Sea",
+          "晨曦海|Dawn Sea",
+          "暮光海|Twilight Sea",
+          "群星海|Sea of Stars",
+          "翡翠海|Emerald Sea",
+          "琥珀海|Amber Sea",
+          "珍珠海|Pearl Sea",
+          "落日海|Sunset Sea",
+          "帝王海|Imperial Sea",
+          "金冠海|Sea of Crowns"
+        ],
+        "mountain": [
+          "龙脊山脉|Dragonspine Mountains",
+          "灰岩山脉|Greystone Mountains",
+          "铁脊山脉|Ironspine Mountains",
+          "白峰山脉|Whitepeak Mountains",
+          "雷鸣山脉|Thunder Mountains",
+          "鹰巢山脉|Eyrie Mountains",
+          "断剑山脉|Brokenblade Mountains",
+          "巨人山脉|Giants’ Mountains",
+          "鹰旗山脉|Eaglebanner Mountains"
+        ]
+      }
+    },
+    {
+      "id": "kingdom",
+      "label": "王国(英法风)",
+      "desc": "中世纪骑士王国,城镇多带 -顿、-维尔、-堡、-福德,如 卡斯特维尔、雷文福德",
+      "tr": {},
+      "stems": [
+        {
+          "l": "ash"
+        },
+        {
+          "l": "bran"
+        },
+        {
+          "l": "wen"
+        },
+        {
+          "l": "bel"
+        },
+        {
+          "l": "rav"
+        },
+        {
+          "l": "hart"
+        },
+        {
+          "l": "mor"
+        },
+        {
+          "l": "pen"
+        },
+        {
+          "l": "lan"
+        },
+        {
+          "l": "car"
+        },
+        {
+          "l": "ald"
+        },
+        {
+          "l": "her"
+        },
+        {
+          "l": "ast"
+        },
+        {
+          "l": "ros"
+        },
+        {
+          "l": "stan"
+        },
+        {
+          "l": "ever"
+        },
+        {
+          "l": "wyn"
+        },
+        {
+          "l": "gil"
+        },
+        {
+          "l": "kel"
+        },
+        {
+          "l": "dun"
+        },
+        {
+          "l": "hal"
+        },
+        {
+          "l": "wil"
+        },
+        {
+          "l": "ard"
+        },
+        {
+          "l": "cal"
+        },
+        {
+          "l": "dor"
+        },
+        {
+          "l": "fen"
+        },
+        {
+          "l": "gar"
+        },
+        {
+          "l": "lor"
+        },
+        {
+          "l": "nor"
+        },
+        {
+          "l": "ren"
+        },
+        {
+          "l": "tam"
+        },
+        {
+          "l": "ver"
+        },
+        {
+          "l": "cor"
+        },
+        {
+          "l": "dar"
+        },
+        {
+          "l": "ken"
+        },
+        {
+          "l": "lyn"
+        },
+        {
+          "l": "mer"
+        },
+        {
+          "l": "sel"
+        },
+        {
+          "l": "bri"
+        }
+      ],
+      "mids": [
+        {
+          "l": "er"
+        },
+        {
+          "l": "en"
+        },
+        {
+          "l": "el"
+        },
+        {
+          "l": "an"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "in"
+        }
+      ],
+      "link": "e",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "land",
+                "gen": false,
+                "zh": "兰"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "mere",
+                "gen": false,
+                "zh": "米尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wen"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "or"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dell",
+                "gen": false,
+                "zh": "戴尔"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.4
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "ton",
+                "gen": false,
+                "zh": "顿"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "ford",
+                "gen": false,
+                "zh": "福德"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "wick",
+                "gen": false,
+                "zh": "威克"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "bury",
+                "gen": false,
+                "zh": "伯里"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ville",
+                "gen": false,
+                "zh": "维尔"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "mont",
+                "gen": false,
+                "zh": "蒙特"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "bourg",
+                "gen": false,
+                "zh": "堡"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "field",
+                "gen": false,
+                "zh": "菲尔德"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "stead",
+                "gen": false,
+                "zh": "斯特德"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "worth",
+                "gen": false,
+                "zh": "沃思"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "gate",
+                "gen": false,
+                "zh": "盖特"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "mouth",
+                "gen": false,
+                "zh": "茅斯"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "chester",
+                "gen": false,
+                "zh": "切斯特"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dale",
+                "gen": false,
+                "zh": "代尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "more",
+                "gen": false,
+                "zh": "莫尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "by",
+                "gen": false,
+                "zh": "比"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "port",
+                "gen": true,
+                "zh": "港"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "haven",
+                "gen": false,
+                "zh": "黑文"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "well",
+                "gen": false,
+                "zh": "韦尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "bridge",
+                "gen": false,
+                "zh": "布里奇"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wood",
+                "gen": false,
+                "zh": "伍德"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "brook",
+                "gen": false,
+                "zh": "布鲁克"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "castle",
+                "gen": false,
+                "zh": "卡斯尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "holt",
+                "gen": false,
+                "zh": "霍尔特"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ley",
+                "gen": false,
+                "zh": "利"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.4
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "ine"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ian"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "or"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wyn"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ell"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "ian"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "or"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wyn"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "el"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.15
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "on"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ey"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "el"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ow"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "shire",
+                "gen": true,
+                "zh": "郡"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "land",
+                "gen": false,
+                "zh": "兰"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "mark",
+                "gen": false,
+                "zh": "马克"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dale",
+                "gen": false,
+                "zh": "代尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "moor",
+                "gen": false,
+                "zh": "莫尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wold",
+                "gen": false,
+                "zh": "沃尔德"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        }
+      },
+      "epithet": {
+        "chance": 0.12,
+        "sea": [
+          "风暴海|Sea of Storms",
+          "迷雾海|Sea of Mists",
+          "寂静海|Silent Sea",
+          "晨曦海|Dawn Sea",
+          "暮光海|Twilight Sea",
+          "群星海|Sea of Stars",
+          "翡翠海|Emerald Sea",
+          "琥珀海|Amber Sea",
+          "珍珠海|Pearl Sea",
+          "落日海|Sunset Sea",
+          "狮心海|Lionheart Sea"
+        ],
+        "mountain": [
+          "龙脊山脉|Dragonspine Mountains",
+          "灰岩山脉|Greystone Mountains",
+          "铁脊山脉|Ironspine Mountains",
+          "白峰山脉|Whitepeak Mountains",
+          "雷鸣山脉|Thunder Mountains",
+          "鹰巢山脉|Eyrie Mountains",
+          "断剑山脉|Brokenblade Mountains",
+          "巨人山脉|Giants’ Mountains",
+          "王冠山脉|Crown Mountains"
+        ]
+      }
+    },
+    {
+      "id": "nordic",
+      "label": "北境(北欧风)",
+      "desc": "维京与冰原,常见 -海姆、-加德、-维克、-霍尔姆,如 斯卡尔海姆、拉夫维克",
+      "tr": {
+        "jAsY": true
+      },
+      "stems": [
+        {
+          "l": "skal"
+        },
+        {
+          "l": "ulf"
+        },
+        {
+          "l": "rav"
+        },
+        {
+          "l": "bjor"
+        },
+        {
+          "l": "jot"
+        },
+        {
+          "l": "vin"
+        },
+        {
+          "l": "sig"
+        },
+        {
+          "l": "ask"
+        },
+        {
+          "l": "eir"
+        },
+        {
+          "l": "grim"
+        },
+        {
+          "l": "hald"
+        },
+        {
+          "l": "kol"
+        },
+        {
+          "l": "lund"
+        },
+        {
+          "l": "nor"
+        },
+        {
+          "l": "osk"
+        },
+        {
+          "l": "ran"
+        },
+        {
+          "l": "sval"
+        },
+        {
+          "l": "tor"
+        },
+        {
+          "l": "vald"
+        },
+        {
+          "l": "brim"
+        },
+        {
+          "l": "dag"
+        },
+        {
+          "l": "gunn"
+        },
+        {
+          "l": "hrim"
+        },
+        {
+          "l": "isk"
+        },
+        {
+          "l": "ost"
+        },
+        {
+          "l": "rog"
+        },
+        {
+          "l": "skog"
+        },
+        {
+          "l": "stav"
+        },
+        {
+          "l": "trond"
+        },
+        {
+          "l": "varg"
+        },
+        {
+          "l": "hjal"
+        },
+        {
+          "l": "aud"
+        },
+        {
+          "l": "eid"
+        },
+        {
+          "l": "geir"
+        },
+        {
+          "l": "har"
+        },
+        {
+          "l": "jarn"
+        },
+        {
+          "l": "mund"
+        },
+        {
+          "l": "ragn"
+        },
+        {
+          "l": "sten"
+        }
+      ],
+      "mids": [
+        {
+          "l": "e"
+        },
+        {
+          "l": "a"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "en"
+        },
+        {
+          "l": "un"
+        }
+      ],
+      "link": "e",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "heim",
+                "gen": false,
+                "zh": "海姆"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "gard",
+                "gen": false,
+                "zh": "加德"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "land",
+                "gen": false,
+                "zh": "兰"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "mark",
+                "gen": false,
+                "zh": "马克"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "rike",
+                "gen": false,
+                "zh": "里克"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "vik",
+                "gen": false,
+                "zh": "维克"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "holm",
+                "gen": false,
+                "zh": "霍尔姆"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "by",
+                "gen": false,
+                "zh": "比"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "stad",
+                "gen": false,
+                "zh": "斯塔德"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "havn",
+                "gen": true,
+                "zh": "港"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "borg",
+                "gen": false,
+                "zh": "堡"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "heim",
+                "gen": false,
+                "zh": "海姆"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "sund",
+                "gen": false,
+                "zh": "松德"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "nes",
+                "gen": false,
+                "zh": "内斯"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dal",
+                "gen": false,
+                "zh": "达尔"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ur"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": ""
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": ""
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "mark",
+                "gen": false,
+                "zh": "马克"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "land",
+                "gen": false,
+                "zh": "兰"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "heim",
+                "gen": false,
+                "zh": "海姆"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dal",
+                "gen": false,
+                "zh": "达尔"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "fjord",
+                "gen": true,
+                "zh": "峡湾"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        }
+      },
+      "epithet": {
+        "chance": 0.15,
+        "sea": [
+          "寒霜海|Frost Sea",
+          "冰牙海|Icefang Sea",
+          "鲸歌海|Whalesong Sea",
+          "灰浪海|Greywave Sea",
+          "风暴海|Sea of Storms",
+          "极光海|Aurora Sea"
+        ],
+        "mountain": [
+          "霜巨人山脉|Frostgiant Mountains",
+          "冰牙山脉|Icefang Mountains",
+          "雷鸣山脉|Thunder Mountains",
+          "巨人之脊|Giant’s Spine",
+          "白狼山脉|Whitewolf Mountains"
+        ]
+      }
+    },
+    {
+      "id": "slavic",
+      "label": "雪原(斯拉夫风)",
+      "desc": "东欧森林与雪原,城市多叫 -格勒、-斯克、-沃,如 别洛格勒、兹拉托沃",
+      "tr": {
+        "jAsY": true,
+        "table": {
+          "be": "别",
+          "de": "杰",
+          "te": "捷",
+          "ne": "涅",
+          "le": "列",
+          "re": "列",
+          "se": "谢",
+          "di": "季",
+          "ti": "季",
+          "cha": "恰",
+          "e": "叶",
+          "ye": "叶"
+        }
+      },
+      "stems": [
+        {
+          "l": "vol"
+        },
+        {
+          "l": "bel"
+        },
+        {
+          "l": "dar"
+        },
+        {
+          "l": "gor"
+        },
+        {
+          "l": "kras"
+        },
+        {
+          "l": "mil"
+        },
+        {
+          "l": "mir"
+        },
+        {
+          "l": "nov"
+        },
+        {
+          "l": "rad"
+        },
+        {
+          "l": "slav"
+        },
+        {
+          "l": "vlad"
+        },
+        {
+          "l": "yar"
+        },
+        {
+          "l": "zor"
+        },
+        {
+          "l": "bor"
+        },
+        {
+          "l": "dob"
+        },
+        {
+          "l": "lub"
+        },
+        {
+          "l": "sved"
+        },
+        {
+          "l": "tver"
+        },
+        {
+          "l": "yas"
+        },
+        {
+          "l": "zlat"
+        },
+        {
+          "l": "ost"
+        },
+        {
+          "l": "prav"
+        },
+        {
+          "l": "stan"
+        },
+        {
+          "l": "svet"
+        },
+        {
+          "l": "bog"
+        },
+        {
+          "l": "dub"
+        },
+        {
+          "l": "vel"
+        },
+        {
+          "l": "vis"
+        },
+        {
+          "l": "kol"
+        },
+        {
+          "l": "mor"
+        },
+        {
+          "l": "sev"
+        },
+        {
+          "l": "chern"
+        },
+        {
+          "l": "bran"
+        },
+        {
+          "l": "drag"
+        }
+      ],
+      "mids": [
+        {
+          "l": "o"
+        },
+        {
+          "l": "e"
+        },
+        {
+          "l": "a"
+        },
+        {
+          "l": "en"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "in"
+        }
+      ],
+      "link": "o",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "avia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ovia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ina"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ania"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ovina"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.4
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "grad",
+                "gen": false,
+                "zh": "格勒"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "gorod",
+                "gen": false,
+                "zh": "哥罗德"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "sk"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "ovo"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "evo"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ets"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ava"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "in"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ov"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ka"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "itsa"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "in"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ov"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ava"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ets"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ov"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "in"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ets"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "ava"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "na"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ets"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ina"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ovina"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "avia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "sk"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ovo"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        }
+      },
+      "epithet": {
+        "chance": 0.1,
+        "sea": [
+          "冰封海|Frozen Sea",
+          "雪狼海|Snowwolf Sea",
+          "寒鸦海|Jackdaw Sea"
+        ],
+        "mountain": [
+          "熊脊山脉|Bearspine Mountains",
+          "冰冠山脉|Icecrown Mountains",
+          "黑松山脉|Blackpine Mountains"
+        ]
+      }
+    },
+    {
+      "id": "hellenic",
+      "label": "群岛(希腊风)",
+      "desc": "爱琴海城邦与神话,常见 -斯、-波利斯、-亚,如 塞罗斯、卡利波利斯",
+      "tr": {},
+      "stems": [
+        {
+          "l": "ther"
+        },
+        {
+          "l": "kal"
+        },
+        {
+          "l": "ast"
+        },
+        {
+          "l": "mel"
+        },
+        {
+          "l": "ker"
+        },
+        {
+          "l": "pel"
+        },
+        {
+          "l": "kor"
+        },
+        {
+          "l": "lyk"
+        },
+        {
+          "l": "dor"
+        },
+        {
+          "l": "ith"
+        },
+        {
+          "l": "kyth"
+        },
+        {
+          "l": "myr"
+        },
+        {
+          "l": "phal"
+        },
+        {
+          "l": "ster"
+        },
+        {
+          "l": "lamp"
+        },
+        {
+          "l": "pyr"
+        },
+        {
+          "l": "tel"
+        },
+        {
+          "l": "syr"
+        },
+        {
+          "l": "thal"
+        },
+        {
+          "l": "zak"
+        },
+        {
+          "l": "xan"
+        },
+        {
+          "l": "oph"
+        },
+        {
+          "l": "kas"
+        },
+        {
+          "l": "pha"
+        },
+        {
+          "l": "lem"
+        },
+        {
+          "l": "mes"
+        },
+        {
+          "l": "ol"
+        },
+        {
+          "l": "eph"
+        },
+        {
+          "l": "kyr"
+        },
+        {
+          "l": "nis"
+        },
+        {
+          "l": "per"
+        },
+        {
+          "l": "ser"
+        },
+        {
+          "l": "thes"
+        },
+        {
+          "l": "tyr"
+        }
+      ],
+      "mids": [
+        {
+          "l": "o"
+        },
+        {
+          "l": "a"
+        },
+        {
+          "l": "e"
+        },
+        {
+          "l": "i"
+        },
+        {
+          "l": "on"
+        },
+        {
+          "l": "an"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "y"
+        }
+      ],
+      "link": "o",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "os"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "eia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ene"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "onia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "aia"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "polis",
+                "gen": false,
+                "zh": "波利斯"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "os"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ae"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "on"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ene"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ea"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "thos"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "kos"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ussa"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "os"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "on"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "as"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "es"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ys"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "ian"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "ean"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "on"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "os"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "os"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "on"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "es"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "as"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.15
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ika"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ene"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "onia"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.3
+        }
+      },
+      "mount": 0.5,
+      "epithet": {
+        "chance": 0.12,
+        "sea": [
+          "海妖海|Siren Sea",
+          "群岛海|Sea of Isles",
+          "晨曦海|Dawn Sea",
+          "珍珠海|Pearl Sea"
+        ],
+        "mountain": [
+          "众神山|Mount of the Gods",
+          "雷霆山|Mount Thunder",
+          "白峰山脉|Whitepeak Mountains"
+        ]
+      }
+    },
+    {
+      "id": "desert",
+      "label": "沙海(阿拉伯风)",
+      "desc": "沙漠、绿洲与商队,常见 -斯坦、-阿巴德、-尔,如 扎希尔、卡斯拉巴德",
+      "tr": {
+        "table": {
+          "me": "麦",
+          "ha": "哈",
+          "kha": "哈",
+          "ai": "艾"
+        }
+      },
+      "stems": [
+        {
+          "l": "zah"
+        },
+        {
+          "l": "qas"
+        },
+        {
+          "l": "sham"
+        },
+        {
+          "l": "khal"
+        },
+        {
+          "l": "rash"
+        },
+        {
+          "l": "tam"
+        },
+        {
+          "l": "sul"
+        },
+        {
+          "l": "kar"
+        },
+        {
+          "l": "bas"
+        },
+        {
+          "l": "nas"
+        },
+        {
+          "l": "jaz"
+        },
+        {
+          "l": "faz"
+        },
+        {
+          "l": "sab"
+        },
+        {
+          "l": "tar"
+        },
+        {
+          "l": "ruz"
+        },
+        {
+          "l": "dar"
+        },
+        {
+          "l": "sar"
+        },
+        {
+          "l": "mir"
+        },
+        {
+          "l": "haz"
+        },
+        {
+          "l": "bah"
+        },
+        {
+          "l": "had"
+        },
+        {
+          "l": "jab"
+        },
+        {
+          "l": "kad"
+        },
+        {
+          "l": "mas"
+        },
+        {
+          "l": "nab"
+        },
+        {
+          "l": "qad"
+        },
+        {
+          "l": "rab"
+        },
+        {
+          "l": "saf"
+        },
+        {
+          "l": "tab"
+        },
+        {
+          "l": "wad"
+        },
+        {
+          "l": "yas"
+        },
+        {
+          "l": "zar"
+        },
+        {
+          "l": "sal"
+        },
+        {
+          "l": "amr"
+        },
+        {
+          "l": "ghar"
+        }
+      ],
+      "mids": [
+        {
+          "l": "a"
+        },
+        {
+          "l": "i"
+        },
+        {
+          "l": "u"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "ir"
+        },
+        {
+          "l": "am"
+        },
+        {
+          "l": "an"
+        }
+      ],
+      "link": "a",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "iya"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "stan",
+                "gen": false,
+                "zh": "斯坦"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ah"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "id"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "abad"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "kand",
+                "gen": false,
+                "zh": "坎德"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ah"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "un"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ra"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ad"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "iya"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "shahr",
+                "gen": false,
+                "zh": "沙赫尔"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "at"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "il"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ad"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": ""
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.1
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "un"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ah"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.15
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "un"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "is"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.15
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "iya"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "ah"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        }
+      },
+      "epithet": {
+        "chance": 0.12,
+        "sea": [
+          "流沙海|Sea of Shifting Sands",
+          "烈日海|Sunscorch Sea",
+          "绿洲海|Oasis Sea",
+          "香料海|Spice Sea",
+          "珍珠海|Pearl Sea"
+        ],
+        "mountain": [
+          "烈日山脉|Sunscorch Mountains",
+          "赤岩山脉|Redrock Mountains",
+          "驼峰山脉|Camelback Mountains"
+        ]
+      }
+    },
+    {
+      "id": "steppe",
+      "label": "草原(突厥蒙古风)",
+      "desc": "草原与游牧,沿用中文里熟悉的蒙古 / 突厥地名写法,如 查干浩特、喀拉郭勒",
+      "tr": {
+        "table": {
+          "ka": "喀",
+          "te": "铁",
+          "mu": "木"
+        }
+      },
+      "stems": [
+        {
+          "l": "kara",
+          "gen": false,
+          "zh": "喀拉"
+        },
+        {
+          "l": "ak",
+          "gen": false,
+          "zh": "阿克"
+        },
+        {
+          "l": "kok",
+          "gen": false,
+          "zh": "科克"
+        },
+        {
+          "l": "sary",
+          "gen": false,
+          "zh": "萨热"
+        },
+        {
+          "l": "kyzyl",
+          "gen": false,
+          "zh": "克孜勒"
+        },
+        {
+          "l": "altan",
+          "gen": false,
+          "zh": "阿勒坦"
+        },
+        {
+          "l": "ulaan",
+          "gen": false,
+          "zh": "乌兰"
+        },
+        {
+          "l": "khokh",
+          "gen": false,
+          "zh": "呼和"
+        },
+        {
+          "l": "tsagaan",
+          "gen": false,
+          "zh": "查干"
+        },
+        {
+          "l": "khar",
+          "gen": false,
+          "zh": "哈尔"
+        },
+        {
+          "l": "shar",
+          "gen": false,
+          "zh": "沙尔"
+        },
+        {
+          "l": "temir",
+          "gen": false,
+          "zh": "铁木尔"
+        },
+        {
+          "l": "bayan",
+          "gen": false,
+          "zh": "巴彦"
+        },
+        {
+          "l": "mongon",
+          "gen": false,
+          "zh": "孟根"
+        },
+        {
+          "l": "tengri",
+          "gen": false,
+          "zh": "腾格里"
+        },
+        {
+          "l": "ikh",
+          "gen": false,
+          "zh": "伊克"
+        },
+        {
+          "l": "ongon",
+          "gen": false,
+          "zh": "翁贡"
+        },
+        {
+          "l": "arslan",
+          "gen": false,
+          "zh": "阿尔斯兰"
+        },
+        {
+          "l": "bori",
+          "gen": false,
+          "zh": "博热"
+        },
+        {
+          "l": "boz",
+          "gen": false,
+          "zh": "博孜"
+        },
+        {
+          "l": "tash",
+          "gen": false,
+          "zh": "塔什"
+        },
+        {
+          "l": "kum",
+          "gen": false,
+          "zh": "库姆"
+        },
+        {
+          "l": "ay",
+          "gen": false,
+          "zh": "阿依"
+        },
+        {
+          "l": "yulduz",
+          "gen": false,
+          "zh": "尤勒都斯"
+        },
+        {
+          "l": "tegin",
+          "gen": false,
+          "zh": "特勤"
+        },
+        {
+          "l": "batur",
+          "gen": false,
+          "zh": "巴图尔"
+        },
+        {
+          "l": "shira",
+          "gen": false,
+          "zh": "西拉"
+        },
+        {
+          "l": "nomin",
+          "gen": false,
+          "zh": "诺敏"
+        },
+        {
+          "l": "sain",
+          "gen": false,
+          "zh": "赛音"
+        },
+        {
+          "l": "bugha",
+          "gen": false,
+          "zh": "布哈"
+        },
+        {
+          "l": "altyn",
+          "gen": false,
+          "zh": "阿勒屯"
+        },
+        {
+          "l": "erdene",
+          "gen": false,
+          "zh": "额尔德尼"
+        },
+        {
+          "l": "mergen",
+          "gen": false,
+          "zh": "莫日根"
+        },
+        {
+          "l": "khatun",
+          "gen": false,
+          "zh": "可敦"
+        }
+      ],
+      "mids": [
+        {
+          "l": "a"
+        },
+        {
+          "l": "u"
+        },
+        {
+          "l": "i"
+        }
+      ],
+      "link": "a",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "ait"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "an"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "it"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ut"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "gin"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "at"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "un"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2,
+          "stems": [
+            {
+              "l": "ker"
+            },
+            {
+              "l": "nai"
+            },
+            {
+              "l": "tat"
+            },
+            {
+              "l": "ong"
+            },
+            {
+              "l": "jal"
+            },
+            {
+              "l": "mer"
+            },
+            {
+              "l": "bar"
+            },
+            {
+              "l": "kip"
+            },
+            {
+              "l": "kan"
+            },
+            {
+              "l": "tol"
+            },
+            {
+              "l": "sal"
+            },
+            {
+              "l": "tur"
+            },
+            {
+              "l": "kel"
+            },
+            {
+              "l": "dur"
+            },
+            {
+              "l": "ogh"
+            },
+            {
+              "l": "bay"
+            },
+            {
+              "l": "khar"
+            },
+            {
+              "l": "ur"
+            },
+            {
+              "l": "sor"
+            }
+          ]
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "khot",
+                "gen": true,
+                "zh": "浩特"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "balik",
+                "gen": false,
+                "zh": "八里"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "kent",
+                "gen": false,
+                "zh": "肯特"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "sumu",
+                "gen": false,
+                "zh": "苏木"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "bulak",
+                "gen": false,
+                "zh": "布拉克"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "bazar",
+                "gen": false,
+                "zh": "巴扎"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "kurgan",
+                "gen": false,
+                "zh": "库尔干"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ordu",
+                "gen": false,
+                "zh": "斡鲁朵"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "tag",
+                "gen": true,
+                "zh": "塔格"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "ula",
+                "gen": true,
+                "zh": "乌拉"
+              },
+              "w": 3
+            }
+          ],
+          "mid": 0
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "tengis",
+                "gen": false,
+                "zh": "腾吉斯"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "dalai",
+                "gen": false,
+                "zh": "达来"
+              },
+              "w": 2
+            }
+          ],
+          "mid": 0
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "gol",
+                "gen": false,
+                "zh": "郭勒"
+              },
+              "w": 3
+            },
+            {
+              "item": {
+                "l": "su",
+                "gen": false,
+                "zh": "苏"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "muren",
+                "gen": false,
+                "zh": "木伦"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "darya",
+                "gen": false,
+                "zh": "达里雅"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "tal",
+                "gen": true,
+                "zh": "塔拉"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "gobi",
+                "gen": true,
+                "zh": "戈壁"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "kum",
+                "gen": false,
+                "zh": "库姆"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dala",
+                "gen": false,
+                "zh": "达拉"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "bulun",
+                "gen": false,
+                "zh": "布伦"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0
+        }
+      }
+    },
+    {
+      "id": "elven",
+      "label": "林语(精灵风)",
+      "desc": "轻柔流动的精灵语感,多用 瑟、希、艾、林,如 艾尔瑟里昂、希尔瓦兰",
+      "tr": {
+        "table": {
+          "e": "艾",
+          "the": "瑟",
+          "se": "瑟",
+          "si": "希",
+          "thi": "希",
+          "ai": "艾",
+          "lai": "莱",
+          "lin": "琳"
+        }
+      },
+      "stems": [
+        {
+          "l": "ael"
+        },
+        {
+          "l": "sil"
+        },
+        {
+          "l": "thal"
+        },
+        {
+          "l": "cel"
+        },
+        {
+          "l": "el"
+        },
+        {
+          "l": "ith"
+        },
+        {
+          "l": "mir"
+        },
+        {
+          "l": "nim"
+        },
+        {
+          "l": "gal"
+        },
+        {
+          "l": "fal"
+        },
+        {
+          "l": "eld"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "lin"
+        },
+        {
+          "l": "sylv"
+        },
+        {
+          "l": "ery"
+        },
+        {
+          "l": "aer"
+        },
+        {
+          "l": "vael"
+        },
+        {
+          "l": "il"
+        },
+        {
+          "l": "naer"
+        },
+        {
+          "l": "ser"
+        },
+        {
+          "l": "tir"
+        },
+        {
+          "l": "fin"
+        },
+        {
+          "l": "aran"
+        },
+        {
+          "l": "eir"
+        },
+        {
+          "l": "lith"
+        },
+        {
+          "l": "nar"
+        },
+        {
+          "l": "cael"
+        },
+        {
+          "l": "len"
+        },
+        {
+          "l": "myr"
+        },
+        {
+          "l": "sael"
+        },
+        {
+          "l": "thar"
+        },
+        {
+          "l": "ven"
+        },
+        {
+          "l": "al"
+        }
+      ],
+      "mids": [
+        {
+          "l": "a"
+        },
+        {
+          "l": "e"
+        },
+        {
+          "l": "i"
+        },
+        {
+          "l": "ar"
+        },
+        {
+          "l": "en"
+        },
+        {
+          "l": "el"
+        },
+        {
+          "l": "in"
+        },
+        {
+          "l": "an"
+        },
+        {
+          "l": "on"
+        },
+        {
+          "l": "il"
+        },
+        {
+          "l": "ir"
+        }
+      ],
+      "link": "e",
+      "kinds": {
+        "state": {
+          "ends": [
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "thas"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ath"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "eth"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dor"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wen"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "lond"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ara"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "iel"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "anor"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ea"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ia"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "aria"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.45
+        },
+        "city": {
+          "ends": [
+            {
+              "item": {
+                "l": "ath"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ond"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "iel"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "as"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "eth"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wen"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "rin"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "dil"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "mar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "las"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "olin"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ador"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "anis"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "est"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.45
+        },
+        "mountain": {
+          "ends": [
+            {
+              "item": {
+                "l": "ith"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ath"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "or"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2
+        },
+        "sea": {
+          "ends": [
+            {
+              "item": {
+                "l": "ae"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ea"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ith"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.2
+        },
+        "river": {
+          "ends": [
+            {
+              "item": {
+                "l": "duin",
+                "gen": false,
+                "zh": "杜因"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "uil"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "en"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ir"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "a"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.15
+        },
+        "region": {
+          "ends": [
+            {
+              "item": {
+                "l": "ath"
+              },
+              "w": 2
+            },
+            {
+              "item": {
+                "l": "and"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ion"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "ar"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "wen"
+              },
+              "w": 1
+            },
+            {
+              "item": {
+                "l": "orien"
+              },
+              "w": 1
+            }
+          ],
+          "mid": 0.35
+        }
+      },
+      "epithet": {
+        "chance": 0.15,
+        "sea": [
+          "星辉海|Starlit Sea",
+          "月语海|Moonwhisper Sea",
+          "银波海|Silverwave Sea",
+          "暮歌海|Evensong Sea",
+          "晨星海|Morningstar Sea"
+        ],
+        "mountain": [
+          "星穹山脉|Starvault Mountains",
+          "月影山脉|Moonshadow Mountains",
+          "晨星山脉|Morningstar Mountains",
+          "银冠山脉|Silvercrown Mountains"
+        ]
+      }
+    }
+  ],
+  "transcription": {
+    "cols": [
+      "a",
+      "e",
+      "i",
+      "o",
+      "u",
+      "ai",
+      "au",
+      "an",
+      "en",
+      "in",
+      "on",
+      "un",
+      "ang",
+      "ong"
+    ],
+    "rows": {
+      "": "阿埃伊奥乌艾奥安恩因翁温昂翁",
+      "b": "巴贝比博布拜鲍班本宾邦本邦邦",
+      "p": "帕佩皮波普派保潘彭平庞彭庞蓬",
+      "d": "达德迪多杜代道丹登丁东敦当东",
+      "t": "塔特提托图泰陶坦腾廷通通唐通",
+      "g": "加格吉戈古盖高甘根金贡贡冈贡",
+      "k": "卡克基科库凯考坎肯金孔昆康孔",
+      "f": "法费菲福富法福凡芬芬丰丰方丰",
+      "v": "瓦维维沃武瓦沃万文文冯文旺冯",
+      "s": "萨塞西索苏赛绍桑森辛松孙桑松",
+      "z": "扎泽齐佐祖载佐赞曾津宗尊赞宗",
+      "sh": "沙谢希肖舒夏绍尚申欣雄顺尚雄",
+      "ch": "查切奇乔丘柴乔钱琴钦琼春昌琼",
+      "j": "贾杰吉乔朱贾乔詹珍金琼君江琼",
+      "m": "马梅米莫穆迈茂曼门明蒙蒙芒蒙",
+      "n": "纳内尼诺努奈诺南嫩宁农农南农",
+      "l": "拉莱利洛卢莱劳兰伦林隆伦朗隆",
+      "r": "拉雷里罗鲁莱劳兰伦林龙伦朗龙",
+      "h": "哈赫希霍胡海豪汉亨欣洪洪杭洪",
+      "th": "萨塞西索苏赛陶桑森辛松孙桑松",
+      "kh": "哈赫希霍胡海豪汗亨欣洪浑杭洪",
+      "y": "亚耶伊约尤亚尧扬延因永云扬永",
+      "w": "瓦韦威沃伍怀沃万温温翁温旺翁",
+      "ts": "察采齐措楚蔡曹灿曾津聪村仓聪",
+      "gh": "加格吉戈古盖高甘根金贡贡冈贡",
+      "dh": "扎泽齐佐祖载佐赞曾津宗尊赞宗"
+    },
+    "lone": {
+      "b": "布",
+      "p": "普",
+      "d": "德",
+      "t": "特",
+      "g": "格",
+      "k": "克",
+      "f": "夫",
+      "v": "夫",
+      "s": "斯",
+      "z": "兹",
+      "sh": "什",
+      "ch": "奇",
+      "j": "吉",
+      "m": "姆",
+      "n": "恩",
+      "l": "尔",
+      "r": "尔",
+      "h": "赫",
+      "th": "斯",
+      "kh": "赫",
+      "gh": "格",
+      "dh": "德",
+      "y": "伊",
+      "w": "乌",
+      "ts": "茨"
+    },
+    "diph": {
+      "ai": "ai",
+      "ay": "ai",
+      "ae": "ai",
+      "ei": "ai",
+      "ey": "ai",
+      "au": "au",
+      "aw": "au",
+      "ou": "u",
+      "oo": "u",
+      "ee": "i",
+      "aa": "a"
+    }
+  },
+  "blocked": {
+    "exact": [
+      "albania",
+      "romania",
+      "armenia",
+      "bulgaria",
+      "serbia",
+      "croatia",
+      "slovenia",
+      "slovakia",
+      "bosnia",
+      "latvia",
+      "lithuania",
+      "estonia",
+      "georgia",
+      "austria",
+      "australia",
+      "russia",
+      "prussia",
+      "scandia",
+      "iberia",
+      "italia",
+      "hispania",
+      "gallia",
+      "britannia",
+      "germania",
+      "dacia",
+      "thracia",
+      "moravia",
+      "bohemia",
+      "silesia",
+      "galicia",
+      "andalusia",
+      "catalonia",
+      "castilia",
+      "castile",
+      "valencia",
+      "valentia",
+      "venezia",
+      "liguria",
+      "etruria",
+      "umbria",
+      "calabria",
+      "sardinia",
+      "sicilia",
+      "corsica",
+      "lusitania",
+      "cambria",
+      "caledonia",
+      "hibernia",
+      "numidia",
+      "mauritania",
+      "libya",
+      "nigeria",
+      "algeria",
+      "tunisia",
+      "syria",
+      "assyria",
+      "arabia",
+      "persia",
+      "india",
+      "macedonia",
+      "moldavia",
+      "moldova",
+      "wallachia",
+      "transylvania",
+      "pannonia",
+      "anatolia",
+      "lydia",
+      "phrygia",
+      "cappadocia",
+      "cilicia",
+      "arcadia",
+      "achaea",
+      "attica",
+      "laconia",
+      "colombia",
+      "bolivia",
+      "venezuela",
+      "patagonia",
+      "tasmania",
+      "virginia",
+      "california",
+      "carolina",
+      "columbia",
+      "philadelphia",
+      "olympia",
+      "alexandria",
+      "ilion",
+      "calais",
+      "rome",
+      "roma",
+      "paris",
+      "london",
+      "berlin",
+      "vienna",
+      "venice",
+      "verona",
+      "milan",
+      "milano",
+      "naples",
+      "napoli",
+      "florence",
+      "genoa",
+      "ravenna",
+      "sparta",
+      "athens",
+      "thebes",
+      "corinth",
+      "delphi",
+      "troy",
+      "troya",
+      "rhodes",
+      "crete",
+      "knossos",
+      "argos",
+      "delos",
+      "naxos",
+      "samos",
+      "ithaca",
+      "ithaka",
+      "kos",
+      "patmos",
+      "lesbos",
+      "chios",
+      "mykonos",
+      "sahara",
+      "cairo",
+      "baghdad",
+      "damascus",
+      "basra",
+      "mosul",
+      "medina",
+      "mecca",
+      "tehran",
+      "kabul",
+      "samarkand",
+      "bukhara",
+      "tashkent",
+      "kazan",
+      "moscow",
+      "kiev",
+      "kyiv",
+      "minsk",
+      "omsk",
+      "tomsk",
+      "smolensk",
+      "novgorod",
+      "belgrade",
+      "zagreb",
+      "sofia",
+      "prague",
+      "warsaw",
+      "krakow",
+      "oslo",
+      "bergen",
+      "stockholm",
+      "uppsala",
+      "copenhagen",
+      "aalborg",
+      "reykjavik",
+      "narvik",
+      "tromso",
+      "helsinki",
+      "turku",
+      "riga",
+      "tallinn",
+      "vilnius",
+      "hamburg",
+      "luxembourg",
+      "strasbourg",
+      "bordeaux",
+      "lyon",
+      "marseille",
+      "nantes",
+      "orleans",
+      "york",
+      "kent",
+      "essex",
+      "wessex",
+      "sussex",
+      "cornwall",
+      "devon",
+      "dover",
+      "oxford",
+      "cambridge",
+      "bristol",
+      "leeds",
+      "ashford",
+      "ashton",
+      "brighton",
+      "preston",
+      "boston",
+      "camden",
+      "hampton",
+      "lancaster",
+      "chester",
+      "manchester",
+      "winchester",
+      "dorchester",
+      "kingston",
+      "richmond",
+      "portsmouth",
+      "plymouth",
+      "dartmouth",
+      "norway",
+      "sweden",
+      "denmark",
+      "finland",
+      "iceland",
+      "holland",
+      "ireland",
+      "scotland",
+      "england",
+      "poland",
+      "lapland",
+      "ukraine",
+      "korean",
+      "persian",
+      "indian",
+      "caspian",
+      "arabian",
+      "iranian",
+      "iraqi",
+      "syrian",
+      "egyptian",
+      "turkish",
+      "mongolian",
+      "tibetan",
+      "chinese",
+      "japanese",
+      "european",
+      "american",
+      "african",
+      "asian",
+      "russian",
+      "german",
+      "french",
+      "english",
+      "spanish",
+      "italian",
+      "roman",
+      "greek",
+      "irish",
+      "scottish",
+      "welsh",
+      "caribbean",
+      "mediterranean",
+      "baltic",
+      "aegean",
+      "adriatic",
+      "ionian",
+      "arctic",
+      "antarctic",
+      "pacific",
+      "atlantic",
+      "maria",
+      "anna",
+      "diana",
+      "elena",
+      "helena",
+      "sara",
+      "sarah",
+      "lara",
+      "laura",
+      "clara",
+      "nina",
+      "vera",
+      "irina",
+      "olga",
+      "natasha",
+      "tatiana",
+      "sonia",
+      "julia",
+      "livia",
+      "hitler",
+      "stalin",
+      "lenin",
+      "nazi",
+      "allah",
+      "jesus",
+      "christ",
+      "buddha",
+      "kaaba",
+      "satan",
+      "lucifer",
+      "atlantis",
+      "avalon",
+      "lemuria",
+      "hyperborea",
+      "midgard",
+      "asgard",
+      "jotunheim",
+      "helheim",
+      "vanaheim",
+      "niflheim",
+      "muspelheim",
+      "utgard",
+      "narnia",
+      "westeros",
+      "essos",
+      "tamriel",
+      "skyrim",
+      "hyrule",
+      "azeroth",
+      "kalimdor",
+      "lordaeron",
+      "dalaran",
+      "stratholme",
+      "quelthalas",
+      "gondor",
+      "mordor",
+      "rohan",
+      "arnor",
+      "lorien",
+      "rivendell",
+      "isengard",
+      "moria",
+      "valinor",
+      "valmar",
+      "numenor",
+      "eriador",
+      "beleriand",
+      "doriath",
+      "gondolin",
+      "lindon",
+      "erebor",
+      "eregion",
+      "moron",
+      "idiot"
+    ],
+    "substr": [
+      "fuck",
+      "shit",
+      "cunt",
+      "dick",
+      "cock",
+      "piss",
+      "anus",
+      "anal",
+      "porn",
+      "sex",
+      "nig",
+      "fag",
+      "rape",
+      "slut",
+      "whore",
+      "penis",
+      "vagin",
+      "semen",
+      "cum",
+      "turd",
+      "arse",
+      "kurwa",
+      "blyat",
+      "blyad",
+      "suka",
+      "pizd",
+      "huy",
+      "khui",
+      "kkk",
+      "nazi",
+      "poop",
+      "tits",
+      "boob",
+      "butt",
+      "damn",
+      "hell",
+      "kill",
+      "dead",
+      "kike",
+      "spic",
+      "twat",
+      "wank",
+      "bitch",
+      "bastard",
+      "retard"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-world.png
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-china.png
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-europe.png
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-africa.png
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-southern-africa.png
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-southern-africa-terrain.png
+CLIMATE_EVIDENCE_FAIL viewport res://docs/atlas/climate_limits/after-southern-africa-habitat.png
+CLIMATE_EVIDENCE_FAIL viewport earth-mode-0
+CLIMATE_EVIDENCE_FAIL viewport earth-mode-1
+CLIMATE_EVIDENCE_FAIL viewport earth-mode-2
+CLIMATE_EVIDENCE_FAIL viewport earth-mode-3
+CLIMATE_EVIDENCE_FAIL viewport earth-china
+CLIMATE_EVIDENCE_FAIL viewport earth-eurasia
+CLIMATE_EVIDENCE_FAIL viewport earth-mediterranean
+ATLAS_CLIMATE_LIMIT_EVIDENCE failures=14

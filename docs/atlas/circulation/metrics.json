@@ -1,0 +1,550 @@
+{
+	"after": {
+		"cells": 33940,
+		"cities": 695,
+		"options": {
+			"city_threshold": 1.0,
+			"rainfall_model": "seasonal_circulation_v2",
+			"river_usage": "environment_only",
+			"road_model": "civ-atlas-103afd3-land-v1",
+			"settlement_model": "climate_capacity_v2",
+			"terrain_model": "earth",
+			"visual_model": "atlas-handdrawn-v1"
+		},
+		"params": {
+			"cells": 36000,
+			"rainfall": 1,
+			"rainfall_model": "seasonal_circulation_v2",
+			"rainfall_transport": {
+				"annual_combine": "arithmetic mean of four seasonal rates",
+				"grid": [
+					360,
+					180
+				],
+				"observed_climate": false,
+				"rain_scale": 70000.0,
+				"rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+				"recycling_fraction": 0.25,
+				"rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, high-mountain rain shadow",
+				"season_heating": [
+					-0.85,
+					0.4,
+					0.85,
+					-0.4
+				],
+				"seasons": [
+					"DJF",
+					"MAM",
+					"JJA",
+					"SON"
+				],
+				"spinup_steps": 100,
+				"transport_step_km": 160.0,
+				"version": "seasonal_circulation_v2",
+				"water_width_km": 120.0,
+				"wind_coordinates": {
+					"seasonal_u": "east",
+					"seasonal_v": "north",
+					"windX": "east",
+					"windY": "south"
+				}
+			},
+			"seed": 1,
+			"settlement_model": "climate_capacity_v2",
+			"temperature": 0,
+			"terrain_model": "earth",
+			"terrain_source": {
+				"bounds": [
+					-180.0,
+					-90.0,
+					180.0,
+					90.0
+				],
+				"date": "2026-10-09",
+				"elevation_encoding": "signed-i16-little-endian-gzip",
+				"elevation_scale_m": 0.5,
+				"format": "atlas-earth-surface-v1",
+				"height": 1800.0,
+				"projection": "EPSG:4326 equirectangular",
+				"registration": "pixel-center",
+				"relief_file": "earth_relief_06m.i16.gz",
+				"relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+				"relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+				"row_order": "north-to-south",
+				"runtime": "native Godot; no Python dependency",
+				"sources": [
+					{
+						"description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+						"reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+						"sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+						"url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+					},
+					{
+						"license": "public domain",
+						"sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+					},
+					{
+						"license": "public domain",
+						"sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+					}
+				],
+				"water_classes": {
+					"lake": 2.0,
+					"land": 0.0,
+					"ocean": 1.0
+				},
+				"water_file": "earth_water_06m.u8.gz",
+				"water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+				"water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+				"width": 3600.0
+			}
+		},
+		"provinces": 744,
+		"roads": 744,
+		"timing": {
+			"glyphs_ms": 423,
+			"places_ms": 735,
+			"raster_ms": 19571,
+			"regions_ms": 997,
+			"roads_ms": 330,
+			"total_ms": 40036,
+			"world_ms": 17191
+		}
+	},
+	"before": {
+		"cells": 33940,
+		"cities": 624,
+		"options": {
+			"city_threshold": 1.0,
+			"rainfall_model": "legacy_monsoon_global_v1",
+			"river_usage": "environment_only",
+			"road_model": "civ-atlas-103afd3-land-v1",
+			"terrain_model": "earth",
+			"visual_model": "atlas-handdrawn-v1"
+		},
+		"params": {
+			"cells": 36000,
+			"rainfall": 1,
+			"rainfall_model": "legacy_monsoon_global_v1",
+			"rainfall_transport": {
+				"distance_reference_km": 4000.0,
+				"grid": [
+					720,
+					360
+				],
+				"horizontal_spinup_cycles": 3,
+				"mm_per_effective_unit": 2000.0,
+				"observed_climate": false,
+				"seasonal_combine": "max(annual,seasonal)",
+				"source": "SettlementEnvironment environment_v1.7",
+				"version": "legacy_monsoon_global_v1",
+				"wrap_x": true
+			},
+			"seed": 1,
+			"temperature": 0,
+			"terrain_model": "earth",
+			"terrain_source": {
+				"bounds": [
+					-180.0,
+					-90.0,
+					180.0,
+					90.0
+				],
+				"date": "2026-10-09",
+				"elevation_encoding": "signed-i16-little-endian-gzip",
+				"elevation_scale_m": 0.5,
+				"format": "atlas-earth-surface-v1",
+				"height": 1800.0,
+				"projection": "EPSG:4326 equirectangular",
+				"registration": "pixel-center",
+				"relief_file": "earth_relief_06m.i16.gz",
+				"relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+				"relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+				"row_order": "north-to-south",
+				"runtime": "native Godot; no Python dependency",
+				"sources": [
+					{
+						"description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+						"reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+						"sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+						"url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+					},
+					{
+						"license": "public domain",
+						"sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+					},
+					{
+						"license": "public domain",
+						"sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+					}
+				],
+				"water_classes": {
+					"lake": 2.0,
+					"land": 0.0,
+					"ocean": 1.0
+				},
+				"water_file": "earth_water_06m.u8.gz",
+				"water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+				"water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+				"width": 3600.0
+			}
+		},
+		"provinces": 682,
+		"roads": 682,
+		"timing": {
+			"glyphs_ms": 385,
+			"places_ms": 651,
+			"raster_ms": 18588,
+			"regions_ms": 902,
+			"roads_ms": 336,
+			"total_ms": 30750,
+			"world_ms": 9460
+		}
+	},
+	"city_threshold": 1,
+	"observed_climate": false,
+	"province_area": 750,
+	"regions": {
+		"after": {
+			"ChinaEast": {
+				"area_km2": 3167612.11433914,
+				"cities": 19,
+				"cities_per_million_km2": 5.99820916014018,
+				"desert_fraction": 0.147088355325503,
+				"farming_potential": 56.9715793834079,
+				"forest_fraction": 0.34990389667294,
+				"provinces": 19,
+				"rain_mm_estimate": 669.339730819412,
+				"suitability": 12.1535415246734
+			},
+			"Congo": {
+				"area_km2": 1805382.11716339,
+				"cities": 11,
+				"cities_per_million_km2": 6.09289296455598,
+				"desert_fraction": 0.0,
+				"farming_potential": 101.39955434435,
+				"forest_fraction": 1.0,
+				"provinces": 11,
+				"rain_mm_estimate": 1670.99155451536,
+				"suitability": 22.5913298796803
+			},
+			"Europe": {
+				"area_km2": 4604859.73744653,
+				"cities": 41,
+				"cities_per_million_km2": 8.90363710029855,
+				"desert_fraction": 0.00457083607071992,
+				"farming_potential": 45.0833530124542,
+				"forest_fraction": 0.912422320474297,
+				"provinces": 41,
+				"rain_mm_estimate": 1342.41827014583,
+				"suitability": 16.0101511675921
+			},
+			"Gobi": {
+				"area_km2": 1224957.88309607,
+				"cities": 0,
+				"cities_per_million_km2": 0.0,
+				"desert_fraction": 0.61397694592666,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.0116033655745664,
+				"provinces": 1,
+				"rain_mm_estimate": 61.1433693101585,
+				"suitability": 0.203494112607874
+			},
+			"HuNW": {
+				"area_km2": 5784220.08475172,
+				"cities": 5,
+				"cities_per_million_km2": 0.864420773542301,
+				"desert_fraction": 0.249991904704483,
+				"farming_potential": 1.62327732915957,
+				"forest_fraction": 0.0755519560715488,
+				"provinces": 7,
+				"rain_mm_estimate": 214.540829594053,
+				"suitability": 0.750657769521096
+			},
+			"HuSE": {
+				"area_km2": 3686804.2392598,
+				"cities": 22,
+				"cities_per_million_km2": 5.96722759666159,
+				"desert_fraction": 0.100077825442203,
+				"farming_potential": 57.4019600888663,
+				"forest_fraction": 0.333934498410567,
+				"provinces": 23,
+				"rain_mm_estimate": 642.795639167069,
+				"suitability": 12.2249165579811
+			},
+			"India": {
+				"area_km2": 2949081.7549231,
+				"cities": 12,
+				"cities_per_million_km2": 4.0690631855043,
+				"desert_fraction": 0.453637204792831,
+				"farming_potential": 47.6904297997477,
+				"forest_fraction": 0.314025441037739,
+				"provinces": 13,
+				"rain_mm_estimate": 756.599111170761,
+				"suitability": 9.95588386864
+			},
+			"NorthChina": {
+				"area_km2": 778897.800773848,
+				"cities": 5,
+				"cities_per_million_km2": 6.41932740730866,
+				"desert_fraction": 0.0573218560539949,
+				"farming_potential": 51.0825145642671,
+				"forest_fraction": 0.384857444811771,
+				"provinces": 5,
+				"rain_mm_estimate": 545.005330705034,
+				"suitability": 11.5731018733119
+			},
+			"Sahara": {
+				"area_km2": 4422903.15768332,
+				"cities": 8,
+				"cities_per_million_km2": 1.8087667115439,
+				"desert_fraction": 0.655950763023771,
+				"farming_potential": 16.7010066402507,
+				"forest_fraction": 0.0612995240605388,
+				"provinces": 10,
+				"rain_mm_estimate": 197.450066779423,
+				"suitability": 3.30430515441907
+			},
+			"SouthChina": {
+				"area_km2": 2018483.48297062,
+				"cities": 14,
+				"cities_per_million_km2": 6.93590020335269,
+				"desert_fraction": 0.182319085469708,
+				"farming_potential": 68.8020014894117,
+				"forest_fraction": 0.380518527335931,
+				"provinces": 14,
+				"rain_mm_estimate": 802.931048835769,
+				"suitability": 14.2767130637672
+			}
+		},
+		"before": {
+			"ChinaEast": {
+				"area_km2": 3167612.11433914,
+				"cities": 19,
+				"cities_per_million_km2": 5.99820916014018,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.889744918296174,
+				"provinces": 19,
+				"rain_mm_estimate": 1376.72838213179,
+				"suitability": 14.9126601771414
+			},
+			"Congo": {
+				"area_km2": 1805382.11716339,
+				"cities": 8,
+				"cities_per_million_km2": 4.43119488331344,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.822463046812855,
+				"provinces": 8,
+				"rain_mm_estimate": 999.409262519276,
+				"suitability": 9.97544977930554
+			},
+			"Europe": {
+				"area_km2": 4604859.73744653,
+				"cities": 30,
+				"cities_per_million_km2": 6.5148564148526,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.993649500235226,
+				"provinces": 30,
+				"rain_mm_estimate": 1226.05592085086,
+				"suitability": 17.2832077507749
+			},
+			"Gobi": {
+				"area_km2": 1224957.88309607,
+				"cities": 4,
+				"cities_per_million_km2": 3.26541839127566,
+				"desert_fraction": 0.0260346420727517,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.824538583070321,
+				"provinces": 5,
+				"rain_mm_estimate": 670.626999327699,
+				"suitability": 5.82896349714227
+			},
+			"HuNW": {
+				"area_km2": 5784220.08475172,
+				"cities": 11,
+				"cities_per_million_km2": 1.90172570179306,
+				"desert_fraction": 0.149738337304833,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.348161523415329,
+				"provinces": 14,
+				"rain_mm_estimate": 420.567250966779,
+				"suitability": 3.42243626258307
+			},
+			"HuSE": {
+				"area_km2": 3686804.2392598,
+				"cities": 19,
+				"cities_per_million_km2": 5.15351474257137,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.868056932608801,
+				"provinces": 19,
+				"rain_mm_estimate": 1238.03934143955,
+				"suitability": 15.8114309188451
+			},
+			"India": {
+				"area_km2": 2949081.7549231,
+				"cities": 12,
+				"cities_per_million_km2": 4.0690631855043,
+				"desert_fraction": 0.0878493454970659,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.301469303674269,
+				"provinces": 12,
+				"rain_mm_estimate": 730.969663154221,
+				"suitability": 5.59566124298428
+			},
+			"NorthChina": {
+				"area_km2": 778897.800773848,
+				"cities": 4,
+				"cities_per_million_km2": 5.13546192584693,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 1.0,
+				"provinces": 4,
+				"rain_mm_estimate": 1550.67816220263,
+				"suitability": 17.4210962832174
+			},
+			"Sahara": {
+				"area_km2": 4422903.15768332,
+				"cities": 8,
+				"cities_per_million_km2": 1.8087667115439,
+				"desert_fraction": 0.460801207734995,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.0,
+				"provinces": 11,
+				"rain_mm_estimate": 265.723529638487,
+				"suitability": 1.46422110509675
+			},
+			"SouthChina": {
+				"area_km2": 2018483.48297062,
+				"cities": 12,
+				"cities_per_million_km2": 5.94505731715945,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.826976373391719,
+				"provinces": 12,
+				"rain_mm_estimate": 1320.81785810973,
+				"suitability": 13.9291427017047
+			}
+		},
+		"climate_only": {
+			"ChinaEast": {
+				"area_km2": 3167612.11433914,
+				"cities": 16,
+				"cities_per_million_km2": 5.05112350327594,
+				"desert_fraction": 0.147088355325503,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.34990389667294,
+				"provinces": 16,
+				"rain_mm_estimate": 669.339730819412,
+				"suitability": 7.32812424411882
+			},
+			"Congo": {
+				"area_km2": 1805382.11716339,
+				"cities": 10,
+				"cities_per_million_km2": 5.5389936041418,
+				"desert_fraction": 0.0,
+				"farming_potential": 0.0,
+				"forest_fraction": 1.0,
+				"provinces": 10,
+				"rain_mm_estimate": 1670.99155451536,
+				"suitability": 13.3983817598163
+			},
+			"Europe": {
+				"area_km2": 4604859.73744653,
+				"cities": 30,
+				"cities_per_million_km2": 6.5148564148526,
+				"desert_fraction": 0.00457083607071992,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.912422320474297,
+				"provinces": 30,
+				"rain_mm_estimate": 1342.41827014583,
+				"suitability": 15.8491113788397
+			},
+			"Gobi": {
+				"area_km2": 1224957.88309607,
+				"cities": 1,
+				"cities_per_million_km2": 0.816354597818916,
+				"desert_fraction": 0.61397694592666,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.0116033655745664,
+				"provinces": 2,
+				"rain_mm_estimate": 61.1433693101585,
+				"suitability": 0.203494112607874
+			},
+			"HuNW": {
+				"area_km2": 5784220.08475172,
+				"cities": 5,
+				"cities_per_million_km2": 0.864420773542301,
+				"desert_fraction": 0.249991904704483,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.0755519560715488,
+				"provinces": 9,
+				"rain_mm_estimate": 214.540829594053,
+				"suitability": 0.718945327666177
+			},
+			"HuSE": {
+				"area_km2": 3686804.2392598,
+				"cities": 21,
+				"cities_per_million_km2": 5.69598997863151,
+				"desert_fraction": 0.100077825442203,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.333934498410567,
+				"provinces": 21,
+				"rain_mm_estimate": 642.795639167069,
+				"suitability": 7.61057795667975
+			},
+			"India": {
+				"area_km2": 2949081.7549231,
+				"cities": 11,
+				"cities_per_million_km2": 3.72997458671228,
+				"desert_fraction": 0.453637204792831,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.314025441037739,
+				"provinces": 13,
+				"rain_mm_estimate": 756.599111170761,
+				"suitability": 5.28049014270977
+			},
+			"NorthChina": {
+				"area_km2": 778897.800773848,
+				"cities": 4,
+				"cities_per_million_km2": 5.13546192584693,
+				"desert_fraction": 0.0573218560539949,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.384857444811771,
+				"provinces": 4,
+				"rain_mm_estimate": 545.005330705034,
+				"suitability": 8.71952706191984
+			},
+			"Sahara": {
+				"area_km2": 4422903.15768332,
+				"cities": 6,
+				"cities_per_million_km2": 1.35657503365793,
+				"desert_fraction": 0.655950763023771,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.0612995240605388,
+				"provinces": 10,
+				"rain_mm_estimate": 197.450066779423,
+				"suitability": 2.10168084824465
+			},
+			"SouthChina": {
+				"area_km2": 2018483.48297062,
+				"cities": 12,
+				"cities_per_million_km2": 5.94505731715945,
+				"desert_fraction": 0.182319085469708,
+				"farming_potential": 0.0,
+				"forest_fraction": 0.380518527335931,
+				"provinces": 12,
+				"rain_mm_estimate": 802.931048835769,
+				"suitability": 7.80531649307796
+			}
+		}
+	},
+	"seed": 1
+}

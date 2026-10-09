@@ -1,0 +1,11 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+WORLD_COMPARE elevation errors=0 max=0.0
+WORLD_COMPARE water errors=0 max=0.0
+WORLD_COMPARE waterLevel errors=0 max=0.0
+WORLD_COMPARE temperature errors=0 max=0.0
+WORLD_COMPARE precipitation errors=0 max=0.0
+WORLD_COMPARE seaIce errors=0 max=0.0
+WORLD_COMPARE flux errors=0 max=0.0
+WORLD_COMPARE biome errors=0 max=0.0
+ATLAS_NATIVE_WORLD failures=0

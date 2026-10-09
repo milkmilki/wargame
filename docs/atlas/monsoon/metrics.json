@@ -1,0 +1,403 @@
+{
+	"after": {
+		"cells": 33940,
+		"cities": 624,
+		"options": {
+			"city_threshold": 1.0,
+			"rainfall_model": "legacy_monsoon_global_v1",
+			"river_usage": "environment_only",
+			"road_model": "civ-atlas-103afd3-land-v1",
+			"terrain_model": "earth",
+			"visual_model": "atlas-handdrawn-v1"
+		},
+		"params": {
+			"cells": 36000,
+			"rainfall": 1,
+			"rainfall_model": "legacy_monsoon_global_v1",
+			"rainfall_transport": {
+				"distance_reference_km": 4000.0,
+				"grid": [
+					720,
+					360
+				],
+				"horizontal_spinup_cycles": 3,
+				"mm_per_effective_unit": 2000.0,
+				"observed_climate": false,
+				"seasonal_combine": "max(annual,seasonal)",
+				"source": "SettlementEnvironment environment_v1.7",
+				"version": "legacy_monsoon_global_v1",
+				"wrap_x": true
+			},
+			"seed": 1,
+			"temperature": 0,
+			"terrain_model": "earth",
+			"terrain_source": {
+				"bounds": [
+					-180.0,
+					-90.0,
+					180.0,
+					90.0
+				],
+				"date": "2026-10-09",
+				"elevation_encoding": "signed-i16-little-endian-gzip",
+				"elevation_scale_m": 0.5,
+				"format": "atlas-earth-surface-v1",
+				"height": 1800.0,
+				"projection": "EPSG:4326 equirectangular",
+				"registration": "pixel-center",
+				"relief_file": "earth_relief_06m.i16.gz",
+				"relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+				"relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+				"row_order": "north-to-south",
+				"runtime": "native Godot; no Python dependency",
+				"sources": [
+					{
+						"description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+						"reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+						"sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+						"url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+					},
+					{
+						"license": "public domain",
+						"sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+					},
+					{
+						"license": "public domain",
+						"sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+					}
+				],
+				"water_classes": {
+					"lake": 2.0,
+					"land": 0.0,
+					"ocean": 1.0
+				},
+				"water_file": "earth_water_06m.u8.gz",
+				"water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+				"water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+				"width": 3600.0
+			}
+		},
+		"provinces": 682,
+		"roads": 682,
+		"timing": {
+			"glyphs_ms": 385,
+			"places_ms": 651,
+			"raster_ms": 18588,
+			"regions_ms": 902,
+			"roads_ms": 336,
+			"total_ms": 30750,
+			"world_ms": 9460
+		}
+	},
+	"before": {
+		"cells": 33940,
+		"cities": 602,
+		"options": {
+			"city_threshold": 1.0,
+			"river_usage": "environment_only",
+			"road_model": "civ-atlas-103afd3-land-v1",
+			"terrain_model": "earth",
+			"visual_model": "atlas-handdrawn-v1"
+		},
+		"params": {
+			"cells": 36000,
+			"rainfall": 1,
+			"seed": 1,
+			"temperature": 0,
+			"terrain_model": "earth",
+			"terrain_source": {
+				"bounds": [
+					-180.0,
+					-90.0,
+					180.0,
+					90.0
+				],
+				"date": "2026-10-09",
+				"elevation_encoding": "signed-i16-little-endian-gzip",
+				"elevation_scale_m": 0.5,
+				"format": "atlas-earth-surface-v1",
+				"height": 1800.0,
+				"projection": "EPSG:4326 equirectangular",
+				"registration": "pixel-center",
+				"relief_file": "earth_relief_06m.i16.gz",
+				"relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+				"relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+				"row_order": "north-to-south",
+				"runtime": "native Godot; no Python dependency",
+				"sources": [
+					{
+						"description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+						"reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+						"sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+						"url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+					},
+					{
+						"license": "public domain",
+						"sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+					},
+					{
+						"license": "public domain",
+						"sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+						"url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+					}
+				],
+				"water_classes": {
+					"lake": 2.0,
+					"land": 0.0,
+					"ocean": 1.0
+				},
+				"water_file": "earth_water_06m.u8.gz",
+				"water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+				"water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+				"width": 3600.0
+			}
+		},
+		"provinces": 661,
+		"roads": 654,
+		"timing": {
+			"glyphs_ms": 402,
+			"places_ms": 686,
+			"raster_ms": 18519,
+			"regions_ms": 954,
+			"roads_ms": 319,
+			"total_ms": 28830,
+			"world_ms": 7559
+		}
+	},
+	"city_threshold": 1,
+	"province_area": 750,
+	"regions": {
+		"after": [
+			{
+				"bounds": [
+					105.0,
+					122.0,
+					22.0,
+					42.0
+				],
+				"cities": 19,
+				"effective_moisture": 1376.72838213179,
+				"name": "ChinaEast",
+				"provinces": 19,
+				"seasonal_moisture": 1373.51046479652,
+				"suitability": 14.9126601771414
+			},
+			{
+				"bounds": [
+					-10.0,
+					30.0,
+					36.0,
+					60.0
+				],
+				"cities": 30,
+				"effective_moisture": 1226.05592085086,
+				"name": "Europe",
+				"provinces": 30,
+				"seasonal_moisture": 276.259216195093,
+				"suitability": 17.2832077507749
+			},
+			{
+				"bounds": [
+					100.0,
+					145.0,
+					18.0,
+					50.0
+				],
+				"cities": 41,
+				"effective_moisture": 1102.74613591113,
+				"name": "EastAsia",
+				"provinces": 42,
+				"seasonal_moisture": 953.238690948976,
+				"suitability": 12.6240608930558
+			},
+			{
+				"bounds": [
+					110.0,
+					122.0,
+					34.0,
+					42.0
+				],
+				"cities": 4,
+				"effective_moisture": 1550.67816220263,
+				"name": "NorthChina",
+				"provinces": 4,
+				"seasonal_moisture": 1550.67816220263,
+				"suitability": 17.4210962832174
+			},
+			{
+				"bounds": [
+					105.0,
+					122.0,
+					22.0,
+					34.0
+				],
+				"cities": 12,
+				"effective_moisture": 1320.81785810973,
+				"name": "SouthChina",
+				"provinces": 12,
+				"seasonal_moisture": 1315.76797089482,
+				"suitability": 13.9291427017047
+			},
+			{
+				"bounds": [
+					-10.0,
+					30.0,
+					20.0,
+					30.0
+				],
+				"cities": 8,
+				"effective_moisture": 265.723529638487,
+				"name": "Sahara",
+				"provinces": 11,
+				"seasonal_moisture": 87.6949194791378,
+				"suitability": 1.46422110509675
+			},
+			{
+				"bounds": [
+					40.0,
+					55.0,
+					18.0,
+					30.0
+				],
+				"cities": 6,
+				"effective_moisture": 548.57730451062,
+				"name": "Arabia",
+				"provinces": 7,
+				"seasonal_moisture": 247.80058721145,
+				"suitability": 5.11309927788467
+			},
+			{
+				"bounds": [
+					70.0,
+					90.0,
+					10.0,
+					30.0
+				],
+				"cities": 12,
+				"effective_moisture": 730.969663154221,
+				"name": "India",
+				"provinces": 12,
+				"seasonal_moisture": 201.597293618878,
+				"suitability": 5.59566124298428
+			}
+		],
+		"before": [
+			{
+				"bounds": [
+					105.0,
+					122.0,
+					22.0,
+					42.0
+				],
+				"cities": 13,
+				"effective_moisture": 341.351084984717,
+				"name": "ChinaEast",
+				"provinces": 13,
+				"seasonal_moisture": 0.0,
+				"suitability": 3.71638506582748
+			},
+			{
+				"bounds": [
+					-10.0,
+					30.0,
+					36.0,
+					60.0
+				],
+				"cities": 31,
+				"effective_moisture": 1097.55684710859,
+				"name": "Europe",
+				"provinces": 31,
+				"seasonal_moisture": 0.0,
+				"suitability": 16.7618393940029
+			},
+			{
+				"bounds": [
+					100.0,
+					145.0,
+					18.0,
+					50.0
+				],
+				"cities": 33,
+				"effective_moisture": 412.405378427157,
+				"name": "EastAsia",
+				"provinces": 35,
+				"seasonal_moisture": 0.0,
+				"suitability": 5.16697239842198
+			},
+			{
+				"bounds": [
+					110.0,
+					122.0,
+					34.0,
+					42.0
+				],
+				"cities": 3,
+				"effective_moisture": 304.84764461614,
+				"name": "NorthChina",
+				"provinces": 3,
+				"seasonal_moisture": 0.0,
+				"suitability": 4.27222280973552
+			},
+			{
+				"bounds": [
+					105.0,
+					122.0,
+					22.0,
+					34.0
+				],
+				"cities": 9,
+				"effective_moisture": 366.620212909049,
+				"name": "SouthChina",
+				"provinces": 9,
+				"seasonal_moisture": 0.0,
+				"suitability": 3.65401997956388
+			},
+			{
+				"bounds": [
+					-10.0,
+					30.0,
+					20.0,
+					30.0
+				],
+				"cities": 9,
+				"effective_moisture": 326.452128125411,
+				"name": "Sahara",
+				"provinces": 10,
+				"seasonal_moisture": 0.0,
+				"suitability": 2.46081940701202
+			},
+			{
+				"bounds": [
+					40.0,
+					55.0,
+					18.0,
+					30.0
+				],
+				"cities": 10,
+				"effective_moisture": 916.602592944948,
+				"name": "Arabia",
+				"provinces": 10,
+				"seasonal_moisture": 0.0,
+				"suitability": 9.86767989341366
+			},
+			{
+				"bounds": [
+					70.0,
+					90.0,
+					10.0,
+					30.0
+				],
+				"cities": 10,
+				"effective_moisture": 590.569636760318,
+				"name": "India",
+				"provinces": 11,
+				"seasonal_moisture": 0.0,
+				"suitability": 3.87753016510381
+			}
+		]
+	},
+	"seed": 1
+}

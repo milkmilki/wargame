@@ -1,0 +1,1047 @@
+{
+  "format": "atlas-seasonal-circulation-evidence-v2",
+  "date": "2026-10-09",
+  "seed": 1,
+  "scene": "res://atlas_earth_preview.tscn",
+  "rainfall_model": "seasonal_circulation_v2",
+  "settlement_model": "climate_capacity_v2",
+  "observed_climate": false,
+  "renderer": "OpenGL Compatibility",
+  "gpu": "AMD Radeon RX 7600",
+  "viewport": [
+    2048,
+    1024
+  ],
+  "screenshot_postprocessing": false,
+  "views": {
+    "africa": {
+      "center": [
+        1120,
+        480
+      ],
+      "zoom": 3.5
+    },
+    "europe": {
+      "center": [
+        1120,
+        230
+      ],
+      "zoom": 5.5
+    },
+    "china": {
+      "center": [
+        1660,
+        345
+      ],
+      "zoom": 7
+    }
+  },
+  "frozen_before": "v1 frozen seed-1 Earth snapshot; exact terrain/water/temperature/mesh unchanged",
+  "events": [
+    {
+      "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+      "city_threshold": 1.0,
+      "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+      "code_version": "atlas-native-port-v1",
+      "elapsed_ms": 22,
+      "event": "start",
+      "godot": {
+        "build": "official",
+        "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+        "hex": 263937,
+        "major": 4,
+        "minor": 7,
+        "patch": 1,
+        "status": "stable",
+        "string": "4.7.1-stable (official)",
+        "timestamp": 0
+      },
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "source_fingerprint": "fc48aabd82eb7f3ff8dd5c7311479f23b4e32aeb89437dc8eda2e7f87212a14b",
+      "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 55,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "真实地球高程与海岸",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 155,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "球面网格与真实高程取样",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 3688,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地球气候、洋流与海冰（模型计算）",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 5854,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "季节大气环流：辐合雨带、陆海季风与西风水汽",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 17170,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "真实地形排水与环境供水",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 17253,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "宜居度与省份",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 18257,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "陆上道路",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 18576,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "全球栅格与浮冰",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 38151,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地形符号规划",
+      "world_index": 1
+    },
+    {
+      "elapsed_ms": 39355,
+      "event": "stage",
+      "model": "native_earth",
+      "pid": 31900,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "stage": "地理名称与标注路径",
+      "world_index": 1
+    },
+    {
+      "cells": 33940,
+      "cities": 695,
+      "elapsed_ms": 64791,
+      "event": "ready",
+      "model": "native_earth",
+      "options": {
+        "city_threshold": 1.0,
+        "rainfall_model": "seasonal_circulation_v2",
+        "river_usage": "environment_only",
+        "road_model": "civ-atlas-103afd3-land-v1",
+        "settlement_model": "climate_capacity_v2",
+        "terrain_model": "earth",
+        "visual_model": "atlas-handdrawn-v1"
+      },
+      "params": {
+        "cells": 36000,
+        "rainfall": 1,
+        "rainfall_model": "seasonal_circulation_v2",
+        "rainfall_transport": {
+          "annual_combine": "arithmetic mean of four seasonal rates",
+          "grid": [
+            360,
+            180
+          ],
+          "observed_climate": false,
+          "rain_scale": 70000.0,
+          "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+          "recycling_fraction": 0.25,
+          "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, high-mountain rain shadow",
+          "season_heating": [
+            -0.85,
+            0.4,
+            0.85,
+            -0.4
+          ],
+          "seasons": [
+            "DJF",
+            "MAM",
+            "JJA",
+            "SON"
+          ],
+          "spinup_steps": 100,
+          "transport_step_km": 160.0,
+          "version": "seasonal_circulation_v2",
+          "water_width_km": 120.0,
+          "wind_coordinates": {
+            "seasonal_u": "east",
+            "seasonal_v": "north",
+            "windX": "east",
+            "windY": "south"
+          }
+        },
+        "seed": 1,
+        "settlement_model": "climate_capacity_v2",
+        "temperature": 0,
+        "terrain_model": "earth",
+        "terrain_source": {
+          "bounds": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+          ],
+          "date": "2026-10-09",
+          "elevation_encoding": "signed-i16-little-endian-gzip",
+          "elevation_scale_m": 0.5,
+          "format": "atlas-earth-surface-v1",
+          "height": 1800.0,
+          "projection": "EPSG:4326 equirectangular",
+          "registration": "pixel-center",
+          "relief_file": "earth_relief_06m.i16.gz",
+          "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+          "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+          "row_order": "north-to-south",
+          "runtime": "native Godot; no Python dependency",
+          "sources": [
+            {
+              "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+              "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+              "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+              "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+            },
+            {
+              "license": "public domain",
+              "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+            },
+            {
+              "license": "public domain",
+              "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+            }
+          ],
+          "water_classes": {
+            "lake": 2.0,
+            "land": 0.0,
+            "ocean": 1.0
+          },
+          "water_file": "earth_water_06m.u8.gz",
+          "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+          "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+          "width": 3600.0
+        }
+      },
+      "pid": 31900,
+      "regions": 744,
+      "roads": 744,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "timing": {
+        "glyphs_ms": 423,
+        "places_ms": 735,
+        "raster_ms": 19571,
+        "regions_ms": 997,
+        "roads_ms": 330,
+        "total_ms": 40036,
+        "world_ms": 17191
+      },
+      "view_ms": 24361,
+      "world_index": 1
+    }
+  ],
+  "view_events": {
+    "ui": [
+      {
+        "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "city_threshold": 1.0,
+        "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "code_version": "atlas-native-port-v1",
+        "elapsed_ms": 24,
+        "event": "start",
+        "godot": {
+          "build": "official",
+          "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+          "hex": 263937,
+          "major": 4,
+          "minor": 7,
+          "patch": 1,
+          "status": "stable",
+          "string": "4.7.1-stable (official)",
+          "timestamp": 0
+        },
+        "model": "native_development_cache",
+        "pid": 4544,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "source_fingerprint": "fc48aabd82eb7f3ff8dd5c7311479f23b4e32aeb89437dc8eda2e7f87212a14b",
+        "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+        "world_index": 1
+      },
+      {
+        "cells": 33940,
+        "cities": 695,
+        "elapsed_ms": 24955,
+        "event": "ready",
+        "model": "native_development_cache",
+        "options": {
+          "city_threshold": 1.0,
+          "rainfall_model": "seasonal_circulation_v2",
+          "river_usage": "environment_only",
+          "road_model": "civ-atlas-103afd3-land-v1",
+          "settlement_model": "climate_capacity_v2",
+          "terrain_model": "earth",
+          "visual_model": "atlas-handdrawn-v1"
+        },
+        "params": {
+          "cells": 36000,
+          "rainfall": 1,
+          "rainfall_model": "seasonal_circulation_v2",
+          "rainfall_transport": {
+            "annual_combine": "arithmetic mean of four seasonal rates",
+            "grid": [
+              360,
+              180
+            ],
+            "observed_climate": false,
+            "rain_scale": 70000.0,
+            "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+            "recycling_fraction": 0.25,
+            "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, high-mountain rain shadow",
+            "season_heating": [
+              -0.85,
+              0.4,
+              0.85,
+              -0.4
+            ],
+            "seasons": [
+              "DJF",
+              "MAM",
+              "JJA",
+              "SON"
+            ],
+            "spinup_steps": 100,
+            "transport_step_km": 160.0,
+            "version": "seasonal_circulation_v2",
+            "water_width_km": 120.0,
+            "wind_coordinates": {
+              "seasonal_u": "east",
+              "seasonal_v": "north",
+              "windX": "east",
+              "windY": "south"
+            }
+          },
+          "seed": 1,
+          "settlement_model": "climate_capacity_v2",
+          "temperature": 0,
+          "terrain_model": "earth",
+          "terrain_source": {
+            "bounds": [
+              -180.0,
+              -90.0,
+              180.0,
+              90.0
+            ],
+            "date": "2026-10-09",
+            "elevation_encoding": "signed-i16-little-endian-gzip",
+            "elevation_scale_m": 0.5,
+            "format": "atlas-earth-surface-v1",
+            "height": 1800.0,
+            "projection": "EPSG:4326 equirectangular",
+            "registration": "pixel-center",
+            "relief_file": "earth_relief_06m.i16.gz",
+            "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+            "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+            "row_order": "north-to-south",
+            "runtime": "native Godot; no Python dependency",
+            "sources": [
+              {
+                "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+                "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+                "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+                "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+              },
+              {
+                "license": "public domain",
+                "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+              },
+              {
+                "license": "public domain",
+                "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+              }
+            ],
+            "water_classes": {
+              "lake": 2.0,
+              "land": 0.0,
+              "ocean": 1.0
+            },
+            "water_file": "earth_water_06m.u8.gz",
+            "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+            "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+            "width": 3600.0
+          }
+        },
+        "pid": 4544,
+        "regions": 744,
+        "roads": 744,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "timing": {
+          "glyphs_ms": 423,
+          "places_ms": 735,
+          "raster_ms": 19571,
+          "regions_ms": 997,
+          "roads_ms": 330,
+          "total_ms": 40036,
+          "world_ms": 17191
+        },
+        "view_ms": 24582,
+        "world_index": 1
+      },
+      {
+        "elapsed_ms": 33136,
+        "event": "ownership",
+        "model": "native_development_cache",
+        "owner": 1,
+        "pid": 4544,
+        "region": 0,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "world_index": 1
+      },
+      {
+        "elapsed_ms": 35544,
+        "error": "",
+        "event": "snapshot_save",
+        "model": "native_development_cache",
+        "pid": 4544,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "world_index": 1
+      },
+      {
+        "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "city_threshold": 1.0,
+        "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "code_version": "atlas-native-port-v1",
+        "elapsed_ms": 21,
+        "event": "start",
+        "godot": {
+          "build": "official",
+          "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+          "hex": 263937,
+          "major": 4,
+          "minor": 7,
+          "patch": 1,
+          "status": "stable",
+          "string": "4.7.1-stable (official)",
+          "timestamp": 0
+        },
+        "model": "snapshot",
+        "pid": 4544,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "source_fingerprint": "fc48aabd82eb7f3ff8dd5c7311479f23b4e32aeb89437dc8eda2e7f87212a14b",
+        "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+        "world_index": 2
+      },
+      {
+        "cells": 33940,
+        "cities": 695,
+        "elapsed_ms": 23974,
+        "event": "ready",
+        "model": "snapshot",
+        "options": {
+          "city_threshold": 1.0,
+          "rainfall_model": "seasonal_circulation_v2",
+          "river_usage": "environment_only",
+          "road_model": "civ-atlas-103afd3-land-v1",
+          "settlement_model": "climate_capacity_v2",
+          "terrain_model": "earth",
+          "visual_model": "atlas-handdrawn-v1"
+        },
+        "params": {
+          "cells": 36000,
+          "rainfall": 1,
+          "rainfall_model": "seasonal_circulation_v2",
+          "rainfall_transport": {
+            "annual_combine": "arithmetic mean of four seasonal rates",
+            "grid": [
+              360,
+              180
+            ],
+            "observed_climate": false,
+            "rain_scale": 70000.0,
+            "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+            "recycling_fraction": 0.25,
+            "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, high-mountain rain shadow",
+            "season_heating": [
+              -0.85,
+              0.4,
+              0.85,
+              -0.4
+            ],
+            "seasons": [
+              "DJF",
+              "MAM",
+              "JJA",
+              "SON"
+            ],
+            "spinup_steps": 100,
+            "transport_step_km": 160.0,
+            "version": "seasonal_circulation_v2",
+            "water_width_km": 120.0,
+            "wind_coordinates": {
+              "seasonal_u": "east",
+              "seasonal_v": "north",
+              "windX": "east",
+              "windY": "south"
+            }
+          },
+          "seed": 1,
+          "settlement_model": "climate_capacity_v2",
+          "temperature": 0,
+          "terrain_model": "earth",
+          "terrain_source": {
+            "bounds": [
+              -180.0,
+              -90.0,
+              180.0,
+              90.0
+            ],
+            "date": "2026-10-09",
+            "elevation_encoding": "signed-i16-little-endian-gzip",
+            "elevation_scale_m": 0.5,
+            "format": "atlas-earth-surface-v1",
+            "height": 1800.0,
+            "projection": "EPSG:4326 equirectangular",
+            "registration": "pixel-center",
+            "relief_file": "earth_relief_06m.i16.gz",
+            "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+            "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+            "row_order": "north-to-south",
+            "runtime": "native Godot; no Python dependency",
+            "sources": [
+              {
+                "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+                "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+                "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+                "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+              },
+              {
+                "license": "public domain",
+                "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+              },
+              {
+                "license": "public domain",
+                "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+              }
+            ],
+            "water_classes": {
+              "lake": 2.0,
+              "land": 0.0,
+              "ocean": 1.0
+            },
+            "water_file": "earth_water_06m.u8.gz",
+            "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+            "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+            "width": 3600.0
+          }
+        },
+        "pid": 4544,
+        "regions": 744,
+        "roads": 744,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "timing": {
+          "glyphs_ms": 423,
+          "places_ms": 735,
+          "raster_ms": 19571,
+          "regions_ms": 997,
+          "roads_ms": 330,
+          "total_ms": 40036,
+          "world_ms": 17191
+        },
+        "view_ms": 23944,
+        "world_index": 2
+      },
+      {
+        "cities": 0,
+        "elapsed_ms": 26708,
+        "event": "city_threshold",
+        "model": "snapshot",
+        "pid": 4544,
+        "roads": 0,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "value": 50.0,
+        "world_index": 2
+      },
+      {
+        "cities": 695,
+        "elapsed_ms": 27971,
+        "event": "city_threshold",
+        "model": "snapshot",
+        "pid": 4544,
+        "roads": 744,
+        "scene": "res://atlas_preview.tscn",
+        "seed": 1,
+        "value": 1.0,
+        "world_index": 2
+      }
+    ],
+    "before": [
+      {
+        "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "city_threshold": 1.0,
+        "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "code_version": "atlas-native-port-v1",
+        "elapsed_ms": 27,
+        "event": "start",
+        "godot": {
+          "build": "official",
+          "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+          "hex": 263937,
+          "major": 4,
+          "minor": 7,
+          "patch": 1,
+          "status": "stable",
+          "string": "4.7.1-stable (official)",
+          "timestamp": 0
+        },
+        "model": "native_development_cache",
+        "pid": 28240,
+        "scene": "res://atlas_earth_preview.tscn",
+        "seed": 1,
+        "source_fingerprint": "87bd15f6636bd4114b08cae2d99128ff99f7d76f34422cdbe781bf4be15b530d",
+        "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+        "world_index": 1
+      },
+      {
+        "cells": 33940,
+        "cities": 624,
+        "elapsed_ms": 27147,
+        "event": "ready",
+        "model": "native_development_cache",
+        "options": {
+          "city_threshold": 1.0,
+          "rainfall_model": "legacy_monsoon_global_v1",
+          "river_usage": "environment_only",
+          "road_model": "civ-atlas-103afd3-land-v1",
+          "terrain_model": "earth",
+          "visual_model": "atlas-handdrawn-v1"
+        },
+        "params": {
+          "cells": 36000,
+          "rainfall": 1,
+          "rainfall_model": "legacy_monsoon_global_v1",
+          "rainfall_transport": {
+            "distance_reference_km": 4000.0,
+            "grid": [
+              720,
+              360
+            ],
+            "horizontal_spinup_cycles": 3,
+            "mm_per_effective_unit": 2000.0,
+            "observed_climate": false,
+            "seasonal_combine": "max(annual,seasonal)",
+            "source": "SettlementEnvironment environment_v1.7",
+            "version": "legacy_monsoon_global_v1",
+            "wrap_x": true
+          },
+          "seed": 1,
+          "temperature": 0,
+          "terrain_model": "earth",
+          "terrain_source": {
+            "bounds": [
+              -180.0,
+              -90.0,
+              180.0,
+              90.0
+            ],
+            "date": "2026-10-09",
+            "elevation_encoding": "signed-i16-little-endian-gzip",
+            "elevation_scale_m": 0.5,
+            "format": "atlas-earth-surface-v1",
+            "height": 1800.0,
+            "projection": "EPSG:4326 equirectangular",
+            "registration": "pixel-center",
+            "relief_file": "earth_relief_06m.i16.gz",
+            "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+            "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+            "row_order": "north-to-south",
+            "runtime": "native Godot; no Python dependency",
+            "sources": [
+              {
+                "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+                "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+                "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+                "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+              },
+              {
+                "license": "public domain",
+                "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+              },
+              {
+                "license": "public domain",
+                "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+              }
+            ],
+            "water_classes": {
+              "lake": 2.0,
+              "land": 0.0,
+              "ocean": 1.0
+            },
+            "water_file": "earth_water_06m.u8.gz",
+            "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+            "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+            "width": 3600.0
+          }
+        },
+        "pid": 28240,
+        "regions": 682,
+        "roads": 682,
+        "scene": "res://atlas_earth_preview.tscn",
+        "seed": 1,
+        "timing": {
+          "glyphs_ms": 385,
+          "places_ms": 651,
+          "raster_ms": 18588,
+          "regions_ms": 902,
+          "roads_ms": 336,
+          "total_ms": 30750,
+          "world_ms": 9460
+        },
+        "view_ms": 26738,
+        "world_index": 1
+      }
+    ],
+    "after": [
+      {
+        "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "city_threshold": 1.0,
+        "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+        "code_version": "atlas-native-port-v1",
+        "elapsed_ms": 30,
+        "event": "start",
+        "godot": {
+          "build": "official",
+          "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+          "hex": 263937,
+          "major": 4,
+          "minor": 7,
+          "patch": 1,
+          "status": "stable",
+          "string": "4.7.1-stable (official)",
+          "timestamp": 0
+        },
+        "model": "native_development_cache",
+        "pid": 23644,
+        "scene": "res://atlas_earth_preview.tscn",
+        "seed": 1,
+        "source_fingerprint": "fc48aabd82eb7f3ff8dd5c7311479f23b4e32aeb89437dc8eda2e7f87212a14b",
+        "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+        "world_index": 1
+      },
+      {
+        "cells": 33940,
+        "cities": 695,
+        "elapsed_ms": 25227,
+        "event": "ready",
+        "model": "native_development_cache",
+        "options": {
+          "city_threshold": 1.0,
+          "rainfall_model": "seasonal_circulation_v2",
+          "river_usage": "environment_only",
+          "road_model": "civ-atlas-103afd3-land-v1",
+          "settlement_model": "climate_capacity_v2",
+          "terrain_model": "earth",
+          "visual_model": "atlas-handdrawn-v1"
+        },
+        "params": {
+          "cells": 36000,
+          "rainfall": 1,
+          "rainfall_model": "seasonal_circulation_v2",
+          "rainfall_transport": {
+            "annual_combine": "arithmetic mean of four seasonal rates",
+            "grid": [
+              360,
+              180
+            ],
+            "observed_climate": false,
+            "rain_scale": 70000.0,
+            "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+            "recycling_fraction": 0.25,
+            "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, high-mountain rain shadow",
+            "season_heating": [
+              -0.85,
+              0.4,
+              0.85,
+              -0.4
+            ],
+            "seasons": [
+              "DJF",
+              "MAM",
+              "JJA",
+              "SON"
+            ],
+            "spinup_steps": 100,
+            "transport_step_km": 160.0,
+            "version": "seasonal_circulation_v2",
+            "water_width_km": 120.0,
+            "wind_coordinates": {
+              "seasonal_u": "east",
+              "seasonal_v": "north",
+              "windX": "east",
+              "windY": "south"
+            }
+          },
+          "seed": 1,
+          "settlement_model": "climate_capacity_v2",
+          "temperature": 0,
+          "terrain_model": "earth",
+          "terrain_source": {
+            "bounds": [
+              -180.0,
+              -90.0,
+              180.0,
+              90.0
+            ],
+            "date": "2026-10-09",
+            "elevation_encoding": "signed-i16-little-endian-gzip",
+            "elevation_scale_m": 0.5,
+            "format": "atlas-earth-surface-v1",
+            "height": 1800.0,
+            "projection": "EPSG:4326 equirectangular",
+            "registration": "pixel-center",
+            "relief_file": "earth_relief_06m.i16.gz",
+            "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+            "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+            "row_order": "north-to-south",
+            "runtime": "native Godot; no Python dependency",
+            "sources": [
+              {
+                "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+                "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+                "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+                "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+              },
+              {
+                "license": "public domain",
+                "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+              },
+              {
+                "license": "public domain",
+                "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+                "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+              }
+            ],
+            "water_classes": {
+              "lake": 2.0,
+              "land": 0.0,
+              "ocean": 1.0
+            },
+            "water_file": "earth_water_06m.u8.gz",
+            "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+            "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+            "width": 3600.0
+          }
+        },
+        "pid": 23644,
+        "regions": 744,
+        "roads": 744,
+        "scene": "res://atlas_earth_preview.tscn",
+        "seed": 1,
+        "timing": {
+          "glyphs_ms": 423,
+          "places_ms": 735,
+          "raster_ms": 19571,
+          "regions_ms": 997,
+          "roads_ms": 330,
+          "total_ms": 40036,
+          "world_ms": 17191
+        },
+        "view_ms": 24801,
+        "world_index": 1
+      }
+    ]
+  },
+  "proof": [
+    {
+      "file": "atlas-circ-regression-0.txt",
+      "sha256": "e07c0ad29d6377b1d9993c49c484444f42f1720daa9e1fa27613061e4810ac4a"
+    },
+    {
+      "file": "atlas-circ-regression-1.txt",
+      "sha256": "e93a3c2ed119d27c75fca47c6f51ba9ee5a111850089068f465444d06a09251b"
+    },
+    {
+      "file": "atlas-circ-regression-2.txt",
+      "sha256": "d77a763e3e2fa2447b8d7b36e85304af207b92f5320ab4ad956beceb6a6b5952"
+    },
+    {
+      "file": "atlas-climate-settlement.txt",
+      "sha256": "4bdd3efa25571405346b339ccee74ab0aa8fbfd57850e03b58376bb0a0b75a0d"
+    },
+    {
+      "file": "atlas-circulation-region-regression.txt",
+      "sha256": "46577bc98ee3674f685cf13ad72933522a29b5a7b13722efd004343dddc7d3f6"
+    },
+    {
+      "file": "atlas-circulation-preview.txt",
+      "sha256": "2c9ed445dffe2a6c23eec266773ffe6620a9464f283edf63f75b46ff00530285"
+    },
+    {
+      "file": "atlas-circulation-validation-1.txt",
+      "sha256": "4244d593727ec9f99cef936e5a71fc5e6107423107b069fd5e0f70089cc3b298"
+    },
+    {
+      "file": "atlas-circulation-validation-2.txt",
+      "sha256": "33804e67ad1e1e4a413a53ab968e9e122249511c672060b2ada8d6c5ad173f9c"
+    },
+    {
+      "file": "atlas-circulation-validation-3.txt",
+      "sha256": "fb2eec245421ba4f0f333825c50ffcb5df7ea2e3935599ebd6225a1d7a82c153"
+    },
+    {
+      "file": "atlas-circulation-snapshot.txt",
+      "sha256": "94cb052b0763b4c609adea5076c618d69cd796900107fae9d5f90197a27fc758"
+    },
+    {
+      "file": "atlas-circulation-legacy-world.txt",
+      "sha256": "7c5520e37fa1e5d35d74129669497a7a7da4af949fefeb6b17f30a0e66af082c"
+    },
+    {
+      "file": "atlas-circulation-ui-final.txt",
+      "sha256": "e44db8b32d7f36b71a393c67317509b1800d1fad660cbda7ce44a050e5e6069b"
+    },
+    {
+      "file": "atlas-circulation-before-views.txt",
+      "sha256": "0a80097ff29219984bce7451c0aad2d213beeefe67062978b19230c4a9086845"
+    },
+    {
+      "file": "atlas-circulation-after-views.txt",
+      "sha256": "c54c3e0dd647d2551740f98695429d092c8281697566716c1a9ad1cfda74b99e"
+    }
+  ],
+  "images": [
+    {
+      "file": "after-africa.png",
+      "sha256": "e5c1e17c5c4556d74283d954a8d1c99c03c27098bc2fea478163a9733d68ed31",
+      "bytes": 2306902
+    },
+    {
+      "file": "after-china.png",
+      "sha256": "cf6247fc557a90fda2e2e1b03557943a2572b93daed56baeddb8fda7b738b2f3",
+      "bytes": 1787266
+    },
+    {
+      "file": "after-europe.png",
+      "sha256": "5b14769a26dbbba42c7d667d113e150dd1f2b00244a14025764c8bfa7f976ceb",
+      "bytes": 2110417
+    },
+    {
+      "file": "after-world.png",
+      "sha256": "23eb05be4678e3760d1e225263bd553a5a6426330952c2dc63fb453e892cd550",
+      "bytes": 3439323
+    },
+    {
+      "file": "before-africa.png",
+      "sha256": "d669d444fee0a43b7cf6f06aaf6af61a480fa82b4222b7386a12c4569c362d9b",
+      "bytes": 2222967
+    },
+    {
+      "file": "before-china.png",
+      "sha256": "58d2391ec9402c04973030da34755213f249d41ce7ff0e035a7040135471e1c6",
+      "bytes": 1743117
+    },
+    {
+      "file": "before-europe.png",
+      "sha256": "cb16e503bc82868ea3958ea07205f319751a9619a5db2aac6dcffa7232244065",
+      "bytes": 2012350
+    },
+    {
+      "file": "before-world.png",
+      "sha256": "182c0c4273f1718498e50c57471ff32246a171e10c357f64f8c38c0e99ca4c86",
+      "bytes": 3051273
+    },
+    {
+      "file": "rainfall-comparison.png",
+      "sha256": "801c0401b27b6a26124c8e878c620952626affc8412a0c2f9c64570f4e48272d",
+      "bytes": 1150535
+    },
+    {
+      "file": "seasonal-winds.png",
+      "sha256": "6f1dad59268c5745a549f29b7b9d5b712c0b509efc52d7023944df539241e7cf",
+      "bytes": 327846
+    }
+  ],
+  "metrics_sha256": "0c781d6c20c2d9d967e73b2206731b6e2c77070d4f2f0bf372aaf4ddf45eec60",
+  "study_mask_metadata": {
+    "purpose": "Validation of city/moisture contrast across Heihe-Tengchong; not imported by runtime generator",
+    "source": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_countries.geojson",
+    "source_sha256": "3e458fc036ad0a66411f2c1e6cac49c5d7bfb81cb1123bc513b22511a2b7fdeb",
+    "license": "Natural Earth public domain",
+    "selection": "ADM0_A3=CHN",
+    "width": 360,
+    "height": 180,
+    "bounds": [
+      -180,
+      -90,
+      180,
+      90
+    ],
+    "encoding": "u8 land-center polygon raster, north-to-south",
+    "precision_note": "1 degree study mask, coarse approximate regional counts, not real population statistics"
+  },
+  "study_mask_sha256": "b476a70e26bd4a2f69852a966973a40fe04b0f1dd23167ca70dfef810d7d9e5a",
+  "known_limitations": [
+    "Reduced seasonal model; not fitted to observed rainfall or population",
+    "Southern China/autumn too dry, orographic and East-African rainfall locally excessive",
+    "Existing SubViewport/GPU teardown warnings"
+  ]
+}

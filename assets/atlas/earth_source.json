@@ -1,0 +1,47 @@
+{
+  "format": "atlas-earth-surface-v1",
+  "width": 3600,
+  "height": 1800,
+  "projection": "EPSG:4326 equirectangular",
+  "registration": "pixel-center",
+  "bounds": [
+    -180,
+    -90,
+    180,
+    90
+  ],
+  "row_order": "north-to-south",
+  "elevation_scale_m": 0.5,
+  "elevation_encoding": "signed-i16-little-endian-gzip",
+  "relief_file": "earth_relief_06m.i16.gz",
+  "water_file": "earth_water_06m.u8.gz",
+  "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+  "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+  "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+  "water_classes": {
+    "land": 0,
+    "ocean": 1,
+    "lake": 2
+  },
+  "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+  "sources": [
+    {
+      "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd",
+      "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+      "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+      "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson",
+      "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+      "license": "public domain"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson",
+      "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+      "license": "public domain"
+    }
+  ],
+  "date": "2026-10-09",
+  "runtime": "native Godot; no Python dependency"
+}

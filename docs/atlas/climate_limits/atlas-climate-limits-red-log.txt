@@ -1,0 +1,9 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+CLIMATE_LIMIT_FAIL extreme heat almost as suitable as temperate climate
+CLIMATE_LIMIT_FAIL extreme wetness almost as suitable as balanced rainfall
+CLIMATE_LIMIT_FAIL forest/freshwater bypass frozen climate
+CLIMATE_LIMIT_FAIL forest/freshwater bypass heat stress
+CLIMATE_LIMIT_FAIL missing growing-season water balance
+CLIMATE_LIMIT_FAIL cold ocean has no rain-suppressing effect on adjacent subtropical land
+ATLAS_CLIMATE_LIMITS failures=6

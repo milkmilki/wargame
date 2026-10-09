@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 军事二值通行兼容校验 ===
+verdict=MILITARY_BINARY_ROAD_EQUIVALENT

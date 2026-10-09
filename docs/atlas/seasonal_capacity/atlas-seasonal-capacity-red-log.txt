@@ -1,0 +1,12 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SEASONAL_CAPACITY_FAIL new formula must invalidate generation caches
+SEASONAL_CAPACITY_FAIL two optimum seasons must reach full suitability
+SEASONAL_CAPACITY_FAIL one optimum season must not equal two
+SEASONAL_CAPACITY_FAIL rain and warmth in different seasons must not combine
+SEASONAL_CAPACITY_FAIL cold winter must not penalize two suitable seasons
+SEASONAL_CAPACITY_FAIL waterlogged seasons must not retain high scores
+SEASONAL_CAPACITY_FAIL hot cutoff must remove tropical heat support
+SEASONAL_CAPACITY_FAIL small excess above 20 C must not collapse Central Plains support
+SEASONAL_CAPACITY_FAIL hot-side decline must accelerate after 24 C
+ATLAS_SEASONAL_CAPACITY failures=9

@@ -1,0 +1,21 @@
+/** Original pure territory/name-path routines against fixed input, development only. */
+import {readFile,writeFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+import {createRequire} from 'node:module';
+import {runInNewContext} from 'node:vm';
+const root=resolve(process.argv[2]),req=createRequire(resolve(root,'package.json'));
+const {transformSync}=createRequire(req.resolve('tsx'))('esbuild');
+const source=(await readFile(resolve(root,'src/render/labels/polity.ts'),'utf8')).replace(/^import .*;\r?\n/gm,'');
+const context:any={module:{exports:{}},exports:{},polityAlive:()=>true,polityName:(p:any)=>p.name,polityShortTitle:(p:any)=>p.name,polityTierAt:()=>0};
+runInNewContext(transformSync(source,{loader:'ts',format:'cjs'}).code,context);
+const data=JSON.parse(await readFile('.dbg/atlas-native-reference/world-1.json','utf8'));
+const bytes=await readFile('.dbg/atlas-native-reference/provinces-1.bin');const provinces=new Int16Array(bytes.buffer,bytes.byteOffset,bytes.byteLength/2);
+const gw=512,gh=256,G=4,region=new Int16Array(gw*gh);
+for(let y=0;y<gh;y++)for(let x=0;x<gw;x++)region[y*gw+x]=provinces[(4*y+2)*2048+4*x+2];
+const grid={gw,gh,G,region,wrap:true};
+const field=context.module.exports.territoryField(grid,Int16Array.from(data.ownership));
+const count=new Int32Array(data.nations.length);for(const o of data.ownership)if(o>=0)count[o]++;
+const civ={polities:data.nations.map((p:any,id:number)=>({...p,id}))};
+const labels=context.module.exports.fitAll(civ,0,field,count,{refCss:1300},2048,(p:number)=>{const cell=data.regions.seat[data.nations[p].seat];return [data.mesh.x[cell],data.mesh.y[cell]];});
+await writeFile('.dbg/atlas-native-reference/name-layout-1.json',JSON.stringify({grid:{gw,gh,G,region:[...region]},owner:[...field.owner],dist:[...field.dist],labels}));
+console.log('ATLAS_LABELS_REFERENCE',labels.length);

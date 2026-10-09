@@ -1,0 +1,1309 @@
+{
+  "source": {
+    "city_policy": "no cities regenerated in this diagnostic export",
+    "export_ms": 74846,
+    "format": "atlas-rainfall-v5-diagnostics",
+    "git_base": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "model": "seasonal_circulation_v5",
+    "parameters": {
+      "cells": 36000,
+      "climate_water_balance": {
+        "aggregation": "best-two joint score ^1.5, multiplied by all-four-season humid-heat/waterlogging penalty",
+        "evaporation": "FAO-56 Hargreaves; biome diagnostics only",
+        "growing_months": "sum of four joint seasonal scores times three; equivalent suitable months",
+        "humid_heat_quarter_mm": [
+          300.0,
+          800.0
+        ],
+        "humid_heat_temperature_C": [
+          20.0,
+          26.0
+        ],
+        "humid_heat_weight": 1.5,
+        "observed_soils": false,
+        "observed_temperature_range": false,
+        "quarter_rain_cutoffs_mm": [
+          50.0,
+          1400.0
+        ],
+        "quarter_rain_plateau_mm": [
+          200.0,
+          800.0
+        ],
+        "seasonal_temperature_amplitude_C": 12.0,
+        "temperature_hot_cutoff_C": 28.0,
+        "temperature_low_cutoff_C": 0.0,
+        "temperature_plateau_C": [
+          10.0,
+          20.0
+        ],
+        "version": "climate_capacity_v5",
+        "waterlogging_quarter_mm": [
+          800.0,
+          1400.0
+        ],
+        "waterlogging_weight": 1.0
+      },
+      "rainfall": 1,
+      "rainfall_model": "seasonal_circulation_v5",
+      "rainfall_transport": {
+        "annual_combine": "arithmetic mean of four seasonal rates",
+        "cold_continent_weather_occupancy": "up to 70 percent fewer moist frontal sectors; local weights normalized",
+        "cold_land_recycling": "shared zonal temperature baseline, elevation and seasonal heating; -2 to 10 C evaporation ramp",
+        "cold_layer_height_m": 1800.0,
+        "cold_layer_inland_scale_km": 900.0,
+        "cold_sector_meridional_multiplier": -3.0,
+        "cold_sector_zonal_multiplier": -0.3,
+        "frontal_extra_lift": 0.04,
+        "frontal_sample_steps": 6,
+        "frontal_transport_steps": 12,
+        "grid": [
+          360,
+          180
+        ],
+        "inland_mixing_latitude_band": [
+          30.0,
+          40.0,
+          50.0,
+          55.0
+        ],
+        "inland_mixing_transition_km": [
+          200.0,
+          1000.0
+        ],
+        "inland_water_recharge_multiplier": 0.1,
+        "lake_freezing_proxy_C": [
+          -2.0,
+          1.0
+        ],
+        "lake_temperature_seasonal_amplitude": 24.0,
+        "land_dry_air_mixing_km": 240.0,
+        "lowland_basin_mixing": "DEM-inferred closed below-sea-level lake basin; 600-1000 km taper, only where nearer than the ocean",
+        "marine_supply": "Magnus saturation relative to 27 C, without a humidity floor",
+        "moist_parcel_mixing_relief": {
+          "humidity_range": [
+            0.15,
+            0.4
+          ],
+          "maximum_relief": 0.9
+        },
+        "observed_climate": false,
+        "orographic_gain": 0.16,
+        "rain_scale": 70000.0,
+        "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+        "recycling_fraction": 0.25,
+        "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion",
+        "sea_ice": "temperature/latitude seasonal open-water proxy; no observed sea ice",
+        "sea_temperature_heating": [
+          -0.625,
+          -0.225,
+          0.625,
+          0.225
+        ],
+        "season_heating": [
+          -0.85,
+          0.4,
+          0.85,
+          -0.4
+        ],
+        "seasons": [
+          "DJF",
+          "MAM",
+          "JJA",
+          "SON"
+        ],
+        "spinup_steps": 100,
+        "transport_step_km": 160.0,
+        "version": "seasonal_circulation_v5",
+        "warm_land_weather_weights": [
+          [
+            0.72,
+            0.1,
+            0.1,
+            0.08
+          ],
+          [
+            0.552,
+            0.16,
+            0.16,
+            0.128
+          ],
+          [
+            0.72,
+            0.1,
+            0.1,
+            0.08
+          ],
+          [
+            0.552,
+            0.16,
+            0.16,
+            0.128
+          ]
+        ],
+        "water_classes": "explicit 0 land / 1 ocean / 2 inland lake; no region masks",
+        "water_width_km": 120.0,
+        "weather_regimes": [
+          "seasonal_mean",
+          "westward_poleward_warm_sector",
+          "eastward_poleward_warm_sector",
+          "equatorward_cold_sector"
+        ],
+        "wind_coordinates": {
+          "seasonal_u": "east",
+          "seasonal_v": "north",
+          "windX": "east",
+          "windY": "south"
+        },
+        "windward_approach_lift": {
+          "distance_km": 160.0,
+          "fraction_of_downwind_rise": 0.75,
+          "source": "upwind inland-lake fraction only"
+        },
+        "windward_mixing_relief_m": [
+          200.0,
+          1000.0
+        ]
+      },
+      "seed": 1,
+      "settlement_model": "climate_capacity_v5",
+      "temperature": 0,
+      "terrain_model": "earth",
+      "terrain_source": {
+        "bounds": [
+          -180.0,
+          -90.0,
+          180.0,
+          90.0
+        ],
+        "date": "2026-10-09",
+        "elevation_encoding": "signed-i16-little-endian-gzip",
+        "elevation_scale_m": 0.5,
+        "format": "atlas-earth-surface-v1",
+        "height": 1800.0,
+        "projection": "EPSG:4326 equirectangular",
+        "registration": "pixel-center",
+        "relief_file": "earth_relief_06m.i16.gz",
+        "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+        "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+        "row_order": "north-to-south",
+        "runtime": "native Godot; no Python dependency",
+        "sources": [
+          {
+            "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+            "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+            "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+            "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+          },
+          {
+            "license": "public domain",
+            "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+            "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+          },
+          {
+            "license": "public domain",
+            "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+            "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+          }
+        ],
+        "water_classes": {
+          "lake": 2.0,
+          "land": 0.0,
+          "ocean": 1.0
+        },
+        "water_file": "earth_water_06m.u8.gz",
+        "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+        "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+        "width": 3600.0
+      }
+    },
+    "pid": 27828,
+    "points_nearest_sphere_node": {
+      "Beijing": {
+        "actual_lon_lat": [
+          115.833470821381,
+          39.4364655017853
+        ],
+        "after_mm": [
+          57.0316619873047,
+          144.481857299805,
+          408.533538818359,
+          147.05387878418
+        ],
+        "before_mm": [
+          56.8432655334473,
+          143.749496459961,
+          441.760559082031,
+          146.681823730469
+        ],
+        "nearest_cell": 20985,
+        "requested_lon_lat": [
+          116.4,
+          39.9
+        ]
+      },
+      "Guangzhou": {
+        "actual_lon_lat": [
+          113.123645782471,
+          23.12460064888
+        ],
+        "after_mm": [
+          37.0803985595703,
+          310.143585205078,
+          759.018920898438,
+          79.2633590698242
+        ],
+        "before_mm": [
+          37.0034713745117,
+          301.916748046875,
+          743.365600585938,
+          79.1020965576172
+        ],
+        "nearest_cell": 22771,
+        "requested_lon_lat": [
+          113.27,
+          23.13
+        ]
+      },
+      "Nanjing": {
+        "actual_lon_lat": [
+          118.216581344604,
+          31.5974843502045
+        ],
+        "after_mm": [
+          48.2881813049316,
+          153.945373535156,
+          500.359344482422,
+          100.347015380859
+        ],
+        "before_mm": [
+          48.1286201477051,
+          121.352203369141,
+          494.2451171875,
+          100.065612792969
+        ],
+        "nearest_cell": 22127,
+        "requested_lon_lat": [
+          118.8,
+          32.1
+        ]
+      },
+      "Wuhan": {
+        "actual_lon_lat": [
+          114.811291694641,
+          30.1166689395905
+        ],
+        "after_mm": [
+          28.6767063140869,
+          140.675247192383,
+          460.971588134766,
+          66.8009262084961
+        ],
+        "before_mm": [
+          28.5747833251953,
+          130.660293579102,
+          453.147583007813,
+          66.508171081543
+        ],
+        "nearest_cell": 22542,
+        "requested_lon_lat": [
+          114.3,
+          30.6
+        ]
+      },
+      "Yakutsk": {
+        "actual_lon_lat": [
+          131.072773933411,
+          61.7238655686378
+        ],
+        "after_mm": [
+          3.8730947971344,
+          15.2484817504883,
+          27.4735870361328,
+          8.98925590515137
+        ],
+        "before_mm": [
+          3.83477449417114,
+          39.8942527770996,
+          60.8844413757324,
+          11.1964387893677
+        ],
+        "nearest_cell": 13536,
+        "requested_lon_lat": [
+          129.72,
+          62.02
+        ]
+      },
+      "Zhengzhou": {
+        "actual_lon_lat": [
+          114.102201461792,
+          34.2851114273071
+        ],
+        "after_mm": [
+          48.7911643981934,
+          163.702087402344,
+          408.629730224609,
+          101.717353820801
+        ],
+        "before_mm": [
+          49.38525390625,
+          156.685409545898,
+          427.030578613281,
+          99.4884262084961
+        ],
+        "nearest_cell": 21484,
+        "requested_lon_lat": [
+          113.65,
+          34.72
+        ]
+      }
+    },
+    "projection_metadata": {
+      "bounds": [
+        -180.0,
+        -90.0,
+        180.0,
+        90.0
+      ],
+      "export_ms": 11811.0,
+      "exporter_sha256": "164fcd6578d91a629b6dbc00caaea3479b82a3f12ac804be252ed482bfd26155",
+      "format": "atlas-seasonal-heatmaps-v1",
+      "godot": {
+        "build": "official",
+        "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+        "hex": 263937.0,
+        "major": 4.0,
+        "minor": 7.0,
+        "patch": 1.0,
+        "status": "stable",
+        "string": "4.7.1-stable (official)",
+        "timestamp": 0.0
+      },
+      "height": 2048.0,
+      "mesh_cells": 33940.0,
+      "months": [
+        [
+          12.0,
+          1.0,
+          2.0
+        ],
+        [
+          3.0,
+          4.0,
+          5.0
+        ],
+        [
+          6.0,
+          7.0,
+          8.0
+        ],
+        [
+          9.0,
+          10.0,
+          11.0
+        ]
+      ],
+      "ocean_policy": "masked; no simulated ocean rainfall output",
+      "params": {
+        "cells": 36000.0,
+        "climate_water_balance": {
+          "evaporation": "FAO-56 Hargreaves; estimated 8-14 C diurnal range",
+          "observed_soils": false,
+          "observed_temperature_range": false,
+          "rain_distribution": "uniform monthly within each quarter",
+          "rainfed_only": true,
+          "seasonal_temperature_amplitude_C": 12.0,
+          "soil_spinup_years": 2.0,
+          "soil_storage_mm": 150.0,
+          "version": "climate_capacity_v3"
+        },
+        "rainfall": 1.0,
+        "rainfall_model": "seasonal_circulation_v3",
+        "rainfall_transport": {
+          "annual_combine": "arithmetic mean of four seasonal rates",
+          "cold_layer_height_m": 1800.0,
+          "cold_layer_inland_scale_km": 900.0,
+          "grid": [
+            360.0,
+            180.0
+          ],
+          "observed_climate": false,
+          "orographic_gain": 0.16,
+          "rain_scale": 70000.0,
+          "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+          "recycling_fraction": 0.25,
+          "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion",
+          "season_heating": [
+            -0.85,
+            0.4,
+            0.85,
+            -0.4
+          ],
+          "seasons": [
+            "DJF",
+            "MAM",
+            "JJA",
+            "SON"
+          ],
+          "spinup_steps": 100.0,
+          "transport_step_km": 160.0,
+          "version": "seasonal_circulation_v3",
+          "water_width_km": 120.0,
+          "wind_coordinates": {
+            "seasonal_u": "east",
+            "seasonal_v": "north",
+            "windX": "east",
+            "windY": "south"
+          }
+        },
+        "seed": 1.0,
+        "settlement_model": "climate_capacity_v3",
+        "temperature": 0.0,
+        "terrain_model": "earth",
+        "terrain_source": {
+          "bounds": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+          ],
+          "date": "2026-10-09",
+          "elevation_encoding": "signed-i16-little-endian-gzip",
+          "elevation_scale_m": 0.5,
+          "format": "atlas-earth-surface-v1",
+          "height": 1800.0,
+          "projection": "EPSG:4326 equirectangular",
+          "registration": "pixel-center",
+          "relief_file": "earth_relief_06m.i16.gz",
+          "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+          "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+          "row_order": "north-to-south",
+          "runtime": "native Godot; no Python dependency",
+          "sources": [
+            {
+              "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+              "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+              "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+              "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+            },
+            {
+              "license": "public domain",
+              "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+            },
+            {
+              "license": "public domain",
+              "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+            }
+          ],
+          "water_classes": {
+            "lake": 2.0,
+            "land": 0.0,
+            "ocean": 1.0
+          },
+          "water_file": "earth_water_06m.u8.gz",
+          "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+          "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+          "width": 3600.0
+        }
+      },
+      "pid": 24460.0,
+      "projection": "equirectangular",
+      "rain_solver_grid": [
+        360.0,
+        180.0
+      ],
+      "rainfall_model": "seasonal_circulation_v3",
+      "rainfall_units": "estimated mm per quarter; source annualized rates divided by four",
+      "row_order": "north_to_south",
+      "seasons": [
+        "DJF",
+        "MAM",
+        "JJA",
+        "SON"
+      ],
+      "seed": 1.0,
+      "settlement_model": "climate_capacity_v3",
+      "snapshot_sha256": "c59894047d1d7954dfcb061b04eb2d01fd63090b8806ecd9acbd8a0b5e6f1c70",
+      "source_snapshot": "res://.dbg/atlas-native-generated-earth-1.bin",
+      "temperature_formula_sha256": "83c526f2e8d22d24fa854070855c78056164847b2acb7fe8663f5fedce08ff23",
+      "temperature_source": "annual node temperature plus latitude-scaled seasonal amplitude; not an independent seasonal atmosphere solve",
+      "temperature_units": "C",
+      "terrain_model": "earth",
+      "validation": {
+        "max_climate_factor_error": 2.980232238e-08,
+        "max_precipitation_sum_error": 0.001220703125,
+        "max_temperature_mean_error": 9.536743164e-07,
+        "projection_holes": 0.0
+      },
+      "width": 4096.0
+    },
+    "seed": 1,
+    "settlement_model": "climate_capacity_v5",
+    "source": "res://.dbg/atlas-native-generated-earth-rainfall-v4.bin",
+    "source_sha256": "5f0ca9fc8e260302e13a553aa62149dd46641aa8194154b41d224c4881ced440",
+    "sources": {
+      "scripts/atlas/circulation_rainfall.gd": "dcac619e961dc06894fa8b6b7854a0b049c9d5a543b1d3e066b50d85d2cac623",
+      "scripts/atlas/climate_settlement.gd": "50c2ece2a95a0c02725acf90162b072eb1860e4ce93bb0e1aa838f69a66b0084",
+      "scripts/atlas/habitat.gd": "6f3797ae462b1784ae721210b0f7f844e1df64e3fb5253ca5aa5c407c6ad4d89",
+      "scripts/atlas/seasonal_circulation.gd": "a08cc5333a85850d0df6033983eb971eec4af16dd5085d7c2ff717338a1d5cde",
+      "scripts/atlas/world.gd": "17e9928391a5fa5fd756bd84d578e1d47385aeef77193b02fcc8fc571d9207a1",
+      "scripts/tools/atlas_export_rainfall_v5.gd": "8690218bf94d273844e8d911832ea91dade27eaaa03bf7e0ffa6f2fe6d207383"
+    },
+    "validation": {
+      "failures": 0,
+      "maximum_quarter_sum_error_mm": 0.00112699437886477,
+      "mesh_exact": true,
+      "primitive_inputs_exact": true
+    },
+    "worktree": "uncommitted source hashes below"
+  },
+  "metrics": {
+    "CentralPlains": {
+      "bounds_W_E_S_N": [
+        110,
+        116,
+        32,
+        37
+      ],
+      "before_quarter_mm": [
+        48.251195497727274,
+        184.4644421678897,
+        529.1224563179521,
+        122.00642897219373
+      ],
+      "before_climate_mean": 0.8033538556250729,
+      "before_habitat_mean": 17.363365880967528,
+      "after_quarter_mm": [
+        47.420865471944566,
+        178.65644644790694,
+        501.46965428753407,
+        126.49787647054664
+      ],
+      "after_climate_mean": 0.7321007575909724,
+      "after_habitat_mean": 15.591663178161884
+    },
+    "ChinaSouth": {
+      "bounds_W_E_S_N": [
+        105,
+        122,
+        22,
+        34
+      ],
+      "before_quarter_mm": [
+        35.16853413204289,
+        226.50282520932714,
+        694.0389398482217,
+        87.20588223514446
+      ],
+      "before_climate_mean": 0.584414277099604,
+      "before_habitat_mean": 12.552256443162738,
+      "after_quarter_mm": [
+        35.38445388107085,
+        227.0847265105504,
+        673.5988534904526,
+        89.83256194618507
+      ],
+      "after_climate_mean": 0.4091197486562014,
+      "after_habitat_mean": 8.356344734172488
+    },
+    "Europe": {
+      "bounds_W_E_S_N": [
+        -10,
+        30,
+        45,
+        55
+      ],
+      "before_quarter_mm": [
+        204.7969615923635,
+        317.4332113291626,
+        365.19693246689593,
+        304.2111193265977
+      ],
+      "before_climate_mean": 0.9595063230819881,
+      "before_habitat_mean": 21.64283608435701,
+      "after_quarter_mm": [
+        202.4890721835203,
+        311.2859921137637,
+        359.99588951941297,
+        300.094366645063
+      ],
+      "after_climate_mean": 0.9527941086574762,
+      "after_habitat_mean": 21.478661841368034
+    },
+    "UpperMidwest": {
+      "bounds_W_E_S_N": [
+        -100,
+        -82,
+        35,
+        45
+      ],
+      "before_quarter_mm": [
+        52.8101175094273,
+        170.4990247212488,
+        185.08165184409393,
+        187.13967490489117
+      ],
+      "before_climate_mean": 0.8250820788689066,
+      "before_habitat_mean": 18.57413243588124,
+      "after_quarter_mm": [
+        54.87238952642847,
+        178.10666270779328,
+        183.4911519089464,
+        190.31761765452495
+      ],
+      "after_climate_mean": 0.8465322627013308,
+      "after_habitat_mean": 19.079241782190785
+    },
+    "WestSiberia": {
+      "bounds_W_E_S_N": [
+        60,
+        90,
+        55,
+        65
+      ],
+      "before_quarter_mm": [
+        3.342908409934796,
+        73.63377486361972,
+        106.31641218887918,
+        32.83471629690788
+      ],
+      "before_climate_mean": 0.09455705834425047,
+      "before_habitat_mean": 1.920612025469954,
+      "after_quarter_mm": [
+        2.3618292001234433,
+        57.56676193714465,
+        88.01837188278049,
+        16.834379633215637
+      ],
+      "after_climate_mean": 0.03026374092558423,
+      "after_habitat_mean": 0.4886558296514834
+    },
+    "EastSiberia": {
+      "bounds_W_E_S_N": [
+        100,
+        140,
+        55,
+        65
+      ],
+      "before_quarter_mm": [
+        10.67358332814073,
+        68.83516764247112,
+        96.67665635524281,
+        38.78619108331701
+      ],
+      "before_climate_mean": 0.035486159447310164,
+      "before_habitat_mean": 0.4692841350030291,
+      "after_quarter_mm": [
+        8.963650697715266,
+        27.20323548105095,
+        44.21704086478059,
+        14.660664161277657
+      ],
+      "after_climate_mean": 0.000364472512367823,
+      "after_habitat_mean": 0.0
+    },
+    "ArcticSiberia": {
+      "bounds_W_E_S_N": [
+        100,
+        160,
+        65,
+        72
+      ],
+      "before_quarter_mm": [
+        2.341956848716343,
+        20.218024517345597,
+        45.39492977273963,
+        3.4483046254296394
+      ],
+      "before_climate_mean": 4.703609306389762e-05,
+      "before_habitat_mean": 0.0,
+      "after_quarter_mm": [
+        2.3610845039690993,
+        14.750073729935304,
+        38.18513841737036,
+        3.4869968928315402
+      ],
+      "after_climate_mean": 1.625318957914579e-05,
+      "after_habitat_mean": 0.0
+    },
+    "CaspianNorth": {
+      "bounds_W_E_S_N": [
+        46,
+        54,
+        46,
+        50
+      ],
+      "before_quarter_mm": [
+        156.61141366718527,
+        210.15860622059427,
+        242.0516080577985,
+        215.4079744076939
+      ],
+      "before_climate_mean": 0.9911394982390288,
+      "before_habitat_mean": 24.708460635850024,
+      "after_quarter_mm": [
+        50.834651455001776,
+        88.48496136273208,
+        138.9738320128382,
+        92.03831911590049
+      ],
+      "after_climate_mean": 0.3142351337884283,
+      "after_habitat_mean": 7.754632041857986
+    },
+    "CaspianEast": {
+      "bounds_W_E_S_N": [
+        53,
+        59,
+        38,
+        46
+      ],
+      "before_quarter_mm": [
+        202.57158989565346,
+        236.61362773923778,
+        220.83705437002413,
+        264.359218291668
+      ],
+      "before_climate_mean": 0.9611353279819077,
+      "before_habitat_mean": 24.743687032474085,
+      "after_quarter_mm": [
+        25.29619934670093,
+        65.85072751332571,
+        62.92455496030575,
+        64.31328915185725
+      ],
+      "after_climate_mean": 0.07301725108717445,
+      "after_habitat_mean": 1.6491649275444882
+    },
+    "CaspianSouth": {
+      "bounds_W_E_S_N": [
+        48,
+        55,
+        36,
+        38
+      ],
+      "before_quarter_mm": [
+        84.41485831101777,
+        195.75763104125778,
+        668.8423017261786,
+        86.41491417334035
+      ],
+      "before_climate_mean": 0.4840440767625829,
+      "before_habitat_mean": 9.41684490438057,
+      "after_quarter_mm": [
+        54.76521854283385,
+        75.83946195251607,
+        272.50094174238467,
+        56.34496194920047
+      ],
+      "after_climate_mean": 0.18020389108001822,
+      "after_habitat_mean": 3.0822864151835496
+    },
+    "Congo": {
+      "bounds_W_E_S_N": [
+        15,
+        30,
+        -5,
+        5
+      ],
+      "before_quarter_mm": [
+        264.34510272169393,
+        855.2882652228382,
+        314.64840261348934,
+        504.4210980414585
+      ],
+      "before_climate_mean": 0.7756817097220612,
+      "before_habitat_mean": 18.785054830024645,
+      "after_quarter_mm": [
+        222.26884518636848,
+        768.2892435455177,
+        159.43298301214162,
+        457.04285201909954
+      ],
+      "after_climate_mean": 0.3217074453703651,
+      "after_habitat_mean": 6.943768143309218
+    },
+    "SoutheastAfrica": {
+      "bounds_W_E_S_N": [
+        28,
+        40,
+        -25,
+        -10
+      ],
+      "before_quarter_mm": [
+        1741.98220971844,
+        346.0352009622727,
+        66.71435134186892,
+        1000.3633864327926
+      ],
+      "before_climate_mean": 0.5151956688404359,
+      "before_habitat_mean": 11.361599034065115,
+      "after_quarter_mm": [
+        1754.538894282077,
+        371.1975042302679,
+        63.809523106056254,
+        1022.1892229951064
+      ],
+      "after_climate_mean": 0.23844691156508308,
+      "after_habitat_mean": 4.331843282263083
+    },
+    "Gobi": {
+      "bounds_W_E_S_N": [
+        95,
+        115,
+        40,
+        47
+      ],
+      "before_quarter_mm": [
+        19.64600462108406,
+        88.0983476873761,
+        98.45500528593035,
+        41.615428273831824
+      ],
+      "before_climate_mean": 0.08854873993431227,
+      "before_habitat_mean": 1.1797437866528593,
+      "after_quarter_mm": [
+        18.569099008843764,
+        79.0442535599136,
+        80.64967591160551,
+        39.40352178103217
+      ],
+      "after_climate_mean": 0.07059325599222921,
+      "after_habitat_mean": 1.114410485514163
+    }
+  },
+  "validation": {
+    "quarter_sum_max_errors_mm": {
+      "before": 0.005859375,
+      "after": 0.00390625
+    },
+    "valid_land_fraction": 0.9935328393327583
+  },
+  "color_scale": "linear 0-800 mm per quarter; above800 darkest; actual values retained in NPZ",
+  "plotter_sha256": "568988e5453785b4338facb2ceac22b212dbfb56a115d93bb5930cc868e36bd0",
+  "files": [
+    {
+      "file": "habitat-after.png",
+      "bytes": 1830819,
+      "sha256": "25546bc1d62b72c4af8cfbcd9ede37e4a22e9b9ae02a381a12eec488037c4c8c",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "habitat-local-comparison.png",
+      "bytes": 916092,
+      "sha256": "8a95eaac869014571d0a35539836226e28b9ffc8d6c4761bb33efdf1893b8dfc",
+      "pixels": [
+        5120,
+        3072
+      ]
+    },
+    {
+      "file": "rain-before-after.png",
+      "bytes": 4181579,
+      "sha256": "63130ba1aa65436dcecd22296f02f7883e9abf1e8e54f9a2c0e09373989e398a",
+      "pixels": [
+        7680,
+        3200
+      ]
+    },
+    {
+      "file": "rain-djf.png",
+      "bytes": 1506102,
+      "sha256": "6c4fd07f1a93b2134349bdaed24881a26c945f6124a9cf0dc1797fa87590700c",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "rain-four-seasons.pdf",
+      "bytes": 2265828,
+      "sha256": "71488a3cb6c4e5510ae663fd10b87eb89c8b55fcd808866526199dd4ca1245bf"
+    },
+    {
+      "file": "rain-four-seasons.png",
+      "bytes": 3290920,
+      "sha256": "cf9512cf311c845831abcfc38a70146af39cafdf63749a4fe6f462ebee5750a9",
+      "pixels": [
+        6144,
+        3584
+      ]
+    },
+    {
+      "file": "rain-jja.png",
+      "bytes": 1685630,
+      "sha256": "bddbf55a2d4681805cadfe52cfc24a53511b426d7fe921887cf76aded3ff1430",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "rain-mam.png",
+      "bytes": 1684922,
+      "sha256": "30ee27e1c352a8f5169b6301443f1dc8a352f01b47bfcb1116db21d16a38379f",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "rain-son.png",
+      "bytes": 1625636,
+      "sha256": "0830a21a3eb858908a77179cc5c0f4f2b482e2014ba16e456c91c958e0c76a9d",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "weather_fields.npz",
+      "bytes": 80391376,
+      "sha256": "86ab29850df88ec811fdee1b2e82eda66bb79fa594f3896ef678219883221760"
+    },
+    {
+      "file": "preview/earth-caspian.png",
+      "bytes": 1852729,
+      "sha256": "73c9390e4f3b2f95f2ddb3aedd7fd0035bdb433353d5e284ac87320e70b5b4a9",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-china.png",
+      "bytes": 1755416,
+      "sha256": "20ddbdb24d95f5044258a07f4738046cb2b8cbb248574812b1a7ba8fb4306ff3",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-congo.png",
+      "bytes": 1792267,
+      "sha256": "a5f4b4307fce6440b91ea199af013f122c4f7da3d8c555645e15c6d4a52a0431",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-eurasia.png",
+      "bytes": 2650835,
+      "sha256": "a95e516d661fa1d33c06b48353938515a39225edf8e55f719d23f9b1ffe7f5f9",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-mediterranean.png",
+      "bytes": 2038793,
+      "sha256": "8708de23d61d3153ee45512a4c99284a263c363972db36358b1437c043913fb8",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-mode-0.png",
+      "bytes": 3379882,
+      "sha256": "47a40278860b47c9e317b9e192ad2ec942ac0f3eeec523ac033ed19732d7070c",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-mode-1.png",
+      "bytes": 3311450,
+      "sha256": "a63c8c573930ef30a00627840e17861cd161e0d50560dcfd9065ff4405ef845d",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-mode-2.png",
+      "bytes": 3486453,
+      "sha256": "339fe181e4ada9bc3f5673be3826df48abee013646de2458183f069873847b4e",
+      "pixels": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "file": "preview/earth-mode-3.png",
+      "bytes": 3326881,
+      "sha256": "09452b03ad4109100ae0228abbdc68a08b210b0a2543b2a7c60a769d44a95e3f",
+      "pixels": [
+        2048,
+        1024
+      ]
+    }
+  ],
+  "preview": {
+    "actual_ready_event": {
+      "cells": 33940,
+      "cities": 491,
+      "elapsed_ms": 82478,
+      "event": "ready",
+      "model": "native_earth",
+      "options": {
+        "city_threshold": 1.0,
+        "rainfall_model": "seasonal_circulation_v5",
+        "river_usage": "environment_only",
+        "road_model": "civ-atlas-103afd3-land-v1",
+        "settlement_model": "climate_capacity_v5",
+        "terrain_model": "earth",
+        "visual_model": "atlas-handdrawn-v1"
+      },
+      "params": {
+        "cells": 36000,
+        "climate_water_balance": {
+          "aggregation": "best-two joint score ^1.5, multiplied by all-four-season humid-heat/waterlogging penalty",
+          "evaporation": "FAO-56 Hargreaves; biome diagnostics only",
+          "growing_months": "sum of four joint seasonal scores times three; equivalent suitable months",
+          "humid_heat_quarter_mm": [
+            300.0,
+            800.0
+          ],
+          "humid_heat_temperature_C": [
+            20.0,
+            26.0
+          ],
+          "humid_heat_weight": 1.5,
+          "observed_soils": false,
+          "observed_temperature_range": false,
+          "quarter_rain_cutoffs_mm": [
+            50.0,
+            1400.0
+          ],
+          "quarter_rain_plateau_mm": [
+            200.0,
+            800.0
+          ],
+          "seasonal_temperature_amplitude_C": 12.0,
+          "temperature_hot_cutoff_C": 28.0,
+          "temperature_low_cutoff_C": 0.0,
+          "temperature_plateau_C": [
+            10.0,
+            20.0
+          ],
+          "version": "climate_capacity_v5",
+          "waterlogging_quarter_mm": [
+            800.0,
+            1400.0
+          ],
+          "waterlogging_weight": 1.0
+        },
+        "rainfall": 1,
+        "rainfall_model": "seasonal_circulation_v5",
+        "rainfall_transport": {
+          "annual_combine": "arithmetic mean of four seasonal rates",
+          "cold_continent_weather_occupancy": "up to 70 percent fewer moist frontal sectors; local weights normalized",
+          "cold_land_recycling": "shared zonal temperature baseline, elevation and seasonal heating; -2 to 10 C evaporation ramp",
+          "cold_layer_height_m": 1800.0,
+          "cold_layer_inland_scale_km": 900.0,
+          "cold_sector_meridional_multiplier": -3.0,
+          "cold_sector_zonal_multiplier": -0.3,
+          "frontal_extra_lift": 0.04,
+          "frontal_sample_steps": 6,
+          "frontal_transport_steps": 12,
+          "grid": [
+            360,
+            180
+          ],
+          "inland_mixing_latitude_band": [
+            30.0,
+            40.0,
+            50.0,
+            55.0
+          ],
+          "inland_mixing_transition_km": [
+            200.0,
+            1000.0
+          ],
+          "inland_water_recharge_multiplier": 0.1,
+          "lake_freezing_proxy_C": [
+            -2.0,
+            1.0
+          ],
+          "lake_temperature_seasonal_amplitude": 24.0,
+          "land_dry_air_mixing_km": 240.0,
+          "lowland_basin_mixing": "DEM-inferred closed below-sea-level lake basin; 600-1000 km taper, only where nearer than the ocean",
+          "marine_supply": "Magnus saturation relative to 27 C, without a humidity floor",
+          "moist_parcel_mixing_relief": {
+            "humidity_range": [
+              0.15,
+              0.4
+            ],
+            "maximum_relief": 0.9
+          },
+          "observed_climate": false,
+          "orographic_gain": 0.16,
+          "rain_scale": 70000.0,
+          "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+          "recycling_fraction": 0.25,
+          "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion",
+          "sea_ice": "temperature/latitude seasonal open-water proxy; no observed sea ice",
+          "sea_temperature_heating": [
+            -0.625,
+            -0.225,
+            0.625,
+            0.225
+          ],
+          "season_heating": [
+            -0.85,
+            0.4,
+            0.85,
+            -0.4
+          ],
+          "seasons": [
+            "DJF",
+            "MAM",
+            "JJA",
+            "SON"
+          ],
+          "spinup_steps": 100,
+          "transport_step_km": 160.0,
+          "version": "seasonal_circulation_v5",
+          "warm_land_weather_weights": [
+            [
+              0.72,
+              0.1,
+              0.1,
+              0.08
+            ],
+            [
+              0.552,
+              0.16,
+              0.16,
+              0.128
+            ],
+            [
+              0.72,
+              0.1,
+              0.1,
+              0.08
+            ],
+            [
+              0.552,
+              0.16,
+              0.16,
+              0.128
+            ]
+          ],
+          "water_classes": "explicit 0 land / 1 ocean / 2 inland lake; no region masks",
+          "water_width_km": 120.0,
+          "weather_regimes": [
+            "seasonal_mean",
+            "westward_poleward_warm_sector",
+            "eastward_poleward_warm_sector",
+            "equatorward_cold_sector"
+          ],
+          "wind_coordinates": {
+            "seasonal_u": "east",
+            "seasonal_v": "north",
+            "windX": "east",
+            "windY": "south"
+          },
+          "windward_approach_lift": {
+            "distance_km": 160.0,
+            "fraction_of_downwind_rise": 0.75,
+            "source": "upwind inland-lake fraction only"
+          },
+          "windward_mixing_relief_m": [
+            200.0,
+            1000.0
+          ]
+        },
+        "seed": 1,
+        "settlement_model": "climate_capacity_v5",
+        "temperature": 0,
+        "terrain_model": "earth",
+        "terrain_source": {
+          "bounds": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+          ],
+          "date": "2026-10-09",
+          "elevation_encoding": "signed-i16-little-endian-gzip",
+          "elevation_scale_m": 0.5,
+          "format": "atlas-earth-surface-v1",
+          "height": 1800.0,
+          "projection": "EPSG:4326 equirectangular",
+          "registration": "pixel-center",
+          "relief_file": "earth_relief_06m.i16.gz",
+          "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+          "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+          "row_order": "north-to-south",
+          "runtime": "native Godot; no Python dependency",
+          "sources": [
+            {
+              "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+              "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+              "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+              "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+            },
+            {
+              "license": "public domain",
+              "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+            },
+            {
+              "license": "public domain",
+              "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+            }
+          ],
+          "water_classes": {
+            "lake": 2.0,
+            "land": 0.0,
+            "ocean": 1.0
+          },
+          "water_file": "earth_water_06m.u8.gz",
+          "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+          "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+          "width": 3600.0
+        }
+      },
+      "pid": 28104,
+      "regions": 602,
+      "roads": 520,
+      "scene": "res://atlas_earth_preview.tscn",
+      "seed": 1,
+      "timing": {
+        "glyphs_ms": 472,
+        "places_ms": 867,
+        "raster_ms": 19461,
+        "regions_ms": 801,
+        "roads_ms": 315,
+        "total_ms": 56801,
+        "world_ms": 34640
+      },
+      "view_ms": 25243,
+      "world_index": 1
+    },
+    "run_log_sha256": "bb4d3c6eedf5165062d98e876bc23e47a21f4d7bafffd28b0e95727a0835d1cf",
+    "cache_sha256": "7d956722c62963accc530cd11b7483a3527a571b263c9a428b45edc327952882"
+  }
+}

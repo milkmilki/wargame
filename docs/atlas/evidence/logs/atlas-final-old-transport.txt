@@ -1,0 +1,3 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+TRANSPORT_COMPATIBILITY_FAIL 主河岸区仍有 6 个可分配格未覆盖；当前世界已保留。

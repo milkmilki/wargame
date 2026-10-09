@@ -1,0 +1,9 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+RAINFALL_SEASONS_FAIL model version must invalidate stale climate caches
+RAINFALL_SEASONS_FAIL Central Plains winter must have modest precipitation, not zero or a wet summer
+RAINFALL_SEASONS_FAIL Central Plains autumn must not become a rainless season
+RAINFALL_SEASONS_FAIL Yangtze region winter/autumn moisture transport missing
+RAINFALL_SEASONS_FAIL cold continental Siberia lacks summer rainfall maximum
+RAINFALL_SEASONS_POINTS {"Gobi":[4.79485478997231,7.40927743911743,10.5825181007385,4.51583105325699],"Sahara":[0.000000410892869950885,10.7905795574188,89.6885204315186,0.0177616084693],"Wuhan":[0.00082221321283864,64.1933780272381,325.528932656859,0.00000388151546316183],"Yakutsk":[19.1151189164504,30.8159078875587,29.6850018846593,16.2997450455009],"Zhengzhou":[0.00993974828630898,177.686356453252,602.162817946626,0.000566310113958274]}
+ATLAS_RAINFALL_SEASONS failures=5

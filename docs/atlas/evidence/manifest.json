@@ -1,0 +1,1326 @@
+{
+  "format": "atlas-visual-evidence-v1",
+  "date": "2026-10-09",
+  "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+  "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+  "branch": "feature/civ-atlas-godot",
+  "uncommitted_new_files": true,
+  "scene": "res://atlas_preview.tscn",
+  "viewport": [
+    2048,
+    1024
+  ],
+  "godot": "4.7.1 a13da4feb",
+  "gpu": "AMD Radeon RX 7600",
+  "options": {
+    "province_area": 750,
+    "nations": 40,
+    "city_threshold": 1,
+    "river_usage": "environment_only",
+    "sea_routes": false,
+    "cells": 36000
+  },
+  "reference_adjustments": [
+    "same eligibility and static ownership",
+    "no visible rivers or river costs",
+    "finite route display year 0",
+    "static names and city symbol ranks for labeled comparison"
+  ],
+  "image_postprocessing": false,
+  "visual_acceptance": "pending user confirmation",
+  "images": [
+    {
+      "file": "original-political-1.png",
+      "source_file": "political-1.png",
+      "sha256": "41ba985c573724025b050aa24e5b180baddbc699dee96f95ded234c73750d69d",
+      "bytes": 4494977,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-political-1.png",
+      "source_file": "godot-native-compare-mode-0.png",
+      "sha256": "c51193b8c1adb2d76d36532ecebf226af8f9e0dc6dd35cf1d63a08049e7870e3",
+      "bytes": 3438742,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-political-7.png",
+      "source_file": "political-7.png",
+      "sha256": "b21e27fae3596ff0970c18f6c026cae95d4bbcb4897205b2905ca8f4cd42a205",
+      "bytes": 4599101,
+      "seed": 7,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-political-7.png",
+      "source_file": "godot-native-final-7.png",
+      "sha256": "7cc628a3aa98a81de16ace5654fa479a7349fba923690fe1f431815940d6b375",
+      "bytes": 3568864,
+      "seed": 7,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-political-2024.png",
+      "source_file": "political-2024.png",
+      "sha256": "38f68d911c461cfeb59e33c1c87fc225663277424a01b46e8d4bd1bca5ba7885",
+      "bytes": 4505217,
+      "seed": 2024,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-political-2024.png",
+      "source_file": "godot-native-final-2024.png",
+      "sha256": "feb52c20608e9170d204c89df0fb8a0a4003e598eef3eeb92b0d2767ef5a91ce",
+      "bytes": 3498300,
+      "seed": 2024,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-terrain-1.png",
+      "source_file": "terrain-1.png",
+      "sha256": "6d4079f276ffd56e6c6dfd2d640927c398ad199ad1fd3a55fdf360f965930381",
+      "bytes": 4333959,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-terrain-1.png",
+      "source_file": "godot-native-compare-mode-1.png",
+      "sha256": "b17a07d88ce134d53d7322c6d2ab5f0fee1d1ecc0591724685a0bfaefa7e034f",
+      "bytes": 3407016,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-province-1.png",
+      "source_file": "province-1.png",
+      "sha256": "f3926b4e5ab115b6f2a7bd349ab4523791213e9a9344cdef1ff084f73a6a667b",
+      "bytes": 4687759,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-province-1.png",
+      "source_file": "godot-native-compare-mode-2.png",
+      "sha256": "1002c57da6fd6c51cdf63ca8144e93b6563cfef33e070f2f5058e0821957036b",
+      "bytes": 3637609,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-habitat-1.png",
+      "source_file": "habitat-1.png",
+      "sha256": "162adc7e15ee4bff10d6eb09863d13fb3578bb632791dc8fd8e0ab62b3bcd715",
+      "bytes": 4452545,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-habitat-1.png",
+      "source_file": "godot-native-compare-mode-3.png",
+      "sha256": "0aa69f2b05a0aaa955bba6da36a40b9ea917f8f4fadc5ea90fb297cccd667b55",
+      "bytes": 3407354,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-labels-1.png",
+      "source_file": "political-labels-1-1.png",
+      "sha256": "4cc4c0b77d6a10d5d3e3efabcd6d72f912df00bb82a84e69ff097fadf7bd0afd",
+      "bytes": 4641203,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": true,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-labels-1.png",
+      "source_file": "godot-native-labels-1.png",
+      "sha256": "df1cef9a86f2d53162e926df71111c8acbe285207c693f4886aad9107e602578",
+      "bytes": 3554484,
+      "seed": 1,
+      "zoom": 1,
+      "center_world": [
+        1024,
+        512
+      ],
+      "clamp_vertical": true,
+      "labels": true,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-labels-4.png",
+      "source_file": "political-labels-4-1.png",
+      "sha256": "cb2c3b0d23d20f10a75258615ed0a43f90f3dcf37b5155ed3b8b775a00542c50",
+      "bytes": 3564271,
+      "seed": 1,
+      "zoom": 4,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": true,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-labels-4.png",
+      "source_file": "godot-native-labels-4.png",
+      "sha256": "cab2d51f642965eecb7d2a542aa895b305e9212dcac1b932a34d681f96b06c73",
+      "bytes": 2349446,
+      "seed": 1,
+      "zoom": 4,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": true,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-zoom-2.png",
+      "source_file": "political-zoom-2-1.png",
+      "sha256": "215d000b848041a14e2a8073da985c44dac984a237fb7c3da5e5df735f4490fd",
+      "bytes": 3711874,
+      "seed": 1,
+      "zoom": 2,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-zoom-2.png",
+      "source_file": "godot-native-zoom-2.png",
+      "sha256": "682b035734680e3256f69999c49152c44b7043164afd665222bd0129ae479699",
+      "bytes": 2606524,
+      "seed": 1,
+      "zoom": 2,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-zoom-4.png",
+      "source_file": "political-zoom-4-1.png",
+      "sha256": "3290c3860bcca30bab971edbe04a66902692feec00d9a9aeeabcf6c9b356aa83",
+      "bytes": 3314468,
+      "seed": 1,
+      "zoom": 4,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-zoom-4.png",
+      "source_file": "godot-native-zoom-4.png",
+      "sha256": "f6f8155960a64edd2f8c6d77560420a7cdab76c07f4a55ddc6639037a8c7fa14",
+      "bytes": 2110142,
+      "seed": 1,
+      "zoom": 4,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-zoom-8.png",
+      "source_file": "political-zoom-8-1.png",
+      "sha256": "9c872a2092a33ea280bb0bafef71e95843bb087d5291e74cf2c1e42b327287da",
+      "bytes": 2807661,
+      "seed": 1,
+      "zoom": 8,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-zoom-8.png",
+      "source_file": "godot-native-zoom-8.png",
+      "sha256": "fd61c8ec2ae5bbc25ecb9685081af7009b8ba37159cff7211504f15ccf1dfb6d",
+      "bytes": 1754456,
+      "seed": 1,
+      "zoom": 8,
+      "center_world": [
+        500,
+        420
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-seam.png",
+      "source_file": "political-seam-1.png",
+      "sha256": "fdd03bd2d17692e277c24c686e83ed9ac737ab4c298ba6f302154b15fb265f4f",
+      "bytes": 2804901,
+      "seed": 1,
+      "zoom": 4,
+      "center_world": [
+        2048,
+        440
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-seam.png",
+      "source_file": "godot-native-seam.png",
+      "sha256": "3d6f715dfde51960d0c8cfb748dcd8bfe82c36089b72d4d775fd6387a5d6ce08",
+      "bytes": 1518963,
+      "seed": 1,
+      "zoom": 4,
+      "center_world": [
+        2048,
+        440
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    },
+    {
+      "file": "original-polar-8.png",
+      "source_file": "political-polar-1.png",
+      "sha256": "3aed1a9150bdb513c943db3780bd960e2f096127f278c4df317cf9c7abab871e",
+      "bytes": 1769745,
+      "seed": 1,
+      "zoom": 8,
+      "center_world": [
+        880,
+        160
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Chromium Canvas"
+    },
+    {
+      "file": "godot-polar-8.png",
+      "source_file": "godot-native-polar-8.png",
+      "sha256": "37460a1f3333ed100a3ce423dc846f52c24a507a74897ca931f341d7f85ed46e",
+      "bytes": 598759,
+      "seed": 1,
+      "zoom": 8,
+      "center_world": [
+        880,
+        160
+      ],
+      "clamp_vertical": true,
+      "labels": false,
+      "renderer": "Godot OpenGL Compatibility"
+    }
+  ],
+  "logs": [
+    {
+      "sha256": "a5b6bac03b9828dcbe61c1b3a29761301db60768728c4ac3b941ec6367a76936",
+      "file": "logs/atlas-final-compile.txt"
+    },
+    {
+      "sha256": "406676d3045b8540250c7ede30879450d64713fcc41b0139e3575b8d74171d2f",
+      "file": "logs/atlas-final-names.txt"
+    },
+    {
+      "sha256": "c6aeaf584f3daa667cd81b7c6f7ed3177e52820e2310f53d33a349b62310e897",
+      "file": "logs/atlas-final-strokes.txt"
+    },
+    {
+      "sha256": "7a548e48c2e81be783f73e3ea84684ecb0d349cc232d3de0b08eecca39fc7a00",
+      "file": "logs/atlas-final-display_cases.txt"
+    },
+    {
+      "sha256": "c6b427bee35e42963104a9ba099c0421813a658c6eb5f4a0ac65d1bfef7b2eb9",
+      "file": "logs/atlas-final-contract.txt"
+    },
+    {
+      "sha256": "a3d40051e451049beb1d3fefe720327f2f16b0910e254ba3b2576513a4c024ac",
+      "file": "logs/atlas-final-snapshot.txt"
+    },
+    {
+      "sha256": "f6bccbf1ffa0c39c53ac909178f97c0fec2d9758cd81a95778650d5679240481",
+      "file": "logs/atlas-final-labels.txt"
+    },
+    {
+      "sha256": "9da43cf4dcfcba3567cd6c41103ef6d417ecb0127fb28145a470ca686e19fd95",
+      "file": "logs/atlas-preview-final.txt"
+    },
+    {
+      "sha256": "23af145ec961f0e757ba5d9b06c057300fe314c0d12a21e4fccf5560b4fdd1a9",
+      "file": "logs/atlas-labels-final.txt"
+    },
+    {
+      "sha256": "2c6a8b810045a1c46e422f0fb5fc9876b0ceb16c94ef027c48cf572dede8d938",
+      "file": "logs/atlas-native-release.txt"
+    },
+    {
+      "sha256": "cb70cf1555023422f6ffa353c6f41ca6264ee6f37da7d81858780c2463989aa4",
+      "file": "logs/atlas-pipeline-final-1.txt"
+    },
+    {
+      "sha256": "1519e1bfbb0aacb1e28f3f2588116fca81951ee2d0c1f33eac632dfd3c8ae900",
+      "file": "logs/atlas-native-pipeline-7.txt"
+    },
+    {
+      "sha256": "72464a3ad92a32ef4e0f594d2c270ed858b264559a37d970dd0c404fc6766272",
+      "file": "logs/atlas-native-pipeline-2024.txt"
+    },
+    {
+      "sha256": "6df7224cd188b60c315c7771e84c507605820b48c30e6fe30398e03851e4667b",
+      "file": "logs/atlas-native-robust-12345.txt"
+    },
+    {
+      "sha256": "f35341a439b7eb5f9ad287b864682a9da80155c01b0126ff190008bd3b3ceb42",
+      "file": "logs/atlas-native-robust-23456.txt"
+    },
+    {
+      "sha256": "be1a62e7cc5950049a650c13238fef2ec19b101dfc39e5ee8882afff2e714480",
+      "file": "logs/atlas-native-robust-34567.txt"
+    },
+    {
+      "sha256": "e290c6b22cb20c335945508287f7334049a6e1bc57f77944c784f14db56557ce",
+      "file": "logs/atlas-native-world-green.txt"
+    },
+    {
+      "sha256": "e290c6b22cb20c335945508287f7334049a6e1bc57f77944c784f14db56557ce",
+      "file": "logs/atlas-native-world-7.txt"
+    },
+    {
+      "sha256": "e290c6b22cb20c335945508287f7334049a6e1bc57f77944c784f14db56557ce",
+      "file": "logs/atlas-native-world-2024.txt"
+    },
+    {
+      "sha256": "164082dbb5e353923deda1875fd8c2f043c5c384f0e868473d9f41f698b21e3c",
+      "file": "logs/atlas-native-zoom.txt"
+    },
+    {
+      "sha256": "81707617acb243bd10dfaefb4058e02e5231c402de16e4627860c1e691e910af",
+      "file": "logs/atlas-native-borders-green.txt"
+    },
+    {
+      "sha256": "9374a24ef430b6acd2267e93becb17d68f309a5c1d00aabe9339e842d8b3f3cc",
+      "file": "logs/atlas-coasts-test.txt"
+    },
+    {
+      "sha256": "f59c8ef504fa215619bd3f2901cef6971018de211a675c1a68257c2eef2b8f05",
+      "file": "logs/atlas-ice-geometry.txt"
+    },
+    {
+      "sha256": "1ed307dd498fba10ae4b64414cf3e184dcd84148efe41801ebb6b9cb2f8994a3",
+      "file": "logs/atlas-places-1-v3.txt"
+    },
+    {
+      "sha256": "c3aee2ae375dba0015456dbc2c024a6a00fafd2bc2820c83773a998755dc9c8f",
+      "file": "logs/atlas-road-lines.txt"
+    },
+    {
+      "sha256": "dc1fee3b638f905e65cc883148ab571b68f22719a73be3422c49ed68ed8fbf99",
+      "file": "logs/atlas-road-lines-7.txt"
+    },
+    {
+      "sha256": "b1c6deb55d1d03e685610cc046f0bff1c7ed69ae3db4ee87549a284ec71cac66",
+      "file": "logs/atlas-final-roadlines2024.txt"
+    },
+    {
+      "sha256": "4d8a394cf01c78a28260a8f1e19fef1dce06d8822f56bd56d19f67f4b58a99ea",
+      "file": "logs/atlas-final-old-roadviews.txt"
+    },
+    {
+      "sha256": "3e76bb1824ff7814ca33cf0620a3c3b901b4f7174cc2c43e8f85e7609c48dc95",
+      "file": "logs/atlas-final-old-template.txt"
+    },
+    {
+      "sha256": "945c51522dbe5eb7dff307e8c35f7a3d22ca6590728cb393459e7573b18d7d75",
+      "file": "logs/atlas-final-old-capacity.txt"
+    },
+    {
+      "sha256": "8244d9b97ebae243a2b0085f965861d55dc28b11b520b7192c3af1ad93c936c3",
+      "file": "logs/atlas-final-old-transport.txt"
+    },
+    {
+      "sha256": "8244d9b97ebae243a2b0085f965861d55dc28b11b520b7192c3af1ad93c936c3",
+      "file": "logs/atlas-baseline-transport.txt"
+    },
+    {
+      "sha256": "ad82f89f68034cecbd5fc782b982709f661b2d72597f2ef4912d7e4489ef18ec",
+      "file": "logs/atlas-native-default-7.txt"
+    },
+    {
+      "sha256": "58244637d0badd8c9886f173428286b3ae9ff0e09626ed5b7faae1f8f2fd265a",
+      "file": "logs/atlas-native-default-2024.txt"
+    },
+    {
+      "sha256": "4bd34c80357231d7357f3bacfc5b18049b30b5367f2ac7542d3967761d678125",
+      "file": "logs/atlas-regression-test_suite.txt"
+    }
+  ],
+  "native_runs": [
+    {
+      "console": "logs/atlas-preview-final.txt",
+      "events": [
+        {
+          "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "city_threshold": 1.0,
+          "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "code_version": "atlas-native-port-v1",
+          "elapsed_ms": 19,
+          "event": "start",
+          "godot": {
+            "build": "official",
+            "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+            "hex": 263937,
+            "major": 4,
+            "minor": 7,
+            "patch": 1,
+            "status": "stable",
+            "string": "4.7.1-stable (official)",
+            "timestamp": 0
+          },
+          "model": "native_development_cache",
+          "pid": 22484,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "source_fingerprint": "5e22054fb5ba329d4bb18b3dbdad54a13632e64f7fc39448b6cadc696d243cfa",
+          "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+          "world_index": 1
+        },
+        {
+          "cells": 33940,
+          "cities": 826,
+          "elapsed_ms": 25089,
+          "event": "ready",
+          "model": "native_development_cache",
+          "options": {
+            "city_threshold": 1.0,
+            "river_usage": "environment_only",
+            "road_model": "civ-atlas-103afd3-land-v1",
+            "visual_model": "atlas-handdrawn-v1"
+          },
+          "params": {
+            "cells": 36000,
+            "landFraction": 0.33,
+            "mountains": 1,
+            "plates": 30,
+            "rainfall": 1,
+            "seed": 1,
+            "temperature": 0
+          },
+          "pid": 22484,
+          "regions": 867,
+          "roads": 948,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "timing": {
+            "glyphs_ms": 434,
+            "places_ms": 608,
+            "raster_ms": 20427,
+            "regions_ms": 1184,
+            "roads_ms": 435,
+            "total_ms": 43400,
+            "world_ms": 18958
+          },
+          "view_ms": 24768,
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 33515,
+          "event": "ownership",
+          "model": "native_development_cache",
+          "owner": 1,
+          "pid": 22484,
+          "region": 0,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 35962,
+          "error": "",
+          "event": "snapshot_save",
+          "model": "native_development_cache",
+          "pid": 22484,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "world_index": 1
+        }
+      ]
+    },
+    {
+      "console": "logs/atlas-preview-final.txt",
+      "events": [
+        {
+          "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "city_threshold": 1.0,
+          "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "code_version": "atlas-native-port-v1",
+          "elapsed_ms": 20,
+          "event": "start",
+          "godot": {
+            "build": "official",
+            "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+            "hex": 263937,
+            "major": 4,
+            "minor": 7,
+            "patch": 1,
+            "status": "stable",
+            "string": "4.7.1-stable (official)",
+            "timestamp": 0
+          },
+          "model": "snapshot",
+          "pid": 22484,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "source_fingerprint": "5e22054fb5ba329d4bb18b3dbdad54a13632e64f7fc39448b6cadc696d243cfa",
+          "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+          "world_index": 2
+        },
+        {
+          "cells": 33940,
+          "cities": 826,
+          "elapsed_ms": 25800,
+          "event": "ready",
+          "model": "snapshot",
+          "options": {
+            "city_threshold": 1.0,
+            "river_usage": "environment_only",
+            "road_model": "civ-atlas-103afd3-land-v1",
+            "visual_model": "atlas-handdrawn-v1"
+          },
+          "params": {
+            "cells": 36000,
+            "landFraction": 0.33,
+            "mountains": 1,
+            "plates": 30,
+            "rainfall": 1,
+            "seed": 1,
+            "temperature": 0
+          },
+          "pid": 22484,
+          "regions": 867,
+          "roads": 948,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "timing": {
+            "glyphs_ms": 434,
+            "places_ms": 608,
+            "raster_ms": 20427,
+            "regions_ms": 1184,
+            "roads_ms": 435,
+            "total_ms": 43400,
+            "world_ms": 18958
+          },
+          "view_ms": 25780,
+          "world_index": 2
+        },
+        {
+          "cities": 0,
+          "elapsed_ms": 28900,
+          "event": "city_threshold",
+          "model": "snapshot",
+          "pid": 22484,
+          "roads": 0,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "value": 50.0,
+          "world_index": 2
+        },
+        {
+          "cities": 826,
+          "elapsed_ms": 30980,
+          "event": "city_threshold",
+          "model": "snapshot",
+          "pid": 22484,
+          "roads": 948,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "value": 1.0,
+          "world_index": 2
+        }
+      ]
+    },
+    {
+      "console": "logs/atlas-labels-final.txt",
+      "events": [
+        {
+          "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "city_threshold": 1.0,
+          "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "code_version": "atlas-native-port-v1",
+          "elapsed_ms": 19,
+          "event": "start",
+          "godot": {
+            "build": "official",
+            "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+            "hex": 263937,
+            "major": 4,
+            "minor": 7,
+            "patch": 1,
+            "status": "stable",
+            "string": "4.7.1-stable (official)",
+            "timestamp": 0
+          },
+          "model": "native_development_cache",
+          "pid": 12332,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "source_fingerprint": "5e22054fb5ba329d4bb18b3dbdad54a13632e64f7fc39448b6cadc696d243cfa",
+          "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+          "world_index": 1
+        },
+        {
+          "cells": 33940,
+          "cities": 826,
+          "elapsed_ms": 25238,
+          "event": "ready",
+          "model": "native_development_cache",
+          "options": {
+            "city_threshold": 1.0,
+            "river_usage": "environment_only",
+            "road_model": "civ-atlas-103afd3-land-v1",
+            "visual_model": "atlas-handdrawn-v1"
+          },
+          "params": {
+            "cells": 36000,
+            "landFraction": 0.33,
+            "mountains": 1,
+            "plates": 30,
+            "rainfall": 1,
+            "seed": 1,
+            "temperature": 0
+          },
+          "pid": 12332,
+          "regions": 867,
+          "roads": 948,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "timing": {
+            "glyphs_ms": 434,
+            "places_ms": 608,
+            "raster_ms": 20427,
+            "regions_ms": 1184,
+            "roads_ms": 435,
+            "total_ms": 43400,
+            "world_ms": 18958
+          },
+          "view_ms": 24915,
+          "world_index": 1
+        }
+      ]
+    },
+    {
+      "console": "logs/atlas-native-release.txt",
+      "events": [
+        {
+          "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "city_threshold": 1.0,
+          "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "code_version": "atlas-native-port-v1",
+          "elapsed_ms": 19,
+          "event": "start",
+          "godot": {
+            "build": "official",
+            "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+            "hex": 263937,
+            "major": 4,
+            "minor": 7,
+            "patch": 1,
+            "status": "stable",
+            "string": "4.7.1-stable (official)",
+            "timestamp": 0
+          },
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "source_fingerprint": "5e22054fb5ba329d4bb18b3dbdad54a13632e64f7fc39448b6cadc696d243cfa",
+          "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 44,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "球面网格",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 3630,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "板块与海陆",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 12544,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "造山与侵蚀",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 15733,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "湖泊与排水",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 15824,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "气候、洋流与海冰",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 18733,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "宜居度与省份",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 19891,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "陆上道路",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 20336,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "全球栅格与浮冰",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 40534,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "地形符号规划",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 42371,
+          "event": "stage",
+          "model": "native",
+          "pid": 11716,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "stage": "地理名称与标注路径",
+          "world_index": 1
+        },
+        {
+          "cells": 33940,
+          "cities": 826,
+          "elapsed_ms": 68934,
+          "event": "ready",
+          "model": "native",
+          "options": {
+            "city_threshold": 1.0,
+            "river_usage": "environment_only",
+            "road_model": "civ-atlas-103afd3-land-v1",
+            "visual_model": "atlas-handdrawn-v1"
+          },
+          "params": {
+            "cells": 36000,
+            "landFraction": 0.33,
+            "mountains": 1,
+            "plates": 30,
+            "rainfall": 1,
+            "seed": 1,
+            "temperature": 0
+          },
+          "pid": 11716,
+          "regions": 867,
+          "roads": 948,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 1,
+          "timing": {
+            "glyphs_ms": 439,
+            "places_ms": 648,
+            "raster_ms": 20198,
+            "regions_ms": 1155,
+            "roads_ms": 439,
+            "total_ms": 42971,
+            "world_ms": 18687
+          },
+          "view_ms": 25590,
+          "world_index": 1
+        }
+      ]
+    },
+    {
+      "console": "logs/atlas-native-default-7.txt",
+      "events": [
+        {
+          "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "city_threshold": 1.0,
+          "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "code_version": "atlas-native-port-v1",
+          "elapsed_ms": 22,
+          "event": "start",
+          "godot": {
+            "build": "official",
+            "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+            "hex": 263937,
+            "major": 4,
+            "minor": 7,
+            "patch": 1,
+            "status": "stable",
+            "string": "4.7.1-stable (official)",
+            "timestamp": 0
+          },
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "source_fingerprint": "d44451a4b5ba08653a224c8a3261fcfbf4ba851346b29db6fc5e932ea5507a9d",
+          "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 31,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "球面网格",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 3553,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "板块与海陆",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 12572,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "造山与侵蚀",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 15790,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "湖泊与排水",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 15926,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "气候、洋流与海冰",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 18949,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "宜居度与省份",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 20020,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "陆上道路",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 20359,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "全球栅格与浮冰",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 40624,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "地形符号规划",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 42526,
+          "event": "stage",
+          "model": "native",
+          "pid": 19348,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "stage": "地理名称与标注路径",
+          "world_index": 1
+        },
+        {
+          "cells": 34043,
+          "cities": 809,
+          "elapsed_ms": 68991,
+          "event": "ready",
+          "model": "native",
+          "options": {
+            "city_threshold": 1.0,
+            "river_usage": "environment_only",
+            "road_model": "civ-atlas-103afd3-land-v1",
+            "visual_model": "atlas-handdrawn-v1"
+          },
+          "params": {
+            "cells": 36000,
+            "landFraction": 0.33,
+            "mountains": 1,
+            "plates": 30,
+            "rainfall": 1,
+            "seed": 7,
+            "temperature": 0
+          },
+          "pid": 19348,
+          "regions": 856,
+          "roads": 845,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 7,
+          "timing": {
+            "glyphs_ms": 462,
+            "places_ms": 709,
+            "raster_ms": 20263,
+            "regions_ms": 1070,
+            "roads_ms": 358,
+            "total_ms": 43197,
+            "world_ms": 18901
+          },
+          "view_ms": 25374,
+          "world_index": 1
+        }
+      ]
+    },
+    {
+      "console": "logs/atlas-native-default-2024.txt",
+      "events": [
+        {
+          "base_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "city_threshold": 1.0,
+          "code_commit": "9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464",
+          "code_version": "atlas-native-port-v1",
+          "elapsed_ms": 22,
+          "event": "start",
+          "godot": {
+            "build": "official",
+            "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+            "hex": 263937,
+            "major": 4,
+            "minor": 7,
+            "patch": 1,
+            "status": "stable",
+            "string": "4.7.1-stable (official)",
+            "timestamp": 0
+          },
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "source_fingerprint": "d44451a4b5ba08653a224c8a3261fcfbf4ba851346b29db6fc5e932ea5507a9d",
+          "upstream": "103afd3d998eac6750692a6813bf5aea03521448",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 45,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "球面网格",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 3838,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "板块与海陆",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 13173,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "造山与侵蚀",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 16325,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "湖泊与排水",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 16440,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "气候、洋流与海冰",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 19429,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "宜居度与省份",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 20727,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "陆上道路",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 21228,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "全球栅格与浮冰",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 41560,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "地形符号规划",
+          "world_index": 1
+        },
+        {
+          "elapsed_ms": 43873,
+          "event": "stage",
+          "model": "native",
+          "pid": 12320,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "stage": "地理名称与标注路径",
+          "world_index": 1
+        },
+        {
+          "cells": 33976,
+          "cities": 907,
+          "elapsed_ms": 70527,
+          "event": "ready",
+          "model": "native",
+          "options": {
+            "city_threshold": 1.0,
+            "river_usage": "environment_only",
+            "road_model": "civ-atlas-103afd3-land-v1",
+            "visual_model": "atlas-handdrawn-v1"
+          },
+          "params": {
+            "cells": 36000,
+            "landFraction": 0.33,
+            "mountains": 1,
+            "plates": 30,
+            "rainfall": 1,
+            "seed": 2024,
+            "temperature": 0
+          },
+          "pid": 12320,
+          "regions": 951,
+          "roads": 1080,
+          "scene": "res://atlas_preview.tscn",
+          "seed": 2024,
+          "timing": {
+            "glyphs_ms": 406,
+            "places_ms": 627,
+            "raster_ms": 20335,
+            "regions_ms": 1306,
+            "roads_ms": 498,
+            "total_ms": 44447,
+            "world_ms": 19374
+          },
+          "view_ms": 25708,
+          "world_index": 1
+        }
+      ]
+    }
+  ]
+}

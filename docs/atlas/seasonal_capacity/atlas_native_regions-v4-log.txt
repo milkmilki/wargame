@@ -1,0 +1,17 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+REGIONS_COMPARE of errors=0
+REGIONS_COMPARE seat errors=0
+REGIONS_COMPARE landmass errors=0
+REGIONS_COMPARE area errors=0
+REGIONS_COMPARE capacity errors=0
+REGIONS_COMPARE biome errors=0
+REGIONS_COMPARE elevation errors=0
+REGIONS_COMPARE cellStart errors=0
+REGIONS_COMPARE cells errors=0
+REGIONS_COMPARE adjStart errors=0
+REGIONS_COMPARE adj errors=0
+REGIONS_COMPARE adjLen errors=0
+REGIONS_COMPARE adjBorder errors=0
+REGIONS_COMPARE adjKind errors=0
+ATLAS_NATIVE_REGIONS failures=0

@@ -1,0 +1,10 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+OpenGL API 3.3.0 Core Profile Context 26.8.1.260810 - Compatibility - Using Device: ATI Technologies Inc. - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS ["--atlas-cache=res://.dbg/atlas-native-generated-earth-1.bin"] capture=
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-31868-1791518716-1.jsonl
+ATLAS_CLIMATE_LIMIT_VIEWS after seed=1 rain=seasonal_circulation_v3 settlement=climate_capacity_v3 PASS
+ERROR: 2 RID allocations of type 'N5GLES312LightStorage11ShadowAtlasE' were leaked at exit.
+ERROR: 2 RID allocations of type 'N5GLES312RenderTargetE' were leaked at exit.
+ERROR: 4 RID allocations of type 'N5GLES37TextureE' were leaked at exit.
+ERROR: 2 RID allocations of type 'N16RendererViewport8ViewportE' were leaked at exit.

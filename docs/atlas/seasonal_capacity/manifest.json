@@ -1,0 +1,400 @@
+{
+  "source": {
+    "city_policy": "unchanged frozen layout; only suitability rescored",
+    "export_ms": 1057,
+    "exporter_sha256": "f8431e56500c531515ffa057cfd6d417bb6b279951a49ee362b5ecff22e6340c",
+    "format": "atlas-seasonal-capacity-v1",
+    "formula_sha256": "57e24f1893e9461e3756a9cefefbf361d0de441dfa86ab6801d4eddab3c4e34b",
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "habitat_formula_sha256": "e1fc5da693c774fd1efb221d691036263153276810e11cd98e1affb50df32db8",
+    "parameters": {
+      "aggregation": "mean of best two joint seasonal scores, raised to 1.5",
+      "evaporation": "FAO-56 Hargreaves; biome diagnostics only",
+      "growing_months": "sum of four joint seasonal scores times three; equivalent suitable months",
+      "observed_soils": false,
+      "observed_temperature_range": false,
+      "quarter_rain_cutoffs_mm": [
+        50.0,
+        1400.0
+      ],
+      "quarter_rain_plateau_mm": [
+        200.0,
+        800.0
+      ],
+      "seasonal_temperature_amplitude_C": 12.0,
+      "temperature_hot_cutoff_C": 30.0,
+      "temperature_hot_shoulder_C": 24.0,
+      "temperature_hot_shoulder_score": 0.85,
+      "temperature_low_cutoff_C": 0.0,
+      "temperature_plateau_C": [
+        10.0,
+        20.0
+      ],
+      "version": "climate_capacity_v4"
+    },
+    "pid": 16368,
+    "previous_formula_sha256": "83c526f2e8d22d24fa854070855c78056164847b2acb7fe8663f5fedce08ff23",
+    "previous_settlement_model": "climate_capacity_v3",
+    "projection_metadata": {
+      "bounds": [
+        -180.0,
+        -90.0,
+        180.0,
+        90.0
+      ],
+      "export_ms": 11811.0,
+      "exporter_sha256": "164fcd6578d91a629b6dbc00caaea3479b82a3f12ac804be252ed482bfd26155",
+      "format": "atlas-seasonal-heatmaps-v1",
+      "godot": {
+        "build": "official",
+        "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+        "hex": 263937.0,
+        "major": 4.0,
+        "minor": 7.0,
+        "patch": 1.0,
+        "status": "stable",
+        "string": "4.7.1-stable (official)",
+        "timestamp": 0.0
+      },
+      "height": 2048.0,
+      "mesh_cells": 33940.0,
+      "months": [
+        [
+          12.0,
+          1.0,
+          2.0
+        ],
+        [
+          3.0,
+          4.0,
+          5.0
+        ],
+        [
+          6.0,
+          7.0,
+          8.0
+        ],
+        [
+          9.0,
+          10.0,
+          11.0
+        ]
+      ],
+      "ocean_policy": "masked; no simulated ocean rainfall output",
+      "params": {
+        "cells": 36000.0,
+        "climate_water_balance": {
+          "evaporation": "FAO-56 Hargreaves; estimated 8-14 C diurnal range",
+          "observed_soils": false,
+          "observed_temperature_range": false,
+          "rain_distribution": "uniform monthly within each quarter",
+          "rainfed_only": true,
+          "seasonal_temperature_amplitude_C": 12.0,
+          "soil_spinup_years": 2.0,
+          "soil_storage_mm": 150.0,
+          "version": "climate_capacity_v3"
+        },
+        "rainfall": 1.0,
+        "rainfall_model": "seasonal_circulation_v3",
+        "rainfall_transport": {
+          "annual_combine": "arithmetic mean of four seasonal rates",
+          "cold_layer_height_m": 1800.0,
+          "cold_layer_inland_scale_km": 900.0,
+          "grid": [
+            360.0,
+            180.0
+          ],
+          "observed_climate": false,
+          "orographic_gain": 0.16,
+          "rain_scale": 70000.0,
+          "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+          "recycling_fraction": 0.25,
+          "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion",
+          "season_heating": [
+            -0.85,
+            0.4,
+            0.85,
+            -0.4
+          ],
+          "seasons": [
+            "DJF",
+            "MAM",
+            "JJA",
+            "SON"
+          ],
+          "spinup_steps": 100.0,
+          "transport_step_km": 160.0,
+          "version": "seasonal_circulation_v3",
+          "water_width_km": 120.0,
+          "wind_coordinates": {
+            "seasonal_u": "east",
+            "seasonal_v": "north",
+            "windX": "east",
+            "windY": "south"
+          }
+        },
+        "seed": 1.0,
+        "settlement_model": "climate_capacity_v3",
+        "temperature": 0.0,
+        "terrain_model": "earth",
+        "terrain_source": {
+          "bounds": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+          ],
+          "date": "2026-10-09",
+          "elevation_encoding": "signed-i16-little-endian-gzip",
+          "elevation_scale_m": 0.5,
+          "format": "atlas-earth-surface-v1",
+          "height": 1800.0,
+          "projection": "EPSG:4326 equirectangular",
+          "registration": "pixel-center",
+          "relief_file": "earth_relief_06m.i16.gz",
+          "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+          "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+          "row_order": "north-to-south",
+          "runtime": "native Godot; no Python dependency",
+          "sources": [
+            {
+              "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+              "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+              "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+              "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+            },
+            {
+              "license": "public domain",
+              "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+            },
+            {
+              "license": "public domain",
+              "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+              "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+            }
+          ],
+          "water_classes": {
+            "lake": 2.0,
+            "land": 0.0,
+            "ocean": 1.0
+          },
+          "water_file": "earth_water_06m.u8.gz",
+          "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+          "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+          "width": 3600.0
+        }
+      },
+      "pid": 24460.0,
+      "projection": "equirectangular",
+      "rain_solver_grid": [
+        360.0,
+        180.0
+      ],
+      "rainfall_model": "seasonal_circulation_v3",
+      "rainfall_units": "estimated mm per quarter; source annualized rates divided by four",
+      "row_order": "north_to_south",
+      "seasons": [
+        "DJF",
+        "MAM",
+        "JJA",
+        "SON"
+      ],
+      "seed": 1.0,
+      "settlement_model": "climate_capacity_v3",
+      "snapshot_sha256": "c59894047d1d7954dfcb061b04eb2d01fd63090b8806ecd9acbd8a0b5e6f1c70",
+      "source_snapshot": "res://.dbg/atlas-native-generated-earth-1.bin",
+      "temperature_formula_sha256": "83c526f2e8d22d24fa854070855c78056164847b2acb7fe8663f5fedce08ff23",
+      "temperature_source": "annual node temperature plus latitude-scaled seasonal amplitude; not an independent seasonal atmosphere solve",
+      "temperature_units": "C",
+      "terrain_model": "earth",
+      "validation": {
+        "max_climate_factor_error": 2.980232238e-08,
+        "max_precipitation_sum_error": 0.001220703125,
+        "max_temperature_mean_error": 9.536743164e-07,
+        "projection_holes": 0.0
+      },
+      "width": 4096.0
+    },
+    "rainfall_model": "seasonal_circulation_v3",
+    "seed": 1,
+    "settlement_model": "climate_capacity_v4",
+    "source": "res://.dbg/atlas-native-generated-earth-1.bin",
+    "source_sha256": "c59894047d1d7954dfcb061b04eb2d01fd63090b8806ecd9acbd8a0b5e6f1c70",
+    "validation": {
+      "climate_inputs_exact": true,
+      "deterministic": true,
+      "legacy_climate_error": 0.0,
+      "legacy_habitat_exact": true
+    }
+  },
+  "metrics": {
+    "中原近似范围": {
+      "bounds_W_E_S_N": [
+        110,
+        116,
+        32,
+        37
+      ],
+      "climate-before_mean": 0.48056319774377176,
+      "climate-after_mean": 0.5507126942186309,
+      "habitat-before_mean": 9.61097431524567,
+      "habitat-after_mean": 11.208889409884376,
+      "high_climate_fraction_after": 0.13467878568818
+    },
+    "欧洲中纬度近似范围": {
+      "bounds_W_E_S_N": [
+        -10,
+        30,
+        45,
+        55
+      ],
+      "climate-before_mean": 0.8289168593135606,
+      "climate-after_mean": 0.9402535491277798,
+      "habitat-before_mean": 18.693241000043912,
+      "habitat-after_mean": 21.16445719947123,
+      "high_climate_fraction_after": 0.9032839254140009
+    },
+    "刚果盆地近似范围": {
+      "bounds_W_E_S_N": [
+        15,
+        30,
+        -5,
+        5
+      ],
+      "climate-before_mean": 0.976164194629867,
+      "climate-after_mean": 0.7766482654268431,
+      "habitat-before_mean": 23.791538128120003,
+      "habitat-after_mean": 18.678609832475445,
+      "high_climate_fraction_after": 0.2798187191727149
+    },
+    "东南亚近似范围": {
+      "bounds_W_E_S_N": [
+        95,
+        120,
+        -5,
+        20
+      ],
+      "climate-before_mean": 0.5578691482522415,
+      "climate-after_mean": 0.2683573064532814,
+      "habitat-before_mean": 12.491971365690281,
+      "habitat-after_mean": 5.925351011833051,
+      "high_climate_fraction_after": 0.06493156215944806
+    },
+    "非洲东南近似范围": {
+      "bounds_W_E_S_N": [
+        28,
+        40,
+        -25,
+        -10
+      ],
+      "climate-before_mean": 0.6917510744357417,
+      "climate-after_mean": 0.41913743396892805,
+      "habitat-before_mean": 15.727576542472724,
+      "habitat-after_mean": 8.927067689189604,
+      "high_climate_fraction_after": 0.02607942160279474
+    }
+  },
+  "land_coverage_fraction": 0.9935328393327583,
+  "plotter_sha256": "168212aa8fd028f3746a79359341cbe518e0baebd72ffc6537ddc89b590424d4",
+  "projection": "land-only native spherical interpolation of node scores; scoring is NOT applied after climate interpolation",
+  "files": [
+    {
+      "file": "before-after.png",
+      "bytes": 3112230,
+      "sha256": "645cfcb377550fe2511b7a89c0664e052ec2f46e3816b06de0eb0d9aae3cc3be",
+      "pixels": [
+        6144,
+        3584
+      ]
+    },
+    {
+      "file": "climate-after.pdf",
+      "bytes": 1016071,
+      "sha256": "26ec6da5d865e6e185389bb5df19a077f77e69867ce7e45c7f1a23ae44bea95e"
+    },
+    {
+      "file": "climate-after.png",
+      "bytes": 2118308,
+      "sha256": "c076168bd93ac0eb4c0d8c4460cb1645aeb71a25ac51326a216d9dcd97fe3cdf",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "four-seasons.png",
+      "bytes": 3238879,
+      "sha256": "92a8a7bc43c74194050f48192540239d200f4fa5791e187d0039fc732a0e2932",
+      "pixels": [
+        6144,
+        3584
+      ]
+    },
+    {
+      "file": "habitat-after.pdf",
+      "bytes": 940062,
+      "sha256": "d114746a33307b843d49bd1dad4fa9ad594c9e3a94d223a55fb86e1b0bec14aa"
+    },
+    {
+      "file": "habitat-after.png",
+      "bytes": 2014645,
+      "sha256": "4f878d0634045dffda4c246332fbde6e60057b976699c8af3fa4a76494a635f5",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "quarter-djf.png",
+      "bytes": 1387410,
+      "sha256": "5eaa8932d6fbdf2c2ca88c131fd9b3d24aa0c96efc0cdea421c1b907e2b3675e",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "quarter-jja.png",
+      "bytes": 1816824,
+      "sha256": "4676cb8a2db71213d5b17c931b346d56e002bcf05f3823af0d7a46028deaeda7",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "quarter-mam.png",
+      "bytes": 1693097,
+      "sha256": "2493e692bf17a43362d08bf8af4528e82fadbfa4995fd90bfb71afc8c0a70db2",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "quarter-son.png",
+      "bytes": 1558240,
+      "sha256": "27c747b8a6c6091fe12ed718911283648a19c90d11ae573f19aff36dfcce8e32",
+      "pixels": [
+        5120,
+        2880
+      ]
+    },
+    {
+      "file": "suitability_fields.npz",
+      "bytes": 29207370,
+      "sha256": "1eaf5f0dddaed221d81ef1d21b86ee1cfdf15e1dbdf5c905f3c71ee22b4fbeaf"
+    }
+  ]
+}
