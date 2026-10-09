@@ -3,7 +3,7 @@ extends SceneTree
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94103)
 	# This test starts a new offensive campaign. Remove the generated map's
 	# pre-existing occupied Fu, which now correctly require separate defense.

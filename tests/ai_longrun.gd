@@ -37,21 +37,12 @@ func _init() -> void:
 	for world_seed in selected_seeds:
 		ResourceForecastRules.profiling_enabled = true
 		ResourceForecastRules.reset_profile()
-		var state := GameState.new()
-		var source_manifest := OS.get_environment("AI_LONGRUN_MAP_SOURCE")
-		if source_manifest.is_empty():
-			state.generate_world(world_seed)
-		else:
-			var cities := int(OS.get_environment("AI_LONGRUN_CITIES"))
-			var nations := int(OS.get_environment("AI_LONGRUN_NATIONS"))
-			if not state.generate_world(world_seed, nations if nations > 0 else 40, cities if cities > 0 else 500, "", {}, world_seed, "", source_manifest):
-				push_error(state.last_generation_error)
-				quit(1)
-				return
+		var state := preload("res://tests/support/grid_world.gd").new()
+		state.generate_world(world_seed, maxi(4,int(OS.get_environment("AI_LONGRUN_NATIONS"))), maxi(200,int(OS.get_environment("AI_LONGRUN_CITIES"))))
 		var actual_land_cities := 0
 		for city in state.cities:
 			if not city.is_dock: actual_land_cities += 1
-		print("LONGRUN_WORLD_DIAGNOSTIC ", JSON.stringify({"source": state.map_source_manifest, "seed": state.world_seed, "rng_seed": state.rng.seed, "rng_state_after_generation": state.rng.state, "land_cities": actual_land_cities, "nations": state.nations.size(), "generation_metadata": state.generation_metadata}))
+		print("LONGRUN_WORLD_DIAGNOSTIC ", JSON.stringify({"source": "synthetic_test_grid", "seed": state.world_seed, "rng_seed": state.rng.seed, "rng_state_after_generation": state.rng.state, "land_cities": actual_land_cities, "nations": state.nations.size(), "generation_metadata": state.generation_metadata}))
 		var simulation := Simulation.new()
 		root.add_child(simulation)
 		simulation.setup(state)

@@ -6,7 +6,7 @@ func _init() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	var before := state.chronicle_events.size()
 	ChronicleRules.begin_war(state, 777, [0], [1])
@@ -29,7 +29,6 @@ func _run() -> void:
 	_test_coalition_declaration()
 	_test_defender_annexation()
 	_test_defender_annexation(true)
-	await _test_history_style(state)
 	if not failures.is_empty():
 		for failure in failures: push_error("CHRONICLE_SMOKE_FAIL: " + failure)
 		quit(1)
@@ -41,7 +40,7 @@ func _check(condition: bool, name: String) -> void:
 	if not condition: failures.append(name)
 
 func _perspective_fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	for id in range(3):
 		var nation := Nation.new()
 		nation.id = id
@@ -157,7 +156,7 @@ func _test_coalition_names() -> void:
 		_check(state.chronicle_events[-1].views[1] == "3年 秦、韩伐我，败绩", "finished participant remains in frozen opponent list")
 
 func _test_coalition_declaration() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
@@ -196,7 +195,7 @@ func _test_coalition_declaration() -> void:
 	simulation.queue_free()
 
 func _test_defender_annexation(with_ally: bool = false) -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	state.nations[0].name = "秦"
 	state.nations[1].name = "赵"
@@ -236,35 +235,3 @@ func _test_defender_annexation(with_ally: bool = false) -> void:
 		_check(not str(views[1]).contains("州陷") and not str(views[1]).contains("国除"), "victorious defender is not marked defeated or extinct")
 		_check(str(views[0]).contains("败绩") and str(views[0]).contains("州陷") and str(views[0]).ends_with("国除"), "actual defeated attacker keeps its own defeat and extinction view")
 		_check(not str(views[0]).contains("破之") and not str(views[0]).contains("取"), "defeated attacker does not inherit defender gains")
-
-func _test_history_style(state: GameState) -> void:
-	state.chronicle_events.append({
-		"actor_ids": [0], "target_ids": [1],
-		"text": "3年 秦伐我，破之，斩敌18200，取函谷、晋阳、邯郸、巨鹿、洛阳、长安、太原、上党、河内、南阳、颍川、陈留 灭秦为郡"
-	})
-	var events_before := state.chronicle_events.duplicate(true)
-	var panel := FamilyTreePanel.new()
-	root.add_child(panel)
-	panel.bind(state)
-	panel.open_for_nation(0)
-	panel._on_mode_selected(1)
-	_check(panel._history.get_child_count() > 0, "history view contains saved records")
-	for child in panel._history.get_children():
-		var label := child as Label
-		_check(label != null and label.get_theme_color("font_color") == Color.BLACK, "history text is explicitly black")
-		if label != null and FileAccess.file_exists("C:/Windows/Fonts/simfang.ttf"):
-			var font_name := label.get_theme_font("font").get_font_name()
-			_check(font_name.contains("FangSong") or font_name.contains("仿宋"), "history uses installed FangSong font")
-	_check(state.chronicle_events == events_before, "history styling does not rewrite persisted events")
-	await process_frame
-	await process_frame
-	_check((panel._history.get_child(0) as Label).get_line_count() > 1, "long history record wraps within the panel")
-	var screenshot_path := ""
-	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--screenshot="):
-			screenshot_path = arg.trim_prefix("--screenshot=")
-	if not screenshot_path.is_empty():
-		await RenderingServer.frame_post_draw
-		_check(root.get_texture().get_image().save_png(screenshot_path) == OK, "history screenshot saved")
-	panel.queue_free()
-	await process_frame

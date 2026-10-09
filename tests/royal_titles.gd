@@ -9,7 +9,7 @@ func _init() -> void:
 		push_error("ROYAL_TITLES_FAIL: title service absent")
 		quit(1)
 		return
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73002)
 	var nation := state.nations[0]
 	service.reconcile(state)

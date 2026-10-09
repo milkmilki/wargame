@@ -19,7 +19,7 @@ func _init() -> void:
 	var action_mismatches := (
 		0 if str(legacy_actions) == str(optimized_actions) else 1
 	)
-	var prefilter_state := GameState.new()
+	var prefilter_state := preload("res://tests/support/grid_world.gd").new()
 	prefilter_state.generate_world(12345, nations, cities)
 	prefilter_state.day = DiplomacyAI.MIN_NEUTRAL_DAYS
 	DiplomacyAI.alliance_acceptance_prefilter_disabled = true
@@ -109,7 +109,7 @@ func _run_world(
 	days: int,
 	disable_cache: bool
 ) -> Simulation:
-	var world := GameState.new()
+	var world := preload("res://tests/support/grid_world.gd").new()
 	world.generate_world(12345, nations, cities)
 	var sim := Simulation.new()
 	root.add_child(sim)

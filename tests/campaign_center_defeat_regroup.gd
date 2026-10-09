@@ -4,7 +4,7 @@ var _failures: Array[String] = []
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(95320)
 	var chain := _two_hop_campaign_chain(state)
 	_check(not chain.is_empty(), "夹具必须找到大营—中间府—州治两跳链")

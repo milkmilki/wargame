@@ -23,7 +23,7 @@ func _init() -> void:
 
 
 func _start_world(disable_slicing: bool) -> void:
-	_active_state = GameState.new()
+	_active_state = preload("res://tests/support/grid_world.gd").new()
 	_active_state.generate_world(12345, _nations, _cities)
 	_active_sim = Simulation.new()
 	root.add_child(_active_sim)

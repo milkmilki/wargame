@@ -187,7 +187,7 @@ func _test_real_round_and_report() -> void:
 
 
 func _fixture(kind: int = Battle.Kind.FIELD) -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(74410)
 	state.armies.clear()
 	state.battles.clear()

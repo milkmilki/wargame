@@ -19,7 +19,7 @@ func _init() -> void:
 	quit(0 if failures.is_empty() else 1)
 
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73003)
 	FamilyFixture.ensure_candidates(state, 0, 3)
 	for a in range(state.nations.size()):

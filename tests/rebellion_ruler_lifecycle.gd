@@ -12,7 +12,7 @@ func check(ok: bool, label: String) -> void:
 		failures.append(label)
 
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 12345
 	state.rng.seed = 12345
 	state.day = 360

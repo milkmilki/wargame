@@ -109,7 +109,7 @@ func _init() -> void:
 
 
 func _build_fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94147)
 	state.armies.clear()
 	state.battles.clear()
@@ -129,7 +129,7 @@ func _build_fixture() -> GameState:
 	for city in state.cities:
 		var center_id := state.administrative_center_of(city.id)
 		var anchor := state.cities[center_id] if center_id >= 0 else city
-		var owner_id := 0 if anchor.coord.x < GameState.GRID / 2 else 1
+		var owner_id := 0 if anchor.coord.x < preload("res://tests/support/grid_world.gd").GRID / 2 else 1
 		city.owner_nation = owner_id
 		state.recognized_city_owners[city.id] = owner_id
 		city.loyalty_target_nation = owner_id

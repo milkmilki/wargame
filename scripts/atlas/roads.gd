@@ -221,7 +221,7 @@ static func network_path(mesh: Dictionary,slots: PackedByteArray,start: int,goal
 			if nd <= limit and nd < dist[j]: dist[j] = nd; prev[j] = i; heap.push(j,nd)
 	return PackedInt32Array()
 
-static func drop_parallel(mesh: Dictionary,pieces: Array,slots: PackedByteArray,city_at: PackedInt32Array) -> Array:
+static func drop_parallel(mesh: Dictionary,pieces: Array,slots: PackedByteArray,city_at: PackedInt32Array,protected_slots: PackedByteArray = PackedByteArray()) -> Array:
 	var nodes: Array = []; var seen := {}; var chains: Array = []
 	for p in pieces:
 		for c in p.cells:
@@ -247,6 +247,10 @@ static func drop_parallel(mesh: Dictionary,pieces: Array,slots: PackedByteArray,
 	chains.sort_custom(func(a,b): return a.cells[0]<b.cells[0] if a.len==b.len else a.len>b.len)
 	for ch in chains:
 		if ch.cells[0] == ch.cells[-1]: continue
+		var protected := false
+		for slot in ch.slots:
+			if not protected_slots.is_empty() and protected_slots[slot]>0: protected = true; break
+		if protected: continue
 		set_slots(mesh,slots,ch,0)
 		var alternative := network_path(mesh,slots,ch.cells[0],ch.cells[-1],1.6*ch.len)
 		var redundant := not alternative.is_empty()

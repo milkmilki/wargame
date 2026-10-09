@@ -61,7 +61,7 @@ func _neutralize_diplomacy(state: GameState) -> void:
 
 
 func _build_state() -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	if context.is_empty():

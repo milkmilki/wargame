@@ -18,7 +18,7 @@ func check(condition: bool, message: String) -> void:
 	if not condition: failures.append(message)
 
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 73003
 	var nation := Nation.new()
 	nation.id = 0
@@ -122,7 +122,7 @@ func _test_restored_foreign_brother() -> void:
 	print("CROSS_PAYER_PATH A=%d D=%d old_C=%d new_C=%d B=%d candidate=%d head_payer=%d child_payers=%s" % [a, d, c, next, b, candidate, int(members[b].title_payer_id), str(child_payers)])
 
 func _test_disabled_title_display() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73003)
 	FamilyFixture.ensure_candidates(state, 0)
 	state.region_ids.fill(-1)

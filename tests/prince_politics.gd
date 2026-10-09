@@ -10,7 +10,7 @@ func check(ok: bool, label: String) -> void:
 		failures.append(label)
 
 func run() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(24680)
 	var nation := state.nations[0]
 	var old_army := state.armies[0]

@@ -23,7 +23,7 @@ func _init() -> void:
 
 
 func _start_world(disable_optimized_scheduling: bool) -> void:
-	_active_state = GameState.new()
+	_active_state = preload("res://tests/support/grid_world.gd").new()
 	_active_state.generate_world(12345, _nation_count, _city_count)
 	_force_adjacent_wars(_active_state, _forced_war_pairs)
 	var components := _active_state.coalition_campaign_components()

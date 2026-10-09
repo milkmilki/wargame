@@ -27,7 +27,7 @@ func _check(condition: bool, message: String) -> void:
 
 
 func _state() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.rng.seed = 96417
 	for nation_id in range(2):
 		var nation := Nation.new()

@@ -6,7 +6,7 @@ const TEST_TICKS: int = 12
 
 
 func _init() -> void:
-	var world := GameState.new()
+	var world := preload("res://tests/support/grid_world.gd").new()
 	world.generate_grid_world(20260823)
 	world.armies.clear()
 	world.battles.clear()

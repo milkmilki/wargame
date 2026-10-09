@@ -4,7 +4,7 @@ var _failed: Array[String] = []
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(12345)
 	var history := PoliticalHistory.new()
 	history.reset(state, Simulation.DAYS_PER_MONTH)
@@ -79,7 +79,7 @@ func _check(condition: bool, message: String) -> void:
 
 
 func _test_nations_created_after_snapshot() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(54321)
 	# Match the reported index: the first snapshot contains only IDs 0..44.
 	while state.nations.size() < 45:

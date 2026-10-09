@@ -9,7 +9,7 @@ func _init() -> void:
 
 
 func _run() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94001)
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(nation_a + 1, state.nations.size()):

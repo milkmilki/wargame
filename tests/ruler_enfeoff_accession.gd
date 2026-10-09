@@ -19,7 +19,7 @@ func _init() -> void:
 	quit(0 if failures.is_empty() else 1)
 
 func _test_landed_accession(reject: bool, scheduled: bool = false) -> void:
-	var state: GameState = StaleAnnexState.new() if reject else GameState.new()
+	var state: GameState = StaleAnnexState.new() if reject else preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73003)
 	FamilyFixture.ensure_candidates(state, 0, 3)
 	state.region_ids.fill(-1)

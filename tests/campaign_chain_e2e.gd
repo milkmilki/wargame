@@ -31,7 +31,7 @@ func _run_campaign_chain(
 	world_seed: int,
 	river_crossing: bool
 ) -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(world_seed)
 	# The chain audits sequential combat, with all three states in one goal region.
 	state.region_ids.fill(0)

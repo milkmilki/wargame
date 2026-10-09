@@ -25,7 +25,7 @@ func _check(condition: bool, message: String) -> void:
 
 
 func _test_positive_capacity_is_binary_for_movement() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91001)
 	state.armies.clear()
 	state.battles.clear()
@@ -79,7 +79,7 @@ func _test_positive_capacity_is_binary_for_movement() -> void:
 
 
 func _test_zero_capacity_still_blocks_movement() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91002)
 	var edge: Edge = state.edges[0]
 	for candidate in state.edges:

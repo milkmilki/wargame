@@ -88,7 +88,7 @@ func _run() -> void:
 	var candidate := SubmissionSimulation.new()
 	reference.preseed = true
 	for sim in [reference, candidate]:
-		var state := GameState.new()
+		var state := preload("res://tests/support/grid_world.gd").new()
 		state.generate_world(12345, 40, 160)
 		root.add_child(sim)
 		sim.setup(state)

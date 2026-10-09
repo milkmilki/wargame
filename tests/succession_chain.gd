@@ -9,7 +9,7 @@ func check(ok: bool, label: String) -> void:
 		failures.append(label)
 
 static func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 137
 	state.rng.seed = 137
 	var nation := Nation.new()

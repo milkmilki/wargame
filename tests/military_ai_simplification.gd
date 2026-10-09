@@ -19,7 +19,7 @@ func _init() -> void:
 
 
 func _test_single_standard_battle_group() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91001)
 	var nation := state.nations[0]
 	var group := nation.battle_groups[0]
@@ -67,7 +67,7 @@ func _test_single_standard_battle_group() -> void:
 
 
 func _test_generated_world_has_only_command_units() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91004)
 	var valid := true
 	for nation in state.nations:
@@ -97,7 +97,7 @@ func _test_campaign_bounds() -> void:
 
 
 func _test_stable_campaign_plan_reuse() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91003)
 	var plan := CoalitionCampaignFront.new()
 	plan.center_city_id = int(state.administrative_center_city_ids[0])
@@ -112,7 +112,7 @@ func _test_stable_campaign_plan_reuse() -> void:
 
 
 func _test_defender_counteroffensive_transition() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91005)
 	state.armies.clear()
 	state.battles.clear()

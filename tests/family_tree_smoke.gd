@@ -17,7 +17,7 @@ func _run() -> void:
 		_check(not lineage.call("was_emperor", {"current_title": "皇太子", "titles": ["晋王"]}), "crown_or_virtual_prince_is_not_emperor")
 		_check(not lineage.call("was_emperor", {"current_title": "楚君", "titles": ["楚君"]}), "ordinary_country_ruler_is_not_emperor")
 		_check(not lineage.call("was_emperor", {}), "unknown_ancestor_is_not_emperor")
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(24680)
 	FamilyTree.ensure_all(state)
 	FamilyFixture.ensure_candidates(state, 0)
@@ -94,7 +94,6 @@ func _run() -> void:
 		RoyalTitles.children(members, previous_person_id).has(late_subject.ruler_person_id),
 		"legacy_enfeoffment_updates_existing_child_cache"
 	)
-	await _test_branch_aware_layout()
 	_test_real_enfeoffment_hook()
 
 	if not _failures.is_empty():
@@ -111,43 +110,8 @@ func _check(condition: bool, label: String) -> void:
 		_failures.append(label)
 
 
-func _test_branch_aware_layout() -> void:
-	var panel := FamilyTreePanel.new()
-	root.add_child(panel)
-	await process_frame
-	var canvas: Control = panel._tree_canvas
-	canvas.size = Vector2(1100.0, 620.0)
-	canvas.set("tree", {
-		"root_person_id": 0,
-		"members": {
-			0: {"id": 0, "name": "？", "parent_id": -1, "titles": [], "nation_ids": []},
-			1: {"id": 1, "name": "张三", "parent_id": 0, "titles": ["汉帝"], "nation_ids": [0]},
-			2: {"id": 2, "name": "张四", "parent_id": 0, "titles": ["秦王"], "nation_ids": [1]},
-			3: {"id": 3, "name": "张七", "parent_id": 2, "titles": ["秦王"], "nation_ids": [1]},
-			4: {"id": 4, "name": "张六", "parent_id": 1, "titles": ["汉帝"], "nation_ids": [0]},
-		},
-	})
-	canvas.call("rebuild_layout")
-	var rects: Dictionary = canvas._rect_by_person
-	_check(
-		(rects[4] as Rect2).get_center().x < (rects[3] as Rect2).get_center().x,
-		"descendants_keep_their_parent_branch_order"
-	)
-	for first_value in rects.keys():
-		for second_value in rects.keys():
-			var first := int(first_value)
-			var second := int(second_value)
-			if first >= second:
-				continue
-			_check(
-				not (rects[first] as Rect2).intersects(rects[second] as Rect2),
-				"family_tree_cards_do_not_overlap_%d_%d" % [first, second]
-			)
-	panel.queue_free()
-
-
 func _test_real_enfeoffment_hook() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	FamilyTree.ensure_all(state)
 	FamilyFixture.ensure_candidates(state, 0)

@@ -73,7 +73,7 @@ func _run_group(
 	var hhi_sum := 0.0
 	var enfeoff_sum := 0.0
 	for s in range(seeds):
-		var state := GameState.new()
+		var state := preload("res://tests/support/grid_world.gd").new()
 		state.generate_world(1000 + s * 7919, nations, cities)
 		var sim := Simulation.new()
 		root.add_child(sim)

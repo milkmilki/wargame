@@ -1,0 +1,6 @@
+Latest cleanup validation: cleanup-validation.json
+37 compile/regression tasks passed; shared suite 505 passed / 0 failed.
+Native Earth seed 1, initial 40 nations: 35 days, failures=0 (PID12504).
+Real GPU entry: cold native generation PID20728; lifecycle-fixed cache recheck PID11316, stderr empty.
+Earlier 365-day native military run: run.json (PID19748), preserved as pre-cleanup evidence.
+Old map-label / trade-render assertions and old Eurasia hydrology tests were removed with their legacy pipeline; they are not active failures.

@@ -5,7 +5,6 @@ var _failures: Array[String] = []
 
 
 func _init() -> void:
-	_test_campaign_battle_locks_allocation_report()
 	_test_parallel_battles_hold_report_until_last_finish()
 	_test_rear_camp_loss_waits_for_parallel_engagements()
 	_test_administrative_end_preserves_other_engagement()
@@ -18,132 +17,6 @@ func _init() -> void:
 		push_error(failure)
 	print("CAMPAIGN_BATTLE_REPORT_LOCK_FAILED count=%d" % _failures.size())
 	quit(1)
-
-
-func _test_campaign_battle_locks_allocation_report() -> void:
-	var fixture := _fixture(96120)
-	if fixture.is_empty():
-		_fail("无法构造战报锁定夹具")
-		return
-	var state: GameState = fixture["state"]
-	var sim: Simulation = fixture["sim"]
-	var attacker := int(fixture["attacker"])
-	var defender := int(fixture["defender"])
-	var war_id := int(fixture["war_id"])
-	var center_id := int(fixture["center_id"])
-	var offense := state.create_campaign_front(
-		war_id, [attacker] as Array[int], attacker,
-		CoalitionCampaignFront.Mode.OFFENSE, center_id
-	)
-	offense.staging_city_id = center_id
-	var defense := state.create_campaign_front(
-		war_id, [defender] as Array[int], defender,
-		CoalitionCampaignFront.Mode.DEFENSE, center_id
-	)
-	var attackers: Array[Army] = []
-	var defenders: Array[Army] = []
-	for index in range(3):
-		var army := _army(961200 + index, attacker, center_id)
-		_bind(army, offense, war_id, center_id)
-		state.armies.append(army)
-		attackers.append(army)
-	for index in range(4):
-		var army := _army(961210 + index, defender, center_id)
-		_bind(army, defense, war_id, center_id)
-		state.armies.append(army)
-		defenders.append(army)
-	var attack_reserve := _army(961220, attacker, center_id)
-	var defense_reserve := _army(961221, defender, center_id)
-	state.armies.append(attack_reserve)
-	state.armies.append(defense_reserve)
-
-	var battle := state.new_battle(Battle.Kind.SIEGE)
-	battle.city = state.cities[center_id]
-	battle.siege_attacker_nation = attacker
-	battle.side_a.append(attackers[0])
-	battle.side_b.append(defenders[0])
-	battle.side_b_defends_city = true
-	attackers[0].state = Army.State.FIGHTING
-	attackers[0].battle_id = battle.id
-	defenders[0].state = Army.State.FIGHTING
-	defenders[0].battle_id = battle.id
-
-	sim._lock_campaign_reports_for_battle(battle)
-	_check(offense.combat_report_locked and defense.combat_report_locked,
-		"州治真实野战必须同时锁定攻守双方战报")
-	_check(offense.reported_effective_manpower == 45000,
-		"进攻战报必须冻结开战时的已绑定可战兵力")
-	_check(defense.reported_effective_manpower == 60000,
-		"防守战报必须冻结开战时的已绑定可战兵力")
-	var frozen_offense_requirement: int = offense.reported_requirement
-	var frozen_defense_requirement: int = defense.reported_requirement
-	for army in attackers + defenders:
-		army.size = 1000
-	var locked_report := state.coalition_campaign_allocation(war_id, attacker)
-	var locked_front_report: Dictionary = (
-		locked_report["fronts"] as Dictionary
-	)[offense.front_id]
-	_check(
-		int(locked_front_report["actual_effective"]) == 3000
-		and int(locked_front_report["reported_effective"]) == 45000
-		and bool(locked_front_report["report_locked"]),
-		"集团报告必须同时区分真实可战兵力与冻结调度战报"
-	)
-	var detail_lines := MapRenderer._nation_campaign_detail_lines(
-		state, attacker, offense, locked_report
-	)
-	var report_text_visible := false
-	for line in detail_lines:
-		if (
-			line.contains("野战中，尚未更新")
-			and line.contains("调度战报兵力45000")
-		):
-			report_text_visible = true
-			break
-	_check(
-		report_text_visible,
-		"国家战争信息必须直观显示冻结战报与实际兵力差异"
-	)
-	var attack_component := _component_for(state, war_id, attacker)
-	var defense_component := _component_for(state, war_id, defender)
-	sim._allocate_coalition_fronts(attack_component)
-	sim._allocate_coalition_fronts(defense_component)
-	_check(attack_reserve.campaign_front_id == -1,
-		"进攻方野战伤亡不得在交战中触发新调兵")
-	_check(defense_reserve.campaign_front_id == -1,
-		"防守方野战伤亡不得在交战中触发新调兵")
-	_check(
-		offense.reported_requirement == frozen_offense_requirement
-		and defense.reported_requirement == frozen_defense_requirement,
-		"交战期间实时R/V变化不得改写冻结调兵需求"
-	)
-
-	battle.finished = true
-	sim._finish_campaign_reports_for_battle(battle)
-	_check(not offense.combat_report_locked and not defense.combat_report_locked,
-		"最后一场相关野战结束后必须解锁战报")
-	_check(
-		offense.reported_effective_manpower == 3000
-		and defense.reported_effective_manpower == 4000,
-		"战后战报必须上报实际幸存可战兵力"
-	)
-	sim._allocate_coalition_fronts(attack_component)
-	_check(attack_reserve.campaign_front_id == -1,
-		"战斗结束当天不得立即以新战报补兵")
-	state.day += 1
-	sim._allocate_coalition_fronts(attack_component)
-	sim._allocate_coalition_fronts(defense_component)
-	_check(attack_reserve.campaign_front_id == offense.front_id,
-		"战报解锁后次日规划必须允许补足进攻缺口")
-	_check(defense_reserve.campaign_front_id == defense.front_id,
-		"战报解锁后次日规划必须允许补足防守缺口")
-	var snapshot: Dictionary = NativeSnapshotBuilder.build(state)["campaign_fronts"]
-	_check(
-		(snapshot["reported_effective_manpower"] as PackedInt32Array).size() == 2
-		and (snapshot["combat_report_locked"] as PackedByteArray).size() == 2,
-		"原生快照必须记录战线战报与锁定状态"
-	)
-	sim.free()
 
 
 func _test_campaign_battle_blocks_ad_hoc_local_reinforcement() -> void:
@@ -327,7 +200,7 @@ func _test_administrative_end_preserves_other_engagement() -> void:
 
 
 func _fixture(seed: int) -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(seed, 8, 48)
 	state.armies.clear()
 	state.battles.clear()

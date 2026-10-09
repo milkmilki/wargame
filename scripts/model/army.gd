@@ -45,6 +45,8 @@ var path: Array[int] = []                  ## 寻路城市序列（不含当前�
 var move_from: int = -1                    ## 当前正在通过的边端点（起）
 var move_to: int = -1                      ## 当前正在通过的边端点（止）
 var move_progress: float = 0.0             ## 当前边行进进度 (0,1)
+## Origin jurisdiction is retained across traffic nodes for an evacuation only.
+var route_origin_city_id: int = -1
 
 ## 当前所属战斗 id（-1=未交战）。FIGHTING 状态时冻结在 move_progress 位置。
 var battle_id: int = -1

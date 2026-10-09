@@ -4,7 +4,7 @@ extends SceneTree
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(91021)
 	state.administrative_center_by_city.resize(state.cities.size())
 	for city_id in range(state.cities.size()):
@@ -40,7 +40,7 @@ func _init() -> void:
 		and is_equal_approx(no_foothold, 0.0)
 		and near_completion <= DiplomacyAI.REGION_UNIFICATION_OBJECTIVE_BONUS
 	)
-	var integration_state := GameState.new()
+	var integration_state := preload("res://tests/support/grid_world.gd").new()
 	integration_state.generate_grid_world(91022)
 	integration_state.region_ids.fill(0)
 	integration_state.region_analysis_revision += 1

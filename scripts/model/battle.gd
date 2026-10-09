@@ -1,5 +1,7 @@
 class_name Battle
 extends RefCounted
+## Optional physical junction anchor; never an attackable settlement.
+var traffic_node_id: int = -1
 ## 一场持续多回合（tick）的战斗。开场四骰固定，累积伤亡与士气损失至结束。
 ## 支持多路对多路（N v M）：side_a / side_b 为军队数组，围城时新到攻击方可 join。
 ##

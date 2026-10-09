@@ -4,7 +4,7 @@ func _init() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(61002)
 	state.armies.clear()
 	for nation in state.nations:

@@ -33,7 +33,7 @@ func _build_state(
 	aggressive: bool,
 	vassal_ids: Array[int]
 ) -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(SEED)
 	# Keep the generated one-LINE-per-city baseline, but return all mobile MAIN
 	# formations to manpower. Both arms must rebuild their field force.

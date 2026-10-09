@@ -8,6 +8,13 @@ Upstream code and these ports: GNU AGPL-3.0-only. Preserve the included
 LICENSE-AGPL-3.0.txt and original copyright notices when distributing.
 This notice does not relicense unrelated pre-existing game code.
 
+The independent `atlas_military.tscn` adapter adds fixed state/prefecture
+administration, budgets and a shared physical transport graph. Its terrain
+route and curve utilities extend the AGPL atlas ports; source and changes are
+documented in `docs/atlas/MILITARY_INTEGRATION.md`. No TypeScript runtime or
+upstream history simulation is introduced. Existing game combat and territory
+transactions retain their own original provenance.
+
 The Earth rainfall adapter `scripts/atlas/monsoon_rainfall.gd` calls the game's
 own regional environment_v1.7 algorithm, extracted into the shared
 `scripts/core/rainfall_transport.gd`. This rainfall algorithm is not copied

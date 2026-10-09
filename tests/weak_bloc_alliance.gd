@@ -128,7 +128,7 @@ func _test_action_paths_and_cache_invalidation() -> void:
 
 
 func _fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	var ids := PackedInt32Array()
 	for id in range(10):
 		ids.append(id)

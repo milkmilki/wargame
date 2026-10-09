@@ -5460,11 +5460,10 @@ static func staging_cities_for_objective(
 	if evaluation_cache.has(cache_key):
 		return evaluation_cache[cache_key] as Array[int]
 	var result: Array[int] = []
-	for neighbor in state.neighbors(objective_city):
+	for neighbor in state.strategic_neighbors(objective_city):
 		var edge := state.edge_of(neighbor, objective_city)
 		if (
-			edge != null
-			and edge.max_manpower > 0
+			((edge != null and edge.max_manpower > 0) or not state.atlas_layout.is_empty())
 			and state.has_military_access(
 				nation_id, state.cities[neighbor].owner_nation
 			)
@@ -6007,13 +6006,14 @@ static func _target_encirclement_effect(
 	var queue: Array[int] = [capital]
 	while not queue.is_empty():
 		var current: int = queue.pop_front()
-		for neighbor in state.neighbors(current):
+		for neighbor in state.strategic_neighbors(current):
 			if neighbor == target_city or reachable.has(neighbor):
 				continue
-			var edge := state.edge_of(current, neighbor)
+			var edge := state.strategic_edge_of(current, neighbor)
 			if (
 				edge == null
 				or edge.max_manpower <= 0
+				or not state.strategic_route_access(current,neighbor,target_nation)
 				or not state.has_military_access(
 					target_nation,
 					state.cities[neighbor].owner_nation
@@ -6581,7 +6581,7 @@ static func _grow_enfeoff_region(
 				best_idx = i
 		var current: int = frontier_queue[best_idx]
 		frontier_queue.remove_at(best_idx)
-		var neighbor_ids := state.neighbors(current)
+		var neighbor_ids := state.strategic_neighbors(current)
 		var sorted_neighbors: Array[int] = neighbor_ids.duplicate()
 		sorted_neighbors.sort()
 		for neighbor in sorted_neighbors:
@@ -6598,7 +6598,7 @@ static func _grow_enfeoff_region(
 				or int(hops.get(neighbor, -1)) < min_hops
 			):
 				continue
-			var edge := state.edge_of(current, neighbor)
+			var edge := state.strategic_edge_of(current, neighbor)
 			if edge == null or edge.max_manpower <= 0:
 				continue
 			in_region[neighbor] = true

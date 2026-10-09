@@ -7,11 +7,11 @@ const LAND_CITY_COUNT := 48
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(
 		WORLD_SEED, REQUESTED_NATIONS, LAND_CITY_COUNT
 	)
-	var repeated := GameState.new()
+	var repeated := preload("res://tests/support/grid_world.gd").new()
 	repeated.generate_world(
 		WORLD_SEED, REQUESTED_NATIONS, LAND_CITY_COUNT
 	)
@@ -52,7 +52,7 @@ func _init() -> void:
 				== state.cities[center_id].owner_nation
 		)
 	valid = valid and state.territory_structure_valid()
-	var ordinary := GameState.new()
+	var ordinary := preload("res://tests/support/grid_world.gd").new()
 	ordinary.generate_world(WORLD_SEED + 1, 4, LAND_CITY_COUNT)
 	var ordinary_counts := PackedInt32Array()
 	valid = (

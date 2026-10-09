@@ -113,7 +113,7 @@ func _make_simulation(
 	city_count: int,
 	disable_cache: bool
 ) -> Simulation:
-	var world := GameState.new()
+	var world := preload("res://tests/support/grid_world.gd").new()
 	world.generate_world(12345, nation_count, city_count)
 	var sim := Simulation.new()
 	sim.trade_forecast_cache_disabled = disable_cache

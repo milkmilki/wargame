@@ -252,7 +252,7 @@ func _test_report_end_replans_tomorrow() -> void:
 
 
 func _state() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.rng.seed = 96322
 	for id in range(2):
 		var nation := Nation.new()

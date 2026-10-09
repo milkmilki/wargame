@@ -83,7 +83,7 @@ func _init() -> void:
 		quit(1)
 
 func _world() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94602)
 	var extra := Nation.new()
 	extra.id = state.nations.size()

@@ -2,7 +2,7 @@ extends SceneTree
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94001)
 	var fu_id := -1
 	for city in state.cities:

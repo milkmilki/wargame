@@ -3,7 +3,7 @@ extends SceneTree
 
 const SAMPLES: int = 12
 
-class ProfiledGameState extends GameState:
+class ProfiledGameState extends "res://tests/support/grid_world.gd":
 	var pair_sync_usec: int = 0
 	var pair_sync_calls: int = 0
 
@@ -116,7 +116,7 @@ func _init() -> void:
 
 
 func _run_benchmark() -> Dictionary:
-	var state: GameState = ProfiledGameState.new() if OS.get_environment("REGIONAL_BENCH_PROFILE") == "1" else GameState.new()
+	var state: GameState = ProfiledGameState.new() if OS.get_environment("REGIONAL_BENCH_PROFILE") == "1" else preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, 40)
 	state.region_ids.fill(0)
 	state.region_analysis_revision += 1

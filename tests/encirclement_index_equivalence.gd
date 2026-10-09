@@ -21,7 +21,7 @@ var _index_builds: int = 0
 var _cache_hits: int = 0
 var _cache_misses: int = 0
 
-class CountingGameState extends GameState:
+class CountingGameState extends "res://tests/support/grid_world.gd":
 	var access_queries: int = 0
 
 	func has_military_access(traveler_nation: int, territory_owner: int) -> bool:
@@ -98,7 +98,7 @@ func _test_distinct_targets_share_eligible_roads() -> void:
 func _test_invalid_inputs() -> void:
 	DiplomacyAI.encirclement_index_enabled = true
 	DiplomacyAI.reset_encirclement_cache_counters()
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(20260823)
 	var cache := {SENTINEL_KEY: "invalid"}
 	_check(
@@ -133,7 +133,7 @@ func _test_invalid_inputs() -> void:
 
 
 func _make_world(world_seed: int) -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, NATION_COUNT, LAND_CITY_COUNT)
 	# 正式小地图默认是中立关系；全体两两开战，确保每个国家的真实边界都
 	# 进入 StrategicMapSnapshot 的敌方候选集合。

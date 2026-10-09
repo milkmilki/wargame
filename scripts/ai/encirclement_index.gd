@@ -120,7 +120,7 @@ func _eligible_neighbors(city_id: int) -> Array[int]:
 		var eligible: Array[int] = []
 		for neighbor in _state.neighbors(city_id):
 			var edge := _state.edge_of(city_id, neighbor)
-			if edge != null and edge.max_manpower > 0 and _state.has_military_access(_target_nation, _state.cities[neighbor].owner_nation):
+			if edge != null and edge.max_manpower > 0 and (_state.atlas_edge_access(edge,_target_nation) if not _state.atlas_layout.is_empty() else _state.has_military_access(_target_nation, _state.cities[neighbor].owner_nation)):
 				eligible.append(neighbor)
 		_accessible_neighbors[city_id] = eligible
 	return _accessible_neighbors[city_id]

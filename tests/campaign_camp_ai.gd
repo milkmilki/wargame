@@ -5,7 +5,7 @@ var _checks: int = 0
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "夹具必须找到可从陆路或本地渡口进入的大州")
@@ -181,7 +181,7 @@ func _init() -> void:
 
 
 func _test_camp_threat_requires_battle() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(95213)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "威胁判定夹具必须找到大州")
@@ -261,7 +261,7 @@ func _test_camp_threat_requires_battle() -> void:
 
 
 func _test_hold_camp_reinforcement_advance() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "驻营援军夹具必须找到大州")
@@ -350,7 +350,7 @@ func _test_hold_camp_reinforcement_advance() -> void:
 
 
 func _test_cleanup_releases_when_fu_unreachable() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "肃清收尾夹具必须找到大州")
@@ -513,7 +513,7 @@ func _test_blocked_fu_fallback(
 	unreachable_frontier: bool,
 	army_count: int
 ) -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(95200 + (1 if unreachable_frontier else 0))
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "阻断府夹具必须找到大州")
@@ -605,7 +605,7 @@ func _test_blocked_fu_fallback(
 
 
 func _test_ready_camp_bypasses_remaining_fu() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(95209)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "营内主力攻州治夹具必须找到大州")
@@ -704,7 +704,7 @@ func _test_ready_camp_bypasses_remaining_fu() -> void:
 
 
 func _test_two_hop_camp_assault() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(95202)
 	var center_id := -1
 	var camp_id := -1

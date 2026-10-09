@@ -1,0 +1,270 @@
+{
+  "baseline": "91dafb85697b9f326770787fb60b0d078f5805a1",
+  "scene": "res://atlas_military.tscn",
+  "smoke_pid": 19748,
+  "seed": 1,
+  "initial_nations": 40,
+  "days": 365,
+  "failures": 0,
+  "elapsed_ms": 1099211,
+  "generation": {
+    "distance_km": 250.0,
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "model": "atlas-military-v1",
+    "nodes": 4321,
+    "seed": 1,
+    "settlements": 1796,
+    "source_sha256": "5f915d0a098b4544a714879e928eefd87a0a50ed547823963814db4934165f10",
+    "timing": {
+      "hierarchy_ms": 2300,
+      "roads_ms": 1498,
+      "smoothing": {
+        "rounds_histogram": [
+          446,
+          2,
+          10,
+          4284
+        ]
+      },
+      "total_ms": 6391
+    },
+    "upstream": "103afd3",
+    "upstream_commit": "103afd3d998eac6750692a6813bf5aea03521448"
+  },
+  "action_pid": 27360,
+  "full_view_pid": 23420,
+  "action_start": 6,
+  "action_goal": 688,
+  "captured_center": 6,
+  "seed_water_hits": 0,
+  "seed_label_mismatches": 0,
+  "world_parameters": {
+    "cells": 36000,
+    "climate_water_balance": {
+      "aggregation": "min(1, sum of best two joint seasonal scores / 1.6)",
+      "annual_penalty": false,
+      "evaporation": "FAO-56 Hargreaves; biome diagnostics only",
+      "growing_months": "sum of four joint seasonal scores times three; equivalent suitable months, not capped food support",
+      "observed_soils": false,
+      "observed_temperature_range": false,
+      "quarter_rain_cutoffs_mm": [
+        50.0,
+        1400.0
+      ],
+      "quarter_rain_plateau_mm": [
+        200.0,
+        800.0
+      ],
+      "seasonal_temperature_amplitude_C": 12.0,
+      "temperature_hot_cutoff_C": 28.0,
+      "temperature_low_cutoff_C": 0.0,
+      "temperature_plateau_C": [
+        10.0,
+        20.0
+      ],
+      "two_season_full_support_score": 1.6,
+      "version": "climate_capacity_v6"
+    },
+    "rainfall": 1,
+    "rainfall_model": "seasonal_circulation_v5",
+    "rainfall_transport": {
+      "annual_combine": "arithmetic mean of four seasonal rates",
+      "cold_continent_weather_occupancy": "up to 70 percent fewer moist frontal sectors; local weights normalized",
+      "cold_land_recycling": "shared zonal temperature baseline, elevation and seasonal heating; -2 to 10 C evaporation ramp",
+      "cold_layer_height_m": 1800.0,
+      "cold_layer_inland_scale_km": 900.0,
+      "cold_sector_meridional_multiplier": -3.0,
+      "cold_sector_zonal_multiplier": -0.3,
+      "frontal_extra_lift": 0.04,
+      "frontal_sample_steps": 6,
+      "frontal_transport_steps": 12,
+      "grid": [
+        360,
+        180
+      ],
+      "inland_mixing_latitude_band": [
+        30.0,
+        40.0,
+        50.0,
+        55.0
+      ],
+      "inland_mixing_transition_km": [
+        200.0,
+        1000.0
+      ],
+      "inland_water_recharge_multiplier": 0.1,
+      "lake_freezing_proxy_C": [
+        -2.0,
+        1.0
+      ],
+      "lake_temperature_seasonal_amplitude": 24.0,
+      "land_dry_air_mixing_km": 240.0,
+      "lowland_basin_mixing": "DEM-inferred closed below-sea-level lake basin; 600-1000 km taper, only where nearer than the ocean",
+      "marine_supply": "Magnus saturation relative to 27 C, without a humidity floor",
+      "moist_parcel_mixing_relief": {
+        "humidity_range": [
+          0.15,
+          0.4
+        ],
+        "maximum_relief": 0.9
+      },
+      "observed_climate": false,
+      "orographic_gain": 0.16,
+      "rain_scale": 70000.0,
+      "rainfall_units": "estimated annual mm; quarterly fields are annualized rates",
+      "recycling_fraction": 0.25,
+      "rules": "seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion",
+      "sea_ice": "temperature/latitude seasonal open-water proxy; no observed sea ice",
+      "sea_temperature_heating": [
+        -0.625,
+        -0.225,
+        0.625,
+        0.225
+      ],
+      "season_heating": [
+        -0.85,
+        0.4,
+        0.85,
+        -0.4
+      ],
+      "seasons": [
+        "DJF",
+        "MAM",
+        "JJA",
+        "SON"
+      ],
+      "spinup_steps": 100,
+      "transport_step_km": 160.0,
+      "version": "seasonal_circulation_v5",
+      "warm_land_weather_weights": [
+        [
+          0.72,
+          0.1,
+          0.1,
+          0.08
+        ],
+        [
+          0.552,
+          0.16,
+          0.16,
+          0.128
+        ],
+        [
+          0.72,
+          0.1,
+          0.1,
+          0.08
+        ],
+        [
+          0.552,
+          0.16,
+          0.16,
+          0.128
+        ]
+      ],
+      "water_classes": "explicit 0 land / 1 ocean / 2 inland lake; no region masks",
+      "water_width_km": 120.0,
+      "weather_regimes": [
+        "seasonal_mean",
+        "westward_poleward_warm_sector",
+        "eastward_poleward_warm_sector",
+        "equatorward_cold_sector"
+      ],
+      "wind_coordinates": {
+        "seasonal_u": "east",
+        "seasonal_v": "north",
+        "windX": "east",
+        "windY": "south"
+      },
+      "windward_approach_lift": {
+        "distance_km": 160.0,
+        "fraction_of_downwind_rise": 0.75,
+        "source": "upwind inland-lake fraction only"
+      },
+      "windward_mixing_relief_m": [
+        200.0,
+        1000.0
+      ]
+    },
+    "seed": 1,
+    "settlement_model": "climate_capacity_v6",
+    "temperature": 0,
+    "terrain_model": "earth",
+    "terrain_source": {
+      "bounds": [
+        -180.0,
+        -90.0,
+        180.0,
+        90.0
+      ],
+      "date": "2026-10-09",
+      "elevation_encoding": "signed-i16-little-endian-gzip",
+      "elevation_scale_m": 0.5,
+      "format": "atlas-earth-surface-v1",
+      "height": 1800.0,
+      "projection": "EPSG:4326 equirectangular",
+      "registration": "pixel-center",
+      "relief_file": "earth_relief_06m.i16.gz",
+      "relief_sha256": "6da8349d1ce00726bcd27158ff42b41d541663173561b47ed77bf3b39c453600",
+      "relief_title": "SRTM15 Earth Relief v2.7 at 06 arc minutes",
+      "row_order": "north-to-south",
+      "runtime": "native Godot; no Python dependency",
+      "sources": [
+        {
+          "description": "GMT SRTM15+ v2.7, 6 arcminutes; 31.5 km full-width Gaussian filter",
+          "reference": "Tozer et al. 2019, DOI 10.1029/2019EA000658",
+          "sha256": "b881500f34739b844658ecb00ce86d9352f9a2a45a1e88f26b914d496ea1b38e",
+          "url": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_p.grd"
+        },
+        {
+          "license": "public domain",
+          "sha256": "e874b27a51d146452be360cafb3cc50c86001074a67d534113e6534682f9826b",
+          "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson"
+        },
+        {
+          "license": "public domain",
+          "sha256": "d350b75978b26fe839b797c2c529b2fb8f47fb3983c03f4964e36d5df9378a52",
+          "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson"
+        }
+      ],
+      "water_classes": {
+        "lake": 2.0,
+        "land": 0.0,
+        "ocean": 1.0
+      },
+      "water_file": "earth_water_06m.u8.gz",
+      "water_processing": "Natural Earth land/lakes; Caspian land-hole component is a lake. Closed raster seas retain ocean class; subpixel straits are not assumed absent.",
+      "water_sha256": "ccde0aec2a85967570851c6ac9c7decbed7621128acfd6db30dbb51f09e18853",
+      "width": 3600.0
+    }
+  },
+  "world_options": {
+    "city_threshold": 1.0,
+    "rainfall_model": "seasonal_circulation_v5",
+    "river_usage": "environment_only",
+    "road_model": "civ-atlas-103afd3-land-v1",
+    "settlement_model": "climate_capacity_v6",
+    "terrain_model": "earth",
+    "visual_model": "atlas-handdrawn-v1"
+  },
+  "full_viewport": [
+    2048,
+    1024
+  ],
+  "military_models": {
+    "graph": "atlas-physical-traffic-v1",
+    "administration": "atlas-zhoufu-v1",
+    "military": "atlas-military-v1",
+    "roads": "atlas-zhoufu-roads-v1"
+  }
+}

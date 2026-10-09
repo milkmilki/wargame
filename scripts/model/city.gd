@@ -3,6 +3,12 @@ extends RefCounted
 ## 城市数据模型 —— 纯数据 SSoT，无逻辑。
 
 var id: int = 0
+enum NodeKind { SETTLEMENT, TRAFFIC }
+var node_kind: int = NodeKind.SETTLEMENT
+var is_traffic: bool:
+	get: return node_kind==NodeKind.TRAFFIC
+func is_settlement() -> bool:
+	return not is_dock and not is_traffic
 var name: String = ""                    ## 稳定地名，由 WorldNaming 确定性分配
 ## 城市唯一的单字「简称」。由 WorldNaming 从全称确定性分配并在战役内去重；
 ## 主权国号及藩王封满五城后的单字王封号都取自建国城/藩都的这个简称。

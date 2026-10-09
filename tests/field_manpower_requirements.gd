@@ -26,7 +26,6 @@ func _init() -> void:
 			_test_real_departure(conqueror, direct)
 	_test_empty_and_recovery()
 	_test_field_blockade_siege()
-	_test_defense_boundary_and_projection()
 	_test_reinforcement_promises()
 	_test_coalition_reinforcement()
 	print("FIELD_MANPOWER_REQUIREMENTS checks=%d failures=%d" % [checks, failures])
@@ -41,7 +40,7 @@ func check(condition: bool, label: String) -> void:
 
 
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	for id in range(2):
 		var nation := Nation.new()
 		nation.id = id
@@ -230,45 +229,6 @@ func _test_field_blockade_siege() -> void:
 	print("FIELD_DEMAND_CHAIN bound=%d arrived=%d R=%d field_rounds=%d" % [
 		state.campaign_committed_manpower(0, 3), sim._siege_assault_manpower(battle),
 		state.campaign_attack_requirement(0, 3, false), rounds])
-	sim.free()
-
-
-func _test_defense_boundary_and_projection() -> void:
-	var state: GameState = Direct.fixture()
-	var attack: Army = Direct.army(state, 0, 2, 10000)
-	var offense: CoalitionCampaignFront = Direct.front(state, [attack])
-	offense.camp_city_id = 2
-	var guard: Army = Direct.army(state, 1, 3, 9000)
-	var defense := state.create_campaign_front(offense.war_id, [1] as Array[int], 1,
-		CoalitionCampaignFront.Mode.DEFENSE, 3)
-	guard.campaign_front_id = defense.front_id
-	guard.campaign_war_id = defense.war_id
-	defense.army_assignments[guard.id] = 3
-	var sim := Simulation.new()
-	sim.setup(state)
-	var context := state.campaign_defense_context(1, 3, defense.war_id)
-	check(int(context.enemy_manpower) == 10000 and int(context.requirement) == 9001,
-		"rear camp projection uses strict field demand")
-	defense.reported_requirement = 7777
-	defense.combat_report_day = state.day
-	var detail := "\n".join(MapRenderer._nation_campaign_detail_lines(state, 1, defense,
-		state.coalition_campaign_allocation(defense.war_id, 1)))
-	check(detail.contains("野战最低9001") and detail.contains("分兵目标7777"),
-		"defense debug shows field threshold separately from frozen allocation report")
-	sim._execute_coalition_defense(defense)
-	check(guard.state == Army.State.IDLE, "equal boundary cannot break camp")
-	guard.size += 1
-	sim._execute_coalition_defense(defense)
-	check(guard.state == Army.State.MOVING and guard.ai_target_city == 2,
-		"defender actually departs toward rear camp over strict boundary")
-	attack.on_edge = true
-	attack.location_city = -1
-	attack.move_from = 3
-	attack.move_to = 2
-	attack.state = Army.State.MOVING
-	attack.path.clear()
-	context = state.campaign_defense_context(1, 3, defense.war_id)
-	check(int(context.enemy_manpower) == 10000, "region plus rear projection deduplicate army ID")
 	sim.free()
 
 

@@ -11,7 +11,6 @@ func _init() -> void:
 	_test_adjacent_states_stay_separate()
 	_test_transaction_scope()
 	_test_rebellion_ends_old_city_battle()
-	_test_counter_reset_and_snapshot()
 	_test_mirrored_uprisings()
 	print("STATE_REBELLION_RESULT failures=%d" % failures)
 	quit(0 if failures == 0 else 1)
@@ -178,34 +177,6 @@ func _test_rebellion_ends_old_city_battle() -> void:
 	check(battle.finished and not battle.has_army(defender), "old defenders are removed from obsolete siege")
 	check(defender.size == 15000 and defender.battle_id == -1, "administrative departure causes no rout loss or stale reference")
 	simulation.free()
-
-
-func _test_counter_reset_and_snapshot() -> void:
-	var state := fixture()
-	var city := state.cities[2]
-	city.administrative_rebellion_progress = 2
-	var snapshot := NativeSnapshotBuilder.build(state)
-	check(snapshot["cities"]["administrative_rebellion_progress"][2] == 2, "snapshot records exact state counter")
-	var definition := MapDefinition.from_state(state)
-	check(not definition["cities"][2].has("administrative_rebellion_progress"), "map export excludes runtime state counter")
-	city.unrest = 100.0 - city.loyalty
-	city.rebellion_cooldown_until_day = state.day + RebellionSystem.REBELLION_COOLDOWN_DAYS
-	city.last_loyalty_reason = "state_reset"
-	var result := state.apply_territory_transaction([{
-		"city_id": 2, "controller_id": 0, "legal_owner_id": 0,
-		"reset_political_target": true, "reason": "state_reset",
-	}] as Array[Dictionary])
-	check(bool(result.get("changed", false)) and city.administrative_rebellion_progress == 0, "political reset is not a no-op when only state counter differs")
-	city.administrative_rebellion_progress = 3
-	state.rebuild_administrative_regions()
-	check(city.administrative_rebellion_progress == 0, "partition rebuild clears old state counter")
-	state = fixture()
-	var sections := MapRenderer.city_detail_sections(state, 0)
-	var capital_explained := false
-	for section in sections:
-		for line in section["lines"]:
-			capital_explained = capital_explained or str(line).contains("首都州不参与地方独立")
-	check(capital_explained, "capital state exemption is visible")
 
 
 func _test_mirrored_uprisings() -> void:

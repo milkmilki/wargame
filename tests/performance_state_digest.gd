@@ -4,7 +4,7 @@ extends SceneTree
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, 40, 160)
 	var sim := Simulation.new()
 	root.add_child(sim)

@@ -22,13 +22,13 @@ func _init() -> void:
 
 func _run() -> void:
 	await _verify_real_succession_dispatch()
-	_baseline_state = GameState.new()
+	_baseline_state = preload("res://tests/support/grid_world.gd").new()
 	_baseline_state.generate_world(12345, _nations, _cities)
 	_baseline_sim = Simulation.new()
 	root.add_child(_baseline_sim)
 	_baseline_sim.setup(_baseline_state)
 	_baseline_sim.set_process(false)
-	_sliced_state = GameState.new()
+	_sliced_state = preload("res://tests/support/grid_world.gd").new()
 	_sliced_state.generate_world(12345, _nations, _cities)
 	_sliced_sim = Simulation.new()
 	root.add_child(_sliced_sim)

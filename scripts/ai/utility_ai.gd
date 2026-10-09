@@ -311,7 +311,7 @@ static func _attack_candidate(
 				city_id
 			) > 0.0
 		):
-			var approach_edge := view.state.edge_of(
+			var approach_edge := view.state.strategic_edge_of(
 				start,
 				city_id
 			)
@@ -392,9 +392,16 @@ static func _attack_approach_distance(
 	target_city: int,
 	formation_size: int = 0
 ) -> float:
+	if not view.state.atlas_layout.is_empty():
+		var approach := INF
+		for city_id in view.state.strategic_neighbors(target_city):
+			if not is_finite(float(access_dist.get(city_id,INF))): continue
+			var field := Pathfinding.dijkstra_field(view.state,city_id,view.nation_id,false,true,target_city,formation_size)
+			approach = minf(approach,float(access_dist[city_id])+float(field.dist.get(target_city,INF)))
+		return approach
 	var best := INF
-	for neighbor in view.state.neighbors(target_city):
-		var edge := view.state.edge_of(target_city, neighbor)
+	for neighbor in view.state.strategic_neighbors(target_city):
+		var edge := view.state.strategic_edge_of(target_city, neighbor)
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		var neighbor_dist := float(access_dist.get(neighbor, INF))
@@ -403,7 +410,7 @@ static func _attack_approach_distance(
 		best = minf(
 			best,
 			neighbor_dist
-				+ float(maxi(edge.distance, 1))
+				+ edge.distance_units()
 					* maxf(edge.travel_time_multiplier, 0.05)
 				+ edge.danger * Pathfinding.DANGER_WEIGHT
 		)
@@ -422,8 +429,8 @@ static func _breakout_candidate(
 	var best_city := -1
 	var best_score := -INF
 	var best_enemy_power := 0.0
-	for neighbor in view.state.neighbors(start):
-		var edge := view.state.edge_of(start, neighbor)
+	for neighbor in view.state.strategic_neighbors(start):
+		var edge := view.state.strategic_edge_of(start, neighbor)
 		if (
 			edge == null
 			or edge.max_manpower <= 0
@@ -436,7 +443,7 @@ static func _breakout_candidate(
 			+ snapshot.value_of_city(neighbor)
 			- 5.0 * enemy_power / own_power
 			- 0.25
-				* float(edge.distance)
+				* edge.distance_units()
 				* maxf(edge.travel_time_multiplier, 0.05)
 		)
 		if score > best_score or (
@@ -528,8 +535,8 @@ static func _blockade_relief_value(view: AiWorldView, enemy_city_id: int) -> flo
 	):
 		return 0.0
 	var value := 0.0
-	for neighbor in view.state.neighbors(enemy_city_id):
-		var edge := view.state.edge_of(enemy_city_id, neighbor)
+	for neighbor in view.state.strategic_neighbors(enemy_city_id):
+		var edge := view.state.strategic_edge_of(enemy_city_id, neighbor)
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		var need := _friendly_relief_need(view, neighbor)
@@ -551,8 +558,8 @@ static func _adjacent_assault_pool(
 	var participants := {}
 	var arrival_by_army := {}
 	var max_arrival_days := 0.0
-	for neighbor in view.state.neighbors(target_city):
-		var edge := view.state.edge_of(target_city, neighbor)
+	for neighbor in view.state.strategic_neighbors(target_city):
+		var edge := view.state.strategic_edge_of(target_city, neighbor)
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		var edge_attack_multiplier := 1.0
@@ -674,7 +681,7 @@ static func _choose_holding(
 	var ratio := support / maxf(enemy, 1.0)
 	# 据守 danger 边享地形红利：敌跨边进攻被削、我方防御随驻防天数适应。复用战斗层
 	# 真源派生净利好系数乘入战力比，修正 AI 低估险要地形守御价值、不放一枪即弃守险关。
-	var hold_edge := view.state.edge_of(army.move_from, army.move_to)
+	var hold_edge := view.state.strategic_edge_of(army.move_from, army.move_to)
 	if hold_edge != null:
 		ratio *= terrain_hold_bias(hold_edge.danger, float(army.holding_days))
 	var target_city := view.state.cities[enemy_endpoint]
@@ -750,7 +757,7 @@ static func _choose_holding(
 			threat.threat_at(enemy_endpoint) * 0.35,
 			direct_edge_enemy
 		)
-		var held_edge := view.state.edge_of(
+		var held_edge := view.state.strategic_edge_of(
 			army.move_from,
 			army.move_to
 		)
@@ -831,8 +838,8 @@ static func _post_capture_exposure(view: AiWorldView, city_id: int) -> int:
 	var friendly_links := 0
 	var hostile_links := 0
 	var target_owner := view.state.cities[city_id].owner_nation
-	for neighbor in view.state.neighbors(city_id):
-		var edge := view.state.edge_of(city_id, neighbor)
+	for neighbor in view.state.strategic_neighbors(city_id):
+		var edge := view.state.strategic_edge_of(city_id, neighbor)
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		var owner := view.state.cities[neighbor].owner_nation

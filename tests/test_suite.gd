@@ -18,10 +18,6 @@ var _fail_msgs: Array[String] = []
 func _init() -> void:
 	print("==== WorldWar 回归测试 ====\n")
 
-	_test_world_generation()
-	_test_river_transport()
-	_test_responsive_map_layout()
-	_test_country_display_fade()
 	_test_terrain_multiplier()
 	_test_battle_basics()
 	_test_administrative_battle_removal()
@@ -41,7 +37,6 @@ func _init() -> void:
 	_test_crosspass_field_priority()
 	_test_capacity_no_block_enemy()
 	_test_directional_friendly_capacity()
-	_test_heightmap_main_army_transport_footprint()
 	_test_march_time_linear()
 	_test_siege_food_clock()
 	_test_morale_retreat_recovery()
@@ -56,7 +51,6 @@ func _init() -> void:
 	_test_atomic_territory_transactions()
 	_test_capital_capture_capitulation()
 	_test_holding_combat_adaptation()
-	_test_retreat_contact_and_position_continuity()
 	_test_stable_force_resource_cache_filter()
 	_test_resource_cache_refreshes_after_new_nation()
 	_test_invalid_loyalty_snapshot_does_not_corrupt_city()
@@ -121,3219 +115,6 @@ func _set_neutral_ruler(nation: Nation) -> void:
 	nation.trade_policy = RulerProfile.POLICY_BALANCED
 
 # ------------------------------------------------------------------ 1. 世界生成
-func _test_world_generation() -> void:
-	print("[1] 世界生成不变量")
-	var gs := GameState.new()
-	gs.generate_world(12345)
-	gs.refresh_derived()
-	var ruler_modifiers_match := true
-	for city in gs.cities:
-		ruler_modifiers_match = (
-			ruler_modifiers_match
-			and _approx(
-				city.ruler_city_defense_multiplier,
-				RulerProfile.city_defense_multiplier(
-					gs.nations[city.owner_nation]
-				)
-			)
-		)
-	for army in gs.armies:
-		var ruler := gs.nations[army.owner_nation]
-		ruler_modifiers_match = (
-			ruler_modifiers_match
-			and _approx(
-				army.ruler_attack_multiplier,
-				RulerProfile.attack_multiplier(ruler)
-			)
-			and _approx(
-				army.ruler_defense_multiplier,
-				RulerProfile.defense_multiplier(ruler)
-			)
-			and _approx(
-				army.ruler_morale_multiplier,
-				RulerProfile.morale_multiplier(ruler)
-			)
-		)
-	_check(
-		ruler_modifiers_match,
-		"refresh_derived 的按国缓存必须与逐城市/逐军队君主修正完全一致"
-	)
-	var legacy_road_flow := {}
-	var tree_road_flow := {}
-	for edge in gs.edges:
-		var edge_key := GameState.edge_key(edge.city_a, edge.city_b)
-		legacy_road_flow[edge_key] = 0.0
-		tree_road_flow[edge_key] = 0.0
-	for road_source in range(gs.cities.size()):
-		var road_field := gs._road_dijkstra(road_source)
-		for road_goal in range(road_source + 1, gs.cities.size()):
-			gs._accumulate_road_flow(
-				road_field["prev"], road_source, road_goal,
-				legacy_road_flow, 1.0
-			)
-		gs._accumulate_road_flow_tree(
-			road_field["prev"], road_source, tree_road_flow
-		)
-	_check(
-		legacy_road_flow == tree_road_flow,
-		"所有起点的道路流量树汇总必须与逐终点路径回溯完全等价"
-	)
-	var land_cities := gs.land_cities()
-	_check(
-		land_cities.size() == GameState.TERRAIN_CITY_COUNT
-			and gs.cities.size() > GameState.TERRAIN_CITY_COUNT,
-		"正式地图应有%d个陆城和动态码头，实为%d城"
-			% [
-				GameState.TERRAIN_CITY_COUNT,
-				gs.cities.size(),
-			]
-	)
-	_check(
-		gs.edges.size() >= gs.cities.size() - 1
-			and gs.edges.size() < gs.cities.size() * 3,
-		"真实地图应使用稀疏局部图，边数实为 %d" % gs.edges.size()
-	)
-	var chokepoint_count := 0
-	for edge in gs.edges:
-		if (
-			edge.max_manpower > 0
-			and edge.danger
-				>= Combat.CHOKEPOINT_DANGER_ONSET
-		):
-			chokepoint_count += 1
-	_check(
-		chokepoint_count > 0,
-		"真实地图至少应生成一条可通行高险关隘"
-	)
-	var expected_initial_armies := 0
-	var default_city_mask := (
-		load(GameState.DEFAULT_CITY_MASK_PATH) as Texture2D
-	).get_image()
-	var all_land_cities_in_default_mask := true
-	for masked_city in gs.land_cities():
-		var mask_x := clampi(
-			int(masked_city.map_position.x * default_city_mask.get_width()),
-			0, default_city_mask.get_width() - 1
-		)
-		var mask_y := clampi(
-			int(masked_city.map_position.y * default_city_mask.get_height()),
-			0, default_city_mask.get_height() - 1
-		)
-		all_land_cities_in_default_mask = (
-			all_land_cities_in_default_mask
-			and default_city_mask.get_pixel(mask_x, mask_y).get_luminance() >= 0.5
-		)
-	_check(
-		all_land_cities_in_default_mask,
-		"默认地图所有陆城必须位于对齐的中国领土白色蒙版内"
-	)
-	for initial_nation in gs.nations:
-		if not gs.land_cities_of(initial_nation.id).is_empty():
-			expected_initial_armies += 1
-	_check(
-		gs.armies.size() == expected_initial_armies,
-		"初始军队应为每个有领土国家一个聚合指挥单位，应为%d，实为%d"
-			% [expected_initial_armies, gs.armies.size()]
-	)
-	_check(gs.nations.size() == 4, "国家数应为 4")
-	var initial_peace := true
-	for nation_a in range(gs.nations.size()):
-		for nation_b in range(nation_a + 1, gs.nations.size()):
-			initial_peace = initial_peace and (
-				gs.relation_between(nation_a, nation_b)
-				== GameState.DiplomaticRelation.NEUTRAL
-			)
-	_check(initial_peace, "真实地形地图应以所有国家两两和平开局")
-	_check(
-		gs.cities.all(func(city: City) -> bool: return not city.at_war),
-		"和平开局时所有城市均不应显示战争状态"
-	)
-	# 初始领土以整州为最小单位，经州/码头压缩图划分后保持本国连通；
-	# 州不可拆分，因此只限制极端失衡，不再要求逐城精确四等份。
-	for n in gs.nations:
-		var owned_land := gs.land_cities_of(n.id)
-		var cnt := owned_land.size()
-		var average_land := (
-			float(GameState.TERRAIN_CITY_COUNT) / float(gs.nations.size())
-		)
-		_check(
-			float(cnt) >= average_land * 0.5
-				and float(cnt) <= average_land * 1.6,
-			"国%d 整州划分后的初始陆城数应在均值%d的50%%～160%%内，实为%d"
-				% [
-					n.id,
-					int(round(average_land)),
-					cnt,
-				]
-		)
-		var food_hubs: Array[City] = []
-		var manpower_hubs: Array[City] = []
-		for owned_city in gs.cities_of(n.id):
-			if owned_city.is_food_hub:
-				food_hubs.append(owned_city)
-			if owned_city.is_manpower_hub:
-				manpower_hubs.append(owned_city)
-		_check(
-			food_hubs.size() == 1
-			and food_hubs[0].food_per_half_year
-				>= int(round(
-					float(GameState.FOOD_HUB_MIN_OUTPUT)
-						* food_hubs[
-							0
-						].terrain_output_multiplier
-				)),
-			"国%d 应有一个达到海拔修正下限的高产粮食核心"
-				% n.id
-		)
-		_check(
-			manpower_hubs.size() == 1
-			and manpower_hubs[0].manpower_per_month
-				>= GameState.MANPOWER_HUB_MIN_OUTPUT,
-			"国%d 应有一个高产人口核心" % n.id
-		)
-		_check(
-			food_hubs.is_empty()
-			or manpower_hubs.is_empty()
-			or food_hubs[0].id != manpower_hubs[0].id,
-			"国%d 的粮食与人口核心在城市充足时应尽量分离" % n.id
-		)
-		var resource_snapshot := StrategicMapSnapshot.build(
-			AiWorldView.build(gs, n.id)
-		)
-		_check(
-			resource_snapshot.value_of_city(food_hubs[0].id) >= 4.0
-			and resource_snapshot.value_of_city(manpower_hubs[0].id) >= 4.0,
-			"资源核心应获得显著战略价值"
-		)
-		var owned_reachable := {}
-		var owned_queue: Array[int] = [owned_land[0].id]
-		owned_reachable[owned_queue[0]] = true
-		while not owned_queue.is_empty():
-			var current: int = owned_queue.pop_front()
-			for neighbor in gs.neighbors(current):
-				var owned_edge := gs.edge_of(current, neighbor)
-				if (
-					owned_edge == null
-					or owned_edge.max_manpower <= 0
-					or
-					gs.cities[neighbor].owner_nation != n.id
-					or owned_reachable.has(neighbor)
-				):
-					continue
-				owned_reachable[neighbor] = true
-				owned_queue.append(neighbor)
-		var reachable_land := 0
-		for city_id in owned_reachable:
-			if not gs.cities[int(city_id)].is_dock:
-				reachable_land += 1
-		_check(
-			reachable_land == cnt,
-			"国%d 初始%d个陆城应经本国节点连通，实为%d"
-				% [
-					n.id,
-					cnt,
-					reachable_land,
-				]
-		)
-		var main_armies := 0
-		var initial_troops := 0
-		var formation_morale_valid := true
-		for army in gs.armies:
-			if army.owner_nation != n.id:
-				continue
-			initial_troops += army.size
-			if (
-				army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
-				and army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
-			):
-				main_armies += 1
-				formation_morale_valid = (
-					formation_morale_valid
-					and _approx(
-						army.max_morale,
-						Army.DEFAULT_MAX_MORALE
-					)
-					and _approx(army.morale, army.max_morale)
-					and army.is_main_battle_role()
-				)
-		var initial_group_members := (
-			gs.battle_group_members(
-				n.id,
-				n.battle_groups[0].id
-			)
-			if not n.battle_groups.is_empty()
-			else [] as Array[Army]
-		)
-		_check(
-			n.battle_groups.size() == 1
-			and initial_group_members.size() == 1
-			and main_armies == 1,
-			"国%d 初始军制必须只有一个15000人主战军团" % n.id
-		)
-		_check(
-			formation_morale_valid,
-			"国%d 主战军士气上限必须为2且军制统一"
-				% n.id
-		)
-		var expected_initial_troops := (
-			main_armies * GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-		_check(
-			initial_troops == expected_initial_troops,
-			"国%d 初始军队必须按两档编制满员，实为%d"
-				% [n.id, initial_troops]
-		)
-		var food_report := DiplomacyAI.war_food_report(
-			gs,
-			n.id,
-			initial_troops,
-			DiplomacyAI.FoodPosture.PEACE
-		)
-		_check(
-			float(food_report["full_strength_annual_balance"]) > 0.0,
-			"国%d 初始满编军制应保持粮食年正收益，实为%.1f"
-				% [n.id, food_report["full_strength_annual_balance"]]
-		)
-		var monthly_gold_income := 0
-		for city in gs.cities_of(n.id):
-			monthly_gold_income += Simulation.city_gold_output(gs, city)
-		var monthly_war_upkeep := int(ceil(
-			float(initial_troops)
-				/ float(GameState.WAR_GOLD_TROOPS_PER_UNIT)
-		))
-		_check(
-			monthly_gold_income > monthly_war_upkeep,
-			"国%d 初始满编军制应保持战时月金正收益：收入%d，军费%d"
-				% [n.id, monthly_gold_income, monthly_war_upkeep]
-		)
-	var target_armies := 40
-	var target_troops := (
-		target_armies * GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
-	var target_monthly_gold := (
-		target_armies * GameState.army_monthly_upkeep(
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-		)
-	)
-	_check(
-		GameState.army_monthly_upkeep(
-			GameState.INITIAL_HEAVY_ARMY_SIZE
-		) == 11,
-		"统一主战军维护费必须为11，建军不收现金"
-	)
-	var target_half_year_food := int(ceil(
-		float(target_troops)
-			* Simulation.FOOD_PER_CAPITA
-			* DiplomacyAI.DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER
-			* 6.0
-	))
-	var terrain_monthly_gold := 0
-	var terrain_base_monthly_gold := 0
-	var terrain_half_year_food := 0
-	var terrain_base_half_year_food := 0
-	var terrain_gold_min := 999999
-	var terrain_gold_max := 0
-	var batch_gold_outputs := CityOutputRules.city_gold_outputs(gs)
-	var batch_gold_matches := batch_gold_outputs.size() == gs.cities.size()
-	var batch_potential_gold_outputs := (
-		CityOutputRules.city_potential_gold_outputs(gs)
-	)
-	var batch_potential_gold_matches := (
-		batch_potential_gold_outputs.size() == gs.cities.size()
-	)
-	var neutral_ruler_modifiers := RulerProfile.modifiers(
-		RulerProfile.BALANCED
-	)
-	for city in gs.cities:
-		var city_gold := Simulation.city_gold_output(gs, city)
-		terrain_monthly_gold += city_gold
-		batch_gold_matches = (
-			batch_gold_matches
-			and batch_gold_outputs[city.id] == city_gold
-		)
-		batch_potential_gold_matches = (
-			batch_potential_gold_matches
-			and batch_potential_gold_outputs[city.id]
-				== CityOutputRules.city_potential_gold_output(gs, city)
-		)
-		terrain_base_monthly_gold += city.gold_per_month
-		terrain_half_year_food += Simulation.city_food_output(gs, city)
-		terrain_base_half_year_food += Simulation.city_food_output(
-			gs,
-			city,
-			{},
-			neutral_ruler_modifiers
-		)
-		if not city.is_dock:
-			terrain_gold_min = mini(
-				terrain_gold_min,
-				city.gold_per_month
-			)
-			terrain_gold_max = maxi(
-				terrain_gold_max,
-				city.gold_per_month
-			)
-	_check(
-		terrain_base_monthly_gold >= target_monthly_gold,
-		"真实地图基础月金产出不得低于%d支主战军的目标军费：产出%d，目标%d"
-			% [target_armies, terrain_base_monthly_gold, target_monthly_gold]
-	)
-	_check(
-		terrain_base_monthly_gold
-			== land_cities.size()
-				* GameState.TERRAIN_CITY_GOLD_TARGET_AVERAGE
-			and terrain_gold_min
-				>= GameState.TERRAIN_CITY_GOLD_OUTPUT_MIN
-			and terrain_gold_max
-				<= GameState.TERRAIN_CITY_GOLD_OUTPUT_MAX
-			and terrain_gold_max - terrain_gold_min >= 10,
-		"真实地图基础金币必须保持配置范围、足够跨度且平均7：总额%d，范围%d～%d"
-			% [
-				terrain_base_monthly_gold,
-				terrain_gold_min,
-				terrain_gold_max,
-			]
-	)
-	var expected_effective_gold := 0
-	for city in gs.cities:
-		if not gs.city_administrative_output_enabled(city.id):
-			continue
-		var ruler_multiplier := 1.0
-		var capital_addition := (
-			Simulation.capital_national_gold_addition(gs, city)
-			if city.is_capital else 0
-		)
-		expected_effective_gold += int(floor(
-			float(city.gold_per_month + capital_addition)
-				* ruler_multiplier
-		))
-	_check(
-		terrain_monthly_gold == expected_effective_gold,
-		"正式地图有效金产出必须逐城应用当前君主倍率：预期%d，实为%d"
-			% [expected_effective_gold, terrain_monthly_gold]
-	)
-	_check(
-		batch_gold_matches,
-		"批量城市金产出必须与逐城真源完全等价"
-	)
-	_check(
-		batch_potential_gold_matches,
-		"批量城市潜在金产出必须与逐城真源完全等价"
-	)
-	_check(
-		terrain_base_half_year_food
-			>= int(floor(float(target_half_year_food) * 0.95)),
-		"中性君主下的真实地图半年粮产出应至少维持%d支主战军：基础产出%d，当前君主实际产出%d，目标需求%d"
-			% [
-				target_armies,
-				terrain_base_half_year_food,
-				terrain_half_year_food,
-				target_half_year_food,
-			]
-	)
-	var plain_city_count := 0
-	var port_market_count := 0
-	var crossroads_count := 0
-	var propagated_city_count := 0
-	var development_weights_valid := true
-	var port_food_multiplier_valid := true
-	for city in land_cities:
-		plain_city_count += 1 if city.is_plain_city else 0
-		port_market_count += 1 if city.is_port_market else 0
-		crossroads_count += 1 if city.is_crossroads else 0
-		var direct_gold := 1.0
-		if city.is_port_market:
-			direct_gold = maxf(
-				direct_gold,
-				GameState.PORT_MARKET_OUTPUT_MULTIPLIER
-			)
-		if city.is_crossroads:
-			direct_gold = maxf(
-				direct_gold,
-				GameState.CROSSROADS_GOLD_MULTIPLIER
-			)
-		if city.is_plain_city:
-			direct_gold = maxf(
-				direct_gold,
-				GameState.PLAIN_GOLD_MULTIPLIER
-			)
-		var direct_food := 1.0
-		if city.is_port_market:
-			direct_food = maxf(
-				direct_food,
-				GameState.PORT_MARKET_OUTPUT_MULTIPLIER
-			)
-			port_food_multiplier_valid = (
-				port_food_multiplier_valid
-				and city.development_food_multiplier
-					>= GameState.PORT_MARKET_OUTPUT_MULTIPLIER
-			)
-		if city.is_plain_city:
-			direct_food = maxf(
-				direct_food,
-				GameState.PLAIN_FOOD_MULTIPLIER
-			)
-		var propagated_gold := 0.0
-		var propagated_food := 0.0
-		for neighbor in gs.neighbors(city.id):
-			var edge := gs.edge_of(city.id, neighbor)
-			var source := gs.cities[neighbor]
-			if (
-				edge == null
-				or edge.max_manpower <= 0
-				or source.is_dock
-			):
-				continue
-			var source_direct_gold := 1.0
-			if source.is_port_market:
-				source_direct_gold = maxf(
-					source_direct_gold,
-					GameState.PORT_MARKET_OUTPUT_MULTIPLIER
-				)
-			if source.is_crossroads:
-				source_direct_gold = maxf(
-					source_direct_gold,
-					GameState.CROSSROADS_GOLD_MULTIPLIER
-				)
-			if source.is_plain_city:
-				source_direct_gold = maxf(
-					source_direct_gold,
-					GameState.PLAIN_GOLD_MULTIPLIER
-				)
-			var source_direct_food := 1.0
-			if source.is_port_market:
-				source_direct_food = maxf(
-					source_direct_food,
-					GameState.PORT_MARKET_OUTPUT_MULTIPLIER
-				)
-			if source.is_plain_city:
-				source_direct_food = maxf(
-					source_direct_food,
-					GameState.PLAIN_FOOD_MULTIPLIER
-				)
-			propagated_gold = maxf(
-				propagated_gold,
-				(source_direct_gold - 1.0)
-					* GameState.DEVELOPMENT_PROPAGATION_RATE
-			)
-			propagated_food = maxf(
-				propagated_food,
-				(source_direct_food - 1.0)
-					* GameState.DEVELOPMENT_PROPAGATION_RATE
-			)
-		var expected_gold := maxf(
-			direct_gold,
-			1.0 + propagated_gold
-		)
-		var expected_food := maxf(
-			direct_food,
-			1.0 + propagated_food
-		)
-		if (
-			direct_gold <= 1.0
-			and direct_food <= 1.0
-			and (
-				expected_gold > 1.0
-				or expected_food > 1.0
-			)
-		):
-			propagated_city_count += 1
-		development_weights_valid = (
-			development_weights_valid
-			and _approx(
-				city.development_gold_multiplier,
-				expected_gold
-			)
-			and _approx(
-				city.development_food_multiplier,
-				expected_food
-			)
-		)
-	_check(
-		plain_city_count == int(round(
-			float(GameState.TERRAIN_CITY_COUNT)
-				* GameState.PLAIN_CITY_SHARE
-		))
-			and port_market_count > 0
-			and crossroads_count > 0
-			and propagated_city_count > 0
-			and development_weights_valid
-			and port_food_multiplier_valid,
-		"种田区位必须包含平原、钱粮港市、高连接枢纽和且仅一层50%%传播：平原%d 港市%d 枢纽%d 传播%d"
-			% [
-				plain_city_count,
-				port_market_count,
-				crossroads_count,
-				propagated_city_count,
-			]
-	)
-	var minimum_city_height := INF
-	var maximum_city_height := -INF
-	for city in land_cities:
-		minimum_city_height = minf(
-			minimum_city_height,
-			city.terrain_height
-		)
-		maximum_city_height = maxf(
-			maximum_city_height,
-			city.terrain_height
-		)
-	var city_height_span := maxf(
-		maximum_city_height - minimum_city_height,
-		0.000001
-	)
-	var height_multipliers_valid := true
-	for city in land_cities:
-		var normalized_height := (
-			(city.terrain_height - minimum_city_height)
-			/ city_height_span
-		)
-		height_multipliers_valid = (
-			height_multipliers_valid
-			and _approx(
-				city.terrain_output_multiplier,
-				GameState.terrain_height_output_multiplier(
-					normalized_height
-				)
-			)
-		)
-	var height_m0 := (
-		GameState.terrain_height_output_multiplier(0.0)
-	)
-	var height_m25 := (
-		GameState.terrain_height_output_multiplier(0.25)
-	)
-	var height_m50 := (
-		GameState.terrain_height_output_multiplier(0.50)
-	)
-	var height_m69 := (
-		GameState.terrain_height_output_multiplier(0.69)
-	)
-	var height_m75 := (
-		GameState.terrain_height_output_multiplier(0.75)
-	)
-	var height_m100 := (
-		GameState.terrain_height_output_multiplier(1.0)
-	)
-	_check(
-		height_multipliers_valid
-			and _approx(height_m0, 1.0)
-			and _approx(
-				height_m100,
-				GameState
-					.TERRAIN_HEIGHT_OUTPUT_MIN_MULTIPLIER
-			)
-			and height_m0 > height_m25
-			and height_m25 > height_m50
-			and height_m50 > height_m75
-			and height_m75 > height_m100
-			and _approx(height_m50, 0.6)
-			and height_m69 >= 0.29
-			and height_m69 <= 0.31
-			and height_m0 - height_m25
-				< height_m25 - height_m50
-			and height_m50 - height_m75
-				> height_m75 - height_m100
-			and _approx(
-				height_m25 - height_m50,
-				height_m50 - height_m75
-			),
-		"海拔产出倍率必须按Sigmoid从低地1.0降至最高地0.2，西南高原约为0.3"
-	)
-	var positions_unique := {}
-	var terrain_has_relief := false
-	for city in gs.cities:
-		positions_unique[city.map_position] = true
-		terrain_has_relief = terrain_has_relief or city.terrain_relief > 0.0
-	_check(
-		gs.uses_heightmap
-			and positions_unique.size() == gs.cities.size(),
-		"正式世界的陆城与码头位置均应互异"
-	)
-	_check(terrain_has_relief, "城市应保存高度图局部起伏数据")
-	var minimum_city_spacing := INF
-	for a in range(land_cities.size()):
-		for b in range(a + 1, land_cities.size()):
-			var delta := (
-				land_cities[a].map_position
-				- land_cities[b].map_position
-			)
-			delta.x *= gs.map_aspect_ratio
-			minimum_city_spacing = minf(minimum_city_spacing, delta.length())
-	_check(
-		minimum_city_spacing
-			>= (
-				TerrainMapGenerator
-					.minimum_city_spacing_for_count(
-						GameState.TERRAIN_CITY_COUNT
-					)
-				* TerrainMapGenerator.LOCAL_SPACING_MIN_FACTOR
-				* TerrainMapGenerator.SPACING_RELAXATION_FLOOR
-			),
-		"%d城动态采样仍须保持硬间距下界，实为 %.4f"
-			% [GameState.TERRAIN_CITY_COUNT, minimum_city_spacing]
-	)
-	var height_ordered: Array[City] = land_cities.duplicate()
-	height_ordered.sort_custom(func(a: City, b: City) -> bool:
-		if not is_equal_approx(a.terrain_height, b.terrain_height):
-			return a.terrain_height < b.terrain_height
-		return a.id < b.id
-	)
-	var elevation_quartile := maxi(
-		height_ordered.size() / 4,
-		1
-	)
-	var lowland_spacing_total := 0.0
-	var highland_spacing_total := 0.0
-	for height_index in range(elevation_quartile):
-		for source_data in [
-			[
-				height_ordered[height_index],
-				true,
-			],
-			[
-				height_ordered[
-					height_ordered.size()
-						- 1
-						- height_index
-				],
-				false,
-			],
-		]:
-			var source: City = source_data[0]
-			var nearest := INF
-			for target in land_cities:
-				if target.id == source.id:
-					continue
-				var spacing_delta := (
-					source.map_position - target.map_position
-				)
-				spacing_delta.x *= gs.map_aspect_ratio
-				nearest = minf(nearest, spacing_delta.length())
-			if bool(source_data[1]):
-				lowland_spacing_total += nearest
-			else:
-				highland_spacing_total += nearest
-	var lowland_mean_spacing := (
-		lowland_spacing_total / float(elevation_quartile)
-	)
-	var highland_mean_spacing := (
-		highland_spacing_total / float(elevation_quartile)
-	)
-	var northwest_spacing_total := 0.0
-	var northwest_count := 0
-	var central_southeast_spacing_total := 0.0
-	var central_southeast_count := 0
-	for source in land_cities:
-		var nearest := INF
-		for target in land_cities:
-			if target.id == source.id:
-				continue
-			var spacing_delta := (
-				source.map_position - target.map_position
-			)
-			spacing_delta.x *= gs.map_aspect_ratio
-			nearest = minf(nearest, spacing_delta.length())
-		if (
-			source.map_position.x < 0.45
-			and source.map_position.y < 0.50
-		):
-			northwest_spacing_total += nearest
-			northwest_count += 1
-		elif (
-			source.map_position.x >= 0.45
-			and source.map_position.y >= 0.35
-		):
-			central_southeast_spacing_total += nearest
-			central_southeast_count += 1
-	var northwest_mean_spacing := (
-		northwest_spacing_total
-		/ float(maxi(northwest_count, 1))
-	)
-	var central_southeast_mean_spacing := (
-		central_southeast_spacing_total
-		/ float(maxi(central_southeast_count, 1))
-	)
-	var river_bank_cities := 0
-	for source in land_cities:
-		var nearest_river := INF
-		for river_path in gs.river_paths:
-			for river_point in river_path:
-				var river_delta := (
-					source.map_position - river_point
-				)
-				river_delta.x *= gs.map_aspect_ratio
-				nearest_river = minf(
-					nearest_river,
-					river_delta.length()
-				)
-		if (
-			nearest_river
-				>= TerrainMapGenerator.RIVER_BANK_MIN_DISTANCE
-			and nearest_river
-				<= TerrainMapGenerator.RIVER_BANK_MAX_DISTANCE
-		):
-			river_bank_cities += 1
-	_check(
-		lowland_mean_spacing < highland_mean_spacing,
-		"低海拔四分位城市应比高海拔四分位更密：low=%.4f high=%.4f"
-			% [
-				lowland_mean_spacing,
-				highland_mean_spacing,
-			]
-	)
-	_check(
-		northwest_count > 0
-			and central_southeast_count > 0
-			and central_southeast_mean_spacing
-				< northwest_mean_spacing,
-		"中东部/东南城市应比西北更密：dense=%.4f northwest=%.4f count=%d/%d"
-			% [
-				central_southeast_mean_spacing,
-				northwest_mean_spacing,
-				central_southeast_count,
-				northwest_count,
-			]
-	)
-	_check(
-		river_bank_cities
-			>= int(ceil(
-				float(GameState.TERRAIN_CITY_COUNT) * 0.10
-			)),
-		"至少10%%陆城应依河而建，当前=%d/%d"
-			% [
-				river_bank_cities,
-				GameState.TERRAIN_CITY_COUNT,
-			]
-	)
-	_check(
-		TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 128.0 / 255.0)) == 0.0
-			and TerrainMapGenerator.packed_altitude(Color(0.2, 0.8, 0.4, 1.0)) > 0.99
-			and not TerrainMapGenerator.packed_is_land(Color(1.0, 1.0, 1.0, 128.0 / 255.0))
-			and TerrainMapGenerator.packed_is_land(Color(0.0, 0.0, 0.0, 129.0 / 255.0))
-			and TerrainMapGenerator.packed_signed_elevation(Color(0.0, 0.0, 0.0, 1.0 / 255.0)) < -0.99
-			and absf(TerrainMapGenerator.packed_signed_elevation(Color(0.0, 0.0, 0.0, 128.0 / 255.0))) < 0.001
-			and TerrainMapGenerator.settlement_density(
-			0.15,
-			0.02,
-			Vector2(0.75, 0.70),
-			1.0
-		) > TerrainMapGenerator.settlement_density(
-			0.75,
-			0.20,
-			Vector2(0.20, 0.20),
-			0.0
-			),
-		"打包纹理Alpha必须独立编码海底/海岸/陆地高程，RGB颜色不得影响地理；聚落仍偏好低地与河岸"
-	)
-	var latitude_density := TerrainMapGenerator.default_city_density_settings()
-	var south_multiplier := TerrainMapGenerator.latitude_density_multiplier(
-		float(latitude_density["latitude_min"]), latitude_density
-	)
-	var peak_multiplier := TerrainMapGenerator.latitude_density_multiplier(
-		float(latitude_density["density_peak_latitude"]), latitude_density
-	)
-	var north_multiplier := TerrainMapGenerator.latitude_density_multiplier(
-		float(latitude_density["latitude_max"]), latitude_density
-	)
-	_check(
-		_approx(south_multiplier, float(latitude_density["south_density"]))
-		and _approx(peak_multiplier, 1.0)
-		and _approx(north_multiplier, float(latitude_density["north_density"]))
-		and north_multiplier < south_multiplier
-		and south_multiplier < peak_multiplier,
-		"纬度城市密度必须服从地图源配置，且峰值>南缘>北缘"
-	)
-	_check(
-		gs.map_source_region_normalized
-			== Rect2(0.0, 0.0, 1.0, 1.0)
-		and _approx(
-			gs.map_aspect_ratio,
-			TerrainMapGenerator.FULL_MAP_ASPECT_RATIO
-		),
-		"底图必须保留覆盖中国全境与周边海洋的完整矩形范围"
-	)
-	var province_seen := {}
-	var province_has_sea := false
-	var terrain_geometry := TerrainMapGenerator.build(
-		GameState.terrain_map_path(),
-		GameState.TERRAIN_CITY_COUNT
-	)
-	var seeded_geometry_a := TerrainMapGenerator.build(
-		GameState.terrain_map_path(),
-		GameState.TERRAIN_CITY_COUNT,
-		GameState.DEFAULT_CITY_MASK_PATH,
-		{},
-		71001
-	)
-	var seeded_geometry_b := TerrainMapGenerator.build(
-		GameState.terrain_map_path(),
-		GameState.TERRAIN_CITY_COUNT,
-		GameState.DEFAULT_CITY_MASK_PATH,
-		{},
-		71002
-	)
-	var seeded_geometry_a_repeat := TerrainMapGenerator.build(
-		GameState.terrain_map_path(),
-		GameState.TERRAIN_CITY_COUNT,
-		GameState.DEFAULT_CITY_MASK_PATH,
-		{},
-		71001
-	)
-	_check(
-		seeded_geometry_a["positions"]
-			== seeded_geometry_a_repeat["positions"]
-			and seeded_geometry_a["positions"]
-				!= seeded_geometry_b["positions"],
-		"程序化地图必须同种子可复现、不同种子生成不同城市与省界布局"
-	)
-	var terrain_bounds: Rect2i = terrain_geometry["bounds"]
-	var province_ids_valid := (
-		gs.province_map_size.x > 0
-		and gs.province_map_size.y > 0
-		and gs.province_ids.size()
-			== gs.province_map_size.x * gs.province_map_size.y
-	)
-	for province_id in gs.province_ids:
-		if province_id < 0:
-			province_has_sea = true
-			continue
-		province_ids_valid = (
-			province_ids_valid
-				and province_id < GameState.TERRAIN_CITY_COUNT
-		)
-		province_seen[province_id] = true
-	_check(
-		province_ids_valid
-		and province_has_sea
-		and province_seen.size() == GameState.TERRAIN_CITY_COUNT,
-		"完整矩形省份图必须为%d城各生成独立省份，海洋保持透明"
-			% GameState.TERRAIN_CITY_COUNT
-	)
-	var warp_sample := Vector2(47.0, 83.0)
-	var warped_sample := TerrainMapGenerator.province_metric_point(
-		warp_sample
-	)
-	var warped_neighbor := TerrainMapGenerator.province_metric_point(
-		warp_sample + Vector2.ONE
-	)
-	_check(
-		gs.province_map_size
-			== terrain_bounds.size
-				* TerrainMapGenerator.PROVINCE_RASTER_SCALE
-			and warped_sample
-				== TerrainMapGenerator.province_metric_point(
-					warp_sample
-				)
-			and warped_sample.distance_to(warp_sample) > 0.5
-			and warped_sample.distance_to(warped_neighbor) < 2.5,
-		"省份归属图必须使用地形分析分辨率和确定、局部连续的域扭曲"
-	)
-	var flat_cost := (
-		TerrainMapGenerator.province_geographic_step_cost(
-			0.20,
-			0.20,
-			false,
-			0.0,
-			1.0
-		)
-	)
-	var mountain_cost := (
-		TerrainMapGenerator.province_geographic_step_cost(
-			0.78,
-			0.84,
-			false,
-			0.0,
-			1.0
-		)
-	)
-	var river_cost := (
-		TerrainMapGenerator.province_geographic_step_cost(
-			0.20,
-			0.20,
-			true,
-			0.0,
-			1.0
-		)
-	)
-	var road_cost := (
-		TerrainMapGenerator.province_geographic_step_cost(
-			0.20,
-			0.20,
-			false,
-			1.0,
-			1.0
-		)
-	)
-	var road_river_cost := (
-		TerrainMapGenerator.province_geographic_step_cost(
-			0.20,
-			0.20,
-			true,
-			1.0,
-			1.0
-		)
-	)
-	_check(
-		mountain_cost > flat_cost * 2.0
-			and river_cost > flat_cost * 4.0
-			and _approx(road_cost, flat_cost)
-			and _approx(road_river_cost, river_cost),
-		"省界地理成本只由山脉与河流塑造，道路不得反向改变省界"
-	)
-	var test_river_field := PackedByteArray()
-	test_river_field.resize(100)
-	TerrainMapGenerator._build_province_river_mask(
-		test_river_field,
-		Vector2i(10, 10),
-		Rect2i(0, 0, 10, 10),
-		[[Vector2i(2, 5), Vector2i(3, 5)]]
-	)
-	_check(
-		test_river_field[5 * 10 + 2] != 0
-			and test_river_field[5 * 10 + 3] != 0,
-		"河流路径必须写入省界地理屏障掩码"
-	)
-	var province_owners_stable := true
-	for city in gs.cities:
-		province_owners_stable = (
-			province_owners_stable
-			and gs.recognized_owner_of(city.id) == city.owner_nation
-		)
-	_check(province_owners_stable, "省份必须保存不随占领变化的初始归属")
-	var province_geometry := MapRenderer.build_province_boundary_segments(gs)
-	var repeated_province_geometry := (
-		MapRenderer.build_province_boundary_segments(gs)
-	)
-	var curved_topology_deterministic := true
-	for topology_key in [
-		"province", "coast",
-		"country_owner_a", "country_owner_b",
-		"country_side_a", "country_side_b",
-		"coast_owner", "coast_side",
-	]:
-		curved_topology_deterministic = (
-			curved_topology_deterministic
-			and province_geometry[topology_key]
-				== repeated_province_geometry[topology_key]
-		)
-	var country_segment_count := (
-		province_geometry["country"] as PackedVector2Array
-	).size() / 2
-	var coast_segment_count := (
-		province_geometry["coast"] as PackedVector2Array
-	).size() / 2
-	var country_sides_valid := true
-	var country_segments: PackedVector2Array = province_geometry["country"]
-	var country_owners_a: PackedInt32Array = province_geometry["country_owner_a"]
-	var country_owners_b: PackedInt32Array = province_geometry["country_owner_b"]
-	var country_sides_a: PackedVector2Array = province_geometry["country_side_a"]
-	var country_sides_b: PackedVector2Array = province_geometry["country_side_b"]
-	for boundary_index in range(country_segment_count):
-		var from := country_segments[boundary_index * 2]
-		var to := country_segments[boundary_index * 2 + 1]
-		var direction := (to - from).normalized()
-		var normal := Vector2(-direction.y, direction.x)
-		var side_a := country_sides_a[boundary_index].dot(normal)
-		var side_b := country_sides_b[boundary_index].dot(normal)
-		country_sides_valid = (
-			country_sides_valid
-			and country_owners_a[boundary_index] != country_owners_b[boundary_index]
-			and absf(side_a) > 0.000001
-			and absf(side_b) > 0.000001
-			and side_a * side_b < 0.0
-		)
-	_check(
-		not (province_geometry["province"] as PackedVector2Array).is_empty()
-		and not (province_geometry["country"] as PackedVector2Array).is_empty()
-		and not (province_geometry["coast"] as PackedVector2Array).is_empty()
-		and (province_geometry["country_owner_a"] as PackedInt32Array).size()
-			== country_segment_count
-		and (province_geometry["country_owner_b"] as PackedInt32Array).size()
-			== country_segment_count
-		and (province_geometry["country_side_a"] as PackedVector2Array).size()
-			== country_segment_count
-		and (province_geometry["country_side_b"] as PackedVector2Array).size()
-			== country_segment_count
-		and (province_geometry["coast_owner"] as PackedInt32Array).size()
-			== coast_segment_count
-		and (province_geometry["coast_side"] as PackedVector2Array).size()
-			== coast_segment_count
-		and country_sides_valid
-		and curved_topology_deterministic,
-		"省界、国境和海岸必须逐段保留两侧国家及内侧方向"
-	)
-	var synthetic_segments := PackedVector2Array([
-		Vector2(0.0, 0.0), Vector2(0.25, 0.0),
-		Vector2(0.25, 0.0), Vector2(0.25, 0.25),
-		Vector2(0.25, 0.25), Vector2(0.50, 0.25),
-		Vector2(0.50, 0.25), Vector2(0.50, 0.50),
-	])
-	var synthetic_curve := MapRenderer._curve_subdivide_boundary_graph(
-		synthetic_segments,
-		{
-			"kind": "province",
-			"province_a": PackedInt32Array([3, 3, 3, 3]),
-			"province_b": PackedInt32Array([7, 7, 7, 7]),
-			"side_a": PackedVector2Array([
-				Vector2.DOWN, Vector2.RIGHT, Vector2.DOWN, Vector2.RIGHT,
-			]),
-			"side_b": PackedVector2Array([
-				Vector2.UP, Vector2.LEFT, Vector2.UP, Vector2.LEFT,
-			]),
-		},
-		Vector2i(16, 16)
-	)
-	var synthetic_curve_segments: PackedVector2Array = (
-		synthetic_curve["segments"]
-	)
-	var synthetic_side_a: PackedVector2Array = (
-		synthetic_curve["province_side_a"]
-	)
-	var synthetic_side_b: PackedVector2Array = (
-		synthetic_curve["province_side_b"]
-	)
-	var synthetic_curve_valid := synthetic_curve_segments.size() > 8
-	for segment_index in range(synthetic_curve_segments.size() / 2):
-		var direction := (
-			synthetic_curve_segments[segment_index * 2 + 1]
-			- synthetic_curve_segments[segment_index * 2]
-		).normalized()
-		var normal := Vector2(-direction.y, direction.x)
-		synthetic_curve_valid = (
-			synthetic_curve_valid
-			and synthetic_side_a[segment_index].dot(normal) > 0.99
-			and synthetic_side_b[segment_index].dot(normal) < -0.99
-		)
-	_check(
-		synthetic_curve_valid,
-		"链级曲线必须消除单格台阶，并按微段局部法线携带两侧归属"
-	)
-	var junction_segments := PackedVector2Array([
-		Vector2(0.5, 0.5), Vector2(0.25, 0.5),
-		Vector2(0.5, 0.5), Vector2(0.75, 0.5),
-		Vector2(0.5, 0.5), Vector2(0.5, 0.75),
-	])
-	var junction_curve := MapRenderer._curve_subdivide_boundary_graph(
-		junction_segments,
-		{
-			"kind": "province",
-			"province_a": PackedInt32Array([1, 1, 2]),
-			"province_b": PackedInt32Array([2, 2, 3]),
-			"side_a": PackedVector2Array([
-				Vector2.DOWN, Vector2.UP, Vector2.RIGHT,
-			]),
-			"side_b": PackedVector2Array([
-				Vector2.UP, Vector2.DOWN, Vector2.LEFT,
-			]),
-		},
-		Vector2i(16, 16)
-	)
-	var junction_output: PackedVector2Array = junction_curve["segments"]
-	var junction_endpoint_count := 0
-	for junction_point in junction_output:
-		if junction_point.is_equal_approx(Vector2(0.5, 0.5)):
-			junction_endpoint_count += 1
-	_check(
-		junction_endpoint_count == 3,
-		"不同省份对共享的三岔点必须切成三条链并固定在原始交点"
-	)
-	var premultiplied_probe := Image.create(8, 8, false, Image.FORMAT_RGBA8)
-	premultiplied_probe.fill(Color(0.0, 0.0, 0.0, 0.0))
-	var probe_ink := Color(0.30, 0.045, 0.035, 1.0).srgb_to_linear()
-	for probe_y in range(4):
-		for probe_x in range(4):
-			premultiplied_probe.set_pixel(
-				probe_x, probe_y, Color(probe_ink.r, probe_ink.g, probe_ink.b, 1.0)
-			)
-	_check(
-		premultiplied_probe.generate_mipmaps() == OK,
-		"国界预乘纹理必须能生成完整 mip 链"
-	)
-	var probe_data := premultiplied_probe.get_data()
-	var probe_format := premultiplied_probe.get_format()
-	var probe_width := 8
-	var probe_height := 8
-	var premultiplied_mips_valid := true
-	for mip_level in range(premultiplied_probe.get_mipmap_count() + 1):
-		var mip_offset := premultiplied_probe.get_mipmap_offset(mip_level)
-		var mip_width := maxi(probe_width >> mip_level, 1)
-		var mip_height := maxi(probe_height >> mip_level, 1)
-		var mip_byte_count := mip_width * mip_height * 4
-		var mip_bytes := probe_data.slice(mip_offset, mip_offset + mip_byte_count)
-		var mip_image := Image.create_from_data(
-			mip_width, mip_height, false, probe_format, mip_bytes
-		)
-		for mip_y in range(mip_height):
-			for mip_x in range(mip_width):
-				var sample := mip_image.get_pixel(mip_x, mip_y)
-				if sample.a <= 0.01:
-					continue
-				var decoded := Vector3(sample.r, sample.g, sample.b) / sample.a
-				premultiplied_mips_valid = (
-					premultiplied_mips_valid
-					and decoded.distance_to(
-						Vector3(probe_ink.r, probe_ink.g, probe_ink.b)
-					) < 0.025
-				)
-	_check(
-		premultiplied_mips_valid,
-		"RGBA8 各级 mip 反预乘后必须保持国界墨色，禁止白边、黑边和色偏"
-	)
-	var micro_cell := 1.0 / 2048.0
-	var micro_curve := MapRenderer._curve_subdivide_boundary_graph(
-		PackedVector2Array([Vector2.ZERO, Vector2(micro_cell, 0.0)]),
-		{
-			"kind": "province",
-			"province_a": PackedInt32Array([3]),
-			"province_b": PackedInt32Array([7]),
-			"side_a": PackedVector2Array([Vector2.DOWN]),
-			"side_b": PackedVector2Array([Vector2.UP]),
-		},
-		Vector2i(2048, 2048)
-	)
-	_check(
-		(micro_curve["segments"] as PackedVector2Array).size() == 8
-		and (micro_curve["province_a"] as PackedInt32Array).size() == 4,
-		"一格尺度的真实边界不得被归一化 UV 退化阈值吞掉"
-	)
-	var reverse_edge := {
-		"from": Vector2(micro_cell, 0.0),
-		"to": Vector2.ZERO,
-		"province_a": 3,
-		"province_b": 7,
-		"side_a": Vector2.DOWN,
-		"side_b": Vector2.UP,
-	}
-	var reverse_side_info := MapRenderer._province_chain_side_info(reverse_edge)
-	var reverse_coast_sign := MapRenderer._coast_chain_side_sign({
-		"from": Vector2(micro_cell, 0.0),
-		"to": Vector2.ZERO,
-		"coast_side": Vector2.DOWN,
-	})
-	_check(
-		int(reverse_side_info["left_province"]) == 7
-		and int(reverse_side_info["right_province"]) == 3
-		and reverse_coast_sign < 0.0,
-		"反向追踪的一格边仍必须按真实切线保留国家与海岸内侧"
-	)
-	var tiny_loop := PackedVector2Array([
-		Vector2(0.0, 0.0), Vector2(micro_cell, 0.0),
-		Vector2(micro_cell, 0.0), Vector2(micro_cell, micro_cell),
-		Vector2(micro_cell, micro_cell), Vector2(0.0, micro_cell),
-		Vector2(0.0, micro_cell), Vector2(0.0, 0.0),
-	])
-	var tiny_loop_curve := MapRenderer._curve_subdivide_boundary_graph(
-		tiny_loop,
-		{
-			"kind": "coast",
-			"coast_province": PackedInt32Array([3, 3, 3, 3]),
-			"coast_side": PackedVector2Array([
-				Vector2.DOWN, Vector2.LEFT, Vector2.UP, Vector2.RIGHT,
-			]),
-		},
-		Vector2i(2048, 2048)
-	)
-	var tiny_loop_segments: PackedVector2Array = tiny_loop_curve["segments"]
-	var tiny_loop_points := PackedVector2Array()
-	for segment_index in range(tiny_loop_segments.size() / 2):
-		tiny_loop_points.append(tiny_loop_segments[segment_index * 2])
-	_check(
-		tiny_loop_segments.size() >= 24
-		and tiny_loop_segments[tiny_loop_segments.size() - 1]
-			.is_equal_approx(tiny_loop_segments[0])
-		and absf(MapRenderer._boundary_ring_area(tiny_loop_points))
-			> 0.000000000001,
-		"一格闭合小岛不得被 RDP 压成两点往返直线"
-	)
-	_check(
-		not (province_geometry["coast"] as PackedVector2Array).is_empty(),
-		"0米海岸线必须生成与城市疆域边界同层的闭合描边"
-	)
-	var base_overlay := MapRenderer.build_province_overlay_image(gs)
-	var transparent_sea_found := false
-	for y in range(gs.province_map_size.y):
-		for x in range(gs.province_map_size.x):
-			if (
-				gs.province_ids[y * gs.province_map_size.x + x] < 0
-				and base_overlay.get_pixel(x, y).a <= 0.001
-			):
-				transparent_sea_found = true
-				break
-		if transparent_sea_found:
-			break
-	_check(transparent_sea_found, "省份覆盖层不得遮挡陆地轮廓外的底图")
-	var subject_color_test := 1
-	var overlord_color_test := 0
-	var original_suzerainty := gs.suzerainty.duplicate(true)
-	gs.suzerainty[subject_color_test] = {
-		"overlord_id": overlord_color_test,
-		"civil_war": false,
-	}
-	var overlord_political_color := MapRenderer.paper_nation_color(
-		gs.nations[overlord_color_test].color
-	)
-	var actual_subject_color := MapRenderer.political_map_color(
-		gs, subject_color_test
-	)
-	_check(
-		absf(actual_subject_color.h - overlord_political_color.h) < 0.001
-		and _approx(
-			actual_subject_color.v,
-			overlord_political_color.v
-				* (1.0 - MapRenderer.VASSAL_BRIGHTNESS_STEP)
-		),
-		"政治疆域中藩王必须继承宗主色并降低约15%明度"
-	)
-	var faction_colors_valid := true
-	var palette_inputs_valid := (
-		not GameState.NATION_PALETTE_HUES.is_empty()
-		and GameState.NATION_PALETTE_HUES.size()
-			== GameState.NATION_PALETTE_SATURATIONS.size()
-		and GameState.NATION_PALETTE_HUES.size()
-			== GameState.NATION_PALETTE_VALUES.size()
-	)
-	for channel in [
-		GameState.NATION_PALETTE_HUES,
-		GameState.NATION_PALETTE_SATURATIONS,
-		GameState.NATION_PALETTE_VALUES,
-	]:
-		for value in channel:
-			palette_inputs_valid = (
-				palette_inputs_valid
-				and float(value) >= 0.0
-				and float(value) <= 1.0
-			)
-	gs.suzerainty = original_suzerainty
-	for nation in gs.nations:
-		var political_color := MapRenderer.political_map_color(gs, nation.id)
-		var counter_color := MapRenderer.command_marker_color(gs, nation.id)
-		var alert_color := MapRenderer.final_faction_visual_color(
-			gs, nation.id, 0.62, 0.08
-		)
-		for visual_color in [nation.color, political_color, counter_color]:
-			faction_colors_valid = (
-				faction_colors_valid
-				and visual_color.h >= GameState.NATION_COLOR_HUE_MIN - 0.0001
-				and visual_color.h <= GameState.NATION_COLOR_HUE_MAX + 0.0001
-				and visual_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.0001
-				and visual_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.0001
-				and visual_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.0001
-				and visual_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.0001
-			)
-		faction_colors_valid = (
-			faction_colors_valid
-			and alert_color.s >= GameState.NATION_COLOR_SATURATION_MIN - 0.0001
-			and alert_color.s <= GameState.NATION_COLOR_SATURATION_MAX + 0.0001
-			and alert_color.v >= GameState.NATION_COLOR_VALUE_MIN - 0.0001
-			and alert_color.v <= GameState.NATION_COLOR_VALUE_MAX + 0.0001
-		)
-	_check(
-		faction_colors_valid and palette_inputs_valid,
-		"国家调色板各HSV通道必须等长且合法，派生显示色必须保持规范范围"
-	)
-	var occupied_test_city := 0
-	var original_test_owner := gs.cities[occupied_test_city].owner_nation
-	gs.cities[occupied_test_city].owner_nation = (
-		original_test_owner + 1
-	) % gs.nations.size()
-	var occupied_overlay := MapRenderer.build_province_overlay_image(gs)
-	var occupation_hatch_found := false
-	for y in range(gs.province_map_size.y):
-		for x in range(gs.province_map_size.x):
-			if (
-				gs.province_ids[y * gs.province_map_size.x + x]
-					== occupied_test_city
-				and (x + y) % 9 < 3
-				and occupied_overlay.get_pixel(x, y).a > 0.60
-			):
-				occupation_hatch_found = true
-				break
-		if occupation_hatch_found:
-			break
-	gs.cities[occupied_test_city].owner_nation = original_test_owner
-	_check(
-		occupation_hatch_found,
-		"被占领省份必须叠加高于底色透明度的占领国斜线纹理"
-	)
-	_check(ResourceLoader.exists("res://main.tscn"), "真实地图场景 main.tscn 必须保留")
-	_check(ResourceLoader.exists("res://square_map.tscn"), "原方形地图场景必须独立保留")
-	_check(
-		ResourceLoader.exists("res://forty_nations.tscn"),
-		"40国可玩场景 forty_nations.tscn 必须存在"
-	)
-	var forty_packed := load("res://forty_nations.tscn") as PackedScene
-	var forty_scene := forty_packed.instantiate()
-	_check(
-		int(forty_scene.get("nation_count")) == 40
-			and int(forty_scene.get("terrain_city_count"))
-				== GameState.TERRAIN_CITY_COUNT
-			and bool(forty_scene.get("randomize_world_seed_on_start"))
-			and forty_scene.get_node_or_null("StrategicMap3D") != null
-			and forty_scene.get_node_or_null("RoadTuningLayer") != null
-			and forty_scene.get_node_or_null("MapEditorLayer") != null
-			and forty_scene.get_node_or_null("SettingsLayer/SettingsButton")
-				!= null
-			and _approx(
-				float(forty_scene.get("initial_army_icon_scale")),
-				0.40
-			)
-			and not bool(
-				forty_scene.get("initial_city_names_visible")
-			),
-		"40国场景必须继承完整主界面、使用当前默认陆城数并在启动时随机生成"
-	)
-	forty_scene.free()
-	# 每国只有首都一个粮仓；本国全部陆城初始储备归集到该粮仓。
-	for n in gs.nations:
-		var warehouses := gs.warehouse_cities_of(n.id)
-		var owned_land_count := gs.land_cities_of(n.id).size()
-		_check(warehouses.size() == 1 and warehouses[0].id == n.capital_city_id,
-			"国%d 初始应只有首都一个粮仓" % n.id)
-		_check(
-			warehouses[0].food_storage
-				>= owned_land_count
-					* GameState.INITIAL_CITY_FOOD_STOCK_MIN
-			and warehouses[0].food_storage
-				<= owned_land_count
-					* GameState.INITIAL_CITY_FOOD_STOCK_MAX,
-			"国%d 首都粮仓应归集%d城初始储备，实为%d"
-				% [
-					n.id,
-					owned_land_count,
-					warehouses[0].food_storage,
-				])
-	var non_warehouse_food := false
-	for c in gs.cities:
-		if not c.has_warehouse and c.food_storage != 0:
-			non_warehouse_food = true
-	_check(not non_warehouse_food, "普通城市不得保存粮食库存")
-	# 邻接对称性
-	var ok_adj := true
-	for cid in gs.adjacency.keys():
-		for nb in gs.neighbors(cid):
-			if not (gs.neighbors(nb) as Array).has(cid):
-				ok_adj = false
-	_check(ok_adj, "邻接表应对称")
-	var road_counts := {
-		0: 0,
-		Edge.TERRAIN_LOW_MANPOWER: 0,
-		Edge.TERRAIN_STANDARD_MANPOWER: 0,
-	}
-	var degrees := {}
-	var shared_province_boundaries := (
-		TerrainMapGenerator.province_shared_boundary_counts(
-			gs.province_ids, gs.province_map_size
-		)
-	)
-	var invalid_land_adjacency := 0
-	var invalid_land_path := 0
-	var curved_land_paths := 0
-	var longest_edge := 0.0
-	var roads_by_relief: Array[Edge] = []
-	for edge in gs.edges:
-		if (
-			edge.max_manpower > 0
-			and edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
-		):
-			roads_by_relief.append(edge)
-	roads_by_relief.sort_custom(func(a: Edge, b: Edge) -> bool:
-		return a.max_height_difference < b.max_height_difference
-	)
-	for edge in gs.edges:
-		if edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]:
-			road_counts[edge.max_manpower] = (
-				int(road_counts.get(edge.max_manpower, 0)) + 1
-			)
-		_check(
-			MapRenderer.is_edge_visible(edge)
-				== (edge.max_manpower > 0),
-			"地图只应显示正容量道路"
-		)
-		degrees[edge.city_a] = int(degrees.get(edge.city_a, 0)) + 1
-		degrees[edge.city_b] = int(degrees.get(edge.city_b, 0)) + 1
-		if (
-			edge.max_manpower > 0
-			and edge.kind not in [Edge.Kind.RIVER, Edge.Kind.SEA]
-		):
-			var delta := (
-				gs.cities[edge.city_a].map_position
-				- gs.cities[edge.city_b].map_position
-			)
-			delta.x *= gs.map_aspect_ratio
-			longest_edge = maxf(longest_edge, delta.length())
-		if edge.kind == Edge.Kind.LAND:
-			if not shared_province_boundaries.has(
-				TerrainMapGenerator._pair_key(edge.city_a, edge.city_b)
-			):
-				invalid_land_adjacency += 1
-			if edge.map_path.size() >= 2:
-				curved_land_paths += 1
-			var road_path := edge.map_points(
-				gs.cities[edge.city_a].map_position,
-				gs.cities[edge.city_b].map_position
-			)
-			for path_index in range(road_path.size() - 1):
-				if not TerrainMapGenerator.province_segment_stays_in_pair(
-					gs.province_ids, gs.province_map_size,
-					road_path[path_index], road_path[path_index + 1],
-					edge.city_a, edge.city_b
-				):
-					invalid_land_path += 1
-					break
-	_check(
-		invalid_land_adjacency == 0,
-		"所有陆路端点必须是共享省界的城市，违规=%d" % invalid_land_adjacency
-	)
-	_check(
-		invalid_land_path == 0 and curved_land_paths > 0,
-		"陆路正式折线必须只经过端点两省，违规=%d 折线路=%d"
-			% [invalid_land_path, curved_land_paths]
-	)
-	var crossing_road_pairs := 0
-	for edge_a_index in range(gs.edges.size()):
-		var edge_a: Edge = gs.edges[edge_a_index]
-		if (
-			edge_a.max_manpower <= 0
-			or edge_a.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
-		):
-			continue
-		for edge_b_index in range(
-			edge_a_index + 1,
-			gs.edges.size()
-		):
-			var edge_b: Edge = gs.edges[edge_b_index]
-			if (
-				edge_b.max_manpower <= 0
-				or edge_b.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
-				or edge_a.city_a in [
-					edge_b.city_a,
-					edge_b.city_b,
-				]
-				or edge_a.city_b in [
-					edge_b.city_a,
-					edge_b.city_b,
-				]
-			):
-				continue
-			var path_a := edge_a.map_points(
-				gs.cities[edge_a.city_a].map_position,
-				gs.cities[edge_a.city_b].map_position
-			)
-			var path_b := edge_b.map_points(
-				gs.cities[edge_b.city_a].map_position,
-				gs.cities[edge_b.city_b].map_position
-			)
-			var paths_cross := false
-			for segment_a in range(path_a.size() - 1):
-				for segment_b in range(path_b.size() - 1):
-					if Geometry2D.segment_intersects_segment(
-						path_a[segment_a], path_a[segment_a + 1],
-						path_b[segment_b], path_b[segment_b + 1]
-					) != null:
-						paths_cross = true
-						break
-				if paths_cross:
-					break
-			if paths_cross:
-				crossing_road_pairs += 1
-	_check(
-		crossing_road_pairs == 0,
-		"可见陆路只能在共享城市端点相接，不得中途交叉，当前交叉对=%d"
-			% crossing_road_pairs
-	)
-	_check(
-		int(road_counts[0]) > 0,
-		"最高起伏道路中应包含不可供大军通行的边，分布=%s" % str(road_counts)
-	)
-	_check(
-		int(road_counts[Edge.TERRAIN_LOW_MANPOWER]) > 0
-		and int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER]) > 0,
-		"陆路正容量只能形成10000/20000两个等级，分布=%s"
-			% str(road_counts)
-	)
-	_check(
-		int(road_counts[Edge.TERRAIN_STANDARD_MANPOWER])
-			< int(road_counts[Edge.TERRAIN_LOW_MANPOWER]),
-		"20000标准陆路应少于10000轻通路，分布=%s" % str(road_counts)
-	)
-	var production_capacities_valid := true
-	for production_edge in gs.edges:
-		production_capacities_valid = (
-			production_capacities_valid
-			and Edge.production_capacity_valid(
-				production_edge.kind,
-				production_edge.max_manpower
-			)
-		)
-	_check(
-		production_capacities_valid,
-		"正式地图容量只允许陆路0/10000/20000与水路50000"
-	)
-	var low_relief_average := 0.0
-	var high_relief_average := 0.0
-	var comparison_count := maxi(roads_by_relief.size() / 4, 1)
-	for i in range(comparison_count):
-		low_relief_average += roads_by_relief[i].max_manpower
-		high_relief_average += roads_by_relief[roads_by_relief.size() - 1 - i].max_manpower
-	_check(
-		low_relief_average > high_relief_average,
-		"低起伏道路的平均通行等级应高于高起伏道路"
-	)
-	var degree_values := degrees.values()
-	_check(
-		degree_values.min() < degree_values.max(),
-		"省份对偶局部图的城市度数应自然变化，不能硬编码固定边数"
-	)
-	_check(
-		longest_edge <= 0.36,
-		"连通骨架不得产生跨区域超长边，最长实为 %.3f" % longest_edge
-	)
-	var reachable := {0: true}
-	var queue: Array[int] = [0]
-	while not queue.is_empty():
-		var current: int = queue.pop_front()
-		for neighbor in gs.neighbors(current):
-			var edge := gs.edge_of(current, neighbor)
-			if edge.max_manpower <= 0 or reachable.has(neighbor):
-				continue
-			reachable[neighbor] = true
-			queue.append(neighbor)
-	_check(
-		reachable.size() == gs.cities.size(),
-		"移除 0 容量边后道路骨架仍必须连通：可达 %d/%d"
-			% [reachable.size(), gs.cities.size()]
-	)
-	var repeated := GameState.new()
-	repeated.generate_world(12345)
-	var terrain_deterministic := repeated.edges.size() == gs.edges.size()
-	for city_id in range(gs.cities.size()):
-		terrain_deterministic = (
-			terrain_deterministic
-			and repeated.cities[city_id].map_position == gs.cities[city_id].map_position
-			and repeated.cities[city_id].owner_nation == gs.cities[city_id].owner_nation
-		)
-	for edge_index in range(gs.edges.size()):
-		var original := gs.edges[edge_index]
-		var copied := repeated.edges[edge_index]
-		terrain_deterministic = (
-			terrain_deterministic
-			and original.city_a == copied.city_a
-			and original.city_b == copied.city_b
-				and original.distance == copied.distance
-			and original.max_manpower == copied.max_manpower
-			and _approx(
-				original.max_height_difference,
-				copied.max_height_difference
-			)
-		)
-	_check(terrain_deterministic, "相同高度图与种子必须生成完全一致的城市和道路")
-
-
-func _test_river_transport() -> void:
-	print("[1a] 河运：双河道、码头阻隔、抢滩、水路与禁止驻边")
-	var gs := GameState.new()
-	gs.generate_world(12345)
-	var docks: Array[City] = []
-	var landing_edges: Array[Edge] = []
-	var river_edges: Array[Edge] = []
-	var sea_edges: Array[Edge] = []
-	for city in gs.cities:
-		if city.is_dock:
-			docks.append(city)
-	for edge in gs.edges:
-		if edge.kind == Edge.Kind.LANDING:
-			landing_edges.append(edge)
-		elif edge.kind == Edge.Kind.RIVER:
-			river_edges.append(edge)
-		elif edge.kind == Edge.Kind.SEA:
-			sea_edges.append(edge)
-	_check(
-		gs.river_paths.size() == 2
-			and docks.size() >= 4
-			and not river_edges.is_empty()
-				and not gs.river_paths.is_empty(),
-		"正式地图必须生成两条各有有效码头连接的主河道"
-	)
-	var minimum_dock_spacing := INF
-	var minimum_dock_city_spacing := INF
-	for dock_a_index in range(docks.size()):
-		for land_city in gs.land_cities():
-			var city_delta := (
-				docks[dock_a_index].map_position
-				- land_city.map_position
-			)
-			city_delta.x *= gs.map_aspect_ratio
-			minimum_dock_city_spacing = minf(
-				minimum_dock_city_spacing, city_delta.length()
-			)
-		for dock_b_index in range(dock_a_index + 1, docks.size()):
-			var dock_delta := (
-				docks[dock_a_index].map_position
-				- docks[dock_b_index].map_position
-			)
-			dock_delta.x *= gs.map_aspect_ratio
-			minimum_dock_spacing = minf(
-				minimum_dock_spacing,
-				dock_delta.length()
-			)
-	_check(
-		minimum_dock_spacing
-			>= TerrainMapGenerator.RIVER_DOCK_MIN_SPACING,
-		"河流几何不得生成视觉重叠码头，最小码头间距实为%.6f"
-			% minimum_dock_spacing
-	)
-	_check(
-		minimum_dock_city_spacing
-			>= TerrainMapGenerator.RIVER_DOCK_CITY_MIN_SPACING,
-		"码头不得贴住普通城市，最小间距实为%.6f"
-			% minimum_dock_city_spacing
-	)
-	var river_shapes_valid := true
-	var river_pair_keys := {}
-	for river_path in gs.river_paths:
-		river_shapes_valid = river_shapes_valid and river_path.size() >= 2
-		for point_index in range(river_path.size() - 1):
-			var owners := TerrainMapGenerator.province_boundary_segment_owners(
-				gs.province_ids, gs.province_map_size,
-				river_path[point_index], river_path[point_index + 1]
-			)
-			river_shapes_valid = river_shapes_valid and owners.x >= 0
-			if owners.x >= 0:
-				river_pair_keys[TerrainMapGenerator._pair_key(owners.x, owners.y)] = true
-	_check(
-		river_shapes_valid and not river_pair_keys.is_empty(),
-		"河道每一小段都必须严格落在两个城市省份的公共边界上"
-	)
-	var generated := TerrainMapGenerator.build(
-		GameState.terrain_map_path(), GameState.TERRAIN_CITY_COUNT,
-		gs.city_generation_mask_path, gs.city_density_settings
-	)
-	var bank_region_count := (
-		generated.get("dock_bank_regions", []) as Array
-	).size()
-	_check(
-		docks.size() >= int(ceil(float(bank_region_count) * 0.75))
-			and docks.size() <= bank_region_count,
-		"渡口数量应接近单侧沿河省份数，不能退化成逐河段密集港口：%d/%d"
-			% [docks.size(), bank_region_count]
-	)
-	var all_lowland_candidates_covered := true
-	for candidate_value in generated.get(
-		"lowland_dock_regions", []
-	):
-		var candidate: Dictionary = candidate_value
-		var covered := false
-		for dock_value in generated.get("docks", []):
-			var dock: Dictionary = dock_value
-			if int(dock["river_id"]) != int(candidate["river_id"]):
-				continue
-			covered = (
-				TerrainMapGenerator.metric_length_between(
-					candidate["position"], dock["position"],
-					gs.map_aspect_ratio
-				) < TerrainMapGenerator.RIVER_DOCK_MIN_SPACING
-				or candidate["position"] == dock["position"]
-			)
-			if covered:
-				break
-		if not covered:
-			all_lowland_candidates_covered = false
-			break
-	_check(
-		all_lowland_candidates_covered,
-		"每个低海拔沿河省份区域都必须生成渡口或被最小间距内的渡口覆盖"
-	)
-	var docks_per_river := {}
-	var dock_banks_valid := true
-	for dock_data in generated.get("docks", []):
-		var river_id := int(dock_data.get("river_id", -1))
-		docks_per_river[river_id] = int(docks_per_river.get(river_id, 0)) + 1
-		var river_path: PackedVector2Array = gs.river_paths[river_id]
-		var path_index := clampi(
-			int(floor(float(dock_data["river_progress"]))),
-			0, river_path.size() - 2
-		)
-		var owners := TerrainMapGenerator.province_boundary_segment_owners(
-			gs.province_ids, gs.province_map_size,
-			river_path[path_index], river_path[path_index + 1]
-		)
-		var banks := Vector2i(
-			mini(int(dock_data["bank_a"]), int(dock_data["bank_b"])),
-			maxi(int(dock_data["bank_a"]), int(dock_data["bank_b"]))
-		)
-		var dock_city := int(dock_data["city_id"])
-		var bank_a_edge := gs.edge_of(banks.x, dock_city)
-		var bank_b_edge := gs.edge_of(banks.y, dock_city)
-		var direct_edge := gs.edge_of(banks.x, banks.y)
-		dock_banks_valid = (
-			dock_banks_valid
-			and owners == banks
-			and bank_a_edge != null and bank_a_edge.kind == Edge.Kind.LANDING
-			and bank_b_edge != null and bank_b_edge.kind == Edge.Kind.LANDING
-			and (direct_edge == null or direct_edge.kind != Edge.Kind.LAND)
-		)
-	_check(
-		dock_banks_valid
-			and int(docks_per_river.get(0, 0)) >= 2
-			and int(docks_per_river.get(1, 0)) >= 2,
-		"每座码头必须位于对应公共省界，并以两条抢滩连接两岸城市；跨河直连LAND必须删除：%s"
-			% docks_per_river
-	)
-	var docks_are_full_cities := true
-	for dock in docks:
-		docks_are_full_cities = (
-			docks_are_full_cities
-			and dock.id >= GameState.TERRAIN_CITY_COUNT
-			and dock.owner_nation >= 0
-			and gs.city_garrison_capacity(dock.id) == 0
-			and gs.recognized_owner_of(dock.id) == dock.owner_nation
-			and not gs.neighbors(dock.id).is_empty()
-		)
-	_check(
-		docks_are_full_cities,
-		"码头必须复用完整城市实体、所有权、法理归属和邻接，且没有州治守军"
-	)
-	var landing_valid := not landing_edges.is_empty()
-	for edge in landing_edges:
-		landing_valid = (
-			landing_valid
-			and edge.danger >= 0.90
-			and (
-				gs.cities[edge.city_a].is_dock
-				or gs.cities[edge.city_b].is_dock
-			)
-		)
-	_check(
-		landing_valid,
-		"陆城与码头间必须是 danger>=0.90 的抢滩边"
-	)
-	var land_crosses_river := false
-	for edge in gs.edges:
-		if (
-			edge.max_manpower <= 0
-			or edge.kind in [Edge.Kind.RIVER, Edge.Kind.SEA]
-		):
-			continue
-		var road_points := edge.map_points(
-			gs.cities[edge.city_a].map_position,
-			gs.cities[edge.city_b].map_position
-		)
-		for road_index in range(road_points.size() - 1):
-			var road_start := road_points[road_index]
-			var road_end := road_points[road_index + 1]
-			var road_delta := road_end - road_start
-			var road_length_sq := road_delta.length_squared()
-			if road_length_sq <= 0.000001:
-				continue
-			for river_path in gs.river_paths:
-				for path_index in range(river_path.size() - 1):
-					var hit = Geometry2D.segment_intersects_segment(
-						road_start, road_end,
-						river_path[path_index], river_path[path_index + 1]
-					)
-					if hit == null:
-						continue
-					var road_t := (
-						(Vector2(hit) - road_start).dot(road_delta)
-						/ road_length_sq
-					)
-					if (
-						road_t > TerrainMapGenerator.RIVER_CROSSING_ENDPOINT_EPS
-						and road_t < 1.0 - TerrainMapGenerator.RIVER_CROSSING_ENDPOINT_EPS
-					):
-						land_crosses_river = true
-						break
-				if land_crosses_river:
-					break
-			if land_crosses_river:
-				break
-		if land_crosses_river:
-			break
-	_check(
-		not land_crosses_river,
-		"任何可通行陆路都不得穿过河流，跨河只能经码头抢滩边和水路"
-	)
-	var river_valid := true
-	var river_danger_bands := {}
-	for edge in river_edges:
-		river_valid = (
-			river_valid
-			and gs.cities[edge.city_a].is_dock
-			and gs.cities[edge.city_b].is_dock
-			and edge.max_manpower == Edge.WATER_MANPOWER
-			and edge.max_height_difference
-				<= TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE
-			and edge.travel_time_multiplier < 1.0
-			and edge.supply_loss_multiplier < 1.0
-			and not edge.allows_holding
-			and edge.danger > 0.0
-		)
-		river_danger_bands[int(round(edge.danger * 100.0))] = true
-	_check(
-		river_valid,
-		"码头间水路必须固定50000容量、快速、低粮损、有水文危险且不可驻边"
-	)
-	var sea_edges_valid := true
-	var sea_crosses_river := false
-	for sea_edge in sea_edges:
-		sea_edges_valid = (
-			sea_edges_valid
-			and sea_edge.max_manpower == Edge.WATER_MANPOWER
-			and not sea_edge.allows_holding
-			and sea_edge.land_ratio < 1.0
-		)
-		var sea_path := sea_edge.map_points(
-			gs.cities[sea_edge.city_a].map_position,
-			gs.cities[sea_edge.city_b].map_position
-		)
-		for sea_index in range(sea_path.size() - 1):
-			for river_path in gs.river_paths:
-				for river_index in range(river_path.size() - 1):
-					var hit = Geometry2D.segment_intersects_segment(
-						sea_path[sea_index], sea_path[sea_index + 1],
-						river_path[river_index], river_path[river_index + 1]
-					)
-					if hit == null:
-						continue
-					var sea_delta := sea_path[sea_index + 1] - sea_path[sea_index]
-					var sea_t := (
-						(Vector2(hit) - sea_path[sea_index]).dot(sea_delta)
-							/ maxf(sea_delta.length_squared(), 0.000001)
-					)
-					var river_delta := river_path[river_index + 1] - river_path[river_index]
-					var river_t := (
-						(Vector2(hit) - river_path[river_index]).dot(river_delta)
-							/ maxf(river_delta.length_squared(), 0.000001)
-					)
-					var endpoint_touch := (
-						(sea_t <= 0.0001 or sea_t >= 0.9999)
-						and (river_t <= 0.0001 or river_t >= 0.9999)
-					)
-					if not endpoint_touch:
-						sea_crosses_river = true
-	_check(
-		sea_edges_valid and not sea_crosses_river,
-		"SEA只连接独立陆地区域，可在海岸河口端点相接但不得中途横穿河流；并须固定50000容量、禁止驻边"
-	)
-	_check(
-		river_danger_bands.size() > 1,
-		"不同河段应从坡度和弯曲度生成不同水文危险"
-	)
-	var geometric_distances_valid := true
-	var longest_metric_length := 0.0
-	var longest_distance := 0
-	for edge in gs.edges:
-		var metric_length := TerrainMapGenerator.metric_polyline_length(
-			edge.map_points(
-				gs.cities[edge.city_a].map_position,
-				gs.cities[edge.city_b].map_position
-			),
-			gs.map_aspect_ratio
-		)
-		var expected_distance := (
-			TerrainMapGenerator.distance_units_for_metric_length(
-				metric_length
-			)
-		)
-		geometric_distances_valid = (
-			geometric_distances_valid
-			and edge.distance == expected_distance
-		)
-		if metric_length > longest_metric_length:
-			longest_metric_length = metric_length
-			longest_distance = edge.distance
-	_check(
-		geometric_distances_valid,
-		"陆路、抢滩边和水路的逻辑距离必须统一取正式路径真实几何长度"
-	)
-	_check(
-		longest_distance
-			== TerrainMapGenerator.distance_units_for_metric_length(
-				longest_metric_length
-			),
-		"正式地图最长边必须保持几何换算值，不得因地图拓扑或旧上限失真：length=%.3f distance=%d"
-			% [
-				longest_metric_length,
-				longest_distance,
-			]
-	)
-	var sample_river: Edge = river_edges[0]
-	var land_reference := Edge.new()
-	land_reference.distance = sample_river.distance
-	land_reference.danger = sample_river.danger
-	_check(
-		_approx(
-			Simulation.edge_travel_days(land_reference)
-				/ Simulation.edge_travel_days(sample_river),
-			1.2,
-			0.001
-		)
-			and Pathfinding._supply_edge_loss(sample_river)
-				< Pathfinding._supply_edge_loss(land_reference),
-		"同距离同危险下，河运速度必须恰为陆运1.2倍且粮食损耗更低"
-	)
-	var keys_unique := gs.edge_lookup.size() == gs.edges.size()
-	for edge in gs.edges:
-		keys_unique = (
-			keys_unique
-			and gs.edge_of(edge.city_a, edge.city_b) == edge
-		)
-	_check(
-		keys_unique
-			and GameState.edge_key(0, 70)
-				!= GameState.edge_key(1, 6),
-		"新增码头 id 超过64后边键仍必须无碰撞"
-	)
-
-	var guard_state := GameState.new()
-	guard_state.generate_grid_world(8123)
-	guard_state.armies.clear()
-	var water_edge := guard_state.edge_of(0, 1)
-	water_edge.kind = Edge.Kind.RIVER
-	water_edge.allows_holding = false
-	guard_state.apply_edge_editor_changes(0, 1, {
-		"kind": Edge.Kind.RIVER,
-		"max_height_difference": (
-			TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE + 0.01
-		),
-	})
-	_check(
-		water_edge.max_manpower == 0 and water_edge.base_max_manpower == 0,
-		"地图编辑器不得把超过高差门槛的码头河运边重新开放"
-	)
-	guard_state.apply_edge_editor_changes(0, 1, {
-		"kind": Edge.Kind.RIVER,
-		"max_height_difference": TerrainMapGenerator.ROAD_MAXIMUM_HEIGHT_DIFFERENCE,
-	})
-	_check(
-		water_edge.max_manpower == Edge.WATER_MANPOWER,
-		"码头河运边回到高差门槛内后应恢复标准水运容量"
-	)
-	var guard := _make_army(
-		9900,
-		guard_state.cities[0].owner_nation,
-		5000,
-		1
-	)
-	guard.state = Army.State.IDLE
-	guard.location_city = 0
-	guard.move_from = 0
-	guard_state.armies.append(guard)
-	var hold := ActionCandidate.make(
-		ActionCandidate.Kind.HOLD,
-		100.0,
-		"河运边不可驻防",
-		1
-	)
-	var guard_sim := Simulation.new()
-	guard_sim.setup(guard_state)
-	_check(
-		not guard_sim._can_queue_ai_candidate(guard, hold)
-			and not guard_sim._execute_ai_candidate(guard, hold),
-		"命令校验与执行层都必须拒绝在河运边驻扎"
-	)
-	guard.state = Army.State.MOVING
-	guard.location_city = -1
-	guard.move_to = 1
-	guard.move_progress = 0.35
-	guard.on_edge = true
-	guard.hold_target_progress = 0.35
-	guard_sim._start_holding(guard)
-	_check(
-		guard.state == Army.State.MOVING
-			and guard.hold_target_progress < 0.0,
-		"状态机兜底不得让军队在河运边进入 HOLDING"
-	)
-	guard.state = Army.State.FIGHTING
-	guard.resume_holding_after_battle = true
-	guard_sim._resume_after_battle(guard)
-	_check(
-		guard.state == Army.State.MOVING,
-		"水路战斗胜方不得通过恢复标记回到 HOLDING"
-	)
-	guard.state = Army.State.HOLDING
-	guard_sim._advance_holding_adaptation()
-	_check(
-		guard.state == Army.State.MOVING,
-		"每日状态校验必须清理水路上的非法 HOLDING"
-	)
-	guard_sim.free()
-
-	# 码头只是一种交通节点，不是行政城市：不能成为首都/粮仓，也不能在
-	# 最后一座陆城失守后让国家继续存活。用真实生成的码头覆盖迁都与事务路径。
-	var dock_owner := docks[0].owner_nation
-	var dock_id := docks[0].id
-	var original_capital := gs.nations[dock_owner].capital_city_id
-	gs.cities[original_capital].is_capital = false
-	gs.cities[dock_id].is_capital = true
-	gs.cities[dock_id].has_warehouse = true
-	gs.cities[dock_id].food_storage = 25
-	gs.nations[dock_owner].capital_city_id = dock_id
-	gs.nations[dock_owner].warehouse_city_ids.append(dock_id)
-	var repaired_capital := gs.ensure_valid_capital(dock_owner)
-	_check(
-		repaired_capital >= 0
-			and not gs.cities[repaired_capital].is_dock
-			and gs.cities[repaired_capital].is_capital
-			and not gs.cities[dock_id].is_capital
-			and not gs.cities[dock_id].has_warehouse
-			and not gs.nations[dock_owner].warehouse_city_ids.has(dock_id),
-		"迁都修复必须拒绝码头首都并清除码头粮仓标记"
-	)
-	var dock_recipient := (dock_owner + 1) % gs.nations.size()
-	var remove_land_operations: Array[Dictionary] = []
-	for owned_land in gs.land_cities_of(dock_owner):
-		remove_land_operations.append({
-			"city_id": owned_land.id,
-			"controller_id": dock_recipient,
-			"legal_owner_id": dock_recipient,
-			"sponsor_id": -1,
-			"reset_political_target": true,
-			"stock_policy": GameState.TerritoryStockDisposition.DESTROY,
-			"reason": "dock_is_not_a_city_regression",
-		})
-	var dock_only_result := gs.apply_territory_transaction(
-		remove_land_operations
-	)
-	_check(
-		bool(dock_only_result.get("ok", false))
-			and gs.land_cities_of(dock_owner).is_empty()
-			and not gs.cities_of(dock_owner).is_empty()
-			and not gs.nations[dock_owner].alive
-			and gs.nations[dock_owner].capital_city_id == -1
-			and gs.nations[dock_owner].warehouse_city_ids.is_empty()
-			and not gs.cities[dock_id].is_capital
-			and not gs.cities[dock_id].has_warehouse
-			and gs.territory_structure_valid(),
-		"仅剩码头的势力必须按无城市灭亡，且不得保留首都或粮仓"
-	)
-
-
-func _test_responsive_map_layout() -> void:
-	print("[1b] 战略图界面：地图响应式、图标四档缩放、城市/道路可点选")
-	var valid_resolutions := (
-		DisplaySettings.RESOLUTIONS.has(
-			DisplaySettings.DEFAULT_RESOLUTION
-		)
-	)
-	for resolution in DisplaySettings.RESOLUTIONS:
-		valid_resolutions = (
-			valid_resolutions
-			and resolution.x * 9 == resolution.y * 16
-		)
-	_check(
-		valid_resolutions
-			and DisplaySettings.RESOLUTIONS.size() == 5,
-		"分辨率设置必须提供五档固定16:9选项，且默认分辨率必须在选项内"
-	)
-	_check(
-		DisplaySettings.validated_resolution(
-			Vector2i(1920, 1080)
-		) == Vector2i(1920, 1080)
-			and DisplaySettings.validated_resolution(
-				Vector2i(1366, 768)
-			) == DisplaySettings.DEFAULT_RESOLUTION,
-		"分辨率配置必须接受白名单尺寸，并把任意或损坏尺寸回退到默认值"
-	)
-	var main_scene := load("res://main.tscn") as PackedScene
-	var settings_game := main_scene.instantiate()
-	root.add_child(settings_game)
-	var settings_sim := settings_game.get_node("Simulation") as Simulation
-	var settings_overlay := settings_game.get_node(
-		"SettingsLayer/SettingsOverlay"
-	) as Control
-	var settings_options := settings_game.get_node(
-		(
-			"SettingsLayer/SettingsOverlay/SettingsPanel/"
-			+ "Margin/Content/ResolutionOption"
-		)
-	) as OptionButton
-	var settings_entry_button := settings_game.get_node(
-		"SettingsLayer/SettingsButton"
-	) as Button
-	settings_game.set("simulation", settings_sim)
-	settings_game.set("settings_overlay", settings_overlay)
-	settings_game.set("resolution_option", settings_options)
-	settings_game.set(
-		"settings_button",
-		settings_entry_button
-	)
-	settings_game.set(
-		"resolution_hint",
-		settings_game.get_node(
-			(
-				"SettingsLayer/SettingsOverlay/SettingsPanel/"
-				+ "Margin/Content/ResolutionHint"
-			)
-		)
-	)
-	settings_game.set(
-		"settings_close_button",
-		settings_game.get_node(
-			(
-				"SettingsLayer/SettingsOverlay/SettingsPanel/"
-				+ "Margin/Content/Actions/CloseButton"
-			)
-		)
-	)
-	settings_game.set(
-		"settings_apply_button",
-		settings_game.get_node(
-			(
-				"SettingsLayer/SettingsOverlay/SettingsPanel/"
-				+ "Margin/Content/Actions/ApplyButton"
-			)
-		)
-	)
-	settings_game.call("_setup_display_settings")
-	var pause_before_settings := settings_sim.paused
-	settings_game.call("_open_settings")
-	var opened_and_paused := (
-		settings_overlay.visible
-		and settings_sim.paused
-		and settings_options.item_count
-			== DisplaySettings.RESOLUTIONS.size()
-		and settings_entry_button.get_theme_font(
-			"font"
-		).has_char("设".unicode_at(0))
-		and settings_options.get_popup().get_theme_font(
-			"font"
-		).has_char("辨".unicode_at(0))
-	)
-	settings_game.call("_close_settings")
-	_check(
-		opened_and_paused
-			and not settings_overlay.visible
-			and settings_sim.paused == pause_before_settings,
-		"设置面板必须使用中文字体、提供全部分辨率，并正确暂停和恢复模拟"
-	)
-	settings_game.free()
-	var base := MapRenderer.compute_layout_for_viewport(Vector2(1280, 720), 4)
-	var large := MapRenderer.compute_layout_for_viewport(Vector2(1920, 1080), 4)
-	var stats_closed := MapRenderer.compute_layout_for_viewport(
-		Vector2(1280, 720),
-		4,
-		false
-	)
-	_check(
-		float(large["cell"]) > float(base["cell"]),
-		"窗口放大时地图画布仍应扩大"
-	)
-	_check(
-		(stats_closed["origin"] as Vector2)
-				== (base["origin"] as Vector2)
-			and _approx(
-				float(stats_closed["span"]),
-				float(base["span"])
-			),
-		"国家列表必须是覆盖式浮窗，开关时不得挤压或移动地图"
-	)
-	var stats_button := MapRenderer.nation_stats_button_rect(
-		Vector2(1280, 720),
-		float(base["display_scale"]),
-		float(base["side_margin"])
-	)
-	_check(
-		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
-			stats_button
-		)
-			and stats_button.size.x > stats_button.size.y,
-		"国家统计按钮必须始终位于窗口内并具备稳定点击区域"
-	)
-	var nation_window := MapRenderer.nation_stats_window_rect(
-		Vector2(1280, 720),
-		float(base["display_scale"]),
-		Vector2(10000.0, -10000.0),
-		40
-	)
-	var nation_window_capacity := (
-		MapRenderer.nation_stats_visible_row_capacity(
-			nation_window.size,
-			float(base["display_scale"])
-		)
-	)
-	var nation_sort_bar := MapRenderer.nation_stats_sort_bar_rect(
-		nation_window,
-		float(base["display_scale"])
-	)
-	var nation_sort_buttons_valid := true
-	for sort_button_index in range(4):
-		nation_sort_buttons_valid = (
-			nation_sort_buttons_valid
-			and nation_sort_bar.encloses(
-				MapRenderer.nation_stats_sort_button_rect(
-					nation_window,
-					float(base["display_scale"]),
-					sort_button_index
-				)
-			)
-		)
-	_check(
-		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
-			nation_window
-		)
-			and nation_window_capacity > 0
-			and nation_window_capacity < 40
-			and MapRenderer.nation_stats_title_rect(
-				nation_window,
-				float(base["display_scale"])
-			).has_point(
-				nation_window.position + Vector2(10.0, 10.0)
-			)
-			and nation_window.encloses(
-				MapRenderer.nation_stats_close_rect(
-					nation_window,
-					float(base["display_scale"])
-				)
-			)
-			and nation_sort_buttons_valid,
-		"国家列表浮窗必须约束在视口内，并提供标题、排序、关闭和滚动区域"
-	)
-	var army_scale_control := (
-		MapRenderer.army_icon_scale_control_rect(
-			Vector2(1280, 720),
-			float(base["display_scale"]),
-			float(base["side_margin"])
-		)
-	)
-	_check(
-		Rect2(Vector2.ZERO, Vector2(1280, 720)).encloses(
-			army_scale_control
-		)
-			and army_scale_control.end.x
-				< stats_button.position.x,
-		"军队图标大小滑块必须位于窗口内，且不能覆盖国家统计按钮"
-	)
-	var scale_renderer := MapRenderer.new()
-	scale_renderer.set_army_icon_scale(1.37)
-	var rounded_scale := scale_renderer.army_icon_scale()
-	scale_renderer.set_army_icon_scale(0.10)
-	var minimum_scale := scale_renderer.army_icon_scale()
-	scale_renderer.set_army_icon_scale(3.00)
-	var maximum_scale := scale_renderer.army_icon_scale()
-	scale_renderer.set_city_names_visible(false)
-	var city_names_hidden := (
-		not scale_renderer.city_names_visible()
-	)
-	scale_renderer.set_city_names_visible(true)
-	var city_names_restored := (
-		scale_renderer.city_names_visible()
-	)
-	_check(
-		_approx(rounded_scale, 1.40)
-			and _approx(
-				minimum_scale,
-				MapRenderer.ARMY_ICON_SCALE_MIN
-			)
-			and _approx(
-				maximum_scale,
-				MapRenderer.ARMY_ICON_SCALE_MAX
-			),
-		"军队图标滑块应按10%步长取整，并限制在10%至180%"
-	)
-	var army_counter := MapRenderer.army_counter_profile()
-	_check(
-		city_names_hidden
-			and city_names_restored
-			and MapRenderer.target_redraw_fps(
-				false,
-				true
-			) == MapRenderer.ACTIVE_REDRAW_FPS
-			and MapRenderer.target_redraw_fps(
-				false,
-				false
-			) == MapRenderer.STATIC_REDRAW_FPS,
-		"城市名称按钮必须可逆切换；无动画时应降到静态刷新频率"
-	)
-	_check(
-		bool(army_counter["main_role"])
-			and str(army_counter["role_code"]) == "主"
-			and int(army_counter["icon"])
-				== int(MapRenderer.FormationIcon.ARMOR)
-			and int(army_counter["marks"]) == 3,
-		"所有军队必须使用统一主战军轮廓、文字与标记"
-	)
-	var map_base_origin := Vector2(100.0, 80.0)
-	var map_base_size := Vector2(600.0, 400.0)
-	var zoom_anchor := Vector2(250.0, 180.0)
-	var anchored_pan := MapRenderer.map_pan_for_zoom_anchor(
-		map_base_origin,
-		map_base_size,
-		1.0,
-		Vector2.ZERO,
-		2.0,
-		zoom_anchor
-	)
-	var normalized_anchor := (
-		zoom_anchor - map_base_origin
-	) / map_base_size
-	var zoomed_origin := MapRenderer.map_view_origin(
-		map_base_origin,
-		map_base_size,
-		2.0,
-		anchored_pan
-	)
-	var zoomed_anchor := (
-		zoomed_origin
-		+ normalized_anchor * map_base_size * 2.0
-	)
-	var clamped_pan := MapRenderer.clamp_map_pan(
-		Vector2(10000.0, -10000.0),
-		2.0,
-		map_base_size
-	)
-	var wheel_up := MapRenderer.wheel_zoom_multiplier(
-		MOUSE_BUTTON_WHEEL_UP,
-		1.0
-	)
-	var wheel_down := MapRenderer.wheel_zoom_multiplier(
-		MOUSE_BUTTON_WHEEL_DOWN,
-		1.0
-	)
-	var smooth_wheel := MapRenderer.wheel_zoom_multiplier(
-		MOUSE_BUTTON_WHEEL_UP,
-		0.25
-	)
-	_check(
-		zoomed_anchor.distance_to(zoom_anchor) <= 0.001
-			and clamped_pan == Vector2(300.0, -200.0)
-			and MapRenderer.clamp_map_pan(
-				Vector2(50.0, 50.0),
-				1.0,
-				map_base_size
-			) == Vector2.ZERO,
-		"滚轮缩放必须锚定鼠标地图坐标，拖动平移必须受边界约束且1倍时归零"
-	)
-	_check(
-		wheel_up > 1.0
-			and wheel_down < 1.0
-			and _approx(wheel_up * wheel_down, 1.0)
-			and smooth_wheel > 1.0
-			and smooth_wheel < wheel_up
-			and _approx(
-				MapRenderer.magnify_zoom_multiplier(1.25),
-				1.25
-			)
-			and _approx(
-				MapRenderer.magnify_zoom_multiplier(0.1),
-				0.5
-			)
-			and _approx(
-				MapRenderer.magnify_zoom_multiplier(3.0),
-				2.0
-			),
-		"触控板捏合与平滑滚轮倍率必须连续、方向正确且限制异常输入"
-	)
-	scale_renderer.free()
-	var large_origin: Vector2 = large["origin"]
-	_check(
-		_approx(
-			large_origin.y,
-			MapRenderer.BASE_HEADER_ONLY_TOP
-				* float(large["display_scale"])
-		),
-		"覆盖式国家列表不得为旧卡片网格预留顶部空间"
-	)
-	var large_span := float(large["cell"]) * float(GameState.GRID)
-	_check(
-		_approx(large_origin.x, (1920.0 - large_span) * 0.5),
-		"放大后的地图应在窗口中水平居中"
-	)
-	var narrow := MapRenderer.compute_layout_for_viewport(Vector2(640, 480), 4)
-	_check(
-		int(narrow["hud_columns"]) < 4
-		and float((narrow["origin"] as Vector2).y) > float(base["origin"].y) * 0.65,
-		"窄窗口应自动减少派生列数，并保持固定顶栏地图起点"
-	)
-	var same_tier := MapRenderer.compute_layout_for_viewport(
-		Vector2(1500, 800),
-		4
-	)
-	var extra_large := MapRenderer.compute_layout_for_viewport(
-		Vector2(2560, 1440),
-		4
-	)
-	_check(
-		_approx(float(narrow["display_scale"]), 0.80)
-			and _approx(float(base["display_scale"]), 1.00)
-			and _approx(float(same_tier["display_scale"]), 1.00)
-			and _approx(float(large["display_scale"]), 1.25)
-			and _approx(float(extra_large["display_scale"]), 1.50),
-		"图标与字体只能使用0.80/1.00/1.25/1.50四档，不得随窗口连续缩放"
-	)
-	var ui_font := MapRenderer.create_ui_font()
-	_check(
-		ui_font.has_char("国".unicode_at(0)),
-		"HUD 字体必须包含中文字形，不能回退为乱码或方框"
-	)
-	var map_label_font := MapRenderer.create_map_label_font()
-	var renderer_source := FileAccess.get_file_as_string(
-		"res://scripts/view/map_renderer.gd"
-	)
-	var map_label_factory_start := renderer_source.find(
-		"static func create_map_label_font()"
-	)
-	var map_label_factory_end := renderer_source.find(
-		"\n\nfunc ", map_label_factory_start
-	)
-	var map_label_factory_source := ""
-	if map_label_factory_start >= 0 and map_label_factory_end > map_label_factory_start:
-		map_label_factory_source = renderer_source.substr(
-			map_label_factory_start,
-			map_label_factory_end - map_label_factory_start
-		).to_lower()
-	_check(
-		map_label_font != null
-			and map_label_font.has_char("国".unicode_at(0))
-			and map_label_factory_source.contains("return create_ui_font()")
-			and not map_label_factory_source.contains("fangsong")
-			and not map_label_factory_source.contains("noto serif")
-			and not map_label_factory_source.contains("source han serif"),
-		"国家地图标签必须复用可用的 CJK Sans/黑体字体，不得声明仿宋/衬线候选"
-	)
-	var trade_draw_start := renderer_source.find(
-		"func _draw_trade_routes()"
-	)
-	var trade_draw_end := renderer_source.find(
-		"\n\nfunc ", trade_draw_start + 1
-	)
-	var trade_draw_source := ""
-	if trade_draw_start >= 0 and trade_draw_end > trade_draw_start:
-		trade_draw_source = renderer_source.substr(
-			trade_draw_start, trade_draw_end - trade_draw_start
-		)
-	_check(
-		MapRenderer.MAP_MODE_TRADE == MapRenderer.MapMode.TRADE
-		and trade_draw_source.contains(
-			"_map_mode != MapMode.TRADE"
-		)
-		and trade_draw_source.contains("state.trade_routes.is_empty()")
-		and trade_draw_source.contains("_draw_trade_flow_markers"),
-		"2D贸易路线必须只在TRADE模式且存在路线时绘制"
-	)
-	var hit_state := GameState.new()
-	hit_state.generate_grid_world(12346)
-	for relation_a in range(hit_state.nations.size()):
-		for relation_b in range(relation_a + 1, hit_state.nations.size()):
-			hit_state.set_diplomatic_relation(
-				relation_a, relation_b,
-				GameState.DiplomaticRelation.NEUTRAL
-			)
-	hit_state.set_diplomatic_relation(
-		0, 1, GameState.DiplomaticRelation.WAR
-	)
-	hit_state.set_diplomatic_relation(
-		0, 2, GameState.DiplomaticRelation.ALLIED
-	)
-	hit_state.set_diplomatic_relation(
-		0, 3, GameState.DiplomaticRelation.ALLIED
-	)
-	hit_state.suzerainty[3] = {
-		"overlord_id": 0,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
-		"created_day": 0,
-		"last_centralization_day": -1,
-		"civil_war": false,
-	}
-	_check(
-		MapRenderer.political_map_color_for_view(hit_state, 1, 0)
-			.is_equal_approx(MapRenderer.DIPLOMACY_ENEMY_COLOR)
-			and MapRenderer.political_map_color_for_view(hit_state, 2, 0)
-				.is_equal_approx(MapRenderer.DIPLOMACY_ALLY_COLOR)
-			and MapRenderer.political_map_color_for_view(hit_state, 3, 0)
-				.is_equal_approx(MapRenderer.DIPLOMACY_VASSAL_COLOR)
-			and MapRenderer.political_map_color_for_view(hit_state, 0, 1)
-				.is_equal_approx(MapRenderer.DIPLOMACY_ENEMY_COLOR)
-			and MapRenderer.political_map_color_for_view(hit_state, 3, 2)
-				.is_equal_approx(MapRenderer.DIPLOMACY_NEUTRAL_COLOR),
-		"外交视角必须把敌国/盟友/直属藩王/中立国映射为红/绿/灰/黑"
-	)
-	var hit_city := hit_state.cities[0]
-	_check(
-		MapRenderer.nation_at_map_position(
-			hit_state, hit_city.map_position
-		) == hit_city.owner_nation
-			and MapRenderer.nation_at_map_position(
-				hit_state, Vector2(-0.1, 0.5)
-			) == -1,
-		"地图国土拾取必须返回当前实控国，并拒绝地图外坐标"
-	)
-	var list_state := GameState.new()
-	list_state.generate_grid_world(12347)
-	list_state.nations[3].alive = false
-	list_state.suzerainty[1] = {
-		"overlord_id": 0,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
-		"created_day": 0,
-		"last_centralization_day": 0,
-		"civil_war": false,
-	}
-	list_state.nations[0].ai_last_force_action = (
-		ActionCandidate.Kind.CREATE_ARMY
-	)
-	list_state.nations[0].ai_last_force_day = 12
-	list_state.nations[0].last_trade_route_count = 2
-	list_state.nations[0].last_trade_gold = 7
-	list_state.nations[0].last_trade_food_import = 30
-	list_state.nations[0].last_trade_food_export = 10
-	list_state.nations[0].last_trade_manpower_import = 40
-	list_state.nations[0].last_food_estimated_production = 0
-	list_state.nations[0].last_food_estimated_consumption = 0
-	list_state.nations[0].last_food_estimated_balance = 20
-	list_state.nations[0].ruler_name = "测试君"
-	list_state.nations[0].ruler_traits = [
-		RulerProfile.TRAIT_FRUGAL
-	] as Array[String]
-	var nation_rows := MapRenderer.nation_list_rows(list_state)
-	var list_manpower_capacity := list_state.manpower_pool_capacity(0)
-	var list_food_capacity := list_state.food_storage_capacity(0)
-	var nation_ids: Array[int] = []
-	for row in nation_rows:
-		nation_ids.append(int(row["nation_id"]))
-	_check(
-		nation_rows.size() == 3
-			and nation_ids == [0, 1, 2]
-			and int(nation_rows[0]["depth"]) == 0
-			and bool(nation_rows[0]["has_subjects"])
-			and int(nation_rows[1]["depth"]) == 1
-			and int(nation_rows[1]["parent_nation_id"]) == 0
-			and str(nation_rows[1]["identity"]).contains("藩王")
-			and str(nation_rows[0]["action"]).contains("建军")
-			and str(nation_rows[0]["identity_primary"]).length() > 0
-			and str(nation_rows[0]["identity_secondary"]).length() > 0
-			and str(nation_rows[0]["power_primary"]).contains("兵力")
-			and str(nation_rows[0]["power_secondary"]).contains("忠诚")
-			and str(nation_rows[0]["power_secondary"]).contains(
-				"人力 %s / %s" % [
-					MapRenderer._compact_quantity(list_state.nations[0].manpower_pool),
-					MapRenderer._compact_quantity(list_manpower_capacity),
-				]
-			)
-			and str(nation_rows[0]["economy_primary"]).contains("月净")
-				and str(nation_rows[0]["economy_primary"]).contains("商贸 +7")
-				and str(nation_rows[0]["economy_secondary"]).contains("粮仓 0")
-				and str(nation_rows[0]["economy_secondary"]).contains(
-					"粮仓 %s / %s" % [
-						MapRenderer._compact_quantity(list_state.nations[0].granary_food),
-						MapRenderer._compact_quantity(list_food_capacity),
-					]
-				)
-				and str(nation_rows[0]["economy_secondary"]).contains("粮净 +20")
-				and str(nation_rows[0]["economy_secondary"]).contains("商路 2")
-				and str(nation_rows[0]["economy_secondary"]).find("购粮") == -1
-				and str(nation_rows[0]["economy_secondary"]).find("购人") == -1
-				and str(nation_rows[0]["economy_secondary"]).find("+0") == -1
-				and str(nation_rows[0]["economy_secondary"]).find("-0") == -1
-				and str(nation_rows[0]["economy"]).contains("商2线")
-				and str(nation_rows[0]["economy"]).contains("金+7")
-				and str(nation_rows[0]["economy"]).contains("粮仓 0")
-				and str(nation_rows[0]["economy"]).find("购粮") == -1
-				and str(nation_rows[0]["economy"]).find("购人") == -1
-			and str(nation_rows[0]["governance_primary"]).contains("测试君")
-			and str(nation_rows[0]["governance_secondary"]).contains("节俭")
-			and str(nation_rows[0]["governance_secondary"]).contains("建军"),
-		"国家列表必须过滤灭亡国家，并把直属藩王缩进到宗主之后"
-	)
-	var sort_state := GameState.new()
-	sort_state.generate_grid_world(12348)
-	for city_index in range(sort_state.cities.size()):
-		var sorted_owner := (
-			0 if city_index < 4
-			else 1 if city_index < 12
-			else 2 if city_index < 32
-			else 3
-		)
-		sort_state.cities[city_index].owner_nation = sorted_owner
-	var treasuries := [40, 10, 30, 20]
-	for nation_index in range(sort_state.nations.size()):
-		sort_state.nations[nation_index].treasury_gold = treasuries[nation_index]
-	sort_state.armies.clear()
-	var army_counts := [1, 3, 2, 4]
-	var next_army_id := 0
-	for owner_id in range(army_counts.size()):
-		for _army_index in range(army_counts[owner_id]):
-			var sorted_army := Army.new()
-			sorted_army.id = next_army_id
-			sorted_army.owner_nation = owner_id
-			sorted_army.size = 100
-			sorted_army.max_size = 100
-			sort_state.armies.append(sorted_army)
-			next_army_id += 1
-	var city_ascending := MapRenderer.nation_list_rows(
-		sort_state, {}, MapRenderer.NATION_SORT_CITY_COUNT, false
-	)
-	var treasury_descending := MapRenderer.nation_list_rows(
-		sort_state, {}, MapRenderer.NATION_SORT_TREASURY, true
-	)
-	var army_ascending := MapRenderer.nation_list_rows(
-		sort_state, {}, MapRenderer.NATION_SORT_ARMY_COUNT, false
-	)
-	_check(
-		_nation_ids_from_rows(city_ascending) == [0, 1, 2, 3]
-			and _nation_ids_from_rows(treasury_descending) == [0, 2, 3, 1]
-			and _nation_ids_from_rows(army_ascending) == [0, 2, 1, 3],
-		"国家列表必须支持按城市、国库和军队支数稳定正序或倒序"
-	)
-	var formation_state := GameState.new()
-	formation_state.generate_grid_world(12349)
-	var aggregate_army: Army = null
-	for army in formation_state.armies:
-		if army.owner_nation == 0:
-			aggregate_army = army
-			break
-	_check(aggregate_army != null, "聚合军团统计夹具必须存在主战指挥单位")
-	if aggregate_army != null:
-		aggregate_army.size = 12000
-		for discrete_size in [10000, 10000]:
-			var discrete_group := formation_state.create_battle_group(0)
-			var discrete_army := formation_state.create_army(
-				0,
-				formation_state.nations[0].capital_city_id,
-				discrete_size,
-				GameState.INITIAL_HEAVY_ARMY_SIZE
-			)
-			formation_state.assign_army_to_battle_group(
-				discrete_army, discrete_group.id
-			)
-		var formation_rows := MapRenderer.nation_list_rows(formation_state)
-		var nation_zero_row: Dictionary = {}
-		for row in formation_rows:
-			if int(row["nation_id"]) == 0:
-				nation_zero_row = row
-				break
-		var formation_sections := MapRenderer.nation_detail_sections(
-			formation_state, 0
-		)
-		var strength_line := ""
-		for section in formation_sections:
-			if str(section["title"]) == "国力与民心":
-				strength_line = str((section["lines"] as Array)[0])
-		_check(
-			int(nation_zero_row.get("army_count", 0)) == 3
-				and int(nation_zero_row.get("command_count", 0)) == 3
-				and str(nation_zero_row.get("power_primary", "")).contains(
-					"军团 3"
-				)
-				and strength_line.contains("主战军团 3")
-				and strength_line.contains("指挥单位 3")
-				and strength_line.contains("总兵力 32000"),
-			"三支独立15000编制必须显示为3个主战军团和3个指挥单位"
-		)
-	var nation_selection_renderer := MapRenderer.new()
-	nation_selection_renderer.state = list_state
-	nation_selection_renderer.select_city(0)
-	var city_view_selected := (
-		nation_selection_renderer.selected_city_id() == 0
-		and nation_selection_renderer.diplomatic_view_nation_id()
-			== list_state.cities[0].owner_nation
-	)
-	nation_selection_renderer.select_edge(0, 1)
-	nation_selection_renderer.select_nation(0)
-	var valid_nation_selected := (
-		nation_selection_renderer.selected_nation_id() == 0
-		and nation_selection_renderer.diplomatic_view_nation_id() == 0
-		and nation_selection_renderer.selected_city_id() == -1
-		and nation_selection_renderer.selected_edge_pair()
-			== Vector2i(-1, -1)
-	)
-	nation_selection_renderer.select_nation(999)
-	_check(
-		city_view_selected
-		and valid_nation_selected
-		and nation_selection_renderer.selected_nation_id() == -1
-		and nation_selection_renderer.diplomatic_view_nation_id() == -1,
-		"点击城市或国家必须进入所属国外交视角，非法国家ID必须清除视角"
-	)
-	nation_selection_renderer.free()
-	list_state.suzerainty[2] = {
-		"overlord_id": 1,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
-		"created_day": 0,
-		"last_centralization_day": 0,
-		"civil_war": false,
-	}
-	var nested_rows := MapRenderer.nation_list_rows(list_state)
-	var collapsed_root_rows := MapRenderer.nation_list_rows(
-		list_state,
-		{0: true}
-	)
-	var collapsed_subject_rows := MapRenderer.nation_list_rows(
-		list_state,
-		{1: true}
-	)
-	_check(
-		[
-			int(nested_rows[0]["nation_id"]),
-			int(nested_rows[1]["nation_id"]),
-			int(nested_rows[2]["nation_id"]),
-		] == [0, 1, 2]
-			and [
-				int(nested_rows[0]["depth"]),
-				int(nested_rows[1]["depth"]),
-				int(nested_rows[2]["depth"]),
-			] == [0, 1, 2]
-			and int(nested_rows[2]["parent_nation_id"]) == 1
-			and collapsed_root_rows.size() == 1
-			and not bool(collapsed_root_rows[0]["expanded"])
-			and collapsed_subject_rows.size() == 2
-			and MapRenderer.nation_list_alive_count(list_state) == 3,
-		"多级宗藩必须递归缩进，折叠宗主时隐藏全部后代，折叠藩王时只隐藏其支系"
-	)
-	var root_row_rect := MapRenderer.nation_stats_row_rect(
-		nation_window,
-		float(base["display_scale"]),
-		0
-	)
-	var nested_row_rect := MapRenderer.nation_stats_row_rect(
-		nation_window,
-		float(base["display_scale"]),
-		2
-	)
-	var root_toggle_rect := MapRenderer.nation_tree_toggle_rect(
-		root_row_rect,
-		float(base["display_scale"]),
-		0
-	)
-	var nested_toggle_rect := MapRenderer.nation_tree_toggle_rect(
-		nested_row_rect,
-		float(base["display_scale"]),
-		2
-	)
-	_check(
-		root_row_rect.position.y
-			> MapRenderer.nation_stats_title_rect(
-				nation_window,
-				float(base["display_scale"])
-			).end.y
-			and root_row_rect.encloses(root_toggle_rect)
-			and nested_row_rect.encloses(nested_toggle_rect)
-			and nested_toggle_rect.position.x
-				> root_toggle_rect.position.x,
-		"宗藩箭头命中区必须位于对应行内，并随层级向右缩进"
-	)
-	var tree_renderer := MapRenderer.new()
-	tree_renderer.state = list_state
-	tree_renderer._display_scale = float(base["display_scale"])
-	tree_renderer._nation_stats_window_position = Vector2(
-		80.0,
-		80.0
-	)
-	var expanded_rect := MapRenderer.nation_stats_window_rect(
-		Vector2(1280.0, 720.0),
-		tree_renderer._display_scale,
-		tree_renderer._nation_stats_window_position,
-		tree_renderer._nation_list_rows_cached().size()
-	)
-	var root_click_rect := MapRenderer.nation_tree_toggle_rect(
-		MapRenderer.nation_stats_row_rect(
-			expanded_rect,
-			tree_renderer._display_scale,
-			0
-		),
-		tree_renderer._display_scale,
-		0
-	)
-	var collapsed_by_click := (
-		tree_renderer._toggle_nation_tree_at_point(
-			root_click_rect.get_center(),
-			expanded_rect
-		)
-	)
-	var collapsed_runtime_rows := (
-		tree_renderer._nation_list_rows_cached()
-	)
-	var collapsed_rect := MapRenderer.nation_stats_window_rect(
-		Vector2(1280.0, 720.0),
-		tree_renderer._display_scale,
-		tree_renderer._nation_stats_window_position,
-		collapsed_runtime_rows.size()
-	)
-	var collapsed_click_rect := MapRenderer.nation_tree_toggle_rect(
-		MapRenderer.nation_stats_row_rect(
-			collapsed_rect,
-			tree_renderer._display_scale,
-			0
-		),
-		tree_renderer._display_scale,
-		0
-	)
-	var expanded_by_click := (
-		tree_renderer._toggle_nation_tree_at_point(
-			collapsed_click_rect.get_center(),
-			collapsed_rect
-		)
-	)
-	var treasury_sort_clicked := tree_renderer._handle_nation_sort_at_point(
-		MapRenderer.nation_stats_sort_button_rect(
-			expanded_rect,
-			tree_renderer._display_scale,
-			1
-		).get_center(),
-		expanded_rect
-	)
-	var descending_before := tree_renderer._nation_stats_sort_descending
-	var direction_clicked := tree_renderer._handle_nation_sort_at_point(
-		MapRenderer.nation_stats_sort_button_rect(
-			expanded_rect,
-			tree_renderer._display_scale,
-			3
-		).get_center(),
-		expanded_rect
-	)
-	_check(
-		collapsed_by_click
-			and collapsed_runtime_rows.size() == 1
-			and collapsed_rect.size.y < expanded_rect.size.y
-			and expanded_by_click
-			and tree_renderer._nation_list_rows_cached().size() == 3,
-		"点击宗主箭头必须折叠支系并缩小窗口，再次点击恢复全部藩属"
-	)
-	_check(
-		treasury_sort_clicked
-			and tree_renderer._nation_stats_sort_key
-				== MapRenderer.NATION_SORT_TREASURY
-			and direction_clicked
-			and tree_renderer._nation_stats_sort_descending
-				!= descending_before,
-		"国家列表排序字段和正倒序按钮必须拥有独立命中区并立即生效"
-	)
-	tree_renderer.free()
-	var border_state := GameState.new()
-	border_state.generate_grid_world(12348)
-	for nation_a in range(border_state.nations.size()):
-		for nation_b in range(
-			nation_a + 1,
-			border_state.nations.size()
-		):
-			border_state.set_diplomatic_relation(
-				nation_a,
-				nation_b,
-				GameState.DiplomaticRelation.NEUTRAL
-			)
-	border_state.suzerainty[1] = {
-		"overlord_id": 0,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
-		"created_day": 0,
-		"last_centralization_day": 0,
-		"civil_war": false,
-	}
-	border_state.suzerainty[3] = {
-		"overlord_id": 0,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE,
-		"created_day": 0,
-		"last_centralization_day": 0,
-		"civil_war": false,
-	}
-	border_state.set_diplomatic_relation(
-		0,
-		1,
-		GameState.DiplomaticRelation.ALLIED
-	)
-	border_state.set_diplomatic_relation(
-		0,
-		3,
-		GameState.DiplomaticRelation.ALLIED
-	)
-	border_state.set_diplomatic_relation(
-		1,
-		3,
-		GameState.DiplomaticRelation.ALLIED
-	)
-	var peaceful_suzerainty_geometry := (
-		MapRenderer.build_province_boundary_segments(border_state)
-	)
-	_check(
-		not (
-			peaceful_suzerainty_geometry["country"]
-				as PackedVector2Array
-		).is_empty()
-			and not (
-			peaceful_suzerainty_geometry["suzerainty"]
-				as PackedVector2Array
-		).is_empty()
-			and (
-				peaceful_suzerainty_geometry["alliance"]
-					as PackedVector2Array
-			).is_empty(),
-		"和平宗藩边界必须保留国家中心线；宗藩与同盟子集只用于语义诊断"
-	)
-	border_state.suzerainty.erase(3)
-	border_state.set_diplomatic_relation(
-		0,
-		3,
-		GameState.DiplomaticRelation.NEUTRAL
-	)
-	border_state.set_diplomatic_relation(
-		1,
-		3,
-		GameState.DiplomaticRelation.NEUTRAL
-	)
-	border_state.suzerainty[1]["civil_war"] = true
-	border_state.set_diplomatic_relation(
-		0,
-		1,
-		GameState.DiplomaticRelation.WAR
-	)
-	var civil_war_geometry := (
-		MapRenderer.build_province_boundary_segments(border_state)
-	)
-	_check(
-		(
-			civil_war_geometry["suzerainty"]
-				as PackedVector2Array
-		).is_empty()
-			and not (
-				civil_war_geometry["enemy"]
-					as PackedVector2Array
-			).is_empty()
-			and (
-				civil_war_geometry["country"]
-					as PackedVector2Array
-			) == (
-				peaceful_suzerainty_geometry["country"]
-					as PackedVector2Array
-			),
-		"削藩内战只能改变外交语义子集，不得改变国家边界中心线"
-	)
-	var hit_origin := Vector2(80.0, 60.0)
-	var hit_map_size := Vector2(640.0, 640.0)
-	var city_to_pick := hit_state.cities[0]
-	var city_pixel := (
-		hit_origin + city_to_pick.map_position * hit_map_size
-	)
-	_check(
-		MapRenderer.pick_city_at_pixel(
-			hit_state,
-			city_pixel,
-			hit_origin,
-			hit_map_size,
-			12.0
-		) == city_to_pick.id,
-		"点击城市符号中心必须稳定命中对应城市"
-	)
-	var edge_to_pick := hit_state.edges[0]
-	var edge_from := (
-		hit_origin
-		+ hit_state.cities[edge_to_pick.city_a].map_position
-			* hit_map_size
-	)
-	var edge_to := (
-		hit_origin
-		+ hit_state.cities[edge_to_pick.city_b].map_position
-			* hit_map_size
-	)
-	var picked_edge := MapRenderer.pick_edge_at_pixel(
-		hit_state,
-		edge_from.lerp(edge_to, 0.5),
-		hit_origin,
-		hit_map_size,
-		5.0
-	)
-	_check(
-		picked_edge == edge_to_pick,
-		"点击道路中点必须稳定命中对应可通行边"
-	)
-	var city_lines := MapRenderer.city_detail_lines(
-		hit_state,
-		city_to_pick.id
-	)
-	var city_sections := MapRenderer.city_detail_sections(
-		hit_state, city_to_pick.id
-	)
-	var edge_lines := MapRenderer.edge_detail_lines(
-		hit_state,
-		edge_to_pick
-	)
-	_check(
-		city_sections.size() == 4
-			and [
-				str(city_sections[0]["title"]),
-				str(city_sections[1]["title"]),
-				str(city_sections[2]["title"]),
-				str(city_sections[3]["title"]),
-			] == ["概况", "军事", "经济", "治理"]
-			and "城市守军" in str((city_sections[1]["lines"] as Array)[0])
-			and "当前没有州级军事行动" in str(
-				(city_sections[1]["lines"] as Array)[1]
-			)
-			and "野战驻军" in str((city_sections[1]["lines"] as Array)[2])
-			and "行政产出" in str((city_sections[2]["lines"] as Array)[0])
-			and "实际" in str((city_sections[2]["lines"] as Array)[1])
-			and "基础产值" in str((city_sections[2]["lines"] as Array)[2])
-			and "地形与发展" in str((city_sections[2]["lines"] as Array)[3])
-			and "首都加成" in str((city_sections[2]["lines"] as Array)[4])
-			and "20%" in str((city_sections[2]["lines"] as Array)[4])
-			and "治理与君主" in str((city_sections[2]["lines"] as Array)[5])
-			and "战乱与驻军" in str((city_sections[2]["lines"] as Array)[6])
-			and "贸易" in str((city_sections[2]["lines"] as Array)[7])
-			and "库存" in str((city_sections[2]["lines"] as Array)[7])
-			and not "简称" in "|".join(city_lines)
-			and "交通中心分" in "|".join(city_lines)
-			and MapRenderer.city_detail_sections(hit_state, -1).is_empty()
-			and edge_lines.size() >= 5
-			and "行军" in edge_lines[2],
-		"城市详情必须显示战略属性及完整的资源产量因素"
-	)
-	var trade_edge_a := hit_state.edge_of(0, 1)
-	var trade_edge_b := hit_state.edge_of(1, 2)
-	var trade_path_ready := trade_edge_a != null and trade_edge_b != null
-	if trade_path_ready:
-		trade_edge_a.map_path = PackedVector2Array([
-			hit_state.cities[0].map_position,
-			hit_state.cities[0].map_position.lerp(
-				hit_state.cities[1].map_position, 0.5
-			),
-			hit_state.cities[1].map_position,
-		])
-		trade_edge_b.map_path = PackedVector2Array([
-			hit_state.cities[1].map_position,
-			hit_state.cities[1].map_position.lerp(
-				hit_state.cities[2].map_position, 0.5
-			),
-			hit_state.cities[2].map_position,
-		])
-	var canonical_route := {
-		"id": 7,
-		"status": TradeNetwork.ACTIVE,
-		"city_path": [0, 1, 2] as Array[int],
-		"food_transfer": 0,
-		"food_source_city": -1,
-		"food_destination_city": -1,
-	}
-	var canonical_segments := MapRenderer.trade_route_map_paths(
-		hit_state, canonical_route
-	)
-	var canonical_flow := MapRenderer.trade_route_flow_path(
-		hit_state, canonical_route
-	)
-	var reverse_food_route: Dictionary = canonical_route.duplicate(true)
-	reverse_food_route["food_transfer"] = 25
-	reverse_food_route["food_source_city"] = 2
-	reverse_food_route["food_destination_city"] = 0
-	var reverse_food_flow := MapRenderer.trade_route_flow_path(
-		hit_state, reverse_food_route
-	)
-	var invalid_food_route: Dictionary = canonical_route.duplicate(true)
-	invalid_food_route["food_transfer"] = 25
-	invalid_food_route["food_source_city"] = hit_state.cities.size() + 10
-	invalid_food_route["food_destination_city"] = hit_state.cities.size() + 11
-	var invalid_food_flow := MapRenderer.trade_route_flow_path(
-		hit_state, invalid_food_route
-	)
-	_check(
-		trade_path_ready
-		and canonical_segments.size() == 2
-		and canonical_segments[0][0].is_equal_approx(
-			hit_state.cities[0].map_position
-		)
-		and canonical_segments[0][-1].is_equal_approx(
-			hit_state.cities[1].map_position
-		)
-		and canonical_segments[1][0].is_equal_approx(
-			hit_state.cities[1].map_position
-		)
-		and canonical_segments[1][-1].is_equal_approx(
-			hit_state.cities[2].map_position
-		)
-		and canonical_flow.size() == 5
-		and canonical_flow[0].is_equal_approx(
-			hit_state.cities[0].map_position
-		)
-		and canonical_flow[-1].is_equal_approx(
-			hit_state.cities[2].map_position
-		)
-		and reverse_food_flow[0].is_equal_approx(
-			hit_state.cities[2].map_position
-		)
-		and reverse_food_flow[-1].is_equal_approx(
-			hit_state.cities[0].map_position
-		)
-		and invalid_food_flow == canonical_flow,
-		"贸易路径必须按city_path规范拼接，粮运方向相反时整体反向"
-	)
-	var polyline := PackedVector2Array([
-		Vector2.ZERO, Vector2(3.0, 0.0), Vector2(3.0, 4.0),
-	])
-	var sample_start := MapRenderer.polyline_sample(polyline, -1.0)
-	var sample_turn := MapRenderer.polyline_sample(polyline, 4.0)
-	var sample_end := MapRenderer.polyline_sample(polyline, 99.0)
-	_check(
-		_approx(MapRenderer.polyline_length(polyline), 7.0)
-		and (sample_start["position"] as Vector2).is_equal_approx(Vector2.ZERO)
-		and (sample_start["tangent"] as Vector2).is_equal_approx(Vector2.RIGHT)
-		and (sample_turn["position"] as Vector2).is_equal_approx(Vector2(3.0, 1.0))
-		and (sample_turn["tangent"] as Vector2).is_equal_approx(Vector2.DOWN)
-		and (sample_end["position"] as Vector2).is_equal_approx(Vector2(3.0, 4.0)),
-		"贸易流折线长度与起点/转角/终点采样必须稳定"
-	)
-	var active_routes: Array[Dictionary] = [
-		{"status": TradeNetwork.ACTIVE},
-	]
-	var rerouted_routes: Array[Dictionary] = [
-		{"status": TradeNetwork.REROUTED},
-	]
-	var blocked_routes: Array[Dictionary] = [
-		{"status": TradeNetwork.BLOCKED},
-	]
-	_check(
-		MapRenderer.has_animated_trade_routes(active_routes)
-		and MapRenderer.has_animated_trade_routes(rerouted_routes)
-		and not MapRenderer.has_animated_trade_routes(blocked_routes)
-		and not MapRenderer.has_animated_trade_routes(
-			[] as Array[Dictionary]
-		),
-		"ACTIVE/REROUTED商路必须驱动动画，BLOCKED/空路线不得刷新动画"
-	)
-	_check(
-		not MapRenderer.city_label_text(city_to_pick).is_empty(),
-		"开启城名时必须能生成稳定城市名称文本"
-	)
-
-# ------------------------------------------------------------------ 2. 地形惩罚
-
-func _test_country_display_fade() -> void:
-	var source := Color.from_hsv(0.37, 0.42, 0.68, 1.0)
-	var adjusted := MapRenderer.country_boundary_display_color(source)
-	_check(
-		is_equal_approx(adjusted.h, source.h)
-		and adjusted.s >= 0.0
-		and adjusted.s <= 1.0
-		and adjusted.v >= 0.0
-		and adjusted.v <= 1.0
-		and is_equal_approx(adjusted.a, 1.0),
-		"国家边界色应保持色相、不透明且HSV合法"
-	)
-	var clamped := MapRenderer.country_boundary_display_color(
-		Color.from_hsv(0.2, 0.96, 0.20, 0.4)
-	)
-	_check(
-		clamped.s >= 0.0
-		and clamped.s <= 1.0
-		and clamped.v >= 0.0
-		and clamped.v <= 1.0
-		and is_equal_approx(clamped.a, 1.0),
-		"国家边界色的饱和度和明度必须保持在有效范围"
-	)
-	var edge_opacity := MapRenderer.country_fill_opacity_for_distance(0.0)
-	var near_opacity := MapRenderer.country_fill_opacity_for_distance(4.0)
-	var far_opacity := MapRenderer.country_fill_opacity_for_distance(40.0)
-	_check(
-		is_equal_approx(edge_opacity, 1.0)
-		and near_opacity < edge_opacity
-		and far_opacity < near_opacity
-		and far_opacity >= MapRenderer.COUNTRY_FILL_MIN_OPACITY,
-		"国家填充应从边界向腹地单调变透明且不低于最低不透明度"
-	)
-	_check(
-		is_equal_approx(
-			MapRenderer.country_fill_opacity_for_distance(100000.0),
-			MapRenderer.COUNTRY_FILL_MIN_OPACITY
-		),
-		"超大国家中心应收敛到统一的最低不透明度"
-	)
-
-
 func _test_terrain_multiplier() -> void:
 	print("[2] danger 地形：攻击惩罚固定，防御惩罚随驻防时间趋近零")
 	var danger := 0.5
@@ -3554,7 +335,7 @@ func _test_persistent_morale() -> void:
 	_check(battle.winner_side == 1, "满士气一方应战胜疲劳(0.3)一方")
 
 	# (b) 战后恢复：满军费、满补给时按统一恢复天数线性回满。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -3605,7 +386,7 @@ func _test_persistent_morale() -> void:
 
 func _test_simulation_progress() -> void:
 	print("[6] 模拟推进：战斗/占领/粮食实际生效")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	for nation_a in range(gs.nations.size()):
 		for nation_b in range(nation_a + 1, gs.nations.size()):
@@ -3671,7 +452,7 @@ func _test_simulation_progress() -> void:
 # ------------------------------------------------------------------ 7. 确定性复现
 func _test_post_unification_continuation() -> void:
 	print("[6b] 统一后继续推演：保留胜者里程碑但不暂停时间")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12666)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -3703,7 +484,7 @@ func _test_determinism() -> void:
 
 
 func _run_signature(world_seed: int, days: int) -> String:
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(world_seed)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -3728,7 +509,7 @@ func _run_signature(world_seed: int, days: int) -> String:
 func _test_time_layering() -> void:
 	print("[8] 时间分层：经济/注粮按月结算，行军按天渐进")
 	# 1. 经济按月结算（非 30×）。总金库口径对国家归属免疫（Σ 城 gold_per_month）。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -3758,7 +539,7 @@ func _test_time_layering() -> void:
 			% [expected_treasury, after])
 	sim.free()
 
-	var morale_state := GameState.new()
+	var morale_state := preload("res://tests/support/grid_world.gd").new()
 	morale_state.generate_grid_world(12347)
 	morale_state.armies.clear()
 	var morale_nation := morale_state.nations[0]
@@ -3790,7 +571,7 @@ func _test_time_layering() -> void:
 	morale_sim.free()
 
 	# 2. 注粮半年一次：隔离单测 _resolve_economy 的 day gate（避开消耗干扰）。
-	var gs2 := GameState.new()
+	var gs2 := preload("res://tests/support/grid_world.gd").new()
 	gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new()
 	sim2.setup(gs2)
@@ -3827,7 +608,7 @@ func _test_time_layering() -> void:
 			% [expected_food_after_half_year, capital.food_storage])
 	sim2.free()
 
-	var garrison_state := GameState.new()
+	var garrison_state := preload("res://tests/support/grid_world.gd").new()
 	garrison_state.generate_grid_world(12346)
 	garrison_state.armies.clear()
 	var productive_city := garrison_state.cities[0]
@@ -3922,7 +703,7 @@ func _test_time_layering() -> void:
 	)
 
 	# 3. 行军不瞬移：单日 step 上界 = 1/MARCH_DAYS_MIN = 1/10 = 0.1（规格 R1，distance=1 最快）。
-	var gs3 := GameState.new()
+	var gs3 := preload("res://tests/support/grid_world.gd").new()
 	gs3.generate_grid_world(12345)
 	var sim3 := Simulation.new()
 	sim3.setup(gs3)
@@ -3954,7 +735,7 @@ func _test_trigger_detection() -> void:
 ## 在真实边 (0,1) 上布两军并检测，返回新生成战斗数。
 ##  X: nation nx, from cx(0=city0/1=city1), progress px；Y: nation ny, from cy, progress py。
 func _detect_count(px: float, nx: int, ny: int, cx: int, py: float, cy: int) -> int:
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -3971,7 +752,7 @@ func _detect_count(px: float, nx: int, ny: int, cx: int, py: float, cy: int) -> 
 
 func _test_three_way_battle() -> void:
 	print("[11] 三方战斗：最近敌对对先战，各侧单一 nation，第三方不并肩")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -4011,7 +792,7 @@ func _single_nation(side: Array) -> bool:
 
 func _test_three_way_siege() -> void:
 	print("[12] 三方占领：一城一围城方，敌对他国不并肩，同族可汇合")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -4062,7 +843,7 @@ func _test_multi_army_aggregation() -> void:
 
 	# (a) 增援按 ETA 抵达（item 4）：初始只有接触的核心对开战(1v1)；靠后友军(离战线 0.30)
 	#     不瞬间参战，须继续行军逼近己方战线到 REINFORCEMENT_RADIUS 内才加入，最终聚合成 2v2。
-	var gs := GameState.new(); gs.generate_grid_world(12345)
+	var gs := preload("res://tests/support/grid_world.gd").new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
 	var a0 := _place_army_on_edge(gs, 0, 0, 0, 1, 0.50)   # A0 n0 norm0.50（接触核心）
@@ -4099,7 +880,7 @@ func _test_multi_army_aggregation() -> void:
 	_check(absi(loss_def_single - loss_def_split) <= 2, "防御反拆分：单支(%d) 与拆分(%d) 总伤应近似（差≤2）" % [loss_def_single, loss_def_split])
 
 	# 援军到场先保留自身士气，下次野战回合按全侧容量合并。
-	var gs2 := GameState.new(); gs2.generate_grid_world(12345)
+	var gs2 := preload("res://tests/support/grid_world.gd").new(); gs2.generate_grid_world(12345)
 	var sim2 := Simulation.new(); sim2.setup(gs2)
 	var tired := _make_army(0, 0, 1000, 10); tired.morale = 0.30
 	var defender := _make_army(1, 1, 1000, 10)
@@ -4131,7 +912,7 @@ func _test_multi_army_aggregation() -> void:
 	_check_combo(2, 3)
 
 	# (f) 同点必触发：两敌军归一化位置完全重合，必开战
-	var gs3 := GameState.new(); gs3.generate_grid_world(12345)
+	var gs3 := preload("res://tests/support/grid_world.gd").new(); gs3.generate_grid_world(12345)
 	var sim3 := Simulation.new(); sim3.setup(gs3)
 	gs3.armies.clear(); gs3.battles.clear()
 	_place_army_on_edge(gs3, 0, 0, 0, 1, 0.50)   # n0 norm0.50
@@ -4152,7 +933,7 @@ func _one_round_side_b_loss(side_a: Array, side_b: Array, seed_val: int) -> int:
 
 ## 在真实边上放 na_count 支 n0 与 nb_count 支 n1（位置紧邻），断言恰 1 场且各侧聚合正确。
 func _check_combo(na_count: int, nb_count: int) -> void:
-	var gs := GameState.new(); gs.generate_grid_world(12345)
+	var gs := preload("res://tests/support/grid_world.gd").new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
 	var id := 0
@@ -4191,7 +972,7 @@ func _check_combo(na_count: int, nb_count: int) -> void:
 
 func _test_three_way_serial() -> void:
 	print("[14] 三方串行：第三敌国卡位不得穿过交战点，A-B 分胜负后立即与幸存者接战")
-	var gs := GameState.new(); gs.generate_grid_world(12345)
+	var gs := preload("res://tests/support/grid_world.gd").new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	gs.armies.clear(); gs.battles.clear()
 	var a := _place_army_on_edge(gs, 0, 0, 0, 1, 0.50)   # n0 norm0.50
@@ -4223,7 +1004,7 @@ func _test_three_way_serial() -> void:
 	var core_nations := {}
 	var ambiguous_frozen := true
 	for perm in [[10, 11, 12], [12, 11, 10], [11, 12, 10]]:
-		var gs2 := GameState.new(); gs2.generate_grid_world(12345)
+		var gs2 := preload("res://tests/support/grid_world.gd").new(); gs2.generate_grid_world(12345)
 		var sim2 := Simulation.new(); sim2.setup(gs2)
 		gs2.armies.clear(); gs2.battles.clear()
 		for nation_id in range(3):
@@ -4269,7 +1050,7 @@ func _test_three_way_serial() -> void:
 
 	# 同一国家的多支等价军不构成“核心国家对”歧义。生产故障中的
 	# 2v1 形状必须直接聚合开战，不能把三军永久冻结在接触面。
-	var gs3 := GameState.new(); gs3.generate_grid_world(12345)
+	var gs3 := preload("res://tests/support/grid_world.gd").new(); gs3.generate_grid_world(12345)
 	var sim3 := Simulation.new(); sim3.setup(gs3)
 	gs3.armies.clear(); gs3.battles.clear()
 	var attackers: Array[Army] = [
@@ -4306,7 +1087,7 @@ func _test_crosspass_field_priority() -> void:
 	print("[16] 相向错身：两敌军同在一条边相向而行，先到边末端者应野战交火而非离边攻城")
 
 	# 找一条敌对相邻边（c1 属 nation != c2 属 nation）
-	var gs := GameState.new(); gs.generate_grid_world(12345)
+	var gs := preload("res://tests/support/grid_world.gd").new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	var c1 := -1; var c2 := -1
 	for e in gs.edges:
@@ -4341,7 +1122,7 @@ func _test_crosspass_field_priority() -> void:
 
 	# 野战胜方已越过道路终点时，败方溃退军不能在下一 tick 重复拉起 FIELD。
 	# 溃退军应先落入目标城，随后胜方进城并与守军统一触发 SIEGE。
-	var endpoint_state := GameState.new()
+	var endpoint_state := preload("res://tests/support/grid_world.gd").new()
 	endpoint_state.generate_grid_world(1601)
 	endpoint_state.armies.clear()
 	endpoint_state.battles.clear()
@@ -4433,7 +1214,7 @@ func _test_crosspass_field_priority() -> void:
 func _test_capacity_no_block_enemy() -> void:
 	print("[17] 五千容量边：敌军先占边，迎战方不得被交通容量挡在城里错身穿过")
 
-	var gs := GameState.new(); gs.generate_grid_world(12345)
+	var gs := preload("res://tests/support/grid_world.gd").new(); gs.generate_grid_world(12345)
 	var sim := Simulation.new(); sim.setup(gs)
 	var c1 := -1; var c2 := -1
 	for e in gs.edges:
@@ -4482,7 +1263,7 @@ func _test_capacity_no_block_enemy() -> void:
 
 func _test_directional_friendly_capacity() -> void:
 	print("[17b] 军事二值通行：正容量不限同向军队，0容量断路")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(1717)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -4668,177 +1449,6 @@ func _test_directional_friendly_capacity() -> void:
 
 # ------------------------------------------------------------------ 17c. 正式高度图主战军二值通行
 
-func _test_heightmap_main_army_transport_footprint() -> void:
-	print("[17c] 正式高度图：15000主战军可经10000出口完整移动且不拆编")
-	var gs := GameState.new()
-	gs.generate_world(12345)
-	var nation_id := -1
-	var capital_id := -1
-	var target_id := -1
-	var main_army: Army = null
-	for nation in gs.nations:
-		var candidate_capital := nation.capital_city_id
-		for neighbor in gs.neighbors(candidate_capital):
-			var candidate_edge := gs.edge_of(
-				candidate_capital, neighbor
-			)
-			if (
-				candidate_edge == null
-				or candidate_edge.kind != Edge.Kind.LAND
-				or candidate_edge.max_manpower <= 0
-				or gs.cities[neighbor].is_dock
-				or gs.cities[neighbor].owner_nation != nation.id
-			):
-				continue
-			for candidate_army in gs.armies:
-				if (
-					candidate_army.owner_nation == nation.id
-					and candidate_army.location_city == candidate_capital
-					and candidate_army.max_size
-						== GameState.INITIAL_HEAVY_ARMY_SIZE
-				):
-					main_army = candidate_army
-					break
-			if main_army != null:
-				nation_id = nation.id
-				capital_id = candidate_capital
-				target_id = neighbor
-				break
-		if main_army != null:
-			break
-	_check(
-		gs.uses_heightmap and main_army != null and target_id >= 0,
-		"正式高度图应存在拥有同国陆路出口的首都及其初始主战军"
-	)
-	if main_army == null or target_id < 0:
-		return
-
-	for neighbor in gs.neighbors(capital_id):
-		var capital_edge := gs.edge_of(capital_id, neighbor)
-		capital_edge.max_manpower = 0
-		capital_edge.passing_count = 0
-		capital_edge.occupied = false
-	var exit_edge := gs.edge_of(capital_id, target_id)
-	exit_edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
-	exit_edge.distance = 1
-	exit_edge.travel_time_multiplier = 1.0
-	exit_edge.danger = 0.0
-	var positive_capital_exits := 0
-	for neighbor in gs.neighbors(capital_id):
-		if gs.edge_of(capital_id, neighbor).max_manpower > 0:
-			positive_capital_exits += 1
-
-	var original_army_id := main_army.id
-	var original_group_id := main_army.battle_group_id
-	gs.armies.clear()
-	gs.armies.append(main_army)
-	gs.battles.clear()
-	var route_field := Pathfinding.dijkstra_field(
-		gs, capital_id, nation_id, false, true, -1,
-		main_army.max_size
-	)
-	var route := Pathfinding.reconstruct(
-		route_field["prev"], capital_id, target_id
-	)
-	_check(
-		positive_capital_exits == 1
-			and exit_edge.max_manpower == Edge.TERRAIN_LOW_MANPOWER
-			and _approx(
-				float(route_field["dist"][target_id]),
-				float(exit_edge.distance)
-					* exit_edge.travel_time_multiplier
-			)
-			and route == [target_id],
-		(
-			"15000主战军二值通行契约失败：exits=%d cap=%d "
-			+ "dist=%.1f expected=%.1f route=%s target=%d"
-		) % [
-			positive_capital_exits, exit_edge.max_manpower,
-			float(route_field["dist"][target_id]),
-			float(exit_edge.distance)
-				* exit_edge.travel_time_multiplier,
-			str(route), target_id,
-		]
-	)
-
-	var sim := Simulation.new()
-	sim.setup(gs)
-	var move_order := ActionCandidate.make(
-		ActionCandidate.Kind.REINFORCE,
-		100.0,
-		"正式高度图主战军二值通行回归",
-		target_id
-	)
-	var issued := sim._execute_ai_candidate(main_army, move_order)
-	_check(
-		issued
-			and main_army.state == Army.State.MOVING
-			and main_army.on_edge
-			and main_army.move_from == capital_id
-			and main_army.move_to == target_id
-			and exit_edge.passing_count == 1,
-		"正式高度图15000主战军应经10000出口完成寻路并开始移动"
-	)
-	var group_members := gs.battle_group_members(
-		nation_id, original_group_id
-	)
-	_check(
-		gs.armies.size() == 1
-			and gs.armies[0] == main_army
-			and main_army.id == original_army_id
-			and main_army.size == GameState.INITIAL_HEAVY_ARMY_SIZE
-			and main_army.max_size == GameState.INITIAL_HEAVY_ARMY_SIZE
-			and main_army.max_morale == Army.DEFAULT_MAX_MORALE
-			and main_army.is_main_battle_role()
-			and group_members.size() == 1
-			and group_members[0] == main_army,
-		"道路运输不得拆分Army或改变主战军编制、士气与战团身份"
-	)
-	var frontage_probe := _make_field_battle(
-		[_make_army(1740, nation_id, 15000, 10)],
-		[_make_army(1741, (nation_id + 1) % gs.nations.size(), 15000, 10)],
-		0.0,
-		1
-	)
-	frontage_probe.edge.max_manpower = Edge.TERRAIN_LOW_MANPOWER
-	_check(
-		Combat.combat_frontage(frontage_probe)
-			== Edge.TERRAIN_LOW_MANPOWER
-			and _approx(
-				Combat.frontage_engaged_ratio(
-					GameState.INITIAL_HEAVY_ARMY_SIZE,
-					Combat.combat_frontage(frontage_probe)
-				),
-				2.0 / 3.0
-			),
-		"军事通行打平后，战斗正面仍必须读取道路的10000容量"
-	)
-	var travel_probe := Edge.new()
-	travel_probe.distance = 1
-	travel_probe.max_manpower = Edge.MIN_MANPOWER
-	var narrow_travel_days := Simulation.edge_travel_days(
-		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
-	travel_probe.max_manpower = Edge.TERRAIN_LOW_MANPOWER
-	var low_road_travel_days := Simulation.edge_travel_days(
-		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
-	travel_probe.max_manpower = Edge.STANDARD_MANPOWER
-	var standard_travel_days := Simulation.edge_travel_days(
-		travel_probe, GameState.INITIAL_HEAVY_ARMY_SIZE
-	)
-	_check(
-		_approx(narrow_travel_days, Simulation.march_days(1))
-			and _approx(low_road_travel_days, Simulation.march_days(1))
-			and _approx(
-				standard_travel_days, Simulation.march_days(1)
-			),
-		"15000主战军经任意正容量道路都应使用相同行军时间"
-	)
-	sim.free()
-
-# ------------------------------------------------------------------ 18. R1 行军时长线性映射
-
 func _test_march_time_linear() -> void:
 	print("[18] R1 行军：10 天起步，按真实距离线性增长且不封顶")
 	# 边界：distance=1 → 10 天；此后每单位增加 5 天。
@@ -4859,7 +1469,7 @@ func _test_march_time_linear() -> void:
 			mono = false
 	_check(mono, "行军时间应随距离单调不减")
 	# 端到端：distance=1 的边，10 个 tick 恰好走完（progress>=1）。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(999)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -4885,7 +1495,7 @@ func _test_march_time_linear() -> void:
 
 func _test_siege_food_clock() -> void:
 	print("[20] R3 粮草：被围约 90 天耗尽 + 补给孤岛 + 粮尽城防大幅降")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(2024)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -4946,7 +1556,7 @@ func _test_siege_food_clock() -> void:
 
 func _test_morale_retreat_recovery() -> void:
 	print("[22] 士气崩溃：向首都纵深撤退 + 驻城耗粮恢复 + 满士气/粮尽解锁")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(777)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -4956,7 +1566,7 @@ func _test_morale_retreat_recovery() -> void:
 		nation.manpower_pool = 0
 
 	# 撤退路线不得把敌城当作中间节点；起点刚失守时仍允许直接离开敌城。
-	var route_state := GameState.new()
+	var route_state := preload("res://tests/support/grid_world.gd").new()
 	route_state.generate_grid_world(778)
 	for city in route_state.cities:
 		city.owner_nation = 1
@@ -4976,7 +1586,7 @@ func _test_morale_retreat_recovery() -> void:
 	var hostile_start_route := Pathfinding.nearest_friendly_city(route_state, route_army, 0)
 	_check(hostile_start_route == [1],
 		"起点刚失守时应允许离开敌城进入最近友城 1，实为 %s" % str(hostile_start_route))
-	var ally_state := GameState.new()
+	var ally_state := preload("res://tests/support/grid_world.gd").new()
 	ally_state.generate_grid_world(779)
 	ally_state.armies.clear()
 	for ally_city in ally_state.cities:
@@ -5154,7 +1764,7 @@ func _test_morale_retreat_recovery() -> void:
 	)
 
 	# 城破后所有旧守军状态都必须离城；后到援军应立即作为攻方触发新战斗。
-	var capture_state := GameState.new()
+	var capture_state := preload("res://tests/support/grid_world.gd").new()
 	capture_state.generate_grid_world(780)
 	capture_state.armies.clear()
 	capture_state.battles.clear()
@@ -5281,7 +1891,7 @@ func _test_morale_retreat_recovery() -> void:
 
 	# 真实地图 68 城复现：占领军已下达后续移动命令，但受容量限制尚未上边。
 	# 其 MOVING 只是任务状态，物理上仍在城内，敌军抵达时必须作为守军参战。
-	var city68_state := GameState.new()
+	var city68_state := preload("res://tests/support/grid_world.gd").new()
 	city68_state.generate_world(12345)
 	city68_state.armies.clear()
 	city68_state.battles.clear()
@@ -5416,7 +2026,7 @@ func _test_morale_retreat_recovery() -> void:
 
 func _test_retreat_transport_footprint() -> void:
 	print("[22a] 撤退二值通行：残余主战军可沿5000窄路撤退且不拆编")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(783)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -5499,7 +2109,7 @@ func _test_retreat_transport_footprint() -> void:
 
 func _test_edge_retreat_transport_batches() -> void:
 	print("[22a2] 边上撤退：端点择路无视正容量大小")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(784)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -5561,7 +2171,7 @@ func _test_edge_retreat_transport_batches() -> void:
 
 func _test_besieged_city_retreat_depth() -> void:
 	print("[22b] 撤退纵深：双围城不得在相邻城市之间横跳，必须向首都方向后撤")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(782)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -5614,7 +2224,7 @@ func _test_besieged_city_retreat_depth() -> void:
 
 func _test_gold_reserve_budget_and_war_snapshot() -> void:
 	print("[31b] Expenditure reserve and real wartime income")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(7105)
 	for nation in gs.nations:
 		_set_neutral_ruler(nation)
@@ -5640,7 +2250,7 @@ func _test_gold_reserve_budget_and_war_snapshot() -> void:
 
 func _test_ruler_economy_integration() -> void:
 	print("[31c] 君主经济：产出、军费与财政报告使用同一有效口径")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(7106)
 	gs.armies.clear()
 	for nation in gs.nations:
@@ -5731,7 +2341,7 @@ func _test_ruler_economy_integration() -> void:
 
 func _test_supply_morale_and_passive_retreat_battle() -> void:
 	print("[23] 状态机：断粮降士气触发溃逃 + 溃逃军只被动接战 + 获胜后继续撤退")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(909)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -5864,7 +2474,7 @@ func _test_rolling_supply_settlement() -> void:
 
 func _test_edge_holding_state() -> void:
 	print("[25] HOLDING：AI 进入高 danger 边、固定位置、补给控制适应")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(5150)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -5978,7 +2588,7 @@ func _test_edge_holding_state() -> void:
 
 func _test_edge_supply_from_both_endpoints() -> void:
 	print("[26] 边上补给：按真实位置比较双端点，当前边接敌不切断友方端点")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(6160)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -6025,7 +2635,7 @@ func _test_edge_supply_from_both_endpoints() -> void:
 
 func _test_warehouse_logistics() -> void:
 	print("[26b] 粮仓机制：最小损耗路线、多粮仓扩展、首都失守迁都与缴获")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(6262)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -6098,7 +2708,7 @@ func _test_warehouse_logistics() -> void:
 	)
 
 	# 独立世界验证首都失守：30% 库存汇入胜方首都，败方立即投降后迁都。
-	var gs2 := GameState.new()
+	var gs2 := preload("res://tests/support/grid_world.gd").new()
 	gs2.generate_grid_world(6363)
 	var sim2 := Simulation.new()
 	sim2.setup(gs2)
@@ -6154,7 +2764,7 @@ func _test_atomic_territory_transactions() -> void:
 	print("[26c] 原子领土事务：行政设施、库存、回滚与无实控法理国")
 
 	# 公开薄封装必须独立完成旧控制者行政状态修复；调用方不得先摘首都/粮仓。
-	var transfer_state := GameState.new()
+	var transfer_state := preload("res://tests/support/grid_world.gd").new()
 	transfer_state.generate_grid_world(63630)
 	var former_owner := 1
 	var recipient := 0
@@ -6243,7 +2853,7 @@ func _test_atomic_territory_transactions() -> void:
 
 	# 旧国仅剩一座首都时，直接攻占必须清空首都/粮仓索引；它可以继续
 	# 保有该城法理，且这种“无实控但有法理”的状态应是合法中间态。
-	var landless_state := GameState.new()
+	var landless_state := preload("res://tests/support/grid_world.gd").new()
 	landless_state.generate_grid_world(63631)
 	var landless_capital_id := landless_state.nations[former_owner].capital_city_id
 	for city in landless_state.cities:
@@ -6291,7 +2901,7 @@ func _test_atomic_territory_transactions() -> void:
 
 	# 批量事务必须先完整验证，再一次提交。即使第一项合法，只要后项非法
 	# 或调用方使用了过期 revision，全部领土/行政/库存状态都必须逐字段不变。
-	var rollback_state := GameState.new()
+	var rollback_state := preload("res://tests/support/grid_world.gd").new()
 	rollback_state.generate_grid_world(63632)
 	for rollback_a in range(rollback_state.nations.size()):
 		for rollback_b in range(
@@ -6480,7 +3090,7 @@ func _test_atomic_territory_transactions() -> void:
 
 	# 忠诚恢复区域包含附加粮仓时，事务先把随城库存归回旧共享粮池，
 	# 再严格按事务前粮池库存和产能比例划转一次。
-	var restore_state := GameState.new()
+	var restore_state := preload("res://tests/support/grid_world.gd").new()
 	restore_state.generate_grid_world(63633)
 	restore_state.armies.clear()
 	restore_state.battles.clear()
@@ -6638,7 +3248,7 @@ func _test_atomic_territory_transactions() -> void:
 		)
 
 	# 三个小粮仓不能因逐仓比例向下取整而少扣；超额请求则返回可扣总量。
-	var withdraw_state := GameState.new()
+	var withdraw_state := preload("res://tests/support/grid_world.gd").new()
 	withdraw_state.generate_grid_world(63634)
 	var withdraw_owner := 0
 	var withdraw_ids: Array[int] = [
@@ -6681,7 +3291,7 @@ func _test_atomic_territory_transactions() -> void:
 
 	# 通过真实忠诚恢复入口覆盖同一尾数场景：旧池 [1,1,1] 按 2/3
 	# 产能划出 2，目标池只能收到实际扣除的 2，全局库存保持 3。
-	var tiny_restore_state := GameState.new()
+	var tiny_restore_state := preload("res://tests/support/grid_world.gd").new()
 	tiny_restore_state.generate_grid_world(63635)
 	tiny_restore_state.armies.clear()
 	tiny_restore_state.battles.clear()
@@ -6778,7 +3388,7 @@ func _test_atomic_territory_transactions() -> void:
 
 func _test_capital_capture_capitulation() -> void:
 	print("[26c] 首都失陷：已控州整体确认、州外保留、立即投降")
-	var surrender_state := GameState.new()
+	var surrender_state := preload("res://tests/support/grid_world.gd").new()
 	surrender_state.generate_grid_world(6365)
 	surrender_state.armies.clear()
 	surrender_state.battles.clear()
@@ -6979,7 +3589,7 @@ func _test_capital_capture_capitulation() -> void:
 
 	# 领土事务 API 的直接契约：先转实控再转法理，以及一体化永久主权
 	# 转移，都必须把 owner/legal/政治目标收敛并清理叛乱状态。
-	var permanent_api_state := GameState.new()
+	var permanent_api_state := preload("res://tests/support/grid_world.gd").new()
 	permanent_api_state.generate_grid_world(6367)
 	for api_a in range(permanent_api_state.nations.size()):
 		for api_b in range(api_a + 1, permanent_api_state.nations.size()):
@@ -7072,7 +3682,7 @@ func _test_capital_capture_capitulation() -> void:
 
 	# 首都失陷投降后，和平结算检测剩余合法飞地，并把飞地整体转交给
 	# 与其陆路边界最多的周边国家；主体领土仍归战败国。
-	var enclave_state := GameState.new()
+	var enclave_state := preload("res://tests/support/grid_world.gd").new()
 	enclave_state.generate_grid_world(6366)
 	enclave_state.armies.clear()
 	enclave_state.battles.clear()
@@ -7167,7 +3777,7 @@ func _test_holding_combat_adaptation() -> void:
 	_check(atk90.size == atk0.size,
 		"驻防时间不得改变守军攻击惩罚；攻击方伤亡应一致：%d/%d" % [atk0.size, atk90.size])
 
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(7170)
 	var sim := Simulation.new()
 	sim.setup(gs)
@@ -7201,230 +3811,6 @@ func _test_holding_combat_adaptation() -> void:
 	sim.free()
 
 # ------------------------------------------------------------------ 28. 溃逃接战 + 位置连续性
-
-func _test_retreat_contact_and_position_continuity() -> void:
-	print("[28] 溃逃接战与位置连续性：驻防截击、连续行军、掉头、新局快照")
-	var gs := GameState.new()
-	gs.generate_grid_world(8282)
-	var sim := Simulation.new()
-	sim.setup(gs)
-	gs.armies.clear()
-	gs.battles.clear()
-
-	var c1 := 0
-	var c2 := 1
-	var holder := _place_army_on_edge(gs, 900, 0, c1, c2, 0.5)
-	holder.state = Army.State.HOLDING
-	var retreater := _place_army_on_edge(gs, 901, 1, c2, c1, 0.5)
-	retreater.state = Army.State.RETREATING
-	retreater.forced_retreat = true
-	sim._detect_encounters()
-	_check(gs.battles.size() == 1 and holder.state == Army.State.FIGHTING
-		and retreater.state == Army.State.FIGHTING,
-		"驻防敌军接触溃逃军时必须截击，不能因双方都非 MOVING 而漏战")
-
-	# 到达中间城后即使下一边已有同向军，也应连续进入下一段。
-	gs.armies.clear()
-	gs.battles.clear()
-	var mover := _make_army(902, gs.cities[0].owner_nation, 1000, 10)
-	mover.state = Army.State.MOVING
-	mover.location_city = 0
-	mover.move_from = 0
-	mover.move_to = 1
-	mover.move_progress = 1.0
-	mover.on_edge = true
-	mover.path = [2] as Array[int]
-	gs.armies.append(mover)
-	var first_edge := gs.edge_of(0, 1)
-	var blocked_edge := gs.edge_of(1, 2)
-	first_edge.passing_count = 1
-	blocked_edge.max_manpower = 30000
-	blocked_edge.passing_count = 0
-	for i in range(2):
-		var blocker := _make_army(9100 + i, mover.owner_nation, 1000, 10)
-		blocker.state = Army.State.MOVING
-		blocker.location_city = 1
-		blocker.move_from = 1
-		blocker.move_to = 2
-		blocker.move_progress = 0.2
-		blocker.on_edge = true
-		gs.armies.append(blocker)
-		blocked_edge.passing_count += 1
-	sim._arrive_at_node(mover)
-	_check(mover.state == Army.State.MOVING and mover.move_to == 2
-		and mover.move_from == 1 and mover.location_city == 1
-		and mover.on_edge and mover.path.is_empty(),
-		"正容量下一边已有同向军时仍应从中间城连续前进；from=%d to=%d location=%d"
-			% [mover.move_from, mover.move_to, mover.location_city])
-
-	# 边上撤退若选择原出发端，交换方向并反转 progress 后物理位置必须完全不变。
-	gs.armies.clear()
-	var turning := _place_army_on_edge(gs, 903, gs.cities[0].owner_nation, 0, 1, 0.2)
-	var edge := gs.edge_of(0, 1)
-	var norm_before := sim._norm_pos(turning, edge)
-	sim._retreat(turning)
-	var norm_after := sim._norm_pos(turning, edge)
-	_check(_approx(norm_before, norm_after),
-		"撤退原地掉头不得改变物理位置：before=%.3f after=%.3f" % [norm_before, norm_after])
-
-	# 多军共同破城时，非主占领军也已在城墙端点，不能瞬移回各自 move_from。
-	gs.armies.clear()
-	gs.battles.clear()
-	var target_city := gs.cities[0]
-	var invader_nation := (target_city.owner_nation + 1) % GameState.NATION_COUNT
-	var lead := _make_army(904, invader_nation, 2000, 10)
-	var support := _make_army(905, invader_nation, 1000, 10)
-	for besieger in [lead, support]:
-		besieger.state = Army.State.FIGHTING
-		besieger.move_from = 1
-		besieger.move_to = 0
-		besieger.move_progress = 1.0
-		gs.armies.append(besieger)
-	var siege := gs.new_battle(Battle.Kind.SIEGE)
-	siege.city = target_city
-	siege.edge = gs.edge_of(0, 1)
-	target_city.garrison_manpower = 0
-	siege.side_a.append(lead)
-	siege.side_a.append(support)
-	sim._advance_siege(siege)
-	_check(support.state == Army.State.IDLE and support.location_city == target_city.id,
-		"共同破城的非主占领军应停在目标城，不得瞬移回出发城；location=%d" % support.location_city)
-
-	# 第三方抵达已有守军的围城时不能加入两侧，应从已抵达的目标城连续撤退，而非瞬移回来源城。
-	gs.armies.clear()
-	gs.battles.clear()
-	for city in gs.cities:
-		city.owner_nation = 0
-	target_city = gs.cities[0]
-	var source_city := gs.cities[1]
-	source_city.owner_nation = 2
-	var besieger := _make_army(906, 1, 1000, 10)
-	var defender := _make_army(907, 0, 1000, 10)
-	var third_party := _make_army(908, 2, 1000, 10)
-	third_party.state = Army.State.MOVING
-	third_party.location_city = source_city.id
-	third_party.move_from = source_city.id
-	third_party.move_to = target_city.id
-	third_party.move_progress = 1.0
-	var contested_siege := gs.new_battle(Battle.Kind.SIEGE)
-	contested_siege.city = target_city
-	contested_siege.edge = gs.edge_of(target_city.id, source_city.id)
-	contested_siege.side_b_defends_city = true
-	contested_siege.side_a.append(besieger)
-	contested_siege.side_b.append(defender)
-	gs.armies.append_array([besieger, defender, third_party])
-	sim._start_or_join_siege(third_party, target_city, contested_siege.edge)
-	_check(third_party.state == Army.State.RETREATING
-		and third_party.move_from == target_city.id
-		and third_party.move_to == source_city.id
-		and _approx(third_party.move_progress, 0.0),
-		"第三方抵达围城后应从目标城连续撤退；state=%d from=%d to=%d progress=%.3f"
-			% [third_party.state, third_party.move_from, third_party.move_to, third_party.move_progress])
-
-	# 重开游戏复用 Renderer 时必须丢弃旧世界位置快照，防止相同 army id 跨世界飞行。
-	var strategic_map := StrategicMap3D.new()
-	strategic_map.state = gs
-	strategic_map.sim = sim
-	strategic_map._army_instances_initialized = true
-	strategic_map._last_army_instances_day = gs.day - 1
-	sim._runtime_day_in_progress = true
-	_check(
-		not strategic_map._should_update_army_instances(),
-		"异步日结算未提交时 3D 军队实例不得读取并刷新部分状态"
-	)
-	sim._runtime_day_in_progress = false
-	_check(
-		strategic_map._should_update_army_instances(),
-		"异步日结算提交后 3D 军队实例必须刷新到新日期"
-	)
-	var renderer := MapRenderer.new()
-	renderer._prev_pos = {0: Vector2(7.5, 7.5)}
-	renderer._curr_pos = {0: Vector2(7.5, 7.5)}
-	renderer._last_day = 99
-	renderer.setup(gs, sim)
-	_check(renderer._prev_pos.is_empty() and renderer._curr_pos.is_empty() and renderer._last_day == -1,
-		"Renderer.setup 必须清空旧世界插值快照")
-	sim.seconds_per_day = 1.0
-	sim._time_acc = 0.2
-	sim._runtime_day_in_progress = true
-	sim.paused = false
-	sim._process(0.5)
-	_check(
-		is_equal_approx(sim._time_acc, 0.7),
-		"异步日计算期间应累计未超限的时间，保持普通日设定倍速"
-	)
-	sim._process(0.5)
-	_check(
-		is_equal_approx(sim._time_acc, 0.9),
-		"异步日的时间债务应封顶，提交后至少留出输入与绘制时间"
-	)
-	renderer._last_day = gs.day - 2
-	renderer._curr_pos = {999: Vector2(0.25, 0.5)}
-	var presentation_anchor := Vector2(0.31, 0.47)
-	renderer._presented_pos[third_party.id] = presentation_anchor
-	renderer._sync_snapshots()
-	_check(
-		renderer._last_day == gs.day - 2
-		and renderer._curr_pos.has(999),
-		"异步日结算未完成时 Renderer 不得提前抓取未提交的位置"
-	)
-	sim._runtime_day_in_progress = false
-	sim.runtime_day_committed.emit(gs.day)
-	_check(
-		renderer._last_day == gs.day
-		and not renderer._curr_pos.has(999),
-		"提交信号必须立即抓取逻辑位置，不得因跨帧追赶跳过中间快照"
-	)
-	_check(
-		renderer._prev_pos.get(
-			third_party.id,
-			Vector2.ZERO
-		).is_equal_approx(presentation_anchor),
-		"新表现段必须从上一帧实际位置开始"
-	)
-	_check(
-		renderer._army_position(third_party).is_equal_approx(
-			renderer._grid_to_pixel(presentation_anchor)
-		),
-		"提交后的第一帧必须保持 C0 位置连续"
-	)
-	# 时间基线性插值：军队在 _tick_duration 内按真实经过时间从 _prev_pos 匀速
-	# （smoothstep 缓动）滑向 _curr_pos，与该 tick 计算跨了几帧无关。
-	var interp_prev := Vector2(0.31, 0.47)
-	var follow_target := Vector2(0.71, 0.47)
-	renderer._prev_pos = {third_party.id: interp_prev}
-	renderer._curr_pos = {third_party.id: follow_target}
-	renderer._tick_duration = 0.25
-	renderer._tick_elapsed = 0.0
-	sim.paused = false
-	gs.winner = -1
-	_check(
-		renderer._army_position(third_party).is_equal_approx(
-			renderer._grid_to_pixel(interp_prev)
-		),
-		"tick 起点（t=0）必须停在上一 tick 位置，保证 C0 连续"
-	)
-	# 推进半个 tick 时长：t=0.5，smoothstep(0.5)=0.5，恰好中点。
-	renderer._advance_tick_interpolation(0.125)
-	var halfway := renderer._army_position(third_party)
-	_check(
-		halfway.is_equal_approx(
-			renderer._grid_to_pixel(interp_prev.lerp(follow_target, 0.5))
-		),
-		"半个 tick 时长后应位于两端中点（smoothstep 对称）"
-	)
-	# 推进超过整个 tick 时长：t 被 clamp 到 1，停在目标，永不越过。
-	renderer._advance_tick_interpolation(1.0)
-	var arrived := renderer._army_position(third_party)
-	_check(
-		arrived.is_equal_approx(renderer._grid_to_pixel(follow_target)),
-		"超过一个 tick 时长后必须精确停在目标位置，永不越过"
-	)
-	strategic_map.free()
-	renderer.free()
-	sim.free()
-
-# ------------------------------------------------------------------ 29a. AI 资源缓存
 
 func _test_stable_force_resource_cache_filter() -> void:
 	print("[29a] AI 资源缓存：只复用快照后仍稳定的索引，动态报告必须重算")
@@ -7490,7 +3876,7 @@ func _test_war_preparation_cancel_cooldown() -> void:
 	print("[32a2] 备战冷却：取消备战后冷却期内不得重开，冷却期满后恢复；集结超时尽力而战")
 	# 用可复现的 AI 世界：推进到有备战意愿的时代，找出一个「本可发起 PREPARE_WAR」的国家，
 	# 给它盖上取消冷却戳后，同一评估里它必须不再出现 PREPARE_WAR；冷却期满后门控解除。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_world(12345, 12)
 	gs.day = DiplomacyAI.WAR_FATIGUE_REFERENCE_DAYS * 5 / 2
 	var baseline: Array[Dictionary] = []
@@ -7536,7 +3922,7 @@ func _test_war_preparation_cancel_cooldown() -> void:
 
 func _test_war_preparation_route_block_grace() -> void:
 	print("[32a3] 备战稳定性：断路自动换薄弱目标；全线封闭与边境屯兵均不得取消")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32041)
 	# All fallback states belong to one business region; this fixture tests roads.
 	gs.region_ids.fill(0)
@@ -7654,7 +4040,7 @@ func _test_war_preparation_route_block_grace() -> void:
 
 func _test_alliance_war_coalitions() -> void:
 	print("[32b] 联盟战争：整体宣战、战时入盟、集团议和与分国军事AI")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32021)
 	for nation_a in range(gs.nations.size()):
 		for nation_b in range(nation_a + 1, gs.nations.size()):
@@ -7842,7 +4228,7 @@ func _test_alliance_war_coalitions() -> void:
 	invalid_sim.free()
 
 	# 最终统计必须读取每城最后一条 operation，而不是 collector 中途命中数。
-	var statistics_state := GameState.new()
+	var statistics_state := preload("res://tests/support/grid_world.gd").new()
 	statistics_state.generate_grid_world(32028)
 	statistics_state.armies.clear()
 	statistics_state.battles.clear()
@@ -7925,7 +4311,7 @@ func _test_alliance_war_coalitions() -> void:
 
 	# 嵌套叛乱同时镇压必须把所有 rebel 直接解析到最终母国，不能让中间
 	# rebel 在 finalizer 阶段通过吞并其子叛军重新获得军队或资源。
-	var nested_state := GameState.new()
+	var nested_state := preload("res://tests/support/grid_world.gd").new()
 	nested_state.generate_grid_world(32030)
 	nested_state.armies.clear()
 	nested_state.battles.clear()
@@ -8016,7 +4402,7 @@ func _test_alliance_war_coalitions() -> void:
 
 	# 地方叛乱的 parent/rebel 即使不是本次议和代表，也必须随所属集团
 	# 一并结算；否则 relation 已和平而 rebellion 仍 active，会立刻破坏结构。
-	var rebellion_peace_state := GameState.new()
+	var rebellion_peace_state := preload("res://tests/support/grid_world.gd").new()
 	rebellion_peace_state.generate_grid_world(32024)
 	rebellion_peace_state.armies.clear()
 	rebellion_peace_state.battles.clear()
@@ -8082,7 +4468,7 @@ func _test_alliance_war_coalitions() -> void:
 	)
 	rebellion_peace_sim.free()
 
-	var join_state := GameState.new()
+	var join_state := preload("res://tests/support/grid_world.gd").new()
 	join_state.generate_grid_world(32022)
 	for join_a in range(join_state.nations.size()):
 		for join_b in range(join_a + 1, join_state.nations.size()):
@@ -8130,7 +4516,7 @@ func _test_alliance_war_coalitions() -> void:
 # ------------------------------------------------------------------ 32c. 宗藩数据模型不变量（增量 A）
 
 func _test_resource_cache_refreshes_after_new_nation() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(260920, 12)
 	var simulation := Simulation.new()
 	simulation.setup(state)
@@ -8168,7 +4554,7 @@ func _test_resource_cache_refreshes_after_new_nation() -> void:
 
 func _test_suzerainty_invariants() -> void:
 	print("[32c] 宗藩：分封守恒、对外关系继承、共同体一体化与结构不变量")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32031)
 	# 归零到全中立，再布置：0 与 1 交战、0 与 3 结盟，第三方 2 保持中立。
 	for a in range(gs.nations.size()):
@@ -8307,7 +4693,7 @@ func _test_suzerainty_invariants() -> void:
 		"分封赐军后战团结构不变量必须成立"
 	)
 	# 宗主 MAIN 战团不随分封转隶。
-	var group_state := GameState.new()
+	var group_state := preload("res://tests/support/grid_world.gd").new()
 	group_state.generate_grid_world(32032)
 	var group_overlord := 0
 	var group_region := _enfeoffable_region(group_state, group_overlord)
@@ -8328,7 +4714,7 @@ func _test_suzerainty_invariants() -> void:
 	# 和平割地可能只确认州治，使旧藩仍实控并法理持有属府、却失去最后一座
 	# 法理州治。领土事务必须在同一提交中解除该宗藩边，不能把坏状态留到
 	# 下一次分封才由结构断言发现。
-	var centerless_state := GameState.new()
+	var centerless_state := preload("res://tests/support/grid_world.gd").new()
 	centerless_state.generate_grid_world(32034)
 	var centerless_region := _enfeoffable_region(centerless_state, 0, 2)
 	FamilyFixture.ensure_candidates(centerless_state, 0)
@@ -8376,7 +4762,7 @@ func _test_suzerainty_invariants() -> void:
 	)
 
 	# 宗主所有既有主战军保持原归属，藩王从零建军。
-	var transfer_state := GameState.new()
+	var transfer_state := preload("res://tests/support/grid_world.gd").new()
 	transfer_state.generate_grid_world(32033)
 	var transfer_overlord := 0
 	var transfer_region := _enfeoffable_region(
@@ -8457,7 +4843,7 @@ func _test_suzerainty_invariants() -> void:
 
 func _test_vassal_tribute() -> void:
 	print("[32d] 宗藩：贡赋按当月税收比例上缴、全体系守恒、逐级支持多级")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32041)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -8620,7 +5006,7 @@ func _test_vassal_tribute() -> void:
 	)
 
 	# 端到端：完整推进一个月，藩王必有正税收并向宗主净转移金钱。
-	var e2e := GameState.new()
+	var e2e := preload("res://tests/support/grid_world.gd").new()
 	e2e.generate_grid_world(32042)
 	for a in range(e2e.nations.size()):
 		for b in range(a + 1, e2e.nations.size()):
@@ -8646,7 +5032,7 @@ func _test_vassal_tribute() -> void:
 
 	# 长期财政压力：藩王月亏、宗主靠贡赋恰好覆盖军费且国库始终为 0。
 	# 关闭新增人力，隔离粮食充足且现金不足时不发生财政裁军的规则。
-	var crisis := GameState.new()
+	var crisis := preload("res://tests/support/grid_world.gd").new()
 	crisis.generate_grid_world(32043)
 	crisis.armies.clear()
 	crisis.battles.clear()
@@ -8894,7 +5280,7 @@ func _test_enfeoff_ai() -> void:
 	print("[32e] 宗藩：区域粮食/财政收益、封地道路连续性、AI 分封触发与门控")
 	# 1. 静态边境军移除后，旧防务负担字段恒为零；财政反事实只比较
 	# 治理增产后的预计贡赋与当前直辖收入。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32051)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -8956,7 +5342,7 @@ func _test_enfeoff_ai() -> void:
 			% [int(burden["required_defense_troops"]), float(burden["burden_ratio"])]
 	)
 	# 内陆州治仍有基础守军成本，但行政半径内不产生距离附加粮耗。
-	var inland_gs := GameState.new()
+	var inland_gs := preload("res://tests/support/grid_world.gd").new()
 	inland_gs.generate_grid_world(32051)
 	# 全国和平且同属一主的语境下，任取一座四邻皆本国的内陆城，防务需求必为 0。
 	var inland_region: Array[int] = []
@@ -8982,7 +5368,7 @@ func _test_enfeoff_ai() -> void:
 		)
 
 	# 2. _grow_enfeoff_region 道路连续性：返回区域必须道路连通且全属本国非首都。
-	var grow_state := GameState.new()
+	var grow_state := preload("res://tests/support/grid_world.gd").new()
 	grow_state.generate_grid_world(32052)
 	var grown := DiplomacyAI._grow_enfeoff_region(grow_state, 0)
 	var continuity_ok := true
@@ -9008,7 +5394,7 @@ func _test_enfeoff_ai() -> void:
 	_check(continuity_ok, "生成的候选封地必须道路连续且全属本国非首都城")
 
 	# 3. AI 门控与触发：战时不分封（新规则）；和平时若有高负担远边疆区则可触发。
-	var ai_state := GameState.new()
+	var ai_state := preload("res://tests/support/grid_world.gd").new()
 	ai_state.generate_grid_world(32053)
 	for a in range(ai_state.nations.size()):
 		for b in range(a + 1, ai_state.nations.size()):
@@ -9063,7 +5449,7 @@ func _test_enfeoff_ai() -> void:
 
 	# 4. 财政路径独立触发：把候选区粮产抬高到低负担、直辖金产压低。
 	# 分封不转移野战军，因此单靠军费不得虚构正收益。
-	var finance_state := GameState.new()
+	var finance_state := preload("res://tests/support/grid_world.gd").new()
 	finance_state.generate_grid_world(32054)
 	for a in range(finance_state.nations.size()):
 		for b in range(a + 1, finance_state.nations.size()):
@@ -9122,7 +5508,7 @@ func _test_enfeoff_ai() -> void:
 
 	# 5. 治理压力路径：旧双收益否决已被治理压力规则补全。若候选区虽财政为负、
 	# 粮食负担低，但存在超行政半径且低忠的远地压力，则仍可因治理收益而分封。
-	var loss_state := GameState.new()
+	var loss_state := preload("res://tests/support/grid_world.gd").new()
 	loss_state.generate_grid_world(32055)
 	for a in range(loss_state.nations.size()):
 		for b in range(a + 1, loss_state.nations.size()):
@@ -9203,7 +5589,7 @@ func _test_enfeoff_ai() -> void:
 	)
 
 	# 5b. 真正的负面对照：财政为负、粮食负担低且治理压力也低于阈值时，AI 不得分封。
-	var shallow_state := GameState.new()
+	var shallow_state := preload("res://tests/support/grid_world.gd").new()
 	for nation_id in range(3):
 		var shallow_nation := Nation.new()
 		shallow_nation.id = nation_id
@@ -9369,7 +5755,7 @@ func _test_enfeoff_ai() -> void:
 func _test_suzerainty_lifecycle() -> void:
 	print("[32f] 宗藩：退盟不得解除宗藩纽带、死亡国悬空记录清理、多级上移")
 	# 1. 退盟保护：AI 不得对宗主-藩王对产出 LEAVE_ALLIANCE 动作。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32061)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -9389,7 +5775,7 @@ func _test_suzerainty_lifecycle() -> void:
 	_check(not breaks_bond, "普通退盟不得解除宗主-藩王的 ALLIED 纽带")
 
 	# 2. 死亡藩王清理：藩王失去全部城市后其宗藩记录必须被移除。
-	var dv := GameState.new()
+	var dv := preload("res://tests/support/grid_world.gd").new()
 	dv.generate_grid_world(32062)
 	for a in range(dv.nations.size()):
 		for b in range(a + 1, dv.nations.size()):
@@ -9414,7 +5800,7 @@ func _test_suzerainty_lifecycle() -> void:
 	)
 
 	# 3. 死亡宗主：多级链中，宗主被灭后其藩王上移到祖父（保持链连续）。
-	var mv := GameState.new()
+	var mv := preload("res://tests/support/grid_world.gd").new()
 	mv.generate_grid_world(32063)
 	for a in range(mv.nations.size()):
 		for b in range(a + 1, mv.nations.size()):
@@ -9455,7 +5841,7 @@ func _test_suzerainty_lifecycle() -> void:
 	)
 
 	# 4. 无祖父的和平藩王独立后必须把零库存中继首都升格为自身粮仓。
-	var independent := GameState.new()
+	var independent := preload("res://tests/support/grid_world.gd").new()
 	independent.generate_grid_world(32064)
 	for a in range(independent.nations.size()):
 		for b in range(a + 1, independent.nations.size()):
@@ -9516,7 +5902,7 @@ func _test_suzerainty_lifecycle() -> void:
 
 func _test_civil_war_relations() -> void:
 	print("[32g] 削藩内战：内战态宗藩WAR、共同体解散、状态机与不变量")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32071)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -9588,7 +5974,7 @@ func _test_civil_war_relations() -> void:
 	civil_sim.free()
 
 	# 内战中宗主死亡：藩王应脱离（无祖父则独立），内战标记清除。
-	var dg := GameState.new()
+	var dg := preload("res://tests/support/grid_world.gd").new()
 	dg.generate_grid_world(32072)
 	for a in range(dg.nations.size()):
 		for b in range(a + 1, dg.nations.size()):
@@ -9620,7 +6006,7 @@ func _test_civil_war_relations() -> void:
 	# 构造宗主 0 与内战藩王 1 分属对立联盟集团：0 ALLIED 2、1 ALLIED 3、2↔3 外部 WAR。
 	# bloc(0)={0,2} 与 bloc(1)={1,3} 因 2↔3 议和时会遍历到内战对 0↔1（WAR），
 	# 若在此停战会抹掉 WAR 却留 civil_war 标记 → 违反不变量第2条，潜伏到后续撤藩才爆。
-	var cw := GameState.new()
+	var cw := preload("res://tests/support/grid_world.gd").new()
 	cw.generate_grid_world(32073)
 	for a in range(cw.nations.size()):
 		for b in range(a + 1, cw.nations.size()):
@@ -9754,7 +6140,7 @@ func _test_civil_war_relations() -> void:
 func _test_centralization_decision() -> void:
 	print("[32h] 削藩：财政收益主判据、高威胁例外、反抗比、和平撤藩守恒")
 	# 构造宗主 0 + 藩王：把藩王大部分军队清掉，制造宗主压倒性优势→藩王接受。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32081)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -9881,7 +6267,7 @@ func _test_centralization_decision() -> void:
 
 	# 征服者藩王面对削藩必定反抗；执行入口不得相信缓存动作中的
 	# resist=false，并按普通削藩火星兵数量的两倍动员。
-	var conqueror_state := GameState.new()
+	var conqueror_state := preload("res://tests/support/grid_world.gd").new()
 	conqueror_state.generate_grid_world(32084)
 	for a in range(conqueror_state.nations.size()):
 		for b in range(a + 1, conqueror_state.nations.size()):
@@ -9950,7 +6336,7 @@ func _test_centralization_decision() -> void:
 	conqueror_sim.free()
 
 	# 财政亏损且威胁不高时不得撤藩，防止移除军力优势门槛后周期性无条件削藩。
-	var loss_state := GameState.new()
+	var loss_state := preload("res://tests/support/grid_world.gd").new()
 	loss_state.generate_grid_world(32083)
 	for a in range(loss_state.nations.size()):
 		for b in range(a + 1, loss_state.nations.size()):
@@ -10007,7 +6393,7 @@ func _test_centralization_decision() -> void:
 	)
 
 	# 高威胁例外：大藩王即使撤藩财政亏损、军力强于宗主，仍应触发削藩并反抗。
-	var rs := GameState.new()
+	var rs := preload("res://tests/support/grid_world.gd").new()
 	rs.generate_grid_world(32082)
 	for a in range(rs.nations.size()):
 		for b in range(a + 1, rs.nations.size()):
@@ -10096,7 +6482,7 @@ func _test_centralization_decision() -> void:
 func _test_civil_war_annexation() -> void:
 	print("[32i] 削藩内战：宗主占藩王首都吞并、藩王占宗主首都继承体系")
 	# 情形一：宗主赢——占藩王首都→吞并藩王全境。
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32091)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -10257,7 +6643,7 @@ func _test_civil_war_annexation() -> void:
 	sim.free()
 
 	# 兼并原语必须分别迁移实控与法理，并终止兼并后失去敌对性的战斗。
-	var atomic := GameState.new()
+	var atomic := preload("res://tests/support/grid_world.gd").new()
 	atomic.generate_grid_world(32093)
 	for a in range(atomic.nations.size()):
 		for b in range(a + 1, atomic.nations.size()):
@@ -10322,7 +6708,7 @@ func _test_civil_war_annexation() -> void:
 	)
 
 	# 情形二：藩王赢——占宗主首都→夺取宗主全境，其余藩王转投，胜者成新顶点。
-	var vs := GameState.new()
+	var vs := preload("res://tests/support/grid_world.gd").new()
 	vs.generate_grid_world(32092)
 	for a in range(vs.nations.size()):
 		for b in range(a + 1, vs.nations.size()):
@@ -10431,7 +6817,7 @@ func _test_civil_war_annexation() -> void:
 
 func _test_resource_capacity_limits() -> void:
 	print("[32i2] 资源容量：按配置储备周期计算，宗主递归计入藩属城市")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(41000)
 	var own_food_output := 0
 	var own_manpower_output := 0
@@ -10511,7 +6897,7 @@ func _test_resource_capacity_limits() -> void:
 func _test_shared_granary_and_relay_supply() -> void:
 	print("[32i2] 共享粮仓：分封守恒归根池、藩王首都零库存中继降损耗、内战切分守恒+火星兵")
 	# --- 1. 分封：粮食不划走、全归宗主根池；藩王首都为零库存中继节点 ---
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(41001)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -10583,7 +6969,7 @@ func _test_shared_granary_and_relay_supply() -> void:
 	)
 
 	# --- 2. 削藩内战：反叛方按领土粮食产能占比切分共享库存（守恒）、并刷火星兵 ---
-	var cw := GameState.new()
+	var cw := preload("res://tests/support/grid_world.gd").new()
 	cw.generate_grid_world(41002)
 	for a in range(cw.nations.size()):
 		for b in range(a + 1, cw.nations.size()):
@@ -10635,7 +7021,7 @@ func _test_shared_granary_and_relay_supply() -> void:
 
 func _test_vassal_governance_output_bonus() -> void:
 	print("[32i3] 藩王加成：藩王疆域城市钱粮产出×1.5、owner 派生自动生效、经济结算与AI估值同源")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(41010)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -10696,7 +7082,7 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 	# --- 子场景 A：合法连通的藩王领土不得被误清理（无假阳性）---
 	# 链 0-1-2-3-4：宗主 0 首都=城0、直辖 城0/城1；藩王 1 领 城2/城3/城4，经 城1-城2 连回宗主。
 	# 此时藩王领土经宗主城1 与体系首都连通（体系视为整体），不是飞地 → 每日清理必须不动它。
-	var sa := GameState.new()
+	var sa := preload("res://tests/support/grid_world.gd").new()
 	sa.generate_grid_world(51001)
 	sa.armies.clear()
 	sa.battles.clear()
@@ -10741,7 +7127,7 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 
 	# --- 子场景 B：被敌方体系包围也不能自动易手；实际攻占才产生临时占领。---
 	# 链 0-1-2-3-4，体系 0→1 的藩王领城4所在完整州；城2/3属敌体系。
-	var sb := GameState.new()
+	var sb := preload("res://tests/support/grid_world.gd").new()
 	sb.generate_grid_world(51002)
 	sb.armies.clear()
 	sb.battles.clear()
@@ -10882,7 +7268,7 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 
 func _test_external_territory_sovereignty() -> void:
 	print("[32i4b] 对外领土：藩王与盟友出发地决定战果，法理收复仍归原藩王")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(51003)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -11047,7 +7433,7 @@ func _test_external_territory_sovereignty() -> void:
 
 	# 宗主0/藩王1/敌2：藩王攻城时战果实控与 sponsor 都归藩王。
 	# 藩王随后灭亡时，正常的死亡宗藩继承再把其法理交给宗主。
-	var departed_state := GameState.new()
+	var departed_state := preload("res://tests/support/grid_world.gd").new()
 	departed_state.generate_grid_world(51005)
 	departed_state.armies.clear()
 	departed_state.battles.clear()
@@ -11148,7 +7534,7 @@ func _test_external_territory_sovereignty() -> void:
 
 func _test_vassal_local_main_command() -> void:
 	print("[32i5] 藩王军制：分封不赐军、复用普通扩军与战役AI、高凝聚力时外交归宗主")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(52001)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -11301,7 +7687,7 @@ func _test_vassal_local_main_command() -> void:
 	)
 
 	# 攻势外交门控：藩王与敌国交战也不主动宣战（进攻性外交由宗主代理）。
-	var war_state := GameState.new()
+	var war_state := preload("res://tests/support/grid_world.gd").new()
 	war_state.generate_grid_world(52002)
 	for a in range(war_state.nations.size()):
 		for b in range(a + 1, war_state.nations.size()):
@@ -11323,7 +7709,7 @@ func _test_vassal_local_main_command() -> void:
 
 func _test_stranded_hostile_army_eviction() -> void:
 	print("[32i6] 敌城滞留驱离：定居在无通行权敌城的己方军队须每日兜底撤离，杜绝 IDLE 死锁")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(53001)
 	gs.armies.clear()
 	gs.battles.clear()
@@ -11380,7 +7766,7 @@ func _test_stranded_hostile_army_eviction() -> void:
 
 func _test_vassal_wartime_support_and_capital() -> void:
 	print("[32j] 分封战争加成：前线藩王自主参战、后方藩王提贡赋、藩王首都失陷不投降割地")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32095)
 	for a in range(gs.nations.size()):
 		for b in range(a + 1, gs.nations.size()):
@@ -11495,7 +7881,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 	sim.free()
 
 	# 藩王首都失陷不触发投降割地：敌国占领前线藩王首都，只丢该城，不整国投降。
-	var cap_state := GameState.new()
+	var cap_state := preload("res://tests/support/grid_world.gd").new()
 	cap_state.generate_grid_world(32096)
 	for a in range(cap_state.nations.size()):
 		for b in range(a + 1, cap_state.nations.size()):
@@ -11546,7 +7932,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 
 	# 藩王全境失守不能触发整个宗藩体系集团议和。藩王只退出自己的
 	# 战争关系，宗主继续对外作战，最终议和权仍在宗主。
-	var eliminated_state := GameState.new()
+	var eliminated_state := preload("res://tests/support/grid_world.gd").new()
 	eliminated_state.generate_grid_world(32097)
 	for a in range(eliminated_state.nations.size()):
 		for b in range(a + 1, eliminated_state.nations.size()):
@@ -11640,7 +8026,7 @@ func _test_vassal_wartime_support_and_capital() -> void:
 
 func _test_sustainable_force_capacity() -> void:
 	print("[34a] 可持续军力：和平按国家资源容量扩军，且不读取州战役需求")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(34000)
 	gs.uses_heightmap = true
 	for nation in gs.nations:
@@ -11677,7 +8063,7 @@ func _test_sustainable_force_capacity() -> void:
 		"目标军力粮食报告必须按目标需求预留六个月口粮：food=%s"
 			% [str(base_target_food)]
 	)
-	var shared := GameState.new()
+	var shared := preload("res://tests/support/grid_world.gd").new()
 	shared.generate_grid_world(34002)
 	var shared_region := _enfeoffable_region(shared, 0, 3)
 	FamilyFixture.ensure_candidates(shared, 0)
@@ -11856,7 +8242,7 @@ func _test_sustainable_force_capacity() -> void:
 
 func _test_invalid_loyalty_snapshot_does_not_corrupt_city() -> void:
 	print("[34b] 忠诚月结：灭亡国家残留节点不写入无效政治目标")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(34001)
 	var city := gs.cities_of(0)[0]
 	var target_before := city.loyalty_target_nation
@@ -11879,7 +8265,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 			and not Simulation._force_structure_review_due(7, 8),
 		"军制评估必须按国家错峰，每180天触发一次"
 	)
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(34001)
 	# 本用例直接对比本国产粮动员能力；贸易不再自动购买粮食或人力。
 	for nation in gs.nations:
@@ -12111,7 +8497,7 @@ func _test_resource_hubs_and_food_mobilization() -> void:
 
 func _test_small_nation_survival_and_emergency_recruitment() -> void:
 	print("[34b] 小国生存：最后城市集中守备、负收益应急征兵与库存硬边界")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(34002)
 	gs.uses_heightmap = true
 	gs.armies.clear()
@@ -12838,22 +9224,22 @@ func _test_structured_battle_log() -> void:
 ## [36b] 首都防御加成：城市作为首都时城防加成翻倍（真源 + 实战 + AI 估值三处一致）。
 func _test_equivariant_ordering() -> void:
 	print("[37] 镜像等变排序：城市镜像 + 军队 ID 置换不变")
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(12345)
 	var city_order_ok := true
-	for row_a in range(GameState.GRID / 2):
-		for col_a in range(GameState.GRID / 2):
-			var a := row_a * GameState.GRID + col_a
+	for row_a in range(preload("res://tests/support/grid_world.gd").GRID / 2):
+		for col_a in range(preload("res://tests/support/grid_world.gd").GRID / 2):
+			var a := row_a * preload("res://tests/support/grid_world.gd").GRID + col_a
 			var mirror_a := (
-				row_a * GameState.GRID
-				+ GameState.GRID - 1 - col_a
+				row_a * preload("res://tests/support/grid_world.gd").GRID
+				+ preload("res://tests/support/grid_world.gd").GRID - 1 - col_a
 			)
-			for row_b in range(GameState.GRID / 2):
-				for col_b in range(GameState.GRID / 2):
-					var b := row_b * GameState.GRID + col_b
+			for row_b in range(preload("res://tests/support/grid_world.gd").GRID / 2):
+				for col_b in range(preload("res://tests/support/grid_world.gd").GRID / 2):
+					var b := row_b * preload("res://tests/support/grid_world.gd").GRID + col_b
 					var mirror_b := (
-						row_b * GameState.GRID
-						+ GameState.GRID - 1 - col_b
+						row_b * preload("res://tests/support/grid_world.gd").GRID
+						+ preload("res://tests/support/grid_world.gd").GRID - 1 - col_b
 					)
 					if (
 						EquivariantOrder.city_id_less(
@@ -13001,7 +9387,7 @@ func _test_remaining_combat_risk_closures() -> void:
 			and not rout_battle.finished,
 		"低士气军应与健康军共享组织度，不得独立溃退"
 	)
-	var promotion_state := GameState.new()
+	var promotion_state := preload("res://tests/support/grid_world.gd").new()
 	promotion_state.generate_grid_world(38042)
 	promotion_state.armies.clear()
 	var broken_challenger := _make_army(
@@ -13092,7 +9478,7 @@ func _test_remaining_combat_risk_closures() -> void:
 	)
 
 	# (e) 军粮每天重算：30 天总耗保持月口径；同月兵力变化和库存不足立即反映。
-	var supply_state := GameState.new()
+	var supply_state := preload("res://tests/support/grid_world.gd").new()
 	supply_state.generate_grid_world(38038)
 	var supply_sim := Simulation.new()
 	supply_sim.setup(supply_state)
@@ -13130,7 +9516,7 @@ func _test_remaining_combat_risk_closures() -> void:
 
 	# (f) 同日增援资格必须按冻结战线批量判定；后方第一军加入不能把战线
 	# 推回并让更远的第二军级联加入。
-	var join_state := GameState.new()
+	var join_state := preload("res://tests/support/grid_world.gd").new()
 	join_state.generate_grid_world(38039)
 	join_state.armies.clear()
 	join_state.battles.clear()
@@ -13180,7 +9566,7 @@ func _test_remaining_combat_risk_closures() -> void:
 	)
 	join_sim.free()
 
-	var initial_join_state := GameState.new()
+	var initial_join_state := preload("res://tests/support/grid_world.gd").new()
 	initial_join_state.generate_grid_world(38041)
 	initial_join_state.armies.clear()
 	initial_join_state.battles.clear()
@@ -13229,7 +9615,7 @@ func _test_remaining_combat_risk_closures() -> void:
 	initial_join_sim.free()
 
 func _make_atomic_coalition_peace_fixture(seed: int) -> Dictionary:
-	var gs := GameState.new()
+	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(seed)
 	gs.armies.clear()
 	gs.battles.clear()

@@ -157,7 +157,7 @@ func _test_cohesion_recovery_resets_timer() -> void:
 
 
 func _fixture() -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(95001)
 	var subject_a := -1
 	var subject_b := -1

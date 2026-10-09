@@ -324,7 +324,7 @@ func _test_break_in_requires_available_force() -> void:
 
 
 func _state() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	for id in range(2):
 		var nation := Nation.new()
 		nation.id = id

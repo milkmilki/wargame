@@ -7,7 +7,7 @@ func check(ok: bool, label: String) -> void:
 	if not ok:
 		failures.append(label)
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(24680)
 	for a in state.nations:
 		for b in state.nations:

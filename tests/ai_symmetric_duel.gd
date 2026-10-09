@@ -175,7 +175,7 @@ func _configure_duel_mode(simulation: Simulation, mode: String) -> void:
 
 
 func _build_symmetric_world() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(880088)
 	state.battles.clear()
 	state.nations.resize(2)
@@ -193,8 +193,8 @@ func _build_symmetric_world() -> GameState:
 	for city in state.cities:
 		var row := city.coord.y
 		var col := city.coord.x
-		var mirror_col := mini(col, GameState.GRID - 1 - col)
-		city.owner_nation = LEFT_NATION if col < GameState.GRID / 2 else RIGHT_NATION
+		var mirror_col := mini(col, preload("res://tests/support/grid_world.gd").GRID - 1 - col)
+		city.owner_nation = LEFT_NATION if col < preload("res://tests/support/grid_world.gd").GRID / 2 else RIGHT_NATION
 		state.recognized_city_owners[city.id] = city.owner_nation
 		city.manpower_per_month = 7 + (row * 7 + mirror_col * 11) % 8
 		city.gold_per_month = 6 + (row * 2 + mirror_col * 3) % 10
@@ -212,16 +212,16 @@ func _build_symmetric_world() -> GameState:
 			* GameState.INITIAL_MANPOWER_RESERVE_MONTHS
 		)
 
-	var left_capital := 3 * GameState.GRID + 1
-	var right_capital := 3 * GameState.GRID + 6
+	var left_capital := 3 * preload("res://tests/support/grid_world.gd").GRID + 1
+	var right_capital := 3 * preload("res://tests/support/grid_world.gd").GRID + 6
 	_set_capital(state, LEFT_NATION, left_capital, 16000)
 	_set_capital(state, RIGHT_NATION, right_capital, 16000)
 
 	for edge in state.edges:
 		var a := state.cities[edge.city_a].coord
 		var b := state.cities[edge.city_b].coord
-		var norm_a := mini(a.x, GameState.GRID - 1 - a.x)
-		var norm_b := mini(b.x, GameState.GRID - 1 - b.x)
+		var norm_a := mini(a.x, preload("res://tests/support/grid_world.gd").GRID - 1 - a.x)
+		var norm_b := mini(b.x, preload("res://tests/support/grid_world.gd").GRID - 1 - b.x)
 		var axis := 1 if a.y != b.y else 0
 		var signature := mini(a.y, b.y) * 17 + (norm_a + norm_b) * 13 + axis * 7
 		edge.distance = 1 + signature % 5
@@ -239,7 +239,7 @@ func _build_symmetric_world() -> GameState:
 	for city_id in range(state.cities.size()):
 		var city := state.cities[city_id]
 		var row := city.coord.y
-		var mirror_col := mini(city.coord.x, GameState.GRID - 1 - city.coord.x)
+		var mirror_col := mini(city.coord.x, preload("res://tests/support/grid_world.gd").GRID - 1 - city.coord.x)
 		var army := state.create_army(
 			city.owner_nation,
 			city_id,
@@ -281,7 +281,7 @@ func _build_symmetric_world() -> GameState:
 			var row := city.coord.y
 			var mirror_col := mini(
 				city.coord.x,
-				GameState.GRID - 1 - city.coord.x
+				preload("res://tests/support/grid_world.gd").GRID - 1 - city.coord.x
 			)
 			var army := state.create_army(
 				city.owner_nation,
@@ -309,10 +309,10 @@ func _validate_symmetry(state: GameState) -> bool:
 		!= state.nations[RIGHT_NATION].manpower_pool
 	):
 		return false
-	for row in range(GameState.GRID):
-		for col in range(GameState.GRID / 2):
-			var left_id := row * GameState.GRID + col
-			var right_id := row * GameState.GRID + (GameState.GRID - 1 - col)
+	for row in range(preload("res://tests/support/grid_world.gd").GRID):
+		for col in range(preload("res://tests/support/grid_world.gd").GRID / 2):
+			var left_id := row * preload("res://tests/support/grid_world.gd").GRID + col
+			var right_id := row * preload("res://tests/support/grid_world.gd").GRID + (preload("res://tests/support/grid_world.gd").GRID - 1 - col)
 			var left := state.cities[left_id]
 			var right := state.cities[right_id]
 			if (
@@ -388,7 +388,7 @@ func _validate_annual_food_surplus() -> bool:
 
 func _mirror_city_id(state: GameState, city_id: int) -> int:
 	var coord := state.cities[city_id].coord
-	return coord.y * GameState.GRID + (GameState.GRID - 1 - coord.x)
+	return coord.y * preload("res://tests/support/grid_world.gd").GRID + (preload("res://tests/support/grid_world.gd").GRID - 1 - coord.x)
 
 
 func _strict_mirror_mismatch(state: GameState) -> String:
@@ -429,9 +429,9 @@ func _strict_mirror_mismatch(state: GameState) -> String:
 		return "nation.campaign_objective left=%d right=%d" % [
 			left_objective, right_objective,
 		]
-	for row in range(GameState.GRID):
-		for col in range(GameState.GRID / 2):
-			var left_id := row * GameState.GRID + col
+	for row in range(preload("res://tests/support/grid_world.gd").GRID):
+		for col in range(preload("res://tests/support/grid_world.gd").GRID / 2):
+			var left_id := row * preload("res://tests/support/grid_world.gd").GRID + col
 			var right_id := _mirror_city_id(state, left_id)
 			var left := state.cities[left_id]
 			var right := state.cities[right_id]

@@ -15,7 +15,7 @@ func _init() -> void:
 	_check(rules.outcome_for_score(54.99, true) == rules.Outcome.REFUSE, "below threshold refuses")
 	_check(is_equal_approx(rules.score(4.0, 1.0, 1.0, 0.0, 0.0), rules.score(100000.0, 1.0, 1.0, 0.0, 0.0)), "military cap")
 	_check(rules.score(100000.0, 1.0, 0.0, 15.0, -5.0) < 55.0, "environment blocks universal surrender")
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94601)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
@@ -35,7 +35,7 @@ func _init() -> void:
 	attacker.id = 999
 	state.nations[0].war_preparation_army_ids = [999]
 	for city in state.cities:
-		city.coord.x = GameState.GRID - 1 - city.coord.x
+		city.coord.x = preload("res://tests/support/grid_world.gd").GRID - 1 - city.coord.x
 		city.map_position.x = 1.0 - city.map_position.x
 	_check(rules.evaluate(state, 0, 1) == original, "mirror and army id permutation leave score unchanged")
 	attacker.id = 100

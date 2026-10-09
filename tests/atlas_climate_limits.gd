@@ -44,4 +44,3 @@ func _initialize() -> void:
 		for x in range(24,29): warm_sum += warm.annual[y*size.x+x]; cool_sum += cool.annual[y*size.x+x]
 	check(warm_sum>0. and cool_sum<warm_sum*.5,"cold ocean has no rain-suppressing effect on adjacent subtropical land")
 	print("ATLAS_CLIMATE_LIMITS failures=",failures); quit(1 if failures else 0)
-

@@ -2,7 +2,7 @@
 
 独立入口 `res://atlas_preview.tscn`，分支 `feature/civ-atlas-godot`，基线 `9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464`。固定上游为 guaner-334/civ-atlas 的 `103afd3d998eac6750692a6813bf5aea03521448`。许可见 `assets/atlas/NOTICE.md`。
 
-默认完整执行 **GDScript 生成 → Godot 2D／Shader 绘制**，不需要 `.dbg`、Node、TypeScript 或浏览器。正式入口仍为 `main.tscn`，未改欧亚、中国场景及游戏模板，未接军事、贸易、补给或战斗。
+默认完整执行 **GDScript 生成 → Godot 2D／Shader 绘制**，不需要 `.dbg`、Node、TypeScript 或浏览器。正式入口现为 `atlas_military.tscn`，默认真实地球，已接入州府军事与补给。旧地图场景和生成管线已删除；此预览场景仍用于新地图的算法与画面对照。详见 `MILITARY_INTEGRATION.md`。
 
 ## 运行与操作
 

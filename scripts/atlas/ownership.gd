@@ -10,16 +10,16 @@ static func color(hue: float) -> Array:
 		result.append(int(floor(channel*255+.5)))
 	return result
 
-static func build(mesh: Dictionary,regions: Dictionary,cities: Array,target: int = 40) -> Dictionary:
+static func build(mesh: Dictionary,regions: Dictionary,cities: Array,target: int = 40,populated_only: bool = false) -> Dictionary:
 	var count: int = regions.count; var candidates: Array[int] = []; var present := {}
 	for city in cities:
 		var r := int(city.region)
 		if not present.has(r): present[r] = true; candidates.append(r)
 	for r in range(count):
-		if not present.has(r): candidates.append(r)
+		if not populated_only and not present.has(r): candidates.append(r)
 	var seats: Array[int] = []
 	if not candidates.is_empty(): seats.append(candidates[0])
-	while seats.size()<mini(target,count):
+	while seats.size()<mini(target,candidates.size()):
 		var best := -1; var score := -1.0
 		for r in candidates:
 			if seats.has(r): continue

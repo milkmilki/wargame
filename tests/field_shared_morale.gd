@@ -159,7 +159,7 @@ func _test_join_and_replay() -> void:
 	var arrival := _army(3, 10000, 2.0)
 	arrival.owner_nation = 0
 	var sim := Simulation.new()
-	sim.state = GameState.new()
+	sim.state = preload("res://tests/support/grid_world.gd").new()
 	sim.state.battles.append(battle)
 	sim._enter_battle(battle, arrival, 1)
 	sim._enter_battle(battle, arrival, 1)
@@ -196,7 +196,7 @@ func _test_join_and_replay() -> void:
 
 
 func _test_real_unified_retreat() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(74410)
 	state.armies.clear()
 	state.battles.clear()
@@ -245,7 +245,7 @@ func _test_real_unified_retreat() -> void:
 
 
 func _test_city_entry_shared_morale() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(74410)
 	state.armies.clear()
 	state.battles.clear()

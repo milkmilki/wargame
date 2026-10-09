@@ -6,7 +6,7 @@ const DAYS: int = 1080
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):

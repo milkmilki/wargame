@@ -3,7 +3,7 @@ extends SceneTree
 var valid := true
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62001)
 	state.armies.clear()
 	var sim := Simulation.new()

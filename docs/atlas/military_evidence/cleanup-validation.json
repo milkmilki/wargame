@@ -1,0 +1,258 @@
+{
+  "date": "2026-10-09",
+  "baseline": "91dafb85697b9f326770787fb60b0d078f5805a1",
+  "entry": "res://atlas_military.tscn",
+  "default_terrain": "earth",
+  "seed": 1,
+  "godot": "4.7.1-stable (official a13da4feb)",
+  "shared_suite": {
+    "passed": 505,
+    "failed": 0
+  },
+  "verified_tasks": [
+    {
+      "test": "project_compile",
+      "passed": true,
+      "sha256": "9d8fd9c74bba065c729f6fc9e5d65c113dcd4c98df205b81868fd415aacefe20",
+      "result_tail": "PROJECT_COMPILE failures=0"
+    },
+    {
+      "test": "test_suite",
+      "passed": true,
+      "sha256": "53c4d1933e336ddaeafc6ac9f68cc9110d3bb36f2978f5b7a980dfa2a29e4996",
+      "result_tail": "==== 结果: 505 通过, 0 失败 ===="
+    },
+    {
+      "test": "movement_capacity_index_equivalence",
+      "passed": true,
+      "sha256": "6cbcb9ee2e6427dbb597ed99f0626e5afddadc4068466bfa1dd532128cf12673",
+      "result_tail": "verdict=MILITARY_BINARY_ROAD_EQUIVALENT"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "passed": true,
+      "sha256": "fd6bb9d6390b4694b01e8e2046ffc08ce6b3d254f90b4a3ca415da9c7c8b143e",
+      "result_tail": "WAR_COUNT_AND_CONQUEROR_RESULT failures=0"
+    },
+    {
+      "test": "zhou_defection",
+      "passed": true,
+      "sha256": "d92b38d52f9c73e94ce876bd2f3cbf13b9efb5680c28c380f7193b90bbe180de",
+      "result_tail": "ZHOU_DEFECTION_OK checks=67"
+    },
+    {
+      "test": "field_manpower_requirements",
+      "passed": true,
+      "sha256": "c4ff92fda73a813163c2bc8fc969ad4f5f52c2b200f6fa986f3b56edbcebfb59",
+      "result_tail": "FIELD_MANPOWER_REQUIREMENTS checks=47 failures=0"
+    },
+    {
+      "test": "campaign_reinforcement_ownership",
+      "passed": true,
+      "sha256": "3e813af7ab596b85e74e7edbf87e7be67529c2e190fa590e2c1a8fcbc0c55170",
+      "result_tail": "CAMPAIGN_REINFORCEMENT_OWNERSHIP checks=35 failures=0"
+    },
+    {
+      "test": "chronicle_smoke",
+      "passed": true,
+      "sha256": "c44f8f7eff2ce99d6f3e4bc45023351e1f891113b3da99f952aee7f7e338be1c",
+      "result_tail": "CHRONICLE_SMOKE_OK"
+    },
+    {
+      "test": "political_history_test",
+      "passed": true,
+      "sha256": "515b8fe2d09bba39da781759f3f876e052db7f9f5ad55f88cc3cdc27fb764018",
+      "result_tail": "POLITICAL_HISTORY_TEST PASS"
+    },
+    {
+      "test": "regional_strategy",
+      "passed": true,
+      "sha256": "ee123b25d50dbadba93cb148f363d08766dbfa6152c2f5296981bd9b8caa9563",
+      "result_tail": "REGIONAL_STRATEGY_RESULT failures=0"
+    },
+    {
+      "test": "regional_access_recovery",
+      "passed": true,
+      "sha256": "9cdd5004753b2da8010da0cd2feec0f45cdfe6eb22726723edc57bfbea600f71",
+      "result_tail": "REGIONAL_ACCESS_RECOVERY_RESULT checks=31 failures=0"
+    },
+    {
+      "test": "family_tree_smoke",
+      "passed": true,
+      "sha256": "a1c4e983e9df7115f6f6af75d598e03bd5533c149278402d6eb0f508240542aa",
+      "result_tail": "FAMILY_TREE_SMOKE_OK"
+    },
+    {
+      "test": "royal_title_origin",
+      "passed": true,
+      "sha256": "852202df5c189197a3f1f3d5861e6a9674fcd9f8a7c884a2776b56e0452d82b8",
+      "result_tail": "ROYAL_TITLE_ORIGIN_RESULT checks=148 failures=0"
+    },
+    {
+      "test": "royal_title_generations",
+      "passed": true,
+      "sha256": "b57f018f11a29914ef4c1ed5086152806d86bbac6db6926e159fa65421040710",
+      "result_tail": "ROYAL_TITLE_GENERATIONS_RESULT checks=164 failures=0"
+    },
+    {
+      "test": "royal_title_lifecycle",
+      "passed": true,
+      "sha256": "4eb15f7a5e19b01f4143f1a19925c24553228cd5dc04e2cbf9e59d8967b94278",
+      "result_tail": "ROYAL_TITLE_LIFECYCLE_RESULT checks=121 failures=0"
+    },
+    {
+      "test": "succession_counterattack",
+      "passed": true,
+      "sha256": "676e03cecb62b3eda3f81687be82610537557d94cac280651fe90e45ac6799dc",
+      "result_tail": "SUCCESSION_COUNTERATTACK: 0 failures day=32 routed=false camp=false size=0 morale=0.068"
+    },
+    {
+      "test": "diplomatic_battle_lifecycle",
+      "passed": true,
+      "sha256": "204deb0645238c849c64412639d2e1067b70521bd5d8127de2e6b6b3af3cad54",
+      "result_tail": "DIPLOMATIC_BATTLE_RESULT checks=38 failures=0"
+    },
+    {
+      "test": "encirclement_index_equivalence",
+      "passed": true,
+      "sha256": "411f45ea65bab89047f56ed6f1c0d6a0fb78fc40776ffec29b371d4c8c429bdb",
+      "result_tail": "ENCIRCLEMENT_INDEX_EQUIVALENT checks=398"
+    },
+    {
+      "test": "diplomacy_objective_batch_cache",
+      "passed": true,
+      "sha256": "79c5a48b962580b6cd5160ad3ba285ae962e6e44028b9382efaad7296aeb114a",
+      "result_tail": "DIPLOMACY_OBJECTIVE_BATCH_CACHE_OK"
+    },
+    {
+      "test": "strategic_betweenness_preference",
+      "passed": true,
+      "sha256": "037097a8bb19f9462485e70d8e21b747d33d192083b5f3f477c93ea5ac1af6d5",
+      "result_tail": "STRATEGIC_BETWEENNESS_PREFERENCE_OK base=4.00 target=12"
+    },
+    {
+      "test": "war_diplomacy_runtime_equivalence",
+      "passed": true,
+      "sha256": "52c05af8b0ad58122b1c8f836661b93ecb1fd064c0fbeb09924a153c9a67ad5a",
+      "result_tail": "verdict=WAR_DIPLOMACY_RUNTIME_EQUIVALENT"
+    },
+    {
+      "test": "atlas_entry_contract",
+      "passed": true,
+      "sha256": "137ebc1b646d3190665918d16cdebc5d78258909c14a5f755d54a8ce6672120d",
+      "result_tail": "ATLAS_ENTRY_CONTRACT failures=0"
+    },
+    {
+      "test": "atlas_preview_lifecycle",
+      "passed": true,
+      "sha256": "ba268ced512cacbd129e61bc978681dd80096ef9680e6add24e7280a63ab0ce0",
+      "result_tail": "ATLAS_PREVIEW_LIFECYCLE failures=0"
+    },
+    {
+      "test": "atlas_military_contract",
+      "passed": true,
+      "sha256": "ec8ced73bc4fa084355778e6cce046b498ec8b95c6c57b4043088925d474dc3f",
+      "result_tail": "ATLAS_MILITARY_CONTRACT nodes=4321 edges=4742 failures=0"
+    },
+    {
+      "test": "atlas_hierarchy_cases",
+      "passed": true,
+      "sha256": "699efffebab67aba1a857d76960dcbcd5495ad299324aab54e298562b59ebdab",
+      "result_tail": "ATLAS_HIERARCHY_CASES failures=0"
+    },
+    {
+      "test": "atlas_traffic_graph",
+      "passed": true,
+      "sha256": "8f44fef5fd2bf83bdaf4ad3f219309c598175a0f2b2d2d11039cd8dab11732d5",
+      "result_tail": "ATLAS_TRAFFIC_GRAPH failures=0"
+    },
+    {
+      "test": "atlas_zhoufu_roads",
+      "passed": true,
+      "sha256": "0338298379539e39ec5d3fd066ef60b25670e0ac2c0258d153658dddd4f65fdd",
+      "result_tail": "ATLAS_ZHOUFU_ROADS settlements=1796 connections=3443 failures=0"
+    },
+    {
+      "test": "atlas_road_smoothing",
+      "passed": true,
+      "sha256": "2c8031bd6e80e0dfaa8d0ff05a02c1bd226b744cdbb13cd42a74ed02c8913607",
+      "result_tail": "ATLAS_ROAD_SMOOTHING failures=0"
+    },
+    {
+      "test": "atlas_segmented_movement",
+      "passed": true,
+      "sha256": "b82ce226ffffc75026e6d76d1177d1cc364fd2d23d855e0ded3fc84d44844a8a",
+      "result_tail": "ATLAS_SEGMENTED_MOVEMENT failures=0"
+    },
+    {
+      "test": "atlas_junction_encounters",
+      "passed": true,
+      "sha256": "1c796c016d57db3f4eca9433f9248effa7e64f95e57d6e2f02040c5a435622a1",
+      "result_tail": "ATLAS_JUNCTION_ENCOUNTERS failures=0"
+    },
+    {
+      "test": "atlas_access_and_repatriation",
+      "passed": true,
+      "sha256": "2ae828b89c5675dad4c8ec693b43b83125c8aa6e1943d82ff0c3418edfc68e96",
+      "result_tail": "ATLAS_ACCESS_OK checks=29 failures=0"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "passed": true,
+      "sha256": "0f521d4797490c2faeeddee32e384d1a1b8bc724e0cf4a26b1e276d7a068f179",
+      "result_tail": "ATLAS_TERRITORY_OK checks=82 failures=0"
+    },
+    {
+      "test": "atlas_path_cache_lifecycle",
+      "passed": true,
+      "sha256": "68eb8381a98dc54bae95cdac2c4002d25448d1fcf1bf0ea0bb0dbb1cfd2cd882",
+      "result_tail": "ATLAS_PATH_CACHE_LIFECYCLE PASS entries=3"
+    },
+    {
+      "test": "atlas_template_invalid",
+      "passed": true,
+      "sha256": "e876e7c60943f35caf35670adebe44219a8011ca85ad7e59d1c9cbfc83b616a1",
+      "result_tail": "ATLAS_TEMPLATE_INVALID failures=0"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "passed": true,
+      "sha256": "01cb98451fa2d03c38c85ee26a488260f5b707f2e8f907a225b1cd7ef37033d5",
+      "result_tail": "ATLAS_MILITARY_PERSISTENCE failures=0"
+    },
+    {
+      "test": "atlas_visual_land_audit",
+      "passed": true,
+      "sha256": "821e919f04d7b5a84ae8f7d0bd4fd760ced90ddc6a393c93a78c0efa91feab28",
+      "result_tail": "ATLAS_VISUAL_LAND centers_on_raster_water=8 fu_on_raster_water=7 max_offset=1.0"
+    },
+    {
+      "test": "atlas_military_smoke",
+      "passed": true,
+      "sha256": "cfba19781bf286130f8367ef46ffafe4cb8638adec14426d2d3a22c9d8433dca",
+      "result_tail": "ATLAS_MILITARY_SMOKE day=35 failures=0 elapsed_ms=44222"
+    }
+  ],
+  "task_count": 37,
+  "failures": 0,
+  "military_smoke": {
+    "pid": 12504,
+    "days": 35,
+    "initial_nations": 40,
+    "failures": 0,
+    "simulation_elapsed_ms": 44222
+  },
+  "gpu": {
+    "renderer": "D3D12 Forward+",
+    "device": "AMD Radeon RX 7600",
+    "native_generation_pid": 20728,
+    "lifecycle_recheck_pid": 11316,
+    "cold_generation_capture": "seed1-main-entry.png",
+    "final_capture": "seed1-main-entry-clean-exit.png",
+    "final_capture_sha256": "fef2dc1c7ae0fb1b64ed47c3f97c84b643a05d4351aad20982cd8723c78d0af8",
+    "final_stderr_empty": true,
+    "recheck_source": "native Atlas development cache; first capture generated Earth without a cache"
+  },
+  "earlier_365_day_run": "run.json; pre-cleanup evidence, not repeated in this migration",
+  "review": "Graph-first impact review was stale (9d26b1b). Source reference scan, full shipped/test script compilation, retained simulation regressions and native Atlas checks were used."
+}

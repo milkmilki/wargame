@@ -56,6 +56,7 @@ func record(event: String, details: Dictionary) -> void:
 	if _file == null: return
 	var entry := details.duplicate()
 	entry["event"] = event
+	entry["pid"] = OS.get_process_id()
 	entry["utc"] = Time.get_datetime_string_from_system(true)
 	_file.store_line(JSON.stringify(entry))
 	_file.flush()

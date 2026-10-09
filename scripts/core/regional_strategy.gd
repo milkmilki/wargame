@@ -27,12 +27,7 @@ static func latitude_output_multiplier(latitude: float) -> float:
 
 
 static func city_latitude(state: GameState, city: City) -> float:
-	if not state.uses_heightmap:
-		return 0.0
-	var settings := state.city_density_settings
-	if settings.is_empty():
-		settings = TerrainMapGenerator.default_city_density_settings(state.map_source_manifest)
-	return TerrainMapGenerator.latitude_for_map_y(city.map_position.y, settings, state.map_source_manifest)
+	return 90.0 - 180.0 * city.map_position.y if state.uses_heightmap else 0.0
 
 
 static func invalidate_geometry(state: GameState) -> void:

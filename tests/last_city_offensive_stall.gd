@@ -182,7 +182,7 @@ func _administrative_snapshot(state: GameState) -> Dictionary:
 
 
 func _build_fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, 4)
 	assert(
 		state.is_zhou_city(LAST_CITY_ID),

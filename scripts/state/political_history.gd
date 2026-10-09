@@ -65,7 +65,10 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 	var snapshot: Dictionary = _snapshots[index]
 	var layout: Dictionary=snapshot.get("atlas_layout",{})
 	if not layout.is_empty():
-		_view_state.map_source_manifest=layout.source
+		if layout.has("cities") and _view_state.get_meta("atlas_layout_signature",0)!=layout.signature:
+			var frozen_cities: Array[City] = []
+			for source_city in layout.cities: frozen_cities.append(_copy_script_object(source_city) as City)
+			_view_state.cities = frozen_cities; _view_state.set_meta("atlas_layout_signature",layout.signature)
 		_view_state.map_models=layout.models.duplicate(true)
 		_view_state.map_aspect_ratio=layout.aspect
 		_view_state.province_map_size=layout.size
@@ -74,6 +77,13 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		_view_state.adjacency=layout.adjacency
 		_view_state.edge_lookup=layout.edge_lookup
 		_view_state.road_network_revision=layout.road_revision
+		if layout.has("military"):
+			_view_state.atlas_layout = layout.military
+			_view_state.administrative_region_ids = layout.admin_ids.duplicate()
+			_view_state.administrative_center_by_city = layout.admin_centers.duplicate()
+			_view_state.administrative_center_city_ids = layout.admin_seats.duplicate()
+			_view_state.administrative_hop_distances = layout.admin_hops.duplicate()
+			_view_state.administrative_region_count = layout.admin_count
 		for i in range(mini(layout.positions.size(),_view_state.cities.size())):
 			_view_state.cities[i].map_position=layout.positions[i]
 	_view_state.day = int(snapshot["day"])
@@ -175,26 +185,14 @@ func _create_view_state(live_state: GameState) -> GameState:
 	var view := GameState.new()
 	view.world_seed = live_state.world_seed
 	view.uses_heightmap = live_state.uses_heightmap
-	view.map_source_manifest = live_state.map_source_manifest
 	view.map_models = live_state.map_models.duplicate(true)
+	view.atlas_layout = live_state.atlas_layout.duplicate(true); view.trade_enabled = live_state.trade_enabled
 	view.map_aspect_ratio = live_state.map_aspect_ratio
-	view.map_source_region_normalized = live_state.map_source_region_normalized
-	view.city_generation_mask_path = live_state.city_generation_mask_path
-	view.political_mask_path = live_state.political_mask_path
-	view.city_density_settings = live_state.city_density_settings.duplicate(true)
 	view.generation_metadata = live_state.generation_metadata.duplicate(true)
 	view.province_map_size = live_state.province_map_size
 	view.province_ids = live_state.province_ids
-	view.river_features = (
-		live_state.river_features.duplicate(true)
-		if not live_state.river_features.is_empty()
-		else MapFeatureContract.from_legacy_river_paths(
-			live_state.river_paths
-		)
-	)
-	view.river_paths = MapFeatureContract.authoritative_paths(
-		view.river_features
-	)
+	view.river_features = live_state.river_features.duplicate(true)
+	view.river_paths = live_state.river_paths.duplicate(true)
 	view.edges = live_state.edges
 	view.adjacency = live_state.adjacency
 	view.edge_lookup = live_state.edge_lookup
@@ -252,7 +250,7 @@ func _capture(game_state: GameState) -> void:
 		nation_politics[nation_id] = political
 		prince_reports[nation_id] = PrincePolitics.report(game_state, nation_id, military.get(nation_id, {}))
 	_snapshots.append({
-		"atlas_layout":_capture_atlas_layout(game_state) if MapSource.atlas_style(game_state.map_source_manifest) else {},
+		"atlas_layout":_capture_atlas_layout(game_state) if not game_state.atlas_layout.is_empty() else {},
 		"day": game_state.day,
 		"family_trees": game_state.family_trees.duplicate(true),
 		"family_revision": game_state.family_revision,
@@ -299,19 +297,29 @@ static func _copy_script_object(source: Object) -> Object:
 			continue
 		var name := StringName(property["name"])
 		var value = source.get(name)
-		copy.set(name, value.duplicate(true) if value is Array or value is Dictionary else value)
+		if value is Array or value is Dictionary:
+			copy.set(name,value.duplicate(true))
+		elif typeof(value) in [TYPE_PACKED_BYTE_ARRAY,TYPE_PACKED_INT32_ARRAY,TYPE_PACKED_INT64_ARRAY,TYPE_PACKED_FLOAT32_ARRAY,TYPE_PACKED_FLOAT64_ARRAY,TYPE_PACKED_STRING_ARRAY,TYPE_PACKED_VECTOR2_ARRAY,TYPE_PACKED_VECTOR3_ARRAY,TYPE_PACKED_VECTOR4_ARRAY,TYPE_PACKED_COLOR_ARRAY]:
+			copy.set(name,value.duplicate())
+		else: copy.set(name,value)
 	return copy
 
 func _capture_atlas_layout(state: GameState) -> Dictionary:
 	var positions:=PackedVector2Array();var paths: Array=[]
 	for city in state.cities: positions.append(city.map_position)
-	for edge in state.edges: paths.append([edge.map_path,edge.road_tier,edge.kind,edge.max_manpower,edge.distance])
-	var signature:=hash([state.map_source_manifest,state.map_models,state.map_aspect_ratio,state.province_ids,state.province_map_size,positions,paths])
+	for edge in state.edges: paths.append([edge.map_path,edge.road_tier,edge.kind,edge.max_manpower,edge.distance,edge.precise_distance,edge.control_city_id])
+	var signature:=hash([state.map_models,state.map_aspect_ratio,state.province_ids,state.province_map_size,positions,paths,state.administrative_center_by_city])
 	if _atlas_layouts.has(signature): return _atlas_layouts[signature]
 	var edges: Array[Edge]=[];var lookup: Dictionary={}
 	for edge in state.edges:
 		var copy:=_copy_script_object(edge) as Edge
 		edges.append(copy);lookup[state._edge_key(copy.city_a,copy.city_b)]=copy
-	var layout: Dictionary={"source":state.map_source_manifest,"models":state.map_models.duplicate(true),"aspect":state.map_aspect_ratio,"size":state.province_map_size,"ids":state.province_ids.duplicate(),"positions":positions,"edges":edges,"edge_lookup":lookup,"adjacency":state.adjacency.duplicate(true),"road_revision":state.road_network_revision}
+	var layout: Dictionary={"models":state.map_models.duplicate(true),"aspect":state.map_aspect_ratio,"size":state.province_map_size,"ids":state.province_ids.duplicate(),"positions":positions,"edges":edges,"edge_lookup":lookup,"adjacency":state.adjacency.duplicate(true),"road_revision":state.road_network_revision}
+	if not state.atlas_layout.is_empty():
+		layout.military = state.atlas_layout.duplicate(true); layout.admin_ids = state.administrative_region_ids.duplicate()
+		layout.admin_centers = state.administrative_center_by_city.duplicate(); layout.admin_seats = state.administrative_center_city_ids.duplicate()
+		layout.admin_hops = state.administrative_hop_distances.duplicate(); layout.admin_count = state.administrative_region_count
+		layout.cities = []; layout.signature = signature
+		for city in state.cities: layout.cities.append(_copy_script_object(city) as City)
 	_atlas_layouts[signature]=layout
 	return layout

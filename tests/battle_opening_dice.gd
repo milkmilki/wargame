@@ -19,7 +19,7 @@ func _run() -> void:
 	quit(0 if failures.is_empty() else 1)
 
 func _counter_fixture() -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 73
 	state.rng.seed = 73
 	for owner in range(2):
@@ -231,7 +231,7 @@ func _test_distribution() -> void:
 	print("BATTLE_DICE_DISTRIBUTION seeds=10000 counts=%s" % str(counts))
 
 func _test_siege_lifecycle() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	state.armies.clear()
 	state.battles.clear()
@@ -337,7 +337,7 @@ func _test_siege_lifecycle() -> void:
 	sim.free()
 
 func _test_snapshot() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	var battle := state.new_battle(Battle.Kind.FIELD)
 	var rng_before := state.rng.state

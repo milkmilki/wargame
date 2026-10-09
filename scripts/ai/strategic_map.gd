@@ -597,10 +597,10 @@ func _discover_connectivity_node(city_id: int) -> void:
 
 func _friendly_neighbors(city_id: int) -> Array[int]:
 	var result: Array[int] = []
-	for neighbor in _state.neighbors(city_id):
+	for neighbor in _state.strategic_neighbors(city_id):
 		if _state.cities[neighbor].owner_nation != nation_id:
 			continue
-		var edge := _state.edge_of(city_id, neighbor)
+		var edge := _state.strategic_edge_of(city_id, neighbor)
 		if edge == null or edge.max_manpower <= 0:
 			continue
 		result.append(neighbor)
@@ -657,8 +657,8 @@ func _finalize_edge_values(shared_edge_values: Dictionary = {}) -> void:
 	var relevant_edges: Array[Edge] = []
 	var relevant_edge_keys := {}
 	for city in _view.friendly_cities:
-		for neighbor in _state.neighbors(city.id):
-			var edge := _state.edge_of(city.id, neighbor)
+		for neighbor in _state.strategic_neighbors(city.id):
+			var edge := _state.strategic_edge_of(city.id, neighbor)
 			if edge == null:
 				continue
 			var edge_key := _edge_key(edge.city_a, edge.city_b)

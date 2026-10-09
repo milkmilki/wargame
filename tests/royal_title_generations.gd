@@ -13,7 +13,7 @@ func _init() -> void:
 	quit(0 if failures.is_empty() else 1)
 
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73004)
 	state.region_ids.fill(-1)
 	var land := state.land_cities_of(0)

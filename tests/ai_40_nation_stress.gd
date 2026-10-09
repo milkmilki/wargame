@@ -78,7 +78,7 @@ func _run_case(
 	var regional_queries_before := RegionalStrategy.query_count
 	var regional_geometry_before := RegionalStrategy.geometry_build_count
 	var regional_control_before := RegionalStrategy.control_build_count
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, nation_count)
 	var generation_usec := (
 		Time.get_ticks_usec() - generation_started
@@ -235,7 +235,7 @@ func _largest_territory_report(state: GameState) -> Dictionary:
 
 
 func _test_territory_report() -> bool:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	for id in range(4):
 		var nation := Nation.new()
 		nation.id = id
@@ -266,7 +266,7 @@ func _test_territory_report() -> bool:
 	state.cities[5].owner_nation = 2
 	report = _largest_territory_report(state)
 	valid = valid and report.root_nation_id == 0 and report.land_cities == 2
-	report = _largest_territory_report(GameState.new())
+	report = _largest_territory_report(preload("res://tests/support/grid_world.gd").new())
 	valid = valid and report.root_nation_id == -1 and report.total_land_cities == 0 and report.share == 0.0
 	if not valid:
 		push_error("territory report must count peaceful suzerainty, exclude docks/allies and use stable ties")

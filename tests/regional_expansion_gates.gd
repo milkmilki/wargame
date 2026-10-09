@@ -224,7 +224,7 @@ func _water_edge(state: GameState, a: int, b: int, kind: int) -> void:
 
 
 static func fixture(capital_only: bool = false) -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.rng.seed = state.world_seed
 	state.day = 3650
 	for owner in range(3):

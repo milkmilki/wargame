@@ -24,7 +24,7 @@ func _init() -> void:
 
 
 func _start_world(serial_threat: bool) -> void:
-	_active_state = GameState.new()
+	_active_state = preload("res://tests/support/grid_world.gd").new()
 	_active_state.generate_world(12345, _nation_count, _city_count)
 	_active_sim = Simulation.new()
 	root.add_child(_active_sim)

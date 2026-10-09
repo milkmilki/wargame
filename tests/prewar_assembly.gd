@@ -4,7 +4,7 @@ var _failures: Array[String] = []
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94146)
 	_neutralize_diplomacy(state)
 	var context := _prewar_context(state)
@@ -328,7 +328,7 @@ func _neutralize_diplomacy(state: GameState) -> void:
 
 
 func _test_preparation_uses_remaining_unplanned_army() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94149)
 	_neutralize_diplomacy(state)
 	var context := _prewar_context(state)

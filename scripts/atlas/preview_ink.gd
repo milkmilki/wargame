@@ -36,6 +36,10 @@ func wrapped_mesh(mesh: ArrayMesh,color: Color) -> void:
 	draw_set_transform(Vector2.ZERO)
 
 static func road_lines(map_data: Dictionary) -> Dictionary:
+	if map_data.has("traffic_graph"):
+		var shared := {"road":[],"trail":[]}
+		for edge in map_data.traffic_graph.edges: shared["road" if edge.tier==1 else "trail"].append(edge.path)
+		return shared
 	var out := {}; var mesh: Dictionary = map_data.mesh
 	var stops := {}; for city in map_data.cities: stops[int(city.cell)] = true
 	for kind in ["road","trail"]:

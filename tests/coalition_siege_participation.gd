@@ -24,7 +24,7 @@ func _check(condition: bool, message: String) -> void:
 
 
 func _fixture() -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.rng.seed = 97131
 	for owner in range(5):
 		var nation := Nation.new()

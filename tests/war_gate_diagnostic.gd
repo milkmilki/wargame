@@ -9,7 +9,7 @@ func _init() -> void:
 	var probe_year := _env_int("PROBE_YEAR", 20)
 	var world_seed := _env_int("PROBE_SEED", 12345)
 	var nations := _env_int("PROBE_NATIONS", 40)
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, nations)
 	var sim := Simulation.new()
 	root.add_child(sim)
@@ -315,7 +315,7 @@ func _probe_conqueror_remnants() -> bool:
 
 
 func _remnant_fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.day = 3650
 	for owner in range(3):
 		var nation := Nation.new()

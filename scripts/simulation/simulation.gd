@@ -11963,10 +11963,22 @@ static func march_days(distance: int) -> float:
 			* MARCH_DAYS_PER_DISTANCE_STEP
 	)
 
+func order_army_to(army: Army,target: int) -> Dictionary:
+	if army==null or target<0 or target>=state.cities.size() or not state.cities[target].is_settlement(): return {"ok":false,"error":"目标必须为真实治所。"}
+	if army.on_edge or army.battle_id>=0 or army.state in [Army.State.FIGHTING,Army.State.RETREATING]: return {"ok":false,"error":"当前行军、战斗或撤退绑定不能改令。"}
+	var start := army.location_city
+	var route := Pathfinding.dijkstra_field(state,start,army.owner_nation,false,true,target,army.max_size)
+	var path := Pathfinding.reconstruct(route.prev,start,target)
+	if path.is_empty(): return {"ok":false,"error":"没有符合通行权限的陆路。"}
+	army.path = path; army.move_from = start; army.move_to = -1; army.move_progress = 0.; army.state = Army.State.MOVING
+	army.ai_target_city = target; army.ai_order_until_day = state.day+365; army.hold_target_progress = -1.
+	_begin_next_leg(army); return {"ok":true}
+
 
 static func edge_travel_days(edge: Edge, _formation_size: int = 0) -> float:
 	if edge == null:
 		return MISSING_EDGE_TRAVEL_DAYS
+	if edge.precise_distance>=0.: return maxf(.000001,edge.distance_units()*MARCH_DAYS_MIN*maxf(edge.travel_time_multiplier,.05))
 	return maxf(
 		march_days(edge.distance)
 			* maxf(edge.travel_time_multiplier, 0.05),
@@ -11974,7 +11986,81 @@ static func edge_travel_days(edge: Edge, _formation_size: int = 0) -> float:
 	)
 
 
+func _advance_atlas_movement() -> void:
+	# Integrate the day at global arrival/contact events. Every army consumes the
+	# same elapsed time; junctions do not add a turn or allow an encounter bypass.
+	var remaining := 1.; var stalled := {}
+	for army in state.armies:
+		if army.encounter_blocked: stalled[army.id] = true; army.encounter_blocked = false
+	var iterations := 0
+	while remaining>.0000001:
+		iterations += 1
+		assert(iterations<=state.cities.size()*2+state.armies.size()+1,"Non-progressing traffic traversal")
+		var moving: Array[Army] = []; var dt := remaining
+		for army in state.armies:
+			if stalled.has(army.id) or not _is_travelling(army) or army.size<=0: continue
+			if army.move_to<0: _begin_next_leg(army)
+			if army.move_to<0: stalled[army.id] = true; continue
+			var days := edge_travel_days(state.edge_of(army.move_from,army.move_to),army.max_size)
+			var target := army.hold_target_progress if army.state==Army.State.MOVING and army.hold_target_progress>=0. else 1.
+			dt = minf(dt,maxf(0.,target-army.move_progress)*days); moving.append(army)
+		if moving.is_empty(): break
+		var holding: Array[Army] = []
+		for army in moving:
+			army.move_progress += dt/edge_travel_days(state.edge_of(army.move_from,army.move_to),army.max_size)
+			if army.state==Army.State.MOVING and army.hold_target_progress>=0. and army.move_progress>=army.hold_target_progress:
+				army.move_progress = army.hold_target_progress; holding.append(army)
+		remaining -= dt
+		_resolve_movement_contacts(holding)
+		_detect_atlas_junction_contacts()
+		var changed := false
+		for army in moving:
+			if army.encounter_blocked: stalled[army.id] = true; continue
+			if not _is_travelling(army) or army.move_to<0 or army.move_progress<1.-.0000001: continue
+			army.move_progress = 1.; _arrive_at_node(army); changed = true
+		if dt<=.0000001 and not changed:
+			for army in moving: stalled[army.id] = true
+
+func _detect_atlas_junction_contacts() -> void:
+	var arrivals := {}
+	for army in state.armies:
+		if not _is_travelling(army) or army.move_to<0 or army.move_progress<1.-.0000001 or not state.cities[army.move_to].is_traffic: continue
+		if not arrivals.has(army.move_to): arrivals[army.move_to] = []
+		arrivals[army.move_to].append(army)
+	for node in arrivals:
+		var armies: Array = arrivals[node]
+		var existing: Battle = null
+		for battle in state.battles:
+			if not battle.finished and battle.traffic_node_id==node: existing = battle; break
+		if existing!=null:
+			for army in armies:
+				if not existing.side_a.is_empty() and army.owner_nation==existing.side_a[0].owner_nation: _enter_battle(existing,army,1)
+				elif not existing.side_b.is_empty() and army.owner_nation==existing.side_b[0].owner_nation: _enter_battle(existing,army,2)
+				elif not existing.side_a.is_empty() and not existing.side_b.is_empty() and (state.is_enemy(army.owner_nation,existing.side_a[0].owner_nation) or state.is_enemy(army.owner_nation,existing.side_b[0].owner_nation)): army.encounter_blocked = true
+			continue
+		for i in range(armies.size()):
+			var a: Army = armies[i]
+			if a.battle_id>=0: continue
+			for j in range(i+1,armies.size()):
+				var b: Army = armies[j]
+				if b.battle_id>=0 or not state.is_enemy(a.owner_nation,b.owner_nation): continue
+				var battle := state.new_battle(Battle.Kind.FIELD); battle.traffic_node_id = node
+				battle.edge = state.edge_of(a.move_from,node)
+				battle.contact_dist_a = battle.edge.distance_units() if node==battle.edge.city_b else 0.
+				battle.contact_dist_b = battle.contact_dist_a
+				_enter_battle(battle,a,1); _enter_battle(battle,b,2); break
+		# Include simultaneous friendly reinforcements on other incoming roads.
+		for battle in state.battles:
+			if battle.finished or battle.traffic_node_id!=node: continue
+			for army in armies:
+				if army.battle_id>=0: continue
+				if army.owner_nation==battle.side_a[0].owner_nation: _enter_battle(battle,army,1)
+				elif army.owner_nation==battle.side_b[0].owner_nation: _enter_battle(battle,army,2)
+				elif state.is_enemy(army.owner_nation,battle.side_a[0].owner_nation) or state.is_enemy(army.owner_nation,battle.side_b[0].owner_nation): army.encounter_blocked = true
+
 func _advance_movement() -> void:
+	if not state.atlas_layout.is_empty():
+		_advance_atlas_movement(); _resolve_battles(); _purge_dead_armies(); return
 	var holding_arrivals := _advance_travelling_armies()
 	_arrive_retreating_armies()
 	_resolve_movement_contacts(holding_arrivals)
@@ -11985,6 +12071,8 @@ func _advance_movement() -> void:
 
 ## 只在既有阶段边界让帧；每个阶段内部的军队/战斗顺序与同步路径完全相同。
 func _advance_movement_over_frames() -> void:
+	if not state.atlas_layout.is_empty():
+		_advance_movement(); await get_tree().process_frame; return
 	_set_runtime_profile_stage(&"movement_travel")
 	var phase_started := (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
@@ -12104,6 +12192,14 @@ func _begin_next_leg(army: Army) -> void:
 	var next_city: int = army.path[0]
 	_wake_defense_for_army(army, next_city)
 	var edge := state.edge_of(from_city, next_city)
+	if not state.atlas_layout.is_empty() and not state.cities[from_city].is_traffic: army.route_origin_city_id = from_city
+	if not state.atlas_layout.is_empty() and edge!=null and not army.diplomatic_repatriation and not state.atlas_edge_access(edge,army.owner_nation,army.path[-1],false,army.route_origin_city_id):
+		army.path.clear()
+		if state.cities[from_city].is_traffic:
+			army.path = Pathfinding.strategic_retreat_city(state,army)
+			if not army.path.is_empty(): _begin_next_leg(army)
+		else: _settle_idle(army,from_city)
+		return
 	if edge == null or edge.max_manpower <= 0:
 		# 路径失效或道路关闭：普通军等待 AI 重规划，撤退军立即改走合法路线。
 		army.path.clear()
@@ -12186,6 +12282,10 @@ func _arrive_at_node(army: Army) -> void:
 	var arrived := army.move_to
 	var edge := state.edge_of(army.move_from, arrived)
 	_release_edge(army)   # 离开边：释放通行槽
+	if state.cities[arrived].is_traffic:
+		army.move_from = arrived; army.move_to = -1; army.move_progress = 0.; army.location_city = arrived
+		if army.path.is_empty(): army.path = Pathfinding.strategic_retreat_city(state,army)
+		_begin_next_leg(army); return
 
 	if army.state == Army.State.RETREATING:
 		army.move_from = arrived
@@ -12522,7 +12622,7 @@ func _detect_encounters() -> void:
 				_retreat(army)
 			continue
 
-		var length := float(maxi(edge.distance, 1))
+		var length := edge.distance_units()
 		var battle := state.new_battle(Battle.Kind.FIELD)
 		battle.edge = edge
 		battle.contact_dist_a = _norm_pos(best_x, edge) * length
@@ -12560,7 +12660,7 @@ func _can_join_field_contact(army: Army, battle: Battle, edge: Edge) -> bool:
 	var conflict := _succession_battle_context(battle)
 	if conflict != null and conflict.side_for(army.id) == 0:
 		return false
-	var length := float(maxi(edge.distance, 1))
+	var length := edge.distance_units()
 	var my_norm := _norm_pos(army, edge)
 	var line_a := clampf(battle.contact_dist_a / length, 0.0, 1.0)
 	var line_b := clampf(battle.contact_dist_b / length, 0.0, 1.0)
@@ -12610,7 +12710,7 @@ func _block_passthrough() -> void:
 		if battle.finished or battle.kind != Battle.Kind.FIELD or battle.edge == null:
 			continue
 		var edge := battle.edge
-		var length := float(maxi(edge.distance, 1))
+		var length := edge.distance_units()
 		var line_norm := clampf(maxf(battle.contact_dist_a, battle.contact_dist_b) / length, 0.0, 1.0)
 		var na := battle.side_a[0].owner_nation if not battle.side_a.is_empty() else -1
 		var nb := battle.side_b[0].owner_nation if not battle.side_b.is_empty() else -1
@@ -12670,7 +12770,7 @@ func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
 			attacker, city
 		)
 		_mark_city_war_disruption(city)
-		var length := float(maxi(edge.distance, 1))
+		var length := edge.distance_units()
 		siege.contact_dist_a = length   # 围城方在城墙 dist=L（端点，无地形惩罚）
 		siege.contact_dist_b = 0.0      # 守军城中 dist=0（端点，无地形惩罚）
 		if not defenders.is_empty():
@@ -13428,7 +13528,7 @@ func _promote_challengers(battle: Battle) -> void:
 		battle.frontline_priority_b.duplicate()
 	)
 	_reset_empty_battle_side_b(battle)
-	battle.contact_dist_a = float(maxi(battle.edge.distance, 1)) if battle.edge != null else 0.0
+	battle.contact_dist_a = battle.edge.distance_units() if battle.edge != null else 0.0
 	battle.side_b_defends_city = false
 	battle.holding_side = 0
 	battle.finished = new_besiegers.is_empty()
@@ -13595,7 +13695,7 @@ func _join_field_battle(battle: Battle, army: Army, edge: Edge) -> void:
 				+ newcomer_days * float(maxi(army.size, 0))
 			) / float(new_total)
 	var my_norm := _norm_pos(army, edge)
-	var length := float(maxi(edge.distance, 1))
+	var length := edge.distance_units()
 	var my_distance := my_norm * length
 	var own_line := (
 		battle.contact_dist_a
@@ -14065,6 +14165,9 @@ func _settle_idle(army: Army, city_id: int) -> void:
 
 ## 士气崩溃撤退：从真实交战位置避开围城，优先向本国首都纵深撤离。
 func _retreat(army: Army) -> void:
+	if not state.atlas_layout.is_empty():
+		var origin_edge := state.edge_of(army.move_from,army.move_to) if army.on_edge else null
+		army.route_origin_city_id = origin_edge.control_city_id if origin_edge!=null else army.location_city
 	army.battle_id = -1
 	army.state = Army.State.RETREATING
 	army.forced_retreat = true
@@ -14138,6 +14241,7 @@ func _start_morale_retreat_from_city(
 	current_city: int,
 	excluded_city_id: int = -1
 ) -> void:
+	if not state.atlas_layout.is_empty() and current_city>=0 and not state.cities[current_city].is_traffic: army.route_origin_city_id = current_city
 	_release_edge(army)
 	army.battle_id = -1
 	army.state = Army.State.RETREATING

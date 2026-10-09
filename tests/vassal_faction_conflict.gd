@@ -28,7 +28,7 @@ func check(ok: bool, label: String) -> void:
 
 
 static func fixture(isolated: bool = false) -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 96261
 	state.rng.seed = 96261
 	state.day = 730

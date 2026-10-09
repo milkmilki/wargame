@@ -23,7 +23,7 @@ func _check(condition: bool, message: String) -> void:
 		failures.append(message)
 
 func _fixture() -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	for owner in range(4):
 		var nation := Nation.new()
 		nation.id = owner

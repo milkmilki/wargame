@@ -4,7 +4,7 @@ var failures: Array[String] = []
 var checks := 0
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62012)
 	state.armies.clear()
 	for nation in state.nations:

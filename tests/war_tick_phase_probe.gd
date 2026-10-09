@@ -203,7 +203,7 @@ func _init() -> void:
 	var nations := _env_int("PHASE_NATIONS", 4)
 	var cities := _env_int("PHASE_CITIES", 160)
 	var days := _env_int("PHASE_DAYS", 365)
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, nations, cities)
 	var sim := Simulation.new()
 	root.add_child(sim)
@@ -384,7 +384,7 @@ func _test_multi_action_frozen_gold_flows(
 
 
 func _make_diplomacy_cache_fixture(disable_cache: bool) -> Simulation:
-	var fixture_state := GameState.new()
+	var fixture_state := preload("res://tests/support/grid_world.gd").new()
 	fixture_state.generate_grid_world(32021)
 	for nation_a in range(fixture_state.nations.size()):
 		for nation_b in range(nation_a + 1, fixture_state.nations.size()):
@@ -406,7 +406,7 @@ func _make_diplomacy_cache_fixture(disable_cache: bool) -> Simulation:
 
 
 func _make_neutral_diplomacy_fixture() -> Simulation:
-	var fixture_state := GameState.new()
+	var fixture_state := preload("res://tests/support/grid_world.gd").new()
 	fixture_state.generate_grid_world(32022)
 	for nation_a in range(fixture_state.nations.size()):
 		for nation_b in range(nation_a + 1, fixture_state.nations.size()):

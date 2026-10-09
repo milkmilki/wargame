@@ -60,7 +60,7 @@ func _run_world(
 	days: int,
 	disable_cache: bool
 ) -> Simulation:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, nations, cities)
 	var sim := Simulation.new()
 	root.add_child(sim)

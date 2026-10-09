@@ -27,6 +27,12 @@ var kind: int = Kind.LAND                  ## 陆路 / 码头抢滩连接 / 码�
 ## 0 表示断路；正数继续作为贸易吞吐与战斗正面，但不限制军队通行。
 var max_manpower: int = STANDARD_MANPOWER
 var distance: int = 1                      ## 距离
+## Atlas units are 250 km. A negative value retains the legacy integer metric.
+var precise_distance: float = -1.0
+var control_city_id: int = -1
+var spherical_path: bool = false
+func distance_units() -> float:
+	return precise_distance if precise_distance>=0.0 else float(maxi(distance,1))
 var danger: float = 0.0                    ## 地形危险系数 (0,1)
 var travel_time_multiplier: float = 1.0    ## 相对同 distance 陆路的行军时间倍率
 var supply_loss_multiplier: float = 1.0    ## 相对同 distance 陆路的粮食运输损耗倍率
@@ -47,7 +53,7 @@ var passing_count: int = 0                 ## 全方向/全阵营边上军队总
 func river_is_navigable() -> bool:
 	if not river_navigation.is_empty():
 		return river_navigation.get("model", "") == "local_height_v1" and bool(river_navigation.get("navigable", false)) and float(river_navigation.get("max_local_height_difference", INF)) <= 0.20
-	return TerrainMapGenerator.river_link_is_navigable(max_height_difference)
+	return max_height_difference <= 0.20
 
 func map_points(from_position: Vector2, to_position: Vector2) -> PackedVector2Array:
 	return (
@@ -66,20 +72,25 @@ func map_position_at(
 	var points := map_points(from_position, to_position)
 	var total := 0.0
 	for index in range(points.size() - 1):
-		var delta := points[index + 1] - points[index]
-		delta.x *= map_aspect_ratio
-		total += delta.length()
+		total += _path_segment_length(points[index],points[index+1],map_aspect_ratio)
 	var target := clampf(progress, 0.0, 1.0) * total
 	for index in range(points.size() - 1):
-		var delta := points[index + 1] - points[index]
-		delta.x *= map_aspect_ratio
-		var length := delta.length()
+		var length := _path_segment_length(points[index],points[index+1],map_aspect_ratio)
 		if target <= length or index == points.size() - 2:
 			return points[index].lerp(
 				points[index + 1], target / maxf(length, 0.000001)
 			)
 		target -= length
 	return points[-1]
+
+func _path_segment_length(a: Vector2,b: Vector2,aspect: float) -> float:
+	if spherical_path: return spherical_angle(a,b)
+	var delta := b-a; delta.x *= aspect; return delta.length()
+
+static func spherical_angle(a: Vector2,b: Vector2) -> float:
+	var latitude_a := PI*.5-a.y*PI; var latitude_b := PI*.5-b.y*PI
+	var haversine := pow(sin((latitude_b-latitude_a)*.5),2.)+cos(latitude_a)*cos(latitude_b)*pow(sin((b.x-a.x)*PI),2.)
+	return 2.*asin(sqrt(clampf(haversine,0.,1.)))
 
 
 ## 正式地图陆路容量唯一量化规则：关闭 / 轻通路 / 标准通路。

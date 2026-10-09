@@ -8,7 +8,7 @@ func _init() -> void:
 	var cities := _env_int("TRADE_SETTLE_CITIES", 500)
 	var iterations := _env_int("TRADE_SETTLE_ITERATIONS", 5)
 	var war_pairs := _env_int("TRADE_SETTLE_WAR_PAIRS", 10)
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, nations, cities)
 	_force_adjacent_wars(state, war_pairs)
 	var structure := TradeNetwork.build_structure(state)

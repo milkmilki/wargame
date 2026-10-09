@@ -2,7 +2,7 @@ extends SceneTree
 var failures: Array[String] = []
 var checks := 0
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62011)
 	var sim := Simulation.new()
 	sim.setup(state)
@@ -132,7 +132,7 @@ func _test_mirror_and_annexation() -> void:
 		results.append({"a": battle.side_size(battle.side_a), "b": battle.side_size(battle.side_b), "ma": battle.side_a[0].morale, "mb": battle.side_b[0].morale})
 	_check(results[0].a == results[1].b and results[0].b == results[1].a, "mixed funding casualties mirror exactly")
 	_check(is_equal_approx(results[0].ma, results[1].mb) and is_equal_approx(results[0].mb, results[1].ma), "mixed funding shared morale mirrors")
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62013)
 	state.nations[0].military_payment_ratio = 0.5
 	state.nations[0].ruler_archetype = RulerProfile.BALANCED

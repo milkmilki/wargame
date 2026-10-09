@@ -44,7 +44,7 @@ func _init() -> void:
 
 
 func _make_world(world_seed: int) -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, NATION_COUNT, LAND_CITY_COUNT)
 	for nation_a in range(state.nations.size()):
 		for nation_b in range(nation_a + 1, state.nations.size()):
@@ -59,7 +59,7 @@ func _make_world(world_seed: int) -> GameState:
 func _test_invalid_inputs() -> void:
 	DiplomacyAI.city_defender_index_disabled = false
 	DiplomacyAI.reset_city_defender_index_counters()
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(20260823)
 	var negative := DiplomacyAI._city_defender_troop_index(state, -1, {})
 	var overflow := DiplomacyAI._city_defender_troop_index(

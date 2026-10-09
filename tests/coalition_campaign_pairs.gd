@@ -45,7 +45,7 @@ func _check(condition: bool, message: String) -> void:
 
 
 func _state(nation_count: int = 2) -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.rng.seed = 130061
 	state.day = 100
 	for owner in range(nation_count):

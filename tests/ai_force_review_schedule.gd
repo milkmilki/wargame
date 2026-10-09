@@ -10,7 +10,7 @@ class ReviewSimulation extends Simulation:
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, 4, 20)
 	var sim := ReviewSimulation.new()
 	root.add_child(sim)

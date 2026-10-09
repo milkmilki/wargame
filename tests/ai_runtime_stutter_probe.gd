@@ -28,7 +28,7 @@ func _init() -> void:
 	_target_days = _env_int("AI_STUT_DAYS", 120)
 	var speed := _env_int("AI_STUT_SPEED", 8)
 
-	_state = GameState.new()
+	_state = preload("res://tests/support/grid_world.gd").new()
 	_state.generate_world(12345, nations, cities)
 	_sim = Simulation.new()
 	root.add_child(_sim)

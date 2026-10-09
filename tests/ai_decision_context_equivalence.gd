@@ -42,7 +42,7 @@ func _run_world(
 	legacy_path: bool,
 	disable_snapshot_resource_reuse: bool
 ) -> Simulation:
-	var world := GameState.new()
+	var world := preload("res://tests/support/grid_world.gd").new()
 	world.generate_world(12345, nations, cities)
 	var sim := Simulation.new()
 	root.add_child(sim)

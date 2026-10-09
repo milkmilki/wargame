@@ -250,6 +250,7 @@ static func build_structure(
 	var city_count := state.cities.size()
 	var nation_count := state.nations.size()
 	var fingerprint := structure_fingerprint(state)
+	if not state.trade_enabled: return _empty_structure(city_count,nation_count,fingerprint)
 	if not _state_ids_indexable(state):
 		return _empty_structure(city_count, nation_count, fingerprint)
 	var city_gold_bonus := _zero_int_array(city_count)
@@ -566,6 +567,8 @@ static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
 static func structure_fingerprint(state: GameState) -> PackedByteArray:
 	if state == null:
 		return var_to_bytes(["trade_structure_v5", null])
+	if not state.trade_enabled:
+		return var_to_bytes(["trade_disabled_v1",state.cities.size(),state.nations.size()])
 	var fields: Array = [
 		"trade_structure_v5",
 		["counts", state.cities.size(), state.nations.size()],

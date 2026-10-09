@@ -5,7 +5,7 @@ const DAYS: int = 1080
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345)
 	var simulation := Simulation.new()
 	root.add_child(simulation)

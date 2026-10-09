@@ -42,7 +42,7 @@ func rebellion(titles: bool, restored: bool = false) -> Dictionary:
 		"challenger": member, "old_crown": crown_member}
 
 func run() -> void:
-	var submitted := GameState.new()
+	var submitted := preload("res://tests/support/grid_world.gd").new()
 	submitted.generate_grid_world(94601)
 	for a in range(submitted.nations.size()):
 		for b in range(a + 1, submitted.nations.size()):

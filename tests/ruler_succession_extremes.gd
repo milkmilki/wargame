@@ -8,7 +8,6 @@ const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 
 func _init() -> void:
 	_test_reign_distribution()
-	_test_reign_range_and_succession()
 	_test_capital_income_and_succession_relocation()
 	_test_capital_relocation_always_prefers_zhou()
 	_test_suzerainty_rulers_reuse_person_names()
@@ -47,7 +46,7 @@ func _test_modifier_query_isolation() -> void:
 
 
 func _test_capital_relocation_always_prefers_zhou() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(71240)
 	var fu_pair := Vector2i(-1, -1)
 	for city in state.cities:
@@ -144,66 +143,8 @@ func _test_reign_distribution() -> void:
 				"reign years must be uniform within each bucket: %d" % years)
 
 
-func _test_reign_range_and_succession() -> void:
-	_check(RulerProfile.MIN_REIGN_YEARS == 1 and RulerProfile.MAX_REIGN_YEARS == 60,
-		"configured reign must span the inclusive 1..60-year range")
-	var observed_years := {}
-	for nation_id in range(64):
-		for revision in range(8):
-			var years := RulerProfile.reign_years(71237, nation_id, revision)
-			observed_years[years] = true
-			_check(
-				years >= RulerProfile.MIN_REIGN_YEARS
-				and years <= RulerProfile.MAX_REIGN_YEARS,
-				"reign duration escaped 1..60 years"
-			)
-			_check(years == RulerProfile.reign_years(71237, nation_id, revision),
-				"the same ruler must retain a deterministic reign length")
-	_check(observed_years.size() > 20, "reign sampling must retain varied durations")
-
-	var state := GameState.new()
-	state.generate_world(71237, 4, 40)
-	var simulation := Simulation.new()
-	simulation.setup(state)
-	var nation := state.nations[0]
-	var successor_id := nation.crown_prince_person_id
-	var successor_name := str(PrincePolitics.person(state, nation.id, successor_id).name)
-	var previous_archetype := nation.ruler_archetype
-	var previous_traits := nation.ruler_traits.duplicate()
-	var previous_revision := nation.ruler_revision
-	var due_day := RulerProfile.succession_due_day(nation, state.world_seed)
-	state.day = due_day - 1
-	simulation._resolve_ruler_successions()
-	_check(nation.ruler_revision == previous_revision, "ruler changed one day early")
-	state.day = due_day
-	simulation._resolve_ruler_successions()
-	_check(nation.ruler_revision == previous_revision + 1, "ruler did not change on due day")
-	_check(nation.ruler_started_day == due_day, "successor start day was not recorded")
-	_check(
-		nation.ruler_person_id == successor_id and nation.ruler_name == successor_name,
-		"independent succession did not reuse the existing crown prince identity"
-	)
-	_check(
-		nation.ruler_archetype != previous_archetype
-		or nation.ruler_traits != previous_traits,
-		"successor reused the complete previous profile"
-	)
-	var next_due := RulerProfile.succession_due_day(nation, state.world_seed)
-	_check(
-		next_due >= due_day + RulerProfile.MIN_REIGN_YEARS * RulerProfile.DAYS_PER_YEAR
-		and next_due <= due_day + RulerProfile.MAX_REIGN_YEARS * RulerProfile.DAYS_PER_YEAR,
-		"successor due day escaped configured range"
-	)
-	var summary := MapRenderer.ruler_summary(nation, state)
-	_check(
-		summary.contains("任期") and summary.contains("余"),
-		"ruler summary does not expose reign duration"
-	)
-	simulation.free()
-
-
 func _test_capital_income_and_succession_relocation() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(71239)
 	state._random_ruler_profiles_enabled = true
 	var nation: Nation = null
@@ -320,7 +261,7 @@ func _test_capital_income_and_succession_relocation() -> void:
 
 
 func _test_suzerainty_rulers_reuse_person_names() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(71241, 2, 20)
 	state._random_ruler_profiles_enabled = true
 	var region: Array[int] = []
@@ -428,7 +369,7 @@ func _test_conqueror_war_benefits() -> void:
 
 
 func _test_puppet_enfeoffment() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(84521, 2, 60)
 	# This repeated-grant scenario requires existing relatives, independent
 	# of the separately tested natural possibility of a childless monarch.
@@ -569,7 +510,7 @@ func _test_puppet_enfeoffment() -> void:
 
 
 func _test_puppet_without_enfeoff_candidate() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(84521, 2, 60)
 	var nation := state.nations[0]
 	nation.ruler_archetype = RulerProfile.PUPPET

@@ -3,7 +3,7 @@ extends SceneTree
 var failures: Array[String] = []
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73001)
 	var service = load("res://scripts/core/empire_status.gd")
 	if service == null:
@@ -41,7 +41,7 @@ func _init() -> void:
 	state.region_ids.fill(-1)
 	service.reconcile(state)
 	check(state.nations[0].get("state_level") == 1 and state.nations[0].get("empire_founder_person_id") == founder, "empire and founder survive losses")
-	state = GameState.new()
+	state = preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73001)
 	state.region_ids.fill(-1)
 	land = state.land_cities_of(0)

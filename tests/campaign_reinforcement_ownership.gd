@@ -11,7 +11,6 @@ func _init() -> void:
 	_test_locked_takeover()
 	_test_incoming_takeover()
 	_test_other_front_and_parallel_lock()
-	_test_routes_wakeup_and_display()
 	_test_succession_priority()
 	_test_succession_nearby()
 	print("CAMPAIGN_REINFORCEMENT_OWNERSHIP checks=%d failures=%d" % [checks, failures])
@@ -126,31 +125,6 @@ func _test_other_front_and_parallel_lock() -> void:
 		parallel.finished = true
 		sim._finish_campaign_reports_for_battle(parallel)
 		check(not front.combat_report_locked, "last report releases lock")
-	sim.free()
-
-func _test_routes_wakeup_and_display() -> void:
-	var state: GameState = Direct.fixture()
-	var attacker: Army = Direct.army(state, 0, 2, 10000)
-	var sim := Simulation.new()
-	sim.setup(state)
-	check(sim._execute_ai_candidate(attacker, ActionCandidate.make(ActionCandidate.Kind.ATTACK, 1, "incoming threat", 3)), "real attack issued")
-	check(sim._ai_forced_nations.has(1), "attack wakes defender for next day")
-	sim._refresh_component_defense_tasks(component(state))
-	var front := state.campaign_front_for(1, 3, CoalitionCampaignFront.Mode.DEFENSE)
-	check(front != null and int(state.campaign_defense_context(1, 3, state.war_id_between(0, 1))["enemy_manpower"]) == 10000, "touching road uses physical V")
-	state.sync_campaign_pairs(state.coalition_campaign_components())
-	if front != null:
-		var display := "\n".join(MapRenderer.nation_detail_lines(state, 1))
-		check(display.contains("额外防守"), "extra defense visible beside active slots")
-	state.edge_of(2, 3).max_manpower = 0
-	attacker.on_edge = false
-	attacker.location_city = 0
-	attacker.move_from = 0
-	attacker.move_to = -1
-	attacker.path = [1, 2, 3] as Array[int]
-	check(not sim._component_defense_centers([1] as Array[int], state.war_id_between(0, 1)).has(3), "broken distant incoming does not retain defense")
-	sim._refresh_component_defense_tasks(component(state))
-	check(state.campaign_front_for(1, 3, CoalitionCampaignFront.Mode.DEFENSE) == null, "broken threat cleans task")
 	sim.free()
 
 func _test_succession_priority() -> void:

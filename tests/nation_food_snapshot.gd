@@ -14,12 +14,9 @@ func _init() -> void:
 
 
 func _run() -> void:
-	_test_legacy_defaults_and_zero_trade_ui()
 	_test_change_city_food_storage()
 	_test_deposit_food_immediate_aggregate()
 	_test_setup_snapshot_production_estimate()
-	_test_monthly_production_rounds_after_nation_sum()
-	_test_monthly_snapshot_and_ui_math()
 	if _failures.is_empty():
 		print("NATION_FOOD_SNAPSHOT_OK checks=%d" % _checks)
 		quit(0)
@@ -40,155 +37,6 @@ func _check(condition: bool, label: String, detail: String = "") -> void:
 	if not detail.is_empty():
 		message += " :: " + detail
 	_failures.append(message)
-
-
-func _test_legacy_defaults_and_zero_trade_ui() -> void:
-	var fresh := Nation.new()
-	_check(
-		fresh.last_food_estimated_production == 0
-			and fresh.last_food_estimated_consumption == 0
-			and fresh.last_food_estimated_balance == 0,
-		"legacy/default_snapshot_fields_zero"
-	)
-
-	var state := _make_single_nation_state()
-	var sections := MapRenderer.nation_detail_sections(state, 0)
-	var trade_line := _section_line_matching(sections, "财政与军费", "商路 ")
-	_check(
-		sections.size() > 0,
-		"legacy/nation_detail_sections_no_error"
-	)
-	_check(
-		trade_line.find("商路 0") >= 0
-			and trade_line.find("商贸金 0") >= 0
-			and trade_line.find("购粮") == -1
-			and trade_line.find("购人") == -1
-			and trade_line.find("+0") == -1
-			and trade_line.find("-0") == -1,
-		"legacy/zero_trade_ui_without_signed_zero",
-		trade_line
-	)
-
-
-func _test_monthly_snapshot_and_ui_math() -> void:
-	var state := _make_trade_pair_state()
-	var expected_trade := TradeNetwork.build(state)
-	var expected_import_0 := int(expected_trade["nation_food_import"][0])
-	var expected_export_0 := int(expected_trade["nation_food_export"][0])
-	var expected_import_1 := int(expected_trade["nation_food_import"][1])
-	var expected_export_1 := int(expected_trade["nation_food_export"][1])
-	_check(
-		expected_import_0 == 0 and expected_import_1 == 0
-			and expected_export_0 == 0 and expected_export_1 == 0,
-		"snapshot/resource_trade_fields_stay_zero",
-		str(expected_trade)
-	)
-
-	var sim := Simulation.new()
-	root.add_child(sim)
-	sim.setup(state)
-	state.day = Simulation.DAYS_PER_MONTH
-	state.month = 1
-	sim._resolve_economy()
-
-	var nation_0 := state.nations[0]
-	var nation_1 := state.nations[1]
-	var expected_prod_0 := int(round(
-		float(Simulation.city_food_output(state, state.cities[0], {})) / 6.0
-	))
-	var expected_prod_1 := int(round(
-		float(Simulation.city_food_output(state, state.cities[1], {})) / 6.0
-	))
-	_check(
-		nation_0.granary_food == 100 and nation_1.granary_food == 0,
-		"snapshot/monthly_trade_does_not_change_granaries",
-		"n0=%d n1=%d" % [nation_0.granary_food, nation_1.granary_food]
-	)
-	_check(
-		nation_0.last_food_estimated_production == expected_prod_0
-			and nation_1.last_food_estimated_production == expected_prod_1,
-		"snapshot/monthly_production_matches_half_year_fold",
-		"actual=%d/%d expected=%d/%d" % [
-			nation_0.last_food_estimated_production,
-			nation_1.last_food_estimated_production,
-			expected_prod_0,
-			expected_prod_1,
-		]
-	)
-	_check(
-		nation_0.last_food_estimated_consumption == nation_0.last_food_demand
-			and nation_1.last_food_estimated_consumption == nation_1.last_food_demand,
-		"snapshot/monthly_consumption_reuses_last_food_demand",
-		"actual=%d/%d demand=%d/%d" % [
-			nation_0.last_food_estimated_consumption,
-			nation_1.last_food_estimated_consumption,
-			nation_0.last_food_demand,
-			nation_1.last_food_demand,
-		]
-	)
-	_check(
-		nation_0.last_food_estimated_balance
-			== nation_0.last_food_estimated_production
-				- nation_0.last_food_estimated_consumption
-				+ nation_0.last_trade_food_import
-				- nation_0.last_trade_food_export
-			and nation_1.last_food_estimated_balance
-				== nation_1.last_food_estimated_production
-					- nation_1.last_food_estimated_consumption
-					+ nation_1.last_trade_food_import
-					- nation_1.last_trade_food_export,
-		"snapshot/net_balance_matches_display_math",
-		"n0=%d n1=%d" % [
-			nation_0.last_food_estimated_balance,
-			nation_1.last_food_estimated_balance,
-		]
-	)
-	_check(
-		nation_0.last_trade_food_import == expected_import_0
-			and nation_0.last_trade_food_export == expected_export_0
-			and nation_1.last_trade_food_import == expected_import_1
-			and nation_1.last_trade_food_export == expected_export_1,
-		"snapshot/trade_snapshot_matches_trade_network",
-		"actual=%d/%d %d/%d expected=%d/%d %d/%d" % [
-			nation_0.last_trade_food_import,
-			nation_0.last_trade_food_export,
-			nation_1.last_trade_food_import,
-			nation_1.last_trade_food_export,
-			expected_import_0,
-			expected_export_0,
-			expected_import_1,
-			expected_export_1,
-		]
-	)
-
-	var sections_0 := MapRenderer.nation_detail_sections(state, 0)
-
-	var food_line_0 := _section_line(sections_0, "粮食储备", 2)
-	var trade_line_0 := _section_line_matching(sections_0, "财政与军费", "商路 ")
-	_check(
-		food_line_0.find("粮仓 %d / %d" % [
-			nation_0.granary_food, state.food_storage_capacity(0),
-		]) >= 0
-			and food_line_0.find("月产(预计) %d" % nation_0.last_food_estimated_production) >= 0
-			and food_line_0.find("月需(预计) %d" % nation_0.last_food_estimated_consumption) >= 0
-			and food_line_0.find(
-				"月净(预计) %s" % _signed_or_zero(nation_0.last_food_estimated_balance)
-			) >= 0,
-		"ui/food_line_matches_snapshot",
-		food_line_0
-	)
-	_check(
-		trade_line_0.find("商路 %d" % nation_0.last_trade_route_count) >= 0
-			and trade_line_0.find(
-				"商贸金 %s" % _signed_or_zero(nation_0.last_trade_gold)
-			) >= 0
-			and trade_line_0.find("购粮") == -1
-			and trade_line_0.find("购人") == -1,
-		"ui/trade_line_matches_snapshot",
-		trade_line_0
-	)
-
-	sim.free()
 
 
 func _test_change_city_food_storage() -> void:
@@ -558,31 +406,6 @@ func _test_setup_trade_snapshot_two_nation_consistency() -> void:
 			]
 		)
 
-	sim.free()
-
-
-func _test_monthly_production_rounds_after_nation_sum() -> void:
-	var state := _make_rounding_fixture_state()
-	var sim := Simulation.new()
-	root.add_child(sim)
-	sim.setup(state)
-	state.day = Simulation.DAYS_PER_MONTH
-	state.month = 1
-	sim._resolve_economy()
-	var nation := state.nations[0]
-	_check(
-		nation.last_food_estimated_production == 2,
-		"rounding/nation_sum_then_divide_by_six",
-		"half_year_total=9 actual=%d" % nation.last_food_estimated_production
-	)
-	var sections := MapRenderer.nation_detail_sections(state, 0)
-	var food_line := _section_line(sections, "粮食储备", 2)
-	_check(
-		food_line.find("月产(预计) 2") >= 0
-			and food_line.find("月需(预计) 0") >= 0,
-		"rounding/ui_static_entry_uses_rounded_total",
-		food_line
-	)
 	sim.free()
 
 

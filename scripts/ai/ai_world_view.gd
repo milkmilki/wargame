@@ -329,7 +329,7 @@ static func _visible_city_ids(
 		if city.owner_nation != owner_nation:
 			continue
 		var border := false
-		for neighbor in game_state.neighbors(city.id):
+		for neighbor in game_state.strategic_neighbors(city.id):
 			if game_state.cities[neighbor].owner_nation != owner_nation:
 				border = true
 				break
@@ -349,7 +349,7 @@ static func _visible_city_ids(
 		visible[city_id] = true
 		if depth >= hops:
 			continue
-		for neighbor in game_state.neighbors(city_id):
+		for neighbor in game_state.strategic_neighbors(city_id):
 			if distance.has(neighbor):
 				continue
 			distance[neighbor] = depth + 1
@@ -445,6 +445,12 @@ static func cached_path_field(
 	required_manpower: int = 0
 ) -> Dictionary:
 	var normalized_goal := allowed_goal
+	if not game_state.atlas_layout.is_empty():
+		# A physical Atlas graph is thousands of nodes. Retaining every obsolete
+		# day/revision field makes a campaign's memory grow without bound.
+		var context := "%d:%d:%d:%d:%d"%[game_state.get_instance_id(),current_day,game_state.ownership_revision,game_state.diplomacy_revision,game_state.road_network_revision]
+		if cache.get("__atlas_context","")!=context or cache.size()>32:
+			cache.clear(); cache["__atlas_context"] = context
 	# allowed_goal 仅在限制通行国时放行最终敌城；不限制通行国、或目标就是
 	# Dijkstra 起点时，它不参与任何松弛判定，统一键可消除伪重复路径场。
 	if allowed_nation < 0 or allowed_goal == start:

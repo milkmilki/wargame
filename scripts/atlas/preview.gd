@@ -113,13 +113,7 @@ func _ready() -> void:
 	if not cache_path.is_empty():
 		var payload = FileAccess.open(cache_path,FileAccess.READ).get_var()
 		generation_index += 1; begin_log("native_development_cache",int(payload.data.seed))
-		data = payload.data; raster = payload.raster; display = payload.display; timing = payload.timing
-		terrain_model = data.options.get("terrain_model","planet")
-		rainfall_model = data.options.get("rainfall_model","atlas_original")
-		settlement_model = data.options.get("settlement_model","atlas_original")
-		sync_rain_control()
-		default_owners = PackedInt32Array(data.ownership); provinces = Generator.pixel_regions(data,raster)
-		var view_start := Time.get_ticks_msec(); await build_view(); open_log("native_development_cache",Time.get_ticks_msec()-view_start)
+		var view_start := Time.get_ticks_msec(); await load_cached_payload(payload); open_log("native_development_cache",Time.get_ticks_msec()-view_start)
 	elif reference_mode: await load_reference(actual_seed)
 	else: await load_native(actual_seed)
 	if not capture_path.is_empty() and not data.is_empty():
@@ -132,6 +126,15 @@ func _ready() -> void:
 		print("ATLAS_CAPTURE_READ")
 		get_viewport().get_texture().get_image().save_png(capture_path)
 		print("ATLAS_NATIVE_CAPTURE ",capture_path); get_tree().quit()
+
+func load_cached_payload(payload: Dictionary) -> void:
+	data = payload.data; raster = payload.raster; display = payload.display; timing = payload.timing
+	terrain_model = data.options.get("terrain_model","planet")
+	rainfall_model = data.options.get("rainfall_model","atlas_original")
+	settlement_model = data.options.get("settlement_model","atlas_original")
+	sync_rain_control()
+	default_owners = PackedInt32Array(data.ownership); provinces = Generator.pixel_regions(data,raster)
+	await build_view()
 
 func make_ui() -> void:
 	var panel := PanelContainer.new(); panel.position = Vector2(12,12); panel.add_child(hud); add_child(panel)
@@ -285,7 +288,9 @@ func build_view() -> void:
 	province_edge = Wash.edge_field(province_labels,2048,1024)
 	rebuild_political_labels()
 	if symbol_view.get_parent(): remove_child(symbol_view); symbol_view.queue_free()
+	else: symbol_view.free()
 	if forest_view.get_parent(): remove_child(forest_view); forest_view.queue_free()
+	else: forest_view.free()
 	forest_view = SubViewport.new(); forest_view.size = Vector2i(size)+Vector2i(64,64)
 	forest_view.transparent_bg = true; forest_view.disable_3d = true; forest_view.render_target_update_mode = SubViewport.UPDATE_ONCE; add_child(forest_view)
 	var forest_shapes := Symbols.new(); forest_shapes.data = data; forest_shapes.forest = display.forest; forest_shapes.layer = "forest"; forest_view.add_child(forest_shapes)
@@ -543,6 +548,16 @@ static func source_fingerprint() -> String:
 func _exit_tree() -> void:
 	if generation_worker!=null and generation_worker.is_started(): generation_worker.wait_to_finish()
 	if log_file: log_file.close()
+
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_PREDELETE: return
+	# Node-valued script members are not automatically owned by the scene tree.
+	# The military UI omits some preview controls; free those unused members too.
+	for property in get_property_list():
+		if (int(property.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0: continue
+		var value = get(property.name)
+		if is_instance_valid(value) and value is Node and value.get_parent() == null and not value.is_queued_for_deletion():
+			value.free()
 
 func log_event(event: String,extra: Dictionary = {}) -> void:
 	if not log_file: return

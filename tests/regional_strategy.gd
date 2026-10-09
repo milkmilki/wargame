@@ -104,7 +104,6 @@ func _test_policy_and_snapshots() -> void:
 	check(historic.nations[0].strategic_region_anchor_city_id == old_anchor, "historical target preserved")
 	var snapshot := NativeSnapshotBuilder.build(state)
 	check((snapshot["nations"]["strategic_region_anchors"] as PackedInt32Array)[0] == 2, "native target encoded")
-	check(MapRenderer.regional_strategy_lines(state, 0).size() == 2, "business region UI")
 	simulation.free()
 
 
@@ -173,7 +172,6 @@ func _test_expansion_exclusions() -> void:
 	RegionalStrategy.update_target(state, 0)
 	check(RegionalStrategy.target_region(state, 0) == 0, "cautious wins over conqueror and ambitious")
 	check(RegionalStrategy.allows_objective(state, 0, 0), "cautious still permits goals in its existing region")
-	check(MapRenderer.regional_strategy_lines(state, 0)[1].contains("经营守成"), "cautious UI shows completed-region holding")
 	nation.ruler_archetype = RulerProfile.BALANCED
 	nation.ruler_traits.clear()
 	RegionalStrategy.update_target(state, 0)
@@ -221,12 +219,10 @@ func _test_environment_and_blocked_neighbors() -> void:
 	state.road_network_revision += 1
 	RegionalStrategy.update_target(state, 0)
 	check(RegionalStrategy.target_region(state, 0) == 0, "no reachable neighbor preserves completed goal")
-	state.city_density_settings["latitude_min"] = 0.0
-	state.city_density_settings["latitude_max"] = 90.0
 	for id in [0, 1]:
-		state.cities[id].map_position.y = 0.0
+		state.cities[id].map_position.y = 0.5
 	for id in [2, 3]:
-		state.cities[id].map_position.y = 1.0
+		state.cities[id].map_position.y = 0.0
 	RegionalStrategy.invalidate_geometry(state)
 	check(RegionalStrategy.similarity(state, 0, 1) < 0.5, "polar and equatorial regions differ")
 	state.uses_heightmap = false
@@ -326,9 +322,8 @@ func _test_nested_suzerainty_index() -> void:
 
 
 static func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.uses_heightmap = true
-	state.city_density_settings = TerrainMapGenerator.default_city_density_settings()
 	for id in range(3):
 		var nation := Nation.new()
 		nation.id = id
@@ -342,7 +337,7 @@ static func fixture() -> GameState:
 		var city := City.new()
 		city.id = id
 		city.owner_nation = id / 2
-		city.map_position = Vector2(float(id) / 6.0, 0.6 if id < 4 else 0.05)
+		city.map_position = Vector2(float(id) / 6.0, 0.32 if id < 4 else 0.21)
 		city.terrain_height = 0.1 if id < 4 else 0.8
 		city.gold_per_month = 100
 		city.food_per_half_year = 600

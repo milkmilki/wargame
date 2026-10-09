@@ -15,7 +15,7 @@ func _init() -> void:
 
 
 func _test_two_state_defense_and_sortie() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94130)
 	var defender_id := 0
 	var enemy_id := 1
@@ -139,7 +139,7 @@ func _test_two_state_defense_and_sortie() -> void:
 
 
 func _test_national_reserve_distribution() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94131)
 	var nation_id := 0
 	_configure_single_owner(state, nation_id)

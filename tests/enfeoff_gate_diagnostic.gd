@@ -12,7 +12,7 @@ func _init() -> void:
 	var world_seed := _env_int("PROBE_SEED", 12345)
 	var nations := _env_int("PROBE_NATIONS", 10)
 	var cities := _env_int("PROBE_CITIES", 100)
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, nations, cities)
 	var sim := Simulation.new()
 	root.add_child(sim)

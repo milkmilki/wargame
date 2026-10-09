@@ -1,6 +1,6 @@
 extends SceneTree
 
-class CountingGameState extends GameState:
+class CountingGameState extends "res://tests/support/grid_world.gd":
 	var alliance_queries: int = 0
 
 	func alliance_bloc(nation_id: int, alive_only: bool = true) -> Array[int]:
@@ -8,7 +8,7 @@ class CountingGameState extends GameState:
 		return super.alliance_bloc(nation_id, alive_only)
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(76001, 12)
 	var fixture := _find_staging_fixture(state)
 	if fixture.is_empty():

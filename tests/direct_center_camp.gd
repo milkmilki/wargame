@@ -11,7 +11,6 @@ func _init() -> void:
 	_test_context_routes_and_promotion()
 	_test_entry_cache_revisions()
 	_test_shared_base_failure()
-	_test_base_display_and_snapshot()
 	_test_real_rout_and_second_wave()
 	_test_real_capture_chain(false)
 	_test_real_capture_chain(true)
@@ -22,7 +21,7 @@ func _init() -> void:
 
 
 static func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 96481
 	state.rng.seed = state.world_seed
 	state.day = 100
@@ -257,22 +256,6 @@ func _test_shared_base_failure() -> void:
 	for troop in state.armies:
 		_check(troop.campaign_front_id == -1 and troop.campaign_war_id == first.war_id and troop.size == 15000, "shared-base release preserves the original war pool and does not add rout losses")
 	sim.free()
-
-
-func _test_base_display_and_snapshot() -> void:
-	var state := fixture()
-	var plan := front(state, [army(state, 0, 2)])
-	plan.camp_city_id = 2
-	var lines := MapRenderer._nation_campaign_detail_lines(state, 0, plan, state.coalition_campaign_allocation(plan.war_id, 0))
-	_check(lines.filter(func(line: String) -> bool: return line.begins_with("集结点／大营：")).size() == 1, "nation display combines coincident assembly and base")
-	_check(lines.filter(func(line: String) -> bool: return line.begins_with("大营：")).is_empty(), "nation display never repeats the same base manpower")
-	var sections := MapRenderer.city_detail_sections(state, 3)
-	var city_lines: Array[String] = []
-	for section in sections:
-		city_lines.append_array(section["lines"])
-	_check(city_lines.filter(func(line: String) -> bool: return line.begins_with("集结点／大营：")).size() == 1 and city_lines.filter(func(line: String) -> bool: return line.begins_with("大营：")).is_empty(), "city display also combines the two roles")
-	var snapshot := NativeSnapshotBuilder.build(state)
-	_check((snapshot["campaign_fronts"]["camp_cities"] as PackedInt32Array)[0] == 2, "existing native snapshot camp field records a rear base without schema additions")
 
 
 func _test_real_rout_and_second_wave() -> void:

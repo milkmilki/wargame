@@ -2,9 +2,6 @@
 .godot/
 /android/
 *.import
-!assets/terrain/china_elevation_white_2048.png.import
-!assets/terrain/eurasia_elevation_white_4096.png.import
-!assets/terrain/eurasia_mercator_elevation_white_4096.png.import
 
 # Headless test Godot HOME (created by test runs via HOME override)
 .tmp-godot-home/
@@ -26,8 +23,6 @@ __pycache__/
 .DS_Store
 *.log
 
-# Terrain DEM regeneration cache (reproducible via scripts/tools; not a runtime dep)
-assets/terrain/*_dem_meters.npz
-assets/terrain/source/blue_marble/
-assets/terrain/source/natural_earth_admin/
-assets/terrain/source/natural_earth/
+
+# Evidence source dumps are archival text, not project script resources.
+docs/**/*.gd.uid

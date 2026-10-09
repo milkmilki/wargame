@@ -14,7 +14,7 @@ func _init() -> void:
 	var visibility_hops := _env_int("AI_STRESS_VISIBILITY_HOPS", -1)
 	var spread_runtime_work := _env_int("AI_STRESS_SPREAD_RUNTIME", 0) != 0
 	var gen_start := Time.get_ticks_usec()
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, nations, cities)
 	var gen_ms := float(Time.get_ticks_usec() - gen_start) / 1000.0
 	var sim := Simulation.new()

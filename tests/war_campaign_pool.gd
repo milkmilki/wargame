@@ -258,7 +258,7 @@ func _test_merged_component_trims_extra_offensive_fronts() -> void:
 
 
 func _test_chain_connected_allies_share_component() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94146, 12, 96)
 	_neutralize(state)
 	var neighbors := _nation_border_neighbors(state)
@@ -303,7 +303,7 @@ func _test_chain_connected_allies_share_component() -> void:
 
 
 func _test_nonborder_allies_keep_separate_components() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94147, 12, 96)
 	_neutralize(state)
 	var neighbors := _nation_border_neighbors(state)
@@ -493,7 +493,7 @@ func _test_empty_front_stays_with_its_war_side() -> void:
 
 
 func _test_annexed_army_leaves_old_war_pool() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94151, 8, 48)
 	state.armies.clear()
 	state.battles.clear()
@@ -530,7 +530,7 @@ func _test_annexed_army_leaves_old_war_pool() -> void:
 
 
 func _test_restored_army_leaves_parent_war_pool() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94152, 8, 48)
 	state.armies.clear()
 	state.battles.clear()
@@ -587,7 +587,7 @@ func _test_restored_army_leaves_parent_war_pool() -> void:
 
 
 func _test_eliminated_rebel_cannot_keep_zombie_war() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94153, 8, 48)
 	state.armies.clear()
 	state.battles.clear()
@@ -645,7 +645,7 @@ func _test_eliminated_rebel_cannot_keep_zombie_war() -> void:
 
 
 func _test_atomic_diplomacy_resynchronizes_war_index() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94154, 8, 48)
 	_neutralize(state)
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
@@ -700,7 +700,7 @@ func _nation_outside(state: GameState, excluded: Array[int]) -> int:
 
 
 func _connected_war_fixture(seed: int) -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(seed, 8, 48)
 	state.armies.clear()
 	state.battles.clear()

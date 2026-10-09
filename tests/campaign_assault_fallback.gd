@@ -97,7 +97,7 @@ func _finish() -> void:
 
 ## C1：强攻途中的野战败北 → 撤营重整，败军回大营。
 func _test_field_rout_regroups_assault() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "野战败北夹具必须找到大州")
@@ -177,7 +177,7 @@ func _test_field_rout_regroups_assault() -> void:
 
 
 func _test_blocked_fu_does_not_restart_unready_assault(route_open: bool) -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "驻营循环夹具必须找到大州")
@@ -273,7 +273,7 @@ func _test_blocked_fu_does_not_restart_unready_assault(route_open: bool) -> void
 
 ## C2：走廊断裂连续两个决策日无法下达进攻令 → 回驻营重整。
 func _test_stalled_assault_falls_back() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94145)
 	var context := _attack_context(state)
 	_check(not context.is_empty(), "强攻停滞夹具必须找到大州")

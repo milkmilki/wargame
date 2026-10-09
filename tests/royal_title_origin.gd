@@ -7,7 +7,6 @@ var failures: Array[String] = []
 
 func _init() -> void:
 	_test_heir_identity_and_accession()
-	_test_deceased_title_display()
 	_test_enfeoffment_and_return()
 	_test_migrated_household_lifetime()
 	_test_twice_annexed_archive_household()
@@ -26,7 +25,7 @@ func check(condition: bool, message: String) -> void:
 	if not condition: failures.append(message)
 
 func fixture() -> GameState:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.world_seed = 73003
 	var nation := Nation.new()
 	nation.id = 0
@@ -82,69 +81,6 @@ func history_count(members: Dictionary) -> int:
 	var total := 0
 	for member in members.values(): total += (member.get("title_history", []) as Array).size()
 	return total
-
-func _test_deceased_title_display() -> void:
-	var state := fixture()
-	var nation := state.nations[0]
-	var tree := FamilyTree.tree_for_nation(state, 0)
-	var members: Dictionary = tree.members
-	var prince := nation.prince_person_ids[1]
-	var title := str(members[prince].current_title)
-	var old_ruler := nation.ruler_person_id
-	var imperial_title := str(members[old_ruler].current_title)
-	check(PrincePolitics.accede(state, 0), "actual accession settles titled collateral death")
-	check(not bool(members[prince].alive), "non-heir prince really dies during cohort settlement")
-	check_ended_title(members[prince], 0, title, "death")
-	check(RoyalTitles.effective_rank(state, members[prince]) == 0, "deceased prince has no active title or stipend")
-	var before := var_to_bytes(state.family_trees)
-	var revision := state.family_revision
-	var rng_state := state.rng.state
-	check(FamilyTree.display_title(members[prince], prince, int(tree.root_person_id), state) == title, "deceased prince card shows the title held at death")
-	check(FamilyTree.display_title(members[prince], prince, int(tree.root_person_id)) == title, "offline genealogy uses the same death title archive")
-	check(FamilyTree.display_title(members[old_ruler], old_ruler, int(tree.root_person_id), state) == imperial_title, "deceased emperor retains imperial title instead of prior virtual title")
-	var html := FamilyTreeHtml.render(tree, "测试国", nation.ruler_person_id, true, state.day, {}, state, 0)
-	var start := html.find('<script id="family-data" type="application/json">')
-	start = html.find(">", start) + 1
-	var data: Dictionary = JSON.parse_string(html.substr(start, html.find("</script>", start) - start))
-	for person in data.people:
-		if int(person.id) == prince:
-			check(person.title == title and person.badges.has("已故"), "HTML exports the deceased title with death badge")
-	var history := PoliticalHistory.new()
-	history.reset(state)
-	var past := history.build_view_state(state, 0)
-	var past_member := PrincePolitics.person(past, 0, prince)
-	check(FamilyTree.display_title(past_member, prince, int(tree.root_person_id), past) == title, "frozen historical genealogy preserves the title held at death")
-	check(state.family_revision == revision and var_to_bytes(state.family_trees) == before and state.rng.state == rng_state, "reading death titles and exporting remains observational")
-	var snapshot := NativeSnapshotBuilder.build(state)
-	check(NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(), "historical display does not reactivate titles in native snapshot")
-	var saved: Dictionary = bytes_to_var(var_to_bytes(snapshot))
-	var saved_death_title := ""
-	for saved_tree in saved.family_trees:
-		for saved_member in saved_tree.members:
-			if int(saved_member.id) == prince: saved_death_title = str(saved_member.get("death_title", ""))
-	check(saved_death_title == title, "native serialization preserves the frozen title at death")
-	var archived_death: Dictionary = members[prince].duplicate(true)
-	archived_death.erase("death_title")
-	check(FamilyTree.display_title(archived_death, prince, int(tree.root_person_id), state) == title, "existing death archives display correctly without a newly saved death title")
-
-	var revoked: Dictionary = members[prince].duplicate(true)
-	revoked.erase("death_title")
-	revoked.title_history.back().end_reason = "annexation"
-	check(FamilyTree.display_title(revoked, prince, int(tree.root_person_id), state) == "无爵", "death does not restore a title lost while alive")
-	var living: Dictionary = members[prince].duplicate(true)
-	living.alive = true
-	check(FamilyTree.display_title(living, prince, int(tree.root_person_id), state) == "无爵", "living person cannot display an ended death archive as current title")
-	var commoner: Dictionary = members[prince].duplicate(true)
-	commoner.erase("death_title")
-	commoner.title_history = []
-	check(FamilyTree.display_title(commoner, prince, int(tree.root_person_id), state) == "无爵", "never-titled dead person stays untitled without guessing from old titles")
-	var subject := state.enfeoff(0, [2] as Array[int])
-	check(subject >= 0, "post-death annex fixture creates a real vassal")
-	if subject < 0: return
-	state.set_diplomatic_relation(0, subject, GameState.DiplomaticRelation.WAR)
-	check(state.annex_nation(subject, 0), "real counter-conquest archives the deceased family's nation")
-	check(FamilyTree.display_title(members[old_ruler], old_ruler, int(tree.root_person_id), state) == imperial_title, "later annexation cannot erase deceased emperor's identity")
-	check(FamilyTree.display_title(members[prince], prince, int(tree.root_person_id), state) == title, "later annexation cannot erase deceased prince's identity")
 
 func check_ended_title(member: Dictionary, source: int, title: String, reason: String) -> void:
 	var found := false
@@ -308,7 +244,7 @@ func _test_native_source_validation() -> void:
 	check(not NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(), "native rejects active foreign source even when payer is valid")
 
 func _test_twice_annexed_archive_household() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(73003)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):

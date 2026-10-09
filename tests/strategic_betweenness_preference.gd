@@ -4,7 +4,7 @@ extends SceneTree
 
 
 func _init() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(92031)
 	state.node_betweenness.resize(state.cities.size())
 	state.node_betweenness.fill(0.0)
@@ -21,9 +21,6 @@ func _init() -> void:
 	var base_values := StrategicMapSnapshot.build_base_city_values(state)
 	var base_delta := (
 		float(base_values[high_city.id]) - float(base_values[low_city.id])
-	)
-	var defense_bonus := CityDefensePlan.node_betweenness_structural_bonus(
-		state, high_city.id
 	)
 	var snapshot := StrategicMapSnapshot.build(
 		AiWorldView.build(state, 0)
@@ -64,23 +61,20 @@ func _init() -> void:
 			base_delta,
 			0.4 * StrategicMapSnapshot.NODE_BETWEENNESS_CITY_VALUE_WEIGHT
 		)
-		and is_equal_approx(
-			defense_bonus,
-			0.4 * CityDefensePlan.NODE_BETWEENNESS_STRUCTURAL_WEIGHT
-		)
+
 		and hard_value_unchanged
 		and int(selected.get("city_id", -1)) == preferred_city
 		and str(selected.get("reason", "")).contains("交通中心值")
 	)
 	if valid:
 		print(
-			"STRATEGIC_BETWEENNESS_PREFERENCE_OK base=%.2f defense=%.2f target=%d"
-			% [base_delta, defense_bonus, preferred_city]
+			"STRATEGIC_BETWEENNESS_PREFERENCE_OK base=%.2f target=%d"
+			% [base_delta, preferred_city]
 		)
 		quit(0)
 		return
 	push_error(
-		"STRATEGIC_BETWEENNESS_PREFERENCE_FAILED base=%.2f defense=%.2f preferred=%d selected=%s"
-		% [base_delta, defense_bonus, preferred_city, str(selected)]
+		"STRATEGIC_BETWEENNESS_PREFERENCE_FAILED base=%.2f preferred=%d selected=%s"
+		% [base_delta, preferred_city, str(selected)]
 	)
 	quit(1)

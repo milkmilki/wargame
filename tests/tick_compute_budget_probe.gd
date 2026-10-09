@@ -9,7 +9,7 @@ func _init() -> void:
 	var days := _env_int("COMPUTE_DAYS", 365)
 	var speed := _env_int("COMPUTE_SPEED", 8)
 
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(12345, nations, cities)
 	DiplomacyAI.reset_alliance_acceptance_prefilter_counters()
 	var sim := Simulation.new()

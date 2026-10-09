@@ -37,7 +37,7 @@ static func plan_operations(
 	if not bool(normalized.get("ok", false)):
 		return normalized
 	if not _territory_tuples_valid(
-		planned_owners, planned_legal_owners, planned_sponsors, nation_count
+		planned_owners, planned_legal_owners, planned_sponsors, nation_count, cities
 	):
 		return _failure("最终领土三元组无效。")
 	return {
@@ -200,6 +200,10 @@ static func _snapshot_territory_tuples(
 	planned_legal_owners.resize(cities.size())
 	planned_sponsors.resize(cities.size())
 	for city in cities:
+		if city.id>=0 and city.id<cities.size() and city.is_traffic:
+			if city.owner_nation!=-1 or recognized_city_owners[city.id]!=-1 or city.occupation_sponsor_nation!=-1: return _failure("交通节点不能拥有政治归属。")
+			planned_owners[city.id] = -1; planned_legal_owners[city.id] = -1; planned_sponsors[city.id] = -1
+			continue
 		if (
 			city.id < 0
 			or city.id >= cities.size()
@@ -249,6 +253,7 @@ static func _normalize_operations(
 		):
 			return _failure("领土操作包含无效或重复城市。")
 		var city = cities[city_id]
+		if city.is_traffic: return _failure("交通节点不能参与领土操作。")
 		var controller_id: int = city.owner_nation
 		if operation.has("controller_id"):
 			controller_id = int(operation["controller_id"])
@@ -335,12 +340,16 @@ static func _territory_tuples_valid(
 	planned_owners: Array[int],
 	planned_legal_owners: Array[int],
 	planned_sponsors: Array[int],
-	nation_count: int
+	nation_count: int,
+	cities: Array = []
 ) -> bool:
 	for city_id in range(planned_owners.size()):
 		var owner_id := planned_owners[city_id]
 		var legal_id := planned_legal_owners[city_id]
 		var sponsor_id := planned_sponsors[city_id]
+		if not cities.is_empty() and cities[city_id].is_traffic:
+			if owner_id!=-1 or legal_id!=-1 or sponsor_id!=-1: return false
+			continue
 		if (
 			owner_id < 0 or owner_id >= nation_count
 			or legal_id < 0 or legal_id >= nation_count

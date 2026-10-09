@@ -16,7 +16,7 @@ func _init() -> void:
 	if not log_path.is_empty():
 		_log = FileAccess.open(log_path, FileAccess.WRITE)
 
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(world_seed, nations)
 	var sim := Simulation.new()
 	root.add_child(sim)

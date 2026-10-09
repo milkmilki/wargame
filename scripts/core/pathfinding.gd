@@ -19,11 +19,13 @@ static func dijkstra_field(
 	use_danger_weight: bool = true,
 	allowed_goal: int = -1,
 	required_manpower: int = 0,
-	blocked_city_ids: Dictionary = {}
+	blocked_city_ids: Dictionary = {},
+	allowed_exit_city: int = -1
 ) -> Dictionary:
 	var dist := {}
 	var prev := {}
 	var visited := {}
+	var exit_city := allowed_exit_city if allowed_exit_city>=0 else (start if not state.cities[start].is_traffic else -1)
 	for city in state.cities:
 		dist[city.id] = INF
 	dist[start] = 0.0
@@ -75,6 +77,7 @@ static func dijkstra_field(
 			):
 				continue
 			if allowed_nation != -1:
+				if not state.atlas_layout.is_empty() and not state.atlas_edge_access(e,allowed_nation,allowed_goal,false,exit_city): continue
 				var v_is_local_crossing_transit := (
 					local_crossing_transit_docks.has(v)
 				)
@@ -96,7 +99,7 @@ static func dijkstra_field(
 					):
 						continue
 				# 起点可为刚失守的敌城；之后只经过本国/盟国，攻击时允许最终敌城。
-				if (
+				if state.atlas_layout.is_empty() and (
 					v != allowed_goal
 					and not v_is_local_crossing_transit
 					and not state.has_military_access(
@@ -104,7 +107,7 @@ static func dijkstra_field(
 					)
 				):
 					continue
-				if (
+				if state.atlas_layout.is_empty() and (
 					u != start
 					and not u_is_local_crossing_transit
 					and not state.has_military_access(
@@ -121,7 +124,7 @@ static func dijkstra_field(
 				continue
 			var w := _edge_transport_distance(e, required_manpower)
 			if use_danger_weight:
-				w += e.danger * DANGER_WEIGHT
+				w += e.danger * DANGER_WEIGHT * (e.distance_units() if e.precise_distance>=0. else 1.)
 			var nd: float = dist[u] + w
 			var improves := nd < float(dist[v])
 			var improves_tie := (
@@ -182,7 +185,7 @@ static func _edge_transport_distance(
 	_formation_size: int
 ) -> float:
 	return (
-		float(maxi(edge.distance, 1))
+		edge.distance_units()
 		* maxf(edge.travel_time_multiplier, 0.05)
 	)
 
@@ -332,7 +335,7 @@ static func strategic_retreat_city(
 	traversal_blocked.erase(start)
 	var field := dijkstra_field(
 		state, start, army.owner_nation, false, true, -1,
-		army.max_size, traversal_blocked
+		army.max_size, traversal_blocked,army.route_origin_city_id
 	)
 	var choice := _strategic_retreat_goal(
 		state, army.owner_nation, start, field["dist"],
@@ -493,7 +496,7 @@ static func strategic_retreat_route_from_edge(
 		traversal_blocked.erase(endpoint)
 		var field := dijkstra_field(
 			state, endpoint, army.owner_nation, false, true, -1,
-			army.max_size, traversal_blocked
+			army.max_size, traversal_blocked,edge.control_city_id
 		)
 		var choice := _strategic_retreat_goal(
 			state, army.owner_nation, endpoint, field["dist"],
@@ -1331,6 +1334,7 @@ static func _local_crossing_or_accessible_step(
 	transit_docks: Dictionary,
 	logistics: bool = false
 ) -> bool:
+	if not state.atlas_layout.is_empty(): return state.atlas_edge_access(edge,nation_id,-1,logistics)
 	var a_is_transit := transit_docks.has(city_a)
 	var b_is_transit := transit_docks.has(city_b)
 	if logistics and not a_is_transit and not b_is_transit:
@@ -1365,7 +1369,7 @@ static func _supply_edge_loss(edge: Edge) -> float:
 		return INF
 	return (
 		SUPPLY_DISTANCE_LOSS
-		* float(maxi(edge.distance, 1))
+		* edge.distance_units()
 		* maxf(edge.supply_loss_multiplier, 0.0)
 		* (1.0 + SUPPLY_DANGER_MULT * clampf(edge.danger, 0.0, 1.0))
 	)

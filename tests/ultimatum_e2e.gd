@@ -147,7 +147,7 @@ func _run() -> void:
 		quit(1)
 
 func _fixture(outcome: int) -> Dictionary:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(94604)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):

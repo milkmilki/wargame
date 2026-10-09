@@ -4,7 +4,7 @@ func _init() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62002)
 	var sim := Simulation.new()
 	sim.setup(state)
@@ -45,7 +45,7 @@ func _run() -> void:
 	quit(0 if valid else 1)
 
 func _test_fixed_settlement() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62003)
 	state.armies.clear()
 	for nation in state.nations:
@@ -76,7 +76,7 @@ func _test_fixed_settlement() -> void:
 	sim.free()
 
 func _test_shared_commitments() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62004)
 	state.armies.clear()
 	state.suzerainty[1] = {"overlord_id": 0, "tribute_rate": 0.25, "civil_war": false}
@@ -119,7 +119,7 @@ func _test_shared_commitments() -> void:
 	_check(DiplomacyAI.resource_forecast(state, 1, -1, DiplomacyAI.FoodPosture.PEACE, cache).input.day == state.day, "batch reports cannot leak across dates")
 
 func _test_field_supply_oracle() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62005)
 	state.armies.clear()
 	for nation in state.nations:
@@ -151,7 +151,7 @@ func _test_field_supply_oracle() -> void:
 	_check(pending.food_end == state.nations[0].granary_food and pending.food_min == minimum, "pre-supply batch reserves current-day consumption before rolling forward")
 	sim.free()
 func _test_wartime_soft_reserve() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(62006)
 	state.armies.clear()
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
@@ -178,7 +178,7 @@ func _test_wartime_soft_reserve() -> void:
 func _test_shared_pool_frame_equivalence() -> void:
 	var baseline: PackedByteArray
 	for sliced in [false, true]:
-		var state := GameState.new()
+		var state := preload("res://tests/support/grid_world.gd").new()
 		state.generate_grid_world(62007)
 		state.armies.clear()
 		state.suzerainty[1] = {"overlord_id": 0, "tribute_rate": 0.25, "civil_war": false}

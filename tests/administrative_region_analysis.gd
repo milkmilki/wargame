@@ -130,7 +130,7 @@ func _check_inactive_city_stays_unassigned() -> bool:
 
 ## 真实地图：每个州都有属府，唯一例外是只与码头相连的城市。
 func _check_generated_world() -> bool:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94001)
 	var active := PackedInt32Array()
 	var max_hops := 0

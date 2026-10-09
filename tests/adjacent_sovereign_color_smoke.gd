@@ -39,7 +39,7 @@ func _set_color(state: GameState, nation_id: int, hue: float) -> void:
 
 
 func _test_circular_hue_conflict_is_resolved() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(93001)
 	_set_color(state, 0, 359.0 / 360.0)
 	_set_color(state, 1, 1.0 / 360.0)
@@ -70,7 +70,7 @@ func _test_circular_hue_conflict_is_resolved() -> void:
 
 
 func _test_same_suzerainty_root_is_exempt() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(93002)
 	_set_color(state, 0, 0.20)
 	_set_color(state, 1, 0.205)
@@ -97,7 +97,7 @@ func _test_same_suzerainty_root_is_exempt() -> void:
 
 
 func _test_vassal_border_constrains_sovereign_roots() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(93004)
 	_set_color(state, 0, 0.20)
 	_set_color(state, 1, 0.60)
@@ -124,7 +124,7 @@ func _test_vassal_border_constrains_sovereign_roots() -> void:
 
 
 func _test_territory_transaction_reconciles_new_border() -> void:
-	var state := GameState.new()
+	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(93003)
 	_set_color(state, 0, 0.10)
 	_set_color(state, 1, 0.35)
@@ -148,8 +148,8 @@ func _test_territory_transaction_reconciles_new_border() -> void:
 
 
 func _test_formal_world_all_sovereign_borders_are_separated() -> void:
-	var state := GameState.new()
-	state.generate_world(93005, 40, GameState.TERRAIN_CITY_COUNT)
+	var state := preload("res://tests/support/grid_world.gd").new()
+	state.generate_world(93005, 40, preload("res://tests/support/grid_world.gd").DEFAULT_CITY_COUNT)
 	var all_borders_valid := true
 	var sovereign_border_count := 0
 	var width := state.province_map_size.x
