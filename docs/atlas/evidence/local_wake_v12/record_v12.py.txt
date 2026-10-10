@@ -1,0 +1,60 @@
+from pathlib import Path
+import hashlib, json, math, shutil, statistics, subprocess
+
+root = Path('.')
+evidence = root / 'docs/atlas/evidence/local_wake_v12'
+evidence.mkdir(parents=True, exist_ok=True)
+(evidence / '.gitattributes').write_text('*.gd.txt -text -eol -whitespace\n*.py.txt -text -eol -whitespace\n', encoding='utf8', newline='\n')
+processes = []
+sources = {}
+for path in sorted(Path('.dbg/local-wake-v12').glob('paired-*.json')):
+    data = json.loads(path.read_text(encoding='utf8'))
+    assert data['seed'] == 1 and len(data['results']['after']) == 35
+    assert data['initial_sha256'] == '69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf'
+    if sources:
+        assert sources == data['source_hashes']
+    sources = data['source_hashes']
+    row = {'pid':data['pid'], 'order':data['variant_order'], 'first_changed_day':data['first_changed_day']}
+    for variant, days in data['results'].items():
+        values = sorted(day['elapsed_usec'] / 1000 for day in days)
+        peak = max(days, key=lambda d:d['elapsed_usec'])
+        row[variant] = {'mean_ms':statistics.mean(values), 'p95_ms':values[math.ceil(.95*len(values))-1], 'max_ms':values[-1], 'peak_day':peak['day'], 'peak_managed_nations':peak['managed_nations']}
+    processes.append(row)
+    shutil.copyfile(path, evidence / path.name)
+assert len(processes) == 5
+medians = {v:{k:statistics.median(r[v][k] for r in processes) for k in ['mean_ms','p95_ms','max_ms']} for v in ['before','after']}
+summary = {'date':'2026-10-11', 'parent_commit':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(), 'seed':1, 'day_range':[181,215], 'nodes':1192, 'armies_at_freeze':234, 'mask':{'enabled':True,'south':20,'north':55,'west':-15,'east':145}, 'systems':{'trade_enabled':True,'rulers_enabled':True}, 'initial_sha256':data['initial_sha256'], 'loaded_source_hashes':sources, 'processes':processes, 'medians':medians, 'improvement_percent':{k:(1-medians['after'][k]/medians['before'][k])*100 for k in medians['before']}, 'limitation':'Headless synchronous daily computation, not GUI frame rate. AI timing intentionally changes; old/new trajectories differ from day210. One frozen state over35days, not long-term equivalence.'}
+(evidence / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2)+'\n', encoding='utf8', newline='\n')
+shutil.copyfile('.dbg/daily-v9/baseline-manifest.json', evidence / 'frozen-input-manifest.json')
+for path in Path('.dbg/local-wake-v12').glob('*.stdout.txt'):
+    if path.name.startswith('paired-'):
+        assert 'V12_COMPARE_COMPLETE' in path.read_text(encoding='utf8')
+        shutil.copyfile(path, evidence/path.name)
+for path in Path('.dbg/local-wake-v12').glob('*.stderr.txt'):
+    if path.name.startswith('paired-'):
+        assert not path.read_bytes()
+        shutil.copyfile(path, evidence/path.name)
+shutil.copyfile('.dbg/local-wake-v12/red.txt', evidence/'red-test.txt')
+archive_sources = sources.copy()
+year = Path('.dbg/local-wake-v12/year-audit')
+if (year/'report.json').exists():
+    report = json.loads((year/'report.json').read_text(encoding='utf8'))
+    assert report['complete'] and report['day'] == 360 and not report['hard_errors']
+    summary['year_audit'] = {k:report[k] for k in ['day','complete','wars_seen','fronts_seen','battles_seen','armies_seen','max_armies','hard_errors','candidates','mean_simulation_ms','mean_audit_ms']}
+    (evidence / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2)+'\n', encoding='utf8', newline='\n')
+    archive_sources.update(report['source_hashes'])
+    target=evidence/'year-audit'; target.mkdir(exist_ok=True)
+    for name in ['manifest.json','report.json','events.jsonl','first-year-profile.jsonl','nation24-context.json']:
+        shutil.copyfile(year/name,target/name)
+    for name in ['year.stdout.txt','year.stderr.txt']:
+        shutil.copyfile(Path('.dbg/local-wake-v12')/name,target/name)
+    assert not (target/'year.stderr.txt').read_bytes()
+for name,expected in archive_sources.items():
+    source=Path(name)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected, name
+    target=evidence/'loaded-source'/Path(name+'.txt')
+    target.parent.mkdir(parents=True,exist_ok=True)
+    target.write_bytes(source.read_bytes())
+for name in ['local_wake_v12_compare.gd','v12_profile_sim.gd','local_wake_v12_year_audit.gd','inspect_v12_year.gd','state_codec.gd','stage_local_wake_v12.py','record_v12.py']:
+    shutil.copyfile(Path('.dbg')/name,evidence/(name+'.txt'))
+print(json.dumps({'medians':medians, 'improvement':summary['improvement_percent'], 'year':summary.get('year_audit')},ensure_ascii=False))

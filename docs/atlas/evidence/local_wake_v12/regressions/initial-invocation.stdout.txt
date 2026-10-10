@@ -1,0 +1,48 @@
+PASS project_compile (25454 ms)
+PASS test_suite (34250 ms)
+PASS atlas_diplomacy_wakes (2891 ms)
+PASS atlas_ai_cadence (2140 ms)
+PASS atlas_coalition_components (2141 ms)
+PASS atlas_coalition_runtime (19359 ms)
+PASS war_diplomacy_runtime_equivalence (17703 ms)
+PASS war_count_and_conqueror (2141 ms)
+PASS succession_counterattack (2234 ms)
+PASS atlas_territory_transactions (2141 ms)
+PASS atlas_politics_trade (20109 ms)
+PASS atlas_supply_runtime (18719 ms)
+PASS atlas_military_persistence (38906 ms)
+PASS political_history_test (2235 ms)
+FAIL coalition_pair_fronts (187 ms)
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Attempt to open script 'res://tests/coalition_pair_fronts.gd' resulted in error 'File not found'.
+   at: load_source_code (modules/gdscript/gdscript.cpp:1139)
+ERROR: Failed loading resource: res://tests/coalition_pair_fronts.gd.
+   at: _load (core/io/resource_loader.cpp:317)
+ERROR: Can't load script: res://tests/coalition_pair_fronts.gd
+   at: start (main/main.cpp:4366)
+
+FAIL coalition_report_lock (203 ms)
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Attempt to open script 'res://tests/coalition_report_lock.gd' resulted in error 'File not found'.
+   at: load_source_code (modules/gdscript/gdscript.cpp:1139)
+ERROR: Failed loading resource: res://tests/coalition_report_lock.gd.
+   at: _load (core/io/resource_loader.cpp:317)
+ERROR: Can't load script: res://tests/coalition_report_lock.gd
+   at: start (main/main.cpp:4366)
+
+FAIL coalition_dispatch (188 ms)
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Attempt to open script 'res://tests/coalition_dispatch.gd' resulted in error 'File not found'.
+   at: load_source_code (modules/gdscript/gdscript.cpp:1139)
+ERROR: Failed loading resource: res://tests/coalition_dispatch.gd.
+   at: _load (core/io/resource_loader.cpp:317)
+ERROR: Can't load script: res://tests/coalition_dispatch.gd
+   at: start (main/main.cpp:4366)
+
+PASS vassal_faction_conflict (2328 ms)
+PASS diplomacy_objective_batch_cache (2875 ms)
+PASS atlas_prewar_batch (2047 ms)
+Tests: 20 failures: 3

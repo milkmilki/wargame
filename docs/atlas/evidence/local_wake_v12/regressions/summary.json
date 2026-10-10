@@ -1,0 +1,168 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 25454,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log",
+      "archived_log": "project_compile.log.txt"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 34250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log",
+      "archived_log": "test_suite.log.txt"
+    },
+    {
+      "test": "atlas_diplomacy_wakes",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2891,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_diplomacy_wakes.log",
+      "archived_log": "atlas_diplomacy_wakes.log.txt"
+    },
+    {
+      "test": "atlas_ai_cadence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_ai_cadence.log",
+      "archived_log": "atlas_ai_cadence.log.txt"
+    },
+    {
+      "test": "atlas_coalition_components",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_coalition_components.log",
+      "archived_log": "atlas_coalition_components.log.txt"
+    },
+    {
+      "test": "atlas_coalition_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 19359,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_coalition_runtime.log",
+      "archived_log": "atlas_coalition_runtime.log.txt"
+    },
+    {
+      "test": "war_diplomacy_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 17703,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_diplomacy_runtime_equivalence.log",
+      "archived_log": "war_diplomacy_runtime_equivalence.log.txt"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_count_and_conqueror.log",
+      "archived_log": "war_count_and_conqueror.log.txt"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_counterattack.log",
+      "archived_log": "succession_counterattack.log.txt"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log",
+      "archived_log": "atlas_territory_transactions.log.txt"
+    },
+    {
+      "test": "atlas_politics_trade",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20109,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_politics_trade.log",
+      "archived_log": "atlas_politics_trade.log.txt"
+    },
+    {
+      "test": "atlas_supply_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 18719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_supply_runtime.log",
+      "archived_log": "atlas_supply_runtime.log.txt"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 38906,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_military_persistence.log",
+      "archived_log": "atlas_military_persistence.log.txt"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\political_history_test.log",
+      "archived_log": "political_history_test.log.txt"
+    },
+    {
+      "test": "vassal_faction_conflict",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\vassal_faction_conflict.log",
+      "archived_log": "vassal_faction_conflict.log.txt"
+    },
+    {
+      "test": "diplomacy_objective_batch_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2875,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomacy_objective_batch_cache.log",
+      "archived_log": "diplomacy_objective_batch_cache.log.txt"
+    },
+    {
+      "test": "atlas_prewar_batch",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_prewar_batch.log",
+      "archived_log": "atlas_prewar_batch.log.txt"
+    },
+    {
+      "test": "coalition_campaign_pairs",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_campaign_pairs.log",
+      "archived_log": "coalition_campaign_pairs.log.txt"
+    },
+    {
+      "test": "campaign_battle_report_lock",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_battle_report_lock.log",
+      "archived_log": "campaign_battle_report_lock.log.txt"
+    },
+    {
+      "test": "coalition_dispatch_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_dispatch_lifecycle.log",
+      "archived_log": "coalition_dispatch_lifecycle.log.txt"
+    }
+  ],
+  "failures": 0,
+  "invocation_note": "Initial runner included three incorrect fixture names, causing resource-load errors. Original results retained separately. Re-executed the three intended, existing fixtures successfully; final results contain the20 valid tests."
+}

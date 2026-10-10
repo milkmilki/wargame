@@ -1,0 +1,54 @@
+from pathlib import Path
+import re
+import subprocess
+
+def head(path):
+    return subprocess.check_output(['git', 'show', 'HEAD:' + path]).decode('utf8').replace('\r\n', '\n')
+
+def stage(path, text):
+    data = text.encode('utf8')
+    blob = subprocess.check_output(['git', 'hash-object', '-w', '--path=' + path, '--stdin'], input=data).decode().strip()
+    subprocess.run(['git', 'update-index', '--cacheinfo', '100644,' + blob + ',' + path], check=True)
+
+path = 'scripts/simulation/simulation.gd'
+text = head(path)
+current = Path(path).read_text(encoding='utf8')
+anchor = 'var _coalition_campaign_query_cache: Dictionary = {}\n'
+flag = current[current.index(anchor) + len(anchor):current.index('## Main-thread political topology only;')]
+assert flag.count('var ') == 1 and 'atlas_local_diplomacy_wakes_enabled' in flag
+text = text.replace(anchor, anchor + flag, 1)
+
+def method_range(source, name):
+    start = source.index('func ' + name + '(')
+    next_method = re.search(r'^func ', source[start+5:], re.M)
+    end = start+5+next_method.start() if next_method else len(source)
+    return start, end
+
+start, end = method_range(text, '_execute_diplomatic_action')
+method = text[start:end]
+launch = method.index('"diplomacy_declare_launch"')
+notify = method.index('\t\t\t\t\t_ai_last_decision_day = -1', launch)
+comment_start = method.rfind('\n', launch, notify-1) + 1
+assert method[comment_start:notify].lstrip().startswith('#')
+replacement = '\t\t\t\t\t# Both blocs, especially passive defenders, respond in this\n\t\t\t\t\t# day\'s AI phase. Unrelated countries retain regular scheduling.\n\t\t\t\t\t_wake_coalition_ai(attackers + defenders)'
+method = method[:comment_start] + replacement + method[notify+len('\t\t\t\t\t_ai_last_decision_day = -1'):]
+text = text[:start] + method + text[end:]
+start, end = method_range(text, '_synchronize_alliance_wars')
+method = text[start:end]
+assert method.count('\t_ai_last_decision_day = -1') == 1
+text = text[:start] + method.replace('\t_ai_last_decision_day = -1', '\t_wake_coalition_ai(bloc + enemies)') + text[end:]
+start, end = method_range(current, '_wake_coalition_ai')
+helper = current[start:end]
+assert helper.rstrip().endswith('_coalition_campaign_wake_day = mini(_coalition_campaign_wake_day, state.day)')
+anchor = 'func _regular_ai_nation_order('
+text = text.replace(anchor, helper + anchor, 1)
+stage(path, text)
+
+path = 'run_tests.py'
+text = head(path)
+anchor = '"atlas_alliance_runtime",'
+assert text.count(anchor) == 1
+text = text.replace(anchor, anchor + '\n    "atlas_diplomacy_wakes",', 1)
+stage(path, text)
+subprocess.run(['git', 'add', 'tests/atlas_diplomacy_wakes.gd'], check=True)
+print('Staged only v12 production change, runner entry and test.')

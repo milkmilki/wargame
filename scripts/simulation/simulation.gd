@@ -171,6 +171,9 @@ var _coalition_defense_activity: Dictionary = {}
 var _coalition_component_keys: Dictionary = {}
 var _coalition_changes_by_nation: Dictionary = {}
 var _coalition_campaign_query_cache: Dictionary = {}
+## External wars wake their participants immediately; other Atlas nations
+## keep their regular strategic schedule. False restores the global oracle.
+var atlas_local_diplomacy_wakes_enabled: bool = true
 ## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
 var _daily_supply_source_cache: Dictionary = {}
 var _stable_supply_city_source_cache: Dictionary = {}
@@ -4550,8 +4553,9 @@ func _execute_diplomatic_action(
 						"diplomacy_declare_launch",
 						declaration_part_started
 					)
-					# 宣战后强制所有参战国（尤其被动防守方）下一天重算州战役。
-					_ai_last_decision_day = -1
+					# Both blocs, especially passive defenders, respond in this
+					# day's AI phase. Unrelated countries retain regular scheduling.
+					_wake_coalition_ai(attackers + defenders)
 		DiplomacyAI.Action.FORM_ALLIANCE:
 			if (
 				state.relation_between(nation_a, nation_b)
@@ -4974,7 +4978,7 @@ func _synchronize_alliance_wars(
 		_queue_or_start_war_mobilization(
 			member, -1, evaluation_cache
 		)
-	_ai_last_decision_day = -1
+	_wake_coalition_ai(bloc + enemies)
 
 
 func _normalize_alliance_wars() -> void:
@@ -6858,6 +6862,20 @@ func _queue_ai_nation_wake(nation_id: int, hard: bool = false) -> void:
 	var batch := maxi(atlas_ai_batch_days, 1)
 	var next_day := state.day + batch - posmod(state.day, batch)
 	_ai_forced_nations[nation_id] = mini(int(_ai_forced_nations.get(nation_id, next_day)), next_day)
+
+
+func _wake_coalition_ai(members: Array[int]) -> void:
+	if (
+		not atlas_local_diplomacy_wakes_enabled or state.atlas_layout.is_empty()
+		or not ai_staggered_decisions or not ai_policy_overrides.is_empty()
+		or state.nations.size() <= _ai_decision_interval_days()
+	):
+		_ai_last_decision_day = -1
+		return
+	for nation_id in members:
+		_queue_ai_nation_wake(nation_id, true)
+	# Do not clear an earlier full political invalidation or the regular backlog.
+	_coalition_campaign_wake_day = mini(_coalition_campaign_wake_day, state.day)
 
 
 func _regular_ai_nation_order(interval: int, force_all: bool = false) -> Array[int]:

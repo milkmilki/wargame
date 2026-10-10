@@ -1,0 +1,38 @@
+{
+  "godot": {
+    "build": "official",
+    "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+    "hex": 263937,
+    "major": 4,
+    "minor": 7,
+    "patch": 1,
+    "status": "stable",
+    "string": "4.7.1-stable (official)",
+    "timestamp": 0
+  },
+  "hashes": {
+    "scripts/ai/diplomacy_ai.gd": "2b9eb2f928258ec8a527c7af51d98c4dcdd85855532d0690868ec8e3d1d04fc7",
+    "scripts/core/pathfinding.gd": "e33f5e1ffa4fd8845cd3b98f41ef6819bce38ef80a69827708b01e14096d05b9",
+    "scripts/core/trade_network.gd": "446af5e4ab0df2bb42958d6169f22a51d63644c9ca495691aafec66113ea7b0c",
+    "scripts/simulation/rules/supply_rules.gd": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa",
+    "scripts/simulation/simulation.gd": "138d2ec0ead1721d720e24fe37a67d092178710c35d40a38e681c8b7fb320062",
+    "scripts/state/game_state.gd": "63117b03bae9c5366ba414478cd3a4445ee24c85243465a6dc4898f8e9f6aa87"
+  },
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "nodes": 1192,
+  "pid": 16232,
+  "scene": "res://.dbg/daily_v9_baseline.gd",
+  "seed": 1,
+  "settlements": 484,
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  }
+}

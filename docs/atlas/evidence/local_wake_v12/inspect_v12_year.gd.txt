@@ -1,0 +1,20 @@
+extends SceneTree
+func _initialize():
+	var snapshot: Dictionary = FileAccess.open("res://.dbg/local-wake-v12/year-audit/final.snapshot", FileAccess.READ).get_var(false)
+	var output := {"snapshot_sha256":FileAccess.get_sha256("res://.dbg/local-wake-v12/year-audit/final.snapshot"), "day":snapshot.day, "nation_id":24, "nation":{}, "armies":[], "chronicle":[]}
+	for key in snapshot.nations:
+		var column = snapshot.nations[key]
+		if column is Array or typeof(column) in [TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY, TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY, TYPE_PACKED_BYTE_ARRAY, TYPE_PACKED_STRING_ARRAY]:
+			if column.size() == snapshot.nations.count: output.nation[key] = column[24]
+	for index in range(snapshot.armies.count):
+		if snapshot.armies.owner[index] != 24: continue
+		var row := {}
+		for key in snapshot.armies:
+			var column = snapshot.armies[key]
+			if column is Array or typeof(column) in [TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY, TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY, TYPE_PACKED_BYTE_ARRAY, TYPE_PACKED_STRING_ARRAY]:
+				if column.size() == snapshot.armies.count: row[key] = column[index]
+		output.armies.append(row)
+	for event in snapshot.chronicle_events:
+		if int(event.day) >= 330: output.chronicle.append(event)
+	FileAccess.open("res://.dbg/local-wake-v12/year-audit/nation24-context.json",FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("V12_YEAR_CONTEXT_COMPLETE"); quit()

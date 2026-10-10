@@ -1,0 +1,2 @@
+*.gd.txt -text -eol -whitespace
+*.py.txt -text -eol -whitespace

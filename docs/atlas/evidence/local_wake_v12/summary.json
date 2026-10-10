@@ -1,0 +1,209 @@
+{
+  "date": "2026-10-11",
+  "parent_commit": "6049b7f99b10473015ecad3e3c0584c6a2fb797e",
+  "seed": 1,
+  "day_range": [
+    181,
+    215
+  ],
+  "nodes": 1192,
+  "armies_at_freeze": 234,
+  "mask": {
+    "enabled": true,
+    "south": 20,
+    "north": 55,
+    "west": -15,
+    "east": 145
+  },
+  "systems": {
+    "trade_enabled": true,
+    "rulers_enabled": true
+  },
+  "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "loaded_source_hashes": {
+    "scripts/core/trade_network.gd": "7dffd30af59347b62f5eae385025ab1c56c9baaabfe7ac476287a42f973048a0",
+    "scripts/simulation/simulation.gd": "421802d6df0cca5d4a1456f602d8b731234af1a69d493860d06217dd8df405bd",
+    "scripts/state/game_state.gd": "e45d0523d83cac6e2600086599f14aeb60807d71f7864b877e08a06ed7d2914a",
+    "tests/support/legacy_alliance_state.gd": "f5135487a9b2322a6000a6849d9b42ca3309c350ac65774efcc16e3effab0744"
+  },
+  "processes": [
+    {
+      "pid": 16492,
+      "order": [
+        "after",
+        "before"
+      ],
+      "first_changed_day": 210,
+      "after": {
+        "mean_ms": 252.36694285714285,
+        "p95_ms": 572.084,
+        "max_ms": 825.306,
+        "peak_day": 210,
+        "peak_managed_nations": 10
+      },
+      "before": {
+        "mean_ms": 258.071,
+        "p95_ms": 612.999,
+        "max_ms": 1009.178,
+        "peak_day": 210,
+        "peak_managed_nations": 40
+      }
+    },
+    {
+      "pid": 28328,
+      "order": [
+        "before",
+        "after"
+      ],
+      "first_changed_day": 210,
+      "after": {
+        "mean_ms": 251.6174,
+        "p95_ms": 589.038,
+        "max_ms": 821.958,
+        "peak_day": 210,
+        "peak_managed_nations": 10
+      },
+      "before": {
+        "mean_ms": 260.18662857142857,
+        "p95_ms": 572.57,
+        "max_ms": 1062.375,
+        "peak_day": 210,
+        "peak_managed_nations": 40
+      }
+    },
+    {
+      "pid": 30616,
+      "order": [
+        "before",
+        "after"
+      ],
+      "first_changed_day": 210,
+      "after": {
+        "mean_ms": 252.90177142857144,
+        "p95_ms": 568.944,
+        "max_ms": 832.708,
+        "peak_day": 210,
+        "peak_managed_nations": 10
+      },
+      "before": {
+        "mean_ms": 256.5760285714286,
+        "p95_ms": 573.341,
+        "max_ms": 1013.761,
+        "peak_day": 210,
+        "peak_managed_nations": 40
+      }
+    },
+    {
+      "pid": 32652,
+      "order": [
+        "before",
+        "after"
+      ],
+      "first_changed_day": 210,
+      "after": {
+        "mean_ms": 250.46114285714285,
+        "p95_ms": 561.403,
+        "max_ms": 829.276,
+        "peak_day": 210,
+        "peak_managed_nations": 10
+      },
+      "before": {
+        "mean_ms": 254.8096857142857,
+        "p95_ms": 569.832,
+        "max_ms": 1012.192,
+        "peak_day": 210,
+        "peak_managed_nations": 40
+      }
+    },
+    {
+      "pid": 33660,
+      "order": [
+        "after",
+        "before"
+      ],
+      "first_changed_day": 210,
+      "after": {
+        "mean_ms": 253.29028571428572,
+        "p95_ms": 573.311,
+        "max_ms": 833.37,
+        "peak_day": 210,
+        "peak_managed_nations": 10
+      },
+      "before": {
+        "mean_ms": 255.12114285714287,
+        "p95_ms": 571.051,
+        "max_ms": 999.45,
+        "peak_day": 210,
+        "peak_managed_nations": 40
+      }
+    }
+  ],
+  "medians": {
+    "before": {
+      "mean_ms": 256.5760285714286,
+      "p95_ms": 572.57,
+      "max_ms": 1012.192
+    },
+    "after": {
+      "mean_ms": 252.36694285714285,
+      "p95_ms": 572.084,
+      "max_ms": 829.276
+    }
+  },
+  "improvement_percent": {
+    "mean_ms": 1.640482837668511,
+    "p95_ms": 0.08488045129855237,
+    "max_ms": 18.07127501501692
+  },
+  "limitation": "Headless synchronous daily computation, not GUI frame rate. AI timing intentionally changes; old/new trajectories differ from day210. One frozen state over35days, not long-term equivalence.",
+  "year_audit": {
+    "day": 360,
+    "complete": true,
+    "wars_seen": 31,
+    "fronts_seen": 109,
+    "battles_seen": 63,
+    "armies_seen": 482,
+    "max_armies": 424,
+    "hard_errors": [],
+    "candidates": [
+      {
+        "armies": 9,
+        "cap": 6,
+        "code": "army_count_above_current_cap",
+        "day": 360,
+        "nation": 24
+      }
+    ],
+    "mean_simulation_ms": 165.735116666667,
+    "mean_audit_ms": 12.0948166666667
+  },
+  "regression_tests": [
+    "project_compile",
+    "test_suite",
+    "atlas_diplomacy_wakes",
+    "atlas_ai_cadence",
+    "atlas_coalition_components",
+    "atlas_coalition_runtime",
+    "war_diplomacy_runtime_equivalence",
+    "war_count_and_conqueror",
+    "succession_counterattack",
+    "atlas_territory_transactions",
+    "atlas_politics_trade",
+    "atlas_supply_runtime",
+    "atlas_military_persistence",
+    "political_history_test",
+    "vassal_faction_conflict",
+    "diplomacy_objective_batch_cache",
+    "atlas_prewar_batch",
+    "coalition_campaign_pairs",
+    "campaign_battle_report_lock",
+    "coalition_dispatch_lifecycle"
+  ],
+  "staged_regression_tests": [
+    "project_compile",
+    "atlas_diplomacy_wakes",
+    "atlas_ai_cadence",
+    "war_count_and_conqueror",
+    "succession_counterattack"
+  ]
+}

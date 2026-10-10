@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_DIPLOMACY_WAKES_FAIL declaration does not request a global AI refresh
+ATLAS_DIPLOMACY_WAKES_FAIL attacker, defender and each allied participant wake immediately
+ATLAS_DIPLOMACY_WAKES_FAIL attacker, defender and each allied participant wake immediately
+ATLAS_DIPLOMACY_WAKES_FAIL attacker, defender and each allied participant wake immediately
+ATLAS_DIPLOMACY_WAKES_FAIL attacker, defender and each allied participant wake immediately
+ATLAS_DIPLOMACY_WAKES_RESULT checks=9 failures=5

@@ -1,0 +1,6 @@
+extends Simulation
+var managed_counts := {}
+func _prepare_ai_view_phase(spread: bool,started: int) -> Dictionary:
+	var result: Dictionary=await super._prepare_ai_view_phase(spread,started)
+	managed_counts[state.day]=result.managed_nations.size()
+	return result
