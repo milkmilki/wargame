@@ -1,0 +1,14 @@
+from pathlib import Path
+import subprocess
+from prepare_v18 import transform_state,transform_sim
+for path,fn in [('scripts/state/game_state.gd',transform_state),('scripts/simulation/simulation.gd',transform_sim)]:
+ s=subprocess.check_output(['git','show','HEAD:'+path]).decode().replace('\r\n','\n')
+ s=fn(s)
+ blob=subprocess.check_output(['git','hash-object','-w','--path='+path,'--stdin'],input=s.encode()).decode().strip()
+ subprocess.run(['git','update-index','--cacheinfo','100644,'+blob+','+path],check=True)
+p='run_tests.py';s=subprocess.check_output(['git','show','HEAD:'+p]).decode().replace('\r\n','\n');needle='"capital_tax_batch",';assert s.count(needle)==1
+s=s.replace(needle,needle+' "resource_capacity_batch",',1)
+blob=subprocess.check_output(['git','hash-object','-w','--path='+p,'--stdin'],input=s.encode()).decode().strip()
+subprocess.run(['git','update-index','--cacheinfo','100644,'+blob+','+p],check=True)
+subprocess.run(['git','add','tests/resource_capacity_batch.gd'],check=True)
+print('Staged only capacity batch edits, preserving older work.')

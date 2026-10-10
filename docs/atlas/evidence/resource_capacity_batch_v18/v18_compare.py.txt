@@ -1,0 +1,42 @@
+from pathlib import Path
+import hashlib,json,statistics,subprocess
+root=Path.cwd(); output=root/'.dbg/capacity-batch-v18/daily'; output.mkdir(exist_ok=True)
+source_root=root/'.dbg/capacity-batch-v18'
+paths=['scripts/state/game_state.gd','scripts/simulation/simulation.gd']
+original={p:(root/p).read_bytes() for p in paths}
+variants={v:{p:(source_root/(Path(p).stem+'-'+v+'.gd.txt')).read_bytes() for p in paths} for v in ['before','after']}
+assert all(original[p]==variants['after'][p] for p in paths)
+for v in variants:
+    for p in paths: (output/(Path(p).stem+'-'+v+'.gd.txt')).write_bytes(variants[v][p])
+s=(root/'.dbg/v17_daily.gd').read_text(encoding='utf-8-sig')
+s=s.replace('"levels" if OS.get_cmdline_user_args().has("--levels") else "heap"','"after" if OS.get_cmdline_user_args().has("--after") else "before"').replace('.dbg/forecast-pools-v17/daily/','.dbg/capacity-batch-v18/daily/')
+(root/'.dbg/v18_daily.gd').write_text(s,encoding='utf-8')
+results=[]
+try:
+    for run in range(1,6):
+        pair={}
+        for v in (['before','after'] if run%2 else ['after','before']):
+            for p in paths: (root/p).write_bytes(variants[v][p])
+            stdout=output/f'run-{run}-{v}.stdout.txt'; stderr=output/f'run-{run}-{v}.stderr.txt'
+            with stdout.open('wb') as o, stderr.open('wb') as e:
+                process=subprocess.Popen(['D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe','--headless','--path',str(root),'--script','res://.dbg/v18_daily.gd','--','--'+v],stdout=o,stderr=e,creationflags=subprocess.CREATE_NO_WINDOW)
+                print('DAILY_START',run,v,process.pid,flush=True)
+                try: code=process.wait(timeout=180)
+                except subprocess.TimeoutExpired:
+                    process.kill();process.wait();raise
+            assert code==0 and not stderr.read_text(encoding='utf-8').strip(),(run,v,code,stderr.read_text())
+            data=json.loads((output/f'{v}-{process.pid}.json').read_text())
+            for p in paths: assert data['source_hashes'][p]==hashlib.sha256(variants[v][p]).hexdigest()
+            assert data['seed']==1 and data['trade'] and data['rulers']
+            assert data['mask']=={'enabled':True,'east':145.,'west':-15.,'south':20.,'north':55.,'version':'atlas-geographic-mask-v1'}
+            assert len(data['rows'])==35 and data['rows'][0]['day']==181 and data['rows'][-1]['day']==215
+            durations=[r['elapsed_us']/1000 for r in data['rows']]
+            pair[v]={'pid':process.pid,'mean_ms':statistics.mean(durations),'p95_ms':sorted(durations)[33],'peak_ms':max(durations),'rows':data['rows'],'initial_sha256':data['initial_sha256']}
+            print('DAILY_RUN',run,v,process.pid,'mean',pair[v]['mean_ms'],'peak',pair[v]['peak_ms'],flush=True)
+        assert pair['before']['initial_sha256']==pair['after']['initial_sha256']
+        assert all(a['sha256']==b['sha256'] for a,b in zip(pair['before']['rows'],pair['after']['rows'])),'full native state mismatch'
+        results.append(pair); (output/'paired-summary.json').write_text(json.dumps(results,indent=2)+'\n',encoding='utf-8')
+finally:
+    for p in paths: (root/p).write_bytes(original[p])
+    assert all((root/p).read_bytes()==original[p] for p in paths)
+print('DAILY_COMPARE_COMPLETE pairs=',len(results),'states=',len(results)*35,flush=True)

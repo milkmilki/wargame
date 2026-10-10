@@ -1,0 +1,11 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation = preload("res://.dbg/v18_scan_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin")
+	var rows := []
+	for day in range(35):
+		sim.state.scan_profile.clear(); sim._advance_day(false)
+		rows.append({"day":sim.state.day,"scans":sim.state.scan_profile.duplicate(true),"profile":sim.tick_profile_last_usec.duplicate()})
+		if day%5==0: await process_frame
+	FileAccess.open("res://.dbg/v18-scans.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"rows":rows},"  "))
+	print("SCAN_PROBE_COMPLETE ",OS.get_process_id()); sim.free(); quit()

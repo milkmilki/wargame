@@ -1,0 +1,3 @@
+RESOURCE_CAPACITY_BATCH_FAIL monthly clamp does not repeat per-country city scans
+RESOURCE_CAPACITY_BATCH_FAIL capacity batch API exists
+RESOURCE_CAPACITY_BATCH_FAIL monthly admission batch API exists

@@ -1,0 +1,282 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "4e454e58b8067fa2708f080862c7bbf11ccff34a",
+  "scope": "fresh batch capacity aggregation for monthly manpower admission and inventory clamping",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "performance_kind": "headless calculation, not GUI frames",
+  "configuration": {
+    "seed": 1,
+    "nations": 40,
+    "nodes": 1192,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "settlement_mask": {
+      "enabled": true,
+      "west": -15,
+      "east": 145,
+      "south": 20,
+      "north": 55
+    }
+  },
+  "range": [
+    181,
+    215
+  ],
+  "frozen_input": ".dbg/daily-v9/frozen-day180.bin",
+  "initial_native_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "equal_native_pairs": 175,
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 10436,
+        "mean_ms": 243.972,
+        "p95_ms": 555.55,
+        "peak_ms": 882.386,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 35352,
+        "mean_ms": 246.77482857142857,
+        "p95_ms": 619.526,
+        "peak_ms": 865.742,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 34244,
+        "mean_ms": 252.23517142857142,
+        "p95_ms": 557.404,
+        "peak_ms": 973.618,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 29432,
+        "mean_ms": 243.72608571428572,
+        "p95_ms": 553.322,
+        "peak_ms": 874.217,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 26356,
+        "mean_ms": 245.17285714285714,
+        "p95_ms": 556.204,
+        "peak_ms": 886.693,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 4848,
+        "mean_ms": 243.94562857142859,
+        "p95_ms": 563.21,
+        "peak_ms": 876.145,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 23864,
+        "mean_ms": 243.82342857142856,
+        "p95_ms": 553.003,
+        "peak_ms": 895.13,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 30780,
+        "mean_ms": 244.36254285714287,
+        "p95_ms": 569.498,
+        "peak_ms": 883.686,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 31096,
+        "mean_ms": 247.36345714285716,
+        "p95_ms": 556.004,
+        "peak_ms": 903.138,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 12956,
+        "mean_ms": 248.06497142857143,
+        "p95_ms": 597.049,
+        "peak_ms": 861.27,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "metrics": {
+    "mean_ms": {
+      "before": 245.17285714285714,
+      "after": 244.36254285714287,
+      "reduction_percent": 0.3305073388454729
+    },
+    "p95_ms": {
+      "before": 556.004,
+      "after": 569.498,
+      "reduction_percent": -2.4269609571154214
+    },
+    "peak_ms": {
+      "before": 895.13,
+      "after": 874.217,
+      "reduction_percent": 2.3363086925921386
+    },
+    "monthly": {
+      "before": 616.958,
+      "after": 599.45,
+      "reduction_percent": 2.837794468991394,
+      "values_ms": {
+        "before": [
+          608.812,
+          673.824,
+          614.981,
+          619.576,
+          616.958
+        ],
+        "after": [
+          593.639,
+          602.242,
+          599.45,
+          603.267,
+          588.66
+        ]
+      }
+    },
+    "monthly_economy": {
+      "before": 100.44,
+      "after": 86.352,
+      "reduction_percent": 14.026284348864987,
+      "values_ms": {
+        "before": [
+          98.944,
+          112.969,
+          100.44,
+          103.88,
+          98.292
+        ],
+        "after": [
+          85.59,
+          87.565,
+          85.632,
+          88.261,
+          86.352
+        ]
+      }
+    },
+    "monthly_diplomacy": {
+      "before": 340.427,
+      "after": 339.717,
+      "reduction_percent": 0.20856160057810819,
+      "values_ms": {
+        "before": [
+          337.023,
+          373.29,
+          339.664,
+          340.427,
+          345.368
+        ],
+        "after": [
+          335.179,
+          343.942,
+          340.666,
+          339.717,
+          333.496
+        ]
+      }
+    },
+    "monthly_reinforcements": {
+      "before": 132.993,
+      "after": 131.205,
+      "reduction_percent": 1.3444316618167742,
+      "values_ms": {
+        "before": [
+          131.074,
+          144.913,
+          132.993,
+          133.628,
+          132.945
+        ],
+        "after": [
+          131.118,
+          131.205,
+          133.699,
+          134.677,
+          128.738
+        ]
+      }
+    }
+  },
+  "diagnostics": {
+    "manpower_gate_pid": 26364,
+    "gate_note": "broad candidate filter, 31 candidates and no manpower failures at day210; rejected as useful optimization for this sample",
+    "scan_pid": 22400,
+    "scan_note": "instrumented subclass; timing includes wrapper overhead and nested member queries, not additive",
+    "day210_manpower_calls": 219,
+    "day210_manpower_us": 31845
+  },
+  "limitations": [
+    "Only 35 days of performance measurement and one monthly boundary; not a long-run stability claim.",
+    "P95 did not improve and whole-day mean improvement is very small.",
+    "The full working performance baseline includes older authorized pending work; source archives identify actual loaded versions. The staged-only checkout is tested separately."
+  ],
+  "working_regression": {
+    "summary": "working-regression-summary.json",
+    "tests": [
+      "project_compile",
+      "resource_capacity_batch",
+      "test_suite",
+      "capital_tax_batch",
+      "forecast_input_pools",
+      "forecast_consumption_commit",
+      "resource_forecast_equivalence",
+      "resource_forecast_integration",
+      "garrison_economy",
+      "atlas_politics_trade",
+      "atlas_trade_runtime",
+      "atlas_supply_runtime",
+      "atlas_coalition_runtime",
+      "war_diplomacy_runtime_equivalence",
+      "war_count_and_conqueror",
+      "succession_counterattack",
+      "atlas_territory_transactions",
+      "atlas_military_persistence",
+      "political_history_test"
+    ],
+    "failures": 0
+  },
+  "staged_regression": {
+    "summary": "staged-regression-summary.json",
+    "tests": [
+      "resource_capacity_batch",
+      "test_suite",
+      "garrison_economy",
+      "resource_forecast_equivalence",
+      "resource_forecast_integration",
+      "war_count_and_conqueror",
+      "succession_counterattack"
+    ],
+    "failures": 0
+  },
+  "new_test_sha256": "7dfeda32fdae431244d063f7f5e715ff51a4aef6d81270cc61102e0df904c443",
+  "compressed_source_archives": {
+    "game_state-after.gd.txt.gz": {
+      "uncompressed_sha256": "b060bb056d0d5fc8157c930a28337236b72e5b2ffcdb8cb689569005e188e3a1",
+      "gzip_sha256": "f6b37c1d1e0f2cf4f2ee0ce0d9a46cfa4360d418ebc1ad5e7c301dc2f2d1cde8"
+    },
+    "game_state-before.gd.txt.gz": {
+      "uncompressed_sha256": "e45d0523d83cac6e2600086599f14aeb60807d71f7864b877e08a06ed7d2914a",
+      "gzip_sha256": "9181958c13a4cc29073ce74a4d377faf04af8a99a2d209008e6def3e8f12c1f2"
+    },
+    "simulation-after.gd.txt.gz": {
+      "uncompressed_sha256": "ecd5e7f8c961438dc6ec006792b047f479a49647c4808b2f76bf5dcc64a344fa",
+      "gzip_sha256": "1192a1c805cb45fe7aade2449b017a30b51d233b3abcd74edff7301919bb29b0"
+    },
+    "simulation-before.gd.txt.gz": {
+      "uncompressed_sha256": "8c7b897bf34ce7cdb6274953378d04036e1feef63c7f5f8a99ba85eefa8632b7",
+      "gzip_sha256": "a218a50f9b39b8e55047b1a183f607d5485569694d2d956d3dfc4b4e73d3c233"
+    }
+  }
+}

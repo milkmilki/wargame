@@ -1644,8 +1644,7 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 			garrison_by_city,
 			modifiers
 		)
-	for nation in state.nations:
-		state.add_manpower(nation.id, monthly_manpower_produced[nation.id])
+	state.add_manpower_batch(monthly_manpower_produced)
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"monthly_city_outputs", economy_part_started)
 	economy_part_started = (

@@ -1,0 +1,90 @@
+from pathlib import Path
+import subprocess
+ROOT=Path.cwd()
+STATE='scripts/state/game_state.gd'; SIM='scripts/simulation/simulation.gd'
+block='''## Fresh base-output capacities for one synchronous batch; never retained across edits.
+## Raw ownership and the scalar APIs' dock-only exclusion are intentional.
+func base_resource_capacities() -> Dictionary:
+	var output_by_owner := {}
+	for city in cities:
+		if city.is_dock:
+			continue
+		if not output_by_owner.has(city.owner_nation):
+			output_by_owner[city.owner_nation] = [0, 0]
+		var output: Array = output_by_owner[city.owner_nation]
+		output[0] += maxi(city.manpower_per_month, 0)
+		output[1] += maxi(city.food_per_half_year, 0)
+	var manpower: Array[int] = []
+	var food: Array[int] = []
+	manpower.resize(nations.size())
+	food.resize(nations.size())
+	var food_by_holder := {}
+	for nation in nations:
+		var monthly_output := 0
+		for member_id in food_pool_members(nation.id):
+			monthly_output += int(output_by_owner.get(member_id, [0, 0])[0])
+		manpower[nation.id] = monthly_output * INITIAL_MANPOWER_RESERVE_MONTHS
+		var holder_id := food_pool_holder(nation.id)
+		if not food_by_holder.has(holder_id):
+			var half_year_output := 0
+			for member_id in food_pool_members(holder_id):
+				half_year_output += int(output_by_owner.get(member_id, [0, 0])[1])
+			food_by_holder[holder_id] = half_year_output * FOOD_CAPACITY_HALF_YEARS
+		food[nation.id] = int(food_by_holder[holder_id])
+	return {"manpower": manpower, "food": food}
+
+
+## Monthly admission uses one fresh capacity batch and retains national commit order.
+func add_manpower_batch(amounts: Array[int]) -> Array[int]:
+	assert(amounts.size() == nations.size())
+	var capacities: Array[int] = base_resource_capacities().manpower
+	var accepted: Array[int] = []
+	for nation in nations:
+		accepted.append(_add_manpower_with_capacity(nation.id, amounts[nation.id], capacities[nation.id]))
+	return accepted
+
+
+'''
+old_add='''	var nation := nations[nation_id]
+	var accepted := mini(
+		amount,
+		maxi(manpower_pool_capacity(nation_id) - nation.manpower_pool, 0)
+	)
+	nation.manpower_pool += accepted
+	return accepted
+'''
+new_add='''	return _add_manpower_with_capacity(nation_id, amount, manpower_pool_capacity(nation_id))
+
+
+func _add_manpower_with_capacity(nation_id: int, amount: int, capacity: int) -> int:
+	if amount <= 0:
+		return 0
+	var nation := nations[nation_id]
+	var accepted := mini(amount, maxi(capacity - nation.manpower_pool, 0))
+	nation.manpower_pool += accepted
+	return accepted
+'''
+def transform_state(s):
+    anchor='## 唯一的人力正向写入口。返回实际进入人力池的数量。'
+    assert s.count(anchor)==1; s=s.replace(anchor,block+anchor,1)
+    assert s.count(old_add)==1; s=s.replace(old_add,new_add,1)
+    anchor='func clamp_resource_capacities() -> void:\n\tvar food_changed := false'
+    assert s.count(anchor)==1; s=s.replace(anchor,anchor+'\n\tvar capacities := base_resource_capacities()',1)
+    old='nation.manpower_pool, 0, manpower_pool_capacity(nation.id)'
+    assert s.count(old)==1; s=s.replace(old,'nation.manpower_pool, 0, int(capacities.manpower[nation.id])',1)
+    old='var excess := _food_pool_stock(nation.id) - food_storage_capacity(nation.id)'
+    assert s.count(old)==1; s=s.replace(old,'var excess := _food_pool_stock(nation.id) - int(capacities.food[nation.id])',1)
+    return s
+def transform_sim(s):
+    old='\tfor nation in state.nations:\n\t\tstate.add_manpower(nation.id, monthly_manpower_produced[nation.id])'
+    assert s.count(old)==1
+    return s.replace(old,'\tstate.add_manpower_batch(monthly_manpower_produced)',1)
+if __name__=='__main__':
+    out=ROOT/'.dbg/capacity-batch-v18'; out.mkdir(exist_ok=True)
+    for path,fn in [(STATE,transform_state),(SIM,transform_sim)]:
+        p=ROOT/path
+        (out/(p.stem+'-before.gd.txt')).write_bytes(p.read_bytes())
+        p.write_text(fn(p.read_text(encoding='utf-8-sig')),encoding='utf-8')
+        (out/(p.stem+'-after.gd.txt')).write_bytes(p.read_bytes())
+    p=ROOT/'run_tests.py'; s=p.read_text(encoding='utf-8-sig'); anchor='"capital_tax_batch",'; assert s.count(anchor)==1
+    p.write_text(s.replace(anchor,anchor+' "resource_capacity_batch",',1),encoding='utf-8')

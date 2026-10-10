@@ -1,0 +1,29 @@
+from pathlib import Path
+p=Path('.dbg')
+codec=(p/'state_codec.gd').read_text(encoding='utf-8-sig')
+codec=codec.replace('var row: Dictionary = snapshot.records[index]\n','var row: Dictionary = snapshot.records[index]\n\t\tif row.script == "res://scripts/state/game_state.gd": row.script = "res://.dbg/v18_scan_state.gd"\n')
+(p/'v18_scan_codec.gd').write_text(codec,encoding='utf-8')
+(p/'v18_scan_state.gd').write_text('''extends GameState
+var scan_profile := {}
+func record(key: String, started: int):
+	var row: Dictionary = scan_profile.get(key,{"calls":0,"usec":0})
+	row.calls += 1; row.usec += Time.get_ticks_usec()-started; scan_profile[key] = row
+func manpower_pool_capacity(nation_id: int) -> int:
+	var started := Time.get_ticks_usec(); var result := super.manpower_pool_capacity(nation_id); record("manpower_capacity",started); return result
+func food_storage_capacity(nation_id: int) -> int:
+	var started := Time.get_ticks_usec(); var result := super.food_storage_capacity(nation_id); record("food_capacity",started); return result
+func food_pool_members(holder_id: int) -> Array[int]:
+	var started := Time.get_ticks_usec(); var result := super.food_pool_members(holder_id); record("food_members",started); return result
+''',encoding='utf-8')
+(p/'v18_scans.gd').write_text('''extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation = preload("res://.dbg/v18_scan_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin")
+	var rows := []
+	for day in range(35):
+		sim.state.scan_profile.clear(); sim._advance_day(false)
+		rows.append({"day":sim.state.day,"scans":sim.state.scan_profile.duplicate(true),"profile":sim.tick_profile_last_usec.duplicate()})
+		if day%5==0: await process_frame
+	FileAccess.open("res://.dbg/v18-scans.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"rows":rows},"  "))
+	print("SCAN_PROBE_COMPLETE ",OS.get_process_id()); sim.free(); quit()
+''',encoding='utf-8')

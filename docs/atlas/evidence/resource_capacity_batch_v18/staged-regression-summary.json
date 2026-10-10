@@ -1,0 +1,56 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "resource_capacity_batch",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2609,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\resource_capacity_batch.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 33704,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "garrison_economy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\garrison_economy.log"
+    },
+    {
+      "test": "resource_forecast_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 563,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\resource_forecast_equivalence.log"
+    },
+    {
+      "test": "resource_forecast_integration",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2781,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\resource_forecast_integration.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v18-staged-verify\\.dbg\\regression\\succession_counterattack.log"
+    }
+  ],
+  "failures": 0
+}

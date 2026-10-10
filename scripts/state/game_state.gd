@@ -4148,15 +4148,60 @@ func manpower_pool_capacity(nation_id: int) -> int:
 	return monthly_output * INITIAL_MANPOWER_RESERVE_MONTHS
 
 
+## Fresh base-output capacities for one synchronous batch; never retained across edits.
+## Raw ownership and the scalar APIs' dock-only exclusion are intentional.
+func base_resource_capacities() -> Dictionary:
+	var output_by_owner := {}
+	for city in cities:
+		if city.is_dock:
+			continue
+		if not output_by_owner.has(city.owner_nation):
+			output_by_owner[city.owner_nation] = [0, 0]
+		var output: Array = output_by_owner[city.owner_nation]
+		output[0] += maxi(city.manpower_per_month, 0)
+		output[1] += maxi(city.food_per_half_year, 0)
+	var manpower: Array[int] = []
+	var food: Array[int] = []
+	manpower.resize(nations.size())
+	food.resize(nations.size())
+	var food_by_holder := {}
+	for nation in nations:
+		var monthly_output := 0
+		for member_id in food_pool_members(nation.id):
+			monthly_output += int(output_by_owner.get(member_id, [0, 0])[0])
+		manpower[nation.id] = monthly_output * INITIAL_MANPOWER_RESERVE_MONTHS
+		var holder_id := food_pool_holder(nation.id)
+		if not food_by_holder.has(holder_id):
+			var half_year_output := 0
+			for member_id in food_pool_members(holder_id):
+				half_year_output += int(output_by_owner.get(member_id, [0, 0])[1])
+			food_by_holder[holder_id] = half_year_output * FOOD_CAPACITY_HALF_YEARS
+		food[nation.id] = int(food_by_holder[holder_id])
+	return {"manpower": manpower, "food": food}
+
+
+## Monthly admission uses one fresh capacity batch and retains national commit order.
+func add_manpower_batch(amounts: Array[int]) -> Array[int]:
+	assert(amounts.size() == nations.size())
+	var capacities: Array[int] = base_resource_capacities().manpower
+	var accepted: Array[int] = []
+	for nation in nations:
+		accepted.append(_add_manpower_with_capacity(nation.id, amounts[nation.id], capacities[nation.id]))
+	return accepted
+
+
 ## 唯一的人力正向写入口。返回实际进入人力池的数量。
 func add_manpower(nation_id: int, amount: int) -> int:
 	if amount <= 0 or nation_id < 0 or nation_id >= nations.size():
 		return 0
+	return _add_manpower_with_capacity(nation_id, amount, manpower_pool_capacity(nation_id))
+
+
+func _add_manpower_with_capacity(nation_id: int, amount: int, capacity: int) -> int:
+	if amount <= 0:
+		return 0
 	var nation := nations[nation_id]
-	var accepted := mini(
-		amount,
-		maxi(manpower_pool_capacity(nation_id) - nation.manpower_pool, 0)
-	)
+	var accepted := mini(amount, maxi(capacity - nation.manpower_pool, 0))
 	nation.manpower_pool += accepted
 	return accepted
 
@@ -4165,13 +4210,14 @@ func add_manpower(nation_id: int, amount: int) -> int:
 ## 避免插入领土事务的多阶段守恒划转中间破坏账目。
 func clamp_resource_capacities() -> void:
 	var food_changed := false
+	var capacities := base_resource_capacities()
 	for nation in nations:
 		nation.manpower_pool = clampi(
-			nation.manpower_pool, 0, manpower_pool_capacity(nation.id)
+			nation.manpower_pool, 0, int(capacities.manpower[nation.id])
 		)
 		if food_pool_holder(nation.id) != nation.id:
 			continue
-		var excess := _food_pool_stock(nation.id) - food_storage_capacity(nation.id)
+		var excess := _food_pool_stock(nation.id) - int(capacities.food[nation.id])
 		if excess > 0:
 			_withdraw_food_from_warehouses(nation, excess)
 			food_changed = true

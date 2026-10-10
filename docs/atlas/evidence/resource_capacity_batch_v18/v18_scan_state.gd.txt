@@ -1,0 +1,11 @@
+extends GameState
+var scan_profile := {}
+func record(key: String, started: int):
+	var row: Dictionary = scan_profile.get(key,{"calls":0,"usec":0})
+	row.calls += 1; row.usec += Time.get_ticks_usec()-started; scan_profile[key] = row
+func manpower_pool_capacity(nation_id: int) -> int:
+	var started := Time.get_ticks_usec(); var result := super.manpower_pool_capacity(nation_id); record("manpower_capacity",started); return result
+func food_storage_capacity(nation_id: int) -> int:
+	var started := Time.get_ticks_usec(); var result := super.food_storage_capacity(nation_id); record("food_capacity",started); return result
+func food_pool_members(holder_id: int) -> Array[int]:
+	var started := Time.get_ticks_usec(); var result := super.food_pool_members(holder_id); record("food_members",started); return result

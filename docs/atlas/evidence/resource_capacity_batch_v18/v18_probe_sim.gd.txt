@@ -1,0 +1,14 @@
+extends Simulation
+var gate_rows: Array = []
+func _resolve_diplomacy() -> void:
+	var candidates := []
+	var cache := {}
+	for nation in state.nations:
+		if not nation.alive or nation.succession_identity or state.is_vassal(nation.id) or nation.war_preparation_target_nation>=0: continue
+		var troops := DiplomacyAI._troop_count(state,nation.id,cache)
+		var era := DiplomacyAI.unification_era_factor(state)
+		var required := maxi(int(round(lerpf(float(DiplomacyAI.MIN_MANPOWER_RESERVE),float(DiplomacyAI.MIN_MANPOWER_RESERVE)/5.,era))),int(ceil(float(troops)*lerpf(.15,DiplomacyAI.TOTAL_WAR_MANPOWER_SHARE,era))))
+		required = mini(required,state.manpower_pool_capacity(nation.id))
+		candidates.append({"nation":nation.id,"pool":nation.manpower_pool,"required":required,"reject":nation.manpower_pool<required})
+	gate_rows.append({"day":state.day,"candidates":candidates})
+	super._resolve_diplomacy()
