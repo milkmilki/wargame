@@ -1,0 +1,213 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "37da4bb1269f4c1098269debed118b8bd5718aaa",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "scope": "headless computation, not GUI frame rate",
+  "configuration": {
+    "seed": 1,
+    "nations": 40,
+    "nodes": 1192,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "mask": {
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    }
+  },
+  "days": [
+    181,
+    215
+  ],
+  "frozen_file": ".dbg/daily-v9/frozen-day180.bin",
+  "frozen_file_sha256": "b9db9e38bd2fbb4f174206917e332982c668ed7f5bf408aaf60bbf0da17089d1",
+  "initial_native_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "metrics": {
+    "mean_ms": {
+      "before": 227.68765714285715,
+      "after": 219.00188571428572,
+      "reduction_percent": 3.814774826868085
+    },
+    "p95_ms": {
+      "before": 542.832,
+      "after": 325.457,
+      "reduction_percent": 40.04461785598491
+    },
+    "peak_ms": {
+      "before": 830.645,
+      "after": 832.36,
+      "reduction_percent": -0.20646605950797656
+    },
+    "ai": {
+      "before": 122.92925714285714,
+      "after": 123.77005714285714
+    },
+    "monthly": {
+      "before": 16.88117142857143,
+      "after": 16.87422857142857
+    },
+    "supply": {
+      "before": 36.56274285714285,
+      "after": 27.438285714285715
+    },
+    "supply_build_plans": {
+      "before": 22.491885714285715,
+      "after": 13.585628571428572
+    },
+    "supply_prepare": {
+      "before": 9.248514285714286,
+      "after": 9.233914285714285
+    },
+    "movement_battles": {
+      "before": 33.20514285714285,
+      "after": 33.25994285714286
+    }
+  },
+  "equal_daily_states": 175,
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 32136,
+        "mean_ms": 229.90451428571427,
+        "p95_ms": 541.442,
+        "peak_ms": 841.376,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 22856,
+        "mean_ms": 218.74131428571428,
+        "p95_ms": 325.457,
+        "peak_ms": 833.976,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 34868,
+        "mean_ms": 227.68765714285715,
+        "p95_ms": 543.906,
+        "peak_ms": 830.645,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 36516,
+        "mean_ms": 219.00188571428572,
+        "p95_ms": 326.665,
+        "peak_ms": 831.676,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 11932,
+        "mean_ms": 226.97142857142856,
+        "p95_ms": 542.832,
+        "peak_ms": 827.607,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 25948,
+        "mean_ms": 218.52037142857142,
+        "p95_ms": 322.854,
+        "peak_ms": 828.549,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 29712,
+        "mean_ms": 226.1232,
+        "p95_ms": 539.933,
+        "peak_ms": 822.525,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 19496,
+        "mean_ms": 219.65142857142857,
+        "p95_ms": 331.298,
+        "peak_ms": 839.17,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 24736,
+        "mean_ms": 228.35025714285715,
+        "p95_ms": 547.594,
+        "peak_ms": 835.063,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 12396,
+        "mean_ms": 222.5614,
+        "p95_ms": 325.101,
+        "peak_ms": 832.36,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "runtime": {
+    "days": 35,
+    "equal_daily_states": 35,
+    "before_pid": 35876,
+    "after_pid": 25096,
+    "workers": 4,
+    "note": "Inherited cumulative runtime peaks are not a new main-thread performance measurement."
+  },
+  "tests": {
+    "new_checks": 1920,
+    "working_passed": 17,
+    "staged_passed": 8,
+    "final_replay_passed": 8
+  },
+  "source_archives": {
+    "scripts__ai__diplomacy_ai.gd.gz": {
+      "original_path": "scripts/ai/diplomacy_ai.gd",
+      "sha256": "5389b8a70317665c4f59ad5682597a5db0ca30f458ec13b0c228ca5987c2210c"
+    },
+    "scripts__ai__threat_field.gd.gz": {
+      "original_path": "scripts/ai/threat_field.gd",
+      "sha256": "22574cc27b17afe5dc0d2ac9a4d491b032fd717628064c2b5b3674c6f7f20ac2"
+    },
+    "scripts__core__pathfinding.gd.gz": {
+      "original_path": "scripts/core/pathfinding.gd",
+      "sha256": "50dbd7b9e36e56a8dbbbe1d28924e0f0cd1c536a63a7bc09f12eaf068fc1dd90"
+    },
+    "scripts__core__rebellion_system.gd.gz": {
+      "original_path": "scripts/core/rebellion_system.gd",
+      "sha256": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118"
+    },
+    "scripts__core__ruler_profile.gd.gz": {
+      "original_path": "scripts/core/ruler_profile.gd",
+      "sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4"
+    },
+    "scripts__core__trade_network.gd.gz": {
+      "original_path": "scripts/core/trade_network.gd",
+      "sha256": "00d0b36000608c8713fbc9d4b98a3f5c2c8719b83a223f55969d903b6a4e0404"
+    },
+    "scripts__simulation__rules__supply_rules.gd.gz": {
+      "original_path": "scripts/simulation/rules/supply_rules.gd",
+      "sha256": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa"
+    },
+    "scripts__simulation__simulation.gd.gz": {
+      "original_path": "scripts/simulation/simulation.gd",
+      "sha256": "4f1504329cb28aff09dafd3aa7e9918c34af060667e168a95780b1169b00af03"
+    },
+    "scripts__state__game_state.gd.gz": {
+      "original_path": "scripts/state/game_state.gd",
+      "sha256": "b060bb056d0d5fc8157c930a28337236b72e5b2ffcdb8cb689569005e188e3a1"
+    },
+    "pathfinding-before.gd.gz": {
+      "original_path": "scripts/core/pathfinding.gd",
+      "sha256": "e33f5e1ffa4fd8845cd3b98f41ef6819bce38ef80a69827708b01e14096d05b9",
+      "variant": "before"
+    }
+  },
+  "limitations": [
+    "One seed, 35-day window and one monthly boundary. No long-run or GUI claim.",
+    "Maximum-day median increased 0.21%; two paired peaks decreased and three increased.",
+    "Measured working tree contains earlier pending functionality; staged-only validation is separate."
+  ]
+}

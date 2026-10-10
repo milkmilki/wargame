@@ -1271,11 +1271,19 @@ static func _supply_loss_field(
 	visited.resize(city_count)
 	visited.fill(0)
 	dist[start] = 0.0
-	var order_rank := EquivariantOrder.city_rank_map(
+	# As in the ordinary Atlas path field, compare exact mirror keys only
+	# for reached nodes instead of sorting the entire planet per warehouse.
+	var lazy_order := not state.atlas_layout.is_empty()
+	var order_rank := {} if lazy_order else EquivariantOrder.city_rank_map(
 		state,
 		nation_id,
 		start
 	)
+	var order_keys := {}
+	var order_origin := state.cities[start].map_position
+	var order_sign := EquivariantOrder._nation_forward_sign(state, nation_id) if lazy_order else 0.0
+	if lazy_order:
+		order_keys[start] = EquivariantOrder._city_key_in_frame(state, start, order_origin, order_sign)
 	if not blocked_edges_ready:
 		blocked_enemy_edges = _enemy_occupied_edge_keys(
 			state,
@@ -1284,11 +1292,13 @@ static func _supply_loss_field(
 	var local_crossing_transit_docks := _local_crossing_transit_docks(
 		state, nation_id, -1
 	)
-	var queue: Array[Dictionary] = [{
+	var initial_entry := {
 		"city": start,
 		"distance": 0.0,
-		"rank": int(order_rank[start]),
-	}]
+		"rank": 0 if lazy_order else int(order_rank[start]),
+	}
+	if lazy_order: initial_entry["order_key"] = order_keys[start]
+	var queue: Array[Dictionary] = [initial_entry]
 	# 中继起点同样以 dist=0 入堆；沿宗藩体系可达道路自然扩散并竞争最短损耗。
 	for origin in extra_zero_origins:
 		if (
@@ -1299,11 +1309,15 @@ static func _supply_loss_field(
 		):
 			continue
 		dist[origin] = 0.0
-		queue.append({
+		var origin_entry := {
 			"city": origin,
 			"distance": 0.0,
-			"rank": int(order_rank[origin]),
-		})
+			"rank": 0 if lazy_order else int(order_rank[origin]),
+		}
+		if lazy_order:
+			order_keys[origin] = EquivariantOrder._city_key_in_frame(state, origin, order_origin, order_sign)
+			origin_entry["order_key"] = order_keys[origin]
+		queue.append(origin_entry)
 	while not queue.is_empty():
 		var entry := _heap_pop(queue)
 		var u := int(entry["city"])
@@ -1338,17 +1352,22 @@ static func _supply_loss_field(
 				is_equal_approx(nd, float(dist[v]))
 				and (
 					prev[v] < 0
-					or int(order_rank[u])
-						< int(order_rank[prev[v]])
+					or (EquivariantOrder._key_less(order_keys[u], order_keys[prev[v]])
+						if lazy_order else int(order_rank[u]) < int(order_rank[prev[v]]))
 				)
 			):
 				dist[v] = nd
 				prev[v] = u
-				_heap_push(queue, {
+				var next_entry := {
 					"city": v,
 					"distance": nd,
-					"rank": int(order_rank[v]),
-				})
+					"rank": 0 if lazy_order else int(order_rank[v]),
+				}
+				if lazy_order:
+					if not order_keys.has(v):
+						order_keys[v] = EquivariantOrder._city_key_in_frame(state, v, order_origin, order_sign)
+					next_entry["order_key"] = order_keys[v]
+				_heap_push(queue, next_entry)
 	return {"dist": dist, "prev": prev}
 
 

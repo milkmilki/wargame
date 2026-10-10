@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 补给网络缓存等价校验 (40国/160城/推进400天) ===
+对比军队=40 不一致=0
+verdict=SUPPLY_CACHE_EQUIVALENT
