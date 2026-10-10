@@ -4,6 +4,12 @@ const Contours = preload("res://scripts/atlas/contours.gd")
 const Geometry = preload("res://scripts/atlas/display_geometry.gd")
 const Strokes = preload("res://scripts/atlas/ink_strokes.gd")
 const Fields = preload("res://scripts/atlas/paint_fields.gd")
+const Persistent = preload("res://scripts/atlas/persistent_strokes.gd")
+var high_performance := false
+var persistent_layers: Array = []
+var fade_texture: ImageTexture
+var scheduler: Node
+var geometry_pool := {}
 var coast: Array = []
 var lake: Array = []
 var rings: Array = []
@@ -14,6 +20,8 @@ var ripple_nodes: Array = []
 var visible_world := Rect2(0,0,2048,1024)
 var last_rect := Rect2()
 var chunks: Array = []
+var mesh_build_count := 0
+var render_rect := Rect2()
 static func chunk(lines: Array) -> Array:
 	var out: Array = []
 	for p in lines:
@@ -23,7 +31,7 @@ static func chunk(lines: Array) -> Array:
 			out.append({"p":points,"box":box})
 	return out
 func in_view(source: Array) -> Array:
-	var out: Array = []; var rect := visible_world.grow(3.)
+	var out: Array = []; var rect := render_rect.grow(3.)
 	for c in source:
 		for shift in [-2048.,0.,2048.]:
 			if rect.intersects(Rect2(c.box.position+Vector2(shift,0),c.box.size),true): out.append(c.p); break
@@ -45,12 +53,16 @@ func setup(raster: Dictionary) -> void:
 		var conc := maxf(0,(int(ice.near[k])-1)/254.); var fade := 1-(clampf((conc-.02)/.28,0,1)*clampf((conc-.02)/.28,0,1)*(3-2*clampf((conc-.02)/.28,0,1)))
 		bytes[k] = roundi(255*fade) if sea[k] and not ice.mask[k] else 0
 	var texture := ImageTexture.create_from_image(Image.create_from_data(raster.w,raster.h,false,Image.FORMAT_R8,bytes))
+	fade_texture = texture
 	for i in range(3):
 		var node := Ripple.new(); node.show_behind_parent = true; var mat := ShaderMaterial.new(); mat.shader = load("res://assets/atlas/ripple.gdshader"); mat.set_shader_parameter("fade_fields",texture); node.material = mat; add_child(node); ripple_nodes.append(node)
 	chunks = [chunk(lake),chunk(coast),chunk(rings[0]),chunk(rings[1]),chunk(rings[2])]
 func rebuild() -> void:
-	if zoom==last_zoom and visible_world==last_rect: return
-	last_zoom = zoom; last_rect = visible_world
+	if high_performance:
+		update_persistent(); return
+	if zoom==last_zoom and last_rect.encloses(visible_world): return
+	last_zoom = zoom; last_rect = visible_world.grow(192./maxf(.1,zoom)); render_rect = last_rect
+	mesh_build_count += 1
 	var gs := pow(zoom/1.35,-.22) if zoom>1.35 else 1.; var aa := .55/zoom
 	meshes = [Strokes.build(in_view(chunks[0]),1.05*gs,aa,Geometry2D.END_BUTT),Strokes.build(in_view(chunks[1]),1.45*gs,aa,Geometry2D.END_BUTT) if zoom>1.35 else ArrayMesh.new()]
 	for i in range(3):
@@ -58,11 +70,25 @@ func rebuild() -> void:
 		if zoom>1.35: ripple_nodes[i].mesh = Strokes.build(in_view(chunks[i+2]),.55*sqrt(PI)*gs,aa,Geometry2D.END_BUTT); ripple_nodes[i].alpha = .42-i*.12; ripple_nodes[i].queue_redraw()
 	queue_redraw()
 func _draw() -> void:
+	if high_performance: return
 	if meshes.is_empty(): return
 	for i in range(2):
 		if meshes[i].get_surface_count()==0: continue
 		for shift in [-2048.,0.,2048.]: draw_set_transform(Vector2(shift,0)); draw_mesh(meshes[i],null,Transform2D.IDENTITY,Color(58/255.,45/255.,34/255.,.65 if i==0 else .9))
 	draw_set_transform(Vector2.ZERO)
+
+func update_persistent() -> void:
+	if persistent_layers.is_empty():
+		for i in range(5):
+			var layer := Persistent.new(); layer.scheduler = scheduler; layer.pool = geometry_pool; var source: Array = lake if i==0 else coast if i==1 else rings[i-2]
+			layer.set_paths(source); layer.style(1.05 if i==0 else 1.45 if i==1 else .55*sqrt(PI),Color(58/255.,45/255.,34/255.,.65 if i==0 else .9 if i==1 else .42-(i-2)*.12))
+			if i>=2: layer.material.set_shader_parameter("ripple",true); layer.material.set_shader_parameter("fade_fields",fade_texture)
+			add_child(layer); persistent_layers.append(layer)
+		for node in ripple_nodes: node.hide()
+		mesh_build_count += 1
+	for i in range(persistent_layers.size()):
+		persistent_layers[i].visible = i==0 or zoom>1.35
+		persistent_layers[i].set_zoom(zoom); persistent_layers[i].set_view(visible_world)
 class Ripple extends Node2D:
 	var mesh: ArrayMesh
 	var alpha: float

@@ -9,9 +9,9 @@ static func house(c: Vector2,u: float) -> PackedVector2Array:
 	return polygon([[-1.9,-.4],[0.,-2.3],[1.9,-.4],[1.5,-.4],[1.5,1.7],[-1.5,1.7],[-1.5,-.4]],c,u)
 static func tower(c: Vector2,u: float) -> PackedVector2Array:
 	return polygon([[-.9,1.8],[-.9,-2.4],[0.,-4.2],[.9,-2.4],[.9,1.8]],c,u)
-static func shape(canvas: Node2D,p: PackedVector2Array,width: float) -> void:
+static func shape(canvas,p: PackedVector2Array,width: float) -> void:
 	canvas.draw_colored_polygon(p,Color8(246,238,216,247)); canvas.draw_polyline(p,Color8(52,34,22,242),width,true)
-static func draw(canvas: Node2D,c: Vector2,s: float,kind: int,color: Color) -> void:
+static func draw(canvas,c: Vector2,s: float,kind: int,color: Color) -> void:
 	var ink := Color8(52,34,22,242)
 	canvas.draw_circle(c+Vector2(0,.2*s),[1.5,2.6,3.7,4.5,5.6][kind]*s,Color8(244,234,210,158))
 	match kind:

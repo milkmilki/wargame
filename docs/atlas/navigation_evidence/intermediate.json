@@ -1,0 +1,34 @@
+{
+	"pid": 31932,
+	"rows": [
+		{
+			"coast_ms": 224.004,
+			"ink_ms": 815.226,
+			"refresh_ms": 376.999,
+			"step": "zoom2",
+			"total_ms": 2078.411
+		},
+		{
+			"coast_ms": 0.002,
+			"ink_ms": 0.338,
+			"refresh_ms": 363.453,
+			"step": "pan2",
+			"total_ms": 438.747
+		},
+		{
+			"coast_ms": 70.218,
+			"ink_ms": 176.525,
+			"refresh_ms": 426.846,
+			"step": "zoom4",
+			"total_ms": 1082.824
+		},
+		{
+			"coast_ms": 0.003,
+			"ink_ms": 0.404,
+			"refresh_ms": 436.495,
+			"step": "pan4",
+			"total_ms": 470.474
+		}
+	],
+	"seed": 1
+}

@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-09T17-14-58-25148-12783141.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=native_atlas
+[DEBUG_RUN] 新局2 seed=1 source=template_reload
+ATLAS_ENTRY_CONTRACT failures=0

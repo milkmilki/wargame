@@ -1,0 +1,3 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_VISUAL_LAND centers_on_raster_water=8 fu_on_raster_water=7 max_offset=1.0

@@ -1,0 +1,34 @@
+{
+	"pid": 26296,
+	"rows": [
+		{
+			"coast_ms": 106.614,
+			"ink_ms": 851.223,
+			"refresh_ms": 356.423,
+			"step": "zoom2",
+			"total_ms": 6678.761
+		},
+		{
+			"coast_ms": 108.314,
+			"ink_ms": 0.415,
+			"refresh_ms": 386.824,
+			"step": "pan2",
+			"total_ms": 26459.994
+		},
+		{
+			"coast_ms": 38.107,
+			"ink_ms": 798.236,
+			"refresh_ms": 381.789,
+			"step": "zoom4",
+			"total_ms": 12869.056
+		},
+		{
+			"coast_ms": 38.458,
+			"ink_ms": 0.348,
+			"refresh_ms": 388.105,
+			"step": "pan4",
+			"total_ms": 18747.241
+		}
+	],
+	"seed": 1
+}

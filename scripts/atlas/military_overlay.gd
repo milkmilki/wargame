@@ -1,9 +1,52 @@
 extends Node2D
+const Strokes = preload("res://scripts/atlas/ink_strokes.gd")
+const VisibleLines = preload("res://scripts/atlas/visible_lines.gd")
+const Persistent = preload("res://scripts/atlas/persistent_strokes.gd")
+var high_performance := false
+var persistent_layers: Array = []
+var persistent_key: Array = []
+var scheduler: Node
+var geometry_pool := {}
 var state: GameState
 var show_traffic := false
 var selection := -1
 var state_lines: Array = []
 var district_lines: Array = []
+var view_zoom := -1.
+var static_key: Array = []
+var static_meshes: Array = []
+var static_build_count := 0
+var visible_world := Rect2(0,0,2048,1024)
+var cached_world := Rect2()
+var line_index: Array = []
+var line_key: Array = []
+
+func set_view_zoom(value: float) -> void:
+	if is_equal_approx(value,view_zoom): return
+	view_zoom = value; queue_redraw()
+
+func set_view(value: float,rect: Rect2) -> void:
+	set_view_zoom(value); visible_world = rect
+	if high_performance:
+		if persistent_layers.is_empty(): update_persistent()
+		else:
+			for i in range(persistent_layers.size()):
+				persistent_layers[i].set_zoom(value); persistent_layers[i].set_view(rect); persistent_layers[i].visible = i==0 or value>=1.5
+		return
+	if not cached_world.encloses(rect): queue_redraw()
+
+func prepare_static() -> void:
+	var value := maxf(.1,global_scale.x)
+	var key := [hash(state_lines),hash(district_lines),value]
+	if key==static_key and cached_world.encloses(visible_world): return
+	var sources := [key[0],key[1]]
+	if sources!=line_key:
+		line_key = sources
+		line_index = [VisibleLines.index(state_lines),VisibleLines.index(district_lines)]
+	cached_world = visible_world.grow(192./value)
+	static_key = key; static_build_count += 1
+	static_meshes = [Strokes.build(VisibleLines.select(line_index[0],cached_world),.75/value,.55/value,Geometry2D.END_BUTT)]
+	static_meshes.append(Strokes.build(VisibleLines.select(line_index[1],cached_world),.45/value,.55/value,Geometry2D.END_BUTT) if value>=1.5 else ArrayMesh.new())
 class Markers extends Node2D:
 	var host: Node2D
 	func _draw() -> void: host.draw_markers(self)
@@ -20,18 +63,31 @@ func army_position(army: Army) -> Vector2:
 	return state.cities[maxi(0,army.location_city)].map_position*Vector2(2048,1024)
 func _draw() -> void:
 	if state==null: return
+	if high_performance: update_persistent()
+	else: prepare_static()
 	var pen := 1./maxf(.1,global_scale.x)
 	for shift in [-2048.,0.,2048.]:
 		draw_set_transform(Vector2(shift,0.))
-		for path in state_lines:
-			if path.size()>=2: draw_polyline(path,Color(.30,.17,.09,.42),.75*pen,true)
-		if global_scale.x>=1.5:
-			for path in district_lines:
-				if path.size()>=2: draw_polyline(path,Color(.35,.23,.15,.20),.45*pen,true)
+		for i in range(0 if high_performance else static_meshes.size()):
+			if static_meshes[i].get_surface_count()>0:
+				draw_mesh(static_meshes[i],null,Transform2D.IDENTITY,Color(.30,.17,.09,.42) if i==0 else Color(.35,.23,.15,.20))
 		if show_traffic:
 			for city in state.cities:
 				if city.is_traffic: draw_circle(city.map_position*Vector2(2048,1024),2.5*pen,Color(.25,.15,.1,.7))
 	draw_set_transform(Vector2.ZERO)
+
+func update_persistent() -> void:
+	var sources := [hash(state_lines),hash(district_lines)]
+	if sources!=persistent_key:
+		persistent_key = sources
+		for layer in persistent_layers: layer.queue_free()
+		persistent_layers.clear(); static_build_count += 1
+		for i in range(2):
+			var layer := Persistent.new(); layer.scheduler = scheduler; layer.pool = geometry_pool; layer.set_paths(state_lines if i==0 else district_lines)
+			layer.style(.75 if i==0 else .45,Color(.30,.17,.09,.42) if i==0 else Color(.35,.23,.15,.20),0,0,-1.)
+			add_child(layer); persistent_layers.append(layer)
+	for i in range(persistent_layers.size()):
+		persistent_layers[i].set_zoom(view_zoom); persistent_layers[i].set_view(visible_world); persistent_layers[i].visible = i==0 or view_zoom>=1.5
 
 func draw_markers(canvas: Node2D) -> void:
 	if state==null: return

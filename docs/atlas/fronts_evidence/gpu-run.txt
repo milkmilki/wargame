@@ -1,0 +1,15 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+D3D12 12_0 - Forward+ - Using Device #0: AMD - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS ["--atlas-cache=res://.dbg/atlas-military-earth.bin"] capture=
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-32116-1791550688-1.jsonl
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-09T12-58-20-32116-15581026.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_development_cache
+ATLAS_FRONT_CAPTURE seed1-peace-china-4x
+ATLAS_FRONT_CAPTURE seed1-war-global-1x
+ATLAS_FRONT_CAPTURE seed1-war-china-2x
+ATLAS_FRONT_CAPTURE seed1-war-china-4x
+ATLAS_FRONT_CAPTURE seed1-war-china-8x
+ATLAS_FRONT_CAPTURE seed1-peace-restored-china-4x
+ATLAS_FRONT_CAPTURE seed1-history-war-china-4x
+ATLAS_FRONT_VISUAL {"border_length":231.13045116514,"checks":17,"failures":0,"focus":[1621.73046875,320.218841552734],"godot":"4.7.1-stable (official)","left":1,"parameters":{"distance_km":250.0,"godot":{"build":"official","hash":"a13da4feb8d8aefc283c3763d33a2f170a18d541","hex":263937,"major":4,"minor":7,"patch":1,"status":"stable","string":"4.7.1-stable (official)","timestamp":0},"model":"atlas-military-v1","nodes":4321,"seed":1,"settlements":1796,"source_sha256":"1212ab6f3e837454c466faeee1b43eb2b1c13471a2a17583ed99e8915a9230d3","timing":{"hierarchy_ms":1104,"roads_ms":734,"smoothing":{"rounds_histogram":[446,2,10,4284]},"total_ms":3274},"upstream":"103afd3","upstream_commit":"103afd3d998eac6750692a6813bf5aea03521448"},"pid":32116,"right":36,"scene":"res://atlas_military.tscn","seed":1,"source":"atlas_development_cache"}

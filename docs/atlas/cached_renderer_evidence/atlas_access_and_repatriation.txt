@@ -1,0 +1,9 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_ACCESS_CASE attack jurisdiction boundaries
+ATLAS_ACCESS_CASE stale runtime attack route
+ATLAS_ACCESS_CASE retreat exits current lost jurisdiction
+ATLAS_ACCESS_CASE no retreat bridge through other enemy
+ATLAS_ACCESS_CASE diplomatic repatriation unguarded=false
+ATLAS_ACCESS_REPAT_ENTER real _start_diplomatic_repatriation from neutral city2
+ATLAS_ACCESS_OK checks=29 failures=0

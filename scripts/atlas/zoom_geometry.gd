@@ -77,10 +77,21 @@ static func nearest(index: Dictionary,px: float,py: float) -> Dictionary:
 	return {"distance":sqrt(best),"side":owner}
 
 static func float_image(values: PackedFloat32Array,channels: int,w: int = 1024) -> ImageTexture:
+	return upload(float_data(values,channels,w))
+
+static func upload(row: Dictionary) -> ImageTexture:
+	return ImageTexture.create_from_image(Image.create_from_data(row.w,row.h,false,row.format,row.bytes))
+
+static func float_data(values: PackedFloat32Array,channels: int,w: int = 1024) -> Dictionary:
 	var h := maxi(1,ceili(values.size()/float(channels*w))); values.resize(w*h*channels)
-	return ImageTexture.create_from_image(Image.create_from_data(w,h,false,Image.FORMAT_RF if channels==1 else Image.FORMAT_RGBAF,values.to_byte_array()))
+	return {"w":w,"h":h,"format":Image.FORMAT_RF if channels==1 else Image.FORMAT_RGBAF,"bytes":values.to_byte_array()}
 
 static func textures(index: Dictionary) -> Dictionary:
+	var out := {}; var prepared := texture_data(index)
+	for key in prepared: out[key] = upload(prepared[key])
+	return out
+
+static func texture_data(index: Dictionary) -> Dictionary:
 	var grid := PackedFloat32Array(); grid.resize(index.nx*index.ny*4)
 	for i in range(index.nx*index.ny): grid[i*4] = index.start[i]; grid[i*4+1] = index.start[i+1]
 	var segments0 := PackedFloat32Array(); var segments1 := PackedFloat32Array(); var segments2 := PackedFloat32Array()
@@ -91,4 +102,4 @@ static func textures(index: Dictionary) -> Dictionary:
 	var ends := PackedFloat32Array(Array(index.ends))
 	for i in range(ends.size()):
 		if is_nan(ends[i]): ends[i] = -1e20
-	return {"segment_grid":float_image(grid,4,index.nx),"segment_list":float_image(PackedFloat32Array(Array(index.list)),1),"segments0":float_image(segments0,4),"segments1":float_image(segments1,4),"segments2":float_image(segments2,4),"segment_ends":float_image(ends,4)}
+	return {"segment_grid":float_data(grid,4,index.nx),"segment_list":float_data(PackedFloat32Array(Array(index.list)),1),"segments0":float_data(segments0,4),"segments1":float_data(segments1,4),"segments2":float_data(segments2,4),"segment_ends":float_data(ends,4)}

@@ -5,6 +5,35 @@ extends Node2D
 ## AGPL-3.0-only.
 const Layout = preload("res://scripts/atlas/text_layout.gd")
 const CitySymbols = preload("res://scripts/atlas/city_symbols.gd")
+const State = preload("res://scripts/atlas/text_state.gd")
+const Scheduler = preload("res://scripts/atlas/render_scheduler.gd")
+var high_performance := false
+var scheduler: Node
+var pool := State.Pool.new()
+var snapshot: Dictionary = {}
+var layout_version := 0
+var lod_index := -1
+var rendered_lod := -1
+var requested_rect := Rect2()
+var layout_coverage := Rect2()
+var busy := false
+var task_serial := 0
+var request_serial := 0
+var camera_origin := Vector2.ZERO
+var camera_zoom := 1.
+var layout_count := 0
+var label_chunks := {}
+var content_key: Array = []
+var city_markers: Node2D
+var marker_detail := 1.
+var marker_data_key: Array = []
+var warmed := {}
+class Chunk extends Node2D:
+	var host: Node2D
+	var marks: Array = []
+	var rows: Array = []
+	func _draw():
+		for shift in [-2048.,0.,2048.]: host.draw_layout(self,marks,rows,Vector2(shift*host.draw_detail(),0))
 var data: Dictionary = {}
 var raster: Dictionary = {}
 var labels: Array = []
@@ -97,6 +126,8 @@ func room_for_capital(mark: Dictionary,new_boxes: Array) -> bool:
 	return false
 
 func rebuild() -> void:
+	if high_performance:
+		invalidate_layout(); return
 	marks.clear(); text_rows.clear(); buckets.clear()
 	if data.is_empty(): return
 	var city_marks: Array = []; var symbol_scale := sqrt(2048./1300)*pow(maxf(1,zoom),.5)
@@ -180,8 +211,12 @@ func place_geography(p: Dictionary) -> void:
 					if place([row.glyphs],px,color,halo,style[6],-1,-1,row.on): return
 
 func _draw() -> void:
-	for mark in marks: CitySymbols.draw(self,mark.pos,mark.scale,mark.kind,mark.color)
-	for row in text_rows:
+	if high_performance: return
+	draw_layout(self,marks,text_rows,Vector2.ZERO)
+
+func draw_layout(canvas: Node2D,city_marks: Array,rows: Array,offset: Vector2) -> void:
+	for mark in city_marks: CitySymbols.draw(canvas,mark.pos+offset,mark.scale,mark.kind,mark.color)
+	for row in rows:
 		var row_font: Font = bold_font if row.bold else font
 		# Rasterize near the displayed size: downscaling a 128 px hinted glyph loses
 		# its thin halo and produces jagged strokes. Source strokeText uses a full
@@ -189,9 +224,90 @@ func _draw() -> void:
 		var font_px := maxi(1,ceili(row.px)); var scale_value: float = row.px/font_px
 		var baseline := (row_font.get_ascent(font_px)-row_font.get_descent(font_px))*.5+font_px*.04
 		for glyph in row.glyphs:
-			draw_set_transform(glyph.pos,glyph.a,Vector2.ONE*scale_value)
+			canvas.draw_set_transform(glyph.pos+offset,glyph.a,Vector2.ONE*scale_value)
 			var width := row_font.get_string_size(glyph.ch,HORIZONTAL_ALIGNMENT_LEFT,-1,font_px).x
 			# Godot's raster outline cache uses oversampled pixels for its radius.
-			draw_string_outline(row_font,Vector2(-width*.5,baseline),glyph.ch,HORIZONTAL_ALIGNMENT_LEFT,-1,font_px,maxi(1,roundi(row.halo_width*2./scale_value)),row.halo,3,TextServer.DIRECTION_AUTO,TextServer.ORIENTATION_HORIZONTAL,2.)
-			draw_string(row_font,Vector2(-width*.5,baseline),glyph.ch,HORIZONTAL_ALIGNMENT_LEFT,-1,font_px,row.color,3,TextServer.DIRECTION_AUTO,TextServer.ORIENTATION_HORIZONTAL,2.)
-	draw_set_transform(Vector2.ZERO)
+			canvas.draw_string_outline(row_font,Vector2(-width*.5,baseline),glyph.ch,HORIZONTAL_ALIGNMENT_LEFT,-1,font_px,maxi(1,roundi(row.halo_width*2./scale_value)),row.halo,3,TextServer.DIRECTION_AUTO,TextServer.ORIENTATION_HORIZONTAL,2.)
+			canvas.draw_string(row_font,Vector2(-width*.5,baseline),glyph.ch,HORIZONTAL_ALIGNMENT_LEFT,-1,font_px,row.color,3,TextServer.DIRECTION_AUTO,TextServer.ORIENTATION_HORIZONTAL,2.)
+	canvas.draw_set_transform(Vector2.ZERO)
+
+func draw_detail() -> float:
+	return Scheduler.LODS[rendered_lod] if rendered_lod>=0 else 1.
+
+func invalidate_layout() -> void:
+	if data.is_empty() or scheduler==null: return
+	layout_version += 1; scheduler.invalidate("labels"); busy = false; layout_coverage = Rect2()
+	scheduler.invalidate("label-warm"); warmed.clear()
+	var content := [hash(data.cities),hash(data.nations),hash(owners),hash(labels)]
+	if content_key!=content: pool = State.Pool.new(); content_key = content
+	# Numerical worker snapshots contain no Node, Font, texture, or mutable game object.
+	snapshot = {"data":{"cities":data.cities.duplicate(true),"nations":data.nations.duplicate(true),"ownership":PackedInt32Array(data.ownership),"mesh":{"x":data.mesh.x,"y":data.mesh.y},"places":data.get("places",[]).duplicate(true)},"raster":{"water":raster.water},"owners":owners.duplicate(),"labels":labels.duplicate(true),"names":show_names,"cities":show_cities,"polities":show_polities}
+	queue_redraw()
+
+func set_camera(position_value: Vector2,zoom_value: float,viewport_size: Vector2) -> void:
+	camera_origin = position_value; camera_zoom = zoom_value
+	requested_rect = Rect2(-position_value/zoom_value,viewport_size/zoom_value)
+	var next := Scheduler.choose_lod(zoom_value,lod_index)
+	if next!=lod_index: lod_index = next; layout_coverage = Rect2()
+	position = position_value; scale = Vector2.ONE*zoom_value/draw_detail()
+	if is_instance_valid(city_markers):
+		city_markers.scale = Vector2.ONE*draw_detail()/marker_detail
+		city_markers.visible = show_cities
+
+func _process(_delta: float) -> void:
+	if not high_performance or snapshot.is_empty() or lod_index<0: return
+	if city_markers==null:
+		city_markers = preload("res://scripts/atlas/city_markers.gd").new(); city_markers.z_index = -1; add_child(city_markers)
+	if marker_data_key!=content_key: city_markers.setup(snapshot.data); marker_data_key = content_key.duplicate()
+	marker_detail = Scheduler.LODS[lod_index]; city_markers.visible = show_cities
+	city_markers.set_view(requested_rect,marker_detail,marks if rendered_lod==lod_index and layout_coverage.encloses(requested_rect) else [])
+	city_markers.scale = Vector2.ONE*draw_detail()/marker_detail
+	if busy or layout_coverage.encloses(requested_rect): return
+	var rect := requested_rect.grow(96./Scheduler.LODS[lod_index])
+	var detail: float = Scheduler.LODS[lod_index]; var target := lod_index; var version := layout_version
+	var worker_pool := pool; var input := snapshot
+	task_serial += 1; var serial := task_serial; request_serial = serial; busy = true
+	var key := "%d:%d:%d:%d:%d"%[hash(content_key),target,int(show_names),int(show_cities),int(show_polities)]
+	scheduler.submit("labels",func(): return worker_pool.calculate(key,input,rect,detail),func(result):
+		if request_serial==serial: busy = false
+		if target!=lod_index or version!=layout_version: return
+		marks = result.marks; text_rows = result.rows; rendered_lod = target; layout_coverage = rect; layout_count += 1
+		scheduler.remember("text:%d"%get_instance_id(),null,result.cache_bytes,true)
+		publish_chunks(); position = camera_origin; scale = Vector2.ONE*camera_zoom/detail,0)
+	warm_neighbors()
+
+func warm_neighbors() -> void:
+	var worker_pool := pool; var input := snapshot; var rect := requested_rect.grow(96./Scheduler.LODS[lod_index])
+	for neighbor in [lod_index-1,lod_index+1]:
+		if neighbor<0 or neighbor>=Scheduler.LODS.size(): continue
+		var key := "%d:%d:%d:%d:%d"%[hash(content_key),neighbor,int(show_names),int(show_cities),int(show_polities)]
+		var stamp := "%s:%d:%d"%[key,floori(rect.position.x/128),floori(rect.position.y/128)]
+		if warmed.has(stamp): continue
+		warmed[stamp] = true; var detail: float = Scheduler.LODS[neighbor]
+		scheduler.submit("label-warm",func(): return worker_pool.calculate(key,input,rect,detail),func(_result): pass,10)
+
+func _exit_tree() -> void:
+	if is_instance_valid(scheduler): scheduler.invalidate("labels"); scheduler.forget("text:%d"%get_instance_id())
+
+func publish_chunks() -> void:
+	var grouped := {}; var detail := draw_detail()
+	for mark in marks:
+		var key := Vector2i(floori(mark.pos.x/detail/128),floori(mark.pos.y/detail/128))
+		if not grouped.has(key): grouped[key] = {"marks":[],"rows":[]}
+		grouped[key].marks.append(mark)
+	for row in text_rows:
+		var p: Vector2 = row.glyphs[0].pos; var key := Vector2i(floori(p.x/detail/128),floori(p.y/detail/128))
+		if not grouped.has(key): grouped[key] = {"marks":[],"rows":[]}
+		grouped[key].rows.append(row)
+	for key in label_chunks.keys():
+		if not grouped.has(key): label_chunks[key].node.queue_free(); label_chunks.erase(key)
+	for key in grouped:
+		var value := hash(grouped[key])
+		if label_chunks.has(key) and label_chunks[key].key==value: continue
+		var chunk: Node2D
+		if label_chunks.has(key): chunk = label_chunks[key].node
+		else: chunk = Chunk.new(); chunk.host = self; add_child(chunk)
+		chunk.marks = []; chunk.rows = grouped[key].rows; chunk.queue_redraw(); label_chunks[key] = {"node":chunk,"key":value}
+
+func is_ready() -> bool:
+	return not busy and rendered_lod==lod_index and layout_coverage.encloses(requested_rect)

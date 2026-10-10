@@ -1,0 +1,42 @@
+{
+  "tests": [
+    {
+      "test": "atlas_war_fronts",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "c1783307d7a27b2b27d0956af7bd5ac80d2c3845e8885ccbbaffce7a29b19ee1"
+    },
+    {
+      "test": "political_history_test",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "515b8fe2d09bba39da781759f3f876e052db7f9f5ad55f88cc3cdc27fb764018"
+    },
+    {
+      "test": "atlas_preview_lifecycle",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "ba268ced512cacbd129e61bc978681dd80096ef9680e6add24e7280a63ab0ce0"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "01cb98451fa2d03c38c85ee26a488260f5b707f2e8f907a225b1cd7ef37033d5"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "0f521d4797490c2faeeddee32e384d1a1b8bc724e0cf4a26b1e276d7a068f179"
+    },
+    {
+      "test": "project_compile",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "9d8fd9c74bba065c729f6fc9e5d65c113dcd4c98df205b81868fd415aacefe20"
+    }
+  ],
+  "gpu_checks": 17,
+  "gpu_failures": 0
+}

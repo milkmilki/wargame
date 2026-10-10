@@ -1,0 +1,17 @@
+[
+  {
+    "test": "atlas_renderer_updates_visual",
+    "pid": 12784,
+    "exit_code": 0
+  },
+  {
+    "test": "atlas_cached_lifecycle_visual",
+    "pid": 26576,
+    "exit_code": 0
+  },
+  {
+    "test": "atlas_city_glyph_repro",
+    "pid": 32904,
+    "exit_code": 0
+  }
+]

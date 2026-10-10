@@ -1,0 +1,194 @@
+{
+  "draw_calls": 2652.0,
+  "failures": 0,
+  "godot": "4.7.1-stable (official)",
+  "layout_builds": 10,
+  "options": {
+    "city_threshold": 1.0,
+    "rainfall_model": "seasonal_circulation_v5",
+    "river_usage": "environment_only",
+    "road_model": "civ-atlas-103afd3-land-v1",
+    "settlement_model": "climate_capacity_v6",
+    "terrain_model": "earth",
+    "visual_model": "atlas-handdrawn-v1"
+  },
+  "pan_settle_ms": 618.188,
+  "parameters": {
+    "distance_km": 250.0,
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "model": "atlas-military-v1",
+    "nodes": 4321,
+    "seed": 1,
+    "settlements": 1796,
+    "source_sha256": "642e2e3fe7ee7a825751e6227f172c63272b7be34205e130d66c74c995e09bee",
+    "timing": {
+      "hierarchy_ms": 1104,
+      "roads_ms": 734,
+      "smoothing": {
+        "rounds_histogram": [
+          446,
+          2,
+          10,
+          4284
+        ]
+      },
+      "total_ms": 3274
+    },
+    "upstream": "103afd3",
+    "upstream_commit": "103afd3d998eac6750692a6813bf5aea03521448"
+  },
+  "pid": 32796,
+  "renderer": "forward_plus",
+  "rows": [
+    {
+      "command_ms": 0.067,
+      "frame_ms": 9.26,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.038,
+      "frame_ms": 11.873,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.05,
+      "frame_ms": 13.075,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.036,
+      "frame_ms": 27.249,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.039,
+      "frame_ms": 21.46,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.038,
+      "frame_ms": 13.082,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.037,
+      "frame_ms": 53.022,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.045,
+      "frame_ms": 14.712,
+      "kind": "pan",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.072,
+      "frame_ms": 9.972,
+      "kind": "zoom_in",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.202,
+      "frame_ms": 10.134,
+      "kind": "zoom_out",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.054,
+      "frame_ms": 26.93,
+      "kind": "zoom_in",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.043,
+      "frame_ms": 13.923,
+      "kind": "zoom_out",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.043,
+      "frame_ms": 21.105,
+      "kind": "zoom_in",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    },
+    {
+      "command_ms": 0.056,
+      "frame_ms": 18.605,
+      "kind": "zoom_out",
+      "layout_delta": 0,
+      "symbol_delta": 0
+    }
+  ],
+  "scene": "res://atlas_military.tscn",
+  "seed": 1,
+  "source": "atlas_development_cache",
+  "symbol_builds": 6,
+  "zoom_settle_ms": 615.038,
+  "medians_ms": {
+    "pan": 13.897,
+    "zoom_in": 21.105,
+    "zoom_out": 13.923
+  },
+  "zoom_median_ms": 16.264,
+  "viewport": [
+    1280,
+    720
+  ],
+  "gpu": "AMD Radeon RX 7600 / D3D12",
+  "simulation": "paused",
+  "stderr_bytes": 0,
+  "screenshots": {
+    "seed1-china-4x.png": "b983aebe9da8142b09f77a7613def0108a16a3b2cf5e89f275a40bf744a790c3",
+    "seed1-china-8x.png": "e10289dbc2025fc5bae50d94e96f27af88fef203db53ccf0e8fd5c7d25220c93",
+    "seed1-dateline-4x.png": "ac387bff300cbe9e46859a136d5fa674b928dd2a7b1bca9571a3e297c02a2273",
+    "seed1-districts-china-4x.png": "b3a2cf73b625842b17d00e83851564cccc42050aed9196d39d346e78df49c893",
+    "seed1-front-china-4x.png": "36cc506c1a74827fb7cbfac27da7d30fc67e61a4b6e748a874dc88834f37b413",
+    "seed1-global.png": "204b2b7de8a8758e7b5e8fc39e3759675528fd11538cddc5c02fa2e8af41a200"
+  },
+  "gpu_run_code_sources": {
+    "scripts/atlas/preview.gd": "7927c9c052b0de4315b7bdca6586090443a148a51910cf8832b453ef96b8d06e",
+    "scripts/atlas/preview_ink.gd": "c6f424005c802b6cd78c1b80428afe3f029d5481375511442c40481f94bb6765",
+    "scripts/atlas/military_overlay.gd": "3913bf32747b4410b4008739120e3e8a300bf98d9eab0c0913b2f2748e731a0c",
+    "scripts/atlas/visible_lines.gd": "be14ed1b2eb2663a6b35469eedacfea4fbe1fb650c70f32071650c0925d6ea63",
+    "assets/atlas/wash.gdshader": "4fd65e0e32b93b7b4ba9c6d18791208e49ba1850431d23cfd28f98f8f25e3099",
+    "scripts/atlas/coast_ink.gd": "44af11541afea73dd54b2cebbb81fd71e3fbc386613bcbfb68489673445c121b"
+  },
+  "delivered_code_sources": {
+    "scripts/atlas/preview.gd": "c21d1a7a9f3f12c0746adbb5e2caf3a1822a60eb88bbdd1944d2d39af772b71e",
+    "scripts/atlas/preview_ink.gd": "c6f424005c802b6cd78c1b80428afe3f029d5481375511442c40481f94bb6765",
+    "scripts/atlas/military_overlay.gd": "3913bf32747b4410b4008739120e3e8a300bf98d9eab0c0913b2f2748e731a0c",
+    "scripts/atlas/visible_lines.gd": "be14ed1b2eb2663a6b35469eedacfea4fbe1fb650c70f32071650c0925d6ea63",
+    "assets/atlas/wash.gdshader": "4fd65e0e32b93b7b4ba9c6d18791208e49ba1850431d23cfd28f98f8f25e3099",
+    "scripts/atlas/coast_ink.gd": "44af11541afea73dd54b2cebbb81fd71e3fbc386613bcbfb68489673445c121b"
+  }
+}

@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+FIELD_DEMAND_CHAIN bound=109316 arrived=109316 R=81852 field_rounds=2
+FIELD_MANPOWER_REQUIREMENTS checks=47 failures=0

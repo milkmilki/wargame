@@ -5,6 +5,7 @@ uniform sampler2D symbols : filter_linear, repeat_disable;
 uniform vec2 map_size = vec2(2048.,1024.);
 uniform vec2 symbol_origin=vec2(0.);
 uniform float symbol_scale=1.;
+uniform float view_zoom=1.;
 uniform sampler2D segment_grid : filter_nearest;
 uniform sampler2D segment_list : filter_nearest;
 uniform sampler2D segments0 : filter_nearest;
@@ -46,7 +47,7 @@ float land_cover(vec2 p) {
 	float v2=lake?(c.g>0.?-1.:1.):(c.g>0.?min(-.001,c.r):max(0.,c.r));
 	float v3=lake?(d.g>0.?-1.:1.):(d.g>0.?min(-.001,d.r):max(0.,d.r));
 	float top=mix(v0,v1,f.x),bot=mix(v2,v3,f.x),v=mix(top,bot,f.y);
-	float grad=length(vec2(mix(v1-v0,v3-v2,f.y),bot-top))/symbol_scale;
+	float grad=length(vec2(mix(v1-v0,v3-v2,f.y),bot-top))/view_zoom;
 	return grad>1e-12?clamp(.5+v/grad,0.,1.):(v>0.?1.:0.);
 }
 float hash2(ivec2 p,uint s) {
@@ -61,7 +62,7 @@ float tiled_noise(vec2 p,uint seed,int period) {
 }
 void fragment() {
 	vec4 color=texture(TEXTURE,UV);vec2 pixel=floor(UV*map_size);
-	if(symbol_scale>1.35) {
+	if(view_zoom>1.35) {
 		vec2 p=UV*map_size;int owner=nearest_side(p);float cover=land_cover(p);
 		if(owner>=0)color=flat_sample(palette,owner);
 		else if(owner!=-32768)color=vec4(0.);

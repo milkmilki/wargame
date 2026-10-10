@@ -1,6 +1,17 @@
 extends "res://scripts/atlas/preview.gd"
 const MilitaryMap = preload("res://scripts/atlas/military_map.gd")
 const Overlay = preload("res://scripts/atlas/military_overlay.gd")
+const WarFronts = preload("res://scripts/atlas/war_fronts.gd")
+const Information = preload("res://scripts/atlas/information_model.gd")
+const Interface = preload("res://scripts/atlas/military_interface.gd")
+var interface: Control
+var info_panel: PanelContainer
+var information_kind := ""
+var information_id := -1
+var information_road := -1
+var information_message := ""
+var front_layer: Node2D
+var last_front_state_key: Array = []
 var state: GameState
 var simulation: Simulation
 var military_payload: Dictionary = {}
@@ -30,36 +41,78 @@ func load_cached_payload(payload: Dictionary) -> void:
 	else: await super.load_cached_payload(payload)
 
 func make_ui() -> void:
-	var panel := PanelContainer.new(); panel.position = Vector2(12,12); panel.add_child(hud); add_child(panel)
-	var title := Label.new(); title.text = "Atlas 州府军事 · 2D 全球地图"; hud.add_child(title)
-	var row := HBoxContainer.new(); hud.add_child(row); row.add_child(seed_control)
-	button(row,"随机星球",func(): if can_rebuild(): await load_preset("planet"))
-	button(row,"真实地球",func(): if can_rebuild(): await load_preset("earth"))
-	button(row,"全图",fit_map)
-	for name_value in ["政治","地形","府辖区","宜居度"]: mode_control.add_item(name_value)
-	row.add_child(mode_control); mode_control.item_selected.connect(func(_i): update_mode())
-	var controls := HBoxContainer.new(); hud.add_child(controls)
-	button(controls,"暂停/继续",func(): if simulation!=null: simulation.paused = not simulation.paused)
-	button(controls,"推进一天",func(): if simulation!=null and not simulation.runtime_day_in_progress(): simulation._advance_day())
-	player_nation.min_value = 0; player_nation.max_value = 39; controls.add_child(player_nation)
-	button(controls,"选本国军队",select_player_army)
-	button(controls,"对选区所属国宣战",declare_selected_war)
-	button(controls,"命令前往选区",order_selected)
-	var debug_row := HBoxContainer.new(); hud.add_child(debug_row)
-	var junctions := CheckButton.new(); junctions.text = "交通节点"; debug_row.add_child(junctions)
-	junctions.toggled.connect(func(value): if overlay!=null: overlay.show_traffic = value; overlay.queue_redraw())
-	button(debug_row,"截图",func(): await export_screenshot())
-	button(debug_row,"保存地图模板",func(): if state!=null: status.text = str(MapDefinition.save_state(state,"atlas-military.json")))
-	button(debug_row,"加载地图模板",load_military_template)
-	var historical := HBoxContainer.new(); hud.add_child(historical)
-	var history_label := Label.new(); history_label.text = "历史快照编号"; historical.add_child(history_label)
-	history_control.min_value = 0; history_control.max_value = 0; historical.add_child(history_control)
-	button(historical,"查看历史",show_history)
-	button(historical,"返回当前",func(): historical_view = false; overlay.state = state; last_owner_revision = -1)
-	hud.add_child(status); hud.add_child(military_status); hud.add_child(details)
-	details.text = "滚轮缩放 · 中键平移 · 左键选辖区 · 右键下令"
-	var font = load("res://assets/atlas/lxgw-wenkai-gb-500.ttf")
-	if font: hud.add_theme_font_override("font",font)
+	interface=Interface.new(); add_child(interface); interface.setup(self)
+	status.text="滚轮缩放 · 中键平移 · 左键查看辖区 · 右键下令"
+
+func information_source() -> GameState:
+	return overlay.state if historical_view and is_instance_valid(overlay) else state
+
+func information_document() -> Dictionary:
+	var source := information_source()
+	if source==null: return {}
+	var doc := {}
+	match information_kind:
+		"city": doc=Information.city(source,information_id)
+		"nation": doc=Information.nation(source,information_id)
+		"army": doc=Information.army(source,information_id)
+		"road": doc=Information.road(source,information_id)
+	if doc.is_empty(): return doc
+	if information_kind=="city" and information_road>=0 and information_road<source.edges.size():
+		doc.sections.append(Information.section("选中道路",[Information.row("查看道路详情","道路 %d"%information_road,"road",information_road)]))
+	doc.notice="历史回看 · 政治快照 · 军事操作已禁用" if historical_view else information_message
+	for action in doc.actions:
+		if action.key in ["order","player","declare","select_army"]:
+			action.disabled=action.disabled or historical_view or (simulation!=null and simulation.runtime_day_in_progress())
+		if action.key=="declare": action.disabled=action.disabled or action.id==int(player_nation.value) or not source.nations[action.id].alive or source.is_enemy(int(player_nation.value),action.id)
+	if historical_view: doc=Information.historical(doc,information_kind)
+	return doc
+
+func show_information(kind: String,id: int) -> void:
+	information_kind=kind; information_id=id; information_message=""
+	if kind=="city": selected_region=id
+	if info_panel!=null: info_panel.show_document(information_document())
+
+func close_information() -> void:
+	information_kind=""; information_id=-1; information_road=-1
+	selected_region=-1
+
+func information_notify(message: String) -> void:
+	details.text=message; information_message=message; status.text=message
+	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
+
+func information_action(key: String,id: int) -> void:
+	match key:
+		"city","nation": show_information(key,id)
+		"focus":
+			var doc := information_document()
+			if not doc.is_empty():
+				var visible_center := Vector2((info_panel.size.x+28+size.x)*.5,size.y*.5)
+				map_root.position=visible_center-doc.point*zoom; limit_pan(); camera_feedback()
+		"copy":
+			var doc := information_document(); var lines: Array[String]=[doc.get("title",""),doc.get("subtitle","")]
+			for section in doc.get("sections",[]):
+				lines.append(section.title)
+				for row in section.rows: lines.append("%s：%s"%[row.label,row.value])
+			DisplayServer.clipboard_set("\n".join(lines)); information_notify("信息已复制")
+		"player":
+			if not historical_view: player_nation.value=id; information_notify("当前操控国："+Information.nation_name(state,id))
+		"select_army":
+			if not historical_view:
+				var army := simulation._army_by_id(id)
+				if army!=null: selected_army=id; player_nation.value=army.owner_nation; information_notify("已选中军队%d，点击目标辖区后右键下令。"%id)
+		"order":
+			if not historical_view: selected_region=id; order_selected()
+		"declare":
+			if not historical_view and id>=0 and id<state.nations.size():
+				var target := state.nations[id].capital_city_id
+				if target>=0: selected_region=target; declare_selected_war()
+
+func export_screenshot() -> void:
+	var shown := interface.visible if interface!=null else false
+	if interface!=null: interface.hide()
+	await super.export_screenshot()
+	hud.hide()
+	if interface!=null: interface.visible=shown
 
 func sync_rain_control() -> void:
 	pass # Climate is frozen in this scenario; the preview's climate selector is absent.
@@ -84,6 +137,8 @@ func build_view() -> void:
 func present_world(prepared: GameState,payload: Dictionary,source: String = "atlas_native_zhoufu") -> void:
 	# Swap only after generation succeeds; the old scenario remains intact on failure.
 	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1
+	close_information(); information_message=""
+	if info_panel!=null: info_panel.hide()
 	if simulation!=null: simulation.queue_free()
 	simulation = Simulation.new(); simulation.setup(state); simulation.paused = true; add_child(simulation)
 	history.reset(state)
@@ -97,7 +152,9 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	await super.build_view()
 	text_layer.z_index = 7
 	if overlay!=null: overlay.queue_free()
-	overlay = Overlay.new(); overlay.state = state; overlay.selection = selected_army; overlay.z_index = 6; map_root.add_child(overlay)
+	overlay = Overlay.new(); overlay.scheduler = render_scheduler; overlay.high_performance = high_performance_renderer; overlay.state = state; overlay.selection = selected_army; overlay.z_index = 6; map_root.add_child(overlay)
+	front_layer = WarFronts.new(); front_layer.scheduler = render_scheduler; front_layer.high_performance = high_performance_renderer; front_layer.z_index = 8; map_root.add_child(front_layer)
+	refresh_fronts(state)
 	var parent: Dictionary = military_payload.data.regions
 	var parent_owners := PackedInt32Array()
 	for id in range(parent.count): parent_owners.append(id)
@@ -124,38 +181,70 @@ func visual_data() -> Dictionary:
 	return result
 
 func _process(_delta: float) -> void:
-	if state==null or overlay==null: return
-	overlay.queue_redraw(); overlay.selection = selected_army
+	if state==null or not view_ready or not is_instance_valid(overlay): return
+	if not navigation_in_progress: overlay.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
+	overlay.selection = selected_army
 	military_status.text = "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
 	history_control.max_value = maxi(0,history.snapshot_count()-1)
 	if not historical_view and last_owner_revision!=state.ownership_revision:
 		for c in range(data.cities.size()): data.ownership[c] = state.cities[c].owner_nation
 		sync_nations(state)
 		last_owner_revision = state.ownership_revision; refresh_ownership()
+	if not political_pending and not historical_view and WarFronts.state_key(state)!=last_front_state_key:
+		refresh_fronts(state)
+	if is_instance_valid(front_layer): front_layer.set_view_zoom(zoom)
 	history.maybe_capture(state); run_log.checkpoint(state)
+
+func refresh_fronts(source: GameState) -> void:
+	if political_pending: return
+	if not is_instance_valid(front_layer) or front_layer.is_queued_for_deletion(): return
+	front_layer.configure(display.lines,source)
+	front_layer.set_view_zoom(zoom)
+	front_layer.visible = mode_control.selected==0 and show_border_layer
+	last_front_state_key = WarFronts.state_key(source)
+	if mode_control.selected==0:
+		for copy in copies:
+			copy.ink.borders = front_layer.normal_borders; copy.ink.queue_redraw()
+
+func political_display_ready() -> void:
+	if overlay!=null: refresh_fronts(overlay.state if historical_view else state)
+
+func current_political_borders() -> Array:
+	return front_layer.normal_borders if is_instance_valid(front_layer) and not front_layer.is_queued_for_deletion() else display.lines
+
+func political_front_snapshot() -> Dictionary:
+	var source: GameState = overlay.state if historical_view and overlay!=null else state
+	var roles := {}
+	if source==null: return {"roles":roles,"signature":0}
+	for left in range(source.nations.size()):
+		for right in range(left+1,source.nations.size()):
+			if source.nations[left].alive and source.nations[right].alive and source.is_enemy(left,right): roles["%d:%d"%[left,right]] = WarFronts.defender_of(source,left,right)
+	return {"roles":roles,"signature":hash([source.get_instance_id(),roles])}
 
 func select_player_army() -> void:
 	if state==null: return
 	for army in state.armies:
-		if army.owner_nation==int(player_nation.value) and army.size>0: selected_army = army.id; details.text = "选中军队%d，%d人。选择辖区后下令。"%[army.id,army.size]; return
+		if army.owner_nation==int(player_nation.value) and army.size>0:
+			selected_army = army.id; show_information("army",army.id)
+			information_notify("选中军队%d，%d人。选择辖区后下令。"%[army.id,army.size]); return
 
 func declare_selected_war() -> void:
-	if historical_view: details.text = "历史视图不可宣战。"; return
+	if historical_view: information_notify("历史视图不可宣战。"); return
 	if state==null or selected_region<0: return
-	if simulation.runtime_day_in_progress(): details.text = "等待当天模拟结束后再宣战。"; return
+	if simulation.runtime_day_in_progress(): information_notify("等待当天模拟结束后再宣战。"); return
 	var target := state.cities[selected_region].owner_nation; var source := int(player_nation.value)
 	if target==source or target<0: return
-	simulation._set_coalition_war(state.alliance_bloc(source),state.alliance_bloc(target)); details.text = "国家%d向国家%d宣战。"%[source,target]
+	simulation._set_coalition_war(state.alliance_bloc(source),state.alliance_bloc(target)); information_notify("%s向%s宣战。"%[state.nations[source].name,state.nations[target].name])
 
 func order_selected() -> void:
-	if historical_view: details.text = "历史视图不可下令。"; return
+	if historical_view: information_notify("历史视图不可下令。"); return
 	if state==null or selected_region<0: return
-	if simulation.runtime_day_in_progress(): details.text = "等待当天模拟结束后再下令。"; return
+	if simulation.runtime_day_in_progress(): information_notify("等待当天模拟结束后再下令。"); return
 	var army: Army = simulation._army_by_id(selected_army)
 	if army==null: select_player_army(); army = simulation._army_by_id(selected_army)
 	if army==null: return
 	var result := simulation.order_army_to(army,selected_region)
-	details.text = str(result.get("error","行军命令已下达。"))
+	information_notify(str(result.get("error","行军命令已下达。")))
 
 func _unhandled_input(event: InputEvent) -> void:
 	super._unhandled_input(event)
@@ -166,7 +255,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			var p: Vector2 = overlay.army_position(army)
 			for shift in [-2048.,0.,2048.]:
 				var distance: float = event.position.distance_squared_to(map_root.to_global(p+Vector2(shift,0.)))
-				if distance<nearest: nearest = distance; selected_army = army.id; player_nation.value = army.owner_nation
+				if distance<nearest:
+					nearest = distance; selected_army = army.id; player_nation.value = army.owner_nation
+					if army.on_edge or state.cities[army.location_city].is_traffic: show_information("army",army.id)
 	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_RIGHT and event.pressed:
 		select_at(map_root.to_local(event.position)); order_selected()
 
@@ -195,14 +286,18 @@ func sync_nations(source: GameState) -> void:
 
 func select_at(position_value: Vector2) -> void:
 	super.select_at(position_value)
-	if state==null or selected_region<0 or selected_region>=state.cities.size(): return
+	if state==null or selected_region<0 or selected_region>=state.cities.size():
+		if info_panel!=null: info_panel.dismiss()
+		return
 	var source: GameState = overlay.state if historical_view else state
 	var city := source.cities[selected_region]
 	var center := source.administrative_center_of(city.id)
 	details.text += "\n%s · 隶属%s · 月人口%d／金钱%d · 半年粮食%d"%["州治" if center==city.id else "府",source.cities[center].name,city.manpower_per_month,city.gold_per_month,city.food_per_half_year]
 	var road := road_at(position_value)
+	information_road=source.edges.find(road) if road!=null else -1
 	if road!=null:
 		details.text += "\n道路%d—%d · %.1f公里 · 控制辖区：%s"%[road.city_a,road.city_b,road.distance_units()*250.,source.cities[road.control_city_id].name]
+	show_information("city",city.id)
 
 func road_at(position_value: Vector2) -> Edge:
 	if overlay==null: return null
@@ -217,6 +312,7 @@ func road_at(position_value: Vector2) -> Edge:
 
 func update_mode() -> void:
 	super.update_mode()
+	if overlay!=null: refresh_fronts(overlay.state if historical_view else state)
 	# Child districts use the fine overlay lines; the bold dashed pen is reserved
 	# for political borders. Their colour boundary is still the shared band map.
 	if mode_control.selected==2:

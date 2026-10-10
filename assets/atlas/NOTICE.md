@@ -8,6 +8,12 @@ Upstream code and these ports: GNU AGPL-3.0-only. Preserve the included
 LICENSE-AGPL-3.0.txt and original copyright notices when distributing.
 This notice does not relicense unrelated pre-existing game code.
 
+`scripts/atlas/war_fronts.gd` ports the sided-border orientation, tooth placement,
+fantasy colours, stroke widths and zoom law from upstream
+`src/render/civ/warfare.ts` (`warFront`, `frontTeeth`, `strokeFront`, `WAR_SIZE`,
+`warLook`). Live/historical hostility comes from our existing GameState rather
+than upstream history simulation. See `docs/atlas/WAR_FRONTS.md`.
+
 The independent `atlas_military.tscn` adapter adds fixed state/prefecture
 administration, budgets and a shared physical transport graph. Its terrain
 route and curve utilities extend the AGPL atlas ports; source and changes are
@@ -63,4 +69,14 @@ simplex-noise 4.0.3, Copyright (c) 2024 Jonas Wagner (MIT), with original
 algorithm credit to Stefan Gustavson and Peter Eastman. Its license is
 preserved in `LICENSE-simplex-noise.txt`. Raster gradient tiles are separately
 ported from civ-atlas `src/gen/util.ts` under the upstream AGPL.
+
+The native inspector in `scripts/atlas/information_theme.gd` and
+`information_panel.gd` follows the pinned upstream `src/ui/theme.css`,
+`countryPanel.css`, `desktop.css` and `panelParts.tsx`, under AGPL-3.0-only.
+`assets/atlas/ui/{flag,city,center,copy}.svg` translates the corresponding
+`src/ui/icons.tsx` paths (white strokes are tinted by Godot). The route and
+war icons are native companion artwork under the same license. Interface
+fonts use installed system fonts, following the upstream system-font stack;
+no Microsoft font files are redistributed. Our information and commands
+continue to come from the existing Godot simulation.
 

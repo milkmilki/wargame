@@ -10,6 +10,8 @@ var forest := PackedByteArray()
 var detail_zoom := 1.0
 var layer := "all"
 var visible_world := Rect2(-100000,-100000,200000,200000)
+var use_subset := false
+var forest_cells := PackedInt32Array()
 
 func quadratic(a: Vector2,b: Vector2,c: Vector2,steps: int = 12) -> PackedVector2Array:
 	var p := PackedVector2Array()
@@ -41,7 +43,7 @@ func _draw() -> void:
 	var kinds := [1,3,2] if layer in ["all","forest","crowns"] else []
 	for kind in kinds:
 		var shapes: Array = []; var crowns: Array = []
-		for i in range(forest.size()):
+		for i in forest_cells if use_subset else range(forest.size()):
 			if forest[i]!=kind: continue
 			var visible := false
 			for sh in [-2048.,0.,2048.]:
@@ -71,6 +73,7 @@ func _draw() -> void:
 					var jx := Maths.hash2(i,2 if t==0 else 10+t*2,seed_value); var jy := Maths.hash2(i,3 if t==0 else 11+t*2,seed_value)
 					var c := Vector2(mesh.x[i],mesh.y[i])+Vector2(jx-.5,jy-.5)*spacing*spread
 					for shift in [-2048.,0.,2048.]:
+						if not visible_world.grow(spacing*2).has_point(c+Vector2(shift,0)): continue
 						crowns.append({"center":c+Vector2(shift,0),"radius":spacing*(.3+.14*(h1 if t==0 else Maths.hash2(i,20+t,seed_value)))*gs})
 		var canopy := Color8(150,165,108) if kind==1 else Color8(118,140,104) if kind==2 else Color8(118,145,90)
 		# Source uses all outlines then all fills, hiding internal canopy borders.

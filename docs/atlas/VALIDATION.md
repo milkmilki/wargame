@@ -4,6 +4,17 @@
 
 本页记录初始随机星球原型。后续追加的真实地球输入、运行与检查见 [EARTH.md](EARTH.md)。
 
+当前军事场景的敌国前线与代码图谱更新记录见 [WAR_FRONTS.md](WAR_FRONTS.md)。
+当前拖动、缩放优化与真实GPU测量见 [NAVIGATION_PERFORMANCE.md](NAVIGATION_PERFORMANCE.md)。
+持久矢量、地形瓦片、增量文字及本轮性能验收见 [CACHED_RENDERER.md](CACHED_RENDERER.md)；上一份导航文档保留为对照基线。
+城市、国家、军队和道路的原生信息框及实机检查见 [INFORMATION_PANELS.md](INFORMATION_PANELS.md)。
+下文的旧系统回归及图谱状态属于初始原型检查记录，不表示当前状态。
+
+2026-10-10 提交前重新执行完整回归：52个独立入口全部通过，包含505项共享模拟断言、
+新信息框、渲染缓存、前线、州府道路、模板恢复和种子1／40国的35天军事烟测。
+本次报告见 [prepush-regressions.json](information_evidence/prepush-regressions.json)。
+运行军事AI时的长帧限制仍按 CACHED_RENDERER.md 记录，未用回归通过替代性能验收。
+
 ## 算法对照结果
 
 | 检查 | 输入与已验证结果 |

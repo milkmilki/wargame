@@ -17,7 +17,19 @@ const CoastInk = preload("res://scripts/atlas/coast_ink.gd")
 const IceGeometry = preload("res://scripts/atlas/ice_geometry.gd")
 const ZoomGeometry = preload("res://scripts/atlas/zoom_geometry.gd")
 const Snapshot = preload("res://scripts/atlas/snapshot.gd")
+const RenderScheduler = preload("res://scripts/atlas/render_scheduler.gd")
+const SymbolTiles = preload("res://scripts/atlas/symbol_tiles.gd")
+const PoliticalDisplay = preload("res://scripts/atlas/political_display.gd")
+@export var high_performance_renderer := true
+var render_scheduler := RenderScheduler.new()
+var symbol_tiles: Node
+var mode_cache := {}
+var prepared_political_texture: ImageTexture
+var political_pending := false
+var political_revision := 0
+var weak_mask := PackedByteArray()
 const REFERENCE := "res://.dbg/atlas-native-reference/"
+const SYMBOL_PAD := 192
 @export_enum("planet","earth") var terrain_model: String = "planet"
 @export_enum("seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original") var rainfall_model: String = "seasonal_circulation_v5"
 var settlement_model: String = "" # Empty selects the rainfall model's default.
@@ -78,21 +90,36 @@ var province_edge: ImageTexture
 var show_border_layer := true
 var generation_worker: Thread
 var rain_control := OptionButton.new()
+var symbol_cache_zoom := -1.
+var symbol_cache_position := Vector2.ZERO
+var symbol_cache_size := Vector2i.ZERO
+var symbol_build_count := 0
+var navigation_timer := Timer.new()
+var navigation_in_progress := false
+var text_cache_position := Vector2.ZERO
+var text_cache_zoom := 1.
+var camera_layout_count := 0
+var last_camera_input_usec := 0
+const NAVIGATION_SETTLE_SECONDS := .14
 
 func _ready() -> void:
 	seed_control.min_value = 0; seed_control.max_value = 4294967295; seed_control.value = 1
 	threshold_control.min_value = 0; threshold_control.max_value = 50; threshold_control.step = .1; threshold_control.value = 1
 	add_child(map_root)
-	symbol_screen.centered = false; symbol_screen.position = Vector2(-32,-32); symbol_screen.z_index = 1; add_child(symbol_screen)
+	add_child(render_scheduler)
+	symbol_screen.centered = false; symbol_screen.position = -Vector2.ONE*SYMBOL_PAD; symbol_screen.z_index = 1; add_child(symbol_screen)
 	text_layer.z_index = 4; add_child(text_layer)
 	make_ui()
+	navigation_timer.one_shot = true; navigation_timer.wait_time = NAVIGATION_SETTLE_SECONDS
+	navigation_timer.timeout.connect(navigation_timeout); add_child(navigation_timer)
 	resized.connect(func():
-		if symbol_layers.is_empty(): return
-		forest_view.size = Vector2i(size)+Vector2i(64,64); symbol_view.size = forest_view.size; limit_pan(); schedule_symbols())
+		if symbol_layers.is_empty() and not high_performance_renderer: return
+		forest_view.size = Vector2i(size)+Vector2i.ONE*SYMBOL_PAD*2; symbol_view.size = Vector2i(size) if high_performance_renderer else forest_view.size; limit_pan(); schedule_symbols())
 	var actual_seed := 1
 	var reference_mode := false
 	var cache_path := ""
 	for arg in OS.get_cmdline_user_args():
+		if arg=="--atlas-legacy-renderer": high_performance_renderer = false
 		if arg.begins_with("--atlas-ref="): actual_seed = int(arg.get_slice("=",1)); reference_mode = true
 		if arg.begins_with("--atlas-seed="): actual_seed = int(arg.get_slice("=",1))
 		if arg=="--atlas-earth": terrain_model = "earth"
@@ -119,6 +146,9 @@ func _ready() -> void:
 	if not capture_path.is_empty() and not data.is_empty():
 		zoom = capture_zoom; map_root.scale = Vector2.ONE*zoom; map_root.position = size*.5-capture_center*zoom; limit_pan()
 		text_layer.show_names = capture_labels; text_layer.show_cities = capture_labels; refresh_symbols()
+		if high_performance_renderer:
+			text_layer.rebuild()
+			if not await await_render_ready(): printerr("ATLAS_CAPTURE_TIMEOUT"); get_tree().quit(1); return
 		print("ATLAS_CAPTURE_PREPARE")
 		await get_tree().process_frame
 		print("ATLAS_CAPTURE_DRAW")
@@ -265,13 +295,20 @@ func load_reference(seed_value: int) -> void:
 
 func build_view() -> void:
 	view_ready = false
+	symbol_cache_zoom = -1.
+	navigation_in_progress = false; navigation_timer.stop()
+	mode_cache.clear(); prepared_political_texture = null; political_pending = false; render_scheduler.invalidate("political")
+	render_scheduler.invalidate("geometry"); render_scheduler.geometry_pending.clear(); render_scheduler.geometry_users.clear()
+	for key in render_scheduler.cache.keys():
+		if key.begins_with("geometry:"): render_scheduler.forget(key)
+	if is_instance_valid(symbol_tiles): symbol_tiles.free(); symbol_tiles = null
 	if not data.regions.has("names"): Names.assign(data)
 	if not data.has("places"):
 		var place_world: Dictionary = data.environment.duplicate(); place_world.mesh = data.mesh; place_world.params = data.params
 		data.places = Places.build(place_world)
 	owner_control.max_value = maxi(0,data.nations.size()-1)
 	for child in map_root.get_children(): child.queue_free()
-	coast_ink = CoastInk.new(); coast_ink.setup(raster)
+	coast_ink = CoastInk.new(); coast_ink.scheduler = render_scheduler; coast_ink.high_performance = high_performance_renderer; coast_ink.setup(raster)
 	copies.clear()
 	chains = Borders.trace(data.mesh,PackedInt32Array(data.regions.of))
 	display.lines = Borders.build(chains,PackedInt32Array(data.ownership),data.mesh,raster,PackedInt32Array(data.regions.of))
@@ -284,6 +321,7 @@ func build_view() -> void:
 	for k in range(province_labels.size()):
 		if province_labels[k]<0: province_labels[k] = -2
 	var weak := weak_coast()
+	weak_mask = weak
 	Geometry.band_labels(province_labels,2048,1024,province_lines,weak)
 	province_edge = Wash.edge_field(province_labels,2048,1024)
 	rebuild_political_labels()
@@ -291,7 +329,7 @@ func build_view() -> void:
 	else: symbol_view.free()
 	if forest_view.get_parent(): remove_child(forest_view); forest_view.queue_free()
 	else: forest_view.free()
-	forest_view = SubViewport.new(); forest_view.size = Vector2i(size)+Vector2i(64,64)
+	forest_view = SubViewport.new(); forest_view.size = Vector2i(size)+Vector2i.ONE*SYMBOL_PAD*2
 	forest_view.transparent_bg = true; forest_view.disable_3d = true; forest_view.render_target_update_mode = SubViewport.UPDATE_ONCE; add_child(forest_view)
 	var forest_shapes := Symbols.new(); forest_shapes.data = data; forest_shapes.forest = display.forest; forest_shapes.layer = "forest"; forest_view.add_child(forest_shapes)
 	symbol_view = SubViewport.new(); symbol_view.size = forest_view.size
@@ -314,7 +352,7 @@ func build_view() -> void:
 	for key in ice_geometry.textures: base_material.set_shader_parameter(key,ice_geometry.textures[key])
 	for field in fields: base_material.set_shader_parameter({"paint":"paint_fields","field":"world_fields","distance":"distances","detail":"detail_fields"}[field],fields[field])
 	var base := ImageTexture.create_from_image(Image.create(2048,1024,false,Image.FORMAT_RGBA8))
-	var ink := Ink.new(); ink.data = data; ink.borders = display.lines; ink.route_lines = Ink.road_lines(data)
+	var ink := Ink.new(); ink.scheduler = render_scheduler; ink.high_performance = high_performance_renderer; ink.data = data; ink.borders = display.lines; ink.route_lines = Ink.road_lines(data)
 	for shift in [-2048.,0.,2048.]:
 		var root := Node2D.new(); root.position.x = shift; map_root.add_child(root)
 		var background := Sprite2D.new(); background.centered = false; background.texture = base; background.material = base_material; root.add_child(background)
@@ -323,12 +361,25 @@ func build_view() -> void:
 	ink.z_index = 3; map_root.add_child(ink)
 	coast_ink.z_index = 1; map_root.add_child(coast_ink)
 	text_layer.data = data; text_layer.raster = raster; refit_names()
+	if high_performance_renderer:
+		for node in symbol_view.get_children(): node.queue_free()
+		forest_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		symbol_layers.clear()
+		symbol_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		symbol_view.msaa_2d = Viewport.MSAA_DISABLED # Tiles already contain resolved 4x MSAA.
+		symbol_view.size = Vector2i(size)
+		symbol_tiles = SymbolTiles.new(); add_child(symbol_tiles); symbol_tiles.setup(data,display,render_scheduler,symbol_view)
+		text_layer.high_performance = true; text_layer.scheduler = render_scheduler
 	fit_map(); update_mode(); refresh_symbols()
 	await get_tree().process_frame
+	if high_performance_renderer and not await await_render_ready(60000): printerr("ATLAS_INITIAL_RENDER_TIMEOUT")
 	view_ready = true
 
 func update_mode() -> void:
 	if data.is_empty(): return
+	if navigation_in_progress: finish_navigation()
+	if high_performance_renderer and mode_cache.has(mode_control.selected):
+		apply_cached_mode(); return
 	var colors: Array = []; labels.resize(provinces.size())
 	var mode := mode_control.selected
 	if mode==3:
@@ -340,9 +391,8 @@ func update_mode() -> void:
 	if mode == 2:
 		colors.clear()
 		for r in range(data.regions.count): colors.append(Color.from_hsv(fmod(r*.61803398875,1),.36,.76))
-	for k in range(provinces.size()):
-		labels[k] = political_labels[k] if mode in [0,1] else province_labels[k]
-	var color_texture := Wash.color_texture(labels,2048,1024,colors)
+	labels = political_labels if mode in [0,1] else province_labels
+	var color_texture := prepared_political_texture if mode in [0,1] and prepared_political_texture!=null else Wash.color_texture(labels,2048,1024,colors)
 	var material := ShaderMaterial.new(); material.shader = load("res://assets/atlas/wash.gdshader")
 	material.set_shader_parameter("edge_field",political_edge if mode in [0,1] else province_edge)
 	material.set_shader_parameter("symbols",symbol_view.get_texture())
@@ -353,14 +403,27 @@ func update_mode() -> void:
 	if colors.is_empty(): palette_values.fill(-2)
 	material.set_shader_parameter("palette",Wash.color_texture(palette_values,palette_values.size(),1,colors))
 	material.set_shader_parameter("world_fields",field_textures.field)
-	material.set_shader_parameter("symbol_origin",map_root.position+Vector2(32,32)); material.set_shader_parameter("symbol_scale",zoom)
+	material.set_shader_parameter("symbol_origin",symbol_cache_position+Vector2.ONE*SYMBOL_PAD)
+	material.set_shader_parameter("symbol_scale",symbol_cache_zoom if symbol_cache_zoom>0 else zoom)
+	material.set_shader_parameter("view_zoom",zoom)
 	for copy in copies:
 		copy.wash.texture = color_texture; copy.wash.material = material; copy.wash.visible = mode!=1; copy.wash.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		copy.ink.borders = province_lines if mode==2 else display.lines
+		copy.ink.borders = province_lines if mode==2 else current_political_borders()
 		copy.ink.show_borders = show_border_layer and mode in [0,2]; copy.ink.queue_redraw()
 	text_layer.show_polities = mode==0
 	text_layer.owners = political_labels
 	text_layer.rebuild()
+	if high_performance_renderer:
+		mode_cache[mode] = {"texture":color_texture,"material":material}; refresh_cached_camera()
+
+func apply_cached_mode() -> void:
+	var mode := mode_control.selected; var cached: Dictionary = mode_cache[mode]
+	labels = political_labels if mode in [0,1] else province_labels
+	for copy in copies:
+		copy.wash.texture = cached.texture; copy.wash.material = cached.material; copy.wash.visible = mode!=1
+		copy.ink.borders = province_lines if mode==2 else current_political_borders()
+		copy.ink.show_borders = show_border_layer and mode in [0,2]; copy.ink.queue_redraw()
+	text_layer.show_polities = mode==0; text_layer.owners = political_labels; text_layer.rebuild(); refresh_cached_camera()
 
 func rebuild_political_labels() -> void:
 	political_labels.resize(provinces.size())
@@ -382,10 +445,53 @@ func weak_coast() -> PackedByteArray:
 
 func refresh_ownership() -> void:
 	if data.is_empty(): return
+	if high_performance_renderer:
+		prepare_political(); return
 	display.lines = Borders.build(chains,PackedInt32Array(data.ownership),data.mesh,raster,PackedInt32Array(data.regions.of))
 	political_index = ZoomGeometry.build(display.lines); political_segments = ZoomGeometry.textures(political_index)
 	rebuild_political_labels()
 	refit_names(); update_mode()
+
+func prepare_political() -> void:
+	political_pending = true; political_revision += 1; var revision := political_revision
+	render_scheduler.invalidate("political")
+	var ownership := PackedInt32Array(data.ownership)
+	var front_snapshot := political_front_snapshot()
+	var input := {"chains":chains,"ownership":ownership,"mesh":data.mesh,"raster":raster,"region_of":PackedInt32Array(data.regions.of),"provinces":provinces,"weak":weak_mask,"fronts":front_snapshot,"data":{"mesh":data.mesh,"regions":data.regions,"ownership":ownership,"nations":data.nations.duplicate(true)}}
+	render_scheduler.submit("political",func(): return PoliticalDisplay.calculate(input),func(result):
+		var uploaded := {}
+		var geometry := {}; var geometry_bytes := {}
+		for kind in result.stroke_plans:
+			var name_value: String = kind; geometry[name_value] = []; geometry_bytes[name_value] = 0
+			for row in result.stroke_plans[kind]:
+				var buffer: Dictionary = row
+				geometry_bytes[name_value] += buffer.vertices.size()*96+buffer.indices.size()*8
+				render_scheduler.enqueue(func(): geometry[name_value].append({"mesh":Ink.Persistent.resource(buffer),"box":buffer.box}),0,"political")
+		for key in result.segments:
+			var buffer: Dictionary = result.segments[key]; var name_value: String = key
+			render_scheduler.enqueue(func(): uploaded[name_value] = ZoomGeometry.upload(buffer),0,"political")
+		render_scheduler.enqueue(func(): uploaded.edge = Wash.texture(result.edge),0,"political")
+		render_scheduler.enqueue(func(): uploaded.color = Wash.texture(result.color),0,"political")
+		render_scheduler.enqueue(func():
+			if revision!=political_revision: return
+			if political_front_snapshot().signature!=front_snapshot.signature: prepare_political(); return
+			for kind in geometry:
+				var key := "geometry:%d:%d"%[render_scheduler.versions.get("geometry",0),result.stroke_keys[kind]]
+				render_scheduler.remember(key,geometry[kind],geometry_bytes[kind],true)
+			display.lines = result.lines; political_index = result.index; political_labels = result.labels
+			political_segments = uploaded.duplicate(); political_segments.erase("edge"); political_segments.erase("color")
+			political_edge = uploaded.edge; prepared_political_texture = uploaded.color; text_layer.labels = result.names
+			mode_cache.erase(0); mode_cache.erase(1); political_pending = false
+			political_display_ready(); update_mode(),0,"political"),-1)
+
+func political_front_snapshot() -> Dictionary:
+	return {"roles":{},"signature":0}
+
+func current_political_borders() -> Array:
+	return display.lines
+
+func political_display_ready() -> void:
+	pass
 
 func change_owner() -> void:
 	if generating or selected_region<0: return
@@ -405,44 +511,131 @@ func rebuild_roads() -> void:
 	status.text = "原生城市/道路 · %d 城市 · %d 路段 · %d ms"%[data.cities.size(),data.roads.size(),Time.get_ticks_msec()-start]
 
 func fit_map() -> void:
+	navigation_in_progress = false; navigation_timer.stop()
 	zoom = minf(size.x/2048.0,size.y/1024.0); map_root.scale = Vector2.ONE*zoom
 	map_root.position = (size-Vector2(2048,1024)*zoom)/2
 	schedule_symbols()
 
 func schedule_symbols() -> void:
-	if symbol_pending or symbol_layers.is_empty(): return
+	if symbol_pending or (symbol_layers.is_empty() and not high_performance_renderer): return
 	symbol_pending = true; call_deferred("refresh_symbols")
 
 func refresh_symbols() -> void:
 	symbol_pending = false
+	if high_performance_renderer and is_instance_valid(symbol_tiles):
+		refresh_cached_camera(); return
 	if symbol_layers.is_empty(): return
-	var origin := map_root.position+Vector2(32,32)
+	if navigation_in_progress:
+		camera_feedback(); return
+	var delta := map_root.position-symbol_cache_position
+	delta.x -= roundf(delta.x/(2048.*zoom))*2048.*zoom
+	var reuse := is_equal_approx(symbol_cache_zoom,zoom) and symbol_cache_size==symbol_view.size and absf(delta.x)<=SYMBOL_PAD-32 and absf(delta.y)<=SYMBOL_PAD-32
+	if not reuse:
+		symbol_cache_position = map_root.position; symbol_cache_zoom = zoom; symbol_cache_size = symbol_view.size
+		delta = Vector2.ZERO; symbol_build_count += 1
+	var origin := symbol_cache_position+Vector2.ONE*SYMBOL_PAD
+	symbol_screen.position = delta-Vector2.ONE*SYMBOL_PAD; symbol_screen.scale = Vector2.ONE
 	var k := maxf(1.,zoom); var gs := 1.0 if k<=1.35 else pow(k/1.35,-.22)
 	paper_material.set_shader_parameter("view_zoom",zoom); paper_material.set_shader_parameter("glyph_scale",gs)
 	coast_ink.zoom = zoom; coast_ink.visible_world = Rect2(-map_root.position/zoom,size/zoom); coast_ink.rebuild()
-	var rect := Rect2(-origin/zoom,Vector2(symbol_view.size)/zoom)
-	for layer in symbol_layers:
-		layer.detail_zoom = k; layer.visible_world = rect; layer.scale = Vector2.ONE*zoom; layer.position = origin; layer.queue_redraw()
-	forest_material.set_shader_parameter("shade_distance",data.mesh.spacing*.42*gs*zoom)
-	forest_material.set_shader_parameter("glyph_scale",gs); forest_material.set_shader_parameter("view_scale",zoom); forest_material.set_shader_parameter("view_origin",origin)
-	crown_material.set_shader_parameter("view_origin",origin); crown_material.set_shader_parameter("view_scale",zoom)
-	forest_view.render_target_update_mode = SubViewport.UPDATE_ONCE; symbol_view.render_target_update_mode = SubViewport.UPDATE_ONCE
+	if not reuse:
+		var rect := Rect2(-origin/zoom,Vector2(symbol_view.size)/zoom)
+		for layer in symbol_layers:
+			layer.detail_zoom = k; layer.visible_world = rect; layer.scale = Vector2.ONE*zoom; layer.position = origin; layer.queue_redraw()
+		forest_material.set_shader_parameter("shade_distance",data.mesh.spacing*.42*gs*zoom)
+		forest_material.set_shader_parameter("glyph_scale",gs); forest_material.set_shader_parameter("view_scale",zoom); forest_material.set_shader_parameter("view_origin",origin)
+		crown_material.set_shader_parameter("view_origin",origin); crown_material.set_shader_parameter("view_scale",zoom)
+		forest_view.render_target_update_mode = SubViewport.UPDATE_ONCE; symbol_view.render_target_update_mode = SubViewport.UPDATE_ONCE
 	for copy in copies:
 		if copy.wash.material:
 			copy.wash.material.set_shader_parameter("symbol_origin",origin); copy.wash.material.set_shader_parameter("symbol_scale",zoom)
-		copy.ink.pen = gs; copy.ink.view_zoom = zoom; copy.ink.queue_redraw()
+			copy.wash.material.set_shader_parameter("view_zoom",zoom)
+		copy.ink.pen = gs; copy.ink.view_zoom = zoom
+		copy.ink.visible_world = Rect2(-map_root.position/zoom,size/zoom); copy.ink.queue_redraw()
+	text_layer.position = Vector2.ZERO; text_layer.scale = Vector2.ONE
 	text_layer.origin = map_root.position; text_layer.zoom = zoom; text_layer.canvas_size = size; text_layer.rebuild()
+	text_cache_position = map_root.position; text_cache_zoom = zoom; camera_layout_count += 1
+
+func start_navigation() -> void:
+	if high_performance_renderer: return
+	navigation_in_progress = true
+	last_camera_input_usec = Time.get_ticks_usec()
+	if navigation_timer.is_inside_tree(): navigation_timer.start(NAVIGATION_SETTLE_SECONDS)
+
+func navigation_timeout() -> void:
+	if not navigation_in_progress: return
+	# A heavy preceding frame can advance a Timer past its duration immediately
+	# after fresh input. Debounce against real elapsed time, not that frame's delta.
+	var remaining := NAVIGATION_SETTLE_SECONDS-(Time.get_ticks_usec()-last_camera_input_usec)/1000000.
+	if remaining>0: navigation_timer.start(remaining)
+	else: finish_navigation()
+
+func finish_navigation() -> void:
+	navigation_in_progress = false; navigation_timer.stop(); refresh_symbols()
+
+func camera_feedback() -> void:
+	if high_performance_renderer and is_instance_valid(symbol_tiles): refresh_cached_camera(); return
+	# Reproject existing screen-space ink immediately; settle to exact label/glyph
+	# sizes after the input burst, instead of rebuilding on every mouse event.
+	if symbol_cache_zoom<=0: return
+	var ratio := zoom/symbol_cache_zoom
+	var delta := map_root.position-symbol_cache_position*ratio
+	delta.x -= roundf(delta.x/(2048.*zoom))*2048.*zoom
+	symbol_screen.scale = Vector2.ONE*ratio
+	symbol_screen.position = delta-Vector2.ONE*SYMBOL_PAD*ratio
+	var text_ratio := zoom/text_cache_zoom
+	var text_delta := map_root.position-text_cache_position*text_ratio
+	text_delta.x -= roundf(text_delta.x/(2048.*zoom))*2048.*zoom
+	text_layer.scale = Vector2.ONE*text_ratio; text_layer.position = text_delta
+	paper_material.set_shader_parameter("view_zoom",zoom)
+	for copy in copies:
+		if copy.wash.material: copy.wash.material.set_shader_parameter("view_zoom",zoom)
+
+func refresh_cached_camera() -> void:
+	var origin := map_root.position
+	symbol_tiles.set_camera(origin,zoom,Vector2(symbol_view.size))
+	symbol_screen.position = Vector2.ZERO; symbol_screen.scale = Vector2.ONE
+	symbol_cache_position = map_root.position; symbol_cache_zoom = zoom
+	var rect := Rect2(-map_root.position/zoom,size/zoom)
+	var gs := pow(maxf(1.,zoom/1.35),-.22)
+	paper_material.set_shader_parameter("view_zoom",zoom); paper_material.set_shader_parameter("glyph_scale",gs)
+	coast_ink.zoom = zoom; coast_ink.visible_world = rect; coast_ink.rebuild()
+	for copy in copies:
+		if copy.wash.material:
+			copy.wash.material.set_shader_parameter("symbol_origin",origin); copy.wash.material.set_shader_parameter("symbol_scale",zoom); copy.wash.material.set_shader_parameter("view_zoom",zoom)
+	if not copies.is_empty():
+		var ink: Node2D = copies[0].ink; ink.view_zoom = zoom; ink.visible_world = rect
+		if ink.persistent_layers.is_empty(): ink.update_persistent()
+		else:
+			for layer in ink.persistent_layers: layer.set_zoom(zoom); layer.set_view(rect)
+	text_layer.set_camera(map_root.position,zoom,size)
+
+func render_is_ready() -> bool:
+	if not high_performance_renderer: return true
+	if political_pending or not is_instance_valid(symbol_tiles) or not symbol_tiles.is_ready() or not text_layer.is_ready(): return false
+	for node in map_root.get_children():
+		if "persistent_layers" in node:
+			for layer in node.persistent_layers:
+				if layer.preparing: return false
+	return true
+
+func await_render_ready(timeout_ms: int = 10000) -> bool:
+	var deadline := Time.get_ticks_msec()+timeout_ms
+	while not render_is_ready() and Time.get_ticks_msec()<deadline: await get_tree().process_frame
+	return render_is_ready()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index==MOUSE_BUTTON_MIDDLE: dragging = event.pressed
 		if event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP,MOUSE_BUTTON_WHEEL_DOWN]:
+			start_navigation()
 			var before := map_root.to_local(event.position)
 			zoom = clampf(zoom*(1.2 if event.button_index==MOUSE_BUTTON_WHEEL_UP else 1/1.2),minf(size.x/2048.,size.y/1024.),8.)
 			map_root.scale = Vector2.ONE*zoom; map_root.position = event.position-before*zoom; limit_pan()
 			schedule_symbols()
 		if event.pressed and event.button_index==MOUSE_BUTTON_LEFT: select_at(map_root.to_local(event.position))
-	elif event is InputEventMouseMotion and dragging: map_root.position += event.relative; limit_pan(); schedule_symbols()
+	elif event is InputEventMouseMotion and dragging:
+		start_navigation(); map_root.position += event.relative; limit_pan(); schedule_symbols()
 
 func limit_pan() -> void:
 	map_root.position.x = fposmod(map_root.position.x+2048*zoom,2048*zoom)-2048*zoom
@@ -507,6 +700,8 @@ func load_snapshot() -> void:
 
 func export_screenshot() -> void:
 	if data.is_empty(): return
+	if navigation_in_progress: finish_navigation()
+	if not await await_render_ready(): status.text = "截图失败：地图细节准备超时"; return
 	hud.hide(); await get_tree().process_frame; RenderingServer.force_draw(true)
 	var path := "user://atlas-%s-%d.png"%[data.options.get("terrain_model","planet"),int(data.get("seed",0))]
 	get_viewport().get_texture().get_image().save_png(path); hud.show(); status.text = "截图："+ProjectSettings.globalize_path(path); log_event("screenshot",{"path":ProjectSettings.globalize_path(path)})

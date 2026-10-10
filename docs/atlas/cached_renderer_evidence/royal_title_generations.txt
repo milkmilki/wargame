@@ -1,0 +1,29 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ROYAL_GENERATION 1 people=41 bp=270 elapsed_ms=9
+ROYAL_GENERATION 2 people=95 bp=380 elapsed_ms=23
+ROYAL_GENERATION 3 people=166 bp=530 elapsed_ms=34
+ROYAL_GENERATION 4 people=289 bp=800 elapsed_ms=55
+ROYAL_GENERATION 5 people=454 bp=930 elapsed_ms=77
+ROYAL_GENERATION 6 people=636 bp=1140 elapsed_ms=108
+ROYAL_GENERATION 7 people=906 bp=1430 elapsed_ms=149
+ROYAL_GENERATION 8 people=1247 bp=1900 elapsed_ms=203
+ROYAL_GENERATION 9 people=1675 bp=2480 elapsed_ms=274
+ROYAL_GENERATION 10 people=2246 bp=2760 elapsed_ms=365
+ROYAL_GENERATION 11 people=2848 bp=3000 elapsed_ms=466
+ROYAL_GENERATION 12 people=3559 bp=3510 elapsed_ms=616
+ROYAL_GENERATION 13 people=4374 bp=4040 elapsed_ms=771
+ROYAL_GENERATION 14 people=5341 bp=4640 elapsed_ms=960
+ROYAL_GENERATION 15 people=6343 bp=4980 elapsed_ms=1190
+ROYAL_GENERATION 16 people=7565 bp=5550 elapsed_ms=1430
+ROYAL_GENERATION 17 people=8885 bp=6130 elapsed_ms=1716
+ROYAL_GENERATION 18 people=10415 bp=6980 elapsed_ms=2060
+ROYAL_GENERATION 19 people=12047 bp=7680 elapsed_ms=2417
+ROYAL_GENERATION 20 people=13906 bp=8500 elapsed_ms=2941
+ROYAL_GENERATION 21 people=16038 bp=9380 elapsed_ms=3413
+ROYAL_GENERATION 22 people=18344 bp=10150 elapsed_ms=4030
+ROYAL_GENERATION 23 people=20900 bp=10970 elapsed_ms=4637
+ROYAL_GENERATION 24 people=23607 bp=11690 elapsed_ms=5498
+ROYAL_GENERATION 25 people=26594 bp=12230 elapsed_ms=6286
+ROYAL_25_GENERATIONS people=26594 initial_bp=190 peak_bp=12230 elapsed_ms=6588
+ROYAL_TITLE_GENERATIONS_RESULT checks=164 failures=0
