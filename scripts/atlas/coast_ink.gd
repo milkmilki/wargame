@@ -36,7 +36,8 @@ func in_view(source: Array) -> Array:
 		for shift in [-2048.,0.,2048.]:
 			if rect.intersects(Rect2(c.box.position+Vector2(shift,0),c.box.size),true): out.append(c.p); break
 	return out
-func setup(raster: Dictionary) -> void:
+static func prepare(raster: Dictionary,prepared_ice: Dictionary = {}) -> Dictionary:
+	var coast: Array=[]; var lake: Array=[]; var rings: Array=[]
 	var n: int = raster.w*raster.h; var sea := PackedByteArray(); sea.resize(n); var lakes := sea.duplicate(); var land := sea.duplicate()
 	for k in range(n): sea[k] = int(raster.water[k]==1); lakes[k] = int(raster.water[k]==2); land[k] = int(raster.water[k]!=1)
 	for p in Contours.trace(raster.w,raster.h,sea,func(a,b): return Contours.elevation_cross(raster.elev,a,b)): coast.append(Geometry.points(Array(p)))
@@ -48,15 +49,19 @@ func setup(raster: Dictionary) -> void:
 		for k in range(n): mask[k] = int(quant[k]<level)
 		for p in Contours.trace(raster.w,raster.h,mask,func(a,b): return float(level-quant[a])/(quant[b]-quant[a])): lines.append(Geometry.points(Array(Contours.chaikin(p))))
 		rings.append(lines)
-	var ice := Fields.ice_field(raster); var bytes := PackedByteArray(); bytes.resize(n)
+	var ice := Fields.ice_field(raster) if prepared_ice.is_empty() else prepared_ice; var bytes := PackedByteArray(); bytes.resize(n)
 	for k in range(n):
 		var conc := maxf(0,(int(ice.near[k])-1)/254.); var fade := 1-(clampf((conc-.02)/.28,0,1)*clampf((conc-.02)/.28,0,1)*(3-2*clampf((conc-.02)/.28,0,1)))
 		bytes[k] = roundi(255*fade) if sea[k] and not ice.mask[k] else 0
-	var texture := ImageTexture.create_from_image(Image.create_from_data(raster.w,raster.h,false,Image.FORMAT_R8,bytes))
+	return {"coast":coast,"lake":lake,"rings":rings,"chunks":[chunk(lake),chunk(coast),chunk(rings[0]),chunk(rings[1]),chunk(rings[2])],"fade":{"w":raster.w,"h":raster.h,"format":Image.FORMAT_R8,"bytes":bytes}}
+
+func setup(raster: Dictionary,prepared_ice: Dictionary = {},prepared: Dictionary = {}) -> void:
+	var plan := prepare(raster,prepared_ice) if prepared.is_empty() else prepared
+	coast=plan.coast; lake=plan.lake; rings=plan.rings; chunks=plan.chunks
+	var texture := Fields.upload(plan.fade)
 	fade_texture = texture
 	for i in range(3):
 		var node := Ripple.new(); node.show_behind_parent = true; var mat := ShaderMaterial.new(); mat.shader = load("res://assets/atlas/ripple.gdshader"); mat.set_shader_parameter("fade_fields",texture); node.material = mat; add_child(node); ripple_nodes.append(node)
-	chunks = [chunk(lake),chunk(coast),chunk(rings[0]),chunk(rings[1]),chunk(rings[2])]
 func rebuild() -> void:
 	if high_performance:
 		update_persistent(); return

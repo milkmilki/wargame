@@ -1,0 +1,14 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_time_controls",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2953,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_time_controls.log"
+    }
+  ],
+  "failures": 0
+}

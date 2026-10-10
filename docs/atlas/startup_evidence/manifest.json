@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-10",
+  "base_commit": "7e20b65a77577fff70fe8c2b895011fa8015037c",
+  "sources": {
+    "run_tests.py": "693a548acaa64b33714bd4f28ab5eabc245c6d60e251993b7648ebaea745fe3b",
+    "scripts/core/equivariant_order.gd": "ec3eefbb1dc216263fb82e455559d5da2b2d3e67e7e80cc897a560e8b0afe252",
+    "scripts/atlas/military_preview.gd": "1a7cc8fb22ad02f77a912e8bf745f599d5184b7070ce36aed71bbeb20ee45ddf",
+    "scripts/atlas/preview.gd": "5ea30effd630ade72fad57f204f4508402f5aae420020f2d4d3b4b956d80539e",
+    "scripts/atlas/paint_fields.gd": "4829029991a8a46b1855b97e624626b5c922077a79dff77292f6c8f2f12dd45a",
+    "scripts/atlas/coast_ink.gd": "c7fdd05dcbf3625b8207fae55bf8badfec0aad7d2fec3f72ce04f0b60179122c",
+    "scripts/atlas/ice_geometry.gd": "88479a8058a756ff5e12d82fff97cf286959ddfcd2f411bfbe0922a7cf84e57b",
+    "scripts/atlas/raster.gd": "3fabaa078b99055803ef309bbdae9840c106b059469a05b046d4f74172f25bdf",
+    "scripts/atlas/seasonal_circulation.gd": "0e4ca5bbb1bf0b733851eca7f6b3e0e0fbc11804b6585955be89ab03b220e441",
+    "scripts/atlas/startup_cache.gd": "39f7dfe2d50e230d51d2fec4b1163af3277e41da3b071d622e7ce8276a34efbc",
+    "scripts/atlas/startup_display.gd": "c559a6ab970b777513e6fb388194fabf9c024c98a8c18566852e8dfc454e3101",
+    "tests/atlas_startup_cache.gd": "2892182fd6d5e6ac0ee68072218eb913bc12b620ca8a7e9fc57649e3cee6d7ee",
+    "tests/atlas_startup_climate.gd": "1eac7e643da3e71a72bfad7a7aeb2317a98e12e65eb5c4d5ef68f9d919f08e9c",
+    "tests/atlas_startup_equivalence.gd": "904e3f08ad7ce806bc195616b10a68c483c6c714da62cde0814f1ec6b186ca95",
+    "tests/atlas_startup_order.gd": "6511466f8540913f06dc96c0f6c94b6a207de80fa705e39e568af470cae3f3d6",
+    "tests/atlas_startup_raster.gd": "ade180d90a9a6b8fd61a07ea6be464805f7193c6659fe4ad40b1cd02a93997dc",
+    "tests/atlas_startup_visual.gd": "ab100cb2ea7ae53fec4182608b9deb24d69c9bb1a47cedb2dea3965405ffa110",
+    "tests/fixtures/atlas_startup_climate.bin": "b61d4db0e947ed0d24f77b5637561323963d4e260a714284a0b8828fce06a0b6"
+  },
+  "artifacts": {
+    "atlas_military_smoke.txt": "95b21ed586eb5af98be5db38cc8c8b9c546f035da1518f889b5c248b4ceaddc3",
+    "atlas_startup_cache.txt": "73c8a1477ae73ff9b4b8fc03bf315456ba5117d07f1f44f07ab24efa214cbed8",
+    "atlas_startup_climate.txt": "942e4b7c0f5ecacb453990119ffadc22bd94cc950b9e625d580b96299609d957",
+    "atlas_startup_order.txt": "924cd5ff5d3d698054fcab95516038caacc9b57392fcc227279023105f0dc908",
+    "baseline-result.json": "3152a37b11bf1f0ba8af7dc1bd7e30b427c7d13d9373049b6b2018aecbd33be3",
+    "baseline-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-stdout.txt": "e0eb31856082a58672f527976129d5ced671d4b6760e953caae8913aa6ba3f96",
+    "baseline.png": "38b2156b5c30abed9e04f28843bbdea5ea25ff4e40d66941354f5be7b1fdcdab",
+    "cold-result.json": "3219cf6f79bc606349754f72d682e567174bcce8a04f9b527c0e0854273f12fe",
+    "cold-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cold-stdout.txt": "704ffad53f9930849b96aa7e93211c8aba95b6624f63c7f72906e00485e9e225",
+    "cold.png": "91a8b34c49403f87a39f9b3b4d89e9ed7c2902c55994d96aa9baabbc390ff017",
+    "gpu-updates-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gpu-updates-stdout.txt": "6b93627cd52674a5052203a8b8821b14dbc30bd392cbb8afc72972cdf56e4559",
+    "normal-cold-result.json": "16e1fe79428091d5536935efc4046ede73342c75231aa917b8ca187b0679b04c",
+    "normal-cold-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-cold-stdout.txt": "6debc938b6f0218f4ccf42ebb88d52507ddde84886ff84fdb585e2c1cef66241",
+    "normal-warm-result.json": "af49cbe192fb3827de66bc44447ca2a4846627d9eb6a453e0f1a0de72775e364",
+    "normal-warm-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-warm-stdout.txt": "c41cb229117c188eae34e4e25f631616d974b481e391e8a6adfbe757b5ab7b90",
+    "regressions.json": "16b759350e3a947b740f4f135de19f477813c80e560069e19330ff0fa24f743e",
+    "test_suite.txt": "53c4d1933e336ddaeafc6ac9f68cc9110d3bb36f2978f5b7a980dfa2a29e4996",
+    "warm-1-result.json": "50585c50fc683fc545e3c4c91cb71b378c52488c41220cda2c5a656a1710a46e",
+    "warm-1-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "warm-1-stdout.txt": "fb080d3550c70b65c24d4ca305231430410fceb895770cd081183652638d2a02",
+    "warm-2-result.json": "e9d8ef109d5752ee1e0c13d05f9e2b9f2936d43c016dee7c4ee497b45eec1ded",
+    "warm-2-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "warm-2-stdout.txt": "235de1de18dc22da2ee63ed20e36d48d80a16cafcd2912c098e03885b08eee57",
+    "warm-3-result.json": "92775dc93cc5cdc1208e6e328bc1525dfc54a711a2976f46b3a0fb571ec4a428",
+    "warm-3-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "warm-3-stdout.txt": "5ca0298f57c6fc3df4807c84afb51bdb840ae349a6eff305198c26f90668705d"
+  },
+  "pixel_comparison": {
+    "map_pixels": 767400,
+    "different_pixels": 0,
+    "excluded_ui_rectangles": [
+      [
+        800,
+        0,
+        1279,
+        109
+      ],
+      [
+        500,
+        590,
+        1279,
+        719
+      ]
+    ]
+  },
+  "full_equivalence": "All data.mesh/environment/regions/cities/roads/ownership/nations/places and raster/hierarchy/graph/district/strategic data match baseline byte-for-byte; verified against final cold payload. Large development payloads are not committed."
+}

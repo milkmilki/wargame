@@ -1,4 +1,5 @@
 extends RefCounted
+const Diplomacy = preload("res://scripts/atlas/diplomacy_view.gd")
 ## Read-only presentation of our simulation. No forecasting, RNG or rule changes.
 static func row(label: String,value: Variant,kind: String = "",id: int = -1) -> Dictionary:
 	return {"label":label,"value":str(value),"kind":kind,"id":id}
@@ -67,9 +68,9 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var relations: Array = []
 	for other in state.nations:
 		if other.id==id or not other.alive: continue
-		var relation := state.relation_between(id,other.id)
-		if relation!=GameState.DiplomaticRelation.NEUTRAL:
-			relations.append(row("敌对" if relation==GameState.DiplomaticRelation.WAR else "同盟",other.name,"nation",other.id))
+		var relation := Diplomacy.kind(state,id,other.id)
+		if relation not in ["neutral",""]:
+			relations.append(row(Diplomacy.LABELS[relation],other.name,"nation",other.id))
 	doc.sections.append(section("外交关系",relations if not relations.is_empty() else [row("关系","暂无敌对或同盟")]))
 	doc.sections.append(section("军队",[row("野战兵力",troops)]+army_rows))
 	doc.sections.append(section("贸易",[row("状态","已启用" if state.trade_enabled else "未启用"),row("最近月度贸易收入",n.last_trade_gold),row("贸易线路",n.last_trade_route_count),row("粮食进口",n.last_trade_food_import),row("粮食出口",n.last_trade_food_export),row("人口进口",n.last_trade_manpower_import)]))

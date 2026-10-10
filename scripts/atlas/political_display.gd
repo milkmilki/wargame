@@ -26,4 +26,4 @@ static func calculate(input: Dictionary) -> Dictionary:
 			if input.fronts.roles[key]==line.left: path.reverse()
 			fronts.append(path); teeth.append_array(Fronts.teeth(path,Fronts.TOOTH_STEP,Fronts.TOOTH_LENGTH))
 		else: normal.append(path)
-	return {"lines":lines,"index":index,"labels":labels,"segments":Zoom.texture_data(index),"edge":Wash.edge_data(labels,2048,1024),"color":Wash.color_data(labels,2048,1024,colors),"names":Labels.fit_all(input.data,Labels.field(grid,input.ownership,512,256)),"stroke_plans":{"normal":Persistent.plan(normal),"front":Persistent.plan(fronts),"teeth":Persistent.plan(teeth)},"stroke_keys":{"normal":hash(normal),"front":hash(fronts),"teeth":hash(teeth)}}
+	return {"lines":lines,"index":index,"labels":labels,"ids":Wash.id_data(labels,2048,1024),"segments":Zoom.texture_data(index),"edge":Wash.edge_data(labels,2048,1024),"color":Wash.color_data(labels,2048,1024,colors),"names":Labels.fit_all(input.data,Labels.field(grid,input.ownership,512,256)),"stroke_plans":{"normal":Persistent.plan(normal),"front":Persistent.plan(fronts),"teeth":Persistent.plan(teeth)},"stroke_keys":{"normal":hash(normal),"front":hash(fronts),"teeth":hash(teeth)}}

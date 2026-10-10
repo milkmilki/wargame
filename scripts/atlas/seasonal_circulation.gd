@@ -129,109 +129,134 @@ static func steady_fields(elevation_m: PackedFloat32Array,land: PackedByteArray,
 	var inland := Transport._sea_distance(ocean_mask,Vector2i(size.x*3,size.y),6.,latitudes,true)
 	var basin_distance := Transport._sea_distance(lowland_mask,Vector2i(size.x*3,size.y),6.,latitudes,true)
 	var humidities: Array = []; var quarters: Array = []; var winds: Array = []; var annual := zeros(n); var peak := annual.duplicate(); var mean_u := annual.duplicate(); var mean_v := annual.duplicate()
+	var context := {"water_types":water_types,"sea_anomaly":sea_anomaly,"continent":continent,"latitudes":latitudes,"offshore":offshore,"inland":inland,"basin_distance":basin_distance}
+	var results: Array = [null,null,null,null]
+	if options.get("parallel",n>=4096):
+		# Each task owns its output arrays; shared inputs are read-only. Join before
+		# combining in the original quarter order to preserve float rounding.
+		var mutex := Mutex.new()
+		var task := WorkerThreadPool.add_group_task(func(q):
+			var result := steady_quarter(q,elevation_m,land,size,options,context)
+			mutex.lock(); results[q]=result; mutex.unlock(),4,mini(4,maxi(1,OS.get_processor_count()-1)),false,"Atlas seasonal climate")
+		WorkerThreadPool.wait_for_group_task_completion(task)
+	else:
+		for q in range(4): results[q]=steady_quarter(q,elevation_m,land,size,options,context)
 	for q in range(4):
-		var season: float = SEASONS[q]
-		var regime: float = options.get("weather_regime",0.)
-		var wind := wind_fields(continent,size,season,regime,float(options.get("meridional_sector",1.)),float(options.get("zonal_sector",1.))); winds.append(wind)
-		var indices := PackedInt32Array(); indices.resize(4*n); var tx := zeros(n); var ty := tx.duplicate()
-		var capacity := tx.duplicate(); var fraction := tx.duplicate(); var monsoon := tx.duplicate(); var retention := tx.duplicate(); var sat := tx.duplicate(); var recharge := tx.duplicate(); var open_water := tx.duplicate(); var recycling := tx.duplicate(); var dry_mixing := tx.duplicate()
-		for y in range(size.y):
-			var lat := latitudes[y]; var cosine := maxf(.05,cos(deg_to_rad(lat)))
-			for x in range(size.x):
-				var i := y*size.x+x
-				var point := stencil(x-wind.u[i]*STEP_KM/(111.*360./size.x*cosine),y+wind.v[i]*STEP_KM/(111.*180./size.y),size)
-				for j in range(4): indices[4*i+j] = point[j]
-				tx[i] = point[4]; ty[i] = point[5]
-				var up_elevation := interpolated(elevation_m,indices,tx,ty,i); var rise := maxf(0,elevation_m[i]-up_elevation)
-				# Orographic ascent begins on the windward approach, not only in
-				# the summit cell. Otherwise a narrow coastal plain receives no
-				# mountain rain while the adjacent high cell receives all of it.
-				var downwind := stencil(x+wind.u[i]*STEP_KM/(111.*360./size.x*cosine),y-wind.v[i]*STEP_KM/(111.*180./size.y),size)
-				var ahead: float = lerpf(lerpf(elevation_m[downwind[0]],elevation_m[downwind[1]],downwind[4]),lerpf(elevation_m[downwind[2]],elevation_m[downwind[3]],downwind[4]),downwind[5])
-				var lakes: Array = [0.,0.,0.,0.]
-				if not water_types.is_empty():
-					for j in range(4): lakes[j] = float(water_types[indices[4*i+j]]==2)
-				var up_water: float = lerpf(lerpf(lakes[0],lakes[1],tx[i]),lerpf(lakes[2],lakes[3],tx[i]),ty[i])
-				# Only directly marine/lake-fed approaches receive this coastal
-				# lifting term; inland hills must not double monsoon rainfall.
-				rise = maxf(rise,.75*up_water*maxf(0.,ahead-elevation_m[i]))
-				var barrier := smoothstep(Transport.RAIN_BARRIER_START_KM*1000.,Transport.RAIN_BARRIER_FULL_KM*1000.,elevation_m[i])
-				capacity[i] = exp(-elevation_m[i]/1000.*barrier*.8)
-				var descending := exp(-pow((absf(lat)-(27.+2.*wind.summer[i]))/7.,2))
-				var convective := exp(-pow((lat-wind.itcz[i])/9.,2))
-				# Midlatitude storm tracks migrate poleward in local summer,
-				# alongside the westerly circulation, rather than equatorward.
-				var fronts := exp(-pow((absf(lat)-(48.+5.*wind.summer[i]))/13.,2))
-				# Rain-producing uplift also requires unstable air. Previously the
-				# raw mountain term bypassed subtropical subsidence altogether.
-				# Summer land-sea convergence can break subsidence (wet monsoon
-				# coasts). Cold marine stability is applied independently below.
-				var monsoon_lift := clampf(1.5*maxf(0.,wind.summer[i])*sqrt(continent[i])*smoothstep(.45,.9,wind.convergence[i]),0.,1.)
-				fraction[i] = (.008+.12*convective+.035*fronts)*(1.-.98*descending)+rise/1200.*.16*(1.-.8*descending*(1.-monsoon_lift))
-				# A passing front replaces locally stable air. This lift still needs
-				# advected humidity and is cooled by marine stability below.
-				fraction[i] += .04*weather_strength(lat)*absf(regime)
-				monsoon[i] = .085*maxf(0,wind.summer[i])*exp(-pow((absf(lat)-24.)/12.,2))*continent[i]*wind.convergence[i]
-				var ocean_km: float = inland[y*size.x*3+size.x+x]*20000.
-				var basin_km: float = basin_distance[y*size.x*3+size.x+x]*20000.
-				var basin_weight := (1.-smoothstep(600.,1000.,basin_km))*smoothstep(0.,500.,ocean_km-basin_km)
-				# Temperate continental dry-air mixing does not suppress tropical
-				# convection or the subtropical monsoon. Rising moist air condenses
-				# before this mixing, preserving windward lake/sea mountain coasts.
-				var temperate := smoothstep(30.,40.,absf(lat))*(1.-smoothstep(50.,55.,absf(lat)))
-				var inland_mixing := basin_weight*smoothstep(200.,1000.,ocean_km)*temperate*(1.-smoothstep(200.,1000.,rise))*STEP_KM/float(options.get("land_mixing_km",LAND_MIXING_KM))
-				dry_mixing[i] = exp(-inland_mixing)
-				retention[i] = exp(-.005-.20*descending)
-				# The old 27-.55*latitude proxy froze temperate open seas and was
-				# inconsistent with the atlas's own ocean temperature baseline.
-				var lake := not water_types.is_empty() and water_types[i]==2
-				var thermal_amplitude := 24. if lake else 5.
-				var sea_temperature: float = Temperature.piecewise(Temperature.TEMP,absf(lat))+thermal_amplitude*SEA_SEASONS[q]*sin(deg_to_rad(lat))+sea_anomaly[i]
-				var supply := marine_supply(sea_temperature,lat)
-				sat[i] = supply.saturation; open_water[i] = supply.open_water
-				if lake: open_water[i] *= smoothstep(-2.,1.,sea_temperature)
-				# Rain falling on frozen ground cannot immediately evaporate as
-				# readily as summer rain. Reuse the shared temperature baseline;
-				# this moisture-budget proxy does not change displayed temperatures.
-				recycling[i] = RECYCLING*smoothstep(-2.,10.,air_temperature(lat,elevation_m[i],season))
-				# A ~100 km marine cell is an evaporation source; the legacy 320 km
-				# width cutoff starved ocean channels and tropical coastal inflow.
-				recharge[i] = (1.-exp(-STEP_KM/320.))*smoothstep(0,120.,offshore[y*size.x*3+size.x+x]*20000.)
-				if not water_types.is_empty() and water_types[i]==2:
-					recharge[i] *= LAKE_RECHARGE
-		var cooling := marine_cooling(sea_anomaly,land,indices,tx,ty,elevation_m)
+		var result: Dictionary=results[q]; var rain: PackedFloat32Array=result.rain; var wind: Dictionary=result.wind
+		humidities.append(result.humidity); quarters.append(rain); winds.append(wind)
 		for i in range(n):
-			var stability := exp(.9*cooling[i])
-			fraction[i] *= stability; monsoon[i] *= stability
-		var humidity := zeros(n); var next := humidity.duplicate(); var rain := humidity.duplicate()
-		if options.has("initial_humidity"): humidity = options.initial_humidity[q].duplicate()
-		else:
-			for i in range(n):
-				var ocean := not land[i] and (water_types.is_empty() or water_types[i]==1)
-				humidity[i] = sat[i]*open_water[i] if ocean else 0.
-		var steps: int = options.get("spinup_steps",100)
-		var sample_steps := clampi(int(options.get("sample_steps",1)),1,steps)
-		var sampled := zeros(n)
-		for iteration in range(steps):
-			for i in range(n):
-				var incoming := interpolated(humidity,indices,tx,ty,i)*.96+humidity[i]*.04
-				if not land[i]: next[i] = incoming+(sat[i]-incoming)*recharge[i]*open_water[i]; continue
-				# Moist maritime air entrains less dry continental air than an
-				# already depleted parcel. Do not turn warm-ocean-fed plains into
-				# deserts merely because their nearest coast is far away.
-				incoming *= pow(dry_mixing[i],1.-.9*smoothstep(.15,.4,incoming))
-				var condensation := maxf(0,incoming-capacity[i])
-				var precip_fraction := clampf(fraction[i]+monsoon[i]*smoothstep(.20,.55,incoming),0,.65)
-				rain[i] = condensation+(incoming-condensation)*precip_fraction
-				if iteration>=steps-sample_steps: sampled[i] += rain[i]/sample_steps
-				next[i] = (incoming-rain[i]+rain[i]*recycling[i])*retention[i]
-			var swap := humidity; humidity = next; next = swap
-		rain = sampled; humidities.append(humidity)
-		for i in range(n):
-			rain[i] *= RAIN_SCALE; annual[i] += rain[i]*.25; peak[i] = maxf(peak[i],rain[i]); mean_u[i] += wind.u[i]*.25; mean_v[i] += wind.v[i]*.25
-		quarters.append(rain)
+			annual[i] += rain[i]*.25; peak[i] = maxf(peak[i],rain[i]); mean_u[i] += wind.u[i]*.25; mean_v[i] += wind.v[i]*.25
 	return {"continentality":continent,"humidity":humidities,"annual":annual,"seasonal":peak,"quarters":quarters,"winds":winds,"mean_u":mean_u,"mean_v":mean_v,
 			"metadata":{"version":VERSION,"seasons":["DJF","MAM","JJA","SON"],"season_heating":SEASONS,"spinup_steps":int(options.get("spinup_steps",100)),"transport_step_km":STEP_KM,"water_width_km":120.,"rain_scale":RAIN_SCALE,"rainfall_units":"estimated annual mm; quarterly fields are annualized rates","recycling_fraction":RECYCLING,"observed_climate":false,"annual_combine":"arithmetic mean of four seasonal rates","cold_layer_inland_scale_km":900.,"cold_layer_height_m":1800.,"orographic_gain":.16,"rules":"seasonal ITCZ, subtropical dry-air exchange, westerlies, land-sea heating gradient, Coriolis deflection, stability/monsoon-limited mountain uplift, high-mountain rain shadow, SST moisture supply and advected cold marine inversion"}}
+
+static func steady_quarter(q: int,elevation_m: PackedFloat32Array,land: PackedByteArray,size: Vector2i,options: Dictionary,context: Dictionary) -> Dictionary:
+	var n := land.size()
+	var water_types: PackedByteArray=context.water_types
+	var sea_anomaly: PackedFloat32Array=context.sea_anomaly
+	var continent: PackedFloat32Array=context.continent
+	var latitudes: PackedFloat32Array=context.latitudes
+	var offshore: PackedFloat32Array=context.offshore
+	var inland: PackedFloat32Array=context.inland
+	var basin_distance: PackedFloat32Array=context.basin_distance
+	var season: float = SEASONS[q]
+	var regime: float = options.get("weather_regime",0.)
+	var wind := wind_fields(continent,size,season,regime,float(options.get("meridional_sector",1.)),float(options.get("zonal_sector",1.)))
+	var indices := PackedInt32Array(); indices.resize(4*n); var tx := zeros(n); var ty := tx.duplicate()
+	var capacity := tx.duplicate(); var fraction := tx.duplicate(); var monsoon := tx.duplicate(); var retention := tx.duplicate(); var sat := tx.duplicate(); var recharge := tx.duplicate(); var open_water := tx.duplicate(); var recycling := tx.duplicate(); var dry_mixing := tx.duplicate()
+	for y in range(size.y):
+		var lat := latitudes[y]; var cosine := maxf(.05,cos(deg_to_rad(lat)))
+		for x in range(size.x):
+			var i := y*size.x+x
+			var point := stencil(x-wind.u[i]*STEP_KM/(111.*360./size.x*cosine),y+wind.v[i]*STEP_KM/(111.*180./size.y),size)
+			for j in range(4): indices[4*i+j] = point[j]
+			tx[i] = point[4]; ty[i] = point[5]
+			var up_elevation := interpolated(elevation_m,indices,tx,ty,i); var rise := maxf(0,elevation_m[i]-up_elevation)
+			# Orographic ascent begins on the windward approach, not only in
+			# the summit cell. Otherwise a narrow coastal plain receives no
+			# mountain rain while the adjacent high cell receives all of it.
+			var downwind := stencil(x+wind.u[i]*STEP_KM/(111.*360./size.x*cosine),y-wind.v[i]*STEP_KM/(111.*180./size.y),size)
+			var ahead: float = lerpf(lerpf(elevation_m[downwind[0]],elevation_m[downwind[1]],downwind[4]),lerpf(elevation_m[downwind[2]],elevation_m[downwind[3]],downwind[4]),downwind[5])
+			var lakes: Array = [0.,0.,0.,0.]
+			if not water_types.is_empty():
+				for j in range(4): lakes[j] = float(water_types[indices[4*i+j]]==2)
+			var up_water: float = lerpf(lerpf(lakes[0],lakes[1],tx[i]),lerpf(lakes[2],lakes[3],tx[i]),ty[i])
+			# Only directly marine/lake-fed approaches receive this coastal
+			# lifting term; inland hills must not double monsoon rainfall.
+			rise = maxf(rise,.75*up_water*maxf(0.,ahead-elevation_m[i]))
+			var barrier := smoothstep(Transport.RAIN_BARRIER_START_KM*1000.,Transport.RAIN_BARRIER_FULL_KM*1000.,elevation_m[i])
+			capacity[i] = exp(-elevation_m[i]/1000.*barrier*.8)
+			var descending := exp(-pow((absf(lat)-(27.+2.*wind.summer[i]))/7.,2))
+			var convective := exp(-pow((lat-wind.itcz[i])/9.,2))
+			# Midlatitude storm tracks migrate poleward in local summer,
+			# alongside the westerly circulation, rather than equatorward.
+			var fronts := exp(-pow((absf(lat)-(48.+5.*wind.summer[i]))/13.,2))
+			# Rain-producing uplift also requires unstable air. Previously the
+			# raw mountain term bypassed subtropical subsidence altogether.
+			# Summer land-sea convergence can break subsidence (wet monsoon
+			# coasts). Cold marine stability is applied independently below.
+			var monsoon_lift := clampf(1.5*maxf(0.,wind.summer[i])*sqrt(continent[i])*smoothstep(.45,.9,wind.convergence[i]),0.,1.)
+			fraction[i] = (.008+.12*convective+.035*fronts)*(1.-.98*descending)+rise/1200.*.16*(1.-.8*descending*(1.-monsoon_lift))
+			# A passing front replaces locally stable air. This lift still needs
+			# advected humidity and is cooled by marine stability below.
+			fraction[i] += .04*weather_strength(lat)*absf(regime)
+			monsoon[i] = .085*maxf(0,wind.summer[i])*exp(-pow((absf(lat)-24.)/12.,2))*continent[i]*wind.convergence[i]
+			var ocean_km: float = inland[y*size.x*3+size.x+x]*20000.
+			var basin_km: float = basin_distance[y*size.x*3+size.x+x]*20000.
+			var basin_weight := (1.-smoothstep(600.,1000.,basin_km))*smoothstep(0.,500.,ocean_km-basin_km)
+			# Temperate continental dry-air mixing does not suppress tropical
+			# convection or the subtropical monsoon. Rising moist air condenses
+			# before this mixing, preserving windward lake/sea mountain coasts.
+			var temperate := smoothstep(30.,40.,absf(lat))*(1.-smoothstep(50.,55.,absf(lat)))
+			var inland_mixing := basin_weight*smoothstep(200.,1000.,ocean_km)*temperate*(1.-smoothstep(200.,1000.,rise))*STEP_KM/float(options.get("land_mixing_km",LAND_MIXING_KM))
+			dry_mixing[i] = exp(-inland_mixing)
+			retention[i] = exp(-.005-.20*descending)
+			# The old 27-.55*latitude proxy froze temperate open seas and was
+			# inconsistent with the atlas's own ocean temperature baseline.
+			var lake := not water_types.is_empty() and water_types[i]==2
+			var thermal_amplitude := 24. if lake else 5.
+			var sea_temperature: float = Temperature.piecewise(Temperature.TEMP,absf(lat))+thermal_amplitude*SEA_SEASONS[q]*sin(deg_to_rad(lat))+sea_anomaly[i]
+			var supply := marine_supply(sea_temperature,lat)
+			sat[i] = supply.saturation; open_water[i] = supply.open_water
+			if lake: open_water[i] *= smoothstep(-2.,1.,sea_temperature)
+			# Rain falling on frozen ground cannot immediately evaporate as
+			# readily as summer rain. Reuse the shared temperature baseline;
+			# this moisture-budget proxy does not change displayed temperatures.
+			recycling[i] = RECYCLING*smoothstep(-2.,10.,air_temperature(lat,elevation_m[i],season))
+			# A ~100 km marine cell is an evaporation source; the legacy 320 km
+			# width cutoff starved ocean channels and tropical coastal inflow.
+			recharge[i] = (1.-exp(-STEP_KM/320.))*smoothstep(0,120.,offshore[y*size.x*3+size.x+x]*20000.)
+			if not water_types.is_empty() and water_types[i]==2:
+				recharge[i] *= LAKE_RECHARGE
+	var cooling := marine_cooling(sea_anomaly,land,indices,tx,ty,elevation_m)
+	for i in range(n):
+		var stability := exp(.9*cooling[i])
+		fraction[i] *= stability; monsoon[i] *= stability
+	var humidity := zeros(n); var next := humidity.duplicate(); var rain := humidity.duplicate()
+	if options.has("initial_humidity"): humidity = options.initial_humidity[q].duplicate()
+	else:
+		for i in range(n):
+			var ocean := not land[i] and (water_types.is_empty() or water_types[i]==1)
+			humidity[i] = sat[i]*open_water[i] if ocean else 0.
+	var steps: int = options.get("spinup_steps",100)
+	var sample_steps := clampi(int(options.get("sample_steps",1)),1,steps)
+	var sampled := zeros(n)
+	for iteration in range(steps):
+		for i in range(n):
+			var incoming := interpolated(humidity,indices,tx,ty,i)*.96+humidity[i]*.04
+			if not land[i]: next[i] = incoming+(sat[i]-incoming)*recharge[i]*open_water[i]; continue
+			# Moist maritime air entrains less dry continental air than an
+			# already depleted parcel. Do not turn warm-ocean-fed plains into
+			# deserts merely because their nearest coast is far away.
+			incoming *= pow(dry_mixing[i],1.-.9*smoothstep(.15,.4,incoming))
+			var condensation := maxf(0,incoming-capacity[i])
+			var precip_fraction := clampf(fraction[i]+monsoon[i]*smoothstep(.20,.55,incoming),0,.65)
+			rain[i] = condensation+(incoming-condensation)*precip_fraction
+			if iteration>=steps-sample_steps: sampled[i] += rain[i]/sample_steps
+			next[i] = (incoming-rain[i]+rain[i]*recycling[i])*retention[i]
+		var swap := humidity; humidity = next; next = swap
+	rain = sampled
+	for i in range(n): rain[i] *= RAIN_SCALE
+	return {"rain":rain,"wind":wind,"humidity":humidity}
 
 static func build_fields(elevation_m: PackedFloat32Array,land: PackedByteArray,size: Vector2i,options: Dictionary = {}) -> Dictionary:
 	# Average the precipitation produced by different weather states, rather

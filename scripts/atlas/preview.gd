@@ -20,11 +20,16 @@ const Snapshot = preload("res://scripts/atlas/snapshot.gd")
 const RenderScheduler = preload("res://scripts/atlas/render_scheduler.gd")
 const SymbolTiles = preload("res://scripts/atlas/symbol_tiles.gd")
 const PoliticalDisplay = preload("res://scripts/atlas/political_display.gd")
+const StartupDisplay = preload("res://scripts/atlas/startup_display.gd")
+var initial_display_plan := {}
+var startup_display_result := {}
+var startup_profile := {}
 @export var high_performance_renderer := true
 var render_scheduler := RenderScheduler.new()
 var symbol_tiles: Node
 var mode_cache := {}
 var prepared_political_texture: ImageTexture
+var political_id_texture: ImageTexture
 var political_pending := false
 var political_revision := 0
 var weak_mask := PackedByteArray()
@@ -295,6 +300,18 @@ func load_reference(seed_value: int) -> void:
 
 func build_view() -> void:
 	view_ready = false
+	var begin := Time.get_ticks_msec()
+	var prepared_display := initial_display_plan; initial_display_plan={}
+	if high_performance_renderer and prepared_display.is_empty():
+		status.text="准备地图绘制数据"; await get_tree().process_frame
+		var worker := Thread.new(); generation_worker=worker
+		var error := worker.start(func(): return StartupDisplay.prepare(data,raster,provinces,display.glyphs))
+		if error!=OK: printerr("ATLAS_DISPLAY_WORKER_FAIL ",error); return
+		while worker.is_alive(): await get_tree().process_frame
+		prepared_display=worker.wait_to_finish()
+	startup_profile.display_prepare_ms=Time.get_ticks_msec()-begin
+	startup_display_result=prepared_display
+	var upload_begin := Time.get_ticks_msec()
 	symbol_cache_zoom = -1.
 	navigation_in_progress = false; navigation_timer.stop()
 	mode_cache.clear(); prepared_political_texture = null; political_pending = false; render_scheduler.invalidate("political")
@@ -308,23 +325,32 @@ func build_view() -> void:
 		data.places = Places.build(place_world)
 	owner_control.max_value = maxi(0,data.nations.size()-1)
 	for child in map_root.get_children(): child.queue_free()
-	coast_ink = CoastInk.new(); coast_ink.scheduler = render_scheduler; coast_ink.high_performance = high_performance_renderer; coast_ink.setup(raster)
+	coast_ink = CoastInk.new(); coast_ink.scheduler = render_scheduler; coast_ink.high_performance = high_performance_renderer; coast_ink.setup(raster,prepared_display.get("ice",{}),prepared_display.get("coast",{}))
 	copies.clear()
-	chains = Borders.trace(data.mesh,PackedInt32Array(data.regions.of))
-	display.lines = Borders.build(chains,PackedInt32Array(data.ownership),data.mesh,raster,PackedInt32Array(data.regions.of))
-	var province_owners := PackedInt32Array(); province_owners.resize(data.regions.count)
-	for r in range(province_owners.size()): province_owners[r] = r
-	province_lines = Borders.build(chains,province_owners,data.mesh,raster,PackedInt32Array(data.regions.of))
-	political_index = ZoomGeometry.build(display.lines); political_segments = ZoomGeometry.textures(political_index)
-	province_index = ZoomGeometry.build(province_lines); province_segments = ZoomGeometry.textures(province_index)
-	province_labels = provinces.duplicate()
-	for k in range(province_labels.size()):
-		if province_labels[k]<0: province_labels[k] = -2
-	var weak := weak_coast()
-	weak_mask = weak
-	Geometry.band_labels(province_labels,2048,1024,province_lines,weak)
-	province_edge = Wash.edge_field(province_labels,2048,1024)
-	rebuild_political_labels()
+	if not prepared_display.is_empty():
+		var geo: Dictionary=prepared_display.geometry
+		chains=geo.chains; display.lines=geo.lines; province_lines=geo.province_lines
+		political_index=geo.political_index; province_index=geo.province_index
+		political_segments=Fields.upload_all(geo.political_segments); province_segments=Fields.upload_all(geo.province_segments)
+		province_labels=geo.province_labels; political_labels=geo.political_labels; weak_mask=geo.weak
+		province_edge=Wash.texture(geo.province_edge); political_edge=Wash.texture(geo.political_edge)
+	else:
+		chains = Borders.trace(data.mesh,PackedInt32Array(data.regions.of))
+		display.lines = Borders.build(chains,PackedInt32Array(data.ownership),data.mesh,raster,PackedInt32Array(data.regions.of))
+		var province_owners := PackedInt32Array(); province_owners.resize(data.regions.count)
+		for r in range(province_owners.size()): province_owners[r] = r
+		province_lines = Borders.build(chains,province_owners,data.mesh,raster,PackedInt32Array(data.regions.of))
+		political_index = ZoomGeometry.build(display.lines); political_segments = ZoomGeometry.textures(political_index)
+		province_index = ZoomGeometry.build(province_lines); province_segments = ZoomGeometry.textures(province_index)
+		province_labels = provinces.duplicate()
+		for k in range(province_labels.size()):
+			if province_labels[k]<0: province_labels[k] = -2
+		var weak := weak_coast()
+		weak_mask = weak
+		Geometry.band_labels(province_labels,2048,1024,province_lines,weak)
+		province_edge = Wash.edge_field(province_labels,2048,1024)
+		rebuild_political_labels()
+	political_id_texture=Wash.texture(prepared_display.geometry.political_ids if not prepared_display.is_empty() and prepared_display.geometry.has("political_ids") else Wash.id_data(political_labels,2048,1024))
 	if symbol_view.get_parent(): remove_child(symbol_view); symbol_view.queue_free()
 	else: symbol_view.free()
 	if forest_view.get_parent(): remove_child(forest_view); forest_view.queue_free()
@@ -343,12 +369,14 @@ func build_view() -> void:
 	crown_material = ShaderMaterial.new(); crown_material.shader = load("res://assets/atlas/crown_clip.gdshader"); crown_material.set_shader_parameter("canopy_mask",forest_view.get_texture()); crowns.material = crown_material; symbol_view.add_child(crowns)
 	var symbols := Symbols.new(); symbols.data = data; symbols.glyphs = display.glyphs; symbols.layer = "glyphs"; symbol_view.add_child(symbols)
 	symbol_layers = [forest_shapes,crowns,symbols]; symbol_screen.texture = symbol_view.get_texture()
-	var fields := Fields.textures(raster,data,display.glyphs)
+	var fields := Fields.upload_all(prepared_display.fields) if not prepared_display.is_empty() else Fields.textures(raster,data,display.glyphs)
 	field_textures = fields
-	habitat_texture = Fields.habitat_texture(data,raster)
+	habitat_texture = Fields.upload(prepared_display.habitat) if not prepared_display.is_empty() else Fields.habitat_texture(data,raster)
 	var base_material := ShaderMaterial.new(); base_material.shader = load("res://assets/atlas/paper.gdshader")
 	paper_material = base_material
-	var ice_geometry := IceGeometry.build(raster)
+	var ice_geometry: Dictionary
+	if not prepared_display.is_empty(): ice_geometry={"lines":prepared_display.ice_geometry.lines,"textures":Fields.upload_all(prepared_display.ice_geometry.textures)}
+	else: ice_geometry=IceGeometry.build(raster)
 	for key in ice_geometry.textures: base_material.set_shader_parameter(key,ice_geometry.textures[key])
 	for field in fields: base_material.set_shader_parameter({"paint":"paint_fields","field":"world_fields","distance":"distances","detail":"detail_fields"}[field],fields[field])
 	var base := ImageTexture.create_from_image(Image.create(2048,1024,false,Image.FORMAT_RGBA8))
@@ -360,7 +388,9 @@ func build_view() -> void:
 		copies.append({"wash":wash_sprite,"ink":ink})
 	ink.z_index = 3; map_root.add_child(ink)
 	coast_ink.z_index = 1; map_root.add_child(coast_ink)
-	text_layer.data = data; text_layer.raster = raster; refit_names()
+	text_layer.data = data; text_layer.raster = raster
+	if not prepared_display.is_empty(): text_layer.labels=prepared_display.geometry.names
+	else: refit_names()
 	if high_performance_renderer:
 		for node in symbol_view.get_children(): node.queue_free()
 		forest_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -374,6 +404,12 @@ func build_view() -> void:
 	await get_tree().process_frame
 	if high_performance_renderer and not await await_render_ready(60000): printerr("ATLAS_INITIAL_RENDER_TIMEOUT")
 	view_ready = true
+	startup_profile.display_upload_ms=Time.get_ticks_msec()-upload_begin
+
+func political_colors() -> Array:
+	var colors: Array=[]
+	for nation in display.nations: colors.append(Color8(nation.color[0],nation.color[1],nation.color[2]))
+	return colors
 
 func update_mode() -> void:
 	if data.is_empty(): return
@@ -387,7 +423,7 @@ func update_mode() -> void:
 			copy.wash.texture = habitat_texture; copy.wash.material = null; copy.wash.visible = true; copy.wash.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 			copy.ink.show_borders = false; copy.ink.queue_redraw()
 		text_layer.show_polities = false; text_layer.rebuild(); return
-	for nation in display.nations: colors.append(Color8(nation.color[0],nation.color[1],nation.color[2]))
+	colors=political_colors()
 	if mode == 2:
 		colors.clear()
 		for r in range(data.regions.count): colors.append(Color.from_hsv(fmod(r*.61803398875,1),.36,.76))
@@ -402,6 +438,8 @@ func update_mode() -> void:
 	for i in range(palette_values.size()): palette_values[i] = i
 	if colors.is_empty(): palette_values.fill(-2)
 	material.set_shader_parameter("palette",Wash.color_texture(palette_values,palette_values.size(),1,colors))
+	material.set_shader_parameter("owner_ids",political_id_texture)
+	material.set_shader_parameter("use_owner_palette",mode==0)
 	material.set_shader_parameter("world_fields",field_textures.field)
 	material.set_shader_parameter("symbol_origin",symbol_cache_position+Vector2.ONE*SYMBOL_PAD)
 	material.set_shader_parameter("symbol_scale",symbol_cache_zoom if symbol_cache_zoom>0 else zoom)
@@ -450,6 +488,7 @@ func refresh_ownership() -> void:
 	display.lines = Borders.build(chains,PackedInt32Array(data.ownership),data.mesh,raster,PackedInt32Array(data.regions.of))
 	political_index = ZoomGeometry.build(display.lines); political_segments = ZoomGeometry.textures(political_index)
 	rebuild_political_labels()
+	political_id_texture=Wash.texture(Wash.id_data(political_labels,2048,1024))
 	refit_names(); update_mode()
 
 func prepare_political() -> void:
@@ -472,6 +511,7 @@ func prepare_political() -> void:
 			render_scheduler.enqueue(func(): uploaded[name_value] = ZoomGeometry.upload(buffer),0,"political")
 		render_scheduler.enqueue(func(): uploaded.edge = Wash.texture(result.edge),0,"political")
 		render_scheduler.enqueue(func(): uploaded.color = Wash.texture(result.color),0,"political")
+		render_scheduler.enqueue(func(): uploaded.ids = Wash.texture(result.ids),0,"political")
 		render_scheduler.enqueue(func():
 			if revision!=political_revision: return
 			if political_front_snapshot().signature!=front_snapshot.signature: prepare_political(); return
@@ -479,7 +519,8 @@ func prepare_political() -> void:
 				var key := "geometry:%d:%d"%[render_scheduler.versions.get("geometry",0),result.stroke_keys[kind]]
 				render_scheduler.remember(key,geometry[kind],geometry_bytes[kind],true)
 			display.lines = result.lines; political_index = result.index; political_labels = result.labels
-			political_segments = uploaded.duplicate(); political_segments.erase("edge"); political_segments.erase("color")
+			political_id_texture=uploaded.ids
+			political_segments = uploaded.duplicate(); political_segments.erase("edge"); political_segments.erase("color"); political_segments.erase("ids")
 			political_edge = uploaded.edge; prepared_political_texture = uploaded.color; text_layer.labels = result.names
 			mode_cache.erase(0); mode_cache.erase(1); political_pending = false
 			political_display_ready(); update_mode(),0,"political"),-1)

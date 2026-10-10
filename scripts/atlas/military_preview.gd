@@ -4,6 +4,64 @@ const Overlay = preload("res://scripts/atlas/military_overlay.gd")
 const WarFronts = preload("res://scripts/atlas/war_fronts.gd")
 const Information = preload("res://scripts/atlas/information_model.gd")
 const Interface = preload("res://scripts/atlas/military_interface.gd")
+const StartupCache = preload("res://scripts/atlas/startup_cache.gd")
+const Selection = preload("res://scripts/atlas/map_selection.gd")
+const Diplomacy = preload("res://scripts/atlas/diplomacy_view.gd")
+var startup_cache_writer: Thread
+var startup_cache_key := ""
+var startup_cache_directory := StartupCache.DIRECTORY
+
+func load_native(seed_value: int) -> void:
+	if generating: return
+	if startup_cache_writer!=null and startup_cache_writer.is_started(): startup_cache_writer.wait_to_finish()
+	generating=true; generation_index+=1; startup_profile={}
+	var options := {"terrain_model":"earth","rainfall_model":rainfall_model} if terrain_model=="earth" else {}
+	if terrain_model=="earth" and not settlement_model.is_empty(): options.settlement_model=settlement_model
+	var use_cache := true
+	for argument in OS.get_cmdline_user_args():
+		if argument=="--atlas-no-startup-cache": use_cache=false
+		if argument.begins_with("--atlas-startup-dir="): startup_cache_directory=argument.trim_prefix("--atlas-startup-dir=")
+	var source: String=source_fingerprint()+load("res://scripts/atlas/military_import.gd").source_fingerprint()
+	var cache_options := options.duplicate()
+	if terrain_model=="earth" and not cache_options.has("settlement_model"):
+		cache_options.settlement_model=Generator.World.SettlementClimate.VERSION if rainfall_model=="seasonal_circulation_v5" else "climate_capacity_v4" if rainfall_model in ["seasonal_circulation_v4","seasonal_circulation_v3"] else "climate_capacity_v2" if rainfall_model=="seasonal_circulation_v2" else "atlas_original"
+	startup_cache_key=StartupCache.key_for(seed_value,threshold_control.value,cache_options,source) if use_cache else ""
+	begin_log("native_earth" if terrain_model=="earth" else "native",seed_value)
+	status.text="准备地图"; await get_tree().process_frame
+	var threshold: float=threshold_control.value; var key := startup_cache_key; var directory := startup_cache_directory
+	var worker := Thread.new(); generation_worker=worker
+	var started := Time.get_ticks_msec()
+	var error := worker.start(func():
+		var cached := StartupCache.read(directory,key) if not key.is_empty() else {}
+		if not cached.is_empty(): return cached
+		var base := Generator.generate(seed_value,threshold,func(stage): call_deferred("stage_update",stage),options)
+		if base.has("error"): return base
+		var payload := MilitaryMap.prepare(base); payload.generation_timing=base.timing
+		return {"payload":payload,"display":{}})
+	if error!=OK: generating=false; status.text="生成线程无法启动"; return
+	while worker.is_alive(): await get_tree().process_frame
+	var result = worker.wait_to_finish()
+	if not result is Dictionary or not result.get("payload") is Dictionary:
+		generating=false; status.text="生成失败，保留原世界"; log_event("failed",{"error":str(result)}); return
+	startup_profile.generate_or_load_ms=Time.get_ticks_msec()-started
+	startup_profile.cache_hit=not result.display.is_empty()
+	var payload: Dictionary=result.payload; initial_display_plan=result.display
+	timing=payload.get("generation_timing",payload.timing)
+	rainfall_model=payload.data.options.get("rainfall_model","atlas_original"); settlement_model=payload.data.options.get("settlement_model","atlas_original")
+	started=Time.get_ticks_msec()
+	var prepared := GameState.new(); prepared.generate_from_atlas(payload)
+	startup_profile.military_import_ms=Time.get_ticks_msec()-started
+	started=Time.get_ticks_msec()
+	await present_world(prepared,payload,"atlas_startup_cache" if startup_profile.cache_hit else "atlas_native_zhoufu")
+	generating=false; open_log(active_model,Time.get_ticks_msec()-started)
+	log_event("startup",{"profile":startup_profile,"cache_key":startup_cache_key})
+	if use_cache and not startup_profile.cache_hit:
+		# Freeze the generated inputs before handing them to the disk writer.
+		# Simulation state is deliberately reconstructed fresh on every launch.
+		var cached := {"payload":payload.duplicate(true),"display":startup_display_result.duplicate(true)}
+		startup_cache_writer=Thread.new()
+		startup_cache_writer.start(func(): return StartupCache.write(directory,key,cached))
+
 var interface: Control
 var info_panel: PanelContainer
 var information_kind := ""
@@ -19,6 +77,11 @@ var overlay: Node2D
 var run_log := DebugRunLog.new()
 var history := PoliticalHistory.new()
 var selected_army := -1
+var command_target := -1
+var diplomatic_observer := -1
+var diplomacy_enabled := false
+var diplomacy_key: Array=[]
+var diplomacy_palette_updates := 0
 var player_nation := SpinBox.new()
 var military_status := Label.new()
 var last_owner_revision := -1
@@ -41,8 +104,36 @@ func load_cached_payload(payload: Dictionary) -> void:
 	else: await super.load_cached_payload(payload)
 
 func make_ui() -> void:
+	mouse_filter=Control.MOUSE_FILTER_IGNORE
 	interface=Interface.new(); add_child(interface); interface.setup(self)
 	status.text="滚轮缩放 · 中键平移 · 左键查看辖区 · 右键下令"
+
+func time_controls_available() -> bool:
+	return simulation!=null and view_ready and not generating and not historical_view
+
+func set_time_speed(multiplier: float) -> void:
+	if time_controls_available(): simulation.set_speed_multiplier(multiplier)
+
+func change_time_speed(factor: float) -> void:
+	if time_controls_available(): set_time_speed(simulation.speed_multiplier()*factor)
+
+func toggle_pause() -> void:
+	if time_controls_available(): simulation.paused=not simulation.paused
+
+func step_day() -> void:
+	if time_controls_available(): await simulation.advance_one_day()
+
+func time_key(event: InputEventKey) -> bool:
+	if not event.pressed or event.echo or not time_controls_available(): return false
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit: return false
+	if event.keycode==KEY_SPACE and focus!=null: return false
+	match event.keycode:
+		KEY_SPACE: toggle_pause()
+		KEY_EQUAL,KEY_KP_ADD,KEY_BRACKETRIGHT: change_time_speed(2.)
+		KEY_MINUS,KEY_KP_SUBTRACT,KEY_BRACKETLEFT: change_time_speed(.5)
+		_: return false
+	get_viewport().set_input_as_handled(); return true
 
 func information_source() -> GameState:
 	return overlay.state if historical_view and is_instance_valid(overlay) else state
@@ -69,12 +160,47 @@ func information_document() -> Dictionary:
 
 func show_information(kind: String,id: int) -> void:
 	information_kind=kind; information_id=id; information_message=""
-	if kind=="city": selected_region=id
+	var source := information_source()
+	if kind=="nation": set_diplomatic_observer(id)
+	elif kind=="city" and source!=null and id>=0 and id<source.cities.size(): set_diplomatic_observer(source.cities[id].owner_nation)
+	selected_region=id if kind=="city" else -1
 	if info_panel!=null: info_panel.show_document(information_document())
 
 func close_information() -> void:
 	information_kind=""; information_id=-1; information_road=-1
 	selected_region=-1
+	command_target=-1
+	diplomatic_observer=-1; diplomacy_enabled=false; refresh_diplomacy()
+
+func set_diplomatic_observer(id: int) -> void:
+	diplomatic_observer=id if Diplomacy.valid(information_source(),id) else -1
+	diplomacy_enabled=diplomatic_observer>=0
+	refresh_diplomacy()
+
+func restore_country_colors() -> void:
+	diplomacy_enabled=false; refresh_diplomacy()
+
+func political_colors() -> Array:
+	var source := information_source()
+	if source==null: return super.political_colors()
+	var colors: Array=[]
+	for nation in source.nations: colors.append(Diplomacy.color(source,diplomatic_observer if diplomacy_enabled else -1,nation.id))
+	return colors
+
+func refresh_diplomacy() -> void:
+	var source := information_source()
+	if source==null: diplomacy_key.clear(); return
+	if information_kind=="city" and information_id>=0 and information_id<source.cities.size(): diplomatic_observer=source.cities[information_id].owner_nation
+	if not Diplomacy.valid(source,diplomatic_observer): diplomatic_observer=-1; diplomacy_enabled=false
+	var key := [source.get_instance_id(),source.diplomacy_revision,source.ownership_revision,hash(source.suzerainty),source.nations.map(func(n): return [n.alive,n.color]),diplomatic_observer,diplomacy_enabled]
+	if key==diplomacy_key: return
+	diplomacy_key=key
+	if mode_cache.has(0):
+		var colors := political_colors(); var ids := PackedInt32Array()
+		for i in range(colors.size()): ids.append(i)
+		mode_cache[0].material.set_shader_parameter("palette",Wash.color_texture(ids,maxi(1,ids.size()),1,colors))
+		diplomacy_palette_updates+=1
+	if interface!=null: interface.refresh_diplomacy()
 
 func information_notify(message: String) -> void:
 	details.text=message; information_message=message; status.text=message
@@ -101,11 +227,10 @@ func information_action(key: String,id: int) -> void:
 				var army := simulation._army_by_id(id)
 				if army!=null: selected_army=id; player_nation.value=army.owner_nation; information_notify("已选中军队%d，点击目标辖区后右键下令。"%id)
 		"order":
-			if not historical_view: selected_region=id; order_selected()
+			if not historical_view: command_target=id; order_selected()
 		"declare":
 			if not historical_view and id>=0 and id<state.nations.size():
-				var target := state.nations[id].capital_city_id
-				if target>=0: selected_region=target; declare_selected_war()
+				declare_war_on(id)
 
 func export_screenshot() -> void:
 	var shown := interface.visible if interface!=null else false
@@ -136,7 +261,7 @@ func build_view() -> void:
 
 func present_world(prepared: GameState,payload: Dictionary,source: String = "atlas_native_zhoufu") -> void:
 	# Swap only after generation succeeds; the old scenario remains intact on failure.
-	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1
+	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1; command_target=-1
 	close_information(); information_message=""
 	if info_panel!=null: info_panel.hide()
 	if simulation!=null: simulation.queue_free()
@@ -155,16 +280,20 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	overlay = Overlay.new(); overlay.scheduler = render_scheduler; overlay.high_performance = high_performance_renderer; overlay.state = state; overlay.selection = selected_army; overlay.z_index = 6; map_root.add_child(overlay)
 	front_layer = WarFronts.new(); front_layer.scheduler = render_scheduler; front_layer.high_performance = high_performance_renderer; front_layer.z_index = 8; map_root.add_child(front_layer)
 	refresh_fronts(state)
-	var parent: Dictionary = military_payload.data.regions
-	var parent_owners := PackedInt32Array()
-	for id in range(parent.count): parent_owners.append(id)
-	var parent_chains := Borders.trace(data.mesh,parent.of)
-	for line in Borders.build(parent_chains,parent_owners,data.mesh,raster,parent.of): overlay.state_lines.append(Geometry.points(line.pts))
+	if startup_display_result.has("geometry") and startup_display_result.geometry.has("state_lines"):
+		overlay.state_lines=startup_display_result.geometry.state_lines
+	else:
+		var parent: Dictionary = military_payload.data.regions
+		var parent_owners := PackedInt32Array()
+		for id in range(parent.count): parent_owners.append(id)
+		var parent_chains := Borders.trace(data.mesh,parent.of)
+		for line in Borders.build(parent_chains,parent_owners,data.mesh,raster,parent.of): overlay.state_lines.append(Geometry.points(line.pts))
 	for line in province_lines: overlay.district_lines.append(Geometry.points(line.pts))
 	status.text = "%d 州 · %d 府 · %d 交通点 · %d 条共享道路段"%[state.administrative_region_count,state.land_cities().size()-state.administrative_region_count,state.cities.size()-state.land_cities().size(),state.edges.size()]
 
 func visual_data() -> Dictionary:
 	var result: Dictionary = military_payload.data.duplicate()
+	result.parent_regions=military_payload.data.regions
 	var h: Dictionary = military_payload.hierarchy
 	var seats := PackedInt32Array(); var areas := PackedFloat32Array(); var capacities := PackedFloat32Array(); var names: Array = []
 	var cities: Array = h.cities.duplicate(true); var owners := PackedInt32Array()
@@ -184,7 +313,7 @@ func _process(_delta: float) -> void:
 	if state==null or not view_ready or not is_instance_valid(overlay): return
 	if not navigation_in_progress: overlay.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
 	overlay.selection = selected_army
-	military_status.text = "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
+	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
 	history_control.max_value = maxi(0,history.snapshot_count()-1)
 	if not historical_view and last_owner_revision!=state.ownership_revision:
 		for c in range(data.cities.size()): data.ownership[c] = state.cities[c].owner_nation
@@ -193,6 +322,7 @@ func _process(_delta: float) -> void:
 	if not political_pending and not historical_view and WarFronts.state_key(state)!=last_front_state_key:
 		refresh_fronts(state)
 	if is_instance_valid(front_layer): front_layer.set_view_zoom(zoom)
+	refresh_diplomacy()
 	history.maybe_capture(state); run_log.checkpoint(state)
 
 func refresh_fronts(source: GameState) -> void:
@@ -229,37 +359,38 @@ func select_player_army() -> void:
 			information_notify("选中军队%d，%d人。选择辖区后下令。"%[army.id,army.size]); return
 
 func declare_selected_war() -> void:
+	if information_kind=="nation": declare_war_on(information_id)
+	elif information_kind=="city" and state!=null and information_id>=0 and information_id<state.cities.size(): declare_war_on(state.cities[information_id].owner_nation)
+
+func declare_war_on(target: int) -> void:
 	if historical_view: information_notify("历史视图不可宣战。"); return
-	if state==null or selected_region<0: return
+	if state==null or simulation==null or generating or target<0 or target>=state.nations.size() or not state.nations[target].alive: return
 	if simulation.runtime_day_in_progress(): information_notify("等待当天模拟结束后再宣战。"); return
-	var target := state.cities[selected_region].owner_nation; var source := int(player_nation.value)
-	if target==source or target<0: return
+	var source := int(player_nation.value)
+	if target==source or source<0 or source>=state.nations.size() or not state.nations[source].alive or state.is_enemy(source,target): return
 	simulation._set_coalition_war(state.alliance_bloc(source),state.alliance_bloc(target)); information_notify("%s向%s宣战。"%[state.nations[source].name,state.nations[target].name])
 
 func order_selected() -> void:
 	if historical_view: information_notify("历史视图不可下令。"); return
-	if state==null or selected_region<0: return
+	if state==null or command_target<0 or command_target>=state.cities.size(): return
 	if simulation.runtime_day_in_progress(): information_notify("等待当天模拟结束后再下令。"); return
 	var army: Army = simulation._army_by_id(selected_army)
 	if army==null: select_player_army(); army = simulation._army_by_id(selected_army)
 	if army==null: return
-	var result := simulation.order_army_to(army,selected_region)
+	if army.owner_nation!=int(player_nation.value): information_notify("请先选择本国军队。"); return
+	var result := simulation.order_army_to(army,command_target)
 	information_notify(str(result.get("error","行军命令已下达。")))
 
+func order_to_inspected() -> void:
+	command_target=selected_region; order_selected()
+
 func _unhandled_input(event: InputEvent) -> void:
-	super._unhandled_input(event)
-	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and overlay!=null and not historical_view:
-		var nearest := 10.*10.
-		for army in state.armies:
-			if army.size<=0: continue
-			var p: Vector2 = overlay.army_position(army)
-			for shift in [-2048.,0.,2048.]:
-				var distance: float = event.position.distance_squared_to(map_root.to_global(p+Vector2(shift,0.)))
-				if distance<nearest:
-					nearest = distance; selected_army = army.id; player_nation.value = army.owner_nation
-					if army.on_edge or state.cities[army.location_city].is_traffic: show_information("army",army.id)
+	if event is InputEventKey and time_key(event): return
 	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_RIGHT and event.pressed:
-		select_at(map_root.to_local(event.position)); order_selected()
+		if historical_view or generating or not view_ready or political_pending: return
+		var target := pick_map(map_root.to_local(event.position),false)
+		command_target=target.district_id; order_selected(); return
+	super._unhandled_input(event)
 
 func load_military_template() -> void:
 	if not can_rebuild(): return
@@ -277,27 +408,55 @@ func show_history() -> void:
 	historical_view = true; overlay.state = view
 	for c in range(data.cities.size()): data.ownership[c] = view.cities[c].owner_nation
 	sync_nations(view)
-	refresh_ownership(); details.text = "历史：第%d天"%view.day
+	refresh_ownership(); refresh_diplomacy(); details.text = "历史：第%d天"%view.day
+	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
+
+func return_to_current() -> void:
+	if state==null or simulation.runtime_day_in_progress(): return
+	historical_view=false; simulation.paused=true
+	if overlay!=null: overlay.state=state
+	last_owner_revision=-1; refresh_diplomacy()
+	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
 
 func sync_nations(source: GameState) -> void:
 	data.nations = []
 	for nation in source.nations: data.nations.append({"name":nation.name,"seat":nation.capital_city_id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)]})
-	display.nations = data.nations; player_nation.max_value = maxi(0,source.nations.size()-1)
+	display.nations = data.nations
+	if not historical_view: player_nation.max_value = maxi(0,source.nations.size()-1)
 
 func select_at(position_value: Vector2) -> void:
-	super.select_at(position_value)
-	if state==null or selected_region<0 or selected_region>=state.cities.size():
-		if info_panel!=null: info_panel.dismiss()
+	if state==null or generating or not view_ready or political_pending: return
+	var picked := pick_map(position_value)
+	if picked.kind.is_empty():
+		close_information()
+		if info_panel!=null: info_panel.hide()
 		return
-	var source: GameState = overlay.state if historical_view else state
-	var city := source.cities[selected_region]
-	var center := source.administrative_center_of(city.id)
-	details.text += "\n%s · 隶属%s · 月人口%d／金钱%d · 半年粮食%d"%["州治" if center==city.id else "府",source.cities[center].name,city.manpower_per_month,city.gold_per_month,city.food_per_half_year]
-	var road := road_at(position_value)
-	information_road=source.edges.find(road) if road!=null else -1
-	if road!=null:
-		details.text += "\n道路%d—%d · %.1f公里 · 控制辖区：%s"%[road.city_a,road.city_b,road.distance_units()*250.,source.cities[road.control_city_id].name]
-	show_information("city",city.id)
+	if picked.kind=="army": selected_army=picked.id
+	information_road=-1
+	if picked.kind=="city":
+		var road := road_at(position_value)
+		information_road=information_source().edges.find(road) if road!=null else -1
+	show_information(picked.kind,picked.id)
+	selected_region=picked.district_id
+
+func pick_map(point: Vector2,objects: bool = true) -> Dictionary:
+	var result := Selection.territory(self,point)
+	if not objects or point.y<0 or point.y>=1024: return result
+	var source := information_source()
+	if source==null: return result
+	if not historical_view and is_instance_valid(overlay):
+		var best := pow(10./maxf(.1,zoom),2); var selected := -1
+		for army in source.armies:
+			if army.size<=0 or (not army.on_edge and (army.location_city<0 or not source.cities[army.location_city].is_traffic)): continue
+			var p: Vector2=overlay.army_position(army); p.x+=roundf((point.x-p.x)/2048.)*2048.
+			var d := point.distance_squared_to(p)
+			if d<best: best=d; selected=army.id
+		if selected>=0: result.kind="army"; result.id=selected; return result
+	if is_instance_valid(text_layer):
+		var city: int=text_layer.hit_city(point)
+		if city>=0 and city<source.cities.size() and source.cities[city].is_settlement():
+			result={"kind":"city","id":city,"district_id":city,"owner_id":source.cities[city].owner_nation}
+	return result
 
 func road_at(position_value: Vector2) -> Edge:
 	if overlay==null: return null
@@ -312,6 +471,8 @@ func road_at(position_value: Vector2) -> Edge:
 
 func update_mode() -> void:
 	super.update_mode()
+	refresh_diplomacy()
+	if interface!=null: interface.refresh_diplomacy()
 	if overlay!=null: refresh_fronts(overlay.state if historical_view else state)
 	# Child districts use the fine overlay lines; the bold dashed pen is reserved
 	# for political borders. Their colour boundary is still the shared band map.
@@ -319,5 +480,6 @@ func update_mode() -> void:
 		for copy in copies: copy.ink.show_borders = false; copy.ink.queue_redraw()
 
 func _exit_tree() -> void:
+	if startup_cache_writer!=null and startup_cache_writer.is_started(): startup_cache_writer.wait_to_finish()
 	run_log.close(state)
 	super._exit_tree()

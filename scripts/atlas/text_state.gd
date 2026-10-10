@@ -147,7 +147,8 @@ func execute(job: Dictionary) -> void:
 		var mark: Dictionary = job.item
 		if not marks.has(mark): return
 		var px: float = [10.5,10.5,11.5,12.,13.5][mark.kind]*sqrt(2048./1300)*pow(maxf(1,zoom),.3)
-		place(Layout.around_mark(mark.name,mark.box,px,2 if mark.kind==4 else 1),px,Color8(48,30,18) if mark.kind>=3 else Color8(62,42,28),Color8(241,230,201,230),2.3,-1,mark.index,0,0,false,{},.3)
+		if place(Layout.around_mark(mark.name,mark.box,px,2 if mark.kind==4 else 1),px,Color8(48,30,18) if mark.kind>=3 else Color8(62,42,28),Color8(241,230,201,230),2.3,-1,mark.index,0,0,false,{},.3):
+			text_rows[-1].city_id=mark.index
 	elif job.type=="place": place_geography(job.item)
 	else:
 		var label: Dictionary = job.item

@@ -21,6 +21,8 @@ CORE = [
     "strategic_betweenness_preference", "war_diplomacy_runtime_equivalence",
 ]
 ATLAS = [
+    "atlas_time_controls", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
+    "atlas_startup_cache", "atlas_startup_climate", "atlas_startup_order",
     "atlas_information_model", "atlas_information_panel",
     "atlas_render_scheduler", "atlas_render_index", "atlas_persistent_strokes", "atlas_shared_stroke_cache",
     "atlas_symbol_mesh", "atlas_symbol_tiles", "atlas_incremental_text", "atlas_wrapped_text", "atlas_city_markers",

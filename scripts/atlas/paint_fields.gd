@@ -4,6 +4,9 @@ const PAINT = ["a9c1c0","9fbcc0","eef0ea","ebe6d8","cfc9ad","9fae8a","d9cfae","e
 const Maths = preload("res://scripts/atlas/math.gd")
 
 static func habitat_texture(data: Dictionary,raster: Dictionary) -> ImageTexture:
+	return upload(habitat_data(data,raster))
+
+static func habitat_data(data: Dictionary,raster: Dictionary) -> Dictionary:
 	var w: int = raster.w; var h: int = raster.h; var n := w*h
 	var num := PackedFloat32Array(); num.resize(n); var den := num.duplicate()
 	for k in range(n):
@@ -24,7 +27,7 @@ static func habitat_texture(data: Dictionary,raster: Dictionary) -> ImageTexture
 		var li := mini(255,roundi(s/28*255)); var fade := 1.0 if s>=1 else (s-.05)/.95
 		for c in range(3): bytes[k*4+c] = lut[li*4+c]
 		bytes[k*4+3] = roundi(lut[li*4+3]*fade)
-	return ImageTexture.create_from_image(Image.create_from_data(w,h,false,Image.FORMAT_RGBA8,bytes))
+	return {"w":w,"h":h,"format":Image.FORMAT_RGBA8,"bytes":bytes}
 
 static func ice_field(raster: Dictionary) -> Dictionary:
 	var w: int = raster.w; var h: int = raster.h; var gw := ceili(w/8.0); var gh := ceili(h/8.0)
@@ -110,6 +113,9 @@ static func blur(src: PackedFloat32Array,w: int,h: int,radius: int,stretch: Pack
 			acc += tmp[mini(h-1,y+radius+1)*w+x]-tmp[maxi(0,y-radius)*w+x]
 
 static func textures(raster: Dictionary,data: Dictionary = {},glyphs: Array = []) -> Dictionary:
+	return upload_all(texture_data(raster,data,glyphs))
+
+static func texture_data(raster: Dictionary,data: Dictionary = {},glyphs: Array = [],prepared_ice: Dictionary = {}) -> Dictionary:
 	var w: int = raster.w; var h: int = raster.h; var n := w*h
 	var land := PackedByteArray(); land.resize(n); var sea := land.duplicate()
 	var rgb: Array = []
@@ -141,12 +147,21 @@ static func textures(raster: Dictionary,data: Dictionary = {},glyphs: Array = []
 			field[4*k+2] = raster.temp[k]; field[4*k+3] = raster.ice[k]
 			distance[2*k] = dl[k]; distance[2*k+1] = ds[k]
 	blur(shade,w,h,3)
-	var ice := ice_field(raster); var skirts := glyph_skirts(data,glyphs,w,h) if not data.is_empty() else PackedByteArray()
+	var ice := ice_field(raster) if prepared_ice.is_empty() else prepared_ice; var skirts := glyph_skirts(data,glyphs,w,h) if not data.is_empty() else PackedByteArray()
 	var detail := PackedFloat32Array(); detail.resize(n*4)
 	for k in range(n):
 		detail[4*k] = ice.mask[k]; detail[4*k+1] = ice.near[k]/255.0; detail[4*k+2] = shade[k]
 		detail[4*k+3] = 0 if skirts.is_empty() else skirts[k]/255.0
-	return {"paint":float_texture(paint,w,h,Image.FORMAT_RGBAF),"field":float_texture(field,w,h,Image.FORMAT_RGBAF),"distance":float_texture(distance,w,h,Image.FORMAT_RGF),"detail":float_texture(detail,w,h,Image.FORMAT_RGBAF)}
+	return {"paint":float_data(paint,w,h,Image.FORMAT_RGBAF),"field":float_data(field,w,h,Image.FORMAT_RGBAF),"distance":float_data(distance,w,h,Image.FORMAT_RGF),"detail":float_data(detail,w,h,Image.FORMAT_RGBAF)}
 
 static func float_texture(values: PackedFloat32Array,w: int,h: int,format_value: int) -> ImageTexture:
 	return ImageTexture.create_from_image(Image.create_from_data(w,h,false,format_value,values.to_byte_array()))
+
+static func float_data(values: PackedFloat32Array,w: int,h: int,format_value: int) -> Dictionary:
+	return {"w":w,"h":h,"format":format_value,"bytes":values.to_byte_array()}
+static func upload(row: Dictionary) -> ImageTexture:
+	return ImageTexture.create_from_image(Image.create_from_data(row.w,row.h,false,row.format,row.bytes))
+static func upload_all(rows: Dictionary) -> Dictionary:
+	var result := {}
+	for key in rows: result[key]=upload(rows[key])
+	return result

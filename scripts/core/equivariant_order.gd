@@ -144,14 +144,14 @@ static func city_rank_map(
 	_city_rank_cache_mutex.unlock()
 	var ids: Array[int] = []
 	var keys := {}
+	# The nation frame is immutable for this entire ranking operation. Computing
+	# its centroid per city makes no-capital initialization quadratic.
+	var origin := _nation_anchor(state,nation_id)
+	if _valid_city(state,anchor_city_id): origin=state.cities[anchor_city_id].map_position
+	var sign := _nation_forward_sign(state,nation_id)
 	for city in state.cities:
 		ids.append(city.id)
-		keys[city.id] = city_key(
-			state,
-			nation_id,
-			city.id,
-			anchor_city_id
-		)
+		keys[city.id] = _city_key_in_frame(state,city.id,origin,sign)
 	ids.sort_custom(func(a: int, b: int) -> bool:
 		return _key_less(keys[a], keys[b])
 	)
@@ -189,8 +189,12 @@ static func city_key(
 	var origin := _nation_anchor(state, nation_id)
 	if _valid_city(state, anchor_city_id):
 		origin = state.cities[anchor_city_id].map_position
-	var position := state.cities[city_id].map_position
 	var sign := _nation_forward_sign(state, nation_id)
+	return _city_key_in_frame(state,city_id,origin,sign)
+
+
+static func _city_key_in_frame(state: GameState,city_id: int,origin: Vector2,sign: float) -> Array[int]:
+	var position := state.cities[city_id].map_position
 	return [
 		_quantize(
 			_oriented_x(position, origin, sign),

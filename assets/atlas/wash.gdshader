@@ -13,10 +13,17 @@ uniform sampler2D segments1 : filter_nearest;
 uniform sampler2D segments2 : filter_nearest;
 uniform sampler2D segment_ends : filter_nearest;
 uniform sampler2D palette : filter_nearest;
+uniform sampler2D owner_ids : filter_nearest, repeat_enable;
+uniform bool use_owner_palette=false;
 uniform sampler2D world_fields : filter_linear,repeat_enable;
 uniform vec4 segment_params=vec4(-4.,-4.,4.,4.);
 vec4 flat_sample(sampler2D tex,int i) {
 	ivec2 size=textureSize(tex,0); return texture(tex,(vec2(float(i%size.x),float(i/size.x))+.5)/vec2(size));
+}
+vec4 territory_color(sampler2D base_texture,vec2 uv) {
+	if(!use_owner_palette)return texture(base_texture,uv);
+	int owner=int(round(texture(owner_ids,uv).r));
+	return owner>=0?flat_sample(palette,owner):vec4(0.);
 }
 int nearest_side(vec2 p) {
 	ivec2 c=ivec2(floor((p-segment_params.xy)/segment_params.z)),size=textureSize(segment_grid,0);
@@ -61,14 +68,14 @@ float tiled_noise(vec2 p,uint seed,int period) {
 	return a+(b-a)*u.x+(c-a)*u.y+(a-b-c+d)*u.x*u.y;
 }
 void fragment() {
-	vec4 color=texture(TEXTURE,UV);vec2 pixel=floor(UV*map_size);
+	vec4 color=territory_color(TEXTURE,UV);vec2 pixel=floor(UV*map_size);
 	if(view_zoom>1.35) {
 		vec2 p=UV*map_size;int owner=nearest_side(p);float cover=land_cover(p);
 		if(owner>=0)color=flat_sample(palette,owner);
 		else if(owner!=-32768)color=vec4(0.);
 		if(color.a==0. && cover>0. && owner==-32768) {
 			vec2 uv=(floor(p-.5)+.5)/map_size;
-			for(int dy=0;dy<=1;dy++)for(int dx=0;dx<=1;dx++){vec4 candidate=texture(TEXTURE,uv+vec2(float(dx),float(dy))/map_size);if(candidate.a>0.)color=candidate;}
+			for(int dy=0;dy<=1;dy++)for(int dx=0;dx<=1;dx++){vec4 candidate=territory_color(TEXTURE,uv+vec2(float(dx),float(dy))/map_size);if(candidate.a>0.)color=candidate;}
 		}
 		color.a*=cover;pixel=p;
 	}

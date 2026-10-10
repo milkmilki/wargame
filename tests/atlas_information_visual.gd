@@ -19,10 +19,16 @@ func run():
 	var graph := hash(scene.military_payload.graph); var provinces := hash(scene.state.province_ids); var rng: int=scene.state.rng.state
 	scene.zoom=4.; scene.map_root.scale=Vector2.ONE*4.; scene.map_root.position=Vector2(826,360)-Vector2(1685,338)*4.
 	scene.limit_pan(); scene.refresh_symbols()
+	check(await scene.await_render_ready(30000),"city glyph layout is ready before clicking")
+	await process_frame; await process_frame
 	var closest := INF; var selected := -1
 	for city in scene.state.land_cities():
+		var hit: Dictionary=scene.pick_map(city.map_position*Vector2(2048,1024))
+		if hit.kind!="city" or hit.id!=city.id: continue
 		var d: float=city.map_position.distance_squared_to(Vector2(1685,338)/Vector2(2048,1024))
 		if d<closest: closest=d; selected=city.id
+	check(selected>=0,"fixture contains a visible selectable city marker")
+	if selected<0: quit(1); return
 	scene.select_at(scene.state.cities[selected].map_position*Vector2(2048,1024))
 	check(scene.information_kind=="city" and scene.info_panel.visible,"map selection opens our city information")
 	await capture("city-top")

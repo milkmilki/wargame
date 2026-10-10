@@ -118,20 +118,19 @@ static func sample_wrapped(field: PackedFloat32Array,w: int,h: int,x: float,y: f
 	var bot := field[y1*w+x0]+(field[y1*w+x1]-field[y1*w+x0])*tx
 	return top+(bot-top)*ty
 
-static func build(world: Dictionary,apply_ice: bool = true) -> Dictionary:
-	var b := base(world); var mesh: Dictionary = world.mesh; var w: int = mesh.width; var h: int = mesh.height; var n := w*h
-	var detail := Tile.build(Maths.sub_seed(int(world.params.seed),"detail"),512,36,4,.55)
-	var jitter := Tile.build(Maths.sub_seed(int(world.params.seed),"jitter"),256,18,3,.5)
-	for i in range(detail.size()): detail[i] *= .25
-	for i in range(jitter.size()): jitter[i] *= .29
+static func pixel_band(world: Dictionary,b: Dictionary,detail: PackedFloat32Array,jitter: PackedFloat32Array,first_row: int,last_row: int) -> Dictionary:
+	var mesh: Dictionary=world.mesh; var w: int=mesh.width; var h: int=mesh.height; var n := w*(last_row-first_row)
 	var elev := zeros(n); var temp := zeros(n); var precip := zeros(n); var water := PackedByteArray(); water.resize(n); var biome := water.duplicate(); var ice := zeros(n)
 	var sampler := Sampler.new(); var radius: float = mesh.width/TAU; var last_triangle := 0
+	if first_row>0:
+		for k in range(first_row*w-1,-1,-1):
+			if b.tri[k]>0: last_triangle=b.tri[k]-1; break
 	var planes: PackedFloat32Array = b.planes
-	for y in range(h):
+	for y in range(first_row,last_row):
 		var cl: float = b.grid.cosLat[y]; var sl: float = b.grid.sinLat[y]; sampler.z = sl*radius
 		var a2 := absf(sl)-.45; var w2r := a2*a2 if a2>0 else 0.0; var stretch := 1.0/maxf(cl,.05)
 		for x in range(w):
-			var k := y*w+x; var tv: int = b.tri[k]
+			var k := y*w+x; var local_pixel := k-first_row*w; var tv: int = b.tri[k]
 			if tv>0: last_triangle = tv-1
 			var o := last_triangle*21; var fx: float = b.wa[k]; var fy: float = b.wb[k]
 			var lake := planes[o]*fx+planes[o+1]*fy+planes[o+2]; var amp := planes[o+3]*fx+planes[o+4]*fy+planes[o+5]; var cw := planes[o+6]*fx+planes[o+7]*fy+planes[o+8]
@@ -152,14 +151,35 @@ static func build(world: Dictionary,apply_ice: bool = true) -> Dictionary:
 				if amp>60 and e>0: dd += .5*Maths.smoothstep(60,250,amp)*sampler.sample(detail,512,2.37,33.1)
 				ee = eb+amp*dd
 				if cw==0 and ee<2: ee = 2
-			elev[k] = ee; var wtr := 2 if is_lake else 1 if ee<0 else 0; water[k] = wtr
+			elev[local_pixel] = ee; var wtr := 2 if is_lake else 1 if ee<0 else 0; water[local_pixel] = wtr
 			var j := sampler.sample(jitter,256,256.0/18/40,3.7)
 			var t := planes[o+9]*fx+planes[o+10]*fy+planes[o+11]-.0065*maxf(0,0.0 if wtr==1 else ee)+1.2*j
 			var pr := (planes[o+12]*fx+planes[o+13]*fy+planes[o+14])*(1+.22*j)
-			temp[k] = t; precip[k] = pr; biome[k] = Planet.biome(t,pr,wtr,0)
+			temp[local_pixel] = t; precip[local_pixel] = pr; biome[local_pixel] = Planet.biome(t,pr,wtr,0)
 			if wtr==1 and tv>0:
 				var concentration := planes[o+18]*fx+planes[o+19]*fy+planes[o+20]
-				if concentration>.002: ice[k] = concentration
+				if concentration>.002: ice[local_pixel] = concentration
+	return {"elev":elev,"temp":temp,"precip":precip,"water":water,"biome":biome,"ice":ice}
+
+static func build(world: Dictionary,apply_ice: bool = true,parallel: bool = true) -> Dictionary:
+	var b := base(world); var mesh: Dictionary = world.mesh; var w: int = mesh.width; var h: int = mesh.height; var n := w*h
+	var detail := Tile.build(Maths.sub_seed(int(world.params.seed),"detail"),512,36,4,.55)
+	var jitter := Tile.build(Maths.sub_seed(int(world.params.seed),"jitter"),256,18,3,.5)
+	for i in range(detail.size()): detail[i] *= .25
+	for i in range(jitter.size()): jitter[i] *= .29
+	var bands: Array=[]
+	var count := mini(4,maxi(1,OS.get_processor_count()-1)) if parallel else 1
+	bands.resize(count)
+	if count==1: bands[0]=pixel_band(world,b,detail,jitter,0,h)
+	else:
+		var mutex := Mutex.new()
+		var task := WorkerThreadPool.add_group_task(func(i):
+			var band := pixel_band(world,b,detail,jitter,i*h/count,(i+1)*h/count)
+			mutex.lock(); bands[i]=band; mutex.unlock(),count,count,false,"Atlas raster pixels")
+		WorkerThreadPool.wait_for_group_task_completion(task)
+	var elev := PackedFloat32Array(); var temp := PackedFloat32Array(); var precip := PackedFloat32Array(); var water := PackedByteArray(); var biome := PackedByteArray(); var ice := PackedFloat32Array()
+	for band in bands:
+		elev.append_array(band.elev); temp.append_array(band.temp); precip.append_array(band.precip); water.append_array(band.water); biome.append_array(band.biome); ice.append_array(band.ice)
 	var result := {"w":w,"h":h,"scale":1.0,"elev":elev,"temp":temp,"precip":precip,"water":water,"biome":biome,"cell":b.cell,"ice":ice,"wrap":true}
 	if apply_ice: FloePixels.apply(result,int(world.params.seed))
 	return result

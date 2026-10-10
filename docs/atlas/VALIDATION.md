@@ -8,6 +8,7 @@
 当前拖动、缩放优化与真实GPU测量见 [NAVIGATION_PERFORMANCE.md](NAVIGATION_PERFORMANCE.md)。
 持久矢量、地形瓦片、增量文字及本轮性能验收见 [CACHED_RENDERER.md](CACHED_RENDERER.md)；上一份导航文档保留为对照基线。
 城市、国家、军队和道路的原生信息框及实机检查见 [INFORMATION_PANELS.md](INFORMATION_PANELS.md)。
+初始化、生成并行化与正常启动缓存的实测见 [STARTUP_PERFORMANCE.md](STARTUP_PERFORMANCE.md)。
 下文的旧系统回归及图谱状态属于初始原型检查记录，不表示当前状态。
 
 2026-10-10 提交前重新执行完整回归：52个独立入口全部通过，包含505项共享模拟断言、
@@ -36,6 +37,8 @@
 道路连通／合法性检查还使用 12345、23456、34567，每个完整生成两次：SHA256 对照 data／raster／display 相同，检查治所归属、省份连通、陆路邻接及通行性、完整连接、共享段唯一性、各可通行分量城市连通、城市阈值临界规则及无城市／无道路世界。重复性记录不包含时间字段。
 
 ## 交互与实机
+
+Atlas军事场景的常用交互、外交着色及国家列表见 [INTERACTIONS.md](INTERACTIONS.md)，本轮证据存放在 `interaction_evidence/`。
 
 tests/atlas_native_preview.gd 在真实图形渲染器执行，结果 failures=0：
 

@@ -1,0 +1,7 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T01-28-43-34500-8620007.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_seed1_40_nations
+ATLAS_SMOKE_PROGRESS day=0 elapsed_ms=0
+ATLAS_SMOKE_PROGRESS day=30 elapsed_ms=21324
+ATLAS_MILITARY_SMOKE day=35 failures=0 elapsed_ms=25470

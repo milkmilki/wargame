@@ -1,0 +1,21 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+D3D12 12_0 - Forward+ - Using Device #0: AMD - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS ["--startup-evidence=res://.dbg/startup-complete-cold", "--atlas-startup-dir=res://.dbg/startup-cache"] capture=
+ATLAS_STARTUP_STAGE 2613 滚轮缩放 · 中键平移 · 左键查看辖区 · 右键下令
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-34256-1791595210-1.jsonl
+ATLAS_STARTUP_STAGE 2756 准备地图
+ATLAS_STARTUP_STAGE 2781 原生生成：真实地球高程与海岸
+ATLAS_STARTUP_STAGE 2911 原生生成：球面网格与真实高程取样
+ATLAS_STARTUP_STAGE 7084 原生生成：地球气候、洋流与海冰（模型计算）
+ATLAS_STARTUP_STAGE 9643 原生生成：季节大气环流：辐合雨带、陆海季风与西风水汽
+ATLAS_STARTUP_STAGE 24262 原生生成：真实地形排水与环境供水
+ATLAS_STARTUP_STAGE 24607 原生生成：宜居度与省份
+ATLAS_STARTUP_STAGE 25770 原生生成：陆上道路
+ATLAS_STARTUP_STAGE 26156 原生生成：全球栅格与浮冰
+ATLAS_STARTUP_STAGE 41121 原生生成：地形符号规划
+ATLAS_STARTUP_STAGE 42372 原生生成：地理名称与标注路径
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T01-20-58-34256-50891813.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_native_zhoufu
+ATLAS_STARTUP_STAGE 51304 准备地图绘制数据
+ATLAS_STARTUP_RESULT {"args":["--startup-evidence=res://.dbg/startup-complete-cold","--atlas-startup-dir=res://.dbg/startup-cache"],"cells":33940,"elapsed_ms":64876,"fingerprints":{"district_pixels":"c9303b071fcadc93633cf03f988fb9326b3b39d475cea3c25050e43cf819e8f2","graph":"5df04e4cbc1b9ac562685c11cb6414931a36393effc9d47da9d8534c438a5b76","hierarchy":"2ef629c21c81df2deca025d230870629cb2954a211fad319ab270affc932ac5b","ownership":"e469dba4a5520179aa0ecde685de312944dd380f9d62d4105484dab20965af66","raster":"a216b9af31384bc2935371787b2346c2935137da2fb38d1c4ea7cffe4c73dad3"},"godot":"4.7.1-stable (official)","military_timing":{"hierarchy_ms":1274,"roads_ms":839,"smoothing":{"rounds_histogram":[446,2,10,4284]},"total_ms":3631},"pid":34256,"profile":{"cache_hit":false,"display_prepare_ms":10411,"display_upload_ms":2219,"generate_or_load_ms":44000,"military_import_ms":2550},"ready":true,"road_segments":4742,"scene":"res://atlas_military.tscn","seed":1,"settlements":1796,"timing":{"glyphs_ms":421,"places_ms":776,"raster_ms":14965,"regions_ms":1162,"roads_ms":386,"total_ms":40367,"world_ms":21827}}

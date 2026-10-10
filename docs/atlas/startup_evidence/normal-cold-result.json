@@ -1,0 +1,50 @@
+{
+	"args": [
+		"--startup-evidence=res://.dbg/startup-normal-entry"
+	],
+	"cells": 33940,
+	"elapsed_ms": 65709,
+	"fingerprints": {
+		"district_pixels": "c9303b071fcadc93633cf03f988fb9326b3b39d475cea3c25050e43cf819e8f2",
+		"graph": "5df04e4cbc1b9ac562685c11cb6414931a36393effc9d47da9d8534c438a5b76",
+		"hierarchy": "2ef629c21c81df2deca025d230870629cb2954a211fad319ab270affc932ac5b",
+		"ownership": "e469dba4a5520179aa0ecde685de312944dd380f9d62d4105484dab20965af66",
+		"raster": "a216b9af31384bc2935371787b2346c2935137da2fb38d1c4ea7cffe4c73dad3"
+	},
+	"godot": "4.7.1-stable (official)",
+	"military_timing": {
+		"hierarchy_ms": 1304,
+		"roads_ms": 832,
+		"smoothing": {
+			"rounds_histogram": [
+				446,
+				2,
+				10,
+				4284
+			]
+		},
+		"total_ms": 3677
+	},
+	"pid": 23464,
+	"profile": {
+		"cache_hit": false,
+		"display_prepare_ms": 10407,
+		"display_upload_ms": 2298,
+		"generate_or_load_ms": 44532,
+		"military_import_ms": 2628
+	},
+	"ready": true,
+	"road_segments": 4742,
+	"scene": "res://atlas_military.tscn",
+	"seed": 1,
+	"settlements": 1796,
+	"timing": {
+		"glyphs_ms": 423,
+		"places_ms": 785,
+		"raster_ms": 15077,
+		"regions_ms": 1153,
+		"roads_ms": 379,
+		"total_ms": 40852,
+		"world_ms": 22201
+	}
+}

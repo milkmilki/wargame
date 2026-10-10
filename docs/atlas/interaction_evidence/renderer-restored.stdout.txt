@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+D3D12 12_0 - Forward+ - Using Device #0: AMD - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS ["--atlas-cache=res://.dbg/atlas-military-earth.bin"] capture=
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-29448-1791602163-1.jsonl
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T03-16-06-29448-7684051.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_development_cache
+ATLAS_RENDER_UPDATES failures=0 pid=29448 seed=1

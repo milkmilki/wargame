@@ -1,0 +1,70 @@
+{
+	"captures": [
+		"global-ordinary",
+		"china-1x",
+		"china-2x",
+		"china-4x",
+		"china-8x",
+		"nation-diplomacy",
+		"city",
+		"district",
+		"mode-1",
+		"mode-3",
+		"mode-0",
+		"countries",
+		"europe-front",
+		"front-closeup",
+		"history",
+		"longitude",
+		"compact-countries",
+		"compact-tools"
+	],
+	"failures": 0,
+	"godot": "4.7.1-stable (official)",
+	"palette_updates": 13,
+	"parameters": {
+		"distance_km": 250.0,
+		"godot": {
+			"build": "official",
+			"hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+			"hex": 263937,
+			"major": 4,
+			"minor": 7,
+			"patch": 1,
+			"status": "stable",
+			"string": "4.7.1-stable (official)",
+			"timestamp": 0
+		},
+		"model": "atlas-military-v1",
+		"nodes": 4321,
+		"seed": 1,
+		"settlements": 1796,
+		"source_sha256": "1ae970a07c3275ba1f85f3d49f1d4ef3d67e2a6af3c4df7da5c0aef5ba5030b6",
+		"timing": {
+			"hierarchy_ms": 1274,
+			"roads_ms": 829,
+			"smoothing": {
+				"rounds_histogram": [
+					446,
+					2,
+					10,
+					4284
+				]
+			},
+			"total_ms": 3638
+		},
+		"upstream": "103afd3",
+		"upstream_commit": "103afd3d998eac6750692a6813bf5aea03521448"
+	},
+	"pid": 30080,
+	"scene": "res://atlas_military.tscn",
+	"seed": 1,
+	"startup_ms": 11071,
+	"startup_profile": {
+		"cache_hit": true,
+		"display_prepare_ms": 0,
+		"display_upload_ms": 2346,
+		"generate_or_load_ms": 556,
+		"military_import_ms": 2554
+	}
+}

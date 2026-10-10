@@ -20,8 +20,9 @@ var template_builds := 0
 var visible_count := 0
 var last_key: Array = []
 var max_update_usec := 0
+var hit_boxes: Array = []
 func setup(source: Dictionary) -> void:
-	data = source; index = Index.new(); last_key.clear()
+	data = source; index = Index.new(); last_key.clear(); hit_boxes.clear()
 	for city in data.cities: index.add(Rect2(Vector2(data.mesh.x[city.cell],data.mesh.y[city.cell])-Vector2.ONE*16,Vector2.ONE*32))
 	if not layers.is_empty(): return
 	for kind in range(5):
@@ -49,6 +50,7 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 		if owner>=0 and data.nations[owner].seat==city.region: kind = 4
 		jobs.append({"id":id,"kind":kind,"owner":owner,"point":Vector2(data.mesh.x[city.cell],data.mesh.y[city.cell])*detail})
 	jobs.sort_custom(func(a,b): return a.id<b.id if a.kind==b.kind else a.kind>b.kind)
+	hit_boxes.clear()
 	var s := sqrt(2048./1300)*pow(maxf(1,detail),.5); var occupied := {}; var counts := [0,0,0,0,0]
 	var buffers: Array = [PackedFloat32Array(),PackedFloat32Array(),PackedFloat32Array(),PackedFloat32Array(),PackedFloat32Array()]
 	for job in jobs:
@@ -61,6 +63,7 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 				for other in occupied.get(cell,[]):
 					if box.intersects(other): collision = true; break
 		if collision and job.kind!=4: continue
+		hit_boxes.append({"id":job.id,"box":box})
 		for cell in buckets:
 			if not occupied.has(cell): occupied[cell] = []
 			occupied[cell].append(box)

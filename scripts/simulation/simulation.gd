@@ -455,6 +455,16 @@ func runtime_day_in_progress() -> bool:
 	return _runtime_day_in_progress
 
 
+func advance_one_day() -> bool:
+	## Manual stepping shares the runtime commit and in-flight guard.
+	if state == null or not paused or _runtime_day_in_progress:
+		return false
+	_time_acc = 0.0
+	_runtime_day_in_progress = true
+	await _advance_runtime_day()
+	return true
+
+
 # ================================================================== 天推进
 
 func _advance_day(spread_runtime_work: bool = false) -> void:

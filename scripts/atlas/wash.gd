@@ -42,6 +42,11 @@ static func edge_data(labels: PackedInt32Array,w: int,h: int) -> Dictionary:
 static func color_texture(labels: PackedInt32Array,w: int,h: int,colors: Array) -> ImageTexture:
 	return texture(color_data(labels,w,h,colors))
 
+static func id_data(labels: PackedInt32Array,w: int,h: int) -> Dictionary:
+	var ids := PackedFloat32Array(); ids.resize(labels.size())
+	for i in range(labels.size()): ids[i]=float(labels[i])
+	return {"w":w,"h":h,"format":Image.FORMAT_RF,"bytes":ids.to_byte_array()}
+
 static func color_data(labels: PackedInt32Array,w: int,h: int,colors: Array) -> Dictionary:
 	var bytes := PackedByteArray(); bytes.resize(w*h*4)
 	for k in range(labels.size()):

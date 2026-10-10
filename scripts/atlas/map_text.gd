@@ -169,7 +169,8 @@ func rebuild() -> void:
 			var mark: Dictionary = job.item
 			if not marks.has(mark): continue
 			var px: float = [10.5,10.5,11.5,12.,13.5][mark.kind]*sqrt(2048./1300)*pow(maxf(1,zoom),.3)
-			place(Layout.around_mark(mark.name,mark.box,px,2 if mark.kind==4 else 1),px,Color8(48,30,18) if mark.kind>=3 else Color8(62,42,28),Color8(241,230,201,230),2.3,-1,mark.index,0,0,false,{},.3)
+			if place(Layout.around_mark(mark.name,mark.box,px,2 if mark.kind==4 else 1),px,Color8(48,30,18) if mark.kind>=3 else Color8(62,42,28),Color8(241,230,201,230),2.3,-1,mark.index,0,0,false,{},.3):
+				text_rows[-1].city_id=mark.index
 		elif job.type=="place": place_geography(job.item)
 		else:
 			var label: Dictionary = job.item
@@ -233,6 +234,26 @@ func draw_layout(canvas: Node2D,city_marks: Array,rows: Array,offset: Vector2) -
 
 func draw_detail() -> float:
 	return Scheduler.LODS[rendered_lod] if rendered_lod>=0 else 1.
+
+func hit_city(world: Vector2) -> int:
+	if not visible or not show_cities: return -1
+	var wrapped := Vector2(fposmod(world.x,2048.),world.y)
+	if high_performance and is_instance_valid(city_markers) and city_markers.visible:
+		for row in city_markers.hit_boxes:
+			for shift in [-2048.,0.,2048.]:
+				if row.box.has_point((wrapped+Vector2(shift,0))*marker_detail): return row.id
+	elif not high_performance:
+		for row in marks:
+			if row.box.has_point(wrapped*zoom+origin): return row.index
+	if not show_names: return -1
+	for row in text_rows:
+		if not row.has("city_id"): continue
+		var boxes := Layout.glyph_boxes(row.glyphs,row.px,2.)
+		for shift in [-2048.,0.,2048.]:
+			var p := (wrapped+Vector2(shift,0))*draw_detail() if high_performance else (wrapped+Vector2(shift,0))*zoom+origin
+			for box in boxes:
+				if box.has_point(p): return row.city_id
+	return -1
 
 func invalidate_layout() -> void:
 	if data.is_empty() or scheduler==null: return

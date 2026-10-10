@@ -77,9 +77,12 @@ func lines() -> Array:
 				if exits[c][side]>=0 and not seen[edge(x,row,side)]: out.append(walk(x,row,side))
 	return out
 static func build(r: Dictionary) -> Dictionary:
-	var m: PackedByteArray = Fields.ice_field(r).mask
+	var result := data(r); result.textures=Fields.upload_all(result.textures); return result
+
+static func data(r: Dictionary,prepared_mask: PackedByteArray = PackedByteArray()) -> Dictionary:
+	var m: PackedByteArray = Fields.ice_field(r).mask if prepared_mask.is_empty() else prepared_mask
 	var planner = load("res://scripts/atlas/ice_geometry.gd").new(r,m); var lines: Array = planner.lines(); var borders: Array = []
 	for line in lines:
 		var p: PackedFloat32Array = line.pts.duplicate(); p.append(p[0]+line.wrap*r.w); p.append(p[1])
 		borders.append({"pts":p,"left":0,"right":1,"closed":line.wrap==0})
-	return {"lines":lines,"textures":Zoom.textures(Zoom.build(borders,4.,r.w,r.h))}
+	return {"lines":lines,"textures":Zoom.texture_data(Zoom.build(borders,4.,r.w,r.h))}
