@@ -1,0 +1,17 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T20-56-48-4936-4292376.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_thirty_year_audit
+AUDIT_PROGRESS day=30 years=0.08 armies=200 wars=0 fronts=0 elapsed_ms=5011
+AUDIT_PROGRESS day=60 years=0.17 armies=245 wars=1 fronts=1 elapsed_ms=8294
+AUDIT_PROGRESS day=90 years=0.25 armies=244 wars=4 fronts=5 elapsed_ms=12415
+AUDIT_PROGRESS day=120 years=0.33 armies=240 wars=6 fronts=6 elapsed_ms=16430
+AUDIT_PROGRESS day=150 years=0.42 armies=240 wars=14 fronts=10 elapsed_ms=20903
+AUDIT_PROGRESS day=180 years=0.5 armies=250 wars=25 fronts=23 elapsed_ms=26369
+AUDIT_PROGRESS day=210 years=0.58 armies=404 wars=25 fronts=29 elapsed_ms=34021
+AUDIT_PROGRESS day=240 years=0.67 armies=445 wars=30 fronts=26 elapsed_ms=43773
+AUDIT_PROGRESS day=270 years=0.75 armies=429 wars=35 fronts=29 elapsed_ms=53396
+AUDIT_PROGRESS day=300 years=0.83 armies=411 wars=34 fronts=32 elapsed_ms=61819
+AUDIT_PROGRESS day=330 years=0.92 armies=381 wars=27 fronts=24 elapsed_ms=73339
+AUDIT_PROGRESS day=360 years=1.0 armies=381 wars=25 fronts=23 elapsed_ms=84616
+AUDIT_COMPLETE {"alive_nations":[0,1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,30,31,32,33,34,35,36,37,38,39,40,42],"armies_seen":481,"battles_seen":72,"candidates":[],"complete":true,"day":360,"debug_run":"C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T20-56-48-4936-4292376.jsonl","elapsed_ms":84739,"fronts_seen":99,"generation":{"distance_km":250.0,"godot":{"build":"official","hash":"a13da4feb8d8aefc283c3763d33a2f170a18d541","hex":263937,"major":4,"minor":7,"patch":1,"status":"stable","string":"4.7.1-stable (official)","timestamp":0},"model":"atlas-military-v1","nodes":1192,"seed":1,"settlements":484,"source_sha256":"c7cf8ddf5a8f790481cce064bcbe3ec26d7a56e1becf6360d1c86a025a5e939d","timing":{"hierarchy_ms":318,"roads_ms":435,"smoothing":{"rounds_histogram":[124,0,4,1180]},"total_ms":1342},"upstream":"103afd3","upstream_commit":"103afd3d998eac6750692a6813bf5aea03521448"},"hard_errors":[],"initial_nations":40,"max_armies":450,"max_batt

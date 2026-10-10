@@ -1,0 +1,52 @@
+{
+  "parent_commit": "2cb526a7d8942be2c32b5cf4456f5d858a6024d5",
+  "source_hashes": {
+    "scripts/ai/diplomacy_ai.gd": "5389b8a70317665c4f59ad5682597a5db0ca30f458ec13b0c228ca5987c2210c",
+    "scripts/simulation/simulation.gd": "8c7b897bf34ce7cdb6274953378d04036e1feef63c7f5f8a99ba85eefa8632b7",
+    ".dbg/v17_daily.gd": "fa7af79037709e442ab1ab772a4b9a772f10bc9ea6410b5b50eaf45dc2499dbd",
+    ".dbg/v17_compare.py": "31bb3a0e973f0874952faf8930b2ff338dbd633e8314794a0637225b259c87f8",
+    ".dbg/v17_probe.gd": "787078d8b27bf57f6aed07e13a1f460e7fceb471dbd9aacf43080244c54ec3ec",
+    ".dbg/v17_probe_sim.gd": "98307da523646a1472cdf5fd8e79e7fc60e6ad510b37df87486479919aeafdab",
+    ".dbg/v17_year.gd": "287e952073cef330144d148bbb54705c00e26a12e854097e057919be08c0cf3d",
+    ".dbg/record_v17.py": "a98798ec8aba4c1bd52057101b460bede859cb6d4d7a7a1b7c3157e28d6dd7e3"
+  },
+  "variant_labels": {
+    "heap": "before: eager all nations",
+    "levels": "after: complete requested financial food pool"
+  },
+  "stats": {
+    "heap": {
+      "mean_ms": 259.74205714285716,
+      "p95_ms": 570.713,
+      "peak_ms": 892.096,
+      "ai_force_context_ms": 19.929771428571428,
+      "ai_ms": 152.71805714285713,
+      "monthly_ms": 17.169657142857144
+    },
+    "levels": {
+      "mean_ms": 244.27462857142856,
+      "p95_ms": 556.255,
+      "peak_ms": 886.391,
+      "ai_force_context_ms": 5.036342857142857,
+      "ai_ms": 137.76160000000002,
+      "monthly_ms": 17.439628571428575
+    }
+  },
+  "identical_daily_snapshots": 175,
+  "regressions": 19,
+  "isolated_regressions": 6,
+  "year": {
+    "pid": 4936,
+    "days": 360,
+    "battles": 72,
+    "fronts": 99,
+    "hard_errors": [],
+    "candidates": []
+  },
+  "limits": [
+    "Headless computation is not GUI frame rate.",
+    "One year does not cover two-year stagnation thresholds or a thirty-year audit.",
+    "Year smoke shared CPU with regressions and import work; no comparative year performance is claimed.",
+    "Peak improvement is modest; monthly and other AI stages remain."
+  ]
+}

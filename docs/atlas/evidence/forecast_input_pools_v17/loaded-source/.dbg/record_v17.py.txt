@@ -1,0 +1,42 @@
+from pathlib import Path
+import json,statistics,subprocess,hashlib,shutil
+run=Path('.dbg/forecast-pools-v17'); out=Path('docs/atlas/evidence/forecast_input_pools_v17'); out.mkdir(parents=True,exist_ok=True)
+def copy(source,target):
+    path=out/target; path.parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(source,path)
+out.joinpath('.gitattributes').write_text('*.gd.txt -text -eol -whitespace\n*.py.txt -text -eol -whitespace\n',encoding='utf8')
+pairs=json.loads((run/'daily/paired-summary.json').read_text()); assert len(pairs)==5
+assert all(all(a['sha256']==b['sha256'] for a,b in zip(p['heap']['rows'],p['levels']['rows'])) for p in pairs)
+stats={}
+for kind in ['heap','levels']:
+    stats[kind]={k:statistics.median(p[kind][k] for p in pairs) for k in ['mean_ms','p95_ms','peak_ms']}
+    for key in ['ai_force_context','ai','monthly']:
+        stats[kind][key+'_ms']=statistics.median(statistics.mean(r['profile'].get(key,0) for r in p[kind]['rows'])/1000 for p in pairs)
+for source in (run/'daily').glob('*'):
+    if source.name=='paired-summary.json':
+        brief=[{kind:{k:v for k,v in p[kind].items() if k!='rows'} for kind in ['heap','levels']} for p in pairs]
+        (out/'daily').mkdir(exist_ok=True); (out/'daily/paired-summary.json').write_text(json.dumps(brief,indent=2)+'\n',encoding='utf8')
+    else: copy(source,'daily/'+source.name)
+for source in (run/'daily').glob('levels-*.json'):
+    data=json.loads(source.read_text()); assert data['mask']['enabled'] and data['mask']['south']==20 and data['mask']['north']==55 and data['mask']['west']==-15 and data['mask']['east']==145
+    assert data['rulers'] and data['trade'] and data['seed']==1
+    for name in ['scripts/ai/diplomacy_ai.gd','scripts/simulation/simulation.gd']:
+        assert data['source_hashes'][name]==hashlib.sha256(Path(name).read_bytes()).hexdigest()
+regression=json.loads((run/'regression-summary.json').read_text()); assert len(regression['results'])==19 and all(r['ok'] for r in regression['results'])
+copy(run/'regression-summary.json','regressions/summary.json')
+for item in regression['results']: copy(item['log'],'regressions/'+item['test']+'.log.txt')
+stage=Path('.dbg/v17-staged-verify/.dbg/regression'); copy(stage/'summary-selected.json','staged-regressions/summary.json')
+for source in stage.glob('*.log'): copy(source,'staged-regressions/'+source.name+'.txt')
+for source in Path('.dbg').glob('v17-*.txt'): copy(source,'diagnostics/'+source.name)
+copy('.dbg/v17-probe.json','diagnostics/input-probe.json')
+report=json.loads((run/'year-audit/report.json').read_text()); assert report['day']==360 and report['complete'] and not report['hard_errors'] and not report['candidates']
+for name,expected in report['source_hashes'].items(): assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==expected,name
+for name in ['manifest.json','report.json','status.json','events.jsonl','first-year-profile.jsonl']: copy(run/'year-audit'/name,'year-audit/'+name)
+for name in ['year-launch.json','year.stdout.txt','year.stderr.txt','staged-import.stdout.txt','staged-import.stderr.txt']: copy(run/name,name)
+sources={}
+for name in ['scripts/ai/diplomacy_ai.gd','scripts/simulation/simulation.gd','.dbg/v17_daily.gd','.dbg/v17_compare.py','.dbg/v17_probe.gd','.dbg/v17_probe_sim.gd','.dbg/v17_year.gd','.dbg/record_v17.py']:
+    copy(name,'loaded-source/'+name+'.txt'); sources[name]=hashlib.sha256(Path(name).read_bytes()).hexdigest()
+for name in ['tests/forecast_input_pools.gd.uid','tests/support/forecast_inputs_reference.gd.uid']:
+    uid=Path('.dbg/v17-staged-verify')/name; assert uid.exists(); shutil.copyfile(uid,name)
+summary={'parent_commit':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),'source_hashes':sources,'variant_labels':{'heap':'before: eager all nations','levels':'after: complete requested financial food pool'},'stats':stats,'identical_daily_snapshots':175,'regressions':19,'isolated_regressions':6,'year':{'pid':json.loads((run/'year-audit/manifest.json').read_text())['godot_pid'],'days':360,'battles':report['battles_seen'],'fronts':report['fronts_seen'],'hard_errors':report['hard_errors'],'candidates':report['candidates']},'limits':['Headless computation is not GUI frame rate.','One year does not cover two-year stagnation thresholds or a thirty-year audit.','Year smoke shared CPU with regressions and import work; no comparative year performance is claimed.','Peak improvement is modest; monthly and other AI stages remain.']}
+(out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
+print(json.dumps({'stats':stats,'year':summary['year']},indent=2))

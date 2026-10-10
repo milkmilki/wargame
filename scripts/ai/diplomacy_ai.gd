@@ -2979,7 +2979,7 @@ static func force_capacity_report(
 	var key := "force_capacity:%d:%d" % [nation_id, posture]
 	if evaluation_cache.has(key):
 		return evaluation_cache[key]
-	var input: Dictionary = _resource_forecast_inputs(state, evaluation_cache)[nation_id]
+	var input: Dictionary = _resource_forecast_inputs(state, evaluation_cache, nation_id)[nation_id]
 	var nation := state.nations[nation_id]
 	var size := GameState.INITIAL_HEAVY_ARMY_SIZE
 	var count := int(input.army_count)
@@ -3428,7 +3428,7 @@ static func resource_forecast(
 	posture: int = -1, evaluation_cache: Dictionary = {}, override: Dictionary = {}
 ) -> Dictionary:
 	_ensure_evaluation_cache_current(state, evaluation_cache)
-	var inputs := _resource_forecast_inputs(state, evaluation_cache)
+	var inputs := _resource_forecast_inputs(state, evaluation_cache, nation_id)
 	var input: Dictionary = inputs[nation_id]
 	var nation := state.nations[nation_id]
 	if posture < 0:
@@ -3490,27 +3490,36 @@ class ForecastInputBuilder extends RefCounted:
 	var capital_fields := {}
 	var garrison_contexts := {}
 	var inputs: Array[Dictionary] = []
+	var nation_ids: Array[int] = []
+	var selected := {}
 	var pools := {}
 	var phase := 0
 	var cursor := 0
-	func _init(source: GameState,values: Dictionary):
+	func _init(source: GameState,values: Dictionary,work_ids: Array[int] = [],prepared: Array[Dictionary] = []):
 		state=source; cache=values
+		inputs = prepared.duplicate()
+		if inputs.is_empty():
+			for _nation in state.nations: inputs.append({})
+		nation_ids = work_ids.duplicate()
+		if nation_ids.is_empty():
+			for nation in state.nations: nation_ids.append(nation.id)
+		for id in nation_ids: selected[id] = true
 		if not cache.has("monthly_gold_flows"): cache.monthly_gold_flows=Simulation.monthly_gold_flows(state)
 		flows=cache.monthly_gold_flows
 		armies=ReinforcementRules.bucket_armies_by_nation(state,true)
 		garrison_index=Simulation.build_garrison_index(state)
 		conservative_index=garrison_index.duplicate()
 	func step() -> void:
-		var count: int = state.cities.size() if phase==0 else state.administrative_center_city_ids.size() if phase==1 else state.nations.size()
+		var count: int = state.cities.size() if phase==0 else state.administrative_center_city_ids.size() if phase==1 else nation_ids.size()
 		if cursor>=count: phase+=1; cursor=0; return
 		match phase:
 			0: city(state.cities[cursor])
 			1: center(state.administrative_center_city_ids[cursor])
-			2: nation(state.nations[cursor])
-			3: pool(state.nations[cursor])
+			2: nation(state.nations[nation_ids[cursor]])
+			3: pool(state.nations[nation_ids[cursor]])
 		cursor+=1
 	func city(city: City) -> void:
-		if city.owner_nation < 0 or city.is_dock:
+		if not selected.has(city.owner_nation) or city.is_dock:
 			return
 		food_output[city.owner_nation] = int(food_output.get(city.owner_nation,0))+maxi(city.food_per_half_year,0)
 		manpower_output[city.owner_nation] = int(manpower_output.get(city.owner_nation,0))+maxi(city.manpower_per_month,0)
@@ -3518,7 +3527,7 @@ class ForecastInputBuilder extends RefCounted:
 	func center(center_value: int) -> void:
 		var center_id := int(center_value)
 		var city := state.cities[center_id]
-		if city.owner_nation >= 0:
+		if selected.has(city.owner_nation):
 			var owner := city.owner_nation
 			if not capital_fields.has(owner):
 				capital_fields[owner]=state.capital_hop_distances(owner)
@@ -3568,7 +3577,7 @@ class ForecastInputBuilder extends RefCounted:
 		pool.trade += int(trade.monthly_food_import) - int(trade.monthly_food_export)
 		pool.exports += int(trade.monthly_food_export)
 		pool.consumers.append_array(consumers)
-		inputs.append({
+		inputs[nation.id] = {
 			"day": state.day, "gold": nation.treasury_gold,
 			"pending_supply_days": int(cache.get("__forecast_pending_supply", false)),
 			"income": int(flow.net_income), "court": int(flow.court_expense_due),
@@ -3578,7 +3587,7 @@ class ForecastInputBuilder extends RefCounted:
 			"manpower_target": mini(manpower_capacity, maxi(DiplomacyAI.MIN_MANPOWER_RESERVE, maxi(int(ceil(troops * 0.15)), refill))),
 			"food_multiplier": consumption_multiplier, "upkeep_multiplier": float(ruler_modifiers[RulerProfile.KEY_UPKEEP]),
 			"reserve_months_bonus": int(ruler_modifiers[RulerProfile.KEY_RESERVE_MONTHS]),
-		})
+		}
 	func pool(nation: Nation) -> void:
 		var pool_id := state.food_pool_holder(nation.id)
 		var pool: Dictionary = pools[pool_id]
@@ -3612,16 +3621,48 @@ class ForecastInputBuilder extends RefCounted:
 		for member in state.food_pool_members(pool_id): storage_capacity+=int(food_output.get(member,0))*GameState.FOOD_CAPACITY_HALF_YEARS
 		input.food_capacity = storage_capacity
 
-static func _resource_forecast_inputs(state: GameState,cache: Dictionary) -> Array[Dictionary]:
+## A requested nation needs its entire financial food pool, including cityless
+## succession identities. Keep already prepared pools and accepted commitments.
+## The default retains the eager all-nation contract for existing callers.
+static func _forecast_input_work_ids(state: GameState,inputs: Array[Dictionary],required_nation: int) -> Array[int]:
+	var wanted := {}
+	if required_nation < 0:
+		for nation in state.nations:
+			if inputs[nation.id].is_empty(): wanted[state.food_pool_holder(nation.id)] = true
+	elif inputs[required_nation].is_empty():
+		wanted[state.food_pool_holder(required_nation)] = true
+	var work: Array[int] = []
+	if wanted.is_empty(): return work
+	for nation in state.nations:
+		if wanted.has(state.food_pool_holder(nation.id)): work.append(nation.id)
+	return work
+
+static func _forecast_input_array(state: GameState,cache: Dictionary) -> Array[Dictionary]:
 	if cache.has("resource_forecast_inputs"): return cache.resource_forecast_inputs
-	var builder := ForecastInputBuilder.new(state,cache)
+	var inputs: Array[Dictionary] = []
+	for _nation in state.nations: inputs.append({})
+	return inputs
+
+static func _resource_forecast_inputs(state: GameState,cache: Dictionary,required_nation: int = -1) -> Array[Dictionary]:
+	_ensure_evaluation_cache_current(state,cache)
+	var inputs := _forecast_input_array(state,cache)
+	var work := _forecast_input_work_ids(state,inputs,required_nation)
+	if work.is_empty():
+		cache.resource_forecast_inputs = inputs
+		return inputs
+	var builder := ForecastInputBuilder.new(state,cache,work,inputs)
 	while builder.phase<4: builder.step()
 	cache.resource_forecast_inputs=builder.inputs
 	return builder.inputs
 
-static func resource_forecast_inputs_over_frames(state: GameState,cache: Dictionary,tree: SceneTree) -> Array[Dictionary]:
-	if cache.has("resource_forecast_inputs"): return cache.resource_forecast_inputs
-	var builder := ForecastInputBuilder.new(state,cache)
+static func resource_forecast_inputs_over_frames(state: GameState,cache: Dictionary,tree: SceneTree,required_nation: int = -1) -> Array[Dictionary]:
+	_ensure_evaluation_cache_current(state,cache)
+	var inputs := _forecast_input_array(state,cache)
+	var work := _forecast_input_work_ids(state,inputs,required_nation)
+	if work.is_empty():
+		cache.resource_forecast_inputs = inputs
+		return inputs
+	var builder := ForecastInputBuilder.new(state,cache,work,inputs)
 	var slice_started := Time.get_ticks_usec()
 	while builder.phase<4:
 		builder.step()
@@ -3704,7 +3745,7 @@ static func prepare_food_capacity_over_frames(state: GameState,nation_id: int,ca
 	var posture := food_posture(state,nation_id,cache)
 	var key := "food_capacity:%d:%d"%[nation_id,posture]
 	if cache.has(key): return
-	await resource_forecast_inputs_over_frames(state,cache,tree)
+	await resource_forecast_inputs_over_frames(state,cache,tree,nation_id)
 	await tree.process_frame
 	var bounds := Vector2i(0,state.max_army_count(nation_id)*GameState.INITIAL_HEAVY_ARMY_SIZE)
 	var slice_started := Time.get_ticks_usec()
@@ -3752,7 +3793,7 @@ static func war_food_report(
 	var full_balance := (float(full_forecast.input.harvest) / 6.0 + float(input.trade_food) - full_demand) * 12.0
 	var pool_troops := 0
 	for member in state.food_pool_members(state.food_pool_holder(nation_id)):
-		pool_troops += int(_resource_forecast_inputs(state, evaluation_cache)[member].troops)
+		pool_troops += int(_resource_forecast_inputs(state, evaluation_cache, member)[member].troops)
 	var result := {
 		"posture": posture, "current_troops": current, "target_troops": target_troops,
 		"pool_holder": state.food_pool_holder(nation_id),

@@ -8104,6 +8104,10 @@ func _step_force_structure(job: Dictionary) -> void:
 	var assessment: ForceStructureAssessment=job.assessment
 	var protected_reserve: int=job.reserve
 	var resource_evaluation_cache: Dictionary=job.cache
+	# Emergency recruitment may bypass the capacity report. Prepare its pool
+	# before changing the army, while preserving prior accepted commitments.
+	if resource_evaluation_cache.has("resource_forecast_inputs"):
+		DiplomacyAI._resource_forecast_inputs(state,resource_evaluation_cache,nation.id)
 	var recruitment := {}
 	if assessment.small_nation_survival:
 		recruitment = _small_nation_force_recruitment(

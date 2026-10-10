@@ -1,0 +1,3 @@
+FORECAST_INPUT_POOLS_FAIL unrelated pool stays unprepared
+FORECAST_INPUT_POOLS_FAIL unrelated pool stays unprepared
+FORECAST_INPUT_POOLS_FAIL civil war separates shared pools

@@ -1,0 +1,18 @@
+extends Simulation
+var input_probe_rows: Array = []
+func _food_security_report(nation_id: int,nation_armies: Array[Army] = [],evaluation_cache: Dictionary = {}) -> Dictionary:
+	DiplomacyAI._ensure_evaluation_cache_current(state,evaluation_cache)
+	var already_ready := evaluation_cache.has("resource_forecast_inputs")
+	var started := Time.get_ticks_usec()
+	var phases := [0,0,0,0]
+	if not already_ready:
+		var builder := DiplomacyAI.ForecastInputBuilder.new(state,evaluation_cache)
+		while builder.phase < 4:
+			var phase: int = builder.phase
+			var tick := Time.get_ticks_usec(); builder.step(); phases[phase] += Time.get_ticks_usec()-tick
+		evaluation_cache.resource_forecast_inputs = builder.inputs
+	var inputs_elapsed := Time.get_ticks_usec()-started
+	started = Time.get_ticks_usec()
+	var report := super._food_security_report(nation_id,nation_armies,evaluation_cache)
+	input_probe_rows.append({"day":state.day,"nation":nation_id,"already_ready":already_ready,"inputs_us":inputs_elapsed,"phases_us":phases,"remaining_us":Time.get_ticks_usec()-started})
+	return report

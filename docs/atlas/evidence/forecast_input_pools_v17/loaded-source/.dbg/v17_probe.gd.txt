@@ -1,0 +1,10 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin","res://.dbg/v17_probe_sim.gd")
+	var settings := {"force_resource_cache_disabled":sim.ai_force_resource_cache_disabled,"snapshot_resource_cache_reuse_disabled":sim.ai_snapshot_resource_cache_reuse_disabled}
+	for day in range(35):
+		sim._advance_day(false)
+		if day%5 == 0: await process_frame
+	FileAccess.open("res://.dbg/v17-probe.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"settings":settings,"rows":sim.input_probe_rows},"  "))
+	print("INPUT_PROBE_COMPLETE ",OS.get_process_id()); sim.free(); quit()

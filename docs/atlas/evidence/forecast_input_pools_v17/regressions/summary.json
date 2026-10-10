@@ -1,0 +1,140 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 22875,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+    },
+    {
+      "test": "forecast_input_pools",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2812,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\forecast_input_pools.log"
+    },
+    {
+      "test": "forecast_consumption_commit",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\forecast_consumption_commit.log"
+    },
+    {
+      "test": "resource_forecast_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 578,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\resource_forecast_equivalence.log"
+    },
+    {
+      "test": "resource_forecast_integration",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2797,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\resource_forecast_integration.log"
+    },
+    {
+      "test": "refresh_derived_modifier_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2687,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\refresh_derived_modifier_equivalence.log"
+    },
+    {
+      "test": "garrison_economy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\garrison_economy.log"
+    },
+    {
+      "test": "atlas_politics_trade",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 19734,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_politics_trade.log"
+    },
+    {
+      "test": "atlas_trade_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 10672,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_trade_runtime.log"
+    },
+    {
+      "test": "atlas_supply_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 19016,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_supply_runtime.log"
+    },
+    {
+      "test": "atlas_coalition_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 18812,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_coalition_runtime.log"
+    },
+    {
+      "test": "diplomacy_objective_batch_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2797,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomacy_objective_batch_cache.log"
+    },
+    {
+      "test": "declaration_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2781,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\declaration_forecast_cache_equivalence.log"
+    },
+    {
+      "test": "ultimatum_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 9360,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ultimatum_forecast_cache_equivalence.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2125,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_counterattack.log"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 39860,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_military_persistence.log"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2437,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\political_history_test.log"
+    }
+  ],
+  "failures": 0
+}
