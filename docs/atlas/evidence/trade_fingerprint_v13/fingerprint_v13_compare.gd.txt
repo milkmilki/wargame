@@ -1,0 +1,32 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var hashes := {}
+	for path in ["scripts/simulation/simulation.gd", "scripts/core/trade_network.gd", "scripts/state/game_state.gd"]:
+		hashes[path] = FileAccess.get_sha256("res://"+path)
+	var output := {"pid":OS.get_process_id(), "seed":1, "source_hashes":hashes, "input_source":JSON.parse_string(FileAccess.open("res://.dbg/daily-v9/baseline-manifest.json", FileAccess.READ).get_as_text()), "results":{}}
+	var variants := ["after", "before"] if OS.get_cmdline_user_args().has("--reverse") else ["before", "after"]
+	output.variant_order = variants
+	for variant in variants:
+		var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin")
+		sim.trade_structure_fingerprint_reuse_disabled = variant == "before"
+		var digest := HashingContext.new(); digest.start(HashingContext.HASH_SHA256); digest.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+		var initial := digest.finish().hex_encode()
+		if output.has("initial_sha256"): assert(output.initial_sha256 == initial, "identical initial state")
+		output.initial_sha256 = initial
+		TradeNetwork.reset_connectivity_prefilter_counters()
+		var rows := []
+		for day in range(35):
+			var before_builds := int(TradeNetwork.connectivity_prefilter_counters().structure_fingerprint_builds)
+			var started := Time.get_ticks_usec(); sim._advance_day(false); var elapsed := Time.get_ticks_usec()-started
+			digest = HashingContext.new(); digest.start(HashingContext.HASH_SHA256); digest.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+			rows.append({"day":sim.state.day, "elapsed_usec":elapsed, "profile":sim.tick_profile_last_usec.duplicate(), "fingerprint_builds":int(TradeNetwork.connectivity_prefilter_counters().structure_fingerprint_builds)-before_builds, "sha256":digest.finish().hex_encode()})
+			if sim.state.day % 10 == 0: print("V13_COMPARE_DAY ",variant," ",sim.state.day); await process_frame
+		output.results[variant] = rows; sim.free(); await process_frame
+	var identical := true
+	for day in range(35):
+		if output.results.before[day].sha256 != output.results.after[day].sha256:
+			identical = false; printerr("V13_STATE_DIFFERENCE day=", output.results.before[day].day)
+	output.identical_daily_snapshots = identical
+	FileAccess.open("res://.dbg/fingerprint-v13/paired-%d.json" % OS.get_process_id(), FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("V13_COMPARE_COMPLETE ",OS.get_process_id()," identical=",identical); quit(0 if identical else 1)

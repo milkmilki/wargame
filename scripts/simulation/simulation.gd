@@ -332,6 +332,8 @@ var diplomacy_mobilization_evaluation_cache_total: int = 0
 ## 贸易预测 A/B：true 时每次请求都重新 build_structure + settle。
 ## 正式运行保持 false；该开关不改变结算路径或结果，只禁用两层复用。
 var trade_forecast_cache_disabled: bool = false
+## Comparison oracle: recompute a cold forecast's fingerprint in TradeNetwork.
+var trade_structure_fingerprint_reuse_disabled: bool = false
 ## 等价性门禁用：true 时 AI/外交也强制使用完整贸易结算；正式游戏 false。
 var trade_summary_forecast_disabled: bool = false
 ## 最近一次真实月结使用的财政流。只在同日年终平衡阶段读取，避免重新构建贸易。
@@ -992,13 +994,14 @@ func _forecast_trade_and_gold_flows(
 		Time.get_ticks_usec() if forecast_substage_enabled else 0
 	)
 	var structure_probe := _trade_structure_runtime_probe()
+	var fingerprint_reused := (
+		not trade_forecast_cache_disabled
+		and not _trade_structure_fingerprint.is_empty()
+		and _trade_structure_probe == structure_probe
+	)
 	var structure_fingerprint := (
 		_trade_structure_fingerprint
-		if (
-			not trade_forecast_cache_disabled
-			and not _trade_structure_fingerprint.is_empty()
-			and _trade_structure_probe == structure_probe
-		)
+		if fingerprint_reused
 		else TradeNetwork.structure_fingerprint(state)
 	)
 	_trade_structure_probe = structure_probe
@@ -1029,7 +1032,9 @@ func _forecast_trade_and_gold_flows(
 			state,
 			true,
 			structure_profile,
-			domestic_shared_caches
+			domestic_shared_caches,
+			# Only a fingerprint computed above in this frozen phase qualifies.
+			PackedByteArray() if trade_structure_fingerprint_reuse_disabled or fingerprint_reused else structure_fingerprint
 		)
 		trade_structure_build_total += 1
 		var counters := TradeNetwork.connectivity_prefilter_counters()

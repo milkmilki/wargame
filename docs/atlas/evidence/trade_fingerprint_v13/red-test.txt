@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+TRADE_FINGERPRINT_REUSE_FAIL cold forecast computes its exact structure fingerprint once; actual=2
+TRADE_FINGERPRINT_REUSE_FAIL warm forecast reuses the existing structure; total=2
+TRADE_FINGERPRINT_REUSE_RESULT checks=3 failures=2

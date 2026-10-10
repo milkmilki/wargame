@@ -68,6 +68,7 @@ const OPERATIONAL_SHARED_CACHE_MAX_ENTRIES: int = 2048
 ## 这些静态计数用于串行基准，不做并发同步；工作线程建网时不保证统计精度。
 static var _candidate_dijkstra_field_builds: int = 0
 static var _structure_builds: int = 0
+static var _structure_fingerprint_builds: int = 0
 static var _candidate_connectivity_queries: int = 0
 static var _candidate_connectivity_searches: int = 0
 static var _candidate_connectivity_union_graph_builds: int = 0
@@ -91,6 +92,7 @@ static var _domestic_ideal_shared_cache_evictions: int = 0
 
 static func reset_connectivity_prefilter_counters() -> void:
 	_structure_builds = 0
+	_structure_fingerprint_builds = 0
 	_candidate_dijkstra_field_builds = 0
 	_candidate_connectivity_queries = 0
 	_candidate_connectivity_searches = 0
@@ -111,6 +113,7 @@ static func reset_connectivity_prefilter_counters() -> void:
 
 static func connectivity_prefilter_counters() -> Dictionary:
 	return {
+		"structure_fingerprint_builds": _structure_fingerprint_builds,
 		"structure_builds": _structure_builds,
 		"candidate_dijkstra_field_builds": _candidate_dijkstra_field_builds,
 		"candidate_connectivity_queries": _candidate_connectivity_queries,
@@ -238,18 +241,21 @@ static func build(
 ## fingerprint 每次 build 只在入口计算一次，且 shared key 显式包含
 ## valid_sources + ideal_allowed_key + exact graph fingerprint，不依赖
 ## Simulation generation 是否正确；generation 仅用于粗粒度清理。
+## prepared_fingerprint is only for an internal caller that just computed the
+## exact fingerprint against this same frozen state. Never reuse it across mutations.
 static func build_structure(
 	state: GameState,
 	use_connectivity_prefilter: bool = true,
 	build_profile: Dictionary = {},
-	shared_caches: Dictionary = {}
+	shared_caches: Dictionary = {},
+	prepared_fingerprint: PackedByteArray = PackedByteArray()
 ) -> Dictionary:
 	if state == null:
 		return _empty_structure(0, 0, structure_fingerprint(null))
 	_structure_builds += 1
 	var city_count := state.cities.size()
 	var nation_count := state.nations.size()
-	var fingerprint := structure_fingerprint(state)
+	var fingerprint := prepared_fingerprint if not prepared_fingerprint.is_empty() else structure_fingerprint(state)
 	if not state.trade_enabled: return _empty_structure(city_count,nation_count,fingerprint)
 	if not _state_ids_indexable(state):
 		return _empty_structure(city_count, nation_count, fingerprint)
@@ -565,6 +571,7 @@ static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
 ## 围城、军队位置、库存、国库与需求不属于路线结构。日期只通过城市当前是否
 ## 处于战乱减产期影响贸易中心产值，不直接写入 token。
 static func structure_fingerprint(state: GameState) -> PackedByteArray:
+	_structure_fingerprint_builds += 1
 	if state == null:
 		return var_to_bytes(["trade_structure_v5", null])
 	if not state.trade_enabled:

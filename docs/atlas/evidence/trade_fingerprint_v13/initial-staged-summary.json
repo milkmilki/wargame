@@ -1,0 +1,49 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20860,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v13-staged-verify\\.dbg\\regression\\project_compile.log"
+    },
+    {
+      "test": "trade_fingerprint_reuse",
+      "ok": false,
+      "exit_code": 1,
+      "elapsed_ms": 44281,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v13-staged-verify\\.dbg\\regression\\trade_fingerprint_reuse.log"
+    },
+    {
+      "test": "trade_structure_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v13-staged-verify\\.dbg\\regression\\trade_structure_cache_equivalence.log"
+    },
+    {
+      "test": "trade_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3516,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v13-staged-verify\\.dbg\\regression\\trade_forecast_cache_equivalence.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v13-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v13-staged-verify\\.dbg\\regression\\succession_counterattack.log"
+    }
+  ],
+  "failures": 1
+}

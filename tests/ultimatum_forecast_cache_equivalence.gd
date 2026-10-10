@@ -96,11 +96,31 @@ func _run() -> void:
 		reference._advance_day(false)
 		candidate._advance_day(false)
 		_check(var_to_bytes(NativeSnapshotBuilder.build(reference.state)) == var_to_bytes(NativeSnapshotBuilder.build(candidate.state)), "live daily snapshot day=%d" % candidate.state.day)
-	_check(reference.submissions > 0 and candidate.submissions == reference.submissions, "live world exercises the same ultimatum submissions")
+	_check(candidate.submissions == reference.submissions, "autonomous worlds execute the same number of ultimatum submissions")
 	_check(candidate.submission_route_builds == reference.submission_route_builds, "live submissions avoid cold route builds expected=%d actual=%d" % [reference.submission_route_builds, candidate.submission_route_builds])
 	print("ULTIMATUM_ROUTE_BUILDS reference=%d candidate=%d submissions=%d" % [reference.submission_route_builds, candidate.submission_route_builds, candidate.submissions])
 	reference.free()
 	candidate.free()
+	# A short autonomous run may contain no ultimatum. Always exercise a real
+	# prepared submission as well; never let zero events satisfy the route check.
+	var prepared_reference := _fixture(UltimatumRules.Outcome.SUBMIT)
+	var prepared_candidate := _fixture(UltimatumRules.Outcome.SUBMIT)
+	prepared_reference.sim.free(); prepared_candidate.sim.free()
+	reference = SubmissionSimulation.new(); candidate = SubmissionSimulation.new()
+	reference.preseed = true
+	root.add_child(reference); root.add_child(candidate)
+	reference.setup(prepared_reference.state); candidate.setup(prepared_candidate.state)
+	var prepared_actions: Array[Dictionary] = []
+	DiplomacyAI._collect_existing_war_preparation(prepared_reference.state, 0, prepared_actions, {})
+	_check(not prepared_actions.is_empty(), "physical assembly produces an executable submission")
+	if not prepared_actions.is_empty():
+		_check(reference._execute_diplomatic_action(prepared_actions[0].duplicate(true)), "prepared reference commits its actual ultimatum")
+		_check(candidate._execute_diplomatic_action(prepared_actions[0].duplicate(true)), "prepared candidate commits its actual ultimatum")
+		_check(reference.submissions == 1 and candidate.submissions == 1, "both instrumented paths execute a genuine submission")
+		_check(var_to_bytes(NativeSnapshotBuilder.build(reference.state)) == var_to_bytes(NativeSnapshotBuilder.build(candidate.state)), "prepared submission preserves the complete committed state")
+		_check(candidate.submission_route_builds == reference.submission_route_builds, "prepared submissions avoid extra cold route builds")
+	print("ULTIMATUM_PREPARED_ROUTE_BUILDS reference=%d candidate=%d submissions=%d" % [reference.submission_route_builds, candidate.submission_route_builds, candidate.submissions])
+	reference.free(); candidate.free()
 	print("ULTIMATUM_FORECAST_CACHE_%s" % ("PASS" if failures.is_empty() else "FAIL"))
 	for failure in failures:
 		push_error(failure)

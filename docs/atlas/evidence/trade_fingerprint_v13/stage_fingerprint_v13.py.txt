@@ -1,0 +1,54 @@
+from pathlib import Path
+import re, subprocess
+
+def head(path):
+    return subprocess.check_output(['git','show','HEAD:'+path]).decode('utf8').replace('\r\n','\n')
+def stage(path,text):
+    blob=subprocess.check_output(['git','hash-object','-w','--path='+path,'--stdin'],input=text.encode('utf8')).decode().strip()
+    subprocess.run(['git','update-index','--cacheinfo','100644,'+blob+','+path],check=True)
+def replace(text,old,new):
+    assert text.count(old)==1,old
+    return text.replace(old,new,1)
+
+path='scripts/simulation/simulation.gd'; text=head(path)
+text=replace(text,'var trade_forecast_cache_disabled: bool = false\n','var trade_forecast_cache_disabled: bool = false\n## Comparison oracle: recompute a cold forecast\'s fingerprint in TradeNetwork.\nvar trade_structure_fingerprint_reuse_disabled: bool = false\n')
+old='''	var structure_probe := _trade_structure_runtime_probe()
+	var structure_fingerprint := (
+		_trade_structure_fingerprint
+		if (
+			not trade_forecast_cache_disabled
+			and not _trade_structure_fingerprint.is_empty()
+			and _trade_structure_probe == structure_probe
+		)
+'''
+new='''	var structure_probe := _trade_structure_runtime_probe()
+	var fingerprint_reused := (
+		not trade_forecast_cache_disabled
+		and not _trade_structure_fingerprint.is_empty()
+		and _trade_structure_probe == structure_probe
+	)
+	var structure_fingerprint := (
+		_trade_structure_fingerprint
+		if fingerprint_reused
+'''
+text=replace(text,old,new)
+text=replace(text,'\t\t\tstructure_profile,\n\t\t\tdomestic_shared_caches\n','\t\t\tstructure_profile,\n\t\t\tdomestic_shared_caches,\n\t\t\t# Only a fingerprint computed above in this frozen phase qualifies.\n\t\t\tPackedByteArray() if trade_structure_fingerprint_reuse_disabled or fingerprint_reused else structure_fingerprint\n')
+stage(path,text)
+path='scripts/core/trade_network.gd'; text=head(path)
+text=replace(text,'static var _structure_builds: int = 0\n','static var _structure_builds: int = 0\nstatic var _structure_fingerprint_builds: int = 0\n')
+text=replace(text,'\t_structure_builds = 0\n','\t_structure_builds = 0\n\t_structure_fingerprint_builds = 0\n')
+text=replace(text,'static func connectivity_prefilter_counters() -> Dictionary:\n\treturn {\n','static func connectivity_prefilter_counters() -> Dictionary:\n\treturn {\n\t\t"structure_fingerprint_builds": _structure_fingerprint_builds,\n')
+text=replace(text,'static func build_structure(\n','## prepared_fingerprint is only for an internal caller that just computed the\n## exact fingerprint against this same frozen state. Never reuse it across mutations.\nstatic func build_structure(\n')
+start=text.index('static func build_structure('); end=start+re.search(r'^static func ',text[start+20:],re.M).start()+20
+method=text[start:end]
+method=replace(method,'\tshared_caches: Dictionary = {}\n','\tshared_caches: Dictionary = {},\n\tprepared_fingerprint: PackedByteArray = PackedByteArray()\n')
+method=replace(method,'\tvar fingerprint := structure_fingerprint(state)\n','\tvar fingerprint := prepared_fingerprint if not prepared_fingerprint.is_empty() else structure_fingerprint(state)\n')
+text=text[:start]+method+text[end:]
+text=replace(text,'static func structure_fingerprint(state: GameState) -> PackedByteArray:\n','static func structure_fingerprint(state: GameState) -> PackedByteArray:\n\t_structure_fingerprint_builds += 1\n')
+stage(path,text)
+path='run_tests.py'; text=head(path)
+text=replace(text,'"project_compile", "test_suite",','"project_compile", "test_suite", "trade_fingerprint_reuse",')
+text=replace(text,'"strategic_betweenness_preference", "war_diplomacy_runtime_equivalence",','"strategic_betweenness_preference", "war_diplomacy_runtime_equivalence",\n    "ultimatum_forecast_cache_equivalence",')
+stage(path,text)
+subprocess.run(['git','add','tests/trade_fingerprint_reuse.gd','tests/ultimatum_forecast_cache_equivalence.gd'],check=True)
+print('Staged v13 API, forecast call, diagnostics, test and runner only.')

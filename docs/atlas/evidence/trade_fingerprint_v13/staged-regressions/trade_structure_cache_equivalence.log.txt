@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 贸易结构缓存等价校验 ===
+checks=65 failures=0
+verdict=TRADE_STRUCTURE_CACHE_EQUIVALENT

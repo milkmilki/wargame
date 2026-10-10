@@ -1,0 +1,66 @@
+from pathlib import Path
+import hashlib, json, math, shutil, statistics, subprocess
+
+base=Path('.dbg/fingerprint-v13')
+target=Path('docs/atlas/evidence/trade_fingerprint_v13'); target.mkdir(parents=True,exist_ok=True)
+(target/'.gitattributes').write_text('*.gd.txt -text -eol -whitespace\n*.py.txt -text -eol -whitespace\n',encoding='utf8',newline='\n')
+processes=[]; hashes={}
+for path in sorted(base.glob('paired-*.json')):
+    data=json.loads(path.read_text(encoding='utf8'))
+    assert data['identical_daily_snapshots'] and len(data['results']['before'])==35
+    assert data['initial_sha256']=='69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf'
+    assert data['input_source']['mask']=={'east':145.0,'enabled':True,'north':55.0,'south':20.0,'version':'atlas-geographic-mask-v1','west':-15.0}
+    if hashes: assert hashes==data['source_hashes']
+    hashes=data['source_hashes']
+    row={'pid':data['pid'],'order':data['variant_order']}
+    for variant,days in data['results'].items():
+        values=sorted(d['elapsed_usec']/1000 for d in days)
+        row[variant]={'mean_ms':statistics.mean(values),'p95_ms':values[math.ceil(.95*len(values))-1],'max_ms':values[-1],'structure_mean_ms':statistics.mean(d['profile'].get('ai_snapshot_forecast_structure_stage',0)/1000 for d in days),'fingerprint_builds':sum(d['fingerprint_builds'] for d in days)}
+    assert all(a['sha256']==b['sha256'] for a,b in zip(data['results']['before'],data['results']['after']))
+    processes.append(row); shutil.copyfile(path,target/path.name)
+assert len(processes)==5
+medians={v:{k:statistics.median(p[v][k] for p in processes) for k in processes[0][v]} for v in ['before','after']}
+summary={'date':'2026-10-11','parent_commit':'a8a18bde06a7c8acbd76e97bc6398674e2721cce','seed':1,'nodes':1192,'armies_at_freeze':234,'day_range':[181,215],'mask':data['input_source']['mask'],'systems':data['input_source']['systems'],'source_hashes':hashes,'initial_sha256':data['initial_sha256'],'identical_daily_snapshots':175,'processes':processes,'medians':medians,'improvement_percent':{k:(1-medians['after'][k]/medians['before'][k])*100 for k in ['mean_ms','p95_ms','max_ms','structure_mean_ms']},'limitation':'Headless daily computation, not GUI frames; one frozen Eurasia war state. Four of five total means improved; all structure stage means improved. Peak did not improve.'}
+shutil.copyfile('.dbg/daily-v9/baseline-manifest.json',target/'frozen-input-manifest.json')
+for path in base.glob('paired-*.stdout.txt'):
+    assert 'V13_COMPARE_COMPLETE' in path.read_text(encoding='utf8'); shutil.copyfile(path,target/path.name)
+for path in base.glob('paired-*.stderr.txt'):
+    assert not path.read_bytes(); shutil.copyfile(path,target/path.name)
+for name in ['red-test.txt','initial-working-ultimatum.log.txt','original-ultimatum.stdout.txt','original-ultimatum.stderr.txt','initial-staged-fingerprint.log.txt']:
+    shutil.copyfile(base/name,target/name)
+for name,sha in hashes.items():
+    path=Path(name); assert hashlib.sha256(path.read_bytes()).hexdigest()==sha
+    destination=target/'loaded-source'/(name+'.txt'); destination.parent.mkdir(parents=True,exist_ok=True); destination.write_bytes(path.read_bytes())
+for name in ['fingerprint_v13_compare.gd','state_codec.gd','stage_fingerprint_v13.py','record_fingerprint_v13.py','v13_original_ultimatum.gd']:
+    shutil.copyfile(Path('.dbg')/name,target/(name+'.txt'))
+initial=json.loads((base/'initial-working-summary.json').read_text(encoding='utf8'))
+corrected=json.loads((base/'corrected-working-summary.json').read_text(encoding='utf8'))
+assert initial['failures']==1 and corrected['failures']==0
+replacement={r['test']:r for r in corrected['results']}
+working=initial.copy(); working['results']=[replacement.get(r['test'],r) for r in initial['results']]; working['failures']=0
+assert len(working['results'])==20 and all(r['ok'] for r in working['results'])
+staged_initial=json.loads((base/'initial-staged-summary.json').read_text(encoding='utf8'))
+staged_new=json.loads(Path('.dbg/v13-staged-verify/.dbg/regression/summary-selected.json').read_text(encoding='utf8'))
+assert staged_initial['failures']==1 and staged_new['failures']==0
+new={r['test']:r for r in staged_new['results']}
+staged=staged_initial.copy(); staged['results']=[new.pop(r['test'],r) for r in staged_initial['results']]+list(new.values()); staged['failures']=0
+assert len(staged['results'])==7 and all(r['ok'] for r in staged['results'])
+for folder,report in [('regressions',working),('staged-regressions',staged)]:
+    destination=target/folder; destination.mkdir(exist_ok=True)
+    for row in report['results']:
+        row['archived_log']=row['test']+'.log.txt'; shutil.copyfile(row['log'],destination/row['archived_log'])
+    (destination/'summary.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf8',newline='\n')
+    summary[folder+'_tests']=[r['test'] for r in report['results']]
+for name in ['initial-working-summary.json','initial-staged-summary.json']:
+    shutil.copyfile(base/name,target/name)
+(target/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf8',newline='\n')
+subprocess.run(['git','add','docs/atlas/TRADE_FINGERPRINT_V13.md',target.as_posix()],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+for path in target.rglob('*.txt'):
+    if not (path.name.endswith('.gd.txt') or path.name.endswith('.py.txt')): continue
+    raw=path.read_bytes(); blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=raw).decode().strip()
+    subprocess.run(['git','update-index','--add','--cacheinfo','100644,'+blob+','+path.as_posix()],check=True)
+    assert subprocess.check_output(['git','show',':'+path.as_posix()])==raw
+result=subprocess.run(['git','diff','--cached','--check'],capture_output=True,text=True,encoding='utf8')
+assert result.returncode==0,result.stdout[:1000]
+print('Raw source bytes and staged whitespace verified.')
+print(json.dumps({'medians':medians,'improvement_percent':summary['improvement_percent'],'working_tests':20,'staged_tests':7},ensure_ascii=False))

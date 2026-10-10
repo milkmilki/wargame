@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 贸易预测缓存等价校验 (8国/32城/60天) ===
+基线计数 structure_build=72 structure_hit=0 forecast_build=72 forecast_hit=0
+缓存计数 structure_build=1 structure_hit=71 forecast_build=4 forecast_hit=68
+TRADE_FORECAST_CACHE_EQUIVALENT checks=158

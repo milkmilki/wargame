@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
-    "project_compile", "test_suite", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
+    "project_compile", "test_suite", "trade_fingerprint_reuse", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
     "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",
@@ -19,6 +19,7 @@ CORE = [
     "succession_counterattack", "diplomatic_battle_lifecycle",
     "encirclement_index_equivalence", "diplomacy_objective_batch_cache",
     "strategic_betweenness_preference", "war_diplomacy_runtime_equivalence",
+    "ultimatum_forecast_cache_equivalence",
 ]
 ATLAS = [
     "atlas_alliance_cache", "atlas_alliance_runtime",

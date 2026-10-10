@@ -1,0 +1,167 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 28531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log",
+      "archived_log": "project_compile.log.txt"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 33343,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log",
+      "archived_log": "test_suite.log.txt"
+    },
+    {
+      "test": "trade_fingerprint_reuse",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 6704,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\trade_fingerprint_reuse.log",
+      "archived_log": "trade_fingerprint_reuse.log.txt"
+    },
+    {
+      "test": "trade_structure_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\trade_structure_cache_equivalence.log",
+      "archived_log": "trade_structure_cache_equivalence.log.txt"
+    },
+    {
+      "test": "trade_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3610,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\trade_forecast_cache_equivalence.log",
+      "archived_log": "trade_forecast_cache_equivalence.log.txt"
+    },
+    {
+      "test": "atlas_forecast_dependencies",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 6125,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_forecast_dependencies.log",
+      "archived_log": "atlas_forecast_dependencies.log.txt"
+    },
+    {
+      "test": "atlas_trade_allocations",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_trade_allocations.log",
+      "archived_log": "atlas_trade_allocations.log.txt"
+    },
+    {
+      "test": "atlas_trade_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 10765,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_trade_runtime.log",
+      "archived_log": "atlas_trade_runtime.log.txt"
+    },
+    {
+      "test": "atlas_trade_schedule",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3344,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_trade_schedule.log",
+      "archived_log": "atlas_trade_schedule.log.txt"
+    },
+    {
+      "test": "atlas_politics_trade",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 21125,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_politics_trade.log",
+      "archived_log": "atlas_politics_trade.log.txt"
+    },
+    {
+      "test": "war_diplomacy_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 17875,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_diplomacy_runtime_equivalence.log",
+      "archived_log": "war_diplomacy_runtime_equivalence.log.txt"
+    },
+    {
+      "test": "atlas_coalition_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 18531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_coalition_runtime.log",
+      "archived_log": "atlas_coalition_runtime.log.txt"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_count_and_conqueror.log",
+      "archived_log": "war_count_and_conqueror.log.txt"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_counterattack.log",
+      "archived_log": "succession_counterattack.log.txt"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 38453,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_military_persistence.log",
+      "archived_log": "atlas_military_persistence.log.txt"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\political_history_test.log",
+      "archived_log": "political_history_test.log.txt"
+    },
+    {
+      "test": "diplomacy_objective_batch_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2782,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomacy_objective_batch_cache.log",
+      "archived_log": "diplomacy_objective_batch_cache.log.txt"
+    },
+    {
+      "test": "declaration_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2797,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\declaration_forecast_cache_equivalence.log",
+      "archived_log": "declaration_forecast_cache_equivalence.log.txt"
+    },
+    {
+      "test": "ultimatum_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 9453,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ultimatum_forecast_cache_equivalence.log",
+      "archived_log": "ultimatum_forecast_cache_equivalence.log.txt"
+    },
+    {
+      "test": "garrison_economy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\garrison_economy.log",
+      "archived_log": "garrison_economy.log.txt"
+    }
+  ],
+  "failures": 0
+}

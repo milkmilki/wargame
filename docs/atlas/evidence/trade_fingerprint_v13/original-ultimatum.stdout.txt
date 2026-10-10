@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ULTIMATUM_ROUTE_BUILDS reference=0 candidate=0 submissions=0
+ULTIMATUM_FORECAST_CACHE_FAIL

@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ULTIMATUM_ROUTE_BUILDS reference=0 candidate=0 submissions=0
+ULTIMATUM_FORECAST_CACHE_FAIL
+ERROR: live world exercises the same ultimatum submissions
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/ultimatum_forecast_cache_equivalence.gd:106)

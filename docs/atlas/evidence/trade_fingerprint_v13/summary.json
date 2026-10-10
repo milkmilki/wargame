@@ -1,0 +1,191 @@
+{
+  "date": "2026-10-11",
+  "parent_commit": "a8a18bde06a7c8acbd76e97bc6398674e2721cce",
+  "seed": 1,
+  "nodes": 1192,
+  "armies_at_freeze": 234,
+  "day_range": [
+    181,
+    215
+  ],
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  },
+  "source_hashes": {
+    "scripts/core/trade_network.gd": "00d0b36000608c8713fbc9d4b98a3f5c2c8719b83a223f55969d903b6a4e0404",
+    "scripts/simulation/simulation.gd": "07afe35e5bf2159bd7479b66b8b5a02bdce9ebda8db595f88b07cb3168eed764",
+    "scripts/state/game_state.gd": "e45d0523d83cac6e2600086599f14aeb60807d71f7864b877e08a06ed7d2914a"
+  },
+  "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "identical_daily_snapshots": 175,
+  "processes": [
+    {
+      "pid": 15596,
+      "order": [
+        "before",
+        "after"
+      ],
+      "after": {
+        "mean_ms": 248.50562857142856,
+        "p95_ms": 569.654,
+        "max_ms": 830.001,
+        "structure_mean_ms": 9.765828571428571,
+        "fingerprint_builds": 24
+      },
+      "before": {
+        "mean_ms": 251.27714285714285,
+        "p95_ms": 571.874,
+        "max_ms": 824.94,
+        "structure_mean_ms": 13.0742,
+        "fingerprint_builds": 42
+      }
+    },
+    {
+      "pid": 20636,
+      "order": [
+        "before",
+        "after"
+      ],
+      "after": {
+        "mean_ms": 249.15002857142858,
+        "p95_ms": 569.793,
+        "max_ms": 825.499,
+        "structure_mean_ms": 9.676228571428572,
+        "fingerprint_builds": 24
+      },
+      "before": {
+        "mean_ms": 255.97522857142857,
+        "p95_ms": 615.458,
+        "max_ms": 826.981,
+        "structure_mean_ms": 13.024542857142857,
+        "fingerprint_builds": 42
+      }
+    },
+    {
+      "pid": 3160,
+      "order": [
+        "after",
+        "before"
+      ],
+      "after": {
+        "mean_ms": 248.9682,
+        "p95_ms": 560.031,
+        "max_ms": 828.798,
+        "structure_mean_ms": 9.8866,
+        "fingerprint_builds": 24
+      },
+      "before": {
+        "mean_ms": 253.48845714285716,
+        "p95_ms": 568.932,
+        "max_ms": 831.86,
+        "structure_mean_ms": 13.302685714285714,
+        "fingerprint_builds": 42
+      }
+    },
+    {
+      "pid": 34620,
+      "order": [
+        "before",
+        "after"
+      ],
+      "after": {
+        "mean_ms": 246.2548,
+        "p95_ms": 565.719,
+        "max_ms": 825.197,
+        "structure_mean_ms": 9.8388,
+        "fingerprint_builds": 24
+      },
+      "before": {
+        "mean_ms": 249.2512,
+        "p95_ms": 566.975,
+        "max_ms": 822.256,
+        "structure_mean_ms": 13.148685714285714,
+        "fingerprint_builds": 42
+      }
+    },
+    {
+      "pid": 36576,
+      "order": [
+        "after",
+        "before"
+      ],
+      "after": {
+        "mean_ms": 253.28282857142858,
+        "p95_ms": 581.876,
+        "max_ms": 823.942,
+        "structure_mean_ms": 10.064714285714286,
+        "fingerprint_builds": 24
+      },
+      "before": {
+        "mean_ms": 251.48022857142857,
+        "p95_ms": 570.22,
+        "max_ms": 823.713,
+        "structure_mean_ms": 13.235828571428572,
+        "fingerprint_builds": 42
+      }
+    }
+  ],
+  "medians": {
+    "before": {
+      "mean_ms": 251.48022857142857,
+      "p95_ms": 570.22,
+      "max_ms": 824.94,
+      "structure_mean_ms": 13.148685714285714,
+      "fingerprint_builds": 42
+    },
+    "after": {
+      "mean_ms": 248.9682,
+      "p95_ms": 569.654,
+      "max_ms": 825.499,
+      "structure_mean_ms": 9.8388,
+      "fingerprint_builds": 24
+    }
+  },
+  "improvement_percent": {
+    "mean_ms": 0.9988970447889822,
+    "p95_ms": 0.09925993476203043,
+    "max_ms": -0.06776250393967231,
+    "structure_mean_ms": 25.17274947631919
+  },
+  "limitation": "Headless daily computation, not GUI frames; one frozen Eurasia war state. Four of five total means improved; all structure stage means improved. Peak did not improve.",
+  "regressions_tests": [
+    "project_compile",
+    "test_suite",
+    "trade_fingerprint_reuse",
+    "trade_structure_cache_equivalence",
+    "trade_forecast_cache_equivalence",
+    "atlas_forecast_dependencies",
+    "atlas_trade_allocations",
+    "atlas_trade_runtime",
+    "atlas_trade_schedule",
+    "atlas_politics_trade",
+    "war_diplomacy_runtime_equivalence",
+    "atlas_coalition_runtime",
+    "war_count_and_conqueror",
+    "succession_counterattack",
+    "atlas_military_persistence",
+    "political_history_test",
+    "diplomacy_objective_batch_cache",
+    "declaration_forecast_cache_equivalence",
+    "ultimatum_forecast_cache_equivalence",
+    "garrison_economy"
+  ],
+  "staged-regressions_tests": [
+    "project_compile",
+    "trade_fingerprint_reuse",
+    "trade_structure_cache_equivalence",
+    "trade_forecast_cache_equivalence",
+    "war_count_and_conqueror",
+    "succession_counterattack",
+    "ultimatum_forecast_cache_equivalence"
+  ]
+}
