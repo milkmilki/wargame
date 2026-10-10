@@ -1,0 +1,230 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "c77795d156c1e2ee7cacfbebd6b6f4cf6f321027",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "scope": "headless computation, not GUI frame rate",
+  "configuration": {
+    "seed": 1,
+    "nations": 40,
+    "nodes": 1192,
+    "edges": 1308,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "mask": {
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    }
+  },
+  "days": [
+    181,
+    215
+  ],
+  "frozen_file": ".dbg/daily-v9/frozen-day180.bin",
+  "frozen_sha256": "b9db9e38bd2fbb4f174206917e332982c668ed7f5bf408aaf60bbf0da17089d1",
+  "initial_native_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "metrics": {
+    "mean_ms": {
+      "before": 218.78014285714286,
+      "after": 216.03297142857144,
+      "reduction_percent": 1.2556767687848363
+    },
+    "p95_ms": {
+      "before": 327.639,
+      "after": 323.681,
+      "reduction_percent": 1.2080368942647324
+    },
+    "peak_ms": {
+      "before": 772.238,
+      "after": 764.64,
+      "reduction_percent": 0.9838935664911684
+    },
+    "ai_snapshot_forecast_structure_fingerprint": {
+      "before": 6.481028571428571,
+      "after": 5.537457142857143
+    },
+    "ai_snapshot_forecast_structure_stage": {
+      "before": 9.899285714285714,
+      "after": 9.916057142857142
+    },
+    "ai_snapshot_forecast_gold_flows": {
+      "before": 12.153142857142857,
+      "after": 11.956057142857142
+    },
+    "monthly_diplomacy": {
+      "before": 8.781799999999999,
+      "after": 8.678571428571429
+    },
+    "monthly_reinforcements": {
+      "before": 2.8406571428571428,
+      "after": 2.776742857142857
+    },
+    "ai": {
+      "before": 123.88654285714287,
+      "after": 122.88382857142858
+    },
+    "supply": {
+      "before": 27.906542857142856,
+      "after": 27.369285714285713
+    }
+  },
+  "fingerprint_sizes": {
+    "after_bytes": 263164,
+    "before_bytes": 324652,
+    "cities": 1192,
+    "edges": 1308,
+    "pid": 16100
+  },
+  "equal_daily_states": 175,
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 22412,
+        "mean_ms": 216.43505714285715,
+        "p95_ms": 327.48,
+        "peak_ms": 772.067,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 33004,
+        "mean_ms": 214.7556,
+        "p95_ms": 323.681,
+        "peak_ms": 757.807,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 15816,
+        "mean_ms": 221.88014285714286,
+        "p95_ms": 343.142,
+        "peak_ms": 793.138,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 25304,
+        "mean_ms": 216.42674285714287,
+        "p95_ms": 327.669,
+        "peak_ms": 759.277,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 23456,
+        "mean_ms": 216.64308571428572,
+        "p95_ms": 329.121,
+        "peak_ms": 765.567,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 1368,
+        "mean_ms": 216.03074285714285,
+        "p95_ms": 320.073,
+        "peak_ms": 769.729,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 27168,
+        "mean_ms": 219.16337142857142,
+        "p95_ms": 327.639,
+        "peak_ms": 783.138,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 15460,
+        "mean_ms": 217.25454285714287,
+        "p95_ms": 323.339,
+        "peak_ms": 775.492,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 20012,
+        "mean_ms": 218.78014285714286,
+        "p95_ms": 322.792,
+        "peak_ms": 772.238,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 4700,
+        "mean_ms": 216.03297142857144,
+        "p95_ms": 326.69,
+        "peak_ms": 764.64,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "runtime": {
+    "days": 35,
+    "equal_daily_states": 35,
+    "before_pid": 35116,
+    "after_pid": 35132,
+    "workers": 4,
+    "note": "Inherited cumulative runtime peaks are not new main-thread performance evidence."
+  },
+  "tests": {
+    "new_checks": 596,
+    "working_passed": 18,
+    "staged_passed": 10,
+    "core_checks": 505
+  },
+  "source_archives": {
+    "scripts__ai__diplomacy_ai.gd.gz": {
+      "original_path": "scripts/ai/diplomacy_ai.gd",
+      "sha256": "153ef419be9fc1696da80673d8e82b338dbbb4f1159644713e23582dc93c2e8a"
+    },
+    "scripts__ai__threat_field.gd.gz": {
+      "original_path": "scripts/ai/threat_field.gd",
+      "sha256": "22574cc27b17afe5dc0d2ac9a4d491b032fd717628064c2b5b3674c6f7f20ac2"
+    },
+    "scripts__core__pathfinding.gd.gz": {
+      "original_path": "scripts/core/pathfinding.gd",
+      "sha256": "50dbd7b9e36e56a8dbbbe1d28924e0f0cd1c536a63a7bc09f12eaf068fc1dd90"
+    },
+    "scripts__core__rebellion_system.gd.gz": {
+      "original_path": "scripts/core/rebellion_system.gd",
+      "sha256": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118"
+    },
+    "scripts__core__ruler_profile.gd.gz": {
+      "original_path": "scripts/core/ruler_profile.gd",
+      "sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4"
+    },
+    "scripts__core__trade_network.gd.gz": {
+      "original_path": "scripts/core/trade_network.gd",
+      "sha256": "56764b738706ede2b4441ded758ac899c4cbebadc78ae4c50d106a6c0367d2af"
+    },
+    "scripts__simulation__rules__reinforcement_phase.gd.gz": {
+      "original_path": "scripts/simulation/rules/reinforcement_phase.gd",
+      "sha256": "cd1cbae44775144e2738e0a0c8363ccbd68191b78bf439afaf5d0cda6ec146bb"
+    },
+    "scripts__simulation__rules__supply_rules.gd.gz": {
+      "original_path": "scripts/simulation/rules/supply_rules.gd",
+      "sha256": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa"
+    },
+    "scripts__simulation__simulation.gd.gz": {
+      "original_path": "scripts/simulation/simulation.gd",
+      "sha256": "ed258dda025e33d0e3338f8763d43b2aa042e2e57550f98e37bb37336a160e39"
+    },
+    "scripts__state__game_state.gd.gz": {
+      "original_path": "scripts/state/game_state.gd",
+      "sha256": "b060bb056d0d5fc8157c930a28337236b72e5b2ffcdb8cb689569005e188e3a1"
+    },
+    "trade_network-before.gd.gz": {
+      "original_path": "scripts/core/trade_network.gd",
+      "sha256": "00d0b36000608c8713fbc9d4b98a3f5c2c8719b83a223f55969d903b6a4e0404",
+      "variant": "before"
+    }
+  },
+  "limitations": [
+    "One seed, 35-day window and one monthly boundary; no long-run or GUI claim.",
+    "All five paired means decreased; one paired peak increased. Other-stage variance contributes to the total.",
+    "Working baseline already contains node-kind, precise-distance and control-city dependencies; staged commit also includes these three fields.",
+    "Other pending annual trade and UI features are excluded from the staged commit."
+  ]
+}

@@ -573,15 +573,18 @@ static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
 static func structure_fingerprint(state: GameState) -> PackedByteArray:
 	_structure_fingerprint_builds += 1
 	if state == null:
-		return var_to_bytes(["trade_structure_v5", null])
+		return var_to_bytes(["trade_structure_v6_packed_records", null])
 	if not state.trade_enabled:
 		return var_to_bytes(["trade_disabled_v1",state.cities.size(),state.nations.size()])
 	var fields: Array = [
-		"trade_structure_v5",
+		"trade_structure_v6_packed_records",
 		["counts", state.cities.size(), state.nations.size()],
 		["map_aspect_ratio", state.map_aspect_ratio],
 	]
 	var non_trade_gold_outputs := CityOutputRules.city_potential_gold_outputs(state)
+	var city_records := PackedInt64Array(); city_records.resize(state.cities.size()*14)
+	var city_positions := PackedVector2Array(); city_positions.resize(state.cities.size())
+	var city_index := 0
 	for city in state.cities:
 		var region_id := (
 			int(state.region_ids[city.id])
@@ -593,14 +596,25 @@ static func structure_fingerprint(state: GameState) -> PackedByteArray:
 			if city.id >= 0 and city.id < non_trade_gold_outputs.size()
 			else CityOutputRules.city_potential_gold_output(state, city)
 		)
-		fields.append([
-			"city", city.id, city.owner_nation, city.is_dock,
-			city.map_position, city.gold_per_month, city.food_per_half_year,
-			non_trade_gold_output,
-			city.is_capital, city.has_warehouse, city.is_port_market,
-			city.is_crossroads, city.is_food_hub, region_id,
-			int(city.get_meta("initial_owner_city", -1)),
-		])
+		var offset := city_index * 14
+		city_records[offset] = city.id
+		city_records[offset+1] = city.owner_nation
+		city_records[offset+2] = int(city.is_dock)
+		city_records[offset+3] = city.node_kind
+		city_records[offset+4] = city.gold_per_month
+		city_records[offset+5] = city.food_per_half_year
+		city_records[offset+6] = non_trade_gold_output
+		city_records[offset+7] = int(city.is_capital)
+		city_records[offset+8] = int(city.has_warehouse)
+		city_records[offset+9] = int(city.is_port_market)
+		city_records[offset+10] = int(city.is_crossroads)
+		city_records[offset+11] = int(city.is_food_hub)
+		city_records[offset+12] = region_id
+		city_records[offset+13] = int(city.get_meta("initial_owner_city", -1))
+		city_positions[city_index] = city.map_position
+		city_index += 1
+	fields.append(["cities_packed",city_records,city_positions])
+
 	for nation in state.nations:
 		fields.append([
 			"nation", nation.id, nation.alive, nation.capital_city_id,
@@ -608,13 +622,25 @@ static func structure_fingerprint(state: GameState) -> PackedByteArray:
 		])
 
 	# edges 的数组顺序也保留：重复端点时 _build_graph() 采用第一条边。
+	var edge_records := PackedInt64Array(); edge_records.resize(state.edges.size()*7)
+	var edge_values := PackedFloat64Array(); edge_values.resize(state.edges.size()*4)
+	var edge_index := 0
 	for edge in state.edges:
-		fields.append([
-			"edge", edge.city_a, edge.city_b, edge.kind,
-			edge.max_manpower, edge.base_max_manpower, edge.distance,
-			edge.travel_time_multiplier, edge.danger,
-			edge.supply_loss_multiplier,
-		])
+		var offset := edge_index * 7
+		edge_records[offset] = edge.city_a
+		edge_records[offset+1] = edge.city_b
+		edge_records[offset+2] = edge.kind
+		edge_records[offset+3] = edge.max_manpower
+		edge_records[offset+4] = edge.base_max_manpower
+		edge_records[offset+5] = edge.distance
+		edge_records[offset+6] = edge.control_city_id
+		var value_offset := edge_index * 4
+		edge_values[value_offset] = edge.precise_distance
+		edge_values[value_offset+1] = edge.travel_time_multiplier
+		edge_values[value_offset+2] = edge.danger
+		edge_values[value_offset+3] = edge.supply_loss_multiplier
+		edge_index += 1
+	fields.append(["edges_packed",edge_records,edge_values])
 	return var_to_bytes(fields)
 
 
