@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T22-25-36-36564-8536485.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_runtime_equivalence
+FORCE_EQ seed=1 nations=40 nodes=4321
+FORCE_EQ_PASS days=6 peak_us={"ai_army_choose":163,"ai_army_sort":1463,"ai_build_view":2858,"ai_finalize":2,"ai_force_commit_slice":2899,"ai_reconcile_commands":1178,"ai_view_city_sort":653,"ai_view_partition":2210,"ai_view_warehouses":7,"cleanup_capitulations":109,"cleanup_evict":172,"cleanup_holding":20,"cleanup_refresh":1441,"cleanup_siege_food":2,"cleanup_suzerainty":3452,"cleanup_total":14674,"cleanup_victory":1287,"cleanup_war_flags":9903,"runtime_commit_signal":3,"supply_finalize_demand":14,"supply_plan_army":180,"supply_sort":1338}

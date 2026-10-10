@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== AI 运行时优化等价性 40国/160城/30天 ===
+串行=3683.1ms 多核=3695.5ms 加速=1.00x
+Threat worker: 串行=47.4ms(7轮) 多核=47.5ms(7轮,4 worker) 加速=1.00x
+verdict=AI_RUNTIME_EQUIVALENT

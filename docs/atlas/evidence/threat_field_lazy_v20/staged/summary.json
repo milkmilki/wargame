@@ -1,0 +1,63 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "threat_field_lazy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2438,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\threat_field_lazy.log"
+    },
+    {
+      "test": "ai_parallel_threat_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 10484,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\ai_parallel_threat_equivalence.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 33172,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "resource_forecast_integration",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2797,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\resource_forecast_integration.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\succession_counterattack.log"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 75125,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\atlas_military_persistence.log"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v20-staged-verify\\.dbg\\regression\\political_history_test.log"
+    }
+  ],
+  "failures": 0
+}

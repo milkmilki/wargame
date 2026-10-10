@@ -7,8 +7,37 @@ const DECAY_DAYS: float = 30.0
 
 var nation_id: int
 var day: int
-var threat_by_city: Dictionary = {}
-var support_by_city: Dictionary = {}
+## Point queries memoize only requested nodes. Public dictionaries retain their
+## original complete, ordered and mutable behavior when explicitly read.
+var threat_by_city: Dictionary:
+	get:
+		if not _threat_materialized:
+			_threat_values = _materialize(_threat_values, _threat_sources)
+			_threat_sources.clear()
+			_threat_materialized = true
+		return _threat_values
+	set(value):
+		_threat_values = value
+		_threat_sources.clear()
+		_threat_materialized = true
+var support_by_city: Dictionary:
+	get:
+		if not _support_materialized:
+			_support_values = _materialize(_support_values, _support_sources)
+			_support_sources.clear()
+			_support_materialized = true
+		return _support_values
+	set(value):
+		_support_values = value
+		_support_sources.clear()
+		_support_materialized = true
+var _threat_values: Dictionary = {}
+var _support_values: Dictionary = {}
+var _threat_sources: Array[Dictionary] = []
+var _support_sources: Array[Dictionary] = []
+var _frozen_city_ids: Array[int] = []
+var _threat_materialized := true
+var _support_materialized := true
 var travel_distance_cache: Dictionary = {}
 ## 多核构建时只读共享的已完成缓存；新条目只写 travel_distance_cache。
 ## 主线程等待全部 worker 完成后再按固定顺序合并，避免 Dictionary 并发写。
@@ -30,12 +59,13 @@ static func build(
 	else:
 		field.travel_distance_cache = shared_travel_cache
 	for city in view.state.cities:
-		field.threat_by_city[city.id] = 0.0
-		field.support_by_city[city.id] = 0.0
+		field._frozen_city_ids.append(city.id)
 	var enemy_sources := field._aggregate_sources(view.state, view.enemy_armies)
 	var friendly_sources := field._aggregate_sources(view.state, view.friendly_armies)
-	field._accumulate(view.state, enemy_sources, field.threat_by_city)
-	field._accumulate(view.state, friendly_sources, field.support_by_city)
+	field._threat_sources = field._freeze_sources(view.state, enemy_sources)
+	field._support_sources = field._freeze_sources(view.state, friendly_sources)
+	field._threat_materialized = false
+	field._support_materialized = false
 	return field
 
 
@@ -54,11 +84,34 @@ static func build_shared_travel_request(
 
 
 func threat_at(city_id: int) -> float:
-	return float(threat_by_city.get(city_id, 0.0))
+	if _threat_materialized:
+		return float(_threat_values.get(city_id, 0.0))
+	return _value_at(city_id, _threat_values, _threat_sources)
 
 
 func support_at(city_id: int) -> float:
-	return float(support_by_city.get(city_id, 0.0))
+	if _support_materialized:
+		return float(_support_values.get(city_id, 0.0))
+	return _value_at(city_id, _support_values, _support_sources)
+
+
+static func _value_at(city_id: int, values: Dictionary, sources: Array[Dictionary]) -> float:
+	if values.has(city_id):
+		return float(values[city_id])
+	var total := 0.0
+	for source in sources:
+		var influence: Dictionary = source.influence
+		if influence.has(city_id):
+			total += float(source.power) * float(influence[city_id])
+	values[city_id] = total
+	return total
+
+
+func _materialize(values: Dictionary, sources: Array[Dictionary]) -> Dictionary:
+	var complete := {}
+	for city_id in _frozen_city_ids:
+		complete[city_id] = _value_at(city_id, values, sources)
+	return complete
 
 
 func _aggregate_sources(state: GameState, armies: Array[Army]) -> Dictionary:
@@ -93,11 +146,11 @@ func _add_source(sources: Dictionary, city_id: int, power: float, offset_days: f
 	sources[city_id] = float(sources.get(city_id, 0.0)) + discounted
 
 
-func _accumulate(
+func _freeze_sources(
 	state: GameState,
-	sources_by_manpower: Dictionary,
-	output: Dictionary
-) -> void:
+	sources_by_manpower: Dictionary
+) -> Array[Dictionary]:
+	var prepared: Array[Dictionary] = []
 	var manpower_levels := sources_by_manpower.keys()
 	manpower_levels.sort()
 	for manpower_value in manpower_levels:
@@ -118,17 +171,10 @@ func _accumulate(
 				int(source_id),
 				required_manpower
 			)
-			var city_ids := _ordered_influence_city_ids(
-				state,
-				int(source_id),
-				required_manpower,
-				influence
-			)
-			for city_id in city_ids:
-				output[city_id] = (
-					float(output.get(city_id, 0.0))
-					+ power * float(influence[city_id])
-				)
+			# Caller-owned travel caches can change after build. Preserve the old
+			# eager field's snapshot semantics, including source summation order.
+			prepared.append({"power":power, "influence":influence.duplicate()})
+	return prepared
 
 
 func _influence_field(
@@ -154,30 +200,6 @@ func _influence_field(
 		)
 	travel_distance_cache[cache_key] = influence
 	return influence
-
-
-func _ordered_influence_city_ids(
-	state: GameState,
-	start: int,
-	required_manpower: int,
-	influence: Dictionary
-) -> Array:
-	var cache_key := "O:%d:%d:%d" % [
-		nation_id,
-		start,
-		required_manpower,
-	]
-	if _travel_cache_has(cache_key):
-		return _travel_cache_get(cache_key)
-	var city_ids := influence.keys()
-	EquivariantOrder.sort_city_ids(
-		city_ids,
-		state,
-		nation_id,
-		state.nations[nation_id].capital_city_id
-	)
-	travel_distance_cache[cache_key] = city_ids
-	return city_ids
 
 
 func _travel_days_field(

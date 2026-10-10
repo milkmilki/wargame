@@ -1,0 +1,234 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "8e0f1eb1ae4e3ef786135a36e6af0752f9bbcfc1",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "scope": "headless simulation computation, not GUI frame rate",
+  "configuration": {
+    "seed": 1,
+    "nations": 40,
+    "nodes": 1192,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "mask": {
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    }
+  },
+  "days": [
+    181,
+    215
+  ],
+  "frozen_file": ".dbg/daily-v9/frozen-day180.bin",
+  "frozen_file_sha256": "b9db9e38bd2fbb4f174206917e332982c668ed7f5bf408aaf60bbf0da17089d1",
+  "initial_native_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "metrics": {
+    "mean_ms": {
+      "before": 244.24334285714286,
+      "after": 232.83371428571428,
+      "reduction_percent": 4.671418446029884
+    },
+    "p95_ms": {
+      "before": 552.864,
+      "after": 546.128,
+      "reduction_percent": 1.2183828210916228
+    },
+    "peak_ms": {
+      "before": 869.678,
+      "after": 835.749,
+      "reduction_percent": 3.9013289976290046
+    },
+    "ai": {
+      "before": 136.8012857142857,
+      "after": 125.37211428571429
+    },
+    "ai_threat": {
+      "before": 18.288742857142857,
+      "after": 6.169857142857143
+    },
+    "ai_snapshot": {
+      "before": 49.91385714285715,
+      "after": 50.14562857142857
+    },
+    "supply": {
+      "before": 36.856542857142855,
+      "after": 37.30217142857143
+    },
+    "monthly": {
+      "before": 17.107599999999998,
+      "after": 17.04382857142857
+    },
+    "movement_battles": {
+      "before": 33.27534285714286,
+      "after": 33.76242857142857
+    }
+  },
+  "equal_daily_states": 175,
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 20060,
+        "mean_ms": 244.2696857142857,
+        "p95_ms": 556.094,
+        "peak_ms": 894.326,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 11796,
+        "mean_ms": 232.83371428571428,
+        "p95_ms": 560.469,
+        "peak_ms": 844.166,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 11448,
+        "mean_ms": 242.35468571428572,
+        "p95_ms": 550.911,
+        "peak_ms": 866.36,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 35132,
+        "mean_ms": 233.27737142857143,
+        "p95_ms": 546.128,
+        "peak_ms": 849.276,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 33856,
+        "mean_ms": 246.5721142857143,
+        "p95_ms": 552.864,
+        "peak_ms": 924.517,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 2980,
+        "mean_ms": 231.3745142857143,
+        "p95_ms": 536.505,
+        "peak_ms": 827.24,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 31952,
+        "mean_ms": 244.24334285714286,
+        "p95_ms": 558.561,
+        "peak_ms": 869.678,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 19104,
+        "mean_ms": 232.99282857142856,
+        "p95_ms": 533.046,
+        "peak_ms": 823.319,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 13784,
+        "mean_ms": 240.4813142857143,
+        "p95_ms": 544.201,
+        "peak_ms": 865.814,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 30632,
+        "mean_ms": 228.29177142857142,
+        "p95_ms": 550.435,
+        "peak_ms": 835.749,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "runtime": {
+    "days": 35,
+    "before_pid": 25856,
+    "after_pid": 29764,
+    "workers": 4,
+    "equal_daily_states": 35,
+    "note": "Inherited runtime peak counters are not a new main-thread or GUI performance measurement."
+  },
+  "probe": {
+    "pid": 32616,
+    "counts": {
+      "fields": {
+        "mean": 8.257142857142858,
+        "max": 13
+      },
+      "source_maps": {
+        "mean": 160.8,
+        "max": 320
+      },
+      "copied_influence_entries": {
+        "mean": 14950.42857142857,
+        "max": 28981
+      },
+      "memoized_node_values": {
+        "mean": 32,
+        "max": 64
+      },
+      "possible_node_values": {
+        "mean": 19685.02857142857,
+        "max": 30992
+      }
+    },
+    "note": "Counts cover synchronous AI construction hook; priority siege contexts outside that hook are not counted. Counts are not runtime RAM measurements."
+  },
+  "tests": {
+    "new_checks": 4990,
+    "working_passed": 21,
+    "staged_passed": 8
+  },
+  "source_archives": {
+    "scripts__ai__diplomacy_ai.gd.gz": {
+      "original_path": "scripts/ai/diplomacy_ai.gd",
+      "sha256": "5389b8a70317665c4f59ad5682597a5db0ca30f458ec13b0c228ca5987c2210c"
+    },
+    "scripts__ai__threat_field.gd.gz": {
+      "original_path": "scripts/ai/threat_field.gd",
+      "sha256": "22574cc27b17afe5dc0d2ac9a4d491b032fd717628064c2b5b3674c6f7f20ac2"
+    },
+    "scripts__core__rebellion_system.gd.gz": {
+      "original_path": "scripts/core/rebellion_system.gd",
+      "sha256": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118"
+    },
+    "scripts__core__ruler_profile.gd.gz": {
+      "original_path": "scripts/core/ruler_profile.gd",
+      "sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4"
+    },
+    "scripts__core__trade_network.gd.gz": {
+      "original_path": "scripts/core/trade_network.gd",
+      "sha256": "00d0b36000608c8713fbc9d4b98a3f5c2c8719b83a223f55969d903b6a4e0404"
+    },
+    "scripts__simulation__rules__supply_rules.gd.gz": {
+      "original_path": "scripts/simulation/rules/supply_rules.gd",
+      "sha256": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa"
+    },
+    "scripts__simulation__simulation.gd.gz": {
+      "original_path": "scripts/simulation/simulation.gd",
+      "sha256": "ecd5e7f8c961438dc6ec006792b047f479a49647c4808b2f76bf5dcc64a344fa"
+    },
+    "scripts__state__game_state.gd.gz": {
+      "original_path": "scripts/state/game_state.gd",
+      "sha256": "b060bb056d0d5fc8157c930a28337236b72e5b2ffcdb8cb689569005e188e3a1"
+    },
+    "threat_field-before.gd.gz": {
+      "original_path": "scripts/ai/threat_field.gd",
+      "sha256": "7533f3378d0c35aecac176007528db57bea312e7a3bbee0e413029c776dcac37",
+      "variant": "before"
+    }
+  },
+  "limitations": [
+    "One seed, 35-day window and one monthly boundary; no 30-year claim.",
+    "Private influence dictionaries consume memory; full-map consumers still pay for all node queries.",
+    "Working-tree benchmark includes earlier authorized pending implementations; staged-only verification is separate."
+  ]
+}
