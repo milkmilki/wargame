@@ -2090,27 +2090,25 @@ func _generate_armies() -> void:
 
 
 func _battle_group_structure_valid() -> bool:
+	# Validate the same membership rules in one pass. Transaction checks and
+	# daily audits must not scan every army once for every registered group.
+	var registered := {}
+	for nation_index in range(nations.size()):
+		for group in nations[nation_index].battle_groups:
+			if group.id >= 0:
+				registered[Vector2i(nation_index, group.id)] = true
+	var counts := {}
+	for army in armies:
+		if army.size <= 0:
+			continue
+		var key := Vector2i(army.owner_nation, army.battle_group_id)
+		if army.max_size != INITIAL_HEAVY_ARMY_SIZE or not registered.has(key):
+			return false
+		counts[key] = int(counts.get(key, 0)) + 1
 	for nation in nations:
 		for group in nation.battle_groups:
-			var army_count := 0
-			for army in battle_group_members(nation.id, group.id):
-				if army.max_size != INITIAL_HEAVY_ARMY_SIZE:
-					return false
-				army_count += 1
-			if army_count > BattleGroup.MAX_ARMIES:
+			if int(counts.get(Vector2i(nation.id, group.id), 0)) > BattleGroup.MAX_ARMIES:
 				return false
-	for army in armies:
-		if (
-			army.size > 0
-			and (
-				army.max_size != INITIAL_HEAVY_ARMY_SIZE
-				or battle_group_by_id(
-					army.owner_nation,
-					army.battle_group_id
-				) == null
-			)
-		):
-			return false
 	return true
 
 

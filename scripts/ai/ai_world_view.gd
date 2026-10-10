@@ -453,8 +453,11 @@ static func cached_path_field(
 	if not game_state.atlas_layout.is_empty():
 		# A physical Atlas graph is thousands of nodes. Retaining every obsolete
 		# day/revision field makes a campaign's memory grow without bound.
-		var context := "%d:%d:%d:%d:%d"%[game_state.get_instance_id(),current_day,game_state.ownership_revision,game_state.diplomacy_revision,game_state.road_network_revision]
-		if cache.get("__atlas_context","")!=context or cache.size()>32:
+		# Ordinary routes depend on territory, access and roads, not the date.
+		# Contested routes retain their day in the entry key below. Clearing all
+		# entries every day (or every 32 requests) destroys the hot working set.
+		var context := "%d:%d:%d:%d"%[game_state.get_instance_id(),game_state.ownership_revision,game_state.diplomacy_revision,game_state.road_network_revision]
+		if cache.get("__atlas_context","")!=context:
 			cache.clear(); cache["__atlas_context"] = context
 	# allowed_goal 仅在限制通行国时放行最终敌城；不限制通行国、或目标就是
 	# Dijkstra 起点时，它不参与任何松弛判定，统一键可消除伪重复路径场。
@@ -477,6 +480,21 @@ static func cached_path_field(
 		normalized_goal,
 		0,
 	]
+	if not game_state.atlas_layout.is_empty():
+		# Capital relocation can change equal-distance tie ordering even when
+		# ownership is unchanged. Include the ordering nation's current capital.
+		var order_nation := allowed_nation if allowed_nation >= 0 else game_state.cities[start].owner_nation
+		var capital := game_state.nations[order_nation].capital_city_id if order_nation >= 0 and order_nation < game_state.nations.size() else -1
+		key += ":C:%d" % capital
+		if cache.has(key):
+			var cached: Dictionary = cache[key]
+			cache.erase(key)
+			cache[key] = cached
+			return cached
+		# Dictionary insertion order is the recency queue; the context marker
+		# remains first. Evict one cold field, never the whole live cache.
+		if cache.size() >= 33:
+			cache.erase(cache.keys()[1])
 	if not cache.has(key):
 		cache[key] = Pathfinding.dijkstra_field(
 			game_state,

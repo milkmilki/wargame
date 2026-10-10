@@ -34,11 +34,20 @@ static func dijkstra_field(
 		if allowed_nation >= 0
 		else state.cities[start].owner_nation
 	)
-	var order_rank := EquivariantOrder.city_rank_map(
+	var lazy_order := not state.atlas_layout.is_empty()
+	var order_rank := {} if lazy_order else EquivariantOrder.city_rank_map(
 		state,
 		order_nation,
 		start
 	)
+	# Sorting all worldwide traffic nodes for each new origin dominates small
+	# national searches. Original ranks are equivalence classes of these exact
+	# keys: compare keys directly, computing only nodes reached by this search.
+	var order_keys := {}
+	var order_origin := state.cities[start].map_position
+	var order_sign := EquivariantOrder._nation_forward_sign(state, order_nation) if lazy_order else 0.0
+	if lazy_order:
+		order_keys[start] = EquivariantOrder._city_key_in_frame(state, start, order_origin, order_sign)
 	var blocked_enemy_edges := (
 		_enemy_occupied_edge_keys(state, allowed_nation)
 		if block_contested_edges
@@ -51,11 +60,13 @@ static func dijkstra_field(
 		if allowed_nation >= 0
 		else {}
 	)
-	var queue: Array[Dictionary] = [{
+	var initial_entry := {
 		"city": start,
 		"distance": 0.0,
-		"rank": int(order_rank[start]),
-	}]
+		"rank": 0 if lazy_order else int(order_rank[start]),
+	}
+	if lazy_order: initial_entry["order_key"] = order_keys[start]
+	var queue: Array[Dictionary] = [initial_entry]
 	while not queue.is_empty():
 		var entry := _heap_pop(queue)
 		var u := int(entry["city"])
@@ -131,18 +142,25 @@ static func dijkstra_field(
 				is_equal_approx(nd, float(dist[v]))
 				and (
 					not prev.has(v)
-					or int(order_rank[u])
-						< int(order_rank[int(prev[v])])
+					or (
+						EquivariantOrder._key_less(order_keys[u], order_keys[int(prev[v])])
+						if lazy_order else int(order_rank[u]) < int(order_rank[int(prev[v])])
+					)
 				)
 			)
 			if improves or improves_tie:
 				dist[v] = nd
 				prev[v] = u
-				_heap_push(queue, {
+				var next_entry := {
 					"city": v,
 					"distance": nd,
-					"rank": int(order_rank[v]),
-				})
+					"rank": 0 if lazy_order else int(order_rank[v]),
+				}
+				if lazy_order:
+					if not order_keys.has(v):
+						order_keys[v] = EquivariantOrder._city_key_in_frame(state, v, order_origin, order_sign)
+					next_entry["order_key"] = order_keys[v]
+				_heap_push(queue, next_entry)
 	return { "dist": dist, "prev": prev }
 
 
@@ -198,6 +216,8 @@ static func _heap_entry_less(
 	var distance_b := float(b["distance"])
 	if not is_equal_approx(distance_a, distance_b):
 		return distance_a < distance_b
+	if a.has("order_key"):
+		return EquivariantOrder._key_less(a["order_key"], b["order_key"])
 	return int(a["rank"]) < int(b["rank"])
 
 
@@ -952,6 +972,17 @@ static func supply_sources_from_network(
 			return []
 		edge_loss = _supply_edge_loss(edge)
 		progress = clampf(army.move_progress, 0.0, 1.0)
+	# The owner, endpoints and diplomatic state stay fixed throughout this
+	# read-only query. Access does not depend on which warehouse is inspected.
+	var from_access := false
+	var to_access := false
+	if edge != null and not network.is_empty():
+		from_access = state.has_logistics_access(
+			army.owner_nation, state.cities[army.move_from].owner_nation
+		)
+		to_access = state.has_logistics_access(
+			army.owner_nation, state.cities[army.move_to].owner_nation
+		)
 	var result: Array[Dictionary] = []
 	for source in network:
 		var dist: PackedFloat64Array = source["dist"]
@@ -959,19 +990,13 @@ static func supply_sources_from_network(
 		if edge == null:
 			loss = dist[start]
 		else:
-			if state.has_logistics_access(
-				army.owner_nation,
-				state.cities[army.move_from].owner_nation
-			):
+			if from_access:
 				loss = minf(
 					loss,
 					progress * edge_loss
 						+ dist[army.move_from]
 				)
-			if state.has_logistics_access(
-				army.owner_nation,
-				state.cities[army.move_to].owner_nation
-			):
+			if to_access:
 				loss = minf(
 					loss,
 					(1.0 - progress) * edge_loss
@@ -984,19 +1009,21 @@ static func supply_sources_from_network(
 			"owner_nation": source["owner_nation"],
 			"loss": loss,
 		})
+	# Equal-loss selection uses the same quantized mirror keys as global city
+	# ranks, but only ranks the candidate warehouses and only on an actual tie.
+	# Query-local data also avoids shared rank-cache churn in supply workers.
+	var tie_ranks := {}
+	var candidate_ids: Array[int] = []
+	for source in result: candidate_ids.append(int(source["city_id"]))
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if not is_equal_approx(
 			float(a["loss"]),
 			float(b["loss"])
 		):
 			return float(a["loss"]) < float(b["loss"])
-		return EquivariantOrder.city_id_less(
-			state,
-			army.owner_nation,
-			int(a["city_id"]),
-			int(b["city_id"]),
-			start
-		)
+		if tie_ranks.is_empty():
+			tie_ranks.merge(EquivariantOrder.subset_city_ranks(candidate_ids, state, army.owner_nation, start))
+		return int(tie_ranks.get(int(a["city_id"]), 1 << 30)) < int(tie_ranks.get(int(b["city_id"]), 1 << 30))
 	)
 	return result
 

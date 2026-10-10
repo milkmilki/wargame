@@ -1,0 +1,35 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_event_slicing",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 12468,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_event_slicing.log"
+    },
+    {
+      "test": "atlas_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 13953,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_runtime_equivalence.log"
+    },
+    {
+      "test": "atlas_contact_index",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2344,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_contact_index.log"
+    },
+    {
+      "test": "atlas_junction_encounters",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_junction_encounters.log"
+    }
+  ],
+  "failures": 0
+}

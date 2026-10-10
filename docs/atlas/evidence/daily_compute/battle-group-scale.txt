@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+BATTLE_GROUP_SCALE nodes=4321 armies=1700 baseline_median_us=214468 indexed_median_us=1332
+BATTLE_GROUP_INDEX_RESULT checks=72 failures=0

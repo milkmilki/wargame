@@ -1,0 +1,23 @@
+extends SceneTree
+const Codec = preload("res://.dbg/state_codec.gd")
+func _initialize(): call_deferred("run")
+func run():
+	var before: Simulation = Codec.new().restore("res://.dbg/frozen-day240.bin", "res://tests/support/legacy_contact_simulation.gd")
+	var after: Simulation = Codec.new().restore("res://.dbg/frozen-day240.bin")
+	root.add_child(before); root.add_child(after)
+	before.paused = true; after.paused = true
+	before.tick_phase_profiling_enabled = true; after.tick_phase_profiling_enabled = true
+	var file := FileAccess.open("res://.dbg/block-ab.jsonl", FileAccess.WRITE)
+	for index in range(10):
+		# Alternate order to reduce a systematic first-run scheduling/cache bias.
+		if index % 2 == 0:
+			before._advance_day(false); after._advance_day(false)
+		else:
+			after._advance_day(false); before._advance_day(false)
+		var matches := var_to_bytes(NativeSnapshotBuilder.build(before.state)) == var_to_bytes(NativeSnapshotBuilder.build(after.state))
+		assert(matches, "Index changes full game state")
+		var row := {"day": after.state.day, "before": before.tick_profile_last_usec.duplicate(), "after": after.tick_profile_last_usec.duplicate(), "state_equal": matches}
+		file.store_line(JSON.stringify(row)); file.flush()
+		print("BLOCK_AB ", after.state.day, " ", row.before.total/1000., " -> ", row.after.total/1000.)
+		await process_frame
+	file.close(); before.free(); after.free(); quit()

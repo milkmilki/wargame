@@ -1,0 +1,45 @@
+{
+  "protocol": "Three paired independent-process 10-day runs from full day240 freeze; alternate order; CPU4 affinity16; concurrent v1 30-year audit remains running",
+  "results": [
+    {
+      "tag": "v2-before-0",
+      "mean_ms": 2166.3147000000004,
+      "supply_ms": 542.4896,
+      "movement_ms": 954.9312
+    },
+    {
+      "tag": "v2-after-0",
+      "mean_ms": 2143.914,
+      "supply_ms": 506.816,
+      "movement_ms": 963.6236
+    },
+    {
+      "tag": "v2-after-1",
+      "mean_ms": 2166.9457,
+      "supply_ms": 517.179,
+      "movement_ms": 972.0071999999999
+    },
+    {
+      "tag": "v2-before-1",
+      "mean_ms": 2188.9084,
+      "supply_ms": 525.4216,
+      "movement_ms": 985.636
+    },
+    {
+      "tag": "v2-before-2",
+      "mean_ms": 2204.7007999999996,
+      "supply_ms": 535.2866,
+      "movement_ms": 984.0181
+    },
+    {
+      "tag": "v2-after-2",
+      "mean_ms": 2164.018,
+      "supply_ms": 526.8196999999999,
+      "movement_ms": 957.2542
+    }
+  ],
+  "all_60_hashes_match_original": true,
+  "mean_before_ms": 2186.6413,
+  "mean_after_ms": 2158.292566666667,
+  "mean_reduction_percent": 1.2964510152320252
+}

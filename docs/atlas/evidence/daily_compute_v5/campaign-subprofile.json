@@ -1,0 +1,220 @@
+[
+	{
+		"day": 241,
+		"path_requests": {
+			"hit": {
+				"calls": 22,
+				"us": 184
+			},
+			"miss": {
+				"calls": 10,
+				"us": 22995
+			}
+		},
+		"phases": {
+			"ai": 602727,
+			"ai_army_decisions": 47642,
+			"ai_build_view": 43743,
+			"ai_campaign_coalition": 126989,
+			"ai_campaign_national": 27916,
+			"ai_campaign_planning": 207577,
+			"ai_campaign_prepare": 50613,
+			"ai_commit": 2074,
+			"ai_declaration_launches": 20,
+			"ai_defense": 39,
+			"ai_force_structure": 9,
+			"ai_reconcile_commands": 47624,
+			"ai_shared_army_index": 6999,
+			"ai_snapshot": 99698,
+			"ai_snapshot_cache_seed": 17603,
+			"ai_threat": 144718,
+			"ai_view_setup": 98524,
+			"atlas_event_arrivals": 100288,
+			"atlas_event_contacts": 76787,
+			"atlas_event_integrate": 36633,
+			"atlas_event_scan": 458709,
+			"campaign": 33,
+			"cleanup": 9856,
+			"maintenance": 1806,
+			"monthly": 1,
+			"morale_merge": 23192,
+			"movement_battles": 733246,
+			"supply": 89497,
+			"supply_build_plans": 41873,
+			"supply_prepare": 15761,
+			"supply_sort": 22300,
+			"supply_withdraw": 9122,
+			"total": 1460363
+		},
+		"segments": {
+			"allocation": {
+				"calls": 2,
+				"us": 17683
+			},
+			"component": {
+				"calls": 2,
+				"us": 65864
+			},
+			"deployment_distance": {
+				"calls": 23,
+				"us": 11151
+			},
+			"pair": {
+				"calls": 1,
+				"us": 575
+			},
+			"prepare": {
+				"calls": 1,
+				"us": 50252
+			}
+		}
+	},
+	{
+		"day": 242,
+		"path_requests": {
+			"hit": {
+				"calls": 78,
+				"us": 516
+			},
+			"miss": {
+				"calls": 17,
+				"us": 53098
+			}
+		},
+		"phases": {
+			"ai": 602727,
+			"ai_army_decisions": 47642,
+			"ai_build_view": 43743,
+			"ai_campaign_coalition": 126989,
+			"ai_campaign_national": 27916,
+			"ai_campaign_planning": 207577,
+			"ai_campaign_prepare": 50613,
+			"ai_commit": 2074,
+			"ai_declaration_launches": 20,
+			"ai_defense": 39,
+			"ai_force_structure": 9,
+			"ai_reconcile_commands": 47624,
+			"ai_shared_army_index": 6999,
+			"ai_snapshot": 99698,
+			"ai_snapshot_cache_seed": 17603,
+			"ai_threat": 144718,
+			"ai_view_setup": 98524,
+			"atlas_event_arrivals": 100288,
+			"atlas_event_contacts": 76787,
+			"atlas_event_integrate": 36633,
+			"atlas_event_scan": 458709,
+			"campaign": 33,
+			"cleanup": 9856,
+			"maintenance": 1806,
+			"monthly": 1,
+			"morale_merge": 23192,
+			"movement_battles": 733246,
+			"supply": 89497,
+			"supply_build_plans": 41873,
+			"supply_prepare": 15761,
+			"supply_sort": 22300,
+			"supply_withdraw": 9122,
+			"total": 1460363
+		},
+		"segments": {
+			"allocation": {
+				"calls": 7,
+				"us": 65651
+			},
+			"component": {
+				"calls": 7,
+				"us": 175574
+			},
+			"deployment_distance": {
+				"calls": 91,
+				"us": 36372
+			},
+			"objective": {
+				"calls": 1,
+				"us": 8811
+			},
+			"pair": {
+				"calls": 4,
+				"us": 17761
+			},
+			"prepare": {
+				"calls": 1,
+				"us": 53203
+			}
+		}
+	},
+	{
+		"day": 243,
+		"path_requests": {
+			"hit": {
+				"calls": 41,
+				"us": 280
+			},
+			"miss": {
+				"calls": 13,
+				"us": 37025
+			}
+		},
+		"phases": {
+			"ai": 602727,
+			"ai_army_decisions": 47642,
+			"ai_build_view": 43743,
+			"ai_campaign_coalition": 126989,
+			"ai_campaign_national": 27916,
+			"ai_campaign_planning": 207577,
+			"ai_campaign_prepare": 50613,
+			"ai_commit": 2074,
+			"ai_declaration_launches": 20,
+			"ai_defense": 39,
+			"ai_force_structure": 9,
+			"ai_reconcile_commands": 47624,
+			"ai_shared_army_index": 6999,
+			"ai_snapshot": 99698,
+			"ai_snapshot_cache_seed": 17603,
+			"ai_threat": 144718,
+			"ai_view_setup": 98524,
+			"atlas_event_arrivals": 100288,
+			"atlas_event_contacts": 76787,
+			"atlas_event_integrate": 36633,
+			"atlas_event_scan": 458709,
+			"campaign": 33,
+			"cleanup": 9856,
+			"maintenance": 1806,
+			"monthly": 1,
+			"morale_merge": 23192,
+			"movement_battles": 733246,
+			"supply": 89497,
+			"supply_build_plans": 41873,
+			"supply_prepare": 15761,
+			"supply_sort": 22300,
+			"supply_withdraw": 9122,
+			"total": 1460363
+		},
+		"segments": {
+			"allocation": {
+				"calls": 5,
+				"us": 34478
+			},
+			"component": {
+				"calls": 5,
+				"us": 80072
+			},
+			"deployment_distance": {
+				"calls": 47,
+				"us": 25150
+			},
+			"objective": {
+				"calls": 2,
+				"us": 20400
+			},
+			"pair": {
+				"calls": 3,
+				"us": 38289
+			},
+			"prepare": {
+				"calls": 1,
+				"us": 50610
+			}
+		}
+	}
+]

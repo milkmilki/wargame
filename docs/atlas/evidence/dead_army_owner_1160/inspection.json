@@ -1,0 +1,170 @@
+{
+	"army": {
+		"ai_action": 5,
+		"ai_order_created_day": 1155,
+		"ai_order_score": 76.0432868164082,
+		"ai_order_until_day": 1160,
+		"ai_target_city": -1,
+		"attack": 10,
+		"battle_group_id": 5,
+		"battle_id": -1,
+		"campaign_front_id": -1,
+		"campaign_war_id": -1,
+		"defense": 10,
+		"defensive_blocked_edge_a": -1,
+		"defensive_blocked_edge_b": -1,
+		"defensive_deployment_until_day": -1,
+		"diplomatic_repatriation": 0,
+		"encounter_blocked": 0,
+		"forced_retreat": 0,
+		"hold_target_progress": -1.0,
+		"holding_days": 0,
+		"id": 1791,
+		"location": 2271,
+		"max_morale": 2.0,
+		"max_size": 15000,
+		"morale": 1.94666666666667,
+		"move_from": 2271,
+		"move_progress": 0.657863461222603,
+		"move_to": 37,
+		"occupation_claimant": 45,
+		"on_edge": 1,
+		"owner": 45,
+		"path_cursor": 0,
+		"political_person_id": -1,
+		"resume_holding_after_battle": 0,
+		"size": 13113,
+		"speed_factor": 0.5,
+		"starving": 1,
+		"state": 1,
+		"supply_debt": 0.200000000000017,
+		"supply_food_debt": 0.0666666666666638,
+		"supply_ratio": 0.0
+	},
+	"conflicts": [],
+	"day": 1160,
+	"events": [
+		{
+			"actor_ids": [
+				33
+			],
+			"actor_name": "苍5",
+			"attacker_casualties": 14470,
+			"captured_centers": [
+				"宣泰郡",
+				"崇安郡",
+				"昌州",
+				"河左郡",
+				"端昌郡",
+				"雪南",
+				"顺德郡"
+			],
+			"casualties": 47408,
+			"day": 1146,
+			"defender_casualties": 32938,
+			"kind": "external_war",
+			"lost_centers": [],
+			"result": "victory",
+			"target_ids": [
+				20,
+				34
+			],
+			"target_names": [
+				"宁3",
+				"澜5"
+			],
+			"text": "4年 伐宁3、澜5，破之，斩敌32938，取宣泰郡、崇安郡、昌州、河左郡、端昌郡、雪南、顺德郡",
+			"views": {
+				"20": "4年 苍5伐我，败绩，斩敌14470，宣泰郡、崇安郡、昌州、河左郡、端昌郡、雪南、顺德郡州陷",
+				"33": "4年 伐宁3、澜5，破之，斩敌32938，取宣泰郡、崇安郡、昌州、河左郡、端昌郡、雪南、顺德郡",
+				"34": "4年 苍5伐我，败绩，斩敌14470，宣泰郡、崇安郡、昌州、河左郡、端昌郡、雪南、顺德郡州陷"
+			},
+			"war_id": 81,
+			"year": 4
+		},
+		{
+			"actor_ids": [
+				12
+			],
+			"actor_name": "宁2",
+			"attacker_casualties": 577,
+			"captured_centers": [
+				"隆和郡"
+			],
+			"casualties": 577,
+			"day": 1160,
+			"defender_casualties": 0,
+			"kind": "external_war",
+			"lost_centers": [],
+			"result": "victory",
+			"target_ids": [
+				45
+			],
+			"target_names": [
+				"严"
+			],
+			"text": "4年 伐严，破之，取隆和郡 灭严为郡",
+			"views": {
+				"12": "4年 伐严，破之，取隆和郡 灭严为郡",
+				"45": "4年 宁2伐我，败绩，斩敌577，隆和郡州陷 国除"
+			},
+			"war_id": 92,
+			"year": 4
+		}
+	],
+	"nation": {
+		"absorbed_into_nation_id": -1,
+		"ai_aggression": 1.0,
+		"alive": 0,
+		"capitals": -1,
+		"competition_closed": 0,
+		"crown_prince_ids": 349,
+		"effective_tribute_rate": 0.0,
+		"empire_founder_person_id": -1,
+		"empire_recognized_day": -1,
+		"family_tree_ids": 43,
+		"food_demand_ema": 23.2572326660156,
+		"food_pool_holder": 45,
+		"gold": 594,
+		"granary_food": 0,
+		"ids": 45,
+		"last_court_expense_due": 13,
+		"last_court_expense_paid": 13,
+		"last_court_expense_rate": 0.3,
+		"last_field_army_upkeep": 11,
+		"last_food_demand": 108,
+		"last_garrison_food_demand": 6,
+		"last_garrison_upkeep": 2,
+		"last_military_upkeep": 13,
+		"last_royal_expense_basis_points": 0,
+		"last_royal_title_counts": [
+			0,
+			0,
+			0,
+			0
+		],
+		"manpower": 103743,
+		"next_battle_group_id": 6,
+		"overlord": -1,
+		"payment_ratio": 1.0,
+		"royal_generation": 0,
+		"royal_titles_initialized": false,
+		"ruler_archetypes": 0,
+		"ruler_person_ids": 348,
+		"ruler_revisions": 0,
+		"ruler_started_days": 690,
+		"ruler_traits": [],
+		"state_level": 0,
+		"strategic_region_anchors": -1,
+		"succession_identity": 0,
+		"suzerainty_civil_war": 0,
+		"suzerainty_created_day": -1,
+		"suzerainty_last_centralization_day": -1,
+		"suzerainty_tribute_rate": 0.0,
+		"unpaid_military_upkeep": 0,
+		"war_preparation_objective": -1,
+		"war_preparation_staging_city": -1,
+		"war_preparation_started_day": -1,
+		"war_preparation_target": -1
+	}
+}

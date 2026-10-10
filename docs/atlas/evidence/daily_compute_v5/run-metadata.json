@@ -1,0 +1,110 @@
+[
+  {
+    "label": "before",
+    "repeat": 0,
+    "tag": "v7-before-0",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\daily-v6-project",
+    "pid": 22784,
+    "affinity_mask": 16,
+    "started_unix": 1791631206.6546462,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "4a801ba08e679d55449988d576244e51112f394173a109797cd47494c506e5ef",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+    },
+    "movement_matches_pre_packed_cache": false
+  },
+  {
+    "label": "after",
+    "repeat": 0,
+    "tag": "v7-after-0",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "pid": 31692,
+    "affinity_mask": 16,
+    "started_unix": 1791631270.6948795,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+    },
+    "movement_matches_pre_packed_cache": true
+  },
+  {
+    "label": "after",
+    "repeat": 1,
+    "tag": "v7-after-1",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "pid": 29608,
+    "affinity_mask": 16,
+    "started_unix": 1791631330.827157,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+    },
+    "movement_matches_pre_packed_cache": true
+  },
+  {
+    "label": "before",
+    "repeat": 1,
+    "tag": "v7-before-1",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\daily-v6-project",
+    "pid": 35208,
+    "affinity_mask": 16,
+    "started_unix": 1791631389.5470529,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "4a801ba08e679d55449988d576244e51112f394173a109797cd47494c506e5ef",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+    },
+    "movement_matches_pre_packed_cache": false
+  },
+  {
+    "label": "before",
+    "repeat": 2,
+    "tag": "v7-before-2",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\daily-v6-project",
+    "pid": 15492,
+    "affinity_mask": 16,
+    "started_unix": 1791631453.149546,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "4a801ba08e679d55449988d576244e51112f394173a109797cd47494c506e5ef",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+    },
+    "movement_matches_pre_packed_cache": false
+  },
+  {
+    "label": "after",
+    "repeat": 2,
+    "tag": "v7-after-2",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "pid": 8044,
+    "affinity_mask": 16,
+    "started_unix": 1791631514.869935,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+    },
+    "movement_matches_pre_packed_cache": true
+  }
+]

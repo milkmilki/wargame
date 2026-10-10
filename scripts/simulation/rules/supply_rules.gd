@@ -31,6 +31,7 @@ static func network_fingerprint(
 	var result: Array[int] = [
 		state.ownership_revision,
 		state.diplomacy_revision,
+		state.road_network_revision,
 	]
 	for owner in state.nations:
 		if not state.has_logistics_access(nation_id, owner.id):

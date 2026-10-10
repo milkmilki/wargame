@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+CONTACT_INDEX history_only=false before_us=178583 after_us=10171 inspected=1536
+CONTACT_INDEX history_only=true before_us=21 after_us=24 inspected=0
+CONTACT_INDEX_RESULT checks=7 failures=0

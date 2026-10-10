@@ -1,0 +1,119 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 19640,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+    },
+    {
+      "test": "atlas_supply_dependencies",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_supply_dependencies.log"
+    },
+    {
+      "test": "atlas_supply_sources",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 6031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_supply_sources.log"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_counterattack.log"
+    },
+    {
+      "test": "diplomatic_battle_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2062,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomatic_battle_lifecycle.log"
+    },
+    {
+      "test": "chronicle_smoke",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2516,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\chronicle_smoke.log"
+    },
+    {
+      "test": "battle_opening_dice",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2984,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\battle_opening_dice.log"
+    },
+    {
+      "test": "war_diplomacy_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 17985,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_diplomacy_runtime_equivalence.log"
+    },
+    {
+      "test": "atlas_access_and_repatriation",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_access_and_repatriation.log"
+    },
+    {
+      "test": "atlas_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 14297,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_runtime_equivalence.log"
+    },
+    {
+      "test": "atlas_event_slicing",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 16485,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_event_slicing.log"
+    },
+    {
+      "test": "atlas_junction_encounters",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_junction_encounters.log"
+    },
+    {
+      "test": "atlas_path_cache_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_path_cache_lifecycle.log"
+    },
+    {
+      "test": "atlas_military_smoke",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 19453,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_military_smoke.log"
+    }
+  ],
+  "failures": 0
+}

@@ -12,4 +12,17 @@ func _initialize() -> void:
 	assert(cache.size()<=33,"Atlas path fields have a bounded live working set")
 	var actual := AiWorldView.cached_path_field(state,state.day,cache,0)
 	assert(actual==expected,"eviction does not change path results")
+	state.day += 1
+	var next_day := AiWorldView.cached_path_field(state,state.day,cache,0)
+	assert(is_same(actual,next_day),"static path fields survive a day without road or diplomacy changes")
+	for start in range(1,mini(40,state.cities.size())):
+		AiWorldView.cached_path_field(state,state.day,cache,start)
+		assert(is_same(actual,AiWorldView.cached_path_field(state,state.day,cache,0)),"hot fields survive bounded LRU eviction")
+	var previous_revision := actual
+	state.road_network_revision += 1
+	actual = AiWorldView.cached_path_field(state,state.day,cache,0)
+	assert(not is_same(previous_revision,actual) and actual==expected,"road edits invalidate fields without changing unchanged routes")
+	var contested := AiWorldView.cached_path_field(state,state.day,cache,0,-1,true,false)
+	state.day += 1
+	assert(not is_same(contested,AiWorldView.cached_path_field(state,state.day,cache,0,-1,true,false)),"contested path fields still refresh daily")
 	print("ATLAS_PATH_CACHE_LIFECYCLE PASS entries=",cache.size()); quit(0)

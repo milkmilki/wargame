@@ -1,0 +1,199 @@
+[
+  {
+    "batch_days": null,
+    "days": [
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1029,
+        "road_errors": [
+          {
+            "a": 245,
+            "actual": 11,
+            "b": 2260,
+            "expected": 10
+          }
+        ],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 11,
+        "watched_expected": 10
+      }
+    ],
+    "errors": [
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1029,
+        "road_errors": [
+          {
+            "a": 245,
+            "actual": 11,
+            "b": 2260,
+            "expected": 10
+          }
+        ],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 11,
+        "watched_expected": 10
+      }
+    ],
+    "initial_day": 1028,
+    "initial_sha256": "39b78b479e376a13f5681187d96a1691adf12e2442fcb656c7451ad98907339a",
+    "pathfinding_sha256": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+    "pid": 20868,
+    "simulation_sha256": "e629406ccdeca96617680538d86c2dfb96b2968ed07a43545ce4284d5e31435f",
+    "tag": "before",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\daily-v2-project",
+    "exit_code": 1
+  },
+  {
+    "batch_days": 1,
+    "days": [
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1029,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 10,
+        "watched_expected": 10
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1030,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 10,
+        "watched_expected": 10
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1031,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 10,
+        "watched_expected": 10
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1032,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 0,
+        "watched_expected": 0
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1033,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 0,
+        "watched_expected": 0
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1034,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 0,
+        "watched_expected": 0
+      }
+    ],
+    "errors": [],
+    "initial_day": 1028,
+    "initial_sha256": "39b78b479e376a13f5681187d96a1691adf12e2442fcb656c7451ad98907339a",
+    "pathfinding_sha256": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+    "pid": 2328,
+    "simulation_sha256": "38ffabec97504a720c03abbfb81dc3a796bd15ba898787f430ce4e905e583c9c",
+    "tag": "after-legacy",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "exit_code": 0
+  },
+  {
+    "batch_days": 3,
+    "days": [
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1029,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 10,
+        "watched_expected": 10
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1030,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 10,
+        "watched_expected": 10
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1031,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 10,
+        "watched_expected": 10
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1032,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 0,
+        "watched_expected": 0
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1033,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 0,
+        "watched_expected": 0
+      },
+      {
+        "battle_binding_errors": 0,
+        "battle_groups_valid": true,
+        "day": 1034,
+        "road_errors": [],
+        "suzerainty_valid": true,
+        "territory_valid": true,
+        "watched_count": 0,
+        "watched_expected": 0
+      }
+    ],
+    "errors": [],
+    "initial_day": 1028,
+    "initial_sha256": "39b78b479e376a13f5681187d96a1691adf12e2442fcb656c7451ad98907339a",
+    "pathfinding_sha256": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+    "pid": 31556,
+    "simulation_sha256": "38ffabec97504a720c03abbfb81dc3a796bd15ba898787f430ce4e905e583c9c",
+    "tag": "after-default",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "exit_code": 0
+  }
+]

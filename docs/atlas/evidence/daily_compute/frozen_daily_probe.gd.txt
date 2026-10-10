@@ -1,0 +1,36 @@
+extends SceneTree
+const Codec = preload("res://.dbg/state_codec.gd")
+func _initialize(): call_deferred("run")
+func run():
+	var mode := OS.get_environment("FROZEN_MODE")
+	var tag := OS.get_environment("FROZEN_TAG")
+	var sim: Simulation
+	if mode=="freeze":
+		var state := GameState.new(); state.generate_from_atlas(preload("res://tests/atlas_military_inputs.gd").military())
+		sim=Simulation.new(); root.add_child(sim); sim.setup(state); sim.paused=true
+		for day in range(240):
+			sim._advance_day(false)
+			if day%30==0: print("FREEZE_PROGRESS ",sim.state.day); await process_frame
+		Codec.new().save("res://.dbg/frozen-day240.bin",sim)
+		var restored: Simulation=Codec.new().restore("res://.dbg/frozen-day240.bin")
+		assert(var_to_bytes(NativeSnapshotBuilder.build(restored.state))==var_to_bytes(NativeSnapshotBuilder.build(sim.state)),"Full freeze roundtrip")
+		for battle in restored.state.battles:
+			for army in battle.side_a+battle.side_b: assert(is_same(army,restored.state.army_by_id(army.id)),"Army graph aliases preserved")
+		print("FREEZE_DONE ",sim.state.day," ",sim.state.armies.size()); restored.free()
+	else:
+		sim=Codec.new().restore("res://.dbg/frozen-day240.bin"); root.add_child(sim); sim.paused=true
+		var initial_digest := HashingContext.new(); initial_digest.start(HashingContext.HASH_SHA256); initial_digest.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+		var expected: String=JSON.parse_string(FileAccess.open("res://.dbg/atlas-daily-baseline.jsonl",FileAccess.READ).get_as_text().split("\n")[239]).sha256
+		assert(initial_digest.finish().hex_encode()==expected,"Restored state matches actual baseline day240")
+		for battle in sim.state.battles:
+			for army in battle.side_a+battle.side_b:
+				assert(sim.state.armies.has(army),"Army graph aliases preserved")
+		sim.tick_phase_profiling_enabled=true
+		var file := FileAccess.open("res://.dbg/frozen-profile-"+tag+".jsonl",FileAccess.WRITE)
+		for day in range(35):
+			sim._advance_day(false)
+			var digest := HashingContext.new(); digest.start(HashingContext.HASH_SHA256); digest.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+			var row := {"day":sim.state.day,"profile":sim.tick_profile_last_usec.duplicate(),"sha256":digest.finish().hex_encode()}
+			file.store_line(JSON.stringify(row)); file.flush(); print("FROZEN_DAY ",sim.state.day," ",row.profile.total/1000.); await process_frame
+		file.close()
+	sim.free(); quit()

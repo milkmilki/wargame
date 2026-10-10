@@ -1,0 +1,18 @@
+{
+  "sources": {
+    "scripts\\simulation\\simulation.gd": "38ffabec97504a720c03abbfb81dc3a796bd15ba898787f430ce4e905e583c9c",
+    "scripts\\core\\pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+    "scripts\\state\\game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+    "scripts\\ai\\ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+    "tests\\atlas_event_slicing.gd": "14b60568e323e2b326cb8770823508f51a33c8b352c2384e83b7fdf280669f74",
+    "tests\\atlas_ai_cadence.gd": "cc9244b378e853d0ecb40b16dd57968d2231eb3e4c65db4bcdae29339fe4a7e5",
+    "tests\\atlas_supply_sources.gd": "21742beb51152e60a3d73b862468c0adc3f980e3324782281a5a6d600d5b4c23",
+    "tests\\atlas_territory_transactions.gd": "a48c98aeca3e236ce52ea255a9e569dbc2880383408df221432f170aeb6dfc5d",
+    "tests\\atlas_long_audit.gd": "021d9dd81e8f589c5bc9bad76901771a01590e952cdd78b33fa83818c469bf9f"
+  },
+  "benchmark": "v5-summary.json",
+  "regression": "final-targeted-regression.json",
+  "source_commit": "cf806910a664be51c686c9c11779ed612ad52632",
+  "uncommitted_changes": true,
+  "note": "Core simulation source equals measured v5 code. Broad33 validation preceded leg cache; final8 includes its final tests. New audit source snapshot lives at manifest.loaded_source_archive."
+}

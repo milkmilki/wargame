@@ -1,0 +1,37 @@
+{
+  "protocol": "Three paired independent-process 30-day runs (241-270), same complete day240 Simulation object graph, alternating order, CPU4 affinity16; no concurrent long audit. Includes one cold supply-cache day per process. Headless computation excludes audit, snapshot serialization, generation and GPU rendering.",
+  "results": {
+    "before": {
+      "mean_ms": 1828.2585444444444,
+      "median_ms": 1555.268,
+      "p95_ms": 3606.2415,
+      "phases_ms": {
+        "ai": 602.2782222222222,
+        "movement_battles": 778.1003,
+        "atlas_event_scan": 450.0432333333333,
+        "supply": 359.6693333333333,
+        "supply_prepare": 11.61828888888889,
+        "supply_build_plans": 314.55145555555555
+      }
+    },
+    "after": {
+      "mean_ms": 1712.870488888889,
+      "median_ms": 1563.9450000000002,
+      "p95_ms": 3552.59045,
+      "phases_ms": {
+        "ai": 595.6196,
+        "movement_battles": 777.8874,
+        "atlas_event_scan": 451.1378555555556,
+        "supply": 253.0293,
+        "supply_prepare": 16.413611111111113,
+        "supply_build_plans": 204.29404444444444
+      }
+    }
+  },
+  "reduction_percent": 6.311364216302273,
+  "supply_reduction_percent": 29.649465064207124,
+  "all_180_daily_hashes_match_reference": true,
+  "hard_invariants_checked_daily": true,
+  "gui_fps_measured": false,
+  "supply_rules_hash_added_after_run": true
+}

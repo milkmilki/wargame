@@ -1,0 +1,84 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2157,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "diplomatic_battle_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomatic_battle_lifecycle.log"
+    },
+    {
+      "test": "atlas_access_and_repatriation",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_access_and_repatriation.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_counterattack.log"
+    },
+    {
+      "test": "atlas_segmented_movement",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2063,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_segmented_movement.log"
+    },
+    {
+      "test": "atlas_junction_encounters",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 1968,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_junction_encounters.log"
+    },
+    {
+      "test": "movement_capacity_index_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2063,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\movement_capacity_index_equivalence.log"
+    },
+    {
+      "test": "atlas_ai_cadence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 1969,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_ai_cadence.log"
+    },
+    {
+      "test": "atlas_event_slicing",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 12531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_event_slicing.log"
+    },
+    {
+      "test": "atlas_supply_sources",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 6031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_supply_sources.log"
+    }
+  ],
+  "failures": 0
+}

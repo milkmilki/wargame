@@ -1,0 +1,50 @@
+{
+  "audit_script": "tests/atlas_long_audit.gd",
+  "days_per_year": 360,
+  "debug_run": "C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-10T08-14-14-22992-7412070.jsonl",
+  "generation": {
+    "distance_km": 250.0,
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "model": "atlas-military-v1",
+    "nodes": 4321,
+    "seed": 1,
+    "settlements": 1796,
+    "source_sha256": "c7ffa4269c3986db8507415725cb28cb5479186b7828e09f515345ae6e8daf1a",
+    "timing": {
+      "hierarchy_ms": 1077,
+      "roads_ms": 707,
+      "smoothing": {
+        "rounds_histogram": [
+          446,
+          2,
+          10,
+          4284
+        ]
+      },
+      "total_ms": 3079
+    },
+    "upstream": "103afd3",
+    "upstream_commit": "103afd3d998eac6750692a6813bf5aea03521448"
+  },
+  "godot_pid": 22992,
+  "initial_nations": 40,
+  "seed": 1,
+  "source_hashes": {
+    "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+    "scripts/core/pathfinding.gd": "129c598b839d802fc4989839b648d4dd54746594005eff4528483d3ef4d2d47e",
+    "scripts/simulation/simulation.gd": "ac71709c1633749ca79c7bb8b5c9588fc29259eccfc59805a2f67e0ab1de71c7",
+    "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+    "tests/atlas_long_audit.gd": "466783f872f4d7030d5c31a85bdf0380ebf65388f428cb340b0adb455d41786d"
+  },
+  "target_days": 10800
+}

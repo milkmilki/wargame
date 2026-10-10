@@ -1,0 +1,21 @@
+import hashlib, json, math, shutil, statistics
+from pathlib import Path
+root = Path(__file__).resolve().parents[1]
+out = root / "docs/atlas/evidence/daily_compute"
+def rows(path):
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+def stats(data):
+    values = sorted(row["profile"]["total"] / 1000 for row in data)
+    return {"days": len(values), "first_day": data[0]["day"], "last_day": data[-1]["day"], "mean_ms": statistics.mean(values), "median_ms": statistics.median(values), "p95_ms": values[math.ceil(len(values) * .95) - 1], "p99_ms": values[math.ceil(len(values) * .99) - 1], "stage_mean_ms": {key: statistics.mean(row["profile"].get(key, 0) / 1000 for row in data) for key in ["ai", "supply", "movement_battles", "cleanup", "monthly"]}}
+before_path = root / ".dbg/daily-baseline-project/.dbg/frozen-profile-baseline-clean.jsonl"
+after_path = root / ".dbg/frozen-profile-final-clean.jsonl"
+before, after = rows(before_path), rows(after_path)
+assert len(before) == len(after) == 35
+baseline = {row["day"]: row["sha256"] for row in rows(out / "baseline-365.jsonl")}
+assert all(b["day"] == a["day"] and b["sha256"] == a["sha256"] == baseline[a["day"]] for b, a in zip(before, after))
+paired = {"before": stats(before), "after": stats(after), "full_state_sha256_matches_original_baseline": 35, "mean_reduction_percent": 100 * (1 - stats(after)["mean_ms"] / stats(before)["mean_ms"])}
+summary = {"scenario": "real Earth, seed1, 40 initial nations, 4321 nodes/1796 settlements", "baseline_commit": "cf806910a664be51c686c9c11779ed612ad52632", "godot": "4.7.1-stable", "protocol": "full Simulation object graph frozen at day240, synchronous 35 days241-275; normal priority; CPU4 affinity16; sequential isolated processes; no concurrent audit or Godot regression processes", "limitation": "One paired run; OS/background load not controlled. Pure CPU daily wall time, excludes rendering, frame waits, snapshot hashing and audit. Not GUI FPS evidence.", "paired_35": paired, "runs": json.loads((root / ".dbg/paired-run-metadata.json").read_text()), "fixture_sha256": hashlib.file_digest((root / ".dbg/frozen-day240.bin").open("rb"), "sha256").hexdigest(), "graph": {"files": 446, "nodes": 4415, "edges": 63415, "flows": 438}, "regression_files": ["core-regression.json", "focused-regression.json", "contact-index-regression.json"], "annual_equivalence_before_contact_index": {name: {"days": len(data), "all_daily_state_hashes_match": all(row["sha256"] == baseline[row["day"]] for row in data)} for name in ["intermediate-365.jsonl", "final-365.jsonl", "audit-first-365.jsonl"] if (data := rows(out / name))}}
+(out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+for source, name in [(before_path, "frozen-before-clean-35.jsonl"), (after_path, "frozen-after-clean-35.jsonl"), (root / ".dbg/paired-run-metadata.json", "paired-run-metadata.json")]: shutil.copyfile(source, out / name)
+for name in ["state_codec.gd", "frozen_daily_probe.gd", "block_ab_probe.gd", "paired_frozen_run.py", "summarize_daily_compute.py"]: shutil.copyfile(root / ".dbg" / name, out / (name + ".txt"))
+print(json.dumps(paired, indent=2))

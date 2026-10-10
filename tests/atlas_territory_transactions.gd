@@ -19,6 +19,11 @@ func _run() -> void:
 	_test_center_capture_defects_only_enemy_fu()
 	_test_capital_victory(false)
 	_test_capital_victory(true)
+	_test_capture_releases_incoming_road()
+	_test_disband_requires_stationary_unbound_army()
+	_test_last_city_retires_unbound_armies(false)
+	_test_last_city_retires_unbound_armies(true)
+	_test_retirement_preserves_succession_proxy()
 	for message in _failures:
 		push_error("ATLAS_TERRITORY_FAIL: " + message)
 	print("ATLAS_TERRITORY_%s checks=%d failures=%d" % [
@@ -31,6 +36,122 @@ func _check(condition: bool, message: String) -> void:
 	_checks += 1
 	if not condition:
 		_failures.append(message)
+
+
+func _test_last_city_retires_unbound_armies(reverse: bool) -> void:
+	var state := _fixture()
+	var loser := 0 if reverse else 1
+	var winner := 1 if reverse else 0
+	var capital := state.nations[loser].capital_city_id
+	# Leave a real one-city country, retaining authoritative legal/control state.
+	for city in state.cities:
+		if city.is_settlement() and city.owner_nation == loser and city.id != capital:
+			var transfer := state.transfer_city_control(city.id,winner,winner,
+				GameState.TerritoryStockDisposition.CAPTURE_SPOILS,"last_city_fixture")
+			_check(bool(transfer.get("ok",false)),"prepare last-city control transaction")
+	state.set_diplomatic_relation(winner,loser,GameState.DiplomaticRelation.WAR)
+	var sim := Simulation.new(); sim.setup(state)
+	var patrol := _army(state,loser,capital)
+	var neighbor := TRAFFIC_ID if capital == 0 else 6
+	var edge := state.edge_of(capital,neighbor)
+	patrol.state = Army.State.MOVING; patrol.on_edge = true
+	patrol.move_to = neighbor; patrol.move_progress = .4
+	patrol.ai_action = ActionCandidate.Kind.REINFORCE; patrol.ai_target_city = neighbor
+	edge.passing_count = 1; edge.occupied = true
+	_check(patrol.campaign_war_id == -1 and patrol.battle_id == -1,
+		"regression patrol is outside war and battle pools")
+	var outsider := _army(state,2,2)
+	var captor := _army(state,winner,capital)
+	for owner in [winner,loser,2]: sim._reconcile_main_commands(owner)
+	_capture(state,sim,captor,capital)
+	_check(not state.nations[loser].alive,"actual capital loss eliminates the last-city country")
+	sim._resolve_eliminated_nation_capitulations(); sim._purge_dead_armies()
+	state.prune_dead_suzerainty()
+	_check(not state.armies.has(patrol) or patrol.owner_nation != loser,
+		"eliminated country cannot retain an unbound travelling patrol reverse=%s" % reverse)
+	_check(edge.passing_count == 0 and not edge.occupied,
+		"eliminated patrol releases physical road exactly once")
+	_check(state.armies.has(outsider) and outsider.size > 0 and outsider.owner_nation == 2,
+		"third-party troops survive elimination cleanup")
+	_check(state.territory_structure_valid(),"actual capture plus cleanup retains territory invariants")
+	_check(state._battle_group_structure_valid(),"actual capture plus cleanup retains command invariants")
+	sim._purge_dead_armies()
+	_check(edge.passing_count == 0,"repeat cleanup cannot release a road twice")
+	sim.free()
+
+
+func _test_retirement_preserves_succession_proxy() -> void:
+	var state := _fixture()
+	# Isolate the explicit exemption; the real succession lifecycle is covered
+	# separately by succession_counterattack, including both victory directions.
+	for city in state.cities:
+		if city.is_settlement() and city.owner_nation == 3:
+			state.transfer_city_control(city.id, 2, 2,
+				GameState.TerritoryStockDisposition.CAPTURE_SPOILS, "proxy_fixture")
+	state.nations[3].succession_identity = true
+	var proxy_army := _army(state, 3, 3)
+	var sim := Simulation.new()
+	sim.setup(state)
+	_check(not state.nations[3].alive, "proxy guard exercises a cityless identity")
+	sim._retire_eliminated_nation_armies()
+	_check(state.armies.has(proxy_army) and proxy_army.size > 0,
+		"cityless succession identity is not a surrendered ordinary country")
+	sim.free()
+
+
+func _test_capture_releases_incoming_road() -> void:
+	for on_road in [false, true]:
+		var state := _fixture()
+		state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
+		var sim := Simulation.new()
+		sim.setup(state)
+		var captor := _army(state, 0, ORDINARY_CENTER)
+		var edge := state.edge_of(TRAFFIC_ID, ORDINARY_CENTER)
+		captor.move_from = TRAFFIC_ID
+		captor.move_to = ORDINARY_CENTER
+		captor.on_edge = on_road
+		edge.passing_count = 1 if on_road else 0
+		edge.occupied = on_road
+		var battle := state.new_battle(Battle.Kind.SIEGE)
+		battle.city = state.cities[ORDINARY_CENTER]
+		battle.siege_attacker_nation = 0
+		battle.siege_claimant_nation = 0
+		sim._enter_battle(battle, captor, 1)
+		sim._complete_siege_capture(battle)
+		_check(battle.finished and state.cities[ORDINARY_CENTER].owner_nation == 0,
+			"real siege capture commits with incoming-road=%s" % on_road)
+		_check(not captor.on_edge and edge.passing_count == 0 and not edge.occupied,
+			"capture releases original road before replacing endpoints incoming-road=%s" % on_road)
+		sim._settle_idle(captor, ORDINARY_CENTER)
+		_check(edge.passing_count == 0, "later settlement cannot double-release road")
+		sim.free()
+
+
+func _test_disband_requires_stationary_unbound_army() -> void:
+	for binding in ["road", "battle", "none"]:
+		var state := _fixture()
+		var sim := Simulation.new()
+		sim.setup(state)
+		var army := _army(state, 0, 0)
+		state.nations[0].manpower_pool = 0
+		var edge := state.edge_of(0, TRAFFIC_ID)
+		army.on_edge = binding == "road"
+		army.move_to = TRAFFIC_ID if army.on_edge else -1
+		army.battle_id = 991 if binding == "battle" else -1
+		edge.passing_count = 1 if army.on_edge else 0
+		edge.occupied = army.on_edge
+		var manpower := state.nations[0].manpower_pool
+		var size := army.size
+		var allowed: bool = binding == "none"
+		_check(sim._disband_army(army, "occupancy regression") == allowed,
+			"only stationary unbound troops can disband: " + binding)
+		_check(state.armies.has(army) != allowed and army.size == (0 if allowed else size),
+			"rejected disband retains live army: " + binding)
+		_check(state.nations[0].manpower_pool == manpower + (size if allowed else 0),
+			"disband manpower is returned exactly once: " + binding)
+		_check(edge.passing_count == (1 if binding == "road" else 0),
+			"disband preserves occupied-road ledger: " + binding)
+		sim.free()
 
 
 func _fixture(mixed_fu: bool = false) -> GameState:

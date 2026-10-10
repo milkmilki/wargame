@@ -1,0 +1,101 @@
+{
+  "scenario": "real Earth, seed1, 40 initial nations, 4321 nodes/1796 settlements",
+  "baseline_commit": "cf806910a664be51c686c9c11779ed612ad52632",
+  "godot": "4.7.1-stable",
+  "protocol": "full Simulation object graph frozen at day240, synchronous 35 days241-275; normal priority; CPU4 affinity16; sequential isolated processes; no concurrent audit or Godot regression processes",
+  "limitation": "One paired run; OS/background load not controlled. Pure CPU daily wall time, excludes rendering, frame waits, snapshot hashing and audit. Not GUI FPS evidence.",
+  "paired_35": {
+    "before": {
+      "days": 35,
+      "first_day": 241,
+      "last_day": 275,
+      "mean_ms": 7842.290085714286,
+      "median_ms": 7613.23,
+      "p95_ms": 11444.875,
+      "p99_ms": 14702.19,
+      "stage_mean_ms": {
+        "ai": 2428.3683142857144,
+        "supply": 478.08097142857144,
+        "movement_battles": 4813.848514285714,
+        "cleanup": 19.283485714285714,
+        "monthly": 77.24337142857144
+      }
+    },
+    "after": {
+      "days": 35,
+      "first_day": 241,
+      "last_day": 275,
+      "mean_ms": 3191.881342857143,
+      "median_ms": 3134.904,
+      "p95_ms": 6010.817,
+      "p99_ms": 6361.435,
+      "stage_mean_ms": {
+        "ai": 1025.4144000000001,
+        "supply": 499.9958285714286,
+        "movement_battles": 1546.643342857143,
+        "cleanup": 20.575,
+        "monthly": 72.69234285714286
+      }
+    },
+    "full_state_sha256_matches_original_baseline": 35,
+    "mean_reduction_percent": 59.29911661044578
+  },
+  "runs": [
+    {
+      "label": "before",
+      "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\daily-baseline-project",
+      "tag": "baseline-clean",
+      "pid": 488,
+      "affinity_mask": 16,
+      "started_unix": 1791619563.522374,
+      "exit_code": 0,
+      "source_hashes": {
+        "scripts/simulation/simulation.gd": "b850885388d0a47d3ecc5e57c9b8084e1fddeea3d942ba8671f669c7a9a830ca",
+        "scripts/core/pathfinding.gd": "9593bde9513886b7e5fe5bcd549fd64d3bfd4b733c481becdde9f78b09630d89",
+        "scripts/ai/ai_world_view.gd": "4e957147d92e5f35a00f2082634d84e4957003110a8410cbaa40b80ae85b7983",
+        "scripts/state/game_state.gd": "ea184b2888c783cd81be633d52750dd697cf97b6eaffa0e86b12a6569db4e85e"
+      }
+    },
+    {
+      "label": "after",
+      "project": "D:\\ProjectICreate\\Wargame\\wargame",
+      "tag": "final-clean",
+      "pid": 26728,
+      "affinity_mask": 16,
+      "started_unix": 1791619852.983429,
+      "exit_code": 0,
+      "source_hashes": {
+        "scripts/simulation/simulation.gd": "ac71709c1633749ca79c7bb8b5c9588fc29259eccfc59805a2f67e0ab1de71c7",
+        "scripts/core/pathfinding.gd": "129c598b839d802fc4989839b648d4dd54746594005eff4528483d3ef4d2d47e",
+        "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+        "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c"
+      }
+    }
+  ],
+  "fixture_sha256": "e3297610beacd1c3ea1c4a11308586d2762f08af8b93087141078804af34c250",
+  "graph": {
+    "files": 446,
+    "nodes": 4415,
+    "edges": 63415,
+    "flows": 438
+  },
+  "regression_files": [
+    "core-regression.json",
+    "focused-regression.json",
+    "contact-index-regression.json"
+  ],
+  "annual_equivalence_before_contact_index": {
+    "intermediate-365.jsonl": {
+      "days": 365,
+      "all_daily_state_hashes_match": true
+    },
+    "final-365.jsonl": {
+      "days": 365,
+      "all_daily_state_hashes_match": true
+    },
+    "audit-first-365.jsonl": {
+      "days": 365,
+      "all_daily_state_hashes_match": true
+    }
+  }
+}

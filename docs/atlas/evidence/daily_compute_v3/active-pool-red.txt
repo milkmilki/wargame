@@ -1,0 +1,10 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_EVENT_CASE junction event_frames=0 armies=3 battles=1 travel_checks=14
+ATLAS_EVENT_CASE opposite_edge event_frames=0 armies=2 battles=1 travel_checks=13
+ATLAS_EVENT_CASE siege event_frames=0 armies=1 battles=1 travel_checks=10
+ATLAS_EVENT_CASE convoy event_frames=128 armies=128 battles=0 travel_checks=49794
+ATLAS_EVENT_CASE convoy_idle event_frames=128 armies=728 battles=0 travel_checks=127794
+ATLAS_EVENT_WRAPPER frames=129
+ATLAS_EVENT_SLICING_RESULT checks=1308 failures=1
+ATLAS_EVENT_SLICING_FAIL traffic traversal must not repeatedly inspect 600 stationary garrisons

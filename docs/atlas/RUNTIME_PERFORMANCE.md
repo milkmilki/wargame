@@ -1,5 +1,9 @@
 # Atlas 地图拖动与日结算修复
 
+后续战争密集期日结算优化与365天状态对照见 [DAILY_COMPUTE.md](DAILY_COMPUTE.md)。
+最新补给依赖优化见 [DAILY_COMPUTE_V3.md](DAILY_COMPUTE_V3.md)，其中headless指标不能当作本页GPU帧率。
+后续行军优化与仍存在的战役规划阻塞见 [DAILY_COMPUTE_V4.md](DAILY_COMPUTE_V4.md)。
+
 基于 `6a29bb6` 的未提交修改。正式入口仍为 `atlas_military.tscn`。
 实际输入是种子1、40国、681州、1115府、2525交通节点，使用降雨v5／宜居度v6。
 生成、行政、交通几何和战斗公式不变；修正AI把无所属国的交通节点当成敌方城市的问题。
@@ -50,6 +54,10 @@ Godot4.7.1、RX7600、D3D12 Forward+、1280×720。每次500次真实鼠标事�
 [证据索引](runtime_performance_evidence/manifest.json)。原始基线及实机截图均保留，未作图像后处理。
 
 ## 验证
+
+2026-10-10后续日结算改动另见[首轮计算量测](DAILY_COMPUTE.md)和
+[补给、事件候选与AI批次](DAILY_COMPUTE_V2.md)。本文下方GPU指标属于此前版本；
+后续headless计算结果不能替代本页GUI帧率或推断新的最高倍率。
 
 专项回归覆盖空闲缓存、窗口大小、局部排序、交通身份、资源输入与容量搜索的同步／分帧等价、
 军队移动触发绘制、卡片局部更新。种子1／40国／4321节点实际推进6天，

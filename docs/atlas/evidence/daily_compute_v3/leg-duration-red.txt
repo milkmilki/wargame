@@ -1,0 +1,12 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_EVENT_CASE junction event_frames=0 armies=3 battles=1 travel_checks=12
+ATLAS_EVENT_CASE opposite_edge event_frames=0 armies=2 battles=1 travel_checks=11
+ATLAS_EVENT_CASE siege event_frames=0 armies=1 battles=1 travel_checks=6
+ATLAS_EVENT_CASE convoy event_frames=128 armies=128 battles=0 travel_checks=49536
+ATLAS_EVENT_CASE convoy_idle event_frames=128 armies=728 battles=0 travel_checks=49536
+STAGGERED_EDGE_QUERIES before=81088 after=81088
+ATLAS_EVENT_CASE convoy_staggered event_frames=132 armies=128 battles=0 travel_checks=95040
+ATLAS_EVENT_WRAPPER frames=129
+ATLAS_EVENT_SLICING_RESULT checks=1707 failures=1
+ATLAS_EVENT_SLICING_FAIL unrelated arrivals must not repeatedly query unchanged travelling roads

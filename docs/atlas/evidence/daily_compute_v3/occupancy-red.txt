@@ -1,0 +1,31 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_TERRITORY_FAILED checks=100 failures=7
+ERROR: ATLAS_TERRITORY_FAIL: capture releases original road before replacing endpoints incoming-road=true
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)
+ERROR: ATLAS_TERRITORY_FAIL: later settlement cannot double-release road
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)
+ERROR: ATLAS_TERRITORY_FAIL: only stationary unbound troops can disband: road
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)
+ERROR: ATLAS_TERRITORY_FAIL: rejected disband retains live army: road
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)
+ERROR: ATLAS_TERRITORY_FAIL: only stationary unbound troops can disband: battle
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)
+ERROR: ATLAS_TERRITORY_FAIL: rejected disband retains live army: battle
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)
+ERROR: ATLAS_TERRITORY_FAIL: disband manpower is returned exactly once: none
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/atlas_territory_transactions.gd:25)

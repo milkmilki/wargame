@@ -1,0 +1,21 @@
+{
+	"after": {
+		"armies": 0,
+		"passing": 0,
+		"size": 0
+	},
+	"before": {
+		"alive": false,
+		"army": 1791,
+		"nation": 45,
+		"passing": 1,
+		"road": [
+			37,
+			2271
+		],
+		"size": 13113,
+		"source_day": 1160
+	},
+	"scope": "Local replay of actual army/road/city-control fields; not a full simulation restore",
+	"simulation_sha256": "4a801ba08e679d55449988d576244e51112f394173a109797cd47494c506e5ef"
+}

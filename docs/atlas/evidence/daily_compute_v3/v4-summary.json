@@ -1,0 +1,61 @@
+{
+  "protocol": "Three paired independent-process 30-day runs (241-270), full day240 freeze, alternate order, CPU4 affinity16; concurrent old-source reproduction on CPU8; brief event regression overlaps v3-after-2, no test overlap in v4/v5",
+  "same_initial_state": true,
+  "within_version_deterministic": true,
+  "daily_hash_equivalence_expected": false,
+  "hard_invariants_checked_daily": true,
+  "candidate_pool_matches_pre_pool": true,
+  "leg_cache_matches_pre_cache": false,
+  "results": {
+    "before": {
+      "mean_ms": 2187.1830555555557,
+      "median_ms": 2114.308,
+      "p95_ms": 3905.1433,
+      "phases_ms": {
+        "ai": 747.4781666666667,
+        "movement_battles": 989.9165333333333,
+        "atlas_event_scan": 649.5896444444444,
+        "supply": 362.1857
+      }
+    },
+    "after": {
+      "mean_ms": 1996.1085777777778,
+      "median_ms": 1704.2350000000001,
+      "p95_ms": 3713.9317,
+      "phases_ms": {
+        "ai": 606.3170222222222,
+        "movement_battles": 939.5511555555555,
+        "atlas_event_scan": 604.4239666666666,
+        "supply": 362.0790333333333
+      }
+    }
+  },
+  "runs": [
+    {
+      "tag": "v4-before-0",
+      "mean_ms": 2189.2683333333334
+    },
+    {
+      "tag": "v4-after-0",
+      "mean_ms": 2053.709
+    },
+    {
+      "tag": "v4-after-1",
+      "mean_ms": 1951.8165333333334
+    },
+    {
+      "tag": "v4-before-1",
+      "mean_ms": 2180.9517333333333
+    },
+    {
+      "tag": "v4-before-2",
+      "mean_ms": 2191.3291
+    },
+    {
+      "tag": "v4-after-2",
+      "mean_ms": 1982.8002
+    }
+  ],
+  "reduction_percent": 8.73609903352347,
+  "gui_fps_measured": false
+}

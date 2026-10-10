@@ -204,6 +204,12 @@ var _trade_garrison_upkeep_cache: Array[int] = []
 var _trade_wartime_mask_diplomacy_revision: int = -1
 var _trade_wartime_mask := PackedByteArray()
 var _ai_last_decision_day: int = -1
+## Atlas strategy is an abstract command cycle, not a daily all-world census.
+## Territorial/diplomatic invalidation and battle reports remain immediate;
+## routine arrival/recruitment warnings coalesce into the next three-day batch.
+var atlas_ai_strategic_interval_days: int = 15
+var atlas_ai_batch_days: int = 3
+var _ai_regular_through_day: int = -1
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
 var _ai_forced_nations: Dictionary = {}
@@ -385,6 +391,7 @@ func setup(game_state: GameState) -> void:
 	_prepared_supply_blocked_edges.clear()
 	_supply_network_fingerprints.clear()
 	_ai_last_decision_day = -1
+	_ai_regular_through_day = -1
 	_ai_forced_nations.clear()
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
@@ -565,30 +572,7 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	var ai_decision_interval := (
-		AI_DECISION_INTERVAL_DAYS
-		if state.uses_heightmap
-		else GRID_AI_DECISION_INTERVAL_DAYS
-	)
-	# 错峰下几乎每天都有一批国家到期；力求「有到期国家或需强制重算」即进入决策。
-	# 关闭错峰（A/B 对照）时退回旧门控：仅在 day%interval==0 全体决策。
-	var force_recompute := (
-		_ai_last_decision_day == -1
-		or not _ai_forced_nations.is_empty()
-	)
-	var ai_decision_due := force_recompute or _coalition_campaign_wake_day <= state.day
-	if ai_staggered_decisions:
-		ai_decision_due = ai_decision_due or not _ai_nation_ids_for_day(
-			state.nations.size(),
-			state.day,
-			rotate_ai_nation_order,
-			ai_decision_interval,
-			false,
-			true
-		).is_empty()
-	else:
-		ai_decision_due = ai_decision_due or state.day % ai_decision_interval == 0
-	if ai_decision_due:
+	if _ai_decision_due_today(_ai_decision_interval_days()):
 		if spread_runtime_work:
 			_set_runtime_profile_stage(&"ai")
 			await _ai_assign_targets(true)
@@ -2684,8 +2668,9 @@ func _resolve_supply() -> void:
 	)
 	var plans: Array = []   # [{army, sources, demand}]
 	var demand_by_nation := _new_food_demand_accumulator()
+	var stationary_loss_cache := {}
 	for army in state.armies:
-		var plan := _build_supply_plan_for_army(army, demand_by_nation)
+		var plan := _build_supply_plan_for_army(army, demand_by_nation, {}, stationary_loss_cache)
 		if not plan.is_empty():
 			plans.append(plan)
 	_finalize_food_demand(demand_by_nation)
@@ -2723,6 +2708,7 @@ func _resolve_supply_over_frames() -> void:
 	)
 	var plans: Array = []
 	var demand_by_nation := _new_food_demand_accumulator()
+	var stationary_loss_cache := {}
 	var precomputed_sources := (
 		await _precompute_supply_sources_over_frames()
 		if not supply_source_parallel_disabled
@@ -2737,7 +2723,8 @@ func _resolve_supply_over_frames() -> void:
 		var plan := _build_supply_plan_for_army(
 			army,
 			demand_by_nation,
-			precomputed_sources
+			precomputed_sources,
+			stationary_loss_cache
 		)
 		if runtime_stage_profiling_enabled:
 			_record_runtime_span(&"supply_plan_army", plan_started)
@@ -2900,14 +2887,29 @@ func _prepare_supply_network_caches() -> Array[int]:
 		var fp := _supply_network_fingerprint(
 			nation_id,
 			warehouse_state,
-			enemy_edges,
+			_supply_relevant_blocked_edges(nation_id, enemy_edges),
 			besieged
 		)
+		# Switching into an active succession context restores conservative keys.
+		fp.append(1 if not state.atlas_layout.is_empty() and state.succession_conflicts.is_empty() else 0)
 		if _supply_network_fingerprints.get(nation_id, []) != fp:
 			_daily_supply_network_cache.erase(nation_id)
 			_stable_supply_city_source_cache.erase(nation_id)
 			_supply_network_fingerprints[nation_id] = fp
 	return active_ids
+
+
+## Changes on roads the logistics search cannot enter cannot change its field.
+## Filter the cache dependency only; actual searches retain all enemy blockers.
+func _supply_relevant_blocked_edges(nation_id: int, enemy_edges: Dictionary) -> Dictionary:
+	if state.atlas_layout.is_empty() or not state.succession_conflicts.is_empty():
+		return enemy_edges
+	var relevant := {}
+	for key in enemy_edges:
+		var edge: Edge = state.edge_lookup.get(key)
+		if edge != null and edge.max_manpower > 0 and state.atlas_edge_access(edge,nation_id,-1,true):
+			relevant[key] = true
+	return relevant
 
 
 ## 真实运行路径在逐军计划前后台预热失效的国家级补给网络。旧路径把网络冷启动
@@ -3052,7 +3054,8 @@ func _new_food_demand_accumulator() -> Array[int]:
 func _build_supply_plan_for_army(
 	army: Army,
 	demand_by_nation: Array[int],
-	precomputed_sources: Dictionary = {}
+	precomputed_sources: Dictionary = {},
+	stationary_loss_cache: Variant = null
 ) -> Dictionary:
 	if army.size <= 0 or army.state == Army.State.RECOVERING:
 		return {}
@@ -3073,7 +3076,18 @@ func _build_supply_plan_for_army(
 			_stable_supply_city_source_cache
 		)
 	)
-	var route_loss := _weighted_supply_loss(sources)
+	# No warehouse withdrawal occurs during plan construction. Stationed armies
+	# with the same owner/location see identical sources and stocks, so compute
+	# their weighted loss once for this batch. Moving positions remain exact;
+	# this cache is discarded before withdrawals or morale recovery can change food.
+	var route_loss: float
+	if not army.on_edge and stationary_loss_cache is Dictionary:
+		var loss_key := Vector2i(army.owner_nation, army.location_city)
+		if not stationary_loss_cache.has(loss_key):
+			stationary_loss_cache[loss_key] = _weighted_supply_loss(sources)
+		route_loss = float(stationary_loss_cache[loss_key])
+	else:
+		route_loss = _weighted_supply_loss(sources)
 	var mult: float = MAX_SUPPLY_MULT
 	if not sources.is_empty():
 		mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
@@ -3996,6 +4010,33 @@ func _resolve_eliminated_nation_capitulations() -> void:
 					% [surrendering, victor]
 				),
 			})
+	_retire_eliminated_nation_armies()
+
+
+## A committed all-city surrender leaves no base for independent formations.
+## Run only after capitulation/annexation finalizers: absorbed troops have already
+## changed owners. Succession identities are military proxies, not lost countries.
+func _retire_eliminated_nation_armies() -> void:
+	var retired_nations := {}
+	for army in state.armies:
+		if army.size <= 0 or army.owner_nation < 0 or army.owner_nation >= state.nations.size():
+			continue
+		var nation := state.nations[army.owner_nation]
+		if nation.alive or nation.succession_identity:
+			continue
+		retired_nations[nation.id] = true
+		_release_edge(army)
+		army.size = 0
+		army.battle_id = -1
+		army.campaign_war_id = -1
+		army.campaign_front_id = -1
+		army.path.clear()
+		army.ai_target_city = -1
+	if not retired_nations.is_empty():
+		var retired_ids: Array[int] = []
+		retired_ids.assign(retired_nations.keys())
+		_reconcile_battles_after_coalition_peace(retired_ids, [] as Array[int])
+		_purge_dead_armies()
 
 
 ## 削藩内战的首都失陷通吃结算。仅当 old_owner 与 claimant 正处于削藩内战关系时生效，
@@ -6784,6 +6825,61 @@ func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
 	_record_tick_profile_stage("ai_commit", ai_profile_stage_started)
 
 
+func _uses_atlas_ai_batching() -> bool:
+	return (
+		not state.atlas_layout.is_empty() and atlas_ai_batch_days > 1
+		and ai_staggered_decisions and ai_policy_overrides.is_empty()
+		and state.succession_conflicts.is_empty()
+	)
+
+
+func _ai_decision_interval_days() -> int:
+	if _uses_atlas_ai_batching():
+		return clampi(atlas_ai_strategic_interval_days, 1, 30)
+	return AI_DECISION_INTERVAL_DAYS if state.uses_heightmap else GRID_AI_DECISION_INTERVAL_DAYS
+
+
+func _due_forced_ai_nations() -> Array:
+	var due: Array = []
+	for nation_id in _ai_forced_nations:
+		var wake = _ai_forced_nations[nation_id]
+		# Legacy boolean flags remain immediate. Only new integer dates defer.
+		if not wake is int or int(wake) <= state.day: due.append(nation_id)
+	return due
+
+
+func _queue_ai_nation_wake(nation_id: int, hard: bool = false) -> void:
+	if nation_id < 0 or nation_id >= state.nations.size(): return
+	if hard or not _uses_atlas_ai_batching():
+		_ai_forced_nations[nation_id] = true
+		return
+	if _ai_forced_nations.has(nation_id) and not _ai_forced_nations[nation_id] is int:
+		return # Never demote an existing hard invalidation.
+	var batch := maxi(atlas_ai_batch_days, 1)
+	var next_day := state.day + batch - posmod(state.day, batch)
+	_ai_forced_nations[nation_id] = mini(int(_ai_forced_nations.get(nation_id, next_day)), next_day)
+
+
+func _regular_ai_nation_order(interval: int, force_all: bool = false) -> Array[int]:
+	if force_all or not _uses_atlas_ai_batching():
+		return _ai_nation_ids_for_day(state.nations.size(), state.day, rotate_ai_nation_order, interval, force_all, ai_staggered_decisions)
+	if posmod(state.day, atlas_ai_batch_days) != 0 and _ai_last_decision_day >= 0:
+		return [] as Array[int]
+	var through := _ai_regular_through_day if _ai_regular_through_day >= 0 else maxi(_ai_last_decision_day, 0)
+	var included := {}
+	# One decision suffices for each overdue nation; no unbounded catch-up loop.
+	for day in range(maxi(through + 1, state.day - maxi(interval, 1) + 1), state.day + 1):
+		for nation_id in _ai_nation_ids_for_day(state.nations.size(), day, rotate_ai_nation_order, interval):
+			included[nation_id] = true
+	return merge_forced_ai_nation_order([] as Array[int], included.keys(), state.nations.size(), state.day, rotate_ai_nation_order, interval)
+
+
+func _ai_decision_due_today(interval: int) -> bool:
+	if _ai_last_decision_day == -1 or not _due_forced_ai_nations().is_empty() or _coalition_campaign_wake_day <= state.day:
+		return true
+	return not _regular_ai_nation_order(interval).is_empty() if ai_staggered_decisions else posmod(state.day, interval) == 0
+
+
 func _prepare_ai_view_phase(
 	spread_runtime_work: bool,
 	runtime_slice_started: int
@@ -6801,24 +6897,16 @@ func _prepare_ai_view_phase(
 	var force_all_nations := (
 		_ai_last_decision_day == -1 and not first_world_decision
 	)
+	var decision_interval := _ai_decision_interval_days()
+	var nation_order := _regular_ai_nation_order(decision_interval, force_all_nations)
+	if not _uses_atlas_ai_batching() or force_all_nations or _ai_last_decision_day == -1 or posmod(state.day, atlas_ai_batch_days) == 0:
+		_ai_regular_through_day = state.day
 	_ai_last_decision_day = state.day
-	var decision_interval := (
-		AI_DECISION_INTERVAL_DAYS
-		if state.uses_heightmap
-		else GRID_AI_DECISION_INTERVAL_DAYS
-	)
-	var nation_order := _ai_nation_ids_for_day(
-		state.nations.size(),
-		state.day,
-		rotate_ai_nation_order,
-		decision_interval,
-		force_all_nations,
-		ai_staggered_decisions
-	)
-	if not force_all_nations and not _ai_forced_nations.is_empty():
+	var forced_today := _due_forced_ai_nations()
+	if not force_all_nations and not forced_today.is_empty():
 		nation_order = merge_forced_ai_nation_order(
 			nation_order,
-			_ai_forced_nations.keys(),
+			forced_today,
 			state.nations.size(),
 			state.day,
 			rotate_ai_nation_order,
@@ -7461,7 +7549,9 @@ func _run_ai_campaign_planning_phase(
 	runtime_slice_started: int,
 	frozen_army_ids: Variant = null
 ) -> Dictionary:
+	var campaign_part_started := Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	var due_components := _prepare_coalition_campaign_batch()
+	_record_tick_profile_stage("ai_campaign_prepare", campaign_part_started)
 	var eligible_nations := {}
 	for component in due_components:
 		for nation_id in component["members"]:
@@ -7488,15 +7578,19 @@ func _run_ai_campaign_planning_phase(
 		var coordinator := ArmyCoordinator.from_view(context["view"])
 		coordinators[nation_id] = coordinator
 		defense_plans[nation_id] = context["defense_plan"]
+	campaign_part_started = Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	_manage_coalition_campaigns(due_components)
+	_record_tick_profile_stage("ai_campaign_coalition", campaign_part_started)
 	var mobilization_claims: Dictionary = _coalition_campaign_query_cache["mobilization_claims"]
 	for nation_id in managed_nations:
 		var decision_context: Dictionary = decision_contexts[nation_id]
 		var defense_plan: CityDefensePlan = defense_plans[nation_id]
 		if not declaration_launched_nations.has(nation_id):
+			campaign_part_started = Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 			_manage_national_campaign_support(
 				nation_id, defense_plan, decision_context, mobilization_claims
 			)
+			_record_tick_profile_stage("ai_campaign_national", campaign_part_started)
 		if (
 			spread_runtime_work
 			and Time.get_ticks_usec() - runtime_slice_started
@@ -10303,6 +10397,16 @@ func _balance_national_reserves(
 		var current_center := state.administrative_center_of(
 			army.location_city
 		)
+		# The selected reachable center cannot have fewer armies than the global
+		# minimum. If this reserve is already within one of that minimum, the
+		# existing imbalance test must reject every possible move. Counts change
+		# after successful orders, so evaluate this proof separately for each army.
+		if counts.has(current_center):
+			var minimum_count := int(counts[centers[0]])
+			for center_id in centers:
+				minimum_count = mini(minimum_count, int(counts[center_id]))
+			if int(counts[current_center]) <= minimum_count + 1:
+				continue
 		var target_center := -1
 		var target_distance := INF
 		var field := defense_plan.view.path_field(
@@ -11564,8 +11668,8 @@ func _create_army_for_nation(
 	army.ai_action = ActionCandidate.Kind.CREATE_ARMY
 	army.ai_order_created_day = state.day
 	army.ai_order_reason = reason
-	# 当前国家计划基于建军前的冻结军队快照；让该国下一日立即重算州战役。
-	_ai_forced_nations[nation_id] = true
+	# Refresh the pre-recruitment snapshot at the next local command batch.
+	_queue_ai_nation_wake(nation_id)
 	nation.ai_last_force_action = ActionCandidate.Kind.CREATE_ARMY
 	nation.ai_last_force_day = state.day
 	nation.ai_last_force_reason = army.ai_order_reason
@@ -11577,6 +11681,8 @@ func _disband_army(army: Army, reason: String = "") -> bool:
 	if (
 		army == null
 		or army.size <= 0
+		or army.on_edge
+		or army.battle_id >= 0
 		or army.state not in [
 			Army.State.IDLE,
 			Army.State.RECOVERING,
@@ -12040,45 +12146,126 @@ static func edge_travel_days(edge: Edge, _formation_size: int = 0) -> float:
 	)
 
 
-func _advance_atlas_movement() -> void:
+func _advance_atlas_movement(spread_runtime_work: bool = false) -> void:
 	# Integrate the day at global arrival/contact events. Every army consumes the
 	# same elapsed time; junctions do not add a turn or allow an encounter bypass.
 	var remaining := 1.; var stalled := {}
 	for army in state.armies:
 		if army.encounter_blocked: stalled[army.id] = true; army.encounter_blocked = false
 	var iterations := 0
+	var slice_started := Time.get_ticks_usec() if spread_runtime_work else 0
+	var event_candidates: Array[Army] = []
+	var candidates_dirty := true
+	# Slots are assigned only while refreshing candidates. The hot event loop
+	# reads packed values instead of looking up an Army -> Variant-array record.
+	var leg_indices_by_army := {}
+	var candidate_leg_indices := PackedInt32Array()
+	var leg_from := PackedInt32Array()
+	var leg_to := PackedInt32Array()
+	var leg_days := PackedFloat64Array()
+	var leg_keys := PackedInt64Array()
+	var duration_state := state
+	var duration_road_revision := state.road_network_revision
 	while remaining>.0000001:
+		var event_part_started := Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 		iterations += 1
 		assert(iterations<=state.cities.size()*2+state.armies.size()+1,"Non-progressing traffic traversal")
-		var moving: Array[Army] = []; var dt := remaining
-		for army in state.armies:
-			if stalled.has(army.id) or not _is_travelling(army) or army.size<=0: continue
-			if army.move_to<0: _begin_next_leg(army)
-			if army.move_to<0: stalled[army.id] = true; continue
-			var days := edge_travel_days(state.edge_of(army.move_from,army.move_to),army.max_size)
-			var target := army.hold_target_progress if army.state==Army.State.MOVING and army.hold_target_progress>=0. else 1.
-			dt = minf(dt,maxf(0.,target-army.move_progress)*days); moving.append(army)
+		var moving: Array[Army] = []; var moving_days := PackedFloat64Array(); var dt := remaining
+		var contact_groups := {}
+		var junction_candidates: Array[Army] = []
+		if duration_state != state or duration_road_revision != state.road_network_revision:
+			leg_indices_by_army.clear()
+			leg_from.clear(); leg_to.clear(); leg_days.clear(); leg_keys.clear()
+			candidates_dirty = true
+			duration_state = state
+			duration_road_revision = state.road_network_revision
+		# Traffic arrivals/contact can only change existing road participants.
+		# Real-settlement arrivals may capture, evict or repatriate other troops;
+		# frame yields permit external commands. Re-scan everyone at those points.
+		if candidates_dirty:
+			event_candidates.clear()
+			candidate_leg_indices.clear()
+			for army in state.armies:
+				if not _is_edge_unit(army): continue
+				var leg_index := int(leg_indices_by_army.get(army, -1))
+				if leg_index < 0:
+					leg_index = leg_days.size()
+					leg_indices_by_army[army] = leg_index
+					leg_from.append(-1); leg_to.append(-1)
+					leg_days.append(0.); leg_keys.append(-1)
+				event_candidates.append(army)
+				candidate_leg_indices.append(leg_index)
+			candidates_dirty = false
+		for candidate_index in range(event_candidates.size()):
+			var army := event_candidates[candidate_index]
+			var leg_index := candidate_leg_indices[candidate_index]
+			var group_key: int = -1
+			if not stalled.has(army.id) and _is_travelling(army) and army.size>0:
+				if army.move_to<0: _begin_next_leg(army)
+				if army.move_to<0:
+					stalled[army.id] = true
+				else:
+					# The same army often spans many unrelated global events before
+					# reaching its next junction. Road travel parameters are immutable
+					# while traffic is bound; cache only this unchanged directed leg.
+					if leg_from[leg_index] != army.move_from or leg_to[leg_index] != army.move_to:
+						leg_from[leg_index] = army.move_from
+						leg_to[leg_index] = army.move_to
+						leg_days[leg_index] = edge_travel_days(state.edge_of(army.move_from,army.move_to),army.max_size)
+						leg_keys[leg_index] = _edge_key_of(army.move_from,army.move_to)
+					var days := leg_days[leg_index]
+					group_key = leg_keys[leg_index]
+					var target := army.hold_target_progress if army.state==Army.State.MOVING and army.hold_target_progress>=0. else 1.
+					dt = minf(dt,maxf(0.,target-army.move_progress)*days); moving.append(army); moving_days.append(days)
+			# Starting a leg only changes that army. Integration changes progress,
+			# not membership, so this event can reuse the same road grouping. Keep
+			# stalled/holding units and zero-size travellers for the original contact
+			# and junction predicates to decide; rebuild after every arrival event.
+			if _is_edge_unit(army):
+				junction_candidates.append(army)
+				if army.size>0 and army.move_to!=-1:
+					var key := group_key if group_key >= 0 else _edge_key_of(army.move_from,army.move_to)
+					if not contact_groups.has(key): contact_groups[key] = [] as Array[Army]
+					contact_groups[key].append(army)
+		_record_tick_profile_stage("atlas_event_scan", event_part_started)
 		if moving.is_empty(): break
+		event_part_started = Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 		var holding: Array[Army] = []
-		for army in moving:
-			army.move_progress += dt/edge_travel_days(state.edge_of(army.move_from,army.move_to),army.max_size)
+		for moving_index in range(moving.size()):
+			var army := moving[moving_index]
+			army.move_progress += dt/moving_days[moving_index]
 			if army.state==Army.State.MOVING and army.hold_target_progress>=0. and army.move_progress>=army.hold_target_progress:
 				army.move_progress = army.hold_target_progress; holding.append(army)
 		remaining -= dt
-		_resolve_movement_contacts(holding)
-		_detect_atlas_junction_contacts()
+		_record_tick_profile_stage("atlas_event_integrate", event_part_started)
+		event_part_started = Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+		_resolve_movement_contacts(holding, contact_groups)
+		_detect_atlas_junction_contacts(junction_candidates)
+		_record_tick_profile_stage("atlas_event_contacts", event_part_started)
+		event_part_started = Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 		var changed := false
 		for army in moving:
 			if army.encounter_blocked: stalled[army.id] = true; continue
-			if not _is_travelling(army) or army.move_to<0 or army.move_progress<1.-.0000001: continue
+			# Almost all units have not reached an endpoint at this unrelated
+			# global event. Reject them before invoking the state predicate.
+			if army.move_to<0 or army.move_progress<1.-.0000001 or not _is_travelling(army): continue
+			if not state.cities[army.move_to].is_traffic: candidates_dirty = true
 			army.move_progress = 1.; _arrive_at_node(army); changed = true
 		if dt<=.0000001 and not changed:
 			for army in moving: stalled[army.id] = true
+		_record_tick_profile_stage("atlas_event_arrivals", event_part_started)
+		# A whole arrival/contact event is atomic. Rendering may run between
+		# events, while every army still receives exactly the same elapsed time.
+		if spread_runtime_work and Time.get_ticks_usec() - slice_started >= AI_RUNTIME_SLICE_BUDGET_USEC:
+			await get_tree().process_frame
+			candidates_dirty = true
+			slice_started = Time.get_ticks_usec()
 
-func _detect_atlas_junction_contacts() -> void:
+func _detect_atlas_junction_contacts(prepared_armies: Variant = null) -> void:
 	var arrivals := {}
-	for army in state.armies:
-		if not _is_travelling(army) or army.move_to<0 or army.move_progress<1.-.0000001 or not state.cities[army.move_to].is_traffic: continue
+	var candidates: Array = prepared_armies if prepared_armies is Array else state.armies
+	for army: Army in candidates:
+		if army.move_to<0 or army.move_progress<1.-.0000001 or not _is_travelling(army) or not state.cities[army.move_to].is_traffic: continue
 		if not arrivals.has(army.move_to): arrivals[army.move_to] = []
 		arrivals[army.move_to].append(army)
 	for node in arrivals:
@@ -12126,7 +12313,11 @@ func _advance_movement() -> void:
 ## 只在既有阶段边界让帧；每个阶段内部的军队/战斗顺序与同步路径完全相同。
 func _advance_movement_over_frames() -> void:
 	if not state.atlas_layout.is_empty():
-		_advance_movement(); await get_tree().process_frame; return
+		await _advance_atlas_movement(true)
+		_resolve_battles()
+		_purge_dead_armies()
+		await get_tree().process_frame
+		return
 	_set_runtime_profile_stage(&"movement_travel")
 	var phase_started := (
 		Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
@@ -12214,10 +12405,10 @@ func _arrive_retreating_armies() -> void:
 			_arrive_at_node(army)
 
 
-func _resolve_movement_contacts(holding_arrivals: Array[Army]) -> void:
+func _resolve_movement_contacts(holding_arrivals: Array[Army], prepared_groups: Variant = null) -> void:
 	# 3. 遭遇检测（普通行军到达节点之前）：同边敌军按物理位置接触即交火。
 	#    走到边末端（norm→1.0）的一方与任何相向敌军必接触 → 优先野战，杜绝错身。
-	_detect_encounters()
+	_detect_encounters(prepared_groups)
 	_block_passthrough()   # 敌占交战点卡位：禁止敌军不战穿过
 	# 驻防转换必须晚于遭遇检测：两支敌军同日抵达同一驻防点时仍应先开战，不能同时变 HOLDING 后互相无视。
 	for army in holding_arrivals:
@@ -12481,11 +12672,11 @@ func _can_continue_local_crossing_transit(
 
 
 func _is_travelling(army: Army) -> bool:
-	return army.state in [Army.State.MOVING, Army.State.RETREATING]
+	return army.state == Army.State.MOVING or army.state == Army.State.RETREATING
 
 
 func _is_edge_unit(army: Army) -> bool:
-	return army.state in [Army.State.MOVING, Army.State.RETREATING, Army.State.HOLDING]
+	return army.state == Army.State.MOVING or army.state == Army.State.RETREATING or army.state == Army.State.HOLDING
 
 
 ## 检测新遭遇（位置驱动的两两交战）：同边上的敌对军队，按物理位置判断是否接触。
@@ -12493,7 +12684,7 @@ func _is_edge_unit(army: Army) -> bool:
 ##  - 同向：后军追上前军（位置差 <= CONTACT_EPS）才触发（修复"追逐永不开战"）。
 ## 一条边先选归一化位置差最小的敌对国家对，再把同国抵达者聚合进对应侧；
 ## 真正无法二分的完全同构多国接触统一脱离，第三方不与敌对方并肩。
-func _detect_encounters() -> void:
+func _detect_encounters(prepared_groups: Variant = null) -> void:
 	# 索引进行中的 FIELD 战斗（按边）
 	var field_by_edge: Dictionary = {}
 	for b in state.battles:
@@ -12501,20 +12692,32 @@ func _detect_encounters() -> void:
 			field_by_edge[_edge_key_of(b.edge.city_a, b.edge.city_b)] = b
 
 	# 按边聚合普通行军、溃逃军与驻防军。只有 MOVING 可主动发起接战。
-	var by_edge: Dictionary = {}
-	for army in state.armies:
-		if not _is_edge_unit(army) or army.size <= 0 or army.move_to == -1:
-			continue
-		var key := _edge_key_of(army.move_from, army.move_to)
-		if not by_edge.has(key):
-			var edge_armies: Array[Army] = []
-			by_edge[key] = edge_armies
-		by_edge[key].append(army)
+	var by_edge: Dictionary = prepared_groups if prepared_groups is Dictionary else {}
+	if not prepared_groups is Dictionary:
+		for army in state.armies:
+			if not _is_edge_unit(army) or army.size <= 0 or army.move_to == -1:
+				continue
+			var key := _edge_key_of(army.move_from, army.move_to)
+			if not by_edge.has(key):
+				var edge_armies: Array[Army] = []
+				by_edge[key] = edge_armies
+			by_edge[key].append(army)
 
 	var ordered_edges: Array[Edge] = []
 	var key_by_edge := {}
 	for key in by_edge:
 		var edge_group: Array[Army] = by_edge[key]
+		# A solitary or single-nation group without an existing battle has no
+		# encounter to resolve. Avoid rebuilding its geometry/sort keys at every
+		# Atlas arrival event; retain the same ordering for participating groups.
+		if not field_by_edge.has(key):
+			var mixed_nations := false
+			for army in edge_group:
+				if army.owner_nation != edge_group[0].owner_nation:
+					mixed_nations = true
+					break
+			if not mixed_nations:
+				continue
 		var grouped_edge := state.edge_of(
 			(edge_group[0] as Army).move_from,
 			(edge_group[0] as Army).move_to
@@ -12760,20 +12963,33 @@ func _edge_contact(x: Army, y: Army, edge: Edge) -> bool:
 ## 下一 tick 由 _detect_encounters 让其与幸存者开战——实现「同点必战、串行化」。
 ## （同 nation 军队不卡位——它们由 _join_field_battle 直接并入本侧。）
 func _block_passthrough() -> void:
+	var field_battles: Array[Battle] = []
 	for battle in state.battles:
 		if battle.finished or battle.kind != Battle.Kind.FIELD or battle.edge == null:
 			continue
+		field_battles.append(battle)
+	if field_battles.is_empty():
+		return
+	# Only progress changes in this transaction. Membership stays valid for its
+	# entire duration; insertion order preserves the original per-battle army
+	# order, including successive clamps by multiple battles on the same road.
+	var armies_by_edge := {}
+	for battle in field_battles:
+		armies_by_edge[_edge_key_of(battle.edge.city_a, battle.edge.city_b)] = [] as Array[Army]
+	for army in state.armies:
+		if not _is_travelling(army) or army.size <= 0 or army.move_to == -1:
+			continue
+		var key := _edge_key_of(army.move_from, army.move_to)
+		if armies_by_edge.has(key):
+			armies_by_edge[key].append(army)
+	for battle in field_battles:
 		var edge := battle.edge
 		var length := edge.distance_units()
 		var line_norm := clampf(maxf(battle.contact_dist_a, battle.contact_dist_b) / length, 0.0, 1.0)
 		var na := battle.side_a[0].owner_nation if not battle.side_a.is_empty() else -1
 		var nb := battle.side_b[0].owner_nation if not battle.side_b.is_empty() else -1
-		for army in state.armies:
-			if not _is_travelling(army) or army.size <= 0 or army.move_to == -1:
-				continue
+		for army: Army in armies_by_edge.get(_edge_key_of(edge.city_a, edge.city_b), []):
 			if battle.has_army(army):
-				continue
-			if _edge_key_of(army.move_from, army.move_to) != _edge_key_of(edge.city_a, edge.city_b):
 				continue
 			# 同 nation 交给 _join_field_battle 处理；此处只卡「敌对且未并入」的第三国
 			if army.owner_nation == na or army.owner_nation == nb:
@@ -13811,7 +14027,7 @@ func _wake_defense_for_army(army: Army, city_id: int) -> void:
 	var defenders := (DiplomacyAI._cached_alliance_bloc(state, owner, _coalition_campaign_query_cache)
 		if not _coalition_defense_activity.is_empty() else state.alliance_bloc(owner))
 	for nation_id in defenders:
-		_ai_forced_nations[nation_id] = true
+		_queue_ai_nation_wake(nation_id)
 
 
 func _strongest_alive(arr: Array[Army]) -> Army:
@@ -14016,6 +14232,9 @@ func _capture_city(
 	if army != null:
 		army.occupation_claimant_nation = -1
 	if army != null and captor_can_remain:
+		# Capture may resolve an incoming-road battle. Release its original
+		# occupancy before replacing endpoints; ordinary arrivals already did so.
+		_release_edge(army)
 		army.state = (
 			Army.State.MOVING if continue_local_crossing else Army.State.IDLE
 		)

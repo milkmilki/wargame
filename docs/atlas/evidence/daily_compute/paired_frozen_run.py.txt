@@ -1,0 +1,20 @@
+import subprocess, ctypes, os, json, time, hashlib
+from pathlib import Path
+root = Path(__file__).resolve().parents[1]
+godot = "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe"
+results = []
+for label, project, tag in [("before", root / ".dbg/daily-baseline-project", "baseline-clean"), ("after", root, "final-clean")]:
+    env = dict(os.environ, FROZEN_MODE="measure", FROZEN_TAG=tag)
+    command = [godot, "--headless", "--path", str(project), "--script", "res://.dbg/frozen_daily_probe.gd"]
+    started = time.time()
+    with (root / (".dbg/paired-" + label + ".stdout.txt")).open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(command, env=env, stdout=output, stderr=subprocess.STDOUT)
+        affinity_ok = bool(ctypes.windll.kernel32.SetProcessAffinityMask(ctypes.c_void_p(process._handle), ctypes.c_size_t(16)))
+        assert affinity_ok, "Could not pin benchmark to logical CPU4"
+        print(label, process.pid, flush=True)
+        code = process.wait()
+    results.append({"label": label, "project": str(project), "tag": tag, "pid": process.pid, "affinity_mask": 16, "started_unix": started, "exit_code": code, "source_hashes": {p: hashlib.sha256((project / p).read_bytes()).hexdigest() for p in ["scripts/simulation/simulation.gd", "scripts/core/pathfinding.gd", "scripts/ai/ai_world_view.gd", "scripts/state/game_state.gd"]}})
+    (root / ".dbg/paired-run-metadata.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(label, "exit", code, flush=True)
+    if code:
+        raise SystemExit(code)

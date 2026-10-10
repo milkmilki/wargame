@@ -1,0 +1,56 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "supply_network_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 61219,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_network_cache_equivalence.log"
+    },
+    {
+      "test": "supply_frame_slice_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 43610,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_frame_slice_equivalence.log"
+    },
+    {
+      "test": "coalition_dispatch_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_dispatch_lifecycle.log"
+    },
+    {
+      "test": "coalition_siege_participation",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_siege_participation.log"
+    },
+    {
+      "test": "coalition_campaign_pairs",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_campaign_pairs.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 33718,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log"
+    }
+  ],
+  "failures": 0
+}
