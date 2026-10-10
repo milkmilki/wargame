@@ -318,6 +318,8 @@ var supply_source_parallel_disabled: bool = false
 var reinforcement_frame_slicing_disabled: bool = false
 ## 等价性守卫：true 时月度经济恢复主线程同步预测；正式运行 false。
 var monthly_economy_worker_disabled: bool = false
+## Comparison oracle: each capital independently scans national base taxes.
+var monthly_capital_tax_batch_disabled: bool = false
 ## 等价性/性能 A/B：true 时恢复逐军图搜索判断补员枢纽可达性；正式游戏 false。
 var reinforcement_network_cache_disabled: bool = false
 ## 外交结构缓存 A/B：true 恢复同一次月度评估内重复构建联盟/敌对集团。
@@ -1618,13 +1620,19 @@ func _resolve_economy(prepared_forecast: Dictionary = {}) -> void:
 	ruler_output_modifiers.resize(state.nations.size())
 	for nation in state.nations:
 		ruler_output_modifiers[nation.id] = RulerProfile.modifiers(nation)
+	var capital_tax_bases := (
+		{} if monthly_capital_tax_batch_disabled else CityOutputRules.capital_tax_bases(state)
+	)
 	for city in state.cities:
 		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
 			continue
 		var owner_id := state.financial_nation_of(city.owner_nation)
 		var nation := state.nations[owner_id]
 		var modifiers: Dictionary = ruler_output_modifiers[owner_id]
-		var gold := city_gold_output(state, city, modifiers)
+		var gold := city_gold_output(
+			state, city, modifiers,
+			-1 if monthly_capital_tax_batch_disabled else int(capital_tax_bases.get(city.owner_nation, 0))
+		)
 		nation.treasury_gold += gold
 		gold_income[owner_id] += gold
 		monthly_manpower_produced[state.financial_nation_of(city.owner_nation)] += city_manpower_output(
@@ -2228,10 +2236,11 @@ static func city_food_output(
 static func city_gold_output(
 	game_state: GameState,
 	city: City,
-	ruler_modifiers: Dictionary = {}
+	ruler_modifiers: Dictionary = {},
+	national_base_gold: int = -1
 ) -> int:
 	return CityOutputRules.city_gold_output(
-		game_state, city, ruler_modifiers
+		game_state, city, ruler_modifiers, national_base_gold
 	)
 
 

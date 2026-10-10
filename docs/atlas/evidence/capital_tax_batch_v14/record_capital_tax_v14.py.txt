@@ -1,0 +1,51 @@
+from pathlib import Path
+import hashlib, json, math, shutil, statistics, subprocess
+base=Path('.dbg/capital-tax-v14')
+target=Path('docs/atlas/evidence/capital_tax_batch_v14'); target.mkdir(parents=True,exist_ok=True)
+(target/'.gitattributes').write_text('*.gd.txt -text -eol -whitespace\n*.py.txt -text -eol -whitespace\n',encoding='utf8',newline='\n')
+processes=[]; hashes={}
+for path in sorted(base.glob('paired-*.json')):
+    d=json.loads(path.read_text(encoding='utf8'))
+    assert d['identical_daily_snapshots'] and len(d['results']['before'])==35
+    assert d['initial_sha256']=='69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf'
+    if hashes: assert hashes==d['source_hashes']
+    hashes=d['source_hashes']; row={'pid':d['pid'],'order':d['variant_order']}
+    for variant,days in d['results'].items():
+        values=sorted(day['elapsed_usec']/1000 for day in days); peak=max(days,key=lambda x:x['elapsed_usec'])
+        row[variant]={'mean_ms':statistics.mean(values),'p95_ms':values[math.ceil(.95*len(values))-1],'max_ms':values[-1],'peak_day':peak['day'],'peak_economy_ms':peak['profile'].get('monthly_economy',0)/1000}
+    assert all(a['sha256']==b['sha256'] for a,b in zip(d['results']['before'],d['results']['after']))
+    processes.append(row); shutil.copyfile(path,target/path.name)
+assert len(processes)==5
+medians={v:{k:statistics.median(p[v][k] for p in processes) for k in ['mean_ms','p95_ms','max_ms','peak_economy_ms']} for v in ['before','after']}
+summary={'date':'2026-10-11','parent_commit':'a40dc3db73141cdf258d80d81e86e4db762d0d96','seed':1,'nodes':1192,'armies_at_freeze':234,'day_range':[181,215],'mask':d['input_source']['mask'],'systems':d['input_source']['systems'],'source_hashes':hashes,'initial_sha256':d['initial_sha256'],'identical_daily_snapshots':175,'processes':processes,'medians':medians,'improvement_percent':{k:(1-medians['after'][k]/medians['before'][k])*100 for k in medians['before']},'limitation':'Headless computation, not GUI frames; one frozen Eurasia war state. Very small daily mean benefit; five peaks improved. Administrative capital-hop traffic-node issue remains separately documented.'}
+shutil.copyfile('.dbg/daily-v9/baseline-manifest.json',target/'frozen-input-manifest.json')
+for path in base.glob('paired-*.stdout.txt'):
+    assert 'V14_COMPARE_COMPLETE' in path.read_text(encoding='utf8'); shutil.copyfile(path,target/path.name)
+for path in base.glob('paired-*.stderr.txt'):
+    assert not path.read_bytes(); shutil.copyfile(path,target/path.name)
+shutil.copyfile(base/'red-test.txt',target/'red-test.txt')
+for name,sha in hashes.items():
+    path=Path(name); assert hashlib.sha256(path.read_bytes()).hexdigest()==sha
+    destination=target/'loaded-source'/(name+'.txt'); destination.parent.mkdir(parents=True,exist_ok=True); destination.write_bytes(path.read_bytes())
+for name in ['capital_tax_v14_compare.gd','state_codec.gd','stage_capital_tax_v14.py','record_capital_tax_v14.py','peak_v14.gd','peak_v14_sim.gd','check_capital_route_v14.gd']:
+    shutil.copyfile(Path('.dbg')/name,target/(name+'.txt'))
+for source,name in [('.dbg/peak-v14.json','peak-diagnostic.json'),('.dbg/capital-route-check-v14.json','capital-route-diagnostic.json')]:
+    shutil.copyfile(source,target/name)
+for folder,path,count in [('regressions',Path('.dbg/regression/summary-selected.json'),20),('staged-regressions',Path('.dbg/v14-staged-verify/.dbg/regression/summary-selected.json'),6)]:
+    report=json.loads(path.read_text(encoding='utf8')); assert report['failures']==0 and len(report['results'])==count
+    destination=target/folder; destination.mkdir(exist_ok=True)
+    for row in report['results']:
+        assert row['ok']; row['archived_log']=row['test']+'.log.txt'; shutil.copyfile(row['log'],destination/row['archived_log'])
+    (destination/'summary.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf8',newline='\n')
+    summary[folder+'_tests']=[r['test'] for r in report['results']]
+(target/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf8',newline='\n')
+subprocess.run(['git','add','docs/atlas/CAPITAL_TAX_BATCH_V14.md',target.as_posix()],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+for path in target.rglob('*.txt'):
+    if not (path.name.endswith('.gd.txt') or path.name.endswith('.py.txt')): continue
+    raw=path.read_bytes(); blob=subprocess.check_output(['git','hash-object','-w','--stdin'],input=raw).decode().strip()
+    subprocess.run(['git','update-index','--add','--cacheinfo','100644,'+blob+','+path.as_posix()],check=True)
+    assert subprocess.check_output(['git','show',':'+path.as_posix()])==raw
+result=subprocess.run(['git','diff','--cached','--check'],capture_output=True,text=True,encoding='utf8')
+assert result.returncode==0,result.stdout[:1000]
+print('Verified raw source hashes, whitespace,20 working and6 staged regressions.')
+print(json.dumps({'medians':medians,'improvement_percent':summary['improvement_percent']},ensure_ascii=False))

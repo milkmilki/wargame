@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+CAPITAL_TAX_BATCH_FAIL monthly taxes have a one-pass national base aggregation
+CAPITAL_TAX_BATCH_RESULT checks=1 failures=1

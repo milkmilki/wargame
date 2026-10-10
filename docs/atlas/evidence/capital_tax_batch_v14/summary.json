@@ -1,0 +1,189 @@
+{
+  "date": "2026-10-11",
+  "parent_commit": "a40dc3db73141cdf258d80d81e86e4db762d0d96",
+  "seed": 1,
+  "nodes": 1192,
+  "armies_at_freeze": 234,
+  "day_range": [
+    181,
+    215
+  ],
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  },
+  "source_hashes": {
+    "scripts/core/city_output_rules.gd": "fb88a0a2235f081c287bdf8f2e06d27a9cce35bea24b82685508b719a2763654",
+    "scripts/core/trade_network.gd": "00d0b36000608c8713fbc9d4b98a3f5c2c8719b83a223f55969d903b6a4e0404",
+    "scripts/simulation/simulation.gd": "7715013d9a030bce62ce86a87d2a4c138e358d4c0d181aea24d3e228fbdce77a",
+    "scripts/state/game_state.gd": "e45d0523d83cac6e2600086599f14aeb60807d71f7864b877e08a06ed7d2914a"
+  },
+  "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "identical_daily_snapshots": 175,
+  "processes": [
+    {
+      "pid": 12248,
+      "order": [
+        "after",
+        "before"
+      ],
+      "after": {
+        "mean_ms": 248.008,
+        "p95_ms": 560.179,
+        "max_ms": 797.399,
+        "peak_day": 210,
+        "peak_economy_ms": 70.094
+      },
+      "before": {
+        "mean_ms": 248.2811142857143,
+        "p95_ms": 574.173,
+        "max_ms": 842.718,
+        "peak_day": 210,
+        "peak_economy_ms": 97.772
+      }
+    },
+    {
+      "pid": 14752,
+      "order": [
+        "before",
+        "after"
+      ],
+      "after": {
+        "mean_ms": 248.75448571428572,
+        "p95_ms": 564.337,
+        "max_ms": 804.349,
+        "peak_day": 210,
+        "peak_economy_ms": 70.627
+      },
+      "before": {
+        "mean_ms": 249.9262857142857,
+        "p95_ms": 574.24,
+        "max_ms": 827.823,
+        "peak_day": 210,
+        "peak_economy_ms": 96.64
+      }
+    },
+    {
+      "pid": 21080,
+      "order": [
+        "after",
+        "before"
+      ],
+      "after": {
+        "mean_ms": 248.1184,
+        "p95_ms": 562.053,
+        "max_ms": 801.672,
+        "peak_day": 210,
+        "peak_economy_ms": 72.568
+      },
+      "before": {
+        "mean_ms": 248.84071428571428,
+        "p95_ms": 562.612,
+        "max_ms": 824.634,
+        "peak_day": 210,
+        "peak_economy_ms": 95.517
+      }
+    },
+    {
+      "pid": 32092,
+      "order": [
+        "before",
+        "after"
+      ],
+      "after": {
+        "mean_ms": 246.89877142857142,
+        "p95_ms": 564.117,
+        "max_ms": 795.018,
+        "peak_day": 210,
+        "peak_economy_ms": 69.928
+      },
+      "before": {
+        "mean_ms": 247.11057142857143,
+        "p95_ms": 565.288,
+        "max_ms": 819.57,
+        "peak_day": 210,
+        "peak_economy_ms": 95.04
+      }
+    },
+    {
+      "pid": 35916,
+      "order": [
+        "before",
+        "after"
+      ],
+      "after": {
+        "mean_ms": 245.0084857142857,
+        "p95_ms": 561.185,
+        "max_ms": 789.02,
+        "peak_day": 210,
+        "peak_economy_ms": 69.998
+      },
+      "before": {
+        "mean_ms": 245.91214285714287,
+        "p95_ms": 558.804,
+        "max_ms": 811.231,
+        "peak_day": 210,
+        "peak_economy_ms": 94.823
+      }
+    }
+  ],
+  "medians": {
+    "before": {
+      "mean_ms": 248.2811142857143,
+      "p95_ms": 565.288,
+      "max_ms": 824.634,
+      "peak_economy_ms": 95.517
+    },
+    "after": {
+      "mean_ms": 248.008,
+      "p95_ms": 562.053,
+      "max_ms": 797.399,
+      "peak_economy_ms": 70.094
+    }
+  },
+  "improvement_percent": {
+    "mean_ms": 0.11000203801244668,
+    "p95_ms": 0.5722746635343445,
+    "max_ms": 3.3026773089637307,
+    "peak_economy_ms": 26.616204445281998
+  },
+  "limitation": "Headless computation, not GUI frames; one frozen Eurasia war state. Very small daily mean benefit; five peaks improved. Administrative capital-hop traffic-node issue remains separately documented.",
+  "regressions_tests": [
+    "project_compile",
+    "test_suite",
+    "capital_tax_batch",
+    "trade_fingerprint_reuse",
+    "garrison_economy",
+    "loyalty_admin_radius",
+    "resource_forecast_integration",
+    "atlas_politics_trade",
+    "atlas_trade_runtime",
+    "atlas_forecast_dependencies",
+    "trade_forecast_cache_equivalence",
+    "war_diplomacy_runtime_equivalence",
+    "atlas_coalition_runtime",
+    "war_count_and_conqueror",
+    "succession_counterattack",
+    "atlas_territory_transactions",
+    "atlas_military_persistence",
+    "political_history_test",
+    "ultimatum_forecast_cache_equivalence",
+    "refresh_derived_modifier_equivalence"
+  ],
+  "staged-regressions_tests": [
+    "project_compile",
+    "capital_tax_batch",
+    "garrison_economy",
+    "loyalty_admin_radius",
+    "war_count_and_conqueror",
+    "succession_counterattack"
+  ]
+}

@@ -1,0 +1,203 @@
+class_name CityOutputRules
+extends RefCounted
+## 城市非贸易产值的纯计算规则。经济结算和贸易中心选举共同使用此处，
+## 避免两套“城市产值”口径随平衡调整逐渐分叉。
+
+const CITY_WAR_OUTPUT_MULTIPLIER: float = 0.50
+const VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER: float = 1.50
+const CAPITAL_NATIONAL_GOLD_SHARE: float = 0.20
+
+
+## Exact monthly capital bases. Match the scalar capital scan: enabled land
+## settlements contribute before war/governance multipliers, grouped by payer.
+## Dictionary integers preserve large custom budgets without int32 truncation.
+static func capital_tax_bases(game_state: GameState) -> Dictionary:
+	var result := {}
+	if game_state == null: return result
+	for city in game_state.land_cities():
+		if not game_state.city_administrative_output_enabled(city.id): continue
+		var owner := game_state.financial_nation_of(city.owner_nation)
+		if owner < 0 or owner >= game_state.nations.size(): continue
+		result[owner] = int(result.get(owner, 0)) + maxi(city.gold_per_month, 0)
+	return result
+
+
+static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	if game_state == null:
+		return result
+	result.resize(game_state.cities.size())
+	var national_base_gold := _national_base_gold(game_state, true)
+	for city in game_state.cities:
+		if city.id < 0 or city.id >= result.size():
+			continue
+		var owner_base := (
+			national_base_gold[city.owner_nation]
+			if city.owner_nation >= 0
+				and city.owner_nation < national_base_gold.size()
+			else 0
+		)
+		result[city.id] = city_gold_output(
+			game_state, city, {}, owner_base
+		)
+	return result
+
+
+static func city_potential_gold_outputs(game_state: GameState) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	if game_state == null:
+		return result
+	result.resize(game_state.cities.size())
+	var national_base_gold := _national_base_gold(game_state, false)
+	for city in game_state.cities:
+		if city.id < 0 or city.id >= result.size():
+			continue
+		result[city.id] = city_potential_gold_output(
+			game_state,
+			city,
+			{},
+			(
+				national_base_gold[city.owner_nation]
+				if city.owner_nation >= 0
+					and city.owner_nation < national_base_gold.size()
+				else 0
+			)
+		)
+	return result
+
+
+static func _national_base_gold(
+	game_state: GameState,
+	respect_administration: bool
+) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	result.resize(game_state.nations.size())
+	result.fill(0)
+	for city in game_state.cities:
+		if (
+			city.is_dock
+			or city.owner_nation < 0
+			or city.owner_nation >= result.size()
+			or (
+				respect_administration
+				and not game_state.city_administrative_output_enabled(city.id)
+			)
+		):
+			continue
+		result[game_state.financial_nation_of(city.owner_nation)] += maxi(city.gold_per_month, 0)
+	return result
+
+
+static func city_gold_output(
+	game_state: GameState,
+	city: City,
+	_ruler_modifiers: Dictionary = {},
+	national_base_gold: int = -1
+) -> int:
+	if game_state == null or city == null:
+		return 0
+	if not game_state.city_administrative_output_enabled(city.id):
+		return 0
+	var output := city_gold_output_before_governance(
+		game_state, city, true, national_base_gold
+	)
+	output = maxi(int(floor(
+		float(output) * city_governance_output_multiplier(game_state, city)
+	)), 0)
+	return output
+
+
+static func city_potential_gold_output(
+	game_state: GameState,
+	city: City,
+	_ruler_modifiers: Dictionary = {},
+	national_base_gold: int = -1
+) -> int:
+	if game_state == null or city == null:
+		return 0
+	var output := city_gold_output_before_governance(
+		game_state, city, false, national_base_gold
+	)
+	output = maxi(int(floor(
+		float(output) * city_governance_output_multiplier(game_state, city)
+	)), 0)
+	if city.owner_nation < 0 or city.owner_nation >= game_state.nations.size():
+		return output
+	return output
+
+
+static func city_gold_output_before_governance(
+	game_state: GameState,
+	city: City,
+	respect_administration: bool = true,
+	national_base_gold: int = -1
+) -> int:
+	if (
+		respect_administration
+		and not game_state.city_administrative_output_enabled(city.id)
+	):
+		return 0
+	var output := city.gold_per_month
+	output += capital_national_gold_addition(
+		game_state, city, respect_administration, national_base_gold
+	)
+	if city_war_disrupted(game_state, city):
+		output = int(floor(float(output) * CITY_WAR_OUTPUT_MULTIPLIER))
+	return maxi(output, 0)
+
+
+static func capital_national_gold_addition(
+	game_state: GameState,
+	city: City,
+	respect_administration: bool = true,
+	national_base_gold: int = -1
+) -> int:
+	if (
+		game_state == null
+		or city == null
+		or not city.is_capital
+		or city.owner_nation < 0
+		or city.owner_nation >= game_state.nations.size()
+		or game_state.nations[city.owner_nation].capital_city_id != city.id
+	):
+		return 0
+	if national_base_gold < 0:
+		national_base_gold = 0
+		for owned_city in game_state.land_cities():
+			if game_state.financial_nation_of(owned_city.owner_nation) != city.owner_nation:
+				continue
+			if (
+				respect_administration
+				and not game_state.city_administrative_output_enabled(owned_city.id)
+			):
+				continue
+			national_base_gold += maxi(owned_city.gold_per_month, 0)
+	return int(floor(
+		float(national_base_gold) * CAPITAL_NATIONAL_GOLD_SHARE
+	))
+
+
+static func city_governance_output_multiplier(
+	game_state: GameState,
+	city: City
+) -> float:
+	if (
+		game_state == null
+		or city == null
+		or city.owner_nation < 0
+		or city.owner_nation >= game_state.nations.size()
+		or not game_state.is_vassal(game_state.financial_nation_of(city.owner_nation))
+	):
+		return 1.0
+	return VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER
+
+
+static func city_war_disrupted(
+	game_state: GameState,
+	city: City
+) -> bool:
+	return (
+		game_state != null
+		and city != null
+		and game_state.day < city.war_disruption_until_day
+	)

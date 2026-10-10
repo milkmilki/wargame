@@ -1,0 +1,17 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin","res://.dbg/peak_v14_sim.gd")
+	var countries := []
+	var started := Time.get_ticks_usec()
+	for nation in sim.state.nations:
+		var hops := sim.state.capital_hop_distances(nation.id)
+		countries.append({"nation":nation.id,"owned":sim.state.land_cities_of(nation.id).size(),"reachable":hops.size()})
+	var capital_all_us := Time.get_ticks_usec()-started
+	var samples := []
+	for day in range(35):
+		started = Time.get_ticks_usec(); sim._advance_day(false)
+		samples.append({"day":sim.state.day,"elapsed_us":Time.get_ticks_usec()-started,"profile":sim.tick_profile_last_usec.duplicate()})
+		if day%10==0: await process_frame
+	FileAccess.open("res://.dbg/peak-v14.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"countries":countries,"capital_all_us":capital_all_us,"actions":sim.diplomacy_rows,"days":samples},"  "))
+	print("V14_PEAK_DIAGNOSTIC_COMPLETE ",OS.get_process_id()); sim.free(); quit()

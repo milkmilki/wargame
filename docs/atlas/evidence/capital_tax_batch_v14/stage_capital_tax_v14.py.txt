@@ -1,0 +1,24 @@
+from pathlib import Path
+import subprocess
+def replace(s,a,b):
+    assert s.count(a)==1,a
+    return s.replace(a,b,1)
+def head(p): return subprocess.check_output(['git','show','HEAD:'+p]).decode('utf8').replace('\r\n','\n')
+def stage(p,s):
+    blob=subprocess.check_output(['git','hash-object','-w','--path='+p,'--stdin'],input=s.encode('utf8')).decode().strip()
+    subprocess.run(['git','update-index','--cacheinfo','100644,'+blob+','+p],check=True)
+p='scripts/simulation/simulation.gd'; s=head(p)
+s=replace(s,'var monthly_economy_worker_disabled: bool = false\n','var monthly_economy_worker_disabled: bool = false\n## Comparison oracle: each capital independently scans national base taxes.\nvar monthly_capital_tax_batch_disabled: bool = false\n')
+s=replace(s,'\t\truler_output_modifiers[nation.id] = RulerProfile.modifiers(nation)\n','\t\truler_output_modifiers[nation.id] = RulerProfile.modifiers(nation)\n\tvar capital_tax_bases := (\n\t\t{} if monthly_capital_tax_batch_disabled else CityOutputRules.capital_tax_bases(state)\n\t)\n')
+s=replace(s,'\t\tvar gold := city_gold_output(state, city, modifiers)\n','\t\tvar gold := city_gold_output(\n\t\t\tstate, city, modifiers,\n\t\t\t-1 if monthly_capital_tax_batch_disabled else int(capital_tax_bases.get(city.owner_nation, 0))\n\t\t)\n')
+s=replace(s,'static func city_gold_output(\n\tgame_state: GameState,\n\tcity: City,\n\truler_modifiers: Dictionary = {}\n','static func city_gold_output(\n\tgame_state: GameState,\n\tcity: City,\n\truler_modifiers: Dictionary = {},\n\tnational_base_gold: int = -1\n')
+s=replace(s,'\treturn CityOutputRules.city_gold_output(\n\t\tgame_state, city, ruler_modifiers\n','\treturn CityOutputRules.city_gold_output(\n\t\tgame_state, city, ruler_modifiers, national_base_gold\n')
+stage(p,s)
+p='scripts/core/city_output_rules.gd'; s=head(p)
+assert s==Path('.dbg/capital-tax-v14/before-city-output.gd.txt').read_text(encoding='utf8')
+stage(p,Path(p).read_text(encoding='utf8'))
+p='run_tests.py'; s=head(p)
+s=replace(s,'"trade_fingerprint_reuse",','"trade_fingerprint_reuse", "capital_tax_batch",')
+stage(p,s)
+subprocess.run(['git','add','tests/capital_tax_batch.gd'],check=True)
+print('Staged v14 only.')

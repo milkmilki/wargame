@@ -1,0 +1,21 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin")
+	var examples := []
+	for nation in sim.state.nations:
+		var capital: int = nation.capital_city_id
+		if capital < 0: continue
+		var hops := sim.state.capital_hop_distances(nation.id)
+		for city_id in sim.state.strategic_neighbors(capital):
+			if sim.state.cities[city_id].owner_nation != nation.id or hops.has(city_id): continue
+			var path: Array = sim.state.atlas_layout.get("strategic_routes",{}).get("%d:%d" % [mini(capital,city_id),maxi(capital,city_id)],[])
+			if path.is_empty(): continue
+			var valid := true
+			for index in range(1,path.size()):
+				var edge := sim.state.edge_of(path[index-1],path[index])
+				if edge == null or edge.max_manpower <= 0 or edge.control_city_id < 0 or sim.state.cities[edge.control_city_id].owner_nation != nation.id:
+					valid = false; break
+			if valid: examples.append({"nation":nation.id,"capital":capital,"town":city_id,"physical_path":path,"old_reachable":hops.size()})
+	FileAccess.open("res://.dbg/capital-route-check-v14.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"day":sim.state.day,"examples":examples},"  "))
+	print("CAPITAL_ROUTE_CHECK examples=",examples.size()); sim.free(); quit()

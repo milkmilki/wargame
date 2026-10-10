@@ -1,0 +1,7 @@
+extends Simulation
+var diplomacy_rows: Array = []
+func _execute_diplomatic_action(action: Dictionary, cache: Dictionary = {}, flows: Array[Dictionary] = []) -> bool:
+	var started := Time.get_ticks_usec()
+	var result := super._execute_diplomatic_action(action, cache, flows)
+	diplomacy_rows.append({"day":state.day,"kind":action.get("kind",-1),"a":action.get("a",-1),"b":action.get("b",-1),"elapsed_us":Time.get_ticks_usec()-started,"changed":result})
+	return result

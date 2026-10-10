@@ -1,0 +1,55 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20828,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v14-staged-verify\\.dbg\\regression\\project_compile.log",
+      "archived_log": "project_compile.log.txt"
+    },
+    {
+      "test": "capital_tax_batch",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v14-staged-verify\\.dbg\\regression\\capital_tax_batch.log",
+      "archived_log": "capital_tax_batch.log.txt"
+    },
+    {
+      "test": "garrison_economy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2329,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v14-staged-verify\\.dbg\\regression\\garrison_economy.log",
+      "archived_log": "garrison_economy.log.txt"
+    },
+    {
+      "test": "loyalty_admin_radius",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v14-staged-verify\\.dbg\\regression\\loyalty_admin_radius.log",
+      "archived_log": "loyalty_admin_radius.log.txt"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v14-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log",
+      "archived_log": "war_count_and_conqueror.log.txt"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2219,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v14-staged-verify\\.dbg\\regression\\succession_counterattack.log",
+      "archived_log": "succession_counterattack.log.txt"
+    }
+  ],
+  "failures": 0
+}

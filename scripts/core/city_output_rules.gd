@@ -8,6 +8,20 @@ const VASSAL_GOVERNANCE_OUTPUT_MULTIPLIER: float = 1.50
 const CAPITAL_NATIONAL_GOLD_SHARE: float = 0.20
 
 
+## Exact monthly capital bases. Match the scalar capital scan: enabled land
+## settlements contribute before war/governance multipliers, grouped by payer.
+## Dictionary integers preserve large custom budgets without int32 truncation.
+static func capital_tax_bases(game_state: GameState) -> Dictionary:
+	var result := {}
+	if game_state == null: return result
+	for city in game_state.land_cities():
+		if not game_state.city_administrative_output_enabled(city.id): continue
+		var owner := game_state.financial_nation_of(city.owner_nation)
+		if owner < 0 or owner >= game_state.nations.size(): continue
+		result[owner] = int(result.get(owner, 0)) + maxi(city.gold_per_month, 0)
+	return result
+
+
 static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
 	var result := PackedInt32Array()
 	if game_state == null:
