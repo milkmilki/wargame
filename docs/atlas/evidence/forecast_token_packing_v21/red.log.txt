@@ -1,0 +1,9 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+FORECAST_TOKEN_PACKING checks=319 failures=6
+FAIL cities stored without per-city nested arrays
+FAIL cities stored without per-city nested arrays
+FAIL cities stored without per-city nested arrays
+FAIL cities stored without per-city nested arrays
+FAIL cities stored without per-city nested arrays
+FAIL cities stored without per-city nested arrays

@@ -877,17 +877,27 @@ func _trade_settlement_token(
 		else TradeNetwork.wartime_nation_mask(state)
 	)
 	var fields: Array = [
-		"trade_settlement_v1",
+		"trade_settlement_v2_packed_cities",
 		["family_revision", state.family_revision],
 		structure_fingerprint,
 		["wartime_nations", effective_wartime_mask],
 	]
+	# Keep integer dependencies exact beyond 2^53; ratios retain float64.
+	# One contiguous record block avoids allocating a small Array per node.
+	var city_inputs := PackedInt64Array()
+	city_inputs.resize(state.cities.size() * 4)
+	var city_ratios := PackedFloat64Array()
+	city_ratios.resize(state.cities.size())
+	var city_index := 0
 	for city in state.cities:
-		fields.append([
-			"city", city.id, city.food_storage,
-			city.garrison_manpower, city.garrison_supply_ratio,
-			city_war_disrupted(state, city),
-		])
+		var offset := city_index * 4
+		city_inputs[offset] = city.id
+		city_inputs[offset + 1] = city.food_storage
+		city_inputs[offset + 2] = city.garrison_manpower
+		city_inputs[offset + 3] = int(city_war_disrupted(state, city))
+		city_ratios[city_index] = city.garrison_supply_ratio
+		city_index += 1
+	fields.append(["cities_packed64", city_inputs, city_ratios])
 	var suzerainty_subjects := state.suzerainty.keys()
 	suzerainty_subjects.sort()
 	for subject_value in suzerainty_subjects:
@@ -935,17 +945,21 @@ func _trade_summary_settlement_token(
 		else TradeNetwork.wartime_nation_mask(state)
 	)
 	var fields: Array = [
-		"trade_summary_settlement_v1",
+		"trade_summary_settlement_v2_packed_cities",
 		["family_revision", state.family_revision],
 		structure_fingerprint,
 		["wartime_nations", effective_wartime_mask],
 		["diplomacy_revision", state.diplomacy_revision],
 	]
+	var city_inputs := PackedInt64Array()
+	city_inputs.resize(state.cities.size() * 3)
+	var offset := 0
 	for city in state.cities:
-		fields.append([
-			"city", city.id, city.garrison_manpower,
-			city_war_disrupted(state, city),
-		])
+		city_inputs[offset] = city.id
+		city_inputs[offset + 1] = city.garrison_manpower
+		city_inputs[offset + 2] = int(city_war_disrupted(state, city))
+		offset += 3
+	fields.append(["cities_packed64", city_inputs])
 	var suzerainty_subjects := state.suzerainty.keys()
 	suzerainty_subjects.sort()
 	for subject_value in suzerainty_subjects:
