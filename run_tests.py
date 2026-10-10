@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
-    "project_compile", "test_suite", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "atlas_capital_hops", "forecast_consumption_commit", "forecast_input_pools", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
+    "project_compile", "test_suite", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "atlas_capital_hops", "forecast_consumption_commit", "forecast_input_pools", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
     "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",

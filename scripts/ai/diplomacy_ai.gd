@@ -3491,6 +3491,8 @@ class ForecastInputBuilder extends RefCounted:
 	var garrison_contexts := {}
 	var inputs: Array[Dictionary] = []
 	var nation_ids: Array[int] = []
+	var city_rows: Array[int] = []
+	var center_rows: Array[int] = []
 	var selected := {}
 	var pools := {}
 	var phase := 0
@@ -3503,18 +3505,24 @@ class ForecastInputBuilder extends RefCounted:
 		nation_ids = work_ids.duplicate()
 		if nation_ids.is_empty():
 			for nation in state.nations: nation_ids.append(nation.id)
-		for id in nation_ids: selected[id] = true
+		var scan_rows := DiplomacyAI._forecast_scan_rows(state,cache)
+		for id in nation_ids:
+			selected[id] = true
+			city_rows.append_array(scan_rows.cities.get(id,[] as Array[int]))
+			center_rows.append_array(scan_rows.centers.get(id,[] as Array[int]))
+		# Indices retain each original traversal order, including duplicate centers.
+		city_rows.sort(); center_rows.sort()
 		if not cache.has("monthly_gold_flows"): cache.monthly_gold_flows=Simulation.monthly_gold_flows(state)
 		flows=cache.monthly_gold_flows
 		armies=ReinforcementRules.bucket_armies_by_nation(state,true)
 		garrison_index=Simulation.build_garrison_index(state)
 		conservative_index=garrison_index.duplicate()
 	func step() -> void:
-		var count: int = state.cities.size() if phase==0 else state.administrative_center_city_ids.size() if phase==1 else nation_ids.size()
+		var count: int = city_rows.size() if phase==0 else center_rows.size() if phase==1 else nation_ids.size()
 		if cursor>=count: phase+=1; cursor=0; return
 		match phase:
-			0: city(state.cities[cursor])
-			1: center(state.administrative_center_city_ids[cursor])
+			0: city(state.cities[city_rows[cursor]])
+			1: center(state.administrative_center_city_ids[center_rows[cursor]])
 			2: nation(state.nations[nation_ids[cursor]])
 			3: pool(state.nations[nation_ids[cursor]])
 		cursor+=1
@@ -3620,6 +3628,23 @@ class ForecastInputBuilder extends RefCounted:
 		var storage_capacity := 0
 		for member in state.food_pool_members(pool_id): storage_capacity+=int(food_output.get(member,0))*GameState.FOOD_CAPACITY_HALF_YEARS
 		input.food_capacity = storage_capacity
+
+
+## Raw ownership matches the builder's selection, including financial proxy cases.
+## The evaluation revision owns this index; never retain it across a new batch.
+static func _forecast_scan_rows(state: GameState,cache: Dictionary) -> Dictionary:
+	if cache.has("forecast_scan_rows"): return cache.forecast_scan_rows
+	var rows := {"cities":{},"centers":{}}
+	for index in range(state.cities.size()):
+		var owner := state.cities[index].owner_nation
+		if not rows.cities.has(owner): rows.cities[owner] = [] as Array[int]
+		(rows.cities[owner] as Array[int]).append(index)
+	for index in range(state.administrative_center_city_ids.size()):
+		var owner := state.cities[state.administrative_center_city_ids[index]].owner_nation
+		if not rows.centers.has(owner): rows.centers[owner] = [] as Array[int]
+		(rows.centers[owner] as Array[int]).append(index)
+	cache.forecast_scan_rows = rows
+	return rows
 
 ## A requested nation needs its entire financial food pool, including cityless
 ## succession identities. Keep already prepared pools and accepted commitments.

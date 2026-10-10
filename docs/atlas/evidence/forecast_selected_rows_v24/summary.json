@@ -1,0 +1,210 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "5ef9906870e7bd1b48ab4bc7bbfe22019d8c973f",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "scope": "headless computation, not GUI frame rate",
+  "configuration": {
+    "seed": 1,
+    "nations": 40,
+    "nodes": 1192,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "mask": {
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    }
+  },
+  "days": [
+    181,
+    215
+  ],
+  "frozen_file": ".dbg/daily-v9/frozen-day180.bin",
+  "frozen_sha256": "b9db9e38bd2fbb4f174206917e332982c668ed7f5bf408aaf60bbf0da17089d1",
+  "initial_native_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "metrics": {
+    "mean_ms": {
+      "before": 218.67837142857144,
+      "after": 215.94474285714284,
+      "reduction_percent": 1.2500681039329498
+    },
+    "p95_ms": {
+      "before": 326.812,
+      "after": 321.672,
+      "reduction_percent": 1.5727696657405439
+    },
+    "peak_ms": {
+      "before": 812.81,
+      "after": 760.175,
+      "reduction_percent": 6.475683123977313
+    },
+    "day210_monthly": {
+      "before": 572.297,
+      "after": 520.766
+    },
+    "day210_monthly_diplomacy": {
+      "before": 337.494,
+      "after": 303.277
+    },
+    "day210_monthly_reinforcements": {
+      "before": 112.533,
+      "after": 96.233
+    },
+    "day210_war_collect_precheck": {
+      "before": 66.339,
+      "after": 45.859
+    },
+    "day210_ai": {
+      "before": 136.15,
+      "after": 134.531
+    },
+    "day210_supply": {
+      "before": 42.778,
+      "after": 43.172
+    }
+  },
+  "equal_daily_states": 175,
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 31488,
+        "mean_ms": 220.3186,
+        "p95_ms": 335.164,
+        "peak_ms": 812.81,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 28592,
+        "mean_ms": 215.94474285714284,
+        "p95_ms": 320.443,
+        "peak_ms": 760.175,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 32660,
+        "mean_ms": 217.38857142857142,
+        "p95_ms": 322.877,
+        "peak_ms": 810.014,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 22532,
+        "mean_ms": 218.75494285714285,
+        "p95_ms": 321.672,
+        "peak_ms": 755.798,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 24992,
+        "mean_ms": 218.67837142857144,
+        "p95_ms": 331.451,
+        "peak_ms": 863.825,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 22688,
+        "mean_ms": 214.14162857142856,
+        "p95_ms": 328.874,
+        "peak_ms": 760.728,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 25032,
+        "mean_ms": 218.12982857142856,
+        "p95_ms": 323.728,
+        "peak_ms": 811.314,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 23128,
+        "mean_ms": 218.2558857142857,
+        "p95_ms": 334.787,
+        "peak_ms": 753.154,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 15964,
+        "mean_ms": 221.13214285714287,
+        "p95_ms": 326.812,
+        "peak_ms": 815.779,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 31544,
+        "mean_ms": 214.94188571428572,
+        "p95_ms": 321.274,
+        "peak_ms": 762.171,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "runtime": {
+    "days": 35,
+    "equal_daily_states": 35,
+    "before_pid": 30824,
+    "after_pid": 12376,
+    "workers": 4,
+    "note": "Inherited cumulative runtime peak counters are not new main-thread performance evidence."
+  },
+  "tests": {
+    "new_checks": 221,
+    "working_passed": 19,
+    "staged_passed": 9,
+    "core_checks": 505
+  },
+  "source_archives": {
+    "scripts__ai__diplomacy_ai.gd.gz": {
+      "original_path": "scripts/ai/diplomacy_ai.gd",
+      "sha256": "153ef419be9fc1696da80673d8e82b338dbbb4f1159644713e23582dc93c2e8a"
+    },
+    "scripts__ai__threat_field.gd.gz": {
+      "original_path": "scripts/ai/threat_field.gd",
+      "sha256": "22574cc27b17afe5dc0d2ac9a4d491b032fd717628064c2b5b3674c6f7f20ac2"
+    },
+    "scripts__core__rebellion_system.gd.gz": {
+      "original_path": "scripts/core/rebellion_system.gd",
+      "sha256": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118"
+    },
+    "scripts__core__ruler_profile.gd.gz": {
+      "original_path": "scripts/core/ruler_profile.gd",
+      "sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4"
+    },
+    "scripts__core__trade_network.gd.gz": {
+      "original_path": "scripts/core/trade_network.gd",
+      "sha256": "00d0b36000608c8713fbc9d4b98a3f5c2c8719b83a223f55969d903b6a4e0404"
+    },
+    "scripts__simulation__rules__supply_rules.gd.gz": {
+      "original_path": "scripts/simulation/rules/supply_rules.gd",
+      "sha256": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa"
+    },
+    "scripts__simulation__simulation.gd.gz": {
+      "original_path": "scripts/simulation/simulation.gd",
+      "sha256": "ed258dda025e33d0e3338f8763d43b2aa042e2e57550f98e37bb37336a160e39"
+    },
+    "scripts__state__game_state.gd.gz": {
+      "original_path": "scripts/state/game_state.gd",
+      "sha256": "b060bb056d0d5fc8157c930a28337236b72e5b2ffcdb8cb689569005e188e3a1"
+    },
+    "diplomacy_ai-before.gd.gz": {
+      "original_path": "scripts/ai/diplomacy_ai.gd",
+      "sha256": "5389b8a70317665c4f59ad5682597a5db0ca30f458ec13b0c228ca5987c2210c",
+      "variant": "before"
+    }
+  },
+  "limitations": [
+    "One seed, 35-day window and one monthly boundary. No long-run or GUI claim.",
+    "Two paired daily means increased; all five peaks decreased.",
+    "Working benchmark includes earlier pending features; staged validation is separate.",
+    "Diagnostic wrappers add overhead and are excluded from performance comparisons."
+  ]
+}

@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ADMIN_DAILY_PROGRESS functions 190
+ADMIN_DAILY_PROGRESS functions 200
+ADMIN_DAILY_PROGRESS functions 210
+V24_FUNCTION_PROBE {"_resource_forecast_inputs":[2061,185114],"food_posture":[714,53282],"resource_forecast":[1720,244110],"resource_report":[135,100121],"war_food_report":[147,258427]}
+V24_EVALUATE_PROBE {"elapsed_usec":29228,"evaluations":1589,"food_shortage":252,"gold_shortage":0,"peak_usec":158,"reserve_growth_denied":461}
+ADMIN_DAILY_COMPLETE functions 26616

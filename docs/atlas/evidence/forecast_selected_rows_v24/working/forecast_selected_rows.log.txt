@@ -1,0 +1,3 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+FORECAST_SELECTED_ROWS_RESULT checks=221 failures=0

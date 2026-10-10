@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+RUNTIME_PROGRESS after 190
+RUNTIME_PROGRESS after 200
+RUNTIME_PROGRESS after 210
+RUNTIME_COMPLETE after 12376
