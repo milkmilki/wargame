@@ -15,6 +15,10 @@ func run():
 	row_control.pressed.emit(); check(selection==[["nation",2]],"navigation uses the latest controller, not the old callback target")
 	var actions := []; panel.act.connect(func(key,id): actions.append([key,id]))
 	panel.buttons[0].node.pressed.emit(); check(actions==[["nation",2]],"actions use the current document")
+	updated.sections.append({"title":"军队","rows":[{"label":"军队1","value":"5000人","kind":"army","id":1}]})
+	var action_control: Control=panel.buttons[0].node
+	panel.show_document(updated)
+	check(panel.rows[0].node==row_control and panel.buttons[0].node==action_control,"roster growth preserves overview and action controls")
 	check(panel.mouse_filter==Control.MOUSE_FILTER_STOP,"the panel stops map clicks and wheel input")
 	check(not panel.mouse_force_pass_scroll_events and not panel.scroll.mouse_force_pass_scroll_events,"wheel input does not propagate at scroll limits")
 	check(panel.scroll.get_global_rect().end.y<=panel.get_global_rect().end.y,"scrolling content stays inside the panel")

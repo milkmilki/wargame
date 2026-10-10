@@ -61,6 +61,8 @@ func setup(view) -> void:
 	var orders := HBoxContainer.new(); body.add_child(orders)
 	button(orders,"选本国军队",view.select_player_army); button(orders,"对选区宣战",view.declare_selected_war); button(orders,"前往选区",view.order_to_inspected)
 	var debug := HBoxContainer.new(); body.add_child(debug)
+	var city_names := CheckButton.new(); city_names.text="城市名称"; city_names.button_pressed=view.text_layer.show_city_names; debug.add_child(city_names)
+	city_names.toggled.connect(func(value): view.text_layer.show_city_names=value; view.text_layer.rebuild())
 	var junctions := CheckButton.new(); junctions.text="交通节点"; debug.add_child(junctions)
 	junctions.toggled.connect(func(value): if view.overlay!=null: view.overlay.show_traffic=value; view.overlay.queue_redraw())
 	button(debug,"截图",func(): await view.export_screenshot())

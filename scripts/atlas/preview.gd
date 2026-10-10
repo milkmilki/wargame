@@ -27,6 +27,7 @@ var startup_profile := {}
 @export var high_performance_renderer := true
 var render_scheduler := RenderScheduler.new()
 var symbol_tiles: Node
+var raster_layers: Node
 var mode_cache := {}
 var prepared_political_texture: ImageTexture
 var political_id_texture: ImageTexture
@@ -206,6 +207,8 @@ func make_ui() -> void:
 				for copy in copies: copy.ink.set(property,value); copy.ink.queue_redraw())
 	var words := CheckButton.new(); words.text = "文字"; words.button_pressed = true; layers.add_child(words)
 	words.toggled.connect(func(value): text_layer.show_names = value; text_layer.rebuild())
+	var city_words := CheckButton.new(); city_words.text = "城市名称"; city_words.button_pressed = text_layer.show_city_names; layers.add_child(city_words)
+	city_words.toggled.connect(func(value): text_layer.show_city_names = value; text_layer.rebuild())
 	button(layers,"全图",fit_map); button(layers,"保存快照",save_snapshot); button(layers,"加载快照",load_snapshot)
 	button(layers,"截图",func(): await export_screenshot())
 	var ownership_row := HBoxContainer.new(); hud.add_child(ownership_row)
@@ -319,6 +322,7 @@ func build_view() -> void:
 	for key in render_scheduler.cache.keys():
 		if key.begins_with("geometry:"): render_scheduler.forget(key)
 	if is_instance_valid(symbol_tiles): symbol_tiles.free(); symbol_tiles = null
+	if is_instance_valid(raster_layers): raster_layers.free(); raster_layers=null
 	if not data.regions.has("names"): Names.assign(data)
 	if not data.has("places"):
 		var place_world: Dictionary = data.environment.duplicate(); place_world.mesh = data.mesh; place_world.params = data.params
@@ -380,10 +384,14 @@ func build_view() -> void:
 	for key in ice_geometry.textures: base_material.set_shader_parameter(key,ice_geometry.textures[key])
 	for field in fields: base_material.set_shader_parameter({"paint":"paint_fields","field":"world_fields","distance":"distances","detail":"detail_fields"}[field],fields[field])
 	var base := ImageTexture.create_from_image(Image.create(2048,1024,false,Image.FORMAT_RGBA8))
+	if high_performance_renderer:
+		raster_layers=preload("res://scripts/atlas/raster_layers.gd").new(); add_child(raster_layers)
+		raster_layers.setup(base,base_material,render_scheduler)
 	var ink := Ink.new(); ink.scheduler = render_scheduler; ink.high_performance = high_performance_renderer; ink.data = data; ink.borders = display.lines; ink.route_lines = Ink.road_lines(data)
 	for shift in [-2048.,0.,2048.]:
 		var root := Node2D.new(); root.position.x = shift; map_root.add_child(root)
 		var background := Sprite2D.new(); background.centered = false; background.texture = base; background.material = base_material; root.add_child(background)
+		if high_performance_renderer: raster_layers.bind(background)
 		var wash_sprite := Sprite2D.new(); wash_sprite.centered = false; wash_sprite.z_index = 2; root.add_child(wash_sprite)
 		copies.append({"wash":wash_sprite,"ink":ink})
 	ink.z_index = 3; map_root.add_child(ink)
@@ -395,11 +403,15 @@ func build_view() -> void:
 		for node in symbol_view.get_children(): node.queue_free()
 		forest_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		symbol_layers.clear()
-		symbol_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		symbol_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		symbol_view.msaa_2d = Viewport.MSAA_DISABLED # Tiles already contain resolved 4x MSAA.
 		symbol_view.size = Vector2i(size)
-		symbol_tiles = SymbolTiles.new(); add_child(symbol_tiles); symbol_tiles.setup(data,display,render_scheduler,symbol_view)
-		text_layer.high_performance = true; text_layer.scheduler = render_scheduler
+		symbol_tiles = SymbolTiles.new(); symbol_tiles.static_world=true; symbol_tiles.world_screen=symbol_screen
+		add_child(symbol_tiles); symbol_tiles.world_ready.connect(func():
+			for copy in copies:
+				if copy.wash.material: symbol_tiles.bind_world_material(copy.wash.material))
+		symbol_tiles.setup(data,display,render_scheduler,symbol_view)
+		text_layer.high_performance = true; text_layer.static_world=true; text_layer.scheduler = render_scheduler
 	fit_map(); update_mode(); refresh_symbols()
 	await get_tree().process_frame
 	if high_performance_renderer and not await await_render_ready(60000): printerr("ATLAS_INITIAL_RENDER_TIMEOUT")
@@ -432,6 +444,7 @@ func update_mode() -> void:
 	var material := ShaderMaterial.new(); material.shader = load("res://assets/atlas/wash.gdshader")
 	material.set_shader_parameter("edge_field",political_edge if mode in [0,1] else province_edge)
 	material.set_shader_parameter("symbols",symbol_view.get_texture())
+	if is_instance_valid(symbol_tiles) and symbol_tiles.static_world: symbol_tiles.bind_world_material(material)
 	var segments: Dictionary = political_segments if mode in [0,1] else province_segments
 	for key in segments: material.set_shader_parameter(key,segments[key])
 	var palette_values := PackedInt32Array(); palette_values.resize(maxi(1,colors.size()))
@@ -634,8 +647,9 @@ func camera_feedback() -> void:
 
 func refresh_cached_camera() -> void:
 	var origin := map_root.position
+	if is_instance_valid(raster_layers): raster_layers.set_zoom(zoom)
 	symbol_tiles.set_camera(origin,zoom,Vector2(symbol_view.size))
-	symbol_screen.position = Vector2.ZERO; symbol_screen.scale = Vector2.ONE
+	if not symbol_tiles.static_world: symbol_screen.position = Vector2.ZERO; symbol_screen.scale = Vector2.ONE
 	symbol_cache_position = map_root.position; symbol_cache_zoom = zoom
 	var rect := Rect2(-map_root.position/zoom,size/zoom)
 	var gs := pow(maxf(1.,zoom/1.35),-.22)
@@ -643,7 +657,9 @@ func refresh_cached_camera() -> void:
 	coast_ink.zoom = zoom; coast_ink.visible_world = rect; coast_ink.rebuild()
 	for copy in copies:
 		if copy.wash.material:
-			copy.wash.material.set_shader_parameter("symbol_origin",origin); copy.wash.material.set_shader_parameter("symbol_scale",zoom); copy.wash.material.set_shader_parameter("view_zoom",zoom)
+			if not symbol_tiles.static_world:
+				copy.wash.material.set_shader_parameter("symbol_origin",origin); copy.wash.material.set_shader_parameter("symbol_scale",zoom)
+			copy.wash.material.set_shader_parameter("view_zoom",zoom)
 	if not copies.is_empty():
 		var ink: Node2D = copies[0].ink; ink.view_zoom = zoom; ink.visible_world = rect
 		if ink.persistent_layers.is_empty(): ink.update_persistent()

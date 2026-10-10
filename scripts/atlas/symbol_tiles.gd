@@ -1,5 +1,6 @@
 extends Node
-## Frozen native symbol tiles; only the visible-tile compositors follow the camera.
+## Frozen native symbols. Production uses one global image; the development
+## tile mode retains viewport compositors for comparison.
 const Symbols = preload("res://scripts/atlas/symbols.gd")
 const Index = preload("res://scripts/atlas/render_index.gd")
 const Scheduler = preload("res://scripts/atlas/render_scheduler.gd")
@@ -39,9 +40,17 @@ var transition_lod := -1
 var view_rect := Rect2(0,0,2048,1024)
 var origin := Vector2.ZERO
 var zoom := 1.
+var camera_size := Vector2.ZERO
 var tile_build_count := 0
 var tile_hits := 0
 var tile_render_max_usec := 0
+var groups_dirty := true
+var group_update_count := 0
+var composite_update_count := 0
+var static_world := false
+var world_screen: Sprite2D
+var world_copies: Array = []
+signal world_ready
 
 func setup(map_data: Dictionary,plan: Dictionary,service: Node,target: SubViewport) -> void:
 	data = map_data; display = plan; scheduler = service; output = target; world_version += 1
@@ -52,9 +61,16 @@ func setup(map_data: Dictionary,plan: Dictionary,service: Node,target: SubViewpo
 	for glyph in display.glyphs:
 		var r: float = glyph.s*2.; max_radius = maxf(max_radius,r)
 		glyph_index.add(Rect2(Vector2(glyph.x,glyph.y)-Vector2.ONE*r,Vector2.ONE*r*2))
+	if static_world:
+		if is_instance_valid(world_screen):
+			for shift in [-8192.,8192.]:
+				var sprite := Sprite2D.new(); sprite.centered=false; sprite.position.x=shift
+				world_screen.add_child(sprite); world_copies.append(sprite)
+		request("overview",Rect2(0,0,2048,1024),4.,true,-10)
+		return
 	for i in range(2):
 		var view := SubViewport.new(); view.disable_3d = true; view.transparent_bg = true; view.size = output.size
-		view.render_target_update_mode = SubViewport.UPDATE_ALWAYS; add_child(view)
+		view.render_target_update_mode = SubViewport.UPDATE_DISABLED; add_child(view)
 		var canvas := Canvas.new(); view.add_child(canvas); groups.append({"view":view,"canvas":canvas,"keys":[]})
 	var sprite := Sprite2D.new(); sprite.centered = false; sprite.texture = groups[0].view.get_texture()
 	blend_material = ShaderMaterial.new(); blend_material.shader = preload("res://assets/atlas/tile_blend.gdshader")
@@ -118,13 +134,19 @@ func create_tile(key: String,rect: Rect2,detail: float,pinned: bool,geometry: Di
 	tile_build_count += 1; tile_render_max_usec = maxi(tile_render_max_usec,Time.get_ticks_usec()-start)
 
 func set_camera(position_value: Vector2,zoom_value: float,viewport_size: Vector2) -> void:
+	if static_world:
+		origin=position_value; zoom=zoom_value
+		place_world_screen()
+		return
+	if origin==position_value and zoom==zoom_value and camera_size==viewport_size and target_lod>=0: return
+	camera_size = viewport_size
 	origin = position_value; zoom = zoom_value; view_rect = Rect2(-origin/zoom,viewport_size/zoom)
 	var next := Scheduler.choose_lod(zoom,target_lod)
 	if next!=target_lod: target_lod = next
 	for group in groups:
 		group.view.size = output.size
 		group.canvas.position = origin; group.canvas.scale = Vector2.ONE*zoom
-	update_groups()
+	groups_dirty = true
 
 func keys_for(lod: int,margin: int = 0,priority: int = -1) -> Array:
 	var out: Array = []; var detail: float = Scheduler.LODS[lod]; var step := TILE/detail
@@ -141,7 +163,6 @@ func keys_for(lod: int,margin: int = 0,priority: int = -1) -> Array:
 	return out
 
 func _process(delta: float) -> void:
-	if groups.is_empty(): return
 	for key in entries.keys():
 		var row: Dictionary = entries[key]
 		if not row.registered and not row.copying and Engine.get_process_frames()>=row.ready_frame:
@@ -150,6 +171,7 @@ func _process(delta: float) -> void:
 			TileTexture.copy(row.texture,Rect2i(Vector2i.ONE*(row.pad-1),row.pixels+Vector2i.ONE*2),func(texture,copied):
 				if not is_instance_valid(owner): return
 				source.registered = true; source.texture = texture; owner.requests.erase(name_value)
+				owner.groups_dirty = true
 				if copied:
 					source.pad = 1; source.bytes = (source.pixels.x+2)*(source.pixels.y+2)*4
 					source.view.queue_free(); source.view = null
@@ -158,20 +180,38 @@ func _process(delta: float) -> void:
 					for child in source.view.get_children(): child.queue_free()
 				source.forest.queue_free(); source.forest = null
 				owner.scheduler.remember(name_value,source,source.bytes,source.pinned or owner.visible_keys.has(name_value))
-				if name_value=="overview": owner.overview = source)
+				if name_value=="overview":
+					owner.overview = source
+					if owner.static_world:
+						owner.group_update_count+=1
+						owner.place_world_screen(); owner.world_ready.emit())
 		elif row.registered and not scheduler.cache.has(key):
 			if is_instance_valid(row.view): row.view.queue_free()
 			entries.erase(key)
-	update_groups()
+			groups_dirty = true
+	if static_world or groups.is_empty(): return
+	if groups_dirty:
+		groups_dirty = false; update_groups(); request_composite()
 	if blending:
 		blend_elapsed += delta; blend_material.set_shader_parameter("blend",minf(1.,blend_elapsed/.12))
+		output.render_target_update_mode = SubViewport.UPDATE_ONCE
 		if blend_elapsed>=.12:
 			blending = false; active_group = 1-active_group; current_lod = transition_lod
 			blend_material.set_shader_parameter("older",groups[active_group].view.get_texture()); blend_material.set_shader_parameter("newer",groups[1-active_group].view.get_texture()); blend_material.set_shader_parameter("blend",0.)
 			clear_group(1-active_group)
+			groups_dirty = true
+
+func request_composite() -> void:
+	# Cached textures are rendered only when their placement/content changes.
+	# The final mask also freezes; otherwise three offscreen passes run at idle.
+	for group in groups:
+		group.view.render_target_update_mode = SubViewport.UPDATE_ONCE
+	output.render_target_update_mode = SubViewport.UPDATE_ONCE
+	composite_update_count += 1
 
 func update_groups() -> void:
 	if target_lod<0 or overview.is_empty(): return
+	group_update_count += 1
 	visible_keys.clear()
 	var target_keys := keys_for(target_lod); var complete := target_keys.all(func(key): return entries.has(key) and entries[key].registered)
 	if current_lod<0: current_lod = target_lod
@@ -197,8 +237,6 @@ func update_groups() -> void:
 				for key in keys_for(neighbor,0,8): wanted[key] = true
 	for key in scheduler.cancel_queued("symbols",wanted): requests.erase(key)
 	if current_lod==target_lod and not blending: clear_group(1-active_group)
-	groups[active_group].view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	groups[1-active_group].view.render_target_update_mode = SubViewport.UPDATE_ALWAYS if blending else SubViewport.UPDATE_DISABLED
 
 func set_rows(group_index: int,keys: Array) -> void:
 	var rows: Array = []; var stamp: Array = []
@@ -221,12 +259,32 @@ func clear_group(group_index: int) -> void:
 	groups[group_index].keys.clear(); groups[group_index].canvas.rows.clear(); groups[group_index].canvas.queue_redraw()
 
 func is_ready() -> bool:
+	if static_world: return not overview.is_empty()
 	if target_lod<0 or overview.is_empty() or blending: return false
 	for key in keys_for(target_lod):
 		if not entries.has(key) or not entries[key].registered: return false
 	return true
 
+func place_world_screen() -> void:
+	if not static_world or overview.is_empty() or not is_instance_valid(world_screen): return
+	world_screen.texture=overview.texture
+	world_screen.region_enabled=true; world_screen.region_rect=Rect2(Vector2.ONE*overview.pad,overview.region_size)
+	world_screen.position=origin
+	world_screen.scale=Vector2.ONE*zoom/overview.detail
+	for sprite in world_copies:
+		sprite.texture=overview.texture; sprite.region_enabled=true; sprite.region_rect=world_screen.region_rect
+
+func bind_world_material(material: ShaderMaterial) -> void:
+	if not static_world or overview.is_empty(): return
+	material.set_shader_parameter("symbols",overview.texture)
+	material.set_shader_parameter("symbols_world",true)
+	material.set_shader_parameter("symbol_world_pad",float(overview.pad))
+	material.set_shader_parameter("symbol_world_detail",float(overview.detail))
+
 func _exit_tree() -> void:
+	for sprite in world_copies:
+		if is_instance_valid(sprite): sprite.queue_free()
+	if static_world and is_instance_valid(world_screen): world_screen.region_enabled=false; world_screen.texture=null
 	if is_instance_valid(scheduler):
 		scheduler.invalidate("symbols")
 		for key in entries: scheduler.forget(key)

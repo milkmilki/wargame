@@ -1,5 +1,6 @@
 extends Node2D
-## Native screen-space label/settlement layer. Layout comes from original atlas paths.
+## Persistent world labels/settlements with optional viewport settlement names.
+## Layout comes from original atlas paths.
 ## Port of render/labels/{draw,polity,settlements}.ts / civ/settlements.ts.
 ## Static preview: all eligible seats are cities; capitals/majors use castle/large-city marks.
 ## AGPL-3.0-only.
@@ -8,6 +9,16 @@ const CitySymbols = preload("res://scripts/atlas/city_symbols.gd")
 const State = preload("res://scripts/atlas/text_state.gd")
 const Scheduler = preload("res://scripts/atlas/render_scheduler.gd")
 var high_performance := false
+var static_world := false
+const STATIC_DETAIL := 4.
+var static_geography: Node2D
+var static_countries: Node2D
+var static_geo_key := 0
+var static_country_key := 0
+var static_geo_rows: Array = []
+var static_busy := false
+var static_build_count := 0
+var static_marker_key: Array = []
 var scheduler: Node
 var pool := State.Pool.new()
 var snapshot: Dictionary = {}
@@ -30,10 +41,11 @@ var marker_data_key: Array = []
 var warmed := {}
 class Chunk extends Node2D:
 	var host: Node2D
+	var fixed_detail := 0.
 	var marks: Array = []
 	var rows: Array = []
 	func _draw():
-		for shift in [-2048.,0.,2048.]: host.draw_layout(self,marks,rows,Vector2(shift*host.draw_detail(),0))
+		for shift in [-2048.,0.,2048.]: host.draw_layout(self,marks,rows,Vector2(shift*(fixed_detail if fixed_detail>0 else host.draw_detail()),0))
 var data: Dictionary = {}
 var raster: Dictionary = {}
 var labels: Array = []
@@ -42,6 +54,7 @@ var origin := Vector2.ZERO
 var zoom := 1.0
 var canvas_size := Vector2(2048,1024)
 var show_names := true
+var show_city_names := false
 var show_cities := true
 var show_polities := true
 var marks: Array = []
@@ -90,7 +103,7 @@ func place(candidates: Array,px: float,color: Color,halo: Color,halo_width: floa
 		for box in boxes:
 			if hits(box,ignore): valid = false; break
 		if not valid: continue
-		if not keep_mark.is_empty() and not room_for_capital(keep_mark,boxes): continue
+		if show_city_names and not keep_mark.is_empty() and not room_for_capital(keep_mark,boxes): continue
 		var misses := 0.
 		if on or owner>=0:
 			var bad := 0; var samples := 0
@@ -156,7 +169,7 @@ func rebuild() -> void:
 	if show_cities:
 		for mark in city_marks:
 			if mark.kind!=4: jobs.append({"type":"mark","item":mark,"priority":100.})
-			if show_names and zoom>=[1.,1.,2.,1.3,1.][mark.kind]: jobs.append({"type":"city","item":mark,"priority":[20.,45.,70.,89.,100.5][mark.kind]})
+			if show_names and show_city_names and zoom>=[1.,1.,2.,1.3,1.][mark.kind]: jobs.append({"type":"city","item":mark,"priority":[20.,45.,70.,89.,100.5][mark.kind]})
 	if show_names and show_polities:
 		for label in labels: jobs.append({"type":"nation","item":label,"priority":101+minf(4.9,log(1+label.regions)/log(2)*.7)})
 	for i in range(jobs.size()): jobs[i].order = i
@@ -245,7 +258,7 @@ func hit_city(world: Vector2) -> int:
 	elif not high_performance:
 		for row in marks:
 			if row.box.has_point(wrapped*zoom+origin): return row.index
-	if not show_names: return -1
+	if not show_names or not show_city_names: return -1
 	for row in text_rows:
 		if not row.has("city_id"): continue
 		var boxes := Layout.glyph_boxes(row.glyphs,row.px,2.)
@@ -263,45 +276,104 @@ func invalidate_layout() -> void:
 	if content_key!=content: pool = State.Pool.new(); content_key = content
 	# Numerical worker snapshots contain no Node, Font, texture, or mutable game object.
 	snapshot = {"data":{"cities":data.cities.duplicate(true),"nations":data.nations.duplicate(true),"ownership":PackedInt32Array(data.ownership),"mesh":{"x":data.mesh.x,"y":data.mesh.y},"places":data.get("places",[]).duplicate(true)},"raster":{"water":raster.water},"owners":owners.duplicate(),"labels":labels.duplicate(true),"names":show_names,"cities":show_cities,"polities":show_polities}
+	snapshot.city_names = show_city_names
+	if static_world:
+		prepare_static_labels()
+		# Only opt-in settlement names use the viewport-dependent layout.
+		snapshot.data.places=[]; snapshot.polities=false
+		if not show_city_names:
+			marks.clear(); text_rows.clear()
+			for chunk in label_chunks.values(): chunk.node.queue_free()
+			label_chunks.clear()
 	queue_redraw()
 
 func set_camera(position_value: Vector2,zoom_value: float,viewport_size: Vector2) -> void:
 	camera_origin = position_value; camera_zoom = zoom_value
 	requested_rect = Rect2(-position_value/zoom_value,viewport_size/zoom_value)
-	var next := Scheduler.choose_lod(zoom_value,lod_index)
+	var next := Scheduler.LODS.find(STATIC_DETAIL) if static_world and not show_city_names else Scheduler.choose_lod(zoom_value,lod_index)
 	if next!=lod_index: lod_index = next; layout_coverage = Rect2()
+	if static_world and not show_city_names: rendered_lod=next
 	position = position_value; scale = Vector2.ONE*zoom_value/draw_detail()
+	place_static_labels()
 	if is_instance_valid(city_markers):
 		city_markers.scale = Vector2.ONE*draw_detail()/marker_detail
 		city_markers.visible = show_cities
 
 func _process(_delta: float) -> void:
 	if not high_performance or snapshot.is_empty() or lod_index<0: return
+	if static_world:
+		if not show_city_names: return
+	else:
+		update_city_markers()
+	if busy or layout_coverage.encloses(requested_rect): return
+	var rect := requested_rect.grow(96./Scheduler.LODS[lod_index])
+	var detail: float = Scheduler.LODS[lod_index]; var target := lod_index; var version := layout_version
+	var worker_pool := pool; var input := snapshot
+	task_serial += 1; var serial := task_serial; request_serial = serial; busy = true
+	var key := "%d:%d:%d:%d:%d:%d"%[hash(content_key),target,int(show_names),int(show_cities),int(show_polities),int(show_city_names)]
+	scheduler.submit("labels",func(): return worker_pool.calculate(key,input,rect,detail),func(result):
+		if request_serial==serial: busy = false
+		if target!=lod_index or version!=layout_version: return
+		marks = result.marks; text_rows = result.rows; rendered_lod = target; layout_coverage = rect; layout_count += 1
+		scheduler.remember("text:%d"%get_instance_id(),null,result.cache_bytes,true)
+		publish_chunks(); position = camera_origin; scale = Vector2.ONE*camera_zoom/detail; place_static_labels(),0)
+	warm_neighbors()
+
+func update_city_markers() -> void:
 	if city_markers==null:
 		city_markers = preload("res://scripts/atlas/city_markers.gd").new(); city_markers.z_index = -1; add_child(city_markers)
 	if marker_data_key!=content_key: city_markers.setup(snapshot.data); marker_data_key = content_key.duplicate()
 	marker_detail = Scheduler.LODS[lod_index]; city_markers.visible = show_cities
 	city_markers.set_view(requested_rect,marker_detail,marks if rendered_lod==lod_index and layout_coverage.encloses(requested_rect) else [])
 	city_markers.scale = Vector2.ONE*draw_detail()/marker_detail
-	if busy or layout_coverage.encloses(requested_rect): return
-	var rect := requested_rect.grow(96./Scheduler.LODS[lod_index])
-	var detail: float = Scheduler.LODS[lod_index]; var target := lod_index; var version := layout_version
-	var worker_pool := pool; var input := snapshot
-	task_serial += 1; var serial := task_serial; request_serial = serial; busy = true
-	var key := "%d:%d:%d:%d:%d"%[hash(content_key),target,int(show_names),int(show_cities),int(show_polities)]
-	scheduler.submit("labels",func(): return worker_pool.calculate(key,input,rect,detail),func(result):
-		if request_serial==serial: busy = false
-		if target!=lod_index or version!=layout_version: return
-		marks = result.marks; text_rows = result.rows; rendered_lod = target; layout_coverage = rect; layout_count += 1
-		scheduler.remember("text:%d"%get_instance_id(),null,result.cache_bytes,true)
-		publish_chunks(); position = camera_origin; scale = Vector2.ONE*camera_zoom/detail,0)
-	warm_neighbors()
+
+func place_static_labels() -> void:
+	if not static_world: return
+	for node in [static_geography,static_countries]:
+		if is_instance_valid(node): node.scale=Vector2.ONE*draw_detail()/STATIC_DETAIL
+	if is_instance_valid(static_geography): static_geography.visible=show_names
+	if is_instance_valid(static_countries): static_countries.visible=show_names and show_polities
+
+func prepare_static_labels() -> void:
+	if city_markers==null:
+		city_markers=preload("res://scripts/atlas/city_markers.gd").new(); city_markers.z_index=-1; add_child(city_markers)
+	var marker_key := [hash(data.cities),hash(data.nations),hash(data.ownership)]
+	if static_marker_key!=marker_key:
+		city_markers.setup(snapshot.data); marker_detail=STATIC_DETAIL
+		city_markers.set_view(Rect2(0,0,2048,1024),STATIC_DETAIL)
+		static_marker_key=marker_key
+	city_markers.visible=show_cities
+	if static_geography==null:
+		static_geography=Chunk.new(); static_geography.host=self; static_geography.fixed_detail=STATIC_DETAIL; add_child(static_geography)
+		static_countries=Chunk.new(); static_countries.host=self; static_countries.fixed_detail=STATIC_DETAIL; add_child(static_countries)
+	place_static_labels()
+	var geo_key := hash([data.get("places",[]),raster.water])
+	var country_key := hash([labels,data.nations,owners])
+	if geo_key==static_geo_key and country_key==static_country_key: return
+	scheduler.invalidate("labels-static"); static_busy=true
+	var full := Rect2(0,0,2048,1024)
+	var geo_input := {"data":{"cities":[],"nations":[],"ownership":[],"mesh":snapshot.data.mesh,"places":snapshot.data.places},"raster":snapshot.raster,"owners":PackedInt32Array(),"labels":[],"names":true,"cities":false,"polities":false,"static_geography":true}
+	var country_input := {"data":{"cities":[],"nations":snapshot.data.nations,"ownership":snapshot.data.ownership,"mesh":snapshot.data.mesh,"places":[]},"raster":snapshot.raster,"owners":snapshot.owners,"labels":snapshot.labels,"names":true,"cities":false,"polities":true}
+	var cached_rows := static_geo_rows; var rebuild_geo := geo_key!=static_geo_key
+	scheduler.submit("labels-static",func():
+		var numerical := State.Pool.new()
+		var geo_rows: Array=numerical.calculate("geo",geo_input,full,STATIC_DETAIL).rows if rebuild_geo else cached_rows
+		var countries: Dictionary=numerical.calculate("countries",country_input,full,STATIC_DETAIL)
+		return {"geo":geo_rows,"countries":countries.rows},func(result):
+		static_busy=false; static_geo_key=geo_key; static_country_key=country_key; static_build_count+=1
+		if rebuild_geo:
+			static_geo_rows=result.geo; static_geography.rows=result.geo; static_geography.queue_redraw()
+		static_countries.rows=result.countries; static_countries.queue_redraw()
+		var bytes := 0
+		for row in result.geo+result.countries: bytes+=128+row.glyphs.size()*512
+		scheduler.remember("static-text:%d"%get_instance_id(),null,bytes,true)
+		place_static_labels(),0)
 
 func warm_neighbors() -> void:
 	var worker_pool := pool; var input := snapshot; var rect := requested_rect.grow(96./Scheduler.LODS[lod_index])
 	for neighbor in [lod_index-1,lod_index+1]:
 		if neighbor<0 or neighbor>=Scheduler.LODS.size(): continue
-		var key := "%d:%d:%d:%d:%d"%[hash(content_key),neighbor,int(show_names),int(show_cities),int(show_polities)]
+		var key := "%d:%d:%d:%d:%d:%d"%[hash(content_key),neighbor,int(show_names),int(show_cities),int(show_polities),int(show_city_names)]
 		var stamp := "%s:%d:%d"%[key,floori(rect.position.x/128),floori(rect.position.y/128)]
 		if warmed.has(stamp): continue
 		warmed[stamp] = true; var detail: float = Scheduler.LODS[neighbor]
@@ -309,6 +381,7 @@ func warm_neighbors() -> void:
 
 func _exit_tree() -> void:
 	if is_instance_valid(scheduler): scheduler.invalidate("labels"); scheduler.forget("text:%d"%get_instance_id())
+	if is_instance_valid(scheduler): scheduler.invalidate("labels-static"); scheduler.forget("static-text:%d"%get_instance_id())
 
 func publish_chunks() -> void:
 	var grouped := {}; var detail := draw_detail()
@@ -331,4 +404,6 @@ func publish_chunks() -> void:
 		chunk.marks = []; chunk.rows = grouped[key].rows; chunk.queue_redraw(); label_chunks[key] = {"node":chunk,"key":value}
 
 func is_ready() -> bool:
+	if static_world and not show_city_names: return not static_busy
+	if static_world and static_busy: return false
 	return not busy and rendered_lod==lod_index and layout_coverage.encloses(requested_rect)

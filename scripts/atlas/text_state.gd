@@ -13,6 +13,8 @@ var origin := Vector2.ZERO
 var zoom := 1.0
 var canvas_size := Vector2(2048,1024)
 var show_names := true
+var show_city_names := false
+var static_geography := false
 var show_cities := true
 var show_polities := true
 var marks: Array = []
@@ -64,7 +66,7 @@ func place(candidates: Array,px: float,color: Color,halo: Color,halo_width: floa
 		for box in boxes:
 			if hits(box,ignore): valid = false; break
 		if not valid: continue
-		if not keep_mark.is_empty() and not room_for_capital(keep_mark,boxes): continue
+		if show_city_names and not keep_mark.is_empty() and not room_for_capital(keep_mark,boxes): continue
 		var misses := 0.
 		if on or owner>=0:
 			var bad := 0; var samples := 0
@@ -124,13 +126,13 @@ func prepare() -> void:
 	var jobs: Array = []
 	if show_names:
 		for p in data.get("places",[]):
-			if zoom<[1.,1.8,3.][clampi(p.rank-1,0,2)]: continue
+			if not static_geography and zoom<[1.,1.8,3.][clampi(p.rank-1,0,2)]: continue
 			var kind: String = "ocean" if p.kind=="sea" and p.name.ends_with("洋") else "bay" if p.kind=="sea" and p.name.ends_with("湾") else p.kind
 			jobs.append({"type":"place","item":p,"priority":PLACE_STYLE[kind][3]-(p.rank-1)*30+minf(9,log(1+p.size)/log(2)*.8)})
 	if show_cities:
 		for mark in city_marks:
 			if mark.kind!=4: jobs.append({"type":"mark","item":mark,"priority":100.})
-			if show_names and zoom>=[1.,1.,2.,1.3,1.][mark.kind]: jobs.append({"type":"city","item":mark,"priority":[20.,45.,70.,89.,100.5][mark.kind]})
+			if show_names and show_city_names and zoom>=[1.,1.,2.,1.3,1.][mark.kind]: jobs.append({"type":"city","item":mark,"priority":[20.,45.,70.,89.,100.5][mark.kind]})
 	if show_names and show_polities:
 		for label in labels: jobs.append({"type":"nation","item":label,"priority":101+minf(4.9,log(1+label.regions)/log(2)*.7)})
 	for i in range(jobs.size()): jobs[i].order = i
@@ -242,6 +244,8 @@ class Pool extends RefCounted:
 			var state = load("res://scripts/atlas/text_state.gd").new()
 			state.data = snapshot.data; state.raster = snapshot.raster; state.labels = snapshot.labels; state.owners = snapshot.owners
 			state.show_names = snapshot.names; state.show_cities = snapshot.cities; state.show_polities = snapshot.polities
+			state.show_city_names = snapshot.get("city_names",false)
+			state.static_geography = snapshot.get("static_geography",false)
 			state.zoom = detail; state.origin = Vector2.ZERO; state.canvas_size = Vector2(2048,1024)*detail
 			state.prepare(); states[key] = state
 		lru.erase(key); lru.append(key)

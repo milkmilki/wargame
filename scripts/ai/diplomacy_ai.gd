@@ -3477,28 +3477,55 @@ static func resource_forecast(
 		evaluation_cache[forecast_key] = report
 	return report
 
-static func _resource_forecast_inputs(state: GameState, cache: Dictionary) -> Array[Dictionary]:
-	if cache.has("resource_forecast_inputs"):
-		return cache.resource_forecast_inputs
-	if not cache.has("monthly_gold_flows"):
-		cache.monthly_gold_flows = Simulation.monthly_gold_flows(state)
-	var flows: Array[Dictionary] = cache.monthly_gold_flows
-	var armies := ReinforcementRules.bucket_armies_by_nation(state, true)
-	var garrison_index := Simulation.build_garrison_index(state)
-	var conservative_index := garrison_index.duplicate()
+class ForecastInputBuilder extends RefCounted:
+	var state: GameState
+	var cache: Dictionary
+	var flows: Array[Dictionary]
+	var armies: Dictionary
+	var garrison_index: Dictionary
+	var conservative_index: Dictionary
 	var garrison_food := {}
-	for city in state.cities:
+	var food_output := {}
+	var manpower_output := {}
+	var capital_fields := {}
+	var garrison_contexts := {}
+	var inputs: Array[Dictionary] = []
+	var pools := {}
+	var phase := 0
+	var cursor := 0
+	func _init(source: GameState,values: Dictionary):
+		state=source; cache=values
+		if not cache.has("monthly_gold_flows"): cache.monthly_gold_flows=Simulation.monthly_gold_flows(state)
+		flows=cache.monthly_gold_flows
+		armies=ReinforcementRules.bucket_armies_by_nation(state,true)
+		garrison_index=Simulation.build_garrison_index(state)
+		conservative_index=garrison_index.duplicate()
+	func step() -> void:
+		var count: int = state.cities.size() if phase==0 else state.administrative_center_city_ids.size() if phase==1 else state.nations.size()
+		if cursor>=count: phase+=1; cursor=0; return
+		match phase:
+			0: city(state.cities[cursor])
+			1: center(state.administrative_center_city_ids[cursor])
+			2: nation(state.nations[cursor])
+			3: pool(state.nations[cursor])
+		cursor+=1
+	func city(city: City) -> void:
 		if city.owner_nation < 0 or city.is_dock:
-			continue
+			return
+		food_output[city.owner_nation] = int(food_output.get(city.owner_nation,0))+maxi(city.food_per_half_year,0)
+		manpower_output[city.owner_nation] = int(manpower_output.get(city.owner_nation,0))+maxi(city.manpower_per_month,0)
 		conservative_index[city.id] = int(ceil(float(city.manpower_per_month) * Simulation.CITY_GARRISON_CAPACITY_PER_MANPOWER * Simulation.CITY_GARRISON_FOOD_PENALTY_MAX / Simulation.CITY_GARRISON_FOOD_PENALTY_RATE))
-	for center_value in state.administrative_center_city_ids:
+	func center(center_value: int) -> void:
 		var center_id := int(center_value)
 		var city := state.cities[center_id]
 		if city.owner_nation >= 0:
-			garrison_food[city.owner_nation] = int(garrison_food.get(city.owner_nation, 0)) + int(Simulation.city_garrison_cost_report(state, city.owner_nation, center_id, city.garrison_manpower, state.capital_hop_distances(city.owner_nation)).food_demand)
-	var inputs: Array[Dictionary] = []
-	var pools := {}
-	for nation in state.nations:
+			var owner := city.owner_nation
+			if not capital_fields.has(owner):
+				capital_fields[owner]=state.capital_hop_distances(owner)
+				var nation := state.nations[owner]
+				garrison_contexts[owner]={"administrative_radius":RebellionSystem.administrative_radius(nation),"upkeep_multiplier":RulerProfile.upkeep_multiplier(nation),"food_multiplier":RulerProfile.food_consumption_multiplier(nation)}
+			garrison_food[owner] = int(garrison_food.get(owner, 0)) + int(Simulation.city_garrison_cost_report(state, owner, center_id, city.garrison_manpower, capital_fields[owner],garrison_contexts[owner]).food_demand)
+	func nation(nation: Nation) -> void:
 		var ruler_modifiers := RulerProfile.modifiers(nation)
 		var field := 0.0
 		var troops := 0
@@ -3524,12 +3551,14 @@ static func _resource_forecast_inputs(state: GameState, cache: Dictionary) -> Ar
 		field *= factor
 		var harvest := 0
 		var conservative := 0
-		for city in _cached_cities_of(state, nation.id, cache):
+		for city in DiplomacyAI._cached_cities_of(state, nation.id, cache):
 			harvest += Simulation.city_food_output(state, city, garrison_index, ruler_modifiers)
 			conservative += Simulation.city_food_output(state, city, conservative_index, ruler_modifiers)
-		var trade := _trade_report(state, nation.id, cache)
+		var trade := DiplomacyAI._trade_report(state, nation.id, cache)
 		var flow: Dictionary = flows[nation.id]
 		var pool_id := state.food_pool_holder(nation.id)
+		var manpower_capacity := 0
+		for member in state.food_pool_members(nation.id): manpower_capacity+=int(manpower_output.get(member,0))*GameState.INITIAL_MANPOWER_RESERVE_MONTHS
 		if not pools.has(pool_id):
 			pools[pool_id] = {"field": 0.0, "garrison": 0, "harvest": 0, "trade": 0, "exports": 0, "consumers": []}
 		var pool: Dictionary = pools[pool_id]
@@ -3546,11 +3575,11 @@ static func _resource_forecast_inputs(state: GameState, cache: Dictionary) -> Ar
 			"upkeep": int(flow.military_upkeep), "field_upkeep": int(flow.field_army_upkeep),
 			"necessary_gold": int(flow.court_expense_due) + int(flow.military_upkeep) + int(flow.tribute_paid) + int(flow.food_trade_expense) + int(flow.manpower_trade_expense),
 			"troops": troops, "base_upkeep": base_upkeep, "army_count": owned.size(), "nation_field_food": field, "harvest_loss": maxi(harvest - conservative, 0),
-			"manpower_target": mini(state.manpower_pool_capacity(nation.id), maxi(MIN_MANPOWER_RESERVE, maxi(int(ceil(troops * 0.15)), refill))),
+			"manpower_target": mini(manpower_capacity, maxi(DiplomacyAI.MIN_MANPOWER_RESERVE, maxi(int(ceil(troops * 0.15)), refill))),
 			"food_multiplier": consumption_multiplier, "upkeep_multiplier": float(ruler_modifiers[RulerProfile.KEY_UPKEEP]),
 			"reserve_months_bonus": int(ruler_modifiers[RulerProfile.KEY_RESERVE_MONTHS]),
 		})
-	for nation in state.nations:
+	func pool(nation: Nation) -> void:
 		var pool_id := state.food_pool_holder(nation.id)
 		var pool: Dictionary = pools[pool_id]
 		var input: Dictionary = inputs[nation.id]
@@ -3578,10 +3607,28 @@ static func _resource_forecast_inputs(state: GameState, cache: Dictionary) -> Ar
 					consumption[elapsed] = amount
 			pool.consumption = consumption
 		input.consumption = pool.consumption
-		input.food = _food_stock(state, pool_id, cache)
-		input.food_capacity = state.food_storage_capacity(pool_id)
-	cache.resource_forecast_inputs = inputs
-	return inputs
+		input.food = DiplomacyAI._food_stock(state, pool_id, cache)
+		var storage_capacity := 0
+		for member in state.food_pool_members(pool_id): storage_capacity+=int(food_output.get(member,0))*GameState.FOOD_CAPACITY_HALF_YEARS
+		input.food_capacity = storage_capacity
+
+static func _resource_forecast_inputs(state: GameState,cache: Dictionary) -> Array[Dictionary]:
+	if cache.has("resource_forecast_inputs"): return cache.resource_forecast_inputs
+	var builder := ForecastInputBuilder.new(state,cache)
+	while builder.phase<4: builder.step()
+	cache.resource_forecast_inputs=builder.inputs
+	return builder.inputs
+
+static func resource_forecast_inputs_over_frames(state: GameState,cache: Dictionary,tree: SceneTree) -> Array[Dictionary]:
+	if cache.has("resource_forecast_inputs"): return cache.resource_forecast_inputs
+	var builder := ForecastInputBuilder.new(state,cache)
+	var slice_started := Time.get_ticks_usec()
+	while builder.phase<4:
+		builder.step()
+		if Time.get_ticks_usec()-slice_started>=3000:
+			await tree.process_frame; slice_started=Time.get_ticks_usec()
+	cache.resource_forecast_inputs=builder.inputs
+	return builder.inputs
 
 static func commit_force_change(state: GameState, nation_id: int, added_troops: int, cache: Dictionary, changes: Array = []) -> void:
 	if not cache.has("resource_forecast_inputs"):
@@ -3638,6 +3685,29 @@ static func commit_force_change(state: GameState, nation_id: int, added_troops: 
 		if str(key).begins_with("forecast:") or str(key).begins_with("food:") or str(key).begins_with("food_capacity:") or str(key).begins_with("force_capacity:") or str(key).begins_with("resource:") or str(key).begins_with("coalition_power:") or str(key).begins_with("food_posture:"):
 			cache.erase(key)
 
+static func food_capacity_step(state: GameState,nation_id: int,posture: int,cache: Dictionary,bounds: Vector2i) -> Vector2i:
+	var candidate := (bounds.x+bounds.y+1)/2
+	var forecast := resource_forecast(state,nation_id,candidate,posture,cache)
+	var viable := int(forecast.food_deficit)==0
+	if posture in [FoodPosture.PEACE,FoodPosture.GUARDED]:
+		viable=viable and float(forecast.food_end)>=minf(float(forecast.input.food),float(forecast.food_target))+float(forecast.food_gap)/3.
+	return Vector2i(candidate,bounds.y) if viable else Vector2i(bounds.x,candidate-1)
+
+static func prepare_food_capacity_over_frames(state: GameState,nation_id: int,cache: Dictionary,tree: SceneTree) -> void:
+	_ensure_evaluation_cache_current(state,cache)
+	var posture := food_posture(state,nation_id,cache)
+	var key := "food_capacity:%d:%d"%[nation_id,posture]
+	if cache.has(key): return
+	await resource_forecast_inputs_over_frames(state,cache,tree)
+	await tree.process_frame
+	var bounds := Vector2i(0,state.max_army_count(nation_id)*GameState.INITIAL_HEAVY_ARMY_SIZE)
+	var slice_started := Time.get_ticks_usec()
+	while bounds.x<bounds.y:
+		bounds=food_capacity_step(state,nation_id,posture,cache,bounds)
+		if Time.get_ticks_usec()-slice_started>=3000:
+			await tree.process_frame; slice_started=Time.get_ticks_usec()
+	cache[key]=bounds.x
+
 static func war_food_report(
 	state: GameState, nation_id: int, target_troops: int = -1,
 	posture: int = -1, evaluation_cache: Dictionary = {}, compute_capacity: bool = false
@@ -3664,15 +3734,8 @@ static func war_food_report(
 		low = int(evaluation_cache[capacity_key])
 		high = low
 	while low < high:
-		var candidate := (low + high + 1) / 2
-		var check := resource_forecast(state, nation_id, candidate, posture, evaluation_cache)
-		var viable := int(check.food_deficit) == 0
-		if posture in [FoodPosture.PEACE, FoodPosture.GUARDED]:
-			viable = viable and float(check.food_end) >= minf(float(check.input.food), float(check.food_target)) + float(check.food_gap) / 3.0
-		if viable:
-			low = candidate
-		else:
-			high = candidate - 1
+		var bounds := food_capacity_step(state,nation_id,posture,evaluation_cache,Vector2i(low,high))
+		low=bounds.x; high=bounds.y
 	if compute_capacity:
 		evaluation_cache[capacity_key] = low
 	var full := _full_strength_troop_count(state, nation_id, evaluation_cache)

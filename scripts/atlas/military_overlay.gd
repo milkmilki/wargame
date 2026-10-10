@@ -51,10 +51,23 @@ class Markers extends Node2D:
 	var host: Node2D
 	func _draw() -> void: host.draw_markers(self)
 var markers: Node2D
+var marker_stamp := -1
+var marker_redraw_count := 0
 func _ready() -> void:
 	markers = Markers.new(); markers.host = self; markers.z_index = 2; add_child(markers)
 func _process(_delta: float) -> void:
-	if markers!=null: markers.queue_redraw()
+	if markers==null or state==null: return
+	# Army motion advances with the simulation. Keep the recorded CanvasItem
+	# commands between changes instead of rebuilding hundreds of circles/paths.
+	var army_keys: Array = []
+	for army in state.armies:
+		army_keys.append([army.id,army.size>0,army.owner_nation,army.on_edge,army.location_city,army.move_from,army.move_to,army.move_progress])
+	var battle_keys: Array = []
+	for battle in state.battles:
+		battle_keys.append([battle.id,battle.finished,battle.traffic_node_id,battle.city.id if battle.city!=null else -1,battle.edge.get_instance_id() if battle.edge!=null else 0,battle.contact_dist_a,battle.contact_dist_b])
+	var stamp := hash([state.get_instance_id(),state.road_network_revision,selection,global_scale.x,army_keys,battle_keys,state.nations.map(func(nation): return nation.color)])
+	if stamp==marker_stamp: return
+	marker_stamp=stamp; marker_redraw_count+=1; markers.queue_redraw()
 func army_position(army: Army) -> Vector2:
 	if army.on_edge and army.move_from>=0 and army.move_to>=0:
 		var edge := state.edge_of(army.move_from,army.move_to)

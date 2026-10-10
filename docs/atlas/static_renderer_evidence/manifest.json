@@ -1,0 +1,21 @@
+{
+  "baseline_commit": "6a29bb6aedba2981af77d16d43e0e6753327f306",
+  "uncommitted_changes": true,
+  "scenario": "atlas_military.tscn",
+  "seed": 1,
+  "navigation": "navigation.json",
+  "regression": "regression.json",
+  "gpu_validation": [
+    "renderer-updates.log",
+    "cache-lifecycle.log"
+  ],
+  "source_hashes": {
+    "scripts/atlas/map_text.gd": "decaf041cbc6762a6bc13ead4e536162fdb948db0f56db0aec81dac696ac3be2",
+    "scripts/atlas/symbol_tiles.gd": "09d4cfa4ccdd8536cdd6d58744ec359dad689d162db4bafc4ed1feaf6174f103",
+    "scripts/atlas/preview.gd": "0514e6573f52720b2595416eebd82f20fc1ceb1b3a77de30df4fa4b749f1fa87",
+    "scripts/atlas/text_state.gd": "2fdd3e3c5f1689b672404a84ae7d23084fd63fc58ce5f2149c8b27b194846a23",
+    "scripts/atlas/render_scheduler.gd": "893c8c90700da7cf686740122e673005dd9b4eb0c2e9c61d210760111d3ec242",
+    "assets/atlas/wash.gdshader": "d6cab1d23d00b2cd17427d6a04d02b6ccf16232d5b9bfe31315d57f7e0ef0b0e",
+    "tests/atlas_static_layers.gd": "bdfb21b24adb668a44534aee92d40e5a866c495faa47be428d66f2333715670c"
+  }
+}

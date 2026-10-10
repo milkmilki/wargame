@@ -8,6 +8,8 @@ var sample_count := 500
 var captures: Array = []
 var detail_samples: Array = []
 var simulate := false
+var show_ui := false
+var information := false
 func _initialize(): call_deferred("run")
 func check(ok: bool,message: String):
 	if not ok: failures += 1; printerr("ATLAS_CACHED_FAIL ",message)
@@ -28,21 +30,28 @@ func run():
 		if argument.begins_with("--samples="): sample_count = int(argument.get_slice("=",1))
 		if argument.begins_with("--evidence="): directory = argument.get_slice("=",1)
 		if argument=="--simulate": simulate = true
+		if argument=="--show-ui": show_ui = true
+		if argument=="--information": information = true
 	root.size = Vector2i(1280,720); DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
 	# Hidden D3D12 windows on this driver periodically block even with an empty
 	# scene. Measure render/input work independently of that presentation wait.
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	scene = load("res://atlas_military.tscn").instantiate(); root.add_child(scene)
 	while not scene.view_ready: await process_frame
-	scene.hud.get_parent().hide(); scene.simulation.paused = true
+	if not show_ui: scene.hud.get_parent().hide()
+	scene.simulation.paused = true
 	var graph := hash(scene.military_payload.graph); var provinces := hash(scene.state.province_ids)
 	await capture("global",Vector2(1024,512),.625)
 	await capture("china4",Vector2(1685,338),4.)
+	if information: scene.show_information("nation",1)
 	if simulate:
 		scene.simulation.runtime_stage_profiling_enabled = true
 		scene.simulation.paused = false
 	var original_meshes: Array = []
 	for layer in scene.copies[0].ink.persistent_layers: original_meshes.append(layer.build_count)
+	var static_tiles: int=scene.symbol_tiles.tile_build_count
+	var static_text: int=scene.text_layer.static_build_count
+	var marker_data: Array=scene.text_layer.static_marker_key.duplicate()
 	for i in range(sample_count):
 		var start := Time.get_ticks_usec(); var kind := "pan"
 		if i%10<8:
@@ -57,6 +66,11 @@ func run():
 	scene.dragging = false; var settle := Time.get_ticks_usec(); await scene.await_render_ready(); var settle_ms := (Time.get_ticks_usec()-settle)/1000.
 	check(not scene.navigation_in_progress,"there is no stop-input full-redraw timer")
 	scene.simulation.paused = true
+	if scene.symbol_tiles.static_world:
+		check(scene.symbol_tiles.tile_build_count==static_tiles,"camera input never prepares natural symbols")
+		check(scene.text_layer.static_build_count==static_text,"camera input never lays out fixed names")
+		check(scene.text_layer.static_marker_key==marker_data,"camera input retains all-world city markers")
+	while scene.simulation.runtime_day_in_progress(): await process_frame
 	for i in range(12):
 		var z := 5.7 if i%2==0 else 4.; var center := Vector2(1685+(i%3)*4,338)
 		scene.zoom = z; scene.map_root.scale = Vector2.ONE*z; scene.map_root.position = Vector2(root.size)*.5-center*z; scene.limit_pan(); scene.refresh_symbols()
@@ -80,5 +94,10 @@ func run():
 	result.day = scene.state.day
 	result.simulation_peak_us = scene.simulation.runtime_span_peak_usec
 	result.simulation_total_us = scene.simulation.runtime_span_total_usec
+	result.ui_visible = show_ui; result.information_visible = information
+	result.symbol_group_updates = scene.symbol_tiles.group_update_count
+	result.terrain_bakes = scene.raster_layers.build_count if scene.raster_layers!=null else 0
+	result.army_redraws = scene.overlay.marker_redraw_count
 	FileAccess.open(directory+"/manifest.json",FileAccess.WRITE).store_string(JSON.stringify(result,"\t")); print("ATLAS_CACHED_RESULT ",JSON.stringify(result))
+	while scene.simulation.runtime_day_in_progress(): await process_frame
 	root.remove_child(scene); scene.queue_free(); await process_frame; quit(1 if failures else 0)

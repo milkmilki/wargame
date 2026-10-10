@@ -1,0 +1,126 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_static_layers",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 1047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_static_layers.log"
+    },
+    {
+      "test": "atlas_runtime_costs",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2781,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_runtime_costs.log"
+    },
+    {
+      "test": "atlas_render_scheduler",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 297,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_render_scheduler.log"
+    },
+    {
+      "test": "atlas_symbol_tiles",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 734,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_symbol_tiles.log"
+    },
+    {
+      "test": "atlas_incremental_text",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 281,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_incremental_text.log"
+    },
+    {
+      "test": "atlas_wrapped_text",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 282,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_wrapped_text.log"
+    },
+    {
+      "test": "atlas_city_markers",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 281,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_city_markers.log"
+    },
+    {
+      "test": "atlas_map_selection",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3344,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_map_selection.log"
+    },
+    {
+      "test": "atlas_information_panel",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 281,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_information_panel.log"
+    },
+    {
+      "test": "atlas_diplomacy_view",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2625,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_diplomacy_view.log"
+    },
+    {
+      "test": "atlas_nation_list",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2547,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_nation_list.log"
+    },
+    {
+      "test": "atlas_war_fronts",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_war_fronts.log"
+    },
+    {
+      "test": "atlas_entry_contract",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 16625,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_entry_contract.log"
+    },
+    {
+      "test": "atlas_camera_feedback",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3171,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_camera_feedback.log"
+    },
+    {
+      "test": "atlas_render_invalidation",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3532,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_render_invalidation.log"
+    },
+    {
+      "test": "atlas_view_caches",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 297,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_view_caches.log"
+    },
+    {
+      "test": "atlas_preview_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 4281,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_preview_lifecycle.log"
+    }
+  ],
+  "failures": 0
+}

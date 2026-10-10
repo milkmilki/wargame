@@ -1,0 +1,15 @@
+{
+  "pid": 10940,
+  "seed": 1,
+  "scene": "res://atlas_military.tscn",
+  "godot": "4.7.1-stable (official)",
+  "simulation": "paused",
+  "ui_visible": true,
+  "failures": 0,
+  "p50": 8.585,
+  "p95": 19.036,
+  "p99": 22.489,
+  "settle_ms": 0.154,
+  "detail_p95": 124.043,
+  "terrain_bakes": 2
+}

@@ -103,6 +103,14 @@ python run_tests.py --godot D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe --gr
 `atlas_cached_lifecycle_visual`（1×／2×／四模式／尺寸／重载／模板）、
 `atlas_city_glyph_repro`（完整地图图标像素回归）、`atlas_strokes_visual` 与 `atlas_tile_copy_visual`。
 
+## 后续运行期修复
+
+最新默认改为[静态世界图层](STATIC_RENDERER.md)：自然符号、自然名称和城市标记覆盖全球，
+拖动、缩放不再补瓦片或排布固定文字；国名在归属变化时单独更新。下述瓦片方案保留为开发对照。
+
+本页保留重构初期记录。静态底图冻结、缓存按事件更新和日结算分批修复的最新结果见
+[运行期性能修复](RUNTIME_PERFORMANCE.md)，其模拟运行测量已达到P95／P99帧目标。
+
 ## 技术来源
 
 保留 civ-atlas `103afd3d998eac6750692a6813bf5aea03521448` 的绘制算法来源与AGPL声明。

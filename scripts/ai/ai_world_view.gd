@@ -32,6 +32,7 @@ var _campaign_reinforcement_threat_cache: Dictionary = {}
 var _path_field_cache: Dictionary = {}
 var _supply_city_cache: Dictionary = {}
 var _supply_network_cache: Dictionary = {}
+var build_profile := {}
 
 
 ## 同一 AI 决策 tick 的所有国家共享基础军队索引。索引只保存 Army 引用，
@@ -129,6 +130,8 @@ static func build(
 	visibility_hops: int = -1
 ) -> AiWorldView:
 	var view := AiWorldView.new()
+	var profiling: bool = shared_army_index.get("profile_view",false)
+	var part_started := Time.get_ticks_usec() if profiling else 0
 	view.state = game_state
 	view.nation_id = owner_nation
 	view.day = game_state.day
@@ -137,6 +140,7 @@ static func build(
 	view._path_field_cache = shared_path_cache
 	view._supply_network_cache = shared_supply_network_cache
 	view.warehouses = game_state.warehouse_cities_of(owner_nation)
+	if profiling: view.build_profile.warehouses=Time.get_ticks_usec()-part_started; part_started=Time.get_ticks_usec()
 	var city_partition_key := "%d:%d:%d:%d" % [
 		owner_nation,
 		game_state.ownership_revision,
@@ -171,23 +175,23 @@ static func build(
 		visible_city_ids = _visible_city_ids(
 			game_state, owner_nation, visibility_hops
 		)
+		var relations := {}
 		for city in game_state.cities:
+			# Road junctions are neutral transport geometry, never strategic cities.
+			# Their unassigned owner (-1) otherwise classifies them as enemy cities.
+			if city.is_traffic: continue
 			if city.owner_nation == owner_nation:
 				view.friendly_cities.append(city)
 			elif visibility_hops >= 0 and not visible_city_ids.has(city.id):
 				continue
-			elif game_state.is_external_enemy(
-				owner_nation,
-				city.owner_nation
-			):
-				view.enemy_cities.append(city)
-			elif game_state.is_allied(
-				owner_nation,
-				city.owner_nation
-			):
-				view.allied_cities.append(city)
 			else:
-				view.neutral_cities.append(city)
+				if not relations.has(city.owner_nation):
+					relations[city.owner_nation] = 1 if game_state.is_external_enemy(owner_nation,city.owner_nation) else 2 if game_state.is_allied(owner_nation,city.owner_nation) else 0
+				match relations[city.owner_nation]:
+					1: view.enemy_cities.append(city)
+					2: view.allied_cities.append(city)
+					_: view.neutral_cities.append(city)
+		if profiling: view.build_profile.partition=Time.get_ticks_usec()-part_started; part_started=Time.get_ticks_usec()
 		EquivariantOrder.sort_cities(
 			view.friendly_cities,
 			game_state,
@@ -219,6 +223,7 @@ static func build(
 		if not shared_army_index.is_empty()
 		else build_army_index(game_state)
 	)
+	if profiling: view.build_profile.city_sort=Time.get_ticks_usec()-part_started; part_started=Time.get_ticks_usec()
 	view.armies_by_nation = army_index["armies_by_nation"]
 	view.armies_by_city = army_index["armies_by_city"]
 	view.armies_by_incident_city = army_index[

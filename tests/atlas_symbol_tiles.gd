@@ -15,6 +15,10 @@ func run():
 	tiles.setup(data,{"forest":PackedByteArray(),"glyphs":[]},service,output)
 	tiles.set_camera(Vector2.ZERO,2.,Vector2(256,256)); await ready_tiles(tiles)
 	for i in range(20): await process_frame
+	var idle_updates: int = tiles.group_update_count
+	for i in range(15): await process_frame
+	check(tiles.group_update_count==idle_updates,"idle frames do not requery or compose frozen layers")
+	check(output.render_target_update_mode!=SubViewport.UPDATE_ALWAYS,"symbol mask is event-driven")
 	var count: int = tiles.tile_build_count
 	for i in range(4): tiles.set_camera(Vector2(-i*2,0),2.,Vector2(256,256)); await process_frame
 	check(tiles.tile_build_count<=count+3,"same-tier pan reuses previously rendered tiles")

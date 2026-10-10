@@ -6346,14 +6346,7 @@ func warehouse_cities_of(nation_id: int) -> Array[City]:
 			and city.has_warehouse
 		):
 			result.append(city)
-	result.sort_custom(func(a: City, b: City) -> bool:
-		return EquivariantOrder.city_less(
-			self,
-			nation_id,
-			a,
-			b
-		)
-	)
+	EquivariantOrder.sort_cities(result,self,nation_id)
 	return result
 
 

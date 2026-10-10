@@ -6836,6 +6836,7 @@ func _prepare_ai_view_phase(
 		if ai_policy_overrides.is_empty()
 		else {}
 	)
+	if not shared_army_index.is_empty(): shared_army_index["profile_view"] = runtime_stage_profiling_enabled
 	_record_tick_profile_stage(
 		"ai_shared_army_index",
 		ai_view_detail_started
@@ -6844,6 +6845,7 @@ func _prepare_ai_view_phase(
 		var nation := state.nations[nation_id]
 		if not nation.alive or nation.succession_identity:
 			continue
+		var view_span_started := Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 		ai_view_detail_started = (
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
@@ -6856,11 +6858,13 @@ func _prepare_ai_view_phase(
 			"ai_reconcile_commands",
 			ai_view_detail_started
 		)
+		if runtime_stage_profiling_enabled: _record_runtime_span(&"ai_reconcile_commands",view_span_started)
 		if ai_policy_overrides.has(nation.id):
 			var policy: Callable = ai_policy_overrides[nation.id]
 			policy.call(state, nation.id, self)
 			continue
 		managed_nations.append(nation_id)
+		view_span_started = Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
 		ai_view_detail_started = (
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
@@ -6873,6 +6877,8 @@ func _prepare_ai_view_phase(
 			"ai_build_view",
 			ai_view_detail_started
 		)
+		if runtime_stage_profiling_enabled: _record_runtime_span(&"ai_build_view",view_span_started)
+		for part in view.build_profile: runtime_span_peak_usec["ai_view_"+part]=maxi(int(runtime_span_peak_usec.get("ai_view_"+part,0)),int(view.build_profile[part]))
 		context_jobs.append({
 			"nation_id": nation_id,
 			"view": view,
@@ -7267,6 +7273,11 @@ func _run_ai_force_structure_phase(
 		)
 		_set_runtime_profile_stage(&"ai_force_context")
 		if not ai_decision_context_disabled:
+			if spread_runtime_work and not ai_force_resource_cache_disabled:
+				# Share aggregates and yield between capacity candidates while
+				# preserving the original nation commit order and frozen inputs.
+				_set_runtime_profile_stage(&"ai_force_food_capacity")
+				await DiplomacyAI.prepare_food_capacity_over_frames(state,nation_id,resource_cache,get_tree())
 			_enrich_ai_decision_context(context, resource_cache)
 			decision_context = context
 		_record_tick_profile_stage("ai_force_context", context_started)
@@ -7279,19 +7290,31 @@ func _run_ai_force_structure_phase(
 			await get_tree().process_frame
 			runtime_slice_started = Time.get_ticks_usec()
 		var commit_started := (
-			Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+			Time.get_ticks_usec() if tick_phase_profiling_enabled or runtime_stage_profiling_enabled else 0
 		)
 		_set_runtime_profile_stage(&"ai_force_commit")
-		_ai_manage_force_structure(
-			context["view"],
-			context["snapshot"],
-			context["threat"],
-			context["defense_plan"],
-			true,
-			resource_cache,
-			decision_context
-		)
+		if spread_runtime_work:
+			await _ai_manage_force_structure_over_frames(
+				context["view"],
+				context["snapshot"],
+				context["threat"],
+				context["defense_plan"],
+				true,
+				resource_cache,
+				decision_context
+			)
+		else:
+			_ai_manage_force_structure(
+				context["view"],
+				context["snapshot"],
+				context["threat"],
+				context["defense_plan"],
+				true,
+				resource_cache,
+				decision_context
+			)
 		_record_tick_profile_stage("ai_force_commit", commit_started)
+		if runtime_stage_profiling_enabled and not spread_runtime_work: _record_runtime_span(&"ai_force_commit",commit_started)
 		if (
 			spread_runtime_work
 			and Time.get_ticks_usec() - runtime_slice_started
@@ -7882,20 +7905,34 @@ static func _sort_ai_decision_order(
 	return result
 
 
-func _ai_manage_force_structure(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	defense_plan: CityDefensePlan = null,
-	roles_reconciled: bool = false,
-	resource_evaluation_cache: Dictionary = {},
-	decision_context: Dictionary = {}
-) -> bool:
+func _ai_manage_force_structure(view: AiWorldView,snapshot: StrategicMapSnapshot,threat: ThreatField,
+	defense_plan: CityDefensePlan = null,roles_reconciled: bool = false,
+	resource_evaluation_cache: Dictionary = {},decision_context: Dictionary = {}) -> bool:
+	var job := _begin_force_structure(view,snapshot,threat,defense_plan,roles_reconciled,resource_evaluation_cache,decision_context)
+	while not job.done: _step_force_structure(job)
+	return job.changed
+
+func _ai_manage_force_structure_over_frames(view: AiWorldView,snapshot: StrategicMapSnapshot,threat: ThreatField,
+	defense_plan: CityDefensePlan = null,roles_reconciled: bool = false,
+	resource_evaluation_cache: Dictionary = {},decision_context: Dictionary = {}) -> bool:
+	var job := _begin_force_structure(view,snapshot,threat,defense_plan,roles_reconciled,resource_evaluation_cache,decision_context)
+	var slice_started := Time.get_ticks_usec()
+	while not job.done:
+		var step_started := Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		_step_force_structure(job)
+		if runtime_stage_profiling_enabled: _record_runtime_span(&"ai_force_commit_slice",step_started)
+		if Time.get_ticks_usec()-slice_started>=3000:
+			await get_tree().process_frame; slice_started=Time.get_ticks_usec()
+	return job.changed
+
+func _begin_force_structure(view: AiWorldView,snapshot: StrategicMapSnapshot,threat: ThreatField,
+	defense_plan: CityDefensePlan = null,roles_reconciled: bool = false,
+	resource_evaluation_cache: Dictionary = {},decision_context: Dictionary = {}) -> Dictionary:
 	if not state.uses_heightmap:
 		# Road clearance is transport-footprint based in every map mode. A main
 		# formation traverses a narrow route in batches and must not be split into
 		# separate Army entities merely to satisfy road capacity.
-		return false
+		return {"done":true,"changed":false}
 	if not roles_reconciled:
 		_reconcile_main_commands(view.nation_id)
 	if defense_plan == null:
@@ -7919,7 +7956,7 @@ func _ai_manage_force_structure(
 		# Reductions changed the frozen demand/upkeep aggregates. Rebuild only
 		# after a real mutation, before the next shared-pool member is evaluated.
 		resource_evaluation_cache.clear()
-		return true
+		return {"done":true,"changed":true}
 	# 只有无军且正常容量为零的小国生存动员可以抽空人力；其余扩军统一
 	# 使用容量报告给出的和平/战时补员储备。
 	var protected_reserve := int(assessment.capacity_report.get(
@@ -7928,50 +7965,57 @@ func _ai_manage_force_structure(
 	))
 	if assessment.emergency_recruitment:
 		protected_reserve = 0
-	var recruited_any := false
 	var recruit_limit := (
 		1
 		if assessment.small_nation_survival
 		else int(assessment.capacity_report.get("additional_armies", 0))
 	)
-	for _recruit_index in range(recruit_limit):
-		var recruitment := {}
-		if assessment.small_nation_survival:
-			recruitment = _small_nation_force_recruitment(
-				view.nation_id,
-				nation,
-				assessment.main_armies
-			)
-		else:
-			recruitment = _regular_force_recruitment(
-				view.nation_id,
-				assessment.capacity_report
-			)
-		var formation_size := int(recruitment.get("size", 0))
-		if formation_size <= 0:
-			break
-		var available_manpower := nation.manpower_pool - protected_reserve
-		if not assessment.emergency_recruitment:
-			var candidate := DiplomacyAI.resource_forecast(state, nation.id, -1, -1, resource_evaluation_cache)
-			candidate = DiplomacyAI.resource_forecast(state, nation.id, int(candidate.input.troops) + formation_size, -1, resource_evaluation_cache, {"base_upkeep_delta": GameState.army_monthly_upkeep(formation_size), "field_food_delta": ReinforcementPhase._grant_food_delta(0, formation_size, float(candidate.input.food_multiplier))})
-			if not bool(candidate.food_growth_allowed):
-				nation.ai_last_force_reason = "扩军否决：粮食预测断供" if not bool(candidate.food_feasible) else "扩军否决：粮食储备预算不足"
-				break
-		if not _try_recruit_force_structure(
-			view,
+	return {"done":recruit_limit<=0,"changed":false,"view":view,"nation":nation,"assessment":assessment,"reserve":protected_reserve,"limit":recruit_limit,"index":0,"cache":resource_evaluation_cache}
+
+func _step_force_structure(job: Dictionary) -> void:
+	var view: AiWorldView=job.view
+	var nation: Nation=job.nation
+	var assessment: ForceStructureAssessment=job.assessment
+	var protected_reserve: int=job.reserve
+	var resource_evaluation_cache: Dictionary=job.cache
+	var recruitment := {}
+	if assessment.small_nation_survival:
+		recruitment = _small_nation_force_recruitment(
+			view.nation_id,
 			nation,
-			assessment,
-			recruitment,
-			available_manpower
-		):
-			break
-		recruited_any = true
-		DiplomacyAI.commit_force_change(state, nation.id, formation_size, resource_evaluation_cache, [{"army": state.armies.back(), "old_size": 0}])
-		assessment.main_armies += 1
-		# 小国生存目标只有一支机动预备队。
-		if assessment.small_nation_survival:
-			break
-	return recruited_any
+			assessment.main_armies
+		)
+	else:
+		recruitment = _regular_force_recruitment(
+			view.nation_id,
+			assessment.capacity_report
+		)
+	var formation_size := int(recruitment.get("size", 0))
+	if formation_size <= 0:
+		job.done=true; return
+	var available_manpower := nation.manpower_pool - protected_reserve
+	if not assessment.emergency_recruitment:
+		var candidate := DiplomacyAI.resource_forecast(state, nation.id, -1, -1, resource_evaluation_cache)
+		candidate = DiplomacyAI.resource_forecast(state, nation.id, int(candidate.input.troops) + formation_size, -1, resource_evaluation_cache, {"base_upkeep_delta": GameState.army_monthly_upkeep(formation_size), "field_food_delta": ReinforcementPhase._grant_food_delta(0, formation_size, float(candidate.input.food_multiplier))})
+		if not bool(candidate.food_growth_allowed):
+			nation.ai_last_force_reason = "扩军否决：粮食预测断供" if not bool(candidate.food_feasible) else "扩军否决：粮食储备预算不足"
+			job.done=true; return
+	if not _try_recruit_force_structure(
+		view,
+		nation,
+		assessment,
+		recruitment,
+		available_manpower
+	):
+		job.done=true; return
+	job.changed = true
+	DiplomacyAI.commit_force_change(state, nation.id, formation_size, resource_evaluation_cache, [{"army": state.armies.back(), "old_size": 0}])
+	assessment.main_armies += 1
+	# 小国生存目标只有一支机动预备队。
+	if assessment.small_nation_survival:
+		job.done=true; return
+	job.index+=1
+	if job.index>=job.limit: job.done=true
 
 
 func _try_force_structure_demobilization(

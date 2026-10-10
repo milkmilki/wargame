@@ -5,6 +5,9 @@ uniform sampler2D symbols : filter_linear, repeat_disable;
 uniform vec2 map_size = vec2(2048.,1024.);
 uniform vec2 symbol_origin=vec2(0.);
 uniform float symbol_scale=1.;
+uniform bool symbols_world=false;
+uniform float symbol_world_pad=0.;
+uniform float symbol_world_detail=4.;
 uniform float view_zoom=1.;
 uniform sampler2D segment_grid : filter_nearest;
 uniform sampler2D segment_list : filter_nearest;
@@ -88,6 +91,7 @@ void fragment() {
 	vec2 sp=UV*map_size*symbol_scale+symbol_origin;
 	sp.x=mod(sp.x,2048.*symbol_scale);
 	vec2 su=sp/vec2(textureSize(symbols,0));
+	if(symbols_world)su=(UV*map_size*symbol_world_detail+vec2(symbol_world_pad))/vec2(textureSize(symbols,0));
 	vec4 sym=texture(symbols,su);float lum=dot(sym.rgb,vec3(.3,.59,.11))*255.;
 	float ink=clamp((125.-lum)/30.,0.,1.);float weight=mix(.85,.55,clamp((lum-165.)/40.,0.,1.));
 	float give=sym.a*(ink+(1.-ink)*weight*(1.-.9*exp(-ii/4./14.)));

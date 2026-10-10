@@ -57,6 +57,16 @@ static func sort_cities(
 ) -> void:
 	if values.size() < 2:
 		return
+	if values.size()*4 < state.cities.size():
+		# A local army/warehouse list must not rank every traffic node worldwide.
+		# Use the exact same keys and comparison as city_rank_map, once per item.
+		var frame := _nation_anchor(state,nation_id)
+		if _valid_city(state,anchor_city_id): frame=state.cities[anchor_city_id].map_position
+		var sign := _nation_forward_sign(state,nation_id)
+		var keys := {}
+		for city in values: keys[city.id]=_city_key_in_frame(state,city.id,frame,sign)
+		values.sort_custom(func(a: City,b: City): return _key_less(keys[a.id],keys[b.id]))
+		return
 	var rank := city_rank_map(
 		state,
 		nation_id,
@@ -75,16 +85,29 @@ static func sort_city_ids(
 	nation_id: int,
 	anchor_city_id: int = -1
 ) -> void:
-	var rank := city_rank_map(
-		state,
-		nation_id,
-		anchor_city_id
-	)
+	var rank := subset_city_ranks(values,state,nation_id,anchor_city_id) if values.size()*4<state.cities.size() else city_rank_map(state,nation_id,anchor_city_id)
 	values.sort_custom(func(a, b) -> bool:
 		return int(rank.get(int(a), 1 << 30)) < int(
 			rank.get(int(b), 1 << 30)
 		)
 	)
+
+
+static func subset_city_ranks(values: Array,state: GameState,nation_id: int,anchor_city_id: int = -1) -> Dictionary:
+	var origin := _nation_anchor(state,nation_id)
+	if _valid_city(state,anchor_city_id): origin=state.cities[anchor_city_id].map_position
+	var sign := _nation_forward_sign(state,nation_id)
+	var keys := {}; var ids: Array = []
+	for value in values:
+		var id := int(value)
+		if not _valid_city(state,id) or keys.has(id): continue
+		keys[id]=_city_key_in_frame(state,id,origin,sign); ids.append(id)
+	ids.sort_custom(func(a,b): return _key_less(keys[a],keys[b]))
+	var ranks := {}; var rank := 0
+	for i in range(ids.size()):
+		if i>0 and (_key_less(keys[ids[i-1]],keys[ids[i]]) or _key_less(keys[ids[i]],keys[ids[i-1]])): rank=i
+		ranks[ids[i]]=rank
+	return ranks
 
 
 static func sort_city_subset(
@@ -324,11 +347,9 @@ static func sort_armies(
 	if _valid_city(state, anchor_city_id):
 		origin = state.cities[anchor_city_id].map_position
 	var sign := _nation_forward_sign(state, nation_id)
-	var city_ranks := city_rank_map(
-		state,
-		nation_id,
-		anchor_city_id
-	)
+	var targets: Array = []
+	for army in values: targets.append(army.move_to if army.move_to>=0 else army.ai_target_city)
+	var city_ranks := subset_city_ranks(targets,state,nation_id,anchor_city_id)
 	var keys := {}
 	for army in values:
 		var position := army_position(state, army)
