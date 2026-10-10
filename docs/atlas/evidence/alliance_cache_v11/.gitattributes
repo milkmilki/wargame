@@ -1,0 +1,3 @@
+# Source archives must retain the exact bytes hashed by the measured process.
+*.gd.txt -text -eol -whitespace
+*.py.txt -text -eol -whitespace

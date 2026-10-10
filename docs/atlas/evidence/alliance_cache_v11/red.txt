@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_ALLIANCE_CACHE_FAIL all observers reuse the complete warm alliance graph
+ATLAS_ALLIANCE_CACHE_FAIL army, date, ownership and unrelated family changes do not rebuild alliance membership
+ATLAS_ALLIANCE_CACHE_RESULT checks=151 failures=2

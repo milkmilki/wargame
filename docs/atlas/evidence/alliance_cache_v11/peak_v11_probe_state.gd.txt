@@ -1,0 +1,8 @@
+extends GameState
+var alliance_queries := 0
+var alliance_usec := 0
+func alliance_bloc(nation_id: int, alive_only: bool = true) -> Array[int]:
+	var started := Time.get_ticks_usec()
+	var result := super.alliance_bloc(nation_id,alive_only)
+	alliance_queries+=1; alliance_usec+=Time.get_ticks_usec()-started
+	return result

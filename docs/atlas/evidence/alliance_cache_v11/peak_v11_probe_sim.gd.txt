@@ -1,0 +1,15 @@
+extends Simulation
+func _execute_diplomatic_action(action: Dictionary,cache: Dictionary = {},gold: Array[Dictionary] = []) -> bool:
+	var old := _ai_last_decision_day
+	var result := super._execute_diplomatic_action(action,cache,gold)
+	if state.day==210: print("V11_ACTION ",JSON.stringify({"kind":action.kind,"a":action.a,"b":action.b,"changed":result,"old_ai_day":old,"new_ai_day":_ai_last_decision_day}))
+	return result
+func _normalize_alliance_wars():
+	var count: int=state.alliance_queries; var usec: int=state.alliance_usec
+	super._normalize_alliance_wars()
+	if state.day==210: print("V11_NORMALIZE ",state.alliance_queries-count," queries / ",state.alliance_usec-usec," usec")
+func _prepare_ai_view_phase(spread: bool,started: int) -> Dictionary:
+	var old := _ai_last_decision_day
+	var result: Dictionary=await super._prepare_ai_view_phase(spread,started)
+	if state.day==210: print("V11_VIEW ",old," / managed=",result.managed_nations.size())
+	return result

@@ -1,0 +1,13 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation=preload("res://.dbg/peak_v11_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin","res://.dbg/peak_v11_probe_sim.gd")
+	var output: Dictionary={"pid":OS.get_process_id(),"input":JSON.parse_string(FileAccess.open("res://.dbg/daily-v9/baseline-manifest.json",FileAccess.READ).get_as_text()),"source_hashes":{},"days":[]}
+	for path in ["scripts/state/game_state.gd","scripts/simulation/simulation.gd"]: output.source_hashes[path]=FileAccess.get_sha256("res://"+path)
+	for day in range(30):
+		sim.state.alliance_queries=0;sim.state.alliance_usec=0
+		var started := Time.get_ticks_usec();sim._advance_day(false)
+		output.days.append({"day":sim.state.day,"elapsed_usec":Time.get_ticks_usec()-started,"alliance_queries":sim.state.alliance_queries,"alliance_usec":sim.state.alliance_usec,"profile":sim.tick_profile_last_usec.duplicate()})
+		if sim.state.day%10==0: print("V11_PROBE_DAY ",sim.state.day);await process_frame
+	FileAccess.open("res://.dbg/peak-v11-probe.json",FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("V11_PROBE_COMPLETE ",OS.get_process_id());sim.free();quit()

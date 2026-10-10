@@ -134,6 +134,10 @@ var next_campaign_front_id: int = 0
 var campaign_pairs: Dictionary = {} # pair_id -> CoalitionCampaignPair
 var next_campaign_pair_id: int = 0
 var _campaign_pair_revision: Array[int] = []
+## Atlas alliance topology is immutable between exact relation/identity changes.
+## Both alive-only variants share their own complete, read-only graph.
+var _alliance_component_cache: Dictionary = {}
+var _alliance_component_mutex := Mutex.new()
 ## 王族谱共享真源；Nation 仅保存 tree/person id，避免独立后复制谱系。
 var family_trees: Dictionary = {}
 var succession_conflicts: Dictionary = {} # original nation -> SuccessionConflict
@@ -442,6 +446,7 @@ func _reset_world(world_seed: int) -> void:
 	campaign_pairs.clear()
 	next_campaign_pair_id = 0
 	_campaign_pair_revision.clear()
+	_alliance_component_cache.clear()
 	adjacency.clear()
 	edge_lookup.clear()
 	day = 0
@@ -3054,6 +3059,40 @@ func alliance_bloc(
 		or (alive_only and not nations[nation_id].alive)
 	):
 		return result
+	var data: Dictionary
+	if atlas_layout.is_empty():
+		data = _build_alliance_components(alive_only)
+	else:
+		var nation_rows := PackedInt32Array()
+		for nation in nations:
+			nation_rows.append(int(nation.alive))
+			nation_rows.append(int(nation.succession_identity))
+		var conflicts := []
+		for key in succession_conflicts:
+			var conflict := succession_conflicts[key] as SuccessionConflict
+			conflicts.append([key, conflict.nation_id, conflict.rebel_nation_id, conflict.war_id])
+		# Membership reads these exact inputs, not ownership, troops, stocks,
+		# future truce dates or war-ID bookkeeping. Cover in-place mutations too.
+		var token := var_to_bytes([nation_rows, diplomatic_relations, conflicts])
+		_alliance_component_mutex.lock()
+		var cached: Dictionary = _alliance_component_cache.get(alive_only, {})
+		if cached.get("token", PackedByteArray()) != token:
+			cached = {"token": token, "data": _build_alliance_components(alive_only)}
+			_alliance_component_cache[alive_only] = cached
+		data = cached["data"]
+		_alliance_component_mutex.unlock()
+	var parent: PackedInt32Array = data["parent"]
+	var nation_root := nation_id
+	while parent[nation_root] != nation_root:
+		nation_root = parent[nation_root]
+	for member in data["components"][nation_root]:
+		result.append(int(member))
+	return result
+
+
+## Keep the original lexicographic conflict-aware union order. One build
+## computes every observer's bloc; published arrays/dictionaries stay private.
+func _build_alliance_components(alive_only: bool) -> Dictionary:
 	var parent := PackedInt32Array()
 	parent.resize(nations.size())
 	parent.fill(-1)
@@ -3103,12 +3142,7 @@ func alliance_bloc(
 			parent[merged_root] = kept_root
 			components[kept_root] = merged
 			components.erase(merged_root)
-	var nation_root := nation_id
-	while parent[nation_root] != nation_root:
-		nation_root = parent[nation_root]
-	for member in components[nation_root]:
-		result.append(int(member))
-	return result
+	return {"parent": parent, "components": components}
 
 
 # ------------------------------------------------------------------ 宗藩关系

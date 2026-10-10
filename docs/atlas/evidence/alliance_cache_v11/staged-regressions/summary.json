@@ -1,0 +1,42 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20375,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v11-staged-verify\\.dbg\\regression\\project_compile.log"
+    },
+    {
+      "test": "atlas_alliance_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v11-staged-verify\\.dbg\\regression\\atlas_alliance_cache.log"
+    },
+    {
+      "test": "atlas_alliance_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 11859,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v11-staged-verify\\.dbg\\regression\\atlas_alliance_runtime.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v11-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v11-staged-verify\\.dbg\\regression\\succession_counterattack.log"
+    }
+  ],
+  "failures": 0
+}

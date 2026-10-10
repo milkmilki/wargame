@@ -1,0 +1,16 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+V11_PROBE_DAY 190
+V11_PROBE_DAY 200
+V11_NORMALIZE 49 queries / 71121 usec
+V11_ACTION {"a":35,"b":0,"changed":true,"kind":2,"new_ai_day":-1,"old_ai_day":209}
+V11_ACTION {"a":35,"b":0,"changed":true,"kind":10,"new_ai_day":-1,"old_ai_day":209}
+V11_ACTION {"a":8,"b":22,"changed":true,"kind":5,"new_ai_day":-1,"old_ai_day":-1}
+V11_ACTION {"a":16,"b":6,"changed":true,"kind":5,"new_ai_day":-1,"old_ai_day":-1}
+V11_ACTION {"a":17,"b":7,"changed":true,"kind":5,"new_ai_day":-1,"old_ai_day":-1}
+V11_ACTION {"a":19,"b":3,"changed":true,"kind":5,"new_ai_day":-1,"old_ai_day":-1}
+V11_ACTION {"a":26,"b":29,"changed":true,"kind":5,"new_ai_day":-1,"old_ai_day":-1}
+V11_ACTION {"a":38,"b":21,"changed":true,"kind":5,"new_ai_day":-1,"old_ai_day":-1}
+V11_VIEW -1 / managed=40
+V11_PROBE_DAY 210
+V11_PROBE_COMPLETE 22208
