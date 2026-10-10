@@ -1,0 +1,14 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin","res://.dbg/v19_probe_sim.gd")
+	var reference: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://docs/atlas/evidence/resource_capacity_batch_v18/after-12956.json"))
+	var rows := []
+	for day in range(35):
+		RulerProfile._v19_modifier_calls=0; RulerProfile._v19_modifier_usec=0; sim.segments.clear(); sim._advance_day(false)
+		var h:=HashingContext.new(); h.start(HashingContext.HASH_SHA256); h.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+		var sha:=h.finish().hex_encode(); assert(sha==reference.rows[day].sha256)
+		rows.append({"day":sim.state.day,"modifier_calls":RulerProfile._v19_modifier_calls,"modifier_usec":RulerProfile._v19_modifier_usec,"segments":sim.segments.duplicate(true),"sha256":sha})
+		if day%5==0: await process_frame
+	FileAccess.open("res://.dbg/v19-ruler-probe/data.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"rows":rows},"  "))
+	print("V19_PROBE_COMPLETE ",OS.get_process_id()); sim.free(); quit()

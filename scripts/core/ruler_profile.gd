@@ -33,6 +33,7 @@ const CONQUEROR_COMBAT_MULTIPLIER: float = 5.0
 const CONQUEROR_CAMPAIGN_REQUIREMENT_MULTIPLIER: float = 0.5
 
 static var _archetype_base_modifiers: Dictionary = _build_archetype_base_modifiers()
+static var _combined_modifier_table: Dictionary = _build_combined_modifiers()
 
 ## 常用裸常量别名，调用方既可写 RulerProfile.CONQUEROR，也可使用
 ## RulerProfile.Archetype.CONQUEROR。
@@ -410,10 +411,12 @@ static func modifiers(
 	traits: Array = []
 ) -> Dictionary:
 	var archetype := _resolved_archetype(profile_or_archetype)
-	var result := _base_modifiers(archetype).duplicate()
-	for trait_id in _resolved_traits(profile_or_archetype, traits):
-		_apply_trait(result, trait_id)
-	return result
+	var resolved_traits := _resolved_traits(profile_or_archetype, traits)
+	if resolved_traits.is_empty():
+		return _base_modifiers(archetype).duplicate()
+	var key := _modifier_combination_key(archetype, resolved_traits)
+	# Tables are immutable, but callers historically own a mutable result.
+	return (_combined_modifier_table[key] as Dictionary).duplicate()
 
 
 static func aggression_multiplier(
@@ -566,6 +569,37 @@ static func is_valid_archetype(archetype: int) -> bool:
 
 static func is_valid_trait(trait_id: String) -> bool:
 	return TRAIT_IDS.has(trait_id)
+
+
+## All legal one/two-trait combinations are computed once before AI workers
+## start. Reuse the original trait operations and their canonical string order.
+static func _build_combined_modifiers() -> Dictionary:
+	assert(MAX_TRAITS == 2)
+	var combinations: Array[Array] = []
+	for trait_id in TRAIT_IDS:
+		combinations.append([trait_id])
+	for first in range(TRAIT_IDS.size()):
+		for second in range(first + 1, TRAIT_IDS.size()):
+			var pair: Array = [TRAIT_IDS[first], TRAIT_IDS[second]]
+			pair.sort()
+			combinations.append(pair)
+	var result := {}
+	for archetype in ARCHETYPE_IDS:
+		for chosen_traits in combinations:
+			var values := _base_modifiers(archetype).duplicate()
+			for trait_id in chosen_traits:
+				_apply_trait(values, trait_id)
+			values.make_read_only()
+			result[_modifier_combination_key(archetype, chosen_traits)] = values
+	result.make_read_only()
+	return result
+
+
+static func _modifier_combination_key(archetype: int, chosen_traits: Array) -> int:
+	var stride := TRAIT_IDS.size() + 1
+	var first := TRAIT_IDS.find(chosen_traits[0]) + 1
+	var second := TRAIT_IDS.find(chosen_traits[1]) + 1 if chosen_traits.size() == 2 else 0
+	return archetype * stride * stride + first * stride + second
 
 
 static func _base_modifiers(archetype: int) -> Dictionary:

@@ -1,0 +1,210 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "7567c7e5995422494c1b223b56f14aa8c6563074",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "performance_scope": "headless computation, not GPU frames",
+  "configuration": {
+    "seed": 1,
+    "nations": 40,
+    "nodes": 1192,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "settlement_mask": {
+      "enabled": true,
+      "west": -15,
+      "east": 145,
+      "south": 20,
+      "north": 55
+    }
+  },
+  "days": [
+    181,
+    215
+  ],
+  "frozen_input": ".dbg/daily-v9/frozen-day180.bin",
+  "equal_native_pairs": 175,
+  "metrics": {
+    "mean_ms": {
+      "before": 241.7042,
+      "after": 239.80885714285714,
+      "reduction_percent": 0.7841580151039371
+    },
+    "p95_ms": {
+      "before": 553.929,
+      "after": 545.874,
+      "reduction_percent": 1.4541574822766004
+    },
+    "peak_ms": {
+      "before": 865.347,
+      "after": 856.799,
+      "reduction_percent": 0.9878118257762495
+    },
+    "100000_modifier_calls_ms": {
+      "before": 651.881,
+      "after": 509.416,
+      "reduction_percent": 21.854448894813622
+    }
+  },
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 28632,
+        "mean_ms": 243.59834285714285,
+        "p95_ms": 553.929,
+        "peak_ms": 865.347,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 27596,
+        "mean_ms": 239.80885714285714,
+        "p95_ms": 545.874,
+        "peak_ms": 850.332,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 36160,
+        "mean_ms": 241.7042,
+        "p95_ms": 566.455,
+        "peak_ms": 873.581,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 28808,
+        "mean_ms": 241.9090857142857,
+        "p95_ms": 560.328,
+        "peak_ms": 861.6,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 20824,
+        "mean_ms": 241.28282857142858,
+        "p95_ms": 553.868,
+        "peak_ms": 864.218,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 31080,
+        "mean_ms": 240.402,
+        "p95_ms": 544.507,
+        "peak_ms": 862.98,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 16592,
+        "mean_ms": 243.2656,
+        "p95_ms": 577.793,
+        "peak_ms": 922.783,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 28444,
+        "mean_ms": 239.52131428571428,
+        "p95_ms": 535.509,
+        "peak_ms": 847.862,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 23892,
+        "mean_ms": 239.75225714285713,
+        "p95_ms": 538.953,
+        "peak_ms": 861.625,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 36720,
+        "mean_ms": 239.7081142857143,
+        "p95_ms": 545.993,
+        "peak_ms": 856.799,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "rejected_garrison_cache_candidates": {
+    "full-scan": {
+      "mean_ms": {
+        "before": 242.45242857142858,
+        "after": 244.3778
+      },
+      "p95_ms": {
+        "before": 550.987,
+        "after": 550.45
+      },
+      "peak_ms": {
+        "before": 861.844,
+        "after": 866.365
+      }
+    },
+    "memo": {
+      "mean_ms": {
+        "before": 241.9292,
+        "after": 242.0316
+      },
+      "p95_ms": {
+        "before": 542.989,
+        "after": 547.969
+      },
+      "peak_ms": {
+        "before": 871.049,
+        "after": 861.349
+      }
+    }
+  },
+  "diagnostics": {
+    "campaign_pid": 25688,
+    "capital_pid": 36060,
+    "ruler_pid": 23004,
+    "modifier_calls_35_days": 34067,
+    "modifier_mean_ms": 6.191685714285715,
+    "day210_modifier_calls": 4689,
+    "day210_modifier_ms": 30.084
+  },
+  "table": {
+    "entries": 780,
+    "rebuild_median_ms": 4.397,
+    "serialized_bytes": 605032,
+    "note": "Rebuild/serialized size are not whole-project startup time or runtime memory usage."
+  },
+  "test_result": {
+    "new_checks": 7245,
+    "working_primary_passed": 18,
+    "missing_test_name": "ruler_profile_integration",
+    "supplement_passed": 3,
+    "unchanged_baseline_failures": 2,
+    "staged_tests_passed": 7
+  },
+  "limitations": [
+    "Only 35 days and one monthly boundary; no long-run audit claim.",
+    "Small whole-day improvement; major AI and monthly costs remain.",
+    "The measured working tree includes older authorized pending changes. Staged-only code is verified separately."
+  ],
+  "source_archives": {
+    "ruler-before.gd.txt.gz": {
+      "uncompressed_sha256": "ba5c428bca9ad31de6b5140d2f39132cb48e37e8304cbed3a58dc76d85cc86e5",
+      "gzip_sha256": "d86dc0a00d7a5becf2ab52f386449f37506bb1fcdb69a325ee65328acb7daefb"
+    },
+    "ruler-loaded.gd.txt.gz": {
+      "uncompressed_sha256": "88691ba12986f963883f0f93cce57e4f1657343ca0256982da91ba2b21c0386d",
+      "gzip_sha256": "b41ad9fda240534038a1476a91842bd21bf41018ad49e7c8723228c5f5d6cb98"
+    },
+    "ruler_profile-after.gd.txt.gz": {
+      "uncompressed_sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4",
+      "gzip_sha256": "f11d327f4b504feee081eb25895523cb72734d18dd68e8eb9ba1ec52e99d32bb"
+    },
+    "ruler_profile-before.gd.txt.gz": {
+      "uncompressed_sha256": "ba5c428bca9ad31de6b5140d2f39132cb48e37e8304cbed3a58dc76d85cc86e5",
+      "gzip_sha256": "d86dc0a00d7a5becf2ab52f386449f37506bb1fcdb69a325ee65328acb7daefb"
+    }
+  },
+  "staged_regression_summary": "staged-regression-summary.json",
+  "reference_source_sha256": "9cafb67362ce3c06535ba6ea066208a2c2595294b83e85319279df405cbcfbf6",
+  "test_source_sha256": "4295dbc83b969785c2ab30b0c83be63d1bdef0ac253b853f9bb97b9a0b001fbe"
+}

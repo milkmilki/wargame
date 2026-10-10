@@ -1,0 +1,94 @@
+extends Simulation
+var segments := {}
+func record(key: String, before: int):
+	var row: Dictionary = segments.get(key,{"calls":0,"us":0})
+	row.calls += 1; row.us += Time.get_ticks_usec()-before; segments[key]=row
+func _trade_structure_runtime_probe() -> Array:
+	var before := Time.get_ticks_usec()
+	var result := super._trade_structure_runtime_probe()
+	record("_trade_structure_runtime_probe",before); return result
+func _trade_summary_settlement_token(
+	structure_fingerprint: PackedByteArray,
+	wartime_mask: PackedByteArray = PackedByteArray()
+) -> PackedByteArray:
+	var before := Time.get_ticks_usec()
+	var result := super._trade_summary_settlement_token(structure_fingerprint,wartime_mask)
+	record("_trade_summary_settlement_token",before); return result
+func _cached_trade_city_gold_outputs(
+	structure_fingerprint: PackedByteArray
+) -> PackedInt32Array:
+	var before := Time.get_ticks_usec()
+	var result := super._cached_trade_city_gold_outputs(structure_fingerprint)
+	record("_cached_trade_city_gold_outputs",before); return result
+func _cached_trade_garrison_upkeep(
+	structure_fingerprint: PackedByteArray
+) -> Array[int]:
+	var before := Time.get_ticks_usec()
+	var result := super._cached_trade_garrison_upkeep(structure_fingerprint)
+	record("_cached_trade_garrison_upkeep",before); return result
+func _forecast_trade_and_gold_flows(
+	summary_only: bool = false
+) -> Dictionary:
+	var before := Time.get_ticks_usec()
+	var result := super._forecast_trade_and_gold_flows(summary_only)
+	record("_forecast_trade_and_gold_flows",before); return result
+func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
+	var before := Time.get_ticks_usec()
+	var result := super._prepare_coalition_campaign_batch()
+	record("_prepare_coalition_campaign_batch",before); return result
+func _plan_coalition_component(
+	component: Dictionary,
+	_defense_centers: Array[int],
+	objective_cache: Dictionary
+) -> bool:
+	var before := Time.get_ticks_usec()
+	var result := super._plan_coalition_component(component,_defense_centers,objective_cache)
+	record("_plan_coalition_component",before); return result
+func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool:
+	var before := Time.get_ticks_usec()
+	var result := super._plan_campaign_pair(pair,cache)
+	record("_plan_campaign_pair",before); return result
+func _allocate_coalition_fronts(component: Dictionary) -> bool:
+	var before := Time.get_ticks_usec()
+	var result := super._allocate_coalition_fronts(component)
+	record("_allocate_coalition_fronts",before); return result
+func _campaign_deployment_distance(army: Army, target: int) -> float:
+	var before := Time.get_ticks_usec()
+	var result := super._campaign_deployment_distance(army,target)
+	record("_campaign_deployment_distance",before); return result
+func _cached_campaign_objective(
+	nation_id: int,
+	target_id: int,
+	cache: Dictionary,
+	excluded_centers: Dictionary = {},
+	camp_counterattack: bool = false
+) -> Dictionary:
+	var before := Time.get_ticks_usec()
+	var result := super._cached_campaign_objective(nation_id,target_id,cache,excluded_centers,camp_counterattack)
+	record("_cached_campaign_objective",before); return result
+func _cached_ai_path_field(
+	cache_nation_id: int,
+	start: int,
+	allowed_nation: int = -1,
+	block_contested_edges: bool = false,
+	use_danger_weight: bool = true,
+	allowed_goal: int = -1,
+	required_manpower: int = 0
+) -> Dictionary:
+	var before := Time.get_ticks_usec()
+	var result := super._cached_ai_path_field(cache_nation_id,start,allowed_nation,block_contested_edges,use_danger_weight,allowed_goal,required_manpower)
+	record("_cached_ai_path_field",before); return result
+func _front_effective_manpower(front: CoalitionCampaignFront) -> int:
+	var before := Time.get_ticks_usec()
+	var result := super._front_effective_manpower(front)
+	record("_front_effective_manpower",before); return result
+func _front_requirement(front: CoalitionCampaignFront) -> int:
+	var before := Time.get_ticks_usec()
+	var result := super._front_requirement(front)
+	record("_front_requirement",before); return result
+func _coalition_allocation_candidates(
+	front: CoalitionCampaignFront, armies: Array[Army], target: int
+) -> Array[Dictionary]:
+	var before := Time.get_ticks_usec()
+	var result := super._coalition_allocation_candidates(front,armies,target)
+	record("_coalition_allocation_candidates",before); return result

@@ -1,0 +1,1 @@
+RULER_MODIFIER_TABLE_FAIL finite immutable modifier combinations are prepared before runtime

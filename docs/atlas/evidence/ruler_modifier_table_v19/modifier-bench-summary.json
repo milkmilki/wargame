@@ -1,0 +1,72 @@
+[
+  {
+    "after": {
+      "checksum": 93566.6999999533,
+      "us": 512624
+    },
+    "before": {
+      "checksum": 93566.6999999533,
+      "us": 646613
+    },
+    "build_us": 4447,
+    "entries": 780,
+    "pid": 468,
+    "serialized_bytes": 605032
+  },
+  {
+    "after": {
+      "checksum": 93566.6999999533,
+      "us": 508720
+    },
+    "before": {
+      "checksum": 93566.6999999533,
+      "us": 651881
+    },
+    "build_us": 4308,
+    "entries": 780,
+    "pid": 36360,
+    "serialized_bytes": 605032
+  },
+  {
+    "after": {
+      "checksum": 93566.6999999533,
+      "us": 513064
+    },
+    "before": {
+      "checksum": 93566.6999999533,
+      "us": 650346
+    },
+    "build_us": 4203,
+    "entries": 780,
+    "pid": 22532,
+    "serialized_bytes": 605032
+  },
+  {
+    "after": {
+      "checksum": 93566.6999999533,
+      "us": 508517
+    },
+    "before": {
+      "checksum": 93566.6999999533,
+      "us": 652264
+    },
+    "build_us": 4397,
+    "entries": 780,
+    "pid": 23584,
+    "serialized_bytes": 605032
+  },
+  {
+    "after": {
+      "checksum": 93566.6999999533,
+      "us": 509416
+    },
+    "before": {
+      "checksum": 93566.6999999533,
+      "us": 655578
+    },
+    "build_us": 4615,
+    "entries": 780,
+    "pid": 16504,
+    "serialized_bytes": 605032
+  }
+]

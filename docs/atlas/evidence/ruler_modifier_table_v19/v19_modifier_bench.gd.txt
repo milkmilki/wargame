@@ -1,0 +1,24 @@
+extends SceneTree
+const Reference = preload("res://tests/support/ruler_modifiers_reference.gd")
+func _initialize(): call_deferred("run")
+func measure(legacy: bool,profiles: Array[Nation]) -> Dictionary:
+	var started := Time.get_ticks_usec(); var sum := 0.0
+	for iteration in range(100000):
+		var profile: Nation = profiles[iteration%profiles.size()]
+		var values := Reference.modifiers(profile) if legacy else RulerProfile.modifiers(profile)
+		sum += float(values[RulerProfile.KEY_FOOD_CONSUMPTION])
+	return {"us":Time.get_ticks_usec()-started,"checksum":sum}
+func run():
+	var profiles: Array[Nation] = []
+	for i in range(30):
+		var nation := Nation.new();nation.ruler_archetype=RulerProfile.ARCHETYPE_IDS[i%RulerProfile.ARCHETYPE_IDS.size()]
+		if i%3>0: nation.ruler_traits.append(RulerProfile.TRAIT_IDS[i%RulerProfile.TRAIT_IDS.size()])
+		if i%3>1: nation.ruler_traits.append(RulerProfile.TRAIT_IDS[(i+5)%RulerProfile.TRAIT_IDS.size()])
+		profiles.append(nation)
+	var reverse := OS.get_cmdline_user_args().has("--reverse")
+	var first := measure(reverse,profiles);var second := measure(not reverse,profiles)
+	assert(first.checksum==second.checksum)
+	var start := Time.get_ticks_usec(); var table := RulerProfile._build_combined_modifiers();var init_us := Time.get_ticks_usec()-start
+	var output := {"pid":OS.get_process_id(),"before":first if reverse else second,"after":second if reverse else first,"entries":table.size(),"build_us":init_us,"serialized_bytes":var_to_bytes(table).size()}
+	FileAccess.open("res://.dbg/ruler-table-v19/modifiers-%d.json"%OS.get_process_id(),FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("MODIFIER_BENCH_COMPLETE ",OS.get_process_id());quit()

@@ -1,0 +1,42 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "ruler_succession_extremes",
+      "ok": false,
+      "exit_code": 1,
+      "elapsed_ms": 2984,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_succession_extremes.log"
+    },
+    {
+      "test": "ruler_enfeoff_accession",
+      "ok": false,
+      "exit_code": 0,
+      "elapsed_ms": 2516,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_enfeoff_accession.log"
+    },
+    {
+      "test": "ruler_extinction",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2062,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_extinction.log"
+    },
+    {
+      "test": "rebellion_ruler_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\rebellion_ruler_lifecycle.log"
+    },
+    {
+      "test": "royal_title_generations",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 8922,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_title_generations.log"
+    }
+  ],
+  "failures": 2
+}

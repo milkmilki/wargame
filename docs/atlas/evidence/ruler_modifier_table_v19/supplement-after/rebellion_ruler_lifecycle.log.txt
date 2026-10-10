@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+REBELLION_RULER_DIAGNOSTIC: {"audit":[],"manpower":0,"nation":1,"ruler":{"child_ids":[6,7],"children_initialized":true,"current_title":"金新昂军君","id":5,"name":"金新昂","nation_ids":[1],"office_nation_id":1,"parent_id":4,"title_history":[],"title_origin_nation_id":-1,"title_payer_id":1,"titles":["金新昂军君"]}}
+REBELLION_RULER_LIFECYCLE: 0 failures

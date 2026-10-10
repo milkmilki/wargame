@@ -1,0 +1,6 @@
+extends GameState
+var hop_calls := 0
+var hop_usec := 0
+func capital_hop_distances(nation_id: int) -> Dictionary:
+	var before := Time.get_ticks_usec(); var result := super.capital_hop_distances(nation_id)
+	hop_calls += 1; hop_usec += Time.get_ticks_usec()-before; return result

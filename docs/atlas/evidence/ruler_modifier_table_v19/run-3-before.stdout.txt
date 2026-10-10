@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ADMIN_DAILY_PROGRESS before 190
+ADMIN_DAILY_PROGRESS before 200
+ADMIN_DAILY_PROGRESS before 210
+ADMIN_DAILY_COMPLETE before 20824

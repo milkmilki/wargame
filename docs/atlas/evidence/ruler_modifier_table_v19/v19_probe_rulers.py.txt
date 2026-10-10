@@ -1,0 +1,21 @@
+from pathlib import Path
+import subprocess
+p=Path('scripts/core/ruler_profile.gd');before=p.read_bytes();out=Path('.dbg/v19-ruler-probe');out.mkdir(exist_ok=True);(out/'ruler-before.gd.txt').write_bytes(before)
+s=before.decode('utf-8').replace('\r\n','\n');s=s.replace('static var _archetype_base_modifiers:', 'static var _v19_modifier_calls := 0\nstatic var _v19_modifier_usec := 0\nstatic var _archetype_base_modifiers:',1)
+needle='\tvar archetype := _resolved_archetype(profile_or_archetype)\n\tvar result := _base_modifiers(archetype).duplicate()';assert s.count(needle)==1
+s=s.replace(needle,'\tvar started := Time.get_ticks_usec()\n'+needle,1)
+needle='\t\t_apply_trait(result, trait_id)\n\treturn result';assert s.count(needle)==1
+s=s.replace(needle,'\t\t_apply_trait(result, trait_id)\n\t_v19_modifier_calls += 1\n\t_v19_modifier_usec += Time.get_ticks_usec()-started\n\treturn result',1)
+(out/'ruler-loaded.gd.txt').write_text(s,encoding='utf-8')
+driver=Path('.dbg/v19_probe.gd').read_text(encoding='utf-8').replace('sim.segments.clear();','RulerProfile._v19_modifier_calls=0; RulerProfile._v19_modifier_usec=0; sim.segments.clear();').replace('"segments":sim.segments.duplicate(true),','"modifier_calls":RulerProfile._v19_modifier_calls,"modifier_usec":RulerProfile._v19_modifier_usec,"segments":sim.segments.duplicate(true),').replace('v19-probe.json','v19-ruler-probe/data.json')
+Path('.dbg/v19_ruler_probe.gd').write_text(driver,encoding='utf-8')
+try:
+ p.write_text(s,encoding='utf-8')
+ with (out/'stdout.txt').open('wb') as o,(out/'stderr.txt').open('wb') as e:
+  process=subprocess.Popen(['D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe','--headless','--path',str(Path.cwd()),'--script','res://.dbg/v19_ruler_probe.gd'],stdout=o,stderr=e,creationflags=subprocess.CREATE_NO_WINDOW)
+  print('RULER_PROBE_START',process.pid,flush=True)
+  try:code=process.wait(timeout=120)
+  except subprocess.TimeoutExpired:process.kill();process.wait();raise
+  assert code==0 and not (out/'stderr.txt').read_text(encoding='utf-8').strip()
+finally:p.write_bytes(before)
+print('RULER_PROBE_COMPLETE',process.pid,flush=True)

@@ -1,0 +1,11 @@
+from pathlib import Path
+import re
+p=Path('tests/support/ruler_modifiers_reference.gd');source=Path('.dbg/ruler-table-v19/ruler-before.gd.txt').read_text(encoding='utf-8-sig')
+first=re.search(r'^static func ',source,re.M).start();prefix=source[:first].replace('class_name RulerProfile\n','')
+functions=['modifiers','is_valid_archetype','is_valid_trait','_base_modifiers','_build_archetype_base_modifiers','_build_base_modifiers','_apply_trait','_set_multipliers','_multiply','_add_reserve_months','_resolved_archetype','_resolved_traits','_normalized_archetype']
+blocks=[]
+for name in functions:
+ match=re.search(r'^static func '+re.escape(name)+r'\([\s\S]*?(?=^static func |\Z)',source,re.M);assert match,name
+ blocks.append(match.group().rstrip())
+p.write_text(prefix.rstrip()+'\n\n\n'+'\n\n\n'.join(blocks)+'\n',encoding='utf-8')
+print('Kept exact original modifier functions; omitted unrelated naming APIs.')

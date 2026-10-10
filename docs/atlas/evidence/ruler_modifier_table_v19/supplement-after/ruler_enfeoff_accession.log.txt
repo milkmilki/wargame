@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SCRIPT ERROR: Invalid call. Nonexistent function 'generate_grid_world' in base 'RefCounted (StaleAnnexState)'.
+   at: _test_landed_accession (res://tests/ruler_enfeoff_accession.gd:23)
+   GDScript backtrace (most recent call first):
+       [0] _test_landed_accession (res://tests/ruler_enfeoff_accession.gd:23)
+       [1] _init (res://tests/ruler_enfeoff_accession.gd:15)
+RULER_ENFEOFF_ACCESSION_RESULT checks=32 failures=0

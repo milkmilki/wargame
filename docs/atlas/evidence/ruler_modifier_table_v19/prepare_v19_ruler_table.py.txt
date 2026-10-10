@@ -1,0 +1,55 @@
+from pathlib import Path
+p=Path('scripts/core/ruler_profile.gd');out=Path('.dbg/ruler-table-v19');out.mkdir(exist_ok=True);(out/'ruler-before.gd.txt').write_bytes(p.read_bytes())
+s=p.read_text(encoding='utf-8-sig');anchor='static var _archetype_base_modifiers: Dictionary = _build_archetype_base_modifiers()\n';assert s.count(anchor)==1
+s=s.replace(anchor,anchor+'static var _combined_modifier_table: Dictionary = _build_combined_modifiers()\n',1)
+old='''	var archetype := _resolved_archetype(profile_or_archetype)
+	var result := _base_modifiers(archetype).duplicate()
+	for trait_id in _resolved_traits(profile_or_archetype, traits):
+		_apply_trait(result, trait_id)
+	return result
+'''
+new='''	var archetype := _resolved_archetype(profile_or_archetype)
+	var resolved_traits := _resolved_traits(profile_or_archetype, traits)
+	if resolved_traits.is_empty():
+		return _base_modifiers(archetype).duplicate()
+	var key := _modifier_combination_key(archetype, resolved_traits)
+	# Tables are immutable, but callers historically own a mutable result.
+	return (_combined_modifier_table[key] as Dictionary).duplicate()
+'''
+assert s.count(old)==1;s=s.replace(old,new,1)
+block='''## All legal one/two-trait combinations are computed once before AI workers
+## start. Reuse the original trait operations and their canonical string order.
+static func _build_combined_modifiers() -> Dictionary:
+	assert(MAX_TRAITS == 2)
+	var combinations: Array[Array] = []
+	for trait_id in TRAIT_IDS:
+		combinations.append([trait_id])
+	for first in range(TRAIT_IDS.size()):
+		for second in range(first + 1, TRAIT_IDS.size()):
+			var pair: Array = [TRAIT_IDS[first], TRAIT_IDS[second]]
+			pair.sort()
+			combinations.append(pair)
+	var result := {}
+	for archetype in ARCHETYPE_IDS:
+		for chosen_traits in combinations:
+			var values := _base_modifiers(archetype).duplicate()
+			for trait_id in chosen_traits:
+				_apply_trait(values, trait_id)
+			values.make_read_only()
+			result[_modifier_combination_key(archetype, chosen_traits)] = values
+	result.make_read_only()
+	return result
+
+
+static func _modifier_combination_key(archetype: int, chosen_traits: Array) -> int:
+	var stride := TRAIT_IDS.size() + 1
+	var first := TRAIT_IDS.find(chosen_traits[0]) + 1
+	var second := TRAIT_IDS.find(chosen_traits[1]) + 1 if chosen_traits.size() == 2 else 0
+	return archetype * stride * stride + first * stride + second
+
+
+'''
+anchor='static func _base_modifiers(archetype: int) -> Dictionary:\n';assert s.count(anchor)==1;s=s.replace(anchor,block+anchor,1)
+p.write_text(s,encoding='utf-8');(out/'ruler-after.gd.txt').write_bytes(p.read_bytes())
+p=Path('run_tests.py');s=p.read_text(encoding='utf-8-sig');needle='"resource_capacity_batch",';assert s.count(needle)==1;p.write_text(s.replace(needle,needle+' "ruler_modifier_table",',1),encoding='utf-8')
+p=Path('tests/support/ruler_modifiers_reference.gd');p.write_text(p.read_text(encoding='utf-8-sig').rstrip()+'\n',encoding='utf-8')

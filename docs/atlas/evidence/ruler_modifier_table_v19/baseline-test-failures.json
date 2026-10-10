@@ -1,0 +1,7 @@
+{
+  "baseline_ruler_sha256": "ba5c428bca9ad31de6b5140d2f39132cb48e37e8304cbed3a58dc76d85cc86e5",
+  "candidate_ruler_sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4",
+  "baseline_failure_count": 2,
+  "candidate_failure_count": 2,
+  "failure_signatures_match": true
+}
