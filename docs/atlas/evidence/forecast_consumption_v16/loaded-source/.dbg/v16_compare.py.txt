@@ -1,0 +1,38 @@
+from pathlib import Path
+import hashlib, subprocess, re, json, statistics
+
+project = Path.cwd()
+output = project / '.dbg/forecast-commit-v16/daily'
+output.mkdir(exist_ok=True)
+production = project / 'scripts/ai/diplomacy_ai.gd'
+original = production.read_bytes()
+(output/'levels-loaded.gd.txt').write_bytes(original)
+slow = subprocess.check_output(["git","show","HEAD:scripts/ai/diplomacy_ai.gd"]).decode("utf8")
+(output/"heap-loaded.gd.txt").write_bytes(slow.encode("utf8"))
+
+results = []
+try:
+    for run in range(1,6):
+        pair = {}
+        for variant in (['heap','levels'] if run%2 else ['levels','heap']):
+            production.write_bytes(slow.encode('utf8') if variant == 'heap' else original)
+            stdout = output / f'run-{run}-{variant}.stdout.txt'
+            stderr = output / f'run-{run}-{variant}.stderr.txt'
+            with stdout.open('wb') as out, stderr.open('wb') as err:
+                process = subprocess.Popen(['D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe','--headless','--path',str(project),'--script','res://.dbg/v16_daily.gd','--','--'+variant],stdout=out,stderr=err,creationflags=subprocess.CREATE_NO_WINDOW)
+                code = process.wait(timeout=180)
+            assert code == 0 and not stderr.read_text(encoding='utf8').strip(), (run,variant,code,stderr.read_text())
+            path = output / f'{variant}-{process.pid}.json'
+            data = json.loads(path.read_text())
+            assert data['source_hashes']['scripts/ai/diplomacy_ai.gd'] == hashlib.sha256(production.read_bytes()).hexdigest()
+            durations = [row['elapsed_us']/1000 for row in data['rows']]
+            pair[variant] = {'pid':process.pid,'mean_ms':statistics.mean(durations),'p95_ms':sorted(durations)[33],'peak_ms':max(durations),'rows':data['rows'],'initial_sha256':data['initial_sha256']}
+            print('DAILY_RUN',run,variant,'pid',process.pid,'mean_ms',pair[variant]['mean_ms'],flush=True)
+        assert pair['heap']['initial_sha256'] == pair['levels']['initial_sha256']
+        assert all(a['sha256'] == b['sha256'] for a,b in zip(pair['heap']['rows'],pair['levels']['rows'])), 'Daily states must match between correct algorithms'
+        results.append(pair)
+        (output/'paired-summary.json').write_text(json.dumps(results,indent=2)+'\n',encoding='utf8')
+finally:
+    production.write_bytes(original)
+    assert hashlib.sha256(production.read_bytes()).hexdigest() == hashlib.sha256(original).hexdigest()
+print('DAILY_COMPARE_COMPLETE pairs=',len(results),'state_pairs=',len(results)*35,flush=True)

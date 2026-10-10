@@ -1,0 +1,17 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func digest(state: GameState) -> String:
+	var hash_context := HashingContext.new(); hash_context.start(HashingContext.HASH_SHA256)
+	hash_context.update(var_to_bytes(NativeSnapshotBuilder.build(state))); return hash_context.finish().hex_encode()
+func run():
+	var variant := "levels" if OS.get_cmdline_user_args().has("--levels") else "heap"
+	var hashes := {}
+	for path in ["scripts/ai/diplomacy_ai.gd","scripts/core/rebellion_system.gd","scripts/simulation/simulation.gd","scripts/state/game_state.gd","scripts/core/trade_network.gd","scripts/simulation/rules/supply_rules.gd"]: hashes[path] = FileAccess.get_sha256("res://"+path)
+	var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin")
+	var output := {"pid":OS.get_process_id(),"variant":variant,"source_hashes":hashes,"initial_sha256":digest(sim.state),"seed":sim.state.world_seed,"mask":sim.state.atlas_layout.data.options.settlement_mask,"rulers":sim.state.random_ruler_profiles_enabled(),"trade":sim.state.trade_enabled,"rows":[]}
+	for day in range(35):
+		var started := Time.get_ticks_usec(); sim._advance_day(false); var elapsed := Time.get_ticks_usec()-started
+		output.rows.append({"day":sim.state.day,"elapsed_us":elapsed,"profile":sim.tick_profile_last_usec.duplicate(),"sha256":digest(sim.state)})
+		if sim.state.day%10 == 0: print("ADMIN_DAILY_PROGRESS ",variant," ",sim.state.day); await process_frame
+	FileAccess.open("res://.dbg/forecast-commit-v16/daily/%s-%d.json"%[variant,OS.get_process_id()],FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("ADMIN_DAILY_COMPLETE ",variant," ",OS.get_process_id()); sim.free(); quit()

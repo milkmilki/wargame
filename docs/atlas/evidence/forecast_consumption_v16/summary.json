@@ -1,0 +1,45 @@
+{
+  "parent_commit": "9a70e710ca50797068934193dcd3b18ae41b9cbe",
+  "source_hashes": {
+    "scripts/ai/diplomacy_ai.gd": "e6a8efb1b971df748eac2ca1a9cad0d9c55aae18001bd7d137b28d0198c330b6",
+    ".dbg/v16_daily.gd": "f73d2a2dc69582daf1a696441d6763ce6bee4934542695158d9bbf33f1b1e36c",
+    ".dbg/v16_compare.py": "89798bed5c74e531ecde7c89defb68d1084cb0ccdc15a6668fb21553d2093af7",
+    ".dbg/v16_probe.gd": "f8d7648bfdb9f97f2a3fab2962f0211a258fb5cb2afab4b5ab51b446aa341fd1",
+    ".dbg/v16_probe_sim.gd": "8426147265c467f48397b6d0da5912d3cf03d8008141b9af9a3bbc71dd547015",
+    ".dbg/record_v16.py": "89e32097ba491905ceaa42e9b5f3beeffb82422accde991dda2b53a0fdbb633b"
+  },
+  "variant_labels": {
+    "heap": "before: drop consumption table",
+    "levels": "after: append exact accepted demand"
+  },
+  "stats": {
+    "heap": {
+      "mean_ms": 259.2552,
+      "p95_ms": 569.05,
+      "peak_ms": 891.541,
+      "force_commit_ms": 6.739257142857142
+    },
+    "levels": {
+      "mean_ms": 259.97168571428574,
+      "p95_ms": 569.706,
+      "peak_ms": 883.021,
+      "force_commit_ms": 5.858257142857143
+    }
+  },
+  "identical_daily_snapshots": 175,
+  "regressions": 13,
+  "isolated_regressions": 5,
+  "formula_probe": {
+    "pid": 22884,
+    "reports": 34,
+    "food_report_ms": 700.64,
+    "formula_ms": 11.936,
+    "evaluations": 686,
+    "all_first_input_reports": true
+  },
+  "limits": [
+    "Whole-day mean and P95 did not improve in these runs.",
+    "Commit phase improvement does not imply a smooth GUI.",
+    "Input aggregation is the next investigation; formula cost is only about 1.7% of measured food-report cost."
+  ]
+}

@@ -1,0 +1,40 @@
+from pathlib import Path
+import json,statistics,subprocess,hashlib,shutil
+run = Path('.dbg/forecast-commit-v16'); out = Path('docs/atlas/evidence/forecast_consumption_v16'); out.mkdir(parents=True,exist_ok=True)
+def copy(source,target):
+    path=out/target; path.parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(source,path)
+out.joinpath('.gitattributes').write_text('*.gd.txt -text -eol -whitespace\n*.py.txt -text -eol -whitespace\n',encoding='utf8')
+pairs=json.loads((run/'daily/paired-summary.json').read_text())
+assert len(pairs)==5 and all(all(a['sha256']==b['sha256'] for a,b in zip(p['heap']['rows'],p['levels']['rows'])) for p in pairs)
+stats={}
+for kind in ['heap','levels']:
+    stats[kind]={k:statistics.median(p[kind][k] for p in pairs) for k in ['mean_ms','p95_ms','peak_ms']}
+    stats[kind]['force_commit_ms']=statistics.median(statistics.mean(r['profile'].get('ai_force_commit',0) for r in p[kind]['rows'])/1000 for p in pairs)
+for source in (run/'daily').glob('*'):
+    if source.name=='paired-summary.json':
+        brief=[{kind:{k:v for k,v in p[kind].items() if k!='rows'} for kind in ['heap','levels']} for p in pairs]
+        (out/'daily').mkdir(exist_ok=True); (out/'daily/paired-summary.json').write_text(json.dumps(brief,indent=2)+'\n',encoding='utf8')
+    else: copy(source,'daily/'+source.name)
+for source in (run/'daily').glob('levels-*.json'):
+    data=json.loads(source.read_text())
+    assert data['mask']=={'east':145.0,'enabled':True,'north':55.0,'south':20.0,'version':'atlas-geographic-mask-v1','west':-15.0}
+    assert data['rulers'] and data['trade'] and data['seed']==1
+    assert data['source_hashes']['scripts/ai/diplomacy_ai.gd']==hashlib.sha256(Path('scripts/ai/diplomacy_ai.gd').read_bytes()).hexdigest()
+copy(run/'regression-summary.json','regressions/summary.json')
+regression=json.loads((run/'regression-summary.json').read_text())
+assert len(regression['results'])==13 and all(r['ok'] for r in regression['results'])
+for item in regression['results']: copy(item['log'],'regressions/'+item['test']+'.log.txt')
+stage=Path('.dbg/v16-staged-verify/.dbg/regression'); copy(stage/'summary-selected.json','staged-regressions/summary.json')
+for source in stage.glob('*.log'): copy(source,'staged-regressions/'+source.name+'.txt')
+for source in Path('.dbg').glob('v16-*.txt'): copy(source,'unit/'+source.name)
+for name in ['food-probe.json','probe.stdout.txt','probe.stderr.txt','staged-import.stdout.txt','staged-import.stderr.txt']: copy(run/name,name)
+sources={}
+for name in ['scripts/ai/diplomacy_ai.gd','.dbg/v16_daily.gd','.dbg/v16_compare.py','.dbg/v16_probe.gd','.dbg/v16_probe_sim.gd','.dbg/record_v16.py']:
+    copy(name,'loaded-source/'+name+'.txt'); sources[name]=hashlib.sha256(Path(name).read_bytes()).hexdigest()
+uid=Path('.dbg/v16-staged-verify/tests/forecast_consumption_commit.gd.uid')
+assert uid.exists(); shutil.copyfile(uid,'tests/forecast_consumption_commit.gd.uid')
+probe=json.loads((run/'food-probe.json').read_text())
+rows=probe['rows']; total=sum(r['elapsed_us'] for r in rows); formulas=sum(r['forecast_profile'].get('elapsed_usec',0) for r in rows)
+summary={'parent_commit':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),'source_hashes':sources,'variant_labels':{'heap':'before: drop consumption table','levels':'after: append exact accepted demand'},'stats':stats,'identical_daily_snapshots':175,'regressions':13,'isolated_regressions':5,'formula_probe':{'pid':probe['pid'],'reports':len(rows),'food_report_ms':total/1000,'formula_ms':formulas/1000,'evaluations':sum(r['forecast_profile'].get('evaluations',0) for r in rows),'all_first_input_reports':all(not r['prepared_inputs'] for r in rows)},'limits':['Whole-day mean and P95 did not improve in these runs.','Commit phase improvement does not imply a smooth GUI.','Input aggregation is the next investigation; formula cost is only about 1.7% of measured food-report cost.']}
+(out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
+print(json.dumps({'stats':stats,'probe':summary['formula_probe']},indent=2))

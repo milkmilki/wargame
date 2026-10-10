@@ -1,0 +1,11 @@
+extends Simulation
+var food_probe_rows: Array = []
+func _food_security_report(nation_id: int,nation_armies: Array[Army] = [],evaluation_cache: Dictionary = {}) -> Dictionary:
+	ResourceForecastRules.reset_profile(); ResourceForecastRules.profiling_enabled = true
+	var prepared_inputs := evaluation_cache.has("resource_forecast_inputs")
+	var started := Time.get_ticks_usec()
+	var report := super._food_security_report(nation_id,nation_armies,evaluation_cache)
+	var elapsed := Time.get_ticks_usec()-started
+	ResourceForecastRules.profiling_enabled = false
+	food_probe_rows.append({"day":state.day,"nation":nation_id,"elapsed_us":elapsed,"prepared_inputs":prepared_inputs,"forecast_profile":ResourceForecastRules.profile()})
+	return report

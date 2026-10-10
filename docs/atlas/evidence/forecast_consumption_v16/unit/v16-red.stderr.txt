@@ -1,0 +1,10 @@
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round0 member0
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round0 member1
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round0 member2
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round1 member0
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round1 member1
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round1 member2
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round2 member0
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round2 member1
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round2 member2
+FORECAST_CONSUMPTION_COMMIT_FAIL accepted recruitment retains cumulative table day0 round0 member0

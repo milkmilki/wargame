@@ -3658,7 +3658,13 @@ static func commit_force_change(state: GameState, nation_id: int, added_troops: 
 		# Keep pre-existing per-army fractional debts when accepting a candidate.
 		inputs[member].consumers = (inputs[member].consumers as Array).duplicate()
 		inputs[member].consumers.append({"rate": rate, "debt": 0.0, "increment": true})
-		inputs[member].erase("consumption")
+		# Keep the exact existing army debts/rounding and append only the
+		# accepted consumer's ceiling. Each pool member owns its new table.
+		if inputs[member].has("consumption"):
+			var consumption: Dictionary = (inputs[member].consumption as Dictionary).duplicate()
+			for elapsed in consumption:
+				consumption[elapsed] = float(consumption[elapsed]) + ceil(rate * int(elapsed) / 30.0 - 0.000001)
+			inputs[member].consumption = consumption
 		inputs[member].harvest = maxf(float(inputs[member].harvest) - float(input.harvest_loss), 0)
 	input.harvest_loss = 0
 	input.nation_field_food += rate
