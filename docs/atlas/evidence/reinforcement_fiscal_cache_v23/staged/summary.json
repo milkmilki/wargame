@@ -1,0 +1,70 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "reinforcement_fiscal_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2437,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\reinforcement_fiscal_cache.log"
+    },
+    {
+      "test": "reinforcement_frame_slice_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 62313,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\reinforcement_frame_slice_equivalence.log"
+    },
+    {
+      "test": "reinforcement_network_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 28531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\reinforcement_network_cache_equivalence.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 33266,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "resource_forecast_integration",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2781,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\resource_forecast_integration.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2218,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\succession_counterattack.log"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 75407,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\atlas_military_persistence.log"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v23-staged-verify\\.dbg\\regression\\political_history_test.log"
+    }
+  ],
+  "failures": 0
+}

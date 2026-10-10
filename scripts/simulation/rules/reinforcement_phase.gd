@@ -9,7 +9,8 @@ static func reinforce_nation(
 	nation: Nation,
 	nation_armies: Array[Army],
 	food_cache: Dictionary,
-	network_cache_disabled: bool
+	network_cache_disabled: bool,
+	prepare_food_cache: Callable = Callable()
 ) -> void:
 	var at_war := not state.wars_of(nation.id).is_empty()
 	var refill_candidates := _collect_refill_candidates(nation_armies, at_war)
@@ -41,6 +42,10 @@ static func reinforce_nation(
 	if plans.is_empty():
 		return
 	_sort_plans(state, nation.id, plans)
+	# Prepare fiscal inputs only when an actual refill plan needs forecasting.
+	# Standalone callers retain the original static builder fallback.
+	if not food_cache.has("monthly_gold_flows") and prepare_food_cache.is_valid():
+		prepare_food_cache.call(food_cache)
 	var forecast_limit := _forecast_refill_limit(state, nation.id, plans, mini(available_manpower, int(plan_result["total_deficit"])), int(plan_result["total_deficit"]), food_cache)
 	available_manpower = mini(available_manpower, forecast_limit)
 	_assign_grants(

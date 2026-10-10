@@ -2641,6 +2641,16 @@ func _bucket_armies_by_nation() -> Dictionary:
 	return ReinforcementRules.bucket_armies_by_nation(state)
 
 
+## Lazy fiscal adapter for a monthly refill batch; no army mutation here.
+func _prepare_reinforcement_forecast_cache(food_cache: Dictionary) -> void:
+	DiplomacyAI._ensure_evaluation_cache_current(state, food_cache)
+	# Full inputs include live treasury, stocks and garrison changes after the
+	# real month settlement. Reuse routes, not an earlier month's fiscal report.
+	var forecast := _forecast_trade_and_gold_flows(false)
+	food_cache["trade_network_result"] = forecast["trade"]
+	food_cache["monthly_gold_flows"] = forecast["gold_flows"]
+
+
 ## 单国当月补员：写本国军队与人力，并提交共享粮池的增量需求。food_cache
 ## 在本批次复用基础汇总；候选接受后失效派生报告，不逐国重复扫描全军。
 func _reinforce_nation(
@@ -2653,7 +2663,8 @@ func _reinforce_nation(
 		nation,
 		nation_armies,
 		food_cache,
-		reinforcement_network_cache_disabled
+		reinforcement_network_cache_disabled,
+		_prepare_reinforcement_forecast_cache
 	)
 
 

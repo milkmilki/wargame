@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+REINFORCEMENT_FISCAL_CACHE checks=20 failures=1
+FAIL no refill plan does not prepare unused fiscal data
