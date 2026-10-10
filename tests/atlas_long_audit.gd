@@ -1,7 +1,7 @@
 extends SceneTree
 ## Manual long-run audit (not part of the quick regression suite).
 ## --audit-years=30; 360 simulation days/year. Evidence stays under .dbg/.
-const DIRECTORY := "res://.dbg/atlas-thirty-year"
+const DIRECTORY := "res://.dbg/atlas-eurasia-thirty-year"
 var state: GameState
 var sim: Simulation
 var run_log := DebugRunLog.new()
@@ -32,7 +32,7 @@ var source_hashes := {}
 var profile_file: FileAccess
 func model_parameters() -> Dictionary:
 	return {"atlas_ai_strategic_interval_days":sim.atlas_ai_strategic_interval_days,
-		"atlas_ai_batch_days":sim.atlas_ai_batch_days,"ai_staggered_decisions":sim.ai_staggered_decisions}
+		"atlas_ai_batch_days":sim.atlas_ai_batch_days,"ai_staggered_decisions":sim.ai_staggered_decisions,"settlement_mask":state.atlas_layout.data.options.get("settlement_mask",{})}
 func _initialize(): call_deferred("run")
 func event(kind: String,details: Dictionary):
 	var row := details.duplicate(); row.kind=kind; row.day=state.day; row.seed=state.world_seed
@@ -159,11 +159,11 @@ func run():
 	for name_value in ["report.json", "latest.snapshot", "final.snapshot"]:
 		var previous_path: String = DIRECTORY+"/"+name_value
 		if FileAccess.file_exists(previous_path): DirAccess.remove_absolute(ProjectSettings.globalize_path(previous_path))
-	var payload: Dictionary=preload("res://tests/atlas_military_inputs.gd").military()
+	var payload: Dictionary=preload("res://tests/atlas_military_inputs.gd").eurasia_military()
 	state=GameState.new(); state.generate_from_atlas(payload)
 	sim=Simulation.new(); root.add_child(sim); sim.setup(state); sim.paused=true
 	sim.tick_phase_profiling_enabled=true; sim.runtime_stage_profiling_enabled=true; sim.ai_snapshot_substage_profiling_enabled=true
-	for path in ["scripts/state/game_state.gd","scripts/simulation/simulation.gd","scripts/simulation/rules/supply_rules.gd","scripts/core/pathfinding.gd","scripts/ai/ai_world_view.gd","tests/atlas_long_audit.gd"]:
+	for path in ["scripts/state/game_state.gd","scripts/simulation/simulation.gd","scripts/simulation/rules/supply_rules.gd","scripts/core/pathfinding.gd","scripts/ai/ai_world_view.gd","tests/atlas_long_audit.gd","scripts/ai/diplomacy_ai.gd","scripts/atlas/settlement_mask.gd","tests/atlas_military_inputs.gd"]:
 		source_hashes[path]=FileAccess.get_sha256("res://"+path)
 	initial_alive=state.nations.size(); started=Time.get_ticks_msec()
 	event_file=FileAccess.open(DIRECTORY+"/events.jsonl",FileAccess.WRITE)

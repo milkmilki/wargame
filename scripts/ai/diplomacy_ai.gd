@@ -5100,6 +5100,7 @@ static func _collect_existing_war_preparation(
 	committed: Dictionary,
 	evaluation_cache: Dictionary = {}
 ) -> void:
+	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var nation := state.nations[nation_id]
 	var target_id := nation.war_preparation_target_nation
 	var objective_city := nation.war_preparation_objective_city
@@ -5116,7 +5117,7 @@ static func _collect_existing_war_preparation(
 		and can_initiate_war_at_range(
 			state, nation_id, target_id, evaluation_cache
 		)
-		and state.can_alliance_declare_war(nation_id, target_id)
+		and _cached_can_alliance_declare_war(state, nation_id, target_id, evaluation_cache)
 	)
 	var objective_valid := (
 		target_nation_valid
@@ -5407,7 +5408,26 @@ static func _collect_preparation_alliance(
 	return true
 
 
+## Reuse the evaluation batch's alliance topology; R and real field manpower V
+## still reflect current garrisons, control, supply and army positions.
+static func prewar_reinforcement_threat(state: GameState, attacker_id: int, target_id: int, center_id: int, cache: Dictionary = {}) -> int:
+	_ensure_evaluation_cache_current(state, cache)
+	if bool(cache.get("__disable_structure_cache",false)) or attacker_id<0 or attacker_id>=state.nations.size() or target_id<0 or target_id>=state.nations.size() or not state.nations[attacker_id].alive or not state.nations[target_id].alive:
+		return state.campaign_prewar_reinforcement_threat(attacker_id,target_id,center_id)
+	return state.campaign_prewar_reinforcement_threat(attacker_id,target_id,center_id,
+		_cached_alliance_bloc(state,target_id,cache),_cached_alliance_bloc(state,attacker_id,cache))
+
+static func prewar_launch_requirement(state: GameState, attacker_id: int, target_id: int, center_id: int, cache: Dictionary = {}) -> int:
+	if not state.is_zhou_city(center_id): return 0
+	_ensure_evaluation_cache_current(state, cache)
+	if bool(cache.get("__disable_structure_cache",false)) or attacker_id<0 or attacker_id>=state.nations.size() or target_id<0 or target_id>=state.nations.size() or not state.nations[attacker_id].alive or not state.nations[target_id].alive:
+		return state.campaign_prewar_launch_requirement(attacker_id,target_id,center_id)
+	return state.campaign_prewar_target_manpower(attacker_id,
+		_cached_campaign_siege_requirement(state,attacker_id,center_id,cache),
+		prewar_reinforcement_threat(state,attacker_id,target_id,center_id,cache))
+
 static func war_preparation_launch_allowed(state: GameState, nation_id: int, cache: Dictionary = {}) -> bool:
+	_ensure_evaluation_cache_current(state, cache)
 	var nation := state.nations[nation_id]
 	var target := nation.war_preparation_target_nation
 	var objective := nation.war_preparation_objective_city
@@ -5415,7 +5435,7 @@ static func war_preparation_launch_allowed(state: GameState, nation_id: int, cac
 		return false
 	if not state.nations[target].alive or state.cities[objective].owner_nation != target or not _ruler_allows_war_objective(state, nation_id, objective):
 		return false
-	if not state.can_alliance_declare_war(nation_id, target) or not RegionalStrategy.allows_objective(state, nation_id, nation.war_preparation_objective_center_city):
+	if not _cached_can_alliance_declare_war(state, nation_id, target, cache) or not RegionalStrategy.allows_objective(state, nation_id, nation.war_preparation_objective_center_city):
 		return false
 	if nation.war_preparation_objective_center_city != state.administrative_center_of(objective):
 		return false
@@ -5424,7 +5444,7 @@ static func war_preparation_launch_allowed(state: GameState, nation_id: int, cac
 	if not war_preparation_resources_ready(state, nation_id, cache):
 		return false
 	if war_preparation_arrived_troops(state, nation_id, cache) < state.campaign_field_minimum_manpower(nation_id,
-		state.campaign_prewar_reinforcement_threat(nation_id, target, nation.war_preparation_objective_center_city)):
+		prewar_reinforcement_threat(state, nation_id, target, nation.war_preparation_objective_center_city, cache)):
 		return false
 	if war_preparation_ready(state, nation_id, cache):
 		return true
@@ -5467,10 +5487,10 @@ static func war_preparation_ready(
 	return war_preparation_arrived_troops(
 		state, nation_id, evaluation_cache
 	) >= (
-		state.campaign_prewar_launch_requirement(
-			nation_id,
+		prewar_launch_requirement(
+			state, nation_id,
 			nation.war_preparation_target_nation,
-			objective_center,
+			objective_center, evaluation_cache,
 		)
 	)
 
@@ -5698,10 +5718,10 @@ static func required_assault_troops(
 			nation.war_preparation_target_nation >= 0
 			and center_id >= 0
 		):
-			return state.campaign_prewar_launch_requirement(
-				nation_id,
+			return prewar_launch_requirement(
+				state, nation_id,
 				nation.war_preparation_target_nation,
-				center_id,
+				center_id, evaluation_cache,
 			)
 	var objective_requirement := objective_assault_troops(
 		state,

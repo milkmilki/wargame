@@ -946,7 +946,9 @@ func campaign_minimum_launch_requirement(
 func campaign_prewar_reinforcement_threat(
 	attacker_id: int,
 	target_nation_id: int,
-	center_city_id: int
+	center_city_id: int,
+	defender_bloc: Array[int] = [],
+	attacker_bloc: Array[int] = []
 ) -> int:
 	if (
 		not is_zhou_city(center_city_id)
@@ -954,8 +956,9 @@ func campaign_prewar_reinforcement_threat(
 		or target_nation_id >= nations.size()
 	):
 		return 0
-	var defender_bloc := alliance_bloc(target_nation_id)
-	var attacker_bloc := alliance_bloc(attacker_id)
+	# Batch callers supply current blocs; direct callers keep the original query.
+	if defender_bloc.is_empty(): defender_bloc=alliance_bloc(target_nation_id)
+	if attacker_bloc.is_empty(): attacker_bloc=alliance_bloc(attacker_id)
 	var result := 0
 	for army in armies:
 		if (

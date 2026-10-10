@@ -1,0 +1,16 @@
+{
+  "day": 720,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "nodes": 1192,
+  "pid": 10268,
+  "seed": 1,
+  "settlements": 484,
+  "sha256": "c25b6152ce28a829b7ee73bedd72a687f53154ae4fc6542fa01c7a81fc55f1a3"
+}

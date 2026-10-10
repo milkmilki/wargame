@@ -5,12 +5,7 @@ func check(ok: bool,message: String) -> void:
 	if not ok: failures+=1; printerr("ATLAS_MASKED_SMOKE_FAIL ",message)
 func _initialize(): call_deferred("run")
 func run():
-	var path := "res://.dbg/atlas-military-eurasia-mask.bin"
-	var payload: Dictionary
-	if FileAccess.file_exists(path): payload=FileAccess.open(path,FileAccess.READ).get_var(false)
-	else:
-		var base := preload("res://scripts/atlas/generator.gd").generate(1,1.,Callable(),{"terrain_model":"earth","rainfall_model":"seasonal_circulation_v5","settlement_model":"climate_capacity_v6","settlement_mask":Mask.EURASIA})
-		payload=preload("res://scripts/atlas/military_map.gd").prepare(base)
+	var payload: Dictionary=preload("res://tests/atlas_military_inputs.gd").eurasia_military()
 	check(payload.data.options.settlement_mask==Mask.EURASIA,"actual test input is the requested regional world")
 	var state := GameState.new(); state.generate_from_atlas(payload)
 	var sim := Simulation.new(); sim.setup(state); sim.paused=true

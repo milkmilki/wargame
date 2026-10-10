@@ -47,3 +47,5 @@
 ![范围外无城市的宜居度全图](evidence/settlement_mask/habitat.png)
 
 ![900×600范围配置面板](evidence/settlement_mask/tools-900.png)
+
+后续日均优化统一使用本场景；首轮战争期结果见 [DAILY_COMPUTE_V5.md](DAILY_COMPUTE_V5.md)。手动长跑脚本已改为欧亚默认输入，使用独立 `.dbg/atlas-eurasia-thirty-year/` 目录。

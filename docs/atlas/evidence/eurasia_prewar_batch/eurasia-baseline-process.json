@@ -1,0 +1,14 @@
+{
+  "started_unix": 1791633968.5542424,
+  "source_hashes": {
+    "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+    "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+    "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+    "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+    "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7"
+  },
+  "commit": "efc8055",
+  "affinity_mask": 16,
+  "pid": 10268,
+  "exit_code": 0
+}

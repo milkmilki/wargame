@@ -21,6 +21,7 @@ CORE = [
     "strategic_betweenness_preference", "war_diplomacy_runtime_equivalence",
 ]
 ATLAS = [
+    "atlas_prewar_batch",
     "atlas_settlement_mask", "atlas_settlement_mask_controls", "atlas_settlement_mask_pipeline", "atlas_masked_military_smoke",
     "atlas_daily_reserves", "atlas_event_slicing", "atlas_path_order_equivalence", "atlas_contact_index", "atlas_supply_sources", "atlas_supply_dependencies", "atlas_ai_cadence",
     "atlas_static_layers",

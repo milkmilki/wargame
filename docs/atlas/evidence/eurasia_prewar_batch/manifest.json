@@ -1,0 +1,87 @@
+{
+  "base_commit": "efc8055feb1ed8e0213cea3f9476b5a6a14d7ddc",
+  "mask": {
+    "enabled": true,
+    "south": 20,
+    "north": 55,
+    "west": -15,
+    "east": 145
+  },
+  "seed": 1,
+  "nations": 40,
+  "nodes": 1192,
+  "settlements": 484,
+  "frozen_day": 720,
+  "measured_days": [
+    721,
+    750
+  ],
+  "pair_count": 3,
+  "paired_affinity_mask": 16,
+  "state_hashes_match": 180,
+  "source_hashes": {
+    "scripts/state/game_state.gd": "424b3192f86097cd253304d5b895baa93bab012701fca406375176d37d59ee60",
+    "scripts/simulation/simulation.gd": "1cc77086b9cc1baa4669016b5b1d76b7e04b122ff8dd75574a3dbf333b68a90d",
+    "scripts/ai/diplomacy_ai.gd": "2b9eb2f928258ec8a527c7af51d98c4dcdd85855532d0690868ec8e3d1d04fc7",
+    "tests/atlas_prewar_batch.gd": "2724508bcc2cb1f956ec90f9593ed7f395a0dc96faf17d032db8d33ea63fd80e",
+    "tests/atlas_long_audit.gd": "4c8979719930aba354bb25a1fe88685f9a777516ddc3a60acdbe0f1393350e04",
+    "tests/atlas_military_inputs.gd": "316b27a13b2e972c1d5cdeb0e22881fbda5e9fa2b0863b47ca394c1d78d2334a"
+  },
+  "regressions": [
+    {
+      "name": "atlas_prewar_batch",
+      "log": "atlas_prewar_batch.txt",
+      "passed": true
+    },
+    {
+      "name": "field_manpower_requirements",
+      "log": "field_manpower_requirements.txt",
+      "passed": true
+    },
+    {
+      "name": "diplomacy_objective_batch_cache",
+      "log": "diplomacy_objective_batch_cache.txt",
+      "passed": true
+    },
+    {
+      "name": "atlas_territory_transactions",
+      "log": "atlas_territory_transactions.txt",
+      "passed": true
+    },
+    {
+      "name": "war_count_and_conqueror",
+      "log": "war_count_and_conqueror.txt",
+      "passed": true
+    },
+    {
+      "name": "succession_counterattack",
+      "log": "succession_counterattack.txt",
+      "passed": true
+    },
+    {
+      "name": "atlas_masked_military_smoke",
+      "log": "atlas_masked_military_smoke.txt",
+      "passed": true
+    },
+    {
+      "name": "atlas_runtime_equivalence",
+      "log": "atlas_runtime_equivalence.txt",
+      "passed": true
+    },
+    {
+      "name": "war_diplomacy_runtime_equivalence",
+      "log": "war_diplomacy_runtime_equivalence.txt",
+      "passed": true
+    },
+    {
+      "name": "project_compile",
+      "log": "project_compile.txt",
+      "passed": true
+    },
+    {
+      "name": "test_suite",
+      "log": "test_suite.txt",
+      "passed": true
+    }
+  ]
+}

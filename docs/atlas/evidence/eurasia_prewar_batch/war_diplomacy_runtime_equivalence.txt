@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 战争/外交运行时调度等价校验 60天 ===
+verdict=WAR_DIPLOMACY_RUNTIME_EQUIVALENT

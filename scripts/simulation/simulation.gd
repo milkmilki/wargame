@@ -10100,10 +10100,13 @@ func _manage_war_preparation_assembly(
 		center_id = state.administrative_center_of(
 			nation.war_preparation_objective_city
 		)
-	var requirement := state.campaign_prewar_launch_requirement(
-		nation_id,
+	# Keep evaluation invalidation separate from live coalition planning records.
+	var prewar_cache: Dictionary = _coalition_campaign_query_cache.get("prewar_evaluation", {})
+	_coalition_campaign_query_cache["prewar_evaluation"] = prewar_cache
+	var requirement := DiplomacyAI.prewar_launch_requirement(
+		state, nation_id,
 		nation.war_preparation_target_nation,
-		center_id,
+		center_id, prewar_cache,
 	)
 	if committed >= requirement:
 		return changed

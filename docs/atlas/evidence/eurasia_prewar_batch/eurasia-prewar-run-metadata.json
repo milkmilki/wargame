@@ -1,0 +1,116 @@
+[
+  {
+    "label": "before",
+    "repeat": 0,
+    "tag": "prewar-before-0",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\eurasia-before-project",
+    "pid": 4936,
+    "affinity_mask": 16,
+    "started_unix": 1791634713.497054,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+      "scripts/ai/diplomacy_ai.gd": "88a587581216c4d50a4c92fc7c7dd4535e678a984b615daa3e43b79ffa9df0db"
+    },
+    "state_matches_pushed_eurasia_baseline": false
+  },
+  {
+    "label": "after",
+    "repeat": 0,
+    "tag": "prewar-after-0",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "pid": 31596,
+    "affinity_mask": 16,
+    "started_unix": 1791634724.173042,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "1cc77086b9cc1baa4669016b5b1d76b7e04b122ff8dd75574a3dbf333b68a90d",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "424b3192f86097cd253304d5b895baa93bab012701fca406375176d37d59ee60",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+      "scripts/ai/diplomacy_ai.gd": "2b9eb2f928258ec8a527c7af51d98c4dcdd85855532d0690868ec8e3d1d04fc7"
+    },
+    "state_matches_pushed_eurasia_baseline": true
+  },
+  {
+    "label": "after",
+    "repeat": 1,
+    "tag": "prewar-after-1",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "pid": 18684,
+    "affinity_mask": 16,
+    "started_unix": 1791634734.21985,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "1cc77086b9cc1baa4669016b5b1d76b7e04b122ff8dd75574a3dbf333b68a90d",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "424b3192f86097cd253304d5b895baa93bab012701fca406375176d37d59ee60",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+      "scripts/ai/diplomacy_ai.gd": "2b9eb2f928258ec8a527c7af51d98c4dcdd85855532d0690868ec8e3d1d04fc7"
+    },
+    "state_matches_pushed_eurasia_baseline": true
+  },
+  {
+    "label": "before",
+    "repeat": 1,
+    "tag": "prewar-before-1",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\eurasia-before-project",
+    "pid": 22684,
+    "affinity_mask": 16,
+    "started_unix": 1791634744.0785823,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+      "scripts/ai/diplomacy_ai.gd": "88a587581216c4d50a4c92fc7c7dd4535e678a984b615daa3e43b79ffa9df0db"
+    },
+    "state_matches_pushed_eurasia_baseline": false
+  },
+  {
+    "label": "before",
+    "repeat": 2,
+    "tag": "prewar-before-2",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\eurasia-before-project",
+    "pid": 4468,
+    "affinity_mask": 16,
+    "started_unix": 1791634754.7265692,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "72b071189b19011da3cf06cf560ba3335cdc2fe44e4217e75544b5718e50ff2c",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+      "scripts/ai/diplomacy_ai.gd": "88a587581216c4d50a4c92fc7c7dd4535e678a984b615daa3e43b79ffa9df0db"
+    },
+    "state_matches_pushed_eurasia_baseline": false
+  },
+  {
+    "label": "after",
+    "repeat": 2,
+    "tag": "prewar-after-2",
+    "project": "D:\\ProjectICreate\\Wargame\\wargame",
+    "pid": 27008,
+    "affinity_mask": 16,
+    "started_unix": 1791634765.8591611,
+    "exit_code": 0,
+    "source_hashes": {
+      "scripts/simulation/simulation.gd": "1cc77086b9cc1baa4669016b5b1d76b7e04b122ff8dd75574a3dbf333b68a90d",
+      "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+      "scripts/ai/ai_world_view.gd": "8bfe9c107cfbc5f07ed6869729f2b15bdca23f1166ea0630848a86bf3d9346ac",
+      "scripts/state/game_state.gd": "424b3192f86097cd253304d5b895baa93bab012701fca406375176d37d59ee60",
+      "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+      "scripts/ai/diplomacy_ai.gd": "2b9eb2f928258ec8a527c7af51d98c4dcdd85855532d0690868ec8e3d1d04fc7"
+    },
+    "state_matches_pushed_eurasia_baseline": true
+  }
+]
