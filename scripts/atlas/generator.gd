@@ -9,10 +9,14 @@ const Raster = preload("res://scripts/atlas/raster.gd")
 const Glyphs = preload("res://scripts/atlas/glyph_plan.gd")
 const Names = preload("res://scripts/atlas/names.gd")
 const Places = preload("res://scripts/atlas/places.gd")
+const SettlementMask = preload("res://scripts/atlas/settlement_mask.gd")
 
 static func generate(seed_value: int = 1,city_threshold: float = 1.0,progress: Callable = Callable(),world_options: Dictionary = {}) -> Dictionary:
 	var begin := Time.get_ticks_msec(); var stages := {}
-	var options := world_options.duplicate(); options.seed = seed_value
+	var mask_error := SettlementMask.validate(world_options.get("settlement_mask",{}))
+	if not mask_error.is_empty(): return {"error":mask_error}
+	var options := world_options.duplicate(true); options.seed = seed_value
+	if options.has("settlement_mask"): options.settlement_mask=SettlementMask.normalize(options.settlement_mask)
 	var world := World.generate(options,progress)
 	if world.has("error"): return world
 	stages.world_ms = Time.get_ticks_msec()-begin
@@ -39,6 +43,7 @@ static func generate(seed_value: int = 1,city_threshold: float = 1.0,progress: C
 		"upstream_commit":"103afd3d998eac6750692a6813bf5aea03521448","params":world.params,"mesh":world.mesh,"environment":environment,
 		"regions":regions,"cities":cities,"roads":roads.routes,"connections":roads.connections,"ownership":ownership.ownership,"nations":ownership.nations,
 		"options":{"terrain_model":world.params.get("terrain_model","planet"),"rainfall_model":world.params.get("rainfall_model","atlas_original"),"settlement_model":world.params.get("settlement_model","atlas_original"),"river_usage":"environment_only","city_threshold":city_threshold,"road_model":"civ-atlas-103afd3-land-v1","visual_model":"atlas-handdrawn-v1"}}
+	if options.has("settlement_mask"): data.options.settlement_mask=options.settlement_mask.duplicate()
 	Names.assign(data)
 	started = Time.get_ticks_msec()
 	if progress.is_valid(): progress.call("地理名称与标注路径")

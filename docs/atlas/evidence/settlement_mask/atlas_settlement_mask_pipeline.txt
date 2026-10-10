@@ -1,0 +1,13 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+MASK_STAGE 真实地球高程与海岸
+MASK_STAGE 球面网格与真实高程取样
+MASK_STAGE 地球气候、洋流与海冰（模型计算）
+MASK_STAGE 季节大气环流：辐合雨带、陆海季风与西风水汽
+MASK_STAGE 真实地形排水与环境供水
+MASK_STAGE 宜居度与省份
+MASK_STAGE 陆上道路
+MASK_STAGE 全球栅格与浮冰
+MASK_STAGE 地形符号规划
+MASK_STAGE 地理名称与标注路径
+ATLAS_SETTLEMENT_MASK_PIPELINE {"cells":33940,"checks":31032,"failures":0,"generation_ms":{"glyphs_ms":381,"places_ms":704,"raster_ms":13308,"regions_ms":646,"roads_ms":191,"total_ms":36202,"world_ms":20914},"global_zhou":681,"godot":{"build":"official","hash":"a13da4feb8d8aefc283c3763d33a2f170a18d541","hex":263937,"major":4,"minor":7,"patch":1,"status":"stable","string":"4.7.1-stable (official)","timestamp":0},"mask":{"east":145.0,"enabled":true,"north":55.0,"south":20.0,"version":"atlas-geographic-mask-v1","west":-15.0},"military_ms":{"hierarchy_ms":318,"roads_ms":435,"smoothing":{"rounds_histogram":[124,0,4,1180]},"total_ms":1342},"nodes":1192,"outside_cells":30350,"regions":400,"road_segments":1308,"seed":1,"settlements":484,"zhou":181}

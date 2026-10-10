@@ -1,0 +1,109 @@
+{
+  "date": "2026-10-10",
+  "seed": 1,
+  "scene": "res://atlas_military.tscn",
+  "gpu_pid": 11452,
+  "gpu": "AMD Radeon RX 7600 / D3D12 Forward+",
+  "base_commit": "cf806910a664be51c686c9c11779ed612ad52632",
+  "source_sha256": {
+    "atlas_military.tscn": "b4cbd044e7ae2c74527a73edd4cf736ddb16c3f7bbfd10607b8503974698beaf",
+    "scripts/atlas/settlement_mask.gd": "6fdc3643da829fb7b749f5fc16646a46e4f573717c09f9d5c675bc690afddcb0",
+    "scripts/atlas/settlement_mask_controls.gd": "b2ea50e4041c2406d631807aac04b53af56630dbfcf89941778a6d4eb3a3c71d",
+    "scripts/atlas/habitat.gd": "5111be5a8b1d6e6ce955c3461e1e834493575d2c0b5fd76ac376ad6d4a840273",
+    "scripts/atlas/generator.gd": "ff6deb5314c8183b3688aac6712c63fbbc5220cc0b992340829bdfe9781c62be",
+    "scripts/atlas/preview.gd": "3c6480bfaf62ea608520de3e042aff0323cdb959206bfb0998a637734f16de34",
+    "scripts/atlas/military_preview.gd": "f9b36a0fc8465bf7ca5bc27d4eb4c3948baf0e4f6ffca5b5ae1795ce5052e359",
+    "scripts/atlas/military_interface.gd": "29c35db776ee00150ce9b30ef867a28e06573cffef6222c8dfddbb66e0a15f61",
+    "scripts/atlas/military_map.gd": "b8f4ff48fb158a12dc72d7eab306fc8ca716da080dcb5d7222cbd8b0c2375995",
+    "scripts/atlas/snapshot.gd": "b0d5eca38d95a962a8ddb53bc695e3e8df319d1cd0e9e946da06f32edf5a39e3",
+    "scripts/atlas/military_template.gd": "a7f2beaa595a6a555fe23b244c600fed4d48cddc9ae1ec5deacaf4a8a4eaa4c0",
+    "scripts/simulation/simulation.gd": "81b60294f76133a80f4770cb11a24a332414651264acc0c1b9b55554a3ac0cec",
+    "tests/atlas_settlement_mask_pipeline.gd": "efdde37ba4b9f533959f0e1ac1a4d7eed76f6c2c24806df32791ac9a8f8062a8",
+    "tests/atlas_masked_military_smoke.gd": "d5be33fea7d769a6748a8ecc1a9db001c4ec3c75e85806d6c0625e6b12f7d602"
+  },
+  "results": [
+    {
+      "test": "atlas_settlement_mask",
+      "ok": true,
+      "log": "atlas_settlement_mask.txt"
+    },
+    {
+      "test": "atlas_settlement_mask_controls",
+      "ok": true,
+      "log": "atlas_settlement_mask_controls.txt"
+    },
+    {
+      "test": "atlas_settlement_mask_pipeline",
+      "ok": true,
+      "log": "atlas_settlement_mask_pipeline.txt"
+    },
+    {
+      "test": "atlas_masked_military_smoke",
+      "ok": true,
+      "log": "atlas_masked_military_smoke.txt"
+    },
+    {
+      "test": "atlas_startup_cache",
+      "ok": true,
+      "log": "atlas_startup_cache.txt"
+    },
+    {
+      "test": "atlas_startup_climate",
+      "ok": true,
+      "log": "atlas_startup_climate.txt"
+    },
+    {
+      "test": "atlas_time_controls",
+      "ok": true,
+      "log": "atlas_time_controls.txt"
+    },
+    {
+      "test": "atlas_information_panel",
+      "ok": true,
+      "log": "atlas_information_panel.txt"
+    },
+    {
+      "test": "atlas_entry_contract",
+      "ok": true,
+      "log": "atlas_entry_contract.txt"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "log": "atlas_military_persistence.txt"
+    },
+    {
+      "test": "atlas_template_invalid",
+      "ok": true,
+      "log": "atlas_template_invalid.txt"
+    },
+    {
+      "test": "atlas_preview_lifecycle",
+      "ok": true,
+      "log": "atlas_preview_lifecycle.txt"
+    },
+    {
+      "test": "project_compile",
+      "ok": true,
+      "log": "project_compile.txt"
+    }
+  ],
+  "limits": [
+    "35 days only; does not constitute the separate 30-year audit.",
+    "Headless daily compute is not GUI frame time.",
+    "Global climate and raster generation still execute.",
+    "GPU screenshots use the freshly generated native development input.",
+    "Current global 30-year process retains its previously loaded source and world."
+  ],
+  "formal_startup": {
+    "pid": 27956,
+    "seed": 1,
+    "scene": "res://atlas_military.tscn",
+    "cache_disabled": true,
+    "exit_code": 0,
+    "log": "formal-startup.jsonl",
+    "nodes": 1192,
+    "settlements": 484
+  },
+  "graph_updated_at": "2026-10-10T20:00:50"
+}

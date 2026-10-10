@@ -51,3 +51,9 @@ gives you structural context (callers, dependents, test coverage) that file sear
 3. Use `get_affected_flows_tool` to understand impact.
 4. Use `query_graph_tool` pattern="tests_for" to check coverage.
 <!-- /code-review-graph MCP tools -->
+
+## 性能优化场景约定
+
+用户已确认：默认启动、后续性能基线和优化验证统一使用欧亚遮罩，北纬20°～55°、西经15°～东经145°，真实地球种子1、40国。
+必须核对实际生成参数中 `settlement_mask.enabled=true` 及四个边界；不要拿全球缓存或全球战争快照替代欧亚性能基线。
+全球地图只用于兼容回归。比较性能时使用相同的欧亚运行中状态、天数、CPU条件和模拟配置，分开记录计算耗时与GUI帧耗时。

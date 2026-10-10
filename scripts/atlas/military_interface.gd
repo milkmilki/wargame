@@ -55,6 +55,7 @@ func setup(view) -> void:
 	var map_row := HBoxContainer.new(); body.add_child(map_row); map_row.add_child(view.seed_control)
 	button(map_row,"随机星球",func(): if view.can_rebuild(): await view.load_preset("planet"))
 	button(map_row,"真实地球",func(): if view.can_rebuild(): await view.load_preset("earth"))
+	view.mask_controls=view.MaskControls.new(); body.add_child(view.mask_controls); view.mask_controls.setup(view)
 	var controls := HBoxContainer.new(); body.add_child(controls)
 	var player := Label.new(); player.text="操控国"; controls.add_child(player)
 	view.player_nation.min_value=0; view.player_nation.max_value=39; controls.add_child(view.player_nation)

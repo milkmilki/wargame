@@ -1,6 +1,7 @@
 extends RefCounted
 ## Independent, validated Godot variant snapshot. Never deserializes objects.
 const NativeMap = preload("res://scripts/atlas/native_map.gd")
+const SettlementMask = preload("res://scripts/atlas/settlement_mask.gd")
 const FORMAT := "atlas-preview"
 const VERSION := 1
 
@@ -14,6 +15,13 @@ static func validate(payload: Variant) -> String:
 	if data.mesh.get("n")!=n or data.mesh.get("width")!=2048 or data.mesh.get("height")!=1024 or data.regions.get("count")!=count: return "世界或省份尺寸不一致"
 	if not data.get("params") is Dictionary or not is_finite(float(data.params.get("seed",NAN))) or not is_finite(float(data.get("seed",NAN))): return "缺少生成种子"
 	if not data.get("options") is Dictionary or not is_finite(float(data.options.get("city_threshold",NAN))): return "缺少城市阈值配置"
+	var mask_error := SettlementMask.validate(data.options.get("settlement_mask",{}))
+	if not mask_error.is_empty(): return mask_error
+	var mask := SettlementMask.normalize(data.options.get("settlement_mask",{}))
+	if mask.get("enabled",false):
+		if not NativeMap.numeric_array(data.environment.get("capacity")) or data.environment.capacity.size()!=n: return "城市生成范围缺少承载量"
+		for cell in range(n):
+			if not SettlementMask.contains_cell(data.mesh,cell,mask) and (data.environment.suitability[cell]!=0. or data.environment.capacity[cell]!=0.): return "城市生成范围外适宜度或承载量非零"
 	if data.regions.has("names"):
 		if not data.regions.names is Array or data.regions.names.size()!=count: return "省份名称维度无效"
 		for name_value in data.regions.names:
@@ -57,6 +65,7 @@ static func validate(payload: Variant) -> String:
 		for owner in payload.default_owners:
 			if int(owner)!=owner or owner< -1 or owner>=data.nations.size(): return "默认归属越界"
 	for city in data.cities:
+		if not SettlementMask.contains_cell(data.mesh,city.cell,mask): return "城市位于生成范围外"
 		if not city.get("major") is bool: return "缺少城市等级"
 	for road in data.roads:
 		if road.get("kind") not in ["road","trail"] or road.cells.size()<2: return "无效道路类型或长度"

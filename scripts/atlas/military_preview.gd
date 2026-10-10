@@ -13,10 +13,11 @@ var startup_cache_directory := StartupCache.DIRECTORY
 
 func load_native(seed_value: int) -> void:
 	if generating: return
+	var mask_error := SettlementMask.validate(settlement_mask)
+	if not mask_error.is_empty(): status.text=mask_error; return
 	if startup_cache_writer!=null and startup_cache_writer.is_started(): startup_cache_writer.wait_to_finish()
 	generating=true; generation_index+=1; startup_profile={}
-	var options := {"terrain_model":"earth","rainfall_model":rainfall_model} if terrain_model=="earth" else {}
-	if terrain_model=="earth" and not settlement_model.is_empty(): options.settlement_model=settlement_model
+	var options := native_generation_options()
 	var use_cache := true
 	for argument in OS.get_cmdline_user_args():
 		if argument=="--atlas-no-startup-cache": use_cache=false
@@ -36,13 +37,15 @@ func load_native(seed_value: int) -> void:
 		if not cached.is_empty(): return cached
 		var base := Generator.generate(seed_value,threshold,func(stage): call_deferred("stage_update",stage),options)
 		if base.has("error"): return base
-		var payload := MilitaryMap.prepare(base); payload.generation_timing=base.timing
+		var payload := MilitaryMap.prepare(base)
+		if payload.has("error"): return payload
+		payload.generation_timing=base.timing
 		return {"payload":payload,"display":{}})
 	if error!=OK: generating=false; status.text="生成线程无法启动"; return
 	while worker.is_alive(): await get_tree().process_frame
 	var result = worker.wait_to_finish()
 	if not result is Dictionary or not result.get("payload") is Dictionary:
-		generating=false; status.text="生成失败，保留原世界"; log_event("failed",{"error":str(result)}); return
+		generating=false; status.text="生成失败，保留原世界："+str(result.get("error","结果无效") if result is Dictionary else "结果无效"); log_event("failed",{"error":str(result)}); return
 	startup_profile.generate_or_load_ms=Time.get_ticks_msec()-started
 	startup_profile.cache_hit=not result.display.is_empty()
 	var payload: Dictionary=result.payload; initial_display_plan=result.display
@@ -256,6 +259,7 @@ func build_view() -> void:
 	if simulation!=null: simulation.paused = true
 	var base := {"data":data,"raster":raster,"display":display}
 	var payload := MilitaryMap.prepare(base)
+	if payload.has("error"): status.text=payload.error; return
 	var prepared := GameState.new(); prepared.generate_from_atlas(payload)
 	await present_world(prepared,payload)
 
@@ -273,6 +277,7 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	settings["params"] = payload.data.params.duplicate(true)
 	run_log.world_started(state,settings,source)
 	raster = payload.raster; data = visual_data(); provinces = military_payload.district_pixels.duplicate(); display = payload.display.duplicate(true); display.nations = data.nations
+	sync_settlement_mask()
 	default_owners = data.ownership.duplicate(); last_owner_revision = state.ownership_revision
 	await super.build_view()
 	text_layer.z_index = 7

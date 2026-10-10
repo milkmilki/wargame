@@ -10,6 +10,7 @@ const RoadGeometry = preload("res://scripts/atlas/road_geometry.gd")
 
 static func prepare(base: Dictionary,target_nations: int = 40) -> Dictionary:
 	var data: Dictionary = base.data
+	if data.cities.is_empty(): return {"error":"选定范围内没有满足城市阈值的州治，请扩大范围或降低城市阈值。"}
 	var total_started := Time.get_ticks_msec()
 	var started := Time.get_ticks_msec()
 	var h := Hierarchy.build(data.mesh,data.environment,data.regions,data.cities,int(data.seed),float(data.options.city_threshold))

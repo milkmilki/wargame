@@ -1,0 +1,35 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_masked_military_smoke",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 5219,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_masked_military_smoke.log"
+    },
+    {
+      "test": "atlas_settlement_mask_controls",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3359,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_settlement_mask_controls.log"
+    },
+    {
+      "test": "atlas_settlement_mask",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 203,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_settlement_mask.log"
+    },
+    {
+      "test": "atlas_preview_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_preview_lifecycle.log"
+    }
+  ],
+  "failures": 0
+}

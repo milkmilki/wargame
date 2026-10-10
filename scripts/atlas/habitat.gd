@@ -8,6 +8,7 @@ const FrozenSettlementClimate = preload("res://scripts/atlas/climate_settlement_
 const PreviousSettlementClimate = preload("res://scripts/atlas/climate_settlement_v3.gd")
 const LegacySettlementClimate = preload("res://scripts/atlas/climate_settlement_v2.gd")
 const BASE = [0,0,0,0,4,12,10,7,30,100,90,4,22,50,80,12]
+const SettlementMask = preload("res://scripts/atlas/settlement_mask.gd")
 
 static func build(mesh: Dictionary,env: Dictionary) -> Dictionary:
 	var n: int = mesh.n
@@ -84,6 +85,7 @@ static func build(mesh: Dictionary,env: Dictionary) -> Dictionary:
 	var result := {"suitability":suit,"capacity":capacity,"coastDist":coast,"harbor":harbor}
 	if not farmland.is_empty(): result.agricultural_potential = farmland
 	result.merge(climate_fields,true)
+	SettlementMask.apply(mesh,result,env.get("params",{}).get("settlement_mask",{}))
 	return result
 
 static func fresh(value: float) -> float:

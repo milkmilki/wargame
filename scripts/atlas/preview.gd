@@ -16,6 +16,8 @@ const MapText = preload("res://scripts/atlas/map_text.gd")
 const CoastInk = preload("res://scripts/atlas/coast_ink.gd")
 const IceGeometry = preload("res://scripts/atlas/ice_geometry.gd")
 const ZoomGeometry = preload("res://scripts/atlas/zoom_geometry.gd")
+const SettlementMask = preload("res://scripts/atlas/settlement_mask.gd")
+const MaskControls = preload("res://scripts/atlas/settlement_mask_controls.gd")
 const Snapshot = preload("res://scripts/atlas/snapshot.gd")
 const RenderScheduler = preload("res://scripts/atlas/render_scheduler.gd")
 const SymbolTiles = preload("res://scripts/atlas/symbol_tiles.gd")
@@ -38,6 +40,8 @@ const REFERENCE := "res://.dbg/atlas-native-reference/"
 const SYMBOL_PAD := 192
 @export_enum("planet","earth") var terrain_model: String = "planet"
 @export_enum("seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original") var rainfall_model: String = "seasonal_circulation_v5"
+@export var settlement_mask: Dictionary = {} # Missing policy keeps legacy global generation.
+var mask_controls: Control
 var settlement_model: String = "" # Empty selects the rainfall model's default.
 const RAIN_MODELS := ["seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original"]
 var data: Dictionary = {}
@@ -169,6 +173,7 @@ func load_cached_payload(payload: Dictionary) -> void:
 	rainfall_model = data.options.get("rainfall_model","atlas_original")
 	settlement_model = data.options.get("settlement_model","atlas_original")
 	sync_rain_control()
+	sync_settlement_mask()
 	default_owners = PackedInt32Array(data.ownership); provinces = Generator.pixel_regions(data,raster)
 	await build_view()
 
@@ -192,6 +197,7 @@ func make_ui() -> void:
 		rainfall_model = RAIN_MODELS[index]; settlement_model = ""
 		if terrain_model=="earth": await load_native(int(seed_control.value)))
 	sync_rain_control()
+	mask_controls=MaskControls.new(); hud.add_child(mask_controls); mask_controls.setup(self)
 	var layers := HBoxContainer.new(); hud.add_child(layers)
 	for name_value in ["政治","地形","省份","宜居度"]: mode_control.add_item(name_value)
 	layers.add_child(mode_control); mode_control.item_selected.connect(func(_i): update_mode())
@@ -237,16 +243,27 @@ func load_preset(model_name: String) -> void:
 func sync_rain_control() -> void:
 	var index := RAIN_MODELS.find(rainfall_model); rain_control.select(maxi(0,index))
 
+func native_generation_options() -> Dictionary:
+	var options := {"terrain_model":"earth","rainfall_model":rainfall_model} if terrain_model=="earth" else {}
+	if terrain_model=="earth" and not settlement_model.is_empty(): options.settlement_model=settlement_model
+	if not settlement_mask.is_empty(): options.settlement_mask=SettlementMask.normalize(settlement_mask)
+	return options
+
+func sync_settlement_mask() -> void:
+	settlement_mask=data.get("options",{}).get("settlement_mask",{}).duplicate()
+	if mask_controls!=null: mask_controls.sync()
+
 func load_native(seed_value: int) -> void:
 	if generating: return
+	var mask_error := SettlementMask.validate(settlement_mask)
+	if not mask_error.is_empty(): status.text=mask_error; return
 	generating = true; generation_index += 1
 	var model_name := "native_earth" if terrain_model=="earth" else "native"
 	begin_log(model_name,seed_value)
 	status.text = "原生生成：球面网格"; await get_tree().process_frame
 	var threshold := threshold_control.value
 	var worker := Thread.new(); generation_worker = worker
-	var generation_options := {"terrain_model":"earth","rainfall_model":rainfall_model} if terrain_model=="earth" else {}
-	if terrain_model=="earth" and not settlement_model.is_empty(): generation_options.settlement_model = settlement_model
+	var generation_options := native_generation_options()
 	var err := worker.start(func(): return Generator.generate(seed_value,threshold,func(stage): call_deferred("stage_update",stage),generation_options))
 	if err!=OK: generating = false; status.text = "生成线程无法启动"; log_event("failed",{"error":status.text}); return
 	while worker.is_alive(): await get_tree().process_frame
@@ -254,7 +271,7 @@ func load_native(seed_value: int) -> void:
 	if not payload is Dictionary or not payload.has("data"):
 		generating = false; status.text = "生成失败，保留原世界："+str(payload.get("error","未知错误") if payload is Dictionary else "结果无效"); log_event("failed",{"error":status.text}); return
 	data = payload.data; raster = payload.raster; display = payload.display; timing = payload.timing
-	rainfall_model = data.options.get("rainfall_model","atlas_original"); settlement_model = data.options.get("settlement_model","atlas_original"); sync_rain_control()
+	rainfall_model = data.options.get("rainfall_model","atlas_original"); settlement_model = data.options.get("settlement_model","atlas_original"); sync_rain_control(); sync_settlement_mask()
 	default_owners = PackedInt32Array(data.ownership); provinces = Generator.pixel_regions(data,raster)
 	var view_started := Time.get_ticks_msec(); await build_view(); generating = false; open_log(model_name,Time.get_ticks_msec()-view_started)
 	status.text = "%s · 种子 %d · %d 地块 / %d 省份 / %d 城市 / %d 路段"%["真实地球（生成省份与国家）" if terrain_model=="earth" else "随机星球",seed_value,data.mesh.n,data.regions.count,data.cities.size(),data.roads.size()]
@@ -752,6 +769,7 @@ func load_snapshot() -> void:
 	rainfall_model = data.options.get("rainfall_model","atlas_original")
 	settlement_model = data.options.get("settlement_model","atlas_original")
 	sync_rain_control()
+	sync_settlement_mask()
 	generation_index += 1; begin_log("snapshot",int(data.seed)); var start := Time.get_ticks_msec()
 	await build_view(); status.text = "预览快照已恢复"; open_log("snapshot",Time.get_ticks_msec()-start)
 

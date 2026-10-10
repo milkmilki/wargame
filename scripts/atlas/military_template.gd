@@ -68,9 +68,11 @@ static func validate(definition: Dictionary) -> String:
 	if h.guardian_by_parent.size()!=parent_count or h.state_by_parent.size()!=parent_count: return "Atlas 托管映射维度无效。"
 	if h.district_of_cell.size()!=payload.data.mesh.n or payload.district_pixels.size()!=2048*1024: return "Atlas 辖区维度无效。"
 	if not payload.get("settlement_records") is Array or payload.settlement_records.size()!=h.cities.size(): return "Atlas 初始治所归属无效。"
+	var mask := Snapshot.SettlementMask.normalize(payload.data.options.get("settlement_mask",{}))
 	var counts := {}; var keys := {}
 	for c in range(h.cities.size()):
 		if not h.cities[c] is Dictionary or not whole_number(h.cities[c].get("cell"),0,cell_count) or not whole_number(h.cities[c].get("region"),0,parent_count): return "Atlas 治所坐标无效。"
+		if not Snapshot.SettlementMask.contains_cell(payload.data.mesh,h.cities[c].cell,mask): return "Atlas 治所位于生成范围外。"
 		if h.state_by_city[c]!=h.center_by_city[c] or h.state_by_city[c]<0 or h.state_by_city[c]>=h.members.size(): return "Atlas 州编号无效。"
 		if h.cities[c].get("role")!=("zhou" if c<h.members.size() else "fu") or not h.cities[c].get("budget") is Array or h.cities[c].budget.size()!=3: return "Atlas 治所身份或预算无效。"
 		for value in h.cities[c].budget:
