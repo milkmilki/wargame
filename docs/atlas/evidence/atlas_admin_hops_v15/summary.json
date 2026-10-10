@@ -1,0 +1,72 @@
+{
+  "parent_commit": "e8077023bb192e4cfe945d68b4338523d9654eac",
+  "source_hashes": {
+    "scripts/core/rebellion_system.gd": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118",
+    ".dbg/admin_hops_v15_measure.gd": "c8f012331ce126d1c603bde9647e5c7a528f1000cdaf39e3b2224e26724a1b14",
+    ".dbg/admin_hops_v15_daily.gd": "2749f7c594023cdc0cbc25db5d9f71fc71e1c7c5ebca81bdfd2a7c9b536810f1",
+    ".dbg/admin_hops_v15_daily.py": "32f1b81cf679440b8e56f4c6ce74ba6b2ef3baea67f8066829bdd14b064028f8",
+    ".dbg/admin_hops_v15_year.gd": "03f686f28d7e4b2694f70a4d39f4b2c5cb81e9581ed426bcd2dc06853bde537f",
+    ".dbg/prepare_admin_v15.py": "d4dfda90e898d0379effe659d8661b3b7e1888a80ba9143cdb335a125ce6e4bc",
+    ".dbg/record_admin_v15.py": "21ecdfe9924dc3ae4a690b3acaab91d9b89e6ff323da5e457f8c2d3c8f38d011",
+    ".dbg/state_codec.gd": "a6da60d78366283ca1643301199b63491db3e5448088c994a208a7d65d453e37"
+  },
+  "query_measurements": [
+    {
+      "pid": 29064,
+      "heap_median_us": 4912.5,
+      "levels_median_us": 3966.5
+    },
+    {
+      "pid": 29848,
+      "heap_median_us": 4907.5,
+      "levels_median_us": 3796.5
+    },
+    {
+      "pid": 31280,
+      "heap_median_us": 5032.0,
+      "levels_median_us": 3858.0
+    },
+    {
+      "pid": 33960,
+      "heap_median_us": 5057.5,
+      "levels_median_us": 3961.0
+    },
+    {
+      "pid": 6600,
+      "heap_median_us": 4940.0,
+      "levels_median_us": 3884.0
+    }
+  ],
+  "heap_reference_ms": 4.94,
+  "levels_ms": 3.884,
+  "query_reduction_percent": 21.376518218623485,
+  "comparison": "correct heap reference vs correct 0/1 level traversal, NOT broken previous production",
+  "daily_stats": {
+    "heap": {
+      "mean_ms": 261.81357142857144,
+      "p95_ms": 570.589,
+      "peak_ms": 913.723
+    },
+    "levels": {
+      "mean_ms": 261.4657142857143,
+      "p95_ms": 572.237,
+      "peak_ms": 884.862
+    }
+  },
+  "identical_daily_snapshots": 175,
+  "days": 360,
+  "year_pid": 18664,
+  "hard_errors": [],
+  "candidates": [],
+  "battles": 72,
+  "fronts": 99,
+  "corrected_known_routes": 96,
+  "limits": [
+    "Headless computation is not GUI frame rate.",
+    "Full-day performance is compared with a correct heap reference; broken previous production cannot serve as an equal-behavior baseline.",
+    "First exploratory measurements overlapped import work and were excluded.",
+    "Year smoke shared CPU with staged import/regressions; no year performance comparison is claimed.",
+    "One year is not a thirty-year audit.",
+    "Other simulation sources match v14 loaded-source hashes where present; older pending work is retained."
+  ]
+}

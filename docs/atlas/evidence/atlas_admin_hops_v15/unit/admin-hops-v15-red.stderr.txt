@@ -1,0 +1,5 @@
+ATLAS_CAPITAL_HOPS_FAIL unowned traffic preserves own connection and does not add hops
+ATLAS_CAPITAL_HOPS_FAIL matches independent relaxation
+ATLAS_CAPITAL_HOPS_FAIL closed shortest route uses longer own alternative
+ATLAS_CAPITAL_HOPS_FAIL allied town is not own administrative transit
+ATLAS_CAPITAL_HOPS_FAIL capital relocation recalculates distances

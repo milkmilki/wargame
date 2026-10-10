@@ -51,6 +51,7 @@ const _CACHE_PRESENT_KEY: StringName = &"__rebellion_cache_present"
 
 
 ## 本国首都到各直辖城市的最少道路跳数。只走本国控制且容量为正的边。
+## Atlas 交通点不增加行政跳数，每段所属辖区仍须由本国控制。
 ## 返回 city_id -> hop_count；断联城市不出现在结果中。
 static func capital_hops(state: GameState, nation_id: int) -> Dictionary:
 	var result: Dictionary = {}
@@ -63,6 +64,8 @@ static func capital_hops(state: GameState, nation_id: int) -> Dictionary:
 		or state.cities[capital_id].owner_nation != nation_id
 	):
 		return result
+	if not state.atlas_layout.is_empty():
+		return _atlas_capital_hops(state, nation_id, capital_id)
 	result[capital_id] = 0
 	var queue: Array[int] = [capital_id]
 	var cursor: int = 0
@@ -79,6 +82,43 @@ static func capital_hops(state: GameState, nation_id: int) -> Dictionary:
 				continue
 			result[neighbor] = int(result[current]) + 1
 			queue.append(neighbor)
+	return result
+
+
+## 0/1 shortest paths over the actual shared road graph. Do not use the one
+## preselected strategic route: a closed/foreign segment may have an own detour.
+## Two queues process zero-cost traffic within a level before next-level towns;
+## this avoids a heap and never counts jurisdiction splits as extra cities.
+static func _atlas_capital_hops(
+	state: GameState, nation_id: int, capital_id: int
+) -> Dictionary:
+	if state.cities[capital_id].is_traffic: return {}
+	var distance := PackedInt32Array(); distance.resize(state.cities.size()); distance.fill(-1)
+	distance[capital_id] = 0
+	var current: Array[int] = [capital_id]
+	var level := 0
+	var result := {}
+	while not current.is_empty():
+		var next: Array[int] = []
+		var cursor := 0
+		while cursor < current.size():
+			var node := current[cursor]; cursor += 1
+			if distance[node] != level: continue
+			if not state.cities[node].is_traffic: result[node] = level
+			for neighbor in state.neighbors(node):
+				var city := state.cities[neighbor]
+				if not city.is_traffic and city.owner_nation != nation_id: continue
+				var candidate := level + (0 if city.is_traffic else 1)
+				if distance[neighbor] >= 0 and distance[neighbor] <= candidate: continue
+				var edge := state.edge_of(node, neighbor)
+				if edge == null or edge.max_manpower <= 0: continue
+				var control := edge.control_city_id
+				if control < 0 or control >= state.cities.size(): continue
+				if state.cities[control].is_traffic or state.cities[control].owner_nation != nation_id: continue
+				distance[neighbor] = candidate
+				if candidate == level: current.append(neighbor)
+				else: next.append(neighbor)
+		current = next; level += 1
 	return result
 
 

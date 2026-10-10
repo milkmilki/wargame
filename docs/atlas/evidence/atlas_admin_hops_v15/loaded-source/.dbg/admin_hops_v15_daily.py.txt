@@ -1,0 +1,46 @@
+from pathlib import Path
+import hashlib, subprocess, re, json, statistics
+
+project = Path.cwd()
+output = project / '.dbg/admin-hops-v15/daily'
+output.mkdir(exist_ok=True)
+production = project / 'scripts/core/rebellion_system.gd'
+original = production.read_bytes()
+(output/'levels-loaded.gd.txt').write_bytes(original)
+reference = Path('.dbg/admin_hops_v15_measure.gd').read_text(encoding='utf8')
+helper = re.search(r'^func reference\(.*?(?=^func snapshot_hash)',reference,re.M|re.S).group()
+helper = helper.replace('func reference(state: GameState,nation_id: int) -> Dictionary:', 'static func _atlas_capital_hops(state: GameState,nation_id: int,capital_id: int) -> Dictionary:')
+helper = helper.replace('var capital := state.nations[nation_id].capital_city_id','var capital := capital_id')
+helper = helper.replace('Maths.Heap.new()', 'preload("res://scripts/atlas/math.gd").Heap.new()')
+fast = original.decode('utf8').replace('\r\n','\n')
+match = re.search(r'^static func _atlas_capital_hops\(.*?(?=^## 汇总实际位于城市节点)',fast,re.M|re.S)
+assert match
+slow = fast[:match.start()] + helper + '\n\n' + fast[match.end():]
+(output/'heap-loaded.gd.txt').write_bytes(slow.encode('utf8'))
+
+results = []
+try:
+    for run in range(1,6):
+        pair = {}
+        for variant in (['heap','levels'] if run%2 else ['levels','heap']):
+            production.write_bytes(slow.encode('utf8') if variant == 'heap' else original)
+            stdout = output / f'run-{run}-{variant}.stdout.txt'
+            stderr = output / f'run-{run}-{variant}.stderr.txt'
+            with stdout.open('wb') as out, stderr.open('wb') as err:
+                process = subprocess.Popen(['D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe','--headless','--path',str(project),'--script','res://.dbg/admin_hops_v15_daily.gd','--','--'+variant],stdout=out,stderr=err,creationflags=subprocess.CREATE_NO_WINDOW)
+                code = process.wait(timeout=180)
+            assert code == 0 and not stderr.read_text(encoding='utf8').strip(), (run,variant,code,stderr.read_text())
+            path = output / f'{variant}-{process.pid}.json'
+            data = json.loads(path.read_text())
+            assert data['source_hashes']['scripts/core/rebellion_system.gd'] == hashlib.sha256(production.read_bytes()).hexdigest()
+            durations = [row['elapsed_us']/1000 for row in data['rows']]
+            pair[variant] = {'pid':process.pid,'mean_ms':statistics.mean(durations),'p95_ms':sorted(durations)[33],'peak_ms':max(durations),'rows':data['rows'],'initial_sha256':data['initial_sha256']}
+            print('DAILY_RUN',run,variant,'pid',process.pid,'mean_ms',pair[variant]['mean_ms'],flush=True)
+        assert pair['heap']['initial_sha256'] == pair['levels']['initial_sha256']
+        assert all(a['sha256'] == b['sha256'] for a,b in zip(pair['heap']['rows'],pair['levels']['rows'])), 'Daily states must match between correct algorithms'
+        results.append(pair)
+        (output/'paired-summary.json').write_text(json.dumps(results,indent=2)+'\n',encoding='utf8')
+finally:
+    production.write_bytes(original)
+    assert hashlib.sha256(production.read_bytes()).hexdigest() == hashlib.sha256(original).hexdigest()
+print('DAILY_COMPARE_COMPLETE pairs=',len(results),'state_pairs=',len(results)*35,flush=True)

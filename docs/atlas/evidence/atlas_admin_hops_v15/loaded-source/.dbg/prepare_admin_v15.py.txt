@@ -1,0 +1,8 @@
+from pathlib import Path
+root = Path('.dbg/admin-hops-v15')
+root.mkdir(exist_ok=True)
+source = Path('tests/atlas_long_audit.gd').read_text(encoding='utf8')
+source = source.replace('res://.dbg/atlas-eurasia-thirty-year', 'res://.dbg/admin-hops-v15/year-audit')
+source = source.replace('["scripts/state/game_state.gd",', '["scripts/core/rebellion_system.gd","scripts/state/game_state.gd",', 1)
+Path('.dbg/admin_hops_v15_year.gd').write_bytes(source.encode('utf8'))
+print('Prepared separate one-year audit directory, including actual administrative source hash.')

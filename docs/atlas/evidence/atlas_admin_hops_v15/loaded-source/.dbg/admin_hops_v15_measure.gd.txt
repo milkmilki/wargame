@@ -1,0 +1,51 @@
+extends SceneTree
+const Maths = preload("res://scripts/atlas/math.gd")
+const Codec = preload("res://.dbg/state_codec.gd")
+func _initialize(): call_deferred("run")
+func reference(state: GameState,nation_id: int) -> Dictionary:
+	var capital := state.nations[nation_id].capital_city_id
+	if not state.nations[nation_id].alive or capital < 0 or state.cities[capital].owner_nation != nation_id or state.cities[capital].is_traffic: return {}
+	var distance := {capital:0}; var result := {}; var heap := Maths.Heap.new(); heap.push(capital,0.)
+	while not heap.empty():
+		var node := heap.pop(); var d := int(heap.last_priority)
+		if d != int(distance[node]): continue
+		if not state.cities[node].is_traffic: result[node] = d
+		for neighbor in state.neighbors(node):
+			var city := state.cities[neighbor]
+			if not city.is_traffic and city.owner_nation != nation_id: continue
+			var candidate := d+(0 if city.is_traffic else 1)
+			if candidate >= int(distance.get(neighbor,2147483647)): continue
+			var edge := state.edge_of(node,neighbor)
+			if edge == null or edge.max_manpower <= 0: continue
+			var control := edge.control_city_id
+			if control < 0 or control >= state.cities.size() or state.cities[control].is_traffic or state.cities[control].owner_nation != nation_id: continue
+			distance[neighbor] = candidate; heap.push(neighbor,float(candidate))
+	return result
+func snapshot_hash(state: GameState) -> String:
+	var digest := HashingContext.new(); digest.start(HashingContext.HASH_SHA256); digest.update(var_to_bytes(NativeSnapshotBuilder.build(state))); return digest.finish().hex_encode()
+func run():
+	var sim: Simulation = Codec.new().restore("res://.dbg/daily-v9/frozen-day180.bin")
+	var before := snapshot_hash(sim.state)
+	var metadata := {"pid":OS.get_process_id(),"day":sim.state.day,"seed":sim.state.world_seed,"mask":sim.state.atlas_layout.data.options.settlement_mask,"nodes":sim.state.cities.size(),"rulers":sim.state.random_ruler_profiles_enabled(),"trade":sim.state.trade_enabled,"source_hashes":{},"rows":[],"known_route":sim.state.capital_hop_distances(0).get(181,-1)}
+	for path in ["scripts/core/rebellion_system.gd","scripts/state/game_state.gd","scripts/simulation/simulation.gd","scripts/atlas/math.gd",".dbg/admin_hops_v15_measure.gd"]: metadata.source_hashes[path] = FileAccess.get_sha256("res://"+path)
+	for nation in sim.state.nations:
+		assert(sim.state.capital_hop_distances(nation.id) == reference(sim.state,nation.id),"physical reference equality")
+	var diagnostic: Dictionary = JSON.parse_string(FileAccess.open("res://docs/atlas/evidence/capital_tax_batch_v14/capital-route-diagnostic.json",FileAccess.READ).get_as_text())
+	var corrected := 0
+	for example in diagnostic.examples:
+		if int(sim.state.capital_hop_distances(int(example.nation)).get(int(example.town),-1)) == 1: corrected += 1
+	metadata.corrected_known_connections = corrected; metadata.known_connections = diagnostic.examples.size()
+	assert(corrected == diagnostic.examples.size(),"all verified own capital routes now reachable in one town hop")
+	for iteration in range(32):
+		var row := {}
+		for variant in (["heap","levels"] if iteration%2==0 else ["levels","heap"]):
+			var started := Time.get_ticks_usec()
+			for nation in sim.state.nations:
+				if variant == "heap": reference(sim.state,nation.id)
+				else: sim.state.capital_hop_distances(nation.id)
+			row[variant] = Time.get_ticks_usec()-started
+		if iteration>=2: metadata.rows.append(row)
+	metadata.initial_sha256 = before; metadata.final_sha256 = snapshot_hash(sim.state)
+	assert(before == metadata.final_sha256,"lookup must not modify state")
+	FileAccess.open("res://.dbg/admin-hops-v15/clean/measure-%d.json"%OS.get_process_id(),FileAccess.WRITE).store_string(JSON.stringify(metadata,"  "))
+	print("ADMIN_HOPS_MEASURE_COMPLETE ",OS.get_process_id()," route0to181=",metadata.known_route); sim.free(); quit()

@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
-    "project_compile", "test_suite", "trade_fingerprint_reuse", "capital_tax_batch", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
+    "project_compile", "test_suite", "trade_fingerprint_reuse", "capital_tax_batch", "atlas_capital_hops", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
     "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",

@@ -1,0 +1,68 @@
+from pathlib import Path
+import json, hashlib, shutil, statistics, subprocess
+
+run = Path('.dbg/admin-hops-v15')
+destination = Path('docs/atlas/evidence/atlas_admin_hops_v15')
+destination.mkdir(parents=True, exist_ok=True)
+destination.joinpath('.gitattributes').write_text('*.gd.txt -text -eol -whitespace\n*.py.txt -text -eol -whitespace\n', encoding='utf8')
+def archive(source, target):
+    target = destination / target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    return hashlib.sha256(target.read_bytes()).hexdigest()
+
+measurements = []
+for source in sorted((run / 'clean').glob('measure-*.json')):
+    data = json.loads(source.read_text(encoding='utf8'))
+    assert data['initial_sha256'] == data['final_sha256']
+    assert data['known_connections'] == data['corrected_known_connections'] == 96
+    assert data['mask']['enabled'] and data['mask']['south'] == 20 and data['mask']['north'] == 55 and data['mask']['west'] == -15 and data['mask']['east'] == 145
+    assert data['seed'] == 1 and data['trade'] and data['rulers']
+    measurements.append({'pid':data['pid'],'heap_median_us':statistics.median(r['heap'] for r in data['rows']),'levels_median_us':statistics.median(r['levels'] for r in data['rows'])})
+    archive(source, 'measurements/' + source.name)
+assert len(measurements) == 5
+for source in (run / 'clean').glob('*.txt'): archive(source,'measurements/'+source.name)
+archive(run/'clean/processes.json','measurements/processes.json')
+
+report = json.loads((run/'year-audit/report.json').read_text(encoding='utf8'))
+assert report['day'] == report['target_days'] == 360 and report['complete'] and not report['hard_errors'] and not report['candidates']
+for path, expected in report['source_hashes'].items():
+    assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == expected, path
+for name in ['manifest.json','status.json','report.json','events.jsonl','first-year-profile.jsonl']:
+    archive(run/'year-audit'/name,'year-audit/'+name)
+for name in ['year-launch.json','year.stdout.txt','year.stderr.txt']:
+    archive(run/name,'year-audit/'+name)
+
+for name in ['regression-summary.json','staged-import.stdout.txt','staged-import.stderr.txt']:
+    archive(run/name,name)
+regression = json.loads((run/'regression-summary.json').read_text(encoding='utf8'))
+# Preserve runner outputs next to the summary; the original .log paths are local.
+for source in Path('.dbg/regression').glob('*.log'):
+    if source.stem in ['project_compile','atlas_capital_hops','loyalty_admin_radius','garrison_economy','resource_forecast_integration','refresh_derived_modifier_equivalence','diplomacy_objective_batch_cache','atlas_politics_trade','atlas_trade_runtime','atlas_coalition_runtime','atlas_supply_runtime','war_count_and_conqueror','succession_counterattack','atlas_territory_transactions','atlas_military_persistence','political_history_test','ultimatum_forecast_cache_equivalence']:
+        archive(source,'regressions/'+source.name+'.txt')
+staged = Path('.dbg/v15-staged-verify/.dbg/regression')
+archive(staged/'summary-selected.json','staged-regressions/summary.json')
+for source in staged.glob('*.log'): archive(source,'staged-regressions/'+source.name+'.txt')
+for source in Path('.dbg').glob('admin-hops-v15-*.*.txt'):
+    archive(source,'unit/'+source.name)
+
+sources = {}
+for path in ['scripts/core/rebellion_system.gd','.dbg/admin_hops_v15_measure.gd','.dbg/admin_hops_v15_daily.gd','.dbg/admin_hops_v15_daily.py','.dbg/admin_hops_v15_year.gd','.dbg/prepare_admin_v15.py','.dbg/record_admin_v15.py','.dbg/state_codec.gd']:
+    sources[path] = archive(path,'loaded-source/'+path+'.txt')
+uid = Path('.dbg/v15-staged-verify/tests/atlas_capital_hops.gd.uid')
+if uid.exists(): shutil.copyfile(uid,'tests/atlas_capital_hops.gd.uid')
+heap = statistics.median(r['heap_median_us'] for r in measurements)/1000
+levels = statistics.median(r['levels_median_us'] for r in measurements)/1000
+daily = json.loads((run/'daily/paired-summary.json').read_text())
+assert len(daily) == 5
+assert all(all(a['sha256'] == b['sha256'] for a,b in zip(pair['heap']['rows'],pair['levels']['rows'])) for pair in daily)
+daily_stats = {variant:{metric:statistics.median(pair[variant][metric] for pair in daily) for metric in ['mean_ms','p95_ms','peak_ms']} for variant in ['heap','levels']}
+for source in (run/'daily').glob('*'):
+    if source.name == 'paired-summary.json':
+        brief = [{variant:{key:value for key,value in pair[variant].items() if key != 'rows'} for variant in ['heap','levels']} for pair in daily]
+        (destination/'daily/paired-summary.json').write_text(json.dumps(brief,indent=2)+'\n',encoding='utf8')
+    else: archive(source,'daily/'+source.name)
+archive('.dbg/daily-v9/baseline-manifest.json','frozen-input-manifest.json')
+summary = {'parent_commit':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),'source_hashes':sources,'query_measurements':measurements,'heap_reference_ms':heap,'levels_ms':levels,'query_reduction_percent':(1-levels/heap)*100,'comparison':'correct heap reference vs correct 0/1 level traversal, NOT broken previous production','daily_stats':daily_stats,'identical_daily_snapshots':175,'days':360,'year_pid':json.loads((run/'year-audit/manifest.json').read_text())['godot_pid'],'hard_errors':report['hard_errors'],'candidates':report['candidates'],'battles':report['battles_seen'],'fronts':report['fronts_seen'],'corrected_known_routes':96,'limits':['Headless computation is not GUI frame rate.','Full-day performance is compared with a correct heap reference; broken previous production cannot serve as an equal-behavior baseline.','First exploratory measurements overlapped import work and were excluded.','Year smoke shared CPU with staged import/regressions; no year performance comparison is claimed.','One year is not a thirty-year audit.','Other simulation sources match v14 loaded-source hashes where present; older pending work is retained.']}
+destination.joinpath('summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
+print(json.dumps(summary,ensure_ascii=False,indent=2))

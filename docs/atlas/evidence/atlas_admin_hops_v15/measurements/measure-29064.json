@@ -1,0 +1,150 @@
+{
+  "corrected_known_connections": 96,
+  "day": 180,
+  "final_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "known_connections": 96,
+  "known_route": 1,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "nodes": 1192,
+  "pid": 29064,
+  "rows": [
+    {
+      "heap": 4804,
+      "levels": 4256
+    },
+    {
+      "heap": 4817,
+      "levels": 3953
+    },
+    {
+      "heap": 5013,
+      "levels": 4211
+    },
+    {
+      "heap": 4857,
+      "levels": 3700
+    },
+    {
+      "heap": 5091,
+      "levels": 3596
+    },
+    {
+      "heap": 5099,
+      "levels": 3663
+    },
+    {
+      "heap": 4546,
+      "levels": 3817
+    },
+    {
+      "heap": 5796,
+      "levels": 3713
+    },
+    {
+      "heap": 4992,
+      "levels": 3594
+    },
+    {
+      "heap": 4774,
+      "levels": 4140
+    },
+    {
+      "heap": 4613,
+      "levels": 4239
+    },
+    {
+      "heap": 4906,
+      "levels": 4096
+    },
+    {
+      "heap": 4848,
+      "levels": 3938
+    },
+    {
+      "heap": 4885,
+      "levels": 3639
+    },
+    {
+      "heap": 4507,
+      "levels": 4945
+    },
+    {
+      "heap": 4741,
+      "levels": 4278
+    },
+    {
+      "heap": 5128,
+      "levels": 3785
+    },
+    {
+      "heap": 5939,
+      "levels": 5940
+    },
+    {
+      "heap": 5240,
+      "levels": 3980
+    },
+    {
+      "heap": 5839,
+      "levels": 3639
+    },
+    {
+      "heap": 5057,
+      "levels": 3645
+    },
+    {
+      "heap": 4919,
+      "levels": 4315
+    },
+    {
+      "heap": 4621,
+      "levels": 3981
+    },
+    {
+      "heap": 5188,
+      "levels": 3574
+    },
+    {
+      "heap": 4771,
+      "levels": 3821
+    },
+    {
+      "heap": 5141,
+      "levels": 4070
+    },
+    {
+      "heap": 4873,
+      "levels": 4101
+    },
+    {
+      "heap": 4782,
+      "levels": 4006
+    },
+    {
+      "heap": 5182,
+      "levels": 4048
+    },
+    {
+      "heap": 4950,
+      "levels": 3884
+    }
+  ],
+  "rulers": true,
+  "seed": 1,
+  "source_hashes": {
+    ".dbg/admin_hops_v15_measure.gd": "c8f012331ce126d1c603bde9647e5c7a528f1000cdaf39e3b2224e26724a1b14",
+    "scripts/atlas/math.gd": "b65fe92bcfab884b14604df000c46ac31705342a5665da50d4b15d5f30e68252",
+    "scripts/core/rebellion_system.gd": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118",
+    "scripts/simulation/simulation.gd": "7715013d9a030bce62ce86a87d2a4c138e358d4c0d181aea24d3e228fbdce77a",
+    "scripts/state/game_state.gd": "e45d0523d83cac6e2600086599f14aeb60807d71f7864b877e08a06ed7d2914a"
+  },
+  "trade": true
+}

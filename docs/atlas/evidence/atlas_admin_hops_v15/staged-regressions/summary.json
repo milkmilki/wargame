@@ -1,0 +1,42 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_capital_hops",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2078,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v15-staged-verify\\.dbg\\regression\\atlas_capital_hops.log"
+    },
+    {
+      "test": "loyalty_admin_radius",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v15-staged-verify\\.dbg\\regression\\loyalty_admin_radius.log"
+    },
+    {
+      "test": "garrison_economy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v15-staged-verify\\.dbg\\regression\\garrison_economy.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v15-staged-verify\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\v15-staged-verify\\.dbg\\regression\\succession_counterattack.log"
+    }
+  ],
+  "failures": 0
+}
