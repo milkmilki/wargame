@@ -17,6 +17,12 @@ var countries := Countries.new()
 var diplomacy_row := HBoxContainer.new()
 var observer_label := Label.new()
 var relation_legend := Label.new()
+class PauseInput extends Node:
+	var host
+	func _input(event: InputEvent) -> void:
+		if event is InputEventKey and event.keycode==KEY_SPACE:
+			if event.pressed and not event.echo: host.toggle_pause()
+			get_viewport().set_input_as_handled()
 func setup(view) -> void:
 	host=view; mouse_filter=Control.MOUSE_FILTER_IGNORE; z_index=20; theme=Style.create()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -28,8 +34,10 @@ func setup(view) -> void:
 	view.info_panel.closed.connect(view.close_information)
 	add_child(toolbar); var bars := VBoxContainer.new(); toolbar.add_child(bars)
 	var bar := HBoxContainer.new(); bars.add_child(bar)
-	for name_value in ["政治","地形","府辖区","宜居度"]: view.mode_control.add_item(name_value)
+	for name_value in ["政治","地形","府辖区","宜居度","贸易区域"]: view.mode_control.add_item(name_value)
 	bar.add_child(view.mode_control); view.mode_control.item_selected.connect(func(_i): view.update_mode())
+	# A focused popup is a separate viewport; the main scene receives no input.
+	var popup_pause:=PauseInput.new(); popup_pause.host=view; view.mode_control.get_popup().add_child(popup_pause)
 	pause_button=button(bar,"继续",view.toggle_pause)
 	button(bar,"全图",view.fit_map)
 	button(bar,"国家",func(): tools.hide(); countries.hide() if countries.visible else countries.open())

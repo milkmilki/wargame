@@ -7,6 +7,15 @@ const Interface = preload("res://scripts/atlas/military_interface.gd")
 const StartupCache = preload("res://scripts/atlas/startup_cache.gd")
 const Selection = preload("res://scripts/atlas/map_selection.gd")
 const Diplomacy = preload("res://scripts/atlas/diplomacy_view.gd")
+const TradeView = preload("res://scripts/atlas/trade_view.gd")
+const TRADE_MODE := 4
+var trade_key: Array=[]
+var trade_pending := false
+var trade_lines: Array=[]
+var trade_build_count := 0
+var trade_hubs: Node2D
+var trade_hub_key: Array=[]
+var trade_center_ids: Array=[]
 var startup_cache_writer: Thread
 var startup_cache_key := ""
 var startup_cache_directory := StartupCache.DIRECTORY
@@ -49,6 +58,9 @@ func load_native(seed_value: int) -> void:
 	startup_profile.generate_or_load_ms=Time.get_ticks_msec()-started
 	startup_profile.cache_hit=not result.display.is_empty()
 	var payload: Dictionary=result.payload; initial_display_plan=result.display
+	# Native startup caches contain geography, never the feature gates of a save.
+	payload=payload.duplicate()
+	payload.simulation_options={"trade_enabled":true,"rulers_enabled":true}
 	timing=payload.get("generation_timing",payload.timing)
 	rainfall_model=payload.data.options.get("rainfall_model","atlas_original"); settlement_model=payload.data.options.get("settlement_model","atlas_original")
 	started=Time.get_ticks_msec()
@@ -90,8 +102,23 @@ var military_status := Label.new()
 var last_owner_revision := -1
 var history_control := SpinBox.new()
 var historical_view := false
+var pending_selection := {}
+var hovered_city := -1
+var hover_key: Array = []
+var hover_mouse_position := Vector2.ZERO
+var hover_mouse_valid := false
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouse:
+		hover_mouse_position=event.position; hover_mouse_valid=true
+	# Run before GUI dispatch, including both halves of ui_accept. Space belongs
+	# to the timeline even when a button, dropdown or editor owns keyboard focus.
+	if event is InputEventKey and event.keycode==KEY_SPACE:
+		if event.pressed and not event.echo: toggle_pause()
+		get_viewport().set_input_as_handled()
 
 func _ready() -> void:
+	get_window().mouse_exited.connect(clear_city_hover)
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--atlas-capture="):
 			get_window().content_scale_size = Vector2i(2048,1024)
@@ -130,9 +157,7 @@ func time_key(event: InputEventKey) -> bool:
 	if not event.pressed or event.echo or not time_controls_available(): return false
 	var focus := get_viewport().gui_get_focus_owner()
 	if focus is LineEdit or focus is TextEdit: return false
-	if event.keycode==KEY_SPACE and focus!=null: return false
 	match event.keycode:
-		KEY_SPACE: toggle_pause()
 		KEY_EQUAL,KEY_KP_ADD,KEY_BRACKETRIGHT: change_time_speed(2.)
 		KEY_MINUS,KEY_KP_SUBTRACT,KEY_BRACKETLEFT: change_time_speed(.5)
 		_: return false
@@ -162,6 +187,7 @@ func information_document() -> Dictionary:
 	return doc
 
 func show_information(kind: String,id: int) -> void:
+	pending_selection.clear()
 	information_kind=kind; information_id=id; information_message=""
 	var source := information_source()
 	if kind=="nation": set_diplomatic_observer(id)
@@ -170,6 +196,7 @@ func show_information(kind: String,id: int) -> void:
 	if info_panel!=null: info_panel.show_document(information_document())
 
 func close_information() -> void:
+	pending_selection.clear()
 	information_kind=""; information_id=-1; information_road=-1
 	selected_region=-1
 	command_target=-1
@@ -266,6 +293,9 @@ func build_view() -> void:
 func present_world(prepared: GameState,payload: Dictionary,source: String = "atlas_native_zhoufu") -> void:
 	# Swap only after generation succeeds; the old scenario remains intact on failure.
 	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1; command_target=-1
+	trade_key.clear(); trade_hub_key.clear(); trade_center_ids.clear(); trade_lines.clear(); trade_pending=false; render_scheduler.invalidate("trade_regions")
+	if is_instance_valid(trade_hubs): trade_hubs.queue_free()
+	trade_hubs=null
 	close_information(); information_message=""
 	if info_panel!=null: info_panel.hide()
 	if simulation!=null: simulation.queue_free()
@@ -315,6 +345,7 @@ func visual_data() -> Dictionary:
 	return result
 
 func _process(_delta: float) -> void:
+	refresh_city_hover()
 	if state==null or not view_ready or not is_instance_valid(overlay): return
 	if not navigation_in_progress: overlay.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
 	overlay.selection = selected_army
@@ -327,8 +358,43 @@ func _process(_delta: float) -> void:
 	if not political_pending and not historical_view and WarFronts.state_key(state)!=last_front_state_key:
 		refresh_fronts(state)
 	if is_instance_valid(front_layer): front_layer.set_view_zoom(zoom)
+	if is_instance_valid(trade_hubs):
+		trade_hubs.visible=mode_control.selected==TRADE_MODE and not historical_view
+		if trade_hubs.visible: refresh_trade_hubs(); trade_hubs.set_zoom(zoom)
+	if mode_control.selected==TRADE_MODE and not trade_key.is_empty():
+		var source:=information_source()
+		if source!=null and (trade_key[0]!=source.get_instance_id() or trade_key[1]!=source.region_analysis_revision): update_trade_mode()
 	refresh_diplomacy()
 	history.maybe_capture(state); run_log.checkpoint(state)
+
+func refresh_city_hover() -> void:
+	if not is_instance_valid(text_layer): return
+	var screen:=hover_mouse_position
+	var control:=get_viewport().gui_get_hovered_control()
+	var blocked:=control!=null and control!=self
+	var markers: Node2D=text_layer.city_markers
+	var publication: int=markers.publication_version if is_instance_valid(markers) else -1
+	var key: Array=[screen,hover_mouse_valid,map_root.position,zoom,mode_control.selected,dragging,generating,view_ready,political_pending,blocked,historical_view,publication,text_layer.visible,text_layer.show_cities,text_layer.layout_count,state.day if state!=null else -1]
+	if key==hover_key: return
+	hover_key=key
+	update_city_hover(screen,blocked or not hover_mouse_valid or not Rect2(Vector2.ZERO,size).has_point(screen))
+
+func clear_city_hover() -> void:
+	hover_mouse_valid=false; hover_key.clear()
+	update_city_hover(Vector2.ZERO,true)
+
+func update_city_hover(screen: Vector2,blocked: bool = false) -> void:
+	var id := -1
+	if not blocked and not dragging and not generating and view_ready and not political_pending and state!=null and is_instance_valid(text_layer):
+		var point:=map_root.to_local(screen)
+		var marker: int=text_layer.hit_city_marker(point)
+		if marker>=0:
+			# Use the same object priority as a click. A visible army above the
+			# marker must not advertise a city inspector underneath it.
+			var picked:=pick_map(point)
+			if picked.kind=="city" and picked.id==marker: id=marker
+	hovered_city=id
+	if is_instance_valid(text_layer): text_layer.set_hover_city(id)
 
 func refresh_fronts(source: GameState) -> void:
 	if political_pending: return
@@ -343,6 +409,11 @@ func refresh_fronts(source: GameState) -> void:
 
 func political_display_ready() -> void:
 	if overlay!=null: refresh_fronts(overlay.state if historical_view else state)
+	if not pending_selection.is_empty():
+		var request := pending_selection.duplicate(); pending_selection.clear()
+		var source:=information_source()
+		if state!=null and source!=null and request.world==state.get_instance_id() and request.source==source.get_instance_id() and request.mode==mode_control.selected and request.historical==historical_view and (not historical_view or request.day==source.day):
+			select_at(request.point)
 
 func current_political_borders() -> Array:
 	return front_layer.normal_borders if is_instance_valid(front_layer) and not front_layer.is_queued_for_deletion() else display.lines
@@ -430,7 +501,12 @@ func sync_nations(source: GameState) -> void:
 	if not historical_view: player_nation.max_value = maxi(0,source.nations.size()-1)
 
 func select_at(position_value: Vector2) -> void:
-	if state==null or generating or not view_ready or political_pending: return
+	if state==null or generating or not view_ready: return
+	if political_pending:
+		var source:=information_source()
+		if source!=null: pending_selection={"point":position_value,"world":state.get_instance_id(),"source":source.get_instance_id(),"mode":mode_control.selected,"historical":historical_view,"day":source.day}
+		return
+	pending_selection.clear()
 	var picked := pick_map(position_value)
 	if picked.kind.is_empty():
 		close_information()
@@ -457,6 +533,14 @@ func pick_map(point: Vector2,objects: bool = true) -> Dictionary:
 			var d := point.distance_squared_to(p)
 			if d<best: best=d; selected=army.id
 		if selected>=0: result.kind="army"; result.id=selected; return result
+	if mode_control.selected==TRADE_MODE and is_instance_valid(trade_hubs) and trade_hubs.visible:
+		var distance:=pow(9./maxf(.1,zoom),2); var center: int=-1
+		for city_id in trade_center_ids:
+			if city_id<0 or city_id>=source.cities.size(): continue
+			var p:=source.cities[city_id].map_position*Vector2(2048,1024); p.x+=roundf((point.x-p.x)/2048.)*2048.
+			var d:=point.distance_squared_to(p)
+			if d<distance: distance=d; center=city_id
+		if center>=0: return {"kind":"city","id":center,"district_id":center,"owner_id":source.cities[center].owner_nation}
 	if is_instance_valid(text_layer):
 		var city: int=text_layer.hit_city(point)
 		if city>=0 and city<source.cities.size() and source.cities[city].is_settlement():
@@ -475,6 +559,14 @@ func road_at(position_value: Vector2) -> Edge:
 	return found
 
 func update_mode() -> void:
+	if is_instance_valid(trade_hubs): trade_hubs.visible=mode_control.selected==TRADE_MODE and not historical_view
+	if mode_control.selected==TRADE_MODE:
+		update_trade_mode()
+		if interface!=null: interface.refresh_diplomacy()
+		if overlay!=null: refresh_fronts(information_source())
+		return
+	if state!=null and (status.text.begins_with("贸易区域") or status.text.begins_with("准备贸易") or status.text.begins_with("历史贸易分区")):
+		status.text="%d 州 · %d 府 · %d 交通点 · %d 条共享道路段"%[state.administrative_region_count,state.land_cities().size()-state.administrative_region_count,state.cities.size()-state.land_cities().size(),state.edges.size()]
 	super.update_mode()
 	refresh_diplomacy()
 	if interface!=null: interface.refresh_diplomacy()
@@ -483,6 +575,72 @@ func update_mode() -> void:
 	# for political borders. Their colour boundary is still the shared band map.
 	if mode_control.selected==2:
 		for copy in copies: copy.ink.show_borders = false; copy.ink.queue_redraw()
+
+func render_is_ready() -> bool:
+	return not (mode_control.selected==TRADE_MODE and trade_pending) and super.render_is_ready()
+
+func update_trade_mode() -> void:
+	if data.is_empty() or information_source()==null: return
+	var source:=information_source()
+	var key: Array=[source.get_instance_id(),source.region_analysis_revision,hash(source.region_ids)]
+	if key==trade_key and mode_cache.has(TRADE_MODE):
+		apply_trade_mode(); return
+	if key==trade_key and trade_pending: return
+	trade_key=key; trade_pending=true; trade_build_count+=1; mode_cache.erase(TRADE_MODE)
+	render_scheduler.invalidate("trade_regions")
+	text_layer.show_polities=false; text_layer.rebuild()
+	for copy in copies: copy.wash.visible=false; copy.ink.show_borders=false; copy.ink.queue_redraw()
+	status.text="准备贸易区域…"
+	var input: Dictionary={"chains":chains,"owners":TradeNetwork.trade_region_ids(source),"mesh":data.mesh,"raster":raster,"region_of":PackedInt32Array(data.regions.of),"provinces":provinces,"weak":weak_mask,"count":source.region_count}
+	render_scheduler.submit("trade_regions",func(): return TradeView.calculate(input),func(result):
+		var uploaded: Dictionary={}
+		for segment in result.segments:
+			var name_value: String=segment; var buffer: Dictionary=result.segments[segment]
+			render_scheduler.enqueue(func(): uploaded[name_value]=ZoomGeometry.upload(buffer),0,"trade_regions")
+		render_scheduler.enqueue(func(): uploaded.edge=Wash.texture(result.edge),0,"trade_regions")
+		render_scheduler.enqueue(func(): uploaded.color=Wash.texture(result.color),0,"trade_regions")
+		render_scheduler.enqueue(func():
+			if key!=trade_key: return
+			var material:=ShaderMaterial.new(); material.shader=load("res://assets/atlas/wash.gdshader")
+			material.set_shader_parameter("edge_field",uploaded.edge)
+			for segment in result.segments: material.set_shader_parameter(segment,uploaded[segment])
+			var ids:=PackedInt32Array()
+			for id in range(result.colors.size()): ids.append(id)
+			material.set_shader_parameter("palette",Wash.color_texture(ids,maxi(1,ids.size()),1,result.colors))
+			material.set_shader_parameter("use_owner_palette",false)
+			material.set_shader_parameter("world_fields",field_textures.field)
+			material.set_shader_parameter("symbols",symbol_view.get_texture())
+			material.set_shader_parameter("symbol_origin",symbol_cache_position+Vector2.ONE*SYMBOL_PAD)
+			material.set_shader_parameter("symbol_scale",symbol_cache_zoom if symbol_cache_zoom>0 else zoom)
+			if is_instance_valid(symbol_tiles) and symbol_tiles.static_world: symbol_tiles.bind_world_material(material)
+			mode_cache[TRADE_MODE]={"texture":uploaded.color,"material":material}
+			trade_lines=result.lines; trade_pending=false
+			if mode_control.selected==TRADE_MODE: apply_trade_mode()
+			,0,"trade_regions"),-1)
+
+func apply_trade_mode() -> void:
+	var cached: Dictionary=mode_cache[TRADE_MODE]
+	for copy in copies:
+		copy.wash.texture=cached.texture; copy.wash.material=cached.material; copy.wash.visible=true
+		copy.ink.borders=trade_lines; copy.ink.show_borders=show_border_layer; copy.ink.queue_redraw()
+	text_layer.show_polities=false; text_layer.rebuild(); refresh_cached_camera()
+	if not is_instance_valid(trade_hubs):
+		trade_hubs=TradeView.Hubs.new(); trade_hubs.z_index=9; map_root.add_child(trade_hubs)
+	trade_hubs.visible=not historical_view; refresh_trade_hubs(); trade_hubs.set_zoom(zoom)
+	status.text="历史贸易分区：%d · 快照未记录贸易中心"%information_source().region_count if historical_view else "贸易区域：%d · 金色圆环为贸易中心"%information_source().region_count
+
+func refresh_trade_hubs() -> void:
+	if historical_view: return
+	var source:=information_source()
+	if source==null: return
+	var key: Array=[source.get_instance_id(),source.region_analysis_revision,source.ownership_revision,source.trade_revision,source.family_revision,hash(source.atlas_trade_centers),source.nations.map(func(n): return [n.alive,n.ruler_revision])]
+	if key==trade_hub_key: return
+	trade_hub_key=key
+	var centers:=TradeNetwork.regional_trade_centers(source); var points:=PackedVector2Array()
+	var ids: Array=centers.keys(); ids.sort(); trade_center_ids.clear()
+	for id in ids:
+		trade_center_ids.append(centers[id]); points.append(source.cities[centers[id]].map_position*Vector2(2048,1024))
+	trade_hubs.set_points(points)
 
 func _exit_tree() -> void:
 	if startup_cache_writer!=null and startup_cache_writer.is_started(): startup_cache_writer.wait_to_finish()

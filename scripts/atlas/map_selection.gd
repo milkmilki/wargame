@@ -12,15 +12,15 @@ static func territory(view,point: Vector2) -> Dictionary:
 		var hit := Curves.nearest(view.province_index,fposmod(point.x,2048.),point.y)
 		if hit.side!=Curves.KEEP: district=hit.side
 	var source: GameState=view.information_source()
-	if source==null or district<0 or district>=source.cities.size(): return result
-	var owner: int=source.cities[district].owner_nation
+	if source==null: return result
+	var owner: int=source.cities[district].owner_nation if district>=0 and district<source.cities.size() else -1
 	if view.mode_control.selected==0:
 		owner=view.political_labels[k]
 		if view.zoom>1.35 and not view.political_index.is_empty():
 			var hit := Curves.nearest(view.political_index,fposmod(point.x,2048.),point.y)
 			if hit.side!=Curves.KEEP: owner=hit.side
 		if owner<0: return result
-		if source.cities[district].owner_nation!=owner:
+		if district<0 or district>=source.cities.size() or source.cities[district].owner_nation!=owner:
 			var distance := INF; district=-1
 			for dy in range(-8,9):
 				if y+dy<0 or y+dy>=1024: continue

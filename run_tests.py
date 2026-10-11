@@ -30,6 +30,8 @@ ATLAS = [
     "atlas_supply_batch_cache", "atlas_supply_shared_fields", "atlas_supply_runtime",
     "atlas_trade_schedule",
     "atlas_trade_runtime",
+    "atlas_space_routing",
+    "atlas_trade_view",
     "atlas_politics_trade",
     "atlas_prewar_batch",
     "atlas_settlement_mask", "atlas_settlement_mask_controls", "atlas_settlement_mask_pipeline", "atlas_masked_military_smoke",

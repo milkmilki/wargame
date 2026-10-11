@@ -248,16 +248,24 @@ func draw_layout(canvas: Node2D,city_marks: Array,rows: Array,offset: Vector2) -
 func draw_detail() -> float:
 	return Scheduler.LODS[rendered_lod] if rendered_lod>=0 else 1.
 
-func hit_city(world: Vector2) -> int:
+func set_hover_city(id: int) -> void:
+	if is_instance_valid(city_markers): city_markers.set_hover_city(id)
+
+func hit_city_marker(world: Vector2) -> int:
 	if not visible or not show_cities: return -1
 	var wrapped := Vector2(fposmod(world.x,2048.),world.y)
 	if high_performance and is_instance_valid(city_markers) and city_markers.visible:
-		for row in city_markers.hit_boxes:
-			for shift in [-2048.,0.,2048.]:
-				if row.box.has_point((wrapped+Vector2(shift,0))*marker_detail): return row.id
+		return city_markers.hit_city(wrapped*marker_detail,2048.*marker_detail)
 	elif not high_performance:
 		for row in marks:
 			if row.box.has_point(wrapped*zoom+origin): return row.index
+	return -1
+
+func hit_city(world: Vector2) -> int:
+	var marker:=hit_city_marker(world)
+	if marker>=0: return marker
+	if not visible or not show_cities: return -1
+	var wrapped := Vector2(fposmod(world.x,2048.),world.y)
 	if not show_names or not show_city_names: return -1
 	for row in text_rows:
 		if not row.has("city_id"): continue

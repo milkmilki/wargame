@@ -19,6 +19,28 @@ func run():
 	var action_control: Control=panel.buttons[0].node
 	panel.show_document(updated)
 	check(panel.rows[0].node==row_control and panel.buttons[0].node==action_control,"roster growth preserves overview and action controls")
+	var state:=GameState.new()
+	for id in range(2):
+		var n:=Nation.new(); n.id=id; n.name="战役国%d"%id; n.capital_city_id=id; state.nations.append(n)
+		var c:=City.new(); c.id=id; c.name="目标州%d"%id; c.owner_nation=id; state.cities.append(c)
+	state.administrative_center_by_city=PackedInt32Array([0,1])
+	var front:=state.create_campaign_front(0,[0] as Array[int],0,CoalitionCampaignFront.Mode.OFFENSE,1)
+	var model=preload("res://scripts/atlas/information_model.gd")
+	panel.show_document(model.nation(state,0))
+	var target: Control
+	for slot in panel.rows:
+		if slot.row.label=="目标州": target=slot.node; break
+	check(target is Button,"campaign objective is a native information-card link")
+	var campaign_builds: int=panel.build_count
+	front.center_city_id=0; front.phase=CoalitionCampaignFront.Phase.ASSAULT_CENTER
+	panel.show_document(model.nation(state,0))
+	check(panel.build_count==campaign_builds and is_instance_valid(target),"campaign phase and target updates reuse card controls")
+	if target is Button:
+		target.pressed.emit(); check(selection.back()==["city",0],"campaign navigation follows the refreshed objective")
+	var overview: Control=panel.rows[0].node
+	state.create_campaign_front(1,[0] as Array[int],0,CoalitionCampaignFront.Mode.DEFENSE,0)
+	panel.show_document(model.nation(state,0))
+	check(panel.rows[0].node==overview,"a second state campaign does not rebuild national overview")
 	check(panel.mouse_filter==Control.MOUSE_FILTER_STOP,"the panel stops map clicks and wheel input")
 	check(not panel.mouse_force_pass_scroll_events and not panel.scroll.mouse_force_pass_scroll_events,"wheel input does not propagate at scroll limits")
 	check(panel.scroll.get_global_rect().end.y<=panel.get_global_rect().end.y,"scrolling content stays inside the panel")

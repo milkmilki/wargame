@@ -1,0 +1,49 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_information_model",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 1969,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_information_model.log"
+    },
+    {
+      "test": "atlas_information_panel",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_information_panel.log"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\political_history_test.log"
+    },
+    {
+      "test": "atlas_map_selection",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3281,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_map_selection.log"
+    },
+    {
+      "test": "atlas_static_layers",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 938,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_static_layers.log"
+    },
+    {
+      "test": "atlas_politics_trade",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 38531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_politics_trade.log"
+    }
+  ],
+  "failures": 0
+}

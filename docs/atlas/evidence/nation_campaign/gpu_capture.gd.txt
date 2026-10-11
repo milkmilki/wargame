@@ -1,0 +1,43 @@
+extends SceneTree
+var failures:=0
+func check(ok: bool,message: String):
+	if not ok: failures+=1; printerr("CAMPAIGN_INFO_GPU_FAIL ",message)
+func _initialize(): call_deferred("run")
+func run():
+	root.size=Vector2i(1280,720)
+	var view=load("res://atlas_military.tscn").instantiate(); root.add_child(view)
+	while not view.view_ready or view.generating: await process_frame
+	view.simulation.set_process(false); view.simulation.paused=true
+	for day in range(180):
+		if not view.state.campaign_fronts.is_empty(): break
+		view.simulation._advance_day()
+		await process_frame
+	var fronts: Array=view.state.campaign_fronts.values()
+	check(not fronts.is_empty(),"actual AI creates a state campaign")
+	if fronts.is_empty(): root.remove_child(view); view.queue_free(); await process_frame; quit(1); return
+	var front: CoalitionCampaignFront=fronts[0]
+	var nation: int=front.anchor_nation_id
+	var target: int=front.center_city_id
+	var point: Vector2=view.state.cities[target].map_position*Vector2(2048,1024)
+	view.zoom=2.; view.map_root.scale=Vector2.ONE*2.; view.map_root.position=Vector2(420,360)-point*2.; view.schedule_symbols()
+	view.show_information("nation",nation)
+	if not await view.await_render_ready(20000): check(false,"map resources ready")
+	for i in range(3): await process_frame
+	var panel=view.info_panel
+	check(panel.document.sections.any(func(s): return s.title=="州战役"),"national card contains state campaign section")
+	var group: Control=panel.section_cache["1:州战役"].node
+	panel.scroll.scroll_vertical=maxi(0,int(group.position.y)-8)
+	for i in range(3): await process_frame
+	RenderingServer.force_draw(true)
+	root.get_texture().get_image().save_png("res://.dbg/atlas-national-state-campaign.png")
+	var target_node: Button
+	for slot in panel.rows:
+		if slot.row.label=="目标州" and slot.row.id==target: target_node=slot.node; break
+	check(target_node!=null,"target state is linked")
+	if target_node!=null:
+		var click:=InputEventMouseButton.new(); click.button_index=MOUSE_BUTTON_LEFT; click.pressed=true
+		click.position=target_node.get_global_rect().get_center()
+		root.push_input(click,true); click.pressed=false; root.push_input(click,true); await process_frame
+		check(view.information_kind=="city" and view.information_id==target,"native objective link opens state seat information")
+	print("CAMPAIGN_INFO_GPU ",JSON.stringify({"pid":OS.get_process_id(),"seed":view.state.world_seed,"day":view.state.day,"nation":nation,"front":front.front_id,"war":front.war_id,"center":target,"phase":front.phase,"mask":view.data.options.settlement_mask,"renderer":RenderingServer.get_current_rendering_method(),"failures":failures}))
+	root.remove_child(view); view.queue_free(); await process_frame; quit(1 if failures else 0)

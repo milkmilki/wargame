@@ -11,6 +11,10 @@
 __pycache__/
 .code-review-graph/
 .dbg/
+.local-dev/
+.codex-test-logs/
+.test-home*/
+.tmp-*/
 
 # IDE and agent-local state
 .claude/

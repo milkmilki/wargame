@@ -21,7 +21,43 @@ var visible_count := 0
 var last_key: Array = []
 var max_update_usec := 0
 var hit_boxes: Array = []
+var publication_version := 0
+var hovered_city := -1
+var previous_city := -1
+var hover_amount := 0.
+var previous_amount := 0.
+const HOVER_DURATION := .12
+func _init() -> void: set_process(false)
+func set_hover_city(id: int) -> void:
+	if id==hovered_city: return
+	var retained := hover_weight(id) if id>=0 else 0.
+	previous_city=hovered_city; previous_amount=hover_amount
+	hovered_city=id; hover_amount=retained
+	set_process(true); publish_hover()
+func hover_weight(id: int) -> float:
+	if id<0: return 0.
+	return maxf(hover_amount if id==hovered_city else 0.,previous_amount if id==previous_city else 0.)
+func _process(delta: float) -> void:
+	hover_amount=move_toward(hover_amount,1. if hovered_city>=0 else 0.,delta/HOVER_DURATION)
+	previous_amount=move_toward(previous_amount,0.,delta/HOVER_DURATION)
+	publish_hover()
+	if previous_amount==0. and (hovered_city<0 or hover_amount==1.): set_process(false)
+func publish_hover() -> void:
+	for layer in layers:
+		for node in layer.nodes:
+			node.material.set_shader_parameter("hovered_city",float(hovered_city))
+			node.material.set_shader_parameter("hover_amount",hover_amount)
+			node.material.set_shader_parameter("previous_city",float(previous_city))
+			node.material.set_shader_parameter("previous_amount",previous_amount)
+func hit_city(point: Vector2,period: float) -> int:
+	for row in hit_boxes:
+		var factor:=1.+.15*hover_weight(row.id)
+		var box:=Rect2(row.anchor+(row.box.position-row.anchor)*factor,row.box.size*factor)
+		for shift in [-period,0.,period]:
+			if box.has_point(point+Vector2(shift,0)): return row.id
+	return -1
 func setup(source: Dictionary) -> void:
+	hovered_city=-1; previous_city=-1; hover_amount=0.; previous_amount=0.; set_process(false); publish_hover()
 	data = source; index = Index.new(); last_key.clear(); hit_boxes.clear()
 	for city in data.cities: index.add(Rect2(Vector2(data.mesh.x[city.cell],data.mesh.y[city.cell])-Vector2.ONE*16,Vector2.ONE*32))
 	if not layers.is_empty(): return
@@ -63,14 +99,16 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 				for other in occupied.get(cell,[]):
 					if box.intersects(other): collision = true; break
 		if collision and job.kind!=4: continue
-		hit_boxes.append({"id":job.id,"box":box})
+		hit_boxes.append({"id":job.id,"box":box,"anchor":job.point})
 		for cell in buckets:
 			if not occupied.has(cell): occupied[cell] = []
 			occupied[cell].append(box)
 		var color := Color8(150,60,50)
 		if job.owner>=0:
 			var rgb: Array = data.nations[job.owner].color; color = Color8(rgb[0],rgb[1],rgb[2])
-		buffers[job.kind].append_array(PackedFloat32Array([s,0.,0.,job.point.x,0.,s,0.,job.point.y,color.r,color.g,color.b,color.a])); counts[job.kind] += 1
+		# Custom alpha carries the stable city id; glyph opacity remains in its
+		# vertex colors. Hover changes shader uniforms, never instance buffers.
+		buffers[job.kind].append_array(PackedFloat32Array([s,0.,0.,job.point.x,0.,s,0.,job.point.y,color.r,color.g,color.b,float(job.id)])); counts[job.kind] += 1
 	visible_count = 0
 	for kind in range(5):
 		var multi: MultiMesh = layers[kind].mesh
@@ -83,3 +121,4 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 			layers[kind].nodes[i].position.x = [-2048.,0.,2048.][i]*detail
 			layers[kind].nodes[i].queue_redraw()
 	max_update_usec = maxi(max_update_usec,Time.get_ticks_usec()-start)
+	publication_version+=1

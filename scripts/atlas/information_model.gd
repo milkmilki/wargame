@@ -16,6 +16,53 @@ static func binding_name(id: int,unbound: String,increment: int = 0) -> String:
 	return str(id+increment) if id>=0 else unbound
 static func action(key: String,label: String,icon: String,id: int = -1) -> Dictionary:
 	return {"key":key,"label":label,"icon":icon,"id":id,"disabled":id<0 and key not in ["focus","copy"]}
+const CAMPAIGN_PHASE_NAMES := {
+	CoalitionCampaignFront.Phase.ASSEMBLE:"集结",
+	CoalitionCampaignFront.Phase.BREAK_IN:"突破州域",
+	CoalitionCampaignFront.Phase.RAID_FU:"争夺属府",
+	CoalitionCampaignFront.Phase.RECALL_CAMP:"回营重整",
+	CoalitionCampaignFront.Phase.HOLD_CAMP:"驻营补充",
+	CoalitionCampaignFront.Phase.ASSAULT_CENTER:"强攻州治",
+	CoalitionCampaignFront.Phase.CLEANUP:"清理残部",
+	CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE:"固守增援",
+	CoalitionCampaignFront.Phase.SORTIE:"出击反攻",
+}
+static func campaign_rows(state: GameState,nation_id: int) -> Array:
+	var fronts:=state.campaign_fronts_for_nation(nation_id)
+	if fronts.is_empty(): return [row("进行中","暂无州战役")]
+	# Stable presentation order is independent of the simulation's tactical
+	# priority. Only live Army bindings count; reports can be frozen in combat.
+	fronts.sort_custom(func(a,b): return a.war_id<b.war_id if a.war_id!=b.war_id else a.front_id<b.front_id)
+	var by_id: Dictionary={}; var totals: Dictionary={}; var offense:=0
+	for front in fronts:
+		by_id[front.front_id]=front; totals[front.front_id]=[0,0,0,0]
+		if front.mode==CoalitionCampaignFront.Mode.OFFENSE: offense+=1
+	for unit in state.armies:
+		if unit.size<=0 or not by_id.has(unit.campaign_front_id): continue
+		var front: CoalitionCampaignFront=by_id[unit.campaign_front_id]
+		if unit.campaign_war_id!=front.war_id: continue
+		var count: Array=totals[front.front_id]
+		count[2]+=1; count[3]+=unit.size
+		if unit.owner_nation==nation_id: count[0]+=1; count[1]+=unit.size
+	var rows: Array=[row("进行中","%d场 · 进攻%d／防守%d"%[fronts.size(),offense,fronts.size()-offense])]
+	for front in fronts:
+		var count: Array=totals[front.front_id]
+		rows.append_array([
+			row("战役%d"%front.front_id,"%s · 战争%s"%["进攻" if front.mode==CoalitionCampaignFront.Mode.OFFENSE else "防守",binding_name(front.war_id,"未绑定",1)]),
+			row("目标州",city_name(state,front.center_city_id),"city",settlement_id(state,front.center_city_id)),
+			row("当前阶段",CAMPAIGN_PHASE_NAMES.get(front.phase,"未识别阶段")),
+			row("主导国家",nation_name(state,front.anchor_nation_id),"nation",front.anchor_nation_id),
+			row("本国投入","%d支 · %d人"%[count[0],count[1]]),
+			row("战线总兵力","%d支 · %d人"%[count[2],count[3]]),
+			row("集结地",city_name(state,front.staging_city_id),"city",settlement_id(state,front.staging_city_id)),
+			row("驻营地",city_name(state,front.camp_city_id),"city",settlement_id(state,front.camp_city_id)),
+			row("重试等待","至第%d天"%front.failed_until_day if front.failed_until_day>state.day else "无"),
+		])
+		if front.tactical_target_city_ids.is_empty(): rows.append(row("战术目标","未指定"))
+		else:
+			for target in front.tactical_target_city_ids:
+				rows.append(row("战术目标",city_name(state,target),"city",settlement_id(state,target)))
+	return rows
 static func city(state: GameState,id: int) -> Dictionary:
 	if id<0 or id>=state.cities.size() or not state.cities[id].is_settlement(): return {}
 	var c := state.cities[id]; var owner := c.owner_nation; var center := state.administrative_center_of(id)
@@ -62,7 +109,18 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var capital := n.capital_city_id
 	var point := state.cities[capital].map_position*Vector2(2048,1024) if capital>=0 and capital<state.cities.size() else Vector2(1024,512)
 	var doc := {"title":n.name,"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id)],"sections":[]}
-	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录"),row("君主特质","、".join(n.ruler_traits) if not n.ruler_traits.is_empty() else "中性"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
+	var traits: Array[String] = []
+	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
+	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录"),row("君主特质","、".join(traits) if not traits.is_empty() else "中性"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
+	doc.sections.append(section("州战役",campaign_rows(state,id)))
+	var target := RegionalStrategy.target_region(state,id)
+	var integration := RegionalStrategy.integration_report(state,id,target)
+	doc.sections.append(section("君主与经营区域",[
+		row("君主类型",RulerProfile.archetype_name(n.ruler_archetype)),row("特质","、".join(traits) if not traits.is_empty() else "无"),
+		row("贸易政策",RulerProfile.trade_policy_name(n.trade_policy)),row("就任日期","第%d天"%n.ruler_started_day),
+		row("经营区域",str(target+1) if target>=0 else "无"),row("区域锚点",city_name(state,n.strategic_region_anchor_city_id),"city",n.strategic_region_anchor_city_id),
+		row("区域整合","%d / %d 治所"%[integration.integrated,integration.total]),
+		row("主动扩张", "允许在经营区域内选择目标" if RulerProfile.offensive_allowed(n) else "仅允许收复或内战目标")]))
 	doc.sections.append(section("国库与人口库",[row("金钱库存",n.treasury_gold),row("可用人口库",n.manpower_pool),row("粮仓库存",stock)]))
 	doc.sections.append(section("最近月度结算",[row("野战军维护费",n.last_field_army_upkeep),row("守军维护费",n.last_garrison_upkeep),row("全军维护费",n.last_military_upkeep),row("欠付军费",n.unpaid_military_upkeep),row("军费支付率","%.0f%%"%(n.military_payment_ratio*100)),row("预计粮食月产",n.last_food_estimated_production),row("预计粮食月需",n.last_food_estimated_consumption),row("预计粮食结余",n.last_food_estimated_balance)]))
 	var relations: Array = []
@@ -111,5 +169,7 @@ static func historical(document: Dictionary,kind: String) -> Dictionary:
 	document.sections=document.sections.filter(func(s): return s.title in allowed)
 	for group in document.sections:
 		group.rows=group.rows.filter(func(r): return r.label not in ["平均忠诚度","当前通行军队","危险系数","行军时间倍率","补给损耗倍率"])
-	document.sections.append(section("快照范围",[row("经济与兵力","此政治快照未记录")]))
+	var limits: Array=[row("经济与兵力","此政治快照未记录")]
+	if kind=="nation": limits.append(row("州战役","此政治快照未记录"))
+	document.sections.append(section("快照范围",limits))
 	return document

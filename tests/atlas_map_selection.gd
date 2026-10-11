@@ -34,5 +34,37 @@ func run():
 	view.political_labels[100*2048+100]=1
 	var seam: Dictionary=view.pick_map(Vector2(100,100),false)
 	check(seam.owner_id==1 and seam.district_id==1,"visible political owner wins at a smoothed border")
+	view.province_labels[100*2048+100]=-2
+	check(view.pick_map(Vector2(100,100),false).owner_id==1,"visible political fill remains selectable without a district at the exact pixel")
+	view.political_pending=true; view.select_at(Vector2(105,100))
+	view.political_pending=false; view.political_display_ready()
+	check(view.information_kind=="nation" and view.information_id==1,"click during background political update is replayed")
+	view.political_pending=true; view.select_at(Vector2(105,100)); view.show_information("nation",0)
+	view.political_pending=false; view.political_display_ready()
+	check(view.information_id==0,"a later explicit selection replaces a queued map click")
+	view.political_pending=true; view.select_at(Vector2(105,100)); view.mode_control.selected=2
+	view.political_pending=false; view.political_display_ready()
+	check(view.information_id==0,"queued click cannot overwrite a later mode change")
+	view.mode_control.selected=0
+	view.text_layer.high_performance=true; view.text_layer.marker_detail=1.
+	var markers=preload("res://scripts/atlas/city_markers.gd").new(); view.text_layer.add_child(markers); view.text_layer.city_markers=markers
+	markers.setup({"cities":[{"region":0,"cell":0,"major":false}],"ownership":[0],"nations":[{"seat":0,"color":[100,80,60]}],"mesh":{"x":[100.],"y":[100.]}})
+	markers.set_view(Rect2(0,0,2048,1024),1.)
+	if not view.has_method("update_city_hover"):
+		check(false,"city hover input is missing")
+	else:
+		view.update_city_hover(Vector2(100,100))
+		check(view.hovered_city==0 and view.pick_map(Vector2(100,100)).kind=="city","hovered icon uses the city click target")
+		view.province_labels[100*2048+125]=1; view.political_labels[100*2048+125]=1
+		view.update_city_hover(Vector2(125,100)); view.select_at(Vector2(125,100))
+		check(view.hovered_city==-1 and view.information_kind=="nation" and view.information_id==1,"territory outside icons keeps country selection")
+		view.update_city_hover(Vector2(100,100),true)
+		check(view.hovered_city==-1,"UI suppresses underlying marker hover")
+		view.dragging=true; view.update_city_hover(Vector2(100,100))
+		check(view.hovered_city==-1,"panning suppresses marker hover")
+		view.dragging=false; view.update_city_hover(Vector2(2148,100))
+		check(view.hovered_city==0,"wrapped city copy is hoverable")
+		view.text_layer.show_cities=false; view.update_city_hover(Vector2(100,100))
+		check(view.hovered_city==-1,"hidden cities cannot stay hovered")
 	root.remove_child(view); view.queue_free(); await process_frame
 	print("ATLAS_MAP_SELECTION failures=",failures); quit(1 if failures else 0)

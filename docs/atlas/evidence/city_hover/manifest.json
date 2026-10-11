@@ -1,0 +1,79 @@
+{
+  "gpu_failures": 0,
+  "godot": "4.7.1",
+  "seed": 1,
+  "checks": [
+    "Godot viewport mouse-motion injection grows icon",
+    "city click opens city card",
+    "territory click opens country card",
+    "toolbar clears hover",
+    "window-exit signal clears hover",
+    "shader animation reuses static instance buffers"
+  ],
+  "renderer": "D3D12 Forward+",
+  "scene": "res://atlas_military.tscn",
+  "base": "222c9a2 + uncommitted changes",
+  "limits": "Paused simulation; checks validate input and GPU visuals, not running-period FPS. Development cache contains initial geography, not a campaign save.",
+  "zoom": 4,
+  "mask": {
+    "south": 20,
+    "east": 145,
+    "enabled": true,
+    "north": 55,
+    "west": -15
+  },
+  "pid": 31456,
+  "gpu": "AMD Radeon RX 7600",
+  "regressions": [
+    {
+      "test": "atlas_map_selection",
+      "errors_found": true
+    },
+    {
+      "test": "atlas_city_markers",
+      "errors_found": false
+    },
+    {
+      "test": "atlas_static_layers",
+      "errors_found": true
+    },
+    {
+      "test": "atlas_camera_feedback",
+      "errors_found": true
+    },
+    {
+      "test": "atlas_render_invalidation",
+      "errors_found": true
+    },
+    {
+      "test": "atlas_space_routing",
+      "errors_found": true
+    },
+    {
+      "test": "atlas_trade_view",
+      "errors_found": true
+    },
+    {
+      "test": "atlas_information_panel",
+      "errors_found": true
+    }
+  ],
+  "city": 17,
+  "hover": {
+    "scale": 1.15,
+    "glyph_templates_unchanged": true,
+    "instance_buffers_unchanged": true,
+    "duration_seconds": 0.12,
+    "label_layouts_unchanged": true
+  },
+  "source_hashes": {
+    "assets/atlas/city_instances.gdshader": "00c06f70178285004c3ac8b4982f7daf3165f49bbf9d5d22c546ed2dddd954b5",
+    "tests/atlas_city_markers.gd": "1c3712d0cffd76a143067e46ff0101dcdc7ab3ac9daff5a7ab768eb229493554",
+    "tests/atlas_map_selection.gd": "51665af6dd9f05bf00fb7f0f7fe99e971deee96a9fdaf732841d1a94a8ffdea2",
+    "scripts/atlas/city_markers.gd": "97334324303209cd38edee4fee54095b12c340169c187d84478b4330c05cb902",
+    "scripts/atlas/map_text.gd": "65ab35512adb4de34ddd0ece75384f82c6a6fed7993a2e4f802cd8cbe53b08f0",
+    "scripts/atlas/military_preview.gd": "1b552a1867211d297a8ee0daf0b08005f81727f1429da817a4d853c78f514438"
+  },
+  "day": 0,
+  "date": "2026-10-10"
+}

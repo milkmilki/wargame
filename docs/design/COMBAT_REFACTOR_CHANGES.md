@@ -1,5 +1,7 @@
 # 战斗系统重构变更说明
 
+> 历史设计记录：旧地图与旧验收描述保留原文；当前入口和行为以 [Atlas交接](../atlas/HANDOFF.md) 为准。
+
 > 对应方案书 [wargame_combat_system_refactor.md](wargame_combat_system_refactor.md) 十七条要求 + 推荐四阶段。
 > 基线 commit：`c346dda`（Sustain offensives throughout active wars）。
 > 验收：`./run_tests.sh` = **1116 断言 / 0 失败**；`tests/combat_statistics.gd` = STATISTICS_PASS（10000 场）；
@@ -14,22 +16,22 @@
 
 | 文件 | 变更要点 |
 |---|---|
-| [scripts/core/combat.gd](scripts/core/combat.gd) | 集中常量；纯函数骨架；对称判定 + 平局；士气→战斗效率；正面宽度/预备队；共享战场骰 + 镜像等变独立战术修正；连续地形/围城曲线；`_canonicalize_side`；可回放结构化日志 |
-| [scripts/core/combat_log.gd](scripts/core/combat_log.gd) | **新建**：结构化日志 JSONL 落盘、加载、逐回合确定性回放与篡改检测 |
-| [scripts/core/equivariant_order.gd](scripts/core/equivariant_order.gd) | **新建**：城市/军队/势力/边的镜像等变物理排序唯一真源，禁止 ID/创建顺序参与行为决胜 |
-| [scripts/simulation/simulation.gd](scripts/simulation/simulation.gd) | 增援 ETA；每日滚动补给；多方战斗；围城状态机；最多三目标攻势；两档军制；邻接驰援；零城市国家向全部交战国立即投降；长距离行军不封顶 |
-| [scripts/core/pathfinding.gd](scripts/core/pathfinding.gd) | 确定性二叉最小堆 Dijkstra 与等长裁决；寻路读取行军倍率，补给读取边级损耗倍率 |
-| [scripts/core/terrain_map_generator.gd](scripts/core/terrain_map_generator.gd) | 160 城低地/中东南/河岸加权采样；黄河/长江控制点模板与纬向走廊；均匀保留约25% crossing并最小连通补点；其余穿河道路禁用；三类边统一由端点几何长度生成距离 |
-| [scripts/model/city.gd](scripts/model/city.gd) | 当前/完整工事及易手恢复字段；`is_dock` 标识复用完整城市能力的码头 |
-| [scripts/model/edge.gd](scripts/model/edge.gd) | 新增 `LAND/LANDING/RIVER` 类型、行军/粮损倍率和 `allows_holding` |
-| [scripts/model/army.gd](scripts/model/army.gd) | 两类补给债；完全同构多方接触的瞬态 `encounter_blocked`（不伪装为驻防） |
-| [scripts/model/battle.gd](scripts/model/battle.gd) | 每侧整场援军士气累计；显式前线优先级；单军溃退队列；驻防/围城/稳定战术随机字段 |
-| [scripts/state/game_state.gd](scripts/state/game_state.gd) | 正式地图 160 个陆城之外创建码头，64 城仅保留为网格夹具；按全部当前城市计算 5000/15000 两档目标军制；首都/资源核心只读取陆城；边键改为 int64 打包 |
-| [scripts/ai](scripts/ai) | Hungarian 军队到城市多槽离散驻防；威胁与抵达时间读取河运速度；水路不生成驻边姿态；外交按战局、军力、钱粮和第三国边境集结计算双边和平意愿 |
-| [scripts/view/map_renderer.gd](scripts/view/map_renderer.gd) | 牛皮纸战略图、国家/道路描边、持续攻势箭头、军图城市/码头、NATO 兵牌、四档固定 UI、可折叠国家统计窗口、城市/道路点击详情；运行时最高 30 FPS、暂停 5 FPS 重绘 |
-| [tests/test_suite.gd](tests/test_suite.gd) | 826 断言：既有机制 + 战略图 UI + 黄河0.50～0.60/双河走向/国家内部与全图最小连通/硬阻隔 + 真实边距 + 多国灭国投降 + 邻接驰援 + 两档军制/同城多军驻防 |
-| [tests/ai_symmetric_duel.gd](tests/ai_symmetric_duel.gd) | 新增 `AI_DUEL_STRICT_MIRROR=1`：逐日比较城市、国家资源和忽略 ID 的军队物理状态多重集 |
-| [tests/combat_statistics.gd](tests/combat_statistics.gd) | **新建**：item 17 万场统计（独立 SceneTree 脚本，不入快速回归） |
+| [scripts/core/combat.gd](../../scripts/core/combat.gd) | 集中常量；纯函数骨架；对称判定 + 平局；士气→战斗效率；正面宽度/预备队；共享战场骰 + 镜像等变独立战术修正；连续地形/围城曲线；`_canonicalize_side`；可回放结构化日志 |
+| [scripts/core/combat_log.gd](../../scripts/core/combat_log.gd) | **新建**：结构化日志 JSONL 落盘、加载、逐回合确定性回放与篡改检测 |
+| [scripts/core/equivariant_order.gd](../../scripts/core/equivariant_order.gd) | **新建**：城市/军队/势力/边的镜像等变物理排序唯一真源，禁止 ID/创建顺序参与行为决胜 |
+| [scripts/simulation/simulation.gd](../../scripts/simulation/simulation.gd) | 增援 ETA；每日滚动补给；多方战斗；围城状态机；最多三目标攻势；两档军制；邻接驰援；零城市国家向全部交战国立即投降；长距离行军不封顶 |
+| [scripts/core/pathfinding.gd](../../scripts/core/pathfinding.gd) | 确定性二叉最小堆 Dijkstra 与等长裁决；寻路读取行军倍率，补给读取边级损耗倍率 |
+| [scripts/core/terrain_map_generator.gd](../../scripts/core/terrain_map_generator.gd) | 160 城低地/中东南/河岸加权采样；黄河/长江控制点模板与纬向走廊；均匀保留约25% crossing并最小连通补点；其余穿河道路禁用；三类边统一由端点几何长度生成距离 |
+| [scripts/model/city.gd](../../scripts/model/city.gd) | 当前/完整工事及易手恢复字段；`is_dock` 标识复用完整城市能力的码头 |
+| [scripts/model/edge.gd](../../scripts/model/edge.gd) | 新增 `LAND/LANDING/RIVER` 类型、行军/粮损倍率和 `allows_holding` |
+| [scripts/model/army.gd](../../scripts/model/army.gd) | 两类补给债；完全同构多方接触的瞬态 `encounter_blocked`（不伪装为驻防） |
+| [scripts/model/battle.gd](../../scripts/model/battle.gd) | 每侧整场援军士气累计；显式前线优先级；单军溃退队列；驻防/围城/稳定战术随机字段 |
+| [scripts/state/game_state.gd](../../scripts/state/game_state.gd) | 正式地图 160 个陆城之外创建码头，64 城仅保留为网格夹具；按全部当前城市计算 5000/15000 两档目标军制；首都/资源核心只读取陆城；边键改为 int64 打包 |
+| [scripts/ai](../../scripts/ai) | Hungarian 军队到城市多槽离散驻防；威胁与抵达时间读取河运速度；水路不生成驻边姿态；外交按战局、军力、钱粮和第三国边境集结计算双边和平意愿 |
+| [scripts/view/map_renderer.gd](../../scripts/view/map_renderer.gd) | 牛皮纸战略图、国家/道路描边、持续攻势箭头、军图城市/码头、NATO 兵牌、四档固定 UI、可折叠国家统计窗口、城市/道路点击详情；运行时最高 30 FPS、暂停 5 FPS 重绘 |
+| [tests/test_suite.gd](../../tests/test_suite.gd) | 826 断言：既有机制 + 战略图 UI + 黄河0.50～0.60/双河走向/国家内部与全图最小连通/硬阻隔 + 真实边距 + 多国灭国投降 + 邻接驰援 + 两档军制/同城多军驻防 |
+| [tests/ai_symmetric_duel.gd](../../tests/ai_symmetric_duel.gd) | 新增 `AI_DUEL_STRICT_MIRROR=1`：逐日比较城市、国家资源和忽略 ID 的军队物理状态多重集 |
+| [tests/combat_statistics.gd](../../tests/combat_statistics.gd) | **新建**：item 17 万场统计（独立 SceneTree 脚本，不入快速回归） |
 
 ---
 
@@ -84,7 +86,7 @@
 
 ## 3. 新增测试
 
-**快速回归 [tests/test_suite.gd](tests/test_suite.gd)（1116 断言 / 0 失败，`./run_tests.sh`）**
+**快速回归 [tests/test_suite.gd](../../tests/test_suite.gd)（1116 断言 / 0 失败，`./run_tests.sh`）**
 - 对称性/守恒/士气/拆分（阶段 1）：位置交换镜像、总伤亡守恒、士气影响战力、防御反拆分不变。
 - 空间/增援（阶段 2）：接触点触发、增援 ETA（远援不瞬时参战）、正面宽度/预备队、拆分不增总正面；5000 正面下 `1×10000` 与 `2×5000` 完整多回合逐轮火力、伤亡、加权士气、胜负和时长一致。
 - 围城（阶段 3）：`fort_strength` 量纲、`siege_required_manpower` 换算、连续围城曲线标定（ratio=1→30、2→16.5、∞→3）、驻军歼灭后城防仍来自工事。
@@ -110,7 +112,7 @@
 - **投降与真实边距**：多国战争中全境失守者向全部交战国投降并清除所有战争关系；正式地图所有三类边逐条等于端点几何长度换算值。
 - **战略图交互**：地图画布响应式但图标仅使用四档离散比例；国家统计按钮可展开/收起卡片窗口，关闭后回收顶部空间；城市中心和道路中点可稳定命中，详情包含控制、工事、驻军、距离与行军信息；攻势箭头在事件完整寿命内持续可见。
 
-**批量统计 [tests/combat_statistics.gd](tests/combat_statistics.gd)（item 17，独立脚本，10000 场，STATISTICS_PASS）**
+**批量统计 [tests/combat_statistics.gd](../../tests/combat_statistics.gd)（item 17，独立脚本，10000 场，STATISTICS_PASS）**
 - ① 位置对称：10000/10000 交换 A/B 逐位镜像（平局 0）。
 - ② 独立战术随机：9997/10000 次两侧修正不同，A 较高占比 0.5020，交换 A/B 严格交换。
 - ③ 优势方胜率：1.3~2.0 倍优势 = 1.0000。
@@ -122,7 +124,7 @@
 
 > item 8 数学边界：若两侧在镜像变换下完全同构且战斗映射到自身，逐局等变要求两侧修正相同；不可能同时强制“不同修正”。非同构空间角色使用独立修正，统计无 A/B 偏置。
 
-**真实地图长跑 [tests/ai_longrun.gd](tests/ai_longrun.gd)（4 种子 × 1095 天）**
+**真实地图长跑 [tests/ai_longrun.gd](../../tests/ai_longrun.gd)（4 种子 × 1095 天）**
 - 合计 `net_captures=17`、`turnovers=93`、`wars=13`、`offensives=40`，既有多城攻势也有邻接迟滞和主会战。
 - 出现 2 个真实多目标准备计划，单国同轮最大实际并行方向数为 3；各种子 `eliminated_wars=0`、`terminal_alliance_lock=0`，且 `invalid=0`、`commit_failures=0`，稳定超过 30 天的军制偏差为 0；总耗时约 `405.2s`。
 

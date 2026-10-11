@@ -1,0 +1,33 @@
+{
+  "nation": 35,
+  "war_id": 39,
+  "godot": "4.7.1",
+  "gpu": "RX7600",
+  "seed": 1,
+  "display_war_number": 40,
+  "day": 60,
+  "pid": 26816,
+  "renderer": "D3D12 Forward+",
+  "center_city": 10,
+  "gpu_failures": 0,
+  "base": "222c9a2 + uncommitted changes",
+  "regression_failures": 0,
+  "date": "2026-10-10",
+  "phase": 1,
+  "front_id": 0,
+  "mask": {
+    "south": 20,
+    "east": 145,
+    "north": 55,
+    "enabled": true,
+    "west": -15
+  },
+  "limits": "Actual AI progression until a live campaign exists; not a long-run audit or FPS benchmark. Geometry loaded from a developer initial-map cache, not a saved campaign. No battlefield state was fabricated for the GPU screenshot.",
+  "source_hashes": {
+    "scripts/atlas/information_panel.gd": "def27d5d55e45a79d6c192dd98cd63140576e6f4f0eab65801eeb7703dfe05f4",
+    "tests/atlas_information_panel.gd": "dbdf48ff9b466dc700891d8ca8c53ac8e40b79270182b0c02fb372f83cb74f6f",
+    "scripts/atlas/information_model.gd": "737054abaf1437b9ac1a97840267670e3e925fba0baacc53d4366036363479c5",
+    "tests/atlas_information_model.gd": "b0d1b858aa56a0a8bb2f1278d02411da8ef675ddea6e0871f7bc00a94320c2e6"
+  },
+  "scene": "res://atlas_military.tscn"
+}

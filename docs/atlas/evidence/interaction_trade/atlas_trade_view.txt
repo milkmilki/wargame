@@ -1,0 +1,3 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_TRADE_VIEW regions=25 lines=58 failures=0

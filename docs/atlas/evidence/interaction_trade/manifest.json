@@ -1,0 +1,51 @@
+{
+  "base_commit": "222c9a260995677bbc27ddd9e82386120fee775d",
+  "uncommitted": true,
+  "scene": "atlas_military.tscn",
+  "seed": 1,
+  "mask": {
+    "south": 20,
+    "north": 55,
+    "west": -15,
+    "east": 145,
+    "enabled": true
+  },
+  "gpu_pid": 11416,
+  "godot": "4.7.1",
+  "renderer": "D3D12 Forward+ RX7600",
+  "tests": [
+    "project_compile",
+    "atlas_map_selection",
+    "atlas_space_routing",
+    "atlas_time_controls",
+    "atlas_trade_view",
+    "political_history_test",
+    "atlas_diplomacy_view",
+    "atlas_nation_list",
+    "atlas_camera_feedback",
+    "atlas_static_layers",
+    "atlas_render_invalidation"
+  ],
+  "failures": 0,
+  "source_hashes": {
+    "scripts/atlas/military_preview.gd": "980b92d5a79380e66af5394ac6ecf2f271ec1128a009195546027b1a87d8d816",
+    "scripts/atlas/military_interface.gd": "bf1643d1e9570b71038ab63ba5c2719752a247f3c5bf1679a448a3e250520e5a",
+    "scripts/atlas/map_selection.gd": "acf9230141ef7f2b676b3710f804336f670bbe01038b0636037fc3022e6a8749",
+    "scripts/atlas/trade_view.gd": "9e74844dd922a46f85cd1ac10cf1419885e62c2b37c3580fcd1bad611b21472d",
+    "scripts/state/political_history.gd": "a3106a9c57e138442d55f601c1f6276a7afe92cbfd7fc627e7a682bbe0e239ea",
+    "tests/atlas_time_controls.gd": "c70ec0929cd81a10e82d47b0c9558b7d50b41abb2a42d600f06139618ef05469",
+    "tests/atlas_map_selection.gd": "f7310b9038ebc38a9c13dc21a41c7e175c809f2ed87437d5780572a4b9dbd9a1",
+    "tests/atlas_trade_view.gd": "0b91600c397b64c68350f95bae1730e7518393800df657ef65e4b3795412c91c",
+    "tests/atlas_space_routing.gd": "57bea55299c72abb62d8ef9ccc4668d048925ed2ddbb870c48392f0c0c7c3589"
+  },
+  "visual_checks": [
+    "GUI Space press/release with button and dropdown focus",
+    "Space in an open popup viewport",
+    "real country mouse click",
+    "queued click through political publication",
+    "trade view center picking",
+    "trade geometry reuse on mode switch, zoom and pan",
+    "historical view and return to current"
+  ],
+  "timing_note": "No FPS or performance threshold claim; geometry build count checked for camera reuse."
+}

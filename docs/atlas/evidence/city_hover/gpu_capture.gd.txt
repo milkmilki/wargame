@@ -1,0 +1,70 @@
+extends SceneTree
+var failures:=0
+func check(ok: bool,message: String):
+	if not ok: failures+=1; printerr("HOVER_GPU_FAIL ",message)
+func _initialize(): call_deferred("run")
+func motion(point: Vector2):
+	var event:=InputEventMouseMotion.new(); event.position=point; event.global_position=point
+	root.push_input(event,true)
+	for i in range(3): await process_frame
+	var deadline:=Time.get_ticks_msec()+2000
+	var markers=root.get_child(root.get_child_count()-1).text_layer.city_markers
+	while markers.is_processing() and Time.get_ticks_msec()<deadline: await process_frame
+func capture(path: String):
+	RenderingServer.force_draw(true)
+	var image:=root.get_texture().get_image()
+	image.save_png(path)
+	image.get_region(Rect2i(592,342,96,96)).save_png(path.replace(".png","-detail.png"))
+func run():
+	root.size=Vector2i(1280,720)
+	var view=load("res://atlas_military.tscn").instantiate(); root.add_child(view)
+	while not view.view_ready or view.generating: await process_frame
+	view.simulation.set_process(false); view.simulation.paused=true
+	if not await view.await_render_ready(15000): check(false,"initial detail ready")
+	var markers=view.text_layer.city_markers
+	var row: Dictionary={}
+	for candidate in markers.hit_boxes:
+		var city=view.state.cities[candidate.id]
+		var lon: float=city.map_position.x*360.-180.; var lat: float=90.-city.map_position.y*180.
+		if lon>105 and lon<122 and lat>27 and lat<38: row=candidate; break
+	check(not row.is_empty(),"visible China marker exists")
+	if row.is_empty(): root.remove_child(view); view.queue_free(); await process_frame; quit(1); return
+	var point: Vector2=row.anchor/view.text_layer.marker_detail
+	view.zoom=4.; view.map_root.scale=Vector2.ONE*4.; view.map_root.position=Vector2(640,390)-point*4.; view.schedule_symbols()
+	if not await view.await_render_ready(15000): check(false,"close-up ready")
+	var screen: Vector2=view.map_root.to_global(point)
+	await motion(Vector2(850,560))
+	var templates: int=markers.template_builds; var buffers:=[]
+	for layer in markers.layers: buffers.append(hash(layer.mesh.buffer))
+	var builds: int=view.text_layer.layout_count; var static_builds: int=view.text_layer.static_build_count
+	capture("res://.dbg/atlas-city-normal.png")
+	await motion(screen)
+	check(view.hovered_city==row.id and markers.hover_weight(row.id)==1.,"actual mouse input grows the hovered city")
+	check(view.pick_map(point).kind=="city" and view.pick_map(point).id==row.id,"hover and click use one target")
+	capture("res://.dbg/atlas-city-hover.png")
+	var click:=InputEventMouseButton.new(); click.button_index=MOUSE_BUTTON_LEFT; click.pressed=true; click.position=screen
+	root.push_input(click,true); await process_frame
+	check(view.info_panel.visible and view.information_kind=="city" and view.information_id==row.id,"actual city click opens the city card")
+	view.close_information(); view.info_panel.hide()
+	var country_screen:=Vector2.ZERO; var owner: int=-1
+	for y in range(260,500,8):
+		for x in range(450,800,8):
+			var p: Vector2=view.map_root.to_local(Vector2(x,y)); var pick: Dictionary=view.pick_map(p)
+			if pick.kind=="nation": country_screen=Vector2(x,y); owner=pick.id; break
+		if owner>=0: break
+	check(owner>=0,"visible country territory exists")
+	await motion(country_screen)
+	check(view.hovered_city==-1 and markers.hover_weight(row.id)==0.,"leaving city restores original icon")
+	click.position=country_screen; root.push_input(click,true); await process_frame
+	check(view.information_kind=="nation" and view.information_id==owner,"actual territory click opens country card")
+	view.close_information(); view.info_panel.hide()
+	await motion(Vector2(40,35))
+	check(view.hovered_city==-1,"toolbar blocks map hover")
+	await motion(screen); root.mouse_exited.emit()
+	for i in range(3): await process_frame
+	while markers.is_processing(): await process_frame
+	check(view.hovered_city==-1 and not view.hover_mouse_valid and markers.hover_weight(row.id)==0.,"leaving window clears city hover")
+	for index in range(buffers.size()): check(hash(markers.layers[index].mesh.buffer)==buffers[index],"hover retains instance buffers")
+	check(markers.template_builds==templates and view.text_layer.layout_count==builds and view.text_layer.static_build_count==static_builds,"hover does not prepare glyphs or labels")
+	print("HOVER_GPU ",JSON.stringify({"pid":OS.get_process_id(),"seed":view.state.world_seed,"city":row.id,"zoom":view.zoom,"mask":view.data.options.settlement_mask,"failures":failures,"renderer":RenderingServer.get_current_rendering_method()}))
+	root.remove_child(view); view.queue_free(); await process_frame; quit(1 if failures else 0)
