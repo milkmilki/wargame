@@ -1,0 +1,291 @@
+{
+  "base": "c9120584adbf1a592ace4d44d31c2e58f67e8e5d",
+  "sources": {
+    "scripts\\simulation\\simulation.gd": "20d2f20c643b23b9fd83bbb95151e85af2749e272e737669cf8576f593f829f3",
+    "scripts\\ai\\action_candidate.gd": "342ac0ed31950003625620fe242626b2fd5f7cf24730ca1265721f4430920c35",
+    "tests\\atlas_reserve_movement_probe.gd": "00771a25cd1d62ee81bd1436c2c8e20b4e98c7e301fc58e98911a3e2d0045f07"
+  },
+  "snapshot_sha256": "b9db9e38bd2fbb4f174206917e332982c668ed7f5bf408aaf60bbf0da17089d1",
+  "runs": [
+    {
+      "label": "war-0-before",
+      "pid": 10096,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\baseline.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-0-before.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-0-after",
+      "pid": 22040,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=res://scripts/simulation/simulation.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-0-after.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-1-after",
+      "pid": 36424,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=res://scripts/simulation/simulation.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-1-after.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-1-before",
+      "pid": 21472,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\baseline.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-1-before.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-2-before",
+      "pid": 10816,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\baseline.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-2-before.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-2-after",
+      "pid": 8016,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=res://scripts/simulation/simulation.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-2-after.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-3-after",
+      "pid": 35064,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=res://scripts/simulation/simulation.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-3-after.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-3-before",
+      "pid": 11232,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\baseline.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-3-before.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-4-before",
+      "pid": 35476,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\baseline.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-4-before.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-4-after",
+      "pid": 35780,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=res://scripts/simulation/simulation.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-4-after.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "peace-before",
+      "pid": 9920,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\before-peace-trace.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\peace-before.json",
+        "--days=180",
+        "--peace=true",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-trace-before",
+      "pid": 10800,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\before-observe.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-trace-before.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "peace-after",
+      "pid": 19156,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\after-peace-trace.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\peace-after.json",
+        "--days=180",
+        "--peace=true",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    },
+    {
+      "label": "war-trace-after",
+      "pid": 35596,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/atlas_reserve_movement_probe.gd",
+        "--",
+        "--simulation=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\after-observe.gd",
+        "--output=C:\\Users\\57859\\.codex\\tmp\\atlas-reserve-fix\\war-trace-after.json",
+        "--days=35",
+        "--peace=false",
+        "--payload=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/atlas-military-eurasia-mask.bin",
+        "--snapshot=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/daily-v9/frozen-day180.bin",
+        "--codec=D:\\ProjectICreate\\Wargame-local\\20261011-cleanup\\.dbg/state_codec.gd"
+      ]
+    }
+  ]
+}

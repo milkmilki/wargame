@@ -945,7 +945,7 @@ func _trade_settlement_token(
 		if army.size <= 0:
 			continue
 		fields.append([
-			"army", army.owner_nation, army.size,
+			"army", army.owner_nation, army.maintenance_manpower(),
 		])
 	return var_to_bytes(fields)
 
@@ -1008,7 +1008,7 @@ func _trade_summary_settlement_token(
 		):
 			continue
 		field_upkeep_units[state.financial_nation_of(army.owner_nation)] += (
-			GameState.army_monthly_upkeep(army.size)
+			GameState.army_monthly_upkeep(army.maintenance_manpower())
 		)
 	fields.append(["field_upkeep_units", field_upkeep_units])
 	return var_to_bytes(fields)
@@ -2839,7 +2839,7 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		if army.size <= 0 or army.state == Army.State.RECOVERING:
 			continue
 		var siege_garrison := _siege_garrison_battle_of(army)
-		if siege_garrison != null and siege_garrison.city.food_storage > 0 and _succession_battle_context(siege_garrison) == null:
+		if siege_garrison != null and _succession_battle_context(siege_garrison) == null and (siege_garrison.city.food_storage > 0 or not army.is_city_garrison):
 			continue
 		if not (army.on_edge and army.move_to != -1):
 			var city_cache: Dictionary = _stable_supply_city_source_cache.get(army.owner_nation, {})
@@ -3169,11 +3169,13 @@ func _build_supply_plan_for_army(
 	if army.size <= 0 or army.state == Army.State.RECOVERING:
 		return {}
 	var siege_garrison := _siege_garrison_battle_of(army)
-	if siege_garrison != null and siege_garrison.city.food_storage > 0 and _succession_battle_context(siege_garrison) == null:
+	if siege_garrison != null and _succession_battle_context(siege_garrison) == null and (siege_garrison.city.food_storage > 0 or not army.is_city_garrison):
 		# 被围守军的粮食消耗真源是每日围城时钟。
-		army.starving = false
-		army.supply_ratio = 1.0
-		army.supply_food_debt = 0.0
+		var has_local_food := siege_garrison.city.food_storage > 0
+		army.starving = not has_local_food
+		army.supply_ratio = 1.0 if has_local_food else 0.0
+		if army.is_city_garrison:
+			army.supply_food_debt = 0.0
 		return {}
 	var sources: Array[Dictionary] = (
 		precomputed_sources[army.get_instance_id()]
@@ -3201,7 +3203,7 @@ func _build_supply_plan_for_army(
 	var mult: float = MAX_SUPPLY_MULT
 	if not sources.is_empty():
 		mult = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
-	var base := int(ceil(army.size * FOOD_PER_CAPITA))
+	var base := int(ceil(army.maintenance_manpower() * FOOD_PER_CAPITA))
 	base = maxi(base, 1)
 	var monthly_demand := int(ceil(
 		base * mult * _daily_food_consumption_multiplier(
@@ -3409,7 +3411,7 @@ func _recover_garrisoned_army(army: Army) -> void:
 		_stable_supply_city_source_cache
 	)
 	var route_loss := _weighted_supply_loss(sources)
-	var full_month_demand := maxi(int(ceil(float(army.size) * RECOVERY_FOOD_PER_CAPITA)), 1)
+	var full_month_demand := maxi(int(ceil(float(army.maintenance_manpower()) * RECOVERY_FOOD_PER_CAPITA)), 1)
 	var recovery_multiplier := maxf(RulerProfile.morale_multiplier(state.military_profile_for_army(army)), 0.1)
 	var target_gain := minf(
 		army.max_morale
@@ -3417,17 +3419,14 @@ func _recover_garrisoned_army(army: Army) -> void:
 			* recovery_multiplier,
 		army.max_morale - army.morale
 	)
-	var full_daily_gain := (
-		army.max_morale
-		/ float(Combat.MORALE_RECOVERY_DAYS)
-	)
-	var monthly_demand := float(full_month_demand) * (
+	var monthly_demand := int(ceil(float(full_month_demand) * (
 		minf(1.0 + route_loss, MAX_SUPPLY_MULT)
 		if not sources.is_empty()
 		else 1.0
 	) * _daily_food_consumption_multiplier(
 		army.owner_nation
-	) * target_gain / maxf(full_daily_gain, 0.0001)
+	)))
+	state.nations[state.financial_nation_of(army.owner_nation)].last_food_demand += monthly_demand
 	army.supply_food_debt += (
 		monthly_demand / float(DAYS_PER_MONTH)
 	)
@@ -3570,6 +3569,17 @@ func _drain_siege_food() -> void:
 			continue
 		state.change_city_food_storage(city.id, -SIEGE_CITY_FOOD_PER_DAY)
 		if battle.side_b_defends_city:
+			for defender in battle.side_b:
+				if defender.size <= 0 or defender.is_city_garrison:
+					continue
+				# Isolated field troops draw their establishment ration locally.
+				# Virtual city defense keeps the existing fixed siege clock above.
+				var monthly := int(ceil(ceil(defender.maintenance_manpower() * FOOD_PER_CAPITA) * _daily_food_consumption_multiplier(defender.owner_nation)))
+				state.nations[state.financial_nation_of(defender.owner_nation)].last_food_demand += monthly
+				defender.supply_food_debt += float(monthly) / DAYS_PER_MONTH
+				var ration := int(floor(defender.supply_food_debt + 0.000001))
+				defender.supply_food_debt -= ration
+				state.change_city_food_storage(city.id, -ration)
 			var has_food := city.food_storage > 0
 			for defender in battle.side_b:
 				if defender.size <= 0:
@@ -8238,8 +8248,8 @@ func _step_force_structure(job: Dictionary) -> void:
 	if not assessment.emergency_recruitment:
 		var candidate := DiplomacyAI.resource_forecast(state, nation.id, -1, -1, resource_evaluation_cache)
 		candidate = DiplomacyAI.resource_forecast(state, nation.id, int(candidate.input.troops) + formation_size, -1, resource_evaluation_cache, {"base_upkeep_delta": GameState.army_monthly_upkeep(formation_size), "field_food_delta": ReinforcementPhase._grant_food_delta(0, formation_size, float(candidate.input.food_multiplier))})
-		if not bool(candidate.food_growth_allowed):
-			nation.ai_last_force_reason = "扩军否决：粮食预测断供" if not bool(candidate.food_feasible) else "扩军否决：粮食储备预算不足"
+		if not bool(candidate.food_growth_allowed) or bool(candidate.gold_shortage):
+			nation.ai_last_force_reason = "扩军否决：军费预测不足" if bool(candidate.gold_shortage) else ("扩军否决：粮食预测断供" if not bool(candidate.food_feasible) else "扩军否决：粮食储备预算不足")
 			job.done=true; return
 	if not _try_recruit_force_structure(
 		view,
@@ -10555,24 +10565,43 @@ func _balance_national_reserves(
 	for center_id in centers:
 		counts[center_id] = 0
 	var reserves: Array[Army] = []
+	var groups := {}
+	for group in state.nations[nation_id].battle_groups:
+		groups[group.id] = group
+	var preparation_ids := {}
+	for army_id in state.nations[nation_id].war_preparation_army_ids:
+		preparation_ids[army_id] = true
 	for army in state.armies:
 		if (
 			army.owner_nation != nation_id
 			or mobilization_claims.has(army.id)
+			or preparation_ids.has(army.id)
+			or _ai_planned_armies.has(army.id)
 			or not state.army_effective_for_field_campaign(army)
-			or army.state != Army.State.IDLE
-			or army.on_edge
+			or army.diplomatic_repatriation
+			or army.forced_retreat
 			or state.campaign_assignment_center(army.id) >= 0
 			or army.campaign_war_id >= 0
+			or army.campaign_front_id >= 0
 			or army.battle_id >= 0
 		):
 			continue
-		reserves.append(army)
+		if army.state == Army.State.MOVING:
+			# A deployment is counted where it will arrive, not at its origin.
+			# Locked idle reserves are counted below too, though neither can move.
+			if army.ai_action == ActionCandidate.Kind.REINFORCE and counts.has(army.ai_target_city):
+				counts[army.ai_target_city] = int(counts[army.ai_target_city]) + 1
+			continue
+		if army.state != Army.State.IDLE or army.on_edge:
+			continue
 		var current_center := state.administrative_center_of(
 			army.location_city
 		)
 		if counts.has(current_center):
 			counts[current_center] = int(counts[current_center]) + 1
+		if state.day < army.ai_order_until_day or state.day < army.defensive_deployment_until_day:
+			continue
+		reserves.append(army)
 	reserves.sort_custom(func(a: Army, b: Army) -> bool:
 		return EquivariantOrder.army_less(state, nation_id, a, b)
 	)
@@ -10581,22 +10610,40 @@ func _balance_national_reserves(
 		var current_center := state.administrative_center_of(
 			army.location_city
 		)
+		var group: BattleGroup = groups.get(army.battle_group_id)
+		var home := group.reserve_target_city if group != null else -1
+		if home >= 0 and not counts.has(home):
+			group.reserve_target_city = -1
+			home = -1
+		if home >= 0 and current_center == home:
+			continue
 		# The selected reachable center cannot have fewer armies than the global
 		# minimum. If this reserve is already within one of that minimum, the
 		# existing imbalance test must reject every possible move. Counts change
 		# after successful orders, so evaluate this proof separately for each army.
-		if counts.has(current_center):
+		if home < 0 and counts.has(current_center):
 			var minimum_count := int(counts[centers[0]])
 			for center_id in centers:
 				minimum_count = mini(minimum_count, int(counts[center_id]))
 			if int(counts[current_center]) <= minimum_count + 1:
+				if group != null:
+					group.reserve_target_city = current_center
 				continue
 		var target_center := -1
 		var target_distance := INF
 		var field := defense_plan.view.path_field(
 			army.location_city, nation_id, false, true, -1, army.max_size
 		)
+		if home >= 0:
+			if float(field["dist"].get(home, INF)) < INF:
+				target_center = home
+			else:
+				# A lost connection releases the home; do not repeatedly attempt it.
+				group.reserve_target_city = -1
+				home = -1
 		for center_id in centers:
+			if home >= 0:
+				break
 			var distance := float(field["dist"].get(center_id, INF))
 			if distance == INF:
 				continue
@@ -10624,12 +10671,16 @@ func _balance_national_reserves(
 		if target_center < 0:
 			continue
 		if current_center == target_center and army.location_city == target_center:
+			if group != null:
+				group.reserve_target_city = current_center
 			continue
 		if (
-			counts.has(current_center)
+			home < 0 and counts.has(current_center)
 			and int(counts[current_center])
 				<= int(counts[target_center]) + 1
 		):
+			if group != null:
+				group.reserve_target_city = current_center
 			continue
 		var redeploy := ActionCandidate.make(
 			ActionCandidate.Kind.REINFORCE,
@@ -10639,6 +10690,7 @@ func _balance_national_reserves(
 		)
 		redeploy.minimum_commit_days = CAMPAIGN_OFFENSIVE_COMMIT_DAYS
 		redeploy.defensive_deployment = true
+		redeploy.reserve_station_city = target_center
 		if not _execute_ai_candidate(army, redeploy):
 			continue
 		if counts.has(current_center):
@@ -11672,7 +11724,7 @@ func _projected_army_food_demand(army: Army) -> float:
 	var multiplier := MAX_SUPPLY_MULT
 	if int(supply[0]) != -1:
 		multiplier = minf(1.0 + route_loss, MAX_SUPPLY_MULT)
-	var base := maxi(int(ceil(float(army.size) * FOOD_PER_CAPITA)), 1)
+	var base := maxi(int(ceil(float(army.maintenance_manpower()) * FOOD_PER_CAPITA)), 1)
 	return ceil(
 		float(base)
 			* multiplier
@@ -11689,9 +11741,22 @@ func _demobilize_for_food_security(
 	target_count: int
 ) -> bool:
 	var candidates: Array[Army] = []
+	var surviving_formations := 0
 	for army in view.friendly_armies:
+		if army.size > 0 and not army.is_city_garrison:
+			surviving_formations += 1
 		if (
 			army.state != Army.State.IDLE
+			or army.size <= 0
+			or army.is_city_garrison
+			or army.on_edge
+			or army.battle_id >= 0
+			or army.campaign_war_id >= 0
+			or army.campaign_front_id >= 0
+			or state.campaign_assignment_center(army.id) >= 0
+			or state.army_reserved_for_succession(army)
+			or state.nations[army.owner_nation].war_preparation_army_ids.has(army.id)
+			or _ai_planned_armies.has(army.id)
 			or army.location_city < 0
 			or threat.threat_at(army.location_city) >= ArmyPower.effective(army)
 		):
@@ -11710,29 +11775,19 @@ func _demobilize_for_food_security(
 	if candidates.is_empty():
 		return false
 	var remaining_savings := float(food_report["required_savings"])
+	remaining_savings = maxf(remaining_savings, float(food_report.get("forecast", {}).get("food_deficit", 0)) / 12.0)
 	var total_returned := 0
 	var total_saved := 0.0
 	var changed := false
 	for army in candidates:
-		if remaining_savings <= 0.01:
+		if remaining_savings <= 0.01 or surviving_formations <= 1:
 			break
-		var minimum_size := int(ceil(
-			float(army.max_size) * PEACETIME_STRENGTH_RATIO
-		))
-		var reducible := army.size - minimum_size
-		if reducible <= 0:
-			continue
-		var demand := _projected_army_food_demand(army)
-		var food_per_person := demand / float(maxi(army.size, 1))
-		var requested := maxi(
-			int(ceil(remaining_savings / maxf(food_per_person, 0.0001))),
-			DEMOBILIZATION_STEP_MIN
-		)
-		var returned := mini(requested, reducible)
-		if returned <= 0:
-			continue
-		var saved := food_per_person * float(returned)
-		army.size -= returned
+		# Reducing survivors cannot release a fixed establishment budget. Only
+		# an unbound idle formation may be retired, keeping one national reserve.
+		var saved := _projected_army_food_demand(army)
+		var returned := army.size
+		army.size = 0
+		surviving_formations -= 1
 		state.add_manpower(army.owner_nation, returned)
 		army.ai_action = ActionCandidate.Kind.DISBAND_ARMY
 		army.ai_order_created_day = state.day
@@ -11749,7 +11804,7 @@ func _demobilize_for_food_security(
 	)
 	var reason := (
 		(
-			"军粮预算缩编：返还%d人，年结余%.0f，库存可撑%.1f年，"
+			"军粮预算撤编：返还%d人，年结余%.0f，库存可撑%.1f年，"
 			+ "态度%d要求%.1f年，目标保留%d军"
 		) % [
 			total_returned,
@@ -12251,6 +12306,10 @@ func _execute_ai_candidate(
 
 
 func _record_ai_order(army: Army, candidate: ActionCandidate) -> void:
+	if candidate.reserve_station_city >= 0:
+		var group := state.battle_group_by_id(army.owner_nation, army.battle_group_id)
+		if group != null:
+			group.reserve_target_city = candidate.reserve_station_city
 	army.encounter_blocked = false
 	army.ai_action = candidate.kind
 	army.ai_target_city = candidate.target_city

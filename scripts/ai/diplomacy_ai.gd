@@ -2993,8 +2993,8 @@ static func force_capacity_report(
 	while additional < upper:
 		var growth := 1 if additional == 0 else (additional + upper + 1) / 2
 		var check := resource_forecast(state, nation_id, int(input.troops) + growth * size, posture, evaluation_cache, {"base_upkeep_delta": growth * GameState.army_monthly_upkeep(size), "field_food_delta": growth * ReinforcementPhase._grant_food_delta(0, size, float(input.food_multiplier))})
-		if not bool(check.food_growth_allowed):
-			reason = "food"
+		if not bool(check.food_growth_allowed) or bool(check.gold_shortage):
+			reason = "gold" if bool(check.gold_shortage) else "food"
 			upper = growth - 1
 		else:
 			additional = growth
@@ -3435,6 +3435,7 @@ static func resource_forecast(
 		posture = food_posture(state, nation_id, evaluation_cache)
 	var peace := posture in [FoodPosture.PEACE, FoodPosture.GUARDED]
 	var current := int(input.troops)
+	var maintenance_current := int(input.get("maintenance_troops", current))
 	if target_troops < 0:
 		target_troops = current
 	var forecast_key := "forecast:%d:%d:%d" % [nation_id, target_troops, posture]
@@ -3449,16 +3450,21 @@ static func resource_forecast(
 	# A proposed offensive deployment cannot assume every army will retain
 	# its peacetime local supply loss. Existing wars keep observed deployment.
 	if posture == FoodPosture.OFFENSIVE_WAR and _cached_wars_of(state, nation_id, evaluation_cache).is_empty():
-		deployment_food_delta = maxf(current * FOOD_PER_CAPITA_MONTH * DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER * float(input.food_multiplier) - float(input.nation_field_food), 0)
+		deployment_food_delta = maxf(maintenance_current * FOOD_PER_CAPITA_MONTH * DEFAULT_CAMPAIGN_SUPPLY_MULTIPLIER * float(input.food_multiplier) - float(input.nation_field_food), 0)
 	if target_troops != current:
-		var unit_food := float(input.nation_field_food) / maxi(current, 1)
+		# Existing vacant ranks already pay maintenance. Explicit creation
+		# candidates carry their additional establishment cost in override.
+		var delta := target_troops - maintenance_current
+		if target_troops > current:
+			delta = maxi(delta, 0)
+		var unit_food := float(input.nation_field_food) / maxi(maintenance_current, 1)
 		if target_troops > current:
 			unit_food = maxf(unit_food, FOOD_PER_CAPITA_MONTH * Simulation.MAX_SUPPLY_MULT * float(input.food_multiplier))
+		if delta > 0 or float(override.get("field_food_delta", 0)) > 0:
 			input.harvest = maxf(float(input.harvest) - float(input.harvest_loss), 0)
-		change.field_food_delta = (target_troops - current) * unit_food
+		change.field_food_delta = delta * unit_food
 		if target_troops < current:
 			change.replace_consumers = true
-		var delta := target_troops - current
 		var base_delta := int(ceil(float(delta) / GameState.WAR_GOLD_TROOPS_PER_UNIT))
 		if delta > 0:
 			var formations := delta / GameState.INITIAL_HEAVY_ARMY_SIZE
@@ -3546,6 +3552,8 @@ class ForecastInputBuilder extends RefCounted:
 		var ruler_modifiers := RulerProfile.modifiers(nation)
 		var field := 0.0
 		var troops := 0
+		var maintenance_troops := 0
+		var army_count := 0
 		var base_upkeep := 0
 		var consumers: Array = []
 		var owned: Array = armies.get(nation.id, [])
@@ -3555,7 +3563,9 @@ class ForecastInputBuilder extends RefCounted:
 			if army.size <= 0:
 				continue
 			troops += army.size
-			base_upkeep += GameState.army_monthly_upkeep(army.size)
+			maintenance_troops += army.maintenance_manpower()
+			army_count += 1
+			base_upkeep += GameState.army_monthly_upkeep(army.maintenance_manpower())
 			var rate := float(TradeNetwork._projected_army_monthly_food_demand(army, nation, consumption_multiplier))
 			field += rate
 			consumers.append({"rate": rate, "debt": army.supply_food_debt})
@@ -3591,7 +3601,7 @@ class ForecastInputBuilder extends RefCounted:
 			"income": int(flow.net_income), "court": int(flow.court_expense_due),
 			"upkeep": int(flow.military_upkeep), "field_upkeep": int(flow.field_army_upkeep),
 			"necessary_gold": int(flow.court_expense_due) + int(flow.military_upkeep) + int(flow.tribute_paid) + int(flow.food_trade_expense) + int(flow.manpower_trade_expense),
-			"troops": troops, "base_upkeep": base_upkeep, "army_count": owned.size(), "nation_field_food": field, "harvest_loss": maxi(harvest - conservative, 0),
+			"troops": troops, "maintenance_troops": maintenance_troops, "base_upkeep": base_upkeep, "army_count": army_count, "nation_field_food": field, "harvest_loss": maxi(harvest - conservative, 0),
 			"manpower_target": mini(manpower_capacity, maxi(DiplomacyAI.MIN_MANPOWER_RESERVE, maxi(int(ceil(troops * 0.15)), refill))),
 			"food_multiplier": consumption_multiplier, "upkeep_multiplier": float(ruler_modifiers[RulerProfile.KEY_UPKEEP]),
 			"reserve_months_bonus": int(ruler_modifiers[RulerProfile.KEY_RESERVE_MONTHS]),
@@ -3705,25 +3715,31 @@ static func commit_force_change(state: GameState, nation_id: int, added_troops: 
 	var upkeep_delta := GameState.army_monthly_upkeep(added_troops)
 	var new_count := 0
 	var full_delta := 0
+	var maintenance_delta := maxi(added_troops, 0)
 	var power_delta := 0.0
 	if not changes.is_empty():
 		upkeep_delta = 0
 		rate = 0
+		maintenance_delta = 0
 		for change in changes:
 			var army: Army = change.army
 			var old_size := int(change.old_size)
-			rate += ReinforcementPhase._grant_food_delta(old_size, army.size, float(input.food_multiplier))
-			upkeep_delta += GameState.army_monthly_upkeep(army.size) - GameState.army_monthly_upkeep(old_size)
+			var old_maintenance := old_size if army.is_city_garrison else (army.max_size if old_size > 0 else 0)
+			var new_maintenance := army.maintenance_manpower()
+			rate += ReinforcementPhase._grant_food_delta(old_maintenance, new_maintenance, float(input.food_multiplier))
+			upkeep_delta += GameState.army_monthly_upkeep(new_maintenance) - GameState.army_monthly_upkeep(old_maintenance)
+			maintenance_delta += new_maintenance - old_maintenance
 			power_delta += ArmyPower.effective(army) * float(army.size - old_size) / maxi(army.size, 1)
 			if old_size == 0:
 				new_count += 1
-				full_delta += army.max_size
+				full_delta += new_maintenance
 	var holder := state.food_pool_holder(nation_id)
 	for member in state.food_pool_members(holder):
 		inputs[member].field_food += rate
 		# Keep pre-existing per-army fractional debts when accepting a candidate.
-		inputs[member].consumers = (inputs[member].consumers as Array).duplicate()
-		inputs[member].consumers.append({"rate": rate, "debt": 0.0, "increment": true})
+		if rate > 0:
+			inputs[member].consumers = (inputs[member].consumers as Array).duplicate()
+			inputs[member].consumers.append({"rate": rate, "debt": 0.0, "increment": true})
 		# Keep the exact existing army debts/rounding and append only the
 		# accepted consumer's ceiling. Each pool member owns its new table.
 		if inputs[member].has("consumption"):
@@ -3731,10 +3747,13 @@ static func commit_force_change(state: GameState, nation_id: int, added_troops: 
 			for elapsed in consumption:
 				consumption[elapsed] = float(consumption[elapsed]) + ceil(rate * int(elapsed) / 30.0 - 0.000001)
 			inputs[member].consumption = consumption
-		inputs[member].harvest = maxf(float(inputs[member].harvest) - float(input.harvest_loss), 0)
-	input.harvest_loss = 0
+		if rate > 0:
+			inputs[member].harvest = maxf(float(inputs[member].harvest) - float(input.harvest_loss), 0)
+	if rate > 0:
+		input.harvest_loss = 0
 	input.nation_field_food += rate
 	input.troops += added_troops
+	input.maintenance_troops = int(input.get("maintenance_troops", input.troops - added_troops)) + maintenance_delta
 	input.base_upkeep += upkeep_delta
 	input.army_count += new_count
 	input.gold = state.nations[nation_id].treasury_gold
@@ -5964,7 +5983,7 @@ static func _build_nation_aggregates(
 		var owner := army.owner_nation
 		power[owner] += ArmyPower.effective(army)
 		troops[owner] += army.size
-		full_troops[owner] += army.max_size
+		full_troops[owner] += army.maintenance_manpower()
 	for nation in state.nations:
 		var nation_id := nation.id
 		var owned_cities: Array[City] = cities_by_nation[nation_id]

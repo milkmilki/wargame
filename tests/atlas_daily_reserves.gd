@@ -1,6 +1,7 @@
 extends SceneTree
-## Real reserve orders must remain identical to cf80691 while balanced states
-## avoid graph searches. The oracle changes only the balancing function.
+## First deployment of unassigned, unlocked reserves keeps the legacy choices;
+## balanced states avoid graph searches. Persistent stations/locks/inbound troops
+## have separate behavioral coverage in atlas_reserve_stations.gd.
 const Grid = preload("res://tests/support/grid_world.gd")
 const Legacy = preload("res://tests/support/legacy_reserve_simulation.gd")
 var failures: Array[String] = []

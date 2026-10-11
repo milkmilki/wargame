@@ -53,7 +53,7 @@ static func _trade_settlement_token(
 		if army.size <= 0:
 			continue
 		fields.append([
-			"army", army.owner_nation, army.size,
+			"army", army.owner_nation, army.size if army.is_city_garrison else maxi(army.max_size, army.size),
 		])
 	return var_to_bytes(fields)
 
@@ -110,7 +110,7 @@ static func _trade_summary_settlement_token(
 		):
 			continue
 		field_upkeep_units[state.financial_nation_of(army.owner_nation)] += (
-			GameState.army_monthly_upkeep(army.size)
+			GameState.army_monthly_upkeep(army.size if army.is_city_garrison else maxi(army.max_size, army.size))
 		)
 	fields.append(["field_upkeep_units", field_upkeep_units])
 	return var_to_bytes(fields)

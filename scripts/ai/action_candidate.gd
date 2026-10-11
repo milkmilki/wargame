@@ -22,6 +22,8 @@ var score: float = -INF
 var minimum_commit_days: int = 10
 var reason: String = ""
 var defensive_deployment: bool = false
+## Persist a reserve station only when this order actually executes.
+var reserve_station_city: int = -1
 
 
 static func make(

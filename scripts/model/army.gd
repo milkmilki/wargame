@@ -33,6 +33,7 @@ var ruler_morale_multiplier: float = 1.0
 var funding_multiplier: float = 1.0
 ## 所属持久指挥单位；-1 表示未编组。每个指挥单位只允许一支主战军。
 var battle_group_id: int = -1
+
 ## 所属战争军队池；-1 表示国家预备队。州目标变化不清除此绑定。
 var campaign_war_id: int = -1
 ## 所属集团州战线；-1 表示只在战争池或国家预备队中。直接保存以避免反查计划。
@@ -115,6 +116,14 @@ var occupation_claimant_nation: int = -1
 var is_city_garrison: bool = false
 var city_garrison_combat_multiplier: float = 1.0
 var city_garrison_defense_bonus: float = 3.0
+
+
+## A surviving field formation maintains its full establishment. Virtual city
+## garrisons retain their actual-headcount accounting; destroyed units cost zero.
+func maintenance_manpower() -> int:
+	if size <= 0:
+		return 0
+	return size if is_city_garrison else maxi(max_size, size)
 
 
 func morale_ratio() -> float:

@@ -10,4 +10,8 @@
 
 验证：`python run_tests.py --godot <Godot路径>`，默认共享回归+Atlas军事35天烟测。完整烟测添加 `--days 365 --timeout 1800`。真实图形验证另运行项目或截图测试。
 
+预备队调防现使用固定驻地，计入在途增援并遵守命令／驻防锁；正常战役、首次赴任仍会行军。行为及耗时对照见 [预备队固定驻地](RESERVE_STATIONS.md)。
+
+野战军实际军费和军粮现按存续编制计费，战损不释放维护预算，补员只耗人力；正常扩军检查钱粮，预算撤编释放完整编制费用。虚拟守军保留原规则，见 [满编维护口径](FIELD_ESTABLISHMENT_COSTS.md)。
+
 详细模块、验证证据和遗留限制见 [军事接入](MILITARY_INTEGRATION.md)、[贸易与君主](POLITICS_TRADE_INTEGRATION.md)、[目录维护](WORKSPACE_HYGIENE.md)与[旧实现移除](LEGACY_REMOVAL.md)。旧实现和历史性能资料可在Git历史查询。

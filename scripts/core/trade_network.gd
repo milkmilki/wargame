@@ -4399,8 +4399,10 @@ static func _projected_army_monthly_food_demand(
 	nation: Nation,
 	cached_multiplier: float = -1.0
 ) -> int:
+	if army.size <= 0:
+		return 0
 	var base := maxi(
-		int(ceil(float(army.size) * FOOD_PER_CAPITA_MONTH)),
+		int(ceil(float(army.maintenance_manpower()) * FOOD_PER_CAPITA_MONTH)),
 		1
 	)
 	var multiplier := (

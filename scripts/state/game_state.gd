@@ -120,7 +120,7 @@ func nation_monthly_military_upkeep(nation_id: int) -> int:
 	var total := 0
 	for army in armies:
 		if financial_nation_of(army.owner_nation) == nation_id and army.size > 0:
-			total += army_monthly_upkeep(army.size)
+			total += army_monthly_upkeep(army.maintenance_manpower())
 	return total
 
 var cities: Array[City] = []

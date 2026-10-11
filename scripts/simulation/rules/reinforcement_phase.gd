@@ -61,6 +61,15 @@ static func reinforce_nation(
 
 static func _forecast_refill_limit(state: GameState, nation_id: int, plans: Array, desired: int, total_deficit: int, cache: Dictionary) -> int:
 	var baseline := DiplomacyAI.resource_forecast(state, nation_id, -1, -1, cache)
+	var has_variable_cost := false
+	for plan in plans:
+		if (plan.army as Army).is_city_garrison:
+			has_variable_cost = true
+			break
+	if not has_variable_cost:
+		# Every vacant field rank already pays its ration and upkeep. There is
+		# no marginal fiscal cost to binary-search for any positive refill size.
+		return desired if bool(baseline.food_feasible) else 0
 	var current := int(baseline.input.troops)
 	var low := 0
 	var high := desired
@@ -71,6 +80,9 @@ static func _forecast_refill_limit(state: GameState, nation_id: int, plans: Arra
 		var food := 0.0
 		for plan in plans:
 			var army: Army = plan.army
+			if not army.is_city_garrison:
+				# Its full establishment is already charged, before and after refill.
+				continue
 			var projected := army.size + int(plan.grant)
 			upkeep += GameState.army_monthly_upkeep(projected) - GameState.army_monthly_upkeep(army.size)
 			food += _grant_food_delta(army.size, projected, float(baseline.input.food_multiplier))

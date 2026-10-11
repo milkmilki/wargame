@@ -46,7 +46,7 @@ static func _upkeep_by_nation(
 			or army.owner_nation >= field.size()
 		):
 			continue
-		field[state.financial_nation_of(army.owner_nation)] += GameState.army_monthly_upkeep(army.size)
+		field[state.financial_nation_of(army.owner_nation)] += GameState.army_monthly_upkeep(army.maintenance_manpower())
 	for nation in state.nations:
 		field[nation.id] = int(effective_upkeep.call(
 			state, nation.id, field[nation.id]

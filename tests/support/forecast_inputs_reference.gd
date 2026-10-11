@@ -50,6 +50,8 @@ func nation(nation: Nation) -> void:
 	var ruler_modifiers := RulerProfile.modifiers(nation)
 	var field := 0.0
 	var troops := 0
+	var maintenance_troops := 0
+	var army_count := 0
 	var base_upkeep := 0
 	var consumers: Array = []
 	var owned: Array = armies.get(nation.id, [])
@@ -59,7 +61,10 @@ func nation(nation: Nation) -> void:
 		if army.size <= 0:
 			continue
 		troops += army.size
-		base_upkeep += GameState.army_monthly_upkeep(army.size)
+		var charged: int = army.size if army.is_city_garrison else maxi(army.max_size, army.size)
+		maintenance_troops += charged
+		army_count += 1
+		base_upkeep += GameState.army_monthly_upkeep(charged)
 		var rate := float(TradeNetwork._projected_army_monthly_food_demand(army, nation, consumption_multiplier))
 		field += rate
 		consumers.append({"rate": rate, "debt": army.supply_food_debt})
@@ -95,7 +100,7 @@ func nation(nation: Nation) -> void:
 		"income": int(flow.net_income), "court": int(flow.court_expense_due),
 		"upkeep": int(flow.military_upkeep), "field_upkeep": int(flow.field_army_upkeep),
 		"necessary_gold": int(flow.court_expense_due) + int(flow.military_upkeep) + int(flow.tribute_paid) + int(flow.food_trade_expense) + int(flow.manpower_trade_expense),
-		"troops": troops, "base_upkeep": base_upkeep, "army_count": owned.size(), "nation_field_food": field, "harvest_loss": maxi(harvest - conservative, 0),
+		"troops": troops, "maintenance_troops": maintenance_troops, "base_upkeep": base_upkeep, "army_count": army_count, "nation_field_food": field, "harvest_loss": maxi(harvest - conservative, 0),
 		"manpower_target": mini(manpower_capacity, maxi(DiplomacyAI.MIN_MANPOWER_RESERVE, maxi(int(ceil(troops * 0.15)), refill))),
 		"food_multiplier": consumption_multiplier, "upkeep_multiplier": float(ruler_modifiers[RulerProfile.KEY_UPKEEP]),
 		"reserve_months_bonus": int(ruler_modifiers[RulerProfile.KEY_RESERVE_MONTHS]),

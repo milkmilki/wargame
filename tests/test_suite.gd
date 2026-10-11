@@ -1517,6 +1517,7 @@ func _test_siege_food_clock() -> void:
 	siege.side_a.append(atk)
 	# 守军困在被围城 c2 内（补给孤岛：只能吃本城存粮）。
 	var garr := _make_army(91, gs.cities[c2].owner_nation, 200, 10)
+	garr.is_city_garrison = true # This fixture tests the virtual city siege clock.
 	garr.state = Army.State.FIGHTING; garr.battle_id = siege.id; garr.location_city = c2
 	siege.side_b.append(garr); siege.side_b_defends_city = true
 	gs.armies = [atk, garr] as Array[Army]
@@ -1700,7 +1701,7 @@ func _test_morale_retreat_recovery() -> void:
 	sim._recover_morale()
 	var full_recovery_food_demand := int(floor(
 		float(ceil(
-			1000.0 * Simulation.RECOVERY_FOOD_PER_CAPITA
+			float(broken.max_size) * Simulation.RECOVERY_FOOD_PER_CAPITA
 		))
 			* float(Combat.MORALE_RECOVERY_DAYS)
 			/ float(Simulation.DAYS_PER_MONTH)
@@ -2292,7 +2293,7 @@ func _test_ruler_economy_integration() -> void:
 		5000,
 		GameState.INITIAL_HEAVY_ARMY_SIZE
 	)
-	var base_upkeep := GameState.army_monthly_upkeep(army.size)
+	var base_upkeep := GameState.army_monthly_upkeep(army.max_size)
 	var expected_gold := int(floor(
 		10.0
 	))
@@ -9477,7 +9478,7 @@ func _test_remaining_combat_risk_closures() -> void:
 			% Combat.SIEGE_FRONTAGE
 	)
 
-	# (e) 军粮每天重算：30 天总耗保持月口径；同月兵力变化和库存不足立即反映。
+	# (e) 军粮按存续编制结算：30天总耗保持月口径，战损不释放维护费。
 	var supply_state := preload("res://tests/support/grid_world.gd").new()
 	supply_state.generate_grid_world(38038)
 	var supply_sim := Simulation.new()
@@ -9498,8 +9499,8 @@ func _test_remaining_combat_risk_closures() -> void:
 		supply_state.day = day
 		supply_sim._resolve_supply()
 	_check(
-		supply_city.food_storage == 70,
-		"12000 人 30 天应消耗旧月口径 30 粮，不得按日 ceil 放大，实余 %d"
+		supply_city.food_storage == 62,
+		"12000残兵的15000人编制30天应消耗38粮，不得按日ceil放大，实余 %d"
 			% supply_city.food_storage
 	)
 	supplied_army.size = 24000
