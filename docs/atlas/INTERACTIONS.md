@@ -85,4 +85,8 @@ Shader的实例自定义数据与顶点接口依据 [Godot CanvasItem Shader文�
 范围外仍可有托管领土或交通节点，不新增治所、府或独立产出。旧模板未记录遮罩时保持全球模式，
 加载后面板同步实际配置。详情与实机证据见 [SETTLEMENT_MASK.md](SETTLEMENT_MASK.md)。
 
+## 战前驻守规则
+
+驻城、驻边野战军不再仅因敌军人数优势主动退避。战败、士气崩溃及战役结束等必要撤离继续自动执行。规则与前后调兵／AI耗时对照见 [PRECONTACT_HOLD.md](PRECONTACT_HOLD.md)。
+
 战斗图标及兵力对比条使用地图顶层标记，置于国界、前线、国名和贸易枢纽之上；界面信息框仍在其上方。实机已验证1×／4×／8×与跨经线视图的前线遮挡修复，见 [evidence/battle_strength/layer_order/summary.json](evidence/battle_strength/layer_order/summary.json)。

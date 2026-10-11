@@ -3,10 +3,7 @@ extends RefCounted
 ## 无训练 Utility AI：生成可解释候选行动并选择最高分。
 
 const ATTACK_ENTER_RATIO: float = 1.35
-const RETREAT_ENTER_RATIO: float = 0.40
 const HOLD_DEPLOY_ENTER_RATIO: float = 0.60
-const EMERGENCY_RETREAT_RATIO: float = 0.25
-const CITY_DEFENSE_RETREAT_WEIGHT: float = 0.5
 const BREAKOUT_SUPPLY_RATIO: float = 0.25
 const BREAKOUT_MIN_POWER_RATIO: float = 0.70
 const ASSAULT_PARTICIPANT_MIN_RATIO: float = 0.35
@@ -49,23 +46,10 @@ static func choose(
 	if breakout != null:
 		return breakout
 	var current := army.location_city
-	var power := ArmyPower.effective(army)
-	var local_threat := threat.threat_at(current)
-	var local_support := maxf(threat.support_at(current), power)
-	# 守军位于本国城池时，把城防加成打折计入守城战力（修正撤退决策低估守城能力）。
-	local_support += _city_defense_support(view, army, current)
-	var local_ratio := local_support / maxf(local_threat, 1.0)
-	if view.day < army.ai_order_until_day and local_ratio >= EMERGENCY_RETREAT_RATIO:
+	# 敌军优势不再触发战前主动退避，也不打破既有命令承诺。
+	# 战败、士气崩溃和战役结束后的撤退由模拟层负责。
+	if view.day < army.ai_order_until_day:
 		return ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "命令承诺期未结束")
-	var retreat := _retreat_candidate(
-		view,
-		snapshot,
-		threat,
-		army,
-		local_ratio
-	)
-	if retreat != null:
-		return retreat
 	var candidates: Array[ActionCandidate] = []
 	candidates.append(ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "保持当前驻地"))
 	if not view.state.uses_heightmap:
@@ -109,80 +93,6 @@ static func choose(
 		)
 	)
 	return candidates[0]
-
-
-## 州治守军折算为守城战力，并复用断粮效率衰减。
-static func _city_defense_support(
-	view: AiWorldView,
-	army: Army,
-	city_id: int
-) -> float:
-	if city_id < 0 or city_id >= view.state.cities.size():
-		return 0.0
-	var city: City = view.state.cities[city_id]
-	if city.owner_nation != army.owner_nation:
-		return 0.0
-	var support := ArmyPower.city_garrison_defense(
-		view.state, -1, city.id
-	) * CITY_DEFENSE_RETREAT_WEIGHT
-	if city.food_storage <= 0:
-		support *= Combat.SIEGE_STARVE_DEF_MULT
-	return support
-
-
-static func _retreat_candidate(
-	view: AiWorldView,
-	snapshot: StrategicMapSnapshot,
-	threat: ThreatField,
-	army: Army,
-	local_ratio: float
-) -> ActionCandidate:
-	var caution := _caution(view)
-	if local_ratio >= RETREAT_ENTER_RATIO * caution:
-		return null
-	var start := army.location_city
-	var field := view.path_field(
-		start,
-		view.nation_id,
-		false,
-		true,
-		-1,
-		army.max_size
-	)
-	var dist: Dictionary = field["dist"]
-	var best_city := -1
-	var best_score := -INF
-	for city in view.friendly_cities:
-		if city.id == start or dist[city.id] == INF:
-			continue
-		var safety := threat.support_at(city.id) - threat.threat_at(city.id)
-		var score := (
-			safety / maxf(ArmyPower.effective(army), 1.0)
-			+ 0.2 * snapshot.value_of_city(city.id)
-			- 0.08 * float(dist[city.id])
-		)
-		if score > best_score or (
-			is_equal_approx(score, best_score)
-			and EquivariantOrder.city_id_less(
-				view.state,
-				view.nation_id,
-				city.id,
-				best_city,
-				start
-			)
-		):
-			best_score = score
-			best_city = city.id
-	if best_city == -1:
-		return null
-	var candidate := ActionCandidate.make(
-		ActionCandidate.Kind.RETREAT,
-		100.0 + (RETREAT_ENTER_RATIO - local_ratio) * 10.0 + best_score,
-		"局部战力比 %.2f 低于撤退阈值，撤往安全城市 %d" % [local_ratio, best_city],
-		best_city
-	)
-	candidate.minimum_commit_days = STRATEGIC_COMMIT_DAYS
-	return candidate
 
 
 static func _frontier_deployment_safe(
@@ -651,8 +561,8 @@ static func stationed_power_at(
 	return view.stationed_power_at(city_id, excluded)
 
 
-## 驻防边地形对守方的净利好系数：真源为 Combat.terrain_hold_bias（据守判定与战役边
-## 选取共用同一派生函数，保证 AI 认知与实战解算同源）。此处仅作本模块调用别名。
+## 保留地形据守系数查询接口；真源为 Combat.terrain_hold_bias。
+## 战役选边与战斗仍使用地形红利，不再据此触发主动退避。
 static func terrain_hold_bias(danger: float, holding_days: float) -> float:
 	return Combat.terrain_hold_bias(danger, holding_days)
 
@@ -670,20 +580,6 @@ static func _choose_holding(
 	if view.state.cities[endpoint].owner_nation != view.nation_id:
 		endpoint = army.move_to
 	var enemy_endpoint := army.move_to if endpoint == army.move_from else army.move_from
-	var enemy := maxf(threat.threat_at(army.move_from), threat.threat_at(army.move_to))
-	var support := maxf(
-		maxf(
-			threat.support_at(army.move_from),
-			threat.support_at(army.move_to)
-		),
-		ArmyPower.effective(army)
-	)
-	var ratio := support / maxf(enemy, 1.0)
-	# 据守 danger 边享地形红利：敌跨边进攻被削、我方防御随驻防天数适应。复用战斗层
-	# 真源派生净利好系数乘入战力比，修正 AI 低估险要地形守御价值、不放一枪即弃守险关。
-	var hold_edge := view.state.strategic_edge_of(army.move_from, army.move_to)
-	if hold_edge != null:
-		ratio *= terrain_hold_bias(hold_edge.danger, float(army.holding_days))
 	var target_city := view.state.cities[enemy_endpoint]
 	if (
 		_is_encircled_low_supply(view, army)
@@ -702,18 +598,6 @@ static func _choose_holding(
 			)
 			breakout.minimum_commit_days = STRATEGIC_COMMIT_DAYS
 			return breakout
-	if enemy > 0.0 and ratio < RETREAT_ENTER_RATIO * _caution(view):
-		var retreat := ActionCandidate.make(
-			ActionCandidate.Kind.RETREAT,
-			20.0,
-			"驻防边敌军优势，战力比 %.2f，执行撤退" % ratio,
-			endpoint
-		)
-		retreat.minimum_commit_days = STRATEGIC_COMMIT_DAYS
-		retreat.defensive_deployment = true
-		retreat.target_edge_a = army.move_from
-		retreat.target_edge_b = army.move_to
-		return retreat
 	if defense_plan.must_hold_city(endpoint):
 		return ActionCandidate.make(
 			ActionCandidate.Kind.HOLD,
