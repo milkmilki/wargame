@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 外交结构缓存等价校验 (40国/160城/365天) ===
+长期状态不一致=0 动作列表不一致=0 结盟预筛不一致=0 V索引不一致=0 预筛={ "checks": 1, "prunes": 1 } V索引={ "builds": 40, "hits": 1480, "legacy_scans": 0 }
+verdict=DIPLOMACY_STRUCTURE_CACHE_EQUIVALENT

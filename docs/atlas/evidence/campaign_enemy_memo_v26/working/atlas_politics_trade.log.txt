@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_POLITICS_TRADE structure regions=25 routes=153
+ATLAS_POLITICS_TRADE day=35 regions=25 routes=153 failures=0

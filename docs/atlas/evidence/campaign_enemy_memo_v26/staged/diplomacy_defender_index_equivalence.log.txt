@@ -1,0 +1,4 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 外交守军索引等价校验（3 seed/5国/30陆城）===
+DIPLOMACY_DEFENDER_INDEX_EQUIVALENT checks=555

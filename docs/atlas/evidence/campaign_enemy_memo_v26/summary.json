@@ -1,0 +1,203 @@
+{
+  "base_commit": "2fa729af2dedb752478c2d5f7005dc7a6c29e0df",
+  "submitted": false,
+  "reason": "D volume has zero free space; cleanup actions were rejected by approval policy. Evidence and complete verification are stored on C.",
+  "scope": "headless compute, not GPU frame rate",
+  "configuration": {
+    "seed": 1,
+    "countries": 40,
+    "nodes": 1192,
+    "initial_armies": 234,
+    "trade": true,
+    "rulers": true,
+    "mask": {
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    }
+  },
+  "metrics": {
+    "mean_ms": {
+      "before": 216.7589142857143,
+      "after": 213.24485714285714,
+      "reduction_percent": 1.6211822957487254
+    },
+    "p95_ms": {
+      "before": 323.464,
+      "after": 320.029,
+      "reduction_percent": 1.0619419780872066
+    },
+    "peak_ms": {
+      "before": 763.824,
+      "after": 758.784,
+      "reduction_percent": 0.6598378684094718
+    },
+    "ai": {
+      "before": 122.57745714285714,
+      "after": 119.71977142857143
+    },
+    "ai_campaign_planning": {
+      "before": 35.686371428571434,
+      "after": 34.658
+    },
+    "ai_campaign_coalition": {
+      "before": 23.655914285714285,
+      "after": 22.641885714285717
+    },
+    "monthly_diplomacy": {
+      "before": 8.696942857142858,
+      "after": 8.707628571428572
+    },
+    "supply": {
+      "before": 27.711428571428574,
+      "after": 27.5096
+    }
+  },
+  "equal_daily_states": 175,
+  "runtime": {
+    "equal_daily_states": 35,
+    "before_pid": 11064,
+    "after_pid": 22176,
+    "workers": 4
+  },
+  "tests": {
+    "checks": 503,
+    "working_passed": 18,
+    "staged_passed": 12,
+    "core_checks": 505
+  },
+  "sources": {
+    "scripts__ai__diplomacy_ai.gd.gz": {
+      "path": "scripts/ai/diplomacy_ai.gd",
+      "sha256": "c246361bd95a951808fbdaf522985d2e0d2c88cb87f86127f512dc57da86c75e"
+    },
+    "scripts__ai__threat_field.gd.gz": {
+      "path": "scripts/ai/threat_field.gd",
+      "sha256": "22574cc27b17afe5dc0d2ac9a4d491b032fd717628064c2b5b3674c6f7f20ac2"
+    },
+    "scripts__core__pathfinding.gd.gz": {
+      "path": "scripts/core/pathfinding.gd",
+      "sha256": "50dbd7b9e36e56a8dbbbe1d28924e0f0cd1c536a63a7bc09f12eaf068fc1dd90"
+    },
+    "scripts__core__rebellion_system.gd.gz": {
+      "path": "scripts/core/rebellion_system.gd",
+      "sha256": "054b06a79fd96d7e96515ecac4c768b2e7dbd34db3d1375b60f90aa71c762118"
+    },
+    "scripts__core__ruler_profile.gd.gz": {
+      "path": "scripts/core/ruler_profile.gd",
+      "sha256": "cebce722980d5ed3dd7a669e28cb75540259c430b04358593d5d1e4845efe0a4"
+    },
+    "scripts__core__trade_network.gd.gz": {
+      "path": "scripts/core/trade_network.gd",
+      "sha256": "56764b738706ede2b4441ded758ac899c4cbebadc78ae4c50d106a6c0367d2af"
+    },
+    "scripts__simulation__rules__reinforcement_phase.gd.gz": {
+      "path": "scripts/simulation/rules/reinforcement_phase.gd",
+      "sha256": "cd1cbae44775144e2738e0a0c8363ccbd68191b78bf439afaf5d0cda6ec146bb"
+    },
+    "scripts__simulation__rules__supply_rules.gd.gz": {
+      "path": "scripts/simulation/rules/supply_rules.gd",
+      "sha256": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa"
+    },
+    "scripts__simulation__simulation.gd.gz": {
+      "path": "scripts/simulation/simulation.gd",
+      "sha256": "ed258dda025e33d0e3338f8763d43b2aa042e2e57550f98e37bb37336a160e39"
+    },
+    "scripts__state__game_state.gd.gz": {
+      "path": "scripts/state/game_state.gd",
+      "sha256": "b060bb056d0d5fc8157c930a28337236b72e5b2ffcdb8cb689569005e188e3a1"
+    }
+  },
+  "initial_native_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "frozen_sha256": "b9db9e38bd2fbb4f174206917e332982c668ed7f5bf408aaf60bbf0da17089d1",
+  "process_pairs": [
+    {
+      "before": {
+        "pid": 19036,
+        "mean_ms": 215.1809142857143,
+        "p95_ms": 323.51,
+        "peak_ms": 754.79,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 22720,
+        "mean_ms": 212.32908571428572,
+        "p95_ms": 320.029,
+        "peak_ms": 754.861,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 21192,
+        "mean_ms": 215.27177142857144,
+        "p95_ms": 320.903,
+        "peak_ms": 756.394,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 20660,
+        "mean_ms": 214.26614285714285,
+        "p95_ms": 328.012,
+        "peak_ms": 760.349,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 3408,
+        "mean_ms": 216.7589142857143,
+        "p95_ms": 323.464,
+        "peak_ms": 772.355,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 22616,
+        "mean_ms": 215.20565714285715,
+        "p95_ms": 316.355,
+        "peak_ms": 764.953,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 31132,
+        "mean_ms": 222.4488,
+        "p95_ms": 344.519,
+        "peak_ms": 772.791,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 34828,
+        "mean_ms": 212.61791428571428,
+        "p95_ms": 316.096,
+        "peak_ms": 758.784,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    },
+    {
+      "before": {
+        "pid": 24568,
+        "mean_ms": 218.85654285714284,
+        "p95_ms": 322.673,
+        "peak_ms": 763.824,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      },
+      "after": {
+        "pid": 34240,
+        "mean_ms": 213.24485714285714,
+        "p95_ms": 326.341,
+        "peak_ms": 758.671,
+        "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf"
+      }
+    }
+  ],
+  "limitations": [
+    "One seed, 35 days and one monthly boundary.",
+    "Two paired peaks increased; all five paired means decreased.",
+    "D verification copy was incomplete; PID35032 import was stopped and excluded.",
+    "Initial working child tests passed but summary write failed due to disk full; complete working regression rerun stored on C.",
+    "Commit, final repository evidence and graph refresh remain pending."
+  ]
+}

@@ -1,0 +1,10 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+COALITION_PAIR_METRIC scenario=two_armed_sides active_offense_tasks=2
+COALITION_PAIR_METRIC scenario=empty_pool active_offense_tasks=0
+COALITION_PAIR_METRIC scenario=second_slot effective=89999 active_offense_tasks=1 expected=1
+COALITION_PAIR_METRIC scenario=second_slot effective=90000 active_offense_tasks=2 expected=2
+COALITION_PAIR_METRIC scenario=topology_split members=[0, 1] slots=[{ "center_city_id": 4, "offense_front_id": 0, "preferred_nation_id": 0, "counterattack": false, "awaiting_mobilization": false }]
+COALITION_PAIR_METRIC scenario=topology_split members=[0, 2] slots=[{ "center_city_id": 8, "offense_front_id": 1, "preferred_nation_id": 0, "counterattack": false, "awaiting_mobilization": false }]
+COALITION_PAIR_METRIC scenario=retiring_detachment visited_endpoint=true final_city=1 state=0 action=5 path=[] from=1 to=-1 progress=0.0
+COALITION_PAIR_RESULT checks=316 failures=0

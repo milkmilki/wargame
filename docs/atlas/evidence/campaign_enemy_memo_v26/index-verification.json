@@ -1,0 +1,10 @@
+{
+  "indexed_code_files_checked": 486,
+  "source_commit": "2fa729af2dedb752478c2d5f7005dc7a6c29e0df",
+  "stage_root": "C:\\Users\\57859\\.codex\\tmp\\atlas-v26-staged-verify",
+  "staged_paths": [
+    "run_tests.py",
+    "scripts/ai/diplomacy_ai.gd",
+    "tests/campaign_enemy_memo.gd"
+  ]
+}
