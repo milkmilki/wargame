@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+OpenGL API 3.3.0 Core Profile Context 26.8.1.260810 - Compatibility - Using Device: ATI Technologies Inc. - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS [] capture=
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-24212-1791694092-1.jsonl
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-11T04-48-15-24212-6494465.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_startup_cache
+ADMIN_ICONS_GPU {"capital":40,"fu":298,"mask":{"east":145.0,"enabled":true,"north":55.0,"south":20.0,"version":"atlas-geographic-mask-v1","west":-15.0},"pid":24212,"renderer":"gl_compatibility","seed":1,"zhou":141}

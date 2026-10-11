@@ -1,6 +1,16 @@
 extends RefCounted
 ## Original hand-drawn house, tower and castle paths. AGPL-3.0-only.
 const CASTLE = [[-4.4,2.6],[-4.4,-3.4],[-3.8,-3.4],[-3.8,-4.2],[-3.2,-4.2],[-3.2,-3.4],[-2.6,-3.4],[-2.6,-4.2],[-2.,-4.2],[-2.,-1.],[-1.3,-1.],[-1.3,-4.6],[-.65,-4.6],[-.65,-5.3],[0.,-5.3],[0.,-4.6],[.65,-4.6],[.65,-5.3],[1.3,-5.3],[1.3,-1.],[2.,-1.],[2.,-4.2],[2.6,-4.2],[2.6,-3.4],[3.2,-3.4],[3.2,-4.2],[3.8,-4.2],[3.8,-3.4],[4.4,-3.4],[4.4,2.6]]
+## Administrative identity is fixed, independent of major-city road status.
+## Non-military previews without roles keep the original major/capital rules.
+static func kind_for(city: Dictionary, owner: int, nations: Array) -> int:
+	if owner>=0 and owner<nations.size() and nations[owner].seat==city.region:
+		return 4
+	match city.get("role", ""):
+		"zhou": return 3
+		"fu": return 2
+	return 3 if city.get("major", false) else 2
+
 static func polygon(flat: Array,c: Vector2,u: float) -> PackedVector2Array:
 	var points := PackedVector2Array()
 	for p in flat: points.append(c+Vector2(p[0],p[1])*u)

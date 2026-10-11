@@ -82,8 +82,7 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 	var jobs: Array = []
 	for id in ids:
 		if not accepted.is_empty() and not permitted.has(id): continue
-		var city: Dictionary = data.cities[id]; var owner := int(data.ownership[city.region]); var kind := 3 if city.major else 2
-		if owner>=0 and data.nations[owner].seat==city.region: kind = 4
+		var city: Dictionary = data.cities[id]; var owner := int(data.ownership[city.region]); var kind := City.kind_for(city,owner,data.nations)
 		jobs.append({"id":id,"kind":kind,"owner":owner,"point":Vector2(data.mesh.x[city.cell],data.mesh.y[city.cell])*detail})
 	jobs.sort_custom(func(a,b): return a.id<b.id if a.kind==b.kind else a.kind>b.kind)
 	hit_boxes.clear()

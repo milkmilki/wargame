@@ -1,0 +1,32 @@
+extends SceneTree
+class Legend extends Node2D:
+	const Glyphs=preload("res://scripts/atlas/city_symbols.gd")
+	const FontResource=preload("res://assets/atlas/lxgw-wenkai-gb-500.ttf")
+	func _draw():
+		draw_rect(Rect2(0,0,1280,170),Color8(246,238,216))
+		for i in range(3):
+			Glyphs.draw(self,Vector2(240+i*400,87),7.,[2,3,4][i],Color8(120,60,50))
+			draw_string(FontResource,Vector2(160+i*400,148),["府 · 房屋群","州治 · 塔楼","首都 · 旗帜城堡"][i],HORIZONTAL_ALIGNMENT_LEFT,-1,22,Color8(52,34,22))
+func _initialize(): call_deferred("run")
+func run():
+	root.size=Vector2i(1280,720)
+	var view=load("res://atlas_military.tscn").instantiate(); root.add_child(view)
+	var deadline=Time.get_ticks_msec()+120000
+	while not view.view_ready or view.generating:
+		if Time.get_ticks_msec()>deadline: printerr("ADMIN_ICONS_GPU_FAILED startup timeout"); quit(1); return
+		await process_frame
+	view.simulation.set_process(false); view.simulation.paused=true
+	if not await view.await_render_ready(15000): printerr("ADMIN_ICONS_GPU_FAILED initial detail"); quit(1); return
+	var markers=view.text_layer.city_markers
+	print("ADMIN_ICONS_GPU ",JSON.stringify({"pid":OS.get_process_id(),"seed":view.state.world_seed,"mask":view.data.options.settlement_mask,"renderer":RenderingServer.get_current_rendering_method(),"zhou":markers.layers[3].mesh.visible_instance_count,"fu":markers.layers[2].mesh.visible_instance_count,"capital":markers.layers[4].mesh.visible_instance_count}))
+	var point=Vector2((112.+180.)/360.*2048.,(90.-34.)/180.*1024.)
+	view.zoom=4.; view.map_root.scale=Vector2.ONE*4.; view.map_root.position=Vector2(640,360)-point*4.; view.schedule_symbols()
+	if not await view.await_render_ready(15000): printerr("ADMIN_ICONS_GPU_FAILED close-up detail"); quit(1); return
+	for i in range(5): await process_frame
+	RenderingServer.force_draw(true); root.get_texture().get_image().save_png("res://.dbg/administrative-icons-map.png")
+	var layer=CanvasLayer.new();layer.layer=100;root.add_child(layer)
+	var legend=Legend.new();legend.position=Vector2(0,550);layer.add_child(legend)
+	for i in range(3): await process_frame
+	RenderingServer.force_draw(true)
+	root.get_texture().get_image().get_region(Rect2i(0,550,1280,170)).save_png("res://.dbg/administrative-icons-legend.png")
+	root.remove_child(view);view.queue_free();await process_frame;quit()

@@ -1,0 +1,54 @@
+{
+  "base_commit": "c9e6799cfc80d62a41426b0ae16bc293b7940861",
+  "rule": {
+    "zhou": 3,
+    "fu": 2,
+    "capital": 4,
+    "without_role": "legacy major/capital"
+  },
+  "regressions": [
+    "atlas_city_markers",
+    "atlas_static_layers",
+    "atlas_wrapped_text",
+    "atlas_incremental_text",
+    "atlas_map_selection",
+    "atlas_camera_feedback",
+    "project_compile"
+  ],
+  "failed_tests": [],
+  "gpu": {
+    "pid": 24212,
+    "seed": 1,
+    "renderer": "gl_compatibility",
+    "hardware": "AMD Radeon RX 7600",
+    "viewport": [
+      1280,
+      720
+    ],
+    "zoom": 4,
+    "mask": {
+      "enabled": true,
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    },
+    "visible": {
+      "zhou": 141,
+      "fu": 298,
+      "capital": 40
+    },
+    "screenshots": [
+      "administrative-icons-map.png",
+      "administrative-icons-legend.png"
+    ]
+  },
+  "scope": "Visual classification only; existing vector paths, static meshes, hover and click rules retained. No simulation or template changes. Not committed or pushed.",
+  "sha256": {
+    "scripts/atlas/city_symbols.gd": "c141a381fe646f85d469ab261ec240bf54942a2e2b961a2bf20b7661fb116f2b",
+    "scripts/atlas/city_markers.gd": "4b259f10c704af8cd662fbeae77e6d48bd25f49db54705fe7612fd37c064cafd",
+    "scripts/atlas/map_text.gd": "0b1f379c930ecf39832c5d7565c2ec8183562f1203cc4c009e7425ba03e217a8",
+    "scripts/atlas/text_state.gd": "02e1d93595a2ec37b8b4cbda858916a2335546f2e692f8d8809f4d20a1ea5aa8",
+    "tests/atlas_city_markers.gd": "6a1ad241e48c0eb293738c31a4080feea7d96b1de690c171e5c91f8bd2eb2c54"
+  }
+}

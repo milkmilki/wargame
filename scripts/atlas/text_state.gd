@@ -108,8 +108,7 @@ func prepare() -> void:
 	if data.is_empty(): return
 	var city_marks: Array = []; var symbol_scale := sqrt(2048./1300)*pow(maxf(1,zoom),.5)
 	for index in range(data.cities.size()):
-		var city: Dictionary = data.cities[index]; var owner := int(data.ownership[city.region]); var kind := 3 if city.major else 2
-		if owner>=0 and data.nations[owner].seat==city.region: kind = 4
+		var city: Dictionary = data.cities[index]; var owner := int(data.ownership[city.region]); var kind := CitySymbols.kind_for(city,owner,data.nations)
 		var color := Color8(150,60,50)
 		if owner>=0:
 			var rgb: Array = data.nations[owner].color; color = Color8(rgb[0],rgb[1],rgb[2])
