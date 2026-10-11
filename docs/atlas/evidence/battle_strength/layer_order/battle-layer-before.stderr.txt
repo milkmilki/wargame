@@ -1,0 +1,4 @@
+BATTLE_BAR_GPU_FAIL pure city garrison/attacker segments, constant screen position 1x
+BATTLE_BAR_GPU_FAIL pure city garrison/attacker segments, constant screen position 4x
+BATTLE_BAR_GPU_FAIL pure city garrison/attacker segments, constant screen position 8x
+BATTLE_BAR_GPU_FAIL pure city garrison/attacker segments, constant screen position wrap

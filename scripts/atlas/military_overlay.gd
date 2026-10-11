@@ -2,6 +2,7 @@ extends Node2D
 const Strokes = preload("res://scripts/atlas/ink_strokes.gd")
 const VisibleLines = preload("res://scripts/atlas/visible_lines.gd")
 const Persistent = preload("res://scripts/atlas/persistent_strokes.gd")
+const BattleBar = preload("res://scripts/atlas/battle_strength_bar.gd")
 var high_performance := false
 var persistent_layers: Array = []
 var persistent_key: Array = []
@@ -54,7 +55,10 @@ var markers: Node2D
 var marker_stamp := -1
 var marker_redraw_count := 0
 func _ready() -> void:
-	markers = Markers.new(); markers.host = self; markers.z_index = 2; add_child(markers)
+	markers = Markers.new(); markers.host = self
+	# Absolute map layer above fronts (8), labels and trade hubs (9).
+	# Keep camera transforms inherited; only drawing order is independent.
+	markers.z_as_relative = false; markers.z_index = 10; add_child(markers)
 func _process(_delta: float) -> void:
 	if markers==null or state==null: return
 	# Army motion advances with the simulation. Keep the recorded CanvasItem
@@ -64,10 +68,12 @@ func _process(_delta: float) -> void:
 		army_keys.append([army.id,army.size>0,army.owner_nation,army.on_edge,army.location_city,army.move_from,army.move_to,army.move_progress])
 	var battle_keys: Array = []
 	for battle in state.battles:
-		battle_keys.append([battle.id,battle.finished,battle.traffic_node_id,battle.city.id if battle.city!=null else -1,battle.edge.get_instance_id() if battle.edge!=null else 0,battle.contact_dist_a,battle.contact_dist_b])
+		battle_keys.append([battle.id,battle.finished,battle.traffic_node_id,battle.city.id if battle.city!=null else -1,battle.edge.get_instance_id() if battle.edge!=null else 0,battle.contact_dist_a,battle.contact_dist_b,battle_strength(battle).counts,battle.kind,battle.side_b_defends_city])
 	var stamp := hash([state.get_instance_id(),state.road_network_revision,selection,global_scale.x,army_keys,battle_keys,state.nations.map(func(nation): return nation.color)])
 	if stamp==marker_stamp: return
 	marker_stamp=stamp; marker_redraw_count+=1; markers.queue_redraw()
+func battle_strength(battle: Battle) -> Dictionary:
+	return BattleBar.summary(battle)
 func army_position(army: Army) -> Vector2:
 	if army.on_edge and army.move_from>=0 and army.move_to>=0:
 		var edge := state.edge_of(army.move_from,army.move_to)
@@ -120,4 +126,7 @@ func draw_markers(canvas: Node2D) -> void:
 			elif battle.city!=null: point = battle.city.map_position*Vector2(2048,1024)
 			elif battle.edge!=null: point = battle.edge.map_position_at((battle.contact_dist_a+battle.contact_dist_b)*.5/maxf(.000001,battle.edge.distance_units()),state.cities[battle.edge.city_a].map_position,state.cities[battle.edge.city_b].map_position,2.)*Vector2(2048,1024)
 			point.x = fposmod(point.x,2048.); canvas.draw_line(point-Vector2(5,5)*pen,point+Vector2(5,5)*pen,Color(.8,.08,.04),3.*pen,true); canvas.draw_line(point+Vector2(-5,5)*pen,point+Vector2(5,-5)*pen,Color(.8,.08,.04),3.*pen,true)
+			canvas.draw_set_transform(Vector2.ZERO)
+			BattleBar.draw(canvas,point+Vector2(shift,0.),pen,battle_strength(battle))
+			canvas.draw_set_transform(Vector2(shift,0.))
 	canvas.draw_set_transform(Vector2.ZERO)

@@ -1,0 +1,110 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "c9e6799cfc80d62a41426b0ae16bc293b7940861",
+  "fix": "military markers: absolute z=10, above front z=8 and trade hub z=9; camera transform inherited; interface remains on top",
+  "gpu": {
+    "before": {
+      "failures": 4,
+      "fixture": "actual front renderer forced through bar and caption; display-only pure siege: city garrison 1500, side_b empty, side_b_defends_city false, attacker 20000; no simulation advancement",
+      "mask": {
+        "east": 145.0,
+        "enabled": true,
+        "north": 55.0,
+        "south": 20.0,
+        "version": "atlas-geographic-mask-v1",
+        "west": -15.0
+      },
+      "pid": 24944,
+      "renderer": "forward_plus",
+      "samples": [
+        {
+          "colors": [
+            "bf6052",
+            "eed5c2",
+            "eed5c2"
+          ],
+          "view": "1x"
+        },
+        {
+          "colors": [
+            "ab2f22",
+            "ab2f24",
+            "eed5c2"
+          ],
+          "view": "4x"
+        },
+        {
+          "colors": [
+            "ab2f23",
+            "ab2f24",
+            "ab2f24"
+          ],
+          "view": "8x"
+        },
+        {
+          "colors": [
+            "ab2f22",
+            "ab2f24",
+            "eed5c2"
+          ],
+          "view": "wrap"
+        }
+      ],
+      "seed": 1
+    },
+    "after": {
+      "failures": 0,
+      "fixture": "actual front renderer forced through bar and caption; display-only pure siege: city garrison 1500, side_b empty, side_b_defends_city false, attacker 20000; no simulation advancement",
+      "mask": {
+        "east": 145.0,
+        "enabled": true,
+        "north": 55.0,
+        "south": 20.0,
+        "version": "atlas-geographic-mask-v1",
+        "west": -15.0
+      },
+      "pid": 24336,
+      "renderer": "forward_plus",
+      "samples": [
+        {
+          "colors": [
+            "984843",
+            "6654b5",
+            "6654b5"
+          ],
+          "view": "1x"
+        },
+        {
+          "colors": [
+            "984843",
+            "6654b5",
+            "6654b5"
+          ],
+          "view": "4x"
+        },
+        {
+          "colors": [
+            "984843",
+            "6654b5",
+            "6654b5"
+          ],
+          "view": "8x"
+        },
+        {
+          "colors": [
+            "984843",
+            "6654b5",
+            "6654b5"
+          ],
+          "view": "wrap"
+        }
+      ],
+      "seed": 1
+    }
+  },
+  "source_sha256": {
+    "scripts/atlas/military_overlay.gd": "46a009d10b8de125cd585bc78f552717a7172bb9e815c955505a90998f11c306",
+    "scripts/atlas/battle_strength_bar.gd": "c4e06bf94b2f29aeb4612e9c43464905d75f2306d05182fe471689216a87f770",
+    ".dbg/battle-strength-layer-gpu.gd": "ec522149f7a6158d31d5e67d6489995eeaf6c3c5a633065f4560c7f157c1dbfb"
+  }
+}

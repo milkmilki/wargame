@@ -1,0 +1,104 @@
+{
+  "base_commit": "c9e6799cfc80d62a41426b0ae16bc293b7940861",
+  "gpu": {
+    "failures": 0,
+    "fixture": "display-only siege participants 1500/20000/20000, no simulation advancement",
+    "mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "pid": 4296,
+    "renderer": "gl_compatibility",
+    "samples": [
+      {
+        "colors": [
+          "984843",
+          "c35e56",
+          "6654b5"
+        ],
+        "view": "1x"
+      },
+      {
+        "colors": [
+          "984843",
+          "c35e56",
+          "6654b5"
+        ],
+        "view": "4x"
+      },
+      {
+        "colors": [
+          "984843",
+          "c35e56",
+          "6654b5"
+        ],
+        "view": "8x"
+      },
+      {
+        "colors": [
+          "984843",
+          "c35e56",
+          "6654b5"
+        ],
+        "view": "wrap"
+      }
+    ],
+    "seed": 1
+  },
+  "regression": {
+    "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+    "days": 35,
+    "results": [
+      {
+        "test": "atlas_battle_strength",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2141,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_battle_strength.log"
+      },
+      {
+        "test": "atlas_runtime_costs",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2797,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_runtime_costs.log"
+      },
+      {
+        "test": "atlas_segmented_movement",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2046,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_segmented_movement.log"
+      },
+      {
+        "test": "atlas_junction_encounters",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 1969,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_junction_encounters.log"
+      },
+      {
+        "test": "project_compile",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 12875,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+      }
+    ],
+    "failures": 0
+  },
+  "assertions": 9,
+  "sources": {
+    "scripts/atlas/battle_strength_bar.gd": "d857339c048686684914005d845d9a9bda882e9bdbd0ac5118e7cffd3b1c9d3f",
+    "scripts/atlas/military_overlay.gd": "0123a1eda2adbbb8e9b27509f2bf877328f9e400cfb0cec841efef36eb61bc06",
+    "tests/atlas_battle_strength.gd": "f760c0aa05374f5f47bc7bb61d149ba543a9e20534de7a412ec5ac642a4e8eda"
+  },
+  "scope": "Presentation only; GPU siege fixture is injected into a paused real map and is not a simulation or victory regression. No military/territory/budget changes, no FPS claim. Prior uncommitted administrative icons retained.",
+  "submitted": false,
+  "pushed": false,
+  "followup": "pure_siege/summary.json"
+}

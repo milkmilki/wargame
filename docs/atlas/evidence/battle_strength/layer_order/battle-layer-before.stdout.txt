@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+D3D12 12_0 - Forward+ - Using Device #0: AMD - AMD Radeon RX 7600
+
+ATLAS_PREVIEW_ARGS [] capture=
+ATLAS_PREVIEW_LOG C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/atlas_preview/atlas-24944-1791700368-1.jsonl
+[DEBUG_RUN] 日志：C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-11T06-32-50-24944-6947336.jsonl
+[DEBUG_RUN] 新局1 seed=1 source=atlas_startup_cache
+BATTLE_BAR_GPU {"failures":4,"fixture":"actual front renderer forced through bar and caption; display-only pure siege: city garrison 1500, side_b empty, side_b_defends_city false, attacker 20000; no simulation advancement","mask":{"east":145.0,"enabled":true,"north":55.0,"south":20.0,"version":"atlas-geographic-mask-v1","west":-15.0},"pid":24944,"renderer":"forward_plus","samples":[{"colors":["bf6052","eed5c2","eed5c2"],"view":"1x"},{"colors":["ab2f22","ab2f24","eed5c2"],"view":"4x"},{"colors":["ab2f23","ab2f24","ab2f24"],"view":"8x"},{"colors":["ab2f22","ab2f24","eed5c2"],"view":"wrap"}],"seed":1}

@@ -37,7 +37,7 @@ ATLAS = [
     "atlas_settlement_mask", "atlas_settlement_mask_controls", "atlas_settlement_mask_pipeline", "atlas_masked_military_smoke",
     "atlas_daily_reserves", "atlas_reserve_stations", "atlas_event_slicing", "atlas_path_order_equivalence", "atlas_contact_index", "atlas_supply_sources", "atlas_supply_dependencies", "atlas_ai_cadence",
     "atlas_static_layers",
-    "atlas_runtime_costs",
+    "atlas_runtime_costs", "atlas_battle_strength",
     "atlas_runtime_equivalence",
     "atlas_time_controls", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
     "atlas_startup_cache", "atlas_startup_climate", "atlas_startup_order",

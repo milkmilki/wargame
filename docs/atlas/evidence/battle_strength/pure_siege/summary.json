@@ -1,0 +1,117 @@
+{
+  "base_commit": "c9e6799cfc80d62a41426b0ae16bc293b7940861",
+  "root_cause": "City garrison Army is attached only during an assault round and detached afterward. Pure blockade has empty side_b and false side_b_defends_city. The original display only read Army participants.",
+  "fix": "Use persistent city garrison for city-defense sieges between rounds; prefer any attached virtual Army, even if dead, to prevent double counting or resurrecting troops. Exclude third-party city garrison from competing besiegers.",
+  "regression": {
+    "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+    "days": 35,
+    "results": [
+      {
+        "test": "atlas_battle_strength",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2422,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_battle_strength.log"
+      },
+      {
+        "test": "atlas_runtime_costs",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2875,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_runtime_costs.log"
+      },
+      {
+        "test": "field_establishment_costs",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2250,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\field_establishment_costs.log"
+      },
+      {
+        "test": "administrative_combat",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 2156,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\administrative_combat.log"
+      },
+      {
+        "test": "project_compile",
+        "ok": true,
+        "exit_code": 0,
+        "elapsed_ms": 13422,
+        "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+      }
+    ],
+    "failures": 0
+  },
+  "checks": 18,
+  "red_failures": 7,
+  "coverage": [
+    "real siege entry",
+    "real blockade attrition",
+    "marker invalidation",
+    "temporary attach/detach",
+    "mixed defenders and city reserve",
+    "third-party challenger exclusion",
+    "field and zero counts",
+    "finished battle",
+    "paused retained commands"
+  ],
+  "gpu": {
+    "failures": 0,
+    "fixture": "display-only pure siege: city garrison 1500, side_b empty, side_b_defends_city false, attacker 20000; no simulation advancement",
+    "mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "pid": 36356,
+    "renderer": "gl_compatibility",
+    "samples": [
+      {
+        "colors": [
+          "984843",
+          "6654b5",
+          "6654b5"
+        ],
+        "view": "1x"
+      },
+      {
+        "colors": [
+          "984843",
+          "6654b5",
+          "6654b5"
+        ],
+        "view": "4x"
+      },
+      {
+        "colors": [
+          "984843",
+          "6654b5",
+          "6654b5"
+        ],
+        "view": "8x"
+      },
+      {
+        "colors": [
+          "984843",
+          "6654b5",
+          "6654b5"
+        ],
+        "view": "wrap"
+      }
+    ],
+    "seed": 1
+  },
+  "scope": "UI-only. No simulation, combat, resource, territory or save-format changes. GPU participants are a display fixture; actual lifecycle is exercised by atlas_battle_strength. Prior mixed-siege evidence retained separately.",
+  "sources": {
+    "scripts/atlas/battle_strength_bar.gd": "c4e06bf94b2f29aeb4612e9c43464905d75f2306d05182fe471689216a87f770",
+    "scripts/atlas/military_overlay.gd": "0123a1eda2adbbb8e9b27509f2bf877328f9e400cfb0cec841efef36eb61bc06",
+    "tests/atlas_battle_strength.gd": "ce0e8f9e95432885cc509bec2f60dde1b31cb831db237a17615bd788aedff9b3"
+  },
+  "submitted": false,
+  "pushed": false
+}

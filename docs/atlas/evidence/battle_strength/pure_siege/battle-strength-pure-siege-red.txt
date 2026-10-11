@@ -1,0 +1,10 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ATLAS_BATTLE_STRENGTH_FAIL pure siege reads persistent city garrison despite empty side_b/false defender flag
+ATLAS_BATTLE_STRENGTH_FAIL blockade attrition updates persistent garrison outside the temporary combat array
+ATLAS_BATTLE_STRENGTH_FAIL city garrison attrition invalidates the recorded bar
+ATLAS_BATTLE_STRENGTH_FAIL temporary garrison is not added to persistent garrison twice
+ATLAS_BATTLE_STRENGTH_FAIL temporary live combat garrison takes precedence until written back
+ATLAS_BATTLE_STRENGTH_FAIL pure siege survives temporary guard detach
+ATLAS_BATTLE_STRENGTH_FAIL siege with real defenders also shows the separate city defense reserve
+ATLAS_BATTLE_STRENGTH failures=7
