@@ -4,6 +4,7 @@ const NativeMap = preload("res://scripts/atlas/native_map.gd")
 const Snapshot = preload("res://scripts/atlas/snapshot.gd")
 static func encode(state: GameState) -> Dictionary:
 	var payload: Dictionary = state.atlas_layout.duplicate(true)
+	payload.simulation_options={"trade_enabled":state.trade_enabled,"rulers_enabled":state.random_ruler_profiles_enabled()}
 	for record in payload.graph.edges:
 		var edge := state.edge_of(record.a,record.b)
 		record.danger = edge.danger; record.max_manpower = edge.max_manpower; record.base_max_manpower = edge.base_max_manpower
@@ -13,7 +14,8 @@ static func encode(state: GameState) -> Dictionary:
 	for nation in state.nations:
 		if not nation.alive or state.land_cities_of(nation.id).is_empty(): continue
 		nation_map[nation.id] = nations.size()
-		nations.append({"name":nation.name,"seat":state.cities[nation.capital_city_id].id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)]})
+		nations.append({"name":nation.name,"seat":state.cities[nation.capital_city_id].id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)],
+			"ruler":{"name":nation.ruler_name,"archetype":nation.ruler_archetype,"traits":nation.ruler_traits.duplicate(),"trade_policy":nation.trade_policy,"region_anchor":nation.strategic_region_anchor_city_id}})
 	payload.nations = nations; payload.settlement_records = []
 	for c in range(payload.hierarchy.cities.size()):
 		var city := state.cities[c]
@@ -35,6 +37,10 @@ static func validate(definition: Dictionary) -> String:
 	if int(definition.get("version",0))!=9 or not definition.get("atlas_payload") is String: return "Atlas 模板格式无效。"
 	var payload := decode(definition)
 	if payload.get("model")!="atlas-military-v1": return "Atlas 模型不支持。"
+	if payload.has("simulation_options"):
+		if not payload.simulation_options is Dictionary: return "Atlas 模拟配置无效。"
+		for key in ["trade_enabled","rulers_enabled"]:
+			if not payload.simulation_options.get(key) is bool: return "Atlas 模拟开关无效。"
 	for key in ["data","hierarchy","graph","raster","display","network","settlement_adjacency","strategic_routes"]:
 		if not payload.get(key) is Dictionary: return "Atlas 模板缺少 "+key
 	if not payload.get("nations") is Array or payload.nations.is_empty(): return "Atlas 国家资料无效。"
@@ -43,6 +49,16 @@ static func validate(definition: Dictionary) -> String:
 		if not nation is Dictionary or not nation.get("name") is String or not nation.get("color") is Array or nation.color.size()!=3: return "Atlas 国家资料无效。"
 		for channel in nation.color:
 			if not whole_number(channel,0,256): return "Atlas 国家颜色无效。"
+		if nation.has("ruler"):
+			if not nation.ruler is Dictionary: return "Atlas 君主资料无效。"
+			var ruler: Dictionary = nation.ruler
+			if not ruler.get("name") is String or not whole_number(ruler.get("archetype"),0,RulerProfile.ARCHETYPE_IDS.size()) or not whole_number(ruler.get("trade_policy"),0,4): return "Atlas 君主资料无效。"
+			if not ruler.get("traits") is Array or ruler.traits.size()>RulerProfile.MAX_TRAITS: return "Atlas 君主特质无效。"
+			var seen := {}
+			for trait_id in ruler.traits:
+				if not trait_id is String or not RulerProfile.is_valid_trait(trait_id) or seen.has(trait_id): return "Atlas 君主特质无效。"
+				seen[trait_id]=true
+			if seen.has(RulerProfile.TRAIT_CENTRALIZER) and seen.has(RulerProfile.TRAIT_FEUDALIST): return "Atlas 君主特质冲突。"
 	var error := NativeMap.validate(payload.data)
 	if not error.is_empty(): return error
 	var cell_count: int = payload.data.mesh.x.size(); var parent_count: int = payload.data.regions.seat.size()
@@ -62,6 +78,8 @@ static func validate(definition: Dictionary) -> String:
 	var h: Dictionary = payload.hierarchy; var graph: Dictionary = payload.graph
 	if not h.get("cities") is Array or not h.get("members") is Array or not graph.get("nodes") is Array or not graph.get("edges") is Array: return "Atlas 州府或交通维度无效。"
 	if h.cities.is_empty() or graph.nodes.size()<h.cities.size(): return "Atlas 缺少治所。"
+	for nation in payload.nations:
+		if nation.has("ruler") and not whole_number(nation.ruler.get("region_anchor",-1),-1,h.cities.size()): return "Atlas 经营区域锚点无效。"
 	for key in ["district_of_cell","center_by_city","state_by_city","state_parents","guardian_by_parent","state_by_parent"]:
 		if not h.get(key) is PackedInt32Array: return "Atlas 固定映射格式无效。"
 	if h.center_by_city.size()!=h.cities.size() or h.state_by_city.size()!=h.cities.size() or h.state_parents.size()!=h.members.size(): return "Atlas 行政映射维度无效。"

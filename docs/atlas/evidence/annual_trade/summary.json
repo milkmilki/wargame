@@ -1,0 +1,18 @@
+{
+  "paired_trials": 15,
+  "independent_benchmark_processes": 3,
+  "uncached_trade_median_ms": 1050.967,
+  "cached_geometry_fiscal_rebuild_median_ms": 66.088,
+  "reduction_percent": 93.7116959904545,
+  "all_trade_results_identical": true,
+  "cached_new_distance_fields": 0,
+  "scenario_days": 180,
+  "scenario_mean_ms": 264.9257111111111,
+  "scenario_median_ms": 187.70850000000002,
+  "scenario_month_median_ms": 2456.234,
+  "scenario_peak_ms": 3614.38,
+  "first_geometry_fields": 48,
+  "last_geometry_fields": 48,
+  "max_armies": 234,
+  "limitation": "Scenario throughput is not GUI frame rate or an exact old/new behavior equivalence assertion; frozen trade pairs compare identical centers, paths and taxes."
+}

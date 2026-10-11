@@ -202,6 +202,10 @@ var generation_metadata: Dictionary = {}
 var map_models: Dictionary = {}
 var atlas_layout: Dictionary = {}
 var trade_enabled: bool = true
+## Runtime-only Atlas trade geometry and fiscal cache; never part of map templates.
+var atlas_trade_cache: Dictionary = {}
+var atlas_trade_centers: Dictionary = {}
+var atlas_trade_mutex := Mutex.new()
 
 func generate_from_atlas(payload: Dictionary) -> void:
 	load("res://scripts/atlas/military_import.gd").install(self,payload)
@@ -507,6 +511,8 @@ func _reset_world(world_seed: int) -> void:
 	recognized_city_owners = PackedInt32Array()
 	rebellions.clear()
 	trade_routes.clear()
+	atlas_trade_cache.clear()
+	atlas_trade_centers = {}
 	trade_revision = 0
 	naming_revision = 0
 	_random_ruler_profiles_enabled = true

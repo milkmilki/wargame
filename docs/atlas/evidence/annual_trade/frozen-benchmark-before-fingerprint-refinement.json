@@ -1,0 +1,53 @@
+{
+  "day": 0,
+  "expected_field_builds": 48,
+  "geometry_field_builds": 288,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "pid": 28868,
+  "routes": 153,
+  "rows": [
+    {
+      "cached_new_fields": 0,
+      "cached_usec": 62989,
+      "equivalent": true,
+      "uncached_usec": 1002869
+    },
+    {
+      "cached_new_fields": 0,
+      "cached_usec": 64866,
+      "equivalent": true,
+      "uncached_usec": 1059973
+    },
+    {
+      "cached_new_fields": 0,
+      "cached_usec": 66832,
+      "equivalent": true,
+      "uncached_usec": 1056513
+    },
+    {
+      "cached_new_fields": 0,
+      "cached_usec": 63756,
+      "equivalent": true,
+      "uncached_usec": 1024603
+    },
+    {
+      "cached_new_fields": 0,
+      "cached_usec": 66074,
+      "equivalent": true,
+      "uncached_usec": 1052667
+    }
+  ],
+  "seed": 1,
+  "source_hash": "7aac744654e6a25d6edf555b23a6807d3f72958a39d01835d784e53ebb77d625",
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  }
+}

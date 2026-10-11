@@ -8,10 +8,13 @@ static func install(state: GameState,payload: Dictionary) -> void:
 	state._reset_world(int(data.seed))
 	state.atlas_layout = payload.duplicate()
 	state.uses_heightmap = true; state.map_aspect_ratio = 2.
-	state.trade_enabled = false
+	# Missing options identify legacy military-only templates. Fresh worlds opt in.
+	var systems: Dictionary = payload.get("simulation_options",{})
+	state.trade_enabled = bool(systems.get("trade_enabled",false))
 	state.map_models = data.options.duplicate(true); state.map_models.administrative_model = h.model; state.map_models.road_model = payload.network.model
+	state.map_models.simulation_options={"trade_enabled":state.trade_enabled,"rulers_enabled":bool(systems.get("rulers_enabled",false))}
 	state.generation_metadata = {"seed":data.seed,"model":payload.model,"upstream":data.upstream,"upstream_commit":data.get("upstream_commit",""),"timing":payload.timing,"distance_km":250.,"settlements":h.cities.size(),"nodes":graph.nodes.size(),"godot":Engine.get_version_info(),"source_sha256":source_fingerprint()}
-	state._generate_nations(GameState.DiplomaticRelation.NEUTRAL,payload.nations.size(),false)
+	state._generate_nations(GameState.DiplomaticRelation.NEUTRAL,payload.nations.size(),bool(systems.get("rulers_enabled",false)))
 	for id in range(graph.nodes.size()):
 		var record: Dictionary = graph.nodes[id]; var city := City.new(); city.id = id
 		city.map_position = Vector2(fposmod(record.position.x/2048.,1.),record.position.y/1024.)
@@ -55,7 +58,13 @@ static func install(state: GameState,payload: Dictionary) -> void:
 	for id in range(state.nations.size()):
 		var nation := state.nations[id]; var source: Dictionary = payload.nations[id]
 		nation.name = source.name; nation.short_name = source.name.left(1)
-		nation.color = Color8(source.color[0],source.color[1],source.color[2]); nation.ruler_name = "中性君主"
+		nation.color = Color8(source.color[0],source.color[1],source.color[2])
+		if not state.random_ruler_profiles_enabled(): nation.ruler_name = "中性君主"
+		if source.has("ruler"):
+			var ruler: Dictionary = source.ruler
+			nation.ruler_name = ruler.name; nation.ruler_archetype = ruler.archetype
+			nation.ruler_traits.assign(ruler.traits); nation.trade_policy = ruler.trade_policy
+			nation.strategic_region_anchor_city_id = int(ruler.get("region_anchor",-1))
 	state._generate_armies(); RegionalStrategy.initialize_targets(state); EmpireStatus.reconcile(state); state.refresh_derived()
 
 static func source_fingerprint() -> String:

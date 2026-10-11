@@ -874,7 +874,8 @@ static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
 static func build_supply_network(
 	state: GameState,
 	nation_id: int,
-	precomputed_blocked_enemy_edges: Variant = null
+	precomputed_blocked_enemy_edges: Variant = null,
+	shared_fields: Variant = null
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var blocked_enemy_edges: Dictionary = (
@@ -918,17 +919,20 @@ static func build_supply_network(
 				or (state.city_under_siege(warehouse.id) and not state.succession_supply_city(warehouse.id))
 			):
 				continue
+			var distances: PackedFloat64Array
+			if shared_fields is Dictionary and shared_fields.has(warehouse.id):
+				distances = shared_fields[warehouse.id]
+			else:
+				distances = _supply_loss_field(
+					state, warehouse.id, nation_id, blocked_enemy_edges,
+					true, relay_origins, true
+				)["dist"]
+				if shared_fields is Dictionary:
+					shared_fields[warehouse.id] = distances
 			result.append({
 				"city_id": warehouse.id,
 				"owner_nation": owner_id,
-				"dist": _supply_loss_field(
-					state,
-					warehouse.id,
-					nation_id,
-					blocked_enemy_edges,
-					true,
-					relay_origins, true
-				)["dist"],
+				"dist": distances,
 			})
 	return result
 

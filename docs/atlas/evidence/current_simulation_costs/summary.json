@@ -1,0 +1,822 @@
+{
+  "run_pid": 1712,
+  "all_trade_builds": 10.0,
+  "source_lookup_mean_usec": 19894.82222222222,
+  "days": [
+    {
+      "day": 1,
+      "armies": 40,
+      "elapsed_usec": 826244,
+      "all_trade_builds": 0,
+      "loss_usec": 350,
+      "source_usec": 707111,
+      "cached_trade_structure_usec": 98
+    },
+    {
+      "day": 2,
+      "armies": 40,
+      "elapsed_usec": 20216,
+      "all_trade_builds": 0,
+      "loss_usec": 157,
+      "source_usec": 273,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 3,
+      "armies": 40,
+      "elapsed_usec": 116171,
+      "all_trade_builds": 0,
+      "loss_usec": 171,
+      "source_usec": 391,
+      "cached_trade_structure_usec": 97
+    },
+    {
+      "day": 4,
+      "armies": 40,
+      "elapsed_usec": 22533,
+      "all_trade_builds": 0,
+      "loss_usec": 161,
+      "source_usec": 292,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 5,
+      "armies": 40,
+      "elapsed_usec": 21720,
+      "all_trade_builds": 0,
+      "loss_usec": 159,
+      "source_usec": 283,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 6,
+      "armies": 43,
+      "elapsed_usec": 167907,
+      "all_trade_builds": 0,
+      "loss_usec": 150,
+      "source_usec": 279,
+      "cached_trade_structure_usec": 96
+    },
+    {
+      "day": 7,
+      "armies": 43,
+      "elapsed_usec": 23522,
+      "all_trade_builds": 0,
+      "loss_usec": 166,
+      "source_usec": 374,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 8,
+      "armies": 43,
+      "elapsed_usec": 24102,
+      "all_trade_builds": 0,
+      "loss_usec": 166,
+      "source_usec": 384,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 9,
+      "armies": 69,
+      "elapsed_usec": 229601,
+      "all_trade_builds": 0,
+      "loss_usec": 438,
+      "source_usec": 417,
+      "cached_trade_structure_usec": 106
+    },
+    {
+      "day": 10,
+      "armies": 69,
+      "elapsed_usec": 25492,
+      "all_trade_builds": 0,
+      "loss_usec": 209,
+      "source_usec": 723,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 11,
+      "armies": 69,
+      "elapsed_usec": 26134,
+      "all_trade_builds": 0,
+      "loss_usec": 182,
+      "source_usec": 749,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 12,
+      "armies": 78,
+      "elapsed_usec": 174611,
+      "all_trade_builds": 0,
+      "loss_usec": 176,
+      "source_usec": 666,
+      "cached_trade_structure_usec": 100
+    },
+    {
+      "day": 13,
+      "armies": 78,
+      "elapsed_usec": 27336,
+      "all_trade_builds": 0,
+      "loss_usec": 247,
+      "source_usec": 916,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 14,
+      "armies": 78,
+      "elapsed_usec": 29480,
+      "all_trade_builds": 0,
+      "loss_usec": 246,
+      "source_usec": 930,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 15,
+      "armies": 101,
+      "elapsed_usec": 192843,
+      "all_trade_builds": 0,
+      "loss_usec": 258,
+      "source_usec": 961,
+      "cached_trade_structure_usec": 105
+    },
+    {
+      "day": 16,
+      "armies": 101,
+      "elapsed_usec": 31493,
+      "all_trade_builds": 0,
+      "loss_usec": 331,
+      "source_usec": 1352,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 17,
+      "armies": 101,
+      "elapsed_usec": 33757,
+      "all_trade_builds": 0,
+      "loss_usec": 252,
+      "source_usec": 1149,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 18,
+      "armies": 117,
+      "elapsed_usec": 159361,
+      "all_trade_builds": 0,
+      "loss_usec": 256,
+      "source_usec": 1213,
+      "cached_trade_structure_usec": 98
+    },
+    {
+      "day": 19,
+      "armies": 117,
+      "elapsed_usec": 33058,
+      "all_trade_builds": 0,
+      "loss_usec": 314,
+      "source_usec": 1594,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 20,
+      "armies": 117,
+      "elapsed_usec": 36465,
+      "all_trade_builds": 0,
+      "loss_usec": 385,
+      "source_usec": 1470,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 21,
+      "armies": 144,
+      "elapsed_usec": 1239474,
+      "all_trade_builds": 1,
+      "loss_usec": 328,
+      "source_usec": 1945,
+      "cached_trade_structure_usec": 108
+    },
+    {
+      "day": 22,
+      "armies": 144,
+      "elapsed_usec": 38608,
+      "all_trade_builds": 0,
+      "loss_usec": 364,
+      "source_usec": 1926,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 23,
+      "armies": 144,
+      "elapsed_usec": 42505,
+      "all_trade_builds": 0,
+      "loss_usec": 348,
+      "source_usec": 1756,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 24,
+      "armies": 165,
+      "elapsed_usec": 248544,
+      "all_trade_builds": 0,
+      "loss_usec": 363,
+      "source_usec": 1935,
+      "cached_trade_structure_usec": 108
+    },
+    {
+      "day": 25,
+      "armies": 165,
+      "elapsed_usec": 40691,
+      "all_trade_builds": 0,
+      "loss_usec": 488,
+      "source_usec": 2927,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 26,
+      "armies": 165,
+      "elapsed_usec": 50478,
+      "all_trade_builds": 0,
+      "loss_usec": 453,
+      "source_usec": 2279,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 27,
+      "armies": 182,
+      "elapsed_usec": 187510,
+      "all_trade_builds": 0,
+      "loss_usec": 442,
+      "source_usec": 2398,
+      "cached_trade_structure_usec": 104
+    },
+    {
+      "day": 28,
+      "armies": 182,
+      "elapsed_usec": 51656,
+      "all_trade_builds": 0,
+      "loss_usec": 549,
+      "source_usec": 2970,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 29,
+      "armies": 182,
+      "elapsed_usec": 57352,
+      "all_trade_builds": 0,
+      "loss_usec": 554,
+      "source_usec": 2743,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 30,
+      "armies": 189,
+      "elapsed_usec": 5739819,
+      "all_trade_builds": 3,
+      "loss_usec": 560,
+      "source_usec": 84166,
+      "cached_trade_structure_usec": 987327
+    },
+    {
+      "day": 31,
+      "armies": 189,
+      "elapsed_usec": 66324,
+      "all_trade_builds": 0,
+      "loss_usec": 602,
+      "source_usec": 3243,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 32,
+      "armies": 189,
+      "elapsed_usec": 61485,
+      "all_trade_builds": 0,
+      "loss_usec": 553,
+      "source_usec": 3038,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 33,
+      "armies": 196,
+      "elapsed_usec": 175877,
+      "all_trade_builds": 0,
+      "loss_usec": 568,
+      "source_usec": 3887,
+      "cached_trade_structure_usec": 96
+    },
+    {
+      "day": 34,
+      "armies": 196,
+      "elapsed_usec": 70889,
+      "all_trade_builds": 0,
+      "loss_usec": 551,
+      "source_usec": 3401,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 35,
+      "armies": 196,
+      "elapsed_usec": 61055,
+      "all_trade_builds": 0,
+      "loss_usec": 539,
+      "source_usec": 3254,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 36,
+      "armies": 221,
+      "elapsed_usec": 241147,
+      "all_trade_builds": 0,
+      "loss_usec": 503,
+      "source_usec": 3364,
+      "cached_trade_structure_usec": 101
+    },
+    {
+      "day": 37,
+      "armies": 221,
+      "elapsed_usec": 68138,
+      "all_trade_builds": 0,
+      "loss_usec": 558,
+      "source_usec": 3776,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 38,
+      "armies": 221,
+      "elapsed_usec": 67606,
+      "all_trade_builds": 0,
+      "loss_usec": 537,
+      "source_usec": 3754,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 39,
+      "armies": 228,
+      "elapsed_usec": 297857,
+      "all_trade_builds": 0,
+      "loss_usec": 517,
+      "source_usec": 3201,
+      "cached_trade_structure_usec": 152
+    },
+    {
+      "day": 40,
+      "armies": 228,
+      "elapsed_usec": 69019,
+      "all_trade_builds": 0,
+      "loss_usec": 640,
+      "source_usec": 3656,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 41,
+      "armies": 228,
+      "elapsed_usec": 74307,
+      "all_trade_builds": 0,
+      "loss_usec": 623,
+      "source_usec": 3753,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 42,
+      "armies": 229,
+      "elapsed_usec": 237226,
+      "all_trade_builds": 0,
+      "loss_usec": 689,
+      "source_usec": 3838,
+      "cached_trade_structure_usec": 110
+    },
+    {
+      "day": 43,
+      "armies": 229,
+      "elapsed_usec": 90437,
+      "all_trade_builds": 0,
+      "loss_usec": 651,
+      "source_usec": 25213,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 44,
+      "armies": 229,
+      "elapsed_usec": 77393,
+      "all_trade_builds": 0,
+      "loss_usec": 684,
+      "source_usec": 3988,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 45,
+      "armies": 229,
+      "elapsed_usec": 169840,
+      "all_trade_builds": 0,
+      "loss_usec": 657,
+      "source_usec": 3637,
+      "cached_trade_structure_usec": 57
+    },
+    {
+      "day": 46,
+      "armies": 229,
+      "elapsed_usec": 67048,
+      "all_trade_builds": 0,
+      "loss_usec": 706,
+      "source_usec": 3560,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 47,
+      "armies": 229,
+      "elapsed_usec": 71831,
+      "all_trade_builds": 0,
+      "loss_usec": 666,
+      "source_usec": 3446,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 48,
+      "armies": 229,
+      "elapsed_usec": 144011,
+      "all_trade_builds": 0,
+      "loss_usec": 266,
+      "source_usec": 1742,
+      "cached_trade_structure_usec": 30
+    },
+    {
+      "day": 49,
+      "armies": 229,
+      "elapsed_usec": 63932,
+      "all_trade_builds": 0,
+      "loss_usec": 694,
+      "source_usec": 3404,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 50,
+      "armies": 229,
+      "elapsed_usec": 65504,
+      "all_trade_builds": 0,
+      "loss_usec": 664,
+      "source_usec": 3648,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 51,
+      "armies": 229,
+      "elapsed_usec": 237704,
+      "all_trade_builds": 0,
+      "loss_usec": 684,
+      "source_usec": 3423,
+      "cached_trade_structure_usec": 131
+    },
+    {
+      "day": 52,
+      "armies": 229,
+      "elapsed_usec": 64804,
+      "all_trade_builds": 0,
+      "loss_usec": 680,
+      "source_usec": 3456,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 53,
+      "armies": 229,
+      "elapsed_usec": 71278,
+      "all_trade_builds": 0,
+      "loss_usec": 769,
+      "source_usec": 3551,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 54,
+      "armies": 229,
+      "elapsed_usec": 244843,
+      "all_trade_builds": 0,
+      "loss_usec": 718,
+      "source_usec": 3403,
+      "cached_trade_structure_usec": 53
+    },
+    {
+      "day": 55,
+      "armies": 229,
+      "elapsed_usec": 66515,
+      "all_trade_builds": 0,
+      "loss_usec": 651,
+      "source_usec": 3350,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 56,
+      "armies": 229,
+      "elapsed_usec": 71208,
+      "all_trade_builds": 0,
+      "loss_usec": 681,
+      "source_usec": 3462,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 57,
+      "armies": 229,
+      "elapsed_usec": 151425,
+      "all_trade_builds": 0,
+      "loss_usec": 2695,
+      "source_usec": 4832,
+      "cached_trade_structure_usec": 48
+    },
+    {
+      "day": 58,
+      "armies": 229,
+      "elapsed_usec": 61452,
+      "all_trade_builds": 0,
+      "loss_usec": 698,
+      "source_usec": 3369,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 59,
+      "armies": 229,
+      "elapsed_usec": 60919,
+      "all_trade_builds": 0,
+      "loss_usec": 648,
+      "source_usec": 3134,
+      "cached_trade_structure_usec": null
+    },
+    {
+      "day": 60,
+      "armies": 229,
+      "elapsed_usec": 2918543,
+      "all_trade_builds": 1,
+      "loss_usec": 667,
+      "source_usec": 88413,
+      "cached_trade_structure_usec": 295
+    },
+    {
+      "day": 61,
+      "armies": 229,
+      "elapsed_usec": 124442,
+      "all_trade_builds": 0,
+      "loss_usec": 707,
+      "source_usec": 8339,
+      "cached_trade_structure_usec": 53
+    },
+    {
+      "day": 62,
+      "armies": 229,
+      "elapsed_usec": 145120,
+      "all_trade_builds": 0,
+      "loss_usec": 758,
+      "source_usec": 5886,
+      "cached_trade_structure_usec": 48
+    },
+    {
+      "day": 63,
+      "armies": 229,
+      "elapsed_usec": 131186,
+      "all_trade_builds": 0,
+      "loss_usec": 743,
+      "source_usec": 6505,
+      "cached_trade_structure_usec": 54
+    },
+    {
+      "day": 64,
+      "armies": 229,
+      "elapsed_usec": 117719,
+      "all_trade_builds": 0,
+      "loss_usec": 699,
+      "source_usec": 5802,
+      "cached_trade_structure_usec": 48
+    },
+    {
+      "day": 65,
+      "armies": 229,
+      "elapsed_usec": 126008,
+      "all_trade_builds": 0,
+      "loss_usec": 690,
+      "source_usec": 5992,
+      "cached_trade_structure_usec": 67
+    },
+    {
+      "day": 66,
+      "armies": 229,
+      "elapsed_usec": 138071,
+      "all_trade_builds": 0,
+      "loss_usec": 770,
+      "source_usec": 6127,
+      "cached_trade_structure_usec": 61
+    },
+    {
+      "day": 67,
+      "armies": 229,
+      "elapsed_usec": 130145,
+      "all_trade_builds": 0,
+      "loss_usec": 653,
+      "source_usec": 5297,
+      "cached_trade_structure_usec": 51
+    },
+    {
+      "day": 68,
+      "armies": 229,
+      "elapsed_usec": 117572,
+      "all_trade_builds": 0,
+      "loss_usec": 698,
+      "source_usec": 5130,
+      "cached_trade_structure_usec": 49
+    },
+    {
+      "day": 69,
+      "armies": 229,
+      "elapsed_usec": 116328,
+      "all_trade_builds": 0,
+      "loss_usec": 749,
+      "source_usec": 5694,
+      "cached_trade_structure_usec": 53
+    },
+    {
+      "day": 70,
+      "armies": 229,
+      "elapsed_usec": 113063,
+      "all_trade_builds": 0,
+      "loss_usec": 713,
+      "source_usec": 5641,
+      "cached_trade_structure_usec": 50
+    },
+    {
+      "day": 71,
+      "armies": 229,
+      "elapsed_usec": 136264,
+      "all_trade_builds": 0,
+      "loss_usec": 819,
+      "source_usec": 7497,
+      "cached_trade_structure_usec": 49
+    },
+    {
+      "day": 72,
+      "armies": 229,
+      "elapsed_usec": 137656,
+      "all_trade_builds": 0,
+      "loss_usec": 706,
+      "source_usec": 3042,
+      "cached_trade_structure_usec": 114
+    },
+    {
+      "day": 73,
+      "armies": 229,
+      "elapsed_usec": 1228906,
+      "all_trade_builds": 1,
+      "loss_usec": 636,
+      "source_usec": 77228,
+      "cached_trade_structure_usec": 906159
+    },
+    {
+      "day": 74,
+      "armies": 229,
+      "elapsed_usec": 153384,
+      "all_trade_builds": 0,
+      "loss_usec": 749,
+      "source_usec": 6992,
+      "cached_trade_structure_usec": 57
+    },
+    {
+      "day": 75,
+      "armies": 229,
+      "elapsed_usec": 146006,
+      "all_trade_builds": 0,
+      "loss_usec": 691,
+      "source_usec": 6921,
+      "cached_trade_structure_usec": 51
+    },
+    {
+      "day": 76,
+      "armies": 229,
+      "elapsed_usec": 168805,
+      "all_trade_builds": 0,
+      "loss_usec": 835,
+      "source_usec": 5570,
+      "cached_trade_structure_usec": 73
+    },
+    {
+      "day": 77,
+      "armies": 229,
+      "elapsed_usec": 175740,
+      "all_trade_builds": 0,
+      "loss_usec": 786,
+      "source_usec": 7117,
+      "cached_trade_structure_usec": 56
+    },
+    {
+      "day": 78,
+      "armies": 229,
+      "elapsed_usec": 130752,
+      "all_trade_builds": 0,
+      "loss_usec": 684,
+      "source_usec": 5295,
+      "cached_trade_structure_usec": 51
+    },
+    {
+      "day": 79,
+      "armies": 229,
+      "elapsed_usec": 165187,
+      "all_trade_builds": 0,
+      "loss_usec": 671,
+      "source_usec": 4831,
+      "cached_trade_structure_usec": 55
+    },
+    {
+      "day": 80,
+      "armies": 229,
+      "elapsed_usec": 1164168,
+      "all_trade_builds": 1,
+      "loss_usec": 681,
+      "source_usec": 7029,
+      "cached_trade_structure_usec": 973955
+    },
+    {
+      "day": 81,
+      "armies": 229,
+      "elapsed_usec": 156101,
+      "all_trade_builds": 0,
+      "loss_usec": 775,
+      "source_usec": 7018,
+      "cached_trade_structure_usec": 66
+    },
+    {
+      "day": 82,
+      "armies": 229,
+      "elapsed_usec": 144407,
+      "all_trade_builds": 0,
+      "loss_usec": 709,
+      "source_usec": 4975,
+      "cached_trade_structure_usec": 64
+    },
+    {
+      "day": 83,
+      "armies": 229,
+      "elapsed_usec": 123979,
+      "all_trade_builds": 0,
+      "loss_usec": 794,
+      "source_usec": 4628,
+      "cached_trade_structure_usec": 71
+    },
+    {
+      "day": 84,
+      "armies": 228,
+      "elapsed_usec": 151285,
+      "all_trade_builds": 0,
+      "loss_usec": 723,
+      "source_usec": 6922,
+      "cached_trade_structure_usec": 68
+    },
+    {
+      "day": 85,
+      "armies": 228,
+      "elapsed_usec": 148414,
+      "all_trade_builds": 0,
+      "loss_usec": 763,
+      "source_usec": 4684,
+      "cached_trade_structure_usec": 65
+    },
+    {
+      "day": 86,
+      "armies": 228,
+      "elapsed_usec": 2215281,
+      "all_trade_builds": 2,
+      "loss_usec": 662,
+      "source_usec": 6678,
+      "cached_trade_structure_usec": 951594
+    },
+    {
+      "day": 87,
+      "armies": 228,
+      "elapsed_usec": 254680,
+      "all_trade_builds": 0,
+      "loss_usec": 647,
+      "source_usec": 94715,
+      "cached_trade_structure_usec": 67
+    },
+    {
+      "day": 88,
+      "armies": 228,
+      "elapsed_usec": 159501,
+      "all_trade_builds": 0,
+      "loss_usec": 690,
+      "source_usec": 6911,
+      "cached_trade_structure_usec": 65
+    },
+    {
+      "day": 89,
+      "armies": 228,
+      "elapsed_usec": 184326,
+      "all_trade_builds": 0,
+      "loss_usec": 736,
+      "source_usec": 6456,
+      "cached_trade_structure_usec": 60
+    },
+    {
+      "day": 90,
+      "armies": 228,
+      "elapsed_usec": 3163605,
+      "all_trade_builds": 1,
+      "loss_usec": 773,
+      "source_usec": 417844,
+      "cached_trade_structure_usec": 340
+    }
+  ],
+  "measured_days": 90,
+  "stderr_empty": true,
+  "weighted_loss_mean_usec": 574.3555555555556,
+  "complete": true,
+  "production_rules_changed": false
+}

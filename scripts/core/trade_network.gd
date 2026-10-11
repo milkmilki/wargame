@@ -1,9 +1,12 @@
 class_name TradeNetwork
 extends RefCounted
+
+## Diagnostic oracle switch; production caches exact per-path tax rounding.
+static var atlas_tax_allocation_cache_enabled: bool = true
 ## 当前世界状态的纯派生贸易网络。
 ##
-## 本类不持有缓存、不修改 GameState，也不依赖 Simulation。build() 的结果可直接
-## 用于月度经济结算、AI 报告或 UI；相同输入始终得到相同路线、分配和 signature。
+## Atlas 的临时几何与财政缓存由 GameState 持有，入口通过其 Mutex 管理；
+## 不依赖 Simulation。结果供经济、AI 和 UI 使用，不把内部缓存字段写入路线。
 
 enum RouteStatus {
 	ACTIVE,
@@ -250,15 +253,25 @@ static func build_structure(
 	shared_caches: Dictionary = {},
 	prepared_fingerprint: PackedByteArray = PackedByteArray()
 ) -> Dictionary:
+	if state != null and not state.atlas_layout.is_empty(): state.atlas_trade_mutex.lock()
+	var result := _build_structure_locked(state,use_connectivity_prefilter,build_profile,shared_caches,prepared_fingerprint)
+	if state != null and not state.atlas_layout.is_empty(): _publish_atlas_centers(state)
+	if state != null and not state.atlas_layout.is_empty(): state.atlas_trade_mutex.unlock()
+	return result
+
+
+static func _build_structure_locked(state: GameState, use_connectivity_prefilter: bool, build_profile: Dictionary, shared_caches: Dictionary, prepared_fingerprint: PackedByteArray = PackedByteArray()) -> Dictionary:
 	if state == null:
 		return _empty_structure(0, 0, structure_fingerprint(null))
 	_structure_builds += 1
 	var city_count := state.cities.size()
 	var nation_count := state.nations.size()
-	var fingerprint := prepared_fingerprint if not prepared_fingerprint.is_empty() else structure_fingerprint(state)
+	var fingerprint := prepared_fingerprint if not prepared_fingerprint.is_empty() else _structure_fingerprint_locked(state)
 	if not state.trade_enabled: return _empty_structure(city_count,nation_count,fingerprint)
 	if not _state_ids_indexable(state):
 		return _empty_structure(city_count, nation_count, fingerprint)
+	if not state.atlas_layout.is_empty() and state.atlas_trade_cache.get("fiscal_fingerprint",PackedByteArray())==fingerprint:
+		return (state.atlas_trade_cache.fiscal_structure as Dictionary).duplicate(true)
 	var city_gold_bonus := _zero_int_array(city_count)
 	var nation_trade_gold := _zero_int_array(nation_count)
 	var nation_trade_tax := _zero_int_array(nation_count)
@@ -285,7 +298,12 @@ static func build_structure(
 			Time.get_ticks_usec() - stage_started
 		)
 		stage_started = Time.get_ticks_usec()
-	var graph := _build_graph(state)
+	var graph: Dictionary = (
+		state.atlas_trade_cache.get("graph",{}) if not state.atlas_layout.is_empty() else {}
+	)
+	if graph.is_empty():
+		graph = _build_graph(state)
+		if not state.atlas_layout.is_empty(): state.atlas_trade_cache.graph=graph
 	if profile_enabled:
 		_accumulate_build_profile(
 			build_profile,
@@ -293,14 +311,16 @@ static func build_structure(
 			Time.get_ticks_usec() - stage_started
 		)
 		stage_started = Time.get_ticks_usec()
-	var party_context := _build_trade_party_context(
+	var party_context := {} if not state.atlas_layout.is_empty() else _build_trade_party_context(
 		state, occupied_edges
 	)
 	var field_cache := {}
-	var routes := _build_regional_routes(
+	var routes := _atlas_regional_routes(state,graph) if not state.atlas_layout.is_empty() else _build_regional_routes(
 		state, graph, besieged, occupied_edges, field_cache,
 		build_profile, shared_caches, party_context
 	)
+	if profile_enabled and not state.atlas_layout.is_empty():
+		_accumulate_build_profile(build_profile,"ai_snapshot_forecast_structure_regional_routes",Time.get_ticks_usec()-stage_started)
 
 	stage_started = Time.get_ticks_usec() if profile_enabled else 0
 	routes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -324,10 +344,14 @@ static func build_structure(
 			"ai_snapshot_forecast_structure_result",
 			Time.get_ticks_usec() - stage_started
 		)
-	return _make_structure(
+	var result := _make_structure(
 		fingerprint, city_count, nation_count, routes, city_gold_bonus,
 		nation_trade_gold, nation_trade_tax, policies
 	)
+	if not state.atlas_layout.is_empty():
+		state.atlas_trade_cache.fiscal_fingerprint=fingerprint
+		state.atlas_trade_cache.fiscal_structure=result.duplicate(true)
+	return result
 
 
 static func _accumulate_build_profile(
@@ -571,6 +595,14 @@ static func _copy_int_array(source: Variant, expected_size: int) -> Array[int]:
 ## 围城、军队位置、库存、国库与需求不属于路线结构。日期只通过城市当前是否
 ## 处于战乱减产期影响贸易中心产值，不直接写入 token。
 static func structure_fingerprint(state: GameState) -> PackedByteArray:
+	if state != null and not state.atlas_layout.is_empty(): state.atlas_trade_mutex.lock()
+	var result := _structure_fingerprint_locked(state)
+	if state != null and not state.atlas_layout.is_empty(): _publish_atlas_centers(state)
+	if state != null and not state.atlas_layout.is_empty(): state.atlas_trade_mutex.unlock()
+	return result
+
+
+static func _structure_fingerprint_locked(state: GameState) -> PackedByteArray:
 	_structure_fingerprint_builds += 1
 	if state == null:
 		return var_to_bytes(["trade_structure_v6_packed_records", null])
@@ -581,6 +613,10 @@ static func structure_fingerprint(state: GameState) -> PackedByteArray:
 		["counts", state.cities.size(), state.nations.size()],
 		["map_aspect_ratio", state.map_aspect_ratio],
 	]
+	if not state.atlas_layout.is_empty():
+		_prepare_atlas_trade_cache(state)
+		fields.append(["atlas_annual_routes_v1",state.atlas_trade_cache.centers,state.atlas_trade_cache.geometry_key])
+		fields.append(["financial_owners",state.nations.map(func(n): return state.financial_nation_of(n.id))])
 	var non_trade_gold_outputs := CityOutputRules.city_potential_gold_outputs(state)
 	var city_records := PackedInt64Array(); city_records.resize(state.cities.size()*14)
 	var city_positions := PackedVector2Array(); city_positions.resize(state.cities.size())
@@ -656,7 +692,7 @@ static func domestic_ideal_graph_fingerprint_exact(
 	for edge in state.edges:
 		fields.append([
 			"edge", edge.city_a, edge.city_b, edge.kind,
-			edge.max_manpower, edge.base_max_manpower, edge.distance,
+			edge.max_manpower, edge.base_max_manpower, edge.distance, edge.precise_distance,
 			edge.travel_time_multiplier, edge.danger,
 			edge.supply_loss_multiplier,
 		])
@@ -879,7 +915,7 @@ static func _allowed_city_mask(
 			continue
 		var owner := city.owner_nation
 		if (
-			owner >= 0 and owner < state.nations.size()
+			(owner >= 0 and owner < state.nations.size()) or city.is_traffic
 		):
 			result[city.id] = 1
 	return result
@@ -938,8 +974,7 @@ static func _ideal_city_mask(state: GameState) -> PackedByteArray:
 	for city in state.cities:
 		if (
 			city.id >= 0 and city.id < result.size()
-			and city.owner_nation >= 0
-			and city.owner_nation < state.nations.size()
+			and (city.is_traffic or (city.owner_nation >= 0 and city.owner_nation < state.nations.size()))
 		):
 			result[city.id] = 1
 	return result
@@ -2108,7 +2143,7 @@ static func _allowed_city_mask_for_enemy_union(
 			continue
 		var owner := city.owner_nation
 		if (
-			owner >= 0 and owner < state.nations.size()
+			(owner >= 0 and owner < state.nations.size()) or city.is_traffic
 		):
 			result[city.id] = 1
 	return result
@@ -2304,7 +2339,7 @@ static func trade_region_ids(state: GameState) -> PackedInt32Array:
 	result.resize(state.cities.size())
 	result.fill(-1)
 	for city in state.cities:
-		if city.is_dock:
+		if city.is_dock or city.is_traffic:
 			continue
 		result[city.id] = (
 			int(state.region_ids[city.id])
@@ -2360,6 +2395,7 @@ static func trade_region_ids(state: GameState) -> PackedInt32Array:
 				result[city.id] = result[source]
 				changed = true
 	for city in state.cities:
+		if city.is_traffic: continue
 		if result[city.id] >= 0:
 			continue
 		result[city.id] = (
@@ -2375,7 +2411,7 @@ static func route_region_crossings(
 	state: GameState, city_path: Array
 ) -> int:
 	return _route_region_crossings_from_ids(
-		city_path, trade_region_ids(state)
+		_tax_cities_on_path(state,city_path) if not state.atlas_layout.is_empty() else city_path, trade_region_ids(state)
 	)
 
 
@@ -2389,6 +2425,7 @@ static func _route_region_crossings_from_ids(
 		if city_id < 0 or city_id >= regions.size():
 			continue
 		var region_id := int(regions[city_id])
+		if region_id < 0: continue
 		if previous_region >= 0 and region_id != previous_region:
 			crossings += 1
 		previous_region = region_id
@@ -2428,13 +2465,110 @@ static func _international_hubs_by_nation(
 static func regional_trade_centers(
 	state: GameState, score_counts: Array = []
 ) -> Dictionary:
+	if state != null and not state.atlas_layout.is_empty() and state.trade_enabled:
+		# UI reads the separately published immutable centers, never waits for pathfinding.
+		if state.atlas_trade_centers.is_empty():
+			state.atlas_trade_mutex.lock()
+			_prepare_atlas_trade_cache(state)
+			_publish_atlas_centers(state)
+			state.atlas_trade_mutex.unlock()
+		return state.atlas_trade_centers.duplicate()
+	return _candidate_regional_trade_centers(state,score_counts)
+
+
+## First year is frozen; from month 12 each of 12 batches rotates annually.
+## Cache writes are protected by the caller; no Node/GPU resources enter this cache.
+static func prepare_atlas_centers(state: GameState) -> void:
+	if state==null or state.atlas_layout.is_empty() or not state.trade_enabled: return
+	state.atlas_trade_mutex.lock()
+	_prepare_atlas_trade_cache(state)
+	_publish_atlas_centers(state)
+	state.atlas_trade_mutex.unlock()
+
+
+static func _publish_atlas_centers(state: GameState) -> void:
+	# Only the main thread publishes the immutable dictionary read by the UI.
+	if OS.get_thread_caller_id()==OS.get_main_thread_id() and state.atlas_trade_cache.has("centers"):
+		if state.atlas_trade_centers!=state.atlas_trade_cache.centers:
+			state.atlas_trade_centers=(state.atlas_trade_cache.centers as Dictionary).duplicate()
+
+
+static func _prepare_atlas_trade_cache(state: GameState) -> void:
+	var month := state.day / 30
+	var layout_key: Array = [state.world_seed,state.cities.size(),state.region_analysis_revision]
+	var key: Array = [state.world_seed,state.cities.size(),state.edges.size(),state.road_network_revision,state.region_analysis_revision,_ideal_city_mask(state)]
+	var cache := state.atlas_trade_cache
+	if cache.get("geometry_key",[]) != key or month < int(cache.get("last_month",0)):
+		var preserve_centers: bool = cache.get("layout_key",[])==layout_key and month>=int(cache.get("last_month",0))
+		var centers: Dictionary = (cache.centers as Dictionary).duplicate() if preserve_centers else _candidate_regional_trade_centers(state)
+		var last_month: int = int(cache.last_month) if preserve_centers else month
+		var regions: Array = (cache.regions as Array).duplicate() if preserve_centers else centers.keys()
+		regions.sort()
+		cache.clear()
+		cache.merge({"layout_key":layout_key,"geometry_key":key,"centers":centers,"regions":regions,"last_month":last_month,"paths":{},"fields":{},"path_builds":0,"dijkstra_builds":0})
+	if month==int(cache.last_month): return
+	var candidates := _candidate_regional_trade_centers(state)
+	var regions: Array = cache.regions
+	var centers: Dictionary = (cache.centers as Dictionary).duplicate()
+	for index in range(regions.size()):
+		var phase := index%12
+		var due := month-posmod(month-phase,12)
+		if due>=12 and due>int(cache.last_month):
+			if candidates.has(regions[index]): centers[regions[index]]=candidates[regions[index]]
+			else: centers.erase(regions[index])
+	cache.centers=centers; cache.last_month=month
+
+
+static func _atlas_regional_routes(state: GameState, graph: Dictionary) -> Array[Dictionary]:
+	var cache := state.atlas_trade_cache
+	var regions := (cache.centers as Dictionary).keys(); regions.sort()
+	var routes: Array[Dictionary] = []
+	var paths: Dictionary = cache.paths
+	var fields: Dictionary = cache.fields
+	var used := {}
+	for i in range(regions.size()):
+		var source := int(cache.centers[regions[i]])
+		for j in range(i+1,regions.size()):
+			var destination := int(cache.centers[regions[j]])
+			var pair := Vector2i(source,destination)
+			used[pair]=true
+			if not paths.has(pair):
+				paths[pair]=_derive_route(state,graph,[source] as Array[int],[destination] as Array[int],0,0,false,{},[],fields)
+				var stored: Dictionary = paths[pair]
+				stored.tax_city_ids=_tax_cities_on_path(state,stored.city_path)
+				stored.region_crossings=_route_region_crossings_from_ids(_tax_cities_on_path(state,stored.preferred_city_path),trade_region_ids(state))
+				cache.path_builds=int(cache.path_builds)+1
+			var route: Dictionary = (paths[pair] as Dictionary).duplicate(true)
+			if (route.preferred_city_path as Array).is_empty(): continue
+			var a := state.financial_nation_of(state.cities[source].owner_nation)
+			var b := state.financial_nation_of(state.cities[destination].owner_nation)
+			if a<0 or b<0 or a>=state.nations.size() or b>=state.nations.size() or not state.nations[a].alive or not state.nations[b].alive: continue
+			route.nation_a=a; route.nation_b=b; route.kind="regional"; route.international=false
+			routes.append(route)
+	for pair in paths.keys():
+		if not used.has(pair):
+			paths.erase(pair)
+			(cache.get("tax_allocations", {}) as Dictionary).erase(pair)
+	# Keep at most two distance fields per currently selected center.
+	var allowed := _ideal_city_mask(state)
+	var keep := {}
+	for region in regions:
+		var city := int(cache.centers[region])
+		for operational in [false,true]:
+			keep[_preferred_endpoint_field_cache_key([city] as Array[int],allowed,operational,{},{})]=true
+	for field_key in fields.keys():
+		if not keep.has(field_key): fields.erase(field_key)
+	return routes
+
+
+static func _candidate_regional_trade_centers(state: GameState, score_counts: Array = []) -> Dictionary:
 	var result := {}
 	if state == null:
 		return result
 	var output_by_city := CityOutputRules.city_potential_gold_outputs(state)
 	var regions := trade_region_ids(state)
 	for city in state.cities:
-		if city.is_dock or city.id < 0 or city.id >= regions.size():
+		if city.is_traffic or city.is_dock or city.id < 0 or city.id >= regions.size():
 			continue
 		if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
 			continue
@@ -3593,6 +3727,7 @@ static func _dijkstra_field(
 	besieged: Dictionary,
 	blocked_edges: Dictionary
 ) -> Dictionary:
+	if not state.atlas_layout.is_empty(): state.atlas_trade_cache.dijkstra_builds=int(state.atlas_trade_cache.get("dijkstra_builds",0))+1
 	var city_count := state.cities.size()
 	var dist := PackedInt64Array()
 	dist.resize(city_count)
@@ -3688,12 +3823,12 @@ static func _edge_transport_cost(edge: Edge, operational: bool) -> float:
 	)
 	capacity_factor = clampf(capacity_factor, 0.60, 1.60)
 	return (
-		float(maxi(edge.distance, 1))
+		edge.distance_units()
 		* maxf(edge.travel_time_multiplier, 0.05)
 		* kind_factor
 		* capacity_factor
 		* (1.0 + clampf(edge.danger, 0.0, 1.0) * 0.50)
-		+ maxf(edge.supply_loss_multiplier, 0.0) * 0.10
+		+ maxf(edge.supply_loss_multiplier, 0.0) * 0.10 * (edge.distance_units() if edge.precise_distance>=0.0 else 1.0)
 	)
 
 
@@ -3896,37 +4031,41 @@ static func _apply_trade_taxes(
 	nation_trade_tax: Array[int]
 ) -> void:
 	var regions := trade_region_ids(state)
+	var financial_owners: Array[int] = []
+	var ruler_factors: Array[float] = []
+	for nation in state.nations:
+		financial_owners.append(state.financial_nation_of(nation.id))
+		ruler_factors.append(_ruler_trade_multiplier(nation))
 	for route_index in range(routes.size()):
 		var route: Dictionary = routes[route_index]
 		var preferred_path: Array = route.get("preferred_city_path", [])
 		if preferred_path.is_empty():
 			preferred_path = route.get("city_path", [])
-		route["region_crossings"] = _route_region_crossings_from_ids(
-			preferred_path, regions
-		)
+		if not route.has("tax_city_ids"):
+			route["region_crossings"] = _route_region_crossings_from_ids(
+				_tax_cities_on_path(state,preferred_path) if not state.atlas_layout.is_empty() else preferred_path, regions
+			)
 		if int(route["status"]) == RouteStatus.BLOCKED:
 			continue
-		var eligible: Array[int] = []
-		for city_id in route["city_path"] as Array[int]:
-			if (
-				city_id >= 0 and city_id < state.cities.size()
-				and not state.cities[city_id].is_dock
-				and not eligible.has(city_id)
-			):
-				eligible.append(city_id)
+		var eligible: Array[int] = route.tax_city_ids if route.has("tax_city_ids") else _tax_cities_on_path(state,route["city_path"])
 		if eligible.is_empty():
 			continue
 		var tax := _route_tax_gold(
-			state, route, policies, eligible.size()
+			state, route, policies, eligible.size(), ruler_factors
 		)
-		var allocation := _allocate_route_tax(state, route, eligible, tax)
+		var allocation := (
+			_atlas_route_tax_allocation(state, route, eligible, tax)
+			if atlas_tax_allocation_cache_enabled and not state.atlas_layout.is_empty()
+			else _allocate_route_tax(state, route, eligible, tax)
+		)
 		var gold_a := 0
 		var gold_b := 0
 		var transit_gold := 0
 		for city_id in eligible:
 			var bonus := int(allocation.get(city_id, 0))
 			city_gold_bonus[city_id] += bonus
-			var owner := state.financial_nation_of(state.cities[city_id].owner_nation)
+			var actual_owner := state.cities[city_id].owner_nation
+			var owner := financial_owners[actual_owner] if actual_owner>=0 and actual_owner<financial_owners.size() else -1
 			if owner >= 0 and owner < nation_trade_gold.size():
 				nation_trade_gold[owner] += bonus
 				nation_trade_tax[owner] += bonus
@@ -3948,6 +4087,23 @@ static func _apply_trade_taxes(
 		route["city_gold_bonus"] = allocation
 		routes[route_index] = route
 
+
+## Junctions only carry traffic. Atlas taxes belong to the actual traversed districts.
+static func _tax_cities_on_path(state: GameState,path: Array) -> Array[int]:
+	var result: Array[int] = []
+	for index in range(path.size()):
+		var city_id := int(path[index])
+		if city_id>=0 and city_id<state.cities.size() and state.cities[city_id].is_settlement() and not result.has(city_id):
+			result.append(city_id)
+		if index+1>=path.size() or state.atlas_layout.is_empty():
+			continue
+		var edge := state.edge_of(city_id,int(path[index+1]))
+		if edge==null:
+			continue
+		var controller := edge.control_city_id
+		if controller>=0 and controller<state.cities.size() and state.cities[controller].is_settlement() and not result.has(controller):
+			result.append(controller)
+	return result
 
 ## 贸易路线及其和平期基准税收属于结构层；战争只在结算层折算实际到账。
 ## 按城市逐项取整，保证 route、city 与 nation 三个公开口径始终守恒。
@@ -4092,7 +4248,8 @@ static func _route_tax_gold(
 	state: GameState,
 	route: Dictionary,
 	policies: Array[int],
-	eligible_city_count: int
+	eligible_city_count: int,
+	ruler_factors: Array[float] = []
 ) -> int:
 	var source := int(route["source"])
 	var destination := int(route["destination"])
@@ -4115,9 +4272,7 @@ static func _route_tax_gold(
 	var nation_a := int(route["nation_a"])
 	var nation_b := int(route["nation_b"])
 	var policy_factor := _gold_policy_factor(policies[nation_a])
-	var ruler_factor := _ruler_trade_multiplier(
-		state.nations[nation_a]
-	)
+	var ruler_factor: float = ruler_factors[nation_a] if ruler_factors.size()==state.nations.size() else _ruler_trade_multiplier(state.nations[nation_a])
 	if nation_b != nation_a:
 		policy_factor = (
 			ISOLATION_TRADE_OUTPUT_MULTIPLIER
@@ -4130,7 +4285,7 @@ static func _route_tax_gold(
 			) * 0.5
 		)
 		ruler_factor = (
-			ruler_factor + _ruler_trade_multiplier(state.nations[nation_b])
+			ruler_factor + (ruler_factors[nation_b] if ruler_factors.size()==state.nations.size() else _ruler_trade_multiplier(state.nations[nation_b]))
 		) * 0.5
 	var route_factor := 1.0
 	if bool(route["uses_water"]):
@@ -4158,6 +4313,31 @@ static func _gold_policy_factor(policy: int) -> float:
 
 static func _ruler_trade_multiplier(nation: Nation) -> float:
 	return clampf(RulerProfile.trade_multiplier(nation), 0.25, 4.0)
+
+
+## Physical city shares do not depend on ownership. Store only the latest
+## exact rounding input per active path; callers own a copy of the allocation.
+## _prepare_atlas_trade_cache / path pruning retire these entries with geometry.
+static func _atlas_route_tax_allocation(state: GameState, route: Dictionary, city_ids: Array[int], total: int) -> Dictionary:
+	var paths: Dictionary = state.atlas_trade_cache.get("paths", {})
+	var pair := Vector2i(int(route.source), int(route.destination))
+	if not paths.has(pair):
+		return _allocate_route_tax(state, route, city_ids, total)
+	var values := PackedInt64Array([total])
+	for city_id in city_ids:
+		var city := state.cities[city_id]
+		values.append(city_id)
+		values.append((1 if city.is_port_market else 0) + (2 if city.is_crossroads else 0))
+	var token := var_to_bytes(values)
+	var allocations: Dictionary = state.atlas_trade_cache.get("tax_allocations", {})
+	var entry: Dictionary = allocations.get(pair, {})
+	if entry.get("token", PackedByteArray()) == token:
+		return (entry.allocation as Dictionary).duplicate()
+	var allocation := _allocate_route_tax(state, route, city_ids, total)
+	allocations[pair] = {"token":token,"allocation":allocation.duplicate()}
+	state.atlas_trade_cache.tax_allocations = allocations
+	state.atlas_trade_cache.allocation_builds = int(state.atlas_trade_cache.get("allocation_builds", 0)) + 1
+	return allocation
 
 
 static func _allocate_route_tax(

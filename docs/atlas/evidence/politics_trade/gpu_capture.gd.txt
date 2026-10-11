@@ -1,0 +1,17 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	root.size=Vector2i(1280,720)
+	var view=load("res://atlas_military.tscn").instantiate(); root.add_child(view)
+	while not view.view_ready or view.generating: await process_frame
+	assert(view.state.trade_enabled and view.state.random_ruler_profiles_enabled())
+	view.show_information("nation",0)
+	if not await view.await_render_ready(): quit(1); return
+	await process_frame; await process_frame
+	RenderingServer.force_draw(true)
+	root.get_texture().get_image().save_png("res://.dbg/atlas-politics-info.png")
+	view.info_panel.scroll.scroll_vertical=350
+	await process_frame; RenderingServer.force_draw(true)
+	root.get_texture().get_image().save_png("res://.dbg/atlas-politics-ruler.png")
+	print("POLITICS_VISUAL ",JSON.stringify({"seed":view.state.world_seed,"mask":view.state.map_models.settlement_mask,"trade":view.state.trade_enabled,"rulers":view.state.random_ruler_profiles_enabled(),"ruler":view.state.nations[0].ruler_name,"regions":view.state.region_count,"routes":view.state.trade_routes.size(),"pid":OS.get_process_id(),"renderer":RenderingServer.get_current_rendering_method()}))
+	quit()

@@ -87,6 +87,9 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 		for i in range(mini(layout.positions.size(),_view_state.cities.size())):
 			_view_state.cities[i].map_position=layout.positions[i]
 	_view_state.day = int(snapshot["day"])
+	_view_state.region_ids = snapshot.get("region_ids",_view_state.region_ids).duplicate()
+	_view_state.region_count = int(snapshot.get("region_count",live_state.region_count))
+	_view_state.region_analysis_revision = int(snapshot.get("region_analysis_revision",_view_state.region_analysis_revision))
 	_view_state.month = int(snapshot["month"])
 	_view_state.ownership_revision = int(snapshot["ownership_revision"])
 	_view_state.diplomacy_revision = int(snapshot["diplomacy_revision"])
@@ -199,6 +202,7 @@ func _create_view_state(live_state: GameState) -> GameState:
 	view.road_network_revision = live_state.road_network_revision
 	view.naming_revision = live_state.naming_revision
 	view.region_ids = live_state.region_ids.duplicate()
+	view.region_count = live_state.region_count
 	view.region_analysis_revision = live_state.region_analysis_revision
 	view.administrative_center_by_city = live_state.administrative_center_by_city.duplicate()
 	view.administrative_center_city_ids = live_state.administrative_center_city_ids.duplicate()
@@ -262,6 +266,9 @@ func _capture(game_state: GameState) -> void:
 		"ownership_revision": game_state.ownership_revision,
 		"diplomacy_revision": game_state.diplomacy_revision,
 		"regional_strategy_revision": game_state.regional_strategy_revision,
+		"region_ids": game_state.region_ids.duplicate(),
+		"region_count": game_state.region_count,
+		"region_analysis_revision": game_state.region_analysis_revision,
 		"strategic_region_anchors": strategic_region_anchors,
 		"court_expense_rates": court_rates,
 		"court_expense_due": court_due,

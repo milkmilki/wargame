@@ -85,6 +85,23 @@ func run():
 	check(not sim._daily_supply_network_cache.has(0),"road revision invalidates supply field")
 	query(sim,"reopened road")
 	check(is_finite((sim._daily_supply_network_cache[0][0].dist as PackedFloat64Array)[2]),"road reopening restores route")
+	# A transfer between two inaccessible foreign owners cannot alter nation 0's
+	# logistics graph. Keep its warmed field, while refreshing affected owners.
+	state.cities[7].owner_nation=1; state.ownership_revision+=1
+	sim._prepare_supply_network_caches()
+	check(sim._daily_supply_network_cache.has(0),"unrelated foreign ownership transfer preserves own supply field")
+	query(sim,"unrelated foreign transfer")
+	state.cities[1].owner_nation=1; state.ownership_revision+=1
+	sim._prepare_supply_network_caches()
+	check(not sim._daily_supply_network_cache.has(0),"own corridor transfer invalidates immediately")
+	query(sim,"own corridor transfer")
+	check((sim._daily_supply_network_cache[0][0].dist as PackedFloat64Array)[2]==INF,"lost corridor cuts supply")
+	state.cities[1].owner_nation=0; state.ownership_revision+=1
+	sim._prepare_supply_network_caches(); query(sim,"corridor reclaimed")
+	state.nations[0].capital_city_id=2
+	sim._prepare_supply_network_caches()
+	check(not sim._daily_supply_network_cache.has(0),"capital changes refresh ordering dependencies")
+	query(sim,"capital relocated")
 	check(state.rng.state == rng_before,"dependency queries do not consume RNG")
 	sim.free()
 	for legacy in [true,false]:
@@ -93,8 +110,23 @@ func run():
 		else: state.succession_conflicts[0] = SuccessionConflict.new()
 		sim._prepare_supply_network_caches(); query(sim,"conservative initial")
 		place(state,state.armies[1],4,5); sim._prepare_supply_network_caches()
-		check(not sim._daily_supply_network_cache.has(0),"legacy/succession retain full blocker dependencies")
+		check(not sim._daily_supply_network_cache.has(0) if legacy else sim._daily_supply_network_cache.has(0),"legacy retains full blockers; Atlas succession ignores physically inaccessible roads")
 		query(sim,"conservative move"); sim.free()
+	# Launched dynastic proxy: logistics resolves its districts to the crown's
+	# financial identity. A third country's blockade there must remain effective.
+	state=fixture(); sim=Simulation.new(); sim.state=state
+	var conflict := SuccessionConflict.new(); conflict.nation_id=0; conflict.rebel_nation_id=1
+	conflict.capital_city_id=0; conflict.camp_city_id=3; conflict.war_id=0
+	state.nations[1].succession_identity=true; state.succession_conflicts[0]=conflict
+	state.set_diplomatic_relation(0,2,GameState.DiplomaticRelation.WAR)
+	var foreign := Army.new(); foreign.id=2; foreign.owner_nation=2
+	foreign.size=1000; foreign.max_size=15000; foreign.location_city=6; state.armies.append(foreign)
+	place(state,foreign,6,7); sim._prepare_supply_network_caches(); query(sim,"launched succession")
+	place(state,foreign,3,4); sim._prepare_supply_network_caches()
+	check(not sim._daily_supply_network_cache.has(0),"third-country blockade in proxy district invalidates financial logistics")
+	query(sim,"proxy corridor blockade")
+	check(sim._prepared_supply_blocked_edges[0].has(GameState.edge_key(3,4)),"proxy blockade kept in actual search")
+	sim.free()
 	for failure in failures: printerr("ATLAS_SUPPLY_DEPENDENCY_FAIL ",failure)
 	print("ATLAS_SUPPLY_DEPENDENCY_RESULT checks=",checks," failures=",failures.size())
 	quit(0 if failures.is_empty() else 1)

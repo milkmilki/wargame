@@ -1,0 +1,115 @@
+extends Simulation
+var timings := {}
+var calls := {}
+func mark(key: String, started: int):
+	timings[key]=int(timings.get(key,0))+Time.get_ticks_usec()-started
+	calls[key]=int(calls.get(key,0))+1
+
+func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
+	state.prune_campaign_offensive_cooldowns()
+	_coalition_campaign_query_cache.clear()
+	_coalition_changes_by_nation.clear()
+	_coalition_armies_by_id.clear()
+	_coalition_armies_by_nation.clear()
+	for army in state.armies:
+		_coalition_armies_by_id[army.id] = army
+		if not _coalition_armies_by_nation.has(army.owner_nation):
+			_coalition_armies_by_nation[army.owner_nation] = [] as Array[Army]
+		(_coalition_armies_by_nation[army.owner_nation] as Array[Army]).append(army)
+	var stamp_activity := Time.get_ticks_usec()
+	_coalition_defense_activity = state.campaign_defense_activity_index()
+	mark("activity",stamp_activity)
+	var stamp_components := Time.get_ticks_usec()
+	var components := state.coalition_campaign_components()
+	mark("components",stamp_components)
+	_coalition_component_keys.clear()
+	for component in components:
+		_coalition_component_keys[str(component["key"])] = true
+	var stamp_reconcile_fronts := Time.get_ticks_usec()
+	_reconcile_coalition_fronts(components)
+	mark("reconcile_fronts",stamp_reconcile_fronts)
+	var stamp_sync_pairs := Time.get_ticks_usec()
+	state.sync_campaign_pairs(components)
+	mark("sync_pairs",stamp_sync_pairs)
+	var stamp_reconcile_fields := Time.get_ticks_usec()
+	_reconcile_campaign_battlefields()
+	mark("reconcile_fields",stamp_reconcile_fields)
+	var due: Array[Dictionary] = []
+	for component in components:
+		var key := str(component["key"])
+		var members: Array[int] = component["members"]
+		var enemy_ids: Array[int] = component["enemy_ids"]
+		if members.is_empty() or enemy_ids.is_empty():
+			continue
+		var defense_centers := _component_defense_centers(members, int(component["war_id"]))
+		var emergency := false
+		for center_id in defense_centers:
+			if state.campaign_front_for(
+				state.cities[center_id].owner_nation,
+				center_id,
+				CoalitionCampaignFront.Mode.DEFENSE,
+				int(component["war_id"]),
+			) == null:
+				emergency = true
+				break
+		var next_day := int(_coalition_campaign_next_due_day.get(key, state.day))
+		if next_day > state.day and not emergency:
+			continue
+		var reported_today := false
+		for front in _component_fronts(component):
+			if not front.combat_report_locked and front.combat_report_day == state.day:
+				reported_today = true
+				break
+		if next_day > state.day and reported_today:
+			continue
+		component["defense_centers"] = defense_centers
+		due.append(component)
+	# A shared slot must be proposed with both sides present in the command batch.
+	var due_keys := {}
+	for component in due:
+		due_keys[component["key"]] = true
+	var pair_ids := {}
+	var additional := {}
+	for pair_value in state.campaign_pairs.values():
+		var pair := pair_value as CoalitionCampaignPair
+		var a_key := "%d:%s" % [pair.war_id, str(pair.side_a_nation_ids)]
+		var b_key := "%d:%s" % [pair.war_id, str(pair.side_b_nation_ids)]
+		if due_keys.has(a_key) or due_keys.has(b_key):
+			pair_ids[pair.pair_id] = true
+			additional[a_key] = true
+			additional[b_key] = true
+	for component in components:
+		if additional.has(component["key"]) and not due_keys.has(component["key"]):
+			component["defense_centers"] = _component_defense_centers(component["members"], int(component["war_id"]))
+			due.append(component)
+	_coalition_campaign_query_cache["due_pair_ids"] = pair_ids
+	return due
+
+func _component_defense_centers(members: Array[int], war_id: int) -> Array[int]:
+	var stamp := Time.get_ticks_usec()
+	var result := super._component_defense_centers(members,war_id)
+	mark("_component_defense_centers",stamp)
+	return result
+
+func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool:
+	var stamp := Time.get_ticks_usec()
+	var result := super._plan_campaign_pair(pair,cache)
+	mark("_plan_campaign_pair",stamp)
+	return result
+
+func _plan_coalition_component(component: Dictionary, centers: Array[int], cache: Dictionary) -> bool:
+	var stamp := Time.get_ticks_usec()
+	var result := super._plan_coalition_component(component,centers,cache)
+	mark("_plan_coalition_component",stamp)
+	return result
+
+func _refresh_component_defense_tasks(component: Dictionary) -> void:
+	var stamp := Time.get_ticks_usec()
+	super._refresh_component_defense_tasks(component)
+	mark("_refresh_component_defense_tasks",stamp)
+
+func _campaign_mobilization_claims() -> Dictionary:
+	var stamp := Time.get_ticks_usec()
+	var result := super._campaign_mobilization_claims()
+	mark("_campaign_mobilization_claims",stamp)
+	return result

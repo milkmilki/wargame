@@ -1,0 +1,64 @@
+{
+  "seed": 1,
+  "day_range": [
+    61,
+    95
+  ],
+  "pids": [
+    36392,
+    23512,
+    2364
+  ],
+  "initial_snapshot_sha256": "5f2c3aa6cd74d8e29043e3181250c46fbf09a85116528f07cce25b3b94caa460",
+  "initial_world": {
+    "nodes": 1192,
+    "armies": 229
+  },
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  },
+  "source_hashes": {
+    "scripts/core/pathfinding.gd": "e33f5e1ffa4fd8845cd3b98f41ef6819bce38ef80a69827708b01e14096d05b9",
+    "scripts/simulation/rules/supply_rules.gd": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa",
+    "scripts/simulation/simulation.gd": "138d2ec0ead1721d720e24fe37a67d092178710c35d40a38e681c8b7fb320062",
+    "tests/support/legacy_supply_batch_simulation.gd": "a3b01bd77a05cc47ac610168f092ace087f64a9191f04944cc8ca91c061c09ac"
+  },
+  "all_105_full_daily_snapshots_identical": true,
+  "stats": {
+    "before": {
+      "daily_mean_ms_median_process": 117.95214285714286,
+      "supply_mean_ms_median_process": 32.483914285714285,
+      "supply_peak_ms_median_process": 361.79,
+      "prepare_mean_ms_median_process": 8.147971428571429,
+      "plan_mean_ms_median_process": 20.709085714285713,
+      "warm_source_batch_wall_ms_median_process": 3.34
+    },
+    "after": {
+      "daily_mean_ms_median_process": 104.01028571428571,
+      "supply_mean_ms_median_process": 18.875714285714285,
+      "supply_peak_ms_median_process": 109.813,
+      "prepare_mean_ms_median_process": 8.195457142857144,
+      "plan_mean_ms_median_process": 6.754085714285714,
+      "warm_source_batch_wall_ms_median_process": 3.398
+    }
+  },
+  "head": "222c9a260995677bbc27ddd9e82386120fee775d",
+  "limitations": [
+    "Headless compute and source-batch wall time are not GUI frame rate.",
+    "One actual Eurasia war state, three independent process pairs; not a fresh-world 180-day or 30-year audit.",
+    "Warm moving-army source batches did not improve; gains mainly remove irrelevant network rebuilds during succession.",
+    "Shared fields retain upstream approximate floating tie rules; these samples are byte-identical, not a proof for all inputs."
+  ],
+  "daily_mean_ms_median_process_reduction_percent": 11.81992696795916,
+  "supply_mean_ms_median_process_reduction_percent": 41.89211891248152,
+  "supply_peak_ms_median_process_reduction_percent": 69.6473092125266
+}

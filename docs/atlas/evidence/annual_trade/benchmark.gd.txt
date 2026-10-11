@@ -1,0 +1,36 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var payload: Dictionary = preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	var state := GameState.new(); state.generate_from_atlas(payload)
+	var initial := TradeNetwork.build_structure(state)
+	var graph := TradeNetwork._build_graph(state)
+	var rows := []
+	var builds := int(state.atlas_trade_cache.dijkstra_builds)
+	for repeat in range(5):
+		var policies := TradeNetwork._collect_policies(state)
+		var started := Time.get_ticks_usec()
+		var uncached := TradeNetwork._build_regional_routes(state,graph,{},[],{})
+		uncached.sort_custom(func(a,b): return a.source<b.source or (a.source==b.source and a.destination<b.destination))
+		for id in range(uncached.size()): uncached[id].id=id
+		var old_cities := TradeNetwork._zero_int_array(state.cities.size())
+		var old_gold := TradeNetwork._zero_int_array(state.nations.size())
+		var old_tax := TradeNetwork._zero_int_array(state.nations.size())
+		TradeNetwork._apply_trade_taxes(state,uncached,policies,old_cities,old_gold,old_tax)
+		var old_usec := Time.get_ticks_usec()-started
+		state.atlas_trade_cache.erase("fiscal_fingerprint")
+		var fields_before := int(state.atlas_trade_cache.dijkstra_builds)
+		started=Time.get_ticks_usec()
+		var cached := TradeNetwork.build_structure(state)
+		var new_usec := Time.get_ticks_usec()-started
+		var equivalent: bool = cached.city_gold_bonus==old_cities and cached.nation_trade_gold==old_gold and cached.nation_trade_tax==old_tax and cached.routes.size()==uncached.size()
+		for id in range(uncached.size()):
+			var raw: Dictionary = (cached.routes[id] as Dictionary).duplicate(true)
+			raw.erase("tax_city_ids")
+			equivalent=equivalent and raw==uncached[id]
+		rows.append({"uncached_usec":old_usec,"cached_usec":new_usec,"equivalent":equivalent,"cached_new_fields":int(state.atlas_trade_cache.dijkstra_builds)-fields_before})
+		if not equivalent: printerr("TRADE_BENCH_DIFFERENT"); quit(1); return
+	var name := "res://.dbg/trade-bench-%d.json"%OS.get_process_id()
+	FileAccess.open(name,FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"source_hash":FileAccess.get_sha256("res://scripts/core/trade_network.gd"),"seed":state.world_seed,"mask":payload.data.options.settlement_mask,"systems":payload.simulation_options,"day":state.day,"routes":initial.routes.size(),"rows":rows,"geometry_field_builds":state.atlas_trade_cache.dijkstra_builds,"expected_field_builds":builds},"  "))
+	print("TRADE_BENCH ",name," ",JSON.stringify(rows))
+	quit()

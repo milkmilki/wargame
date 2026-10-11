@@ -1,0 +1,9 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+COALITION_BATCH_METRIC assembled=30000 requirement=9001 outside_rotation_dispatched=1 commit_failures=0
+COALITION_MOBILIZATION_METRIC required=89101 assigned=90000 planning_cycles=1
+COALITION_COUNTERATTACK_METRIC defense_release_to_order_days=0 within_same_planning_cycle=true
+COALITION_REACHABILITY_METRIC unreachable_gap_occupants=0
+COALITION_TRANSFER_METRIC active_transfers=3 maximum=3
+COALITION_TRAVEL_METRIC arrival_day=25 sortie_day=25 travel_days=25 planning_wait_days=0
+COALITION_DISPATCH_LIFECYCLE_RESULT checks=67 failures=0

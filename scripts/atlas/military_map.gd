@@ -49,7 +49,7 @@ static func prepare(base: Dictionary,target_nations: int = 40) -> Dictionary:
 			pairs[mini(a,b)*h.cities.size()+maxi(a,b)] = Vector2i(mini(a,b),maxi(a,b))
 	var keys: Array = pairs.keys(); keys.sort()
 	for key in keys: territorial.append(pairs[key])
-	return {"model":MODEL,"data":data,"raster":raster,"display":base.display,"hierarchy":h,"network":roads,"graph":graph,
+	return {"model":MODEL,"simulation_options":{"trade_enabled":true,"rulers_enabled":true},"data":data,"raster":raster,"display":base.display,"hierarchy":h,"network":roads,"graph":graph,
 		"ownership":political.ownership,"nations":political.nations,"district_pixels":district_pixels,
 		"settlement_adjacency":strategic,"strategic_routes":strategic_routes,"territorial_pairs":territorial,"timing":{"hierarchy_ms":hierarchy_ms,"roads_ms":roads_ms,"total_ms":Time.get_ticks_msec()-total_started,"smoothing":smoothing},"distance_km":250.0}
 

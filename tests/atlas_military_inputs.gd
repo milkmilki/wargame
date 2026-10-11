@@ -14,7 +14,9 @@ static func base(seed_value: int = 1,earth: bool = true) -> Dictionary:
 static func military() -> Dictionary:
 	var path := "res://.dbg/atlas-military-earth.bin"
 	if FileAccess.file_exists(path): return FileAccess.open(path,FileAccess.READ).get_var(false)
-	var result := MilitaryMap.prepare(base()); FileAccess.open(path,FileAccess.WRITE).store_var(result,false); return result
+	var result := MilitaryMap.prepare(base())
+	result.simulation_options={"trade_enabled":false,"rulers_enabled":false}
+	FileAccess.open(path,FileAccess.WRITE).store_var(result,false); return result
 
 ## Performance/default audit world. Global fixtures above remain compatibility inputs.
 static func eurasia_military() -> Dictionary:
@@ -22,7 +24,9 @@ static func eurasia_military() -> Dictionary:
 	var mask: Dictionary = preload("res://scripts/atlas/settlement_mask.gd").EURASIA
 	if FileAccess.file_exists(path):
 		var cached: Dictionary = FileAccess.open(path,FileAccess.READ).get_var(false)
-		if cached.get("data",{}).get("options",{}).get("settlement_mask",{})==mask: return cached
+		if cached.get("data",{}).get("options",{}).get("settlement_mask",{})==mask:
+			cached.simulation_options={"trade_enabled":true,"rulers_enabled":true}
+			return cached
 	var result := MilitaryMap.prepare(Generator.generate(1,1.,Callable(),{"terrain_model":"earth","rainfall_model":"seasonal_circulation_v5","settlement_model":"climate_capacity_v6","settlement_mask":mask}))
 	assert(not result.has("error"),str(result.get("error","")))
 	DirAccess.make_dir_recursive_absolute("res://.dbg")

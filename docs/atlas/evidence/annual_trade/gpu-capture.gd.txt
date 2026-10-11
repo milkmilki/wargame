@@ -1,0 +1,73 @@
+extends SceneTree
+var failures:=0
+func check(ok: bool,message: String):
+	if not ok: failures+=1; printerr("INTERACTION_GPU_FAIL ",message)
+func _initialize(): call_deferred("run")
+func run():
+	root.size=Vector2i(1280,720)
+	var view=load("res://atlas_military.tscn").instantiate(); root.add_child(view)
+	while not view.view_ready or view.generating: await process_frame
+	view.simulation.set_process(false)
+	var button: Button=view.interface.speed_buttons[0].node
+	var activations: Array=[0]; button.pressed.connect(func(): activations[0]+=1)
+	button.grab_focus()
+	var key:=InputEventKey.new(); key.keycode=KEY_SPACE; key.pressed=true; root.push_input(key,true)
+	check(not view.simulation.paused and activations[0]==0,"focused button Space only resumes")
+	key.pressed=false; root.push_input(key,true)
+	view.simulation.paused=true; view.mode_control.grab_focus(); key.pressed=true; root.push_input(key,true)
+	check(not view.simulation.paused and not view.mode_control.get_popup().visible,"focused dropdown Space does not open it")
+	view.simulation.paused=true; var popup: PopupMenu=view.mode_control.get_popup(); popup.popup(); await process_frame
+	popup.push_input(key,true); check(not view.simulation.paused and view.mode_control.selected==0,"popup viewport routes Space correctly")
+	key.pressed=false; popup.push_input(key,true); popup.hide(); view.simulation.paused=true
+	var point:=Vector2.ZERO; var owner: int=-1
+	for y in range(180,400,8):
+		for x in range(420,810,8):
+			var p: Vector2=view.map_root.to_local(Vector2(x,y)); var pick: Dictionary=view.pick_map(p)
+			if pick.kind=="nation": point=p; owner=pick.id; break
+		if owner>=0: break
+	check(owner>=0,"visible country click sample exists")
+	var click:=InputEventMouseButton.new(); click.button_index=MOUSE_BUTTON_LEFT; click.pressed=true; click.position=view.map_root.to_global(point)
+	root.push_input(click,true)
+	check(view.info_panel.visible and view.information_kind=="nation" and view.information_id==owner,"real GUI map click opens country inspector")
+	view.close_information(); view.info_panel.hide(); view.refresh_ownership(); root.push_input(click,true)
+	check(not view.pending_selection.is_empty(),"pending border update retains map click")
+	if not await view.await_render_ready(15000): check(false,"political render ready")
+	check(view.info_panel.visible and view.information_id==owner,"pending country click resolves after atomic update")
+	view.close_information(); view.info_panel.hide(); view.mode_control.select(4); view.update_mode()
+	if not await view.await_render_ready(15000): check(false,"trade view ready")
+	await process_frame; RenderingServer.force_draw(true)
+	root.get_texture().get_image().save_png("res://.dbg/atlas-trade-overview.png")
+	var builds: int=view.trade_build_count
+	view.mode_control.select(0); view.update_mode(); view.mode_control.select(4); view.update_mode()
+	check(view.trade_build_count==builds,"mode switch reuses trade geometry")
+	view.zoom=2.; view.map_root.scale=Vector2.ONE*2.; view.map_root.position=Vector2(640,360)-Vector2(1250,330)*2.; view.schedule_symbols()
+	if not await view.await_render_ready(15000): check(false,"zoom render ready")
+	await process_frame; RenderingServer.force_draw(true)
+	root.get_texture().get_image().save_png("res://.dbg/atlas-trade-europe.png")
+	check(view.trade_build_count==builds,"pan and zoom never rebuild trade geometry")
+	var center: int=view.trade_center_ids[0]
+	view.select_at(view.state.cities[center].map_position*Vector2(2048,1024))
+	check(view.information_kind=="city" and view.information_id==center,"trade center marker opens its real city")
+	view.close_information(); view.info_panel.hide(); view.show_history(); await process_frame
+	if not await view.await_render_ready(15000): check(false,"historical trade view ready")
+	check(view.historical_view and not view.trade_hubs.visible,"history hides uncaptured economic hub selection")
+	view.return_to_current(); await process_frame
+	if not await view.await_render_ready(15000): check(false,"current trade view ready")
+	check(not view.historical_view and view.trade_hubs.visible,"return restores current trade centers")
+	var first_region: int=view.state.atlas_trade_centers.keys().min()
+	var old_center: int=view.state.atlas_trade_centers[first_region]
+	var next_center: int=-1
+	for city in view.state.cities:
+		if city.is_settlement() and view.state.region_ids[city.id]==first_region and city.id!=old_center:
+			next_center=city.id; city.gold_per_month=10000; break
+	view.state.day=360; view.state.month=12
+	TradeNetwork.build(view.state); view.refresh_trade_hubs()
+	check(next_center>=0 and view.state.atlas_trade_centers[first_region]==next_center and view.trade_center_ids.has(next_center),"annual center rotation appears in actual hub layer")
+	view.zoom=4.; view.map_root.scale=Vector2.ONE*4.; view.map_root.position=Vector2(640,360)-view.state.cities[next_center].map_position*Vector2(2048,1024)*4.; view.schedule_symbols()
+	if not await view.await_render_ready(15000): check(false,"annual hub capture ready")
+	await process_frame; RenderingServer.force_draw(true)
+	root.get_texture().get_image().save_png("res://.dbg/atlas-trade-annual.png")
+	print("INTERACTION_GPU ",JSON.stringify({"pid":OS.get_process_id(),"seed":view.state.world_seed,"mask":view.state.map_models.settlement_mask,"day":view.state.day,"trade_regions":view.state.region_count,"trade_centers":view.trade_center_ids.size(),"trade_builds":builds,"failures":failures,"renderer":RenderingServer.get_current_rendering_method()}))
+	quit(1 if failures else 0)
+
+

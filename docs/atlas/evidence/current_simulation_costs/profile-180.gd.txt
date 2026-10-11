@@ -1,0 +1,21 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var payload: Dictionary = preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	var state := GameState.new(); state.generate_from_atlas(payload)
+	var sim := Simulation.new(); sim.setup(state)
+	sim.tick_phase_profiling_enabled=true; sim.runtime_stage_profiling_enabled=true; sim.ai_snapshot_substage_profiling_enabled=true
+	var hashes := {}
+	for path in ["scripts/simulation/simulation.gd","scripts/core/trade_network.gd"]:
+		hashes[path]=FileAccess.get_sha256("res://"+path)
+	FileAccess.open("res://.dbg/current-cost-manifest.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"seed":state.world_seed,"mask":payload.data.options.settlement_mask,"systems":payload.simulation_options,"cities":state.cities.size(),"settlements":payload.hierarchy.members.size(),"regions":state.region_count,"godot":Engine.get_version_info(),"hashes":hashes},"  "))
+	var file := FileAccess.open("res://.dbg/current-cost-profile.jsonl",FileAccess.WRITE)
+	for day in range(180):
+		sim.runtime_span_total_usec.clear(); sim.runtime_span_peak_usec.clear()
+		var old_builds := sim.trade_structure_build_total
+		var old_forecasts := sim.trade_forecast_build_total
+		var started := Time.get_ticks_usec(); sim._advance_day(false); var elapsed := Time.get_ticks_usec()-started
+		var row := {"day":state.day,"elapsed_usec":elapsed,"armies":state.armies.size(),"profile":sim.tick_profile_last_usec.duplicate(),"runtime":sim.runtime_span_total_usec.duplicate(),"trade_builds":sim.trade_structure_build_total-old_builds,"trade_forecasts":sim.trade_forecast_build_total-old_forecasts,"cache_hits":sim.trade_structure_cache_hit_total}
+		file.store_line(JSON.stringify(row)); file.flush()
+		if state.day%15==0: print("COST_DAY ",state.day," ms=",elapsed/1000.); await process_frame
+	file.close(); sim.free(); quit()

@@ -1,0 +1,54 @@
+from pathlib import Path
+import hashlib
+import json
+import math
+import shutil
+import statistics
+
+base = Path('docs/atlas/evidence/coalition_cache_v10')
+pids = [24208, 25092, 9364, 13140, 14456]
+runs = [json.loads((Path('.dbg/ai-v10') / f'paired-{pid}.json').read_text(encoding='utf-8')) for pid in pids]
+keys = ['total', 'ai', 'ai_campaign_planning', 'ai_campaign_prepare', 'ai_campaign_components', 'ai_campaign_coalition', 'movement_battles', 'supply']
+means = []
+for run in runs:
+    variants = {}
+    for variant in ['before', 'after']:
+        rows = run['results'][variant]
+        assert len(rows) == 35
+        variants[variant] = {key: statistics.mean((row['elapsed_usec'] if key == 'total' else row['profile'].get(key, 0)) / 1000 for row in rows) for key in keys}
+    tails = {}
+    for variant in ['before', 'after']:
+        rows = run['results'][variant]
+        values = sorted(row['elapsed_usec'] / 1000 for row in rows)
+        peak = max(rows, key=lambda row: row['elapsed_usec'])
+        tails[variant] = {'p95_ms': values[math.ceil(.95 * len(values)) - 1],
+                          'max_ms': max(values), 'max_day': peak['day'],
+                          'max_profile_ms': {key: value / 1000 for key, value in peak['profile'].items()}}
+    means.append({'pid': run['pid'], 'order': run.get('variant_order', ['before', 'after']), 'means_ms': variants, 'tails': tails,
+                  'total_reduction_percent': 100 * (1 - variants['after']['total'] / variants['before']['total'])})
+output = {
+    'date': '2026-10-11', 'head': '222c9a260995677bbc27ddd9e82386120fee775d',
+    'seed': 1, 'day_range': [181, 215], 'nodes': 1192, 'armies_at_freeze': 234,
+    'pids': pids, 'source_hashes': runs[0]['source_hashes'],
+    'mask': runs[0]['input_source']['mask'], 'systems': runs[0]['input_source']['systems'],
+    'initial_sha256': runs[0]['initial_sha256'], 'process_means': means,
+    'full_daily_snapshot_pairs': 35 * len(runs),
+    'all_daily_snapshots_identical': all(a['sha256'] == b['sha256'] for run in runs for a, b in zip(run['results']['before'], run['results']['after'])),
+    'same_initial_state': all(run['initial_sha256'] == runs[0]['initial_sha256'] for run in runs),
+    'loaded_source_hashes_match_workspace': all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha for run in runs for path, sha in run['source_hashes'].items()),
+    'median_paired_total_reduction_percent': statistics.median(row['total_reduction_percent'] for row in means),
+    'stats': {variant: {key: statistics.median(row['means_ms'][variant][key] for row in means) for key in keys} for variant in ['before', 'after']},
+    'tail_stats': {variant: {key: statistics.median(row['tails'][variant][key] for row in means) for key in ['p95_ms', 'max_ms']} for variant in ['before', 'after']},
+    'limitations': ['Headless compute, not GUI frame rate.', 'One current Eurasia war state, 35 days per process.', 'First three processes run before/after; last two reverse this order.', 'Military policy and daily force activity are unchanged.'],
+}
+assert output['all_daily_snapshots_identical'] and output['same_initial_state'] and output['loaded_source_hashes_match_workspace']
+output['median_process_total_reduction_percent'] = 100 * (1 - output['stats']['after']['total'] / output['stats']['before']['total'])
+output['campaign_reduction_percent'] = 100 * (1 - output['stats']['after']['ai_campaign_planning'] / output['stats']['before']['ai_campaign_planning'])
+for pid in pids:
+    shutil.copyfile(Path('.dbg/ai-v10') / f'paired-{pid}.json', base / f'paired-{pid}.json')
+for number in range(1, 6):
+    for suffix in ['stdout.txt', 'stderr.txt']:
+        shutil.copyfile(Path('.dbg/ai-v10') / f'paired-{number}.{suffix}', base / f'paired-{number}.{suffix}')
+(base / 'summary.json').write_text(json.dumps(output, indent=2), encoding='utf-8')
+shutil.copyfile(__file__, base / 'ai_v10_summary.py.txt')
+print(json.dumps({key: value for key, value in output.items() if key != 'process_means'}, indent=2))

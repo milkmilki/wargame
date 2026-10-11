@@ -1,0 +1,3 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+AI_FORCE_REVIEW_SCHEDULE PASS reports=3 off_cycle=0

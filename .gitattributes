@@ -3,3 +3,4 @@
 
 # Preserve captured evidence bytes so recorded SHA256 values survive checkout.
 docs/atlas/*_evidence/** -text -whitespace
+docs/atlas/evidence/** -text -whitespace

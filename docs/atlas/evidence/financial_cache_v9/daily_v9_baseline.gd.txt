@@ -1,0 +1,22 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var payload: Dictionary = preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	var state := GameState.new(); state.generate_from_atlas(payload)
+	var sim := Simulation.new(); sim.setup(state)
+	sim.tick_phase_profiling_enabled=true; sim.runtime_stage_profiling_enabled=true; sim.ai_snapshot_substage_profiling_enabled=true
+	DirAccess.make_dir_recursive_absolute("res://.dbg/daily-v9")
+	var hashes := {}
+	for path in ["scripts/simulation/simulation.gd","scripts/core/trade_network.gd","scripts/core/pathfinding.gd","scripts/ai/diplomacy_ai.gd","scripts/simulation/rules/supply_rules.gd","scripts/state/game_state.gd"]:
+		hashes[path]=FileAccess.get_sha256("res://"+path)
+	var metadata := {"pid":OS.get_process_id(),"seed":state.world_seed,"mask":payload.data.options.settlement_mask,"systems":payload.simulation_options,"nodes":state.cities.size(),"settlements":state.cities.filter(func(c): return c.is_settlement()).size(),"godot":Engine.get_version_info(),"hashes":hashes,"scene":"res://.dbg/daily_v9_baseline.gd"}
+	FileAccess.open("res://.dbg/daily-v9/baseline-manifest.json",FileAccess.WRITE).store_string(JSON.stringify(metadata,"  "))
+	var log := DebugRunLog.new(); log.begin(metadata.scene); log.world_started(state,payload.simulation_options.merged({"settlement_mask":metadata.mask}),"daily_v9")
+	var file := FileAccess.open("res://.dbg/daily-v9/baseline-profile.jsonl",FileAccess.WRITE)
+	for day in range(180):
+		sim.runtime_span_total_usec.clear(); sim.runtime_span_peak_usec.clear()
+		var started := Time.get_ticks_usec(); sim._advance_day(false); var elapsed := Time.get_ticks_usec()-started
+		file.store_line(JSON.stringify({"day":state.day,"elapsed_usec":elapsed,"armies":state.armies.size(),"profile":sim.tick_profile_last_usec.duplicate(),"runtime":sim.runtime_span_total_usec.duplicate()})); file.flush()
+		if state.day%15==0: print("V9_BASELINE_DAY ",state.day," ms=",elapsed/1000.); log.checkpoint(state); await process_frame
+	preload("res://.dbg/state_codec.gd").new().save("res://.dbg/daily-v9/frozen-day180.bin",sim)
+	print("V9_BASELINE_COMPLETE pid=",OS.get_process_id()," day=",state.day); file.close(); sim.free(); quit()

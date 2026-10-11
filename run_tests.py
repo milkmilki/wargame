@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
-    "project_compile", "test_suite", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "trade_packed_fingerprint", "campaign_enemy_memo", "atlas_capital_hops", "forecast_consumption_commit", "forecast_input_pools", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
+    "project_compile", "test_suite", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "trade_packed_fingerprint", "campaign_enemy_memo", "atlas_capital_hops", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
     "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",
@@ -22,8 +22,15 @@ CORE = [
     "ultimatum_forecast_cache_equivalence",
 ]
 ATLAS = [
-    "atlas_alliance_cache", "atlas_alliance_runtime",
     "atlas_diplomacy_wakes",
+    "atlas_alliance_cache", "atlas_alliance_runtime",
+    "atlas_coalition_components", "atlas_coalition_runtime",
+    "atlas_trade_allocations",
+    "atlas_forecast_dependencies",
+    "atlas_supply_batch_cache", "atlas_supply_shared_fields", "atlas_supply_runtime",
+    "atlas_trade_schedule",
+    "atlas_trade_runtime",
+    "atlas_politics_trade",
     "atlas_prewar_batch",
     "atlas_settlement_mask", "atlas_settlement_mask_controls", "atlas_settlement_mask_pipeline", "atlas_masked_military_smoke",
     "atlas_daily_reserves", "atlas_event_slicing", "atlas_path_order_equivalence", "atlas_contact_index", "atlas_supply_sources", "atlas_supply_dependencies", "atlas_ai_cadence",

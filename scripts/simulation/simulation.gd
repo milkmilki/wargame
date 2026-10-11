@@ -174,6 +174,11 @@ var _coalition_campaign_query_cache: Dictionary = {}
 ## External wars wake their participants immediately; other Atlas nations
 ## keep their regular strategic schedule. False restores the global oracle.
 var atlas_local_diplomacy_wakes_enabled: bool = true
+## Main-thread political topology only; never cache force activity or assignments.
+var _coalition_component_cache_token: PackedByteArray = PackedByteArray()
+var _coalition_component_cache: Array[Dictionary] = []
+## Equivalence oracle: production uses the topology cache in Atlas worlds.
+var ai_coalition_component_cache_disabled: bool = false
 ## 行军位置每日缓存；驻城位置跨日复用，仅在该国网络或该城围城状态变化时失效。
 var _daily_supply_source_cache: Dictionary = {}
 var _stable_supply_city_source_cache: Dictionary = {}
@@ -186,6 +191,9 @@ var _prepared_supply_blocked_edges: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
 var _supply_network_fingerprints: Dictionary = {}
+## Per frozen supply batch: equivalent Atlas access/blockade graphs share
+## warehouse distance fields. Each worker owns a complete sharing group.
+var _supply_shared_field_caches_by_nation: Dictionary = {}
 ## 贸易预测分两层缓存：结构层跨日复用昂贵图搜索；完整预测只在所有结算
 ## 输入完全相同时复用。缓存结果只供 Simulation 内部只读消费者共享。
 var _trade_structure_fingerprint: PackedByteArray = PackedByteArray()
@@ -213,6 +221,9 @@ var _ai_last_decision_day: int = -1
 var atlas_ai_strategic_interval_days: int = 15
 var atlas_ai_batch_days: int = 3
 var _ai_regular_through_day: int = -1
+## Last completed force review per nation. Batched decisions must consume a
+## missed half-year review once instead of requiring its exact calendar day.
+var _ai_force_reviewed_through: Dictionary = {}
 ## 局部拓扑变化只提前重算受影响国家；全局外交变化仍用
 ## _ai_last_decision_day == -1 触发全体重算。
 var _ai_forced_nations: Dictionary = {}
@@ -391,14 +402,18 @@ func setup(game_state: GameState) -> void:
 	_coalition_component_keys.clear()
 	_coalition_changes_by_nation.clear()
 	_coalition_campaign_query_cache.clear()
+	_coalition_component_cache_token.clear()
+	_coalition_component_cache.clear()
 	_daily_supply_source_cache.clear()
 	_stable_supply_city_source_cache.clear()
 	_supply_source_besieged_cities.clear()
 	_daily_supply_network_cache.clear()
 	_prepared_supply_blocked_edges.clear()
 	_supply_network_fingerprints.clear()
+	_supply_shared_field_caches_by_nation.clear()
 	_ai_last_decision_day = -1
 	_ai_regular_through_day = -1
+	_ai_force_reviewed_through.clear()
 	_ai_forced_nations.clear()
 	_pending_declaration_launches.clear()
 	_pending_war_mobilizations.clear()
@@ -494,6 +509,8 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	EmpireStatus.reconcile(state)
 	_resolve_ruler_successions()
 	_update_succession_conflicts()
+	# Prepare the cheap yearly center selection on the main thread before fiscal workers.
+	if state.day % DAYS_PER_MONTH == 0: TradeNetwork.prepare_atlas_centers(state)
 	_record_tick_profile_stage("maintenance", profile_stage_started)
 	profile_stage_started = (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
@@ -1240,9 +1257,12 @@ func _trade_structure_runtime_probe() -> Array:
 		state.ownership_revision,
 		state.road_network_revision,
 	]
+	if not state.atlas_layout.is_empty(): result.append_array([state.day / DAYS_PER_MONTH,state.family_revision,state.diplomacy_revision])
 	for city in state.cities:
 		if city_war_disrupted(state, city):
-			result.append([city.id, city.war_disruption_until_day])
+			# Current output depends on the active penalty, not its future expiry.
+			# Extending a siege keeps the same output; expiry removes this city.
+			result.append(city.id)
 	for nation in state.nations:
 		result.append_array([
 			nation.id, nation.alive, nation.capital_city_id,
@@ -2811,6 +2831,9 @@ func _resolve_supply_over_frames() -> void:
 func _precompute_supply_sources_over_frames() -> Dictionary:
 	var payloads: Array[Dictionary] = []
 	var chunk: Array[Army] = []
+	var result := {}
+	var representatives := {}
+	var aliases := {}
 	const CHUNK_SIZE: int = 32
 	for army in state.armies:
 		if army.size <= 0 or army.state == Army.State.RECOVERING:
@@ -2818,6 +2841,16 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		var siege_garrison := _siege_garrison_battle_of(army)
 		if siege_garrison != null and siege_garrison.city.food_storage > 0 and _succession_battle_context(siege_garrison) == null:
 			continue
+		if not (army.on_edge and army.move_to != -1):
+			var city_cache: Dictionary = _stable_supply_city_source_cache.get(army.owner_nation, {})
+			if city_cache.has(army.location_city):
+				result[army.get_instance_id()] = city_cache[army.location_city]
+				continue
+			var position := Vector2i(army.owner_nation, army.location_city)
+			if representatives.has(position):
+				aliases[army.get_instance_id()] = representatives[position]
+				continue
+			representatives[position] = army.get_instance_id()
 		chunk.append(army)
 		if chunk.size() >= CHUNK_SIZE:
 			payloads.append(_make_supply_source_job(chunk))
@@ -2825,7 +2858,7 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 	if not chunk.is_empty():
 		payloads.append(_make_supply_source_job(chunk))
 	if payloads.is_empty():
-		return {}
+		return result
 	var task_ids: Array[int] = []
 	for payload in payloads:
 		task_ids.append(WorkerThreadPool.add_task(
@@ -2843,10 +2876,18 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		await get_tree().process_frame
 	for task_id in task_ids:
 		WorkerThreadPool.wait_for_task_completion(task_id)
-	var result := {}
 	for payload in payloads:
 		for key in payload["results"] as Dictionary:
 			result[key] = (payload["results"] as Dictionary)[key]
+		# Workers read the frozen world; only the main thread publishes caches.
+		for army: Army in payload["armies"]:
+			if army.on_edge and army.move_to != -1:
+				continue
+			if not _stable_supply_city_source_cache.has(army.owner_nation):
+				_stable_supply_city_source_cache[army.owner_nation] = {}
+			(_stable_supply_city_source_cache[army.owner_nation] as Dictionary)[army.location_city] = result[army.get_instance_id()]
+	for key in aliases:
+		result[key] = result[aliases[key]]
 	return result
 
 
@@ -2908,6 +2949,10 @@ func _prepare_supply_network_caches() -> Array[int]:
 		if supply_network_cache_disabled
 		else _supply_warehouse_availability(besieged)
 	)
+	var owner_rows := (
+		{} if supply_network_cache_disabled
+		else SupplyRules.network_owner_rows(state, warehouse_state, besieged)
+	)
 	for nation_id_value in active_ids:
 		var nation_id := int(nation_id_value)
 		var enemy_edges := {}
@@ -2929,21 +2974,33 @@ func _prepare_supply_network_caches() -> Array[int]:
 			nation_id,
 			warehouse_state,
 			_supply_relevant_blocked_edges(nation_id, enemy_edges),
-			besieged
+			besieged,
+			owner_rows
 		)
-		# Switching into an active succession context restores conservative keys.
-		fp.append(1 if not state.atlas_layout.is_empty() and state.succession_conflicts.is_empty() else 0)
+		# Legacy crossings retain all blockers; Atlas districts use exact access.
+		fp.append(1 if not state.atlas_layout.is_empty() else 0)
 		if _supply_network_fingerprints.get(nation_id, []) != fp:
 			_daily_supply_network_cache.erase(nation_id)
 			_stable_supply_city_source_cache.erase(nation_id)
 			_supply_network_fingerprints[nation_id] = fp
+	_supply_shared_field_caches_by_nation.clear()
+	if not supply_network_cache_disabled and not state.atlas_layout.is_empty():
+		var groups := {}
+		for nation_id in active_ids:
+			var key := SupplyRules.network_sharing_key(_supply_network_fingerprints[nation_id])
+			if not groups.has(key): groups[key] = {}
+			var fields: Dictionary = groups[key]
+			_supply_shared_field_caches_by_nation[nation_id] = fields
+			# A valid warmed network can also seed a newly active ally's fields.
+			for source in _daily_supply_network_cache.get(nation_id, []):
+				if not fields.has(source.city_id): fields[source.city_id] = source.dist
 	return active_ids
 
 
 ## Changes on roads the logistics search cannot enter cannot change its field.
 ## Filter the cache dependency only; actual searches retain all enemy blockers.
 func _supply_relevant_blocked_edges(nation_id: int, enemy_edges: Dictionary) -> Dictionary:
-	if state.atlas_layout.is_empty() or not state.succession_conflicts.is_empty():
+	if state.atlas_layout.is_empty():
 		return enemy_edges
 	var relevant := {}
 	for key in enemy_edges:
@@ -2968,16 +3025,25 @@ func _prebuild_supply_networks_over_frames(
 		return
 	var networks: Array = []
 	networks.resize(missing_ids.size())
+	var group_indices := {}
+	for index in range(missing_ids.size()):
+		var nation_id := missing_ids[index]
+		var key: Variant = SupplyRules.network_sharing_key(_supply_network_fingerprints[nation_id]) if _supply_shared_field_caches_by_nation.has(nation_id) else nation_id
+		if not group_indices.has(key): group_indices[key] = []
+		(group_indices[key] as Array).append(index)
+	var groups := group_indices.values()
 	var payload := {
 		"nation_ids": missing_ids,
 		"networks": networks,
 		"blocked_edges_by_nation":
 			_prepared_supply_blocked_edges,
+		"groups": groups,
+		"field_caches": _supply_shared_field_caches_by_nation,
 	}
 	_set_runtime_profile_stage(&"supply_network_worker")
 	if (
 		supply_network_parallel_prebuild_disabled
-		or missing_ids.size() == 1
+		or groups.size() == 1
 	):
 		var task_id := WorkerThreadPool.add_task(
 			_build_supply_networks_serial.bind(payload),
@@ -2989,7 +3055,7 @@ func _prebuild_supply_networks_over_frames(
 		WorkerThreadPool.wait_for_task_completion(task_id)
 	else:
 		var worker_count := mini(
-			missing_ids.size(),
+			groups.size(),
 			mini(
 				maxi(OS.get_processor_count() - 1, 1),
 				SUPPLY_NETWORK_MAX_WORKERS
@@ -3037,15 +3103,16 @@ func _build_supply_network_partition(
 	worker_count: int,
 	payload: Dictionary
 ) -> void:
-	var nation_ids: Array[int] = payload["nation_ids"]
+	var groups: Array = payload["groups"]
 	var index := worker_index
-	while index < nation_ids.size():
-		_build_supply_network_at(index, payload)
+	while index < groups.size():
+		for network_index in groups[index]:
+			_build_supply_network_at(int(network_index), payload)
 		index += worker_count
 
 
-## nation_ids/networks 均已定长；每个索引只由一个 worker 写入，线程间不修改
-## 容器大小，也不共享可变结果。
+## nation_ids/networks 均已定长；每个索引只由一个 worker 写入。
+## 同一共享距离场组串行交给一个 worker，其他 worker 只处理独立组。
 func _build_supply_network_at(
 	index: int,
 	payload: Dictionary
@@ -3059,7 +3126,8 @@ func _build_supply_network_at(
 	networks[index] = Pathfinding.build_supply_network(
 		state,
 		nation_id,
-		blocked_edges_by_nation.get(nation_id, {})
+		blocked_edges_by_nation.get(nation_id, {}),
+		(payload["field_caches"] as Dictionary).get(nation_id)
 	)
 
 
@@ -3114,7 +3182,8 @@ func _build_supply_plan_for_army(
 			army,
 			_daily_supply_source_cache,
 			_daily_supply_network_cache,
-			_stable_supply_city_source_cache
+			_stable_supply_city_source_cache,
+			_supply_shared_field_caches_by_nation.get(army.owner_nation)
 		)
 	)
 	# No warehouse withdrawal occurs during plan construction. Stationed armies
@@ -3412,10 +3481,11 @@ func _supply_network_fingerprint(
 	nation_id: int,
 	warehouse_state: Dictionary,
 	enemy_edges: Dictionary,
-	besieged: Dictionary
+	besieged: Dictionary,
+	owner_rows: Dictionary = {}
 ) -> Array[int]:
 	return SupplyRules.network_fingerprint(
-		state, nation_id, warehouse_state, enemy_edges, besieged
+		state, nation_id, warehouse_state, enemy_edges, besieged, owner_rows
 	)
 
 
@@ -3429,7 +3499,8 @@ func _cached_supply_sources(
 	army: Army,
 	cache: Dictionary,
 	network_cache: Dictionary,
-	stable_city_cache: Variant = null
+	stable_city_cache: Variant = null,
+	shared_field_cache: Variant = null
 ) -> Array[Dictionary]:
 	var on_edge := army.on_edge and army.move_to != -1
 	var position_key := _supply_position_key(army)
@@ -3446,7 +3517,9 @@ func _cached_supply_sources(
 			network_cache[army.owner_nation] = (
 				Pathfinding.build_supply_network(
 					state,
-					army.owner_nation
+					army.owner_nation,
+					_prepared_supply_blocked_edges.get(army.owner_nation, {}) if shared_field_cache is Dictionary else null,
+					shared_field_cache
 				)
 			)
 		var sources_started := (
@@ -7399,8 +7472,9 @@ func _run_ai_force_structure_phase(
 		# Preserve its empty-context fallback without running an unused
 		# capacity search for nations outside the half-year review phase.
 		decision_contexts[nation_id] = {}
-		if not _force_structure_review_due(nation_id, state.day):
+		if not _force_structure_review_ready(nation_id):
 			continue
+		_ai_force_reviewed_through[nation_id] = state.day
 		if not resource_cache_seeded:
 			# Only stable topology survives declaration launches. Food and
 			# resource reports are rebuilt against current state on first use.
@@ -7594,6 +7668,19 @@ static func _force_structure_review_due(nation_id: int, day: int) -> bool:
 		day - nation_id,
 		FORCE_STRUCTURE_REVIEW_INTERVAL_DAYS
 	) == 0
+
+
+func _force_structure_review_ready(nation_id: int) -> bool:
+	if not _uses_atlas_ai_batching():
+		return _force_structure_review_due(nation_id, state.day)
+	if nation_id < 0 or state.day < 0:
+		return false
+	var due_day := state.day - posmod(
+		state.day - nation_id, FORCE_STRUCTURE_REVIEW_INTERVAL_DAYS
+	)
+	return due_day >= 0 and due_day > int(
+		_ai_force_reviewed_through.get(nation_id, -1)
+	)
 
 
 func _run_ai_campaign_planning_phase(
@@ -8748,6 +8835,38 @@ func _manage_national_campaign_support(
 	return _balance_national_reserves(nation_id, defense_plan, mobilization_claims) or changed
 
 
+func _cached_coalition_campaign_components() -> Array[Dictionary]:
+	if ai_coalition_component_cache_disabled or state.atlas_layout.is_empty():
+		return state.coalition_campaign_components()
+	var nation_rows := PackedInt32Array()
+	for nation in state.nations:
+		nation_rows.append(int(nation.alive))
+		nation_rows.append(int(nation.succession_identity))
+	var succession_rows := []
+	for key in state.succession_conflicts:
+		var conflict := state.succession_conflicts[key] as SuccessionConflict
+		succession_rows.append([key, conflict.nation_id, conflict.rebel_nation_id, conflict.war_id])
+	var faction_rows := []
+	for key in state.vassal_conflicts:
+		var faction: Dictionary = state.vassal_conflicts[key]
+		faction_rows.append([key, faction.get("active", false), faction.get("central", []), faction.get("rebels", [])])
+	# Full relation/identity inputs also cover in-place war/faction changes.
+	# Revision counters cover territorial contacts and actual city ownership.
+	var token := var_to_bytes([
+		state.get_instance_id(), state.ownership_revision,
+		state.diplomacy_revision, state.road_network_revision,
+		state.administrative_region_revision, state.cities.size(), state.edges.size(),
+		nation_rows, state.diplomatic_relations, state.war_relation_ids,
+		succession_rows, faction_rows,
+	])
+	if token != _coalition_component_cache_token:
+		_coalition_component_cache = state.coalition_campaign_components()
+		_coalition_component_cache_token = token
+	# The planner adds defense_centers and replaces member arrays. Keep its
+	# working copy independent of the persistent topology, including empty worlds.
+	return _coalition_component_cache.duplicate(true)
+
+
 func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
 	state.prune_campaign_offensive_cooldowns()
 	_coalition_campaign_query_cache.clear()
@@ -8760,7 +8879,9 @@ func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
 			_coalition_armies_by_nation[army.owner_nation] = [] as Array[Army]
 		(_coalition_armies_by_nation[army.owner_nation] as Array[Army]).append(army)
 	_coalition_defense_activity = state.campaign_defense_activity_index()
-	var components := state.coalition_campaign_components()
+	var components_started := Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
+	var components := _cached_coalition_campaign_components()
+	_record_tick_profile_stage("ai_campaign_components", components_started)
 	_coalition_component_keys.clear()
 	for component in components:
 		_coalition_component_keys[str(component["key"])] = true

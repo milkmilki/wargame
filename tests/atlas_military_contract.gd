@@ -24,8 +24,9 @@ func _initialize() -> void:
 			check(state.strategic_edge_of(city.id,neighbor)!=null,"AI quotient edge maps to physical route")
 	var fixed := state.administrative_center_by_city.duplicate(); state.rebuild_administrative_regions()
 	check(fixed==state.administrative_center_by_city,"road rebuild retains administrative mapping")
-	check(not state.trade_enabled and not state.random_ruler_profiles_enabled(),"preview military excludes trade and dynastic events")
-	check(TradeNetwork.build_structure(state).routes.is_empty(),"disabled trade produces no routes")
+	check(state.trade_enabled and state.random_ruler_profiles_enabled(),"new worlds enable trade and ruler systems")
+	state.trade_enabled=false
+	check(TradeNetwork.build_structure(state).routes.is_empty(),"explicitly disabled trade produces no routes")
 	for pair in state.territorial_border_pairs():
 		check(state.cities[pair.x].is_settlement() and state.cities[pair.y].is_settlement(),"political borders exclude traffic nodes")
 	print("ATLAS_MILITARY_CONTRACT nodes=",state.cities.size()," edges=",state.edges.size()," failures=",failures)

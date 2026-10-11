@@ -1,0 +1,13 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var sim: Simulation=preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin","res://.dbg/ai_v10_probe_sim.gd")
+	var output := {"pid":OS.get_process_id(),"source_hashes":{},"input":JSON.parse_string(FileAccess.open("res://.dbg/daily-v9/baseline-manifest.json",FileAccess.READ).get_as_text()),"days":[]}
+	for path in ["scripts/simulation/simulation.gd","scripts/state/game_state.gd"]: output.source_hashes[path]=FileAccess.get_sha256("res://"+path)
+	for day in range(10):
+		sim.timings.clear(); sim.calls.clear()
+		var stamp := Time.get_ticks_usec(); sim._advance_day(false)
+		output.days.append({"day":sim.state.day,"elapsed_usec":Time.get_ticks_usec()-stamp,"profile":sim.tick_profile_last_usec.duplicate(),"timings":sim.timings.duplicate(),"calls":sim.calls.duplicate()})
+		print("V10_PROBE_DAY ",sim.state.day); await process_frame
+	FileAccess.open("res://.dbg/ai-v10-probe.json",FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("V10_PROBE_COMPLETE ",OS.get_process_id());sim.free();quit()

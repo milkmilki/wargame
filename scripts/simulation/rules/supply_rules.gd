@@ -3,6 +3,12 @@ extends RefCounted
 ## Deterministic supply calculations. Simulation owns scheduling and caches;
 ## this module owns fingerprints, weighting, and warehouse withdrawals.
 
+## The first seven local fingerprint entries identify layout/capital ordering;
+## remaining owner rows/blockades identify the actual weighted logistics graph.
+static func network_sharing_key(fingerprint: Array[int]) -> PackedByteArray:
+	var header_size := 7 if fingerprint.size() > 3 and fingerprint[3] == -5 else 3
+	return var_to_bytes(fingerprint.slice(header_size))
+
 
 
 
@@ -26,15 +32,26 @@ static func network_fingerprint(
 	nation_id: int,
 	warehouse_state: Dictionary,
 	enemy_edges: Dictionary,
-	besieged: Dictionary
+	besieged: Dictionary,
+	owner_rows: Dictionary = {}
 ) -> Array[int]:
 	var result: Array[int] = [
 		state.ownership_revision,
 		state.diplomacy_revision,
 		state.road_network_revision,
 	]
+	if not state.atlas_layout.is_empty() and state.succession_conflicts.is_empty() and not owner_rows.is_empty():
+		# Atlas road access is determined by its controlling district. Accessible
+		# owner rows below include those districts, warehouses and relay origins;
+		# an unrelated foreign conquest must not invalidate every country's field.
+		result[0] = 0
+		result[1] = 0
+		result.append_array([-5, state.cities.size(), state.nations.size(), state.nations[nation_id].capital_city_id])
 	for owner in state.nations:
 		if not state.has_logistics_access(nation_id, owner.id):
+			continue
+		if owner_rows.has(owner.id):
+			result.append_array(owner_rows[owner.id] as Array[int])
 			continue
 		result.append(-1)
 		result.append(owner.id)
@@ -51,6 +68,36 @@ static func network_fingerprint(
 	enemy_keys.sort()
 	for edge_key_value in enemy_keys:
 		result.append(int(edge_key_value))
+	return result
+
+
+## Owner-specific dependencies are identical for every traveler; prepare once
+## per frozen supply batch instead of repeatedly walking the same vassal pool.
+static func network_owner_rows(
+	state: GameState, warehouse_state: Dictionary, besieged: Dictionary
+) -> Dictionary:
+	var result := {}
+	var local_dependencies := not state.atlas_layout.is_empty() and state.succession_conflicts.is_empty()
+	var owned_cities := {}
+	if local_dependencies:
+		for city in state.cities:
+			if city.owner_nation < 0 or city.owner_nation >= state.nations.size():
+				continue
+			if not owned_cities.has(city.owner_nation):
+				owned_cities[city.owner_nation] = [] as Array[int]
+			(owned_cities[city.owner_nation] as Array[int]).append(city.id)
+	for owner in state.nations:
+		var row: Array[int] = [-1, owner.id]
+		row.append_array(warehouse_state.get(owner.id, [] as Array[int]) as Array[int])
+		if not owner.warehouse_city_ids.is_empty():
+			row.append(-3)
+			for capital_id in state.food_pool_relay_capitals(owner.id):
+				row.append(capital_id)
+				row.append(1 if besieged.has(capital_id) and not state.succession_supply_city(capital_id) else 0)
+		if local_dependencies:
+			row.append_array([-4, owner.capital_city_id])
+			row.append_array(owned_cities.get(owner.id, [] as Array[int]) as Array[int])
+		result[owner.id] = row
 	return result
 
 

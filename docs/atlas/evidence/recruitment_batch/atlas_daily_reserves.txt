@@ -1,0 +1,25 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+RESERVE_CASE balanced queued=false changed=false fields_before=3 fields_after=0
+RESERVE_CASE within_one queued=false changed=false fields_before=4 fields_after=0
+RESERVE_CASE unbalanced queued=false changed=true fields_before=4 fields_after=2
+RESERVE_CASE equal_targets queued=false changed=true fields_before=4 fields_after=1
+RESERVE_CASE fu_balanced queued=false changed=false fields_before=3 fields_after=0
+RESERVE_CASE fu_unbalanced queued=false changed=true fields_before=4 fields_after=2
+RESERVE_CASE disconnected queued=false changed=false fields_before=3 fields_after=3
+RESERVE_CASE no_permission queued=false changed=false fields_before=3 fields_after=3
+RESERVE_CASE no_current_center queued=false changed=true fields_before=1 fields_after=1
+RESERVE_CASE mobilization_claims queued=false changed=false fields_before=0 fields_after=0
+RESERVE_CASE balanced queued=true changed=false fields_before=3 fields_after=0
+RESERVE_CASE within_one queued=true changed=false fields_before=4 fields_after=0
+RESERVE_CASE unbalanced queued=true changed=true fields_before=4 fields_after=2
+RESERVE_CASE equal_targets queued=true changed=true fields_before=4 fields_after=1
+RESERVE_CASE fu_balanced queued=true changed=false fields_before=3 fields_after=0
+RESERVE_CASE fu_unbalanced queued=true changed=true fields_before=4 fields_after=2
+RESERVE_CASE disconnected queued=true changed=false fields_before=3 fields_after=3
+RESERVE_CASE no_permission queued=true changed=false fields_before=3 fields_after=3
+RESERVE_CASE no_current_center queued=true changed=true fields_before=1 fields_after=1
+RESERVE_CASE mobilization_claims queued=true changed=false fields_before=0 fields_after=0
+RESERVE_CASE atlas_balanced queued=true changed=false fields_before=38 fields_after=0
+RESERVE_CASE atlas_unbalanced queued=true changed=true fields_before=6 fields_after=5
+ATLAS_DAILY_RESERVES_RESULT checks=162 failures=0

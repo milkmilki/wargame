@@ -1,0 +1,17 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var payload: Dictionary = preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	var state := GameState.new(); state.generate_from_atlas(payload)
+	var sim := Simulation.new(); root.add_child(sim); sim.setup(state); sim.paused=true
+	for day in range(60):
+		sim._advance_day(false)
+		if state.day%15==0: print("FREEZE_SUPPLY_DAY ",state.day); await process_frame
+	var digest := HashingContext.new(); digest.start(HashingContext.HASH_SHA256)
+	digest.update(var_to_bytes(NativeSnapshotBuilder.build(state)))
+	var metadata := {"pid":OS.get_process_id(),"seed":state.world_seed,"day":state.day,"mask":payload.data.options.settlement_mask,"systems":payload.simulation_options,"armies":state.armies.size(),"nodes":state.cities.size(),"sha256":digest.finish().hex_encode(),"source_hashes":{}}
+	for path in ["scripts/simulation/simulation.gd","scripts/state/game_state.gd","scripts/core/pathfinding.gd","scripts/simulation/rules/supply_rules.gd","scripts/core/trade_network.gd"]:
+		metadata.source_hashes[path]=FileAccess.get_sha256("res://"+path)
+	preload("res://.dbg/state_codec.gd").new().save("res://.dbg/supply-current-day60.bin",sim)
+	FileAccess.open("res://.dbg/supply-current-day60.json",FileAccess.WRITE).store_string(JSON.stringify(metadata,"  "))
+	print("FREEZE_SUPPLY ",JSON.stringify(metadata)); sim.free(); quit()

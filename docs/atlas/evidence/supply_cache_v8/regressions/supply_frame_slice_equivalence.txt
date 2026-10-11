@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 补给分帧等价校验 (同一运行时路径, 基线200天/分帧200天) ===
+对比军队=40 不一致=0
+verdict=SUPPLY_SLICE_EQUIVALENT

@@ -1,0 +1,12 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+DIP_PROBE_DAY 190
+DIP_PROBE_DAY 200
+DIP_ACTION_COST {"a":35,"b":0,"day":210,"kind":"diplomacy_commit_war","usec":112706}
+DIP_ACTION_COST {"a":8,"b":22,"day":210,"kind":"diplomacy_commit_prepare_war","usec":10321}
+DIP_ACTION_COST {"a":16,"b":6,"day":210,"kind":"diplomacy_commit_prepare_war","usec":4217}
+DIP_ACTION_COST {"a":17,"b":7,"day":210,"kind":"diplomacy_commit_prepare_war","usec":4479}
+DIP_ACTION_COST {"a":19,"b":3,"day":210,"kind":"diplomacy_commit_prepare_war","usec":4119}
+DIP_ACTION_COST {"a":26,"b":29,"day":210,"kind":"diplomacy_commit_prepare_war","usec":4321}
+DIP_ACTION_COST {"a":38,"b":21,"day":210,"kind":"diplomacy_commit_prepare_war","usec":4151}
+DIP_PROBE_DAY 210

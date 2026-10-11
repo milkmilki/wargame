@@ -1,0 +1,27 @@
+{
+  "armies": 229,
+  "day": 60,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "nodes": 1192,
+  "pid": 28916,
+  "seed": 1,
+  "sha256": "5f2c3aa6cd74d8e29043e3181250c46fbf09a85116528f07cce25b3b94caa460",
+  "source_hashes": {
+    "scripts/core/pathfinding.gd": "f077a69dfb013bec2aaf5c20fc166401b8a65eb30f737861f12ae04b67c93f1d",
+    "scripts/core/trade_network.gd": "446af5e4ab0df2bb42958d6169f22a51d63644c9ca495691aafec66113ea7b0c",
+    "scripts/simulation/rules/supply_rules.gd": "141ab598500f6bdeb5f86f5cb8fa924d38d9bb1e65638fb167eca97d148288f7",
+    "scripts/simulation/simulation.gd": "d93762256856c722b8fa8517035e21d3e19b4f8385f1fd63974592a4ef525425",
+    "scripts/state/game_state.gd": "63117b03bae9c5366ba414478cd3a4445ee24c85243465a6dc4898f8e9f6aa87"
+  },
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  }
+}

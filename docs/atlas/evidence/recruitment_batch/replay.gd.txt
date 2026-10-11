@@ -1,0 +1,37 @@
+extends SceneTree
+const Template = preload("res://scripts/atlas/military_template.gd")
+const Reinforcement = preload("res://scripts/simulation/rules/reinforcement_phase.gd")
+var state: GameState
+var sim: Simulation
+var records := []
+func _initialize(): call_deferred("run")
+func capture():
+	var cache := {}
+	var rows := []
+	for n in state.nations:
+		if not n.alive or n.capital_city_id<0: continue
+		var capacity := DiplomacyAI.force_capacity_report(state,n.id,-1,cache)
+		var current := DiplomacyAI.resource_forecast(state,n.id,-1,-1,cache)
+		var candidate := DiplomacyAI.resource_forecast(state,n.id,int(current.input.troops)+15000,-1,cache,{"base_upkeep_delta":GameState.army_monthly_upkeep(15000),"field_food_delta":Reinforcement._grant_food_delta(0,15000,float(current.input.food_multiplier))})
+		var capital := state.cities[n.capital_city_id]
+		var lon := capital.map_position.x*360.-180.
+		var lat := 90.-capital.map_position.y*180.
+		var totals := [0,0,0]; var centers := 0; var garrison := 0
+		for c in state.land_cities_of(n.id):
+			totals[0]+=c.manpower_per_month; totals[1]+=c.gold_per_month; totals[2]+=c.food_per_half_year
+			if state.is_zhou_city(c.id): centers+=1; garrison+=c.garrison_manpower
+		rows.append({"id":n.id,"name":n.name,"capital":capital.name,"lon":lon,"lat":lat,"settlements":state.land_cities_of(n.id).size(),"zhou":centers,"base_budget":totals,"garrison_troops":garrison,"profile":n.ruler_archetype,"traits":n.ruler_traits,"manpower":n.manpower_pool,"gold":n.treasury_gold,"wars":state.wars_of(n.id),"capacity":capacity,"input":current.input,"candidate":candidate,"last_force_reason":n.ai_last_force_reason})
+	records.append({"day":state.day,"nations":rows})
+	FileAccess.open("res://.dbg/recruitment-after.json",FileAccess.WRITE).store_string(JSON.stringify({"pid":OS.get_process_id(),"seed":state.world_seed,"models":state.map_models,"source":preload("res://scripts/atlas/military_import.gd").source_fingerprint(),"records":records},"  "))
+	print("RECRUIT_DIAG day=",state.day," armies=",state.armies.size())
+func run():
+	var definition: Dictionary = JSON.parse_string(FileAccess.open("user://debug_runs/run-2026-10-10T13-17-19-27764-68815753-world1-map.json",FileAccess.READ).get_as_text())
+	state=GameState.new(); state.generate_from_atlas(Template.decode(definition))
+	sim=Simulation.new(); sim.setup(state)
+	capture()
+	for day in range(180):
+		sim._advance_day()
+		if state.day in [15,30,90,180]: capture()
+	sim.free(); quit()
+
+

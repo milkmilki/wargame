@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-11",
+  "head": "222c9a260995677bbc27ddd9e82386120fee775d",
+  "pids": [
+    22068,
+    21032,
+    25264
+  ],
+  "seed": 1,
+  "nodes": 1192,
+  "armies_at_freeze": 234,
+  "day_range": [
+    181,
+    215
+  ],
+  "initial_sha256": "69d0820e2df0beff3c9e71c0294fb1a4e31334b56db0db88b7f6e99b304250cf",
+  "source_hashes": {
+    "scripts/core/trade_network.gd": "7dffd30af59347b62f5eae385025ab1c56c9baaabfe7ac476287a42f973048a0",
+    "scripts/simulation/simulation.gd": "44ae6d726d6d097c00c322b07419c35c34c7230cdc5ccea31e2c205b67bca53c",
+    "tests/support/legacy_forecast_dependency_simulation.gd": "42c1aabff19d974c5f9deb0d7d141d58a5af4865703f376a586f46ef144b3d69"
+  },
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  },
+  "stats": {
+    "before": {
+      "total_mean_ms_median_process": 323.8200857142857,
+      "ai_snapshot_cache_seed_mean_ms_median_process": 33.56408571428571,
+      "ai_snapshot_forecast_structure_stage_mean_ms_median_process": 17.59,
+      "ai_snapshot_forecast_structure_fingerprint_mean_ms_median_process": 9.598171428571428,
+      "monthly_diplomacy_mean_ms_median_process": 11.94122857142857
+    },
+    "after": {
+      "total_mean_ms_median_process": 316.2237428571429,
+      "ai_snapshot_cache_seed_mean_ms_median_process": 26.751085714285715,
+      "ai_snapshot_forecast_structure_stage_mean_ms_median_process": 13.205285714285713,
+      "ai_snapshot_forecast_structure_fingerprint_mean_ms_median_process": 6.511742857142857,
+      "monthly_diplomacy_mean_ms_median_process": 11.889057142857142
+    }
+  },
+  "full_daily_snapshot_pairs": 105,
+  "all_daily_snapshots_identical": true,
+  "baseline_variant": "pre-v9 runtime probe + exact allocation cache disabled",
+  "limitations": [
+    "Headless compute, not GUI frame rate.",
+    "One later war state; do not compare with supply-v8 day61-95 as if it were the same workload.",
+    "Campaign planning and movement dominate remaining costs."
+  ],
+  "total_reduction_percent": 2.3458528955628943,
+  "ai_snapshot_cache_seed_reduction_percent": 20.298482306342734
+}

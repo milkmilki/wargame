@@ -1,0 +1,23 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+	var hashes := {}
+	for path in ["scripts/simulation/simulation.gd","scripts/core/trade_network.gd","tests/support/legacy_forecast_dependency_simulation.gd"]: hashes[path]=FileAccess.get_sha256("res://"+path)
+	var output := {"pid":OS.get_process_id(),"seed":1,"source_hashes":hashes,"input_source":JSON.parse_string(FileAccess.open("res://.dbg/daily-v9/baseline-manifest.json",FileAccess.READ).get_as_text()),"results":{}}
+	for variant in ["before","after"]:
+		TradeNetwork.atlas_tax_allocation_cache_enabled=variant=="after"
+		var sim: Simulation = preload("res://.dbg/state_codec.gd").new().restore("res://.dbg/daily-v9/frozen-day180.bin","res://tests/support/legacy_forecast_dependency_simulation.gd" if variant=="before" else "")
+		var digest := HashingContext.new(); digest.start(HashingContext.HASH_SHA256); digest.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+		var initial := digest.finish().hex_encode()
+		if output.has("initial_sha256"): assert(output.initial_sha256==initial,"identical initial state")
+		output.initial_sha256=initial
+		var rows := []
+		for day in range(35):
+			var started := Time.get_ticks_usec(); sim._advance_day(false); var elapsed := Time.get_ticks_usec()-started
+			digest=HashingContext.new(); digest.start(HashingContext.HASH_SHA256); digest.update(var_to_bytes(NativeSnapshotBuilder.build(sim.state)))
+			rows.append({"day":sim.state.day,"elapsed_usec":elapsed,"profile":sim.tick_profile_last_usec.duplicate(),"sha256":digest.finish().hex_encode()})
+			if sim.state.day%10==0: print("V9_COMPARE_DAY ",variant," ",sim.state.day); await process_frame
+		output.results[variant]=rows; sim.free(); await process_frame
+	for day in range(35): assert(output.results.before[day].sha256==output.results.after[day].sha256,"identical daily native state")
+	FileAccess.open("res://.dbg/daily-v9/paired-%d.json"%OS.get_process_id(),FileAccess.WRITE).store_string(JSON.stringify(output,"  "))
+	print("V9_COMPARE_COMPLETE ",OS.get_process_id()); quit()

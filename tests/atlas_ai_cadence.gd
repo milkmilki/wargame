@@ -3,11 +3,23 @@ extends SceneTree
 ## war-report wakeups and normal nation coverage must remain dependable.
 var failures: Array[String] = []
 var checks := 0
+class ReviewSimulation extends Simulation:
+	var reviews := {}
+	func _seed_trade_forecast(cache: Dictionary) -> Dictionary:
+		return cache
+	func _ai_manage_force_structure(view: AiWorldView,_snapshot: StrategicMapSnapshot,_threat: ThreatField,
+		_defense_plan: CityDefensePlan = null,_roles_reconciled: bool = false,
+		_resource_cache: Dictionary = {},_decision_context: Dictionary = {}) -> bool:
+		if not reviews.has(view.nation_id): reviews[view.nation_id]=[]
+		reviews[view.nation_id].append(state.day)
+		return false
+
 func check(ok: bool, message: String):
 	checks += 1
 	if not ok: failures.append(message)
 func _initialize(): call_deferred("run")
 func run():
+	for batch in [2,3,4,5]: await test_batched_force_reviews(batch)
 	var state := GameState.new(); state._reset_world(1)
 	state._generate_nations(GameState.DiplomaticRelation.NEUTRAL, 40, false)
 	state.atlas_layout = {"model":"cadence-test"}; state.uses_heightmap = true
@@ -57,3 +69,36 @@ func run():
 	for failure in failures: printerr("ATLAS_AI_CADENCE_FAIL ", failure)
 	print("ATLAS_AI_CADENCE_RESULT checks=", checks, " failures=", failures.size())
 	quit(0 if failures.is_empty() else 1)
+
+func test_batched_force_reviews(batch: int) -> void:
+	var state := GameState.new(); state._reset_world(1)
+	state._generate_nations(GameState.DiplomaticRelation.NEUTRAL,40,false)
+	state.atlas_layout={"model":"review-test"}; state.uses_heightmap=true
+	var sim := ReviewSimulation.new(); sim.state=state
+	sim.atlas_ai_batch_days=batch
+	sim.ai_decision_context_disabled=true
+	sim._ai_last_decision_day=0; sim._ai_regular_through_day=0
+	var contexts := {}
+	for id in range(40):
+		var view := AiWorldView.new(); view.nation_id=id; view.state=state
+		contexts[id]={"view":view,"snapshot":null,"threat":null,"defense_plan":null}
+	for day in range(1,235):
+		state.day=day
+		var order := sim._regular_ai_nation_order(15)
+		if order.is_empty(): continue
+		sim._ai_regular_through_day=day
+		await sim._run_ai_force_structure_phase(order,contexts,{},false,0)
+		# An extra same-day emergency must not repeat the half-year review.
+		await sim._run_ai_force_structure_phase(order,contexts,{},false,0)
+	for id in range(40):
+		var dates: Array=sim.reviews.get(id,[])
+		check(dates.size()==2,"batch %d: every national phase receives exactly two half-year reviews: %d %s"%[batch,id,str(dates)])
+		if dates.size()==2:
+			var delay := 15+batch-1
+			check(dates[0]>=id and dates[0]<=id+delay and dates[1]>=id+180 and dates[1]<=id+180+delay,"reviews catch missed dates without starving nations: %d"%id)
+	# A skipped cycle is assessed once against current resources, not replayed.
+	state.day=800
+	await sim._run_ai_force_structure_phase([8] as Array[int],contexts,{},false,0)
+	await sim._run_ai_force_structure_phase([8] as Array[int],contexts,{},false,0)
+	check(sim.reviews.get(8,[]).size()==3,"long jump does not replay missed recruiting batches")
+	sim.free()

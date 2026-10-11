@@ -1,0 +1,104 @@
+{
+  "days": 180,
+  "total_ms": {
+    "mean": 396.11955555555556,
+    "median": 183.5875,
+    "p95": 1599.444,
+    "maximum": 5963.059
+  },
+  "ordinary_day_ms": {
+    "mean": 281.23740229885055,
+    "median": 181.0755,
+    "p95": 1327.563,
+    "maximum": 2273.308
+  },
+  "month_day_ms": {
+    "mean": 3727.702,
+    "median": 3381.356,
+    "p95": 5963.059,
+    "maximum": 5963.059
+  },
+  "stage_daily_mean_ms": {
+    "ai": 221.9356,
+    "supply": 46.79282222222222,
+    "monthly": 84.01692777777778,
+    "monthly_reinforcements": 37.924772222222224,
+    "monthly_diplomacy": 37.56312777777778,
+    "monthly_economy": 5.958344444444444,
+    "movement_battles": 18.402638888888887,
+    "morale_merge": 5.296494444444445,
+    "cleanup": 6.152333333333333,
+    "ai_snapshot_forecast_structure_stage": 88.34845555555556,
+    "ai_snapshot_forecast_structure_regional_routes": 73.82224444444445,
+    "ai_snapshot_forecast_trade_settle": 1.2978888888888889,
+    "ai_snapshot_forecast_gold_flows": 6.590905555555556
+  },
+  "max_armies": 234,
+  "trade_build_days": [
+    {
+      "day": 30,
+      "build_ms": 976.425
+    },
+    {
+      "day": 73,
+      "build_ms": 998.449
+    },
+    {
+      "day": 80,
+      "build_ms": 1008.035
+    },
+    {
+      "day": 86,
+      "build_ms": 980.178
+    },
+    {
+      "day": 92,
+      "build_ms": 980.875
+    },
+    {
+      "day": 104,
+      "build_ms": 966.3
+    },
+    {
+      "day": 118,
+      "build_ms": 1011.468
+    },
+    {
+      "day": 129,
+      "build_ms": 995.636
+    },
+    {
+      "day": 139,
+      "build_ms": 1035.11
+    },
+    {
+      "day": 161,
+      "build_ms": 982.705
+    },
+    {
+      "day": 162,
+      "build_ms": 975.997
+    },
+    {
+      "day": 167,
+      "build_ms": 979.485
+    },
+    {
+      "day": 168,
+      "build_ms": 981.692
+    },
+    {
+      "day": 171,
+      "build_ms": 983.212
+    },
+    {
+      "day": 173,
+      "build_ms": 1036.413
+    },
+    {
+      "day": 179,
+      "build_ms": 995.04
+    }
+  ],
+  "counter_limitation": "Simulation trade counters reset during cache invalidation; raw deltas may be negative and cannot count all static TradeNetwork builds."
+}

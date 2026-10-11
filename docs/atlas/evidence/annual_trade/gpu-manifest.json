@@ -1,0 +1,27 @@
+{
+  "failures": 0,
+  "systems": {
+    "trade_enabled": true,
+    "rulers_enabled": true
+  },
+  "scene": "atlas_military.tscn",
+  "artificial_calendar_visual_test": true,
+  "seed": 1,
+  "gpu": "RX 7600",
+  "rendering_method": "forward_plus",
+  "source_hashes": {
+    "scripts/state/game_state.gd": "63117b03bae9c5366ba414478cd3a4445ee24c85243465a6dc4898f8e9f6aa87",
+    "scripts/atlas/military_preview.gd": "bc454d2874bacccc8f4409114be39add40e75df4bdf1e385e18e3de2ecb31c23",
+    "scripts/simulation/simulation.gd": "d93762256856c722b8fa8517035e21d3e19b4f8385f1fd63974592a4ef525425",
+    "scripts/core/trade_network.gd": "446af5e4ab0df2bb42958d6169f22a51d63644c9ca495691aafec66113ea7b0c"
+  },
+  "day": 360,
+  "settlement_mask": {
+    "east": 145,
+    "enabled": true,
+    "north": 55,
+    "south": 20,
+    "west": -15
+  },
+  "pid": 34924
+}

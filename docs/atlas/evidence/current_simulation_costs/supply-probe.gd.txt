@@ -1,0 +1,27 @@
+extends Simulation
+var source_usec := 0
+var loss_usec := 0
+var garrison_usec := 0
+var source_calls := 0
+var loss_calls := 0
+var garrison_calls := 0
+var source_entries := 0
+var network_misses: Array = []
+func _cached_supply_sources(army: Army, cache: Dictionary, network_cache: Dictionary, stable_city_cache: Variant=null) -> Array[Dictionary]:
+	var started:=Time.get_ticks_usec()
+	var network_missing:=not network_cache.has(army.owner_nation)
+	var result:=super._cached_supply_sources(army,cache,network_cache,stable_city_cache)
+	var elapsed:=Time.get_ticks_usec()-started
+	if network_missing: network_misses.append({"nation":army.owner_nation,"us":elapsed,"sources":result.size(),"network_sources":network_cache.get(army.owner_nation,[]).size()})
+	source_usec+=elapsed;source_calls+=1;source_entries+=result.size()
+	return result
+func _weighted_supply_loss(sources: Array[Dictionary]) -> float:
+	var started:=Time.get_ticks_usec()
+	var result:=super._weighted_supply_loss(sources)
+	loss_usec+=Time.get_ticks_usec()-started;loss_calls+=1
+	return result
+func _siege_garrison_battle_of(army: Army) -> Battle:
+	var started:=Time.get_ticks_usec()
+	var result:=super._siege_garrison_battle_of(army)
+	garrison_usec+=Time.get_ticks_usec()-started;garrison_calls+=1
+	return result

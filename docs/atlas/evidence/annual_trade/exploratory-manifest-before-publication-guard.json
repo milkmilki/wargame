@@ -1,0 +1,35 @@
+{
+  "cities": 1192,
+  "godot": {
+    "build": "official",
+    "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+    "hex": 263937,
+    "major": 4,
+    "minor": 7,
+    "patch": 1,
+    "status": "stable",
+    "string": "4.7.1-stable (official)",
+    "timestamp": 0
+  },
+  "hashes": {
+    "scripts/core/trade_network.gd": "1049ca086dd195b752f1ce3bd59572e5710a388c7f52f93a313c75acbab48aba",
+    "scripts/simulation/simulation.gd": "8f4920a2b462b6f0cc9decf5e3730377d09983c951c9d605f0823361dbf3983b"
+  },
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "pid": 28912,
+  "regions": 25,
+  "seed": 1,
+  "settlements": 484,
+  "states": 181,
+  "systems": {
+    "rulers_enabled": true,
+    "trade_enabled": true
+  }
+}

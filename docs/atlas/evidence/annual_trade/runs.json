@@ -1,0 +1,73 @@
+[
+  {
+    "tag": "benchmark-0",
+    "pid": 31404,
+    "exit_code": 0,
+    "command": [
+      "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+      "--path",
+      "D:\\ProjectICreate\\Wargame\\wargame",
+      "--script",
+      "res://.dbg/trade_cache_benchmark.gd",
+      "--headless"
+    ],
+    "stderr_empty": true
+  },
+  {
+    "tag": "benchmark-1",
+    "pid": 31544,
+    "exit_code": 0,
+    "command": [
+      "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+      "--path",
+      "D:\\ProjectICreate\\Wargame\\wargame",
+      "--script",
+      "res://.dbg/trade_cache_benchmark.gd",
+      "--headless"
+    ],
+    "stderr_empty": true
+  },
+  {
+    "tag": "benchmark-2",
+    "pid": 16796,
+    "exit_code": 0,
+    "command": [
+      "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+      "--path",
+      "D:\\ProjectICreate\\Wargame\\wargame",
+      "--script",
+      "res://.dbg/trade_cache_benchmark.gd",
+      "--headless"
+    ],
+    "stderr_empty": true
+  },
+  {
+    "tag": "days-180",
+    "pid": 24096,
+    "exit_code": 0,
+    "command": [
+      "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+      "--path",
+      "D:\\ProjectICreate\\Wargame\\wargame",
+      "--script",
+      "res://.dbg/current_cost_trade_after.gd",
+      "--headless"
+    ],
+    "stderr_empty": true
+  },
+  {
+    "tag": "gpu",
+    "pid": 34924,
+    "exit_code": 0,
+    "command": [
+      "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+      "--path",
+      "D:\\ProjectICreate\\Wargame\\wargame",
+      "--script",
+      "res://.dbg/annual_trade_visual.gd",
+      "--",
+      "--atlas-cache=res://.dbg/atlas-politics-visual.bin"
+    ],
+    "stderr_empty": true
+  }
+]

@@ -1,0 +1,7 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+RECRUIT_DIAG day=0 armies=40
+RECRUIT_DIAG day=15 armies=101
+RECRUIT_DIAG day=30 armies=189
+RECRUIT_DIAG day=90 armies=228
+RECRUIT_DIAG day=180 armies=234
