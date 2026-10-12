@@ -251,6 +251,8 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::pack_owner_inputs);
     ClassDB::bind_method(D_METHOD("pack_trade_city_inputs", "cities", "day", "include_food"),
             &NativeGraphSnapshot::pack_trade_city_inputs);
+    ClassDB::bind_method(D_METHOD("query_logistics_access", "travelers", "owners", "identities", "relations", "allied", "missing"),
+            &NativeGraphSnapshot::query_logistics_access);
     ClassDB::bind_method(D_METHOD("query_administrative_fields", "cities", "adjacency",
             "edge_lookup", "nations", "capitals", "traffic_kind"),
             &NativeGraphSnapshot::query_administrative_fields);
@@ -272,7 +274,7 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::query_connectivity_filtered);
 }
 
-int64_t NativeGraphSnapshot::api_version() const { return 5; }
+int64_t NativeGraphSnapshot::api_version() const { return 6; }
 
 Dictionary NativeGraphSnapshot::query_key_order(const Array &input) const {
     if (input.size() > std::numeric_limits<int32_t>::max())
@@ -502,6 +504,45 @@ Dictionary NativeGraphSnapshot::pack_trade_city_inputs(const Array &cities,
     Dictionary result;
     result["records"] = records;
     result["ratios"] = ratios;
+    return result;
+}
+
+Dictionary NativeGraphSnapshot::query_logistics_access(const PackedInt64Array &travelers,
+        const PackedInt64Array &owners, const PackedByteArray &identities,
+        const Dictionary &relations, int64_t allied, int64_t missing) const {
+    const int64_t count = travelers.size(), width = owners.size(), nations = identities.size();
+    if (width && count > std::numeric_limits<int32_t>::max() / width)
+        return error_result("Too many logistics access cells.");
+    Array rows;
+    if (rows.resize(count) != OK) return error_result("Unable to allocate logistics access rows.");
+    for (int64_t i = 0; i < count; ++i) {
+        PackedByteArray row;
+        if (row.resize(width) != OK) return error_result("Unable to allocate logistics access cells.");
+        uint8_t *out = row.ptrw();
+        const int64_t traveler = travelers[i];
+        for (int64_t j = 0; j < width; ++j) {
+            const int64_t owner = owners[j];
+            bool allowed = traveler == owner;
+            if (!allowed && traveler >= 0 && owner >= 0 && traveler < nations && owner < nations
+                    && !identities[traveler] && !identities[owner]) {
+                const String key = String::num_int64(std::min(traveler, owner)) + ":"
+                        + String::num_int64(std::max(traveler, owner));
+                const Variant relation = relations.get(key, missing);
+                if (relation.get_type() != Variant::INT) {
+                    // Preserve the script's conversions and custom representations.
+                    Dictionary fallback;
+                    fallback["supported"] = false;
+                    return fallback;
+                }
+                allowed = int64_t(relation) == allied;
+            }
+            out[j] = allowed ? 1 : 0;
+        }
+        rows[i] = row;
+    }
+    Dictionary result;
+    result["supported"] = true;
+    result["rows"] = rows;
     return result;
 }
 

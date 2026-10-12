@@ -1,8 +1,8 @@
 class_name NativeCompute
 extends RefCounted
-## Native runtime graph boundary. Gameplay objects, access rules and side effects
-## stay in GDScript; the extension only reads immutable packed query inputs.
-const API_VERSION := 5
+## Native runtime graph boundary. Gameplay objects, financial identities and
+## side effects stay in GDScript; kernels only read their query inputs.
+const API_VERSION := 6
 const EXTENSION_PATH := "res://native/runtime_graph/runtime_graph.gdextension"
 static var _override := ""
 static var _graphs: Dictionary = {}
@@ -131,7 +131,7 @@ static func require_native() -> bool:
 		_fatal("NativeGraphSnapshot is missing. Build the Godot 4.7.1 extension with scripts/tools/build_native_compute.py.")
 		return false
 	var probe: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order") or not probe.has_method("pack_trade_city_inputs"):
+	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order") or not probe.has_method("pack_trade_city_inputs") or not probe.has_method("query_logistics_access"):
 		_fatal("NativeGraphSnapshot API version mismatch; rebuild the extension.")
 		return false
 	return true
@@ -541,6 +541,40 @@ static func trade_city_inputs(cities: Array, day: int, include_food: bool) -> Di
 	var result: Dictionary = _finish_result(graph.call("pack_trade_city_inputs", cities, day, include_food), "trade_city_inputs", started)
 	if mode == "compare": verify_equal(reference, result, "trade_city_inputs")
 	return result
+
+
+## A frozen supply preparation pass. Preserve custom callback states and keep
+## standalone permission queries live; this table is never revision-cached.
+static func logistics_access_rows(state: GameState, travelers: Array[int]) -> Dictionary:
+	var mode := backend()
+	if mode == "gdscript" or travelers.is_empty() or state.atlas_layout.is_empty() or state.get_script().resource_path != "res://scripts/state/game_state.gd":
+		return {}
+	if not require_native(): return {}
+	var roots := {}
+	var owners := PackedInt64Array()
+	var identities := PackedByteArray()
+	for nation in state.nations:
+		var root := state.financial_nation_of(nation.id)
+		roots[nation.id] = root
+		owners.append(root)
+		identities.append(int(nation.succession_identity))
+	var queries := PackedInt64Array()
+	for traveler in travelers:
+		queries.append(int(roots[traveler]) if roots.has(traveler) else state.financial_nation_of(traveler))
+	var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
+	var started := _profile_start()
+	var result := _finish_result(graph.call("query_logistics_access", queries, owners, identities, state.diplomatic_relations, GameState.DiplomaticRelation.ALLIED, GameState.DiplomaticRelation.WAR), "logistics_access", started)
+	if not bool(result.get("supported", false)): return {}
+	var rows: Dictionary = {}
+	for index in range(travelers.size()): rows[travelers[index]] = result["rows"][index]
+	if mode == "compare":
+		var reference := {}
+		for traveler in travelers:
+			var row := PackedByteArray()
+			for nation in state.nations: row.append(int(state.has_logistics_access(traveler, nation.id)))
+			reference[traveler] = row
+		verify_equal(reference, rows, "logistics_access")
+	return rows
 
 
 static func connectivity(snapshot: StrategicMapSnapshot, roots: Array[int]) -> Dictionary:

@@ -33,7 +33,8 @@ static func network_fingerprint(
 	warehouse_state: Dictionary,
 	enemy_edges: Dictionary,
 	besieged: Dictionary,
-	owner_rows: Dictionary = {}
+	owner_rows: Dictionary = {},
+	access_row: PackedByteArray = PackedByteArray()
 ) -> Array[int]:
 	var result: Array[int] = [
 		state.ownership_revision,
@@ -47,8 +48,11 @@ static func network_fingerprint(
 		result[0] = 0
 		result[1] = 0
 		result.append_array([-5, state.cities.size(), state.nations.size(), state.nations[nation_id].capital_city_id])
+	var owner_index := 0
 	for owner in state.nations:
-		if not state.has_logistics_access(nation_id, owner.id):
+		var allowed := bool(access_row[owner_index]) if access_row.size() == state.nations.size() else state.has_logistics_access(nation_id, owner.id)
+		owner_index += 1
+		if not allowed:
 			continue
 		if owner_rows.has(owner.id):
 			result.append_array(owner_rows[owner.id] as Array[int])

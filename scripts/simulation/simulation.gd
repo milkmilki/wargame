@@ -190,6 +190,7 @@ var _battle_lookup_cache: Dictionary = {}
 var _daily_food_multiplier_cache: Dictionary = {}
 ## 当日指纹阶段已按国家汇总的敌军占据边；后台建网直接复用，避免再次全军扫描。
 var _prepared_supply_blocked_edges: Dictionary = {}
+var _prepared_supply_access_rows: Dictionary = {}
 ## 补给网络依赖指纹（owner_nation -> Array[int]）：仅当指纹变化才丢弃对应网络重建，
 ## 拓扑不变的天数直接复用其损耗场，削减每日全量 O(粮仓×E) 重建（实测约省 12%）。
 var _supply_network_fingerprints: Dictionary = {}
@@ -411,6 +412,7 @@ func setup(game_state: GameState) -> void:
 	_supply_source_besieged_cities.clear()
 	_daily_supply_network_cache.clear()
 	_prepared_supply_blocked_edges.clear()
+	_prepared_supply_access_rows.clear()
 	_supply_network_fingerprints.clear()
 	_supply_shared_field_caches_by_nation.clear()
 	_ai_last_decision_day = -1
@@ -2803,6 +2805,7 @@ func _compute_supply_source_job(payload: Dictionary) -> void:
 ## 每日重算前的补给缓存维护：行军位置查表每天失效；驻城位置仅在该国网络
 ## 或该城围城状态变化时失效。网络损耗场继续按依赖指纹选择性失效。
 func _prepare_supply_network_caches() -> Array[int]:
+	_prepared_supply_access_rows.clear()
 	_daily_supply_source_cache.clear()
 	_daily_food_multiplier_cache.clear()
 	_battle_lookup_cache.clear()
@@ -2843,6 +2846,8 @@ func _prepare_supply_network_caches() -> Array[int]:
 		{} if supply_network_cache_disabled
 		else SupplyRules.network_owner_rows(state, warehouse_state, besieged)
 	)
+	if not supply_network_cache_disabled:
+		_prepared_supply_access_rows = NativeCompute.logistics_access_rows(state, active_ids)
 	for nation_id_value in active_ids:
 		var nation_id := int(nation_id_value)
 		var enemy_edges := {}
@@ -2884,6 +2889,7 @@ func _prepare_supply_network_caches() -> Array[int]:
 			# A valid warmed network can also seed a newly active ally's fields.
 			for source in _daily_supply_network_cache.get(nation_id, []):
 				if not fields.has(source.city_id): fields[source.city_id] = source.dist
+	_prepared_supply_access_rows.clear()
 	return active_ids
 
 
@@ -3376,7 +3382,8 @@ func _supply_network_fingerprint(
 	owner_rows: Dictionary = {}
 ) -> Array[int]:
 	return SupplyRules.network_fingerprint(
-		state, nation_id, warehouse_state, enemy_edges, besieged, owner_rows
+		state, nation_id, warehouse_state, enemy_edges, besieged, owner_rows,
+		_prepared_supply_access_rows.get(nation_id, PackedByteArray())
 	)
 
 

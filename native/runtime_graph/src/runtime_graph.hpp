@@ -45,6 +45,10 @@ public:
     Dictionary pack_owner_inputs(const Array &cities) const;
     Dictionary pack_trade_city_inputs(const Array &cities, int64_t day,
             bool include_food) const;
+    // Financial identities are resolved by the script before this pure batch.
+    Dictionary query_logistics_access(const PackedInt64Array &travelers,
+            const PackedInt64Array &owners, const PackedByteArray &identities,
+            const Dictionary &relations, int64_t allied, int64_t missing) const;
 
     // Read live administrative topology once, then compute each country's
     // zero/one-hop field. This boundary query does not use cached CSR topology.
