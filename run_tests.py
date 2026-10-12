@@ -14,7 +14,7 @@ CORE = [
     "native_extension_contract", "native_graph_equivalence", "native_edge_inputs", "native_administrative_fields", "native_key_order", "native_frozen_batch", "native_world_lifecycle", "native_runtime_equivalence",
     "project_compile", "test_suite", "field_establishment_costs", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "trade_packed_fingerprint", "campaign_enemy_memo", "atlas_capital_hops", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
     "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements", "supply_combat_attributes", "morale_rout_only", "field_shared_morale", "military_funding", "battle_opening_dice",
-    "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup", "campaign_mobilization_costs",
+    "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup", "campaign_defense_center_activity", "campaign_mobilization_costs",
     "campaign_action_readiness", "campaign_staging_legality", "coalition_dispatch_lifecycle", "coalition_siege_participation",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",

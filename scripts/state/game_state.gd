@@ -5,6 +5,9 @@ extends RefCounted
 
 const TerritoryTransaction = preload("res://scripts/state/territory_transaction.gd")
 
+## Debug oracle for comparing direct province queries with full-world scans.
+static var campaign_center_activity_index_disabled_for_tests := false
+
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 500
 const CITY_MANPOWER_PER_MONTH_MAX: int = 1000
@@ -1856,6 +1859,53 @@ func _campaign_has_live_route(army: Army, target_city: int) -> bool:
 	return true
 
 
+## Standalone reports need only one province. Keep the complete batch index
+## separate, and preserve its record order and live-route/camp eligibility.
+func _campaign_defense_center_activity(center_id: int) -> Dictionary:
+	var forces := []
+	var camps := []
+	var rear_fronts := {}
+	for front_value in campaign_fronts.values():
+		var front := front_value as CoalitionCampaignFront
+		if front != null and front.center_city_id == center_id and campaign_has_rear_camp(front):
+			rear_fronts[front.front_id] = front
+	for army in armies:
+		if army.size <= 0:
+			continue
+		var present := army.location_city >= 0 and administrative_center_of(army.location_city) == center_id
+		if army.on_edge:
+			present = present or administrative_center_of(army.move_from) == center_id or administrative_center_of(army.move_to) == center_id
+		var incoming_target := army.ai_target_city >= 0 and administrative_center_of(army.ai_target_city) == center_id
+		var front := rear_fronts.get(army.campaign_front_id) as CoalitionCampaignFront
+		if not present and not incoming_target and front == null:
+			continue
+		var effective := not army.is_city_garrison and army_effective_for_field_campaign(army)
+		if front != null and front.army_assignments.has(army.id):
+			var at_camp := army.is_at_city_node(front.camp_city_id)
+			var returning := int(front.army_assignments[army.id]) == front.camp_city_id and _campaign_has_live_route(army, front.camp_city_id)
+			if at_camp or returning:
+				camps.append({
+					"army_id": army.id, "owner": army.owner_nation,
+					"war_id": front.war_id, "city_id": front.camp_city_id,
+					"size": army.size if effective else 0,
+				})
+		if effective and (present or (incoming_target and _campaign_has_live_attack_route(army))):
+			forces.append({
+				"army_id": army.id, "owner": army.owner_nation, "size": army.size,
+				"present": present,
+			})
+	var sieges := []
+	for battle in battles:
+		if not battle.finished and battle.kind == Battle.Kind.SIEGE and battle.city != null and administrative_center_of(battle.city.id) == center_id:
+			sieges.append(battle.siege_attacker_nation)
+	var fu_ids: Array[int] = []
+	for city in cities:
+		if city.politically_active and not city.is_dock and is_fu_city(city.id) and administrative_center_of(city.id) == center_id:
+			fu_ids.append(city.id)
+	return {"forces": {center_id: forces}, "camps": {center_id: camps},
+		"sieges": {center_id: sieges}, "fu_by_center": {center_id: fu_ids}}
+
+
 func campaign_defense_context(
 	nation_id: int, center_id: int, war_id: int,
 	activity_index: Dictionary = {}
@@ -1865,7 +1915,13 @@ func campaign_defense_context(
 		"enemy_manpower": 0, "requirement": 0}
 	if not is_zhou_city(center_id):
 		return result
-	var index := campaign_defense_activity_index() if activity_index.is_empty() else activity_index
+	var index := activity_index
+	if index.is_empty():
+		index = (
+			campaign_defense_activity_index()
+			if campaign_center_activity_index_disabled_for_tests and OS.has_feature("debug")
+			else _campaign_defense_center_activity(center_id)
+		)
 	var counted_armies := {}
 	for force in (index["forces"] as Dictionary).get(center_id, []):
 		var owner := int(force["owner"])
