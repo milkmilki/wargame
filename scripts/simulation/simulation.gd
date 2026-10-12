@@ -7237,6 +7237,14 @@ func _run_ai_army_decision_phase(
 	runtime_slice_started: int,
 	mobilization_claims: Dictionary = {}
 ) -> int:
+	# Orders remain buffered until this phase ends. Reachability is immutable
+	# here, so starving armies of one nation share a single warehouse network.
+	var manpower_hub_networks: Variant = null
+	if (
+		_collect_ai_commands and ai_policy_overrides.is_empty()
+		and state.get_script().resource_path == "res://scripts/state/game_state.gd"
+	):
+		manpower_hub_networks = {}
 	for nation_id in managed_nations:
 		var context: Dictionary = military_contexts[nation_id]
 		var nation := state.nations[nation_id]
@@ -7283,7 +7291,8 @@ func _run_ai_army_decision_phase(
 				coordinator,
 				minimum_participant_ratio,
 				defense_plan,
-				mobilization_claims
+				mobilization_claims,
+				manpower_hub_networks
 			)
 		if (
 			spread_runtime_work
@@ -7305,7 +7314,8 @@ func _decide_ai_army(
 	coordinator: ArmyCoordinator,
 	minimum_participant_ratio: float,
 	defense_plan: CityDefensePlan,
-	mobilization_claims: Dictionary = {}
+	mobilization_claims: Dictionary = {},
+	manpower_hub_networks: Variant = null
 ) -> void:
 	_set_runtime_profile_stage(&"ai_army_campaign")
 	if (
@@ -7335,7 +7345,8 @@ func _decide_ai_army(
 		coordinator,
 		army,
 		minimum_participant_ratio,
-		defense_plan
+		defense_plan,
+		manpower_hub_networks
 	)
 	_record_runtime_span(&"ai_army_choose", choose_started)
 	if candidate.kind == ActionCandidate.Kind.NONE:

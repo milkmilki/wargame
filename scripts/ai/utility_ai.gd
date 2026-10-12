@@ -21,7 +21,8 @@ static func choose(
 	coordinator: ArmyCoordinator,
 	army: Army,
 	minimum_participant_ratio: float = ASSAULT_PARTICIPANT_MIN_RATIO,
-	defense_plan: CityDefensePlan = null
+	defense_plan: CityDefensePlan = null,
+	manpower_hub_networks: Variant = null
 ) -> ActionCandidate:
 	var active_defense_plan := defense_plan
 	if active_defense_plan == null:
@@ -38,11 +39,12 @@ static func choose(
 			coordinator,
 			army,
 			minimum_participant_ratio,
-			active_defense_plan
+			active_defense_plan,
+			manpower_hub_networks
 		)
 	if army.state != Army.State.IDLE or army.location_city < 0:
 		return ActionCandidate.make(ActionCandidate.Kind.NONE, 0.0, "状态不可接受新命令")
-	var breakout := _breakout_candidate(view, snapshot, army)
+	var breakout := _breakout_candidate(view, snapshot, army, manpower_hub_networks)
 	if breakout != null:
 		return breakout
 	var current := army.location_city
@@ -330,9 +332,10 @@ static func _attack_approach_distance(
 static func _breakout_candidate(
 	view: AiWorldView,
 	snapshot: StrategicMapSnapshot,
-	army: Army
+	army: Army,
+	manpower_hub_networks: Variant = null
 ) -> ActionCandidate:
-	if not _is_encircled_low_supply(view, army):
+	if not _is_encircled_low_supply(view, army, manpower_hub_networks):
 		return null
 	var start := army.location_city
 	var own_power := maxf(ArmyPower.effective(army), 1.0)
@@ -377,11 +380,28 @@ static func _breakout_candidate(
 	return candidate
 
 
-static func _is_encircled_low_supply(view: AiWorldView, army: Army) -> bool:
-	return (
+static func _is_encircled_low_supply(
+	view: AiWorldView, army: Army, manpower_hub_networks: Variant = null
+) -> bool:
+	if not (
 		army.starving
 		and army.supply_ratio <= BREAKOUT_SUPPLY_RATIO
-		and not Pathfinding.can_reach_manpower_hub(view.state, army)
+	):
+		return false
+	# A buffered command phase owns this cache and cannot change the graph.
+	# Standalone calls and custom callback states keep reading live inputs.
+	if (
+		manpower_hub_networks == null
+		or view.state.get_script().resource_path != "res://scripts/state/game_state.gd"
+	):
+		return not Pathfinding.can_reach_manpower_hub(view.state, army)
+	var networks: Dictionary = manpower_hub_networks
+	if not networks.has(army.owner_nation):
+		networks[army.owner_nation] = Pathfinding.build_manpower_hub_network(
+			view.state, army.owner_nation
+		)
+	return not Pathfinding.can_reach_manpower_hub_from_network(
+		view.state, army, networks[army.owner_nation]
 	)
 
 
@@ -574,7 +594,8 @@ static func _choose_holding(
 	coordinator: ArmyCoordinator,
 	army: Army,
 	minimum_participant_ratio: float,
-	defense_plan: CityDefensePlan
+	defense_plan: CityDefensePlan,
+	manpower_hub_networks: Variant = null
 ) -> ActionCandidate:
 	var endpoint := army.move_from
 	if view.state.cities[endpoint].owner_nation != view.nation_id:
@@ -582,7 +603,7 @@ static func _choose_holding(
 	var enemy_endpoint := army.move_to if endpoint == army.move_from else army.move_from
 	var target_city := view.state.cities[enemy_endpoint]
 	if (
-		_is_encircled_low_supply(view, army)
+		_is_encircled_low_supply(view, army, manpower_hub_networks)
 		and view.state.is_enemy(view.nation_id, target_city.owner_nation)
 	):
 		var breakout_target_power := _breakout_target_power(view, enemy_endpoint)
