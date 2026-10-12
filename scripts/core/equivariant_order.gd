@@ -379,6 +379,13 @@ static func sort_armies(
 			army.ai_order_until_day,
 			army.defensive_deployment_until_day,
 		]
+	if values.size() >= 16 and not state.atlas_layout.is_empty() and NativeCompute.backend() != "gdscript":
+		var rows: Array = []
+		for army in values: rows.append(keys[army])
+		var original := values.duplicate()
+		var order := NativeCompute.key_order(rows)
+		for index in range(order.size()): values[index] = original[order[index]]
+		return
 	values.sort_custom(func(a: Army, b: Army) -> bool:
 		return _key_less(keys[a], keys[b])
 	)
