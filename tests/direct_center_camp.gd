@@ -12,8 +12,8 @@ func _init() -> void:
 	_test_entry_cache_revisions()
 	_test_shared_base_failure()
 	_test_real_rout_and_second_wave()
-	_test_real_capture_chain(false)
-	_test_real_capture_chain(true)
+	_test_defense_holds_center(false)
+	_test_defense_holds_center(true)
 	for message in failures:
 		push_error("DIRECT_CENTER_CAMP_FAIL: " + message)
 	print("DIRECT_CENTER_CAMP_RESULT checks=%d failures=%d" % [checks, failures.size()])
@@ -302,7 +302,9 @@ func _test_real_rout_and_second_wave() -> void:
 	sim.free()
 
 
-func _test_real_capture_chain(river: bool) -> void:
+## Simplified defense holds its center until relief is needed; an enemy rear
+## camp alone does not authorize a pursuit outside the defended province.
+func _test_defense_holds_center(river: bool) -> void:
 	var state := fixture()
 	if river:
 		state.edge_of(2, 3).max_manpower = 0
@@ -330,42 +332,29 @@ func _test_real_capture_chain(river: bool) -> void:
 		guards.append(troop)
 	var plan := front(state, guards)
 	plan.phase = CoalitionCampaignFront.Phase.HOLD_CAMP
+	var defenders: Array[Army] = []
 	for _index in range(4):
-		army(state, 1, 3)
+		defenders.append(army(state, 1, 3))
 	var sim := Simulation.new()
 	root.add_child(sim)
 	sim.setup(state)
 	sim.diplomacy_enabled = false
 	sim._campaign_receiving_city(plan)
-	var captured := -1
-	var released := -1
-	var counter_order := -1
-	var new_defense := -1
-	var cooldown_until := -1
-	var counter_target := -1
-	for _day in range(300):
+	var context := state.campaign_defense_context(1, 3, plan.war_id)
+	_check((context["enemy_camp_ids"] as Array[int]).has(2), "enemy rear camp creates a genuine defense task")
+	_check(60000 > int(context["requirement"]), "holding the center is intentional even with sufficient field manpower")
+	for _day in range(30):
 		sim._advance_day()
-		if captured < 0 and state.cities[2].owner_nation == 1:
-			captured = state.day
-			cooldown_until = state.campaign_offensive_cooldown_until(plan.war_id, [0] as Array[int])
-		if captured >= 0 and released < 0 and state.campaign_front(plan.front_id) == null:
-			released = state.day
-		for troop in state.armies:
-			var current := state.campaign_front(troop.campaign_front_id)
-			if current != null and current.mode == CoalitionCampaignFront.Mode.OFFENSE and troop.owner_nation == 1 and (troop.on_edge or not troop.path.is_empty()):
-				if counter_order < 0:
-					counter_order = state.day
-					counter_target = current.center_city_id
-		if counter_target >= 0 and state.campaign_front_for(0, counter_target, CoalitionCampaignFront.Mode.DEFENSE, plan.war_id) != null:
-			new_defense = state.day
-			break
-	_check(captured > 100, "original defender must march and actually capture the populated rear camp")
-	_check(released >= captured and captured >= 0, "rear camp capture releases the old front only after real occupation")
-	_check(counter_order > captured and counter_order >= released, "rear camp victory yields executable next-day same-war counteroffense")
-	_check(new_defense >= counter_order and counter_order >= 0, "counteroffense causes the original attacker to build an actual defense")
-	_check(cooldown_until == captured + 60, "rear camp defeat registers exactly the original sixty-day cooldown")
-	_check(sim.ai_last_command_commit_failures == 0, "rear camp chain has no rejected movement orders")
+		for troop in defenders:
+			_check(troop.is_at_city_node(3) and troop.path.is_empty(), "defense keeps the actual cohort at its center without pursuing the enemy rear camp")
+	var defense := state.campaign_front_for(1, 3, CoalitionCampaignFront.Mode.DEFENSE, plan.war_id)
+	_check(defense != null and defense.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE, "live defense holds before any center siege")
+	_check(state.cities[2].owner_nation == 0 and state.cities[3].owner_nation == 1, "holding does not fabricate an occupation or change either province owner")
+	_check(state.campaign_front(plan.front_id) == plan, "an uncaptured rear camp retains its real offensive task")
+	for troop in defenders:
+		_check(defense != null and troop.campaign_front_id == defense.front_id and troop.campaign_war_id == plan.war_id, "holding defenders preserve their actual war and front bindings")
+	_check(sim.ai_last_command_commit_failures == 0, "center hold has no rejected movement orders")
 	for pair in state.campaign_pairs.values():
 		_check(pair.battlefields.size() <= 2, "rear camp pursuit never consumes an extra battlefield slot")
-	print("DIRECT_CENTER_COUNTER_METRIC river=%s capture=%d release=%d counter_order=%d new_defense=%d cooldown=%d" % [river, captured, released, counter_order, new_defense, cooldown_until])
+	print("DIRECT_CENTER_HOLD_METRIC river=%s day=%d rear_owner=%d center_owner=%d" % [river, state.day, state.cities[2].owner_nation, state.cities[3].owner_nation])
 	sim.free()
