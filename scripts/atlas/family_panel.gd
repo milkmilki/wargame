@@ -16,7 +16,7 @@ func _init() -> void:
 	var body := VBoxContainer.new(); add_child(body)
 	var header := HBoxContainer.new(); body.add_child(header)
 	title.size_flags_horizontal=Control.SIZE_EXPAND_FILL; header.add_child(title)
-	button(header,"×",close)
+	button(header,"×",close).tooltip_text="关闭家族树（Esc）"
 	var tools := HBoxContainer.new(); body.add_child(tools)
 	search.placeholder_text="搜索姓名 / 人物编号"; search.size_flags_horizontal=Control.SIZE_EXPAND_FILL; tools.add_child(search)
 	search.text_submitted.connect(func(_text): search_next())
@@ -43,6 +43,9 @@ func _init() -> void:
 func button(parent: Node,text_value: String,callback: Callable) -> Button:
 	var control:=Button.new(); control.text=text_value; parent.add_child(control); control.pressed.connect(callback); return control
 func open(id: int,person_id: int = -1) -> void:
+	# z_index controls drawing, not GUI picking. The map toolbar is added
+	# later, so raise sibling input order as well before opening this overlay.
+	if get_parent()!=null: get_parent().move_child(self,get_parent().get_child_count()-1)
 	nation_id=id; revision.clear(); visible=true; refresh_model()
 	if model.is_empty(): title.text="等待当日结算完成…"; return
 	responsive(); call_deferred("initial_focus",person_id)
