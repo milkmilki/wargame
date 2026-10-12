@@ -7,6 +7,8 @@ const TerritoryTransaction = preload("res://scripts/state/territory_transaction.
 
 ## Debug oracle for comparing direct province queries with full-world scans.
 static var campaign_center_activity_index_disabled_for_tests := false
+## Debug scalar scan oracle for administrative member index benchmarks.
+static var administrative_member_index_disabled_for_tests := false
 
 const NATION_COUNT: int = 4
 const CITY_MANPOWER_PER_MONTH_MIN: int = 500
@@ -250,6 +252,10 @@ var _regional_strategy_control: Dictionary = {}
 ## never bridge two land components. These values are derived from roads.
 var administrative_region_ids: PackedInt32Array = PackedInt32Array()
 var administrative_center_by_city: PackedInt32Array = PackedInt32Array()
+var _administrative_member_partition := PackedInt32Array()
+var _administrative_member_index: Dictionary = {}
+var _administrative_member_mutex := Mutex.new()
+var _administrative_member_cache_builds := 0
 var administrative_hop_distances: PackedInt32Array = PackedInt32Array()
 var administrative_center_city_ids: PackedInt32Array = PackedInt32Array()
 var administrative_region_count: int = 0
@@ -504,6 +510,9 @@ func _reset_world(world_seed: int) -> void:
 	_regional_strategy_control.clear()
 	administrative_region_ids = PackedInt32Array()
 	administrative_center_by_city = PackedInt32Array()
+	_administrative_member_partition = PackedInt32Array()
+	_administrative_member_index.clear()
+	_administrative_member_cache_builds = 0
 	administrative_hop_distances = PackedInt32Array()
 	administrative_center_city_ids = PackedInt32Array()
 	administrative_region_count = 0
@@ -839,9 +848,26 @@ func administrative_members(center_city_id: int) -> Array[int]:
 	var result: Array[int] = []
 	if not is_zhou_city(center_city_id):
 		return result
-	for city_id in range(administrative_center_by_city.size()):
-		if administrative_center_by_city[city_id] == center_city_id:
-			result.append(city_id)
+	if administrative_member_index_disabled_for_tests and OS.has_feature("debug"):
+		for city_id in range(administrative_center_by_city.size()):
+			if administrative_center_by_city[city_id] == center_city_id:
+				result.append(city_id)
+		return result
+	_administrative_member_mutex.lock()
+	# Compare actual contents, rather than revisions, so direct partition edits
+	# remain visible. Publish only a complete index to concurrent frozen readers.
+	if _administrative_member_partition != administrative_center_by_city:
+		var grouped := {}
+		for city_id in range(administrative_center_by_city.size()):
+			var center := administrative_center_by_city[city_id]
+			if not grouped.has(center): grouped[center] = [] as Array[int]
+			(grouped[center] as Array[int]).append(city_id)
+		_administrative_member_index = grouped
+		_administrative_member_partition = administrative_center_by_city.duplicate()
+		if OS.has_feature("debug"): _administrative_member_cache_builds += 1
+	# Callers historically receive an independent array and may sort/clear it.
+	result = (_administrative_member_index[center_city_id] as Array[int]).duplicate()
+	_administrative_member_mutex.unlock()
 	return result
 
 
