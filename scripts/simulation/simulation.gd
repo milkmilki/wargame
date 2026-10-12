@@ -8908,7 +8908,7 @@ func _campaign_mobilization_claims() -> Dictionary:
 	var effective_by_front := {}
 	# Planning may already have moved armies. Build fresh read-only requirement
 	# indexes for this reservation pass, then share them across its pending slots.
-	var requirement_cache := {}
+	var requirement_cache := {"__freeze_campaign_v_armies": true}
 	var deficits: Dictionary = _coalition_campaign_query_cache.get("allocation_deficits", {})
 	for army in state.armies:
 		if army.campaign_front_id >= 0 and not deficits.has(army.campaign_front_id) and state.army_effective_for_field_campaign(army):

@@ -11,6 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
+    "campaign_frozen_reinforcement",
     "native_logistics_access",
     "administrative_member_index",
     "native_extension_contract", "native_graph_equivalence", "native_edge_inputs", "native_administrative_fields", "native_key_order", "native_trade_city_inputs", "native_frozen_batch", "native_world_lifecycle", "native_runtime_equivalence",

@@ -5881,6 +5881,24 @@ static func _cached_campaign_reinforcement_threat(
 			center_city_id, 0
 		))
 	var threat_by_center := {}
+	# Only callers that own an uninterrupted read-only pass may share army rows.
+	# Ordinary caches still scan live armies when a new attacker is queried.
+	if bool(evaluation_cache.get("__freeze_campaign_v_armies", false)) and state.get_script().resource_path == "res://scripts/state/game_state.gd":
+		if not evaluation_cache.has("campaign_v_army_rows"):
+			evaluation_cache["campaign_v_army_rows"] = _capture_campaign_reinforcement_rows(state)
+		var enemy_by_owner := {}
+		var rows: Array[PackedInt64Array] = evaluation_cache["campaign_v_army_rows"]
+		for row in rows:
+			var owner := int(row[0])
+			if not enemy_by_owner.has(owner): enemy_by_owner[owner] = state.is_enemy(attacker_id, owner)
+			if not bool(enemy_by_owner[owner]): continue
+			for column in [2, 3]:
+				var center_id := int(row[column])
+				if center_id < 0 or (column == 3 and center_id == row[2]): continue
+				threat_by_center[center_id] = int(threat_by_center.get(center_id, 0)) + int(row[1])
+		evaluation_cache[cache_key] = threat_by_center
+		_campaign_v_index_builds += 1
+		return int(threat_by_center.get(center_city_id, 0))
 	# Relations are fixed during this read-only build; armies share their owner.
 	var enemy_by_owner := {}
 	for army in state.armies:
@@ -5914,6 +5932,23 @@ static func _cached_campaign_reinforcement_threat(
 	evaluation_cache[cache_key] = threat_by_center
 	_campaign_v_index_builds += 1
 	return int(threat_by_center.get(center_city_id, 0))
+
+
+## Capture eligibility and physical regions once, in original army order.
+## Packed int64 rows retain wide manpower values and invalid owner IDs.
+static func _capture_campaign_reinforcement_rows(state: GameState) -> Array[PackedInt64Array]:
+	var rows: Array[PackedInt64Array] = []
+	for army in state.armies:
+		if not state.army_effective_for_field_campaign(army) or army.is_city_garrison: continue
+		var first := -1
+		var second := -1
+		if army.on_edge:
+			first = state.administrative_center_of(army.move_from)
+			second = state.administrative_center_of(army.move_to)
+		elif army.location_city >= 0:
+			first = state.administrative_center_of(army.location_city)
+		rows.append(PackedInt64Array([army.owner_nation, army.size, first, second]))
+	return rows
 
 
 static func _national_power(
