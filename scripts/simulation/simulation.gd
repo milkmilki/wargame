@@ -84,6 +84,7 @@ const REINFORCEMENT_RADIUS: float = 0.15
 const AI_DECISION_INTERVAL_DAYS: int = 10
 const GRID_AI_DECISION_INTERVAL_DAYS: int = 5
 const AI_RUNTIME_SLICE_BUDGET_USEC: int = 6000
+enum CoalitionPlanningStage { LOST_CAMPS, DEFENSE_TASKS, PAIRS, COMPONENTS, CLAIMS, FINALIZE }
 const AI_CONTEXT_SLICE_BUDGET_USEC: int = 6000
 const SUPPLY_RUNTIME_SLICE_BUDGET_USEC: int = 3000
 ## 单个重计算日结束后至少留出这段墙钟时间处理输入与绘制，避免时间债务让
@@ -7642,7 +7643,13 @@ func _run_ai_campaign_planning_phase(
 		coordinators[nation_id] = coordinator
 		defense_plans[nation_id] = context["defense_plan"]
 	campaign_part_started = Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
-	_manage_coalition_campaigns(due_components)
+	if spread_runtime_work:
+		var coalition_result := await _manage_coalition_campaigns_over_frames(
+			due_components, runtime_slice_started
+		)
+		runtime_slice_started = int(coalition_result["slice_started"])
+	else:
+		_manage_coalition_campaigns(due_components)
 	_record_tick_profile_stage("ai_campaign_coalition", campaign_part_started)
 	var mobilization_claims: Dictionary = _coalition_campaign_query_cache["mobilization_claims"]
 	for nation_id in managed_nations:
@@ -8859,35 +8866,116 @@ func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
 
 
 func _manage_coalition_campaigns(prepared_components: Variant = null) -> bool:
+	var job := _begin_coalition_campaign_planning(prepared_components)
+	while not job["done"]:
+		_step_coalition_campaign_planning(job)
+	return bool(job["changed"])
+
+
+func _manage_coalition_campaigns_over_frames(
+	prepared_components: Variant = null,
+	runtime_slice_started: int = 0,
+	budget_usec: int = AI_RUNTIME_SLICE_BUDGET_USEC
+) -> Dictionary:
+	var job := _begin_coalition_campaign_planning(prepared_components)
+	while not job["done"]:
+		if Time.get_ticks_usec() - runtime_slice_started >= budget_usec:
+			await get_tree().process_frame
+			runtime_slice_started = Time.get_ticks_usec()
+		var step_started := Time.get_ticks_usec() if runtime_stage_profiling_enabled else 0
+		_step_coalition_campaign_planning(job)
+		_record_runtime_span(&"ai_campaign_coalition_step", step_started)
+	return {"changed": job["changed"], "slice_started": runtime_slice_started}
+
+
+func _begin_coalition_campaign_planning(prepared_components: Variant = null) -> Dictionary:
 	var components: Array[Dictionary] = (
 		_prepare_coalition_campaign_batch()
 		if prepared_components == null else prepared_components
 	)
-	var changed := false
 	# Resolve failed camps before either side allocates or evaluates defense.
 	_coalition_campaign_query_cache["prepared_pairs"] = true
-	for component in components:
-		for front in _component_fronts(component, CoalitionCampaignFront.Mode.OFFENSE):
-			if _campaign_camp_lost_to_enemy(front):
-				changed = _fail_lost_campaign_camp(front.anchor_nation_id, front, {}) or changed
-	if changed:
-		_coalition_defense_activity = state.campaign_defense_activity_index()
-	for component in components:
+	return {
+		"components": components, "stage": CoalitionPlanningStage.LOST_CAMPS, "index": 0,
+		"fronts": [], "front_index": -1, "pairs": [], "due_pairs": {},
+		"changed": false, "done": false,
+	}
+
+
+func _step_coalition_campaign_planning(job: Dictionary) -> void:
+	var components: Array[Dictionary] = job["components"]
+	var index := int(job["index"])
+	# Enumerate each component's fronts at the same point as the synchronous
+	# loop: an earlier lost camp may release fronts in a later component.
+	if int(job["stage"]) == CoalitionPlanningStage.LOST_CAMPS:
+		while index < components.size():
+			if int(job["front_index"]) < 0:
+				job["fronts"] = _component_fronts(
+					components[index], CoalitionCampaignFront.Mode.OFFENSE
+				)
+				job["front_index"] = 0
+			var fronts: Array = job["fronts"]
+			var front_index := int(job["front_index"])
+			if front_index < fronts.size():
+				var front := fronts[front_index] as CoalitionCampaignFront
+				job["front_index"] = front_index + 1
+				if _campaign_camp_lost_to_enemy(front):
+					job["changed"] = _fail_lost_campaign_camp(
+						front.anchor_nation_id, front, {}
+					) or bool(job["changed"])
+				return
+			index += 1
+			job["index"] = index
+			job["front_index"] = -1
+		if job["changed"]:
+			_coalition_defense_activity = state.campaign_defense_activity_index()
+		job["stage"] = CoalitionPlanningStage.DEFENSE_TASKS
+		job["index"] = 0
+		return
+	if int(job["stage"]) == CoalitionPlanningStage.DEFENSE_TASKS:
+		if index >= components.size():
+			job["due_pairs"] = _coalition_campaign_query_cache.get("due_pair_ids", {})
+			# Defense refresh can create or retire pairs; capture them only now.
+			job["pairs"] = state.campaign_pairs.values()
+			job["stage"] = CoalitionPlanningStage.PAIRS
+			job["index"] = 0
+			return
+		var component: Dictionary = components[index]
 		for member_id in component["members"]:
 			RegionalStrategy.update_target(state, int(member_id))
 		_refresh_component_defense_tasks(component)
-	var due_pairs: Dictionary = _coalition_campaign_query_cache.get("due_pair_ids", {})
-	for pair_value in state.campaign_pairs.values():
-		var pair := pair_value as CoalitionCampaignPair
+		job["index"] = index + 1
+		return
+	if int(job["stage"]) == CoalitionPlanningStage.PAIRS:
+		var pairs: Array = job["pairs"]
+		if index >= pairs.size():
+			job["stage"] = CoalitionPlanningStage.COMPONENTS
+			job["index"] = 0
+			return
+		var pair := pairs[index] as CoalitionCampaignPair
+		var due_pairs: Dictionary = job["due_pairs"]
 		if due_pairs.has(pair.pair_id):
-			changed = _plan_campaign_pair(pair, _coalition_campaign_query_cache) or changed
-	for component in components:
+			job["changed"] = _plan_campaign_pair(
+				pair, _coalition_campaign_query_cache
+			) or bool(job["changed"])
+		job["index"] = index + 1
+		return
+	if int(job["stage"]) == CoalitionPlanningStage.COMPONENTS:
+		if index >= components.size():
+			job["stage"] = CoalitionPlanningStage.CLAIMS
+			return
+		var component: Dictionary = components[index]
 		var key := str(component["key"])
 		_coalition_campaign_next_due_day[key] = state.day + AI_DECISION_INTERVAL_DAYS
-		changed = _plan_coalition_component(
+		job["changed"] = _plan_coalition_component(
 			component, component["defense_centers"], _coalition_campaign_query_cache
-		) or changed
-	_coalition_campaign_query_cache["mobilization_claims"] = _campaign_mobilization_claims()
+		) or bool(job["changed"])
+		job["index"] = index + 1
+		return
+	if int(job["stage"]) == CoalitionPlanningStage.CLAIMS:
+		_coalition_campaign_query_cache["mobilization_claims"] = _campaign_mobilization_claims()
+		job["stage"] = CoalitionPlanningStage.FINALIZE
+		return
 	_coalition_campaign_wake_day = 2147483647
 	for key in _coalition_campaign_next_due_day.keys():
 		if not _coalition_component_keys.has(key):
@@ -8899,7 +8987,7 @@ func _manage_coalition_campaigns(prepared_components: Variant = null) -> bool:
 	_coalition_armies_by_id.clear()
 	_coalition_armies_by_nation.clear()
 	_coalition_defense_activity.clear()
-	return changed
+	job["done"] = true
 
 
 func _campaign_mobilization_claims() -> Dictionary:

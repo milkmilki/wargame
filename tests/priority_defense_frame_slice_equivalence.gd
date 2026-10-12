@@ -21,7 +21,7 @@ func _init() -> void:
 
 
 func _run() -> void:
-	await _verify_real_succession_dispatch()
+	await _verify_private_succession_isolation()
 	_baseline_state = preload("res://tests/support/grid_world.gd").new()
 	_baseline_state.generate_world(12345, _nations, _cities)
 	_baseline_sim = Simulation.new()
@@ -82,7 +82,7 @@ func _finish() -> void:
 	quit(0 if mismatches == 0 else 1)
 
 
-func _verify_real_succession_dispatch() -> void:
+func _verify_private_succession_isolation() -> void:
 	var fingerprints: Array[String] = []
 	for sliced in [false, true]:
 		var state: GameState = Direct.fixture()
@@ -97,6 +97,11 @@ func _verify_real_succession_dispatch() -> void:
 		conflict.war_id = state.war_id_between(0, 1)
 		conflict.army_ids = [attacker.id]
 		conflict.crown_army_ids = [guard.id, reserve.id]
+		# Succession uses a private battle. Legacy map IDs must not dispatch
+		# map troops, even when a simultaneous map siege shares those IDs.
+		conflict.battle = Battle.new()
+		conflict.battle.side_a = [Army.new()] as Array[Army]
+		conflict.battle.side_b = [Army.new()] as Array[Army]
 		state.succession_conflicts[1] = conflict
 		var battle := state.new_battle(Battle.Kind.SIEGE)
 		battle.city = state.cities[3]
@@ -107,17 +112,18 @@ func _verify_real_succession_dispatch() -> void:
 		root.add_child(sim)
 		sim.setup(state)
 		sim.set_process(false)
+		var before := [_army_fp(attacker), _army_fp(guard), _army_fp(reserve)]
 		if sliced:
 			await sim._advance_priority_city_defense_reinforcements(true)
 		else:
 			sim._advance_priority_city_defense_reinforcements()
-		if reserve.state != Army.State.MOVING:
+		if before != [_army_fp(attacker), _army_fp(guard), _army_fp(reserve)]:
 			_succession_mismatches += 1
 		fingerprints.append(_army_fp(reserve))
 		sim.free()
 	if fingerprints[0] != fingerprints[1]:
 		_succession_mismatches += 1
-	print("SUCCESSION_PRIORITY_REAL_DISPATCH mismatches=%d" % _succession_mismatches)
+	print("SUCCESSION_PRIORITY_MAP_ISOLATION mismatches=%d" % _succession_mismatches)
 
 
 func _army_fp(army: Army) -> String:
