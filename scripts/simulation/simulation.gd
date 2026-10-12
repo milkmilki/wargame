@@ -7706,9 +7706,7 @@ func _reconcile_main_commands(
 		for army in state.armies:
 			if army.owner_nation == nation_id and army.size > 0:
 				armies.append(army)
-	armies.sort_custom(func(a: Army, b: Army) -> bool:
-		return EquivariantOrder.army_less(state, nation_id, a, b)
-	)
+	EquivariantOrder.sort_armies(armies, state, nation_id)
 	var armies_by_group := {}
 	for army in armies:
 		army.max_size = GameState.INITIAL_HEAVY_ARMY_SIZE
@@ -8894,6 +8892,8 @@ func _manage_coalition_campaigns(prepared_components: Variant = null) -> bool:
 
 
 func _campaign_mobilization_claims() -> Dictionary:
+	if state.campaign_pairs.is_empty() and state.campaign_fronts.is_empty():
+		return {}
 	var needs := {}
 	var members_by_key := {}
 	var effective_by_front := {}
@@ -8948,15 +8948,18 @@ func _campaign_mobilization_claims() -> Dictionary:
 	var candidates_by_nation := {}
 	for key in needs:
 		var remaining := int(needs[key])
+		if remaining <= 0:
+			continue
 		var context: Dictionary = members_by_key[key]
 		for member_id in context["members"]:
+			if remaining <= 0:
+				break
 			if not candidates_by_nation.has(member_id):
 				var candidates: Array[Army] = []
 				for army in _coalition_armies_by_nation.get(member_id, []):
 					if army.campaign_front_id < 0 and army.state == Army.State.IDLE and not army.on_edge and state.army_effective_for_field_campaign(army) and army.defensive_deployment_until_day <= state.day and not ai_policy_overrides.has(army.owner_nation):
 						candidates.append(army)
-				candidates.sort_custom(func(a: Army, b: Army) -> bool:
-					return EquivariantOrder.army_less(state, int(member_id), a, b))
+				EquivariantOrder.sort_armies(candidates, state, int(member_id))
 				candidates_by_nation[member_id] = candidates
 			var candidates: Array[Army] = candidates_by_nation[member_id]
 			for army in candidates:
@@ -10446,9 +10449,7 @@ func _balance_national_reserves(
 		if state.day < army.ai_order_until_day or state.day < army.defensive_deployment_until_day:
 			continue
 		reserves.append(army)
-	reserves.sort_custom(func(a: Army, b: Army) -> bool:
-		return EquivariantOrder.army_less(state, nation_id, a, b)
-	)
+	EquivariantOrder.sort_armies(reserves, state, nation_id)
 	var changed := false
 	for army in reserves:
 		var current_center := state.administrative_center_of(
