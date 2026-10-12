@@ -5,8 +5,11 @@ signal act(key: String,id: int)
 signal closed
 signal ruler_changed(nation_id: int, archetype: int, traits: Array[String])
 signal pause_requested
+signal layout_changed
 const Style = preload("res://scripts/atlas/information_theme.gd")
 const RulerEditor = preload("res://scripts/atlas/ruler_editor.gd")
+const ComparisonTable = preload("res://scripts/atlas/comparison_table.gd")
+var preferred_width := 0.
 var provider: Callable
 var document := {}
 var rows: Array = []
@@ -25,7 +28,11 @@ var build_count := 0
 var section_cache := {}
 var action_shape := -1
 func display_rows(group: Dictionary) -> Array:
+	if group.has("columns"): return []
 	return group.rows.filter(func(r): return not r.get("ruler_field",false)) if group.has("ruler") else group.rows
+func section_shape(group: Dictionary) -> Array:
+	if group.has("columns"): return [group.columns.size(),group.rows.map(func(r): return r.label)]
+	return [group.has("ruler"),display_rows(group).map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0])]
 func _init():
 	theme=Style.create(); custom_minimum_size=Vector2(340,0); mouse_filter=Control.MOUSE_FILTER_STOP; mouse_force_pass_scroll_events=false
 	var content := VBoxContainer.new(); content.add_theme_constant_override("separation",12); add_child(content)
@@ -46,10 +53,13 @@ func show_document(value: Dictionary) -> void:
 	if value.is_empty(): dismiss(); return
 	var same_object: bool = document.get("title","")==value.title
 	document=value; visible=true
+	var requested_width: float=value.get("preferred_width",0.)
+	if requested_width!=preferred_width:
+		preferred_width=requested_width; layout_changed.emit()
 	title.text=value.title; subtitle.text=value.subtitle; swatch.add_theme_stylebox_override("panel",Style.box(value.color,4))
 	notice.text=value.get("notice",""); notice.visible=not notice.text.is_empty()
 	var structure: Array = []
-	for group in value.sections: structure.append([group.title,group.has("ruler"),display_rows(group).map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0])])
+	for group in value.sections: structure.append([group.title,section_shape(group)])
 	var next := hash([structure,value.actions.map(func(a): return [a.key,a.label,a.icon])])
 	if next!=shape:
 		shape=next; rebuild(value)
@@ -60,6 +70,8 @@ func show_document(value: Dictionary) -> void:
 	var index := 0
 	for group_index in range(value.sections.size()):
 		var group: Dictionary=value.sections[group_index]
+		if group.has("columns"):
+			section_cache["%d:%s"%[group_index,group.title]].table.configure(group); continue
 		if group.has("ruler"): section_cache["%d:%s"%[group_index,group.title]].editor.configure(group.ruler)
 		for r in display_rows(group):
 			var slot: Dictionary = rows[index]; slot.row=r; slot.node.text=r.value; slot.node.tooltip_text=r.value; index+=1
@@ -72,7 +84,7 @@ func rebuild(value: Dictionary) -> void:
 	for index in range(value.sections.size()):
 		var group: Dictionary = value.sections[index]
 		var key := "%d:%s"%[index,group.title]; wanted[key]=true
-		var signature := hash([group.has("ruler"),display_rows(group).map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0])])
+		var signature := hash(section_shape(group))
 		if section_cache.has(key) and section_cache[key].signature==signature:
 			rows.append_array(section_cache[key].rows); body.move_child(section_cache[key].node,index); continue
 		if section_cache.has(key):
@@ -106,6 +118,9 @@ func rebuild_section(group: Dictionary) -> Dictionary:
 	var heading := Label.new(); heading.text=group.title; heading.add_theme_font_size_override("font_size",13); heading.add_theme_color_override("font_color",Style.MUTED); section.add_child(heading)
 	var panel := PanelContainer.new(); var group_style := Style.box(Color(.463,.463,.502,.10),10); panel.add_theme_stylebox_override("panel",group_style); section.add_child(panel)
 	var list := VBoxContainer.new(); list.add_theme_constant_override("separation",0); panel.add_child(list)
+	if group.has("columns"):
+		var table:=ComparisonTable.new(group); list.add_child(table)
+		return {"node":section,"rows":[],"table":table}
 	var editor: Control
 	if group.has("ruler"):
 		editor=RulerEditor.new();list.add_child(editor)
@@ -141,3 +156,4 @@ func _unhandled_key_input(event: InputEvent):
 		dismiss(); get_viewport().set_input_as_handled()
 func dismiss():
 	visible=false; document={}; closed.emit()
+	if preferred_width!=0.: preferred_width=0.; layout_changed.emit()

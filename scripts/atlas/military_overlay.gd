@@ -3,6 +3,7 @@ const Strokes = preload("res://scripts/atlas/ink_strokes.gd")
 const VisibleLines = preload("res://scripts/atlas/visible_lines.gd")
 const Persistent = preload("res://scripts/atlas/persistent_strokes.gd")
 const BattleBar = preload("res://scripts/atlas/battle_strength_bar.gd")
+const BattleInformation = preload("res://scripts/atlas/battle_information.gd")
 var high_performance := false
 var persistent_layers: Array = []
 var persistent_key: Array = []
@@ -74,6 +75,21 @@ func _process(_delta: float) -> void:
 	marker_stamp=stamp; marker_redraw_count+=1; markers.queue_redraw()
 func battle_strength(battle: Battle) -> Dictionary:
 	return BattleBar.summary(battle)
+func battle_position(battle: Battle) -> Vector2:
+	return BattleInformation.position(state,battle)
+func battle_at(point: Vector2) -> int:
+	if state==null: return -1
+	var pen:=1./maxf(.1,global_scale.x); var best:=INF; var selected: int=-1
+	for battle in state.battles:
+		if battle.finished: continue
+		var row:=battle_strength(battle)
+		if row.total<=0: continue
+		var anchor:=battle_position(battle)
+		anchor.x+=roundf((point.x-anchor.x)/2048.)*2048.
+		var rect:=BattleBar.hit_rect(anchor,pen,row)
+		var distance:=point.distance_squared_to(rect.get_center())
+		if rect.has_point(point) and distance<best: best=distance; selected=battle.id
+	return selected
 func army_position(army: Army) -> Vector2:
 	if army.on_edge and army.move_from>=0 and army.move_to>=0:
 		var edge := state.edge_of(army.move_from,army.move_to)
@@ -121,10 +137,7 @@ func draw_markers(canvas: Node2D) -> void:
 			if army.id==selection: canvas.draw_arc(point,8.*pen,0.,TAU,24,Color(1.,.85,.2),2.*pen,true)
 		for battle in state.battles:
 			if battle.finished: continue
-			var point := Vector2.ZERO
-			if battle.traffic_node_id>=0: point = state.cities[battle.traffic_node_id].map_position*Vector2(2048,1024)
-			elif battle.city!=null: point = battle.city.map_position*Vector2(2048,1024)
-			elif battle.edge!=null: point = battle.edge.map_position_at((battle.contact_dist_a+battle.contact_dist_b)*.5/maxf(.000001,battle.edge.distance_units()),state.cities[battle.edge.city_a].map_position,state.cities[battle.edge.city_b].map_position,2.)*Vector2(2048,1024)
+			var point := battle_position(battle)
 			point.x = fposmod(point.x,2048.); canvas.draw_line(point-Vector2(5,5)*pen,point+Vector2(5,5)*pen,Color(.8,.08,.04),3.*pen,true); canvas.draw_line(point+Vector2(-5,5)*pen,point+Vector2(5,-5)*pen,Color(.8,.08,.04),3.*pen,true)
 			canvas.draw_set_transform(Vector2.ZERO)
 			BattleBar.draw(canvas,point+Vector2(shift,0.),pen,battle_strength(battle))

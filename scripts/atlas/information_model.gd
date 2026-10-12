@@ -177,7 +177,7 @@ static func army(state: GameState,id: int) -> Dictionary:
 			var edge := state.edge_of(unit.move_from,unit.move_to)
 			if edge!=null: point = edge.map_position_at(unit.move_progress if unit.move_from==edge.city_a else 1.-unit.move_progress,state.cities[edge.city_a].map_position,state.cities[edge.city_b].map_position,2.)*Vector2(2048,1024)
 		var target := unit.path[-1] if not unit.path.is_empty() else -1
-		var strength := [row("人数",unit.size),row("满编人数",unit.max_size),row("士气","%.2f"%unit.morale),row("供给率","%.0f%%"%(unit.supply_ratio*100)),row("粮食补给欠额","%.2f"%unit.supply_food_debt),row("基础攻击",unit.attack),row("基础防御",unit.defense),row("军费倍率","%.2f"%unit.funding_multiplier)]
+		var strength := [row("人数",unit.size),row("满编人数",unit.max_size),row("士气","%.2f"%unit.morale),row("有效士气／上限","%.2f / %.2f"%[unit.combat_morale(),unit.combat_max_morale()]),row("君主士气倍率","×%.2f"%maxf(unit.ruler_morale_multiplier,.1)),row("供给率","%.0f%%"%(unit.supply_ratio*100)),row("粮食补给欠额","%.2f"%unit.supply_food_debt),row("基础攻击",unit.attack),row("基础防御",unit.defense),row("君主攻击倍率","×%.2f"%maxf(unit.ruler_attack_multiplier,.1)),row("君主防御倍率","×%.2f"%maxf(unit.ruler_defense_multiplier,.1)),row("军费倍率","%.2f"%unit.funding_multiplier),row("修正后攻击","%.2f"%unit.combat_attack()),row("修正后防御","%.2f"%unit.combat_defense())]
 		var deployment := [
 			row("状态",["驻扎","行军","交战","败退","恢复","部署"][unit.state]),
 			row("所在节点",city_name(state,unit.location_city),"city",settlement_id(state,unit.location_city)),
@@ -186,7 +186,7 @@ static func army(state: GameState,id: int) -> Dictionary:
 			row("战团",binding_name(unit.battle_group_id,"未编组")),
 			row("战争",binding_name(unit.campaign_war_id,"未参战",1)),
 			row("战线",binding_name(unit.campaign_front_id,"未绑定")),
-			row("战斗",binding_name(unit.battle_id,"未交战")),
+			row("战斗",binding_name(unit.battle_id,"未交战"),"battle",unit.battle_id),
 			row("命令原因",unit.ai_order_reason if not unit.ai_order_reason.is_empty() else "无")]
 		return {"title":"军队%d"%id,"subtitle":"%s · 第%d天"%[nation_name(state,owner),state.day],"color":color,"point":point,
 			"actions":[action("nation","所属国家","flag",owner),action("focus","设为中心","center"),action("select_army","选中军队","war",id),action("copy","复制信息","copy")],

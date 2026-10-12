@@ -32,6 +32,7 @@ func setup(view) -> void:
 	view.info_panel.provider=view.information_document
 	view.info_panel.navigate.connect(view.show_information); view.info_panel.act.connect(view.information_action)
 	view.info_panel.closed.connect(view.close_information)
+	view.info_panel.layout_changed.connect(place)
 	view.info_panel.ruler_changed.connect(view.edit_ruler)
 	view.info_panel.pause_requested.connect(view.toggle_pause)
 	view.family_panel=preload("res://scripts/atlas/family_panel.gd").new()
@@ -139,6 +140,7 @@ func button(parent: Control,text_value: String,callback: Callable) -> Button:
 func place() -> void:
 	if host==null or host.info_panel==null: return
 	var width := 372. if size.x>=1100 else 340.
+	width=maxf(width,host.info_panel.preferred_width)
 	host.info_panel.position=Vector2(14,14); host.info_panel.size=Vector2(minf(width,maxf(300,size.x-28)),maxf(240,size.y-28))
 	toolbar.position=Vector2(maxf(14,size.x-430),14); toolbar.size=Vector2(416,88)
 	tools.position=Vector2(maxf(14,size.x-446),116); tools.size=Vector2(432,minf(380,size.y-140))

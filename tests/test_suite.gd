@@ -8656,9 +8656,9 @@ func _test_small_nation_survival_and_emergency_recruitment() -> void:
 	sim.free()
 
 
-## [35] 阶段1 战斗公平性与守恒：胜负与 A/B 位置无关、伤亡整数守恒、平局、士气影响战力、拆分不改总量。
+## [35] 战斗公平性与守恒：胜负与 A/B 位置无关、伤亡整数守恒、平局、士气仅控制溃败、拆分不改总量。
 func _test_combat_fairness_and_conservation() -> void:
-	print("[35] 战斗公平：A/B 无偏置 + 伤亡守恒 + 平局 + 士气战力 + 拆分等价")
+	print("[35] 战斗公平：A/B 无偏置 + 伤亡守恒 + 平局 + 士气溃败 + 拆分等价")
 
 	# (a) A/B 位置无偏置：同一对不对称阵容，交换 side_a/side_b 与固定种子后，胜方应随之镜像交换。
 	#     强者(3000)对弱者(1000)：强者所在侧必胜，与它站 A 还是 B 无关。
@@ -8728,16 +8728,12 @@ func _test_combat_fairness_and_conservation() -> void:
 		split_sum += c
 	_check(single_sum == split_sum, "拆分伤亡总量应一致：单支%d vs 10支%d" % [single_sum, split_sum])
 
-	# (f) 士气影响战力：combat_efficiency 单调、满士气=1.0、下界=MIN_COMBAT_EFFICIENCY。
-	_check(_approx(Combat.combat_efficiency(1.0), 1.0), "满士气效率应=1.0")
-	_check(_approx(Combat.combat_efficiency(0.0), Combat.MIN_COMBAT_EFFICIENCY), "零士气效率应=下界")
-	_check(Combat.combat_efficiency(0.5) > Combat.combat_efficiency(0.2), "效率随士气单调递增")
-	# 同兵力同装备，满士气攻方一回合杀伤应 ≥ 疲劳攻方（士气折算攻击力，而非第二血条）。
+	# (f) 士气只决定溃败；未溃败部队的火力不随士气打折。
 	var full_att := _make_army(0, 0, 2000, 10)             # morale 默认 1.0
 	var tired_att := _make_army(0, 0, 2000, 10); tired_att.morale = 0.3
 	var loss_full := _one_round_side_b_loss([full_att], [_make_army(2, 1, 3000, 10)], 90)
 	var loss_tired := _one_round_side_b_loss([tired_att], [_make_army(2, 1, 3000, 10)], 90)
-	_check(loss_full > loss_tired, "满士气攻方杀伤(%d)应高于疲劳攻方(%d)（士气折算战力）" % [loss_full, loss_tired])
+	_check(loss_full == loss_tired, "同兵力同装备时满士气与疲劳攻方杀伤应一致：%d vs %d" % [loss_full, loss_tired])
 	var mixed_strong := _make_army(3, 0, 1000, 20, 10)
 	mixed_strong.morale = 0.25
 	var mixed_steady := _make_army(4, 0, 2000, 8, 10)
@@ -8749,20 +8745,15 @@ func _test_combat_fairness_and_conservation() -> void:
 	var mixed_expected_attack := (
 		float(mixed_strong.size)
 			* float(mixed_strong.attack)
-			* Combat.combat_efficiency(
-					mixed_strong.combat_morale()
-				)
 		+ float(mixed_steady.size)
 			* float(mixed_steady.attack)
-			* Combat.combat_efficiency(mixed_steady.morale)
 	)
 	var mixed_frontline := Combat.frontline_allocation(
 		mixed_side,
 		100000
 	)
 	var mixed_actual_attack := Combat._frontline_attack(
-		mixed_frontline,
-		Combat._side_combat_efficiency(mixed_side)
+		mixed_frontline
 	)
 	_check(
 		_approx(
@@ -8770,7 +8761,7 @@ func _test_combat_fairness_and_conservation() -> void:
 			mixed_expected_attack,
 			0.000001
 		),
-		"无限正面混编军的侧级组织效率必须严格还原逐军火力求和"
+		"无限正面混编军的火力必须按各军属性求和且不受士气影响"
 	)
 	# 君主倍率改变的是有效士气量纲。侵蚀回写必须除以君主倍率，
 	# 否则 ruler>1 的军队会被多扣、ruler<1 的军队会被少扣。
@@ -9460,10 +9451,10 @@ func _test_remaining_combat_risk_closures() -> void:
 	var unsupplied_attack := Combat._side_attack([siege_unsupplied])
 	_check(
 		full_attack == 100000.0
-			and tired_attack < full_attack
+			and tired_attack == full_attack
 			and _approx(unsupplied_attack, full_attack * 0.5)
 			and siege_unsupplied.size == 10000,
-		"低士气/部分缺粮降低火力但不折算人数：full=%.1f tired=%.1f supply=%.1f"
+		"士气不修正火力；部分缺粮降低火力但不折算人数：full=%.1f tired=%.1f supply=%.1f"
 			% [full_attack, tired_attack, unsupplied_attack]
 	)
 	var siege_mass_a := _make_army(10033, 0, 10000, 10, 10)

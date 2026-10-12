@@ -18,7 +18,9 @@ supply losses or require synchronization with army records.
   ratio. Only committed frontline soldiers receive direct combat casualties.
 - Existing casualty, base-decay and frontline-starvation coefficients erode
   the surviving side's collective morale capacity. Effective side morale
-  remains the basis of combat efficiency and the `0.15` rout threshold.
+  controls the `0.15` rout threshold. Under combat rules v7, morale no longer
+  multiplies attack, defense, firepower or AI force estimates; see
+  [morale_rout_only_20261012.md](morale_rout_only_20261012.md).
 - Arrivals keep their own morale until the next round. High-morale arrivals
   can raise the shared ratio; low-morale arrivals can lower it. There is no
   separate reinforcement bonus or accumulated reinforcement allowance.
@@ -42,8 +44,8 @@ next day. Later defenders trigger a new field engagement using actual current
 army values. Each battlefield has its own morale; front combat-report locking
 still lasts until all related real field engagements finish.
 
-Native snapshot schema is 19, without obsolete reinforcement allowance arrays.
-Combat logs carry rules version 3, formation maxima, ruler modifiers and
+Native snapshot schema is 28, without obsolete reinforcement allowance arrays.
+Combat logs carry rules version 7, formation maxima, ruler modifiers and
 the actual funding multiplier. Funding affects attack/defense, not shared
 morale or morale recovery. See [military_funding_and_food.md](military_funding_and_food.md).
 Earlier rule-version logs are rejected rather than replayed under new rules.

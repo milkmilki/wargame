@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent
 CORE = [
     "native_extension_contract", "native_graph_equivalence", "native_edge_inputs", "native_frozen_batch", "native_world_lifecycle", "native_runtime_equivalence",
     "project_compile", "test_suite", "field_establishment_costs", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "trade_packed_fingerprint", "campaign_enemy_memo", "atlas_capital_hops", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
-    "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements", "supply_combat_attributes",
+    "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements", "supply_combat_attributes", "morale_rout_only", "field_shared_morale", "military_funding", "battle_opening_dice",
     "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup",
     "campaign_action_readiness", "campaign_staging_legality", "coalition_dispatch_lifecycle", "coalition_siege_participation",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
@@ -40,7 +40,7 @@ ATLAS = [
     "atlas_settlement_mask", "atlas_settlement_mask_controls", "atlas_settlement_mask_pipeline", "atlas_masked_military_smoke",
     "atlas_daily_reserves", "atlas_reserve_stations", "atlas_event_slicing", "atlas_path_order_equivalence", "atlas_contact_index", "atlas_supply_sources", "atlas_traffic_supply", "atlas_supply_dependencies", "atlas_ai_cadence",
     "atlas_static_layers",
-    "atlas_runtime_costs", "atlas_battle_strength",
+    "atlas_runtime_costs", "atlas_battle_strength", "atlas_battle_information", "atlas_battle_information_interaction", "atlas_battle_comparison",
     "atlas_runtime_equivalence",
     "atlas_time_controls", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
     "atlas_startup_cache", "atlas_startup_climate", "atlas_startup_order",

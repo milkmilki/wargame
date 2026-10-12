@@ -43,8 +43,15 @@ static func draw(canvas: Node2D,point: Vector2,pen: float,row: Dictionary) -> vo
 	# Labels are outside the segments so a tiny garrison retains its true width.
 	# Drawing under inverse zoom keeps the entire bar and text readable on screen.
 	canvas.draw_set_transform(point,0.,Vector2.ONE*pen)
-	var label: String="  ·  ".join(text)
+	var label: String="  ·  ".join(text)+"  ›"
 	var px:=11
 	var text_width:=FONT.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,px).x
 	canvas.draw_string_outline(FONT,Vector2(-text_width*.5,-38.),label,HORIZONTAL_ALIGNMENT_LEFT,-1,px,3,Color8(246,238,216,245))
 	canvas.draw_string(FONT,Vector2(-text_width*.5,-38.),label,HORIZONTAL_ALIGNMENT_LEFT,-1,px,Color8(52,34,22))
+
+static func hit_rect(point: Vector2,pen: float,row: Dictionary) -> Rect2:
+	var labels: PackedStringArray=[]
+	for i in range(3):
+		if row.counts[i]>0: labels.append("%s %d"%[row.labels[i],row.counts[i]])
+	var width:=maxf(WIDTH,FONT.get_string_size("  ·  ".join(labels)+"  ›",HORIZONTAL_ALIGNMENT_LEFT,-1,11).x)
+	return Rect2(point+Vector2(-width*.5-3.,-53.)*pen,Vector2(width+6.,38.)*pen)

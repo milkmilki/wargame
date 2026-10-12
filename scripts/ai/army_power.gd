@@ -14,9 +14,9 @@ static func effective(army: Army) -> float:
 		))
 		/ 10.0
 	)
-	var morale_factor := clampf(army.combat_morale(), 0.0, 1.0)
 	# combat_attack/defense already include supply; do not apply it twice.
-	return float(army.size) * quality * morale_factor
+	# Morale governs routing/readiness, not the unit's attack/defense quality.
+	return float(army.size) * quality
 
 
 static func city_garrison_defense(

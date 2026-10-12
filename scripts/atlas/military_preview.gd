@@ -3,6 +3,7 @@ const MilitaryMap = preload("res://scripts/atlas/military_map.gd")
 const Overlay = preload("res://scripts/atlas/military_overlay.gd")
 const WarFronts = preload("res://scripts/atlas/war_fronts.gd")
 const Information = preload("res://scripts/atlas/information_model.gd")
+const BattleInformation = preload("res://scripts/atlas/battle_information.gd")
 const FamilyModel = preload("res://scripts/atlas/family_model.gd")
 var family_panel: Control
 var committed_information := {}
@@ -191,6 +192,14 @@ func information_document() -> Dictionary:
 		"nation": doc=Information.nation(source,information_id)
 		"army": doc=Information.army(source,information_id)
 		"road": doc=Information.road(source,information_id)
+		"battle":
+			if historical_view:
+				return {"title":"战斗详情","subtitle":"历史政治快照","color":Color.GRAY,"point":Vector2.ZERO,"actions":[],"sections":[],"notice":"此政治快照未记录战斗、兵力和士气。"}
+			doc=BattleInformation.document(source,information_id)
+			if doc.is_empty() and document_key==committed_information_key:
+				var last: Dictionary=committed_information.duplicate(true)
+				last.notice="这场战斗已结束或已移出活跃列表。以下为最后一次查看的记录（%s），不是完整战报。"%last.subtitle
+				return last
 		"person":
 			if family_panel!=null and not family_panel.model.is_empty(): doc=FamilyModel.person_document(family_panel.model,information_id)
 	if doc.is_empty(): return doc
@@ -239,6 +248,11 @@ func show_information(kind: String,id: int) -> void:
 			if information_kind!=kind or information_id!=id: return
 			document=information_document()
 		info_panel.show_document(document)
+		# The wider comparison card can overlap the toolbar in compact windows.
+		# Keep its close/action controls ahead in both drawing and GUI input order.
+		if is_instance_valid(interface) and info_panel.visible and info_panel.get_parent()==interface:
+			interface.move_child(info_panel,interface.get_child_count()-1)
+		if kind=="battle" and info_panel.visible: info_panel.close_button.grab_focus()
 
 func close_information() -> void:
 	pending_selection.clear()
@@ -284,7 +298,7 @@ func information_notify(message: String) -> void:
 func information_action(key: String,id: int) -> void:
 	match key:
 		"family": if family_panel!=null: family_panel.open(id)
-		"city","nation": show_information(key,id)
+		"city","nation","army","battle": show_information(key,id)
 		"focus":
 			var doc := information_document()
 			if not doc.is_empty():
@@ -582,6 +596,8 @@ func pick_map(point: Vector2,objects: bool = true) -> Dictionary:
 	var source := information_source()
 	if source==null: return result
 	if not historical_view and is_instance_valid(overlay):
+		var battle_id: int=overlay.battle_at(point)
+		if battle_id>=0: result.kind="battle"; result.id=battle_id; return result
 		var best := pow(10./maxf(.1,zoom),2); var selected := -1
 		for army in source.armies:
 			if army.size<=0 or (not army.on_edge and (army.location_city<0 or not source.cities[army.location_city].is_traffic)): continue

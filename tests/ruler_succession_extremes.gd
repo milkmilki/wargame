@@ -360,7 +360,7 @@ func _test_extreme_modifiers() -> void:
 					"army": conqueror_army,
 					"committed": 100,
 					"size_before": 100,
-				}], 1.0),
+				}]),
 				5000.0
 			),
 		"conqueror attack multiplier did not reach frontline firepower"

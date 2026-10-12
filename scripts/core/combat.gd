@@ -32,16 +32,12 @@ const MORALE_BASE_DECAY: float = 0.01      ## 每回合基础士气衰减（保�
 const MORALE_STARVE_DECAY: float = 0.10    ## 断粮方每回合额外士气衰减——粮草特色
 const MORALE_RECOVERY_DAYS: int = 60       ## 满军费、满补给时从零士气恢复至上限的天数
 
-# ---- 士气→战斗效率（item 2：士气是组织度而非第二血条）----
-## 有效战斗力 = 名义战斗力 × combat_efficiency(morale)。
-## efficiency = MIN + (1-MIN)*morale：满士气(1.0)→1.0（保持既有满士气标定不变），
-## 零士气→MIN（仍能自卫但火力大幅下降，不再贡献完整伤害）。
-const MIN_COMBAT_EFFICIENCY: float = 0.2
+# ---- 士气只控制溃败；未溃败的前线部队按完整攻防属性作战 ----
 ## 整侧溃败阈值（兵力加权派生士气）。不为 0：士气极低的一方在兵力归零前合理溃败。
 const SIDE_ROUT_THRESHOLD: float = 0.15
 ## 单支军队溃退阈值：士气 <= 此值的军队视为已失去组织、退出前线（不再计入有效战力）。
 const ARMY_ROUT_THRESHOLD: float = 0.05
-const COMBAT_RULES_VERSION: int = 6
+const COMBAT_RULES_VERSION: int = 7
 
 # ---- 边地形：danger 是唯一真源 ----
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
@@ -210,12 +206,6 @@ static func resolve_round(battle: Battle, day: int = -1) -> void:
 	var log_morale_before_b := battle.side_morale(battle.side_b) if battle_log_enabled else 0.0
 	var morale_before_a := float(shared_a.effective) if field_rules else battle.side_morale(battle.side_a)
 	var morale_before_b := float(shared_b.effective) if field_rules else battle.side_morale(battle.side_b)
-	var combat_efficiency_a := combat_efficiency(morale_before_a) if field_rules else _side_combat_efficiency(
-		battle.side_a
-	)
-	var combat_efficiency_b := combat_efficiency(morale_before_b) if field_rules else _side_combat_efficiency(
-		battle.side_b
-	)
 
 	var danger := battle.edge.danger if battle.edge != null else 0.0
 	var attack_pen_a := 1.0
@@ -269,13 +259,13 @@ static func resolve_round(battle: Battle, day: int = -1) -> void:
 
 	# 火力只由本轮明确投入的前线兵力贡献。
 	var fire_a := (
-		_frontline_attack(frontline_a, combat_efficiency_a)
+		_frontline_attack(frontline_a)
 		* attack_pen_a
 		* performance_a
 		* siege_attack_damage_multiplier(battle)
 	)
 	var fire_b := (
-		_frontline_attack(frontline_b, combat_efficiency_b)
+		_frontline_attack(frontline_b)
 		* attack_pen_b
 		* performance_b
 	)
@@ -342,11 +332,11 @@ static func resolve_round(battle: Battle, day: int = -1) -> void:
 		# 对称指标裁决（item 1）：与 a/b 位置、军队 id、遍历顺序无关；完全对称判平局。
 		battle.winner_side = decide_winner(
 			dead_a, dead_b, broke_a, broke_b,
-			float(active_size_a) * combat_efficiency(mor_a) if field_rules else _combined_side_residual(
+			float(active_size_a) if field_rules else _combined_side_residual(
 				battle.side_a,
 				battle.routed_a
 			),
-			float(active_size_b) * combat_efficiency(mor_b) if field_rules else _combined_side_residual(
+			float(active_size_b) if field_rules else _combined_side_residual(
 				battle.side_b,
 				battle.routed_b
 			)
@@ -543,7 +533,7 @@ static func _priority_log_snapshot(priority: Dictionary) -> Dictionary:
 ## 判定顺序：① 兵力歼灭优先（仅一方全歼→另一方胜）；② 士气溃败（仅一方崩→另一方胜）；
 ## ③ 双方同时失败 → 按对称「剩余续战能力」residual 裁决，完全相等则平局。
 ## 关键性质：交换 (a,b) 输入 → 输出对称交换（1↔2，0 不变），故不存在「默认 A 方获胜」偏置；
-## residual 是兵力×效率之和，与军队 id / 创建顺序 / 遍历顺序无关。
+## residual 按剩余兵力（守军含固有攻防修正）比较，不含士气倍率，与军队 id / 创建顺序 / 遍历顺序无关。
 static func decide_winner(
 	dead_a: bool, dead_b: bool,
 	broke_a: bool, broke_b: bool,
@@ -643,10 +633,7 @@ static func _frontline_size(frontline: Array[Dictionary]) -> int:
 	return total
 
 
-static func _frontline_attack(
-	frontline: Array[Dictionary],
-	side_efficiency: float
-) -> float:
+static func _frontline_attack(frontline: Array[Dictionary]) -> float:
 	var total := 0.0
 	for entry in frontline:
 		var army: Army = entry["army"]
@@ -654,32 +641,8 @@ static func _frontline_attack(
 			float(entry["committed"])
 			* army.combat_attack()
 			* _city_garrison_attack_multiplier(army)
-			* side_efficiency
 		)
 	return total
-
-
-static func _side_combat_efficiency(side: Array[Army]) -> float:
-	var nominal_attack := 0.0
-	var effective_attack := 0.0
-	for army in side:
-		if army.size <= 0:
-			continue
-		var army_nominal := (
-			float(army.size)
-			* army.combat_attack()
-			* _city_garrison_attack_multiplier(army)
-		)
-		nominal_attack += army_nominal
-		effective_attack += (
-			army_nominal
-				* combat_efficiency(army.combat_morale())
-		)
-	return (
-		effective_attack / nominal_attack
-		if nominal_attack > 0.0
-		else 0.0
-	)
 
 
 static func _frontline_avg_defense(
@@ -961,14 +924,13 @@ static func _side_size(side: Array[Army]) -> int:
 	return total
 
 
-## 一侧「剩余续战能力」= Σ 存活军队 size × combat_efficiency(morale)。对称、与顺序无关。
+## 同时溃败时的剩余兵力比较，守军按固有攻防倍率折算，不再按士气打折。
 static func _side_residual(side: Array[Army]) -> float:
 	var total := 0.0
 	for a in side:
 		if a.size > 0:
 			total += (
 				float(a.size)
-				* combat_efficiency(a.combat_morale())
 				* sqrt(
 					_city_garrison_attack_multiplier(a)
 					* _city_garrison_defense_multiplier(a)
@@ -1010,7 +972,6 @@ static func _side_attack(side: Array[Army]) -> float:
 			total += (
 				float(a.size)
 				* a.combat_attack()
-				* combat_efficiency(a.combat_morale())
 			)
 	return total
 
@@ -1044,14 +1005,6 @@ static func frontage_engaged_ratio(side_total: int, frontage: int) -> float:
 	if frontage <= 0 or frontage >= side_total:
 		return 1.0
 	return float(frontage) / float(side_total)
-
-
-## 士气→战斗效率（item 2，纯函数）。efficiency = MIN + (1-MIN)*morale：
-## 满士气(1.0)→1.0（保持既有满士气标定不变，故满编满士气战斗数值与重构前一致）；
-## 零士气→MIN_COMBAT_EFFICIENCY（仍能自卫但火力大幅下降，不再贡献完整伤害）。
-## 单调线性、无阈值台阶，士气因此是「组织度/战斗意志」而非第二条生命值。
-static func combat_efficiency(morale: float) -> float:
-	return MIN_COMBAT_EFFICIENCY + (1.0 - MIN_COMBAT_EFFICIENCY) * clampf(morale, 0.0, 1.0)
 
 
 static func _side_avg_defense(side: Array[Army], side_size: int) -> float:

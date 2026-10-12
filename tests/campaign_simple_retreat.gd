@@ -43,5 +43,5 @@ func _init() -> void:
 	check(not Pathfinding.has_friendly_retreat_route_from_city(state,0,0),"neutral territory is not a retreat")
 	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.ALLIED)
 	check(Pathfinding.has_friendly_retreat_route_from_city(state,0,0),"allied safe fu is a fallback retreat")
-	check(Combat.COMBAT_RULES_VERSION==6 and NativeSnapshotBuilder.SCHEMA_VERSION==28,"combat remains v6; private succession snapshots use v28")
+	check(Combat.COMBAT_RULES_VERSION==7 and NativeSnapshotBuilder.SCHEMA_VERSION==28,"morale rout-only combat uses v7; private succession snapshots remain v28")
 	print("CAMPAIGN_SIMPLE_RETREAT checks=%d failures=%d"%[checks,failures]);quit(0 if failures==0 else 1)
