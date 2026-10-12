@@ -904,20 +904,8 @@ func _trade_settlement_token(
 	]
 	# Keep integer dependencies exact beyond 2^53; ratios retain float64.
 	# One contiguous record block avoids allocating a small Array per node.
-	var city_inputs := PackedInt64Array()
-	city_inputs.resize(state.cities.size() * 4)
-	var city_ratios := PackedFloat64Array()
-	city_ratios.resize(state.cities.size())
-	var city_index := 0
-	for city in state.cities:
-		var offset := city_index * 4
-		city_inputs[offset] = city.id
-		city_inputs[offset + 1] = city.food_storage
-		city_inputs[offset + 2] = city.garrison_manpower
-		city_inputs[offset + 3] = int(city_war_disrupted(state, city))
-		city_ratios[city_index] = city.garrison_supply_ratio
-		city_index += 1
-	fields.append(["cities_packed64", city_inputs, city_ratios])
+	var city_inputs := NativeCompute.trade_city_inputs(state.cities, state.day, true)
+	fields.append(["cities_packed64", city_inputs["records"], city_inputs["ratios"]])
 	var suzerainty_subjects := state.suzerainty.keys()
 	suzerainty_subjects.sort()
 	for subject_value in suzerainty_subjects:
@@ -971,15 +959,8 @@ func _trade_summary_settlement_token(
 		["wartime_nations", effective_wartime_mask],
 		["diplomacy_revision", state.diplomacy_revision],
 	]
-	var city_inputs := PackedInt64Array()
-	city_inputs.resize(state.cities.size() * 3)
-	var offset := 0
-	for city in state.cities:
-		city_inputs[offset] = city.id
-		city_inputs[offset + 1] = city.garrison_manpower
-		city_inputs[offset + 2] = int(city_war_disrupted(state, city))
-		offset += 3
-	fields.append(["cities_packed64", city_inputs])
+	var city_inputs := NativeCompute.trade_city_inputs(state.cities, state.day, false)
+	fields.append(["cities_packed64", city_inputs["records"]])
 	var suzerainty_subjects := state.suzerainty.keys()
 	suzerainty_subjects.sort()
 	for subject_value in suzerainty_subjects:
@@ -1261,11 +1242,14 @@ func _trade_structure_runtime_probe() -> Array:
 		state.road_network_revision,
 	]
 	if not state.atlas_layout.is_empty(): result.append_array([state.day / DAYS_PER_MONTH,state.family_revision,state.diplomacy_revision])
-	for city in state.cities:
-		if city_war_disrupted(state, city):
-			# Current output depends on the active penalty, not its future expiry.
-			# Extending a siege keeps the same output; expiry removes this city.
-			result.append(city.id)
+	if NativeCompute.backend() == "gdscript":
+		for city in state.cities:
+			if city_war_disrupted(state, city): result.append(city.id)
+	else:
+		var records: PackedInt64Array = NativeCompute.trade_city_inputs(state.cities, state.day, false)["records"]
+		for offset in range(0, records.size(), 3):
+			# Keep only the active penalty, not its future expiry.
+			if records[offset + 2] != 0: result.append(records[offset])
 	for nation in state.nations:
 		result.append_array([
 			nation.id, nation.alive, nation.capital_city_id,

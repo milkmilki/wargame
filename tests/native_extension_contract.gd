@@ -21,10 +21,24 @@ func _initialize() -> void:
 	check(ClassDB.class_exists("NativeGraphSnapshot"), "native snapshot registered")
 	if ClassDB.class_exists("NativeGraphSnapshot"):
 		var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-		check(graph.call("api_version") == 4, "native API version 4")
-		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields", "query_key_order"]:
+		check(graph.call("api_version") == 5, "native API version 5")
+		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields", "query_key_order", "pack_trade_city_inputs"]:
 			check(graph.has_method(method), "native method " + method)
 		check(graph.call("configure", PackedInt32Array([0, 0]), PackedInt32Array(), PackedInt32Array(), PackedInt32Array(), PackedFloat64Array([0.0, 0.0, 0.5, 0.0, 0.0])), "empty-edge snapshot configures")
+		var city := City.new()
+		city.id = (1 << 54) + 1
+		city.food_storage = (1 << 54) + 3
+		city.garrison_manpower = (1 << 35) + 1
+		city.garrison_supply_ratio = -0.0
+		city.war_disruption_until_day = 51
+		for include_food in [false, true]:
+			var records := PackedInt64Array([city.id, city.garrison_manpower, 1])
+			var ratios := PackedFloat64Array()
+			if include_food:
+				records.insert(1, city.food_storage)
+				ratios.append(city.garrison_supply_ratio)
+			var packed: Dictionary = graph.call("pack_trade_city_inputs", [city], 50, include_food)
+			check(var_to_bytes(packed) == var_to_bytes({"records": records, "ratios": ratios}), "release forecast packing preserves wide integers and signed zero")
 		for count in [0, 1, 16, 17, 64]:
 			var keys := []
 			var expected: Array[int] = []
@@ -52,7 +66,7 @@ func _run_error_probe(mode: String) -> void:
 	var source := FileAccess.get_file_as_string("res://scripts/core/native_compute.gd")
 	source = source.replace("class_name NativeCompute\n", "")
 	if mode == "api_mismatch":
-		source = source.replace("const API_VERSION := 4", "const API_VERSION := 999")
+		source = source.replace("const API_VERSION := 5", "const API_VERSION := 999")
 	elif mode == "missing":
 		NativeCompute.clear_caches_for_tests()
 		if ClassDB.class_exists("NativeGraphSnapshot"):

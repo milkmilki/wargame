@@ -2,7 +2,7 @@ class_name NativeCompute
 extends RefCounted
 ## Native runtime graph boundary. Gameplay objects, access rules and side effects
 ## stay in GDScript; the extension only reads immutable packed query inputs.
-const API_VERSION := 4
+const API_VERSION := 5
 const EXTENSION_PATH := "res://native/runtime_graph/runtime_graph.gdextension"
 static var _override := ""
 static var _graphs: Dictionary = {}
@@ -131,7 +131,7 @@ static func require_native() -> bool:
 		_fatal("NativeGraphSnapshot is missing. Build the Godot 4.7.1 extension with scripts/tools/build_native_compute.py.")
 		return false
 	var probe: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order"):
+	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order") or not probe.has_method("pack_trade_city_inputs"):
 		_fatal("NativeGraphSnapshot API version mismatch; rebuild the extension.")
 		return false
 	return true
@@ -512,6 +512,36 @@ static func administrative_fields(state: GameState, nations: Array[int]) -> Dict
 		for nation in nations: reference[nation] = RebellionSystem.capital_hops(state,nation)
 		verify_equal(reference,fields,"administrative_fields")
 	return fields
+
+## Forecast records use signed int64 and preserve every float64 bit. Models
+## remain live and read-only; no revision-based city input cache is introduced.
+static func trade_city_inputs(cities: Array, day: int, include_food: bool) -> Dictionary:
+	var mode := backend()
+	var reference := {}
+	if mode in ["gdscript", "compare"]:
+		var records := PackedInt64Array()
+		var ratios := PackedFloat64Array()
+		var width := 4 if include_food else 3
+		records.resize(cities.size() * width)
+		if include_food: ratios.resize(cities.size())
+		for index in range(cities.size()):
+			var city = cities[index]
+			var offset := index * width
+			records[offset] = city.id
+			if include_food:
+				records[offset + 1] = city.food_storage
+				ratios[index] = city.garrison_supply_ratio
+			records[offset + width - 2] = city.garrison_manpower
+			records[offset + width - 1] = int(day < city.war_disruption_until_day)
+		reference = {"records": records, "ratios": ratios}
+	if mode == "gdscript": return reference
+	if not require_native(): return {}
+	var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
+	var started := _profile_start()
+	var result: Dictionary = _finish_result(graph.call("pack_trade_city_inputs", cities, day, include_food), "trade_city_inputs", started)
+	if mode == "compare": verify_equal(reference, result, "trade_city_inputs")
+	return result
+
 
 static func connectivity(snapshot: StrategicMapSnapshot, roots: Array[int]) -> Dictionary:
 	var started := _profile_start()

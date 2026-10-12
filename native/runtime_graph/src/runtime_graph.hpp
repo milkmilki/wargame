@@ -43,6 +43,8 @@ public:
     Dictionary pack_edge_inputs(const Array &edges, int64_t modes,
             const PackedFloat64Array &constants) const;
     Dictionary pack_owner_inputs(const Array &cities) const;
+    Dictionary pack_trade_city_inputs(const Array &cities, int64_t day,
+            bool include_food) const;
 
     // Read live administrative topology once, then compute each country's
     // zero/one-hop field. This boundary query does not use cached CSR topology.

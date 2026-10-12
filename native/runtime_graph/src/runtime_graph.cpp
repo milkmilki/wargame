@@ -249,6 +249,8 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::pack_edge_inputs);
     ClassDB::bind_method(D_METHOD("pack_owner_inputs", "cities"),
             &NativeGraphSnapshot::pack_owner_inputs);
+    ClassDB::bind_method(D_METHOD("pack_trade_city_inputs", "cities", "day", "include_food"),
+            &NativeGraphSnapshot::pack_trade_city_inputs);
     ClassDB::bind_method(D_METHOD("query_administrative_fields", "cities", "adjacency",
             "edge_lookup", "nations", "capitals", "traffic_kind"),
             &NativeGraphSnapshot::query_administrative_fields);
@@ -270,7 +272,7 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::query_connectivity_filtered);
 }
 
-int64_t NativeGraphSnapshot::api_version() const { return 4; }
+int64_t NativeGraphSnapshot::api_version() const { return 5; }
 
 Dictionary NativeGraphSnapshot::query_key_order(const Array &input) const {
     if (input.size() > std::numeric_limits<int32_t>::max())
@@ -453,6 +455,53 @@ Dictionary NativeGraphSnapshot::pack_owner_inputs(const Array &cities) const {
     Dictionary result;
     result["owners"] = owners;
     result["unique"] = unique;
+    return result;
+}
+
+Dictionary NativeGraphSnapshot::pack_trade_city_inputs(const Array &cities,
+        int64_t day, bool include_food) const {
+    const int64_t width = include_food ? 4 : 3;
+    const int64_t count = cities.size();
+    if (count > std::numeric_limits<int32_t>::max() / width)
+        return error_result("Too many trade city records.");
+    PackedInt64Array records;
+    PackedFloat64Array ratios;
+    if (records.resize(count * width) != OK || (include_food && ratios.resize(count) != OK))
+        return error_result("Unable to allocate trade city records.");
+    int64_t *out = records.ptrw();
+    double *ratio_out = ratios.ptrw();
+    const StringName id_name("id"), food_name("food_storage");
+    const StringName garrison_name("garrison_manpower"), disruption_name("war_disruption_until_day");
+    const StringName ratio_name("garrison_supply_ratio");
+    for (int64_t i = 0; i < count; ++i) {
+        const Variant entry = cities[i];
+        Object *city = entry.get_type() == Variant::OBJECT ? static_cast<Object *>(entry) : nullptr;
+        if (!city) return error_result("Null or nonobject trade city input.");
+        int64_t offset = i * width;
+        const Variant id = city->get(id_name);
+        if (id.get_type() != Variant::INT) return error_result("Trade city ID must be an integer.");
+        out[offset++] = int64_t(id);
+        if (include_food) {
+            const Variant food = city->get(food_name);
+            if (food.get_type() != Variant::INT) return error_result("Trade city food must be an integer.");
+            out[offset++] = int64_t(food);
+        }
+        const Variant garrison = city->get(garrison_name), disruption = city->get(disruption_name);
+        if (garrison.get_type() != Variant::INT || disruption.get_type() != Variant::INT)
+            return error_result("Trade city garrison and disruption day must be integers.");
+        out[offset++] = int64_t(garrison);
+        out[offset] = day < int64_t(disruption) ? 1 : 0;
+        if (include_food) {
+            const Variant ratio = city->get(ratio_name);
+            if (ratio.get_type() != Variant::FLOAT && ratio.get_type() != Variant::INT)
+                return error_result("Trade city supply ratio must be numeric.");
+            // Tokens preserve all float64 bits, including signed zero and NaN.
+            ratio_out[i] = double(ratio);
+        }
+    }
+    Dictionary result;
+    result["records"] = records;
+    result["ratios"] = ratios;
     return result;
 }
 
