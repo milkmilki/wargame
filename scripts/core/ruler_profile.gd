@@ -34,6 +34,8 @@ const CONQUEROR_CAMPAIGN_REQUIREMENT_MULTIPLIER: float = 0.5
 
 static var _archetype_base_modifiers: Dictionary = _build_archetype_base_modifiers()
 static var _combined_modifier_table: Dictionary = _build_combined_modifiers()
+static var scalar_modifiers_disabled_for_tests := false
+static var _scalar_debug_build := OS.has_feature("debug")
 
 ## 常用裸常量别名，调用方既可写 RulerProfile.CONQUEROR，也可使用
 ## RulerProfile.Archetype.CONQUEROR。
@@ -419,22 +421,38 @@ static func modifiers(
 	return (_combined_modifier_table[key] as Dictionary).duplicate()
 
 
+static func _modifier_value(profile_or_archetype: Variant, traits: Array, key: String) -> Variant:
+	var archetype := _resolved_archetype(profile_or_archetype)
+	var resolved_traits := _resolved_traits(profile_or_archetype, traits)
+	var values: Dictionary = (
+		_base_modifiers(archetype) if resolved_traits.is_empty()
+		else _combined_modifier_table[_modifier_combination_key(archetype, resolved_traits)]
+	)
+	return values[key]
+
+
 static func aggression_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_AGGRESSION])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_AGGRESSION])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_AGGRESSION))
 
 
 static func peace_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_PEACE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_PEACE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_PEACE))
 
 
 static func alliance_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_ALLIANCE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_ALLIANCE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_ALLIANCE))
 
 
 const COURT_EXPENSE_LOW: float = 0.1
@@ -453,43 +471,57 @@ static func court_expense_rate(profile_or_archetype: Variant) -> float:
 static func food_output_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_FOOD_OUTPUT])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_FOOD_OUTPUT])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_FOOD_OUTPUT))
 
 
 static func manpower_output_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_MANPOWER_OUTPUT])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_MANPOWER_OUTPUT])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_MANPOWER_OUTPUT))
 
 
 static func upkeep_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_UPKEEP])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_UPKEEP])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_UPKEEP))
 
 
 static func war_benefit_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_WAR_BENEFIT])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_WAR_BENEFIT])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_WAR_BENEFIT))
 
 
 static func offensive_interval_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_OFFENSIVE_INTERVAL])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_OFFENSIVE_INTERVAL])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_OFFENSIVE_INTERVAL))
 
 
 static func food_consumption_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_FOOD_CONSUMPTION])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_FOOD_CONSUMPTION])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_FOOD_CONSUMPTION))
 
 
 static func attack_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_ATTACK])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_ATTACK])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_ATTACK))
 
 
 static func campaign_requirement_multiplier(profile_or_archetype: Variant) -> float:
@@ -503,43 +535,57 @@ static func campaign_requirement_multiplier(profile_or_archetype: Variant) -> fl
 static func morale_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_MORALE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_MORALE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_MORALE))
 
 
 static func defense_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_DEFENSE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_DEFENSE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_DEFENSE))
 
 
 static func city_defense_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_CITY_DEFENSE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_CITY_DEFENSE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_CITY_DEFENSE))
 
 
 static func reserve_months_bonus(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> int:
-	return int(modifiers(profile_or_archetype, traits)[KEY_RESERVE_MONTHS])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return int(modifiers(profile_or_archetype, traits)[KEY_RESERVE_MONTHS])
+	return int(_modifier_value(profile_or_archetype, traits, KEY_RESERVE_MONTHS))
 
 
 static func enfeoff_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_ENFEOFF])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_ENFEOFF])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_ENFEOFF))
 
 
 static func centralize_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_CENTRALIZE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_CENTRALIZE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_CENTRALIZE))
 
 
 static func trade_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_TRADE])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_TRADE])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_TRADE))
 
 
 static func offensive_allowed(
@@ -552,7 +598,9 @@ static func offensive_allowed(
 static func loyalty_multiplier(
 	profile_or_archetype: Variant, traits: Array = []
 ) -> float:
-	return float(modifiers(profile_or_archetype, traits)[KEY_LOYALTY])
+	if scalar_modifiers_disabled_for_tests and _scalar_debug_build:
+		return float(modifiers(profile_or_archetype, traits)[KEY_LOYALTY])
+	return float(_modifier_value(profile_or_archetype, traits, KEY_LOYALTY))
 
 
 static func all_archetypes() -> Array[int]:

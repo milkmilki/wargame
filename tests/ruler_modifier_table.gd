@@ -3,14 +3,43 @@ extends SceneTree
 const Reference = preload("res://tests/support/ruler_modifiers_reference.gd")
 var checks := 0
 var failures: Array[String] = []
+var scalar_api := RulerProfile.new()
+const SCALARS := {
+	"aggression_multiplier": RulerProfile.KEY_AGGRESSION,
+	"peace_multiplier": RulerProfile.KEY_PEACE,
+	"alliance_multiplier": RulerProfile.KEY_ALLIANCE,
+	"food_output_multiplier": RulerProfile.KEY_FOOD_OUTPUT,
+	"manpower_output_multiplier": RulerProfile.KEY_MANPOWER_OUTPUT,
+	"upkeep_multiplier": RulerProfile.KEY_UPKEEP,
+	"war_benefit_multiplier": RulerProfile.KEY_WAR_BENEFIT,
+	"offensive_interval_multiplier": RulerProfile.KEY_OFFENSIVE_INTERVAL,
+	"food_consumption_multiplier": RulerProfile.KEY_FOOD_CONSUMPTION,
+	"attack_multiplier": RulerProfile.KEY_ATTACK,
+	"morale_multiplier": RulerProfile.KEY_MORALE,
+	"defense_multiplier": RulerProfile.KEY_DEFENSE,
+	"city_defense_multiplier": RulerProfile.KEY_CITY_DEFENSE,
+	"reserve_months_bonus": RulerProfile.KEY_RESERVE_MONTHS,
+	"enfeoff_multiplier": RulerProfile.KEY_ENFEOFF,
+	"centralize_multiplier": RulerProfile.KEY_CENTRALIZE,
+	"trade_multiplier": RulerProfile.KEY_TRADE,
+	"loyalty_multiplier": RulerProfile.KEY_LOYALTY,
+}
 func _initialize(): call_deferred("run")
 func check(ok: bool, label: String):
 	checks += 1
 	if not ok: failures.append(label)
 func equal_reference(profile: Variant, traits: Array, label: String):
-	check(var_to_bytes(RulerProfile.modifiers(profile,traits)) == var_to_bytes(Reference.modifiers(profile,traits)),label)
+	var expected: Dictionary = Reference.modifiers(profile,traits)
+	check(var_to_bytes(RulerProfile.modifiers(profile,traits)) == var_to_bytes(expected),label)
+	for method in SCALARS:
+		var value: Variant = scalar_api.call(method,profile,traits)
+		var reference: Variant = int(expected[SCALARS[method]]) if method == "reserve_months_bonus" else float(expected[SCALARS[method]])
+		check(var_to_bytes(value) == var_to_bytes(reference), label+" exact scalar bytes: "+method)
 func run():
 	var implementation := RulerProfile.new()
+	check(implementation.has_method("_modifier_value"),"scalar queries read the immutable table without allocating a mutable dictionary")
+	if not implementation.has_method("_modifier_value"):
+		finish(); return
 	check(implementation.has_method("_build_combined_modifiers"),"finite immutable modifier combinations are prepared before runtime")
 	if not implementation.has_method("_build_combined_modifiers"):
 		finish(); return
@@ -35,6 +64,10 @@ func run():
 	var mutable := Nation.new(); mutable.ruler_archetype = RulerProfile.MERCHANT
 	for trait_id in RulerProfile.TRAIT_IDS:
 		mutable.ruler_traits.assign([trait_id]); equal_reference(mutable,[],"live trait edits without revision changes")
+	RulerProfile.scalar_modifiers_disabled_for_tests = true
+	for archetype in RulerProfile.ARCHETYPE_IDS:
+		equal_reference(archetype,[RulerProfile.TRAIT_HARSH],"debug scalar reference path")
+	RulerProfile.scalar_modifiers_disabled_for_tests = false
 	var jobs := []
 	var tasks: Array[int] = []
 	for slot in range(4):
@@ -45,7 +78,11 @@ func run():
 				var traits: Array = [RulerProfile.TRAIT_IDS[iteration%RulerProfile.TRAIT_IDS.size()],
 					RulerProfile.TRAIT_IDS[(iteration*7+slot+1)%RulerProfile.TRAIT_IDS.size()]]
 				var output := RulerProfile.modifiers(archetype,traits)
-				if var_to_bytes(output) != var_to_bytes(Reference.modifiers(archetype,traits)): job.ok=false
+				var reference: Dictionary = Reference.modifiers(archetype,traits)
+				if var_to_bytes(output) != var_to_bytes(reference): job.ok=false
+				for method in SCALARS:
+					var expected: Variant = int(reference[SCALARS[method]]) if method == "reserve_months_bonus" else float(reference[SCALARS[method]])
+					if var_to_bytes(scalar_api.call(method,archetype,traits)) != var_to_bytes(expected): job.ok=false
 				output[RulerProfile.KEY_UPKEEP] = -999
 		))
 	for task in tasks: WorkerThreadPool.wait_for_task_completion(task)
