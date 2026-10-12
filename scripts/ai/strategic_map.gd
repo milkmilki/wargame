@@ -132,7 +132,9 @@ static func build(
 		)
 		accounted_usec += elapsed_usec
 		stage_started = Time.get_ticks_usec()
-	snapshot._select_priority_targets(view)
+	# Objective queries add army threat indexes. The caller reuses its cache
+	# after force commits, so retain new indexes only within this snapshot.
+	snapshot._select_priority_targets(view, diplomacy_cache.duplicate())
 	if profile_enabled:
 		var elapsed_usec := Time.get_ticks_usec() - stage_started
 		_accumulate_build_profile(
@@ -672,13 +674,15 @@ func _finalize_edge_values(shared_edge_values: Dictionary = {}) -> void:
 	var relevant_edge_keys := {}
 	for city in _view.friendly_cities:
 		for neighbor in _state.strategic_neighbors(city.id):
-			var edge := _state.strategic_edge_of(city.id, neighbor)
-			if edge == null:
-				continue
-			var edge_key := _edge_key(edge.city_a, edge.city_b)
+			# Own roads are encountered from both endpoints. Deduplicate before
+			# reconstructing an Atlas route and allocating its temporary Edge.
+			var edge_key := _edge_key(city.id, neighbor)
 			if relevant_edge_keys.has(edge_key):
 				continue
 			relevant_edge_keys[edge_key] = true
+			var edge := _state.strategic_edge_of(city.id, neighbor)
+			if edge == null:
+				continue
 			relevant_edges.append(edge)
 	for edge in relevant_edges:
 		var key := _edge_key(edge.city_a, edge.city_b)
@@ -783,7 +787,9 @@ func _compute_offensive_values(
 		)
 
 
-func _select_priority_targets(view: AiWorldView) -> void:
+func _select_priority_targets(
+	view: AiWorldView, diplomacy_cache: Dictionary = {}
+) -> void:
 	var scored: Array = []
 	var diplomatic_targets := {}
 	for enemy_id in _state.wars_of(nation_id):
@@ -797,7 +803,8 @@ func _select_priority_targets(view: AiWorldView) -> void:
 				objective.get("city_id", -1)
 			))
 			var tactical_id := DiplomacyAI.administrative_tactical_target(
-				_state, nation_id, enemy_id, center_id
+				_state, nation_id, enemy_id, center_id, -1, false,
+				diplomacy_cache
 			)
 			if tactical_id >= 0:
 				diplomatic_targets[tactical_id] = true
