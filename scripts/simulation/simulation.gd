@@ -6593,7 +6593,8 @@ func _build_parallel_ai_threat(job_index: int) -> void:
 	]
 	job["threat"] = ThreatField.build(
 		job["view"],
-		job["threat_cache"]
+		job["threat_cache"],
+		{}, false, job.get("threat_frozen_inputs", {})
 	)
 
 
@@ -6650,7 +6651,8 @@ func _build_ai_threat_partition(
 	while job_index < jobs.size():
 		var job: Dictionary = jobs[job_index]
 		job["threat"] = ThreatField.build(
-			job["view"], base_cache, local_cache, true
+			job["view"], base_cache, local_cache, true,
+			payload.get("frozen_inputs", {})
 		)
 		job_index += worker_count
 
@@ -6672,9 +6674,21 @@ func _build_ai_travel_partition(
 		request_index += worker_count
 
 
-func _ai_threat_travel_requests() -> Array[Vector2i]:
+func _ai_threat_travel_requests(context_jobs: Variant = null) -> Array[Vector2i]:
+	var armies: Array[Army] = state.armies
+	if context_jobs != null:
+		armies = []
+		var seen := {}
+		for job in context_jobs:
+			var view := job["view"] as AiWorldView
+			for group in [view.friendly_armies, view.enemy_armies]:
+				for army: Army in group:
+					var instance_id := army.get_instance_id()
+					if not seen.has(instance_id):
+						seen[instance_id] = true
+						armies.append(army)
 	var unique := {}
-	for army in state.armies:
+	for army in armies:
 		if army.size <= 0:
 			continue
 		var starts: Array[int] = []
@@ -7078,7 +7092,8 @@ func _build_ai_snapshot_threat_phase(
 				mini(maxi(OS.get_processor_count() - 1, 1), AI_THREAT_MAX_WORKERS)
 			)
 		)
-		var travel_requests := _ai_threat_travel_requests().filter(
+		var phase_requests := _ai_threat_travel_requests(context_jobs)
+		var travel_requests := phase_requests.filter(
 			func(request: Vector2i) -> bool:
 				return not _threat_travel_cache.has(
 					"I:%d:%d" % [request.x, request.y]
@@ -7110,6 +7125,9 @@ func _build_ai_snapshot_threat_phase(
 		var threat_payload := {
 			"jobs": context_jobs,
 			"threat_base_cache": _threat_travel_cache,
+			"frozen_inputs": ThreatField.freeze_shared_inputs(
+				state, _threat_travel_cache, phase_requests
+			),
 			"worker_cache_deltas": [],
 		}
 		var worker_cache_deltas: Array = threat_payload["worker_cache_deltas"]
@@ -7155,8 +7173,17 @@ func _build_ai_snapshot_threat_phase(
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
+		var frozen_inputs := {}
+		if not context_jobs.is_empty():
+			frozen_inputs = ThreatField.freeze_shared_inputs(
+				state, _threat_travel_cache, _ai_threat_travel_requests(context_jobs)
+			)
 		for job_index in range(context_jobs.size()):
+			var job := context_jobs[job_index]
+			if is_same(job["threat_cache"], _threat_travel_cache):
+				job["threat_frozen_inputs"] = frozen_inputs
 			_build_parallel_ai_threat(job_index)
+			job.erase("threat_frozen_inputs")
 		_record_tick_profile_stage("ai_threat", ai_profile_stage_started)
 		ai_profile_stage_started = (
 			Time.get_ticks_usec()

@@ -36,6 +36,7 @@ var _support_values: Dictionary = {}
 var _threat_sources: Array[Dictionary] = []
 var _support_sources: Array[Dictionary] = []
 var _frozen_city_ids: Array[int] = []
+var _frozen_influences: Dictionary = {}
 var _threat_materialized := true
 var _support_materialized := true
 var travel_distance_cache: Dictionary = {}
@@ -48,7 +49,8 @@ static func build(
 	view: AiWorldView,
 	shared_travel_cache: Dictionary = {},
 	local_write_cache: Dictionary = {},
-	use_readonly_base_cache: bool = false
+	use_readonly_base_cache: bool = false,
+	frozen_inputs: Dictionary = {}
 ) -> ThreatField:
 	var field := ThreatField.new()
 	field.nation_id = view.nation_id
@@ -58,15 +60,45 @@ static func build(
 		field.travel_distance_cache = local_write_cache
 	else:
 		field.travel_distance_cache = shared_travel_cache
-	for city in view.state.cities:
-		field._frozen_city_ids.append(city.id)
+	if frozen_inputs.is_empty():
+		for city in view.state.cities:
+			field._frozen_city_ids.append(city.id)
+	else:
+		field._frozen_city_ids = frozen_inputs["city_ids"]
+		field._frozen_influences = frozen_inputs["influences"]
 	var enemy_sources := field._aggregate_sources(view.state, view.enemy_armies)
 	var friendly_sources := field._aggregate_sources(view.state, view.friendly_armies)
 	field._threat_sources = field._freeze_sources(view.state, enemy_sources)
 	field._support_sources = field._freeze_sources(view.state, friendly_sources)
+	field._frozen_influences = {}
 	field._threat_materialized = false
 	field._support_materialized = false
 	return field
+
+
+## Capture ordered city IDs and already prepared influence maps once for a
+## read-only AI phase. Caller-owned caches stay mutable; fields retain only
+## the immutable maps actually used by their sources.
+static func freeze_shared_inputs(
+	state: GameState, cache: Dictionary, requests: Array[Vector2i]
+) -> Dictionary:
+	var city_ids: Array[int] = []
+	for city in state.cities:
+		city_ids.append(city.id)
+	city_ids.make_read_only()
+	var influences := {}
+	for request in requests:
+		var key := "I:%d:%d" % [request.x, request.y]
+		if influences.has(key) or not cache.has(key):
+			continue
+		var source: Dictionary = cache[key]
+		var frozen := source.duplicate()
+		frozen.make_read_only()
+		influences[key] = frozen
+	influences.make_read_only()
+	var result := {"city_ids": city_ids, "influences": influences}
+	result.make_read_only()
+	return result
 
 
 ## ThreatField 中 D/I 缓存与观察国无关。军队无视正容量道路的吞吐后，
@@ -166,14 +198,15 @@ func _freeze_sources(
 		)
 		for source_id in source_ids:
 			var power := float(sources[source_id])
-			var influence := _influence_field(
-				state,
-				int(source_id),
-				required_manpower
-			)
+			var key := "I:%d:%d" % [int(source_id), required_manpower]
+			var influence: Dictionary
+			if _frozen_influences.has(key):
+				influence = _frozen_influences[key]
+			else:
+				influence = _influence_field(state, int(source_id), required_manpower).duplicate()
 			# Caller-owned travel caches can change after build. Preserve the old
 			# eager field's snapshot semantics, including source summation order.
-			prepared.append({"power":power, "influence":influence.duplicate()})
+			prepared.append({"power":power, "influence":influence})
 	return prepared
 
 
