@@ -1,0 +1,29 @@
+{
+  "head": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "replay_days": 2160,
+  "replay_pid": 14752,
+  "seed": 1,
+  "scope": "controlled lifecycle checks plus current-code autonomous same-initial-map replay; not a running campaign restore; user orders are not replayed",
+  "production_changes": "none for this diagnosis; prior ruler editor changes preserved",
+  "warning": "diagnostic FileAccess.get_sha256 uses Army.gd capitalization; Windows case warning only, no gameplay load failure",
+  "input_comparison": "initial seats, owners, budgets, ruler types/traits, initial RNG, administrative geometry, network and all effective road attributes match prior GUI session PID 30132; raw graph serialization differs",
+  "phase_counter_limit": "phase is classified from entry field-side presence and round advancement; a newly reconciled field defender on that day can be counted as assault; selected cases are checked against guard casualties and transitions",
+  "checks": {
+    "controlled_failures": 0,
+    "qualifying_still_blockade": 0,
+    "raw_threefold_blockade_days": 546
+  },
+  "loaded_hashes": {
+    ".dbg/siege-eurasia-probe.gd": "30f96d8af8fda308244ed003890da3a85f46b4b405261f9395a32766955e60c5",
+    "scripts/core/combat.gd": "749ee44d57e6615947352537b48660905546b747347042a3f98c9593be6a1a24",
+    "scripts/model/Army.gd": "04c54b87b3445d21f356bbc78d1954a16aec55704e829c7804dd762ffc015b8f",
+    "scripts/simulation/simulation.gd": "05d2b5cca3f4209f12ec9e5266fe7481336c85329649d161539997659e931f9f",
+    "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d"
+  },
+  "supply_followup": {
+    "pid": 32604,
+    "days": 412,
+    "confirmed": "arrivals carried marching supply flags; ownerless traffic endpoint filter rejects a reachable warehouse",
+    "production_changes": "none; confirmed bug remains to be fixed"
+  }
+}

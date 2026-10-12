@@ -1,0 +1,44 @@
+extends SceneTree
+func _init(): call_deferred("run")
+func digest(value: Variant) -> String:
+	var hash_value := HashingContext.new()
+	hash_value.start(HashingContext.HASH_SHA256)
+	hash_value.update(var_to_bytes(value))
+	return hash_value.finish().hex_encode()
+func run():
+	var path := "user://debug_runs/run-2026-10-11T06-36-47-30132-5928322-world1-map.json"
+	var definition: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	var actual: Dictionary = preload("res://scripts/atlas/military_template.gd").decode(definition)
+	var fixture: Dictionary = preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	var rows := {}
+	for field in ["hierarchy", "graph", "network", "ownership", "district_pixels", "settlement_adjacency", "strategic_routes", "territorial_pairs"]:
+		rows[field] = {"same":digest(actual[field])==digest(fixture[field]),"user":digest(actual[field]),"replay":digest(fixture[field])}
+	var state := GameState.new()
+	state.generate_from_atlas(fixture)
+	var mismatches: Array = []
+	for city_id in range(actual.settlement_records.size()):
+		var record: Dictionary = actual.settlement_records[city_id]
+		var city: City = state.cities[city_id]
+		if record.owner != city.owner_nation or record.name != city.name or record.budget != [city.manpower_per_month,city.gold_per_month,city.food_per_half_year]:
+			mismatches.append(city_id)
+	rows.city_records_mismatched = mismatches
+	var rulers: Array = []
+	for id in range(state.nations.size()):
+		var nation: Nation = state.nations[id]
+		var ruler: Dictionary = actual.nations[id].ruler
+		if ruler.archetype != nation.ruler_archetype or ruler.traits != nation.ruler_traits or ruler.name != nation.ruler_name:
+			rulers.append(id)
+	rows.rulers_mismatched = rulers
+	var actual_state := GameState.new()
+	actual_state.generate_from_atlas(actual)
+	var edge_mismatches: Array = []
+	for edge in state.edges:
+		var other := actual_state.edge_of(edge.city_a, edge.city_b)
+		if other == null or edge.distance_units()!=other.distance_units() or edge.danger!=other.danger or edge.max_manpower!=other.max_manpower or edge.map_path!=other.map_path or edge.travel_time_multiplier!=other.travel_time_multiplier or edge.supply_loss_multiplier!=other.supply_loss_multiplier or edge.allows_holding!=other.allows_holding:
+			edge_mismatches.append([edge.city_a,edge.city_b])
+	rows.effective_edges_mismatched = edge_mismatches
+	rows.initial_rng = str(state.rng.state)
+	rows.actual_initial_map = ProjectSettings.globalize_path(path)
+	print("SIEGE_INPUT_COMPARE ", JSON.stringify(rows))
+	FileAccess.open("res://.dbg/siege-input-compare.json",FileAccess.WRITE).store_string(JSON.stringify(rows,"\t"))
+	quit()

@@ -1,0 +1,27 @@
+extends SceneTree
+func _init():call_deferred("run")
+func run():
+	var state:=GameState.new()
+	for id in range(2):
+		var nation:=Nation.new();nation.id=id;state.nations.append(nation)
+	for id in range(3):
+		var city:=City.new();city.id=id;city.owner_nation=0 if id==0 else (-1 if id==1 else 1)
+		city.node_kind=City.NodeKind.TRAFFIC if id==1 else City.NodeKind.SETTLEMENT
+		state.cities.append(city)
+	var edge:=Edge.new();edge.city_a=1;edge.city_b=2;edge.control_city_id=0
+	state.edges.append(edge);state.edge_lookup[GameState.edge_key(1,2)]=edge
+	var army:=Army.new();army.owner_nation=0;army.location_city=1;army.move_from=1;army.move_to=2;army.move_progress=0.87;army.on_edge=true;army.state=Army.State.MOVING
+	var distances:=PackedFloat64Array([0.0,0.1,INF])
+	var network: Array[Dictionary]=[{"city_id":0,"owner_nation":0,"dist":distances}]
+	var marching:=Pathfinding.supply_sources_from_network(state,army,network)
+	army.on_edge=false;army.state=Army.State.FIGHTING;army.move_progress=1.0
+	var arrived:=Pathfinding.supply_sources_from_network(state,army,network)
+	army.on_edge=true;army.state=Army.State.MOVING;army.move_progress=0.87
+	state.cities[1].owner_nation=0
+	var owned_endpoint:=Pathfinding.supply_sources_from_network(state,army,network)
+	var result:={"warehouse_field_reaches_traffic_node":is_finite(distances[1]),"marching_ownerless_traffic_sources":marching.size(),"arrived_sources":arrived.size(),"marching_owned_endpoint_sources":owned_endpoint.size(),"scope":"supplied precomputed warehouse field; endpoint access filter isolated, not full map pathfinding"}
+	var confirmed:=marching.is_empty() and arrived.size()==1 and owned_endpoint.size()==1
+	result.confirmed=confirmed
+	FileAccess.open("res://.dbg/supply-endpoint-repro.json",FileAccess.WRITE).store_string(JSON.stringify(result,"\t"))
+	print("SUPPLY_ENDPOINT_REPRO ",JSON.stringify(result))
+	quit(0 if confirmed else 1)

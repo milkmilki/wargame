@@ -1,0 +1,49 @@
+{
+  "checks": 18,
+  "failures": 0,
+  "focus": [
+    1042.51037597656,
+    223.765121459961
+  ],
+  "godot": "4.7.1-stable (official)",
+  "hostile_relation_fixture": true,
+  "owner": 0,
+  "parameters": {
+    "distance_km": 250.0,
+    "godot": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "model": "atlas-military-v1",
+    "nodes": 1192,
+    "seed": 1,
+    "settlements": 484,
+    "source_sha256": "352dc9ea2511283f84140011d7293e483274a6aa2dcee984e4e97cd79c070198",
+    "timing": {
+      "hierarchy_ms": 293,
+      "roads_ms": 383,
+      "smoothing": {
+        "rounds_histogram": [
+          124,
+          0,
+          4,
+          1180
+        ]
+      },
+      "total_ms": 1200
+    },
+    "upstream": "103afd3",
+    "upstream_commit": "103afd3d998eac6750692a6813bf5aea03521448"
+  },
+  "pid": 27696,
+  "renderer": "AMD Radeon RX 7600",
+  "seed": 1,
+  "subject": 40
+}

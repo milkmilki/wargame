@@ -1,0 +1,35 @@
+extends SceneTree
+const Inputs = preload("res://tests/atlas_military_inputs.gd")
+const Mask = preload("res://scripts/atlas/settlement_mask.gd")
+const OUT := "res://.dbg/hotspot-20261012"
+func _initialize() -> void: call_deferred("run")
+func run() -> void:
+	var payload := Inputs.eurasia_military()
+	assert(payload.data.options.settlement_mask == Mask.EURASIA)
+	var state := GameState.new(); state.generate_from_atlas(payload)
+	var sim := Simulation.new(); sim.setup(state)
+	sim.tick_phase_profiling_enabled = true
+	sim.runtime_stage_profiling_enabled = true
+	sim.ai_snapshot_substage_profiling_enabled = true
+	var hashes := {}
+	for path in ["scripts/state/game_state.gd","scripts/simulation/simulation.gd","scripts/core/pathfinding.gd","scripts/core/combat.gd","scripts/core/trade_network.gd","scripts/ai/diplomacy_ai.gd","scripts/model/army.gd","scripts/simulation/rules/supply_rules.gd","scripts/simulation/rules/reinforcement_phase.gd"]:
+		hashes[path] = FileAccess.get_sha256("res://"+path)
+	var manifest := {"pid":OS.get_process_id(),"seed":state.world_seed,"initial_nations":state.nations.size(),"mask":payload.data.options.settlement_mask,"trade":state.trade_enabled,"rulers":state.random_ruler_profiles_enabled(),"nodes":state.cities.size(),"settlements":state.land_cities().size(),"godot":Engine.get_version_info(),"source_hashes":hashes,"scope":"headless synchronous compute with diagnostic profiling; no rendering or audit included","days":720,"ai_interval":sim.atlas_ai_strategic_interval_days,"ai_batch":sim.atlas_ai_batch_days}
+	FileAccess.open(OUT+"/manifest.json",FileAccess.WRITE).store_string(JSON.stringify(manifest,"  "))
+	var file := FileAccess.open(OUT+"/daily.jsonl",FileAccess.WRITE)
+	for i in range(720):
+		sim.runtime_span_total_usec.clear();sim.runtime_span_peak_usec.clear()
+		var start := Time.get_ticks_usec();sim._advance_day(false);var elapsed := Time.get_ticks_usec()-start
+		var living := 0;var moving := 0;var active_battles := 0;var living_nations := 0
+		for army in state.armies:
+			if army.size>0:
+				living+=1
+				if army.on_edge:moving+=1
+		for battle in state.battles:
+			if not battle.finished:active_battles+=1
+		for nation in state.nations:
+			if nation.alive:living_nations+=1
+		file.store_line(JSON.stringify({"day":state.day,"compute_us":elapsed,"profile":sim.tick_profile_last_usec,"spans_us":sim.runtime_span_total_usec,"peak_spans_us":sim.runtime_span_peak_usec,"armies":living,"moving":moving,"nations":living_nations,"fronts":state.campaign_fronts.size(),"battles":active_battles}))
+		if state.day%30==0:
+			file.flush();print("HOTSPOT_PROGRESS day=",state.day," armies=",living," nations=",living_nations," compute_ms=",elapsed/1000.);await process_frame
+	file.close();sim.free();print("HOTSPOT_DONE days=720");quit(0)

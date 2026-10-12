@@ -1,0 +1,22 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SIEGE_EURASIA_START {"cities":1192,"initial_rng":"4982495298212809567","mask":{"east":145.0,"enabled":true,"north":55.0,"south":20.0,"version":"atlas-geographic-mask-v1","west":-15.0},"nations":40,"pid":14752,"rulers":true,"scope":"current-code autonomous replay; historical user interventions not reproduced","seed":1,"source_hashes":{".dbg/siege-eurasia-probe.gd":"30f96d8af8fda308244ed003890da3a85f46b4b405261f9395a32766955e60c5","scripts/core/combat.gd":"749ee44d57e6615947352537b48660905546b747347042a3f98c9593be6a1a24","scripts/model/Army.gd":"04c54b87b3445d21f356bbc78d1954a16aec55704e829c7804dd762ffc015b8f","scripts/simulation/simulation.gd":"05d2b5cca3f4209f12ec9e5266fe7481336c85329649d161539997659e931f9f","scripts/state/game_state.gd":"2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d"},"source_sha256":"c3fa92aaa80b7e0086823503580cd913a1fb37f4224d02d5541d7651e4049b92","target_days":2160,"trade":true}
+SIEGE_EURASIA_PROGRESS day=120 armies=240 sieges_seen=2
+SIEGE_EURASIA_PROGRESS day=240 armies=402 sieges_seen=37
+SIEGE_EURASIA_PROGRESS day=360 armies=373 sieges_seen=57
+SIEGE_EURASIA_PROGRESS day=480 armies=450 sieges_seen=83
+SIEGE_EURASIA_PROGRESS day=600 armies=460 sieges_seen=109
+SIEGE_EURASIA_PROGRESS day=720 armies=437 sieges_seen=127
+SIEGE_EURASIA_PROGRESS day=840 armies=421 sieges_seen=138
+SIEGE_EURASIA_PROGRESS day=960 armies=438 sieges_seen=145
+SIEGE_EURASIA_PROGRESS day=1080 armies=399 sieges_seen=156
+SIEGE_EURASIA_PROGRESS day=1200 armies=415 sieges_seen=167
+SIEGE_EURASIA_PROGRESS day=1320 armies=423 sieges_seen=173
+SIEGE_EURASIA_PROGRESS day=1440 armies=407 sieges_seen=177
+SIEGE_EURASIA_PROGRESS day=1560 armies=405 sieges_seen=188
+SIEGE_EURASIA_PROGRESS day=1680 armies=397 sieges_seen=196
+SIEGE_EURASIA_PROGRESS day=1800 armies=372 sieges_seen=205
+SIEGE_EURASIA_PROGRESS day=1920 armies=404 sieges_seen=211
+SIEGE_EURASIA_PROGRESS day=2040 armies=411 sieges_seen=219
+SIEGE_EURASIA_PROGRESS day=2160 armies=387 sieges_seen=238
+SIEGE_EURASIA_DONE day=2160

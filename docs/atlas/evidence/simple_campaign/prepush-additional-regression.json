@@ -1,0 +1,35 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_ruler_editor",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 4203,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_ruler_editor.log"
+    },
+    {
+      "test": "atlas_vassal_borders",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2625,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_vassal_borders.log"
+    },
+    {
+      "test": "atlas_enfeoff",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 96938,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_enfeoff.log"
+    },
+    {
+      "test": "atlas_enfeoff_connectivity",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2734,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_enfeoff_connectivity.log"
+    }
+  ],
+  "failures": 0
+}

@@ -1,0 +1,36 @@
+{
+  "godot": {
+    "build": "official",
+    "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+    "hex": 263937,
+    "major": 4,
+    "minor": 7,
+    "patch": 1,
+    "status": "stable",
+    "string": "4.7.1-stable (official)",
+    "timestamp": 0
+  },
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "pid": 27532,
+  "rulers": true,
+  "seed": 1,
+  "source_hashes": {
+    "scripts/core/combat.gd": "44431cf893c296cf78d21aa66f06775dbd928f177669e406f80ea0ccbe80cdd7",
+    "scripts/core/native_snapshot_builder.gd": "f1456f745d7622ea31acc6143032ca360287077cfe4a3b01008f0e4306bd6478",
+    "scripts/core/pathfinding.gd": "b22d99ffe7d4de2dcbf1307bce00022e370b94d61022ce825e150ec28f2acc4a",
+    "scripts/model/coalition_campaign_front.gd": "65534d749c63e3343807d705eabf7fd447c954225cfff4df9458a5ddca4b621f",
+    "scripts/simulation/rules/simple_campaign.gd": "ff515c5fb16140770994e3eacae68347edc4b2dd13453f0b192319898a59d905",
+    "scripts/simulation/simulation.gd": "48b9ffc9227e2fd8ae798a486f2f9572293f6413a82da3f6f26d1ebd5cc1d2b6",
+    "scripts/state/game_state.gd": "e21bc983f9b9e2ff2b708a699d0ca2b642021b78c3700e60d39fd3353df700b2",
+    "tests/campaign_masked_audit.gd": "02ae495069f69d6101aed459c3e8724e0fac5b9dc8163f173e6ebd0edcac046c"
+  },
+  "target_days": 720,
+  "trade": true
+}

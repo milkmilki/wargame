@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-11",
+  "base_commit": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "gpu": {
+    "failures": 0,
+    "fixture": "live masked Eurasia; native menu signals for type/trait edits, template roundtrip; no simulation days advanced; not physical keyboard/mouse validation",
+    "mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "pid": 31184,
+    "renderer": "forward_plus",
+    "seed": 1
+  },
+  "tests": {
+    "atlas_ruler_editor": "RULER_EDITOR_RESULT failures=0",
+    "atlas_information_panel": "ATLAS_INFORMATION_PANEL failures=0",
+    "atlas_information_model": "ATLAS_INFORMATION_MODEL failures=0",
+    "atlas_space_routing": "ATLAS_SPACE_ROUTING failures=0",
+    "ruler_modifier_table": "RULER_MODIFIER_TABLE_RESULT checks=7245 failures=0",
+    "atlas_military_persistence": "ATLAS_MILITARY_PERSISTENCE failures=0",
+    "atlas_territory_transactions": "ATLAS_TERRITORY_OK checks=126 failures=0"
+  },
+  "source_hashes": {
+    "scripts/atlas/ruler_editor.gd": "95a2036c3adc1ec5595848dff06ae22ff9f8cfeaaa62a0b0d9a9a2758b4ccefa",
+    "scripts/atlas/information_model.gd": "bead1954b4eaad2350b972faeb2bd0c2084c644ac030ea5716b470e697b74125",
+    "scripts/atlas/information_panel.gd": "3d173b07d6273b0c8c70a5356abcec05ac35f4b7813f2454266a648166472fdc",
+    "scripts/atlas/military_interface.gd": "5adabcb2f6184bd997442a88cc655d7110fbe604e40ef6c2e3347e721cbf173d",
+    "scripts/atlas/military_preview.gd": "aff0a3116dd5dc6eb1b7a9a834437b99974f7db32734d8c10380690f54f1fa5d",
+    "scripts/simulation/simulation.gd": "05d2b5cca3f4209f12ec9e5266fe7481336c85329649d161539997659e931f9f",
+    "tests/atlas_ruler_editor.gd": "02c6a137957f5f04303d747be7009a20384d1b7a61860ce41eaced052280596a"
+  },
+  "behavior": "Immediate edits for any currently inspected living nation. Two optional trait slots; duplicate/centralizer-feudalist conflicts disabled. Updates national and current-family-person profiles through Simulation.set_ruler_profile; identity, reign and RNG unchanged. History/generation/in-progress day/stale-card requests blocked.",
+  "limitations": "GPU menu validation uses native index_pressed signals; synthetic viewport/window key injections did not activate the native menu and are not evidence of physical keyboard/mouse testing. Space routing is separately checked with viewport events in the headless regression. No performance or long-run claim.",
+  "screenshots": [
+    "ruler-editor-wide.png",
+    "ruler-editor-compact.png"
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "supply_combat_attributes",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_combat_attributes.log"
+    },
+    {
+      "test": "field_manpower_requirements",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\field_manpower_requirements.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 67594,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "direct_center_camp",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2406,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\direct_center_camp.log"
+    },
+    {
+      "test": "military_funding",
+      "ok": false,
+      "exit_code": 1,
+      "elapsed_ms": 2438,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\military_funding.log"
+    },
+    {
+      "test": "ultimatum_rules",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ultimatum_rules.log"
+    },
+    {
+      "test": "ai_decision_context_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 91469,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ai_decision_context_equivalence.log"
+    },
+    {
+      "test": "encirclement_index_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\encirclement_index_equivalence.log"
+    },
+    {
+      "test": "atlas_battle_strength",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_battle_strength.log"
+    },
+    {
+      "test": "atlas_traffic_supply",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_traffic_supply.log"
+    },
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20282,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+    }
+  ],
+  "failures": 1
+}

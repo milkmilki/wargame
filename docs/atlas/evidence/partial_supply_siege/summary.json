@@ -1,0 +1,62 @@
+{
+  "base_commit": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "rule": "sum actual size * clamp(supply_ratio,0,1), alive/non-routed; round once; no starving veto; uncapped admission",
+  "source_hashes": {
+    "scripts/simulation/simulation.gd": "a845f5d9c811931bdf1289f7b9e01dc1fadec386dfa0c92f9f5ec6f823a7d5e2",
+    "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+    "scripts/core/combat.gd": "749ee44d57e6615947352537b48660905546b747347042a3f98c9593be6a1a24",
+    "scripts/model/army.gd": "04c54b87b3445d21f356bbc78d1954a16aec55704e829c7804dd762ffc015b8f",
+    "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+    "tests/field_manpower_requirements.gd": "c15d55af0c4df45e42769b70901f959fa5de60fd8bd2e71d76c6d50352f085aa",
+    "tests/direct_center_camp.gd": "3b65d527e1ebe6f5306328961c4c490d04d358aa3840d575f9eec4162e09d7f3",
+    "tests/atlas_territory_transactions.gd": "db34898721634d8bd5f7feed32d8e2f3f02df5b445a3f79bfbfe4ee894dfad65",
+    "tests/atlas_masked_military_smoke.gd": "64f83095e2261bfd8d9d86e7756c53987c5de91d53036961692d948aba0344b6",
+    "run_tests.py": "be76d6722d7fc421885beeaece7d4f5e1cdbb57b14d50257114cd08175a50c50"
+  },
+  "red": {
+    "checks": 80,
+    "failures": 6,
+    "log": "red.log"
+  },
+  "green": {
+    "checks": 80,
+    "failures": 0,
+    "log": "field_manpower_requirements.log"
+  },
+  "regressions": "regressions.json",
+  "default_eurasia_365": {
+    "armies": 370,
+    "battles": 4,
+    "day": 365,
+    "failures": 0,
+    "mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "nodes": 1192,
+    "pid": 28436,
+    "rulers": true,
+    "seed": 1,
+    "settlements": 484,
+    "source_hashes": {
+      "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+      "scripts/simulation/simulation.gd": "a845f5d9c811931bdf1289f7b9e01dc1fadec386dfa0c92f9f5ec6f823a7d5e2",
+      "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+      "tests/atlas_masked_military_smoke.gd": "64f83095e2261bfd8d9d86e7756c53987c5de91d53036961692d948aba0344b6"
+    },
+    "trade": true
+  },
+  "smoke_evidence": "eurasia-365.json",
+  "limits": [
+    "Headless correctness smoke, not 30-year audit or GPU performance benchmark.",
+    "Concurrent regressions; recorded compute times are not a performance comparison.",
+    "Existing ruler-editor and traffic-supply fixes retained.",
+    "Combat damage and starvation effects unchanged; only assault admission is weighted."
+  ],
+  "delivery": "uncommitted; not pushed"
+}

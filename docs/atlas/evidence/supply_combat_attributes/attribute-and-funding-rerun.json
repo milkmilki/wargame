@@ -1,0 +1,14 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "military_funding",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2515,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\military_funding.log"
+    }
+  ],
+  "failures": 0
+}

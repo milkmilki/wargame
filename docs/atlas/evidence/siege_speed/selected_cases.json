@@ -1,0 +1,186 @@
+[
+  {
+    "armies": [
+      {
+        "id": 77,
+        "morale": 2.5,
+        "nation": 10,
+        "size": 14048,
+        "starving": false,
+        "state": 2,
+        "supply_ratio": 1.0
+      },
+      {
+        "id": 76,
+        "morale": 2.5,
+        "nation": 10,
+        "size": 14048,
+        "starving": false,
+        "state": 2,
+        "supply_ratio": 1.0
+      },
+      {
+        "id": 72,
+        "morale": 2.5,
+        "nation": 10,
+        "size": 14048,
+        "starving": false,
+        "state": 2,
+        "supply_ratio": 1.0
+      },
+      {
+        "id": 75,
+        "morale": 2.425,
+        "nation": 10,
+        "size": 12894,
+        "starving": true,
+        "state": 2,
+        "supply_ratio": 0.0
+      }
+    ],
+    "battle": 4,
+    "city": 44,
+    "city_defense_multiplier": 1.0,
+    "control_share": 0.0,
+    "day": 147,
+    "eligible_attackers": 42144,
+    "finished": false,
+    "guard_after": 14670,
+    "guard_before": 14700,
+    "name": "关右",
+    "phase": "blockade",
+    "raw_attackers": 55038,
+    "requirement": 44100,
+    "rounds_after": 6,
+    "rounds_before": 6,
+    "winner": 0
+  },
+  {
+    "battle": 75,
+    "city": 45,
+    "city_defense_multiplier": 1.0,
+    "control_share": 0.0,
+    "day": 318,
+    "eligible_attackers": 0,
+    "finished": false,
+    "guard_after": 14970,
+    "guard_before": 15000,
+    "name": "安州",
+    "phase": "blockade",
+    "raw_attackers": 13561,
+    "requirement": 45000,
+    "rounds_after": 0,
+    "rounds_before": 0,
+    "winner": 0
+  },
+  {
+    "armies": [
+      {
+        "id": 108,
+        "morale": 2.00475,
+        "nation": 16,
+        "size": 13561,
+        "starving": false,
+        "state": 2,
+        "supply_ratio": 1.0
+      },
+      {
+        "id": 317,
+        "morale": 1.998,
+        "nation": 16,
+        "size": 8909,
+        "starving": false,
+        "state": 2,
+        "supply_ratio": 1.0
+      },
+      {
+        "id": 106,
+        "morale": 2.00475,
+        "nation": 16,
+        "size": 10378,
+        "starving": true,
+        "state": 2,
+        "supply_ratio": 0.0
+      },
+      {
+        "id": 111,
+        "morale": 2.00475,
+        "nation": 16,
+        "size": 8753,
+        "starving": true,
+        "state": 2,
+        "supply_ratio": 0.0
+      },
+      {
+        "id": 112,
+        "morale": 2.00475,
+        "nation": 16,
+        "size": 8913,
+        "starving": true,
+        "state": 2,
+        "supply_ratio": 0.0
+      },
+      {
+        "id": 316,
+        "morale": 2.00475,
+        "nation": 16,
+        "size": 10355,
+        "starving": true,
+        "state": 2,
+        "supply_ratio": 0.0
+      }
+    ],
+    "battle": 75,
+    "city": 45,
+    "city_defense_multiplier": 1.0,
+    "control_share": 0.0,
+    "day": 411,
+    "eligible_attackers": 22470,
+    "finished": false,
+    "guard_after": 12386,
+    "guard_before": 12411,
+    "name": "安州",
+    "phase": "blockade",
+    "raw_attackers": 60869,
+    "requirement": 37233,
+    "rounds_after": 0,
+    "rounds_before": 0,
+    "winner": 0
+  },
+  {
+    "battle": 75,
+    "city": 45,
+    "city_defense_multiplier": 1.0,
+    "control_share": 0.0,
+    "day": 412,
+    "eligible_attackers": 60869,
+    "finished": false,
+    "guard_after": 10627,
+    "guard_before": 12386,
+    "name": "安州",
+    "phase": "assault",
+    "raw_attackers": 60869,
+    "requirement": 37158,
+    "rounds_after": 1,
+    "rounds_before": 0,
+    "winner": 0
+  },
+  {
+    "battle": 75,
+    "city": 45,
+    "city_defense_multiplier": 0.9,
+    "control_share": 1.0,
+    "day": 419,
+    "eligible_attackers": 60583,
+    "finished": true,
+    "guard_after": 15000,
+    "guard_before": 73,
+    "name": "安州",
+    "phase": "assault",
+    "raw_attackers": 60583,
+    "requirement": 219,
+    "rounds_after": 8,
+    "rounds_before": 7,
+    "winner": 1
+  }
+]

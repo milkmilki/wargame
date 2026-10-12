@@ -1,0 +1,45 @@
+extends SceneTree
+
+class SupplySimulation extends Simulation:
+	var supply_log: FileAccess
+	func _withdraw_supply_for_plan(plan: Dictionary) -> void:
+		var army: Army = plan.army
+		var trace := state.day in [411,412] and army.id in [108,317,106,111,112,316]
+		var row := {}
+		if trace:
+			row = {"day":state.day,"army":army.id,"nation":army.owner_nation,"size":army.size,"location_city":army.location_city,"current_city_node":army.current_city_node(),"on_edge":army.on_edge,"from":army.move_from,"to":army.move_to,"progress":army.move_progress,"battle":army.battle_id,"demand":plan.demand,"sources":[]}
+			for source in plan.sources:
+				row.sources.append({"city":source.city_id,"owner":source.owner_nation,"loss":source.loss,"before":state.cities[source.city_id].food_storage})
+		super._withdraw_supply_for_plan(plan)
+		if trace:
+			row.starving=army.starving
+			row.supply_ratio=army.supply_ratio
+			for source in row.sources:source.after=state.cities[source.city].food_storage
+			supply_log.store_line(JSON.stringify(row))
+	func _advance_siege(battle: Battle, armies_by_city: Dictionary = {}) -> void:
+		if state.day in [411,412] and battle.city.id==45:
+			var row := {"kind":"siege","day":state.day,"battle":battle.id,"city":battle.city.id,"guard":battle.city.garrison_manpower,"eligible":_siege_assault_manpower(battle),"raw":battle.side_size(battle.side_a)}
+			supply_log.store_line(JSON.stringify(row))
+		super._advance_siege(battle,armies_by_city)
+
+func _initialize():call_deferred("run")
+func run():
+	var state:=GameState.new()
+	state.generate_from_atlas(preload("res://tests/atlas_military_inputs.gd").eurasia_military())
+	var sim:=SupplySimulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	sim.paused=true
+	sim.supply_log=FileAccess.open("res://.dbg/siege-supply-probe.jsonl",FileAccess.WRITE)
+	var manifest:={"pid":OS.get_process_id(),"seed":state.world_seed,"initial_rng":str(state.rng.state),"mask":state.atlas_layout.data.options.settlement_mask,"trade":state.trade_enabled,"rulers":state.random_ruler_profiles_enabled(),"days":412,"source_hashes":{}}
+	for path in ["scripts/simulation/simulation.gd","scripts/simulation/rules/supply_rules.gd","scripts/core/pathfinding.gd",".dbg/siege-supply-probe.gd"]:manifest.source_hashes[path]=FileAccess.get_sha256("res://"+path)
+	FileAccess.open("res://.dbg/siege-supply-manifest.json",FileAccess.WRITE).store_string(JSON.stringify(manifest,"\t"))
+	print("SIEGE_SUPPLY_START ",JSON.stringify(manifest))
+	for day in range(412):
+		sim._advance_day()
+		if state.day%120==0:print("SIEGE_SUPPLY_PROGRESS ",state.day);await process_frame
+	sim.supply_log.close()
+	root.remove_child(sim)
+	sim.free()
+	print("SIEGE_SUPPLY_DONE ",state.day)
+	quit()

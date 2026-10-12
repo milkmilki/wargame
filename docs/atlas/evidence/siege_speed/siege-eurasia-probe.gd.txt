@@ -1,0 +1,65 @@
+extends SceneTree
+
+class SiegeSimulation extends Simulation:
+	var siege_log: FileAccess
+	var summaries := {}
+	func _advance_siege(battle: Battle, armies_by_city: Dictionary = {}) -> void:
+		var city := battle.city
+		var guard := city.garrison_manpower
+		var raw := battle.side_size(battle.side_a)
+		var eligible := _siege_assault_manpower(battle)
+		var attacker := battle.siege_attacker_nation
+		var front := state.campaign_front_for(attacker, city.id, CoalitionCampaignFront.Mode.OFFENSE)
+		var anchor := front.anchor_nation_id if front != null else attacker
+		var requirement := state.campaign_attack_requirement(anchor, city.id, false)
+		var round_before := battle.round_no
+		var field := battle.uses_field_combat_rules()
+		var first: Dictionary = summaries.get(battle.id, {"battle": battle.id, "city": city.id, "name": city.name, "longitude": city.map_position.x * 360.0 - 180.0, "latitude": 90.0-city.map_position.y*180.0, "start_day": state.day, "days": 0, "assault_days": 0, "blockade_days": 0, "field_days": 0, "threefold_days": 0, "threefold_blockade_days": 0, "initial_guard": guard, "initial_raw": raw, "initial_requirement": requirement})
+		super._advance_siege(battle, armies_by_city)
+		var phase := "field" if field else ("assault" if battle.round_no > round_before else "blockade")
+		first.days += 1
+		first[phase+"_days"] += 1
+		if guard > 0 and raw >= guard * 3:
+			first.threefold_days += 1
+			if phase == "blockade": first.threefold_blockade_days += 1
+		first.last_day = state.day
+		first.last_guard = city.garrison_manpower
+		first.last_raw = battle.side_size(battle.side_a)
+		first.finished = battle.finished
+		first.winner = battle.winner_side
+		summaries[battle.id] = first
+		var row := {"day": state.day, "battle": battle.id, "city": city.id, "name": city.name, "guard_before": guard, "guard_after": city.garrison_manpower, "raw_attackers": raw, "eligible_attackers": eligible, "requirement": requirement, "phase": phase, "rounds_before": round_before, "rounds_after": battle.round_no, "finished": battle.finished, "winner": battle.winner_side, "city_defense_multiplier": city.ruler_city_defense_multiplier, "control_share": state.administrative_campaign_control_share(attacker, city.id)}
+		if not field and raw >= guard * 3 and phase == "blockade":
+			row.armies = []
+			for army in battle.side_a:
+				row.armies.append({"id": army.id, "nation": army.owner_nation, "size": army.size, "morale": army.combat_morale(), "starving": army.starving, "supply_ratio": army.supply_ratio, "state": army.state})
+		siege_log.store_line(JSON.stringify(row))
+
+func _initialize(): call_deferred("run")
+func run():
+	var state := GameState.new()
+	var payload: Dictionary = preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	state.generate_from_atlas(payload)
+	var sim := SiegeSimulation.new()
+	root.add_child(sim)
+	sim.setup(state)
+	sim.paused = true
+	sim.siege_log = FileAccess.open("res://.dbg/siege-eurasia-daily.jsonl", FileAccess.WRITE)
+	var hashes := {}
+	for path in ["scripts/simulation/simulation.gd", "scripts/state/game_state.gd", "scripts/core/combat.gd", "scripts/model/Army.gd", ".dbg/siege-eurasia-probe.gd"]:
+		hashes[path] = FileAccess.get_sha256("res://"+path)
+	var manifest := {"pid": OS.get_process_id(), "seed": state.world_seed, "mask": state.atlas_layout.data.options.settlement_mask, "trade": state.trade_enabled, "rulers": state.random_ruler_profiles_enabled(), "cities": state.cities.size(), "nations": state.nations.size(), "initial_rng": str(state.rng.state), "source_sha256": state.generation_metadata.source_sha256, "source_hashes": hashes, "target_days": 2160, "scope": "current-code autonomous replay; historical user interventions not reproduced"}
+	FileAccess.open("res://.dbg/siege-eurasia-manifest.json", FileAccess.WRITE).store_string(JSON.stringify(manifest,"\t"))
+	print("SIEGE_EURASIA_START ",JSON.stringify(manifest))
+	for day in range(2160):
+		sim._advance_day()
+		if state.day % 120 == 0:
+			sim.siege_log.flush()
+			print("SIEGE_EURASIA_PROGRESS day=", state.day, " armies=",state.armies.size()," sieges_seen=",sim.summaries.size())
+			FileAccess.open("res://.dbg/siege-eurasia-summary.json",FileAccess.WRITE).store_string(JSON.stringify({"day":state.day,"manifest":manifest,"sieges":sim.summaries.values()},"\t"))
+			await process_frame
+	sim.siege_log.close()
+	print("SIEGE_EURASIA_DONE day=", state.day)
+	root.remove_child(sim)
+	sim.free()
+	quit()

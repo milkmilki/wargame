@@ -1,0 +1,167 @@
+{
+  "base_commit": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "combat_rules_version": 5,
+  "rule": "actual headcount for siege admission; food ratio scales derived attack and defense exactly once; AI reads the same attributes",
+  "source_hashes": {
+    "scripts/model/army.gd": "8e99fe0fc5d6b8e948ca8d30ebce119fe54608f8615f25ca536264205080b877",
+    "scripts/ai/army_power.gd": "52a85cc0686c4e828df7e89c2ad8ed342f40a0d4e3afa7506f445b583c840e4e",
+    "scripts/core/combat.gd": "c2b51646dc84a30d07c66522e118ff803a20a9fea33f27631715eb318a2fbd4c",
+    "scripts/core/combat_log.gd": "b2a0c844d0efa2da80a48ae7db192649c8d183f573cded32ae2f59824155735a",
+    "scripts/simulation/simulation.gd": "6911f060610675f7372f8e542a7a847e13ece5bc0275fa0b00bdb046511a295c",
+    "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+    "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+    "tests/supply_combat_attributes.gd": "6c90113fc76fcc3aa3fe6428862275de9b2fc7ae9b48ebbf9329f7abb099837e",
+    "tests/field_manpower_requirements.gd": "fb1222606fa4d5abda52990c720fcb146b0b988af478c5d60a8b2df4e02131c7",
+    "tests/test_suite.gd": "fb10933bc694840377b82b13536ccaf6df067742fed8aa897227be96b5bd41f0",
+    "tests/military_funding.gd": "6c7e159af0df10d70967109338cbb35bd8e88a9e8beb7b63637c48d0bc2705cd",
+    "tests/atlas_masked_military_smoke.gd": "64f83095e2261bfd8d9d86e7756c53987c5de91d53036961692d948aba0344b6",
+    "run_tests.py": "ffed41c20b143c985fe34994d3a3e9a9f09abe08ba0f4489155e3b1d80e244ca"
+  },
+  "tdd": {
+    "attributes": {
+      "checks": 51,
+      "red_failures": 34,
+      "log": "red-attributes.log"
+    },
+    "admission": {
+      "checks": 87,
+      "red_failures": 6,
+      "log": "red-admission.log"
+    },
+    "replay": {
+      "checks": 55,
+      "red_failures": 4,
+      "log": "red-replay.log"
+    },
+    "final_attributes": {
+      "checks": 57,
+      "failures": 0
+    }
+  },
+  "regressions": [
+    {
+      "test": "supply_combat_attributes",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_combat_attributes.log"
+    },
+    {
+      "test": "field_manpower_requirements",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\field_manpower_requirements.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 64219,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "direct_center_camp",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2406,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\direct_center_camp.log"
+    },
+    {
+      "test": "military_funding",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2515,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\military_funding.log"
+    },
+    {
+      "test": "ultimatum_rules",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ultimatum_rules.log"
+    },
+    {
+      "test": "ai_decision_context_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 91469,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ai_decision_context_equivalence.log"
+    },
+    {
+      "test": "encirclement_index_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2531,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\encirclement_index_equivalence.log"
+    },
+    {
+      "test": "atlas_battle_strength",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_battle_strength.log"
+    },
+    {
+      "test": "atlas_traffic_supply",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_traffic_supply.log"
+    },
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+    }
+  ],
+  "failures": 0,
+  "default_eurasia_365": {
+    "armies": 372,
+    "battles": 5,
+    "day": 365,
+    "failures": 0,
+    "mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "nodes": 1192,
+    "pid": 13780,
+    "rulers": true,
+    "seed": 1,
+    "settlements": 484,
+    "source_hashes": {
+      "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+      "scripts/simulation/simulation.gd": "6911f060610675f7372f8e542a7a847e13ece5bc0275fa0b00bdb046511a295c",
+      "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+      "tests/atlas_masked_military_smoke.gd": "64f83095e2261bfd8d9d86e7756c53987c5de91d53036961692d948aba0344b6"
+    },
+    "trade": true
+  },
+  "regression_notes": [
+    "Initial military_funding failure was hardcoded version 4; updated expectation to version 5, rerun passed.",
+    "Partial/zero-ration battle replay corrected after smoke start; covered separately by final core and replay tests.",
+    "AI context compatibility check: 40 nations/160 grid cities/365 days, all three decision/cache variants match."
+  ],
+  "limits": [
+    "Headless correctness smoke is not a 30-year audit or GPU performance test.",
+    "Smoke and regressions overlapped; timing is not a performance comparison.",
+    "City virtual garrisons retain existing city food multiplier; no duplicate food ratio applied.",
+    "Other pre-existing uncommitted features and traffic-supply fix preserved."
+  ],
+  "delivery": "uncommitted, not pushed; code graph updated"
+}

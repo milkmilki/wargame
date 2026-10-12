@@ -1,0 +1,145 @@
+{
+  "checks": 1180,
+  "failures": [],
+  "final_nations": 43,
+  "final_vassals": {
+    "40": {
+      "civil_war": false,
+      "created_day": 30,
+      "last_centralization_day": -1,
+      "overlord_id": 36,
+      "tribute_rate": 0.25
+    }
+  },
+  "initial_ai_actions": [
+    {
+      "a": 36,
+      "b": 36,
+      "effective_food_burden": 0.0491400491400491,
+      "enfeoff_max_region_cities": 5,
+      "enfeoff_require_foreign_frontier": false,
+      "enfeoff_target_direct_cities": 1,
+      "enfeoff_tendency": 5.0,
+      "governance_pressure": {
+        "administrative_radius": 2.485,
+        "city_ids": [
+          47,
+          55,
+          247,
+          253
+        ],
+        "city_reports": [
+          {
+            "city_id": 47,
+            "distance_excess": 0.0,
+            "hop_count": 2,
+            "pressure_component": 0.0,
+            "pressured": false,
+            "target_loyalty": 62.5
+          },
+          {
+            "city_id": 55,
+            "distance_excess": 0.515000000000001,
+            "hop_count": 3,
+            "pressure_component": 0.598333333333334,
+            "pressured": true,
+            "target_loyalty": 54.5
+          },
+          {
+            "city_id": 247,
+            "distance_excess": 0.0,
+            "hop_count": 1,
+            "pressure_component": 0.0,
+            "pressured": false,
+            "target_loyalty": 64.5
+          },
+          {
+            "city_id": 253,
+            "distance_excess": 1.515,
+            "hop_count": 4,
+            "pressure_component": 2.93166666666667,
+            "pressured": true,
+            "target_loyalty": 46.5
+          }
+        ],
+        "pressure_score": 3.53,
+        "pressured_city_count": 2,
+        "pressured_excess": 2.03,
+        "soft_threshold": 55.0
+      },
+      "kind": 7,
+      "perceived_fiscal_benefit": 18,
+      "reason": "和平期偏远地区傀儡君主主动缩减直辖，仅保留首都所在州1城、治理压力：偏远州2城超行政半径（半径2.5，倾向后压力17.65）、财政月增益+18（倾向后守军减负50+贡赋18-直辖50），分封以转移守军与治理负担",
+      "region_cities": [
+        47,
+        55,
+        247,
+        253
+      ],
+      "score": 31.2375
+    }
+  ],
+  "initial_candidate_nations": 33,
+  "initial_nations": 40,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "natural_day": 365,
+  "natural_grants": [
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 5.0,
+      "nation_a": 36,
+      "nation_b": 36,
+      "reason": "和平期偏远地区傀儡君主主动缩减直辖，仅保留首都所在州1城、治理压力：偏远州2城超行政半径（半径2.5，倾向后压力17.65）、财政月增益+18（倾向后守军减负50+贡赋18-直辖50），分封以转移守军与治理负担",
+      "ruler_archetype": 9,
+      "subject_nation": 40
+    }
+  ],
+  "nodes": 1192,
+  "pid": 13016,
+  "requested_grant": {
+    "natural": false,
+    "overlord": 7,
+    "overlord_name": "云1",
+    "prince": 38,
+    "region_cities": [
+      6,
+      8,
+      15,
+      74,
+      112,
+      190,
+      191,
+      192,
+      193,
+      200,
+      201,
+      202,
+      276,
+      340,
+      341
+    ],
+    "subject": 40,
+    "subject_capital": 15,
+    "subject_name": "丏王"
+  },
+  "rulers": true,
+  "seed": 1,
+  "settlements": 484,
+  "source_hashes": {
+    "scripts/ai/diplomacy_ai.gd": "3141d51ef6df6452e42aecd85cae1b8cc52133e5a96c715dd4e04429f9fef50b",
+    "scripts/core/family_tree.gd": "8f9e7d732a9c1caa4f617ce076c198ce7d7813f2c0dd09e910b265fded8777ce",
+    "scripts/core/prince_politics.gd": "2b7248bc77724fa660aef441098f7c743343d195b22c16b1205c77d3b1dd78e6",
+    "scripts/simulation/simulation.gd": "6911f060610675f7372f8e542a7a847e13ece5bc0275fa0b00bdb046511a295c",
+    "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+    "tests/atlas_enfeoff.gd": "27bae4c0bd20f088264655ac3bb9dbecdd6fa8013820cfcbff9cbe060c449667"
+  },
+  "trade": true
+}

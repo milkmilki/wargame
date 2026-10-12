@@ -1,0 +1,97 @@
+{
+  "head": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "scope": "Atlas traffic-node food-source access; per-army allocation, food costs and assault gate unchanged",
+  "source_hashes": {
+    "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+    "scripts/simulation/simulation.gd": "05d2b5cca3f4209f12ec9e5266fe7481336c85329649d161539997659e931f9f",
+    "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+    "tests/atlas_masked_military_smoke.gd": "64f83095e2261bfd8d9d86e7756c53987c5de91d53036961692d948aba0344b6"
+  },
+  "regressions": [
+    {
+      "test": "atlas_traffic_supply",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "e76f439399d1424d6e559ff6dcd98e71d7b19c8e73b6333c82e62a554e5a2801"
+    },
+    {
+      "test": "atlas_supply_sources",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "6f31a2d1479b80aac9513648a6180277b065b40b6e7efe70ed6beeac958e3d59"
+    },
+    {
+      "test": "atlas_supply_dependencies",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "3c41cab522e061385d24dce9c558d8fe5cb01843343d061d361c88e6f742eaa4"
+    },
+    {
+      "test": "atlas_access_and_repatriation",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "2ae828b89c5675dad4c8ec693b43b83125c8aa6e1943d82ff0c3418edfc68e96"
+    },
+    {
+      "test": "atlas_supply_runtime",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "143470b51d19e61ea9bc1ef1efe89a42fa48fcb9eabcfa8342eff536f4495e11"
+    },
+    {
+      "test": "atlas_runtime_equivalence",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "946d429026cd217d73ea118580156bb31d4ccd8493fdf381681c1537863a8f64"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "2b6ba7cbfcaeea788a69f0d3fa338756c37c9747790b008a76cb8516dbab361f"
+    },
+    {
+      "test": "test_suite",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "53c4d1933e336ddaeafc6ac9f68cc9110d3bb36f2978f5b7a980dfa2a29e4996"
+    },
+    {
+      "test": "atlas_masked_military_smoke",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "d6986200597faddfb019daf77c3b043caa23ad102c844b436ba5ada3910b4849"
+    },
+    {
+      "test": "project_compile",
+      "exit_code": 0,
+      "ok": true,
+      "log_sha256": "9d8fd9c74bba065c729f6fc9e5d65c113dcd4c98df205b81868fd415aacefe20"
+    }
+  ],
+  "special_checks": 18,
+  "core_checks": 505,
+  "territory_checks": 126,
+  "smoke": {
+    "pid": 16260,
+    "seed": 1,
+    "mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "trade": true,
+    "rulers": true,
+    "days": 365,
+    "nodes": 1192,
+    "settlements": 484,
+    "armies": 370,
+    "battles": 4,
+    "failures": 0
+  },
+  "limits": "headless correctness smoke, not visual or performance acceptance; concurrent test timings are not performance evidence; diagnostic pre-fix trajectory is not expected to stay identical",
+  "not_committed": true
+}

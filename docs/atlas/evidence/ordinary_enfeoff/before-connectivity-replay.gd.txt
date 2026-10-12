@@ -1,0 +1,97 @@
+extends SceneTree
+class BeforeState extends GameState:
+	func enfeoff_region_closure(
+		overlord_id: int,
+		city_ids: Array[int]
+	) -> Array[int]:
+		if (
+			overlord_id < 0
+			or overlord_id >= nations.size()
+			or not nations[overlord_id].alive
+			or city_ids.is_empty()
+		):
+			return [] as Array[int]
+		var capital_id := nations[overlord_id].capital_city_id
+		if (
+			capital_id < 0
+			or capital_id >= cities.size()
+			or cities[capital_id].owner_nation != overlord_id
+		):
+			return [] as Array[int]
+		var region := {}
+		for city_id in city_ids:
+			if (
+				city_id < 0
+				or city_id >= cities.size()
+				or region.has(city_id)
+				or city_id == capital_id
+				or cities[city_id].owner_nation != overlord_id
+			):
+				return [] as Array[int]
+			region[city_id] = true
+		var reachable := {capital_id: true}
+		var queue: Array[int] = [capital_id]
+		var cursor := 0
+		while cursor < queue.size():
+			var current := queue[cursor]
+			cursor += 1
+			for neighbor in neighbors(current):
+				var edge := edge_of(current, neighbor)
+				if (
+					reachable.has(neighbor)
+					or region.has(neighbor)
+					or cities[neighbor].owner_nation
+						!= overlord_id
+					or edge == null
+					or edge.max_manpower <= 0
+				):
+					continue
+				reachable[neighbor] = true
+				queue.append(neighbor)
+		for city in cities:
+			if (
+				city.owner_nation == overlord_id
+				and not city.is_dock
+				and not reachable.has(city.id)
+			):
+				region[city.id] = true
+		var result: Array[int] = []
+		for city_id_value in region:
+			result.append(int(city_id_value))
+		result.sort()
+		return result
+
+var checks:=0
+var failures:=0
+func check(ok: bool,message: String) -> void:
+	checks+=1
+	if not ok:failures+=1;push_error(message)
+func edge(state: GameState,a: int,b: int,control: int) -> Edge:
+	var road:=Edge.new();road.city_a=a;road.city_b=b;road.control_city_id=control
+	state.edges.append(road);state.adjacency[a].append(b);state.adjacency[b].append(a)
+	state.edge_lookup[GameState.edge_key(a,b)]=road
+	return road
+func _init() -> void:
+	var state:=BeforeState.new()
+	for id in range(2):
+		var nation:=Nation.new();nation.id=id;nation.capital_city_id=0 if id==0 else 3;state.nations.append(nation)
+	for id in range(5):
+		var city:=City.new();city.id=id;city.owner_nation=0 if id<3 else 1 if id==3 else -1
+		city.node_kind=City.NodeKind.TRAFFIC if id==4 else City.NodeKind.SETTLEMENT
+		city.politically_active=id!=4
+		state.cities.append(city);state.adjacency[id]=[] as Array[int]
+	state.atlas_layout={"model":"atlas-military-v1"}
+	edge(state,0,4,0);var rear:=edge(state,4,1,1);edge(state,0,2,2)
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[2],"ownerless junction keeps home city connected without bloating fief")
+	check(state.cities[4].owner_nation==-1,"junction remains politically ownerless")
+	rear.control_city_id=2
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"road crossing granted jurisdiction really cuts the home city")
+	rear.control_city_id=3
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"foreign road cannot preserve direct administration")
+	rear.control_city_id=-1
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"unassigned Atlas road cannot provide administrative access")
+	rear.control_city_id=1;rear.max_manpower=0
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"blocked-capacity road still creates a real enclave")
+	rear.max_manpower=15000;state.atlas_layout.clear()
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"legacy graph retains owner-based endpoint rule")
+	print("ATLAS_ENFEOFF_CONNECTIVITY checks=%d failures=%d"%[checks,failures]);quit(0 if failures==0 else 1)

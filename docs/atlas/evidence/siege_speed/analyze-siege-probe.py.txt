@@ -1,0 +1,16 @@
+from pathlib import Path
+import json
+from collections import Counter
+
+rows=[]
+complete_bytes=Path('.dbg/siege-eurasia-daily.jsonl').read_bytes().rsplit(b'\n',1)[0]
+for line in complete_bytes.decode('utf-8').splitlines():
+    try: rows.append(json.loads(line))
+    except json.JSONDecodeError: pass  # The live file may end in a partially written line.
+blocked=[r for r in rows if r['phase']=='blockade' and r['guard_before']>0 and r['raw_attackers']>=3*r['guard_before']]
+qualifying=[r for r in rows if r['phase']=='blockade' and r['guard_before']>0 and r['eligible_attackers']>=r['requirement'] and not r['finished']]
+summary=json.loads(Path('.dbg/siege-eurasia-summary.json').read_text(encoding='utf-8'))
+local=[s for s in summary['sieges'] if 100<=s['longitude']<=109 and 28<=s['latitude']<=34]
+result={'latest_day':rows[-1]['day'],'summary_day':summary['day'],'siege_days':len(rows),'raw_threefold_blockade_days':len(blocked),'qualifying_still_blockade':qualifying,'threefold_blockade_eligibility':dict(Counter('below_requirement' if r['eligible_attackers']<r['requirement'] else 'meets_requirement' for r in blocked)), 'sichuan_bounding_box_sieges':local}
+print(json.dumps(result,ensure_ascii=False,indent=2))
+Path('.dbg/siege-eurasia-analysis.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')

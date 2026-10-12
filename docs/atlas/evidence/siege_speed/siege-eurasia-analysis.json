@@ -1,0 +1,56 @@
+{
+  "latest_day": 2160,
+  "summary_day": 2160,
+  "siege_days": 6115,
+  "raw_threefold_blockade_days": 546,
+  "qualifying_still_blockade": [],
+  "threefold_blockade_eligibility": {
+    "below_requirement": 546
+  },
+  "sichuan_bounding_box_sieges": [
+    {
+      "assault_days": 0,
+      "battle": 133,
+      "blockade_days": 1,
+      "city": 244,
+      "days": 9,
+      "field_days": 8,
+      "finished": true,
+      "initial_guard": 0,
+      "initial_raw": 84449,
+      "initial_requirement": 0,
+      "last_day": 581,
+      "last_guard": 0,
+      "last_raw": 87423,
+      "latitude": 28.1999462842941,
+      "longitude": 108.934571743011,
+      "name": "安州·府2",
+      "start_day": 573,
+      "threefold_blockade_days": 0,
+      "threefold_days": 0,
+      "winner": 1
+    },
+    {
+      "assault_days": 1,
+      "battle": 178,
+      "blockade_days": 15,
+      "city": 126,
+      "days": 24,
+      "field_days": 8,
+      "finished": true,
+      "initial_guard": 15000,
+      "initial_raw": 12894,
+      "initial_requirement": 15000,
+      "last_day": 752,
+      "last_guard": 14550,
+      "last_raw": 0,
+      "latitude": 31.7584007978439,
+      "longitude": 104.079172611237,
+      "name": "昌州",
+      "start_day": 729,
+      "threefold_blockade_days": 0,
+      "threefold_days": 0,
+      "winner": 2
+    }
+  ]
+}

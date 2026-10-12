@@ -1,0 +1,28 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "supply_combat_attributes",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2156,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_combat_attributes.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 64219,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 20031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+    }
+  ],
+  "failures": 0
+}

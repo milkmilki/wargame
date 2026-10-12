@@ -1,0 +1,21 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "ruler_enfeoff_accession",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2703,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_enfeoff_accession.log"
+    },
+    {
+      "test": "atlas_enfeoff",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 55843,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_enfeoff.log"
+    }
+  ],
+  "failures": 0
+}

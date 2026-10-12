@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-12",
+  "baseline_commit": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "uncommitted": true,
+  "world": {
+    "seed": 1,
+    "initial_nations": 40,
+    "mask": "20-55N,-15-145E",
+    "trade": true,
+    "rulers": true
+  },
+  "before": {
+    "pid": 28480,
+    "days": 2160,
+    "ordinary_grants": 0,
+    "events": 1,
+    "report": "before-six-years.json"
+  },
+  "after": {
+    "pid": 11968,
+    "days": 30,
+    "ordinary_grants": 6,
+    "events": 9,
+    "report": "after-day30.json",
+    "stopped_at_first_ordinary": true
+  },
+  "production_change": "Atlas administrative connectivity traverses ownerless junctions only on remaining directly controlled jurisdiction roads; no balance threshold change",
+  "current_source_hashes": {
+    "scripts/state/game_state.gd": "dcf529a4e7d748e2e408d8d580c66f54b5dd15638cdc5f11fbc1ee0672065e73",
+    "scripts/ai/diplomacy_ai.gd": "3141d51ef6df6452e42aecd85cae1b8cc52133e5a96c715dd4e04429f9fef50b",
+    "scripts/atlas/war_fronts.gd": "fecd2ef1da16b2bc57edc64c10515a2b029575a53e8055dbb6109936bccba2c0",
+    "scripts/atlas/persistent_strokes.gd": "68feca7f4235948e3a99b4d16655610abc7a10a79a86eba47cf327248c323f8b",
+    "assets/atlas/stroke.gdshader": "7dc9eae2565f2a9ea9b092872ce326923b68c95e9aa7da3fc600a86b53a6a27b",
+    "tests/atlas_enfeoff_connectivity.gd": "aeb42f99d528ba907a47ebfde230105c80503d1b844caa9224d96185877e0643",
+    "tests/atlas_ordinary_enfeoff.gd": "c384ecc6272c2cfead0520af509161a7a6a4ae47711d8dec6ac295d307e3e68e",
+    "tests/atlas_vassal_borders.gd": "0c0cb617cce672a129c92d60291599c5a0c9b702e896e591d63b86d89dcbbe74",
+    "tests/atlas_vassal_borders_visual.gd": "27c1eb56898a77dca0cde821adcfe406cda52d910870bb508542b9a0750eabfb"
+  },
+  "regression_tests": [
+    "atlas_enfeoff_connectivity",
+    "enfeoff_shared_lineage",
+    "royal_title_lifecycle",
+    "ruler_enfeoff_accession",
+    "atlas_territory_transactions",
+    "vassal_faction_conflict",
+    "atlas_masked_military_smoke",
+    "project_compile"
+  ],
+  "render_regression_tests": [
+    "atlas_vassal_borders",
+    "atlas_war_fronts",
+    "atlas_persistent_strokes",
+    "atlas_static_layers",
+    "atlas_render_invalidation"
+  ],
+  "gpu_manifest": "../vassal_borders/gpu-manifest.json",
+  "images_visually_inspected": [
+    "vassal-local-4x.png",
+    "vassal-local-8x.png",
+    "ordinary-comparison-4x.png",
+    "hostile-bond-local-4x.png",
+    "history-peaceful-4x.png"
+  ],
+  "coverage_limits": [
+    "Post-fix natural observation stopped on day30; independent default-world smoke ran365days.",
+    "GPU hostile border is a relation-field fixture, not a naturally generated civil war.",
+    "Legacy renderer mesh checks only; real GPU screenshots use default persistent renderer.",
+    "Graph change detection includes earlier uncommitted modifications; source review and executed tests establish this task evidence."
+  ]
+}

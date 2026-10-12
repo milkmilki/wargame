@@ -1,0 +1,14 @@
+{
+  "graph": {
+    "updated_at": "2026-10-12T13:12:35",
+    "age_seconds": 1,
+    "built_at_sha": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+    "built_on_branch": "feature/civ-atlas-godot",
+    "head_sha": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+    "head_matches_build": true
+  },
+  "files_reparsed": 1,
+  "errors": [],
+  "review": "Source review plus 35 regression processes, 365-day strict sync/sliced comparison, 720/365/365-day audits and four inspected GPU screenshots. Graph has incomplete dynamic GDScript call coverage; zero reported flows is not zero impact.",
+  "known_unpassed": "seed2024 day330 front1 center110: physical corridor crosses hostile fu318; permission rules prevent travel from captured entry319 to center110."
+}

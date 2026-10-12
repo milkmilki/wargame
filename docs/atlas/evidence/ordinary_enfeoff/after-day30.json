@@ -1,0 +1,1036 @@
+{
+  "day": 30,
+  "events": [
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 5.0,
+      "nation_a": 14,
+      "nation_b": 14,
+      "overlord_name": "临2",
+      "reason": "和平期偏远地区傀儡君主主动缩减直辖，仅保留首都所在州3城，分封以转移守军与治理负担",
+      "ruler_archetype": 9,
+      "subject_cities": [
+        10,
+        195,
+        196,
+        197
+      ],
+      "subject_name": "云西王",
+      "subject_nation": 40,
+      "subject_nations": [
+        40,
+        41
+      ]
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 1.1,
+      "nation_a": 17,
+      "nation_b": 17,
+      "overlord_name": "苍3",
+      "reason": "和平期偏远地区治理压力：偏远州5城超行政半径（半径3.7，倾向后压力16.82），分封以转移守军与治理负担",
+      "ruler_archetype": 5,
+      "subject_cities": [
+        130,
+        139,
+        361,
+        362,
+        363,
+        380,
+        381,
+        382
+      ],
+      "subject_name": "事王",
+      "subject_nation": 42
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 1.1,
+      "nation_a": 19,
+      "nation_b": 19,
+      "overlord_name": "景3",
+      "reason": "和平期偏远地区治理压力：偏远州2城超行政半径（半径6.0，倾向后压力12.47）、远地守军附加粮耗13/月（负担比0.11，倾向后0.12），分封以转移守军与治理负担",
+      "ruler_archetype": 5,
+      "subject_cities": [
+        116,
+        178,
+        477,
+        478,
+        479
+      ],
+      "subject_name": "亲王",
+      "subject_nation": 43
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 1.8,
+      "nation_a": 24,
+      "nation_b": 24,
+      "overlord_name": "岚4",
+      "reason": "和平期偏远地区治理压力：偏远州4城超行政半径（半径1.9，倾向后压力46.26）、财政月增益+1（倾向后守军减负32+贡赋17-直辖48），分封以转移守军与治理负担",
+      "ruler_archetype": 3,
+      "subject_cities": [
+        25,
+        65,
+        217,
+        218,
+        263
+      ],
+      "subject_name": "乁王",
+      "subject_nation": 44
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 5.0,
+      "nation_a": 27,
+      "nation_b": 27,
+      "overlord_name": "景4",
+      "reason": "和平期偏远地区傀儡君主主动缩减直辖，仅保留首都所在州2城、治理压力：偏远州5城超行政半径（半径2.4，倾向后压力50.83）、远地守军附加粮耗12/月（负担比0.05，倾向后0.25）、财政月增益+48（倾向后守军减负85+贡赋21-直辖58），分封以转移守军与治理负担",
+      "ruler_archetype": 9,
+      "subject_cities": [
+        86,
+        121,
+        154,
+        298,
+        299,
+        418
+      ],
+      "subject_name": "乹王",
+      "subject_nation": 45,
+      "subject_nations": [
+        45,
+        46
+      ]
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 1.98,
+      "nation_a": 34,
+      "nation_b": 34,
+      "overlord_name": "澜5",
+      "reason": "和平期偏远地区治理压力：偏远州1城超行政半径（半径4.7，倾向后压力17.16）、远地守军附加粮耗13/月（负担比0.05，倾向后0.11），分封以转移守军与治理负担",
+      "ruler_archetype": 5,
+      "subject_cities": [
+        5,
+        59,
+        188,
+        189
+      ],
+      "subject_name": "端化郡王",
+      "subject_nation": 47
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 1.0,
+      "nation_a": 35,
+      "nation_b": 35,
+      "overlord_name": "景5",
+      "reason": "和平期偏远地区治理压力：偏远州9城超行政半径（半径4.3，倾向后压力85.88），分封以转移守军与治理负担",
+      "ruler_archetype": 0,
+      "subject_cities": [
+        23,
+        37,
+        53,
+        66,
+        67,
+        215,
+        216,
+        235,
+        236,
+        264,
+        265,
+        266
+      ],
+      "subject_name": "丗王",
+      "subject_nation": 48
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 5.0,
+      "nation_a": 36,
+      "nation_b": 36,
+      "overlord_name": "宁5",
+      "reason": "和平期偏远地区傀儡君主主动缩减直辖，仅保留首都所在州1城、治理压力：偏远州2城超行政半径（半径2.5，倾向后压力17.65）、财政月增益+18（倾向后守军减负50+贡赋18-直辖50），分封以转移守军与治理负担",
+      "ruler_archetype": 9,
+      "subject_cities": [
+        47,
+        55,
+        247,
+        253
+      ],
+      "subject_name": "定兴郡王",
+      "subject_nation": 49
+    },
+    {
+      "action": 7,
+      "day": 30,
+      "enfeoff_tendency": 1.8,
+      "nation_a": 37,
+      "nation_b": 37,
+      "overlord_name": "岳5",
+      "reason": "和平期偏远地区治理压力：偏远州3城超行政半径（半径1.9，倾向后压力34.70），分封以转移守军与治理负担",
+      "ruler_archetype": 3,
+      "subject_cities": [
+        1,
+        184,
+        185
+      ],
+      "subject_name": "金州王",
+      "subject_nation": 50
+    }
+  ],
+  "failures": [],
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "monthly_gates": [
+    {
+      "counts": {
+        "benefit_below_threshold": 13,
+        "eligible": 6,
+        "no_complete_region_or_core": 11,
+        "no_prince": 6
+      },
+      "day": 0,
+      "nations": [
+        {
+          "cities": 15,
+          "fiscal": -35,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 0,
+          "reason": "benefit_below_threshold",
+          "region": [
+            11,
+            12,
+            198
+          ],
+          "ruler": 6
+        },
+        {
+          "cities": 1,
+          "nation": 1,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 5
+        },
+        {
+          "cities": 2,
+          "nation": 2,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 2
+        },
+        {
+          "cities": 2,
+          "nation": 3,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 2
+        },
+        {
+          "cities": 7,
+          "nation": 4,
+          "reason": "no_prince",
+          "ruler": 4
+        },
+        {
+          "cities": 5,
+          "nation": 5,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 2
+        },
+        {
+          "cities": 12,
+          "fiscal": -18,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 6,
+          "reason": "benefit_below_threshold",
+          "region": [
+            95,
+            310,
+            311
+          ],
+          "ruler": 0
+        },
+        {
+          "cities": 16,
+          "fiscal": -32,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 7,
+          "reason": "benefit_below_threshold",
+          "region": [
+            112,
+            340,
+            341
+          ],
+          "ruler": 2
+        },
+        {
+          "cities": 12,
+          "fiscal": -31,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 8,
+          "reason": "benefit_below_threshold",
+          "region": [
+            3,
+            84,
+            293,
+            294
+          ],
+          "ruler": 0
+        },
+        {
+          "cities": 20,
+          "fiscal": -9,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 9,
+          "reason": "benefit_below_threshold",
+          "region": [
+            149,
+            405,
+            406,
+            407
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 14,
+          "fiscal": -40,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 10,
+          "reason": "benefit_below_threshold",
+          "region": [
+            38,
+            85,
+            237,
+            295,
+            296,
+            297
+          ],
+          "ruler": 6
+        },
+        {
+          "cities": 4,
+          "nation": 11,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 8
+        },
+        {
+          "cities": 2,
+          "nation": 12,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 3
+        },
+        {
+          "cities": 5,
+          "nation": 13,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 0
+        },
+        {
+          "cities": 16,
+          "fiscal": -46,
+          "food": 0.0,
+          "governance": 3.252,
+          "nation": 15,
+          "reason": "benefit_below_threshold",
+          "region": [
+            94,
+            135,
+            156,
+            308,
+            309,
+            371,
+            372,
+            373,
+            421,
+            422
+          ],
+          "ruler": 4
+        },
+        {
+          "cities": 29,
+          "fiscal": -13,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 16,
+          "reason": "benefit_below_threshold",
+          "region": [
+            137,
+            376,
+            377
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 18,
+          "fiscal": -35,
+          "food": 0.0206378986866792,
+          "governance": 16.8208333333333,
+          "nation": 17,
+          "reason": "eligible",
+          "region": [
+            130,
+            139,
+            361,
+            362,
+            363,
+            380,
+            381,
+            382
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 7,
+          "nation": 18,
+          "reason": "no_prince",
+          "ruler": 2
+        },
+        {
+          "cities": 21,
+          "fiscal": -10,
+          "food": 0.118344827586207,
+          "governance": 12.4666666666667,
+          "nation": 19,
+          "reason": "eligible",
+          "region": [
+            116,
+            178,
+            477,
+            478,
+            479
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 1,
+          "nation": 20,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 8
+        },
+        {
+          "cities": 27,
+          "fiscal": -4,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 21,
+          "reason": "benefit_below_threshold",
+          "region": [
+            151,
+            410,
+            411,
+            412
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 30,
+          "nation": 22,
+          "reason": "no_prince",
+          "ruler": 0
+        },
+        {
+          "cities": 14,
+          "nation": 23,
+          "reason": "no_prince",
+          "ruler": 5
+        },
+        {
+          "cities": 15,
+          "fiscal": 1,
+          "food": 0.0753926701570681,
+          "governance": 46.26,
+          "nation": 24,
+          "reason": "eligible",
+          "region": [
+            25,
+            65,
+            217,
+            218,
+            263
+          ],
+          "ruler": 3
+        },
+        {
+          "cities": 18,
+          "fiscal": -24,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 25,
+          "reason": "benefit_below_threshold",
+          "region": [
+            63,
+            262
+          ],
+          "ruler": 7
+        },
+        {
+          "cities": 17,
+          "fiscal": -20,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 26,
+          "reason": "benefit_below_threshold",
+          "region": [
+            157,
+            174,
+            423,
+            424,
+            425,
+            465,
+            466,
+            467
+          ],
+          "ruler": 1
+        },
+        {
+          "cities": 3,
+          "nation": 29,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 7
+        },
+        {
+          "cities": 10,
+          "fiscal": -3,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 30,
+          "reason": "benefit_below_threshold",
+          "region": [
+            171,
+            458,
+            459,
+            460
+          ],
+          "ruler": 6
+        },
+        {
+          "cities": 13,
+          "fiscal": -18,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 31,
+          "reason": "benefit_below_threshold",
+          "region": [
+            146,
+            396,
+            397,
+            398
+          ],
+          "ruler": 0
+        },
+        {
+          "cities": 4,
+          "nation": 32,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 0
+        },
+        {
+          "cities": 8,
+          "nation": 33,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 5
+        },
+        {
+          "cities": 16,
+          "fiscal": -22,
+          "food": 0.106363636363636,
+          "governance": 17.16,
+          "nation": 34,
+          "reason": "eligible",
+          "region": [
+            5,
+            59,
+            188,
+            189
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 22,
+          "fiscal": -75,
+          "food": 0.082799408575653,
+          "governance": 85.875,
+          "nation": 35,
+          "reason": "eligible",
+          "region": [
+            23,
+            37,
+            53,
+            66,
+            67,
+            215,
+            216,
+            235,
+            236,
+            264,
+            265,
+            266
+          ],
+          "ruler": 0
+        },
+        {
+          "cities": 10,
+          "fiscal": -3,
+          "food": 0.06189111747851,
+          "governance": 34.695,
+          "nation": 37,
+          "reason": "eligible",
+          "region": [
+            1,
+            184,
+            185
+          ],
+          "ruler": 3
+        },
+        {
+          "cities": 10,
+          "nation": 38,
+          "reason": "no_prince",
+          "ruler": 0
+        },
+        {
+          "cities": 11,
+          "nation": 39,
+          "reason": "no_prince",
+          "ruler": 0
+        }
+      ]
+    },
+    {
+      "counts": {
+        "already_vassal": 9,
+        "benefit_below_threshold": 10,
+        "no_complete_region_or_core": 9,
+        "no_prince": 11,
+        "preparing_war": 8
+      },
+      "day": 30,
+      "nations": [
+        {
+          "cities": 15,
+          "fiscal": -35,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 0,
+          "reason": "benefit_below_threshold",
+          "region": [
+            11,
+            12,
+            198
+          ],
+          "ruler": 6
+        },
+        {
+          "cities": 1,
+          "nation": 1,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 5
+        },
+        {
+          "cities": 2,
+          "nation": 2,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 2
+        },
+        {
+          "cities": 2,
+          "nation": 3,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 2
+        },
+        {
+          "cities": 7,
+          "nation": 4,
+          "reason": "no_prince",
+          "ruler": 4
+        },
+        {
+          "cities": 5,
+          "nation": 5,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 2
+        },
+        {
+          "cities": 12,
+          "nation": 6,
+          "reason": "preparing_war",
+          "ruler": 0
+        },
+        {
+          "cities": 16,
+          "fiscal": -32,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 7,
+          "reason": "benefit_below_threshold",
+          "region": [
+            112,
+            340,
+            341
+          ],
+          "ruler": 2
+        },
+        {
+          "cities": 12,
+          "nation": 8,
+          "reason": "preparing_war",
+          "ruler": 0
+        },
+        {
+          "cities": 20,
+          "nation": 9,
+          "reason": "preparing_war",
+          "ruler": 5
+        },
+        {
+          "cities": 14,
+          "nation": 10,
+          "reason": "preparing_war",
+          "ruler": 6
+        },
+        {
+          "cities": 4,
+          "nation": 11,
+          "reason": "preparing_war",
+          "ruler": 8
+        },
+        {
+          "cities": 2,
+          "nation": 12,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 3
+        },
+        {
+          "cities": 5,
+          "nation": 13,
+          "reason": "preparing_war",
+          "ruler": 0
+        },
+        {
+          "cities": 16,
+          "nation": 15,
+          "reason": "preparing_war",
+          "ruler": 4
+        },
+        {
+          "cities": 29,
+          "fiscal": -13,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 16,
+          "reason": "benefit_below_threshold",
+          "region": [
+            137,
+            376,
+            377
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 10,
+          "nation": 17,
+          "reason": "no_prince",
+          "ruler": 5
+        },
+        {
+          "cities": 7,
+          "nation": 18,
+          "reason": "no_prince",
+          "ruler": 2
+        },
+        {
+          "cities": 16,
+          "fiscal": -26,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 19,
+          "reason": "benefit_below_threshold",
+          "region": [
+            134,
+            369,
+            370
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 1,
+          "nation": 20,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 8
+        },
+        {
+          "cities": 27,
+          "fiscal": -4,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 21,
+          "reason": "benefit_below_threshold",
+          "region": [
+            151,
+            410,
+            411,
+            412
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 30,
+          "nation": 22,
+          "reason": "no_prince",
+          "ruler": 0
+        },
+        {
+          "cities": 14,
+          "nation": 23,
+          "reason": "no_prince",
+          "ruler": 5
+        },
+        {
+          "cities": 10,
+          "nation": 24,
+          "reason": "no_prince",
+          "ruler": 3
+        },
+        {
+          "cities": 18,
+          "fiscal": -24,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 25,
+          "reason": "benefit_below_threshold",
+          "region": [
+            63,
+            262
+          ],
+          "ruler": 7
+        },
+        {
+          "cities": 17,
+          "fiscal": -20,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 26,
+          "reason": "benefit_below_threshold",
+          "region": [
+            157,
+            174,
+            423,
+            424,
+            425,
+            465,
+            466,
+            467
+          ],
+          "ruler": 1
+        },
+        {
+          "cities": 3,
+          "nation": 29,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 7
+        },
+        {
+          "cities": 10,
+          "nation": 30,
+          "reason": "preparing_war",
+          "ruler": 6
+        },
+        {
+          "cities": 13,
+          "fiscal": -18,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 31,
+          "reason": "benefit_below_threshold",
+          "region": [
+            146,
+            396,
+            397,
+            398
+          ],
+          "ruler": 0
+        },
+        {
+          "cities": 4,
+          "nation": 32,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 0
+        },
+        {
+          "cities": 8,
+          "nation": 33,
+          "reason": "no_complete_region_or_core",
+          "region": [],
+          "ruler": 5
+        },
+        {
+          "cities": 12,
+          "fiscal": -50,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 34,
+          "reason": "benefit_below_threshold",
+          "region": [
+            20,
+            56,
+            211,
+            212,
+            254
+          ],
+          "ruler": 5
+        },
+        {
+          "cities": 10,
+          "fiscal": -29,
+          "food": 0.0,
+          "governance": 0.0,
+          "nation": 35,
+          "reason": "benefit_below_threshold",
+          "region": [
+            7,
+            76,
+            278,
+            279
+          ],
+          "ruler": 0
+        },
+        {
+          "cities": 7,
+          "nation": 37,
+          "reason": "no_prince",
+          "ruler": 3
+        },
+        {
+          "cities": 10,
+          "nation": 38,
+          "reason": "no_prince",
+          "ruler": 0
+        },
+        {
+          "cities": 11,
+          "nation": 39,
+          "reason": "no_prince",
+          "ruler": 0
+        },
+        {
+          "cities": 4,
+          "nation": 40,
+          "reason": "already_vassal",
+          "ruler": 2
+        },
+        {
+          "cities": 8,
+          "nation": 41,
+          "reason": "already_vassal",
+          "ruler": 5
+        },
+        {
+          "cities": 8,
+          "nation": 42,
+          "reason": "already_vassal",
+          "ruler": 7
+        },
+        {
+          "cities": 5,
+          "nation": 43,
+          "reason": "already_vassal",
+          "ruler": 0
+        },
+        {
+          "cities": 5,
+          "nation": 44,
+          "reason": "already_vassal",
+          "ruler": 3
+        },
+        {
+          "cities": 6,
+          "nation": 45,
+          "reason": "already_vassal",
+          "ruler": 1
+        },
+        {
+          "cities": 6,
+          "nation": 46,
+          "reason": "already_vassal",
+          "ruler": 6
+        },
+        {
+          "cities": 4,
+          "nation": 47,
+          "reason": "already_vassal",
+          "ruler": 1
+        },
+        {
+          "cities": 12,
+          "nation": 48,
+          "reason": "no_prince",
+          "ruler": 7
+        },
+        {
+          "cities": 4,
+          "nation": 49,
+          "reason": "no_prince",
+          "ruler": 0
+        },
+        {
+          "cities": 3,
+          "nation": 50,
+          "reason": "already_vassal",
+          "ruler": 1
+        }
+      ]
+    }
+  ],
+  "pid": 11968,
+  "requested_limit": 2160,
+  "rulers": true,
+  "seed": 1,
+  "source_hashes": {
+    "scripts/ai/diplomacy_ai.gd": "3141d51ef6df6452e42aecd85cae1b8cc52133e5a96c715dd4e04429f9fef50b",
+    "scripts/core/combat.gd": "c2b51646dc84a30d07c66522e118ff803a20a9fea33f27631715eb318a2fbd4c",
+    "scripts/core/prince_politics.gd": "2b7248bc77724fa660aef441098f7c743343d195b22c16b1205c77d3b1dd78e6",
+    "scripts/model/army.gd": "8e99fe0fc5d6b8e948ca8d30ebce119fe54608f8615f25ca536264205080b877",
+    "scripts/simulation/simulation.gd": "6911f060610675f7372f8e542a7a847e13ece5bc0275fa0b00bdb046511a295c",
+    "scripts/state/game_state.gd": "dcf529a4e7d748e2e408d8d580c66f54b5dd15638cdc5f11fbc1ee0672065e73",
+    "tests/atlas_ordinary_enfeoff.gd": "c384ecc6272c2cfead0520af509161a7a6a4ae47711d8dec6ac295d307e3e68e"
+  },
+  "stop_after_first_ordinary": true,
+  "trade": true
+}

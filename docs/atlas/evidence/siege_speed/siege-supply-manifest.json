@@ -1,0 +1,22 @@
+{
+	"days": 412,
+	"initial_rng": "4982495298212809567",
+	"mask": {
+		"east": 145.0,
+		"enabled": true,
+		"north": 55.0,
+		"south": 20.0,
+		"version": "atlas-geographic-mask-v1",
+		"west": -15.0
+	},
+	"pid": 32604,
+	"rulers": true,
+	"seed": 1,
+	"source_hashes": {
+		".dbg/siege-supply-probe.gd": "95cdb0cae8908ff065c55355f2f7bcdf20fc4e2198b8ecaab5aa9e6c534d3625",
+		"scripts/core/pathfinding.gd": "50dbd7b9e36e56a8dbbbe1d28924e0f0cd1c536a63a7bc09f12eaf068fc1dd90",
+		"scripts/simulation/rules/supply_rules.gd": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa",
+		"scripts/simulation/simulation.gd": "05d2b5cca3f4209f12ec9e5266fe7481336c85329649d161539997659e931f9f"
+	},
+	"trade": true
+}

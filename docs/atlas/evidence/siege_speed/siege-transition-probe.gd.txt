@@ -1,0 +1,126 @@
+extends SceneTree
+
+var failures := 0
+var rows: Array[Dictionary] = []
+
+func _init() -> void:
+	call_deferred("run")
+
+func check(value: bool, message: String) -> void:
+	if not value:
+		failures += 1
+		printerr("SIEGE_PROBE_FAIL ", message)
+
+func fixture(garrison: int, manpower: int) -> Dictionary:
+	var state := preload("res://tests/support/grid_world.gd").new()
+	state.generate_grid_world(94002)
+	state.armies.clear()
+	state.battles.clear()
+	var city: City = state.cities[state.administrative_center_city_ids[0]]
+	for member_id in state.administrative_members(city.id):
+		state.cities[member_id].owner_nation = city.owner_nation
+	state.ownership_revision += 1
+	var attacker_id := (city.owner_nation + 1) % state.nations.size()
+	var sim := Simulation.new()
+	sim.setup(state)
+	for nation in state.nations:
+		nation.military_payment_ratio = 1.0
+	city.garrison_manpower = garrison
+	city.garrison_supply_ratio = 1.0
+	city.food_storage = 100000
+	city.ruler_city_defense_multiplier = 1.0
+	var army := troop(9000, attacker_id, state.adjacency[city.id][0], city.id, manpower)
+	state.armies.append(army)
+	sim._start_or_join_siege(army, city, state.edge_of(army.move_from, city.id))
+	check(state.battles.size() == 1, "actual siege entry")
+	var battle: Battle = state.battles[0]
+	battle.assault_dice = PackedInt32Array([0, 0, 0, 0])
+	return {"state": state, "sim": sim, "city": city, "army": army, "battle": battle}
+
+func troop(id: int, owner: int, origin: int, target: int, size: int) -> Army:
+	var army := Army.new()
+	army.id = id
+	army.owner_nation = owner
+	army.location_city = origin
+	army.move_from = origin
+	army.move_to = target
+	army.size = size
+	army.max_size = size
+	army.morale = 2.0
+	army.max_morale = 2.0
+	army.supply_ratio = 1.0
+	return army
+
+func run() -> void:
+	var f := fixture(1000, 2900)
+	var sim: Simulation = f.sim
+	var battle: Battle = f.battle
+	sim._resolve_battles()
+	check(battle.round_no == 0, "below R remains blockade")
+	var reinforcement := troop(9001, f.army.owner_nation, f.army.move_from, f.city.id, 100)
+	f.state.armies.append(reinforcement)
+	sim._start_or_join_siege(reinforcement, f.city, battle.edge)
+	check(f.state.battles.size() == 1 and battle.side_a.has(reinforcement), "reinforcement joins same siege")
+	sim._resolve_battles()
+	check(battle.round_no == 1, "reinforcement immediately starts assault next resolution")
+	rows.append({"case": "reinforcement", "initial_garrison": 1000, "initial_attackers": 2900, "reinforcement": 100, "round_after_second_day": battle.round_no, "remaining_guard": f.city.garrison_manpower})
+	sim.free()
+	f = fixture(1000, 2997)
+	sim = f.sim
+	battle = f.battle
+	sim._resolve_battles()
+	check(battle.round_no == 0 and f.city.garrison_manpower == 998, "first blockade weakens guard")
+	sim._resolve_battles()
+	check(battle.round_no == 1, "lower garrison R starts assault next resolution")
+	rows.append({"case": "attrition_transition", "initial_guard": 1000, "attackers": 2997, "second_day_R": 2994, "round_after_second_day": battle.round_no})
+	sim.free()
+	f = fixture(1000, 4000)
+	sim = f.sim
+	battle = f.battle
+	f.army.starving = true
+	f.army.supply_ratio = 0.5
+	check(sim._siege_assault_manpower(battle) == 0, "partial ration excludes whole formation from current assault threshold")
+	sim._resolve_battles()
+	check(battle.round_no == 0, "4x raw manpower can remain blockade when not fully supplied")
+	f.army.starving = false
+	f.army.supply_ratio = 1.0
+	sim._resolve_battles()
+	check(battle.round_no == 1, "same siege resumes assault immediately after supply restoration")
+	rows.append({"case":"supply_restoration", "initial_guard":1000, "raw_attackers":4000,"partial_ration":0.5,"eligible_at_partial_ration":0,"round_after_restoration":battle.round_no})
+	sim.free()
+	for scenario in [{"size":45000,"defense":1.0}, {"size":60000,"defense":1.0}, {"size":90000,"defense":1.0}, {"size":60000,"defense":2.0}]:
+		var size: int = scenario.size
+		f = fixture(15000, 15000)
+		sim = f.sim
+		battle = f.battle
+		for index in range(1, size / 15000):
+			var joined := troop(9000+index, f.army.owner_nation, f.army.move_from, f.city.id, 15000)
+			f.state.armies.append(joined)
+			sim._start_or_join_siege(joined, f.city, battle.edge)
+		f.city.ruler_city_defense_multiplier = scenario.defense
+		Combat.battle_log_enabled = true
+		Combat.clear_battle_log()
+		var initial_R: int = f.state.campaign_attack_requirement(f.army.owner_nation, f.city.id, false)
+		var result := {"case": "assault", "initial_guard": 15000, "initial_attackers": size, "initial_R": initial_R, "defense_multiplier":scenario.defense, "formation_size":15000, "controlled_dice": [0,0,0,0], "supply": 1.0, "funding": 1.0, "snapshots": []}
+		for day in range(1, 501):
+			f.state.day = day
+			sim._resolve_battles()
+			if day in [1,30,90,180] or battle.finished:
+				result.snapshots.append({"day": day, "combat_rounds": battle.round_no, "guard": f.city.garrison_manpower, "attackers": battle.side_size(battle.side_a), "morale": battle.side_morale(battle.side_a), "finished": battle.finished, "winner": battle.winner_side})
+			if day == 1:
+				check(battle.round_no == 1, "3x and above enters assault immediately")
+				var log: Dictionary = Combat.battle_log[0]
+				result["first_round_frontline"] = log.frontline_strength_a
+				result["first_round_reserve"] = log.reserve_strength_a
+				result["first_round_guard_loss"] = 15000 - f.city.garrison_manpower
+			if battle.finished:
+				break
+		result["ended_by_day_500"] = battle.finished
+		rows.append(result)
+		Combat.battle_log_enabled = false
+		sim.free()
+	var output := {"seed": 94002, "scope": "controlled grid siege lifecycle, no AI/economy tick, fixed assault dice", "failures": failures, "cases": rows}
+	var file := FileAccess.open("res://.dbg/siege-transition-probe.json", FileAccess.WRITE)
+	file.store_string(JSON.stringify(output, "\t"))
+	print(JSON.stringify(output))
+	quit(1 if failures else 0)

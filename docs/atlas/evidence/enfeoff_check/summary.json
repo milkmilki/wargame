@@ -1,0 +1,104 @@
+{
+  "checked_on": "2026-10-12",
+  "base_commit": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "godot": "4.7.1.stable.official.a13da4feb",
+  "source_hashes": {
+    "scripts/ai/diplomacy_ai.gd": "3141d51ef6df6452e42aecd85cae1b8cc52133e5a96c715dd4e04429f9fef50b",
+    "scripts/core/family_tree.gd": "8f9e7d732a9c1caa4f617ce076c198ce7d7813f2c0dd09e910b265fded8777ce",
+    "scripts/core/prince_politics.gd": "2b7248bc77724fa660aef441098f7c743343d195b22c16b1205c77d3b1dd78e6",
+    "scripts/simulation/simulation.gd": "6911f060610675f7372f8e542a7a847e13ece5bc0275fa0b00bdb046511a295c",
+    "scripts/state/game_state.gd": "2e9ce435c5afaabe26e152e8071ea75eb2e95af6395cfc5152fc49453dd8834d",
+    "tests/atlas_enfeoff.gd": "27bae4c0bd20f088264655ac3bb9dbecdd6fa8013820cfcbff9cbe060c449667",
+    "tests/ruler_enfeoff_accession.gd": "d27a42f7744e6bff1db8f1dbc678a053734828f069b7870c8ef56363789b642c",
+    "scripts/model/army.gd": "8e99fe0fc5d6b8e948ca8d30ebce119fe54608f8615f25ca536264205080b877",
+    "scripts/core/combat.gd": "c2b51646dc84a30d07c66522e118ff803a20a9fea33f27631715eb318a2fbd4c",
+    "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+    "scripts/ai/army_power.gd": "52a85cc0686c4e828df7e89c2ad8ed342f40a0d4e3afa7506f445b583c840e4e"
+  },
+  "simulation": "atlas-enfeoff-check.json",
+  "regressions": [
+    {
+      "test": "enfeoff_shared_lineage",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3296,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\enfeoff_shared_lineage.log"
+    },
+    {
+      "test": "royal_title_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3172,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_title_lifecycle.log"
+    },
+    {
+      "test": "prince_politics",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2938,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\prince_politics.log"
+    },
+    {
+      "test": "ruler_enfeoff_accession",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2703,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_enfeoff_accession.log"
+    },
+    {
+      "test": "vassal_regular_military_ai",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2265,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\vassal_regular_military_ai.log"
+    },
+    {
+      "test": "atlas_enfeoff",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 55843,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_enfeoff.log"
+    }
+  ],
+  "failures": 0,
+  "natural_ai": {
+    "day": 30,
+    "overlord": 36,
+    "subject": 40,
+    "ruler_archetype": "puppet",
+    "days_observed": 365
+  },
+  "requested_transaction": {
+    "natural": false,
+    "overlord": 7,
+    "overlord_name": "云1",
+    "prince": 38,
+    "region_cities": [
+      6,
+      8,
+      15,
+      74,
+      112,
+      190,
+      191,
+      192,
+      193,
+      200,
+      201,
+      202,
+      276,
+      340,
+      341
+    ],
+    "subject": 40,
+    "subject_capital": 15,
+    "subject_name": "丏王"
+  },
+  "fixture_fix": "StaleAnnexState now extends GridFixture; rejected accession branch executes, 37 checks pass. No production behavior change.",
+  "limits": [
+    "Headless, no manual button click verification. Atlas has no manual enfeoffment button.",
+    "One natural seed observed for 365 days, not a 30-year audit.",
+    "Requested and natural grants belong to separate worlds."
+  ],
+  "delivery": "uncommitted, not pushed; graph updated"
+}

@@ -1,0 +1,226 @@
+{
+	"cases": [
+		{
+			"case": "reinforcement",
+			"initial_attackers": 2900,
+			"initial_garrison": 1000,
+			"reinforcement": 100,
+			"remaining_guard": 935,
+			"round_after_second_day": 1
+		},
+		{
+			"attackers": 2997,
+			"case": "attrition_transition",
+			"initial_guard": 1000,
+			"round_after_second_day": 1,
+			"second_day_R": 2994
+		},
+		{
+			"case": "supply_restoration",
+			"eligible_at_partial_ration": 0,
+			"initial_guard": 1000,
+			"partial_ration": 0.5,
+			"raw_attackers": 4000,
+			"round_after_restoration": 1
+		},
+		{
+			"case": "assault",
+			"controlled_dice": [
+				0,
+				0,
+				0,
+				0
+			],
+			"defense_multiplier": 1.0,
+			"ended_by_day_500": true,
+			"first_round_frontline": 15000,
+			"first_round_guard_loss": 313,
+			"first_round_reserve": 30000,
+			"formation_size": 15000,
+			"funding": 1.0,
+			"initial_R": 45000,
+			"initial_attackers": 45000,
+			"initial_guard": 15000,
+			"snapshots": [
+				{
+					"attackers": 44687,
+					"combat_rounds": 1,
+					"day": 1,
+					"finished": false,
+					"guard": 14687,
+					"morale": 1.9884836198447,
+					"winner": 0
+				},
+				{
+					"attackers": 38462,
+					"combat_rounds": 30,
+					"day": 30,
+					"finished": false,
+					"guard": 5610,
+					"morale": 1.70594134404065,
+					"winner": 0
+				},
+				{
+					"attackers": 37355,
+					"combat_rounds": 48,
+					"day": 48,
+					"finished": true,
+					"guard": 0,
+					"morale": 1.59972089419996,
+					"winner": 1
+				}
+			],
+			"supply": 1.0
+		},
+		{
+			"case": "assault",
+			"controlled_dice": [
+				0,
+				0,
+				0,
+				0
+			],
+			"defense_multiplier": 1.0,
+			"ended_by_day_500": true,
+			"first_round_frontline": 15000,
+			"first_round_guard_loss": 313,
+			"first_round_reserve": 45000,
+			"formation_size": 15000,
+			"funding": 1.0,
+			"initial_R": 45000,
+			"initial_attackers": 60000,
+			"initial_guard": 15000,
+			"snapshots": [
+				{
+					"attackers": 59687,
+					"combat_rounds": 1,
+					"day": 1,
+					"finished": false,
+					"guard": 14687,
+					"morale": 1.99137781292409,
+					"winner": 0
+				},
+				{
+					"attackers": 53462,
+					"combat_rounds": 30,
+					"day": 30,
+					"finished": false,
+					"guard": 5610,
+					"morale": 1.78430744767827,
+					"winner": 0
+				},
+				{
+					"attackers": 52355,
+					"combat_rounds": 48,
+					"day": 48,
+					"finished": true,
+					"guard": 0,
+					"morale": 1.70829069278868,
+					"winner": 1
+				}
+			],
+			"supply": 1.0
+		},
+		{
+			"case": "assault",
+			"controlled_dice": [
+				0,
+				0,
+				0,
+				0
+			],
+			"defense_multiplier": 1.0,
+			"ended_by_day_500": true,
+			"first_round_frontline": 15000,
+			"first_round_guard_loss": 313,
+			"first_round_reserve": 75000,
+			"formation_size": 15000,
+			"funding": 1.0,
+			"initial_R": 45000,
+			"initial_attackers": 90000,
+			"initial_guard": 15000,
+			"snapshots": [
+				{
+					"attackers": 89687,
+					"combat_rounds": 1,
+					"day": 1,
+					"finished": false,
+					"guard": 14687,
+					"morale": 1.99426190551585,
+					"winner": 0
+				},
+				{
+					"attackers": 83462,
+					"combat_rounds": 30,
+					"day": 30,
+					"finished": false,
+					"guard": 5610,
+					"morale": 1.85926190304416,
+					"winner": 0
+				},
+				{
+					"attackers": 82355,
+					"combat_rounds": 48,
+					"day": 48,
+					"finished": true,
+					"guard": 0,
+					"morale": 1.8108029253085,
+					"winner": 1
+				}
+			],
+			"supply": 1.0
+		},
+		{
+			"case": "assault",
+			"controlled_dice": [
+				0,
+				0,
+				0,
+				0
+			],
+			"defense_multiplier": 2.0,
+			"ended_by_day_500": true,
+			"first_round_frontline": 15000,
+			"first_round_guard_loss": 179,
+			"first_round_reserve": 45000,
+			"formation_size": 15000,
+			"funding": 1.0,
+			"initial_R": 45000,
+			"initial_attackers": 60000,
+			"initial_guard": 15000,
+			"snapshots": [
+				{
+					"attackers": 59375,
+					"combat_rounds": 1,
+					"day": 1,
+					"finished": false,
+					"guard": 14821,
+					"morale": 1.98547368421053,
+					"winner": 0
+				},
+				{
+					"attackers": 44493,
+					"combat_rounds": 30,
+					"day": 30,
+					"finished": false,
+					"guard": 9630,
+					"morale": 1.56672684118429,
+					"winner": 0
+				},
+				{
+					"attackers": 33498,
+					"combat_rounds": 84,
+					"day": 84,
+					"finished": true,
+					"guard": 0,
+					"morale": 1.01379310710456,
+					"winner": 1
+				}
+			],
+			"supply": 1.0
+		}
+	],
+	"failures": 0,
+	"scope": "controlled grid siege lifecycle, no AI/economy tick, fixed assault dice",
+	"seed": 94002
+}

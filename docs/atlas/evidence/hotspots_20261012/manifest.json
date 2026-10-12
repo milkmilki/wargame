@@ -1,0 +1,56 @@
+{
+  "ai_batch": 3,
+  "ai_interval": 15,
+  "days": 720,
+  "godot": {
+    "build": "official",
+    "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+    "hex": 263937,
+    "major": 4,
+    "minor": 7,
+    "patch": 1,
+    "status": "stable",
+    "string": "4.7.1-stable (official)",
+    "timestamp": 0
+  },
+  "initial_nations": 40,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "nodes": 1192,
+  "pid": 22476,
+  "rulers": true,
+  "scope": "headless synchronous compute with diagnostic profiling; no rendering or audit included",
+  "seed": 1,
+  "settlements": 484,
+  "source_hashes": {
+    "scripts/ai/diplomacy_ai.gd": "3141d51ef6df6452e42aecd85cae1b8cc52133e5a96c715dd4e04429f9fef50b",
+    "scripts/core/combat.gd": "c2b51646dc84a30d07c66522e118ff803a20a9fea33f27631715eb318a2fbd4c",
+    "scripts/core/pathfinding.gd": "05a6064996e1875629013c7fa52f7a6cba9662785a0b350dfe2f4dcd08085bba",
+    "scripts/core/trade_network.gd": "5038ea2867e96c0be57e8232129a4bf3c30950ef2254a714a15dced66861d83b",
+    "scripts/model/army.gd": "8e99fe0fc5d6b8e948ca8d30ebce119fe54608f8615f25ca536264205080b877",
+    "scripts/simulation/rules/reinforcement_phase.gd": "7298a82f44bcc38ddd2c381da3e040c61535fdad15b55fc1bf04c7eb72416af3",
+    "scripts/simulation/rules/supply_rules.gd": "ed2a852388cf79d87bc907d5524a428bee5679b8c43f9167760de05ff02430fa",
+    "scripts/simulation/simulation.gd": "6911f060610675f7372f8e542a7a847e13ece5bc0275fa0b00bdb046511a295c",
+    "scripts/state/game_state.gd": "dcf529a4e7d748e2e408d8d580c66f54b5dd15638cdc5f11fbc1ee0672065e73"
+  },
+  "trade": true,
+  "cpu": "Intel Core i5-14400F",
+  "head": "a71932a7d69bf1ed284cc18ed7e7b6f12a791914",
+  "branch": "feature/civ-atlas-godot",
+  "uncommitted": true,
+  "other_godot_processes_at_start": 0,
+  "profiler": {
+    "phase": true,
+    "runtime_spans": true,
+    "snapshot_substages": true
+  },
+  "completed": true,
+  "measurement_count": 1,
+  "cpu_affinity": "default, not pinned"
+}

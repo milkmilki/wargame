@@ -1,0 +1,3 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SUPPLY_ENDPOINT_REPRO {"arrived_sources":1,"confirmed":true,"marching_owned_endpoint_sources":1,"marching_ownerless_traffic_sources":0,"scope":"supplied precomputed warehouse field; endpoint access filter isolated, not full map pathfinding","warehouse_field_reaches_traffic_node":true}

@@ -1,0 +1,47 @@
+{
+	"actual_initial_map": "C:/Users/57859/AppData/Roaming/Godot/app_userdata/WorldWar/debug_runs/run-2026-10-11T06-36-47-30132-5928322-world1-map.json",
+	"city_records_mismatched": [],
+	"district_pixels": {
+		"replay": "6a4762886d66224453df2946c30b758227b45623e7daffa4cf72b0662b5617c5",
+		"same": true,
+		"user": "6a4762886d66224453df2946c30b758227b45623e7daffa4cf72b0662b5617c5"
+	},
+	"effective_edges_mismatched": [],
+	"graph": {
+		"replay": "b490bf5a1915c914266dc99c5616f0a54460b43fc9d526dac1404b7e6349dfdf",
+		"same": false,
+		"user": "13eb35219d0f9edf8cc24f6d90c0b424d4a8ad61f74e879d5c93d68ffc048f8b"
+	},
+	"hierarchy": {
+		"replay": "f1f02ad2dc49ab37f1eb6a7e57e6a95b98d452a2b534bb6b1113bda398dd61b9",
+		"same": true,
+		"user": "f1f02ad2dc49ab37f1eb6a7e57e6a95b98d452a2b534bb6b1113bda398dd61b9"
+	},
+	"initial_rng": "4982495298212809567",
+	"network": {
+		"replay": "6e4e4b5533048d53cc2f9ea7dbf4e292847f9427be6d4fe7c40669ca9bebaa4f",
+		"same": true,
+		"user": "6e4e4b5533048d53cc2f9ea7dbf4e292847f9427be6d4fe7c40669ca9bebaa4f"
+	},
+	"ownership": {
+		"replay": "e97eb72c93aaf1db9ad368bc69e2736026b89afd2415389c9d3d51fa078a973c",
+		"same": true,
+		"user": "e97eb72c93aaf1db9ad368bc69e2736026b89afd2415389c9d3d51fa078a973c"
+	},
+	"rulers_mismatched": [],
+	"settlement_adjacency": {
+		"replay": "82062f8745d6ef183d5a2457c252c3fdc6b146be71b1e5ee208c86a102d3de56",
+		"same": true,
+		"user": "82062f8745d6ef183d5a2457c252c3fdc6b146be71b1e5ee208c86a102d3de56"
+	},
+	"strategic_routes": {
+		"replay": "2cf4e660f092bf461a18c224bd0dd1da4ab2dad2263aa2d1a75d3e78b4374670",
+		"same": true,
+		"user": "2cf4e660f092bf461a18c224bd0dd1da4ab2dad2263aa2d1a75d3e78b4374670"
+	},
+	"territorial_pairs": {
+		"replay": "17a19494427ea68cde0baf8ab85f2e3692204dd129e203da573e74ea5fa1ff82",
+		"same": true,
+		"user": "17a19494427ea68cde0baf8ab85f2e3692204dd129e203da573e74ea5fa1ff82"
+	}
+}

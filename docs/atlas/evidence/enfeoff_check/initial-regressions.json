@@ -1,0 +1,42 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "enfeoff_shared_lineage",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3296,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\enfeoff_shared_lineage.log"
+    },
+    {
+      "test": "royal_title_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3172,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_title_lifecycle.log"
+    },
+    {
+      "test": "prince_politics",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2938,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\prince_politics.log"
+    },
+    {
+      "test": "ruler_enfeoff_accession",
+      "ok": false,
+      "exit_code": 0,
+      "elapsed_ms": 2797,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_enfeoff_accession.log"
+    },
+    {
+      "test": "vassal_regular_military_ai",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2265,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\vassal_regular_military_ai.log"
+    }
+  ],
+  "failures": 1
+}

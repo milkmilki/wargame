@@ -1,0 +1,36 @@
+{
+  "attacker": 17,
+  "center": 45,
+  "defender": 16,
+  "fixture": "controlled blockade, territory capture/return and relief on real Earth; manually positioned troops",
+  "front": 0,
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "pid": 26640,
+  "renderer": "AMD Radeon RX 7600",
+  "seed": 1,
+  "source_hashes": {
+    "scripts/atlas/information_model.gd": "66f5761e85525568d634f2dcb71b82f209bcdd73829c9e5063a2c155499f98f9",
+    "scripts/core/combat.gd": "44431cf893c296cf78d21aa66f06775dbd928f177669e406f80ea0ccbe80cdd7",
+    "scripts/core/pathfinding.gd": "b22d99ffe7d4de2dcbf1307bce00022e370b94d61022ce825e150ec28f2acc4a",
+    "scripts/simulation/rules/simple_campaign.gd": "ff515c5fb16140770994e3eacae68347edc4b2dd13453f0b192319898a59d905",
+    "scripts/simulation/simulation.gd": "48b9ffc9227e2fd8ae798a486f2f9572293f6413a82da3f6f26d1ebd5cc1d2b6",
+    "tests/campaign_simple_visual.gd": "d060949660a425cff31478d579d530ee4524467adb85aa07c5ecf1fe99ca862b"
+  },
+  "tasks": {
+    "1000000": {
+      "status": 0,
+      "target": 243
+    },
+    "1000001": {
+      "status": 1,
+      "target": 244
+    }
+  }
+}
