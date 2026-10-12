@@ -296,6 +296,17 @@ func _test_summary_token_scope() -> void:
 		_counter_detail(sim)
 	)
 	army.size = maxi(army.size / 2, 1)
+	var casualties_only := sim._forecast_trade_and_gold_flows(true)
+	_check(
+		casualties_only == first
+			and sim.trade_forecast_build_total == builds_before
+			and sim.trade_forecast_cache_hit_total == hits_before + 3,
+		"summary_token/field_casualties_keep_establishment_upkeep",
+		_counter_detail(sim)
+	)
+	# Surviving field formations pay for max_size, not their current headcount.
+	# Change the establishment to exercise an actual upkeep invalidation.
+	army.max_size = army.size
 	var army_changed := sim._forecast_trade_and_gold_flows(true)
 	var direct_structure := TradeNetwork.build_structure(state)
 	var direct_summary := TradeNetwork.settle_nation_summary(

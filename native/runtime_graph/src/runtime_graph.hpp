@@ -42,6 +42,13 @@ public:
             const PackedFloat64Array &constants) const;
     Dictionary pack_owner_inputs(const Array &cities) const;
 
+    // Read live administrative topology once, then compute each country's
+    // zero/one-hop field. This boundary query does not use cached CSR topology.
+    Dictionary query_administrative_fields(const Array &cities,
+            const Dictionary &adjacency, const Dictionary &edge_lookup,
+            const PackedInt32Array &nations, const PackedInt32Array &capitals,
+            int64_t traffic_kind) const;
+
     Dictionary query_travel(int64_t start, const PackedFloat64Array &costs,
             const PackedByteArray &enabled, double horizon) const;
 

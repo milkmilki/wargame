@@ -247,6 +247,9 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::pack_edge_inputs);
     ClassDB::bind_method(D_METHOD("pack_owner_inputs", "cities"),
             &NativeGraphSnapshot::pack_owner_inputs);
+    ClassDB::bind_method(D_METHOD("query_administrative_fields", "cities", "adjacency",
+            "edge_lookup", "nations", "capitals", "traffic_kind"),
+            &NativeGraphSnapshot::query_administrative_fields);
     ClassDB::bind_method(D_METHOD("query_travel", "start", "costs", "enabled", "horizon"),
             &NativeGraphSnapshot::query_travel);
     ClassDB::bind_method(D_METHOD("query_path", "start", "extra_origins", "costs", "enabled", "accessible",
@@ -265,7 +268,7 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::query_connectivity_filtered);
 }
 
-int64_t NativeGraphSnapshot::api_version() const { return 2; }
+int64_t NativeGraphSnapshot::api_version() const { return 3; }
 
 bool NativeGraphSnapshot::configure(const PackedInt32Array &p_offsets,
         const PackedInt32Array &p_targets, const PackedInt32Array &p_edge_ids,
@@ -411,6 +414,101 @@ Dictionary NativeGraphSnapshot::pack_owner_inputs(const Array &cities) const {
     Dictionary result;
     result["owners"] = owners;
     result["unique"] = unique;
+    return result;
+}
+
+Dictionary NativeGraphSnapshot::query_administrative_fields(const Array &cities,
+        const Dictionary &adjacency, const Dictionary &edge_lookup,
+        const PackedInt32Array &nations, const PackedInt32Array &capitals,
+        int64_t traffic_kind) const {
+    const int64_t nodes = cities.size();
+    if (nodes > std::numeric_limits<int32_t>::max() || nations.size() != capitals.size())
+        return error_result("Invalid administrative field array sizes.");
+    std::vector<int64_t> owners(nodes);
+    std::vector<uint8_t> traffic(nodes);
+    const StringName owner_name("owner_nation"), kind_name("node_kind");
+    const StringName capacity_name("max_manpower"), control_name("control_city_id");
+    for (int64_t i = 0; i < nodes; ++i) {
+        const Variant entry = cities[i];
+        Object *city = entry.get_type() == Variant::OBJECT ? static_cast<Object *>(entry) : nullptr;
+        if (!city) return error_result("Null or nonobject administrative city.");
+        const Variant owner = city->get(owner_name), kind = city->get(kind_name);
+        if (owner.get_type() != Variant::INT || kind.get_type() != Variant::INT)
+            return error_result("Administrative city owner and node kind must be integers.");
+        owners[i] = int64_t(owner);
+        traffic[i] = int64_t(kind) == traffic_kind;
+    }
+    // Copy the actual directed adjacency in its original order. Reading this
+    // live graph also observes direct edits without relying on road revisions.
+    std::vector<int64_t> row_offsets{0};
+    std::vector<int32_t> row_targets;
+    std::vector<int64_t> control_owners;
+    std::unordered_map<Object *, int64_t> edge_controls;
+    for (int64_t from = 0; from < nodes; ++from) {
+        const Variant neighbors_value = adjacency.get(from, Array());
+        if (neighbors_value.get_type() != Variant::ARRAY)
+            return error_result("Administrative adjacency rows must be arrays.");
+        const Array neighbors = neighbors_value;
+        for (int64_t index = 0; index < neighbors.size(); ++index) {
+            const Variant neighbor = neighbors[index];
+            if (neighbor.get_type() != Variant::INT || int64_t(neighbor) < 0 || int64_t(neighbor) >= nodes)
+                return error_result("Invalid administrative adjacency target.");
+            const int64_t to = int64_t(neighbor);
+            const int64_t key = (std::min(from, to) << 32) | std::max(from, to);
+            const Variant entry = edge_lookup.get(key, Variant());
+            if (entry.get_type() == Variant::NIL) continue;
+            Object *edge = entry.get_type() == Variant::OBJECT ? static_cast<Object *>(entry) : nullptr;
+            if (!edge) return error_result("Nonobject administrative road.");
+            auto cached = edge_controls.find(edge);
+            if (cached == edge_controls.end()) {
+                const Variant capacity = edge->get(capacity_name), control = edge->get(control_name);
+                if (capacity.get_type() != Variant::INT || control.get_type() != Variant::INT)
+                    return error_result("Administrative road capacity and control must be integers.");
+                const int64_t control_id = int64_t(control);
+                const int64_t owner = int64_t(capacity) > 0 && control_id >= 0 && control_id < nodes
+                        && !traffic[control_id] ? owners[control_id] : -1;
+                cached = edge_controls.emplace(edge, owner).first;
+            }
+            if (cached->second < 0) continue;
+            row_targets.push_back(int32_t(to));
+            control_owners.push_back(cached->second);
+        }
+        row_offsets.push_back(row_targets.size());
+    }
+    Dictionary fields;
+    for (int64_t index = 0; index < nations.size(); ++index) {
+        const int32_t nation = nations[index], capital = capitals[index];
+        Dictionary field;
+        if (nation >= 0 && capital >= 0 && capital < nodes && !traffic[capital] && owners[capital] == nation) {
+            std::vector<int32_t> distance(nodes, -1), current{capital};
+            distance[capital] = 0;
+            int32_t level = 0;
+            // Match the reference's two FIFO queues, including dictionary
+            // insertion order. Traffic never counts as an administrative hop.
+            while (!current.empty()) {
+                std::vector<int32_t> next;
+                for (size_t cursor = 0; cursor < current.size(); ++cursor) {
+                    const int32_t node = current[cursor];
+                    if (distance[node] != level) continue;
+                    if (!traffic[node]) field[node] = level;
+                    for (int64_t arc = row_offsets[node]; arc < row_offsets[node + 1]; ++arc) {
+                        const int32_t neighbor = row_targets[arc];
+                        if (control_owners[arc] != nation || (!traffic[neighbor] && owners[neighbor] != nation)) continue;
+                        const int32_t candidate = level + (traffic[neighbor] ? 0 : 1);
+                        if (distance[neighbor] >= 0 && distance[neighbor] <= candidate) continue;
+                        distance[neighbor] = candidate;
+                        if (candidate == level) current.push_back(neighbor);
+                        else next.push_back(neighbor);
+                    }
+                }
+                current = std::move(next);
+                ++level;
+            }
+        }
+        fields[nation] = field;
+    }
+    Dictionary result;
+    result["fields"] = fields;
     return result;
 }
 

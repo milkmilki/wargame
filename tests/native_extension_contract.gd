@@ -21,8 +21,8 @@ func _initialize() -> void:
 	check(ClassDB.class_exists("NativeGraphSnapshot"), "native snapshot registered")
 	if ClassDB.class_exists("NativeGraphSnapshot"):
 		var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-		check(graph.call("api_version") == 2, "native API version 2")
-		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs"]:
+		check(graph.call("api_version") == 3, "native API version 3")
+		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields"]:
 			check(graph.has_method(method), "native method " + method)
 		check(graph.call("configure", PackedInt32Array([0, 0]), PackedInt32Array(), PackedInt32Array(), PackedInt32Array(), PackedFloat64Array([0.0, 0.0, 0.5, 0.0, 0.0])), "empty-edge snapshot configures")
 	var descriptor := ConfigFile.new()
@@ -42,7 +42,7 @@ func _run_error_probe(mode: String) -> void:
 	var source := FileAccess.get_file_as_string("res://scripts/core/native_compute.gd")
 	source = source.replace("class_name NativeCompute\n", "")
 	if mode == "api_mismatch":
-		source = source.replace("const API_VERSION := 2", "const API_VERSION := 999")
+		source = source.replace("const API_VERSION := 3", "const API_VERSION := 999")
 	elif mode == "missing":
 		NativeCompute.clear_caches_for_tests()
 		if ClassDB.class_exists("NativeGraphSnapshot"):

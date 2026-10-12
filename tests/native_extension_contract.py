@@ -102,12 +102,16 @@ def export_project(godot: Path, template: Path) -> tuple[Path, dict]:
     (project / "main.tscn").write_text('[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="res://tests/native_extension_release.gd" id="1"]\n[node name="Contract" type="Node"]\nscript=ExtResource("1")\n', encoding="utf-8")
     preset = '[preset.0]\nname="NativeContract"\nplatform="Windows Desktop"\nrunnable=true\nexport_filter="all_resources"\ninclude_filter=""\nexclude_filter=""\nexport_path=""\nscript_export_mode=2\n[preset.0.options]\ncustom_template/debug=""\ncustom_template/release="%s"\nbinary_format/architecture="x86_64"\nbinary_format/embed_pck=false\ndebug/export_console_wrapper=0\napplication/modify_resources=false\n' % template.as_posix()
     (project / "export_presets.cfg").write_text(preset, encoding="utf-8")
+    # First-scan extension docs can still be queued when 4.7.1 --import quits
+    # (godot-cpp #2024). Let editor frames drain before the strict import check.
+    warmed = run([godot, "--headless", "--editor", "--path", project,
+                  "--quit-after", "120", "--max-fps", "20"], cwd=project, timeout=180)
     imported = run([godot, "--headless", "--editor", "--path", project, "--import"], cwd=project, timeout=180)
     output = project / "output"
     output.mkdir()
     exported = run([godot, "--headless", "--path", project, "--export-release", "NativeContract", output / "contract.exe"],
                    cwd=project, timeout=180)
-    return output, {"import": imported, "export": exported}
+    return output, {"warm_editor": warmed, "import": imported, "export": exported}
 
 
 def main() -> None:

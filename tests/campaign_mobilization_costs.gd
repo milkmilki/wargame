@@ -58,7 +58,45 @@ func run():
 	check(sim._campaign_mobilization_claims().is_empty(),"no campaign tasks require no mobilization")
 	check(state.eligibility_checks.is_empty(),"no campaigns do not inspect stale bound armies")
 	sim.free()
+	pending_requirements()
 	print("MOBILIZATION_COSTS failures=",failures); quit(1 if failures else 0)
+
+func pending_requirements():
+	var state := fixture(0); state.campaign_fronts.clear()
+	for id in range(2,4):
+		var city := City.new(); city.id = id; city.owner_nation = 1
+		city.map_position = Vector2(.6+id*.05,.5); state.cities.append(city)
+	state.region_count = 1; state.region_ids = PackedInt32Array([0,0,0,0])
+	state.administrative_center_by_city = PackedInt32Array([0,1,2,3])
+	state.administrative_center_city_ids = PackedInt32Array([0,1,2,3])
+	state.recognized_city_owners = PackedInt32Array([0,1,1,1])
+	for nation in state.nations: nation.strategic_region_anchor_city_id = nation.capital_city_id
+	for center in [1,2,3]: state.cities[center].garrison_manpower = 18000
+	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.WAR)
+	# Each pair respects the production limit of two slots; the actor must
+	# evaluate multiple administrative states across a single read-only call.
+	for id in range(2):
+		var pair := CoalitionCampaignPair.new(); pair.pair_id = id; pair.war_id = 7
+		pair.side_a_nation_ids = [0]; pair.side_b_nation_ids = [1]
+		for center in ([1,2] if id==0 else [3]):
+			pair.battlefields.append(CoalitionCampaignPair.make_battlefield(center,-1))
+		state.campaign_pairs[id] = pair
+	for index in range(100): army(state,0,10000)
+	for center in [1,2,3]: army(state,1,10000).location_city = center
+	var sim := simulation(state)
+	for scenario in ["ordinary","conqueror","strong_enemy"]:
+		if scenario == "conqueror": state.nations[0].ruler_archetype = RulerProfile.CONQUEROR
+		if scenario == "strong_enemy":
+			for unit in state.armies:
+				if unit.owner_nation == 1: unit.size = 500000
+		state.eligibility_checks.clear()
+		var claims := sim._campaign_mobilization_claims(); var reserved := 0; var scans := 0
+		for unit in state.armies:
+			if unit.owner_nation == 0 and claims.has(unit.id): reserved += unit.size
+		for count in state.eligibility_checks.values(): scans += int(count)
+		check(reserved == {"ordinary":170000,"conqueror":140000,"strong_enemy":680000}[scenario],"pending reservations preserve exact siege, ruler and field thresholds: "+scenario)
+		check(scans <= state.armies.size()*3,"pending states share one reinforcement index per actor: "+scenario)
+	sim.free()
 func benchmark():
 	# Reuse a real EURASIA workload without generating or saving another world.
 	var directory:="res://.dbg/native-runtime/"

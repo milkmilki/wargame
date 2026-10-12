@@ -157,7 +157,7 @@ func _owner_cases() -> void:
 
 func _control_cases() -> void:
 	var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-	check(graph.call("api_version") == 2, "live controls require API version 2")
+	check(graph.call("api_version") == 3, "native administrative batches require API version 3")
 	check(graph.call("configure", PackedInt32Array([0, 0, 0, 0]), PackedInt32Array(), PackedInt32Array(), PackedInt32Array([0, 0]), PackedFloat64Array([0.,0.,0.,0.,0., 0.,0.,0.,0.,0., 0.,0.,0.,0.,0.])), "live control snapshot configures")
 	var edge_a := Edge.new()
 	var edge_b := Edge.new()

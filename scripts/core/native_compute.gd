@@ -2,7 +2,7 @@ class_name NativeCompute
 extends RefCounted
 ## Native runtime graph boundary. Gameplay objects, access rules and side effects
 ## stay in GDScript; the extension only reads immutable packed query inputs.
-const API_VERSION := 2
+const API_VERSION := 3
 const EXTENSION_PATH := "res://native/runtime_graph/runtime_graph.gdextension"
 static var _override := ""
 static var _graphs: Dictionary = {}
@@ -131,7 +131,7 @@ static func require_native() -> bool:
 		_fatal("NativeGraphSnapshot is missing. Build the Godot 4.7.1 extension with scripts/tools/build_native_compute.py.")
 		return false
 	var probe: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs"):
+	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields"):
 		_fatal("NativeGraphSnapshot API version mismatch; rebuild the extension.")
 		return false
 	return true
@@ -465,6 +465,36 @@ static func end_trade_batch(state: GameState) -> void:
 	_mutex.lock()
 	_trade_batches.erase(state.get_instance_id())
 	_mutex.unlock()
+
+## One frozen fiscal batch. Integer fields retain the reference queue order;
+## live adjacency and model properties are packed inside the native call.
+static func administrative_fields(state: GameState, nations: Array[int]) -> Dictionary:
+	var reference := {}
+	if backend() == "gdscript" or state.atlas_layout.is_empty():
+		for nation in nations: reference[nation] = RebellionSystem.capital_hops(state,nation)
+		return reference
+	if not require_native(): return {}
+	var started := _profile_start()
+	var capitals := PackedInt32Array()
+	for nation in nations:
+		var capital := (
+			state.nations[nation].capital_city_id
+			if nation >= 0 and nation < state.nations.size() and state.nations[nation].alive
+			else -1
+		)
+		capitals.append(capital if capital >= 0 and capital < state.cities.size() else -1)
+	var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
+	_record_profile("administrative_fields", "pack", started)
+	started = _profile_start()
+	var result: Dictionary = graph.call(
+		"query_administrative_fields", state.cities, state.adjacency,
+		state.edge_lookup, PackedInt32Array(nations), capitals, City.NodeKind.TRAFFIC
+	)
+	var fields: Dictionary = _finish_result(result,"administrative_fields",started).get("fields",{})
+	if backend() == "compare":
+		for nation in nations: reference[nation] = RebellionSystem.capital_hops(state,nation)
+		verify_equal(reference,fields,"administrative_fields")
+	return fields
 
 static func connectivity(snapshot: StrategicMapSnapshot, roots: Array[int]) -> Dictionary:
 	var started := _profile_start()

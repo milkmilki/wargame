@@ -1540,12 +1540,30 @@ static func monthly_garrison_upkeep_by_nation(
 		):
 			continue
 		(centers_by_nation[city.owner_nation] as Array[int]).append(center_id)
+	var native_fields := {}
+	# Custom states may override capital_hop_distances. Keep their callback;
+	# the canonical Atlas state can pack the live road graph once for the batch.
+	if (
+		not game_state.atlas_layout.is_empty()
+		and game_state.get_script().resource_path == "res://scripts/state/game_state.gd"
+		and NativeCompute.backend() != "gdscript"
+	):
+		var active_nations: Array[int] = []
+		for nation_id in range(result.size()):
+			if not (centers_by_nation[nation_id] as Array[int]).is_empty():
+				active_nations.append(nation_id)
+		if not active_nations.is_empty():
+			native_fields = NativeCompute.administrative_fields(game_state,active_nations)
 	for nation_id in range(result.size()):
 		var centers: Array[int] = centers_by_nation[nation_id]
 		if centers.is_empty():
 			continue
 		var nation := game_state.nations[nation_id]
-		var hops := game_state.capital_hop_distances(nation_id)
+		var hops: Dictionary = (
+			native_fields[nation_id]
+			if native_fields.has(nation_id)
+			else game_state.capital_hop_distances(nation_id)
+		)
 		var cost_context := {
 			"administrative_radius":
 				RebellionSystem.administrative_radius(nation),
@@ -8897,6 +8915,9 @@ func _campaign_mobilization_claims() -> Dictionary:
 	var needs := {}
 	var members_by_key := {}
 	var effective_by_front := {}
+	# Planning may already have moved armies. Build fresh read-only requirement
+	# indexes for this reservation pass, then share them across its pending slots.
+	var requirement_cache := {}
 	var deficits: Dictionary = _coalition_campaign_query_cache.get("allocation_deficits", {})
 	for army in state.armies:
 		if army.campaign_front_id >= 0 and not deficits.has(army.campaign_front_id) and state.army_effective_for_field_campaign(army):
@@ -8928,7 +8949,11 @@ func _campaign_mobilization_claims() -> Dictionary:
 				if front != null:
 					requirement = front.reported_requirement if front.combat_report_day >= 0 else _front_requirement(front)
 				elif not counterattack:
-					requirement = maxi(requirement, state.campaign_attack_requirement(actor, center))
+					requirement = state.campaign_offense_manpower(actor,
+						DiplomacyAI._cached_campaign_siege_requirement(
+							state, actor, center, requirement_cache),
+						DiplomacyAI._cached_campaign_reinforcement_threat(
+							state, actor, center, requirement_cache))
 				var committed := int(effective_by_front.get(front.front_id, 0)) if front != null else 0
 				var key := "%d:%s" % [pair.war_id, str(members)]
 				var shortage := int(deficits[front.front_id]) if front != null and deficits.has(front.front_id) else maxi(requirement - committed, 0)
