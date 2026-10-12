@@ -21,10 +21,10 @@ func _initialize() -> void:
 	check(ClassDB.class_exists("NativeGraphSnapshot"), "native snapshot registered")
 	if ClassDB.class_exists("NativeGraphSnapshot"):
 		var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-		check(graph.call("api_version") == 6, "native API version 6")
+		check(graph.call("api_version") == 7, "native API version 7")
 		var logistics: Dictionary = graph.call("query_logistics_access", PackedInt64Array([0, 2, -1, 1 << 40]), PackedInt64Array([1, 2, -1, 1 << 40]), PackedByteArray([0, 0, 1]), {"0:1": 2, "0:2": 2}, 2, 1)
 		check(var_to_bytes(logistics) == var_to_bytes({"supported": true, "rows": [PackedByteArray([1, 0, 0, 0]), PackedByteArray([0, 1, 0, 0]), PackedByteArray([0, 0, 1, 0]), PackedByteArray([0, 0, 0, 1])]}), "release logistics preserves identity rules and wide invalid roots")
-		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields", "query_key_order", "pack_trade_city_inputs", "query_logistics_access"]:
+		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields", "query_key_order", "pack_trade_city_inputs", "query_logistics_access", "query_city_partitions"]:
 			check(graph.has_method(method), "native method " + method)
 		check(graph.call("configure", PackedInt32Array([0, 0]), PackedInt32Array(), PackedInt32Array(), PackedInt32Array(), PackedFloat64Array([0.0, 0.0, 0.5, 0.0, 0.0])), "empty-edge snapshot configures")
 		var city := City.new()
@@ -33,6 +33,10 @@ func _initialize() -> void:
 		city.garrison_manpower = (1 << 35) + 1
 		city.garrison_supply_ratio = -0.0
 		city.war_disruption_until_day = 51
+		var payload: Array[City] = [city, city]
+		var empty: Array[City] = []
+		var groups: Dictionary = graph.call("query_city_partitions", payload, PackedInt64Array([city.id, city.id]), PackedInt64Array([1 << 40, 0]), PackedByteArray([0, 0]), 0, {1 << 40: 2}, {}, true)
+		check(var_to_bytes(groups) == var_to_bytes({"friendly": [city] as Array[City], "enemy": empty, "allied": empty, "neutral": empty}), "release city groups retain types and own hidden cities")
 		for include_food in [false, true]:
 			var records := PackedInt64Array([city.id, city.garrison_manpower, 1])
 			var ratios := PackedFloat64Array()
@@ -68,7 +72,7 @@ func _run_error_probe(mode: String) -> void:
 	var source := FileAccess.get_file_as_string("res://scripts/core/native_compute.gd")
 	source = source.replace("class_name NativeCompute\n", "")
 	if mode == "api_mismatch":
-		source = source.replace("const API_VERSION := 6", "const API_VERSION := 999")
+		source = source.replace("const API_VERSION := 7", "const API_VERSION := 999")
 	elif mode == "missing":
 		NativeCompute.clear_caches_for_tests()
 		if ClassDB.class_exists("NativeGraphSnapshot"):

@@ -6967,7 +6967,9 @@ func _prepare_ai_view_phase(
 		if ai_policy_overrides.is_empty()
 		else {}
 	)
-	if not shared_army_index.is_empty(): shared_army_index["profile_view"] = runtime_stage_profiling_enabled
+	if not shared_army_index.is_empty():
+		shared_army_index["profile_view"] = runtime_stage_profiling_enabled
+		shared_army_index["city_partition_inputs"] = NativeCompute.city_partition_inputs(state)
 	_record_tick_profile_stage(
 		"ai_shared_army_index",
 		ai_view_detail_started

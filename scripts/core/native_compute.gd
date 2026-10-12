@@ -2,7 +2,7 @@ class_name NativeCompute
 extends RefCounted
 ## Native runtime graph boundary. Gameplay objects, financial identities and
 ## side effects stay in GDScript; kernels only read their query inputs.
-const API_VERSION := 6
+const API_VERSION := 7
 const EXTENSION_PATH := "res://native/runtime_graph/runtime_graph.gdextension"
 static var _override := ""
 static var _graphs: Dictionary = {}
@@ -131,7 +131,7 @@ static func require_native() -> bool:
 		_fatal("NativeGraphSnapshot is missing. Build the Godot 4.7.1 extension with scripts/tools/build_native_compute.py.")
 		return false
 	var probe: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order") or not probe.has_method("pack_trade_city_inputs") or not probe.has_method("query_logistics_access"):
+	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order") or not probe.has_method("pack_trade_city_inputs") or not probe.has_method("query_logistics_access") or not probe.has_method("query_city_partitions"):
 		_fatal("NativeGraphSnapshot API version mismatch; rebuild the extension.")
 		return false
 	return true
@@ -575,6 +575,43 @@ static func logistics_access_rows(state: GameState, travelers: Array[int]) -> Di
 			reference[traveler] = row
 		verify_equal(reference, rows, "logistics_access")
 	return rows
+
+
+## The AI view phase owns this snapshot; it is never cached across phases.
+static func city_partition_inputs(state: GameState) -> Dictionary:
+	if backend() == "gdscript" or state.atlas_layout.is_empty() or state.get_script().resource_path != "res://scripts/state/game_state.gd": return {}
+	var ids := PackedInt64Array(); var owners := PackedInt64Array(); var traffic := PackedByteArray()
+	var owner_ids: Array[int] = []; var seen := {}
+	for city in state.cities:
+		var owner := city.owner_nation; var is_traffic := city.is_traffic
+		ids.append(city.id); owners.append(owner); traffic.append(int(is_traffic))
+		if not is_traffic and not seen.has(owner):
+			seen[owner] = true; owner_ids.append(owner)
+	return {"state_id": state.get_instance_id(), "cities": state.cities, "ids": ids, "owners": owners, "traffic": traffic, "owner_ids": owner_ids}
+
+
+static func city_partitions(state: GameState, nation: int, inputs: Dictionary, visible: Dictionary, limited: bool) -> Dictionary:
+	if backend() == "gdscript" or inputs.is_empty() or int(inputs.get("state_id", -1)) != state.get_instance_id() or state.get_script().resource_path != "res://scripts/state/game_state.gd": return {}
+	if not require_native(): return {}
+	var relations := {}
+	for owner in inputs["owner_ids"]:
+		if owner != nation:
+			relations[owner] = 1 if state.is_external_enemy(nation, owner) else 2 if state.is_allied(nation, owner) else 0
+	var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
+	var started := _profile_start()
+	var result := _finish_result(graph.call("query_city_partitions", inputs["cities"], inputs["ids"], inputs["owners"], inputs["traffic"], nation, relations, visible, limited), "city_partitions", started)
+	if backend() == "compare":
+		var friendly: Array[City] = []; var enemy: Array[City] = []
+		var allied: Array[City] = []; var neutral: Array[City] = []
+		for city in state.cities:
+			if city.is_traffic: continue
+			if city.owner_nation == nation: friendly.append(city)
+			elif limited and not visible.has(city.id): continue
+			elif state.is_external_enemy(nation, city.owner_nation): enemy.append(city)
+			elif state.is_allied(nation, city.owner_nation): allied.append(city)
+			else: neutral.append(city)
+		verify_equal({"friendly": friendly, "enemy": enemy, "allied": allied, "neutral": neutral}, result, "city_partitions")
+	return result
 
 
 static func connectivity(snapshot: StrategicMapSnapshot, roots: Array[int]) -> Dictionary:

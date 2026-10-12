@@ -49,6 +49,10 @@ public:
     Dictionary query_logistics_access(const PackedInt64Array &travelers,
             const PackedInt64Array &owners, const PackedByteArray &identities,
             const Dictionary &relations, int64_t allied, int64_t missing) const;
+    Dictionary query_city_partitions(const Array &cities, const PackedInt64Array &ids,
+            const PackedInt64Array &owners, const PackedByteArray &traffic,
+            int64_t nation, const Dictionary &relations, const Dictionary &visible,
+            bool limited) const;
 
     // Read live administrative topology once, then compute each country's
     // zero/one-hop field. This boundary query does not use cached CSR topology.

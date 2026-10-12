@@ -175,22 +175,29 @@ static func build(
 		visible_city_ids = _visible_city_ids(
 			game_state, owner_nation, visibility_hops
 		)
-		var relations := {}
-		for city in game_state.cities:
-			# Road junctions are neutral transport geometry, never strategic cities.
-			# Their unassigned owner (-1) otherwise classifies them as enemy cities.
-			if city.is_traffic: continue
-			if city.owner_nation == owner_nation:
-				view.friendly_cities.append(city)
-			elif visibility_hops >= 0 and not visible_city_ids.has(city.id):
-				continue
-			else:
-				if not relations.has(city.owner_nation):
-					relations[city.owner_nation] = 1 if game_state.is_external_enemy(owner_nation,city.owner_nation) else 2 if game_state.is_allied(owner_nation,city.owner_nation) else 0
-				match relations[city.owner_nation]:
-					1: view.enemy_cities.append(city)
-					2: view.allied_cities.append(city)
-					_: view.neutral_cities.append(city)
+		var partitions := NativeCompute.city_partitions(game_state, owner_nation, shared_army_index.get("city_partition_inputs", {}), visible_city_ids, visibility_hops >= 0)
+		if not partitions.is_empty():
+			view.friendly_cities = partitions["friendly"]
+			view.enemy_cities = partitions["enemy"]
+			view.allied_cities = partitions["allied"]
+			view.neutral_cities = partitions["neutral"]
+		else:
+			var relations := {}
+			for city in game_state.cities:
+				# Road junctions are neutral transport geometry, never strategic cities.
+				# Their unassigned owner (-1) otherwise classifies them as enemy cities.
+				if city.is_traffic: continue
+				if city.owner_nation == owner_nation:
+					view.friendly_cities.append(city)
+				elif visibility_hops >= 0 and not visible_city_ids.has(city.id):
+					continue
+				else:
+					if not relations.has(city.owner_nation):
+						relations[city.owner_nation] = 1 if game_state.is_external_enemy(owner_nation,city.owner_nation) else 2 if game_state.is_allied(owner_nation,city.owner_nation) else 0
+					match relations[city.owner_nation]:
+						1: view.enemy_cities.append(city)
+						2: view.allied_cities.append(city)
+						_: view.neutral_cities.append(city)
 		if profiling: view.build_profile.partition=Time.get_ticks_usec()-part_started; part_started=Time.get_ticks_usec()
 		EquivariantOrder.sort_cities(
 			view.friendly_cities,

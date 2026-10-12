@@ -253,6 +253,8 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::pack_trade_city_inputs);
     ClassDB::bind_method(D_METHOD("query_logistics_access", "travelers", "owners", "identities", "relations", "allied", "missing"),
             &NativeGraphSnapshot::query_logistics_access);
+    ClassDB::bind_method(D_METHOD("query_city_partitions", "cities", "ids", "owners", "traffic", "nation", "relations", "visible", "limited"),
+            &NativeGraphSnapshot::query_city_partitions);
     ClassDB::bind_method(D_METHOD("query_administrative_fields", "cities", "adjacency",
             "edge_lookup", "nations", "capitals", "traffic_kind"),
             &NativeGraphSnapshot::query_administrative_fields);
@@ -274,7 +276,7 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::query_connectivity_filtered);
 }
 
-int64_t NativeGraphSnapshot::api_version() const { return 6; }
+int64_t NativeGraphSnapshot::api_version() const { return 7; }
 
 Dictionary NativeGraphSnapshot::query_key_order(const Array &input) const {
     if (input.size() > std::numeric_limits<int32_t>::max())
@@ -543,6 +545,39 @@ Dictionary NativeGraphSnapshot::query_logistics_access(const PackedInt64Array &t
     Dictionary result;
     result["supported"] = true;
     result["rows"] = rows;
+    return result;
+}
+
+Dictionary NativeGraphSnapshot::query_city_partitions(const Array &cities,
+        const PackedInt64Array &ids, const PackedInt64Array &owners,
+        const PackedByteArray &traffic, int64_t nation, const Dictionary &relations,
+        const Dictionary &visible, bool limited) const {
+    const int64_t count = cities.size();
+    if (ids.size() != count || owners.size() != count || traffic.size() != count)
+        return error_result("City partition input lengths must match.");
+    Array groups[4];
+    if (cities.is_typed()) {
+        for (Array &group : groups)
+            group.set_typed(cities.get_typed_builtin(), cities.get_typed_class_name(), cities.get_typed_script());
+    }
+    for (int64_t i = 0; i < count; ++i) {
+        if (traffic[i]) continue;
+        int group = 0;
+        if (owners[i] != nation) {
+            if (limited && !visible.has(ids[i])) continue;
+            const Variant relation = relations.get(owners[i], int64_t(0));
+            if (relation.get_type() != Variant::INT)
+                return error_result("City partition relation codes must be integers.");
+            const int64_t code = relation;
+            group = code == 1 ? 1 : code == 2 ? 2 : 3;
+        }
+        groups[group].append(cities[i]);
+    }
+    Dictionary result;
+    result["friendly"] = groups[0];
+    result["enemy"] = groups[1];
+    result["allied"] = groups[2];
+    result["neutral"] = groups[3];
     return result;
 }
 
