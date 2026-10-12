@@ -240,6 +240,8 @@ bool trade_less(const TradeEntry &a, const TradeEntry &b) {
 } // namespace
 
 void NativeGraphSnapshot::_bind_methods() {
+    ClassDB::bind_method(D_METHOD("query_key_order", "keys"),
+            &NativeGraphSnapshot::query_key_order);
     ClassDB::bind_method(D_METHOD("api_version"), &NativeGraphSnapshot::api_version);
     ClassDB::bind_method(D_METHOD("configure", "offsets", "targets", "edge_ids", "controls", "node_geometry"),
             &NativeGraphSnapshot::configure);
@@ -268,7 +270,44 @@ void NativeGraphSnapshot::_bind_methods() {
             &NativeGraphSnapshot::query_connectivity_filtered);
 }
 
-int64_t NativeGraphSnapshot::api_version() const { return 3; }
+int64_t NativeGraphSnapshot::api_version() const { return 4; }
+
+Dictionary NativeGraphSnapshot::query_key_order(const Array &input) const {
+    if (input.size() > std::numeric_limits<int32_t>::max())
+        return error_result("Too many integer sort keys.");
+    std::vector<std::vector<int64_t>> keys;
+    keys.reserve(input.size());
+    for (int64_t index = 0; index < input.size(); ++index) {
+        const Variant value = input[index];
+        if (value.get_type() != Variant::ARRAY)
+            return error_result("Integer sort keys must be arrays.");
+        const Array row = value;
+        std::vector<int64_t> key;
+        key.reserve(row.size());
+        for (int64_t field = 0; field < row.size(); ++field) {
+            const Variant scalar = row[field];
+            if (scalar.get_type() != Variant::INT)
+                return error_result("Integer sort key fields must be integers.");
+            key.push_back(int64_t(scalar));
+        }
+        keys.push_back(std::move(key));
+    }
+    PackedInt32Array order;
+    order.resize(input.size());
+    for (int64_t index = 0; index < input.size(); ++index) order[index] = int32_t(index);
+    struct KeyLess {
+        const std::vector<std::vector<int64_t>> *keys = nullptr;
+        bool operator()(int32_t a, int32_t b) const { return (*keys)[a] < (*keys)[b]; }
+    };
+    // Array.sort_custom uses this introsort. STL sort or stable_sort would
+    // change equal-key permutations and thus shared supply allocation order.
+    SortArray<int32_t, KeyLess> sorter;
+    sorter.compare.keys = &keys;
+    if (!order.is_empty()) sorter.sort(order.ptrw(), order.size());
+    Dictionary result;
+    result["order"] = order;
+    return result;
+}
 
 bool NativeGraphSnapshot::configure(const PackedInt32Array &p_offsets,
         const PackedInt32Array &p_targets, const PackedInt32Array &p_edge_ids,

@@ -32,6 +32,8 @@ protected:
 
 public:
     int64_t api_version() const;
+    // Return Godot's exact lexicographic permutation of frozen integer rows.
+    Dictionary query_key_order(const Array &keys) const;
     bool configure(const PackedInt32Array &p_offsets,
             const PackedInt32Array &p_targets, const PackedInt32Array &p_edge_ids,
             const PackedInt32Array &p_controls, const PackedFloat64Array &p_geometry);

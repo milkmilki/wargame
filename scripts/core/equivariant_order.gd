@@ -595,6 +595,13 @@ static func sort_armies_by_mirror_orbit(
 ) -> void:
 	if values.size() < 2:
 		return
+	if values.size() >= 16 and not state.atlas_layout.is_empty() and NativeCompute.backend() != "gdscript":
+		var rows: Array = []
+		for army in values: rows.append(mirror_orbit_army_key(state, army))
+		var original := values.duplicate()
+		var order := NativeCompute.key_order(rows)
+		for index in range(order.size()): values[index] = original[order[index]]
+		return
 	var keys := {}
 	for army in values:
 		keys[army] = mirror_orbit_army_key(state, army)

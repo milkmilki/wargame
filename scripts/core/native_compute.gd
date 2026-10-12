@@ -2,7 +2,7 @@ class_name NativeCompute
 extends RefCounted
 ## Native runtime graph boundary. Gameplay objects, access rules and side effects
 ## stay in GDScript; the extension only reads immutable packed query inputs.
-const API_VERSION := 3
+const API_VERSION := 4
 const EXTENSION_PATH := "res://native/runtime_graph/runtime_graph.gdextension"
 static var _override := ""
 static var _graphs: Dictionary = {}
@@ -131,7 +131,7 @@ static func require_native() -> bool:
 		_fatal("NativeGraphSnapshot is missing. Build the Godot 4.7.1 extension with scripts/tools/build_native_compute.py.")
 		return false
 	var probe: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields"):
+	if int(probe.call("api_version")) != API_VERSION or not probe.has_method("make_access_mask") or not probe.has_method("patch_access_mask") or not probe.has_method("query_connectivity_filtered") or not probe.has_method("pack_edge_inputs") or not probe.has_method("pack_owner_inputs") or not probe.has_method("query_administrative_fields") or not probe.has_method("query_key_order"):
 		_fatal("NativeGraphSnapshot API version mismatch; rebuild the extension.")
 		return false
 	return true
@@ -465,6 +465,23 @@ static func end_trade_batch(state: GameState) -> void:
 	_mutex.lock()
 	_trade_batches.erase(state.get_instance_id())
 	_mutex.unlock()
+
+## Integer key permutation; Godot's equal-key order is part of the contract.
+static func key_order(keys: Array) -> PackedInt32Array:
+	var reference: Array[int] = []
+	if backend() in ["gdscript", "compare"]:
+		for index in range(keys.size()): reference.append(index)
+		reference.sort_custom(func(a: int, b: int) -> bool:
+			return EquivariantOrder._key_less(keys[a], keys[b]))
+	if backend() == "gdscript": return PackedInt32Array(reference)
+	if not require_native(): return PackedInt32Array()
+	var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
+	var started := _profile_start()
+	var result: Dictionary = graph.call("query_key_order", keys)
+	var order: PackedInt32Array = _finish_result(result, "key_order", started).get("order", PackedInt32Array())
+	if backend() == "compare": verify_equal(PackedInt32Array(reference), order, "key_order")
+	return order
+
 
 ## One frozen fiscal batch. Integer fields retain the reference queue order;
 ## live adjacency and model properties are packed inside the native call.

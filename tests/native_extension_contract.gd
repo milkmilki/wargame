@@ -21,10 +21,20 @@ func _initialize() -> void:
 	check(ClassDB.class_exists("NativeGraphSnapshot"), "native snapshot registered")
 	if ClassDB.class_exists("NativeGraphSnapshot"):
 		var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")
-		check(graph.call("api_version") == 3, "native API version 3")
-		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields"]:
+		check(graph.call("api_version") == 4, "native API version 4")
+		for method in ["configure", "query_travel", "query_path", "query_trade", "query_connectivity", "make_access_mask", "patch_access_mask", "query_connectivity_filtered", "pack_edge_inputs", "pack_owner_inputs", "query_administrative_fields", "query_key_order"]:
 			check(graph.has_method(method), "native method " + method)
 		check(graph.call("configure", PackedInt32Array([0, 0]), PackedInt32Array(), PackedInt32Array(), PackedInt32Array(), PackedFloat64Array([0.0, 0.0, 0.5, 0.0, 0.0])), "empty-edge snapshot configures")
+		for count in [0, 1, 16, 17, 64]:
+			var keys := []
+			var expected: Array[int] = []
+			for index in range(count):
+				keys.append([index % 3, (1 << 60) + index % 2])
+				expected.append(index)
+			expected.sort_custom(func(a: int, b: int) -> bool:
+				return EquivariantOrder._key_less(keys[a], keys[b]))
+			var result: Dictionary = graph.call("query_key_order", keys)
+			check(not result.has("error") and result.get("order") == PackedInt32Array(expected), "native key permutation size %d" % count)
 	var descriptor := ConfigFile.new()
 	check(descriptor.load(NativeCompute.EXTENSION_PATH) == OK, "extension descriptor included")
 	check(descriptor.get_value("configuration", "entry_symbol", "") == "runtime_graph_library_init", "descriptor entry symbol")
@@ -42,7 +52,7 @@ func _run_error_probe(mode: String) -> void:
 	var source := FileAccess.get_file_as_string("res://scripts/core/native_compute.gd")
 	source = source.replace("class_name NativeCompute\n", "")
 	if mode == "api_mismatch":
-		source = source.replace("const API_VERSION := 3", "const API_VERSION := 999")
+		source = source.replace("const API_VERSION := 4", "const API_VERSION := 999")
 	elif mode == "missing":
 		NativeCompute.clear_caches_for_tests()
 		if ClassDB.class_exists("NativeGraphSnapshot"):
